@@ -58686,6 +58686,12 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // nothing, and `= o ( f1 o )` dropped o's value though the call
         // handed it back — agora #742. The module-end answers decide.)
         : b __ud_clend | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) )
+        // (A call that lends out of an argument nurlc cannot tell apart from
+        // this owner — a closure's capture, `\ → v { = o ( first vs ) }`:
+        // its value may be o's own, or another's. Asked by its key where it
+        // runs: o keeps it where it is its own, and the old value goes where
+        // it is not. Kept back on every run instead, it leaked — agora #378.)
+        : b __ud_unk_lend & & & & & == __ud_tt TT_LPAREN != 0 ( nurl_str_len __ud_borrow ) != 0 ( nurl_str_len __ud_ptr ) ! __ud_may_self __ud_kgo ! ( __lend_from_other_owners syms name )
         : ~ s __ud_kcond ? ! __ud_kgo `` ? == __ud_tt TT_LPAREN ? & __ud_clend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ? ( seq ( nurl_sym_get2 syms bck_rhs_val `__btail` ) name ) ( nurl_str_cat `1` `` ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
         // (Only an owner that may own its value: one bound as a borrow
         // outright (`__sborrow` `1`, a `: ~` lend out of a `vec_get`) owns
@@ -58698,6 +58704,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // is a value of the caller's own, whatever its key — an Rc share,
         // `( rc_clone r )`, has the old share's block. Kept as the old one,
         // the new share was never released — agora #475.)
+        ? & __ud_unk_lend == 0 ( nurl_str_len __ud_kcond ) { = __ud_kcond ( nurl_str_cat `1` `` ) } {}
         : s __ud_lco ( nurl_sym_get syms `__last_call_own__` )
         ? & & & != 0 ( nurl_str_len __ud_kcond ) == __ud_tt TT_LPAREN != 0 ( nurl_str_len __ud_lco ) ! ( seq __ud_lco `false` ) {
             : s __ud_nl ( nurl_cg_reg cg )
@@ -58769,7 +58776,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // IR clang rejects. Kept back there, as before #317's fix: a leak
         // until those types have keys, agora #361.)
         : b __ud_other_lend ? & & & == __ud_tt TT_LPAREN != 0 ( nurl_str_len __ud_borrow ) != 0 ( nurl_str_len __ud_ptr ) ! __ud_may_self
-        ? ( __lend_from_other_owners syms name ) ( __ud_hand_over_keyed syms __ud_ptr vt ) F F
+        ? | ( __lend_from_other_owners syms name ) __ud_unk_lend ( __ud_hand_over_keyed syms __ud_ptr vt ) F F
         // (An old value whose drop runs code of the program's own leaves
         // its slot before that code runs: mem_udrop_take_old.)
         : ~ s __ud_late ``
