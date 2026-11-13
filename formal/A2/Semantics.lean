@@ -314,6 +314,12 @@ inductive WFv : Ty → Val → Prop
   /-- A2-drop.3: a destructor type's values are its inner type's, a struct's
       or an enum's (`% Drop` is on one of these). -/
   | dtor {f : Nat} {t : Ty} {v : Val} : t.isStruct = true → WFv t v → WFv (.dtor f t) v
+  /-- A3.3, Agora #837: a read guard of a lock's payload `u`: a share of a
+      view, which, in memory, holds the payload it carries, a share of the
+      lock block and that block's payload, at the view's type `prod (lk u) u`
+      (`ArcBlk`), one that holds no view. -/
+  | rguard {u : Ty} {k : Nat} {p : Val} :
+      WFv (.prod (.lk u) u) p → (Ty.prod (.lk u) u).holdsView = false → WFv (.rguard u) (.arc k p)
 
 /-- A3.1: tree `T` of type `τ` holds a share of block `k`, whose payload is
     a `u`: the one it carries, `some p`, or (A3.2) none, for a lock share.
@@ -341,13 +347,21 @@ inductive ArcIn : Ty → Val → Ty → Nat → Option Val → Prop
   /-- A2-drop.3: a destructor type's values are its inner type's. -/
   | dtor {f : Nat} {t : Ty} {x : Val} {u : Ty} {k : Nat} {p : Option Val} :
       ArcIn t x u k p → ArcIn (.dtor f t) x u k p
+  /-- A3.3, Agora #837: a read guard is a share of block `k`, a view; the
+      share's type `rguard u` names it (`ArcBlk`: a view of type
+      `prod (lk u) u`). -/
+  | rguard {u : Ty} {k : Nat} {p : Val} : ArcIn (.rguard u) (.arc k p) (.rguard u) k (some p)
 
-/-- A3.3: a block an `arc` share names: an `arc` block holding `p`, or a
-    view of a lock block (`rw_read`'s guard), whose payload `p` is a share of
+/-- A3.3: a block an `arc` share names: an `arc` block of the share's
+    payload type `u` holding `p`, or, for a read guard (Agora #837: `u` is
+    `rguard w`, the guard's own type, `ArcIn.rguard`), a view of a lock block
+    (`rw_read`'s), of type `prod (lk w) w`, whose payload `p` is a share of
     the lock block and that block's payload.  Both are frozen while they
-    live. -/
+    live.  Only a guard's share names a view (until Agora #837 any `arc`
+    share of a payload type `prod (lk w) w` might have). -/
 def ArcBlk (b : Option Blk) (u : Ty) (p : Val) : Prop :=
-  b = some ⟨u, .arc, some p⟩ ∨ b = some ⟨u, .view, some p⟩
+  (u.isGuard = false ∧ b = some ⟨u, .arc, some p⟩) ∨
+    ∃ w k0 p0, u = .rguard w ∧ p = .pair (.lk k0) p0 ∧ b = some ⟨.prod (.lk w) w, .view, some p⟩
 
 /-- A3.2: what a share asks of its block: an `arc` share (carrying `some p`)
     an `arc` block holding `p`, a lock share (`none`) a lock block of its
@@ -636,9 +650,8 @@ inductive RRes where
 
 /-- A3.6: what a read of a module global of type `t` finds: a share of a
     block of that type — a lock share of a lock block, or an `arc` share of
-    the block whose payload it carries (`ArcBlk`: an `arc` block, or a view, a
-    read guard a `make` handed back, which the model's `arc` type does not
-    tell from an `Arc`). -/
+    the block whose payload it carries (`ArcBlk`; Agora #837: an `arc` block,
+    as no global is a read guard, `Ty.sync`). -/
 def GlobFits (B : Nat → Option Blk) (t : Ty) (v : Val) : Prop :=
   (∃ u k o, t = .lk u ∧ v = .lk k ∧ B k = some ⟨u, .lock, o⟩) ∨
   (∃ u k p, t = .arc u ∧ v = .arc k p ∧ ArcBlk (B k) u p)
@@ -1513,9 +1526,11 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       `TStep.spawnFail` puts one before its call, and its unwinding drops
       `x` (`Release.drop`), the block left checked out; or (Agora #803), for
       a destructor payload, hands `x` to a destructor frame
-      (`Step.scopeLPD`), the block left checked out (a case nurlc refuses
-      at compile time: such a payload fails the check only through a read
-      guard, Agora #837). -/
+      (`Step.scopeLPD`), the block left checked out.  Since Agora #837 a
+      typed check-out whose payload holds no cell share (every destructor
+      payload) never fails it (`A3.LockDtorWitness.giveCheck_typed`): a lock's
+      payload holds no read guard (`Ty.ok`); one holding a cell share may
+      fail its cell half, as nurlc's `locked_with` panics (h340). -/
   | scopeLFail {m : Mem} {k : Nat} {t : Ty} {x : Var} {sl : Slot} :
       m.st x = some sl → ¬ GiveCheck m x sl →
       Step P m (.scopeL k t x .skip) (.ok m (.scopeL k t x .panic))
@@ -1544,18 +1559,21 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       no frame of it left, so no step fills it again (`A3.Step.stay`;
       `withLock`, `lockTake` and `rwRead` need the payload in).
 
-      nurlc never takes this path: the rule makes the model total on a case
-      nurlc rules out at compile time.  Such a payload holds no cell share
-      (`Ty.lkPay`'s `!hasCell`), so the cell half of `SendCheck` holds of it
+      **A defensive rule: no typed reachable configuration takes it**
+      (Agora #837, `A3.reach_no_scopeLPD`,
+      `A3.LockDtorWitness.scopeL_typed_no_scopeLPD`), as nurlc never takes
+      this path.  Such a payload holds no cell share (`Ty.lkPay`'s
+      `!hasCell`), so the cell half of `SendCheck` holds of it
       (`WFv.noCell_hasCell`) and `GiveCheck` fails only through `NoGuard`:
       the value reaches a read guard.  nurlc refuses that statically
       (`% NotSend RGuard`, `stdlib/std/rwlock.nu`), and its `mem_send_check`
       counts only handle blocks, so its `locked_with` / `locked_update` /
-      `locked_apply` / `locked_await` never panic there on such a payload.
-      The model is looser than nurlc here: it admits a `Locked` of a `D`
-      holding a read guard (Agora #837 tracks refusing it in the types).
-      Leaving the block checked out mirrors the runtime's held lock word,
-      should the case arise (`A3/DESIGN.md`, Agora #803). -/
+      `locked_apply` / `locked_await` never panic there on such a payload;
+      since Agora #837 the model's types refuse it too (a read guard is of
+      type `Ty.rguard`, which no lock's payload type holds, `Ty.hasGuard`).
+      The rule keeps the semantics total on an untyped store; leaving the
+      block checked out mirrors the runtime's held lock word, should the
+      case arise (`A3/DESIGN.md`, Agora #803, #837). -/
   | scopeLPD {m m1 : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt} {sl : Slot} {n f : Nat} {u : Ty} :
       Step P m s (.panic m1) → CheckedOut m1 k t → t = Ty.nest n (.dtor f u) →
       m1.st x = some sl → ¬ GiveCheck m1 x sl →

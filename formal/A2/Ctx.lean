@@ -136,6 +136,8 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
     intro P' H' hp hs; exact .pkg (ih (app hp (envDeps_mono hs)) (envDeps_mono hs)) hq
   | arc h hw hv hl =>
     intro P' H' hp _; obtain ⟨dep, hd, hla⟩ := hl; exact .arc h hw hv ⟨dep, hp hd, hla⟩
+  | rguard h hw hv hl =>
+    intro P' H' hp _; obtain ⟨dep, hd, hla⟩ := hl; exact .rguard h hw hv ⟨dep, hp hd, hla⟩
   | lk h => intro _ _ _ _; exact .lk h
   | cell h hl => intro P' H' hp _; obtain ⟨dep, hd, hla⟩ := hl; exact .cell h ⟨dep, hp hd, hla⟩
   | dtor _ ih => intro P' H' hp hs; exact .dtor (ih hp hs)
@@ -169,6 +171,8 @@ theorem ValOK.onlyReaders {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : Va
   | pkg _ hq ih => intro P' hp; exact .pkg (ih (app hp)) hq
   | arc h hw hv hl =>
     intro P' hp; obtain ⟨dep, hd, hla⟩ := hl; exact .arc h hw hv ⟨dep, hp dep hd hla.bound, hla⟩
+  | rguard h hw hv hl =>
+    intro P' hp; obtain ⟨dep, hd, hla⟩ := hl; exact .rguard h hw hv ⟨dep, hp dep hd hla.bound, hla⟩
   | lk h => intro _ _; exact .lk h
   | cell h hl => intro P' hp; obtain ⟨dep, hd, hla⟩ := hl; exact .cell h ⟨dep, hp dep hd hla.bound, hla⟩
   | dtor _ ih => intro P' hp; exact .dtor (ih hp)

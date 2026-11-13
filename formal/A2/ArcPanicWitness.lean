@@ -265,7 +265,7 @@ theorem tail_typed {Γ : Ctx} (hR : NoRootb Γ) (hD : NoDeps Γ) {a b y s : Var}
   have hnew : RhsT K3 [] (.arcNew DP y) ES K3' := by
     have h := RhsT.arcNew (Γ := K3) (F := []) (t := DP) (y := y) (Ey := ED) hK3d
       (by simp [ED, Entry.arm, EP]) (by simp [ED, Entry.arm]) (Or.inr rfl)
-      ⟨by simp [DP, T, Ty.holdsView], by simp [DP, T, Ty.hasFn]⟩ (by simp [DP, T, Ty.hasCell])
+      ⟨by simp [DP, T, Ty.holdsView], by simp [DP, T, Ty.hasFn]⟩ (by simp [DP, T, Ty.hasCell]) (by simp [DP, T, Ty.hasGuard])
       (PushArg.move (by simp [DP, T, Ty.owning]) (by simp [ED, Entry.arm, EP]) (by simp)
         (hK3.noPin y) (DtorSafe.of_none (fun v E h => (hK3 v E h).2.1) _ _ _))
     rw [hkill] at h; exact h

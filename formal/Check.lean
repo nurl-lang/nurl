@@ -179,6 +179,40 @@ import A3
 #print axioms A3.LockArcDtorWitness.main_no_leak_panic
 #print axioms A3.LockArcDtorWitness.last_drop_reaps
 #print axioms A3.lockArcDtor_claim
+-- Agora #837: a read guard is a type of its own (`Ty.rguard`), `% NotSend`: no lock's, cell's or
+-- `Arc`'s payload, no global and no closure of a class that crosses holds one (`Ty.hasGuard`,
+-- `Ty.ok`, `Cross.Fits`); so a typed check-out's give-back passes its crossing check, for every
+-- payload type holding no cell share (every destructor payload, shares included), and
+-- `Step.scopeLPD` never fires from a typed reachable configuration
+#print axioms A2.Ty.ok_rguard
+#print axioms A2.Ty.ok_lk_guard
+#print axioms A2.Ty.ok_arc_guard
+#print axioms A2.Cross.Fits.guard
+#print axioms A2.ArcBlk.guard
+#print axioms A2.ArcBlk.view
+#print axioms A2.MInv.guard_val
+#print axioms A2.MInv.lends_val
+#print axioms A2.out_guard
+#print axioms A2.ArcIn.guard_hasGuard
+#print axioms A2.WFv.not_href
+#print axioms A2.WFv.refers_noView
+#print axioms A3.LockDtorWitness.noGuard_of_free
+#print axioms A3.LockDtorWitness.sendCheck_free
+#print axioms A3.LockDtorWitness.giveCheck_of
+#print axioms A3.LockDtorWitness.checkedOut_free
+#print axioms A3.LockDtorWitness.giveCheck_typed
+#print axioms A3.LockDtorWitness.giveCheck_typed_dtor
+#print axioms A3.LockDtorWitness.scopeL_typed_end_giveCheck
+#print axioms A3.LockDtorWitness.Step.panic_blkBack
+#print axioms A3.LockDtorWitness.scopeL_typed_panic_give
+#print axioms A3.LockDtorWitness.scopeL_typed_panic_at
+#print axioms A3.LockDtorWitness.scopeL_typed_panic_giveCheck
+#print axioms A3.LockDtorWitness.scopeL_typed_no_scopeLPD
+#print axioms A3.scopeL_typed_panic_of
+#print axioms A3.reach_scopeL_giveCheck
+#print axioms A3.reach_no_scopeLPD
+#print axioms A3.RwDtorWitness.guard_refused
+#print axioms A3.RwDtorWitness.arc_pair_ok
 -- (A3/ChanDtorWitness.lean)
 #print axioms A3.ChanDtorWitness.main_typed
 #print axioms A3.ChanDtorWitness.main_safe
@@ -350,7 +384,7 @@ import A3
 #print axioms A2.Dtor.shares_dtor_free
 #print axioms A2.Dtor.blocks_dtor_free
 -- Agora #804: an `arc` block is never of a read guard's view type (the block-level fact
--- behind `Ty.ok_arc_dtor`, which a read guard's share type widens by `Ty.rview`)
+-- behind `Ty.ok_arc_dtor`; since Agora #837 a read guard is a type of its own, `Ty.rguard`)
 #print axioms A2.Dtor.arc_blocks_dtor
 #print axioms A2.Blk.DtorOK.arc
 #print axioms A2.Blk.DtorOK.nest

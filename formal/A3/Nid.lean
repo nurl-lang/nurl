@@ -73,7 +73,7 @@ structure BlockOK (B : Nat → Option Blk) (n k : Nat) (bl : Blk) : Prop where
     -- share; an `arc` block's may be one at its top (Agora #755:
     -- or a drained `Vec` of them), and a `dead` block's is (`Blk.DtorOK`,
     -- `MInv.blocks`)
-    bl.DtorOK
+    bl.DtorOK ∧ bl.ty.hasGuard = false
   key   : k < n
   nodup : bl.tree.ids.Nodup
   lt    : ∀ i ∈ bl.tree.ids, i < n

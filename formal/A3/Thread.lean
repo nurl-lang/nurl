@@ -75,15 +75,14 @@ theorem GlobsOK.noDead {P : Prog} {G : Globs} (hG : GlobsOK P G) {k : Nat} {bl :
   have hB : ∀ k bl p, G.blk k = some bl → bl.pay = some p → WFv bl.ty p ∧ SharesIn G.blk bl.ty p :=
     fun k bl p hk hp => (hG.inv.blocks k bl hk).2.2.1 p hp
   refine Reached.not_dead (fun v ⟨g, hg⟩ => ?_) hB (hG.reach k bl hk) hk
-  obtain ⟨t, _, _, hfit⟩ := hG.sync g v hg
+  obtain ⟨t, _, htok, hfit⟩ := hG.sync g v hg
   rcases hfit with ⟨u, k', o, rfl, rfl, hk'⟩ | ⟨u, k', p, rfl, rfl, hk'⟩
   · refine ⟨.lk u, WFv.lk, fun u' k'' p' ha => ?_⟩
     cases ha
     exact ⟨o, hk'⟩
   · have hwp : WFv u p ∧ u.holdsView = false := by
-      rcases hk' with h | h
-      · exact ⟨((hB k' _ p h rfl).1), (hG.inv.blocks k' _ h).2.1⟩
-      · exact ⟨((hB k' _ p h rfl).1), (hG.inv.blocks k' _ h).2.1⟩
+      have h := hk'.arc (Ty.isGuard_of_hasGuard (Ty.ok_arc_guard htok))
+      exact ⟨((hB k' _ p h rfl).1), (hG.inv.blocks k' _ h).2.1⟩
     refine ⟨.arc u, WFv.arc hwp.1 hwp.2, fun u' k'' p' ha => ?_⟩
     cases ha
     exact hk'

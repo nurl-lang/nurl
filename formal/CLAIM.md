@@ -359,6 +359,27 @@ the LLVM / C11 memory model rather than redefining it.
       locking thread (`spawn_guard`, `lockNew_guard`, `chanSend_guard`).
       That no guard leaves its thread is argued over reachable
       configurations, not a lemma.
+    - **Agora #837: a read guard's own type, refused where nurlc refuses
+      it.** The guard is of type `Ty.rguard u` (its value still a share of
+      a view, `WFv.rguard`; only a guard's share names a view, `ArcBlk`).
+      Until #837 it was `arc (prod (lk u) u)`, which a genuine `Arc` of a
+      pair of a lock and a value of its payload's type shares (nurlc's
+      `Arc<(Locked U, U)>`), so the types could not refuse the guard
+      without refusing that `Arc`. `Ty.hasGuard` holds exactly where an
+      `rguard` occurs, and, as nurlc's `% NotSend RGuard` does, `Ty.ok`
+      refuses one in a lock's, a cell's (so a channel's) and an `Arc`'s
+      payload, at any depth, `Ty.sync` refuses one as a global, and
+      `Cross.Fits` in the environment of a closure of a class that crosses
+      (`send`, `sync`, `bare`; so a `: Send` trait object): a closure that
+      holds one is `any` or `dropd`, which cross nowhere
+      (`A3.RwDtorWitness.guard_refused`). A local binding, a struct and a
+      `Vec` may hold one, and the genuine `Arc` of a pair is admitted as
+      before (`arc_pair_ok`). `arc_clone` takes no guard (nurlc has no
+      `RGuard` clone); `rguard_get` is `arc_get` through the guard
+      (`Ty.Lends`). No block's type holds a guard (`MInv.blocks`), so a
+      value of a type that holds none reaches no view
+      (`A3.LockDtorWitness.noGuard_of_free`): a lock's payload meets the
+      crossing check's guard half statically, as nurlc's does.
     - **Agora #804: `RwLocked D`.** A read guard of a payload that is a
       destructor value (or holds one) is typed (`RhsT.rwRead` /
       `rwTryRead` ask only `hasCell = false`;
@@ -380,9 +401,11 @@ the LLVM / C11 memory model rather than redefining it.
       guard dropped after the lock's last share and the lock block reaped
       by that guard's thread, follows from the marking sweep but is not yet
       a lemma (Agora #831). The
-      guard's type `arc (prod (lk D) D)` is admitted by `Ty.ok` through
-      `Ty.rview` (exactly `prod (lk u) u` with `u.lkPay` and no cell
-      share); no `arc` block is of that type (`A2.Dtor.arc_blocks_dtor`).
+      guard's type `rguard D` (Agora #837; before, `arc (prod (lk D) D)`)
+      is admitted by `Ty.ok` when `D` is a lock's payload holding no cell
+      share, and its view's type `prod (lk D) D` by `Ty.rview` and
+      `Blk.DtorOK`; no `arc` block is of a destructor type of that shape
+      (`A2.Dtor.arc_blocks_dtor`).
       Witness: `A3.RwDtorWitness.main` (an `RwLocked` of a destructor
       value, made, read through a guard, dropped: `main_typed`,
       `main_safe`, `main_no_leak`, `main_no_leak_panic`;
@@ -441,10 +464,11 @@ the LLVM / C11 memory model rather than redefining it.
       `lockRestoreFail`, `chanSendFail`); the give-back at a lock scope's
       end asks it too (`GiveCheck`), and a failed one panics with the lock
       held (`Step.scopeLFail`), as `locked_with` does (Agora #803: a
-      destructor payload that fails it goes to a destructor frame on the
-      unwinding, `Step.scopeLPD`, not the code-less drop: a case nurlc
-      refuses statically, the check failing there only through a read
-      guard, Agora #837). A lock is Sync
+      destructor payload that fails it would go to a destructor frame on
+      the unwinding, `Step.scopeLPD`, not the code-less drop; since Agora
+      #837 no typed reachable configuration takes that rule,
+      `A3.reach_no_scopeLPD`: a lock's payload holds no read guard, and a
+      destructor payload no cell share). A lock is Sync
       whatever it holds (`Ty.hasCell (lk _) = false`, h358).
       Confinement (`CellInv`) now places every cell's owners in one
       thread's slots or in one block's payload, never split
@@ -486,9 +510,9 @@ the LLVM / C11 memory model rather than redefining it.
       no root; `% Sync` / `% NotSend` assertions on a program's own types;
       `locked_take` through a cell share; a failed give-back
       frees the value where the runtime keeps it in the held lock (no one
-      reaches it either way; Agora #803: a destructor value's goes to a
-      destructor frame, `Step.scopeLPD`, on a case nurlc refuses
-      statically);
+      reaches it either way; Agora #803: a destructor value's would go to
+      a destructor frame, `Step.scopeLPD`, which no typed reachable
+      configuration takes since Agora #837, `A3.reach_no_scopeLPD`);
       a closure that captures by name and also changes its environment;
       subsumption inside a container's element type (a `Vec` of `sync`
       closures is no `Vec` of `any` ones). Classes are ordered bare ≤
@@ -1077,15 +1101,20 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   program checked, `Rhs.codeOK`). `locked_update l f` checks it out to
   `x` (`withLock`) as before; the body gives `x` no other value (`hna`)
   and leaves it holding a `D` at its end (as before), and the scope's end
-  gives it back, and nothing else, when its type holds no share: the
-  give-back's crossing check cannot fail, so `Step.scopeLFail` and the
+  gives it back, and nothing else: the give-back's crossing check cannot
+  fail on a typed payload that holds no cell share (every destructor
+  payload, `arc` and lock shares included; Agora #837,
+  `A3.LockDtorWitness.giveCheck_typed`: no cell share, and no read guard,
+  which no lock payload's type holds), so `Step.scopeLFail` and the
   code-less `Release.drop` are not taken
-  (`A3.LockDtorWitness.scopeL_end_gives_back`, over `release_puts`,
-  `sendCheck_noArc`; that `x` holds a `t` is proved for a typed frame,
-  Agora #805, and that the block is there and checked out on every
-  reached configuration, Agora #808 below). A panic in the body gives it back too
+  (`A3.LockDtorWitness.scopeL_end_gives_back`, over `release_puts`; for a
+  typed frame `scopeL_typed_end_gives_back`; that `x` holds a `t` is proved
+  for a typed frame, Agora #805, and that the block is there and checked
+  out on every reached configuration, Agora #808 below:
+  `A3.reach_scopeL_end_gives_back`). A panic in the body gives it back too
   (`scopeL_panic_gives_back`: `Step.scopeLP`'s release is the give-back
-  whenever `x` still owns a `D`, the same hypotheses), where nurlc's `locked_update`, which runs
+  whenever `x` still owns a `D`; for a typed frame `scopeL_typed_panic`,
+  `A3.reach_scopeL_panic`), where nurlc's `locked_update`, which runs
   `f` in place in the lock's memory, leaves the value there with the lock
   held (the model releases the lock: A3.2's over-approximation, above). A
   body that moves the value out (to a `letd`, a call's `sink` parameter)
@@ -1108,7 +1137,8 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `withLock` does (an owner, or, for an `int` payload, a plain integer
   binding: `frame_slot`, `release_cases`), so these lemmas, and the
   give-back over a reached configuration below, hold for every payload
-  type that holds no share, with no `holdsDtor` premise. Agora
+  type that holds no cell share (since Agora #837; before, no share), with
+  no `holdsDtor` premise. Agora
   #808 proves the block's half on every configuration a run reaches: an invariant (`A3.LockInv`, `A3.reach_lockInv`,
   kept by every `TStep`: a thread's step, its marking sweep and reaps, a
   spawn, a failed spawn) says each `scopeL k t x s` frame's block is a lock
@@ -1207,11 +1237,17 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   (`stdlib/runtime_core.c`) counts only handle blocks, so nurlc's
   `locked_with` / `locked_update` / `locked_apply` / `locked_await`
   (`stdlib/std/thread.nu`) never panic in `mem_send_check` on such a
-  payload. The model is looser than nurlc here: it admits a `Locked` of a
-  `D` holding a read guard, which nurlc refuses (Agora #837 tracks
-  refusing it in the model's types). `Step.scopeLPD` makes the model
-  total on that case, which nurlc rules out at compile time: at the
-  check-out's normal end the end panics with the lock held
+  payload. Since Agora #837 the model refuses that case statically too: a
+  read guard is a type of its own (`Ty.rguard`), which no lock's payload
+  type holds (`Ty.ok`, `Ty.hasGuard`), so a typed check-out's value passes
+  its crossing check (`A3.LockDtorWitness.giveCheck_typed`, of every
+  payload type holding no cell share: every destructor payload, `arc` and
+  lock shares included) and `Step.scopeLPD` never fires from a typed
+  reachable configuration (`A3.reach_no_scopeLPD`, over
+  `LockDtorWitness.scopeL_typed_no_scopeLPD`; at the end,
+  `A3.reach_scopeL_giveCheck`). The rule stays, a total and defensive case
+  of the semantics of an untyped store: at the check-out's normal end a
+  failing check panics with the lock held
   (`Step.scopeLFail`), and that panic, like one in the body, turns the
   check-out's frame into the value's destructor frame at its end, the
   panic after it (`Step.scopeLPD`, as the reap's frame of a `dead`
@@ -1220,22 +1256,23 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `A3.LockArcDtorWitness.release_none`); the frame's end runs the
   destructor on the panicking thread (`fail_end_runs_dtor`: from the end,
   three steps, each the only one, the third calling the destructor). The
-  block is left checked out, mirroring the runtime's held lock word should
-  the case arise; that it stays so is A3.2's lock invariant, not a lemma
-  of this path (no `scopeL k` frame remains, `A3.Step.stay`, and
-  `withLock`, `lockTake` and `rwRead` all need the payload in). What this
-  rests on: no headline theorem says the destructor runs on a failed
-  give-back (`NoLeak`, `no_leak_end` and `no_leak_panic` would have held
-  with the old code-less drop too); that it runs is the local lemmas'
-  (`release_none`, `fail_end_runs_dtor`), and those are conditional: they
-  take `¬ GiveCheck` as a hypothesis, and no typed reachable configuration
-  is shown to meet it (it needs a read guard in the payload; Agora #837
-  aims to prove it unreachable, `giveCheck_typed`). Nor is the passing
-  case a lemma for such a payload: the give-back lemmas of
+  block is left checked out, mirroring the runtime's held lock word; that
+  it stays so is A3.2's lock invariant, not a lemma of this path (no
+  `scopeL k` frame remains, `A3.Step.stay`, and `withLock`, `lockTake`
+  and `rwRead` all need the payload in). These local lemmas (`release_none`,
+  `fail_end_runs_dtor`) take `¬ GiveCheck` as a hypothesis, which no typed
+  reachable configuration meets (above), so they describe the defensive
+  rule only; no headline theorem reads them. The passing case is a lemma
+  for every such payload (Agora #837): the give-back lemmas of
   `A3.LockDtorWitness` (`giveable_of`, `scopeL_typed_end_gives_back`,
-  `release_cases`, `scopeL_typed_panic`) still assume `hasArc = false`, so
-  that a typed share-holding payload's check-out ends in `Release.put` is
-  not yet a lemma (Agora #837 item 3). The same frame serves a `Locked
+  `release_cases`, `scopeL_typed_panic`) no longer assume `hasArc = false`,
+  only that the payload type holds no cell share, so a typed check-out of a
+  share-holding destructor payload ends in `Release.put` at its end and on
+  a panic (`A3.reach_scopeL_end_gives_back`, `A3.reach_scopeL_panic`). A
+  payload that owns no destructor value and holds a cell share may still
+  fail the check, as nurlc's `locked_with` panics when a handle's other
+  owner is kept (h340); its value, which owns no destructor value, is then
+  dropped with no code. The same frame serves a `Locked
   (Vec D)` (it drains the `Vec`) and a cell's check-out (`withCell`); for
   a cell it has no runtime counterpart: real handles check their state
   out with `rc_take` / `rc_restore` (`stdlib/std/rc.nu`), which run no
@@ -1257,10 +1294,11 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   elements that own no destructor value, as for any `Vec`; `vec_clear` has
   no form of its own: it is a truncation to 0, or for a `Vec D` code the
   calculus types, `A2/DropCode.lean`); `hna` still refuses an `assign` to the binding; the
-  give-back's crossing check cannot fail (`sendCheck_noArc` is of any type
-  that holds no share; for one that holds `arc` or lock shares, Agora #803,
-  a failing check hands the `Vec` to a destructor frame that drains it,
-  `Step.scopeLPD`); `locked_restore` of the `Vec` is typed (Agora
+  give-back's crossing check cannot fail (Agora #837,
+  `A3.LockDtorWitness.giveCheck_typed`, of every typed payload holding no
+  cell share, `arc` and lock shares included; `Step.scopeLPD`, which would
+  hand a failing `Vec` to a destructor frame that drains it, is never
+  taken, `A3.reach_no_scopeLPD`); `locked_restore` of the `Vec` is typed (Agora
   #810: it fills only a taken block). So the `Locked D` cut's three closed
   paths cover it unchanged. When the last share
   goes the marking sweep marks the lock block (`Cand` already reads a lock

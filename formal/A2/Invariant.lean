@@ -112,15 +112,49 @@ theorem BlkLe.view {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : 
 
 theorem ArcBlk.grow {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {p : Val}
     (h : ArcBlk (B k) t p) : ArcBlk (B' k) t p := by
-  rcases h with h | h
-  · exact Or.inl (hb.arc h)
-  · exact Or.inr (hb.view h)
+  rcases h with ⟨hg, h⟩ | ⟨w, k0, p0, hu, hp, h⟩
+  · exact Or.inl ⟨hg, hb.arc h⟩
+  · exact Or.inr ⟨w, k0, p0, hu, hp, hb.view h⟩
 
 /-- What the holders of a share read of its block is the payload it carries. -/
 theorem ArcBlk.rd {b : Option Blk} {t : Ty} {p : Val} (h : ArcBlk b t p) : ∃ bl, b = some bl ∧ bl.rd = p := by
-  rcases h with h | h
+  rcases h with ⟨_, h⟩ | ⟨_, _, _, _, _, h⟩
   · exact ⟨_, h, rfl⟩
   · exact ⟨_, h, rfl⟩
+
+/-- Agora #837: a share that is no read guard's names an `arc` block. -/
+theorem ArcBlk.arc {b : Option Blk} {t : Ty} {p : Val} (h : ArcBlk b t p) (ht : t.isGuard = false) :
+    b = some ⟨t, .arc, some p⟩ := by
+  rcases h with ⟨_, h⟩ | ⟨w, _, _, rfl, _, _⟩
+  · exact h
+  · cases ht
+
+/-- ... and so does one whose payload is a tree of its type (a view's
+    payload is a pair, no tree of a guard's type). -/
+theorem ArcBlk.arc_of_wfv {b : Option Blk} {t : Ty} {p : Val} (h : ArcBlk b t p) (hw : WFv t p) :
+    b = some ⟨t, .arc, some p⟩ := by
+  rcases h with ⟨_, h⟩ | ⟨w, _, _, rfl, rfl, _⟩
+  · exact h
+  · cases hw
+
+/-- Agora #837: a read guard names a view of its view type, whose payload is
+    a share of the lock block and that block's payload; only a guard does. -/
+theorem ArcBlk.guard {b : Option Blk} {w : Ty} {p : Val} (h : ArcBlk b (.rguard w) p) :
+    b = some ⟨.prod (.lk w) w, .view, some p⟩ ∧ ∃ k0 p0, p = .pair (.lk k0) p0 := by
+  rcases h with ⟨h, _⟩ | ⟨w', k0, p0, hu, hp, h⟩
+  · cases h
+  · cases hu; exact ⟨h, k0, p0, hp⟩
+
+/-- An `arc` block of a type that is no guard's is an `ArcBlk`. -/
+theorem ArcBlk.of_arc {b : Option Blk} {t : Ty} {p : Val} (ht : t.isGuard = false)
+    (h : b = some ⟨t, .arc, some p⟩) : ArcBlk b t p := Or.inl ⟨ht, h⟩
+
+/-- A view block is named only by a guard's share. -/
+theorem ArcBlk.view {b : Option Blk} {t u : Ty} {p : Val} (h : ArcBlk b t p) (hb : b = some ⟨u, .view, some p⟩) :
+    ∃ w, t = .rguard w ∧ u = .prod (.lk w) w := by
+  rcases h with ⟨_, h⟩ | ⟨w, _, _, rfl, _, h⟩
+  · rw [hb] at h; cases h
+  · rw [hb] at h; cases h; exact ⟨w, rfl, rfl⟩
 
 /-- ... a lock block as a lock block of its type ... -/
 theorem BlkLe.lock {B B' : Nat → Option Blk} (hb : BlkLe B B') {k : Nat} {t : Ty} {o : Option Val}
@@ -167,6 +201,9 @@ theorem SharesOK.pkg {m : Mem} {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cr
   fun u k p ha => h u k p (.pkg ha hq)
 theorem SharesOK.here {m : Mem} {t : Ty} {k : Nat} {p : Val} (h : SharesOK m (.arc t) (.arc k p)) :
     ArcBlk (m.blk k) t p := h t k (some p) .here
+/-- A3.3, Agora #837: a read guard names a view of its type (`ArcBlk`). -/
+theorem SharesOK.guard {m : Mem} {u : Ty} {k : Nat} {p : Val} (h : SharesOK m (.rguard u) (.arc k p)) :
+    ArcBlk (m.blk k) (.rguard u) p := h _ k (some p) .rguard
 /-- A3.2: a lock share names a lock block of its type. -/
 theorem SharesOK.lk {m : Mem} {t : Ty} {k : Nat} (h : SharesOK m (.lk t) (.lk k)) :
     ∃ o, m.blk k = some ⟨t, .lock, o⟩ := h t k none .lk
@@ -180,6 +217,7 @@ theorem ArcIn.hasArc {τ : Ty} {T : Val} {u : Ty} {k : Nat} {p : Option Val} (h 
   | here => rfl
   | lk => rfl
   | cell => rfl
+  | rguard => rfl
   | child _ _ ih => exact ih
   | fst _ ih => simp [Ty.hasArc, ih]
   | snd _ ih => simp [Ty.hasArc, ih]
@@ -290,6 +328,7 @@ theorem WFv.noCell_hasCell {τ : Ty} {v : Val} (hw : WFv τ v) (hnc : τ.hasCell
   | arc => intro h; cases h
   | lk => intro h; cases h
   | cell => simp [Ty.hasCell] at hnc
+  | rguard => intro h; cases h
   | pkg _ hq ih => intro h; cases h with | pkg h => exact ih (hq.2.1 hnc) h
   | node _ ih =>
     intro h
@@ -502,6 +541,13 @@ inductive ValOK (m : Mem) : Ty → Val → List Dep → List Dep → Prop
       ArcBlk (m.blk k) t p → WFv t p → t.holdsView = false →
       (∃ dep ∈ P, ArcLanded m dep (.arc k p)) →
       ValOK m (.arc t) (.arc k p) P H
+  /-- A3.3, Agora #837: a read guard lent: as an `arc` share, its block (a
+      view) holds the payload it carries, of the view's type, and the share
+      lands through a dependency. -/
+  | rguard {u : Ty} {k : Nat} {p : Val} {P H : List Dep} :
+      ArcBlk (m.blk k) (.rguard u) p → WFv (.prod (.lk u) u) p → (Ty.prod (.lk u) u).holdsView = false →
+      (∃ dep ∈ P, ArcLanded m dep (.arc k p)) →
+      ValOK m (.rguard u) (.arc k p) P H
   /-- A3.2: a lock share lent: its block is a lock block of its type.  No
       one borrows into a lock's payload, so it lands through nothing; the
       sweep keeps the block while a slot holds the share. -/
@@ -957,7 +1003,12 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
                 -- an `arc` block's may be one at its
                 -- top or (Agora #755) a drained `Vec` of them, and a `dead`
                 -- block's is (`Blk.DtorOK`)
-                bl.DtorOK
+                bl.DtorOK ∧
+                -- Agora #837: and no block's type holds a read guard (an
+                -- `Arc`'s, a lock's and a cell's payload asks it, `Ty.ok`,
+                -- and a view's type is `prod (lk u) u` of a lock's `u`): a
+                -- guard is `% NotSend`
+                bl.ty.hasGuard = false
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/

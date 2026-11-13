@@ -598,7 +598,7 @@ theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT
   have hsp : r.spine = [] := src_spine hsrc
   have hanch := hi.leafAnch hsp
   -- what the invariant says of the block
-  obtain ⟨htok, hvf, _, _, hdead⟩ := hi.blocks k _ hk
+  obtain ⟨htok, hvf, _, _, hdead, _⟩ := hi.blocks k _ hk
   have hstr : u.isStruct = true := by
     have := Ty.ok_of_nest htok; simp [Ty.ok] at this; exact this.1
   have hfn : (Ty.nest n (.dtor f u)).hasFn = false := by
@@ -2807,7 +2807,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         rcases hblk1.2 kk _ hck.1 with h | ⟨_, _, h, _⟩
         · exact h
         · cases h
-      obtain ⟨htok, hvf, _, _, hdk⟩ := hi.blocks kk _ hk
+      obtain ⟨htok, hvf, _, _, hdk, _⟩ := hi.blocks kk _ hk
       have hstr : u.isStruct = true := by
         have := Ty.ok_of_nest htok; simp [Ty.ok] at this; exact this.1
       have hfn : (Ty.nest n (.dtor f u)).hasFn = false := by

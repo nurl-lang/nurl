@@ -517,6 +517,7 @@ theorem KB.of_noArc {n : Nat} {τ : Ty} {T : Val} (hw : WFv τ T) (ha : τ.hasAr
   | inr _ ih => simp only [Ty.hasArc, Bool.or_eq_false_iff] at ha; exact .inr (ih ha.2)
   | pkg _ hq ih => exact .pkg (ih (hq.2.2.1 ha))
   | arc => cases ha
+  | rguard => cases ha
   | lk => cases ha
   | cell => cases ha
   | dtor _ _ ih => exact ih ha
@@ -537,8 +538,11 @@ theorem KB.of_wfv {B : Nat → Option Blk} {n : Nat} (hB : ∀ k bl, B k = some 
     · exact .pkg (KB.of_noArc hv (hq.2.2.1 hqs))
     · exact .pkg (ih fun u k p h => hs u k p (.pkg h hqs))
   | arc =>
-    have h := hs _ _ _ .here
-    rcases h with h | h <;> exact .arc (hB _ _ h)
+    obtain ⟨_, h, _⟩ := ArcBlk.rd (hs _ _ _ .here)
+    exact .arc (hB _ _ h)
+  | rguard =>
+    obtain ⟨_, h, _⟩ := ArcBlk.rd (hs _ _ _ .rguard)
+    exact .arc (hB _ _ h)
   | lk =>
     obtain ⟨o, h⟩ := hs _ _ _ .lk
     exact .lk (hB _ _ h)
@@ -698,7 +702,8 @@ theorem CKeys.start {P : Prog} {G : Globs} (hG : GlobsOK P G) (s : Stmt) (nv : N
   · obtain ⟨_, _, _, hf⟩ := hG.sync g v hg
     rcases hf with ⟨u, k, o, _, rfl, hk⟩ | ⟨u, k, p, _, rfl, hk⟩
     · exact .lk (hB _ _ hk)
-    · rcases hk with hk | hk <;> exact .arc (hB _ _ hk)
+    · obtain ⟨_, hk, _⟩ := hk.rd
+      exact .arc (hB _ _ hk)
 
 /-- **On every configuration a typed start reaches, every share names a key
     below `nid`.** -/
