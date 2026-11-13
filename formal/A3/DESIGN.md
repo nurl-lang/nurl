@@ -1061,8 +1061,13 @@ dropped: `main_typed`, `main_safe`, `main_no_leak`, `main_no_leak_panic`,
 `A3.chanDtor_claim`), and (Agora #805) `A3.ChanDtorWitness.mainC` (the
 channel closed, then a destructor value sent: `mainC_typed`, `mainC_safe`,
 `mainC_no_leak`, `mainC_no_leak_panic`, `A3.chanClosed_claim`,
-`A3.chanClosed_reaps`). Read off the steps, not proved: that the glue's body
-drains the queue, and that a typed check-out body leaves the binding
+`A3.chanClosed_reaps`). Agora #805: the glue drains the queue in index order,
+stated as its frame's steps (`A3.chanGlue_drains`: `GlueOK`'s `unpair` puts
+the queue's field in `movedFirst`, the typing makes its hand-over a `letd` at
+`vec s` in the chain the tail starts with, `LetdChain`, whose frame
+`scopeD w f` ends by `Step.scopeDDrain` and nothing else, element 0 first;
+`glueV_drains` at the witness). Read off the steps, not proved: the reap's
+call into the glue's body, and that a typed check-out body leaves the binding
 holding its value; no run is traced, and no receive of a destructor value
 has a witness. Still refused: a channel of destructor values holding a
 share, and the plain `prod (vec D) int` lock payload (no glue).

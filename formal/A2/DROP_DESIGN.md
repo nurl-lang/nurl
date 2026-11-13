@@ -1115,8 +1115,13 @@ each one shrinks `CLAIM.md`'s exception:
      received, the share dropped), each typed, safe, leak-free (end and
      panic), with the mark-and-reap step lemmas, A3's claim
      (`A3.lockVecDtor_claim`, `A3.chanDtor_claim`) and the A3 reap instance
-     (`A3.lockVecDtor_reaps`, `A3.chanDtor_reaps`). Read off the steps, not
-     proved: that the glue's body drains the queue; no run is traced.  (Agora
+     (`A3.lockVecDtor_reaps`, `A3.chanDtor_reaps`). Agora #805: the glue's
+     body drains the queue in index order, as the frame's steps
+     (`A3.chanGlue_drains`, over `GlueOK`'s shape and the glue's typing: the
+     queue handed to a `letd` at `vec s`, whose frame's end is
+     `Step.scopeDDrain`, element 0 first; `A3.ChanDtorWitness.glueV_drains`).
+     Read off the steps, not proved: the reap's call into the glue's body; no
+     run is traced.  (Agora
      #805: the parked block of a closed channel's send is marked and reaped
      by the sender, `A3.TStep.closed_send_reaps`, witness
      `A3.ChanDtorWitness.mainC`, `A3.chanClosed_claim`, `A3.chanClosed_reaps`.)

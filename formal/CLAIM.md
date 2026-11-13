@@ -1077,12 +1077,17 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `A3.chanDtor_reaps`) and (Agora #805) `A3.ChanDtorWitness.mainC` (the
   channel closed, then a destructor value sent: `mainC_typed`,
   `mainC_safe`, `mainC_no_leak`, `mainC_no_leak_panic`;
-  `A3.chanClosed_claim`, `A3.chanClosed_reaps`). Read off the steps, not
-  proved: that the glue's body drains the queue (its typing,
-  `A2.DtorWitness.glueV_body`, binds the queue by `letd` at `vec DT`,
-  whose frame's end is the drain); no
-  theorem traces the run, and no receive of a destructor value is given a
-  witness. Not typed: a channel of destructor values that hold a share
+  `A3.chanClosed_claim`, `A3.chanClosed_reaps`). Agora #805: a channel's
+  glue drains the queue in index order (`A3.chanGlue_drains`, any
+  `GlueOK` glue of `prod (vec s) int` with `s` holding a destructor value,
+  and `A3.ChanDtorWitness.glueV_drains`): its body takes the struct apart
+  and, through the typing, hands the queue to a `letd` at `vec s` (an
+  `assign` or `unpair` of it is refused), whose frame's end, under any
+  renaming the call applies, is the drain's step and nothing else, element
+  0 first, each in a frame of its own. Read off the steps, not proved:
+  the run from the reap's call of the glue into its body (the parameter's
+  binding, `BindParams`); no theorem traces the run, and no receive of a
+  destructor value is given a witness. Not typed: a channel of destructor values that hold a share
   (`Ty.lkPay`'s `!hasArc`, stricter than nurlc), or of values holding one
   in a field of a type with no destructor of its own.
 - Agora #610: **the last share's drop runs an `Arc`'s destructor, on the

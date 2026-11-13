@@ -115,6 +115,13 @@ import A3
 #print axioms A3.ChanDtorWitness.mainC_no_leak_panic
 #print axioms A3.chanClosed_claim
 #print axioms A3.chanClosed_reaps
+-- Agora #805: a channel's glue (`GlueOK` over `prod (vec s) int`) drains the queue in index order,
+-- as its frame's steps: the queue to a `letd` at `vec s`, whose frame ends by the drain
+#print axioms A3.LetdChain.of_movedFirst
+#print axioms A3.LetdChain.typed
+#print axioms A3.unpair_body
+#print axioms A3.chanGlue_drains
+#print axioms A3.ChanDtorWitness.glueV_drains
 -- Agora #755 item 1: A3's marking sweep and eager reaps (A3/Mark.lean, A3/Reap.lean):
 -- the thread that drops the last share runs the destructor
 #print axioms A3.CParts.sweepD

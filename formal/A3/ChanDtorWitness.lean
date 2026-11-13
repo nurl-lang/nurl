@@ -33,9 +33,10 @@ nothing refers to the channel's block any more the marking sweep marks it
 (`last_drop_reaps`, and on A3's threads `A3.chanDtor_reaps`), which binds
 the payload in a frame `scopeD _ 7 skip` whose end calls `glueV` on it
 (`reap_runs_glue`, over `A2.Dtor.scopeD_end_runs_dtor`); the glue's body
-takes it apart and drains the queue (`A2.DtorWitness.glueV_body`'s typing:
-the queue to a `letd` at `vec DT`), each element's `dfn` in index order,
-as nurlc's last `Channel_drop` drops the queued elements in order on the
+takes it apart and drains the queue, each element's `dfn` in index order
+(Agora #805: the glue's steps, `A3.chanGlue_drains`, `glueV_drains`: the
+queue to a `letd` frame whose end is the drain, element 0 first), as
+nurlc's last `Channel_drop` drops the queued elements in order on the
 dropping thread.  As for the other witnesses, no theorem traces the run.
 
 A `chan_send` to a closed channel does not queue the value: it moves it
@@ -225,7 +226,7 @@ theorem last_drop_reaps {m : Mem} {k : Nat} {p : Val} (hk : m.blk k = some ⟨GV
     `scopeD m.nv 7 skip` before the redex; from a store where that slot
     still holds it (no node: a struct) and no orphan awaits, that frame's end
     is the call of `glueV` on it (`A2.Dtor.scopeD_end_runs_dtor`), whose body
-    takes it apart and drains the queue. -/
+    takes it apart and drains the queue (`A3.chanGlue_drains`, `glueV_drains`). -/
 theorem reap_runs_glue {m : Mem} {k : Nat} {q f : Val}
     (hk : m.blk k = some ⟨GVD, .dead, some (.pair q f)⟩)
     (hnc : ∀ c', ¬ Sub (.cell c') (.pair q f)) {r : Stmt} (hr : r.src = true) :
@@ -491,3 +492,217 @@ theorem chanClosed_reaps {C : Cfg} (hr : Reach A2.DtorWitness.P (fun _ => false)
     (fun ⟨_, _, _, _, _, _, h⟩ => by cases h) hx he ha hc rfl hse
 
 end A3
+
+/-! ### Agora #805: a channel's glue drains the queue in index order
+
+A channel's state under its glue is `Ty.dtor g (prod (vec s) int)`, `g` a
+`GlueOK` function: its body takes the struct apart (`unpair 0 x z s'`), and
+the queue's field `x`, of a type holding a destructor value, is handed on
+first thing (`Stmt.movedFirst`).  Read through the typing, that hand-over is
+a `letd` of the queue at its own type, `vec s`, in the chain of hand-overs
+`s'` starts with (`LetdChain`: an `unpair` of `x` is refused, `x` being no
+struct, and the glue's tail does nothing else, `Stmt.pureGlue`); its frame is
+`scopeD w f`, whose end, with the queue non-empty, is the drain's step and
+nothing else: element 0 to a `letd` of its own (`chanGlue_drains`; at the
+witness's `glueV`, `glueV_drains`).  Not traced: the run from the reap's
+call of the glue into its body (the call binds the struct to the renamed
+parameter, `BindParams`), and the destructor of each element run to its
+end. -/
+
+namespace A3
+open A2
+
+/-- `t` is reached from `s` through hand-overs to `letd` (`letd w f (.var y) _`). -/
+inductive LetdChain : Stmt → Stmt → Prop
+  | refl {s : Stmt} : LetdChain s s
+  | letd {w f y : Nat} {k t : Stmt} : LetdChain k t → LetdChain (.letd w f (.var y) k) t
+
+/-- What `movedFirst` lists is moved by a `letd` of the chain, the chain's
+    `assign`, or taken apart by its `unpair`. -/
+theorem LetdChain.of_movedFirst {x : Var} : ∀ {s : Stmt}, x ∈ s.movedFirst →
+    (∃ w f k, LetdChain s (.letd w f (.var x) k)) ∨ (∃ y, LetdChain s (.assign y (.var x))) ∨
+      (∃ a b k, LetdChain s (.unpair x a b k))
+  | .letd w f r k, h => by
+    cases r with
+    | var y =>
+      simp only [Stmt.movedFirst, List.mem_cons] at h
+      rcases h with rfl | h
+      · exact .inl ⟨w, f, k, .refl⟩
+      · rcases LetdChain.of_movedFirst h with ⟨w', f', k', hc⟩ | ⟨y', hc⟩ | ⟨a, b, k', hc⟩
+        · exact .inl ⟨w', f', k', .letd hc⟩
+        · exact .inr (.inl ⟨y', .letd hc⟩)
+        · exact .inr (.inr ⟨a, b, k', .letd hc⟩)
+    | _ => simp [Stmt.movedFirst] at h
+  | .assign y r, h => by
+    cases r with
+    | var w => simp only [Stmt.movedFirst, List.mem_singleton] at h; subst h; exact .inr (.inl ⟨y, .refl⟩)
+    | _ => simp [Stmt.movedFirst] at h
+  | .unpair y a b k, h => by
+    simp only [Stmt.movedFirst, List.mem_singleton] at h; subst h; exact .inr (.inr ⟨a, b, k, .refl⟩)
+  | .skip, h | .seq _ _, h | .letv _ _ _, h | .letcall _ _ _ _, h | .ite _ _ _, h | .while _ _, h
+  | .push _ _, h | .free _, h | .scope _ _, h | .rbind _ _, h | .frozen _ _, h | .panic, h
+  | .letrec _ _ _, h | .catchR _ _ _, h | .callc _ _ _ _ _, h | .scopeD _ _ _, h | .edit _ _ _, h
+  | .withLock _ _ _, h | .scopeL _ _ _ _, h | .insert _ _ _, h | .withElem _ _ _ _, h
+  | .callcE _ _ _ _ _, h => by simp [Stmt.movedFirst] at h
+
+theorem LetdChain.pureGlue {s t : Stmt} (h : LetdChain s t) (hp : s.pureGlue = true) : t.pureGlue = true := by
+  induction h with
+  | refl => exact hp
+  | letd _ ih => exact ih (by simpa [Stmt.pureGlue] using hp)
+
+/-- A renaming (a call's, `callRen`) keeps the chain. -/
+theorem LetdChain.rename {s t : Stmt} (h : LetdChain s t) (ρ : Var → Var) : LetdChain (s.rename ρ) (t.rename ρ) := by
+  induction h with
+  | refl => exact .refl
+  | letd _ ih => exact .letd ih
+
+/-- A hand-over of `y` keeps the type of every other binding (and `y`'s). -/
+theorem RhsT.var_ty {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E : Entry} (h : RhsT Γ F (.var y) E Γ1)
+    {v : Var} {E0 : Entry} (hv : Γ v = some E0) : ∃ E1, Γ1 v = some E1 ∧ E1.ty = E0.ty := by
+  have key : ∀ E', Γ y = some E' →
+      ∃ E1, setE (kill .replace false y Γ) y { E' with live := false, dtor := false } v = some E1 ∧
+        E1.ty = E0.ty := by
+    intro E' hy
+    by_cases he : v = y
+    · subst he; rw [hv] at hy; cases hy; exact ⟨{ E0 with live := false, dtor := false }, by simp [setE, upd], rfl⟩
+    · refine ⟨killE .replace false y E0, by simp [setE, upd, he, kill, hv], ?_⟩
+      unfold killE; split <;> rfl
+  cases h <;> first | exact ⟨E0, hv, rfl⟩ | exact key _ (by assumption)
+
+/-- Through a chain of hand-overs a binding stays, at its type. -/
+theorem LetdChain.typed {P : Prog} {s t : Stmt} (hc : LetdChain s t) :
+    ∀ {Γ : Ctx} {F : List Var} {Δ : Ctx} {x : Var} {E : Entry}, StmtT P Γ F s Δ → Γ x = some E →
+      ∃ Γ' F' Δ' E', StmtT P Γ' F' t Δ' ∧ Γ' x = some E' ∧ E'.ty = E.ty := by
+  induction hc with
+  | refl => intro Γ F Δ x E h hx; exact ⟨Γ, F, Δ, E, h, hx, rfl⟩
+  | @letd w f y k t _ ih =>
+    intro Γ F Δ x E h hx
+    generalize hst : Stmt.letd w f (.var y) k = st at h
+    induction h generalizing E with
+    | letd _ hw _ hr _ _ _ _ _ _ hb _ _ =>
+      cases hst
+      have hne : x ≠ w := fun he => by rw [he, hw] at hx; cases hx
+      obtain ⟨E1, h1, h1t⟩ := RhsT.var_ty hr hx
+      obtain ⟨Γ', F', Δ', E', h', hx', ht'⟩ := ih hb (x := x) (E := E1) (by simp [setE, upd, hne, h1])
+      exact ⟨Γ', F', Δ', E', h', hx', ht'.trans h1t⟩
+    | @sub Γa Γ0 _ _ _ _ hw _ _ ih2 =>
+      obtain ⟨hn, hE⟩ := hw.1 x
+      cases hg : Γ0 x with
+      | none => exact absurd (hn.mpr hg) (by rw [hx]; simp)
+      | some E' =>
+        obtain ⟨Γ', F', Δ', E'', h', hx', ht'⟩ := ih2 hg hst
+        exact ⟨Γ', F', Δ', E'', h', hx', ht'.trans (hE E E' hx hg).ty⟩
+    | _ => cases hst
+
+theorem compE_ty (E : Entry) (a : Ty) : (compE E a).ty = a := by cases a <;> rfl
+
+/-- What a typed `unpair`'s body is typed in: `y` a struct `prod a b` (under
+    its destructor type if it has one), `x` bound at `a`, and `x ≠ z`. -/
+theorem unpair_body {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt}
+    (h : StmtT P Γ F (.unpair y x z s) Δ) :
+    ∃ (E : Entry) (a b : Ty), Γ y = some E ∧ E.ty.undtor = .prod a b ∧ x ≠ z ∧
+      ∃ Γ' F' Δ' Ex, StmtT P Γ' F' s Δ' ∧ Γ' x = some Ex ∧ Ex.ty = a := by
+  generalize hst : Stmt.unpair y x z s = st at h
+  induction h with
+  | unpair _ hy _ _ hty _ _ _ h9 _ _ hb =>
+    cases hst
+    exact ⟨_, _, _, hy, unpair_undtor hty, h9, _, _, _, _, hb, by simp [setE, upd, h9]; rfl, compE_ty _ _⟩
+  | @sub Γa Γ0 _ _ _ _ hw _ _ ih =>
+    obtain ⟨E', a, b, hy', hty, hxz, rest⟩ := ih hst
+    obtain ⟨hn, hE⟩ := hw.1 y
+    cases hg : Γa y with
+    | none => rw [hn.mp hg] at hy'; cases hy'
+    | some E =>
+      have hw' := hE E E' hg hy'
+      exact ⟨E, a, b, rfl, by rw [hw'.ty] at hty; exact hty, hxz, rest⟩
+  | _ => cases hst
+
+/-- **Agora #805: a channel's glue drains the queue in index order.**  The
+    glue `g` of a channel's state, `prod (vec s) int` with `s` holding a
+    destructor value (`GlueOK`, typed: `ProgOK`), takes the struct apart
+    (`unpair 0 x z s'`) and hands the queue `x` to a `letd w f` of the chain
+    `s'` starts with (`LetdChain`; not to an `assign` nor an `unpair`, which
+    the glue's typing refuses), and the steps of that hand-over, under any
+    renaming `ρ` of the body's variables (a call runs the body renamed,
+    `callIn`'s `callRen`), are:
+
+    1. the `unpair`: from a store where the parameter `0` owns the state
+       `pair q fl`, `x` owns the queue `q` and `z` the flag;
+    2. the `letd`: from a store where `x` owns `q`, `q` moves to `w`, in the
+       frame `scopeD w f k`;
+    3. that frame's end, with `w` owning a non-empty `Vec`: the drain's step
+       and nothing else (no orphan to reap first), element 0 to a `letd` of
+       its own (`Step.scopeDDrain`), which binds it, the queue one shorter,
+       in a frame `scopeD _ f` of its own — so the elements' destructors run
+       in index order, FIFO, as nurlc's last `Channel_drop` drops `ChImpl`'s
+       queue. -/
+theorem chanGlue_drains {P : Prog} (hP : ProgOK P) {g : Nat} {s : Ty} (h : GlueOK P g (.prod (.vec s) .int))
+    (hs : s.holdsDtor = true) :
+    ∃ fn x z s' w f k, P[g]? = some fn ∧ fn.params = [(.sink, .dtor g (.prod (.vec s) .int))] ∧
+      fn.body = .unpair 0 x z s' ∧ x ≠ z ∧ x ∈ s'.movedFirst ∧ LetdChain s' (.letd w f (.var x) k) ∧
+      ∀ ρ : Var → Var,
+      LetdChain (s'.rename ρ) (.letd (ρ w) f (.var (ρ x)) (k.rename ρ)) ∧
+      (∀ (m : Mem) (q fl : Val), ρ x ≠ ρ z → m.st (ρ 0) = some ⟨true, some (.pair q fl)⟩ →
+        m.st (ρ x) = none → m.st (ρ z) = none →
+        Step P m (fn.body.rename ρ)
+          (.ok (((m.set (ρ 0) ⟨true, none⟩).set (ρ x) ⟨q.owns, some q⟩).set (ρ z) ⟨fl.owns, some fl⟩)
+            (.scope (ρ x) (.scope (ρ z) (s'.rename ρ))))) ∧
+      (∀ (m : Mem) (q : Val), m.st (ρ x) = some ⟨true, some q⟩ → m.st (ρ w) = none →
+        Step P m (.letd (ρ w) f (.var (ρ x)) (k.rename ρ))
+          (.ok ((m.set (ρ x) ⟨true, none⟩).set (ρ w) ⟨true, some q⟩) (.scopeD (ρ w) f (k.rename ρ)))) ∧
+      (∀ (m : Mem) (t : Ty) (c d : Nat) (e : Val) (es : List Val),
+        m.st (ρ w) = some ⟨true, some (.node t c d (e :: es))⟩ → ¬ Orphan m →
+        (∀ r, Step P m (.scopeD (ρ w) f .skip) r ↔
+          r = .ok { m with nv := m.nv + 1 } (.scopeD (ρ w) f (.letd m.nv f (.remove (ρ w) (.lit 0)) .skip))) ∧
+        ∀ (m2 : Mem) (y : Var), m2.st (ρ w) = some ⟨true, some (.node t c d (e :: es))⟩ → m2.st y = none →
+          m2.alloc c = true → m2.alloc d = true →
+          Step P m2 (.scopeD (ρ w) f (.letd y f (.remove (ρ w) (.lit 0)) .skip))
+            (.ok ((m2.set (ρ w) ⟨true, some (.node t c d es)⟩).set y ⟨e.owns, some e⟩)
+              (.scopeD (ρ w) f (.scopeD y f .skip)))) := by
+  obtain ⟨fn, x, z, s', hfn, hps, hbody, hpure, hdx, _⟩ := A2.Dtor.glue_takes_apart hP h
+  have hmf := (hdx (by simpa [Ty.holdsDtor] using hs)).1
+  obtain ⟨Δ, hb, _⟩ := (hP fn (List.mem_of_getElem? hfn)).2.2.2.2.2.2.2.2.2.2.2.2
+  rw [hbody] at hb
+  obtain ⟨E0, a, b, h0, hty, hxz, Γ', F', Δ', Ex, hb', hx', hxt⟩ := unpair_body hb
+  have hE0 : E0.ty = .dtor g (.prod (.vec s) .int) := by
+    simp [sigCtx, hps, paramE] at h0
+    rw [← h0]
+  rw [hE0] at hty
+  simp [Ty.undtor] at hty
+  obtain ⟨rfl, rfl⟩ := hty
+  rcases LetdChain.of_movedFirst hmf with ⟨w, f, k, hc⟩ | ⟨y, hc⟩ | ⟨a', b', k, hc⟩
+  · refine ⟨fn, x, z, s', w, f, k, hfn, hps, hbody, hxz, hmf, hc, fun ρ => ⟨hc.rename ρ,
+      fun m q fl hρ h0 hx hz => ?_, fun m q hx hw => Step.letd hw (EvalR.moveOwn hx),
+      fun m t c d e es hw hno => ⟨?_, ?_⟩⟩⟩
+    · rw [hbody]; exact Step.unpair h0 hx hz hρ
+    · obtain ⟨h1, h2⟩ := A2.Dtor.scopeD_end_drains (P := P) (f := f) hw hno
+      exact fun r => ⟨h2 r, fun h => h ▸ h1⟩
+    · exact fun m2 y hw2 hy hc2 hd2 => A2.Dtor.scopeD_drain_binds hw2 hy hc2 hd2
+  · have := LetdChain.pureGlue hc hpure
+    simp [Stmt.pureGlue] at this
+  · exfalso
+    obtain ⟨Γ'', F'', Δ'', E'', hu, hx'', ht''⟩ := LetdChain.typed hc hb' hx'
+    obtain ⟨E3, a1, b1, h3, h3t, _⟩ := unpair_body hu
+    rw [hx''] at h3; cases h3
+    rw [ht'', hxt] at h3t
+    simp [Ty.undtor] at h3t
+
+end A3
+
+namespace A3.ChanDtorWitness
+open A2
+open A2.DtorWitness (DT P prog_ok)
+
+/-- ... at the witness's channel: `glueV`, the glue of `prod (vec DT) int`,
+    drains the queue in index order (`A3.chanGlue_drains`). -/
+theorem glueV_drains : ∃ fn x z s' w f k, P[7]? = some fn ∧ fn.body = .unpair 0 x z s' ∧
+    LetdChain s' (.letd w f (.var x) k) ∧
+    ∀ (m : Mem) (t : Ty) (c d : Nat) (e : Val) (es : List Val),
+      m.st w = some ⟨true, some (.node t c d (e :: es))⟩ → ¬ Orphan m →
+      ∀ r, Step P m (.scopeD w f .skip) r ↔
+        r = .ok { m with nv := m.nv + 1 } (.scopeD w f (.letd m.nv f (.remove w (.lit 0)) .skip)) := by
+  obtain ⟨fn, x, z, s', w, f, k, h1, _, h3, _, _, h5, h6⟩ :=
+    chanGlue_drains (P := P) prog_ok A2.DtorWitness.glueV_glueOK (s := DT) rfl
+  exact ⟨fn, x, z, s', w, f, k, h1, h3, h5, fun m t c d e es hw hno => ((h6 id).2.2.2 m t c d e es hw hno).1⟩
+
+end A3.ChanDtorWitness
