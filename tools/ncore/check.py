@@ -158,6 +158,7 @@ class FnCheck:
         self.tails_memo = {}
         self.agg_lends = {}      # a literal temporary -> the bindings it shows and has not taken
         self.temp_fresh = {}
+        self.call_lent = {}      # a call's temporary -> the arguments it may hand back whole
         self.walking = set()
         self.moved_from = None   # the last value moved that holds views of its own parts     # the loans of the loops being walked: their containers' buffers     # a temporary -> its value is what a call made and handed over
         self.s_invokes = set()
@@ -853,6 +854,10 @@ class FnCheck:
             return AV("O", (), (), held)
         if sm["res"] == "lent":
             loans, alias = set(), set()
+            if dest_vid is not None:
+                # (the arguments this call may hand back whole, as written)
+                self.call_lent[dest_vid] = [ops[k] for (k, path, kind) in sm["lends"]
+                                            if not path and kind == "handle" and k < len(ops)]
             for k in whole:
                 moved = self.move_out(st, ops[k][1], line)
                 loans |= moved.loans
@@ -1350,18 +1355,28 @@ class FnCheck:
                                   lend_owner=outer if v.kind == "temp" else ((lambda x: True) if v.mut and repoint else (lambda x: False)))
                 # (…through a join too: `= x ? c x ( f )` - where the join may
                 # select the target, its value is copied in, h373)
-                own_parts = cur is not None and cur.own == "O" and new.own in ("L", "O") and any(
+                own_parts = cur is not None and cur.own in ("O", "P") and new.own in ("L", "O") and any(
                     self.loans.get(l, ((None,),))[0][0] == vid for l in new.loans) and v.kind != "temp"
                 if own_parts:
                     # `= o ( f o … )`: o is given (a part of) its own value back
                     # - it keeps owning it; nothing is released (the keep rule)
                     rest = {l for l in new.loans if self.loans.get(l, ((None,),))[0][0] != vid}
-                    if rest and new.call and v.ty is not None and not self.T.copyable(v.ty):
+                    # (`= o ( f o other )`: the call is handed the binding
+                    # itself and another argument, and may hand back either)
+                    lent = self.call_lent.get(rv[1][1], ()) if rv[0] == "use" and rv[1][0] == "v" else ()
+                    direct = ("v", vid, ()) in lent and any(op != ("v", vid, ()) for op in lent)
+                    if rest and new.call and v.ty is not None and (
+                            (v.ty[0] in ("opt", "res") and direct) or not self.T.copyable(v.ty)):
                         # which of them a run hands back is not known, so
-                        # neither is whether the binding still owns its value
+                        # neither is whether the binding still owns its value.
+                        # (A handle is told apart at run time by its buffer.
+                        # An option or a result has no such key, and no
+                        # binding borrows the call's result to take the old
+                        # value over: agora #412, #425.)
                         self.err(ln, f"{v.name} is given back what this call may lend out of itself "
                                      f"or out of another argument")
-                    st.vals[vid] = AV("O", rest, frozenset(), cur.held | new.held)
+                    st.vals[vid] = AV(cur.own, () if cur.own == "P" else rest, frozenset(),
+                                      cur.held | new.held | (hfrom(rest) if cur.own == "P" else frozenset()))
                     return st
                 if cur is not None and cur.own in ("O", "P"):
                     self.handover(st, (vid, ()))

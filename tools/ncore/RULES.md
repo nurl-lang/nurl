@@ -60,6 +60,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A field taken out of its owner is not read, nor the value handed on whole, until it is given a value again | §2.1 | `State.gone` |
 | A store replacing a place hands its old value to the binding that read that very place | §7.6 (#265) | `handover` |
 | `= o ( f o … )`: a binding given a part of its own value keeps it | §7.6 (#475) | `own_parts` |
+| `= o ( f o other )`, the call handed the binding itself and another argument it may hand back: an option or a result owner is refused (no run-time key says which came back), a handle is told apart by its buffer | §7.6 (#412, #419) | `call_lent`, `stmt` (`assign`) |
 | A lend handed to a holder that outlives what it borrows is copied where it can be, refused where it cannot | §7.6 | `transfer` |
 | A value owned on some paths and lent on others is copied on the paths that lend it, for a holder that outlives the lender | §7.6 | `transfer` (`mixed`) |
 | A borrowed value stored into an owner is copied, with the views it holds; one that cannot be copied is refused | §7.6, §2.13 | `rvalue` (`agg`), `apply_call` stores |
@@ -100,6 +101,18 @@ stops that way as decided by the walk (`WALK_RULES`).
 The walk's ownership refusals go through one door (`own_die`,
 `bck_emit_error`, `g_walk_owns` in compiler/nurlc.nu) that `--emit-core`
 passes, so the program reaches the checker whole.
+
+## One IR shape, two answers in nurlc
+
+The probes below have the IR of a refused probe and are accepted by nurlc
+today, or the reverse: the walk's answer depends on a spelling the IR does
+not have. The engine gives one answer. Which one is PROPOSAL_CORE_IR D4
+(the owner's and claude-formal's): the checker takes the answer formal/A2
+gives and lists the other side here.
+
+| shape | refused when | accepted when | the checker |
+|---|---|---|---|
+| `= o ( pick o other k )`, `o` an option owner, `pick` may hand back either argument | `pick` is a plain function defined above the call (`option_owner_given_a_call_that_may_lend_itself_or_another_argument`, agora #412) | `pick` is defined below the call, is a generic instance, or is a `dyn` method (`option_owner_given_back_by_a_callee_below_runs_clean`, `…_by_a_generic_runs_clean`, `…_by_a_dyn_method_runs_clean`): the per-call key decides at run time | refuses all (A2 refuses the form) |
 
 ## Declared summaries
 
