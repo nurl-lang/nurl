@@ -1463,9 +1463,14 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Ea.mode.isRoot = true → a ∉ s.vars → (∃ E, Δ x = some E ∧ E.live = true) →
       (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) →
       StmtT P Γ F (.withLock a x s) (exitScope x Δ)
-  /-- A3.2: run time: `x`'s lock scope, typed as a `scope`. -/
+  /-- A3.2: run time: `x`'s lock scope, typed as a `scope`.  (Agora #805: for
+      a payload that holds a destructor value, `x` is an owner, and live where
+      the body ends, as `withLock` asks: its check-out's end gives a `t` back,
+      `A3.LockDtorWitness.scopeL_end_owns`.) -/
   | scopeL {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
-      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ E.ty = t) → x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
+      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ E.ty = t ∧
+        (t.holdsDtor = true → E.mode = .own ∧ ∃ E', Δ x = some E' ∧ E'.live = true)) →
+      x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
       StmtT P Γ F (.scopeL k t x s) (exitScope x Δ)
   /-- A2-elem (Agora #391): `y`'s value moves into `x` at index `i`: a push
       whose element then moves to index `i`.  The invariant does not see the

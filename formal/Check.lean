@@ -76,6 +76,14 @@ import A3
 #print axioms A3.LockDtorWitness.scopeL_end_gives_back
 #print axioms A3.LockDtorWitness.scopeL_panic_gives_back
 #print axioms A3.LockDtorWitness.sendCheck_noArc
+-- Agora #805: a typed check-out frame of a destructor payload ends with `x` owning a `t`, and at every
+-- panic point `x` owns a `t` (given back) or nothing (`StmtT.scopeL` asks `x` an owner, live at the end)
+#print axioms A3.LockDtorWitness.scopeL_end_entry
+#print axioms A3.LockDtorWitness.scopeL_end_owns
+#print axioms A3.LockDtorWitness.scopeL_typed_end_gives_back
+#print axioms A3.LockDtorWitness.Step.panic_st
+#print axioms A3.LockDtorWitness.scopeL_entry
+#print axioms A3.LockDtorWitness.scopeL_typed_panic
 #print axioms A3.LockDtorWitness.rwRead_dtor_refused
 #print axioms A3.LockDtorWitness.lockRestore_dtor_refused
 #print axioms A3.LockDtorWitness.main_typed

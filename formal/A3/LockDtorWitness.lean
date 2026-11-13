@@ -32,6 +32,14 @@ stores and steps, not of this program's run (which no theorem here traces):
   the value in the lock's memory (a body that moved the value out handed it
   to an owner that runs its destructor, a `letd` or a call's, by A2-drop's
   rules; that the body gave it no other value is `StmtT.withLock`'s `hna`);
+* (Agora #805) for a typed frame, the binding's half of those hypotheses is
+  proved: `StmtT.scopeL` asks, for a destructor payload, that `x` is an
+  owner, live where the body ends, so at the end `x` owns a `t`
+  (`scopeL_end_owns`, `scopeL_typed_end_gives_back`) and at every panic
+  point a `t` (given back) or nothing (moved to an owner that runs its
+  destructor; the release then frees nothing): `scopeL_typed_panic`.  The
+  block's half (its payload checked out there) is still a hypothesis: no
+  invariant ties a `scopeL` frame to its block;
 * when the lock's last share is gone, the marking sweep marks its block
   `dead`, its payload in it, and the same thread's next step is the reap
   that hands the payload to a destructor frame of `dfn`
@@ -186,6 +194,161 @@ theorem scopeL_panic_gives_back {P : Prog} {m m2 : Mem} {k : Nat} {t : Ty} {x : 
   cases h with
   | scopeLP hs hrl => exact ⟨_, hs, fun v hx hw hna hvf hk => release_puts hx hw hna hvf hk hrl⟩
   | waitPanic hw => exact hw.elim
+
+/-- Agora #805: **a typed check-out of a destructor payload ends with its
+    binding live and owned, at the payload's type**: the typing of the run-time
+    frame `scopeL k t x skip` (whose rule asks, for a `t` that holds a
+    destructor value, that `x` is an owner and live where the body ends, as
+    `withLock` does; `StmtT.scopeL`) names `x` live, owned, of type `t`. -/
+theorem scopeL_end_entry {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var}
+    (ht : StmtT P Γ F (.scopeL k t x .skip) Δ) (hd : t.holdsDtor = true) :
+    ∃ E, Γ x = some E ∧ E.live = true ∧ E.mode = .own ∧ E.ty = t := by
+  generalize hs : Stmt.scopeL k t x .skip = st at ht
+  induction ht with
+  | scopeL hxE _ hb _ =>
+    cases hs
+    obtain ⟨E, hx, _, hty, hdl⟩ := hxE
+    obtain ⟨hmo, E', hΔ, hlv⟩ := hdl hd
+    refine ⟨E, hx, ?_, hmo, hty⟩
+    rcases skip_inv hb with rfl | hw
+    · rw [hx] at hΔ; cases hΔ; exact hlv
+    · exact (((hw.1 x).2 E E' hx hΔ).live hlv).1
+  | @sub Γa Γ0 _ _ _ _ hw _ _ ih =>
+    obtain ⟨E0, h0, hl0, hm0, ht0⟩ := ih hs
+    obtain ⟨hn, hE⟩ := hw.1 x
+    cases hg : Γa x with
+    | none => rw [hn.mp hg] at h0; cases h0
+    | some E =>
+      have hw' := hE E E0 hg h0
+      exact ⟨E, rfl, (hw'.live hl0).1, by rw [← hw'.mode]; exact hm0, by rw [← hw'.ty]; exact ht0⟩
+  | _ => cases hs
+
+/-- **... so in the store, `x` owns a `t` there** (`MInv.slot`): the first
+    hypothesis of `scopeL_end_gives_back`, discharged for a typed frame. -/
+theorem scopeL_end_owns {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {m : Mem}
+    (ht : StmtT P Γ F (.scopeL k t x .skip) Δ) (hi : MInv m Γ) (hd : t.holdsDtor = true) :
+    ∃ v, m.st x = some ⟨true, some v⟩ ∧ WFv t v := by
+  obtain ⟨E, hx, hl, hm, hty⟩ := scopeL_end_entry ht hd
+  obtain ⟨sl, hsl, _, hown, hok, _⟩ := hi.slot x E hx
+  rw [hm] at hown hok
+  obtain ⟨_, hw, hlive⟩ := hok rfl
+  obtain ⟨T, hT, _⟩ := hlive hl
+  obtain ⟨o, val⟩ := sl
+  simp only at hown hT
+  subst hown; subst hT
+  exact ⟨T, hsl, hty ▸ hw T rfl⟩
+
+/-- **The check-out's end gives the value back, for a typed frame**: with
+    `x`'s ownership discharged by the typing (`scopeL_end_owns`), what is
+    left of `scopeL_end_gives_back`'s hypotheses is the block's: that it has
+    its payload checked out (`m.blk k = some ⟨t, .lock, none⟩`). -/
+theorem scopeL_typed_end_gives_back {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var}
+    {m : Mem} (ht : StmtT P Γ F (.scopeL k t x .skip) Δ) (hi : MInv m Γ) (hd : t.holdsDtor = true)
+    (hna : t.hasArc = false) (hvf : t.holdsView = false) (hk : m.blk k = some ⟨t, .lock, none⟩)
+    (hno : ¬ Orphan m) {r : Res} (h : Step P m (.scopeL k t x .skip) r) :
+    ∃ v, m.st x = some ⟨true, some v⟩ ∧ r = .ok ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x) .skip := by
+  obtain ⟨v, hx, hw⟩ := scopeL_end_owns ht hi hd
+  exact ⟨v, hx, scopeL_end_gives_back hx hw hna hvf hk hno h⟩
+
+/-- A panic's unwinding changes no slot but the frames' it unwinds (the
+    statement's spine). -/
+theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic m1)) :
+    ∀ y, y ∉ s.spine → m1.st y = m.st y := by
+  generalize hr : Res.panic m1 = r at h
+  induction h generalizing m1 with
+  | seqP _ ih => cases hr; exact fun y hy => ih rfl y (by simpa [Stmt.spine] using hy)
+  | letvP _ | assignP _ | letdP _ | panic | waitPanic _ | withElemOOB _ _ _ _ =>
+    cases hr; exact fun _ _ => rfl
+  | @scopeP m1' x' _ _ _ _ _ _ ih =>
+    cases hr
+    intro y hy
+    simp only [Stmt.spine, List.mem_cons, not_or] at hy
+    show upd m1'.st x' none y = _
+    rw [upd_ne _ _ hy.1]; exact ih rfl y hy.2
+  | @rbindP m1' p _ _ _ _ ih =>
+    cases hr
+    intro y hy
+    simp only [Stmt.spine, List.mem_cons, not_or] at hy
+    show upd m1'.st p none y = _
+    rw [upd_ne _ _ hy.1]; exact ih rfl y hy.2
+  | frozenP _ ih => cases hr; exact fun y hy => ih rfl y (by simpa [Stmt.spine] using hy)
+  | @scopeDPMoved m1' x' _ _ _ _ ih =>
+    cases hr
+    intro y hy
+    simp only [Stmt.spine, List.mem_cons, not_or] at hy
+    show upd m1'.st x' none y = _
+    rw [upd_ne _ _ hy.1]; exact ih rfl y hy.2
+  | @scopeLP m1' m2' _ _ x' _ _ hrl ih =>
+    cases hr
+    intro y hy
+    simp only [Stmt.spine, List.mem_cons, not_or] at hy
+    have : m2'.st y = m1'.st y := by
+      cases hrl <;> (show upd m1'.st x' none y = _; rw [upd_ne _ _ hy.1])
+    rw [this]; exact ih rfl y hy.2
+  | _ => cases hr
+
+/-- The typing of a check-out frame of a destructor payload names `x` an
+    owner of type `t` (`StmtT.scopeL`, through `sub`). -/
+theorem scopeL_entry {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
+    (ht : StmtT P Γ F (.scopeL k t x s) Δ) (hd : t.holdsDtor = true) :
+    ∃ E, Γ x = some E ∧ E.mode = .own ∧ E.ty = t := by
+  generalize hs : Stmt.scopeL k t x s = st at ht
+  induction ht with
+  | scopeL hxE _ _ _ =>
+    cases hs
+    obtain ⟨E, hx, _, hty, hdl⟩ := hxE
+    exact ⟨E, hx, (hdl hd).1, hty⟩
+  | @sub Γa Γ0 _ _ _ _ hw _ _ ih =>
+    obtain ⟨E0, h0, hm0, ht0⟩ := ih hs
+    obtain ⟨hn, hE⟩ := hw.1 x
+    cases hg : Γa x with
+    | none => rw [hn.mp hg] at h0; cases h0
+    | some E =>
+      have hw' := hE E E0 hg h0
+      exact ⟨E, rfl, by rw [← hw'.mode]; exact hm0, by rw [← hw'.ty]; exact ht0⟩
+  | _ => cases hs
+
+/-- Agora #805: **at every panic point of a typed check-out of a destructor
+    payload, `x` owns a `t` or nothing**: a panic that unwinds through
+    `scopeL k t x s` (`Step.scopeLP`) leaves `x`'s slot as the body's
+    unwinding found it, an owner's (the frame's typing, `scopeL_entry`, and
+    `MInv.slot`) holding a `t` or moved out.  Holding a `t`, the release
+    gives it back when the block has its payload checked out
+    (`release_puts`); moved out, the release frees nothing (the value went
+    to an owner that runs its destructor: A2-drop's binders), the block left
+    as it was. -/
+theorem scopeL_typed_panic {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
+    {m m2 : Mem} (ht : StmtT P Γ F (.scopeL k t x s) Δ) (hi : Inv m Γ F (.scopeL k t x s))
+    (hd : t.holdsDtor = true) (hna : t.hasArc = false) (hvf : t.holdsView = false)
+    (h : Step P m (.scopeL k t x s) (.panic m2)) :
+    ∃ m1, Step P m s (.panic m1) ∧
+      ((∃ v, m1.st x = some ⟨true, some v⟩ ∧ WFv t v ∧
+          (m1.blk k = some ⟨t, .lock, none⟩ →
+            m2 = ({ m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) }.remove x))) ∨
+        (m1.st x = some ⟨true, none⟩ ∧ m2 = m1.remove x)) := by
+  cases h with
+  | waitPanic hw => exact hw.elim
+  | @scopeLP m1 _ _ _ _ _ hs hrl =>
+    refine ⟨m1, hs, ?_⟩
+    have hxsp : x ∉ s.spine := by
+      have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
+    have hst := Step.panic_st hs x hxsp
+    obtain ⟨E, hx, hm, hty⟩ := scopeL_entry ht hd
+    obtain ⟨sl, hsl, _, hown, hok, _⟩ := hi.slot x E hx
+    rw [hm] at hown hok
+    obtain ⟨_, hw, _⟩ := hok rfl
+    obtain ⟨o, val⟩ := sl
+    simp only at hown; subst hown
+    cases val with
+    | some v =>
+      have hx1 : m1.st x = some ⟨true, some v⟩ := by rw [hst]; exact hsl
+      exact .inl ⟨v, hx1, hty ▸ hw v rfl, fun hk => release_puts hx1 (hty ▸ hw v rfl) hna hvf hk hrl⟩
+    | none =>
+      have hx1 : m1.st x = some ⟨true, none⟩ := by rw [hst]; exact hsl
+      refine .inr ⟨hx1, ?_⟩
+      cases hrl with
+      | put hx' _ _ _ => rw [hx1] at hx'; cases hx'
+      | drop _ hx' hdr => rw [hx1] at hx'; cases hx'; cases hdr; rfl
 
 /-! ### Still refused -/
 

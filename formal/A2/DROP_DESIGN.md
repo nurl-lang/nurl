@@ -1017,9 +1017,14 @@ each one shrinks `CLAIM.md`'s exception:
         (`RhsT.lockRestore` asks `dtorFree`: the model's restore may fill a
         block a `withLock` has checked out). The steps' lemmas:
         `A3.LockDtorWitness.scopeL_end_gives_back`,
-        `scopeL_panic_gives_back`, `release_puts`. That a typed body leaves
-        `x` owning the value wherever it panics, unless it moved it to an
-        owner that runs its destructor, is read off the rules, not proved.
+        `scopeL_panic_gives_back`, `release_puts`. Agora #805: that a typed
+        body leaves `x` owning the value at its end, and wherever it panics
+        owning it or moved out (to an owner that runs its destructor), is
+        proved for a typed frame (`StmtT.scopeL` asks, for a destructor
+        payload, `x` an owner live at the body's end, as `withLock` does:
+        `A3.LockDtorWitness.scopeL_end_owns`, `scopeL_typed_end_gives_back`,
+        `scopeL_typed_panic`); that the block is then checked out is read off
+        the rules, not proved (no invariant ties a frame to its block).
         `x` is still `lockE t` (no `dtor`, no `dbind`): nothing reads those
         flags of a check-out binding, as it views nothing and runs nothing.
      2. *The orphaned lock block.* `Cand` / `CandPay` / `TopPay` admit a

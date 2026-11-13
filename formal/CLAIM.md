@@ -974,10 +974,20 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `f` in place in the lock's memory, leaves the value there with the lock
   held (the model releases the lock: A3.2's over-approximation, above). A
   body that moves the value out (to a `letd`, a call's `sink` parameter)
-  hands it to an owner that runs its destructor, by the rules above; that
-  a typed body leaves `x` holding a `D` at its end and wherever it panics,
-  unless it moved it so, and that the block is then checked out, is read
-  off the rules, not proved: both lemmas are conditional on it. When the lock's last share is
+  hands it to an owner that runs its destructor, by the rules above.
+  Agora #805 proves the binding's half for a typed frame: the run-time
+  check-out frame's typing (`StmtT.scopeL`) now asks, for a payload that
+  holds a destructor value, that `x` is an owner and live where the body
+  ends (as `withLock` already asked), so at the frame's end `x` owns a
+  value of the payload's type (`A3.LockDtorWitness.scopeL_end_owns`,
+  `scopeL_typed_end_gives_back`), and at every panic point `x` owns a `t`,
+  given back when the block is checked out, or nothing, the value moved to
+  an owner that runs its destructor, and the release frees nothing
+  (`scopeL_typed_panic`, over `Step.panic_st`, `scopeL_entry`). What stays
+  read off the rules, not proved: that the block is then checked out
+  (`m.blk k = some ⟨t, .lock, none⟩`): no invariant ties a `scopeL` frame
+  to its block (the block is checked out exactly while a frame of it is on
+  some thread), so the give-back lemmas keep that hypothesis. When the lock's last share is
   gone the marking sweep marks the lock block `dead`, its payload in it
   (`Cand` admits a lock block whose payload is in it), and the same thread
   reaps it as an `Arc`'s (`A3.LockDtorWitness.last_drop_reaps`, over
@@ -1042,7 +1052,9 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   `mainV_safe`, `mainV_no_leak`, `mainV_no_leak_panic`, `last_dropV_reaps`,
   `reapV_drains`; `A3.lockVecDtor_claim`, `A3.lockVecDtor_reaps`). The
   run is not traced; that the body leaves the binding holding a `Vec` at
-  its end and where it panics is read off the rules, as for `Locked D`.
+  its end and where it panics is proved for a typed frame as for `Locked
+  D` (Agora #805, `scopeL_end_owns`, `scopeL_typed_panic`), and that the
+  block is then checked out is read off the rules, as for `Locked D`.
 - Agora #755: **a channel of destructor values.** nurlc's `Channel A` is a
   counted `ChImpl A`, a struct holding the queue (`Vec A`), whose drop glue
   drops the queue's elements in index order when the last `Channel_drop`

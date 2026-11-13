@@ -331,8 +331,8 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     induction ht with
     | scopeL hxE hxF hs hpx _ =>
       cases hS
-      obtain ⟨Ex, hx, hnrb, hty⟩ := hxE
-      exact StmtT.scopeL ⟨Ex, hx, hnrb, hty⟩ hxF (ih hsp hhole _ _ _ hs (hi.scopeLIn hx hnrb)) hpx
+      obtain ⟨Ex, hx, hnrb, hty, hdl⟩ := hxE
+      exact StmtT.scopeL ⟨Ex, hx, hnrb, hty, hdl⟩ hxF (ih hsp hhole _ _ _ hs (hi.scopeLIn hx hnrb)) hpx
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
 
