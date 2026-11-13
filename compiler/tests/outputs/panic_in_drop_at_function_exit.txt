@@ -58,6 +58,11 @@ lit_copy: recovered: panic in drop litcopy.local
 drop lentlit.local
 drop lentlit.e0
 lent_lit: recovered: panic in drop lentlit.local
+drop litparam.local
+litparam: caller still has the caller's string, handed over as a copy
+drop litpdrop.local
+drop litpdrop.param
+lit_pdrop: recovered: panic in drop litpdrop.local
 drop deferlit.result
 defer_lit: recovered: panic in a defer
 drop deferbind.result
