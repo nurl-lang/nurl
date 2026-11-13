@@ -60187,6 +60187,7 @@ unsafe @ __replaces_note_io i syms s name s field → v {
                 = g_agg_fpfx_st __fs_px0
                 ( nurl_sym_def syms `__last_field_fld__` `` )
                 : b __fs_fresh ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+                : b __fs_slfresh | == __fs_tt TT_LBRACK ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
                 : s __fs_guard ? == __fs_tt TT_LPAREN ( nurl_sym_get syms `__last_call_guard__` ) ``
                 ? ( __store_type_clash ( nurl_get_last_type ) ftype )
                 { ( die lex ( nurl_str_cat ( nurl_str_cat4
@@ -60291,10 +60292,23 @@ unsafe @ __replaces_note_io i syms s name s field → v {
                     ( nurl_print `  ` ) ( nurl_print __fso ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print gep ) ( nurl_print `\n` )
                     ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print __fso ) ( nurl_print `)` ) ( emit_dbg_eol )
                 } {}
+                // (A slice field this binding owns, as a string field: a
+                // fresh slice is taken as it is, an owned slice binding
+                // moves in — its slot left empty once the field holds the
+                // buffer — and any other slice is copied (refused for
+                // elements that own values); the one it replaces is freed
+                // once the new one is in hand. Stored as it came, the
+                // binding and the field both released one buffer; agora
+                // #545.)
+                : b __fs_slown & & != 0 g_auto_drop_strings ( mem_is_slice_ty ftype ) ( mem_struct_field_owned syms alloca_ptr ( nurl_str_int fidx ) `slice` )
+                : b __fs_slmv & & __fs_slown ( is_ident_tok __fs_tt ) ( __slice_let_moves syms __fs_tt __fs_v1 `` ftype F )
+                ? & & __fs_slown ! | __fs_slfresh __fs_slmv ! ( bck_unsafe_ctx ) { = __fs_sval ( mem_emit_slice_copy lex syms cg ftype __fs_sval __fs_l1 ) } {}
+                ? __fs_slown { ( mem_emit_slice_free_at cg ( nurl_llty ftype ) gep ) } {}
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ftype ) )
                 ( nurl_print ` ` ) ( nurl_print __fs_sval )
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty ftype ) )
                 ( nurl_print `* ` ) ( nurl_print gep ) ( emit_dbg_line_eol bck_line )
+                ? __fs_slmv { ( __slice_slot_empty syms __fs_v1 ftype ) ( bck_stash_move __fs_v1 __fs_l1 ( nurl_str_cat3 `the field store that moved its buffer to '` ( nurl_str_cat3 obj_name `.` fname ) `'` ) ) } {}
                 ( __fs_store_done syms cg alloca_ptr __ffv )
                 ( __fs_late_emit )
                 ^ rhs
@@ -62477,6 +62491,7 @@ unsafe @ gen_agg_lit i lex i syms i cg → s {
         // so the caller that gets the value releases it.)
         : b fld_moved_slice & & agg_moves_fields ( is_ident_tok fld_first_tt ) ( __slice_let_moves syms fld_first_tt fld_first_val `` ( nurl_get_last_type ) F )
         ? fld_moved_slice {
+            ( bck_stash_move fld_first_val ( nurl_lex_line lex ) `the literal that moved its buffer into a field` )
             ? __fj_defer { ( nurl_print_buf_start ) } {}
             ( __slice_slot_empty syms fld_first_val ( nurl_get_last_type ) )
             ? __fj_defer { = __fj_kept ( nurl_str_cat __fj_kept ( nurl_print_buf_stop ) ) } {}
