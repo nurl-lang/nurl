@@ -31446,7 +31446,13 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     : i __rb_line ( nurl_lex_line lex )
     ( expect lex TT_RBRACE )
     ? & & __blk_ret_sx __tail_any == 0 g_did_ret { ( __bck_fall_ret_record lex syms __tail_tt __tail_tv __tail_sxn0 __tail_line __tail_col ) } {}
-    ? != 0 g_core_live { ( core_discard __cb_h __cb_t ) ( core_scope_end ) ( core_push 0 ) } {}
+    ? != 0 g_core_live {
+        // (A body that falls off with its last statement's value — a tail
+        // `?` / `??`, whose arms did not return themselves — returns it:
+        // gen_fn_decl_concrete's `__fall_used`.)
+        ? & & & __blk_ret_val __tail_any == 0 g_did_ret > g_core_os_n __cb_h { ( core_ret T ) } {}
+        ( core_discard __cb_h __cb_t ) ( core_scope_end ) ( core_push 0 )
+    } {}
     ( bck_block_exit __rb_line )
     ( __blk_leave F )
     ? __tail_any
