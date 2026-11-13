@@ -20837,6 +20837,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 } {}
                 ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request ( nurl_llty at ) ) )
                 ( nurl_print `(i1 ` ) ( nurl_print __ie_c ) ( nurl_print `, ptr ` ) ( nurl_print __ie_p ) ( nurl_print `)\n` )
+                // (…which gives the caller's binding a new value, the empty one:
+                // a replace of the parameter, so what the caller lent out of
+                // it ends at the call — agora #776.)
+                ( __replaces_note syms bck_arg_val `` )
             } {}
         } {}
         // A capture of a closure returned right here — its env keeps it for
@@ -21258,6 +21262,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     } {}
                     ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request ( nurl_llty at ) ) )
                     ( nurl_print `(i1 ` ) ( nurl_print __jz_c ) ( nurl_print `, ptr ` ) ( nurl_print __jz_p ) ( nurl_print `)\n` )
+                    ( __replaces_note syms arg_join_ioh `` )
                 } {}
             } {}
             ? & & & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST != 0 ( nurl_str_len arg_join_own ) ! ( seq arg_join_own `true` ) ! arg_join_io {

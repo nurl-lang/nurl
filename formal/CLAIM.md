@@ -94,6 +94,15 @@ the LLVM / C11 memory model rather than redefining it.
   and an owner given a lend that cannot come out of its old value
   (`rules/t375.md`); it does not cover the hand-over. Those programs are
   outside the claim until an A2 rule (or phase C/D) covers the hand-over.
+
+  And a hand-over out of an `inout` parameter: a function that hands its
+  `inout` parameter of a handle type to a taker leaves the caller's binding
+  the type's empty value (Agora #776), and the caller may read it after the
+  call. A2 moves only an owner (`RhsT.moveOwn`); this is a take it lacks. It
+  reads as an `inout .replace` call whose new value is the empty one — nurlc
+  summarises the callee as replacing the parameter, so every borrow the
+  caller holds of it ends at the call. Outside the claim until A2 has a
+  `take` of an `inout .replace` place.
 - **A3** *(proven)* — the theorem with threads: a well-typed program has no data
   race. Proven under sequential consistency, where a race is two threads'
   next steps touching one address, one of them writing, not both atomic.
