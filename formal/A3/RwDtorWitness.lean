@@ -16,10 +16,15 @@ anything from it.  Its payload is read in place: what `rguard_get g`
 `share` dependency) while the guard lives, and the guard, through the
 view's share of the lock block, keeps the lock block reached
 (`view_keeps_lock`), so the payload is never an orphan while a reader lives.
-The lock block alone owns the payload, and when its last share and its last
-view are gone the marking sweep marks it `dead` and the same thread reaps
-it, running the payload's destructor once
-(`A3.LockDtorWitness.last_drop_reaps`, which is of every lock block of `DT`).
+The lock block alone owns the payload.  When the lock's last share goes
+after every guard, its views swept, so that no slot's value and no block's
+payload refers to the lock block (`A3.LockDtorWitness.last_drop_reaps`'
+hypotheses, of a lock block of `DT`), the marking sweep marks it `dead` and
+the same thread reaps it, the reap's frame running the payload's
+destructor.  The other order, a guard dropped after the lock's last share
+(its view still refers to the lock block, so `last_drop_reaps` does not
+apply; the sweep that ends the guard's drop marks the lock block), is not
+yet a lemma (Agora #831).
 
 Before Agora #804 the read guard asked a payload that owns no destructor
 value (the type-level reading of the view as a copy of the payload;

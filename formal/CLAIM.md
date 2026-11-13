@@ -352,6 +352,13 @@ the LLVM / C11 memory model rather than redefining it.
       payload that holds a library handle (`RhsT.rwRead`'s `hasCell`,
       h357): readers read it at once, so it faces Sync. An `RwLocked` of
       one is still made and written.
+      A read guard is `% NotSend`: the crossing check refuses a value that
+      holds a guard at any depth (`NoGuard`, part of `SendCheck`), so a
+      spawn, a value going into a lock and a lock scope's give-back never
+      carry one to another thread, and the runtime's unlock runs on the
+      locking thread (`spawn_guard`, `lockNew_guard`, `chanSend_guard`).
+      That no guard leaves its thread is argued over reachable
+      configurations, not a lemma.
     - **Agora #804: `RwLocked D`.** A read guard of a payload that is a
       destructor value (or holds one) is typed (`RhsT.rwRead` /
       `rwTryRead` ask only `hasCell = false`;
@@ -360,10 +367,19 @@ the LLVM / C11 memory model rather than redefining it.
       and its payload is its lock block's (`ViewsAt`): no sweep frees and
       no reap drops anything of a view, which is never an orphan to be nor
       marked `dead` (`A2.Dtor.blocks_dtor_free`,
-      `A3.RwDtorWitness.view_no_dtor`), and a reached view keeps its lock
-      block reached (`view_keeps_lock`), so the payload is dropped once,
-      with its destructor, by the thread that drops the lock's last share
-      after the last guard (`A3.LockDtorWitness.last_drop_reaps`). The
+      `A3.RwDtorWitness.view_no_dtor`). While a guard lives, its view keeps
+      the lock block reached (`view_keeps_lock`), so the lock block is not
+      an orphan to be (`view_lock_not_cand`). When the lock's last share
+      goes after every guard, and every guard's view is gone with it (the
+      sweep that ends a guard's drop removes an unreached view), so that no
+      slot's value and no block's payload refers to the lock block, the
+      sweep marks the lock block `dead` and the dropping thread's next step
+      is the reap, whose frame runs the destructor
+      (`A3.LockDtorWitness.last_drop_reaps`, for a lock block of `DT`; it
+      takes the absence of a view as a hypothesis). The other order, a
+      guard dropped after the lock's last share and the lock block reaped
+      by that guard's thread, follows from the marking sweep but is not yet
+      a lemma (Agora #831). The
       guard's type `arc (prod (lk D) D)` is admitted by `Ty.ok` through
       `Ty.rview` (exactly `prod (lk u) u` with `u.lkPay` and no cell
       share); no `arc` block is of that type (`A2.Dtor.arc_blocks_dtor`).
@@ -371,13 +387,6 @@ the LLVM / C11 memory model rather than redefining it.
       value, made, read through a guard, dropped: `main_typed`,
       `main_safe`, `main_no_leak`, `main_no_leak_panic`;
       `A3.rwDtor_claim`: `A3.claim` over it).
-      A read guard is `% NotSend`: the crossing check refuses a value that
-      holds a guard at any depth (`NoGuard`, part of `SendCheck`), so a
-      spawn, a value going into a lock and a lock scope's give-back never
-      carry one to another thread, and the runtime's unlock runs on the
-      locking thread (`spawn_guard`, `lockNew_guard`, `chanSend_guard`).
-      That no guard leaves its thread is argued over reachable
-      configurations, not a lemma.
     - **Not proven here (phase D):** a view lives until no slot reaches
       it, which may be after the guard's drop, where the runtime unlocks.
       As for `Arc`'s refcount, phase D must show that no live binding
@@ -1060,7 +1069,7 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   give-back's crossing check cannot fail, so `Step.scopeLFail` and the
   code-less `Release.drop` are not taken
   (`A3.LockDtorWitness.scopeL_end_gives_back`, over `release_puts`,
-  `sendCheck_noArc`; that `x` owns a `t` is proved for a typed frame,
+  `sendCheck_noArc`; that `x` holds a `t` is proved for a typed frame,
   Agora #805, and that the block is there and checked out on every
   reached configuration, Agora #808 below). A panic in the body gives it back too
   (`scopeL_panic_gives_back`: `Step.scopeLP`'s release is the give-back
@@ -1070,14 +1079,18 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   body that moves the value out (to a `letd`, a call's `sink` parameter)
   hands it to an owner that runs its destructor, by the rules above.
   Agora #805 proves the binding's half for a typed frame: the run-time
-  check-out frame's typing (`StmtT.scopeL`) asks that `x` is an owner and
+  check-out frame's typing (`StmtT.scopeL`) asks that `x` is an owner (or,
+  since Agora #825, for an `int` payload a plain integer binding) and
   live where the body ends (as `withLock` already asked), so at the
-  frame's end `x` owns a value of the payload's type
+  frame's end `x` holds a value of the payload's type
   (`A3.LockDtorWitness.scopeL_end_owns`, `scopeL_typed_end_gives_back`),
-  and at every panic point `x` owns a `t`, given back when the block is
-  checked out, or nothing, the value moved to an owner that runs its
-  destructor, and the release frees nothing (`scopeL_typed_panic`, over
-  `Step.panic_st`, `scopeL_entry`). Agora #805 asked this for a payload
+  and at every panic point `x` holds a `t` (owned, or an `int` payload's
+  integer), given back when the block is checked out, or nothing (an
+  owner whose value moved to an owner that runs its destructor, or an
+  integer binding holding no integer), and the release frees nothing
+  (`scopeL_typed_panic`, over `Step.panic_st`, `scopeL_entry`; an integer
+  the binding holds is never dropped by the release when the block is
+  checked out: `release_cases`). Agora #805 asked this for a payload
   that holds a destructor value only; since Agora #825 `StmtT.scopeL`
   carries `x`'s liveness for every payload type and binds `x` as
   `withLock` does (an owner, or, for an `int` payload, a plain integer

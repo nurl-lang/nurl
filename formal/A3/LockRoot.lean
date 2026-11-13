@@ -1289,10 +1289,13 @@ theorem reach_scopeL_end_gives_back (hP : ProgOK P) (hPc : ProgCodes P) (hSp : S
     configuration** (Agora #808): `scopeL_typed_panic` with the block's state
     discharged: the block is there (`reach_frame_live`) and checked out, and
     the body's unwinding leaves it so (its frame is the block's only one,
-    `Step.stay`): at the panic point `x` holds a `u` (owned, or an integer
-    payload's plain integer), given back into the block, or nothing, the
-    release freeing nothing; for every payload type that holds no share and
-    no view (Agora #825). -/
+    `Step.stay`): at the panic point either `x` holds a `u` (owned, or an
+    integer payload's plain integer) and it is given back into the block,
+    or `x` holds nothing (an owner moved out, or an integer binding holding
+    no integer) and the release only removes its slot; for every payload
+    type that holds no share and no view (Agora #825).  An integer the
+    binding holds is never dropped: its release is the give-back
+    (`LockDtorWitness.release_cases`). -/
 theorem reach_scopeL_panic (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
     (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
@@ -1303,7 +1306,8 @@ theorem reach_scopeL_panic (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P 
     ∃ m1, Step P (C.view th) b (.panic m1) ∧
       ((∃ o v, m1.st x = some ⟨o, some v⟩ ∧ WFv u v ∧ (o = true ∨ u = .int) ∧
           m2 = ({ m1 with blk := upd m1.blk k (some ⟨u, .lock, some v⟩) }.remove x)) ∨
-        ((m1.st x = some ⟨true, none⟩ ∨ (u = .int ∧ ∃ w, m1.st x = some ⟨false, w⟩)) ∧
+        ((m1.st x = some ⟨true, none⟩ ∨
+            (u = .int ∧ ∃ w, m1.st x = some ⟨false, w⟩ ∧ ∀ n, w ≠ some (.int n))) ∧
           m2 = m1.remove x)) := by
   have hl := reach_lockInv hP hPc hSp hG ht hs hsc hv hr
   obtain ⟨ps, hcp, _⟩ := (reach_inv hP hPc hSp hG ht hs hsc hv hr).1

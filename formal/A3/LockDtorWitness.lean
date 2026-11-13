@@ -37,9 +37,11 @@ stores and steps, not of this program's run (which no theorem here traces):
   is bound as `withLock` binds it (an owner, or, for an integer payload, a
   plain integer binding) and live where the body ends, so at the end `x`
   holds a `t` (`scopeL_end_owns`, `scopeL_typed_end_gives_back`) and at
-  every panic point a `t` (given back) or nothing (moved to an owner that
-  runs its destructor; the release then frees nothing):
-  `scopeL_typed_panic`.  The
+  every panic point a `t` (given back once the block is checked out, an
+  integer binding's integer included) or nothing (an owner's value moved
+  to an owner that runs its destructor, or an integer binding holding no
+  integer; the release then frees nothing): `scopeL_typed_panic`, over
+  `release_cases`.  The
   block's half (its payload checked out there) is a hypothesis here;
   Agora #808 discharges it on every reached configuration
   (`A3/LockExcl.lean`, `A3/LockRoot.lean`: `reach_scopeL_end_gives_back`,
@@ -380,7 +382,10 @@ theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic
     (owned, or an integer payload's plain integer), it gives the value back
     when the block has its payload checked out (`release_puts`); owning
     nothing (moved out), or an integer binding's holding no integer, it frees
-    nothing, the block left as it was. -/
+    nothing, the block left as it was.  A drop of a plain integer binding
+    that holds an integer is the first case: with the block checked out it
+    is the give-back (`release_puts`), so the second case holds of no slot
+    that holds a `t`. -/
 theorem release_cases {m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var}
     (hna : t.hasArc = false) (hvf : t.holdsView = false)
     (hsl : (∃ w, m1.st x = some ⟨true, w⟩ ∧ ∀ v, w = some v → WFv t v) ∨
@@ -389,7 +394,8 @@ theorem release_cases {m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var}
     (∃ o v, m1.st x = some ⟨o, some v⟩ ∧ WFv t v ∧ (o = true ∨ t = .int) ∧
         (CheckedOut m1 k t →
           m2 = ({ m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) }.remove x))) ∨
-      ((m1.st x = some ⟨true, none⟩ ∨ (t = .int ∧ ∃ w, m1.st x = some ⟨false, w⟩)) ∧
+      ((m1.st x = some ⟨true, none⟩ ∨
+          (t = .int ∧ ∃ w, m1.st x = some ⟨false, w⟩ ∧ ∀ n, w ≠ some (.int n))) ∧
         m2 = m1.remove x) := by
   rcases hsl with ⟨w, hx1, hw⟩ | ⟨rfl, w, hx1⟩
   · cases w with
@@ -399,14 +405,19 @@ theorem release_cases {m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var}
       cases hrl with
       | put hx' _ _ _ => rw [hx1] at hx'; cases hx'
       | drop _ hx' hdr => rw [hx1] at hx'; cases hx'; cases hdr; rfl
-  · cases hrl with
-    | @put _ v hx' hg _ _ =>
-      rw [hx1] at hx'; cases hx'
-      obtain ⟨n, rfl⟩ : ∃ n, v = .int n := by cases v <;> simp_all [Giveable]
-      exact .inl ⟨false, .int n, hx1, .int, .inr rfl, fun _ => rfl⟩
-    | drop _ hx' hdr =>
-      rw [hx1] at hx'; cases hx'
-      exact .inr ⟨.inr ⟨rfl, w, hx1⟩, by cases hdr; rfl⟩
+  · by_cases hwi : ∃ n, w = some (.int n)
+    · obtain ⟨n, rfl⟩ := hwi
+      exact .inl ⟨false, .int n, hx1, .int, .inr rfl,
+        fun hk => release_puts hx1 .int (.inr rfl) hna hvf hk hrl⟩
+    · have hni : ∀ n, w ≠ some (.int n) := fun n he => hwi ⟨n, he⟩
+      cases hrl with
+      | @put _ v hx' hg _ _ =>
+        rw [hx1] at hx'; cases hx'
+        obtain ⟨n, rfl⟩ : ∃ n, v = .int n := by cases v <;> simp_all [Giveable]
+        exact absurd rfl (hni n)
+      | drop _ hx' hdr =>
+        rw [hx1] at hx'; cases hx'
+        exact .inr ⟨.inr ⟨rfl, w, hx1, hni⟩, by cases hdr; rfl⟩
 
 /-- Agora #805, #825: **at every panic point of a typed check-out, `x` holds
     a `t` or nothing**, for every payload type that holds no share and no
@@ -414,9 +425,11 @@ theorem release_cases {m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var}
     leaves `x`'s slot as the body's unwinding found it, as `withLock` bound
     it (the frame's typing, `scopeL_entry`, and `frame_slot`): an owner's,
     holding a `t` or moved out, or an integer payload's plain integer
-    binding's.  Holding a `t`, the release gives it back when the block has
-    its payload checked out (`release_puts`); moved out, the release frees
-    nothing (the value went to an owner that runs its destructor: A2-drop's
+    binding's.  Holding a `t` (an owner's tree, or an integer binding's
+    integer), the release gives it back when the block has its payload
+    checked out (`release_puts`); holding nothing (an owner moved out, or an
+    integer binding holding no integer), the release frees nothing (a
+    moved-out value went to an owner that runs its destructor: A2-drop's
     binders), the block left as it was (`release_cases`). -/
 theorem scopeL_typed_panic {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
     {m m2 : Mem} (ht : StmtT P Γ F (.scopeL k t x s) Δ) (hi : Inv m Γ F (.scopeL k t x s))
@@ -426,7 +439,8 @@ theorem scopeL_typed_panic {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t 
       ((∃ o v, m1.st x = some ⟨o, some v⟩ ∧ WFv t v ∧ (o = true ∨ t = .int) ∧
           (CheckedOut m1 k t →
             m2 = ({ m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) }.remove x))) ∨
-        ((m1.st x = some ⟨true, none⟩ ∨ (t = .int ∧ ∃ w, m1.st x = some ⟨false, w⟩)) ∧
+        ((m1.st x = some ⟨true, none⟩ ∨
+            (t = .int ∧ ∃ w, m1.st x = some ⟨false, w⟩ ∧ ∀ n, w ≠ some (.int n))) ∧
           m2 = m1.remove x)) := by
   cases h with
   | waitPanic hw => exact hw.elim

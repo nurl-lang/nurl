@@ -1007,10 +1007,11 @@ settled:
    value) and live where the body ends (as `withLock` asks; Agora #825: for
    every payload type, an `int` payload's `x` a plain integer binding), so
    at the end `x` owns a `t` (`scopeL_end_owns`,
-   `scopeL_typed_end_gives_back`), and at every panic point a `t`, given
-   back, or nothing, a body that moved it out having handed it to an owner
-   that runs its destructor (A2-drop's binders), the release freeing nothing
-   (`scopeL_typed_panic`). Agora #808: that the block is there and checked
+   `scopeL_typed_end_gives_back`), and at every panic point a `t` (an
+   integer binding's integer included), given back, or nothing, a body that
+   moved it out having handed it to an owner that runs its destructor
+   (A2-drop's binders), or an integer binding holding no integer, the
+   release freeing nothing (`scopeL_typed_panic`, `release_cases`). Agora #808: that the block is there and checked
    out is proved on every reached configuration (`A3/LockExcl.lean`,
    `A3/LockRoot.lean`, below). `RwLocked D`'s read guard was refused
    here (`RhsT.rwRead` asked `dtorFree`, reading a view's payload as a copy);
@@ -1094,7 +1095,10 @@ settled:
      lemmas over a `Reach` with no hypothesis on the block
      (`reach_scopeL_end_gives_back`, `reach_scopeL_panic`; the body's
      unwinding leaves the block checked out, its frame being its only
-     one).
+     one). At a panic, then, `x` held a `t` and it is given back, or `x`
+     held nothing and only its slot is removed, for every payload type
+     that holds no share and no view: an `int` payload's integer is never
+     dropped (`release_cases`).
 3. *A3.* Lock blocks are shared. Since item 1 of Agora #755 (below) the
    configuration's marking sweep marks an orphaned `Locked D`'s block and
    the thread whose step dropped the last share reaps it
@@ -1653,16 +1657,39 @@ The change, and nothing wider:
 
 The headline theorems (`A2.memory_safe`, `soundness`, `no_leak_end`,
 `no_leak_panic`, `A3.claim`, `claim_full`, `claim_made`) are unchanged in
-statement and re-proven. Race freedom is A3.3's: readers in parallel, a
-writer waits while a view lives (`HasView`), and a guard is `% NotSend`
-(`NoGuard`). A guard moved into a binding, an `Arc` or a lock keeps its view
-reached, and a reached view keeps its lock block reached
-(`A3.RwDtorWitness.view_keeps_lock`): the lock block is never an orphan to
-be while a guard lives (`view_lock_not_cand`), so a guard cannot outlive the
-payload it lends. The payload is dropped exactly once, with its
-destructor, when the lock block's last share (and last view) is gone: the
-marking sweep marks the lock block (as for `Locked D`,
-`A3.LockDtorWitness.last_drop_reaps`, which is of every lock block of `DT`).
+statement and re-proven. Their premises' class is wider: `Ty.ok` and
+`Blk.DtorOK` (in `MInv`, and in `GlobsOK` for the globals) now admit the
+read guard of a destructor payload and its view, so the same statements
+cover more programs, which strengthens the claim. Race freedom is A3.3's:
+readers in parallel, a writer waits while a view lives (`HasView`), and a
+guard is `% NotSend` (`NoGuard`: a crossing, `locked_new` among them,
+refuses a value that reaches one). A guard moved into a binding, an `Arc`
+or a global keeps its view reached. (Here the model is looser than nurlc:
+nurlc's `RGuard` is `% NotSend`, so it cannot be a global's value, but
+`Ty.sync` admits the guard's type `arc (prod (lk D) D)`, and `arc_new` is
+no crossing. That is harmless to memory: the view is frozen and owns
+nothing.) While a guard lives, its view keeps the lock block reached
+(`A3.RwDtorWitness.view_keeps_lock`), so the lock block is not an orphan
+to be (`view_lock_not_cand`) and a guard cannot outlive the payload it
+lends. What is proved of the payload's drop covers one order only:
+- *The lock's last share goes after every guard.* `last_drop_reaps`
+  (`A3.LockDtorWitness`, of a lock block of the witness's type `DT`, its
+  payload in it) asks, of the store the step ends with, that no slot's
+  value and no block's payload refers to the lock block. Every guard's
+  view must then be gone, not only its guard: the sweep that ends a
+  guard's drop removes its view once nothing reaches it (a view is never
+  an orphan to be nor marked, `A2.Dtor.blocks_dtor_free`), and the
+  lemma takes the absence of a view as its hypothesis (`hb`), not from the
+  order of the drops. Given it, the marking sweep marks the lock block
+  `dead`, its payload in it, and the thread's next step is the reap, whose
+  frame runs the destructor (`settle_reaps`,
+  `A2.Dtor.scopeD_end_runs_dtor`).
+- *A guard is dropped last*, after the lock's last share: the view then
+  still refers to the lock block, so `last_drop_reaps` does not apply. The
+  marking sweep that ends the guard's drop removes the view and marks the
+  lock block, and that thread reaps it, but that is not yet a lemma
+  (Agora #831).
+No lemma states that the payload is dropped exactly once.
 Witness: `A3/RwDtorWitness.lean` (`main`: an `RwLocked D` made, read through
 a guard, dropped; `main_typed`, `main_safe`, `main_no_leak`,
 `main_no_leak_panic`, `A3.rwDtor_claim`; `rwRead_dtor_typed` and

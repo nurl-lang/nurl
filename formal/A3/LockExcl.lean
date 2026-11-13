@@ -890,7 +890,11 @@ theorem reach_lock_excl (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spa
   exact ⟨rfl, Redex.frame_unique h1 h2 (hl.nd i ti hi k u1 (h1.lfr_mem rfl))⟩
 
 /-- `LockDtorWitness.scopeL_typed_panic`, with the frame's invariant over a
-    store of the same slots as the one the step runs on. -/
+    store of the same slots as the one the step runs on: `x` holds a `t`
+    (an owner's, or an integer payload's plain integer), given back if the
+    block has its payload checked out, or holds nothing (an owner moved out,
+    or an integer binding holding no integer), its slot removed and the
+    block left as it was. -/
 theorem scopeL_typed_panic_of {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
     {m mo m2 : Mem} (ht : StmtT P Γ F (.scopeL k t x s) Δ) (hi : Inv mo Γ F (.scopeL k t x s))
     (hst0 : mo.st = m.st) (hna : t.hasArc = false) (hvf : t.holdsView = false)
@@ -899,7 +903,8 @@ theorem scopeL_typed_panic_of {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x
       ((∃ o v, m1.st x = some ⟨o, some v⟩ ∧ WFv t v ∧ (o = true ∨ t = .int) ∧
           (CheckedOut m1 k t →
             m2 = ({ m1 with blk := upd m1.blk k (some ⟨t, .lock, some v⟩) }.remove x))) ∨
-        ((m1.st x = some ⟨true, none⟩ ∨ (t = .int ∧ ∃ w, m1.st x = some ⟨false, w⟩)) ∧
+        ((m1.st x = some ⟨true, none⟩ ∨
+            (t = .int ∧ ∃ w, m1.st x = some ⟨false, w⟩ ∧ ∀ n, w ≠ some (.int n))) ∧
           m2 = m1.remove x)) := by
   cases h with
   | waitPanic hw => exact hw.elim
