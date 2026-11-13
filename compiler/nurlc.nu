@@ -31385,8 +31385,17 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // that call may lend from may hold it, by the same answers.
 @ mem_ud_hold_lend_cond i syms i cg s w s vt → s {
     : s up ( mem_udrop_ptr_of syms w )
-    ? == 0 ( nurl_str_len up ) { ^ ( nurl_str_cat `` `` ) } {}
+    // (A binding that owns nothing of its own — `: x { v }` over an outer
+    // `v` is lent it: what it holds may be this owner's own value, and `= v
+    // x` gives v that value back. Asked by its key, as a cursor is; taken
+    // for another value, v's was released and stored back freed — agora
+    // #667.)
+    ? == 0 ( nurl_str_len up ) { ^ ? & != 0 ( nurl_sym_len2 syms w `__ptr` ) == 0 ( nurl_sym_len2 syms w `__param` ) ( nurl_str_cat `1` `` ) ( nurl_str_cat `` `` ) } {}
     ? != 0 ( nurl_sym_len2 syms up `__alias` ) { ^ ( nurl_str_cat `1` `` ) } {}
+    // (…and one bound as a lend, on every path or on some — `__sborrow` `1`
+    // or `dyn`: the same, whatever it lends.)
+    : s usb ( nurl_sym_get2 syms up `__sborrow` )
+    ? | ( seq usb `1` ) ( seq usb `dyn` ) { ^ ( nurl_str_cat `1` `` ) } {}
     : ~ s ks ( nurl_str_cat ( nurl_sym_get2 syms w `__pljk` ) `` )
     : ~ s rs ( nurl_str_cat ( nurl_sym_get2 syms w `__pljr` ) `` )
     : s want ( __ud_core_ty vt )
@@ -32886,6 +32895,16 @@ unsafe @ __src_has_raw_ptr s text → b {
                 ( nurl_print `  ` ) ( nurl_print __pv ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print ( nurl_str_slice __ssb 1 - ( nurl_str_len __ssb ) 1 ) ) ( nurl_print `\n` )
                 ( nurl_print `  store i1 ` ) ( nurl_print __pv ) ( nurl_print `, ptr ` ) ( nurl_print ( nurl_str_slice __psb 1 - ( nurl_str_len __psb ) 1 ) ) ( nurl_print `\n` )
             } { ( __sb syms ptr __ssb ) }
+            // (…and, a source that owns its value on some paths only, what it
+            // holds on the others: a payload of an enum this frame keeps — a
+            // `sink` is handed a copy there, __lent_by_join — or a local's
+            // lend a returned literal copies, __bind_lends_local. A cursor
+            // over the source found them through it; the move takes them
+            // over, agora #667.)
+            ? ( seq __ssb `dyn` ) {
+                ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jpkept` ) ( nurl_sym_get2 syms src `__jpkept` ) )
+                ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__llocal` ) ( nurl_sym_get2 syms src `__llocal` ) )
+            } {}
             // …and whatever the source was a cursor over. An owner in a
             // deeper scope than this binding dies first: its value is
             // taken over here instead (a payload moved out of an option
@@ -35082,6 +35101,15 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 @ mem_journal_forget_tmpown i cg s ptr → v {
     ? | == 0 g_auto_drop_strings == 0 g_cond_depth { ^ v } {}
     ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ptr ) ( nurl_print `)\n` )
+}
+
+// Is binding slot `ptr`'s journal entry one the drain reads its drop flag
+// for (mem_journal_push_handle, mem_journal_push_userdrop's `__ujs`, a
+// temporary owner's `__tmpj`) — so it drops what the flag says is owned
+// when a panic meets it, as the scope's end would?
+@ __jrnl_by_flag i syms s ptr s vt → b {
+    ? | != 0 ( nurl_sym_len g_fn_escapes ( nurl_str_cat3 ptr `__tmpj` ( nurl_str_int g_ff_gen ) ) ) != 0 ( nurl_sym_len g_fn_escapes ( nurl_str_cat3 ptr `__ujs` ( nurl_str_int g_ff_gen ) ) ) { ^ T } {}
+    ^ & ( __is_handle_ty vt ) != 0 ( nurl_sym_len2 syms ptr `__live` )
 }
 
 // Forget a user `% Drop` value's journal entry (keyed by its alloca) —
@@ -38723,7 +38751,8 @@ unsafe @ __ty_holds_view s ty i depth → b {
 // A handover by name (`: T b a`, `= b a`) out of a binding that owns its
 // value, as the generated code knows it — a String, a Vec or a struct with
 // a drop slot of its own that was bound as no borrow (a fresh value, or a
-// call's result by that call's own answer) and is no cursor over another
+// call's result by that call's own answer), or that owns it on some paths
+// only (`dyn`: `? c ( mk ) borrowed`), and is no cursor over another
 // binding — is a move in the generated code: the target
 // takes the source's drop flag where the handover runs
 // (__mem_udrop_bind_flag), and the source drops nothing until it is given a
@@ -38738,7 +38767,8 @@ unsafe @ __ty_holds_view s ty i depth → b {
 // moved on every visit, also one that finds it no owner — a borrow on some
 // path the generated code's record of it does not show — so a read of it
 // before it is given a new value is refused wherever the flag may have gone.
-// (Safe code only: what the walk does not check keeps the cursor.)
+// (In code the walk does not check — `unsafe`, a trusted file — the move is
+// made all the same; only the walk's row is not told.)
 : ~ i g_amv_cur 0
 : ~ s g_amv_src ``
 
@@ -38746,16 +38776,27 @@ unsafe @ __ty_holds_view s ty i depth → b {
 // compiled records such a move? `m` or `a`, the mark of its row.
 unsafe @ amv_open i syms s src s vt → s {
     = g_amv_cur 0
-    ? | | | == g_borrowck 0 != 0 g_bck_rec_off ! ( bck_sound ) ( bck_unsafe_ctx ) { ^ ( nurl_str_cat `a` `` ) } {}
-    ? ! ( __is_handle_ty vt ) { ^ ( nurl_str_cat `a` `` ) } {}
+    // (Not where the walk records nothing for this statement — a form
+    // compiled again to read it, `g_bck_rec_off` — or runs under rules of
+    // another kind: the cursor there is what that path was written for.)
+    ? | | == g_borrowck 0 != 0 g_bck_rec_off ! ( bck_sound ) { ^ ( nurl_str_cat `a` `` ) } {}
+    // (A value of any other type — an option, a struct, an enum — takes the
+    // source's flag wherever it is handed over by name, __mem_udrop_bind_flag:
+    // a move too. Told it was a copy, the walk let a source that may own its
+    // value be read after the target released it — agora #667.)
     : s sp ( mem_udrop_ptr_of syms src )
     ? | | == 0 ( nurl_str_len sp ) != 0 ( nurl_sym_len2 syms sp `__alias` ) != 0 ( nurl_sym_len2 syms sp `__pname` ) { ^ ( nurl_str_cat `a` `` ) } {}
     // (Bound as no borrow, or from a call whose answer is in its slot —
     // `@slot`, __mem_bind_bit: its flag is that answer.)
     : s sb ( nurl_sym_get2 syms sp `__sborrow` )
-    ? & != 0 ( nurl_str_len sb ) != ( nurl_str_get sb 0 ) 64 { ^ ( nurl_str_cat `a` `` ) } {}
+    ? & != 0 ( nurl_str_len sb ) ! ( __sb_by_flag sb ) { ^ ( nurl_str_cat `a` `` ) } {}
     = g_amv_cur 1
     = g_amv_src ( nurl_str_cat src `` )
+    // (The generated code moves in `unsafe` and trusted code too: what the
+    // walk does not check there is still compiled by the one rule. Kept the cursor
+    // there, the #634 rotation in an `unsafe` function read freed memory —
+    // agora #667 item 4. Only the walk's row is not told.)
+    ? ( bck_unsafe_ctx ) { ^ ( nurl_str_cat `a` `` ) } {}
     ^ ( nurl_str_cat `m` `` )
 }
 
@@ -50646,11 +50687,16 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // A borrow released by its own name: never its to release. (A field
     // viewer, `fborrow`, is consumed by taking the field over: codegen
     // empties the field where it lives.)
+    // (…but not one that may own its value, handed over by name in a move
+    // the generated code makes — amv_open: the target takes the source's
+    // run-time flag, so what it may own goes with it and a borrow loses
+    // nothing. Agora #667.)
+    : i amv_k ? & == kc 6 ( seq ( bck_field rec 6 ) `am` ) ( bck_field_int rec 1 ) -1
     : ~ s brest ( nurl_str_cat ist `` )
     : i n ( nurl_str_len ist )
     : ~ i k 0
     ~ < k n {
-        ? & == BCK_BORROWED_SHARED ( bck_st_get ist k ) | | == BCK_MOVED ( bck_st_get out k ) == BCK_STORED ( bck_st_get out k ) == BCK_MAYBE_MOVED ( bck_st_get out k ) {
+        ? && && == BCK_BORROWED_SHARED ( bck_st_get ist k ) | | == BCK_MOVED ( bck_st_get out k ) == BCK_STORED ( bck_st_get out k ) == BCK_MAYBE_MOVED ( bck_st_get out k ) ! & == k amv_k ( bck_st_may_own ist k ) {
             : s ks ( nurl_str_int k )
             : s fbk ( nurl_sym_get g_bck ( bck_bkey `fb_` ks ) )
             ? == 0 ( nurl_str_len fbk ) {
@@ -56826,9 +56872,18 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // value into name, so x is no longer dropped — forget its
         // alloca-keyed journal entry or a panic would replay its
         // destructor on a value the destination now owns (§7).
-        ? & & != 0 g_auto_drop_strings ( is_ident_tok bck_rhs_tt )
+        // (Not the entry of a `: ~` binding the drain reads the drop flag
+        // for — a handle's, or one with a flag of its own: the flag is the
+        // one x's scope end drops by, so the entry says what x owns wherever
+        // a panic meets it — nothing once it has moved on, its new value
+        // once it is given one. Forgotten here, nothing registered it again:
+        // under recover that new value leaked, agora #667. A `:` binding is
+        // given no value again, and its entry still goes: a pair no panic
+        // can meet is then left out, __jrnl_slot_elide.)
+        ? & & & != 0 g_auto_drop_strings ( is_ident_tok bck_rhs_tt )
         ( nurl_sym_has_word syms `__user_drops__`
         ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) )
+        ! & != 0 ( nurl_sym_len2 syms bck_rhs_val `__mutable` ) ( __jrnl_by_flag syms ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) ( nurl_sym_get syms bck_rhs_val ) )
         { ( mem_journal_forget_userdrop cg
             ( nurl_sym_get2 syms bck_rhs_val `__ptr` )
             ( nurl_sym_get syms bck_rhs_val ) ) }
