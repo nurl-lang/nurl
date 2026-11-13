@@ -208,8 +208,8 @@ noncomputable def Mem.sweep (m : Mem) : Mem :=
 An `arc` block whose payload is a destructor value (`Ty.ok`'s `arc` case),
 or (Agora #755) a drained `Vec` of them at any depth (`Ty.nest n (.dtor f u)`),
 or (Agora #755, `Locked D`) a lock block whose payload, a destructor value
-holding no share (`Ty.lkPay`), is in it (a cell's state too: a cell's block
-is a lock block), is not freed by the sweep that finds it unreached: it is marked `dead` and
+holding no cell share (`Ty.lkPay`; Agora #803: before, no share), is in
+it (a cell's state too: a cell's block is a lock block), is not freed by the sweep that finds it unreached: it is marked `dead` and
 its payload stays, for the thread whose step left it unreached to hand to a
 destructor frame (`Step.reap`, `Settle`).  Only a *top* orphan is marked:
 one that no other orphan's payload reaches.  An inner one stays reached,
@@ -217,7 +217,10 @@ through the outer payload, until the outer destructor drops its share:
 outer first, as the runtime's counts do.  A `dead` block's payload is a
 root: what it reaches is kept.  Orphans that reach each other in a cycle
 (no top one) are freed with no code, as `Mem.sweep` frees every block
-(the runtime leaks such a cycle and runs no destructor either). -/
+(the runtime leaks such a cycle and runs no destructor either).  Since
+Agora #803 two `Locked D` payloads, each holding a share of the other's
+lock (in a closure's environment: types are finite otherwise), form such a
+cycle directly, with no other lock between them. -/
 
 /-- A `dead` block's payload, awaiting its destructor: a root of the sweep. -/
 def DeadPay (B : Nat → Option Blk) (v : Val) : Prop :=
@@ -1509,7 +1512,9 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       `TStep.spawnFail` puts one before its call, and its unwinding drops
       `x` (`Release.drop`), the block left checked out; or (Agora #803), for
       a destructor payload, hands `x` to a destructor frame
-      (`Step.scopeLPD`), the block left checked out. -/
+      (`Step.scopeLPD`), the block left checked out (a case nurlc refuses
+      at compile time: such a payload fails the check only through a read
+      guard, Agora #837). -/
   | scopeLFail {m : Mem} {k : Nat} {t : Ty} {x : Var} {sl : Slot} :
       m.st x = some sl → ¬ GiveCheck m x sl →
       Step P m (.scopeL k t x .skip) (.ok m (.scopeL k t x .panic))
@@ -1534,12 +1539,22 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       a destructor frame of `x` at its end (`scopeD x f`, as the reap's of a
       `dead` block, `Step.reap`), followed by the panic raised again; the
       frame's end runs the destructor (or drains the `Vec`), on the
-      panicking thread, and frees `x`.  The block stays checked out for good,
-      as nurlc's `locked_with` / `locked_update` panic with the lock held
-      (`stdlib/std/thread.nu`): no thread takes it again.  nurlc leaves the
-      value in the lock's memory and runs its destructor when the `Locked`'s
-      last share drops; the model runs it here, earlier, on this thread
-      (`A3/DESIGN.md`, Agora #803). -/
+      panicking thread, and frees `x`.  The block is left checked out with
+      no frame of it left, so no step fills it again (`A3.Step.stay`;
+      `withLock`, `lockTake` and `rwRead` need the payload in).
+
+      nurlc never takes this path: the rule makes the model total on a case
+      nurlc rules out at compile time.  Such a payload holds no cell share
+      (`Ty.lkPay`'s `!hasCell`), so the cell half of `SendCheck` holds of it
+      (`WFv.noCell_hasCell`) and `GiveCheck` fails only through `NoGuard`:
+      the value reaches a read guard.  nurlc refuses that statically
+      (`% NotSend RGuard`, `stdlib/std/rwlock.nu`), and its `mem_send_check`
+      counts only handle blocks, so its `locked_with` / `locked_update` /
+      `locked_apply` / `locked_await` never panic there on such a payload.
+      The model is looser than nurlc here: it admits a `Locked` of a `D`
+      holding a read guard (Agora #837 tracks refusing it in the types).
+      Leaving the block checked out mirrors the runtime's held lock word,
+      should the case arise (`A3/DESIGN.md`, Agora #803). -/
   | scopeLPD {m m1 : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt} {sl : Slot} {n f : Nat} {u : Ty} :
       Step P m s (.panic m1) → CheckedOut m1 k t → t = Ty.nest n (.dtor f u) →
       m1.st x = some sl → ¬ GiveCheck m1 x sl →

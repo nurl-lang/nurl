@@ -9,26 +9,46 @@ all (`Ty.lkPay` asked `!t.hasArc`): so the give-back's crossing check
 and no unwinding dropped one with no code (`Release.drop`, `DropSlot`).  nurlc
 accepts `Locked Conn` where `% Drop Conn` holds an `Arc Pool`.  Now the
 payload may hold `arc` and lock shares (`Ty.lkPay` asks only that it holds no
-cell share, which the reap's no-cell premise needs); its check can fail (the
-value holds a read guard, which nurlc refuses statically), and then:
+cell share, which the reap's no-cell premise needs).
+
+**When the check can fail.**  Holding no cell share, such a value meets the
+cell half of `SendCheck` (`WFv.noCell_hasCell`), so `GiveCheck` fails only
+through `NoGuard`: the value reaches a read guard.  nurlc refuses that
+statically (`% NotSend RGuard`, `stdlib/std/rwlock.nu`), and its
+`mem_send_check` counts only handle blocks, so nurlc's `locked_with` /
+`locked_update` / `locked_apply` / `locked_await` never panic there on such
+a payload.  The model is looser: it admits a `Locked` of a `D` holding a read
+guard, and `Step.scopeLPD` makes its semantics total on that case, which
+nurlc rules out at compile time (Agora #837 tracks refusing it in the
+model's types, and proving the failing case unreachable, `giveCheck_typed`,
+not yet a lemma).
+
+**The lemmas are conditional.**  `release_none`, `scopeL_fail_end`,
+`scopeL_fail_frame` and `fail_end_runs_dtor` take `¬ GiveCheck` as a
+hypothesis, and no typed reachable configuration is shown here to meet it
+(it needs a read guard in the payload).  Under it:
 
 * at the check-out's normal end, the end panics with the lock held
-  (`Step.scopeLFail`, as `locked_with` / `locked_update` run
-  `mem_send_check` after the closure, before `nurl_lk_exit`), and the panic's
-  one step turns the frame into `x`'s destructor frame, at its end, followed
-  by the panic (`Step.scopeLPD`; `scopeL_fail_end`, `scopeL_fail_frame`);
+  (`Step.scopeLFail`), and the panic's one step turns the frame into `x`'s
+  destructor frame, at its end, followed by the panic (`Step.scopeLPD`;
+  `scopeL_fail_end`, `scopeL_fail_frame`);
 * on a panic in the body, the same (`Step.scopeLPD`): the failing value is
   never released by `Release` (`release_none`), so never dropped with no
   code;
 * the frame's end then calls the destructor on `x`
-  (`fail_frame_runs_dtor`), on the panicking thread, the block left checked
-  out for good, as nurlc leaves the lock held: no thread takes it again.
+  (`fail_frame_runs_dtor`), on the panicking thread (`fail_end_runs_dtor`:
+  the three steps from the end, each the only one).
 
-So a failing give-back runs the destructor (`fail_end_runs_dtor`: the three
-steps from the end, each the only one).  nurlc leaves the value in the lock's
-memory and runs its destructor when the `Locked`'s last share drops; the model
-runs it at the failure, on the failing thread: earlier, and maybe on another
-thread than nurlc's (`A3/DESIGN.md`, Agora #803).
+That the block then stays checked out is not these lemmas' (the last
+conjunct of `fail_end_runs_dtor` restates its hypothesis): it is
+`A3/LockExcl.lean`'s.  After `scopeLPD` no `scopeL k` frame remains, a step
+leaves a block whose payload is out as it was unless it is that block's
+frame's (`A3.Step.stay`, `A3.LockInv`), and `withLock`, `lockTake` and
+`rwRead` all need the payload in (`locked_restore` fills only a taken block).
+Leaving it checked out mirrors the runtime's held lock word, should the case
+arise.  No headline theorem says the destructor runs: `NoLeak` would hold of
+a code-less drop too.  That a failing give-back runs it rests on
+`release_none` and `fail_end_runs_dtor`.
 
 The witness: `main` makes an `Arc` share, puts it in a destructor value (`DA`,
 the struct `TA = prod (arc int) int` whose destructor `dfnA` takes it lent),
@@ -45,7 +65,13 @@ It is typed (`main_typed`, which `Ty.ok` refused before), every run of it is
 safe (`main_safe`) and leaks nothing (`main_no_leak`, `main_no_leak_panic`);
 the lock's last drop hands the payload, the `Arc` share in it, to a
 destructor frame (`last_drop_reaps`); A3's claim covers it
-(`A3.lockArcDtor_claim`). -/
+(`A3.lockArcDtor_claim`).  Its give-back's check cannot fail (it holds no read
+guard), so it does not reach the lemmas above; and its give-back is not
+traced either: the give-back lemmas of `A3.LockDtorWitness`
+(`giveable_of`, `scopeL_typed_end_gives_back`, `release_cases`,
+`scopeL_typed_panic`) still assume `hasArc = false`, so that a typed
+share-holding payload's check-out ends in `Release.put` is not yet a lemma
+(Agora #837 item 3). -/
 
 namespace A3.LockArcDtorWitness
 open A2
@@ -145,8 +171,12 @@ theorem fail_frame_runs_dtor {P : Prog} {m : Mem} {x : Var} {f : Nat} {v : Val}
     check and no orphan to reap, the next three steps are each the only one:
     the end panics with the lock held (`scopeL_fail_end`), the panic turns the
     frame into `x`'s destructor frame (`scopeL_fail_frame`), and its end calls
-    `f` on `x` (`fail_frame_runs_dtor`).  The block stays checked out: no
-    other thread takes it again, as nurlc's lock is held for good. -/
+    `f` on `x` (`fail_frame_runs_dtor`).  Conditional: `¬ GiveCheck` is a
+    hypothesis, which needs a read guard in the payload, and no typed
+    reachable configuration is shown to meet it (Agora #837).  The last
+    conjunct restates `hck`; that the block stays checked out afterwards is
+    `A3/LockExcl.lean`'s (`A3.Step.stay`: no `scopeL k` frame remains, and
+    `withLock`, `lockTake` and `rwRead` need the payload in). -/
 theorem fail_end_runs_dtor {P : Prog} {m : Mem} {k : Nat} {f : Nat} {u : Ty} {x : Var} {v : Val}
     (hck : CheckedOut m k (.dtor f u)) (hx : m.st x = some ⟨true, some v⟩) (hv : v.isNode = false)
     (hng : ¬ GiveCheck m x ⟨true, some v⟩) (hno : ¬ Orphan m) :

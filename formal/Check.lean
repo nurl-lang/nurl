@@ -161,8 +161,10 @@ import A3
 #print axioms A3.lockVecDtor_claim
 -- Agora #803 (A3/LockArcDtorWitness.lean): a destructor payload may hold `arc` and lock shares (no
 -- cell share, `Ty.lkPay`); its give-back's failing crossing check turns the check-out's frame into
--- the value's destructor frame (`Step.scopeLPD`), never the code-less drop (`Release.drop`); a
--- witness, a `Locked` of a destructor value holding an `Arc` share
+-- the value's destructor frame (`Step.scopeLPD`), never the code-less drop (`Release.drop`): a
+-- case nurlc refuses statically (the check fails only through a read guard, Agora #837), and the
+-- lemmas take the failing check as a hypothesis; a witness, a `Locked` of a destructor value
+-- holding an `Arc` share
 #print axioms A2.pres_unwindD
 #print axioms A2.Inv.scopeL_iff
 #print axioms A3.LockArcDtorWitness.release_none

@@ -953,7 +953,8 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
                 -- A2-drop.3d, Agora #610: a view owns nothing (Agora #804:
                 -- its payload, its lock block's, is of a read guard's view
                 -- type or owns no destructor value), a lock's none or (Agora #755) one at its
-                -- top holding no share; an `arc` block's may be one at its
+                -- top holding no cell share (Agora #803; before, no share);
+                -- an `arc` block's may be one at its
                 -- top or (Agora #755) a drained `Vec` of them, and a `dead`
                 -- block's is (`Blk.DtorOK`)
                 bl.DtorOK

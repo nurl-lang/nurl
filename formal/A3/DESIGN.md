@@ -1288,8 +1288,10 @@ every thread's slots and the globals) freed an orphaned `Arc<D>`'s,
   the thread whose later step leaves the block unreached, or never, if that
   thread never ends the slot (its scope does not end). Several orphans one
   step leaves are reaped in the order `Step.reap` picks; a cycle of orphans
-  (through a lock), and every block reached only from that cycle's
-  payloads, is freed with no code, as on A2.
+  (through a lock; since Agora #803 two `Locked D` payloads can form one
+  directly, each holding a share of the other's lock in a closure's
+  environment), and every block reached only from that cycle's payloads,
+  is freed with no code, as on A2, where the runtime leaks it.
 
 ### Agora #803: a destructor payload that holds a share
 
@@ -1301,26 +1303,38 @@ fails, the scope's normal end panics (`Step.scopeLFail`), and the unwinding
 (`Step.scopeLP`) took the code-less `Release.drop`, a `DropSlot` that runs no
 code: a destructor value would have been released without its destructor.
 
-*What nurlc does.* `locked_with`, `locked_update`, `locked_apply` and
-`locked_await` (`stdlib/std/thread.nu`) run `mem_send_check` on the value
-after the closure and before `nurl_lk_exit`; on failure they panic with the
-lock held. The value stays in the lock's memory, the lock is never exited,
-and no other thread gets in; the value's destructor runs when the
-`Locked`'s last share drops (`Locked_drop`).
+*When the check can fail.* A payload `lkPay` admits as a destructor value
+holds no cell share (`hasCell = false`), so the cell half of `SendCheck`
+always holds of it (`WFv.noCell_hasCell`, A2/Invariant.lean), and
+`GiveCheck` fails only through `NoGuard`: the value reaches a read guard.
 
-*The two designs.* (b) On a failed check the value goes to a destructor
-frame on the panicking thread, as the reap's does (`Step.reap`): its
-destructor runs during the unwinding, and the block stays checked out for
-good. (p) A poisoned block: the value goes back into the block, marked held
-forever, and the reap of the lock block runs the destructor later. (p) is
-nurlc's timing, but it puts back into a shared block the very value the
-check refused (one that reaches a read guard, `NoGuard`), which every other
-entry into a lock's payload keeps out (`locked_new`, a cell's constructor,
-`locked_restore`, `chan_send`, the give-back), and it needs a block state
-"held for good" that every lemma casing on a block's state meets, and the
-reap of such a block. (b) keeps the value where it already is, in the
-failing thread's slot, adds one step and no state, and changes no
-invariant. Chosen: (b).
+*What nurlc does.* nurlc never takes this path. `locked_with`,
+`locked_update`, `locked_apply` and `locked_await` (`stdlib/std/thread.nu`)
+run `mem_send_check` on the value after the closure and before
+`nurl_lk_exit`, and panic with the lock held when it fails; but nurlc
+statically refuses a read guard in a value that crosses (`% NotSend
+RGuard`, `stdlib/std/rwlock.nu`), and its `mem_send_check`
+(`stdlib/runtime_core.c`) counts only handle blocks, so on such a payload
+the check never fails there. The model is looser than nurlc here: it
+admits a `Locked` of a `D` holding a read guard, which nurlc refuses.
+Agora #837 tracks refusing it in the model's types. Until then
+`Step.scopeLPD` makes the model total on a case nurlc rules out at compile
+time.
+
+*The two designs.* What the model does with the value on that case.
+(b) On a failed check the value goes to a destructor frame on the
+panicking thread, as the reap's does (`Step.reap`): its destructor runs
+during the unwinding, and the block is left checked out, mirroring the
+runtime's held lock word should the case arise. (p) A poisoned block: the
+value goes back into the block, marked held forever, and the reap of the
+lock block runs the destructor later. (p) puts back into a shared block
+the very value the check refused (one that reaches a read guard,
+`NoGuard`), which every other entry into a lock's payload keeps out
+(`locked_new`, a cell's constructor, `locked_restore`, `chan_send`, the
+give-back), and it needs a block state "held for good" that every lemma
+casing on a block's state meets, and the reap of such a block. (b) keeps
+the value where it already is, in the failing thread's slot, adds one step
+and no state, and changes no invariant. Chosen: (b).
 
 *The rules.*
 
@@ -1358,10 +1372,13 @@ invariant. Chosen: (b).
   `Inv.scopeL_iff` reads the frame's invariant as a scope's.
 
 *A3.* Lock exclusion with a failed give-back: the frame leaves the thread's
-`lkeys` and its block stays checked out (`Step.stay`'s new case, as
-`scopeLP` with a drop), which `LockInv` and `RootInv` already admit; no
-other thread takes the block again (`withLock` waits on a checked-out
-block), so it is held for good, nurlc's lock held. The destructor's steps
+`lkeys` and its block is left checked out (`Step.stay`'s new case, as
+`scopeLP` with a drop), which `LockInv` and `RootInv` already admit. That
+the block then stays checked out is `LockExcl`'s invariant, not a lemma of
+the failing path: no `scopeL k` frame remains, a step leaves a block whose
+payload is out as it was unless it is that block's frame's (`Step.stay`),
+and `withLock`, `lockTake` and `rwRead` all need the payload in
+(`locked_restore` fills only a taken block). The destructor's steps
 are the failing thread's on a value it owns: A3.1's crossing rules see
 nothing new (the value's `arc` shares are its slot's, the blocks they name
 as before). Every A3 lemma that cases on a step gained the new case as
@@ -1371,33 +1388,55 @@ and `no_leak_panic`: unchanged and re-proven; the value's addresses are its
 slot's until the frame frees them.
 
 *Cells and channels.* A cell's check-out (`withCell`) is the same frame
-(`scopeL`), so it is covered by the same rule. A channel's send
-(`EvalR.chanSend`), `locked_new`, a cell's constructor and `locked_restore`
-that fail `SendCheck` panic with the store as it was, the value in the
-sender's binding, whose own frame (a `letd`'s) runs its destructor; a
-receive's check (`RecvCheck`) is of cells only, which the payload holds
-none of. So no failing check drops a destructor value with no code, and a
-channel of destructor values that hold `arc` or lock shares is typed too
-(no witness of it).
+(`scopeL`), so the model treats it by the same rule. That has no runtime
+counterpart: real handles check their state out with `rc_take` /
+`rc_restore` (`stdlib/std/rc.nu`), which run no crossing check and hold no
+lock, so a cell's give-back never fails at run time. And on a panic the
+runtime's taken value is dropped by its local frame (its destructor runs)
+and the `Rc` stays empty for good: later handle operations panic, where
+the model's `withCell` gives the state back (`Release.put`), or, after a
+failed give-back, leaves the block checked out and waits. That a library
+handle behaves as the model's cell stays part of the trusted base
+(phase B). A channel's send (`EvalR.chanSend`), `locked_new`, a cell's
+constructor and `locked_restore` that fail `SendCheck` panic with the
+store as it was, the value in the sender's binding, whose own frame (a
+`letd`'s) runs its destructor; a receive's check (`RecvCheck`) is of cells
+only, which the payload holds none of. So no failing check drops a
+destructor value with no code, and a channel of destructor values that
+hold `arc` or lock shares is typed too (no witness of it).
 
-*Distance from nurlc.* The destructor of a value whose give-back fails runs
-at the failure, during the unwinding, on the failing thread; nurlc runs it
-when the `Locked`'s last share drops, on whichever thread drops it, later.
-Both are memory-safe: the value is the failing thread's, and the block,
-checked out for good, admits no other thread.
+*Distance from nurlc.* None that a nurlc program meets: the failing case
+needs a read guard in the payload, which nurlc refuses statically. Were it
+to arise, the model runs the value's destructor at the failure, during the
+unwinding, on the failing thread, and leaves the block checked out as the
+runtime leaves its lock word held. Both are memory-safe: the value is the
+failing thread's, and the block admits no other thread.
+
+*What is proved.* No headline theorem says the destructor runs on a failed
+give-back: `NoLeak`, `no_leak_end` and `no_leak_panic` would have held with
+the old code-less drop too. That it runs rests on the local lemmas
+(`release_none`, `fail_end_runs_dtor`), and those are conditional: they
+take `¬ GiveCheck` as a hypothesis, and no typed reachable configuration is
+shown to meet it (the failing case needs a read guard in the payload;
+Agora #837 aims to prove it unreachable, `giveCheck_typed`). The
+give-back lemmas of `A3/LockDtorWitness.lean` (`giveable_of`,
+`scopeL_typed_end_gives_back`, `release_cases`, `scopeL_typed_panic`)
+still assume `hasArc = false`: that a typed share-holding payload's
+check-out ends in `Release.put` is not yet a lemma (Agora #837 item 3).
 
 *Lemmas and witness* (`A3/LockArcDtorWitness.lean`): `release_none` (a
 failing destructor payload of a checked-out block is no `Release`),
 `scopeL_fail_end` and `scopeL_fail_frame` (at the end, the panic, then the
 destructor frame, each step the only one), `fail_frame_runs_dtor` (the
 frame's end calls the destructor), `fail_end_runs_dtor` (the three steps
-together, the block left checked out). The witness `main` makes an `Arc`
+together; its last conjunct, the block checked out, restates its
+hypothesis). The witness `main` makes an `Arc`
 share, puts it in a destructor value (`DA`, the struct `prod (arc int)
 int` with the destructor `dfnA`), moves that into a `Locked`, updates it
 through `locked_apply` and drops the last share: `main_typed`, `main_safe`,
 `main_no_leak`, `main_no_leak_panic`, `last_drop_reaps`,
-`A3.lockArcDtor_claim`. Its check cannot fail (it holds no read guard); the
-failing case is the lemmas', of any program.
+`A3.lockArcDtor_claim`. Its check cannot fail (it holds no read guard), so
+it does not reach the failing lemmas, and its give-back is not traced.
 
 ## A3.3's mechanization (`RwLocked`, `% Frozen`)
 
@@ -3838,7 +3877,9 @@ Each is a restriction, and sound as stated.
 - *An `RwLocked` of a library handle* is made and written but not read.
   The runtime refuses it where it crosses.
 - *A failed give-back drops the value* where the runtime keeps it in the
-  held lock. Nothing reaches it either way.
+  held lock. Nothing reaches it either way. (Agora #803: a destructor
+  value's goes to a destructor frame instead, `Step.scopeLPD`, on a case
+  nurlc refuses statically.)
 - *`locked_take` takes only through a lock share*, not a cell share (A3.2's
   second cut).
 

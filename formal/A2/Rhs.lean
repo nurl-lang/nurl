@@ -199,7 +199,8 @@ def BlocksIn (m : Mem) : Prop :=
     (∀ p, bl.pay = some p → WFv bl.ty p ∧ SharesOK m bl.ty p) ∧ (bl.kind = .lock ∨ bl.ty.hasCell = false) ∧
     -- A2-drop.3d, Agora #610: a view owns nothing (Agora #804: its payload,
     -- its lock block's, of a read guard's view type or owning none), a
-    -- lock's none or (Agora #755) one at its top holding no share; an `arc`
+    -- lock's none or (Agora #755) one at its top holding no cell share
+    -- (Agora #803; before, no share); an `arc`
     -- block's may be one at its top, or (Agora #755) a drained `Vec` of them
     -- (`Blk.DtorOK`)
     bl.DtorOK
@@ -227,7 +228,8 @@ theorem arcDtorOK {t : Ty} {o : Option Val} (hd : t.dtorFree = true ∨ t.dnest 
 
 /-- Agora #755 (`Locked D`, `Locked (Vec D)`): a lock block whose payload
     owns no destructor value or is one at its top, or a drained `Vec` of
-    them, holding no share (`Ty.lkPay`), of a type that holds no closure. -/
+    them, holding no cell share (`Ty.lkPay`; Agora #803: before, no share),
+    of a type that holds no closure. -/
 theorem lockDtorOK {t : Ty} {o : Option Val} (hd : t.lkPay = true) (hfn : t.hasFn = false) :
     Blk.DtorOK ⟨t, .lock, o⟩ := by
   refine ⟨fun _ _ => Or.inr (Or.inl ⟨rfl, hd⟩), fun h => by simp at h, fun hf _ => ?_⟩

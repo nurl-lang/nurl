@@ -353,9 +353,10 @@ def Ty.dtorViews (t : Ty) : Bool := t.dnest && t.holdsView
     it is always reaped, at its own type (a `Vec` drained by the reap's
     frame).  Agora #803: it may hold `arc` and lock shares (nurlc's `Locked
     Conn`, `% Drop Conn` holding an `Arc Pool`), so its give-back's crossing
-    check (`GiveCheck`) can fail (the value reaches a read guard); the value
-    then goes to a destructor frame on the unwinding (`Step.scopeLPD`), never
-    to the code-less drop (`Release.drop`).  Until Agora #803 it asked
+    check (`GiveCheck`) can fail (the value reaches a read guard, which
+    nurlc refuses statically and the model does not yet: Agora #837); the
+    value then goes to a destructor frame on the unwinding (`Step.scopeLPD`),
+    never to the code-less drop (`Release.drop`).  Until Agora #803 it asked
     `!t.hasArc`, which kept that check unfailable. -/
 def Ty.lkPay (t : Ty) : Bool := t.dtorFree || (t.dnest && !t.hasCell)
 
