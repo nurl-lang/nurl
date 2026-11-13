@@ -1,5 +1,5 @@
-// arm_tail_join_or_payload_lend_of_an_outer_binding_releases_the_arm_locals_runs_clean: a `?` arm with a local, whose tail is an inner join of two lends out of an outer Vec, or a `??` arm over a lent temporary option whose tail lends its payload; both paths.
-// Closed (agora #775 items 4, 5): an inner join that selects and lends only outer bindings, and a payload whose option is lent out of an outer binding (`__plroot` / `__plend`), are none of the arm's own: its locals go at its exit (mem_arm_outer_lend, __arm_join_lends_outer).
+// arm_tail_join_or_payload_lend_of_an_outer_binding_releases_the_arm_locals_runs_clean: a `?` arm with a local, whose tail is an inner join of two lends out of an outer Vec, or a `??` arm over a lent temporary option whose tail lends its payload, or an outer `: ~` cursor given a lend of an arm local or of an outer Vec and lent by the tail; both paths.
+// Closed (agora #775 items 4, 5, 7): an inner join that selects and lends only outer bindings, and a payload whose option is lent out of an outer binding (`__plroot` / `__plend`), are none of the arm's own: its locals go at its exit (mem_arm_outer_lend, __arm_join_lends_outer).
 // main 160339c1: the arm's local leaks on each run (definitely lost).
 // map: §7.6 | A2 | runs-clean | - | agora #775: an arm whose tail lends only outer bindings releases its locals
 $ `stdlib/core/string.nu`
@@ -16,4 +16,17 @@ $ `stdlib/core/option.nu`
 
 @ payload_tail i c → v { : ( Vec String ) v ( mkv ) : String e ?? ( vec_get [String] v c ) { T p → { : String junk ( mk 5 ) ( idg [String] p ) } F → ( mk 3 ) } ( nurl_println ( string_data e ) ) }
 
-@ main → i { ( join_tail 0 ) ( join_tail 1 ) ( payload_tail 0 ) ( payload_tail 1 ) ^ 0 }
+@ cursor_tail i c → v {
+    : ~ String cur ( mk 8 )
+    : String e ? == c 1 { : ( Vec String ) u ( mkv ) = cur ( vec_at [String] u 0 ) ( idg [String] cur ) } ( mk 3 )
+    ( nurl_println ( string_data e ) )
+}
+
+@ outer_cursor_tail i c → v {
+    : ( Vec String ) w ( mkv )
+    : ~ String cur ( mk 8 )
+    : String e ? == c 1 { : String junk ( mk 2 ) = cur ( vec_at [String] w 0 ) ( idg [String] cur ) } ( mk 3 )
+    ( nurl_println ( string_data e ) )
+}
+
+@ main → i { ( join_tail 0 ) ( join_tail 1 ) ( payload_tail 0 ) ( payload_tail 1 ) ( cursor_tail 0 ) ( cursor_tail 1 ) ( outer_cursor_tail 0 ) ( outer_cursor_tail 1 ) ^ 0 }

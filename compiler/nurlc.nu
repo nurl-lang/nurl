@@ -23044,6 +23044,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     : s fl ( mem_udrop_flag_get syms cg up )
                     ? ( seq fl `1` ) { = how `` } { = how ( nurl_str_cat fl `` ) }
                 } {}
+                // (…one whose every lend root (`__pljr`) is a binding of an
+                // outer scope holds no lend of the arm's own either: `= cur (
+                // vec_at [String] w 0 )`, w outer; agora #775.)
+                ? ( __lend_roots_outer syms nm here ) { = how `` } {}
             }
         } {}
         ? == 0 ( nurl_str_len how ) {} {
@@ -23199,7 +23203,11 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         : s nm0 ( str_first_word rest ) = rest ( str_skip_word rest )
         : s nm ? ( seq nm0 `-` ) nm0 ( __path_root_name nm0 )
         : s up ? ( seq nm `-` ) `` ( mem_udrop_ptr_of syms nm )
-        : b own & != 0 ( nurl_str_len up ) ! ( str_contains_word old_user up )
+        // (…or a binding of an outer scope that may hold a lend of one of
+        // them — `= cur ( vec_at [String] u 0 )`, u the arm's: its roots,
+        // `__pljr`. Lent on, it is copied where the callee lends it, as an
+        // arm local is; agora #775.)
+        : b own | & != 0 ( nurl_str_len up ) ! ( str_contains_word old_user up ) & ! ( seq nm `-` ) ( __holds_arm_local_lend syms nm old_user )
         ? own { = any T } {}
         = mine ? == 0 ( nurl_str_len mine ) ( nurl_str_cat ? own nm `-` `` ) ( nurl_str_cat3 mine ` ` ? own nm `-` )
     }
@@ -23214,6 +23222,41 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     : s oh ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print oh ) ( nurl_print ` = or i1 ` ) ( nurl_print hown ) ( nurl_print `, ` ) ( nurl_print lp ) ( nurl_print `\n` )
     ^ ( nurl_str_cat3 nv ` ` oh )
+}
+
+// Are binding `nm`'s lend roots (`__pljr`) — at least one — all bindings
+// of a scope outside depth `here` (or scalar `-` positions)?
+@ __lend_roots_outer i syms s nm i here → b {
+    : s rs ( nurl_sym_get2 syms nm `__pljr` )
+    ? == 0 ( nurl_str_len rs ) { ^ F } {}
+    : ~ s rest ( __str_lines_words rs )
+    : ~ b any F
+    ~ != 0 ( nurl_str_len rest ) {
+        : s r0 ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( seq r0 `-` ) {
+            : s r ( __path_root_name r0 )
+            ? | == 0 ( nurl_sym_len syms r ) >= ( nurl_sym_depth_of syms r ) here { ^ F } {}
+            = any T
+        } {}
+    }
+    ^ any
+}
+
+// Does binding `nm` (of any scope) hold, by its lend roots (`__pljr`), a
+// lend of a binding registered for its drop since `old_user` (an arm's own)?
+@ __holds_arm_local_lend i syms s nm s old_user → b {
+    : s rs ( nurl_sym_get2 syms nm `__pljr` )
+    ? == 0 ( nurl_str_len rs ) { ^ F } {}
+    : ~ s rest ( __str_lines_words rs )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s r0 ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( seq r0 `-` ) {
+            : s r ( __path_root_name r0 )
+            : s rp ( mem_udrop_ptr_of syms r )
+            ? & != 0 ( nurl_str_len rp ) ! ( str_contains_word old_user rp ) { ^ T } {}
+        } {}
+    }
+    ^ F
 }
 
 // The same second chance for a value that CAN hold an address, when it is
