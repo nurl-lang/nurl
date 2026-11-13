@@ -511,7 +511,16 @@ the LLVM / C11 memory model rather than redefining it.
       refuses it, `A3.mix_not_globsOK`). There a check-out through the lock
       share changes the cell's state as no `CellOp`, so a race with a
       `withCell`, which the runtime runs with no lock, was not a `Race`.
-      `A3.claim`'s text is unchanged; only `GlobsOK` asks more. The sweep keeps what the globals reach, and
+      `A3.claim`'s text is unchanged; only `GlobsOK` asks more. Read it with
+      care: as a theorem `A3.claim` concludes what it did (its `RaceFree`
+      and `CellOp` are unchanged), and the fact that makes `RaceFree`
+      adequate on cells — every check-out of a cell's block is a `CellOp`
+      of an owner's share — is the separate theorem `A3.reach_frame_cellOp`
+      (with `A3.reach_shareKind`), not part of `A3.Claim`'s statement.
+      ("A cell's block" is a definition: a block some value of the
+      configuration names by a cell share, `Cfg.Holds (.cell k)`; blocks
+      carry no mark of their own.) Folding it into `A3.Claim` is
+      Agora #818. The sweep keeps what the globals reach, and
       `NoLeak` says only that is left once every thread has finished, as
       the runtime keeps globals until the process exits.
     - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
