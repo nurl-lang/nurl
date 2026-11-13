@@ -88,19 +88,20 @@ def join_own(a, b):
 
 
 class State:
-    __slots__ = ("vals", "dead", "bottom", "defers")
+    __slots__ = ("vals", "dead", "bottom", "defers", "gone")
 
-    def __init__(self, vals=None, dead=frozenset(), bottom=False, defers=()):
+    def __init__(self, vals=None, dead=frozenset(), bottom=False, defers=(), gone=frozenset()):
         self.vals = dict(vals or {})
         self.dead = frozenset(dead)
         self.bottom = bottom
         self.defers = tuple(defers)      # the `;` blocks armed so far, oldest first
+        self.gone = frozenset(gone)      # (variable, path): a field taken out of its owner
 
     def copy(self):
-        return State(self.vals, self.dead, self.bottom, self.defers)
+        return State(self.vals, self.dead, self.bottom, self.defers, self.gone)
 
     def key(self):
-        return (self.bottom, self.dead, self.defers,
+        return (self.bottom, self.dead, self.defers, self.gone,
                 tuple(sorted(((k, v.key()) for k, v in self.vals.items()), key=repr)))
 
 
@@ -119,7 +120,7 @@ def join(a, b):
                      x.call or y.call)
     # a block armed on one path may run: it is checked as if it does
     defers = a.defers + tuple(d for d in b.defers if d not in a.defers)
-    return State(vals, a.dead | b.dead, defers=defers)
+    return State(vals, a.dead | b.dead, defers=defers, gone=a.gone | b.gone)
 
 
 VIEW_TYPES = ("s", "slice")
@@ -390,6 +391,11 @@ class FnCheck:
         if av.own == "U":
             return NONE
         self.check_live(st, av, line, name)
+        if st.gone:
+            for (gv, gp) in st.gone:
+                if gv == vid and (prefix(gp, path) or prefix(path, gp)):
+                    self.err(line, f"{self.pname((vid, gp))} is used after it was taken out of {name}")
+                    return NONE
         ty = self.ty_of_place((vid, path))
         if ty is not None and self.T.is_scalar(ty):
             if path:
@@ -640,7 +646,7 @@ class FnCheck:
                             self.err(line, f"{name} takes {self.pname((op[1], op[2]))}, which is a borrow")
                         elif not self.T.copyable(ty):
                             self.err(line, f"{name} takes a borrowed value that cannot be copied")
-                    elif not self.take_payload(st, avs[k], line) and not self.T.copyable(ty):
+                    elif not self.take_payload(st, avs[k], line, direct=bool(op[2])) and not self.T.copyable(ty):
                         self.err(line, f"{name} takes a borrowed value that cannot be copied")
         # effects
         for (k, path, eff) in sm["effects"]:
@@ -773,7 +779,7 @@ class FnCheck:
             keep = {l for l in av.loans if self.loans.get(l, (None,))[0] != a}
             st.vals[vid] = AV("O", keep, frozenset(), av.held)
 
-    def take_payload(self, st, av, line):
+    def take_payload(self, st, av, line, direct=True):
         """A value read in place out of what owns it - a binding a cursor or
         a join names, a field, an element, a payload - is taken out of its
         owner when it is consumed: the owner (or that part of it) is moved,
@@ -795,8 +801,12 @@ class FnCheck:
                 self.s_consumes.add(self.pidx[vid])
             if not path:
                 st.vals[vid] = AV("M" if sure else "X")
-            elif "*" not in path:
-                st.vals[vid] = AV("X")
+            elif "*" not in path and direct:
+                # the field is moved where it lives: it, what is under it
+                # and the value as a whole are not read until it is given a
+                # value again (§2.1). Taken through a binding of it, the
+                # field is left empty, and an empty String or Vec is one.
+                st.gone = st.gone | {(vid, path)}
         return True
 
     def store_into(self, st, place, add, depth=0, already_rooted=False, base=()):
@@ -1116,6 +1126,8 @@ class FnCheck:
         # a loan nothing holds any more is no fact about a later round or a
         # later use of its site: only what some value still needs stays ended
         st.dead = st.dead & self.all_loans(st)
+        if st.gone:
+            st.gone = frozenset(g for g in st.gone if g[0] not in declared)
         return st
 
     def stmt(self, st, s):
@@ -1178,6 +1190,8 @@ class FnCheck:
                     st.vals[vid] = AV("P", (), (), held)
                 else:
                     st.vals[vid] = new
+                if st.gone:
+                    st.gone = frozenset(g for g in st.gone if g[0] != vid)
                 return st
             fty = self.ty_of_place((vid, path))
             new = self.rvalue(st, rv, ln, ddepth, fty, self.pname((vid, path)))
@@ -1193,6 +1207,8 @@ class FnCheck:
             self.handover(st, (vid, path))
             self.effect(st, (vid, path), "replace", ln)
             self.store_into(st, (vid, path), add)
+            if st.gone:
+                st.gone = frozenset(g for g in st.gone if not (g[0] == vid and prefix(path, g[1])))
             return st
         if k == "eval":
             _, rv, ln = s
