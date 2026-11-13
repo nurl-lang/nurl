@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_dup_variant_cross_enum.nu:7:11: error: variant 'X' is already declared by enum 'A' at compiler/tests/diag_dup_variant_cross_enum.nu:6. Variant names are file-scope constants (each becomes a global '@X', and a bare 'X' must name exactly one enum's tag): rename one.
+compiler/tests/diag_dup_variant_cross_enum.nu:8:11: error: variant 'X' is already declared by enum 'A' at compiler/tests/diag_dup_variant_cross_enum.nu:7. Variant names are file-scope constants (a bare 'X' must name exactly one enum's tag): rename one.
 : | B { Z X }
           ^
 error: aborting due to 1 previous error

@@ -1,0 +1,19 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+206
+8
+-1
+12 20
+10 22
+Low too low
+High 10 too high
+0 0
+73
+left right
+107
+2000000 2000001000000
+10
+2
+20

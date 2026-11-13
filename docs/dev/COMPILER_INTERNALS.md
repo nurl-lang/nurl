@@ -134,6 +134,56 @@ writes split definitions, including replicas; it neither shifts the index
 nor allocates another module buffer. Dropping something still referenced
 surfaces as an undefined symbol at link time.
 
+### What the emitted IR promises the optimiser
+
+nurlc emits first-class aggregates (`%Point`, `%Shape`, `{ i1, T, E }`)
+as SSA values, and LLVM is good at them along a straight line. Two shapes
+it cannot see through, so nurlc does not emit them (AGORA-853;
+`compiler/tests/agg_no_phi_ir.sh` holds both):
+
+- **No `phi` that merges aggregates.** InstCombine folds an
+  `extractvalue` into a phi only when it is the phi's one user, and an
+  aggregate has a user per field: the tag of such a phi, or an option's
+  flag, stays an `extractvalue` no jump threading or value propagation
+  reads. A value join (`?`, `??`) of an aggregate type therefore goes
+  through a slot of the frame — each arm stores before its `br`, the
+  join loads after its phis (`__agg_slot_*`; gen_cond's `c_jslot`,
+  gen_match's `m_jslot`) — and SROA + mem2reg give one scalar phi per
+  field. A function or closure body whose result is an aggregate returns
+  the same way: its `^` sites, the try's error exit and the fall-off
+  value store into the result slot and branch to one exit block
+  (`emit_ret_value`, `emit_agg_exit`, `__agg_ret__`), because several
+  `ret %Agg` are merged by SimplifyCFG into exactly the phi this avoids.
+  What "aggregate" means here is `__ll_is_agg`: more than one word. A
+  String, a Vec, a library handle, a struct of one such field and an
+  enum of bare tags are one word under another name, their phi folds,
+  and they keep it.
+- **No load of an immutable tag.** An enum variant is its place in the
+  declaration, printed as that number (`<Variant>__tag`,
+  `__variant_tag`; its `__global` mark is `=<tag>`, so reading one costs
+  the lookup a global's read already made). There is no `@Variant`
+  global: a load of a global is opaque until LTO internalises it — after
+  the pre-link inliner and jump threading have run.
+
+Three returns keep a `ret` of their own. A tail call's result
+(`g_tail_reg`) has to stand beside the call for the recursion to become
+a loop. The body's last statement, when no return before it took the
+slot (`g_ret_top`, `g_ret_final`, `g_agg_ret_n`), is the only exit of a
+body that has no other: it compiles to the IR it always did, with no
+slot and no exit block. And anything that is no aggregate. The slot is
+the function's result slot (`__ret_val__`, `__ret_slot`), the one a
+return under a `;` defer already leaves its value in; a closure body,
+which has no defers of its own, gets one from its first return that
+needs it.
+
+(A join one of whose arms returned keeps a phi of its one remaining
+edge, which merges nothing and LLVM reads as its value. A temporary's
+drop word carried past a `?`, `mem_join_drop_words`, is a phi of a
+one-word handle beside its flag.)
+
+A new emission site that merges values of a possibly-aggregate type takes
+the slot (`__ll_is_agg` decides), never a hand-written `phi`.
+
 ## 3. Global state — families and owners
 
 Globals fall into the families below. The generated appendix (§6)
