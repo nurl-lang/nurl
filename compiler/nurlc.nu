@@ -8766,8 +8766,14 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     : b __rg_lit_name & __rg_lit_reads ! __rg_lit_own
     // (…a parameter that is no `sink` among them owns its value on the runs
     // this function consumes it: guarded on those, __ret_lit_param_own.)
-    : s __rg_hbit ? | __rg_named __rg_lit_name ( nurl_str_cat `` `` ) ? & __rg_lit_own != 0 ( nurl_str_len hbit ) ( __ret_lit_param_own syms cg hbit ) ( nurl_str_cat hbit `` )
-    = g_ret_lit_own __rg_lit_own
+    // (…and a value this return copied or took out of what held it —
+    // `^ . h name` of a local h, a payload taken out of a local enum, a
+    // copy of either (ret_field_copy) — is no binding's any more, nor the
+    // caller's yet: journaled with its own bit while the locals are
+    // dropped. Left unguarded, a local's panicking destructor lost it:
+    // agora #814, #677 D.)
+    : s __rg_hbit ? & | __rg_named __rg_lit_name ! ret_field_copy ( nurl_str_cat `` `` ) ? & __rg_lit_own != 0 ( nurl_str_len hbit ) ( __ret_lit_param_own syms cg hbit ) ( nurl_str_cat hbit `` )
+    = g_ret_lit_own | __rg_lit_own & ret_field_copy != 0 ( nurl_str_len __rg_hbit )
     // (A raw string a call made fresh — the same proof the function's own
     // `__fn_ret_str_owned__` takes — and a closure literal: gen_ret_term
     // journals what they own while the locals are dropped, Agora #620.)
