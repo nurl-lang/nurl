@@ -18172,10 +18172,14 @@ unsafe @ __sx_publish i me s sx → v {
     // String, agora #638.)
     ? == tt TT_LBRACE {
         : s tn ( nurl_sym_get syms `__tail_name__` )
-        // (…and a value block whose tail is any binding — a view of a block
-        // local, `: s e { : s t … t }`: that binding's sources, as the bare
-        // `: s e t` has them; agora #823, formal's OK.)
-        ? && && != 0 ( nurl_str_len tn ) ( seq ( nurl_sym_get syms `__tail_ptr__` ) ( nurl_sym_get2 syms tn `__ptr` ) ) ( seq ( nurl_sym_get syms `__last_ident_name__` ) tn ) { ^ ( nurl_str_cat `|` tn ) } {}
+        // (…and a value block whose tail is any binding that owns fresh
+        // storage — a view of a block local, `: s e { : s t ( concat … ) t }`:
+        // that binding, as the bare `: s e t` has it; agora #823, formal's OK.
+        // A tail that views something hands on what it views — its own
+        // source expression, which names it (`vec_at(outer|-)`), as before.)
+        ? && && != 0 ( nurl_str_len tn ) ( seq ( nurl_sym_get syms `__tail_ptr__` ) ( nurl_sym_get2 syms tn `__ptr` ) ) ( seq ( nurl_sym_get syms `__last_ident_name__` ) tn ) {
+            ? | ( __is_closure_ty ( nurl_sym_get syms tn ) ) | != g_sx_at + n0 1 ! ( __sx_names_any g_sx ) { ^ ( nurl_str_cat `|` tn ) } {}
+        } {}
     } {}
     ? | | | | | == tt TT_LPAREN == tt TT_QUEST == tt TT_AT == tt TT_BACKSLASH == tt TT_LBRACE == tt TT_QUESTQUEST {
         ^ ? == g_sx_at + n0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `*` `` )
@@ -42024,28 +42028,33 @@ unsafe @ __bck_view_row s rec → b {
 unsafe @ bck_sx_ids s sx → s {
     : i n ( nurl_str_len sx )
     : *u sp # *u sx
-    // (`|f` whole: the binding of that name a block that just closed made —
-    // a value block's tail, bck_xl_resolve's `|` spelling; `|` is otherwise
-    // a delimiter. Agora #638.)
-    ? & > n 1 == # i . sp 0 124 {
-        : ~ i j 1
-        ~ & < j n ! ( __sx_delim # i . sp j ) { = j + j 1 }
-        ? == j n { ^ ( nurl_str_int ( bck_intern ( bck_xl_resolve sx ) ) ) } {}
-    } {}
+    // (`|f`: the binding of that name a block that just closed made — a
+    // value block's tail, bck_xl_resolve's `|` spelling (agora #638) — whole
+    // or as one source of a join, `{|t;…}` (agora #823). A `|` that starts a
+    // word, at the start or after `(` `{` `;` `|`, is that prefix; the
+    // separator `|` always follows a source, since none is empty.)
     : ~ s out ( nurl_str_cat `` `` )
     : ~ i i 0
     ~ < i n {
-        ? ( __sx_delim # i . sp i ) {
-            = out ( nurl_str_cat out ( nurl_str_slice sx i 1 ) )
-            = i + i 1
-        } {
-            : ~ i e i
+        : i c # i . sp i
+        : i pc ? > i 0 # i . sp - i 1 40
+        : b clo & & & == c 124 < + i 1 n ! ( __sx_delim # i . sp + i 1 ) | | | == pc 40 == pc 123 == pc 59 == pc 124
+        ? clo {
+            : ~ i e + i 1
             ~ & < e n ! ( __sx_delim # i . sp e ) { = e + e 1 }
-            : s w ( nurl_str_slice sx i - e i )
-            : b keep | | & < e n == # i . sp e 40 ( seq w `-` ) ( seq w `*` )
-            = out ? keep ( nurl_str_cat out w ) ( nurl_str_cat out ( nurl_str_int ( bck_intern ( bck_xl_resolve w ) ) ) )
+            = out ( nurl_str_cat out ( nurl_str_int ( bck_intern ( bck_xl_resolve ( nurl_str_slice sx i - e i ) ) ) ) )
             = i e
-        }
+        } { ? ( __sx_delim c ) {
+                = out ( nurl_str_cat out ( nurl_str_slice sx i 1 ) )
+                = i + i 1
+            } {
+                : ~ i e i
+                ~ & < e n ! ( __sx_delim # i . sp e ) { = e + e 1 }
+                : s w ( nurl_str_slice sx i - e i )
+                : b keep | | & < e n == # i . sp e 40 ( seq w `-` ) ( seq w `*` )
+                = out ? keep ( nurl_str_cat out w ) ( nurl_str_cat out ( nurl_str_int ( bck_intern ( bck_xl_resolve w ) ) ) )
+                = i e
+            } }
     }
     ^ out
 }
