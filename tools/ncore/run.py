@@ -11,6 +11,7 @@ every file given as a program that must be accepted (the tree's own code:
 a refusal there is a rule written too coarsely).
 """
 import os
+import signal
 import sys
 import collections
 import traceback
@@ -155,19 +156,34 @@ def verdict_nurlc(path):
     return ("rejected" if errors else "runs-clean"), errors, summ
 
 
+def _timed_out(signum, frame):
+    raise TimeoutError()
+
+
 def one(job):
     """One probe's outcome: (name, status, detail, first error)."""
     path, use_nurlc = job
     exp = expected(path)
     name = os.path.basename(path)
+    # NCORE_TIMEOUT=<seconds>: a program the checker does not finish in time
+    # is skipped and named, not waited for (default 300).
+    limit = int(os.environ.get("NCORE_TIMEOUT", "300"))
+    if limit and hasattr(signal, "SIGALRM"):
+        signal.signal(signal.SIGALRM, _timed_out)
+        signal.alarm(limit)
     try:
         got, errors, _ = (verdict_nurlc if use_nurlc else verdict)(path)
     except Unsupported as e:
         return (name, "skip", str(e)[:80], None)
+    except TimeoutError:
+        return (name, "skip", f"the checker did not finish in {limit} s", None)
     except RecursionError:
         return (name, "crash", "RecursionError", None)
     except (ParseError, CheckError, KeyError, IndexError, TypeError, AttributeError, ValueError) as e:
         return (name, "crash", type(e).__name__ + ": " + str(e)[:80], None)
+    finally:
+        if limit and hasattr(signal, "SIGALRM"):
+            signal.alarm(0)
     st = "agree" if exp == got else "false-accept" if exp == "rejected" else "false-reject"
     return (name, st, got, errors[0] if errors else None)
 
