@@ -1540,6 +1540,13 @@ def check_program(prog, max_rounds=40):
         if (name.endswith("_clone") or name.endswith("_share")) and sm["res"] == "lent":
             # a handle's copy hook makes a value of its own (§7.6)
             errors.append((name, fn.line, "a copy hook hands its argument back, whole or in part"))
+        if getattr(fn, "is_closure", False):
+            ncap = getattr(fn, "ncap", 0)
+            if (any(k < ncap and kind == "view" for (k, _, kind) in sm["lends"])
+                    or any(k < ncap and kind == "view" for (_, k, _, kind) in sm["rholds"])):
+                # a view a closure hands back may point into its arguments,
+                # which the call follows, never into what it captured (§7.5)
+                errors.append((name, fn.line, "a closure hands back a view of what it captured"))
         if getattr(fn, "is_closure", False) and sm["stores"]:
             # a closure's type does not say what running it stores, so
             # nothing where it runs would follow a view it leaves in a
