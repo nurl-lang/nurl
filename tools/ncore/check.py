@@ -602,6 +602,12 @@ class FnCheck:
                     if reach or self.would_kill(st, place, eff, other.loans | hloans(other.held)):
                         self.err(line, f"{name}: the closure in argument {k + 1} changes "
                                        f"{self.pname(place)}, which argument {m + 1} also reaches")
+        # a closure several threads may run at once changes nothing it
+        # captured (MEMORY.md §6.5)
+        for k in sm.get("shares", ()):
+            if k < len(avs) and self.closure_capture_effects(avs[k]):
+                self.err(line, f"{name}: the closure in argument {k + 1} changes what it captured, "
+                               f"and several threads may run it at once")
         # consumed arguments
         for k in sm["consumes"]:
             if k >= len(ops):
