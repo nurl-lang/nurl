@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+a heap string
+a heap string
+a heap string
+a heap string

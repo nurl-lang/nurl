@@ -1,0 +1,22 @@
+// returned_block_whose_tail_is_a_block_naming_a_param: `@ f String p → String { ^ { { p } } }`: the caller's String was handed back as the function's own, then released twice (agora #663).
+// Closed: a block's tail that is itself a block hands up that block's first token (`{ { v } }` ends in `v`), so `^` hands the binding back by `^ v`'s rules: a parameter or a lend is copied (gen_block_expr, `__tail_first_deep__`; agora #663).
+// main (before this PR): accepted; AddressSanitizer reported heap-use-after-free.
+// map: §7.6 | A2 | runs-clean | - | agora #663: a returned block whose tail is a block naming a parameter (UAF on main)
+$ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+
+@ mk i c → String { ^ ( string_from `a heap string long enough for the heap buffer` ) }
+
+@ mkv i c → ( Vec String ) { : ~ ( Vec String ) v ( vec_new [String] ) ( vec_push [String] v ( mk c ) ) ^ v }
+
+@ idg [T] T x → T { ^ x }
+
+@ f String p → String { ^ { { p } } }
+
+@ main → i {
+    : String a ( mk 1 )
+    : String b ( f a )
+    ( nurl_println ( string_data a ) )
+    ( nurl_println ( string_data b ) )
+    ^ 0
+}
