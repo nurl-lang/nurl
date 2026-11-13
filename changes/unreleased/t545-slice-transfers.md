@@ -9,3 +9,4 @@
 
 - **A `: ~` copy of a slice is a borrow** (Agora #545). `: ~ [i d a  ( setl d )`, where setl gives its `inout` slice a new value, is refused: "'d' does not own its value: it borrows it from 'a'", as for a String.
 - **An `inout` slice of elements that own values cannot be given a slice it does not own** (Agora #545). `= p q` with p an `inout [String` and q a borrowed `[String` is refused; copying the elements one by one is not supported there. Give it a fresh slice, or pass the owner to a `sink` parameter and store that.
+- **An enum with a slice payload compiles and releases it** (Agora #841). `: | E { EA [i EB i }` produced invalid IR (its drop read the boxed payload as a slice of no type), and the payload was never freed. The enum's drop now releases the slice, and its elements where they own values. An owned slice binding moved into such a payload moves, so reading it after is refused.
