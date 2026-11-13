@@ -32,11 +32,11 @@ E = ("*",)
 
 
 def S(modes, res="none", lends=(), rholds=(), effects=(), stores=(),
-      consumes=(), elems=()):
+      consumes=(), elems=(), detaches=()):
     return {"modes": list(modes), "res": res, "lends": list(lends),
             "rholds": list(rholds), "effects": list(effects),
             "stores": list(stores), "consumes": list(consumes),
-            "elems": list(elems)}
+            "elems": list(elems), "detaches": list(detaches)}
 
 
 PRIMS = {
@@ -121,6 +121,45 @@ PRIMS = {
     "box_set": S(["in", "in"], effects=[(0, E, "replace")],
                  stores=[(0, E, 1, (), "value")]),
     "box_free": S(["sink"], consumes=[0]),
+    # ---- Rc / Arc / Shared: a counted block every copy of the handle shares --
+    "rc_new": S(["in"], res="own", rholds=[(E, 0, (), "held")], consumes=[0]),
+    "rc_get": S(["in"], res="lent", lends=[(0, E, "handle")], elems=[0]),
+    "rc_set": S(["in", "in"], effects=[(0, E, "replace")], stores=[(0, E, 1, (), "value")]),
+    "rc_take": S(["in"], res="own", effects=[(0, E, "replace")], rholds=[((), 0, E, "held")], elems=[0]),
+    "rc_clone": S(["in"], res="own", rholds=[((), 0, (), "held")]),
+    "rc_free": S(["sink"], consumes=[0]),
+    "arc_new": S(["in"], res="own", rholds=[(E, 0, (), "held")], consumes=[0]),
+    "arc_get": S(["in"], res="lent", lends=[(0, E, "handle")], elems=[0]),
+    "arc_clone": S(["in"], res="own", rholds=[((), 0, (), "held")]),
+    "shared_new": S(["in"], res="own", rholds=[(E, 0, (), "held")], consumes=[0]),
+    "shared_clone": S(["in"], res="own", rholds=[((), 0, (), "held")]),
+    # ---- trait objects: the box owns the value -------------------------------
+    "dyn": S(["in"], res="own", rholds=[(E, 0, (), "held")], consumes=[0]),
+    # ---- threads, channels, panics -------------------------------------------
+    # a closure a thread runs takes what it captured with it (§2.1)
+    "thread_spawn": S(["in"], res="own", detaches=[0]),
+    "thread_spawn_owned": S(["in"], res="own", detaches=[0]),
+    "spawn": S(["in"], res="own", detaches=[0]),
+    "thread_join": S(["in"]),
+    "recover": S(["in"], res="own"),
+    "chan_new": S([], res="own"),
+    "chan_send": S(["in", "in"], stores=[(0, E, 1, (), "value")]),
+    "chan_recv": S(["in"], res="own", rholds=[(("#T0",), 0, E, "held")]),
+    "chan_close": S(["in"]),
+    # ---- HashMap ---------------------------------------------------------------
+    "map_new": S([], res="own"),
+    "map_set": S(["in"] * 5, res="own", effects=[(0, (), "realloc")],
+                 stores=[(0, E, 1, (), "value"), (0, E, 2, (), "value")],
+                 rholds=[(("#T0",), 0, E, "held")]),
+    "map_get": S(["in"] * 4, res="lent", lends=[(0, E, "handle")], elems=[0]),
+    "map_len": S(["in"]),
+    # ---- more of the runtime ---------------------------------------------------
+    "strlen": S(["in"]),
+    "nurl_eprint": S(["in"]),
+    "nurl_eprintln": S(["in"]),
+    "nurl_eprintln_int": S(["in"]),
+    "nurl_eprint_int": S(["in"]),
+    "vec_push_word_u8": S(["in"] * 4, effects=[(0, (), "realloc")]),
     # ---- Option -----------------------------------------------------------
     "opt_unwrap": S(["in"], res="lent", lends=[(0, ("#T0",), "handle")]),
     "opt_unwrap_or": S(["sink", "sink"], res="own", consumes=[0, 1]),

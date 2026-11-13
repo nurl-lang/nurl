@@ -82,7 +82,9 @@ def verdict_nurlc(path):
                 raise Unsupported(f"no summary for {prog.fn_tmpl.get(n) or n}")
             trusted.add(n)
         keep[n] = every[n]
-        todo.extend(callees(every[n]))
+        for c in callees(every[n]):
+            todo.append(c)
+            todo.extend(prog.virt.get(c, ()))
     for fn in keep.values():
         rd.lower_body(fn)
     prog.fns = keep
@@ -91,10 +93,28 @@ def verdict_nurlc(path):
     return ("rejected" if errors else "runs-clean"), errors, summ
 
 
+def one(job):
+    """One probe's outcome: (name, status, detail, first error)."""
+    path, use_nurlc = job
+    exp = expected(path)
+    name = os.path.basename(path)
+    try:
+        got, errors, _ = (verdict_nurlc if use_nurlc else verdict)(path)
+    except Unsupported as e:
+        return (name, "skip", str(e)[:80], None)
+    except RecursionError:
+        return (name, "crash", "RecursionError", None)
+    except (ParseError, CheckError, KeyError, IndexError, TypeError, AttributeError, ValueError) as e:
+        return (name, "crash", type(e).__name__ + ": " + str(e)[:80], None)
+    st = "agree" if exp == got else "false-accept" if exp == "rejected" else "false-reject"
+    return (name, st, got, errors[0] if errors else None)
+
+
 def main(argv):
     files = []
     show = 15
     use_nurlc = False
+    jobs = 0
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -107,60 +127,56 @@ def main(argv):
             use_nurlc = True
             i += 1
             continue
+        if a == "--jobs":
+            jobs = int(argv[i + 1])
+            i += 2
+            continue
         if a == "--show":
             show = int(argv[i + 1])
             i += 2
             continue
         files.append(a if os.path.exists(a) else os.path.join(HOLES, a))
         i += 1
+    work = [(p, use_nurlc) for p in files]
+    if jobs > 1 and len(files) > 3:
+        import multiprocessing
+        with multiprocessing.Pool(jobs) as pool:
+            done = pool.map(one, work, chunksize=8)
+    else:
+        done = [one(w) for w in work]
     counts = collections.Counter()
-    results = []
     skips = collections.Counter()
     mism = {"false_accept": [], "false_reject": []}
-    for path in files:
-        exp = expected(path)
-        name = os.path.basename(path)
-        try:
-            got, errors, _ = (verdict_nurlc if use_nurlc else verdict)(path)
-        except Unsupported as e:
+    for name, st, detail, err in done:
+        if st == "skip":
             counts["skip"] += 1
-            skips[str(e).split(" (")[0][:40]] += 1
-            results.append((name, "skip", str(e)[:80]))
-            continue
-        except (ParseError, CheckError, KeyError, IndexError, TypeError, AttributeError, ValueError) as e:
+            skips[detail.split(" (")[0][:40]] += 1
+        elif st == "crash":
             counts["crash"] += 1
-            skips["CRASH " + type(e).__name__ + ": " + str(e)[:60]] += 1
-            results.append((name, "crash", type(e).__name__ + ": " + str(e)[:80]))
-            if len(argv) <= 3:
-                traceback.print_exc()
-            continue
-        results.append((name, "agree" if exp == got else "false-accept" if exp == "rejected" else "false-reject",
-                        str(errors[0]) if errors else ""))
-        if exp == got:
-            counts["agree:" + got] += 1
-        elif exp == "rejected":
+            skips["CRASH " + detail[:60]] += 1
+        elif st == "agree":
+            counts["agree:" + detail] += 1
+        elif st == "false-accept":
             counts["FALSE-ACCEPT"] += 1
             mism["false_accept"].append(name)
         else:
             counts["false-reject"] += 1
-            mism["false_reject"].append((name, errors[0] if errors else None))
+            mism["false_reject"].append((name, err))
         if len(files) <= 3:
-            print(name, "expected", exp, "got", got)
-            for e in errors:
-                print("   ", e)
+            print(name, "expected", expected(os.path.join(HOLES, name)) if os.path.exists(os.path.join(HOLES, name)) else None,
+                  "got", detail)
+            if err:
+                print("   ", err)
     print(dict(counts))
     print("skips:", skips.most_common(25))
-    print("FALSE ACCEPTS (unsafe, prototype accepts):", len(mism["false_accept"]))
+    print("FALSE ACCEPTS (unsafe, the checker accepts):", len(mism["false_accept"]))
     for n in mism["false_accept"][:show]:
         print("   ", n)
-    print("false rejects (safe, prototype refuses):", len(mism["false_reject"]))
+    print("false rejects (safe, the checker refuses):", len(mism["false_reject"]))
     for n, e in mism["false_reject"][:show]:
         print("   ", n, "--", e)
     with open(os.path.join(HERE, "results_nurlc.tsv" if use_nurlc else "results_own.tsv"), "w", encoding="utf-8") as f:
-        f.write("".join(f"{n}\t{st}\t{why}\n" for n, st, why in results))
-    with open(os.path.join(HERE, "last_run_nurlc.txt" if use_nurlc else "last_run.txt"), "w", encoding="utf-8") as f:
-        f.write("FALSE_ACCEPT\n" + "\n".join(mism["false_accept"]) + "\nFALSE_REJECT\n")
-        f.write("\n".join(f"{n}\t{e}" for n, e in mism["false_reject"]) + "\n")
+        f.write("".join(f"{n}\t{st}\t{err if err else detail}\n" for n, st, detail, err in done))
 
 
 if __name__ == "__main__":

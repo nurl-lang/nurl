@@ -37,9 +37,31 @@ def nurlc_binary():
 
 
 def emit_core(path):
-    """nurlc's core IR of the program at `path`, and what it could not lower."""
+    """nurlc's core IR of the program at `path`, and what it could not lower.
+    With NCORE_CACHE set to a directory, what nurlc printed is kept there
+    and read back (delete the directory when nurlc changes)."""
+    cache = os.environ.get("NCORE_CACHE")
+    key = None
+    if cache:
+        os.makedirs(cache, exist_ok=True)
+        key = os.path.join(cache, os.path.basename(path))
+        if os.path.exists(key + ".rc"):
+            with open(key + ".core", encoding="utf-8") as f:
+                out = f.read()
+            with open(key + ".err", encoding="utf-8") as f:
+                err = f.read()
+            with open(key + ".rc") as f:
+                rc = int(f.read())
+            return out, [l for l in err.splitlines() if l.startswith("core-gap\t")], rc, err
     r = subprocess.run([nurlc_binary(), "--no-borrowck", "--emit-core", os.path.abspath(path)], cwd=ROOT,
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if key:
+        with open(key + ".core", "w", encoding="utf-8") as f:
+            f.write(r.stdout)
+        with open(key + ".err", "w", encoding="utf-8") as f:
+            f.write(r.stderr)
+        with open(key + ".rc", "w") as f:
+            f.write(str(r.returncode))
     gaps = [l for l in r.stderr.splitlines() if l.startswith("core-gap\t")]
     return r.stdout, gaps, r.returncode, r.stderr
 
@@ -50,6 +72,7 @@ class Reader:
         self.prog.fn_flags = {}        # name -> flags (bit 0: raw memory allowed)
         self.prog.fn_tmpl = {}         # name -> the generic it is an instance of
         self.prog.fn_file = {}
+        self.prog.virt = {}            # a `dyn` method's virtual callee -> the impls it may run
         self.types = {}                # type string -> TypeInfo
         self.conv_memo = {}
         self.raw_fns = []
@@ -78,6 +101,9 @@ class Reader:
                 cur = None
             elif line.startswith("ty\t"):
                 self.parse_type(line.split("\t"))
+            elif line.startswith("virt\t"):
+                f = line.split("\t")
+                self.prog.virt[f[1]] = f[2:]
             elif cur is not None:
                 cur["stmts"].append(line)
 
@@ -296,9 +322,14 @@ class Reader:
                 vid = int(toks[1])
                 out.append(("let", vid, self.rvalue(toks[2:], rest_ty, fn, self.next_site(fn)), ln))
             elif k == "assign":
-                op = self.operand(toks[1], fn)
                 rv = self.rvalue(toks[2:], rest_ty, fn, self.next_site(fn))
-                out.append(("assign", (op[1], op[2]), rv, ln))
+                if toks[1].startswith("g:"):
+                    # a store into a module global: what it is given outlives
+                    # every frame
+                    out.append(("gstore", toks[1][2:].split("/")[0], rv, ln))
+                else:
+                    op = self.operand(toks[1], fn)
+                    out.append(("assign", (op[1], op[2]), rv, ln))
             elif k == "eval":
                 out.append(("eval", self.rvalue(toks[1:], rest_ty, fn, self.next_site(fn)), ln))
             elif k == "drop":
