@@ -56029,7 +56029,10 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             }
         } {}
         ? & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
-        : i __cbc ( __clo_bind_class syms vt val rhs_closure_env __src_owned_env bck_rhs_tt name bck_rhs_val )
+        // (A value block whose tail is a closure binding of its own is that
+        // binding to the walk too, as `: g f`: a move of its env, and what it
+        // captured, agora #835.)
+        : i __cbc ? != 0 ( nurl_str_len __bc_tail ) ( __clo_bind_class syms vt val `` ( mem_clo_listed syms __bc_tail ) TT_IDENT name __bc_tail ) ( __clo_bind_class syms vt val rhs_closure_env __src_owned_env bck_rhs_tt name bck_rhs_val )
         : s __cbr ? & == __cbc 5 != 0 g_borrowck ( nurl_sym_get g_bck `reads` ) ``
         // (Its own value unless a call lends it one — `arc_get`'s payload,
         // a field accessor's: that value's drop stays its owner's.)
@@ -56461,7 +56464,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                 }
             } {}
             ? & != 0 g_bck_closure_depth >= ( bck_walk_class ( nurl_llty ptype ) ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
-            : i __cbc ( __clo_bind_class syms ( nurl_llty ptype ) val rhs_closure_env __src_owned_env bck_rhs_tt name bck_rhs_val )
+            : i __cbc ? != 0 ( nurl_str_len __bc_tail ) ( __clo_bind_class syms ( nurl_llty ptype ) val `` ( mem_clo_listed syms __bc_tail ) TT_IDENT name __bc_tail ) ( __clo_bind_class syms ( nurl_llty ptype ) val rhs_closure_env __src_owned_env bck_rhs_tt name bck_rhs_val )
             : s __cbr ? & == __cbc 5 != 0 g_borrowck ( nurl_sym_get g_bck `reads` ) ``
             = g_bck_bind_owns ? & == bck_rhs_tt TT_LPAREN ! | == 0 ( nurl_str_len g_bck_rhs_lend ) ( seq g_bck_rhs_lend `-` ) 0 1
             ( bck_record_binding `let` name bck_line __cbc ( nurl_llty ptype ) )
