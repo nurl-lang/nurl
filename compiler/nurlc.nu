@@ -11486,6 +11486,11 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
     // copied and the temporary dropped where the result can be copied
     // (mem_own_lendback); where it cannot, the temporary stays.
     ? ( str_contains_word ( mem_fn_lent_params syms fname ) arg ) { ^ F } {}
+    // …nor hand back an owner holding a view of it — an enum or a struct
+    // with a view field, by the walk's answer (g_fn_rviews, __rv_ask; the
+    // flag is emitted after the walks): dropped right after the call, the
+    // result viewed freed memory (agora #464).
+    ? ( __rv_views_arg fname arg ) { ^ F } {}
     ^ != 0 ( nurl_sym_len2 syms fname `__body_done` )
 }
 
@@ -11500,6 +11505,8 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
     ? | != 0 ( nurl_sym_len2 syms who `__ret_borrow` ) != 0 ( nurl_sym_len g_fn_ret_view who ) { ^ T } {}
     ? | ( nurl_sym_has_word g_fn_unverified who arg ) ( nurl_sym_has_word g_fn_escapes who arg ) { ^ T } {}
     ? ( str_contains_word ( mem_fn_lent_params syms who ) arg ) { ^ T } {}
+    // (…or an owner holding a view of it, by the walk's answer: agora #464.)
+    ? ( __rv_views_arg who arg ) { ^ T } {}
     ? | ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retclo##` who ) ) arg )
     ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcap##` who ) ) arg ) { ^ T } {}
     ^ ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retptr##` who ) ) arg )
@@ -11528,6 +11535,18 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 // (code outside the safe subset: g_fn_safe), yes — what a closure it
 // returns lends is summarised from those (agora #141).
 @ __view_flag_value i syms s callee s generic i index b clo → b {
+    // (A handle result that may hold a view — an enum with a view variant
+    // beside an owned one, a struct of a view and a String: its temporary
+    // goes now unless the callee may keep or hand back the argument, its
+    // walk's answer of what the result views included; agora #464.)
+    ? != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `viewhold##` callee `##` ( nurl_str_int index ) ) ) {
+        : s who ? != 0 ( nurl_sym_len2 syms callee `__body_done` ) callee generic
+        : s arg ( nurl_str_int index )
+        // (By the walk's answer alone: a lend — an Arc share cloned out of
+        // the argument — is the handle test's, which keeps the temporary
+        // back without making the result a view of it.)
+        ^ ( __rv_views_arg who arg )
+    } {}
     ? ( __result_may_view syms callee generic index ) { ^ T } {}
     ? ! clo { ^ F } {}
     : s who ? != 0 ( nurl_sym_len2 syms callee `__body_done` ) callee generic
@@ -13015,6 +13034,41 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
     ( nurl_eprintln ( nurl_str_cat `  retoste=` ( nurl_sym_get g_pending_impl ( nurl_str_cat `retoste##` f ) ) ) )
 }
 
+// The temporaries a call's result may view (`@.__nurl_view.N`) and the
+// handle temporaries dropped right after their call (`@.__nurl_hdrop.N`):
+// emitted once the deferred walks have answered what each function hands
+// back views of (g_fn_rviews) — a callee parked behind its caller answered
+// nothing when mem_emit_arg_flags ran (agora #464).
+@ mem_emit_view_flags i syms → v {
+    : s viewflags ( nurl_sym_get g_pending_impl `viewflags` )
+    : i viewflags_n ( nurl_str_len viewflags )
+    : ~ i viewflags_p 0
+    ~ < viewflags_p viewflags_n {
+        : i viewflags_e0 ( __word_end viewflags viewflags_n viewflags_p ) : s number ( __span_dup viewflags viewflags_p viewflags_e0 ) = viewflags_p + viewflags_e0 1
+        : i viewflags_e1 ( __word_end viewflags viewflags_n viewflags_p ) : s callee ( __span_dup viewflags viewflags_p viewflags_e1 ) = viewflags_p + viewflags_e1 1
+        : i viewflags_e2 ( __word_end viewflags viewflags_n viewflags_p ) : s generic ( __span_dup viewflags viewflags_p viewflags_e2 ) = viewflags_p + viewflags_e2 1
+        : i viewflags_e3 ( __word_end viewflags viewflags_n viewflags_p ) : s index ( __span_dup viewflags viewflags_p viewflags_e3 ) = viewflags_p + viewflags_e3 1
+        : i viewflags_e4 ( __word_end viewflags viewflags_n viewflags_p ) : s clo ( __span_dup viewflags viewflags_p viewflags_e4 ) = viewflags_p + viewflags_e4 1
+        ( nurl_print `@.__nurl_view.` ) ( nurl_print number )
+        ( nurl_print ` = private constant i1 ` )
+        ( nurl_print ? ( __view_flag_value syms callee generic ( nurl_str_to_int index ) ( seq clo `1` ) ) `true` `false` )
+        ( nurl_print `\n` )
+    }
+    : s hdrops ( nurl_sym_get g_pending_impl `hdrops` )
+    : i hdrops_n ( nurl_str_len hdrops )
+    : ~ i hdrops_p 0
+    ~ < hdrops_p hdrops_n {
+        : i hdrops_e0 ( __word_end hdrops hdrops_n hdrops_p ) : s number ( __span_dup hdrops hdrops_p hdrops_e0 ) = hdrops_p + hdrops_e0 1
+        : i hdrops_e1 ( __word_end hdrops hdrops_n hdrops_p ) : s callee ( __span_dup hdrops hdrops_p hdrops_e1 ) = hdrops_p + hdrops_e1 1
+        : i hdrops_e2 ( __word_end hdrops hdrops_n hdrops_p ) : s generic ( __span_dup hdrops hdrops_p hdrops_e2 ) = hdrops_p + hdrops_e2 1
+        : i hdrops_e3 ( __word_end hdrops hdrops_n hdrops_p ) : s index ( __span_dup hdrops hdrops_p hdrops_e3 ) = hdrops_p + hdrops_e3 1
+        ( nurl_print `@.__nurl_hdrop.` ) ( nurl_print number )
+        ( nurl_print ` = private constant i1 ` )
+        ( nurl_print ? ( mem_handle_temp_drop_safe syms callee ( nurl_str_to_int index ) ) `true` `false` )
+        ( nurl_print `\n` )
+    }
+}
+
 @ mem_emit_arg_flags i syms → v {
     = g_summaries_final 1
     ( __dump_summary syms )
@@ -13074,20 +13128,6 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
         ( nurl_print ? ( mem_consumer_arg_drop_safe syms callee ( nurl_str_to_int index ) ) `true` `false` )
         ( nurl_print `\n` )
     }
-    : s viewflags ( nurl_sym_get g_pending_impl `viewflags` )
-    : i viewflags_n ( nurl_str_len viewflags )
-    : ~ i viewflags_p 0
-    ~ < viewflags_p viewflags_n {
-        : i viewflags_e0 ( __word_end viewflags viewflags_n viewflags_p ) : s number ( __span_dup viewflags viewflags_p viewflags_e0 ) = viewflags_p + viewflags_e0 1
-        : i viewflags_e1 ( __word_end viewflags viewflags_n viewflags_p ) : s callee ( __span_dup viewflags viewflags_p viewflags_e1 ) = viewflags_p + viewflags_e1 1
-        : i viewflags_e2 ( __word_end viewflags viewflags_n viewflags_p ) : s generic ( __span_dup viewflags viewflags_p viewflags_e2 ) = viewflags_p + viewflags_e2 1
-        : i viewflags_e3 ( __word_end viewflags viewflags_n viewflags_p ) : s index ( __span_dup viewflags viewflags_p viewflags_e3 ) = viewflags_p + viewflags_e3 1
-        : i viewflags_e4 ( __word_end viewflags viewflags_n viewflags_p ) : s clo ( __span_dup viewflags viewflags_p viewflags_e4 ) = viewflags_p + viewflags_e4 1
-        ( nurl_print `@.__nurl_view.` ) ( nurl_print number )
-        ( nurl_print ` = private constant i1 ` )
-        ( nurl_print ? ( __view_flag_value syms callee generic ( nurl_str_to_int index ) ( seq clo `1` ) ) `true` `false` )
-        ( nurl_print `\n` )
-    }
     : s lends ( nurl_sym_get g_pending_impl `lends` )
     : i lends_n ( nurl_str_len lends )
     : ~ i lends_p 0
@@ -13103,19 +13143,6 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
         ( nurl_print `@.__nurl_lend` ) ( nurl_print kind ) ( nurl_print `.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` )
         ( nurl_print ? == k ? ( seq kind `one` ) 1 2 `true` `false` )
-        ( nurl_print `\n` )
-    }
-    : s hdrops ( nurl_sym_get g_pending_impl `hdrops` )
-    : i hdrops_n ( nurl_str_len hdrops )
-    : ~ i hdrops_p 0
-    ~ < hdrops_p hdrops_n {
-        : i hdrops_e0 ( __word_end hdrops hdrops_n hdrops_p ) : s number ( __span_dup hdrops hdrops_p hdrops_e0 ) = hdrops_p + hdrops_e0 1
-        : i hdrops_e1 ( __word_end hdrops hdrops_n hdrops_p ) : s callee ( __span_dup hdrops hdrops_p hdrops_e1 ) = hdrops_p + hdrops_e1 1
-        : i hdrops_e2 ( __word_end hdrops hdrops_n hdrops_p ) : s generic ( __span_dup hdrops hdrops_p hdrops_e2 ) = hdrops_p + hdrops_e2 1
-        : i hdrops_e3 ( __word_end hdrops hdrops_n hdrops_p ) : s index ( __span_dup hdrops hdrops_p hdrops_e3 ) = hdrops_p + hdrops_e3 1
-        ( nurl_print `@.__nurl_hdrop.` ) ( nurl_print number )
-        ( nurl_print ` = private constant i1 ` )
-        ( nurl_print ? ( mem_handle_temp_drop_safe syms callee ( nurl_str_to_int index ) ) `true` `false` )
         ( nurl_print `\n` )
     }
     // One entry per raw string parameter of every function (each one's own
@@ -33101,7 +33128,14 @@ unsafe @ __pfo_bind_lends i syms s name → v {
             // provably keeps no hold on this argument.
             // (…or a struct that cannot be copied — a library handle's
             // option in it: `( conn ( mk ) )` leaked the St, h265.)
-            : b __hret & ! __scalar_ret | | | ( __is_handle_ty __crt ) ( __wrap_of_values __crt ) ( __ty_no_address __crt 0 ) ( __lit_moves_whole __crt )
+            // (Not a result that may hold a view — an enum with a view
+            // variant, a struct with a view field: what it views of this
+            // temporary is the view path's below, the temporary kept to the
+            // call that consumes the result or a kept result refused;
+            // dropped here, the result viewed freed memory — agora #464.)
+            : b __hret0 & ! __scalar_ret | | | ( __is_handle_ty __crt ) ( __wrap_of_values __crt ) ( __ty_no_address __crt 0 ) ( __lit_moves_whole __crt )
+            : b __hret_view & __hret0 ( __ty_holds_view_p __crt )
+            : b __hret & __hret0 ! __hret_view
             ? & __hret ! shadowed {
                 : s __tad ( nurl_cg_reg cg )
                 ( emit_sink_flag_load ( mem_argdrop_const syms call_name fname arg_idx ) __tad )
@@ -33153,9 +33187,23 @@ unsafe @ __pfo_bind_lends i syms s name → v {
                 : b __tvok ! shadowed
                 ? __tvok {
                     : s __tvl ( nurl_cg_reg cg )
+                    // (A handle that may hold a view is asked as a handle is —
+                    // dropped now unless its callee may keep or hand back
+                    // this argument, its walk's answer among them: `viewhold`,
+                    // __view_flag_value.)
+                    ? __hret_view { ( nurl_sym_def g_pending_impl ( nurl_str_cat4 `viewhold##` call_name `##` ( nurl_str_int arg_idx ) ) `1` ) } {}
                     ( emit_sink_flag_load ( mem_view_flag call_name fname arg_idx | ( __is_closure_ty __crt ) ( __ts_may_hold_closures __crt syms ) ) __tvl )
-                    : s __tvn ( nurl_cg_reg cg )
+                    : ~ s __tvn ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __tvn ) ( nurl_print ` = xor i1 ` ) ( nurl_print __tvl ) ( nurl_print `, 1\n` )
+                    // (…and, a handle, dropped now only where the handle test
+                    // says too: a callee that keeps or sinks it took it.)
+                    ? __hret_view {
+                        : s __thd ( nurl_cg_reg cg )
+                        ( emit_sink_flag_load ( mem_argdrop_const syms call_name fname arg_idx ) __thd )
+                        : s __tvh ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __tvh ) ( nurl_print ` = and i1 ` ) ( nurl_print __tvn ) ( nurl_print `, ` ) ( nurl_print __thd ) ( nurl_print `\n` )
+                        = __tvn __tvh
+                    } {}
                     : s __twi ( mem_gate_drop_words cg __tw __tvn )
                     = owned ? == 0 ( nurl_str_len owned ) __twi ( nurl_str_cat3 owned ` ` __twi )
                     = __twd ( mem_gate_drop_words cg __tw __tvl )
@@ -47064,6 +47112,15 @@ unsafe @ __vk_assumptions_check → v {
     } {}
     ? || && != 0 ( nurl_str_len g_bck_fn ) ( seq cal g_bck_fn ) ( __vk_pend cal ) { ^ ? ( __rv_holder_result cal ) 1 0 } {}
     ^ 0
+}
+
+// May `cal`'s result view storage its argument `aix` owns — itself, or its
+// elements (__rv_ask 1, 2, 4)? A copy of the views the argument holds (3,
+// `%k`) views what they view, not the argument: the argument may go while
+// the result lives (agora #464: `pool_new`'s Wal, a temporary `mem_dup`).
+@ __rv_views_arg s cal s aix → b {
+    : i r ( __rv_ask cal aix )
+    ^ & != r 0 != r 3
 }
 
 // Does `cal` hand back an owner that may hold views (class 3: a Vec of
@@ -98474,7 +98531,6 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         ( emit_sink_flags )
         ( mem_emit_arg_flags syms )
         ( resolve_nocopy_lends syms )
-        ( resolve_view_temps syms )
         ( resolve_clo_nc_rets syms )
         ( resolve_nc_lent_stores syms )
         ( resolve_nc_local_lends syms )
@@ -98490,6 +98546,10 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         = g_vk_assume_on 1
         ( resolve_deferred_borrowck )
         ( __vk_assumptions_check )
+        // (What a call's result views of a temporary, once every walk has
+        // said what its function hands back: agora #464.)
+        ( mem_emit_view_flags syms )
+        ( resolve_view_temps syms )
         // (After every walk: the payload views are parked by the walks.)
         ( resolve_arc_mut )
         ( resolve_lit_handoffs )
