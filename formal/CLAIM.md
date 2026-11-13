@@ -678,6 +678,9 @@ Outside A2:
   `Vec` in another argument. Inside a call, what a borrowed parameter
   reaches is frozen, so A2 has no change rooted at one, and
   `Stmt.withElem` takes an owner's element only.
+- A view of an owner kept across the owner's move into a struct field or
+  literal, where nurlc hands the view to the field path (Agora #799); A2's
+  move ends the owner's views (`RhsT.moveOwn`).
 
 ## Destructors, and a panic while a panic unwinds
 
