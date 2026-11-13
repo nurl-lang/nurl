@@ -187,8 +187,9 @@ def main(argv):
     print("false rejects (safe, the checker refuses):", len(mism["false_reject"]))
     for n, e in mism["false_reject"][:show]:
         print("   ", n, "--", e)
-    with open(os.path.join(HERE, "results_nurlc.tsv" if use_nurlc else "results_own.tsv"), "w", encoding="utf-8") as f:
-        f.write("".join(f"{n}\t{st}\t{err if err else detail}\n" for n, st, detail, err in done))
+    if len(files) > 3:
+        with open(os.path.join(HERE, "results_nurlc.tsv" if use_nurlc else "results_own.tsv"), "w", encoding="utf-8") as f:
+            f.write("".join(f"{n}\t{st}\t{err if err else detail}\n" for n, st, detail, err in done))
 
 
 if __name__ == "__main__":
