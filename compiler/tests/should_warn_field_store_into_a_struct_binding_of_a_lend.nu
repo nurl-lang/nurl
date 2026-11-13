@@ -7,7 +7,9 @@
 // what it is given by its run-time flag, so nothing leaks.
 //
 // Not warned: an owned copy (`mem_dup`), a binding given a new value of its
-// own by `=` before the store, and a struct a call made fresh.
+// own by `=` before the store, a struct a call made fresh, and a copy that
+// is read again after the store — put back with vec_put, or read locally:
+// there the store is not lost.
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/io.nu`
@@ -38,5 +40,14 @@ $ `stdlib/core/io.nu`
     : App m ( mk )
     = . m n 10
     ( nurl_println_int . m n )
+    // Not warned: the copy is put back where it lives.
+    : ~ App t ( vec_at [App] ps 0 )
+    = . t n 11
+    ( vec_put [App] ps 0 t )
+    ( nurl_println_int . ( vec_at [App] ps 0 ) n )
+    // Not warned: the copy is read after the store.
+    : App c ( vec_at [App] ps 0 )
+    = . c n 12
+    ( nurl_println_int . c n )
     ^ 0
 }

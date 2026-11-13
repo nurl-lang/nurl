@@ -38207,6 +38207,10 @@ unsafe @ __callee_decl_name s cn → s {
 // Set by a binding whose right-hand side is a call: the sources a borrow of
 // its result has (bck_call_lend_srcs); `-` for any other right-hand side.
 : ~ s g_bck_rhs_lend `-`
+// 1 once a `:` has bound a struct copy of a lend in this module
+// (__lendcopy_note, agora #798): only then do `:`, `=` and field stores ask
+// a binding for that mark.
+: ~ i g_lendcopy_any 0
 // …and whether that call hands back an argument whole, nothing read
 // through it (mem_fn_lends_params): a borrow of its result is that
 // argument's own value (bck_note_borrow's `vborrow`).
@@ -57158,7 +57162,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // the binding owns that copy by the call's own bit, agora #477.)
         : s __lcp ? == bck_rhs_tt TT_LPAREN ( __call_copied_own val ) ``
         ( nurl_sym_def g_call_cp `bind` __lcp )
-        ( __lendcopy_note syms name vt bck_rhs_tt g_bck_rhs_lend __blk_lend __lcp )
+        ( __lendcopy_note lex syms name vt bck_rhs_tt g_bck_rhs_lend __blk_lend __lcp )
         ? & & & & != 0 g_auto_drop_strings ( __is_autodrop_enum vt syms ) != 0 ( nurl_str_len rhs_borrow ) ! __blk_lend == 0 ( nurl_str_len __lcp )
         { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
         { ? != 0 g_auto_drop_strings
@@ -57582,7 +57586,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             // #477.)
             : s __lcp ? == bck_rhs_tt TT_LPAREN ( __call_copied_own store_val ) ``
             ( nurl_sym_def g_call_cp `bind` __lcp )
-            ( __lendcopy_note syms name ptype bck_rhs_tt g_bck_rhs_lend __blk_lend __lcp )
+            ( __lendcopy_note lex syms name ptype bck_rhs_tt g_bck_rhs_lend __blk_lend __lcp )
             ? & & & & != 0 g_auto_drop_strings ( __is_autodrop_enum ptype syms ) != 0 ( nurl_str_len rhs_borrow ) ! __blk_lend == 0 ( nurl_str_len __lcp )
             { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `1` ) }
             { ? != 0 g_auto_drop_strings
@@ -57849,7 +57853,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
             ( bck_add_cap_name name ) }
         { ( bck_clear_cap_name syms name ) }
         // (A new value: no longer the copy of a lend the `:` made, agora #798.)
-        ? != 0 ( nurl_sym_len2 syms name `__lendcopy` ) { ( nurl_sym_def syms ( nurl_str_cat name `__lendcopy` ) `` ) } {}
+        ? != 0 g_lendcopy_any { ? != 0 ( nurl_sym_len2 syms name `__lendcopy` ) { ( nurl_sym_def syms ( nurl_str_cat name `__lendcopy` ) `` ) } {} } {}
         // (…a closure a call hands back: its effects, as for `:`; agora #802.)
         ? & & != 0 g_clo_eff_set == bck_rhs_tt TT_LPAREN ( __is_closure_ty ( nurl_sym_get syms name ) ) { ( nurl_sym_def syms ( nurl_str_cat name `__closure_effects` ) ( nurl_sym_get syms `__last_call_clo_effects__` ) ) } {}
         // Env ownership, the `:` binding's rule in the `=` spelling. A
@@ -60531,9 +60535,12 @@ unsafe @ __replaces_note_io i syms s name s field → v {
                 // said, as a by-value parameter's is above.
                 : ~ i __bck_k ( __fs_borrowed_copy_kind syms obj_name )
                 // (A struct binding of a lend: the value stored is the
-                // binding's by its flag, so only the write is lost — agora
-                // #798.)
-                ? == __bck_k 4 { ( warn_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_lost 4 obj_name fname ( nurl_sym_get2 syms obj_name `__lendcopy` ) ) ) = __bck_k 0 } {}
+                // binding's by its flag, so only the write is lost — and
+                // only where nothing reads the binding again; agora #798.)
+                ? == __bck_k 4 {
+                    ? ! ( __lendcopy_read_ahead lex syms obj_name ) { ( warn_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_lost 4 obj_name fname ( nurl_sym_get2 syms obj_name `__lendcopy` ) ) ) } {}
+                    = __bck_k 0
+                } {}
                 ? != __bck_k 0 {
                     ? ( __type_needs_drop ftype syms ) { ( die_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_msg __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {
                         ? & != __bck_k 1 != __bck_k 5 { ( warn_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_lost __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {}
@@ -85301,8 +85308,55 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
     } {}
     ? & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__fe_copy` ) { ^ 2 } {}
     ? & & & & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__pslot` ) ! ( seq ( nurl_sym_get2 syms obj `__inout` ) `1` ) == 0 ( nurl_sym_len2 syms obj `__sinkp` ) == 0 ( nurl_str_len g_drop_glue_ty ) { ^ ? ( seq ( nurl_sym_get2 syms obj `__cloparam` ) `1` ) 5 1 } {}
-    ? != 0 ( nurl_sym_len2 syms obj `__lendcopy` ) { ^ 4 } {}
+    ? != 0 g_lendcopy_any { ? != 0 ( nurl_sym_len2 syms obj `__lendcopy` ) { ^ 4 } {} } {}
     ^ 0
+}
+
+// Is `name` read further down its scope: from the statement at `lex` (the
+// one after the store) to the `}` that closes the block it was bound in —
+// as many `}` more than `{` as the store stands deeper than the `:`
+// (`__lcpos`, where the `:` ended)? A store into the copy a `:` made of a lend is lost
+// only where nothing reads the copy again: `( vec_put [P] ps i e )` puts it
+// back, `. e n` reads it (AGORA-798). The target of a later store (`= . e
+// n 7`, `= . . e in k 1`, `= e …`) is no read: the first name after a `=`,
+// past its dots. Lexer position restored.
+@ __lendcopy_read_ahead i lex i syms s name → b {
+    : i here ( nurl_lex_cur_start lex )
+    // (How many blocks the store stands in that the `:` does not.)
+    ( nurl_lex_set_pos lex ( nurl_str_to_int ( nurl_sym_get2 syms name `__lcpos` ) ) )
+    : ~ i k 0
+    ~ & < ( nurl_lex_cur_start lex ) here != ( nurl_lex_type lex ) TT_EOF {
+        : i bt ( nurl_lex_type lex )
+        ? == bt TT_LBRACE { = k + k 1 } {}
+        ? == bt TT_RBRACE { = k - k 1 } {}
+        ( nurl_lex_advance lex )
+    }
+    ( nurl_lex_set_pos lex here )
+    : ~ i d 0
+    : ~ b found F
+    : ~ b more T
+    : ~ b tgt F
+    ~ & & more ! found != ( nurl_lex_type lex ) TT_EOF {
+        : i tt ( nurl_lex_type lex )
+        ? == tt TT_LBRACE { = d + d 1 } {}
+        ? == tt TT_RBRACE { = d - d 1 } {}
+        ? < + d k 0 { = more F } {
+            ? ( is_ident_tok tt ) {
+                ? & ! tgt ( seq ( nurl_lex_val lex ) name ) { = found T } {}
+                = tgt F
+            } { ? == tt TT_EQ { = tgt T } { ? != tt TT_DOT { = tgt F } {} } }
+            ( nurl_lex_advance lex )
+        }
+    }
+    ( nurl_lex_set_pos lex here )
+    ^ found
+}
+
+// The library generics whose result is a value stored in their first
+// argument, read in place: an element (vec_at, slice_at) or a payload
+// (rc_get, box_get) — what the walk lends out of that argument.
+@ __lendcopy_reader s base → b {
+    ^ ( str_contains_word `vec_at vec_at_loc slice_at slice_at_loc rc_get box_get` base )
 }
 
 // The type of `src`: a binding (`ps`) or a field path of one (`w.apps`).
@@ -85342,24 +85396,39 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
 // made (`lcp`), a call that answers per call whether it lent, a value
 // block's copy — leaves no mark, nor does a call to a program function not
 // compiled yet: its lends are every argument until its summary is written,
-// and it may hand back a fresh value. (A generic's instance is compiled
-// after its caller too — `__last_call_forward__` `vec_at__App vec_at` —
-// and is judged by its arguments' types, as above.) `=` of a new value
-// clears it (gen_assign).
-@ __lendcopy_note i syms s name s ty i rhs_tt s lend b blk_lend s lcp → v {
-    : ~ s src ``
-    : s fw ( nurl_sym_get syms `__last_call_forward__` )
-    : s fwb ( str_first_word ( str_skip_word fw ) )
-    : b fw_ok | == 0 ( nurl_str_len fw ) & != 0 ( nurl_str_len fwb ) != 0 ( nurl_str_starts fw ( nurl_str_cat fwb `__` ) )
-    ? & & & & & == rhs_tt TT_LPAREN ! blk_lend == 0 ( nurl_str_len lcp ) ! ( __call_answers syms rhs_tt ) fw_ok ( __lc_struct_ty ty ) {
-        : ~ s rest ( nurl_str_cat lend `` )
-        ~ & == 0 ( nurl_str_len src ) != 0 ( nurl_str_len rest ) {
-            : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-            ? & & != 0 ( nurl_str_len w ) ! ( seq w `-` ) ( __lendcopy_holds ( __lendcopy_src_ty syms w ) ty ) { = src w } {}
-        }
+// and it may hand back a fresh value. A generic's instance is compiled
+// after its caller too (`__last_call_forward__` `vec_at__App vec_at`), so
+// its lends are every argument as well: only the library's element and
+// payload readers count there (__lendcopy_reader) — not a check-out
+// (`rc_take`, `locked_take`: the value moves out, the binding's own until
+// it is put back) nor a getter that copies (`locked_get`). `=` of a new
+// value clears it (gen_assign).
+@ __lendcopy_note i lex i syms s name s ty i rhs_tt s lend b blk_lend s lcp → v {
+    // (Every `:` passes here: the cheap tests first — a call that lends,
+    // a struct binding — and a mark to clear only once one was made.)
+    ? & & & & & == rhs_tt TT_LPAREN != 0 ( nurl_str_len lend ) ! ( seq lend `-` ) ! blk_lend == 0 ( nurl_str_len lcp ) ( __lc_struct_ty ty ) {
+        : s fw ( nurl_sym_get syms `__last_call_forward__` )
+        : ~ b fw_ok T
+        ? != 0 ( nurl_str_len fw ) {
+            : s fwb ( str_first_word ( str_skip_word fw ) )
+            = fw_ok & & != 0 ( nurl_str_len fwb ) != 0 ( nurl_str_starts fw ( nurl_str_cat fwb `__` ) ) ( __lendcopy_reader fwb )
+        } {}
+        ? & fw_ok ! ( __call_answers syms rhs_tt ) {
+            : ~ s src ``
+            : ~ s rest ( nurl_str_cat lend `` )
+            ~ & == 0 ( nurl_str_len src ) != 0 ( nurl_str_len rest ) {
+                : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+                ? & & != 0 ( nurl_str_len w ) ! ( seq w `-` ) ( __lendcopy_holds ( __lendcopy_src_ty syms w ) ty ) { = src w } {}
+            }
+            ? != 0 ( nurl_str_len src ) {
+                ( nurl_sym_def syms ( nurl_str_cat name `__lendcopy` ) src )
+                ( nurl_sym_def syms ( nurl_str_cat name `__lcpos` ) ( nurl_str_int ( nurl_lex_cur_start lex ) ) )
+                = g_lendcopy_any 1
+                ^
+            } {}
+        } {}
     } {}
-    ? != 0 ( nurl_str_len src ) { ( nurl_sym_def syms ( nurl_str_cat name `__lendcopy` ) src ) ^ } {}
-    ? != 0 ( nurl_sym_len2 syms name `__lendcopy` ) { ( nurl_sym_def syms ( nurl_str_cat name `__lendcopy` ) `` ) } {}
+    ? != 0 g_lendcopy_any { ? != 0 ( nurl_sym_len2 syms name `__lendcopy` ) { ( nurl_sym_def syms ( nurl_str_cat name `__lendcopy` ) `` ) } {} } {}
 }
 
 // Does field `fname` of struct type `oty` (`%T`) own memory?
