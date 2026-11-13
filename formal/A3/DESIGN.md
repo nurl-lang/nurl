@@ -2037,10 +2037,15 @@ where the call places it).
   or in, a global read) of one of the same kind; `withLock` /
   `Stmt.withCell` and the `scopeL` frame name the block by its key and
   make no share. The start's blocks and globals must agree with one
-  (`A3.GlobsKinds`): the make phase leaves that (`A3.made_kinds`), but
-  `GlobsOK` does not ask it, and admits a start whose global lock share
-  names the block a cell share in another global lock's payload names
-  (`A3.mix_globsOK`, `A3.mix_not_shareKind`).
+  (`A3.GlobsKinds`), which `GlobsOK` asks since Agora #815
+  (`GlobsOK.kinds`; `A3.claim`'s text unchanged) and the make phase leaves
+  (`make_ok`, so `A3.claim_made`'s statement is unchanged). Without it the
+  premise (`GlobsTyped`, what `GlobsOK` asked before) admits a start whose
+  global lock share names the block a cell share in another global lock's
+  payload names (`A3.mixG`, `A3.mix_globsTyped`, `A3.mix_not_shareKind`),
+  on which a check-out through the lock share changes the cell's state as
+  no `CellOp`: a race the claim would miss. `GlobsOK` refuses it
+  (`A3.mix_not_globsOK`).
 
 **Probes** (`tools/fuzz/holes/*.nu`). In the model, a thread's closure is
 the spawned function, and its captures are `sink` arguments.
@@ -2665,6 +2670,15 @@ that the store they leave is such a start, without a phase in `TStep`.
   - (A3.5b) `codes`: every package a block holds names code of the
     program (`BlkCodes`), as `MemCodes` says of the store a typed `make`
     leaves. So `GlobsOK` takes the program: `GlobsOK P G`.
+  - (A3.5's second cut) `cells`: a library handle's shares are in one
+    block's payload.
+  - (Agora #815) `kinds`: the start keeps lock and cell shares apart
+    (`GlobsKinds`), which the typing cannot see. The fields above are
+    `GlobsTyped P G`, which `GlobsOK` extends; `A3.mixG` is `GlobsTyped`
+    but names a key by both kinds (`A3.mix_not_shareKind`), and `GlobsOK`
+    refuses it (`A3.mix_not_globsOK`). `make_ok` derives it (the make's run
+    keeps a kind per key, `A3.reach_kinds`), so `A3.claim_made` is
+    unchanged.
 - `Cfg.roots`: the configuration's sweep counts the globals' shares as
   roots, beside every thread's slots (`Cfg.sweep`; since Agora #755 item 1
   the marking sweep `Cfg.sweepD`, which roots them too). So a global's block,

@@ -423,12 +423,9 @@ the LLVM / C11 memory model rather than redefining it.
       `A3.CKinds`, in every slot, payload and global, kept by every step:
       `cellNew` and `lockNew` take a fresh key above every share,
       `A3.CKeys`, and every other share is a copy of one of the same
-      kind). That holds from a start whose globals keep the kinds apart
-      (`A3.GlobsKinds`), which the make phase leaves (`A3.made_kinds`,
-      `A3.reach_shareKind_made`); `GlobsOK` alone admits a start naming a
-      key by both (`A3.mix_globsOK`, `A3.mix_not_shareKind`: a global lock
-      share of a block whose cell share another global lock's payload
-      holds), on which a check-out through the lock share is no `CellOp`.
+      kind). That holds from a start whose globals keep the kinds apart,
+      which `GlobsOK` asks (`GlobsOK.kinds`, A3.6 below) and the make
+      phase leaves (`make_ok`, `A3.reach_shareKind_made`).
     - **Not typed yet:** a store of a borrowed handle into an owner (the
       runtime's implicit copy); a handle changed through a borrow that is
       no root; `% Sync` / `% NotSend` assertions on a program's own types;
@@ -485,10 +482,7 @@ the LLVM / C11 memory model rather than redefining it.
     - **Not proven here:** phase D must show the runtime's reference
       count of a handle's block equals the model's owners. (That a thread
       inside a check-out of a cell's block holds an owner's share of the
-      cell is proved, Agora #808 / #815: `A3.reach_frame_cell_owner`, from
-      a start whose globals keep lock and cell shares apart,
-      `A3.GlobsKinds`, which every start the make phase leaves does and
-      `A3.claim`'s `GlobsOK` does not ask.)
+      cell is proved, Agora #808 / #815: `A3.reach_frame_cell_owner`.)
   - **A3.6** *(proven)* — module globals reached by several
     threads.
     - **The calculus.** A global set at start (`: ( Locked T ) g ( make )`)
@@ -504,7 +498,20 @@ the LLVM / C11 memory model rather than redefining it.
     - **The start.** `A3.claim` takes the start's globals as a premise
       (`GlobsOK`: each fits a synchronising type, A2's invariant holds of
       them, and every block is reached from one). With no global it is
-      the earlier statement. The sweep keeps what the globals reach, and
+      the earlier statement. Since Agora #815 the premise also asks that
+      the start keep lock and cell shares apart (`GlobsOK.kinds`,
+      `GlobsKinds`: a kind per key that every share in a block's payload
+      or a global agrees with, so no key is named by both a lock share and
+      a cell share). The typing cannot see it, since both shares name a
+      lock block of their payload type, and without it the premise admitted
+      a start that names block 0 by a global `Locked int` and by a cell
+      share in another global lock's payload (`A3.mixG`: it satisfies
+      `GlobsTyped`, every condition `GlobsOK` asked before, but not
+      `ShareKind`, `A3.mix_globsTyped`, `A3.mix_not_shareKind`; `GlobsOK`
+      refuses it, `A3.mix_not_globsOK`). There a check-out through the lock
+      share changes the cell's state as no `CellOp`, so a race with a
+      `withCell`, which the runtime runs with no lock, was not a `Race`.
+      `A3.claim`'s text is unchanged; only `GlobsOK` asks more. The sweep keeps what the globals reach, and
       `NoLeak` says only that is left once every thread has finished, as
       the runtime keeps globals until the process exits.
     - **In Lean.** `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`
@@ -520,7 +527,10 @@ the LLVM / C11 memory model rather than redefining it.
       Each `make` runs before `main`, single-threaded, from the empty
       store (`makeStmt`, `Made`), and is itself memory-safe and race-free
       (`made_safe`). What the makes leave satisfies `GlobsOK` (`make_ok`,
-      `made_ok`), so the premise is derived, not assumed; a make that
+      `made_ok`), the kinds field too (each make's run keeps a kind per
+      key, `A3.reach_kinds`, and its result is one of its values), so the
+      premise is derived, not assumed, and `A3.claim_made`'s statement is
+      unchanged by Agora #815; a make that
       panics ends the program before `main` (`MakePanics`). A typed
       program reads each global at its declared type (`ProgGlobs`,
       `Stmt.globsAt`), so no read panics (`Reach.glob_typed`).

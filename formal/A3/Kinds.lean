@@ -1,6 +1,4 @@
 import A3.Keys
-import A3.LockRoot
-import A3.Make
 
 /-! A3.5 — Agora #815: **no block is named by both a lock share and a cell share.**
 
@@ -23,31 +21,15 @@ share of the configuration agrees with (`CKinds`): in every thread's slot
 module globals.  A configuration step keeps one (`TStep.kinds`: a step moves
 `κ` only at the fresh key `nid`, which no share names yet).  The start has
 one when its blocks and globals do (`GlobsKinds`), which the make phase
-leaves (`made_kinds`); `GlobsOK` alone does not ask it (`mix_globsOK`,
-`mix_not_shareKind`).  Hence `ShareKind`
+leaves (`make_ok`), and `GlobsOK` asks of the start (`GlobsOK.kinds`):
+`GlobsTyped`, all it asked before, admits a start naming a key by both
+(`mix_globsTyped`, `mix_not_shareKind`).  Hence `ShareKind`
 (`reach_shareKind`): no key is named by a share `.lk k` and by a share
 `.cell k` of one reached configuration, and a check-out of a cell's block is
-through a cell share (`reach_frame_cell_owner`). -/
+through a cell share (`reach_frame_cell_owner`, A3/LockRoot.lean). -/
 
 namespace A3
 open A2
-
-/-- Every lock share `v` holds names a key of kind `false` under `κ`, every
-    cell share one of kind `true` (outside a carried `arc` payload, which is
-    ghost data, as in `KB`). -/
-inductive KK (κ : Nat → Bool) : Val → Prop
-  | int {j : Nat} : KK κ (.int j)
-  | href {c : Nat} : KK κ (.href c)
-  | view {d o l : Nat} : KK κ (.view d o l)
-  | node {t : Ty} {c d : Nat} {es : List Val} : (∀ e ∈ es, KK κ e) → KK κ (.node t c d es)
-  | pair {v w : Val} : KK κ v → KK κ w → KK κ (.pair v w)
-  | inl {v : Val} : KK κ v → KK κ (.inl v)
-  | inr {v : Val} : KK κ v → KK κ (.inr v)
-  | pkg {fs : List Nat} {te : Ty} {ms : List Nat} {v : Val} {cs : List (Var × PMode × Ty)} :
-      KK κ v → KK κ (.pkg fs te ms v cs)
-  | arc {k : Nat} {p : Val} : KK κ (.arc k p)
-  | lk {k : Nat} : κ k = false → KK κ (.lk k)
-  | cell {k : Nat} : κ k = true → KK κ (.cell k)
 
 /-- `κ` moved at the key `n` only: to `b`. -/
 def kSet (κ : Nat → Bool) (n : Nat) (b : Bool) : Nat → Bool := fun j => if j = n then b else κ j
@@ -687,19 +669,6 @@ theorem Reach.kinds {P : Prog} {spawn : Nat → Bool} {C C' : Cfg} (hr : Reach P
 
 /-! ### The start -/
 
-/-- **A3.5, a start whose blocks and globals keep lock and cell shares
-    apart**: a kind per key that every share in a block's payload or a
-    global agrees with.  The make phase leaves one (`made_kinds`), and so does
-    no global (`GlobsKinds.empty`); `GlobsOK` alone does not ask it (it
-    admits a global lock share `.lk k` beside a payload holding the cell
-    share `.cell k`: both name a lock block of `k`'s payload type,
-    `mix_globsOK`). -/
-def GlobsKinds (G : Globs) : Prop :=
-  ∃ κ : Nat → Bool, (∀ k t kd v, G.blk k = some ⟨t, kd, some v⟩ → KK κ v) ∧ ∀ g v, G.gl g = some v → KK κ v
-
-theorem GlobsKinds.empty : GlobsKinds Globs.empty :=
-  ⟨fun _ => false, fun _ _ _ _ h => (by cases h), fun _ _ h => (by cases h)⟩
-
 theorem CKinds.start {G : Globs} (hG : GlobsKinds G) (s : Stmt) (nv : Nat) :
     ∃ κ, CKinds κ (Cfg.start G s nv) := by
   obtain ⟨κ, hb, hg⟩ := hG
@@ -709,11 +678,12 @@ theorem CKinds.start {G : Globs} (hG : GlobsKinds G) (s : Stmt) (nv : Nat) :
   | zero => simp at hj; subst hj; cases hx
   | succ _ => simp at hj
 
-/-- **On every configuration a typed start reaches whose globals keep lock
-    and cell shares apart, a kind per key agrees with every share.** -/
-theorem reach_kinds {P : Prog} {spawn : Nat → Bool} {G : Globs} (hG : GlobsOK P G) (hGk : GlobsKinds G)
+/-- **On every configuration a typed start reaches, a kind per key agrees
+    with every share** (the start's globals keep lock and cell shares apart,
+    `GlobsOK.kinds`). -/
+theorem reach_kinds {P : Prog} {spawn : Nat → Bool} {G : Globs} (hG : GlobsOK P G)
     {s : Stmt} {nv : Nat} {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C) : ∃ κ, CKinds κ C := by
-  obtain ⟨κ, h⟩ := CKinds.start hGk s nv
+  obtain ⟨κ, h⟩ := CKinds.start hG.kinds s nv
   exact Reach.kinds hr h (CKeys.start hG s nv)
 
 /-! ### No key named by both a lock share and a cell share -/
@@ -747,84 +717,24 @@ theorem CKinds.holds_cell {κ : Nat → Bool} {C : Cfg} (h : CKinds κ C) {k : N
 theorem CKinds.shareKind {κ : Nat → Bool} {C : Cfg} (h : CKinds κ C) : ShareKind C := fun _ hl hc => by
   have h1 := h.holds_lk hl; rw [h.holds_cell hc] at h1; cases h1
 
-/-- **Agora #815: on every configuration a typed start reaches whose globals
-    keep lock and cell shares apart (`GlobsKinds`), no block is named by both
-    a lock share and a cell share.** -/
-theorem reach_shareKind {P : Prog} {spawn : Nat → Bool} {G : Globs} (hG : GlobsOK P G) (hGk : GlobsKinds G)
+/-- **Agora #815: on every configuration a typed start reaches, no block is
+    named by both a lock share and a cell share.** -/
+theorem reach_shareKind {P : Prog} {spawn : Nat → Bool} {G : Globs} (hG : GlobsOK P G)
     {s : Stmt} {nv : Nat} {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C) : ShareKind C := by
-  obtain ⟨κ, h⟩ := reach_kinds hG hGk hr
+  obtain ⟨κ, h⟩ := reach_kinds hG hr
   exact h.shareKind
 
-/-- **The make phase keeps lock and cell shares apart**: each `make` runs
-    from a start that does (`reach_kinds`), and its result, which moves into
-    the global, is a value of its thread. -/
-theorem made_kinds {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    {D : List Decl} (hD : DeclsOK P D) {i : Nat} {G : Globs} (h : Made P spawn D i G) : GlobsKinds G := by
-  induction h with
-  | nil => exact GlobsKinds.empty
-  | @make i d G C st nv o v hm _ hr hths hst ih =>
-    obtain ⟨κ, hC⟩ := reach_kinds (made_ok hP hPc hSp hD hm).1 ih hr
-    have hth : C.ths[0]? = some ⟨st, nv, .scope 0 (.assign 0 (.glob i d.ty))⟩ := by rw [hths]; rfl
-    refine ⟨κ, ⟨hC.blk, fun g w hg => ?_⟩⟩
-    simp only [upd] at hg
-    by_cases hgi : g = i
-    · rw [ite_eq_left hgi] at hg; cases hg; exact hC.ths 0 _ hth 0 o v hst
-    · rw [ite_eq_right hgi] at hg; exact hC.gl g w hg
+/-! ### Why `GlobsOK` asks `GlobsKinds`
 
-/-- **Agora #815, from the program's declarations**: on every configuration
-    the start the make phase left reaches, no block is named by both a lock
-    share and a cell share. -/
-theorem reach_shareKind_made {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgCodes P)
-    (hSp : SpawnOK P spawn) {D : List Decl} (hD : DeclsOK P D) {G : Globs} (h : Made P spawn D D.length G)
-    {s : Stmt} {nv : Nat} {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C) : ShareKind C :=
-  reach_shareKind (made_ok hP hPc hSp hD h).1 (made_kinds hP hPc hSp hD h) hr
-
-/-! ### A check-out of a cell's block -/
-
-section reach
-variable {P : Prog} {spawn : Nat → Bool} {G : Globs} {s0 : Stmt} {Δ0 : Ctx} {nv : Nat}
-
-/-- **A3.5, Agora #815: a check-out of a cell's block is through a cell share,
-    by a thread that holds an owner's share of the cell** (`CellOp`'s second
-    case).  In a reached configuration, a thread inside a check-out of block
-    `k` (a `scopeL k` frame), where some value of the configuration holds a
-    cell share of `k` (`Cfg.Holds`: a thread's slot, a block's payload or a
-    global), holds that cell share in a slot the frame's body does not name
-    (the frame's root, `reach_frame_root`: a lock share of `k` would name
-    `k` by both kinds, which `reach_shareKind` rules out), and an owner's
-    share of cell `k` (`reach_frame_root_cell_owner`). -/
-theorem reach_frame_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (hGk : GlobsKinds G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true)
-    (hsc : s0.codesOK P) (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
-    {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
-    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) (hc : C.Holds (.cell k)) :
-    ∃ y o, th.st y = some ⟨o, some (.cell k)⟩ ∧ y ∉ b.nm ∧
-      ∃ y' v, th.st y' = some ⟨true, some v⟩ ∧ Sub (.cell k) v := by
-  obtain ⟨y, o, w, hy, hw, hyn, how⟩ := reach_frame_root_cell_owner hP hPc hSp hG ht hs hsc hv hr hi hK
-  rcases hw with rfl | rfl
-  · exact absurd hc (reach_shareKind hG hGk hr k (.inl ⟨i, th, y, o, _, hi, hy, Sub.refl _⟩))
-  · exact ⟨y, o, hy, hyn, how rfl⟩
-
-/-- ... so its next step is a step on the cell (`CellOp`, its second case). -/
-theorem reach_frame_cellOp (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (hGk : GlobsKinds G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true)
-    (hsc : s0.codesOK P) (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
-    {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
-    (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) (hc : C.Holds (.cell k)) :
-    CellOp th k := by
-  obtain ⟨_, _, _, _, y', v, hy', hs'⟩ := reach_frame_cell_owner hP hPc hSp hG hGk ht hs hsc hv hr hi hK hc
-  exact .inr ⟨mem_lfr_keys (hK.lfr_mem rfl), y', v, hy', hs'⟩
-
-end reach
-
-/-! ### `GlobsOK` alone does not keep the kinds apart
-
-A start `GlobsOK` holds of whose key 0 is named by a lock share (global 0, a
-`Locked int`) and by a cell share (in the payload of block 1, the lock
-global 1 shares, a `Locked (cell int)`): both name a lock block of payload
-type `int`, which is all the typing asks of either.  No make phase leaves it
-(`made_kinds`), but `A3.claim`'s `GlobsOK` premise admits it; `GlobsKinds`
-is the start's fact the kinds rest on. -/
+A start `GlobsTyped` holds of (every condition `GlobsOK` asked before
+Agora #815) whose key 0 is named by a lock share (global 0, a `Locked int`)
+and by a cell share (in the payload of block 1, the lock global 1 shares, a
+`Locked (cell int)`): both name a lock block of payload type `int`, which is
+all the typing asks of either.  On it a thread checking block 0 out through
+the global's lock share changes the cell's state with no owner's share of
+the cell: no `CellOp`, so a race with a `withCell` on the cell, which the
+runtime runs with no lock, would not be a `Race`.  `GlobsOK` refuses it
+(`mix_not_globsOK`); no make phase leaves it (`make_ok`). -/
 
 /-- Block 0 a lock of an integer, block 1 a lock whose payload is a cell
     share of block 0. -/
@@ -845,8 +755,8 @@ theorem mixB_some {k : Nat} {bl : Blk} (h : mixB k = some bl) :
     · rw [ite_eq_left h1] at h; cases h; exact .inr ⟨h1, rfl⟩
     · rw [ite_eq_right h1] at h; cases h
 
-/-- `GlobsOK` holds of it ... -/
-theorem mix_globsOK (P : Prog) : GlobsOK P mixG where
+/-- `GlobsTyped` holds of it ... -/
+theorem mix_globsTyped (P : Prog) : GlobsTyped P mixG where
   sync g v h := by
     simp only [mixG] at h
     by_cases h0 : g = 0
@@ -908,5 +818,10 @@ theorem mix_globsOK (P : Prog) : GlobsOK P mixG where
 /-- ... and its start names key 0 by both kinds. -/
 theorem mix_not_shareKind (s : Stmt) (nv : Nat) : ¬ ShareKind (Cfg.start mixG s nv) := fun h =>
   h 0 (.inr (.inr ⟨0, _, rfl, .refl _⟩)) (.inr (.inl ⟨1, _, _, _, rfl, .refl _⟩))
+
+/-- ... so `GlobsOK` refuses it: every start it admits keeps the kinds apart
+    (`reach_shareKind`, at the start itself). -/
+theorem mix_not_globsOK (P : Prog) : ¬ GlobsOK P mixG := fun hG =>
+  mix_not_shareKind .skip 0 (reach_shareKind (spawn := fun _ => false) hG .refl)
 
 end A3

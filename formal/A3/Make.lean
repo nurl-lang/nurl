@@ -1,4 +1,5 @@
 import A3.Claim
+import A3.Kinds
 
 /-! A3.6's rest — module globals made before `main`, read at their declared types.
 
@@ -402,9 +403,18 @@ theorem make_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgCod
       cases h' : st x with
       | none => rfl
       | some _ => rw [h'] at this; cases this
-  refine ⟨⟨fun g w hg => ?_, ?_, fun j hj => ?_, fun k bl hk => ?_, hcd.blk.1, hcd.blk.2,
+  -- Agora #815: a kind per key agrees with every share of `C` (`reach_kinds`), the
+  -- result's too, which moves into the global
+  have hkinds : GlobsKinds ⟨C.alloc, C.nid, C.blk, upd C.gl i (some v)⟩ := by
+    obtain ⟨κ, hC⟩ := reach_kinds hG hr
+    refine ⟨κ, hC.blk, fun g w hg => ?_⟩
+    simp only [upd] at hg
+    by_cases hgi : g = i
+    · rw [ite_eq_left hgi] at hg; cases hg; exact hC.ths 0 _ hth 0 true v hst
+    · rw [ite_eq_right hgi] at hg; exact hC.gl g w hg
+  refine ⟨⟨⟨fun g w hg => ?_, ?_, fun j hj => ?_, fun k bl hk => ?_, hcd.blk.1, hcd.blk.2,
     -- A3.5: each cell's shares are in one block, below `nid`: the cells' homes
-    fun k k1 k2 h1 h2 => ⟨hcell.one k k1 k2 h1 h2, hcell.blkBelow k1 k h1⟩⟩, hfit, hgl⟩
+    fun k k1 k2 h1 h2 => ⟨hcell.one k k1 k2 h1 h2, hcell.blkBelow k1 k h1⟩⟩, hkinds⟩, hfit, hgl⟩
   · -- each global holds a share of a block of a type that synchronises itself
     by_cases hgi : g = i
     · subst hgi; simp [upd] at hg; subst hg
@@ -461,6 +471,14 @@ theorem made_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgCod
         exact (hr.globFits (C := Cfg.start G (makeStmt i d) 1) hw hf).2
     · have hgi : g ≠ i := by omega
       simp [upd, hgi, hgl, hunset g (by omega)]
+
+/-- **Agora #815, from the program's declarations**: on every configuration
+    the start the make phase left reaches, no block is named by both a lock
+    share and a cell share (`reach_shareKind`, `GlobsOK` derived). -/
+theorem reach_shareKind_made {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgCodes P)
+    (hSp : SpawnOK P spawn) {D : List Decl} (hD : DeclsOK P D) {i : Nat} {G : Globs} (h : Made P spawn D i G)
+    {s : Stmt} {nv : Nat} {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C) : ShareKind C :=
+  reach_shareKind (made_ok hP hPc hSp hD h).1 hr
 
 /-- ... and, once every global is made, the start holds each at its declared
     type. -/

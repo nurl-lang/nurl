@@ -160,9 +160,9 @@ import A3
 #print axioms A3.reach_closed_send_reaps_assign
 -- Agora #815: no block is named by both a lock share and a cell share (A3/Kinds.lean): a kind per
 -- key that every share of the configuration agrees with, kept by every step (a constructor's fresh
--- key above every share), at a start whose globals keep the kinds apart (which the make phase
--- leaves); so a check-out of a cell's block is through a cell share, by an owner (`CellOp`); `GlobsOK`
--- alone admits a start naming a key by both kinds
+-- key above every share), at a start whose globals keep the kinds apart (`GlobsOK.kinds`, which the
+-- make phase leaves); so a check-out of a cell's block is through a cell share, by an owner (`CellOp`);
+-- `GlobsTyped` (`GlobsOK` before #815) admits a start naming a key by both, which `GlobsOK` refuses
 #print axioms A3.EvalR.kinds
 #print axioms A3.Step.kinds
 #print axioms A3.CSettle.kinds
@@ -172,12 +172,12 @@ import A3
 #print axioms A3.reach_kinds
 #print axioms A3.CKinds.shareKind
 #print axioms A3.reach_shareKind
-#print axioms A3.made_kinds
 #print axioms A3.reach_shareKind_made
 #print axioms A3.reach_frame_cell_owner
 #print axioms A3.reach_frame_cellOp
-#print axioms A3.mix_globsOK
+#print axioms A3.mix_globsTyped
 #print axioms A3.mix_not_shareKind
+#print axioms A3.mix_not_globsOK
 #print axioms A3.ChanDtorWitness.mainC_typed
 #print axioms A3.ChanDtorWitness.mainC_safe
 #print axioms A3.ChanDtorWitness.mainC_no_leak
