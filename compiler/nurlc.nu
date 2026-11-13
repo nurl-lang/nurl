@@ -6919,7 +6919,25 @@ unsafe @ __arg_lend_root i syms → s {
 // closure's.
 unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
     ? ! ( __is_closure_ty lt ) { ^ v } {}
-    : s effs ? == tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_effects__` ) ? ( is_ident_tok tt ) ( nurl_sym_get2 syms tv `__closure_effects` ) ? & == tt TT_LPAREN != 0 g_clo_eff_set ( nurl_sym_get syms `__last_call_clo_effects__` ) ``
+    // (A binding: under any name the closure may have, a literal assigned
+    // in an arm too — __clo_run_attr; agora #802.)
+    : s effs0 ? == tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_effects__` ) ? ( is_ident_tok tt ) ( __clo_run_attr syms tv `__closure_effects` `le` ) ? & == tt TT_LPAREN != 0 g_clo_eff_set ( nurl_sym_get syms `__last_call_clo_effects__` ) ``
+    : ~ s effs ( nurl_str_cat effs0 `` )
+    // (…and a join's or a block's arms, `^ ? k c1 c2`: the literals they
+    // may be, #686's nodes.)
+    ? & != 0 g_clo_nodes | | == tt TT_QUEST == tt TT_QUESTQUEST == tt TT_LBRACE {
+        : ~ s ms ( __clo_val_members syms tt tv )
+        ~ != 0 ( nurl_str_len ms ) {
+            : s m ( str_first_word ms ) = ms ( str_skip_word ms )
+            ? ! ( seq m `*` ) {
+                : ~ s ls ( __clo_lits_of m )
+                ~ != 0 ( nurl_str_len ls ) {
+                    : s l ( str_first_word ls ) = ls ( str_skip_word ls )
+                    = effs ( __word_union effs ( nurl_sym_get g_clo_nodes ( nurl_str_cat `le#` l ) ) )
+                }
+            } {}
+        }
+    } {}
     ? == 0 ( nurl_str_len effs ) { ^ v } {}
     : ~ s out ``
     : ~ s rest ( nurl_str_cat effs `` )
@@ -6944,6 +6962,18 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
     ( nurl_sym_def g_pending_impl key ( __word_union cur out ) )
 }
 
+// What a call written as an argument lends out of, as a roster entry:
+// `~a,b` (the names, not `-`), or `-` for nothing named.
+@ __effr_lent s srcs → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat srcs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & ! ( seq w `-` ) != 0 ( nurl_str_len w ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out `,` w ) } {}
+    }
+    ^ ? == 0 ( nurl_str_len out ) ( nurl_str_cat `-` `` ) ( nurl_str_cat `~` out )
+}
+
 // A `retcloeff` summary's words rewritten onto a call's arguments
 // (`arg_idents`, `-` where one is no name): `%k` the name of argument k.
 // One whose argument is no name changes nothing a name of the caller's
@@ -6960,7 +6990,19 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
         : i end ? & > p 0 < p c1 p c1
         : s nm ( bck_nth_word idents ( nurl_str_to_int ( nurl_str_slice e1 1 - end 1 ) ) )
         ? & != 0 ( nurl_str_len nm ) ! ( seq nm `-` ) {
-            = out ( __word_union out ( nurl_str_cat3 ? lent `~` `` nm ( nurl_str_slice e1 end - ( nurl_str_len e1 ) end ) ) )
+            ? == ( nurl_str_get nm 0 ) 126 {
+                // (…an argument lent out of bindings, `~a,b`: what the closure
+                // does to it is done to a value lent out of each — the call
+                // part, `:callee:aix`, kept; agora #802.)
+                : s tl ( nurl_str_slice e1 c1 - ( nurl_str_len e1 ) c1 )
+                : ~ s ls ( bck_swap_char ( nurl_str_slice nm 1 - ( nurl_str_len nm ) 1 ) 44 32 )
+                ~ != 0 ( nurl_str_len ls ) {
+                    : s lw ( str_first_word ls ) = ls ( str_skip_word ls )
+                    = out ( __word_union out ( nurl_str_cat3 `~` lw tl ) )
+                }
+            } {
+                = out ( __word_union out ( nurl_str_cat3 ? lent `~` `` nm ( nurl_str_slice e1 end - ( nurl_str_len e1 ) end ) ) )
+            }
         } {}
     }
     ^ out
@@ -18970,6 +19012,12 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     : ~ s __arc_sync ``
     : ~ s arg_roots ``
     : ~ b arg_has_froot F
+    // (…and, for a callee handing back a closure whose effects it records
+    // (`retcloeff`), whose storage each argument is: its name, its field
+    // path, or the bindings a call written there lends out of, `~a,b` —
+    // `-` for none; agora #802.)
+    : b __want_effr & != 0 g_retcloeff_n != 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` call_name )
+    : ~ s arg_effr ``
     : ~ s __clo_args ``
     // What the closures handed to this call (and, through a closure value,
     // the one called) do to their captures when they run there — `r=e`
@@ -20532,6 +20580,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
         ( nurl_str_cat bck_arg_nm `` )
         ( nurl_str_cat3 arg_idents ` ` bck_arg_nm )
+        ? __want_effr {
+            : s __aer ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? != 0 ( nurl_str_len arg_froot ) ( nurl_str_cat arg_froot `` ) ? == bck_arg_tt TT_LPAREN ( __effr_lent ( bck_call_lend_srcs syms ) ) ( nurl_str_cat `-` `` )
+            = arg_effr ? == 0 ( nurl_str_len arg_effr ) ( nurl_str_cat __aer `` ) ( nurl_str_cat3 arg_effr ` ` __aer )
+        } {}
         // (…and for the lend chain: an argument that is a call that may lend
         // out of a local of this frame stands as `__alr#N` — agora #560.)
         : s __alr ? & & ( seq bck_arg_nm `-` ) == arg_eff_tt TT_LPAREN g_call_may_lend ( __arg_lend_root syms ) ``
@@ -22260,7 +22312,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     ? != 0 g_clo_eff_set { ( nurl_sym_def syms `__last_call_clo_effects__` `` ) = g_clo_eff_set 0 } {}
     ? != 0 g_retcloeff_n {
         ? != 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` __lend_cn ) {
-            : s __cle ( __clo_effs_onto_args ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcloeff##` __lend_cn ) ) arg_idents )
+            : s __cle ( __clo_effs_onto_args ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcloeff##` __lend_cn ) ) ? __want_effr arg_effr arg_idents )
             ? != 0 ( nurl_str_len __cle ) { ( nurl_sym_def syms `__last_call_clo_effects__` __cle ) = g_clo_eff_set 1 } {}
         } {}
     } {}
@@ -35700,6 +35752,12 @@ unsafe @ __clo_cap_marks i syms s caps i line → v {
         // (Run inside another closure's body: its effect too — and, on one
         // of that literal's own parameters, a drop of its summary, as the
         // call written there inline would be; agora #435.)
+        // (Run in the function itself: what it does to a local holding or
+        // read out of a parameter is the function's — as the call written
+        // here would be. The body noted what that local led to when the
+        // literal was made; a binding the closure captured by reference may
+        // lead somewhere new by the time it runs, `= e . a v`; agora #802.)
+        ? & & == 0 g_bck_closure_depth != 0 ( nurl_str_len g_cur_params ) | != 0 ( nurl_str_len g_pderiv ) != 0 g_pderiv_cn { ( __clo_eff_fn_note syms pn cal aix lent ) } {}
         ? lent { ( __clo_effect_note_lent pn cal aix ) } {
             ( __clo_effect_note pn cal aix )
             ? & != 0 g_bck_closure_depth != 0 ( nurl_str_len g_clo_cur ) {
@@ -35715,6 +35773,25 @@ unsafe @ __clo_cap_marks i syms s caps i line → v {
                 }
             } {}
         }
+    }
+}
+
+// A closure run in the function compiling now hands local `pn` (or a
+// value lent out of it, `lent`) to `callee` as argument `aix`: the drop and
+// irealloc edges the call written here would note, through what the local
+// leads to now (__drop_note_via, __pderiv_reach; agora #802).
+@ __clo_eff_fn_note i syms s pn s callee i aix b lent → v {
+    : s rt ( __path_root_name pn )
+    ? | ( str_contains_word g_cur_params rt ) == 0 ( nurl_sym_len2 syms rt `__ptr` ) { ^ v } {}
+    : s ty ( nurl_sym_get syms rt )
+    ? == 0 ( nurl_str_len ty ) { ^ v } {}
+    ? & ! lent ( seq rt pn ) { ( __drop_note_via syms pn callee aix ( nurl_llty ty ) ) } {}
+    : b fe ( __pd_may_field syms rt )
+    : ~ s rr ( __pderiv_reach syms rt )
+    ~ != 0 ( nurl_str_len rr ) {
+        : s w ( str_first_word rr ) = rr ( str_skip_word rr )
+        : i h ( nurl_str_find w `#` )
+        ? < h 0 { ( __irealloc_edge_note syms w callee aix fe ) } { ( __irealloc_edge_note_c syms ( nurl_str_slice w 0 h ) callee aix ( nurl_str_slice w + h 1 - - ( nurl_str_len w ) h 1 ) fe ) }
     }
 }
 
@@ -55307,6 +55384,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
             ( nurl_sym_def syms ( nurl_str_cat name `__closure_assigns` ) ( nurl_sym_get syms `__last_closure_assigns__` ) ) ( nurl_sym_def syms ( nurl_str_cat name `__closure_fldroots` ) ( nurl_sym_get syms `__last_closure_fldroots__` ) )
             ( bck_add_cap_name name ) }
         { ( bck_clear_cap_name syms name ) }
+        // (…a closure a call hands back: its effects, as for `:`; agora #802.)
+        ? & & != 0 g_clo_eff_set == bck_rhs_tt TT_LPAREN ( __is_closure_ty ( nurl_sym_get syms name ) ) { ( nurl_sym_def syms ( nurl_str_cat name `__closure_effects` ) ( nurl_sym_get syms `__last_call_clo_effects__` ) ) } {}
         // Env ownership, the `:` binding's rule in the `=` spelling. A
         // capturing closure owns a heap env block; the binding path
         // registers it so the function-exit drain frees it, and the
