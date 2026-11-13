@@ -48436,9 +48436,47 @@ unsafe @ resolve_irealloc_summaries → v {
 
 // The drop summaries closed over the calls (rounds until nothing changes:
 // each carries a summary one call further), at module end.
-@ resolve_drop_summaries → v {
+unsafe @ resolve_drop_summaries → v {
     ? == 0 g_fn_safe { ^ } {}
+    ( __dyn_virtual_drop_edges )
     ( __drops_close F )
+}
+
+// A `dyn` call may run any impl of its method: the virtual callee drops
+// what one of them drops of the same argument — an edge `k:impl:k` for each
+// parameter, as its mutation and replacement summaries have them
+// (__dyn_virtual_mut_edges). Without it a method that clears what the
+// object's share points at was a call that drops nothing (agora #738).
+unsafe @ __dyn_virtual_drop_edges → v {
+    : ~ s rest ( nurl_sym_get g_pending_impl `dynvirt` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s vn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s parts ( dyn_subst_parts ( nurl_sym_get g_pending_impl ( nurl_str_cat `dynvt##` vn ) ) ( nurl_sym_get g_pending_impl ( nurl_str_cat `dynvm##` vn ) ) `i64` )
+        : i na ( __dyn_parts_arity parts )
+        : ~ s add ``
+        // (…only where every impl has a drop summary: one in raw code is
+        // answered by its mutation summary, as the virtual callee's own was —
+        // taken for safe, its drops would be lost; agora #738's review.)
+        : ~ b allsafe T
+        : ~ s fns ( __dyn_impl_fns vn )
+        ~ != 0 ( nurl_str_len fns ) {
+            : s fn ( str_first_word fns ) = fns ( str_skip_word fns )
+            ? != 0 ( nurl_sym_len g_fn_safe fn ) {
+                : ~ i k 0
+                ~ < k na {
+                    = add ( __word_union add ( nurl_str_cat4 ( nurl_str_int k ) `:` fn ( nurl_str_cat `:` ( nurl_str_int k ) ) ) )
+                    = k + k 1
+                }
+            } { = allsafe F }
+        }
+        ? & allsafe != 0 ( nurl_str_len add ) {
+            ( nurl_sym_def g_drop_edges vn ( __word_union ( nurl_sym_get g_drop_edges vn ) add ) )
+            ? == 0 ( nurl_sym_len g_fn_safe vn ) {
+                ( nurl_sym_def g_fn_safe vn `1` )
+                = g_fn_safe_list ? == 0 ( nurl_str_len g_fn_safe_list ) ( nurl_str_cat vn `` ) ( nurl_str_cat3 g_fn_safe_list ` ` vn )
+            } {}
+        } {}
+    }
 }
 
 // Is the drop key `ks` (`k`, `k.rel`) of `f` one of a parameter that
@@ -48705,12 +48743,47 @@ unsafe @ __rc_reach s lty → s {
             ? & != 0 ( nurl_str_starts item `%Weak__` ) ( __ty_std_named item `Weak` ) {
                 = found ( __bar_add found ( nurl_str_cat `%Rc__` ( nurl_str_slice item 7 - ( nurl_str_len item ) 7 ) ) )
             } {}
-            : s kids ( __ty_kids g_root_syms item T )
+            // (A trait object boxes a value of one of the types implementing
+            // its trait: what those reach, it may — agora #738.)
+            : s kids ? != 0 ( nurl_str_starts item `%dyn.` ) ( __dyn_impl_tys item ) ( __ty_kids g_root_syms item T )
             ? != 0 ( nurl_str_len kids ) { = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat kids `` ) ( nurl_str_cat3 kids `|` work ) } {}
         } {}
     }
     ( nurl_sym_def g_rc_reach_memo lty ? == 0 ( nurl_str_len found ) `-` found )
     ^ found
+}
+
+// The LLVM types implementing the trait of trait-object type `item`
+// (`%dyn.Wiper`), `|`-separated: the impls of each of its methods
+// (`implsof##`, known from the signature scan — an impl may leave a
+// default method out, so all of them are asked).
+@ __dyn_impl_tys s item → s {
+    : s tn0 ( __dyn_trait_of ( nurl_str_slice item 1 - ( nurl_str_len item ) 1 ) )
+    ? == 0 ( nurl_str_len tn0 ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s out ``
+    // (…and its supertraits', at any depth: a trait with no methods of its
+    // own, `% Tool [T] : Wiper { }`, dispatches theirs — every type
+    // implementing it implements them; agora #738's review.)
+    : ~ s work ( nurl_str_cat tn0 `` )
+    : ~ s seen ( nurl_str_cat tn0 `` )
+    ~ != 0 ( nurl_str_len work ) {
+        : s tn ( str_first_word work ) = work ( str_skip_word work )
+        : ~ s sup ( nurl_str_cat ( nurl_sym_get2 g_trait_syms tn `__supers` ) `` )
+        ~ != 0 ( nurl_str_len sup ) {
+            : s sw ( str_first_word sup ) = sup ( str_skip_word sup )
+            ? ! ( str_contains_word seen sw ) { = seen ( nurl_str_cat3 seen ` ` sw ) = work ( nurl_str_cat3 work ` ` sw ) } {}
+        }
+        : ~ s ms ( nurl_str_cat ( nurl_sym_get2 g_trait_syms tn `__methods` ) `` )
+        ~ != 0 ( nurl_str_len ms ) {
+            : s m ( str_first_word ms ) = ms ( str_skip_word ms )
+            : ~ s lls ( nurl_str_cat ( nurl_sym_get g_impl_trait_syms ( nurl_str_cat4 `implsof##` tn `##` m ) ) `` )
+            ~ != 0 ( nurl_str_len lls ) {
+                : s ll ( str_first_word lls ) = lls ( str_skip_word lls )
+                ? < ( nurl_str_find ( nurl_str_cat3 `|` out `|` ) ( nurl_str_cat3 `|` ll `|` ) ) 0 { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ll `` ) ( nurl_str_cat3 out `|` ll ) } {}
+            }
+        }
+    }
+    ^ out
 }
 
 // The Rc types a value of type `lty` IS or holds in its own storage: an
@@ -48738,7 +48811,8 @@ unsafe @ __rc_direct s lty → s {
                     = out ( __bar_add out ( nurl_str_cat `%Rc__` ( nurl_str_slice item 7 - ( nurl_str_len item ) 7 ) ) )
                 } {
                     : b boxed & != 0 ( nurl_str_starts item `%Box__` ) ( __ty_std_named item `Box` )
-                    : s kids ? boxed ( nurl_llty ( __inst_targ item 0 ) ) ( __ty_kids g_root_syms item F )
+                    // (…as a trait object's boxed value is: agora #738.)
+                    : s kids ? boxed ( nurl_llty ( __inst_targ item 0 ) ) ? != 0 ( nurl_str_starts item `%dyn.` ) ( __dyn_impl_tys item ) ( __ty_kids g_root_syms item F )
                     ? != 0 ( nurl_str_len kids ) { = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat kids `` ) ( nurl_str_cat3 kids `|` work ) } {}
                 }
             }
@@ -48795,6 +48869,18 @@ unsafe @ __bck_rcix_sync → v {
 // may run the program's code is the elements, its type arguments.
 unsafe @ __rc_runs_user_drop s lty → b {
     ? | == 0 g_user_drop_seen == 0 ( nurl_str_len lty ) { ^ F } {}
+    // (A trait object: its synthesized drop runs the boxed value's — a
+    // `% Drop` of the program's own only where an implementing type has
+    // one; agora #738's review.)
+    ? != 0 ( nurl_str_starts lty `%dyn.` ) {
+        : ~ s ts ( bck_swap_char ( __dyn_impl_tys lty ) 124 32 )
+        ? == 0 ( nurl_str_len ts ) { ^ T } {}
+        ~ != 0 ( nurl_str_len ts ) {
+            : s t ( str_first_word ts ) = ts ( str_skip_word ts )
+            ? ( __rc_runs_user_drop t ) { ^ T } {}
+        }
+        ^ F
+    } {}
     : s first ( __inst_targ lty 0 )
     ? & != 0 ( nurl_str_len first ) ( __ty_std_named lty ( __lty_base_name lty ) ) {
         : ~ s a ( nurl_str_cat first `` )
