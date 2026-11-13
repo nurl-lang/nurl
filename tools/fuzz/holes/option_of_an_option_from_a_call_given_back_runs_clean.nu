@@ -3,7 +3,7 @@
 // map: §7.6 | A2 | runs-clean | - | agora #475: an option of an option from a call, given back by a callee below
 $ `stdlib/core/string.nu`
 
-@ mk → ??String { ^ @ ??String { T @ ?String { T ( string_from `the owned inner string, long enough for the heap` ) } } }
+@ mk → ?? String { ^ @ ?? String { T @ ?String { T ( string_from `the owned inner string, long enough for the heap` ) } } }
 
 @ main → i {
     : ~ ? ? String o ( mk )
@@ -12,7 +12,7 @@ $ `stdlib/core/string.nu`
     ^ 0
 }
 
-@ f ? ? String o i k → ??String {
+@ f ? ? String o i k → ?? String {
     ? == k 1 { ^ o } {}
     ^ ( mk )
 }

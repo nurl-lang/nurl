@@ -6,7 +6,7 @@ $ `stdlib/core/string.nu`
 @ show ? ? String o → v { ?? o { T i → { ?? i { T s → { ( nurl_println ( string_data s ) ) } F → { ( nurl_println `inner none` ) } } } F → { ( nurl_println `none` ) } } }
 
 @ main → i {
-    : ~ ? ? String o @ ??String { T @ ?String { T ( string_from `the owned inner string, long enough for the heap` ) } }
+    : ~ ? ? String o @ ?? String { T @ ?String { T ( string_from `the owned inner string, long enough for the heap` ) } }
     = o ( f o 1 )
     ( show o )
     = o ( f o 0 )
@@ -16,7 +16,7 @@ $ `stdlib/core/string.nu`
     ^ 0
 }
 
-@ f ? ? String o i k → ??String {
+@ f ? ? String o i k → ?? String {
     ? == k 1 { ^ o } {}
-    ^ @ ??String { T @ ?String { T ( string_from `a fresh inner string, long enough for the heap` ) } }
+    ^ @ ?? String { T @ ?String { T ( string_from `a fresh inner string, long enough for the heap` ) } }
 }
