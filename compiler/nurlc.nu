@@ -29697,6 +29697,24 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     >= ( nurl_str_find t `*, i64 }` ) 0
 }
 
+// Exactly a slice `{ T*, i64 }`: its first comma outside nested braces is the
+// one before the length (an optional slice, `{ i1, { T*, i64 } }`, is not).
+unsafe @ __is_slice_ll s t → b {
+    ? ! ( mem_is_slice_ty t ) { ^ F } {}
+    : i n ( nurl_str_len t )
+    : *u sp # *u t
+    : ~ i d 0
+    : ~ i i 1
+    ~ < i n {
+        : i c # i . sp i
+        ? | == c 123 == c 40 { = d + d 1 } {}
+        ? | == c 125 == c 41 { = d - d 1 } {}
+        ? & == c 44 == d 0 { ^ & == - n i 7 ( seq ( nurl_str_slice t i 7 ) `, i64 }` ) } {}
+        = i + i 1
+    }
+    ^ F
+}
+
 // Record that `name` was DECLARED (`:`-bound) as an owned slice in the
 // current scope. Parallel sideband to `__owned_slices__`, needed by the
 // Phase 2D arm-local slice drop: `= outer [ … ]` inside an arm also
@@ -80103,7 +80121,7 @@ unsafe @ __type_needs_drop s ty i syms → b {
     ? == 0 ( nurl_str_len pt ) { ^ F } {}
     ? ( seq pt `%String` ) { ^ T } {}
     // (A slice payload owns its buffer, boxed: agora #841.)
-    ? & != 0 g_auto_drop_strings ( mem_is_slice_ty pt ) { ^ T } {}
+    ? & != 0 g_auto_drop_strings ( __is_slice_ll ( nurl_llty pt ) ) { ^ T } {}
     ? != 0 ( nurl_str_starts pt `%Vec__` ) { ^ T } {}
     ? ( __is_libh pt ) { ^ T } {}
     ? ( __drop_is_boxed pt syms ) { ^ T } {}
@@ -80431,7 +80449,7 @@ unsafe @ __type_needs_drop s ty i syms → b {
     // A slice payload is boxed: its buffer (and the elements it owns, as an
     // owned slice binding's) goes, then the box. A zero slot was taken out.
     // (Not dropped at all, a slice payload leaked; agora #841.)
-    ? ( mem_is_slice_ty pt ) {
+    ? ( __is_slice_ll ( nurl_llty pt ) ) {
         : s sz ( __dr ctr )
         : s sl ( nurl_str_cat `drop_slive_` ( nurl_str_int ctr ) )
         : s sd ( nurl_str_cat `drop_sdone_` ( nurl_str_int ctr ) )
