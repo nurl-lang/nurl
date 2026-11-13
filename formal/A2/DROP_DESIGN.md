@@ -1054,11 +1054,13 @@ each one shrinks `CLAIM.md`'s exception:
      block is a lock block), with no witness program; that a real handle
      with such a state behaves as the model's cell is an assumption about
      the library (trusted base, phase B): the handles check their state
-     out with `rc_take` / `rc_restore`, which meet Agora #795. A taken
-     block is freed with no code, the destructor run once on the taker:
-     the model's semantics, the intended one; nurlc's `locked_take`
-     leaves zeros that its last `Locked_drop` drops again (Agora #795,
-     open, `tools/fuzz/holes/open/t795.md`): the runtime must match.
+     out with `rc_take` / `rc_restore`, whose taken state the last
+     handle's drop skips (Agora #795, github#1832). A taken block is
+     freed with no code, the destructor run once on the taker: the
+     model's semantics, the intended one, and nurlc's since Agora #795
+     (fixed by github#1832): `locked_take` still leaves zeros, but the
+     last `Locked_drop` asks `nurl_lk_taken` and then releases only the
+     latch (before the fix it dropped the zeros again).
    - **Built: `Locked (Vec D)` and a channel of `D`** (Agora #755's last
      cut, A2's runs and A3's threads; `A3/DESIGN.md`'s A3.2 and A3.4
      sections have the design).

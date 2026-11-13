@@ -1000,15 +1000,17 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   binding of its own (a `letd`'s: `letv` takes no destructor value). That
   is the model's semantics, and the intended one: a taken block holds
   nothing (`⟨t, .lock, none⟩`), the sweep frees it with no code, and the
-  destructor runs once, on the taker's binding. **nurlc diverges today**
-  (Agora #795, open; `tools/fuzz/holes/open/t795.md`): `locked_take` leaves
-  zero bytes in the slot and nothing marks it taken, so the last
-  `Locked_drop` runs the destructor a second time, on the zeros (and
-  `rc_take` / `rc_restore` share the design). The runtime must match the
-  model; until it does, the claim does not cover a `Locked D` (or, since
-  the last cut, a `Locked (Vec D)` or a channel of `D`, whose `locked_take`
-  the model treats the same way) taken and never restored before its last
-  share goes. Witness: `A3.LockDtorWitness.main` (a
+  destructor runs once, on the taker's binding. nurlc matches the model
+  (Agora #795, fixed by github#1832): `locked_take` still leaves zero
+  bytes in the slot, but the last `Locked_drop` asks the lock whether its
+  value is out (`nurl_lk_taken`) and then releases only the latch, so the
+  destructor runs once, on the taker's binding; `rc_take` / `rc_restore`,
+  which share the design, are fixed alike (`Rc_drop` and the runtime's
+  release paths skip a value whose `RC_TAKEN` bit is set). Before the fix
+  the last `Locked_drop` ran the destructor a second time, on the zeros,
+  and the claim did not cover a `Locked D` (or a `Locked (Vec D)` or a
+  channel of `D`, whose `locked_take` the model treats the same way) taken
+  and never restored before its last share goes; it now does. Witness: `A3.LockDtorWitness.main` (a
   `Locked` of a destructor value, updated through `locked_apply` with a
   closure that takes it `inout`, its share dropped: typed, `main_safe`,
   `main_no_leak`, `main_no_leak_panic`; `A3.lockDtor_claim`: `A3.claim`
@@ -1021,8 +1023,8 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   covers rests on an assumption about the library, not a result: the
   model's `withCell` gives the state back on a panic as `withLock` does,
   but the real handles check their state out with `rc_take` /
-  `rc_restore` (`compiler/tests/handle_checkout.nu`), which with a
-  `% Drop` state meet Agora #795. That a library's handle with such a
+  `rc_restore` (`compiler/tests/handle_checkout.nu`), whose taken state
+  the last handle's drop skips since Agora #795 (github#1832). That a library's handle with such a
   state behaves as the model's cell is part of the trusted base (phase B). Still refused: `RwLocked D`'s read guard
   (`rwRead_dtor_refused`: a view copies the payload, which owns nothing)
   and `locked_restore` of a destructor value (`lockRestore_dtor_refused`:

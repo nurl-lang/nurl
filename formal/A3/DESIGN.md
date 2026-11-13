@@ -969,11 +969,13 @@ settled:
    `letd`'s): `withLock` keeps its root share alive through the body. A
    taken block (`⟨t, .lock, none⟩`) is freed with no code and the
    destructor runs once, on the taker: the model's semantics and the
-   intended one. nurlc diverges today (Agora #795, open,
-   `tools/fuzz/holes/open/t795.md`): `locked_take` leaves zero bytes that
-   nothing marks taken, and the last `Locked_drop` runs the destructor
-   again on them (`rc_take` / `rc_restore` share the design). The runtime
-   must match the model. `scopeL_end_gives_back` and
+   intended one. nurlc matches it since Agora #795 (fixed by
+   github#1832): `locked_take` still leaves zero bytes, but the last
+   `Locked_drop` asks the lock whether its value is out (`nurl_lk_taken`)
+   and then releases only the latch, and `Rc_drop` and the runtime's
+   release paths skip a value whose `RC_TAKEN` bit is set (`rc_take` /
+   `rc_restore` share the design). Before the fix the last `Locked_drop`
+   ran the destructor again on the zeros. `scopeL_end_gives_back` and
    `scopeL_panic_gives_back` are lemmas of stores: `x` owning a `t` and
    the block checked out are their hypotheses. Agora #805 discharges the
    first for a typed frame (`scopeL_typed_end_gives_back`,
@@ -1001,7 +1003,7 @@ value, updated by `locked_apply` with a closure that takes it `inout`
 the same rules, with no witness program; that a real library handle with
 such a state behaves as the model's cell is an assumption about the
 library (trusted base, phase B), not a result: the handles check their
-state out with `rc_take` / `rc_restore`, which meet Agora #795. Still refused: a payload that holds a
+state out with `rc_take` / `rc_restore`, whose taken state the last handle's drop skips since Agora #795 (github#1832). Still refused: a payload that holds a
 share and a destructor value in a field of a type of no destructor of its
 own. (A `Vec` of destructor values and a channel of them are typed since
 the last cut, below.)
