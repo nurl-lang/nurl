@@ -16689,7 +16689,12 @@ unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
         } {}
     } {}
     ? & ( __type_needs_drop ty syms ) ( __clone_supported ty syms ) {
-        : s r ( mem_emit_clone_on cg ty v `1` )
+        // (A literal written as the operand is a fresh value that owns all
+        // it holds — as a call's argument it copied what it borrowed —
+        // where it lends nothing and holds no view: it is the copy. Copied
+        // again, the literal itself was released by no one: agora #814.)
+        : b __dlit & & == __dtt TT_AT == 0 ( nurl_sym_len syms `__agg_lends__` ) ! ( __ty_holds_view_p ty )
+        : s r ? __dlit ( nurl_str_cat v `` ) ( mem_emit_clone_on cg ty v `1` )
         // The copy is fresh: nothing of what the copied expression lent or
         // which call made it describes it (mem_lent_cond / mem_call_retown
         // read the last call's answer — `( vec_push out ( mem_dup c ) )`
