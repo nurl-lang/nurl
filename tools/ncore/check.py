@@ -1073,6 +1073,11 @@ class FnCheck:
                                  lend_owner=lend_owner, dest_vid=dest_vid, named=named)
         if k == "call":
             av = self.apply_call(st, rv, line)
+            if av.own == "L" and dest_ty is not None and dest_ty[0] == "closure":
+                # a closure a call hands back is its caller's own copy: it
+                # holds what the lent one holds, and is no borrow of where
+                # that one sat (MEMORY.md §7.5)
+                av = AV("O", (), (), av.held)
             if av.own == "L" and self.local_depth(AV("L", av.loans, av.alias)) > dest_depth:
                 if copy_ok and dest_ty is not None and self.T.copyable(dest_ty) and not self.T.is_scalar(dest_ty):
                     return AV("O")
