@@ -85,18 +85,20 @@ def join_own(a, b):
 
 
 class State:
-    __slots__ = ("vals", "dead", "bottom")
+    __slots__ = ("vals", "dead", "bottom", "defers")
 
-    def __init__(self, vals=None, dead=frozenset(), bottom=False):
+    def __init__(self, vals=None, dead=frozenset(), bottom=False, defers=()):
         self.vals = dict(vals or {})
         self.dead = frozenset(dead)
         self.bottom = bottom
+        self.defers = tuple(defers)      # the `;` blocks armed so far, oldest first
 
     def copy(self):
-        return State(self.vals, self.dead, self.bottom)
+        return State(self.vals, self.dead, self.bottom, self.defers)
 
     def key(self):
-        return (self.bottom, self.dead, tuple(sorted((k, v.key()) for k, v in self.vals.items())))
+        return (self.bottom, self.dead, self.defers,
+                tuple(sorted(((k, v.key()) for k, v in self.vals.items()), key=repr)))
 
 
 def join(a, b):
@@ -111,7 +113,9 @@ def join(a, b):
             vals[k] = x or y
             continue
         vals[k] = AV(join_own(x.own, y.own), x.loans | y.loans, x.alias | y.alias, x.held | y.held)
-    return State(vals, a.dead | b.dead)
+    # a block armed on one path may run: it is checked as if it does
+    defers = a.defers + tuple(d for d in b.defers if d not in a.defers)
+    return State(vals, a.dead | b.dead, defers=defers)
 
 
 VIEW_TYPES = ("s", "slice")
@@ -135,6 +139,9 @@ class FnCheck:
         self.rets = []
         self.exits = []
         self.loop_stack = []
+        self.defer_bodies = []
+        self.s_invokes = set()
+        self.ncap = getattr(fn, "ncap", 0)
 
     # -- names / errors -----------------------------------------------------
     def err(self, line, msg):
@@ -455,6 +462,16 @@ class FnCheck:
         for (k, path, eff) in sm["effects"]:
             if k < len(ops) and ops[k][0] == "v":
                 self.effect(st, (ops[k][1], ops[k][2] + tuple(path)), eff, line)
+        # a closure the callee may run does, at this call, what its body does
+        # to its captures (MEMORY.md §2.11); a callee nothing says that of
+        # may run any closure it is handed
+        inv = sm.get("invokes")
+        for k, av in enumerate(avs):
+            if (inv is None or k in inv) and self.closures_in(av):
+                self.run_closures(st, av, line, f"{name}: the closure in argument {k + 1}")
+                for a in av.alias:
+                    if a[0] in self.pidx:
+                        self.s_invokes.add(self.pidx[a[0]])
         # stores into arguments
         for (j, dpath, k, path, kind) in sm["stores"]:
             if j >= len(ops) or k >= len(ops) or ops[j][0] != "v":
@@ -559,6 +576,89 @@ class FnCheck:
             return
         st.vals[vid] = AV(av.own, av.loans, av.alias, av.held | frozenset(add))
 
+    # -- closures (MEMORY.md §2.11, §7.5) -----------------------------------------
+    def make_closure(self, st, rv, line):
+        """A closure literal holds what it captures: a copy of the handle of
+        each value captured, and the views those hold.  What it may run is
+        its body: `('clo', F)` beside its captures."""
+        _, fname, ops, site = rv
+        held = {(("^f",), ("clo", fname))}
+        for i, op in enumerate(ops):
+            av = self.read(st, op, line, (site, i), f"capture {i + 1}")
+            if av.own == "N":
+                continue
+            fp = (f"^{i}",)
+            if av.own in ("O", "P") and op[0] == "v":
+                held.add((fp, self.loan(st, (site, i), (op[1], op[2]), "handle")))
+                held |= hroot(av.held, fp)
+            else:
+                held |= hfrom(av.loans, fp) | hroot(av.held, fp)
+        return AV("O", (), (), held)
+
+    def closures_in(self, av):
+        """The closure bodies a value may run, with where its captures sit."""
+        return [(hp[:-1], l[1]) for hp, l in av.held
+                if isinstance(l, tuple) and len(l) == 2 and l[0] == "clo" and hp and hp[-1] == "^f"]
+
+    def run_closures(self, st, av, line, what):
+        """Running a closure reads every capture and does what its body does
+        to them."""
+        self.check_live(st, AV("N", held=av.held), line, what, held=True)
+        for base, fname in self.closures_in(av):
+            sm = self.summ.get(fname)
+            fn = self.prog.fns.get(fname)
+            if sm is None or fn is None:
+                continue
+            ncap = getattr(fn, "ncap", 0)
+            n = len(base)
+            caps = {}
+            for hp, l in av.held:
+                if hp[:n] == base and len(hp) == n + 1 and hp[n].startswith("^") and hp[n] != "^f" and l in self.loans:
+                    caps.setdefault(int(hp[n][1:]), []).append(self.loans[l][0])
+            for (k, path, eff) in sm["effects"]:
+                if k < ncap:
+                    for place in caps.get(k, ()):
+                        self.effect(st, (place[0], place[1] + tuple(path)), eff, line)
+            for k in sm["consumes"]:
+                if k < ncap:
+                    for place in caps.get(k, ()):
+                        # the body releases its capture when it runs
+                        self.effect(st, place, "replace", line)
+                        cur = st.vals.get(place[0])
+                        if cur is not None and cur.own in ("O", "P") and not place[1]:
+                            if cur.own == "P":
+                                self.s_consumes.add(self.pidx[place[0]])
+                            st.vals[place[0]] = AV("X")
+
+    def call_closure(self, st, rv, line):
+        """A call through a closure value: its arguments are lent, its result
+        is its caller's own (§7.5)."""
+        _, ops, site = rv
+        cav = self.read(st, ops[0], line, (site, 0), "the closure")
+        for i, op in enumerate(ops[1:]):
+            self.read(st, op, line, (site, i + 1), f"argument {i + 1} of the closure")
+        self.run_closures(st, cav, line, "the closure called here")
+        if not self.closures_in(cav):
+            for a in cav.alias:
+                if a[0] in self.pidx:
+                    self.s_invokes.add(self.pidx[a[0]])
+            if ops[0][0] == "v" and ops[0][1] in self.pidx:
+                self.s_invokes.add(self.pidx[ops[0][1]])
+        return AV("O")
+
+    def run_defers(self, st):
+        """A function's exit runs the `;` blocks armed on the way, newest
+        first."""
+        if st.bottom or not st.defers:
+            return st
+        pending = st.defers
+        st.defers = ()
+        for d in reversed(pending):
+            st = self.run(st, self.defer_bodies[d])
+            if st.bottom:
+                break
+        return st
+
     # -- rvalues ---------------------------------------------------------------
     def rvalue(self, st, rv, line, dest_depth, dest_ty, what, copy_ok=False, lend_owner=lambda vid: False,
                dest_vid=None):
@@ -587,6 +687,13 @@ class FnCheck:
                     held |= hfrom(av.loans, fp)
                 held |= hroot(av.held, fp)
             return AV("O", (), (), held)
+        if k == "closure":
+            return self.make_closure(st, rv, line)
+        if k == "callind":
+            av = self.call_closure(st, rv, line)
+            if dest_ty is not None and self.T.is_scalar(dest_ty):
+                return NONE
+            return av
         if k == "scalar":
             for i, op in enumerate(rv[1]):
                 self.read(st, op, line, ("sc", id(rv), i))
@@ -741,14 +848,21 @@ class FnCheck:
         if k == "foreach":
             _, vid, sop, body, ln = s
             return self.foreach(st, s, vid, sop, body, ln)
+        if k == "defer":
+            _, body, ln = s
+            self.defer_bodies.append(body)
+            st.defers = st.defers + (len(self.defer_bodies) - 1,)
+            return st
         if k == "ret":
             _, op, ln = s
             if op is not None:
                 av = self.transfer(st, op, ln, ("ret", id(s)), 0, self.fn.ret, "the returned value",
                                    copy_ok=True, is_ret=True)
+                st = self.run_defers(st)
                 self.check_live(st, av, ln, "the returned value", held=True)
                 self.rets.append((av, st.copy()))
             else:
+                st = self.run_defers(st)
                 self.exits.append(st.copy())
             return State(bottom=True)
         if k == "break":
@@ -845,7 +959,7 @@ class FnCheck:
             st.vals[vid] = NONE if v.ty is not None and self.T.is_scalar(v.ty) else AV("P")
         end = self.run(st, self.fn.body)
         if not end.bottom:
-            self.exits.append(end)
+            self.exits.append(self.run_defers(end))
         return self.make_summary()
 
     def param_loan(self, lid):
@@ -889,14 +1003,15 @@ class FnCheck:
         consumes = set(self.s_consumes) | {k for k, m in enumerate(self.fn.modes) if m == "sink"}
         return {"modes": list(self.fn.modes), "res": res, "lends": sorted(lends), "rholds": sorted(rholds),
                 "effects": sorted(self.s_effects), "stores": sorted(stores),
-                "consumes": sorted(consumes), "elems": sorted(self.s_elems)}
+                "consumes": sorted(consumes), "elems": sorted(self.s_elems),
+                "invokes": sorted(self.s_invokes)}
 
 
 def initial_summary(prog, fn):
     T = Types(prog)
     return {"modes": list(fn.modes), "res": "none" if fn.ret is None or T.is_scalar(fn.ret) else "own",
             "lends": [], "rholds": [], "effects": [], "stores": [],
-            "consumes": [k for k, m in enumerate(fn.modes) if m == "sink"], "elems": []}
+            "consumes": [k for k, m in enumerate(fn.modes) if m == "sink"], "elems": [], "invokes": []}
 
 
 def check_program(prog, max_rounds=40):
@@ -912,7 +1027,10 @@ def check_program(prog, max_rounds=40):
         if not changed:
             break
     errors = []
+    trusted = getattr(prog, "trusted", ())
     for name, fn in prog.fns.items():
+        if name in trusted:
+            continue
         fc = FnCheck(prog, fn, summ, final=True)
         fc.check()
         errors += fc.errors
@@ -929,6 +1047,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems"):
-        out[key] = sorted(set(map(tuple_ify, a[key])) | set(map(tuple_ify, b[key])), key=repr)
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes"):
+        out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out

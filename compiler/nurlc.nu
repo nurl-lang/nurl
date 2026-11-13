@@ -253,6 +253,10 @@
 : ~ i g_core_vb -1  // the temporary of the innermost value block open, -1 none: what is bound inside is that block's
 : ~ i g_core_kw_h 0  // the call with named arguments just read: where its operands begin, and its arguments' parameter positions in the order written (core_kwargs_reorder)
 : ~ s g_core_kw_slots ``
+: ~ i g_core_virts 0  // the `dyn` methods' virtual callees the IR called, interned (core_note_virt)
+: ~ i g_core_virt_n 0
+: ~ i g_core_virt_cap 0
+: ~ i g_core_virt_seen 0
 : i CORE_VW 7
 : i CORE_VS 1048576
 // Statement words.
@@ -9665,6 +9669,8 @@ unsafe @ core_expr_exit i h0 i tt i acks0 → v {
     // (A closure literal, a try and a slice literal are lowered by their
     // own hooks or not at all: one operand left is not their value.)
     : b own_hook | == tt TT_BACKSLASH == tt TT_LBRACK
+    // (A cast that makes an address or an aggregate is raw memory.)
+    ? == tt TT_HASH { ? ! ( core_ty_scalar ( nurl_get_last_type ) ) { = g_core_fflags | g_core_fflags 2 } {} } {}
     ? & == n 1 | ! own_hook != acks0 g_core_acks {
         ? | | | == tt TT_QUEST == tt TT_QUESTQUEST == tt TT_BACKSLASH == tt TT_LBRACE { ( __core_join_fix ) } {}
         ^
@@ -9757,6 +9763,8 @@ unsafe @ core_name_op i syms s name s lt → i {
         ^ 1
     } {}
     ? == ( nurl_str_get glb 0 ) 61 { ^ 0 } {}
+    // (A global of numbers holds nothing to track.)
+    ? ( core_ty_scalar lt ) { ^ 0 } {}
     ^ ( core_place -1 -1 ( __core_in name ) )
 }
 
@@ -9779,8 +9787,49 @@ unsafe @ __core_capture s name s ty → i {
 
 // A call's arguments are the operands above `h0`; its result, of type
 // `ret_ty`, is a temporary unless it is a number.
+// A `dyn` method's virtual callee (`m__dyn__Trait`) a call named: listed
+// with the impls it may run by core_print_virts.
+unsafe @ core_note_virt i callee → v {
+    : s cn # s callee
+    ? == 0 g_core_virt_seen { = g_core_virt_seen ( nurl_sym_new ) } {}
+    ? != 0 ( nurl_sym_len g_core_virt_seen cn ) { ^ } {}
+    ( nurl_sym_def g_core_virt_seen cn `1` )
+    ? >= g_core_virt_n g_core_virt_cap {
+        : i nc ? == g_core_virt_cap 0 64 * g_core_virt_cap 2
+        = g_core_virts ( __core_grown g_core_virts g_core_virt_n nc )
+        = g_core_virt_cap nc
+    } {}
+    : *i va # *i # s g_core_virts
+    = . va g_core_virt_n callee
+    = g_core_virt_n + g_core_virt_n 1
+}
+
+// `virt`, the virtual callee, then the impl functions it stands for: the
+// method's impl for each type that implements its trait.
+unsafe @ core_print_virts → v {
+    : ~ i k 0
+    ~ < k g_core_virt_n {
+        : *i va # *i # s g_core_virts
+        : s vn ( nurl_str_cat # s . va k `` )
+        : i at ( nurl_str_find vn `__dyn__` )
+        : s m ( nurl_str_slice vn 0 at )
+        : s dt ( nurl_str_slice vn + at 7 - ( nurl_str_len vn ) + at 7 )
+        ( __core_o `virt\t` ) ( __core_o vn )
+        : ~ s lls ( nurl_sym_get g_impl_trait_syms ( nurl_str_cat4 `implsof##` dt `##` m ) )
+        ~ != 0 ( nurl_str_len lls ) {
+            : s ll ( str_first_word lls )
+            = lls ( str_skip_word lls )
+            : s mk ( nurl_sym_get g_impl_name_syms ( nurl_str_cat3 m `##` ll ) )
+            ? != 0 ( nurl_str_len mk ) { ( __core_o `\t` ) ( __core_o m ) ( __core_o `__` ) ( __core_o mk ) } {}
+        }
+        ( __core_o `\n` )
+        = k + k 1
+    }
+}
+
 // A call through a closure value (`ind`): the value is the first operand.
 unsafe @ core_call i h0 s ret_ty b ind → v {
+    ? & ! ind != 0 g_core_callee { ? >= ( nurl_str_find # s g_core_callee `__dyn__` ) 0 { ( core_note_virt g_core_callee ) } {} } {}
     ? ( core_ty_scalar ret_ty ) {
         ( core_w CO_EVAL )
         ? ind { ( core_w RV_CALLIND ) } { ( core_w RV_CALL ) ( core_w g_core_callee ) }
@@ -9947,6 +9996,8 @@ unsafe @ core_member_elem i syms s ot i lex → i {
     ? == n 0 { ^ ( __core_in `*` ) } {}
     : *u p # *u ot
     : b ptr == ( nurl_str_at p n - n 1 ) 42
+    // (A read or a store through a pointer is raw memory.)
+    ? ptr { = g_core_fflags | g_core_fflags 2 } {}
     : i c0 ( nurl_str_at p n 0 )
     : i tt ( nurl_lex_type lex )
     ? == tt TT_INT {
@@ -10161,6 +10212,27 @@ unsafe @ core_guard → v {
     ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops h0 )
 }
 
+// `a | b` / `a & b` on flags, after `a` (on top): `b` runs only when `a`
+// does not decide — in the else of `a` for `|`, in its then for `&`.
+// Returns where the temporaries `b` makes begin.
+unsafe @ core_sc_begin b is_or → i {
+    : i op ( core_pop )
+    ( core_w CO_IF ) ( core_w op )
+    ? is_or { ( core_w CO_ELSE ) } {}
+    ( core_scope_begin )
+    ^ g_core_tmp_n
+}
+
+// …and after `b` (on top): it is read, and what it made is released.
+unsafe @ core_sc_end i t0 → v {
+    : i h0 - g_core_os_n 1
+    ? >= h0 0 { ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops h0 ) } {}
+    ( core_discard g_core_os_n t0 )
+    ( core_scope_end )
+    ( core_w CO_END )
+    ( core_push 0 )
+}
+
 // `~ cond { body }` before its condition; returns where the LOOP word is,
 // for core_loop_cancel.
 unsafe @ core_loop_begin → i {
@@ -10334,6 +10406,21 @@ unsafe @ core_try → v {
     ( core_w CO_END )
     ( core_push ? ( core_ty_scalar ty ) 0 ( core_op_var t ) )
     = g_core_acks + g_core_acks 1
+}
+
+// The capture `name` of the closure body being built is taken by pointer
+// (a `: ~` binding the body assigns, MEMORY.md §2.3): flag 8.
+unsafe @ core_capture_byref s name → v {
+    : i nm ( __core_in name )
+    : *i vs # *i # s g_core_vars
+    : ~ i k 0
+    ~ < k g_core_var_n {
+        ? & == . vs + * k CORE_VW 2 3 == . vs * k CORE_VW nm {
+            = . vs + * k CORE_VW 4 | . vs + * k CORE_VW 4 8
+            ^
+        } {}
+        = k + k 1
+    }
 }
 
 // A closure literal before its body: what it captures (`caps`, names of
@@ -10533,6 +10620,7 @@ unsafe @ core_print_fn → v {
 // The module's IR to stdout, and what was not lowered to stderr.
 unsafe @ core_flush i syms → v {
     ( core_print_types syms )
+    ( core_print_virts )
     ? != 0 g_core_out {
         : *u ob # *u # s g_core_out
         = . ob g_core_out_n # u 0
@@ -10545,6 +10633,14 @@ unsafe @ core_flush i syms → v {
     ? != 0 g_core_unlowered {
         ( nurl_eprintln ( nurl_str_cat3 `core: ` ( nurl_str_int g_core_unlowered ) ` construct(s) not lowered` ) )
     } {}
+    // The builder's arrays (the last function's, reused by each) and the lists.
+    ? != 0 g_core_code { ( nurl_free # s g_core_code ) = g_core_code 0 = g_core_code_cap 0 } {}
+    ? != 0 g_core_vars { ( nurl_free # s g_core_vars ) = g_core_vars 0 = g_core_var_cap 0 } {}
+    ? != 0 g_core_pl { ( nurl_free # s g_core_pl ) = g_core_pl 0 = g_core_pl_cap 0 } {}
+    ? != 0 g_core_os { ( nurl_free # s g_core_os ) = g_core_os 0 = g_core_os_cap 0 } {}
+    ? != 0 g_core_tmps { ( nurl_free # s g_core_tmps ) = g_core_tmps 0 = g_core_tmp_cap 0 } {}
+    ? != 0 g_core_tys { ( nurl_free # s g_core_tys ) = g_core_tys 0 = g_core_ty_n 0 = g_core_ty_cap 0 } {}
+    ? != 0 g_core_virts { ( nurl_free # s g_core_virts ) = g_core_virts 0 = g_core_virt_n 0 = g_core_virt_cap 0 } {}
 }
 
 @ __nest_enter i lex → v {
@@ -11649,6 +11745,7 @@ unsafe @ __agg_twin_hint i lex i syms s aty → s {
 @ gen_logical_and s lv s left_lbl i lex i syms i cg → s {
     : s lright ( nurl_cg_lbl cg `and_right` )
     : s lend ( nurl_cg_lbl cg `and_end` )
+    : i __sc_t ? != 0 g_core_live ( core_sc_begin F ) 0
     // Short-circuit: if left is false, skip right evaluation
     ( nurl_print `  br i1 ` ) ( nurl_print lv )
     ( nurl_print `, label %` ) ( nurl_print lright )
@@ -11661,6 +11758,7 @@ unsafe @ __agg_twin_hint i lex i syms s aty → s {
     = g_rp_sc + g_rp_sc 1
     : s rv ( gen_expr lex syms cg )
     = g_rp_sc - g_rp_sc 1
+    ? != 0 g_core_live { ( core_sc_end __sc_t ) } {}
     : s rt ( nurl_get_last_type )
     // Check type compatibility
     ? ! ( seq rt `i1` )
@@ -11686,6 +11784,7 @@ unsafe @ __agg_twin_hint i lex i syms s aty → s {
 @ gen_logical_or s lv s left_lbl i lex i syms i cg → s {
     : s lright ( nurl_cg_lbl cg `or_right` )
     : s lend ( nurl_cg_lbl cg `or_end` )
+    : i __sc_t ? != 0 g_core_live ( core_sc_begin T ) 0
     // Short-circuit: if left is true, skip right evaluation
     ( nurl_print `  br i1 ` ) ( nurl_print lv )
     ( nurl_print `, label %` ) ( nurl_print lend )
@@ -11698,6 +11797,7 @@ unsafe @ __agg_twin_hint i lex i syms s aty → s {
     = g_rp_sc + g_rp_sc 1
     : s rv ( gen_expr lex syms cg )
     = g_rp_sc - g_rp_sc 1
+    ? != 0 g_core_live { ( core_sc_end __sc_t ) } {}
     : s rt ( nurl_get_last_type )
     // Check type compatibility
     ? ! ( seq rt `i1` )
@@ -18787,7 +18887,7 @@ unsafe @ __kw_trim s raw → s {
 // in PARAMETER order, filling omitted parameters from their defaults.
 // Restricted to ordinary @-functions with no inout/sink parameters
 // (guarded by the caller); generics/FFI/variadic never reach here.
-@ gen_call_kwargs i lex i syms i cg s fname → s {
+inline @ gen_call_kwargs i lex i syms i cg s fname → s {
     : s r ( __gen_call_kwargs_body lex syms cg fname )
     ? != 0 g_core_live { ( core_kwargs_reorder g_core_kw_h g_core_kw_slots ( nurl_str_to_int ( nurl_sym_get2 syms fname `__kw_n` ) ) ) } {}
     ^ r
@@ -61402,7 +61502,7 @@ unsafe @ __replaces_note_io i syms s name s field → v {
     ^ F
 }
 
-@ gen_field_store i lex i syms i cg → s {
+inline @ gen_field_store i lex i syms i cg → s {
     ? == 0 g_core_live { ^ ( __gen_field_store_body lex syms cg ) } {}
     : i h0 g_core_os_n
     : i e0 g_core_mb_elem
@@ -63232,7 +63332,7 @@ unsafe @ gen_cast i lex i syms i cg → s {
     ^ ( nurl_str_cat inner_tfo `` )
 }
 
-unsafe @ gen_member i lex i syms i cg → s {
+inline unsafe @ gen_member i lex i syms i cg → s {
     ? == 0 g_core_live { ^ ( __gen_member_body lex syms cg ) } {}
     : i h0 g_core_os_n
     : i e0 g_core_mb_elem
@@ -63781,7 +63881,7 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
 // Builds a compound type value using a chain of insertvalue instructions.
 // Example:  @ ? i { 1 42 }  creates Some(42) as { i1, i64 }.
 
-unsafe @ gen_agg_lit i lex i syms i cg → s {
+inline unsafe @ gen_agg_lit i lex i syms i cg → s {
     ? == 0 g_core_live { ^ ( __gen_agg_lit_body lex syms cg ) } {}
     : i h0 g_core_os_n
     : i ty0 g_core_agg_ty
@@ -65946,7 +66046,7 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
 // Allocates a heap array, stores values, returns { T*, i64 } slice struct.
 // Example:  [ i | 10 20 30 ]  →  { i64* ptr, i64 3 }
 
-@ gen_slice_literal i lex i syms i cg → s {
+inline @ gen_slice_literal i lex i syms i cg → s {
     ? == 0 g_core_live { ^ ( __gen_slice_literal_body lex syms cg ) } {}
     : i h0 g_core_os_n
     : i ty0 g_core_agg_ty
@@ -69250,6 +69350,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
                 // value's leaves or the drain would free what the caller
                 // now owns (docs/MEMORY.md §7).
                 ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__captured_byref` ) `1` )
+                ? != 0 g_core_live { ( core_capture_byref cap_name ) } {}
                 ( __clo_cap_home body_syms cap_val cap_name )
                 ( __pderiv_alias cap_optr cap_val ) }
             {  // Existing path: alloca + store so the body sees a local.
@@ -100697,6 +100798,9 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `  --coverage-link-ir=FILE  also write staged IR; stdout keeps final paths\n` )
     ( nurl_print `  --coverage-notes=FILE  GCOV notes path in staged IR; use both with --coverage\n` )
     ( nurl_print `  --check             validate without writing LLVM IR or split files\n` )
+    ( nurl_print `  --emit-core         validate, and print the core IR instead of LLVM IR:\n` )
+    ( nurl_print `                      each function's variables and statements, every\n` )
+    ( nurl_print `                      producer bound before its consumer (docs/dev/CORE_IR.md)\n` )
     ( nurl_print `  --stdin             read source from stdin; <file.nu> keeps its logical path\n` )
     ( nurl_print `  --sanitize-address  mark every generated function for AddressSanitizer\n` )
     ( nurl_print `  --lint              run lint-only diagnostics: unused symbols and imports,\n` )

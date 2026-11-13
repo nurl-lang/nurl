@@ -25,7 +25,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 SCALAR_NAMES = {"i64": "i", "i1": "b", "double": "f", "float": "f32", "void": "v", "": "v",
                 "i8": "u", "u8": "u", "i16": "i16", "i32": "i32", "u16": "u16", "u32": "u32",
                 "u64": "u64"}
-KINDS = {0: "param", 1: "local", 2: "temp", 3: "capture"}
+KINDS = {0: "param", 1: "local", 2: "temp", 3: "param"}
 
 
 class TypeInfo:
@@ -164,7 +164,9 @@ class Reader:
         parts = tok.split("/")
         root = parts[0]
         if root.startswith("g:"):
-            raise Unsupported("global")
+            # a module global: safe code reads only one set at start, which
+            # nothing replaces or releases - a value with nothing to track
+            return ("c", ("i",))
         vid = int(root[1:])
         ty = fn.vars[vid].ty
         path = []
@@ -217,6 +219,12 @@ class Reader:
             return ("scalar", [self.operand(t, fn) for t in toks[2:2 + n]])
         if k == "payload":
             return ("payload", self.operand(toks[1], fn), toks[2], int(toks[3]))
+        if k == "closure":
+            n = int(toks[2])
+            return ("closure", toks[1], [self.operand(t, fn) for t in toks[3:3 + n]], site)
+        if k == "callind":
+            n = int(toks[1])
+            return ("callind", [self.operand(t, fn) for t in toks[2:2 + n]], site)
         if k == "opaque":
             raise Unsupported(f"construct nurlc did not lower (token {toks[1]})")
         raise Unsupported("rvalue " + k)
@@ -225,6 +233,7 @@ class Reader:
         from lower import Types
         self.T = Types(self.prog)
         fn = FnIR(raw["name"], raw["line"])
+        fn.ncap = 0
         fn.ret = self.conv(raw["ret"])
         for vid, kind, depth, flags, line, blk, name, ty in raw["vars"]:
             v = Var(vid, name or f"%t{vid}", self.conv(ty) if ty else None, KINDS.get(kind, "local"),
@@ -232,7 +241,12 @@ class Reader:
             v.mut = bool(flags & 1)
             v.blk = blk if blk >= 0 else None
             fn.vars[vid] = v
-            if kind == 0:
+            if kind == 3:
+                # a closure body's capture: a parameter the closure itself hands it
+                fn.params.append(vid)
+                fn.modes.append("cap")
+                fn.ncap += 1
+            elif kind == 0:
                 fn.params.append(vid)
                 fn.modes.append("inout" if flags & 2 else "sink" if flags & 4 else "in")
         fn.raw = raw
@@ -295,6 +309,10 @@ class Reader:
                 out.append(("break", ln))
             elif k == "continue":
                 out.append(("continue", ln))
+            elif k == "defer":
+                inner = self.block(lines, fn, ("end",))
+                self.pos += 1
+                out.append(("defer", inner, ln))
             elif k == "scope":
                 inner = self.block(lines, fn, ("end",))
                 self.pos += 1

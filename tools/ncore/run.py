@@ -41,16 +41,52 @@ def verdict(path):
 
 
 def verdict_nurlc(path):
-    """The verdict on the IR nurlc itself lowers the program to."""
+    """The verdict on the IR nurlc itself lowers the program to.
+
+    The program's own functions are checked.  A function of the standard
+    library is trusted: a declared summary (prims.py) answers for it; one
+    with none whose body uses no raw memory is walked for its summary, and
+    one that does needs a declared summary."""
+    from prims import PRIMS
     rd, gaps, rc, err = fromnurlc.read_program(path)
     if rc != 0:
         first = next((l for l in err.splitlines() if "error" in l), "nurlc failed")
         raise Unsupported("nurlc: " + first.split("error:")[-1].strip()[:40])
     prog = rd.prog
-    checked = {n: f for n, f in prog.fns.items() if not prog.fn_flags[n] & 1}
-    for fn in checked.values():
+    every = dict(prog.fns)
+
+    def declared(n):
+        return PRIMS.get(n) is not None or PRIMS.get(prog.fn_tmpl.get(n) or "") is not None
+
+    def callees(fn):
+        out = set()
+        for line in fn.raw["stmts"]:
+            t = line.split(" ")
+            for i, w in enumerate(t[:-1]):
+                if w in ("call", "closure") and i <= 2:
+                    out.add(t[i + 1])
+        return out
+
+    todo = [n for n, f in every.items() if not prog.fn_flags[n] & 1]
+    keep = {}
+    trusted = set()
+    while todo:
+        n = todo.pop()
+        if n in keep or n not in every:
+            continue
+        flags = prog.fn_flags[n]
+        if flags & 1:
+            if declared(n):
+                continue
+            if flags & 2:
+                raise Unsupported(f"no summary for {prog.fn_tmpl.get(n) or n}")
+            trusted.add(n)
+        keep[n] = every[n]
+        todo.extend(callees(every[n]))
+    for fn in keep.values():
         rd.lower_body(fn)
-    prog.fns = checked
+    prog.fns = keep
+    prog.trusted = trusted
     errors, summ = check_program(prog)
     return ("rejected" if errors else "runs-clean"), errors, summ
 
