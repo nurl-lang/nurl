@@ -1,0 +1,3 @@
+### Fixed
+
+- **An arm whose tail lends only outer bindings releases its locals** (Agora #775, items 4 and 5). `: String e ? c { : String a ( mk 4 ) ? c ( vec_at [String] v 0 ) ( vec_at [String] v 0 ) } ( mk 3 )` leaked `a`: only a tail call was asked what it lends, and a tail that is an inner join was taken to lend anything. So was `?? ( vec_get [String] v 0 ) { T p → { : String junk ( mk 5 ) ( idg [String] p ) } … }`, where the payload `p` is lent out of the outer `v` and none of the arm's own. An inner join whose arms select and lend only outer bindings, and a payload whose option is lent out of an outer binding, now let the arm's locals go at its exit. An arm that lends one of its own locals keeps them, as before.

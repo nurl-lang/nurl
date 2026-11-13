@@ -23005,7 +23005,13 @@ unsafe @ gen_call_body i lex i syms i cg → s {
 // argument is one, the gate is `true`. `` when it is no such arm.
 @ mem_arm_outer_lend i syms i cg s ty i tt0 → s {
     ? ! ( __ty_no_address ty 0 ) { ^ ( nurl_str_cat `` `` ) } {}
-    ? != ( __arm_eff_tt syms tt0 ) TT_LPAREN { ^ ( nurl_str_cat `` `` ) } {}
+    : i __aet ( __arm_eff_tt syms tt0 )
+    // (A tail that is an inner join: what it may lend is what its arms
+    // select and what their calls lend out of — `__last_phi_idents__`,
+    // `__last_join_arm_lends__`. None of them a binding of this arm: its
+    // locals go at its exit — agora #775.)
+    ? | == __aet TT_QUEST == __aet TT_QUESTQUEST { ^ ( __arm_join_lends_outer syms ) } {}
+    ? != __aet TT_LPAREN { ^ ( nurl_str_cat `` `` ) } {}
     : s key ( nurl_sym_get syms `__last_call_lend_key__` )
     ? | == 0 ( nurl_str_len key ) ( seq key `__field__` ) { ^ ( nurl_str_cat `` `` ) } {}
     : s cn ( str_first_word key )
@@ -23020,7 +23026,14 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // is its root binding's: lent out of an outer one, it is none of
         // the arm's own; agora #662.)
         : s nm0 ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s nm ? ( seq nm0 `-` ) nm0 ( __path_root_name nm0 )
+        : s nm1 ? ( seq nm0 `-` ) nm0 ( __path_root_name nm0 )
+        // (…and a `??` payload bound in the arm is its option's — the
+        // temporary's root, `__plroot`, or the binding its payload is lent
+        // out of, `__plend`: an outer one, it is none of the arm's own,
+        // agora #775.)
+        : s __plr0 ? | ( seq nm1 `-` ) == 0 ( nurl_sym_len syms nm1 ) `` ( nurl_sym_get2 syms nm1 `__plroot` )
+        : s __plr ? | != 0 ( nurl_str_len __plr0 ) | ( seq nm1 `-` ) == 0 ( nurl_sym_len syms nm1 ) ( nurl_str_cat __plr0 `` ) ( nurl_sym_get2 syms nm1 `__plend` )
+        : s nm ? & & != 0 ( nurl_str_len __plr ) == 0 ( nurl_str_len ( str_skip_word __plr ) ) & != 0 ( nurl_sym_len syms __plr ) < ( nurl_sym_depth_of syms __plr ) here ( nurl_str_cat __plr `` ) nm1
         // `how`: `` — a safe lender, nothing to ask; `ask` — ask the callee;
         // else the binding's drop flag — ask the callee where it is down.
         : ~ s how `ask`
@@ -23060,6 +23073,40 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     : s g ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print g ) ( nurl_print ` = xor i1 ` ) ( nurl_print acc ) ( nurl_print `, true\n` )
     ^ g
+}
+
+// The inner join just evaluated as an arm's tail lends nothing of the
+// arm's own bindings: every binding its arms select, and every root a
+// lending arm's call lends out of, is of an outer scope (`true`), else ``
+// (one is the arm's, or nurlc cannot name it).
+@ __arm_join_lends_outer i syms → s {
+    : i here ( nurl_sym_depth syms )
+    : ~ s ids ( nurl_sym_get syms `__last_phi_idents__` )
+    ~ != 0 ( nurl_str_len ids ) {
+        : s w ( str_first_word ids ) = ids ( str_skip_word ids )
+        ? | == 0 ( nurl_sym_len syms w ) >= ( nurl_sym_depth_of syms w ) here { ^ ( nurl_str_cat `` `` ) } {}
+    }
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get syms `__last_join_arm_lends__` ) `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s ent ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : i tb ( nurl_str_find ent `\t` )
+        ? < tb 0 { ^ ( nurl_str_cat `` `` ) } {}
+        : s cn ( str_first_word ( nurl_str_slice ent 0 tb ) )
+        : ~ s roots ( nurl_str_slice ent + tb 1 - - ( nurl_str_len ent ) tb 1 )
+        : ~ i j 0
+        ~ != 0 ( nurl_str_len roots ) {
+            : s r0 ( str_first_word roots ) = roots ( str_skip_word roots )
+            // (A scalar argument lends nothing.)
+            ? ! ( __callee_param_scalar syms cn j ) {
+                : s r ( __path_root_name r0 )
+                ? | ( seq r0 `-` ) | == 0 ( nurl_sym_len syms r ) >= ( nurl_sym_depth_of syms r ) here { ^ ( nurl_str_cat `` `` ) } {}
+            } {}
+            = j + j 1
+        }
+    }
+    ^ ( nurl_str_cat `true` `` )
 }
 
 // Park the arm-local user-drop / struct-field delta (entries not in the
