@@ -31719,7 +31719,18 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // enum: its first payload slot may be a number another value holds too.)
 @ __ud_keyable s vt → b {
     : s ll ( nurl_llty vt )
-    : s t ? != 0 ( nurl_str_starts ll `{ i1, ` ) ( __wrap_part ll 0 ) ( nurl_str_cat vt `` )
+    // (An option or a result by its active side, as mem_ud_ident_key keys
+    // it: either side that keys — a result whose error owns a String beside
+    // a number, `!i String`, or an option of an option, `? ?String`, by its
+    // innermost payload. Asked by its first side only, those had no key, and
+    // `= o ( f o k )` released o's value while the new one was it — agora
+    // #475.)
+    ? != 0 ( nurl_str_starts ll `{ i1, ` ) {
+        : s pt ( __wrap_part_key ll 0 )
+        : s et ( __wrap_part_key ll 1 )
+        ^ | & != 0 ( nurl_str_len pt ) ( __ud_keyable pt ) & != 0 ( nurl_str_len et ) ( __ud_keyable et )
+    } {}
+    : s t ( nurl_str_cat vt `` )
     ? == 0 ( nurl_str_len t ) { ^ F } {}
     // (An enum by its active variant's key, mem_enum_variant_key: one with
     // a variant that owns a buffer.)
@@ -31932,16 +31943,18 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 @ mem_ud_ident_key i cg s vt s val → s {
     : s ll ( nurl_llty vt )
     ? == 0 ( nurl_str_starts ll `{ i1, ` ) { ^ ( mem_identity_key cg vt val ) } {}
-    : s pt ( __wrap_part ll 0 )
-    : s et ( __wrap_part ll 1 )
+    : s pt ( __wrap_part_key ll 0 )
+    : s et ( __wrap_part_key ll 1 )
     : s p ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print p ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
-    : s pk ( mem_identity_key cg pt p )
+    // (A side that is an option or a result itself by its own active side:
+    // `? ?String` by its innermost payload — agora #475.)
+    : s pk ( mem_ud_ident_key cg pt p )
     : ~ s ek ``
     ? != 0 ( nurl_str_len et ) {
         : s e ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print e ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 2\n` )
-        = ek ( mem_identity_key cg et e )
+        = ek ( mem_ud_ident_key cg et e )
     } {}
     ? & == 0 ( nurl_str_len pk ) == 0 ( nurl_str_len ek ) { ^ ( nurl_str_cat `` `` ) } {}
     : s tg ( nurl_cg_reg cg )
@@ -32467,12 +32480,20 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // one path and freshly opened on another).
     ? ! ( __clone_supported rlt g_root_syms ) {
         ? ( __nc_drop_ty rlt ) { ^ T } {}
-        ^ != 0 ( nurl_str_len ( __nc_wrap_payload rlt ) )
+        ? != 0 ( nurl_str_len ( __nc_wrap_payload rlt ) ) { ^ T } {}
+        // (…an option of an option, which has no copy: by what its payload
+        // owns, below — agora #475. Only that: any other wrap with no copy
+        // answers as it did.)
+        ? | == 0 ( nurl_str_starts rlt `{ i1, ` ) == 0 ( nurl_str_starts ( __wrap_part_key rlt 0 ) `{ i1, ` ) { ^ F } {}
     } {}
     ? != 0 ( nurl_str_starts rlt `{ i1, ` ) {
-        : s pt ( __wrap_part rlt 0 )
-        : s et ( __wrap_part rlt 1 )
-        ^ | & != 0 ( nurl_str_len pt ) ( __elem_owns pt g_root_syms ) & != 0 ( nurl_str_len et ) ( __elem_owns et g_root_syms )
+        // (A side that is an option itself — `? ?String` — by what it owns:
+        // __wrap_part_key splits it by nesting. Taken for owning nothing, the
+        // function answered no call, and `= o ( f o 0 )` kept o's old value
+        // back on the run that handed over a fresh one — agora #475.)
+        : s pt ( __wrap_part_key rlt 0 )
+        : s et ( __wrap_part_key rlt 1 )
+        ^ | & != 0 ( nurl_str_len pt ) ? != 0 ( nurl_str_starts pt `{ i1, ` ) ( __is_hown_ty pt ) ( __elem_owns pt g_root_syms ) & != 0 ( nurl_str_len et ) ? != 0 ( nurl_str_starts et `{ i1, ` ) ( __is_hown_ty et ) ( __elem_owns et g_root_syms )
     } {}
     ^ ( __type_needs_drop rlt g_root_syms )
 }
@@ -58066,7 +58087,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // nothing, and `= o ( f1 o )` dropped o's value though the call
         // handed it back — agora #742. The module-end answers decide.)
         : b __ud_clend | g_call_may_lend ( __lend_pending ( nurl_sym_get syms `__last_call_name__` ) )
-        : s __ud_kcond ? ! __ud_kgo `` ? == bck_rhs_tt TT_LPAREN ? & __ud_clend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ? ( seq ( nurl_sym_get2 syms bck_rhs_val `__btail` ) name ) ( nurl_str_cat `1` `` ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
+        : ~ s __ud_kcond ? ! __ud_kgo `` ? == bck_rhs_tt TT_LPAREN ? & __ud_clend ! __ud_may_self ( mem_ud_lend_own_cond syms cg vt ) `` ? & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) ? ( seq ( nurl_sym_get2 syms bck_rhs_val `__btail` ) name ) ( nurl_str_cat `1` `` ) ( mem_ud_hold_lend_cond syms cg bck_rhs_val vt ) ``
         // (Only an owner that may own its value: one bound as a borrow
         // outright (`__sborrow` `1`, a `: ~` lend out of a `vec_get`) owns
         // nothing to keep, and its flag, never set, gates no drop — setting
@@ -58074,6 +58095,20 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // (The binding's flag before the `=` touches it — a self-lend gates
         // it first, __ud_of — for mem_ff_write_back below.)
         : s __ud_of0 ? | == 0 g_ff_any == 0 ( nurl_str_len __ud_ptr ) `` ? != 0 ( nurl_str_len __ud_of ) ( nurl_str_cat __ud_of `` ) ( mem_udrop_flag_get syms cg __ud_ptr )
+        // (…and only on a run the call lent its result: one it handed over
+        // is a value of the caller's own, whatever its key — an Rc share,
+        // `( rc_clone r )`, has the old share's block. Kept as the old one,
+        // the new share was never released — agora #475.)
+        : s __ud_lco ( nurl_sym_get syms `__last_call_own__` )
+        ? & & & != 0 ( nurl_str_len __ud_kcond ) == bck_rhs_tt TT_LPAREN != 0 ( nurl_str_len __ud_lco ) ! ( seq __ud_lco `false` ) {
+            : s __ud_nl ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __ud_nl ) ( nurl_print ` = xor i1 ` ) ( nurl_print ? ( seq __ud_lco `1` ) `true` __ud_lco ) ( nurl_print `, 1\n` )
+            ? ( seq __ud_kcond `1` ) { = __ud_kcond __ud_nl } {
+                : s __ud_kc2 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __ud_kc2 ) ( nurl_print ` = and i1 ` ) ( nurl_print __ud_kcond ) ( nurl_print `, ` ) ( nurl_print __ud_nl ) ( nurl_print `\n` )
+                = __ud_kcond __ud_kc2
+            }
+        } {}
         : ~ s __ud_kept ? != 0 ( nurl_str_len __ud_kcond ) ( mem_udrop_keep_same syms cg __ud_ptr vt store_val __ud_kcond ) ``
         // (…or the value of a cursor over this binding that owns some of
         // its fields on its own — `: ~ P q o  = . q name …  = o q`, or a
@@ -85555,6 +85590,20 @@ unsafe @ __jpb_note i cg s up → v {
     ? < cm 0 ( nurl_str_cat `` `` ) ( nurl_str_slice body + cm 2 - - ( nurl_str_len body ) cm 2 )
     ? >= ( nurl_str_find part ` ` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
     ^ part
+}
+
+// …or, for a key, a part that is an option or a result itself (`{ i1, {
+// i1, %String } }`'s payload): split by nesting, as an aggregate's fields
+// are (agora #475). `` where neither is.
+@ __wrap_part_key s ty i k → s {
+    : s p ( __wrap_part ty k )
+    ? != 0 ( nurl_str_len p ) { ^ p } {}
+    : i n ( nurl_str_len ty )
+    ? | < n 9 == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s fs ( __seplist_rest ( __agg_fields ty ) )
+    : s q ? == k 0 ( seplist_first fs ) ( seplist_first ( __seplist_rest fs ) )
+    ? != 0 ( nurl_str_starts q `{ i1, ` ) { ^ q } {}
+    ^ ( nurl_str_cat `` `` )
 }
 
 // Copy what an option / result carries when `cond` (an i1 or `1`) holds:
