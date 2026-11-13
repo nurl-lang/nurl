@@ -2129,6 +2129,9 @@ unsafe @ agg_field_count i syms s ot → i {
 // of a closure body in it): gen_call's hand-over step for them (agora
 // #778) asks this short list, not the symbol table, per argument.
 : ~ s g_fn_io_names ``
+// …and those of a handle type, which no summary makes a `sink`
+// (__note_ioh_params, agora #776).
+: ~ s g_fn_ioh_names ``
 // The value `?`s whose arms' stores are kept apart (agora #757,
 // __bck_arm_join): a counter for their ids, and how many noted are not
 // written yet — a statement's flush asks the table only when there are some.
@@ -68123,9 +68126,14 @@ unsafe @ str_has_index s list i k → b {
 // function empties where it hands the value on (agora #778), so it is never
 // consumed (bck_record_inferred_sink, agora #776)?
 @ __inout_handle_param i syms s name → b {
-    // (The function's own `inout` parameters are a short list, asked
-    // first: most calls hand on no such name.)
-    ? | == 0 ( nurl_str_len g_fn_io_names ) ! ( str_contains_word g_fn_io_names name ) { ^ F } {}
+    // (The function's own list, made once at its entry: __note_ioh_params.)
+    // (Not inside a closure body: a parameter of its own may have the name.)
+    ? | == 0 ( nurl_str_len g_fn_ioh_names ) != 0 g_bck_closure_depth { ^ F } {}
+    ^ ( str_contains_word g_fn_ioh_names name )
+}
+
+// …asked of the binding itself (__note_ioh_params).
+@ __inout_handle_binding i syms s name → b {
     ? ! ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) { ^ F } {}
     // (Its binding's type is the pointer it is passed as.)
     : s t ( nurl_sym_get syms name )
@@ -75566,13 +75574,18 @@ unsafe @ __alloca_struct_params i syms i cg → v {
 // summary makes a `sink` either: the caller's slot is emptied where one is
 // handed on, and the caller drops its binding as ever (__inout_handle_param,
 // agora #776).
-@ __note_ioh_params i syms s fname → v {
+unsafe @ __note_ioh_params i syms s fname → v {
+    = g_fn_ioh_names ``
+    ? == 0 ( nurl_str_len g_fn_io_names ) { ^ v } {}
     : ~ s names ( nurl_sym_get syms `__fn_param_names__` )
     : ~ i index 0
     : ~ s add ``
     ~ != 0 ( nurl_str_len names ) {
         : s name ( str_first_word names ) = names ( str_skip_word names )
-        ? ( __inout_handle_param syms name ) { = add ? == 0 ( nurl_str_len add ) ( nurl_str_int index ) ( nurl_str_cat3 add ` ` ( nurl_str_int index ) ) } {}
+        ? ( __inout_handle_binding syms name ) {
+            = add ? == 0 ( nurl_str_len add ) ( nurl_str_int index ) ( nurl_str_cat3 add ` ` ( nurl_str_int index ) )
+            = g_fn_ioh_names ? == 0 ( nurl_str_len g_fn_ioh_names ) ( nurl_str_cat name `` ) ( nurl_str_cat3 g_fn_ioh_names ` ` name )
+        } {}
         = index + index 1
     }
     ? == 0 ( nurl_str_len add ) { ^ v } {}
