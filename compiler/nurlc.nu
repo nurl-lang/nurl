@@ -7759,7 +7759,12 @@ unsafe @ __gen_ret i lex i syms i cg → s {
         : s __plk_ty ( nurl_get_last_type )
         ? ( __lent_payload_owns syms ret_first_val __plk_ty ) {
             ? ( __clone_supported __plk_ty syms ) {
-                : s __plk_f ( __payload_keeper_flag syms cg ret_first_val )
+                : s __plk_f0 ( __payload_keeper_flag syms cg ret_first_val )
+                // (A `: ~` alias of the payload also owns a value of its own
+                // where it was given one — its flag: copied there too, as
+                // the alias drops its own on the way out. Agora #814.)
+                : s __plk_m ? != 0 ( nurl_sym_len2 syms ret_first_val `__etake_ofm` ) ( mem_udrop_flag_get syms cg ( mem_udrop_ptr_of syms ret_first_val ) ) ``
+                : s __plk_f ? | == 0 ( nurl_str_len __plk_m ) == 0 ( nurl_str_len __plk_f0 ) ( nurl_str_cat __plk_f0 `` ) ( __or_i1 cg __plk_f0 __plk_m )
                 ? == 0 ( nurl_str_len __plk_f ) {
                     = val ( mem_emit_cloneif cg __plk_ty val `1` )
                     = hbit ( nurl_str_cat `true` `` )
@@ -33785,7 +33790,11 @@ unsafe @ __jt_reg i cg → s {
 // gen_let_or_struct's `__etake_of`), or `name` itself (agora #783).
 @ __pl_alias_of i syms s name → s {
     : s al ( nurl_sym_get2 syms name `__etake_of` )
-    ^ ? == 0 ( nurl_str_len al ) ( nurl_str_cat name `` ) ( nurl_str_cat al `` )
+    ? != 0 ( nurl_str_len al ) { ^ ( nurl_str_cat al `` ) } {}
+    // (…or a `: ~` one, which may be given another value: copied, never
+    // taken — __payload_lent_of_frame, gen_ret's #641 copy; agora #814.)
+    : s am ( nurl_sym_get2 syms name `__etake_ofm` )
+    ^ ? == 0 ( nurl_str_len am ) ( nurl_str_cat name `` ) ( nurl_str_cat am `` )
 }
 
 @ __etake_rec_own i syms s name → s {
@@ -33960,9 +33969,13 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 @ __payload_lent_of_frame i syms s name0 → b {
     // (…under another name too: `: String t s`, agora #783.)
     : s name ( __pl_alias_of syms name0 )
-    ? ! ( seq ( nurl_sym_get2 syms name `__enum_pl` ) `1` ) { ^ F } {}
+    // (A `: ~` alias is copied even out of an enum a take could move it
+    // out of: re-pointed, the take would hand out the wrong value.)
+    : b mal != 0 ( nurl_sym_len2 syms name0 `__etake_ofm` )
+    ? & ! mal ! ( seq ( nurl_sym_get2 syms name `__enum_pl` ) `1` ) { ^ F } {}
     // (Not one a take moves out, its own or its option's.)
-    ? != 0 ( nurl_str_len ( __etake_rec syms name ) ) { ^ F } {}
+    ? & ! mal != 0 ( nurl_str_len ( __etake_rec syms name ) ) { ^ F } {}
+    ? mal { ^ T } {}
     // (A temporary's: the rest of the scope keeps it, gen_match.)
     ? ( seq ( nurl_sym_get2 syms name `__ekeep_tmp` ) `1` ) { ^ T } {}
     : s root ( __payload_root_binding syms name )
@@ -55066,7 +55079,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // #783. Not a `: ~` binding, which may be given another value; nor
         // a view of an enum with a `% Drop` of its own (`__lview`), whose
         // binding is copied on the way out already, #641.)
-        ? | != 0 g_etake_n != 0 g_epl_n { ( nurl_sym_def syms ( nurl_str_cat name `__etake_of` ) ? & & & ! is_mutable ( is_ident_tok bck_rhs_tt ) == 0 ( nurl_sym_len2 syms bck_rhs_val `__lview` ) | != 0 ( nurl_str_len ( __etake_rec syms bck_rhs_val ) ) ( seq ( nurl_sym_get2 syms ( __pl_alias_of syms bck_rhs_val ) `__enum_pl` ) `1` ) ( __pl_alias_of syms bck_rhs_val ) `` ) } {}
+        ? | != 0 g_etake_n != 0 g_epl_n { ( nurl_sym_def syms ( nurl_str_cat name ? is_mutable `__etake_ofm` `__etake_of` ) ? & & ( is_ident_tok bck_rhs_tt ) == 0 ( nurl_sym_len2 syms bck_rhs_val `__lview` ) | != 0 ( nurl_str_len ( __etake_rec syms bck_rhs_val ) ) ( seq ( nurl_sym_get2 syms ( __pl_alias_of syms bck_rhs_val ) `__enum_pl` ) `1` ) ( __pl_alias_of syms bck_rhs_val ) `` ) ( nurl_sym_def syms ( nurl_str_cat name ? is_mutable `__etake_of` `__etake_ofm` ) `` ) } {}
         ? > ( nurl_str_len vt ) 1 { = g_pd_let_mut is_mutable ( __pderiv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) = g_pd_let_mut F ( __clo_deriv_note syms name vt bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) } {}
         ? != 0 ( nurl_sym_len2 syms name `__eaddr` ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__eaddr` ) ( nurl_sym_get2 syms name `__eaddr` ) ) } {}
         // Only mark mutability if explicitly specified with ~
@@ -55489,7 +55502,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
             ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
             // (A payload bound under another name: as above, agora #783.)
-            ? | != 0 g_etake_n != 0 g_epl_n { ( nurl_sym_def syms ( nurl_str_cat name `__etake_of` ) ? & & & ! is_mutable ( is_ident_tok bck_rhs_tt ) == 0 ( nurl_sym_len2 syms bck_rhs_val `__lview` ) | != 0 ( nurl_str_len ( __etake_rec syms bck_rhs_val ) ) ( seq ( nurl_sym_get2 syms ( __pl_alias_of syms bck_rhs_val ) `__enum_pl` ) `1` ) ( __pl_alias_of syms bck_rhs_val ) `` ) } {}
+            ? | != 0 g_etake_n != 0 g_epl_n { ( nurl_sym_def syms ( nurl_str_cat name ? is_mutable `__etake_ofm` `__etake_of` ) ? & & ( is_ident_tok bck_rhs_tt ) == 0 ( nurl_sym_len2 syms bck_rhs_val `__lview` ) | != 0 ( nurl_str_len ( __etake_rec syms bck_rhs_val ) ) ( seq ( nurl_sym_get2 syms ( __pl_alias_of syms bck_rhs_val ) `__enum_pl` ) `1` ) ( __pl_alias_of syms bck_rhs_val ) `` ) ( nurl_sym_def syms ( nurl_str_cat name ? is_mutable `__etake_of` `__etake_ofm` ) `` ) } {}
             ? > ( nurl_str_len ptype ) 1 { = g_pd_let_mut is_mutable ( __pderiv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) = g_pd_let_mut F ( __clo_deriv_note syms name ptype bck_rhs_tt bck_rhs_val g_bck_rhs_lend g_bck_let_sx_last ) } {}
             ? != 0 ( nurl_sym_len2 syms name `__eaddr` ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__eaddr` ) ( nurl_sym_get2 syms name `__eaddr` ) ) } {}
             // Only mark mutability if explicitly specified with ~
