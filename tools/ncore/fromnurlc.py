@@ -12,7 +12,8 @@ checker the way the compiler lowered it.
   v     id  kind  depth  flags  line  block  name  type   (one per variable)
   <statements, one a line>
   endfn
-  ty    type  class  drops  base  A n targ…  F n (name type)…  V n (variant npay ptype…)…
+  ty    type  class  drops[c]  base  A n targ…  F n (name type)…  V n (variant npay ptype…)…
+  virt  callee  impl…
 """
 import os
 import subprocess
@@ -32,7 +33,7 @@ KINDS = {0: "param", 1: "local", 2: "temp", 3: "param"}
 
 
 class TypeInfo:
-    __slots__ = ("name", "cls", "drops", "base", "targs", "fields", "variants")
+    __slots__ = ("name", "cls", "drops", "clone", "base", "targs", "fields", "variants")
 
 
 def nurlc_binary():
@@ -75,6 +76,7 @@ class Reader:
         self.prog.fn_flags = {}        # name -> flags (bit 0: raw memory allowed)
         self.prog.fn_tmpl = {}         # name -> the generic it is an instance of
         self.prog.fn_file = {}
+        self.prog.clonable = set()     # named types nurlc can copy a value of
         self.prog.handle_elem = {}     # a one-payload handle type -> its payload's type
         self.prog.shared = set()       # …the ones whose copies share the payload
         self.prog.virt = {}            # a `dyn` method's virtual callee -> the impls it may run
@@ -114,7 +116,8 @@ class Reader:
 
     def parse_type(self, f):
         t = TypeInfo()
-        t.name, t.cls, t.drops, t.base = f[1], int(f[2]), f[3] == "1", f[4]
+        t.name, t.cls, t.drops, t.base = f[1], int(f[2]), f[3].startswith("1"), f[4]
+        t.clone = f[3].endswith("c")       # a copy of a value of it can be made
         i = 5
         assert f[i] == "A"
         n = int(f[i + 1])
@@ -175,6 +178,10 @@ class Reader:
                 return ("box", self.conv(info.targs[0]))
             if info.base == "Slice" and len(info.targs) == 1:
                 return ("slice", self.conv(info.targs[0]))
+            if getattr(info, "clone", False) and info.base in SHARED_HANDLES:
+                # (a share of the handle; a struct's field-by-field copy is
+                # decided by its fields, as before)
+                self.prog.clonable.add(name)
             if len(info.targs) == 1 and info.base in HANDLES_OF_ONE:
                 # a handle over one payload: `*` is the payload
                 self.prog.handle_elem[name] = self.conv(info.targs[0])

@@ -248,6 +248,8 @@ class FnCheck:
         return out
 
     def kills_paths(self, eff, p, pp, q, qp, k):
+        if k == "share":
+            return False
         if k == "ref" or eff == "end":
             # a pointer to the binding itself: good while the binding is,
             # whatever value it is given - and only that ends with it
@@ -717,6 +719,8 @@ class FnCheck:
         if not bases:
             return held
         drop = set()
+        add = set()
+        shared = getattr(self.prog, "shared", ())
         for base, fname in bases:
             body = self.prog.fns.get(fname)
             if body is None:
@@ -728,9 +732,16 @@ class FnCheck:
                 if l not in self.loans or self.loans[l][1] != "handle":
                     continue
                 i = int(hp[n][1:])
-                if i < len(body.params) and self.T.copyable(body.vars[body.params[i]].ty):
+                cty = body.vars[body.params[i]].ty if i < len(body.params) else None
+                if cty is not None and self.T.copyable(cty):
                     drop.add((hp, l))
-        return frozenset(held) - drop
+                    if cty[0] == "named" and cty[1] in shared:
+                        # its copy of a shared handle is a share: it ends
+                        # with nothing, and still reaches the one payload
+                        sl = ("share", l)
+                        self.loans[sl] = (self.loans[l][0], "share")
+                        add.add((hp, sl))
+        return (frozenset(held) - drop) | add
 
     def closures_in(self, av):
         """The closure bodies a value may run, with where its captures sit."""

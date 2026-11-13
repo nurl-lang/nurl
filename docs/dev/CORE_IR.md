@@ -51,7 +51,8 @@ virt  <virtual callee> <impl function>…
   open where it was made. `value block` is the temporary of the value
   block it was bound in, -1 for none.
 - `ty` lists every type the IR mentions, and the types those hold: the
-  borrow walk's binding class, whether it has something to release, and
+  borrow walk's binding class, whether it has something to release (`1`)
+  and whether a copy of it can be made (`c` after it, `-` if not), and
   its layout.
 - `virt` lists, for each `dyn` method the IR calls (`m__dyn__Trait`), the
   impl functions the call may run.

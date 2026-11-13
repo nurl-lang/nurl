@@ -10302,7 +10302,8 @@ unsafe @ core_note_ty s ty → v {
 
 // Every type the module's IR mentioned, and the types those hold, one a
 // line: `ty`, the type, its binding class (bck_bind_class), whether it has
-// something to release, its base name, then `A` and its type arguments,
+// something to release (`1`) and whether a copy of it can be made (`c`),
+// its base name, then `A` and its type arguments,
 // `F` and its fields (name, type), `V` and its variants (name, payload
 // types). The lists a type has none of are empty.
 unsafe @ core_print_types i syms → v {
@@ -10314,6 +10315,7 @@ unsafe @ core_print_types i syms → v {
         ( __core_o `ty\t` ) ( __core_o ty )
         ( __core_o `\t` ) ( __core_oi ( bck_bind_class ty ) )
         ( __core_o `\t` ) ( __core_o ? ( __type_needs_drop ty syms ) `1` `0` )
+        ( __core_o ? ( __clone_supported ty syms ) `c` `-` )
         : i c0 ( nurl_str_get ty 0 )
         : b ptr == ( nurl_str_get ty - n 1 ) 42
         ( __core_o `\t` )

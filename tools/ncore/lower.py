@@ -144,6 +144,10 @@ class Types:
         k = ty[0]
         if k == "String":
             return True
+        # nurlc's own answer for a named type (a library handle's copy is a
+        # share of it, a struct's a copy of each field)
+        if k == "named" and ty[1] in getattr(self.prog, "clonable", ()):
+            return True
         if k in ("vec", "box", "opt"):
             return self.copyable(ty[1], seen)
         if k == "named" and ty[1] in self.prog.structs and ty[1] not in seen:
