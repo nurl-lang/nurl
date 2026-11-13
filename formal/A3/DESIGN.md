@@ -1038,9 +1038,10 @@ the last cut, below.)
 4. *A closed channel's send* used to free the value with no code
    (`Frees`). `EvalR.chanSendClosed` now moves it into a fresh lock block
    of the element type (`t.undtor = prod (vec s) int`, read off the
-   channel's type) that no share names (`closed_send_parks` proves that
-   much); the marking sweep that ends the step is then to free it, or mark
-   it `dead` for the sending thread to reap (read off the steps): nurlc's
+   channel's type) that no share names (`closed_send_parks` proves the
+   value lands there); the marking sweep that ends the step is then to
+   free it, or mark it `dead` for the sending thread to reap (Agora #805,
+   proved for a destructor element: `TStep.closed_send_reaps`, below): nurlc's
    `chan_send` drops its unqueued (inferred-`sink`) parameter before it
    returns, on the sender. The A3 proofs take it as `locked_new`'s block
    (`CellKeep.moveIn`, `EvalR.ownedId`, `Grows`, `lift` / `restrict` /
@@ -1057,9 +1058,11 @@ through the check-out, the share dropped: `mainV_typed`, `mainV_safe`,
 its state `glueV`'s struct, one value sent and never received, the share
 dropped: `main_typed`, `main_safe`, `main_no_leak`, `main_no_leak_panic`,
 `last_drop_reaps`, `reap_runs_glue`, `closed_send_parks`,
-`A3.chanDtor_claim`). Read off the steps, not proved: that the glue's body
-drains the queue, that the parked block of a closed channel's send is
-marked and reaped by the sender (no typed witness closes a channel), and that a typed check-out body leaves the binding
+`A3.chanDtor_claim`), and (Agora #805) `A3.ChanDtorWitness.mainC` (the
+channel closed, then a destructor value sent: `mainC_typed`, `mainC_safe`,
+`mainC_no_leak`, `mainC_no_leak_panic`, `A3.chanClosed_claim`,
+`A3.chanClosed_reaps`). Read off the steps, not proved: that the glue's body
+drains the queue, and that a typed check-out body leaves the binding
 holding its value; no run is traced, and no receive of a destructor value
 has a witness. Still refused: a channel of destructor values holding a
 share, and the plain `prod (vec D) int` lock payload (no glue).

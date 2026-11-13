@@ -100,6 +100,21 @@ import A3
 #print axioms A3.ChanDtorWitness.reap_runs_glue
 #print axioms A3.ChanDtorWitness.closed_send_parks
 #print axioms A3.chanDtor_claim
+-- Agora #805: every share in a configuration a typed start reaches names a key below `nid`
+-- (A3/Keys.lean), so a closed channel's send parks its value in a block nothing refers to: the
+-- step's marking sweep marks it and the sending thread reaps it; a witness closes a channel, then sends
+#print axioms A3.Step.keys
+#print axioms A3.TStep.keys
+#print axioms A3.CKeys.start
+#print axioms A3.reach_keys
+#print axioms A3.TStep.closed_send_reaps
+#print axioms A3.reach_closed_send_reaps
+#print axioms A3.ChanDtorWitness.mainC_typed
+#print axioms A3.ChanDtorWitness.mainC_safe
+#print axioms A3.ChanDtorWitness.mainC_no_leak
+#print axioms A3.ChanDtorWitness.mainC_no_leak_panic
+#print axioms A3.chanClosed_claim
+#print axioms A3.chanClosed_reaps
 -- Agora #755 item 1: A3's marking sweep and eager reaps (A3/Mark.lean, A3/Reap.lean):
 -- the thread that drops the last share runs the destructor
 #print axioms A3.CParts.sweepD

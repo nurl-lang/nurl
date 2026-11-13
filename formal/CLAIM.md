@@ -256,11 +256,16 @@ the LLVM / C11 memory model rather than redefining it.
       value that owns no destructor value) or mark it `dead` for the
       sending thread to reap (a destructor value: its destructor runs on
       the sender, as nurlc's `chan_send` drops its unqueued
-      inferred-`sink` parameter before it returns). That the parked block
-      is marked and reaped by the sender is read off the steps, not
-      proved: no lemma discharges `Mem.sweepD_marks`'s no-reference
-      premises for the fresh block, and no typed witness closes a
-      channel.
+      inferred-`sink` parameter before it returns). Since Agora #805 that
+      is proved for a destructor element: every share in a configuration
+      a typed start reaches names a key below `nid` (`A3.reach_keys`,
+      kept by every step: `A3.Step.keys`, `A3.TStep.keys`), so nothing
+      refers to the fresh block, and the step's marking sweep marks it and
+      the sending thread's reaps bind the value in a fresh slot of its own,
+      in that configuration step (`A3.TStep.closed_send_reaps`,
+      `A3.reach_closed_send_reaps`). A typed witness closes a channel, then
+      sends a destructor value (`A3.ChanDtorWitness.mainC`,
+      `A3.chanClosed_claim`, `A3.chanClosed_reaps`).
       `chan_recv` moves the front out to the receiver, owned (an option:
       none when closed and empty), and waits while the queue is empty and
       open (`RBlocked`). `chan_try_recv` answers none at once, and
@@ -1062,18 +1067,20 @@ docs/MEMORY.md §7.6) is inside the calculus for every type, views included
   option's glue binds (`letv` refuses a type that holds a destructor
   value), so the receiver's binding runs its destructor. A `chan_send` to
   a closed channel parks the value in a fresh lock block of the element
-  type (`EvalR.chanSendClosed`, `closed_send_parks`), for the marking
-  sweep to mark and the sender to reap (above). Witness:
+  type (`EvalR.chanSendClosed`, `closed_send_parks`), which the marking
+  sweep marks and the sender reaps (Agora #805, `A3.TStep.closed_send_reaps`,
+  above). Witnesses:
   `A3.ChanDtorWitness.main` (a channel of `DT`, one value sent and never
   received, the only share dropped: `main_typed`, `main_safe`,
   `main_no_leak`, `main_no_leak_panic`, `last_drop_reaps`,
   `reap_runs_glue`, `closed_send_parks`; `A3.chanDtor_claim`,
-  `A3.chanDtor_reaps`). Read off the steps, not proved: that the glue's
-  body drains the queue (its typing, `A2.DtorWitness.glueV_body`, binds
-  the queue by `letd` at `vec DT`, whose frame's end is the drain); that
-  the parked block of a closed channel's send is marked and reaped by the
-  sender (`closed_send_parks` proves only that the value lands in a fresh
-  lock block; no typed witness closes a channel); no
+  `A3.chanDtor_reaps`) and (Agora #805) `A3.ChanDtorWitness.mainC` (the
+  channel closed, then a destructor value sent: `mainC_typed`,
+  `mainC_safe`, `mainC_no_leak`, `mainC_no_leak_panic`;
+  `A3.chanClosed_claim`, `A3.chanClosed_reaps`). Read off the steps, not
+  proved: that the glue's body drains the queue (its typing,
+  `A2.DtorWitness.glueV_body`, binds the queue by `letd` at `vec DT`,
+  whose frame's end is the drain); no
   theorem traces the run, and no receive of a destructor value is given a
   witness. Not typed: a channel of destructor values that hold a share
   (`Ty.lkPay`'s `!hasArc`, stricter than nurlc), or of values holding one

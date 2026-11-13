@@ -1,4 +1,5 @@
 import A3.Reap
+import A3.Keys
 
 /-! A3 — Agora #755, a channel of destructor values, and a witness.
 
@@ -41,10 +42,13 @@ A `chan_send` to a closed channel does not queue the value: it moves it
 into a fresh lock block of the element type that no share names
 (`EvalR.chanSendClosed`; `closed_send_parks` proves that much), which the
 marking sweep that ends the step is to mark `dead` for the sending thread
-to reap, as nurlc's `chan_send` drops the value before it returns.  That
-it is marked and reaped is read off the steps (`Mem.sweepD_marks` at a
-lock block, whose no-reference premises are not discharged here for the
-fresh block), not proved, and no typed witness closes a channel.  The receiver's binding of a `chan_recv` of destructor
+to reap, as nurlc's `chan_send` drops the value before it returns.  Agora
+#805 proves it: every share in a configuration a typed start reaches names
+a key below `nid` (`A3.reach_keys`), so nothing refers to the fresh block,
+which the sweep marks and the sender's reaps bind
+(`A3.TStep.closed_send_reaps`); `mainC` closes the channel, then sends a
+destructor value (`mainC_typed`, `A3.chanClosed_claim`,
+`A3.chanClosed_reaps`).  The receiver's binding of a `chan_recv` of destructor
 values is an `Option D`, which only a `letd` with the option's glue binds
 (`letv` refuses a type that holds a destructor value): no witness of a
 receive is given here. -/
@@ -237,9 +241,9 @@ theorem reap_runs_glue {m : Mem} {k : Nat} {q f : Val}
     the value `chan_send` takes from `y` is not queued; the store after the
     send holds it in a fresh lock block of the queue's element type, at the
     key `m1.nid` (no share names it), and the answer is 0.  The marking
-    sweep that ends the step then marks it `dead` when nothing refers to it
-    (`Mem.sweepD_marks` at a lock block, as `last_drop_reaps`), for the
-    sending thread to reap: the destructor runs on the sender, as nurlc's
+    sweep that ends the step then marks it `dead`, for the sending thread to
+    reap (Agora #805: `A3.TStep.closed_send_reaps`, over every share's key
+    being below `nid`): the destructor runs on the sender, as nurlc's
     `chan_send` drops the value it did not queue before it returns. -/
 theorem closed_send_parks {m m' : Mem} {a y : Var} {r : Val} {o : Bool}
     (h : EvalR m (.chanSend a y) (.ok r o m')) {o' : Bool} {k : Nat} {t : Ty} {q : Val} {f : Nat}
@@ -287,5 +291,203 @@ theorem chanDtor_reaps {C : Cfg} {i : Nat} {m' : Mem} {s' : Stmt} {C' : Cfg} (hl
       ∃ (t' : Thread) (x : Var), C'.ths[i]? = some t' ∧ t'.st x = some ⟨true, some p⟩ ∧ m'.nv ≤ x ∧
         Emptied C'.blk k A2.DtorWitness.GVD :=
   TStep.last_drop_reaps (n := 0) (f := 7) (u := A2.DtorWitness.GV) hlen hse (Or.inr rfl) hk hv hb
+
+end A3
+
+/-! ### Agora #805: a closed channel, then a send
+
+`mainC` makes the channel as `main` does, closes it, then sends a destructor
+value: the send does not queue it but parks it in a fresh lock block, which
+the marking sweep that ends the step marks for the sending thread to reap
+(`A3.TStep.closed_send_reaps`, here `A3.chanClosed_reaps`):
+
+```
+: a 1  : b 2  :drop q ( vec_new DT )  : c 0  :drop h ( pair q c )
+: ch ( locked_new h )  : z ( chan_close ch )
+:drop x ( pair a b )  : r ( chan_send ch x )
+``` -/
+
+namespace A3.ChanDtorWitness
+open A2
+open A2.DynCell (NoRootb noRootb_empty)
+open A2.DtorWitness (NoDeps T DT GV GVD EP P prog_ok prog_codes drop_ok gvdrop_ok)
+
+/-- `... : ch ( locked_new h )  : z ( chan_close ch )  :drop x ( pair a b )  : r ( chan_send ch x )` -/
+def mainC : Stmt :=
+  .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2)) (.letd 2 0 (.new DT)
+    (.letv 3 (.expr (.lit 0)) (.letd 4 7 (.pair 2 3)
+      (.letv 5 (.lockNew GVD 4) (.letv 6 (.chanClose 5)
+        (.letd 7 0 (.pair 0 1) (.letv 8 (.chanSend 5 7) .skip))))))))
+
+/-- **Closing a channel of destructor values, then sending one, is typed**
+    (`RhsT.chanClose`, `RhsT.chanSend` over `Ty.ChanOf`). -/
+theorem mainC_typed : ∃ Δ, StmtT P (fun _ => none) [] mainC Δ := by
+  let K1 : Ctx := A2.setE (fun _ => none) 0 intE
+  let K2 : Ctx := A2.setE K1 1 intE
+  have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
+  have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
+  let EN : Entry := ⟨.vec DT, .own, true, [], [], false, false⟩
+  have hnew : RhsT K2 [] (.new DT) EN K2 := RhsT.new (by decide)
+  let EV : Entry := Entry.arm { EN with ty := .vec DT, held := [] }
+  have hEVe : EV = ⟨.vec DT, .own, true, [], [], false, false⟩ := by
+    simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
+  let K3 : Ctx := A2.setE K2 2 EV
+  have hK3 : NoRootb K3 := hK2.setE (by rw [hEVe]; simp)
+  let K4 : Ctx := A2.setE K3 3 intE
+  have hK4 : NoRootb K4 := hK3.setE (by simp [intE])
+  let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { EV with live := false, dtor := false }
+  have hK5 : NoRootb K5 := (hK4.kill _ _ _).setE (by rw [hEVe]; simp)
+  have h42 : K4 2 = some EV := by simp [K4, K3, A2.setE, upd]
+  have hmv : PushArg K4 [] 2 EV EV.ty EV.held K5 :=
+    PushArg.move (Γ := K4) (F := []) (y := 2) (E := EV) (t := EV.ty) rfl (by rw [hEVe]) (by simp)
+      (hK4.noPin _) (DtorSafe.of_none (fun v E h => (hK4 v E h).2.1) _ _ _)
+  have h53 : K5 3 = some intE := by
+    simp [K5, K4, A2.setE, upd, A2.kill, killE, hits, intE, Entry.vdeps, Mode.ownSlot]
+  let EG0 : Entry := ⟨.prod EV.ty intE.ty, .own, true, [], EV.held ++ [], false, false⟩
+  have hgp : RhsT K4 [] (.pair 2 3) EG0 K5 :=
+    RhsT.pair (Ey := EV) (Ez := intE) h42 (by rw [hEVe]) hmv h53 rfl PushArg.int
+      (by simp [intE, Mode.ownSlot])
+  have hEG0 : EG0 = ⟨GV, .own, true, [], [], false, false⟩ := by simp [EG0, hEVe, intE, GV]
+  let EGa : Entry := Entry.arm { EG0 with ty := GVD, held := EG0.held }
+  have hEGa : EGa = ⟨GVD, .own, true, [], [], false, false⟩ := by
+    simp [EGa, hEG0, Entry.arm, GVD, GV, DT, T, Ty.dtorViews, Ty.holdsView]
+  let K6 : Ctx := A2.setE K5 4 EGa
+  have hK6 : NoRootb K6 := hK5.setE (by rw [hEGa]; simp)
+  let K6' : Ctx := A2.setE (kill .replace false 4 K6) 4 { EGa with live := false, dtor := false }
+  have hK6' : NoRootb K6' := (hK6.kill _ _ _).setE (by rw [hEGa]; simp)
+  have hmv4 : PushArg K6 [] 4 EGa GVD EGa.held K6' :=
+    PushArg.move (Γ := K6) (F := []) (y := 4) (E := EGa) (t := GVD) rfl (by rw [hEGa]) (by simp)
+      (hK6.noPin _) (DtorSafe.of_none (fun v E h => (hK6 v E h).2.1) _ _ _)
+  have hlnew : RhsT K6 [] (.lockNew GVD 4) EC K6' :=
+    RhsT.lockNew (by simp [K6, A2.setE]) (by rw [hEGa]) (by rw [hEGa]) (by decide)
+      ⟨by simp [GVD, GV, DT, T, Ty.holdsView], by simp [GVD, GV, DT, T, Ty.hasFn]⟩ hmv4
+  let K7 : Ctx := A2.setE K6' 5 EC
+  have hK7 : NoRootb K7 := hK6'.setE (by simp [EC])
+  -- `chan_close ch`
+  have hclose : RhsT K7 [] (.chanClose 5) intE K7 :=
+    RhsT.chanClose (E := EC) (s := DT) (by simp [K7, A2.setE]) rfl chan_of
+  let K7c : Ctx := A2.setE K7 6 intE
+  have hK7c : NoRootb K7c := hK7.setE (by simp [intE])
+  -- `:drop x ( pair a b )`
+  have hpair : RhsT K7c [] (.pair 0 1) EP K7c :=
+    RhsT.pair (Ey := intE) (Ez := intE)
+      (by simp [K7c, K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill, killE, hits, intE, Entry.vdeps,
+        Mode.ownSlot])
+      rfl PushArg.int
+      (by simp [K7c, K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill, killE, hits, intE, Entry.vdeps,
+        Mode.ownSlot])
+      rfl PushArg.int (by simp [intE, Mode.ownSlot])
+  let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+    simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
+  let K8 : Ctx := A2.setE K7c 7 ED
+  have hK8 : NoRootb K8 := hK7c.setE (by rw [hEDe]; simp)
+  let K8' : Ctx := A2.setE (kill .replace false 7 K8) 7 { ED with live := false, dtor := false }
+  have hK8' : NoRootb K8' := (hK8.kill _ _ _).setE (by rw [hEDe]; simp)
+  have hmv7 : PushArg K8 [] 7 ED DT ED.held K8' :=
+    PushArg.move (Γ := K8) (F := []) (y := 7) (E := ED) (t := DT) rfl (by rw [hEDe]) (by simp)
+      (hK8.noPin _) (DtorSafe.of_none (fun v E h => (hK8 v E h).2.1) _ _ _)
+  have hsend : RhsT K8 [] (.chanSend 5 7) intE K8' :=
+    RhsT.chanSend (Ea := EC) (s := DT)
+      (by simp [K8, K7c, K7, A2.setE, upd]) rfl chan_of (by simp [K8, A2.setE]) (by rw [hEDe]) (by rw [hEDe])
+      hmv7
+  let K9 : Ctx := A2.setE K8' 8 intE
+  have hK9 : NoRootb K9 := hK8'.setE (by simp [intE])
+  have hr := StmtT.letv (P := P) (x := 8) (r := .chanSend 5 7) (E := intE) (F := []) (Γ := K8) (Γ1 := K8')
+    (s := .skip) rfl (by simp [K8, K7c, K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp)
+    hsend StmtT.skip (hK9.endOK _)
+  have hx := StmtT.letd (P := P) (Γ := K7c) (Γ1 := K7c) (F := []) (x := 7) (f := 0) (r := .pair 0 1)
+    (s := .letv 8 (.chanSend 5 7) .skip) (E := EP) (t := T) (H := []) rfl
+    (by simp [K7c, K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hpair rfl
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hr
+    ((hK9.exitScope 8).endOK _)
+  have hz := StmtT.letv (P := P) (x := 6) (r := .chanClose 5) (E := intE) (F := []) (Γ := K7) (Γ1 := K7)
+    rfl (by simp [K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hclose hx
+    (((hK9.exitScope 8).exitScope 7).endOK _) (fun _ => rfl)
+  have hc := StmtT.letv (P := P) (x := 5) (r := .lockNew GVD 4) (E := EC) (F := []) (Γ := K6) (Γ1 := K6')
+    rfl (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hlnew hz
+    ((((hK9.exitScope 8).exitScope 7).exitScope 6).endOK _) (fun _ => rfl)
+  have hg := StmtT.letd (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 4) (f := 7) (r := .pair 2 3)
+    (s := .letv 5 (.lockNew GVD 4) (.letv 6 (.chanClose 5)
+      (.letd 7 0 (.pair 0 1) (.letv 8 (.chanSend 5 7) .skip))))
+    (E := EG0) (t := GV) (H := EG0.held) (τ := GVD) rfl
+    (by simp [K4, K3, K2, K1, A2.setE, upd]) (by simp) hgp rfl
+    (Or.inl ⟨rfl, Or.inl (by rw [hEG0])⟩) rfl rfl (letd_fn gvdrop_ok) (HeldUp.refl _ _) hc
+    (((((hK9.exitScope 8).exitScope 7).exitScope 6).exitScope 5).endOK _)
+  have h3 := StmtT.letv (P := P) (x := 3) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
+    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hg
+    ((((((hK9.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).endOK _)
+  have hdv := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
+    (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K2, K1, A2.setE, upd])
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) h3
+    (((((((hK9.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).endOK _)
+  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hdv
+    ((((((((hK9.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).exitScope 2).endOK _)
+  exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (((((((((hK9.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
+
+theorem mainC_codes : mainC.codesOK P := by
+  simp only [mainC, Stmt.codesOK, Rhs.codeOK]
+  exact ⟨trivial, trivial, trivial, trivial, trivial, chanNew_codeOK (n := 0) gvdrop_ok drop_ok, trivial,
+    trivial, trivial, trivial⟩
+
+/-- **Every run of it is safe** ... -/
+theorem mainC_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 9) mainC (.ok m' s')) :
+    ¬ Stuck P m' s' := by
+  obtain ⟨Δ, ht⟩ := mainC_typed
+  exact memory_safe prog_ok prog_codes ht rfl mainC_codes (by decide) hr
+
+/-- **... and leaks nothing**, the parked value's block too ... -/
+theorem mainC_no_leak {m' : Mem} (hr : Steps P (emptyMem 9) mainC (.ok m' .skip)) :
+    ∀ i, m'.alloc i = false := by
+  obtain ⟨Δ, ht⟩ := mainC_typed
+  exact no_leak_end prog_ok prog_codes ht rfl mainC_codes (by decide) hr
+
+/-- **... and on a panic either.** -/
+theorem mainC_no_leak_panic {m' : Mem} (hr : Steps P (emptyMem 9) mainC (.panic m')) :
+    ∀ i, m'.alloc i = false := by
+  obtain ⟨Δ, ht⟩ := mainC_typed
+  exact no_leak_panic prog_ok prog_codes ht rfl mainC_codes (by decide) hr
+
+end A3.ChanDtorWitness
+
+namespace A3
+open A2
+
+/-- Agora #805, the closed channel's witness (`A3.ChanDtorWitness.mainC`):
+    safe, race-free and leak-free on every interleaving. -/
+theorem chanClosed_claim :
+    MemorySafe A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty ChanDtorWitness.mainC 9) ∧
+      RaceFree A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty ChanDtorWitness.mainC 9) ∧
+      NoLeak A2.DtorWitness.P (fun _ => false) (Cfg.start Globs.empty ChanDtorWitness.mainC 9) := by
+  obtain ⟨Δ, ht⟩ := ChanDtorWitness.mainC_typed
+  exact claim _ _ Globs.empty _ Δ 9 A2.DtorWitness.prog_ok A2.DtorWitness.prog_codes
+    (fun _ h => by cases h) GlobsOK.empty ht rfl ChanDtorWitness.mainC_codes (by decide)
+
+/-- ... and its send to the closed channel (`A3.TStep.closed_send_reaps` at
+    the witness's channel, a channel of `DT` under `glueV`'s struct): on
+    every configuration the run reaches, when a thread's next step is a
+    `letv` of `chan_send` whose channel is closed, the value goes into a
+    fresh lock block at `C.nid`, the marking sweep that ends the step marks
+    it `dead`, and in that configuration step's result a fresh slot of the
+    sending thread owns it, reaped (in a frame `scopeD _ 0 skip` whose end
+    calls `dfn`), the block emptied or gone. -/
+theorem chanClosed_reaps {C : Cfg} (hr : Reach A2.DtorWitness.P (fun _ => false)
+      (Cfg.start Globs.empty ChanDtorWitness.mainC 9) C) {i : Nat}
+    {t : Thread} {K : Stmt → Stmt} {x a y : Var} {k : Stmt} (hi : C.ths[i]? = some t)
+    (hR : Redex t.s K (.letv x (.chanSend a y) k)) (hx : t.st x = none)
+    {r : Val} {o : Bool} {m1 : Mem} (he : EvalR (C.view t) (.chanSend a y) (.ok r o m1))
+    {o' : Bool} {kc : Nat} {q : Val} {f : Nat} (ha : t.st a = some ⟨o', some (.lk kc)⟩)
+    (hc : C.blk kc = some ⟨A2.DtorWitness.GVD, .lock, some (.pair q (.int (f + 1)))⟩)
+    {C' : Cfg} (hse : CSettle A2.DtorWitness.P i (C.put i (m1.set x ⟨o, some r⟩) (K (.scope x k))).sweepD C') :
+    TStep A2.DtorWitness.P (fun _ => false) C C' ∧ r = .int 0 ∧ ∃ v m0, TakeVal (C.view t) y v m0 ∧
+      (C.put i (m1.set x ⟨o, some r⟩) (K (.scope x k))).sweepD.blk C.nid =
+        some ⟨A2.DtorWitness.DT, .dead, some v⟩ ∧
+      ∃ (t' : Thread) (z : Var), C'.ths[i]? = some t' ∧ t'.st z = some ⟨true, some v⟩ ∧ t.nv ≤ z ∧
+        Emptied C'.blk C.nid A2.DtorWitness.DT :=
+  reach_closed_send_reaps (n := 0) (g := 0) (u := A2.DtorWitness.T) GlobsOK.empty hr hi hR
+    (fun ⟨_, _, _, _, _, _, h⟩ => by cases h) hx he ha hc rfl hse
 
 end A3
