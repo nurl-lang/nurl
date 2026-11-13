@@ -785,8 +785,10 @@ a cell whose payload one scope at a time checks out.
   - Otherwise `Release.drop` drops `x`'s slot as a scope's end does. With
     `StmtT.withLock`'s premises a typed program's normal-path end is always
     a `put` (the block outlives the body, and `x` holds a `t` there); `drop`
-    keeps the rule total. That the end is a `put` is argued below, not
-    proven as a lemma.
+    keeps the rule total. That the end is a `put` is argued below; Agora
+    #808 proves it for a payload that holds a destructor value on a reached
+    configuration, given the block is still there
+    (`A3.reach_scopeL_end_gives_back`).
   - `Release` is total by construction, so no invariant has to say that the
     frame's `x` holds what was checked out of block `k`. Such an invariant
     (`LockOK`) was tried and dropped: keeping it at `scopeLIn` needs facts
@@ -902,8 +904,10 @@ stated.
 
 **Not proven here.**
 - deadlock freedom;
-- that a typed program's lock scope ends in a `put`, as a lemma (it would
-  need an invariant tying each `scopeL k` frame to block `k`);
+- that a typed program's lock scope ends in a `put`, as a lemma (Agora
+  #808's `A3.LockInv` ties each `scopeL k` frame to block `k`, and
+  `reach_scopeL_end_gives_back` proves it for a destructor payload, given
+  the block is still there; that it is, is not proved);
 - shares in a lock's payload (A3.2's second cut: `arc` and lock shares, not
   cell shares);
 - the probes h267 h358;
@@ -948,9 +952,9 @@ settled:
    `scopeL_typed_end_gives_back`), and at every panic point a `t`, given
    back, or nothing, a body that moved it out having handed it to an owner
    that runs its destructor (A2-drop's binders), the release freeing nothing
-   (`scopeL_typed_panic`). Not proved: that the block is checked out there
-   (as for every `scopeL`, above: no invariant ties a frame to its block;
-   Agora #808). `RwLocked D`'s read guard is refused
+   (`scopeL_typed_panic`). Agora #808: that the block is checked out there
+   is proved on every reached configuration, given the block is still there
+   (`A3/LockExcl.lean`, below); that it stays there is not. `RwLocked D`'s read guard is refused
    (`RhsT.rwRead` asks `dtorFree`: a view's payload is a copy, which owns
    nothing), and so is `locked_set` of one (its body assigns `x`).
 2. *The last share.* The marking sweep (`Mem.sweepD`, Agora #610) admits a
@@ -969,16 +973,51 @@ settled:
    `letd`'s): `withLock` keeps its root share alive through the body. A
    taken block (`⟨t, .lock, none⟩`) is freed with no code and the
    destructor runs once, on the taker: the model's semantics and the
-   intended one. nurlc diverges today (Agora #795, open,
-   `tools/fuzz/holes/open/t795.md`): `locked_take` leaves zero bytes that
-   nothing marks taken, and the last `Locked_drop` runs the destructor
-   again on them (`rc_take` / `rc_restore` share the design). The runtime
-   must match the model. `scopeL_end_gives_back` and
+   intended one. nurlc matches it since Agora #795 (fixed by
+   github#1832): `locked_take` still leaves zero bytes, but the last
+   `Locked_drop` asks the lock whether its value is out (`nurl_lk_taken`)
+   and then releases only the latch, and `Rc_drop` and the runtime's
+   release paths skip a value whose `RC_TAKEN` bit is set (`rc_take` /
+   `rc_restore` share the design). Before the fix the last `Locked_drop`
+   ran the destructor again on the zeros. `scopeL_end_gives_back` and
    `scopeL_panic_gives_back` are lemmas of stores: `x` owning a `t` and
    the block checked out are their hypotheses. Agora #805 discharges the
    first for a typed frame (`scopeL_typed_end_gives_back`,
-   `scopeL_typed_panic`); the second is read off the rules for a typed
-   program, as for every `scopeL` (Agora #808).
+   `scopeL_typed_panic`); Agora #808 the second on every reached
+   configuration, but for the block being there:
+   - *The invariant* (`A3.LockInv`, `reach_lockInv`): over the threads'
+     frames (`Stmt.lfr`, `lkeys` with the payload types) and the shared
+     blocks, each frame's block is a lock block of the frame's type, or
+     gone, at a key below `nid`; a frame of a payload that is not
+     `dtorFree` has its block checked out (`⟨t, .lock, none⟩`), and no
+     other frame on any thread is of that block (`one`, `nd`).
+   - *Kept by a thread's step* (`LockInv.put`): a step's frames are its
+     statement's, or the inner ones of them, or those and one new one at
+     the innermost end, a `withLock`'s, of a block whose payload it took
+     out (`Step.lfr`; the code a step brings in is source, inside no
+     frame, by the typing and `ProgOK`); a checked-out block is left as it
+     was but by its own frame's end (`Step.stay`, `EvalR.stay`: every
+     operation that writes a lock block asks its payload in, a new block's
+     key is fresh, and `locked_restore`, which asks it out, is of a
+     `dtorFree` payload, `RhsT.lockRestore`); so a new frame's block was no
+     frame's of a payload that is not `dtorFree`.  The marking sweep keeps
+     a frame's block or removes it, and marks none (an orphan to be holds
+     its payload, of a destructor type, `Cand`); the reaps are steps
+     (`LockInv.settle`); a spawn and a failed spawn leave the frames where
+     they were (`LockInv.spawn`, `spawnFail`).
+   - *So*: A3.2's mutual exclusion (`reach_lock_excl`: two frames of one
+     such block are one frame, `Redex.frame_unique`), the block's state at a
+     frame (`reach_frame_out`), and the give-back lemmas over a `Reach`
+     with only `C.blk k ≠ none` left of the block's hypothesis
+     (`reach_scopeL_end_gives_back`, `reach_scopeL_panic`; the body's
+     unwinding leaves the block checked out, its frame being its only one).
+   - *Not proved*: that the block is never removed while its frame is out
+     (the sweep removes an unreached lock block whose payload is out). The
+     check-out's root share outlives the body (`withLock`'s premises), but
+     `scopeL k t x s` keeps no record of the binding the share is in, so
+     the invariant cannot follow it; doing so needs a step's slots kept
+     for a name the body does not name, through calls that hand over
+     by-name captures (`CapsOK`).
 3. *A3.* Lock blocks are shared. Since item 1 of Agora #755 (below) the
    configuration's marking sweep marks an orphaned `Locked D`'s block and
    the thread whose step dropped the last share reaps it
@@ -1001,7 +1040,7 @@ value, updated by `locked_apply` with a closure that takes it `inout`
 the same rules, with no witness program; that a real library handle with
 such a state behaves as the model's cell is an assumption about the
 library (trusted base, phase B), not a result: the handles check their
-state out with `rc_take` / `rc_restore`, which meet Agora #795. Still refused: a payload that holds a
+state out with `rc_take` / `rc_restore`, whose taken state the last handle's drop skips since Agora #795 (github#1832). Still refused: a payload that holds a
 share and a destructor value in a field of a type of no destructor of its
 own. (A `Vec` of destructor values and a channel of them are typed since
 the last cut, below.)
@@ -1078,14 +1117,16 @@ elements' destructor, `s = Ty.nest n (.dtor f u)`, whose frame `scopeD w f`
 ends, the queue non-empty, by one `Step.scopeDDrain` and nothing else,
 element 0 first; index order is that step iterated, which no theorem does;
 `glueV_drains` at the witness, `f = 0`). Read off the steps, not proved: the
-reap's call into the glue's body, and that the check-out's block is checked
-out where the body ends or panics (Agora #808); no run is traced. Agora #805: a receive of a destructor
+reap's call into the glue's body; that the check-out's block is checked out
+where the body ends or panics is proved on a reached configuration given the
+block is still there (Agora #808, `A3.reach_frame_out`); no run is traced. Agora #805: a receive of a destructor
 value has a witness, `A3.ChanDtorWitness.mainR` (the option `chan_recv` hands
 out bound by `letd` under its glue `ofnR`, `EnumGlueOK` over `sum int DT`:
 `mainR_typed`, `mainR_safe`, `mainR_no_leak`, `mainR_no_leak_panic`,
 `A3.chanRecv_claim`, `recv_runs_glue`, `ofnR_takes_payload`). (The check-out
 body's half is proved since Agora #805 for a typed frame, `scopeL_end_owns`,
-`scopeL_typed_panic`; the block's half is not: Agora #808.) Still refused: a channel of destructor values holding a
+`scopeL_typed_panic`; the block's half since Agora #808 on a reached
+configuration, given the block is still there.) Still refused: a channel of destructor values holding a
 share, and the plain `prod (vec D) int` lock payload (no glue).
 
 ### Agora #755 item 1: the destructor on A3's threads
@@ -1963,8 +2004,10 @@ where the call places it).
 - *`CellOp`'s second case* asks the thread inside a check-out to hold a
   share of the cell. In a typed program it always does (the share the
   check-out is through stays in `a` for the whole body, by `withLock`'s
-  premises). That is argued, not proven as a lemma (as A3.2's "a typed
-  lock scope ends in a `put`").
+  premises). That is argued, not proven as a lemma; it is the same fact as
+  the lock check-out's "the block stays while its frame is out", left by
+  Agora #808, and one lemma (a step keeps the slot of a root the body does
+  not name) closes both.
 
 **Probes** (`tools/fuzz/holes/*.nu`). In the model, a thread's closure is
 the spawned function, and its captures are `sink` arguments.
@@ -3827,8 +3870,9 @@ run of the model.
   give-back's own check passes in every reachable configuration. The value
   passed `locked_new`'s check, and since then the thread's slots took only
   the box's share and the lock's old value, whose cells are in no other
-  place (`CellInv.one`). This is argued, as A3.2 argues that a lock scope
-  ends in a `put`, not proven as a lemma.
+  place (`CellInv.one`). This is argued, not proven as a lemma (A3.2's
+  lock scope ending in a `put` is proved since Agora #805 / #808, given the
+  block is still there).
 - `rw_set` is the same form. The runtime's `rw_set` checks nothing, and
   the model's `RwLocked` checks every value going in (A3.5's second cut).
   The check finds nothing on a payload that holds no library handle, which

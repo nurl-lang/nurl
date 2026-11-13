@@ -1023,9 +1023,14 @@ each one shrinks `CLAIM.md`'s exception:
         proved for a typed frame (`StmtT.scopeL` asks, for a destructor
         payload, `x` an owner live at the body's end, as `withLock` does:
         `A3.LockDtorWitness.scopeL_end_owns`, `scopeL_typed_end_gives_back`,
-        `scopeL_typed_panic`); that the block is then checked out is read off
-        the rules, not proved (no invariant ties a frame to its block;
-        Agora #808).
+        `scopeL_typed_panic`); that the block is then checked out is proved
+        on every reached configuration given the block is still there
+        (Agora #808: `A3.LockInv`, `A3.reach_lockInv`, `A3.reach_frame_out`,
+        A3.2's mutual exclusion `A3.reach_lock_excl`, and the give-back
+        lemmas over a `Reach`, `A3.reach_scopeL_end_gives_back`,
+        `A3.reach_scopeL_panic`); that the block is not removed while its
+        frame is out is not proved (the frame keeps no record of the
+        binding its root share is in).
         `x` is still `lockE t` (no `dtor`, no `dbind`): nothing reads those
         flags of a check-out binding, as it views nothing and runs nothing.
      2. *The orphaned lock block.* `Cand` / `CandPay` / `TopPay` admit a
@@ -1054,11 +1059,13 @@ each one shrinks `CLAIM.md`'s exception:
      block is a lock block), with no witness program; that a real handle
      with such a state behaves as the model's cell is an assumption about
      the library (trusted base, phase B): the handles check their state
-     out with `rc_take` / `rc_restore`, which meet Agora #795. A taken
-     block is freed with no code, the destructor run once on the taker:
-     the model's semantics, the intended one; nurlc's `locked_take`
-     leaves zeros that its last `Locked_drop` drops again (Agora #795,
-     open, `tools/fuzz/holes/open/t795.md`): the runtime must match.
+     out with `rc_take` / `rc_restore`, whose taken state the last
+     handle's drop skips (Agora #795, github#1832). A taken block is
+     freed with no code, the destructor run once on the taker: the
+     model's semantics, the intended one, and nurlc's since Agora #795
+     (fixed by github#1832): `locked_take` still leaves zeros, but the
+     last `Locked_drop` asks `nurl_lk_taken` and then releases only the
+     latch (before the fix it dropped the zeros again).
    - **Built: `Locked (Vec D)` and a channel of `D`** (Agora #755's last
      cut, A2's runs and A3's threads; `A3/DESIGN.md`'s A3.2 and A3.4
      sections have the design).
