@@ -19046,6 +19046,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // argument was not one) — the returned-handle propagation below
     // maps the callee's ret-alias indices back to caller bindings.
     : ~ s arg_idents ``
+    // (…and the bindings a join argument's arms select, published with the
+    // call: `__last_call_join_phi__`, agora #775.)
+    : ~ s __call_jphi ``
     // …and the positions of the arguments that are no bare name but may
     // still lend what they read: a field, a join, a call that may lend —
     // not a literal or a fresh value (agora #412).
@@ -19676,6 +19679,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // over, as `( eat p )` takes it — agora #567.)
             = arg_join_io & | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( __all_inout syms ( nurl_sym_get syms `__last_phi_idents__` ) )
             = arg_join_ioh ? arg_join_io ( __join_io_handle syms ( nurl_sym_get syms `__last_phi_idents__` ) ) ``
+            ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST { = __call_jphi ( __word_union __call_jphi ( nurl_sym_get syms `__last_phi_idents__` ) ) } {}
             = arg_lent ( mem_lent_cond syms cg at arg_eff_tt bck_arg_val )
             // (A call that may lend its result — by name, as a view, or on
             // some paths — for a value no copy can stand in for, h228.)
@@ -22309,6 +22313,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // generic instance compiled after this caller), the arguments by
     // position and the callee to ask at module end (mem_ret_local_lend).
     ( nurl_sym_def syms `__last_call_args__` arg_idents )
+    ( nurl_sym_def syms `__last_call_join_phi__` __call_jphi )
     // …and its source expression: the callee's summaries say which
     // arguments its result points into or lends (a callee without one —
     // a foreign function, a builtin — hands back a value of its own; a
@@ -23037,6 +23042,12 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // `how`: `` — a safe lender, nothing to ask; `ask` — ask the callee;
         // else the binding's drop flag — ask the callee where it is down.
         : ~ s how `ask`
+        // (A join argument — the call's only unnamed one — whose arms select
+        // only bindings of outer scopes lends none of the arm's own:
+        // `__last_call_join_phi__`, agora #775.)
+        ? & ( seq nm `-` ) == 1 ( __word_count_of ( nurl_sym_get syms `__last_call_args__` ) `-` ) {
+            ? ( __words_outer syms ( nurl_sym_get syms `__last_call_join_phi__` ) here ) { = how `` } {}
+        } {}
         ? & & ! ( seq nm `-` ) != 0 ( nurl_sym_len syms nm ) < ( nurl_sym_depth_of syms nm ) here {
             ? == 0 ( nurl_sym_len2 syms nm `__mutable` ) { = how `` } {
                 : s up ( mem_udrop_ptr_of syms nm )
@@ -23197,10 +23208,16 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     : ~ s rest ? != 0 ( nurl_str_len g_call_roots ) ( nurl_str_cat g_call_roots `` ) ( nurl_sym_get syms `__last_call_args__` )
     : ~ s mine ``
     : ~ b any F
+    // (An argument nurlc cannot name that is a join — the call's only such
+    // one, so the join just published is it — stands for the bindings its
+    // arms select: one of them the arm's own, the argument is copied where
+    // the callee lends it, as that binding by name is; agora #775.)
+    : s __jarg ? == 1 ( __word_count_of rest `-` ) ( __arm_own_phi syms old_user ) ``
     ~ != 0 ( nurl_str_len rest ) {
         // (A field path, `lo.name`, is its root binding's: a field of one of
         // the arm's own is the arm's own too; agora #662.)
-        : s nm0 ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s nm0x ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s nm0 ? & ( seq nm0x `-` ) != 0 ( nurl_str_len __jarg ) ( nurl_str_cat __jarg `` ) nm0x
         : s nm ? ( seq nm0 `-` ) nm0 ( __path_root_name nm0 )
         : s up ? ( seq nm `-` ) `` ( mem_udrop_ptr_of syms nm )
         // (…or a binding of an outer scope that may hold a lend of one of
@@ -23240,6 +23257,42 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         } {}
     }
     ^ any
+}
+
+// Are the words of `ws` (at least one) all bindings of a scope outside
+// depth `here`?
+@ __words_outer i syms s ws i here → b {
+    : ~ s rest ( nurl_str_cat ws `` )
+    ? == 0 ( nurl_str_len rest ) { ^ F } {}
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? | == 0 ( nurl_sym_len syms w ) >= ( nurl_sym_depth_of syms w ) here { ^ F } {}
+    }
+    ^ T
+}
+
+// How many words of `ws` are `w`.
+@ __word_count_of s ws s w → i {
+    : ~ s rest ( nurl_str_cat ws `` )
+    : ~ i n 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s x ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq x w ) { = n + n 1 } {}
+    }
+    ^ n
+}
+
+// The first binding a join argument of the call just made selects
+// (`__last_call_join_phi__`, gen_call)
+// that is registered for its drop since `old_user` — an arm's own — or ``.
+@ __arm_own_phi i syms s old_user → s {
+    : ~ s ids ( nurl_sym_get syms `__last_call_join_phi__` )
+    ~ != 0 ( nurl_str_len ids ) {
+        : s w ( str_first_word ids ) = ids ( str_skip_word ids )
+        : s up ( mem_udrop_ptr_of syms w )
+        ? & != 0 ( nurl_str_len up ) ! ( str_contains_word old_user up ) { ^ ( nurl_str_cat w `` ) } {}
+    }
+    ^ ( nurl_str_cat `` `` )
 }
 
 // Does binding `nm` (of any scope) hold, by its lend roots (`__pljr`), a
