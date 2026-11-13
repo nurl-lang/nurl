@@ -35695,9 +35695,28 @@ unsafe @ __clo_cap_marks i syms s caps i line → v {
     : ~ s rest ( nurl_str_cat g_clo_caps_now `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s c ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? ( bck_is_heap_lty ( nurl_llty ( nurl_sym_get syms c ) ) ) {
-            : s e ( nurl_str_cat3 c `:` `@opaqueclo:0` )
-            = effs ? == 0 ( nurl_str_len effs ) ( nurl_str_cat e `` ) ( nurl_str_cat3 effs ` ` e )
+        : s clt ( nurl_llty ( nurl_sym_get syms c ) )
+        // (…and a capture that can be given a new value — `: ~`, an
+        // `inout` parameter — may be given one there: a closure that
+        // captured it by reference can be the one passed. Its borrows end
+        // as at a closure that runs here and assigns it; ending its views
+        // left an element read out of it, or what was read out of an Arc's
+        // payload, under a value released — agora #644.)
+        // (A capture that is the standard library's Arc: its payload is
+        // frozen — nothing run here moves its buffer — so an immutable one
+        // is left be: a closure lent out of it, `: ( @ v i ) run ( arc_get
+        // … mine )`, could be run only once.)
+        : b carc & != 0 ( nurl_str_starts clt `%Arc__` ) ( __ty_std_named clt `Arc` )
+        : b cmut | ( seq ( nurl_sym_get2 syms c `__mutable` ) `1` ) ( seq ( nurl_sym_get2 syms c `__inout` ) `1` )
+        ? ( bck_is_heap_lty clt ) {
+            ? ! carc {
+                : s e ( nurl_str_cat3 c `:` `@opaqueclo:0` )
+                = effs ? == 0 ( nurl_str_len effs ) ( nurl_str_cat e `` ) ( nurl_str_cat3 effs ` ` e )
+            } {}
+            ? cmut {
+                : s ea ( nurl_str_cat3 c `:` `@assign:0` )
+                = effs ? == 0 ( nurl_str_len effs ) ( nurl_str_cat ea `` ) ( nurl_str_cat3 effs ` ` ea )
+            } {}
         } {}
     }
     ? != 0 ( nurl_str_len effs ) { ( bck_closure_effects_run syms effs line ) } {}
