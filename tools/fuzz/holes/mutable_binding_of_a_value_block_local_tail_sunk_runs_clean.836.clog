@@ -1,0 +1,4 @@
+[1/2] /home/user/nurl664/tools/fuzz/holes/mutable_binding_of_a_value_block_local_tail_sunk_runs_clean.nu → /home/user/nurl664/tools/fuzz/holes/mutable_binding_of_a_value_block_local_tail_sunk_runs_clean.836.ll
+[2/2] /home/user/nurl664/tools/fuzz/holes/mutable_binding_of_a_value_block_local_tail_sunk_runs_clean.836.ll → /home/user/nurl664/tools/fuzz/holes/mutable_binding_of_a_value_block_local_tail_sunk_runs_clean.836  (-O1 -fsanitize=address,undefined -fsanitize-address-use-after-scope -fno-omit-frame-pointer -fno-sanitize-recover=all  -lsqlite3)
+
+Done: /home/user/nurl664/tools/fuzz/holes/mutable_binding_of_a_value_block_local_tail_sunk_runs_clean.836
