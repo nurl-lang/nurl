@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+inner fresh string long enough for heap
+outer string long enough for a heap buffer
+1
+2
+3
+3
+1
+inner fresh string long enough for heap
+inner fresh string long enough for heap
+again a heap string here, long

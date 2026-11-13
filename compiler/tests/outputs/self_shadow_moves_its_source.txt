@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+same scope, long enough for a heap buffer
+nested read, long enough for a heap buffer
+7
+7
+8
+8
+1
