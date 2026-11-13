@@ -76,8 +76,11 @@ WINDOW = 200
 OPEN_NOTE = re.compile(r"tools/fuzz/holes/open/t(\d+)\.md$")
 FRAGMENTS = "changes/unreleased/"
 CHANGELOG = "CHANGELOG.md"
-# An Agora task as the change's text names it: `#545`, not `github#545`.
-TASK_REF = re.compile(r"(?<![\w#])#(\d+)\b")
+# An Agora task as the change's text names it: `AGORA-545`, the spelling
+# docs/agents/issue-tracker.md asks for (GitHub links a bare `#545` to its
+# own pull request 545), or `#545` as older changes wrote it; not
+# `github#545`.
+TASK_REF = re.compile(r"(?:\bAGORA-|(?<![\w#])#)(\d+)\b")
 
 # `reverts: <what>` at the start of a line; `<what>` is a list of shas and
 # pull request numbers.
@@ -292,7 +295,7 @@ def report(mb, commits, found, head_blob):
         lines += [
             "  Closing a hole: the change that deletes tools/fuzz/holes/open/t<N>.md names",
             "                 its task in the pull request title or body (%s)."
-            % ", ".join("#" + n for n in notes),
+            % ", ".join("AGORA-" + n for n in notes),
         ]
     return "\n".join(lines)
 

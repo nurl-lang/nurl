@@ -13,7 +13,7 @@ section heading, followed by the entry exactly as it will read in
 ```markdown
 ### Fixed
 
-- **A try hands the caller only an error it owns** (Agora #205). …
+- **A try hands the caller only an error it owns** (AGORA-205). …
 ```
 
 Sections: Added, Changed, Deprecated, Removed, Performance, Fixed,

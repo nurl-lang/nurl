@@ -1,7 +1,7 @@
 # tools/fuzz/holes/open — soundness holes known open
 
 **One file per hole known open**, `t<N>.md` after its Agora task: one
-paragraph, `**agora #N: <shape>.** <what happens>. Until the fix ships,
+paragraph, `**AGORA-N: <shape>.** <what happens>. Until the fix ships,
 <how to stay clear of it>.` A PR that finds a hole it does not fix adds
 the file, and the PR that closes the hole deletes it, so no two PRs edit
 the same file (Agora #136). `open_list.py --write` turns them into the

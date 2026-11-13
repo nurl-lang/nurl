@@ -147,7 +147,7 @@ class Controls(unittest.TestCase):
         code, out = self.r.check()
         self.assertEqual(code, 1, out)
         self.assertIn(self.note[:8], out)
-        self.assertIn("names\n                 its task in the pull request title or body (#545)", out)
+        self.assertIn("names\n                 its task in the pull request title or body (AGORA-545)", out)
 
     def test_a_revert_that_does_not_say_so(self):
         self.r.git("rebase", "-q", "main")
@@ -197,6 +197,15 @@ class Controls(unittest.TestCase):
         self.author({"tools/fuzz/holes/open/t545.md": None}, subject="slices")
         self.assertEqual(self.r.check(body="github#545 is another thing")[0], 1)
         self.assertEqual(self.r.check(body="Closes Agora #545.")[0], 0)
+
+    def test_the_task_named_as_agora_n_counts(self):
+        # The spelling docs/agents/issue-tracker.md asks for: GitHub links a
+        # bare `#545` to its own pull request 545.
+        self.r.git("rebase", "-q", "main")
+        self.author({"tools/fuzz/holes/open/t545.md": None}, subject="slices")
+        self.assertEqual(self.r.check(body="Closes AGORA-5450.")[0], 1)
+        self.assertEqual(self.r.check(body="Closes AGORA-545.")[0], 0)
+        self.assertEqual(self.r.check(body="Closes github#545 and AGORA-545.")[0], 0)
 
     def test_a_release_fold_deletes_the_fragments(self):
         self.r.git("rebase", "-q", "main")

@@ -8,8 +8,10 @@ second rebased and ran CI again (Agora #136; the changelog had the same
 problem, #211). Now a hole is a file:
 
   * a PR that finds a hole it does not fix adds tools/fuzz/holes/open/t<N>.md
-    (N = its Agora task): one paragraph, `**agora #N: <shape>.** <what
-    happens>. Until the fix ships, <how to stay clear of it>.`;
+    (N = its Agora task): one paragraph, `**AGORA-N: <shape>.** <what
+    happens>. Until the fix ships, <how to stay clear of it>.` (a note
+    written before the AGORA-N spelling, `**agora #N: …**`, is read too;
+    docs/agents/issue-tracker.md says why: GitHub links a bare `#N`);
   * the PR that closes it deletes that file.
 
 No two PRs touch the same file. The list in docs/LIMITATIONS.md (between
@@ -21,7 +23,7 @@ checks it on the tag.
   open_list.py --check   fail when the list is not what the files say
   open_list.py --known-issues [CLOSED]
                          print the release's Known issues entry from the
-                         same files (CLOSED: "agora #224, #229 …", the holes
+                         same files (CLOSED: "AGORA-224, AGORA-229 …", the holes
                          the release closed), ready for CHANGELOG.md
 """
 import pathlib
@@ -44,8 +46,8 @@ def holes():
     for f in files:
         text = f.read_text().strip()
         n = re.sub(r"\D", "", f.stem)
-        if not text.startswith(f"**agora #{n}:"):
-            sys.exit(f"open_list.py: {f.relative_to(ROOT)} must start with `**agora #{n}: …**`")
+        if not (text.startswith(f"**AGORA-{n}:") or text.startswith(f"**agora #{n}:")):
+            sys.exit(f"open_list.py: {f.relative_to(ROOT)} must start with `**AGORA-{n}: …**`")
         out.append(text)
     return out
 
@@ -73,7 +75,7 @@ def known_issues(closed):
     items = []
     for text in holes():
         flat = " ".join(text.split())
-        m = re.match(r"\*\*agora #(\d+): (.+?)\.?\*\*", flat)
+        m = re.match(r"\*\*(?:AGORA-|agora #)(\d+): (.+?)\.?\*\*", flat)
         shape = m.group(2)
         items.append((m.group(1), shape[0].lower() + shape[1:]))
     n = len(items)
@@ -83,8 +85,9 @@ def known_issues(closed):
     else:
         count = WORDS[n] if n < len(WORDS) else str(n)
         verb = "hole is" if n == 1 else "holes are"
-        parts = [f"#{k} ({s})" for k, s in items]
-        parts[0] = "agora " + parts[0]
+        # (AGORA-N: these lines go into the release notes on GitHub,
+        # which links a bare `#N` to its own pull request N.)
+        parts = [f"AGORA-{k} ({s})" for k, s in items]
         lst = parts[0] if n == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
         head = f"- **{count} soundness {verb} open, each with a fix in progress**:"
         body = (f" {lst}. `docs/LIMITATIONS.md` gives each one's shape and how to"
