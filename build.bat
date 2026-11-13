@@ -266,6 +266,14 @@ REM emits is byte-identical either way, and the fixed-point check below
 REM still proves it. See build.sh for the measured Linux numbers.
 set "BOOT_OPT=-O0"
 
+REM The compiler stages link with an 8 MB stack reserve, as a Linux
+REM process gets by default: the walk and the code generator recurse once
+REM per nesting level of the program compiled, and a -O0 stage spends tens
+REM of KB a level. With Windows's 1 MB default a stage compiling nurlc.nu
+REM ran out of stack (0xC00000FD) one function local past the edge, and the
+REM shipped compiler would on a deeply nested program the Linux one compiles.
+set "STACK_OPT=-Wl,/STACK:8388608"
+
 REM ── stage0 link ──────────────────────────────────────────────
 REM Python-free bootstrap: link the committed `nurlc_lastgood.ll`
 REM snapshot (regenerate via Linux/macOS `./build.sh --refresh-bootstrap`
@@ -274,8 +282,8 @@ REM current nurlc.nu). The .ll carries no `target triple` directive
 REM so clang on Windows picks the host triple automatically.
 set "LABEL=stage0 link"
 >>"%LOG%" echo.
->>"%LOG%" echo [%LABEL%] "%CLANG%" %BOOT_OPT% compiler/nurlc_lastgood.ll stdlib/runtime.o -lwinhttp -o build/nurlc_lastgood.bin.exe
-"%CLANG%" %BOOT_OPT% compiler/nurlc_lastgood.ll stdlib/runtime.o -lwinhttp -o build/nurlc_lastgood.bin.exe >>"%LOG%" 2>&1
+>>"%LOG%" echo [%LABEL%] "%CLANG%" %BOOT_OPT% %STACK_OPT% compiler/nurlc_lastgood.ll stdlib/runtime.o -lwinhttp -o build/nurlc_lastgood.bin.exe
+"%CLANG%" %BOOT_OPT% %STACK_OPT% compiler/nurlc_lastgood.ll stdlib/runtime.o -lwinhttp -o build/nurlc_lastgood.bin.exe >>"%LOG%" 2>&1
 if errorlevel 1 goto :failed
 
 REM ── stage1 ir ────────────────────────────────────────────────
@@ -288,8 +296,8 @@ if errorlevel 1 goto :failed
 REM ── stage1 link ──────────────────────────────────────────────
 set "LABEL=stage1 link"
 >>"%LOG%" echo.
->>"%LOG%" echo [%LABEL%] "%CLANG%" %BOOT_OPT% build/nurlc_self.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self.exe
-"%CLANG%" %BOOT_OPT% build/nurlc_self.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self.exe >>"%LOG%" 2>&1
+>>"%LOG%" echo [%LABEL%] "%CLANG%" %BOOT_OPT% %STACK_OPT% build/nurlc_self.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self.exe
+"%CLANG%" %BOOT_OPT% %STACK_OPT% build/nurlc_self.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self.exe >>"%LOG%" 2>&1
 if errorlevel 1 goto :failed
 
 REM ── stage2 ir ────────────────────────────────────────────────
@@ -309,8 +317,8 @@ if not errorlevel 1 goto :selfwarn
 REM ── stage2 link ──────────────────────────────────────────────
 set "LABEL=stage2 link"
 >>"%LOG%" echo.
->>"%LOG%" echo [%LABEL%] "%CLANG%" -O2 build/nurlc_self2.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self2.exe
-"%CLANG%" -O2 build/nurlc_self2.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self2.exe >>"%LOG%" 2>&1
+>>"%LOG%" echo [%LABEL%] "%CLANG%" -O2 %STACK_OPT% build/nurlc_self2.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self2.exe
+"%CLANG%" -O2 %STACK_OPT% build/nurlc_self2.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self2.exe >>"%LOG%" 2>&1
 if errorlevel 1 goto :failed
 
 REM ── Fixed-point check ────────────────────────────────────────
