@@ -1122,6 +1122,7 @@ class FnCheck:
                     self.fresh_string_kept(st, op, src, line, f"{name}, which keeps it")
                     moved = self.move_out(st, op[1], line)
                     moved = self.reroot(st, moved, ops[j][1], ops[j][2] + dpath)
+                    self.rehome_views(st, op[1], (ops[j][1], (ops[j][2] + dpath)[:PATH_MAX]))
                     add = hroot(self.closure_owned(moved.held), dpath)
                 elif src.own == "L":
                     ty = self.ty_of_place((op[1], op[2])) if op[0] == "v" else None
@@ -1434,6 +1435,20 @@ class FnCheck:
             return
         self.younger_views(vid, add)
         st.vals[vid] = AV(av.own, av.loans, av.alias, av.held | frozenset(add))
+        # what goes into a shared handle's payload is held by the one
+        # object every share of it reaches: a binding that may be another
+        # handle on it holds it too (MEMORY.md §2.10, agora #392)
+        tails = self.shared_tails((vid, path))
+        if tails and add:
+            types = {t for t, _ in tails}
+            for w, wav in list(st.vals.items()):
+                if w == vid or w < 0 or wav.own not in ("O", "P", "L"):
+                    continue
+                wty = self.fn.vars[w].ty
+                if wty is None or not (types & self.T.shared_in(wty)):
+                    continue
+                st.vals[w] = AV(wav.own, wav.loans, wav.alias, wav.held | frozenset(((), l) for _, l in add),
+                                wav.call)
 
     def younger_views(self, vid, add):
         """A value whose release runs a destructor that may read its views
@@ -1529,6 +1544,27 @@ class FnCheck:
                 continue
             st.vals[vid] = AV(av.own, {sub.get(l, l) for l in av.loans},
                               {(dest, a[1]) if a[0] == src else a for a in av.alias},
+                              {(hp, sub.get(l, l)) for hp, l in av.held}, av.call)
+        st.dead = frozenset(st.dead) - set(sub.values())
+
+    def rehome_views(self, st, src, went):
+        """A binding moved into a container or a holder (`went`): a view of
+        its buffer kept elsewhere is a view of that buffer where it went
+        (MEMORY.md §2.10, agora #337)."""
+        sub = {}
+        for vid, av in st.vals.items():
+            for l in av.loans | hloans(av.held):
+                if l in self.loans and l not in sub and self.loans[l] == ((src, ()), "view"):
+                    nl = ("rh", l, went)
+                    self.loans[nl] = (went, "view")
+                    sub[l] = nl
+        if not sub:
+            return
+        for vid, av in list(st.vals.items()):
+            if not (av.loans & sub.keys() or hloans(av.held) & sub.keys()):
+                continue
+            st.vals[vid] = AV(av.own, {sub.get(l, l) for l in av.loans},
+                              {went if a == (src, ()) else a for a in av.alias},
                               {(hp, sub.get(l, l)) for hp, l in av.held}, av.call)
         st.dead = frozenset(st.dead) - set(sub.values())
 
@@ -1765,7 +1801,31 @@ class FnCheck:
                 elif kind in ("view", "heldin") or (kind == "held" and place[0] not in self.hvid):
                     out.add(((), l))
             return AV("O", (), (), out)
-        return AV("O")
+        # what a known body's result holds of its parameters, the result of
+        # this call holds of these arguments (MEMORY.md §2.8, agora #422)
+        out = set()
+        for _, fname in known:
+            sm = self.summ.get(fname)
+            body = self.prog.fns.get(fname)
+            if sm is None or body is None:
+                continue
+            ncap = getattr(body, "ncap", 0)
+            for (dpath, k, path, kind) in sm.get("rholds", ()):
+                i = k - ncap
+                if not (0 <= i < len(avs)):
+                    continue
+                dpath = tuple(dpath)
+                if kind == "held":
+                    out |= hroot(hsub(avs[i].held, tuple(path)), dpath)
+                elif kind in ("view", "handle"):
+                    op = ops[1 + i]
+                    out |= hfrom(avs[i].loans, dpath)
+                    places = set(avs[i].alias)
+                    if op[0] == "v" and st.vals.get(op[1]) is not None and st.vals[op[1]].own in ("O", "P"):
+                        places.add((op[1], op[2]))
+                    for a in places:
+                        out.add((dpath, self.loan(st, (site, "cr", i, dpath), (a[0], a[1] + tuple(path)), kind)))
+        return AV("O", (), (), out)
 
     def closure_capture_effects(self, av):
         """(place, effect) for what the closures a value may run do to what

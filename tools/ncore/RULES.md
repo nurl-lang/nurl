@@ -127,6 +127,9 @@ summarised by the same analysis, to a fixpoint over the program.
 | Inside a closure, running a closure it was handed may grow or clear what this one captured: the caller's closure may have captured the same | §2.11 | `call_closure` |
 | What another thread runs holds no view | §6.5 | `apply_call` (`detaches`) |
 | A view handed back out of where it was kept (an element that is a slice or a raw string) points where the kept one points | §2.10 | `apply_call` |
+| What goes into a shared handle's payload is held by the one object every share reaches: a binding that may be another handle on it holds it too | §2.10 (agora #392) | `store_into` |
+| A view of a binding's buffer kept elsewhere follows the binding into the container or holder that takes it | §2.10 (agora #337) | `rehome_views` |
+| The result of a call through a known closure holds of its arguments what the body's summary says its result holds of its parameters | §2.8 (agora #422) | `call_closure` |
 | What a closure the caller chose hands back may hold what its captures hold (not its handles of the captures themselves): a function that collects such results hands them on | §2.11, §2.10 | `call_closure`, `heldin` |
 | A closure's result is its caller's own: what it lends out of a capture is copied, and a value that cannot be copied is refused | §7.5 | `check_program` |
 | A closure several threads may run changes nothing it captured | §6.5 | `shares` |
