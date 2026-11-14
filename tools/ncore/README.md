@@ -15,6 +15,8 @@ decides the hole probes without any code per surface spelling.
 | `fromnurlc.py` | nurlc's core IR (`--emit-core`) read into the form `check.py` checks |
 | `derive.py` | the summary of a library function whose body crosses the raw boundary, from what the walk believes of it (`sum` lines), where `prims.py` declares none |
 | `RULES.md` | the rules `check.py` checks, each with where docs/MEMORY.md states it |
+| `disagree.tsv` | the probes whose `// map:` verdict the rules do not give yet, and how (the work left) |
+| `show.py` | one program: its verdict, errors and summaries; `--trace FN` the state after each statement |
 | `run.py` | runs probes and compares the verdict with each probe's `// map:` line |
 | `openprobes/` | probes written from open hole tickets |
 
@@ -27,6 +29,15 @@ probe and every construct, and `syntax.py` / `lower.py` are not used.
 cd tools/ncore
 PYTHONUTF8=1 python run.py --nurlc --jobs 8 --all  # every probe, on nurlc's IR (NURLC=<binary>; NCORE_CACHE=<dir> keeps the IR between runs)
 PYTHONUTF8=1 python run.py --nurlc --clean --list files.txt  # programs nurlc accepts (examples, tests): every one refused is a rule too coarse
+PYTHONUTF8=1 python show.py --trace main <probe>.nu          # why: the state after each statement
+```
+
+`--nurlc --all` ends by comparing with `disagree.tsv`: a probe that agrees
+now is progress (`--write-list` takes it off the list), one that joined
+the list is named and the run fails. A change to the rules is held to
+that line, and to `--clean` over examples/ and the valid compiler tests.
+
+```
 PYTHONUTF8=1 python run.py --list subset.txt      # the probes with no closures, traits, threads, Rc or generic definitions
 PYTHONUTF8=1 python run.py openprobes/*.nu        # the open holes
 PYTHONUTF8=1 python run.py <probe>.nu             # one probe, with its errors
