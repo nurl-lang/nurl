@@ -156,10 +156,23 @@ def derive(prog, fn, ws):
         res = "lent"
     else:
         res = "own"
+    # The parameters the walk says it changes only through a handle that
+    # synchronises itself (`syncd`: a Locked, a store behind its own mutex,
+    # read out of them - the thread rules' answer): no change to the value
+    # itself, which an Arc may freeze, but a change inside those handles'
+    # payloads - every share of one reaches it (`regions`). An Arc's
+    # payload is frozen: none of it.
+    regions = set()
+    arcs = getattr(prog, "arcs", ())
+    for k in _idx(ws, "syncd", n):
+        effects = {e for e in effects if e[0] != k}
+        for ty in T.shared_in(pty[k]):
+            if ty not in arcs:
+                regions.add((ty, (), "realloc"))
     return {"modes": list(fn.modes), "res": res, "lends": sorted(lends), "rholds": sorted(rholds),
             "effects": sorted(effects), "stores": sorted(stores), "consumes": sorted(consumes),
             "elems": [], "detaches": [], "invokes": sorted(invokes), "cloargs": [], "shares": [],
-            "derived": True}
+            "regions": sorted(regions), "derived": True}
 
 
 def extern(ws):

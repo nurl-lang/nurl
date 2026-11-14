@@ -1940,6 +1940,14 @@ class FnCheck:
             if av.own == "N":
                 # (a number, a string literal: nothing a view could outlive)
                 continue
+            if (any(x[4] == "held" and x[2] == i for x in sm.get("stores", ()))
+                    and any(l in self.loans and self.loans[l][1] not in ("share",)
+                            for l in hloans(av.held) | (av.loans if av.own == "L" else frozenset()))):
+                # the body leaves an argument or a capture holding what this
+                # capture holds, and nothing where it runs follows that: a
+                # capture that holds a view or a lend is refused here (one
+                # that holds none - a fresh buffer - gives none)
+                self.err(line, "a closure leaves a capture or an argument holding a view")
             if i in vback:
                 # a view a closure hands back may point into its arguments,
                 # which the call follows, never into what it captured (§7.5)
@@ -3455,6 +3463,11 @@ def check_program(prog, max_rounds=40):
         real = [x for x in sm["stores"]
                 if not (x[4] == "held" and x[2] < len(fn.params)
                         and not T.view_capable(fn.vars[fn.params[x[2]]].ty))
+                # (…nor what a capture taken by value holds: that is known
+                # where the closure is made, and judged there - make_closure,
+                # by what the captured value holds then)
+                and not (x[4] == "held" and x[2] < ncap_
+                         and not getattr(fn.vars[fn.params[x[2]]], "byref", False))
                 # (…nor where the place it is stored in has no room for one)
                 and not (x[4] == "held" and x[0] < len(fn.params)
                          and not T.view_capable(T.at(fn.vars[fn.params[x[0]]].ty, x[1]), ()))
