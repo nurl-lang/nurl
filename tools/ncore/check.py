@@ -985,6 +985,11 @@ class FnCheck:
                     # an owned raw string in a binding: what keeps it holds a
                     # view of the binding's buffer (MEMORY.md §2.13)
                     add = {(dpath, self.loan(st, (site, "sv", j, k), (op[1], ()), "view"))}
+                elif (src.own in ("O", "P") and op[0] == "v" and not op[2] and sv.kind != "temp"
+                      and sv.ty is not None and sv.ty[0] == "closure"):
+                    # a closure binding kept by value is copied: it stays
+                    # the binding's own (MEMORY.md §7.5)
+                    add = hroot(self.closure_owned(src.held), dpath)
                 elif src.own in ("O", "P") and op[0] == "v" and not op[2]:
                     self.fresh_string_kept(st, op, src, line, f"{name}, which keeps it")
                     moved = self.move_out(st, op[1], line)
