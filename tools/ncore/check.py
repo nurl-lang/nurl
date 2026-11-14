@@ -835,13 +835,16 @@ class FnCheck:
                             self.err(line, f"{name} takes a borrowed value that cannot be copied")
                     elif (not op[2] and self.fn.vars[op[1]].kind == "local" and avs[k].alias
                           and k < len(sm["modes"]) and sm["modes"][k] == "sink"
-                          and all(not a[1] and a[0] in self.pidx and st.vals.get(a[0]) is not None
-                                  and st.vals[a[0]].own == "P" and self.fn.modes[self.pidx[a[0]]] == "in"
+                          and all(not a[1] and st.vals.get(a[0]) is not None
+                                  and ((a[0] in self.pidx and st.vals[a[0]].own == "P"
+                                        and self.fn.modes[self.pidx[a[0]]] == "in")
+                                       or (st.vals[a[0]].own == "O" and self.fn.vars[op[1]].mut))
                                   for a in avs[k].alias)):
-                        # a second name of a parameter the caller keeps: not
-                        # this function's to hand to a `sink` (a callee that
-                        # merely keeps it takes the parameter over instead)
-                        self.err(line, f"{name} takes {self.vname(op[1])}, which is a borrow of the caller's value")
+                        # a second name of a parameter the caller keeps, or
+                        # a `: ~` cursor of a binding: a borrow, not this
+                        # name's to hand to a `sink` (a callee that merely
+                        # keeps it takes the owner over through it instead)
+                        self.err(line, f"{name} takes {self.vname(op[1])}, which is a borrow of another binding's value")
                     elif not self.take_payload(st, avs[k], line, direct=bool(op[2])) and not self.T.copyable(ty):
                         self.err(line, f"{name} takes a borrowed value that cannot be copied")
                 elif ty is not None and ty[0] == "closure":
