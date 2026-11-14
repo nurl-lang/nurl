@@ -58,6 +58,22 @@ def hroot(held, path):
     return frozenset((path + hp, l) for hp, l in held)
 
 
+def captured_held(held):
+    """What the captures of the closures in `held` hold: the entries below
+    a capture's own (`^i`), re-rooted at the value, and what stands for a
+    parameter's."""
+    out = set()
+    for hp, l in held:
+        for i, e in enumerate(hp):
+            if e.startswith("^") and e != "^f" and i < len(hp) - 1:
+                out.add(((), l))
+                break
+        else:
+            if isinstance(l, tuple) and len(l) == 3 and l[2] in ("held", "heldin"):
+                out.add(((), l))
+    return frozenset(out)
+
+
 def hloans(held):
     return frozenset(l for _, l in held)
 
@@ -319,7 +335,7 @@ class FnCheck:
         return out
 
     def kills_paths(self, eff, p, pp, q, qp, k):
-        if k in ("share", "held"):
+        if k in ("share", "held", "heldin"):
             return False
         if eff == "take":
             # a part moved out of where it lived: what was lent out of that
@@ -428,7 +444,7 @@ class FnCheck:
         loans = hloans(held_here)
         if not loans:
             return NONE
-        alias = {self.loans[l][0] for l in loans if l in self.loans and self.loans[l][1] != "held"}
+        alias = {self.loans[l][0] for l in loans if l in self.loans and self.loans[l][1] not in ("held", "heldin")}
         return AV("L", loans, alias, frozenset())
 
     def read(self, st, op, line, site, what="value"):
@@ -524,7 +540,7 @@ class FnCheck:
         value was given a handle copy for - is that lend, not an owner."""
         # (what a parameter holds, `held`, is held somewhere inside: it does
         # not make the part a lend)
-        own = {l for hp, l in av.held if not hp and l in self.loans and self.loans[l][1] != "held"}
+        own = {l for hp, l in av.held if not hp and l in self.loans and self.loans[l][1] not in ("held", "heldin")}
         if not own:
             return av
         alias = {self.loans[l][0] for l in own}
@@ -1038,6 +1054,8 @@ class FnCheck:
                         add = hfrom(src.loans, dpath) | hroot(src.held, dpath)
                 else:
                     add = hroot(src.held, dpath)
+            elif kind == "heldin":
+                add = hroot(captured_held(src.held), dpath)
             elif kind == "held":
                 add = hroot(hsub(src.held, tuple(path)), dpath)
             else:
@@ -1073,6 +1091,12 @@ class FnCheck:
                 # (what a temporary handed back whole holds comes with it)
                 continue
             dpath = tuple(dpath)
+            if kind == "heldin":
+                # what the captures of the closure in argument k hold (the
+                # values it hands back when it runs): not its handles of
+                # the captures themselves
+                held |= hroot(captured_held(avs[k].held), dpath)
+                continue
             if kind == "held":
                 # (a closure the result keeps copies in what it can, §7.5)
                 held |= hroot(self.closure_owned(hsub(avs[k].held, tuple(path))), dpath)
@@ -1520,6 +1544,21 @@ class FnCheck:
                     for a in places:
                         if a[0] in self.pidx:
                             self.s_cloargs.add((k, i, self.pidx[a[0]], a[1][:3]))
+            # what a closure the caller chose hands back is its caller's
+            # own, and may hold what the closure holds: the views its
+            # captures hold (an iterator's elements)
+            out = set()
+            for hp, l in cav.held:
+                if l not in self.loans:
+                    continue
+                place, kind = self.loans[l]
+                if kind == "held" and place[0] in self.hvid:
+                    # (of a closure parameter: what its captures hold, in
+                    # the caller's words - `heldin`)
+                    out.add(((), self.loan(st, ("phin", place[0]), place, "heldin")))
+                elif kind in ("view", "heldin") or (kind == "held" and place[0] not in self.hvid):
+                    out.add(((), l))
+            return AV("O", (), (), out)
         return AV("O")
 
     def closure_capture_effects(self, av):
@@ -2202,7 +2241,7 @@ class FnCheck:
             return None
         place, kind = self.loans[lid]
         if place[0] in self.hvid:
-            return self.hvid[place[0]], (), "held"
+            return self.hvid[place[0]], (), "heldin" if kind == "heldin" else "held"
         if place[0] in self.pidx:
             return self.pidx[place[0]], place[1][:3], kind
         return None
@@ -2269,7 +2308,7 @@ class FnCheck:
                         sclos.add((j, clo_path(hp), lid[1]))
                         continue
                     pl = self.param_loan(lid)
-                    if pl and not (pl[2] == "held" and pl[0] == j):
+                    if pl and not (pl[2] in ("held", "heldin") and pl[0] == j):
                         stores.add((j, hp[:3]) + pl)
         consumes = set(self.s_consumes) | {k for k, m in enumerate(self.fn.modes) if m == "sink"}
         return {"modes": list(self.fn.modes), "res": res, "lends": sorted(lends), "rholds": sorted(rholds),

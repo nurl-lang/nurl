@@ -34,6 +34,7 @@ A **loan** is a place and a kind:
 | `ref` | a pointer to the binding itself (a capture taken by pointer) | the binding's scope ending, or the binding moved |
 | `share` | a closure's own copy of a shared handle | nothing |
 | `held` | what a parameter's value holds: the caller's to say | nothing in this frame; each call puts what its argument holds in its place |
+| `heldin` | what the captures of a closure parameter hold (what it hands back when it runs: an iterator's elements) | nothing in this frame; each call puts what its closure argument's captures hold in its place |
 
 An **effect** on a place is `realloc`, `drop` (its elements), `replace` (its
 value), `take` (a field or a payload moved out of where it lived: only what
@@ -114,6 +115,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | Inside a closure, running a closure it was handed may grow or clear what this one captured: the caller's closure may have captured the same | §2.11 | `call_closure` |
 | What another thread runs holds no view | §6.5 | `apply_call` (`detaches`) |
 | A view handed back out of where it was kept (an element that is a slice or a raw string) points where the kept one points | §2.10 | `apply_call` |
+| What a closure the caller chose hands back may hold what its captures hold (not its handles of the captures themselves): a function that collects such results hands them on | §2.11, §2.10 | `call_closure`, `heldin` |
 | A closure's result is its caller's own: what it lends out of a capture is copied, and a value that cannot be copied is refused | §7.5 | `check_program` |
 | A closure several threads may run changes nothing it captured | §6.5 | `shares` |
 | What an `Arc` shares is not changed in place | §6.5 | `effect` |
