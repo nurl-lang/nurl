@@ -174,6 +174,7 @@ class FnCheck:
         self.lit_nocopy = {}     # a literal temporary -> its field that borrows a value with no copy
         self.lit_lendcopy = set()  # literal temporaries around a part of a parameter that can be copied
         self.call_by_fn = {}     # a call's temporary -> the callee is a function of the program
+        self.vcopy_temps = set() # temporaries that are a copy of an owned raw string binding's view
         self.slot_vars = set()   # payload bindings of a library getter's option: a container's slot
         self.call_mixed = set()  # the temporaries of calls whose result is the caller's own on some calls
         self.ret_fresh = False   # some return hands back a value of the function's own that holds something
@@ -645,9 +646,10 @@ class FnCheck:
         if (is_ret and av.own == "L" and av.call and dest_ty == ("s",) and op[0] == "v" and not op[2]
                 and self.fn.vars[op[1]].kind == "temp" and av.loans
                 and all(l in self.loans and self.fn.vars[self.loans[l][0][0]].kind == "local"
-                        and self.fn.vars[self.loans[l][0][0]].ty == ("String",) for l in av.loans)):
-            # the text of a local String, as a call handed it back: the
-            # caller is given a copy of it, its own (MEMORY.md §7.6)
+                        and self.fn.vars[self.loans[l][0][0]].ty in (("String",), ("s",)) for l in av.loans)):
+            # the text of a local String (or of an owned raw string), as a
+            # call handed it back: the caller is given a copy of it, its
+            # own (MEMORY.md §7.6)
             return AV("O")
         if av.held and is_ret:
             av = self.closure_takes_over(st, av, line, op[0] == "v" and self.fn.vars[op[1]].kind == "temp")
@@ -669,6 +671,7 @@ class FnCheck:
             # slice. A view of a String's buffer owns nothing.)
             viewish = dest_ty is not None and dest_ty[0] in VIEW_TYPES
             mine = [a for a in av.alias if (st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
+                                            and op[1] not in self.vcopy_temps
                                             and self.fn.vars[a[0]].kind != "param" and "*" not in a[1]
                                             and (not viewish or (self.ty_of_place(a) or ("?",))[0] == dest_ty[0]))]
             if mine and self.fn.vars[op[1]].kind == "temp":
@@ -1064,6 +1067,7 @@ class FnCheck:
         for (dpath, fname) in sm.get("rclos", ()):
             held.add((tuple(dpath), ("clo", fname)))
         vcopy = None
+        vcopy_own = False
         for (dpath, k, path, kind) in sm["rholds"]:
             if k >= len(avs) or (k in whole and kind == "held" and not path and not dpath):
                 # (what a temporary handed back whole holds comes with it)
@@ -1077,6 +1081,8 @@ class FnCheck:
                     if ty is not None and ty[0] in VIEW_TYPES:
                         # a copy of a view is that view (MEMORY.md §2.13)
                         vcopy = avs[k]
+                        cur = st.vals.get(ops[k][1]) if ops[k][0] == "v" and not ops[k][2] else None
+                        vcopy_own = cur is not None and cur.own == "O" and self.fn.vars[ops[k][1]].kind != "temp"
                 elif (not path and not dpath and avs[k].own == "O" and dest_vid is not None
                       and ops[k][0] == "v" and not ops[k][2] and self.fn.vars[ops[k][1]].kind != "temp"
                       and self.fn.vars[dest_vid].ty is not None and self.fn.vars[dest_vid].ty[0] == "s"
@@ -1085,6 +1091,7 @@ class FnCheck:
                     # view of that binding's buffer)
                     vcopy = AV("L", {self.loan(st, (site, "vc", k), (ops[k][1], ()), "view")},
                                {(ops[k][1], ())}, frozenset())
+                    vcopy_own = True
             else:
                 held |= hfrom(avs[k].loans, dpath)
                 for a in avs[k].alias:
@@ -1096,7 +1103,11 @@ class FnCheck:
                 for (dpath, path, kind) in sm.get("selfholds", ()):
                     held.add((tuple(dpath), self.loan(st, (site, "self", tuple(dpath)), (dest_vid, tuple(path)), kind)))
             if vcopy is not None:
-                return AV("L", vcopy.loans, vcopy.alias, held, True)
+                # (a view of an owned raw string's own buffer is that
+                # binding's view, not "what a call lent")
+                if vcopy_own and dest_vid is not None:
+                    self.vcopy_temps.add(dest_vid)
+                return AV("L", vcopy.loans, vcopy.alias, held, vcopy.own == "L" and not vcopy_own)
             return AV("O", (), (), held)
         if sm["res"] == "lent":
             loans, alias = set(), set()
