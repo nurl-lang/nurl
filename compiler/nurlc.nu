@@ -16791,6 +16791,15 @@ unsafe @ eng_byte s w i k → i {
                 // result has no such key.)
                 ( eng_err ln ( nurl_str_cat ( eng_vname vid ) ` is given back what this call may lend out of itself or out of another argument` ) )
             } {}
+            ? & >= src 0 ( fx_has src FX_CALL_MIXED ) {
+                // (…on the calls it answers with a value of its own, the old
+                // one goes - nurlc tells them apart by key: what was lent out
+                // of it ends; what it held it may still hold)
+                : i was_weak g_fc_weak
+                = g_fc_weak 1
+                ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ln 0 )
+                = g_fc_weak was_weak
+            } {}
             ? == cown OW_P {
                 ( st_put st vid ( av_make cown 0 0 ( sq_union ( sq_union ( av_held cur ) ( av_held new ) ) ( held_from rest 0 ) ) F ) )
             } {
@@ -16843,11 +16852,20 @@ unsafe @ eng_byte s w i k → i {
             ( st_put st vid ( av_make OW_P 0 0 held F ) )
             ? & first == held 0 { = g_s_credits ( sq_add g_s_credits ( fv_pidx vid ) ) } {}
         } {
-            ? & & == cown OW_O == ( av_own new ) OW_L ( av_call new ) {
-                // (an owner given a call's lend holds its own copy of the
-                // handle from here on: no longer "what a call lent")
-                ( st_put st vid ( av_make OW_L ( av_loans new ) ( av_alias new ) ( av_held new ) F ) )
-            } { ( st_put st vid new ) }
+            : i msrc ( rv_use_var rv )
+            ? & & & & & == ( av_own new ) OW_L ( fv_mut vid ) == kind VK_LOCAL & != vty ET_NONE == ( et_kind vty ) EK_S >= msrc 0 ( fx_has msrc FX_CALL_MIXED ) {
+                // a `: ~ s` slot given what a call hands back as its caller's
+                // own on some calls: the slot owns it there - nurlc's
+                // owner-slot flag - and its next value releases it, so what
+                // viewed it ends then
+                ( st_put st vid ( av_make OW_O ( av_loans new ) 0 ( av_held new ) F ) )
+            } {
+                ? & & == cown OW_O == ( av_own new ) OW_L ( av_call new ) {
+                    // (an owner given a call's lend holds its own copy of the
+                    // handle from here on: no longer "what a call lent")
+                    ( st_put st vid ( av_make OW_L ( av_loans new ) ( av_alias new ) ( av_held new ) F ) )
+                } { ( st_put st vid new ) }
+            }
         }
         ( younger_views vid ( sq_union ( held_from ( av_loans new ) 0 ) ( av_held new ) ) )
         ? & & first == ( av_loans new ) 0 == ( av_held new ) 0 {

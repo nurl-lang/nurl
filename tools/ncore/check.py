@@ -2958,6 +2958,12 @@ class FnCheck:
                         # value over: agora #412, #425.)
                         self.err(ln, f"{v.name} is given back what this call may lend out of itself "
                                      f"or out of another argument")
+                    if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] and rv[1][1] in self.call_mixed:
+                        # (…on the calls it answers with a value of its own,
+                        # the old one goes - nurlc tells them apart by key:
+                        # what was lent out of it ends; what it held it may
+                        # still hold)
+                        self.effect(st, (vid, ()), "replace", ln, weak=True)
                     st.vals[vid] = AV(cur.own, () if cur.own == "P" else rest, frozenset(),
                                       cur.held | new.held | (hfrom(rest) if cur.own == "P" else frozenset()))
                     return st
@@ -3002,6 +3008,14 @@ class FnCheck:
                     st.vals[vid] = AV("P", (), (), held)
                     if first and not held:
                         self.s_credits.add(self.pidx[vid])
+                elif (new.own == "L" and v.mut and v.kind == "local" and v.ty == ("s",)
+                      and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] and rv[1][1] in self.call_mixed):
+                    # a `: ~ s` slot given what a call hands back as its
+                    # caller's own on some calls (a fresh slice, or the
+                    # argument): the slot owns it there - nurlc's owner-slot
+                    # flag - and its next value releases it, so what viewed
+                    # it ends then
+                    st.vals[vid] = AV("O", new.loans, frozenset(), new.held)
                 elif cur is not None and cur.own == "O" and new.own == "L" and new.call:
                     # (an owner given a call's lend holds its own copy of
                     # the handle from here on: no longer "what a call lent")
