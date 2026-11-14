@@ -89,6 +89,10 @@ seq_ shape_closure "a defer is a block of its own" '^defer$' '^scope$' '^eval ca
 want apply "a closure parameter is called through" '^eval callind 2 v0 v1$'
 # Named and defaulted arguments arrive in parameter order.
 want shape_named "defaults fill a call's arguments" '^eval call defaults 3 c c c$'
+seq_ shape_fall "a body's tail join is what it returns" '^let [0-9]+ none$' '^if v[0-9]+$' '^assign v[0-9]+ use v[0-9]+$' '^ret v[0-9]+$'
+# (the closure of shape_fall_closure: the one that hands back a String)
+fall_clo=$(awk -F'\t' '$1 == "fn" && $2 ~ /^__closure_/ && $3 == "%String" { print $2; exit }' "$WORK/a.core")
+seq_ "${fall_clo:-__closure_none}" "a closure body's tail join is what it returns" '^if v[0-9]+$' '^assign v[0-9]+ use v[0-9]+$' '^ret v[0-9]+$'
 
 # The closure's body is a function of the IR, its captures its first variables.
 caps=$(awk -F'\t' '$1 == "fn" { p = ($2 ~ /^__closure_/) } p && $1 == "v" && $3 == 3 { n++ } END { print n + 0 }' "$WORK/a.core")

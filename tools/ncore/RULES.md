@@ -34,6 +34,8 @@ A **loan** is a place and a kind:
 | `ref` | a pointer to the binding itself (a capture taken by pointer) | the binding's scope ending, or the binding moved |
 | `share` | a closure's own copy of a shared handle | nothing |
 | `held` | what a parameter's value holds: the caller's to say | nothing in this frame; each call puts what its argument holds in its place |
+| `stale` | what a by-pointer capture's part held when the closure runs (read before the body gave it a value) | nothing; it only marks the read |
+| `heldin` | what the captures of a closure parameter hold (what it hands back when it runs: an iterator's elements) | nothing in this frame; each call puts what its closure argument's captures hold in its place |
 
 An **effect** on a place is `realloc`, `drop` (its elements), `replace` (its
 value), `take` (a field or a payload moved out of where it lived: only what
@@ -53,6 +55,10 @@ summarised by the same analysis, to a fixpoint over the program.
 | rule | MEMORY.md | in check.py |
 |---|---|---|
 | A use of a value whose loan has ended is the error | §2.10 | `check_live` |
+| A binding given a value that views a shorter-lived one is refused where it is used after that one ended, or where it leaves the function holding it, not where it is stored. Stored at once: a pointer into the frame (§2.7), and a view given to a value whose destructor may read it (§2.14) | §2.10, §2.7, §2.14 | `transfer`, `read` |
+| Storage the caller holds (an `inout` parameter) may not view this frame's values while a function of the program runs, which may unwind: unless the call is handed that storage and its body's first statement gives it a value that views nothing | §3.3d (#386) | `apply_call`, summary `credits` |
+| A closure that reads, through a capture taken by pointer, a part its body did not give a value first reads what the binding holds when it runs: refused where the closure is made or run while that part holds an ended view | §2.3, §2.11 | `stale`, `stale_capture_check` |
+| What was bound after a `;` block was armed is released before the block runs | §7.2 | `run_defers`, `defer_before` |
 | An owner handed on by name moves; `: ~` of a name is a cursor | §2.2, §7.6 | `transfer`, `move_out` |
 | A value that holds a view is read whole only while what the view points into is there | §2.10 | `read` |
 | A call's arguments are frozen for its duration: its effects end no view another argument holds | §2.4 | `apply_call` |
@@ -63,8 +69,9 @@ summarised by the same analysis, to a fixpoint over the program.
 | A borrow handed to a consumer: a part read in place is taken out of its owner; a call's lend in a temporary is copied; a binding of a call's lend is refused | §2.5, §7.6 | `apply_call`, `take_payload` |
 | A field taken out of its owner is not read, nor the value handed on whole, until it is given a value again | §2.1 | `State.gone` |
 | A part taken out of an `inout` parameter is a change to the caller's binding, not a hand-over of it; left taken at an exit, it is gone in the caller's binding | §2.1, §2.12 | `take_payload`, summary `gone` |
+| An `inout` parameter handed to a consumer: the consumer is given a copy, the binding keeps its value, and what the caller lent out of the binding ends (the call may have given it a new value) | §2.12 (#776) | `apply_call` (`copied`) |
 | A lend of an element given back to the same element is read before the old value goes | §2.4 | `apply_call` (`stored_back`) |
-| A store replacing a place hands its old value to the binding that read that very place | §7.6 (#265) | `handover` |
+| A store replacing a place hands its old value to the binding that read that very place: the first one; a later reader of the same place borrows from it | §7.6 (#265) | `handover` |
 | A `: ~` cursor of a binding kept by value (pushed, stored into a literal) hands the binding on: the binding is moved through it, and the cursor reads the value where it went | §7.6 | `apply_call` stores, `rvalue` (`agg`) |
 | What was lent out of a temporary follows it into the binding it moves to | §1 Temporaries | `rehome` |
 | `= o ( f o … )`: a binding given a part of its own value keeps it | §7.6 (#475) | `own_parts` |
@@ -74,6 +81,9 @@ summarised by the same analysis, to a fixpoint over the program.
 | A borrowed value stored into an owner is copied, with the views it holds; one that cannot be copied is refused | §7.6, §2.13 | `rvalue` (`agg`), `apply_call` stores |
 | A literal around a part of a parameter is a lend of the caller's value where it is handed back as it is. Taken by anything else, it is copied there, or refused where the part has no copy | §7.6 (#200) | `rvalue` (`agg`), `lit_nocopy`, `lit_lendcopy` |
 | A `sink` parameter is the function's own: handed to a new holder, it moves there | §2.1 | `transfer` |
+| `dyn Trait x`, x a value the caller keeps (a parameter, a field read): the box is given a copy, where one can be made | §1 Methods | `apply_call` (`copied`) |
+| A raw string a closure hands back is copied: the caller's own, whatever buffer the body read it out of | §7.5 | `make_closure` |
+| The text of a local String, as a call handed it back (`^ ( string_data x )`, `^ ( view_of x )`), is copied at the return; a binding of that view handed back is a view of a released local | §7.6 (#663) | `transfer` |
 | A place is followed five steps deep (`PATH_MAX`): a walk down a recursive value names the place that deep and stops | - (the engine's bound) | `loan` |
 | A `?` / `??` that selects among this frame's owners moves the one it selects into an immutable binding, and out with a return | §2.2 | `stmt` (`let`), `transfer` |
 | A literal that is a statement's temporary shows its consumer the bindings it names; they move into it only where it is taken | §7.6 (h693) | `agg_lends` |
@@ -98,7 +108,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | Running a closure reads every capture and does what its body does to them, and to the arguments it is called with | §2.11 | `run_closures`, `closure_arg_effects` |
 | A function that runs a closure argument does so at its call; what it hands the closure of its other arguments is in its summary | §2.11 | `invokes`, `cloargs` |
 | A closure that changes a capture meets no other argument that reaches it | §2.4, §2.11 | `apply_call` |
-| A closure leaves no capture and no argument holding a view | §2.11 | `check_program` |
+| A closure leaves no capture holding a view, and no `inout` argument. What it leaves one by-value argument holding of another is followed where the call that runs it is seen | §2.11 (#403) | `check_program`, `closure_arg_effects` |
 | A closure kept by an owner, and a literal handed back as it is, copies in what it captured and can copy; a bound closure handed back by name does not | §7.5, §2.11 (h310) | `closure_owned`, `transfer` |
 | A closure another thread runs takes the bindings it captured; one taken by pointer may not go. A handle whose copy is a share two threads may use (the type table's `t`) is captured as a share of its own | §2.1, §2.3, §6.5 | `detaches`, `cap_loans`, `thread_share` |
 | A closure binding handed to another binding gives it its environment and stays a borrow of it; stored into a literal or handed to a keeper, the holder has a copy | §7.5 (#835, #173) | `closure_moved_into`, `transfer`, `apply_call` |
@@ -110,6 +120,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | Inside a closure, running a closure it was handed may grow or clear what this one captured: the caller's closure may have captured the same | §2.11 | `call_closure` |
 | What another thread runs holds no view | §6.5 | `apply_call` (`detaches`) |
 | A view handed back out of where it was kept (an element that is a slice or a raw string) points where the kept one points | §2.10 | `apply_call` |
+| What a closure the caller chose hands back may hold what its captures hold (not its handles of the captures themselves): a function that collects such results hands them on | §2.11, §2.10 | `call_closure`, `heldin` |
 | A closure's result is its caller's own: what it lends out of a capture is copied, and a value that cannot be copied is refused | §7.5 | `check_program` |
 | A closure several threads may run changes nothing it captured | §6.5 | `shares` |
 | What an `Arc` shares is not changed in place | §6.5 | `effect` |
@@ -143,6 +154,8 @@ gives and lists the other side here.
 | shape | refused when | accepted when | the checker |
 |---|---|---|---|
 | `= o ( pick o other k )`, `o` an option owner, `pick` may hand back either argument | `pick` is a plain function defined above the call (`option_owner_given_a_call_that_may_lend_itself_or_another_argument`, agora #412) | `pick` is defined below the call, is a generic instance, or is a `dyn` method (`option_owner_given_back_by_a_callee_below_runs_clean`, `…_by_a_generic_runs_clean`, `…_by_a_dyn_method_runs_clean`): the per-call key decides at run time | refuses all (A2 refuses the form) |
+
+| `^ ( id x )`, `x` an owned raw string of this frame, `id` handing its argument back | `id` is defined below the function (`identity_of_a_fresh_s_binding_returned_callee_below`) | `id` is defined above it (`…_callee_above_runs_clean`): the text is copied at the return | accepts both (the copy) |
 
 ## Declared summaries
 

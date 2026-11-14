@@ -21,7 +21,9 @@ import subprocess
 from syntax import Unsupported
 from lower import FnIR, Program, Var
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+# (NCORE_ROOT=<repository>: for a copy of this directory run from elsewhere)
+ROOT = os.environ.get("NCORE_ROOT") or os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
 SCALAR_NAMES = {"i64": "i", "i1": "b", "double": "f", "float": "f32", "void": "v", "": "v",
                 "i8": "u", "u8": "u", "i16": "i16", "i32": "i32", "u16": "u16", "u32": "u32",
@@ -247,7 +249,8 @@ class Reader:
                 idx = int(p[1:])
                 if ty is not None and ty[0] == "opt":
                     if idx != 1:
-                        raise Unsupported("an option's flag as a place")
+                        # (its flag: a number)
+                        return ("c", ("i",))
                     p = "#T0"
                     ty = ty[1]
                 elif ty is not None and ty[0] == "res":
@@ -256,15 +259,23 @@ class Reader:
                     elif idx == 2:
                         p, ty = "#F0", ty[2]
                     else:
-                        raise Unsupported("a result's flag as a place")
+                        return ("c", ("i",))
+                elif ty is not None and ty[0] in ("slice", "vec"):
+                    # (an element named by its position: an element)
+                    p = "*"
+                    ty = self.T.elem(ty)
                 else:
                     raise Unsupported("positional member of " + (ty[0] if ty else "?"))
             elif p == "*":
                 ty = self.T.elem(ty)
             else:
+                if ty is not None and ty[0] == "box":
+                    # (a field read through a Box is a field of what it holds)
+                    path.append("*")
+                    ty = self.T.elem(ty)
                 nty, _ = self.T.field(ty, p)
-                if nty is None and ty is not None and ty[0] == "slice" and p == "length":
-                    # a slice's length: a number
+                if nty is None and ty is not None and ty[0] in ("slice", "String", "vec") and p in ("length", "len", "cap"):
+                    # a slice's length, a handle's size: a number
                     return ("c", ("i",))
                 if nty is None and ty is not None and ty[0] not in ("named",):
                     raise Unsupported(f"field {p} of {ty[0]}")

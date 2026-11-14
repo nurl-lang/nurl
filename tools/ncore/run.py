@@ -54,7 +54,9 @@ def verdict(path):
 
 # What marks a diagnostic of the fused walk that the ownership engine does
 # not replace (docs/spec.md §3.3d, MEMORY.md §6.5's Send / Sync, typing).
-WALK_RULES = ("raw memory", "only an 'unsafe' function", "which only an 'unsafe'", "is not Send", "is not Sync",
+WALK_RULES = ("gives its tag only", "that spelling is the compiler's own", "passed where parameter expects",
+              "passed where the parameter is",
+              "raw memory", "only an 'unsafe' function", "which only an 'unsafe'", "is not Send", "is not Sync",
               "not Send:", "is set at start", "is declared 'raw'", "runtime handle", "FFI parameter",
               "expects type", "undefined identifier", "internal to the standard library",
               "takes a raw pointer", "hands back a raw pointer", "the standard library's address",
@@ -75,7 +77,7 @@ def verdict_nurlc(path):
     rd, gaps, rc, err = fromnurlc.read_program(path)
     if rc != 0:
         first = next((l for l in err.splitlines() if "error" in l), "nurlc failed")
-        msg = first.split("error:")[-1].strip()
+        msg = first.split("error:", 1)[-1].strip()
         # A refusal that is no ownership rule - the raw-memory boundary, a
         # type that may not cross to another thread, a type error - is the
         # walk's to make, on types alone: the engine is not asked.
@@ -196,6 +198,7 @@ def one(job):
 
 def main(argv):
     files = []
+    whole = write_list = False
     show = 15
     use_nurlc = False
     jobs = 0
@@ -218,6 +221,11 @@ def main(argv):
             continue
         if a == "--all":
             files += sorted(os.path.join(HOLES, n) for n in os.listdir(HOLES) if n.endswith(".nu"))
+            whole = True
+            i += 1
+            continue
+        if a == "--write-list":
+            write_list = True
             i += 1
             continue
         if a == "--jobs":
@@ -272,7 +280,43 @@ def main(argv):
         out = "results_clean.tsv" if CLEAN else "results_nurlc.tsv" if use_nurlc else "results_own.tsv"
         with open(os.path.join(HERE, out), "w", encoding="utf-8") as f:
             f.write("".join(f"{n}\t{st}\t{err if err else detail}\n" for n, st, detail, err in done))
+    if whole and use_nurlc and not CLEAN:
+        return disagreements(done, write_list)
+    return 0
+
+
+LIST = "disagree.tsv"
+
+
+def disagreements(done, write):
+    """The probes whose verdict the rules do not give yet are a list in the
+    repository (disagree.tsv: probe, what is wrong): the work left, and the
+    line a change to the rules is held to.  A probe that left the list is
+    progress; one that joined it is named, and the run fails."""
+    now = {n: st for n, st, _, _ in done if st != "agree"}
+    path = os.path.join(HERE, LIST)
+    if write:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("".join(f"{n}\t{now[n]}\n" for n in sorted(now)))
+        print(f"{LIST}: {len(now)} written")
+        return 0
+    if not os.path.exists(path):
+        return 0
+    with open(path, encoding="utf-8") as f:
+        was = dict(l.rstrip("\n").split("\t")[:2] for l in f if l.strip())
+    seen = {n for n, _, _, _ in done}
+    left = sorted(n for n in was if n in seen and n not in now)
+    joined = sorted(n for n in now if n not in was)
+    changed = sorted(n for n in now if n in was and was[n] != now[n])
+    print(f"{LIST}: {len(was)} listed, {len(left)} agree now, {len(joined)} new, {len(changed)} changed kind")
+    for n in joined:
+        print("    NEW", now[n], n)
+    for n in changed:
+        print("    was", was[n], "now", now[n], n)
+    if left:
+        print("    (run with --write-list to take the", len(left), "that agree now off the list)")
+    return 1 if joined else 0
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    sys.exit(main(sys.argv[1:]))
