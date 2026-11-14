@@ -28,6 +28,8 @@ from lower import Types, Var
 # NCORE_DERIVE=1: a library function's derived summary (derive.py) answers
 # before its declared one - how far the walk's own answers carry.
 DERIVE_FIRST = os.environ.get("NCORE_DERIVE") == "1"
+PATH_MAX = 5
+
 # NCORE_TRACE=<binding>: say on stderr where an effect on it ends a loan.
 TRACE = os.environ.get("NCORE_TRACE")
 
@@ -170,6 +172,7 @@ class FnCheck:
         self.call_lent = {}      # a call's temporary -> the arguments it may hand back whole
         self.cap_loans = set()   # the loans that are a closure's own handle of a binding it captured
         self.lit_nocopy = {}     # a literal temporary -> its field that borrows a value with no copy
+        self.lit_lendcopy = set()  # literal temporaries around a part of a parameter that can be copied
         self.call_by_fn = {}     # a call's temporary -> the callee is a function of the program
         self.slot_vars = set()   # payload bindings of a library getter's option: a container's slot
         self.call_mixed = set()  # the temporaries of calls whose result is the caller's own on some calls
@@ -236,6 +239,11 @@ class FnCheck:
 
     # -- loans ----------------------------------------------------------------
     def loan(self, st, site, place, kind):
+        # (a place is followed PATH_MAX steps deep: a walk down a recursive
+        # value - a cursor repointed at its own payload's payload - names
+        # the place that deep and stops)
+        if len(place[1]) > PATH_MAX:
+            place = (place[0], place[1][:PATH_MAX])
         lid = (site, place, kind)
         if lid in st.dead:
             # made again at the same site in a later round of a loop: whatever
@@ -575,6 +583,10 @@ class FnCheck:
         outlive a local it borrows from - deep-copied (a join's value, a
         return) or refused."""
         av = self.read(st, op, line, site, what)
+        if op[0] == "v" and not op[2] and op[1] in self.lit_lendcopy and not is_ret and av.own == "L":
+            # (taken by something other than a return: the copy is made)
+            av = AV("O", (), (), av.held)
+            st.vals[op[1]] = av
         if op[0] == "v" and not op[2] and op[1] in self.lit_nocopy and not is_ret:
             self.err(line, f"field {self.lit_nocopy[op[1]]}: a borrowed value would have to be copied here, "
                            f"and it cannot be copied")
@@ -819,6 +831,11 @@ class FnCheck:
                     # now that it is taken)
                     avs[k] = AV(avs[k].own, avs[k].loans, avs[k].alias, moved.held, avs[k].call)
                     continue
+            if avs[k].own == "L" and op[0] == "v" and not op[2] and op[1] in self.lit_lendcopy:
+                # (a literal around a part of a parameter, handed to a
+                # consumer: the copy is made for it)
+                copied.add(k)
+                continue
             if avs[k].own == "L":
                 ty = self.ty_of_place((op[1], op[2])) if op[0] == "v" else None
                 if ty is not None and self.T.owns_handle(ty):
@@ -1069,7 +1086,7 @@ class FnCheck:
                     continue
                 loans |= av.loans
                 for a in av.alias:
-                    pl = (a[0], a[1] + tuple(path))
+                    pl = (a[0], (a[1] + tuple(path))[:PATH_MAX])
                     alias.add(pl)
                     loans.add(self.loan(st, (site, "l", k), pl, kind))
                 held |= hsub(av.held, tuple(path))
@@ -1612,6 +1629,17 @@ class FnCheck:
                             self.err(line, f"field {i + 1}: a borrowed value would have to be copied here, "
                                            f"and it cannot be copied")
                     if fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES and self.T.copyable(fty):
+                        dv = self.fn.vars[dest_vid] if dest_vid is not None else None
+                        if (dv is not None
+                                and (dv.kind == "temp" or dv.name.startswith("%t")) and not av.call
+                                and av.alias and all(a[0] in self.pidx and a[1] for a in av.alias)):
+                            # a part of a parameter, read in place: handed
+                            # back as it is, the literal is a lend of the
+                            # caller's value (no copy is made); taken by
+                            # anything else, it is copied there
+                            nc_loans |= av.loans
+                            nc_alias |= av.alias
+                            self.lit_lendcopy.add(dest_vid)
                         # a lend stored into an owning field is copied: the
                         # copy holds the views the value holds (§2.13)
                         held |= hroot(av.held, fp)
@@ -1658,7 +1686,7 @@ class FnCheck:
                 # (an option a callee made around a lend of an element -
                 # `vec_get` - is no place of its own: its payload is the
                 # element)
-                pl = a if wrapped else (a[0], a[1] + (tag,))
+                pl = a if wrapped else (a[0], (a[1] + (tag,))[:PATH_MAX])
                 alias.add(pl)
                 loans.add(self.loan(st, ("pl", id(rv), pl), pl, "handle"))
             # (the payload of what a function of the program lent is that
