@@ -15381,7 +15381,9 @@ unsafe @ eng_byte s w i k → i {
             // (the call's other arguments are frozen for it: one that reaches
             // a shared payload the closure changes - another handle on the Rc
             // it replaces - is changed under the callee)
-            ( frozen_by_closure_regions ops avs k ( av_held av ) name line )
+            // (…but a callee that keeps the closure - stores it, hands it
+            // back - runs it later, under no call's arguments)
+            ? ! ( sm_keeps_arg sm k ) { ( frozen_by_closure_regions ops avs k ( av_held av ) name line ) } {}
             // (a callee that catches a panic of the closure it runs: the
             // body may stop anywhere, so what it would have given a new
             // value may still hold what it held)
@@ -16120,7 +16122,18 @@ unsafe @ eng_byte s w i k → i {
     ^ res
 }
 
-@ call_closure i st i ops i site i line → i {
+// Is a value of type `t` a view, or a container of views (`?s`, a `Vec s`)?
+// (Not known: yes.)
+@ et_view_result i t → b {
+    ? == t ET_NONE { ^ T } {}
+    : i kind ( et_kind t )
+    ? ( et_is_view t ) { ^ T } {}
+    ? | | == kind EK_OPT == kind EK_VEC == kind EK_BOX { ^ & != ( et_at t ET_E1 ) ET_NONE ( et_view_result ( et_at t ET_E1 ) ) } {}
+    ? == kind EK_RES { ^ | & != ( et_at t ET_E1 ) ET_NONE ( et_view_result ( et_at t ET_E1 ) ) & != ( et_at t ET_E2 ) ET_NONE ( et_view_result ( et_at t ET_E2 ) ) } {}
+    ^ F
+}
+
+@ call_closure i st i ops i site i line i dest_ty → i {
     : i n - ( wv_len ops ) 1
     : i cop ( wv_at ops 0 )
     : i cav ( eng_read st cop line TG_ARG * site 256 )
@@ -16280,7 +16293,7 @@ unsafe @ eng_byte s w i k → i {
         : ~ b unsummed F
         = c 0
         ~ < c ( wv_len known ) { ? ! ( sm_have ( wv_at known + c 1 ) ) { = unsummed T } {} = c + c 2 }
-        ? unsummed { = out ( clo_result_views st cav out ) } {}
+        ? & unsummed ( et_view_result dest_ty ) { = out ( clo_result_views st cav out ) } {}
         = c 0
         ~ < c ( wv_len known ) {
             : i f ( wv_at known + c 1 )
@@ -16354,8 +16367,18 @@ unsafe @ eng_byte s w i k → i {
                         // (what a capture holds - the views a captured Vec's
                         // elements are - handed back: the result holds them,
                         // where the closure value holds them)
+                        // (below the capture: not the closure's own handle of
+                        // the binding it captured)
                         : i cbase ( ep_cat ( ep_child ( wv_at known c ) ( ee_cap ( tp_at t 4 1 ) ) ) rpath )
-                        = out ( sq_union out ( held_root ( held_sub ( av_held cav ) cbase ) dpath ) )
+                        : i chs ( av_held cav )
+                        : ~ i below 0
+                        : ~ i hq 0
+                        ~ < hq ( sq_len chs ) {
+                            : i he ( sq_at chs hq )
+                            ? > ( ep_len ( he_path he ) ) ( ep_len cbase ) { = below ( sq_add below he ) } {}
+                            = hq + hq 1
+                        }
+                        = out ( sq_union out ( held_root ( held_sub below cbase ) dpath ) )
                     } {}
                     ? & >= ai 0 < ai n {
                         : i av ( wv_at avs ai )
@@ -16874,7 +16897,7 @@ unsafe @ eng_byte s w i k → i {
         : i ops ( wv_new )
         : ~ i j 0
         ~ < j n { ( wv_push ops ( eng_op ( ec + + at 2 j ) ) ) = j + j 1 }
-        : i av ( call_closure st ops at line )
+        : i av ( call_closure st ops at line dest_ty )
         ( wv_drop ops )
         ? & != dest_ty ET_NONE ( et_scalar dest_ty ) { ^ g_av_none } {}
         ^ av

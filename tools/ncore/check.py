@@ -1584,7 +1584,11 @@ class FnCheck:
                 # callee, agora #736)
                 regs = set()
                 shared_tys = getattr(self.prog, "shared", ())
-                for cbase, fname in self.closures_in(av):
+                # (a callee that keeps the closure - stores it, hands it back
+                # - runs it later, under no call's arguments)
+                kept_clo = (any(x[2] == k for x in sm.get("stores", ()))
+                            or any(r[1] == k for r in sm.get("rholds", ())))
+                for cbase, fname in (() if kept_clo else self.closures_in(av)):
                     csm = self.summ.get(fname)
                     cfn = self.prog.fns.get(fname)
                     if csm is None or cfn is None:
@@ -2338,7 +2342,7 @@ class FnCheck:
                                 self.s_consumes.add(self.pidx[place[0]])
                             st.vals[place[0]] = AV("X")
 
-    def call_closure(self, st, rv, line):
+    def call_closure(self, st, rv, line, dest_ty=None):
         """A call through a closure value: its arguments are lent, its result
         is its caller's own (§7.5)."""
         _, ops, site = rv
@@ -2451,10 +2455,13 @@ class FnCheck:
         # this call holds of these arguments (MEMORY.md §2.8, agora #422)
         out = set()
         vloans, valias = set(), set()
-        if any(self.summ.get(f) is None or f not in self.prog.fns for _, f in known):
+        if (any(self.summ.get(f) is None or f not in self.prog.fns for _, f in known)
+                and self.view_result(dest_ty)):
             # (a body nothing says the result of - a library's closure: what
             # it hands back may hold what the closure holds, as an unknown
-            # one's may)
+            # one's may - where the result is a view or a container of views,
+            # the elements an iterator produces; any other value it hands
+            # back is copied, MEMORY.md §7.5)
             out |= self.closure_result_views(st, cav)
         for base, fname in known:
             sm = self.summ.get(fname)
@@ -2495,7 +2502,10 @@ class FnCheck:
                     # (what a capture holds - the views a captured Vec's
                     # elements are - handed back: the result holds them,
                     # where the closure value holds them)
-                    out |= hroot(hsub(cav.held, base + (f"^{k}",) + tuple(path)), tuple(dpath))
+                    # (below the capture: not the closure's own handle of
+                    # the binding it captured)
+                    cb = base + (f"^{k}",) + tuple(path)
+                    out |= hroot(hsub({(hp, l) for hp, l in cav.held if len(hp) > len(cb)}, cb), tuple(dpath))
                     continue
                 if not (0 <= i < len(avs)):
                     continue
@@ -2513,6 +2523,20 @@ class FnCheck:
         if vloans or valias:
             return AV("L", vloans, valias, out)
         return AV("O", (), (), out)
+
+    def view_result(self, ty):
+        """Is a value of type `ty` a view, or a container of views (`?s`, a
+        `Vec s`)?  (Not known: yes.)"""
+        if ty is None:
+            return True
+        k = ty[0]
+        if k in VIEW_TYPES:
+            return True
+        if k in ("opt", "vec", "box"):
+            return self.view_result(ty[1]) if ty[1] is not None else False
+        if k == "res":
+            return any(t is not None and self.view_result(t) for t in ty[1:3])
+        return False
 
     def closure_result_views(self, st, cav):
         """What a call of a closure no summary speaks for may hand back of
@@ -2908,7 +2932,7 @@ class FnCheck:
         if k == "closure":
             return self.make_closure(st, rv, line)
         if k == "callind":
-            av = self.call_closure(st, rv, line)
+            av = self.call_closure(st, rv, line, dest_ty)
             if dest_ty is not None and self.T.is_scalar(dest_ty):
                 return NONE
             return av
