@@ -2030,7 +2030,12 @@ def check_program(prog, max_rounds=40):
         if (name.endswith("_clone") or name.endswith("_share")) and sm["res"] == "lent":
             # a handle's copy hook makes a value of its own (§7.6)
             errors.append((name, fn.line, "a copy hook hands its argument back, whole or in part"))
-        if getattr(fn, "is_closure", False) and sm["stores"]:
+        # (what an argument or a capture holds, handed on by value, is a
+        # view only where its type has room for one)
+        real = [x for x in sm["stores"]
+                if not (x[4] == "held" and x[2] < len(fn.params)
+                        and not T.view_capable(fn.vars[fn.params[x[2]]].ty))]
+        if getattr(fn, "is_closure", False) and real:
             # a closure's type does not say what running it stores, so
             # nothing where it runs would follow a view it leaves in a
             # capture or in an argument (MEMORY.md §2.11)
