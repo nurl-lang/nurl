@@ -594,16 +594,16 @@ class FnCheck:
                 # `: ~ s y x`, x an owned raw string: a slot of its own is
                 # given a copy of the text (MEMORY.md §7.6, owned string slots)
                 av = AV("O", (), (), frozenset())
+            elif (stored and vty is not None and vty[0] == "closure" and self.fn.vars[vid].kind != "temp"
+                  and not is_ret):
+                # a closure binding (or parameter) stored into a literal:
+                # the literal owns a copy of it (MEMORY.md §7.5, agora #173)
+                av = AV("O", (), (), self.closure_owned(src.held))
             elif src.own == "P" or (self.fn.vars[vid].kind != "temp" and (
                     (raw and not is_ret and not (stored and vty[0] == "slice")) or lend_owner(vid))):
                 # a parameter is lent to its new name (the caller owns it); an
                 # owned raw string or slice is viewed, not moved
                 av = AV("L", {self.loan(st, site, (vid, ()), "view" if raw else "handle")}, {(vid, ())}, src.held)
-            elif (stored and vty is not None and vty[0] == "closure" and self.fn.vars[vid].kind != "temp"
-                  and not is_ret):
-                # a closure binding stored into a literal: the literal owns
-                # a copy of it (MEMORY.md §7.5, agora #173)
-                av = AV("O", (), (), self.closure_owned(src.held))
             else:
                 av = self.move_out(st, vid, line)
                 if is_ret and self.moved_from:
@@ -1148,7 +1148,12 @@ class FnCheck:
                 # a view a closure hands back may point into its arguments,
                 # which the call follows, never into what it captured (§7.5)
                 self.err(line, "a closure hands back a view of what it captured")
-            if av.own in ("O", "P") and op[0] == "v":
+            cty = self.ty_of_place((op[1], op[2])) if op[0] == "v" else None
+            if av.own in ("O", "P") and op[0] == "v" and cty is not None and cty[0] == "closure":
+                # a captured closure is a copy of it: the new closure holds
+                # what that one holds, and no handle of where it sits
+                held |= hroot(av.held, fp)
+            elif av.own in ("O", "P") and op[0] == "v":
                 lid = self.loan(st, (site, i), (op[1], op[2]), "handle")
                 self.cap_loans.add(lid)
                 held.add((fp, lid))
