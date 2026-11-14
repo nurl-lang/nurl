@@ -14538,6 +14538,13 @@ unsafe @ eng_byte s w i k → i {
                     // is given a copy, where one can be made
                     = copied ( sq_add copied ck ) = done T
                 } {}
+                ? & & & & & & & ! done == cown OW_P >= ( fv_pidx ov ) 0 < ( fv_pidx ov ) g_f_ncap ! ( fv_byref ov ) & != cty ET_NONE & ( et_copyable cty ) ! ( et_scalar cty ) == ( sm_mode sm ck ) PM_IN {
+                    // a closure's capture that has a copy, handed to a
+                    // function that keeps its `in` parameter: it is given a
+                    // copy, and the closure keeps its own. (A `sink` takes
+                    // the capture itself.)
+                    = copied ( sq_add copied ck ) = done T
+                } {}
                 ? & ! done ownop {
                     : i moved ( move_out st ov line )
                     // (what the callee keeps of it is what the value holds
@@ -15739,7 +15746,16 @@ unsafe @ eng_byte s w i k → i {
             } {}
             ? ! next {
                 = g_fc_moved_vid -1
+                // (a literal that keeps an `in` parameter with no copy, as
+                // the payload of an option or a result literal: good to hand
+                // back as it is, as the literal was)
+                : ~ i carried 0
+                ? & & & & wrapper whole dest_temp != 0 ( wv_at g_fx_nocopy ov ) != 0 ( wv_at g_fx_litp ov ) {
+                    = carried ( wv_at g_fx_nocopy ov )
+                    ( wv_put g_fx_nocopy ov 0 )
+                } {}
                 : ~ i av ( eng_transfer st op line TG_ARG + * at 256 i dest_depth fty WK_FIELD + i 1 TF_STORED -1 )
+                ? != carried 0 { ( wv_put g_fx_nocopy dest carried ) } {}
                 ? have_dest {
                     = av ( eng_reroot st av dest fp )
                     ? & & & whole == cown OW_O == ( st_own st ov ) OW_M != ( fv_kind ov ) VK_TEMP {
@@ -15763,8 +15779,11 @@ unsafe @ eng_byte s w i k → i {
                             = a + a 1
                         }
                     } {}
+                    // (…or an `in` parameter named whole: handed back as it
+                    // is, the literal keeps the caller's argument - `ret`)
+                    : b keeps_param & & & & tempish ! ( av_call av ) != al 0 whole | ( sq_has ( wv_at g_fx_litp dest ) ov ) & wrapper != 0 ( wv_at g_fx_litp ov )
                     ? & fown ! ( et_copyable fty ) {
-                        ? param_parts {
+                        ? | param_parts keeps_param {
                             // a part of a parameter, read in place: the literal
                             // is a lend of the caller's value, good to hand
                             // back as it is and nothing else
@@ -16312,6 +16331,30 @@ unsafe @ eng_byte s w i k → i {
                 = g_s_consumes ( sq_add g_s_consumes ( fv_pidx b ) )
                 ( eng_effect st ( pl_make b 0 ) EF_REPLACE ln 0 )
                 ( st_put st b ( av_make OW_M 0 0 0 F ) )
+                // (the result owns it: it is no lend of the argument the
+                // call took)
+                : i bp ( pl_make b 0 )
+                : i all ( sq_union ( av_loans av ) ( held_loans ( av_held av ) ) )
+                : ~ i mine 0
+                : ~ i j 0
+                ~ < j ( sq_len all ) {
+                    : i l ( sq_at all j )
+                    ? & & ( el_is_loan l ) == ( el_place l ) bp == ( el_kind l ) LK_HANDLE { = mine ( sq_add mine l ) } {}
+                    = j + j 1
+                }
+                ? | != mine 0 ( sq_has ( av_alias av ) bp ) {
+                    : i rest ( sq_minus ( av_loans av ) mine )
+                    : i held ( av_held av )
+                    : i tmp ( wv_new )
+                    = j 0
+                    ~ < j ( sq_len held ) {
+                        : i he ( sq_at held j )
+                        ? ! ( sq_has mine ( he_loan he ) ) { ( wv_push tmp he ) } {}
+                        = j + j 1
+                    }
+                    = av ( av_make ? & != rest 0 == ( av_own av ) OW_L OW_L OW_O rest ( sq_del ( av_alias av ) bp ) ( sq_set_of_wv tmp ) & ( av_call av ) != rest 0 )
+                    ( wv_drop tmp )
+                } {}
             } {}
             = k + k 1
         }
@@ -17992,7 +18035,13 @@ unsafe @ eng_byte s w i k → i {
             : i j ( tp_at t 5 0 )
             : i sk ( tp_at t 5 2 )
             : i kind ( tp_at t 5 4 )
-            ? ! & & == kind LK_HELD < sk np ! ( et_view_capable ( efp_ty f sk ) ) {
+            // (An `inout` argument given a capture or another argument
+            // whole is given a copy of it, where its type has one: it holds
+            // nothing of where the value came from. A capture taken by
+            // pointer is given the handle itself.)
+            : i jt ( efp_ty f j )
+            : b copied_in & & & & & == kind LK_HANDLE >= j ncap == ( tp_at t 5 1 ) 0 == ( tp_at t 5 3 ) 0 != jt ET_NONE & ! ( et_is_view jt ) ( et_copyable jt )
+            ? & ! copied_in ! & & == kind LK_HELD < sk np ! ( et_view_capable ( efp_ty f sk ) ) {
                 ? | | < j ncap < sk ncap == ( sm_mode f j ) PM_INOUT { = real T } {}
             } {}
             = k + k 1

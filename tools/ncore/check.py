@@ -1098,6 +1098,16 @@ class FnCheck:
                     # trait objects own their value)
                     copied.add(k)
                     continue
+                if (cur and cur.own == "P" and op[1] in self.pidx and self.pidx[op[1]] < self.ncap
+                        and not getattr(cv, "byref", False) and cv.ty is not None
+                        and self.T.copyable(cv.ty) and not self.T.is_scalar(cv.ty)
+                        and k < len(sm["modes"]) and sm["modes"][k] == "in"):
+                    # a closure's capture that has a copy, handed to a
+                    # function that keeps its `in` parameter: it is given a
+                    # copy, and the closure keeps its own (MEMORY.md §7.5,
+                    # agora #796). (A `sink` takes the capture itself.)
+                    copied.add(k)
+                    continue
                 if cur and cur.own in ("O", "P"):
                     moved = self.move_out(st, op[1], line)
                     # (what the callee keeps of it is what the value holds
@@ -2219,7 +2229,17 @@ class FnCheck:
                     continue
                 self.moved_from = None
                 was = cur.own if cur is not None else None
+                carried = None
+                if (ty is not None and ty[0] in ("opt", "res") and op[0] == "v" and not op[2]
+                        and op[1] in self.lit_nocopy and op[1] in self.lit_params
+                        and dest_vid is not None and self.fn.vars[dest_vid].kind == "temp"):
+                    # (a literal that keeps an `in` parameter with no copy,
+                    # as the payload of an option or a result literal: good
+                    # to hand back as it is, as the literal was)
+                    carried = self.lit_nocopy.pop(op[1])
                 av = self.transfer(st, op, line, (site, i), dest_depth, fty, f"field {i + 1}", stored=True)
+                if carried is not None:
+                    self.lit_nocopy[dest_vid] = carried
                 if dest_vid is not None:
                     av = self.reroot(st, av, dest_vid, (names[i],))
                     if was == "O" and st.vals[op[1]].own == "M" and self.fn.vars[op[1]].kind != "temp":
@@ -2233,11 +2253,18 @@ class FnCheck:
                         # (a statement's temporary, or the unnamed binding a
                         # `\` try hands its failure on in)
                         if (dv is not None and (dv.kind == "temp" or dv.name.startswith("%t")) and not av.call
-                                and av.alias and all(a[0] in self.pidx and a[1] for a in av.alias)):
+                                and av.alias and (all(a[0] in self.pidx and a[1] for a in av.alias)
+                                                  or (op[0] == "v" and not op[2] and (
+                                                      op[1] in self.lit_params.get(dest_vid, ())
+                                                      or (ty is not None and ty[0] in ("opt", "res")
+                                                          and op[1] in self.lit_params))))):
                             # a part of a parameter, read in place: the
                             # literal is a lend of the caller's value, good
                             # to hand back as it is and nothing else
                             # (MEMORY.md §7.6, agora #200)
+                            # (…or an `in` parameter named whole: handed
+                            # back as it is, the literal keeps the caller's
+                            # argument - `ret`)
                             nc_loans |= av.loans
                             nc_alias |= av.alias
                             self.lit_nocopy[dest_vid] = i + 1
@@ -2680,6 +2707,14 @@ class FnCheck:
                             self.s_consumes.add(self.pidx[b])
                             self.effect(st, (b, ()), "replace", ln)
                             st.vals[b] = AV("M")
+                            # (the result owns it: it is no lend of the
+                            # argument the call took)
+                            mine = {l for l in av.loans | hloans(av.held)
+                                    if self.loans.get(l, (None,))[0] == (b, ()) and self.loans[l][1] == "handle"}
+                            if mine or (b, ()) in av.alias:
+                                rest = av.loans - mine
+                                av = AV("L" if rest and av.own == "L" else "O", rest, av.alias - {(b, ())},
+                                        {(hp, l) for hp, l in av.held if l not in mine}, av.call and bool(rest))
                 if (av.own in ("L", "O") and not av.call and av.loans and self.fn.ret is not None
                         and self.fn.ret[0] not in VIEW_TYPES and self.T.owning(self.fn.ret)
                         and op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp"
@@ -3019,9 +3054,17 @@ def check_program(prog, max_rounds=40):
         # (…and what it leaves one ARGUMENT holding of another is followed
         # where the call that runs it is seen: closure_arg_effects. A
         # capture left holding something, or held by an argument, is not.)
+        # (An `inout` argument given a capture or another argument whole is
+        # given a copy of it, where its type has one: it holds nothing of
+        # where the value came from. A capture taken by pointer is given
+        # the handle itself - agora #864.)
         real = [x for x in sm["stores"]
                 if not (x[4] == "held" and x[2] < len(fn.params)
                         and not T.view_capable(fn.vars[fn.params[x[2]]].ty))
+                and not (x[4] == "handle" and x[0] >= ncap_ and not x[1] and not x[3]
+                         and fn.vars[fn.params[x[0]]].ty is not None
+                         and fn.vars[fn.params[x[0]]].ty[0] not in VIEW_TYPES
+                         and T.copyable(fn.vars[fn.params[x[0]]].ty))
                 and (x[0] < ncap_ or x[2] < ncap_ or fn.modes[x[0]] == "inout")]
         if getattr(fn, "is_closure", False) and real:
             # a closure's type does not say what running it stores, so
