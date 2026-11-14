@@ -11627,6 +11627,40 @@ unsafe @ eng_keep_fn → v {
     ^ any
 }
 
+// The shared handle types (an Rc, an Arc, a program handle whose copy is
+// a share) a value of type `t` may reach, pushed onto `out` once each.
+@ __et_shared_in i t i out → v {
+    ? | < t 0 ( et_scalar t ) { ^ } {}
+    : i kind ( et_kind t )
+    ? | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT == kind EK_SLICE { ( __et_shared_in ( et_at t ET_E1 ) out ) ^ } {}
+    ? == kind EK_RES { ( __et_shared_in ( et_at t ET_E1 ) out ) ( __et_shared_in ( et_at t ET_E2 ) out ) ^ } {}
+    ? | != kind EK_NAMED ( __et_in_seen t ) { ^ } {}
+    ? & ( et_flag t ETF_SHARED ) ! ( __wv_has out t ) { ( wv_push out t ) } {}
+    ( wv_push g_et_seen t )
+    ? ( et_flag t ETF_HANDLE ) { ( __et_shared_in ( et_at t ET_E1 ) out ) } {
+        ? ( et_flag t ETF_STRUCT ) {
+            : ~ i k 0
+            ~ < k ( et_at t ET_F_N ) { ( __et_shared_in ( et_field_ty t k ) out ) = k + k 1 }
+        } {}
+        ? ( et_flag t ETF_ENUM ) {
+            : ~ i v 0
+            ~ < v ( et_at t ET_V_N ) {
+                : i at ( __et_variant_at t v )
+                : ~ i q 0
+                ~ < q ( wv_at g_et_w + at 1 ) { ( __et_shared_in ( et_of ( wv_at g_et_w + + at 2 q ) ) out ) = q + q 1 }
+                = v + v 1
+            }
+        } {}
+    }
+    ( wv_pop g_et_seen )
+}
+
+@ et_shared_in i t i out → v {
+    : i was ( __et_ask )
+    ( __et_shared_in t out )
+    ( __et_asked was )
+}
+
 @ et_reaches_shared i t i sh → b {
     : i was ( __et_ask )
     : b r ( __et_reaches t sh )
@@ -17394,6 +17428,7 @@ unsafe @ eng_byte s w i k → i {
     ? ( seq key `rviews` ) { ^ ( __core_tab g_fn_rviews f ) } {}
     ? ( seq key `vcopies` ) { ^ ( __core_tab g_fn_vcopies f ) } {}
     ? ( seq key `invoke_only` ) { ^ ( __core_tab g_fn_invoke_only f ) } {}
+    ? ( seq key `syncd` ) { ^ ( __ws_syncd f np ) } {}
     ? ( seq key `retptr` ) { ^ ( __core_tab g_pending_impl ( nurl_str_cat `retptr##` f ) ) } {}
     ? ( seq key `ret_owned` ) { ^ ( nurl_str_cat ( nurl_sym_get2 syms f `__ret_owned` ) `` ) } {}
     ? ( seq key `ffi_writes` ) { ^ ( nurl_str_cat ( nurl_sym_get2 syms f `__ffi_writes` ) `` ) } {}
@@ -17677,6 +17712,33 @@ unsafe @ eng_byte s w i k → i {
         ( wv_drop hl )
         ( wv_trunc rholds 0 )
     } {}
+    // The parameters the walk says it changes only through a handle that
+    // synchronises itself (`syncd`: a Locked, a store behind its own mutex,
+    // read out of them - the thread rules' answer): no change to the value
+    // itself, which an Arc may freeze, but a change inside those handles'
+    // payloads - every share of one reaches it. An Arc's payload is frozen:
+    // none of it.
+    : i regions ( wv_new )
+    : i syncd ( wv_new )
+    ( __ws_idx ( ws_get f tmpl `syncd` n ) n syncd )
+    = k 0
+    ~ < k ( wv_len syncd ) {
+        : i sk ( wv_at syncd k )
+        : i kept ( wv_new )
+        : ~ i e 0
+        ~ < e ( wv_len effects ) { ? != ( tp_at ( wv_at effects e ) 3 0 ) sk { ( wv_push kept ( wv_at effects e ) ) } {} = e + e 1 }
+        ( wv_copy effects kept ) ( wv_drop kept )
+        : i shs ( wv_new )
+        ( et_shared_in ( efp_ty fi sk ) shs )
+        = e 0
+        ~ < e ( wv_len shs ) {
+            : i sh ( wv_at shs e )
+            ? ! ( et_flag sh ETF_ARC ) { ( wv_push regions ( tp3 sh 0 EF_REALLOC ) ) } {}
+            = e + e 1
+        }
+        ( wv_drop shs )
+        = k + k 1
+    }
     : i r ( sx_new )
     ( sm_put r SM_STATE 3 )
     ( sm_put r SM_RES ? ret_scalar RES_NONE ? != 0 ( wv_len lends ) RES_LENT RES_OWN )
@@ -17696,6 +17758,8 @@ unsafe @ eng_byte s w i k → i {
     ( sm_put r SM_STORES ( sm_keep ( sq_set_of_wv stores ) ) )
     ( sm_put r SM_CONSUMES ( sm_keep ( sq_set_of_wv consumes ) ) )
     ( sm_put r SM_INVOKES ( sm_keep ( sq_set_of_wv invokes ) ) )
+    ( sm_put r SM_REGIONS ( sm_keep ( sq_set_of_wv regions ) ) )
+    ( wv_drop regions ) ( wv_drop syncd )
     ( wv_drop sink ) ( wv_drop keeps ) ( wv_drop stored ) ( wv_drop hand ) ( wv_drop tmp ) ( wv_drop consumes )
     ( wv_drop reallocs ) ( wv_drop mutates ) ( wv_drop effects ) ( wv_drop changed ) ( wv_drop lends ) ( wv_drop rholds )
     ( wv_drop stores ) ( wv_drop escapes ) ( wv_drop only_run ) ( wv_drop invokes )
@@ -19694,6 +19758,23 @@ unsafe @ __core_sum_kv s key s val → v {
     ( __core_o `\t` ) ( __core_o key ) ( __core_o `=` ) ( __core_o val )
 }
 
+// The parameters of `f` it changes only through a handle that
+// synchronises itself (a Locked, a store behind its own mutex) read out of
+// them: no change to the value itself, which an Arc may freeze. The thread
+// rules' own answer (__thr_unsync_change), as words.
+unsafe @ __ws_syncd s f i np → s {
+    : ~ s sy ( nurl_str_cat `` `` )
+    : s fb ( bck_generic_base f )
+    : ~ i k 0
+    ~ < k np {
+        : s ks ( nurl_str_int k )
+        : b chg | | ( str_contains_word ( nurl_sym_get g_fn_mutates f ) ks ) ( str_contains_word ( nurl_sym_get g_fn_mutates fb ) ks ) ( nurl_sym_has_word g_fn_reallocs f ks )
+        ? & chg ! ( __thr_unsync_change f fb ks ) { = sy ( nurl_str_cat3 sy ? == 0 ( nurl_str_len sy ) `` ` ` ks ) } {}
+        = k + k 1
+    }
+    ^ sy
+}
+
 // `sum`, a name, its parameter count, then `key=words` for each answer
 // the walk's summaries hold for that name once every one is final (the
 // tables of docs/dev/COMPILER_INTERNALS.md, "escape analysis"): what the
@@ -19757,6 +19838,11 @@ unsafe @ core_print_sum i syms s f i np → v {
     }
     ? any { ( __core_sum_kv `lkind` lk ) } {}
     ( __core_sum_kv `hrun` hr )
+    // (the parameters it changes only through a handle that synchronises
+    // itself - a Locked, a store behind its own mutex - read out of them:
+    // no change to the value itself, which an Arc may freeze. The thread
+    // rules' own answer, __thr_unsync_change.)
+    ( __core_sum_kv `syncd` ( __ws_syncd f np ) )
     ( __core_o `\n` )
 }
 
