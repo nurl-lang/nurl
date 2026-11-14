@@ -13257,6 +13257,13 @@ unsafe @ eng_byte s w i k → i {
     ^ ( ep_last q )
 }
 
+// Has the named type `ty` a `% Drop` of its own (a `drop__T` function)?
+@ eng_own_dtor i ty → b {
+    ? | == ty ET_NONE != ( et_kind ty ) EK_NAMED { ^ F } {}
+    : s nm ( eng_str ( et_at ty ET_NAME ) )
+    ^ >= ( ef_find ( eng_intern ( nurl_str_cat `drop__` ( nurl_str_slice nm 1 - ( nurl_str_len nm ) 1 ) ) ) ) 0
+}
+
 // Is element `e` a payload (`#V0`)?
 @ __eng_elem_is_pay i e → b {
     ? | == e 0 == e EE_STAR { ^ F } {}
@@ -17079,7 +17086,9 @@ unsafe @ eng_byte s w i k → i {
         : ~ i sub ( held_sub ( av_held av ) ( ep_child 0 tag ) )
         : b whole & ( op_is_place op ) == ( pl_path op ) 0
         : i pty ? whole ( agg_field_ty ( fv_ty ( pl_var op ) ) variant idx ) ET_NONE
-        ? & & whole == ( fv_kind ( pl_var op ) ) VK_TEMP == ( av_own av ) OW_O {
+        // (…not of one with a destructor of its own: it runs on the whole
+        // value, payloads and all - a payload is a lend of it)
+        ? & & & whole == ( fv_kind ( pl_var op ) ) VK_TEMP == ( av_own av ) OW_O ! ( eng_own_dtor ( fv_ty ( pl_var op ) ) ) {
             : i sub2 ? >= dest 0 ( rebase_self sub ( pl_var op ) tag dest ) sub
             ^ ( lent_part ( av_make OW_O 0 0 sub2 F ) )
         } {}

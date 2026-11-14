@@ -3063,7 +3063,14 @@ class FnCheck:
             tag = f"#{variant}{idx}"
             sub = hsub(av.held, (tag,))
             pty = self.ty_of_field(self.fn.vars[op[1]].ty if op[0] == "v" and not op[2] else None, variant, idx)
-            if op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp" and av.own == "O":
+            mty = self.fn.vars[op[1]].ty if op[0] == "v" else None
+            own_dtor = (mty is not None and mty[0] == "named"
+                        and ("drop__" + mty[1]) in getattr(self.prog, "fn_flags", ()))
+            if (op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp" and av.own == "O"
+                    and not own_dtor):
+                # (…not of one with a destructor of its own: it runs on the
+                # whole value, payloads and all - a payload is a lend of it,
+                # agora #641)
                 if dest_vid is not None:
                     sub = self.rebase_self(sub, op[1], tag, dest_vid)
                 return self.lent_part(AV("O", (), (), sub))
