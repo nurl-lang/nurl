@@ -492,7 +492,9 @@ class FnCheck:
     def lent_part(self, av):
         """A part read out of a value that holds it as a lend - a field the
         value was given a handle copy for - is that lend, not an owner."""
-        own = {l for hp, l in av.held if not hp and l in self.loans}
+        # (what a parameter holds, `held`, is held somewhere inside: it does
+        # not make the part a lend)
+        own = {l for hp, l in av.held if not hp and l in self.loans and self.loans[l][1] != "held"}
         if not own:
             return av
         alias = {self.loans[l][0] for l in own}
@@ -1497,6 +1499,11 @@ class FnCheck:
                 return st
             fty = self.ty_of_place((vid, path))
             new = self.rvalue(st, rv, ln, ddepth, fty, self.pname((vid, path)))
+            if new.own == "L" and fty is not None and fty[0] == "closure":
+                # a closure stored into a field is the field's own copy: it
+                # holds what the one it was copied from holds, and is no
+                # borrow of where that one sits (MEMORY.md §7.5)
+                new = AV("O", (), (), self.closure_owned(new.held))
             if cur is not None and cur.own in ("M", "X", "D"):
                 self.err(ln, f"{v.name} is used after it was moved")
             add = (hfrom(new.loans) | new.held) if new.own == "L" else new.held

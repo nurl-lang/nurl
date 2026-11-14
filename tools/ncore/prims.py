@@ -157,7 +157,9 @@ PRIMS = {
     "chan_close": S(["in"]),
     # ---- HashMap ---------------------------------------------------------------
     "map_new": S([], res="own"),
-    "map_set": S(["in"] * 5, res="own", effects=[(0, (), "realloc")],
+    # (the key's old value leaves the map with the result: what was lent
+    # out of it is lent out of nothing the map holds)
+    "map_set": S(["in"] * 5, res="own", effects=[(0, (), "realloc"), (0, E, "replace")],
                  stores=[(0, E, 1, (), "value"), (0, E, 2, (), "value")],
                  rholds=[(("#T0",), 0, E, "held")]),
     "map_get": S(["in"] * 4, res="lent", lends=[(0, E, "handle")], elems=[0]),
