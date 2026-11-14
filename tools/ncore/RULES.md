@@ -74,6 +74,8 @@ summarised by the same analysis, to a fixpoint over the program.
 | A borrowed value stored into an owner is copied, with the views it holds; one that cannot be copied is refused | §7.6, §2.13 | `rvalue` (`agg`), `apply_call` stores |
 | A literal around a part of a parameter is a lend of the caller's value where it is handed back as it is. Taken by anything else, it is copied there, or refused where the part has no copy | §7.6 (#200) | `rvalue` (`agg`), `lit_nocopy`, `lit_lendcopy` |
 | A `sink` parameter is the function's own: handed to a new holder, it moves there | §2.1 | `transfer` |
+| `dyn Trait x`, x a value the caller keeps (a parameter, a field read): the box is given a copy, where one can be made | §1 Methods | `apply_call` (`copied`) |
+| A raw string a closure hands back is copied: the caller's own, whatever buffer the body read it out of | §7.5 | `make_closure` |
 | A place is followed five steps deep (`PATH_MAX`): a walk down a recursive value names the place that deep and stops | - (the engine's bound) | `loan` |
 | A `?` / `??` that selects among this frame's owners moves the one it selects into an immutable binding, and out with a return | §2.2 | `stmt` (`let`), `transfer` |
 | A literal that is a statement's temporary shows its consumer the bindings it names; they move into it only where it is taken | §7.6 (h693) | `agg_lends` |

@@ -837,6 +837,13 @@ class FnCheck:
                     # (MEMORY.md §7.6)
                     copied.add(k)
                     continue
+                if (cur and cur.own == "P" and op[1] in self.pidx and self.fn.modes[self.pidx[op[1]]] == "in"
+                        and name == "dyn" and cv.ty is not None and self.T.copyable(cv.ty)):
+                    # `dyn Trait p`, p a parameter the caller keeps: the box
+                    # is given a copy, where one can be made (MEMORY.md §1,
+                    # trait objects own their value)
+                    copied.add(k)
+                    continue
                 if cur and cur.own in ("O", "P"):
                     moved = self.move_out(st, op[1], line)
                     # (what the callee keeps of it is what the value holds
@@ -848,6 +855,12 @@ class FnCheck:
                 # consumer: the copy is made for it)
                 copied.add(k)
                 continue
+            if avs[k].own == "L" and name == "dyn" and op[0] == "v":
+                ty = self.ty_of_place((op[1], op[2]))
+                if ty is not None and self.T.copyable(ty):
+                    # (a borrowed value boxed: the box is given a copy)
+                    copied.add(k)
+                    continue
             if avs[k].own == "L":
                 ty = self.ty_of_place((op[1], op[2])) if op[0] == "v" else None
                 if ty is not None and self.T.owns_handle(ty):
