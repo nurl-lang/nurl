@@ -476,6 +476,7 @@
 : i FX_STALE_CAP 2048  // a closure body's capture taken by pointer
 : i FX_OWN_SLOT 4096  // a `: ~ s` born owning: a literal, a fresh value
 : i FX_RET_AGG 8192  // a literal handed back as it is, or nested in one: its fields move out of what they name
+: i FX_PAYLOAD 16384  // bound by a `??` arm to a payload
 : ~ i g_fc_cap_loans 0  // the loans closures captured (a set)
 : ~ i g_fc_walking 0  // the loans of the loops being walked (a set)
 : ~ i g_fc_ret_watch -1  // the binding a `ret` handed back, while the `;` blocks run after it
@@ -13550,21 +13551,10 @@ unsafe @ eng_byte s w i k → i {
         }
     } {}
     ? & & & & & is_ret == ( av_own av ) OW_L ( av_call av ) & != dest_ty ET_NONE == ( et_kind dest_ty ) EK_S & whole == ( fv_kind ovid ) VK_TEMP != ( av_loans av ) 0 {
-        : i loans ( av_loans av )
-        : ~ b all T
-        : ~ i k 0
-        ~ & all < k ( sq_len loans ) {
-            : i l ( sq_at loans k )
-            ? ! ( el_is_loan l ) { = all F } {
-                : i lv ( pl_var ( el_place l ) )
-                : i lk ( et_kind ( fv_ty lv ) )
-                ? ! & & == ( fv_kind lv ) VK_LOCAL != ( fv_ty lv ) ET_NONE | == lk EK_STRING == lk EK_S { = all F } {}
-            }
-            = k + k 1
-        }
-        ? all {
-            // the text of a local String (or of an owned raw string), as a
-            // call handed it back: the caller is given a copy of it, its own
+        ? ( eng_text_of_local st ( av_loans av ) ) {
+            // the text of a local String (or of an owned raw string) - a
+            // local's field too, whatever the local borrows -, as a call
+            // handed it back: the caller is given a copy of it, its own
             ^ ( av_make OW_O 0 0 0 F )
         } {}
     } {}
@@ -16200,6 +16190,7 @@ unsafe @ eng_byte s w i k → i {
     : i kind ( fv_kind vid )
     : i vty ( fv_ty vid )
     : i rk ( ec rv )
+    ? == rk RV_PAYLOAD { ( fx_set vid FX_PAYLOAD ) } {}
     ? & != rk RV_NONE == kind VK_TEMP {
         // (a call whose summary says its result is its own)
         ( fx_clear vid FX_TEMP_FRESH )
@@ -17829,6 +17820,36 @@ unsafe @ eng_byte s w i k → i {
         = at ( eng_next at )
     }
     ( wv_drop nones )
+}
+
+// Are `loans` - what a call lent - the text of a String (or of a raw
+// string) a local of this function holds: every place the call itself lent
+// out of is one, of a local that owns its value (on the paths that made
+// it, at least) - not a view of a loop's element, nor an arm's payload
+// (the option goes with the `??`)?
+@ eng_text_of_local i st i loans → b {
+    : ~ i mine 0
+    : ~ i k 0
+    ~ < k ( sq_len loans ) {
+        : i l ( sq_at loans k )
+        ? & ( el_is_loan l ) == ( el_tag l ) TG_L { = mine ( sq_add mine l ) } {}
+        = k + k 1
+    }
+    ? == 0 ( sq_len mine ) {
+        = k 0
+        ~ < k ( sq_len loans ) { ? ! ( el_is_loan ( sq_at loans k ) ) { ^ F } {} = k + k 1 }
+        = mine loans
+    } {}
+    = k 0
+    ~ < k ( sq_len mine ) {
+        : i pl ( el_place ( sq_at mine k ) )
+        : i lv ( pl_var pl )
+        : i ty ( eng_ty_of pl )
+        ? | | | | != ( fv_kind lv ) VK_LOCAL ( fx_has lv FX_PAYLOAD ) != ( st_own st lv ) OW_O ! ( eng_path_no_star ( pl_path pl ) ) == ty ET_NONE { ^ F } {}
+        ? & != ( et_kind ty ) EK_STRING != ( et_kind ty ) EK_S { ^ F } {}
+        = k + k 1
+    }
+    ^ T
 }
 
 // Is no step of `path` an element (`*`)?

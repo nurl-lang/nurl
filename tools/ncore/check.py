@@ -220,6 +220,7 @@ class FnCheck:
         self.fe_vars = set()     # the element bindings of `~ x xs` loops
         self.cursor_slots = set()  # the `: ~ s` bindings born from a view
         self.own_slots = set()     # the `: ~ s` bindings born owning: a literal, a fresh value
+        self.payload_bound = set()  # the bindings a `??` arm binds to a payload
 
         def blocks(stmts):
             nones = {s[1] for s in stmts if s[0] == "let" and s[2] is None}
@@ -500,6 +501,24 @@ class FnCheck:
             e = self.elem_norm(vty)
             return e is not None and e == self.elem_norm(pty)
         return False
+
+    def text_of_local(self, st, av):
+        """Is `av` - what a call lent - the text of a String (or of a raw
+        string) a local of this function holds: every place the call itself
+        lent out of is one, of a local that owns its value (on the paths
+        that made it, at least) - not a view of a loop's element, nor an
+        arm's payload (agora #679: the option goes with the `??`)?"""
+        mine = [l for l in av.loans if l in self.loans and isinstance(l[0], tuple)
+                and len(l[0]) == 3 and l[0][1] == "l"]
+        if not mine:
+            mine = [l for l in av.loans if l in self.loans]
+            if len(mine) != len(av.loans):
+                return False
+        return all(self.fn.vars[self.loans[l][0][0]].kind == "local"
+                   and self.loans[l][0][0] not in self.payload_bound
+                   and st.vals.get(self.loans[l][0][0]) is not None
+                   and st.vals[self.loans[l][0][0]].own == "O" and "*" not in self.loans[l][0][1]
+                   and self.ty_of_place(self.loans[l][0]) in (("String",), ("s",)) for l in mine)
 
     def scalar_place(self, place):
         """Is the place known to hold a number (no handle, no view)?"""
@@ -809,11 +828,11 @@ class FnCheck:
                     self.moved_from = None
         if (is_ret and av.own == "L" and av.call and dest_ty == ("s",) and op[0] == "v" and not op[2]
                 and self.fn.vars[op[1]].kind == "temp" and av.loans
-                and all(l in self.loans and self.fn.vars[self.loans[l][0][0]].kind == "local"
-                        and self.fn.vars[self.loans[l][0][0]].ty in (("String",), ("s",)) for l in av.loans)):
-            # the text of a local String (or of an owned raw string), as a
-            # call handed it back: the caller is given a copy of it, its
-            # own (MEMORY.md §7.6)
+                and self.text_of_local(st, av)):
+            # the text of a local String (or of an owned raw string) - a
+            # local's field too, whatever the local borrows -, as a call
+            # handed it back: the caller is given a copy of it, its own
+            # (MEMORY.md §7.6)
             return AV("O")
         if av.held and is_ret:
             av = self.closure_takes_over(st, av, line, op[0] == "v" and self.fn.vars[op[1]].kind == "temp")
@@ -2567,6 +2586,8 @@ class FnCheck:
         if k == "let":
             _, vid, rv, ln = s
             v = self.fn.vars[vid]
+            if rv is not None and rv[0] == "payload":
+                self.payload_bound.add(vid)
             if rv is not None and v.kind == "temp":
                 # (a call whose summary says its result is its own)
                 self.temp_fresh[vid] = rv[0] == "call" and self.summary(rv[1])["res"] == "own" and not self.summary(rv[1])["rholds"]
