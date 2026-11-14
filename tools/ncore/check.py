@@ -23,7 +23,7 @@ import os
 import sys
 
 from prims import PRIMS
-from lower import Types, Var
+from lower import SCALARS, Types, Var
 
 # NCORE_DERIVE=1: a library function's derived summary (derive.py) answers
 # before its declared one - how far the walk's own answers carry.
@@ -234,6 +234,33 @@ class FnCheck:
                         else:
                             blocks(part)
         blocks(fn.body)
+        # the literals the function hands back as they are (`^ @ W { … }`),
+        # and the literals nested in one (`@ Json { JStr . r str }`): their
+        # fields move out of what they name (h264)
+        self.ret_aggs = set()
+        aggs = {}
+
+        def rets(stmts):
+            for s in stmts:
+                if s[0] == "let" and s[2] is not None and s[2][0] == "agg":
+                    aggs[s[1]] = s[2]
+                elif s[0] == "ret" and s[1] is not None and s[1][0] == "v" and not s[1][2]:
+                    self.ret_aggs.add(s[1][1])
+                for part in s[1:]:
+                    if isinstance(part, list):
+                        if part and isinstance(part[0], tuple) and part[0] and isinstance(part[0][0], str) and len(part[0]) == 2 and isinstance(part[0][1], list):
+                            for _, arm in part:
+                                rets(arm)
+                        else:
+                            rets(part)
+        rets(fn.body)
+        work = [v for v in self.ret_aggs if v in aggs]
+        self.ret_aggs = set(work)
+        while work:
+            for op in aggs[work.pop()][3]:
+                if op[0] == "v" and not op[2] and op[1] in aggs and op[1] not in self.ret_aggs:
+                    self.ret_aggs.add(op[1])
+                    work.append(op[1])
         self.stale_caps = set()  # this closure body's captures taken by pointer
         self.s_cloargs = set()
         self.s_retparams = set()
@@ -262,21 +289,7 @@ class FnCheck:
         return self.ty_at(self.fn.vars[vid].ty, path)
 
     def ty_at(self, ty, path):
-        for p in path:
-            if ty is None:
-                return None
-            if p == "*":
-                ty = self.T.elem(ty)
-            elif p.startswith("#"):
-                vs = self.T.variants(ty)
-                if not vs:
-                    return None
-                var, idx = p[1:-1], int(p[-1])
-                d = dict(vs)
-                ty = d[var][idx] if var in d and idx < len(d[var]) else None
-            else:
-                ty, _ = self.T.field(ty, p)
-        return ty
+        return self.T.at(ty, path)
 
     def holds_views(self, ty):
         if ty is None:
@@ -415,7 +428,7 @@ class FnCheck:
         if vid == self.ret_watch and eff != "end":
             self.ret_changed = True
         if av.own == "L" and eff != "end":
-            for a in av.alias:
+            for a in self.value_aliases(vid, av.alias):
                 self.effect(st, (a[0], a[1] + path), eff, line, depth + 1, weak)
             return
         shown = self.agg_lends.get(vid)
@@ -455,6 +468,40 @@ class FnCheck:
                     continue
                 keep.add((hp, l))
             st.vals[vid] = AV(av.own, av.loans, av.alias, keep)
+
+    def value_aliases(self, vid, alias):
+        """The places of `alias` that are the borrowed value itself: a call
+        that lends a view of `x.g[*].data` lends handles of `x.g` and of
+        `x.g[*]` around it too, and those are not the view's storage - what
+        is done inside the view is done inside `x.g[*].data` only. A place
+        is the value when its type is the value's (a view: its element type
+        is the place's element type); if none is, every place may be."""
+        if len(alias) < 2:
+            return alias
+        vty = self.fn.vars[vid].ty
+        if vty is None:
+            return alias
+        out = []
+        for a in alias:
+            pty = self.ty_of_place(a)
+            if pty is None or pty == vty:
+                out.append(a)
+            elif vty[0] in VIEW_TYPES or pty[0] in VIEW_TYPES:
+                # (bytes are bytes: a raw string's, a String's, a slice's)
+                e = self.elem_norm(vty)
+                if e is not None and e == self.elem_norm(pty):
+                    out.append(a)
+        return out or alias
+
+    def scalar_place(self, place):
+        """Is the place known to hold a number (no handle, no view)?"""
+        ty = self.ty_of_place(place)
+        return ty is not None and ty[0] in SCALARS
+
+    def elem_norm(self, ty):
+        """The element type of `ty` for value_aliases: every number is one."""
+        e = ("u",) if ty[0] == "s" else self.T.elem(ty)
+        return ("num",) if e is not None and e[0] in SCALARS else e
 
     def would_kill(self, st, place, eff, loans, depth=0):
         vid, path = place
@@ -1152,6 +1199,12 @@ class FnCheck:
                             self.err(line, f"{name} takes a borrowed value that cannot be copied")
                     elif (not op[2] and self.fn.vars[op[1]].kind == "local" and avs[k].alias
                           and k < len(sm["modes"]) and sm["modes"][k] == "sink"
+                          # (a `sink` that keeps the value - in its result,
+                          # in another argument - takes the owner over
+                          # through the name, as a keeper does; one that
+                          # releases it would release the owner's)
+                          and not any(r[1] == k for r in sm.get("rholds", ()))
+                          and not any(x[2] == k for x in sm.get("stores", ()))
                           # (a value with a destructor of its own under
                           # another name is that value: agora #768)
                           and not (ty[0] == "named" and ("drop__" + ty[1]) in getattr(self.prog, "fn_flags", ())
@@ -1459,6 +1512,11 @@ class FnCheck:
                 loans |= av.loans
                 for a in av.alias:
                     pl = (a[0], (a[1] + tuple(path))[:PATH_MAX])
+                    if kind == "handle" and path and self.scalar_place(pl):
+                        # (a handle of a number is no handle: a lend of the
+                        # elements of a `Vec f` lends their storage - the
+                        # `view` beside it - and nothing else)
+                        continue
                     alias.add(pl)
                     loans.add(self.loan(st, (site, "l", k), pl, kind))
                 held |= hsub(av.held, tuple(path))
@@ -2227,6 +2285,23 @@ class FnCheck:
                     went = (dest_vid, fp)
                     st.vals[op[1]] = AV("L", {self.loan(st, (site, i, "cm"), went, "handle")}, {went}, cur.held)
                     continue
+                if (dest_vid in self.ret_aggs and op[0] == "v" and op[2]
+                        and all(e != "*" and not e.startswith("#") for e in op[2])
+                        and self.fn.vars[op[1]].kind == "local" and st.vals.get(op[1]) is not None
+                        and st.vals[op[1]].own == "O" and not st.vals[op[1]].loans
+                        and fty is not None and fty[0] == "named" and fty[1] in getattr(self.prog, "zmove", ())):
+                    # a field of a struct this function owns, of a type with
+                    # no copy whose zero value is empty (a struct of Strings
+                    # and options of `% Drop` values), named in a literal
+                    # handed back: it moves out whole, zeroed in the struct,
+                    # which releases the rest of itself (nurlc's `z` flag,
+                    # h264). One whose zero value would still run a `% Drop`
+                    # has no such move, and is lent (AGORA-865)
+                    self.read(st, op, line, (site, i), f"field {i + 1}")
+                    held |= hroot(hsub(st.vals[op[1]].held, tuple(op[2])), fp)
+                    self.effect(st, (op[1], tuple(op[2])), "take", line)
+                    st.gone = st.gone | {(op[1], tuple(op[2])[:PATH_MAX])}
+                    continue
                 self.moved_from = None
                 was = cur.own if cur is not None else None
                 carried = None
@@ -2337,7 +2412,12 @@ class FnCheck:
                            and not (aty[0] == "named" and aty[1] in self.prog.enums))
                 # (an option a callee made around a lend of an element -
                 # `vec_get` - is no place of its own: its payload is the
-                # element)
+                # element. So is one around a lend of a place whose type is
+                # the payload's - an enum of the program's too: `json_get`
+                # lends `?Json` around an element `Json`)
+                if (not wrapped and aty is not None and pty is not None and aty == pty
+                        and aty != self.fn.vars[op[1]].ty):
+                    wrapped = True
                 pl = a if wrapped else (a[0], (a[1] + (tag,))[:PATH_MAX])
                 alias.add(pl)
                 loans.add(self.loan(st, ("pl", id(rv), pl), pl, "handle"))
@@ -2533,10 +2613,15 @@ class FnCheck:
                 # block's local, an arm's - is copied in: MEMORY.md §7.6,
                 # "hands it a value of its own")
                 # (…an owner is: a cursor given a lend stays a borrow, of
-                # whatever it is pointed at now)
+                # whatever it is pointed at now. A cursor given a binding
+                # that owns its value takes the value over, as any name
+                # given an owner does: the cursor's slot owns from here on,
+                # and the binding is moved - nurlc's owner-slot flag)
+                cursor_lends = lambda x: not (self.fn.vars[x].kind == "local" and st.vals.get(x) is not None
+                                              and st.vals[x].own == "O" and not st.vals[x].loans)
                 new = self.rvalue(st, rv, ln, ddepth, v.ty, v.name, copy_ok=not repoint, dest_vid=vid,
                                   named=v.kind != "temp",
-                                  lend_owner=outer if v.kind == "temp" else ((lambda x: True) if v.mut and repoint else (lambda x: False)))
+                                  lend_owner=outer if v.kind == "temp" else (cursor_lends if v.mut and repoint else (lambda x: False)))
                 # (…through a join too: `= x ? c x ( f )` - where the join may
                 # select the target, its value is copied in, h373)
                 own_parts = cur is not None and cur.own in ("O", "P") and new.own in ("L", "O") and any(
@@ -3072,6 +3157,9 @@ def check_program(prog, max_rounds=40):
         real = [x for x in sm["stores"]
                 if not (x[4] == "held" and x[2] < len(fn.params)
                         and not T.view_capable(fn.vars[fn.params[x[2]]].ty))
+                # (…nor where the place it is stored in has no room for one)
+                and not (x[4] == "held" and x[0] < len(fn.params)
+                         and not T.view_capable(T.at(fn.vars[fn.params[x[0]]].ty, x[1]), ()))
                 and not (x[4] == "handle" and x[0] >= ncap_ and not x[1] and not x[3]
                          and fn.vars[fn.params[x[0]]].ty is not None
                          and fn.vars[fn.params[x[0]]].ty[0] not in VIEW_TYPES

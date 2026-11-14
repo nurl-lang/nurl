@@ -287,6 +287,24 @@ class Types:
                     return norm(fty), name
         return None, None
 
+    def at(self, ty, path):
+        """The type of the place `path` inside a value of type `ty`."""
+        for p in path:
+            if ty is None:
+                return None
+            if p == "*":
+                ty = self.elem(ty)
+            elif p.startswith("#"):
+                vs = self.variants(ty)
+                if not vs:
+                    return None
+                var, idx = p[1:-1], int(p[-1])
+                d = dict(vs)
+                ty = d[var][idx] if var in d and idx < len(d[var]) else None
+            else:
+                ty, _ = self.field(ty, p)
+        return ty
+
     def elem(self, ty):
         if ty and ty[0] in ("vec", "slice", "box"):
             return ty[1]
