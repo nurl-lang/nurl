@@ -174,6 +174,7 @@ class FnCheck:
         self.walking = set()
         self.moved_from = None   # the last value moved that holds views of its own parts     # the loans of the loops being walked: their containers' buffers     # a temporary -> its value is what a call made and handed over
         self.s_invokes = set()
+        self.s_detaches = set()
         self.s_cloargs = set()
         self.s_retparams = set()
         self.s_regions = set()
@@ -737,6 +738,22 @@ class FnCheck:
             if k < len(avs) and self.closure_capture_effects(avs[k]):
                 self.err(line, f"{name}: the closure in argument {k + 1} changes what it captured, "
                                f"and several threads may run it at once")
+        # an `inout` argument is the callee's alone for the call: no other
+        # argument is the same binding, a part of it, or a lend of it
+        # (MEMORY.md §2.4)
+        for k, mode in enumerate(sm["modes"][:len(ops)]):
+            if mode != "inout" or ops[k][0] != "v":
+                continue
+            _, vid, path = ops[k]
+            for m, op in enumerate(ops):
+                if m == k:
+                    continue
+                same = op[0] == "v" and op[1] == vid and (prefix(op[2], path) or prefix(path, op[2]))
+                lend = any(a[0] == vid and (prefix(a[1], path) or prefix(path, a[1])) for a in avs[m].alias)
+                if same or lend:
+                    self.err(line, f"{name}: argument {k + 1} is handed over to be changed (`inout`), "
+                                   f"and argument {m + 1} reaches it too")
+                    break
         # consumed arguments
         copied = set()
         for k in sm["consumes"]:
@@ -798,6 +815,10 @@ class FnCheck:
         # a closure another thread runs takes what it captured with it
         for k in sm.get("detaches", ()):
             if k < len(avs):
+                if ops[k][0] == "v" and not ops[k][2] and ops[k][1] in self.pidx:
+                    # (a parameter handed on to a callee that detaches it:
+                    # this function detaches its argument)
+                    self.s_detaches.add(self.pidx[ops[k][1]])
                 for hp, l in avs[k].held:
                     if l in self.loans and hp and hp[-1].startswith("^") and hp[-1] != "^f":
                         place = self.loans[l][0]
@@ -1823,6 +1844,7 @@ class FnCheck:
                 "effects": sorted(self.s_effects), "stores": sorted(stores),
                 "consumes": sorted(consumes), "elems": sorted(self.s_elems),
                 "invokes": sorted(self.s_invokes), "cloargs": sorted(self.s_cloargs),
+                "detaches": sorted(self.s_detaches),
                 "regions": sorted(self.s_regions), "selfholds": sorted(self.s_selfholds),
                 "rclos": sorted(rclos), "sclos": sorted(sclos), "calllends": sorted(calllends)}
 
@@ -1832,7 +1854,7 @@ def initial_summary(prog, fn):
     return {"modes": list(fn.modes), "res": "none" if fn.ret is None or T.is_scalar(fn.ret) else "own",
             "lends": [], "rholds": [], "effects": [], "stores": [],
             "consumes": [k for k, m in enumerate(fn.modes) if m == "sink"], "elems": [], "invokes": [],
-            "cloargs": [], "regions": [], "selfholds": [], "rclos": [], "sclos": []}
+            "cloargs": [], "regions": [], "selfholds": [], "rclos": [], "sclos": [], "detaches": []}
 
 
 def check_program(prog, max_rounds=40):
@@ -1888,6 +1910,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out

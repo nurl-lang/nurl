@@ -54,6 +54,8 @@ summarised by the same analysis, to a fixpoint over the program.
 | An owner handed on by name moves; `: ~` of a name is a cursor | §2.2, §7.6 | `transfer`, `move_out` |
 | A value that holds a view is read whole only while what the view points into is there | §2.10 | `read` |
 | A call's arguments are frozen for its duration: its effects end no view another argument holds | §2.4 | `apply_call` |
+| An `inout` argument is the callee's alone for the call: no other argument is the same binding, a part of it or a lend of it | §2.4 | `apply_call` |
+| A function that hands a parameter to a callee that detaches it detaches its argument | §2.7 | `s_detaches` |
 | A call's effects come before its stores; a consumed argument is moved | §2.1 | `apply_call` |
 | A view-typed parameter (`s`, a slice) is a view the caller lent, never an owner | §1 | `read` |
 | A borrow handed to a consumer: a part read in place is taken out of its owner; a call's lend in a temporary is copied; a binding of a call's lend is refused | §2.5, §7.6 | `apply_call`, `take_payload` |
