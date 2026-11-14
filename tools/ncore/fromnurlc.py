@@ -206,7 +206,9 @@ class Reader:
                 self.prog.clonable.add(name)
             else:
                 self.prog.unclonable.add(name)
-            if len(info.targs) == 1 and info.base in HANDLES_OF_ONE:
+            # (a handle over one payload: the ones listed, and any other
+            # library handle with one type argument - a guard, a pool)
+            if len(info.targs) == 1 and (info.base in HANDLES_OF_ONE or info.cls == 0):
                 # a handle over one payload: `*` is the payload
                 self.prog.handle_elem[name] = self.conv(info.targs[0])
                 if info.base in SHARED_HANDLES:

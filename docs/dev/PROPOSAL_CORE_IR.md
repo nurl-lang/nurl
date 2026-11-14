@@ -10,6 +10,40 @@ the core IR and `nurlc --emit-core` prints it. [CORE_IR.md](CORE_IR.md)
 describes it, and `tools/ncore --nurlc` runs the reference checker on what
 nurlc lowers instead of on its own parser's lowering.
 
+S2 is being prepared (AGORA-859). A program the walk refuses on an
+ownership rule reaches the IR whole (one door, CORE_IR.md §6), the IR
+carries the walk's own summaries of the functions whose bodies cross the
+raw boundary (`sum` lines), and the reference checker's rules are a table,
+[tools/ncore/RULES.md](../../tools/ncore/RULES.md), each row with the
+section of docs/MEMORY.md that states it. That table is what the engine in
+nurlc transcribes. The measure of the table is two-sided: the hole probes'
+`// map:` verdicts (does it refuse what nurlc refuses), and the programs
+nurlc accepts (`run.py --clean` over examples/ and compiler/tests: does it
+refuse nothing nurlc accepts). The numbers are in the AGORA-859 thread.
+
+What the table has shown so far for §7:
+
+- **D2** has a bridge and a measured scope. Until summaries are declared
+  in source, the walk's own answers for a raw function are read out of its
+  tables (`sum` lines, `tools/ncore/derive.py`). Three runs over the hole
+  probes say where a declared summary is needed:
+
+  | summaries used | probes that agree |
+  |---|---|
+  | hand-declared for about 220 functions (`prims.py`), the walk's tables for the other raw ones | 3,182 |
+  | the same, but every library function whose body stays inside the raw boundary is walked, declared or not (`NCORE_WALK=1`) | 3,180 |
+  | no hand-declared summary at all (`NCORE_WALK=1 NCORE_DERIVE=1`) | 2,975 |
+
+  A function whose body stays inside the raw boundary needs none: the
+  engine reads its body. The raw core (`vec_*`, `string_*`, `rc_*`,
+  `arc_*`, `map_*`, the channels) does: what nurlc knows of it today is
+  partly by name, and its tables alone lose about 200 probes. That is the
+  set D2's declarations have to cover first.
+- **D4** has its first concrete list: shapes with one core IR that nurlc
+  answers two ways, depending on a spelling the IR does not have
+  (RULES.md, "One IR shape, two answers in nurlc"). The engine gives one
+  answer for each; which one is the decision.
+
 ## 1. The decision asked
 
 Stop closing memory-safety holes one surface shape at a time. Replace the

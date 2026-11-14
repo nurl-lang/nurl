@@ -62,17 +62,27 @@ summarised by the same analysis, to a fixpoint over the program.
 | A view-typed parameter (`s`, a slice) is a view the caller lent, never an owner | §1 | `read` |
 | A borrow handed to a consumer: a part read in place is taken out of its owner; a call's lend in a temporary is copied; a binding of a call's lend is refused | §2.5, §7.6 | `apply_call`, `take_payload` |
 | A field taken out of its owner is not read, nor the value handed on whole, until it is given a value again | §2.1 | `State.gone` |
+| A part taken out of an `inout` parameter is a change to the caller's binding, not a hand-over of it; left taken at an exit, it is gone in the caller's binding | §2.1, §2.12 | `take_payload`, summary `gone` |
+| A lend of an element given back to the same element is read before the old value goes | §2.4 | `apply_call` (`stored_back`) |
 | A store replacing a place hands its old value to the binding that read that very place | §7.6 (#265) | `handover` |
+| A `: ~` cursor of a binding kept by value (pushed, stored into a literal) hands the binding on: the binding is moved through it, and the cursor reads the value where it went | §7.6 | `apply_call` stores, `rvalue` (`agg`) |
+| What was lent out of a temporary follows it into the binding it moves to | §1 Temporaries | `rehome` |
 | `= o ( f o … )`: a binding given a part of its own value keeps it | §7.6 (#475) | `own_parts` |
 | `= o ( f o other )`, the call handed the binding itself and another argument it may hand back: an option or a result owner is refused (no run-time key says which came back), a handle is told apart by its buffer | §7.6 (#412, #419) | `call_lent`, `stmt` (`assign`) |
 | A lend handed to a holder that outlives what it borrows is copied where it can be, refused where it cannot | §7.6 | `transfer` |
 | A value owned on some paths and lent on others is copied on the paths that lend it, for a holder that outlives the lender | §7.6 | `transfer` (`mixed`) |
 | A borrowed value stored into an owner is copied, with the views it holds; one that cannot be copied is refused | §7.6, §2.13 | `rvalue` (`agg`), `apply_call` stores |
+| A literal around a part of a parameter is a lend of the caller's value where it is handed back as it is. Taken by anything else, it is copied there, or refused where the part has no copy | §7.6 (#200) | `rvalue` (`agg`), `lit_nocopy`, `lit_lendcopy` |
+| A `sink` parameter is the function's own: handed to a new holder, it moves there | §2.1 | `transfer` |
+| A place is followed five steps deep (`PATH_MAX`): a walk down a recursive value names the place that deep and stops | - (the engine's bound) | `loan` |
 | A `?` / `??` that selects among this frame's owners moves the one it selects into an immutable binding, and out with a return | §2.2 | `stmt` (`let`), `transfer` |
 | A literal that is a statement's temporary shows its consumer the bindings it names; they move into it only where it is taken | §7.6 (h693) | `agg_lends` |
 | A field read off a temporary leaves it | §7.5 (h323) | `transfer` |
 | An owned temporary a callee hands back whole leaves with the result; the result is owned per call | §1 Temporaries, §7.6 | `apply_call` (`whole`) |
 | A result owned on some paths and lent on others borrows its argument | §7.6 Call results | `make_summary` |
+| …and a binding of it owns it on the calls that made it fresh (an option's `None` is no fresh value): what views it does not outlive the binding | §7.6 Call results | summary `mixed`, `call_mixed` |
+| The payload of what a function of the program lent is that call's lend still; the payload of an option a library getter made around an element is the element | §7.6 | `rvalue` (`payload`), `call_by_fn` |
+| A cursor given a shorter-lived lend stays a borrow of it; an owner given one is handed a copy | §7.6 | `stmt` (`assign`) |
 | A field or a payload of an owned temporary a callee hands back is taken out of it: the result owns it (an element of its buffer is not) | §1 Temporaries, §7.6 (#635) | `apply_call` (`part`) |
 | An owned slice moves into the literal that takes it | §7.6 | `transfer` (`stored`) |
 | A fresh raw string kept by a value is owned by nothing | §2.13 | `fresh_string_kept` |
@@ -80,6 +90,9 @@ summarised by the same analysis, to a fixpoint over the program.
 | A function's exit runs the `;` blocks armed on the way, newest first, after its result is made | §1 | `run_defers` |
 | …and before the result leaves the frame: a `;` block still reads the binding handed back, and may not release or change it | §1, §7.2 (#165) | `stmt` (`ret`), `ret_watch` |
 | An owned raw string in a binding handed to a keeper is copied; the binding keeps its buffer | §7.6 | `apply_call` (`copied`) |
+| A binding a `;` block armed after it may read is released after the chain has run, not where its scope ends | §7.2 | `defer_reads`, `scope_end` |
+| A binding of what a call lent out of a temporary is handed a copy | §7.6 | `stmt` (`let`) |
+| A `?` / `??` that is owned on some paths and selects an owner on others moves the one it selects, as one that only selects does | §2.2 | `stmt` (`let`) |
 | A `~` loop walks its container's buffer: a change to it ends the walk | §2.5 | `foreach`, `walking` |
 | A closure holds what it captured: a copy of each handle, the views those hold; one taken by pointer is a `ref` | §2.11, §2.3 | `make_closure` |
 | Running a closure reads every capture and does what its body does to them, and to the arguments it is called with | §2.11 | `run_closures`, `closure_arg_effects` |
@@ -94,6 +107,10 @@ summarised by the same analysis, to a fixpoint over the program.
 | An argument the callee took over and hands back as it is is the caller's own again, holding what it held | §7.5 (#463) | `apply_call` |
 | `= b ( wrap b )`: a new value that holds a handle of the binding's old one keeps it; nothing is released | §7.6 (#475) | `stmt` (`assign`, `inside`) |
 | A view a closure hands back may point into its arguments, never into what it captured; judged where the closure is made (a captured literal is no view of anything) | §7.5 | `make_closure` (`vback`) |
+| Inside a closure, running a closure it was handed may grow or clear what this one captured: the caller's closure may have captured the same | §2.11 | `call_closure` |
+| What another thread runs holds no view | §6.5 | `apply_call` (`detaches`) |
+| A view handed back out of where it was kept (an element that is a slice or a raw string) points where the kept one points | §2.10 | `apply_call` |
+| A closure's result is its caller's own: what it lends out of a capture is copied, and a value that cannot be copied is refused | §7.5 | `check_program` |
 | A closure several threads may run changes nothing it captured | §6.5 | `shares` |
 | What an `Arc` shares is not changed in place | §6.5 | `effect` |
 | A shared payload (`Rc`, `Arc`, `Shared`) is one place per handle type: an effect inside one ends what was lent out of any | proposal D3 | `shared_tails`, `region_effect` |
