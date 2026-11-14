@@ -801,6 +801,11 @@ class FnCheck:
             for m, op in enumerate(ops):
                 if m == k:
                     continue
+                if op[0] == "v":
+                    oty = self.ty_of_place((op[1], op[2]))
+                    if oty is not None and self.T.is_scalar(oty):
+                        # (a number read out of it is a copy made before the call)
+                        continue
                 same = op[0] == "v" and op[1] == vid and (prefix(op[2], path) or prefix(path, op[2]))
                 lend = any(a[0] == vid and (prefix(a[1], path) or prefix(path, a[1])) for a in avs[m].alias)
                 if same or lend:
@@ -825,9 +830,11 @@ class FnCheck:
                     # copy, the binding keeps its own (MEMORY.md §7.5)
                     copied.add(k)
                     continue
-                if cur and cur.own == "O" and cv.kind != "temp" and cv.ty is not None and cv.ty[0] == "s":
-                    # an owned raw string in a binding: a keeper copies it,
-                    # the binding keeps its buffer (MEMORY.md §7.6)
+                if (cur and cur.own == "O" and cv.kind != "temp" and cv.ty is not None
+                        and (cv.ty[0] == "s" or cv.ty == ("opt", ("s",)))):
+                    # an owned raw string in a binding (or an option of
+                    # one): a keeper copies it, the binding keeps its buffer
+                    # (MEMORY.md §7.6)
                     copied.add(k)
                     continue
                 if cur and cur.own in ("O", "P"):
