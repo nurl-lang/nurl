@@ -8,12 +8,19 @@
   "observability": {
     "enabled": true
   },
-  // Assets-only Worker: serves the static `next build` (output: 'export')
-  // output, no Worker script. Search runs against a build-time Orama index
-  // fetched and queried client-side (see components/search.tsx) instead of
-  // a live API route, which a static export cannot serve.
+  // A small Worker for agents (Markdown content negotiation, Link headers,
+  // the API catalog's media type) in front of the static `next build`
+  // (output: 'export') in out/. Search runs against a build-time Orama
+  // index fetched and queried client-side (see components/search.tsx)
+  // instead of a live API route.
+  "main": "worker/index.ts",
   "assets": {
     "directory": "./out",
-    "not_found_handling": "404-page"
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    // Only these paths reach the Worker; every other asset (scripts,
+    // images, /llms.txt, /sitemap.xml, the rest of /.well-known) is served
+    // straight from the asset layer, without a Worker invocation.
+    "run_worker_first": ["/", "/docs", "/docs.md", "/docs/*", "/.well-known/api-catalog"]
   }
 }
