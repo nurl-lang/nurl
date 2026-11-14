@@ -217,6 +217,7 @@ class FnCheck:
         # inside the arms)
         self.block_temps = set()
         self.fe_vars = set()     # the element bindings of `~ x xs` loops
+        self.cursor_slots = set()  # the `: ~ s` bindings born from a view
 
         def blocks(stmts):
             nones = {s[1] for s in stmts if s[0] == "let" and s[2] is None}
@@ -683,9 +684,11 @@ class FnCheck:
                 av = AV("L", {self.loan(st, site, (vid, ()), "view")}, {(vid, ())}, frozenset())
             elif (src.own == "O" and vty is not None and vty[0] == "s" and self.fn.vars[vid].kind != "temp"
                   and dv is not None and dv.mut and dv.kind == "local" and not is_ret
-                  # (a cursor that owns its value on some paths only is no
-                  # owner to copy from: the slot is pointed at it)
-                  and not src.loans):
+                  # (a slot born from a view is a cursor: given a cursor
+                  # that owns its value on some paths only, it is pointed
+                  # at it. A slot born owning takes a copy of whatever it
+                  # is given, and any slot one of an owned binding.)
+                  and (not src.loans or dest_vid not in self.cursor_slots)):
                 # `: ~ s y x`, x an owned raw string: a slot of its own is
                 # given a copy of the text (MEMORY.md §7.6, owned string slots)
                 av = AV("O", (), (), frozenset())
@@ -2313,6 +2316,8 @@ class FnCheck:
                 # `: ~ T c x` is a cursor: it borrows the owner x
                 new = self.rvalue(st, rv, ln, v.depth, v.ty, v.name, dest_vid=vid,
                                   lend_owner=(lambda x: True) if v.mut else (lambda x: False))
+                if v.mut and v.kind == "local" and v.ty == ("s",) and new.own == "L":
+                    self.cursor_slots.add(vid)
                 if (not v.mut and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
                         and self.fn.vars[rv[1][1]].kind == "temp" and not new.call and new.alias
                         and (new.own == "L" or (new.own == "O" and new.loans))
@@ -2407,7 +2412,7 @@ class FnCheck:
                     # itself and another argument, and may hand back either)
                     lent = self.call_lent.get(rv[1][1], ()) if rv[0] == "use" and rv[1][0] == "v" else ()
                     direct = ("v", vid, ()) in lent and any(op != ("v", vid, ()) for op in lent)
-                    if rest and new.call and v.ty is not None and (
+                    if rest and new.call and v.ty is not None and v.ty[0] not in VIEW_TYPES and (
                             (v.ty[0] in ("opt", "res") and direct) or not self.T.copyable(v.ty)):
                         # which of them a run hands back is not known, so
                         # neither is whether the binding still owns its value.

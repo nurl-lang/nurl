@@ -128,7 +128,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | What another thread runs holds no view | §6.5 | `apply_call` (`detaches`) |
 | A view handed back out of where it was kept (an element that is a slice or a raw string) points where the kept one points | §2.10 | `apply_call` |
 | A join whose arm is an owned raw string of a binding that lives on hands the join a copy of its text | §7.6 (owned string slots) | `transfer` |
-| A mutable raw-string binding given an owned raw string of another binding takes a copy of its text; given a cursor that owns its value on some paths only, it is pointed at it, and reads it no longer than that cursor lives | §7.6 (owned string slots, h119) | `transfer` |
+| A mutable raw-string binding born owning takes a copy of the text it is given, and any such binding one of an owned raw string of another binding. One born from a view is a cursor: given a cursor that owns its value on some paths only, it is pointed at it, and reads it no longer than that cursor lives | §7.6 (owned string slots, h119) | `transfer` (`cursor_slots`) |
 | A function that hands back what a call lends out of a parameter it takes over on another path is refused, a join with a fresh arm included | §7.6 (agora #743) | `check_program` (`calllends`) |
 | A slice literal owns its elements: one that names a binding or a parameter is given a copy of it | §7.6 (agora #485) | `rvalue` (`agg`) |
 | A value block whose tail names a binding of an outer scope, or a field of one, only lends it: a consumer is given a copy | §2.12 (agora #555) | `apply_call` (`block_temps`) |
