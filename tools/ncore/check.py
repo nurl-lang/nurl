@@ -572,6 +572,34 @@ class FnCheck:
         ty = self.ty_of_place(place)
         return ty is not None and (ty[0] in SCALARS or (ty[0] == "named" and ty[1] in getattr(self.prog, "nodrop", ())))
 
+    def holds_its_source(self, av):
+        """Does the payload `av` hold a view of itself, where it sits in its
+        option?"""
+        return any(l in self.loans and any(self.loans[l][0][0] == a[0] and prefix(a[1], self.loans[l][0][1])
+                                           for a in av.alias)
+                   for l in hloans(av.held))
+
+    def held_of_own(self, av, vid):
+        """What the payload `av`, taken out of its option into `vid`, holds:
+        its views of the payload itself are views of `vid`'s parts from
+        here on (they move with it, `reroot`)."""
+        out = set()
+        for hp, l in av.held:
+            hit = None
+            if l in self.loans:
+                q, qp = self.loans[l][0]
+                for a in av.alias:
+                    if q == a[0] and prefix(a[1], qp):
+                        hit = qp[len(a[1]):]
+                        break
+            if hit is None:
+                out.add((hp, l))
+            else:
+                nl = ("rb", l, vid)
+                self.loans[nl] = ((vid, hit[:PATH_MAX]), self.loans[l][1])
+                out.add((hp, nl))
+        return frozenset(out)
+
     def own_payload(self, st, av):
         """Is `av` - not a call's lend - the payload of an option or a result
         that locals of this function own (`?? tr { T t → … }`)?"""
@@ -2867,21 +2895,34 @@ class FnCheck:
                 return st
             fty = self.ty_of_place((vid, path))
             src = rv[1][1] if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] else None
-            if (src is not None and src in self.payload_bound and fty is not None and not self.T.copyable(fty)
-                    and self.T.owning(fty) and self.own_payload(st, st.vals.get(src))
+            if (src is not None and src in self.payload_bound and fty is not None and self.T.owning(fty)
+                    and self.own_payload(st, st.vals.get(src))
+                    and (not self.T.copyable(fty) or self.holds_its_source(st.vals[src]))
                     and self.take_payload(st, st.vals[src], ln)):
                 # an arm's payload of an option or a result a local owns,
-                # with no copy, stored into a field: it goes over with its
-                # option, which is not read after (as into a literal handed
-                # back)
-                st.vals[src] = AV("O", (), (), st.vals[src].held)
+                # stored into a field, with no copy - or one whose copy
+                # would go on viewing the payload it was made from (a
+                # tokenizer whose closure reads its own tables): it goes
+                # over with its option, which is not read after (as into a
+                # literal handed back)
+                st.vals[src] = AV("O", (), (), self.held_of_own(st.vals[src], src))
             was = st.vals[src].own if src is not None and st.vals.get(src) is not None else None
             # (a lend of something that ends before the field's holder is
             # copied in, where the field's type has a copy: MEMORY.md §7.6,
             # "borrowed values are copied into owners")
-            new = self.rvalue(st, rv, ln, ddepth, fty, self.pname((vid, path)),
-                              copy_ok=fty is not None and fty[0] not in VIEW_TYPES and fty[0] != "closure"
-                              and self.T.copyable(fty) and not self.T.is_scalar(fty), named=True)
+            fcopy = (fty is not None and fty[0] not in VIEW_TYPES and fty[0] != "closure"
+                     and self.T.copyable(fty) and not self.T.is_scalar(fty))
+            new = self.rvalue(st, rv, ln, ddepth, fty, self.pname((vid, path)), copy_ok=fcopy, named=True)
+            if (new.own == "L" and fcopy and v.kind == "local" and self.T.has_udrop(v.ty)
+                    and any(l in self.loans and self.loans[l][1] in ("view", "handle")
+                            and self.fn.vars[self.loans[l][0][0]].kind == "local"
+                            and self.fn.vars[self.loans[l][0][0]].id > vid and self.fn.vars[self.loans[l][0][0]].depth >= v.depth
+                            for l in new.loans)):
+                # (a lend of a binding declared after the holder - released
+                # before it, newest first - stored into a holder whose drop
+                # may read what it holds: copied in, where it has a copy, as
+                # a lend of an inner scope's binding is. MEMORY.md §2.14)
+                new = AV("O", (), (), new.held)
             if was == "O" and st.vals[src].own == "M" and self.fn.vars[src].kind != "temp":
                 self.rehome_views(st, src, (vid, tuple(path)[:PATH_MAX]))
             if new.own == "L" and fty is not None and fty[0] == "closure":

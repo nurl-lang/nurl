@@ -13944,6 +13944,23 @@ unsafe @ eng_byte s w i k → i {
     ^ T
 }
 
+// Does `av` lend (a view, a handle) a local declared after `vid`, of its
+// scope or a deeper one?
+@ eng_lends_younger i av i vid → b {
+    : i ls ( av_loans av )
+    : ~ i k 0
+    ~ < k ( sq_len ls ) {
+        : i l ( sq_at ls k )
+        ? ( el_is_loan l ) {
+            : i kind ( el_kind l )
+            : i src ( pl_var ( el_place l ) )
+            ? & & | == kind LK_VIEW == kind LK_HANDLE == ( fv_kind src ) VK_LOCAL & > src vid >= ( fv_depth src ) ( fv_depth vid ) { ^ T } {}
+        } {}
+        = k + k 1
+    }
+    ^ F
+}
+
 // A value whose release runs a destructor that may read its views is
 // given no view of a binding declared after it: that binding is released
 // first, on every way out and on an unwind.
@@ -16616,12 +16633,16 @@ unsafe @ eng_byte s w i k → i {
     // a store into a part
     : i fty ( eng_ty_of target )
     : i src ( rv_use_var rv )
-    ? & & & & & >= src 0 ( fx_has src FX_PAYLOAD ) != fty ET_NONE ! ( et_copyable fty ) ( et_owning fty ) ( eng_own_payload st ( st_av st src ) ) {
-        // an arm's payload of an option or a result a local owns, with no
-        // copy, stored into a field: it goes over with its option, which is
-        // not read after (as into a literal handed back)
+    ? & & & & >= src 0 ( fx_has src FX_PAYLOAD ) != fty ET_NONE ( et_owning fty ) ( eng_own_payload st ( st_av st src ) ) {
+        // an arm's payload of an option or a result a local owns, stored
+        // into a field, with no copy - or one whose copy would go on viewing
+        // the payload it was made from (a tokenizer whose closure reads its
+        // own tables): it goes over with its option, which is not read after
+        // (as into a literal handed back)
         : i sav ( st_av st src )
-        ? ( take_payload st sav ln T ) { ( st_put st src ( av_make OW_O 0 0 ( av_held sav ) F ) ) } {}
+        ? | ! ( et_copyable fty ) ( eng_holds_its_source sav ) {
+            ? ( take_payload st sav ln T ) { ( st_put st src ( av_make OW_O 0 0 ( eng_held_of_own sav src ) F ) ) } {}
+        } {}
     } {}
     : i was ? >= src 0 ( st_own st src ) OW_NONE
     // (a lend of something that ends before the field's holder is copied
@@ -16629,6 +16650,13 @@ unsafe @ eng_byte s w i k → i {
     : b fcopy & & & & != fty ET_NONE ! ( et_is_view fty ) != ( et_kind fty ) EK_CLOSURE ( et_copyable fty ) ! ( et_scalar fty )
     : ~ i new ( eng_rvalue st rv ln ddepth fty WK_PLACE target | TF_NAMED ? fcopy TF_COPY_OK 0 -1 )
     ? != g_fc_unsup 0 { ^ } {}
+    ? & & & & fcopy == ( av_own new ) OW_L == kind VK_LOCAL ( et_has_udrop vty ) ( eng_lends_younger new vid ) {
+        // (a lend of a binding declared after the holder - released before
+        // it, newest first - stored into a holder whose drop may read what
+        // it holds: copied in, where it has a copy, as a lend of an inner
+        // scope's binding is)
+        = new ( av_make OW_O 0 0 ( av_held new ) F )
+    } {}
     ? & & & >= src 0 == was OW_O == ( st_own st src ) OW_M != ( fv_kind src ) VK_TEMP {
         ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) )
     } {}
@@ -18029,6 +18057,60 @@ unsafe @ eng_byte s w i k → i {
         = k + k 1
     }
     ^ T
+}
+
+// Does the payload `av` hold a view of itself, where it sits in its option?
+@ eng_holds_its_source i av → b {
+    : i ls ( held_loans ( av_held av ) )
+    : i al ( av_alias av )
+    : ~ i k 0
+    ~ < k ( sq_len ls ) {
+        : i l ( sq_at ls k )
+        ? ( el_is_loan l ) {
+            : i q ( el_place l )
+            : ~ i a 0
+            ~ < a ( sq_len al ) {
+                : i pa ( sq_at al a )
+                ? & == ( pl_var q ) ( pl_var pa ) ( ep_prefix ( pl_path pa ) ( pl_path q ) ) { ^ T } {}
+                = a + a 1
+            }
+        } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+// What the payload `av`, taken out of its option into `vid`, holds: its
+// views of the payload itself are views of `vid`'s parts from here on (they
+// move with it, eng_reroot).
+@ eng_held_of_own i av i vid → i {
+    : i held ( av_held av )
+    : i al ( av_alias av )
+    : i tmp ( wv_new )
+    : ~ i k 0
+    ~ < k ( sq_len held ) {
+        : i he ( sq_at held k )
+        : i l ( he_loan he )
+        : ~ i hit -1
+        ? ( el_is_loan l ) {
+            : i q ( el_place l )
+            : ~ i a 0
+            ~ & < hit 0 < a ( sq_len al ) {
+                : i pa ( sq_at al a )
+                ? & == ( pl_var q ) ( pl_var pa ) ( ep_prefix ( pl_path pa ) ( pl_path q ) ) { = hit ( ep_drop ( pl_path q ) ( ep_len ( pl_path pa ) ) ) } {}
+                = a + a 1
+            }
+        } {}
+        ? < hit 0 { ( wv_push tmp he ) } {
+            ( el_key3 TG_RB l vid )
+            : i nl ( __el_keyed ( pl_make vid ( ep_take hit PATH_MAX ) ) ( el_kind l ) )
+            ( wv_push tmp ( he_make ( he_path he ) nl ) )
+        }
+        = k + k 1
+    }
+    : i out ( sq_set_of_wv tmp )
+    ( wv_drop tmp )
+    ^ out
 }
 
 // Is `av` - not a call's lend - the payload of an option or a result that
