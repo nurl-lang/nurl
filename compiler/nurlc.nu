@@ -405,6 +405,9 @@
 : i HELD_MAX 8  // where in a value a loan is held is followed this deep: held deeper, it is held at the prefix (a loop storing into a value what it holds re-roots it under itself every round)
 : i HELD_WIDEN 8  // one loan is held in at most this many places of a value; held in more, it is held at their longest common prefix (held_widen)
 : ~ i g_et_ee 0  // an enum type → its one container element type + 3 (__et_enum_elem)
+: ~ i g_chain_on 0  // 1 while the `;` chain runs (run_defers): its blocks' bindings outlive the blocks
+: ~ i g_chain_scopes 0  // …the offsets their scopes start at (scope_end's `from`)
+: ~ i g_chain_kept 0  // …the bindings kept, released after the chain
 : ~ i g_hw_memo 0  // held set → its widened form + 1, for the function being read (held_widen)
 : i PV_BIAS 1048576  // a place is a word: (variable + PV_BIAS) * 2^32 + path
 : ~ i g_fv_ty -1  // the function being read: each variable's type
@@ -12568,6 +12571,30 @@ unsafe @ eng_byte s w i k → i {
     ^ & == ( et_kind ty ) EK_NAMED ! ( et_flag ty ETF_DROPS )
 }
 
+// Does the place's path take a step its type has no part for (a variant's
+// payload of a Vec, a field of a number) - a place no value has?
+@ eng_ill_typed i pl → b {
+    : i path ( pl_path pl )
+    : ~ i ty ( fv_ty ( pl_var pl ) )
+    : ~ i k 0
+    ~ < k ( ep_len path ) {
+        ? == ty ET_NONE { ^ F } {}
+        : i e ( ep_at path k )
+        : i kind ( et_kind ty )
+        : b cont | | | | == kind EK_VEC == kind EK_SLICE == kind EK_BOX == kind EK_STRING == kind EK_S
+        ? ( ee_is_pay e ) {
+            ? | | cont & == kind EK_SCALAR ! ( et_flag ty ETF_BOOL ) & == kind EK_NAMED ( et_flag ty ETF_STRUCT ) { ^ T } {}
+        } {
+            ? != e EE_STAR {
+                ? | | | cont == kind EK_OPT == kind EK_RES == kind EK_SCALAR { ^ T } {}
+            } {}
+        }
+        = ty ( eng_ty_at ty ( ep_child 0 e ) )
+        = k + k 1
+    }
+    ^ F
+}
+
 // Is the place known to hold a number (no handle, no view)?
 @ eng_place_scalar i pl → b {
     : i ty ( eng_ty_of pl )
@@ -14922,7 +14949,9 @@ unsafe @ eng_byte s w i k → i {
                                         ~ & inout_part < a ( sq_len al ) {
                                             : i pa ( sq_at al a )
                                             : i pi ( fv_pidx ( pl_var pa ) )
-                                            ? | | == ( pl_path pa ) 0 < pi 0 != ( fp_mode pi ) PM_INOUT { = inout_part F } {}
+                                            // (…or of an element of any
+                                            // parameter's container)
+                                            ? | | == ( pl_path pa ) 0 < pi 0 & != ( fp_mode pi ) PM_INOUT ( eng_path_no_star ( pl_path pa ) ) { = inout_part F } {}
                                             = a + a 1
                                         }
                                     } {}
@@ -15115,10 +15144,17 @@ unsafe @ eng_byte s w i k → i {
         : i kind ( tp_at t 5 4 )
         ? & & < j n < sk n ( op_is_place ( wv_at ops j ) ) {
             : i oj ( wv_at ops j )
-            : i src ( wv_at avs sk )
+            : ~ i src ( wv_at avs sk )
             : i op ( wv_at ops sk )
             : b isv ( op_is_place op )
             : b whole & isv == ( pl_path op ) 0
+            ? & & & & == kind SK_VALUE == ( av_own src ) OW_L whole ( fx_has ( pl_var op ) FX_LENDCOPY ) == ( st_own st ( pl_var op ) ) OW_L {
+                // (a literal around a part of a parameter, kept by value: the
+                // copy is made - the literal is its own, and the bindings it
+                // names move into it, as when it is taken)
+                = src ( av_make OW_O 0 0 ( av_held src ) F )
+                ( st_put st ( pl_var op ) src )
+            } {}
             : i sown ( av_own src )
             : ~ i add 0
             ? == kind SK_VALUE {
@@ -15412,16 +15448,27 @@ unsafe @ eng_byte s w i k → i {
                         } {
                             = loans ( sq_union loans ( av_loans av ) )
                             : i al ( av_alias av )
+                            // (a place the path cannot reach - a variant's
+                            // payload asked of a Vec - is none the lend is
+                            // of, where one the path reaches is there)
+                            : ~ b any_typed F
                             : ~ i a 0
+                            ~ & ! any_typed < a ( sq_len al ) {
+                                : i pa0 ( sq_at al a )
+                                ? ! ( eng_ill_typed ( pl_make ( pl_var pa0 ) ( ep_take ( ep_cat ( pl_path pa0 ) lpath ) PATH_MAX ) ) ) { = any_typed T } {}
+                                = a + a 1
+                            }
+                            = a 0
                             ~ < a ( sq_len al ) {
                                 : i pa ( sq_at al a )
                                 : i pl ( pl_make ( pl_var pa ) ( ep_take ( ep_cat ( pl_path pa ) lpath ) PATH_MAX ) )
+                                : b skip_ill & any_typed ( eng_ill_typed pl )
                                 // (a handle of a number is no handle: a lend
                                 // of the elements of a `Vec f` lends their
                                 // storage - the `view` beside it - and
                                 // nothing else)
                                 : i plty ? & == lkind LK_HANDLE != lpath 0 ( eng_ty_of pl ) ET_NONE
-                                ? | | != lkind LK_HANDLE == lpath 0 | == plty ET_NONE != ( et_kind plty ) EK_SCALAR {
+                                ? & ! skip_ill | | != lkind LK_HANDLE == lpath 0 | == plty ET_NONE != ( et_kind plty ) EK_SCALAR {
                                     = alias ( sq_add alias pl )
                                     ( el_key3 TG_L site lk )
                                     = loans ( sq_add loans ( eng_loan st pl lkind ) )
@@ -15877,12 +15924,18 @@ unsafe @ eng_byte s w i k → i {
 // (`st` is changed in place; it may come back with no path open.)
 @ run_defers i st → v {
     ? | ( st_bottom st ) == ( st_defers st ) 0 { ^ } {}
+    // (what a block binds lives on after the block, until the whole chain
+    // has run - a block armed inside a block, which runs after it, reads
+    // it: released then, newest first)
+    : b outer == g_chain_on 0
+    ? outer { = g_chain_on 1 = g_chain_scopes ( wv_new ) = g_chain_kept ( wv_new ) } {}
     : i pending ( st_defers st )
     ( wv_put st ST_DEFERS 0 )
     : ~ i k - ( sq_len pending ) 1
-    ~ >= k 0 {
+    ~ & >= k 0 ! ( st_bottom st ) {
         : i id ( sq_at pending k )
         : i d ( wv_at g_fc_defers id )
+        ? == ( ec + d 1 ) CO_SCOPE { ( wv_push g_chain_scopes + d 2 ) } {}
         // what was bound after this `;` is released at its scope's exit,
         // before the block runs (what was bound before it, after the
         // chain) - a block that reads a holder pointed at one of those
@@ -15892,7 +15945,7 @@ unsafe @ eng_byte s w i k → i {
         : ~ i vid - g_f_nv 1
         ~ >= vid 0 {
             : i av ( st_av st vid )
-            ? & & & & & != av 0 ! ( sq_has seen vid ) == ( av_own av ) OW_O == ( fv_kind vid ) VK_LOCAL != vid g_fc_ret_watch ! ( sq_has reads vid ) {
+            ? & & & & & & != av 0 ! ( sq_has seen vid ) == ( av_own av ) OW_O == ( fv_kind vid ) VK_LOCAL != vid g_fc_ret_watch ! ( sq_has reads vid ) ! ( __wv_has g_chain_kept vid ) {
                 ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) 0 )
                 ( eng_effect st ( pl_make vid 0 ) EF_END ( fv_line vid ) 0 )
                 ( st_put st vid ( av_make OW_D 0 0 0 F ) )
@@ -15900,9 +15953,29 @@ unsafe @ eng_byte s w i k → i {
             = vid - vid 1
         }
         ( eng_run st + d 1 ( wv_at g_ec_link d ) )
-        ? ( st_bottom st ) { ^ } {}
         = k - k 1
     }
+    // (blocks the chain's own blocks armed run after them)
+    ? & ! ( st_bottom st ) != ( st_defers st ) 0 { ( run_defers st ) } {}
+    ? outer {
+        : i kept g_chain_kept
+        = g_chain_on 0
+        ( wv_drop g_chain_scopes )
+        ? ! ( st_bottom st ) {
+            : ~ i j - ( wv_len kept ) 1
+            ~ >= j 0 {
+                : i vid ( wv_at kept j )
+                : i av ( st_av st vid )
+                ? != av 0 {
+                    ? == ( av_own av ) OW_O { ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) 0 ) } {}
+                    ( eng_effect st ( pl_make vid 0 ) EF_END ( fv_line vid ) 0 )
+                    ? != ( av_own av ) OW_M { ( st_put st vid ( av_make OW_D 0 0 0 F ) ) } {}
+                } {}
+                = j - j 1
+            }
+        } {}
+        ( wv_drop kept )
+    } {}
 }
 
 // ── Ownership engine: rvalues ────────────────────────────────────────
@@ -16318,6 +16391,13 @@ unsafe @ eng_byte s w i k → i {
         ? == ( ec at ) CO_LET { ? ! ( fv_carried ( ec + at 1 ) ) { ( wv_push declared ( ec + at 1 ) ) } {} } {}
         = at ( eng_next at )
     }
+    ? & != g_chain_on 0 ( __wv_has g_chain_scopes from ) {
+        // (a `;` block's own bindings: released after the chain)
+        : ~ i q 0
+        ~ < q ( wv_len declared ) { ( wv_push g_chain_kept ( wv_at declared q ) ) = q + q 1 }
+        ( wv_drop declared )
+        ^
+    } {}
     // a binding a `;` block armed here may read is released after the
     // chain has run, at the function's exit: not where its scope ends
     : i kept ? != ( st_defers st ) 0 ( defer_reads st ) 0
@@ -18623,7 +18703,9 @@ unsafe @ eng_byte s w i k → i {
             // nothing of where the value came from. A capture taken by
             // pointer is given the handle itself.)
             : i jt ( efp_ty f j )
-            : b copied_in & & & & & == kind LK_HANDLE >= j ncap == ( tp_at t 5 1 ) 0 == ( tp_at t 5 3 ) 0 != jt ET_NONE & ! ( et_is_view jt ) ( et_copyable jt )
+            // (…or a field of one)
+            : i jft ( eng_ty_at jt ( tp_at t 5 1 ) )
+            : b copied_in & & & & == kind LK_HANDLE >= j ncap == ( tp_at t 5 3 ) 0 != jft ET_NONE & ! ( et_is_view jft ) ( et_copyable jft )
             // (…nor where the place it is stored in has no room for one)
             : b roomless & & == kind LK_HELD < j np ! ( et_view_capable ( eng_ty_at jt ( tp_at t 5 1 ) ) )
             ? & & ! copied_in ! roomless ! & & == kind LK_HELD < sk np ! ( et_view_capable ( efp_ty f sk ) ) {
