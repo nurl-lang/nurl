@@ -173,6 +173,7 @@ class FnCheck:
         self.call_mixed = set()  # the temporaries of calls whose result is the caller's own on some calls
         self.ret_fresh = False   # some return hands back a value of the function's own that holds something
         self.temp_none = {}      # a literal temporary -> it is an option's `None`
+        self.var_fresh = set()   # the variables given a value of their own that is no `None`
         self.ret_watch = None    # the binding a return handed back, while its `;` blocks run
         self.defer_vars = {}     # a `;` block -> the variables its body names
         self.ret_changed = False
@@ -1178,6 +1179,18 @@ class FnCheck:
                 held |= hfrom(av.loans, fp) | hroot(av.held, fp)
         return AV("O", (), (), held)
 
+    def note_fresh(self, vid, rv, new):
+        """`vid` was given `new`: a value of its own that is no `None`?"""
+        if new.own not in ("O", "P") or new.loans:
+            return
+        if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]:
+            if rv[1][1] in self.var_fresh:
+                self.var_fresh.add(vid)
+            return
+        if rv[0] == "agg" and self.temp_none.get(vid):
+            return
+        self.var_fresh.add(vid)
+
     def closure_moved_into(self, st, rv, dest):
         """`= keep f`, `: g f`: a closure binding handed to another binding
         gives it its environment and stays a borrow of it - readable while
@@ -1649,6 +1662,7 @@ class FnCheck:
                     # holder that outlives what it borrows")
                     new = AV("O", (), (), new.held)
                 st.vals[vid] = self.reroot(st, new, vid)
+                self.note_fresh(vid, rv, new)
                 self.closure_moved_into(st, rv, vid)
             return st
         if k == "assign":
@@ -1714,6 +1728,7 @@ class FnCheck:
                     st.vals[vid] = AV("L", new.loans, new.alias, new.held)
                 else:
                     st.vals[vid] = new
+                self.note_fresh(vid, rv, new)
                 self.closure_moved_into(st, rv, vid)
                 if st.gone:
                     st.gone = frozenset(g for g in st.gone if g[0] != vid)
@@ -1816,9 +1831,10 @@ class FnCheck:
                 self.params_hold_locals(st, ln)
                 self.rets.append((av, st.copy()))
                 if av.own in ("O", "P") and not av.loans and not (
-                        op[0] == "v" and not op[2] and self.temp_none.get(op[1])):
+                        op[0] == "v" and not op[2] and op[1] not in self.var_fresh):
                     # (a value of its own that holds something: an option's
-                    # `None` hands no storage over)
+                    # `None` hands no storage over, nor does a binding that
+                    # was only ever given one)
                     self.ret_fresh = True
                 self.exit_drops(st, ln)
             else:

@@ -122,7 +122,7 @@ def verdict_nurlc(path):
             continue
         flags = prog.fn_flags[n]
         if flags & 1:
-            if declared(n):
+            if declared(n) and (flags & 6 or not WALK_FIRST):
                 continue
             if flags & 6:
                 # its body crosses the raw boundary (raw memory, a `raw`
@@ -154,6 +154,12 @@ def verdict_nurlc(path):
     prog.trusted = trusted
     errors, summ = check_program(prog)
     return ("rejected" if errors else "runs-clean"), errors, summ
+
+
+# NCORE_WALK=1: a library function whose body stays inside the raw boundary
+# is walked even where prims.py declares a summary for it (how far the
+# declared summaries are still needed).
+WALK_FIRST = os.environ.get("NCORE_WALK") == "1"
 
 
 def _timed_out(signum, frame):
