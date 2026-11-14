@@ -98,6 +98,9 @@ def derive(prog, fn, ws):
         if pl is None or not h.isdigit() or int(h) >= n:
             continue
         k, path, kind = pl
+        if pty[k] is not None and pty[k][0] == "closure":
+            # (a closure kept is a copy: the holder holds what it holds)
+            kind = "held"
         stores.add((int(h), (), k, () if kind == "held" else path, kind))
     for k in _idx(ws, "vcopies", n):
         for h in changed:

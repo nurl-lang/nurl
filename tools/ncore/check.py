@@ -1171,6 +1171,10 @@ class FnCheck:
                  if isinstance(l, tuple) and len(l) == 2 and l[0] == "clo" and hp and hp[-1] == "^f"]
         if not bases:
             return held
+        # (a closure captured by another keeps the handles it holds as they
+        # are: no owner copies them in - agora #161)
+        bases = [(b, f) for b, f in bases
+                 if not any(len(o) < len(b) and b[:len(o)] == o and b[len(o)].startswith("^") for o, _ in bases)]
         drop = set()
         add = set()
         shared = getattr(self.prog, "shared", ())
@@ -1186,7 +1190,8 @@ class FnCheck:
                     continue
                 i = int(hp[n][1:])
                 cty = body.vars[body.params[i]].ty if i < len(body.params) else None
-                if cty is not None and self.T.copyable(cty):
+                if cty is not None and (self.T.copyable(cty) or cty[0] == "closure"):
+                    # (a captured closure is copied as any closure kept is)
                     drop.add((hp, l))
                     if cty[0] == "named" and cty[1] in shared:
                         # its copy of a shared handle is a share: it ends
