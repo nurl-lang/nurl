@@ -612,6 +612,29 @@ class FnCheck:
                         and (self.ty_of_place((a[0], a[1][:-1])) or ("?",))[0] in ("opt", "res")
                         for a in av.alias))
 
+    def ill_typed(self, place):
+        """Does the place's path take a step its type has no part for (a
+        variant's payload of a Vec, a field of a number) - a place no value
+        has?"""
+        vid, path = place
+        ty = self.fn.vars[vid].ty
+        structs = self.prog.structs
+        for e in path:
+            if ty is None:
+                return False
+            k = ty[0]
+            if e.startswith("#"):
+                # (a payload: of an enum, an option, a result, a bool only)
+                if k in ("vec", "slice", "box", "String", "s") or k in SCALARS and k != "b" \
+                        or (k == "named" and ty[1] in structs):
+                    return True
+            elif e != "*":
+                # (a field: of a struct only)
+                if k in ("vec", "slice", "box", "String", "s", "opt", "res") or k in SCALARS:
+                    return True
+            ty = self.ty_at(ty, (e,))
+        return False
+
     def scalar_place(self, place):
         """Is the place known to hold a number (no handle, no view)?"""
         ty = self.ty_of_place(place)
@@ -1694,8 +1717,12 @@ class FnCheck:
                     part = True
                     continue
                 loans |= av.loans
-                for a in av.alias:
-                    pl = (a[0], (a[1] + tuple(path))[:PATH_MAX])
+                cands = [(a[0], (a[1] + tuple(path))[:PATH_MAX]) for a in av.alias]
+                typed = [pl for pl in cands if not self.ill_typed(pl)]
+                for pl in (typed or cands):
+                    # (a place the path cannot reach - a variant's payload
+                    # asked of a Vec - is none the lend is of, where one
+                    # the path reaches is there)
                     if kind == "handle" and path and self.scalar_place(pl):
                         # (a handle of a number is no handle: a lend of the
                         # elements of a `Vec f` lends their storage - the

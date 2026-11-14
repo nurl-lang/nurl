@@ -12571,6 +12571,30 @@ unsafe @ eng_byte s w i k → i {
     ^ & == ( et_kind ty ) EK_NAMED ! ( et_flag ty ETF_DROPS )
 }
 
+// Does the place's path take a step its type has no part for (a variant's
+// payload of a Vec, a field of a number) - a place no value has?
+@ eng_ill_typed i pl → b {
+    : i path ( pl_path pl )
+    : ~ i ty ( fv_ty ( pl_var pl ) )
+    : ~ i k 0
+    ~ < k ( ep_len path ) {
+        ? == ty ET_NONE { ^ F } {}
+        : i e ( ep_at path k )
+        : i kind ( et_kind ty )
+        : b cont | | | | == kind EK_VEC == kind EK_SLICE == kind EK_BOX == kind EK_STRING == kind EK_S
+        ? ( ee_is_pay e ) {
+            ? | | cont & == kind EK_SCALAR ! ( et_flag ty ETF_BOOL ) & == kind EK_NAMED ( et_flag ty ETF_STRUCT ) { ^ T } {}
+        } {
+            ? != e EE_STAR {
+                ? | | | cont == kind EK_OPT == kind EK_RES == kind EK_SCALAR { ^ T } {}
+            } {}
+        }
+        = ty ( eng_ty_at ty ( ep_child 0 e ) )
+        = k + k 1
+    }
+    ^ F
+}
+
 // Is the place known to hold a number (no handle, no view)?
 @ eng_place_scalar i pl → b {
     : i ty ( eng_ty_of pl )
@@ -15424,16 +15448,27 @@ unsafe @ eng_byte s w i k → i {
                         } {
                             = loans ( sq_union loans ( av_loans av ) )
                             : i al ( av_alias av )
+                            // (a place the path cannot reach - a variant's
+                            // payload asked of a Vec - is none the lend is
+                            // of, where one the path reaches is there)
+                            : ~ b any_typed F
                             : ~ i a 0
+                            ~ & ! any_typed < a ( sq_len al ) {
+                                : i pa0 ( sq_at al a )
+                                ? ! ( eng_ill_typed ( pl_make ( pl_var pa0 ) ( ep_take ( ep_cat ( pl_path pa0 ) lpath ) PATH_MAX ) ) ) { = any_typed T } {}
+                                = a + a 1
+                            }
+                            = a 0
                             ~ < a ( sq_len al ) {
                                 : i pa ( sq_at al a )
                                 : i pl ( pl_make ( pl_var pa ) ( ep_take ( ep_cat ( pl_path pa ) lpath ) PATH_MAX ) )
+                                : b skip_ill & any_typed ( eng_ill_typed pl )
                                 // (a handle of a number is no handle: a lend
                                 // of the elements of a `Vec f` lends their
                                 // storage - the `view` beside it - and
                                 // nothing else)
                                 : i plty ? & == lkind LK_HANDLE != lpath 0 ( eng_ty_of pl ) ET_NONE
-                                ? | | != lkind LK_HANDLE == lpath 0 | == plty ET_NONE != ( et_kind plty ) EK_SCALAR {
+                                ? & ! skip_ill | | != lkind LK_HANDLE == lpath 0 | == plty ET_NONE != ( et_kind plty ) EK_SCALAR {
                                     = alias ( sq_add alias pl )
                                     ( el_key3 TG_L site lk )
                                     = loans ( sq_add loans ( eng_loan st pl lkind ) )
