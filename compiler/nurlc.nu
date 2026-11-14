@@ -15833,10 +15833,53 @@ unsafe @ eng_byte s w i k → i {
             : i ncap ( ef_ncap f )
             : ~ i e 0
             ~ < e ( sm_n f SM_INVOKES ) {
-                : i ai - ( sm_at f SM_INVOKES e ) ncap
+                : i ik ( sm_at f SM_INVOKES e )
+                : i ai - ik ncap
                 ? & & >= ai 0 < ai n ( held_has_clo ( av_held ( wv_at avs ai ) ) ) {
                     ( run_closures st ( av_held ( wv_at avs ai ) ) WK_ARG_CLO + ai 1 line )
-                } {}
+                } {
+                    ? & >= ai 0 < ai n {
+                        // (a closure this function was handed, handed on to one
+                        // that runs it: this function runs it, on what that one
+                        // hands it - the summary's invokes / cloargs, as for a
+                        // closure called here directly)
+                        : ~ i roots 0
+                        : i cal ( av_alias ( wv_at avs ai ) )
+                        : ~ i a 0
+                        ~ < a ( sq_len cal ) {
+                            : i rp ( fv_pidx ( pl_var ( sq_at cal a ) ) )
+                            ? >= rp 0 { = roots ( sq_add roots rp ) } {}
+                            = a + a 1
+                        }
+                        : i aop ( wv_at ops + ai 1 )
+                        ? & ( op_is_place aop ) >= ( fv_pidx ( pl_var aop ) ) 0 { = roots ( sq_add roots ( fv_pidx ( pl_var aop ) ) ) } {}
+                        = g_s_invokes ( sq_union g_s_invokes roots )
+                        : ~ i e2 0
+                        ~ < e2 ( sm_n f SM_CLOARGS ) {
+                            : i t ( sm_at f SM_CLOARGS e2 )
+                            : i src - ( tp_at t 4 2 ) ncap
+                            ? & & == ( tp_at t 4 0 ) ik >= src 0 < src n {
+                                : i sop ( wv_at ops + src 1 )
+                                : ~ i pls ( av_alias ( wv_at avs src ) )
+                                ? ( op_is_place sop ) { = pls ( sq_add pls sop ) } {}
+                                = a 0
+                                ~ < a ( sq_len pls ) {
+                                    : i pa ( sq_at pls a )
+                                    : i pj ( fv_pidx ( pl_var pa ) )
+                                    ? >= pj 0 {
+                                        : ~ i r 0
+                                        ~ < r ( sq_len roots ) {
+                                            = g_s_cloargs ( sq_add g_s_cloargs ( tp4 ( sq_at roots r ) ( tp_at t 4 1 ) pj ( ep_take ( ep_cat ( pl_path pa ) ( tp_at t 4 3 ) ) 3 ) ) )
+                                            = r + r 1
+                                        }
+                                    } {}
+                                    = a + a 1
+                                }
+                            } {}
+                            = e2 + e2 1
+                        }
+                    } {}
+                }
                 = e + e 1
             }
             = e 0

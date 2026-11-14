@@ -2286,6 +2286,27 @@ class FnCheck:
                 i = k - ncap
                 if 0 <= i < len(avs) and self.closures_in(avs[i]):
                     self.run_closures(st, avs[i], line, f"the closure in argument {i + 1}")
+                elif 0 <= i < len(avs):
+                    # (a closure this function was handed, handed on to one
+                    # that runs it: this function runs it, on what that one
+                    # hands it - the summary's `invokes` / `cloargs`, as for
+                    # a closure called here directly, agora #420)
+                    roots = {self.pidx[a[0]] for a in avs[i].alias if a[0] in self.pidx}
+                    if ops[1 + i][0] == "v" and ops[1 + i][1] in self.pidx:
+                        roots.add(self.pidx[ops[1 + i][1]])
+                    self.s_invokes |= roots
+                    for (k2, pi, j, path) in sm.get("cloargs", ()):
+                        src = j - ncap
+                        if k2 != k or not 0 <= src < len(avs):
+                            continue
+                        op = ops[1 + src]
+                        places = set(avs[src].alias)
+                        if op[0] == "v":
+                            places.add((op[1], op[2]))
+                        for a in places:
+                            if a[0] in self.pidx:
+                                for r in roots:
+                                    self.s_cloargs.add((r, pi, self.pidx[a[0]], (a[1] + tuple(path))[:3]))
             for (k, pi, j, path) in sm.get("cloargs", ()):
                 i, src = k - ncap, j - ncap
                 if 0 <= i < len(avs) and 0 <= src < len(avs) and ops[1 + src][0] == "v":
