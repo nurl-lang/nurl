@@ -599,6 +599,8 @@ class FnCheck:
                             self.s_selfholds.add((hp[:3], self.loans[l][0][1][:3], self.loans[l][1]))
                     av = AV(av.own, av.loans, av.alias, {(hp, l) for hp, l in av.held if l not in own}, av.call)
                     self.moved_from = None
+        if av.held and is_ret:
+            av = self.closure_takes_over(st, av, line)
         if (av.held and is_ret and op[0] == "v" and self.fn.vars[op[1]].kind == "temp"
                 and self.local_depth(AV("N", held=av.held)) > dest_depth):
             # a closure literal handed back as it is takes over what it
@@ -1086,6 +1088,35 @@ class FnCheck:
                 or d is None or d.own != "O" or self.fn.vars[dest].kind == "temp"):
             return
         st.vals[src] = AV("L", {self.loan(st, ("clomv", src, dest), (dest, ()), "handle")}, {(dest, ())}, d.held)
+
+    def closure_takes_over(self, st, av, line):
+        """A closure that leaves the frame it was made in owns a capture it
+        cannot copy: the binding it captured moves into its environment,
+        and the frame no longer releases it (MEMORY.md §7.5, h240)."""
+        bases = {hp[:-1]: l[1] for hp, l in av.held
+                 if isinstance(l, tuple) and len(l) == 2 and l[0] == "clo" and hp and hp[-1] == "^f"}
+        if not bases:
+            return av
+        held = set(av.held)
+        for hp, l in av.held:
+            if (not hp or hp[:-1] not in bases or not hp[-1].startswith("^") or hp[-1] == "^f"
+                    or l not in self.cap_loans or l not in self.loans or self.loans[l][1] != "handle"):
+                continue
+            # (one its body hands on to a consumer: a capture it only reads
+            # stays the frame's, and the closure may not outlive it)
+            if int(hp[-1][1:]) not in (self.summ.get(bases[hp[:-1]]) or {}).get("consumes", ()):
+                continue
+            place = self.loans[l][0]
+            v = self.fn.vars[place[0]]
+            cur = st.vals.get(place[0])
+            if (place[1] or v.kind != "local" or cur is None or cur.own != "O" or v.ty is None
+                    or v.ty[0] == "closure" or self.T.copyable(v.ty)):
+                continue
+            moved = self.move_out(st, place[0], line)
+            self.moved_from = None
+            held.discard((hp, l))
+            held |= hroot(moved.held, hp)
+        return AV(av.own, av.loans, av.alias, held, av.call)
 
     def closure_owned(self, held):
         """What a closure kept by an owner - stored into a container, a
