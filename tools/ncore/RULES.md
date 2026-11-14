@@ -36,7 +36,9 @@ A **loan** is a place and a kind:
 | `held` | what a parameter's value holds: the caller's to say | nothing in this frame; each call puts what its argument holds in its place |
 
 An **effect** on a place is `realloc`, `drop` (its elements), `replace` (its
-value) or `end` (the binding). `kills_paths` is formal/A2's `Eff.kills`
+value), `take` (a field or a payload moved out of where it lived: only what
+was lent out of that part ends, and a closure's handle of the value around
+it) or `end` (the binding). `kills_paths` is formal/A2's `Eff.kills`
 lifted from bindings to places.
 
 A **summary** per function: `res`, `lends`, `rholds`, `effects`, `stores`,

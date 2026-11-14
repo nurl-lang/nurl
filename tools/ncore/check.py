@@ -247,6 +247,10 @@ class FnCheck:
         (q, k) = self.loans[lid]
         if q[0] == p[0] and self.kills_paths(eff, p, p[1], q, q[1], k):
             return True
+        if eff == "take" and lid in self.cap_loans and q[0] == p[0] and prefix(q[1], p[1]) and k != "ref":
+            # (a closure that captured the value around the part taken may
+            # read that part when it runs)
+            return True
         # A shared payload - what every copy of an Rc / Arc / Shared handle
         # reaches - is one place per handle type: which handles are copies
         # of one another is not known here (PROPOSAL_CORE_IR D3), so an
@@ -300,6 +304,10 @@ class FnCheck:
     def kills_paths(self, eff, p, pp, q, qp, k):
         if k in ("share", "held"):
             return False
+        if eff == "take":
+            # a part moved out of where it lived: what was lent out of that
+            # part ends, a handle of the value around it does not
+            return k != "ref" and prefix(pp, qp)
         if k == "ref" or eff == "end":
             # a pointer to the binding itself: good while the binding is,
             # whatever value it is given - and only that ends with it
@@ -365,10 +373,10 @@ class FnCheck:
                 print(f"trace: {self.fn.name}:{line}: {eff} on {self.pname(place)} ends {len(killed)} loan(s)", file=sys.stderr)
             st.dead = st.dead | killed
         # what the place held is gone with what the effect released
-        if eff in ("drop", "replace") and av.held:
+        if eff in ("drop", "replace", "take") and av.held:
             keep = set()
             for hp, l in av.held:
-                if eff == "replace" and prefix(path, hp):
+                if eff in ("replace", "take") and prefix(path, hp):
                     continue
                 if eff == "drop" and prefix(path, hp) and len(hp) > len(path):
                     continue
@@ -1031,8 +1039,11 @@ class FnCheck:
         sure = len(roots) == 1
         for vid, path, root in roots:
             # (an element taken leaves its slot empty: what was lent out of
-            # the elements before ends, as after a vec_remove - §2.5)
-            self.effect(st, (vid, path), "replace", line)
+            # the elements before ends, as after a vec_remove - §2.5. A
+            # field or a payload taken out leaves the rest of its value as
+            # it was: only what was lent out of the part itself ends.)
+            part = bool(path) and path[-1] != "*"
+            self.effect(st, (vid, path), "take" if part else "replace", line)
             if root.own == "P":
                 self.s_consumes.add(self.pidx[vid])
             if not path:
