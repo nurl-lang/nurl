@@ -320,6 +320,7 @@
 : ~ i g_et_ix -1  // a type (interned) → its number + 1
 : ~ i g_et_seen -1  // the named types a question about a type is inside of (a type that holds itself)
 : ~ i g_et_seen_base 0  // …where the question being answered began in it
+: ~ i g_et_low 0  // …the lowest place on it a type met again was at (__et_low_open)
 : ~ i g_et_names 0  // 1 once the names below are interned
 : ~ i g_etn_i64 0
 : ~ i g_etn_i1 0
@@ -597,6 +598,9 @@
 : i TG_RB 33  // a payload taken out of a temporary: what it holds of itself, of its new holder
 : ~ i g_fc_dvars -1  // a `;` block (its offset) → the variables its body names + 1 (a set), for this function
 : ~ i g_fc_dbefore -1  // an armed `;` block (its number) → the variables that had a value when it was armed + 1 (a set)
+: ~ i g_fc_dfe -1  // …→ the `~ x xs` elements whose round armed it (a set, 0 for none)
+: ~ i g_fe_walking -1  // the elements of the `~ x xs` loops a round of is being walked
+: ~ i g_fe_outside 0  // the elements a `;` block now running reads outside their rounds (a set)
 : ~ i g_fc_defers -1  // the `;` blocks armed in this run, in order: each one's offset (a state names them by number)
 : ~ i g_fc_rets -1  // the function's returns: the value handed back (an AV), and the state there (a vector)
 : ~ i g_fc_exits -1  // …and its exits with no value: the state there
@@ -711,6 +715,8 @@
 // until then no type has one, and the questions that walk a struct's
 // fields looking for one answer at once.
 : ~ i g_user_drop_seen 0
+// (__zero_drops_user: the walk now asked was cut short by its depth guard.)
+: ~ i g_zdu_cut 0
 
 // die → __diag_abort: print-position variants share this exit/panic tail.
 @ __diag_abort → v {
@@ -11348,8 +11354,29 @@ unsafe @ eng_keep_fn → v {
 @ __et_in_seen i t → b {
     : i n ( wv_len g_et_seen )
     : ~ i k g_et_seen_base
-    ~ < k n { ? == ( wv_at g_et_seen k ) t { ^ T } {} = k + k 1 }
+    ~ < k n { ? == ( wv_at g_et_seen k ) t { ? < k g_et_low { = g_et_low k } {} ^ T } {} = k + k 1 }
     ^ F
+}
+
+// A named type's answer found inside another question is that question's
+// answer for it: a type met again on the way down answered as a cycle,
+// also one of the types the question is inside of. Where none of those
+// was met (no type met again sat below this one's place on the stack,
+// g_et_low), it is the answer asked from outside, and kept as that
+// (__et_memo_put): each named type is then walked once per question, not
+// once per path to it - a struct of eight fields eight deep was 8^8.
+// (An answer kept that way is the one the question asked inside would
+// reach as well: an "any" question asks whether a leaf answering yes is
+// reachable, and a cycle reached through a type the question is inside of
+// is reached from that type too.)
+@ __et_low_open → i {
+    : i was g_et_low
+    = g_et_low 4611686018427387904
+    ^ was
+}
+
+@ __et_low_close i t i q i d i was b ans → v {
+    ? >= g_et_low d { ( __et_memo_put t q ans ) = g_et_low was } { ? < was g_et_low { = g_et_low was } {} }
 }
 
 @ __et_ask → i {
@@ -11383,6 +11410,16 @@ unsafe @ eng_keep_fn → v {
     ? == kind EK_OPT { ^ ( __et_scalar ( et_at t ET_E1 ) ) } {}
     ? != kind EK_NAMED { ^ F } {}
     ? ( __et_in_seen t ) { ^ F } {}
+    : i have ( __et_memo_get t ETM_SCALAR )
+    ? >= have 0 { ^ == have 1 } {}
+    : i was ( __et_low_open )
+    : i d ( wv_len g_et_seen )
+    : b r ( __et_scalar_named t )
+    ( __et_low_close t ETM_SCALAR d was r )
+    ^ r
+}
+
+@ __et_scalar_named i t → b {
     ? ( et_flag t ETF_ENUM ) {
         ( wv_push g_et_seen t )
         : i n ( et_at t ET_V_N )
@@ -11441,6 +11478,16 @@ unsafe @ eng_keep_fn → v {
     ? ! ( et_flag t ETF_DROPS ) { ^ F } {}
     ? ( et_flag t ETF_HANDLE ) { ^ T } {}
     ? ( __et_in_seen t ) { ^ F } {}
+    : i have ( __et_memo_get t ETM_OWNING )
+    ? >= have 0 { ^ == have 1 } {}
+    : i was ( __et_low_open )
+    : i d ( wv_len g_et_seen )
+    : b r ( __et_owning_named t )
+    ( __et_low_close t ETM_OWNING d was r )
+    ^ r
+}
+
+@ __et_owning_named i t → b {
     ? ( et_flag t ETF_STRUCT ) {
         ( wv_push g_et_seen t )
         : i n ( et_at t ET_F_N )
@@ -11488,30 +11535,41 @@ unsafe @ eng_keep_fn → v {
     ? == kind EK_OPT { ^ ( __et_owns_handle ( et_at t ET_E1 ) ) } {}
     ? == kind EK_RES { ^ | ( __et_owns_handle ( et_at t ET_E1 ) ) ( __et_owns_handle ( et_at t ET_E2 ) ) } {}
     ? & & == kind EK_NAMED ! ( et_flag t ETF_HANDLE ) ! ( __et_in_seen t ) {
-        ? ( et_flag t ETF_STRUCT ) {
-            ( wv_push g_et_seen t )
-            : i n ( et_at t ET_F_N )
-            : ~ b any F
+        : i have ( __et_memo_get t ETM_OWNS_HANDLE )
+        ? >= have 0 { ^ == have 1 } {}
+        : i was ( __et_low_open )
+        : i d ( wv_len g_et_seen )
+        : b r ( __et_owns_handle_named t )
+        ( __et_low_close t ETM_OWNS_HANDLE d was r )
+        ^ r
+    } {}
+    ^ ( et_owning t )
+}
+
+@ __et_owns_handle_named i t → b {
+    ? ( et_flag t ETF_STRUCT ) {
+        ( wv_push g_et_seen t )
+        : i n ( et_at t ET_F_N )
+        : ~ b any F
+        : ~ i k 0
+        ~ & ! any < k n { ? ( __et_owns_handle ( et_field_ty t k ) ) { = any T } {} = k + k 1 }
+        ( wv_pop g_et_seen )
+        ^ any
+    } {}
+    ? ( et_flag t ETF_ENUM ) {
+        ( wv_push g_et_seen t )
+        : i n ( et_at t ET_V_N )
+        : ~ b any F
+        : ~ i v 0
+        ~ & ! any < v n {
+            : i at ( __et_variant_at t v )
+            : i pn ( wv_at g_et_w + at 1 )
             : ~ i k 0
-            ~ & ! any < k n { ? ( __et_owns_handle ( et_field_ty t k ) ) { = any T } {} = k + k 1 }
-            ( wv_pop g_et_seen )
-            ^ any
-        } {}
-        ? ( et_flag t ETF_ENUM ) {
-            ( wv_push g_et_seen t )
-            : i n ( et_at t ET_V_N )
-            : ~ b any F
-            : ~ i v 0
-            ~ & ! any < v n {
-                : i at ( __et_variant_at t v )
-                : i pn ( wv_at g_et_w + at 1 )
-                : ~ i k 0
-                ~ & ! any < k pn { ? ( __et_owns_handle ( et_of ( wv_at g_et_w + + at 2 k ) ) ) { = any T } {} = k + k 1 }
-                = v + v 1
-            }
-            ( wv_pop g_et_seen )
-            ^ any
-        } {}
+            ~ & ! any < k pn { ? ( __et_owns_handle ( et_of ( wv_at g_et_w + + at 2 k ) ) ) { = any T } {} = k + k 1 }
+            = v + v 1
+        }
+        ( wv_pop g_et_seen )
+        ^ any
     } {}
     ^ ( et_owning t )
 }
@@ -11539,36 +11597,47 @@ unsafe @ eng_keep_fn → v {
     ? == kind EK_RES { ^ | ( __et_view_capable ( et_at t ET_E1 ) ) ( __et_view_capable ( et_at t ET_E2 ) ) } {}
     ? == kind EK_NAMED {
         ? ( __et_in_seen t ) { ^ F } {}
-        ? ( et_flag t ETF_HANDLE ) {
-            ( wv_push g_et_seen t )
-            : b r ( __et_view_capable ( et_at t ET_E1 ) )
-            ( wv_pop g_et_seen )
-            ^ r
-        } {}
-        ? ( et_flag t ETF_STRUCT ) {
-            ( wv_push g_et_seen t )
-            : i n ( et_at t ET_F_N )
-            : ~ b any F
+        : i have ( __et_memo_get t ETM_VIEW_CAPABLE )
+        ? >= have 0 { ^ == have 1 } {}
+        : i was ( __et_low_open )
+        : i d ( wv_len g_et_seen )
+        : b r ( __et_view_capable_named t )
+        ( __et_low_close t ETM_VIEW_CAPABLE d was r )
+        ^ r
+    } {}
+    ^ T
+}
+
+@ __et_view_capable_named i t → b {
+    ? ( et_flag t ETF_HANDLE ) {
+        ( wv_push g_et_seen t )
+        : b r ( __et_view_capable ( et_at t ET_E1 ) )
+        ( wv_pop g_et_seen )
+        ^ r
+    } {}
+    ? ( et_flag t ETF_STRUCT ) {
+        ( wv_push g_et_seen t )
+        : i n ( et_at t ET_F_N )
+        : ~ b any F
+        : ~ i k 0
+        ~ & ! any < k n { ? ( __et_view_capable ( et_field_ty t k ) ) { = any T } {} = k + k 1 }
+        ( wv_pop g_et_seen )
+        ^ any
+    } {}
+    ? ( et_flag t ETF_ENUM ) {
+        ( wv_push g_et_seen t )
+        : i n ( et_at t ET_V_N )
+        : ~ b any F
+        : ~ i v 0
+        ~ & ! any < v n {
+            : i at ( __et_variant_at t v )
+            : i pn ( wv_at g_et_w + at 1 )
             : ~ i k 0
-            ~ & ! any < k n { ? ( __et_view_capable ( et_field_ty t k ) ) { = any T } {} = k + k 1 }
-            ( wv_pop g_et_seen )
-            ^ any
-        } {}
-        ? ( et_flag t ETF_ENUM ) {
-            ( wv_push g_et_seen t )
-            : i n ( et_at t ET_V_N )
-            : ~ b any F
-            : ~ i v 0
-            ~ & ! any < v n {
-                : i at ( __et_variant_at t v )
-                : i pn ( wv_at g_et_w + at 1 )
-                : ~ i k 0
-                ~ & ! any < k pn { ? ( __et_view_capable ( et_of ( wv_at g_et_w + + at 2 k ) ) ) { = any T } {} = k + k 1 }
-                = v + v 1
-            }
-            ( wv_pop g_et_seen )
-            ^ any
-        } {}
+            ~ & ! any < k pn { ? ( __et_view_capable ( et_of ( wv_at g_et_w + + at 2 k ) ) ) { = any T } {} = k + k 1 }
+            = v + v 1
+        }
+        ( wv_pop g_et_seen )
+        ^ any
     } {}
     ^ T
 }
@@ -11596,6 +11665,9 @@ unsafe @ eng_keep_fn → v {
 }
 
 // May a value of type `t` reach a payload of the shared handle type `sh`?
+// (A named type stays on the stack until the question is answered: met
+// again, from anywhere, it has answered already - had it reached `sh`,
+// the question would be answered - so each is walked once per question.)
 @ __et_reaches i t i sh → b {
     ? | < t 0 ( et_scalar t ) { ^ F } {}
     : i kind ( et_kind t )
@@ -11623,12 +11695,13 @@ unsafe @ eng_keep_fn → v {
             }
         } {}
     }
-    ( wv_pop g_et_seen )
     ^ any
 }
 
 // The shared handle types (an Rc, an Arc, a program handle whose copy is
 // a share) a value of type `t` may reach, pushed onto `out` once each.
+// (A named type walked once per question, as in __et_reaches: what it
+// reaches is in `out` already.)
 @ __et_shared_in i t i out → v {
     ? | < t 0 ( et_scalar t ) { ^ } {}
     : i kind ( et_kind t )
@@ -11652,7 +11725,6 @@ unsafe @ eng_keep_fn → v {
             }
         } {}
     }
-    ( wv_pop g_et_seen )
 }
 
 @ et_shared_in i t i out → v {
@@ -15004,33 +15076,41 @@ unsafe @ eng_byte s w i k → i {
                                     // the binding is a borrow, and its field is
                                     // not its to hand to a `sink`
                                     ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, which is a borrow` ) )
-                                } {
-                                    // (a part of an `inout` parameter is the
-                                    // caller's, who goes on holding the whole:
-                                    // handed to a callee that keeps it - in its
-                                    // result, in another argument - it is
-                                    // copied; taken out, it would leave the
-                                    // caller's value with a hole. One that
-                                    // releases it takes it.)
-                                    : ~ b inout_part & & ( et_copyable ty ) != ( av_alias av ) 0 ( sm_keeps_arg sm ck )
-                                    ? inout_part {
-                                        : i al ( av_alias av )
-                                        : ~ i a 0
-                                        ~ & inout_part < a ( sq_len al ) {
-                                            : i pa ( sq_at al a )
-                                            : i pi ( fv_pidx ( pl_var pa ) )
-                                            // (…or of an element of any
-                                            // parameter's container)
-                                            ? | | == ( pl_path pa ) 0 < pi 0 & != ( fp_mode pi ) PM_INOUT ( eng_path_no_star ( pl_path pa ) ) { = inout_part F } {}
-                                            = a + a 1
-                                        }
-                                    } {}
-                                    ? inout_part { = copied ( sq_add copied ck ) } {
-                                        ? & ! ( take_payload st av line != ( pl_path op ) 0 ) ! ( et_copyable ty ) {
-                                            ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) )
+                                } { ? & & != ( pl_path op ) 0 sinkmode & != g_fe_outside 0 ( sq_has g_fe_outside ov ) {
+                                        // a field of a loop's element, in a `;`
+                                        // block armed in a round, which runs
+                                        // outside every round: the element is a
+                                        // view of the container's there, its field
+                                        // not its to hand to a `sink`, as a
+                                        // `vec_at` copy's is not (agora #672)
+                                        ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, a loop's element read outside its round, which is a borrow` ) )
+                                    } {
+                                        // (a part of an `inout` parameter is the
+                                        // caller's, who goes on holding the whole:
+                                        // handed to a callee that keeps it - in its
+                                        // result, in another argument - it is
+                                        // copied; taken out, it would leave the
+                                        // caller's value with a hole. One that
+                                        // releases it takes it.)
+                                        : ~ b inout_part & & ( et_copyable ty ) != ( av_alias av ) 0 ( sm_keeps_arg sm ck )
+                                        ? inout_part {
+                                            : i al ( av_alias av )
+                                            : ~ i a 0
+                                            ~ & inout_part < a ( sq_len al ) {
+                                                : i pa ( sq_at al a )
+                                                : i pi ( fv_pidx ( pl_var pa ) )
+                                                // (…or of an element of any
+                                                // parameter's container)
+                                                ? | | == ( pl_path pa ) 0 < pi 0 & != ( fp_mode pi ) PM_INOUT ( eng_path_no_star ( pl_path pa ) ) { = inout_part F } {}
+                                                = a + a 1
+                                            }
                                         } {}
-                                    }
-                                }
+                                        ? inout_part { = copied ( sq_add copied ck ) } {
+                                            ? & ! ( take_payload st av line != ( pl_path op ) 0 ) ! ( et_copyable ty ) {
+                                                ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) )
+                                            } {}
+                                        }
+                                    } }
                             }
                         }
                     }
@@ -16187,7 +16267,14 @@ unsafe @ eng_byte s w i k → i {
             } {}
             = vid - vid 1
         }
+        // (a loop's element read there is read outside every round: the
+        // block runs at the function's exit, and the element's slot is no
+        // slot of a round any more - a view of the container's element,
+        // agora #672)
+        : i fe_was g_fe_outside
+        = g_fe_outside ( wv_at g_fc_dfe id )
         ( eng_run st + d 1 ( wv_at g_ec_link d ) )
+        = g_fe_outside fe_was
         = k - k 1
     }
     // (blocks the chain's own blocks armed run after them)
@@ -17293,7 +17380,9 @@ unsafe @ eng_byte s w i k → i {
             ( st_put cur vid ? == ( av_own v ) OW_L ( av_make OW_L ( sq_union ( av_loans v ) ( av_loans src ) ) ( av_alias v ) 0 F ) g_av_none )
         } { ( st_put cur vid ( av_make OW_L loans elem_alias sub F ) ) }
     }
+    ( wv_push g_fe_walking vid )
     ( eng_run cur + at 3 end )
+    ( wv_pop g_fe_walking )
     ( wv_pop g_fc_loops ) ( wv_pop g_fc_loops )
     ( wv_copy nxt head )
     ( st_join_into nxt cur )
@@ -17464,6 +17553,7 @@ unsafe @ eng_byte s w i k → i {
         // round of a loop runs once for each)
         : i id ( wv_len g_fc_defers )
         ( wv_push g_fc_defers at )
+        ( wv_push g_fc_dfe ? == 0 ( wv_len g_fe_walking ) 0 ( sq_set_of_wv g_fe_walking ) )
         ( wv_push tmp id )
         ( wv_put st ST_DEFERS ( sq_of_wv tmp 0 ( wv_len tmp ) ) )
         ( wv_trunc tmp 0 )
@@ -18297,8 +18387,10 @@ unsafe @ eng_byte s w i k → i {
     ? < g_fx 0 {
         = g_fx ( wv_new ) = g_fx_nocopy ( wv_new ) = g_fx_agg ( wv_new ) = g_fx_litp ( wv_new ) = g_fx_lent ( wv_new )
         = g_fc_rets ( wv_new ) = g_fc_exits ( wv_new ) = g_fc_loops ( wv_new ) = g_fc_defers ( wv_new )
+        = g_fc_dfe ( wv_new ) = g_fe_walking ( wv_new )
     } {}
-    ( wv_trunc g_fc_defers 0 )
+    ( wv_trunc g_fc_defers 0 ) ( wv_trunc g_fc_dfe 0 ) ( wv_trunc g_fe_walking 0 )
+    = g_fe_outside 0
     ( wv_fill g_fx g_f_nv 0 ) ( wv_fill g_fx_nocopy g_f_nv 0 ) ( wv_fill g_fx_agg g_f_nv 0 )
     ( wv_fill g_fx_litp g_f_nv 0 ) ( wv_fill g_fx_lent g_f_nv 0 )
     ( wv_trunc g_fc_rets 0 ) ( wv_trunc g_fc_exits 0 ) ( wv_trunc g_fc_loops 0 )
@@ -90550,10 +90642,25 @@ unsafe @ __opt_err_mangle s e → s {
 // asks its fields; anything else that holds such a drop - a Box, an enum
 // of the program's (its variant 0 with a zero payload), a move-only
 // library handle - is answered yes.
+// (Asked once per type, `zdu##`: a struct of eight fields eight deep was
+// 8^8 walks for one answer, and the type table asks it of every type.
+// The answer depends on the type alone - the program's `% Drop`s are
+// known after the signature pre-scan - except where the depth guard cut
+// the walk short, which is not kept.)
 @ __zero_drops_user s ty i depth → b {
     ? == 0 ( nurl_str_len ty ) { ^ F } {}
     ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
-    ? > depth 16 { ^ T } {}
+    ? != 0 ( nurl_sym_len2 g_impl_name_syms `zdu##` ty ) { ^ ( seq ( nurl_sym_get2 g_impl_name_syms `zdu##` ty ) `1` ) } {}
+    : i cut0 g_zdu_cut
+    = g_zdu_cut 0
+    : b r ( __zero_drops_user_walk ty depth )
+    ? == 0 g_zdu_cut { ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `zdu##` ty ) ? r `1` `0` ) } {}
+    = g_zdu_cut | g_zdu_cut cut0
+    ^ r
+}
+
+@ __zero_drops_user_walk s ty i depth → b {
+    ? > depth 16 { = g_zdu_cut 1 ^ T } {}
     ? | ( __has_user_drop ty ) ( __is_moveonly_libh ty ) { ^ T } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ F } {}
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ F } {}

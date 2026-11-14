@@ -238,6 +238,9 @@ class FnCheck:
         self.ret_watch = None    # the binding a return handed back, while its `;` blocks run
         self.defer_vars = {}     # a `;` block -> the variables its body names
         self.defer_before = {}   # a `;` block -> the variables bound when it was armed
+        self.fe_walking = []     # the elements of the `~ x xs` loops a round of is being walked
+        self.defer_fe = {}       # a `;` block -> those elements when it was armed
+        self.fe_outside = frozenset()   # …while that block runs
         self.ret_changed = False
         self.walking = set()
         self.moved_from = None   # the last value moved that holds views of its own parts     # the loans of the loops being walked: their containers' buffers     # a temporary -> its value is what a call made and handed over
@@ -1437,6 +1440,14 @@ class FnCheck:
                         # borrow, and its field is not its to hand to a
                         # `sink` (MEMORY.md §2.10, agora #680)
                         self.err(line, f"{name} takes a field of {self.vname(op[1])}, which is a borrow")
+                    elif (op[2] and op[1] in self.fe_outside
+                          and k < len(sm["modes"]) and sm["modes"][k] == "sink"):
+                        # a field of a loop's element, in a `;` block armed
+                        # in a round, which runs outside every round: the
+                        # element is a view of the container's there, its
+                        # field not its to hand to a `sink`, as a `vec_at`
+                        # copy's is not (agora #672)
+                        self.err(line, f"{name} takes a field of {self.vname(op[1])}, a loop's element read outside its round, which is a borrow")
                     elif (self.T.copyable(ty) and avs[k].alias
                           and all(a[1] and a[0] in self.pidx
                                   and (self.fn.modes[self.pidx[a[0]]] == "inout" or "*" in a[1])
@@ -2495,7 +2506,13 @@ class FnCheck:
                 self.effect(st, (vid, ()), "replace", v.line)
                 self.effect(st, (vid, ()), "end", v.line)
                 st.vals[vid] = AV("D")
+            # (a loop's element read there is read outside every round:
+            # the block runs at the function's exit, its slot in the
+            # container is no slot of a round any more - a view of the
+            # container's element, MEMORY.md §7.2, agora #672)
+            was_fe, self.fe_outside = self.fe_outside, self.defer_fe.get(d, frozenset())
             st = self.run(st, self.defer_bodies[d])
+            self.fe_outside = was_fe
             if st.bottom:
                 break
         if not st.bottom and st.defers:
@@ -3185,6 +3202,7 @@ class FnCheck:
             self.defer_bodies.append(body)
             st.defers = st.defers + (len(self.defer_bodies) - 1,)
             self.defer_before[len(self.defer_bodies) - 1] = frozenset(st.vals)
+            self.defer_fe[len(self.defer_bodies) - 1] = frozenset(self.fe_walking)
             return st
         if k == "ret":
             _, op, ln = s
@@ -3357,7 +3375,9 @@ class FnCheck:
             cur.vals[vid] = AV("L", v.loans | src.loans, v.alias, frozenset()) if v.own == "L" else NONE
         else:
             cur.vals[vid] = AV("L", loans, elem_alias, hsub(src.held, ("*",)))
+        self.fe_walking.append(vid)
         b = self.run(cur, body)
+        self.fe_walking.pop()
         breaks, conts = self.loop_stack.pop()
         nxt = join(head, b)
         for x in conts:

@@ -114,9 +114,45 @@ def unify(pt, at, env, tparams):
         unify(pt[1], at[1], env, tparams)
 
 
+INF = float("inf")
+
+
 class Types:
     def __init__(self, prog):
         self.prog = prog
+        self._memo = {}
+        self._low = INF
+
+    def _named(self, q, name, seen, cyc, walk):
+        """A named type's answer to the question q, asked inside of the
+        named types `seen`: one met again answers `cyc`.  Where no type met
+        again inside it was one of `seen` (the lowest place on the stack a
+        type met again was at, `_low`, is its own or deeper), the answer is
+        the one asked from outside, and kept: each named type is walked
+        once per question, not once per path to it (a struct of eight
+        fields eight deep was 8^8 walks).  An answer kept that way is the
+        one the question asked inside reaches as well: the question is
+        whether a leaf answering it is reachable from where it was asked,
+        and a cycle through one of `seen` is reached from that type too."""
+        if name in seen:
+            i = seen.index(name)
+            if i < self._low:
+                self._low = i
+            return cyc
+        memo = self._memo.setdefault(q, {})
+        if name in memo:
+            return memo[name]
+        was, self._low = self._low, INF
+        r = walk(seen + (name,))
+        d = len(seen)
+        if self._low >= d:
+            memo[name] = r
+            self._low = was
+        else:
+            self._low = min(was, self._low)
+        if not seen:
+            self._low = was
+        return r
 
     def is_scalar(self, ty, seen=()):
         if ty is None:
@@ -125,14 +161,11 @@ class Types:
         if k in SCALARS or k == "ptr":
             return True
         if k == "named" and ty[1] in self.prog.enums:
-            if ty[1] in seen:
-                return False
-            return all(all(self.is_scalar(t, seen + (ty[1],)) for t in tys)
-                       for _, tys in self.prog.enums[ty[1]])
+            return self._named("scalar", ty[1], seen, False, lambda ns: all(
+                all(self.is_scalar(t, ns) for t in tys) for _, tys in self.prog.enums[ty[1]]))
         if k == "named" and ty[1] in self.prog.structs:
-            if ty[1] in seen:
-                return False
-            return all(self.is_scalar(t, seen + (ty[1],)) for t, _ in self.prog.structs[ty[1]])
+            return self._named("scalar", ty[1], seen, False, lambda ns: all(
+                self.is_scalar(t, ns) for t, _ in self.prog.structs[ty[1]]))
         if k == "opt":
             return self.is_scalar(ty[1], seen)
         if k == "tvar":
@@ -160,13 +193,15 @@ class Types:
             return self.copyable(ty[1], seen) and self.copyable(ty[2], seen)
         if k in ("vec", "box", "opt"):
             return self.copyable(ty[1], seen)
-        if k == "named" and ty[1] in seen:
-            return True       # a type that holds itself: as copyable as the rest of it
+        # (a type that holds itself: as copyable as the rest of it)
         if k == "named" and ty[1] in self.prog.structs:
-            return all(self.copyable(t, seen + (ty[1],)) for t, _ in self.prog.structs[ty[1]])
+            return self._named("copyable", ty[1], seen, True, lambda ns: all(
+                self.copyable(t, ns) for t, _ in self.prog.structs[ty[1]]))
         if k == "named" and ty[1] in self.prog.enums:
-            return all(all(self.copyable(t, seen + (ty[1],)) for t in tys)
-                       for _, tys in self.prog.enums[ty[1]])
+            return self._named("copyable", ty[1], seen, True, lambda ns: all(
+                all(self.copyable(t, ns) for t in tys) for _, tys in self.prog.enums[ty[1]]))
+        if k == "named" and ty[1] in seen:
+            return True
         return False
 
     def owning(self, ty, seen=()):
@@ -184,12 +219,12 @@ class Types:
             return False      # nurlc's own answer: it has nothing to release
         if k == "named" and ty[1] in getattr(self.prog, "handle_elem", ()):
             return True       # a library handle owns its block
-        if k == "named" and ty[1] not in seen:
-            nseen = seen + (ty[1],)
-            if ty[1] in self.prog.structs:
-                return any(self.owning(t, nseen) for t, _ in self.prog.structs[ty[1]])
-            if ty[1] in self.prog.enums:
-                return any(any(self.owning(t, nseen) for t in tys) for _, tys in self.prog.enums[ty[1]])
+        if k == "named" and ty[1] in self.prog.structs:
+            return self._named("owning", ty[1], seen, False, lambda ns: any(
+                self.owning(t, ns) for t, _ in self.prog.structs[ty[1]]))
+        if k == "named" and ty[1] in self.prog.enums:
+            return self._named("owning", ty[1], seen, False, lambda ns: any(
+                any(self.owning(t, ns) for t in tys) for _, tys in self.prog.enums[ty[1]]))
         return False
 
     def owns_handle(self, ty, seen=()):
@@ -204,12 +239,15 @@ class Types:
             return self.owns_handle(ty[1], seen)
         if k == "res":
             return self.owns_handle(ty[1], seen) or self.owns_handle(ty[2], seen)
-        if k == "named" and ty[1] not in getattr(self.prog, "handle_elem", ()) and ty[1] not in seen:
-            nseen = seen + (ty[1],)
+        # (a type met again answers as an owner does)
+        if k == "named" and ty[1] not in getattr(self.prog, "handle_elem", ()):
+            cyc = self.owning(ty) if ty[1] in seen else False
             if ty[1] in self.prog.structs:
-                return any(self.owns_handle(t, nseen) for t, _ in self.prog.structs[ty[1]])
+                return self._named("owns_handle", ty[1], seen, cyc, lambda ns: any(
+                    self.owns_handle(t, ns) for t, _ in self.prog.structs[ty[1]]))
             if ty[1] in self.prog.enums:
-                return any(any(self.owns_handle(t, nseen) for t in tys) for _, tys in self.prog.enums[ty[1]])
+                return self._named("owns_handle", ty[1], seen, cyc, lambda ns: any(
+                    any(self.owns_handle(t, ns) for t in tys) for _, tys in self.prog.enums[ty[1]]))
         return self.owning(ty)
 
     def has_udrop(self, ty):
@@ -237,19 +275,21 @@ class Types:
             return self.shared_in(ty[1], seen)
         if k == "res":
             return self.shared_in(ty[1], seen) | self.shared_in(ty[2], seen)
-        if k != "named" or ty[1] in seen:
+        if k != "named":
             return set()
-        seen = seen + (ty[1],)
-        out = {ty[1]} if ty[1] in getattr(self.prog, "shared", ()) else set()
-        he = getattr(self.prog, "handle_elem", {}).get(ty[1])
+        return set(self._named("shared_in", ty[1], seen, frozenset(), lambda ns: self._shared_named(ty[1], ns)))
+
+    def _shared_named(self, name, seen):
+        out = {name} if name in getattr(self.prog, "shared", ()) else set()
+        he = getattr(self.prog, "handle_elem", {}).get(name)
         if he is not None:
-            return out | self.shared_in(he, seen)
-        for t, _ in self.prog.structs.get(ty[1], ()):
+            return frozenset(out | self.shared_in(he, seen))
+        for t, _ in self.prog.structs.get(name, ()):
             out |= self.shared_in(t, seen)
-        for _, tys in self.prog.enums.get(ty[1], ()):
+        for _, tys in self.prog.enums.get(name, ()):
             for t in tys:
                 out |= self.shared_in(t, seen)
-        return out
+        return frozenset(out)
 
     def view_capable(self, ty, seen=()):
         """Can a value of this type hold a view or a borrowed handle at all
@@ -268,16 +308,17 @@ class Types:
         if k == "res":
             return self.view_capable(ty[1], seen) or self.view_capable(ty[2], seen)
         if k == "named":
-            if ty[1] in seen:
-                return False
-            nseen = seen + (ty[1],)
-            he = getattr(self.prog, "handle_elem", {}).get(ty[1])
-            if he is not None:
-                return self.view_capable(he, nseen)
-            if ty[1] in self.prog.structs:
-                return any(self.view_capable(t, nseen) for t, _ in self.prog.structs[ty[1]])
-            if ty[1] in self.prog.enums:
-                return any(any(self.view_capable(t, nseen) for t in tys) for _, tys in self.prog.enums[ty[1]])
+            return self._named("view_capable", ty[1], seen, False, lambda ns: self._view_capable_named(ty[1], ns))
+        return True
+
+    def _view_capable_named(self, name, nseen):
+        he = getattr(self.prog, "handle_elem", {}).get(name)
+        if he is not None:
+            return self.view_capable(he, nseen)
+        if name in self.prog.structs:
+            return any(self.view_capable(t, nseen) for t, _ in self.prog.structs[name])
+        if name in self.prog.enums:
+            return any(any(self.view_capable(t, nseen) for t in tys) for _, tys in self.prog.enums[name])
         return True
 
     def field(self, ty, name):
