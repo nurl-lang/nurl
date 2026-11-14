@@ -30955,6 +30955,10 @@ unsafe @ __blk_leave b val → v {
     // (What a tail field read starts at, read before this scope goes — or,
     // for a tail that is itself a block, what that block's tail read.)
     ? & any == __tail_tt TT_DOT { ( __blk_froot_set ( nurl_sym_get syms `__last_member_root__` ) ) } { ? & any == __tail_tt TT_LBRACE {} { = g_blk_froot `` } }
+    // (A closure body that falls off with its last statement's value — a
+    // tail `?` / `??` whose arms did not return themselves — returns it,
+    // as gen_block_ret has it for a function's body.)
+    ? & & & & != 0 g_core_live __blk_scope __blk_ret_val == 0 g_did_ret > g_core_os_n __cb_h { ( core_ret T ) } {}
     ? & != 0 g_core_live __blk_scope { ( core_discard __cb_h __cb_t ) ( core_scope_end ) ( core_push 0 ) } {}
     ? & != 0 g_core_live >= __cvb 0 { ( core_vblock_end __cvb __cvb0 __cb_h ) } {}
     = g_blk_tail_eff ? == __tail_tt TT_LBRACE g_blk_tail_eff ? & == __tail_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN TT_LPAREN __tail_tt
