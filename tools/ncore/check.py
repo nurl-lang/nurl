@@ -1009,6 +1009,12 @@ class FnCheck:
         for (k, path, eff) in sm["effects"]:
             if k < len(ops) and ops[k][0] == "v" and not (k in copied and not path):
                 self.effect(st, (ops[k][1], ops[k][2] + tuple(path)), eff, line)
+                if (eff == "replace" and not path and not ops[k][2] and k < len(sm["modes"])
+                        and sm["modes"][k] == "inout"):
+                    # (a binding an `inout` callee may give a value of its
+                    # own: what it hands over counts every value it was
+                    # ever given, MEMORY.md §7.6 "Call results")
+                    self.var_fresh.add(ops[k][1])
         for (k, path) in sm.get("gone", ()):
             if k < len(ops) and ops[k][0] == "v":
                 st.gone = st.gone | {(ops[k][1], ops[k][2] + tuple(path))}
@@ -2320,6 +2326,15 @@ class FnCheck:
         if k == "match":
             _, op, arms, ln = s
             self.read(st, op, ln, ("m", id(s)))
+            if op[0] == "v" and not op[2] and op[1] in self.call_mixed:
+                # a payload matched straight out of a call that answers per
+                # call: the temporary is the call's own storage on the
+                # calls that made it fresh, released with the `??`
+                # (MEMORY.md §7.6 "Call results", agora #679)
+                cur = st.vals.get(op[1])
+                mty = self.fn.vars[op[1]].ty
+                if cur is not None and cur.own == "L" and mty is not None and mty[0] not in VIEW_TYPES:
+                    st.vals[op[1]] = AV("O", cur.loans, frozenset(), cur.held)
             out = State(bottom=True)
             for vname, body in arms:
                 out = join(out, self.run(st.copy(), body))
@@ -2354,7 +2369,7 @@ class FnCheck:
                             self.s_consumes.add(self.pidx[b])
                             self.effect(st, (b, ()), "replace", ln)
                             st.vals[b] = AV("M")
-                if (av.own == "L" and not av.call and av.alias and self.fn.ret is not None
+                if (av.own in ("L", "O") and not av.call and av.loans and self.fn.ret is not None
                         and self.fn.ret[0] not in VIEW_TYPES and self.T.owning(self.fn.ret)
                         and op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp"
                         and op[1] not in self.lit_nocopy and op[1] not in self.lit_lendcopy):
@@ -2364,18 +2379,23 @@ class FnCheck:
                     # is taken as by a `sink` and the result is the caller's
                     # own on that path (MEMORY.md §7.6, h408-h415). (Handed
                     # back by name inside the arm, or out of an enum of the
-                    # program's, it is lent: RULES.md, "One IR shape".)
-                    pay = {a for a in av.alias
+                    # program's, it is lent: RULES.md, "One operation".)
+                    places = {self.loans[l][0] for l in av.loans
+                              if l in self.loans and self.loans[l][1] == "handle"} | set(av.alias)
+                    pay = {a for a in places
                            if a[1] and a[1][-1].startswith("#") and "*" not in a[1] and a[0] in self.pidx
                            and self.fn.modes[self.pidx[a[0]]] == "in" and st.vals[a[0]].own == "P"
-                           and (self.ty_of_place((a[0], a[1][:-1])) or ("?",))[0] in ("opt", "res")}
+                           and (self.ty_of_place((a[0], a[1][:-1])) or ("?",))[0] in ("opt", "res")
+                           # (the payload itself, not a field read out of it:
+                           # that lends the parameter back in part, agora #178)
+                           and not any(b[0] == a[0] and len(b[1]) > len(a[1]) and prefix(a[1], b[1])
+                                       for b in places)}
                     if pay:
                         for a in sorted(pay):
                             self.effect(st, a, "take", ln)
                             self.s_consumes.add(self.pidx[a[0]])
-                        rest = av.alias - pay
-                        av = AV("L" if rest else "O",
-                                {l for l in av.loans if self.loans.get(l, (None,))[0] not in pay}, rest, av.held)
+                        left = {l for l in av.loans if self.loans.get(l, (None,))[0] not in pay}
+                        av = AV("O" if av.own == "O" or not left else "L", left, av.alias - pay, av.held)
                 gone = st.vals.get(op[1]) if before is not None else None
                 if st.defers and before is not None and gone is not None and gone.own == "M":
                     # the `;` blocks run after the result is made and before
@@ -2399,7 +2419,7 @@ class FnCheck:
                 self.check_live(st, av, ln, "the returned value", held=True)
                 self.params_hold_locals(st, ln)
                 self.rets.append((av, st.copy()))
-                if av.own in ("O", "P") and not av.loans and not (
+                if av.own in ("O", "P") and (not av.loans or av.own == "O") and not (
                         op[0] == "v" and not op[2] and op[1] not in self.var_fresh):
                     # (a value of its own that holds something: an option's
                     # `None` hands no storage over, nor does a binding that

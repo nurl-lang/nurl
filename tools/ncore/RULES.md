@@ -93,6 +93,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | An owned temporary a callee hands back whole leaves with the result; the result is owned per call | §1 Temporaries, §7.6 | `apply_call` (`whole`) |
 | A result owned on some paths and lent on others borrows its argument | §7.6 Call results | `make_summary` |
 | …and a binding of it owns it on the calls that made it fresh (an option's `None` is no fresh value): what views it does not outlive the binding | §7.6 Call results | summary `mixed`, `call_mixed` |
+| What a function hands over counts every value the returned binding was given: fresh on one path and a lend on another, filled through an `inout` callee. A payload matched straight out of such a call is in the call's own storage on the fresh calls, released with the `??` | §7.6 Call results (agora #679) | `ret` (`ret_fresh`), `apply_call` (`var_fresh`), `match` |
 | The payload of what a function of the program lent is that call's lend still; the payload of an option a library getter made around an element is the element | §7.6 | `rvalue` (`payload`), `call_by_fn` |
 | A cursor given a shorter-lived lend stays a borrow of it; an owner given one is handed a copy | §7.6 | `stmt` (`assign`) |
 | A field or a payload of an owned temporary a callee hands back is taken out of it: the result owns it (an element of its buffer is not) | §1 Temporaries, §7.6 (#635) | `apply_call` (`part`) |
