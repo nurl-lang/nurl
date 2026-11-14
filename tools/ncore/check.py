@@ -689,6 +689,14 @@ class FnCheck:
                 # `: ~ s y x`, x an owned raw string: a slot of its own is
                 # given a copy of the text (MEMORY.md §7.6, owned string slots)
                 av = AV("O", (), (), frozenset())
+            elif (src.own == "O" and not src.loans and vty is not None and vty[0] == "s"
+                  and self.fn.vars[vid].kind == "local" and dv is not None and dv.kind == "temp"
+                  and dest_vid not in self.block_temps and not is_ret and not stored
+                  and self.fn.vars[vid].depth <= dv.depth):
+                # a join whose arm is an owned raw string of a binding that
+                # lives on hands the join a copy of its text (MEMORY.md
+                # §7.6, owned string slots)
+                av = AV("O", (), (), frozenset())
             elif (stored and vty is not None and vty[0] == "closure" and self.fn.vars[vid].kind != "temp"
                   and not is_ret):
                 # a closure binding (or parameter) stored into a literal:

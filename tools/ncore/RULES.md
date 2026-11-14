@@ -127,6 +127,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | Inside a closure, running a closure it was handed may grow or clear what this one captured: the caller's closure may have captured the same | §2.11 | `call_closure` |
 | What another thread runs holds no view | §6.5 | `apply_call` (`detaches`) |
 | A view handed back out of where it was kept (an element that is a slice or a raw string) points where the kept one points | §2.10 | `apply_call` |
+| A join whose arm is an owned raw string of a binding that lives on hands the join a copy of its text | §7.6 (owned string slots) | `transfer` |
 | A mutable raw-string binding given an owned raw string of another binding takes a copy of its text; given a cursor that owns its value on some paths only, it is pointed at it, and reads it no longer than that cursor lives | §7.6 (owned string slots, h119) | `transfer` |
 | A function that hands back what a call lends out of a parameter it takes over on another path is refused, a join with a fresh arm included | §7.6 (agora #743) | `check_program` (`calllends`) |
 | A slice literal owns its elements: one that names a binding or a parameter is given a copy of it | §7.6 (agora #485) | `rvalue` (`agg`) |
