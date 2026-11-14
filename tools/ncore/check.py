@@ -734,6 +734,13 @@ class FnCheck:
         if (av.own == "L" or mixed) and (own_block or self.local_depth(AV("L", av.loans, av.alias)) > dest_depth):
             if copy_ok and dest_ty is not None and self.T.copyable(dest_ty) and not self.T.is_scalar(dest_ty):
                 av = AV("O", (), (), av.held)
+            elif own_block and mixed and dest_ty is not None and self.T.owning(dest_ty):
+                # a value block's join that is fresh on one arm and a local
+                # of the block on another: the local ends with the block,
+                # so its arm is copied - and this value has no copy
+                # (MEMORY.md §7.6, agora #188)
+                self.err(line, f"{what}: a borrowed value would have to be copied here, and it cannot be copied")
+                return av
             elif own_block:
                 return av
             elif copy_ok and not is_ret and not named:
@@ -743,7 +750,11 @@ class FnCheck:
             elif mixed and not (is_ret and any(
                     l in self.loans and isinstance(l[0], tuple) and len(l[0]) == 3 and l[0][1] == "l"
                     and self.fn.vars[self.loans[l][0][0]].kind == "local" for l in av.loans)):
-                pass
+                if is_ret and st.defers and dest_ty is not None and self.T.owning(dest_ty):
+                    # (the local a join selected is not moved out from under
+                    # a `;` block that may still release it: its arm is a
+                    # lend, copied - and this value has no copy; agora #186)
+                    self.err(line, f"{what}: a borrowed value would have to be copied here, and it cannot be copied")
             else:
                 # (…a return of what a call lent out of a local of this
                 # frame, on the paths that did not make a value of their
@@ -2176,6 +2187,16 @@ class FnCheck:
                             and all(self.fn.vars[a[0]].depth >= v.depth for a in sel)
                             and self.take_payload(st, AV("L", new.loans, sel, new.held), ln)):
                         new = AV("O", (), (), new.held)
+                    elif (not self.T.copyable(v.ty) and self.T.owning(v.ty)
+                          and any(a[1] and a[1][-1].startswith("#") and any(not e.startswith("#") for e in a[1])
+                                  for a in sel)):
+                        # the payload of an option a field keeps: the struct
+                        # keeps it (a value with no copy is not taken out of
+                        # a field), so the binding, which owns its value on
+                        # the other arms, would need a copy of it
+                        # (MEMORY.md §7.6, h227)
+                        self.err(ln, f"{v.name}: a borrowed value would have to be copied here, "
+                                     f"and it cannot be copied")
                 if (new.own == "L" and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
                         and rv[1][1] in self.call_mixed and v.ty is not None and v.ty[0] not in VIEW_TYPES):
                     # what the call handed back is the caller's own on the

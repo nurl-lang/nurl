@@ -101,6 +101,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A field or a payload of an `in` parameter kept by value (pushed, stored) is taken out of it: the function owns the parameter from there and the caller's argument moves into the call. So is the payload of a local option or enum, through the `??` binding over it | §7.6 (h389–h404, h421–h423), §2.11 (agora #170) | `apply_call` stores |
 | An option's or a result's payload taken through its `??` binding leaves the option unreadable until it is given a value again. A field taken through a binding of it is left an empty String or Vec, and the payload slot of an enum of the program's is left empty the same way | §2.1, §2.11 (agora #170, #175) | `take_payload` |
 | A value that cannot be copied has no empty state to leave behind: a field of that type is not taken out of its struct, nor a payload of that type out of an enum of the program's: the read is a lend, and what would own it is refused. An `inout` parameter given such a lend is refused too | §7.6 ("Values that cannot be copied", h322–h327, agora #641), §2.12 (agora #697) | `take_payload`, `assign` |
+| What a `?` / `??` selects among this frame's owners moves out with a return; not from under an armed `;` block, and not out of a value block whose local it is: there the arm is a lend, copied, and refused for a value with no copy. A binding over a join whose arm is the payload of an option a field keeps, with no copy, is refused the same way | §2.2, §7.6 (agora #186, #188, h227) | `transfer`, `let` |
 | A fresh raw string kept by a value is owned by nothing | §2.13 | `fresh_string_kept` |
 | A module global outlives every frame: it holds no view of one | §2.13 | `gstore` |
 | A function's exit runs the `;` blocks armed on the way, newest first, after its result is made | §1 | `run_defers` |
@@ -163,6 +164,7 @@ gives and lists the other side here.
 | `= o ( pick o other k )`, `o` an option owner, `pick` may hand back either argument | `pick` is a plain function defined above the call (`option_owner_given_a_call_that_may_lend_itself_or_another_argument`, agora #412) | `pick` is defined below the call, is a generic instance, or is a `dyn` method (`option_owner_given_back_by_a_callee_below_runs_clean`, `…_by_a_generic_runs_clean`, `…_by_a_dyn_method_runs_clean`): the per-call key decides at run time | refuses all (A2 refuses the form) |
 
 | `^ ( id x )`, `x` an owned raw string of this frame, `id` handing its argument back | `id` is defined below the function (`identity_of_a_fresh_s_binding_returned_callee_below`) | `id` is defined above it (`…_callee_above_runs_clean`): the text is copied at the return | accepts both (the copy) |
+| `? c x l` as a function's value, `l` a local with no copy, `x` a parameter or a fresh value | it is the body's fall-off value (`drop_param_local_fall_off`, agora #186: "would have to be copied") | it is written `^ ? c x l`: the selected local moves out | accepts both (the move) |
 
 ### One operation, three answers by spelling
 
