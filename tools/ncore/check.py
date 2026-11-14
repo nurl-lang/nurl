@@ -169,6 +169,7 @@ class FnCheck:
         self.temp_fresh = {}
         self.call_lent = {}      # a call's temporary -> the arguments it may hand back whole
         self.cap_loans = set()   # the loans that are a closure's own handle of a binding it captured
+        self.call_by_fn = {}     # a call's temporary -> the callee is a function of the program
         self.ret_watch = None    # the binding a return handed back, while its `;` blocks run
         self.defer_vars = {}     # a `;` block -> the variables its body names
         self.ret_changed = False
@@ -981,6 +982,7 @@ class FnCheck:
         if sm["res"] == "lent":
             loans, alias = set(), set()
             if dest_vid is not None:
+                self.call_by_fn[dest_vid] = name in self.prog.fns and name not in getattr(self.prog, "trusted", ())
                 # (the arguments this call may hand back whole, as written)
                 self.call_lent[dest_vid] = [ops[k] for (k, path, kind) in sm["lends"]
                                             if not path and kind == "handle" and k < len(ops)]
@@ -1486,7 +1488,12 @@ class FnCheck:
                 pl = a if wrapped else (a[0], a[1] + (tag,))
                 alias.add(pl)
                 loans.add(self.loan(st, ("pl", id(rv), pl), pl, "handle"))
-            return AV("L", loans, alias, sub)
+            # (the payload of what a function of the program lent is that
+            # call's lend still: not a slot a consumer may empty, as the
+            # payload of a library getter's option is)
+            lent_by_fn = (av.call and op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp"
+                          and self.call_by_fn.get(op[1], False))
+            return AV("L", loans, alias, sub, lent_by_fn)
         raise CheckError(f"rvalue {k}")
 
     def agg_paths(self, ty, variant, n):
