@@ -585,8 +585,14 @@ class FnCheck:
             vty = self.fn.vars[vid].ty
             raw = vty is not None and vty[0] in VIEW_TYPES
             to_view = dest_ty is not None and dest_ty[0] == "s" and vty is not None and vty[0] != "s"
+            dv = self.fn.vars[dest_vid] if dest_vid is not None else None
             if to_view:
                 av = AV("L", {self.loan(st, site, (vid, ()), "view")}, {(vid, ())}, frozenset())
+            elif (src.own == "O" and vty is not None and vty[0] == "s" and self.fn.vars[vid].kind != "temp"
+                  and dv is not None and dv.mut and dv.kind == "local" and not is_ret):
+                # `: ~ s y x`, x an owned raw string: a slot of its own is
+                # given a copy of the text (MEMORY.md §7.6, owned string slots)
+                av = AV("O", (), (), frozenset())
             elif src.own == "P" or (self.fn.vars[vid].kind != "temp" and (
                     (raw and not is_ret and not (stored and vty[0] == "slice")) or lend_owner(vid))):
                 # a parameter is lent to its new name (the caller owns it); an
