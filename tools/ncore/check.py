@@ -23,12 +23,18 @@ import os
 import sys
 
 from prims import PRIMS
-from lower import Types, Var
+from lower import SCALARS, Types, Var
 
 # NCORE_DERIVE=1: a library function's derived summary (derive.py) answers
 # before its declared one - how far the walk's own answers carry.
 DERIVE_FIRST = os.environ.get("NCORE_DERIVE") == "1"
 PATH_MAX = 5
+# (where in a value a loan is held is followed this deep: a loop that
+# stores into a value what it already holds - `e.layers[*].qw` given what
+# `e` holds - re-roots it under itself every round, and the paths would
+# grow without end. Held deeper, it is held at the prefix: `hsub` reads
+# an entry at an ancestor as held at every part below it.)
+HELD_MAX = 8
 
 # NCORE_TRACE=<binding>: say on stderr where an effect on it ends a loan.
 TRACE = os.environ.get("NCORE_TRACE")
@@ -55,7 +61,7 @@ def hsub(held, path):
 
 
 def hroot(held, path):
-    return frozenset((path + hp, l) for hp, l in held)
+    return frozenset(((path + hp)[:HELD_MAX], l) for hp, l in held)
 
 
 def captured_held(held):
@@ -82,11 +88,43 @@ def hfrom(loans, path=()):
     return frozenset((path, l) for l in loans)
 
 
+# (one loan is held in at most HELD_WIDEN places of a value; held in more,
+# it is held at their longest common prefix. A value given, round after
+# round, what holds what it holds - a model's buffers pushed into its own
+# fields - re-roots its loans under every field, and the places multiply:
+# 6 M of them in nurllama's loader. Held at a prefix, a loan is held at
+# every place below it, which is what `hsub` reads.)
+HELD_WIDEN = 8
+
+
+def widen_held(held):
+    if len(held) <= HELD_WIDEN:
+        return held
+    by = {}
+    for hp, l in held:
+        by.setdefault(l, []).append(hp)
+    if all(len(ps) <= HELD_WIDEN for ps in by.values()):
+        return held
+    out = set()
+    for l, ps in by.items():
+        if len(ps) <= HELD_WIDEN:
+            out |= {(hp, l) for hp in ps}
+            continue
+        lcp = ps[0]
+        for hp in ps[1:]:
+            n = 0
+            while n < len(lcp) and n < len(hp) and lcp[n] == hp[n]:
+                n += 1
+            lcp = lcp[:n]
+        out.add((lcp, l))
+    return frozenset(out)
+
+
 class AV:
     __slots__ = ("own", "loans", "alias", "held", "call")
 
     def __init__(self, own, loans=frozenset(), alias=frozenset(), held=frozenset(), call=False):
-        self.own, self.loans, self.alias, self.held = own, frozenset(loans), frozenset(alias), frozenset(held)
+        self.own, self.loans, self.alias, self.held = own, frozenset(loans), frozenset(alias), widen_held(frozenset(held))
         # a lend a call handed back: a copy of the handle in its owner, not
         # the owner's part read in place
         self.call = call
@@ -219,6 +257,8 @@ class FnCheck:
         self.block_temps = set()
         self.fe_vars = set()     # the element bindings of `~ x xs` loops
         self.cursor_slots = set()  # the `: ~ s` bindings born from a view
+        self.own_slots = set()     # the `: ~ s` bindings born owning: a literal, a fresh value
+        self.payload_bound = set()  # the bindings a `??` arm binds to a payload
 
         def blocks(stmts):
             nones = {s[1] for s in stmts if s[0] == "let" and s[2] is None}
@@ -233,6 +273,33 @@ class FnCheck:
                         else:
                             blocks(part)
         blocks(fn.body)
+        # the literals the function hands back as they are (`^ @ W { … }`),
+        # and the literals nested in one (`@ Json { JStr . r str }`): their
+        # fields move out of what they name (h264)
+        self.ret_aggs = set()
+        aggs = {}
+
+        def rets(stmts):
+            for s in stmts:
+                if s[0] == "let" and s[2] is not None and s[2][0] == "agg":
+                    aggs[s[1]] = s[2]
+                elif s[0] == "ret" and s[1] is not None and s[1][0] == "v" and not s[1][2]:
+                    self.ret_aggs.add(s[1][1])
+                for part in s[1:]:
+                    if isinstance(part, list):
+                        if part and isinstance(part[0], tuple) and part[0] and isinstance(part[0][0], str) and len(part[0]) == 2 and isinstance(part[0][1], list):
+                            for _, arm in part:
+                                rets(arm)
+                        else:
+                            rets(part)
+        rets(fn.body)
+        work = [v for v in self.ret_aggs if v in aggs]
+        self.ret_aggs = set(work)
+        while work:
+            for op in aggs[work.pop()][3]:
+                if op[0] == "v" and not op[2] and op[1] in aggs and op[1] not in self.ret_aggs:
+                    self.ret_aggs.add(op[1])
+                    work.append(op[1])
         self.stale_caps = set()  # this closure body's captures taken by pointer
         self.s_cloargs = set()
         self.s_retparams = set()
@@ -261,21 +328,7 @@ class FnCheck:
         return self.ty_at(self.fn.vars[vid].ty, path)
 
     def ty_at(self, ty, path):
-        for p in path:
-            if ty is None:
-                return None
-            if p == "*":
-                ty = self.T.elem(ty)
-            elif p.startswith("#"):
-                vs = self.T.variants(ty)
-                if not vs:
-                    return None
-                var, idx = p[1:-1], int(p[-1])
-                d = dict(vs)
-                ty = d[var][idx] if var in d and idx < len(d[var]) else None
-            else:
-                ty, _ = self.T.field(ty, p)
-        return ty
+        return self.T.at(ty, path)
 
     def holds_views(self, ty):
         if ty is None:
@@ -368,6 +421,13 @@ class FnCheck:
     def kills_paths(self, eff, p, pp, q, qp, k):
         if k in ("share", "held", "heldin", "stale") or eff == "permute":
             return False
+        if (eff in ("replace", "drop", "take") and k in ("handle", "view") and p is not None
+                and self.owns_nothing(p)):
+            # (a value that owns nothing - numbers, and views of what others
+            # own - releases nothing when it is given a new value: what was
+            # lent through it is where it was. `= r next` over a reader of
+            # a model's bytes leaves a slice read out of it good)
+            return False
         if eff == "take":
             # a part moved out of where it lived: what was lent out of that
             # part ends, a handle of the value around it does not
@@ -391,7 +451,9 @@ class FnCheck:
             rest = pp[len(qp):]
             if k == "handle" and self.holds_views(self.ty_of_place(q)):
                 return True
-            if k == "handle" and eff == "replace" and "*" not in rest:
+            if k == "handle" and eff == "replace" and "*" not in rest and not (p is not None and self.scalar_place(p)):
+                # (a number given a new value releases nothing: a copy of
+                # the handles around it stays good)
                 return True
             return False
         return False
@@ -414,7 +476,7 @@ class FnCheck:
         if vid == self.ret_watch and eff != "end":
             self.ret_changed = True
         if av.own == "L" and eff != "end":
-            for a in av.alias:
+            for a in self.value_aliases(vid, av.alias):
                 self.effect(st, (a[0], a[1] + path), eff, line, depth + 1, weak)
             return
         shown = self.agg_lends.get(vid)
@@ -454,6 +516,109 @@ class FnCheck:
                     continue
                 keep.add((hp, l))
             st.vals[vid] = AV(av.own, av.loans, av.alias, keep)
+
+    def value_aliases(self, vid, alias):
+        """The places of `alias` that are the borrowed value itself: a call
+        that lends a view of `x.g[*].data` lends handles of `x.g` and of
+        `x.g[*]` around it too, and those are not the view's storage - what
+        is done inside the view is done inside `x.g[*].data` only. If no
+        place is, every place may be."""
+        if len(alias) < 2:
+            return alias
+        vty = self.fn.vars[vid].ty
+        if vty is None:
+            return alias
+        out = [a for a in alias if self.is_value_place(vty, a)]
+        return out or alias
+
+    def is_value_place(self, vty, place, wrapped=False):
+        """Can `place` be a value of type `vty` itself - its type is `vty`
+        (for a view: its element type is the view's), or is not known?
+        `wrapped`: an option or a result around such a value is one too."""
+        pty = self.ty_of_place(place)
+        if vty is None or pty is None or pty == vty:
+            return True
+        if wrapped and pty[0] in ("opt", "res") and vty in pty[1:]:
+            # (an option or a result around the value: a payload's payload
+            # is handed out with its option, agora #175)
+            return True
+        if vty[0] in VIEW_TYPES or pty[0] in VIEW_TYPES:
+            e = self.elem_norm(vty)
+            return e is not None and e == self.elem_norm(pty)
+        return False
+
+    def text_of_local(self, st, av):
+        """Is `av` - what a call lent - the text of a String (or of a raw
+        string) a local of this function holds: every place the call itself
+        lent out of is one, of a local that owns its value (on the paths
+        that made it, at least) - not a view of a loop's element, nor an
+        arm's payload (agora #679: the option goes with the `??`)?"""
+        mine = [l for l in av.loans if l in self.loans and isinstance(l[0], tuple)
+                and len(l[0]) == 3 and l[0][1] == "l"]
+        if not mine:
+            mine = [l for l in av.loans if l in self.loans]
+            if len(mine) != len(av.loans):
+                return False
+        return all(self.fn.vars[self.loans[l][0][0]].kind == "local"
+                   and self.loans[l][0][0] not in self.payload_bound
+                   and st.vals.get(self.loans[l][0][0]) is not None
+                   and st.vals[self.loans[l][0][0]].own == "O" and "*" not in self.loans[l][0][1]
+                   and self.ty_of_place(self.loans[l][0]) in (("String",), ("s",)) for l in mine)
+
+    def owns_nothing(self, place):
+        """Does the place hold a value that releases nothing when it goes - a
+        number, or a struct of numbers and views (nurlc's type table: no
+        drop)?"""
+        ty = self.ty_of_place(place)
+        return ty is not None and (ty[0] in SCALARS or (ty[0] == "named" and ty[1] in getattr(self.prog, "nodrop", ())))
+
+    def holds_its_source(self, av):
+        """Does the payload `av` hold a view of itself, where it sits in its
+        option?"""
+        return any(l in self.loans and any(self.loans[l][0][0] == a[0] and prefix(a[1], self.loans[l][0][1])
+                                           for a in av.alias)
+                   for l in hloans(av.held))
+
+    def held_of_own(self, av, vid):
+        """What the payload `av`, taken out of its option into `vid`, holds:
+        its views of the payload itself are views of `vid`'s parts from
+        here on (they move with it, `reroot`)."""
+        out = set()
+        for hp, l in av.held:
+            hit = None
+            if l in self.loans:
+                q, qp = self.loans[l][0]
+                for a in av.alias:
+                    if q == a[0] and prefix(a[1], qp):
+                        hit = qp[len(a[1]):]
+                        break
+            if hit is None:
+                out.add((hp, l))
+            else:
+                nl = ("rb", l, vid)
+                self.loans[nl] = ((vid, hit[:PATH_MAX]), self.loans[l][1])
+                out.add((hp, nl))
+        return frozenset(out)
+
+    def own_payload(self, st, av):
+        """Is `av` - not a call's lend - the payload of an option or a result
+        that locals of this function own (`?? tr { T t → … }`)?"""
+        return (av is not None and not av.call and bool(av.alias)
+                and all(a[1] and "*" not in a[1] and a[1][-1].startswith("#")
+                        and self.fn.vars[a[0]].kind == "local"
+                        and st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
+                        and (self.ty_of_place((a[0], a[1][:-1])) or ("?",))[0] in ("opt", "res")
+                        for a in av.alias))
+
+    def scalar_place(self, place):
+        """Is the place known to hold a number (no handle, no view)?"""
+        ty = self.ty_of_place(place)
+        return ty is not None and ty[0] in SCALARS
+
+    def elem_norm(self, ty):
+        """The element type of `ty` for value_aliases: every number is one."""
+        e = ("u",) if ty[0] == "s" else self.T.elem(ty)
+        return ("num",) if e is not None and e[0] in SCALARS else e
 
     def would_kill(self, st, place, eff, loans, depth=0):
         vid, path = place
@@ -584,6 +749,21 @@ class FnCheck:
                 held.add((hp, l))
         return AV(av.own, av.loans, av.alias, held, av.call)
 
+    def rebase_self(self, held, tmp, tag, dest):
+        """The payload `tag` of the temporary `tmp`, taken out of it into
+        `dest`: what it holds of itself (a tokenizer's piece table viewing
+        its own buffer, `selfholds`) is held of `dest` from here on - the
+        temporary is released with its statement, the payload is not."""
+        out = set()
+        for hp, l in held:
+            if l in self.loans and self.loans[l][0][0] == tmp and self.loans[l][0][1][:1] == (tag,):
+                nl = ("rb", l, dest)
+                self.loans[nl] = ((dest, self.loans[l][0][1][1:][:PATH_MAX]), self.loans[l][1])
+                out.add((hp, nl))
+            else:
+                out.add((hp, l))
+        return frozenset(out)
+
     def lent_part(self, av):
         """A part read out of a value that holds it as a lend - a field the
         value was given a handle copy for - is that lend, not an owner."""
@@ -598,7 +778,9 @@ class FnCheck:
     def local_depth(self, av):
         d = 0
         for lid in av.loans | hloans(av.held):
-            if lid not in self.loans:
+            if lid not in self.loans or self.loans[lid][1] == "share":
+                # (a share of a handle is a handle of its own on the one
+                # payload: it borrows no binding)
                 continue
             place = self.loans[lid][0]
             v = self.fn.vars[place[0]]
@@ -616,16 +798,25 @@ class FnCheck:
         if named:
             # the literal is taken: the bindings it showed move into it
             gone = set()
+            moved = {}
             for fname, b in named.items():
                 cur = st.vals.get(b)
                 if cur is not None and cur.own == "O":
                     gone |= {l for hp, l in src.held if l in self.loans and self.loans[l] == ((b, ()), "handle")}
+                    # (what the binding holds of its own parts goes with it:
+                    # held of the field it moved into, as `reroot` does)
+                    for hp, l in src.held:
+                        if l in self.loans and l not in gone and self.loans[l][0][0] == b:
+                            nl = ("rr", l, vid, (fname,))
+                            self.loans[nl] = ((vid, ((fname,) + self.loans[l][0][1])[:PATH_MAX]), self.loans[l][1])
+                            moved[l] = nl
                     self.effect(st, (b, ()), "replace", line)
                     st.vals[b] = AV("M")
                     # (a view of its buffer is a view of the field's now)
                     self.rehome_views(st, b, (vid, (fname,)))
             src = st.vals[vid]
-            src = AV(src.own, src.loans, src.alias, {(hp, l) for hp, l in src.held if l not in gone}, src.call)
+            src = AV(src.own, src.loans, src.alias,
+                     {(hp, moved.get(l, l)) for hp, l in src.held if l not in gone}, src.call)
             st.vals[vid] = src
         if src.own == "P":
             self.s_consumes.add(self.pidx[vid])
@@ -715,6 +906,13 @@ class FnCheck:
                 # a `sink` parameter is the function's own: handed to a new
                 # holder, it moves there
                 av = self.move_out(st, vid, line)
+            elif (src.own == "P" and stored and vid in self.pidx and self.pidx[vid] < self.ncap
+                  and not getattr(self.fn.vars[vid], "byref", False) and not raw and vty is not None
+                  and vty[0] != "closure" and self.T.owning(vty) and not self.T.copyable(vty)):
+                # a capture with no copy, stored into a literal by the
+                # closure's body: it moves out of the closure, which may run
+                # once (run again, it panics; MEMORY.md §7.5, h222)
+                av = self.move_out(st, vid, line)
             elif src.own == "P" or (self.fn.vars[vid].kind != "temp" and (
                     # (an owned slice moves its buffer to whatever is given
                     # it, as any owner does: MEMORY.md §2.1, §2.2)
@@ -744,11 +942,11 @@ class FnCheck:
                     self.moved_from = None
         if (is_ret and av.own == "L" and av.call and dest_ty == ("s",) and op[0] == "v" and not op[2]
                 and self.fn.vars[op[1]].kind == "temp" and av.loans
-                and all(l in self.loans and self.fn.vars[self.loans[l][0][0]].kind == "local"
-                        and self.fn.vars[self.loans[l][0][0]].ty in (("String",), ("s",)) for l in av.loans)):
-            # the text of a local String (or of an owned raw string), as a
-            # call handed it back: the caller is given a copy of it, its
-            # own (MEMORY.md §7.6)
+                and self.text_of_local(st, av)):
+            # the text of a local String (or of an owned raw string) - a
+            # local's field too, whatever the local borrows -, as a call
+            # handed it back: the caller is given a copy of it, its own
+            # (MEMORY.md §7.6)
             return AV("O")
         if av.held and is_ret:
             av = self.closure_takes_over(st, av, line, op[0] == "v" and self.fn.vars[op[1]].kind == "temp")
@@ -759,6 +957,12 @@ class FnCheck:
             # assigned to a binding that outlives its captures - holds only
             # copies of their handles (MEMORY.md §2.11, h310)
             av = AV(av.own, av.loans, av.alias, self.closure_owned(av.held), av.call)
+        if (dest_vid in self.own_slots and av.loans and av.own in ("L", "O") and not is_ret and not stored
+                and dest_ty == ("s",) and op[0] == "v"):
+            # a string binding that owns its value from birth takes its own
+            # copy of any value that is not fresh: it holds no view of where
+            # the value came from (MEMORY.md §7.6, owned string slots)
+            return AV("O")
         own_block = dest_vid is not None and self.refers_to_block(av, dest_vid)
         if is_ret and av.own == "L" and not av.call and av.alias and op[0] == "v" and not op[2]:
             # what a `?` / `??` or a value block selected among this
@@ -878,7 +1082,74 @@ class FnCheck:
         from syntax import Unsupported
         raise Unsupported(f"no summary for {tmpl or name}")
 
+    def releases_in(self, sm, k, op):
+        """Does the callee give argument `k` (the operand `op`), or a part of
+        it, a new value that releases the old one - a place that may hold a
+        handle? A new number releases nothing, and a new element of a
+        buffer is the buffer's: every copy of the handle sees it."""
+        for (j, p, eff) in sm["effects"]:
+            if j != k or eff != "replace" or "*" in p:
+                continue
+            ty = self.ty_at(self.ty_of_place((op[1], op[2])) if op[0] == "v" else None, p)
+            if ty is None or ty[0] not in SCALARS:
+                return True
+        return False
+
     def apply_call(self, st, rv, line, dest_vid=None):
+        """A call; and after it, a `: ~` copy of a local that owns a struct
+        or an enum outright, handed `inout` to a callee that gives it or a
+        part of it a new value, is that value's owner: the local it copied
+        is moved (MEMORY.md §2.4, agora #135). A copy of a handle (a String,
+        a Vec) is a cursor and stays one."""
+        _, name, ops, site = rv
+        sm = self.summary(name)
+        takes = []
+        for k, op in enumerate(ops):
+            if (op[0] != "v" or op[2] or k >= len(sm["modes"]) or sm["modes"][k] != "inout"
+                    or not self.releases_in(sm, k, op)):
+                continue
+            v, av = self.fn.vars[op[1]], st.vals.get(op[1])
+            if (av is None or av.own != "L" or av.call or len(av.alias) != 1 or len(av.loans) != 1
+                    or v.kind != "local" or not v.mut or v.ty is None or v.ty[0] != "named"
+                    or v.ty[1] in self.prog.handle_elem or not self.T.owning(v.ty)):
+                continue
+            (src, spath), = av.alias
+            cur = st.vals.get(src)
+            sink = src in self.pidx and self.fn.modes[self.pidx[src]] == "sink"
+            if (spath or cur is None or cur.loans or cur.own != ("P" if sink else "O")
+                    or not (sink or (src not in self.pidx and self.fn.vars[src].kind == "local"))
+                    or self.loans.get(next(iter(av.loans))) != ((src, ()), "handle")):
+                continue
+            takes.append((op[1], src))
+        # an `inout` argument whose binding does not own its value - a `: ~`
+        # copy of another binding or of a parameter, a field read, what a
+        # call lends; on any path - may not go to a callee that gives the
+        # parameter, or a field of it, a new value: the callee releases the
+        # old one, which its owner still holds (MEMORY.md §2.4, agora #135)
+        for k, op in enumerate(ops):
+            if (op[0] != "v" or k >= len(sm["modes"]) or sm["modes"][k] != "inout" or op[1] in self.pidx
+                    or any(vid == op[1] for vid, _ in takes)
+                    or not self.releases_in(sm, k, op)):
+                continue
+            av = st.vals.get(op[1])
+            if av is None or av.own not in ("L", "O"):
+                continue
+            lent = [l for l in av.loans if l in self.loans and l not in st.dead and self.loans[l][1] == "handle"]
+            if lent:
+                self.err(line, f"{self.vname(op[1])} does not own its value: it borrows it from "
+                               f"{self.pname(self.loans[lent[0]][0])}, and {name} gives what it is handed "
+                               f"`inout` a new value")
+        out = self.apply_call_(st, rv, line, dest_vid)
+        for vid, src in takes:
+            av, cur = st.vals.get(vid), st.vals.get(src)
+            if st.bottom or av is None or cur is None or cur.own not in ("O", "P"):
+                continue
+            st.vals[vid] = AV("O", (), (), set(av.held) | set(cur.held))
+            st.vals[src] = AV("M")
+            self.rehome_views(st, src, (vid, ()))
+        return out
+
+    def apply_call_(self, st, rv, line, dest_vid=None):
         _, name, ops, site = rv
         sm = self.summary(name)
         if name in self.prog.fns and name not in getattr(self.prog, "trusted", ()):
@@ -961,12 +1232,19 @@ class FnCheck:
         # (MEMORY.md §2.4)
         # (a change inside a shared handle's payload is a change to the one
         # object every share reaches, not to this argument: `regions`)
-        changed = {k for (k, p, eff) in sm["effects"] if eff in ("realloc", "drop", "replace")
-                   and not (k < len(ops) and ops[k][0] == "v" and self.shared_tails((ops[k][1], ops[k][2] + tuple(p))))}
+        # (…nor is a number written into a buffer's element: it ends nothing
+        # another argument views, every holder of the buffer sees it)
+        changed = {k for (k, p, eff) in sm["effects"] if eff in ("realloc", "drop", "replace", "take")
+                   and not (k < len(ops) and ops[k][0] == "v" and self.shared_tails((ops[k][1], ops[k][2] + tuple(p))))
+                   and not (eff == "replace" and "*" in p and k < len(ops) and ops[k][0] == "v"
+                            and self.scalar_place((ops[k][1], (ops[k][2] + tuple(p))[:PATH_MAX])))}
         for k, mode in enumerate(sm["modes"][:len(ops)]):
             # (…nor is one the callee changes without saying `inout`: the
-            # buffer it moves is the other argument's too)
-            if (mode != "inout" and k not in changed) or ops[k][0] != "v":
+            # buffer it moves is the other argument's too. An `inout` one it
+            # gives no new value that releases or moves anything - it only
+            # reads it, or writes numbers into it - ends nothing another
+            # argument views: `__tpl_seg_eq inout r … nm`, nm read out of r)
+            if k not in changed or ops[k][0] != "v":
                 continue
             _, vid, path = ops[k]
             by_value = {src for (j, dp, src, pth, kind) in sm["stores"] if kind == "value" and j == k}
@@ -1028,6 +1306,16 @@ class FnCheck:
                     # trait objects own their value)
                     copied.add(k)
                     continue
+                if (cur and cur.own == "P" and op[1] in self.pidx and self.pidx[op[1]] < self.ncap
+                        and not getattr(cv, "byref", False) and cv.ty is not None
+                        and self.T.copyable(cv.ty) and not self.T.is_scalar(cv.ty)
+                        and k < len(sm["modes"]) and sm["modes"][k] == "in"):
+                    # a closure's capture that has a copy, handed to a
+                    # function that keeps its `in` parameter: it is given a
+                    # copy, and the closure keeps its own (MEMORY.md §7.5,
+                    # agora #796). (A `sink` takes the capture itself.)
+                    copied.add(k)
+                    continue
                 if cur and cur.own in ("O", "P"):
                     moved = self.move_out(st, op[1], line)
                     # (what the callee keeps of it is what the value holds
@@ -1072,6 +1360,12 @@ class FnCheck:
                             self.err(line, f"{name} takes a borrowed value that cannot be copied")
                     elif (not op[2] and self.fn.vars[op[1]].kind == "local" and avs[k].alias
                           and k < len(sm["modes"]) and sm["modes"][k] == "sink"
+                          # (a `sink` that keeps the value - in its result,
+                          # in another argument - takes the owner over
+                          # through the name, as a keeper does; one that
+                          # releases it would release the owner's)
+                          and not any(r[1] == k for r in sm.get("rholds", ()))
+                          and not any(x[2] == k for x in sm.get("stores", ()))
                           # (a value with a destructor of its own under
                           # another name is that value: agora #768)
                           and not (ty[0] == "named" and ("drop__" + ty[1]) in getattr(self.prog, "fn_flags", ())
@@ -1100,6 +1394,18 @@ class FnCheck:
                         # borrow, and its field is not its to hand to a
                         # `sink` (MEMORY.md §2.10, agora #680)
                         self.err(line, f"{name} takes a field of {self.vname(op[1])}, which is a borrow")
+                    elif (self.T.copyable(ty) and avs[k].alias
+                          and all(a[1] and a[0] in self.pidx and self.fn.modes[self.pidx[a[0]]] == "inout"
+                                  for a in avs[k].alias)
+                          and (any(r[1] == k for r in sm.get("rholds", ()))
+                               or any(x[2] == k for x in sm.get("stores", ())))):
+                        # a part of an `inout` parameter is the caller's,
+                        # who goes on holding the whole: handed to a callee
+                        # that keeps it (in its result, in another argument),
+                        # it is copied - taken out, it would leave the
+                        # caller's value with a hole. (One that releases it
+                        # takes it: a change to the caller's binding.)
+                        copied.add(k)
                     elif not self.take_payload(st, avs[k], line, direct=bool(op[2])) and not self.T.copyable(ty):
                         self.err(line, f"{name} takes a borrowed value that cannot be copied")
                 elif ty is not None and ty[0] == "closure":
@@ -1379,6 +1685,11 @@ class FnCheck:
                 loans |= av.loans
                 for a in av.alias:
                     pl = (a[0], (a[1] + tuple(path))[:PATH_MAX])
+                    if kind == "handle" and path and self.scalar_place(pl):
+                        # (a handle of a number is no handle: a lend of the
+                        # elements of a `Vec f` lends their storage - the
+                        # `view` beside it - and nothing else)
+                        continue
                     alias.add(pl)
                     loans.add(self.loan(st, (site, "l", k), pl, kind))
                 held |= hsub(av.held, tuple(path))
@@ -1813,7 +2124,27 @@ class FnCheck:
             for (k, path, eff) in sm["effects"]:
                 if k < ncap:
                     for place in caps.get(k, ()):
+                        cur = st.vals.get(place[0])
+                        if (eff == "replace" and not path and not place[1] and cur is not None and cur.own == "L"
+                                and self.fn.vars[place[0]].kind == "local"):
+                            # the body gives a binding that borrows its value
+                            # (a `: ~` copy of another) a new one: the binding
+                            # owns that, and what it borrowed stays its
+                            # owner's, untouched (MEMORY.md §2.11: the
+                            # closure is handed the binding's drop flag)
+                            if weak or k in sm.get("keeps", ()):
+                                st.vals[place[0]] = AV("O", cur.loans, cur.alias, cur.held, cur.call)
+                            else:
+                                st.vals[place[0]] = AV("O")
+                            # (what it is given is not seen from here: it
+                            # may be a value of its own that holds something)
+                            self.var_fresh.add(place[0])
+                            continue
                         self.effect(st, (place[0], place[1] + tuple(path)), eff, line, weak=weak)
+            # (what the body changes inside a shared payload is changed in
+            # the one payload every handle on it reaches: MEMORY.md §2.2)
+            for (ty, tail, eff) in sm.get("regions", ()):
+                self.region_effect(st, ty, tuple(tail), eff)
             for k in sm["consumes"]:
                 if k < ncap:
                     for place in caps.get(k, ()):
@@ -2127,9 +2458,36 @@ class FnCheck:
                     went = (dest_vid, fp)
                     st.vals[op[1]] = AV("L", {self.loan(st, (site, i, "cm"), went, "handle")}, {went}, cur.held)
                     continue
+                if (dest_vid in self.ret_aggs and op[0] == "v" and op[2]
+                        and all(e != "*" and not e.startswith("#") for e in op[2])
+                        and self.fn.vars[op[1]].kind == "local" and st.vals.get(op[1]) is not None
+                        and st.vals[op[1]].own == "O" and not st.vals[op[1]].loans
+                        and fty is not None and fty[0] == "named" and fty[1] in getattr(self.prog, "zmove", ())):
+                    # a field of a struct this function owns, of a type with
+                    # no copy whose zero value is empty (a struct of Strings
+                    # and options of `% Drop` values), named in a literal
+                    # handed back: it moves out whole, zeroed in the struct,
+                    # which releases the rest of itself (nurlc's `z` flag,
+                    # h264). One whose zero value would still run a `% Drop`
+                    # has no such move, and is lent (AGORA-865)
+                    self.read(st, op, line, (site, i), f"field {i + 1}")
+                    held |= hroot(hsub(st.vals[op[1]].held, tuple(op[2])), fp)
+                    self.effect(st, (op[1], tuple(op[2])), "take", line)
+                    st.gone = st.gone | {(op[1], tuple(op[2])[:PATH_MAX])}
+                    continue
                 self.moved_from = None
                 was = cur.own if cur is not None else None
+                carried = None
+                if (ty is not None and ty[0] in ("opt", "res") and op[0] == "v" and not op[2]
+                        and op[1] in self.lit_nocopy and op[1] in self.lit_params
+                        and dest_vid is not None and self.fn.vars[dest_vid].kind == "temp"):
+                    # (a literal that keeps an `in` parameter with no copy,
+                    # as the payload of an option or a result literal: good
+                    # to hand back as it is, as the literal was)
+                    carried = self.lit_nocopy.pop(op[1])
                 av = self.transfer(st, op, line, (site, i), dest_depth, fty, f"field {i + 1}", stored=True)
+                if carried is not None:
+                    self.lit_nocopy[dest_vid] = carried
                 if dest_vid is not None:
                     av = self.reroot(st, av, dest_vid, (names[i],))
                     if was == "O" and st.vals[op[1]].own == "M" and self.fn.vars[op[1]].kind != "temp":
@@ -2143,14 +2501,29 @@ class FnCheck:
                         # (a statement's temporary, or the unnamed binding a
                         # `\` try hands its failure on in)
                         if (dv is not None and (dv.kind == "temp" or dv.name.startswith("%t")) and not av.call
-                                and av.alias and all(a[0] in self.pidx and a[1] for a in av.alias)):
+                                and av.alias and (all(a[0] in self.pidx and a[1] for a in av.alias)
+                                                  or (op[0] == "v" and not op[2] and (
+                                                      op[1] in self.lit_params.get(dest_vid, ())
+                                                      or (ty is not None and ty[0] in ("opt", "res")
+                                                          and op[1] in self.lit_params))))):
                             # a part of a parameter, read in place: the
                             # literal is a lend of the caller's value, good
                             # to hand back as it is and nothing else
                             # (MEMORY.md §7.6, agora #200)
+                            # (…or an `in` parameter named whole: handed
+                            # back as it is, the literal keeps the caller's
+                            # argument - `ret`)
                             nc_loans |= av.loans
                             nc_alias |= av.alias
                             self.lit_nocopy[dest_vid] = i + 1
+                        elif (dest_vid in self.ret_aggs and op[0] == "v" and not op[2] and self.own_payload(st, av)
+                              and self.take_payload(st, av, line)):
+                            # the payload of an option or a result a local of
+                            # this function owns, named in a literal handed
+                            # back: it goes over with its option, which is
+                            # not read after (h264's move for a payload)
+                            held |= hroot(av.held, fp)
+                            continue
                         elif (not av.call and av.alias and op[0] == "v" and not op[2] and op[1] in self.slot_vars
                               and all(st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O" for a in av.alias)
                               and self.take_payload(st, av, line)):
@@ -2209,7 +2582,14 @@ class FnCheck:
             sub = hsub(av.held, (tag,))
             pty = self.ty_of_field(self.fn.vars[op[1]].ty if op[0] == "v" and not op[2] else None, variant, idx)
             if op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp" and av.own == "O":
+                if dest_vid is not None:
+                    sub = self.rebase_self(sub, op[1], tag, dest_vid)
                 return self.lent_part(AV("O", (), (), sub))
+            if pty is not None and not self.T.owning(pty) and not self.T.view_capable(pty):
+                # (a payload with no room for a view or a handle - an error
+                # code and an offset - borrows nothing, whatever its option
+                # lends: a copy of its words)
+                return NONE
             if pty is not None and pty[0] in VIEW_TYPES:
                 v = self.view_value(sub)
                 return AV("L", v.loans | av.loans, v.alias, frozenset()) if v.own == "L" else NONE
@@ -2220,7 +2600,12 @@ class FnCheck:
                            and not (aty[0] == "named" and aty[1] in self.prog.enums))
                 # (an option a callee made around a lend of an element -
                 # `vec_get` - is no place of its own: its payload is the
-                # element)
+                # element. So is one around a lend of a place whose type is
+                # the payload's - an enum of the program's too: `json_get`
+                # lends `?Json` around an element `Json`)
+                if (not wrapped and aty is not None and pty is not None and aty == pty
+                        and aty != self.fn.vars[op[1]].ty):
+                    wrapped = True
                 pl = a if wrapped else (a[0], (a[1] + (tag,))[:PATH_MAX])
                 alias.add(pl)
                 loans.add(self.loan(st, ("pl", id(rv), pl), pl, "handle"))
@@ -2268,27 +2653,32 @@ class FnCheck:
         return st
 
     def defer_reads(self, st):
-        """The variables the `;` blocks armed so far name."""
+        """The variables the `;` blocks armed so far may read: the ones they
+        name, and what those hold or borrow - a closure the block calls
+        reads what it captured (agora #655: every one of them is kept
+        until the chain has run)."""
         out = set()
         for d in st.defers:
-            if d not in self.defer_vars:
-                found = set()
-
-                def walk(x):
-                    if isinstance(x, tuple) and len(x) == 3 and x[0] == "v" and isinstance(x[1], int):
-                        found.add(x[1])
-                    elif isinstance(x, (tuple, list)):
-                        for y in x:
-                            walk(y)
-                walk(self.defer_bodies[d])
-                self.defer_vars[d] = found
-            out |= self.defer_vars[d]
+            out |= self.defer_reads_of(d)
+        work = list(out)
+        while work:
+            av = st.vals.get(work.pop())
+            if av is None:
+                continue
+            for l in av.loans | hloans(av.held):
+                if l in self.loans:
+                    w = self.loans[l][0][0]
+                    if w not in out:
+                        out.add(w)
+                        work.append(w)
         return out
 
     def scope_end(self, st, stmts, line):
         if st.bottom:
             return st
-        declared = [s[1] for s in stmts if s[0] == "let"]
+        # (a temporary of a join's arm that the arm's value may view is
+        # the enclosing statement's: released where its `drop` says)
+        declared = [s[1] for s in stmts if s[0] == "let" and not self.fn.vars[s[1]].carried]
         # a binding a `;` block armed here may read is released after the
         # chain has run, at the function's exit: not where its scope ends
         # (MEMORY.md §7.2, "values registered before a defer")
@@ -2322,6 +2712,8 @@ class FnCheck:
         if k == "let":
             _, vid, rv, ln = s
             v = self.fn.vars[vid]
+            if rv is not None and rv[0] == "payload":
+                self.payload_bound.add(vid)
             if rv is not None and v.kind == "temp":
                 # (a call whose summary says its result is its own)
                 self.temp_fresh[vid] = rv[0] == "call" and self.summary(rv[1])["res"] == "own" and not self.summary(rv[1])["rholds"]
@@ -2333,6 +2725,9 @@ class FnCheck:
                                   lend_owner=(lambda x: True) if v.mut else (lambda x: False))
                 if v.mut and v.kind == "local" and v.ty == ("s",) and new.own == "L":
                     self.cursor_slots.add(vid)
+                if v.mut and v.kind == "local" and v.ty == ("s",) and not new.loans and (
+                        new.own == "O" or (rv[0] == "use" and rv[1][0] == "c")):
+                    self.own_slots.add(vid)
                 if (not v.mut and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
                         and self.fn.vars[rv[1][1]].kind == "temp" and not new.call and new.alias
                         and (new.own == "L" or (new.own == "O" and new.loans))
@@ -2344,9 +2739,13 @@ class FnCheck:
                     # - owners of this frame that live no longer than the
                     # binding: a parameter is the caller's, and a binding of
                     # an inner scope is a second name of an outer owner
+                    # (…an owner of the binding's type: a value that only
+                    # views an owner - a reader over a Vec's bytes - selects
+                    # none)
                     roots = [st.vals.get(a[0]) for a in new.alias]
                     if (all(r is not None and r.own == "O" for r in roots)
                             and all(self.fn.vars[a[0]].depth >= v.depth for a in new.alias)
+                            and all(self.is_value_place(v.ty, a, True) for a in new.alias)
                             and self.take_payload(st, new, ln)):
                         new = AV("O", (), (), new.held)
                 elif (not v.mut and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
@@ -2361,6 +2760,7 @@ class FnCheck:
                     roots = [st.vals.get(a[0]) for a in sel]
                     if (all(r is not None and r.own == "O" for r in roots)
                             and all(self.fn.vars[a[0]].depth >= v.depth for a in sel)
+                            and all(self.is_value_place(v.ty, a, True) for a in sel)
                             and self.take_payload(st, AV("L", new.loans, sel, new.held), ln)):
                         new = AV("O", (), (), new.held)
                     elif (not self.T.copyable(v.ty) and self.T.owning(v.ty)
@@ -2411,10 +2811,15 @@ class FnCheck:
                 # block's local, an arm's - is copied in: MEMORY.md §7.6,
                 # "hands it a value of its own")
                 # (…an owner is: a cursor given a lend stays a borrow, of
-                # whatever it is pointed at now)
+                # whatever it is pointed at now. A cursor given a binding
+                # that owns its value takes the value over, as any name
+                # given an owner does: the cursor's slot owns from here on,
+                # and the binding is moved - nurlc's owner-slot flag)
+                cursor_lends = lambda x: not (self.fn.vars[x].kind == "local" and st.vals.get(x) is not None
+                                              and st.vals[x].own == "O" and not st.vals[x].loans)
                 new = self.rvalue(st, rv, ln, ddepth, v.ty, v.name, copy_ok=not repoint, dest_vid=vid,
                                   named=v.kind != "temp",
-                                  lend_owner=outer if v.kind == "temp" else ((lambda x: True) if v.mut and repoint else (lambda x: False)))
+                                  lend_owner=outer if v.kind == "temp" else (cursor_lends if v.mut and repoint else (lambda x: False)))
                 # (…through a join too: `= x ? c x ( f )` - where the join may
                 # select the target, its value is copied in, h373)
                 own_parts = cur is not None and cur.own in ("O", "P") and new.own in ("L", "O") and any(
@@ -2453,6 +2858,13 @@ class FnCheck:
                     self.handover(st, (vid, ()))
                     self.effect(st, (vid, ()), "replace", ln)
                 new = self.reroot(st, new, vid)
+                if cur is not None and cur.own == "P" and v.ty is not None and v.ty[0] == "closure":
+                    # a closure binding reached through a pointer (an
+                    # `inout` parameter, a capture taken by pointer) is a
+                    # place that owns its closure, as a field is: the one
+                    # stored copies in every capture that has a copy
+                    # (MEMORY.md §7.4, h297)
+                    new = AV(new.own, new.loans, new.alias, self.closure_owned(new.held), new.call)
                 if cur is not None and cur.own == "P":
                     if (new.own == "L" and v.ty is not None and v.ty[0] not in VIEW_TYPES
                             and self.T.owning(v.ty) and not self.T.copyable(v.ty)):
@@ -2483,8 +2895,34 @@ class FnCheck:
                 return st
             fty = self.ty_of_place((vid, path))
             src = rv[1][1] if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] else None
+            if (src is not None and src in self.payload_bound and fty is not None and self.T.owning(fty)
+                    and self.own_payload(st, st.vals.get(src))
+                    and (not self.T.copyable(fty) or self.holds_its_source(st.vals[src]))
+                    and self.take_payload(st, st.vals[src], ln)):
+                # an arm's payload of an option or a result a local owns,
+                # stored into a field, with no copy - or one whose copy
+                # would go on viewing the payload it was made from (a
+                # tokenizer whose closure reads its own tables): it goes
+                # over with its option, which is not read after (as into a
+                # literal handed back)
+                st.vals[src] = AV("O", (), (), self.held_of_own(st.vals[src], src))
             was = st.vals[src].own if src is not None and st.vals.get(src) is not None else None
-            new = self.rvalue(st, rv, ln, ddepth, fty, self.pname((vid, path)))
+            # (a lend of something that ends before the field's holder is
+            # copied in, where the field's type has a copy: MEMORY.md §7.6,
+            # "borrowed values are copied into owners")
+            fcopy = (fty is not None and fty[0] not in VIEW_TYPES and fty[0] != "closure"
+                     and self.T.copyable(fty) and not self.T.is_scalar(fty))
+            new = self.rvalue(st, rv, ln, ddepth, fty, self.pname((vid, path)), copy_ok=fcopy, named=True)
+            if (new.own == "L" and fcopy and v.kind == "local" and self.T.has_udrop(v.ty)
+                    and any(l in self.loans and self.loans[l][1] in ("view", "handle")
+                            and self.fn.vars[self.loans[l][0][0]].kind == "local"
+                            and self.fn.vars[self.loans[l][0][0]].id > vid and self.fn.vars[self.loans[l][0][0]].depth >= v.depth
+                            for l in new.loans)):
+                # (a lend of a binding declared after the holder - released
+                # before it, newest first - stored into a holder whose drop
+                # may read what it holds: copied in, where it has a copy, as
+                # a lend of an inner scope's binding is. MEMORY.md §2.14)
+                new = AV("O", (), (), new.held)
             if was == "O" and st.vals[src].own == "M" and self.fn.vars[src].kind != "temp":
                 self.rehome_views(st, src, (vid, tuple(path)[:PATH_MAX]))
             if new.own == "L" and fty is not None and fty[0] == "closure":
@@ -2524,6 +2962,10 @@ class FnCheck:
             av = st.vals.get(vid)
             if av and av.own == "O":
                 self.effect(st, (vid, ()), "replace", ln)
+                st.vals[vid] = AV("D")
+            elif av and self.fn.vars[vid].carried and av.own != "M":
+                # (a join arm's temporary the statement releases: no scope
+                # ends it, so the binding is gone here)
                 st.vals[vid] = AV("D")
             return st
         if k == "scope":
@@ -2580,6 +3022,14 @@ class FnCheck:
                             self.s_consumes.add(self.pidx[b])
                             self.effect(st, (b, ()), "replace", ln)
                             st.vals[b] = AV("M")
+                            # (the result owns it: it is no lend of the
+                            # argument the call took)
+                            mine = {l for l in av.loans | hloans(av.held)
+                                    if self.loans.get(l, (None,))[0] == (b, ()) and self.loans[l][1] == "handle"}
+                            if mine or (b, ()) in av.alias:
+                                rest = av.loans - mine
+                                av = AV("L" if rest and av.own == "L" else "O", rest, av.alias - {(b, ())},
+                                        {(hp, l) for hp, l in av.held if l not in mine}, av.call and bool(rest))
                 if (av.own in ("L", "O") and not av.call and av.loans and self.fn.ret is not None
                         and self.fn.ret[0] not in VIEW_TYPES and self.T.owning(self.fn.ret)
                         and op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp"
@@ -2865,7 +3315,11 @@ class FnCheck:
 
 def initial_summary(prog, fn):
     T = Types(prog)
-    return {"modes": list(fn.modes), "res": "none" if fn.ret is None or T.is_scalar(fn.ret) else "own",
+    # (a view - a raw string, a slice - is no value of its own until a
+    # return says so: a string literal handed back is static, owned by
+    # nobody; summaries only grow, so a body that returns an owned one
+    # raises it)
+    return {"modes": list(fn.modes), "res": "none" if fn.ret is None or T.is_scalar(fn.ret) or fn.ret[0] in VIEW_TYPES else "own",
             "lends": [], "rholds": [], "effects": [], "stores": [],
             "consumes": [k for k, m in enumerate(fn.modes) if m == "sink"], "elems": [], "invokes": [],
             "cloargs": [], "regions": [], "selfholds": [], "rclos": [], "sclos": [], "detaches": []}
@@ -2919,9 +3373,20 @@ def check_program(prog, max_rounds=40):
         # (…and what it leaves one ARGUMENT holding of another is followed
         # where the call that runs it is seen: closure_arg_effects. A
         # capture left holding something, or held by an argument, is not.)
+        # (An `inout` argument given a capture or another argument whole is
+        # given a copy of it, where its type has one: it holds nothing of
+        # where the value came from. A capture taken by pointer is given
+        # the handle itself - agora #864.)
         real = [x for x in sm["stores"]
                 if not (x[4] == "held" and x[2] < len(fn.params)
                         and not T.view_capable(fn.vars[fn.params[x[2]]].ty))
+                # (…nor where the place it is stored in has no room for one)
+                and not (x[4] == "held" and x[0] < len(fn.params)
+                         and not T.view_capable(T.at(fn.vars[fn.params[x[0]]].ty, x[1]), ()))
+                and not (x[4] == "handle" and x[0] >= ncap_ and not x[1] and not x[3]
+                         and fn.vars[fn.params[x[0]]].ty is not None
+                         and fn.vars[fn.params[x[0]]].ty[0] not in VIEW_TYPES
+                         and T.copyable(fn.vars[fn.params[x[0]]].ty))
                 and (x[0] < ncap_ or x[2] < ncap_ or fn.modes[x[0]] == "inout")]
         if getattr(fn, "is_closure", False) and real:
             # a closure's type does not say what running it stores, so

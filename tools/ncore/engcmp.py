@@ -165,8 +165,9 @@ def verdicts(results, jobs):
     work = []
     for name in sorted(ref):
         path = name if os.path.isabs(name) else os.path.join(holes, name)
-        if not os.path.exists(path):
-            path = os.path.join(ROOT, "compiler", "tests", name)
+        for sub in (("compiler", "tests"), ("examples",)):
+            if not os.path.exists(path):
+                path = os.path.join(ROOT, *sub, name)
         work.append((name, path))
     same, differ = 0, []
     with ProcessPoolExecutor(max_workers=jobs) as ex:

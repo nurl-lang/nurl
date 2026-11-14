@@ -266,8 +266,10 @@ for f in "${FILES[@]}"; do
     read -r bs < "$WORK/base/$k"; read -r ns < "$WORK/new/$k"
     # (A locale with a decimal comma writes the times as `2,823`: awk would
     # read that as a string and compare it as one — `"2,688" > 10` — so the
-    # comma is made a point and both are taken as numbers.)
-    if awk -v b="$bs" -v n="$ns" -v r="$SWEEP_SLOWER" 'BEGIN { gsub(/,/, ".", b); gsub(/,/, ".", n); b += 0; n += 0; exit !(n >= 1 && n > b * r) }'; then
+    # comma is made a point and both are taken as numbers - in the C
+    # locale: an awk that follows the locale reads `0.716` as 0 under a
+    # decimal comma, and every file over a second was listed as slower.)
+    if LC_ALL=C awk -v b="$bs" -v n="$ns" -v r="$SWEEP_SLOWER" 'BEGIN { gsub(/,/, ".", b); gsub(/,/, ".", n); b += 0; n += 0; exit !(n >= 1 && n > b * r) }'; then
         (( slower == 0 )) && echo
         slower=$((slower + 1))
         # (The first twenty: a change that slows everything down says so in

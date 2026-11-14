@@ -44,6 +44,12 @@ virt  <virtual callee> <impl function>…
 sum   <function> <parameters> (<key>=<words>)…
 ```
 
+- `v` flags: 1 mutable, 2 `inout`, 4 `sink`, 8 a capture taken by pointer,
+  16 a temporary made in an arm of a `?` join that the arm's value may view
+  (`? c ( first ( text 1 ) ) …`). The walk hands such a temporary on past
+  the join, for the call that consumes the join to release, so in the IR it
+  is the enclosing statement's: of the join's depth, not ended where the
+  arm's scope ends, and dropped where that statement drops its own.
 - `fn` flags: bit 0 the body may use raw memory (`unsafe`, or a file of the
   standard library); bit 1 it crosses the raw boundary itself (a read or a
   store through a pointer, a cast that makes an address, a call only

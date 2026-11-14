@@ -78,6 +78,9 @@ seq_ shape_loops "a foreach binds its element" '^foreach [0-9]+ v0$' '^scope$' '
 seq_ shape_loops "a loop's condition, then its body" '^loop$' '^loopcond c$' '^scope$' '^break$' '^end$' '^end$'
 # A condition that is a true literal: the loop ends only at a `break` or a `^`.
 seq_ shape_loop_always "a literal-true condition says so" '^loop$' '^loopcond T$' '^scope$' '^break$' '^end$' '^end$'
+# A temporary an arm's value views is the statement's: no drop in the arm,
+# and its drop after the call the join goes to.
+seq_ shape_arm_temp "an arm's viewed temporary outlives the join" '^let [0-9]+ none$' '^else$' '^let [0-9]+ call shape_text 1 v0$' '^let [0-9]+ call string_data 1 v[0-9]+$' '^assign v[0-9]+ use v[0-9]+$' '^end$' '^end$' '^eval call nurl_str_len 1 v[0-9]+$' '^drop [0-9]+$' '^drop [0-9]+$' '^drop [0-9]+$'
 # A value block: its tail is assigned to a temporary of the statement around it.
 seq_ shape_block "a value block's tail lands in a temporary" '^let [0-9]+ none$' '^let [0-9]+ call string_from 1 c$' '^let [0-9]+ call string_clone 1 v[0-9]+$' '^assign v[0-9]+ use v[0-9]+$' '^let [0-9]+ use v[0-9]+$'
 # The operand of `|` that may not run is in the else of the first.

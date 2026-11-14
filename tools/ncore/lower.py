@@ -27,13 +27,14 @@ SCALARS = {"i", "u", "f", "b", "i8", "i16", "i32", "u16", "u32", "u64", "f32",
 
 
 class Var:
-    __slots__ = ("id", "name", "ty", "kind", "line", "depth", "mut", "blk", "byref")
+    __slots__ = ("id", "name", "ty", "kind", "line", "depth", "mut", "blk", "byref", "carried")
 
     def __init__(self, vid, name, ty, kind, line, depth):
         self.id, self.name, self.ty, self.kind, self.line, self.depth = vid, name, ty, kind, line, depth
         self.mut = False
         self.blk = None       # the value block's temporary, for a binding the block made
         self.byref = False    # a closure body's capture taken by pointer
+        self.carried = False  # a temporary of a join's arm that lives to the end of the join's statement
 
     def __repr__(self):
         return f"{self.name}#{self.id}"
@@ -286,6 +287,24 @@ class Types:
                     return norm(fty), name
         return None, None
 
+    def at(self, ty, path):
+        """The type of the place `path` inside a value of type `ty`."""
+        for p in path:
+            if ty is None:
+                return None
+            if p == "*":
+                ty = self.elem(ty)
+            elif p.startswith("#"):
+                vs = self.variants(ty)
+                if not vs:
+                    return None
+                var, idx = p[1:-1], int(p[-1])
+                d = dict(vs)
+                ty = d[var][idx] if var in d and idx < len(d[var]) else None
+            else:
+                ty, _ = self.field(ty, p)
+        return ty
+
     def elem(self, ty):
         if ty and ty[0] in ("vec", "slice", "box"):
             return ty[1]
@@ -296,6 +315,18 @@ class Types:
                 return he[ty[1]]
         if ty and ty[0] == "String":
             return ("u",)
+        # an enum of the program's whose container payloads all hold one
+        # element type (`Json`: `JArr ( Vec Json )`, `JObj ( Vec Json )`):
+        # `*` is an element of one of them - what a walk down it reaches
+        if ty and ty[0] == "named" and ty[1] in self.prog.enums:
+            es = set()
+            for _, tys in self.prog.enums[ty[1]]:
+                for t in tys:
+                    t = norm(t)
+                    if t and t[0] in ("vec", "slice", "box"):
+                        es.add(t[1])
+            if len(es) == 1:
+                return es.pop()
         return None
 
     def variants(self, ty):

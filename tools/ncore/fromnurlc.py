@@ -35,7 +35,7 @@ KINDS = {0: "param", 1: "local", 2: "temp", 3: "param"}
 
 
 class TypeInfo:
-    __slots__ = ("name", "cls", "drops", "clone", "udrop", "share", "tshare", "base", "targs", "fields", "variants")
+    __slots__ = ("name", "cls", "drops", "clone", "udrop", "share", "tshare", "zmove", "base", "targs", "fields", "variants")
 
 
 def nurlc_binary():
@@ -81,6 +81,7 @@ class Reader:
         self.prog.clonable = set()     # named types nurlc can copy a value of
         self.prog.unclonable = set()   # …and the ones it cannot
         self.prog.nodrop = set()       # named types with nothing to release
+        self.prog.zmove = set()        # named types a returned literal takes whole out of a local's field, zeroing it (h264)
         self.prog.udrop = set()        # named types whose drop is a use of the views they hold (§2.14)
         self.prog.handle_elem = {}     # a one-payload handle type -> its payload's type
         self.prog.shared = set()       # …the ones whose copies share the payload
@@ -133,6 +134,7 @@ class Reader:
         t.udrop = "d" in f[3]              # its drop runs the program's code, which may read its views
         t.share = "h" in f[3]              # its copy is a share of one object
         t.tshare = "t" in f[3]             # …that two threads may use at once
+        t.zmove = "z" in f[3]              # a field of it moves whole out of a local into a returned literal, zeroed
         i = 5
         assert f[i] == "A"
         n = int(f[i + 1])
@@ -217,6 +219,8 @@ class Reader:
                 self.prog.nodrop.add(name)
             if getattr(info, "tshare", False):
                 self.prog.thread_share.add(name)
+            if getattr(info, "zmove", False):
+                self.prog.zmove.add(name)
             if getattr(info, "clone", False):
                 self.prog.clonable.add(name)
             else:
@@ -341,6 +345,7 @@ class Reader:
             v.mut = bool(flags & 1)
             v.blk = blk if blk >= 0 else None
             v.byref = bool(flags & 8)      # a capture taken by pointer
+            v.carried = bool(flags & 16)   # a join arm's temporary the enclosing statement releases
             fn.vars[vid] = v
             if kind == 3:
                 # a closure body's capture: a parameter the closure itself hands it

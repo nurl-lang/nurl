@@ -106,6 +106,12 @@ $ `stdlib/core/string.nu`
     ^ ( string_len got )
 }
 
+@ shape_text i n → String { ^ ( string_from `a temporary` ) }
+
+// An arm's value that views a temporary the arm made: the temporary is the
+// statement's, released after the call that consumes the join.
+@ shape_arm_temp i n → i { ^ ( nurl_str_len ? > n 1 `OK` ( string_data ( shape_text n ) ) ) }
+
 @ main → i {
     : Shape sh @ Shape { Named ( string_from `q` ) }
     : i z ?? ( shape_try ( string_from `x` ) ) { T v → v F e → 0 }
@@ -116,5 +122,5 @@ $ `stdlib/core/string.nu`
     : b one ( shape_short w )
     : String fell ( shape_fall T )
     : i falls + ( string_len fell ) ( shape_fall_closure F )
-    ^ ? & & & one > total 0 == falls 6 == ( shape_loop_always 3 ) 3 0 1
+    ^ ? & & & & one > total 0 == falls 6 == ( shape_loop_always 3 ) 3 == ( shape_arm_temp 0 ) 11 0 1
 }

@@ -8,7 +8,8 @@ after each statement of that function.
   PYTHONUTF8=1 python show.py --trace main <probe.nu>
 
 (NURLC=<binary>, NCORE_CACHE=<dir> as for run.py; NCORE_TRACE=<binding>
-says which effect ends a loan on that binding.)
+says which effect ends a loan on that binding; NCORE_SHOW_VARS=a,b
+limits a trace to those bindings.)
 """
 
 import os
@@ -33,14 +34,16 @@ def main(argv):
         path = os.path.join(run.HOLES, path)
     if trace:
         inner = check.FnCheck.stmt
+        only = set(filter(None, os.environ.get("NCORE_SHOW_VARS", "").split(",")))
 
         def stmt(self, st, s):
             out = inner(self, st, s)
             if self.final and self.fn.name == trace:
                 vals = "bottom" if out is None or out.bottom else {
-                    self.vname(v): a for v, a in out.vals.items() if a.own != "N"}
+                    self.vname(v): a for v, a in out.vals.items()
+                    if a.own != "N" and (not only or self.vname(v) in only)}
                 print(str(s)[:110])
-                print("      ", str(vals)[:700])
+                print("      ", str(vals)[:700 if not only else 4000])
             return out
         check.FnCheck.stmt = stmt
     verdict, errors, summ = run.verdict_nurlc(path)
