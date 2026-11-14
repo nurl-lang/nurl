@@ -2661,10 +2661,14 @@ class FnCheck:
         for vid in sorted(st.vals, reverse=True):
             av = st.vals[vid]
             v = self.fn.vars[vid]
-            if av.own != "O" or v.kind == "param" or vid == keep:
+            if av.own not in ("O", "X") or v.kind == "param" or vid == keep:
                 continue
             if av.held and v.ty is not None and v.ty[0] == "named" and v.ty[1] in udrop:
+                # (one moved on some paths only is dropped on the others:
+                # formal's DtorSafe join rule, agora #252)
                 self.check_live(st, AV("N", held=av.held), line, f"the drop of {v.name}", held=True)
+            if av.own != "O":
+                continue
             self.effect(st, (vid, ()), "replace", line)
             st.vals[vid] = AV("D")
 
@@ -3145,12 +3149,15 @@ class FnCheck:
             av = st.vals.get(vid)
             if av is None or vid in kept:
                 continue
-            if av.own == "O":
+            if av.own in ("O", "X"):
                 vty = self.fn.vars[vid].ty
                 if av.held and vty is not None and vty[0] == "named" and vty[1] in getattr(self.prog, "udrop", ()):
                     # its destructor may read the views it holds: its drop
-                    # is a use of what they point into (MEMORY.md §2.14)
+                    # is a use of what they point into (MEMORY.md §2.14) -
+                    # one moved on some paths only is dropped on the others
+                    # (formal's DtorSafe join rule, agora #252)
                     self.check_live(st, AV("N", held=av.held), line, f"the drop of {self.vname(vid)}", held=True)
+            if av.own == "O":
                 self.effect(st, (vid, ()), "replace", line)
             # (the binding itself is gone: what points at it ends)
             self.effect(st, (vid, ()), "end", line)

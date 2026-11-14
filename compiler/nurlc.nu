@@ -16539,13 +16539,16 @@ unsafe @ eng_byte s w i k → i {
     : ~ i vid - g_f_nv 1
     ~ >= vid 0 {
         : i av ( st_av st vid )
-        ? & & & != av 0 == ( av_own av ) OW_O != ( fv_kind vid ) VK_PARAM != vid keep {
+        ? & & & != av 0 | == ( av_own av ) OW_O == ( av_own av ) OW_X != ( fv_kind vid ) VK_PARAM != vid keep {
             : i ty ( fv_ty vid )
             ? & & != ( av_held av ) 0 == ( et_kind ty ) EK_NAMED & != ty ET_NONE ( et_flag ty ETF_UDROP ) {
+                // (one moved on some paths only is dropped on the others)
                 ( check_live st 0 ( av_held av ) WK_DROP vid line )
             } {}
-            ( eng_effect st ( pl_make vid 0 ) EF_REPLACE line 0 )
-            ( st_put st vid ( av_make OW_D 0 0 0 F ) )
+            ? == ( av_own av ) OW_O {
+                ( eng_effect st ( pl_make vid 0 ) EF_REPLACE line 0 )
+                ( st_put st vid ( av_make OW_D 0 0 0 F ) )
+            } {}
         } {}
         = vid - vid 1
     }
@@ -17162,15 +17165,16 @@ unsafe @ eng_byte s w i k → i {
         : i av ( st_av st vid )
         ? & != av 0 ! ( sq_has kept vid ) {
             : i own ( av_own av )
-            ? == own OW_O {
+            ? | == own OW_O == own OW_X {
                 : i vty ( fv_ty vid )
                 ? & & != ( av_held av ) 0 == ( et_kind vty ) EK_NAMED & != vty ET_NONE ( et_flag vty ETF_UDROP ) {
                     // its destructor may read the views it holds: its drop
-                    // is a use of what they point into
+                    // is a use of what they point into - one moved on some
+                    // paths only is dropped on the others
                     ( check_live st 0 ( av_held av ) WK_DROP vid line )
                 } {}
-                ( eng_effect st ( pl_make vid 0 ) EF_REPLACE line 0 )
             } {}
+            ? == own OW_O { ( eng_effect st ( pl_make vid 0 ) EF_REPLACE line 0 ) } {}
             // (the binding itself is gone: what points at it ends)
             ( eng_effect st ( pl_make vid 0 ) EF_END line 0 )
             ? != own OW_M { ( st_put st vid ( av_make OW_D 0 0 0 F ) ) } {}
