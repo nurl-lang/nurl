@@ -591,12 +591,15 @@ class FnCheck:
         if named:
             # the literal is taken: the bindings it showed move into it
             gone = set()
-            for b in named.values():
+            for fname, b in named.items():
                 cur = st.vals.get(b)
                 if cur is not None and cur.own == "O":
                     gone |= {l for hp, l in src.held if l in self.loans and self.loans[l] == ((b, ()), "handle")}
                     self.effect(st, (b, ()), "replace", line)
                     st.vals[b] = AV("M")
+                    # (a view of its buffer is a view of the field's now)
+                    self.rehome_views(st, b, (vid, (fname,)))
+            src = st.vals[vid]
             src = AV(src.own, src.loans, src.alias, {(hp, l) for hp, l in src.held if l not in gone}, src.call)
             st.vals[vid] = src
         if src.own == "P":
@@ -2033,9 +2036,14 @@ class FnCheck:
                     st.vals[op[1]] = AV("L", {self.loan(st, (site, i, "cm"), went, "handle")}, {went}, cur.held)
                     continue
                 self.moved_from = None
+                was = cur.own if cur is not None else None
                 av = self.transfer(st, op, line, (site, i), dest_depth, fty, f"field {i + 1}", stored=True)
                 if dest_vid is not None:
                     av = self.reroot(st, av, dest_vid, (names[i],))
+                    if was == "O" and st.vals[op[1]].own == "M" and self.fn.vars[op[1]].kind != "temp":
+                        # (a binding moved into the literal: a view of its
+                        # buffer is a view of the field's from here on)
+                        self.rehome_views(st, op[1], (dest_vid, (names[i],)))
                 if av.own == "L":
                     if (fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES
                             and not self.T.copyable(fty)):
@@ -2377,7 +2385,11 @@ class FnCheck:
                     st.gone = frozenset(g for g in st.gone if g[0] != vid)
                 return st
             fty = self.ty_of_place((vid, path))
+            src = rv[1][1] if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] else None
+            was = st.vals[src].own if src is not None and st.vals.get(src) is not None else None
             new = self.rvalue(st, rv, ln, ddepth, fty, self.pname((vid, path)))
+            if was == "O" and st.vals[src].own == "M" and self.fn.vars[src].kind != "temp":
+                self.rehome_views(st, src, (vid, tuple(path)[:PATH_MAX]))
             if new.own == "L" and fty is not None and fty[0] == "closure":
                 # a closure stored into a field is the field's own copy: it
                 # holds what the one it was copied from holds, and is no
@@ -2568,7 +2580,9 @@ class FnCheck:
             self.read(c, cop, ln, ("wc", id(s)))
         self.run(c.copy(), body)
         breaks, _ = self.loop_stack.pop()
-        out = c
+        # (a condition that is a true literal never lets the loop end: what
+        # holds after it is what held at a `break`)
+        out = State(bottom=True) if len(cop) > 2 and cop[2] == "always" else c
         for x in breaks:
             out = join(out, x)
         return out

@@ -42,6 +42,15 @@ $ `stdlib/core/string.nu`
     ^ + n k
 }
 
+@ shape_loop_always i n → i {
+    : ~ i k 0
+    ~ T {
+        = k + k 1
+        ? >= k n { break } {}
+    }
+    ^ k
+}
+
 @ shape_store → i {
     : ( Vec String ) v ( vec_new [String] )
     : ~ P p @ P { v 1 }
@@ -107,5 +116,5 @@ $ `stdlib/core/string.nu`
     : b one ( shape_short w )
     : String fell ( shape_fall T )
     : i falls + ( string_len fell ) ( shape_fall_closure F )
-    ^ ? & & one > total 0 == falls 6 0 1
+    ^ ? & & & one > total 0 == falls 6 == ( shape_loop_always 3 ) 3 0 1
 }

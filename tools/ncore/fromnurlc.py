@@ -437,7 +437,10 @@ class Reader:
                 out.append(("match", sop, arms, ln))
             elif k == "loop":
                 cond = self.block(lines, fn, ("loopcond",))
-                cop = self.operand(lines[self.pos].split(" ")[1], fn)
+                ctok = lines[self.pos].split(" ")[1]
+                # (`T`: a literal that is true - the loop ends only by a
+                # `break` or a return)
+                cop = ("c", ("b",), "always") if ctok == "T" else self.operand(ctok, fn)
                 self.pos += 1
                 body = self.block(lines, fn, ("end",))
                 self.pos += 1

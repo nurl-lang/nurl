@@ -279,6 +279,7 @@
 : i CO_ARM 8
 : i CO_LOOP 9  // condition statements, CO_LOOPCOND operand, body, CO_END
 : i CO_LOOPCOND 10
+: i CORE_OP_TRUE -2  // a loop condition that is a true literal (core_loop_cond)
 : i CO_FOREACH 11  // vid operand … CO_END
 : i CO_SCOPE 12  // … CO_END
 : i CO_DROP 13  // vid
@@ -10312,10 +10313,13 @@ unsafe @ core_loop_begin → i {
 
 // The condition (the operand on top) is evaluated; the temporaries it
 // made since `t0` are released each round; the body's scope opens.
-unsafe @ core_loop_cond i t0 → v {
+// `always`: the condition is a literal that is true (`~ T {`, `~ 1 {`): the
+// loop is left only by a `break` or a `^`, which the engine has to know to
+// say what holds after it (printed `loopcond T`).
+unsafe @ core_loop_cond i t0 b always → v {
     : i op ( core_pop )
     ( core_discard g_core_os_n t0 )
-    ( core_w CO_LOOPCOND ) ( core_w op )
+    ( core_w CO_LOOPCOND ) ( core_w ? always CORE_OP_TRUE op )
     ( core_scope_begin )
 }
 
@@ -10572,6 +10576,7 @@ unsafe @ __core_oi i x → v {
 // An operand: `c` nothing to track, `?` not named, else a place — `v3`,
 // `g:name`, with `/field`, `/*`, `/#Variant.i` steps.
 unsafe @ __core_o_op i op → v {
+    ? == op CORE_OP_TRUE { ( __core_o `T` ) ^ } {}
     ? == op 0 { ( __core_o `c` ) ^ } {}
     ? == op 1 { ( __core_o `?` ) ^ } {}
     ? < op 0 { ( __core_o `-` ) ^ } {}
@@ -30120,7 +30125,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ? == ( nurl_lex_type lex ) TT_LBRACE
     {
         // It's a loop.
-        ? != 0 g_core_live { ( core_loop_cond __cl_t ) } {}
+        ? != 0 g_core_live { ( core_loop_cond __cl_t __lp_true ) } {}
         // Narrow non-i1 integer loop conditions (see gen_cond).
         = cv ( coerce_to_i1 lex syms cv cvt cg )
         ( __loop_cond_release syms cg __lc_strs __lc_structs __lc_user __lc_slices __lc_cenv )
