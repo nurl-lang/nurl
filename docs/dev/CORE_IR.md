@@ -1,10 +1,12 @@
 # The core IR
 
 Status: **stage S1 of [PROPOSAL_CORE_IR.md](PROPOSAL_CORE_IR.md)** (AGORA-858),
-and the preparation of S2 (AGORA-859). nurlc builds the core IR as it
-compiles and `--emit-core` prints it. Nothing in the compiler reads it yet:
-the borrow walk and `mem_*` decide exactly what they decided before. This note says what the IR is, how the walk builds it,
-and how to keep it complete. Read
+and S2 in shadow (AGORA-859, AGORA-863). nurlc builds the core IR as it
+compiles and `--emit-core` prints it. The ownership engine in the compiler
+reads it under `--engine` and says what it finds (§7); in an ordinary
+compile nothing reads it, and the borrow walk and `mem_*` decide exactly
+what they decided before. This note says what the IR is, how the walk
+builds it, how to keep it complete, and what the engine is. Read
 [COMPILER_INTERNALS.md](COMPILER_INTERNALS.md) first.
 
 ## 1. What it is
@@ -200,3 +202,60 @@ lowered. A refusal that is no ownership rule (typing, the raw boundary,
 `Send` / `Sync`, visibility) still stops the program: those stay the
 walk's. A new ownership refusal in the walk uses the door, or the probes
 written for it never reach the reference checker.
+
+## 7. The ownership engine (in shadow)
+
+`nurlc --engine <file.nu>` is `--emit-core`, and after the IR what the
+engine says of the module:
+
+```
+ety   <type> <kind> <container of> <error side> <flags> <answers>     how it reads each type
+eng   err <function> <line> <message>                                  a finding
+eng   verdict runs-clean | rejected | skip <why>                       one line, last
+```
+
+It is the rule table of [tools/ncore/RULES.md](../../tools/ncore/RULES.md)
+— the reference checker `tools/ncore/check.py` — written in the compiler,
+over the same IR. It decides nothing yet: a compile is still the walk's.
+What it has to show first is that it gives the reference's answers.
+
+**Where it is.** One section of `compiler/nurlc.nu`, "Ownership engine",
+before `core_fn_begin`:
+
+| part | what |
+|---|---|
+| the kernel | word vectors named by a number (`wv_*`) and interned sequences (`sq_*`: a set is a sorted sequence, so it is one word, and a union is asked once). The engine's only raw memory: every index is checked here |
+| maps, the functions kept | `im_*`; `eng_keep_fn` keeps a function's IR until the module is done; `eng_link` links its blocks |
+| types | `et_of` reads a type once from the walk's own tables; the questions the rules ask of it (`et_scalar`, `et_copyable`, `et_owning`, …) |
+| paths, places, loans, values, states | a place is a variable and an interned path; a value (AV) is four words — ownership, the loans it is, the places it names, what it holds — and a state is a vector of them |
+| summaries | `tp2`…`tp5` (tuples kept for the module), `sm_*`; `eng_prims` (the declared summaries of raw library functions, generated from `tools/ncore/prims.py`), `eng_derive` (the walk's own tables for the rest, until summaries are declared in source: decision D2) |
+| the rules | `eng_read`, `eng_effect`, `eng_transfer`, `eng_apply_call`, `call_closure`, `eng_rvalue`, `eng_stmt` …: each the function of `check.py` it is named after |
+| the driver | `eng_select` (which functions are walked: a function of the program is walked and reported on, a library function it reaches is trusted), `eng_check_module`, `eng_main` |
+
+Outside the kernel and five helpers that read the builder's own arrays
+or a string's bytes, the engine is safe code: its rules name vectors,
+sequences and tuples by number and never hold a pointer.
+
+**How it runs.** At `core_flush`, on the whole module. Each walked
+function is checked once, a callee before its callers; it is checked
+again only if a summary it read has changed since (recursion, a closure's
+body reached through a value). A loop is run until what holds at its
+head stops changing, and a loop met again in the same state is not run
+again. What a function's last check found is its findings.
+
+**How it is compared.** `tools/ncore/engcmp.py`:
+
+```
+PYTHONUTF8=1 python tools/ncore/engcmp.py --verdicts --jobs 8      every hole probe: the engine's verdict against the reference's
+PYTHONUTF8=1 python tools/ncore/engcmp.py --list files.txt         its reading of every type against the reference's
+```
+
+`compiler/tests/core_ir.sh` holds three of its answers in the build: the
+shapes run clean, a use after a move is found on its line, and the
+compiler's own source runs clean.
+
+**What it is not yet.** The authority (the walk's refusals still stand
+and the engine's are only printed); a source of diagnostics (its messages
+are the reference's, without the walk's advice); the decider of drops
+(stage S3). `--engine-trace` names each function on stderr as it is
+read, and prints the summaries it made.

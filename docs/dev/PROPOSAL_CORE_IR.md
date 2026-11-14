@@ -21,6 +21,27 @@ nurlc transcribes. The measure of the table is two-sided: the hole probes'
 nurlc accepts (`run.py --clean` over examples/ and compiler/tests: does it
 refuse nothing nurlc accepts). The numbers are in the AGORA-859 thread.
 
+**The engine is in the compiler, in shadow** (AGORA-863): the table
+transcribed into `compiler/nurlc.nu`, run by `nurlc --engine` on the IR of
+the module being compiled; a compile is still the walk's. Measured against
+the reference checker (`tools/ncore/engcmp.py`):
+
+| | the engine gives the reference's verdict on |
+|---|---|
+| hole probes | 3,495 of 3,495 |
+| `compiler/tests` with a `COMPILE OK` golden | 1,117 of 1,118 (the other: the reference does not finish in its time limit; the engine answers in 0.08 s) |
+| `examples/` | 65 of 65 |
+| `compiler/nurlc.nu` itself | both accept it whole (3,315 functions, the engine's own among them) |
+
+Its cost on the compiler's own source is 4.0 G instructions; the borrow
+walk it is to replace is about 6.9 G of the 24.6 G self-compile (§10,
+line 2). The reference takes about ten minutes on the same input.
+Writing it found two things the reference had wrong, both fixed in the
+table and in the engine and pinned by probes: a callee's "gives its
+parameter a new value" was taken for certain when it holds on some paths
+only, and a closure run under `recover` was taken to run to its end.
+[CORE_IR.md](CORE_IR.md) §7 says where the engine is and how it runs.
+
 What the table has shown so far for §7:
 
 - **D2** has a bridge and a measured scope. Until summaries are declared

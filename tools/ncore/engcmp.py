@@ -1,16 +1,20 @@
 # Copyright (c) 2026 The NURL Project Developers
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""The engine in nurlc against the reference checker, on one program.
+"""The engine in nurlc against the reference checker.
 
 `nurlc --emit-core --engine` prints, after the IR, what the engine built
-in the compiler says: `ety` lines (how it reads each type), and later its
-summaries and findings.  This reads one such output and says where the
-two differ.
+into the compiler says: `ety` lines (how it reads each type), `eng err`
+lines (a finding: function, line, message) and one `eng verdict` line
+(`runs-clean`, `rejected`, or `skip` with the reason).
 
-  PYTHONUTF8=1 python engcmp.py <file.nu> [...]     (NURLC=<binary>)
+  PYTHONUTF8=1 python engcmp.py <file.nu> [...]             types: the engine's reading against the reference's
   PYTHONUTF8=1 python engcmp.py --list files.txt --jobs 8
+  PYTHONUTF8=1 python engcmp.py --verdicts [results.tsv] --jobs 8
+        the engine's verdict on every program listed in a results file of
+        `run.py --nurlc` (default: results_nurlc.tsv, every hole probe)
+        against the reference checker's verdict recorded there
 
-Exit status 1 if any program differs.
+(NURLC=<binary>.)  Exit status 1 if anything differs.
 """
 
 import os
@@ -117,6 +121,66 @@ def compare(path):
     return path, diffs
 
 
+def engine_verdict(path):
+    """(verdict, findings) the engine gives `path`; a refusal of the walk
+    that is no ownership rule is the walk's to make, as in run.py."""
+    from run import WALK_RULES
+    try:
+        rc, text, err = emit(path)
+    except subprocess.TimeoutExpired:
+        return "timeout", []
+    if rc != 0:
+        first = next((l for l in err.splitlines() if "error" in l), "nurlc failed")
+        msg = first.split("error:", 1)[-1].strip()
+        if any(w in msg for w in WALK_RULES):
+            return "rejected", [("nurlc", "0", "the walk: " + msg[:60])]
+        return "skip", [("nurlc", "0", msg[:60])]
+    verdict, errs = "none", []
+    for line in text.split("\n"):
+        if line.startswith("eng\tverdict\t"):
+            verdict = line.split("\t")[2]
+        elif line.startswith("eng\terr\t"):
+            errs.append(tuple(line.split("\t")[2:5]))
+    if verdict == "none":
+        bad = [x for x in err.split("\n") if "internal error" in x]
+        verdict = "crash: " + (bad[0][:80] if bad else f"rc={rc}")
+    return verdict, errs
+
+
+def _verdict_job(job):
+    name, path = job
+    return (name,) + engine_verdict(path)
+
+
+def verdicts(results, jobs):
+    """The engine's verdict on every program of a `run.py --nurlc` results
+    file against the reference's verdict in it."""
+    ref = {}
+    for line in open(results, encoding="utf-8"):
+        f = line.rstrip("\n").split("\t")
+        if len(f) < 3:
+            continue
+        ref[f[0]] = "runs-clean" if f[2] == "runs-clean" else ("skip" if f[1] == "skip" else "rejected")
+    holes = os.path.join(ROOT, "tools", "fuzz", "holes")
+    work = []
+    for name in sorted(ref):
+        path = name if os.path.isabs(name) else os.path.join(holes, name)
+        if not os.path.exists(path):
+            path = os.path.join(ROOT, "compiler", "tests", name)
+        work.append((name, path))
+    same, differ = 0, []
+    with ProcessPoolExecutor(max_workers=jobs) as ex:
+        for name, verdict, errs in ex.map(_verdict_job, work):
+            if verdict == ref[name]:
+                same += 1
+            else:
+                differ.append((name, ref[name], verdict, errs[:1]))
+    for name, want, got, errs in differ[:40]:
+        print(f"{name}: reference {want}, engine {got} {errs[0] if errs else ''}")
+    print(f"engcmp: {same} of {same + len(differ)} programs get the reference's verdict")
+    return 1 if differ else 0
+
+
 def main(argv):
     jobs = 1
     files = []
@@ -124,6 +188,15 @@ def main(argv):
     while i < len(argv):
         if argv[i] == "--jobs":
             jobs = int(argv[i + 1]); i += 2
+        elif argv[i] == "--verdicts":
+            res = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results_nurlc.tsv")
+            if i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+                res = argv[i + 1]; i += 1
+            i += 1
+            rest = argv[i:]
+            if "--jobs" in rest:
+                jobs = int(rest[rest.index("--jobs") + 1])
+            return verdicts(res, jobs)
         elif argv[i] == "--list":
             files += [l.strip() for l in open(argv[i + 1], encoding="utf-8") if l.strip()]; i += 2
         else:

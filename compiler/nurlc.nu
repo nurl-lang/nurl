@@ -266,7 +266,11 @@
 : ~ i g_core_fn_n 0
 : ~ i g_core_fn_cap 0
 : ~ i g_walk_owns 1  // 1: the fused walk makes its ownership refusals (own_die, bck_emit_error); 0 under --emit-core, where the IR's reader decides them
-// <engine globals>
+// ── Ownership engine (docs/dev/CORE_IR.md §7, AGORA-863) ─────────────
+// The rule table of tools/ncore/RULES.md over the core IR: one analysis
+// of a module's ownership, in shadow under `--engine` (it prints what it
+// finds; the walk still decides). Its globals; the code is the sections
+// "Ownership engine: …" before core_fn_begin.
 : ~ i g_wv 0  // the vectors' registry, 3 words each: buffer, length, capacity
 : ~ i g_wv_n 0
 : ~ i g_wv_cap 0
@@ -616,7 +620,6 @@
 : ~ i g_el_next -1  // per loan: the next loan on the same variable + 1
 : ~ i g_el_shared -1  // the loans whose place reaches through a shared handle
 : ~ i g_av_all -1  // an AV → the loans it is or holds + 1 (a set), for this function
-// </engine globals>
 : i CORE_VW 7
 : i CORE_VS 1048576
 // Statement words.
@@ -10334,7 +10337,6 @@ unsafe @ core_scope_end → v {
     = g_core_depth - g_core_depth 1
 }
 
-// <engine>
 // ── Ownership engine: the kernel ─────────────────────────────────────
 // Word vectors and interned sequences. This is the only raw memory the
 // engine has: its rules are safe code that names a vector or a sequence
@@ -18057,7 +18059,6 @@ unsafe @ eng_print_types → v {
     }
     ( __core_o ? == ne 0 `eng\tverdict\truns-clean\n` `eng\tverdict\trejected\n` )
 }
-// </engine>
 // A function's (or a closure body's) IR begins. The builder of the
 // function it is compiled inside, if any, is set aside.
 unsafe @ core_fn_begin s fname s file i line i flags s tmpl → v {
@@ -109130,6 +109131,9 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `  --emit-core         validate, and print the core IR instead of LLVM IR:\n` )
     ( nurl_print `                      each function's variables and statements, every\n` )
     ( nurl_print `                      producer bound before its consumer (docs/dev/CORE_IR.md)\n` )
+    ( nurl_print `  --engine            --emit-core, and after the IR what the ownership engine\n` )
+    ( nurl_print `                      says of it: 'eng err' findings and an 'eng verdict' line\n` )
+    ( nurl_print `                      (in shadow: the compile itself is still the walk's)\n` )
     ( nurl_print `  --stdin             read source from stdin; <file.nu> keeps its logical path\n` )
     ( nurl_print `  --sanitize-address  mark every generated function for AddressSanitizer\n` )
     ( nurl_print `  --lint              run lint-only diagnostics: unused symbols and imports,\n` )
@@ -109427,8 +109431,8 @@ unsafe @ main → i {
         ? ( seq a `--stdin` ) { = stdin_source T = ai + ai 1 continue } {}
         ? ( seq a `--check` ) { = check_only T = ai + ai 1 continue } {}
         ? ( seq a `--emit-core` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = ai + ai 1 continue } {}
-        ? ( seq a `--engine` ) { = g_eng_on 1 = ai + ai 1 continue } {}
-        ? ( seq a `--engine-trace` ) { = g_eng_on 1 = g_eng_dbg 1 = ai + ai 1 continue } {}
+        ? ( seq a `--engine` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = g_eng_on 1 = ai + ai 1 continue } {}
+        ? ( seq a `--engine-trace` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = g_eng_on 1 = g_eng_dbg 1 = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--coverage-link-ir=` ) {
             = g_coverage_link_ir ( nurl_str_slice a 19 - ( nurl_str_len a ) 19 )
             ? == 0 ( nurl_str_len g_coverage_link_ir ) {
