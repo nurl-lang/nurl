@@ -16677,6 +16677,13 @@ unsafe @ eng_byte s w i k → i {
             // capture that has a copy
             = new ( av_make ( av_own new ) ( av_loans new ) ( av_alias new ) ( closure_owned ( av_held new ) ) ( av_call new ) )
         } {}
+        // the closure's own parameter assigned whole over a capture: it is
+        // lent for the call only, and is copied in - the capture owns the
+        // copy (nurlc, agora #864)
+        : i rsv ( rv_use_var rv )
+        ? & & & & & & == cown OW_P >= ( fv_pidx vid ) 0 < ( fv_pidx vid ) g_f_ncap >= rsv 0 >= ( fv_pidx rsv ) g_f_ncap & != ( fp_mode ( fv_pidx rsv ) ) PM_SINK == ( av_own new ) OW_L & & != vty ET_NONE ! ( et_is_view vty ) ( et_copyable vty ) {
+            = new ( av_make OW_O 0 0 ( av_held new ) F )
+        } {}
         ? == cown OW_P {
             ? & & & == ( av_own new ) OW_L & != vty ET_NONE ! ( et_is_view vty ) ( et_owning vty ) ! ( et_copyable vty ) {
                 // the caller's binding owns what it is given: a lend is
@@ -69465,7 +69472,25 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 ( __fs_dropifv_old `true` vt __io_old3 )
             }
         } {}
-        : s __ud_borrow ( nurl_str_cat ( __rhs_borrow_of syms val ) `` )
+        : ~ s __ud_borrow ( nurl_str_cat ( __rhs_borrow_of syms val ) `` )
+        // A closure's own parameter assigned whole over a binding the closure
+        // captured by pointer (`( once \ String r → v { = best r } )`): the
+        // parameter is borrowed for the call only - a call through a closure
+        // value keeps what it passed and releases it when it returns - and
+        // what the body stores of it is copied, as into a container or a
+        // field (mem_lent_cond). Taken for a lend, the capture went on
+        // pointing at what the caller released (agora #864). Copied in, the
+        // binding owns it: its old value goes, its flag says owned. A type
+        // with no copy cannot be stored so at all.
+        : b __cp_clo & & & != 0 g_bck_closure_depth ( is_ident_tok bck_rhs_tt ) ( __is_clo_param syms bck_rhs_val ) & != 0 ( nurl_str_len __ud_ptr ) != 0 ( nurl_sym_len2 syms __ud_ptr `__outer_owned` )
+        ? __cp_clo {
+            ? ( __clone_supported vt syms ) {
+                = store_val ( mem_emit_cloneif cg vt store_val `1` )
+                = __ud_borrow ``
+            } {
+                ( own_die_stmt lex ( nurl_str_cat4 ( nurl_str_cat3 `'` name `' is captured by the closure and given its own parameter '` ) bck_rhs_val `', which the closure borrows for the call only — what calls it releases the value when it returns — and a '` ( nurl_str_cat3 ( llvm_to_nurl vt ) `' has no copy to give '` ( nurl_str_cat name `' instead. Take the parameter as 'sink' so the closure owns it, or keep the value outside the closure.` ) ) ) )
+            }
+        } {}
         // `= c ( bump c )` with bump handing its argument back: the same
         // value returns to the same binding — nothing to drop or re-own.
         // Whether it does is known at module end (mem_call_retown): until
@@ -69821,6 +69846,9 @@ unsafe @ gen_assign i lex i syms i cg → s {
         }
         // (…and owns it again past whatever the call's answer said.)
         ? != 0 ( nurl_str_len __ud_kept ) { ( mem_udrop_keep_settle syms cg __ud_ptr __ud_kept ) } {}
+        // (…a closure parameter copied in over a by-pointer capture is the
+        // binding's own: agora #864, above.)
+        ? & __cp_clo ( __clone_supported vt syms ) { ( mem_udrop_flag_set syms cg __ud_ptr `1` ) ( __sb syms __ud_ptr `` ) } {}
         // (…a copy of a part of the old value is the binding's own.)
         ? != 0 ( nurl_str_len __ud_pcpy ) {
             : s __ud_pf0 ( mem_udrop_flag_get syms cg __ud_ptr )

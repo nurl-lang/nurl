@@ -2931,6 +2931,15 @@ class FnCheck:
                     # stored copies in every capture that has a copy
                     # (MEMORY.md §7.4, h297)
                     new = AV(new.own, new.loans, new.alias, self.closure_owned(new.held), new.call)
+                if (cur is not None and cur.own == "P" and vid in self.pidx and self.pidx[vid] < self.ncap
+                        and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] and rv[1][1] in self.pidx
+                        and self.pidx[rv[1][1]] >= self.ncap and self.fn.modes[self.pidx[rv[1][1]]] != "sink"
+                        and new.own == "L" and v.ty is not None and v.ty[0] not in VIEW_TYPES
+                        and self.T.copyable(v.ty)):
+                    # the closure's own parameter assigned whole over a
+                    # capture: it is lent for the call only, and is copied
+                    # in - the capture owns the copy (nurlc, agora #864)
+                    new = AV("O", (), (), new.held)
                 if cur is not None and cur.own == "P":
                     if (new.own == "L" and v.ty is not None and v.ty[0] not in VIEW_TYPES
                             and self.T.owning(v.ty) and not self.T.copyable(v.ty)):

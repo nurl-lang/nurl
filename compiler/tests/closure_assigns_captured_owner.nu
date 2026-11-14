@@ -5,8 +5,10 @@
 // wrote the caller's alloca but could not reach the binding's drop flag, so
 // the old value was never dropped and the new one never owned — one
 // response leaked per request (stdlib http_server's keep-alive loop). The
-// env now carries the flag. A borrowed element assigned the same way stays
-// borrowed.
+// env now carries the flag. A closure's own parameter assigned the same
+// way is copied in, and the binding owns the copy: the parameter is lent
+// for the call only (agora #864; it stayed a borrow, and a caller that
+// lent a local of its own left the binding pointing at it).
 
 $ `stdlib/core/vec.nu`
 
