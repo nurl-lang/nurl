@@ -1062,6 +1062,14 @@ class FnCheck:
                     # a `;` block that may still release it: its arm is a
                     # lend, copied - and this value has no copy; agora #186)
                     self.err(line, f"{what}: a borrowed value would have to be copied here, and it cannot be copied")
+                elif (is_ret and dest_ty is not None and self.T.owning(dest_ty) and not self.T.copyable(dest_ty)
+                      and any(l in self.loans and self.loans[l][0][1]
+                              and self.fn.vars[self.loans[l][0][0]].kind == "local" for l in av.loans)):
+                    # (an arm that hands out a FIELD of a local - not the
+                    # local itself, which the join moves - is a lend of it,
+                    # copied at the return: and this value has no copy;
+                    # agora #178)
+                    self.err(line, f"{what}: a borrowed value would have to be copied here, and it cannot be copied")
             else:
                 # (…a return of what a call lent out of a local of this
                 # frame, on the paths that did not make a value of their

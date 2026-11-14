@@ -14092,7 +14092,22 @@ unsafe @ eng_byte s w i k → i {
                     // a `;` block that may still release it: its arm is a
                     // lend, copied - and this value has no copy)
                     ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
-                } {}
+                } {
+                    // (an arm that hands out a FIELD of a local - not the local
+                    // itself, which the join moves - is a lend of it, copied at
+                    // the return: and this value has no copy)
+                    : ~ b field_local F
+                    ? & & & is_ret != dest_ty ET_NONE ( et_owning dest_ty ) ! ( et_copyable dest_ty ) {
+                        : i fls ( av_loans av )
+                        : ~ i fk 0
+                        ~ < fk ( sq_len fls ) {
+                            : i l ( sq_at fls fk )
+                            ? & & ( el_is_loan l ) != ( pl_path ( el_place l ) ) 0 == ( fv_kind ( pl_var ( el_place l ) ) ) VK_LOCAL { = field_local T } {}
+                            = fk + fk 1
+                        }
+                    } {}
+                    ? field_local { ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: a borrowed value would have to be copied here, and it cannot be copied` ) ) } {}
+                }
             } {
                 // (…a return of what a call lent out of a local of this
                 // frame, on the paths that did not make a value of their own,
