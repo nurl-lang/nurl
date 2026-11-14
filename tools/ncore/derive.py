@@ -124,8 +124,15 @@ def derive(prog, fn, ws):
     only_run = set(_idx(ws, "invoke_only", n))
     rv_answered = ws.get("rviews", "").startswith(":")
     for k in range(n):
-        if scalar(pty[k]) or (k in only_run and pty[k] is not None and pty[k][0] == "closure"):
-            # (a closure the function only runs is kept nowhere)
+        if k in only_run and pty[k] is not None and pty[k][0] == "closure":
+            # (a closure the function only runs is kept nowhere - but what
+            # it hands back when it runs may be the result: `iter_find`
+            # hands back an element its iterator produced, which holds
+            # what the iterator's captures hold, agora #472)
+            if not ret_scalar and (ret_view or T.view_capable(fn.ret)):
+                rholds.add(((), k, (), "heldin"))
+            continue
+        if scalar(pty[k]):
             continue
         if not ret_scalar and not (rv_answered and pty[k] is not None and pty[k][0] in VIEW_TYPES):
             # (an argument that is itself a view - a raw string, a slice -

@@ -1518,10 +1518,16 @@ class FnCheck:
                     # this function detaches its argument)
                     self.s_detaches.add(self.pidx[ops[k][1]])
                 for hp, l in avs[k].held:
-                    if l in self.loans and self.loans[l][1] == "view" and any(x.startswith("^") for x in hp):
+                    if (l in self.loans and any(x.startswith("^") for x in hp)
+                            and (self.loans[l][1] == "view"
+                                 or (self.loans[l][1] == "held" and self.loans[l][0][0] in self.hvid
+                                     and self.held_of_views(self.loans[l][0][0])
+                                     and not self.crosses_with_owner(avs[k].held, hp, self.loans[l][0][0])))):
                         # what another thread runs holds no view: this side
                         # may release what it points into while the other
-                        # runs (MEMORY.md §6.5)
+                        # runs (MEMORY.md §6.5) - nor a copy of the views a
+                        # parameter holds (`held`), into its caller's storage
+                        # (a closure parameter's are what its captures hold)
                         self.err(line, f"{name}: what another thread runs holds a view of "
                                        f"{self.pname(self.loans[l][0])}")
                         break
@@ -1543,6 +1549,17 @@ class FnCheck:
                             continue
                         if l in self.cap_loans and not place[1] and cur is not None and cur.own in ("O", "P"):
                             self.move_out(st, place[0], line)
+                        elif (l in self.cap_loans and place[1] and self.loans[l][1] == "handle"
+                              and cur is not None and cur.own == "O" and self.fn.vars[place[0]].kind == "local"):
+                            # a binding read out of a library handle field,
+                            # captured by what another thread runs: the
+                            # handle there goes with it - its owner is moved
+                            # (nurlc's "taking over a binding read out of its
+                            # field")
+                            pty = self.ty_of_place(place)
+                            if (pty is not None and pty[0] == "named" and self.T.owns_handle(pty)
+                                    and pty[1] not in getattr(self.prog, "thread_share", ())):
+                                self.move_out(st, place[0], line)
         # a closure the callee may run does, at this call, what its body does
         # to its captures (MEMORY.md §2.11); a callee nothing says that of
         # may run any closure it is handed
@@ -2012,6 +2029,12 @@ class FnCheck:
                 # a captured closure is a copy of it: the new closure holds
                 # what that one holds, and no handle of where it sits
                 held |= hroot(av.held, fp)
+            elif av.own in ("O", "P") and op[0] == "v" and cty is not None and cty[0] == "s":
+                # a raw string captured by value is a copy of its address: a
+                # view of the binding's buffer, which stays the binding's
+                # (MEMORY.md §2.13)
+                held.add((fp, self.loan(st, (site, i), (op[1], op[2]), "view")))
+                held |= hroot(av.held, fp)
             elif av.own in ("O", "P") and op[0] == "v":
                 lid = self.loan(st, (site, i), (op[1], op[2]), "handle")
                 self.cap_loans.add(lid)
@@ -2384,33 +2407,28 @@ class FnCheck:
             # what a closure the caller chose hands back is its caller's
             # own, and may hold what the closure holds: the views its
             # captures hold (an iterator's elements)
-            out = set()
-            for hp, l in cav.held:
-                if l not in self.loans:
-                    continue
-                place, kind = self.loans[l]
-                if kind == "held" and place[0] in self.hvid:
-                    # (of a closure parameter: what its captures hold, in
-                    # the caller's words - `heldin`)
-                    out.add(((), self.loan(st, ("phin", place[0]), place, "heldin")))
-                elif kind in ("view", "heldin") or (kind == "held" and place[0] not in self.hvid):
-                    out.add(((), l))
-            return AV("O", (), (), out)
+            return AV("O", (), (), self.closure_result_views(st, cav))
         # what a known body's result holds of its parameters, the result of
         # this call holds of these arguments (MEMORY.md §2.8, agora #422)
         out = set()
         vloans, valias = set(), set()
+        if any(self.summ.get(f) is None or f not in self.prog.fns for _, f in known):
+            # (a body nothing says the result of - a library's closure: what
+            # it hands back may hold what the closure holds, as an unknown
+            # one's may)
+            out |= self.closure_result_views(st, cav)
         for base, fname in known:
             sm = self.summ.get(fname)
             body = self.prog.fns.get(fname)
             if sm is None or body is None:
                 continue
             ncap = getattr(body, "ncap", 0)
-            if sm["res"] == "lent" and body.ret is not None and body.ret[0] in VIEW_TYPES:
-                # a view the body hands back is that view: what it lends of
+            if sm["res"] == "lent" and body.ret is not None and body.ret[0] == "slice":
+                # a slice the body hands back is that view: what it lends of
                 # its parameters, the result of this call lends of these
                 # arguments - and of what its captures point at (a value it
-                # hands back is copied, MEMORY.md §7.5; a view has no copy)
+                # hands back is copied, MEMORY.md §7.5 - a raw string too,
+                # h220; a slice has no copy)
                 for (k, path, kind) in sm["lends"]:
                     i = k - ncap
                     places = set()
@@ -2434,6 +2452,12 @@ class FnCheck:
                         vloans.add(self.loan(st, (site, "cv", k), pl, kind))
             for (dpath, k, path, kind) in sm.get("rholds", ()):
                 i = k - ncap
+                if 0 <= k < ncap and kind == "held":
+                    # (what a capture holds - the views a captured Vec's
+                    # elements are - handed back: the result holds them,
+                    # where the closure value holds them)
+                    out |= hroot(hsub(cav.held, base + (f"^{k}",) + tuple(path)), tuple(dpath))
+                    continue
                 if not (0 <= i < len(avs)):
                     continue
                 dpath = tuple(dpath)
@@ -2450,6 +2474,22 @@ class FnCheck:
         if vloans or valias:
             return AV("L", vloans, valias, out)
         return AV("O", (), (), out)
+
+    def closure_result_views(self, st, cav):
+        """What a call of a closure no summary speaks for may hand back of
+        what the closure holds: the views its captures hold."""
+        out = set()
+        for hp, l in cav.held:
+            if l not in self.loans:
+                continue
+            place, kind = self.loans[l]
+            if kind == "held" and place[0] in self.hvid:
+                # (of a closure parameter: what its captures hold, in the
+                # caller's words - `heldin`)
+                out.add(((), self.loan(st, ("phin", place[0]), place, "heldin")))
+            elif kind in ("view", "heldin") or (kind == "held" and place[0] not in self.hvid):
+                out.add(((), l))
+        return out
 
     def closure_capture_effects(self, av):
         """(place, effect) for what the closures a value may run do to what
@@ -2588,6 +2628,25 @@ class FnCheck:
                     if av.own != "M":
                         st.vals[vid] = AV("D")
         return st
+
+    def held_of_views(self, h):
+        """Is what parameter `h` stands for holds (a `held` loan's place) a
+        set of views into its caller's storage - not what a closure
+        parameter's captures hold?"""
+        ty = self.fn.vars[self.fn.params[self.hvid[h]]].ty
+        return ty is not None and ty[0] != "closure"
+
+    def crosses_with_owner(self, held, hp, h):
+        """Does the capture that holds, at `hp`, what parameter `h` stands
+        for holds also hold the parameter itself (a closure over it): the
+        views go with their owner's value, judged where it was given."""
+        cap = next((i for i in range(len(hp)) if hp[i].startswith("^")), None)
+        if cap is None:
+            return False
+        base = hp[:cap + 1]
+        pv = self.fn.params[self.hvid[h]]
+        return any(p[:cap + 1] == base and l2 in self.loans and self.loans[l2][0][0] == pv
+                   and self.loans[l2][1] in ("handle", "ref") for p, l2 in held)
 
     def borrowed_copy(self, vid):
         """Is `vid` a copy of a value this frame only borrows: a by-value
@@ -3212,6 +3271,16 @@ class FnCheck:
                 # holds what the one it was copied from holds, and is no
                 # borrow of where that one sits (MEMORY.md §7.5)
                 new = AV("O", (), (), self.closure_owned(new.held))
+            if (new.own == "L" and fty is not None and fty[0] not in VIEW_TYPES and fty[0] != "closure"
+                    and self.T.owning(fty) and not self.T.copyable(fty) and not new.call
+                    and rv[0] == "use" and rv[1][0] == "v" and rv[1][2]
+                    and self.fn.vars[rv[1][1]].kind != "temp"):
+                # a field of a binding stored into a field: a borrow of it,
+                # which the holder would own - it has to be copied, and it
+                # cannot be (MEMORY.md §7.6; a `sink` or the owner itself
+                # hands a value over)
+                self.err(ln, f"{self.pname((vid, path))}: a borrowed value would have to be copied here, "
+                             f"and it cannot be copied")
             if cur is not None and cur.own in ("M", "X", "D"):
                 self.err(ln, f"{v.name} is used after it was moved")
             add = (hfrom(new.loans) | new.held) if new.own == "L" else new.held
