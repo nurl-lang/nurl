@@ -736,9 +736,14 @@ class FnCheck:
                 # a join's or block's value that cannot be copied stays a
                 # lend: if what it borrows ends first, its use is the error
                 return av
-            elif mixed:
+            elif mixed and not (is_ret and any(
+                    l in self.loans and isinstance(l[0], tuple) and len(l[0]) == 3 and l[0][1] == "l"
+                    and self.fn.vars[self.loans[l][0][0]].kind == "local" for l in av.loans)):
                 pass
             else:
+                # (…a return of what a call lent out of a local of this
+                # frame, on the paths that did not make a value of their
+                # own, included: the local is released on the way out)
                 self.err(line, f"{what}: a view of a value released before its holder escapes")
         if av.held and self.local_depth(AV("N", held=av.held)) > dest_depth and copy_ok and dest_ty is not None:
             # a part the value holds as a lend of something that ends before
