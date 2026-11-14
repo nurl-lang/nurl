@@ -191,5 +191,4 @@ PRIMS = {
     "vec_push_word_u8": S(["in"] * 4, effects=[(0, (), "realloc")]),
     # ---- Option -----------------------------------------------------------
     "opt_unwrap": S(["in"], res="lent", lends=[(0, ("#T0",), "handle")]),
-    "opt_unwrap_or": S(["sink", "sink"], res="own", consumes=[0, 1]),
 }
