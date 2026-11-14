@@ -29,6 +29,12 @@ from lower import SCALARS, Types, Var
 # before its declared one - how far the walk's own answers carry.
 DERIVE_FIRST = os.environ.get("NCORE_DERIVE") == "1"
 PATH_MAX = 5
+# (where in a value a loan is held is followed this deep: a loop that
+# stores into a value what it already holds - `e.layers[*].qw` given what
+# `e` holds - re-roots it under itself every round, and the paths would
+# grow without end. Held deeper, it is held at the prefix: `hsub` reads
+# an entry at an ancestor as held at every part below it.)
+HELD_MAX = 8
 
 # NCORE_TRACE=<binding>: say on stderr where an effect on it ends a loan.
 TRACE = os.environ.get("NCORE_TRACE")
@@ -55,7 +61,7 @@ def hsub(held, path):
 
 
 def hroot(held, path):
-    return frozenset((path + hp, l) for hp, l in held)
+    return frozenset(((path + hp)[:HELD_MAX], l) for hp, l in held)
 
 
 def captured_held(held):
@@ -659,6 +665,21 @@ class FnCheck:
                 held.add((hp, l))
         return AV(av.own, av.loans, av.alias, held, av.call)
 
+    def rebase_self(self, held, tmp, tag, dest):
+        """The payload `tag` of the temporary `tmp`, taken out of it into
+        `dest`: what it holds of itself (a tokenizer's piece table viewing
+        its own buffer, `selfholds`) is held of `dest` from here on - the
+        temporary is released with its statement, the payload is not."""
+        out = set()
+        for hp, l in held:
+            if l in self.loans and self.loans[l][0][0] == tmp and self.loans[l][0][1][:1] == (tag,):
+                nl = ("rb", l, dest)
+                self.loans[nl] = ((dest, self.loans[l][0][1][1:][:PATH_MAX]), self.loans[l][1])
+                out.add((hp, nl))
+            else:
+                out.add((hp, l))
+        return frozenset(out)
+
     def lent_part(self, av):
         """A part read out of a value that holds it as a lend - a field the
         value was given a handle copy for - is that lend, not an owner."""
@@ -693,16 +714,25 @@ class FnCheck:
         if named:
             # the literal is taken: the bindings it showed move into it
             gone = set()
+            moved = {}
             for fname, b in named.items():
                 cur = st.vals.get(b)
                 if cur is not None and cur.own == "O":
                     gone |= {l for hp, l in src.held if l in self.loans and self.loans[l] == ((b, ()), "handle")}
+                    # (what the binding holds of its own parts goes with it:
+                    # held of the field it moved into, as `reroot` does)
+                    for hp, l in src.held:
+                        if l in self.loans and l not in gone and self.loans[l][0][0] == b:
+                            nl = ("rr", l, vid, (fname,))
+                            self.loans[nl] = ((vid, ((fname,) + self.loans[l][0][1])[:PATH_MAX]), self.loans[l][1])
+                            moved[l] = nl
                     self.effect(st, (b, ()), "replace", line)
                     st.vals[b] = AV("M")
                     # (a view of its buffer is a view of the field's now)
                     self.rehome_views(st, b, (vid, (fname,)))
             src = st.vals[vid]
-            src = AV(src.own, src.loans, src.alias, {(hp, l) for hp, l in src.held if l not in gone}, src.call)
+            src = AV(src.own, src.loans, src.alias,
+                     {(hp, moved.get(l, l)) for hp, l in src.held if l not in gone}, src.call)
             st.vals[vid] = src
         if src.own == "P":
             self.s_consumes.add(self.pidx[vid])
@@ -2458,6 +2488,8 @@ class FnCheck:
             sub = hsub(av.held, (tag,))
             pty = self.ty_of_field(self.fn.vars[op[1]].ty if op[0] == "v" and not op[2] else None, variant, idx)
             if op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp" and av.own == "O":
+                if dest_vid is not None:
+                    sub = self.rebase_self(sub, op[1], tag, dest_vid)
                 return self.lent_part(AV("O", (), (), sub))
             if pty is not None and not self.T.owning(pty) and not self.T.view_capable(pty):
                 # (a payload with no room for a view or a handle - an error

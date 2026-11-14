@@ -402,6 +402,7 @@
 : i EE_FN 4  // `^f`: the closure's body
 : i EE_STAR 0  // element 0 is `*`
 : i PATH_MAX 5  // a loan's place is followed this deep and no further
+: i HELD_MAX 8  // where in a value a loan is held is followed this deep: held deeper, it is held at the prefix (a loop storing into a value what it holds re-roots it under itself every round)
 : i PV_BIAS 1048576  // a place is a word: (variable + PV_BIAS) * 2^32 + path
 : ~ i g_fv_ty -1  // the function being read: each variable's type
 : ~ i g_fv_pidx -1  // …its number among the parameters, -1 if it is none
@@ -586,6 +587,7 @@
 : ~ i g_fc_walked -1  // per function: 1 the engine walks its body
 : ~ i g_sm_dyn 0  // the name `dyn` (interned): boxing a value as a trait object
 : i TG_SC 32
+: i TG_RB 33  // a payload taken out of a temporary: what it holds of itself, of its new holder
 : ~ i g_fc_dvars -1  // a `;` block (its offset) → the variables its body names + 1 (a set), for this function
 : ~ i g_fc_dbefore -1  // an armed `;` block (its number) → the variables that had a value when it was armed + 1 (a set)
 : ~ i g_fc_defers -1  // the `;` blocks armed in this run, in order: each one's offset (a state names them by number)
@@ -12017,7 +12019,7 @@ unsafe @ eng_keep_fn → v {
     : ~ i k 0
     ~ < k n {
         : i he ( sq_at held k )
-        ( wv_push tmp ( he_make ( ep_cat path ( he_path he ) ) ( he_loan he ) ) )
+        ( wv_push tmp ( he_make ( ep_take ( ep_cat path ( he_path he ) ) HELD_MAX ) ( he_loan he ) ) )
         = k + k 1
     }
     : i out ( sq_set_of_wv tmp )
@@ -13013,6 +13015,35 @@ unsafe @ eng_byte s w i k → i {
     ^ out
 }
 
+// The payload `tag` of the temporary `tmp`, taken out of it into `dest`:
+// what it holds of itself (a tokenizer's piece table viewing its own
+// buffer) is held of `dest` from here on - the temporary is released with
+// its statement, the payload is not.
+@ rebase_self i held i tmp i tag i dest → i {
+    : i tmp_w ( wv_new )
+    : ~ i k 0
+    ~ < k ( sq_len held ) {
+        : i he ( sq_at held k )
+        : i l ( he_loan he )
+        : ~ b done F
+        ? ( el_is_loan l ) {
+            : i pl ( el_place l )
+            : i pp ( pl_path pl )
+            ? & & == ( pl_var pl ) tmp != pp 0 == ( ep_at pp 0 ) tag {
+                ( el_key3 TG_RB l dest )
+                : i nl ( __el_keyed ( pl_make dest ( ep_take ( ep_drop pp 1 ) PATH_MAX ) ) ( el_kind l ) )
+                ( wv_push tmp_w ( he_make ( he_path he ) nl ) )
+                = done T
+            } {}
+        } {}
+        ? ! done { ( wv_push tmp_w he ) } {}
+        = k + k 1
+    }
+    : i out ( sq_set_of_wv tmp_w )
+    ( wv_drop tmp_w )
+    ^ out
+}
+
 // A part read out of a value that holds it as a lend - a field the value
 // was given a handle copy for - is that lend, not an owner.
 @ lent_part i av → i {
@@ -13201,6 +13232,7 @@ unsafe @ eng_byte s w i k → i {
     ? != named 0 {
         // the literal is taken: the bindings it showed move into it
         : ~ i gone 0
+        : i moved ( im_new )
         : ~ i k 0
         ~ < k ( sq_len named ) {
             : i w ( sq_at named k )
@@ -13216,6 +13248,18 @@ unsafe @ eng_byte s w i k → i {
                     ? & & ( el_is_loan l ) == ( el_place l ) want == ( el_kind l ) LK_HANDLE { = gone ( sq_add gone l ) } {}
                     = j + j 1
                 }
+                // (what the binding holds of its own parts goes with it:
+                // held of the field it moved into, as eng_reroot does)
+                = j 0
+                ~ < j ( sq_len held0 ) {
+                    : i l ( he_loan ( sq_at held0 j ) )
+                    ? & & & ( el_is_loan l ) ! ( sq_has gone l ) == ( pl_var ( el_place l ) ) b == 0 ( im_get moved l 0 ) {
+                        ( el_key4 TG_RR l vid ( ep_child 0 fname ) )
+                        : i nl ( __el_keyed ( pl_make vid ( ep_take ( ep_cat ( ep_child 0 fname ) ( pl_path ( el_place l ) ) ) PATH_MAX ) ) ( el_kind l ) )
+                        ( im_put moved l + nl 1 )
+                    } {}
+                    = j + j 1
+                }
                 ( eng_effect st want EF_REPLACE line 0 )
                 ( st_put st b ( av_make OW_M 0 0 0 F ) )
                 // (a view of its buffer is a view of the field's now)
@@ -13229,11 +13273,14 @@ unsafe @ eng_byte s w i k → i {
         = k 0
         ~ < k ( sq_len held1 ) {
             : i he ( sq_at held1 k )
-            ? ! ( sq_has gone ( he_loan he ) ) { ( wv_push tmp he ) } {}
+            ? ! ( sq_has gone ( he_loan he ) ) {
+                : i nl ( im_get moved ( he_loan he ) 0 )
+                ( wv_push tmp ? != nl 0 ( he_make ( he_path he ) - nl 1 ) he )
+            } {}
             = k + k 1
         }
         ( st_put st vid ( av_make ( av_own src1 ) ( av_loans src1 ) ( av_alias src1 ) ( sq_set_of_wv tmp ) ( av_call src1 ) ) )
-        ( wv_drop tmp )
+        ( wv_drop tmp ) ( wv_drop moved )
     } {}
     : i src ( st_av st vid )
     ? == ( av_own src ) OW_P { = g_s_consumes ( sq_add g_s_consumes ( fv_pidx vid ) ) } {}
@@ -16040,7 +16087,10 @@ unsafe @ eng_byte s w i k → i {
         : i sub ( held_sub ( av_held av ) ( ep_child 0 tag ) )
         : b whole & ( op_is_place op ) == ( pl_path op ) 0
         : i pty ? whole ( agg_field_ty ( fv_ty ( pl_var op ) ) variant idx ) ET_NONE
-        ? & & whole == ( fv_kind ( pl_var op ) ) VK_TEMP == ( av_own av ) OW_O { ^ ( lent_part ( av_make OW_O 0 0 sub F ) ) } {}
+        ? & & whole == ( fv_kind ( pl_var op ) ) VK_TEMP == ( av_own av ) OW_O {
+            : i sub2 ? >= dest 0 ( rebase_self sub ( pl_var op ) tag dest ) sub
+            ^ ( lent_part ( av_make OW_O 0 0 sub2 F ) )
+        } {}
         ? & & != pty ET_NONE ! ( et_owning pty ) ! ( et_view_capable pty ) {
             // (a payload with no room for a view or a handle - an error code
             // and an offset - borrows nothing, whatever its option lends: a
@@ -16817,6 +16867,7 @@ unsafe @ eng_byte s w i k → i {
     : i op ( ec at )
     : i ln ( eng_line at )
     = g_fc_line ln
+    ? == g_eng_dbg 2 { ( nurl_eprintln ( nurl_str_cat3 ( nurl_str_cat3 `estmt ` ( nurl_str_int ln ) ` op=` ) ( nurl_str_int op ) ( nurl_str_cat ` paths=` ( nurl_str_int / ( wv_len g_ep ) 3 ) ) ) ) } {}
     ? == op CO_LET { ( stmt_let st at ln ) ^ ( eng_next at ) } {}
     ? == op CO_ASSIGN {
         : i irop ( ec + at 1 )
@@ -17714,6 +17765,8 @@ unsafe @ eng_byte s w i k → i {
 // findings are recorded if `final`, and its summary is merged into the
 // one kept. T if the summary changed.
 @ eng_check_fn i f b final → b {
+    // (`--engine-trace`: each walk named as it starts, so a slow one shows)
+    ? != 0 g_eng_dbg { ( nurl_eprintln ( nurl_str_cat3 ( nurl_str_cat3 `ewalk ` ( eng_str ( ef_at f EF_NAME ) ) ? final ` final` `` ) ` paths=` ( nurl_str_int / ( wv_len g_ep ) 3 ) ) ) } {}
     ( eng_fn_begin f )
     = g_fc_final ? final 1 0
     = g_fc_unsup 0
@@ -109979,6 +110032,7 @@ unsafe @ main → i {
         ? ( seq a `--emit-core` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = ai + ai 1 continue } {}
         ? ( seq a `--engine` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = g_eng_on 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-trace` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = g_eng_on 1 = g_eng_dbg 1 = ai + ai 1 continue } {}
+        ? ( seq a `--engine-trace2` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = g_eng_on 1 = g_eng_dbg 2 = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--coverage-link-ir=` ) {
             = g_coverage_link_ir ( nurl_str_slice a 19 - ( nurl_str_len a ) 19 )
             ? == 0 ( nurl_str_len g_coverage_link_ir ) {
