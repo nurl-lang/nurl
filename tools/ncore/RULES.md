@@ -113,7 +113,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A closure holds what it captured: a copy of each handle, the views those hold; one taken by pointer is a `ref` | §2.11, §2.3 | `make_closure` |
 | Running a closure reads every capture and does what its body does to them, and to the arguments it is called with | §2.11 | `run_closures`, `closure_arg_effects` |
 | A function that runs a closure argument does so at its call; what it hands the closure of its other arguments is in its summary | §2.11 | `invokes`, `cloargs` |
-| A closure that changes a capture meets no other argument that reaches it | §2.4, §2.11 | `apply_call` |
+| A closure that changes a capture meets no other argument that reaches it. One the callee runs — handed as it is, or inside an option, a struct or a container — that changes the payload of a shared handle meets no argument that may be another handle on that payload: the callee's view through it would end under it | §2.4, §2.11, §2.2 (agora #736) | `apply_call` |
 | A closure leaves no capture holding a view, and no `inout` argument. What it leaves one by-value argument holding of another is followed where the call that runs it is seen | §2.11 (#403) | `check_program`, `closure_arg_effects` |
 | A closure kept by an owner, and a literal handed back as it is, copies in what it captured and can copy; a bound closure handed back by name does not | §7.5, §2.11 (h310) | `closure_owned`, `transfer` |
 | A closure another thread runs takes the bindings it captured; one taken by pointer may not go. A handle whose copy is a share two threads may use (the type table's `t`) is captured as a share of its own | §2.1, §2.3, §6.5 | `detaches`, `cap_loans`, `thread_share` |

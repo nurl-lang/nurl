@@ -861,6 +861,7 @@ class FnCheck:
                     self.err(line, f"{name}: a part of argument {k + 1} views what the call changes in it")
         # a closure that changes what it captured is a second route to it: it
         # may not meet another argument that reaches that capture (§2.4, §2.11)
+        inv = sm.get("invokes")
         for k, av in enumerate(avs):
             for place, eff in self.closure_capture_effects(av):
                 for m, other in enumerate(avs):
@@ -873,6 +874,15 @@ class FnCheck:
                     if reach or self.would_kill(st, place, eff, other.loans | hloans(other.held)):
                         self.err(line, f"{name}: the closure in argument {k + 1} changes "
                                        f"{self.pname(place)}, which argument {m + 1} also reaches")
+                    elif ((inv is None or k in inv) and ops[m][0] == "v" and eff in ("realloc", "drop", "replace")
+                          and {t for t, _ in self.shared_tails(place)}
+                          & self.T.shared_in(self.ty_of_place((ops[m][1], ops[m][2])))):
+                        # the callee runs it, and it changes the payload of
+                        # a shared handle another argument may be a handle
+                        # on: what the callee views through that argument
+                        # ends under it (MEMORY.md §2.2, §2.11, agora #736)
+                        self.err(line, f"{name}: the closure in argument {k + 1} changes "
+                                       f"{self.pname(place)}, and argument {m + 1} may be another handle on it")
         # a closure several threads may run at once changes nothing it
         # captured (MEMORY.md §6.5)
         for k in sm.get("shares", ()):
