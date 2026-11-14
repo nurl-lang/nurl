@@ -1340,6 +1340,27 @@ class FnCheck:
             root = st.vals.get(vid)
             if root is None or root.own not in ("O", "P"):
                 return False
+            if path and path[-1].startswith("#"):
+                parent = self.ty_of_place((vid, path[:-1]))
+                pty = self.ty_of_place((vid, path))
+                if (parent is not None and parent[0] == "named" and pty is not None
+                        and self.T.owning(pty) and not self.T.copyable(pty)):
+                    # the payload of an enum of the program's is taken out
+                    # of its slot, which is left empty (agora #175): one
+                    # that cannot be copied has no empty state, so the enum
+                    # keeps it and the arm is lent it (agora #641). An
+                    # option's or a result's payload is handed over, and
+                    # its option with it.
+                    return False
+            if "*" not in path and any(not e.startswith("#") for e in path):
+                pty = self.ty_of_place((vid, path))
+                if pty is not None and self.T.owning(pty) and not self.T.copyable(pty):
+                    # a value that cannot be copied has no empty state to
+                    # leave where it was: the field keeps it, and a read of
+                    # it is a lend (MEMORY.md §7.6, "Values that cannot be
+                    # copied"). The payload of a binding's own option is
+                    # taken with the option, which is not read after.
+                    return False
             roots.append((vid, path, root))
         sure = len(roots) == 1
         for vid, path, root in roots:
@@ -1355,13 +1376,15 @@ class FnCheck:
                 self.s_consumes.add(self.pidx[vid])
             if not path:
                 st.vals[vid] = AV("M" if sure else "X")
-            elif "*" not in path and (direct or path[-1].startswith("#")):
+            elif "*" not in path and (direct or (path[-1].startswith("#") and (
+                    self.ty_of_place((vid, path[:-1])) or ("?",))[0] in ("opt", "res"))):
                 # the field is moved where it lives: it, what is under it
                 # and the value as a whole are not read until it is given a
                 # value again (§2.1). Taken through a binding of it, the
-                # field is left empty, and an empty String or Vec is one;
-                # a payload has no empty state, its option or enum still
-                # says it is there (agora #170).
+                # field is left empty, and an empty String or Vec is one,
+                # and so is an enum's payload slot; an option's payload has
+                # no empty state, the option still says it is there
+                # (agora #170).
                 st.gone = st.gone | {(vid, path)}
         return True
 
@@ -2218,6 +2241,13 @@ class FnCheck:
                     self.effect(st, (vid, ()), "replace", ln)
                 new = self.reroot(st, new, vid)
                 if cur is not None and cur.own == "P":
+                    if (new.own == "L" and v.ty is not None and v.ty[0] not in VIEW_TYPES
+                            and self.T.owning(v.ty) and not self.T.copyable(v.ty)):
+                        # the caller's binding owns what it is given: a
+                        # lend is copied in, and this one has no copy
+                        # (MEMORY.md §2.12, agora #697)
+                        self.err(ln, f"{v.name}: a borrowed value would have to be copied here, "
+                                     f"and it cannot be copied")
                     held = (new.held | hfrom(new.loans)) if new.own == "L" else new.held
                     st.vals[vid] = AV("P", (), (), held)
                     if first and not held:
