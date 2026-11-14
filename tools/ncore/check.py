@@ -421,6 +421,13 @@ class FnCheck:
     def kills_paths(self, eff, p, pp, q, qp, k):
         if k in ("share", "held", "heldin", "stale") or eff == "permute":
             return False
+        if (eff in ("replace", "drop", "take") and k in ("handle", "view") and p is not None
+                and self.owns_nothing(p)):
+            # (a value that owns nothing - numbers, and views of what others
+            # own - releases nothing when it is given a new value: what was
+            # lent through it is where it was. `= r next` over a reader of
+            # a model's bytes leaves a slice read out of it good)
+            return False
         if eff == "take":
             # a part moved out of where it lived: what was lent out of that
             # part ends, a handle of the value around it does not
@@ -557,6 +564,13 @@ class FnCheck:
                    and st.vals.get(self.loans[l][0][0]) is not None
                    and st.vals[self.loans[l][0][0]].own == "O" and "*" not in self.loans[l][0][1]
                    and self.ty_of_place(self.loans[l][0]) in (("String",), ("s",)) for l in mine)
+
+    def owns_nothing(self, place):
+        """Does the place hold a value that releases nothing when it goes - a
+        number, or a struct of numbers and views (nurlc's type table: no
+        drop)?"""
+        ty = self.ty_of_place(place)
+        return ty is not None and (ty[0] in SCALARS or (ty[0] == "named" and ty[1] in getattr(self.prog, "nodrop", ())))
 
     def scalar_place(self, place):
         """Is the place known to hold a number (no handle, no view)?"""
@@ -1182,14 +1196,17 @@ class FnCheck:
         # object every share reaches, not to this argument: `regions`)
         # (…nor is a number written into a buffer's element: it ends nothing
         # another argument views, every holder of the buffer sees it)
-        changed = {k for (k, p, eff) in sm["effects"] if eff in ("realloc", "drop", "replace")
+        changed = {k for (k, p, eff) in sm["effects"] if eff in ("realloc", "drop", "replace", "take")
                    and not (k < len(ops) and ops[k][0] == "v" and self.shared_tails((ops[k][1], ops[k][2] + tuple(p))))
                    and not (eff == "replace" and "*" in p and k < len(ops) and ops[k][0] == "v"
                             and self.scalar_place((ops[k][1], (ops[k][2] + tuple(p))[:PATH_MAX])))}
         for k, mode in enumerate(sm["modes"][:len(ops)]):
             # (…nor is one the callee changes without saying `inout`: the
-            # buffer it moves is the other argument's too)
-            if (mode != "inout" and k not in changed) or ops[k][0] != "v":
+            # buffer it moves is the other argument's too. An `inout` one it
+            # gives no new value that releases or moves anything - it only
+            # reads it, or writes numbers into it - ends nothing another
+            # argument views: `__tpl_seg_eq inout r … nm`, nm read out of r)
+            if k not in changed or ops[k][0] != "v":
                 continue
             _, vid, path = ops[k]
             by_value = {src for (j, dp, src, pth, kind) in sm["stores"] if kind == "value" and j == k}

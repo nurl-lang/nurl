@@ -12526,6 +12526,15 @@ unsafe @ eng_byte s w i k → i {
 // Does effect `eff` at path `pp` (of place `p`) end a loan of kind `k`
 // on path `qp` (of place `q`, in the same variable or the same shared
 // payload)?
+// Does the place hold a value that releases nothing when it goes - a
+// number, or a struct of numbers and views (no drop)?
+@ eng_owns_nothing i pl → b {
+    : i ty ( eng_ty_of pl )
+    ? == ty ET_NONE { ^ F } {}
+    ? == ( et_kind ty ) EK_SCALAR { ^ T } {}
+    ^ & == ( et_kind ty ) EK_NAMED ! ( et_flag ty ETF_DROPS )
+}
+
 // Is the place known to hold a number (no handle, no view)?
 @ eng_place_scalar i pl → b {
     : i ty ( eng_ty_of pl )
@@ -12534,6 +12543,11 @@ unsafe @ eng_byte s w i k → i {
 
 @ kills_paths i eff i pp i q i qp i k b pscalar → b {
     ? | | | | == k LK_SHARE == k LK_HELD == k LK_HELDIN == k LK_STALE == eff EF_PERMUTE { ^ F } {}
+    // (a value that owns nothing - numbers, and views of what others own -
+    // releases nothing when it is given a new value: what was lent through
+    // it is where it was. `pscalar`: the effect is a replace, a drop or a
+    // take of such a place.)
+    ? & pscalar | == k LK_HANDLE == k LK_VIEW { ^ F } {}
     ? == eff EF_TAKE {
         // a part moved out of where it lived: what was lent out of that
         // part ends, a handle of the value around it does not
@@ -12583,7 +12597,7 @@ unsafe @ eng_byte s w i k → i {
     ? ! ( el_is_loan l ) { ^ F } {}
     : i q ( el_place l )
     : i k ( el_kind l )
-    : b pscalar & == eff EF_REPLACE ( eng_place_scalar p )
+    : b pscalar & | | == eff EF_REPLACE == eff EF_DROP == eff EF_TAKE ( eng_owns_nothing p )
     ? & == ( pl_var q ) ( pl_var p ) ( kills_paths eff ( pl_path p ) q ( pl_path q ) k pscalar ) { ^ T } {}
     ? & & & == eff EF_TAKE ( sq_has g_fc_cap_loans l ) == ( pl_var q ) ( pl_var p ) & ( ep_prefix ( pl_path q ) ( pl_path p ) ) != k LK_REF {
         // (a closure that captured the value around the part taken may
@@ -14621,7 +14635,7 @@ unsafe @ eng_byte s w i k → i {
         : i t ( sm_at sm SM_EFFECTS e )
         : i ck ( tp_at t 3 0 )
         : i eff ( tp_at t 3 2 )
-        ? | | == eff EF_REALLOC == eff EF_DROP == eff EF_REPLACE {
+        ? | | | == eff EF_REALLOC == eff EF_DROP == eff EF_REPLACE == eff EF_TAKE {
             : ~ b shared F
             ? & < ck n ( op_is_place ( wv_at ops ck ) ) {
                 : i ok ( wv_at ops ck )
@@ -14641,7 +14655,10 @@ unsafe @ eng_byte s w i k → i {
     ~ & < k n < k ( sm_n sm SM_MODES ) {
         : i mode ( sm_mode sm k )
         : i ok ( wv_at ops k )
-        ? & | == mode PM_INOUT ( sq_has changed k ) ( op_is_place ok ) {
+        // (an `inout` argument the callee gives no new value that releases
+        // or moves anything - it only reads it, or writes numbers into it -
+        // ends nothing another argument views)
+        ? & ( sq_has changed k ) ( op_is_place ok ) {
             : i vid ( pl_var ok )
             : i path ( pl_path ok )
             : ~ b stop F
