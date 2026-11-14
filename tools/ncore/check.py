@@ -2515,6 +2515,19 @@ class FnCheck:
             for vid in self.fn.params[:getattr(self.fn, "ncap", 0)]:
                 self.effect(st, (vid, ()), "realloc", line)
                 self.effect(st, (vid, ()), "drop", line)
+        if not known and self.walking:
+            # (a closure nothing here says the body of may change what it is
+            # handed - its caller chooses it: a container a `~` loop walks
+            # handed to it is changed under the loop, agora #436)
+            walked = {self.loans[l][0] for l in self.walking if l in self.loans}
+            for i, op in enumerate(ops[1:]):
+                if op[0] != "v":
+                    continue
+                places = {(op[1], op[2])} | set(avs[i].alias)
+                if any(p[0] == w[0] and (prefix(p[1], w[1]) or prefix(w[1], p[1])) for p in places for w in walked):
+                    self.err(line, f"argument {i + 1} of the closure is a container a loop walks, which the "
+                                   f"closure may change")
+                    break
         if not known:
             roots = {self.pidx[a[0]] for a in cav.alias if a[0] in self.pidx}
             if ops[0][0] == "v" and ops[0][1] in self.pidx:
@@ -2805,6 +2818,19 @@ class FnCheck:
         return any(p[:cap + 1] == base and l2 in self.loans and self.loans[l2][0][0] == pv
                    and self.loans[l2][1] in ("handle", "ref") for p, l2 in held)
 
+    def carry_call_lent(self, vid, rv):
+        """A temporary given another's value whole (a value block's tail, a
+        join's arm) is that call's result: the arguments it may hand back
+        whole go with it (`call_lent`, `call_mixed`)."""
+        if (rv is None or rv[0] != "use" or rv[1][0] != "v" or rv[1][2]
+                or self.fn.vars[vid].kind != "temp"):
+            return
+        src = rv[1][1]
+        if src in self.call_lent:
+            self.call_lent[vid] = list(self.call_lent[src])
+        if src in self.call_mixed:
+            self.call_mixed.add(vid)
+
     def share_handle_at(self, place):
         """Is the value at `place` a library handle whose copy is a share
         of one object (nurlc's `h`: a PNCounter, a Shared)?"""
@@ -3006,7 +3032,9 @@ class FnCheck:
                             nc_loans |= av.loans
                             nc_alias |= av.alias
                             self.lit_nocopy[dest_vid] = i + 1
-                            uncopy_lent = True
+                            # (a PART of a parameter: one named whole is the
+                            # caller's argument, moved into the result, h207)
+                            uncopy_lent = uncopy_lent or all(a[0] in self.pidx and a[1] for a in av.alias)
                         elif (dest_vid in self.ret_aggs and op[0] == "v" and not op[2] and self.own_payload(st, av)
                               and self.take_payload(st, av, line)):
                             # the payload of an option or a result a local of
@@ -3231,6 +3259,7 @@ class FnCheck:
             v = self.fn.vars[vid]
             if rv is not None and rv[0] == "payload":
                 self.payload_bound.add(vid)
+            self.carry_call_lent(vid, rv)
             if (rv is not None and rv[0] == "use" and rv[1][0] == "v" and rv[1][2] and v.kind == "local"
                     and not v.mut):
                 # (a binding read out of a field of another: which one)
@@ -3339,6 +3368,7 @@ class FnCheck:
                 cursor_lends = lambda x: not (self.fn.vars[x].kind == "local" and st.vals.get(x) is not None
                                               and st.vals[x].own == "O" and not st.vals[x].loans)
                 psrc = rv[1][1] if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] else None
+                self.carry_call_lent(vid, rv)
                 if (v.kind != "temp" and psrc is not None and self.fn.vars[psrc].kind == "local"
                         and not self.fn.vars[psrc].mut
                         and v.ty is not None and v.ty[0] not in VIEW_TYPES and v.ty[0] != "closure"

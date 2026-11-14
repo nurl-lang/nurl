@@ -13257,6 +13257,17 @@ unsafe @ eng_byte s w i k → i {
     ^ ( ep_last q )
 }
 
+// A temporary given another's value whole (a value block's tail, a join's
+// arm) is that call's result: the arguments it may hand back whole go with
+// it (g_fx_lent, FX_CALL_MIXED).
+@ carry_call_lent i vid i rv → v {
+    ? != ( fv_kind vid ) VK_TEMP { ^ } {}
+    : i src ( rv_use_var rv )
+    ? < src 0 { ^ } {}
+    ? != 0 ( wv_at g_fx_lent src ) { ( wv_put g_fx_lent vid ( wv_at g_fx_lent src ) ) } {}
+    ? ( fx_has src FX_CALL_MIXED ) { ( fx_set vid FX_CALL_MIXED ) } {}
+}
+
 // Is one of `loans` a handle loan?
 @ eng_has_handle_loan i loans → b {
     : ~ i k 0
@@ -16414,6 +16425,35 @@ unsafe @ eng_byte s w i k → i {
     : ~ i out 0
     : ~ i vloans 0
     : ~ i valias 0
+    ? & ! any != g_fc_walking 0 {
+        // (a closure nothing here says the body of may change what it is
+        // handed - its caller chooses it: a container a `~` loop walks
+        // handed to it is changed under the loop)
+        : ~ b whit F
+        : ~ i wi 0
+        ~ & ! whit < wi n {
+            : i wop ( wv_at ops + wi 1 )
+            ? ( op_is_place wop ) {
+                : i pls ( sq_add ( av_alias ( wv_at avs wi ) ) wop )
+                : ~ i wp 0
+                ~ & ! whit < wp ( sq_len pls ) {
+                    : i p ( sq_at pls wp )
+                    : ~ i wk2 0
+                    ~ & ! whit < wk2 ( sq_len g_fc_walking ) {
+                        : i wl ( sq_at g_fc_walking wk2 )
+                        ? ( el_is_loan wl ) {
+                            : i w ( el_place wl )
+                            ? & == ( pl_var p ) ( pl_var w ) | ( ep_prefix ( pl_path p ) ( pl_path w ) ) ( ep_prefix ( pl_path w ) ( pl_path p ) ) { = whit T } {}
+                        } {}
+                        = wk2 + wk2 1
+                    }
+                    = wp + wp 1
+                }
+            } {}
+            ? whit { ( eng_err line ( nurl_str_cat3 `argument ` ( nurl_str_int + wi 1 ) ` of the closure is a container a loop walks, which the closure may change` ) ) } {}
+            = wi + wi 1
+        }
+    } {}
     ? ! any {
         ? ( ef_is_closure g_ec_f ) {
             // inside a closure, a closure it was handed is the caller's:
@@ -17011,7 +17051,9 @@ unsafe @ eng_byte s w i k → i {
                             = nc_loans ( sq_union nc_loans ( av_loans av ) )
                             = nc_alias ( sq_union nc_alias al )
                             ( wv_put g_fx_nocopy dest + i 1 )
-                            = uncopy_lent T
+                            // (a PART of a parameter: one named whole is the
+                            // caller's argument, moved into the result)
+                            ? param_parts { = uncopy_lent T } {}
                         } {
                             : ~ b slot & & & ! ( av_call av ) != al 0 whole ( fx_has ov FX_SLOT )
                             ? slot {
@@ -17286,6 +17328,7 @@ unsafe @ eng_byte s w i k → i {
     : i vty ( fv_ty vid )
     : i rk ( ec rv )
     ? == rk RV_PAYLOAD { ( fx_set vid FX_PAYLOAD ) } {}
+    ( carry_call_lent vid rv )
     ? & & == rk RV_USE == kind VK_LOCAL ! ( fv_mut vid ) {
         // (a binding read out of a field of another: which one)
         : i uop ( eng_op ( ec + rv 1 ) )
@@ -17430,6 +17473,7 @@ unsafe @ eng_byte s w i k → i {
         // given a lend stays a borrow, of whatever it is pointed at now)
         : i flags | | ? repoint 0 TF_COPY_OK ? != kind VK_TEMP TF_NAMED 0 ? == kind VK_TEMP TF_LEND_OUTER ? & ( fv_mut vid ) repoint TF_CURSOR 0
         : i psrc ( rv_use_var rv )
+        ( carry_call_lent vid rv )
         ? & & & & == kind VK_TEMP >= psrc 0 != vty ET_NONE ! ( et_is_view vty ) & & != ( et_kind vty ) EK_CLOSURE ( et_owning vty ) & ( fx_has psrc FX_PAYLOAD ) ( eng_own_payload st ( st_av st psrc ) ) {
             // an arm's payload of an option a local owns, handed out by a
             // value `??`: it goes over with its option - the walk moves it
