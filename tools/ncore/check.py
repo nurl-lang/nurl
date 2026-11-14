@@ -1440,6 +1440,17 @@ class FnCheck:
                         # borrow, and its field is not its to hand to a
                         # `sink` (MEMORY.md §2.10, agora #680)
                         self.err(line, f"{name} takes a field of {self.vname(op[1])}, which is a borrow")
+                    elif (not op[2] and op[1] in self.slot_vars and avs[k].own == "L"
+                          and k < len(sm["modes"]) and sm["modes"][k] == "sink"
+                          and not any(r[1] == k for r in sm.get("rholds", ()))
+                          and not any(x[2] == k for x in sm.get("stores", ()))):
+                        # the payload of what a library getter lent (`vec_get`,
+                        # `lru_get`) handed to a callee that releases it: the
+                        # container still holds it and releases it again - a
+                        # borrow (a callee that keeps it is handed a copy,
+                        # h299). Only a `~` loop's element is taken out of
+                        # its slot (MEMORY.md §7.6)
+                        self.err(line, f"{name} takes {self.vname(op[1])}, the payload of what a getter lent, which is a borrow")
                     elif (op[2] and op[1] in self.pidx and self.pidx[op[1]] < self.ncap
                           and not getattr(self.fn.vars[op[1]], "byref", False)
                           and k < len(sm["modes"]) and sm["modes"][k] == "sink"):
@@ -3196,6 +3207,16 @@ class FnCheck:
                 # and the binding is moved - nurlc's owner-slot flag)
                 cursor_lends = lambda x: not (self.fn.vars[x].kind == "local" and st.vals.get(x) is not None
                                               and st.vals[x].own == "O" and not st.vals[x].loans)
+                psrc = rv[1][1] if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] else None
+                if (v.kind == "temp" and psrc is not None and psrc in self.payload_bound
+                        and v.ty is not None and v.ty[0] not in VIEW_TYPES and v.ty[0] != "closure"
+                        and self.T.owning(v.ty) and self.own_payload(st, st.vals.get(psrc))
+                        and self.take_payload(st, st.vals[psrc], ln)):
+                    # an arm's payload of an option a local owns, handed out
+                    # by a value `??`: it goes over with its option - nurlc
+                    # moves it (the option is moved on that path, read after
+                    # it is a possibly-moved value; agora #175)
+                    st.vals[psrc] = AV("O", (), (), self.held_of_own(st.vals[psrc], psrc))
                 new = self.rvalue(st, rv, ln, ddepth, v.ty, v.name, copy_ok=not repoint, dest_vid=vid,
                                   named=v.kind != "temp",
                                   lend_owner=outer if v.kind == "temp" else (cursor_lends if v.mut and repoint else (lambda x: False)))
