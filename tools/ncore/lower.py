@@ -315,6 +315,18 @@ class Types:
                 return he[ty[1]]
         if ty and ty[0] == "String":
             return ("u",)
+        # an enum of the program's whose container payloads all hold one
+        # element type (`Json`: `JArr ( Vec Json )`, `JObj ( Vec Json )`):
+        # `*` is an element of one of them - what a walk down it reaches
+        if ty and ty[0] == "named" and ty[1] in self.prog.enums:
+            es = set()
+            for _, tys in self.prog.enums[ty[1]]:
+                for t in tys:
+                    t = norm(t)
+                    if t and t[0] in ("vec", "slice", "box"):
+                        es.add(t[1])
+            if len(es) == 1:
+                return es.pop()
         return None
 
     def variants(self, ty):

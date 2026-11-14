@@ -404,6 +404,7 @@
 : i PATH_MAX 5  // a loan's place is followed this deep and no further
 : i HELD_MAX 8  // where in a value a loan is held is followed this deep: held deeper, it is held at the prefix (a loop storing into a value what it holds re-roots it under itself every round)
 : i HELD_WIDEN 8  // one loan is held in at most this many places of a value; held in more, it is held at their longest common prefix (held_widen)
+: ~ i g_et_ee 0  // an enum type → its one container element type + 3 (__et_enum_elem)
 : ~ i g_hw_memo 0  // held set → its widened form + 1, for the function being read (held_widen)
 : i PV_BIAS 1048576  // a place is a word: (variable + PV_BIAS) * 2^32 + path
 : ~ i g_fv_ty -1  // the function being read: each variable's type
@@ -11294,7 +11295,39 @@ unsafe @ eng_keep_fn → v {
     ? | | == kind EK_VEC == kind EK_SLICE == kind EK_BOX { ^ ( et_at t ET_E1 ) } {}
     ? & == kind EK_NAMED ( et_flag t ETF_HANDLE ) { ^ ( et_at t ET_E1 ) } {}
     ? == kind EK_STRING { ^ ET_NUM } {}
+    // an enum of the program's whose container payloads all hold one element
+    // type (`Json`: `JArr ( Vec Json )`, `JObj ( Vec Json )`): `*` is an
+    // element of one of them - what a walk down it reaches
+    ? & == kind EK_NAMED ( et_flag t ETF_ENUM ) { ^ ( __et_enum_elem t ) } {}
     ^ ET_NONE
+}
+
+@ __et_enum_elem i t → i {
+    ? == g_et_ee 0 { = g_et_ee ( im_new ) } {}
+    : i have ( im_get g_et_ee t 0 )
+    ? != have 0 { ^ - have 3 } {}
+    : ~ i e ET_NONE
+    : ~ b many F
+    : i n ( et_at t ET_V_N )
+    : ~ i v 0
+    ~ < v n {
+        : i at ( __et_variant_at t v )
+        : i np ( wv_at g_et_w + at 1 )
+        : ~ i k 0
+        ~ < k np {
+            : i pt ( et_of ( wv_at g_et_w + + at 2 k ) )
+            : i pk ( et_kind pt )
+            ? & >= pt 0 | | == pk EK_VEC == pk EK_SLICE == pk EK_BOX {
+                : i pe ( et_at pt ET_E1 )
+                ? == e ET_NONE { = e pe } { ? != e pe { = many T } {} }
+            } {}
+            = k + k 1
+        }
+        = v + v 1
+    }
+    : i out ? many ET_NONE e
+    ( im_put g_et_ee t + out 3 )
+    ^ out
 }
 
 @ et_is_view i t → b {
@@ -16092,20 +16125,7 @@ unsafe @ eng_byte s w i k → i {
                             // of this function owns, named in a literal handed
                             // back: it goes over with its option, which is not
                             // read after - h264's move for a payload)
-                            : ~ b own_pay & & & & have_dest ( fx_has dest FX_RET_AGG ) ! ( av_call av ) != al 0 whole
-                            ? own_pay {
-                                : ~ i a 0
-                                ~ & own_pay < a ( sq_len al ) {
-                                    : i pa ( sq_at al a )
-                                    : i pp ( pl_path pa )
-                                    : i pv ( pl_var pa )
-                                    ? | | | == pp 0 ! ( eng_path_no_star pp ) ! ( ee_is_pay ( ep_last pp ) ) | != ( fv_kind pv ) VK_LOCAL != ( st_own st pv ) OW_O { = own_pay F } {
-                                        : i wty ( eng_ty_at ( fv_ty pv ) ( ep_parent pp ) )
-                                        ? | == wty ET_NONE & != ( et_kind wty ) EK_OPT != ( et_kind wty ) EK_RES { = own_pay F } {}
-                                    }
-                                    = a + a 1
-                                }
-                            } {}
+                            : b own_pay & & & have_dest ( fx_has dest FX_RET_AGG ) whole ( eng_own_payload st av )
                             ? & slot ( take_payload st av line T ) {
                                 // the payload of a library getter's option over
                                 // one of this frame's containers: a slot, which
@@ -16596,6 +16616,13 @@ unsafe @ eng_byte s w i k → i {
     // a store into a part
     : i fty ( eng_ty_of target )
     : i src ( rv_use_var rv )
+    ? & & & & & >= src 0 ( fx_has src FX_PAYLOAD ) != fty ET_NONE ! ( et_copyable fty ) ( et_owning fty ) ( eng_own_payload st ( st_av st src ) ) {
+        // an arm's payload of an option or a result a local owns, with no
+        // copy, stored into a field: it goes over with its option, which is
+        // not read after (as into a literal handed back)
+        : i sav ( st_av st src )
+        ? ( take_payload st sav ln T ) { ( st_put st src ( av_make OW_O 0 0 ( av_held sav ) F ) ) } {}
+    } {}
     : i was ? >= src 0 ( st_own st src ) OW_NONE
     // (a lend of something that ends before the field's holder is copied
     // in, where the field's type has a copy)
@@ -18000,6 +18027,24 @@ unsafe @ eng_byte s w i k → i {
         ? | | | | != ( fv_kind lv ) VK_LOCAL ( fx_has lv FX_PAYLOAD ) != ( st_own st lv ) OW_O ! ( eng_path_no_star ( pl_path pl ) ) == ty ET_NONE { ^ F } {}
         ? & != ( et_kind ty ) EK_STRING != ( et_kind ty ) EK_S { ^ F } {}
         = k + k 1
+    }
+    ^ T
+}
+
+// Is `av` - not a call's lend - the payload of an option or a result that
+// locals of this function own (`?? tr { T t → … }`)?
+@ eng_own_payload i st i av → b {
+    ? | | == av 0 ( av_call av ) == ( av_alias av ) 0 { ^ F } {}
+    : i al ( av_alias av )
+    : ~ i a 0
+    ~ < a ( sq_len al ) {
+        : i pa ( sq_at al a )
+        : i pp ( pl_path pa )
+        : i pv ( pl_var pa )
+        ? | | | == pp 0 ! ( eng_path_no_star pp ) ! ( ee_is_pay ( ep_last pp ) ) | != ( fv_kind pv ) VK_LOCAL != ( st_own st pv ) OW_O { ^ F } {}
+        : i wty ( eng_ty_at ( fv_ty pv ) ( ep_parent pp ) )
+        ? | == wty ET_NONE & != ( et_kind wty ) EK_OPT != ( et_kind wty ) EK_RES { ^ F } {}
+        = a + a 1
     }
     ^ T
 }

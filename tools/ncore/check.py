@@ -572,6 +572,16 @@ class FnCheck:
         ty = self.ty_of_place(place)
         return ty is not None and (ty[0] in SCALARS or (ty[0] == "named" and ty[1] in getattr(self.prog, "nodrop", ())))
 
+    def own_payload(self, st, av):
+        """Is `av` - not a call's lend - the payload of an option or a result
+        that locals of this function own (`?? tr { T t → … }`)?"""
+        return (av is not None and not av.call and bool(av.alias)
+                and all(a[1] and "*" not in a[1] and a[1][-1].startswith("#")
+                        and self.fn.vars[a[0]].kind == "local"
+                        and st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
+                        and (self.ty_of_place((a[0], a[1][:-1])) or ("?",))[0] in ("opt", "res")
+                        for a in av.alias))
+
     def scalar_place(self, place):
         """Is the place known to hold a number (no handle, no view)?"""
         ty = self.ty_of_place(place)
@@ -2478,12 +2488,7 @@ class FnCheck:
                             nc_loans |= av.loans
                             nc_alias |= av.alias
                             self.lit_nocopy[dest_vid] = i + 1
-                        elif (dest_vid in self.ret_aggs and not av.call and av.alias and op[0] == "v" and not op[2]
-                              and all(a[1] and "*" not in a[1] and a[1][-1].startswith("#")
-                                      and self.fn.vars[a[0]].kind == "local"
-                                      and st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
-                                      and (self.ty_of_place((a[0], a[1][:-1])) or ("?",))[0] in ("opt", "res")
-                                      for a in av.alias)
+                        elif (dest_vid in self.ret_aggs and op[0] == "v" and not op[2] and self.own_payload(st, av)
                               and self.take_payload(st, av, line)):
                             # the payload of an option or a result a local of
                             # this function owns, named in a literal handed
@@ -2862,6 +2867,14 @@ class FnCheck:
                 return st
             fty = self.ty_of_place((vid, path))
             src = rv[1][1] if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] else None
+            if (src is not None and src in self.payload_bound and fty is not None and not self.T.copyable(fty)
+                    and self.T.owning(fty) and self.own_payload(st, st.vals.get(src))
+                    and self.take_payload(st, st.vals[src], ln)):
+                # an arm's payload of an option or a result a local owns,
+                # with no copy, stored into a field: it goes over with its
+                # option, which is not read after (as into a literal handed
+                # back)
+                st.vals[src] = AV("O", (), (), st.vals[src].held)
             was = st.vals[src].own if src is not None and st.vals.get(src) is not None else None
             # (a lend of something that ends before the field's holder is
             # copied in, where the field's type has a copy: MEMORY.md §7.6,
