@@ -341,6 +341,7 @@ class Reader:
             v.mut = bool(flags & 1)
             v.blk = blk if blk >= 0 else None
             v.byref = bool(flags & 8)      # a capture taken by pointer
+            v.carried = bool(flags & 16)   # a join arm's temporary the enclosing statement releases
             fn.vars[vid] = v
             if kind == 3:
                 # a closure body's capture: a parameter the closure itself hands it

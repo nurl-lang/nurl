@@ -27,13 +27,14 @@ SCALARS = {"i", "u", "f", "b", "i8", "i16", "i32", "u16", "u32", "u64", "f32",
 
 
 class Var:
-    __slots__ = ("id", "name", "ty", "kind", "line", "depth", "mut", "blk", "byref")
+    __slots__ = ("id", "name", "ty", "kind", "line", "depth", "mut", "blk", "byref", "carried")
 
     def __init__(self, vid, name, ty, kind, line, depth):
         self.id, self.name, self.ty, self.kind, self.line, self.depth = vid, name, ty, kind, line, depth
         self.mut = False
         self.blk = None       # the value block's temporary, for a binding the block made
         self.byref = False    # a closure body's capture taken by pointer
+        self.carried = False  # a temporary of a join's arm that lives to the end of the join's statement
 
     def __repr__(self):
         return f"{self.name}#{self.id}"

@@ -622,6 +622,7 @@
 : ~ i g_el_shared -1  // the loans whose place reaches through a shared handle
 : ~ i g_av_all -1  // an AV → the loans it is or holds + 1 (a set), for this function
 : i CORE_VW 7
+: i CORE_VF_CARRIED 16  // a variable's flag: a temporary of a join's arm that the enclosing statement releases (core_arm_end)
 : i CORE_VS 1048576
 // Statement words.
 : i CO_LET 1  // vid rvalue
@@ -11746,6 +11747,10 @@ unsafe @ eng_keep_fn → v {
 
 @ fv_byref i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) 8 }
 
+// A temporary made in a join's arm that lives on to the end of the
+// statement the join is in: released where its `drop` says.
+@ fv_carried i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_CARRIED }
+
 @ fv_line i vid → i { ? < vid 0 { ^ 0 } {} ^ ( ev vid 5 ) }
 
 // The value block's temporary a binding was made in, -1 none.
@@ -15950,7 +15955,7 @@ unsafe @ eng_byte s w i k → i {
     : i declared ( wv_new )
     : ~ i at from
     ~ < at to {
-        ? == ( ec at ) CO_LET { ( wv_push declared ( ec + at 1 ) ) } {}
+        ? == ( ec at ) CO_LET { ? ! ( fv_carried ( ec + at 1 ) ) { ( wv_push declared ( ec + at 1 ) ) } {} } {}
         = at ( eng_next at )
     }
     // a binding a `;` block armed here may read is released after the
@@ -16266,7 +16271,10 @@ unsafe @ eng_byte s w i k → i {
     : i fty ( eng_ty_of target )
     : i src ( rv_use_var rv )
     : i was ? >= src 0 ( st_own st src ) OW_NONE
-    : ~ i new ( eng_rvalue st rv ln ddepth fty WK_PLACE target 0 -1 )
+    // (a lend of something that ends before the field's holder is copied
+    // in, where the field's type has a copy)
+    : b fcopy & & & & != fty ET_NONE ! ( et_is_view fty ) != ( et_kind fty ) EK_CLOSURE ( et_copyable fty ) ! ( et_scalar fty )
+    : ~ i new ( eng_rvalue st rv ln ddepth fty WK_PLACE target | TF_NAMED ? fcopy TF_COPY_OK 0 -1 )
     ? != g_fc_unsup 0 { ^ } {}
     ? & & & >= src 0 == was OW_O == ( st_own st src ) OW_M != ( fv_kind src ) VK_TEMP {
         ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) )
@@ -16669,7 +16677,11 @@ unsafe @ eng_byte s w i k → i {
         ? == ( st_own st vid ) OW_O {
             ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ln 0 )
             ( st_put st vid ( av_make OW_D 0 0 0 F ) )
-        } {}
+        } {
+            // (a join arm's temporary the statement releases: no scope ends
+            // it, so the binding is gone here)
+            ? & & != ( st_av st vid ) 0 ( fv_carried vid ) != ( st_own st vid ) OW_M { ( st_put st vid ( av_make OW_D 0 0 0 F ) ) } {}
+        }
         ^ ( eng_next at )
     } {}
     ? == op CO_SCOPE {
@@ -18456,10 +18468,26 @@ unsafe @ core_if_begin → i {
 
 // An arm of the join `j` ends: its value (on top) is the join's, the
 // temporaries it made since `t0` are released, its scope closes.
-unsafe @ core_arm_end i j i t0 → v {
+// `carry`: the arm's value may view a temporary the arm made (`? c ( first
+// ( text 1 ) ) …`), which the walk hands on past the join for the call
+// that consumes the join to release. The arm's temporaries are then the
+// enclosing statement's: of the join's depth, marked (CORE_VF_CARRIED) so
+// that the arm's scope does not end them, and released where that
+// statement releases its own.
+unsafe @ core_arm_end i j i t0 b carry → v {
     : i op ( core_pop )
     ? != op 0 { ( core_w CO_ASSIGN ) ( core_w ( core_op_var j ) ) ( core_w RV_USE ) ( core_w op ) } {}
-    ( core_discard g_core_os_n t0 )
+    ? carry {
+        : *i tm # *i # s g_core_tmps
+        : *i vs # *i # s g_core_vars
+        : ~ i k t0
+        ~ < k g_core_tmp_n {
+            : i b * . tm k CORE_VW
+            = . vs + b 3 . vs + * j CORE_VW 3
+            = . vs + b 4 | . vs + b 4 CORE_VF_CARRIED
+            = k + k 1
+        }
+    } { ( core_discard g_core_os_n t0 ) }
     ( core_scope_end )
 }
 
@@ -34194,12 +34222,12 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // (Only an arm that is a literal or a join stores values of its own.)
     : b __aj_t & != 0 g_borrowck | | == t_tt0 TT_AT == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST
     : i __cj ? != 0 g_core_live ( core_if_begin ) 0
-    : i __cjt g_core_tmp_n
+    : ~ i __cjt g_core_tmp_n
     : s __aj0 ? __aj_t ( nurl_str_cat ( nurl_sym_get g_bck `ppends` ) `` ) ``
     : s __ajj0 ? __aj_t ( nurl_str_cat ( nurl_sym_get g_bck `pajoins` ) `` ) ``
     = g_vb_arm_pub ? & != 0 g_vb_on | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST 1 0
     : ~ s tv ( gen_expr lex syms cg )
-    ? != 0 g_core_live { ( core_arm_end __cj __cjt ) } {}
+    ? != 0 g_core_live { ( core_arm_end __cj __cjt != 0 ( nurl_sym_len syms `__deferred_temps__` ) ) = __cjt g_core_tmp_n } {}
     = g_vb_arm_pub 0
     // (…what a bare `?` / `??` arm published of what its own arms lent:
     // agora #836.)
@@ -34496,7 +34524,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : s __ajj1 ? __aj_e ( nurl_str_cat ( nurl_sym_get g_bck `pajoins` ) `` ) ``
     = g_vb_arm_pub ? & != 0 g_vb_on | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST 1 0
     : ~ s ev ( gen_expr lex syms cg )
-    ? != 0 g_core_live { ( core_arm_end __cj __cjt ) ( core_join_end __cj ) } {}
+    ? != 0 g_core_live { ( core_arm_end __cj __cjt != 0 ( nurl_sym_len syms `__deferred_temps__` ) ) ( core_join_end __cj ) } {}
     = g_vb_arm_pub 0
     : s e_vbin ? & != 0 g_vb_on | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST ( nurl_str_cat ( nurl_sym_get syms `__last_join_vbsel__` ) `` ) ``
     ? != 0 ( nurl_str_len e_vbin ) { ( nurl_sym_def syms `__last_join_vbsel__` `` ) } {}
@@ -36968,7 +36996,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             ? m_rval { = g_rpg_want 1 } {}
             = g_vb_arm_pub ? & != 0 g_vb_on | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST 1 0
             : ~ s arm_result ( gen_stmt lex syms cg )
-            ? != 0 g_core_live { ( core_arm_end __cmj __cmt ) } {}
+            ? != 0 g_core_live { ( core_arm_end __cmj __cmt F ) } {}
             = g_vb_arm_pub 0
             : s arm_vbin ? & != 0 g_vb_on | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST ( nurl_str_cat ( nurl_sym_get syms `__last_join_vbsel__` ) `` ) ``
             ? != 0 ( nurl_str_len arm_vbin ) { ( nurl_sym_def syms `__last_join_vbsel__` `` ) } {}

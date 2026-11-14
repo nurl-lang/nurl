@@ -2405,7 +2405,9 @@ class FnCheck:
     def scope_end(self, st, stmts, line):
         if st.bottom:
             return st
-        declared = [s[1] for s in stmts if s[0] == "let"]
+        # (a temporary of a join's arm that the arm's value may view is
+        # the enclosing statement's: released where its `drop` says)
+        declared = [s[1] for s in stmts if s[0] == "let" and not self.fn.vars[s[1]].carried]
         # a binding a `;` block armed here may read is released after the
         # chain has run, at the function's exit: not where its scope ends
         # (MEMORY.md §7.2, "values registered before a defer")
@@ -2611,7 +2613,12 @@ class FnCheck:
             fty = self.ty_of_place((vid, path))
             src = rv[1][1] if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] else None
             was = st.vals[src].own if src is not None and st.vals.get(src) is not None else None
-            new = self.rvalue(st, rv, ln, ddepth, fty, self.pname((vid, path)))
+            # (a lend of something that ends before the field's holder is
+            # copied in, where the field's type has a copy: MEMORY.md §7.6,
+            # "borrowed values are copied into owners")
+            new = self.rvalue(st, rv, ln, ddepth, fty, self.pname((vid, path)),
+                              copy_ok=fty is not None and fty[0] not in VIEW_TYPES and fty[0] != "closure"
+                              and self.T.copyable(fty) and not self.T.is_scalar(fty), named=True)
             if was == "O" and st.vals[src].own == "M" and self.fn.vars[src].kind != "temp":
                 self.rehome_views(st, src, (vid, tuple(path)[:PATH_MAX]))
             if new.own == "L" and fty is not None and fty[0] == "closure":
@@ -2651,6 +2658,10 @@ class FnCheck:
             av = st.vals.get(vid)
             if av and av.own == "O":
                 self.effect(st, (vid, ()), "replace", ln)
+                st.vals[vid] = AV("D")
+            elif av and self.fn.vars[vid].carried and av.own != "M":
+                # (a join arm's temporary the statement releases: no scope
+                # ends it, so the binding is gone here)
                 st.vals[vid] = AV("D")
             return st
         if k == "scope":
