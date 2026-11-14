@@ -204,6 +204,7 @@ class FnCheck:
         self.walking = set()
         self.moved_from = None   # the last value moved that holds views of its own parts     # the loans of the loops being walked: their containers' buffers     # a temporary -> its value is what a call made and handed over
         self.s_invokes = set()
+        self.s_catches = set()   # the closure parameters run where a panic in them is caught
         self.s_detaches = set()
         self.s_stale = set()     # (capture, path): read before the body gave it a value
         self.s_credits = set()   # parameters the body's first statement gives a value that views nothing
@@ -1167,10 +1168,15 @@ class FnCheck:
         for k, av in enumerate(avs):
             # (one another thread runs took its captures with it, above)
             if k not in gone and (inv is None or k in inv) and self.closures_in(av):
-                self.run_closures(st, av, line, f"{name}: the closure in argument {k + 1}")
+                # (a callee that catches a panic of the closure it runs:
+                # `catches`)
+                caught = k in sm.get("catches", ())
+                self.run_closures(st, av, line, f"{name}: the closure in argument {k + 1}", weak=caught)
                 for a in av.alias:
                     if a[0] in self.pidx:
                         self.s_invokes.add(self.pidx[a[0]])
+                        if caught:
+                            self.s_catches.add(self.pidx[a[0]])
         # …and what the callee hands that closure of its other arguments
         handed = {}
         for (k, i, j, path) in sm.get("cloargs", ()):
@@ -1784,9 +1790,11 @@ class FnCheck:
         return [(hp[:-1], l[1]) for hp, l in av.held
                 if isinstance(l, tuple) and len(l) == 2 and l[0] == "clo" and hp and hp[-1] == "^f"]
 
-    def run_closures(self, st, av, line, what):
+    def run_closures(self, st, av, line, what, weak=False):
         """Running a closure reads every capture and does what its body does
-        to them."""
+        to them.  `weak`: it is run where a panic in it is caught (`recover`),
+        so the body may stop anywhere: what it ends is ended, what it would
+        have given a new value may still hold what it held."""
         self.check_live(st, AV("N", held=av.held), line, what, held=True)
         for base, fname in self.closures_in(av):
             sm = self.summ.get(fname)
@@ -1805,7 +1813,7 @@ class FnCheck:
             for (k, path, eff) in sm["effects"]:
                 if k < ncap:
                     for place in caps.get(k, ()):
-                        self.effect(st, (place[0], place[1] + tuple(path)), eff, line)
+                        self.effect(st, (place[0], place[1] + tuple(path)), eff, line, weak=weak)
             for k in sm["consumes"]:
                 if k < ncap:
                     for place in caps.get(k, ()):
@@ -2852,7 +2860,7 @@ class FnCheck:
                 "regions": sorted(self.s_regions), "selfholds": sorted(self.s_selfholds),
                 "rclos": sorted(rclos), "sclos": sorted(sclos), "calllends": sorted(calllends),
                 "gone": sorted(left_gone), "mixed": [1] if mixed else [], "stale": sorted(self.s_stale),
-                "credits": sorted(self.s_credits), "keeps": sorted(keeps)}
+                "credits": sorted(self.s_credits), "keeps": sorted(keeps), "catches": sorted(self.s_catches)}
 
 
 def initial_summary(prog, fn):
@@ -2933,6 +2941,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "gone", "mixed", "stale", "credits", "keeps"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "gone", "mixed", "stale", "credits", "keeps", "catches"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out

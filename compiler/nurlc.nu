@@ -532,7 +532,7 @@
 : ~ i g_sm -1  // the summaries, SM_W words a function (by its number); each set a place in g_sm_w, 0 the empty one
 : ~ i g_sm_w -1  // …their sets: a count, then the words in order
 : ~ i g_sm_tmp -1
-: i SM_W 24
+: i SM_W 26
 : i SM_STATE 0  // 0 none yet, 1 made by the engine, 2 declared, 3 derived from the walk's tables
 : i SM_RES 1  // RES_*
 : i SM_LENDS 2  // (parameter, path, kind): the result is a handle of / a view into it
@@ -557,6 +557,7 @@
 : i SM_NPARAM 21
 : i SM_MODES 22  // the parameters' modes, a sequence in g_sm_w
 : i SM_KEEPS 23  // the parameters that may go back still holding what they held on entry
+: i SM_CATCHES 24  // the closure parameters it runs where a panic in them is caught (`recover`): the body may stop anywhere
 : i RES_NONE 0
 : i RES_OWN 1
 : i RES_LENT 2
@@ -598,6 +599,7 @@
 : ~ i g_fc_order -1  // the functions the engine walks, in the order they were reached
 : ~ i g_fc_weak 0  // 1 while an effect that may not have happened is applied (eng_effect keeps what the place holds)
 : ~ i g_fc_loopmemo -1  // (a loop, the state it was entered in, the loops walked around it) → the state it left + 1, for this run of the function
+: ~ i g_s_catches 0
 // </engine globals>
 : i CORE_VW 7
 : i CORE_VS 1048576
@@ -10797,15 +10799,24 @@ unsafe @ sq_set_of_wv i h → i {
     ^ m
 }
 
-@ __im_slot i m i key → i {
-    : i cap ( wv_at m 0 )
-    : ~ i h * + key 1 2654435761
-    = h ^^ h >> h 15
-    : ~ i slot & h - cap 1
+// (The slot `key` is in, or the empty one it goes to. The keys are words
+// with their entropy anywhere - interned strings' addresses, places with
+// a variable in the high half - so every bit is mixed into the low ones.)
+unsafe @ __im_slot i m i key → i {
+    : *i r # *i # s g_wv
+    : *i p # *i # s . r * m 3
+    : i mask - . p 0 1
+    : ~ i h + key 1
+    = h ^^ h & >> h 33 2147483647
+    = h * h -49064778989728563
+    = h ^^ h & >> h 33 2147483647
+    = h * h -4265267296055464877
+    = h ^^ h & >> h 33 2147483647
+    : ~ i slot & h mask
     ~ T {
-        : i k ( wv_at m + 2 * slot 2 )
+        : i k . p + 2 * slot 2
         ? | == k 0 == k + key 1 { ^ slot } {}
-        = slot & + slot 1 - cap 1
+        = slot & + slot 1 mask
     }
     ^ 0
 }
@@ -13887,7 +13898,10 @@ unsafe @ eng_str i name → s { ^ # s name }
                         ? == ( wv_at caps k ) pk {
                             // the body releases its capture when it runs
                             : i place ( wv_at caps + k 1 )
+                            : i was_weak g_fc_weak
+                            = g_fc_weak 0
                             ( eng_effect st place EF_REPLACE line 0 )
+                            = g_fc_weak was_weak
                             : i cown ( st_own st ( pl_var place ) )
                             ? & | == cown OW_O == cown OW_P == ( pl_path place ) 0 {
                                 ? == cown OW_P { = g_s_consumes ( sq_add g_s_consumes ( fv_pidx ( pl_var place ) ) ) } {}
@@ -14510,12 +14524,21 @@ unsafe @ eng_str i name → s { ^ # s name }
         : i av ( wv_at avs k )
         // (one another thread runs took its captures with it, above)
         ? & & ! ( sm_has sm SM_DETACHES k ) ( sm_has sm SM_INVOKES k ) ( held_has_clo ( av_held av ) ) {
+            // (a callee that catches a panic of the closure it runs: the
+            // body may stop anywhere, so what it would have given a new
+            // value may still hold what it held)
+            : b caught ( sm_has sm SM_CATCHES k )
+            = g_fc_weak ? caught 1 0
             ( run_closures st ( av_held av ) WK_CALL_CLO + k 1 line )
+            = g_fc_weak 0
             : i al ( av_alias av )
             : ~ i a 0
             ~ < a ( sq_len al ) {
                 : i pi ( fv_pidx ( pl_var ( sq_at al a ) ) )
-                ? >= pi 0 { = g_s_invokes ( sq_add g_s_invokes pi ) } {}
+                ? >= pi 0 {
+                    = g_s_invokes ( sq_add g_s_invokes pi )
+                    ? caught { = g_s_catches ( sq_add g_s_catches pi ) } {}
+                } {}
                 = a + a 1
             }
         } {}
@@ -16556,7 +16579,7 @@ unsafe @ __sx_set s text s shape → i {
 @ sm_put i r i field i w → v { ( wv_put g_sm + * r SM_W field w ) }
 
 // A declared summary (eng_prims).
-unsafe @ eng_prim s name s modes s res s lends s rholds s effects s stores s consumes s elems s detaches s invokes s cloargs s shares → v {
+unsafe @ eng_prim s name s modes s res s lends s rholds s effects s stores s consumes s elems s detaches s invokes s cloargs s shares s catches → v {
     : i r ( sx_new )
     ( im_put g_sx_ix ( __core_in name ) + r 1 )
     ( sm_put r SM_STATE 2 )
@@ -16585,6 +16608,7 @@ unsafe @ eng_prim s name s modes s res s lends s rholds s effects s stores s con
     ( sm_put r SM_INVOKES ( __sx_set invokes `n` ) )
     ( sm_put r SM_CLOARGS ( __sx_set cloargs `nnnp` ) )
     ( sm_put r SM_SHARES ( __sx_set shares `n` ) )
+    ( sm_put r SM_CATCHES ( __sx_set catches `n` ) )
 }
 
 // The declared summary of `name` (interned), -1 none.
@@ -17032,6 +17056,14 @@ unsafe @ eng_virt_impls i vn i out → v {
         = k + k 1
     }
     ( sm_put r SM_KEEPS ( sm_keep kset ) )
+    = kset 0
+    = k 0
+    ~ < k ( wv_len impls ) {
+        : i f ( ef_find ( wv_at impls k ) )
+        ? & & >= f 0 ( ef_walked f ) ( sm_have f ) { = kset ( sq_union kset ( sm_load f SM_CATCHES ) ) } {}
+        = k + k 1
+    }
+    ( sm_put r SM_CATCHES ( sm_keep kset ) )
     ( sm_put r SM_RES res )
     ( sm_put r SM_MIXED mixed )
     ( sm_put r SM_MODES ( sm_word any SM_MODES ) )
@@ -17067,124 +17099,125 @@ unsafe @ eng_virt_impls i vn i out → v {
 //   rholds    where-in-the-result parameter path kind: the result holds it
 //   effects   parameter path effect: what the call may do to it
 //   stores    parameter where-in-it parameter path kind: what the first holds after
-//   consumes, elems, detaches, invokes, shares: parameters
+//   consumes, elems, detaches, invokes, shares, catches: parameters
+//   (catches: a closure parameter it runs where a panic in it is caught)
 //   cloargs   closure-parameter its-parameter parameter path
 // A path is its elements joined by `/`, `-` the empty one.
 @ eng_prims → v {
-    ( eng_prim `arc_clone` `in` `own` `` `- 0 - held` `` `` `` `` `` `` `` `` )
-    ( eng_prim `arc_get` `in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` )
-    ( eng_prim `arc_new` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `0` )
-    ( eng_prim `arc_strong` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `atomic_add` `in in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `atomic_get` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `atomic_new` `in` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `atomic_set` `in in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `box_free` `sink` `none` `` `` `` `` `0` `` `` `` `` `` )
-    ( eng_prim `box_get` `in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` )
-    ( eng_prim `box_new` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` )
-    ( eng_prim `box_set` `in in` `none` `` `` `0 * replace` `0 * 1 - value` `` `` `` `` `` `` )
-    ( eng_prim `chan_close` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `chan_new` `` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `chan_recv` `in` `own` `` `#T0 0 * held` `` `` `` `` `` `` `` `` )
-    ( eng_prim `chan_send` `in in` `none` `` `` `` `0 * 1 - value` `` `` `` `` `` `` )
-    ( eng_prim `chan_try_recv` `in` `own` `` `#T0 0 * held` `` `` `` `` `` `` `` `` )
-    ( eng_prim `dyn` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` )
-    ( eng_prim `hash_string` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `locked_new` `sink` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` )
-    ( eng_prim `map_get` `in in in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` )
-    ( eng_prim `map_len` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `map_new` `` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `map_set` `in in in in in` `own` `` `#T0 0 * held` `0 - realloc 0 * replace` `0 * 1 - value 0 * 2 - value` `` `` `` `` `` `` )
-    ( eng_prim `mem_dup` `in` `own` `` `- 0 - held` `` `` `` `0` `` `` `` `` )
-    ( eng_prim `nurl_eprint` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_eprint_int` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_eprintln` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_eprintln_int` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_exit` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_fiber_current` `` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_panic` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_print` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_print_int` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_println` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_println_int` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_str_cat` `in in` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_str_cat3` `in in in` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_str_cat4` `in in in in` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_str_eq` `in in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_str_find` `in in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_str_get` `in in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_str_int` `in` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_str_len` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `nurl_str_slice` `in in in` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `opt_unwrap` `in` `lent` `0 #T0 handle` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `puts` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `rc_clone` `in` `own` `` `- 0 - held` `` `` `` `` `` `` `` `` )
-    ( eng_prim `rc_free` `sink` `none` `` `` `` `` `0` `` `` `` `` `` )
-    ( eng_prim `rc_get` `in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` )
-    ( eng_prim `rc_new` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` )
-    ( eng_prim `rc_set` `in in` `none` `` `` `0 * replace` `0 * 1 - value` `` `` `` `` `` `` )
-    ( eng_prim `rc_strong` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `rc_take` `in` `own` `` `- 0 * held` `0 * replace` `` `` `0` `` `` `` `` )
-    ( eng_prim `recover` `in` `own` `` `` `` `` `` `` `` `0` `` `` )
-    ( eng_prim `rw_new` `sink` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` )
-    ( eng_prim `shared_clone` `in` `own` `` `- 0 - held` `` `` `` `` `` `` `` `` )
-    ( eng_prim `shared_new` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` )
-    ( eng_prim `slice_at` `in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` )
-    ( eng_prim `slice_byte` `in in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `slice_empty` `` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `slice_from_vec` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `slice_get` `in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` )
-    ( eng_prim `slice_len` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `slice_put` `in in in` `none` `` `` `0 * replace` `0 * 2 - value` `` `` `` `` `` `` )
-    ( eng_prim `slice_sub` `in in in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `slice_to_vec` `in` `own` `` `- 0 - held` `` `` `` `0` `` `` `` `` )
-    ( eng_prim `slice_window` `in in in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `spawn` `in` `own` `` `` `` `` `` `` `0` `` `` `` )
-    ( eng_prim `spawn_joinable` `in` `own` `` `` `` `` `` `` `0` `` `` `` )
-    ( eng_prim `spawn_owned` `in` `own` `` `` `` `` `` `` `0` `` `` `` )
-    ( eng_prim `string_adopt` `sink` `own` `` `` `` `` `0` `` `` `` `` `` )
-    ( eng_prim `string_clear` `in` `none` `` `` `0 - drop` `` `` `` `` `` `` `` )
-    ( eng_prim `string_clone` `in` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `string_concat` `in in` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `string_data` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `string_free` `sink` `none` `` `` `` `` `0` `` `` `` `` `` )
-    ( eng_prim `string_from` `in` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `string_len` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `string_new` `` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `string_push_char` `in in` `none` `` `` `0 - realloc` `` `` `` `` `` `` `` )
-    ( eng_prim `string_push_int` `in in` `none` `` `` `0 - realloc` `` `` `` `` `` `` `` )
-    ( eng_prim `string_push_str` `in in` `none` `` `` `0 - realloc` `` `` `` `` `` `` `` )
-    ( eng_prim `string_substr` `in in in` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `string_with_cap` `in` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `strlen` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `thread_join` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `thread_spawn` `in` `own` `` `` `` `` `` `` `0` `` `` `` )
-    ( eng_prim `thread_spawn_owned` `in` `own` `` `` `` `` `` `` `0` `` `` `` )
-    ( eng_prim `vec_at` `in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` )
-    ( eng_prim `vec_clear` `in` `none` `` `` `0 - drop` `` `` `` `` `` `` `` )
-    ( eng_prim `vec_clone` `in` `own` `` `- 0 - held` `` `` `` `0` `` `` `` `` )
-    ( eng_prim `vec_each` `in in` `none` `` `` `` `` `` `0` `` `1` `1 0 0 *` `` )
-    ( eng_prim `vec_extend` `in in` `none` `` `` `0 - realloc` `0 - 1 - held` `` `1` `` `` `` `` )
-    ( eng_prim `vec_extend_range` `in in in in` `none` `` `` `0 - realloc` `0 - 1 - held` `` `1` `` `` `` `` )
-    ( eng_prim `vec_free` `sink` `none` `` `` `` `` `0` `` `` `` `` `` )
-    ( eng_prim `vec_get` `in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` )
-    ( eng_prim `vec_insert` `in in in` `none` `` `` `0 - realloc` `0 * 2 - value` `` `` `` `` `` `` )
-    ( eng_prim `vec_is_empty` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `vec_len` `in` `none` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `vec_new` `` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `vec_pop` `in` `own` `` `#T0 0 * held` `0 - drop` `` `` `0` `` `` `` `` )
-    ( eng_prim `vec_push` `in in` `none` `` `` `0 - realloc` `0 * 1 - value` `` `` `` `` `` `` )
-    ( eng_prim `vec_push_word_u8` `in in in in` `none` `` `` `0 - realloc` `` `` `` `` `` `` `` )
-    ( eng_prim `vec_put` `in in in` `none` `` `` `0 * replace` `0 * 2 - value` `` `` `` `` `` `` )
-    ( eng_prim `vec_remove` `in in` `own` `` `#T0 0 * held` `0 - drop` `` `` `0` `` `` `` `` )
-    ( eng_prim `vec_reserve` `in in` `none` `` `` `0 - realloc` `` `` `` `` `` `` `` )
-    ( eng_prim `vec_reverse` `in` `none` `` `` `0 * permute` `` `` `` `` `` `` `` )
-    ( eng_prim `vec_set` `in in in` `none` `` `` `0 * replace` `0 * 2 - value` `` `` `` `` `` `` )
-    ( eng_prim `vec_shrink_to_fit` `in` `none` `` `` `0 - realloc` `` `` `` `` `` `` `` )
-    ( eng_prim `vec_swap` `in in in` `none` `` `` `0 * permute` `` `` `` `` `` `` `` )
-    ( eng_prim `vec_truncate` `in in` `none` `` `` `0 - drop` `` `` `` `` `` `` `` )
-    ( eng_prim `vec_with_cap` `in` `own` `` `` `` `` `` `` `` `` `` `` )
-    ( eng_prim `vec_zeroed` `in` `own` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `arc_clone` `in` `own` `` `- 0 - held` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `arc_get` `in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `arc_new` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `0` `` )
+    ( eng_prim `arc_strong` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `atomic_add` `in in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `atomic_get` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `atomic_new` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `atomic_set` `in in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `box_free` `sink` `none` `` `` `` `` `0` `` `` `` `` `` `` )
+    ( eng_prim `box_get` `in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `box_new` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` `` )
+    ( eng_prim `box_set` `in in` `none` `` `` `0 * replace` `0 * 1 - value` `` `` `` `` `` `` `` )
+    ( eng_prim `chan_close` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `chan_new` `` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `chan_recv` `in` `own` `` `#T0 0 * held` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `chan_send` `in in` `none` `` `` `` `0 * 1 - value` `` `` `` `` `` `` `` )
+    ( eng_prim `chan_try_recv` `in` `own` `` `#T0 0 * held` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `dyn` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` `` )
+    ( eng_prim `hash_string` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `locked_new` `sink` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` `` )
+    ( eng_prim `map_get` `in in in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `map_len` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `map_new` `` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `map_set` `in in in in in` `own` `` `#T0 0 * held` `0 - realloc 0 * replace` `0 * 1 - value 0 * 2 - value` `` `` `` `` `` `` `` )
+    ( eng_prim `mem_dup` `in` `own` `` `- 0 - held` `` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `nurl_eprint` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_eprint_int` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_eprintln` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_eprintln_int` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_exit` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_fiber_current` `` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_panic` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_print` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_print_int` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_println` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_println_int` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_str_cat` `in in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_str_cat3` `in in in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_str_cat4` `in in in in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_str_eq` `in in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_str_find` `in in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_str_get` `in in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_str_int` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_str_len` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `nurl_str_slice` `in in in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `opt_unwrap` `in` `lent` `0 #T0 handle` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `puts` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `rc_clone` `in` `own` `` `- 0 - held` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `rc_free` `sink` `none` `` `` `` `` `0` `` `` `` `` `` `` )
+    ( eng_prim `rc_get` `in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `rc_new` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` `` )
+    ( eng_prim `rc_set` `in in` `none` `` `` `0 * replace` `0 * 1 - value` `` `` `` `` `` `` `` )
+    ( eng_prim `rc_strong` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `rc_take` `in` `own` `` `- 0 * held` `0 * replace` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `recover` `in` `own` `` `` `` `` `` `` `` `0` `` `` `0` )
+    ( eng_prim `rw_new` `sink` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` `` )
+    ( eng_prim `shared_clone` `in` `own` `` `- 0 - held` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `shared_new` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` `` )
+    ( eng_prim `slice_at` `in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `slice_byte` `in in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `slice_empty` `` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `slice_from_vec` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `slice_get` `in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `slice_len` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `slice_put` `in in in` `none` `` `` `0 * replace` `0 * 2 - value` `` `` `` `` `` `` `` )
+    ( eng_prim `slice_sub` `in in in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `slice_to_vec` `in` `own` `` `- 0 - held` `` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `slice_window` `in in in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `spawn` `in` `own` `` `` `` `` `` `` `0` `` `` `` `` )
+    ( eng_prim `spawn_joinable` `in` `own` `` `` `` `` `` `` `0` `` `` `` `` )
+    ( eng_prim `spawn_owned` `in` `own` `` `` `` `` `` `` `0` `` `` `` `` )
+    ( eng_prim `string_adopt` `sink` `own` `` `` `` `` `0` `` `` `` `` `` `` )
+    ( eng_prim `string_clear` `in` `none` `` `` `0 - drop` `` `` `` `` `` `` `` `` )
+    ( eng_prim `string_clone` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `string_concat` `in in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `string_data` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `string_free` `sink` `none` `` `` `` `` `0` `` `` `` `` `` `` )
+    ( eng_prim `string_from` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `string_len` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `string_new` `` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `string_push_char` `in in` `none` `` `` `0 - realloc` `` `` `` `` `` `` `` `` )
+    ( eng_prim `string_push_int` `in in` `none` `` `` `0 - realloc` `` `` `` `` `` `` `` `` )
+    ( eng_prim `string_push_str` `in in` `none` `` `` `0 - realloc` `` `` `` `` `` `` `` `` )
+    ( eng_prim `string_substr` `in in in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `string_with_cap` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `strlen` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `thread_join` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `thread_spawn` `in` `own` `` `` `` `` `` `` `0` `` `` `` `` )
+    ( eng_prim `thread_spawn_owned` `in` `own` `` `` `` `` `` `` `0` `` `` `` `` )
+    ( eng_prim `vec_at` `in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `vec_clear` `in` `none` `` `` `0 - drop` `` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_clone` `in` `own` `` `- 0 - held` `` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `vec_each` `in in` `none` `` `` `` `` `` `0` `` `1` `1 0 0 *` `` `` )
+    ( eng_prim `vec_extend` `in in` `none` `` `` `0 - realloc` `0 - 1 - held` `` `1` `` `` `` `` `` )
+    ( eng_prim `vec_extend_range` `in in in in` `none` `` `` `0 - realloc` `0 - 1 - held` `` `1` `` `` `` `` `` )
+    ( eng_prim `vec_free` `sink` `none` `` `` `` `` `0` `` `` `` `` `` `` )
+    ( eng_prim `vec_get` `in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `vec_insert` `in in in` `none` `` `` `0 - realloc` `0 * 2 - value` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_is_empty` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_len` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_new` `` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_pop` `in` `own` `` `#T0 0 * held` `0 - drop` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `vec_push` `in in` `none` `` `` `0 - realloc` `0 * 1 - value` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_push_word_u8` `in in in in` `none` `` `` `0 - realloc` `` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_put` `in in in` `none` `` `` `0 * replace` `0 * 2 - value` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_remove` `in in` `own` `` `#T0 0 * held` `0 - drop` `` `` `0` `` `` `` `` `` )
+    ( eng_prim `vec_reserve` `in in` `none` `` `` `0 - realloc` `` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_reverse` `in` `none` `` `` `0 * permute` `` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_set` `in in in` `none` `` `` `0 * replace` `0 * 2 - value` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_shrink_to_fit` `in` `none` `` `` `0 - realloc` `` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_swap` `in in in` `none` `` `` `0 * permute` `` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_truncate` `in in` `none` `` `` `0 - drop` `` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_with_cap` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_zeroed` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
 }
 
 // ── Ownership engine: one function ───────────────────────────────────
@@ -17241,7 +17274,8 @@ unsafe @ eng_virt_impls i vn i out → v {
     = g_fc_moved_vid -1 = g_fc_moved_own 0
     = g_fc_line ( ef_at f EF_LINE )
     = g_s_effects 0 = g_s_consumes 0 = g_s_elems 0 = g_s_invokes 0 = g_s_detaches 0
-    = g_s_stale 0 = g_s_credits 0 = g_s_cloargs 0 = g_s_regions 0 = g_s_selfholds 0
+    = g_s_stale 0 = g_s_credits 0 = g_s_cloargs 0 = g_s_regions 0 = g_s_selfholds 0 = g_s_catches 0
+    = g_fc_weak 0
     // the value block temporaries: made empty and given the block's tail
     // in the same run of statements (a join's is given its value inside
     // the arms) - found once per block
@@ -17463,6 +17497,7 @@ unsafe @ eng_virt_impls i vn i out → v {
     ? ( sm_merge f SM_STALE g_s_stale ) { = changed T } {}
     ? ( sm_merge f SM_CREDITS g_s_credits ) { = changed T } {}
     ? ( sm_merge f SM_KEEPS keeps ) { = changed T } {}
+    ? ( sm_merge f SM_CATCHES g_s_catches ) { = changed T } {}
     ? changed { = g_sm_version + g_sm_version 1 } {}
     ^ changed
 }
@@ -17503,6 +17538,7 @@ unsafe @ eng_virt_impls i vn i out → v {
     ~ <= field SM_CREDITS { ? != field SM_MIXED { ( sm_put f field 0 ) } {} = field + field 1 }
     ( sm_put f SM_MIXED 0 )
     ( sm_put f SM_KEEPS 0 )
+    ( sm_put f SM_CATCHES 0 )
     ( sm_put f SM_CONSUMES ( sm_keep ( sq_set_of_wv sinks ) ) )
     ( wv_drop sinks )
 }
