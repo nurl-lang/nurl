@@ -122,11 +122,15 @@ def derive(prog, fn, ws):
     # function changes, holds what the arguments hold (formal/A2's
     # `heldOfArgs`, the answer for a callee with no walk of its own).
     only_run = set(_idx(ws, "invoke_only", n))
+    rv_answered = ws.get("rviews", "").startswith(":")
     for k in range(n):
         if scalar(pty[k]) or (k in only_run and pty[k] is not None and pty[k][0] == "closure"):
             # (a closure the function only runs is kept nowhere)
             continue
-        if not ret_scalar:
+        if not ret_scalar and not (rv_answered and pty[k] is not None and pty[k][0] in VIEW_TYPES):
+            # (an argument that is itself a view - a raw string, a slice -
+            # holds nothing but that view, and which of them the result
+            # views the walk has answered: `rviews`)
             rholds.add(((), k, (), "held"))
         if not ws.get("vkeeps", "").startswith(":"):
             # (…unless the walk answered what it leaves in its arguments)
