@@ -14818,15 +14818,26 @@ unsafe @ eng_byte s w i k → i {
                     ? & != oty ET_NONE ( et_scalar oty ) { = skip T } {}
                 } {}
                 ? ! skip {
-                    : b same & & ( op_is_place om ) == ( pl_var om ) vid | ( ep_prefix ( pl_path om ) path ) ( ep_prefix path ( pl_path om ) )
-                    : ~ b lend F
-                    : i mal ( av_alias ( wv_at avs m ) )
+                    // (the changed argument is its place and what it is a
+                    // cursor or a lend of: `( walk t cur )`, cur a `: ~`
+                    // cursor of t, grows the buffer t is)
+                    : ~ i roots ( sq_add 0 ok )
+                    = roots ( sq_union roots ( av_alias ( wv_at avs k ) ) )
+                    : ~ i mine ( av_alias ( wv_at avs m ) )
+                    ? ( op_is_place om ) { = mine ( sq_add mine om ) } {}
+                    : ~ b same F
                     : ~ i a 0
-                    ~ & ! lend < a ( sq_len mal ) {
-                        : i pa ( sq_at mal a )
-                        ? & == ( pl_var pa ) vid | ( ep_prefix ( pl_path pa ) path ) ( ep_prefix path ( pl_path pa ) ) { = lend T } {}
+                    ~ & ! same < a ( sq_len roots ) {
+                        : i ra ( sq_at roots a )
+                        : ~ i b 0
+                        ~ & ! same < b ( sq_len mine ) {
+                            : i qa ( sq_at mine b )
+                            ? & == ( pl_var qa ) ( pl_var ra ) | ( ep_prefix ( pl_path qa ) ( pl_path ra ) ) ( ep_prefix ( pl_path ra ) ( pl_path qa ) ) { = same T } {}
+                            = b + b 1
+                        }
                         = a + a 1
                     }
+                    : b lend F
                     ? | same lend {
                         ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) `: argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ` is handed over to be changed ('inout'), and argument ` ( nurl_str_int + m 1 ) ` reaches it too` ) ) )
                         = stop T

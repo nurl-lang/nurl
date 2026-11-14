@@ -1296,8 +1296,13 @@ class FnCheck:
                     if oty is not None and self.T.is_scalar(oty):
                         # (a number read out of it is a copy made before the call)
                         continue
-                same = op[0] == "v" and op[1] == vid and (prefix(op[2], path) or prefix(path, op[2]))
-                lend = any(a[0] == vid and (prefix(a[1], path) or prefix(path, a[1])) for a in avs[m].alias)
+                # (the changed argument is its place and what it is a
+                # cursor or a lend of: `( walk t cur )`, cur a `: ~` cursor
+                # of t, grows the buffer t is - agora #589)
+                roots = {(vid, tuple(path))} | {(a[0], tuple(a[1])) for a in avs[k].alias}
+                mine = ({(op[1], tuple(op[2]))} if op[0] == "v" else set()) | {(a[0], tuple(a[1])) for a in avs[m].alias}
+                same = any(r[0] == q[0] and (prefix(q[1], r[1]) or prefix(r[1], q[1])) for r in roots for q in mine)
+                lend = False
                 if same or lend:
                     self.err(line, f"{name}: argument {k + 1} is handed over to be changed (`inout`), "
                                    f"and argument {m + 1} reaches it too")
