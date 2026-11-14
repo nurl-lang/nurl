@@ -72,7 +72,8 @@ def derive(prog, fn, ws):
 
     lends, rholds, stores = set(), set(), set()
     for k, c in enumerate(ws.get("lkind", "")[:n]):
-        if scalar(pty[k]):
+        if scalar(pty[k]) or (pty[k] is not None and pty[k][0] == "closure"):
+            # (a closure has no part to lend)
             continue
         if c == "1":
             lends.add((k, (), "handle"))

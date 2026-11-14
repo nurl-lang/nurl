@@ -1882,8 +1882,8 @@ class FnCheck:
                     new = AV("O", new.loans, frozenset(), new.held)
                 if (new.own == "L" and new.loans and v.kind != "temp" and v.ty is not None
                         and v.ty[0] not in VIEW_TYPES and self.T.copyable(v.ty)
-                        and all(l in self.loans and self.fn.vars[self.loans[l][0][0]].kind == "temp"
-                                and self.loans[l][1] == "handle" for l in new.loans)):
+                        and all(l in self.loans and self.loans[l][1] == "handle" for l in new.loans)
+                        and any(self.fn.vars[self.loans[l][0][0]].kind == "temp" for l in new.loans)):
                     # a binding of what a call lent out of a temporary: the
                     # temporary ends with the statement, so the binding is
                     # handed a copy (MEMORY.md §7.6, "a lend handed to a
