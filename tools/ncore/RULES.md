@@ -63,6 +63,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A borrow handed to a consumer: a part read in place is taken out of its owner; a call's lend in a temporary is copied; a binding of a call's lend is refused | §2.5, §7.6 | `apply_call`, `take_payload` |
 | A field taken out of its owner is not read, nor the value handed on whole, until it is given a value again | §2.1 | `State.gone` |
 | A part taken out of an `inout` parameter is a change to the caller's binding, not a hand-over of it; left taken at an exit, it is gone in the caller's binding | §2.1, §2.12 | `take_payload`, summary `gone` |
+| An `inout` parameter handed to a consumer: the consumer is given a copy, the binding keeps its value, and what the caller lent out of the binding ends (the call may have given it a new value) | §2.12 (#776) | `apply_call` (`copied`) |
 | A lend of an element given back to the same element is read before the old value goes | §2.4 | `apply_call` (`stored_back`) |
 | A store replacing a place hands its old value to the binding that read that very place | §7.6 (#265) | `handover` |
 | A `: ~` cursor of a binding kept by value (pushed, stored into a literal) hands the binding on: the binding is moved through it, and the cursor reads the value where it went | §7.6 | `apply_call` stores, `rvalue` (`agg`) |

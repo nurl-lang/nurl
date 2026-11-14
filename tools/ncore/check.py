@@ -837,6 +837,16 @@ class FnCheck:
                     # (MEMORY.md §7.6)
                     copied.add(k)
                     continue
+                if (cur and cur.own == "P" and op[1] in self.pidx and self.fn.modes[self.pidx[op[1]]] == "inout"
+                        and cv.ty is not None and self.T.copyable(cv.ty) and not self.T.is_scalar(cv.ty)):
+                    # an `inout` parameter is the caller's binding: a
+                    # consumer is given a copy of its value, and the binding
+                    # keeps it (MEMORY.md §2.12). What the caller lent out
+                    # of the binding ends all the same: the call may have
+                    # given it a new value (agora #776)
+                    self.s_effects.add((self.pidx[op[1]], (), "replace"))
+                    copied.add(k)
+                    continue
                 if (cur and cur.own == "P" and op[1] in self.pidx and self.fn.modes[self.pidx[op[1]]] == "in"
                         and name == "dyn" and cv.ty is not None and self.T.copyable(cv.ty)):
                     # `dyn Trait p`, p a parameter the caller keeps: the box
