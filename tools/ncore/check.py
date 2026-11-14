@@ -965,17 +965,20 @@ class FnCheck:
         binding that owned its value on other paths already (a join) owns
         it on every path then."""
         for vid, av in list(st.vals.items()):
-            if av.own not in ("L", "O") or len(av.alias) != 1 or self.fn.vars[vid].kind == "temp":
+            if av.own not in ("L", "O") or not av.alias or self.fn.vars[vid].kind == "temp":
                 continue
-            (a,) = av.alias
-            if a != place:
+            # (the place itself, or the payload of an option or a result
+            # that is the place - agora #170: not a field, an enum's
+            # payload or an element, which go with the value replaced)
+            if any(a[0] != place[0] or not prefix(place[1], a[1])
+                   or a[1][len(place[1]):] not in ((), ("#T0",), ("#F0",)) for a in av.alias):
                 continue
             if av.own == "O" and not av.loans:
                 continue
             ty = self.fn.vars[vid].ty
             if ty is None or ty[0] in VIEW_TYPES or ty[0] == "closure":
                 continue
-            keep = {l for l in av.loans if self.loans.get(l, (None,))[0] != a}
+            keep = {l for l in av.loans if self.loans.get(l, (None,))[0] not in av.alias}
             st.vals[vid] = AV("O", keep, frozenset(), av.held)
 
     def take_payload(self, st, av, line, direct=True):
@@ -1045,8 +1048,12 @@ class FnCheck:
             byref = body is not None and i < len(body.params) and getattr(body.vars[body.params[i]], "byref", False)
             if byref and op[0] == "v":
                 # taken by pointer (a `: ~` binding the body assigns): the
-                # closure points into this frame (MEMORY.md §2.3)
+                # closure points into this frame (MEMORY.md §2.3) - at the
+                # binding, whatever value it holds: it has no handle of the
+                # value that a new one would end
                 held.add((fp, self.loan(st, (site, i, "ref"), (op[1], op[2]), "ref")))
+                held |= hroot(av.held, fp)
+                continue
             if av.own == "N":
                 # (a number, a string literal: nothing a view could outlive)
                 continue

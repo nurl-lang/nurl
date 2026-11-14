@@ -39807,7 +39807,7 @@ unsafe @ __callee_decl_name s cn → s {
     ( die lex msg )
 }
 
-@ __bck_raw_call_rules i lex i syms s call_name → v {
+inline @ __bck_raw_call_rules i lex i syms s call_name → v {
     : s base ( bck_generic_base call_name )
     ? != 0 g_raw_fns {
         ? | != 0 ( nurl_sym_len g_raw_fns call_name ) != 0 ( nurl_sym_len g_raw_fns ( __callee_decl_name call_name ) ) {
