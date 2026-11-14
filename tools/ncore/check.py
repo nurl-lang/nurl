@@ -1507,6 +1507,13 @@ class FnCheck:
             if kind == "value":
                 op = ops[k]
                 sv = self.fn.vars[op[1]] if op[0] == "v" else None
+                if (src.own == "L" and op[0] == "v" and not op[2] and op[1] in self.lit_lendcopy
+                        and st.vals.get(op[1]) is not None and st.vals[op[1]].own == "L"):
+                    # (a literal around a part of a parameter, kept by value:
+                    # the copy is made - the literal is its own, and the
+                    # bindings it names move into it, as when it is taken)
+                    src = AV("O", (), (), src.held)
+                    st.vals[op[1]] = src
                 if (src.own == "O" and op[0] == "v" and not op[2] and sv.kind != "temp"
                         and sv.ty is not None and sv.ty[0] == "s"):
                     # an owned raw string in a binding: what keeps it holds a

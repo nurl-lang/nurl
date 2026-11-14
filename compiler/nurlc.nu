@@ -15120,10 +15120,17 @@ unsafe @ eng_byte s w i k → i {
         : i kind ( tp_at t 5 4 )
         ? & & < j n < sk n ( op_is_place ( wv_at ops j ) ) {
             : i oj ( wv_at ops j )
-            : i src ( wv_at avs sk )
+            : ~ i src ( wv_at avs sk )
             : i op ( wv_at ops sk )
             : b isv ( op_is_place op )
             : b whole & isv == ( pl_path op ) 0
+            ? & & & & == kind SK_VALUE == ( av_own src ) OW_L whole ( fx_has ( pl_var op ) FX_LENDCOPY ) == ( st_own st ( pl_var op ) ) OW_L {
+                // (a literal around a part of a parameter, kept by value: the
+                // copy is made - the literal is its own, and the bindings it
+                // names move into it, as when it is taken)
+                = src ( av_make OW_O 0 0 ( av_held src ) F )
+                ( st_put st ( pl_var op ) src )
+            } {}
             : i sown ( av_own src )
             : ~ i add 0
             ? == kind SK_VALUE {
