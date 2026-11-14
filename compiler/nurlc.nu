@@ -575,7 +575,8 @@
 : ~ i g_sm_dyn 0  // the name `dyn` (interned): boxing a value as a trait object
 : i TG_SC 32
 : ~ i g_fc_dvars -1  // a `;` block (its offset) → the variables its body names + 1 (a set), for this function
-: ~ i g_fc_dbefore -1  // a `;` block (its offset) → the variables that had a value when it was armed + 1 (a set)
+: ~ i g_fc_dbefore -1  // an armed `;` block (its number) → the variables that had a value when it was armed + 1 (a set)
+: ~ i g_fc_defers -1  // the `;` blocks armed in this run, in order: each one's offset (a state names them by number)
 : ~ i g_fc_rets -1  // the function's returns: the value handed back (an AV), and the state there (a vector)
 : ~ i g_fc_exits -1  // …and its exits with no value: the state there
 : ~ i g_fc_loops -1  // the loops being run, two vectors each: the states at its `break`s, and at its `continue`s
@@ -593,6 +594,7 @@
 : ~ i g_sx_virt_at -1  // …and the version it was merged at
 : ~ i g_eng_skip 0  // why the module is not checked (interned), 0: it is
 : ~ i g_ws_syms 0
+: ~ i g_fc_order -1  // the functions the engine walks, in the order they were reached
 // </engine globals>
 : i CORE_VW 7
 : i CORE_VS 1048576
@@ -13131,7 +13133,8 @@ unsafe @ closure_owned i held → i {
             ? & & < ( ep_len ob ) ( ep_len base ) ( ep_prefix ob base ) ( ee_is_cap ( ep_at base ( ep_len ob ) ) ) { = inner T } {}
             = o + o 1
         }
-        ? ! inner {
+        // (a body the engine does not walk: nothing is known of its captures)
+        ? & ! inner ( ef_walked f ) {
             : i bl ( ep_len base )
             = k 0
             ~ < k n {
@@ -14927,13 +14930,14 @@ unsafe @ eng_str i name → s { ^ # s name }
     : i rt ( ef_at f EF_RET )
     // (a raw string a closure hands back is its caller's own: the text is
     // copied, whatever buffer the body read it out of)
-    : b ret_s ? == rt 0 F == ( et_kind ( et_of rt ) ) EK_S
+    : b walked ( ef_walked f )
+    : b ret_s ? | ! walked == rt 0 F == ( et_kind ( et_of_ptr rt ) ) EK_S
     : i n ( wv_len ops )
     : ~ i i 0
     ~ < i n {
         : i op ( wv_at ops i )
         : i fp ( ep_child 0 ( ee_cap i ) )
-        : b byref != 0 & ( efp_flags f i ) 8
+        : b byref & walked != 0 & ( efp_flags f i ) 8
         ? & byref ( op_is_place op ) {
             // taken by pointer (a `: ~` binding the body assigns): the
             // closure points into this frame - at the binding, whatever
@@ -15278,7 +15282,7 @@ unsafe @ eng_str i name → s { ^ # s name }
     : i ds ( st_defers st )
     : ~ i out 0
     : ~ i k 0
-    ~ < k ( sq_len ds ) { = out ( sq_union out ( defer_reads_of ( sq_at ds k ) ) ) = k + k 1 }
+    ~ < k ( sq_len ds ) { = out ( sq_union out ( defer_reads_of ( wv_at g_fc_defers ( sq_at ds k ) ) ) ) = k + k 1 }
     ^ out
 }
 
@@ -15290,12 +15294,13 @@ unsafe @ eng_str i name → s { ^ # s name }
     ( wv_put st ST_DEFERS 0 )
     : ~ i k - ( sq_len pending ) 1
     ~ >= k 0 {
-        : i d ( sq_at pending k )
+        : i id ( sq_at pending k )
+        : i d ( wv_at g_fc_defers id )
         // what was bound after this `;` is released at its scope's exit,
         // before the block runs (what was bound before it, after the
         // chain) - a block that reads a holder pointed at one of those
         // reads a released value
-        : i seen - ( im_get g_fc_dbefore d 1 ) 1
+        : i seen - ( im_get g_fc_dbefore id 1 ) 1
         : i reads ( defer_reads_of d )
         : ~ i vid - g_f_nv 1
         ~ >= vid 0 {
@@ -16380,12 +16385,16 @@ unsafe @ eng_str i name → s { ^ # s name }
         : i ds ( st_defers st )
         : i tmp ( wv_new )
         ( sq_to_wv ds tmp )
-        ( wv_push tmp at )
+        // (each time a `;` is met it is armed anew: a block armed in every
+        // round of a loop runs once for each)
+        : i id ( wv_len g_fc_defers )
+        ( wv_push g_fc_defers at )
+        ( wv_push tmp id )
         ( wv_put st ST_DEFERS ( sq_of_wv tmp 0 ( wv_len tmp ) ) )
         ( wv_trunc tmp 0 )
         : ~ i v 0
         ~ < v g_f_nv { ? != 0 ( st_av st v ) { ( wv_push tmp v ) } {} = v + v 1 }
-        ( im_put g_fc_dbefore at + ( sq_set_of_wv tmp ) 1 )
+        ( im_put g_fc_dbefore id + ( sq_set_of_wv tmp ) 1 )
         ( wv_drop tmp )
         ^ ( eng_next at )
     } {}
@@ -17162,8 +17171,9 @@ unsafe @ eng_virt_impls i vn i out → v {
     = g_fc_unsup 0
     ? < g_fx 0 {
         = g_fx ( wv_new ) = g_fx_nocopy ( wv_new ) = g_fx_agg ( wv_new ) = g_fx_litp ( wv_new ) = g_fx_lent ( wv_new )
-        = g_fc_rets ( wv_new ) = g_fc_exits ( wv_new ) = g_fc_loops ( wv_new )
+        = g_fc_rets ( wv_new ) = g_fc_exits ( wv_new ) = g_fc_loops ( wv_new ) = g_fc_defers ( wv_new )
     } {}
+    ( wv_trunc g_fc_defers 0 )
     ( wv_fill g_fx g_f_nv 0 ) ( wv_fill g_fx_nocopy g_f_nv 0 ) ( wv_fill g_fx_agg g_f_nv 0 )
     ( wv_fill g_fx_litp g_f_nv 0 ) ( wv_fill g_fx_lent g_f_nv 0 )
     ( wv_trunc g_fc_rets 0 ) ( wv_trunc g_fc_exits 0 ) ( wv_trunc g_fc_loops 0 )
@@ -17508,6 +17518,8 @@ unsafe @ eng_virt_impls i vn i out → v {
     ? < g_fc_walked 0 { = g_fc_walked ( wv_new ) = g_fc_trusted ( wv_new ) } {}
     ( wv_fill g_fc_walked n 0 )
     ( wv_fill g_fc_trusted n 0 )
+    ? < g_fc_order 0 { = g_fc_order ( wv_new ) } {}
+    ( wv_trunc g_fc_order 0 )
     : i todo ( wv_new )
     : i by ( wv_new )
     : ~ i f 0
@@ -17537,6 +17549,7 @@ unsafe @ eng_virt_impls i vn i out → v {
             } {}
             ? keep {
                 ( wv_put g_fc_walked fn 1 )
+                ( wv_push g_fc_order fn )
                 // (`src`: the library function the program itself called on
                 // the way here)
                 : i nsrc ? != 0 & flags 1 ? >= src 0 src fn -1
@@ -17663,32 +17676,36 @@ unsafe @ eng_virt_impls i vn i out → v {
     ( eng_prims_once )
     ( eng_select )
     ? != g_eng_skip 0 { ^ } {}
-    : i n ( ef_n )
-    : ~ i f 0
-    ~ < f n { ? != 0 ( wv_at g_fc_walked f ) { ( eng_initial_summary f ) } {} = f + f 1 }
+    // (in the order they were reached from the program's functions: a
+    // caller before the functions it calls)
+    : i n ( wv_len g_fc_order )
+    : ~ i k 0
+    ~ < k n { : i f ( wv_at g_fc_order k ) ? != 0 ( wv_at g_fc_walked f ) { ( eng_initial_summary f ) } {} = k + k 1 }
     : ~ i round 0
     : ~ b changed T
     ~ & & changed < round 40 == g_eng_skip 0 {
         = changed F
-        = f 0
-        ~ & < f n == g_eng_skip 0 {
+        = k 0
+        ~ & < k n == g_eng_skip 0 {
+            : i f ( wv_at g_fc_order k )
             ? != 0 ( wv_at g_fc_walked f ) {
                 ? ( eng_check_fn f F ) { = changed T } {}
                 ? != g_fc_unsup 0 { ( eng_skip_why_s g_fc_unsup ) } {}
             } {}
-            = f + f 1
+            = k + k 1
         }
         = round + round 1
     }
     ? != g_eng_skip 0 { ^ } {}
-    = f 0
-    ~ & < f n == g_eng_skip 0 {
+    = k 0
+    ~ & < k n == g_eng_skip 0 {
+        : i f ( wv_at g_fc_order k )
         ? & != 0 ( wv_at g_fc_walked f ) == 0 ( wv_at g_fc_trusted f ) {
             ( eng_check_fn f T )
             ? != g_fc_unsup 0 { ( eng_skip_why_s g_fc_unsup ) } {}
             ( eng_fn_final f )
         } {}
-        = f + f 1
+        = k + k 1
     }
 }
 
@@ -17727,6 +17744,54 @@ unsafe @ eng_print_types → v {
     }
 }
 
+// (`--engine-trace`) Each function the engine walked, on stderr: whether
+// it is trusted, its result, and how many entries each set of its
+// summary has.
+unsafe @ eng_dump_summaries → v {
+    : ~ i f 0
+    ~ < f ( ef_n ) {
+        ? & != 0 ( wv_at g_fc_walked f ) ( sm_have f ) {
+            : ~ s line ( nurl_str_cat3 `esum ` # s ( ef_at f EF_NAME ) ? != 0 ( wv_at g_fc_trusted f ) ` (trusted)` `` )
+            = line ( nurl_str_cat3 line ` res=` ( nurl_str_int ( sm_word f SM_RES ) ) )
+            = line ( nurl_str_cat3 line ` lends=` ( nurl_str_int ( sm_n f SM_LENDS ) ) )
+            = line ( nurl_str_cat3 line ` rholds=` ( nurl_str_int ( sm_n f SM_RHOLDS ) ) )
+            = line ( nurl_str_cat3 line ` effects=` ( nurl_str_int ( sm_n f SM_EFFECTS ) ) )
+            = line ( nurl_str_cat3 line ` stores=` ( nurl_str_int ( sm_n f SM_STORES ) ) )
+            = line ( nurl_str_cat3 line ` consumes=` ( nurl_str_int ( sm_n f SM_CONSUMES ) ) )
+            = line ( nurl_str_cat3 line ` invokes=` ( nurl_str_int ( sm_n f SM_INVOKES ) ) )
+            = line ( nurl_str_cat3 line ` rclos=` ( nurl_str_int ( sm_n f SM_RCLOS ) ) )
+            = line ( nurl_str_cat3 line ` sclos=` ( nurl_str_int ( sm_n f SM_SCLOS ) ) )
+            = line ( nurl_str_cat3 line ` mixed=` ( nurl_str_int ( sm_word f SM_MIXED ) ) )
+            ( nurl_eprintln line )
+            : ~ i k 0
+            ~ < k ( sm_n f SM_RHOLDS ) {
+                : i t ( sm_at f SM_RHOLDS k )
+                ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat4 `   rholds (` ( __eng_path_str ( tp_at t 4 0 ) ) `) ` ( nurl_str_int ( tp_at t 4 1 ) ) ) ( nurl_str_cat4 ` (` ( __eng_path_str ( tp_at t 4 2 ) ) `) ` ( nurl_str_int ( tp_at t 4 3 ) ) ) ) )
+                = k + k 1
+            }
+            = k 0
+            ~ < k ( sm_n f SM_LENDS ) {
+                : i t ( sm_at f SM_LENDS k )
+                ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 `   lends ` ( nurl_str_int ( tp_at t 3 0 ) ) ` (` ) ( nurl_str_cat3 ( __eng_path_str ( tp_at t 3 1 ) ) `) ` ( nurl_str_int ( tp_at t 3 2 ) ) ) ) )
+                = k + k 1
+            }
+            = k 0
+            ~ < k ( sm_n f SM_EFFECTS ) {
+                : i t ( sm_at f SM_EFFECTS k )
+                ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 `   effects ` ( nurl_str_int ( tp_at t 3 0 ) ) ` (` ) ( nurl_str_cat3 ( __eng_path_str ( tp_at t 3 1 ) ) `) ` ( nurl_str_int ( tp_at t 3 2 ) ) ) ) )
+                = k + k 1
+            }
+            = k 0
+            ~ < k ( sm_n f SM_STORES ) {
+                : i t ( sm_at f SM_STORES k )
+                ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat ( nurl_str_cat3 `   stores ` ( nurl_str_int ( tp_at t 5 0 ) ) ` (` ) ( nurl_str_cat3 ( __eng_path_str ( tp_at t 5 1 ) ) `) ` ( nurl_str_int ( tp_at t 5 2 ) ) ) ) ( nurl_str_cat4 ` (` ( __eng_path_str ( tp_at t 5 3 ) ) `) ` ( nurl_str_int ( tp_at t 5 4 ) ) ) ) )
+                = k + k 1
+            }
+        } {}
+        = f + f 1
+    }
+}
+
 @ eng_prims_once → v {
     ? >= g_sx_ix 0 { ^ } {}
     ( sx_new )
@@ -17747,6 +17812,7 @@ unsafe @ eng_main i syms → v {
     ( eng_print_types )
     ? == 0 ( ef_n ) { ( __core_o `eng\tverdict\truns-clean\n` ) ^ } {}
     ( eng_check_module )
+    ? != 0 g_eng_dbg { ( eng_dump_summaries ) } {}
     ? != g_eng_skip 0 {
         ( __core_o `eng\tverdict\tskip\t` ) ( __core_o # s g_eng_skip ) ( __core_o `\n` )
         ^
