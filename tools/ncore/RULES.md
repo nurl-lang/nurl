@@ -77,6 +77,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A `sink` parameter is the function's own: handed to a new holder, it moves there | §2.1 | `transfer` |
 | `dyn Trait x`, x a value the caller keeps (a parameter, a field read): the box is given a copy, where one can be made | §1 Methods | `apply_call` (`copied`) |
 | A raw string a closure hands back is copied: the caller's own, whatever buffer the body read it out of | §7.5 | `make_closure` |
+| The text of a local String, as a call handed it back (`^ ( string_data x )`, `^ ( view_of x )`), is copied at the return; a binding of that view handed back is a view of a released local | §7.6 (#663) | `transfer` |
 | A place is followed five steps deep (`PATH_MAX`): a walk down a recursive value names the place that deep and stops | - (the engine's bound) | `loan` |
 | A `?` / `??` that selects among this frame's owners moves the one it selects into an immutable binding, and out with a return | §2.2 | `stmt` (`let`), `transfer` |
 | A literal that is a statement's temporary shows its consumer the bindings it names; they move into it only where it is taken | §7.6 (h693) | `agg_lends` |

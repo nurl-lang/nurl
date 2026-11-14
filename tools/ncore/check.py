@@ -642,6 +642,13 @@ class FnCheck:
                             self.s_selfholds.add((hp[:3], self.loans[l][0][1][:3], self.loans[l][1]))
                     av = AV(av.own, av.loans, av.alias, {(hp, l) for hp, l in av.held if l not in own}, av.call)
                     self.moved_from = None
+        if (is_ret and av.own == "L" and av.call and dest_ty == ("s",) and op[0] == "v" and not op[2]
+                and self.fn.vars[op[1]].kind == "temp" and av.loans
+                and all(l in self.loans and self.fn.vars[self.loans[l][0][0]].kind == "local"
+                        and self.fn.vars[self.loans[l][0][0]].ty == ("String",) for l in av.loans)):
+            # the text of a local String, as a call handed it back: the
+            # caller is given a copy of it, its own (MEMORY.md §7.6)
+            return AV("O")
         if av.held and is_ret:
             av = self.closure_takes_over(st, av, line, op[0] == "v" and self.fn.vars[op[1]].kind == "temp")
         if (av.held and is_ret and op[0] == "v" and self.fn.vars[op[1]].kind == "temp"
@@ -1871,6 +1878,10 @@ class FnCheck:
                     # handed a copy (MEMORY.md §7.6, "a lend handed to a
                     # holder that outlives what it borrows")
                     new = AV("O", (), (), new.held)
+                if new.own == "L" and new.call and v.kind == "local" and v.ty is not None and v.ty[0] in VIEW_TYPES:
+                    # (a binding of a view a call handed back is a view like
+                    # any other: no longer "what a call lent")
+                    new = AV("L", new.loans, new.alias, new.held)
                 st.vals[vid] = self.reroot(st, new, vid)
                 self.note_fresh(vid, rv, new)
                 self.closure_moved_into(st, rv, vid)

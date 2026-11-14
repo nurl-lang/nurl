@@ -185,7 +185,6 @@ payload_stored_then_option_handed_on.nu	false-accept
 payload_through_a_join_then_its_enum_reassigned.nu	false-reject
 raw_maybe_fresh_rec_bound_returned.nu	false-accept
 raw_maybe_fresh_rec_returned.nu	false-accept
-raw_view_block_tail.nu	false-reject
 rc_get_payload_handed_to_a_sink_in_a_closure_return.nu	false-accept
 rc_payload_walked_while_a_closure_pushes_through_a_clone.nu	false-accept
 rc_set_of_a_view_into_one_share_read_through_another.nu	false-accept
