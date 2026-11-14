@@ -203,6 +203,35 @@ class Types:
                 return any(any(self.owns_handle(t, nseen) for t in tys) for _, tys in self.prog.enums[ty[1]])
         return self.owning(ty)
 
+    def view_capable(self, ty, seen=()):
+        """Can a value of this type hold a view or a borrowed handle at all
+        (a raw string, a slice, a closure, a pointer, anywhere in it)?"""
+        if ty is None:
+            return True
+        if self.is_scalar(ty):
+            return False
+        k = ty[0]
+        if k in ("s", "slice", "closure", "ptr"):
+            return True
+        if k == "String":
+            return False
+        if k in ("vec", "box", "opt"):
+            return self.view_capable(ty[1], seen)
+        if k == "res":
+            return self.view_capable(ty[1], seen) or self.view_capable(ty[2], seen)
+        if k == "named":
+            if ty[1] in seen:
+                return False
+            nseen = seen + (ty[1],)
+            he = getattr(self.prog, "handle_elem", {}).get(ty[1])
+            if he is not None:
+                return self.view_capable(he, nseen)
+            if ty[1] in self.prog.structs:
+                return any(self.view_capable(t, nseen) for t, _ in self.prog.structs[ty[1]])
+            if ty[1] in self.prog.enums:
+                return any(any(self.view_capable(t, nseen) for t in tys) for _, tys in self.prog.enums[ty[1]])
+        return True
+
     def field(self, ty, name):
         if ty and ty[0] == "named" and ty[1] in self.prog.structs:
             for i, (fty, fname) in enumerate(self.prog.structs[ty[1]]):

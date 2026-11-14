@@ -134,6 +134,11 @@ def derive(prog, fn, ws):
     invokes = {k for k in range(n) if pty[k] is not None and pty[k][0] == "closure"}
     invokes |= {k for k in _idx(ws, "hrun", n)}
 
+    if not ret_scalar and not ret_view and not T.view_capable(fn.ret):
+        # a result whose type has nowhere to keep a view or a borrowed
+        # handle holds none, whatever the raw code's provenance reached
+        lends = {l for l in lends if l[2] == "handle"}
+        rholds = set()
     if ret_scalar:
         res = "none"
     elif lends:
