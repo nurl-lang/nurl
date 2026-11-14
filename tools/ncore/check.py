@@ -933,7 +933,21 @@ class FnCheck:
                     add = hroot(self.closure_owned(moved.held), dpath)
                 elif src.own == "L":
                     ty = self.ty_of_place((op[1], op[2])) if op[0] == "v" else None
-                    if ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and self.T.copyable(ty):
+                    if (ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and not src.call
+                            and op[0] == "v" and not op[2] and self.fn.vars[op[1]].mut
+                            and self.fn.vars[op[1]].kind == "local" and src.alias
+                            and all(not a[1] and st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
+                                    and self.fn.vars[a[0]].kind == "local" for a in src.alias)
+                            and self.take_payload(st, src, line)):
+                        # a `: ~` cursor of a binding hands on the value it
+                        # copies the handle of: the binding is moved through
+                        # it (MEMORY.md §7.6), and the cursor reads the
+                        # value where it went
+                        add = hroot(src.held, dpath)
+                        went = (ops[j][1], ops[j][2] + dpath)
+                        st.vals[op[1]] = AV("L", {self.loan(st, (site, "cm", j, k), went, "handle")}, {went},
+                                            src.held)
+                    elif ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and self.T.copyable(ty):
                         # a lend stored as an owner is copied, with the views it holds
                         add = hroot(src.held, dpath)
                     elif (ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and not src.call
@@ -1201,6 +1215,33 @@ class FnCheck:
                 self.cap_loans |= av.loans
                 held |= hfrom(av.loans, fp) | hroot(av.held, fp)
         return AV("O", (), (), held)
+
+    def rehome(self, st, rv, dest):
+        """A temporary moved into a binding: what was lent out of the
+        temporary is lent out of the binding from here on."""
+        if not rv or rv[0] != "use" or rv[1][0] != "v" or rv[1][2]:
+            return
+        src = rv[1][1]
+        cur = st.vals.get(src)
+        if self.fn.vars[src].kind != "temp" or cur is None or cur.own != "M":
+            return
+        sub = {}
+        for vid, av in st.vals.items():
+            for l in av.loans | hloans(av.held):
+                if l in self.loans and self.loans[l][0][0] == src and l not in sub:
+                    place, kind = self.loans[l]
+                    nl = ("rh", l, dest)
+                    self.loans[nl] = ((dest, place[1]), kind)
+                    sub[l] = nl
+        if not sub:
+            return
+        for vid, av in list(st.vals.items()):
+            if not (av.loans & sub.keys() or hloans(av.held) & sub.keys()):
+                continue
+            st.vals[vid] = AV(av.own, {sub.get(l, l) for l in av.loans},
+                              {(dest, a[1]) if a[0] == src else a for a in av.alias},
+                              {(hp, sub.get(l, l)) for hp, l in av.held}, av.call)
+        st.dead = frozenset(st.dead) - set(sub.values())
 
     def note_fresh(self, vid, rv, new):
         """`vid` was given `new`: a value of its own that is no `None`?"""
@@ -1523,6 +1564,19 @@ class FnCheck:
                     continue
                 if cur is not None:
                     self.fresh_string_kept(st, op, cur, line, "a field")
+                if (cur is not None and cur.own == "L" and not cur.call and self.fn.vars[op[1]].mut
+                        and self.fn.vars[op[1]].kind == "local" and cur.alias and dest_vid is not None
+                        and fty is not None and fty[0] not in VIEW_TYPES and fty[0] != "closure" and self.T.owning(fty)
+                        and all(not a[1] and st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
+                                and self.fn.vars[a[0]].kind == "local" for a in cur.alias)
+                        and self.take_payload(st, cur, line)):
+                    # a `: ~` cursor of a binding hands on the value it
+                    # copies the handle of: the binding is moved into the
+                    # literal through it, and the cursor reads it there
+                    held |= hroot(cur.held, fp)
+                    went = (dest_vid, fp)
+                    st.vals[op[1]] = AV("L", {self.loan(st, (site, i, "cm"), went, "handle")}, {went}, cur.held)
+                    continue
                 self.moved_from = None
                 av = self.transfer(st, op, line, (site, i), dest_depth, fty, f"field {i + 1}", stored=True)
                 if dest_vid is not None:
@@ -1741,6 +1795,7 @@ class FnCheck:
                 st.vals[vid] = self.reroot(st, new, vid)
                 self.note_fresh(vid, rv, new)
                 self.closure_moved_into(st, rv, vid)
+                self.rehome(st, rv, vid)
             return st
         if k == "assign":
             _, (vid, path), rv, ln = s
