@@ -247,7 +247,8 @@ class Reader:
                 idx = int(p[1:])
                 if ty is not None and ty[0] == "opt":
                     if idx != 1:
-                        raise Unsupported("an option's flag as a place")
+                        # (its flag: a number)
+                        return ("c", ("i",))
                     p = "#T0"
                     ty = ty[1]
                 elif ty is not None and ty[0] == "res":
@@ -256,7 +257,7 @@ class Reader:
                     elif idx == 2:
                         p, ty = "#F0", ty[2]
                     else:
-                        raise Unsupported("a result's flag as a place")
+                        return ("c", ("i",))
                 elif ty is not None and ty[0] in ("slice", "vec"):
                     # (an element named by its position: an element)
                     p = "*"
@@ -266,9 +267,13 @@ class Reader:
             elif p == "*":
                 ty = self.T.elem(ty)
             else:
+                if ty is not None and ty[0] == "box":
+                    # (a field read through a Box is a field of what it holds)
+                    path.append("*")
+                    ty = self.T.elem(ty)
                 nty, _ = self.T.field(ty, p)
-                if nty is None and ty is not None and ty[0] == "slice" and p == "length":
-                    # a slice's length: a number
+                if nty is None and ty is not None and ty[0] in ("slice", "String", "vec") and p in ("length", "len", "cap"):
+                    # a slice's length, a handle's size: a number
                     return ("c", ("i",))
                 if nty is None and ty is not None and ty[0] not in ("named",):
                     raise Unsupported(f"field {p} of {ty[0]}")
