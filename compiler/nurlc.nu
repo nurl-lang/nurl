@@ -597,6 +597,7 @@
 : ~ i g_ws_syms 0
 : ~ i g_fc_order -1  // the functions the engine walks, in the order they were reached
 : ~ i g_fc_weak 0  // 1 while an effect that may not have happened is applied (eng_effect keeps what the place holds)
+: ~ i g_fc_loopmemo -1  // (a loop, the state it was entered in, the loops walked around it) → the state it left + 1, for this run of the function
 // </engine globals>
 : i CORE_VW 7
 : i CORE_VS 1048576
@@ -16156,9 +16157,39 @@ unsafe @ eng_str i name → s { ^ # s name }
     ( st_set_bottom st )
 }
 
+// A loop met again in the same state does what it did: a loop inside a
+// loop is run once for each state its outer rounds reach it in, not once
+// for each round (rounds repeat states; without this the work is the
+// product of the rounds of every loop around it). Only where no finding
+// is being recorded: the run that reports walks everything.
+@ loop_memo_key i st i at → i {
+    ( wv_trunc g_el_key 0 )
+    ( wv_push g_el_key at ) ( wv_push g_el_key ( sq_of_wv st 0 ( wv_len st ) ) ) ( wv_push g_el_key g_fc_walking )
+    : i key ( sq_of_wv g_el_key 0 3 )
+    ( wv_trunc g_el_key 0 )
+    ^ key
+}
+
+// T if the loop at `at` was run from `st` before: `st` becomes what it left.
+@ loop_memo_hit i st i key → b {
+    ? != 0 g_fc_final { ^ F } {}
+    : i have ( im_get g_fc_loopmemo key 0 )
+    ? == have 0 { ^ F } {}
+    ( wv_trunc st 0 )
+    ( sq_to_wv - have 1 st )
+    ^ T
+}
+
+@ loop_memo_put i st i key → v {
+    ? != 0 g_fc_final { ^ } {}
+    ( im_put g_fc_loopmemo key + ( sq_of_wv st 0 ( wv_len st ) ) 1 )
+}
+
 // A `~ cond { }` loop: run until what holds at its head stops changing,
 // then once more for the findings.
 @ stmt_loop i st i at i ln → v {
+    : i memo ( loop_memo_key st at )
+    ? ( loop_memo_hit st memo ) { ^ } {}
     : i lc ( wv_at g_ec_link at )
     : i end ( wv_at g_ec_link lc )
     : i irop ( ec + lc 1 )
@@ -16207,6 +16238,7 @@ unsafe @ eng_str i name → s { ^ # s name }
     ( st_free c ) ( st_free head )
     ( eng_free_states breaks ) ( eng_free_states conts )
     ( wv_drop breaks ) ( wv_drop conts )
+    ( loop_memo_put st memo )
 }
 
 // One round of a `~ x xs { }` loop from the state `head`: `nxt` becomes
@@ -16252,6 +16284,8 @@ unsafe @ eng_str i name → s { ^ # s name }
 @ stmt_foreach i st i at i ln → v {
     : i vid ( ec + at 1 )
     ( fx_set vid FX_FE )
+    : i memo ( loop_memo_key st at )
+    ? ( loop_memo_hit st memo ) { ^ } {}
     : i sop ( eng_op ( ec + at 2 ) )
     : i src ( eng_read st sop ln TG_FS at )
     ( check_live st ( av_loans src ) ( av_held src ) WK_LOOP 0 ln )
@@ -16287,6 +16321,7 @@ unsafe @ eng_str i name → s { ^ # s name }
     = g_fc_walking outer
     ( wv_copy st out )
     ( st_free head ) ( st_free nxt ) ( st_free out )
+    ( loop_memo_put st memo )
 }
 
 @ eng_free_states i list → v {
@@ -17199,6 +17234,8 @@ unsafe @ eng_virt_impls i vn i out → v {
     ? >= g_fc_dvars 0 { ( wv_drop g_fc_dvars ) ( wv_drop g_fc_dbefore ) } {}
     = g_fc_dvars ( im_new )
     = g_fc_dbefore ( im_new )
+    ? >= g_fc_loopmemo 0 { ( wv_drop g_fc_loopmemo ) } {}
+    = g_fc_loopmemo ( im_new )
     = g_fc_cap_loans 0 = g_fc_walking 0
     = g_fc_ret_watch -1 = g_fc_ret_changed 0 = g_fc_ret_fresh 0
     = g_fc_moved_vid -1 = g_fc_moved_own 0
