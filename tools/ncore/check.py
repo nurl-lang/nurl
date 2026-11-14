@@ -616,7 +616,7 @@ class FnCheck:
                     av = AV(av.own, av.loans, av.alias, {(hp, l) for hp, l in av.held if l not in own}, av.call)
                     self.moved_from = None
         if av.held and is_ret:
-            av = self.closure_takes_over(st, av, line)
+            av = self.closure_takes_over(st, av, line, op[0] == "v" and self.fn.vars[op[1]].kind == "temp")
         if (av.held and is_ret and op[0] == "v" and self.fn.vars[op[1]].kind == "temp"
                 and self.local_depth(AV("N", held=av.held)) > dest_depth):
             # a closure literal handed back as it is takes over what it
@@ -1157,7 +1157,7 @@ class FnCheck:
             return
         st.vals[src] = AV("L", {self.loan(st, ("clomv", src, dest), (dest, ()), "handle")}, {(dest, ())}, d.held)
 
-    def closure_takes_over(self, st, av, line):
+    def closure_takes_over(self, st, av, line, direct=False):
         """A closure that leaves the frame it was made in owns a capture it
         cannot copy: the binding it captured moves into its environment,
         and the frame no longer releases it (MEMORY.md §7.5, h240)."""
@@ -1170,12 +1170,18 @@ class FnCheck:
             if (not hp or hp[:-1] not in bases or not hp[-1].startswith("^") or hp[-1] == "^f"
                     or l not in self.cap_loans or l not in self.loans or self.loans[l][1] != "handle"):
                 continue
-            # (one its body hands on to a consumer: a capture it only reads
-            # stays the frame's, and the closure may not outlive it)
-            if int(hp[-1][1:]) not in (self.summ.get(bases[hp[:-1]]) or {}).get("consumes", ()):
-                continue
             place = self.loans[l][0]
             v = self.fn.vars[place[0]]
+            # (one its body hands on to a consumer - or, for a closure
+            # handed back as it is written, a struct with a destructor of
+            # its own that it only reads, h224. An option, a container or a
+            # raw string it only reads stays the frame's, and the closure
+            # may not outlive it: agora #463, h141.)
+            consumed = int(hp[-1][1:]) in (self.summ.get(bases[hp[:-1]]) or {}).get("consumes", ())
+            plain = (direct and v.ty is not None and v.ty[0] == "named"
+                     and v.ty[1] not in getattr(self.prog, "handle_elem", ()))
+            if not consumed and not plain:
+                continue
             cur = st.vals.get(place[0])
             if (place[1] or v.kind != "local" or cur is None or cur.own != "O" or v.ty is None
                     or v.ty[0] == "closure" or self.T.copyable(v.ty)):
