@@ -259,6 +259,8 @@ class FnCheck:
         self.cursor_slots = set()  # the `: ~ s` bindings born from a view
         self.own_slots = set()     # the `: ~ s` bindings born owning: a literal, a fresh value
         self.payload_bound = set()  # the bindings a `??` arm binds to a payload
+        self.chain_scopes = None    # while the `;` chain runs: its blocks' scopes (their bindings outlive them)
+        self.chain_kept = []
 
         def blocks(stmts):
             nones = {s[1] for s in stmts if s[0] == "let" and s[2] is None}
@@ -2340,9 +2342,18 @@ class FnCheck:
         first."""
         if st.bottom or not st.defers:
             return st
+        # (what a block binds lives on after the block, until the whole
+        # chain has run - a block armed inside a block, which runs after
+        # it, reads it: released then, newest first. MEMORY.md §7.2)
+        outer = self.chain_scopes is None
+        if outer:
+            self.chain_scopes, self.chain_kept = set(), []
         pending = st.defers
         st.defers = ()
         for d in reversed(pending):
+            for x in self.defer_bodies[d]:
+                if x[0] == "scope" and isinstance(x[1], list):
+                    self.chain_scopes.add(id(x[1]))
             # what was bound after this `;` is released at its scope's exit,
             # before the block runs (what was bound before it, after the
             # chain: MEMORY.md §7.2) - a block that reads a holder pointed
@@ -2352,7 +2363,7 @@ class FnCheck:
                 av = st.vals[vid]
                 v = self.fn.vars[vid]
                 if (vid in seen or av.own != "O" or v.kind != "local" or vid == self.ret_watch
-                        or vid in self.defer_reads_of(d)):
+                        or vid in self.defer_reads_of(d) or vid in self.chain_kept):
                     continue
                 self.effect(st, (vid, ()), "replace", v.line)
                 self.effect(st, (vid, ()), "end", v.line)
@@ -2360,6 +2371,21 @@ class FnCheck:
             st = self.run(st, self.defer_bodies[d])
             if st.bottom:
                 break
+        if not st.bottom and st.defers:
+            # (blocks the chain's own blocks armed run after them)
+            st = self.run_defers(st)
+        if outer:
+            kept, self.chain_scopes, self.chain_kept = self.chain_kept, None, []
+            if not st.bottom:
+                for vid in reversed(kept):
+                    av = st.vals.get(vid)
+                    if av is None:
+                        continue
+                    if av.own == "O":
+                        self.effect(st, (vid, ()), "replace", self.fn.vars[vid].line)
+                    self.effect(st, (vid, ()), "end", self.fn.vars[vid].line)
+                    if av.own != "M":
+                        st.vals[vid] = AV("D")
         return st
 
     def defer_reads_of(self, d):
@@ -2681,6 +2707,10 @@ class FnCheck:
         # (a temporary of a join's arm that the arm's value may view is
         # the enclosing statement's: released where its `drop` says)
         declared = [s[1] for s in stmts if s[0] == "let" and not self.fn.vars[s[1]].carried]
+        if self.chain_scopes is not None and id(stmts) in self.chain_scopes:
+            # (a `;` block's own bindings: released after the chain)
+            self.chain_kept.extend(declared)
+            return st
         # a binding a `;` block armed here may read is released after the
         # chain has run, at the function's exit: not where its scope ends
         # (MEMORY.md §7.2, "values registered before a defer")

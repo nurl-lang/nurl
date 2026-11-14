@@ -405,6 +405,9 @@
 : i HELD_MAX 8  // where in a value a loan is held is followed this deep: held deeper, it is held at the prefix (a loop storing into a value what it holds re-roots it under itself every round)
 : i HELD_WIDEN 8  // one loan is held in at most this many places of a value; held in more, it is held at their longest common prefix (held_widen)
 : ~ i g_et_ee 0  // an enum type → its one container element type + 3 (__et_enum_elem)
+: ~ i g_chain_on 0  // 1 while the `;` chain runs (run_defers): its blocks' bindings outlive the blocks
+: ~ i g_chain_scopes 0  // …the offsets their scopes start at (scope_end's `from`)
+: ~ i g_chain_kept 0  // …the bindings kept, released after the chain
 : ~ i g_hw_memo 0  // held set → its widened form + 1, for the function being read (held_widen)
 : i PV_BIAS 1048576  // a place is a word: (variable + PV_BIAS) * 2^32 + path
 : ~ i g_fv_ty -1  // the function being read: each variable's type
@@ -15879,12 +15882,18 @@ unsafe @ eng_byte s w i k → i {
 // (`st` is changed in place; it may come back with no path open.)
 @ run_defers i st → v {
     ? | ( st_bottom st ) == ( st_defers st ) 0 { ^ } {}
+    // (what a block binds lives on after the block, until the whole chain
+    // has run - a block armed inside a block, which runs after it, reads
+    // it: released then, newest first)
+    : b outer == g_chain_on 0
+    ? outer { = g_chain_on 1 = g_chain_scopes ( wv_new ) = g_chain_kept ( wv_new ) } {}
     : i pending ( st_defers st )
     ( wv_put st ST_DEFERS 0 )
     : ~ i k - ( sq_len pending ) 1
-    ~ >= k 0 {
+    ~ & >= k 0 ! ( st_bottom st ) {
         : i id ( sq_at pending k )
         : i d ( wv_at g_fc_defers id )
+        ? == ( ec + d 1 ) CO_SCOPE { ( wv_push g_chain_scopes + d 2 ) } {}
         // what was bound after this `;` is released at its scope's exit,
         // before the block runs (what was bound before it, after the
         // chain) - a block that reads a holder pointed at one of those
@@ -15894,7 +15903,7 @@ unsafe @ eng_byte s w i k → i {
         : ~ i vid - g_f_nv 1
         ~ >= vid 0 {
             : i av ( st_av st vid )
-            ? & & & & & != av 0 ! ( sq_has seen vid ) == ( av_own av ) OW_O == ( fv_kind vid ) VK_LOCAL != vid g_fc_ret_watch ! ( sq_has reads vid ) {
+            ? & & & & & & != av 0 ! ( sq_has seen vid ) == ( av_own av ) OW_O == ( fv_kind vid ) VK_LOCAL != vid g_fc_ret_watch ! ( sq_has reads vid ) ! ( __wv_has g_chain_kept vid ) {
                 ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) 0 )
                 ( eng_effect st ( pl_make vid 0 ) EF_END ( fv_line vid ) 0 )
                 ( st_put st vid ( av_make OW_D 0 0 0 F ) )
@@ -15902,9 +15911,29 @@ unsafe @ eng_byte s w i k → i {
             = vid - vid 1
         }
         ( eng_run st + d 1 ( wv_at g_ec_link d ) )
-        ? ( st_bottom st ) { ^ } {}
         = k - k 1
     }
+    // (blocks the chain's own blocks armed run after them)
+    ? & ! ( st_bottom st ) != ( st_defers st ) 0 { ( run_defers st ) } {}
+    ? outer {
+        : i kept g_chain_kept
+        = g_chain_on 0
+        ( wv_drop g_chain_scopes )
+        ? ! ( st_bottom st ) {
+            : ~ i j - ( wv_len kept ) 1
+            ~ >= j 0 {
+                : i vid ( wv_at kept j )
+                : i av ( st_av st vid )
+                ? != av 0 {
+                    ? == ( av_own av ) OW_O { ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) 0 ) } {}
+                    ( eng_effect st ( pl_make vid 0 ) EF_END ( fv_line vid ) 0 )
+                    ? != ( av_own av ) OW_M { ( st_put st vid ( av_make OW_D 0 0 0 F ) ) } {}
+                } {}
+                = j - j 1
+            }
+        } {}
+        ( wv_drop kept )
+    } {}
 }
 
 // ── Ownership engine: rvalues ────────────────────────────────────────
@@ -16320,6 +16349,13 @@ unsafe @ eng_byte s w i k → i {
         ? == ( ec at ) CO_LET { ? ! ( fv_carried ( ec + at 1 ) ) { ( wv_push declared ( ec + at 1 ) ) } {} } {}
         = at ( eng_next at )
     }
+    ? & != g_chain_on 0 ( __wv_has g_chain_scopes from ) {
+        // (a `;` block's own bindings: released after the chain)
+        : ~ i q 0
+        ~ < q ( wv_len declared ) { ( wv_push g_chain_kept ( wv_at declared q ) ) = q + q 1 }
+        ( wv_drop declared )
+        ^
+    } {}
     // a binding a `;` block armed here may read is released after the
     // chain has run, at the function's exit: not where its scope ends
     : i kept ? != ( st_defers st ) 0 ( defer_reads st ) 0
