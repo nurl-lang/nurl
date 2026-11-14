@@ -13256,6 +13256,13 @@ unsafe @ eng_byte s w i k → i {
     ^ ( ep_last q )
 }
 
+// Is element `e` a payload (`#V0`)?
+@ __eng_elem_is_pay i e → b {
+    ? | == e 0 == e EE_STAR { ^ F } {}
+    : s n ( eng_str ( ee_name e ) )
+    ^ & != 0 ( nurl_str_len n ) == ( nurl_str_get n 0 ) 35
+}
+
 // Is element `e` a struct's field (not `*`, a payload `#V0`, a capture `^3`)?
 @ eng_field_elem i e → b {
     ? | == e 0 == e EE_STAR { ^ F } {}
@@ -15294,7 +15301,10 @@ unsafe @ eng_byte s w i k → i {
                     ? & cap == ( el_kind l ) LK_HELD {
                         : i pv - -1 ( pl_var ( el_place l ) )
                         : i pty ? < ( fv_pidx pv ) 0 ET_NONE ( fv_ty pv )
-                        ? | == pty ET_NONE == ( et_kind pty ) EK_CLOSURE { = cap F } {
+                        // (a container whose elements are views - a `( Vec s )`:
+                        // what a derived summary says a value made from an
+                        // argument holds is no view of it otherwise)
+                        ? | == pty ET_NONE ! ( et_holds_views pty ) { = cap F } {
                             : ~ i h2 0
                             ~ & cap < h2 ( sq_len held ) {
                                 : i he2 ( sq_at held h2 )
@@ -15353,8 +15363,25 @@ unsafe @ eng_byte s w i k → i {
     = k 0
     ~ < k n {
         : i av ( wv_at avs k )
+        ? & & ! ( sq_has dets k ) ( sm_has sm SM_INVOKES k ) ( op_is_place ( wv_at ops k ) ) {
+            // (a parameter - or a part of one - handed to a callee that runs
+            // what it holds: this function runs it)
+            : i ip ( fv_pidx ( pl_var ( wv_at ops k ) ) )
+            ? >= ip 0 { = g_s_invokes ( sq_add g_s_invokes ip ) } {}
+            : i ial ( av_alias av )
+            : ~ i ia 0
+            ~ < ia ( sq_len ial ) {
+                : i ip2 ( fv_pidx ( pl_var ( sq_at ial ia ) ) )
+                ? >= ip2 0 { = g_s_invokes ( sq_add g_s_invokes ip2 ) } {}
+                = ia + ia 1
+            }
+        } {}
         // (one another thread runs took its captures with it, above)
         ? & & ! ( sq_has dets k ) ( sm_has sm SM_INVOKES k ) ( held_has_clo ( av_held av ) ) {
+            // (the call's other arguments are frozen for it: one that reaches
+            // a shared payload the closure changes - another handle on the Rc
+            // it replaces - is changed under the callee)
+            ( frozen_by_closure_regions ops avs k ( av_held av ) name line )
             // (a callee that catches a panic of the closure it runs: the
             // body may stop anywhere, so what it would have given a new
             // value may still hold what it held)
@@ -16000,6 +16027,73 @@ unsafe @ eng_byte s w i k → i {
 
 // A call through a closure value (`ops`: the closure, then its
 // arguments): its arguments are lent, its result is its caller's own.
+// The shared payloads the closures in `held` change when they run: their
+// summaries' regions, and a change under `*` of a capture that is a shared
+// handle. An argument of the call (other than `k`, the one holding them)
+// that reaches one is changed under the callee: refused.
+@ frozen_by_closure_regions i ops i avs i k i held i name i line → v {
+    : i regs ( wv_new )
+    : i cl ( wv_new )
+    ( closures_in held cl )
+    : ~ i c 0
+    ~ < c ( wv_len cl ) {
+        : i base ( wv_at cl c )
+        : i f ( wv_at cl + c 1 )
+        ? ( sm_have f ) {
+            : ~ i e 0
+            ~ < e ( sm_n f SM_REGIONS ) {
+                : i rg ( sm_at f SM_REGIONS e )
+                : i eff ( tp_at rg 3 2 )
+                ? | | | == eff EF_REPLACE == eff EF_REALLOC == eff EF_DROP == eff EF_TAKE { ( wv_push regs ( tp_at rg 3 0 ) ) } {}
+                = e + e 1
+            }
+            : i ncap ( ef_ncap f )
+            = e 0
+            ~ < e ( sm_n f SM_EFFECTS ) {
+                : i t ( sm_at f SM_EFFECTS e )
+                : i kc ( tp_at t 3 0 )
+                : i eff ( tp_at t 3 2 )
+                ? & & < kc ncap == ( ep_first ( tp_at t 3 1 ) ) EE_STAR | | | == eff EF_REPLACE == eff EF_REALLOC == eff EF_DROP == eff EF_TAKE {
+                    : i cp ( ep_child base ( ee_cap kc ) )
+                    : ~ i h 0
+                    ~ < h ( sq_len held ) {
+                        : i he ( sq_at held h )
+                        : i l ( he_loan he )
+                        ? & == ( he_path he ) cp ( el_is_loan l ) {
+                            : i cty ( eng_ty_of ( el_place l ) )
+                            ? & & != cty ET_NONE == ( et_kind cty ) EK_NAMED ( et_flag cty ETF_SHARED ) { ( wv_push regs cty ) } {}
+                        } {}
+                        = h + h 1
+                    }
+                } {}
+                = e + e 1
+            }
+        } {}
+        = c + c 2
+    }
+    ? != 0 ( wv_len regs ) {
+        : i n ( wv_len avs )
+        : ~ b hit F
+        : ~ i i 0
+        ~ & ! hit < i n {
+            : i op ( wv_at ops i )
+            ? & != i k ( op_is_place op ) {
+                : i ity ( eng_ty_of op )
+                ? != ity ET_NONE {
+                    : i out ( wv_new )
+                    ( et_shared_in ity out )
+                    : ~ i q 0
+                    ~ & ! hit < q ( wv_len out ) { ? ( __wv_has regs ( wv_at out q ) ) { = hit T } {} = q + q 1 }
+                    ( wv_drop out )
+                    ? hit { ( eng_err line ( nurl_str_cat4 ( eng_str name ) `: argument ` ( nurl_str_int + i 1 ) ( nurl_str_cat3 ` is reached by this call through the closure in argument ` ( nurl_str_int + k 1 ) `, which changes what it shares` ) ) ) } {}
+                } {}
+            } {}
+            = i + i 1
+        }
+    } {}
+    ( wv_drop regs ) ( wv_drop cl )
+}
+
 // What a call of a closure no summary speaks for may hand back of what the
 // closure `cav` holds - the views its captures hold - added to `out`.
 @ clo_result_views i st i cav i out → i {
@@ -16800,7 +16894,7 @@ unsafe @ eng_byte s w i k → i {
         // (a number: a copy, nothing to follow)
         ? & != dest_ty ET_NONE ( et_scalar dest_ty ) { ^ g_av_none } {}
         : i tag ( ee_pay variant idx )
-        : i sub ( held_sub ( av_held av ) ( ep_child 0 tag ) )
+        : ~ i sub ( held_sub ( av_held av ) ( ep_child 0 tag ) )
         : b whole & ( op_is_place op ) == ( pl_path op ) 0
         : i pty ? whole ( agg_field_ty ( fv_ty ( pl_var op ) ) variant idx ) ET_NONE
         ? & & whole == ( fv_kind ( pl_var op ) ) VK_TEMP == ( av_own av ) OW_O {
@@ -16834,6 +16928,19 @@ unsafe @ eng_byte s w i k → i {
             // `?Json` around an element `Json`.)
             ? & & & & ! wrapped != aty ET_NONE != pty ET_NONE == aty pty != aty ( fv_ty ( pl_var op ) ) { = wrapped T } {}
             : i pl ? wrapped pa ( pl_make ( pl_var pa ) ( ep_take ( ep_child ( pl_path pa ) tag ) PATH_MAX ) )
+            ? wrapped {
+                // (…and what the element holds is what the payload holds:
+                // the lend put it at the option's own root - a closure read
+                // out of a Vec of closures)
+                : i ah ( av_held av )
+                : ~ i w 0
+                ~ < w ( sq_len ah ) {
+                    : i he ( sq_at ah w )
+                    : i e0 ( ep_first ( he_path he ) )
+                    ? | == e0 0 ! ( __eng_elem_is_pay e0 ) { = sub ( sq_add sub he ) } {}
+                    = w + w 1
+                }
+            } {}
             = alias ( sq_add alias pl )
             ( el_key3 TG_PL at pl )
             = loans ( sq_add loans ( eng_loan st pl LK_HANDLE ) )
@@ -19249,8 +19356,16 @@ unsafe @ eng_byte s w i k → i {
         = k + k 1
     }
     = k 0
+    // (…and an ELEMENT of one, with or without a copy: a loop's element, a
+    // payload of what `vec_get` lent - a field is copied back for the
+    // struct's own destructor, an element is not)
+    : ~ b elent F
     ~ < k ( sm_n f SM_LENDS ) {
-        ? ( sm_has f SM_CONSUMES ( tp_at ( sm_at f SM_LENDS k ) 3 0 ) ) { = lent T } {}
+        : i lt ( sm_at f SM_LENDS k )
+        ? ( sm_has f SM_CONSUMES ( tp_at lt 3 0 ) ) {
+            = lent T
+            ? & != ( sm_mode f ( tp_at lt 3 0 ) ) PM_SINK ( ep_has_star ( tp_at lt 3 1 ) ) { = elent T } {}
+        } {}
         = k + k 1
     }
     ? kept {
@@ -19259,7 +19374,7 @@ unsafe @ eng_byte s w i k → i {
         // the lend was asked for
         ( eng_err_fn f line `hands back what a call lends out of a parameter it takes over on another path` )
     } {
-        ? & & lent != ret ET_NONE ! ( et_copyable ret ) {
+        ? & & lent != ret ET_NONE | ! ( et_copyable ret ) elent {
             // the caller cannot both keep an argument the result borrows
             // and have handed it over
             ( eng_err_fn f line `hands back what it may lend out of a parameter it takes over on another path` )

@@ -1566,11 +1566,50 @@ class FnCheck:
         inv = sm.get("invokes")
         gone = dets
         for k, av in enumerate(avs):
+            if k not in gone and inv is not None and k in inv and k < len(ops) and ops[k][0] == "v":
+                # (a parameter - or a part of one - handed to a callee that
+                # runs what it holds: this function runs it, agora #736)
+                roots = {a[0] for a in av.alias} | {ops[k][1]}
+                for r in roots:
+                    if r in self.pidx:
+                        self.s_invokes.add(self.pidx[r])
             # (one another thread runs took its captures with it, above)
             if k not in gone and (inv is None or k in inv) and self.closures_in(av):
                 # (a callee that catches a panic of the closure it runs:
                 # `catches`)
                 caught = k in sm.get("catches", ())
+                # (the call's other arguments are frozen for it: one that
+                # reaches a shared payload the closure changes - another
+                # handle on the Rc it replaces - is changed under the
+                # callee, agora #736)
+                regs = set()
+                shared_tys = getattr(self.prog, "shared", ())
+                for cbase, fname in self.closures_in(av):
+                    csm = self.summ.get(fname)
+                    cfn = self.prog.fns.get(fname)
+                    if csm is None or cfn is None:
+                        continue
+                    regs |= {ty for (ty, _, eff) in csm.get("regions", ())
+                             if eff in ("replace", "realloc", "drop", "take")}
+                    # (…and a change under `*` of a capture that is a shared
+                    # handle: inside the one payload every handle reaches)
+                    for (kc, path, eff) in csm["effects"]:
+                        if (kc >= getattr(cfn, "ncap", 0) or not path or path[0] != "*"
+                                or eff not in ("replace", "realloc", "drop", "take")):
+                            continue
+                        for hp, l in av.held:
+                            if hp == cbase + (f"^{kc}",) and l in self.loans:
+                                cty = self.ty_of_place(self.loans[l][0])
+                                if cty is not None and cty[0] == "named" and cty[1] in shared_tys:
+                                    regs.add(cty[1])
+                for i in range(len(avs)):
+                    if not regs or i == k or ops[i][0] != "v":
+                        continue
+                    ity = self.ty_of_place((ops[i][1], ops[i][2]))
+                    if ity is not None and self.T.shared_in(ity) & regs:
+                        self.err(line, f"{name}: argument {i + 1} is reached by this call through the "
+                                       f"closure in argument {k + 1}, which changes what it shares")
+                        break
                 self.run_closures(st, av, line, f"{name}: the closure in argument {k + 1}", weak=caught)
                 for a in av.alias:
                     if a[0] in self.pidx:
@@ -2634,7 +2673,13 @@ class FnCheck:
         set of views into its caller's storage - not what a closure
         parameter's captures hold?"""
         ty = self.fn.vars[self.fn.params[self.hvid[h]]].ty
-        return ty is not None and ty[0] != "closure"
+        if ty is None or ty[0] == "closure":
+            return False
+        # (a container whose elements are views - a `( Vec s )`: what a
+        # derived summary says a value made from an argument holds is no
+        # view of it otherwise)
+        e = self.T.elem(ty)
+        return e is not None and (e[0] in VIEW_TYPES or (not self.T.is_scalar(e) and not self.T.owning(e)))
 
     def crosses_with_owner(self, held, hp, h):
         """Does the capture that holds, at `hp`, what parameter `h` stands
@@ -2908,6 +2953,11 @@ class FnCheck:
                         and aty != self.fn.vars[op[1]].ty):
                     wrapped = True
                 pl = a if wrapped else (a[0], (a[1] + (tag,))[:PATH_MAX])
+                if wrapped:
+                    # (…and what the element holds is what the payload
+                    # holds: the lend put it at the option's own root - a
+                    # closure read out of a Vec of closures, agora #736)
+                    sub = sub | {(hp, l) for hp, l in av.held if not (hp and hp[0].startswith("#"))}
                 alias.add(pl)
                 loans.add(self.loan(st, ("pl", id(rv), pl), pl, "handle"))
             # (the payload of what a function of the program lent is that
@@ -3707,7 +3757,12 @@ def check_program(prog, max_rounds=40):
             # another path: the parameter is released there, and no copy of
             # the lend was asked for (MEMORY.md §7.6)
             errors.append((name, fn.line, "hands back what a call lends out of a parameter it takes over on another path"))
-        elif lent and fn.ret is not None and not T.copyable(fn.ret):
+        # (…and an ELEMENT of one, with or without a copy: a loop's element,
+        # a payload of what `vec_get` lent - a field is copied back for the
+        # struct's own destructor, an element is not; agora #765, #677)
+        elif lent and fn.ret is not None and (not T.copyable(fn.ret) or any(
+                k in sm["consumes"] and fn.modes[k] != "sink" and "*" in path
+                for (k, path, kind) in sm["lends"])):
             # the caller cannot both keep an argument the result borrows
             # and have handed it over
             errors.append((name, fn.line, "hands back what it may lend out of a parameter it takes over on another path"))
