@@ -15597,6 +15597,30 @@ unsafe @ eng_byte s w i k → i {
         } {
             : i av ( eng_read st op line TG_ARG + * site 256 i )
             ? != ( av_own av ) OW_N {
+                // the body leaves an argument or a capture holding what this
+                // capture holds, and nothing where it runs follows that: a
+                // capture that holds a view or a lend is refused here (one
+                // that holds none - a fresh buffer - gives none)
+                ? have {
+                    : ~ b hs F
+                    : ~ i e 0
+                    ~ & ! hs < e ( sm_n f SM_STORES ) {
+                        : i t ( sm_at f SM_STORES e )
+                        ? & == ( tp_at t 5 4 ) LK_HELD == ( tp_at t 5 2 ) i { = hs T } {}
+                        = e + e 1
+                    }
+                    ? hs {
+                        : i ls ( sq_union ( held_loans ( av_held av ) ) ? == ( av_own av ) OW_L ( av_loans av ) 0 )
+                        : ~ b bad F
+                        = e 0
+                        ~ & ! bad < e ( sq_len ls ) {
+                            : i l ( sq_at ls e )
+                            ? & ( el_is_loan l ) != ( el_kind l ) LK_SHARE { = bad T } {}
+                            = e + e 1
+                        }
+                        ? bad { ( eng_err line `a closure leaves a capture or an argument holding a view` ) } {}
+                    } {}
+                } {}
                 // the captures the body hands back a view of
                 ? & have ! ret_s {
                     : ~ b vback F
@@ -18780,7 +18804,11 @@ unsafe @ eng_byte s w i k → i {
             : b copied_in & & & & == kind LK_HANDLE >= j ncap == ( tp_at t 5 3 ) 0 != jft ET_NONE & ! ( et_is_view jft ) ( et_copyable jft )
             // (…nor where the place it is stored in has no room for one)
             : b roomless & & == kind LK_HELD < j np ! ( et_view_capable ( eng_ty_at jt ( tp_at t 5 1 ) ) )
-            ? & & ! copied_in ! roomless ! & & == kind LK_HELD < sk np ! ( et_view_capable ( efp_ty f sk ) ) {
+            // (…nor what a capture taken by value holds: that is known where
+            // the closure is made, and judged there, by what the captured
+            // value holds then)
+            : b cap_held & & == kind LK_HELD < sk ncap == 0 & ( efp_flags f sk ) 8
+            ? & & & ! copied_in ! roomless ! cap_held ! & & == kind LK_HELD < sk np ! ( et_view_capable ( efp_ty f sk ) ) {
                 ? | | < j ncap < sk ncap == ( sm_mode f j ) PM_INOUT { = real T } {}
             } {}
             = k + k 1
