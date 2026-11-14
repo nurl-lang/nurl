@@ -648,34 +648,87 @@ async function handleSymbolsBackfill(req: Request, env: Env): Promise<Response> 
 // ── GitHub OAuth (token bootstrap) ────────────────────────────────────
 
 const PAGE_STYLE =
-  `body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:48rem;` +
-    `margin:3rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a}` +
-  `a{color:#0b62d6}` +
-  `h1{margin-bottom:.2em}` +
-  `code{background:#f4f4f4;padding:.1em .35em;border-radius:4px;font-size:.92em}` +
-  `pre{background:#f4f4f4;padding:1rem;border-radius:6px;overflow:auto}` +
+  `:root{--fg:#1a1a1a;--muted:#667085;--faint:#98a2b3;--bg:#fff;--panel:#f8fafc;` +
+    `--line:#e4e7ec;--code:#f2f4f7;--link:#0b62d6;--accent:#14b8a6;--bad:#c0262d}` +
+  `@media (prefers-color-scheme:dark){:root{--fg:#e6e8eb;--muted:#a0a8b5;--faint:#7c8594;` +
+    `--bg:#14151c;--panel:#1b1d26;--line:#2b2e3a;--code:#232633;--link:#6aa8ff;--bad:#ff6b6b}}` +
+  `*{box-sizing:border-box}` +
+  `html{background:var(--bg)}` +
+  `body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:72rem;` +
+    `margin:0 auto;padding:1.5rem 1.25rem 4rem;line-height:1.6;color:var(--fg);background:var(--bg)}` +
+  `a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}` +
+  `h1{margin:.2em 0 .15em;font-size:2rem;line-height:1.2;word-break:break-word}` +
+  `h2.side{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:1.6rem 0 .5rem}` +
+  `code{background:var(--code);padding:.1em .35em;border-radius:4px;font-size:.9em}` +
+  `pre{background:var(--code);padding:1rem;border-radius:8px;overflow:auto;font-size:.9em}` +
   `pre code{background:transparent;padding:0}` +
-  `.readme{border-top:1px solid #e5e5e5;margin-top:2.5rem;padding-top:.5rem}` +
+  `.muted{color:var(--muted)}.faint{color:var(--faint)}.bad{color:var(--bad)}` +
+  `.crumbs{font-size:.9rem;color:var(--muted);margin-bottom:.4rem}` +
+  `.crumbs a{color:var(--muted)}.crumbs a:hover{color:var(--link)}` +
+  `.ver{display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8em;` +
+    `background:var(--code);border:1px solid var(--line);border-radius:999px;padding:.05em .6em;vertical-align:middle}` +
+  `h1 .ver{font-size:.42em;font-weight:500;position:relative;top:-.25em}` +
+  `.lead{font-size:1.08rem;color:var(--muted);margin:.2rem 0 0}` +
+  `.readme{margin-top:1rem}` +
   `.readme img{max-width:100%}` +
-  `.readme table{border-collapse:collapse;margin:1rem 0}` +
-  `.readme th,.readme td{border:1px solid #ddd;padding:.4rem .7rem;text-align:left}` +
-  `.readme th{background:#f4f4f4}` +
-  `.readme blockquote{border-left:3px solid #ddd;margin:1em 0;padding:.2rem 1rem;color:#555}` +
-  `.readme h1,.readme h2{border-bottom:1px solid #eee;padding-bottom:.2em}` +
-  `.readme hr{border:0;border-top:1px solid #e5e5e5;margin:2rem 0}` +
+  `.readme table{border-collapse:collapse;margin:1rem 0;display:block;overflow:auto}` +
+  `.readme th,.readme td{border:1px solid var(--line);padding:.4rem .7rem;text-align:left}` +
+  `.readme th{background:var(--panel)}` +
+  `.readme blockquote{border-left:3px solid var(--line);margin:1em 0;padding:.2rem 1rem;color:var(--muted)}` +
+  `.readme h1,.readme h2{border-bottom:1px solid var(--line);padding-bottom:.2em}` +
+  `.readme hr{border:0;border-top:1px solid var(--line);margin:2rem 0}` +
   `.site-head{display:flex;align-items:center;gap:.6rem;` +
-    `margin:-1rem 0 1.8rem;padding-bottom:1rem;border-bottom:1px solid #e5e5e5}` +
-  `.site-head .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#1a1a1a}` +
+    `margin:0 0 1.8rem;padding-bottom:1rem;border-bottom:1px solid var(--line)}` +
+  `.site-head .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:var(--fg)}` +
   `.site-head .badge{display:inline-flex;border-radius:8px;overflow:hidden;` +
     `box-shadow:0 2px 10px rgba(20,184,166,.25)}` +
   `.site-head .badge img{display:block}` +
   `.site-head .wm{font-size:1.1rem;font-weight:600;letter-spacing:.01em}` +
-  `.site-head .wm b{color:#0b62d6}` +
+  `.site-head .wm b{color:var(--accent)}` +
   `.site-head .spacer{flex:1}` +
-  `.site-head .home{font-size:.85rem;color:#666;font-weight:400;text-decoration:none;transition:color .15s}` +
-  `.site-head .home:hover{color:#0b62d6}` +
+  `.site-head nav{display:flex;gap:1.1rem;font-size:.88rem}` +
+  `.site-head nav a{color:var(--muted);white-space:nowrap}.site-head nav a:hover{color:var(--link)}` +
+  `.site-head .wm{white-space:nowrap}` +
+  `@media (max-width:30rem){.site-head nav{gap:.7rem;font-size:.8rem}.site-head nav a.ext{display:none}}` +
+  `.search{display:flex;gap:.5rem;margin:1rem 0 .6rem}` +
+  `.search input{flex:1;font:inherit;padding:.6rem .85rem;border:1px solid var(--line);border-radius:8px;` +
+    `background:var(--bg);color:var(--fg)}` +
+  `.search input:focus{outline:2px solid var(--accent);outline-offset:-1px}` +
+  `button,.btn{font:inherit;font-size:.9rem;padding:.55rem 1rem;border-radius:8px;border:1px solid var(--line);` +
+    `background:var(--panel);color:var(--fg);cursor:pointer}` +
+  `button:hover{border-color:var(--accent)}` +
+  `.pkgs{list-style:none;padding:0;margin:1rem 0;display:grid;gap:.75rem;` +
+    `grid-template-columns:repeat(auto-fill,minmax(20rem,1fr))}` +
+  `.pkgs li{border:1px solid var(--line);border-radius:10px;padding:.85rem 1rem;background:var(--panel);` +
+    `transition:border-color .15s}` +
+  `.pkgs li:hover{border-color:var(--accent)}` +
+  `.pkgs .top{display:flex;align-items:baseline;gap:.5rem;justify-content:space-between}` +
+  `.pkgs .name{font-weight:600;font-size:1.05rem}` +
+  `.pkgs p{margin:.3rem 0 0;font-size:.92rem;color:var(--muted)}` +
+  `.layout{display:grid;grid-template-columns:minmax(0,1fr) 19rem;gap:2.5rem;margin-top:1.5rem}` +
+  `@media (max-width:52rem){.layout{grid-template-columns:minmax(0,1fr)}.layout aside{order:-1}}` +
+  `aside .install{position:relative}` +
+  `aside .install pre{margin:0;padding:.75rem 2.6rem .75rem .8rem;font-size:.82em}` +
+  `aside .copy{position:absolute;top:.35rem;right:.35rem;padding:.2rem .5rem;font-size:.75rem}` +
+  `dl.meta{display:grid;grid-template-columns:auto 1fr;gap:.25rem .9rem;margin:0;font-size:.9rem}` +
+  `dl.meta dt{color:var(--muted)}dl.meta dd{margin:0;word-break:break-word}` +
+  `ul.plain{list-style:none;padding:0;margin:0;font-size:.92rem}ul.plain li{padding:.15rem 0}` +
+  `details.versions{border:1px solid var(--line);border-radius:10px;background:var(--panel)}` +
+  `details.versions summary{cursor:pointer;padding:.6rem .85rem;font-size:.92rem;list-style:none;` +
+    `display:flex;justify-content:space-between;align-items:center}` +
+  `details.versions summary::-webkit-details-marker{display:none}` +
+  `details.versions summary::after{content:"▸";color:var(--muted);transition:transform .15s}` +
+  `details.versions[open] summary::after{transform:rotate(90deg)}` +
+  `details.versions ol{list-style:none;margin:0;padding:0 .85rem .5rem;max-height:24rem;overflow:auto;` +
+    `border-top:1px solid var(--line)}` +
+  `details.versions li{display:flex;flex-wrap:wrap;gap:.1rem .6rem;align-items:baseline;` +
+    `padding:.4rem 0;border-bottom:1px solid var(--line);font-size:.85rem}` +
+  `details.versions li:last-child{border-bottom:0}` +
+  `details.versions .v{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:600}` +
+  `details.versions .links{margin-left:auto}` +
   `.files{border-collapse:collapse;width:100%}` +
-  `.files td{border-bottom:1px solid #eee;padding:.25rem .5rem}`;
+  `.files td{border-bottom:1px solid var(--line);padding:.3rem .5rem}` +
+  `footer{margin-top:4rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.85rem;color:var(--muted)}`;
 
 // Same icon as nurlapi/static/favicon.svg — served directly at /favicon.svg
 // so the registry header badge and tab icon work standalone without external
@@ -689,23 +742,59 @@ const FAVICON_SVG =
 
 // Branded header injected on every registry page.
 const SITE_HEAD =
-  `<div class="site-head">` +
+  `<header class="site-head">` +
     `<a class="brand" href="/">` +
       `<span class="badge"><img src="/favicon.svg" width="32" height="32" alt="NURL"></span>` +
       `<span class="wm">NURL <b>registry</b></span>` +
     `</a>` +
     `<span class="spacer"></span>` +
-    `<a class="home" href="https://nurl-lang.org/" target="_blank" rel="noopener">nurl-lang.org →</a>` +
-  `</div>`;
+    `<nav><a href="/">Packages</a><a href="/login">Publish</a>` +
+      `<a class=ext href="https://nurl-lang.org/">nurl-lang.org</a></nav>` +
+  `</header>`;
 
-function htmlPage(title: string, bodyHtml: string, status = 200): Response {
+const SITE_FOOT =
+  `<footer>NURL package registry · <a href="/sitemap.xml">sitemap</a> · ` +
+    `<a href="/api/v1/catalog">catalog JSON</a> · <a href="https://nurl-lang.org/">nurl-lang.org</a></footer>`;
+
+// The public origin every absolute URL (canonical, og:url, sitemap) is
+// built on — REGISTRY_URL without its trailing slash.
+function siteOrigin(env: Env): string {
+  return (env.REGISTRY_URL || "https://reg.nurl-lang.org").replace(/\/+$/, "");
+}
+
+interface PageMeta {
+  description?: string;   // <meta name=description> + og:description
+  canonical?: string;     // absolute URL
+  jsonLd?: unknown;       // structured data (schema.org)
+}
+
+// Every registry page is open to every crawler: robots.txt allows all,
+// and each page says index,follow in both the meta tag and the header.
+function htmlPage(title: string, bodyHtml: string, status = 200, meta: PageMeta = {}): Response {
+  const desc = meta.description ? esc(meta.description.replace(/\s+/g, " ").trim().slice(0, 300)) : "";
+  const head =
+    `<!doctype html><html lang=en><head><meta charset=utf-8><title>${esc(title)}</title>` +
+    `<meta name=viewport content="width=device-width,initial-scale=1">` +
+    `<meta name=robots content="index,follow,max-image-preview:large,max-snippet:-1">` +
+    (desc ? `<meta name=description content="${desc}">` : "") +
+    (meta.canonical ? `<link rel=canonical href="${esc(meta.canonical)}">` : "") +
+    `<meta property="og:type" content="website"><meta property="og:site_name" content="NURL registry">` +
+    `<meta property="og:title" content="${esc(title)}">` +
+    (desc ? `<meta property="og:description" content="${desc}">` : "") +
+    (meta.canonical ? `<meta property="og:url" content="${esc(meta.canonical)}">` : "") +
+    `<meta name="twitter:card" content="summary">` +
+    `<meta name=color-scheme content="light dark">` +
+    `<link rel="icon" type="image/svg+xml" href="/favicon.svg">` +
+    (meta.jsonLd
+      ? `<script type="application/ld+json">${JSON.stringify(meta.jsonLd).replace(/</g, "\\u003c")}</script>`
+      : "") +
+    `<style>${PAGE_STYLE}</style></head>`;
   return new Response(
-    `<!doctype html><meta charset=utf-8><title>${title}</title>` +
-      `<meta name=viewport content="width=device-width,initial-scale=1">` +
-      `<link rel="icon" type="image/svg+xml" href="/favicon.svg">` +
-      `<style>${PAGE_STYLE}</style>` +
-      `<body>${SITE_HEAD}${bodyHtml}</body>`,
-    { status, headers: { "content-type": "text/html; charset=utf-8" } },
+    `${head}<body>${SITE_HEAD}<main>${bodyHtml}</main>${SITE_FOOT}</body></html>`,
+    {
+      status,
+      headers: { "content-type": "text/html; charset=utf-8", "x-robots-tag": "all" },
+    },
   );
 }
 
@@ -740,25 +829,43 @@ async function handleCatalog(url: URL, env: Env): Promise<Response> {
   ).bind(q).all<CatalogRow>();
   const items = rows.results ?? [];
   const list = items.length
-    ? `<ul>${items.map((p) =>
-        `<li><a href="/packages/${esc(p.name)}">${esc(p.name)}</a> ` +
-        (p.latest ? `<code>${esc(p.latest)}</code>` : `<em>(all versions yanked)</em>`) +
-        (p.description ? ` <span style="color:#666">— ${esc(p.description.slice(0, 160))}</span>` : "") +
+    ? `<ul class=pkgs>${items.map((p) =>
+        `<li><div class=top><a class=name href="/packages/${esc(p.name)}">${esc(p.name)}</a>` +
+        (p.latest ? `<span class=ver>${esc(p.latest)}</span>` : `<em class=faint>all yanked</em>`) +
+        `</div>` +
+        (p.description ? `<p>${esc(p.description.slice(0, 200))}</p>` : "") +
         `</li>`).join("")}</ul>`
     : `<p>No packages${q ? ` matching “${esc(q)}”` : " published"} yet.</p>`;
-  return htmlPage("NURL registry",
+  const origin = siteOrigin(env);
+  return htmlPage(q ? `“${q}” — NURL registry` : "NURL registry — packages for the NURL language",
     `<h1>Packages</h1>` +
-    `<form method=get><input name=q value="${esc(q)}" placeholder="search packages" ` +
-      `style="padding:.4rem;width:60%"> <button>Search</button></form>` +
-    `<p style="color:#666">${items.length} package(s) · <a href="/login">get a publish token →</a></p>` +
-    list);
+    `<p class=lead>Libraries and tools for the <a href="https://nurl-lang.org/">NURL</a> programming language.</p>` +
+    `<form class=search method=get action="/"><input name=q type=search value="${esc(q)}" ` +
+      `placeholder="Search by name, description or symbol…" aria-label="Search packages"> ` +
+      `<button>Search</button></form>` +
+    `<p class=muted>${items.length} package(s)${q ? ` matching “${esc(q)}” · <a href="/">show all</a>` : ""}</p>` +
+    list,
+    200,
+    {
+      description: "The NURL package registry: browse, search and install libraries for the NURL programming language.",
+      // A search result page canonicalises to the catalog itself.
+      canonical: `${origin}/`,
+      jsonLd: {
+        "@context": "https://schema.org", "@type": "WebSite", name: "NURL registry", url: `${origin}/`,
+        potentialAction: {
+          "@type": "SearchAction", target: `${origin}/?q={search_term_string}`,
+          "query-input": "required name=search_term_string",
+        },
+      },
+    });
 }
 
 async function handlePackageDetail(env: Env, name: string): Promise<Response> {
   if (!NAME_RE.test(name)) return htmlPage("not found", `<p>Invalid package name.</p>`, 404);
   const idx = await readIndex(env, name);
   if (idx.versions.length === 0) {
-    return htmlPage("not found", `<p><a href="/">← all packages</a></p><h1>${esc(name)}</h1><p>Not found.</p>`, 404);
+    return htmlPage("not found",
+      `<p class=crumbs><a href="/">Packages</a> /</p><h1>${esc(name)}</h1><p>Not found.</p>`, 404);
   }
   const newestFirst = [...idx.versions].reverse();
   const latest = newestFirst.find((v) => !v.yanked);
@@ -767,10 +874,10 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
   // self-declared manifest field): the package owner (first publisher) and
   // the GitHub login that published each version.
   const ownerRow = await env.REG_DB.prepare(
-    `SELECT u.login AS login
+    `SELECT u.login AS login, p.description AS description
        FROM packages p JOIN users u ON u.id = p.owner_user_id
       WHERE p.name = ?`,
-  ).bind(name).first<{ login: string }>();
+  ).bind(name).first<{ login: string; description: string | null }>();
   const pubRows = await env.REG_DB.prepare(
     `SELECT v.version AS version, u.login AS login, v.published_at AS published_at
        FROM versions v JOIN users u ON u.id = v.published_by
@@ -779,38 +886,46 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
   const pubBy = new Map((pubRows.results ?? []).map((r) => [r.version, r]));
   const ghLink = (login: string) =>
     `<a href="https://github.com/${esc(login)}">@${esc(login)}</a>`;
-  const ownerHtml = ownerRow
-    ? `<p style="color:#666">owner ${ghLink(ownerRow.login)}</p>`
-    : "";
+  // published_at is epoch MILLISECONDS (server clock at publish; in the
+  // schema since day one, so every version has an authoritative date).
+  const dateOf = (v: string) => {
+    const pub = pubBy.get(v);
+    return pub ? new Date(pub.published_at).toISOString().slice(0, 10) : "";
+  };
+  const description = (ownerRow?.description ?? "").trim();
 
+  // The version list is collapsed: a long release history should not push
+  // the rest of the page down. It opens by itself only when it is short.
   const versionsHtml = newestFirst.map((v) => {
     const pub = pubBy.get(v.version);
-    // published_at is epoch MILLISECONDS (server clock at publish; in the
-    // schema since day one, so every version has an authoritative date).
-    const date = pub ? new Date(pub.published_at).toISOString().slice(0, 10) : "";
-    return `<li><code>${esc(v.version)}</code>` +
-      (v.yanked ? ` <span style="color:#b00">(yanked)</span>` : "") +
-      (date ? ` <span style="color:#999">· ${date}</span>` : "") +
-      (pub ? ` <span style="color:#999">· ${ghLink(pub.login)}</span>` : "") +
-      ` <span style="color:#999">· <a href="/packages/${esc(name)}/${esc(v.version)}/files">files</a></span>` +
-      ` <span style="color:#999">· <a href="/packages/${esc(name)}/${esc(v.version)}/api">api</a></span>` +
+    const date = dateOf(v.version);
+    const base = `/packages/${esc(name)}/${esc(v.version)}`;
+    return `<li><span class=v>${esc(v.version)}</span>` +
+      (v.yanked ? `<span class=bad>yanked</span>` : "") +
+      (date ? `<span class=faint>${date}</span>` : "") +
+      (pub ? `<span class=faint>${ghLink(pub.login)}</span>` : "") +
+      `<span class="links faint"><a href="${base}/api">api</a> · <a href="${base}/files">files</a></span>` +
       `</li>`;
   }).join("");
+  const nVer = newestFirst.length;
+  const versionsBlock =
+    `<details class=versions${nVer <= 3 ? " open" : ""}>` +
+      `<summary><span><b>${nVer}</b> version${nVer === 1 ? "" : "s"}</span></summary>` +
+      `<ol>${versionsHtml}</ol></details>`;
+
   const depsHtml = latest && latest.deps.length
-    ? `<ul>${latest.deps.map((d) =>
+    ? `<ul class=plain>${latest.deps.map((d) =>
         `<li><a href="/packages/${esc(d.name)}">${esc(d.name)}</a> <code>${esc(d.req)}</code></li>`).join("")}</ul>`
-    : `<p>None.</p>`;
+    : `<p class=muted style="margin:0;font-size:.92rem">None.</p>`;
   const reqStr = latest ? `^${latest.version}` : "*";
 
   // Repository link, read straight from the latest tarball's nurl.toml
   // ([package].repository). Only http(s) URLs are rendered as links.
-  let repoHtml = "";
+  let repo = "";
   if (latest) {
     try {
-      const repo = await extractManifestRepository(env.REG_BUCKET, name, latest.version);
-      if (repo && /^https?:\/\//i.test(repo)) {
-        repoHtml = `<p style="color:#666">repository <a href="${esc(repo)}">${esc(repo)}</a></p>`;
-      }
+      const r = await extractManifestRepository(env.REG_BUCKET, name, latest.version);
+      if (r && /^https?:\/\//i.test(r)) repo = r;
     } catch { /* no repository line */ }
   }
 
@@ -838,15 +953,51 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
       }
     } catch { /* fall through with no README */ }
   }
+  if (!readmeHtml) readmeHtml = `<p class=muted>This package has no README.</p>`;
 
-  return htmlPage(name,
-    `<p><a href="/">← all packages</a></p><h1>${esc(name)}</h1>` +
-    ownerHtml +
-    repoHtml +
-    `<h3>Install</h3><pre>[dependencies]\n${esc(name)} = "${esc(reqStr)}"</pre>` +
-    `<h3>Versions</h3><ul>${versionsHtml}</ul>` +
-    `<h3>Dependencies (latest)</h3>${depsHtml}` +
-    readmeHtml);
+  const installText = `[dependencies]\n${name} = "${reqStr}"`;
+  const latestBase = latest ? `/packages/${esc(name)}/${esc(latest.version)}` : "";
+  const metaRows =
+    (latest ? `<dt>Latest</dt><dd><code>${esc(latest.version)}</code>` +
+      (dateOf(latest.version) ? ` <span class=faint>· ${dateOf(latest.version)}</span>` : "") + `</dd>` : "") +
+    (ownerRow ? `<dt>Owner</dt><dd>${ghLink(ownerRow.login)}</dd>` : "") +
+    (repo ? `<dt>Repository</dt><dd><a href="${esc(repo)}">${esc(repo.replace(/^https?:\/\//i, ""))}</a></dd>` : "") +
+    (latest ? `<dt>Docs</dt><dd><a href="${latestBase}/api">API reference</a> · <a href="${latestBase}/files">files</a></dd>` : "");
+
+  const aside =
+    `<aside>` +
+      `<h2 class=side style="margin-top:0">Install</h2>` +
+      `<div class=install><pre id=inst>${esc(installText)}</pre>` +
+        `<button class=copy type=button onclick="navigator.clipboard.writeText(document.getElementById('inst').innerText)` +
+        `.then(()=>{this.textContent='copied';setTimeout(()=>this.textContent='copy',1500)})">copy</button></div>` +
+      `<h2 class=side>About</h2><dl class=meta>${metaRows}</dl>` +
+      `<h2 class=side>Dependencies</h2>${depsHtml}` +
+      `<h2 class=side>Versions</h2>${versionsBlock}` +
+    `</aside>`;
+
+  const origin = siteOrigin(env);
+  const canonical = `${origin}/packages/${name}`;
+  const metaDesc = description ||
+    `${name} — a package for the NURL programming language${latest ? `, version ${latest.version}` : ""}.`;
+  return htmlPage(`${name}${latest ? ` ${latest.version}` : ""} — NURL registry`,
+    `<p class=crumbs><a href="/">Packages</a> /</p>` +
+    `<h1>${esc(name)} ${latest ? `<span class=ver>${esc(latest.version)}</span>` : `<span class=bad style="font-size:.5em">all versions yanked</span>`}</h1>` +
+    (description ? `<p class=lead>${esc(description)}</p>` : "") +
+    `<div class=layout><article>${readmeHtml}</article>${aside}</div>`,
+    200,
+    {
+      description: metaDesc,
+      canonical,
+      jsonLd: {
+        "@context": "https://schema.org", "@type": "SoftwareSourceCode",
+        name, url: canonical, description: metaDesc,
+        programmingLanguage: "NURL",
+        ...(latest ? { version: latest.version } : {}),
+        ...(latest && dateOf(latest.version) ? { dateModified: dateOf(latest.version) } : {}),
+        ...(repo ? { codeRepository: repo } : {}),
+        ...(ownerRow ? { author: { "@type": "Person", name: ownerRow.login, url: `https://github.com/${ownerRow.login}` } } : {}),
+      },
+    });
 }
 
 // "1.2 KB" / "3.4 MB" — display sizes for the files page.
@@ -884,13 +1035,19 @@ async function handlePackageFiles(env: Env, name: string, version: string): Prom
   const total = files.reduce((s, f) => s + f.size, 0);
   const rows = files.map((f) =>
     `<tr><td><code>${esc(f.path)}</code></td>` +
-    `<td style="text-align:right;color:#666">${fmtSize(f.size)}</td></tr>`).join("");
-  const res = htmlPage(`${name} ${version} — files`,
-    `<p><a href="/packages/${esc(name)}">← ${esc(name)}</a></p>` +
-    `<h1>${esc(name)} <code>${esc(version)}</code></h1>` +
-    `<p style="color:#666">${files.length} file(s) · ${fmtSize(total)} unpacked` +
-    (ver.yanked ? ` · <span style="color:#b00">(yanked)</span>` : "") + `</p>` +
-    `<table class=files>${rows}</table>`);
+    `<td class=muted style="text-align:right">${fmtSize(f.size)}</td></tr>`).join("");
+  const res = htmlPage(`${name} ${version} — files — NURL registry`,
+    `<p class=crumbs><a href="/">Packages</a> / <a href="/packages/${esc(name)}">${esc(name)}</a> /</p>` +
+    `<h1>${esc(name)} <span class=ver>${esc(version)}</span> files</h1>` +
+    `<p class=muted>${files.length} file(s) · ${fmtSize(total)} unpacked · ` +
+    `<a href="/packages/${esc(name)}/${esc(version)}/api">API reference</a>` +
+    (ver.yanked ? ` · <span class=bad>yanked</span>` : "") + `</p>` +
+    `<table class=files>${rows}</table>`,
+    200,
+    {
+      description: `Files in ${name} ${version}, a package for the NURL programming language.`,
+      canonical: `${siteOrigin(env)}/packages/${name}/${version}/files`,
+    });
   res.headers.set("cache-control", "public, max-age=86400, immutable");
   return res;
 }
@@ -920,18 +1077,65 @@ async function handlePackageApi(env: Env, name: string, version: string): Promis
   }
   const mods = listTarSrcModules(ab);
   let bodyHtml =
-    `<p><a href="/packages/${esc(name)}">← ${esc(name)}</a></p>` +
-    `<h1>${esc(name)} <span style="color:#666">${esc(version)}</span> API</h1>`;
+    `<p class=crumbs><a href="/">Packages</a> / <a href="/packages/${esc(name)}">${esc(name)}</a> /</p>` +
+    `<h1>${esc(name)} <span class=ver>${esc(version)}</span> API</h1>` +
+    `<p class=muted>${mods.length} module(s) · <a href="/packages/${esc(name)}/${esc(version)}/files">files</a>` +
+    (ver.yanked ? ` · <span class=bad>yanked</span>` : "") + `</p>`;
   if (mods.length === 0) {
-    bodyHtml += `<p style="color:#666">No <code>src/*.nu</code> modules in this release.</p>`;
+    bodyHtml += `<p class=muted>No <code>src/*.nu</code> modules in this release.</p>`;
   } else {
     const md = mods.map((m) => renderNurldoc(m.text, m.path.replace(/^src\//, "")))
       .join("\n\n---\n\n");
     bodyHtml += `<div class="readme">${renderMarkdown(md)}</div>`;
   }
-  const res = htmlPage(`${name} ${version} — API`, bodyHtml);
+  const res = htmlPage(`${name} ${version} API — NURL registry`, bodyHtml, 200, {
+    description: `API reference for ${name} ${version}: ${mods.map((m) => m.path.replace(/^src\//, "")).join(", ").slice(0, 200)}`,
+    canonical: `${siteOrigin(env)}/packages/${name}/${version}/api`,
+  });
   res.headers.set("cache-control", "public, max-age=86400, immutable");
   return res;
+}
+
+// GET /sitemap.xml — the catalog, every package page, and the latest
+// release's API and files pages, so crawlers find all of them without
+// following the search form.
+async function handleSitemap(env: Env): Promise<Response> {
+  const rows = await env.REG_DB.prepare(
+    `SELECT p.name AS name, v.version AS version, v.published_at AS published_at
+       FROM packages p
+       LEFT JOIN versions v ON v.name = p.name AND v.yanked = 0 AND v.pending = 0
+        AND v.published_at = (SELECT MAX(v2.published_at) FROM versions v2
+                               WHERE v2.name = p.name AND v2.yanked = 0 AND v2.pending = 0)
+      ORDER BY p.name`,
+  ).all<{ name: string; version: string | null; published_at: number | null }>();
+  const origin = siteOrigin(env);
+  const xe = (s: string) => s.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]!));
+  const url = (loc: string, lastmod?: string, priority?: string) =>
+    `<url><loc>${xe(loc)}</loc>${lastmod ? `<lastmod>${lastmod}</lastmod>` : ""}` +
+    `${priority ? `<priority>${priority}</priority>` : ""}</url>`;
+  let newest = 0;
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const r of rows.results ?? []) {
+    if (seen.has(r.name)) continue;
+    seen.add(r.name);
+    const lm = r.published_at ? new Date(r.published_at).toISOString().slice(0, 10) : undefined;
+    if (r.published_at && r.published_at > newest) newest = r.published_at;
+    parts.push(url(`${origin}/packages/${r.name}`, lm, "0.8"));
+    if (r.version) {
+      parts.push(url(`${origin}/packages/${r.name}/${r.version}/api`, lm, "0.5"));
+      parts.push(url(`${origin}/packages/${r.name}/${r.version}/files`, lm, "0.3"));
+    }
+  }
+  const body =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` +
+    url(`${origin}/`, newest ? new Date(newest).toISOString().slice(0, 10) : undefined, "1.0") +
+    parts.join("") + `</urlset>\n`;
+  return new Response(body, {
+    headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=3600" },
+  });
 }
 
 async function handleSearch(req: Request, url: URL, env: Env): Promise<Response> {
@@ -1100,9 +1304,9 @@ async function handleCallback(req: Request, env: Env): Promise<Response> {
     "NURL registry — token",
     `<h1>Signed in as ${ghUser.login}</h1>` +
       `<p>Your publish token (shown once — store it now):</p>` +
-      `<pre style="background:#f4f4f4;padding:1rem;border-radius:6px;user-select:all">${token}</pre>` +
+      `<pre style="user-select:all">${token}</pre>` +
       `<p>Use it with nurlpkg:</p>` +
-      `<pre style="background:#f4f4f4;padding:1rem;border-radius:6px">export NURL_TOKEN=${token}\nnurlpkg publish</pre>` +
+      `<pre>export NURL_TOKEN=${token}\nnurlpkg publish</pre>` +
       `<p>This token expires on <b>${new Date(expires).toISOString().slice(0, 10)}</b> ` +
       `(90 days) — sign in again to rotate it. For CI, mint a token restricted to ` +
       `specific packages with <code>POST /api/v1/token/new</code>.</p>`,
@@ -1149,75 +1353,88 @@ async function handleTokenNew(req: Request, env: Env): Promise<Response> {
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    const url = new URL(req.url);
-    const path = url.pathname;
-
-    if (req.method === "GET") {
-      if (path === "/") return handleCatalog(url, env);
-      if (path === "/favicon.svg" || path === "/favicon.ico") {
-        return new Response(FAVICON_SVG, {
-          headers: {
-            "content-type": "image/svg+xml; charset=utf-8",
-            "cache-control": "public, max-age=86400",
-          },
-        });
-      }
-      if (path === "/robots.txt") {
-        return new Response("User-agent: *\nAllow: /\n", {
-          headers: { "content-type": "text/plain; charset=utf-8" },
-        });
-      }
-      if (path === "/login") return handleLogin(env);
-      if (path === "/auth/callback") return handleCallback(req, env);
-      if (path === "/api/v1/search") return handleSearch(req, url, env);
-      if (path === "/api/v1/catalog") return handleCatalogJson(req, env);
-      if (path === "/api/v1/stats") return handleStats(env);
-      if (path.startsWith("/packages/")) {
-        const rest = decodeURIComponent(path.slice("/packages/".length));
-        // /packages/<name>/<version>/files — the tarball's file listing.
-        const m = rest.match(/^([^/]+)\/([^/]+)\/files$/);
-        if (m) return handlePackageFiles(env, m[1].toLowerCase(), m[2]);
-        // /packages/<name>/<version>/api — nurldoc API docs.
-        const ma = rest.match(/^([^/]+)\/([^/]+)\/api$/);
-        if (ma) return handlePackageApi(env, ma[1].toLowerCase(), ma[2]);
-        return handlePackageDetail(env, rest.toLowerCase());
-      }
-      if (path.startsWith("/index/") && path.endsWith(".json")) {
-        const name = path.slice("/index/".length, -".json".length).toLowerCase();
-        if (!NAME_RE.test(name)) return json({ error: "invalid_name" }, 400);
-        return serveR2(env, `index/${name}.json`, "application/json");
-      }
-      if (path.startsWith("/files/")) {
-        // /files/<name>/<version>/<relpath> — a README image from the tarball.
-        const rest = path.slice("/files/".length);
-        const s1 = rest.indexOf("/");
-        const s2 = s1 < 0 ? -1 : rest.indexOf("/", s1 + 1);
-        if (s1 < 0 || s2 < 0) return json({ error: "bad_path" }, 400);
-        const fname = decodeURIComponent(rest.slice(0, s1)).toLowerCase();
-        const fver = decodeURIComponent(rest.slice(s1 + 1, s2));
-        const frel = decodeURIComponent(rest.slice(s2 + 1));
-        return handleFile(env, fname, fver, frel);
-      }
-      if (path.startsWith("/pkgs/")) {
-        // pkgs/<name>/<file>.tar.gz (+ optional .minisig) — reject traversal.
-        if (path.includes("..")) return json({ error: "bad_path" }, 400);
-        if (path.endsWith(".tar.gz.minisig")) return serveR2(env, path.slice(1), "text/plain");
-        if (path.endsWith(".tar.gz")) return serveR2(env, path.slice(1), "application/gzip");
-        return json({ error: "bad_path" }, 400);
-      }
-      return json({ error: "not_found" }, 404);
+    // HEAD is GET without the body — crawlers and link checkers probe with
+    // it, and a 404 there reads as "this page does not exist".
+    if (req.method === "HEAD") {
+      const res = await route(new Request(req.url, { method: "GET", headers: req.headers }), env);
+      return new Response(null, { status: res.status, headers: res.headers });
     }
-
-    if (req.method === "POST") {
-      if (path === "/api/v1/publish") return handlePublish(req, env);
-      if (path === "/api/v1/yank") return handleYank(req, env, true);
-      if (path === "/api/v1/unyank") return handleYank(req, env, false);
-      if (path === "/api/v1/revoke") return handleRevoke(req, env);
-      if (path === "/api/v1/token/new") return handleTokenNew(req, env);
-      if (path === "/api/v1/admin/sign-backfill") return handleSignBackfill(req, env);
-      if (path === "/api/v1/admin/desc-backfill") return handleDescBackfill(req, env);
-      if (path === "/api/v1/admin/symbols-backfill") return handleSymbolsBackfill(req, env);
-    }
-    return json({ error: "not_found" }, 404);
+    return route(req, env);
   },
 } satisfies ExportedHandler<Env>;
+
+async function route(req: Request, env: Env): Promise<Response> {
+  const url = new URL(req.url);
+  const path = url.pathname;
+
+  if (req.method === "GET") {
+    if (path === "/") return handleCatalog(url, env);
+    if (path === "/favicon.svg" || path === "/favicon.ico") {
+      return new Response(FAVICON_SVG, {
+        headers: {
+          "content-type": "image/svg+xml; charset=utf-8",
+          "cache-control": "public, max-age=86400",
+        },
+      });
+    }
+    if (path === "/robots.txt") {
+      // Every crawler — search engines and AI agents alike — may read
+      // every page.
+      return new Response(`User-agent: *\nAllow: /\n\nSitemap: ${siteOrigin(env)}/sitemap.xml\n`, {
+        headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=3600" },
+      });
+    }
+    if (path === "/sitemap.xml") return handleSitemap(env);
+    if (path === "/login") return handleLogin(env);
+    if (path === "/auth/callback") return handleCallback(req, env);
+    if (path === "/api/v1/search") return handleSearch(req, url, env);
+    if (path === "/api/v1/catalog") return handleCatalogJson(req, env);
+    if (path === "/api/v1/stats") return handleStats(env);
+    if (path.startsWith("/packages/")) {
+      const rest = decodeURIComponent(path.slice("/packages/".length));
+      // /packages/<name>/<version>/files — the tarball's file listing.
+      const m = rest.match(/^([^/]+)\/([^/]+)\/files$/);
+      if (m) return handlePackageFiles(env, m[1].toLowerCase(), m[2]);
+      // /packages/<name>/<version>/api — nurldoc API docs.
+      const ma = rest.match(/^([^/]+)\/([^/]+)\/api$/);
+      if (ma) return handlePackageApi(env, ma[1].toLowerCase(), ma[2]);
+      return handlePackageDetail(env, rest.toLowerCase());
+    }
+    if (path.startsWith("/index/") && path.endsWith(".json")) {
+      const name = path.slice("/index/".length, -".json".length).toLowerCase();
+      if (!NAME_RE.test(name)) return json({ error: "invalid_name" }, 400);
+      return serveR2(env, `index/${name}.json`, "application/json");
+    }
+    if (path.startsWith("/files/")) {
+      // /files/<name>/<version>/<relpath> — a README image from the tarball.
+      const rest = path.slice("/files/".length);
+      const s1 = rest.indexOf("/");
+      const s2 = s1 < 0 ? -1 : rest.indexOf("/", s1 + 1);
+      if (s1 < 0 || s2 < 0) return json({ error: "bad_path" }, 400);
+      const fname = decodeURIComponent(rest.slice(0, s1)).toLowerCase();
+      const fver = decodeURIComponent(rest.slice(s1 + 1, s2));
+      const frel = decodeURIComponent(rest.slice(s2 + 1));
+      return handleFile(env, fname, fver, frel);
+    }
+    if (path.startsWith("/pkgs/")) {
+      // pkgs/<name>/<file>.tar.gz (+ optional .minisig) — reject traversal.
+      if (path.includes("..")) return json({ error: "bad_path" }, 400);
+      if (path.endsWith(".tar.gz.minisig")) return serveR2(env, path.slice(1), "text/plain");
+      if (path.endsWith(".tar.gz")) return serveR2(env, path.slice(1), "application/gzip");
+      return json({ error: "bad_path" }, 400);
+    }
+    return json({ error: "not_found" }, 404);
+  }
+
+  if (req.method === "POST") {
+    if (path === "/api/v1/publish") return handlePublish(req, env);
+    if (path === "/api/v1/yank") return handleYank(req, env, true);
+    if (path === "/api/v1/unyank") return handleYank(req, env, false);
+    if (path === "/api/v1/revoke") return handleRevoke(req, env);
+    if (path === "/api/v1/token/new") return handleTokenNew(req, env);
+    if (path === "/api/v1/admin/sign-backfill") return handleSignBackfill(req, env);
+    if (path === "/api/v1/admin/desc-backfill") return handleDescBackfill(req, env);
+    if (path === "/api/v1/admin/symbols-backfill") return handleSymbolsBackfill(req, env);
+  }
+  return json({ error: "not_found" }, 404);
+}
