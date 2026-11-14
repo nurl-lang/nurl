@@ -852,6 +852,10 @@ class FnCheck:
                             self.err(line, f"{name} takes a borrowed value that cannot be copied")
                     elif (not op[2] and self.fn.vars[op[1]].kind == "local" and avs[k].alias
                           and k < len(sm["modes"]) and sm["modes"][k] == "sink"
+                          # (a value with a destructor of its own under
+                          # another name is that value: agora #768)
+                          and not (ty[0] == "named" and ("drop__" + ty[1]) in getattr(self.prog, "fn_flags", ())
+                                   and not self.fn.vars[op[1]].mut)
                           and all(not a[1] and st.vals.get(a[0]) is not None
                                   and ((a[0] in self.pidx and st.vals[a[0]].own == "P"
                                         and self.fn.modes[self.pidx[a[0]]] == "in")
