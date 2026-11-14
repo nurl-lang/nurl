@@ -289,7 +289,7 @@
 : ~ i g_ef_vars -1  // …their variables, CORE_VW words each
 : ~ i g_ef_pl -1  // …their places, 3 words each
 : ~ i g_ef_ix -1  // a function's name (interned) → its number + 1 (an im_ map)
-: i EF_W 13
+: i EF_W 15
 : i EF_NAME 0
 : i EF_FILE 1
 : i EF_LINE 2
@@ -303,6 +303,8 @@
 : i EF_VAR_N 10
 : i EF_PL 11  // where its places begin in g_ef_pl (in words), and how many places
 : i EF_PL_N 12
+: i EF_NPARAMS 13  // how many parameters it takes, a closure body's captures included
+: i EF_NCAP 14  // …and how many of them are captures
 : ~ i g_ec 0  // the function the engine is reading: where its words begin in g_ef_code, and how many
 : ~ i g_ec_n 0
 : ~ i g_ec_f 0  // …its number
@@ -607,6 +609,13 @@
 : ~ i g_fc_dirty -1  // per function: 1 it is to be checked (again)
 : ~ i g_fe -1  // per function: its findings (a vector of line, message pairs), -1 none
 : ~ i g_fe_cur -1  // the findings of the function being checked
+: ~ i g_ef_count 0  // how many functions are kept (ef_n)
+: ~ i g_ec_next -1  // per word of the function being read: for a statement's first word, where the next statement begins (eng_link)
+: ~ i g_sm_rd_head -1  // per function: the first of the edges that read its summary + 1, 0 none (g_sm_readers: reader, next)
+: ~ i g_el_first -1  // per variable (+ the pseudo ones): its first loan + 1, 0 none
+: ~ i g_el_next -1  // per loan: the next loan on the same variable + 1
+: ~ i g_el_shared -1  // the loans whose place reaches through a shared handle
+: ~ i g_av_all -1  // an AV → the loans it is or holds + 1 (a set), for this function
 // </engine globals>
 : i CORE_VW 7
 : i CORE_VS 1048576
@@ -10496,6 +10505,24 @@ unsafe @ wv_eq i a i b → b {
     ^ == 0 # i ( memcmp # s . r * a 3 # s . r * b 3 * n 8 )
 }
 
+// The first index at or after `from` where `a` and `b` differ, -1 if they
+// are the same from there on (the shorter one's length bounds the scan).
+unsafe @ wv_diff i a i b i from → i {
+    ? | | < a 0 >= a g_wv_n | < b 0 >= b g_wv_n { ( __eng_ice `wv_diff: no such vector` ) ^ -1 } {}
+    : *i r # *i # s g_wv
+    : i na . r + * a 3 1
+    : i nb . r + * b 3 1
+    : i n ? < na nb na nb
+    : *i pa # *i # s . r * a 3
+    : *i pb # *i # s . r * b 3
+    : ~ i k ? < from 0 0 from
+    ~ < k n {
+        ? != . pa k . pb k { ^ k } {}
+        = k + k 1
+    }
+    ^ -1
+}
+
 // ── Sequences ──
 unsafe @ __sq_hash * i p i n → i {
     : ~ i h + 1469598103934665603 n
@@ -10882,13 +10909,27 @@ unsafe @ eng_keep_fn → v {
     ( wv_push g_ef g_core_var_n )
     ( wv_push g_ef ( wv_len g_ef_pl ) )
     ( wv_push g_ef g_core_pl_n )
+    // (its parameters and captures, counted once)
+    : *i vs # *i # s g_core_vars
+    : ~ i np 0
+    : ~ i ncap 0
+    : ~ i v 0
+    ~ < v g_core_var_n {
+        : i kind . vs + * v CORE_VW 2
+        ? | == kind 0 == kind 3 { = np + np 1 } {}
+        ? == kind 3 { = ncap + ncap 1 } {}
+        = v + v 1
+    }
+    ( wv_push g_ef np )
+    ( wv_push g_ef ncap )
+    = g_ef_count + g_ef_count 1
     ( wv_append_raw g_ef_code g_core_code g_core_code_n )
     ( wv_append_raw g_ef_vars g_core_vars * g_core_var_n CORE_VW )
     ( wv_append_raw g_ef_pl g_core_pl * g_core_pl_n 3 )
     ( im_put g_ef_ix g_core_fname + f 1 )
 }
 
-@ ef_n → i { ? < g_ef 0 { ^ 0 } {} ^ / ( wv_len g_ef ) EF_W }
+@ ef_n → i { ^ g_ef_count }
 
 @ ef_at i f i field → i { ^ ( wv_at g_ef + * f EF_W field ) }
 
@@ -10941,8 +10982,9 @@ unsafe @ eng_keep_fn → v {
 @ eng_link → v {
     ? < g_ec_link 0 { = g_ec_link ( wv_new ) } {}
     ( wv_fill g_ec_link g_ec_n -1 )
-    ? < g_ec_line 0 { = g_ec_line ( wv_new ) } {}
+    ? < g_ec_line 0 { = g_ec_line ( wv_new ) = g_ec_next ( wv_new ) } {}
     ( wv_fill g_ec_line g_ec_n 0 )
+    ( wv_fill g_ec_next g_ec_n 0 )
     : i stack ( wv_new )
     : ~ i line ( ef_at g_ec_f EF_LINE )
     : ~ i at 0
@@ -10963,22 +11005,28 @@ unsafe @ eng_keep_fn → v {
             : i open ( wv_pop stack )
             ( wv_put g_ec_link open at )
         } {}
-        = at + at ( eng_stmt_len at )
+        : i len ( eng_stmt_len at )
+        ( wv_put g_ec_next at + at len )
+        = at + at len
     }
     ? != 0 ( wv_len stack ) { ( __eng_ice `a block of the IR is not closed` ) } {}
     ( wv_drop stack )
+    // (a statement that opens a block: the next statement is after its END)
+    = at 0
+    ~ < at g_ec_n {
+        : i op ( ec at )
+        : i after ( wv_at g_ec_next at )
+        ? | | | | == op CO_IF == op CO_MATCH == op CO_LOOP == op CO_FOREACH | == op CO_SCOPE == op CO_DEFER {
+            : ~ i p ( wv_at g_ec_link at )
+            ~ != ( ec p ) CO_END { = p ( wv_at g_ec_link p ) }
+            ( wv_put g_ec_next at + p 1 )
+        } {}
+        = at after
+    }
 }
 
 // The statement after the one at `at`, a block it opens included.
-@ eng_next i at → i {
-    : i op ( ec at )
-    ? | | | | == op CO_IF == op CO_MATCH == op CO_LOOP == op CO_FOREACH | == op CO_SCOPE == op CO_DEFER {
-        : ~ i p ( wv_at g_ec_link at )
-        ~ != ( ec p ) CO_END { = p ( wv_at g_ec_link p ) }
-        ^ + p 1
-    } {}
-    ^ + at ( eng_stmt_len at )
-}
+@ eng_next i at → i { ^ ( wv_at g_ec_next at ) }
 
 // The line in effect at the statement at `at`.
 @ eng_line i at → i { ^ ( wv_at g_ec_line at ) }
@@ -11734,6 +11782,14 @@ unsafe @ eng_fn_begin i f → v {
     ( wv_trunc g_el 0 )
     ( wv_drop g_el_ix )
     = g_el_ix ( im_new )
+    ? < g_el_first 0 { = g_el_first ( wv_new ) = g_el_next ( wv_new ) = g_el_shared ( wv_new ) } {}
+    ( wv_fill g_el_first + * g_f_nv 2 2 0 )
+    ( wv_trunc g_el_next 0 )
+    ( wv_trunc g_el_shared 0 )
+    ? >= g_fc_tails 0 { ( wv_drop g_fc_tails ) } {}
+    = g_fc_tails ( im_new )
+    ? >= g_av_all 0 { ( wv_drop g_av_all ) } {}
+    = g_av_all ( im_new )
     = g_av_none ( av_make OW_N 0 0 0 F )
 }
 
@@ -11765,6 +11821,14 @@ unsafe @ eng_fn_begin i f → v {
     : i l ( el_n )
     ( wv_push g_el place ) ( wv_push g_el kind ) ( wv_push g_el key )
     ( im_put g_el_ix key + l 1 )
+    // (the loans on one variable are chained: an effect on it looks at
+    // those, not at every loan of the function)
+    ? != kind LK_CLO {
+        : i slot + + ( pl_var place ) g_f_nv 1
+        ( wv_push g_el_next ( wv_at g_el_first slot ) )
+        ( wv_put g_el_first slot + l 1 )
+        ? != 0 ( sq_len ( shared_tails place ) ) { ( wv_push g_el_shared l ) } {}
+    } { ( wv_push g_el_next 0 ) }
     ^ l
 }
 
@@ -11888,16 +11952,16 @@ unsafe @ eng_fn_begin i f → v {
         ( wv_put a ST_DEFERS ( sq_of_wv tmp 0 ( wv_len tmp ) ) )
         ( wv_drop tmp )
     } {}
-    : ~ i v 0
-    ~ < v g_f_nv {
-        : i x ( wv_at a + ST_VARS v )
-        : i y ( wv_at b + ST_VARS v )
-        ? != x y {
-            ? == x 0 { ( wv_put a + ST_VARS v y ) } {
-                ? != y 0 { ( wv_put a + ST_VARS v ( av_join x y ) ) } {}
-            }
-        } {}
-        = v + v 1
+    // (only the variables whose values differ: most are the same on both
+    // paths)
+    : ~ i at ( wv_diff a b ST_VARS )
+    ~ >= at 0 {
+        : i x ( wv_at a at )
+        : i y ( wv_at b at )
+        ? == x 0 { ( wv_put a at y ) } {
+            ? != y 0 { ( wv_put a at ( av_join x y ) ) } {}
+        }
+        = at ( wv_diff a b + at 1 )
     }
 }
 
@@ -12016,7 +12080,9 @@ unsafe @ eng_fn_begin i f → v {
     : i key + * f 1048576 g_fc_reading
     ? != 0 ( im_get g_sm_edges key 0 ) { ^ } {}
     ( im_put g_sm_edges key 1 )
-    ( wv_push g_sm_readers f ) ( wv_push g_sm_readers g_fc_reading )
+    : i e ( wv_len g_sm_readers )
+    ( wv_push g_sm_readers g_fc_reading ) ( wv_push g_sm_readers ( wv_at g_sm_rd_head f ) )
+    ( wv_put g_sm_rd_head f + e 1 )
 }
 
 @ sm_have i f → b {
@@ -12087,18 +12153,7 @@ unsafe @ ef_is_closure i f → b { ^ != 0 ( nurl_str_starts # s ( ef_at f EF_NAM
 @ ef_walked i f → b { ? | < g_fc_walked 0 < f 0 { ^ F } {} ^ != 0 ( wv_at g_fc_walked f ) }
 
 // How many parameters function `f` takes (captures included).
-@ ef_nparams i f → i {
-    : i base ( ef_at f EF_VARS )
-    : i nv ( ef_at f EF_VAR_N )
-    : ~ i n 0
-    : ~ i v 0
-    ~ < v nv {
-        : i kind ( wv_at g_ef_vars + + base * v CORE_VW 2 )
-        ? | == kind 3 == kind 0 { = n + n 1 } {}
-        = v + v 1
-    }
-    ^ n
-}
+@ ef_nparams i f → i { ^ ( ef_at f EF_NPARAMS ) }
 
 // Has variable `vid` of the function being read no name (a temporary, or
 // the binding a `\` try hands its failure on in)?
@@ -12362,7 +12417,6 @@ unsafe @ eng_op i irop → i {
 // The shared handles `place` reaches through: a sequence of (handle
 // type, the path below its payload).
 unsafe @ shared_tails i place → i {
-    ? < g_fc_tails 0 { = g_fc_tails ( im_new ) } {}
     : i have ( im_get g_fc_tails place -1 )
     ? >= have 0 { ^ have } {}
     : i vid ( pl_var place )
@@ -12468,10 +12522,11 @@ unsafe @ eng_kills i eff i p i l → b {
 unsafe @ region_effect i st i ty i tail i eff → v {
     = g_s_regions ( sq_add g_s_regions ( tp3 ty ( ep_take tail 3 ) eff ) )
     : ~ i dead ( st_dead st )
-    : i n ( el_n )
-    : ~ i l 0
-    ~ < l n {
-        ? & ( el_is_loan l ) ! ( sq_has dead l ) {
+    : i n ( wv_len g_el_shared )
+    : ~ i x 0
+    ~ < x n {
+        : i l ( wv_at g_el_shared x )
+        ? ! ( sq_has dead l ) {
             : i q ( el_place l )
             : i qs ( shared_tails q )
             : ~ i a 0
@@ -12482,7 +12537,7 @@ unsafe @ region_effect i st i ty i tail i eff → v {
             }
             ? hit { = dead ( sq_add dead l ) } {}
         } {}
-        = l + l 1
+        = x + x 1
     }
     ( wv_put st ST_DEAD dead )
 }
@@ -12493,7 +12548,15 @@ unsafe @ region_effect i st i ty i tail i eff → v {
     : ~ i v 0
     ~ < v g_f_nv {
         : i av ( st_av st v )
-        ? != av 0 { = live ( sq_union ( sq_union live ( av_loans av ) ) ( held_loans ( av_held av ) ) ) } {}
+        ? & != av 0 != av g_av_none {
+            // (what one value is or holds, asked once a value)
+            : ~ i mine - ( im_get g_av_all av 0 ) 1
+            ? < mine 0 {
+                = mine ( sq_union ( av_loans av ) ( held_loans ( av_held av ) ) )
+                ( im_put g_av_all av + mine 1 )
+            } {}
+            = live ( sq_union live mine )
+        } {}
         = v + v 1
     }
     ^ live
@@ -12559,12 +12622,23 @@ unsafe @ eng_effect i st i place i eff i line i depth → v {
             = k + k 1
         }
     } {
-        : i n ( el_n )
-        : ~ i l 0
-        ~ < l n {
+        // the loans on this variable, and - if the place is inside a
+        // shared payload - the ones on any payload of that handle type
+        : ~ i x ( wv_at g_el_first + + vid g_f_nv 1 )
+        ~ != x 0 {
+            : i l - x 1
             ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
-            = l + l 1
+            = x ( wv_at g_el_next l )
         }
+        ? != 0 ( sq_len ( shared_tails place ) ) {
+            : i n ( wv_len g_el_shared )
+            : ~ i y 0
+            ~ < y n {
+                : i l ( wv_at g_el_shared y )
+                ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
+                = y + y 1
+            }
+        } {}
     }
     ( wv_put st ST_DEAD dead )
     // what the place held is gone with what the effect released
@@ -12803,17 +12877,7 @@ unsafe @ efp_ty i f i i → i {
 }
 
 // How many of function `f`'s parameters are a closure body's captures.
-@ ef_ncap i f → i {
-    : i base ( ef_at f EF_VARS )
-    : i nv ( ef_at f EF_VAR_N )
-    : ~ i n 0
-    : ~ i v 0
-    ~ < v nv {
-        ? == ( wv_at g_ef_vars + + base * v CORE_VW 2 ) 3 { = n + n 1 } {}
-        = v + v 1
-    }
-    ^ n
-}
+@ ef_ncap i f → i { ^ ( ef_at f EF_NCAP ) }
 
 // The marker a value holds for a closure body it may run.
 @ clo_marker i f → i {
@@ -17283,8 +17347,6 @@ unsafe @ eng_virt_impls i vn i out → v {
     ( wv_fill g_fx g_f_nv 0 ) ( wv_fill g_fx_nocopy g_f_nv 0 ) ( wv_fill g_fx_agg g_f_nv 0 )
     ( wv_fill g_fx_litp g_f_nv 0 ) ( wv_fill g_fx_lent g_f_nv 0 )
     ( wv_trunc g_fc_rets 0 ) ( wv_trunc g_fc_exits 0 ) ( wv_trunc g_fc_loops 0 )
-    ? >= g_fc_tails 0 { ( wv_drop g_fc_tails ) } {}
-    = g_fc_tails ( im_new )
     ? >= g_fc_dvars 0 { ( wv_drop g_fc_dvars ) ( wv_drop g_fc_dbefore ) } {}
     = g_fc_dvars ( im_new )
     = g_fc_dbefore ( im_new )
@@ -17810,7 +17872,9 @@ unsafe @ eng_virt_impls i vn i out → v {
     : i nf ( ef_n )
     ? < g_fc_dirty 0 {
         = g_fc_dirty ( wv_new ) = g_fe ( wv_new ) = g_sm_stamp ( wv_new ) = g_sm_edges ( im_new ) = g_sm_readers ( wv_new )
+        = g_sm_rd_head ( wv_new )
     } {}
+    ( wv_fill g_sm_rd_head nf 0 )
     ( wv_fill g_fc_dirty nf 0 )
     ( wv_fill g_fe nf -1 )
     ( wv_fill g_sm_stamp nf 0 )
@@ -17843,10 +17907,10 @@ unsafe @ eng_virt_impls i vn i out → v {
                 ? != g_fc_unsup 0 { ( eng_skip_why_s g_fc_unsup ) } {}
                 ? changed {
                     // every function that read this summary is walked again
-                    : ~ i e 0
-                    ~ < e ( wv_len g_sm_readers ) {
-                        ? == ( wv_at g_sm_readers e ) f { ( wv_put g_fc_dirty ( wv_at g_sm_readers + e 1 ) 1 ) } {}
-                        = e + e 2
+                    : ~ i e ( wv_at g_sm_rd_head f )
+                    ~ != e 0 {
+                        ( wv_put g_fc_dirty ( wv_at g_sm_readers - e 1 ) 1 )
+                        = e ( wv_at g_sm_readers e )
                     }
                 } {}
             } {}
