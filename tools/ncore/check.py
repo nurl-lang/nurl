@@ -1403,7 +1403,8 @@ class FnCheck:
                 cur = st.vals.get(op[1]) if op[0] == "v" and not op[2] else None
                 if (dest_vid is not None and self.fn.vars[dest_vid].kind == "temp" and cur is not None
                         and cur.own == "O" and self.fn.vars[op[1]].kind == "local"
-                        and fty is not None and fty[0] not in VIEW_TYPES):
+                        and fty is not None and fty[0] not in VIEW_TYPES and fty[0] != "closure"):
+                    # (a closure binding is copied into the literal: below)
                     # a literal that is a statement's temporary shows its
                     # consumer the bindings it names: they move into it only
                     # where the literal itself is taken (stored, handed to a
