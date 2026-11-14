@@ -15074,11 +15074,41 @@ unsafe @ eng_byte s w i k → i {
         ( region_effect st ( tp_at t 3 0 ) ( tp_at t 3 1 ) ( tp_at t 3 2 ) )
         = e + e 1
     }
-    // a closure another thread runs takes what it captured with it
-    : i nd ( sm_n sm SM_DETACHES )
+    // a closure another thread runs takes what it captured with it (…and
+    // a closure stored into what two threads may share - a channel, a
+    // thread-shared handle's payload - may be run by the other one: it
+    // takes its captures with it as one a thread is spawned on does)
+    : ~ i dets 0
+    = e 0
+    ~ < e ( sm_n sm SM_DETACHES ) { = dets ( sq_add dets ( sm_at sm SM_DETACHES e ) ) = e + e 1 }
+    = e 0
+    ~ < e ( sm_n sm SM_STORES ) {
+        : i t ( sm_at sm SM_STORES e )
+        : i tj ( tp_at t 5 0 )
+        : i tk ( tp_at t 5 2 )
+        : i tkind ( tp_at t 5 4 )
+        ? & & & | == tkind SK_VALUE == tkind LK_HANDLE < tj n < tk n ( op_is_place ( wv_at ops tj ) ) {
+            ? ( held_has_clo ( av_held ( wv_at avs tk ) ) ) {
+                : i jty ( eng_ty_of ( wv_at ops tj ) )
+                ? != jty ET_NONE {
+                    : ~ b ts & == ( et_kind jty ) EK_NAMED ( et_flag jty ETF_TSHARE )
+                    ? ! ts {
+                        : i shs ( wv_new )
+                        ( et_shared_in jty shs )
+                        : ~ i q 0
+                        ~ < q ( wv_len shs ) { ? ( et_flag ( wv_at shs q ) ETF_TSHARE ) { = ts T } {} = q + q 1 }
+                        ( wv_drop shs )
+                    } {}
+                    ? ts { = dets ( sq_add dets tk ) } {}
+                } {}
+            } {}
+        } {}
+        = e + e 1
+    }
+    : i nd ( sq_len dets )
     = e 0
     ~ < e nd {
-        : i dk ( sm_at sm SM_DETACHES e )
+        : i dk ( sq_at dets e )
         ? < dk n {
             : i ok ( wv_at ops dk )
             ? & & ( op_is_place ok ) == ( pl_path ok ) 0 >= ( fv_pidx ( pl_var ok ) ) 0 {
@@ -15137,7 +15167,7 @@ unsafe @ eng_byte s w i k → i {
     ~ < k n {
         : i av ( wv_at avs k )
         // (one another thread runs took its captures with it, above)
-        ? & & ! ( sm_has sm SM_DETACHES k ) ( sm_has sm SM_INVOKES k ) ( held_has_clo ( av_held av ) ) {
+        ? & & ! ( sq_has dets k ) ( sm_has sm SM_INVOKES k ) ( held_has_clo ( av_held av ) ) {
             // (a callee that catches a panic of the closure it runs: the
             // body may stop anywhere, so what it would have given a new
             // value may still hold what it held)

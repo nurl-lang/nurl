@@ -1474,7 +1474,20 @@ class FnCheck:
         for (ty, tail, eff) in sm.get("regions", ()):
             self.region_effect(st, ty, tuple(tail), eff)
         # a closure another thread runs takes what it captured with it
-        for k in sm.get("detaches", ()):
+        # (…and a closure stored into what two threads may share - a
+        # channel, a thread-shared handle's payload - may be run by the
+        # other one: it takes its captures with it as one a thread is
+        # spawned on does, MEMORY.md §6.5, h340)
+        tshare = getattr(self.prog, "thread_share", ())
+        dets = set(sm.get("detaches", ()))
+        for (j, dpath, k, path, kind) in sm["stores"]:
+            if (kind in ("value", "handle") and j < len(ops) and k < len(avs) and ops[j][0] == "v"
+                    and self.closures_in(avs[k])):
+                jty = self.ty_of_place((ops[j][1], ops[j][2]))
+                if jty is not None and ((jty[0] == "named" and jty[1] in tshare)
+                                        or self.T.shared_in(jty) & set(tshare)):
+                    dets.add(k)
+        for k in sorted(dets):
             if k < len(avs):
                 if ops[k][0] == "v" and not ops[k][2] and ops[k][1] in self.pidx:
                     # (a parameter handed on to a callee that detaches it:
@@ -1510,7 +1523,7 @@ class FnCheck:
         # to its captures (MEMORY.md §2.11); a callee nothing says that of
         # may run any closure it is handed
         inv = sm.get("invokes")
-        gone = set(sm.get("detaches", ()))
+        gone = dets
         for k, av in enumerate(avs):
             # (one another thread runs took its captures with it, above)
             if k not in gone and (inv is None or k in inv) and self.closures_in(av):
