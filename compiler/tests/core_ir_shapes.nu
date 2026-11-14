@@ -83,6 +83,20 @@ $ `stdlib/core/string.nu`
     ^ + ( defaults 1 ) ( defaults c : 7 a : 1 )
 }
 
+// A body that falls off with a tail join's value hands it back with no
+// `^`: a function's, and a closure's.
+@ shape_fall b c → String {
+    ? c ( string_from `left` ) ( string_from `right` )
+}
+
+@ shape_fall_closure b c → i {
+    : ( @ String b ) pick \ b d → String {
+        ? d ( string_from `p` ) ( string_from `qq` )
+    }
+    : String got ( pick c )
+    ^ ( string_len got )
+}
+
 @ main → i {
     : Shape sh @ Shape { Named ( string_from `q` ) }
     : i z ?? ( shape_try ( string_from `x` ) ) { T v → v F e → 0 }
@@ -91,5 +105,7 @@ $ `stdlib/core/string.nu`
     : ( Vec String ) vs ( vec_new [String] )
     : i total + + + + + + + z ( shape_loops vs ) # i ( shape_match sh ) ( shape_store ) ( shape_block ) ( shape_closure ) ( shape_named ) . xs length
     : b one ( shape_short w )
-    ^ ? & one > total 0 0 0
+    : String fell ( shape_fall T )
+    : i falls + ( string_len fell ) ( shape_fall_closure F )
+    ^ ? & & one > total 0 == falls 6 0 1
 }
