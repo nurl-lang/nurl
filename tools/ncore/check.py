@@ -689,7 +689,8 @@ class FnCheck:
             mine = [a for a in av.alias if (st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
                                             and op[1] not in self.vcopy_temps
                                             and self.fn.vars[a[0]].kind != "param" and "*" not in a[1]
-                                            and (not viewish or (self.ty_of_place(a) or ("?",))[0] == dest_ty[0]))]
+                                            and (not viewish or ((self.ty_of_place(a) or ("?",))[0] == dest_ty[0]
+                                                                 and self.named_directly(av, a))))]
             if mine and self.fn.vars[op[1]].kind == "temp":
                 gone = set()
                 for a in mine:
@@ -1352,6 +1353,13 @@ class FnCheck:
                               {(dest, a[1]) if a[0] == src else a for a in av.alias},
                               {(hp, sub.get(l, l)) for hp, l in av.held}, av.call)
         st.dead = frozenset(st.dead) - set(sub.values())
+
+    def named_directly(self, av, place):
+        """Is `place` one the value names itself (`? c a b`: the binding
+        handed on) - not a view of it read out of something that held one
+        (a payload, a field)?"""
+        return any(l in self.loans and self.loans[l][0] == place and isinstance(l[0], tuple)
+                   and l[0] and l[0][0] == "use" for l in av.loans)
 
     def note_fresh(self, vid, rv, new):
         """`vid` was given `new`: a value of its own that is no `None`?"""
