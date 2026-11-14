@@ -12597,10 +12597,18 @@ unsafe @ eng_byte s w i k → i {
 // storage: what is done inside the view is done inside `x.g[*].data` only.
 // A place is the value when its type is the value's (a view: its element
 // type is the place's).
-@ eng_alias_is_value i vid i a → b {
-    : i vty ( fv_ty vid )
+@ eng_alias_is_value i vid i a → b { ^ ( eng_is_value_place ( fv_ty vid ) a F ) }
+
+// Can place `a` be a value of type `vty` itself - its type is `vty` (for a
+// view: its element type is the view's), or is not known? `wrapped`: an
+// option or a result around such a value is one too (a payload's payload
+// is handed out with its option).
+@ eng_is_value_place i vty i a b wrapped → b {
     : i pty ( eng_ty_of a )
     ? | | == vty ET_NONE == pty ET_NONE == pty vty { ^ T } {}
+    ? & wrapped | == ( et_kind pty ) EK_OPT == ( et_kind pty ) EK_RES {
+        ? | == ( et_at pty ET_E1 ) vty == ( et_at pty ET_E2 ) vty { ^ T } {}
+    } {}
     ? | ( et_is_view vty ) ( et_is_view pty ) {
         // (bytes are bytes: a raw string's, a String's, a slice's)
         : i e ( eng_elem_norm vty )
@@ -16016,6 +16024,12 @@ unsafe @ eng_byte s w i k → i {
         : b whole & ( op_is_place op ) == ( pl_path op ) 0
         : i pty ? whole ( agg_field_ty ( fv_ty ( pl_var op ) ) variant idx ) ET_NONE
         ? & & whole == ( fv_kind ( pl_var op ) ) VK_TEMP == ( av_own av ) OW_O { ^ ( lent_part ( av_make OW_O 0 0 sub F ) ) } {}
+        ? & & != pty ET_NONE ! ( et_owning pty ) ! ( et_view_capable pty ) {
+            // (a payload with no room for a view or a handle - an error code
+            // and an offset - borrows nothing, whatever its option lends: a
+            // copy of its words)
+            ^ g_av_none
+        } {}
         ? & != pty ET_NONE ( et_is_view pty ) {
             : i v ( view_value sub )
             ? == ( av_own v ) OW_L { ^ ( av_make OW_L ( sq_union ( av_loans v ) ( av_loans av ) ) ( av_alias v ) 0 F ) } {}
@@ -16189,9 +16203,11 @@ unsafe @ eng_byte s w i k → i {
         : i al ( av_alias new )
         : ~ b all T
         : ~ i a 0
+        // (…an owner of the binding's type: a value that only views an
+        // owner - a reader over a Vec's bytes - selects none)
         ~ & all < a ( sq_len al ) {
             : i pv ( pl_var ( sq_at al a ) )
-            ? | != ( st_own st pv ) OW_O < ( fv_depth pv ) ( fv_depth vid ) { = all F } {}
+            ? | | != ( st_own st pv ) OW_O < ( fv_depth pv ) ( fv_depth vid ) ! ( eng_is_value_place vty ( sq_at al a ) T ) { = all F } {}
             = a + a 1
         }
         ? & all ( take_payload st new ln T ) { = new ( av_make OW_O 0 0 ( av_held new ) F ) } {}
@@ -16214,7 +16230,7 @@ unsafe @ eng_byte s w i k → i {
                 = a 0
                 ~ & all < a ( sq_len sel ) {
                     : i pv ( pl_var ( sq_at sel a ) )
-                    ? | != ( st_own st pv ) OW_O < ( fv_depth pv ) ( fv_depth vid ) { = all F } {}
+                    ? | | != ( st_own st pv ) OW_O < ( fv_depth pv ) ( fv_depth vid ) ! ( eng_is_value_place vty ( sq_at sel a ) T ) { = all F } {}
                     = a + a 1
                 }
                 ? & all ( take_payload st ( av_make OW_L loans sel ( av_held new ) F ) ln T ) { = new ( av_make OW_O 0 0 ( av_held new ) F ) } {

@@ -475,25 +475,31 @@ class FnCheck:
         """The places of `alias` that are the borrowed value itself: a call
         that lends a view of `x.g[*].data` lends handles of `x.g` and of
         `x.g[*]` around it too, and those are not the view's storage - what
-        is done inside the view is done inside `x.g[*].data` only. A place
-        is the value when its type is the value's (a view: its element type
-        is the place's element type); if none is, every place may be."""
+        is done inside the view is done inside `x.g[*].data` only. If no
+        place is, every place may be."""
         if len(alias) < 2:
             return alias
         vty = self.fn.vars[vid].ty
         if vty is None:
             return alias
-        out = []
-        for a in alias:
-            pty = self.ty_of_place(a)
-            if pty is None or pty == vty:
-                out.append(a)
-            elif vty[0] in VIEW_TYPES or pty[0] in VIEW_TYPES:
-                # (bytes are bytes: a raw string's, a String's, a slice's)
-                e = self.elem_norm(vty)
-                if e is not None and e == self.elem_norm(pty):
-                    out.append(a)
+        out = [a for a in alias if self.is_value_place(vty, a)]
         return out or alias
+
+    def is_value_place(self, vty, place, wrapped=False):
+        """Can `place` be a value of type `vty` itself - its type is `vty`
+        (for a view: its element type is the view's), or is not known?
+        `wrapped`: an option or a result around such a value is one too."""
+        pty = self.ty_of_place(place)
+        if vty is None or pty is None or pty == vty:
+            return True
+        if wrapped and pty[0] in ("opt", "res") and vty in pty[1:]:
+            # (an option or a result around the value: a payload's payload
+            # is handed out with its option, agora #175)
+            return True
+        if vty[0] in VIEW_TYPES or pty[0] in VIEW_TYPES:
+            e = self.elem_norm(vty)
+            return e is not None and e == self.elem_norm(pty)
+        return False
 
     def scalar_place(self, place):
         """Is the place known to hold a number (no handle, no view)?"""
@@ -2430,6 +2436,11 @@ class FnCheck:
             pty = self.ty_of_field(self.fn.vars[op[1]].ty if op[0] == "v" and not op[2] else None, variant, idx)
             if op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp" and av.own == "O":
                 return self.lent_part(AV("O", (), (), sub))
+            if pty is not None and not self.T.owning(pty) and not self.T.view_capable(pty):
+                # (a payload with no room for a view or a handle - an error
+                # code and an offset - borrows nothing, whatever its option
+                # lends: a copy of its words)
+                return NONE
             if pty is not None and pty[0] in VIEW_TYPES:
                 v = self.view_value(sub)
                 return AV("L", v.loans | av.loans, v.alias, frozenset()) if v.own == "L" else NONE
@@ -2574,9 +2585,13 @@ class FnCheck:
                     # - owners of this frame that live no longer than the
                     # binding: a parameter is the caller's, and a binding of
                     # an inner scope is a second name of an outer owner
+                    # (…an owner of the binding's type: a value that only
+                    # views an owner - a reader over a Vec's bytes - selects
+                    # none)
                     roots = [st.vals.get(a[0]) for a in new.alias]
                     if (all(r is not None and r.own == "O" for r in roots)
                             and all(self.fn.vars[a[0]].depth >= v.depth for a in new.alias)
+                            and all(self.is_value_place(v.ty, a, True) for a in new.alias)
                             and self.take_payload(st, new, ln)):
                         new = AV("O", (), (), new.held)
                 elif (not v.mut and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
@@ -2591,6 +2606,7 @@ class FnCheck:
                     roots = [st.vals.get(a[0]) for a in sel]
                     if (all(r is not None and r.own == "O" for r in roots)
                             and all(self.fn.vars[a[0]].depth >= v.depth for a in sel)
+                            and all(self.is_value_place(v.ty, a, True) for a in sel)
                             and self.take_payload(st, AV("L", new.loans, sel, new.held), ln)):
                         new = AV("O", (), (), new.held)
                     elif (not self.T.copyable(v.ty) and self.T.owning(v.ty)
