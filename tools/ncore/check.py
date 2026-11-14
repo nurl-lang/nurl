@@ -868,6 +868,14 @@ class FnCheck:
                     # this function detaches its argument)
                     self.s_detaches.add(self.pidx[ops[k][1]])
                 for hp, l in avs[k].held:
+                    if l in self.loans and self.loans[l][1] == "view" and any(x.startswith("^") for x in hp):
+                        # what another thread runs holds no view: this side
+                        # may release what it points into while the other
+                        # runs (MEMORY.md §6.5)
+                        self.err(line, f"{name}: what another thread runs holds a view of "
+                                       f"{self.pname(self.loans[l][0])}")
+                        break
+                for hp, l in avs[k].held:
                     if l in self.loans and hp and hp[-1].startswith("^") and hp[-1] != "^f":
                         place = self.loans[l][0]
                         if self.loans[l][1] == "ref":
