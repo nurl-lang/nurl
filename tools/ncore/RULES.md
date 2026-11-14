@@ -68,6 +68,13 @@ summarised by the same analysis, to a fixpoint over the program.
 | A function that hands a parameter to a callee that detaches it detaches its argument | §2.7 | `s_detaches` |
 | A call's effects come before its stores; a consumed argument is moved | §2.1 | `apply_call` |
 | A view-typed parameter (`s`, a slice) is a view the caller lent, never an owner | §1 | `read` |
+| An `inout` argument whose binding does not own its value (a `: ~` copy of another binding or of a parameter, a field read, what a call lends; on any path) may not go to a callee that gives the parameter, or a field of it, a new value: the callee releases the old one, which its owner still holds. A `: ~` copy of a local or a `sink` parameter that owns a struct or an enum outright is the exception: after the call it is the value's owner, and the binding it copied is moved | §2.4 (#135, h367–h370) | `apply_call`: `takes`, the borrowed-argument check |
+| A `: ~ s` binding born owning (from a literal, from a fresh value) takes its own copy of any value that is not fresh: it holds no view of where the value came from | §7.6 (owned string slots) | `own_slots`, `transfer` |
+| A closure whose body gives a binding it captured by pointer a new value, where that binding borrows its value (a `: ~` copy of another): the binding owns the new value, and what it borrowed stays its owner's, untouched | §2.11 | `run_closures` |
+| A capture with no copy, stored into a literal by the closure's body, moves out of the closure: it may run once (run again, it panics) | §7.5 (h222, h224) | `transfer`: the capture branch |
+| A closure binding reached through a pointer (an `inout` parameter, a capture taken by pointer) is a place that owns its closure, as a field is: a closure stored there copies in every capture that has a copy | §7.4 (h297) | `stmt` (`assign`), `closure_owned` |
+| A share of a shared handle borrows no binding: a value that holds one may outlive the binding the share was copied from | §6.5, §7.5 | `local_depth` |
+| What a closure's body changes inside a shared payload is changed where the closure is run, in every payload of that handle type (`regions`) | §2.2 (#845) | `run_closures`, `region_effect` |
 | A borrow handed to a consumer: a part read in place is taken out of its owner; a call's lend in a temporary is copied; a binding of a call's lend is refused | §2.5, §7.6 | `apply_call`, `take_payload` |
 | A field taken out of its owner is not read, nor the value handed on whole, until it is given a value again | §2.1 | `State.gone` |
 | A part taken out of an `inout` parameter is a change to the caller's binding, not a hand-over of it; left taken at an exit, it is gone in the caller's binding | §2.1, §2.12 | `take_payload`, summary `gone` |
