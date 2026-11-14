@@ -1,3 +1,0 @@
-### Fixed
-
-- **An owner given back its own value through a forwarder declared above its callee keeps it** (Agora #742). With `@ f1 String p → String { ^ ( f0 p ) }` declared above `@ f0 String p → String { ^ p }`, `= o ( f1 o )` released o's value and went on to hold it: what f1 lends waited on f0's summary until the end of the module, and the assignment read the call as lending nothing. The assignment now asks whether a call's lends are still pending, as a call to a function not compiled yet already counted, and keeps a result that is the owner's own old value at run time — for a String, an option, a Vec, a value lent on some calls only, nested calls and a loop.

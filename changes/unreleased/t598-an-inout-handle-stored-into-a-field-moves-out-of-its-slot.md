@@ -1,3 +1,0 @@
-### Fixed
-
-- **An `inout` handle parameter stored into another `inout`'s field moves out of its slot** (Agora #598). `@ stash inout ( Vec String ) v inout Hold b → v { … = . b held v = v ( vec_new [String] ) }` left the field and `v`'s slot sharing one buffer. `= v` then freed it under the field, and the caller's two handles were a use after free and a double free. The store now empties `v`'s slot where it was not copied, as handing `v` to a `sink` does (#776, #778). `= v …` then drops nothing, and the caller's binding ends with the new Vec. The function counts as replacing `v`, so a borrow the caller holds of its argument ends at the call.

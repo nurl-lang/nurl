@@ -1,3 +1,0 @@
-### Changed
-
-- **A typo in a binding's type is reported as an unknown type** (Agora #725). `: Ptt p @ Pt { 2 3 }` with no `Ptt` declared read as the inferred binding `Ptt` of the value `p`, and the error named `p` — "use of undefined identifier 'p'" — the binding the program meant to declare. A word named like a type that names none, followed by a word that names nothing in scope, now reads "unknown type 'Ptt' in a binding type — no struct or enum with this name is declared (a typo, or a missing '$' import?)", as the parameter spelling `@ get Ptt p → i` already did, at `Ptt`, for a plain and an aliased name. `: x 5` and `: y x` read as before.

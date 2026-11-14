@@ -1,16 +1,16 @@
 # Proposal: one ownership engine over a core IR
 
-Status: **proposal for the owner's decision** (Agora AGORA-441, 2026-11-13).
-Nothing in `compiler/nurlc.nu` changes with this document. It comes with a
-working prototype of the checker it proposes (`tools/ncore/`) and the
-measurements below.
+Status: **under way** (Agora AGORA-441, proposed 2026-11-13): S1 is in the
+compiler (AGORA-858), S2's engine runs in shadow beside the walk
+(AGORA-859, AGORA-863). The document came with a working prototype of the
+checker it proposes (`tools/ncore/`) and the measurements below.
 
 **Where it stands.** S1 is in the compiler (AGORA-858): the walk builds
 the core IR and `nurlc --emit-core` prints it. [CORE_IR.md](CORE_IR.md)
 describes it, and `tools/ncore --nurlc` runs the reference checker on what
 nurlc lowers instead of on its own parser's lowering.
 
-S2 is being prepared (AGORA-859). A program the walk refuses on an
+S2 is in shadow (AGORA-859, AGORA-863). A program the walk refuses on an
 ownership rule reaches the IR whole (one door, CORE_IR.md §6), the IR
 carries the walk's own summaries of the functions whose bodies cross the
 raw boundary (`sum` lines), and the reference checker's rules are a table,

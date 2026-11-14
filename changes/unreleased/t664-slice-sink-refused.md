@@ -1,4 +1,0 @@
-### Changed
-
-- **A second name for a local slice is that slice** (Agora #664). `: [i c a` out of an owned slice moves it, so `( eat c )` with eat a `sink [i` parameter is refused, as `( eat a )` already is ("passing a compiler-auto-dropped value to a 'sink' parameter is not yet supported"). Before, c was a borrow, and the sink was handed a value nobody accounted for.
-- **Reading a slice after `: [i c a` moved its buffer is refused** (Agora #664): "use of moved value 'a'", as after `= c a` or `: String c a`. Read the slice through `c`, or give `a` a new value first.

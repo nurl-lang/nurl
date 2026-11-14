@@ -1,3 +1,0 @@
-### Fixed
-
-- **A function empties its caller's slot where it hands an `inout` parameter to a consuming call** (Agora #778). In `@ boom inout ( Vec S ) p → i { : i n ( eat p ) ( panic `boom` ) ^ n }` called as `( boom . h a )` under `recover`, the field was emptied only once the call returned (Agora #567), and the panic's unwind dropped `h` with `. h a` still holding what `eat` had released (heap-use-after-free). The function now empties the slot through `p` right after the value is loaded for `eat`, as a field handed to a `sink` is emptied before its call, so the slot is empty on every path. Only for a handle type, whose zero is the empty value; the caller's drop flag is cleared as before.

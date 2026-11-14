@@ -203,8 +203,9 @@
 // order, in which every producer (a call, a literal, a join, a block) is
 // bound to a variable before anything consumes it, and every value read is
 // a place (a variable and a path of fields, `*` elements and payloads).
-// `--emit-core` prints it; nothing else reads it yet, and with the flag off
-// every hook is one test of g_core_on.
+// `--emit-core` prints it, and the ownership engine reads it under
+// `--engine` (in shadow); with the flag off every hook is one test of
+// g_core_on.
 : ~ i g_core_on 0  // 1: the walk builds the core IR (--emit-core)
 : ~ i g_core_live 0  // 1 while a function's IR is being built
 : ~ i g_core_code 0  // the function's statements, as words (CO_* / RV_*)
@@ -110043,12 +110044,15 @@ unsafe @ split_emit_module i n i mlen → v {
     ( nurl_print `  --coverage-link-ir=FILE  also write staged IR; stdout keeps final paths\n` )
     ( nurl_print `  --coverage-notes=FILE  GCOV notes path in staged IR; use both with --coverage\n` )
     ( nurl_print `  --check             validate without writing LLVM IR or split files\n` )
-    ( nurl_print `  --emit-core         validate, and print the core IR instead of LLVM IR:\n` )
-    ( nurl_print `                      each function's variables and statements, every\n` )
-    ( nurl_print `                      producer bound before its consumer (docs/dev/CORE_IR.md)\n` )
+    ( nurl_print `  --emit-core         check types and syntax, and print the core IR instead of\n` )
+    ( nurl_print `                      LLVM IR: each function's variables and statements, every\n` )
+    ( nurl_print `                      producer bound before its consumer (docs/dev/CORE_IR.md);\n` )
+    ( nurl_print `                      the walk's ownership refusals are left to the IR's reader\n` )
     ( nurl_print `  --engine            --emit-core, and after the IR what the ownership engine\n` )
     ( nurl_print `                      says of it: 'eng err' findings and an 'eng verdict' line\n` )
     ( nurl_print `                      (in shadow: the compile itself is still the walk's)\n` )
+    ( nurl_print `  --engine-trace      --engine, and name each function on stderr as the engine\n` )
+    ( nurl_print `                      walks it, with the summaries it made\n` )
     ( nurl_print `  --stdin             read source from stdin; <file.nu> keeps its logical path\n` )
     ( nurl_print `  --sanitize-address  mark every generated function for AddressSanitizer\n` )
     ( nurl_print `  --lint              run lint-only diagnostics: unused symbols and imports,\n` )

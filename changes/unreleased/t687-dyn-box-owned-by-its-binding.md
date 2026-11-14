@@ -1,3 +1,0 @@
-### Fixed
-
-- **A trait object bound right after a call is its binding's own** (Agora #687). `: %Tr d ( dyn Tr g )` took its drop flag from whatever the last call before it said of its own result. Right after a call that lends (`: String b ( first v )`, `first` handing back a `vec_at` element) the box was taken for a borrow, never dropped, and leaked with everything in it; as the first statement of a closure body after an owned call in the enclosing function, the flag was a register of that function, and clang refused the IR (`use of undefined value '%r4'`). A `( dyn … )` box is allocated where it is made, so the binding now owns it, known by the box's own register; and a closure body starts with none of the enclosing function's last-call state, as a function body does.

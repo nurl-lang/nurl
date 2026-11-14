@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-11-06 · Current release: **0.89.0** · Language: **Grammar
+_Last reviewed: 2026-11-14 · Current release: **0.92.0** · Language: **Grammar
 v2.12** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -670,7 +670,7 @@ new language features.
   `Atomic`, channels, `SendCheck` library handles, closures and trait
   objects across threads, module globals, data-race freedom) are proven in
   Lean 4 (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`,
-  `A2.no_leak_panic`, `A3.claim`, `A3.claim_made`), building without a
+  `A2.no_leak_panic`, `A3.claim_full`, `A3.claim_made_full`), building without a
   warning on Lean 4.35. Open: B (the standard library's `unsafe` base), C (nurlc
   implements the rules, by certificate) and D (code generation).
 
