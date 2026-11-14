@@ -1106,17 +1106,17 @@ class FnCheck:
         vback = ({k for (k, _, kind) in sm.get("lends", ()) if kind == "view"}
                  | {k for (_, k, _, kind) in sm.get("rholds", ()) if kind == "view"})
         for i, op in enumerate(ops):
-            av = self.read(st, op, line, (site, i), f"capture {i + 1}")
             fp = (f"^{i}",)
             byref = body is not None and i < len(body.params) and getattr(body.vars[body.params[i]], "byref", False)
             if byref and op[0] == "v":
                 # taken by pointer (a `: ~` binding the body assigns): the
                 # closure points into this frame (MEMORY.md §2.3) - at the
-                # binding, whatever value it holds: it has no handle of the
+                # binding, whatever value it holds when the body runs: it
+                # reads nothing where it is made, and has no handle of the
                 # value that a new one would end
                 held.add((fp, self.loan(st, (site, i, "ref"), (op[1], op[2]), "ref")))
-                held |= hroot(av.held, fp)
                 continue
+            av = self.read(st, op, line, (site, i), f"capture {i + 1}")
             if av.own == "N":
                 # (a number, a string literal: nothing a view could outlive)
                 continue
