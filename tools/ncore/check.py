@@ -405,7 +405,9 @@ class FnCheck:
             rest = pp[len(qp):]
             if k == "handle" and self.holds_views(self.ty_of_place(q)):
                 return True
-            if k == "handle" and eff == "replace" and "*" not in rest:
+            if k == "handle" and eff == "replace" and "*" not in rest and not (p is not None and self.scalar_place(p)):
+                # (a number given a new value releases nothing: a copy of
+                # the handles around it stays good)
                 return True
             return False
         return False
@@ -941,6 +943,19 @@ class FnCheck:
         from syntax import Unsupported
         raise Unsupported(f"no summary for {tmpl or name}")
 
+    def releases_in(self, sm, k, op):
+        """Does the callee give argument `k` (the operand `op`), or a part of
+        it, a new value that releases the old one - a place that may hold a
+        handle? A new number releases nothing, and a new element of a
+        buffer is the buffer's: every copy of the handle sees it."""
+        for (j, p, eff) in sm["effects"]:
+            if j != k or eff != "replace" or "*" in p:
+                continue
+            ty = self.ty_at(self.ty_of_place((op[1], op[2])) if op[0] == "v" else None, p)
+            if ty is None or ty[0] not in SCALARS:
+                return True
+        return False
+
     def apply_call(self, st, rv, line, dest_vid=None):
         """A call; and after it, a `: ~` copy of a local that owns a struct
         or an enum outright, handed `inout` to a callee that gives it or a
@@ -952,7 +967,7 @@ class FnCheck:
         takes = []
         for k, op in enumerate(ops):
             if (op[0] != "v" or op[2] or k >= len(sm["modes"]) or sm["modes"][k] != "inout"
-                    or not any(j == k and eff == "replace" for (j, p, eff) in sm["effects"])):
+                    or not self.releases_in(sm, k, op)):
                 continue
             v, av = self.fn.vars[op[1]], st.vals.get(op[1])
             if (av is None or av.own != "L" or av.call or len(av.alias) != 1 or len(av.loans) != 1
@@ -975,7 +990,7 @@ class FnCheck:
         for k, op in enumerate(ops):
             if (op[0] != "v" or k >= len(sm["modes"]) or sm["modes"][k] != "inout" or op[1] in self.pidx
                     or any(vid == op[1] for vid, _ in takes)
-                    or not any(j == k and eff == "replace" for (j, p, eff) in sm["effects"])):
+                    or not self.releases_in(sm, k, op)):
                 continue
             av = st.vals.get(op[1])
             if av is None or av.own not in ("L", "O"):
@@ -2343,6 +2358,19 @@ class FnCheck:
                             nc_loans |= av.loans
                             nc_alias |= av.alias
                             self.lit_nocopy[dest_vid] = i + 1
+                        elif (dest_vid in self.ret_aggs and not av.call and av.alias and op[0] == "v" and not op[2]
+                              and all(a[1] and "*" not in a[1] and a[1][-1].startswith("#")
+                                      and self.fn.vars[a[0]].kind == "local"
+                                      and st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
+                                      and (self.ty_of_place((a[0], a[1][:-1])) or ("?",))[0] in ("opt", "res")
+                                      for a in av.alias)
+                              and self.take_payload(st, av, line)):
+                            # the payload of an option or a result a local of
+                            # this function owns, named in a literal handed
+                            # back: it goes over with its option, which is
+                            # not read after (h264's move for a payload)
+                            held |= hroot(av.held, fp)
+                            continue
                         elif (not av.call and av.alias and op[0] == "v" and not op[2] and op[1] in self.slot_vars
                               and all(st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O" for a in av.alias)
                               and self.take_payload(st, av, line)):
@@ -3096,7 +3124,11 @@ class FnCheck:
 
 def initial_summary(prog, fn):
     T = Types(prog)
-    return {"modes": list(fn.modes), "res": "none" if fn.ret is None or T.is_scalar(fn.ret) else "own",
+    # (a view - a raw string, a slice - is no value of its own until a
+    # return says so: a string literal handed back is static, owned by
+    # nobody; summaries only grow, so a body that returns an owned one
+    # raises it)
+    return {"modes": list(fn.modes), "res": "none" if fn.ret is None or T.is_scalar(fn.ret) or fn.ret[0] in VIEW_TYPES else "own",
             "lends": [], "rholds": [], "effects": [], "stores": [],
             "consumes": [k for k, m in enumerate(fn.modes) if m == "sink"], "elems": [], "invokes": [],
             "cloargs": [], "regions": [], "selfholds": [], "rclos": [], "sclos": [], "detaches": []}

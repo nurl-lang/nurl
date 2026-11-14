@@ -12461,7 +12461,13 @@ unsafe @ eng_byte s w i k → i {
 // Does effect `eff` at path `pp` (of place `p`) end a loan of kind `k`
 // on path `qp` (of place `q`, in the same variable or the same shared
 // payload)?
-@ kills_paths i eff i pp i q i qp i k → b {
+// Is the place known to hold a number (no handle, no view)?
+@ eng_place_scalar i pl → b {
+    : i ty ( eng_ty_of pl )
+    ^ & != ty ET_NONE == ( et_kind ty ) EK_SCALAR
+}
+
+@ kills_paths i eff i pp i q i qp i k b pscalar → b {
     ? | | | | == k LK_SHARE == k LK_HELD == k LK_HELDIN == k LK_STALE == eff EF_PERMUTE { ^ F } {}
     ? == eff EF_TAKE {
         // a part moved out of where it lived: what was lent out of that
@@ -12498,7 +12504,9 @@ unsafe @ eng_byte s w i k → i {
             : ~ i r pp
             : ~ b star F
             ~ > ( ep_len r ) ( ep_len qp ) { ? == ( ep_last r ) EE_STAR { = star T } {} = r ( ep_parent r ) }
-            ^ ! star
+            // (a number given a new value releases nothing: a copy of the
+            // handles around it stays good)
+            ^ & ! star ! pscalar
         } {}
         ^ F
     } {}
@@ -12510,7 +12518,8 @@ unsafe @ eng_byte s w i k → i {
     ? ! ( el_is_loan l ) { ^ F } {}
     : i q ( el_place l )
     : i k ( el_kind l )
-    ? & == ( pl_var q ) ( pl_var p ) ( kills_paths eff ( pl_path p ) q ( pl_path q ) k ) { ^ T } {}
+    : b pscalar & == eff EF_REPLACE ( eng_place_scalar p )
+    ? & == ( pl_var q ) ( pl_var p ) ( kills_paths eff ( pl_path p ) q ( pl_path q ) k pscalar ) { ^ T } {}
     ? & & & == eff EF_TAKE ( sq_has g_fc_cap_loans l ) == ( pl_var q ) ( pl_var p ) & ( ep_prefix ( pl_path q ) ( pl_path p ) ) != k LK_REF {
         // (a closure that captured the value around the part taken may
         // read that part when it runs)
@@ -12527,7 +12536,7 @@ unsafe @ eng_byte s w i k → i {
     ~ < a ( sq_len qs ) {
         : ~ i b 0
         ~ < b ( sq_len ps ) {
-            ? & == ( sq_at qs a ) ( sq_at ps b ) ( kills_paths eff ( sq_at ps + b 1 ) q ( sq_at qs + a 1 ) k ) { ^ T } {}
+            ? & == ( sq_at qs a ) ( sq_at ps b ) ( kills_paths eff ( sq_at ps + b 1 ) q ( sq_at qs + a 1 ) k pscalar ) { ^ T } {}
             = b + b 2
         }
         = a + a 2
@@ -12550,7 +12559,7 @@ unsafe @ eng_byte s w i k → i {
             : ~ i a 0
             : ~ b hit F
             ~ & ! hit < a ( sq_len qs ) {
-                ? & == ( sq_at qs a ) ty ( kills_paths eff tail q ( sq_at qs + a 1 ) ( el_kind l ) ) { = hit T } {}
+                ? & == ( sq_at qs a ) ty ( kills_paths eff tail q ( sq_at qs + a 1 ) ( el_kind l ) F ) { = hit T } {}
                 = a + a 2
             }
             ? hit { = dead ( sq_add dead l ) } {}
@@ -14229,13 +14238,20 @@ unsafe @ eng_byte s w i k → i {
 // `site`: the arguments are read, what the summary says the callee does
 // is done to them, and the result's value is returned. `dest`: the
 // temporary or binding the result goes to, -1 none.
-// Does the callee give parameter `k`, or a part of it, a new value?
-@ sm_replaces i sm i k → b {
+// Does the callee give argument `k` (the operand `op`), or a part of it, a
+// new value that releases the old one - a place that may hold a handle? A
+// new number releases nothing, and a new element of a buffer is the
+// buffer's: every copy of the handle sees it.
+@ sm_releases_in i sm i k i op → b {
     : i ne ( sm_n sm SM_EFFECTS )
+    : i oty ( eng_ty_of op )
     : ~ i e 0
     ~ < e ne {
         : i t ( sm_at sm SM_EFFECTS e )
-        ? & == ( tp_at t 3 0 ) k == ( tp_at t 3 2 ) EF_REPLACE { ^ T } {}
+        ? & & == ( tp_at t 3 0 ) k == ( tp_at t 3 2 ) EF_REPLACE ( eng_path_no_star ( tp_at t 3 1 ) ) {
+            : i ty ( eng_ty_at oty ( tp_at t 3 1 ) )
+            ? | == ty ET_NONE != ( et_kind ty ) EK_SCALAR { ^ T } {}
+        } {}
         = e + e 1
     }
     ^ F
@@ -14276,7 +14292,7 @@ unsafe @ eng_byte s w i k → i {
     : ~ i k 0
     ~ < k n {
         : i op ( wv_at ops k )
-        ? & & ( op_is_place op ) == ( sm_mode sm k ) PM_INOUT ( sm_replaces sm k ) {
+        ? & & ( op_is_place op ) == ( sm_mode sm k ) PM_INOUT ( sm_releases_in sm k op ) {
             : i vid ( pl_var op )
             : i src ? == ( pl_path op ) 0 ( takeover_source st vid ) -1
             ? >= src 0 { ( wv_push takes vid ) ( wv_push takes src ) } {
@@ -15901,6 +15917,24 @@ unsafe @ eng_byte s w i k → i {
                                 : ~ i a 0
                                 ~ & slot < a ( sq_len al ) { ? != ( st_own st ( pl_var ( sq_at al a ) ) ) OW_O { = slot F } {} = a + a 1 }
                             } {}
+                            // (the payload of an option or a result a local
+                            // of this function owns, named in a literal handed
+                            // back: it goes over with its option, which is not
+                            // read after - h264's move for a payload)
+                            : ~ b own_pay & & & & have_dest ( fx_has dest FX_RET_AGG ) ! ( av_call av ) != al 0 whole
+                            ? own_pay {
+                                : ~ i a 0
+                                ~ & own_pay < a ( sq_len al ) {
+                                    : i pa ( sq_at al a )
+                                    : i pp ( pl_path pa )
+                                    : i pv ( pl_var pa )
+                                    ? | | | == pp 0 ! ( eng_path_no_star pp ) ! ( ee_is_pay ( ep_last pp ) ) | != ( fv_kind pv ) VK_LOCAL != ( st_own st pv ) OW_O { = own_pay F } {
+                                        : i wty ( eng_ty_at ( fv_ty pv ) ( ep_parent pp ) )
+                                        ? | == wty ET_NONE & != ( et_kind wty ) EK_OPT != ( et_kind wty ) EK_RES { = own_pay F } {}
+                                    }
+                                    = a + a 1
+                                }
+                            } {}
                             ? & slot ( take_payload st av line T ) {
                                 // the payload of a library getter's option over
                                 // one of this frame's containers: a slot, which
@@ -15908,7 +15942,12 @@ unsafe @ eng_byte s w i k → i {
                                 = held ( sq_union held ( held_root ( av_held av ) fp ) )
                                 = next T
                             } {
-                                ( eng_err line ( nurl_str_cat3 `field ` ( nurl_str_int + i 1 ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+                                ? & own_pay ( take_payload st av line T ) {
+                                    = held ( sq_union held ( held_root ( av_held av ) fp ) )
+                                    = next T
+                                } {
+                                    ( eng_err line ( nurl_str_cat3 `field ` ( nurl_str_int + i 1 ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+                                }
                             }
                         }
                     } {}
@@ -17749,6 +17788,16 @@ unsafe @ eng_byte s w i k → i {
     ( wv_drop nones )
 }
 
+// Is no step of `path` an element (`*`)?
+@ eng_path_no_star i path → b {
+    : ~ i k 0
+    ~ < k ( ep_len path ) {
+        ? == ( ep_at path k ) EE_STAR { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
 // Is every step of `path` a field (no element, no payload)?
 @ eng_path_fields i path → b {
     : ~ i k 0
@@ -17978,7 +18027,11 @@ unsafe @ eng_byte s w i k → i {
     ( sm_put f SM_STATE 1 )
     : i rt ( ef_at f EF_RET )
     : i ret ? == rt 0 ET_NONE ( et_of_ptr rt )
-    ( sm_put f SM_RES ? | == ret ET_NONE ( et_scalar ret ) RES_NONE RES_OWN )
+    // (a view - a raw string, a slice - is no value of its own until a
+    // return says so: a string literal handed back is static, owned by
+    // nobody; summaries only grow, so a body that returns an owned one
+    // raises it)
+    ( sm_put f SM_RES ? | | == ret ET_NONE ( et_scalar ret ) ( et_is_view ret ) RES_NONE RES_OWN )
     : i n ( ef_nparams f )
     : i at ( wv_len g_sm_w )
     ( wv_push g_sm_w n )
