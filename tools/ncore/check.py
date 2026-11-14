@@ -2111,6 +2111,13 @@ def check_program(prog, max_rounds=40):
         if (name.endswith("_clone") or name.endswith("_share")) and sm["res"] == "lent":
             # a handle's copy hook makes a value of its own (§7.6)
             errors.append((name, fn.line, "a copy hook hands its argument back, whole or in part"))
+        if getattr(fn, "is_closure", False) and fn.ret is not None and not T.copyable(fn.ret):
+            ncap = getattr(fn, "ncap", 0)
+            if any(k < ncap and kind == "handle" for (k, _, kind) in sm["lends"]):
+                # a closure's result is its caller's own: what it lends out
+                # of a capture has to be copied, and this cannot be
+                # (MEMORY.md §7.5)
+                errors.append((name, fn.line, "a closure hands back, out of what it captured, a value it cannot copy"))
         # (what an argument or a capture holds, handed on by value, is a
         # view only where its type has room for one)
         real = [x for x in sm["stores"]

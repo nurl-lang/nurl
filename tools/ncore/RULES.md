@@ -103,6 +103,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | An argument the callee took over and hands back as it is is the caller's own again, holding what it held | §7.5 (#463) | `apply_call` |
 | `= b ( wrap b )`: a new value that holds a handle of the binding's old one keeps it; nothing is released | §7.6 (#475) | `stmt` (`assign`, `inside`) |
 | A view a closure hands back may point into its arguments, never into what it captured; judged where the closure is made (a captured literal is no view of anything) | §7.5 | `make_closure` (`vback`) |
+| A closure's result is its caller's own: what it lends out of a capture is copied, and a value that cannot be copied is refused | §7.5 | `check_program` |
 | A closure several threads may run changes nothing it captured | §6.5 | `shares` |
 | What an `Arc` shares is not changed in place | §6.5 | `effect` |
 | A shared payload (`Rc`, `Arc`, `Shared`) is one place per handle type: an effect inside one ends what was lent out of any | proposal D3 | `shared_tails`, `region_effect` |
