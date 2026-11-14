@@ -170,6 +170,7 @@ class FnCheck:
         self.call_lent = {}      # a call's temporary -> the arguments it may hand back whole
         self.cap_loans = set()   # the loans that are a closure's own handle of a binding it captured
         self.ret_watch = None    # the binding a return handed back, while its `;` blocks run
+        self.defer_vars = {}     # a `;` block -> the variables its body names
         self.ret_changed = False
         self.walking = set()
         self.moved_from = None   # the last value moved that holds views of its own parts     # the loans of the loops being walked: their containers' buffers     # a temporary -> its value is what a call made and handed over
@@ -1474,13 +1475,35 @@ class FnCheck:
             st = self.stmt(st, s)
         return st
 
+    def defer_reads(self, st):
+        """The variables the `;` blocks armed so far name."""
+        out = set()
+        for d in st.defers:
+            if d not in self.defer_vars:
+                found = set()
+
+                def walk(x):
+                    if isinstance(x, tuple) and len(x) == 3 and x[0] == "v" and isinstance(x[1], int):
+                        found.add(x[1])
+                    elif isinstance(x, (tuple, list)):
+                        for y in x:
+                            walk(y)
+                walk(self.defer_bodies[d])
+                self.defer_vars[d] = found
+            out |= self.defer_vars[d]
+        return out
+
     def scope_end(self, st, stmts, line):
         if st.bottom:
             return st
         declared = [s[1] for s in stmts if s[0] == "let"]
+        # a binding a `;` block armed here may read is released after the
+        # chain has run, at the function's exit: not where its scope ends
+        # (MEMORY.md §7.2, "values registered before a defer")
+        kept = self.defer_reads(st) if st.defers else ()
         for vid in reversed(declared):
             av = st.vals.get(vid)
-            if av is None:
+            if av is None or vid in kept:
                 continue
             if av.own == "O":
                 vty = self.fn.vars[vid].ty

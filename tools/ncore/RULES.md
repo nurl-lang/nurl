@@ -80,6 +80,9 @@ summarised by the same analysis, to a fixpoint over the program.
 | A function's exit runs the `;` blocks armed on the way, newest first, after its result is made | §1 | `run_defers` |
 | …and before the result leaves the frame: a `;` block still reads the binding handed back, and may not release or change it | §1, §7.2 (#165) | `stmt` (`ret`), `ret_watch` |
 | An owned raw string in a binding handed to a keeper is copied; the binding keeps its buffer | §7.6 | `apply_call` (`copied`) |
+| A binding a `;` block armed after it may read is released after the chain has run, not where its scope ends | §7.2 | `defer_reads`, `scope_end` |
+| A binding of what a call lent out of a temporary is handed a copy | §7.6 | `stmt` (`let`) |
+| A `?` / `??` that is owned on some paths and selects an owner on others moves the one it selects, as one that only selects does | §2.2 | `stmt` (`let`) |
 | A `~` loop walks its container's buffer: a change to it ends the walk | §2.5 | `foreach`, `walking` |
 | A closure holds what it captured: a copy of each handle, the views those hold; one taken by pointer is a `ref` | §2.11, §2.3 | `make_closure` |
 | Running a closure reads every capture and does what its body does to them, and to the arguments it is called with | §2.11 | `run_closures`, `closure_arg_effects` |
