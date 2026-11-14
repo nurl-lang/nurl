@@ -152,6 +152,10 @@ PRIMS = {
     "thread_spawn_owned": S(["in"], res="own", detaches=[0]),
     "spawn": S(["in"], res="own", detaches=[0]),
     "thread_join": S(["in"]),
+    # a handler the runtime keeps past the call, run on a signal after this
+    # frame may be gone: the entry behind it takes the env `in`, so its body
+    # cannot say that it keeps it (nurlc's escape calls, h503)
+    "signal_install": S(["in", "in"], detaches=[1]),
     # (the closure is run where a panic in it is caught: it may stop anywhere)
     "recover": dict(S(["in"], res="own", invokes=[0]), catches=[0]),
     "chan_new": S([], res="own"),
