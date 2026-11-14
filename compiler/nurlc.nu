@@ -485,6 +485,81 @@
 : ~ i g_s_cloargs 0  // …(closure parameter, its parameter, the parameter handed, path): a sequence each
 : ~ i g_s_regions 0  // …(shared handle type * 2^36 + tail * 16 + effect)
 : ~ i g_s_selfholds 0  // …(where in the result, path, kind): a sequence each
+: i WK_VALUE 0  // what a finding calls its value (eng_what): "value"
+: i WK_VAR 1  // a variable's name
+: i WK_PLACE 2  // a place's
+: i WK_RET 3
+: i WK_FIELD 4
+: i WK_ELEM 5
+: i WK_CLOARG 6
+: i WK_CLO 7
+: i WK_CLO_CALLED 8
+: i WK_MATCH 9
+: i WK_LOOP 10
+: i WK_GLOBAL 11
+: i WK_CALL_CLO 12
+: i WK_ARG_CLO 13
+: ~ i g_fc_callee 0  // the callee of the call being applied (interned)
+: i TG_USE 1  // the keys loans are made under: a `use` read by the statement at an offset
+: i TG_ARG 2  // operand k of the statement at an offset (offset * 256 + k)
+: i TG_RET 3
+: i TG_MATCH 4
+: i TG_IF 5
+: i TG_WC 6
+: i TG_FS 7
+: i TG_PL 8
+: i TG_LIT 9
+: i TG_CM 10
+: i TG_SV 11
+: i TG_CM2 12
+: i TG_S 13
+: i TG_R 14
+: i TG_SELF 15
+: i TG_VC 16
+: i TG_CR 17
+: i TG_FW 18
+: i TG_FE 19
+: i TG_PH 20
+: i TG_PHIN 21
+: i TG_L 22  // what a call lent (el_tag tells it)
+: i TG_RR 23
+: i TG_RH 24
+: i TG_CAP 25
+: i TG_EVAL 26
+: i TG_STALE 9001
+: ~ i g_pp -1  // tuples kept for the module: pairs, 2 words each (a tuple of n is a pair of a tuple of n-1 and its last)
+: ~ i g_pp_ix -1  // (first * 2^32 + second) → the pair + 1
+: ~ i g_sm -1  // the summaries, SM_W words a function (by its number); each set a place in g_sm_w, 0 the empty one
+: ~ i g_sm_w -1  // …their sets: a count, then the words in order
+: ~ i g_sm_tmp -1
+: i SM_W 24
+: i SM_STATE 0  // 0 none yet, 1 made by the engine, 2 declared, 3 derived from the walk's tables
+: i SM_RES 1  // RES_*
+: i SM_LENDS 2  // (parameter, path, kind): the result is a handle of / a view into it
+: i SM_RHOLDS 3  // (where in the result, parameter, path, kind): the result holds it
+: i SM_EFFECTS 4  // (parameter, path, effect)
+: i SM_STORES 5  // (parameter j, where in it, parameter k, path, kind): after the call j holds it
+: i SM_CONSUMES 6
+: i SM_ELEMS 7
+: i SM_INVOKES 8
+: i SM_CLOARGS 9  // (closure parameter, its parameter, the parameter handed, path)
+: i SM_DETACHES 10
+: i SM_SHARES 11
+: i SM_REGIONS 12  // (shared handle type, path below its payload, effect)
+: i SM_SELFHOLDS 13  // (where in the result, path, kind)
+: i SM_RCLOS 14  // (where in the result, closure body)
+: i SM_SCLOS 15  // (parameter, where in it, closure body)
+: i SM_CALLLENDS 16
+: i SM_GONE 17  // (parameter, path)
+: i SM_MIXED 18  // 1: the result is the caller's own on some calls
+: i SM_STALE 19  // (capture, path)
+: i SM_CREDITS 20
+: i SM_NPARAM 21
+: i SM_MODES 22  // the parameters' modes, a sequence in g_sm_w
+: i RES_NONE 0
+: i RES_OWN 1
+: i RES_LENT 2
+: i SK_VALUE 9  // a store of the argument's value itself (beside the LK_* kinds)
 // </engine globals>
 : i CORE_VW 7
 : i CORE_VS 1048576
@@ -11598,6 +11673,9 @@ unsafe @ eng_fn_begin i f → v {
 
 @ el_kind i l → i { ^ ( wv_at g_el + * l 3 1 ) }
 
+// The first word of the key a loan was made under (TG_*).
+@ el_tag i l → i { ^ ( sq_at ( wv_at g_el + * l 3 2 ) 0 ) }
+
 // Is `l` a loan (and no marker of a closure's body)?
 @ el_is_loan i l → b { ^ != ( el_kind l ) LK_CLO }
 
@@ -11813,6 +11891,101 @@ unsafe @ eng_fn_begin i f → v {
     ^ out
 }
 
+// ── Ownership engine: tuples and summaries ───────────────────────────
+// A summary says what a call of a function does, in terms of its
+// parameters: what its result is a handle of or holds, what it does to
+// its arguments, what it leaves one holding of another. Its entries are
+// small tuples (a parameter, a path, a kind …), each kept once for the
+// module as a number (tp2 … tp5), so a set of them is a set of words.
+@ __pp_init → v {
+    ? >= g_pp 0 { ^ } {}
+    = g_pp ( wv_new ) = g_pp_ix ( im_new )
+    = g_sm ( wv_new ) = g_sm_w ( wv_new ) = g_sm_tmp ( wv_new )
+    ( wv_push g_sm_w 0 )
+}
+
+@ tp2 i a i b → i {
+    ( __pp_init )
+    ? | | < a 0 < b 0 | >= a 2147483648 >= b 4294967296 { ( __eng_ice `a tuple's member is out of range` ) ^ 0 } {}
+    : i key + * a 4294967296 b
+    : i have ( im_get g_pp_ix key 0 )
+    ? != have 0 { ^ - have 1 } {}
+    : i id / ( wv_len g_pp ) 2
+    ( wv_push g_pp a ) ( wv_push g_pp b )
+    ( im_put g_pp_ix key + id 1 )
+    ^ id
+}
+
+@ tp3 i a i b i c → i { ^ ( tp2 ( tp2 a b ) c ) }
+
+@ tp4 i a i b i c i d → i { ^ ( tp2 ( tp3 a b c ) d ) }
+
+@ tp5 i a i b i c i d i e → i { ^ ( tp2 ( tp4 a b c d ) e ) }
+
+// Member `k` of the tuple `t` of `n`.
+@ tp_at i t i n i k → i {
+    : ~ i id t
+    : ~ i m n
+    ~ & > m 2 < k - m 1 { = id ( wv_at g_pp * id 2 ) = m - m 1 }
+    ? == m 2 { ^ ( wv_at g_pp + * id 2 ? == k 0 0 1 ) } {}
+    ^ ( wv_at g_pp + * id 2 1 )
+}
+
+// The summary of function `f`: is there one, and its words.
+@ sm_have i f → b {
+    ? | < g_sm 0 < f 0 { ^ F } {}
+    ? >= * f SM_W ( wv_len g_sm ) { ^ F } {}
+    ^ != 0 ( wv_at g_sm + * f SM_W SM_STATE )
+}
+
+@ sm_word i f i field → i { ^ ( wv_at g_sm + * f SM_W field ) }
+
+@ sm_n i f i field → i { ^ ( wv_at g_sm_w ( sm_word f field ) ) }
+
+@ sm_at i f i field i k → i { ^ ( wv_at g_sm_w + + ( sm_word f field ) 1 k ) }
+
+// Is `w` in that set of the summary? (The sets are in order.)
+@ sm_has i f i field i w → b {
+    : i at ( sm_word f field )
+    : ~ i lo 0
+    : ~ i hi ( wv_at g_sm_w at )
+    ~ < lo hi {
+        : i mid / + lo hi 2
+        : i x ( wv_at g_sm_w + + at 1 mid )
+        ? == x w { ^ T } {}
+        ? < x w { = lo + mid 1 } { = hi mid }
+    }
+    ^ F
+}
+
+// Room for function `f`'s summary.
+@ sm_room i f → v {
+    ( __pp_init )
+    ~ <= ( wv_len g_sm ) * + f 1 SM_W { ( wv_push g_sm 0 ) }
+}
+
+// The set (a sequence of this function) kept for the module: where it is
+// in g_sm_w.
+@ sm_keep i set → i {
+    : i n ( sq_len set )
+    ? == n 0 { ^ 0 } {}
+    : i at ( wv_len g_sm_w )
+    ( wv_push g_sm_w n )
+    ( sq_to_wv set g_sm_w )
+    ^ at
+}
+
+// A set kept for the module, as a set of this function.
+@ sm_load i f i field → i {
+    : i at ( sm_word f field )
+    : i n ( wv_at g_sm_w at )
+    ? == n 0 { ^ 0 } {}
+    ( wv_trunc g_sm_tmp 0 )
+    : ~ i k 0
+    ~ < k n { ( wv_push g_sm_tmp ( wv_at g_sm_w + + at 1 k ) ) = k + k 1 }
+    ^ ( sq_of_wv g_sm_tmp 0 n )
+}
+
 // ── Ownership engine: findings, names, types of places ───────────────
 unsafe @ eng_err i line s msg → v {
     ? == 0 g_fc_final { ^ } {}
@@ -11959,7 +12132,7 @@ unsafe @ eng_op i irop → i {
     : i pl ? > ( ep_len ( pl_path place ) ) PATH_MAX ( pl_make ( pl_var place ) ( ep_take ( pl_path place ) PATH_MAX ) ) place
     : i l ( __el_keyed pl kind )
     ? ! ( sq_has ( st_dead st ) l ) { ^ l } {}
-    ( el_key2 9001 l )
+    ( el_key2 TG_STALE l )
     : i stale ( __el_keyed pl kind )
     : ~ i v 0
     ~ < v g_f_nv {
@@ -12258,9 +12431,28 @@ unsafe @ would_kill i st i place i eff i loans i depth → b {
     ^ `stale`
 }
 
+// What a finding calls the value it is about: built only when there is
+// one to report.
+unsafe @ eng_what i wk i wa → s {
+    ? == wk WK_VAR { ^ ( eng_vname wa ) } {}
+    ? == wk WK_PLACE { ^ ( eng_pname wa ) } {}
+    ? == wk WK_RET { ^ ( nurl_str_cat `the returned value` `` ) } {}
+    ? == wk WK_FIELD { ^ ( nurl_str_cat `field ` ( nurl_str_int wa ) ) } {}
+    ? == wk WK_ELEM { ^ ( nurl_str_cat `element ` ( nurl_str_int wa ) ) } {}
+    ? == wk WK_CLOARG { ^ ( nurl_str_cat3 `argument ` ( nurl_str_int wa ) ` of the closure` ) } {}
+    ? == wk WK_CLO { ^ ( nurl_str_cat `the closure` `` ) } {}
+    ? == wk WK_CLO_CALLED { ^ ( nurl_str_cat `the closure called here` `` ) } {}
+    ? == wk WK_MATCH { ^ ( nurl_str_cat `matched value` `` ) } {}
+    ? == wk WK_LOOP { ^ ( nurl_str_cat `the loop's container` `` ) } {}
+    ? == wk WK_GLOBAL { ^ ( nurl_str_cat `the global ` # s wa ) } {}
+    ? == wk WK_CALL_CLO { ^ ( nurl_str_cat3 # s g_fc_callee `: the closure in argument ` ( nurl_str_int wa ) ) } {}
+    ? == wk WK_ARG_CLO { ^ ( nurl_str_cat `the closure in argument ` ( nurl_str_int wa ) ) } {}
+    ^ ( nurl_str_cat `value` `` )
+}
+
 // A value is used: a loan it is, or (`held`) one it holds, that ended
 // is the finding.
-unsafe @ check_live i st i loans i held s what i line → b {
+unsafe @ check_live i st i loans i held i wk i wa i line → b {
     : i all ? == held 0 loans ( sq_union loans ( held_loans held ) )
     ? ! ( sq_meets all ( st_dead st ) ) { ^ T } {}
     : i dead ( st_dead st )
@@ -12268,7 +12460,7 @@ unsafe @ check_live i st i loans i held s what i line → b {
     ~ < k ( sq_len all ) {
         : i l ( sq_at all k )
         ? & ( sq_has dead l ) ( el_is_loan l ) {
-            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 what ` uses a ` ( eng_kind_word ( el_kind l ) ) )
+            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_what wk wa ) ` uses a ` ( eng_kind_word ( el_kind l ) ) )
             ( nurl_str_cat3 ` of ` ( eng_pname ( el_place l ) ) `, which was changed or released` ) ) )
             ^ F
         } {}
@@ -12297,16 +12489,15 @@ unsafe @ check_live i st i loans i held s what i line → b {
 
 // The value of operand `op`, read. The key for a loan the read makes is
 // (`ktag`, `ka`): the caller's, so each read in a statement makes its own.
-unsafe @ eng_read i st i op i line i ktag i ka s what → i {
+unsafe @ eng_read i st i op i line i ktag i ka → i {
     ? ! ( op_is_place op ) { ^ g_av_none } {}
     : i vid ( pl_var op )
     : i path ( pl_path op )
     : i av ( st_av st vid )
     ? == av 0 { ^ g_av_none } {}
-    : s name ( eng_vname vid )
     : i own ( av_own av )
-    ? | == own OW_M == own OW_X { ( eng_err line ( nurl_str_cat name ` is used after it was moved` ) ) ^ g_av_none } {}
-    ? == own OW_D { ( eng_err line ( nurl_str_cat name ` is used after it was released` ) ) ^ g_av_none } {}
+    ? | == own OW_M == own OW_X { ( eng_err line ( nurl_str_cat ( eng_vname vid ) ` is used after it was moved` ) ) ^ g_av_none } {}
+    ? == own OW_D { ( eng_err line ( nurl_str_cat ( eng_vname vid ) ` is used after it was released` ) ) ^ g_av_none } {}
     ? == own OW_U { ^ g_av_none } {}
     : i held ( av_held av )
     ? & ( fx_has vid FX_STALE_CAP ) != held 0 {
@@ -12322,31 +12513,31 @@ unsafe @ eng_read i st i op i line i ktag i ka s what → i {
             = k + k 1
         }
     } {}
-    ( check_live st ( av_loans av ) 0 name line )
+    ( check_live st ( av_loans av ) 0 WK_VAR vid line )
     ? & != held 0 == path 0 {
         // a value that holds a view - one stored into it, or captured by
         // it - is read whole: what the view points into must still be there
-        ( check_live st ( av_loans av ) held name line )
+        ( check_live st ( av_loans av ) held WK_VAR vid line )
     } {}
     : i gone ( st_gone st )
     : ~ i g 0
     ~ < g ( sq_len gone ) {
         : i gp ( sq_at gone g )
         ? & == ( pl_var gp ) vid | ( ep_prefix ( pl_path gp ) path ) ( ep_prefix path ( pl_path gp ) ) {
-            ( eng_err line ( nurl_str_cat3 ( eng_pname gp ) ` is used after it was taken out of ` name ) )
+            ( eng_err line ( nurl_str_cat3 ( eng_pname gp ) ` is used after it was taken out of ` ( eng_vname vid ) ) )
             ^ g_av_none
         } {}
         = g + g 1
     }
     : i ty ( eng_ty_of op )
     ? & != ty ET_NONE ( et_scalar ty ) {
-        ? != path 0 { ( check_live st 0 ( held_sub held path ) name line ) } {}
+        ? != path 0 { ( check_live st 0 ( held_sub held path ) WK_VAR vid line ) } {}
         ^ g_av_none
     } {}
     : i sub ? != path 0 ( held_sub held path ) held
     ? & != path 0 != sub 0 {
         // (…and a part of it that holds a view, the same)
-        ( check_live st 0 sub ( eng_pname op ) line )
+        ( check_live st 0 sub WK_PLACE op line )
     } {}
     ? | == own OW_O == own OW_P {
         ? == path 0 {
@@ -12360,7 +12551,7 @@ unsafe @ eng_read i st i op i line i ktag i ka s what → i {
         } {}
         ? ( et_is_view ty ) {
             : i v ( view_value sub )
-            ( check_live st ( av_loans v ) 0 ( eng_pname op ) line )
+            ( check_live st ( av_loans v ) 0 WK_PLACE op line )
             ^ v
         } {}
         ( el_key2 ktag ka )
@@ -12370,7 +12561,7 @@ unsafe @ eng_read i st i op i line i ktag i ka s what → i {
         ? == path 0 { ^ av } {}
         ? & ( et_is_view ty ) != sub 0 {
             : i v ( view_value sub )
-            ( check_live st ( av_loans v ) 0 ( eng_pname op ) line )
+            ( check_live st ( av_loans v ) 0 WK_PLACE op line )
             ^ ( av_make OW_L ( sq_union ( av_loans v ) ( av_loans av ) ) ( av_alias v ) 0 F )
         } {}
         : i al ( av_alias av )
