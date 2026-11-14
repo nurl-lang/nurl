@@ -12845,6 +12845,30 @@ unsafe @ eng_byte s w i k → i {
             = k + k 1
         }
     } {}
+    ? & & != path 0 != eff EF_END != ( av_held av ) 0 {
+        // inside a part of the value that is a view - a slice field over
+        // another binding's buffer (`= . x w ( slice_from_vec … )`, then
+        // `( slice_put . x w 0 … )`): what is done there is done to what the
+        // view points into, as for a binding that is a view
+        : i hd ( av_held av )
+        : ~ i k 0
+        ~ < k ( sq_len hd ) {
+            : i he ( sq_at hd k )
+            : i hp ( he_path he )
+            : i l ( he_loan he )
+            ? & & & & != hp 0 < ( ep_len hp ) ( ep_len path ) ( ep_prefix hp path ) ( el_is_loan l ) == ( el_kind l ) LK_VIEW {
+                : i hty ( eng_ty_of ( pl_make vid hp ) )
+                ? & != hty ET_NONE ( et_is_view hty ) {
+                    : i q ( el_place l )
+                    : i qv ( pl_var q )
+                    ? & >= qv 0 != 0 ( st_av st qv ) {
+                        ( eng_effect st ( pl_make qv ( ep_take ( ep_cat ( pl_path q ) ( ep_drop path ( ep_len hp ) ) ) PATH_MAX ) ) eff line + depth 1 )
+                    } {}
+                } {}
+            } {}
+            = k + k 1
+        }
+    } {}
     ? & >= ( fv_pidx vid ) 0 != eff EF_END {
         = g_s_effects ( sq_add g_s_effects ( tp3 ( fv_pidx vid ) ( ep_take path 3 ) eff ) )
     } {}

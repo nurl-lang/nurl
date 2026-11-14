@@ -486,6 +486,19 @@ class FnCheck:
             # a field of a literal temporary that shows a binding: what is
             # done to it is done to the binding
             self.effect(st, (shown[path[0]], path[1:]), eff, line, depth + 1)
+        if path and eff != "end" and av.held:
+            # inside a part of the value that is a view - a slice field over
+            # another binding's buffer (`= . x w ( slice_from_vec … )`, then
+            # `( slice_put . x w 0 … )`): what is done there is done to what
+            # the view points into, as for a binding that is a view
+            for hp, l in av.held:
+                if (hp and len(hp) < len(path) and path[:len(hp)] == hp and l in self.loans
+                        and self.loans[l][1] == "view"):
+                    hty = self.ty_of_place((vid, hp))
+                    if hty is not None and hty[0] in VIEW_TYPES:
+                        q = self.loans[l][0]
+                        if q[0] >= 0 and q[0] in st.vals:
+                            self.effect(st, (q[0], (q[1] + path[len(hp):])[:PATH_MAX]), eff, line, depth + 1, weak)
         if vid in self.pidx and eff != "end":
             self.s_effects.add((self.pidx[vid], path[:3], eff))
         if eff != "end":
