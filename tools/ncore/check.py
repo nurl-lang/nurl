@@ -2524,7 +2524,9 @@ class FnCheck:
                 if op[0] != "v":
                     continue
                 places = {(op[1], op[2])} | set(avs[i].alias)
-                if any(p[0] == w[0] and (prefix(p[1], w[1]) or prefix(w[1], p[1])) for p in places for w in walked):
+                # (the container itself, or what holds it - not an element of
+                # it, a copy the loop hands out)
+                if any(p[0] == w[0] and prefix(p[1], w[1]) for p in places for w in walked):
                     self.err(line, f"argument {i + 1} of the closure is a container a loop walks, which the "
                                    f"closure may change")
                     break

@@ -16443,7 +16443,9 @@ unsafe @ eng_byte s w i k → i {
                         : i wl ( sq_at g_fc_walking wk2 )
                         ? ( el_is_loan wl ) {
                             : i w ( el_place wl )
-                            ? & == ( pl_var p ) ( pl_var w ) | ( ep_prefix ( pl_path p ) ( pl_path w ) ) ( ep_prefix ( pl_path w ) ( pl_path p ) ) { = whit T } {}
+                            // (the container itself, or what holds it - not an
+                            // element of it, a copy the loop hands out)
+                            ? & == ( pl_var p ) ( pl_var w ) ( ep_prefix ( pl_path p ) ( pl_path w ) ) { = whit T } {}
                         } {}
                         = wk2 + wk2 1
                     }
