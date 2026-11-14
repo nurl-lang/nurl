@@ -631,7 +631,8 @@ class FnCheck:
         st.dead = st.dead - own
         st.vals[vid] = AV("M")
         self.moved_from = (vid, own) if own else None
-        return AV("O", src.loans, frozenset(), src.held)
+        # (a value that is a call's lend on some paths stays one)
+        return AV("O", src.loans, frozenset(), src.held, src.call and bool(src.loans))
 
     def refers_to_block(self, av, blk):
         for lid in av.loans:
@@ -681,7 +682,10 @@ class FnCheck:
             elif to_view:
                 av = AV("L", {self.loan(st, site, (vid, ()), "view")}, {(vid, ())}, frozenset())
             elif (src.own == "O" and vty is not None and vty[0] == "s" and self.fn.vars[vid].kind != "temp"
-                  and dv is not None and dv.mut and dv.kind == "local" and not is_ret):
+                  and dv is not None and dv.mut and dv.kind == "local" and not is_ret
+                  # (a cursor that owns its value on some paths only is no
+                  # owner to copy from: the slot is pointed at it)
+                  and not src.loans):
                 # `: ~ s y x`, x an owned raw string: a slot of its own is
                 # given a copy of the text (MEMORY.md §7.6, owned string slots)
                 av = AV("O", (), (), frozenset())
@@ -706,7 +710,10 @@ class FnCheck:
                     or lend_owner(vid))):
                 # a parameter is lent to its new name (the caller owns it); an
                 # owned raw string or slice is viewed, not moved
-                av = AV("L", {self.loan(st, site, (vid, ()), "view" if raw else "handle")}, {(vid, ())}, src.held)
+                # (…and one that is a view on some paths is that view there)
+                more = src.loans if raw and src.own == "O" else frozenset()
+                av = AV("L", {self.loan(st, site, (vid, ()), "view" if raw else "handle")} | set(more),
+                        {(vid, ())}, src.held)
             else:
                 av = self.move_out(st, vid, line)
                 if is_ret and self.moved_from:
@@ -2750,8 +2757,9 @@ class FnCheck:
             return hp if len(hp) <= 6 else hp[:5] + ("^f",)
         calllends = set()
         for av, _ in self.rets:
-            if av.call and av.own == "L":
-                # (handed back as a call lent it: not the parameter itself)
+            if av.call and av.loans and av.own in ("L", "O"):
+                # (handed back as a call lent it: not the parameter itself;
+                # a join with a fresh arm lends it on its other arm)
                 for lid in av.loans:
                     pl = self.param_loan(lid)
                     if pl and pl[2] == "handle":
