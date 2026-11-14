@@ -385,6 +385,106 @@
 : i ET_NONE -1  // no type known
 : i ET_NUM -2  // a number nothing lists (a String's byte)
 : ~ i g_eng_dbg 0  // 1: the engine names each function on stderr as it reads it (`--engine-trace`)
+: ~ i g_ee -1  // path elements, 4 words each: the element (interned), its kind bits (EE_*), a payload's variant (interned) and its number in it
+: ~ i g_ee_ix -1  // an element (interned) → its number + 1
+: ~ i g_ep -1  // paths, 3 words each: the path it extends, the element added, its length; path 0 is the empty one
+: ~ i g_ep_ix -1  // (path * 65536 + element) → the extended path + 1
+: ~ i g_ep_tmp -1  // a path's elements, while one is rebuilt
+: i EE_PAY 1  // `#Variant0`: a payload
+: i EE_CAP 2  // `^3`: a closure's capture
+: i EE_FN 4  // `^f`: the closure's body
+: i EE_STAR 0  // element 0 is `*`
+: i PATH_MAX 5  // a loan's place is followed this deep and no further
+: i PV_BIAS 1048576  // a place is a word: (variable + PV_BIAS) * 2^32 + path
+: ~ i g_fv_ty -1  // the function being read: each variable's type
+: ~ i g_fv_pidx -1  // …its number among the parameters, -1 if it is none
+: ~ i g_fp -1  // …the parameters (captures first): the variable
+: ~ i g_fp_mode -1  // …and how it is passed (PM_*)
+: ~ i g_f_ncap 0  // …how many of them are a closure body's captures
+: ~ i g_f_ret 0  // …its return type
+: ~ i g_f_nv 0  // …how many variables it has
+: i PM_IN 0
+: i PM_INOUT 1
+: i PM_SINK 2
+: i PM_CAP 3
+: i VK_PARAM 0
+: i VK_LOCAL 1
+: i VK_TEMP 2
+: ~ i g_el -1  // the function's loans, 3 words each: place, kind, the key it was made under (a sequence)
+: ~ i g_el_ix -1  // a key → the loan's number + 1
+: ~ i g_el_key -1  // a key being put together
+: i LK_HANDLE 1  // the value is that place's own handle (a copy of it)
+: i LK_VIEW 2  // a view into the place's buffer
+: i LK_REF 3  // a pointer to the binding itself
+: i LK_SHARE 4
+: i LK_HELD 5  // what a parameter holds, the caller's to say
+: i LK_HELDIN 6  // what a closure parameter's captures hold
+: i LK_STALE 7  // a by-pointer capture's part, read before the body gave it a value
+: i LK_CLO 8  // no loan: the body of a closure the value may run (the place word is the function's number)
+: i OW_NONE 0  // no value recorded for the variable
+: i OW_U 1  // declared, no value yet
+: i OW_O 2  // owns its value
+: i OW_P 3  // a parameter: the caller's
+: i OW_L 4  // a lend
+: i OW_N 5  // nothing to follow (a number, a value that holds nothing)
+: i OW_M 6  // moved
+: i OW_X 7  // moved on some paths
+: i OW_D 8  // dropped
+: i ST_BOTTOM 0  // a state's words: 1 if no path reaches here
+: i ST_DEAD 1  // the loans that ended (a set)
+: i ST_GONE 2  // the places a part was taken out of (a set)
+: i ST_DEFERS 3  // the `;` blocks armed, oldest first (a sequence of statement offsets)
+: i ST_VARS 4  // then one word a variable: its value (an AV, a sequence of 4 words)
+: ~ i g_av_none 0  // the AV of a value with nothing to follow, in this function's sequences
+: ~ i g_st_free -1  // state vectors to use again
+: i OP_CONST -1  // an operand that is a number, or anything else with nothing to follow
+: i OP_NONE -2  // no operand
+: i OP_UNSUP -3  // an operand the IR did not name: the function is not checked
+: i EF_REALLOC 1  // a place's buffer may move
+: i EF_DROP 2  // its elements may be released
+: i EF_REPLACE 3  // it is given a new value, or released
+: i EF_TAKE 4  // a part is moved out of where it lived
+: i EF_END 5  // the binding itself ends
+: i EF_PERMUTE 6  // its elements change slots, none is released
+: ~ i g_fc_final 0  // 1: the run that reports (the summaries have settled)
+: ~ i g_fc_errs -1  // the module's findings, 3 words each: function, line, message (all interned)
+: ~ i g_fc_unsup 0  // the function being checked holds something the engine has no rule for: why (interned), 0 none
+: ~ i g_fc_line 0  // the line of the statement being run
+: ~ i g_fx -1  // per variable of the function: FX_* bits
+: ~ i g_fx_nocopy -1  // …a literal temporary: the field (1-based) it holds a borrowed value in that cannot be copied, 0 none
+: ~ i g_fx_agg -1  // …a literal temporary: the bindings it shows and has not taken (a set of element * 2^32 + variable)
+: ~ i g_fx_litp -1  // …a literal temporary: the parameters it names whole (a set)
+: ~ i g_fx_lent -1  // …a call's temporary: the arguments the call may hand back whole (a sequence of operands)
+: i FX_SLOT 1  // the payload of a library getter's option over a container: a slot a consumer may empty
+: i FX_CALL_MIXED 2  // a call's temporary whose value is the caller's own on some calls
+: i FX_CALL_BY_FN 4  // a call's temporary lent by a function of the program
+: i FX_TEMP_FRESH 8  // a temporary a call made and handed over
+: i FX_TEMP_NONE 16  // a literal temporary that is an option's `none`
+: i FX_VAR_FRESH 32  // given a value of its own that is no `none`
+: i FX_VCOPY 64  // a call's temporary that is a view of an owned raw string's own buffer
+: i FX_BLOCK_TEMP 128  // a value block's temporary
+: i FX_FE 256  // a `~ x xs` loop's element
+: i FX_CURSOR 512  // a `: ~ s` born from a view
+: i FX_LENDCOPY 1024  // a literal around a part of a parameter: a lend handed back as it is, copied by anything else
+: i FX_STALE_CAP 2048  // a closure body's capture taken by pointer
+: ~ i g_fc_cap_loans 0  // the loans closures captured (a set)
+: ~ i g_fc_walking 0  // the loans of the loops being walked (a set)
+: ~ i g_fc_ret_watch -1  // the binding a `ret` handed back, while the `;` blocks run after it
+: ~ i g_fc_ret_changed 0
+: ~ i g_fc_ret_fresh 0  // some return hands back a value of the function's own that holds something
+: ~ i g_fc_moved_vid -1  // the last value moved that holds views of its own parts: the binding, and those loans (a set)
+: ~ i g_fc_moved_own 0
+: ~ i g_fc_tails -1  // a place → the shared handles it reaches through + 1 (shared_tails), for this function
+: ~ i g_s_effects 0  // the summary being made: what the body does to its parameters (a set of parameter * 2^36 + path * 16 + effect)
+: ~ i g_s_consumes 0  // …the parameters it takes over (a set)
+: ~ i g_s_elems 0
+: ~ i g_s_invokes 0
+: ~ i g_s_detaches 0
+: ~ i g_s_stale 0  // …(capture * 2^32 + path): read before the body gave it a value
+: ~ i g_s_credits 0
+: ~ i g_s_cloargs 0  // …(closure parameter, its parameter, the parameter handed, path): a sequence each
+: ~ i g_s_regions 0  // …(shared handle type * 2^36 + tail * 16 + effect)
+: ~ i g_s_selfholds 0  // …(where in the result, path, kind): a sequence each
 // </engine globals>
 : i CORE_VW 7
 : i CORE_VS 1048576
@@ -11287,6 +11387,1007 @@ unsafe @ et_holds_views i t → b {
     : i e ( et_elem t )
     ? == e ET_NONE { ^ F } {}
     ^ | ( et_is_view e ) & ! ( et_scalar e ) ! ( et_owning e )
+}
+
+// ── Ownership engine: paths and places ───────────────────────────────
+// A place is a variable and a path of elements below it: a field's name,
+// `*` (an element, a boxed value, a handle's payload), `#Variant0` (a
+// payload), `^3` (a closure's capture). Elements and paths are interned
+// for the module; a path is a number, extending one is a lookup, and one
+// path is a prefix of another when it is an ancestor of it.
+unsafe @ __ep_init → v {
+    ? >= g_ep 0 { ^ } {}
+    = g_ee ( wv_new ) = g_ee_ix ( im_new ) = g_ep ( wv_new ) = g_ep_ix ( im_new ) = g_ep_tmp ( wv_new )
+    ( wv_push g_ep -1 ) ( wv_push g_ep -1 ) ( wv_push g_ep 0 )
+    ( wv_push g_ee ( __core_in `*` ) ) ( wv_push g_ee 0 ) ( wv_push g_ee 0 ) ( wv_push g_ee 0 )
+    ( im_put g_ee_ix ( __core_in `*` ) 1 )
+}
+
+// The element named by the interned string `name`.
+unsafe @ ee_of i name → i {
+    ( __ep_init )
+    : i have ( im_get g_ee_ix name 0 )
+    ? != have 0 { ^ - have 1 } {}
+    : i e / ( wv_len g_ee ) 4
+    : s str # s name
+    : i n ( nurl_str_len str )
+    : i c0 ? == 0 n 0 ( nurl_str_get str 0 )
+    : ~ i bits 0
+    : ~ i variant 0
+    : ~ i idx 0
+    ? & == c0 35 >= n 2 {
+        // `#Variant3`: the variant's name, and the last character its number
+        = bits EE_PAY
+        = variant ( __core_in ( nurl_str_slice str 1 - n 2 ) )
+        = idx - ( nurl_str_get str - n 1 ) 48
+    } {}
+    ? == c0 94 { = bits ? ( seq str `^f` ) | EE_CAP EE_FN EE_CAP } {}
+    ( wv_push g_ee name ) ( wv_push g_ee bits ) ( wv_push g_ee variant ) ( wv_push g_ee idx )
+    ( im_put g_ee_ix name + e 1 )
+    ^ e
+}
+
+unsafe @ ee_str s str → i { ^ ( ee_of ( __core_in str ) ) }
+
+// `#Variant<k>`: payload `k` of a variant.
+unsafe @ ee_pay i variant i k → i { ^ ( ee_str ( nurl_str_cat3 `#` # s variant ( nurl_str_int k ) ) ) }
+
+// `^k`: capture `k`.
+unsafe @ ee_cap i k → i { ^ ( ee_str ( nurl_str_cat `^` ( nurl_str_int k ) ) ) }
+
+@ ee_bits i e → i { ^ ( wv_at g_ee + * e 4 1 ) }
+
+@ ee_name i e → i { ^ ( wv_at g_ee * e 4 ) }
+
+// A payload element's variant (interned) and its number in it.
+@ ee_variant i e → i { ^ ( wv_at g_ee + * e 4 2 ) }
+
+@ ee_idx i e → i { ^ ( wv_at g_ee + * e 4 3 ) }
+
+@ ee_is_pay i e → b { ^ != 0 & ( ee_bits e ) EE_PAY }
+
+@ ee_is_cap i e → b { ^ != 0 & ( ee_bits e ) EE_CAP }
+
+// A capture's number (`^3` → 3), -1 for `^f` and for anything else.
+unsafe @ ee_cap_no i e → i {
+    ? | == 0 & ( ee_bits e ) EE_CAP != 0 & ( ee_bits e ) EE_FN { ^ -1 } {}
+    : s str # s ( ee_name e )
+    ^ ( nurl_str_to_int ( nurl_str_slice str 1 - ( nurl_str_len str ) 1 ) )
+}
+
+@ ep_len i p → i { ^ ( wv_at g_ep + * p 3 2 ) }
+
+@ ep_parent i p → i { ^ ( wv_at g_ep * p 3 ) }
+
+// The last element of a path that has one.
+@ ep_last i p → i { ^ ( wv_at g_ep + * p 3 1 ) }
+
+// Path `p` with element `e` after it.
+@ ep_child i p i e → i {
+    : i key + * p 65536 e
+    : i have ( im_get g_ep_ix key 0 )
+    ? != have 0 { ^ - have 1 } {}
+    ? >= e 65536 { ( __eng_ice `too many path elements in one module` ) } {}
+    : i np / ( wv_len g_ep ) 3
+    ( wv_push g_ep p ) ( wv_push g_ep e ) ( wv_push g_ep + ( ep_len p ) 1 )
+    ( im_put g_ep_ix key + np 1 )
+    ^ np
+}
+
+// The first `n` elements of `p` (`p` itself if it has no more).
+@ ep_take i p i n → i {
+    : ~ i q p
+    ~ > ( ep_len q ) n { = q ( ep_parent q ) }
+    ^ q
+}
+
+// Element `k` of `p`.
+@ ep_at i p i k → i { ^ ( ep_last ( ep_take p + k 1 ) ) }
+
+// Is `p` a prefix of `q` (`p` itself included)?
+@ ep_prefix i p i q → b { ^ & <= ( ep_len p ) ( ep_len q ) == ( ep_take q ( ep_len p ) ) p }
+
+// `p` then `q`.
+@ ep_cat i p i q → i {
+    ? == q 0 { ^ p } {}
+    ? == p 0 { ^ q } {}
+    ^ ( ep_child ( ep_cat p ( ep_parent q ) ) ( ep_last q ) )
+}
+
+// `p` without its first `n` elements.
+@ ep_drop i p i n → i {
+    ? <= ( ep_len p ) n { ^ 0 } {}
+    ? == n 0 { ^ p } {}
+    ^ ( ep_child ( ep_drop ( ep_parent p ) n ) ( ep_last p ) )
+}
+
+// Does `p` have a `*` in it?
+@ ep_has_star i p → b {
+    : ~ i q p
+    ~ != q 0 { ? == ( ep_last q ) EE_STAR { ^ T } {} = q ( ep_parent q ) }
+    ^ F
+}
+
+@ pl_make i vid i path → i { ^ + * + vid PV_BIAS 4294967296 path }
+
+@ pl_var i pl → i { ^ - / pl 4294967296 PV_BIAS }
+
+@ pl_path i pl → i { ^ % pl 4294967296 }
+
+// A held entry is a word too: where in the holder (a path), and what (a
+// loan's number).
+@ he_make i path i loan → i { ^ + * path 4294967296 loan }
+
+@ he_path i he → i { ^ / he 4294967296 }
+
+@ he_loan i he → i { ^ % he 4294967296 }
+
+// ── Ownership engine: the function being read ────────────────────────
+// eng_fn_begin readies function `f`: its variables' types, its
+// parameters, an empty loan table, and the sequences forgotten.
+@ fv_ty i vid → i { ? | < vid 0 >= vid g_f_nv { ^ ET_NONE } {} ^ ( wv_at g_fv_ty vid ) }
+
+@ fv_kind i vid → i {
+    ? < vid 0 { ^ VK_PARAM } {}
+    : i k ( ev vid 2 )
+    ^ ? == k 3 VK_PARAM ? == k 0 VK_PARAM ? == k 2 VK_TEMP VK_LOCAL
+}
+
+@ fv_depth i vid → i { ? < vid 0 { ^ 0 } {} ^ ( ev vid 3 ) }
+
+@ fv_mut i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) 1 }
+
+@ fv_byref i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) 8 }
+
+@ fv_line i vid → i { ? < vid 0 { ^ 0 } {} ^ ( ev vid 5 ) }
+
+// The value block's temporary a binding was made in, -1 none.
+@ fv_blk i vid → i { ? < vid 0 { ^ -1 } {} ^ ( ev vid 6 ) }
+
+// Its number among the parameters, -1 if it is none.
+@ fv_pidx i vid → i { ? | < vid 0 >= vid g_f_nv { ^ -1 } {} ^ ( wv_at g_fv_pidx vid ) }
+
+@ fp_n → i { ^ ( wv_len g_fp ) }
+
+@ fp_vid i k → i { ^ ( wv_at g_fp k ) }
+
+@ fp_mode i k → i { ^ ( wv_at g_fp_mode k ) }
+
+unsafe @ eng_fn_begin i f → v {
+    ( __ep_init )
+    ? < g_fv_ty 0 {
+        = g_fv_ty ( wv_new ) = g_fv_pidx ( wv_new ) = g_fp ( wv_new ) = g_fp_mode ( wv_new )
+        = g_el ( wv_new ) = g_el_ix ( im_new ) = g_el_key ( wv_new )
+    } {}
+    ( eng_open f )
+    ( eng_sq_reset )
+    = g_f_nv ( ef_at f EF_VAR_N )
+    : i rt ( ef_at f EF_RET )
+    = g_f_ret ? == rt 0 ET_NONE ( et_of rt )
+    ( wv_trunc g_fv_ty 0 ) ( wv_trunc g_fv_pidx 0 ) ( wv_trunc g_fp 0 ) ( wv_trunc g_fp_mode 0 )
+    = g_f_ncap 0
+    : ~ i v 0
+    ~ < v g_f_nv {
+        : i tn ( ev v 1 )
+        : b none ? == tn 0 T == 0 ( nurl_str_len # s tn )
+        ( wv_push g_fv_ty ? none ET_NONE ( et_of tn ) )
+        : i kind ( ev v 2 )
+        : i flags ( ev v 4 )
+        ? | == kind 3 == kind 0 {
+            ( wv_push g_fv_pidx ( wv_len g_fp ) )
+            ( wv_push g_fp v )
+            ( wv_push g_fp_mode ? == kind 3 PM_CAP ? != 0 & flags 2 PM_INOUT ? != 0 & flags 4 PM_SINK PM_IN )
+            ? == kind 3 { = g_f_ncap + g_f_ncap 1 } {}
+        } { ( wv_push g_fv_pidx -1 ) }
+        = v + v 1
+    }
+    ( wv_trunc g_el 0 )
+    ( wv_drop g_el_ix )
+    = g_el_ix ( im_new )
+    = g_av_none ( av_make OW_N 0 0 0 F )
+}
+
+// ── Ownership engine: loans ──────────────────────────────────────────
+// A loan says that a value depends on a place: it is that place's handle,
+// a view into its buffer, a pointer to it. It is made under a key — where
+// in the function, and for what — so the same statement met again in a
+// loop's next round makes the same loan.
+@ el_n → i { ^ / ( wv_len g_el ) 3 }
+
+@ el_place i l → i { ^ ( wv_at g_el * l 3 ) }
+
+@ el_kind i l → i { ^ ( wv_at g_el + * l 3 1 ) }
+
+// Is `l` a loan (and no marker of a closure's body)?
+@ el_is_loan i l → b { ^ != ( el_kind l ) LK_CLO }
+
+// The loan made under the key in g_el_key (the place and the kind added
+// to it here): its number, made if there is none.
+@ __el_keyed i place i kind → i {
+    ( wv_push g_el_key place ) ( wv_push g_el_key kind )
+    : i key ( sq_of_wv g_el_key 0 ( wv_len g_el_key ) )
+    ( wv_trunc g_el_key 0 )
+    : i have ( im_get g_el_ix key 0 )
+    ? != have 0 { ^ - have 1 } {}
+    : i l ( el_n )
+    ( wv_push g_el place ) ( wv_push g_el kind ) ( wv_push g_el key )
+    ( im_put g_el_ix key + l 1 )
+    ^ l
+}
+
+@ el_key1 i tag → v { ( wv_trunc g_el_key 0 ) ( wv_push g_el_key tag ) }
+
+@ el_key2 i tag i a → v { ( el_key1 tag ) ( wv_push g_el_key a ) }
+
+@ el_key3 i tag i a i b → v { ( el_key2 tag a ) ( wv_push g_el_key b ) }
+
+@ el_key4 i tag i a i b i c → v { ( el_key3 tag a b ) ( wv_push g_el_key c ) }
+
+// ── Ownership engine: values and states ──────────────────────────────
+// What the engine knows of a variable's value (an AV): whether it owns
+// it, the loans it is (a lend: the places it may be a handle or a view
+// of), the places it names, and what it holds inside (where, and which
+// loan). An AV is a sequence of four words, so it is one word itself.
+// A state is a vector: whether any path reaches it, the loans that
+// ended, the places a part was taken out of, the `;` blocks armed, and
+// an AV for each variable.
+@ av_make i own i loans i alias i held b call → i {
+    ( wv_trunc g_el_key 0 )
+    ( wv_push g_el_key + own ? call 16 0 ) ( wv_push g_el_key loans ) ( wv_push g_el_key alias ) ( wv_push g_el_key held )
+    : i id ( sq_of_wv g_el_key 0 4 )
+    ( wv_trunc g_el_key 0 )
+    ^ id
+}
+
+@ av_own i av → i { ^ % ( sq_at av 0 ) 16 }
+
+@ av_call i av → b { ^ >= ( sq_at av 0 ) 16 }
+
+@ av_loans i av → i { ^ ( sq_at av 1 ) }
+
+@ av_alias i av → i { ^ ( sq_at av 2 ) }
+
+@ av_held i av → i { ^ ( sq_at av 3 ) }
+
+// An owner on one path and a lend on another is an owner that is
+// released by a flag; moved on one path only is "moved on some".
+@ own_join i a i b → i {
+    ? == a b { ^ a } {}
+    ? == a OW_U { ^ b } {}
+    ? == b OW_U { ^ a } {}
+    : b a_oln | | == a OW_O == a OW_L == a OW_N
+    : b b_oln | | == b OW_O == b OW_L == b OW_N
+    ? & a_oln b_oln { ^ ? | == a OW_O == b OW_O OW_O OW_L } {}
+    : b a_gone | | == a OW_M == a OW_X == a OW_D
+    : b b_gone | | == b OW_M == b OW_X == b OW_D
+    ? | a_gone b_gone { ^ OW_X } {}
+    ^ ? | == a OW_O == b OW_O OW_O a
+}
+
+@ av_join i a i b → i {
+    ? == a b { ^ a } {}
+    ^ ( av_make ( own_join ( av_own a ) ( av_own b ) ) ( sq_union ( av_loans a ) ( av_loans b ) )
+    ( sq_union ( av_alias a ) ( av_alias b ) ) ( sq_union ( av_held a ) ( av_held b ) )
+    | ( av_call a ) ( av_call b ) )
+}
+
+// A new state: nothing recorded, every path open.
+@ st_new → i {
+    ? < g_st_free 0 { = g_st_free ( wv_new ) } {}
+    : i st ? != 0 ( wv_len g_st_free ) ( wv_pop g_st_free ) ( wv_new )
+    ( wv_fill st + ST_VARS g_f_nv 0 )
+    ^ st
+}
+
+@ st_free i st → v { ( wv_push g_st_free st ) }
+
+@ st_copy i st → i {
+    ? < g_st_free 0 { = g_st_free ( wv_new ) } {}
+    : i c ? != 0 ( wv_len g_st_free ) ( wv_pop g_st_free ) ( wv_new )
+    ( wv_copy c st )
+    ^ c
+}
+
+@ st_bottom i st → b { ^ != 0 ( wv_at st ST_BOTTOM ) }
+
+@ st_set_bottom i st → v { ( wv_put st ST_BOTTOM 1 ) }
+
+@ st_dead i st → i { ^ ( wv_at st ST_DEAD ) }
+
+@ st_gone i st → i { ^ ( wv_at st ST_GONE ) }
+
+@ st_defers i st → i { ^ ( wv_at st ST_DEFERS ) }
+
+// The value recorded for `vid`: 0 none.
+@ st_av i st i vid → i { ? | < vid 0 >= vid g_f_nv { ^ 0 } {} ^ ( wv_at st + ST_VARS vid ) }
+
+@ st_put i st i vid i av → v { ( wv_put st + ST_VARS vid av ) }
+
+// `vid`'s ownership in `st` (OW_NONE: nothing recorded).
+@ st_own i st i vid → i {
+    : i av ( st_av st vid )
+    ? == av 0 { ^ OW_NONE } {}
+    ^ ( av_own av )
+}
+
+// `a` becomes the join of `a` and `b`: what holds on either path.
+@ st_join_into i a i b → v {
+    ? ( st_bottom b ) { ^ } {}
+    ? ( st_bottom a ) { ( wv_copy a b ) ^ } {}
+    ( wv_put a ST_DEAD ( sq_union ( st_dead a ) ( st_dead b ) ) )
+    ( wv_put a ST_GONE ( sq_union ( st_gone a ) ( st_gone b ) ) )
+    // a block armed on one path may run: it is checked as if it does
+    : i da ( st_defers a )
+    : i db ( st_defers b )
+    ? != da db {
+        : i tmp ( wv_new )
+        ( sq_to_wv da tmp )
+        : i nb ( sq_len db )
+        : ~ i k 0
+        ~ < k nb {
+            : i d ( sq_at db k )
+            : ~ b have F
+            : ~ i j 0
+            ~ & ! have < j ( sq_len da ) { ? == ( sq_at da j ) d { = have T } {} = j + j 1 }
+            ? ! have { ( wv_push tmp d ) } {}
+            = k + k 1
+        }
+        ( wv_put a ST_DEFERS ( sq_of_wv tmp 0 ( wv_len tmp ) ) )
+        ( wv_drop tmp )
+    } {}
+    : ~ i v 0
+    ~ < v g_f_nv {
+        : i x ( wv_at a + ST_VARS v )
+        : i y ( wv_at b + ST_VARS v )
+        ? != x y {
+            ? == x 0 { ( wv_put a + ST_VARS v y ) } {
+                ? != y 0 { ( wv_put a + ST_VARS v ( av_join x y ) ) } {}
+            }
+        } {}
+        = v + v 1
+    }
+}
+
+@ st_eq i a i b → b { ^ ( wv_eq a b ) }
+
+// ── Ownership engine: sets of held entries ───────────────────────────
+// What a value holds at its sub-path `path`, re-rooted there: an entry
+// below the path keeps what is left of its own path, one above it (held
+// by the whole) is held at the root.
+@ held_sub i held i path → i {
+    ? | == held 0 == path 0 { ^ held } {}
+    : i n ( sq_len held )
+    : i np ( ep_len path )
+    : i tmp ( wv_new )
+    : ~ i k 0
+    ~ < k n {
+        : i he ( sq_at held k )
+        : i hp ( he_path he )
+        ? ( ep_prefix path hp ) { ( wv_push tmp ( he_make ( ep_drop hp np ) ( he_loan he ) ) ) } {
+            ? ( ep_prefix hp path ) { ( wv_push tmp ( he_make 0 ( he_loan he ) ) ) } {}
+        }
+        = k + k 1
+    }
+    : i out ( sq_set_of_wv tmp )
+    ( wv_drop tmp )
+    ^ out
+}
+
+// Every entry of `held` moved under `path`.
+@ held_root i held i path → i {
+    ? | == held 0 == path 0 { ^ held } {}
+    : i n ( sq_len held )
+    : i tmp ( wv_new )
+    : ~ i k 0
+    ~ < k n {
+        : i he ( sq_at held k )
+        ( wv_push tmp ( he_make ( ep_cat path ( he_path he ) ) ( he_loan he ) ) )
+        = k + k 1
+    }
+    : i out ( sq_set_of_wv tmp )
+    ( wv_drop tmp )
+    ^ out
+}
+
+// The loans `loans`, each held at `path`.
+@ held_from i loans i path → i {
+    ? == loans 0 { ^ 0 } {}
+    : i n ( sq_len loans )
+    : i tmp ( wv_new )
+    : ~ i k 0
+    ~ < k n { ( wv_push tmp ( he_make path ( sq_at loans k ) ) ) = k + k 1 }
+    : i out ( sq_set_of_wv tmp )
+    ( wv_drop tmp )
+    ^ out
+}
+
+// The loans held anywhere in `held`.
+@ held_loans i held → i {
+    ? == held 0 { ^ 0 } {}
+    : i n ( sq_len held )
+    : i tmp ( wv_new )
+    : ~ i k 0
+    ~ < k n { ( wv_push tmp ( he_loan ( sq_at held k ) ) ) = k + k 1 }
+    : i out ( sq_set_of_wv tmp )
+    ( wv_drop tmp )
+    ^ out
+}
+
+// ── Ownership engine: findings, names, types of places ───────────────
+unsafe @ eng_err i line s msg → v {
+    ? == 0 g_fc_final { ^ } {}
+    ? < g_fc_errs 0 { = g_fc_errs ( wv_new ) } {}
+    ( wv_push g_fc_errs ( ef_at g_ec_f EF_NAME ) )
+    ( wv_push g_fc_errs line )
+    ( wv_push g_fc_errs ( __core_in msg ) )
+}
+
+// The function holds something the engine has no rule for: it is not
+// checked, and says why.
+unsafe @ eng_unsup s why → v {
+    ? == 0 g_fc_unsup { = g_fc_unsup ( __core_in why ) } {}
+}
+
+// A variable's name as a diagnostic writes it (`%t7` a temporary).
+unsafe @ eng_vname i vid → s {
+    ? < vid 0 { ^ ( nurl_str_cat `what ` ( eng_vname - -1 vid ) ) } {}
+    : s n # s ( ev vid 0 )
+    ? == 0 ( nurl_str_len n ) { ^ ( nurl_str_cat `%t` ( nurl_str_int vid ) ) } {}
+    ^ ( nurl_str_cat n `` )
+}
+
+unsafe @ __eng_path_str i path → s {
+    ? == path 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : i e ( ep_last path )
+    : s head ( __eng_path_str ( ep_parent path ) )
+    ? == e EE_STAR { ^ ( nurl_str_cat head `[*]` ) } {}
+    ? ( ee_is_pay e ) { ^ ( nurl_str_cat head # s ( ee_name e ) ) } {}
+    ^ ( nurl_str_cat3 head `.` # s ( ee_name e ) )
+}
+
+unsafe @ eng_pname i pl → s { ^ ( nurl_str_cat ( eng_vname ( pl_var pl ) ) ( __eng_path_str ( pl_path pl ) ) ) }
+
+// The type at `path` below a value of type `t`.
+unsafe @ eng_ty_at i t i path → i {
+    ? == path 0 { ^ t } {}
+    : i up ( eng_ty_at t ( ep_parent path ) )
+    ? == up ET_NONE { ^ ET_NONE } {}
+    : i e ( ep_last path )
+    ? == e EE_STAR { ^ ( et_elem up ) } {}
+    ? ( ee_is_pay e ) { ^ ( et_variant_ty up ( ee_variant e ) ( ee_idx e ) ) } {}
+    ^ ( et_field up ( ee_name e ) )
+}
+
+unsafe @ eng_ty_of i pl → i { ^ ( eng_ty_at ( fv_ty ( pl_var pl ) ) ( pl_path pl ) ) }
+
+// ── Ownership engine: per-variable notes of the function ─────────────
+@ fx_has i vid i bit → b { ? | < vid 0 >= vid g_f_nv { ^ F } {} ^ != 0 & ( wv_at g_fx vid ) bit }
+
+@ fx_set i vid i bit → v { ( wv_put g_fx vid | ( wv_at g_fx vid ) bit ) }
+
+@ fx_clear i vid i bit → v { ? ( fx_has vid bit ) { ( wv_put g_fx vid - ( wv_at g_fx vid ) bit ) } {} }
+
+// ── Ownership engine: operands ───────────────────────────────────────
+// An operand of the IR as the rules read it: OP_CONST for anything with
+// nothing to follow (a number, a global, a flag, a length), OP_NONE for
+// none, else a place. The path is the IR's, put in the engine's terms by
+// the types on the way down: a positional member of an option or a
+// result is its payload, of a slice or a Vec an element; a field read
+// through a Box is a field of what it holds.
+unsafe @ eng_op i irop → i {
+    ? == irop 0 { ^ OP_CONST } {}
+    ? == irop CORE_OP_TRUE { ^ OP_CONST } {}
+    ? < irop 0 { ^ OP_NONE } {}
+    ? == irop 1 { ( eng_unsup `operand nurlc did not name` ) ^ OP_UNSUP } {}
+    // the place's elements, root first
+    : i chain ( wv_new )
+    : ~ i p - irop 2
+    ~ >= ( ep p 1 ) 0 { ( wv_push chain ( ep p 2 ) ) = p ( ep p 1 ) }
+    : i vid ( ep p 0 )
+    ? < vid 0 { ( wv_drop chain ) ^ OP_CONST } {}
+    : ~ i ty ( fv_ty vid )
+    : ~ i path 0
+    : ~ i k - ( wv_len chain ) 1
+    : ~ i out 0
+    : ~ b done F
+    ~ & ! done >= k 0 {
+        : s el # s ( wv_at chain k )
+        : i c0 ? == 0 ( nurl_str_len el ) 0 ( nurl_str_get el 0 )
+        : i kind ( et_kind ty )
+        ? == c0 35 {
+            : i idx ( nurl_str_to_int ( nurl_str_slice el 1 - ( nurl_str_len el ) 1 ) )
+            ? & != ty ET_NONE == kind EK_OPT {
+                ? != idx 1 { = out OP_CONST = done T } {
+                    = path ( ep_child path ( ee_pay g_etn_T 0 ) )
+                    = ty ( et_at ty ET_E1 )
+                }
+            } {
+                ? & != ty ET_NONE == kind EK_RES {
+                    ? == idx 1 { = path ( ep_child path ( ee_pay g_etn_T 0 ) ) = ty ( et_at ty ET_E1 ) } {
+                        ? == idx 2 { = path ( ep_child path ( ee_pay g_etn_F 0 ) ) = ty ( et_at ty ET_E2 ) } { = out OP_CONST = done T }
+                    }
+                } {
+                    ? & != ty ET_NONE | == kind EK_SLICE == kind EK_VEC {
+                        = path ( ep_child path EE_STAR )
+                        = ty ( et_elem ty )
+                    } {
+                        ( eng_unsup `positional member` )
+                        = out OP_UNSUP = done T
+                    }
+                }
+            }
+        } {
+            ? ( seq el `*` ) {
+                = ty ( et_elem ty )
+                = path ( ep_child path EE_STAR )
+            } {
+                ? & != ty ET_NONE == kind EK_BOX {
+                    = path ( ep_child path EE_STAR )
+                    = ty ( et_elem ty )
+                } {}
+                : i nty ( et_field ty ( wv_at chain k ) )
+                : i k2 ( et_kind ty )
+                ? & & == nty ET_NONE >= ty 0 & | | == k2 EK_SLICE == k2 EK_STRING == k2 EK_VEC | | ( seq el `length` ) ( seq el `len` ) ( seq el `cap` ) {
+                    = out OP_CONST = done T
+                } {
+                    ? & & == nty ET_NONE != ty ET_NONE != k2 EK_NAMED {
+                        ( eng_unsup `field of a value that has none` )
+                        = out OP_UNSUP = done T
+                    } {
+                        = ty nty
+                        = path ( ep_child path ( ee_of ( wv_at chain k ) ) )
+                    }
+                }
+            }
+        }
+        = k - k 1
+    }
+    ( wv_drop chain )
+    ? done { ^ out } {}
+    ^ ( pl_make vid path )
+}
+
+@ op_is_place i op → b { ^ >= op 0 }
+
+// ── Ownership engine: loans made by the rules ────────────────────────
+// A loan on `place` of `kind`, made under the key readied in g_el_key
+// (el_key1 … el_key4). A place is followed PATH_MAX elements deep. A
+// loan that ended and is made again at the same place in a later round
+// of a loop is live again: whatever still holds the old one is left
+// holding a dead stand-in.
+@ eng_loan i st i place i kind → i {
+    : i pl ? > ( ep_len ( pl_path place ) ) PATH_MAX ( pl_make ( pl_var place ) ( ep_take ( pl_path place ) PATH_MAX ) ) place
+    : i l ( __el_keyed pl kind )
+    ? ! ( sq_has ( st_dead st ) l ) { ^ l } {}
+    ( el_key2 9001 l )
+    : i stale ( __el_keyed pl kind )
+    : ~ i v 0
+    ~ < v g_f_nv {
+        : i av ( st_av st v )
+        ? != av 0 {
+            : b in_loans ( sq_has ( av_loans av ) l )
+            : b in_held ( sq_has ( held_loans ( av_held av ) ) l )
+            ? | in_loans in_held {
+                : i loans ? in_loans ( sq_add ( sq_del ( av_loans av ) l ) stale ) ( av_loans av )
+                : ~ i held ( av_held av )
+                ? in_held {
+                    : i tmp ( wv_new )
+                    : i n ( sq_len held )
+                    : ~ i k 0
+                    ~ < k n {
+                        : i he ( sq_at held k )
+                        ( wv_push tmp ? == ( he_loan he ) l ( he_make ( he_path he ) stale ) he )
+                        = k + k 1
+                    }
+                    = held ( sq_set_of_wv tmp )
+                    ( wv_drop tmp )
+                } {}
+                // (the reference makes this value without its `call` mark)
+                ( st_put st v ( av_make ( av_own av ) loans ( av_alias av ) held F ) )
+            } {}
+        } {}
+        = v + v 1
+    }
+    ( wv_put st ST_DEAD ( sq_add ( sq_del ( st_dead st ) l ) stale ) )
+    ^ l
+}
+
+// ── Ownership engine: what an effect ends ────────────────────────────
+// The shared handles `place` reaches through: a sequence of (handle
+// type, the path below its payload).
+unsafe @ shared_tails i place → i {
+    ? < g_fc_tails 0 { = g_fc_tails ( im_new ) } {}
+    : i have ( im_get g_fc_tails place -1 )
+    ? >= have 0 { ^ have } {}
+    : i vid ( pl_var place )
+    : i path ( pl_path place )
+    : i n ( ep_len path )
+    : i tmp ( wv_new )
+    : ~ i ty ( fv_ty vid )
+    : ~ i k 0
+    ~ & < k n != ty ET_NONE {
+        : i e ( ep_at path k )
+        ? & & == e EE_STAR == ( et_kind ty ) EK_NAMED ( et_flag ty ETF_SHARED ) {
+            ( wv_push tmp ty )
+            ( wv_push tmp ( ep_drop path + k 1 ) )
+        } {}
+        = ty ( eng_ty_at ( fv_ty vid ) ( ep_take path + k 1 ) )
+        = k + k 1
+    }
+    : i out ( sq_of_wv tmp 0 ( wv_len tmp ) )
+    ( wv_drop tmp )
+    ( im_put g_fc_tails place out )
+    ^ out
+}
+
+// Does effect `eff` at path `pp` (of place `p`) end a loan of kind `k`
+// on path `qp` (of place `q`, in the same variable or the same shared
+// payload)?
+unsafe @ kills_paths i eff i pp i q i qp i k → b {
+    ? | | | | == k LK_SHARE == k LK_HELD == k LK_HELDIN == k LK_STALE == eff EF_PERMUTE { ^ F } {}
+    ? == eff EF_TAKE {
+        // a part moved out of where it lived: what was lent out of that
+        // part ends, a handle of the value around it does not
+        ^ & != k LK_REF ( ep_prefix pp qp )
+    } {}
+    ? | == k LK_REF == eff EF_END {
+        // a pointer to the binding itself: good while the binding is,
+        // whatever value it is given - and only that ends with it
+        ^ & & == k LK_REF == eff EF_END ( ep_prefix pp qp )
+    } {}
+    ? == pp qp {
+        ? | == eff EF_REPLACE == k LK_VIEW { ^ T } {}
+        ^ ( et_holds_views ( eng_ty_of q ) )
+    } {}
+    ? ( ep_prefix pp qp ) {
+        // the effect is on an ancestor of the loan's place
+        ? == eff EF_REPLACE { ^ T } {}
+        ? == eff EF_DROP {
+            : ~ i r qp
+            ~ > ( ep_len r ) ( ep_len pp ) {
+                : i e ( ep_last r )
+                ? | == e EE_STAR ( ee_is_pay e ) { ^ T } {}
+                = r ( ep_parent r )
+            }
+            ^ F
+        } {}
+        ^ F
+    } {}
+    ? ( ep_prefix qp pp ) {
+        // the effect is inside the loan's place
+        ? & == k LK_HANDLE ( et_holds_views ( eng_ty_of q ) ) { ^ T } {}
+        ? & == k LK_HANDLE == eff EF_REPLACE {
+            : ~ i r pp
+            : ~ b star F
+            ~ > ( ep_len r ) ( ep_len qp ) { ? == ( ep_last r ) EE_STAR { = star T } {} = r ( ep_parent r ) }
+            ^ ! star
+        } {}
+        ^ F
+    } {}
+    ^ F
+}
+
+// Does effect `eff` on place `p` end loan `l`?
+unsafe @ eng_kills i eff i p i l → b {
+    ? ! ( el_is_loan l ) { ^ F } {}
+    : i q ( el_place l )
+    : i k ( el_kind l )
+    ? & == ( pl_var q ) ( pl_var p ) ( kills_paths eff ( pl_path p ) q ( pl_path q ) k ) { ^ T } {}
+    ? & & & == eff EF_TAKE ( sq_has g_fc_cap_loans l ) == ( pl_var q ) ( pl_var p ) & ( ep_prefix ( pl_path q ) ( pl_path p ) ) != k LK_REF {
+        // (a closure that captured the value around the part taken may
+        // read that part when it runs)
+        ^ T
+    } {}
+    // A shared payload - what every copy of an Rc / Arc / Shared handle
+    // reaches - is one place per handle type: which handles are copies of
+    // one another is not known here, so an effect inside a payload of that
+    // type ends what was lent out of any payload of it.
+    : i ps ( shared_tails p )
+    ? == 0 ( sq_len ps ) { ^ F } {}
+    : i qs ( shared_tails q )
+    : ~ i a 0
+    ~ < a ( sq_len qs ) {
+        : ~ i b 0
+        ~ < b ( sq_len ps ) {
+            ? & == ( sq_at qs a ) ( sq_at ps b ) ( kills_paths eff ( sq_at ps + b 1 ) q ( sq_at qs + a 1 ) k ) { ^ T } {}
+            = b + b 2
+        }
+        = a + a 2
+    }
+    ^ F
+}
+
+// An effect at `tail` inside some payload of the shared handle type
+// `ty`: ends what was lent out of any payload of that type.
+unsafe @ region_effect i st i ty i tail i eff → v {
+    = g_s_regions ( sq_add g_s_regions + + * ty 68719476736 * ( ep_take tail 3 ) 16 eff )
+    : ~ i dead ( st_dead st )
+    : i n ( el_n )
+    : ~ i l 0
+    ~ < l n {
+        ? & ( el_is_loan l ) ! ( sq_has dead l ) {
+            : i q ( el_place l )
+            : i qs ( shared_tails q )
+            : ~ i a 0
+            : ~ b hit F
+            ~ & ! hit < a ( sq_len qs ) {
+                ? & == ( sq_at qs a ) ty ( kills_paths eff tail q ( sq_at qs + a 1 ) ( el_kind l ) ) { = hit T } {}
+                = a + a 2
+            }
+            ? hit { = dead ( sq_add dead l ) } {}
+        } {}
+        = l + l 1
+    }
+    ( wv_put st ST_DEAD dead )
+}
+
+// Every loan some variable's value is or holds.
+@ all_loans i st → i {
+    : ~ i live 0
+    : ~ i v 0
+    ~ < v g_f_nv {
+        : i av ( st_av st v )
+        ? != av 0 { = live ( sq_union ( sq_union live ( av_loans av ) ) ( held_loans ( av_held av ) ) ) } {}
+        = v + v 1
+    }
+    ^ live
+}
+
+// What is done to a place: the loans it ends are dead from here on, and
+// what the place held is gone with what the effect released.
+unsafe @ eng_effect i st i place i eff i line i depth → v {
+    : i vid ( pl_var place )
+    : i path ( pl_path place )
+    : i av ( st_av st vid )
+    ? | == av 0 > depth 8 { ^ } {}
+    ? & == vid g_fc_ret_watch != eff EF_END { = g_fc_ret_changed 1 } {}
+    ? & == ( av_own av ) OW_L != eff EF_END {
+        : i al ( av_alias av )
+        : ~ i k 0
+        ~ < k ( sq_len al ) {
+            : i a ( sq_at al k )
+            ( eng_effect st ( pl_make ( pl_var a ) ( ep_cat ( pl_path a ) path ) ) eff line + depth 1 )
+            = k + k 1
+        }
+        ^
+    } {}
+    : i shown ( wv_at g_fx_agg vid )
+    ? & & != shown 0 != path 0 != eff EF_END {
+        // a field of a literal temporary that shows a binding: what is
+        // done to it is done to the binding
+        : i first ( ep_at path 0 )
+        : ~ i k 0
+        ~ < k ( sq_len shown ) {
+            : i w ( sq_at shown k )
+            ? == / w 4294967296 first { ( eng_effect st ( pl_make % w 4294967296 ( ep_drop path 1 ) ) eff line + depth 1 ) } {}
+            = k + k 1
+        }
+    } {}
+    ? & >= ( fv_pidx vid ) 0 != eff EF_END {
+        = g_s_effects ( sq_add g_s_effects + + * ( fv_pidx vid ) 68719476736 * ( ep_take path 3 ) 16 eff )
+    } {}
+    ? != eff EF_END {
+        // an effect inside a shared payload is one on that handle type's
+        // payload, whichever handle it was reached through: the callers'
+        // too (the summary's regions)
+        : i ts ( shared_tails place )
+        : ~ i a 0
+        ~ < a ( sq_len ts ) {
+            : i ty ( sq_at ts a )
+            = g_s_regions ( sq_add g_s_regions + + * ty 68719476736 * ( ep_take ( sq_at ts + a 1 ) 3 ) 16 eff )
+            ? ( et_flag ty ETF_ARC ) {
+                // every thread holding a copy of the Arc reads its payload:
+                // nothing changes it in place
+                ( eng_err line ( nurl_str_cat ( eng_pname place ) ` is inside what an Arc shares, and is changed here` ) )
+            } {}
+            = a + a 2
+        }
+    } {}
+    : ~ i dead ( st_dead st )
+    ? == eff EF_PERMUTE {
+        // (elements moved between slots: a loop walking them is upset)
+        : ~ i k 0
+        ~ < k ( sq_len g_fc_walking ) {
+            : i l ( sq_at g_fc_walking k )
+            ? & & ! ( sq_has dead l ) == ( pl_var ( el_place l ) ) vid ( ep_prefix ( pl_path ( el_place l ) ) path ) { = dead ( sq_add dead l ) } {}
+            = k + k 1
+        }
+    } {
+        : i n ( el_n )
+        : ~ i l 0
+        ~ < l n {
+            ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
+            = l + l 1
+        }
+    }
+    ( wv_put st ST_DEAD dead )
+    // what the place held is gone with what the effect released
+    : i av2 ( st_av st vid )
+    : i held ( av_held av2 )
+    ? & | | == eff EF_DROP == eff EF_REPLACE == eff EF_TAKE != held 0 {
+        : i tmp ( wv_new )
+        : ~ i k 0
+        ~ < k ( sq_len held ) {
+            : i he ( sq_at held k )
+            : i hp ( he_path he )
+            : ~ b keep T
+            ? & | == eff EF_REPLACE == eff EF_TAKE ( ep_prefix path hp ) { = keep F } {}
+            ? & & == eff EF_DROP ( ep_prefix path hp ) > ( ep_len hp ) ( ep_len path ) { = keep F } {}
+            ? keep { ( wv_push tmp he ) } {}
+            = k + k 1
+        }
+        // (the reference makes this value without its `call` mark)
+        ( st_put st vid ( av_make ( av_own av2 ) ( av_loans av2 ) ( av_alias av2 ) ( sq_set_of_wv tmp ) F ) )
+        ( wv_drop tmp )
+    } {}
+}
+
+// Would `eff` on `place` end one of `loans`?
+unsafe @ would_kill i st i place i eff i loans i depth → b {
+    : i vid ( pl_var place )
+    : i av ( st_av st vid )
+    ? | == av 0 > depth 8 { ^ F } {}
+    ? == ( av_own av ) OW_L {
+        : i al ( av_alias av )
+        : ~ i k 0
+        ~ < k ( sq_len al ) {
+            : i a ( sq_at al k )
+            ? ( would_kill st ( pl_make ( pl_var a ) ( ep_cat ( pl_path a ) ( pl_path place ) ) ) eff loans + depth 1 ) { ^ T } {}
+            = k + k 1
+        }
+        ^ F
+    } {}
+    : i dead ( st_dead st )
+    : ~ i k 0
+    ~ < k ( sq_len loans ) {
+        : i l ( sq_at loans k )
+        ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+// ── Ownership engine: reads ──────────────────────────────────────────
+@ eng_kind_word i k → s {
+    ? == k LK_HANDLE { ^ `handle` } {}
+    ? == k LK_VIEW { ^ `view` } {}
+    ? == k LK_REF { ^ `ref` } {}
+    ? == k LK_SHARE { ^ `share` } {}
+    ? == k LK_HELD { ^ `held` } {}
+    ? == k LK_HELDIN { ^ `heldin` } {}
+    ^ `stale`
+}
+
+// A value is used: a loan it is, or (`held`) one it holds, that ended
+// is the finding.
+unsafe @ check_live i st i loans i held s what i line → b {
+    : i all ? == held 0 loans ( sq_union loans ( held_loans held ) )
+    ? ! ( sq_meets all ( st_dead st ) ) { ^ T } {}
+    : i dead ( st_dead st )
+    : ~ i k 0
+    ~ < k ( sq_len all ) {
+        : i l ( sq_at all k )
+        ? & ( sq_has dead l ) ( el_is_loan l ) {
+            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 what ` uses a ` ( eng_kind_word ( el_kind l ) ) )
+            ( nurl_str_cat3 ` of ` ( eng_pname ( el_place l ) ) `, which was changed or released` ) ) )
+            ^ F
+        } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// A view-typed value read out of where it is held: its loans are the
+// loans held there, and it views their places.
+@ view_value i held_here → i {
+    : i loans ( held_loans held_here )
+    ? == loans 0 { ^ g_av_none } {}
+    : i tmp ( wv_new )
+    : ~ i k 0
+    ~ < k ( sq_len loans ) {
+        : i l ( sq_at loans k )
+        : i kind ( el_kind l )
+        ? & & & != kind LK_CLO != kind LK_HELD != kind LK_HELDIN != kind LK_STALE { ( wv_push tmp ( el_place l ) ) } {}
+        = k + k 1
+    }
+    : i alias ( sq_set_of_wv tmp )
+    ( wv_drop tmp )
+    ^ ( av_make OW_L loans alias 0 F )
+}
+
+// The value of operand `op`, read. The key for a loan the read makes is
+// (`ktag`, `ka`): the caller's, so each read in a statement makes its own.
+unsafe @ eng_read i st i op i line i ktag i ka s what → i {
+    ? ! ( op_is_place op ) { ^ g_av_none } {}
+    : i vid ( pl_var op )
+    : i path ( pl_path op )
+    : i av ( st_av st vid )
+    ? == av 0 { ^ g_av_none } {}
+    : s name ( eng_vname vid )
+    : i own ( av_own av )
+    ? | == own OW_M == own OW_X { ( eng_err line ( nurl_str_cat name ` is used after it was moved` ) ) ^ g_av_none } {}
+    ? == own OW_D { ( eng_err line ( nurl_str_cat name ` is used after it was released` ) ) ^ g_av_none } {}
+    ? == own OW_U { ^ g_av_none } {}
+    : i held ( av_held av )
+    ? & ( fx_has vid FX_STALE_CAP ) != held 0 {
+        // (a by-pointer capture read before the body gave that part a
+        // value: it reads what the binding held when the closure runs)
+        : ~ i k 0
+        ~ < k ( sq_len held ) {
+            : i he ( sq_at held k )
+            : i hp ( he_path he )
+            ? & == ( el_kind ( he_loan he ) ) LK_STALE | ( ep_prefix path hp ) ( ep_prefix hp path ) {
+                = g_s_stale ( sq_add g_s_stale + * ( fv_pidx vid ) 4294967296 ( ep_take hp 3 ) )
+            } {}
+            = k + k 1
+        }
+    } {}
+    ( check_live st ( av_loans av ) 0 name line )
+    ? & != held 0 == path 0 {
+        // a value that holds a view - one stored into it, or captured by
+        // it - is read whole: what the view points into must still be there
+        ( check_live st ( av_loans av ) held name line )
+    } {}
+    : i gone ( st_gone st )
+    : ~ i g 0
+    ~ < g ( sq_len gone ) {
+        : i gp ( sq_at gone g )
+        ? & == ( pl_var gp ) vid | ( ep_prefix ( pl_path gp ) path ) ( ep_prefix path ( pl_path gp ) ) {
+            ( eng_err line ( nurl_str_cat3 ( eng_pname gp ) ` is used after it was taken out of ` name ) )
+            ^ g_av_none
+        } {}
+        = g + g 1
+    }
+    : i ty ( eng_ty_of op )
+    ? & != ty ET_NONE ( et_scalar ty ) {
+        ? != path 0 { ( check_live st 0 ( held_sub held path ) name line ) } {}
+        ^ g_av_none
+    } {}
+    : i sub ? != path 0 ( held_sub held path ) held
+    ? & != path 0 != sub 0 {
+        // (…and a part of it that holds a view, the same)
+        ( check_live st 0 sub ( eng_pname op ) line )
+    } {}
+    ? | == own OW_O == own OW_P {
+        ? == path 0 {
+            ? & & == own OW_P ( et_is_view ty ) != ( fp_mode ( fv_pidx vid ) ) PM_SINK {
+                // a raw string or slice parameter is a view the caller
+                // lent: read, it is that view, never an owner to move
+                ( el_key2 ktag ka )
+                ^ ( av_make OW_L ( sq_add 0 ( eng_loan st op LK_VIEW ) ) ( sq_add 0 op ) held F )
+            } {}
+            ^ ( av_make own ( av_loans av ) ( sq_add 0 op ) held F )
+        } {}
+        ? ( et_is_view ty ) {
+            : i v ( view_value sub )
+            ( check_live st ( av_loans v ) 0 ( eng_pname op ) line )
+            ^ v
+        } {}
+        ( el_key2 ktag ka )
+        ^ ( av_make OW_L ( sq_add 0 ( eng_loan st op LK_HANDLE ) ) ( sq_add 0 op ) sub F )
+    } {}
+    ? == own OW_L {
+        ? == path 0 { ^ av } {}
+        ? & ( et_is_view ty ) != sub 0 {
+            : i v ( view_value sub )
+            ( check_live st ( av_loans v ) 0 ( eng_pname op ) line )
+            ^ ( av_make OW_L ( sq_union ( av_loans v ) ( av_loans av ) ) ( av_alias v ) 0 F )
+        } {}
+        : i al ( av_alias av )
+        : ~ i alias 0
+        : ~ i loans ( av_loans av )
+        : ~ i k 0
+        ~ < k ( sq_len al ) {
+            : i a ( sq_at al k )
+            : i a2 ( pl_make ( pl_var a ) ( ep_cat ( pl_path a ) path ) )
+            = alias ( sq_add alias a2 )
+            ( el_key2 ktag ka )
+            = loans ( sq_add loans ( eng_loan st a2 LK_HANDLE ) )
+            = k + k 1
+        }
+        ^ ( av_make OW_L loans alias sub F )
+    } {}
+    ^ av
 }
 
 // ── Ownership engine: the driver ─────────────────────────────────────
