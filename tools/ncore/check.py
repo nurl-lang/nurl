@@ -345,7 +345,7 @@ class FnCheck:
         return out
 
     def kills_paths(self, eff, p, pp, q, qp, k):
-        if k in ("share", "held", "heldin", "stale"):
+        if k in ("share", "held", "heldin", "stale") or eff == "permute":
             return False
         if eff == "take":
             # a part moved out of where it lived: what was lent out of that
@@ -411,6 +411,10 @@ class FnCheck:
                     # payload: nothing changes it in place (MEMORY.md §6.5)
                     self.err(line, f"{self.pname(place)} is inside what an Arc shares, and is changed here")
         killed = {l for l in self.loans if l not in st.dead and self.kills(eff, place, l)}
+        if eff == "permute":
+            # (elements moved between slots: a loop walking them is upset)
+            killed = {l for l in self.walking if l in self.loans and l not in st.dead
+                      and self.loans[l][0][0] == vid and prefix(self.loans[l][0][1], path)}
         if killed:
             if TRACE and self.final and self.vname(vid) == TRACE:
                 print(f"trace: {self.fn.name}:{line}: {eff} on {self.pname(place)} ends {len(killed)} loan(s)", file=sys.stderr)
@@ -645,7 +649,14 @@ class FnCheck:
             raw = vty is not None and vty[0] in VIEW_TYPES
             to_view = dest_ty is not None and dest_ty[0] == "s" and vty is not None and vty[0] != "s"
             dv = self.fn.vars[dest_vid] if dest_vid is not None else None
-            if to_view:
+            if (vty is not None and vty[0] == "named" and vty[1] in getattr(self.prog, "nodrop", ())
+                    and src.own == "P"):
+                # a parameter with nothing to release (a struct of views and
+                # numbers): its new holder is given a copy of its words,
+                # which holds the views it holds and nothing of the
+                # parameter itself (MEMORY.md §2.13)
+                av = AV("N", (), (), src.held)
+            elif to_view:
                 av = AV("L", {self.loan(st, site, (vid, ()), "view")}, {(vid, ())}, frozenset())
             elif (src.own == "O" and vty is not None and vty[0] == "s" and self.fn.vars[vid].kind != "temp"
                   and dv is not None and dv.mut and dv.kind == "local" and not is_ret):

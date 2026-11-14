@@ -103,8 +103,10 @@ PRIMS = {
                  stores=[(0, E, 2, (), "value")]),
     "vec_insert": S(["in", "in", "in"], effects=[(0, (), "realloc")],
                     stores=[(0, E, 2, (), "value")]),
-    "vec_swap": S(["in", "in", "in"], effects=[(0, E, "replace")]),
-    "vec_reverse": S(["in"], effects=[(0, E, "replace")]),
+    # (the elements change slots and none is released: a handle of one, a
+    # view of its buffer stay good; only a loop walking the slots is upset)
+    "vec_swap": S(["in", "in", "in"], effects=[(0, E, "permute")]),
+    "vec_reverse": S(["in"], effects=[(0, E, "permute")]),
     "vec_extend": S(["in", "in"], effects=[(0, (), "realloc")],
                     stores=[((0, (), 1, (), "held"))], elems=[1]),
     "vec_extend_range": S(["in", "in", "in", "in"], effects=[(0, (), "realloc")],
