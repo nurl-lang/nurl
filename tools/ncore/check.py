@@ -1099,8 +1099,12 @@ class FnCheck:
         # (MEMORY.md §2.4)
         # (a change inside a shared handle's payload is a change to the one
         # object every share reaches, not to this argument: `regions`)
+        # (…nor is a number written into a buffer's element: it ends nothing
+        # another argument views, every holder of the buffer sees it)
         changed = {k for (k, p, eff) in sm["effects"] if eff in ("realloc", "drop", "replace")
-                   and not (k < len(ops) and ops[k][0] == "v" and self.shared_tails((ops[k][1], ops[k][2] + tuple(p))))}
+                   and not (k < len(ops) and ops[k][0] == "v" and self.shared_tails((ops[k][1], ops[k][2] + tuple(p))))
+                   and not (eff == "replace" and "*" in p and k < len(ops) and ops[k][0] == "v"
+                            and self.scalar_place((ops[k][1], (ops[k][2] + tuple(p))[:PATH_MAX])))}
         for k, mode in enumerate(sm["modes"][:len(ops)]):
             # (…nor is one the callee changes without saying `inout`: the
             # buffer it moves is the other argument's too)
@@ -2504,21 +2508,24 @@ class FnCheck:
         return st
 
     def defer_reads(self, st):
-        """The variables the `;` blocks armed so far name."""
+        """The variables the `;` blocks armed so far may read: the ones they
+        name, and what those hold or borrow - a closure the block calls
+        reads what it captured (agora #655: every one of them is kept
+        until the chain has run)."""
         out = set()
         for d in st.defers:
-            if d not in self.defer_vars:
-                found = set()
-
-                def walk(x):
-                    if isinstance(x, tuple) and len(x) == 3 and x[0] == "v" and isinstance(x[1], int):
-                        found.add(x[1])
-                    elif isinstance(x, (tuple, list)):
-                        for y in x:
-                            walk(y)
-                walk(self.defer_bodies[d])
-                self.defer_vars[d] = found
-            out |= self.defer_vars[d]
+            out |= self.defer_reads_of(d)
+        work = list(out)
+        while work:
+            av = st.vals.get(work.pop())
+            if av is None:
+                continue
+            for l in av.loans | hloans(av.held):
+                if l in self.loans:
+                    w = self.loans[l][0][0]
+                    if w not in out:
+                        out.add(w)
+                        work.append(w)
         return out
 
     def scope_end(self, st, stmts, line):

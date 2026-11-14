@@ -14527,6 +14527,12 @@ unsafe @ eng_byte s w i k → i {
             ? & < ck n ( op_is_place ( wv_at ops ck ) ) {
                 : i ok ( wv_at ops ck )
                 ? != 0 ( sq_len ( shared_tails ( pl_make ( pl_var ok ) ( ep_cat ( pl_path ok ) ( tp_at t 3 1 ) ) ) ) ) { = shared T } {}
+                // (…nor is a number written into a buffer's element: it ends
+                // nothing another argument views, every holder of the
+                // buffer sees it)
+                ? & & ! shared == eff EF_REPLACE ! ( eng_path_no_star ( tp_at t 3 1 ) ) {
+                    ? ( eng_place_scalar ( pl_make ( pl_var ok ) ( ep_take ( ep_cat ( pl_path ok ) ( tp_at t 3 1 ) ) PATH_MAX ) ) ) { = shared T } {}
+                } {}
             } {}
             ? ! shared { = changed ( sq_add changed ck ) } {}
         } {}
@@ -15651,12 +15657,33 @@ unsafe @ eng_byte s w i k → i {
     ^ out
 }
 
-// The variables the `;` blocks armed so far name.
+// The variables the `;` blocks armed so far may read: the ones they name,
+// and what those hold or borrow - a closure the block calls reads what it
+// captured (every one of them is kept until the chain has run).
 @ defer_reads i st → i {
     : i ds ( st_defers st )
     : ~ i out 0
     : ~ i k 0
     ~ < k ( sq_len ds ) { = out ( sq_union out ( defer_reads_of ( wv_at g_fc_defers ( sq_at ds k ) ) ) ) = k + k 1 }
+    : i work ( wv_new )
+    = k 0
+    ~ < k ( sq_len out ) { ( wv_push work ( sq_at out k ) ) = k + k 1 }
+    ~ > ( wv_len work ) 0 {
+        : i av ( st_av st ( wv_pop work ) )
+        ? != av 0 {
+            : i ls ( sq_union ( av_loans av ) ( held_loans ( av_held av ) ) )
+            : ~ i j 0
+            ~ < j ( sq_len ls ) {
+                : i l ( sq_at ls j )
+                ? ( el_is_loan l ) {
+                    : i w ( pl_var ( el_place l ) )
+                    ? ! ( sq_has out w ) { = out ( sq_add out w ) ( wv_push work w ) } {}
+                } {}
+                = j + j 1
+            }
+        } {}
+    }
+    ( wv_drop work )
     ^ out
 }
 
