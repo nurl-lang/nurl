@@ -266,6 +266,126 @@
 : ~ i g_core_fn_n 0
 : ~ i g_core_fn_cap 0
 : ~ i g_walk_owns 1  // 1: the fused walk makes its ownership refusals (own_die, bck_emit_error); 0 under --emit-core, where the IR's reader decides them
+// <engine globals>
+: ~ i g_wv 0  // the vectors' registry, 3 words each: buffer, length, capacity
+: ~ i g_wv_n 0
+: ~ i g_wv_cap 0
+: ~ i g_wv_freed 0  // a released slot to hand out again: its number + 1 (its length word chains the next), 0 none
+: ~ i g_sq 0  // the sequences, end to end: a length word, then the words (the id is where the length is)
+: ~ i g_sq_n 0
+: ~ i g_sq_cap 0
+: ~ i g_sq_ht 0  // id + 1 by the hash of the words, open addressing; 0 an empty slot
+: ~ i g_sq_ht_cap 0  // a power of two
+: ~ i g_sq_ht_n 0
+: ~ i g_sq_tmp 0  // where a sequence is put together before it is interned
+: ~ i g_sq_tmp_n 0
+: ~ i g_sq_tmp_cap 0
+: ~ i g_sq_memo 0  // sq_union's answers, 3 words each: a + 1, b, the union; direct-mapped
+: i ENG_SQ_MEMO 4096
+
+: ~ i g_eng_on 0  // 1: the ownership engine reads the module's IR and prints its answers (`--emit-core --engine`)
+: ~ i g_ef -1  // the functions kept for it, EF_W words each (eng_keep_fn); -1 none yet
+: ~ i g_ef_code -1  // …their statements, end to end
+: ~ i g_ef_vars -1  // …their variables, CORE_VW words each
+: ~ i g_ef_pl -1  // …their places, 3 words each
+: ~ i g_ef_ix -1  // a function's name (interned) → its number + 1 (an im_ map)
+: i EF_W 13
+: i EF_NAME 0
+: i EF_FILE 1
+: i EF_LINE 2
+: i EF_RET 3
+: i EF_FLAGS 4
+: i EF_TMPL 5
+: i EF_NPARAM 6
+: i EF_CODE 7  // where its statements begin in g_ef_code, and how many words
+: i EF_CODE_N 8
+: i EF_VARS 9  // where its variables begin in g_ef_vars (in words), and how many variables
+: i EF_VAR_N 10
+: i EF_PL 11  // where its places begin in g_ef_pl (in words), and how many places
+: i EF_PL_N 12
+: ~ i g_ec 0  // the function the engine is reading: where its words begin in g_ef_code, and how many
+: ~ i g_ec_n 0
+: ~ i g_ec_f 0  // …its number
+: ~ i g_ec_link -1  // per word of it: for a word that opens a block, where the block's next part begins (eng_link)
+: ~ i g_eng_syms 0  // the symbol table the engine asks about types (the module's, at core_flush)
+: ~ i g_et -1  // the types the engine has met, ET_W words each (et_of)
+: ~ i g_et_w -1  // …their lists: fields (name, type), variants (name, payload count, types), each word an interned string
+: ~ i g_et_ix -1  // a type (interned) → its number + 1
+: ~ i g_et_seen -1  // the named types a question about a type is inside of (a type that holds itself)
+: ~ i g_et_seen_base 0  // …where the question being answered began in it
+: ~ i g_et_names 0  // 1 once the names below are interned
+: ~ i g_etn_i64 0
+: ~ i g_etn_i1 0
+: ~ i g_etn_double 0
+: ~ i g_etn_float 0
+: ~ i g_etn_void 0
+: ~ i g_etn_empty 0
+: ~ i g_etn_i8 0
+: ~ i g_etn_u8 0
+: ~ i g_etn_i16 0
+: ~ i g_etn_i32 0
+: ~ i g_etn_u16 0
+: ~ i g_etn_u32 0
+: ~ i g_etn_u64 0
+: ~ i g_etn_i8p 0
+: ~ i g_etn_String 0
+: ~ i g_etn_Vec 0
+: ~ i g_etn_Box 0
+: ~ i g_etn_Slice 0
+: ~ i g_etn_Rc 0
+: ~ i g_etn_Arc 0
+: ~ i g_etn_Shared 0
+: ~ i g_etn_Channel 0
+: ~ i g_etn_Locked 0
+: ~ i g_etn_RwLocked 0
+: ~ i g_etn_Deque 0
+: ~ i g_etn_Set 0
+: ~ i g_etn_star 0
+: ~ i g_etn_T 0
+: ~ i g_etn_F 0
+: i ET_W 12
+: i ET_NAME 0
+: i ET_KIND 1
+: i ET_E1 2  // what it is a container of (an element, a payload, a pointee), a type number; -1 none
+: i ET_E2 3  // a result's error side
+: i ET_FLAGS 4
+: i ET_BASE 5
+: i ET_CLS 6
+: i ET_F 7  // its fields in g_et_w: name, type
+: i ET_F_N 8
+: i ET_V 9  // its variants in g_et_w: name, payload count, the payload types
+: i ET_V_N 10
+: i ET_MEMO 11  // answers kept: bit 2k "asked", bit 2k+1 the answer (ETM_*)
+: i EK_SCALAR 0
+: i EK_S 1  // a raw string
+: i EK_PTR 2
+: i EK_OPT 3
+: i EK_RES 4
+: i EK_SLICE 5
+: i EK_CLOSURE 6
+: i EK_STRING 7
+: i EK_VEC 8
+: i EK_BOX 9
+: i EK_NAMED 10
+: i ETF_DROPS 1  // it has something to release
+: i ETF_CLONE 2  // a copy of it can be made
+: i ETF_UDROP 4  // its drop may read the views it holds
+: i ETF_SHARE 8  // its copy is a share of one object
+: i ETF_TSHARE 16  // …that two threads may use at once
+: i ETF_HANDLE 32  // a handle over one payload (ET_E1): `*` is the payload
+: i ETF_SHARED 64  // …whose copies reach the same payload (an Rc, an Arc, a Shared)
+: i ETF_ARC 128
+: i ETF_ENUM 256
+: i ETF_STRUCT 512
+: i ETF_BOOL 1024  // the scalar `b`
+: i ETM_SCALAR 0
+: i ETM_OWNING 1
+: i ETM_OWNS_HANDLE 2
+: i ETM_VIEW_CAPABLE 3
+: i ET_NONE -1  // no type known
+: i ET_NUM -2  // a number nothing lists (a String's byte)
+: ~ i g_eng_dbg 0  // 1: the engine names each function on stderr as it reads it (`--engine-trace`)
+// </engine globals>
 : i CORE_VW 7
 : i CORE_VS 1048576
 // Statement words.
@@ -9983,6 +10103,1249 @@ unsafe @ core_scope_end → v {
     = g_core_depth - g_core_depth 1
 }
 
+// <engine>
+// ── Ownership engine: the kernel ─────────────────────────────────────
+// Word vectors and interned sequences. This is the only raw memory the
+// engine has: its rules are safe code that names a vector or a sequence
+// by a number, and every index they pass is checked here.
+//
+// A word vector is a growable array of words. A sequence is an immutable
+// run of words that exists once: two sequences with the same words have
+// the same id, so a set (a sorted sequence) is compared, copied and
+// stored as one word, and the union of two is asked once (sq_union's
+// memo). Sequences live until eng_sq_reset; the engine resets them
+// between functions.
+@ __eng_ice s what → v {
+    ( nurl_eprintln ( nurl_str_cat `nurlc: internal error in the ownership engine: ` what ) )
+    ( nurl_exit 70 )
+}
+
+unsafe @ __eng_grown i arr i n i ncap → i {
+    : s nw # s ( nurl_alloc * ncap 8 )
+    ? != n 0 { ( memcpy nw # s arr * n 8 ) } {}
+    ? != arr 0 { ( nurl_free # s arr ) } {}
+    ^ # i nw
+}
+
+// A new, empty vector.
+unsafe @ wv_new → i {
+    ? != 0 g_wv_freed {
+        : i h - g_wv_freed 1
+        : *i r # *i # s g_wv
+        = g_wv_freed . r + * h 3 1
+        = . r * h 3 0
+        = . r + * h 3 1 0
+        = . r + * h 3 2 0
+        ^ h
+    } {}
+    ? >= g_wv_n g_wv_cap {
+        : i nc ? == g_wv_cap 0 64 * g_wv_cap 2
+        = g_wv ( __eng_grown g_wv * g_wv_n 3 * nc 3 )
+        = g_wv_cap nc
+    } {}
+    : *i r # *i # s g_wv
+    : i h g_wv_n
+    = . r * h 3 0
+    = . r + * h 3 1 0
+    = . r + * h 3 2 0
+    = g_wv_n + g_wv_n 1
+    ^ h
+}
+
+// Its buffer is released and its number may name another vector later: a
+// stale number then reads that vector, never freed memory.
+unsafe @ wv_drop i h → v {
+    ? | < h 0 >= h g_wv_n { ( __eng_ice `wv_drop: no such vector` ) ^ } {}
+    : *i r # *i # s g_wv
+    : i buf . r * h 3
+    ? != buf 0 { ( nurl_free # s buf ) } {}
+    = . r * h 3 0
+    = . r + * h 3 1 g_wv_freed
+    = . r + * h 3 2 -1
+    = g_wv_freed + h 1
+}
+
+unsafe @ wv_len i h → i {
+    ? | < h 0 >= h g_wv_n { ( __eng_ice `wv_len: no such vector` ) ^ 0 } {}
+    : *i r # *i # s g_wv
+    ? < . r + * h 3 2 0 { ( __eng_ice `wv_len: the vector was released` ) ^ 0 } {}
+    ^ . r + * h 3 1
+}
+
+unsafe @ wv_at i h i k → i {
+    ? | < h 0 >= h g_wv_n { ( __eng_ice `wv_at: no such vector` ) ^ 0 } {}
+    : *i r # *i # s g_wv
+    ? | < k 0 >= k . r + * h 3 1 { ( __eng_ice `wv_at: index out of range` ) ^ 0 } {}
+    ? < . r + * h 3 2 0 { ( __eng_ice `wv_at: the vector was released` ) ^ 0 } {}
+    : *i p # *i # s . r * h 3
+    ^ . p k
+}
+
+unsafe @ wv_put i h i k i w → v {
+    ? | < h 0 >= h g_wv_n { ( __eng_ice `wv_put: no such vector` ) ^ } {}
+    : *i r # *i # s g_wv
+    ? | < k 0 >= k . r + * h 3 1 { ( __eng_ice `wv_put: index out of range` ) ^ } {}
+    ? < . r + * h 3 2 0 { ( __eng_ice `wv_put: the vector was released` ) ^ } {}
+    : *i p # *i # s . r * h 3
+    = . p k w
+}
+
+unsafe @ __wv_room i h i need → v {
+    : *i r # *i # s g_wv
+    : i cap . r + * h 3 2
+    ? <= need cap { ^ } {}
+    : ~ i nc ? == cap 0 8 * cap 2
+    ~ < nc need { = nc * nc 2 }
+    = . r * h 3 ( __eng_grown . r * h 3 . r + * h 3 1 nc )
+    = . r + * h 3 2 nc
+}
+
+unsafe @ wv_push i h i w → v {
+    ? | < h 0 >= h g_wv_n { ( __eng_ice `wv_push: no such vector` ) ^ } {}
+    : *i r # *i # s g_wv
+    ? < . r + * h 3 2 0 { ( __eng_ice `wv_push: the vector was released` ) ^ } {}
+    : i n . r + * h 3 1
+    ( __wv_room h + n 1 )
+    : *i p # *i # s . r * h 3
+    = . p n w
+    = . r + * h 3 1 + n 1
+}
+
+unsafe @ wv_pop i h → i {
+    ? | < h 0 >= h g_wv_n { ( __eng_ice `wv_pop: no such vector` ) ^ 0 } {}
+    : *i r # *i # s g_wv
+    : i n . r + * h 3 1
+    ? | <= n 0 < . r + * h 3 2 0 { ( __eng_ice `wv_pop: the vector is empty` ) ^ 0 } {}
+    : *i p # *i # s . r * h 3
+    = . r + * h 3 1 - n 1
+    ^ . p - n 1
+}
+
+// Shorter, never longer: the words past `n` are forgotten.
+unsafe @ wv_trunc i h i n → v {
+    ? | < h 0 >= h g_wv_n { ( __eng_ice `wv_trunc: no such vector` ) ^ } {}
+    : *i r # *i # s g_wv
+    ? | < n 0 > n . r + * h 3 1 { ( __eng_ice `wv_trunc: longer than the vector` ) ^ } {}
+    = . r + * h 3 1 n
+}
+
+// `n` words, each `w`.
+unsafe @ wv_fill i h i n i w → v {
+    ? | | < h 0 >= h g_wv_n < n 0 { ( __eng_ice `wv_fill: no such vector` ) ^ } {}
+    : *i r # *i # s g_wv
+    ? < . r + * h 3 2 0 { ( __eng_ice `wv_fill: the vector was released` ) ^ } {}
+    ( __wv_room h n )
+    : *i p # *i # s . r * h 3
+    : ~ i k 0
+    ~ < k n { = . p k w = k + k 1 }
+    = . r + * h 3 1 n
+}
+
+// `dst` becomes a copy of `src`.
+unsafe @ wv_copy i dst i src → v {
+    ? | | < dst 0 >= dst g_wv_n | < src 0 >= src g_wv_n { ( __eng_ice `wv_copy: no such vector` ) ^ } {}
+    : *i r # *i # s g_wv
+    ? | < . r + * dst 3 2 0 < . r + * src 3 2 0 { ( __eng_ice `wv_copy: a vector was released` ) ^ } {}
+    : i n . r + * src 3 1
+    ( __wv_room dst n )
+    ? != n 0 { ( memcpy # s . r * dst 3 # s . r * src 3 * n 8 ) } {}
+    = . r + * dst 3 1 n
+}
+
+// `n` words at the address `src`, appended (the builder's own arrays,
+// which are not vectors).
+unsafe @ wv_append_raw i h i src i n → v {
+    ? | | < h 0 >= h g_wv_n < n 0 { ( __eng_ice `wv_append_raw: no such vector` ) ^ } {}
+    ? == n 0 { ^ } {}
+    : *i r # *i # s g_wv
+    ? < . r + * h 3 2 0 { ( __eng_ice `wv_append_raw: the vector was released` ) ^ } {}
+    : i len . r + * h 3 1
+    ( __wv_room h + len n )
+    ( memcpy # s + . r * h 3 * len 8 # s src * n 8 )
+    = . r + * h 3 1 + len n
+}
+
+unsafe @ wv_eq i a i b → b {
+    ? | | < a 0 >= a g_wv_n | < b 0 >= b g_wv_n { ( __eng_ice `wv_eq: no such vector` ) ^ F } {}
+    : *i r # *i # s g_wv
+    : i n . r + * a 3 1
+    ? != n . r + * b 3 1 { ^ F } {}
+    ? == n 0 { ^ T } {}
+    ^ == 0 # i ( memcmp # s . r * a 3 # s . r * b 3 * n 8 )
+}
+
+// ── Sequences ──
+unsafe @ __sq_hash * i p i n → i {
+    : ~ i h + 1469598103934665603 n
+    : ~ i k 0
+    ~ < k n {
+        = h * ^^ h . p k 1099511628211
+        = h ^^ h >> h 29
+        = k + k 1
+    }
+    ^ & h 9223372036854775807
+}
+
+// Every sequence is forgotten; the empty one is id 0 again.
+unsafe @ eng_sq_reset → v {
+    ? == 0 g_sq_cap {
+        = g_sq ( __eng_grown 0 0 1024 )
+        = g_sq_cap 1024
+        = g_sq_memo ( __eng_grown 0 0 * ENG_SQ_MEMO 3 )
+    } {}
+    : *i st # *i # s g_sq
+    = . st 0 0
+    = g_sq_n 1
+    : i want 256
+    ? < g_sq_ht_cap want {
+        ? != 0 g_sq_ht { ( nurl_free # s g_sq_ht ) } {}
+        = g_sq_ht # i ( nurl_alloc * want 8 )
+    } {}
+    // (a table a large function grew is cut back: clearing it is what a
+    // reset costs)
+    = g_sq_ht_cap want
+    ( nurl_memset # s g_sq_ht 0 * want 8 )
+    = g_sq_ht_n 0
+    ( nurl_memset # s g_sq_memo 0 * * ENG_SQ_MEMO 3 8 )
+    = g_sq_tmp_n 0
+}
+
+unsafe @ __sq_ht_grow → v {
+    : i oc g_sq_ht_cap
+    : i nc * oc 2
+    : *i nt # *i ( nurl_alloc * nc 8 )
+    ( nurl_memset # s nt 0 * nc 8 )
+    : *i ot # *i # s g_sq_ht
+    : *i st # *i # s g_sq
+    : ~ i k 0
+    ~ < k oc {
+        : i e . ot k
+        ? != e 0 {
+            : i id - e 1
+            : ~ i slot & ( __sq_hash # *i # s + g_sq * + id 1 8 . st id ) - nc 1
+            ~ != 0 . nt slot { = slot & + slot 1 - nc 1 }
+            = . nt slot e
+        } {}
+        = k + k 1
+    }
+    // (the old table was the engine's own allocation unless it is the
+    // first, which eng_sq_reset keeps: free it either way)
+    ( nurl_free # s g_sq_ht )
+    = g_sq_ht # i # s nt
+    = g_sq_ht_cap nc
+}
+
+// The id of the sequence of `n` words at `p`.
+unsafe @ __sq_intern * i p i n → i {
+    ? == n 0 { ^ 0 } {}
+    : i h ( __sq_hash p n )
+    : *i st # *i # s g_sq
+    : *i ht # *i # s g_sq_ht
+    : ~ i slot & h - g_sq_ht_cap 1
+    ~ != 0 . ht slot {
+        : i id - . ht slot 1
+        ? == . st id n {
+            ? == 0 # i ( memcmp # s + g_sq * + id 1 8 # s p * n 8 ) { ^ id } {}
+        } {}
+        = slot & + slot 1 - g_sq_ht_cap 1
+    }
+    // new
+    ? > + + g_sq_n n 1 g_sq_cap {
+        : ~ i nc * g_sq_cap 2
+        ~ < nc + + g_sq_n n 1 { = nc * nc 2 }
+        // (`p` may point into the store: carry it over)
+        : i inside & >= # i p g_sq < # i p + g_sq * g_sq_cap 8
+        : i off - # i p g_sq
+        = g_sq ( __eng_grown g_sq g_sq_n nc )
+        = g_sq_cap nc
+        ? != 0 inside { ^ ( __sq_intern # *i # s + g_sq off n ) } {}
+    } {}
+    : *i st2 # *i # s g_sq
+    : i id g_sq_n
+    = . st2 id n
+    ( memcpy # s + g_sq * + id 1 8 # s p * n 8 )
+    = g_sq_n + + g_sq_n n 1
+    = . ht slot + id 1
+    = g_sq_ht_n + g_sq_ht_n 1
+    ? > * g_sq_ht_n 2 g_sq_ht_cap { ( __sq_ht_grow ) } {}
+    ^ id
+}
+
+unsafe @ __sq_ok i id → b {
+    ? | < id 0 >= id g_sq_n { ( __eng_ice `no such sequence` ) ^ F } {}
+    ^ T
+}
+
+unsafe @ sq_len i id → i {
+    ? ! ( __sq_ok id ) { ^ 0 } {}
+    : *i st # *i # s g_sq
+    ^ . st id
+}
+
+unsafe @ sq_at i id i k → i {
+    ? ! ( __sq_ok id ) { ^ 0 } {}
+    : *i st # *i # s g_sq
+    ? | < k 0 >= k . st id { ( __eng_ice `sq_at: index out of range` ) ^ 0 } {}
+    ^ . st + + id 1 k
+}
+
+// The sequence of the words of vector `h` from `from`, `n` of them.
+unsafe @ sq_of_wv i h i from i n → i {
+    ? | < h 0 >= h g_wv_n { ( __eng_ice `sq_of_wv: no such vector` ) ^ 0 } {}
+    : *i r # *i # s g_wv
+    ? | | < from 0 < n 0 > + from n . r + * h 3 1 { ( __eng_ice `sq_of_wv: range out of the vector` ) ^ 0 } {}
+    ? == n 0 { ^ 0 } {}
+    ^ ( __sq_intern # *i # s + . r * h 3 * from 8 n )
+}
+
+// The words of sequence `id`, appended to vector `h`.
+unsafe @ sq_to_wv i id i h → v {
+    ? ! ( __sq_ok id ) { ^ } {}
+    ? | < h 0 >= h g_wv_n { ( __eng_ice `sq_to_wv: no such vector` ) ^ } {}
+    : *i st # *i # s g_sq
+    : i n . st id
+    ? == n 0 { ^ } {}
+    : *i r # *i # s g_wv
+    : i len . r + * h 3 1
+    ( __wv_room h + len n )
+    ( memcpy # s + . r * h 3 * len 8 # s + g_sq * + id 1 8 * n 8 )
+    = . r + * h 3 1 + len n
+}
+
+unsafe @ __sq_tmp_room i need → v {
+    ? <= need g_sq_tmp_cap { ^ } {}
+    : ~ i nc ? == g_sq_tmp_cap 0 256 * g_sq_tmp_cap 2
+    ~ < nc need { = nc * nc 2 }
+    = g_sq_tmp ( __eng_grown g_sq_tmp 0 nc )
+    = g_sq_tmp_cap nc
+}
+
+// ── Sets: sorted sequences, each word once ──
+unsafe @ sq_has i a i w → b {
+    ? ! ( __sq_ok a ) { ^ F } {}
+    : *i st # *i # s g_sq
+    : ~ i lo 0
+    : ~ i hi . st a
+    ~ < lo hi {
+        : i mid / + lo hi 2
+        : i x . st + + a 1 mid
+        ? == x w { ^ T } {}
+        ? < x w { = lo + mid 1 } { = hi mid }
+    }
+    ^ F
+}
+
+// The set `a` with `w` in it.
+unsafe @ sq_add i a i w → i {
+    ? ! ( __sq_ok a ) { ^ 0 } {}
+    : *i st # *i # s g_sq
+    : i n . st a
+    ( __sq_tmp_room + n 1 )
+    : *i t # *i # s g_sq_tmp
+    : ~ i k 0
+    ~ & < k n < . st + + a 1 k w { = . t k . st + + a 1 k = k + k 1 }
+    ? & < k n == . st + + a 1 k w { ^ a } {}
+    = . t k w
+    : ~ i j k
+    ~ < j n { = . t + j 1 . st + + a 1 j = j + j 1 }
+    ^ ( __sq_intern t + n 1 )
+}
+
+// The set `a` without `w`.
+unsafe @ sq_del i a i w → i {
+    ? ! ( sq_has a w ) { ^ a } {}
+    : *i st # *i # s g_sq
+    : i n . st a
+    ( __sq_tmp_room n )
+    : *i t # *i # s g_sq_tmp
+    : ~ i k 0
+    : ~ i m 0
+    ~ < k n {
+        ? != . st + + a 1 k w { = . t m . st + + a 1 k = m + m 1 } {}
+        = k + k 1
+    }
+    ^ ( __sq_intern t m )
+}
+
+unsafe @ sq_union i a i b → i {
+    ? == a b { ^ a } {}
+    ? == a 0 { ^ b } {}
+    ? == b 0 { ^ a } {}
+    ? ! & ( __sq_ok a ) ( __sq_ok b ) { ^ 0 } {}
+    : i lo ? < a b a b
+    : i hi ? < a b b a
+    : i mslot * % + * lo 2654435761 hi ENG_SQ_MEMO 3
+    : *i memo # *i # s g_sq_memo
+    ? & == . memo mslot + lo 1 == . memo + mslot 1 hi { ^ . memo + mslot 2 } {}
+    : *i st # *i # s g_sq
+    : i na . st a
+    : i nb . st b
+    ( __sq_tmp_room + na nb )
+    : *i t # *i # s g_sq_tmp
+    : ~ i i 0
+    : ~ i j 0
+    : ~ i m 0
+    ~ & < i na < j nb {
+        : i x . st + + a 1 i
+        : i y . st + + b 1 j
+        ? == x y { = . t m x = i + i 1 = j + j 1 } {
+            ? < x y { = . t m x = i + i 1 } { = . t m y = j + j 1 }
+        }
+        = m + m 1
+    }
+    ~ < i na { = . t m . st + + a 1 i = i + i 1 = m + m 1 }
+    ~ < j nb { = . t m . st + + b 1 j = j + j 1 = m + m 1 }
+    : i u ( __sq_intern t m )
+    : *i memo2 # *i # s g_sq_memo
+    = . memo2 mslot + lo 1
+    = . memo2 + mslot 1 hi
+    = . memo2 + mslot 2 u
+    ^ u
+}
+
+// The words of `a` that are not in `b`.
+unsafe @ sq_minus i a i b → i {
+    ? | == a 0 == b 0 { ^ a } {}
+    ? == a b { ^ 0 } {}
+    ? ! & ( __sq_ok a ) ( __sq_ok b ) { ^ 0 } {}
+    : *i st # *i # s g_sq
+    : i na . st a
+    : i nb . st b
+    ( __sq_tmp_room na )
+    : *i t # *i # s g_sq_tmp
+    : ~ i i 0
+    : ~ i j 0
+    : ~ i m 0
+    ~ < i na {
+        : i x . st + + a 1 i
+        ~ & < j nb < . st + + b 1 j x { = j + j 1 }
+        ? | >= j nb != . st + + b 1 j x { = . t m x = m + m 1 } {}
+        = i + i 1
+    }
+    ? == m na { ^ a } {}
+    ^ ( __sq_intern t m )
+}
+
+// Do `a` and `b` share a word?
+unsafe @ sq_meets i a i b → b {
+    ? | == a 0 == b 0 { ^ F } {}
+    ? == a b { ^ T } {}
+    ? ! & ( __sq_ok a ) ( __sq_ok b ) { ^ F } {}
+    : *i st # *i # s g_sq
+    : i na . st a
+    : i nb . st b
+    : ~ i i 0
+    : ~ i j 0
+    ~ & < i na < j nb {
+        : i x . st + + a 1 i
+        : i y . st + + b 1 j
+        ? == x y { ^ T } {}
+        ? < x y { = i + i 1 } { = j + j 1 }
+    }
+    ^ F
+}
+
+// The set of the words of vector `h` (in any order, repeats allowed).
+unsafe @ sq_set_of_wv i h → i {
+    ? | < h 0 >= h g_wv_n { ( __eng_ice `sq_set_of_wv: no such vector` ) ^ 0 } {}
+    : *i r # *i # s g_wv
+    : i n . r + * h 3 1
+    ? == n 0 { ^ 0 } {}
+    ( __sq_tmp_room n )
+    : *i t # *i # s g_sq_tmp
+    : *i p # *i # s . r * h 3
+    // insertion sort: the sets the engine builds this way are small
+    : ~ i m 0
+    : ~ i k 0
+    ~ < k n {
+        : i w . p k
+        : ~ i j m
+        ~ & > j 0 > . t - j 1 w { = j - j 1 }
+        ? | == j 0 != . t - j 1 w {
+            // (not there: shift the tail up)
+            : ~ i q m
+            ~ > q j { = . t q . t - q 1 = q - q 1 }
+            = . t j w
+            = m + m 1
+        } {}
+        = k + k 1
+    }
+    ^ ( __sq_intern t m )
+}
+
+// ── Ownership engine: maps ───────────────────────────────────────────
+// A map from words to words in a vector: open addressing, two words a
+// slot (key + 1, value), the slot count a power of two kept in word 0 and
+// the entry count in word 1.
+@ im_new → i {
+    : i m ( wv_new )
+    ( wv_fill m + 2 * 16 2 0 )
+    ( wv_put m 0 16 )
+    ^ m
+}
+
+@ __im_slot i m i key → i {
+    : i cap ( wv_at m 0 )
+    : ~ i h * + key 1 2654435761
+    = h ^^ h >> h 15
+    : ~ i slot & h - cap 1
+    ~ T {
+        : i k ( wv_at m + 2 * slot 2 )
+        ? | == k 0 == k + key 1 { ^ slot } {}
+        = slot & + slot 1 - cap 1
+    }
+    ^ 0
+}
+
+// The value `key` has, `none` when it has none.
+@ im_get i m i key i none → i {
+    : i slot ( __im_slot m key )
+    ? == 0 ( wv_at m + 2 * slot 2 ) { ^ none } {}
+    ^ ( wv_at m + 3 * slot 2 )
+}
+
+@ im_put i m i key i val → v {
+    : i slot ( __im_slot m key )
+    ? != 0 ( wv_at m + 2 * slot 2 ) { ( wv_put m + 3 * slot 2 val ) ^ } {}
+    ( wv_put m + 2 * slot 2 + key 1 )
+    ( wv_put m + 3 * slot 2 val )
+    ( wv_put m 1 + ( wv_at m 1 ) 1 )
+    : i cap ( wv_at m 0 )
+    ? <= * ( wv_at m 1 ) 2 cap { ^ } {}
+    // grow: the entries are put again into twice the slots
+    : i old ( wv_new )
+    ( wv_copy old m )
+    ( wv_fill m + 2 * * cap 2 2 0 )
+    ( wv_put m 0 * cap 2 )
+    : ~ i k 0
+    ~ < k cap {
+        : i ok ( wv_at old + 2 * k 2 )
+        ? != ok 0 { ( im_put m - ok 1 ( wv_at old + 3 * k 2 ) ) } {}
+        = k + k 1
+    }
+    ( wv_drop old )
+}
+
+// ── Ownership engine: the functions it reads ─────────────────────────
+// The walk builds one function's IR at a time (g_core_code, g_core_vars,
+// g_core_pl) and reuses the arrays. The engine reads a module whole: a
+// call needs its callee's summary, wherever the callee is written. So
+// each function's words are kept, end to end, until core_flush runs the
+// engine on them.
+unsafe @ eng_keep_fn → v {
+    ? < g_ef 0 {
+        = g_ef ( wv_new ) = g_ef_code ( wv_new ) = g_ef_vars ( wv_new ) = g_ef_pl ( wv_new )
+        = g_ef_ix ( im_new )
+    } {}
+    : i f / ( wv_len g_ef ) EF_W
+    ( wv_push g_ef g_core_fname )
+    ( wv_push g_ef g_core_ffile )
+    ( wv_push g_ef g_core_fline )
+    ( wv_push g_ef g_core_fret )
+    ( wv_push g_ef g_core_fflags )
+    ( wv_push g_ef g_core_ftmpl )
+    ( wv_push g_ef g_core_nparam )
+    ( wv_push g_ef ( wv_len g_ef_code ) )
+    ( wv_push g_ef g_core_code_n )
+    ( wv_push g_ef ( wv_len g_ef_vars ) )
+    ( wv_push g_ef g_core_var_n )
+    ( wv_push g_ef ( wv_len g_ef_pl ) )
+    ( wv_push g_ef g_core_pl_n )
+    ( wv_append_raw g_ef_code g_core_code g_core_code_n )
+    ( wv_append_raw g_ef_vars g_core_vars * g_core_var_n CORE_VW )
+    ( wv_append_raw g_ef_pl g_core_pl * g_core_pl_n 3 )
+    ( im_put g_ef_ix g_core_fname + f 1 )
+}
+
+@ ef_n → i { ? < g_ef 0 { ^ 0 } {} ^ / ( wv_len g_ef ) EF_W }
+
+@ ef_at i f i field → i { ^ ( wv_at g_ef + * f EF_W field ) }
+
+// The function named `name` (interned): its number, -1 if the module has none.
+@ ef_find i name → i {
+    ? < g_ef_ix 0 { ^ -1 } {}
+    ^ - ( im_get g_ef_ix name 0 ) 1
+}
+
+// ── Ownership engine: reading a function's words ─────────────────────
+// eng_open makes function `f` the one being read: ec is a word of its
+// statements, ev a word of a variable, ep a word of a place.
+@ ec i at → i { ^ ( wv_at g_ef_code + g_ec at ) }
+
+@ ev i vid i field → i { ^ ( wv_at g_ef_vars + + ( ef_at g_ec_f EF_VARS ) * vid CORE_VW field ) }
+
+@ ep i place i field → i { ^ ( wv_at g_ef_pl + + ( ef_at g_ec_f EF_PL ) * place 3 field ) }
+
+// How many words the rvalue at `at` takes.
+@ eng_rv_len i at → i {
+    : i k ( ec at )
+    ? == k RV_NONE { ^ 1 } {}
+    ? == k RV_USE { ^ 2 } {}
+    ? == k RV_CALL { ^ + 3 ( ec + at 2 ) } {}
+    ? == k RV_AGG { ^ + 4 ( ec + at 3 ) } {}
+    ? == k RV_SCALAR { ^ + 2 ( ec + at 1 ) } {}
+    ? == k RV_PAYLOAD { ^ 4 } {}
+    ? == k RV_CLOSURE { ^ + 3 ( ec + at 2 ) } {}
+    ? == k RV_CALLIND { ^ + 2 ( ec + at 1 ) } {}
+    ^ + 3 ( ec + at 2 )
+}
+
+// …and the statement at `at`.
+@ eng_stmt_len i at → i {
+    : i op ( ec at )
+    ? | == op CO_LET == op CO_ASSIGN { ^ + 2 ( eng_rv_len + at 2 ) } {}
+    ? == op CO_EVAL { ^ + 1 ( eng_rv_len + at 1 ) } {}
+    ? == op CO_FOREACH { ^ 3 } {}
+    ? | | | | | | == op CO_IF == op CO_MATCH == op CO_ARM == op CO_LOOPCOND == op CO_DROP == op CO_RET == op CO_LINE { ^ 2 } {}
+    ^ 1
+}
+
+// The blocks of the function being read, linked: for the word that opens
+// a block (or a part of one), where its next part begins.
+//   IF → its ELSE, or its END        ELSE → the END
+//   MATCH → its first ARM, or END    ARM → the next ARM, or the END
+//   LOOP → its LOOPCOND              LOOPCOND → the loop's END
+//   FOREACH, SCOPE, DEFER → their END
+// (A loop's body is a SCOPE of its own after the LOOPCOND.)
+@ eng_link → v {
+    ? < g_ec_link 0 { = g_ec_link ( wv_new ) } {}
+    ( wv_fill g_ec_link g_ec_n -1 )
+    : i stack ( wv_new )
+    : ~ i at 0
+    ~ < at g_ec_n {
+        : i op ( ec at )
+        ? | | | | == op CO_IF == op CO_MATCH == op CO_LOOP == op CO_FOREACH | == op CO_SCOPE == op CO_DEFER {
+            ( wv_push stack at )
+        } {}
+        ? | | == op CO_ELSE == op CO_ARM == op CO_LOOPCOND {
+            // the part before it ends here
+            : i open ( wv_pop stack )
+            ( wv_put g_ec_link open at )
+            ( wv_push stack at )
+        } {}
+        ? == op CO_END {
+            : i open ( wv_pop stack )
+            ( wv_put g_ec_link open at )
+        } {}
+        = at + at ( eng_stmt_len at )
+    }
+    ? != 0 ( wv_len stack ) { ( __eng_ice `a block of the IR is not closed` ) } {}
+    ( wv_drop stack )
+}
+
+@ eng_open i f → v {
+    = g_ec_f f
+    = g_ec ( ef_at f EF_CODE )
+    = g_ec_n ( ef_at f EF_CODE_N )
+    ( eng_link )
+}
+
+// ── Ownership engine: types ──────────────────────────────────────────
+// A type is the walk's own (an LLVM-shaped string, interned). The engine
+// asks a handful of questions about one — is it a number, what is it a
+// container of, has it something to release, can it be copied — and the
+// answers come from the compiler's own tables, read once per type and
+// kept (et_of). They are the answers `--emit-core` prints on a `ty` line.
+unsafe @ __et_names → v {
+    ? != 0 g_et_names { ^ } {}
+    = g_et_names 1
+    = g_etn_i64 ( __core_in `i64` ) = g_etn_i1 ( __core_in `i1` ) = g_etn_double ( __core_in `double` )
+    = g_etn_float ( __core_in `float` ) = g_etn_void ( __core_in `void` ) = g_etn_empty ( __core_in `` )
+    = g_etn_i8 ( __core_in `i8` ) = g_etn_u8 ( __core_in `u8` ) = g_etn_i16 ( __core_in `i16` )
+    = g_etn_i32 ( __core_in `i32` ) = g_etn_u16 ( __core_in `u16` ) = g_etn_u32 ( __core_in `u32` )
+    = g_etn_u64 ( __core_in `u64` ) = g_etn_i8p ( __core_in `i8*` )
+    = g_etn_String ( __core_in `String` ) = g_etn_Vec ( __core_in `Vec` ) = g_etn_Box ( __core_in `Box` )
+    = g_etn_Slice ( __core_in `Slice` ) = g_etn_Rc ( __core_in `Rc` ) = g_etn_Arc ( __core_in `Arc` )
+    = g_etn_Shared ( __core_in `Shared` ) = g_etn_Channel ( __core_in `Channel` )
+    = g_etn_Locked ( __core_in `Locked` ) = g_etn_RwLocked ( __core_in `RwLocked` )
+    = g_etn_Deque ( __core_in `Deque` ) = g_etn_Set ( __core_in `Set` )
+    = g_etn_star ( __core_in `*` ) = g_etn_T ( __core_in `T` ) = g_etn_F ( __core_in `F` )
+    = g_et ( wv_new ) = g_et_w ( wv_new ) = g_et_ix ( im_new ) = g_et_seen ( wv_new )
+}
+
+@ __et_scalar_name i n → b {
+    ^ | | | | | | | | | | | | == n g_etn_i64 == n g_etn_i1 == n g_etn_double == n g_etn_float == n g_etn_void == n g_etn_empty == n g_etn_i8 == n g_etn_u8 == n g_etn_i16 == n g_etn_i32 == n g_etn_u16 == n g_etn_u32 == n g_etn_u64
+}
+
+@ et_at i t i field → i { ^ ( wv_at g_et + * t ET_W field ) }
+
+@ et_flag i t i flag → b { ? < t 0 { ^ F } {} ^ != 0 & ( et_at t ET_FLAGS ) flag }
+
+@ et_kind i t → i { ? < t 0 { ^ EK_SCALAR } {} ^ ( et_at t ET_KIND ) }
+
+// The type named by the interned string `name`: its number. A number is
+// ET_NUM unless it is the flag type, which a match needs to tell.
+unsafe @ et_of i name → i {
+    ( __et_names )
+    : i have ( im_get g_et_ix name 0 )
+    ? != have 0 { ^ - have 1 } {}
+    ? & ( __et_scalar_name name ) != name g_etn_i1 { ^ ET_NUM } {}
+    : i syms g_eng_syms
+    : s ty ( nurl_str_cat # s name `` )
+    : i n ( nurl_str_len ty )
+    // (anything that is no named type, no inline aggregate and no pointer
+    // is a number to the engine: a vector, an array, a function's type)
+    ? & & & != name g_etn_i1 != name g_etn_i8p > n 0 & & != ( nurl_str_get ty 0 ) 37 != ( nurl_str_get ty 0 ) 123 != ( nurl_str_get ty - n 1 ) 42 { ^ ET_NUM } {}
+    ? & > n 0 == ( nurl_str_get ty - n 1 ) 41 { ^ ET_NUM } {}
+    : i t / ( wv_len g_et ) ET_W
+    ( im_put g_et_ix name + t 1 )
+    : ~ i k 0
+    ~ < k ET_W { ( wv_push g_et 0 ) = k + k 1 }
+    ( wv_put g_et + * t ET_W ET_NAME name )
+    ( wv_put g_et + * t ET_W ET_E1 ET_NONE )
+    ( wv_put g_et + * t ET_W ET_E2 ET_NONE )
+    ? == name g_etn_i1 {
+        ( wv_put g_et + * t ET_W ET_KIND EK_SCALAR )
+        ( wv_put g_et + * t ET_W ET_FLAGS ETF_BOOL )
+        ^ t
+    } {}
+    ? == name g_etn_i8p { ( wv_put g_et + * t ET_W ET_KIND EK_S ) ^ t } {}
+    : i c0 ? == n 0 0 ( nurl_str_get ty 0 )
+    : b ptr & > n 0 == ( nurl_str_get ty - n 1 ) 42
+    ? ptr {
+        ( wv_put g_et + * t ET_W ET_KIND EK_PTR )
+        ( wv_put g_et + * t ET_W ET_E1 ( et_of ( __core_in ( nurl_str_slice ty 0 - n 1 ) ) ) )
+        ^ t
+    } {}
+    // the walk's answers
+    : ~ i flags 0
+    ? ( __type_needs_drop ty syms ) { = flags | flags ETF_DROPS } {}
+    ? ( __clone_supported ty syms ) { = flags | flags ETF_CLONE } {}
+    ? ( __drop_may_read_view ty ) { = flags | flags ETF_UDROP } {}
+    : b share ? ( __is_libh ty ) ( seq ( __libh_copy_op ty ) `share` ) F
+    ? share { = flags | flags ETF_SHARE } {}
+    ? & share ( __thr_share_ok syms ty ) { = flags | flags ETF_TSHARE } {}
+    ( wv_put g_et + * t ET_W ET_CLS ( bck_bind_class ty ) )
+    // fields
+    : s ln ? == c0 37 ( __lty_layout_name ty ) ``
+    : i fc ? != 0 ( nurl_str_len ln ) ( nurl_sym_int2 syms ln `__field_count` ) -1
+    : i afc ? == c0 123 ( agg_field_count syms ty ) -1
+    : i nf ? >= fc 0 fc ? >= afc 0 afc 0
+    ( wv_put g_et + * t ET_W ET_F ( wv_len g_et_w ) )
+    ( wv_put g_et + * t ET_W ET_F_N nf )
+    : ~ i fi 0
+    ~ < fi nf {
+        : s fname ? >= fc 0 ( nurl_sym_get syms ( nurl_str_cat3 ln `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__name` ) ) ) ``
+        : s ft ? >= fc 0 ( nurl_llty ( nurl_sym_get syms ( nurl_str_cat3 ln `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) ) ( compound_field_type ty fi )
+        ( wv_push g_et_w ( __core_in fname ) )
+        ( wv_push g_et_w ( __core_in ft ) )
+        = fi + fi 1
+    }
+    // variants
+    : s vl ? != 0 ( nurl_str_len ln ) ( nurl_sym_get2 syms ln `__variants` ) ``
+    ( wv_put g_et + * t ET_W ET_V ( wv_len g_et_w ) )
+    ( wv_put g_et + * t ET_W ET_V_N ( count_words vl ) )
+    : ~ s rest ( nurl_str_cat vl `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s vname ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : i pn0 ( nurl_sym_int2 syms vname `__paycount` )
+        : i pn ? < pn0 0 0 pn0
+        ( wv_push g_et_w ( __core_in vname ) )
+        ( wv_push g_et_w pn )
+        : ~ i pi 0
+        ~ < pi pn {
+            ( wv_push g_et_w ( __core_in ( nurl_llty ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) ) ) )
+            = pi + pi 1
+        }
+    }
+    // what it is, in the engine's terms
+    ? == c0 123 {
+        : i f0 ? > nf 0 ( wv_at g_et_w + ( et_at t ET_F ) 1 ) 0
+        : i f1 ? > nf 1 ( wv_at g_et_w + ( et_at t ET_F ) 3 ) 0
+        : i f2 ? > nf 2 ( wv_at g_et_w + ( et_at t ET_F ) 5 ) 0
+        ? & == nf 2 == f0 g_etn_i1 {
+            ( wv_put g_et + * t ET_W ET_KIND EK_OPT )
+            ( wv_put g_et + * t ET_W ET_E1 ( et_of f1 ) )
+        } {
+            ? & == nf 3 == f0 g_etn_i1 {
+                ( wv_put g_et + * t ET_W ET_KIND EK_RES )
+                ( wv_put g_et + * t ET_W ET_E1 ( et_of f1 ) )
+                ( wv_put g_et + * t ET_W ET_E2 ( et_of f2 ) )
+            } {
+                : s f0s # s f0
+                : i f0n ? == f0 0 0 ( nurl_str_len f0s )
+                ? & & == nf 2 > f0n 0 & == ( nurl_str_get f0s - f0n 1 ) 42 == f1 g_etn_i64 {
+                    ( wv_put g_et + * t ET_W ET_KIND EK_SLICE )
+                    ( wv_put g_et + * t ET_W ET_E1 ( et_of ( __core_in ( nurl_str_slice f0s 0 - f0n 1 ) ) ) )
+                } {
+                    ( wv_put g_et + * t ET_W ET_KIND EK_CLOSURE )
+                }
+            }
+        }
+        ( wv_put g_et + * t ET_W ET_FLAGS flags )
+        ^ t
+    } {}
+    // `%Name…`
+    : i base ( __core_in ( __lty_base_name ty ) )
+    ( wv_put g_et + * t ET_W ET_BASE base )
+    : ~ i ac 0
+    : ~ s arg ( __inst_targ ty 0 )
+    ~ != 0 ( nurl_str_len arg ) { = ac + ac 1 = arg ( __inst_targ ty ac ) }
+    : i a0 ? > ac 0 ( et_of ( __core_in ( nurl_llty ( __inst_targ ty 0 ) ) ) ) ET_NONE
+    ? & == base g_etn_String == ac 0 { ( wv_put g_et + * t ET_W ET_KIND EK_STRING ) ( wv_put g_et + * t ET_W ET_FLAGS flags ) ^ t } {}
+    ? & == base g_etn_Vec == ac 1 { ( wv_put g_et + * t ET_W ET_KIND EK_VEC ) ( wv_put g_et + * t ET_W ET_E1 a0 ) ( wv_put g_et + * t ET_W ET_FLAGS flags ) ^ t } {}
+    ? & == base g_etn_Box == ac 1 { ( wv_put g_et + * t ET_W ET_KIND EK_BOX ) ( wv_put g_et + * t ET_W ET_E1 a0 ) ( wv_put g_et + * t ET_W ET_FLAGS flags ) ^ t } {}
+    ? & == base g_etn_Slice == ac 1 { ( wv_put g_et + * t ET_W ET_KIND EK_SLICE ) ( wv_put g_et + * t ET_W ET_E1 a0 ) ( wv_put g_et + * t ET_W ET_FLAGS flags ) ^ t } {}
+    ( wv_put g_et + * t ET_W ET_KIND EK_NAMED )
+    : b shared | | == base g_etn_Rc == base g_etn_Arc == base g_etn_Shared
+    : b of_one | | | | | shared == base g_etn_Channel == base g_etn_Locked == base g_etn_RwLocked == base g_etn_Deque == base g_etn_Set
+    ? & == ac 1 | of_one == 0 ( et_at t ET_CLS ) {
+        // a handle over one payload: `*` is the payload
+        ( wv_put g_et + * t ET_W ET_E1 a0 )
+        = flags | flags ETF_HANDLE
+        ? shared { = flags | flags ETF_SHARED } {}
+        ? == base g_etn_Arc { = flags | flags ETF_ARC } {}
+    } {
+        ? != 0 ( et_at t ET_V_N ) { = flags | flags ETF_ENUM } {
+            ? != 0 nf { = flags | flags ETF_STRUCT } {}
+        }
+    }
+    ( wv_put g_et + * t ET_W ET_FLAGS flags )
+    ^ t
+}
+
+// Field `k` of a struct: its name (interned) and its type.
+@ et_field_name i t i k → i { ^ ( wv_at g_et_w + ( et_at t ET_F ) * k 2 ) }
+
+unsafe @ et_field_ty i t i k → i { ^ ( et_of ( wv_at g_et_w + + ( et_at t ET_F ) * k 2 1 ) ) }
+
+// The type of the field named `name`, ET_NONE if `t` is no struct or has none.
+unsafe @ et_field i t i name → i {
+    ? | < t 0 ! ( et_flag t ETF_STRUCT ) { ^ ET_NONE } {}
+    : i n ( et_at t ET_F_N )
+    : ~ i k 0
+    ~ < k n {
+        ? == ( et_field_name t k ) name { ^ ( et_field_ty t k ) } {}
+        = k + k 1
+    }
+    ^ ET_NONE
+}
+
+// Where variant number `v` of an enum sits in g_et_w.
+@ __et_variant_at i t i v → i {
+    : ~ i at ( et_at t ET_V )
+    : ~ i k 0
+    ~ < k v { = at + + at 2 ( wv_at g_et_w + at 1 ) = k + k 1 }
+    ^ at
+}
+
+// The payload types of the variant named `name`: how many (-1: no such
+// variant), and payload `k`'s type. An option's `T` and `F` both carry
+// its payload type; a result's `F` its error type; the flag type has `T`
+// and `F` with nothing.
+@ et_variant_n i t i name → i {
+    ? < t 0 { ^ -1 } {}
+    : i kind ( et_kind t )
+    ? | == kind EK_OPT == kind EK_RES { ^ ? | == name g_etn_T == name g_etn_F 1 -1 } {}
+    ? ( et_flag t ETF_BOOL ) { ^ ? | == name g_etn_T == name g_etn_F 0 -1 } {}
+    ? ! ( et_flag t ETF_ENUM ) { ^ -1 } {}
+    : i n ( et_at t ET_V_N )
+    : ~ i v 0
+    ~ < v n {
+        : i at ( __et_variant_at t v )
+        ? == ( wv_at g_et_w at ) name { ^ ( wv_at g_et_w + at 1 ) } {}
+        = v + v 1
+    }
+    ^ -1
+}
+
+unsafe @ et_variant_ty i t i name i k → i {
+    ? < t 0 { ^ ET_NONE } {}
+    : i kind ( et_kind t )
+    ? == kind EK_OPT { ^ ? == k 0 ( et_at t ET_E1 ) ET_NONE } {}
+    ? == kind EK_RES { ^ ? != k 0 ET_NONE ? == name g_etn_T ( et_at t ET_E1 ) ( et_at t ET_E2 ) } {}
+    ? ! ( et_flag t ETF_ENUM ) { ^ ET_NONE } {}
+    : i n ( et_at t ET_V_N )
+    : ~ i v 0
+    ~ < v n {
+        : i at ( __et_variant_at t v )
+        ? == ( wv_at g_et_w at ) name {
+            ? >= k ( wv_at g_et_w + at 1 ) { ^ ET_NONE } {}
+            ^ ( et_of ( wv_at g_et_w + + at 2 k ) )
+        } {}
+        = v + v 1
+    }
+    ^ ET_NONE
+}
+
+// What a value of it is a container of: an element, a boxed value, a
+// handle's payload, a String's byte.
+@ et_elem i t → i {
+    ? < t 0 { ^ ET_NONE } {}
+    : i kind ( et_kind t )
+    ? | | == kind EK_VEC == kind EK_SLICE == kind EK_BOX { ^ ( et_at t ET_E1 ) } {}
+    ? & == kind EK_NAMED ( et_flag t ETF_HANDLE ) { ^ ( et_at t ET_E1 ) } {}
+    ? == kind EK_STRING { ^ ET_NUM } {}
+    ^ ET_NONE
+}
+
+@ et_is_view i t → b {
+    ? < t 0 { ^ F } {}
+    : i kind ( et_kind t )
+    ^ | == kind EK_S == kind EK_SLICE
+}
+
+// The named types the question being answered is inside of: a type that
+// holds itself is met again on the way down, and answers for itself what
+// the question says a cycle answers. Each question asked from outside
+// starts with none (g_et_seen_base), also when it is asked while another
+// is being answered.
+@ __et_in_seen i t → b {
+    : i n ( wv_len g_et_seen )
+    : ~ i k g_et_seen_base
+    ~ < k n { ? == ( wv_at g_et_seen k ) t { ^ T } {} = k + k 1 }
+    ^ F
+}
+
+@ __et_ask → i {
+    : i was g_et_seen_base
+    = g_et_seen_base ( wv_len g_et_seen )
+    ^ was
+}
+
+@ __et_asked i was → v {
+    ( wv_trunc g_et_seen g_et_seen_base )
+    = g_et_seen_base was
+}
+
+@ __et_memo_get i t i q → i {
+    : i m ( et_at t ET_MEMO )
+    ? == 0 & m << 1 * q 2 { ^ -1 } {}
+    ^ ? != 0 & m << 2 * q 2 1 0
+}
+
+@ __et_memo_put i t i q b ans → v {
+    : i m ( et_at t ET_MEMO )
+    ( wv_put g_et + * t ET_W ET_MEMO | | m << 1 * q 2 ? ans << 2 * q 2 0 )
+}
+
+// A number, or a value made of numbers only (a pointer counts as one:
+// safe code has none to follow).
+unsafe @ __et_scalar i t → b {
+    ? < t 0 { ^ T } {}
+    : i kind ( et_kind t )
+    ? | == kind EK_SCALAR == kind EK_PTR { ^ T } {}
+    ? == kind EK_OPT { ^ ( __et_scalar ( et_at t ET_E1 ) ) } {}
+    ? != kind EK_NAMED { ^ F } {}
+    ? ( __et_in_seen t ) { ^ F } {}
+    ? ( et_flag t ETF_ENUM ) {
+        ( wv_push g_et_seen t )
+        : i n ( et_at t ET_V_N )
+        : ~ b all T
+        : ~ i v 0
+        ~ & all < v n {
+            : i at ( __et_variant_at t v )
+            : i pn ( wv_at g_et_w + at 1 )
+            : ~ i k 0
+            ~ & all < k pn { ? ! ( __et_scalar ( et_of ( wv_at g_et_w + + at 2 k ) ) ) { = all F } {} = k + k 1 }
+            = v + v 1
+        }
+        ( wv_pop g_et_seen )
+        ^ all
+    } {}
+    ? ( et_flag t ETF_STRUCT ) {
+        ( wv_push g_et_seen t )
+        : i n ( et_at t ET_F_N )
+        : ~ b all T
+        : ~ i k 0
+        ~ & all < k n { ? ! ( __et_scalar ( et_field_ty t k ) ) { = all F } {} = k + k 1 }
+        ( wv_pop g_et_seen )
+        ^ all
+    } {}
+    ^ F
+}
+
+unsafe @ et_scalar i t → b {
+    ? < t 0 { ^ T } {}
+    : i have ( __et_memo_get t ETM_SCALAR )
+    ? >= have 0 { ^ == have 1 } {}
+    : i was ( __et_ask )
+    : b r ( __et_scalar t )
+    ( __et_asked was )
+    ( __et_memo_put t ETM_SCALAR r )
+    ^ r
+}
+
+// May a lent value of this type be copied where it would outlive what it
+// borrows? The walk's own answer (`__clone_supported`); a raw view has none.
+unsafe @ et_copyable i t → b {
+    ? ( et_scalar t ) { ^ T } {}
+    : i kind ( et_kind t )
+    ? == kind EK_STRING { ^ T } {}
+    ? | | | | == kind EK_NAMED == kind EK_VEC == kind EK_BOX == kind EK_OPT == kind EK_RES { ^ ( et_flag t ETF_CLONE ) } {}
+    ^ F
+}
+
+// Does a value of this type own heap memory when it is an owner?
+unsafe @ __et_owning i t → b {
+    ? ( et_scalar t ) { ^ F } {}
+    : i kind ( et_kind t )
+    ? | | | | == kind EK_STRING == kind EK_VEC == kind EK_BOX == kind EK_SLICE == kind EK_S { ^ T } {}
+    ? == kind EK_OPT { ^ ( __et_owning ( et_at t ET_E1 ) ) } {}
+    ? != kind EK_NAMED { ^ F } {}
+    ? ! ( et_flag t ETF_DROPS ) { ^ F } {}
+    ? ( et_flag t ETF_HANDLE ) { ^ T } {}
+    ? ( __et_in_seen t ) { ^ F } {}
+    ? ( et_flag t ETF_STRUCT ) {
+        ( wv_push g_et_seen t )
+        : i n ( et_at t ET_F_N )
+        : ~ b any F
+        : ~ i k 0
+        ~ & ! any < k n { ? ( __et_owning ( et_field_ty t k ) ) { = any T } {} = k + k 1 }
+        ( wv_pop g_et_seen )
+        ^ any
+    } {}
+    ? ( et_flag t ETF_ENUM ) {
+        ( wv_push g_et_seen t )
+        : i n ( et_at t ET_V_N )
+        : ~ b any F
+        : ~ i v 0
+        ~ & ! any < v n {
+            : i at ( __et_variant_at t v )
+            : i pn ( wv_at g_et_w + at 1 )
+            : ~ i k 0
+            ~ & ! any < k pn { ? ( __et_owning ( et_of ( wv_at g_et_w + + at 2 k ) ) ) { = any T } {} = k + k 1 }
+            = v + v 1
+        }
+        ( wv_pop g_et_seen )
+        ^ any
+    } {}
+    ^ F
+}
+
+unsafe @ et_owning i t → b {
+    ? < t 0 { ^ F } {}
+    : i have ( __et_memo_get t ETM_OWNING )
+    ? >= have 0 { ^ == have 1 } {}
+    : i was ( __et_ask )
+    : b r ( __et_owning t )
+    ( __et_asked was )
+    ( __et_memo_put t ETM_OWNING r )
+    ^ r
+}
+
+// Does a value of this type hold a handle of its own — not only views,
+// which a copy shares?
+unsafe @ __et_owns_handle i t → b {
+    ? | < t 0 ( et_scalar t ) { ^ F } {}
+    : i kind ( et_kind t )
+    ? | == kind EK_S == kind EK_SLICE { ^ F } {}
+    ? == kind EK_OPT { ^ ( __et_owns_handle ( et_at t ET_E1 ) ) } {}
+    ? == kind EK_RES { ^ | ( __et_owns_handle ( et_at t ET_E1 ) ) ( __et_owns_handle ( et_at t ET_E2 ) ) } {}
+    ? & & == kind EK_NAMED ! ( et_flag t ETF_HANDLE ) ! ( __et_in_seen t ) {
+        ? ( et_flag t ETF_STRUCT ) {
+            ( wv_push g_et_seen t )
+            : i n ( et_at t ET_F_N )
+            : ~ b any F
+            : ~ i k 0
+            ~ & ! any < k n { ? ( __et_owns_handle ( et_field_ty t k ) ) { = any T } {} = k + k 1 }
+            ( wv_pop g_et_seen )
+            ^ any
+        } {}
+        ? ( et_flag t ETF_ENUM ) {
+            ( wv_push g_et_seen t )
+            : i n ( et_at t ET_V_N )
+            : ~ b any F
+            : ~ i v 0
+            ~ & ! any < v n {
+                : i at ( __et_variant_at t v )
+                : i pn ( wv_at g_et_w + at 1 )
+                : ~ i k 0
+                ~ & ! any < k pn { ? ( __et_owns_handle ( et_of ( wv_at g_et_w + + at 2 k ) ) ) { = any T } {} = k + k 1 }
+                = v + v 1
+            }
+            ( wv_pop g_et_seen )
+            ^ any
+        } {}
+    } {}
+    ^ ( et_owning t )
+}
+
+unsafe @ et_owns_handle i t → b {
+    ? < t 0 { ^ F } {}
+    : i have ( __et_memo_get t ETM_OWNS_HANDLE )
+    ? >= have 0 { ^ == have 1 } {}
+    : i was ( __et_ask )
+    : b r ( __et_owns_handle t )
+    ( __et_asked was )
+    ( __et_memo_put t ETM_OWNS_HANDLE r )
+    ^ r
+}
+
+// Can a value of this type hold a view or a borrowed handle at all (a raw
+// string, a slice, a closure, a pointer, anywhere in it)?
+unsafe @ __et_view_capable i t → b {
+    ? == t ET_NONE { ^ T } {}
+    ? ( et_scalar t ) { ^ F } {}
+    : i kind ( et_kind t )
+    ? | | | == kind EK_S == kind EK_SLICE == kind EK_CLOSURE == kind EK_PTR { ^ T } {}
+    ? == kind EK_STRING { ^ F } {}
+    ? | | == kind EK_VEC == kind EK_BOX == kind EK_OPT { ^ ( __et_view_capable ( et_at t ET_E1 ) ) } {}
+    ? == kind EK_RES { ^ | ( __et_view_capable ( et_at t ET_E1 ) ) ( __et_view_capable ( et_at t ET_E2 ) ) } {}
+    ? == kind EK_NAMED {
+        ? ( __et_in_seen t ) { ^ F } {}
+        ? ( et_flag t ETF_HANDLE ) {
+            ( wv_push g_et_seen t )
+            : b r ( __et_view_capable ( et_at t ET_E1 ) )
+            ( wv_pop g_et_seen )
+            ^ r
+        } {}
+        ? ( et_flag t ETF_STRUCT ) {
+            ( wv_push g_et_seen t )
+            : i n ( et_at t ET_F_N )
+            : ~ b any F
+            : ~ i k 0
+            ~ & ! any < k n { ? ( __et_view_capable ( et_field_ty t k ) ) { = any T } {} = k + k 1 }
+            ( wv_pop g_et_seen )
+            ^ any
+        } {}
+        ? ( et_flag t ETF_ENUM ) {
+            ( wv_push g_et_seen t )
+            : i n ( et_at t ET_V_N )
+            : ~ b any F
+            : ~ i v 0
+            ~ & ! any < v n {
+                : i at ( __et_variant_at t v )
+                : i pn ( wv_at g_et_w + at 1 )
+                : ~ i k 0
+                ~ & ! any < k pn { ? ( __et_view_capable ( et_of ( wv_at g_et_w + + at 2 k ) ) ) { = any T } {} = k + k 1 }
+                = v + v 1
+            }
+            ( wv_pop g_et_seen )
+            ^ any
+        } {}
+    } {}
+    ^ T
+}
+
+unsafe @ et_view_capable i t → b {
+    ? < t 0 { ^ == t ET_NONE } {}
+    : i have ( __et_memo_get t ETM_VIEW_CAPABLE )
+    ? >= have 0 { ^ == have 1 } {}
+    : i was ( __et_ask )
+    : b r ( __et_view_capable t )
+    ( __et_asked was )
+    ( __et_memo_put t ETM_VIEW_CAPABLE r )
+    ^ r
+}
+
+// Does releasing a value of this type run a destructor that may read the
+// views it holds? The walk's transitive answer for a named type, followed
+// through the containers the engine spells out.
+unsafe @ et_has_udrop i t → b {
+    ? | < t 0 ( et_scalar t ) { ^ F } {}
+    : i kind ( et_kind t )
+    ? | | == kind EK_VEC == kind EK_BOX == kind EK_OPT { ^ ( et_has_udrop ( et_at t ET_E1 ) ) } {}
+    ? == kind EK_RES { ^ | ( et_has_udrop ( et_at t ET_E1 ) ) ( et_has_udrop ( et_at t ET_E2 ) ) } {}
+    ^ & == kind EK_NAMED ( et_flag t ETF_UDROP )
+}
+
+// May a value of type `t` reach a payload of the shared handle type `sh`?
+unsafe @ __et_reaches i t i sh → b {
+    ? | < t 0 ( et_scalar t ) { ^ F } {}
+    : i kind ( et_kind t )
+    ? | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT == kind EK_SLICE { ^ ( __et_reaches ( et_at t ET_E1 ) sh ) } {}
+    ? == kind EK_RES { ^ | ( __et_reaches ( et_at t ET_E1 ) sh ) ( __et_reaches ( et_at t ET_E2 ) sh ) } {}
+    ? | != kind EK_NAMED ( __et_in_seen t ) { ^ F } {}
+    ? & == t sh ( et_flag t ETF_SHARED ) { ^ T } {}
+    ( wv_push g_et_seen t )
+    : ~ b any F
+    ? ( et_flag t ETF_HANDLE ) { = any ( __et_reaches ( et_at t ET_E1 ) sh ) } {
+        : i n ( et_at t ET_F_N )
+        : ~ i k 0
+        ? ( et_flag t ETF_STRUCT ) {
+            ~ & ! any < k n { ? ( __et_reaches ( et_field_ty t k ) sh ) { = any T } {} = k + k 1 }
+        } {}
+        ? ( et_flag t ETF_ENUM ) {
+            : i vn ( et_at t ET_V_N )
+            : ~ i v 0
+            ~ & ! any < v vn {
+                : i at ( __et_variant_at t v )
+                : i pn ( wv_at g_et_w + at 1 )
+                : ~ i p 0
+                ~ & ! any < p pn { ? ( __et_reaches ( et_of ( wv_at g_et_w + + at 2 p ) ) sh ) { = any T } {} = p + p 1 }
+                = v + v 1
+            }
+        } {}
+    }
+    ( wv_pop g_et_seen )
+    ^ any
+}
+
+unsafe @ et_reaches_shared i t i sh → b {
+    : i was ( __et_ask )
+    : b r ( __et_reaches t sh )
+    ( __et_asked was )
+    ^ r
+}
+
+// Does a container of this type hold views in its elements (a Vec of raw
+// strings, of structs of views)?
+unsafe @ et_holds_views i t → b {
+    ? == t ET_NONE { ^ T } {}
+    : i e ( et_elem t )
+    ? == e ET_NONE { ^ F } {}
+    ^ | ( et_is_view e ) & ! ( et_scalar e ) ! ( et_owning e )
+}
+
+// ── Ownership engine: the driver ─────────────────────────────────────
+unsafe @ __eng_o_ty i t → v {
+    ? == t ET_NONE { ( __core_o `-` ) ^ } {}
+    ? == t ET_NUM { ( __core_o `#` ) ^ } {}
+    ( __core_o # s ( et_at t ET_NAME ) )
+}
+
+// The types the IR listed, as the engine reads them: `ety`, the type, its
+// kind, what it is a container of, its flags, and its answers to the
+// questions the rules ask (a letter each, `-` for no). tools/ncore
+// compares these with the reference checker's own reading.
+unsafe @ eng_print_types → v {
+    : ~ i k 0
+    ~ < k g_core_ty_n {
+        : *i ta # *i # s g_core_tys
+        : i name . ta k
+        : i t ( et_of name )
+        ( __core_o `ety\t` ) ( __core_o # s name )
+        ( __core_o `\t` ) ( __core_oi ( et_kind t ) )
+        ( __core_o `\t` ) ( __eng_o_ty ? < t 0 ET_NONE ( et_at t ET_E1 ) )
+        ( __core_o `\t` ) ( __eng_o_ty ? < t 0 ET_NONE ( et_at t ET_E2 ) )
+        ( __core_o `\t` ) ( __core_oi ? < t 0 0 ( et_at t ET_FLAGS ) )
+        ( __core_o `\t` )
+        ( __core_o ? ( et_scalar t ) `n` `-` )
+        ( __core_o ? ( et_copyable t ) `c` `-` )
+        ( __core_o ? ( et_owning t ) `o` `-` )
+        ( __core_o ? ( et_owns_handle t ) `h` `-` )
+        ( __core_o ? ( et_view_capable t ) `v` `-` )
+        ( __core_o ? ( et_has_udrop t ) `d` `-` )
+        ( __core_o ? ( et_holds_views t ) `w` `-` )
+        ( __core_o `\n` )
+        = k + k 1
+    }
+}
+
+// Every function kept, read in turn; what the engine says goes after the
+// IR's own text, one `eng` line a finding.
+unsafe @ eng_run i syms → v {
+    = g_eng_syms syms
+    ( eng_sq_reset )
+    ( eng_print_types )
+    : i n ( ef_n )
+    : ~ i f 0
+    ~ < f n {
+        ? != 0 g_eng_dbg { ( nurl_eprintln ( nurl_str_cat `eng: ` # s ( ef_at f EF_NAME ) ) ) } {}
+        ( eng_open f )
+        : ~ i at 0
+        : ~ i stmts 0
+        ~ < at g_ec_n { = stmts + stmts 1 = at + at ( eng_stmt_len at ) }
+        ( __core_o `efn\t` ) ( __core_o # s ( ef_at f EF_NAME ) )
+        ( __core_o `\t` ) ( __core_oi stmts )
+        ( __core_o `\t` ) ( __core_oi ( ef_at f EF_VAR_N ) )
+        ( __core_o `\t` ) ( __core_oi ( ef_at f EF_PL_N ) ) ( __core_o `\n` )
+        = f + f 1
+    }
+}
+// </engine>
 // A function's (or a closure body's) IR begins. The builder of the
 // function it is compiled inside, if any, is set aside.
 unsafe @ core_fn_begin s fname s file i line i flags s tmpl → v {
@@ -10035,6 +11398,7 @@ unsafe @ core_fn_end → v {
     ? == 0 g_core_live { ^ } {}
     ( core_note_fn )
     ( core_print_fn )
+    ? != 0 g_eng_on { ( eng_keep_fn ) } {}
     ? == 0 g_core_saved { = g_core_live 0 ^ } {}
     ? != 0 g_core_code { ( nurl_free # s g_core_code ) } {}
     ? != 0 g_core_vars { ( nurl_free # s g_core_vars ) } {}
@@ -10831,6 +12195,7 @@ unsafe @ core_flush i syms → v {
     ( core_print_types syms )
     ( core_print_virts )
     ( core_print_sums syms )
+    ? != 0 g_eng_on { ( eng_run syms ) } {}
     ? != 0 g_core_out {
         : *u ob # *u # s g_core_out
         = . ob g_core_out_n # u 0
@@ -101350,6 +102715,8 @@ unsafe @ main → i {
         ? ( seq a `--stdin` ) { = stdin_source T = ai + ai 1 continue } {}
         ? ( seq a `--check` ) { = check_only T = ai + ai 1 continue } {}
         ? ( seq a `--emit-core` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = ai + ai 1 continue } {}
+        ? ( seq a `--engine` ) { = g_eng_on 1 = ai + ai 1 continue } {}
+        ? ( seq a `--engine-trace` ) { = g_eng_on 1 = g_eng_dbg 1 = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--coverage-link-ir=` ) {
             = g_coverage_link_ir ( nurl_str_slice a 19 - ( nurl_str_len a ) 19 )
             ? == 0 ( nurl_str_len g_coverage_link_ir ) {
