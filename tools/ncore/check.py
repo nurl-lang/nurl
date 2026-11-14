@@ -891,11 +891,19 @@ class FnCheck:
         outlive a local it borrows from - deep-copied (a join's value, a
         return) or refused."""
         av = self.read(st, op, line, site, what)
-        if op[0] == "v" and not op[2] and op[1] in self.lit_lendcopy and not is_ret and av.own == "L":
+        # (a join's temporary given it - `^ ?? o { T s → @ W { s } … }` -
+        # carries it on as it is: what takes the join decides)
+        to_temp = dest_vid is not None and self.fn.vars[dest_vid].kind == "temp"
+        if (op[0] == "v" and not op[2] and op[1] in self.lit_lendcopy and not is_ret and av.own == "L"
+                and to_temp):
+            self.lit_lendcopy.add(dest_vid)
+        elif op[0] == "v" and not op[2] and op[1] in self.lit_lendcopy and not is_ret and av.own == "L":
             # (taken by something other than a return: the copy is made)
             av = AV("O", (), (), av.held)
             st.vals[op[1]] = av
-        if op[0] == "v" and not op[2] and op[1] in self.lit_nocopy and not is_ret:
+        if op[0] == "v" and not op[2] and op[1] in self.lit_nocopy and not is_ret and to_temp:
+            self.lit_nocopy[dest_vid] = self.lit_nocopy[op[1]]
+        elif op[0] == "v" and not op[2] and op[1] in self.lit_nocopy and not is_ret:
             self.err(line, f"field {self.lit_nocopy[op[1]]}: a borrowed value would have to be copied here, "
                            f"and it cannot be copied")
         if op[0] == "v" and op[2] and av.own == "L" and "*" not in op[2]:
@@ -1463,6 +1471,14 @@ class FnCheck:
                         # borrow, and its field is not its to hand to a
                         # `sink` (MEMORY.md §2.10, agora #680)
                         self.err(line, f"{name} takes a field of {self.vname(op[1])}, which is a borrow")
+                    elif (op[2] and self.fn.vars[op[1]].kind == "local" and st.vals.get(op[1]) is not None
+                          and st.vals[op[1]].own == "O"
+                          and any(l in self.loans and self.loans[l][1] == "handle" for l in st.vals[op[1]].loans)
+                          and k < len(sm["modes"]) and sm["modes"][k] == "sink"):
+                        # (…and of one that is a lend on some paths or calls
+                        # only - a call's result that is its own per call: on
+                        # those, the field is another's)
+                        self.err(line, f"{name} takes a field of {self.vname(op[1])}, which is a borrow on some paths")
                     elif (not op[2] and op[1] in self.slot_vars and avs[k].own == "L"
                           and k < len(sm["modes"]) and sm["modes"][k] == "sink"
                           and not any(r[1] == k for r in sm.get("rholds", ()))
