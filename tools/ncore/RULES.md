@@ -137,6 +137,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A parameter of a type with nothing to release (a struct of views and numbers: nurlc's `drops` answer) is copied by its words: its new holder holds the views it holds and nothing of the parameter | §2.13 | `transfer` |
 | What goes into a shared handle's payload is held by the one object every share reaches: a binding that may be another handle on it holds it too | §2.10 (agora #392) | `store_into` |
 | A view of a binding's buffer kept elsewhere follows the binding into the container, the literal or the field that takes it | §2.10 (agora #337) | `rehome_views` |
+| A summary's effect says what may happen. A parameter the callee gives a new value on every path goes back holding none of what it held; one that goes back, on some way out, still holding it (`keeps`) keeps what it holds at the call: what was lent out of it ends all the same | §2.10 (AGORA-863) | `make_summary`, `apply_call`, `effect` (`weak`) |
 | A loop whose condition is a true literal ends only at a `break` or a return: what holds after it is what held there | §2.5 | `loop` (`loopcond T`) |
 | The result of a call through a known closure holds of its arguments what the body's summary says its result holds of its parameters | §2.8 (agora #422) | `call_closure` |
 | What a closure the caller chose hands back may hold what its captures hold (not its handles of the captures themselves): a function that collects such results hands them on | §2.11, §2.10 | `call_closure`, `heldin` |

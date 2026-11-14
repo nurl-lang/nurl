@@ -401,7 +401,11 @@ class FnCheck:
             live |= v.loans | hloans(v.held)
         return live
 
-    def effect(self, st, place, eff, line, depth=0):
+    def effect(self, st, place, eff, line, depth=0, weak=False):
+        """`weak`: the effect may not have happened (a callee that gives its
+        `inout` parameter a new value on some of its paths only): what was
+        lent out of the place ends all the same, what the place holds it
+        may still hold."""
         vid, path = place
         av = st.vals.get(vid)
         if av is None or depth > 8:
@@ -410,7 +414,7 @@ class FnCheck:
             self.ret_changed = True
         if av.own == "L" and eff != "end":
             for a in av.alias:
-                self.effect(st, (a[0], a[1] + path), eff, line, depth + 1)
+                self.effect(st, (a[0], a[1] + path), eff, line, depth + 1, weak)
             return
         shown = self.agg_lends.get(vid)
         if shown and path and path[0] in shown and eff != "end":
@@ -440,7 +444,7 @@ class FnCheck:
                 print(f"trace: {self.fn.name}:{line}: {eff} on {self.pname(place)} ends {len(killed)} loan(s)", file=sys.stderr)
             st.dead = st.dead | killed
         # what the place held is gone with what the effect released
-        if eff in ("drop", "replace", "take") and av.held:
+        if eff in ("drop", "replace", "take") and av.held and not weak:
             keep = set()
             for hp, l in av.held:
                 if eff in ("replace", "take") and prefix(path, hp):
@@ -1105,7 +1109,10 @@ class FnCheck:
         # effects
         for (k, path, eff) in sm["effects"]:
             if k < len(ops) and ops[k][0] == "v" and not (k in copied and not path):
-                self.effect(st, (ops[k][1], ops[k][2] + tuple(path)), eff, line)
+                # (a parameter the callee gives a new value on some paths
+                # only may go back holding what it held: `keeps`)
+                self.effect(st, (ops[k][1], ops[k][2] + tuple(path)), eff, line,
+                            weak=eff == "replace" and not path and k in sm.get("keeps", ()))
                 if (eff == "replace" and not path and not ops[k][2] and k < len(sm["modes"])
                         and sm["modes"][k] == "inout"):
                     # (a binding an `inout` callee may give a value of its
@@ -2809,7 +2816,17 @@ class FnCheck:
             res = "own"
         stores = set()
         left_gone = set()
+        # the parameters that go back, on some way out, still holding what
+        # they held when the function was entered: one it gives a new value
+        # on every path holds none of it
+        keeps = set()
         for st in [s for _, s in self.rets] + self.exits:
+            for vid, j in self.pidx.items():
+                av = st.vals.get(vid)
+                if av is not None and any(
+                        l in self.loans and self.loans[l][1] == "held" and self.loans[l][0][0] == -1 - vid
+                        for _, l in av.held):
+                    keeps.add(j)
             for (gv, gp) in st.gone:
                 if gv in self.pidx and self.fn.modes[self.pidx[gv]] == "inout":
                     # a part taken out of an `inout` parameter and not given
@@ -2835,7 +2852,7 @@ class FnCheck:
                 "regions": sorted(self.s_regions), "selfholds": sorted(self.s_selfholds),
                 "rclos": sorted(rclos), "sclos": sorted(sclos), "calllends": sorted(calllends),
                 "gone": sorted(left_gone), "mixed": [1] if mixed else [], "stale": sorted(self.s_stale),
-                "credits": sorted(self.s_credits)}
+                "credits": sorted(self.s_credits), "keeps": sorted(keeps)}
 
 
 def initial_summary(prog, fn):
@@ -2916,6 +2933,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "gone", "mixed", "stale", "credits"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "gone", "mixed", "stale", "credits", "keeps"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out

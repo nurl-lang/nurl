@@ -556,6 +556,7 @@
 : i SM_CREDITS 20
 : i SM_NPARAM 21
 : i SM_MODES 22  // the parameters' modes, a sequence in g_sm_w
+: i SM_KEEPS 23  // the parameters that may go back still holding what they held on entry
 : i RES_NONE 0
 : i RES_OWN 1
 : i RES_LENT 2
@@ -595,6 +596,7 @@
 : ~ i g_eng_skip 0  // why the module is not checked (interned), 0: it is
 : ~ i g_ws_syms 0
 : ~ i g_fc_order -1  // the functions the engine walks, in the order they were reached
+: ~ i g_fc_weak 0  // 1 while an effect that may not have happened is applied (eng_effect keeps what the place holds)
 // </engine globals>
 : i CORE_VW 7
 : i CORE_VS 1048576
@@ -12535,7 +12537,10 @@ unsafe @ eng_effect i st i place i eff i line i depth → v {
     // what the place held is gone with what the effect released
     : i av2 ( st_av st vid )
     : i held ( av_held av2 )
-    ? & | | == eff EF_DROP == eff EF_REPLACE == eff EF_TAKE != held 0 {
+    // (an effect that may not have happened - a callee that gives its
+    // `inout` parameter a new value on some of its paths only - leaves the
+    // place holding what it held: g_fc_weak)
+    ? & & | | == eff EF_DROP == eff EF_REPLACE == eff EF_TAKE != held 0 == 0 g_fc_weak {
         : i tmp ( wv_new )
         : ~ i k 0
         ~ < k ( sq_len held ) {
@@ -14408,7 +14413,11 @@ unsafe @ eng_str i name → s { ^ # s name }
         : i eff ( tp_at t 3 2 )
         ? & & < ek n ( op_is_place ( wv_at ops ek ) ) ! & ( sq_has copied ek ) == epath 0 {
             : i ok ( wv_at ops ek )
+            // (a parameter the callee gives a new value on some paths only
+            // may go back holding what it held)
+            = g_fc_weak ? & & == eff EF_REPLACE == epath 0 ( sm_has sm SM_KEEPS ek ) 1 0
             ( eng_effect st ( pl_make ( pl_var ok ) ( ep_cat ( pl_path ok ) epath ) ) eff line 0 )
+            = g_fc_weak 0
             ? & & & == eff EF_REPLACE == epath 0 == ( pl_path ok ) 0 == ( sm_mode sm ek ) PM_INOUT {
                 // (a binding an `inout` callee may give a value of its own)
                 ( fx_set ( pl_var ok ) FX_VAR_FRESH )
@@ -16980,6 +16989,14 @@ unsafe @ eng_virt_impls i vn i out → v {
         } {}
         = k + k 1
     }
+    : ~ i kset 0
+    = k 0
+    ~ < k ( wv_len impls ) {
+        : i f ( ef_find ( wv_at impls k ) )
+        ? & & >= f 0 ( ef_walked f ) ( sm_have f ) { = kset ( sq_union kset ( sm_load f SM_KEEPS ) ) } {}
+        = k + k 1
+    }
+    ( sm_put r SM_KEEPS ( sm_keep kset ) )
     ( sm_put r SM_RES res )
     ( sm_put r SM_MIXED mixed )
     ( sm_put r SM_MODES ( sm_word any SM_MODES ) )
@@ -17333,6 +17350,10 @@ unsafe @ eng_virt_impls i vn i out → v {
     ? & == res RES_LENT == lends 0 { = res RES_OWN } {}
     : ~ i stores 0
     : ~ i left_gone 0
+    // the parameters that go back, on some way out, still holding what
+    // they held when the function was entered: one it gives a new value on
+    // every path holds none of it
+    : ~ i keeps 0
     : i ne ( wv_len g_fc_exits )
     : ~ i s 0
     ~ < s + nr ne {
@@ -17355,6 +17376,7 @@ unsafe @ eng_virt_impls i vn i out → v {
                 = k 0
                 ~ < k ( sq_len held ) {
                     : i he ( sq_at held k )
+                    ? & == ( el_kind ( he_loan he ) ) LK_HELD == ( pl_var ( el_place ( he_loan he ) ) ) - -1 ( fp_vid j ) { = keeps ( sq_add keeps j ) } {}
                     ? == ( el_kind ( he_loan he ) ) LK_CLO { = sclos ( sq_add sclos ( tp3 j ( clo_path ( he_path he ) ) ( el_place ( he_loan he ) ) ) ) } {
                         : i pl ( param_loan ( he_loan he ) )
                         ? >= pl 0 {
@@ -17403,6 +17425,7 @@ unsafe @ eng_virt_impls i vn i out → v {
     ? ( sm_merge f SM_GONE left_gone ) { = changed T } {}
     ? ( sm_merge f SM_STALE g_s_stale ) { = changed T } {}
     ? ( sm_merge f SM_CREDITS g_s_credits ) { = changed T } {}
+    ? ( sm_merge f SM_KEEPS keeps ) { = changed T } {}
     ? changed { = g_sm_version + g_sm_version 1 } {}
     ^ changed
 }
@@ -17442,6 +17465,7 @@ unsafe @ eng_virt_impls i vn i out → v {
     : ~ i field SM_LENDS
     ~ <= field SM_CREDITS { ? != field SM_MIXED { ( sm_put f field 0 ) } {} = field + field 1 }
     ( sm_put f SM_MIXED 0 )
+    ( sm_put f SM_KEEPS 0 )
     ( sm_put f SM_CONSUMES ( sm_keep ( sq_set_of_wv sinks ) ) )
     ( wv_drop sinks )
 }
