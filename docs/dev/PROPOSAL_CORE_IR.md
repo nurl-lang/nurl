@@ -23,10 +23,22 @@ refuse nothing nurlc accepts). The numbers are in the AGORA-859 thread.
 
 What the table has shown so far for §7:
 
-- **D2** has a bridge: until summaries are declared in source, the walk's
-  own answers for a raw function are read out of its tables. About 220
-  library functions had a hand-written summary in `prims.py`; the rest are
-  now derived. A declared summary is still what replaces both.
+- **D2** has a bridge and a measured scope. Until summaries are declared
+  in source, the walk's own answers for a raw function are read out of its
+  tables (`sum` lines, `tools/ncore/derive.py`). Three runs over the hole
+  probes say where a declared summary is needed:
+
+  | summaries used | probes that agree |
+  |---|---|
+  | hand-declared for about 220 functions (`prims.py`), the walk's tables for the other raw ones | 3,182 |
+  | the same, but every library function whose body stays inside the raw boundary is walked, declared or not (`NCORE_WALK=1`) | 3,180 |
+  | no hand-declared summary at all (`NCORE_WALK=1 NCORE_DERIVE=1`) | 2,975 |
+
+  A function whose body stays inside the raw boundary needs none: the
+  engine reads its body. The raw core (`vec_*`, `string_*`, `rc_*`,
+  `arc_*`, `map_*`, the channels) does: what nurlc knows of it today is
+  partly by name, and its tables alone lose about 200 probes. That is the
+  set D2's declarations have to cover first.
 - **D4** has its first concrete list: shapes with one core IR that nurlc
   answers two ways, depending on a spelling the IR does not have
   (RULES.md, "One IR shape, two answers in nurlc"). The engine gives one
