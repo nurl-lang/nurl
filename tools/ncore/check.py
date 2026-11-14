@@ -864,7 +864,13 @@ class FnCheck:
             dpath = tuple(dpath)
             if kind == "value":
                 op = ops[k]
-                if src.own in ("O", "P") and op[0] == "v" and not op[2]:
+                sv = self.fn.vars[op[1]] if op[0] == "v" else None
+                if (src.own == "O" and op[0] == "v" and not op[2] and sv.kind != "temp"
+                        and sv.ty is not None and sv.ty[0] == "s"):
+                    # an owned raw string in a binding: what keeps it holds a
+                    # view of the binding's buffer (MEMORY.md §2.13)
+                    add = {(dpath, self.loan(st, (site, "sv", j, k), (op[1], ()), "view"))}
+                elif src.own in ("O", "P") and op[0] == "v" and not op[2]:
                     self.fresh_string_kept(st, op, src, line, f"{name}, which keeps it")
                     moved = self.move_out(st, op[1], line)
                     moved = self.reroot(st, moved, ops[j][1], ops[j][2] + dpath)
@@ -1300,7 +1306,9 @@ class FnCheck:
             if av is None:
                 continue
             for hp, l in av.held:
-                if l in self.loans and l not in st.dead:
+                # (live or ended: a view of a local that ended inside the
+                # function is one the caller's storage still holds)
+                if l in self.loans:
                     v = self.fn.vars[self.loans[l][0][0]]
                     if v.kind != "param" and self.loans[l][1] != "share":
                         self.err(line, f"{self.vname(vid)} is the caller's, and goes back holding a view of {v.name}")
