@@ -14922,7 +14922,9 @@ unsafe @ eng_byte s w i k → i {
                                         ~ & inout_part < a ( sq_len al ) {
                                             : i pa ( sq_at al a )
                                             : i pi ( fv_pidx ( pl_var pa ) )
-                                            ? | | == ( pl_path pa ) 0 < pi 0 != ( fp_mode pi ) PM_INOUT { = inout_part F } {}
+                                            // (…or of an element of any
+                                            // parameter's container)
+                                            ? | | == ( pl_path pa ) 0 < pi 0 & != ( fp_mode pi ) PM_INOUT ( eng_path_no_star ( pl_path pa ) ) { = inout_part F } {}
                                             = a + a 1
                                         }
                                     } {}
@@ -18623,7 +18625,9 @@ unsafe @ eng_byte s w i k → i {
             // nothing of where the value came from. A capture taken by
             // pointer is given the handle itself.)
             : i jt ( efp_ty f j )
-            : b copied_in & & & & & == kind LK_HANDLE >= j ncap == ( tp_at t 5 1 ) 0 == ( tp_at t 5 3 ) 0 != jt ET_NONE & ! ( et_is_view jt ) ( et_copyable jt )
+            // (…or a field of one)
+            : i jft ( eng_ty_at jt ( tp_at t 5 1 ) )
+            : b copied_in & & & & == kind LK_HANDLE >= j ncap == ( tp_at t 5 3 ) 0 != jft ET_NONE & ! ( et_is_view jft ) ( et_copyable jft )
             // (…nor where the place it is stored in has no room for one)
             : b roomless & & == kind LK_HELD < j np ! ( et_view_capable ( eng_ty_at jt ( tp_at t 5 1 ) ) )
             ? & & ! copied_in ! roomless ! & & == kind LK_HELD < sk np ! ( et_view_capable ( efp_ty f sk ) ) {

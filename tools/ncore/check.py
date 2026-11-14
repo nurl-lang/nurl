@@ -1395,11 +1395,13 @@ class FnCheck:
                         # `sink` (MEMORY.md §2.10, agora #680)
                         self.err(line, f"{name} takes a field of {self.vname(op[1])}, which is a borrow")
                     elif (self.T.copyable(ty) and avs[k].alias
-                          and all(a[1] and a[0] in self.pidx and self.fn.modes[self.pidx[a[0]]] == "inout"
+                          and all(a[1] and a[0] in self.pidx
+                                  and (self.fn.modes[self.pidx[a[0]]] == "inout" or "*" in a[1])
                                   for a in avs[k].alias)
                           and (any(r[1] == k for r in sm.get("rholds", ()))
                                or any(x[2] == k for x in sm.get("stores", ())))):
-                        # a part of an `inout` parameter is the caller's,
+                        # a part of an `inout` parameter - or of an element
+                        # of any parameter's container - is the caller's,
                         # who goes on holding the whole: handed to a callee
                         # that keeps it (in its result, in another argument),
                         # it is copied - taken out, it would leave the
@@ -3373,9 +3375,9 @@ def check_program(prog, max_rounds=40):
         # (…and what it leaves one ARGUMENT holding of another is followed
         # where the call that runs it is seen: closure_arg_effects. A
         # capture left holding something, or held by an argument, is not.)
-        # (An `inout` argument given a capture or another argument whole is
-        # given a copy of it, where its type has one: it holds nothing of
-        # where the value came from. A capture taken by pointer is given
+        # (An `inout` argument - or a field of one - given a capture or
+        # another argument whole is given a copy of it, where its type has
+        # one: it holds nothing of where the value came from. A capture taken by pointer is given
         # the handle itself - agora #864.)
         real = [x for x in sm["stores"]
                 if not (x[4] == "held" and x[2] < len(fn.params)
@@ -3383,10 +3385,10 @@ def check_program(prog, max_rounds=40):
                 # (…nor where the place it is stored in has no room for one)
                 and not (x[4] == "held" and x[0] < len(fn.params)
                          and not T.view_capable(T.at(fn.vars[fn.params[x[0]]].ty, x[1]), ()))
-                and not (x[4] == "handle" and x[0] >= ncap_ and not x[1] and not x[3]
-                         and fn.vars[fn.params[x[0]]].ty is not None
-                         and fn.vars[fn.params[x[0]]].ty[0] not in VIEW_TYPES
-                         and T.copyable(fn.vars[fn.params[x[0]]].ty))
+                and not (x[4] == "handle" and x[0] >= ncap_ and not x[3]
+                         and T.at(fn.vars[fn.params[x[0]]].ty, x[1]) is not None
+                         and T.at(fn.vars[fn.params[x[0]]].ty, x[1])[0] not in VIEW_TYPES
+                         and T.copyable(T.at(fn.vars[fn.params[x[0]]].ty, x[1])))
                 and (x[0] < ncap_ or x[2] < ncap_ or fn.modes[x[0]] == "inout")]
         if getattr(fn, "is_closure", False) and real:
             # a closure's type does not say what running it stores, so
