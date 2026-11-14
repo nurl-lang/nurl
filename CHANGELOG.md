@@ -10,6 +10,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/) until a release folds them in here (`tools/changelog.py`).
 
+## [0.92.1] — 2026-11-14
+
+### Fixed
+
+- A closure that assigns its own parameter over a binding it captured by pointer (`( once \ String r → v { = best r } )`) copies it in, and the binding owns the copy. Before, the binding was left borrowing the argument, which a call through the closure value lends for the call only: a caller that lent a local of its own released it on returning, and the binding was read after it was freed (heap-use-after-free under ASan). A parameter whose type has no copy cannot be stored so, and is refused with the way out (a `sink` parameter). The reference checker and the ownership engine (`--engine`) follow the same rule. Probes `closure_assigns_its_borrowed_parameter_over_a_capture_runs_clean`, `…_struct_parameter_…_runs_clean`, `closure_assigns_its_borrowed_uncopyable_parameter_over_a_capture` (agora #864).
+- Compiling a program whose struct nests by value many types of many fields (eight fields eight deep: `compiler/tests/drop_analysis_wide_deep_generic.nu`) no longer walks every path through them to ask whether a zeroed value would run a `% Drop` of the program's: the answer is kept per type (`__zero_drops_user`, from AGORA-865). `nurlc --emit-core` and `--engine` on that test: 39 s → 0.07 s. The ownership engine's type questions (`et_scalar`, `et_owning`, `et_owns_handle`, `et_view_capable`, what a type reaches of the shared handles) walk each named type once per question as well, and so does the reference checker (150 s → 0.2 s); every answer is the one asked before (AGORA-863).
+- `nurlc --engine` (the ownership engine, in shadow), and the reference checker with it: a function whose summary is the walk's and which changes a parameter only through a handle that synchronises itself (an MCP server's task store, a `Shared` behind its own mutex) no longer reads as changing an `Arc`'s frozen payload. `--emit-core` prints the walk's own answer for it (`syncd=` on a `sum` line, from the thread rules' `__thr_unsync_change`), and such a change is one inside the payloads of the shared handles the parameter reaches. What a closure leaves an argument holding of a capture taken by value is judged where the closure is made, by what the captured value holds. agora's and anomaly's MCP services are accepted: 17 files of the tree refused → 8 (AGORA-863).
+- `nurlc --engine` (the ownership engine, in shadow), and the reference checker with it, now refuse what nurlc refuses in these shapes: a field of a `~` loop's element handed to a `sink` in a `;` block armed in the loop (it runs outside every round); a field of a closure's by-value capture handed to a `sink`; a value that owns memory stored into a field of a by-value parameter, a loop's element, or a closure's by-value capture or parameter (the store is lost and nothing releases it); a fresh raw string stored into a field; a function that keeps, in what its caller holds, a view of a `sink` raw-string parameter it releases; a closure whose body changes, through one capture, what another of its captures views; a view a closure call hands back outliving what it views; a closure over a stack binding handed to `signal_install`; a raw string captured by value (a view of the binding's buffer) crossing to a thread, and a copy of a `( Vec s )` parameter's views; a binding read out of a library handle field captured by a thread (it takes the handle over); a field of a binding stored into a field with no copy; a closure read out of a Vec, or run by a callee, changing the Rc another argument shares; an iterator's element (`iter_find`) outliving the string it views; an element of a parameter handed back while another path takes the parameter over. Earlier rules of the batch: a change inside a view field lands where the view points; a closure call's arguments are frozen against what its body does to its captures; a closure stored into a thread-shared handle detaches as one a thread runs; a closure parameter handed on to a closure that runs it is run by the function; a changed argument's exclusivity covers what it is a cursor of. Probes the engine accepts that nurlc refuses: 99 → 60 (AGORA-863).
+- `nurlc --engine` (the ownership engine, in shadow), and the reference checker with it, now refuse what nurlc refuses in these shapes: the payload of what a library getter lent (`vec_get`, `lru_get`) handed to a callee that releases it; a field of a binding read out of a field (a copy of it) handed to one, or that binding where what it views is a borrow itself; a field of a binding that is a lend on some calls only (a call's result its own per call); a raw string a call may hand over fresh on some calls kept by a value; a value whose destructor reads its views, moved on some paths only (it is still dropped on the others); a join or a value block handing back a field of a local with no copy, or a non-copyable `% Drop` payload of a matched temporary whose type has a destructor of its own; a literal holding a value of its own beside a non-copyable part of a parameter; `= o { ( pick o other 1 ) }` as `= o ( pick o other 1 )` is; a closure parameter handed the container a `~` loop walks. And they now follow what nurlc does: a value `??` hands out a local option's payload by moving it; a binding read out of a library handle field, handed to a `sink`, takes the handle over (its owner is moved); a binding read out of a field of an option's payload, given to an owner, takes it with its option; a literal lending a parameter's part rides a join as it is. Probes the engine accepts that nurlc refuses: 60 → 40 (AGORA-863).
+
+### Changed
+
+- **nurl-lang.org is readable by agents** (github#1902): `robots.txt` with content signals and a `Sitemap:` line, `/sitemap.xml`, Markdown negotiation (`Accept: text/markdown` on `/` and `/docs/…` answers with the page's Markdown twin; `/docs/<slug>.md` for any client), RFC 8288 `Link` headers on the homepage, `/.well-known/api-catalog` (RFC 9727), an MCP server card for `play.nurl-lang.org/mcp`, an agent-skills index with a NURL skill, and a rewritten `/llms.txt`.
+
+### Known issues
+
+- **45 soundness holes are open, each with a fix in progress**: agora
+  #242 (a join or a value block bound by `:` and then handed on by name,
+  in nine remaining shapes), #280 (a field a `sink` took, used again by
+  a route the check does not see), #382 (a panic under `recover` between
+  a holder's store of a callee local's view and its repoint), #384 (a
+  handle's own drop hook that reads a view), #395 (a store through a
+  borrow that #292 does not follow to its owner), #424 (a borrow of a
+  `??` payload, and the scrutinee handed to a callee that clears it),
+  #428 (a change made in place by a route that does not reach the
+  owner), #460 (two `??` payload bindings of one enum value, a change
+  through one), #462 (a function binding a lent element of its
+  parameter, or an enum payload of one, and handing the binding back),
+  #466 (an `inout` view parameter kept in a second holder, an `s` global
+  or a thread), #479 (a copied closure that views a local, a closure
+  body handing a `sink` a value derived from its capture, and a
+  statement-form match arm returning a closure over a borrowed field),
+  #481 (a `dyn` impl that calls its own method through a dyn field),
+  #487 (a bare `s` view handed back through a `??` value join), #489 (an
+  `unsafe` function handing back a view of its `~` loop's element over a
+  parameter), #495 (a struct element of a parameter, bound and handed to
+  a callee that clears a field of it), #545 (an owned slice moved on,
+  given a parameter, or read after a move), #557 (a borrow through one
+  `??` and a change of the payload's field in another), #560 (`^` of a
+  lend of a local reached through a direct slice call, another slice
+  maker or a re-pointed / aliased slice, a payload field bound first, an
+  option field of a payload, a vec_pop payload, or a closure), #575 (a
+  heap-valued value block's locals keep their names after the block),
+  #580 (a `~` loop over a container lent out of another, grown through
+  another borrow of it), #631 (a mutable second name of an owner,
+  changed, then handed on), #637 (a closure a `;` defer calls, bound
+  where the binding is made more than once), #638 (closures through
+  value blocks, the rest of #627), #647 (a view of a struct's field
+  across a call that grows that field through a handle read out of its
+  parameter), #656 (a closure that changes a by-value parameter it
+  captured), #669 (a borrowed `% Drop` value still taken for owned
+  through a nested generic identity, an `=` into an owning binding, a
+  stored binding of a parameter, or a loop element handed to a `sink`),
+  #677 (a part of a parameter handed back on one path while another path
+  hands the parameter to a `sink`; a payload of a local plain enum
+  handed back through a binding, a generic call or a struct's field; a
+  `% Drop` literal handed straight to a function that only reads it),
+  #689 (the crossing check and a sealed handle over an Arc), #696 (a
+  handle local changed in a loop before it is given a captured field),
+  #738 (a trait object holding a share), #766 (a value whose `% Drop`
+  changes a shared Rc's payload, released where no call is), #774 (a `~`
+  loop over an Rc payload of numbers, reset through another handle
+  inside it; a payload view written into an `inout` parameter), #776 (a
+  function that consumes its `inout` parameter on some paths only), #793
+  (a parameter put into a local by a spelling the keep summary or the
+  put tracking misses), #797 (a closure body growing a field or element
+  handle read out of a parameter, a capture or its own parameter; a dyn
+  call lending its argument's field), #800 (a closure literal changing a
+  handle lent out of its own parameter is unseen by the thread rules; a
+  dyn call lending its argument's field is no irealloc edge), #811 (a
+  `~` loop element of a parameter's Vec handed to a callee that clears
+  through it; a struct holding a closure that captured a share), #813 (a
+  returned closure's effects are lost when its builder is declared below
+  its caller or is generic), #832 (a view of a matched option field's
+  payload outlives a callee growing it), #838 (a returned closure's
+  effects are lost through a call that hands its argument back, a
+  struct, Option or Vec it is stored in, a helper handed a join of
+  closures, or a closure literal's call), #839 (a value block passed as
+  an argument, its tail a binding of its own, and the call's result kept
+  past that binding (#833's walk twin)), #840 (a `: ~` cursor of a `??`
+  payload stored inside its arm, or a struct cursor given a field before
+  it is stored, gives the owner's value away unseen), #841 (slices that
+  nobody releases), #848 (a struct whose only owning field is a slice is
+  released only as a binding of its own) and #851 (an owning value
+  stored through a nested field path into a `~` loop element, or a
+  capturing closure stored into a loop element's field).
+  `docs/LIMITATIONS.md` gives each one's shape and how to stay clear of
+  it. Closed in this release: AGORA-864. A release does not say "no hole
+  is known open" while one is.
+
 ## [0.92.0] — 2026-11-14
 
 ### Added
