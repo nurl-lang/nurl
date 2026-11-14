@@ -30,8 +30,9 @@ model (`formal/A2`), extended only where NURL has more.
 
 ## 2. The text `--emit-core` prints
 
-`nurlc --emit-core file.nu` checks the program as `--check` does and prints
-the IR on stdout instead of LLVM IR. Tab-separated header lines, one
+`nurlc --emit-core file.nu` checks the program as `--check` does - except
+that the walk's ownership refusals are left to the IR's reader (§6) - and
+prints the IR on stdout instead of LLVM IR. Tab-separated header lines, one
 statement a line:
 
 ```

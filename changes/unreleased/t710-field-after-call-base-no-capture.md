@@ -1,3 +1,0 @@
-### Fixed
-
-- **A field read off a call's result in a closure body captures nothing** (Agora #710). In `. ( arc_get [P] a ) r` the name `r` is a field of the struct the call hands back, but the closure's capture scan took it for the enclosing function's binding of that name: an outer `Rc` called `r` made a thread's closure "not Send", and an outer `Vec` called `v` was moved into a closure that only read a field `v`. The scan now types the call's result when its `)` closes (the function's declared return type, or the generic instance's, by its type arguments) and reads the name after it as a field when that result is a struct by value. Over a call that hands back a pointer, `. ( p ) k` still indexes by the captured value `k`.

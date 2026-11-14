@@ -382,7 +382,7 @@ unwinding and `recover`, the drop journal, and leak freedom
 threads, `Arc`, `Locked` / `Mutex`, `RwLocked` and `% Frozen` / `% NotSend`
 guards, `Atomic`, channels, `SendCheck` library handles, closures and
 trait objects across threads, module globals, and data-race freedom
-(`A3.claim`, `A3.claim_made`). [`formal/RULES.md`](../formal/RULES.md)
+(`A3.claim`, `A3.claim_made`, and in full `A3.claim_full`, `A3.claim_made_full`). [`formal/RULES.md`](../formal/RULES.md)
 gives the formal rule for each rule below.
 
 ### 2.1 Moves — use after move
@@ -2049,12 +2049,11 @@ that spawn or keep it. The error is reported where the value leaves,
 naming the capture and the line the closure was built on. A closure
 whose origin cannot be followed (a `Vec` element, a call through a
 closure value) is rejected where it crosses; build it at the hand-over
-or take it as a parameter. Two stores this following does not reach yet
-are listed in docs/LIMITATIONS.md: a helper that fills its caller's
-container (agora #717), and a struct or an option holding the closure
-where it is put into a container or has the field assigned later (agora
-#718). Until it reaches them, a closure type that is a struct's field or
-an aggregate's member is read by the types its signature names as well:
+or take it as a parameter. The following reaches a helper that fills its
+caller's container, and a struct or an option holding the closure where
+it is put into a container or has the field assigned later (agora #717,
+#718; 0.92.0). A closure type that is a struct's field or an aggregate's
+member is read by the types its signature names as well:
 `: P { ( @ ( Rc i ) ) mk }` does not cross, though a closure that makes
 its `Rc` on the thread that runs it captured none.
 
@@ -2235,7 +2234,7 @@ of them is tested continuously:
   calculus (`formal/`, `./check.sh`) is mechanically proven sound in Lean 4
   with zero `sorry`, on Lean's standard axioms only: `A2.memory_safe`,
   `A2.no_leak_end` and `A2.no_leak_panic` in `formal/A2/Soundness.lean`,
-  and `A3.claim` and `A3.claim_made` in `formal/A3/` — well-typed programs
+  and `A3.claim`, `A3.claim_made` (in full: `A3.claim_full`, `A3.claim_made_full`) in `formal/A3/` — well-typed programs
   never get stuck on a use after free, a double free, a dangling borrow or
   view or an out-of-bounds access, have no data race across threads, and
   leak nothing at exit, on the panic path too. The calculus covers owned

@@ -1,3 +1,0 @@
-### Fixed
-
-- **A callee's change through a binding it derived from its parameter ends the caller's borrows** (Agora #735, #734, #737). `@ ch ( Vec ( Vec String ) ) vs → v { ~ x vs { ( vec_clear [String] x ) } }` — a change through a `~` loop's element — was in no drop summary, and a caller's borrow of an element's String outlived the clear; so did `( ch ( slice_from_vec vs ) )`, ch clearing an element through the temporary slice it was handed. An Rc handed to `rc_set` through a `??` payload of the parameter (an option, an enum, a `vec_get` result, a struct's option field), a loop element or a slice element replaced the payload under a view taken through another share. Each is refused now; a callee that only reads through such a binding is unchanged.

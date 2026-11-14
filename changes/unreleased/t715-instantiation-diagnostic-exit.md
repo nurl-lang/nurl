@@ -1,3 +1,0 @@
-### Fixed
-
-- **nurlc exits 1, not with a crash, after a diagnostic raised inside a generic function's instantiation** (Agora #715). `( par_map_index [( Rc i )] … )` printed the right error (the element is not Send) and then died with SIGSEGV (exit 139) or "double free or corruption" (exit 134), so a build tool or an agent reading the exit status saw a compiler crash where there was an ordinary refusal. A module-scope fact learned inside a function body (a generic struct's instance layout) is kept in a table the scope owns, and that table was also in the list of tables the compilation releases at exit: when a diagnostic left the body mid-scope, the exit sweep released it, then its owner released it again. The scope's table is its owner's alone now.

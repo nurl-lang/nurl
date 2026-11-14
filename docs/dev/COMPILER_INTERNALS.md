@@ -17,7 +17,8 @@ imports — it defines its own string/symtab/lexer helpers so stage0 can
 build it from `nurlc_lastgood.ll` with nothing but clang). Why it is not
 split into modules of its own either:
 [ADR 0003](../adr/0003-one-file-compiler.md). There is **no
-AST and no IR data structure**: parsing, type checking, borrow checking
+AST**, and the one IR data structure, the core IR (below), is built beside
+the walk and read only by `--emit-core` and `--engine`: parsing, type checking, borrow checking
 and code generation are one recursive descent (`parse_program` →
 `gen_stmt` / `gen_expr` / `gen_*`) that **emits LLVM IR text to stdout
 as it walks** (`emit` = `nurl_print`). What crosses statement/function
@@ -189,8 +190,8 @@ the slot (`__ll_is_agg` decides), never a hand-written `phi`.
 The walk also builds, per function, the core IR of
 [PROPOSAL_CORE_IR.md](PROPOSAL_CORE_IR.md): variables and statements in
 evaluation order, every producer bound before its consumer
-(`g_core_*`, the `core_*` functions). `--emit-core` prints it; nothing
-else reads it yet. [CORE_IR.md](CORE_IR.md) says how it is built (an
+(`g_core_*`, the `core_*` functions). `--emit-core` prints it, and the
+ownership engine reads it under `--engine` (in shadow). [CORE_IR.md](CORE_IR.md) says how it is built (an
 operand stack `gen_expr` checks where it returns) and what a new
 expression form owes it: a hook, or `compiler/tests/core_ir.sh` fails on
 the `opaque` it leaves.
