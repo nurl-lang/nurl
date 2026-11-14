@@ -10822,6 +10822,12 @@ unsafe @ sq_set_of_wv i h → i {
     ^ ( __sq_intern t m )
 }
 
+// An interned string is a word to the engine; this is the string it names.
+unsafe @ eng_str i name → s { ^ # s name }
+
+// …and the word a string is, interned.
+unsafe @ eng_in s x → i { ^ ( __core_in x ) }
+
 // ── Ownership engine: maps ───────────────────────────────────────────
 // A map from words to words in a vector: open addressing, two words a
 // slot (key + 1, value), the slot count a power of two kept in word 0 and
@@ -10837,7 +10843,7 @@ unsafe @ sq_set_of_wv i h → i {
 // with their entropy anywhere - interned strings' addresses, places with
 // a variable in the high half - so every bit is mixed into the low ones.)
 unsafe @ __im_slot i m i key → i {
-    : *i r # *i # s g_wv
+    : *i r # *i ( eng_str g_wv )
     : *i p # *i # s . r * m 3
     : i mask - . p 0 1
     : ~ i h + key 1
@@ -10910,7 +10916,7 @@ unsafe @ eng_keep_fn → v {
     ( wv_push g_ef ( wv_len g_ef_pl ) )
     ( wv_push g_ef g_core_pl_n )
     // (its parameters and captures, counted once)
-    : *i vs # *i # s g_core_vars
+    : *i vs # *i ( eng_str g_core_vars )
     : ~ i np 0
     : ~ i ncap 0
     : ~ i v 0
@@ -11044,7 +11050,7 @@ unsafe @ eng_keep_fn → v {
 // container of, has it something to release, can it be copied — and the
 // answers come from the compiler's own tables, read once per type and
 // kept (et_of). They are the answers `--emit-core` prints on a `ty` line.
-unsafe @ __et_names → v {
+@ __et_names → v {
     ? != 0 g_et_names { ^ } {}
     = g_et_names 1
     = g_etn_i64 ( __core_in `i64` ) = g_etn_i1 ( __core_in `i1` ) = g_etn_double ( __core_in `double` )
@@ -11073,13 +11079,13 @@ unsafe @ __et_names → v {
 
 // The type named by the interned string `name`: its number. A number is
 // ET_NUM unless it is the flag type, which a match needs to tell.
-unsafe @ et_of i name → i {
+@ et_of i name → i {
     ( __et_names )
     : i have ( im_get g_et_ix name 0 )
     ? != have 0 { ^ - have 1 } {}
     ? & ( __et_scalar_name name ) != name g_etn_i1 { ^ ET_NUM } {}
     : i syms g_eng_syms
-    : s ty ( nurl_str_cat # s name `` )
+    : s ty ( nurl_str_cat ( eng_str name ) `` )
     : i n ( nurl_str_len ty )
     // (anything that is no named type, no inline aggregate and no pointer
     // is a number to the engine: a vector, an array, a function's type)
@@ -11161,7 +11167,7 @@ unsafe @ et_of i name → i {
                 ( wv_put g_et + * t ET_W ET_E1 ( et_of f1 ) )
                 ( wv_put g_et + * t ET_W ET_E2 ( et_of f2 ) )
             } {
-                : s f0s # s f0
+                : s f0s ( eng_str f0 )
                 : i f0n ? == f0 0 0 ( nurl_str_len f0s )
                 ? & & == nf 2 > f0n 0 & == ( nurl_str_get f0s - f0n 1 ) 42 == f1 g_etn_i64 {
                     ( wv_put g_et + * t ET_W ET_KIND EK_SLICE )
@@ -11206,10 +11212,10 @@ unsafe @ et_of i name → i {
 // Field `k` of a struct: its name (interned) and its type.
 @ et_field_name i t i k → i { ^ ( wv_at g_et_w + ( et_at t ET_F ) * k 2 ) }
 
-unsafe @ et_field_ty i t i k → i { ^ ( et_of ( wv_at g_et_w + + ( et_at t ET_F ) * k 2 1 ) ) }
+@ et_field_ty i t i k → i { ^ ( et_of ( wv_at g_et_w + + ( et_at t ET_F ) * k 2 1 ) ) }
 
 // The type of the field named `name`, ET_NONE if `t` is no struct or has none.
-unsafe @ et_field i t i name → i {
+@ et_field i t i name → i {
     ? | < t 0 ! ( et_flag t ETF_STRUCT ) { ^ ET_NONE } {}
     : i n ( et_at t ET_F_N )
     : ~ i k 0
@@ -11248,7 +11254,7 @@ unsafe @ et_field i t i name → i {
     ^ -1
 }
 
-unsafe @ et_variant_ty i t i name i k → i {
+@ et_variant_ty i t i name i k → i {
     ? < t 0 { ^ ET_NONE } {}
     : i kind ( et_kind t )
     ? == kind EK_OPT { ^ ? == k 0 ( et_at t ET_E1 ) ET_NONE } {}
@@ -11320,7 +11326,7 @@ unsafe @ et_variant_ty i t i name i k → i {
 
 // A number, or a value made of numbers only (a pointer counts as one:
 // safe code has none to follow).
-unsafe @ __et_scalar i t → b {
+@ __et_scalar i t → b {
     ? < t 0 { ^ T } {}
     : i kind ( et_kind t )
     ? | == kind EK_SCALAR == kind EK_PTR { ^ T } {}
@@ -11354,7 +11360,7 @@ unsafe @ __et_scalar i t → b {
     ^ F
 }
 
-unsafe @ et_scalar i t → b {
+@ et_scalar i t → b {
     ? < t 0 { ^ T } {}
     : i have ( __et_memo_get t ETM_SCALAR )
     ? >= have 0 { ^ == have 1 } {}
@@ -11367,7 +11373,7 @@ unsafe @ et_scalar i t → b {
 
 // May a lent value of this type be copied where it would outlive what it
 // borrows? The walk's own answer (`__clone_supported`); a raw view has none.
-unsafe @ et_copyable i t → b {
+@ et_copyable i t → b {
     ? ( et_scalar t ) { ^ T } {}
     : i kind ( et_kind t )
     ? == kind EK_STRING { ^ T } {}
@@ -11376,7 +11382,7 @@ unsafe @ et_copyable i t → b {
 }
 
 // Does a value of this type own heap memory when it is an owner?
-unsafe @ __et_owning i t → b {
+@ __et_owning i t → b {
     ? ( et_scalar t ) { ^ F } {}
     : i kind ( et_kind t )
     ? | | | | == kind EK_STRING == kind EK_VEC == kind EK_BOX == kind EK_SLICE == kind EK_S { ^ T } {}
@@ -11412,7 +11418,7 @@ unsafe @ __et_owning i t → b {
     ^ F
 }
 
-unsafe @ et_owning i t → b {
+@ et_owning i t → b {
     ? < t 0 { ^ F } {}
     : i have ( __et_memo_get t ETM_OWNING )
     ? >= have 0 { ^ == have 1 } {}
@@ -11425,7 +11431,7 @@ unsafe @ et_owning i t → b {
 
 // Does a value of this type hold a handle of its own — not only views,
 // which a copy shares?
-unsafe @ __et_owns_handle i t → b {
+@ __et_owns_handle i t → b {
     ? | < t 0 ( et_scalar t ) { ^ F } {}
     : i kind ( et_kind t )
     ? | == kind EK_S == kind EK_SLICE { ^ F } {}
@@ -11460,7 +11466,7 @@ unsafe @ __et_owns_handle i t → b {
     ^ ( et_owning t )
 }
 
-unsafe @ et_owns_handle i t → b {
+@ et_owns_handle i t → b {
     ? < t 0 { ^ F } {}
     : i have ( __et_memo_get t ETM_OWNS_HANDLE )
     ? >= have 0 { ^ == have 1 } {}
@@ -11473,7 +11479,7 @@ unsafe @ et_owns_handle i t → b {
 
 // Can a value of this type hold a view or a borrowed handle at all (a raw
 // string, a slice, a closure, a pointer, anywhere in it)?
-unsafe @ __et_view_capable i t → b {
+@ __et_view_capable i t → b {
     ? == t ET_NONE { ^ T } {}
     ? ( et_scalar t ) { ^ F } {}
     : i kind ( et_kind t )
@@ -11517,7 +11523,7 @@ unsafe @ __et_view_capable i t → b {
     ^ T
 }
 
-unsafe @ et_view_capable i t → b {
+@ et_view_capable i t → b {
     ? < t 0 { ^ == t ET_NONE } {}
     : i have ( __et_memo_get t ETM_VIEW_CAPABLE )
     ? >= have 0 { ^ == have 1 } {}
@@ -11531,7 +11537,7 @@ unsafe @ et_view_capable i t → b {
 // Does releasing a value of this type run a destructor that may read the
 // views it holds? The walk's transitive answer for a named type, followed
 // through the containers the engine spells out.
-unsafe @ et_has_udrop i t → b {
+@ et_has_udrop i t → b {
     ? | < t 0 ( et_scalar t ) { ^ F } {}
     : i kind ( et_kind t )
     ? | | == kind EK_VEC == kind EK_BOX == kind EK_OPT { ^ ( et_has_udrop ( et_at t ET_E1 ) ) } {}
@@ -11540,7 +11546,7 @@ unsafe @ et_has_udrop i t → b {
 }
 
 // May a value of type `t` reach a payload of the shared handle type `sh`?
-unsafe @ __et_reaches i t i sh → b {
+@ __et_reaches i t i sh → b {
     ? | < t 0 ( et_scalar t ) { ^ F } {}
     : i kind ( et_kind t )
     ? | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT == kind EK_SLICE { ^ ( __et_reaches ( et_at t ET_E1 ) sh ) } {}
@@ -11571,7 +11577,7 @@ unsafe @ __et_reaches i t i sh → b {
     ^ any
 }
 
-unsafe @ et_reaches_shared i t i sh → b {
+@ et_reaches_shared i t i sh → b {
     : i was ( __et_ask )
     : b r ( __et_reaches t sh )
     ( __et_asked was )
@@ -11580,7 +11586,7 @@ unsafe @ et_reaches_shared i t i sh → b {
 
 // Does a container of this type hold views in its elements (a Vec of raw
 // strings, of structs of views)?
-unsafe @ et_holds_views i t → b {
+@ et_holds_views i t → b {
     ? == t ET_NONE { ^ T } {}
     : i e ( et_elem t )
     ? == e ET_NONE { ^ F } {}
@@ -11593,7 +11599,7 @@ unsafe @ et_holds_views i t → b {
 // payload), `^3` (a closure's capture). Elements and paths are interned
 // for the module; a path is a number, extending one is a lookup, and one
 // path is a prefix of another when it is an ancestor of it.
-unsafe @ __ep_init → v {
+@ __ep_init → v {
     ? >= g_ep 0 { ^ } {}
     = g_ee ( wv_new ) = g_ee_ix ( im_new ) = g_ep ( wv_new ) = g_ep_ix ( im_new ) = g_ep_tmp ( wv_new )
     ( wv_push g_ep -1 ) ( wv_push g_ep -1 ) ( wv_push g_ep 0 )
@@ -11602,12 +11608,12 @@ unsafe @ __ep_init → v {
 }
 
 // The element named by the interned string `name`.
-unsafe @ ee_of i name → i {
+@ ee_of i name → i {
     ( __ep_init )
     : i have ( im_get g_ee_ix name 0 )
     ? != have 0 { ^ - have 1 } {}
     : i e / ( wv_len g_ee ) 4
-    : s str # s name
+    : s str ( eng_str name )
     : i n ( nurl_str_len str )
     : i c0 ? == 0 n 0 ( nurl_str_get str 0 )
     : ~ i bits 0
@@ -11625,13 +11631,13 @@ unsafe @ ee_of i name → i {
     ^ e
 }
 
-unsafe @ ee_str s str → i { ^ ( ee_of ( __core_in str ) ) }
+@ ee_str s str → i { ^ ( ee_of ( __core_in str ) ) }
 
 // `#Variant<k>`: payload `k` of a variant.
-unsafe @ ee_pay i variant i k → i { ^ ( ee_str ( nurl_str_cat3 `#` # s variant ( nurl_str_int k ) ) ) }
+@ ee_pay i variant i k → i { ^ ( ee_str ( nurl_str_cat3 `#` ( eng_str variant ) ( nurl_str_int k ) ) ) }
 
 // `^k`: capture `k`.
-unsafe @ ee_cap i k → i { ^ ( ee_str ( nurl_str_cat `^` ( nurl_str_int k ) ) ) }
+@ ee_cap i k → i { ^ ( ee_str ( nurl_str_cat `^` ( nurl_str_int k ) ) ) }
 
 @ ee_bits i e → i { ^ ( wv_at g_ee + * e 4 1 ) }
 
@@ -11647,9 +11653,9 @@ unsafe @ ee_cap i k → i { ^ ( ee_str ( nurl_str_cat `^` ( nurl_str_int k ) ) )
 @ ee_is_cap i e → b { ^ != 0 & ( ee_bits e ) EE_CAP }
 
 // A capture's number (`^3` → 3), -1 for `^f` and for anything else.
-unsafe @ ee_cap_no i e → i {
+@ ee_cap_no i e → i {
     ? | == 0 & ( ee_bits e ) EE_CAP != 0 & ( ee_bits e ) EE_FN { ^ -1 } {}
-    : s str # s ( ee_name e )
+    : s str ( eng_str ( ee_name e ) )
     ^ ( nurl_str_to_int ( nurl_str_slice str 1 - ( nurl_str_len str ) 1 ) )
 }
 
@@ -11751,7 +11757,7 @@ unsafe @ ee_cap_no i e → i {
 
 @ fp_mode i k → i { ^ ( wv_at g_fp_mode k ) }
 
-unsafe @ eng_fn_begin i f → v {
+@ eng_fn_begin i f → v {
     ( __ep_init )
     ? < g_fv_ty 0 {
         = g_fv_ty ( wv_new ) = g_fv_pidx ( wv_new ) = g_fp ( wv_new ) = g_fp_mode ( wv_new )
@@ -11767,7 +11773,7 @@ unsafe @ eng_fn_begin i f → v {
     : ~ i v 0
     ~ < v g_f_nv {
         : i tn ( ev v 1 )
-        : b none ? == tn 0 T == 0 ( nurl_str_len # s tn )
+        : b none ? == tn 0 T == 0 ( nurl_str_len ( eng_str tn ) )
         ( wv_push g_fv_ty ? none ET_NONE ( et_of tn ) )
         : i kind ( ev v 2 )
         : i flags ( ev v 4 )
@@ -12144,10 +12150,10 @@ unsafe @ eng_fn_begin i f → v {
     ^ ( sq_of_wv g_sm_tmp 0 n )
 }
 
-unsafe @ eng_intern s x → i { ^ ( __core_in x ) }
+@ eng_intern s x → i { ^ ( __core_in x ) }
 
 // Is function `f` a closure's body (`__closure_N`)?
-unsafe @ ef_is_closure i f → b { ^ != 0 ( nurl_str_starts # s ( ef_at f EF_NAME ) `__closure_` ) }
+@ ef_is_closure i f → b { ^ != 0 ( nurl_str_starts ( eng_str ( ef_at f EF_NAME ) ) `__closure_` ) }
 
 // Does the engine walk function `f`'s body?
 @ ef_walked i f → b { ? | < g_fc_walked 0 < f 0 { ^ F } {} ^ != 0 ( wv_at g_fc_walked f ) }
@@ -12157,16 +12163,16 @@ unsafe @ ef_is_closure i f → b { ^ != 0 ( nurl_str_starts # s ( ef_at f EF_NAM
 
 // Has variable `vid` of the function being read no name (a temporary, or
 // the binding a `\` try hands its failure on in)?
-unsafe @ ev_unnamed i vid → b { ^ == 0 ( nurl_str_len # s ( ev vid 0 ) ) }
+@ ev_unnamed i vid → b { ^ == 0 ( nurl_str_len ( eng_str ( ev vid 0 ) ) ) }
 
 // (defined with the driver: a summary for a function the engine does not walk)
 @ eng_summary_other i name i f → i { ^ ( eng_summary_declared name f ) }
 
 // The declared summary of the generic `tmpl` (interned; the empty name
 // has none).
-unsafe @ sx_declared_tmpl i tmpl → i {
+@ sx_declared_tmpl i tmpl → i {
     ? == tmpl 0 { ^ -1 } {}
-    ? == 0 ( nurl_str_len # s tmpl ) { ^ -1 } {}
+    ? == 0 ( nurl_str_len ( eng_str tmpl ) ) { ^ -1 } {}
     ? < g_sx_ix 0 { ^ -1 } {}
     ^ - ( im_get g_sx_ix tmpl 0 ) 1
 }
@@ -12209,11 +12215,11 @@ unsafe @ eng_byte s w i k → i {
     ^ 0
 }
 
-unsafe @ et_of_ptr i name → i { ^ ( et_of name ) }
+@ et_of_ptr i name → i { ^ ( et_of name ) }
 
 // Does function `f`'s name end in `_clone` or `_share` (a handle's copy hook)?
-unsafe @ ef_name_ends i f → b {
-    : s n # s ( ef_at f EF_NAME )
+@ ef_name_ends i f → b {
+    : s n ( eng_str ( ef_at f EF_NAME ) )
     : i len ( nurl_str_len n )
     ? < len 6 { ^ F } {}
     : s tail ( nurl_str_slice n - len 6 6 )
@@ -12221,23 +12227,23 @@ unsafe @ ef_name_ends i f → b {
 }
 
 // A finding about function `f` as a whole.
-unsafe @ eng_err_fn i f i line s msg → v {
+@ eng_err_fn i f i line s msg → v {
     ? < ( wv_at g_fe f ) 0 { ( wv_put g_fe f ( wv_new ) ) } {}
     ( wv_push ( wv_at g_fe f ) line )
     ( wv_push ( wv_at g_fe f ) ( __core_in msg ) )
 }
 
-unsafe @ eng_unsup_s s why → v { ? == 0 g_fc_unsup { = g_fc_unsup ( __core_in why ) } {} }
+@ eng_unsup_s s why → v { ? == 0 g_fc_unsup { = g_fc_unsup ( __core_in why ) } {} }
 
 // The module is not checked: why.
-unsafe @ eng_skip_why s why i name → v {
-    ? == 0 g_eng_skip { = g_eng_skip ( __core_in ( nurl_str_cat why # s name ) ) } {}
+@ eng_skip_why s why i name → v {
+    ? == 0 g_eng_skip { = g_eng_skip ( __core_in ( nurl_str_cat why ( eng_str name ) ) ) } {}
 }
 
 @ eng_skip_why_s i why → v { ? == 0 g_eng_skip { = g_eng_skip why } {} }
 
 // ── Ownership engine: findings, names, types of places ───────────────
-unsafe @ eng_err i line s msg → v {
+@ eng_err i line s msg → v {
     ? | == 0 g_fc_final < g_fe_cur 0 { ^ } {}
     ( wv_push g_fe_cur line )
     ( wv_push g_fe_cur ( __core_in msg ) )
@@ -12245,31 +12251,31 @@ unsafe @ eng_err i line s msg → v {
 
 // The function holds something the engine has no rule for: it is not
 // checked, and says why.
-unsafe @ eng_unsup s why → v {
+@ eng_unsup s why → v {
     ? == 0 g_fc_unsup { = g_fc_unsup ( __core_in why ) } {}
 }
 
 // A variable's name as a diagnostic writes it (`%t7` a temporary).
-unsafe @ eng_vname i vid → s {
+@ eng_vname i vid → s {
     ? < vid 0 { ^ ( nurl_str_cat `what ` ( eng_vname - -1 vid ) ) } {}
-    : s n # s ( ev vid 0 )
+    : s n ( eng_str ( ev vid 0 ) )
     ? == 0 ( nurl_str_len n ) { ^ ( nurl_str_cat `%t` ( nurl_str_int vid ) ) } {}
     ^ ( nurl_str_cat n `` )
 }
 
-unsafe @ __eng_path_str i path → s {
+@ __eng_path_str i path → s {
     ? == path 0 { ^ ( nurl_str_cat `` `` ) } {}
     : i e ( ep_last path )
     : s head ( __eng_path_str ( ep_parent path ) )
     ? == e EE_STAR { ^ ( nurl_str_cat head `[*]` ) } {}
-    ? ( ee_is_pay e ) { ^ ( nurl_str_cat head # s ( ee_name e ) ) } {}
-    ^ ( nurl_str_cat3 head `.` # s ( ee_name e ) )
+    ? ( ee_is_pay e ) { ^ ( nurl_str_cat head ( eng_str ( ee_name e ) ) ) } {}
+    ^ ( nurl_str_cat3 head `.` ( eng_str ( ee_name e ) ) )
 }
 
-unsafe @ eng_pname i pl → s { ^ ( nurl_str_cat ( eng_vname ( pl_var pl ) ) ( __eng_path_str ( pl_path pl ) ) ) }
+@ eng_pname i pl → s { ^ ( nurl_str_cat ( eng_vname ( pl_var pl ) ) ( __eng_path_str ( pl_path pl ) ) ) }
 
 // The type at `path` below a value of type `t`.
-unsafe @ eng_ty_at i t i path → i {
+@ eng_ty_at i t i path → i {
     ? == path 0 { ^ t } {}
     : i up ( eng_ty_at t ( ep_parent path ) )
     ? == up ET_NONE { ^ ET_NONE } {}
@@ -12279,7 +12285,7 @@ unsafe @ eng_ty_at i t i path → i {
     ^ ( et_field up ( ee_name e ) )
 }
 
-unsafe @ eng_ty_of i pl → i { ^ ( eng_ty_at ( fv_ty ( pl_var pl ) ) ( pl_path pl ) ) }
+@ eng_ty_of i pl → i { ^ ( eng_ty_at ( fv_ty ( pl_var pl ) ) ( pl_path pl ) ) }
 
 // ── Ownership engine: per-variable notes of the function ─────────────
 @ fx_has i vid i bit → b { ? | < vid 0 >= vid g_f_nv { ^ F } {} ^ != 0 & ( wv_at g_fx vid ) bit }
@@ -12295,7 +12301,7 @@ unsafe @ eng_ty_of i pl → i { ^ ( eng_ty_at ( fv_ty ( pl_var pl ) ) ( pl_path 
 // the types on the way down: a positional member of an option or a
 // result is its payload, of a slice or a Vec an element; a field read
 // through a Box is a field of what it holds.
-unsafe @ eng_op i irop → i {
+@ eng_op i irop → i {
     ? == irop 0 { ^ OP_CONST } {}
     ? == irop CORE_OP_TRUE { ^ OP_CONST } {}
     ? < irop 0 { ^ OP_NONE } {}
@@ -12312,7 +12318,7 @@ unsafe @ eng_op i irop → i {
     : ~ i out 0
     : ~ b done F
     ~ & ! done >= k 0 {
-        : s el # s ( wv_at chain k )
+        : s el ( eng_str ( wv_at chain k ) )
         : i c0 ? == 0 ( nurl_str_len el ) 0 ( nurl_str_get el 0 )
         : i kind ( et_kind ty )
         ? == c0 35 {
@@ -12416,7 +12422,7 @@ unsafe @ eng_op i irop → i {
 // ── Ownership engine: what an effect ends ────────────────────────────
 // The shared handles `place` reaches through: a sequence of (handle
 // type, the path below its payload).
-unsafe @ shared_tails i place → i {
+@ shared_tails i place → i {
     : i have ( im_get g_fc_tails place -1 )
     ? >= have 0 { ^ have } {}
     : i vid ( pl_var place )
@@ -12443,7 +12449,7 @@ unsafe @ shared_tails i place → i {
 // Does effect `eff` at path `pp` (of place `p`) end a loan of kind `k`
 // on path `qp` (of place `q`, in the same variable or the same shared
 // payload)?
-unsafe @ kills_paths i eff i pp i q i qp i k → b {
+@ kills_paths i eff i pp i q i qp i k → b {
     ? | | | | == k LK_SHARE == k LK_HELD == k LK_HELDIN == k LK_STALE == eff EF_PERMUTE { ^ F } {}
     ? == eff EF_TAKE {
         // a part moved out of where it lived: what was lent out of that
@@ -12488,7 +12494,7 @@ unsafe @ kills_paths i eff i pp i q i qp i k → b {
 }
 
 // Does effect `eff` on place `p` end loan `l`?
-unsafe @ eng_kills i eff i p i l → b {
+@ eng_kills i eff i p i l → b {
     ? ! ( el_is_loan l ) { ^ F } {}
     : i q ( el_place l )
     : i k ( el_kind l )
@@ -12519,7 +12525,7 @@ unsafe @ eng_kills i eff i p i l → b {
 
 // An effect at `tail` inside some payload of the shared handle type
 // `ty`: ends what was lent out of any payload of that type.
-unsafe @ region_effect i st i ty i tail i eff → v {
+@ region_effect i st i ty i tail i eff → v {
     = g_s_regions ( sq_add g_s_regions ( tp3 ty ( ep_take tail 3 ) eff ) )
     : ~ i dead ( st_dead st )
     : i n ( wv_len g_el_shared )
@@ -12564,7 +12570,7 @@ unsafe @ region_effect i st i ty i tail i eff → v {
 
 // What is done to a place: the loans it ends are dead from here on, and
 // what the place held is gone with what the effect released.
-unsafe @ eng_effect i st i place i eff i line i depth → v {
+@ eng_effect i st i place i eff i line i depth → v {
     : i vid ( pl_var place )
     : i path ( pl_path place )
     : i av ( st_av st vid )
@@ -12666,7 +12672,7 @@ unsafe @ eng_effect i st i place i eff i line i depth → v {
 }
 
 // Would `eff` on `place` end one of `loans`?
-unsafe @ would_kill i st i place i eff i loans i depth → b {
+@ would_kill i st i place i eff i loans i depth → b {
     : i vid ( pl_var place )
     : i av ( st_av st vid )
     ? | == av 0 > depth 8 { ^ F } {}
@@ -12703,7 +12709,7 @@ unsafe @ would_kill i st i place i eff i loans i depth → b {
 
 // What a finding calls the value it is about: built only when there is
 // one to report.
-unsafe @ eng_what i wk i wa → s {
+@ eng_what i wk i wa → s {
     ? == wk WK_VAR { ^ ( eng_vname wa ) } {}
     ? == wk WK_PLACE { ^ ( eng_pname wa ) } {}
     ? == wk WK_RET { ^ ( nurl_str_cat `the returned value` `` ) } {}
@@ -12714,8 +12720,8 @@ unsafe @ eng_what i wk i wa → s {
     ? == wk WK_CLO_CALLED { ^ ( nurl_str_cat `the closure called here` `` ) } {}
     ? == wk WK_MATCH { ^ ( nurl_str_cat `matched value` `` ) } {}
     ? == wk WK_LOOP { ^ ( nurl_str_cat `the loop's container` `` ) } {}
-    ? == wk WK_GLOBAL { ^ ( nurl_str_cat `the global ` # s wa ) } {}
-    ? == wk WK_CALL_CLO { ^ ( nurl_str_cat3 # s g_fc_callee `: the closure in argument ` ( nurl_str_int wa ) ) } {}
+    ? == wk WK_GLOBAL { ^ ( nurl_str_cat `the global ` ( eng_str wa ) ) } {}
+    ? == wk WK_CALL_CLO { ^ ( nurl_str_cat3 ( eng_str g_fc_callee ) `: the closure in argument ` ( nurl_str_int wa ) ) } {}
     ? == wk WK_ARG_CLO { ^ ( nurl_str_cat `the closure in argument ` ( nurl_str_int wa ) ) } {}
     ? == wk WK_DROP { ^ ( nurl_str_cat `the drop of ` ( eng_vname wa ) ) } {}
     ^ ( nurl_str_cat `value` `` )
@@ -12723,7 +12729,7 @@ unsafe @ eng_what i wk i wa → s {
 
 // A value is used: a loan it is, or (`held`) one it holds, that ended
 // is the finding.
-unsafe @ check_live i st i loans i held i wk i wa i line → b {
+@ check_live i st i loans i held i wk i wa i line → b {
     : i all ? == held 0 loans ( sq_union loans ( held_loans held ) )
     ? ! ( sq_meets all ( st_dead st ) ) { ^ T } {}
     : i dead ( st_dead st )
@@ -12760,7 +12766,7 @@ unsafe @ check_live i st i loans i held i wk i wa i line → b {
 
 // The value of operand `op`, read. The key for a loan the read makes is
 // (`ktag`, `ka`): the caller's, so each read in a statement makes its own.
-unsafe @ eng_read i st i op i line i ktag i ka → i {
+@ eng_read i st i op i line i ktag i ka → i {
     ? ! ( op_is_place op ) { ^ g_av_none } {}
     : i vid ( pl_var op )
     : i path ( pl_path op )
@@ -12855,7 +12861,7 @@ unsafe @ eng_read i st i op i line i ktag i ka → i {
 // ── Ownership engine: moves and hand-overs ───────────────────────────
 // Parameter `i` (captures first) of function `f`: its type, ET_NONE if it
 // has no such parameter.
-unsafe @ efp_ty i f i i → i {
+@ efp_ty i f i i → i {
     : i base ( ef_at f EF_VARS )
     : i nv ( ef_at f EF_VAR_N )
     : ~ i seen 0
@@ -12866,7 +12872,7 @@ unsafe @ efp_ty i f i i → i {
             ? == seen i {
                 : i tn ( wv_at g_ef_vars + + base * v CORE_VW 1 )
                 ? == tn 0 { ^ ET_NONE } {}
-                ? == 0 ( nurl_str_len # s tn ) { ^ ET_NONE } {}
+                ? == 0 ( nurl_str_len ( eng_str tn ) ) { ^ ET_NONE } {}
                 ^ ( et_of tn )
             } {}
             = seen + seen 1
@@ -12900,7 +12906,7 @@ unsafe @ efp_ty i f i i → i {
 // A fresh raw string - the result of a call that hands its string over -
 // kept by a value (a field, an element) is owned by nothing: a raw
 // string in a value is a view.
-unsafe @ fresh_string_kept i st i op i cur s where i line → v {
+@ fresh_string_kept i st i op i cur s where i line → v {
     ? ! ( op_is_place op ) { ^ } {}
     : i vid ( pl_var op )
     ? & & & & & == ( fv_kind vid ) VK_TEMP == ( et_kind ( fv_ty vid ) ) EK_S != ( fv_ty vid ) ET_NONE == ( av_own cur ) OW_O == ( pl_path op ) 0 & == ( av_held cur ) 0 ( fx_has vid FX_TEMP_FRESH ) {
@@ -13113,7 +13119,7 @@ unsafe @ fresh_string_kept i st i op i cur s where i line → v {
 // A binding or a temporary gives its value up: what was lent out of it
 // ends, it is "moved" from here on, and the value goes on as an owner.
 // A literal that showed bindings and is taken takes them with it.
-unsafe @ move_out i st i vid i line → i {
+@ move_out i st i vid i line → i {
     : i named ( wv_at g_fx_agg vid )
     ( wv_put g_fx_agg vid 0 )
     ? != named 0 {
@@ -13207,7 +13213,7 @@ unsafe @ move_out i st i vid i line → i {
 // a literal, or handed back - holds: it copies in every capture it held
 // a handle of that has a copy, so only what it cannot copy, the views
 // its captures hold and its pointers into the frame still borrow.
-unsafe @ closure_owned i held → i {
+@ closure_owned i held → i {
     ? | == held 0 ! ( held_has_clo held ) { ^ held } {}
     : i n ( sq_len held )
     // the closures in it: where (the path above `^f`), and the body
@@ -13278,7 +13284,7 @@ unsafe @ closure_owned i held → i {
 // A closure that leaves the frame it was made in owns a capture it
 // cannot copy: the binding it captured moves into its environment, and
 // the frame no longer releases it.
-unsafe @ closure_takes_over i st i av i line b direct → i {
+@ closure_takes_over i st i av i line b direct → i {
     : i held0 ( av_held av )
     ? | == held0 0 ! ( held_has_clo held0 ) { ^ av } {}
     : i n ( sq_len held0 )
@@ -13329,7 +13335,7 @@ unsafe @ closure_takes_over i st i av i line b direct → i {
 // outlive a local it borrows from - deep-copied (a join's value, a
 // return) or refused. `flags`: TF_*. `dest_vid`: the binding or the
 // temporary that takes it, -1 none.
-unsafe @ eng_transfer i st i op i line i ktag i ka i dest_depth i dest_ty i wk i wa i flags i dest_vid → i {
+@ eng_transfer i st i op i line i ktag i ka i dest_depth i dest_ty i wk i wa i flags i dest_vid → i {
     : b copy_ok != 0 & flags TF_COPY_OK
     : b is_ret != 0 & flags TF_RET
     : b named != 0 & flags TF_NAMED
@@ -13617,8 +13623,6 @@ unsafe @ eng_transfer i st i op i line i ktag i ka i dest_depth i dest_ty i wk i
 }
 
 // ── Ownership engine: taking, storing ────────────────────────────────
-unsafe @ eng_str i name → s { ^ # s name }
-
 // A value read in place out of what owns it - a binding a cursor or a
 // join names, a field, an element, a payload - is taken out of its owner
 // when it is consumed: the owner (or that part of it) is moved, on some
@@ -16591,7 +16595,7 @@ unsafe @ eng_str i name → s { ^ # s name }
 
 // A path as a declared summary writes it: its elements joined by `/`,
 // `-` the empty one.
-unsafe @ __sx_path s w → i {
+@ __sx_path s w → i {
     ? ( seq w `-` ) { ^ 0 } {}
     : ~ i p 0
     : ~ s rest ( nurl_str_cat w `` )
@@ -16633,7 +16637,7 @@ unsafe @ __sx_path s w → i {
 // The words of `text` as one of a summary's sets: `shape` says what each
 // word of an entry is (`n` a number, `p` a path, `k` a kind, `e` an
 // effect), one letter a word.
-unsafe @ __sx_set s text s shape → i {
+@ __sx_set s text s shape → i {
     : i arity ( nurl_str_len shape )
     : i tmp ( wv_new )
     : i one ( wv_new )
@@ -16664,7 +16668,7 @@ unsafe @ __sx_set s text s shape → i {
 @ sm_put i r i field i w → v { ( wv_put g_sm + * r SM_W field w ) }
 
 // A declared summary (eng_prims).
-unsafe @ eng_prim s name s modes s res s lends s rholds s effects s stores s consumes s elems s detaches s invokes s cloargs s shares s catches → v {
+@ eng_prim s name s modes s res s lends s rholds s effects s stores s consumes s elems s detaches s invokes s cloargs s shares s catches → v {
     : i r ( sx_new )
     ( im_put g_sx_ix ( __core_in name ) + r 1 )
     ( sm_put r SM_STATE 2 )
@@ -16707,7 +16711,7 @@ unsafe @ eng_prim s name s modes s res s lends s rholds s effects s stores s con
 // Until its summary is declared, the answers the fused walk already
 // holds for it are read into the engine's form here: the same trust the
 // compiler places in that function today.
-unsafe @ __ws_one s f s key i np → s {
+@ __ws_one s f s key i np → s {
     : i syms g_ws_syms
     ? ( seq key `sink` ) { ^ ( __core_tab g_fn_sink f ) } {}
     ? ( seq key `keeps` ) { ^ ( __core_tab g_fn_keeps f ) } {}
@@ -16752,14 +16756,14 @@ unsafe @ __ws_one s f s key i np → s {
 
 // The walk's answer `key` for function `f`: its own, or its template's
 // where its own is silent.
-unsafe @ ws_get s f s tmpl s key i np → s {
+@ ws_get s f s tmpl s key i np → s {
     : s own ( __ws_one f key np )
     ? | != 0 ( nurl_str_len own ) == 0 ( nurl_str_len tmpl ) { ^ own } {}
     ^ ( __ws_one tmpl key np )
 }
 
 // The numbers below `n` among the words of `text`, onto `out`.
-unsafe @ __ws_idx s text i n i out → v {
+@ __ws_idx s text i n i out → v {
     : ~ s rest ( nurl_str_cat text `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest )
@@ -16779,9 +16783,9 @@ unsafe @ __ws_idx s text i n i out → v {
 
 // The summary of the raw library function `f` (number `fi` in the
 // module) from the walk's answers.
-unsafe @ eng_derive i name i fi → i {
-    : s f ( nurl_str_cat # s name `` )
-    : s tmpl ( nurl_str_cat # s ( ef_at fi EF_TMPL ) `` )
+@ eng_derive i name i fi → i {
+    : s f ( nurl_str_cat ( eng_str name ) `` )
+    : s tmpl ( nurl_str_cat ( eng_str ( ef_at fi EF_TMPL ) ) `` )
     : i n ( ef_nparams fi )
     : i rt ( ef_at fi EF_RET )
     : i ret ? == rt 0 ET_NONE ( et_of rt )
@@ -17034,8 +17038,8 @@ unsafe @ eng_derive i name i fi → i {
 // A function with no body in the module (the runtime's, an extern): it
 // keeps no argument and changes none the walk knows of; its result is
 // the caller's own where the walk says so, and nothing to follow otherwise.
-unsafe @ eng_extern i name → i {
-    : s f ( nurl_str_cat # s name `` )
+@ eng_extern i name → i {
+    : s f ( nurl_str_cat ( eng_str name ) `` )
     : i n 16
     : i r ( sx_new )
     ( sm_put r SM_STATE 3 )
@@ -17076,8 +17080,8 @@ unsafe @ eng_extern i name → i {
 
 // The impls a `dyn` method's virtual callee `vn` may run, onto `out`
 // (function names, interned).
-unsafe @ eng_virt_impls i vn i out → v {
-    : s name ( nurl_str_cat # s vn `` )
+@ eng_virt_impls i vn i out → v {
+    : s name ( nurl_str_cat ( eng_str vn ) `` )
     : i at ( nurl_str_find name `__dyn__` )
     ? < at 0 { ^ } {}
     : s m ( nurl_str_slice name 0 at )
@@ -17928,10 +17932,10 @@ unsafe @ eng_virt_impls i vn i out → v {
 }
 
 // ── Ownership engine: what it prints ─────────────────────────────────
-unsafe @ __eng_o_ty i t → v {
+@ __eng_o_ty i t → v {
     ? == t ET_NONE { ( __core_o `-` ) ^ } {}
     ? == t ET_NUM { ( __core_o `#` ) ^ } {}
-    ( __core_o # s ( et_at t ET_NAME ) )
+    ( __core_o ( eng_str ( et_at t ET_NAME ) ) )
 }
 
 // The types the IR listed, as the engine reads them: `ety`, the type, its
@@ -17941,10 +17945,10 @@ unsafe @ __eng_o_ty i t → v {
 unsafe @ eng_print_types → v {
     : ~ i k 0
     ~ < k g_core_ty_n {
-        : *i ta # *i # s g_core_tys
+        : *i ta # *i ( eng_str g_core_tys )
         : i name . ta k
         : i t ( et_of name )
-        ( __core_o `ety\t` ) ( __core_o # s name )
+        ( __core_o `ety\t` ) ( __core_o ( eng_str name ) )
         ( __core_o `\t` ) ( __core_oi ( et_kind t ) )
         ( __core_o `\t` ) ( __eng_o_ty ? < t 0 ET_NONE ( et_at t ET_E1 ) )
         ( __core_o `\t` ) ( __eng_o_ty ? < t 0 ET_NONE ( et_at t ET_E2 ) )
@@ -17965,11 +17969,11 @@ unsafe @ eng_print_types → v {
 // (`--engine-trace`) Each function the engine walked, on stderr: whether
 // it is trusted, its result, and how many entries each set of its
 // summary has.
-unsafe @ eng_dump_summaries → v {
+@ eng_dump_summaries → v {
     : ~ i f 0
     ~ < f ( ef_n ) {
         ? & != 0 ( wv_at g_fc_walked f ) ( sm_have f ) {
-            : ~ s line ( nurl_str_cat3 `esum ` # s ( ef_at f EF_NAME ) ? != 0 ( wv_at g_fc_trusted f ) ` (trusted)` `` )
+            : ~ s line ( nurl_str_cat3 `esum ` ( eng_str ( ef_at f EF_NAME ) ) ? != 0 ( wv_at g_fc_trusted f ) ` (trusted)` `` )
             = line ( nurl_str_cat3 line ` res=` ( nurl_str_int ( sm_word f SM_RES ) ) )
             = line ( nurl_str_cat3 line ` lends=` ( nurl_str_int ( sm_n f SM_LENDS ) ) )
             = line ( nurl_str_cat3 line ` rholds=` ( nurl_str_int ( sm_n f SM_RHOLDS ) ) )
@@ -18020,7 +18024,7 @@ unsafe @ eng_dump_summaries → v {
 // The engine, on the module the walk just compiled: what it says goes
 // after the IR's own text. `eng verdict` is `runs-clean`, `rejected`, or
 // `skip` with the reason; `eng err` a finding (function, line, message).
-unsafe @ eng_main i syms → v {
+@ eng_main i syms → v {
     = g_eng_syms syms
     = g_ws_syms syms
     = g_sm_dyn ( __core_in `dyn` )
@@ -18032,7 +18036,7 @@ unsafe @ eng_main i syms → v {
     ( eng_check_module )
     ? != 0 g_eng_dbg { ( eng_dump_summaries ) } {}
     ? != g_eng_skip 0 {
-        ( __core_o `eng\tverdict\tskip\t` ) ( __core_o # s g_eng_skip ) ( __core_o `\n` )
+        ( __core_o `eng\tverdict\tskip\t` ) ( __core_o ( eng_str g_eng_skip ) ) ( __core_o `\n` )
         ^
     } {}
     : ~ i ne 0
@@ -18042,9 +18046,9 @@ unsafe @ eng_main i syms → v {
         ? >= errs 0 {
             : ~ i k 0
             ~ < k ( wv_len errs ) {
-                ( __core_o `eng\terr\t` ) ( __core_o # s ( ef_at f EF_NAME ) )
+                ( __core_o `eng\terr\t` ) ( __core_o ( eng_str ( ef_at f EF_NAME ) ) )
                 ( __core_o `\t` ) ( __core_oi ( wv_at errs k ) )
-                ( __core_o `\t` ) ( __core_o # s ( wv_at errs + k 1 ) ) ( __core_o `\n` )
+                ( __core_o `\t` ) ( __core_o ( eng_str ( wv_at errs + k 1 ) ) ) ( __core_o `\n` )
                 = ne + ne 1
                 = k + k 2
             }
