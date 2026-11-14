@@ -1526,6 +1526,15 @@ class FnCheck:
                             and all(self.fn.vars[a[0]].depth >= v.depth for a in new.alias)
                             and self.take_payload(st, new, ln)):
                         new = AV("O", (), (), new.held)
+                if (new.own == "L" and new.loans and v.kind != "temp" and v.ty is not None
+                        and v.ty[0] not in VIEW_TYPES and self.T.copyable(v.ty)
+                        and all(l in self.loans and self.fn.vars[self.loans[l][0][0]].kind == "temp"
+                                and self.loans[l][1] == "handle" for l in new.loans)):
+                    # a binding of what a call lent out of a temporary: the
+                    # temporary ends with the statement, so the binding is
+                    # handed a copy (MEMORY.md §7.6, "a lend handed to a
+                    # holder that outlives what it borrows")
+                    new = AV("O", (), (), new.held)
                 st.vals[vid] = self.reroot(st, new, vid)
                 self.closure_moved_into(st, rv, vid)
             return st
