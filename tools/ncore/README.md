@@ -32,6 +32,17 @@ PYTHONUTF8=1 python run.py --nurlc --clean --list files.txt  # programs nurlc ac
 PYTHONUTF8=1 python show.py --trace main <probe>.nu          # why: the state after each statement
 ```
 
+The same rules are in the compiler (`nurlc --engine`, docs/dev/CORE_IR.md
+§7). `engcmp.py` holds the two together:
+
+```
+PYTHONUTF8=1 python engcmp.py --verdicts --jobs 8   # every probe of results_nurlc.tsv: the engine's verdict against the one recorded there
+PYTHONUTF8=1 python engcmp.py --list files.txt      # the engine's reading of every type against this checker's
+```
+
+A rule changed here is changed there, and the other way round: the
+comparison is what says they are still one table.
+
 `--nurlc --all` ends by comparing with `disagree.tsv`: a probe that agrees
 now is progress (`--write-list` takes it off the list), one that joined
 the list is named and the run fails. A change to the rules is held to

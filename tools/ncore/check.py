@@ -204,6 +204,7 @@ class FnCheck:
         self.walking = set()
         self.moved_from = None   # the last value moved that holds views of its own parts     # the loans of the loops being walked: their containers' buffers     # a temporary -> its value is what a call made and handed over
         self.s_invokes = set()
+        self.s_catches = set()   # the closure parameters run where a panic in them is caught
         self.s_detaches = set()
         self.s_stale = set()     # (capture, path): read before the body gave it a value
         self.s_credits = set()   # parameters the body's first statement gives a value that views nothing
@@ -217,6 +218,7 @@ class FnCheck:
         # inside the arms)
         self.block_temps = set()
         self.fe_vars = set()     # the element bindings of `~ x xs` loops
+        self.cursor_slots = set()  # the `: ~ s` bindings born from a view
 
         def blocks(stmts):
             nones = {s[1] for s in stmts if s[0] == "let" and s[2] is None}
@@ -400,7 +402,11 @@ class FnCheck:
             live |= v.loans | hloans(v.held)
         return live
 
-    def effect(self, st, place, eff, line, depth=0):
+    def effect(self, st, place, eff, line, depth=0, weak=False):
+        """`weak`: the effect may not have happened (a callee that gives its
+        `inout` parameter a new value on some of its paths only): what was
+        lent out of the place ends all the same, what the place holds it
+        may still hold."""
         vid, path = place
         av = st.vals.get(vid)
         if av is None or depth > 8:
@@ -409,7 +415,7 @@ class FnCheck:
             self.ret_changed = True
         if av.own == "L" and eff != "end":
             for a in av.alias:
-                self.effect(st, (a[0], a[1] + path), eff, line, depth + 1)
+                self.effect(st, (a[0], a[1] + path), eff, line, depth + 1, weak)
             return
         shown = self.agg_lends.get(vid)
         if shown and path and path[0] in shown and eff != "end":
@@ -439,7 +445,7 @@ class FnCheck:
                 print(f"trace: {self.fn.name}:{line}: {eff} on {self.pname(place)} ends {len(killed)} loan(s)", file=sys.stderr)
             st.dead = st.dead | killed
         # what the place held is gone with what the effect released
-        if eff in ("drop", "replace", "take") and av.held:
+        if eff in ("drop", "replace", "take") and av.held and not weak:
             keep = set()
             for hp, l in av.held:
                 if eff in ("replace", "take") and prefix(path, hp):
@@ -683,9 +689,11 @@ class FnCheck:
                 av = AV("L", {self.loan(st, site, (vid, ()), "view")}, {(vid, ())}, frozenset())
             elif (src.own == "O" and vty is not None and vty[0] == "s" and self.fn.vars[vid].kind != "temp"
                   and dv is not None and dv.mut and dv.kind == "local" and not is_ret
-                  # (a cursor that owns its value on some paths only is no
-                  # owner to copy from: the slot is pointed at it)
-                  and not src.loans):
+                  # (a slot born from a view is a cursor: given a cursor
+                  # that owns its value on some paths only, it is pointed
+                  # at it. A slot born owning takes a copy of whatever it
+                  # is given, and any slot one of an owned binding.)
+                  and (not src.loans or dest_vid not in self.cursor_slots)):
                 # `: ~ s y x`, x an owned raw string: a slot of its own is
                 # given a copy of the text (MEMORY.md §7.6, owned string slots)
                 av = AV("O", (), (), frozenset())
@@ -1102,7 +1110,10 @@ class FnCheck:
         # effects
         for (k, path, eff) in sm["effects"]:
             if k < len(ops) and ops[k][0] == "v" and not (k in copied and not path):
-                self.effect(st, (ops[k][1], ops[k][2] + tuple(path)), eff, line)
+                # (a parameter the callee gives a new value on some paths
+                # only may go back holding what it held: `keeps`)
+                self.effect(st, (ops[k][1], ops[k][2] + tuple(path)), eff, line,
+                            weak=eff == "replace" and not path and k in sm.get("keeps", ()))
                 if (eff == "replace" and not path and not ops[k][2] and k < len(sm["modes"])
                         and sm["modes"][k] == "inout"):
                     # (a binding an `inout` callee may give a value of its
@@ -1157,10 +1168,15 @@ class FnCheck:
         for k, av in enumerate(avs):
             # (one another thread runs took its captures with it, above)
             if k not in gone and (inv is None or k in inv) and self.closures_in(av):
-                self.run_closures(st, av, line, f"{name}: the closure in argument {k + 1}")
+                # (a callee that catches a panic of the closure it runs:
+                # `catches`)
+                caught = k in sm.get("catches", ())
+                self.run_closures(st, av, line, f"{name}: the closure in argument {k + 1}", weak=caught)
                 for a in av.alias:
                     if a[0] in self.pidx:
                         self.s_invokes.add(self.pidx[a[0]])
+                        if caught:
+                            self.s_catches.add(self.pidx[a[0]])
         # …and what the callee hands that closure of its other arguments
         handed = {}
         for (k, i, j, path) in sm.get("cloargs", ()):
@@ -1774,9 +1790,11 @@ class FnCheck:
         return [(hp[:-1], l[1]) for hp, l in av.held
                 if isinstance(l, tuple) and len(l) == 2 and l[0] == "clo" and hp and hp[-1] == "^f"]
 
-    def run_closures(self, st, av, line, what):
+    def run_closures(self, st, av, line, what, weak=False):
         """Running a closure reads every capture and does what its body does
-        to them."""
+        to them.  `weak`: it is run where a panic in it is caught (`recover`),
+        so the body may stop anywhere: what it ends is ended, what it would
+        have given a new value may still hold what it held."""
         self.check_live(st, AV("N", held=av.held), line, what, held=True)
         for base, fname in self.closures_in(av):
             sm = self.summ.get(fname)
@@ -1795,7 +1813,7 @@ class FnCheck:
             for (k, path, eff) in sm["effects"]:
                 if k < ncap:
                     for place in caps.get(k, ()):
-                        self.effect(st, (place[0], place[1] + tuple(path)), eff, line)
+                        self.effect(st, (place[0], place[1] + tuple(path)), eff, line, weak=weak)
             for k in sm["consumes"]:
                 if k < ncap:
                     for place in caps.get(k, ()):
@@ -2313,6 +2331,8 @@ class FnCheck:
                 # `: ~ T c x` is a cursor: it borrows the owner x
                 new = self.rvalue(st, rv, ln, v.depth, v.ty, v.name, dest_vid=vid,
                                   lend_owner=(lambda x: True) if v.mut else (lambda x: False))
+                if v.mut and v.kind == "local" and v.ty == ("s",) and new.own == "L":
+                    self.cursor_slots.add(vid)
                 if (not v.mut and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
                         and self.fn.vars[rv[1][1]].kind == "temp" and not new.call and new.alias
                         and (new.own == "L" or (new.own == "O" and new.loans))
@@ -2407,7 +2427,7 @@ class FnCheck:
                     # itself and another argument, and may hand back either)
                     lent = self.call_lent.get(rv[1][1], ()) if rv[0] == "use" and rv[1][0] == "v" else ()
                     direct = ("v", vid, ()) in lent and any(op != ("v", vid, ()) for op in lent)
-                    if rest and new.call and v.ty is not None and (
+                    if rest and new.call and v.ty is not None and v.ty[0] not in VIEW_TYPES and (
                             (v.ty[0] in ("opt", "res") and direct) or not self.T.copyable(v.ty)):
                         # which of them a run hands back is not known, so
                         # neither is whether the binding still owns its value.
@@ -2804,7 +2824,17 @@ class FnCheck:
             res = "own"
         stores = set()
         left_gone = set()
+        # the parameters that go back, on some way out, still holding what
+        # they held when the function was entered: one it gives a new value
+        # on every path holds none of it
+        keeps = set()
         for st in [s for _, s in self.rets] + self.exits:
+            for vid, j in self.pidx.items():
+                av = st.vals.get(vid)
+                if av is not None and any(
+                        l in self.loans and self.loans[l][1] == "held" and self.loans[l][0][0] == -1 - vid
+                        for _, l in av.held):
+                    keeps.add(j)
             for (gv, gp) in st.gone:
                 if gv in self.pidx and self.fn.modes[self.pidx[gv]] == "inout":
                     # a part taken out of an `inout` parameter and not given
@@ -2830,7 +2860,7 @@ class FnCheck:
                 "regions": sorted(self.s_regions), "selfholds": sorted(self.s_selfholds),
                 "rclos": sorted(rclos), "sclos": sorted(sclos), "calllends": sorted(calllends),
                 "gone": sorted(left_gone), "mixed": [1] if mixed else [], "stale": sorted(self.s_stale),
-                "credits": sorted(self.s_credits)}
+                "credits": sorted(self.s_credits), "keeps": sorted(keeps), "catches": sorted(self.s_catches)}
 
 
 def initial_summary(prog, fn):
@@ -2911,6 +2941,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "gone", "mixed", "stale", "credits"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "gone", "mixed", "stale", "credits", "keeps", "catches"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out

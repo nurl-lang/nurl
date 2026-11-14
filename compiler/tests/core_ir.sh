@@ -120,6 +120,21 @@ else
     bad "the compiler's own source: nothing opaque" "$(grep -c '^core-gap' "$WORK/self.err") gap(s), $sfns functions"
 fi
 
+# The ownership engine (`--engine`, docs/dev/CORE_IR.md §7): it reads the
+# same IR, in shadow. A program with nothing to refuse is `runs-clean`, a
+# use after a move is found where it is, and the compiler's own source
+# passes it.
+(cd "$ROOT" && "$NURLC" --engine compiler/tests/core_ir_shapes.nu) > "$WORK/e.core" 2> "$WORK/e.err"
+if grep -qE '^eng	verdict	runs-clean$' "$WORK/e.core"; then note "the engine: the shapes run clean" "ok"; else bad "the engine: the shapes run clean" "$(grep -E '^eng	' "$WORK/e.core" | head -1)"; fi
+(cd "$ROOT" && "$NURLC" --engine tools/fuzz/holes/slice_read_after_its_buffer_moved_by_assignment.nu) > "$WORK/r.core" 2> "$WORK/r.err"
+if grep -qE '^eng	err	main	10	a is used after it was moved$' "$WORK/r.core" && grep -qE '^eng	verdict	rejected$' "$WORK/r.core"; then
+    note "the engine: a use after a move is found" "ok"
+else
+    bad "the engine: a use after a move is found" "$(grep -E '^eng	' "$WORK/r.core" | head -1)"
+fi
+(cd "$ROOT" && "$NURLC" --engine compiler/nurlc.nu) 2> "$WORK/s.err" | grep -E '^eng	' > "$WORK/s.eng"
+if grep -qE '^eng	verdict	runs-clean$' "$WORK/s.eng"; then note "the engine: the compiler's own source runs clean" "ok"; else bad "the engine: the compiler's own source runs clean" "$(head -1 "$WORK/s.eng") $(head -1 "$WORK/s.err")"; fi
+
 # `--emit-core` prints the IR, not LLVM IR.
 if grep -qE '^define |^declare ' "$WORK/a.core"; then bad "--emit-core prints no LLVM IR" "found a define"; else note "--emit-core prints no LLVM IR" "ok"; fi
 

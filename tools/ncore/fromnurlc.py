@@ -157,7 +157,15 @@ class Reader:
         """A nurlc type as check.py's type tuple."""
         if t in self.conv_memo:
             return self.conv_memo[t]
-        self.conv_memo[t] = ("named", t, ())        # a recursive type meets itself
+        info = self.types.get(t)
+        if (t.startswith("%") and not t.endswith("*") and info is not None
+                and not (info.base == "String" and not info.targs)
+                and not (info.base in ("Vec", "Box", "Slice") and len(info.targs) == 1)):
+            # a struct, an enum or a handle that holds itself meets itself
+            # on the way down: by its name, which is what it will be. (A
+            # container met again is read again: a name stands for a named
+            # type only.)
+            self.conv_memo[t] = ("named", t[1:], ())
         r = self.conv1(t)
         self.conv_memo[t] = r
         info = self.types.get(t)
@@ -174,7 +182,8 @@ class Reader:
             return ("s",)
         if t.endswith("*"):
             return ("ptr", self.conv(t[:-1]))
-        if t.startswith("<") or t.startswith("["):
+        if t.startswith("<") or t.startswith("[") or t.endswith(")"):
+            # (a vector, an array, a function's type: nothing to follow)
             return ("i",)
         info = self.types.get(t)
         if t.startswith("{"):

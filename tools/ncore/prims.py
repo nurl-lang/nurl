@@ -152,7 +152,8 @@ PRIMS = {
     "thread_spawn_owned": S(["in"], res="own", detaches=[0]),
     "spawn": S(["in"], res="own", detaches=[0]),
     "thread_join": S(["in"]),
-    "recover": S(["in"], res="own", invokes=[0]),
+    # (the closure is run where a panic in it is caught: it may stop anywhere)
+    "recover": dict(S(["in"], res="own", invokes=[0]), catches=[0]),
     "chan_new": S([], res="own"),
     "chan_send": S(["in", "in"], stores=[(0, E, 1, (), "value")]),
     "chan_recv": S(["in"], res="own", rholds=[(("#T0",), 0, E, "held")]),
