@@ -821,12 +821,18 @@ class FnCheck:
         # an `inout` argument is the callee's alone for the call: no other
         # argument is the same binding, a part of it, or a lend of it
         # (MEMORY.md §2.4)
+        changed = {k for (k, _, eff) in sm["effects"] if eff in ("realloc", "drop", "replace")}
         for k, mode in enumerate(sm["modes"][:len(ops)]):
-            if mode != "inout" or ops[k][0] != "v":
+            # (…nor is one the callee changes without saying `inout`: the
+            # buffer it moves is the other argument's too)
+            if (mode != "inout" and k not in changed) or ops[k][0] != "v":
                 continue
             _, vid, path = ops[k]
+            by_value = {src for (j, dp, src, pth, kind) in sm["stores"] if kind == "value" and j == k}
             for m, op in enumerate(ops):
-                if m == k:
+                if m == k or (mode != "inout" and m in by_value):
+                    # (an argument the callee keeps by value is read - copied
+                    # or taken - before it changes the other)
                     continue
                 if op[0] == "v":
                     oty = self.ty_of_place((op[1], op[2]))
