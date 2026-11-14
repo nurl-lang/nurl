@@ -936,9 +936,15 @@ class FnCheck:
         # result: the result owns it (MEMORY.md §1, Temporaries)
         whole = set()
         if sm["res"] == "lent":
-            whole = {k for (k, path, kind) in sm["lends"] if not path and kind == "handle" and k < len(ops)
+            whole = {k for (k, path, kind) in sm["lends"] if not path and k < len(ops)
                      and ops[k][0] == "v" and not ops[k][2] and self.fn.vars[ops[k][1]].kind == "temp"
-                     and avs[k].own == "O"}
+                     and avs[k].own == "O"
+                     # (a handle, or a raw string handed back as the raw
+                     # string it is: an owned one is its own buffer)
+                     and (kind == "handle" or (kind == "view" and dest_vid is not None
+                                               and self.fn.vars[ops[k][1]].ty is not None
+                                               and self.fn.vars[ops[k][1]].ty[0] == "s"
+                                               and self.fn.vars[dest_vid].ty == self.fn.vars[ops[k][1]].ty))}
         # the closure bodies the callee leaves in an argument, and in its result
         for (j, dpath, fname) in sm.get("sclos", ()):
             if j < len(ops) and ops[j][0] == "v":
