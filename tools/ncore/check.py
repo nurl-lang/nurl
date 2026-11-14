@@ -230,6 +230,7 @@ class FnCheck:
         self.lit_lendcopy = set()  # literal temporaries around a part of a parameter that can be copied
         self.call_by_fn = {}     # a call's temporary -> the callee is a function of the program
         self.vcopy_temps = set() # temporaries that are a copy of an owned raw string binding's view
+        self.view_src = {}       # a binding read out of a field of another -> that binding
         self.slot_vars = set()   # payload bindings of a library getter's option: a container's slot
         self.call_mixed = set()  # the temporaries of calls whose result is the caller's own on some calls
         self.ret_fresh = False   # some return hands back a value of the function's own that holds something
@@ -1456,6 +1457,29 @@ class FnCheck:
                         # h299). Only a `~` loop's element is taken out of
                         # its slot (MEMORY.md §7.6)
                         self.err(line, f"{name} takes {self.vname(op[1])}, the payload of what a getter lent, which is a borrow")
+                    elif (not op[2] and op[1] in self.view_src and k < len(sm["modes"]) and sm["modes"][k] == "sink"
+                          and st.vals.get(self.view_src[op[1]]) is not None
+                          and st.vals[self.view_src[op[1]]].own == "L" and st.vals[self.view_src[op[1]]].call
+                          and not any(r[1] == k for r in sm.get("rholds", ()))
+                          and not any(x[2] == k for x in sm.get("stores", ()))):
+                        # (…a binding read out of a field of a binding of
+                        # what a call lent - a `vec_at` copy: that binding is
+                        # a borrow, and its field is not its to hand over)
+                        self.err(line, f"{name} takes {self.vname(op[1])}, a field of "
+                                       f"{self.vname(self.view_src[op[1]])}, which is a borrow")
+                    elif (k < len(sm["modes"]) and sm["modes"][k] == "sink" and self.field_viewer(st, op[1])
+                          and (op[2] or any(st.vals.get(a[0]) is not None and st.vals[a[0]].own == "L"
+                                            and (st.vals[a[0]].call or self.field_viewer(st, a[0]))
+                                            for a in st.vals[op[1]].alias))
+                          and not any(r[1] == k for r in sm.get("rholds", ()))
+                          and not any(x[2] == k for x in sm.get("stores", ()))):
+                        # a binding read out of a field (`: Q e . r q`) is a
+                        # copy of it: a field of it handed to a callee that
+                        # releases it is emptied in the copy only, and the
+                        # owner releases it again - nor is the viewer, whole,
+                        # its to hand over where what it views is a borrow
+                        # itself (a field of a `vec_at` copy)
+                        self.err(line, f"{name} takes {self.pname((op[1], op[2]))}, read out of a field, which is a borrow")
                     elif (op[2] and op[1] in self.pidx and self.pidx[op[1]] < self.ncap
                           and not getattr(self.fn.vars[op[1]], "byref", False)
                           and k < len(sm["modes"]) and sm["modes"][k] == "sink"):
@@ -2733,6 +2757,15 @@ class FnCheck:
         return any(p[:cap + 1] == base and l2 in self.loans and self.loans[l2][0][0] == pv
                    and self.loans[l2][1] in ("handle", "ref") for p, l2 in held)
 
+    def field_viewer(self, st, vid):
+        """Is `vid` a binding read out of a field (`: Q e . r q`): a local,
+        not a cursor, lent - not by a call - by field paths only?"""
+        v = self.fn.vars.get(vid)
+        av = st.vals.get(vid)
+        return (v is not None and v.kind == "local" and not v.mut and av is not None and av.own == "L"
+                and not av.call and bool(av.alias)
+                and all(a[1] and all(not e.startswith(("#", "*", "^")) for e in a[1]) for a in av.alias))
+
     def borrowed_copy(self, vid):
         """Is `vid` a copy of a value this frame only borrows: a by-value
         (`in`) parameter (not a destructor's receiver), a `~` loop's
@@ -3109,6 +3142,10 @@ class FnCheck:
             v = self.fn.vars[vid]
             if rv is not None and rv[0] == "payload":
                 self.payload_bound.add(vid)
+            if (rv is not None and rv[0] == "use" and rv[1][0] == "v" and rv[1][2] and v.kind == "local"
+                    and not v.mut):
+                # (a binding read out of a field of another: which one)
+                self.view_src[vid] = rv[1][1]
             if rv is not None and v.kind == "temp":
                 # (a call whose summary says its result is its own)
                 self.temp_fresh[vid] = rv[0] == "call" and self.summary(rv[1])["res"] == "own" and not self.summary(rv[1])["rholds"]
