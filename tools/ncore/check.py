@@ -88,11 +88,43 @@ def hfrom(loans, path=()):
     return frozenset((path, l) for l in loans)
 
 
+# (one loan is held in at most HELD_WIDEN places of a value; held in more,
+# it is held at their longest common prefix. A value given, round after
+# round, what holds what it holds - a model's buffers pushed into its own
+# fields - re-roots its loans under every field, and the places multiply:
+# 6 M of them in nurllama's loader. Held at a prefix, a loan is held at
+# every place below it, which is what `hsub` reads.)
+HELD_WIDEN = 8
+
+
+def widen_held(held):
+    if len(held) <= HELD_WIDEN:
+        return held
+    by = {}
+    for hp, l in held:
+        by.setdefault(l, []).append(hp)
+    if all(len(ps) <= HELD_WIDEN for ps in by.values()):
+        return held
+    out = set()
+    for l, ps in by.items():
+        if len(ps) <= HELD_WIDEN:
+            out |= {(hp, l) for hp in ps}
+            continue
+        lcp = ps[0]
+        for hp in ps[1:]:
+            n = 0
+            while n < len(lcp) and n < len(hp) and lcp[n] == hp[n]:
+                n += 1
+            lcp = lcp[:n]
+        out.add((lcp, l))
+    return frozenset(out)
+
+
 class AV:
     __slots__ = ("own", "loans", "alias", "held", "call")
 
     def __init__(self, own, loans=frozenset(), alias=frozenset(), held=frozenset(), call=False):
-        self.own, self.loans, self.alias, self.held = own, frozenset(loans), frozenset(alias), frozenset(held)
+        self.own, self.loans, self.alias, self.held = own, frozenset(loans), frozenset(alias), widen_held(frozenset(held))
         # a lend a call handed back: a copy of the handle in its owner, not
         # the owner's part read in place
         self.call = call
@@ -1307,6 +1339,18 @@ class FnCheck:
                         # borrow, and its field is not its to hand to a
                         # `sink` (MEMORY.md §2.10, agora #680)
                         self.err(line, f"{name} takes a field of {self.vname(op[1])}, which is a borrow")
+                    elif (self.T.copyable(ty) and avs[k].alias
+                          and all(a[1] and a[0] in self.pidx and self.fn.modes[self.pidx[a[0]]] == "inout"
+                                  for a in avs[k].alias)
+                          and (any(r[1] == k for r in sm.get("rholds", ()))
+                               or any(x[2] == k for x in sm.get("stores", ())))):
+                        # a part of an `inout` parameter is the caller's,
+                        # who goes on holding the whole: handed to a callee
+                        # that keeps it (in its result, in another argument),
+                        # it is copied - taken out, it would leave the
+                        # caller's value with a hole. (One that releases it
+                        # takes it: a change to the caller's binding.)
+                        copied.add(k)
                     elif not self.take_payload(st, avs[k], line, direct=bool(op[2])) and not self.T.copyable(ty):
                         self.err(line, f"{name} takes a borrowed value that cannot be copied")
                 elif ty is not None and ty[0] == "closure":

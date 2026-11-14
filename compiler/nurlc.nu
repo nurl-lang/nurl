@@ -403,6 +403,8 @@
 : i EE_STAR 0  // element 0 is `*`
 : i PATH_MAX 5  // a loan's place is followed this deep and no further
 : i HELD_MAX 8  // where in a value a loan is held is followed this deep: held deeper, it is held at the prefix (a loop storing into a value what it holds re-roots it under itself every round)
+: i HELD_WIDEN 8  // one loan is held in at most this many places of a value; held in more, it is held at their longest common prefix (held_widen)
+: ~ i g_hw_memo 0  // held set → its widened form + 1, for the function being read (held_widen)
 : i PV_BIAS 1048576  // a place is a word: (variable + PV_BIAS) * 2^32 + path
 : ~ i g_fv_ty -1  // the function being read: each variable's type
 : ~ i g_fv_pidx -1  // …its number among the parameters, -1 if it is none
@@ -11780,6 +11782,8 @@ unsafe @ eng_keep_fn → v {
     } {}
     ( eng_open f )
     ( eng_sq_reset )
+    ? != g_hw_memo 0 { ( wv_drop g_hw_memo ) } {}
+    = g_hw_memo ( im_new )
     = g_f_nv ( ef_at f EF_VAR_N )
     : i rt ( ef_at f EF_RET )
     = g_f_ret ? == rt 0 ET_NONE ( et_of rt )
@@ -11869,7 +11873,65 @@ unsafe @ eng_keep_fn → v {
 // A state is a vector: whether any path reaches it, the loans that
 // ended, the places a part was taken out of, the `;` blocks armed, and
 // an AV for each variable.
-@ av_make i own i loans i alias i held b call → i {
+// `held` with each loan held in at most HELD_WIDEN places: held in more, it
+// is held at their longest common prefix. A value given, round after
+// round, what holds what it holds - a model's buffers pushed into its own
+// fields - re-roots its loans under every field, and the places multiply
+// (6 M of them in nurllama's loader). Held at a prefix, a loan is held at
+// every place below it, which is what held_sub reads.
+@ held_widen i held → i {
+    : i memo ( im_get g_hw_memo held 0 )
+    ? != memo 0 { ^ - memo 1 } {}
+    : i cnt ( im_new )
+    : i n ( sq_len held )
+    : ~ b over F
+    : ~ i k 0
+    ~ < k n {
+        : i l ( he_loan ( sq_at held k ) )
+        : i c + ( im_get cnt l 0 ) 1
+        ( im_put cnt l c )
+        ? > c HELD_WIDEN { = over T } {}
+        = k + k 1
+    }
+    : ~ i out held
+    ? over {
+        : i lcp ( im_new )
+        : i tmp ( wv_new )
+        = k 0
+        ~ < k n {
+            : i he ( sq_at held k )
+            : i l ( he_loan he )
+            ? > ( im_get cnt l 0 ) HELD_WIDEN {
+                : i have ( im_get lcp l 0 )
+                ( im_put lcp l + ? == have 0 ( he_path he ) ( ep_lcp - have 1 ( he_path he ) ) 1 )
+            } { ( wv_push tmp he ) }
+            = k + k 1
+        }
+        = k 0
+        ~ < k n {
+            : i l ( he_loan ( sq_at held k ) )
+            : i p ( im_get lcp l 0 )
+            ? != p 0 { ( wv_push tmp ( he_make - p 1 l ) ) } {}
+            = k + k 1
+        }
+        = out ( sq_set_of_wv tmp )
+        ( wv_drop tmp ) ( wv_drop lcp )
+    } {}
+    ( wv_drop cnt )
+    ( im_put g_hw_memo held + out 1 )
+    ^ out
+}
+
+// The longest common prefix of paths `p` and `q`.
+@ ep_lcp i p i q → i {
+    : ~ i a ( ep_take p ( ep_len q ) )
+    : ~ i b ( ep_take q ( ep_len a ) )
+    ~ != a b { = a ( ep_parent a ) = b ( ep_parent b ) }
+    ^ a
+}
+
+@ av_make i own i loans i alias i held0 b call → i {
+    : i held ? & != held0 0 > ( sq_len held0 ) HELD_WIDEN ( held_widen held0 ) held0
     ( wv_trunc g_el_key 0 )
     ( wv_push g_el_key + own ? call 16 0 ) ( wv_push g_el_key loans ) ( wv_push g_el_key alias ) ( wv_push g_el_key held )
     : i id ( sq_of_wv g_el_key 0 4 )
@@ -14779,9 +14841,29 @@ unsafe @ eng_byte s w i k → i {
                                     // not its to hand to a `sink`
                                     ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, which is a borrow` ) )
                                 } {
-                                    ? & ! ( take_payload st av line != ( pl_path op ) 0 ) ! ( et_copyable ty ) {
-                                        ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) )
+                                    // (a part of an `inout` parameter is the
+                                    // caller's, who goes on holding the whole:
+                                    // handed to a callee that keeps it - in its
+                                    // result, in another argument - it is
+                                    // copied; taken out, it would leave the
+                                    // caller's value with a hole. One that
+                                    // releases it takes it.)
+                                    : ~ b inout_part & & ( et_copyable ty ) != ( av_alias av ) 0 ( sm_keeps_arg sm ck )
+                                    ? inout_part {
+                                        : i al ( av_alias av )
+                                        : ~ i a 0
+                                        ~ & inout_part < a ( sq_len al ) {
+                                            : i pa ( sq_at al a )
+                                            : i pi ( fv_pidx ( pl_var pa ) )
+                                            ? | | == ( pl_path pa ) 0 < pi 0 != ( fp_mode pi ) PM_INOUT { = inout_part F } {}
+                                            = a + a 1
+                                        }
                                     } {}
+                                    ? inout_part { = copied ( sq_add copied ck ) } {
+                                        ? & ! ( take_payload st av line != ( pl_path op ) 0 ) ! ( et_copyable ty ) {
+                                            ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) )
+                                        } {}
+                                    }
                                 }
                             }
                         }
