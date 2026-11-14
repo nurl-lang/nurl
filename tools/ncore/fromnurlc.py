@@ -85,6 +85,7 @@ class Reader:
         self.prog.udrop = set()        # named types whose drop is a use of the views they hold (§2.14)
         self.prog.handle_elem = {}     # a one-payload handle type -> its payload's type
         self.prog.shared = set()       # …the ones whose copies share the payload
+        self.prog.share_handles = set()  # library handles whose copy is a share of one object (`h`)
         self.prog.thread_share = set() # handles a thread's closure captures as a share of its own (§6.5)
         self.prog.copy_answer = {}     # a Vec / Box / option / result type -> can a copy of it be made
         self.prog.arcs = set()         # …and the ones other threads may hold a copy of
@@ -221,6 +222,8 @@ class Reader:
                 self.prog.thread_share.add(name)
             if getattr(info, "zmove", False):
                 self.prog.zmove.add(name)
+            if getattr(info, "share", False):
+                self.prog.share_handles.add(name)
             if getattr(info, "clone", False):
                 self.prog.clonable.add(name)
             else:
