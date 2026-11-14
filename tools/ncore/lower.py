@@ -209,6 +209,21 @@ class Types:
                 return any(any(self.owns_handle(t, nseen) for t in tys) for _, tys in self.prog.enums[ty[1]])
         return self.owning(ty)
 
+    def has_udrop(self, ty):
+        """Does a value of this type run, where it is released, a destructor
+        that may read the views it holds?  nurlc's own answer for a named
+        type (the `d` flag: a `% Drop` of the program's own anywhere in it,
+        a library handle asked by its type arguments), followed through the
+        types this reader spells out."""
+        if ty is None or self.is_scalar(ty):
+            return False
+        k = ty[0]
+        if k in ("vec", "box", "opt"):
+            return self.has_udrop(ty[1])
+        if k == "res":
+            return self.has_udrop(ty[1]) or self.has_udrop(ty[2])
+        return k == "named" and ty[1] in getattr(self.prog, "udrop", ())
+
     def view_capable(self, ty, seen=()):
         """Can a value of this type hold a view or a borrowed handle at all
         (a raw string, a slice, a closure, a pointer, anywhere in it)?"""

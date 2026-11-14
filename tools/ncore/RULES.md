@@ -62,7 +62,8 @@ summarised by the same analysis, to a fixpoint over the program.
 | An owner handed on by name moves; `: ~` of a name is a cursor | §2.2, §7.6 | `transfer`, `move_out` |
 | A value that holds a view is read whole only while what the view points into is there | §2.10 | `read` |
 | A call's arguments are frozen for its duration: its effects end no view another argument holds | §2.4 | `apply_call` |
-| An `inout` argument is the callee's alone for the call: no other argument is the same binding, a part of it or a lend of it | §2.4 | `apply_call` |
+| An `inout` argument is the callee's alone for the call: no other argument is the same binding, a part of it or a lend of it. So is one the callee changes without saying `inout`, unless the change is inside a shared handle's payload: that is a change to the one object every share reaches (the `regions` row) | §2.4, §7.7 | `apply_call` |
+| A struct literal, or a variant's payload, that names an `in` parameter whole and is handed back as it is keeps the caller's argument: it moves into the result as into a `sink`. Bound, pushed or assigned first, the literal holds a copy; the payload of an option or a result literal is a lend of the caller's value | §1 (temporaries), §7.6 (h207) | `rvalue` (`agg`: `lit_params`), `ret` |
 | A function that hands a parameter to a callee that detaches it detaches its argument | §2.7 | `s_detaches` |
 | A call's effects come before its stores; a consumed argument is moved | §2.1 | `apply_call` |
 | A view-typed parameter (`s`, a slice) is a view the caller lent, never an owner | §1 | `read` |
@@ -127,6 +128,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A shared payload (`Rc`, `Arc`, `Shared`) is one place per handle type: an effect inside one ends what was lent out of any | proposal D3 | `shared_tails`, `region_effect` |
 | A `dyn` method's call may run any impl of the method | §1 Methods | `summary` (`virt`) |
 | The drop of a value whose destructor may read its views is a use of them | §2.14 | `scope_end` |
+| A binding whose release runs such a destructor (its own, or one in a field, an option's or result's payload, an element, a library handle's type argument) gains no view of a binding declared after it: refused where it gains it, by an assignment or through a call that stores into it, because the younger one is released first on every way out | §2.14 | `younger_views` |
 | A copy hook (`S_clone`, `S_share`) hands back a value of its own | §7.6 | `check_program` |
 | A closure a callee hands back, or leaves in an argument, runs the body it was made with: the summary names the bodies (`rclos`, `sclos`) | §2.11 | `make_summary`, `apply_call` |
 | A copy of a view is that view | §2.13 | `apply_call` (`vcopy`) |

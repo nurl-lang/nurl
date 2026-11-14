@@ -184,6 +184,7 @@ class FnCheck:
         self.defer_bodies = []
         self.tails_memo = {}
         self.agg_lends = {}      # a literal temporary -> the bindings it shows and has not taken
+        self.lit_params = {}     # a literal temporary -> the parameters it names whole
         self.temp_fresh = {}
         self.call_lent = {}      # a call's temporary -> the arguments it may hand back whole
         self.cap_loans = set()   # the loans that are a closure's own handle of a binding it captured
@@ -206,6 +207,7 @@ class FnCheck:
         self.s_detaches = set()
         self.s_stale = set()     # (capture, path): read before the body gave it a value
         self.s_credits = set()   # parameters the body's first statement gives a value that views nothing
+        self.cur_line = fn.line
         body = fn.body
         while body and body[0][0] == "scope":
             body = body[0][1]
@@ -878,7 +880,10 @@ class FnCheck:
         # an `inout` argument is the callee's alone for the call: no other
         # argument is the same binding, a part of it, or a lend of it
         # (MEMORY.md §2.4)
-        changed = {k for (k, _, eff) in sm["effects"] if eff in ("realloc", "drop", "replace")}
+        # (a change inside a shared handle's payload is a change to the one
+        # object every share reaches, not to this argument: `regions`)
+        changed = {k for (k, p, eff) in sm["effects"] if eff in ("realloc", "drop", "replace")
+                   and not (k < len(ops) and ops[k][0] == "v" and self.shared_tails((ops[k][1], ops[k][2] + tuple(p))))}
         for k, mode in enumerate(sm["modes"][:len(ops)]):
             # (…nor is one the callee changes without saying `inout`: the
             # buffer it moves is the other argument's too)
@@ -1359,7 +1364,25 @@ class FnCheck:
             for a in av.alias:
                 self.store_into(st, (a[0], a[1]), frozenset((hp, l) for hp, l in add), depth + 1, True, a[1])
             return
+        self.younger_views(vid, add)
         st.vals[vid] = AV(av.own, av.loans, av.alias, av.held | frozenset(add))
+
+    def younger_views(self, vid, add):
+        """A value whose release runs a destructor that may read its views
+        is given no view of a binding declared after it: that binding is
+        released first, on every way out and on an unwind (MEMORY.md
+        §2.14)."""
+        v = self.fn.vars[vid]
+        if v.kind != "local" or not self.T.has_udrop(v.ty):
+            return
+        for _, l in add:
+            if l not in self.loans or self.loans[l][1] not in ("view", "handle"):
+                continue
+            src = self.fn.vars[self.loans[l][0][0]]
+            if src.kind == "local" and src.id > vid and src.depth >= v.depth:
+                self.err(self.cur_line, f"{v.name} is given a view of {src.name}, which was declared after it "
+                                        f"and is released first")
+                return
 
     # -- closures (MEMORY.md §2.11, §7.5) -----------------------------------------
     def make_closure(self, st, rv, line):
@@ -1845,6 +1868,18 @@ class FnCheck:
                     continue
                 if cur is not None:
                     self.fresh_string_kept(st, op, cur, line, "a field")
+                if dest_vid is not None and self.fn.vars[dest_vid].kind == "temp" and cur is not None:
+                    wrapper = ty is not None and ty[0] in ("opt", "res")
+                    if (not wrapper and cur.own == "P" and self.fn.modes[self.pidx[op[1]]] == "in"
+                            and fty is not None and fty[0] not in VIEW_TYPES and fty[0] != "closure"
+                            and self.T.owning(fty)):
+                        # a parameter named whole in a struct literal or as
+                        # a variant's payload: handed back as it is, the
+                        # literal keeps the caller's argument (below, `ret`)
+                        self.lit_params.setdefault(dest_vid, set()).add(op[1])
+                    elif wrapper and op[1] in self.lit_params:
+                        # (…or as the payload of an option or a result)
+                        self.lit_params.setdefault(dest_vid, set()).update(self.lit_params[op[1]])
                 if (cur is not None and cur.own == "L" and not cur.call and self.fn.vars[op[1]].mut
                         and self.fn.vars[op[1]].kind == "local" and cur.alias and dest_vid is not None
                         and fty is not None and fty[0] not in VIEW_TYPES and fty[0] != "closure" and self.T.owning(fty)
@@ -2040,6 +2075,8 @@ class FnCheck:
 
     def stmt(self, st, s):
         k = s[0]
+        if isinstance(s[-1], int):
+            self.cur_line = s[-1]
         if k == "let":
             _, vid, rv, ln = s
             v = self.fn.vars[vid]
@@ -2173,6 +2210,7 @@ class FnCheck:
                     st.vals[vid] = AV("L", new.loans, new.alias, new.held)
                 else:
                     st.vals[vid] = new
+                self.younger_views(vid, hfrom(new.loans) | new.held)
                 if first and not new.loans and not new.held:
                     # (the body's first statement gives the parameter a value
                     # that views nothing: nothing can unwind before it)
@@ -2257,6 +2295,17 @@ class FnCheck:
                 av = self.transfer(st, op, ln, ("ret", id(s)), 0, self.fn.ret, "the returned value",
                                    copy_ok=True, is_ret=True)
                 self.moved_from = None
+                if op[0] == "v" and not op[2]:
+                    # a literal handed back as it is keeps the parameters it
+                    # names whole: the caller's arguments move into the
+                    # result, as into a `sink` (MEMORY.md §1 temporaries,
+                    # §7.6 h207). Bound, pushed or assigned first, it holds
+                    # copies of them.
+                    for b in sorted(self.lit_params.get(op[1], ())):
+                        if st.vals[b].own == "P":
+                            self.s_consumes.add(self.pidx[b])
+                            self.effect(st, (b, ()), "replace", ln)
+                            st.vals[b] = AV("M")
                 gone = st.vals.get(op[1]) if before is not None else None
                 if st.defers and before is not None and gone is not None and gone.own == "M":
                     # the `;` blocks run after the result is made and before
