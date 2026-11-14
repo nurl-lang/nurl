@@ -663,7 +663,9 @@ class FnCheck:
                 # holder, it moves there
                 av = self.move_out(st, vid, line)
             elif src.own == "P" or (self.fn.vars[vid].kind != "temp" and (
-                    (raw and not is_ret and not (stored and vty[0] == "slice")
+                    # (an owned slice moves its buffer to whatever is given
+                    # it, as any owner does: MEMORY.md §2.1, §2.2)
+                    (raw and not is_ret and vty[0] != "slice"
                      # (a join's temporary given an arm's own raw string
                      # takes it: the arm's binding ends before the join does)
                      and not (dv is not None and dv.kind == "temp" and not lend_owner(vid)
@@ -1110,6 +1112,20 @@ class FnCheck:
                         went = (ops[j][1], ops[j][2] + dpath)
                         st.vals[op[1]] = AV("L", {self.loan(st, (site, "cm", j, k), went, "handle")}, {went},
                                             src.held)
+                    elif (ty is not None and self.T.owns_handle(ty) and ty[0] not in VIEW_TYPES and not src.call
+                          and src.alias
+                          and all(a[1] and "*" not in a[1] and st.vals.get(a[0]) is not None
+                                  and ((a[0] in self.pidx and self.fn.modes[self.pidx[a[0]]] == "in"
+                                        and st.vals[a[0]].own == "P")
+                                       or (st.vals[a[0]].own == "O" and a[1][-1].startswith("#")))
+                                  for a in src.alias)
+                          and self.take_payload(st, src, line, direct=bool(op[2]))):
+                        # a field or a payload of an `in` parameter kept by
+                        # value is taken out of it: the function owns the
+                        # parameter from here and releases the rest of it,
+                        # and the caller's argument moves into the call
+                        # (MEMORY.md §7.6, h389-h404, h421-h423)
+                        add = hroot(src.held, dpath)
                     elif ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and self.T.copyable(ty):
                         # a lend stored as an owner is copied, with the views it holds
                         add = hroot(src.held, dpath)
@@ -1339,11 +1355,13 @@ class FnCheck:
                 self.s_consumes.add(self.pidx[vid])
             if not path:
                 st.vals[vid] = AV("M" if sure else "X")
-            elif "*" not in path and direct:
+            elif "*" not in path and (direct or path[-1].startswith("#")):
                 # the field is moved where it lives: it, what is under it
                 # and the value as a whole are not read until it is given a
                 # value again (§2.1). Taken through a binding of it, the
-                # field is left empty, and an empty String or Vec is one.
+                # field is left empty, and an empty String or Vec is one;
+                # a payload has no empty state, its option or enum still
+                # says it is there (agora #170).
                 st.gone = st.gone | {(vid, path)}
         return True
 
@@ -2306,6 +2324,28 @@ class FnCheck:
                             self.s_consumes.add(self.pidx[b])
                             self.effect(st, (b, ()), "replace", ln)
                             st.vals[b] = AV("M")
+                if (av.own == "L" and not av.call and av.alias and self.fn.ret is not None
+                        and self.fn.ret[0] not in VIEW_TYPES and self.T.owning(self.fn.ret)
+                        and op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp"
+                        and op[1] not in self.lit_nocopy and op[1] not in self.lit_lendcopy):
+                    # the payload of an `in` parameter's option or result,
+                    # handed back as the value of the `??` over it: the
+                    # function moves the value on, so the caller's argument
+                    # is taken as by a `sink` and the result is the caller's
+                    # own on that path (MEMORY.md §7.6, h408-h415). (Handed
+                    # back by name inside the arm, or out of an enum of the
+                    # program's, it is lent: RULES.md, "One IR shape".)
+                    pay = {a for a in av.alias
+                           if a[1] and a[1][-1].startswith("#") and "*" not in a[1] and a[0] in self.pidx
+                           and self.fn.modes[self.pidx[a[0]]] == "in" and st.vals[a[0]].own == "P"
+                           and (self.ty_of_place((a[0], a[1][:-1])) or ("?",))[0] in ("opt", "res")}
+                    if pay:
+                        for a in sorted(pay):
+                            self.effect(st, a, "take", ln)
+                            self.s_consumes.add(self.pidx[a[0]])
+                        rest = av.alias - pay
+                        av = AV("L" if rest else "O",
+                                {l for l in av.loans if self.loans.get(l, (None,))[0] not in pay}, rest, av.held)
                 gone = st.vals.get(op[1]) if before is not None else None
                 if st.defers and before is not None and gone is not None and gone.own == "M":
                     # the `;` blocks run after the result is made and before

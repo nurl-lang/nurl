@@ -64,6 +64,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A call's arguments are frozen for its duration: its effects end no view another argument holds | §2.4 | `apply_call` |
 | An `inout` argument is the callee's alone for the call: no other argument is the same binding, a part of it or a lend of it. So is one the callee changes without saying `inout`, unless the change is inside a shared handle's payload: that is a change to the one object every share reaches (the `regions` row) | §2.4, §7.7 | `apply_call` |
 | A struct literal, or a variant's payload, that names an `in` parameter whole and is handed back as it is keeps the caller's argument: it moves into the result as into a `sink`. Bound, pushed or assigned first, the literal holds a copy; the payload of an option or a result literal is a lend of the caller's value | §1 (temporaries), §7.6 (h207) | `rvalue` (`agg`: `lit_params`), `ret` |
+| The payload of an `in` parameter's option or result, handed back as the value of the `??` over it, takes the caller's argument: the result is the caller's own on that path. Handed back by name inside the arm, or out of an enum of the program's, it is lent | §7.6 (h408–h415) | `ret` |
 | A function that hands a parameter to a callee that detaches it detaches its argument | §2.7 | `s_detaches` |
 | A call's effects come before its stores; a consumed argument is moved | §2.1 | `apply_call` |
 | A view-typed parameter (`s`, a slice) is a view the caller lent, never an owner | §1 | `read` |
@@ -95,7 +96,9 @@ summarised by the same analysis, to a fixpoint over the program.
 | The payload of what a function of the program lent is that call's lend still; the payload of an option a library getter made around an element is the element | §7.6 | `rvalue` (`payload`), `call_by_fn` |
 | A cursor given a shorter-lived lend stays a borrow of it; an owner given one is handed a copy | §7.6 | `stmt` (`assign`) |
 | A field or a payload of an owned temporary a callee hands back is taken out of it: the result owns it (an element of its buffer is not) | §1 Temporaries, §7.6 (#635) | `apply_call` (`part`) |
-| An owned slice moves into the literal that takes it | §7.6 | `transfer` (`stored`) |
+| An owned slice moves its buffer to whatever is given it — a new binding, an assignment, a field, a literal — as any owner does; an owned raw string in a binding is viewed or copied instead (§2.13) | §2.1, §2.2, §7.6 | `transfer` |
+| A field or a payload of an `in` parameter kept by value (pushed, stored) is taken out of it: the function owns the parameter from there and the caller's argument moves into the call. So is the payload of a local option or enum, through the `??` binding over it | §7.6 (h389–h404, h421–h423), §2.11 (agora #170) | `apply_call` stores |
+| A payload taken through its `??` binding leaves its option or enum unreadable until it is given a value again: a payload has no empty state (a field taken through a binding of it is left an empty String or Vec) | §2.1, §2.11 (agora #170) | `take_payload` |
 | A fresh raw string kept by a value is owned by nothing | §2.13 | `fresh_string_kept` |
 | A module global outlives every frame: it holds no view of one | §2.13 | `gstore` |
 | A function's exit runs the `;` blocks armed on the way, newest first, after its result is made | §1 | `run_defers` |
@@ -158,6 +161,22 @@ gives and lists the other side here.
 | `= o ( pick o other k )`, `o` an option owner, `pick` may hand back either argument | `pick` is a plain function defined above the call (`option_owner_given_a_call_that_may_lend_itself_or_another_argument`, agora #412) | `pick` is defined below the call, is a generic instance, or is a `dyn` method (`option_owner_given_back_by_a_callee_below_runs_clean`, `…_by_a_generic_runs_clean`, `…_by_a_dyn_method_runs_clean`): the per-call key decides at run time | refuses all (A2 refuses the form) |
 
 | `^ ( id x )`, `x` an owned raw string of this frame, `id` handing its argument back | `id` is defined below the function (`identity_of_a_fresh_s_binding_returned_callee_below`) | `id` is defined above it (`…_callee_above_runs_clean`): the text is copied at the return | accepts both (the copy) |
+
+### One operation, three answers by spelling
+
+Not the same IR, but the same thing done: a function hands back a value
+that is, or is built around, an `in` parameter or a part of one. nurlc's
+answer (its `sum` line) follows how it is written. The checker copies
+each, so that the probes agree; an engine that decides the drops itself
+(stage S3) can give one answer for all of them, and which is D4 too.
+
+| written | nurlc's answer | the caller's argument |
+|---|---|---|
+| `^ p`, `^ . p f`, `?? p { V x → { ^ x } }`, `^ ?? e { V x → x … }` over an enum of the program's, `^ @ ?T { T p }` | lent (`retpart`, `ret_borrow`, per call where another path is fresh) | stays the caller's; the result borrows it |
+| `^ ?? o { T x → x F → … }`, `o` an option or a result | taken (`sink`, `keeps`): h408–h415 | moved into the call |
+| `^ @ K { p }`, `^ @ E { V p }`, `^ @ ?K { T @ K { p } }` | kept (`keeps`, `stores`): h207 | moved into the call |
+| `^ @ KK { @ K { p } }` | lent (`ret_borrow`) | stays the caller's |
+| `: K k @ K { p }` then `^ k`; `( vec_push out @ K { p } )`; `= . o f @ K { p }` | a copy of `p` is made | stays the caller's |
 
 ## Declared summaries
 
