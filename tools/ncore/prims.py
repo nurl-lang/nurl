@@ -32,11 +32,16 @@ E = ("*",)
 
 
 def S(modes, res="none", lends=(), rholds=(), effects=(), stores=(),
-      consumes=(), elems=(), detaches=()):
+      consumes=(), elems=(), detaches=(), invokes=(), cloargs=(), shares=()):
     return {"modes": list(modes), "res": res, "lends": list(lends),
             "rholds": list(rholds), "effects": list(effects),
             "stores": list(stores), "consumes": list(consumes),
-            "elems": list(elems), "detaches": list(detaches)}
+            "elems": list(elems), "detaches": list(detaches),
+            # the closure arguments it runs, and what it hands them:
+            # (closure argument, its parameter, the argument that is, path)
+            "invokes": list(invokes), "cloargs": list(cloargs),
+            # the arguments several threads may reach at once
+            "shares": list(shares)}
 
 
 PRIMS = {
@@ -86,8 +91,9 @@ PRIMS = {
     "vec_get": S(["in", "in"], res="lent", lends=[(0, E, "handle")], elems=[0]),
     "vec_clear": S(["in"], effects=[(0, (), "drop")]),
     "vec_truncate": S(["in", "in"], effects=[(0, (), "drop")]),
+    # (an option of the element: what the element held, its payload holds)
     "vec_pop": S(["in"], res="own", effects=[(0, (), "drop")], elems=[0],
-                 rholds=[((), 0, E, "held")]),
+                 rholds=[(("#T0",), 0, E, "held")]),
     "vec_reserve": S(["in", "in"], effects=[(0, (), "realloc")]),
     "vec_free": S(["sink"], consumes=[0]),
     "vec_clone": S(["in"], res="own", rholds=[((), 0, (), "held")], elems=[0]),
@@ -105,7 +111,7 @@ PRIMS = {
                           stores=[(0, (), 1, (), "held")], elems=[1]),
     "vec_shrink_to_fit": S(["in"], effects=[(0, (), "realloc")]),
     "vec_remove": S(["in", "in"], res="own", effects=[(0, (), "drop")], elems=[0],
-                    rholds=[((), 0, E, "held")]),
+                    rholds=[(("#T0",), 0, E, "held")]),
     "vec_data": None,  # raw pointer: unsafe only
     # ---- Slice ----------------------------------------------------------
     "slice_from_vec": S(["in"], res="lent", lends=[(0, (), "view")]),
@@ -131,7 +137,7 @@ PRIMS = {
     "rc_take": S(["in"], res="own", effects=[(0, E, "replace")], rholds=[((), 0, E, "held")], elems=[0]),
     "rc_clone": S(["in"], res="own", rholds=[((), 0, (), "held")]),
     "rc_free": S(["sink"], consumes=[0]),
-    "arc_new": S(["in"], res="own", rholds=[(E, 0, (), "held")], consumes=[0]),
+    "arc_new": S(["in"], res="own", rholds=[(E, 0, (), "held")], consumes=[0], shares=[0]),
     "arc_get": S(["in"], res="lent", lends=[(0, E, "handle")], elems=[0]),
     "arc_clone": S(["in"], res="own", rholds=[((), 0, (), "held")]),
     "shared_new": S(["in"], res="own", rholds=[(E, 0, (), "held")], consumes=[0]),
@@ -144,18 +150,36 @@ PRIMS = {
     "thread_spawn_owned": S(["in"], res="own", detaches=[0]),
     "spawn": S(["in"], res="own", detaches=[0]),
     "thread_join": S(["in"]),
-    "recover": S(["in"], res="own"),
+    "recover": S(["in"], res="own", invokes=[0]),
     "chan_new": S([], res="own"),
     "chan_send": S(["in", "in"], stores=[(0, E, 1, (), "value")]),
     "chan_recv": S(["in"], res="own", rholds=[(("#T0",), 0, E, "held")]),
     "chan_close": S(["in"]),
     # ---- HashMap ---------------------------------------------------------------
     "map_new": S([], res="own"),
-    "map_set": S(["in"] * 5, res="own", effects=[(0, (), "realloc")],
+    # (the key's old value leaves the map with the result: what was lent
+    # out of it is lent out of nothing the map holds)
+    "map_set": S(["in"] * 5, res="own", effects=[(0, (), "realloc"), (0, E, "replace")],
                  stores=[(0, E, 1, (), "value"), (0, E, 2, (), "value")],
                  rholds=[(("#T0",), 0, E, "held")]),
     "map_get": S(["in"] * 4, res="lent", lends=[(0, E, "handle")], elems=[0]),
     "map_len": S(["in"]),
+    "chan_try_recv": S(["in"], res="own", rholds=[(("#T0",), 0, E, "held")]),
+    "spawn_joinable": S(["in"], res="own", detaches=[0]),
+    "spawn_owned": S(["in"], res="own", detaches=[0]),
+    "atomic_new": S(["in"], res="own"),
+    "atomic_add": S(["in", "in"]),
+    "atomic_get": S(["in"]),
+    "atomic_set": S(["in", "in"]),
+    "arc_strong": S(["in"]),
+    "rc_strong": S(["in"]),
+    "locked_new": S(["sink"], res="own", rholds=[(E, 0, (), "held")], consumes=[0]),
+    "rw_new": S(["sink"], res="own", rholds=[(E, 0, (), "held")], consumes=[0]),
+    "hash_string": S(["in"]),
+    "slice_byte": S(["in", "in"]),
+    "nurl_fiber_current": S([]),
+    # (the closure is run on each element, lent)
+    "vec_each": S(["in", "in"], elems=[0], invokes=[1], cloargs=[(1, 0, 0, E)]),
     # ---- more of the runtime ---------------------------------------------------
     "nurl_panic": S(["in"]),
     "nurl_exit": S(["in"]),

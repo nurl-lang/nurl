@@ -1,9 +1,9 @@
 # The core IR
 
-Status: **stage S1 of [PROPOSAL_CORE_IR.md](PROPOSAL_CORE_IR.md)** (AGORA-858).
-nurlc builds the core IR as it compiles and `--emit-core` prints it. Nothing
-in the compiler reads it yet: the borrow walk and `mem_*` decide exactly what
-they decided before. This note says what the IR is, how the walk builds it,
+Status: **stage S1 of [PROPOSAL_CORE_IR.md](PROPOSAL_CORE_IR.md)** (AGORA-858),
+and the preparation of S2 (AGORA-859). nurlc builds the core IR as it
+compiles and `--emit-core` prints it. Nothing in the compiler reads it yet:
+the borrow walk and `mem_*` decide exactly what they decided before. This note says what the IR is, how the walk builds it,
 and how to keep it complete. Read
 [COMPILER_INTERNALS.md](COMPILER_INTERNALS.md) first.
 
@@ -39,11 +39,14 @@ v     <id> <kind> <depth> <flags> <line> <value block> <name> <type>
 endfn
 ty    <type> <class> <drops> <base> A <n> <type arguments> F <n> (<field> <type>)… V <n> (<variant> <payloads> <type>…)…
 virt  <virtual callee> <impl function>…
+sum   <function> <parameters> (<key>=<words>)…
 ```
 
 - `fn` flags: bit 0 the body may use raw memory (`unsafe`, or a file of the
-  standard library), bit 1 it does so itself (a read or a store through a
-  pointer, a cast that makes an address). `template` is the generic an
+  standard library); bit 1 it crosses the raw boundary itself (a read or a
+  store through a pointer, a cast that makes an address, a call only
+  `unsafe` code may make: `bck_check_raw_call`'s rules, asked of every
+  call); bit 2 it calls a foreign function. `template` is the generic an
   instance was made from.
 - `v` kind: 0 parameter, 1 binding, 2 temporary, 3 capture. Flags: 1
   mutable, 2 `inout`, 4 `sink`, 8 a capture taken by pointer (a `: ~`
@@ -51,11 +54,24 @@ virt  <virtual callee> <impl function>…
   open where it was made. `value block` is the temporary of the value
   block it was bound in, -1 for none.
 - `ty` lists every type the IR mentions, and the types those hold: the
-  borrow walk's binding class, whether it has something to release (`1`)
-  and whether a copy of it can be made (`c` after it, `-` if not), and
-  its layout.
+  borrow walk's binding class, whether it has something to release (`1`),
+  whether a copy of it can be made (`c` after it, `-` if not), whether
+  its drop may read the views it holds (`d`: a `% Drop` of the program's
+  own, MEMORY.md §2.14), whether its copy is a share of one object (`h`)
+  that two threads may use at once (`t`, MEMORY.md §6.5), and its layout.
 - `virt` lists, for each `dyn` method the IR calls (`m__dyn__Trait`), the
   impl functions the call may run.
+- `sum` lists what the fused walk's own summaries hold for a function once
+  every one is final: the tables of
+  [COMPILER_INTERNALS.md](COMPILER_INTERNALS.md) ("escape analysis") by
+  name, an empty answer left out (`sink=1`, `reallocs=0`, `rviews=:%0`,
+  `lkind=20`, …; `core_print_sum` is the list). One line for each function
+  built, for the template of each instance, and for each function called
+  that has no body here (a function of the runtime, an extern:
+  `ret_owned`, `ffi`, `ffi_writes`). It is what answers for a function
+  whose body crosses the raw boundary until its summary is declared in
+  source (PROPOSAL_CORE_IR D2): the trust the compiler places in that
+  function today, written down. `tools/ncore/derive.py` reads it.
 
 Statements:
 
@@ -162,5 +178,25 @@ PYTHONUTF8=1 python run.py --nurlc --list subset.txt
 PYTHONUTF8=1 python run.py --nurlc <probe>.nu
 ```
 
-It passes `--no-borrowck`: the IR is the same, and a refusal of the borrow
-walk does not hide the function it was in.
+The walk runs as it does in a compile, so its summaries are final where
+the `sum` lines are printed, and its refusals are let through (§6).
+
+## 6. The walk's ownership refusals go through one door
+
+A program the walk refuses on an ownership rule has to reach the IR whole:
+the checker that reads the IR is asked the same question, and a function
+the walk stopped in would be missing. Every ownership refusal the fused
+walk makes goes through one family of functions:
+
+| the refusal | goes through |
+|---|---|
+| the borrow walk's (`bck_*`) | `bck_emit_error` |
+| a die-level one in `gen_*` (`a fresh string stored here is owned by nothing`, `would have to be copied here`, `is given back what this call may lend`, …) | `own_die`, `own_die_stmt`, `own_die_pos`, `own_die_file_pos` |
+| the literal hand-offs decided at the module's end | `resolve_lit_handoffs` |
+
+Each asks `g_walk_owns`. It is 1 in every compile and 0 under
+`--emit-core`: the refusal is passed, the walk goes on, and the function is
+lowered. A refusal that is no ownership rule (typing, the raw boundary,
+`Send` / `Sync`, visibility) still stops the program: those stay the
+walk's. A new ownership refusal in the walk uses the door, or the probes
+written for it never reach the reference checker.

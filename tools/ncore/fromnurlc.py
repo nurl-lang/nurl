@@ -33,7 +33,7 @@ KINDS = {0: "param", 1: "local", 2: "temp", 3: "param"}
 
 
 class TypeInfo:
-    __slots__ = ("name", "cls", "drops", "clone", "base", "targs", "fields", "variants")
+    __slots__ = ("name", "cls", "drops", "clone", "udrop", "share", "tshare", "base", "targs", "fields", "variants")
 
 
 def nurlc_binary():
@@ -57,7 +57,7 @@ def emit_core(path):
             with open(key + ".rc") as f:
                 rc = int(f.read())
             return out, [l for l in err.splitlines() if l.startswith("core-gap\t")], rc, err
-    r = subprocess.run([nurlc_binary(), "--no-borrowck", "--emit-core", os.path.abspath(path)], cwd=ROOT,
+    r = subprocess.run([nurlc_binary(), "--emit-core", os.path.abspath(path)], cwd=ROOT,
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
     if key:
         with open(key + ".core", "w", encoding="utf-8") as f:
@@ -77,9 +77,15 @@ class Reader:
         self.prog.fn_tmpl = {}         # name -> the generic it is an instance of
         self.prog.fn_file = {}
         self.prog.clonable = set()     # named types nurlc can copy a value of
+        self.prog.unclonable = set()   # …and the ones it cannot
+        self.prog.udrop = set()        # named types whose drop is a use of the views they hold (§2.14)
         self.prog.handle_elem = {}     # a one-payload handle type -> its payload's type
         self.prog.shared = set()       # …the ones whose copies share the payload
+        self.prog.thread_share = set() # handles a thread's closure captures as a share of its own (§6.5)
+        self.prog.copy_answer = {}     # a Vec / Box / option / result type -> can a copy of it be made
+        self.prog.arcs = set()         # …and the ones other threads may hold a copy of
         self.prog.virt = {}            # a `dyn` method's virtual callee -> the impls it may run
+        self.prog.walk_sums = {}       # a function -> the answers the walk's summaries hold for it (`sum` lines)
         self.types = {}                # type string -> TypeInfo
         self.conv_memo = {}
         self.raw_fns = []
@@ -111,13 +117,19 @@ class Reader:
             elif line.startswith("virt\t"):
                 f = line.split("\t")
                 self.prog.virt[f[1]] = f[2:]
+            elif line.startswith("sum\t"):
+                f = line.split("\t")
+                self.prog.walk_sums[f[1]] = dict(kv.split("=", 1) for kv in f[3:])
             elif cur is not None:
                 cur["stmts"].append(line)
 
     def parse_type(self, f):
         t = TypeInfo()
         t.name, t.cls, t.drops, t.base = f[1], int(f[2]), f[3].startswith("1"), f[4]
-        t.clone = f[3].endswith("c")       # a copy of a value of it can be made
+        t.clone = "c" in f[3]              # a copy of a value of it can be made
+        t.udrop = "d" in f[3]              # its drop runs the program's code, which may read its views
+        t.share = "h" in f[3]              # its copy is a share of one object
+        t.tshare = "t" in f[3]             # …that two threads may use at once
         i = 5
         assert f[i] == "A"
         n = int(f[i + 1])
@@ -145,6 +157,11 @@ class Reader:
         self.conv_memo[t] = ("named", t, ())        # a recursive type meets itself
         r = self.conv1(t)
         self.conv_memo[t] = r
+        info = self.types.get(t)
+        if info is not None and r[0] in ("vec", "box", "opt", "res"):
+            # nurlc's own answer to "can a copy of it be made" (a Vec of
+            # views is copied view by view)
+            self.prog.copy_answer[r] = info.clone
         return r
 
     def conv1(self, t):
@@ -178,15 +195,24 @@ class Reader:
                 return ("box", self.conv(info.targs[0]))
             if info.base == "Slice" and len(info.targs) == 1:
                 return ("slice", self.conv(info.targs[0]))
-            if getattr(info, "clone", False) and info.base in SHARED_HANDLES:
-                # (a share of the handle; a struct's field-by-field copy is
-                # decided by its fields, as before)
+            # nurlc's own answer: a library handle's copy is a share of it, a
+            # struct's a copy of each field - and a value with a `% Drop` of
+            # its own and no clone has none
+            if getattr(info, "udrop", False):
+                self.prog.udrop.add(name)
+            if getattr(info, "tshare", False):
+                self.prog.thread_share.add(name)
+            if getattr(info, "clone", False):
                 self.prog.clonable.add(name)
+            else:
+                self.prog.unclonable.add(name)
             if len(info.targs) == 1 and info.base in HANDLES_OF_ONE:
                 # a handle over one payload: `*` is the payload
                 self.prog.handle_elem[name] = self.conv(info.targs[0])
                 if info.base in SHARED_HANDLES:
                     self.prog.shared.add(name)
+                if info.base == "Arc":
+                    self.prog.arcs.add(name)
                 return ("named", name, ())
             if info.variants:
                 self.prog.enums[name] = [(v, list(pts)) for v, pts in info.variants]
@@ -235,6 +261,9 @@ class Reader:
                 ty = self.T.elem(ty)
             else:
                 nty, _ = self.T.field(ty, p)
+                if nty is None and ty is not None and ty[0] == "slice" and p == "length":
+                    # a slice's length: a number
+                    return ("c", ("i",))
                 if nty is None and ty is not None and ty[0] not in ("named",):
                     raise Unsupported(f"field {p} of {ty[0]}")
                 ty = nty
@@ -343,7 +372,10 @@ class Reader:
                 out.append(("let", vid, self.rvalue(toks[2:], rest_ty, fn, self.next_site(fn)), ln))
             elif k == "assign":
                 rv = self.rvalue(toks[2:], rest_ty, fn, self.next_site(fn))
-                if toks[1].startswith("g:"):
+                if toks[1] == "c":
+                    # a store into a global of numbers: nothing to track
+                    out.append(("eval", rv, ln))
+                elif toks[1].startswith("g:"):
                     # a store into a module global: what it is given outlives
                     # every frame
                     out.append(("gstore", toks[1][2:].split("/")[0], rv, ln))

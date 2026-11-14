@@ -148,11 +148,18 @@ class Types:
         # share of it, a struct's a copy of each field)
         if k == "named" and ty[1] in getattr(self.prog, "clonable", ()):
             return True
+        if k == "named" and ty[1] in getattr(self.prog, "unclonable", ()):
+            return False
+        ans = getattr(self.prog, "copy_answer", None)
+        if ans and k in ("vec", "box", "opt") and ty in ans:
+            return ans[ty]
         if k in ("vec", "box", "opt"):
             return self.copyable(ty[1], seen)
-        if k == "named" and ty[1] in self.prog.structs and ty[1] not in seen:
+        if k == "named" and ty[1] in seen:
+            return True       # a type that holds itself: as copyable as the rest of it
+        if k == "named" and ty[1] in self.prog.structs:
             return all(self.copyable(t, seen + (ty[1],)) for t, _ in self.prog.structs[ty[1]])
-        if k == "named" and ty[1] in self.prog.enums and ty[1] not in seen:
+        if k == "named" and ty[1] in self.prog.enums:
             return all(all(self.copyable(t, seen + (ty[1],)) for t in tys)
                        for _, tys in self.prog.enums[ty[1]])
         return False
@@ -168,6 +175,8 @@ class Types:
             return True   # an owned raw string (nurl_str_cat) owns; a view does not
         if k == "opt":
             return self.owning(ty[1], seen)
+        if k == "named" and ty[1] in getattr(self.prog, "handle_elem", ()):
+            return True       # a library handle owns its block
         if k == "named" and ty[1] not in seen:
             nseen = seen + (ty[1],)
             if ty[1] in self.prog.structs:
@@ -175,6 +184,24 @@ class Types:
             if ty[1] in self.prog.enums:
                 return any(any(self.owning(t, nseen) for t in tys) for _, tys in self.prog.enums[ty[1]])
         return False
+
+    def owns_handle(self, ty, seen=()):
+        """Does a value of this type hold a handle of its own - not only
+        views (`s`, a slice), which a copy shares?"""
+        if ty is None or self.is_scalar(ty):
+            return False
+        k = ty[0]
+        if k in ("s", "slice"):
+            return False
+        if k == "opt":
+            return self.owns_handle(ty[1], seen)
+        if k == "named" and ty[1] not in getattr(self.prog, "handle_elem", ()) and ty[1] not in seen:
+            nseen = seen + (ty[1],)
+            if ty[1] in self.prog.structs:
+                return any(self.owns_handle(t, nseen) for t, _ in self.prog.structs[ty[1]])
+            if ty[1] in self.prog.enums:
+                return any(any(self.owns_handle(t, nseen) for t in tys) for _, tys in self.prog.enums[ty[1]])
+        return self.owning(ty)
 
     def field(self, ty, name):
         if ty and ty[0] == "named" and ty[1] in self.prog.structs:
@@ -201,6 +228,8 @@ class Types:
             return None
         if ty[0] == "opt":
             return [("T", [ty[1]]), ("F", [ty[1]])]
+        if ty[0] == "res":
+            return [("T", [ty[1]]), ("F", [ty[2]])]
         if ty[0] == "b":
             return [("T", []), ("F", [])]
         if ty[0] == "named" and ty[1] in self.prog.enums:

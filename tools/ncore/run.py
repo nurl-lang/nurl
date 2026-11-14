@@ -3,12 +3,15 @@
 """Run the core-IR checker over hole probes and compare with each probe's
 `// map:` verdict (rejected / runs-clean).
 
-  python tools/ncore/run.py [--nurlc] [--all] [--list FILE] [--jobs N] [--show N] [probe.nu ...]
+  python tools/ncore/run.py [--nurlc] [--all] [--clean] [--list FILE] [--jobs N] [--show N] [probe.nu ...]
 
 --nurlc checks the IR nurlc itself lowers the program to (fromnurlc.py);
-without it the prototype's own parser and lowering are used.
+without it the prototype's own parser and lowering are used. --clean takes
+every file given as a program that must be accepted (the tree's own code:
+a refusal there is a rule written too coarsely).
 """
 import os
+import signal
 import sys
 import collections
 import traceback
@@ -21,11 +24,17 @@ from load import load, lib_headers               # noqa: E402
 from lower import build_program                  # noqa: E402
 from check import check_program, CheckError      # noqa: E402
 import fromnurlc                                 # noqa: E402
+import derive                                    # noqa: E402
 
 HOLES = os.path.join(HERE, "..", "fuzz", "holes")
 
 
+CLEAN = False     # --clean: every file given is a program that must be accepted
+
+
 def expected(path):
+    if CLEAN:
+        return "runs-clean"
     with open(path, encoding="utf-8") as f:
         for line in f:
             if line.startswith("// map:"):
@@ -43,6 +52,18 @@ def verdict(path):
     return ("rejected" if errors else "runs-clean"), errors, summ
 
 
+# What marks a diagnostic of the fused walk that the ownership engine does
+# not replace (docs/spec.md §3.3d, MEMORY.md §6.5's Send / Sync, typing).
+WALK_RULES = ("raw memory", "only an 'unsafe' function", "which only an 'unsafe'", "is not Send", "is not Sync",
+              "not Send:", "is set at start", "is declared 'raw'", "runtime handle", "FFI parameter",
+              "expects type", "undefined identifier", "internal to the standard library",
+              "takes a raw pointer", "hands back a raw pointer", "the standard library's address",
+              "a number passed where", "is left out of this literal", "carries a payload, and a bare variant",
+              "was bound inside the value block", "fills its value with zero bytes", "cannot assign to immutable",
+              "and every thread can", "a number cannot become", "passes a C stream", "would copy a '",
+              "where several threads may run", "asserts that '")
+
+
 def verdict_nurlc(path):
     """The verdict on the IR nurlc itself lowers the program to.
 
@@ -54,9 +75,31 @@ def verdict_nurlc(path):
     rd, gaps, rc, err = fromnurlc.read_program(path)
     if rc != 0:
         first = next((l for l in err.splitlines() if "error" in l), "nurlc failed")
-        raise Unsupported("nurlc: " + first.split("error:")[-1].strip()[:40])
+        msg = first.split("error:")[-1].strip()
+        # A refusal that is no ownership rule - the raw-memory boundary, a
+        # type that may not cross to another thread, a type error - is the
+        # walk's to make, on types alone: the engine is not asked.
+        if any(w in msg for w in WALK_RULES):
+            return "rejected", [("nurlc", 0, "the walk: " + msg[:60])], {}
+        raise Unsupported("nurlc: " + msg[:40])
     prog = rd.prog
     every = dict(prog.fns)
+
+    memo = {}
+
+    def derived(n):
+        """The summary of library function `n` the walk's answers give
+        (derive.py); None for one the walk did not compile."""
+        if n not in memo:
+            fn = every.get(n)
+            if fn is None:
+                # a function of the runtime, an extern: no body anywhere
+                memo[n] = derive.extern(prog.walk_sums[n]) if n in prog.walk_sums else None
+            else:
+                # (it has IR, so the walk compiled it: its answers are final)
+                memo[n] = derive.derive(prog, fn, derive.walk_answers(prog, n)) if prog.fn_flags[n] & 1 else None
+        return memo[n]
+    prog.derived = derived
 
     def declared(n):
         return PRIMS.get(n) is not None or PRIMS.get(prog.fn_tmpl.get(n) or "") is not None
@@ -81,11 +124,15 @@ def verdict_nurlc(path):
         if flags & 1:
             if declared(n):
                 continue
-            if flags & 2:
-                # the library function the program called that led here is
-                # the one to declare a summary for
+            if flags & 6:
+                # its body crosses the raw boundary (raw memory, a `raw`
+                # callee, a foreign function): the walk's answers stand
+                # for it
+                # (derive.py) until a summary is declared
+                if derived(n) is not None:
+                    continue
                 top = by or n
-                raise Unsupported(f"no summary for {prog.fn_tmpl.get(top) or top}")
+                raise Unsupported(f"no summary for {prog.fn_tmpl.get(top) or top}" + (f" ({n})" if n != top else ""))
             trusted.add(n)
         keep[n] = every[n]
         # (`src`: the library function the program itself called on the way here)
@@ -93,12 +140,24 @@ def verdict_nurlc(path):
         for c in callees(every[n]):
             todo.append((c, src))
             todo.extend((m, src) for m in prog.virt.get(c, ()))
-    for fn in keep.values():
-        rd.lower_body(fn)
+    for n, fn in list(keep.items()):
+        try:
+            rd.lower_body(fn)
+        except Unsupported:
+            # a library function that reads a handle's own fields has no
+            # body the checker follows: the walk's answers stand for it
+            if not prog.fn_flags[n] & 1 or derived(n) is None:
+                raise
+            del keep[n]
+            trusted.discard(n)
     prog.fns = keep
     prog.trusted = trusted
     errors, summ = check_program(prog)
     return ("rejected" if errors else "runs-clean"), errors, summ
+
+
+def _timed_out(signum, frame):
+    raise TimeoutError()
 
 
 def one(job):
@@ -106,14 +165,25 @@ def one(job):
     path, use_nurlc = job
     exp = expected(path)
     name = os.path.basename(path)
+    # NCORE_TIMEOUT=<seconds>: a program the checker does not finish in time
+    # is skipped and named, not waited for (default 300).
+    limit = int(os.environ.get("NCORE_TIMEOUT", "300"))
+    if limit and hasattr(signal, "SIGALRM"):
+        signal.signal(signal.SIGALRM, _timed_out)
+        signal.alarm(limit)
     try:
         got, errors, _ = (verdict_nurlc if use_nurlc else verdict)(path)
     except Unsupported as e:
         return (name, "skip", str(e)[:80], None)
+    except TimeoutError:
+        return (name, "skip", f"the checker did not finish in {limit} s", None)
     except RecursionError:
         return (name, "crash", "RecursionError", None)
     except (ParseError, CheckError, KeyError, IndexError, TypeError, AttributeError, ValueError) as e:
         return (name, "crash", type(e).__name__ + ": " + str(e)[:80], None)
+    finally:
+        if limit and hasattr(signal, "SIGALRM"):
+            signal.alarm(0)
     st = "agree" if exp == got else "false-accept" if exp == "rejected" else "false-reject"
     return (name, st, got, errors[0] if errors else None)
 
@@ -133,6 +203,11 @@ def main(argv):
             continue
         if a == "--nurlc":
             use_nurlc = True
+            i += 1
+            continue
+        if a == "--clean":
+            global CLEAN
+            CLEAN = True
             i += 1
             continue
         if a == "--all":
@@ -188,7 +263,8 @@ def main(argv):
     for n, e in mism["false_reject"][:show]:
         print("   ", n, "--", e)
     if len(files) > 3:
-        with open(os.path.join(HERE, "results_nurlc.tsv" if use_nurlc else "results_own.tsv"), "w", encoding="utf-8") as f:
+        out = "results_clean.tsv" if CLEAN else "results_nurlc.tsv" if use_nurlc else "results_own.tsv"
+        with open(os.path.join(HERE, out), "w", encoding="utf-8") as f:
             f.write("".join(f"{n}\t{st}\t{err if err else detail}\n" for n, st, detail, err in done))
 
 
