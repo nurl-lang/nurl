@@ -600,6 +600,13 @@
 : ~ i g_fc_weak 0  // 1 while an effect that may not have happened is applied (eng_effect keeps what the place holds)
 : ~ i g_fc_loopmemo -1  // (a loop, the state it was entered in, the loops walked around it) → the state it left + 1, for this run of the function
 : ~ i g_s_catches 0
+: ~ i g_fc_reading -1  // the function being checked (its number), -1 none: whose reads of summaries are noted
+: ~ i g_sm_stamp -1  // per function: the last function that read its summary + 1 (so one check notes one edge once)
+: ~ i g_sm_edges -1  // (function read * 2^20 + reader) → 1: the edges noted
+: ~ i g_sm_readers -1  // the edges, two words each: the function read, its reader
+: ~ i g_fc_dirty -1  // per function: 1 it is to be checked (again)
+: ~ i g_fe -1  // per function: its findings (a vector of line, message pairs), -1 none
+: ~ i g_fe_cur -1  // the findings of the function being checked
 // </engine globals>
 : i CORE_VW 7
 : i CORE_VS 1048576
@@ -12000,13 +12007,30 @@ unsafe @ eng_fn_begin i f → v {
 }
 
 // The summary of function `f`: is there one, and its words.
+// (Every read of a walked function's summary is noted: the function
+// being checked is checked again if that summary changes later.)
+@ sm_note i f → v {
+    ? | < g_fc_reading 0 >= f ( ef_n ) { ^ } {}
+    ? == ( wv_at g_sm_stamp f ) + g_fc_reading 1 { ^ } {}
+    ( wv_put g_sm_stamp f + g_fc_reading 1 )
+    : i key + * f 1048576 g_fc_reading
+    ? != 0 ( im_get g_sm_edges key 0 ) { ^ } {}
+    ( im_put g_sm_edges key 1 )
+    ( wv_push g_sm_readers f ) ( wv_push g_sm_readers g_fc_reading )
+}
+
 @ sm_have i f → b {
     ? | < g_sm 0 < f 0 { ^ F } {}
     ? >= * f SM_W ( wv_len g_sm ) { ^ F } {}
-    ^ != 0 ( wv_at g_sm + * f SM_W SM_STATE )
+    ? == 0 ( wv_at g_sm + * f SM_W SM_STATE ) { ^ F } {}
+    ( sm_note f )
+    ^ T
 }
 
-@ sm_word i f i field → i { ^ ( wv_at g_sm + * f SM_W field ) }
+@ sm_word i f i field → i {
+    ( sm_note f )
+    ^ ( wv_at g_sm + * f SM_W field )
+}
 
 @ sm_n i f i field → i { ^ ( wv_at g_sm_w ( sm_word f field ) ) }
 
@@ -12143,10 +12167,9 @@ unsafe @ ef_name_ends i f → b {
 
 // A finding about function `f` as a whole.
 unsafe @ eng_err_fn i f i line s msg → v {
-    ? < g_fc_errs 0 { = g_fc_errs ( wv_new ) } {}
-    ( wv_push g_fc_errs ( ef_at f EF_NAME ) )
-    ( wv_push g_fc_errs line )
-    ( wv_push g_fc_errs ( __core_in msg ) )
+    ? < ( wv_at g_fe f ) 0 { ( wv_put g_fe f ( wv_new ) ) } {}
+    ( wv_push ( wv_at g_fe f ) line )
+    ( wv_push ( wv_at g_fe f ) ( __core_in msg ) )
 }
 
 unsafe @ eng_unsup_s s why → v { ? == 0 g_fc_unsup { = g_fc_unsup ( __core_in why ) } {} }
@@ -12160,11 +12183,9 @@ unsafe @ eng_skip_why s why i name → v {
 
 // ── Ownership engine: findings, names, types of places ───────────────
 unsafe @ eng_err i line s msg → v {
-    ? == 0 g_fc_final { ^ } {}
-    ? < g_fc_errs 0 { = g_fc_errs ( wv_new ) } {}
-    ( wv_push g_fc_errs ( ef_at g_ec_f EF_NAME ) )
-    ( wv_push g_fc_errs line )
-    ( wv_push g_fc_errs ( __core_in msg ) )
+    ? | == 0 g_fc_final < g_fe_cur 0 { ^ } {}
+    ( wv_push g_fe_cur line )
+    ( wv_push g_fe_cur ( __core_in msg ) )
 }
 
 // The function holds something the engine has no rule for: it is not
@@ -17617,59 +17638,70 @@ unsafe @ eng_virt_impls i vn i out → v {
     ( wv_fill g_fc_trusted n 0 )
     ? < g_fc_order 0 { = g_fc_order ( wv_new ) } {}
     ( wv_trunc g_fc_order 0 )
+    // (a depth-first walk from the program's functions: a function is
+    // put in the order when everything it calls has been, so a callee
+    // comes before its callers and one pass over the order settles every
+    // function that is in no cycle)
     : i todo ( wv_new )
     : i by ( wv_new )
-    : ~ i f 0
-    ~ < f n {
-        ? == 0 & ( ef_at f EF_FLAGS ) 1 { ( wv_push todo f ) ( wv_push by -1 ) } {}
-        = f + f 1
+    : i leave ( wv_new )
+    : ~ i f - n 1
+    ~ >= f 0 {
+        ? == 0 & ( ef_at f EF_FLAGS ) 1 { ( wv_push todo f ) ( wv_push by -1 ) ( wv_push leave 0 ) } {}
+        = f - f 1
     }
     : i callees ( wv_new )
     : i impls ( wv_new )
+    : i seen ( wv_new )
+    ( wv_fill seen n 0 )
     ~ & != 0 ( wv_len todo ) == g_eng_skip 0 {
         : i fn ( wv_pop todo )
         : i src ( wv_pop by )
-        ? == 0 ( wv_at g_fc_walked fn ) {
-            : i flags ( ef_at fn EF_FLAGS )
-            : i name ( ef_at fn EF_NAME )
-            : ~ b keep T
-            ? != 0 & flags 1 {
-                ? | >= ( sx_declared name ) 0 >= ( sx_declared_tmpl ( ef_at fn EF_TMPL ) ) 0 { = keep F } {
-                    ? != 0 & flags 6 {
-                        // its body crosses the raw boundary (raw memory, a
-                        // raw callee, a foreign function): the walk's
-                        // answers stand for it until a summary is declared
-                        = keep F
-                        ? < ( eng_derived name fn ) 0 { ( eng_skip_why `no summary for ` name ) } {}
-                    } { ( wv_put g_fc_trusted fn 1 ) }
-                }
-            } {}
-            ? keep {
-                ( wv_put g_fc_walked fn 1 )
-                ( wv_push g_fc_order fn )
-                // (`src`: the library function the program itself called on
-                // the way here)
-                : i nsrc ? != 0 & flags 1 ? >= src 0 src fn -1
-                ( wv_trunc callees 0 )
-                ( eng_callees fn callees )
-                : ~ i k 0
-                ~ < k ( wv_len callees ) {
-                    : i c ( ef_find ( wv_at callees k ) )
-                    ? >= c 0 { ( wv_push todo c ) ( wv_push by nsrc ) } {}
-                    ( wv_trunc impls 0 )
-                    ( eng_virt_impls ( wv_at callees k ) impls )
-                    : ~ i j 0
-                    ~ < j ( wv_len impls ) {
-                        : i m ( ef_find ( wv_at impls j ) )
-                        ? >= m 0 { ( wv_push todo m ) ( wv_push by nsrc ) } {}
-                        = j + j 1
+        : i leaving ( wv_pop leave )
+        ? != 0 leaving { ( wv_push g_fc_order fn ) } {
+            ? == 0 ( wv_at seen fn ) {
+                ( wv_put seen fn 1 )
+                : i flags ( ef_at fn EF_FLAGS )
+                : i name ( ef_at fn EF_NAME )
+                : ~ b keep T
+                ? != 0 & flags 1 {
+                    ? | >= ( sx_declared name ) 0 >= ( sx_declared_tmpl ( ef_at fn EF_TMPL ) ) 0 { = keep F } {
+                        ? != 0 & flags 6 {
+                            // its body crosses the raw boundary (raw memory, a
+                            // raw callee, a foreign function): the walk's
+                            // answers stand for it until a summary is declared
+                            = keep F
+                            ? < ( eng_derived name fn ) 0 { ( eng_skip_why `no summary for ` name ) } {}
+                        } { ( wv_put g_fc_trusted fn 1 ) }
                     }
-                    = k + k 1
-                }
+                } {}
+                ? keep {
+                    ( wv_put g_fc_walked fn 1 )
+                    ( wv_push todo fn ) ( wv_push by src ) ( wv_push leave 1 )
+                    // (`src`: the library function the program itself called
+                    // on the way here)
+                    : i nsrc ? != 0 & flags 1 ? >= src 0 src fn -1
+                    ( wv_trunc callees 0 )
+                    ( eng_callees fn callees )
+                    : ~ i k 0
+                    ~ < k ( wv_len callees ) {
+                        : i c ( ef_find ( wv_at callees k ) )
+                        ? >= c 0 { ( wv_push todo c ) ( wv_push by nsrc ) ( wv_push leave 0 ) } {}
+                        ( wv_trunc impls 0 )
+                        ( eng_virt_impls ( wv_at callees k ) impls )
+                        : ~ i j 0
+                        ~ < j ( wv_len impls ) {
+                            : i m ( ef_find ( wv_at impls j ) )
+                            ? >= m 0 { ( wv_push todo m ) ( wv_push by nsrc ) ( wv_push leave 0 ) } {}
+                            = j + j 1
+                        }
+                        = k + k 1
+                    }
+                } {}
             } {}
-        } {}
+        }
     }
-    ( wv_drop todo ) ( wv_drop by ) ( wv_drop callees ) ( wv_drop impls )
+    ( wv_drop todo ) ( wv_drop by ) ( wv_drop leave ) ( wv_drop callees ) ( wv_drop impls ) ( wv_drop seen )
     // a function the engine cannot read whole: a library function goes
     // back to the walk's answers, a function of the program is the
     // module's reason not to be checked
@@ -17766,28 +17798,57 @@ unsafe @ eng_virt_impls i vn i out → v {
     } {}
 }
 
-// The module's functions, checked: the summaries of the walked ones are
-// made until none changes, then each function of the program is run once
-// more for its findings.
+// The module's functions, checked. Each is walked once, a callee before
+// its callers; a function is walked again only if a summary it read has
+// changed since (a function that calls itself, two that call each other,
+// a closure's body reached through a value). What a function's last walk
+// found is its findings.
 @ eng_check_module → v {
     ( eng_prims_once )
     ( eng_select )
     ? != g_eng_skip 0 { ^ } {}
-    // (in the order they were reached from the program's functions: a
-    // caller before the functions it calls)
+    : i nf ( ef_n )
+    ? < g_fc_dirty 0 {
+        = g_fc_dirty ( wv_new ) = g_fe ( wv_new ) = g_sm_stamp ( wv_new ) = g_sm_edges ( im_new ) = g_sm_readers ( wv_new )
+    } {}
+    ( wv_fill g_fc_dirty nf 0 )
+    ( wv_fill g_fe nf -1 )
+    ( wv_fill g_sm_stamp nf 0 )
     : i n ( wv_len g_fc_order )
     : ~ i k 0
-    ~ < k n { : i f ( wv_at g_fc_order k ) ? != 0 ( wv_at g_fc_walked f ) { ( eng_initial_summary f ) } {} = k + k 1 }
+    ~ < k n {
+        : i f ( wv_at g_fc_order k )
+        ? != 0 ( wv_at g_fc_walked f ) { ( eng_initial_summary f ) ( wv_put g_fc_dirty f 1 ) } {}
+        = k + k 1
+    }
     : ~ i round 0
-    : ~ b changed T
-    ~ & & changed < round 40 == g_eng_skip 0 {
-        = changed F
+    : ~ b any T
+    ~ & & any < round 64 == g_eng_skip 0 {
+        = any F
         = k 0
         ~ & < k n == g_eng_skip 0 {
             : i f ( wv_at g_fc_order k )
-            ? != 0 ( wv_at g_fc_walked f ) {
-                ? ( eng_check_fn f F ) { = changed T } {}
+            ? != 0 ( wv_at g_fc_dirty f ) {
+                ( wv_put g_fc_dirty f 0 )
+                = any T
+                : b reported == 0 ( wv_at g_fc_trusted f )
+                ? reported {
+                    ? < ( wv_at g_fe f ) 0 { ( wv_put g_fe f ( wv_new ) ) } {}
+                    ( wv_trunc ( wv_at g_fe f ) 0 )
+                    = g_fe_cur ( wv_at g_fe f )
+                } { = g_fe_cur -1 }
+                = g_fc_reading f
+                : b changed ( eng_check_fn f reported )
+                = g_fc_reading -1
                 ? != g_fc_unsup 0 { ( eng_skip_why_s g_fc_unsup ) } {}
+                ? changed {
+                    // every function that read this summary is walked again
+                    : ~ i e 0
+                    ~ < e ( wv_len g_sm_readers ) {
+                        ? == ( wv_at g_sm_readers e ) f { ( wv_put g_fc_dirty ( wv_at g_sm_readers + e 1 ) 1 ) } {}
+                        = e + e 2
+                    }
+                } {}
             } {}
             = k + k 1
         }
@@ -17795,13 +17856,9 @@ unsafe @ eng_virt_impls i vn i out → v {
     }
     ? != g_eng_skip 0 { ^ } {}
     = k 0
-    ~ & < k n == g_eng_skip 0 {
+    ~ < k n {
         : i f ( wv_at g_fc_order k )
-        ? & != 0 ( wv_at g_fc_walked f ) == 0 ( wv_at g_fc_trusted f ) {
-            ( eng_check_fn f T )
-            ? != g_fc_unsup 0 { ( eng_skip_why_s g_fc_unsup ) } {}
-            ( eng_fn_final f )
-        } {}
+        ? & != 0 ( wv_at g_fc_walked f ) == 0 ( wv_at g_fc_trusted f ) { ( eng_fn_final f ) } {}
         = k + k 1
     }
 }
@@ -17914,13 +17971,21 @@ unsafe @ eng_main i syms → v {
         ( __core_o `eng\tverdict\tskip\t` ) ( __core_o # s g_eng_skip ) ( __core_o `\n` )
         ^
     } {}
-    : i ne ? < g_fc_errs 0 0 / ( wv_len g_fc_errs ) 3
-    : ~ i k 0
-    ~ < k ne {
-        ( __core_o `eng\terr\t` ) ( __core_o # s ( wv_at g_fc_errs * k 3 ) )
-        ( __core_o `\t` ) ( __core_oi ( wv_at g_fc_errs + * k 3 1 ) )
-        ( __core_o `\t` ) ( __core_o # s ( wv_at g_fc_errs + * k 3 2 ) ) ( __core_o `\n` )
-        = k + k 1
+    : ~ i ne 0
+    : ~ i f 0
+    ~ < f ( ef_n ) {
+        : i errs ( wv_at g_fe f )
+        ? >= errs 0 {
+            : ~ i k 0
+            ~ < k ( wv_len errs ) {
+                ( __core_o `eng\terr\t` ) ( __core_o # s ( ef_at f EF_NAME ) )
+                ( __core_o `\t` ) ( __core_oi ( wv_at errs k ) )
+                ( __core_o `\t` ) ( __core_o # s ( wv_at errs + k 1 ) ) ( __core_o `\n` )
+                = ne + ne 1
+                = k + k 2
+            }
+        } {}
+        = f + f 1
     }
     ( __core_o ? == ne 0 `eng\tverdict\truns-clean\n` `eng\tverdict\trejected\n` )
 }
