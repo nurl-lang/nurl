@@ -1209,6 +1209,10 @@ class FnCheck:
         # the captures the body hands back a view of
         vback = ({k for (k, _, kind) in sm.get("lends", ()) if kind == "view"}
                  | {k for (_, k, _, kind) in sm.get("rholds", ()) if kind == "view"})
+        if body is not None and body.ret is not None and body.ret[0] == "s":
+            # (a raw string a closure hands back is its caller's own: the
+            # text is copied, whatever buffer the body read it out of)
+            vback = set()
         for i, op in enumerate(ops):
             fp = (f"^{i}",)
             byref = body is not None and i < len(body.params) and getattr(body.vars[body.params[i]], "byref", False)
