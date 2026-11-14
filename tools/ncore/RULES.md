@@ -70,6 +70,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A lend handed to a holder that outlives what it borrows is copied where it can be, refused where it cannot | §7.6 | `transfer` |
 | A value owned on some paths and lent on others is copied on the paths that lend it, for a holder that outlives the lender | §7.6 | `transfer` (`mixed`) |
 | A borrowed value stored into an owner is copied, with the views it holds; one that cannot be copied is refused | §7.6, §2.13 | `rvalue` (`agg`), `apply_call` stores |
+| A literal around a part of a parameter that has no copy is a lend of the caller's value: good to hand back as it is, refused where anything keeps it | §7.6 (#200) | `rvalue` (`agg`), `lit_nocopy` |
 | A `?` / `??` that selects among this frame's owners moves the one it selects into an immutable binding, and out with a return | §2.2 | `stmt` (`let`), `transfer` |
 | A literal that is a statement's temporary shows its consumer the bindings it names; they move into it only where it is taken | §7.6 (h693) | `agg_lends` |
 | A field read off a temporary leaves it | §7.5 (h323) | `transfer` |

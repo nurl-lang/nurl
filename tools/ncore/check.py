@@ -169,6 +169,7 @@ class FnCheck:
         self.temp_fresh = {}
         self.call_lent = {}      # a call's temporary -> the arguments it may hand back whole
         self.cap_loans = set()   # the loans that are a closure's own handle of a binding it captured
+        self.lit_nocopy = {}     # a literal temporary -> its field that borrows a value with no copy
         self.call_by_fn = {}     # a call's temporary -> the callee is a function of the program
         self.call_mixed = set()  # the temporaries of calls whose result is the caller's own on some calls
         self.ret_fresh = False   # some return hands back a value of the function's own that holds something
@@ -573,6 +574,9 @@ class FnCheck:
         outlive a local it borrows from - deep-copied (a join's value, a
         return) or refused."""
         av = self.read(st, op, line, site, what)
+        if op[0] == "v" and not op[2] and op[1] in self.lit_nocopy and not is_ret:
+            self.err(line, f"field {self.lit_nocopy[op[1]]}: a borrowed value would have to be copied here, "
+                           f"and it cannot be copied")
         if op[0] == "v" and op[2] and av.own == "L" and "*" not in op[2]:
             root = st.vals.get(op[1])
             pty = self.ty_of_place((op[1], op[2]))
@@ -1453,6 +1457,7 @@ class FnCheck:
             names = self.agg_paths(ty, variant, len(ops))
             held = set()
             lent = {}
+            nc_loans, nc_alias = set(), set()
             for i, op in enumerate(ops):
                 fty = self.ty_of_field(ty, variant, i)
                 fp = (names[i],)
@@ -1480,8 +1485,18 @@ class FnCheck:
                 if av.own == "L":
                     if (fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES
                             and not self.T.copyable(fty)):
-                        self.err(line, f"field {i + 1}: a borrowed value would have to be copied here, "
-                                       f"and it cannot be copied")
+                        if (dest_vid is not None and self.fn.vars[dest_vid].kind == "temp" and not av.call
+                                and av.alias and all(a[0] in self.pidx and a[1] for a in av.alias)):
+                            # a part of a parameter, read in place: the
+                            # literal is a lend of the caller's value, good
+                            # to hand back as it is and nothing else
+                            # (MEMORY.md §7.6, agora #200)
+                            nc_loans |= av.loans
+                            nc_alias |= av.alias
+                            self.lit_nocopy[dest_vid] = i + 1
+                        else:
+                            self.err(line, f"field {i + 1}: a borrowed value would have to be copied here, "
+                                           f"and it cannot be copied")
                     if fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES and self.T.copyable(fty):
                         # a lend stored into an owning field is copied: the
                         # copy holds the views the value holds (§2.13)
@@ -1491,6 +1506,8 @@ class FnCheck:
                 held |= hroot(self.closure_owned(av.held), fp)
             if lent:
                 self.agg_lends[dest_vid] = lent
+            if nc_loans:
+                return AV("L", nc_loans, nc_alias, held)
             return AV("O", (), (), held)
         if k == "closure":
             return self.make_closure(st, rv, line)

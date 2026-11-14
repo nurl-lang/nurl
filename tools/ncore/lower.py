@@ -151,8 +151,10 @@ class Types:
         if k == "named" and ty[1] in getattr(self.prog, "unclonable", ()):
             return False
         ans = getattr(self.prog, "copy_answer", None)
-        if ans and k in ("vec", "box", "opt") and ty in ans:
+        if ans and k in ("vec", "box", "opt", "res") and ty in ans:
             return ans[ty]
+        if k == "res":
+            return self.copyable(ty[1], seen) and self.copyable(ty[2], seen)
         if k in ("vec", "box", "opt"):
             return self.copyable(ty[1], seen)
         if k == "named" and ty[1] in seen:
@@ -195,6 +197,8 @@ class Types:
             return False
         if k == "opt":
             return self.owns_handle(ty[1], seen)
+        if k == "res":
+            return self.owns_handle(ty[1], seen) or self.owns_handle(ty[2], seen)
         if k == "named" and ty[1] not in getattr(self.prog, "handle_elem", ()) and ty[1] not in seen:
             nseen = seen + (ty[1],)
             if ty[1] in self.prog.structs:
