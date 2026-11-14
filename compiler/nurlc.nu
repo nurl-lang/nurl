@@ -13291,7 +13291,13 @@ unsafe @ eng_byte s w i k → i {
     : i vid ( pl_var op )
     ? & & & & & == ( fv_kind vid ) VK_TEMP == ( et_kind ( fv_ty vid ) ) EK_S != ( fv_ty vid ) ET_NONE == ( av_own cur ) OW_O == ( pl_path op ) 0 & == ( av_held cur ) 0 ( fx_has vid FX_TEMP_FRESH ) {
         ( eng_err line ( nurl_str_cat3 `a fresh string handed to ` where ` is owned by nothing` ) )
-    } {}
+    } {
+        // (…and one a call may hand over fresh on some calls, a lend on the
+        // rest: on those it is owned by nothing either)
+        ? & & & & == ( fv_kind vid ) VK_TEMP != ( fv_ty vid ) ET_NONE == ( et_kind ( fv_ty vid ) ) EK_S == ( av_own cur ) OW_L & == ( pl_path op ) 0 ( fx_has vid FX_CALL_MIXED ) {
+            ( eng_err line ( nurl_str_cat3 `the string handed to ` where ` may be a fresh one, owned by nothing` ) )
+        } {}
+    }
 }
 
 // The value just moved into `dest` (at path `base`) holds views of its

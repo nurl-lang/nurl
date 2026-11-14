@@ -771,6 +771,11 @@ class FnCheck:
         if (v.kind == "temp" and v.ty is not None and v.ty[0] == "s" and cur.own == "O" and not op[2]
                 and not cur.held and self.temp_fresh.get(op[1])):
             self.err(line, f"a fresh string handed to {where} is owned by nothing")
+        elif (v.kind == "temp" and v.ty is not None and v.ty[0] == "s" and cur.own == "L" and not op[2]
+              and op[1] in self.call_mixed):
+            # (…and one a call may hand over fresh on some calls, a lend on
+            # the rest: on those it is owned by nothing either)
+            self.err(line, f"the string handed to {where} may be a fresh one, owned by nothing")
 
     def reroot(self, st, av, dest, base=()):
         """The value just moved into `dest` (at path `base`) holds views of
