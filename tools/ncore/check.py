@@ -643,7 +643,12 @@ class FnCheck:
                 # holder, it moves there
                 av = self.move_out(st, vid, line)
             elif src.own == "P" or (self.fn.vars[vid].kind != "temp" and (
-                    (raw and not is_ret and not (stored and vty[0] == "slice")) or lend_owner(vid))):
+                    (raw and not is_ret and not (stored and vty[0] == "slice")
+                     # (a join's temporary given an arm's own raw string
+                     # takes it: the arm's binding ends before the join does)
+                     and not (dv is not None and dv.kind == "temp" and not lend_owner(vid)
+                              and self.fn.vars[vid].depth > dv.depth))
+                    or lend_owner(vid))):
                 # a parameter is lent to its new name (the caller owns it); an
                 # owned raw string or slice is viewed, not moved
                 av = AV("L", {self.loan(st, site, (vid, ()), "view" if raw else "handle")}, {(vid, ())}, src.held)
