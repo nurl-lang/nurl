@@ -28,8 +28,8 @@ the reference checker (`tools/ncore/engcmp.py`):
 
 | | the engine gives the reference's verdict on |
 |---|---|
-| hole probes | 3,495 of 3,495 |
-| `compiler/tests` with a `COMPILE OK` golden | 1,117 of 1,118 (the other: the reference does not finish in its time limit; the engine answers in 0.08 s) |
+| hole probes | 3,499 of 3,499 |
+| `compiler/tests` with a `COMPILE OK` golden | 1,117 of 1,118 (the other, `loop_nest_deep.nu`: the reference does not finish in its time limit; the engine answers in 0.03 s) |
 | `examples/` | 65 of 65 |
 | `compiler/nurlc.nu` itself | both accept it whole (3,315 functions, the engine's own among them) |
 
