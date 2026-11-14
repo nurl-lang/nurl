@@ -727,11 +727,17 @@ class FnCheck:
             avs.append(av)
         # a call may not change what another of its arguments views (A2: a
         # call's arguments are frozen for its duration)
+        # (an argument the call stores by value where it replaces is read -
+        # copied, or taken out of the old value - before the old value goes:
+        # a lend of the element given back to the same element)
+        stored_back = {(j, src) for (j, dp, src, pth, kind) in sm["stores"] if kind == "value"}
         for (k, path, eff) in sm["effects"]:
             if k >= len(ops) or ops[k][0] != "v":
                 continue
             place = (ops[k][1], ops[k][2] + tuple(path))
             for m, av in enumerate(avs):
+                if eff == "replace" and (k, m) in stored_back:
+                    continue
                 if m != k and self.would_kill(st, place, eff, av.loans | hloans(av.held)):
                     self.err(line, f"{name}: argument {m + 1} views what the call changes through argument {k + 1}")
                 elif m == k and self.would_kill(st, place, eff, hloans(av.held)):
