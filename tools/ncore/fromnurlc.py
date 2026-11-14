@@ -80,6 +80,7 @@ class Reader:
         self.prog.fn_file = {}
         self.prog.clonable = set()     # named types nurlc can copy a value of
         self.prog.unclonable = set()   # …and the ones it cannot
+        self.prog.nodrop = set()       # named types with nothing to release
         self.prog.udrop = set()        # named types whose drop is a use of the views they hold (§2.14)
         self.prog.handle_elem = {}     # a one-payload handle type -> its payload's type
         self.prog.shared = set()       # …the ones whose copies share the payload
@@ -202,6 +203,9 @@ class Reader:
             # its own and no clone has none
             if getattr(info, "udrop", False):
                 self.prog.udrop.add(name)
+            if not info.drops:
+                # (nothing to release: a struct of views and numbers)
+                self.prog.nodrop.add(name)
             if getattr(info, "tshare", False):
                 self.prog.thread_share.add(name)
             if getattr(info, "clone", False):
@@ -433,7 +437,10 @@ class Reader:
                 out.append(("match", sop, arms, ln))
             elif k == "loop":
                 cond = self.block(lines, fn, ("loopcond",))
-                cop = self.operand(lines[self.pos].split(" ")[1], fn)
+                ctok = lines[self.pos].split(" ")[1]
+                # (`T`: a literal that is true - the loop ends only by a
+                # `break` or a return)
+                cop = ("c", ("b",), "always") if ctok == "T" else self.operand(ctok, fn)
                 self.pos += 1
                 body = self.block(lines, fn, ("end",))
                 self.pos += 1

@@ -82,7 +82,7 @@ Statements:
 | `eval <rvalue>` | evaluated for its effects; the result is a number or nothing |
 | `if <op>` … `else` … `end` | `?`, and the operand of `\|` / `&` that may not run |
 | `match <op>`, `arm <pattern>` …, `end` | `??`; a payload binding is `let <v> payload <op> <variant> <i>` in its arm |
-| `loop` … `loopcond <op>` … `end` | `~ cond { }`: the condition's statements, the condition, the body |
+| `loop` … `loopcond <op>` … `end` | `~ cond { }`: the condition's statements, the condition, the body. `loopcond T`: the condition is a literal that is true (`~ T {`, `~ 1 {`), so the loop is left only by a `break` or a `^` |
 | `foreach <v> <op>` … `end` | `~ x xs { }` |
 | `scope` … `end` | a scope: what is bound in it is released at its `end` |
 | `defer` … `end` | `; { }`: runs at every exit from here on |

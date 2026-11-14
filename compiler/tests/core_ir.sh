@@ -76,6 +76,8 @@ seq_ shape_match "payloads are bound in their arms" '^match v0$' '^arm Circle$' 
 # Loops.
 seq_ shape_loops "a foreach binds its element" '^foreach [0-9]+ v0$' '^scope$' '^eval call string_len 1 v[0-9]+$' '^end$' '^end$'
 seq_ shape_loops "a loop's condition, then its body" '^loop$' '^loopcond c$' '^scope$' '^break$' '^end$' '^end$'
+# A condition that is a true literal: the loop ends only at a `break` or a `^`.
+seq_ shape_loop_always "a literal-true condition says so" '^loop$' '^loopcond T$' '^scope$' '^break$' '^end$' '^end$'
 # A value block: its tail is assigned to a temporary of the statement around it.
 seq_ shape_block "a value block's tail lands in a temporary" '^let [0-9]+ none$' '^let [0-9]+ call string_from 1 c$' '^let [0-9]+ call string_clone 1 v[0-9]+$' '^assign v[0-9]+ use v[0-9]+$' '^let [0-9]+ use v[0-9]+$'
 # The operand of `|` that may not run is in the else of the first.

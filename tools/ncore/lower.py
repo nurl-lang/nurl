@@ -179,6 +179,8 @@ class Types:
             return True   # an owned raw string (nurl_str_cat) owns; a view does not
         if k == "opt":
             return self.owning(ty[1], seen)
+        if k == "named" and ty[1] in getattr(self.prog, "nodrop", ()):
+            return False      # nurlc's own answer: it has nothing to release
         if k == "named" and ty[1] in getattr(self.prog, "handle_elem", ()):
             return True       # a library handle owns its block
         if k == "named" and ty[1] not in seen:
@@ -208,6 +210,45 @@ class Types:
             if ty[1] in self.prog.enums:
                 return any(any(self.owns_handle(t, nseen) for t in tys) for _, tys in self.prog.enums[ty[1]])
         return self.owning(ty)
+
+    def has_udrop(self, ty):
+        """Does a value of this type run, where it is released, a destructor
+        that may read the views it holds?  nurlc's own answer for a named
+        type (the `d` flag: a `% Drop` of the program's own anywhere in it,
+        a library handle asked by its type arguments), followed through the
+        types this reader spells out."""
+        if ty is None or self.is_scalar(ty):
+            return False
+        k = ty[0]
+        if k in ("vec", "box", "opt"):
+            return self.has_udrop(ty[1])
+        if k == "res":
+            return self.has_udrop(ty[1]) or self.has_udrop(ty[2])
+        return k == "named" and ty[1] in getattr(self.prog, "udrop", ())
+
+    def shared_in(self, ty, seen=()):
+        """The shared handle types (an Rc, an Arc, a program handle whose
+        copy is a share) a value of this type may reach."""
+        if ty is None or self.is_scalar(ty):
+            return set()
+        k = ty[0]
+        if k in ("vec", "box", "opt", "slice"):
+            return self.shared_in(ty[1], seen)
+        if k == "res":
+            return self.shared_in(ty[1], seen) | self.shared_in(ty[2], seen)
+        if k != "named" or ty[1] in seen:
+            return set()
+        seen = seen + (ty[1],)
+        out = {ty[1]} if ty[1] in getattr(self.prog, "shared", ()) else set()
+        he = getattr(self.prog, "handle_elem", {}).get(ty[1])
+        if he is not None:
+            return out | self.shared_in(he, seen)
+        for t, _ in self.prog.structs.get(ty[1], ()):
+            out |= self.shared_in(t, seen)
+        for _, tys in self.prog.enums.get(ty[1], ()):
+            for t in tys:
+                out |= self.shared_in(t, seen)
+        return out
 
     def view_capable(self, ty, seen=()):
         """Can a value of this type hold a view or a borrowed handle at all

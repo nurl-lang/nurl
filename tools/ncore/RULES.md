@@ -62,7 +62,9 @@ summarised by the same analysis, to a fixpoint over the program.
 | An owner handed on by name moves; `: ~` of a name is a cursor | §2.2, §7.6 | `transfer`, `move_out` |
 | A value that holds a view is read whole only while what the view points into is there | §2.10 | `read` |
 | A call's arguments are frozen for its duration: its effects end no view another argument holds | §2.4 | `apply_call` |
-| An `inout` argument is the callee's alone for the call: no other argument is the same binding, a part of it or a lend of it | §2.4 | `apply_call` |
+| An `inout` argument is the callee's alone for the call: no other argument is the same binding, a part of it or a lend of it. So is one the callee changes without saying `inout`, unless the change is inside a shared handle's payload: that is a change to the one object every share reaches (the `regions` row) | §2.4, §7.7 | `apply_call` |
+| A struct literal, or a variant's payload, that names an `in` parameter whole and is handed back as it is keeps the caller's argument: it moves into the result as into a `sink`. Bound, pushed or assigned first, the literal holds a copy; the payload of an option or a result literal is a lend of the caller's value | §1 (temporaries), §7.6 (h207) | `rvalue` (`agg`: `lit_params`), `ret` |
+| The payload of an `in` parameter's option or result, handed back as the value of the `??` over it, takes the caller's argument: the result is the caller's own on that path. Handed back by name inside the arm, or out of an enum of the program's, it is lent | §7.6 (h408–h415) | `ret` |
 | A function that hands a parameter to a callee that detaches it detaches its argument | §2.7 | `s_detaches` |
 | A call's effects come before its stores; a consumed argument is moved | §2.1 | `apply_call` |
 | A view-typed parameter (`s`, a slice) is a view the caller lent, never an owner | §1 | `read` |
@@ -91,10 +93,15 @@ summarised by the same analysis, to a fixpoint over the program.
 | An owned temporary a callee hands back whole leaves with the result; the result is owned per call | §1 Temporaries, §7.6 | `apply_call` (`whole`) |
 | A result owned on some paths and lent on others borrows its argument | §7.6 Call results | `make_summary` |
 | …and a binding of it owns it on the calls that made it fresh (an option's `None` is no fresh value): what views it does not outlive the binding | §7.6 Call results | summary `mixed`, `call_mixed` |
+| What a function hands over counts every value the returned binding was given: fresh on one path and a lend on another, filled through an `inout` callee. A payload matched straight out of such a call is in the call's own storage on the fresh calls, released with the `??` | §7.6 Call results (agora #679) | `ret` (`ret_fresh`), `apply_call` (`var_fresh`), `match` |
 | The payload of what a function of the program lent is that call's lend still; the payload of an option a library getter made around an element is the element | §7.6 | `rvalue` (`payload`), `call_by_fn` |
 | A cursor given a shorter-lived lend stays a borrow of it; an owner given one is handed a copy | §7.6 | `stmt` (`assign`) |
 | A field or a payload of an owned temporary a callee hands back is taken out of it: the result owns it (an element of its buffer is not) | §1 Temporaries, §7.6 (#635) | `apply_call` (`part`) |
-| An owned slice moves into the literal that takes it | §7.6 | `transfer` (`stored`) |
+| An owned slice moves its buffer to whatever is given it — a new binding, an assignment, a field, a literal — as any owner does; an owned raw string in a binding is viewed or copied instead (§2.13) | §2.1, §2.2, §7.6 | `transfer` |
+| A field or a payload of an `in` parameter kept by value (pushed, stored) is taken out of it: the function owns the parameter from there and the caller's argument moves into the call. So is the payload of a local option or enum, through the `??` binding over it | §7.6 (h389–h404, h421–h423), §2.11 (agora #170) | `apply_call` stores |
+| An option's or a result's payload taken through its `??` binding leaves the option unreadable until it is given a value again. A field taken through a binding of it is left an empty String or Vec, and the payload slot of an enum of the program's is left empty the same way | §2.1, §2.11 (agora #170, #175) | `take_payload` |
+| A value that cannot be copied has no empty state to leave behind: a field of that type is not taken out of its struct, nor a payload of that type out of an enum of the program's: the read is a lend, and what would own it is refused. An `inout` parameter given such a lend is refused too | §7.6 ("Values that cannot be copied", h322–h327, agora #641), §2.12 (agora #697) | `take_payload`, `assign` |
+| What a `?` / `??` selects among this frame's owners moves out with a return; not from under an armed `;` block, and not out of a value block whose local it is: there the arm is a lend, copied, and refused for a value with no copy. A binding over a join whose arm is the payload of an option a field keeps, with no copy, is refused the same way | §2.2, §7.6 (agora #186, #188, h227) | `transfer`, `let` |
 | A fresh raw string kept by a value is owned by nothing | §2.13 | `fresh_string_kept` |
 | A module global outlives every frame: it holds no view of one | §2.13 | `gstore` |
 | A function's exit runs the `;` blocks armed on the way, newest first, after its result is made | §1 | `run_defers` |
@@ -107,7 +114,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A closure holds what it captured: a copy of each handle, the views those hold; one taken by pointer is a `ref` | §2.11, §2.3 | `make_closure` |
 | Running a closure reads every capture and does what its body does to them, and to the arguments it is called with | §2.11 | `run_closures`, `closure_arg_effects` |
 | A function that runs a closure argument does so at its call; what it hands the closure of its other arguments is in its summary | §2.11 | `invokes`, `cloargs` |
-| A closure that changes a capture meets no other argument that reaches it | §2.4, §2.11 | `apply_call` |
+| A closure that changes a capture meets no other argument that reaches it. One the callee runs — handed as it is, or inside an option, a struct or a container — that changes the payload of a shared handle meets no argument that may be another handle on that payload: the callee's view through it would end under it | §2.4, §2.11, §2.2 (agora #736) | `apply_call` |
 | A closure leaves no capture holding a view, and no `inout` argument. What it leaves one by-value argument holding of another is followed where the call that runs it is seen | §2.11 (#403) | `check_program`, `closure_arg_effects` |
 | A closure kept by an owner, and a literal handed back as it is, copies in what it captured and can copy; a bound closure handed back by name does not | §7.5, §2.11 (h310) | `closure_owned`, `transfer` |
 | A closure another thread runs takes the bindings it captured; one taken by pointer may not go. A handle whose copy is a share two threads may use (the type table's `t`) is captured as a share of its own | §2.1, §2.3, §6.5 | `detaches`, `cap_loans`, `thread_share` |
@@ -120,6 +127,18 @@ summarised by the same analysis, to a fixpoint over the program.
 | Inside a closure, running a closure it was handed may grow or clear what this one captured: the caller's closure may have captured the same | §2.11 | `call_closure` |
 | What another thread runs holds no view | §6.5 | `apply_call` (`detaches`) |
 | A view handed back out of where it was kept (an element that is a slice or a raw string) points where the kept one points | §2.10 | `apply_call` |
+| A join whose arm is an owned raw string of a binding that lives on hands the join a copy of its text | §7.6 (owned string slots) | `transfer` |
+| A mutable raw-string binding given an owned raw string of another binding takes a copy of its text; given a cursor that owns its value on some paths only, it is pointed at it, and reads it no longer than that cursor lives | §7.6 (owned string slots, h119) | `transfer` |
+| A function that hands back what a call lends out of a parameter it takes over on another path is refused, a join with a fresh arm included | §7.6 (agora #743) | `check_program` (`calllends`) |
+| A slice literal owns its elements: one that names a binding or a parameter is given a copy of it | §7.6 (agora #485) | `rvalue` (`agg`) |
+| A value block whose tail names a binding of an outer scope, or a field of one, only lends it: a consumer is given a copy | §2.12 (agora #555) | `apply_call` (`block_temps`) |
+| An element taken out of a container parameter (a loop's element handed to a `sink`) is a change to the container's elements, not a take-over of the container. A loop's element with no copy is not taken; nor is a field of a binding of what a call lent; nor a payload of what a shared handle lends | §2.5, §2.10, §7.5 (agora #588, #669, #680, #463) | `take_payload`, `apply_call` |
+| A swap or a reverse moves elements between slots and releases none: a handle of an element and a view of its buffer stay good; a loop walking the container is upset (effect `permute`) | §2.5 | `effect`, `prims.py` |
+| A parameter of a type with nothing to release (a struct of views and numbers: nurlc's `drops` answer) is copied by its words: its new holder holds the views it holds and nothing of the parameter | §2.13 | `transfer` |
+| What goes into a shared handle's payload is held by the one object every share reaches: a binding that may be another handle on it holds it too | §2.10 (agora #392) | `store_into` |
+| A view of a binding's buffer kept elsewhere follows the binding into the container, the literal or the field that takes it | §2.10 (agora #337) | `rehome_views` |
+| A loop whose condition is a true literal ends only at a `break` or a return: what holds after it is what held there | §2.5 | `loop` (`loopcond T`) |
+| The result of a call through a known closure holds of its arguments what the body's summary says its result holds of its parameters | §2.8 (agora #422) | `call_closure` |
 | What a closure the caller chose hands back may hold what its captures hold (not its handles of the captures themselves): a function that collects such results hands them on | §2.11, §2.10 | `call_closure`, `heldin` |
 | A closure's result is its caller's own: what it lends out of a capture is copied, and a value that cannot be copied is refused | §7.5 | `check_program` |
 | A closure several threads may run changes nothing it captured | §6.5 | `shares` |
@@ -127,6 +146,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A shared payload (`Rc`, `Arc`, `Shared`) is one place per handle type: an effect inside one ends what was lent out of any | proposal D3 | `shared_tails`, `region_effect` |
 | A `dyn` method's call may run any impl of the method | §1 Methods | `summary` (`virt`) |
 | The drop of a value whose destructor may read its views is a use of them | §2.14 | `scope_end` |
+| A binding whose release runs such a destructor (its own, or one in a field, an option's or result's payload, an element, a library handle's type argument) gains no view of a binding declared after it: refused where it gains it, by an assignment or through a call that stores into it, because the younger one is released first on every way out | §2.14 | `younger_views` |
 | A copy hook (`S_clone`, `S_share`) hands back a value of its own | §7.6 | `check_program` |
 | A closure a callee hands back, or leaves in an argument, runs the body it was made with: the summary names the bodies (`rclos`, `sclos`) | §2.11 | `make_summary`, `apply_call` |
 | A copy of a view is that view | §2.13 | `apply_call` (`vcopy`) |
@@ -156,6 +176,23 @@ gives and lists the other side here.
 | `= o ( pick o other k )`, `o` an option owner, `pick` may hand back either argument | `pick` is a plain function defined above the call (`option_owner_given_a_call_that_may_lend_itself_or_another_argument`, agora #412) | `pick` is defined below the call, is a generic instance, or is a `dyn` method (`option_owner_given_back_by_a_callee_below_runs_clean`, `…_by_a_generic_runs_clean`, `…_by_a_dyn_method_runs_clean`): the per-call key decides at run time | refuses all (A2 refuses the form) |
 
 | `^ ( id x )`, `x` an owned raw string of this frame, `id` handing its argument back | `id` is defined below the function (`identity_of_a_fresh_s_binding_returned_callee_below`) | `id` is defined above it (`…_callee_above_runs_clean`): the text is copied at the return | accepts both (the copy) |
+| `? c x l` as a function's value, `l` a local with no copy, `x` a parameter or a fresh value | it is the body's fall-off value (`drop_param_local_fall_off`, agora #186: "would have to be copied") | it is written `^ ? c x l`: the selected local moves out | accepts both (the move) |
+
+### One operation, three answers by spelling
+
+Not the same IR, but the same thing done: a function hands back a value
+that is, or is built around, an `in` parameter or a part of one. nurlc's
+answer (its `sum` line) follows how it is written. The checker copies
+each, so that the probes agree; an engine that decides the drops itself
+(stage S3) can give one answer for all of them, and which is D4 too.
+
+| written | nurlc's answer | the caller's argument |
+|---|---|---|
+| `^ p`, `^ . p f`, `?? p { V x → { ^ x } }`, `^ ?? e { V x → x … }` over an enum of the program's, `^ @ ?T { T p }` | lent (`retpart`, `ret_borrow`, per call where another path is fresh) | stays the caller's; the result borrows it |
+| `^ ?? o { T x → x F → … }`, `o` an option or a result | taken (`sink`, `keeps`): h408–h415 | moved into the call |
+| `^ @ K { p }`, `^ @ E { V p }`, `^ @ ?K { T @ K { p } }` | kept (`keeps`, `stores`): h207 | moved into the call |
+| `^ @ KK { @ K { p } }` | lent (`ret_borrow`) | stays the caller's |
+| `: K k @ K { p }` then `^ k`; `( vec_push out @ K { p } )`; `= . o f @ K { p }` | a copy of `p` is made | stays the caller's |
 
 ## Declared summaries
 

@@ -122,11 +122,15 @@ def derive(prog, fn, ws):
     # function changes, holds what the arguments hold (formal/A2's
     # `heldOfArgs`, the answer for a callee with no walk of its own).
     only_run = set(_idx(ws, "invoke_only", n))
+    rv_answered = ws.get("rviews", "").startswith(":")
     for k in range(n):
         if scalar(pty[k]) or (k in only_run and pty[k] is not None and pty[k][0] == "closure"):
             # (a closure the function only runs is kept nowhere)
             continue
-        if not ret_scalar:
+        if not ret_scalar and not (rv_answered and pty[k] is not None and pty[k][0] in VIEW_TYPES):
+            # (an argument that is itself a view - a raw string, a slice -
+            # holds nothing but that view, and which of them the result
+            # views the walk has answered: `rviews`)
             rholds.add(((), k, (), "held"))
         if not ws.get("vkeeps", "").startswith(":"):
             # (…unless the walk answered what it leaves in its arguments)
@@ -137,6 +141,10 @@ def derive(prog, fn, ws):
     invokes = {k for k in range(n) if pty[k] is not None and pty[k][0] == "closure"}
     invokes |= {k for k in _idx(ws, "hrun", n)}
 
+    if fn.ret == ("s",) and ws.get("ret_owned"):
+        # the walk knows the result for a string of its own (`ret_owned`):
+        # a fresh buffer, which holds nothing of the arguments
+        rholds = set()
     if not ret_scalar and not ret_view and not T.view_capable(fn.ret):
         # a result whose type has nowhere to keep a view or a borrowed
         # handle holds none, whatever the raw code's provenance reached
