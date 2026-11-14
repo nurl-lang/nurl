@@ -69,9 +69,11 @@ def norm(ty):
             return ("String",)
         if ty[1] == "Vec":
             return ("vec", norm(ty[2][0])) if ty[2] else ("vec", ("tvar", "?"))
-        if ty[1] == "Slice":
+        # (with a type argument: the library's; a program's own struct of
+        # that name has none, and is a struct)
+        if ty[1] == "Slice" and ty[2]:
             return ("slice", norm(ty[2][0]))
-        if ty[1] == "Box":
+        if ty[1] == "Box" and ty[2]:
             return ("box", norm(ty[2][0]))
         return ("named", ty[1], tuple(norm(a) for a in ty[2]))
     if k in ("vec", "slice", "box", "opt", "ptr"):

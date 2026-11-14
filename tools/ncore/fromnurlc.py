@@ -257,6 +257,10 @@ class Reader:
                         p, ty = "#F0", ty[2]
                     else:
                         raise Unsupported("a result's flag as a place")
+                elif ty is not None and ty[0] in ("slice", "vec"):
+                    # (an element named by its position: an element)
+                    p = "*"
+                    ty = self.T.elem(ty)
                 else:
                     raise Unsupported("positional member of " + (ty[0] if ty else "?"))
             elif p == "*":

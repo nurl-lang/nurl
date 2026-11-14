@@ -54,7 +54,9 @@ def verdict(path):
 
 # What marks a diagnostic of the fused walk that the ownership engine does
 # not replace (docs/spec.md §3.3d, MEMORY.md §6.5's Send / Sync, typing).
-WALK_RULES = ("raw memory", "only an 'unsafe' function", "which only an 'unsafe'", "is not Send", "is not Sync",
+WALK_RULES = ("gives its tag only", "that spelling is the compiler's own", "passed where parameter expects",
+              "passed where the parameter is",
+              "raw memory", "only an 'unsafe' function", "which only an 'unsafe'", "is not Send", "is not Sync",
               "not Send:", "is set at start", "is declared 'raw'", "runtime handle", "FFI parameter",
               "expects type", "undefined identifier", "internal to the standard library",
               "takes a raw pointer", "hands back a raw pointer", "the standard library's address",
@@ -75,7 +77,7 @@ def verdict_nurlc(path):
     rd, gaps, rc, err = fromnurlc.read_program(path)
     if rc != 0:
         first = next((l for l in err.splitlines() if "error" in l), "nurlc failed")
-        msg = first.split("error:")[-1].strip()
+        msg = first.split("error:", 1)[-1].strip()
         # A refusal that is no ownership rule - the raw-memory boundary, a
         # type that may not cross to another thread, a type error - is the
         # walk's to make, on types alone: the engine is not asked.
