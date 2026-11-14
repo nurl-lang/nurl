@@ -62,6 +62,8 @@ summarised by the same analysis, to a fixpoint over the program.
 | A view-typed parameter (`s`, a slice) is a view the caller lent, never an owner | §1 | `read` |
 | A borrow handed to a consumer: a part read in place is taken out of its owner; a call's lend in a temporary is copied; a binding of a call's lend is refused | §2.5, §7.6 | `apply_call`, `take_payload` |
 | A field taken out of its owner is not read, nor the value handed on whole, until it is given a value again | §2.1 | `State.gone` |
+| A part taken out of an `inout` parameter is a change to the caller's binding, not a hand-over of it; left taken at an exit, it is gone in the caller's binding | §2.1, §2.12 | `take_payload`, summary `gone` |
+| A lend of an element given back to the same element is read before the old value goes | §2.4 | `apply_call` (`stored_back`) |
 | A store replacing a place hands its old value to the binding that read that very place | §7.6 (#265) | `handover` |
 | `= o ( f o … )`: a binding given a part of its own value keeps it | §7.6 (#475) | `own_parts` |
 | `= o ( f o other )`, the call handed the binding itself and another argument it may hand back: an option or a result owner is refused (no run-time key says which came back), a handle is told apart by its buffer | §7.6 (#412, #419) | `call_lent`, `stmt` (`assign`) |

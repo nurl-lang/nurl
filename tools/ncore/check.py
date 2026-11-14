@@ -834,6 +834,9 @@ class FnCheck:
         for (k, path, eff) in sm["effects"]:
             if k < len(ops) and ops[k][0] == "v" and not (k in copied and not path):
                 self.effect(st, (ops[k][1], ops[k][2] + tuple(path)), eff, line)
+        for (k, path) in sm.get("gone", ()):
+            if k < len(ops) and ops[k][0] == "v":
+                st.gone = st.gone | {(ops[k][1], ops[k][2] + tuple(path))}
         # what the callee may do inside a shared payload, whichever handle it
         # reaches it through
         for (ty, tail, eff) in sm.get("regions", ()):
@@ -1057,7 +1060,9 @@ class FnCheck:
             # it was: only what was lent out of the part itself ends.)
             part = bool(path) and path[-1] != "*"
             self.effect(st, (vid, path), "take" if part else "replace", line)
-            if root.own == "P":
+            if root.own == "P" and not (path and self.fn.modes[self.pidx[vid]] == "inout"):
+                # (a part taken out of an `inout` parameter is a change to
+                # the caller's binding, which stays the caller's)
                 self.s_consumes.add(self.pidx[vid])
             if not path:
                 st.vals[vid] = AV("M" if sure else "X")
@@ -1904,7 +1909,13 @@ class FnCheck:
         if res == "lent" and not lends:
             res = "own"
         stores = set()
+        left_gone = set()
         for st in [s for _, s in self.rets] + self.exits:
+            for (gv, gp) in st.gone:
+                if gv in self.pidx and self.fn.modes[self.pidx[gv]] == "inout":
+                    # a part taken out of an `inout` parameter and not given
+                    # a value again: the caller's binding goes back without it
+                    left_gone.add((self.pidx[gv], tuple(gp)[:3]))
             for vid, j in self.pidx.items():
                 av = st.vals.get(vid)
                 if av is None:
@@ -1923,7 +1934,8 @@ class FnCheck:
                 "invokes": sorted(self.s_invokes), "cloargs": sorted(self.s_cloargs),
                 "detaches": sorted(self.s_detaches),
                 "regions": sorted(self.s_regions), "selfholds": sorted(self.s_selfholds),
-                "rclos": sorted(rclos), "sclos": sorted(sclos), "calllends": sorted(calllends)}
+                "rclos": sorted(rclos), "sclos": sorted(sclos), "calllends": sorted(calllends),
+                "gone": sorted(left_gone)}
 
 
 def initial_summary(prog, fn):
@@ -1987,6 +1999,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "gone"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out
