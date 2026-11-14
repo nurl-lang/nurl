@@ -34,6 +34,7 @@ A **loan** is a place and a kind:
 | `ref` | a pointer to the binding itself (a capture taken by pointer) | the binding's scope ending, or the binding moved |
 | `share` | a closure's own copy of a shared handle | nothing |
 | `held` | what a parameter's value holds: the caller's to say | nothing in this frame; each call puts what its argument holds in its place |
+| `stale` | what a by-pointer capture's part held when the closure runs (read before the body gave it a value) | nothing; it only marks the read |
 | `heldin` | what the captures of a closure parameter hold (what it hands back when it runs: an iterator's elements) | nothing in this frame; each call puts what its closure argument's captures hold in its place |
 
 An **effect** on a place is `realloc`, `drop` (its elements), `replace` (its
@@ -54,6 +55,10 @@ summarised by the same analysis, to a fixpoint over the program.
 | rule | MEMORY.md | in check.py |
 |---|---|---|
 | A use of a value whose loan has ended is the error | §2.10 | `check_live` |
+| A binding given a value that views a shorter-lived one is refused where it is used after that one ended, or where it leaves the function holding it, not where it is stored. Stored at once: a pointer into the frame (§2.7), and a view given to a value whose destructor may read it (§2.14) | §2.10, §2.7, §2.14 | `transfer`, `read` |
+| Storage the caller holds (an `inout` parameter) may not view this frame's values while a function of the program runs, which may unwind: unless the call is handed that storage and its body's first statement gives it a value that views nothing | §3.3d (#386) | `apply_call`, summary `credits` |
+| A closure that reads, through a capture taken by pointer, a part its body did not give a value first reads what the binding holds when it runs: refused where the closure is made or run while that part holds an ended view | §2.3, §2.11 | `stale`, `stale_capture_check` |
+| What was bound after a `;` block was armed is released before the block runs | §7.2 | `run_defers`, `defer_before` |
 | An owner handed on by name moves; `: ~` of a name is a cursor | §2.2, §7.6 | `transfer`, `move_out` |
 | A value that holds a view is read whole only while what the view points into is there | §2.10 | `read` |
 | A call's arguments are frozen for its duration: its effects end no view another argument holds | §2.4 | `apply_call` |
