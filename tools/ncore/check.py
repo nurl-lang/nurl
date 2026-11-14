@@ -1003,12 +1003,16 @@ class FnCheck:
                     if a[0] in self.pidx:
                         self.s_invokes.add(self.pidx[a[0]])
         # …and what the callee hands that closure of its other arguments
+        handed = {}
         for (k, i, j, path) in sm.get("cloargs", ()):
             if k < len(avs) and j < len(ops) and ops[j][0] == "v":
-                for _, fname in self.closures_in(avs[k]):
-                    pl = [None] * (i + 1)
-                    pl[i] = (ops[j][1], ops[j][2] + tuple(path))
-                    self.closure_arg_effects(st, fname, pl, line)
+                handed.setdefault(k, {})[i] = (ops[j][1], ops[j][2] + tuple(path))
+        for k, at in handed.items():
+            # (every argument the callee hands that closure, together: what
+            # the closure leaves one holding of another is between them)
+            pl = [at.get(i) for i in range(max(at) + 1)]
+            for _, fname in self.closures_in(avs[k]):
+                self.closure_arg_effects(st, fname, pl, line)
         # stores into arguments
         for (j, dpath, k, path, kind) in sm["stores"]:
             if j >= len(ops) or k >= len(ops) or ops[j][0] != "v":
@@ -1620,6 +1624,19 @@ class FnCheck:
             i = k - ncap
             if 0 <= i < len(places) and places[i] is not None:
                 self.effect(st, (places[i][0], places[i][1] + tuple(path)), eff, line)
+        # …and what it leaves one argument holding of another, where the
+        # call that runs it is seen: the holder holds it here (agora #403)
+        for (j, dpath, k, path, kind) in sm["stores"]:
+            a, b = j - ncap, k - ncap
+            if not (0 <= a < len(places) and 0 <= b < len(places)) or places[a] is None or places[b] is None:
+                continue
+            src = (places[b][0], places[b][1] + tuple(path))
+            if kind in ("view", "handle"):
+                add = {(tuple(dpath), self.loan(st, ("cs", fname, j, k), src, kind))}
+            else:
+                av = st.vals.get(src[0])
+                add = hroot(hsub(av.held, src[1]), tuple(dpath)) if av is not None else frozenset()
+            self.store_into(st, places[a], add)
 
     def exit_drops(self, st, line, keep=None):
         """A function's exit releases what its frame still owns, newest
@@ -2400,9 +2417,14 @@ def check_program(prog, max_rounds=40):
                 errors.append((name, fn.line, "a closure hands back, out of what it captured, a value it cannot copy"))
         # (what an argument or a capture holds, handed on by value, is a
         # view only where its type has room for one)
+        ncap_ = getattr(fn, "ncap", 0)
+        # (…and what it leaves one ARGUMENT holding of another is followed
+        # where the call that runs it is seen: closure_arg_effects. A
+        # capture left holding something, or held by an argument, is not.)
         real = [x for x in sm["stores"]
                 if not (x[4] == "held" and x[2] < len(fn.params)
-                        and not T.view_capable(fn.vars[fn.params[x[2]]].ty))]
+                        and not T.view_capable(fn.vars[fn.params[x[2]]].ty))
+                and (x[0] < ncap_ or x[2] < ncap_ or fn.modes[x[0]] == "inout")]
         if getattr(fn, "is_closure", False) and real:
             # a closure's type does not say what running it stores, so
             # nothing where it runs would follow a view it leaves in a
