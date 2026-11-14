@@ -74,6 +74,8 @@ summarised by the same analysis, to a fixpoint over the program.
 | A fresh raw string kept by a value is owned by nothing | §2.13 | `fresh_string_kept` |
 | A module global outlives every frame: it holds no view of one | §2.13 | `gstore` |
 | A function's exit runs the `;` blocks armed on the way, newest first, after its result is made | §1 | `run_defers` |
+| …and before the result leaves the frame: a `;` block still reads the binding handed back, and may not release or change it | §1, §7.2 (#165) | `stmt` (`ret`), `ret_watch` |
+| An owned raw string in a binding handed to a keeper is copied; the binding keeps its buffer | §7.6 | `apply_call` (`copied`) |
 | A `~` loop walks its container's buffer: a change to it ends the walk | §2.5 | `foreach`, `walking` |
 | A closure holds what it captured: a copy of each handle, the views those hold; one taken by pointer is a `ref` | §2.11, §2.3 | `make_closure` |
 | Running a closure reads every capture and does what its body does to them, and to the arguments it is called with | §2.11 | `run_closures`, `closure_arg_effects` |

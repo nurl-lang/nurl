@@ -169,6 +169,8 @@ class FnCheck:
         self.temp_fresh = {}
         self.call_lent = {}      # a call's temporary -> the arguments it may hand back whole
         self.cap_loans = set()   # the loans that are a closure's own handle of a binding it captured
+        self.ret_watch = None    # the binding a return handed back, while its `;` blocks run
+        self.ret_changed = False
         self.walking = set()
         self.moved_from = None   # the last value moved that holds views of its own parts     # the loans of the loops being walked: their containers' buffers     # a temporary -> its value is what a call made and handed over
         self.s_invokes = set()
@@ -332,6 +334,8 @@ class FnCheck:
         av = st.vals.get(vid)
         if av is None or depth > 8:
             return
+        if vid == self.ret_watch and eff != "end":
+            self.ret_changed = True
         if av.own == "L" and eff != "end":
             for a in av.alias:
                 self.effect(st, (a[0], a[1] + path), eff, line, depth + 1)
@@ -747,6 +751,11 @@ class FnCheck:
                 if cur and cur.own in ("O", "P") and cv.kind != "temp" and cv.ty is not None and cv.ty[0] == "closure":
                     # a closure binding handed to a keeper: the keeper has a
                     # copy, the binding keeps its own (MEMORY.md §7.5)
+                    copied.add(k)
+                    continue
+                if cur and cur.own == "O" and cv.kind != "temp" and cv.ty is not None and cv.ty[0] == "s":
+                    # an owned raw string in a binding: a keeper copies it,
+                    # the binding keeps its buffer (MEMORY.md §7.6)
                     copied.add(k)
                     continue
                 if cur and cur.own in ("O", "P"):
@@ -1567,10 +1576,30 @@ class FnCheck:
         if k == "ret":
             _, op, ln = s
             if op is not None:
+                before = st.vals.get(op[1]) if op[0] == "v" and not op[2] else None
                 av = self.transfer(st, op, ln, ("ret", id(s)), 0, self.fn.ret, "the returned value",
                                    copy_ok=True, is_ret=True)
                 self.moved_from = None
-                st = self.run_defers(st)
+                gone = st.vals.get(op[1]) if before is not None else None
+                if st.defers and before is not None and gone is not None and gone.own == "M":
+                    # the `;` blocks run after the result is made and before
+                    # it leaves the frame: they still read the binding it
+                    # was made from (MEMORY.md §1)
+                    st.vals[op[1]] = before
+                    self.ret_watch, self.ret_changed = op[1], False
+                    st = self.run_defers(st)
+                    self.ret_watch = None
+                    if not st.bottom:
+                        after = st.vals.get(op[1])
+                        if (self.ret_changed or after is None or after.own != before.own
+                                or any(g[0] == op[1] for g in st.gone)):
+                            # (…read it: a block that releases or changes
+                            # it does so to the value the caller was handed)
+                            self.err(ln, f"a `;` block releases or changes {self.vname(op[1])}, "
+                                         f"which was handed back")
+                        st.vals[op[1]] = gone
+                else:
+                    st = self.run_defers(st)
                 self.check_live(st, av, ln, "the returned value", held=True)
                 self.params_hold_locals(st, ln)
                 self.rets.append((av, st.copy()))
