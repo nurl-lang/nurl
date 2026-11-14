@@ -1467,6 +1467,17 @@ class FnCheck:
                         # a borrow, and its field is not its to hand over)
                         self.err(line, f"{name} takes {self.vname(op[1])}, a field of "
                                        f"{self.vname(self.view_src[op[1]])}, which is a borrow")
+                    elif (not op[2] and k < len(sm["modes"]) and sm["modes"][k] == "sink"
+                          and self.field_viewer(st, op[1])
+                          and all(st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
+                                  and self.fn.vars[a[0]].kind == "local" and self.share_handle_at(a)
+                                  for a in st.vals[op[1]].alias)):
+                        # a binding read out of a library handle field, handed
+                        # to a `sink`: the handle there goes with it - its
+                        # owner is moved (nurlc: "taking over a binding read
+                        # out of its field")
+                        for a in st.vals[op[1]].alias:
+                            self.move_out(st, a[0], line)
                     elif (k < len(sm["modes"]) and sm["modes"][k] == "sink" and self.field_viewer(st, op[1])
                           and (op[2] or any(st.vals.get(a[0]) is not None and st.vals[a[0]].own == "L"
                                             and (st.vals[a[0]].call or self.field_viewer(st, a[0]))
@@ -2757,6 +2768,25 @@ class FnCheck:
         return any(p[:cap + 1] == base and l2 in self.loans and self.loans[l2][0][0] == pv
                    and self.loans[l2][1] in ("handle", "ref") for p, l2 in held)
 
+    def share_handle_at(self, place):
+        """Is the value at `place` a library handle whose copy is a share
+        of one object (nurlc's `h`: a PNCounter, a Shared)?"""
+        ty = self.ty_of_place(place)
+        return ty is not None and ty[0] == "named" and ty[1] in getattr(self.prog, "share_handles", ())
+
+    def option_payload_field(self, st, av):
+        """Is `av` a field viewer of a field of a payload of an option a local
+        owns (`: ( Vec u ) pl . f payload`, f an arm's payload)?"""
+        def one(a):
+            if (len(a[1]) >= 2 and a[1][0].startswith("#") and self.fn.vars[a[0]].kind == "local"
+                    and st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
+                    and (self.fn.vars[a[0]].ty or ("?",))[0] in ("opt", "res")):
+                return True
+            # (…or a field of the arm's payload binding itself)
+            return (a[1] and a[0] in self.payload_bound
+                    and self.own_payload(st, st.vals.get(a[0])))
+        return av is not None and av.own == "L" and not av.call and bool(av.alias) and all(one(a) for a in av.alias)
+
     def field_viewer(self, st, vid):
         """Is `vid` a binding read out of a field (`: Q e . r q`): a local,
         not a cursor, lent - not by a call - by field paths only?"""
@@ -3250,6 +3280,18 @@ class FnCheck:
                 cursor_lends = lambda x: not (self.fn.vars[x].kind == "local" and st.vals.get(x) is not None
                                               and st.vals[x].own == "O" and not st.vals[x].loans)
                 psrc = rv[1][1] if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] else None
+                if (v.kind != "temp" and psrc is not None and self.fn.vars[psrc].kind == "local"
+                        and not self.fn.vars[psrc].mut
+                        and v.ty is not None and v.ty[0] not in VIEW_TYPES and v.ty[0] != "closure"
+                        and self.T.owning(v.ty) and self.option_payload_field(st, st.vals.get(psrc))
+                        and all(self.take_payload(st, st.vals[a[0]], ln) if a[0] in self.payload_bound
+                                else self.take_payload(st, st.vals[psrc], ln)
+                                for a in sorted(st.vals[psrc].alias))):
+                    # a binding read out of a field of an arm's payload of an
+                    # option a local owns, given to an owner: the field goes
+                    # over with its option, as nurlc moves it (the option is
+                    # moved on that path; agora #336)
+                    st.vals[psrc] = AV("O", (), (), self.held_of_own(st.vals[psrc], psrc))
                 if (v.kind == "temp" and psrc is not None and psrc in self.payload_bound
                         and v.ty is not None and v.ty[0] not in VIEW_TYPES and v.ty[0] != "closure"
                         and self.T.owning(v.ty) and self.own_payload(st, st.vals.get(psrc))

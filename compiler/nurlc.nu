@@ -13308,6 +13308,44 @@ unsafe @ eng_byte s w i k → i {
     ^ F
 }
 
+// …is every place a field viewer views a library handle (its copy a share
+// of one object) that a local of this frame owns?
+@ eng_viewer_of_share_handles i st i vid → b {
+    : i al ( av_alias ( st_av st vid ) )
+    ? == al 0 { ^ F } {}
+    : ~ i a 0
+    ~ < a ( sq_len al ) {
+        : i pa ( sq_at al a )
+        : i r ( pl_var pa )
+        ? | != ( fv_kind r ) VK_LOCAL != ( st_own st r ) OW_O { ^ F } {}
+        : i ty ( eng_ty_of pa )
+        ? | | == ty ET_NONE != ( et_kind ty ) EK_NAMED ! ( et_flag ty ETF_SHARE ) { ^ F } {}
+        = a + a 1
+    }
+    ^ T
+}
+
+// Is `av` a binding's view of a field of an arm's payload of an option a
+// local owns (`: ( Vec u ) pl . f payload`), through the option or the
+// arm's payload binding?
+@ eng_option_payload_field i st i av → b {
+    ? | == av 0 != ( av_own av ) OW_L { ^ F } {}
+    ? | ( av_call av ) == ( av_alias av ) 0 { ^ F } {}
+    : i al ( av_alias av )
+    : ~ i a 0
+    ~ < a ( sq_len al ) {
+        : i pa ( sq_at al a )
+        : i v ( pl_var pa )
+        : i pp ( pl_path pa )
+        : i vty ( fv_ty v )
+        : b ok1 & & & & >= ( ep_len pp ) 2 ( __eng_elem_is_pay ( ep_first pp ) ) == ( fv_kind v ) VK_LOCAL == ( st_own st v ) OW_O & != vty ET_NONE | == ( et_kind vty ) EK_OPT == ( et_kind vty ) EK_RES
+        : b ok2 & & != pp 0 ( fx_has v FX_PAYLOAD ) ( eng_own_payload st ( st_av st v ) )
+        ? ! | ok1 ok2 { ^ F } {}
+        = a + a 1
+    }
+    ^ T
+}
+
 // …is `vid` read out of a field of a binding of what a call lent?
 @ eng_viewsrc_lent i st i vid → b {
     ? | < vid 0 >= vid g_f_nv { ^ F } {}
@@ -15211,55 +15249,62 @@ unsafe @ eng_byte s w i k → i {
                                             // binding is a borrow, and its field is not its
                                             // to hand over)
                                             ( eng_err line ( nurl_str_cat4 ( eng_str name ) ` takes ` ( eng_vname ov ) ( nurl_str_cat3 `, a field of ` ( eng_vname - ( wv_at g_fx_vsrc ov ) 1 ) `, which is a borrow` ) ) )
-                                        } { ? & & & sinkmode ! ( sm_keeps_arg sm ck ) ( eng_field_viewer st ov ) | != ( pl_path op ) 0 ( eng_views_a_borrow st ov ) {
-                                                // a binding read out of a field (`: Q e . r q`) is
-                                                // a copy of it: a field of it handed to a callee
-                                                // that releases it is emptied in the copy only,
-                                                // and the owner releases it again - nor is the
-                                                // viewer, whole, its to hand over where what it
-                                                // views is a borrow itself
-                                                ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes ` ( eng_pname op ) ) `, read out of a field, which is a borrow` ) )
-                                            } { ? & & & & != ( pl_path op ) 0 sinkmode >= ( fv_pidx ov ) 0 < ( fv_pidx ov ) g_f_ncap ! ( fv_byref ov ) {
-                                                    // a field of a capture the closure holds by
-                                                    // value: the body's copy, made at each call -
-                                                    // the binding outside still holds the field,
-                                                    // and releases it again (the walk's `pendfc`)
-                                                    ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, a capture this closure holds by value` ) )
-                                                } { ? & & != ( pl_path op ) 0 sinkmode & != g_fe_outside 0 ( sq_has g_fe_outside ov ) {
-                                                        // a field of a loop's element, in a `;`
-                                                        // block armed in a round, which runs
-                                                        // outside every round: the element is a
-                                                        // view of the container's there, its field
-                                                        // not its to hand to a `sink`, as a
-                                                        // `vec_at` copy's is not (agora #672)
-                                                        ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, a loop's element read outside its round, which is a borrow` ) )
-                                                    } {
-                                                        // (a part of an `inout` parameter is the
-                                                        // caller's, who goes on holding the whole:
-                                                        // handed to a callee that keeps it - in its
-                                                        // result, in another argument - it is
-                                                        // copied; taken out, it would leave the
-                                                        // caller's value with a hole. One that
-                                                        // releases it takes it.)
-                                                        : ~ b inout_part & & ( et_copyable ty ) != ( av_alias av ) 0 ( sm_keeps_arg sm ck )
-                                                        ? inout_part {
-                                                            : i al ( av_alias av )
-                                                            : ~ i a 0
-                                                            ~ & inout_part < a ( sq_len al ) {
-                                                                : i pa ( sq_at al a )
-                                                                : i pi ( fv_pidx ( pl_var pa ) )
-                                                                // (…or of an element of any
-                                                                // parameter's container)
-                                                                ? | | == ( pl_path pa ) 0 < pi 0 & != ( fp_mode pi ) PM_INOUT ( eng_path_no_star ( pl_path pa ) ) { = inout_part F } {}
-                                                                = a + a 1
-                                                            }
-                                                        } {}
-                                                        ? inout_part { = copied ( sq_add copied ck ) } {
-                                                            ? & ! ( take_payload st av line != ( pl_path op ) 0 ) ! ( et_copyable ty ) {
-                                                                ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) )
+                                        } { ? & & & == ( pl_path op ) 0 sinkmode ( eng_field_viewer st ov ) ( eng_viewer_of_share_handles st ov ) {
+                                                // a binding read out of a library handle field,
+                                                // handed to a `sink`: the handle there goes with
+                                                // it - its owner is moved
+                                                : i val ( av_alias ( st_av st ov ) )
+                                                : ~ i va 0
+                                                ~ < va ( sq_len val ) { ( move_out st ( pl_var ( sq_at val va ) ) line ) = va + va 1 }
+                                            } { ? & & & sinkmode ! ( sm_keeps_arg sm ck ) ( eng_field_viewer st ov ) | != ( pl_path op ) 0 ( eng_views_a_borrow st ov ) {
+                                                    // a binding read out of a field (`: Q e . r q`) is
+                                                    // a copy of it: a field of it handed to a callee
+                                                    // that releases it is emptied in the copy only,
+                                                    // and the owner releases it again - nor is the
+                                                    // viewer, whole, its to hand over where what it
+                                                    // views is a borrow itself
+                                                    ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes ` ( eng_pname op ) ) `, read out of a field, which is a borrow` ) )
+                                                } { ? & & & & != ( pl_path op ) 0 sinkmode >= ( fv_pidx ov ) 0 < ( fv_pidx ov ) g_f_ncap ! ( fv_byref ov ) {
+                                                        // a field of a capture the closure holds by
+                                                        // value: the body's copy, made at each call -
+                                                        // the binding outside still holds the field,
+                                                        // and releases it again (the walk's `pendfc`)
+                                                        ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, a capture this closure holds by value` ) )
+                                                    } { ? & & != ( pl_path op ) 0 sinkmode & != g_fe_outside 0 ( sq_has g_fe_outside ov ) {
+                                                            // a field of a loop's element, in a `;`
+                                                            // block armed in a round, which runs
+                                                            // outside every round: the element is a
+                                                            // view of the container's there, its field
+                                                            // not its to hand to a `sink`, as a
+                                                            // `vec_at` copy's is not (agora #672)
+                                                            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, a loop's element read outside its round, which is a borrow` ) )
+                                                        } {
+                                                            // (a part of an `inout` parameter is the
+                                                            // caller's, who goes on holding the whole:
+                                                            // handed to a callee that keeps it - in its
+                                                            // result, in another argument - it is
+                                                            // copied; taken out, it would leave the
+                                                            // caller's value with a hole. One that
+                                                            // releases it takes it.)
+                                                            : ~ b inout_part & & ( et_copyable ty ) != ( av_alias av ) 0 ( sm_keeps_arg sm ck )
+                                                            ? inout_part {
+                                                                : i al ( av_alias av )
+                                                                : ~ i a 0
+                                                                ~ & inout_part < a ( sq_len al ) {
+                                                                    : i pa ( sq_at al a )
+                                                                    : i pi ( fv_pidx ( pl_var pa ) )
+                                                                    // (…or of an element of any
+                                                                    // parameter's container)
+                                                                    ? | | == ( pl_path pa ) 0 < pi 0 & != ( fp_mode pi ) PM_INOUT ( eng_path_no_star ( pl_path pa ) ) { = inout_part F } {}
+                                                                    = a + a 1
+                                                                }
                                                             } {}
-                                                        }
-                                                    } } } } } }
+                                                            ? inout_part { = copied ( sq_add copied ck ) } {
+                                                                ? & ! ( take_payload st av line != ( pl_path op ) 0 ) ! ( et_copyable ty ) {
+                                                                    ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) )
+                                                                } {}
+                                                            }
+                                                        } } } } } } }
                             }
                         }
                     }
@@ -17318,6 +17363,23 @@ unsafe @ eng_byte s w i k → i {
             // possibly-moved value)
             : i pav ( st_av st psrc )
             ? ( take_payload st pav ln T ) { ( st_put st psrc ( av_make OW_O 0 0 ( eng_held_of_own pav psrc ) F ) ) } {}
+        } {}
+        ? & & & & != kind VK_TEMP >= psrc 0 == ( fv_kind psrc ) VK_LOCAL ! ( fv_mut psrc ) & & != vty ET_NONE ! ( et_is_view vty ) & != ( et_kind vty ) EK_CLOSURE ( et_owning vty ) {
+            : i fav ( st_av st psrc )
+            ? ( eng_option_payload_field st fav ) {
+                // a binding read out of a field of an arm's payload of an
+                // option a local owns, given to an owner: the field goes over
+                // with its option, as the walk moves it
+                : i fal ( av_alias fav )
+                : ~ b took T
+                : ~ i fa 0
+                ~ & took < fa ( sq_len fal ) {
+                    : i fv ( pl_var ( sq_at fal fa ) )
+                    = took ? ( fx_has fv FX_PAYLOAD ) ( take_payload st ( st_av st fv ) ln T ) ( take_payload st ( st_av st psrc ) ln T )
+                    = fa + fa 1
+                }
+                ? took { ( st_put st psrc ( av_make OW_O 0 0 ( eng_held_of_own ( st_av st psrc ) psrc ) F ) ) } {}
+            } {}
         } {}
         : ~ i new ( eng_rvalue st rv ln ddepth vty WK_VAR vid flags vid )
         ? != g_fc_unsup 0 { ^ } {}
