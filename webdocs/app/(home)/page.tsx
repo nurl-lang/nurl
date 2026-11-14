@@ -1,72 +1,22 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { Bot, Code2, Cpu, GitBranch, Package, Rocket, ShieldCheck, Terminal } from 'lucide-react';
+import type { Metadata } from 'next';
+import { Code2, GitBranch, Package, Rocket, Terminal } from 'lucide-react';
 import { Pill } from '@/components/version-badges';
 import { benchmarkStats } from '@/lib/benchmark-stats.generated';
 import { contributors } from '@/lib/contributors.generated';
 import targetFacts from '@/site-facts.json';
 import { docsCommit, nurlVersion, releaseFacts } from '@/lib/release-facts.generated';
-import { gitConfig } from '@/lib/shared';
+import { gitConfig, repoUrl } from '@/lib/shared';
+import { addExample, features, fizzBuzzExample, packages, projects, tagline } from '@/lib/home-content';
 
-const repoUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
-
-const features = [
-  {
-    icon: Bot,
-    title: 'Regular prefix-arity grammar',
-    description: 'Every operator has a fixed arity. There is no infix syntax or precedence table.',
+export const metadata: Metadata = {
+  description: tagline,
+  alternates: {
+    canonical: '/',
+    types: { 'text/markdown': '/index.md', 'text/plain': '/llms.txt' },
   },
-  {
-    icon: Code2,
-    title: 'Local semantics',
-    description: 'A token’s meaning depends on a short span of preceding tokens.',
-  },
-  {
-    icon: ShieldCheck,
-    title: 'Single-owner memory',
-    description: 'Values auto-drop at scope exit. Borrow checking, an explicit unsafe/raw boundary, and a mechanized Lean 4 proof (formal/) guarantee memory safety.',
-  },
-  {
-    icon: GitBranch,
-    title: 'Deterministic compiler',
-    description: 'Bootstrap compiles the compiler twice and requires identical LLVM IR from both runs.',
-  },
-  {
-    icon: Cpu,
-    title: 'LLVM-backed',
-    description: 'One LLVM pipeline targets desktops, servers, WebAssembly, RISC-V, and embedded systems.',
-  },
-  {
-    icon: Rocket,
-    title: 'Self-hosting',
-    description: 'The compiler is written in NURL and builds itself from source.',
-  },
-];
-
-const projects = [
-  {
-    title: 'The compiler itself',
-    description: 'A self-hosting compiler that produces identical LLVM IR in two compilation rounds.',
-    href: `${repoUrl}/blob/main/compiler/nurlc.nu`,
-  },
-  {
-    title: 'A Game Boy emulator',
-    description: 'A complete DMG emulator compiled to WebAssembly for the browser.',
-    href: 'https://play.nurl-lang.org/gameboydemo',
-  },
-  {
-    title: 'The playground backend',
-    description: 'NURL serves the playground, build service, MCP endpoint, and package registry.',
-    href: `${repoUrl}/tree/main/nurlapi`,
-  },
-  {
-    title: 'Examples',
-    description: 'Examples include Game of Life, HTTP/2, MCP servers, agents, and embedded targets.',
-    href: `${repoUrl}/tree/main/examples`,
-  },
-];
-
-const packages = ['nurllama', 'whisper', 'onnx', 'tensor', 'grad', 'yoloe', 'nwasm', 'image', 'nq'];
+};
 
 function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
   return (
@@ -87,7 +37,7 @@ export default function HomePage() {
             <Pill href={`${repoUrl}/blob/${gitConfig.branch}/CHANGELOG.md`}>{nurlVersion}</Pill>
           </div>
           <p className="mt-6 max-w-2xl text-lg text-fd-muted-foreground">
-            A compiled language without a virtual machine, garbage collector, or interpreter — designed as a target for LLM code generation, with deterministic builds and native LLVM performance.
+            {tagline}
           </p>
           <div className="mt-8 flex flex-wrap justify-center gap-4">
             <Link
@@ -152,20 +102,11 @@ export default function HomePage() {
           <div className="mt-8 grid gap-4 lg:grid-cols-2">
             <article className="overflow-hidden rounded-xl border bg-fd-card">
               <p className="border-b px-4 py-3 text-sm font-medium">Add two integers</p>
-              <pre className="overflow-x-auto p-4 text-sm"><code>{`@ add i a i b → i { ^ + a b }
-
-( add 3 4 )     // → 7`}</code></pre>
+              <pre className="overflow-x-auto p-4 text-sm"><code>{addExample}</code></pre>
             </article>
             <article className="overflow-hidden rounded-xl border bg-fd-card">
               <p className="border-b px-4 py-3 text-sm font-medium">FizzBuzz</p>
-              <pre className="overflow-x-auto p-4 text-sm"><code>{`: ~ i i 1
-~ <= i 100 {
-    ? == 0 % i 15 { ( nurl_print \`FizzBuzz\\n\` ) }
-    ? == 0 % i 3  { ( nurl_print \`Fizz\\n\` ) }
-    ? == 0 % i 5  { ( nurl_print \`Buzz\\n\` ) }
-    { ( nurl_println_int i ) }
-    = i + i 1
-}`}</code></pre>
+              <pre className="overflow-x-auto p-4 text-sm"><code>{fizzBuzzExample}</code></pre>
             </article>
           </div>
           <p className="mt-6 text-sm text-fd-muted-foreground">See the <Link href="/docs/cheat-sheet" className="font-medium text-fd-primary hover:underline">language reference</Link> for generics, traits, pattern matching, errors, channels, compile-time evaluation, and async runtime support.</p>

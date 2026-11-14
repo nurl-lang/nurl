@@ -1,2 +1,38 @@
+# nurl-lang.org — the NURL programming language: homepage and docs.
+#
+# Every crawler, search engine and AI agent alike, may read every page.
+# Agents: /llms.txt is the index, /llms-full.txt every doc page in one
+# file, and any page answers `Accept: text/markdown` with its Markdown.
+# The NURL MCP server is described at /.well-known/mcp/server-card.json.
+#
+# Content signals (https://contentsignals.org/): search, AI answers
+# (ai-input) and model training (ai-train) are all allowed. NURL is
+# open source (MIT OR Apache-2.0); a model that has read these docs
+# writes better NURL.
+
 User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
 Allow: /
+
+# AI search and assistant crawlers: they fetch the pages AI answers cite.
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+User-agent: Claude-SearchBot
+User-agent: Claude-User
+User-agent: PerplexityBot
+User-agent: Perplexity-User
+User-agent: DuckAssistBot
+User-agent: MistralAI-User
+# AI training crawlers.
+User-agent: GPTBot
+User-agent: ClaudeBot
+User-agent: Google-Extended
+User-agent: Applebot-Extended
+User-agent: CCBot
+User-agent: Meta-ExternalAgent
+User-agent: Amazonbot
+User-agent: Bytespider
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
+Allow: /
+
+Sitemap: https://nurl-lang.org/sitemap.xml
