@@ -320,6 +320,7 @@
 : ~ i g_et_ix -1  // a type (interned) → its number + 1
 : ~ i g_et_seen -1  // the named types a question about a type is inside of (a type that holds itself)
 : ~ i g_et_seen_base 0  // …where the question being answered began in it
+: ~ i g_et_low 0  // …the lowest place on it a type met again was at (__et_low_open)
 : ~ i g_et_names 0  // 1 once the names below are interned
 : ~ i g_etn_i64 0
 : ~ i g_etn_i1 0
@@ -595,8 +596,13 @@
 : ~ i g_sm_dyn 0  // the name `dyn` (interned): boxing a value as a trait object
 : i TG_SC 32
 : i TG_RB 33  // a payload taken out of a temporary: what it holds of itself, of its new holder
+: i TG_CV 34  // a view a closure's body hands back: what it lends of an argument, a capture
 : ~ i g_fc_dvars -1  // a `;` block (its offset) → the variables its body names + 1 (a set), for this function
 : ~ i g_fc_dbefore -1  // an armed `;` block (its number) → the variables that had a value when it was armed + 1 (a set)
+: ~ i g_fc_dfe -1  // …→ the `~ x xs` elements whose round armed it (a set, 0 for none)
+: ~ i g_fe_walking -1  // the elements of the `~ x xs` loops a round of is being walked
+: ~ i g_fe_outside 0  // the elements a `;` block now running reads outside their rounds (a set)
+: ~ i g_fc_dtor 0  // 1 while the function read is a `% Drop` method (`drop__T`): its receiver is its own
 : ~ i g_fc_defers -1  // the `;` blocks armed in this run, in order: each one's offset (a state names them by number)
 : ~ i g_fc_rets -1  // the function's returns: the value handed back (an AV), and the state there (a vector)
 : ~ i g_fc_exits -1  // …and its exits with no value: the state there
@@ -711,6 +717,8 @@
 // until then no type has one, and the questions that walk a struct's
 // fields looking for one answer at once.
 : ~ i g_user_drop_seen 0
+// (__zero_drops_user: the walk now asked was cut short by its depth guard.)
+: ~ i g_zdu_cut 0
 
 // die → __diag_abort: print-position variants share this exit/panic tail.
 @ __diag_abort → v {
@@ -11348,8 +11356,29 @@ unsafe @ eng_keep_fn → v {
 @ __et_in_seen i t → b {
     : i n ( wv_len g_et_seen )
     : ~ i k g_et_seen_base
-    ~ < k n { ? == ( wv_at g_et_seen k ) t { ^ T } {} = k + k 1 }
+    ~ < k n { ? == ( wv_at g_et_seen k ) t { ? < k g_et_low { = g_et_low k } {} ^ T } {} = k + k 1 }
     ^ F
+}
+
+// A named type's answer found inside another question is that question's
+// answer for it: a type met again on the way down answered as a cycle,
+// also one of the types the question is inside of. Where none of those
+// was met (no type met again sat below this one's place on the stack,
+// g_et_low), it is the answer asked from outside, and kept as that
+// (__et_memo_put): each named type is then walked once per question, not
+// once per path to it - a struct of eight fields eight deep was 8^8.
+// (An answer kept that way is the one the question asked inside would
+// reach as well: an "any" question asks whether a leaf answering yes is
+// reachable, and a cycle reached through a type the question is inside of
+// is reached from that type too.)
+@ __et_low_open → i {
+    : i was g_et_low
+    = g_et_low 4611686018427387904
+    ^ was
+}
+
+@ __et_low_close i t i q i d i was b ans → v {
+    ? >= g_et_low d { ( __et_memo_put t q ans ) = g_et_low was } { ? < was g_et_low { = g_et_low was } {} }
 }
 
 @ __et_ask → i {
@@ -11383,6 +11412,16 @@ unsafe @ eng_keep_fn → v {
     ? == kind EK_OPT { ^ ( __et_scalar ( et_at t ET_E1 ) ) } {}
     ? != kind EK_NAMED { ^ F } {}
     ? ( __et_in_seen t ) { ^ F } {}
+    : i have ( __et_memo_get t ETM_SCALAR )
+    ? >= have 0 { ^ == have 1 } {}
+    : i was ( __et_low_open )
+    : i d ( wv_len g_et_seen )
+    : b r ( __et_scalar_named t )
+    ( __et_low_close t ETM_SCALAR d was r )
+    ^ r
+}
+
+@ __et_scalar_named i t → b {
     ? ( et_flag t ETF_ENUM ) {
         ( wv_push g_et_seen t )
         : i n ( et_at t ET_V_N )
@@ -11441,6 +11480,16 @@ unsafe @ eng_keep_fn → v {
     ? ! ( et_flag t ETF_DROPS ) { ^ F } {}
     ? ( et_flag t ETF_HANDLE ) { ^ T } {}
     ? ( __et_in_seen t ) { ^ F } {}
+    : i have ( __et_memo_get t ETM_OWNING )
+    ? >= have 0 { ^ == have 1 } {}
+    : i was ( __et_low_open )
+    : i d ( wv_len g_et_seen )
+    : b r ( __et_owning_named t )
+    ( __et_low_close t ETM_OWNING d was r )
+    ^ r
+}
+
+@ __et_owning_named i t → b {
     ? ( et_flag t ETF_STRUCT ) {
         ( wv_push g_et_seen t )
         : i n ( et_at t ET_F_N )
@@ -11488,30 +11537,41 @@ unsafe @ eng_keep_fn → v {
     ? == kind EK_OPT { ^ ( __et_owns_handle ( et_at t ET_E1 ) ) } {}
     ? == kind EK_RES { ^ | ( __et_owns_handle ( et_at t ET_E1 ) ) ( __et_owns_handle ( et_at t ET_E2 ) ) } {}
     ? & & == kind EK_NAMED ! ( et_flag t ETF_HANDLE ) ! ( __et_in_seen t ) {
-        ? ( et_flag t ETF_STRUCT ) {
-            ( wv_push g_et_seen t )
-            : i n ( et_at t ET_F_N )
-            : ~ b any F
+        : i have ( __et_memo_get t ETM_OWNS_HANDLE )
+        ? >= have 0 { ^ == have 1 } {}
+        : i was ( __et_low_open )
+        : i d ( wv_len g_et_seen )
+        : b r ( __et_owns_handle_named t )
+        ( __et_low_close t ETM_OWNS_HANDLE d was r )
+        ^ r
+    } {}
+    ^ ( et_owning t )
+}
+
+@ __et_owns_handle_named i t → b {
+    ? ( et_flag t ETF_STRUCT ) {
+        ( wv_push g_et_seen t )
+        : i n ( et_at t ET_F_N )
+        : ~ b any F
+        : ~ i k 0
+        ~ & ! any < k n { ? ( __et_owns_handle ( et_field_ty t k ) ) { = any T } {} = k + k 1 }
+        ( wv_pop g_et_seen )
+        ^ any
+    } {}
+    ? ( et_flag t ETF_ENUM ) {
+        ( wv_push g_et_seen t )
+        : i n ( et_at t ET_V_N )
+        : ~ b any F
+        : ~ i v 0
+        ~ & ! any < v n {
+            : i at ( __et_variant_at t v )
+            : i pn ( wv_at g_et_w + at 1 )
             : ~ i k 0
-            ~ & ! any < k n { ? ( __et_owns_handle ( et_field_ty t k ) ) { = any T } {} = k + k 1 }
-            ( wv_pop g_et_seen )
-            ^ any
-        } {}
-        ? ( et_flag t ETF_ENUM ) {
-            ( wv_push g_et_seen t )
-            : i n ( et_at t ET_V_N )
-            : ~ b any F
-            : ~ i v 0
-            ~ & ! any < v n {
-                : i at ( __et_variant_at t v )
-                : i pn ( wv_at g_et_w + at 1 )
-                : ~ i k 0
-                ~ & ! any < k pn { ? ( __et_owns_handle ( et_of ( wv_at g_et_w + + at 2 k ) ) ) { = any T } {} = k + k 1 }
-                = v + v 1
-            }
-            ( wv_pop g_et_seen )
-            ^ any
-        } {}
+            ~ & ! any < k pn { ? ( __et_owns_handle ( et_of ( wv_at g_et_w + + at 2 k ) ) ) { = any T } {} = k + k 1 }
+            = v + v 1
+        }
+        ( wv_pop g_et_seen )
+        ^ any
     } {}
     ^ ( et_owning t )
 }
@@ -11539,36 +11599,47 @@ unsafe @ eng_keep_fn → v {
     ? == kind EK_RES { ^ | ( __et_view_capable ( et_at t ET_E1 ) ) ( __et_view_capable ( et_at t ET_E2 ) ) } {}
     ? == kind EK_NAMED {
         ? ( __et_in_seen t ) { ^ F } {}
-        ? ( et_flag t ETF_HANDLE ) {
-            ( wv_push g_et_seen t )
-            : b r ( __et_view_capable ( et_at t ET_E1 ) )
-            ( wv_pop g_et_seen )
-            ^ r
-        } {}
-        ? ( et_flag t ETF_STRUCT ) {
-            ( wv_push g_et_seen t )
-            : i n ( et_at t ET_F_N )
-            : ~ b any F
+        : i have ( __et_memo_get t ETM_VIEW_CAPABLE )
+        ? >= have 0 { ^ == have 1 } {}
+        : i was ( __et_low_open )
+        : i d ( wv_len g_et_seen )
+        : b r ( __et_view_capable_named t )
+        ( __et_low_close t ETM_VIEW_CAPABLE d was r )
+        ^ r
+    } {}
+    ^ T
+}
+
+@ __et_view_capable_named i t → b {
+    ? ( et_flag t ETF_HANDLE ) {
+        ( wv_push g_et_seen t )
+        : b r ( __et_view_capable ( et_at t ET_E1 ) )
+        ( wv_pop g_et_seen )
+        ^ r
+    } {}
+    ? ( et_flag t ETF_STRUCT ) {
+        ( wv_push g_et_seen t )
+        : i n ( et_at t ET_F_N )
+        : ~ b any F
+        : ~ i k 0
+        ~ & ! any < k n { ? ( __et_view_capable ( et_field_ty t k ) ) { = any T } {} = k + k 1 }
+        ( wv_pop g_et_seen )
+        ^ any
+    } {}
+    ? ( et_flag t ETF_ENUM ) {
+        ( wv_push g_et_seen t )
+        : i n ( et_at t ET_V_N )
+        : ~ b any F
+        : ~ i v 0
+        ~ & ! any < v n {
+            : i at ( __et_variant_at t v )
+            : i pn ( wv_at g_et_w + at 1 )
             : ~ i k 0
-            ~ & ! any < k n { ? ( __et_view_capable ( et_field_ty t k ) ) { = any T } {} = k + k 1 }
-            ( wv_pop g_et_seen )
-            ^ any
-        } {}
-        ? ( et_flag t ETF_ENUM ) {
-            ( wv_push g_et_seen t )
-            : i n ( et_at t ET_V_N )
-            : ~ b any F
-            : ~ i v 0
-            ~ & ! any < v n {
-                : i at ( __et_variant_at t v )
-                : i pn ( wv_at g_et_w + at 1 )
-                : ~ i k 0
-                ~ & ! any < k pn { ? ( __et_view_capable ( et_of ( wv_at g_et_w + + at 2 k ) ) ) { = any T } {} = k + k 1 }
-                = v + v 1
-            }
-            ( wv_pop g_et_seen )
-            ^ any
-        } {}
+            ~ & ! any < k pn { ? ( __et_view_capable ( et_of ( wv_at g_et_w + + at 2 k ) ) ) { = any T } {} = k + k 1 }
+            = v + v 1
+        }
+        ( wv_pop g_et_seen )
+        ^ any
     } {}
     ^ T
 }
@@ -11596,6 +11667,9 @@ unsafe @ eng_keep_fn → v {
 }
 
 // May a value of type `t` reach a payload of the shared handle type `sh`?
+// (A named type stays on the stack until the question is answered: met
+// again, from anywhere, it has answered already - had it reached `sh`,
+// the question would be answered - so each is walked once per question.)
 @ __et_reaches i t i sh → b {
     ? | < t 0 ( et_scalar t ) { ^ F } {}
     : i kind ( et_kind t )
@@ -11623,12 +11697,13 @@ unsafe @ eng_keep_fn → v {
             }
         } {}
     }
-    ( wv_pop g_et_seen )
     ^ any
 }
 
 // The shared handle types (an Rc, an Arc, a program handle whose copy is
 // a share) a value of type `t` may reach, pushed onto `out` once each.
+// (A named type walked once per question, as in __et_reaches: what it
+// reaches is in `out` already.)
 @ __et_shared_in i t i out → v {
     ? | < t 0 ( et_scalar t ) { ^ } {}
     : i kind ( et_kind t )
@@ -11652,7 +11727,6 @@ unsafe @ eng_keep_fn → v {
             }
         } {}
     }
-    ( wv_pop g_et_seen )
 }
 
 @ et_shared_in i t i out → v {
@@ -12845,6 +12919,30 @@ unsafe @ eng_byte s w i k → i {
             = k + k 1
         }
     } {}
+    ? & & != path 0 != eff EF_END != ( av_held av ) 0 {
+        // inside a part of the value that is a view - a slice field over
+        // another binding's buffer (`= . x w ( slice_from_vec … )`, then
+        // `( slice_put . x w 0 … )`): what is done there is done to what the
+        // view points into, as for a binding that is a view
+        : i hd ( av_held av )
+        : ~ i k 0
+        ~ < k ( sq_len hd ) {
+            : i he ( sq_at hd k )
+            : i hp ( he_path he )
+            : i l ( he_loan he )
+            ? & & & & != hp 0 < ( ep_len hp ) ( ep_len path ) ( ep_prefix hp path ) ( el_is_loan l ) == ( el_kind l ) LK_VIEW {
+                : i hty ( eng_ty_of ( pl_make vid hp ) )
+                ? & != hty ET_NONE ( et_is_view hty ) {
+                    : i q ( el_place l )
+                    : i qv ( pl_var q )
+                    ? & >= qv 0 != 0 ( st_av st qv ) {
+                        ( eng_effect st ( pl_make qv ( ep_take ( ep_cat ( pl_path q ) ( ep_drop path ( ep_len hp ) ) ) PATH_MAX ) ) eff line + depth 1 )
+                    } {}
+                } {}
+            } {}
+            = k + k 1
+        }
+    } {}
     ? & >= ( fv_pidx vid ) 0 != eff EF_END {
         = g_s_effects ( sq_add g_s_effects ( tp3 ( fv_pidx vid ) ( ep_take path 3 ) eff ) )
     } {}
@@ -13148,6 +13246,41 @@ unsafe @ eng_byte s w i k → i {
     : ~ i k 0
     ~ < k ( sq_len held ) { ? ( he_is_clo ( sq_at held k ) ) { ^ T } {} = k + k 1 }
     ^ F
+}
+
+// The first element of path `p` (`a` of `a.b.c`), 0 for the empty one.
+@ ep_first i p → i {
+    ? == p 0 { ^ 0 } {}
+    : ~ i q p
+    ~ != ( ep_parent q ) 0 { = q ( ep_parent q ) }
+    ^ ( ep_last q )
+}
+
+// Is element `e` a payload (`#V0`)?
+@ __eng_elem_is_pay i e → b {
+    ? | == e 0 == e EE_STAR { ^ F } {}
+    : s n ( eng_str ( ee_name e ) )
+    ^ & != 0 ( nurl_str_len n ) == ( nurl_str_get n 0 ) 35
+}
+
+// Is element `e` a struct's field (not `*`, a payload `#V0`, a capture `^3`)?
+@ eng_field_elem i e → b {
+    ? | == e 0 == e EE_STAR { ^ F } {}
+    : s n ( eng_str ( ee_name e ) )
+    ? == 0 ( nurl_str_len n ) { ^ F } {}
+    : i c ( nurl_str_get n 0 )
+    ^ & != c 35 != c 94
+}
+
+// Is `vid` a copy of a value this frame only borrows: a by-value (`in`)
+// parameter (not a destructor's receiver), a `~` loop's element, a closure
+// body's by-value capture or parameter?
+@ eng_borrowed_copy i vid → b {
+    ? ( fx_has vid FX_FE ) { ^ T } {}
+    : i k ( fv_pidx vid )
+    ? < k 0 { ^ F } {}
+    ? < k g_f_ncap { ^ ! ( fv_byref vid ) } {}
+    ^ & == ( fp_mode k ) PM_IN == g_fc_dtor 0
 }
 
 // A fresh raw string - the result of a call that hands its string over -
@@ -14278,6 +14411,39 @@ unsafe @ eng_byte s w i k → i {
             }
             = k 0
             ~ < k ( wv_len caps ) { ( stale_capture_check st f ( wv_at caps k ) ( wv_at caps + k 1 ) line ) = k + k 2 }
+            // (what the body changes through one capture may end what another
+            // of its captures views: the body reads that one too, in this run
+            // or the next)
+            : ~ b self_hit F
+            : ~ i e0 0
+            ~ & ! self_hit < e0 ( sm_n f SM_EFFECTS ) {
+                : i t0 ( sm_at f SM_EFFECTS e0 )
+                : i pk0 ( tp_at t0 3 0 )
+                : i eff0 ( tp_at t0 3 2 )
+                ? & < pk0 ncap | | | == eff0 EF_REPLACE == eff0 EF_REALLOC == eff0 EF_DROP == eff0 EF_TAKE {
+                    = k 0
+                    ~ & ! self_hit < k ( wv_len caps ) {
+                        ? == ( wv_at caps k ) pk0 {
+                            : i place0 ( wv_at caps + k 1 )
+                            : i ch0 ( pl_make ( pl_var place0 ) ( ep_take ( ep_cat ( pl_path place0 ) ( tp_at t0 3 1 ) ) PATH_MAX ) )
+                            : ~ i h 0
+                            ~ & ! self_hit < h ( sq_len held ) {
+                                : i he ( sq_at held h )
+                                : i hp ( he_path he )
+                                : i l ( he_loan he )
+                                : i top ( ep_take hp + bl 1 )
+                                ? & & & & & & & > ( ep_len hp ) bl == ( ep_parent top ) base ( ee_is_cap ( ep_last top ) ) == 0 & ( ee_bits ( ep_last top ) ) EE_FN != ( ee_cap_no ( ep_last top ) ) pk0 ( el_is_loan l ) | == ( el_kind l ) LK_VIEW == ( el_kind l ) LK_HANDLE & ! ( sq_has ( st_dead st ) l ) ( eng_kills eff0 ch0 l ) {
+                                    ( eng_err line ( nurl_str_cat4 ( eng_what wk wa ) `: its body changes ` ( eng_pname ch0 ) `, which another of its captures views, when it runs here` ) )
+                                    = self_hit T
+                                } {}
+                                = h + h 1
+                            }
+                        } {}
+                        = k + k 2
+                    }
+                } {}
+                = e0 + e0 1
+            }
             : i ne ( sm_n f SM_EFFECTS )
             : ~ i e 0
             ~ < e ne {
@@ -14794,15 +14960,26 @@ unsafe @ eng_byte s w i k → i {
                     ? & != oty ET_NONE ( et_scalar oty ) { = skip T } {}
                 } {}
                 ? ! skip {
-                    : b same & & ( op_is_place om ) == ( pl_var om ) vid | ( ep_prefix ( pl_path om ) path ) ( ep_prefix path ( pl_path om ) )
-                    : ~ b lend F
-                    : i mal ( av_alias ( wv_at avs m ) )
+                    // (the changed argument is its place and what it is a
+                    // cursor or a lend of: `( walk t cur )`, cur a `: ~`
+                    // cursor of t, grows the buffer t is)
+                    : ~ i roots ( sq_add 0 ok )
+                    = roots ( sq_union roots ( av_alias ( wv_at avs k ) ) )
+                    : ~ i mine ( av_alias ( wv_at avs m ) )
+                    ? ( op_is_place om ) { = mine ( sq_add mine om ) } {}
+                    : ~ b same F
                     : ~ i a 0
-                    ~ & ! lend < a ( sq_len mal ) {
-                        : i pa ( sq_at mal a )
-                        ? & == ( pl_var pa ) vid | ( ep_prefix ( pl_path pa ) path ) ( ep_prefix path ( pl_path pa ) ) { = lend T } {}
+                    ~ & ! same < a ( sq_len roots ) {
+                        : i ra ( sq_at roots a )
+                        : ~ i b 0
+                        ~ & ! same < b ( sq_len mine ) {
+                            : i qa ( sq_at mine b )
+                            ? & == ( pl_var qa ) ( pl_var ra ) | ( ep_prefix ( pl_path qa ) ( pl_path ra ) ) ( ep_prefix ( pl_path ra ) ( pl_path qa ) ) { = same T } {}
+                            = b + b 1
+                        }
                         = a + a 1
                     }
+                    : b lend F
                     ? | same lend {
                         ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) `: argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ` is handed over to be changed ('inout'), and argument ` ( nurl_str_int + m 1 ) ` reaches it too` ) ) )
                         = stop T
@@ -14969,33 +15146,47 @@ unsafe @ eng_byte s w i k → i {
                                     // the binding is a borrow, and its field is
                                     // not its to hand to a `sink`
                                     ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, which is a borrow` ) )
-                                } {
-                                    // (a part of an `inout` parameter is the
-                                    // caller's, who goes on holding the whole:
-                                    // handed to a callee that keeps it - in its
-                                    // result, in another argument - it is
-                                    // copied; taken out, it would leave the
-                                    // caller's value with a hole. One that
-                                    // releases it takes it.)
-                                    : ~ b inout_part & & ( et_copyable ty ) != ( av_alias av ) 0 ( sm_keeps_arg sm ck )
-                                    ? inout_part {
-                                        : i al ( av_alias av )
-                                        : ~ i a 0
-                                        ~ & inout_part < a ( sq_len al ) {
-                                            : i pa ( sq_at al a )
-                                            : i pi ( fv_pidx ( pl_var pa ) )
-                                            // (…or of an element of any
-                                            // parameter's container)
-                                            ? | | == ( pl_path pa ) 0 < pi 0 & != ( fp_mode pi ) PM_INOUT ( eng_path_no_star ( pl_path pa ) ) { = inout_part F } {}
-                                            = a + a 1
-                                        }
-                                    } {}
-                                    ? inout_part { = copied ( sq_add copied ck ) } {
-                                        ? & ! ( take_payload st av line != ( pl_path op ) 0 ) ! ( et_copyable ty ) {
-                                            ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) )
-                                        } {}
-                                    }
-                                }
+                                } { ? & & & & != ( pl_path op ) 0 sinkmode >= ( fv_pidx ov ) 0 < ( fv_pidx ov ) g_f_ncap ! ( fv_byref ov ) {
+                                        // a field of a capture the closure holds by
+                                        // value: the body's copy, made at each call -
+                                        // the binding outside still holds the field,
+                                        // and releases it again (the walk's `pendfc`)
+                                        ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, a capture this closure holds by value` ) )
+                                    } { ? & & != ( pl_path op ) 0 sinkmode & != g_fe_outside 0 ( sq_has g_fe_outside ov ) {
+                                            // a field of a loop's element, in a `;`
+                                            // block armed in a round, which runs
+                                            // outside every round: the element is a
+                                            // view of the container's there, its field
+                                            // not its to hand to a `sink`, as a
+                                            // `vec_at` copy's is not (agora #672)
+                                            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, a loop's element read outside its round, which is a borrow` ) )
+                                        } {
+                                            // (a part of an `inout` parameter is the
+                                            // caller's, who goes on holding the whole:
+                                            // handed to a callee that keeps it - in its
+                                            // result, in another argument - it is
+                                            // copied; taken out, it would leave the
+                                            // caller's value with a hole. One that
+                                            // releases it takes it.)
+                                            : ~ b inout_part & & ( et_copyable ty ) != ( av_alias av ) 0 ( sm_keeps_arg sm ck )
+                                            ? inout_part {
+                                                : i al ( av_alias av )
+                                                : ~ i a 0
+                                                ~ & inout_part < a ( sq_len al ) {
+                                                    : i pa ( sq_at al a )
+                                                    : i pi ( fv_pidx ( pl_var pa ) )
+                                                    // (…or of an element of any
+                                                    // parameter's container)
+                                                    ? | | == ( pl_path pa ) 0 < pi 0 & != ( fp_mode pi ) PM_INOUT ( eng_path_no_star ( pl_path pa ) ) { = inout_part F } {}
+                                                    = a + a 1
+                                                }
+                                            } {}
+                                            ? inout_part { = copied ( sq_add copied ck ) } {
+                                                ? & ! ( take_payload st av line != ( pl_path op ) 0 ) ! ( et_copyable ty ) {
+                                                    ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) )
+                                                } {}
+                                            }
+                                        } } }
                             }
                         }
                     }
@@ -15050,11 +15241,41 @@ unsafe @ eng_byte s w i k → i {
         ( region_effect st ( tp_at t 3 0 ) ( tp_at t 3 1 ) ( tp_at t 3 2 ) )
         = e + e 1
     }
-    // a closure another thread runs takes what it captured with it
-    : i nd ( sm_n sm SM_DETACHES )
+    // a closure another thread runs takes what it captured with it (…and
+    // a closure stored into what two threads may share - a channel, a
+    // thread-shared handle's payload - may be run by the other one: it
+    // takes its captures with it as one a thread is spawned on does)
+    : ~ i dets 0
+    = e 0
+    ~ < e ( sm_n sm SM_DETACHES ) { = dets ( sq_add dets ( sm_at sm SM_DETACHES e ) ) = e + e 1 }
+    = e 0
+    ~ < e ( sm_n sm SM_STORES ) {
+        : i t ( sm_at sm SM_STORES e )
+        : i tj ( tp_at t 5 0 )
+        : i tk ( tp_at t 5 2 )
+        : i tkind ( tp_at t 5 4 )
+        ? & & & | == tkind SK_VALUE == tkind LK_HANDLE < tj n < tk n ( op_is_place ( wv_at ops tj ) ) {
+            ? ( held_has_clo ( av_held ( wv_at avs tk ) ) ) {
+                : i jty ( eng_ty_of ( wv_at ops tj ) )
+                ? != jty ET_NONE {
+                    : ~ b ts & == ( et_kind jty ) EK_NAMED ( et_flag jty ETF_TSHARE )
+                    ? ! ts {
+                        : i shs ( wv_new )
+                        ( et_shared_in jty shs )
+                        : ~ i q 0
+                        ~ < q ( wv_len shs ) { ? ( et_flag ( wv_at shs q ) ETF_TSHARE ) { = ts T } {} = q + q 1 }
+                        ( wv_drop shs )
+                    } {}
+                    ? ts { = dets ( sq_add dets tk ) } {}
+                } {}
+            } {}
+        } {}
+        = e + e 1
+    }
+    : i nd ( sq_len dets )
     = e 0
     ~ < e nd {
-        : i dk ( sm_at sm SM_DETACHES e )
+        : i dk ( sq_at dets e )
         ? < dk n {
             : i ok ( wv_at ops dk )
             ? & & ( op_is_place ok ) == ( pl_path ok ) 0 >= ( fv_pidx ( pl_var ok ) ) 0 {
@@ -15068,10 +15289,31 @@ unsafe @ eng_byte s w i k → i {
             ~ & ! stop < h ( sq_len held ) {
                 : i he ( sq_at held h )
                 : i l ( he_loan he )
-                ? == ( el_kind l ) LK_VIEW {
+                ? | == ( el_kind l ) LK_VIEW & == ( el_kind l ) LK_HELD < ( pl_var ( el_place l ) ) 0 {
                     : ~ b cap F
+                    : ~ i capq 0
                     : ~ i q ( he_path he )
-                    ~ != q 0 { ? ( ee_is_cap ( ep_last q ) ) { = cap T } {} = q ( ep_parent q ) }
+                    ~ != q 0 { ? ( ee_is_cap ( ep_last q ) ) { = cap T = capq q } {} = q ( ep_parent q ) }
+                    // (…nor a copy of the views a parameter holds, into its
+                    // caller's storage - but not with the parameter itself, a
+                    // closure over it: those go with their owner's value; nor
+                    // what a closure parameter's captures hold)
+                    ? & cap == ( el_kind l ) LK_HELD {
+                        : i pv - -1 ( pl_var ( el_place l ) )
+                        : i pty ? < ( fv_pidx pv ) 0 ET_NONE ( fv_ty pv )
+                        // (a container whose elements are views - a `( Vec s )`:
+                        // what a derived summary says a value made from an
+                        // argument holds is no view of it otherwise)
+                        ? | == pty ET_NONE ! ( et_holds_views pty ) { = cap F } {
+                            : ~ i h2 0
+                            ~ & cap < h2 ( sq_len held ) {
+                                : i he2 ( sq_at held h2 )
+                                : i l2 ( he_loan he2 )
+                                ? & & & ( el_is_loan l2 ) == ( ep_take ( he_path he2 ) ( ep_len capq ) ) capq == ( pl_var ( el_place l2 ) ) pv | == ( el_kind l2 ) LK_HANDLE == ( el_kind l2 ) LK_REF { = cap F } {}
+                                = h2 + h2 1
+                            }
+                        }
+                    } {}
                     ? cap {
                         // what another thread runs holds no view: this side may
                         // release what it points into while the other runs
@@ -15098,7 +15340,16 @@ unsafe @ eng_byte s w i k → i {
                         : i cty ( fv_ty ( pl_var place ) )
                         ? ! & & != cty ET_NONE == ( et_kind cty ) EK_NAMED ( et_flag cty ETF_TSHARE ) {
                             : i cown ( st_own st ( pl_var place ) )
-                            ? & & ( sq_has g_fc_cap_loans l ) == ( pl_path place ) 0 | == cown OW_O == cown OW_P { ( move_out st ( pl_var place ) line ) } {}
+                            ? & & ( sq_has g_fc_cap_loans l ) == ( pl_path place ) 0 | == cown OW_O == cown OW_P { ( move_out st ( pl_var place ) line ) } {
+                                // (a binding read out of a library handle
+                                // field, captured by what another thread runs:
+                                // the handle there goes with it - its owner is
+                                // moved)
+                                ? & & & & ( sq_has g_fc_cap_loans l ) != ( pl_path place ) 0 == ( el_kind l ) LK_HANDLE == cown OW_O == ( fv_kind ( pl_var place ) ) VK_LOCAL {
+                                    : i fty ( eng_ty_of place )
+                                    ? & & & != fty ET_NONE == ( et_kind fty ) EK_NAMED ( et_owns_handle fty ) ! ( et_flag fty ETF_TSHARE ) { ( move_out st ( pl_var place ) line ) } {}
+                                } {}
+                            }
                         } {}
                     }
                 } {}
@@ -15112,8 +15363,27 @@ unsafe @ eng_byte s w i k → i {
     = k 0
     ~ < k n {
         : i av ( wv_at avs k )
+        ? & & ! ( sq_has dets k ) ( sm_has sm SM_INVOKES k ) ( op_is_place ( wv_at ops k ) ) {
+            // (a parameter - or a part of one - handed to a callee that runs
+            // what it holds: this function runs it)
+            : i ip ( fv_pidx ( pl_var ( wv_at ops k ) ) )
+            ? >= ip 0 { = g_s_invokes ( sq_add g_s_invokes ip ) } {}
+            : i ial ( av_alias av )
+            : ~ i ia 0
+            ~ < ia ( sq_len ial ) {
+                : i ip2 ( fv_pidx ( pl_var ( sq_at ial ia ) ) )
+                ? >= ip2 0 { = g_s_invokes ( sq_add g_s_invokes ip2 ) } {}
+                = ia + ia 1
+            }
+        } {}
         // (one another thread runs took its captures with it, above)
-        ? & & ! ( sm_has sm SM_DETACHES k ) ( sm_has sm SM_INVOKES k ) ( held_has_clo ( av_held av ) ) {
+        ? & & ! ( sq_has dets k ) ( sm_has sm SM_INVOKES k ) ( held_has_clo ( av_held av ) ) {
+            // (the call's other arguments are frozen for it: one that reaches
+            // a shared payload the closure changes - another handle on the Rc
+            // it replaces - is changed under the callee)
+            // (…but a callee that keeps the closure - stores it, hands it
+            // back - runs it later, under no call's arguments)
+            ? ! ( sm_keeps_arg sm k ) { ( frozen_by_closure_regions ops avs k ( av_held av ) name line ) } {}
             // (a callee that catches a panic of the closure it runs: the
             // body may stop anywhere, so what it would have given a new
             // value may still hold what it held)
@@ -15195,9 +15465,10 @@ unsafe @ eng_byte s w i k → i {
             ? == kind SK_VALUE {
                 : i sv ? isv ( pl_var op ) -1
                 : i svty ( fv_ty sv )
-                ? & & & & == sown OW_O whole != ( fv_kind sv ) VK_TEMP != svty ET_NONE == ( et_kind svty ) EK_S {
+                ? & & & & | == sown OW_O == sown OW_P whole != ( fv_kind sv ) VK_TEMP != svty ET_NONE == ( et_kind svty ) EK_S {
                     // an owned raw string in a binding: what keeps it holds a
-                    // view of the binding's buffer
+                    // view of the binding's buffer - a parameter's too, a
+                    // `sink` one released on the way out
                     ( el_key4 TG_SV site j sk )
                     = add ( sq_add 0 ( he_make dpath ( eng_loan st op LK_VIEW ) ) )
                 } {
@@ -15606,7 +15877,8 @@ unsafe @ eng_byte s w i k → i {
                     : ~ i e 0
                     ~ & ! hs < e ( sm_n f SM_STORES ) {
                         : i t ( sm_at f SM_STORES e )
-                        ? & == ( tp_at t 5 4 ) LK_HELD == ( tp_at t 5 2 ) i { = hs T } {}
+                        : i sj ( tp_at t 5 0 )
+                        ? & & & & == ( tp_at t 5 4 ) LK_HELD == ( tp_at t 5 2 ) i < sj ( ef_nparams f ) ( et_view_capable ( efp_ty f i ) ) ( et_view_capable ( eng_ty_at ( efp_ty f sj ) ( tp_at t 5 1 ) ) ) { = hs T } {}
                         = e + e 1
                     }
                     ? hs {
@@ -15650,18 +15922,25 @@ unsafe @ eng_byte s w i k → i {
                     // holds what that one holds, and no handle of where it sits
                     = held ( sq_union held ( held_root ( av_held av ) fp ) )
                 } {
-                    ? & | == own OW_O == own OW_P ( op_is_place op ) {
+                    ? & & | == own OW_O == own OW_P ( op_is_place op ) & != cty ET_NONE == ( et_kind cty ) EK_S {
+                        // a raw string captured by value is a copy of its
+                        // address: a view of the binding's buffer, which
+                        // stays the binding's
                         ( el_key2 TG_ARG + * site 256 i )
-                        : i lid ( eng_loan st op LK_HANDLE )
-                        = g_fc_cap_loans ( sq_add g_fc_cap_loans lid )
-                        = held ( sq_add held ( he_make fp lid ) )
+                        = held ( sq_add held ( he_make fp ( eng_loan st op LK_VIEW ) ) )
                         = held ( sq_union held ( held_root ( av_held av ) fp ) )
-                    } {
-                        // (a captured view, or a lend: the closure reaches
-                        // what it borrows)
-                        = g_fc_cap_loans ( sq_union g_fc_cap_loans ( av_loans av ) )
-                        = held ( sq_union held ( sq_union ( held_from ( av_loans av ) fp ) ( held_root ( av_held av ) fp ) ) )
-                    }
+                    } { ? & | == own OW_O == own OW_P ( op_is_place op ) {
+                            ( el_key2 TG_ARG + * site 256 i )
+                            : i lid ( eng_loan st op LK_HANDLE )
+                            = g_fc_cap_loans ( sq_add g_fc_cap_loans lid )
+                            = held ( sq_add held ( he_make fp lid ) )
+                            = held ( sq_union held ( held_root ( av_held av ) fp ) )
+                        } {
+                            // (a captured view, or a lend: the closure reaches
+                            // what it borrows)
+                            = g_fc_cap_loans ( sq_union g_fc_cap_loans ( av_loans av ) )
+                            = held ( sq_union held ( sq_union ( held_from ( av_loans av ) fp ) ( held_root ( av_held av ) fp ) ) )
+                        } }
                 }
             } {}
         }
@@ -15682,15 +15961,186 @@ unsafe @ eng_byte s w i k → i {
     ( st_put st src ( av_make OW_L ( sq_add 0 ( eng_loan st at LK_HANDLE ) ) ( sq_add 0 at ) ( av_held d ) F ) )
 }
 
+// An argument the body is handed is frozen for the call, as any call's
+// are: the body may not end, through what it captured, what an argument
+// borrows (`( c e )`, e a payload of the option `o` the body replaces) - it
+// reads its parameter after.
+@ clo_args_frozen i st i cav i avs i line → v {
+    : i held ( av_held cav )
+    ? ! ( held_has_clo held ) { ^ } {}
+    : i cl ( wv_new )
+    ( closures_in held cl )
+    : ~ b hit F
+    : ~ i c 0
+    ~ & ! hit < c ( wv_len cl ) {
+        : i base ( wv_at cl c )
+        : i f ( wv_at cl + c 1 )
+        ? ( sm_have f ) {
+            : i ncap ( ef_ncap f )
+            : i bl ( ep_len base )
+            : i caps ( wv_new )
+            : ~ i k 0
+            ~ < k ( sq_len held ) {
+                : i he ( sq_at held k )
+                : i hp ( he_path he )
+                : i l ( he_loan he )
+                ? & & & & == ( ep_len hp ) + bl 1 == ( ep_parent hp ) base ( ee_is_cap ( ep_last hp ) ) == 0 & ( ee_bits ( ep_last hp ) ) EE_FN ( el_is_loan l ) {
+                    ( wv_push caps ( ee_cap_no ( ep_last hp ) ) ) ( wv_push caps ( el_place l ) )
+                } {}
+                = k + k 1
+            }
+            : ~ i e 0
+            ~ & ! hit < e ( sm_n f SM_EFFECTS ) {
+                : i t ( sm_at f SM_EFFECTS e )
+                : i pk ( tp_at t 3 0 )
+                : i eff ( tp_at t 3 2 )
+                ? & < pk ncap | | | == eff EF_REPLACE == eff EF_REALLOC == eff EF_DROP == eff EF_TAKE {
+                    = k 0
+                    ~ & ! hit < k ( wv_len caps ) {
+                        ? == ( wv_at caps k ) pk {
+                            : i place ( wv_at caps + k 1 )
+                            : i ch ( pl_make ( pl_var place ) ( ep_take ( ep_cat ( pl_path place ) ( tp_at t 3 1 ) ) PATH_MAX ) )
+                            : ~ i a 0
+                            ~ & ! hit < a ( wv_len avs ) {
+                                : i ls ( av_loans ( wv_at avs a ) )
+                                : ~ i j 0
+                                ~ & ! hit < j ( sq_len ls ) {
+                                    : i l ( sq_at ls j )
+                                    ? & & ( el_is_loan l ) ! ( sq_has ( st_dead st ) l ) ( eng_kills eff ch l ) {
+                                        ( eng_err line ( nurl_str_cat ( nurl_str_cat3 `argument ` ( nurl_str_int + a 1 ) ` is reached by this call through the closure it calls, which gives ` ) ( nurl_str_cat ( eng_pname ch ) ` a new value when it runs here` ) ) )
+                                        = hit T
+                                    } {}
+                                    = j + j 1
+                                }
+                                = a + a 1
+                            }
+                        } {}
+                        = k + k 2
+                    }
+                } {}
+                = e + e 1
+            }
+            ( wv_drop caps )
+        } {}
+        = c + c 2
+    }
+    ( wv_drop cl )
+}
+
 // A call through a closure value (`ops`: the closure, then its
 // arguments): its arguments are lent, its result is its caller's own.
-@ call_closure i st i ops i site i line → i {
+// The shared payloads the closures in `held` change when they run: their
+// summaries' regions, and a change under `*` of a capture that is a shared
+// handle. An argument of the call (other than `k`, the one holding them)
+// that reaches one is changed under the callee: refused.
+@ frozen_by_closure_regions i ops i avs i k i held i name i line → v {
+    : i regs ( wv_new )
+    : i cl ( wv_new )
+    ( closures_in held cl )
+    : ~ i c 0
+    ~ < c ( wv_len cl ) {
+        : i base ( wv_at cl c )
+        : i f ( wv_at cl + c 1 )
+        ? ( sm_have f ) {
+            : ~ i e 0
+            ~ < e ( sm_n f SM_REGIONS ) {
+                : i rg ( sm_at f SM_REGIONS e )
+                : i eff ( tp_at rg 3 2 )
+                ? | | | == eff EF_REPLACE == eff EF_REALLOC == eff EF_DROP == eff EF_TAKE { ( wv_push regs ( tp_at rg 3 0 ) ) } {}
+                = e + e 1
+            }
+            : i ncap ( ef_ncap f )
+            = e 0
+            ~ < e ( sm_n f SM_EFFECTS ) {
+                : i t ( sm_at f SM_EFFECTS e )
+                : i kc ( tp_at t 3 0 )
+                : i eff ( tp_at t 3 2 )
+                ? & & < kc ncap == ( ep_first ( tp_at t 3 1 ) ) EE_STAR | | | == eff EF_REPLACE == eff EF_REALLOC == eff EF_DROP == eff EF_TAKE {
+                    : i cp ( ep_child base ( ee_cap kc ) )
+                    : ~ i h 0
+                    ~ < h ( sq_len held ) {
+                        : i he ( sq_at held h )
+                        : i l ( he_loan he )
+                        ? & == ( he_path he ) cp ( el_is_loan l ) {
+                            : i cty ( eng_ty_of ( el_place l ) )
+                            ? & & != cty ET_NONE == ( et_kind cty ) EK_NAMED ( et_flag cty ETF_SHARED ) { ( wv_push regs cty ) } {}
+                        } {}
+                        = h + h 1
+                    }
+                } {}
+                = e + e 1
+            }
+        } {}
+        = c + c 2
+    }
+    ? != 0 ( wv_len regs ) {
+        : i n ( wv_len avs )
+        : ~ b hit F
+        : ~ i i 0
+        ~ & ! hit < i n {
+            : i op ( wv_at ops i )
+            ? & != i k ( op_is_place op ) {
+                : i ity ( eng_ty_of op )
+                ? != ity ET_NONE {
+                    : i out ( wv_new )
+                    ( et_shared_in ity out )
+                    : ~ i q 0
+                    ~ & ! hit < q ( wv_len out ) { ? ( __wv_has regs ( wv_at out q ) ) { = hit T } {} = q + q 1 }
+                    ( wv_drop out )
+                    ? hit { ( eng_err line ( nurl_str_cat4 ( eng_str name ) `: argument ` ( nurl_str_int + i 1 ) ( nurl_str_cat3 ` is reached by this call through the closure in argument ` ( nurl_str_int + k 1 ) `, which changes what it shares` ) ) ) } {}
+                } {}
+            } {}
+            = i + i 1
+        }
+    } {}
+    ( wv_drop regs ) ( wv_drop cl )
+}
+
+// What a call of a closure no summary speaks for may hand back of what the
+// closure `cav` holds - the views its captures hold - added to `out`.
+@ clo_result_views i st i cav i out → i {
+    : ~ i res out
+    : i ch ( av_held cav )
+    : ~ i a 0
+    ~ < a ( sq_len ch ) {
+        : i l ( he_loan ( sq_at ch a ) )
+        ? ( el_is_loan l ) {
+            : i place ( el_place l )
+            : i kind ( el_kind l )
+            : b hv < ( pl_var place ) 0
+            ? & == kind LK_HELD hv {
+                // (of a closure parameter: what its captures hold, in the
+                // caller's words)
+                ( el_key2 TG_PHIN ( pl_var place ) )
+                = res ( sq_add res ( he_make 0 ( eng_loan st place LK_HELDIN ) ) )
+            } {
+                ? | | == kind LK_VIEW == kind LK_HELDIN & == kind LK_HELD ! hv { = res ( sq_add res ( he_make 0 l ) ) } {}
+            }
+        } {}
+        = a + a 1
+    }
+    ^ res
+}
+
+// Is a value of type `t` a view, or a container of views (`?s`, a `Vec s`)?
+// (Not known: yes.)
+@ et_view_result i t → b {
+    ? == t ET_NONE { ^ T } {}
+    : i kind ( et_kind t )
+    ? ( et_is_view t ) { ^ T } {}
+    ? | | == kind EK_OPT == kind EK_VEC == kind EK_BOX { ^ & != ( et_at t ET_E1 ) ET_NONE ( et_view_result ( et_at t ET_E1 ) ) } {}
+    ? == kind EK_RES { ^ | & != ( et_at t ET_E1 ) ET_NONE ( et_view_result ( et_at t ET_E1 ) ) & != ( et_at t ET_E2 ) ET_NONE ( et_view_result ( et_at t ET_E2 ) ) } {}
+    ^ F
+}
+
+@ call_closure i st i ops i site i line i dest_ty → i {
     : i n - ( wv_len ops ) 1
     : i cop ( wv_at ops 0 )
     : i cav ( eng_read st cop line TG_ARG * site 256 )
     : i avs ( wv_new )
     : ~ i i 0
     ~ < i n { ( wv_push avs ( eng_read st ( wv_at ops + i 1 ) line TG_ARG + + * site 256 i 1 ) ) = i + i 1 }
+    ( clo_args_frozen st cav avs line )
     ( run_closures st ( av_held cav ) WK_CLO_CALLED 0 line )
     : i known ( wv_new )
     ( closures_in ( av_held cav ) known )
@@ -15711,10 +16161,53 @@ unsafe @ eng_byte s w i k → i {
             : i ncap ( ef_ncap f )
             : ~ i e 0
             ~ < e ( sm_n f SM_INVOKES ) {
-                : i ai - ( sm_at f SM_INVOKES e ) ncap
+                : i ik ( sm_at f SM_INVOKES e )
+                : i ai - ik ncap
                 ? & & >= ai 0 < ai n ( held_has_clo ( av_held ( wv_at avs ai ) ) ) {
                     ( run_closures st ( av_held ( wv_at avs ai ) ) WK_ARG_CLO + ai 1 line )
-                } {}
+                } {
+                    ? & >= ai 0 < ai n {
+                        // (a closure this function was handed, handed on to one
+                        // that runs it: this function runs it, on what that one
+                        // hands it - the summary's invokes / cloargs, as for a
+                        // closure called here directly)
+                        : ~ i roots 0
+                        : i cal ( av_alias ( wv_at avs ai ) )
+                        : ~ i a 0
+                        ~ < a ( sq_len cal ) {
+                            : i rp ( fv_pidx ( pl_var ( sq_at cal a ) ) )
+                            ? >= rp 0 { = roots ( sq_add roots rp ) } {}
+                            = a + a 1
+                        }
+                        : i aop ( wv_at ops + ai 1 )
+                        ? & ( op_is_place aop ) >= ( fv_pidx ( pl_var aop ) ) 0 { = roots ( sq_add roots ( fv_pidx ( pl_var aop ) ) ) } {}
+                        = g_s_invokes ( sq_union g_s_invokes roots )
+                        : ~ i e2 0
+                        ~ < e2 ( sm_n f SM_CLOARGS ) {
+                            : i t ( sm_at f SM_CLOARGS e2 )
+                            : i src - ( tp_at t 4 2 ) ncap
+                            ? & & == ( tp_at t 4 0 ) ik >= src 0 < src n {
+                                : i sop ( wv_at ops + src 1 )
+                                : ~ i pls ( av_alias ( wv_at avs src ) )
+                                ? ( op_is_place sop ) { = pls ( sq_add pls sop ) } {}
+                                = a 0
+                                ~ < a ( sq_len pls ) {
+                                    : i pa ( sq_at pls a )
+                                    : i pj ( fv_pidx ( pl_var pa ) )
+                                    ? >= pj 0 {
+                                        : ~ i r 0
+                                        ~ < r ( sq_len roots ) {
+                                            = g_s_cloargs ( sq_add g_s_cloargs ( tp4 ( sq_at roots r ) ( tp_at t 4 1 ) pj ( ep_take ( ep_cat ( pl_path pa ) ( tp_at t 4 3 ) ) 3 ) ) )
+                                            = r + r 1
+                                        }
+                                    } {}
+                                    = a + a 1
+                                }
+                            } {}
+                            = e2 + e2 1
+                        }
+                    } {}
+                }
                 = e + e 1
             }
             = e 0
@@ -15743,6 +16236,8 @@ unsafe @ eng_byte s w i k → i {
     }
     : b any != 0 ( wv_len known )
     : ~ i out 0
+    : ~ i vloans 0
+    : ~ i valias 0
     ? ! any {
         ? ( ef_is_closure g_ec_f ) {
             // inside a closure, a closure it was handed is the caller's:
@@ -15789,33 +16284,78 @@ unsafe @ eng_byte s w i k → i {
         }
         // what a closure the caller chose hands back is its caller's own,
         // and may hold what the closure holds: the views its captures hold
-        : i ch ( av_held cav )
-        = a 0
-        ~ < a ( sq_len ch ) {
-            : i l ( he_loan ( sq_at ch a ) )
-            ? ( el_is_loan l ) {
-                : i place ( el_place l )
-                : i kind ( el_kind l )
-                : b hv < ( pl_var place ) 0
-                ? & == kind LK_HELD hv {
-                    // (of a closure parameter: what its captures hold, in
-                    // the caller's words)
-                    ( el_key2 TG_PHIN ( pl_var place ) )
-                    = out ( sq_add out ( he_make 0 ( eng_loan st place LK_HELDIN ) ) )
-                } {
-                    ? | | == kind LK_VIEW == kind LK_HELDIN & == kind LK_HELD ! hv { = out ( sq_add out ( he_make 0 l ) ) } {}
-                }
-            } {}
-            = a + a 1
-        }
+        = out ( clo_result_views st cav out )
     } {
         // what a known body's result holds of its parameters, the result
         // of this call holds of these arguments
+        // (a body nothing says the result of - a library's closure: what it
+        // hands back may hold what the closure holds, as an unknown one's may)
+        : ~ b unsummed F
+        = c 0
+        ~ < c ( wv_len known ) { ? ! ( sm_have ( wv_at known + c 1 ) ) { = unsummed T } {} = c + c 2 }
+        ? & unsummed ( et_view_result dest_ty ) { = out ( clo_result_views st cav out ) } {}
         = c 0
         ~ < c ( wv_len known ) {
             : i f ( wv_at known + c 1 )
             ? ( sm_have f ) {
                 : i ncap ( ef_ncap f )
+                ? & & == ( sm_word f SM_RES ) RES_LENT != 0 ( ef_at f EF_RET ) == ( et_kind ( et_of ( ef_at f EF_RET ) ) ) EK_SLICE {
+                    // a slice the body hands back is that view: what it lends
+                    // of its parameters, the result of this call lends of
+                    // these arguments - and of what its captures point at (a
+                    // value it hands back is copied - a raw string too, h220;
+                    // a slice has no copy)
+                    : i base ( wv_at known c )
+                    : i bl ( ep_len base )
+                    : ~ i e 0
+                    ~ < e ( sm_n f SM_LENDS ) {
+                        : i t ( sm_at f SM_LENDS e )
+                        : i lk ( tp_at t 3 0 )
+                        : i lpath ( tp_at t 3 1 )
+                        : i lkind ( tp_at t 3 2 )
+                        : i ai - lk ncap
+                        : i pls ( wv_new )
+                        ? & >= ai 0 < ai n {
+                            : i av ( wv_at avs ai )
+                            ? == lkind LK_HELD { = vloans ( sq_union vloans ( held_loans ( held_sub ( av_held av ) lpath ) ) ) } {
+                                ? != ( av_own av ) OW_N {
+                                    = vloans ( sq_union vloans ( av_loans av ) )
+                                    ( sq_to_wv ( av_alias av ) pls )
+                                    : i op ( wv_at ops + ai 1 )
+                                    ? ( op_is_place op ) {
+                                        : i oo ( st_own st ( pl_var op ) )
+                                        ? | == oo OW_O == oo OW_P { ( wv_push pls op ) } {}
+                                    } {}
+                                } {}
+                            }
+                        } {
+                            ? & & >= lk 0 < lk ncap != lkind LK_HELD {
+                                : i ch ( av_held cav )
+                                : ~ i h 0
+                                ~ < h ( sq_len ch ) {
+                                    : i he ( sq_at ch h )
+                                    : i hp ( he_path he )
+                                    : i l ( he_loan he )
+                                    ? & & & & & == ( ep_len hp ) + bl 1 == ( ep_parent hp ) base ( ee_is_cap ( ep_last hp ) ) == 0 & ( ee_bits ( ep_last hp ) ) EE_FN == ( ee_cap_no ( ep_last hp ) ) lk ( el_is_loan l ) {
+                                        ( wv_push pls ( el_place l ) )
+                                    } {}
+                                    = h + h 1
+                                }
+                            } {}
+                        }
+                        : ~ i a 0
+                        ~ < a ( wv_len pls ) {
+                            : i pa ( wv_at pls a )
+                            : i pl ( pl_make ( pl_var pa ) ( ep_take ( ep_cat ( pl_path pa ) lpath ) PATH_MAX ) )
+                            = valias ( sq_add valias pl )
+                            ( el_key3 TG_CV site lk )
+                            = vloans ( sq_add vloans ( eng_loan st pl lkind ) )
+                            = a + a 1
+                        }
+                        ( wv_drop pls )
+                        = e + e 1
+                    }
+                } {}
                 : ~ i e 0
                 ~ < e ( sm_n f SM_RHOLDS ) {
                     : i t ( sm_at f SM_RHOLDS e )
@@ -15823,6 +16363,23 @@ unsafe @ eng_byte s w i k → i {
                     : i ai - ( tp_at t 4 1 ) ncap
                     : i rpath ( tp_at t 4 2 )
                     : i kind ( tp_at t 4 3 )
+                    ? & & < ai 0 >= ( tp_at t 4 1 ) 0 == kind LK_HELD {
+                        // (what a capture holds - the views a captured Vec's
+                        // elements are - handed back: the result holds them,
+                        // where the closure value holds them)
+                        // (below the capture: not the closure's own handle of
+                        // the binding it captured)
+                        : i cbase ( ep_cat ( ep_child ( wv_at known c ) ( ee_cap ( tp_at t 4 1 ) ) ) rpath )
+                        : i chs ( av_held cav )
+                        : ~ i below 0
+                        : ~ i hq 0
+                        ~ < hq ( sq_len chs ) {
+                            : i he ( sq_at chs hq )
+                            ? > ( ep_len ( he_path he ) ) ( ep_len cbase ) { = below ( sq_add below he ) } {}
+                            = hq + hq 1
+                        }
+                        = out ( sq_union out ( held_root ( held_sub below cbase ) dpath ) )
+                    } {}
                     ? & >= ai 0 < ai n {
                         : i av ( wv_at avs ai )
                         ? == kind LK_HELD { = out ( sq_union out ( held_root ( held_sub ( av_held av ) rpath ) dpath ) ) } {
@@ -15851,6 +16408,7 @@ unsafe @ eng_byte s w i k → i {
         }
     }
     ( wv_drop avs ) ( wv_drop known ) ( wv_drop places ) ( wv_drop cl2 )
+    ? | != vloans 0 != valias 0 { ^ ( av_make OW_L vloans valias out F ) } {}
     ^ ( av_make OW_O 0 0 out F )
 }
 
@@ -16011,7 +16569,14 @@ unsafe @ eng_byte s w i k → i {
             } {}
             = vid - vid 1
         }
+        // (a loop's element read there is read outside every round: the
+        // block runs at the function's exit, and the element's slot is no
+        // slot of a round any more - a view of the container's element,
+        // agora #672)
+        : i fe_was g_fe_outside
+        = g_fe_outside ( wv_at g_fc_dfe id )
         ( eng_run st + d 1 ( wv_at g_ec_link d ) )
+        = g_fe_outside fe_was
         = k - k 1
     }
     // (blocks the chain's own blocks armed run after them)
@@ -16332,7 +16897,7 @@ unsafe @ eng_byte s w i k → i {
         : i ops ( wv_new )
         : ~ i j 0
         ~ < j n { ( wv_push ops ( eng_op ( ec + + at 2 j ) ) ) = j + j 1 }
-        : i av ( call_closure st ops at line )
+        : i av ( call_closure st ops at line dest_ty )
         ( wv_drop ops )
         ? & != dest_ty ET_NONE ( et_scalar dest_ty ) { ^ g_av_none } {}
         ^ av
@@ -16352,7 +16917,7 @@ unsafe @ eng_byte s w i k → i {
         // (a number: a copy, nothing to follow)
         ? & != dest_ty ET_NONE ( et_scalar dest_ty ) { ^ g_av_none } {}
         : i tag ( ee_pay variant idx )
-        : i sub ( held_sub ( av_held av ) ( ep_child 0 tag ) )
+        : ~ i sub ( held_sub ( av_held av ) ( ep_child 0 tag ) )
         : b whole & ( op_is_place op ) == ( pl_path op ) 0
         : i pty ? whole ( agg_field_ty ( fv_ty ( pl_var op ) ) variant idx ) ET_NONE
         ? & & whole == ( fv_kind ( pl_var op ) ) VK_TEMP == ( av_own av ) OW_O {
@@ -16386,6 +16951,19 @@ unsafe @ eng_byte s w i k → i {
             // `?Json` around an element `Json`.)
             ? & & & & ! wrapped != aty ET_NONE != pty ET_NONE == aty pty != aty ( fv_ty ( pl_var op ) ) { = wrapped T } {}
             : i pl ? wrapped pa ( pl_make ( pl_var pa ) ( ep_take ( ep_child ( pl_path pa ) tag ) PATH_MAX ) )
+            ? wrapped {
+                // (…and what the element holds is what the payload holds:
+                // the lend put it at the option's own root - a closure read
+                // out of a Vec of closures)
+                : i ah ( av_held av )
+                : ~ i w 0
+                ~ < w ( sq_len ah ) {
+                    : i he ( sq_at ah w )
+                    : i e0 ( ep_first ( he_path he ) )
+                    ? | == e0 0 ! ( __eng_elem_is_pay e0 ) { = sub ( sq_add sub he ) } {}
+                    = w + w 1
+                }
+            } {}
             = alias ( sq_add alias pl )
             ( el_key3 TG_PL at pl )
             = loans ( sq_add loans ( eng_loan st pl LK_HANDLE ) )
@@ -16700,6 +17278,15 @@ unsafe @ eng_byte s w i k → i {
                 // result has no such key.)
                 ( eng_err ln ( nurl_str_cat ( eng_vname vid ) ` is given back what this call may lend out of itself or out of another argument` ) )
             } {}
+            ? & >= src 0 ( fx_has src FX_CALL_MIXED ) {
+                // (…on the calls it answers with a value of its own, the old
+                // one goes - nurlc tells them apart by key: what was lent out
+                // of it ends; what it held it may still hold)
+                : i was_weak g_fc_weak
+                = g_fc_weak 1
+                ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ln 0 )
+                = g_fc_weak was_weak
+            } {}
             ? == cown OW_P {
                 ( st_put st vid ( av_make cown 0 0 ( sq_union ( sq_union ( av_held cur ) ( av_held new ) ) ( held_from rest 0 ) ) F ) )
             } {
@@ -16752,11 +17339,20 @@ unsafe @ eng_byte s w i k → i {
             ( st_put st vid ( av_make OW_P 0 0 held F ) )
             ? & first == held 0 { = g_s_credits ( sq_add g_s_credits ( fv_pidx vid ) ) } {}
         } {
-            ? & & == cown OW_O == ( av_own new ) OW_L ( av_call new ) {
-                // (an owner given a call's lend holds its own copy of the
-                // handle from here on: no longer "what a call lent")
-                ( st_put st vid ( av_make OW_L ( av_loans new ) ( av_alias new ) ( av_held new ) F ) )
-            } { ( st_put st vid new ) }
+            : i msrc ( rv_use_var rv )
+            ? & & & & & == ( av_own new ) OW_L ( fv_mut vid ) == kind VK_LOCAL & != vty ET_NONE == ( et_kind vty ) EK_S >= msrc 0 ( fx_has msrc FX_CALL_MIXED ) {
+                // a `: ~ s` slot given what a call hands back as its caller's
+                // own on some calls: the slot owns it there - nurlc's
+                // owner-slot flag - and its next value releases it, so what
+                // viewed it ends then
+                ( st_put st vid ( av_make OW_O ( av_loans new ) 0 ( av_held new ) F ) )
+            } {
+                ? & & == cown OW_O == ( av_own new ) OW_L ( av_call new ) {
+                    // (an owner given a call's lend holds its own copy of the
+                    // handle from here on: no longer "what a call lent")
+                    ( st_put st vid ( av_make OW_L ( av_loans new ) ( av_alias new ) ( av_held new ) F ) )
+                } { ( st_put st vid new ) }
+            }
         }
         ( younger_views vid ( sq_union ( held_from ( av_loans new ) 0 ) ( av_held new ) ) )
         ? & & first == ( av_loans new ) 0 == ( av_held new ) 0 {
@@ -16779,6 +17375,21 @@ unsafe @ eng_byte s w i k → i {
     // a store into a part
     : i fty ( eng_ty_of target )
     : i src ( rv_use_var rv )
+    : i fe0 ( ep_first ( pl_path target ) )
+    ? & & & != fty ET_NONE ( eng_field_elem fe0 ) | ( et_owning fty ) ( et_has_udrop fty ) ( eng_borrowed_copy vid ) {
+        // a field of a copy of a value this frame only borrows - a by-value
+        // parameter's, a loop's element, a closure's by-value capture or
+        // parameter - given a value that owns memory: the store lands where
+        // the owner never looks, and nothing releases the value stored
+        // (agora #488, #643)
+        ( eng_err ln ( nurl_str_cat4 `field ` ( eng_str ( ee_name fe0 ) ) ` of ` ( nurl_str_cat3 ( eng_vname vid ) ` is given a value that owns memory, but ` ( nurl_str_cat ( eng_vname vid ) ` is a copy of a value this function borrows` ) ) ) )
+    } {}
+    ? & & >= src 0 != fty ET_NONE == ( et_kind fty ) EK_S {
+        // (a fresh raw string stored into a field: a raw string a value
+        // holds is a view, MEMORY.md §2.13)
+        : i sav ( st_av st src )
+        ? != sav 0 { ( fresh_string_kept st ( pl_make src 0 ) sav `a field` ln ) } {}
+    } {}
     ? & & & & >= src 0 ( fx_has src FX_PAYLOAD ) != fty ET_NONE ( et_owning fty ) ( eng_own_payload st ( st_av st src ) ) {
         // an arm's payload of an option or a result a local owns, stored
         // into a field, with no copy - or one whose copy would go on viewing
@@ -16811,6 +17422,17 @@ unsafe @ eng_byte s w i k → i {
         // what the one it was copied from holds, and is no borrow of where
         // that one sits
         = new ( av_make OW_O 0 0 ( closure_owned ( av_held new ) ) F )
+    } {}
+    ? & & & & == ( av_own new ) OW_L != fty ET_NONE ! ( et_is_view fty ) != ( et_kind fty ) EK_CLOSURE & & ( et_owning fty ) ! ( et_copyable fty ) ! ( av_call new ) {
+        // a field of a binding stored into a field: a borrow of it, which the
+        // holder would own - it has to be copied, and it cannot be (a `sink`
+        // or the owner itself hands a value over)
+        ? == ( ec rv ) RV_USE {
+            : i rop ( eng_op ( ec + rv 1 ) )
+            ? & & ( op_is_place rop ) != ( pl_path rop ) 0 != ( fv_kind ( pl_var rop ) ) VK_TEMP {
+                ( eng_err ln ( nurl_str_cat ( eng_pname target ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+            } {}
+        } {}
     } {}
     ? | | == cown OW_M == cown OW_X == cown OW_D { ( eng_err ln ( nurl_str_cat ( eng_vname vid ) ` is used after it was moved` ) ) } {}
     : i add ? == ( av_own new ) OW_L ( sq_union ( held_from ( av_loans new ) 0 ) ( av_held new ) ) ( av_held new )
@@ -17099,7 +17721,9 @@ unsafe @ eng_byte s w i k → i {
             ( st_put cur vid ? == ( av_own v ) OW_L ( av_make OW_L ( sq_union ( av_loans v ) ( av_loans src ) ) ( av_alias v ) 0 F ) g_av_none )
         } { ( st_put cur vid ( av_make OW_L loans elem_alias sub F ) ) }
     }
+    ( wv_push g_fe_walking vid )
     ( eng_run cur + at 3 end )
+    ( wv_pop g_fe_walking )
     ( wv_pop g_fc_loops ) ( wv_pop g_fc_loops )
     ( wv_copy nxt head )
     ( st_join_into nxt cur )
@@ -17270,6 +17894,7 @@ unsafe @ eng_byte s w i k → i {
         // round of a loop runs once for each)
         : i id ( wv_len g_fc_defers )
         ( wv_push g_fc_defers at )
+        ( wv_push g_fc_dfe ? == 0 ( wv_len g_fe_walking ) 0 ( sq_set_of_wv g_fe_walking ) )
         ( wv_push tmp id )
         ( wv_put st ST_DEFERS ( sq_of_wv tmp 0 ( wv_len tmp ) ) )
         ( wv_trunc tmp 0 )
@@ -17703,7 +18328,11 @@ unsafe @ eng_byte s w i k → i {
         : i pty ( efp_ty fi k )
         : b scalar & != pty ET_NONE ( et_scalar pty )
         : b closure & != pty ET_NONE == ( et_kind pty ) EK_CLOSURE
-        // (a closure the function only runs is kept nowhere)
+        // (a closure the function only runs is kept nowhere - but what it
+        // hands back when it runs may be the result: `iter_find` hands back
+        // an element its iterator produced, which holds what the
+        // iterator's captures hold)
+        ? & & & ( __wv_has only_run k ) closure ! ret_scalar | ret_view ( et_view_capable ret ) { ( wv_push rholds ( tp4 0 k 0 LK_HELDIN ) ) } {}
         ? ! | scalar & ( __wv_has only_run k ) closure {
             // (an argument that is itself a view - a raw string, a slice -
             // holds nothing but that view, and which of them the result
@@ -18006,6 +18635,7 @@ unsafe @ eng_byte s w i k → i {
     ( eng_prim `rw_new` `sink` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` `` )
     ( eng_prim `shared_clone` `in` `own` `` `- 0 - held` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `shared_new` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `` `` )
+    ( eng_prim `signal_install` `in in` `none` `` `` `` `` `` `` `1` `` `` `` `` )
     ( eng_prim `slice_at` `in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
     ( eng_prim `slice_byte` `in in` `none` `` `` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `slice_empty` `` `none` `` `` `` `` `` `` `` `` `` `` `` )
@@ -18103,8 +18733,11 @@ unsafe @ eng_byte s w i k → i {
     ? < g_fx 0 {
         = g_fx ( wv_new ) = g_fx_nocopy ( wv_new ) = g_fx_agg ( wv_new ) = g_fx_litp ( wv_new ) = g_fx_lent ( wv_new )
         = g_fc_rets ( wv_new ) = g_fc_exits ( wv_new ) = g_fc_loops ( wv_new ) = g_fc_defers ( wv_new )
+        = g_fc_dfe ( wv_new ) = g_fe_walking ( wv_new )
     } {}
-    ( wv_trunc g_fc_defers 0 )
+    ( wv_trunc g_fc_defers 0 ) ( wv_trunc g_fc_dfe 0 ) ( wv_trunc g_fe_walking 0 )
+    = g_fe_outside 0
+    = g_fc_dtor ? != 0 ( nurl_str_starts ( eng_str ( ef_at f EF_NAME ) ) `drop__` ) 1 0
     ( wv_fill g_fx g_f_nv 0 ) ( wv_fill g_fx_nocopy g_f_nv 0 ) ( wv_fill g_fx_agg g_f_nv 0 )
     ( wv_fill g_fx_litp g_f_nv 0 ) ( wv_fill g_fx_lent g_f_nv 0 )
     ( wv_trunc g_fc_rets 0 ) ( wv_trunc g_fc_exits 0 ) ( wv_trunc g_fc_loops 0 )
@@ -18746,8 +19379,16 @@ unsafe @ eng_byte s w i k → i {
         = k + k 1
     }
     = k 0
+    // (…and an ELEMENT of one, with or without a copy: a loop's element, a
+    // payload of what `vec_get` lent - a field is copied back for the
+    // struct's own destructor, an element is not)
+    : ~ b elent F
     ~ < k ( sm_n f SM_LENDS ) {
-        ? ( sm_has f SM_CONSUMES ( tp_at ( sm_at f SM_LENDS k ) 3 0 ) ) { = lent T } {}
+        : i lt ( sm_at f SM_LENDS k )
+        ? ( sm_has f SM_CONSUMES ( tp_at lt 3 0 ) ) {
+            = lent T
+            ? & != ( sm_mode f ( tp_at lt 3 0 ) ) PM_SINK ( ep_has_star ( tp_at lt 3 1 ) ) { = elent T } {}
+        } {}
         = k + k 1
     }
     ? kept {
@@ -18756,12 +19397,24 @@ unsafe @ eng_byte s w i k → i {
         // the lend was asked for
         ( eng_err_fn f line `hands back what a call lends out of a parameter it takes over on another path` )
     } {
-        ? & & lent != ret ET_NONE ! ( et_copyable ret ) {
+        ? & & lent != ret ET_NONE | ! ( et_copyable ret ) elent {
             // the caller cannot both keep an argument the result borrows
             // and have handed it over
             ( eng_err_fn f line `hands back what it may lend out of a parameter it takes over on another path` )
         } {}
     }
+    // a view of a `sink` parameter kept in what the caller holds (a raw
+    // string pushed into the caller's Vec of views): the function releases
+    // the parameter on the way out, and the caller reads the view after
+    : ~ b sinkview F
+    = k 0
+    ~ & ! sinkview < k ( sm_n f SM_STORES ) {
+        : i t ( sm_at f SM_STORES k )
+        : i sk ( tp_at t 5 2 )
+        ? & & == ( tp_at t 5 4 ) LK_VIEW ( sm_has f SM_CONSUMES sk ) == ( sm_mode f sk ) PM_SINK { = sinkview T } {}
+        = k + k 1
+    }
+    ? sinkview { ( eng_err_fn f line `keeps, in storage the caller holds, a view of a sink parameter it releases` ) } {}
     ? & ( ef_name_ends f ) == ( sm_word f SM_RES ) RES_LENT {
         // a handle's copy hook makes a value of its own
         ( eng_err_fn f line `a copy hook hands its argument back, whole or in part` )
@@ -90356,10 +91009,25 @@ unsafe @ __opt_err_mangle s e → s {
 // asks its fields; anything else that holds such a drop - a Box, an enum
 // of the program's (its variant 0 with a zero payload), a move-only
 // library handle - is answered yes.
+// (Asked once per type, `zdu##`: a struct of eight fields eight deep was
+// 8^8 walks for one answer, and the type table asks it of every type.
+// The answer depends on the type alone - the program's `% Drop`s are
+// known after the signature pre-scan - except where the depth guard cut
+// the walk short, which is not kept.)
 @ __zero_drops_user s ty i depth → b {
     ? == 0 ( nurl_str_len ty ) { ^ F } {}
     ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
-    ? > depth 16 { ^ T } {}
+    ? != 0 ( nurl_sym_len2 g_impl_name_syms `zdu##` ty ) { ^ ( seq ( nurl_sym_get2 g_impl_name_syms `zdu##` ty ) `1` ) } {}
+    : i cut0 g_zdu_cut
+    = g_zdu_cut 0
+    : b r ( __zero_drops_user_walk ty depth )
+    ? == 0 g_zdu_cut { ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `zdu##` ty ) ? r `1` `0` ) } {}
+    = g_zdu_cut | g_zdu_cut cut0
+    ^ r
+}
+
+@ __zero_drops_user_walk s ty i depth → b {
+    ? > depth 16 { = g_zdu_cut 1 ^ T } {}
     ? | ( __has_user_drop ty ) ( __is_moveonly_libh ty ) { ^ T } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ F } {}
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ F } {}
