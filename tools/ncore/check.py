@@ -1426,6 +1426,9 @@ class FnCheck:
             av = self.read(st, op, line, ("pl", id(rv)), "matched value")
             if av.own == "N":
                 return NONE
+            if dest_ty is not None and self.T.is_scalar(dest_ty):
+                # (a number: a copy, nothing to follow)
+                return NONE
             tag = f"#{variant}{idx}"
             sub = hsub(av.held, (tag,))
             pty = self.ty_of_field(self.fn.vars[op[1]].ty if op[0] == "v" and not op[2] else None, variant, idx)
@@ -1512,7 +1515,8 @@ class FnCheck:
                 new = self.rvalue(st, rv, ln, v.depth, v.ty, v.name, dest_vid=vid,
                                   lend_owner=(lambda x: True) if v.mut else (lambda x: False))
                 if (not v.mut and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
-                        and self.fn.vars[rv[1][1]].kind == "temp" and new.own == "L" and not new.call
+                        and self.fn.vars[rv[1][1]].kind == "temp" and not new.call and new.alias
+                        and (new.own == "L" or (new.own == "O" and new.loans))
                         and v.ty is not None and v.ty[0] not in VIEW_TYPES and v.ty[0] != "closure"
                         and not self.T.is_scalar(v.ty)):
                     # a `?` / `??` (or a value block) that selects among
