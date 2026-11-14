@@ -171,6 +171,7 @@ class FnCheck:
         self.cap_loans = set()   # the loans that are a closure's own handle of a binding it captured
         self.lit_nocopy = {}     # a literal temporary -> its field that borrows a value with no copy
         self.call_by_fn = {}     # a call's temporary -> the callee is a function of the program
+        self.slot_vars = set()   # payload bindings of a library getter's option: a container's slot
         self.call_mixed = set()  # the temporaries of calls whose result is the caller's own on some calls
         self.ret_fresh = False   # some return hands back a value of the function's own that holds something
         self.temp_none = {}      # a literal temporary -> it is an option's `None`
@@ -1497,6 +1498,15 @@ class FnCheck:
                             nc_loans |= av.loans
                             nc_alias |= av.alias
                             self.lit_nocopy[dest_vid] = i + 1
+                        elif (not av.call and av.alias and op[0] == "v" and not op[2] and op[1] in self.slot_vars
+                              and all(st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O" for a in av.alias)
+                              and self.take_payload(st, av, line)):
+                            # the payload of a library getter's option over
+                            # one of this frame's containers: a slot, which
+                            # is emptied, and the literal owns what was in
+                            # it (MEMORY.md §7.6)
+                            held |= hroot(av.held, fp)
+                            continue
                         else:
                             self.err(line, f"field {i + 1}: a borrowed value would have to be copied here, "
                                            f"and it cannot be copied")
@@ -1555,6 +1565,9 @@ class FnCheck:
             # payload of a library getter's option is)
             lent_by_fn = (av.call and op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp"
                           and self.call_by_fn.get(op[1], False))
+            if (dest_vid is not None and av.call and not lent_by_fn and op[0] == "v" and not op[2]
+                    and self.fn.vars[op[1]].kind == "temp" and alias and all("*" in a[1] for a in alias)):
+                self.slot_vars.add(dest_vid)
             return AV("L", loans, alias, sub, lent_by_fn)
         raise CheckError(f"rvalue {k}")
 
