@@ -909,6 +909,13 @@ class FnCheck:
                     if ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and self.T.copyable(ty):
                         # a lend stored as an owner is copied, with the views it holds
                         add = hroot(src.held, dpath)
+                    elif (ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and not src.call
+                          and src.alias and all(not a[1] for a in src.alias)
+                          and self.take_payload(st, src, line)):
+                        # a second name of an owner (a parameter renamed, a
+                        # cursor of a binding) kept by value: the owner is
+                        # taken over through it (MEMORY.md §7.6)
+                        add = hroot(src.held, dpath)
                     else:
                         if ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES:
                             self.err(line, f"{name} keeps a borrowed value that would have to be copied, "
