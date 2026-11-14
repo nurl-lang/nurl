@@ -1025,6 +1025,15 @@ class FnCheck:
                                             and self.fn.vars[a[0]].kind != "param" and "*" not in a[1]
                                             and (not viewish or ((self.ty_of_place(a) or ("?",))[0] == dest_ty[0]
                                                                  and self.named_directly(av, a))))]
+            if (mine and self.fn.vars[op[1]].kind == "temp" and any(a[1] for a in mine)
+                    and dest_ty is not None and dest_ty[0] not in VIEW_TYPES and self.T.owning(dest_ty)
+                    and not self.T.copyable(dest_ty)):
+                # (…a FIELD of one is no owner it selects: the local is
+                # dropped, fields and all, on the way out - the field is
+                # copied for the caller, and this one has no copy; agora #180)
+                self.err(line, f"{what}: hands back a field of a local, which is released on the way out, "
+                               f"and the field cannot be copied")
+                return av
             if mine and self.fn.vars[op[1]].kind == "temp":
                 gone = set()
                 for a in mine:

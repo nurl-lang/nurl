@@ -14031,6 +14031,19 @@ unsafe @ eng_byte s w i k → i {
             } {}
             = k + k 1
         }
+        // (…a FIELD of one is no owner it selects: the local is dropped,
+        // fields and all, on the way out - the field is copied for the
+        // caller, and this one has no copy)
+        ? & & != 0 ( wv_len mine ) == ( fv_kind ovid ) VK_TEMP & & != dest_ty ET_NONE ! ( et_is_view dest_ty ) & ( et_owning dest_ty ) ! ( et_copyable dest_ty ) {
+            : ~ b field_mine F
+            : ~ i fm 0
+            ~ < fm ( wv_len mine ) { ? != ( pl_path ( wv_at mine fm ) ) 0 { = field_mine T } {} = fm + fm 1 }
+            ? field_mine {
+                ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: hands back a field of a local, which is released on the way out, and the field cannot be copied` ) )
+                ( wv_drop mine )
+                ^ av
+            } {}
+        } {}
         ? & != 0 ( wv_len mine ) == ( fv_kind ovid ) VK_TEMP {
             : ~ i gone 0
             : i loans ( av_loans av )
