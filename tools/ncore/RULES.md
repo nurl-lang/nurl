@@ -103,6 +103,9 @@ summarised by the same analysis, to a fixpoint over the program.
 | An argument the callee took over and hands back as it is is the caller's own again, holding what it held | §7.5 (#463) | `apply_call` |
 | `= b ( wrap b )`: a new value that holds a handle of the binding's old one keeps it; nothing is released | §7.6 (#475) | `stmt` (`assign`, `inside`) |
 | A view a closure hands back may point into its arguments, never into what it captured; judged where the closure is made (a captured literal is no view of anything) | §7.5 | `make_closure` (`vback`) |
+| Inside a closure, running a closure it was handed may grow or clear what this one captured: the caller's closure may have captured the same | §2.11 | `call_closure` |
+| What another thread runs holds no view | §6.5 | `apply_call` (`detaches`) |
+| A view handed back out of where it was kept (an element that is a slice or a raw string) points where the kept one points | §2.10 | `apply_call` |
 | A closure's result is its caller's own: what it lends out of a capture is copied, and a value that cannot be copied is refused | §7.5 | `check_program` |
 | A closure several threads may run changes nothing it captured | §6.5 | `shares` |
 | What an `Arc` shares is not changed in place | §6.5 | `effect` |

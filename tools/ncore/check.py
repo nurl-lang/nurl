@@ -1351,6 +1351,13 @@ class FnCheck:
         # what the body does to its parameters it does to these arguments
         for _, fname in known:
             self.closure_arg_effects(st, fname, [(op[1], op[2]) if op[0] == "v" else None for op in ops[1:]], line)
+        if not known and getattr(self.fn, "is_closure", False):
+            # inside a closure, a closure it was handed is the caller's:
+            # what this one captured the caller's may have captured too, and
+            # running it may grow or clear it (MEMORY.md §2.11)
+            for vid in self.fn.params[:getattr(self.fn, "ncap", 0)]:
+                self.effect(st, (vid, ()), "realloc", line)
+                self.effect(st, (vid, ()), "drop", line)
         if not known:
             roots = {self.pidx[a[0]] for a in cav.alias if a[0] in self.pidx}
             if ops[0][0] == "v" and ops[0][1] in self.pidx:
