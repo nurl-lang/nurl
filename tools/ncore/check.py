@@ -1351,6 +1351,25 @@ class FnCheck:
         # what the body does to its parameters it does to these arguments
         for _, fname in known:
             self.closure_arg_effects(st, fname, [(op[1], op[2]) if op[0] == "v" else None for op in ops[1:]], line)
+            # …and a closure it is handed and runs does, here, what its own
+            # body does: to what it captured, and to the arguments the body
+            # hands it (the body's `invokes` / `cloargs`)
+            sm = self.summ.get(fname)
+            body = self.prog.fns.get(fname)
+            if sm is None or body is None:
+                continue
+            ncap = getattr(body, "ncap", 0)
+            for k in sm.get("invokes", ()):
+                i = k - ncap
+                if 0 <= i < len(avs) and self.closures_in(avs[i]):
+                    self.run_closures(st, avs[i], line, f"the closure in argument {i + 1}")
+            for (k, pi, j, path) in sm.get("cloargs", ()):
+                i, src = k - ncap, j - ncap
+                if 0 <= i < len(avs) and 0 <= src < len(avs) and ops[1 + src][0] == "v":
+                    for _, f2 in self.closures_in(avs[i]):
+                        pl = [None] * (pi + 1)
+                        pl[pi] = (ops[1 + src][1], ops[1 + src][2] + tuple(path))
+                        self.closure_arg_effects(st, f2, pl, line)
         if not known and getattr(self.fn, "is_closure", False):
             # inside a closure, a closure it was handed is the caller's:
             # what this one captured the caller's may have captured too, and
