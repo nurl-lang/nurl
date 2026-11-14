@@ -1204,7 +1204,8 @@ class FnCheck:
         binding (MEMORY.md §7.6, agora #265): it owns it from here on.  A
         binding that owned its value on other paths already (a join) owns
         it on every path then."""
-        for vid, av in list(st.vals.items()):
+        first = None
+        for vid, av in sorted(st.vals.items()):
             if av.own not in ("L", "O") or not av.alias or self.fn.vars[vid].kind == "temp":
                 continue
             # (the place itself, or the payload of an option or a result
@@ -1219,7 +1220,14 @@ class FnCheck:
             if ty is None or ty[0] in VIEW_TYPES or ty[0] == "closure":
                 continue
             keep = {l for l in av.loans if self.loans.get(l, (None,))[0] not in av.alias}
-            st.vals[vid] = AV("O", keep, frozenset(), av.held)
+            if first is None or av.own == "O":
+                # (the first binding that read it: one value has one owner)
+                first = vid if first is None else first
+                st.vals[vid] = AV("O", keep, frozenset(), av.held)
+            else:
+                # (a later reader of the same place borrows from the first)
+                at = (first, ())
+                st.vals[vid] = AV("L", keep | {self.loan(st, ("ho", vid, first), at, "handle")}, {at}, av.held)
 
     def take_payload(self, st, av, line, direct=True):
         """A value read in place out of what owns it - a binding a cursor or
