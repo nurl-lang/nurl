@@ -1485,7 +1485,10 @@ class FnCheck:
                 if av.own == "L":
                     if (fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES
                             and not self.T.copyable(fty)):
-                        if (dest_vid is not None and self.fn.vars[dest_vid].kind == "temp" and not av.call
+                        dv = self.fn.vars[dest_vid] if dest_vid is not None else None
+                        # (a statement's temporary, or the unnamed binding a
+                        # `\` try hands its failure on in)
+                        if (dv is not None and (dv.kind == "temp" or dv.name.startswith("%t")) and not av.call
                                 and av.alias and all(a[0] in self.pidx and a[1] for a in av.alias)):
                             # a part of a parameter, read in place: the
                             # literal is a lend of the caller's value, good
