@@ -1873,6 +1873,20 @@ class FnCheck:
                             and all(self.fn.vars[a[0]].depth >= v.depth for a in new.alias)
                             and self.take_payload(st, new, ln)):
                         new = AV("O", (), (), new.held)
+                elif (not v.mut and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
+                      and self.fn.vars[rv[1][1]].kind == "temp" and new.own == "O" and new.loans and not new.call
+                      and v.ty is not None and v.ty[0] not in VIEW_TYPES and v.ty[0] != "closure"
+                      and all(isinstance(l, tuple) and isinstance(l[0], tuple) and l[0] and l[0][0] == "pl"
+                              and l in self.loans and self.loans[l][1] == "handle" for l in new.loans)):
+                    # …and one that is its own on some arms and a payload of
+                    # this frame's owner on the others moves that payload
+                    # out of its owner, as one that only selects does
+                    sel = {self.loans[l][0] for l in new.loans}
+                    roots = [st.vals.get(a[0]) for a in sel]
+                    if (all(r is not None and r.own == "O" for r in roots)
+                            and all(self.fn.vars[a[0]].depth >= v.depth for a in sel)
+                            and self.take_payload(st, AV("L", new.loans, sel, new.held), ln)):
+                        new = AV("O", (), (), new.held)
                 if (new.own == "L" and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
                         and rv[1][1] in self.call_mixed and v.ty is not None and v.ty[0] not in VIEW_TYPES):
                     # what the call handed back is the caller's own on the
