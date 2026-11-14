@@ -82,6 +82,7 @@ class Reader:
         self.prog.handle_elem = {}     # a one-payload handle type -> its payload's type
         self.prog.shared = set()       # …the ones whose copies share the payload
         self.prog.thread_share = set() # handles a thread's closure captures as a share of its own (§6.5)
+        self.prog.copy_answer = {}     # a Vec / Box / option / result type -> can a copy of it be made
         self.prog.arcs = set()         # …and the ones other threads may hold a copy of
         self.prog.virt = {}            # a `dyn` method's virtual callee -> the impls it may run
         self.prog.walk_sums = {}       # a function -> the answers the walk's summaries hold for it (`sum` lines)
@@ -156,6 +157,11 @@ class Reader:
         self.conv_memo[t] = ("named", t, ())        # a recursive type meets itself
         r = self.conv1(t)
         self.conv_memo[t] = r
+        info = self.types.get(t)
+        if info is not None and r[0] in ("vec", "box", "opt", "res"):
+            # nurlc's own answer to "can a copy of it be made" (a Vec of
+            # views is copied view by view)
+            self.prog.copy_answer[r] = info.clone
         return r
 
     def conv1(self, t):

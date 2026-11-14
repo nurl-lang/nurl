@@ -150,6 +150,9 @@ class Types:
             return True
         if k == "named" and ty[1] in getattr(self.prog, "unclonable", ()):
             return False
+        ans = getattr(self.prog, "copy_answer", None)
+        if ans and k in ("vec", "box", "opt") and ty in ans:
+            return ans[ty]
         if k in ("vec", "box", "opt"):
             return self.copyable(ty[1], seen)
         if k == "named" and ty[1] in seen:
