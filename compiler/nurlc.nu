@@ -19184,7 +19184,15 @@ unsafe @ core_loop_begin → i {
 // loop is left only by a `break` or a `^`, which the engine has to know to
 // say what holds after it (printed `loopcond T`).
 unsafe @ core_loop_cond i t0 b always → v {
-    : i op ( core_pop )
+    : ~ i op ( core_pop )
+    // (a condition read out of one of those temporaries - `~ . ( locked_get
+    // g ) serving` - is read before they go, as the code does: into a
+    // number of its own, the condition being one)
+    ? & & ! always >= op 2 > g_core_tmp_n t0 {
+        : i cv ( core_var_new `` `i1` 2 0 g_core_line )
+        ( core_w CO_LET ) ( core_w cv ) ( core_w RV_USE ) ( core_w op )
+        = op ( core_op_var cv )
+    } {}
     ( core_discard g_core_os_n t0 )
     ( core_w CO_LOOPCOND ) ( core_w ? always CORE_OP_TRUE op )
     ( core_scope_begin )
