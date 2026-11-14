@@ -15630,7 +15630,8 @@ unsafe @ eng_byte s w i k → i {
                     : ~ i e 0
                     ~ & ! hs < e ( sm_n f SM_STORES ) {
                         : i t ( sm_at f SM_STORES e )
-                        ? & == ( tp_at t 5 4 ) LK_HELD == ( tp_at t 5 2 ) i { = hs T } {}
+                        : i sj ( tp_at t 5 0 )
+                        ? & & & & == ( tp_at t 5 4 ) LK_HELD == ( tp_at t 5 2 ) i < sj ( ef_nparams f ) ( et_view_capable ( efp_ty f i ) ) ( et_view_capable ( eng_ty_at ( efp_ty f sj ) ( tp_at t 5 1 ) ) ) { = hs T } {}
                         = e + e 1
                     }
                     ? hs {

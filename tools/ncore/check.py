@@ -1953,7 +1953,11 @@ class FnCheck:
             if av.own == "N":
                 # (a number, a string literal: nothing a view could outlive)
                 continue
-            if (any(x[4] == "held" and x[2] == i for x in sm.get("stores", ()))
+            if (body is not None
+                    and any(x[4] == "held" and x[2] == i and x[0] < len(body.params)
+                            and self.T.view_capable(body.vars[body.params[i]].ty)
+                            and self.T.view_capable(self.T.at(body.vars[body.params[x[0]]].ty, x[1]), ())
+                            for x in sm.get("stores", ()))
                     and any(l in self.loans and self.loans[l][1] not in ("share",)
                             for l in hloans(av.held) | (av.loans if av.own == "L" else frozenset()))):
                 # the body leaves an argument or a capture holding what this
