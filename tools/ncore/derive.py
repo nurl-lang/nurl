@@ -137,6 +137,10 @@ def derive(prog, fn, ws):
     invokes = {k for k in range(n) if pty[k] is not None and pty[k][0] == "closure"}
     invokes |= {k for k in _idx(ws, "hrun", n)}
 
+    if fn.ret == ("s",) and ws.get("ret_owned"):
+        # the walk knows the result for a string of its own (`ret_owned`):
+        # a fresh buffer, which holds nothing of the arguments
+        rholds = set()
     if not ret_scalar and not ret_view and not T.view_capable(fn.ret):
         # a result whose type has nowhere to keep a view or a borrowed
         # handle holds none, whatever the raw code's provenance reached

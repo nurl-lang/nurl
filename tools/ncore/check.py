@@ -212,6 +212,25 @@ class FnCheck:
         while body and body[0][0] == "scope":
             body = body[0][1]
         self.first_stmt = body[0] if body else None
+        # the temporaries of value blocks: made empty and given the block's
+        # tail in the same run of statements (a join's is given its value
+        # inside the arms)
+        self.block_temps = set()
+        self.fe_vars = set()     # the element bindings of `~ x xs` loops
+
+        def blocks(stmts):
+            nones = {s[1] for s in stmts if s[0] == "let" and s[2] is None}
+            for s in stmts:
+                if s[0] == "assign" and not s[1][1] and s[1][0] in nones:
+                    self.block_temps.add(s[1][0])
+                for part in s[1:]:
+                    if isinstance(part, list):
+                        if part and isinstance(part[0], tuple) and part[0] and isinstance(part[0][0], str) and len(part[0]) == 2 and isinstance(part[0][1], list):
+                            for _, arm in part:      # a match's arms
+                                blocks(arm)
+                        else:
+                            blocks(part)
+        blocks(fn.body)
         self.stale_caps = set()  # this closure body's captures taken by pointer
         self.s_cloargs = set()
         self.s_retparams = set()
@@ -997,6 +1016,17 @@ class FnCheck:
                 # consumer: the copy is made for it)
                 copied.add(k)
                 continue
+            if (avs[k].own == "L" and not avs[k].call and op[0] == "v" and not op[2] and op[1] in self.block_temps
+                    and avs[k].alias):
+                # a value block whose tail names a binding of an outer scope
+                # or a field of one only lends it: a consumer is given a
+                # copy, and the binding keeps its value (MEMORY.md §2.12,
+                # agora #555)
+                ty = self.fn.vars[op[1]].ty
+                if ty is not None and ty[0] not in VIEW_TYPES and self.T.owning(ty) and not self.T.copyable(ty):
+                    self.err(line, f"{name} takes a borrowed value that cannot be copied")
+                copied.add(k)
+                continue
             if avs[k].own == "L" and name == "dyn" and op[0] == "v":
                 ty = self.ty_of_place((op[1], op[2]))
                 if ty is not None and self.T.copyable(ty):
@@ -1033,6 +1063,20 @@ class FnCheck:
                         # name's to hand to a `sink` (a callee that merely
                         # keeps it takes the owner over through it instead)
                         self.err(line, f"{name} takes {self.vname(op[1])}, which is a borrow of another binding's value")
+                    elif (not op[2] and op[1] in self.fe_vars and not self.T.copyable(ty)
+                          and k < len(sm["modes"]) and sm["modes"][k] == "sink"):
+                        # a loop's element that cannot be copied stays in
+                        # the container that keeps it: `vec_pop`,
+                        # `vec_remove` hand one over (agora #669)
+                        self.err(line, f"{name} takes a loop element that cannot be copied")
+                    elif (op[2] and self.fn.vars[op[1]].kind == "local" and st.vals.get(op[1]) is not None
+                          and st.vals[op[1]].own == "L" and st.vals[op[1]].call
+                          and k < len(sm["modes"]) and sm["modes"][k] == "sink"):
+                        # a field of a binding of what a call lent (a copy
+                        # of an element `vec_at` lends): the binding is a
+                        # borrow, and its field is not its to hand to a
+                        # `sink` (MEMORY.md §2.10, agora #680)
+                        self.err(line, f"{name} takes a field of {self.vname(op[1])}, which is a borrow")
                     elif not self.take_payload(st, avs[k], line, direct=bool(op[2])) and not self.T.copyable(ty):
                         self.err(line, f"{name} takes a borrowed value that cannot be copied")
                 elif ty is not None and ty[0] == "closure":
@@ -1412,9 +1456,12 @@ class FnCheck:
             # it was: only what was lent out of the part itself ends.)
             part = bool(path) and path[-1] != "*"
             self.effect(st, (vid, path), "take" if part else "replace", line)
-            if root.own == "P" and not (path and self.fn.modes[self.pidx[vid]] == "inout"):
+            if root.own == "P" and not (path and self.fn.modes[self.pidx[vid]] == "inout") and "*" not in path:
                 # (a part taken out of an `inout` parameter is a change to
-                # the caller's binding, which stays the caller's)
+                # the caller's binding, which stays the caller's; an element
+                # taken out of a container parameter is a change to its
+                # elements, which ends what the caller lent out of them and
+                # leaves the container the caller's: agora #588)
                 self.s_consumes.add(self.pidx[vid])
             if not path:
                 st.vals[vid] = AV("M" if sure else "X")
@@ -1994,6 +2041,18 @@ class FnCheck:
                 fty = self.ty_of_field(ty, variant, i)
                 fp = (names[i],)
                 cur = st.vals.get(op[1]) if op[0] == "v" and not op[2] else None
+                if (ty is not None and ty[0] == "slice" and cur is not None and cur.own in ("O", "P")
+                        and self.fn.vars[op[1]].kind != "temp" and fty is not None and fty[0] not in VIEW_TYPES
+                        and fty[0] != "closure" and self.T.owning(fty)):
+                    # a slice literal owns its elements: one that names a
+                    # binding or a parameter is given a copy of it, and the
+                    # binding keeps its value (MEMORY.md §7.6, agora #485)
+                    self.read(st, op, line, (site, i), f"element {i + 1}")
+                    if not self.T.copyable(fty):
+                        self.err(line, f"element {i + 1}: a borrowed value would have to be copied here, "
+                                       f"and it cannot be copied")
+                    held |= hroot(cur.held, fp)
+                    continue
                 if (dest_vid is not None and self.fn.vars[dest_vid].kind == "temp" and cur is not None
                         and cur.own == "O" and self.fn.vars[op[1]].kind == "local"
                         and fty is not None and fty[0] not in VIEW_TYPES and fty[0] != "closure"):
@@ -2137,10 +2196,13 @@ class FnCheck:
             # payload of a library getter's option is)
             lent_by_fn = (av.call and op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp"
                           and self.call_by_fn.get(op[1], False))
-            if (dest_vid is not None and av.call and not lent_by_fn and op[0] == "v" and not op[2]
+            # (…nor is the payload of what a shared handle lends: every
+            # share reaches it, agora #463)
+            shared = av.call and any(self.shared_tails(a) for a in alias)
+            if (dest_vid is not None and av.call and not lent_by_fn and not shared and op[0] == "v" and not op[2]
                     and self.fn.vars[op[1]].kind == "temp" and alias and all("*" in a[1] for a in alias)):
                 self.slot_vars.add(dest_vid)
-            return AV("L", loans, alias, sub, lent_by_fn)
+            return AV("L", loans, alias, sub, lent_by_fn or shared)
         raise CheckError(f"rvalue {k}")
 
     def agg_paths(self, ty, variant, n):
@@ -2588,6 +2650,7 @@ class FnCheck:
         return out
 
     def foreach(self, st, s, vid, sop, body, ln):
+        self.fe_vars.add(vid)
         src = self.read(st, sop, ln, ("fs", id(s)), "the loop's container")
         self.check_live(st, src, ln, "the loop's container", held=True)
         # the loop walks the container's buffer for as long as it runs
