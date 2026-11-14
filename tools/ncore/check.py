@@ -170,6 +170,9 @@ class FnCheck:
         self.call_lent = {}      # a call's temporary -> the arguments it may hand back whole
         self.cap_loans = set()   # the loans that are a closure's own handle of a binding it captured
         self.call_by_fn = {}     # a call's temporary -> the callee is a function of the program
+        self.call_mixed = set()  # the temporaries of calls whose result is the caller's own on some calls
+        self.ret_fresh = False   # some return hands back a value of the function's own that holds something
+        self.temp_none = {}      # a literal temporary -> it is an option's `None`
         self.ret_watch = None    # the binding a return handed back, while its `;` blocks run
         self.defer_vars = {}     # a `;` block -> the variables its body names
         self.ret_changed = False
@@ -1045,6 +1048,8 @@ class FnCheck:
                 return AV("O", loans, alias, held)
             if not loans and not alias:
                 return AV("N", (), (), held)
+            if sm.get("mixed") and dest_vid is not None:
+                self.call_mixed.add(dest_vid)
             return AV("L", loans, alias, held, call=True)
         return NONE
 
@@ -1430,6 +1435,8 @@ class FnCheck:
             return av
         if k == "agg":
             _, ty, variant, ops, site = rv
+            if dest_vid is not None:
+                self.temp_none[dest_vid] = variant == "F" and ty is not None and ty[0] == "opt"
             names = self.agg_paths(ty, variant, len(ops))
             held = set()
             lent = {}
@@ -1625,6 +1632,13 @@ class FnCheck:
                             and all(self.fn.vars[a[0]].depth >= v.depth for a in new.alias)
                             and self.take_payload(st, new, ln)):
                         new = AV("O", (), (), new.held)
+                if (new.own == "L" and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
+                        and rv[1][1] in self.call_mixed and v.ty is not None and v.ty[0] not in VIEW_TYPES):
+                    # what the call handed back is the caller's own on the
+                    # calls that made it fresh: the binding owns it there
+                    # and releases it, and borrows on the others (owned per
+                    # call, MEMORY.md §7.6 "Call results")
+                    new = AV("O", new.loans, frozenset(), new.held)
                 if (new.own == "L" and new.loans and v.kind != "temp" and v.ty is not None
                         and v.ty[0] not in VIEW_TYPES and self.T.copyable(v.ty)
                         and all(l in self.loans and self.fn.vars[self.loans[l][0][0]].kind == "temp"
@@ -1801,6 +1815,11 @@ class FnCheck:
                 self.check_live(st, av, ln, "the returned value", held=True)
                 self.params_hold_locals(st, ln)
                 self.rets.append((av, st.copy()))
+                if av.own in ("O", "P") and not av.loans and not (
+                        op[0] == "v" and not op[2] and self.temp_none.get(op[1])):
+                    # (a value of its own that holds something: an option's
+                    # `None` hands no storage over)
+                    self.ret_fresh = True
                 self.exit_drops(st, ln)
             else:
                 st = self.run_defers(st)
@@ -1956,11 +1975,16 @@ class FnCheck:
                 pl = self.param_loan(lid)
                 if pl:
                     rholds.add((hp[:3],) + pl)
+        mixed = False
         if res == "own" and lends:
             # its own on some paths, a lend of an argument on others: the
             # caller's result borrows that argument (answered per call,
             # MEMORY.md §7.6 "Call results")
             res = "lent"
+        if res == "lent" and self.ret_fresh:
+            # (…and is the caller's own on the calls that made it fresh:
+            # what holds it releases it there)
+            mixed = True
         if self.fn.ret is not None and self.T.is_scalar(self.fn.ret):
             res = "none"
         if res == "lent" and not lends:
@@ -1992,7 +2016,7 @@ class FnCheck:
                 "detaches": sorted(self.s_detaches),
                 "regions": sorted(self.s_regions), "selfholds": sorted(self.s_selfholds),
                 "rclos": sorted(rclos), "sclos": sorted(sclos), "calllends": sorted(calllends),
-                "gone": sorted(left_gone)}
+                "gone": sorted(left_gone), "mixed": [1] if mixed else []}
 
 
 def initial_summary(prog, fn):
@@ -2061,6 +2085,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "gone"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "gone", "mixed"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out
