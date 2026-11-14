@@ -1060,6 +1060,16 @@ class FnCheck:
                 # (its own on the calls that handed a temporary back, a lend
                 # of the other arguments on the rest: owned per call)
                 return AV("O", loans, alias, held)
+            dty = self.fn.vars[dest_vid].ty if dest_vid is not None else None
+            if dty is not None and dty[0] in VIEW_TYPES:
+                # a view handed back out of where it was kept (an element
+                # that is a slice, a raw string) is that view: it points
+                # where the kept one points
+                kept = self.view_value(frozenset((hp, l) for hp, l in held if not hp))
+                if kept.own == "L":
+                    loans |= kept.loans
+                    alias |= kept.alias
+                    held = {(hp, l) for hp, l in held if hp}
             if not loans and not alias:
                 return AV("N", (), (), held)
             if sm.get("mixed") and dest_vid is not None:
