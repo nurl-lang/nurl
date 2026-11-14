@@ -16840,6 +16840,8 @@ unsafe @ eng_byte s w i k → i {
         : ~ i lent 0
         : ~ i nc_loans 0
         : ~ i nc_alias 0
+        : ~ b uncopy_lent F
+        : ~ b owned_fresh F
         : b wrapper & != ty ET_NONE | == ( et_kind ty ) EK_OPT == ( et_kind ty ) EK_RES
         : ~ i i 0
         ~ < i n {
@@ -16852,6 +16854,7 @@ unsafe @ eng_byte s w i k → i {
             : i cur ? whole ( st_av st ov ) 0
             : i cown ? != cur 0 ( av_own cur ) OW_NONE
             : b fplain & & != fty ET_NONE ! ( et_is_view fty ) != ( et_kind fty ) EK_CLOSURE
+            ? & & & == cown OW_O == ( fv_kind ov ) VK_TEMP & != fty ET_NONE ! ( et_is_view fty ) ( et_owning fty ) { = owned_fresh T } {}
             : ~ b next F
             ? & & & & & != ty ET_NONE == ( et_kind ty ) EK_SLICE | == cown OW_O == cown OW_P != ( fv_kind ov ) VK_TEMP fplain ( et_owning fty ) {
                 // a slice literal owns its elements: one that names a
@@ -16978,6 +16981,7 @@ unsafe @ eng_byte s w i k → i {
                             = nc_loans ( sq_union nc_loans ( av_loans av ) )
                             = nc_alias ( sq_union nc_alias al )
                             ( wv_put g_fx_nocopy dest + i 1 )
+                            = uncopy_lent T
                         } {
                             : ~ b slot & & & ! ( av_call av ) != al 0 whole ( fx_has ov FX_SLOT )
                             ? slot {
@@ -17027,6 +17031,12 @@ unsafe @ eng_byte s w i k → i {
             = i + i 1
         }
         ? & != lent 0 have_dest { ( wv_put g_fx_agg dest lent ) } {}
+        ? & uncopy_lent owned_fresh {
+            // a field of its own beside a part of a parameter it only borrows,
+            // which cannot be copied: lent whole, the literal's own field is
+            // released by no one; owned whole, the borrowed one twice
+            ( eng_err line `a literal holds a value of its own beside a part of a parameter it only borrows, which cannot be copied` )
+        } {}
         ? != nc_loans 0 { ^ ( av_make OW_L nc_loans nc_alias held F ) } {}
         ^ ( av_make OW_O 0 0 held F )
     } {}

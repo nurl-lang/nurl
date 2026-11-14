@@ -2871,10 +2871,14 @@ class FnCheck:
             held = set()
             lent = {}
             nc_loans, nc_alias = set(), set()
+            uncopy_lent = owned_fresh = False
             for i, op in enumerate(ops):
                 fty = self.ty_of_field(ty, variant, i)
                 fp = (names[i],)
                 cur = st.vals.get(op[1]) if op[0] == "v" and not op[2] else None
+                if (cur is not None and cur.own == "O" and self.fn.vars[op[1]].kind == "temp"
+                        and fty is not None and fty[0] not in VIEW_TYPES and self.T.owning(fty)):
+                    owned_fresh = True
                 if (ty is not None and ty[0] == "slice" and cur is not None and cur.own in ("O", "P")
                         and self.fn.vars[op[1]].kind != "temp" and fty is not None and fty[0] not in VIEW_TYPES
                         and fty[0] != "closure" and self.T.owning(fty)):
@@ -2986,6 +2990,7 @@ class FnCheck:
                             nc_loans |= av.loans
                             nc_alias |= av.alias
                             self.lit_nocopy[dest_vid] = i + 1
+                            uncopy_lent = True
                         elif (dest_vid in self.ret_aggs and op[0] == "v" and not op[2] and self.own_payload(st, av)
                               and self.take_payload(st, av, line)):
                             # the payload of an option or a result a local of
@@ -3026,6 +3031,13 @@ class FnCheck:
                 held |= hroot(self.closure_owned(av.held), fp)
             if lent:
                 self.agg_lends[dest_vid] = lent
+            if uncopy_lent and owned_fresh:
+                # a field of its own beside a part of a parameter it only
+                # borrows, which cannot be copied: lent whole, the literal's
+                # own field is released by no one; owned whole, the borrowed
+                # one is released twice (agora #635)
+                self.err(line, "a literal holds a value of its own beside a part of a parameter it only "
+                               "borrows, which cannot be copied")
             if nc_loans:
                 return AV("L", nc_loans, nc_alias, held)
             return AV("O", (), (), held)
