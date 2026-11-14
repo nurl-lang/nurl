@@ -1477,7 +1477,13 @@ class FnCheck:
                 return AV("L", v.loans | av.loans, v.alias, frozenset()) if v.own == "L" else NONE
             loans, alias = set(av.loans), set()
             for a in av.alias:
-                pl = (a[0], a[1] + (tag,))
+                aty = self.ty_of_place(a)
+                wrapped = (aty is not None and aty[0] not in ("opt", "res")
+                           and not (aty[0] == "named" and aty[1] in self.prog.enums))
+                # (an option a callee made around a lend of an element -
+                # `vec_get` - is no place of its own: its payload is the
+                # element)
+                pl = a if wrapped else (a[0], a[1] + (tag,))
                 alias.add(pl)
                 loans.add(self.loan(st, ("pl", id(rv), pl), pl, "handle"))
             return AV("L", loans, alias, sub)
