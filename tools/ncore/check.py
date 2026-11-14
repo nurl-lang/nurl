@@ -615,8 +615,13 @@ class FnCheck:
             # frame's owners goes to the caller with the return: the one
             # selected moves out (MEMORY.md §2.2); a parameter it may be
             # instead is lent, as before
+            # (a view handed back - `s`, a slice - selects an owner only
+            # where the owner is itself one: an owned raw string, an owned
+            # slice. A view of a String's buffer owns nothing.)
+            viewish = dest_ty is not None and dest_ty[0] in VIEW_TYPES
             mine = [a for a in av.alias if (st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
-                                            and self.fn.vars[a[0]].kind != "param" and "*" not in a[1])]
+                                            and self.fn.vars[a[0]].kind != "param" and "*" not in a[1]
+                                            and (not viewish or (self.ty_of_place(a) or ("?",))[0] == dest_ty[0]))]
             if mine and self.fn.vars[op[1]].kind == "temp":
                 gone = set()
                 for a in mine:
