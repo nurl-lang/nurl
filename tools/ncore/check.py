@@ -1635,7 +1635,9 @@ class FnCheck:
                 # (a lend of something that ends before the target - an inner
                 # block's local, an arm's - is copied in: MEMORY.md §7.6,
                 # "hands it a value of its own")
-                new = self.rvalue(st, rv, ln, ddepth, v.ty, v.name, copy_ok=True, dest_vid=vid,
+                # (…an owner is: a cursor given a lend stays a borrow, of
+                # whatever it is pointed at now)
+                new = self.rvalue(st, rv, ln, ddepth, v.ty, v.name, copy_ok=not repoint, dest_vid=vid,
                                   named=v.kind != "temp",
                                   lend_owner=outer if v.kind == "temp" else ((lambda x: True) if v.mut and repoint else (lambda x: False)))
                 # (…through a join too: `= x ? c x ( f )` - where the join may
