@@ -2223,6 +2223,35 @@ class FnCheck:
         avs = []
         for i, op in enumerate(ops[1:]):
             avs.append(self.read(st, op, line, (site, i + 1), f"argument {i + 1} of the closure"))
+        # an argument the body is handed is frozen for the call, as any
+        # call's are: the body may not end, through what it captured, what
+        # an argument borrows (`( c e )`, e a payload of the option `o` the
+        # body replaces) - it reads its parameter after (agora #445)
+        for base, fname in self.closures_in(cav):
+            sm = self.summ.get(fname)
+            body = self.prog.fns.get(fname)
+            if sm is None or body is None:
+                continue
+            ncap = getattr(body, "ncap", 0)
+            n = len(base)
+            caps = {}
+            for hp, l in cav.held:
+                if hp[:n] == base and len(hp) == n + 1 and hp[n].startswith("^") and hp[n] != "^f" and l in self.loans:
+                    caps.setdefault(int(hp[n][1:]), []).append(self.loans[l][0])
+            hit = False
+            for (k, path, eff) in sm["effects"]:
+                if k >= ncap or eff not in ("replace", "realloc", "drop", "take") or hit:
+                    continue
+                for place in caps.get(k, ()):
+                    ch = (place[0], (place[1] + tuple(path))[:PATH_MAX])
+                    for i, a in enumerate(avs):
+                        if any(l in self.loans and l not in st.dead and self.kills(eff, ch, l) for l in a.loans):
+                            self.err(line, f"argument {i + 1} is reached by this call through the closure it "
+                                           f"calls, which gives {self.pname(ch)} a new value when it runs here")
+                            hit = True
+                            break
+                    if hit:
+                        break
         self.run_closures(st, cav, line, "the closure called here")
         known = self.closures_in(cav)
         # what the body does to its parameters it does to these arguments

@@ -15706,6 +15706,72 @@ unsafe @ eng_byte s w i k → i {
     ( st_put st src ( av_make OW_L ( sq_add 0 ( eng_loan st at LK_HANDLE ) ) ( sq_add 0 at ) ( av_held d ) F ) )
 }
 
+// An argument the body is handed is frozen for the call, as any call's
+// are: the body may not end, through what it captured, what an argument
+// borrows (`( c e )`, e a payload of the option `o` the body replaces) - it
+// reads its parameter after.
+@ clo_args_frozen i st i cav i avs i line → v {
+    : i held ( av_held cav )
+    ? ! ( held_has_clo held ) { ^ } {}
+    : i cl ( wv_new )
+    ( closures_in held cl )
+    : ~ b hit F
+    : ~ i c 0
+    ~ & ! hit < c ( wv_len cl ) {
+        : i base ( wv_at cl c )
+        : i f ( wv_at cl + c 1 )
+        ? ( sm_have f ) {
+            : i ncap ( ef_ncap f )
+            : i bl ( ep_len base )
+            : i caps ( wv_new )
+            : ~ i k 0
+            ~ < k ( sq_len held ) {
+                : i he ( sq_at held k )
+                : i hp ( he_path he )
+                : i l ( he_loan he )
+                ? & & & & == ( ep_len hp ) + bl 1 == ( ep_parent hp ) base ( ee_is_cap ( ep_last hp ) ) == 0 & ( ee_bits ( ep_last hp ) ) EE_FN ( el_is_loan l ) {
+                    ( wv_push caps ( ee_cap_no ( ep_last hp ) ) ) ( wv_push caps ( el_place l ) )
+                } {}
+                = k + k 1
+            }
+            : ~ i e 0
+            ~ & ! hit < e ( sm_n f SM_EFFECTS ) {
+                : i t ( sm_at f SM_EFFECTS e )
+                : i pk ( tp_at t 3 0 )
+                : i eff ( tp_at t 3 2 )
+                ? & < pk ncap | | | == eff EF_REPLACE == eff EF_REALLOC == eff EF_DROP == eff EF_TAKE {
+                    = k 0
+                    ~ & ! hit < k ( wv_len caps ) {
+                        ? == ( wv_at caps k ) pk {
+                            : i place ( wv_at caps + k 1 )
+                            : i ch ( pl_make ( pl_var place ) ( ep_take ( ep_cat ( pl_path place ) ( tp_at t 3 1 ) ) PATH_MAX ) )
+                            : ~ i a 0
+                            ~ & ! hit < a ( wv_len avs ) {
+                                : i ls ( av_loans ( wv_at avs a ) )
+                                : ~ i j 0
+                                ~ & ! hit < j ( sq_len ls ) {
+                                    : i l ( sq_at ls j )
+                                    ? & & ( el_is_loan l ) ! ( sq_has ( st_dead st ) l ) ( eng_kills eff ch l ) {
+                                        ( eng_err line ( nurl_str_cat ( nurl_str_cat3 `argument ` ( nurl_str_int + a 1 ) ` is reached by this call through the closure it calls, which gives ` ) ( nurl_str_cat ( eng_pname ch ) ` a new value when it runs here` ) ) )
+                                        = hit T
+                                    } {}
+                                    = j + j 1
+                                }
+                                = a + a 1
+                            }
+                        } {}
+                        = k + k 2
+                    }
+                } {}
+                = e + e 1
+            }
+            ( wv_drop caps )
+        } {}
+        = c + c 2
+    }
+    ( wv_drop cl )
+}
+
 // A call through a closure value (`ops`: the closure, then its
 // arguments): its arguments are lent, its result is its caller's own.
 @ call_closure i st i ops i site i line → i {
@@ -15715,6 +15781,7 @@ unsafe @ eng_byte s w i k → i {
     : i avs ( wv_new )
     : ~ i i 0
     ~ < i n { ( wv_push avs ( eng_read st ( wv_at ops + i 1 ) line TG_ARG + + * site 256 i 1 ) ) = i + i 1 }
+    ( clo_args_frozen st cav avs line )
     ( run_closures st ( av_held cav ) WK_CLO_CALLED 0 line )
     : i known ( wv_new )
     ( closures_in ( av_held cav ) known )
