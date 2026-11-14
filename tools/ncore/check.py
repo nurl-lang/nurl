@@ -975,6 +975,14 @@ class FnCheck:
                     if ty is not None and ty[0] in VIEW_TYPES:
                         # a copy of a view is that view (MEMORY.md §2.13)
                         vcopy = avs[k]
+                elif (not path and not dpath and avs[k].own == "O" and dest_vid is not None
+                      and ops[k][0] == "v" and not ops[k][2] and self.fn.vars[ops[k][1]].kind != "temp"
+                      and self.fn.vars[dest_vid].ty is not None and self.fn.vars[dest_vid].ty[0] == "s"
+                      and self.fn.vars[ops[k][1]].ty == self.fn.vars[dest_vid].ty):
+                    # (…and a copy of an owned raw string in a binding is a
+                    # view of that binding's buffer)
+                    vcopy = AV("L", {self.loan(st, (site, "vc", k), (ops[k][1], ()), "view")},
+                               {(ops[k][1], ())}, frozenset())
             else:
                 held |= hfrom(avs[k].loans, dpath)
                 for a in avs[k].alias:
