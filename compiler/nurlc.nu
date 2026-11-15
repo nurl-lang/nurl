@@ -289,6 +289,9 @@
 : i ENG_SQ_MEMO 4096
 
 : ~ i g_eng_on 0  // 1: the ownership engine reads the module's IR and prints its answers (`--emit-core --engine`)
+: ~ i g_eng_decide 0  // 1: what the engine finds refuses the program, printed as diagnostics; no IR text is made (`--engine-decides`)
+: ~ i g_eng_nref 0  // …how many findings it reported
+: ~ i g_core_flushed 0  // 1 once core_flush has run
 : ~ i g_ef -1  // the functions kept for it, EF_W words each (eng_keep_fn); -1 none yet
 : ~ i g_ef_code -1  // …their statements, end to end
 : ~ i g_ef_vars -1  // …their variables, CORE_VW words each
@@ -10080,6 +10083,7 @@ unsafe @ __core_w_ops i h0 → v {
 // counted, and named on stderr with the function it is in.
 unsafe @ __core_gap s what → v {
     = g_core_unlowered + g_core_unlowered 1
+    ? != 0 g_eng_decide { ^ } {}
     ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat4 `core-gap\t` what `\t` # s g_core_fname ) ( nurl_str_cat4 `\t` # s g_core_ffile `:` ( nurl_str_int g_core_line ) ) ) )
 }
 
@@ -19911,12 +19915,17 @@ unsafe @ eng_print_types → v {
     ( eng_sq_reset )
     ( __ep_init )
     ( __et_names )
-    ( eng_print_types )
-    ? == 0 ( ef_n ) { ( __core_o `eng\tverdict\truns-clean\n` ) ^ } {}
+    ? == 0 g_eng_decide { ( eng_print_types ) } {}
+    ? == 0 ( ef_n ) {
+        ? == 0 g_eng_decide { ( __core_o `eng\tverdict\truns-clean\n` ) } {}
+        ^
+    } {}
     ( eng_check_module )
     ? != 0 g_eng_dbg { ( eng_dump_summaries ) } {}
     ? != g_eng_skip 0 {
-        ( __core_o `eng\tverdict\tskip\t` ) ( __core_o ( eng_str g_eng_skip ) ) ( __core_o `\n` )
+        // (what the engine cannot read it does not judge: the walk's
+        // verdict stands for the module)
+        ? == 0 g_eng_decide { ( __core_o `eng\tverdict\tskip\t` ) ( __core_o ( eng_str g_eng_skip ) ) ( __core_o `\n` ) } {}
         ^
     } {}
     : ~ i ne 0
@@ -19926,16 +19935,33 @@ unsafe @ eng_print_types → v {
         ? >= errs 0 {
             : ~ i k 0
             ~ < k ( wv_len errs ) {
-                ( __core_o `eng\terr\t` ) ( __core_o ( eng_str ( ef_at f EF_NAME ) ) )
-                ( __core_o `\t` ) ( __core_oi ( wv_at errs k ) )
-                ( __core_o `\t` ) ( __core_o ( eng_str ( wv_at errs + k 1 ) ) ) ( __core_o `\n` )
+                ? != 0 g_eng_decide {
+                    ( eng_report f ( wv_at errs k ) ( eng_str ( wv_at errs + k 1 ) ) )
+                } {
+                    ( __core_o `eng\terr\t` ) ( __core_o ( eng_str ( ef_at f EF_NAME ) ) )
+                    ( __core_o `\t` ) ( __core_oi ( wv_at errs k ) )
+                    ( __core_o `\t` ) ( __core_o ( eng_str ( wv_at errs + k 1 ) ) ) ( __core_o `\n` )
+                }
                 = ne + ne 1
                 = k + k 2
             }
         } {}
         = f + f 1
     }
-    ( __core_o ? == ne 0 `eng\tverdict\truns-clean\n` `eng\tverdict\trejected\n` )
+    = g_eng_nref ne
+    ? == 0 g_eng_decide { ( __core_o ? == ne 0 `eng\tverdict\truns-clean\n` `eng\tverdict\trejected\n` ) } {}
+}
+
+// A finding of the engine as a diagnostic: the file of the function it is
+// in, the line, the source line with a caret under the statement's start.
+@ eng_report i f i line s msg → v {
+    : s file ( eng_str ( ef_at f EF_FILE ) )
+    : s src ( compiler_read_source file )
+    : s text ? & > line 0 != 0 ( nurl_str_len src ) ( __src_line_text src ( nurl_str_len src ) line ) ``
+    : s body ( __trim_sp text )
+    : i at ( nurl_str_find text body )
+    : i col ? < at 0 1 + at 1
+    ( __diag_pos_emit `error` file line col text msg )
 }
 // A function's (or a closure body's) IR begins. The builder of the
 // function it is compiled inside, if any, is set aside.
@@ -19988,7 +20014,7 @@ unsafe @ core_fn_ret s ret_ty → v {
 unsafe @ core_fn_end → v {
     ? == 0 g_core_live { ^ } {}
     ( core_note_fn )
-    ( core_print_fn )
+    ? == 0 g_eng_decide { ( core_print_fn ) } {}
     ? != 0 g_eng_on { ( eng_keep_fn ) } {}
     ? == 0 g_core_saved { = g_core_live 0 ^ } {}
     ? != 0 g_core_code { ( nurl_free # s g_core_code ) } {}
@@ -20832,9 +20858,13 @@ unsafe @ core_print_sums i syms → v {
 
 // The module's IR to stdout, and what was not lowered to stderr.
 unsafe @ core_flush i syms → v {
-    ( core_print_types syms )
-    ( core_print_virts )
-    ( core_print_sums syms )
+    ? != 0 g_core_flushed { ^ } {}
+    = g_core_flushed 1
+    ? == 0 g_eng_decide {
+        ( core_print_types syms )
+        ( core_print_virts )
+        ( core_print_sums syms )
+    } {}
     ? != 0 g_eng_on { ( eng_main syms ) } {}
     ? != 0 g_core_out {
         : *u ob # *u # s g_core_out
@@ -20845,7 +20875,7 @@ unsafe @ core_flush i syms → v {
         = g_core_out_n 0
         = g_core_out_cap 0
     } {}
-    ? != 0 g_core_unlowered {
+    ? & != 0 g_core_unlowered == 0 g_eng_decide {
         ( nurl_eprintln ( nurl_str_cat3 `core: ` ( nurl_str_int g_core_unlowered ) ` construct(s) not lowered` ) )
     } {}
     // The builder's arrays (the last function's, reused by each) and the lists.
@@ -111431,6 +111461,10 @@ unsafe @ main → i {
         ? ( seq a `--emit-core` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = ai + ai 1 continue } {}
         ? ( seq a `--engine` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = g_eng_on 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-trace` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = g_eng_on 1 = g_eng_dbg 1 = ai + ai 1 continue } {}
+        // (the engine decides beside the walk: the walk's own refusals
+        // still stop the compile where they are met, and what the engine
+        // finds at the end of the module refuses it too)
+        ? ( seq a `--engine-decides` ) { = g_core_on 1 = g_eng_on 1 = g_eng_decide 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-trace2` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = g_eng_on 1 = g_eng_dbg 2 = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--coverage-link-ir=` ) {
             = g_coverage_link_ir ( nurl_str_slice a 19 - ( nurl_str_len a ) 19 )
@@ -111715,13 +111749,24 @@ unsafe @ main → i {
         ? ( seq panic_message `__nurlc_ice__` ) {} { ( __ice_report path panic_message ) }
         = compile_error 3
     } {}
+    // The ownership engine's verdict on the whole module (`--engine-decides`):
+    // a program the walk let through is refused here when the engine
+    // finds a use of what was changed, moved or released.
+    ? & != 0 g_eng_decide == compile_error 0 {
+        ( core_flush syms )
+        ? > g_eng_nref 0 {
+            ( nurl_eprintln ( nurl_str_cat3 `error: compilation aborted — ` ( nurl_str_int g_eng_nref )
+            ? > g_eng_nref 1 ` ownership violations` ` ownership violation` ) )
+            = compile_error 1
+        } {}
+    } {}
     // Every function this compile will ever emit is now in the buffer:
     // close it and write out the part `main` can reach.
     ? | check_only != compile_error 0 {
         // The fused walk has completed every semantic check. Discard its
         // buffered IR without copying, indexing, printing or splitting it.
         ( nurl_print_buf_unwind )
-        ? != 0 g_core_on { ( core_flush syms ) } {}
+        ? != 0 g_core_on { ? != 0 g_eng_decide { = g_eng_on 0 } {} ( core_flush syms ) } {}
     } {
         ( flush_simd_deferred )
         : s __mod ( nurl_print_buf_stop )
