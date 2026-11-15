@@ -9678,6 +9678,22 @@ unsafe @ __gen_ret i lex i syms i cg → s {
         ? & __skfl | ( seq hbit `true` ) ( seq hbit `false` ) { = hbit ( mem_udrop_flag_get syms cg __skp ) ( mem_hown_mark_dyn syms ) } {
             ? ( seq hbit `true` ) { = hbit ? | ret_fresh_slice != 0 ( nurl_str_len skip ) ( nurl_str_cat `true` `` ) ( nurl_str_cat `false` `` ) } {}
         }
+        // (…and a slice that is, on this run, the very buffer an owned
+        // slice field of a local struct holds — however it got here: a
+        // binding of the field, a chain of them, a `: ~` cursor given it
+        // on some paths, a join's or an arm's value — is taken out of the
+        // struct there, by identity, as `^ . h xs` takes it by name: the
+        // field is left empty, so the struct's release frees nothing of
+        // it, and this run hands the buffer over. Left lent, the caller
+        // read what h's release freed — agora #664's shape spelled through
+        // a binding.)
+        ? & & ! ret_slice_taken ! ( seq hbit `true` ) == 0 g_bck_closure_depth {
+            : s __tk ( __ret_take_struct_slices syms cg lt val )
+            ? != 0 ( nurl_str_len __tk ) {
+                = hbit ? ( seq hbit `false` ) ( nurl_str_cat __tk `` ) ( __or_i1 cg hbit __tk )
+                ( mem_hown_mark_dyn syms )
+            } {}
+        } {}
     } {}
     ( mem_store_hown syms hbit )
     ( mem_save_return_proof syms cg lt skip_str_ptr | ret_is_direct_call ret_is_det_join )
@@ -72300,7 +72316,12 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : b __slc_fl & & lhs_is_owned_slc == 37 ( nurl_str_get ptr 0 ) != 0 ( nurl_sym_len2 syms ptr `__live` )
         : b __slc_mix & & __slc_fl | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST != 0 ( nurl_sym_len syms `__last_slice_own_bit__` )
         : b __slc_fresh | | | == bck_rhs_tt TT_LBRACK ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` ) rhs_slice_owned rhs_other_owner
-        : b __slc_lent & & __slc_fl ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name )
+        // (…and a field read of another binding, `= z . h xs`, as much a
+        // borrow: z's old value goes where its flag says, and z owns none
+        // of h's. Taken for neither, z's literal leaked and z's drop freed
+        // h's buffer under h — agora #664's shape through a cursor.)
+        : b __slc_frd & & & == bck_rhs_tt TT_DOT != 0 ( nurl_sym_len syms `__last_member_root__` ) ! ( seq ( nurl_sym_get syms `__last_member_root__` ) name ) ! ( seq ( str_first_word ( nurl_sym_get syms `__last_field_read__` ) ) ptr )
+        : b __slc_lent & __slc_fl | & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name ) __slc_frd
         // (An `inout` slice parameter is the caller's slot (§2.4): a fresh
         // value or an owned local moved in replaces the caller's buffer,
         // which goes here, as an inout String's old value does. Left alone,
@@ -100390,6 +100411,102 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
     // folds to false in one piece (__ir_fold_range).
     ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request fl ) )
     ( nurl_print `(i1 ` ) ( nurl_print cond ) ( nurl_print `, ptr ` ) ( nurl_print g ) ( nurl_print `)\n` )
+}
+
+// The owned slice fields of this frame's local structs that the slice
+// value `val` (type `lt`) handed back may be, on this run: each is taken
+// — zeroed in its struct, which then frees nothing of it — where `val`
+// is its buffer, the same pointer and length (and not empty), and the
+// struct is this frame's to release there. An i1 operand, true on the
+// runs one was taken; `` where no such field is in scope. Both owners
+// count: a field a literal gave the struct (`__owned_struct_fields__`,
+// agora #664) and one the struct owns by type, held by a binding that
+// releases it (`__user_drops__`, agora #848). A parameter's struct is
+// none of them: its fields stay its caller's.
+@ __ret_take_struct_slices i syms i cg s lt s val → s {
+    ? == 0 g_auto_drop_strings { ^ ( nurl_str_cat `` `` ) } {}
+    : s llt ( nurl_llty lt )
+    : ~ s acc ``
+    : ~ s seen ``
+    : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s p ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s path ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s lsn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s lidx ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & & & ( seq kind `slice` ) == 37 ( nurl_str_get p 0 ) == 0 ( nurl_sym_len2 syms p `__pname` ) ! ( __is_inout_ptr syms p ) {
+            : s fty ( nurl_llty ( nurl_sym_get g_root_syms ( nurl_str_cat3 lsn `__idx_` ( nurl_str_cat lidx `__type` ) ) ) )
+            : s gp ( bck_swap_char path 46 44 )
+            : s key ( nurl_str_cat3 p `#` gp )
+            ? & ( seq fty llt ) ! ( str_contains_word seen key ) {
+                = seen ( nurl_str_cat3 seen ` ` key )
+                : s t ( __ret_take_slice_field cg p ( nurl_str_cat `%` sn ) gp llt val ( mem_udrop_flag_get syms cg p ) )
+                = acc ( __or_i1 cg acc t )
+            } {}
+        } {}
+    }
+    = rest ( nurl_sym_get syms `__user_drops__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s p ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i vn ( nurl_str_len vt )
+        ? & & & & > vn 1 == 37 ( nurl_str_get vt 0 ) != 42 ( nurl_str_get vt - vn 1 ) == 37 ( nurl_str_get p 0 ) == 0 ( nurl_sym_len2 syms p `__pname` ) {
+            : s sname ( nurl_str_slice vt 1 - vn 1 )
+            : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
+            : ~ b any F
+            : ~ i fi 0
+            ~ & ! any < fi fc {
+                = any & ( __owned_slice_ty ( nurl_llty ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) ) ) ( seq ( nurl_llty ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) ) llt )
+                = fi + fi 1
+            }
+            ? & any | ( __is_owned_struct_ty vt ) ( __agg_drop_takes_fields vt ) {
+                = fi 0
+                ~ < fi fc {
+                    : s fty ( nurl_llty ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) )
+                    : s key ( nurl_str_cat3 p `#` ( nurl_str_int fi ) )
+                    ? & & ( __owned_slice_ty fty ) ( seq fty llt ) ! ( str_contains_word seen key ) {
+                        = seen ( nurl_str_cat3 seen ` ` key )
+                        : s t ( __ret_take_slice_field cg p vt ( nurl_str_int fi ) llt val ( mem_udrop_flag_get syms cg p ) )
+                        = acc ( __or_i1 cg acc t )
+                    } {}
+                    = fi + fi 1
+                }
+            } {}
+        } {}
+    }
+    ^ acc
+}
+
+// …one of them: field `path` (GEP indices, `1,0`) of the struct `sty` at
+// `ptr`, a slice of type `llt`, taken where it is `val`'s buffer and
+// `cond` holds. The i1 that says it was.
+@ __ret_take_slice_field i cg s ptr s sty s path s llt s val s cond → s {
+    : s g ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print g ) ( nurl_print ` = getelementptr ` ) ( nurl_print sty ) ( nurl_print `, ptr ` )
+    ( nurl_print ptr ) ( nurl_print `, i32 0` ) ( nurl_print ( __ff_gep_path path ) ) ( nurl_print `\n` )
+    : s cur ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print cur ) ( nurl_print ` = load ` ) ( nurl_print llt ) ( nurl_print `, ptr ` ) ( nurl_print g ) ( nurl_print `\n` )
+    : s cp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print cp ) ( nurl_print ` = extractvalue ` ) ( nurl_print llt ) ( nurl_print ` ` ) ( nurl_print cur ) ( nurl_print `, 0\n` )
+    : s vp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print vp ) ( nurl_print ` = extractvalue ` ) ( nurl_print llt ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+    : s cl ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print cl ) ( nurl_print ` = extractvalue ` ) ( nurl_print llt ) ( nurl_print ` ` ) ( nurl_print cur ) ( nurl_print `, 1\n` )
+    : s vl ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print vl ) ( nurl_print ` = extractvalue ` ) ( nurl_print llt ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
+    : s ep ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ep ) ( nurl_print ` = icmp eq ptr ` ) ( nurl_print cp ) ( nurl_print `, ` ) ( nurl_print vp ) ( nurl_print `\n` )
+    : s el ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print el ) ( nurl_print ` = icmp eq i64 ` ) ( nurl_print cl ) ( nurl_print `, ` ) ( nurl_print vl ) ( nurl_print `\n` )
+    : s nn ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nn ) ( nurl_print ` = icmp ne ptr ` ) ( nurl_print cp ) ( nurl_print `, null\n` )
+    : ~ s t ( __and_i1 cg ( __and_i1 cg ep el ) nn )
+    ? ! ( seq cond `1` ) { = t ( __and_i1 cg t cond ) } {}
+    ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request llt ) )
+    ( nurl_print `(i1 ` ) ( nurl_print t ) ( nurl_print `, ptr ` ) ( nurl_print g ) ( nurl_print `)\n` )
+    ^ t
 }
 
 // `__nurl_zero_if.<n>(i1 c, ptr p)` stores a zero `fl` through `p` when
