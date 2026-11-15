@@ -289,7 +289,8 @@
 : ~ i g_sq_tmp 0  // where a sequence is put together before it is interned
 : ~ i g_sq_tmp_n 0
 : ~ i g_sq_tmp_cap 0
-: ~ i g_sq_memo 0  // sq_union's answers, 3 words each: a + 1, b, the union; direct-mapped
+: ~ i g_sq_memo 0  // sq_union's answers, 4 words each: a + 1, b, the union, the reset it was made after; direct-mapped
+: ~ i g_sq_epoch 0  // eng_sq_reset's count: a memo entry of an earlier one is stale
 : i ENG_SQ_MEMO 4096
 
 : ~ i g_eng_on 0  // 1: the ownership engine reads the module's IR and prints its answers (`--emit-core --engine`)
@@ -638,6 +639,8 @@
 : ~ i g_fc_first_stmt -1  // the offset of the body's first statement
 : ~ i g_sx_ix -1  // a function's name (interned) → its summary record + 1, for the ones the engine does not walk (declared, derived)
 : ~ i g_sx_next 0  // the next record past the module's functions
+: ~ i g_sx_tmp -1  // __sx_set's vectors: the set's entries, and the words of one
+: ~ i g_sx_one -1
 : ~ i g_sx_none -1  // names with no summary at all (a set kept as a map)
 : ~ i g_sm_version 0  // bumped when a walked function's summary changes
 : ~ i g_sx_virt -1  // a `dyn` method's virtual callee → the record of its impls' merged summaries + 1 …
@@ -650,6 +653,11 @@
 : ~ i g_s_catches 0
 : ~ i g_fc_reading -1  // the function being checked (its number), -1 none: whose reads of summaries are noted
 : ~ i g_sm_stamp -1  // per function: the last function that read its summary + 1 (so one check notes one edge once)
+: ~ i g_sm_last_f -1  // the summary sm_note noted last, and who read it (its stamp is set)
+: ~ i g_fc_in_make 0  // 1 while eng_make_summary merges a walk's summary into the one kept
+: ~ i g_fc_selfread 0  // 1: the walk of the function being checked read its own summary
+: ~ i g_fc_virt_used 0  // 1: …or asked for a `dyn` method's summary (eng_virt: a cached one notes no read)
+: ~ i g_sm_last_r -1
 : ~ i g_sm_edges -1  // (function read * 2^20 + reader) → 1: the edges noted
 : ~ i g_sm_readers -1  // the edges, two words each: the function read, its reader
 : ~ i g_fc_dirty -1  // per function: 1 it is to be checked (again)
@@ -662,6 +670,9 @@
 : ~ i g_el_next -1  // per loan: the next loan on the same variable + 1
 : ~ i g_el_shared -1  // the loans whose place reaches through a shared handle
 : ~ i g_av_all -1  // an AV → the loans it is or holds + 1 (a set), for this function
+: ~ i g_al_seen -1  // the alias sets av_make has met in this function (an im_ map: set → 1)
+: ~ i g_f_aliased -1  // per variable (+ g_f_nv + 1): 1 if a place of it is in one of them (eng_handover)
+: ~ i g_f_alias_over 0  // 1: a place's variable was out of that range - every variable counts as aliased
 : i CORE_VW 7
 : i CORE_VF_CARRIED 16  // a variable's flag: a temporary of a join's arm that the enclosing statement releases (core_arm_end)
 : i CORE_VF_TAKEN 64  // a capture's flag: the body marks it taken in its env when it gives it away; a later run panics (core_capture_taken)
@@ -10239,6 +10250,7 @@ unsafe @ __core_capture s name s ty → i {
 // A `dyn` method's virtual callee (`m__dyn__Trait`) a call named: listed
 // with the impls it may run by core_print_virts.
 unsafe @ core_note_virt i callee → v {
+    ? != 0 g_eng_decide { ^ } {}
     : s cn # s callee
     ? == 0 g_core_virt_seen { = g_core_virt_seen ( nurl_sym_new ) } {}
     ? != 0 ( nurl_sym_len g_core_virt_seen cn ) { ^ } {}
@@ -10280,6 +10292,7 @@ unsafe @ core_print_virts → v {
 // what the walk holds of one that has no body here (a function of the
 // runtime, an extern).
 unsafe @ core_note_callee i callee → v {
+    ? != 0 g_eng_decide { ^ } {}
     : s cn # s callee
     ? == 0 g_core_callee_seen { = g_core_callee_seen ( nurl_sym_new ) } {}
     ? != 0 ( nurl_sym_len g_core_callee_seen cn ) { ^ } {}
@@ -10593,6 +10606,20 @@ unsafe @ wv_pop i h → i {
     ^ . p - n 1
 }
 
+// Longer, never shorter: words `w` added until it has `n`.
+unsafe @ wv_pad i h i n i w → v {
+    ? | < h 0 >= h g_wv_n { ( __eng_ice `wv_pad: no such vector` ) ^ } {}
+    : *i r # *i # s g_wv
+    ? < . r + * h 3 2 0 { ( __eng_ice `wv_pad: the vector was released` ) ^ } {}
+    : i len . r + * h 3 1
+    ? <= n len { ^ } {}
+    ( __wv_room h n )
+    : *i p # *i # s . r * h 3
+    : ~ i k len
+    ~ < k n { = . p k w = k + k 1 }
+    = . r + * h 3 1 n
+}
+
 // Shorter, never longer: the words past `n` are forgotten.
 unsafe @ wv_trunc i h i n → v {
     ? | < h 0 >= h g_wv_n { ( __eng_ice `wv_trunc: no such vector` ) ^ } {}
@@ -10681,7 +10708,8 @@ unsafe @ eng_sq_reset → v {
     ? == 0 g_sq_cap {
         = g_sq ( __eng_grown 0 0 1024 )
         = g_sq_cap 1024
-        = g_sq_memo ( __eng_grown 0 0 * ENG_SQ_MEMO 3 )
+        = g_sq_memo ( __eng_grown 0 0 * ENG_SQ_MEMO 4 )
+        ( nurl_memset # s g_sq_memo 0 * * ENG_SQ_MEMO 4 8 )
     } {}
     : *i st # *i # s g_sq
     = . st 0 0
@@ -10696,7 +10724,10 @@ unsafe @ eng_sq_reset → v {
     = g_sq_ht_cap want
     ( nurl_memset # s g_sq_ht 0 * want 8 )
     = g_sq_ht_n 0
-    ( nurl_memset # s g_sq_memo 0 * * ENG_SQ_MEMO 3 8 )
+    // (the memo's entries are of the sequences forgotten: stale by their
+    // stamp, not cleared - a clear of the whole memo for each function
+    // read was the larger part of what reading a small one cost)
+    = g_sq_epoch + g_sq_epoch 1
     = g_sq_tmp_n 0
 }
 
@@ -10864,9 +10895,9 @@ unsafe @ sq_union i a i b → i {
     ? ! & ( __sq_ok a ) ( __sq_ok b ) { ^ 0 } {}
     : i lo ? < a b a b
     : i hi ? < a b b a
-    : i mslot * % + * lo 2654435761 hi ENG_SQ_MEMO 3
+    : i mslot * % + * lo 2654435761 hi ENG_SQ_MEMO 4
     : *i memo # *i # s g_sq_memo
-    ? & == . memo mslot + lo 1 == . memo + mslot 1 hi { ^ . memo + mslot 2 } {}
+    ? & & == . memo mslot + lo 1 == . memo + mslot 1 hi == . memo + mslot 3 g_sq_epoch { ^ . memo + mslot 2 } {}
     : *i st # *i # s g_sq
     : i na . st a
     : i nb . st b
@@ -10890,6 +10921,7 @@ unsafe @ sq_union i a i b → i {
     = . memo2 mslot + lo 1
     = . memo2 + mslot 1 hi
     = . memo2 + mslot 2 u
+    = . memo2 + mslot 3 g_sq_epoch
     ^ u
 }
 
@@ -11049,19 +11081,6 @@ unsafe @ eng_keep_fn → v {
     : b body ! & != 0 & g_core_fflags 1 != 0 & g_core_fflags 6
     : i code_n ? body g_core_code_n 0
     : i pl_n ? body g_core_pl_n 0
-    ( wv_push g_ef g_core_fname )
-    ( wv_push g_ef g_core_ffile )
-    ( wv_push g_ef g_core_fline )
-    ( wv_push g_ef g_core_fret )
-    ( wv_push g_ef g_core_fflags )
-    ( wv_push g_ef g_core_ftmpl )
-    ( wv_push g_ef g_core_nparam )
-    ( wv_push g_ef ( wv_len g_ef_code ) )
-    ( wv_push g_ef code_n )
-    ( wv_push g_ef ( wv_len g_ef_vars ) )
-    ( wv_push g_ef g_core_var_n )
-    ( wv_push g_ef ( wv_len g_ef_pl ) )
-    ( wv_push g_ef pl_n )
     // (its parameters and captures, counted once)
     : *i vs # *i ( eng_str g_core_vars )
     : ~ i np 0
@@ -11073,11 +11092,34 @@ unsafe @ eng_keep_fn → v {
         ? == kind 3 { = ncap + ncap 1 } {}
         = v + v 1
     }
+    // (…and of a body not kept, only they of its variables: they are what
+    // the efp_ questions read, in their order)
+    : i var_n ? body g_core_var_n np
+    ( wv_push g_ef g_core_fname )
+    ( wv_push g_ef g_core_ffile )
+    ( wv_push g_ef g_core_fline )
+    ( wv_push g_ef g_core_fret )
+    ( wv_push g_ef g_core_fflags )
+    ( wv_push g_ef g_core_ftmpl )
+    ( wv_push g_ef g_core_nparam )
+    ( wv_push g_ef ( wv_len g_ef_code ) )
+    ( wv_push g_ef code_n )
+    ( wv_push g_ef ( wv_len g_ef_vars ) )
+    ( wv_push g_ef var_n )
+    ( wv_push g_ef ( wv_len g_ef_pl ) )
+    ( wv_push g_ef pl_n )
     ( wv_push g_ef np )
     ( wv_push g_ef ncap )
     = g_ef_count + g_ef_count 1
     ( wv_append_raw g_ef_code g_core_code code_n )
-    ( wv_append_raw g_ef_vars g_core_vars * g_core_var_n CORE_VW )
+    ? body { ( wv_append_raw g_ef_vars g_core_vars * g_core_var_n CORE_VW ) } {
+        = v 0
+        ~ < v g_core_var_n {
+            : i kind . vs + * v CORE_VW 2
+            ? | == kind 0 == kind 3 { ( wv_append_raw g_ef_vars + g_core_vars * * v CORE_VW 8 CORE_VW ) } {}
+            = v + v 1
+        }
+    }
     ( wv_append_raw g_ef_pl g_core_pl * pl_n 3 )
     ( im_put g_ef_ix g_core_fname + f 1 )
 }
@@ -12092,6 +12134,11 @@ unsafe @ eng_keep_fn → v {
     ( wv_fill g_fc_priv_src g_f_nv -1 )
     ? >= g_av_all 0 { ( wv_drop g_av_all ) } {}
     = g_av_all ( im_new )
+    ? >= g_al_seen 0 { ( wv_drop g_al_seen ) } {}
+    = g_al_seen ( im_new )
+    ? < g_f_aliased 0 { = g_f_aliased ( wv_new ) } {}
+    ( wv_fill g_f_aliased + * g_f_nv 2 2 0 )
+    = g_f_alias_over 0
     = g_av_none ( av_make OW_N 0 0 0 F )
 }
 
@@ -12207,8 +12254,33 @@ unsafe @ eng_keep_fn → v {
     ^ a
 }
 
+// The variables whose places are in the alias set `alias` are noted as
+// aliased: a value that names a place of a variable no AV of the function
+// names is no reader of it (eng_handover).
+@ __av_note_alias i alias → v {
+    ? | < g_al_seen 0 != 0 ( im_get g_al_seen alias 0 ) { ^ } {}
+    ( im_put g_al_seen alias 1 )
+    : i n ( wv_len g_f_aliased )
+    : ~ i k 0
+    ~ < k ( sq_len alias ) {
+        : i slot + + ( pl_var ( sq_at alias k ) ) g_f_nv 1
+        ? & >= slot 0 < slot n { ( wv_put g_f_aliased slot 1 ) } { = g_f_alias_over 1 }
+        = k + k 1
+    }
+}
+
+// Is a place of variable `vid` named by some AV made in this function?
+// (F: no value of the function aliases it.)
+@ av_var_aliased i vid → b {
+    ? | < g_f_aliased 0 != 0 g_f_alias_over { ^ T } {}
+    : i slot + + vid g_f_nv 1
+    ? | < slot 0 >= slot ( wv_len g_f_aliased ) { ^ T } {}
+    ^ != 0 ( wv_at g_f_aliased slot )
+}
+
 @ av_make i own i loans i alias i held0 b call → i {
     : i held ? & != held0 0 > ( sq_len held0 ) HELD_WIDEN ( held_widen held0 ) held0
+    ? != alias 0 { ( __av_note_alias alias ) } {}
     ( wv_trunc g_el_key 0 )
     ( wv_push g_el_key + own ? call 16 0 ) ( wv_push g_el_key loans ) ( wv_push g_el_key alias ) ( wv_push g_el_key held )
     : i id ( sq_of_wv g_el_key 0 4 )
@@ -12434,7 +12506,10 @@ unsafe @ eng_keep_fn → v {
 // (Every read of a walked function's summary is noted: the function
 // being checked is checked again if that summary changes later.)
 @ sm_note i f → v {
+    // (the read noted last is the one most often noted again)
+    ? & == f g_sm_last_f == g_fc_reading g_sm_last_r { ^ } {}
     ? | < g_fc_reading 0 >= f ( ef_n ) { ^ } {}
+    = g_sm_last_f f = g_sm_last_r g_fc_reading
     ? == ( wv_at g_sm_stamp f ) + g_fc_reading 1 { ^ } {}
     ( wv_put g_sm_stamp f + g_fc_reading 1 )
     : i key + * f 1048576 g_fc_reading
@@ -12454,6 +12529,10 @@ unsafe @ eng_keep_fn → v {
 }
 
 @ sm_word i f i field → i {
+    // (the walk of a function reading its own summary: an input of the
+    // walk, but for its parameters' modes and count, which the initial
+    // summary fixes)
+    ? & & == f g_fc_reading == 0 g_fc_in_make & != field SM_MODES != field SM_NPARAM { = g_fc_selfread 1 } {}
     ( sm_note f )
     ^ ( wv_at g_sm + * f SM_W field )
 }
@@ -12479,7 +12558,7 @@ unsafe @ eng_keep_fn → v {
 // Room for function `f`'s summary.
 @ sm_room i f → v {
     ( __pp_init )
-    ~ <= ( wv_len g_sm ) * + f 1 SM_W { ( wv_push g_sm 0 ) }
+    ? <= ( wv_len g_sm ) * + f 1 SM_W { ( wv_pad g_sm + * + f 1 SM_W 1 0 ) } {}
 }
 
 // The set (a sequence of this function) kept for the module: where it is
@@ -14923,11 +15002,30 @@ unsafe @ eng_byte s w i k → i {
 // hands that old value over to the binding: it owns it from here on. A
 // binding that owned its value on other paths already owns it on every
 // path then.
+// Was a handle of `place` itself ever lent in this function (a loan on
+// it of kind LK_HANDLE)?
+@ __el_handle_on i place → b {
+    : i slot + + ( pl_var place ) g_f_nv 1
+    ? | < slot 0 >= slot ( wv_len g_el_first ) { ^ T } {}
+    : ~ i x ( wv_at g_el_first slot )
+    ~ != x 0 {
+        : i l - x 1
+        ? & == ( el_place l ) place == ( el_kind l ) LK_HANDLE { ^ T } {}
+        = x ( wv_at g_el_next l )
+    }
+    ^ F
+}
+
 @ eng_handover i st i place → v {
     : i pv ( pl_var place )
     : i pp ( pl_path place )
     : i t0 ( ep_child pp ( ee_pay g_etn_T 0 ) )
     : i f0 ( ep_child pp ( ee_pay g_etn_F 0 ) )
+    // (no value names a place of the variable, and no handle of the
+    // place was lent: nothing below has a reader to hand it to. Asked
+    // after the paths above are made - the module numbers its paths in
+    // the order they are first made, and a set's order is theirs)
+    ? & ! ( av_var_aliased pv ) ! ( __el_handle_on place ) { ^ } {}
     : ~ i first -1
     : ~ i vid 0
     ~ < vid g_f_nv {
@@ -19373,21 +19471,32 @@ unsafe @ eng_byte s w i k → i {
 // word of an entry is (`n` a number, `p` a path, `k` a kind, `e` an
 // effect), one letter a word.
 @ __sx_set s text s shape → i {
+    // (most of a declared summary's sets are empty: the empty set is kept
+    // as 0, sm_keep's answer for it)
+    : i n ( nurl_str_len text )
+    ? == 0 n { ^ 0 } {}
     : i arity ( nurl_str_len shape )
-    : i tmp ( wv_new )
-    : i one ( wv_new )
-    : ~ s rest ( nurl_str_cat text `` )
-    ~ != 0 ( nurl_str_len rest ) {
+    ? < g_sx_tmp 0 { = g_sx_tmp ( wv_new ) = g_sx_one ( wv_new ) } {}
+    : i tmp g_sx_tmp
+    : i one g_sx_one
+    ( wv_trunc tmp 0 )
+    // (the words are read where they are: a number from its digits, the
+    // others cut out of the text - not a copy of the rest made per word)
+    : ~ i pos 0
+    ~ < pos n {
         ( wv_trunc one 0 )
         : ~ i k 0
         ~ < k arity {
-            : s w ( str_first_word rest )
-            = rest ( str_skip_word rest )
+            : ~ i e pos
+            ~ & < e n != 32 ( eng_byte text e ) { = e + e 1 }
             : i c ( eng_byte shape k )
-            ? == c 110 { ( wv_push one ( nurl_str_to_int w ) ) } {}
-            ? == c 112 { ( wv_push one ( __sx_path w ) ) } {}
-            ? == c 107 { ( wv_push one ( __sx_kind w ) ) } {}
-            ? == c 101 { ( wv_push one ( __sx_eff w ) ) } {}
+            ? == c 110 { ( wv_push one ( __sx_num text pos e ) ) } {
+                : s w ( nurl_str_slice text pos - e pos )
+                ? == c 112 { ( wv_push one ( __sx_path w ) ) } {}
+                ? == c 107 { ( wv_push one ( __sx_kind w ) ) } {}
+                ? == c 101 { ( wv_push one ( __sx_eff w ) ) } {}
+            }
+            = pos ? < e n + e 1 e
             = k + k 1
         }
         ? == arity 1 { ( wv_push tmp ( wv_at one 0 ) ) } {}
@@ -19395,9 +19504,18 @@ unsafe @ eng_byte s w i k → i {
         ? == arity 4 { ( wv_push tmp ( tp4 ( wv_at one 0 ) ( wv_at one 1 ) ( wv_at one 2 ) ( wv_at one 3 ) ) ) } {}
         ? == arity 5 { ( wv_push tmp ( tp5 ( wv_at one 0 ) ( wv_at one 1 ) ( wv_at one 2 ) ( wv_at one 3 ) ( wv_at one 4 ) ) ) } {}
     }
-    : i at ( sm_keep ( sq_set_of_wv tmp ) )
-    ( wv_drop tmp ) ( wv_drop one )
-    ^ at
+    ^ ( sm_keep ( sq_set_of_wv tmp ) )
+}
+
+// The number written in bytes [from, to) of `text` (a declared summary's
+// parameter number: digits, a `-` before them).
+@ __sx_num s text i from i to → i {
+    : ~ i k from
+    : b neg & < k to == 45 ( eng_byte text k )
+    ? neg { = k + k 1 } {}
+    : ~ i v 0
+    ~ & < k to & >= ( eng_byte text k ) 48 <= ( eng_byte text k ) 57 { = v + * v 10 - ( eng_byte text k ) 48 = k + k 1 }
+    ^ ? neg - 0 v v
 }
 
 @ sm_put i r i field i w → v { ( wv_put g_sm + * r SM_W field w ) }
@@ -19882,6 +20000,7 @@ unsafe @ eng_byte s w i k → i {
         = k + k 1
     }
     ? < any 0 { ( wv_drop impls ) ^ -1 } {}
+    = g_fc_virt_used 1
     : i cached - ( im_get g_sx_virt name 0 ) 1
     ? & >= cached 0 == ( im_get g_sx_virt_at name -1 ) g_sm_version { ( wv_drop impls ) ^ cached } {}
     : i r ? >= cached 0 cached ( sx_new )
@@ -20120,6 +20239,7 @@ unsafe @ eng_byte s w i k → i {
     ( eng_fn_begin f )
     = g_fc_final ? final 1 0
     = g_fc_unsup 0
+    = g_fc_selfread 0 = g_fc_virt_used 0
     ? < g_fx 0 {
         = g_fx ( wv_new ) = g_fx_nocopy ( wv_new ) = g_fx_agg ( wv_new ) = g_fx_litp ( wv_new ) = g_fx_lent ( wv_new ) = g_fx_vsrc ( wv_new ) = g_fx_vpath ( wv_new )
         = g_fc_rets ( wv_new ) = g_fc_exits ( wv_new ) = g_fc_loops ( wv_new ) = g_fc_defers ( wv_new )
@@ -20198,7 +20318,12 @@ unsafe @ eng_byte s w i k → i {
     } {}
     ( st_free st )
     ? != g_fc_unsup 0 { ^ F } {}
-    ^ ( eng_make_summary f )
+    // (what the merge reads of the summary kept is no read of the walk's:
+    // eng_check_module tells the two apart)
+    = g_fc_in_make 1
+    : b changed ( eng_make_summary f )
+    = g_fc_in_make 0
+    ^ changed
 }
 
 // A value block's temporary: one made empty and given a value in the
@@ -20608,7 +20733,10 @@ unsafe @ eng_byte s w i k → i {
 // The functions a function calls or makes a closure of, onto `out`
 // (names, interned).
 @ eng_callees i f i out → v {
-    ( eng_open f )
+    // (its words only: the walk's links of its blocks are not read here)
+    = g_ec_f f
+    = g_ec ( ef_at f EF_CODE )
+    = g_ec_n ( ef_at f EF_CODE_N )
     : ~ i at 0
     ~ < at g_ec_n {
         : i op ( ec at )
@@ -20897,6 +21025,7 @@ unsafe @ eng_byte s w i k → i {
     ( wv_fill g_fc_dirty nf 0 )
     ( wv_fill g_fe nf -1 )
     ( wv_fill g_sm_stamp nf 0 )
+    = g_sm_last_f -1 = g_sm_last_r -1
     : i n ( wv_len g_fc_order )
     : ~ i k 0
     ~ < k n {
@@ -20924,11 +21053,18 @@ unsafe @ eng_byte s w i k → i {
                 : b changed ( eng_check_fn f reported )
                 = g_fc_reading -1
                 ? != g_fc_unsup 0 { ( eng_skip_why_s g_fc_unsup ) } {}
+                // (the function itself is one of the readers once its summary
+                // is merged; it is walked again for its own change only if
+                // the walk read that summary - the merge's read is no input
+                // of the walk - or read one that notes no read, a `dyn`
+                // method's: a walk of the same inputs finds the same)
+                : b again | != 0 g_fc_selfread != 0 g_fc_virt_used
                 ? changed {
                     // every function that read this summary is walked again
                     : ~ i e ( wv_at g_sm_rd_head f )
                     ~ != e 0 {
-                        ( wv_put g_fc_dirty ( wv_at g_sm_readers - e 1 ) 1 )
+                        : i rd ( wv_at g_sm_readers - e 1 )
+                        ? | != rd f again { ( wv_put g_fc_dirty rd 1 ) } {}
                         = e ( wv_at g_sm_readers e )
                     }
                 } {}
@@ -21496,7 +21632,9 @@ unsafe @ core_jump b is_break → v {
 
 // A type a variable or a literal has: listed once by core_print_types.
 unsafe @ core_note_ty s ty → v {
-    ? == 0 ( nurl_str_len ty ) { ^ } {}
+    // (the lists of what the IR mentioned are for its printer: none is
+    // made when no IR is printed)
+    ? | != 0 g_eng_decide == 0 ( nurl_str_len ty ) { ^ } {}
     ? == 0 g_core_ty_seen { = g_core_ty_seen ( nurl_sym_new ) } {}
     ? != 0 ( nurl_sym_len g_core_ty_seen ty ) { ^ } {}
     ( nurl_sym_def g_core_ty_seen ty `1` )
@@ -21923,6 +22061,7 @@ unsafe @ core_print_fn → v {
 
 // The function just built: listed for core_print_sums.
 unsafe @ core_note_fn → v {
+    ? != 0 g_eng_decide { ^ } {}
     ? >= + g_core_fn_n 3 g_core_fn_cap {
         : i nc ? == g_core_fn_cap 0 192 * g_core_fn_cap 2
         = g_core_fns ( __core_grown g_core_fns g_core_fn_n nc )
@@ -51060,8 +51199,11 @@ unsafe @ __callee_decl_name s cn → s {
 @ bck_check_raw_call i lex i syms s call_name → v {
     // The core IR's answer to "does this function's body cross the raw
     // boundary?" is this rule's, asked of every call whoever makes it (bit
-    // 1 of the function's flags, docs/dev/CORE_IR.md §2).
-    ? != 0 g_core_live {
+    // 1 of the function's flags, docs/dev/CORE_IR.md §2). Asked only
+    // while the answer can change: not once the bit is set, and not of a
+    // function that may not use raw memory when no IR is printed (the
+    // bit is read only with bit 0, eng_keep_fn and eng_select).
+    ? & & != 0 g_core_live == 0 & g_core_fflags 2 | != 0 & g_core_fflags 1 == 0 g_eng_decide {
         = g_raw_probe 1
         ( __bck_raw_call_rules lex syms call_name )
         ? == g_raw_probe 2 { = g_core_fflags | g_core_fflags 2 } {}
