@@ -390,6 +390,7 @@
 : i ETF_STRUCT 512
 : i ETF_BOOL 1024  // the scalar `b`
 : i ETF_ZMOVE 2048  // a field of it moves whole out of a local into a returned literal, zeroed at the source (__lit_moves_whole)
+: i ETF_ORDERS 4096  // one value of it orders every change made through a borrow of it (an Arc, a type the program asserts `% Sync` with no part asserted `% NotSync`: __thr_orders_itself)
 : i ETM_SCALAR 0
 : i ETM_OWNING 1
 : i ETM_OWNS_HANDLE 2
@@ -11157,6 +11158,7 @@ unsafe @ eng_keep_fn → v {
     ? share { = flags | flags ETF_SHARE } {}
     ? & share ( __thr_share_ok syms ty ) { = flags | flags ETF_TSHARE } {}
     ? ( __lit_moves_whole ty ) { = flags | flags ETF_ZMOVE } {}
+    ? & == c0 37 ( __thr_orders_itself syms ty ) { = flags | flags ETF_ORDERS } {}
     ( wv_put g_et + * t ET_W ET_CLS ( bck_bind_class ty ) )
     // fields
     : s ln ? == c0 37 ( __lty_layout_name ty ) ``
@@ -12684,6 +12686,20 @@ unsafe @ eng_byte s w i k → i {
     ^ out
 }
 
+// Is the change at `path` of `vid`, `below` steps under a shared payload,
+// made inside a value that orders every change made through a borrow of it
+// (ETF_ORDERS): the payload itself or a part of it around the changed place?
+@ eng_change_ordered i vid i path i below → b {
+    : i n ( ep_len path )
+    : ~ i j - n below
+    ~ < j n {
+        : i ty ( eng_ty_at ( fv_ty vid ) ( ep_take path j ) )
+        ? ( et_flag ty ETF_ORDERS ) { ^ T } {}
+        = j + j 1
+    }
+    ^ F
+}
+
 // Does effect `eff` at path `pp` (of place `p`) end a loan of kind `k`
 // on path `qp` (of place `q`, in the same variable or the same shared
 // payload)?
@@ -12971,9 +12987,11 @@ unsafe @ eng_byte s w i k → i {
         ~ < a ( sq_len ts ) {
             : i ty ( sq_at ts a )
             = g_s_regions ( sq_add g_s_regions ( tp3 ty ( ep_take ( sq_at ts + a 1 ) 3 ) eff ) )
-            ? ( et_flag ty ETF_ARC ) {
+            ? & ( et_flag ty ETF_ARC ) ! ( eng_change_ordered vid path ( ep_len ( sq_at ts + a 1 ) ) ) {
                 // every thread holding a copy of the Arc reads its payload:
-                // nothing changes it in place
+                // nothing changes it in place - unless a value the change is
+                // made inside, below the payload, orders it itself (the
+                // program's own `unsafe % Sync` promise, MEMORY.md §6.5)
                 ( eng_err line ( nurl_str_cat ( eng_pname place ) ` is inside what an Arc shares, and is changed here` ) )
             } {}
             = a + a 2
@@ -17980,7 +17998,14 @@ unsafe @ eng_byte s w i k → i {
                 // copied in, and this one has no copy
                 ( eng_err ln ( nurl_str_cat ( eng_vname vid ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
             } {}
-            : i held ? == ( av_own new ) OW_L ( sq_union ( av_held new ) ( held_from ( av_loans new ) 0 ) ) ( av_held new )
+            // (…and one that has a copy, given to an `inout` parameter - not
+            // to a capture, the binding outside - is given that copy: it
+            // holds what the lent value holds, and no handle of where the
+            // value was lent from. nurlc copies it in unless the call handed
+            // back the binding's own value, told apart by its buffer: agora
+            // #343, #456. A copy of a view is that view.)
+            : b lcopy & & & & & & == ( av_own new ) OW_L >= ( fv_pidx vid ) g_f_ncap == ( fp_mode ( fv_pidx vid ) ) PM_INOUT != vty ET_NONE ! ( et_is_view vty ) != ( et_kind vty ) EK_CLOSURE & ( et_owning vty ) ( et_copyable vty )
+            : i held ? & == ( av_own new ) OW_L ! lcopy ( sq_union ( av_held new ) ( held_from ( av_loans new ) 0 ) ) ( av_held new )
             ( st_put st vid ( av_make OW_P 0 0 held F ) )
             ? & first == held 0 { = g_s_credits ( sq_add g_s_credits ( fv_pidx vid ) ) } {}
         } {
@@ -19450,9 +19475,11 @@ unsafe @ eng_byte s w i k → i {
     ( eng_mark_blocks 0 g_ec_n )
     // the literals handed back as they are, and the ones nested in them
     ( eng_mark_rets )
-    // the body's first statement, inside the scopes it opens with
+    // the body's first statement, inside the scopes it opens with - past
+    // the temporaries bound before it that run nothing and cannot unwind
+    // (a literal of operands, `= w @ W { `literal` }`: agora #386)
     : ~ i at 0
-    ~ & < at g_ec_n | | == ( ec at ) CO_SCOPE == ( ec at ) CO_LINE == ( ec at ) CO_NOP { = at + at ( eng_stmt_len at ) }
+    ~ & < at g_ec_n | | | == ( ec at ) CO_SCOPE == ( ec at ) CO_LINE == ( ec at ) CO_NOP & == ( ec at ) CO_LET | | == ( ec + at 2 ) RV_AGG == ( ec + at 2 ) RV_USE == ( ec + at 2 ) RV_NONE { = at + at ( eng_stmt_len at ) }
     = g_fc_first_stmt at
     : i st ( st_new )
     : ~ i p 0
