@@ -646,6 +646,8 @@
 : ~ i g_av_all -1  // an AV → the loans it is or holds + 1 (a set), for this function
 : i CORE_VW 7
 : i CORE_VF_CARRIED 16  // a variable's flag: a temporary of a join's arm that the enclosing statement releases (core_arm_end)
+: i CORE_VF_TAKEN 64  // a capture's flag: the body marks it taken in its env when it gives it away; a later run panics (core_capture_taken)
+: i CORE_VF_SECOND 32  // a variable's flag: a closure binding given an owner's closure that the walk does not move: a second name of it (core_second_name)
 : i CORE_VS 1048576
 // Statement words.
 : i CO_LET 1  // vid rvalue
@@ -11910,6 +11912,10 @@ unsafe @ eng_keep_fn → v {
 // statement the join is in: released where its `drop` says.
 @ fv_carried i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_CARRIED }
 
+// A closure binding that is a second name of the owner it was given: the
+// walk left the env where it was (CORE_VF_SECOND).
+@ fv_second i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_SECOND }
+
 @ fv_line i vid → i { ? < vid 0 { ^ 0 } {} ^ ( ev vid 5 ) }
 
 // The value block's temporary a binding was made in, -1 none.
@@ -14434,7 +14440,41 @@ unsafe @ eng_byte s w i k → i {
         } {}
         = vid + vid 1
     }
-    ? >= first 0 { ^ } {}
+    ? >= first 0 {
+        // (a closure that captured a reader of the place holds the reader's
+        // copy of the handle: the old value, which the reader owns now - its
+        // handle of the place is one of the reader's)
+        : i at ( pl_make first 0 )
+        = vid 0
+        ~ < vid g_f_nv {
+            : i av ( st_av st vid )
+            ? & != av 0 ( held_has_clo ( av_held av ) ) {
+                : i held ( av_held av )
+                : i tmp ( wv_new )
+                : ~ b any F
+                : ~ i k 0
+                ~ < k ( sq_len held ) {
+                    : i he ( sq_at held k )
+                    : i l ( he_loan he )
+                    : ~ b cap F
+                    ? & & ( el_is_loan l ) == ( el_kind l ) LK_HANDLE == ( el_place l ) place {
+                        : ~ i q ( he_path he )
+                        ~ != q 0 { ? ( ee_is_cap ( ep_last q ) ) { = cap T } {} = q ( ep_parent q ) }
+                    } {}
+                    ? cap {
+                        ( el_key3 TG_HO vid first )
+                        ( wv_push tmp ( he_make ( he_path he ) ( eng_loan st at LK_HANDLE ) ) )
+                        = any T
+                    } { ( wv_push tmp he ) }
+                    = k + k 1
+                }
+                ? any { ( st_put st vid ( av_make ( av_own av ) ( av_loans av ) ( av_alias av ) ( sq_set_of_wv tmp ) ( av_call av ) ) ) } {}
+                ( wv_drop tmp )
+            } {}
+            = vid + vid 1
+        }
+        ^
+    } {}
     // …or to the part of another value that was given a copy of its handle
     // (a field of a struct the caller holds): that part owns the old value
     // from here on
@@ -15546,6 +15586,9 @@ unsafe @ eng_byte s w i k → i {
                 } {}
                 = h + h 1
             }
+            // (the copy the other thread runs takes over what the body
+            // releases: the closure here gave it up, and panics if run again)
+            ? & ( op_is_place ok ) == ( pl_path ok ) 0 { ( clo_gave_away st ( pl_var ok ) ) } {}
         } {}
         = e + e 1
     }
@@ -15582,6 +15625,8 @@ unsafe @ eng_byte s w i k → i {
             = g_fc_weak ? caught 1 0
             ( run_closures st ( av_held av ) WK_CALL_CLO + k 1 line )
             = g_fc_weak 0
+            : i rk ( wv_at ops k )
+            ? & ( op_is_place rk ) == ( pl_path rk ) 0 { ( clo_gave_away st ( pl_var rk ) ) } {}
             : i al ( av_alias av )
             : ~ i a 0
             ~ < a ( sq_len al ) {
@@ -16324,6 +16369,45 @@ unsafe @ eng_byte s w i k → i {
     ^ F
 }
 
+// The closure binding `vid` was run, or another thread was handed a copy
+// of it (which takes over what the body releases): a capture of its own
+// that the body marks taken in its env where it gives it away (the IR's
+// CORE_VF_TAKEN: the walk took it over from its binding where the closure
+// was made) is checked by the env on every later run, which panics before
+// it reads it (MEMORY.md §7.5, agora #463). The closure holds no handle of
+// it any more: what the run did to the binding (released it) does not end
+// the closure.
+@ clo_gave_away i st i vid → v {
+    : i av ( st_av st vid )
+    ? == av 0 { ^ } {}
+    : i held ( av_held av )
+    ? ! ( held_has_clo held ) { ^ } {}
+    : i cl ( wv_new )
+    ( closures_in held cl )
+    : ~ i rest held
+    : ~ i c 0
+    ~ < c ( wv_len cl ) {
+        : i base ( wv_at cl c )
+        : i f ( wv_at cl + c 1 )
+        ? & ( ef_walked f ) == base 0 {
+            : i bl ( ep_len base )
+            : ~ i k 0
+            ~ < k ( sq_len held ) {
+                : i he ( sq_at held k )
+                : i hp ( he_path he )
+                ? & & > ( ep_len hp ) bl ( ep_prefix base hp ) ( ee_is_cap ( ep_at hp bl ) ) {
+                    : i e ( ep_at hp bl )
+                    ? & == 0 & ( ee_bits e ) EE_FN != 0 & ( efp_flags f ( ee_cap_no e ) ) CORE_VF_TAKEN { = rest ( sq_del rest he ) } {}
+                } {}
+                = k + k 1
+            }
+        } {}
+        = c + c 2
+    }
+    ( wv_drop cl )
+    ? != rest held { ( st_put st vid ( av_make ( av_own av ) ( av_loans av ) ( av_alias av ) rest ( av_call av ) ) ) } {}
+}
+
 @ call_closure i st i ops i site i line i dest_ty → i {
     : i n - ( wv_len ops ) 1
     : i cop ( wv_at ops 0 )
@@ -16333,6 +16417,7 @@ unsafe @ eng_byte s w i k → i {
     ~ < i n { ( wv_push avs ( eng_read st ( wv_at ops + i 1 ) line TG_ARG + + * site 256 i 1 ) ) = i + i 1 }
     ( clo_args_frozen st cav avs line )
     ( run_closures st ( av_held cav ) WK_CLO_CALLED 0 line )
+    ? & ( op_is_place cop ) == ( pl_path cop ) 0 { ( clo_gave_away st ( pl_var cop ) ) } {}
     : i known ( wv_new )
     ( closures_in ( av_held cav ) known )
     : i places ( wv_new )
@@ -17351,9 +17436,12 @@ unsafe @ eng_byte s w i k → i {
         } {}
     } {}
     ? == rk RV_NONE { ( st_put st vid ( av_make OW_U 0 0 0 F ) ) ^ } {}
-    // `: ~ T c x` is a cursor: it borrows the owner x
+    // `: ~ T c x` is a cursor: it borrows the owner x; so does a closure
+    // binding the walk made a second name of x (MEMORY.md §7.5: a move goes
+    // only to a binding that lives as long, and from under no `;` block
+    // that may still call x)
     : b mut ( fv_mut vid )
-    : ~ i new ( eng_rvalue st rv ln ( fv_depth vid ) vty WK_VAR vid ? mut TF_LEND_OWNER 0 vid )
+    : ~ i new ( eng_rvalue st rv ln ( fv_depth vid ) vty WK_VAR vid ? | mut ( fv_second vid ) TF_LEND_OWNER 0 vid )
     ? != g_fc_unsup 0 { ^ } {}
     ? & & & mut == kind VK_LOCAL & != vty ET_NONE == ( et_kind vty ) EK_S == ( av_own new ) OW_L { ( fx_set vid FX_CURSOR ) } {}
     ? & & & & mut == kind VK_LOCAL & != vty ET_NONE == ( et_kind vty ) EK_S == ( av_loans new ) 0 | == ( av_own new ) OW_O & == rk RV_USE == ( ec + rv 1 ) 0 { ( fx_set vid FX_OWN_SLOT ) } {}
@@ -17477,7 +17565,7 @@ unsafe @ eng_byte s w i k → i {
         // (a lend of something that ends before the target - an inner
         // block's local, an arm's - is copied in; an owner is: a cursor
         // given a lend stays a borrow, of whatever it is pointed at now)
-        : i flags | | ? repoint 0 TF_COPY_OK ? != kind VK_TEMP TF_NAMED 0 ? == kind VK_TEMP TF_LEND_OUTER ? & ( fv_mut vid ) repoint TF_CURSOR 0
+        : i flags | | | ? repoint 0 TF_COPY_OK ? != kind VK_TEMP TF_NAMED 0 ? == kind VK_TEMP TF_LEND_OUTER ? & ( fv_mut vid ) repoint TF_CURSOR 0 ? ( fv_second vid ) TF_LEND_OWNER 0
         : i psrc ( rv_use_var rv )
         ( carry_call_lent vid rv )
         ? & & & & == kind VK_TEMP >= psrc 0 != vty ET_NONE ! ( et_is_view vty ) & & != ( et_kind vty ) EK_CLOSURE ( et_owning vty ) & ( fx_has psrc FX_PAYLOAD ) ( eng_own_payload st ( st_av st psrc ) ) {
@@ -17593,7 +17681,9 @@ unsafe @ eng_byte s w i k → i {
             // parameter, a capture taken by pointer) is a place that owns
             // its closure, as a field is: the one stored copies in every
             // capture that has a copy
-            = new ( av_make ( av_own new ) ( av_loans new ) ( av_alias new ) ( closure_owned ( av_held new ) ) ( av_call new ) )
+            // (a binding's env is copied in, a temporary's moves in: the
+            // place's own either way, no borrow of where it came from)
+            = new ( av_make OW_O 0 0 ( closure_owned ( av_held new ) ) F )
         } {}
         // the closure's own parameter assigned whole over a capture: it is
         // lent for the call only, and is copied in - the capture owns the
@@ -20509,6 +20599,63 @@ unsafe @ core_capture_byref s name → v {
     ~ < k g_core_var_n {
         ? & == . vs + * k CORE_VW 2 3 == . vs * k CORE_VW nm {
             = . vs + * k CORE_VW 4 | . vs + * k CORE_VW 4 8
+            ^
+        } {}
+        = k + k 1
+    }
+}
+
+// The closure binding `name` was given a binding's closure whose env the
+// walk did not move (mem_bind_closure_owner: a shorter-lived binding, or
+// one a `;` defer may still call through the other): it is a second name
+// of a closure the other still owns. Flag CORE_VF_SECOND.
+unsafe @ core_second_name i syms s name → v {
+    : i cv ( nurl_sym_int2 syms name `__cv` )
+    ? | < cv 0 != / cv CORE_VS g_core_serial { ^ } {}
+    : i vid % cv CORE_VS
+    ? >= vid g_core_var_n { ^ } {}
+    : *i vs # *i # s g_core_vars
+    = . vs + * vid CORE_VW 4 | . vs + * vid CORE_VW 4 CORE_VF_SECOND
+}
+
+// The operand on top, a closure binding a `=` gives another without moving
+// its env (gen_assign's __asn_move_env): bound first to a temporary that is
+// a second name of it (CORE_VF_SECOND), which the assignment is given.
+unsafe @ core_second_op s ty → v {
+    : i op ( core_pop )
+    : i t ( core_temp ty )
+    : *i vs # *i # s g_core_vars
+    = . vs + * t CORE_VW 4 | . vs + * t CORE_VW 4 CORE_VF_SECOND
+    ( core_w CO_LET ) ( core_w t ) ( core_w RV_USE ) ( core_w op )
+    ( core_push ( core_op_var t ) )
+}
+
+// The operand on top, a value block's temporary, is given its tail binding's
+// closure without its env (__blk_tail_closure: a `;` block in the block may
+// still call the binding): a second name of it (CORE_VF_SECOND).
+unsafe @ core_second_top → v {
+    ? <= g_core_os_n 0 { ^ } {}
+    : *i os # *i # s g_core_os
+    : i op . os - g_core_os_n 1
+    ? < op 2 { ^ } {}
+    : *i ps # *i # s g_core_pl
+    : i b * - op 2 3
+    : i vid . ps b
+    ? | | < vid 0 >= vid g_core_var_n != . ps + b 1 -1 { ^ } {}
+    : *i vs # *i # s g_core_vars
+    = . vs + * vid CORE_VW 4 | . vs + * vid CORE_VW 4 CORE_VF_SECOND
+}
+
+// The capture `name` of the closure body being built is the env's own,
+// which the body marks taken where it gives it away (__clo_capture_gone):
+// a later run of the closure panics before it reads it. Flag CORE_VF_TAKEN.
+unsafe @ core_capture_taken s name → v {
+    : i nm ( __core_in name )
+    : *i vs # *i # s g_core_vars
+    : ~ i k 0
+    ~ < k g_core_var_n {
+        ? & == . vs + * k CORE_VW 2 3 == . vs * k CORE_VW nm {
+            = . vs + * k CORE_VW 4 | . vs + * k CORE_VW 4 CORE_VF_TAKEN
             ^
         } {}
         = k + k 1
@@ -46365,7 +46512,7 @@ unsafe @ __jt_reg i cg → s {
         { ? & & src_owned ! ( mem_clo_deferred syms rhs_val ) >= ( nurl_sym_depth_of syms rhs_val ) ( nurl_sym_depth syms )
             { = owner ( mem_clo_owner_of syms cg rhs_val ) = owns T
                 ( mem_clo_release_source syms rhs_val ) }
-            {} } }
+            { ? & src_owned != 0 g_core_live { ( core_second_name syms name ) } {} } } }
     ( __clo_tmp_set `` )
     ( mem_clo_slot_new syms cg name owner )
     ? owns { ( mem_own_closure_add syms name ) } {}
@@ -46388,8 +46535,12 @@ unsafe @ __jt_reg i cg → s {
     ? | == 0 ( nurl_str_len tp ) ! ( seq tp ( nurl_sym_get2 syms nm `__ptr` ) ) { ^ ( nurl_str_cat `` `` ) } {}
     ? | == 0 ( nurl_str_starts tp `%r` ) < ( nurl_str_to_int ( nurl_str_slice tp 2 ( nurl_str_len tp ) ) ) rmin { ^ ( nurl_str_cat `` `` ) } {}
     ? == 0 ( nurl_sym_len2 syms nm `__envown` ) { ^ ( nurl_str_cat `` `` ) } {}
-    // (A defer inside the block may call it: its env stays its own.)
-    ? ( mem_clo_deferred syms nm ) { ^ ( nurl_str_cat `` `` ) } {}
+    // (A defer inside the block may call it: its env stays its own, and
+    // the block's value is a second name of it.)
+    ? ( mem_clo_deferred syms nm ) {
+        ? != 0 g_core_live { ( core_second_top ) } {}
+        ^ ( nurl_str_cat `` `` )
+    } {}
     ^ ( nurl_str_cat nm `` )
 }
 
@@ -69574,7 +69725,13 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : i __rp_at ( nurl_lex_cur_start lex )
         = g_dyn_box_reg -1  // (a box this right-hand side makes: mem_udrop_bind_flag)
         : ~ s val ( gen_operand lex syms cg )
-        ? != 0 g_core_live { ( core_assign __ca_t ) } {}
+        ? != 0 g_core_live {
+            // (`= h g`, g a closure binding that owns its env, moves nothing
+            // where h outlives g or a `;` block may still call g - the
+            // __asn_move_env test below: h is given a second name of it)
+            ? & & & & ( __is_closure_ty vt ) __src_owned_env ! | __tg_io != 0 ( nurl_sym_len2 syms name `__clo_place` ) ! ( seq bck_rhs_val name ) | ( mem_clo_deferred syms bck_rhs_val ) < ( nurl_sym_depth_of syms bck_rhs_val ) ( nurl_sym_depth_of syms name ) { ( core_second_op vt ) } {}
+            ( core_assign __ca_t )
+        } {}
         ? != 0 g_most_n { ( __most_wreset syms __ud_ptr0 ) } {}
         ( __rp_rhs_set & __tg_io ( __rp_literal_only ( nurl_lex_src_slice lex __rp_at - ( nurl_lex_cur_start lex ) __rp_at ) ) )
         : i rhs_eff_tt ( __val_eff_tt bck_rhs_tt )
@@ -79739,6 +79896,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             ( nurl_print `  call void @nurl_panic(i8* @__cmoved.` ) ( nurl_print closure_fn_name ) ( nurl_print `)\n  unreachable\n` )
             ( nurl_print oko ) ( nurl_print `:\n` )
             ( nurl_sym_def body_syms `__cur_lbl__` oko )
+            ? != 0 g_core_live { ( core_capture_taken ov ) } {}
             : s bp ( nurl_sym_get2 body_syms ov `__ptr` )
             ( nurl_sym_def body_syms ( nurl_str_cat bp `__live` ) ofg )
             ( nurl_sym_def body_syms ( nurl_str_cat bp `__outer_owned` ) `1` )
@@ -97239,6 +97397,7 @@ unsafe @ __clo_payload_taken i syms i cg s name → v {
     ( nurl_print `  ` ) ( nurl_print p ) ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_sym_get syms `__env_tk_ty__` ) ) ( nurl_print `, ptr ` ) ( nurl_print ( nurl_sym_get syms `__env_ptr__` ) )
     ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_sym_get syms `__env_tk_p__` ) ) ( nurl_print `, i32 ` ) ( nurl_print k ) ( nurl_print `\n` )
     ( nurl_print `  store i1 1, ptr ` ) ( nurl_print p ) ( nurl_print `\n` )
+    ? != 0 g_core_live { ( core_capture_taken name ) } {}
 }
 
 // A closure body moves its capture `name` out (into a literal, a container,
