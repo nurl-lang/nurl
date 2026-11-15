@@ -71,7 +71,10 @@ sum   <function> <parameters> (<key>=<words>)…
   standard library); bit 1 it crosses the raw boundary itself (a read or a
   store through a pointer, a cast that makes an address, a call only
   `unsafe` code may make: `bck_check_raw_call`'s rules, asked of every
-  call); bit 2 it calls a foreign function. `template` is the generic an
+  call); bit 2 it calls a foreign function; bit 3 it may start a panic
+  with no call the IR names - a check codegen writes inline (a division,
+  a remainder or a shift checked at run time, a float-to-integer
+  conversion, a closure capture's taken check; `core_note_panic_point`). `template` is the generic an
   instance was made from.
 - `v` kind: 0 parameter, 1 binding, 2 temporary, 3 capture. Flags: 1
   mutable, 2 `inout`, 4 `sink`, 8 a capture taken by pointer (a `: ~`
