@@ -13879,6 +13879,14 @@ unsafe @ eng_byte s w i k → i {
     ^ ( av_make ( av_own av ) ( av_loans av ) ( av_alias av ) held ( av_call av ) )
 }
 
+// Is place `pl` a part of an `inout` parameter (not a closure's capture):
+// storage the caller holds?
+@ eng_inout_root i pl → b {
+    : i v ( pl_var pl )
+    : i k ( fv_pidx v )
+    ^ & & & != ( pl_path pl ) 0 >= k g_f_ncap == ( fv_kind v ) VK_PARAM == ( fp_mode k ) PM_INOUT
+}
+
 // A value handed to a new holder (a let, `=`, a return, a field): an
 // owner moves; a lend is copied with its loans, or - where it would
 // outlive a local it borrows from - deep-copied (a join's value, a
@@ -13980,7 +13988,12 @@ unsafe @ eng_byte s w i k → i {
                             // closure, which may run once - run again, it
                             // panics)
                             : b cap_out & & & & & & & & == sown OW_P stored >= ( fv_pidx vid ) 0 < ( fv_pidx vid ) g_f_ncap ! ( fv_byref vid ) ! raw != vty ET_NONE != ( et_kind vty ) EK_CLOSURE & ( et_owning vty ) ! ( et_copyable vty )
-                            ? | & & & & & == sown OW_P >= ( fv_pidx vid ) 0 == ( fp_mode ( fv_pidx vid ) ) PM_SINK ! is_ret ! raw ! lend_owner cap_out {
+                            // (…and an `in` parameter stored whole into a
+                            // field of an `inout` one - storage the caller
+                            // holds - is kept: it goes there as it is, and
+                            // the caller's argument moves into the call)
+                            : b io_kept & & & & & & & & & == sown OW_P == wk WK_PLACE >= ( fv_pidx vid ) g_f_ncap == ( fp_mode ( fv_pidx vid ) ) PM_IN ! is_ret ! raw ! lend_owner != vty ET_NONE & != ( et_kind vty ) EK_CLOSURE ( et_owning vty ) ( eng_inout_root wa )
+                            ? | | & & & & & == sown OW_P >= ( fv_pidx vid ) 0 == ( fp_mode ( fv_pidx vid ) ) PM_SINK ! is_ret ! raw ! lend_owner cap_out io_kept {
                                 // a `sink` parameter is the function's own:
                                 // handed to a new holder, it moves there
                                 = av ( move_out st vid line )
@@ -17156,7 +17169,10 @@ unsafe @ eng_byte s w i k → i {
         : i tag ( ee_pay variant idx )
         : ~ i sub ( held_sub ( av_held av ) ( ep_child 0 tag ) )
         : b whole & ( op_is_place op ) == ( pl_path op ) 0
-        : i pty ? whole ( agg_field_ty ( fv_ty ( pl_var op ) ) variant idx ) ET_NONE
+        // (the payload's type, of a field path matched in place too: `?? . h
+        // t { Word w → … }`, a view payload, is a copy of the view the field
+        // holds, not a handle of the field)
+        : i pty ? ( op_is_place op ) ( agg_field_ty ( eng_ty_of op ) variant idx ) ET_NONE
         // (…not of one with a destructor of its own: it runs on the whole
         // value, payloads and all - a payload is a lend of it)
         ? & & & whole == ( fv_kind ( pl_var op ) ) VK_TEMP == ( av_own av ) OW_O ! ( eng_own_dtor ( fv_ty ( pl_var op ) ) ) {
@@ -17171,7 +17187,10 @@ unsafe @ eng_byte s w i k → i {
         } {}
         ? & != pty ET_NONE ( et_is_view pty ) {
             : i v ( view_value sub )
-            ? == ( av_own v ) OW_L { ^ ( av_make OW_L ( sq_union ( av_loans v ) ( av_loans av ) ) ( av_alias v ) 0 F ) } {}
+            // (a copy of the view the matched value holds there: it needs
+            // what it views, not the value it was copied out of - a field
+            // path matched in place is read as a handle of that field)
+            ? == ( av_own v ) OW_L { ^ v } {}
             ^ g_av_none
         } {}
         : ~ i loans ( av_loans av )
@@ -17687,9 +17706,10 @@ unsafe @ eng_byte s w i k → i {
         // scope's binding is)
         = new ( av_make OW_O 0 0 ( av_held new ) F )
     } {}
-    ? & & & >= src 0 == was OW_O == ( st_own st src ) OW_M != ( fv_kind src ) VK_TEMP {
-        ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) )
-    } {}
+    // (a binding moved into the field: the views of its buffer kept
+    // elsewhere follow it there - once the field's old value is gone, which
+    // ends only what was lent out of that old value)
+    : b rehome & & & >= src 0 == was OW_O == ( st_own st src ) OW_M != ( fv_kind src ) VK_TEMP
     ? & & == ( av_own new ) OW_L != fty ET_NONE == ( et_kind fty ) EK_CLOSURE {
         // a closure stored into a field is the field's own copy: it holds
         // what the one it was copied from holds, and is no borrow of where
@@ -17713,10 +17733,12 @@ unsafe @ eng_byte s w i k → i {
         // a struct cursor is a copy of the struct: its field store writes
         // the copy; the value it replaced stays the owner's
         ( st_put st vid ( av_make OW_L ( av_loans cur ) ( av_alias cur ) ( sq_union ( av_held cur ) ( held_root add path ) ) F ) )
+        ? rehome { ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) ) } {}
         ^
     } {}
     ( eng_handover st target )
     ( eng_effect st target EF_REPLACE ln 0 )
+    ? rehome { ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) ) } {}
     ( store_into st target add 0 F 0 )
     : i gone ( st_gone st )
     ? != gone 0 {
@@ -17991,7 +18013,9 @@ unsafe @ eng_byte s w i k → i {
     ? & != ety ET_NONE ( et_scalar ety ) { ( st_put cur vid g_av_none ) } {
         ? ( et_is_view ety ) {
             : i v ( view_value sub )
-            ( st_put cur vid ? == ( av_own v ) OW_L ( av_make OW_L ( sq_union ( av_loans v ) ( av_loans src ) ) ( av_alias v ) 0 F ) g_av_none )
+            // (a view element is a copy of what it points into: it needs
+            // that, not the container it was copied out of - agora #471)
+            ( st_put cur vid ? == ( av_own v ) OW_L v g_av_none )
         } { ( st_put cur vid ( av_make OW_L loans elem_alias sub F ) ) }
     }
     ( wv_push g_fe_walking vid )

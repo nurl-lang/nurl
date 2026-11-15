@@ -216,7 +216,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A swap or a reverse moves elements between slots and releases none: a handle of an element and a view of its buffer stay good; a loop walking the container is upset (effect `permute`) | §2.5 | `effect`, `prims.py` |
 | A parameter of a type with nothing to release (a struct of views and numbers: nurlc's `drops` answer) is copied by its words: its new holder holds the views it holds and nothing of the parameter | §2.13 | `transfer` |
 | What goes into a shared handle's payload is held by the one object every share reaches: a binding that may be another handle on it holds it too | §2.10 (agora #392) | `store_into` |
-| A view of a binding's buffer kept elsewhere follows the binding into the container, the literal or the field that takes it | §2.10 (agora #337) | `rehome_views` |
+| A view of a binding's buffer kept elsewhere follows the binding into the container, the literal or the field that takes it. Into a field, it follows once the field's old value is gone: the store ends what was lent out of the old value, not the view that moved in with the new one (`= . xx v xs`, then a slice of xs read: agora #799) | §2.10 (agora #337, #799) | `rehome_views`, `stmt_assign` |
 | A summary's effect says what may happen. A parameter the callee gives a new value on every path goes back holding none of what it held; one that goes back, on some way out, still holding it (`keeps`) keeps what it holds at the call: what was lent out of it ends all the same | §2.10 (AGORA-863) | `make_summary`, `apply_call`, `effect` (`weak`) |
 | A loop whose condition is a true literal ends only at a `break` or a return: what holds after it is what held there | §2.5 | `loop` (`loopcond T`) |
 | The result of a call through a known closure holds of its arguments what the body's summary says its result holds of its parameters | §2.8 (agora #422) | `call_closure` |
@@ -231,6 +231,8 @@ summarised by the same analysis, to a fixpoint over the program.
 | A copy hook (`S_clone`, `S_share`) hands back a value of its own | §7.6 | `check_program` |
 | A closure a callee hands back, or leaves in an argument, runs the body it was made with: the summary names the bodies (`rclos`, `sclos`) | §2.11 | `make_summary`, `apply_call` |
 | A copy of a view is that view | §2.13 | `apply_call` (`vcopy`) |
+| A view-typed payload matched out of a value, a field path matched in place too (`?? . h t { Word w → … }`), and a view element of a `~` loop (`~ v e { … }`, `e` a `( Vec s )`), is a copy of the view the value holds there: it needs what it views, not the value or the container it was copied out of (agora #338, #471) | §2.13, §2.10 | rvalue `payload`, `fe_round` |
+| An `in` parameter stored whole into a field of an `inout` parameter (storage the caller holds: `= . p s text`) is kept: it goes there as it is, with no copy, and the caller's argument moves into the call (nurlc's `keeps`) | §2.12, §1 (temporaries) | `eng_transfer` (`io_kept`) |
 | What an argument holds, its copy and whatever was given its elements hold too, through any number of callees | §2.10, §2.13 | `held` loans, `make_summary` |
 
 ## Not rules of the engine
