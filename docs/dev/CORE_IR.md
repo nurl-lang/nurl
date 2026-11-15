@@ -67,6 +67,10 @@ sum   <function> <parameters> (<key>=<words>)…
   on in it whole - a lend as the call lent it, the caller told per call
   whether it owns it (`mem_store_hown`), as `^` of the call's result
   would - where a literal written `@ !T E { F e }` copies its field.
+  256: a call's temporary (an option) whose payload codegen reads from a
+  slot it can name (`vec_get`: `mem_note_vec_get`), and takes out of that
+  slot where a consumer takes the payload whole (`mem_vget_consume`) -
+  the element leaves its container rather than going over as a copy.
 - `fn` flags: bit 0 the body may use raw memory (`unsafe`, or a file of the
   standard library); bit 1 it crosses the raw boundary itself (a read or a
   store through a pointer, a cast that makes an address, a call only
