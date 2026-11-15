@@ -663,6 +663,7 @@
 : ~ i g_fc_order -1  // the functions the engine walks, in the order they were reached
 : ~ i g_fc_weak 0  // 1 while an effect that may not have happened is applied (eng_effect keeps what the place holds)
 : ~ i g_fc_loopmemo -1  // (a loop, the state it was entered in, the loops walked around it) → the state it left + 1, for this run of the function
+: ~ i g_fc_loophead -1  // …→ what holds at its head once its rounds settled + 1: the run that reports starts there (loop_head_memo)
 : ~ i g_s_catches 0
 : ~ i g_fc_reading -1  // the function being checked (its number), -1 none: whose reads of summaries are noted
 : ~ i g_sm_stamp -1  // per function: the last function that read its summary + 1 (so one check notes one edge once)
@@ -19525,6 +19526,25 @@ unsafe @ eng_byte s w i k → i {
     ( im_put g_fc_loopmemo key + ( sq_of_wv st 0 ( wv_len st ) ) 1 )
 }
 
+// T if the rounds of the loop at `at` settled from this entry before:
+// `head` becomes what held at its head then. The rounds record nothing,
+// so they are the same whether or not the run around them reports; the
+// run that reports a loop inside a loop meets it in the state the outer
+// loop's last round met it in, and starts from the head that round
+// settled on, where it ran the rounds again (twice or more per loop, for
+// each loop around it).
+@ loop_head_memo i head i key → b {
+    : i have ( im_get g_fc_loophead key 0 )
+    ? == have 0 { ^ F } {}
+    ( wv_trunc head 0 )
+    ( sq_to_wv - have 1 head )
+    ^ T
+}
+
+@ loop_head_put i head i key → v {
+    ( im_put g_fc_loophead key + ( sq_of_wv head 0 ( wv_len head ) ) 1 )
+}
+
 // A `~ cond { }` loop: run until what holds at its head stops changing,
 // then once more for the findings.
 @ stmt_loop i st i at i ln → v {
@@ -19541,7 +19561,8 @@ unsafe @ eng_byte s w i k → i {
     : i breaks ( wv_new )
     : i conts ( wv_new )
     : ~ i round 0
-    : ~ b settled F
+    : b known ( loop_head_memo head memo )
+    : ~ b settled known
     ~ & ! settled < round 12 {
         ( wv_push g_fc_loops breaks ) ( wv_push g_fc_loops conts )
         : i c ( st_copy head )
@@ -19560,6 +19581,7 @@ unsafe @ eng_byte s w i k → i {
         ( st_free nxt )
         = round + round 1
     }
+    ? ! known { ( loop_head_put head memo ) } {}
     = g_fc_final final
     ( wv_push g_fc_loops breaks ) ( wv_push g_fc_loops conts )
     : i c ( st_copy head )
@@ -19653,13 +19675,15 @@ unsafe @ eng_byte s w i k → i {
     : i outer g_fc_walking
     = g_fc_walking ( sq_union g_fc_walking walk )
     : ~ i round 0
-    : ~ b settled F
+    : b known ( loop_head_memo head memo )
+    : ~ b settled known
     ~ & ! settled < round 12 {
         ( fe_round head at vid walk elem_alias src ln nxt out )
         ? ( st_eq nxt head ) { = settled T } {}
         ( wv_copy head nxt )
         = round + round 1
     }
+    ? ! known { ( loop_head_put head memo ) } {}
     = g_fc_final final
     ( fe_round head at vid walk elem_alias src ln nxt out )
     = g_fc_walking outer
@@ -20663,8 +20687,9 @@ unsafe @ eng_byte s w i k → i {
     ? >= g_fc_dvars 0 { ( wv_drop g_fc_dvars ) ( wv_drop g_fc_dbefore ) } {}
     = g_fc_dvars ( im_new )
     = g_fc_dbefore ( im_new )
-    ? >= g_fc_loopmemo 0 { ( wv_drop g_fc_loopmemo ) } {}
+    ? >= g_fc_loopmemo 0 { ( wv_drop g_fc_loopmemo ) ( wv_drop g_fc_loophead ) } {}
     = g_fc_loopmemo ( im_new )
+    = g_fc_loophead ( im_new )
     = g_fc_cap_loans 0 = g_fc_walking 0 = g_fc_wb_pairs 0 = g_fc_wbs 0
     = g_fc_ret_watch -1 = g_fc_ret_changed 0 = g_fc_ret_fresh 0
     = g_fc_moved_vid -1 = g_fc_moved_own 0
