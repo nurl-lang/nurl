@@ -252,6 +252,10 @@
 : ~ i g_core_ftmpl 0  // …and the generic it is an instance of, interned (`` none)
 : ~ i g_core_acks 0  // bumped by the hooks of the constructs only a hook can lower (core_expr_exit)
 : ~ i g_core_vb -1  // the temporary of the innermost value block open, -1 none: what is bound inside is that block's
+: ~ i g_core_vb_tail -1  // the operand a value block just ended stands for when it is a binding of its own (core_vblock_end), -1 none
+: ~ i g_core_vb_tail_t -1  // …that block's temporary
+: ~ i g_core_vb_tail_at -1  // …and the code length then, in function g_core_vb_tail_fs: the operand is that block's value only right there
+: ~ i g_core_vb_tail_fs -1
 : ~ i g_core_kw_h 0  // the call with named arguments just read: where its operands begin, and its arguments' parameter positions in the order written (core_kwargs_reorder)
 : ~ s g_core_kw_slots ``
 : ~ i g_core_pend 0  // the arguments of the calls being compiled read as values and not taken yet, 3 words each: stack slot, operand, type interned (0: read in place) (core_arg_read)
@@ -10236,7 +10240,18 @@ unsafe @ core_param i syms s name s ty i mode i line → v {
 
 // `: [~] T name value`: the value on top of the stack is bound.
 unsafe @ core_let i syms s name s ty b mut i line → v {
-    : i op ( core_pop )
+    : ~ i op ( core_pop )
+    // (A `: ~` binding of a value block whose tail is a binding the block
+    // made itself takes the value over: the block's local is no cursor's
+    // to lend - its value moves into the new binding, which owns it
+    // (__blk_tail_binding). Through the block's temporary, as the block's
+    // own value is handed on; a `:` binding is the tail's second name,
+    // `: e s`, core_vblock_end.)
+    ? & & & mut == op g_core_vb_tail == g_core_code_n g_core_vb_tail_at == g_core_serial g_core_vb_tail_fs {
+        ( core_w CO_ASSIGN ) ( core_w ( core_op_var g_core_vb_tail_t ) ) ( core_w RV_USE ) ( core_w op )
+        = op ( core_op_var g_core_vb_tail_t )
+    } {}
+    = g_core_vb_tail -1
     : i vid ( core_var_new name ty 1 ? mut 1 0 line )
     ( __core_bind syms name vid )
     ( core_w CO_LET ) ( core_w vid ) ( core_w RV_USE ) ( core_w op )
@@ -21958,7 +21973,10 @@ unsafe @ core_vblock_end i t i prev i h0 → v {
     ? > g_core_os_n h0 {
         : i op ( core_pop )
         = g_core_os_n h0
-        ? ( __core_own_binding op t ) { = val op } {
+        ? ( __core_own_binding op t ) {
+            = val op
+            = g_core_vb_tail op = g_core_vb_tail_t t = g_core_vb_tail_at g_core_code_n = g_core_vb_tail_fs g_core_serial
+        } {
             ? != op 0 { ( core_w CO_ASSIGN ) ( core_w ( core_op_var t ) ) ( core_w RV_USE ) ( core_w op ) } {}
         }
     } {}
