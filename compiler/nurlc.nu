@@ -490,10 +490,15 @@
 : i FX_OWN_SLOT 4096  // a `: ~ s` born owning: a literal, a fresh value
 : i FX_RET_AGG 8192  // a literal handed back as it is, or nested in one: its fields move out of what they name
 : i FX_PAYLOAD 16384  // bound by a `??` arm to a payload
+: i FX_JOIN_TEMP 32768  // a temporary bound empty: a join's (or a value block's, FX_BLOCK_TEMP; or a try's)
+: i FX_JOIN_VAR 65536  // a binding given a `?` / `??` join's value whole: nurlc keeps an owner flag for it
+: i FX_TAIL_TOOK 131072  // a value block's temporary that took a local of the block from its tail join
 : ~ i g_fc_cap_loans 0  // the loans closures captured (a set)
 : ~ i g_fc_walking 0  // the loans of the loops being walked (a set)
 : ~ i g_fc_ret_watch -1  // the binding a `ret` handed back, while the `;` blocks run after it
 : ~ i g_fc_ret_changed 0
+: ~ i g_fc_ret_sel -1  // the owners a `ret`'s join or value block moved out, each with its value before (a vector of pairs)
+: ~ i g_fc_ret_ws 0  // …the ones of them watched while the `;` blocks run (a set)
 : ~ i g_fc_ret_fresh 0  // some return hands back a value of the function's own that holds something
 : ~ i g_fc_moved_vid -1  // the last value moved that holds views of its own parts: the binding, and those loans (a set)
 : ~ i g_fc_moved_own 0
@@ -12904,7 +12909,7 @@ unsafe @ eng_byte s w i k → i {
     : i path ( pl_path place )
     : i av ( st_av st vid )
     ? | == av 0 > depth 8 { ^ } {}
-    ? & == vid g_fc_ret_watch != eff EF_END { = g_fc_ret_changed 1 } {}
+    ? & | == vid g_fc_ret_watch ( sq_has g_fc_ret_ws vid ) != eff EF_END { = g_fc_ret_changed 1 } {}
     ? & == ( av_own av ) OW_L != eff EF_END {
         : i al ( av_alias av )
         : b all ! ( eng_alias_typed vid al )
@@ -13343,6 +13348,20 @@ unsafe @ eng_byte s w i k → i {
             ? | ( av_call rav ) ( eng_field_viewer st r ) { ^ T } {}
         } {}
         = a + a 1
+    }
+    ^ F
+}
+
+// Is the place a part of a variant's payload of an enum of the program's
+// (not an option's or a result's)?
+@ eng_in_enum_payload i pa → b {
+    : ~ i q ( pl_path pa )
+    ~ != q 0 {
+        ? ( ee_is_pay ( ep_last q ) ) {
+            : i pty ( eng_ty_of ( pl_make ( pl_var pa ) ( ep_parent q ) ) )
+            ? & != pty ET_NONE == ( et_kind pty ) EK_NAMED { ^ T } {}
+        } {}
+        = q ( ep_parent q )
     }
     ^ F
 }
@@ -14071,6 +14090,46 @@ unsafe @ eng_byte s w i k → i {
         // the value came from
         ^ ( av_make OW_O 0 0 0 F )
     } {}
+    ? & & & & is_ret whole ( fx_has ovid FX_JOIN_VAR ) | == ( av_own av ) OW_L & == ( av_own av ) OW_O != ( av_loans av ) 0 & & != dest_ty ET_NONE ! ( et_is_view dest_ty ) & ( et_owning dest_ty ) ( et_copyable dest_ty ) {
+        // a binding of a `?` / `??` join handed back: nurlc keeps an owner
+        // flag for it, and the return copies on the runs where it lends -
+        // the caller is handed its own (MEMORY.md §7.6, agora #335). (Not a
+        // payload: the payload of an `in` parameter's option handed back
+        // takes the caller's argument, h408-h409.)
+        : ~ b nopay T
+        : i jl ( av_loans av )
+        : ~ i k 0
+        ~ & nopay < k ( sq_len jl ) {
+            : i l ( sq_at jl k )
+            ? ( el_is_loan l ) {
+                : i lp ( pl_path ( el_place l ) )
+                : ~ i q 0
+                ~ < q ( ep_len lp ) { ? ( ee_is_pay ( ep_at lp q ) ) { = nopay F } {} = q + q 1 }
+            } {}
+            = k + k 1
+        }
+        ? nopay { = av ( av_make OW_O 0 0 ( av_held av ) F ) } {}
+    } {}
+    ? & & & & & is_ret whole ( fx_has ovid FX_TAIL_TOOK ) != dest_ty ET_NONE ( et_owning dest_ty ) ! ( et_copyable dest_ty ) {
+        // a value block that took a local of its own from its tail join is
+        // not handed back: out of a value block whose local it is, the arm
+        // is a lend, copied - and this value has no copy (agora #188)
+        ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+    } {}
+    ? & & & & is_ret whole ( fx_has ovid FX_SLOT ) == ( av_own av ) OW_L & & != dest_ty ET_NONE ( et_owning dest_ty ) ! ( et_copyable dest_ty ) {
+        // the payload of a library getter's option over a container of this
+        // frame, handed back bare, with no copy: it is taken out of its
+        // slot, which is left empty, and the caller owns it (agora #209)
+        : i al ( av_alias av )
+        : ~ b slot != al 0
+        : ~ i a 0
+        ~ & slot < a ( sq_len al ) {
+            : i pa ( sq_at al a )
+            ? | | != ( st_own st ( pl_var pa ) ) OW_O != ( fv_kind ( pl_var pa ) ) VK_LOCAL ! ( ep_has_star ( pl_path pa ) ) { = slot F } {}
+            = a + a 1
+        }
+        ? & slot ( take_payload st av line T ) { = av ( av_make OW_O 0 0 ( av_held av ) F ) } {}
+    } {}
     : b own_block & >= dest_vid 0 ( refers_to_block av dest_vid )
     ? & & & & is_ret == ( av_own av ) OW_L ! ( av_call av ) != ( av_alias av ) 0 whole {
         // what a `?` / `??` or a value block selected among this frame's
@@ -14117,6 +14176,7 @@ unsafe @ eng_byte s w i k → i {
                     ? & ( el_is_loan l ) == ( pl_var ( el_place l ) ) ( pl_var a ) { = gone ( sq_add gone l ) } {}
                     = j + j 1
                 }
+                ? & == ( pl_path a ) 0 >= g_fc_ret_sel 0 { ( wv_push g_fc_ret_sel ( pl_var a ) ) ( wv_push g_fc_ret_sel ( st_av st ( pl_var a ) ) ) } {}
                 ( eng_effect st a EF_REPLACE line 0 )
                 ? == ( pl_path a ) 0 { ( st_put st ( pl_var a ) ( av_make ? == nal 1 OW_M OW_X 0 0 0 F ) ) } {}
                 = rest_alias ( sq_del rest_alias a )
@@ -14434,12 +14494,14 @@ unsafe @ eng_byte s w i k → i {
             : i own ( av_own av )
             : i alias ( av_alias av )
             ? & & | == own OW_L == own OW_O != alias 0 != ( fv_kind vid ) VK_TEMP {
-                : ~ b ok T
+                // (one of the places it may name is that place: which one it
+                // holds is told at run time by the handle's identity)
+                : ~ b ok F
                 : ~ i k 0
-                ~ & ok < k ( sq_len alias ) {
+                ~ & ! ok < k ( sq_len alias ) {
                     : i a ( sq_at alias k )
                     : i ap ( pl_path a )
-                    ? | != ( pl_var a ) pv ! | | == ap pp == ap t0 == ap f0 { = ok F } {}
+                    ? & == ( pl_var a ) pv | | == ap pp == ap t0 == ap f0 { = ok T } {}
                     = k + k 1
                 }
                 ? & ok ! & == own OW_O == ( av_loans av ) 0 {
@@ -14450,7 +14512,8 @@ unsafe @ eng_byte s w i k → i {
                         = k 0
                         ~ < k ( sq_len loans ) {
                             : i l ( sq_at loans k )
-                            ? ! & ( el_is_loan l ) ( sq_has alias ( el_place l ) ) { = keep ( sq_add keep l ) } {}
+                            : i lp ( pl_path ( el_place l ) )
+                            ? ! & & ( el_is_loan l ) == ( pl_var ( el_place l ) ) pv | | == lp pp == lp t0 == lp f0 { = keep ( sq_add keep l ) } {}
                             = k + k 1
                         }
                         ? | < first 0 == own OW_O {
@@ -15475,14 +15538,14 @@ unsafe @ eng_byte s w i k → i {
                                                             // the binding outside still holds the field,
                                                             // and releases it again (the walk's `pendfc`)
                                                             ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, a capture this closure holds by value` ) )
-                                                        } { ? & & != ( pl_path op ) 0 sinkmode & != g_fe_outside 0 ( sq_has g_fe_outside ov ) {
-                                                                // a field of a loop's element, in a `;`
-                                                                // block armed in a round, which runs
-                                                                // outside every round: the element is a
-                                                                // view of the container's there, its field
-                                                                // not its to hand to a `sink`, as a
-                                                                // `vec_at` copy's is not (agora #672)
-                                                                ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, a loop's element read outside its round, which is a borrow` ) )
+                                                        } { ? & sinkmode & != g_fe_outside 0 ( sq_has g_fe_outside ov ) {
+                                                                // a loop's element, or a field of it, in a
+                                                                // `;` block armed in a round, which runs
+                                                                // once, outside every round: the element
+                                                                // is a view of the container's there, not
+                                                                // its to hand to a `sink`, as a `vec_at`
+                                                                // copy's is not (agora #672)
+                                                                ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes ` ( eng_pname op ) ) `, a loop's element read outside its round, which is a borrow` ) )
                                                             } {
                                                                 // (a part of an `inout` parameter is the
                                                                 // caller's, who goes on holding the whole:
@@ -15504,7 +15567,18 @@ unsafe @ eng_byte s w i k → i {
                                                                         = a + a 1
                                                                     }
                                                                 } {}
-                                                                ? inout_part { = copied ( sq_add copied ck ) } {
+                                                                // (…and a part of an arm's payload of an
+                                                                // enum of the program's: the match lends
+                                                                // the payload, which its enum goes on
+                                                                // holding - a callee that takes a part of
+                                                                // it is handed a copy, agora #357, #559)
+                                                                : ~ b enum_part & & & ! inout_part != ( pl_path op ) 0 ( et_copyable ty ) != ( av_alias av ) 0
+                                                                ? enum_part {
+                                                                    : i al ( av_alias av )
+                                                                    : ~ i a 0
+                                                                    ~ & enum_part < a ( sq_len al ) { ? ! ( eng_in_enum_payload ( sq_at al a ) ) { = enum_part F } {} = a + a 1 }
+                                                                } {}
+                                                                ? | inout_part enum_part { = copied ( sq_add copied ck ) } {
                                                                     ? & ! ( take_payload st av line != ( pl_path op ) 0 ) ! ( et_copyable ty ) {
                                                                         ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) )
                                                                     } {}
@@ -15807,10 +15881,22 @@ unsafe @ eng_byte s w i k → i {
                     } {
                         ? & | == sown OW_O == sown OW_P whole {
                             ( fresh_string_kept st op src ( nurl_str_cat ( eng_str name ) `, which keeps it` ) line )
+                            : i pre ( st_av st sv )
                             : ~ i moved ( move_out st sv line )
                             = moved ( eng_reroot st moved ( pl_var oj ) ( ep_cat ( pl_path oj ) dpath ) )
                             ( rehome_views st sv ( pl_make ( pl_var oj ) ( ep_take ( ep_cat ( pl_path oj ) dpath ) PATH_MAX ) ) )
                             = add ( held_root ( closure_owned ( av_held moved ) ) dpath )
+                            ? & & & & & & != pre 0 == ( av_own pre ) OW_O != ( av_loans pre ) 0 ! ( av_call pre ) == ( fv_kind sv ) VK_LOCAL != svty ET_NONE ! ( et_is_view svty ) {
+                                // a binding that owns its value by a flag (a
+                                // store's hand-over, a join) kept by value: the
+                                // value goes over on the runs that own it and a
+                                // copy on the others, and the binding goes on
+                                // holding the handle - a lend of where it went,
+                                // or of what it lent
+                                : i went ( pl_make ( pl_var oj ) ( ep_take ( ep_cat ( pl_path oj ) dpath ) PATH_MAX ) )
+                                ( el_key4 TG_CM2 site j sk )
+                                ( st_put st sv ( av_make OW_L ( sq_add ( av_loans pre ) ( eng_loan st went LK_HANDLE ) ) ( sq_add ( av_alias pre ) went ) ( av_held pre ) F ) )
+                            } {}
                         } {
                             ? == sown OW_L {
                                 : i ty ? isv ( eng_ty_of op ) ET_NONE
@@ -16983,7 +17069,7 @@ unsafe @ eng_byte s w i k → i {
         : ~ i vid - g_f_nv 1
         ~ >= vid 0 {
             : i av ( st_av st vid )
-            ? & & & & & & != av 0 ! ( sq_has seen vid ) == ( av_own av ) OW_O == ( fv_kind vid ) VK_LOCAL != vid g_fc_ret_watch ! ( sq_has reads vid ) ! ( __wv_has g_chain_kept vid ) {
+            ? & & & & & & != av 0 ! ( sq_has seen vid ) == ( av_own av ) OW_O == ( fv_kind vid ) VK_LOCAL != vid g_fc_ret_watch ! ( sq_has reads vid ) & ! ( __wv_has g_chain_kept vid ) ! ( sq_has g_fc_ret_ws vid ) {
                 ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) 0 )
                 ( eng_effect st ( pl_make vid 0 ) EF_END ( fv_line vid ) 0 )
                 ( st_put st vid ( av_make OW_D 0 0 0 F ) )
@@ -17236,7 +17322,8 @@ unsafe @ eng_byte s w i k → i {
                     // `\` try hands its failure on in)
                     : b tempish & have_dest | == ( fv_kind dest ) VK_TEMP ( ev_unnamed dest )
                     : i al ( av_alias av )
-                    : ~ b param_parts & & tempish ! ( av_call av ) != al 0
+                    // (not a getter's slot, which is taken: below)
+                    : ~ b param_parts & & & tempish ! ( av_call av ) != al 0 ! & whole ( fx_has ov FX_SLOT )
                     ? param_parts {
                         : ~ i a 0
                         ~ & param_parts < a ( sq_len al ) {
@@ -17263,7 +17350,10 @@ unsafe @ eng_byte s w i k → i {
                             : ~ b slot & & & ! ( av_call av ) != al 0 whole ( fx_has ov FX_SLOT )
                             ? slot {
                                 : ~ i a 0
-                                ~ & slot < a ( sq_len al ) { ? != ( st_own st ( pl_var ( sq_at al a ) ) ) OW_O { = slot F } {} = a + a 1 }
+                                // (…a parameter's container too: the element is
+                                // taken out of its slot, a change to its
+                                // elements, agora #204)
+                                ~ & slot < a ( sq_len al ) { : i so ( st_own st ( pl_var ( sq_at al a ) ) ) ? & != so OW_O != so OW_P { = slot F } {} = a + a 1 }
                             } {}
                             // (the payload of an option or a result a local
                             // of this function owns, named in a literal handed
@@ -17549,7 +17639,11 @@ unsafe @ eng_byte s w i k → i {
             } {}
         } {}
     } {}
-    ? == rk RV_NONE { ( st_put st vid ( av_make OW_U 0 0 0 F ) ) ^ } {}
+    ? == rk RV_NONE {
+        ? == kind VK_TEMP { ( fx_set vid FX_JOIN_TEMP ) } {}
+        ( st_put st vid ( av_make OW_U 0 0 0 F ) )
+        ^
+    } {}
     // `: ~ T c x` is a cursor: it borrows the owner x; so does a closure
     // binding the walk made a second name of x (MEMORY.md §7.5: a move goes
     // only to a binding that lives as long, and from under no `;` block
@@ -17561,6 +17655,7 @@ unsafe @ eng_byte s w i k → i {
     ? & & & & mut == kind VK_LOCAL & != vty ET_NONE == ( et_kind vty ) EK_S == ( av_loans new ) 0 | == ( av_own new ) OW_O & == rk RV_USE == ( ec + rv 1 ) 0 { ( fx_set vid FX_OWN_SLOT ) } {}
     : i src ( rv_use_var rv )
     : b from_temp & >= src 0 == ( fv_kind src ) VK_TEMP
+    ? & & & & from_temp == kind VK_LOCAL ! ( fv_mut vid ) ( fx_has src FX_JOIN_TEMP ) ! ( fx_has src FX_BLOCK_TEMP ) { ( fx_set vid FX_JOIN_VAR ) } {}
     : b plain_ty & & != vty ET_NONE ! ( et_is_view vty ) != ( et_kind vty ) EK_CLOSURE
     : i nown ( av_own new )
     ? & & & & & & ! mut == kind VK_LOCAL from_temp ! ( av_call new ) != ( av_alias new ) 0 | == nown OW_L & == nown OW_O != ( av_loans new ) 0 & plain_ty ! ( et_scalar vty ) {
@@ -17573,13 +17668,48 @@ unsafe @ eng_byte s w i k → i {
         : ~ b all T
         : ~ i a 0
         // (…an owner of the binding's type: a value that only views an
-        // owner - a reader over a Vec's bytes - selects none)
+        // owner - a reader over a Vec's bytes - selects none. Nor is a
+        // field of a local an owner it selects: the local keeps it, and the
+        // binding is a second name of it, as the walk binds it)
         ~ & all < a ( sq_len al ) {
             : i pv ( pl_var ( sq_at al a ) )
-            ? | | != ( st_own st pv ) OW_O < ( fv_depth pv ) ( fv_depth vid ) ! ( eng_is_value_place vty ( sq_at al a ) T ) { = all F } {}
+            : i pp ( pl_path ( sq_at al a ) )
+            ? | | | != ( st_own st pv ) OW_O < ( fv_depth pv ) ( fv_depth vid ) ! ( eng_is_value_place vty ( sq_at al a ) T ) & != pp 0 ( eng_path_fields pp ) { = all F } {}
             = a + a 1
         }
-        ? & all ( take_payload st new ln T ) { = new ( av_make OW_O 0 0 ( av_held new ) F ) } {}
+        ? & all ( take_payload st new ln T ) { = new ( av_make OW_O 0 0 ( av_held new ) F ) } {
+            // (…and one whose other arms lend the caller's values - a
+            // parameter, a part of one - moves the owners it selects on
+            // their paths, and lends those on the others: the binding owns
+            // its value by a flag, MEMORY.md §7.6, agora #242)
+            : i own_w ( wv_new )
+            : ~ b rest_params T
+            = a 0
+            ~ < a ( sq_len al ) {
+                : i pa ( sq_at al a )
+                : i pv ( pl_var pa )
+                ? & & & & == ( st_own st pv ) OW_O == ( pl_path pa ) 0 == ( fv_kind pv ) VK_LOCAL >= ( fv_depth pv ) ( fv_depth vid ) ( eng_is_value_place vty pa T ) { ( wv_push own_w pa ) } {
+                    ? != ( fv_kind pv ) VK_PARAM { = rest_params F } {}
+                }
+                = a + a 1
+            }
+            : i owners ( sq_set_of_wv own_w )
+            ( wv_drop own_w )
+            ? & & ! all rest_params != owners 0 {
+                ? ( take_payload st ( av_make OW_L ( av_loans new ) owners ( av_held new ) F ) ln T ) {
+                    : ~ i lent 0
+                    = a 0
+                    ~ < a ( sq_len ( av_loans new ) ) {
+                        : i l ( sq_at ( av_loans new ) a )
+                        ? ! & ( el_is_loan l ) ( sq_has owners ( pl_make ( pl_var ( el_place l ) ) 0 ) ) { = lent ( sq_add lent l ) } {}
+                        = a + a 1
+                    }
+                    = a 0
+                    ~ < a ( sq_len owners ) { ( st_put st ( pl_var ( sq_at owners a ) ) ( av_make OW_X 0 0 0 F ) ) = a + a 1 }
+                    = new ( av_make OW_O lent ( sq_minus al owners ) ( av_held new ) F )
+                } {}
+            } {}
+        }
     } {
         ? & & & & & & ! mut == kind VK_LOCAL from_temp == nown OW_O != ( av_loans new ) 0 ! ( av_call new ) plain_ty {
             : i loans ( av_loans new )
@@ -17705,6 +17835,44 @@ unsafe @ eng_byte s w i k → i {
                     = fa + fa 1
                 }
                 ? took { ( st_put st psrc ( av_make OW_O 0 0 ( eng_held_of_own ( st_av st psrc ) psrc ) F ) ) } {}
+            } {}
+        } {}
+        ? & & & == kind VK_TEMP ( fx_has vid FX_BLOCK_TEMP ) >= psrc 0 == ( fv_kind psrc ) VK_TEMP {
+            // a join that is its value block's tail, an arm of which lent a
+            // local of the block: the block's end moves that local into the
+            // join's value on the arm's path, as an arm's own local moves -
+            // the walk publishes it with the bit that says the arm ran
+            // (agora #807)
+            : i jav ( st_av st psrc )
+            : i jal ? != jav 0 ( av_alias jav ) 0
+            : i ow ( wv_new )
+            : ~ i a 0
+            ~ < a ( sq_len jal ) {
+                : i pa ( sq_at jal a )
+                : i pv ( pl_var pa )
+                ? & & & == ( pl_path pa ) 0 == ( fv_kind pv ) VK_LOCAL == ( fv_blk pv ) vid == ( st_own st pv ) OW_O { ( wv_push ow pa ) } {}
+                = a + a 1
+            }
+            : i owners ( sq_set_of_wv ow )
+            ( wv_drop ow )
+            ? & != owners 0 ! ( av_call jav ) {
+                ? ( take_payload st ( av_make OW_L ( av_loans jav ) owners ( av_held jav ) F ) ln T ) {
+                    : i jl ( av_loans jav )
+                    : ~ i lent 0
+                    = a 0
+                    ~ < a ( sq_len jl ) {
+                        : i l ( sq_at jl a )
+                        ? ! & ( el_is_loan l ) ( sq_has owners ( pl_make ( pl_var ( el_place l ) ) 0 ) ) { = lent ( sq_add lent l ) } {}
+                        = a + a 1
+                    }
+                    : i rest ( sq_minus jal owners )
+                    ? | != rest 0 != lent 0 {
+                        = a 0
+                        ~ < a ( sq_len owners ) { ( st_put st ( pl_var ( sq_at owners a ) ) ( av_make OW_X 0 0 0 F ) ) = a + a 1 }
+                    } {}
+                    ( st_put st psrc ( av_make OW_O lent rest ( av_held jav ) F ) )
+                    ( fx_set vid FX_TAIL_TOOK )
+                } {}
             } {}
         } {}
         : ~ i new ( eng_rvalue st rv ln ddepth vty WK_VAR vid flags vid )
@@ -17937,6 +18105,43 @@ unsafe @ eng_byte s w i k → i {
     } {}
 }
 
+// The `;` blocks of a `ret` whose join or value block moved owners of this
+// frame out (`^ { … l }`, `^ ? c l m`): they run after the result is made
+// and before it leaves the frame, as for `^ l` - they still read those
+// owners, and may not release or change them (MEMORY.md §7.1, agora #197).
+@ ret_watch_selected i st i ln → v {
+    : i sel ( wv_new )
+    ( wv_copy sel g_fc_ret_sel )
+    : i n ( wv_len sel )
+    : i after ( wv_new )
+    : ~ i k 0
+    ~ < k n {
+        : i vid ( wv_at sel k )
+        ( wv_push after ( st_av st vid ) )
+        ( st_put st vid ( wv_at sel + k 1 ) )
+        = g_fc_ret_ws ( sq_add g_fc_ret_ws vid )
+        = k + k 2
+    }
+    = g_fc_ret_changed 0
+    ( run_defers st )
+    = g_fc_ret_ws 0
+    ? ! ( st_bottom st ) {
+        : i gn ( st_gone st )
+        = k 0
+        ~ < k n {
+            : i vid ( wv_at sel k )
+            : i now ( st_av st vid )
+            : ~ b bad | | != 0 g_fc_ret_changed == now 0 != ( av_own now ) ( av_own ( wv_at sel + k 1 ) )
+            : ~ i j 0
+            ~ < j ( sq_len gn ) { ? == ( pl_var ( sq_at gn j ) ) vid { = bad T } {} = j + j 1 }
+            ? bad { ( eng_err ln ( nurl_str_cat3 `a ';' block releases or changes ` ( eng_vname vid ) `, which was handed back` ) ) } {}
+            ( st_put st vid ( wv_at after / k 2 ) )
+            = k + k 2
+        }
+    } {}
+    ( wv_drop sel ) ( wv_drop after )
+}
+
 // The `ret` at `at`.
 @ stmt_ret i st i at i ln → v {
     : i op ( eng_op ( ec + at 1 ) )
@@ -17953,6 +18158,8 @@ unsafe @ eng_byte s w i k → i {
     : b whole & ( op_is_place op ) == ( pl_path op ) 0
     : i ov ? whole ( pl_var op ) -1
     : i before ? whole ( st_av st ov ) 0
+    ? < g_fc_ret_sel 0 { = g_fc_ret_sel ( wv_new ) } {}
+    ( wv_trunc g_fc_ret_sel 0 )
     : ~ i av ( eng_transfer st op ln TG_RET at 0 g_f_ret WK_RET 0 | TF_COPY_OK TF_RET -1 )
     = g_fc_moved_vid -1
     ? whole {
@@ -18072,7 +18279,9 @@ unsafe @ eng_byte s w i k → i {
             } {}
             ( st_put st ov gone )
         } {}
-    } { ( run_defers st ) }
+    } {
+        ? & != ( st_defers st ) 0 > ( wv_len g_fc_ret_sel ) 0 { ( ret_watch_selected st ln ) } { ( run_defers st ) }
+    }
     ? ! ( st_bottom st ) {
         ( check_live st ( av_loans av ) ( av_held av ) WK_RET 0 ln )
         ( params_hold_locals st ln )
@@ -18367,10 +18576,13 @@ unsafe @ eng_byte s w i k → i {
     ? == op CO_FOREACH { ( stmt_foreach st at ln ) ^ ( eng_next at ) } {}
     ? == op CO_DEFER {
         : i ds ( st_defers st )
+        // (a `;` is armed once: met again in a later round of a loop, it is
+        // armed already - its flag is set, and the block runs once, at the
+        // function's exit, MEMORY.md §7.1)
+        : ~ i dk 0
+        ~ < dk ( sq_len ds ) { ? == ( wv_at g_fc_defers ( sq_at ds dk ) ) at { ^ ( eng_next at ) } {} = dk + dk 1 }
         : i tmp ( wv_new )
         ( sq_to_wv ds tmp )
-        // (each time a `;` is met it is armed anew: a block armed in every
-        // round of a loop runs once for each)
         : i id ( wv_len g_fc_defers )
         ( wv_push g_fc_defers at )
         ( wv_push g_fc_dfe ? == 0 ( wv_len g_fe_walking ) 0 ( sq_set_of_wv g_fe_walking ) )
