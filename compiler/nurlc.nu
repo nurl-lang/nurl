@@ -13709,7 +13709,10 @@ unsafe @ eng_byte s w i k → i {
         ( wv_drop tmp ) ( wv_drop moved )
     } {}
     : i src ( st_av st vid )
-    ? == ( av_own src ) OW_P { = g_s_consumes ( sq_add g_s_consumes ( fv_pidx vid ) ) } {}
+    // (a capture taken by pointer moved here may be given a value again
+    // before the body ends: whether it goes back moved is read off the
+    // states at the exits)
+    ? & == ( av_own src ) OW_P ! ( fv_byref vid ) { = g_s_consumes ( sq_add g_s_consumes ( fv_pidx vid ) ) } {}
     // (what the value holds of its own parts - an index field viewing its
     // arena field - goes with it: those loans are re-rooted at its new
     // holder, eng_reroot)
@@ -13980,7 +13983,14 @@ unsafe @ eng_byte s w i k → i {
                             // closure, which may run once - run again, it
                             // panics)
                             : b cap_out & & & & & & & & == sown OW_P stored >= ( fv_pidx vid ) 0 < ( fv_pidx vid ) g_f_ncap ! ( fv_byref vid ) ! raw != vty ET_NONE != ( et_kind vty ) EK_CLOSURE & ( et_owning vty ) ! ( et_copyable vty )
-                            ? | & & & & & == sown OW_P >= ( fv_pidx vid ) 0 == ( fp_mode ( fv_pidx vid ) ) PM_SINK ! is_ret ! raw ! lend_owner cap_out {
+                            // (…and a capture taken by pointer is the frame's
+                            // binding itself, reached with its drop flag:
+                            // handed by name to another binding it moves, as
+                            // that binding's `= t a` moves in its own frame -
+                            // agora #634. Whether it is moved when the body
+                            // ends is the summary's `consumes`)
+                            : b ref_out & & & & & & & & & == sown OW_P ( fv_byref vid ) >= ( fv_pidx vid ) 0 < ( fv_pidx vid ) g_f_ncap have_dv != ( fv_kind dest_vid ) VK_TEMP ! raw ! stored != vty ET_NONE & != ( et_kind vty ) EK_CLOSURE ( et_owning vty )
+                            ? | | & & & & & == sown OW_P >= ( fv_pidx vid ) 0 == ( fp_mode ( fv_pidx vid ) ) PM_SINK ! is_ret ! raw ! lend_owner cap_out & & ref_out ! is_ret ! lend_owner {
                                 // a `sink` parameter is the function's own:
                                 // handed to a new holder, it moves there
                                 = av ( move_out st vid line )
@@ -14111,6 +14121,22 @@ unsafe @ eng_byte s w i k → i {
     // (a value that is its own on some paths and a lend on others - a
     // join of a fresh value and a borrowed one - is copied on the paths
     // that lend it, where its new holder outlives what it borrows)
+    ? & & & & & & is_ret whole == ( av_own av ) OW_L ! ( av_call av ) ( fx_has ovid FX_SLOT ) != ( av_alias av ) 0 == ( st_defers st ) 0 {
+        // the payload of a library getter's option over one of this
+        // frame's own containers, handed back by name: its slot is emptied
+        // and the caller owns what was in it, as a literal handed back
+        // takes it (nurlc's mem_vget_consume, agora #372). Not from under
+        // an armed `;` block, which may still read the slot (agora #561)
+        : i sal ( av_alias av )
+        : ~ b slot T
+        : ~ i sa 0
+        ~ & slot < sa ( sq_len sal ) {
+            : i sv ( pl_var ( sq_at sal sa ) )
+            ? | != ( fv_kind sv ) VK_LOCAL != ( st_own st sv ) OW_O { = slot F } {}
+            = sa + sa 1
+        }
+        ? & slot ( take_payload st av line T ) { = av ( av_make OW_O 0 0 ( av_held av ) F ) } {}
+    } {}
     : b mixed & == ( av_own av ) OW_O != ( av_loans av ) 0
     ? & | == ( av_own av ) OW_L mixed | own_block > ( local_depth ( av_loans av ) ( av_alias av ) 0 ) dest_depth {
         ? & & & copy_ok != dest_ty ET_NONE ( et_copyable dest_ty ) ! ( et_scalar dest_ty ) {
@@ -14542,6 +14568,61 @@ unsafe @ eng_byte s w i k → i {
 
 // Running a closure reads every capture and does what its body does to
 // them.
+// What closure body `f` leaves a capture taken by pointer holding of
+// another capture, done where it runs (`caps`: (number, place) pairs): the
+// binding the pointer names is given it, as an argument a call leaves
+// holding another is. What the source holds is read before the body's
+// effects (`phase` -1: into `snap`), the store made after them (`phase` 0).
+// A closure that points into this frame runs only where its captures are
+// known; one whose source capture is no longer named there (copied into
+// an owner since) is refused where it runs.
+@ run_cap_stores i st i f i caps i ncap i snap i phase i line i wk i wa → v {
+    : i ns ( sm_n f SM_STORES )
+    : ~ i e 0
+    ~ < e ns {
+        : i t ( sm_at f SM_STORES e )
+        : i cj ( tp_at t 5 0 )
+        : i cs ( tp_at t 5 2 )
+        ? & & & < cj ncap < cs ncap != cj cs != 0 & ( efp_flags f cj ) 8 {
+            : ~ i pj -1
+            : ~ i ps -1
+            : ~ i k 0
+            ~ < k ( wv_len caps ) {
+                ? == ( wv_at caps k ) cj { = pj ( wv_at caps + k 1 ) } {}
+                ? == ( wv_at caps k ) cs { = ps ( wv_at caps + k 1 ) } {}
+                = k + k 2
+            }
+            : i kind ( tp_at t 5 4 )
+            : i dpath ( tp_at t 5 1 )
+            : b loan | == kind LK_VIEW == kind LK_HANDLE
+            ? & >= pj 0 >= ps 0 {
+                : i src ( pl_make ( pl_var ps ) ( ep_cat ( pl_path ps ) ( tp_at t 5 3 ) ) )
+                ? < phase 0 {
+                    : ~ i add 0
+                    ? ! loan {
+                        : i sav ( st_av st ( pl_var src ) )
+                        ? != sav 0 { = add ( held_root ( held_sub ( av_held sav ) ( pl_path src ) ) dpath ) } {}
+                    } {}
+                    ( wv_push snap add )
+                } {
+                    : ~ i add ( wv_at snap e )
+                    ? loan {
+                        ( el_key4 TG_CS f cj cs )
+                        = add ( sq_add 0 ( he_make dpath ( eng_loan st src kind ) ) )
+                    } {}
+                    ( store_into st pj add 0 F 0 )
+                }
+            } {
+                ? < phase 0 {
+                    ( wv_push snap 0 )
+                    ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: a closure leaves a capture holding a view of another capture, and where it runs that capture is not known` ) )
+                } {}
+            }
+        } { ? < phase 0 { ( wv_push snap 0 ) } {} }
+        = e + e 1
+    }
+}
+
 @ run_closures i st i held i wk i wa i line → v {
     ( check_live st 0 held wk wa line )
     ? ! ( held_has_clo held ) { ^ } {}
@@ -14568,6 +14649,10 @@ unsafe @ eng_byte s w i k → i {
             }
             = k 0
             ~ < k ( wv_len caps ) { ( stale_capture_check st f ( wv_at caps k ) ( wv_at caps + k 1 ) line ) = k + k 2 }
+            // (what a capture holds that the body leaves another holding, as
+            // the run finds it: before what the body does to it)
+            : i snap ( wv_new )
+            ( run_cap_stores st f caps ncap snap -1 line wk wa )
             // (what the body changes through one capture may end what another
             // of its captures views: the body reads that one too, in this run
             // or the next)
@@ -14636,6 +14721,10 @@ unsafe @ eng_byte s w i k → i {
                 } {}
                 = e + e 1
             }
+            // what the body leaves a capture taken by pointer holding of
+            // another capture: the binding it points at holds it here
+            ( run_cap_stores st f caps ncap snap 0 line wk wa )
+            ( wv_drop snap )
             // (what the body changes inside a shared payload is changed in
             // the one payload every handle on it reaches)
             : i nrg ( sm_n f SM_REGIONS )
@@ -15853,6 +15942,11 @@ unsafe @ eng_byte s w i k → i {
                             = vcopy_own T
                         } {}
                     }
+                } { ? & == kind LK_HANDLE ( sm_has sm SM_CONSUMES rk ) {
+                    // (a handle of an argument the callee takes over - moved
+                    // into the call, or given a copy - is the result's own:
+                    // the callee kept the value there, `retcap`, h305. What
+                    // the argument held comes with it, the `held` row)
                 } {
                     = held ( sq_union held ( held_from ( av_loans av ) dpath ) )
                     : i al ( av_alias av )
@@ -15863,7 +15957,7 @@ unsafe @ eng_byte s w i k → i {
                         = held ( sq_add held ( he_make dpath ( eng_loan st ( pl_make ( pl_var pa ) ( ep_cat ( pl_path pa ) rpath ) ) kind ) ) )
                         = a + a 1
                     }
-                }
+                } }
             }
         } {}
         = e + e 1
@@ -16058,6 +16152,20 @@ unsafe @ eng_byte s w i k → i {
             ( stale_capture_check st f i op line )
         } {
             : i av ( eng_read st op line TG_ARG + * site 256 i )
+            // (taken over: a value that cannot be copied, in a closure that
+            // may leave its frame - the IR's capture flag 4. The binding
+            // moves into the env, which releases it: the closure holds
+            // what it held, and no handle of the binding - h239-h243)
+            : b owned & & != 0 & ( efp_flags f i ) 4 ( op_is_place op ) & & == ( pl_path op ) 0 == ( fv_kind ( pl_var op ) ) VK_LOCAL == ( av_own av ) OW_O
+            ? owned {
+                : i moved ( move_out st ( pl_var op ) line )
+                // (the capture is still named, by a loan nothing ends - it
+                // borrows no binding: what running the closure does to it,
+                // and who may run it at once, is still seen)
+                ( el_key2 TG_ARG + * site 256 i )
+                = held ( sq_add held ( he_make fp ( eng_loan st op LK_SHARE ) ) )
+                = held ( sq_union held ( held_root ( av_held moved ) fp ) )
+            } {}
             ? != ( av_own av ) OW_N {
                 // the body leaves an argument or a capture holding what this
                 // capture holds, and nothing where it runs follows that: a
@@ -16108,7 +16216,7 @@ unsafe @ eng_byte s w i k → i {
                 } {}
                 : i own ( av_own av )
                 : i cty ? ( op_is_place op ) ( eng_ty_of op ) ET_NONE
-                ? & & | == own OW_O == own OW_P ( op_is_place op ) & != cty ET_NONE == ( et_kind cty ) EK_CLOSURE {
+                ? owned {} { ? & & | == own OW_O == own OW_P ( op_is_place op ) & != cty ET_NONE == ( et_kind cty ) EK_CLOSURE {
                     // a captured closure is a copy of it: the new closure
                     // holds what that one holds, and no handle of where it sits
                     = held ( sq_union held ( held_root ( av_held av ) fp ) )
@@ -16132,7 +16240,7 @@ unsafe @ eng_byte s w i k → i {
                             = g_fc_cap_loans ( sq_union g_fc_cap_loans ( av_loans av ) )
                             = held ( sq_union held ( sq_union ( held_from ( av_loans av ) fp ) ( held_root ( av_held av ) fp ) ) )
                         } }
-                }
+                } }
             } {}
         }
         = i + i 1
@@ -16967,7 +17075,10 @@ unsafe @ eng_byte s w i k → i {
                 // has no such move, and is lent (AGORA-865)
                 : i rv0 ( pl_var op )
                 : i rav ( st_av st rv0 )
-                ? & & & & & & ( eng_path_fields ( pl_path op ) ) == ( fv_kind rv0 ) VK_LOCAL != rav 0 == ( av_own rav ) OW_O == 0 ( sq_len ( av_loans rav ) ) & != fty ET_NONE == ( et_kind fty ) EK_NAMED ( et_flag fty ETF_ZMOVE ) {
+                // (A closure field moves out the same way: its zero value is
+                // no closure, and the walk zeroes it at the source as it does
+                // a handle's - gen_agg_lit, h193.)
+                ? & & & & & & ( eng_path_fields ( pl_path op ) ) == ( fv_kind rv0 ) VK_LOCAL != rav 0 == ( av_own rav ) OW_O == 0 ( sq_len ( av_loans rav ) ) != fty ET_NONE | == ( et_kind fty ) EK_CLOSURE & == ( et_kind fty ) EK_NAMED ( et_flag fty ETF_ZMOVE ) {
                     ( eng_read st op line TG_ARG + * at 256 i )
                     = held ( sq_union held ( held_root ( held_sub ( av_held ( st_av st rv0 ) ) ( pl_path op ) ) fp ) )
                     ( eng_effect st op EF_TAKE line 0 )
@@ -17690,10 +17801,12 @@ unsafe @ eng_byte s w i k → i {
     ? & & & >= src 0 == was OW_O == ( st_own st src ) OW_M != ( fv_kind src ) VK_TEMP {
         ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) )
     } {}
-    ? & & == ( av_own new ) OW_L != fty ET_NONE == ( et_kind fty ) EK_CLOSURE {
+    ? & & | == ( av_own new ) OW_L == ( av_own new ) OW_O != fty ET_NONE == ( et_kind fty ) EK_CLOSURE {
         // a closure stored into a field is the field's own copy: it holds
         // what the one it was copied from holds, and is no borrow of where
-        // that one sits
+        // that one sits. Lent or its own, it copies in every capture that
+        // has a copy (nurlc's nurl_closure_adopt, mem_clo_into_store: a
+        // literal's env in place, a binding's in a copy - h195)
         = new ( av_make OW_O 0 0 ( closure_owned ( av_held new ) ) F )
     } {}
     ? & & & & == ( av_own new ) OW_L != fty ET_NONE ! ( et_is_view fty ) != ( et_kind fty ) EK_CLOSURE & & ( et_owning fty ) ! ( et_copyable fty ) ! ( av_call new ) {
@@ -19375,6 +19488,9 @@ unsafe @ eng_byte s w i k → i {
         : ~ i j 0
         ~ < j ( fp_n ) {
             : i av ( st_av st ( fp_vid j ) )
+            // (a capture taken by pointer that goes back moved on some way
+            // out: the body takes the binding's value over when it runs)
+            ? & & != av 0 ( fv_byref ( fp_vid j ) ) | == ( av_own av ) OW_M == ( av_own av ) OW_X { = g_s_consumes ( sq_add g_s_consumes j ) } {}
             ? != av 0 {
                 : i held ( av_held av )
                 = k 0
@@ -19734,7 +19850,12 @@ unsafe @ eng_byte s w i k → i {
             // the closure is made, and judged there, by what the captured
             // value holds then)
             : b cap_held & & == kind LK_HELD < sk ncap == 0 & ( efp_flags f sk ) 8
-            ? & & & ! copied_in ! roomless ! cap_held ! & & == kind LK_HELD < sk np ! ( et_view_capable ( efp_ty f sk ) ) {
+            // (…nor what it leaves a capture taken by pointer holding of
+            // another capture: the closure points into the frame that made
+            // it, and runs only where both captures are known - the binding
+            // is given it there, run_closures)
+            : b cap_to_ref & & & < j ncap < sk ncap != j sk != 0 & ( efp_flags f j ) 8
+            ? & & & & ! copied_in ! roomless ! cap_held ! cap_to_ref ! & & == kind LK_HELD < sk np ! ( et_view_capable ( efp_ty f sk ) ) {
                 ? | | < j ncap < sk ncap == ( sm_mode f j ) PM_INOUT { = real T } {}
             } {}
             = k + k 1
@@ -20515,6 +20636,24 @@ unsafe @ core_capture_byref s name → v {
     }
 }
 
+// The captures of the closure body being built whose binding moves into
+// the env when the literal is made (`owned`: g_nc_own_caps, values that
+// cannot be copied in a closure that may leave its frame, h239-h243): flag
+// 4, the closure takes them over as a `sink` takes its argument.
+unsafe @ core_capture_owned s owned → v {
+    : *i vs # *i # s g_core_vars
+    : ~ s rest ( nurl_str_cat owned `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nm ( __core_in ( str_first_word rest ) )
+        = rest ( str_skip_word rest )
+        : ~ i k 0
+        ~ < k g_core_var_n {
+            ? & == . vs + * k CORE_VW 2 3 == . vs * k CORE_VW nm { = . vs + * k CORE_VW 4 | . vs + * k CORE_VW 4 4 } {}
+            = k + k 1
+        }
+    }
+}
+
 // A closure literal before its body: what it captures (`caps`, names of
 // the enclosing function's bindings) is read here, in the enclosing
 // function, and its body's IR begins — the captures its first variables.
@@ -20533,6 +20672,7 @@ unsafe @ core_closure_begin i syms s caps s fname s file i line s ret_ty → v {
         = rest ( str_skip_word rest )
         ( core_var_new nm2 ( nurl_sym_get syms nm2 ) 3 0 line )
     }
+    ? != 0 ( nurl_str_len g_nc_own_caps ) { ( core_capture_owned g_nc_own_caps ) } {}
     ( core_scope_begin )
 }
 
