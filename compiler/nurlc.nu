@@ -625,6 +625,10 @@
 : ~ i g_fe_walking -1  // the elements of the `~ x xs` loops a round of is being walked
 : ~ i g_fe_outside 0  // the elements a `;` block now running reads outside their rounds (a set)
 : ~ i g_fc_dtor 0  // 1 while the function read is a `% Drop` method (`drop__T`): its receiver is its own
+: ~ i g_dt_fn -1  // a type → the destructor of the program's own its release runs + 2, 1 none (et_dtor_fn)
+: ~ i g_dt_reach -1  // a type → 2 its release may run one (in it, in a field, an element, a payload), 1 not
+: ~ i g_rd_at -1  // per function: where the paths of its first parameter its body names begin in g_rd_w + 1, 0 none
+: ~ i g_rd_w -1  // …a count, then the paths (0: the parameter whole)
 : ~ i g_fc_defers -1  // the `;` blocks armed in this run, in order: each one's offset (a state names them by number)
 : ~ i g_fc_rets -1  // the function's returns: the value handed back (an AV), and the state there (a vector)
 : ~ i g_fc_exits -1  // …and its exits with no value: the state there
@@ -17586,12 +17590,147 @@ unsafe @ eng_byte s w i k → i {
     ^ ( av_make OW_O 0 0 out F )
 }
 
+// ── Ownership engine: destructors ────────────────────────────────────
+// Releasing a value whose type has a destructor of the program's own - a
+// `% Drop` method (`drop__T`), a handle's `S_drop` hook the program
+// writes - runs it: wherever the value is released (a scope's end, a
+// function's exit, a temporary's statement, the old value of `=`, a
+// `sink` parameter its callee lets go), that is a call of it, and what its
+// summary says it does there is done (MEMORY.md §2.10, §2.14). A library
+// handle's own hook reads only what it owns (agora #363): trusted, as the
+// library is. The function, -1 none.
+@ et_dtor_fn i t → i {
+    ? | < t 0 ( et_scalar t ) { ^ -1 } {}
+    ? != ( et_kind t ) EK_NAMED { ^ -1 } {}
+    : i have ( im_get g_dt_fn t 0 )
+    ? != have 0 { ^ - have 2 } {}
+    : s ty ( eng_str ( et_at t ET_NAME ) )
+    : ~ i f -1
+    : ~ s fname ``
+    ? ( __has_user_drop ty ) { = fname ( nurl_str_cat `drop__` ( nurl_sym_get2 g_impl_name_syms `drop##` ty ) ) } {
+        ? ( __is_libh ty ) { = fname ( __libh_fn ty `drop` ) } {}
+    }
+    ? != 0 ( nurl_str_len fname ) {
+        = f ( ef_find ( eng_intern fname ) )
+        ? >= f 0 { ? | ! ( ef_reported f ) != ( ef_nparams f ) 1 { = f -1 } {} } {}
+    } {}
+    ( im_put g_dt_fn t + f 2 )
+    ^ f
+}
+
+// May releasing a value of type `t` run a destructor of the program's own
+// - its own, a field's, an element's, a payload's? (Asked once a type;
+// a type met again inside itself answers no there: it is asked whole.)
+@ et_reaches_dtor i t i depth → b {
+    ? | | < t 0 > depth 6 ( et_scalar t ) { ^ F } {}
+    : i have ( im_get g_dt_reach t 0 )
+    ? != have 0 { ^ == have 2 } {}
+    : ~ b r >= ( et_dtor_fn t ) 0
+    : i kind ( et_kind t )
+    ? & ! r | | == kind EK_VEC == kind EK_BOX == kind EK_OPT { = r ( et_reaches_dtor ( et_at t ET_E1 ) + depth 1 ) } {}
+    ? & & & ! r == kind EK_NAMED ( et_flag t ETF_STRUCT ) ! ( __is_libh ( eng_str ( et_at t ET_NAME ) ) ) {
+        : ~ i k 0
+        ~ & ! r < k ( et_at t ET_F_N ) { = r ( et_reaches_dtor ( et_field_ty t k ) + depth 1 ) = k + k 1 }
+    } {}
+    ? == depth 0 { ( im_put g_dt_reach t ? r 2 1 ) } {}
+    ^ r
+}
+
+// The value at `place`, of type `t`, is released here: each destructor of
+// the program's own it runs is applied - its own first, then its fields'
+// (the drop glue), an element's, a payload's.
+@ eng_dtor_release i st i place i t i line i depth → v {
+    ? | | < t 0 > depth 6 ( et_scalar t ) { ^ } {}
+    ? == depth 0 { ? ! ( et_reaches_dtor t 0 ) { ^ } {} } {}
+    : i vid ( pl_var place )
+    : i path ( pl_path place )
+    // (a part taken out - a payload matched out, a field a `sink` took -
+    // is not there to release: what took it releases it)
+    : i gone ( st_gone st )
+    : ~ i g 0
+    ~ < g ( sq_len gone ) {
+        : i gp ( sq_at gone g )
+        ? & == ( pl_var gp ) vid ( ep_prefix ( pl_path gp ) path ) { ^ } {}
+        = g + g 1
+    }
+    : i f ( et_dtor_fn t )
+    ? >= f 0 { ? != f g_ec_f { ( eng_dtor_apply st place t f line ) } {} } {}
+    : i kind ( et_kind t )
+    ? | | == kind EK_VEC == kind EK_BOX == kind EK_OPT {
+        : i e ? == kind EK_OPT ( ee_pay g_etn_T 0 ) EE_STAR
+        ( eng_dtor_release st ( pl_make vid ( ep_child path e ) ) ( et_at t ET_E1 ) line + depth 1 )
+        ^
+    } {}
+    ? & & == kind EK_NAMED ( et_flag t ETF_STRUCT ) ! ( __is_libh ( eng_str ( et_at t ET_NAME ) ) ) {
+        : ~ i k 0
+        ~ < k ( et_at t ET_F_N ) {
+            : i ft ( et_field_ty t k )
+            ? ( et_reaches_dtor ft 0 ) { ( eng_dtor_release st ( pl_make vid ( ep_child path ( ee_of ( et_field_name t k ) ) ) ) ft line + depth 1 ) } {}
+            = k + k 1
+        }
+    } {}
+}
+
+// The destructor `f` runs on the value at `place`: what it reads of its
+// receiver - the paths its body names - must still be there (no part a
+// `sink` took, no view of what was released before it), and what its
+// summary says it changes through it (a shared payload's region
+// included) is changed.
+@ eng_dtor_apply i st i place i t i f i line → v {
+    : b hnd ( et_flag t ETF_HANDLE )
+    : i vid ( pl_var place )
+    : i base ( pl_path place )
+    : i av ( st_av st vid )
+    ? == av 0 { ^ } {}
+    : i at - ( wv_at g_rd_at f ) 1
+    ? >= at 0 {
+        : i held ( av_held av )
+        : i gone ( st_gone st )
+        : i n ( wv_at g_rd_w at )
+        : ~ i r 0
+        ~ < r n {
+            : i rp ( wv_at g_rd_w + + at 1 r )
+            // (a handle's fields are its payload, as its literal stores them)
+            : i tp ( ep_cat base ? & hnd != rp 0 ( ep_child 0 EE_STAR ) rp )
+            : ~ i g 0
+            ~ < g ( sq_len gone ) {
+                : i gp ( sq_at gone g )
+                ? & == ( pl_var gp ) vid | ( ep_prefix ( pl_path gp ) tp ) ( ep_prefix tp ( pl_path gp ) ) {
+                    ( eng_err line ( nurl_str_cat4 ( eng_pname gp ) ` is used by the drop of ` ( eng_vname vid ) ( nurl_str_cat3 ` after it was taken out of ` ( eng_vname vid ) `` ) ) )
+                    ^
+                } {}
+                = g + g 1
+            }
+            : i sub ( held_sub held tp )
+            ? != sub 0 { ? ! ( check_live st 0 sub WK_DROP vid line ) { ^ } {} } {}
+            = r + r 1
+        }
+    } {}
+    : i sm ( eng_summary_of ( ef_at f EF_NAME ) )
+    ? < sm 0 { ^ } {}
+    : ~ i e 0
+    ~ < e ( sm_n sm SM_EFFECTS ) {
+        : i te ( sm_at sm SM_EFFECTS e )
+        ? == ( tp_at te 3 0 ) 0 { ( eng_effect st ( pl_make vid ( ep_cat base ( tp_at te 3 1 ) ) ) ( tp_at te 3 2 ) line 0 ) } {}
+        = e + e 1
+    }
+    = e 0
+    ~ < e ( sm_n sm SM_REGIONS ) {
+        : i te ( sm_at sm SM_REGIONS e )
+        : i pk - ( tp_at te 4 3 ) 1
+        : i via ? == pk 0 ( region_arg_via st place ) 0
+        ? & >= via 0 <= pk 0 { ( region_effect st ( tp_at te 4 0 ) ( tp_at te 4 1 ) ( tp_at te 4 2 ) via ) } {}
+        = e + e 1
+    }
+}
+
 // ── Ownership engine: exits and `;` blocks ───────────────────────────
 // A function's exit releases what its frame still owns, newest first:
 // the drop of a value whose destructor may read its views is a use of
 // them.
 @ exit_drops i st i line i keep → v {
     ? ( st_bottom st ) { ^ } {}
+    ( sink_param_drops st line )
     : ~ i vid - g_f_nv 1
     ~ >= vid 0 {
         : i av ( st_av st vid )
@@ -17601,12 +17740,27 @@ unsafe @ eng_byte s w i k → i {
                 // (one moved on some paths only is dropped on the others)
                 ( check_live st 0 ( av_held av ) WK_DROP vid line )
             } {}
+            ( eng_dtor_release st ( pl_make vid 0 ) ty line 0 )
             ? == ( av_own av ) OW_O {
                 ( eng_effect st ( pl_make vid 0 ) EF_REPLACE line 0 )
                 ( st_put st vid ( av_make OW_D 0 0 0 F ) )
             } {}
         } {}
         = vid - vid 1
+    }
+}
+
+// A `sink` parameter the function still owns at its exit is released
+// there: its destructor runs (but not in that destructor itself).
+@ sink_param_drops i st i line → v {
+    : ~ i p 0
+    ~ < p ( fp_n ) {
+        ? == ( fp_mode p ) PM_SINK {
+            : i vid ( fp_vid p )
+            : i av ( st_av st vid )
+            ? & != av 0 == ( av_own av ) OW_P { ( eng_dtor_release st ( pl_make vid 0 ) ( fv_ty vid ) line 0 ) } {}
+        } {}
+        = p + p 1
     }
 }
 
@@ -18260,6 +18414,7 @@ unsafe @ eng_byte s w i k → i {
                     // paths only is dropped on the others
                     ( check_live st 0 ( av_held av ) WK_DROP vid line )
                 } {}
+                ( eng_dtor_release st ( pl_make vid 0 ) vty line 0 )
             } {}
             ? == own OW_O { ( eng_effect st ( pl_make vid 0 ) EF_REPLACE line 0 ) } {}
             // (the binding itself is gone: what points at it ends)
@@ -18634,6 +18789,8 @@ unsafe @ eng_byte s w i k → i {
             ^
         } {}
         ? | == cown OW_O == cown OW_P {
+            // (the old value is released: its destructor runs on it)
+            ( eng_dtor_release st target vty ln 0 )
             ( eng_handover st target )
             ( eng_effect st target EF_REPLACE ln 0 )
         } {}
@@ -18779,6 +18936,19 @@ unsafe @ eng_byte s w i k → i {
         ( st_put st vid ( av_make OW_L ( av_loans cur ) ( av_alias cur ) ( sq_union ( av_held cur ) ( held_root add path ) ) F ) )
         ? rehome { ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) ) } {}
         ^
+    } {}
+    ? | == cown OW_O == cown OW_P {
+        // (the part's old value is released - unless a `sink` took it, and
+        // the store refills it)
+        : i gn ( st_gone st )
+        : ~ b refill F
+        : ~ i gi 0
+        ~ < gi ( sq_len gn ) {
+            : i gp ( sq_at gn gi )
+            ? & == ( pl_var gp ) vid ( ep_prefix ( pl_path gp ) path ) { = refill T } {}
+            = gi + gi 1
+        }
+        ? ! refill { ( eng_dtor_release st target fty ln 0 ) } {}
     } {}
     ( eng_handover st target )
     ( eng_effect st target EF_REPLACE ln 0 )
@@ -19209,6 +19379,7 @@ unsafe @ eng_byte s w i k → i {
     ? == op CO_DROP {
         : i vid ( ec + at 1 )
         ? == ( st_own st vid ) OW_O {
+            ( eng_dtor_release st ( pl_make vid 0 ) ( fv_ty vid ) ln 0 )
             ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ln 0 )
             ( st_put st vid ( av_make OW_D 0 0 0 F ) )
         } {
@@ -20193,6 +20364,7 @@ unsafe @ eng_byte s w i k → i {
         ( run_defers st )
         ? ! ( st_bottom st ) {
             ( params_hold_locals st ( ef_at f EF_LINE ) )
+            ( sink_param_drops st ( ef_at f EF_LINE ) )
             ( wv_push g_fc_exits ( st_copy st ) )
         } {}
     } {}
@@ -20630,11 +20802,20 @@ unsafe @ eng_byte s w i k → i {
     ( eng_fn_begin f )
     = g_fc_unsup 0
     : i ops ( wv_new )
+    // (…and the paths of its first parameter it names, for a destructor:
+    // what releasing a value reads of it, eng_dtor_apply)
+    : i rd ( wv_new )
     : ~ i at 0
     ~ & < at g_ec_n == g_fc_unsup 0 {
         : i op ( ec at )
         ( wv_trunc ops 0 )
         ( eng_stmt_ops at ops )
+        : ~ i q 0
+        ~ < q ( wv_len ops ) {
+            : i o ( wv_at ops q )
+            ? & ( op_is_place o ) == ( fv_pidx ( pl_var o ) ) 0 { ? ! ( __wv_has rd ( pl_path o ) ) { ( wv_push rd ( pl_path o ) ) } {} } {}
+            = q + q 1
+        }
         : ~ i rv -1
         ? | == op CO_LET == op CO_ASSIGN { = rv + at 2 } {}
         ? == op CO_EVAL { = rv + at 1 } {}
@@ -20662,6 +20843,13 @@ unsafe @ eng_byte s w i k → i {
         = at + at ( eng_stmt_len at )
     }
     ( wv_drop ops )
+    ? & >= g_rd_at 0 < f ( wv_len g_rd_at ) {
+        ( wv_put g_rd_at f + ( wv_len g_rd_w ) 1 )
+        ( wv_push g_rd_w ( wv_len rd ) )
+        : ~ i r 0
+        ~ < r ( wv_len rd ) { ( wv_push g_rd_w ( wv_at rd r ) ) = r + r 1 }
+    } {}
+    ( wv_drop rd )
     : b ok == g_fc_unsup 0
     ^ ok
 }
@@ -20676,6 +20864,11 @@ unsafe @ eng_byte s w i k → i {
     ? < g_fc_walked 0 { = g_fc_walked ( wv_new ) = g_fc_trusted ( wv_new ) } {}
     ( wv_fill g_fc_walked n 0 )
     ( wv_fill g_fc_trusted n 0 )
+    ? < g_rd_at 0 { = g_rd_at ( wv_new ) = g_rd_w ( wv_new ) } {}
+    ( wv_fill g_rd_at n 0 )
+    ( wv_trunc g_rd_w 0 )
+    ? >= g_dt_fn 0 { ( wv_drop g_dt_fn ) ( wv_drop g_dt_reach ) } {}
+    = g_dt_fn ( im_new ) = g_dt_reach ( im_new )
     ? < g_fc_order 0 { = g_fc_order ( wv_new ) } {}
     ( wv_trunc g_fc_order 0 )
     // (a depth-first walk from the program's functions: a function is
