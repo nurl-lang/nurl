@@ -6705,11 +6705,17 @@ unsafe @ __arg_lend_root i syms → s {
             // for no root at all, the element went to the caller as its own
             // and the local's drop freed it under them — agora #553.)
             // (A view's pairs, `__vljk`, where it has no payload's.)
-            : b rpl != 0 ( nurl_sym_len2 syms r `__pljk` )
+            // (A field path of such a root, `h.a` of `( f0 . h a )` with h a
+            // `??` payload or a binding of `vec_at`, is asked of h: what the
+            // call lent out of h's field it lent out of what h was lent out
+            // of. Taken for no root, the field went to the caller as its own
+            // while the local's drop freed it — agora #762.)
+            : s rl ? > rdot 0 ( nurl_str_cat rb `` ) ( nurl_str_cat r `` )
+            : b rpl != 0 ( nurl_sym_len2 syms rl `__pljk` )
             // (Only a root with no owner slot of its own, or a `??` payload
             // that is a cursor over its match's binding, `__plbind` /
             // `__alias`: one that owns answers by its own flags, above.)
-            ? & & < rdot 0 | == 0 ( nurl_str_len up ) & != 0 ( nurl_sym_len2 syms up `__alias` ) != 0 ( nurl_sym_len2 syms r `__plbind` ) | rpl != 0 ( nurl_str_len ( __vlj_get syms r `__vljk` ) ) {
+            ? & & | < rdot 0 | rpl != 0 ( nurl_sym_len2 syms rl `__plbind` ) | == 0 ( nurl_str_len up ) & != 0 ( nurl_sym_len2 syms up `__alias` ) != 0 ( nurl_sym_len2 syms rl `__plbind` ) | rpl != 0 ( nurl_str_len ( __vlj_get syms rl `__vljk` ) ) {
                 : s knd ? rpl `p` `v`
                 // (A call argument's stand-in, `__alr#N`, is a call nested in
                 // this one: what it lends out of a parameter the function keeps
@@ -6721,7 +6727,7 @@ unsafe @ __arg_lend_root i syms → s {
                 ? != 0 ( nurl_str_starts r `__alr#` ) {
                     ( __pfo_links_set ( nurl_str_cat4 g_pfo_links ? == 0 ( nurl_str_len g_pfo_links ) `` ` ` ( nurl_str_cat4 ( str_first_word key ) ` ` ( __key_gn key ) ( nurl_str_cat ` ` ( nurl_str_int idx ) ) ) `` ) )
                 } { = g_pfo_via 1 }
-                : s sr ( __pl_chain_sub syms cg r knd )
+                : s sr ( __pl_chain_sub syms cg rl knd )
                 = g_pfo_via __evia
                 ( __pfo_links_set __elinks )
                 : i stb ( nurl_str_find sr `\t` )
@@ -18242,13 +18248,7 @@ unsafe @ eng_byte s w i k → i {
                 } {}
                 ? & & & & & & & != cur 0 == cown OW_L ! ( av_call cur ) ( fv_mut ov ) == ( fv_kind ov ) VK_LOCAL != ( av_alias cur ) 0 have_dest & fplain ( et_owning fty ) {
                     : i al ( av_alias cur )
-                    : ~ b all T
-                    : ~ i a 0
-                    ~ & all < a ( sq_len al ) {
-                        : i pa ( sq_at al a )
-                        ? ! & & == ( pl_path pa ) 0 == ( st_own st ( pl_var pa ) ) OW_O == ( fv_kind ( pl_var pa ) ) VK_LOCAL { = all F } {}
-                        = a + a 1
-                    }
+                    : b all ( eng_cursor_hands_on st al )
                     ? & all ( take_payload st cur line T ) {
                         // a `: ~` cursor of a binding hands on the value it
                         // copies the handle of: the binding is moved into the
@@ -20636,12 +20636,34 @@ unsafe @ eng_byte s w i k → i {
     : i al ( av_alias av )
     : ~ i a 0
     ~ < a ( sq_len al ) {
+        ? ! ( eng_own_payload_at st ( sq_at al a ) ) { ^ F } {}
+        = a + a 1
+    }
+    ^ T
+}
+
+// …is place `pa` the payload of an option or a result a local of this
+// function owns (`o#T0`, o owning its value)?
+@ eng_own_payload_at i st i pa → b {
+    : i pp ( pl_path pa )
+    : i pv ( pl_var pa )
+    ? | | | == pp 0 ! ( eng_path_no_star pp ) ! ( ee_is_pay ( ep_last pp ) ) | != ( fv_kind pv ) VK_LOCAL != ( st_own st pv ) OW_O { ^ F } {}
+    : i wty ( eng_ty_at ( fv_ty pv ) ( ep_parent pp ) )
+    ^ & != wty ET_NONE | == ( et_kind wty ) EK_OPT == ( et_kind wty ) EK_RES
+}
+
+// Does a `: ~` cursor whose value is a lend of the places `al`, stored into a
+// literal, hand on the value of what it is a cursor over: is each of them a
+// local that owns its value outright, or the payload of an option or a
+// result a local owns (a cursor of a `??` arm's payload)? nurlc's
+// mem_lent_cond moves the value out of each such owner there (its flag, the
+// option's slot: mem_note_kept), and copies only where none owns it (agora
+// #840).
+@ eng_cursor_hands_on i st i al → b {
+    : ~ i a 0
+    ~ < a ( sq_len al ) {
         : i pa ( sq_at al a )
-        : i pp ( pl_path pa )
-        : i pv ( pl_var pa )
-        ? | | | == pp 0 ! ( eng_path_no_star pp ) ! ( ee_is_pay ( ep_last pp ) ) | != ( fv_kind pv ) VK_LOCAL != ( st_own st pv ) OW_O { ^ F } {}
-        : i wty ( eng_ty_at ( fv_ty pv ) ( ep_parent pp ) )
-        ? | == wty ET_NONE & != ( et_kind wty ) EK_OPT != ( et_kind wty ) EK_RES { ^ F } {}
+        ? ! | & & == ( pl_path pa ) 0 == ( st_own st ( pl_var pa ) ) OW_O == ( fv_kind ( pl_var pa ) ) VK_LOCAL ( eng_own_payload_at st pa ) { ^ F } {}
         = a + a 1
     }
     ^ T
@@ -83718,7 +83740,67 @@ unsafe @ str_has_index s list i k → b {
     { ( mem_udrop_flag_set syms cg eo `0` ) } {}
     : s uptr ( mem_udrop_ptr_of syms name )
     ? != 0 ( nurl_str_len uptr )
-    { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_lend syms cg uptr copied ) } {}
+    { ( mem_ff_kept_moved syms cg uptr copied )
+        ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_lend syms cg uptr copied )
+        ? != 0 g_ff_any { ( nurl_sym_def syms ( nurl_str_cat uptr `__ffleave` ) `` ) } {} } {}
+}
+
+// A binding that owns some fields on its own (mem_ff_slot: a cursor given a
+// field, `: ~ H c h  = . c items ( vec_new )`) stored by value (a literal's
+// field, a field or element store): where the store moved it (`copied`, an
+// i1 or `1` / `` as mem_note_kept has it, does not hold) those fields go with
+// the rest of its value — their flags clear, the literal owns them — and
+// each value one of them replaced, the slot's own kept by the first store,
+// is its source's and goes here; the sources stop owning the value whatever
+// its first buffer says (`__ffleave`, read by mem_alias_src_leaves). As
+// gen_ret hands such a binding back (agora #781). Kept with their flags, the
+// fields were released by the binding and again by the literal (agora #840).
+@ mem_ff_kept_moved i syms i cg s ptr s copied → v {
+    ? | == 0 g_ff_any != 0 g_bck_closure_depth { ^ v } {}
+    : ~ s rest ( nurl_sym_get g_fn_escapes ( nurl_str_cat3 ptr `__ff` ( nurl_str_int g_ff_gen ) ) )
+    ? == 0 ( nurl_str_len rest ) { ^ v } {}
+    : ~ s mv ( nurl_str_cat `true` `` )
+    ? & != 0 ( nurl_str_len copied ) ! ( seq copied `0` ) {
+        ? != ( nurl_str_get copied 0 ) 37 { ^ v } {}
+        = mv ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print mv ) ( nurl_print ` = xor i1 ` ) ( nurl_print copied ) ( nurl_print `, 1
+` )
+    } {}
+    : s own ( mem_udrop_flag_get syms cg ptr )
+    : ~ s any `false`
+    : ~ s fr ( nurl_str_cat rest `` )
+    ~ != 0 ( nurl_str_len fr ) {
+        = fr ( str_skip_word fr )
+        : s f ( str_first_word fr ) = fr ( str_skip_word fr )
+        = fr ( str_skip_word ( str_skip_word ( str_skip_word fr ) ) )
+        : s fv ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print fv ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print f ) ( nurl_print `
+` )
+        : s fo ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print fo ) ( nurl_print ` = or i1 ` ) ( nurl_print any ) ( nurl_print `, ` ) ( nurl_print fv ) ( nurl_print `
+` )
+        = any fo
+    }
+    ( mem_ff_orig_drops cg ptr own mv )
+    : s no ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print no ) ( nurl_print ` = xor i1 ` ) ( nurl_print own ) ( nurl_print `, 1
+` )
+    ( nurl_sym_def syms ( nurl_str_cat ptr `__ffleave` ) ( __and_i1 cg ( __and_i1 cg any no ) mv ) )
+    : s nmv ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nmv ) ( nurl_print ` = xor i1 ` ) ( nurl_print mv ) ( nurl_print `, 1
+` )
+    = fr ( nurl_str_cat rest `` )
+    ~ != 0 ( nurl_str_len fr ) {
+        = fr ( str_skip_word fr )
+        : s f ( str_first_word fr ) = fr ( str_skip_word fr )
+        = fr ( str_skip_word ( str_skip_word ( str_skip_word fr ) ) )
+        : s fv ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print fv ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print f ) ( nurl_print `
+` )
+        : s nf ( __and_i1 cg fv nmv )
+        ( nurl_print `  store i1 ` ) ( nurl_print nf ) ( nurl_print `, ptr ` ) ( nurl_print f ) ( nurl_print `
+` )
+    }
 }
 
 // …in a literal passed straight to a call: the value moves into the
