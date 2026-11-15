@@ -14943,9 +14943,38 @@ unsafe @ eng_byte s w i k → i {
     ( wv_drop cl )
 }
 
+// What capture `cap` of the closure at `base` in `held` holds, at path
+// `sp` into it: what the closure took with it where it was made (the
+// entries below its `^cap`), and what the binding it holds a handle of
+// holds now (the closure reads that value when it runs).
+@ clo_cap_held i st i held i base i cap i sp → i {
+    : i at ( ep_child base ( ee_cap cap ) )
+    : i al ( ep_len at )
+    : ~ i out 0
+    : ~ i took 0
+    : ~ i k 0
+    ~ < k ( sq_len held ) {
+        : i he ( sq_at held k )
+        : i hp ( he_path he )
+        : i l ( he_loan he )
+        ? & != hp 0 ( ep_prefix at hp ) {
+            ? > ( ep_len hp ) al { = took ( sq_add took ( he_make ( ep_drop hp al ) l ) ) } {
+                ? & ( el_is_loan l ) | == ( el_kind l ) LK_HANDLE == ( el_kind l ) LK_SHARE {
+                    : i p ( el_place l )
+                    : i av ( st_av st ( pl_var p ) )
+                    ? != av 0 { = out ( sq_union out ( held_sub ( av_held av ) ( ep_cat ( pl_path p ) sp ) ) ) } {}
+                } { ? != ( el_kind l ) LK_REF { = took ( sq_add took ( he_make 0 l ) ) } {} }
+            }
+        } {}
+        = k + k 1
+    }
+    ^ ( sq_union out ( held_sub took sp ) )
+}
+
 // The effects of closure body `f` on its own parameters, applied to the
-// places it is called with (`places`: a place a parameter, -1 none).
-@ closure_arg_effects i st i f i places i line → v {
+// places it is called with (`places`: a place a parameter, -1 none). The
+// closure sits at `base` in `held`, the value run.
+@ closure_arg_effects i st i f i places i held i base i line → v {
     ? ! ( sm_have f ) { ^ } {}
     : i ncap ( ef_ncap f )
     : i np ( wv_len places )
@@ -14960,14 +14989,20 @@ unsafe @ eng_byte s w i k → i {
         } {}
         = e + e 1
     }
-    // …and what it leaves one argument holding of another, where the call
-    // that runs it is seen: the holder holds it here
+    // …and what it leaves one argument holding of another, or of what a
+    // capture taken by value holds, where the call that runs it is seen:
+    // the holder holds it here
     : i ns ( sm_n f SM_STORES )
     = e 0
     ~ < e ns {
         : i t ( sm_at f SM_STORES e )
         : i a - ( tp_at t 5 0 ) ncap
         : i b - ( tp_at t 5 2 ) ncap
+        : i cs ( tp_at t 5 2 )
+        ? & & & & & == ( tp_at t 5 4 ) LK_HELD < cs ncap == 0 & ( efp_flags f cs ) 8 >= a 0 < a np >= ( wv_at places a ) 0 {
+            : i add ( held_root ( clo_cap_held st held base cs ( tp_at t 5 3 ) ) ( tp_at t 5 1 ) )
+            ( store_into st ( wv_at places a ) add 0 F 0 )
+        } {}
         ? & & & & & >= a 0 < a np >= b 0 < b np >= ( wv_at places a ) 0 >= ( wv_at places b ) 0 {
             : i pb ( wv_at places b )
             : i src ( pl_make ( pl_var pb ) ( ep_cat ( pl_path pb ) ( tp_at t 5 3 ) ) )
@@ -14991,6 +15026,17 @@ unsafe @ eng_byte s w i k → i {
 @ sm_mode i sm i k → i {
     ? >= k ( sm_n sm SM_MODES ) { ^ -1 } {}
     ^ ( sm_at sm SM_MODES k )
+}
+
+// May the callee change argument `k`: an `inout` parameter, or one it
+// changes or stores into?
+@ sm_changes_arg i sm i k → b {
+    ? == ( sm_mode sm k ) PM_INOUT { ^ T } {}
+    : ~ i e 0
+    ~ < e ( sm_n sm SM_EFFECTS ) { ? == ( tp_at ( sm_at sm SM_EFFECTS e ) 3 0 ) k { ^ T } {} = e + e 1 }
+    = e 0
+    ~ < e ( sm_n sm SM_STORES ) { ? == ( tp_at ( sm_at sm SM_STORES e ) 5 0 ) k { ^ T } {} = e + e 1 }
+    ^ F
 }
 
 // Does the callee keep parameter `k`, or a part of it, past the call: in
@@ -15865,11 +15911,57 @@ unsafe @ eng_byte s w i k → i {
                 ( wv_trunc cl 0 )
                 ( closures_in ( av_held ( wv_at avs k ) ) cl )
                 : ~ i c 0
-                ~ < c ( wv_len cl ) { ( closure_arg_effects st ( wv_at cl + c 1 ) pl line ) = c + c 2 }
+                ~ < c ( wv_len cl ) { ( closure_arg_effects st ( wv_at cl + c 1 ) pl ( av_held ( wv_at avs k ) ) ( wv_at cl c ) line ) = c + c 2 }
             } {}
             = k + k 1
         }
         ( wv_drop pl ) ( wv_drop cl )
+    } {}
+    // …and a callee the engine has not walked (its summary is the walk's
+    // tables' or declared) does not say which of its arguments it hands a
+    // closure it runs: each argument it may change may be one, and is left
+    // holding what the body leaves an argument holding of what a capture
+    // taken by value holds - of a closure known here, that capture's; of
+    // one this function was handed, what its caller's captures hold
+    ? != ( sm_word sm SM_STATE ) 1 {
+        = k 0
+        ~ < k n {
+            ? & ! ( sq_has dets k ) ( sm_has sm SM_INVOKES k ) {
+                : i cav ( wv_at avs k )
+                : ~ i add 0
+                ? ( held_has_clo ( av_held cav ) ) {
+                    : i cl ( wv_new )
+                    ( closures_in ( av_held cav ) cl )
+                    : ~ i c 0
+                    ~ < c ( wv_len cl ) {
+                        : i f ( wv_at cl + c 1 )
+                        ? ( sm_have f ) {
+                            : i ncap ( ef_ncap f )
+                            = e 0
+                            ~ < e ( sm_n f SM_STORES ) {
+                                : i t ( sm_at f SM_STORES e )
+                                : i cs ( tp_at t 5 2 )
+                                ? & & & == ( tp_at t 5 4 ) LK_HELD < cs ncap == 0 & ( efp_flags f cs ) 8 >= ( tp_at t 5 0 ) ncap {
+                                    = add ( sq_union add ( clo_cap_held st ( av_held cav ) ( wv_at cl c ) cs ( tp_at t 5 3 ) ) )
+                                } {}
+                                = e + e 1
+                            }
+                        } {}
+                        = c + c 2
+                    }
+                    ( wv_drop cl )
+                } { = add ( clo_result_views st cav 0 ) }
+                ? != add 0 {
+                    : ~ i j 0
+                    ~ < j n {
+                        : i oj ( wv_at ops j )
+                        ? & & & != j k ( op_is_place oj ) ( sm_changes_arg sm j ) ( et_view_capable ( eng_ty_of oj ) ) { ( store_into st oj add 0 F 0 ) } {}
+                        = j + j 1
+                    }
+                } {}
+            } {}
+            = k + k 1
+        }
     } {}
     // stores into arguments
     = e 0
@@ -16332,17 +16424,19 @@ unsafe @ eng_byte s w i k → i {
                 = held ( sq_union held ( held_root ( av_held moved ) fp ) )
             } {}
             ? != ( av_own av ) OW_N {
-                // the body leaves an argument or a capture holding what this
-                // capture holds, and nothing where it runs follows that: a
-                // capture that holds a view or a lend is refused here (one
-                // that holds none - a fresh buffer - gives none)
+                // the body leaves another capture holding what this capture
+                // holds, and nothing where it runs follows that: a capture
+                // that holds a view or a lend is refused here (one that
+                // holds none - a fresh buffer - gives none). What it leaves
+                // an argument holding of it is followed where the call that
+                // runs the closure is seen (closure_arg_effects).
                 ? have {
                     : ~ b hs F
                     : ~ i e 0
                     ~ & ! hs < e ( sm_n f SM_STORES ) {
                         : i t ( sm_at f SM_STORES e )
                         : i sj ( tp_at t 5 0 )
-                        ? & & & & == ( tp_at t 5 4 ) LK_HELD == ( tp_at t 5 2 ) i < sj ( ef_nparams f ) ( et_view_capable ( efp_ty f i ) ) ( et_view_capable ( eng_ty_at ( efp_ty f sj ) ( tp_at t 5 1 ) ) ) { = hs T } {}
+                        ? & & & & == ( tp_at t 5 4 ) LK_HELD == ( tp_at t 5 2 ) i < sj ( ef_ncap f ) ( et_view_capable ( efp_ty f i ) ) ( et_view_capable ( eng_ty_at ( efp_ty f sj ) ( tp_at t 5 1 ) ) ) { = hs T } {}
                         = e + e 1
                     }
                     ? hs {
@@ -16657,7 +16751,7 @@ unsafe @ eng_byte s w i k → i {
         ( wv_trunc places 0 )
         = i 0
         ~ < i n { : i o ( wv_at ops + i 1 ) ( wv_push places ? ( op_is_place o ) o -1 ) = i + i 1 }
-        ( closure_arg_effects st f places line )
+        ( closure_arg_effects st f places ( av_held cav ) ( wv_at known c ) line )
         // …and a closure it is handed and runs does, here, what its own
         // body does: to what it captured, and to the arguments the body
         // hands it
@@ -16729,7 +16823,7 @@ unsafe @ eng_byte s w i k → i {
                         ( wv_trunc places 0 )
                         ~ <= ( wv_len places ) pi { ( wv_push places -1 ) }
                         ( wv_put places pi ( pl_make ( pl_var so ) ( ep_cat ( pl_path so ) ( tp_at t 4 3 ) ) ) )
-                        ( closure_arg_effects st ( wv_at cl2 + c2 1 ) places line )
+                        ( closure_arg_effects st ( wv_at cl2 + c2 1 ) places ( av_held ( wv_at avs ai ) ) ( wv_at cl2 c2 ) line )
                         = c2 + c2 2
                     }
                 } {}
@@ -16817,6 +16911,24 @@ unsafe @ eng_byte s w i k → i {
             }
             = r + r 1
         }
+        // …and an argument that is no part of a parameter (a value of this
+        // frame) is followed by no caller: it may be left holding what the
+        // closure's captures hold, as its result may
+        : i ch ( clo_result_views st cav 0 )
+        ? != ch 0 {
+            = i 0
+            ~ < i n {
+                : i op ( wv_at ops + i 1 )
+                ? & ( op_is_place op ) ( et_view_capable ( eng_ty_of op ) ) {
+                    : ~ b rooted >= ( fv_pidx ( pl_var op ) ) 0
+                    : i al ( av_alias ( wv_at avs i ) )
+                    = a 0
+                    ~ & ! rooted < a ( sq_len al ) { ? >= ( fv_pidx ( pl_var ( sq_at al a ) ) ) 0 { = rooted T } {} = a + a 1 }
+                    ? ! rooted { ( store_into st op ch 0 F 0 ) } {}
+                } {}
+                = i + i 1
+            }
+        } {}
         // what a closure the caller chose hands back is its caller's own,
         // and may hold what the closure holds: the views its captures hold
         = out ( clo_result_views st cav out )
