@@ -13585,6 +13585,9 @@ unsafe @ eng_byte s w i k → i {
 // is lent out of the binding from here on.
 @ eng_rehome i st i src i dest → v {
     ? | != ( fv_kind src ) VK_TEMP != ( st_own st src ) OW_M { ^ } {}
+    // (only loans made on the temporary move: with none made on it -
+    // the common case, a call's fresh result - there is nothing to scan)
+    ? == 0 ( wv_at g_el_first + + src g_f_nv 1 ) { ^ } {}
     : i from ( wv_new )
     : i to ( wv_new )
     : i live ( all_loans st )
