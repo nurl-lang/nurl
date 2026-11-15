@@ -37802,6 +37802,12 @@ unsafe @ __ty_no_address s ty0 i depth → b {
                 : s sf ( str_first_word urest ) = urest ( str_skip_word urest )
                 : s lv ( str_first_word urest ) = urest ( str_skip_word urest )
                 ( mem_journal_forget_userdrop cg ptr vt )
+                // (A `: ~` slice binding outliving the arm that holds an owned
+                // slice field of it takes that over first: __scope_slice_handover.)
+                ? != 0 ( nurl_sym_len syms `__owned_slices__` ) {
+                    : s __ahc ( mem_drop_cond_of cg ? ( seq sf `-` ) `` sf ? ( seq lv `-` ) `` lv )
+                    ( __scope_struct_slices_handover syms cg ptr vt ? == 0 ( nurl_str_len __ahc ) `1` __ahc )
+                } {}
                 ( mem_emit_gated_drop_of cg ptr vt ? ( seq sf `-` ) `` sf ? ( seq lv `-` ) `` lv )
             }
             : ~ s srest ( nurl_sym_get g_fn_escapes skey )
@@ -37812,6 +37818,7 @@ unsafe @ __ty_no_address s ty0 i depth → b {
                 : s kind ( str_first_word srest ) = srest ( str_skip_word srest )
                 : s leaf_sname ( str_first_word srest ) = srest ( str_skip_word srest )
                 : s leaf_idx ( str_first_word srest ) = srest ( str_skip_word srest )
+                ? ( seq kind `slice` ) { ( __scope_slice_handover syms cg ptr ( nurl_str_cat `%` sname ) ( bck_swap_char path 46 44 ) ( nurl_llty ( nurl_sym_get syms ( nurl_str_cat3 leaf_sname `__idx_` ( nurl_str_cat leaf_idx `__type` ) ) ) ) `1` ) } {}
                 ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx )
             }
             : ~ s lrest ( nurl_sym_get g_fn_escapes lkey )
@@ -45438,7 +45445,10 @@ unsafe @ mem_path_to_indices s path → s {
         // the whole group consistently.
         ? ( str_contains_word old_list ptr ) {} {
             ? ( str_contains_word snap ptr ) { ( mem_dkeep_mark ptr ) }
-            { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
+            { // (A `: ~` slice binding that outlives the struct and holds
+                // this very buffer takes it over first: __scope_slice_handover.)
+                ? ( seq kind `slice` ) { ( __scope_slice_handover syms cg ptr ( nurl_str_cat `%` sname ) ( bck_swap_char path 46 44 ) ( nurl_llty ( nurl_sym_get syms ( nurl_str_cat3 leaf_sname `__idx_` ( nurl_str_cat leaf_idx `__type` ) ) ) ) `1` ) } {}
+                ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
         }
     }
 }
@@ -50870,6 +50880,13 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
                     // inside the destructor itself replays it.
                     ( __jpb_putback syms cg ptr old_list )
                     ( mem_journal_forget_userdrop cg ptr vt )
+                    // (…and its owned slice fields a `: ~` slice binding
+                    // outliving it holds are that binding's first, where
+                    // the drop runs: __scope_slice_handover.)
+                    ? & == 0 ( nurl_sym_len2 syms ptr `__dsel` ) != 0 ( nurl_sym_len syms `__owned_slices__` ) {
+                        : s __hc ( mem_drop_cond_of cg ( nurl_sym_get2 syms ptr `__sinkflag` ) ( nurl_sym_get2 syms ptr `__live` ) )
+                        ( __scope_struct_slices_handover syms cg ptr vt ? == 0 ( nurl_str_len __hc ) `1` __hc )
+                    } {}
                     ( mem_emit_gated_drop syms cg ptr vt )
                 }
             }
@@ -72386,6 +72403,48 @@ unsafe @ gen_assign i lex i syms i cg → s {
         : b __slc_io_cp & & & __slc_io ( is_ident_tok bck_rhs_tt ) ! __slc_fresh ! ( seq bck_rhs_val name )
         ? __slc_io_cp { = val ( mem_emit_slice_copy lex syms cg vt val bck_line ) } {}
         ? & __slc_io | __slc_fresh __slc_io_cp { ( mem_emit_slice_free_at cg ( nurl_llty vt ) ptr ) } {}
+        // (…and a join no arm of which hands over a slice of its own, `= z
+        // ? c . h xs w`: a borrow too, unless what it yields lies inside z's
+        // own old buffer (an arm of z itself, or a view of it, as a cursor
+        // re-pointed through itself is) — decided by the buffer, at run
+        // time. Elsewhere z's old value goes where its flag says and z owns
+        // none of the new one; taken for z's own, z's literal leaked and its
+        // drop freed h's field under h — agora #664's shape through a join.)
+        : ~ s __slc_jkeep ``
+        ? & & & __slc_fl | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST ! __slc_mix ! | __slc_fresh __slc_lent {
+            : s __jlt ( nurl_llty vt )
+            : s __jo ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __jo ) ( nurl_print ` = load ` ) ( nurl_print __jlt ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `
+` )
+            : s __jop ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __jop ) ( nurl_print ` = extractvalue ` ) ( nurl_print __jlt ) ( nurl_print ` ` ) ( nurl_print __jo ) ( nurl_print `, 0
+` )
+            : s __jol ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __jol ) ( nurl_print ` = extractvalue ` ) ( nurl_print __jlt ) ( nurl_print ` ` ) ( nurl_print __jo ) ( nurl_print `, 1
+` )
+            : s __jnp ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __jnp ) ( nurl_print ` = extractvalue ` ) ( nurl_print __jlt ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0
+` )
+            : s __jend ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __jend ) ( nurl_print ` = getelementptr ` ) ( nurl_print ( __owned_slice_elem __jlt ) ) ( nurl_print `, ptr ` ) ( nurl_print __jop ) ( nurl_print `, i64 ` ) ( nurl_print __jol ) ( nurl_print `
+` )
+            : s __jge ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __jge ) ( nurl_print ` = icmp uge ptr ` ) ( nurl_print __jnp ) ( nurl_print `, ` ) ( nurl_print __jop ) ( nurl_print `
+` )
+            : s __jlt2 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __jlt2 ) ( nurl_print ` = icmp ult ptr ` ) ( nurl_print __jnp ) ( nurl_print `, ` ) ( nurl_print __jend ) ( nurl_print `
+` )
+            : s __jeq ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __jeq ) ( nurl_print ` = icmp eq ptr ` ) ( nurl_print __jnp ) ( nurl_print `, ` ) ( nurl_print __jop ) ( nurl_print `
+` )
+            = __slc_jkeep ( __or_i1 cg ( __and_i1 cg __jge __jlt2 ) __jeq )
+            : s __jf ( mem_udrop_flag_get syms cg ptr )
+            : s __jnk ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __jnk ) ( nurl_print ` = xor i1 ` ) ( nurl_print __slc_jkeep ) ( nurl_print `, 1
+` )
+            ( mem_emit_slice_free_flagged cg ( nurl_sym_get2 g_fn_escapes ptr `__slt` ) ptr ( __and_i1 cg __jf __jnk ) )
+            = __slc_jkeep ( __and_i1 cg __jf __slc_jkeep )
+        } {}
         ? __slc_fl {
             ? | | __slc_fresh __slc_mix __slc_lent { ( mem_emit_slice_free_key syms cg ptr ) } {}
         } {
@@ -73332,7 +73391,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         ? lhs_is_owned_str { ( mem_journal_push_str syms cg ptr ) } {}
         ? lhs_is_owned_slc { ( mem_journal_push_slice cg vt ptr ) } {}
         ? __slc_fl {
-            ( mem_udrop_flag_set syms cg ptr ? __slc_fresh `1` ? __slc_mix ( nurl_sym_get syms `__last_slice_own_bit__` ) ? __slc_lent `0` ( mem_udrop_flag_get syms cg ptr ) )
+            ( mem_udrop_flag_set syms cg ptr ? __slc_fresh `1` ? __slc_mix ( nurl_sym_get syms `__last_slice_own_bit__` ) ? __slc_lent `0` ? != 0 ( nurl_str_len __slc_jkeep ) __slc_jkeep ( mem_udrop_flag_get syms cg ptr ) )
         } {}
         // Panic-unwind journal: assigning an owned struct into a by-ref
         // capture escapes it to the caller's frame. Forget its heap leaves
@@ -100590,6 +100649,92 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
     ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request llt ) )
     ( nurl_print `(i1 ` ) ( nurl_print t ) ( nurl_print `, ptr ` ) ( nurl_print g ) ( nurl_print `)\n` )
     ^ t
+}
+
+// An owned slice field (`path`, GEP indices, of the struct `sty` at
+// `ptr`, a slice of type `llt`) about to be released with its struct at
+// the end of a scope (`cond`: `1`, or the i1 the struct's drop is gated
+// by): a `: ~` slice binding still alive past it whose value is, on this
+// run, that very buffer — same pointer and length, not empty — and which
+// owns nothing now (its flag clear: a view) takes it over, as a String
+// binding given a field of a struct dropped before it does
+// (mem_udrop_field_move): its flag is set, and the field is left empty, so
+// the struct's release frees nothing of it. However the binding came to
+// hold it — `= z . h xs`, a join, a binding of the field, a loop round —
+// it is the buffer that decides. Left a view, the binding was read and
+// released after the struct's release freed it (agora #664's shape
+// through an inner block). One binding at most takes it.
+@ __scope_slice_handover i syms i cg s ptr s sty s path s llt s cond → v {
+    : ~ s rest ( nurl_sym_get syms `__owned_slices__` )
+    : ~ s g ``
+    : ~ s cp ``
+    : ~ s cl ``
+    : ~ s base ``
+    : ~ s acc ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s key ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s fl ( nurl_sym_get2 syms key `__live` )
+        ? & & & == 37 ( nurl_str_get key 0 ) != 0 ( nurl_str_len fl ) ! ( seq key ptr ) ( seq ( nurl_llty ( nurl_sym_get2 g_fn_escapes key `__slt` ) ) llt ) {
+            ? == 0 ( nurl_str_len g ) {
+                = g ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print g ) ( nurl_print ` = getelementptr ` ) ( nurl_print sty ) ( nurl_print `, ptr ` )
+                ( nurl_print ptr ) ( nurl_print `, i32 0` ) ( nurl_print ( __ff_gep_path path ) ) ( nurl_print `\n` )
+                : s cur ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print cur ) ( nurl_print ` = load ` ) ( nurl_print llt ) ( nurl_print `, ptr ` ) ( nurl_print g ) ( nurl_print `\n` )
+                = cp ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print cp ) ( nurl_print ` = extractvalue ` ) ( nurl_print llt ) ( nurl_print ` ` ) ( nurl_print cur ) ( nurl_print `, 0\n` )
+                = cl ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print cl ) ( nurl_print ` = extractvalue ` ) ( nurl_print llt ) ( nurl_print ` ` ) ( nurl_print cur ) ( nurl_print `, 1\n` )
+                : s nn ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print nn ) ( nurl_print ` = icmp ne ptr ` ) ( nurl_print cp ) ( nurl_print `, null\n` )
+                = base ? ( seq cond `1` ) ( nurl_str_cat nn `` ) ( __and_i1 cg nn cond )
+            } {}
+            : s zv ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print zv ) ( nurl_print ` = load ` ) ( nurl_print llt ) ( nurl_print `, ptr ` ) ( nurl_print key ) ( nurl_print `\n` )
+            : s zp ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print zp ) ( nurl_print ` = extractvalue ` ) ( nurl_print llt ) ( nurl_print ` ` ) ( nurl_print zv ) ( nurl_print `, 0\n` )
+            : s zl ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print zl ) ( nurl_print ` = extractvalue ` ) ( nurl_print llt ) ( nurl_print ` ` ) ( nurl_print zv ) ( nurl_print `, 1\n` )
+            : s ep ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print ep ) ( nurl_print ` = icmp eq ptr ` ) ( nurl_print zp ) ( nurl_print `, ` ) ( nurl_print cp ) ( nurl_print `\n` )
+            : s el ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print el ) ( nurl_print ` = icmp eq i64 ` ) ( nurl_print zl ) ( nurl_print `, ` ) ( nurl_print cl ) ( nurl_print `\n` )
+            : s f ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print f ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print fl ) ( nurl_print `\n` )
+            : s nf ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = xor i1 ` ) ( nurl_print f ) ( nurl_print `, 1\n` )
+            : ~ s m ( __and_i1 cg ( __and_i1 cg ( __and_i1 cg ep el ) nf ) base )
+            ? != 0 ( nurl_str_len acc ) {
+                : s na ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print na ) ( nurl_print ` = xor i1 ` ) ( nurl_print acc ) ( nurl_print `, 1\n` )
+                = m ( __and_i1 cg m na )
+            } {}
+            : s nfl ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print nfl ) ( nurl_print ` = or i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print m ) ( nurl_print `\n` )
+            ( nurl_print `  store i1 ` ) ( nurl_print nfl ) ( nurl_print `, ptr ` ) ( nurl_print fl ) ( nurl_print `\n` )
+            = acc ( __or_i1 cg acc m )
+        } {}
+    }
+    ? != 0 ( nurl_str_len acc ) {
+        ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request llt ) )
+        ( nurl_print `(i1 ` ) ( nurl_print acc ) ( nurl_print `, ptr ` ) ( nurl_print g ) ( nurl_print `)\n` )
+    } {}
+}
+
+// …every owned slice field of the struct `vt` at `ptr`, dropped whole by
+// its glue under `cond`.
+@ __scope_struct_slices_handover i syms i cg s ptr s vt s cond → v {
+    : i vn ( nurl_str_len vt )
+    ? | | < vn 2 != 37 ( nurl_str_get vt 0 ) == 42 ( nurl_str_get vt - vn 1 ) { ^ v } {}
+    ? == 0 ( nurl_sym_len syms `__owned_slices__` ) { ^ v } {}
+    : s sname ( nurl_str_slice vt 1 - vn 1 )
+    : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
+    : ~ i fi 0
+    ~ < fi fc {
+        : s fty ( nurl_llty ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) )
+        ? ( __owned_slice_ty fty ) { ( __scope_slice_handover syms cg ptr vt ( nurl_str_int fi ) fty cond ) } {}
+        = fi + fi 1
+    }
 }
 
 // `__nurl_zero_if.<n>(i1 c, ptr p)` stores a zero `fl` through `p` when
