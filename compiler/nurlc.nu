@@ -9546,12 +9546,27 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // the one handed back, by identity (mem_drop_owned, g_ret_sl_ids).
     // Taken for no slice of its own, the caller borrowed what the return
     // released, agora #664.)
+    // (…and the slice payload of an option a local binding of this frame
+    // owns, `?? o { T q → ^ q }`: o releases it on the way out, so the
+    // caller gets a copy of its own - as a field returned out of a struct
+    // this function owns is copied (docs/MEMORY.md §7.6). Handed back as
+    // it was, the caller read what o's drop freed; agora #841.)
+    : ~ b ret_plslice_copy F
+    ? & & & ( is_ident_tok ret_first_tt ) ( mem_is_slice_ty lt ) != 0 g_auto_drop_strings ! ( mem_slice_owned syms ret_first_val ) {
+        : s __psb ( nurl_sym_get2 syms ret_first_val `__plbind` )
+        ? & & != 0 ( nurl_str_len __psb ) < ( nurl_sym_word_index syms `__fn_param_names__` __psb ) 0 != 0 ( nurl_str_len ( mem_udrop_ptr_of syms __psb ) ) {
+            ? != 0 ( nurl_str_len ( __opt_slice_payload ( nurl_llty ( nurl_sym_get syms __psb ) ) ) ) {
+                = val ( mem_emit_clone_on cg ( nurl_llty lt ) val `1` )
+                = ret_plslice_copy T
+            } {}
+        } {}
+    } {}
     = g_ret_sl_ids ? & ( mem_is_slice_ty lt ) | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST ( __ret_join_own_slices syms ) ``
     = g_ret_sl_val ? != 0 ( nurl_str_len g_ret_sl_ids ) ( nurl_str_cat val `` ) ``
     : b ret_fresh_slice & ( mem_is_slice_ty lt ) | | & | | == ret_first_tt TT_LBRACK == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
     ( seq ( nurl_sym_get syms `__last_slice_owned__` ) `1` )
     & ret_is_direct_call ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
-    | != 0 ( nurl_str_len g_ret_sl_ids ) ret_slice_taken
+    | | != 0 ( nurl_str_len g_ret_sl_ids ) ret_slice_taken ret_plslice_copy
     // (A returned slice binding with a drop flag — a `: ~` one — owns what
     // it holds where its flag says: per call, not a fact of every call.
     // Marked owned, `: ~ [i r p  ^ r` handed the caller its own argument.)
@@ -14332,6 +14347,40 @@ unsafe @ eng_byte s w i k → i {
     ( wv_drop tmp ) ( wv_drop from ) ( wv_drop to )
 }
 
+// The part of a binding that `place`, inside a literal temporary, is: the
+// literal shows that binding at its first field and has not taken it yet
+// (g_fx_agg, taken at move_out) - so what is lent out of it is still lent
+// out of the binding's own places. -1 for none.
+@ agg_shown_place i place → i {
+    : i named ( wv_at g_fx_agg ( pl_var place ) )
+    ? == named 0 { ^ -1 } {}
+    : i p ( pl_path place )
+    ? == p 0 { ^ -1 } {}
+    : i e0 ( ep_first p )
+    : ~ i k 0
+    ~ < k ( sq_len named ) {
+        : i w ( sq_at named k )
+        ? == / w 4294967296 e0 { ^ ( pl_make % w 4294967296 ( ep_drop p 1 ) ) } {}
+        = k + k 1
+    }
+    ^ -1
+}
+
+// `loans` without the literal's own showing of the binding `shown` is in:
+// its handle of that binding's whole value (move_out's `gone`), which is
+// the literal's part itself and no view of it.
+@ shown_loans i loans i shown → i {
+    : i want ( pl_make ( pl_var shown ) 0 )
+    : ~ i out loans
+    : ~ i k 0
+    ~ < k ( sq_len loans ) {
+        : i l ( sq_at loans k )
+        ? & & ( el_is_loan l ) == ( el_place l ) want == ( el_kind l ) LK_HANDLE { = out ( sq_del out l ) } {}
+        = k + k 1
+    }
+    ^ out
+}
+
 // A binding or a temporary gives its value up: what was lent out of it
 // ends, it is "moved" from here on, and the value goes on as an owner.
 // A literal that showed bindings and is taken takes them with it.
@@ -16213,6 +16262,12 @@ unsafe @ eng_byte s w i k → i {
         ? & < k n ( op_is_place ( wv_at ops k ) ) {
             : i ok ( wv_at ops k )
             : i place ( pl_make ( pl_var ok ) ( ep_cat ( pl_path ok ) ( tp_at t 3 1 ) ) )
+            // (…in a literal handed straight to the call, a part that is a
+            // binding the literal shows and takes only once the call has it
+            // (move_out): the change is made to that binding's value, which
+            // its views still name - `( use @ S { sv b } )`, a view of b
+            // beside b grown, agora #563)
+            : i shown ( agg_shown_place place )
             : ~ i m 0
             ~ < m n {
                 : ~ b back F
@@ -16227,11 +16282,11 @@ unsafe @ eng_byte s w i k → i {
                 ? ! back {
                     : i av ( wv_at avs m )
                     ? != m k {
-                        ? ( would_kill st place eff ( sq_union ( av_loans av ) ( held_loans ( av_held av ) ) ) 0 ) {
+                        ? | ( would_kill st place eff ( sq_union ( av_loans av ) ( held_loans ( av_held av ) ) ) 0 ) & >= shown 0 ( would_kill st shown eff ( shown_loans ( sq_union ( av_loans av ) ( held_loans ( av_held av ) ) ) shown ) 0 ) {
                             ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) `: argument ` ( nurl_str_int + m 1 ) ) ( nurl_str_cat ` views what the call changes through argument ` ( nurl_str_int + k 1 ) ) ) )
                         } {}
                     } {
-                        ? ( would_kill st place eff ( held_loans ( av_held av ) ) 0 ) {
+                        ? | ( would_kill st place eff ( held_loans ( av_held av ) ) 0 ) & >= shown 0 ( would_kill st shown eff ( shown_loans ( held_loans ( av_held av ) ) shown ) 0 ) {
                             // an argument is frozen for the call - a part of it
                             // may not view what the call changes in another part
                             ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) `: a part of argument ` ( nurl_str_int + k 1 ) ) ` views what the call changes in it` ) )
@@ -40389,6 +40444,15 @@ unsafe @ gen_match i lex i syms i cg → s {
                     ( mem_clo_slot_new syms cg pv0 __po )
                     ? ! ( seq __po `null` ) { ( mem_own_closure_add syms pv0 ) } {}
                 } {}
+                // An owned slice payload (`T q →` over a `?[i`) the same: the
+                // binding owns the slice exactly when the option was a call's
+                // or a literal's and handed over - by that flag. (Owned by
+                // nobody, a call's fresh one leaked; agora #841.)
+                ? & & & pt0_is_opt_bool != 0 g_auto_drop_strings != 0 ( nurl_str_len scrut_own ) != 0 ( nurl_str_len ( __opt_slice_payload ( nurl_llty match_type ) ) ) {
+                    ( mem_own_add syms pv0 )
+                    ( mem_slice_decl_add syms pv0 )
+                    ( mem_udrop_flag_set syms cg vp0 scrut_own )
+                } {}
                 // (An enum's payload: lent by the enum, h231.)
                 ( nurl_sym_def syms ( nurl_str_cat pv0 `__enum_pl` ) ? pt0_is_opt_bool `` `1` )
                 ? ! pt0_is_opt_bool { = g_epl_n + g_epl_n 1 } {}
@@ -43710,16 +43774,21 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
     }
 }
 
-// True if `t` looks like a slice struct "{ T*, i64 }".
+// True if `t` is a slice struct "{ T*, i64 }" - exactly one: its first
+// comma outside nested braces is the one before the length. (Asked only
+// whether `*, i64 }` appeared in it, an option or a result holding a
+// slice, `{ i1, { T*, i64 } }`, was taken for a slice too: its release
+// read the tag as the buffer, invalid IR - agora #841.)
 @ mem_is_slice_ty s t → b {
-    & != 0 ( nurl_str_starts t `{ ` )
-    >= ( nurl_str_find t `*, i64 }` ) 0
+    ? | == 0 ( nurl_str_starts t `{ ` ) == 0 ( nurl_str_ends t `*, i64 }` ) { ^ F } {}
+    ^ ( __slice_len_comma t )
 }
 
-// Exactly a slice `{ T*, i64 }`: its first comma outside nested braces is the
-// one before the length (an optional slice, `{ i1, { T*, i64 } }`, is not).
-unsafe @ __is_slice_ll s t → b {
-    ? ! ( mem_is_slice_ty t ) { ^ F } {}
+@ __is_slice_ll s t → b { ^ ( mem_is_slice_ty t ) }
+
+// Is the first comma of `{ … }` outside nested braces the one before its
+// closing `, i64 }`?
+unsafe @ __slice_len_comma s t → b {
     : i n ( nurl_str_len t )
     : *u sp # *u t
     : ~ i d 0
@@ -46873,7 +46942,8 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         // back on the run that handed over a fresh one — agora #475.)
         : s pt ( __wrap_part_key rlt 0 )
         : s et ( __wrap_part_key rlt 1 )
-        ^ | & != 0 ( nurl_str_len pt ) ? != 0 ( nurl_str_starts pt `{ i1, ` ) ( __is_hown_ty pt ) ( __elem_owns pt g_root_syms ) & != 0 ( nurl_str_len et ) ? != 0 ( nurl_str_starts et `{ i1, ` ) ( __is_hown_ty et ) ( __elem_owns et g_root_syms )
+        // (…and an owned slice payload, the option's own: agora #841.)
+        ^ | & != 0 ( nurl_str_len pt ) ? | != 0 ( nurl_str_starts pt `{ i1, ` ) ( __owned_slice_ty pt ) ( __is_hown_ty pt ) ( __elem_owns pt g_root_syms ) & != 0 ( nurl_str_len et ) ? != 0 ( nurl_str_starts et `{ i1, ` ) ( __is_hown_ty et ) ( __elem_owns et g_root_syms )
     } {}
     ^ ( __type_needs_drop rlt g_root_syms )
 }
@@ -47073,9 +47143,17 @@ unsafe @ __pfo_bind_lends i syms s name → v {
                     // until the call returns, agora #131.)
                     = w ( nurl_str_cat3 ( mem_journal_push_cloenv cg __co ) ` c|` __co )
                 } {
-                    ( __handle_drop_ensure lty )
-                    ( __dropifv_request lty )
-                    = w ( nurl_str_cat3 ( mem_journal_push_temp cg lty lval lc ) ` ` ( nurl_str_cat4 `h|` lc ( nurl_str_cat3 `|` lty `|` ) lval ) )
+                    // (An owned slice - a struct's slice field, an option's
+                    // slice payload: its elements and buffer, by its parked
+                    // name - agora #841.)
+                    ? ( __owned_slice_ty lty ) {
+                        ( __dropifv_request lty )
+                        = w ( nurl_str_cat4 `h|` lc ( nurl_str_cat3 `|` ( __park_ty lty ) `|` ) lval )
+                    } {
+                        ( __handle_drop_ensure lty )
+                        ( __dropifv_request lty )
+                        = w ( nurl_str_cat3 ( mem_journal_push_temp cg lty lval lc ) ` ` ( nurl_str_cat4 `h|` lc ( nurl_str_cat3 `|` lty `|` ) lval ) )
+                    }
                 }
             }
             = owned ? == 0 ( nurl_str_len owned ) w ( nurl_str_cat3 owned ` ` w )
@@ -47508,7 +47586,8 @@ unsafe @ __src_has_raw_ptr s text → b {
             : s c ( nurl_str_slice t 0 b1 )
             = t ( nurl_str_slice t + b1 1 - - ( nurl_str_len t ) b1 1 )
             : i b2 ( nurl_str_find t `|` )
-            : s ty ( nurl_str_slice t 0 b2 )
+            : s pty ( nurl_str_slice t 0 b2 )
+            : s ty ( __unpark_ty pty )
             : s v ( nurl_str_slice t + b2 1 - - ( nurl_str_len t ) b2 1 )
             : s pc ( nurl_cg_reg cg )
             : s pv ( nurl_cg_reg cg )
@@ -47518,7 +47597,7 @@ unsafe @ __src_has_raw_ptr s text → b {
             ( nurl_print `  ` ) ( nurl_print pv ) ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` [ ` ) ( nurl_print v ) ( nurl_print `, %` ) ( nurl_print own )
             ? != 0 ( nurl_str_len other ) { ( nurl_print ` ], [ zeroinitializer, %` ) ( nurl_print other ) } {}
             ( nurl_print ` ]\n` )
-            = out ( __words_join out ( nurl_str_cat4 `h|` pc ( nurl_str_cat3 `|` ty `|` ) pv ) )
+            = out ( __words_join out ( nurl_str_cat4 `h|` pc ( nurl_str_cat3 `|` pty `|` ) pv ) )
         } {}
     }
     ^ out
@@ -47559,7 +47638,9 @@ unsafe @ __src_has_raw_ptr s text → b {
             ( nurl_print `  ` ) ( nurl_print __tpc ) ( nurl_print ` = and i1 ` ) ( nurl_print c ) ( nurl_print `, ` ) ( nurl_print __ttag ) ( nurl_print `\n` )
             ( __handle_drop_ensure top )
             ( __dropifv_request top )
-            = __tw ( nurl_str_cat4 `h|` __tpc ( nurl_str_cat3 `|` top `|` ) __tpv )
+            // (A payload type with blanks - a slice, a closure - parked by
+            // its drop name: the words are blank-separated, agora #841.)
+            = __tw ( nurl_str_cat4 `h|` __tpc ( nurl_str_cat3 `|` ( __park_ty top ) `|` ) __tpv )
         } {}
         ? != 0 ( nurl_str_len toe ) {
             : s __tev ( nurl_cg_reg cg )
@@ -47570,7 +47651,7 @@ unsafe @ __src_has_raw_ptr s text → b {
             ( nurl_print `  ` ) ( nurl_print __tec ) ( nurl_print ` = and i1 ` ) ( nurl_print c ) ( nurl_print `, ` ) ( nurl_print __tnt ) ( nurl_print `\n` )
             ( __handle_drop_ensure toe )
             ( __dropifv_request toe )
-            : s __tew ( nurl_str_cat4 `h|` __tec ( nurl_str_cat3 `|` toe `|` ) __tev )
+            : s __tew ( nurl_str_cat4 `h|` __tec ( nurl_str_cat3 `|` ( __park_ty toe ) `|` ) __tev )
             = __tw ? == 0 ( nurl_str_len __tw ) __tew ( nurl_str_cat3 __tw ` ` __tew )
         } {}
     } {
@@ -50006,9 +50087,14 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
         : s vt ( __unpark_ty ( str_first_word vrest ) ) = vrest ( str_skip_word vrest )
         : s ll ( nurl_llty vt )
         ( nurl_print `define linkonce_odr void @__dropifv_` ) ( nurl_print ( __drop_mangle vt ) )
-        ( nurl_print `(i1 %c, ` ) ( nurl_print ll ) ( nurl_print ` %v) alwaysinline {\nentry:\n  br i1 %c, label %d, label %x\nd:\n  call void @` )
-        ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` ( __drop_mangle vt ) ) ) )
-        ( nurl_print `(` ) ( nurl_print ll ) ( nurl_print ` %v)\n  br label %x\nx:\n  ret void\n}\n` )
+        ( nurl_print `(i1 %c, ` ) ( nurl_print ll ) ( nurl_print ` %v) alwaysinline {\nentry:\n  br i1 %c, label %d, label %x\nd:\n` )
+        // (An owned slice - an option's payload - has no `drop__` of its
+        // own: its elements and buffer, here. Agora #841.)
+        ? ( __owned_slice_ty ll ) { : ~ i ctr 0 ( emit_drop_slice_value ll `%v` ctr ) } {
+            ( nurl_print `  call void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` ( __drop_mangle vt ) ) ) )
+            ( nurl_print `(` ) ( nurl_print ll ) ( nurl_print ` %v)\n` )
+        }
+        ( nurl_print `  br label %x\nx:\n  ret void\n}\n` )
     }
     : ~ s rest ( nurl_sym_get g_impl_name_syms `__pending_dropifs__` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -71770,7 +71856,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // Same snapshot the `:` paths take, and for the same reason:
         // generating the RHS reads the identifier, and a value read of a
         // closure binding drops it from the owned set.
-        : b __src_owned_env & ( is_ident_tok bck_rhs_tt )
+        : ~ b __src_owned_env & ( is_ident_tok bck_rhs_tt )
         ( mem_clo_listed syms bck_rhs_val )
         : i __sxn0 g_sx_n
         : i __sxmp0 g_member_path_on
@@ -71791,7 +71877,20 @@ unsafe @ gen_assign i lex i syms i cg → s {
         } {}
         : i __rp_at ( nurl_lex_cur_start lex )
         = g_dyn_box_reg -1  // (a box this right-hand side makes: mem_udrop_bind_flag)
+        : i __arhs_r0 ( nurl_peek # s cg 0 )
         : ~ s val ( gen_operand lex syms cg )
+        // A value block whose tail is a closure binding the block made itself
+        // (`= a { : h \ … h }`) hands its env over as `= a h` does (docs/
+        // MEMORY.md §7.5), as a `:` binding of one does (__blk_tail_closure).
+        // Read as a block, `a` was given h's env without it - a second name
+        // of what h released at the scope's end, before a `;` block armed
+        // earlier called `a` (agora #846).
+        : s __abt ( __blk_tail_closure syms bck_rhs_tt ( nurl_get_last_type ) __arhs_r0 )
+        ? != 0 ( nurl_str_len __abt ) {
+            = __src_owned_env ( mem_clo_listed syms __abt )
+            = bck_rhs_tt TT_IDENT
+            = bck_rhs_val __abt
+        } {}
         ? != 0 g_core_live {
             // (`= h g`, g a closure binding that owns its env, moves nothing
             // where h outlives g or a `;` block may still call g - the
@@ -77615,8 +77714,20 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // copied into an owner (docs/MEMORY.md §7.6). Stored as it came,
         // the literal's drop released the buffer its owner still held.
         // (In `unsafe` code too: the drop releases it there as well.)
-        ? & & & & != 0 g_auto_drop_strings ! is_slice_fresh ! agg_is_wrap ( __owned_slice_ty ( nurl_llty fty ) ) | != enum_paycount -1 ( __agg_drop_takes_fields agg_ty ) {
+        // (…and an option's slice payload, which the option owns the same
+        // way: __opt_slice_payload, agora #841.)
+        ? & & & & != 0 g_auto_drop_strings ! is_slice_fresh ( __owned_slice_ty ( nurl_llty fty ) ) ? agg_is_wrap != 0 ( nurl_str_len ( __opt_slice_payload ( nurl_llty agg_ty ) ) ) T | != enum_paycount -1 ( __agg_drop_takes_fields agg_ty ) {
             = fval ( mem_emit_clone_on cg ( nurl_llty fty ) fval `1` )
+        } {}
+        // (…and an owned slice the literal holds by type - a struct's slice
+        // field, an option's slice payload: fresh, moved in or copied in
+        // just above, it is the literal's own, dropped after the call it is
+        // an argument of unless the callee keeps it. Left out, `( qsum @ Q {
+        // [i | 1 2] } )` leaked the buffer, agora #841.)
+        ? & & & & __ao_ctx ! __ao_tag == enum_paycount -1 ( __owned_slice_ty ( nurl_llty fty ) ) ? agg_is_wrap != 0 ( nurl_str_len ( __opt_slice_payload ( nurl_llty agg_ty ) ) ) ( __agg_drop_takes_fields agg_ty ) {
+            : s __aos ( nurl_str_cat4 fty `|1|` fval `` )
+            : s __aosl ( nurl_sym_get syms `__agg_arg_own__` )
+            ( nurl_sym_def syms `__agg_arg_own__` ? == 0 ( nurl_str_len __aosl ) __aos ( nurl_str_cat3 __aosl `;` __aos ) )
         } {}
         : s idx_str ( nurl_str_int idx )
         ? & != 0 g_auto_drop_strings is_str_fresh
@@ -93448,6 +93559,12 @@ unsafe @ __brace_close s s → i {
     // and a `vec_pop` of closures handed back one its Vec had freed.)
     : s __cp ( __opt_clo_payload ty )
     ? != 0 ( nurl_str_len __cp ) { ^ __cp } {}
+    // …and an option of an owned slice owns the slice, its buffer and the
+    // elements it owns, as a struct field of one does (docs/MEMORY.md
+    // §7.6): `?[i` is dropped and copied through its twin. (Nothing owned
+    // it: `@ ?[i { T [i | 1 2] }` leaked its buffer, agora #841.)
+    : s __sp ( __opt_slice_payload ty )
+    ? != 0 ( nurl_str_len __sp ) { ^ __sp } {}
     ? | < n 9 == 0 ( nurl_str_starts ty `{ i1, %` ) { ^ ( nurl_str_cat `` `` ) } {}
     ? != ( nurl_str_get ty - n 1 ) 125 { ^ ( nurl_str_cat `` `` ) } {}
     : ~ s p ( nurl_str_slice ty 6 - n 8 )
@@ -94522,6 +94639,18 @@ unsafe @ __slice_mangle s ty → s {
     : s p ( seplist_first rest )
     : s e ( __seplist_rest rest )
     ? & ( __is_closure_llty p ) & < ( nurl_str_find e ` ` ) 0 < ( nurl_str_find e `;` ) 0 { ^ p } {}
+    ^ ( nurl_str_cat `` `` )
+}
+
+// The owned slice payload `{ T*, i64 }` of an option `{ i1, { T*, i64 } }`
+// (or of a result whose error is a plain word); `` otherwise.
+@ __opt_slice_payload s ty → s {
+    ? | == 0 g_auto_drop_strings | == 0 ( nurl_str_starts ty `{ i1, { ` ) < ( nurl_str_find ty `*, i64 }` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : s fs ( __agg_fields ty )
+    : s rest ( __seplist_rest fs )
+    : s p ( seplist_first rest )
+    : s e ( __seplist_rest rest )
+    ? & ( __owned_slice_ty p ) & < ( nurl_str_find e ` ` ) 0 < ( nurl_str_find e `;` ) 0 { ^ p } {}
     ^ ( nurl_str_cat `` `` )
 }
 
@@ -101408,6 +101537,12 @@ unsafe @ __jpb_note i cg s up → v {
         ? | ( __is_closure_llty p ) < ( nurl_str_find p ` ` ) 0 { ^ p } {}
         ^ ( nurl_str_cat `` `` )
     } {}
+    // …and so does an owned slice part (an option of one owns it,
+    // __opt_slice_payload; agora #841).
+    ? != 0 ( nurl_str_len ( __opt_slice_payload ty ) ) {
+        : s fs ( __seplist_rest ( __agg_fields ty ) )
+        ^ ? == k 0 ( seplist_first fs ) ( seplist_first ( __seplist_rest fs ) )
+    } {}
     : s body ( nurl_str_slice ty 6 - n 8 )
     : i cm ( nurl_str_find body `, ` )
     : s part ? == k 0 ? < cm 0 ( nurl_str_cat body `` ) ( nurl_str_slice body 0 cm )
@@ -101441,7 +101576,7 @@ unsafe @ __jpb_note i cg s up → v {
     : ~ i k 0
     ~ < k 2 {
         : s pt ( __wrap_part ty k )
-        ? & != 0 ( nurl_str_len pt ) ( __elem_owns pt g_root_syms ) {
+        ? & != 0 ( nurl_str_len pt ) | ( __elem_owns pt g_root_syms ) ( __owned_slice_ty pt ) {
             : s side ( nurl_cg_reg cg )
             ? == k 0 {
                 ( nurl_print `  ` ) ( nurl_print side ) ( nurl_print ` = and i1 ` ) ( nurl_print c ) ( nurl_print `, ` ) ( nurl_print tag ) ( nurl_print `\n` )
