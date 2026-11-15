@@ -61,10 +61,11 @@ $ `stdlib/core/slice.nu`
 // and because the `vec_push` in the same loop stores, LLVM could not
 // CSE that strlen away, so the whole converter was O(n²): 117 µs for a
 // 4 KB input, versus 168 ns for the memcpy below (699×). Same shape as
-// `bytes_extend_str`.
+// `bytes_extend_str`. The room is for `n` bytes a string already holds,
+// so it needs no size check and makes no panic (_vec_with_room).
 @ bytes_from_str s raw → ( Vec u ) {
     : i n ( nurl_str_len raw )
-    : ( Vec u ) v ( vec_with_cap [u] n )
+    : ( Vec u ) v ( _vec_with_room [u] n )
     ? > n 0 {
         : *u src # *u raw
         : *u dst ( vec_data [u] v )

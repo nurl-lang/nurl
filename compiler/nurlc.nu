@@ -509,6 +509,7 @@
 : i FX_TAIL_TOOK 131072  // a value block's temporary that took a local of the block from its tail join
 : i FX_CALL_TEMP 262144  // a call's temporary, of a callee nurlc's summary says may lend its result (eng_walk_lends)
 : i FX_CALL_BIND 524288  // a binding (`: T e`, not `: ~`) given a call's temporary whole, or such a binding whole: nurlc keeps the call's per-call answer for it
+: i FX_SLOT_TAKE 1048576  // an FX_SLOT payload of a temporary nurlc takes it out of (CORE_VF_SLOT): a consumer that takes it empties the slot
 : ~ i g_fc_cap_loans 0  // the loans closures captured (a set)
 : ~ i g_fc_wb_pairs 0  // (the loan a place holds of a reader's value, the struct cursor whose field store handed it over: eng_cursor_handover), a set
 : ~ i g_fc_wbs 0  // while a call's effects are applied: the cursors it writes back into the slots they were read from (a set)
@@ -695,6 +696,8 @@
 : i CORE_VF_TAKEN 64  // a capture's flag: the body marks it taken in its env when it gives it away; a later run panics (core_capture_taken)
 : i CORE_VF_SECOND 32  // a variable's flag: a closure binding given an owner's closure that the walk does not move: a second name of it (core_second_name)
 : i CORE_VF_HANDON 128  // a variable's flag: the literal a `\` try hands its failure on in, which codegen hands on whole (core_try)
+: i CORE_VF_SLOT 256  // a variable's flag: a call's temporary whose payload nurlc reads from a slot it can name, and takes out of it where a consumer takes the payload (mem_note_vec_get, mem_vget_consume)
+: ~ i g_core_slotget 0  // 1: the call just generated read a slot nurlc can name (mem_note_vec_get); its temporary gets CORE_VF_SLOT (core_call)
 : i CORE_VS 1048576
 // Statement words.
 : i CO_LET 1  // vid rvalue
@@ -10438,6 +10441,8 @@ unsafe @ core_note_callee i callee → v {
 
 // A call through a closure value (`ind`): the value is the first operand.
 unsafe @ core_call i h0 s ret_ty b ind → v {
+    : b slot != 0 g_core_slotget
+    = g_core_slotget 0
     ? & ! ind != 0 g_core_callee {
         ? >= ( nurl_str_find # s g_core_callee `__dyn__` ) 0 { ( core_note_virt g_core_callee ) } {}
         ( core_note_callee g_core_callee )
@@ -10453,6 +10458,11 @@ unsafe @ core_call i h0 s ret_ty b ind → v {
         ^
     } {}
     : i t ( core_temp ret_ty )
+    ? slot {
+        : *i vs # *i # s g_core_vars
+        : i fb + * t CORE_VW 4
+        = . vs fb | . vs fb CORE_VF_SLOT
+    } {}
     ( core_w CO_LET ) ( core_w t )
     ? ind { ( core_w RV_CALLIND ) } { ( core_w RV_CALL ) ( core_w g_core_callee ) }
     ( __core_w_ops h0 )
@@ -12215,6 +12225,9 @@ unsafe @ eng_keep_fn → v {
 @ fv_second i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_SECOND }
 // The literal a `\` try hands its failure on in (CORE_VF_HANDON).
 @ fv_handon i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_HANDON }
+// A call's temporary whose payload nurlc takes out of the slot it read it
+// from, where a consumer takes the payload (CORE_VF_SLOT).
+@ fv_slot i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_SLOT }
 
 @ fv_line i vid → i { ? < vid 0 { ^ 0 } {} ^ ( ev vid 5 ) }
 
@@ -13538,6 +13551,30 @@ unsafe @ eng_byte s w i k → i {
         = k + k 1
     }
     ^ F
+}
+
+// The payload `ov` of a library getter's option (FX_SLOT), handed whole
+// to a callee that releases it, where the IR says nurlc takes it out of
+// the slot it was read from (FX_SLOT_TAKE, CORE_VF_SLOT: mem_vget_consume):
+// the element is taken out of each place the
+// payload aliases - the change a container's owner, or a caller whose
+// parameter it is, sees. F, and nothing done, where one of those places is
+// in a closure's capture: nurlc takes nothing out of a capture's container
+// (__vget_live), so the payload stays a borrow there.
+@ eng_slot_take i st i ov i line → b {
+    ? ! ( fx_has ov FX_SLOT_TAKE ) { ^ F } {}
+    : i av ( st_av st ov )
+    ? == av 0 { ^ F } {}
+    : i al ( av_alias av )
+    ? == ( sq_len al ) 0 { ^ F } {}
+    : ~ i k 0
+    ~ < k ( sq_len al ) {
+        : i rv ( pl_var ( sq_at al k ) )
+        ? | < rv 0 & >= ( fv_pidx rv ) 0 < ( fv_pidx rv ) g_f_ncap { ^ F } {}
+        = k + k 1
+    }
+    ( eng_effect st ( pl_make ov 0 ) EF_TAKE line 0 )
+    ^ T
 }
 
 @ eng_effect i st i place i eff i line i depth → v {
@@ -15971,7 +16008,7 @@ unsafe @ eng_byte s w i k → i {
                 ? ( __eng_ty_has_clo ty 0 ) { ^ T } {}
                 // (a value it holds, and so may release, whose release
                 // runs a destructor of the program's)
-                ? > g_eng_dtor_unw 0 { ? ( __eng_ty_dtor ty 0 ) { ^ T } {} } {}
+                ? > g_eng_dtor_unw 0 { ? ( et_reaches_dtor ty 0 ) { ^ T } {} } {}
             } {}
         } {}
         = v + v 1
@@ -15993,36 +16030,6 @@ unsafe @ eng_byte s w i k → i {
     = g_ec sc
     = g_ec_n sn
     ^ ind
-}
-
-// Does releasing a value of type `t` run a destructor of the program's
-// (`% Drop`), its own or a part's - a type of numbers only included, which
-// et_reaches_dtor, asking what has something to release, passes over?
-@ __eng_ty_dtor i t i depth → b {
-    ? | < t 0 > depth 6 { ^ F } {}
-    : i kind ( et_kind t )
-    ? == kind EK_SCALAR { ^ F } {}
-    ? & == kind EK_NAMED ( __has_user_drop ( eng_str ( et_at t ET_NAME ) ) ) { ^ T } {}
-    ? != ( et_at t ET_E1 ) ET_NONE { ? ( __eng_ty_dtor ( et_at t ET_E1 ) + depth 1 ) { ^ T } {} } {}
-    ? != ( et_at t ET_E2 ) ET_NONE { ? ( __eng_ty_dtor ( et_at t ET_E2 ) + depth 1 ) { ^ T } {} } {}
-    : ~ i k 0
-    ~ < k ( et_at t ET_F_N ) {
-        ? ( __eng_ty_dtor ( et_field_ty t k ) + depth 1 ) { ^ T } {}
-        = k + k 1
-    }
-    ? ( et_flag t ETF_ENUM ) {
-        : ~ i v 0
-        ~ < v ( et_at t ET_V_N ) {
-            : i at ( __et_variant_at t v )
-            = k 0
-            ~ < k ( wv_at g_et_w + at 1 ) {
-                ? ( __eng_ty_dtor ( et_of ( wv_at g_et_w + + at 2 k ) ) + depth 1 ) { ^ T } {}
-                = k + k 1
-            }
-            = v + v 1
-        }
-    } {}
-    ^ F
 }
 
 // Does a value of type `t` hold a closure (itself one, or a field, an
@@ -16176,10 +16183,14 @@ unsafe @ eng_byte s w i k → i {
     ^ out
 }
 
-@ eng_apply_call_do i st i name i sm i ops i site i line i dest → i {
-    : i n ( wv_len ops )
+// A point where this frame may unwind: a call of `name` that may (sm,
+// ops its summary and operands), or the release of a value whose
+// destructor `name` may panic (sm -1, no operands). Storage the caller
+// holds must be whole there and view nothing of this frame: a `recover`
+// caller reads it after the unwind.
+@ eng_unwind_point i st i name i sm i ops i line → v {
+    : i n ? < ops 0 0 ( wv_len ops )
     : i callee ( ef_find name )
-    = g_fc_callee name
     ? > ( fp_n ) 0 {
         // a function of the program may unwind, and so may one that may
         // reach a panic (`( panic … )` itself): storage the caller holds
@@ -16216,7 +16227,7 @@ unsafe @ eng_byte s w i k → i {
                     ? views {
                         : ~ b credited F
                         = k 0
-                        ~ < k n {
+                        ~ & >= sm 0 < k n {
                             ? & == ( wv_at ops k ) ( pl_make vid 0 ) ( sm_has sm SM_CREDITS k ) { = credited T } {}
                             = k + k 1
                         }
@@ -16239,6 +16250,13 @@ unsafe @ eng_byte s w i k → i {
             = p + p 1
         }
     } {}
+}
+
+@ eng_apply_call_do i st i name i sm i ops i site i line i dest → i {
+    : i n ( wv_len ops )
+    : i callee ( ef_find name )
+    = g_fc_callee name
+    ( eng_unwind_point st name sm ops line )
     : i avs ( wv_new )
     : ~ i i 0
     ~ < i n {
@@ -16579,13 +16597,14 @@ unsafe @ eng_byte s w i k → i {
                         // what a call lent is a copy of a handle its owner
                         // keeps: a temporary is handed over as a copy of the
                         // value, and so is a binding of it handed to a
-                        // declared `sink`, where nurlc's summary says the
+                        // callee that takes it (a declared `sink`, or one that
+                        // keeps its parameter), where nurlc's summary says the
                         // callee lends its result: the binding keeps the
                         // call's own answer of whether it lent, and the copy
                         // goes where it did (a `: T e ( vec_at v 0 )`, or a
                         // second name of one). Any other binding of it is
                         // not the binding's to give
-                        : b cbind & & & == ( fv_kind ov ) VK_LOCAL == ( pl_path op ) 0 ( fx_has ov FX_CALL_BIND ) == ( sm_mode sm ck ) PM_SINK
+                        : b cbind & & & == ( fv_kind ov ) VK_LOCAL == ( pl_path op ) 0 ( fx_has ov FX_CALL_BIND ) | == ( sm_mode sm ck ) PM_SINK ( sm_keeps_arg sm ck )
                         ? cbind {
                             ? ( et_copyable ty ) { = copied ( sq_add copied ck ) } { ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) ) }
                         } {
@@ -16642,11 +16661,17 @@ unsafe @ eng_byte s w i k → i {
                                     } { ? & & & & == ( pl_path op ) 0 ( fx_has ov FX_SLOT ) == ( av_own av ) OW_L sinkmode ! ( sm_keeps_arg sm ck ) {
                                             // the payload of what a library getter lent
                                             // (`vec_get`, `lru_get`) handed to a callee that
-                                            // releases it: the container still holds it and
-                                            // releases it again - a borrow (a callee that
-                                            // keeps it is handed a copy). Only a `~` loop's
-                                            // element is taken out of its slot
-                                            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes ` ( eng_vname ov ) ) `, the payload of what a getter lent, which is a borrow` ) )
+                                            // releases it: where the IR says nurlc takes it
+                                            // out of the slot it was read from (`vec_get`:
+                                            // mem_vget_consume), what the container holds
+                                            // there is taken - for a parameter's container, a
+                                            // change its caller sees. (A callee that keeps it
+                                            // is handed a copy.) Anywhere else - another
+                                            // getter, a closure's capture - the container
+                                            // still holds it and releases it again: a borrow
+                                            ? ( eng_slot_take st ov line ) {} {
+                                                ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes ` ( eng_vname ov ) ) `, the payload of what a getter lent, which is a borrow` ) )
+                                            }
                                         } { ? & & & == ( pl_path op ) 0 sinkmode ! ( sm_keeps_arg sm ck ) ( eng_viewsrc_lent st ov ) {
                                                 // (…a binding read out of a field of a binding of
                                                 // what a call lent - a `vec_at` copy: that
@@ -18158,7 +18183,7 @@ unsafe @ eng_byte s w i k → i {
 // handle's own hook reads only what it owns (agora #363): trusted, as the
 // library is. The function, -1 none.
 @ et_dtor_fn i t → i {
-    ? | < t 0 ( et_scalar t ) { ^ -1 } {}
+    ? < t 0 { ^ -1 } {}
     ? != ( et_kind t ) EK_NAMED { ^ -1 } {}
     : i have ( im_get g_dt_fn t 0 )
     ? != have 0 { ^ - have 2 } {}
@@ -18177,18 +18202,31 @@ unsafe @ eng_byte s w i k → i {
 }
 
 // May releasing a value of type `t` run a destructor of the program's own
-// - its own, a field's, an element's, a payload's? (Asked once a type;
-// a type met again inside itself answers no there: it is asked whole.)
+// - its own, a field's, an element's, a payload's (an option's, a result's,
+// an enum variant's)? A type that holds only numbers is asked too: its
+// `% Drop` runs all the same (a struct of counters whose destructor
+// panics, or reports). (Asked once a type; a type met again inside itself
+// answers no there: it is asked whole.)
 @ et_reaches_dtor i t i depth → b {
-    ? | | < t 0 > depth 6 ( et_scalar t ) { ^ F } {}
+    ? | | < t 0 > depth 6 == ( et_kind t ) EK_SCALAR { ^ F } {}
     : i have ( im_get g_dt_reach t 0 )
     ? != have 0 { ^ == have 2 } {}
     : ~ b r >= ( et_dtor_fn t ) 0
     : i kind ( et_kind t )
-    ? & ! r | | == kind EK_VEC == kind EK_BOX == kind EK_OPT { = r ( et_reaches_dtor ( et_at t ET_E1 ) + depth 1 ) } {}
+    ? & ! r | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT == kind EK_RES { = r ( et_reaches_dtor ( et_at t ET_E1 ) + depth 1 ) } {}
+    ? & & ! r == kind EK_RES != ( et_at t ET_E2 ) ET_NONE { = r ( et_reaches_dtor ( et_at t ET_E2 ) + depth 1 ) } {}
     ? & & & ! r == kind EK_NAMED ( et_flag t ETF_STRUCT ) ! ( __is_libh ( eng_str ( et_at t ET_NAME ) ) ) {
         : ~ i k 0
         ~ & ! r < k ( et_at t ET_F_N ) { = r ( et_reaches_dtor ( et_field_ty t k ) + depth 1 ) = k + k 1 }
+    } {}
+    ? & & ! r == kind EK_NAMED ( et_flag t ETF_ENUM ) {
+        : ~ i v 0
+        ~ & ! r < v ( et_at t ET_V_N ) {
+            : i at ( __et_variant_at t v )
+            : ~ i k 0
+            ~ & ! r < k ( wv_at g_et_w + at 1 ) { = r ( et_reaches_dtor ( et_of ( wv_at g_et_w + + at 2 k ) ) + depth 1 ) = k + k 1 }
+            = v + v 1
+        }
     } {}
     ? == depth 0 { ( im_put g_dt_reach t ? r 2 1 ) } {}
     ^ r
@@ -18198,7 +18236,7 @@ unsafe @ eng_byte s w i k → i {
 // the program's own it runs is applied - its own first, then its fields'
 // (the drop glue), an element's, a payload's.
 @ eng_dtor_release i st i place i t i line i depth → v {
-    ? | | < t 0 > depth 6 ( et_scalar t ) { ^ } {}
+    ? | | < t 0 > depth 6 == ( et_kind t ) EK_SCALAR { ^ } {}
     ? == depth 0 { ? ! ( et_reaches_dtor t 0 ) { ^ } {} } {}
     : i vid ( pl_var place )
     : i path ( pl_path place )
@@ -18212,7 +18250,14 @@ unsafe @ eng_byte s w i k → i {
         = g + g 1
     }
     : i f ( et_dtor_fn t )
-    ? >= f 0 { ? != f g_ec_f { ( eng_dtor_apply st place t f line ) } {} } {}
+    ? >= f 0 { ? != f g_ec_f {
+            // (a destructor that may panic unwinds this frame from where
+            // the value is released, as a call that may does: what the
+            // caller holds must be whole and view nothing of this frame
+            // there - eng_unwind_point)
+            ? ( eng_may_unwind ( ef_at f EF_NAME ) ) { ( eng_unwind_point st ( ef_at f EF_NAME ) -1 -1 line ) } {}
+            ( eng_dtor_apply st place t f line )
+        } {} } {}
     : i kind ( et_kind t )
     ? | | == kind EK_VEC == kind EK_BOX == kind EK_OPT {
         : i e ? == kind EK_OPT ( ee_pay g_etn_T 0 ) EE_STAR
@@ -18916,7 +18961,10 @@ unsafe @ eng_byte s w i k → i {
             : ~ b stars T
             = a 0
             ~ & stars < a ( sq_len alias ) { ? ! ( ep_has_star ( pl_path ( sq_at alias a ) ) ) { = stars F } {} = a + a 1 }
-            ? stars { ( fx_set dest FX_SLOT ) } {}
+            ? stars {
+                ( fx_set dest FX_SLOT )
+                ? ( fv_slot ( pl_var op ) ) { ( fx_set dest FX_SLOT_TAKE ) } {}
+            } {}
         } {}
         ^ ( av_make OW_L loans alias sub | lent_by_fn shared )
     } {}
@@ -35375,7 +35423,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // released again; agora #641.)
         ? & & & & & summary_callee != 0 ( nurl_str_len arg_lent ) ! ( seq arg_lent `1` )
         ( str_has_index callee_sink arg_idx ) ( __clone_supported at syms )
-        | ( __lent_by_call syms bck_arg_tt bck_arg_val ) ( __lent_by_join syms bck_arg_tt bck_arg_val ) {
+        | | ( __lent_by_call syms bck_arg_tt bck_arg_val ) ( __lent_by_join syms bck_arg_tt bck_arg_val ) & ( is_ident_tok bck_arg_tt ) ( __mlent_of syms ( mem_udrop_ptr_of syms bck_arg_val ) ) {
             = av ( mem_emit_cloneif cg at av arg_lent )
         } {}
         // A call's result it only lends (`( vec_at v 0 )`) handed to a
@@ -45459,6 +45507,8 @@ unsafe @ mem_path_to_indices s path → s {
     : s c ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print c ) ( nurl_print ` = extractvalue ` ) ( nurl_print vty ) ( nurl_print ` ` ) ( nurl_print vval ) ( nurl_print `, 0\n` )
     ( nurl_sym_def syms `__last_vec_get__` ( nurl_str_cat4 c ` ` idx ( nurl_str_cat ` ` ( nurl_llty ( __vec_elem_llvm vty ) ) ) ) )
+    // (…and the IR's temporary of this call says so: CORE_VF_SLOT)
+    ? != 0 g_core_live { = g_core_slotget 1 } {}
 }
 
 // A binding of that call's result carries the slot (`: ?T got ( vec_get … )`),
@@ -47831,6 +47881,7 @@ unsafe @ __src_has_raw_ptr s text → b {
     : s ls ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print ls ) ( nurl_print ` = alloca i1\n  store i1 ` ) ( nurl_print nr ) ( nurl_print `, ptr ` ) ( nurl_print ls ) ( nurl_print `\n` )
     ( __sb syms ptr ( nurl_str_cat `@` ls ) )
+    ( __mlent_note syms ptr r )
     // …and which call made it (`cn gn`): whether that call can lend at
     // all is a module-end fact (__hown_dyn's `retdynif##`).
     ( nurl_sym_def syms ( nurl_str_cat ls `__sbcn` ) ( nurl_sym_get syms `__last_retown_const__` ) )
@@ -73216,6 +73267,9 @@ unsafe @ gen_assign i lex i syms i cg → s {
         ? != 0 ( nurl_str_len __ud_ro_new ) {
             ( mem_udrop_flag_set syms cg __ud_ptr __ud_ro_new )
             ( nurl_sym_set_deep syms ( nurl_str_cat __ud_ptr `__sborrow` ) `` )
+            // (…and on the runs it lent, the binding holds the lend: what
+            // moves it on copies it there, __mlent_note.)
+            ( __mlent_note syms __ud_ptr __ud_ro_new )
         } {
             ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) != 0 ( nurl_str_len __ud_of )
             {  // (A lent result that is not the old value — another
@@ -73243,7 +73297,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 // runs, by the identity test above, too: what moves it —
                 // a push, a literal's field — copies it where it owns
                 // nothing, agora #419.)
-                ? & ( __is_handle_ty vt ) == 0 ( nurl_str_len __ud_skey ) { ( nurl_sym_set_deep syms ( nurl_str_cat __ud_ptr `__sborrow` ) `` ) } {
+                ? & ( __is_handle_ty vt ) == 0 ( nurl_str_len __ud_skey ) { ( nurl_sym_set_deep syms ( nurl_str_cat __ud_ptr `__sborrow` ) `` ) ( __mlent_note syms __ud_ptr __ud_nf ) } {
                     : s __ud_nb ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __ud_nb ) ( nurl_print ` = xor i1 ` ) ( nurl_print __ud_nf ) ( nurl_print `, 1\n` )
                     : s __ud_ls ( nurl_cg_reg cg )
@@ -100272,6 +100326,26 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
     ^ fr
 }
 
+// The binding with drop slot `ptr` was given, by a call, a value it owns
+// exactly where `own` (an i1, or a constant) says, and a lend of that call
+// on the other runs: from here on, a binding that owns its value only by
+// its flag (no `__sborrow`, no cursor) holds a lend wherever its flag is
+// clear, whatever a later `=` on another path set at compile time — so
+// what moves it on (a `sink`, a store, `^`) copies it there (mem_lent_cond).
+// The mark is never taken back: a flag that is clear because the value
+// moved out is a use the walk refuses. Read by its `__sborrow` alone, the
+// binding's lentness was the last `=` compiled, not the last one run: `= e
+// ( vec_at … )` on one path, `( keep e )` released what the Vec still held.
+@ __mlent_note i syms s ptr s own → v {
+    ? | | == 0 ( nurl_str_len ptr ) ( seq own `true` ) ( seq own `1` ) { ^ v } {}
+    ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__mlent` ) `1` )
+}
+
+@ __mlent_of i syms s ptr → b {
+    ? == 0 ( nurl_sym_len2 syms ptr `__mlent` ) { ^ F } {}
+    ^ == 0 ( nurl_sym_len2 syms ptr `__sborrow` )
+}
+
 // Lentness of a value about to be stored, from how it was spelled: `` —
 // owned here (the store moves it), `1` — borrowed, or an i1 register.
 @ mem_lent_cond i syms i cg s ty i tt s val → s {
@@ -100336,6 +100410,15 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
         // (`?? ( vec_get … )` bound first). A parameter owner is handed
         // over by its caller whenever the store takes it (g_fn_keeps).
         : ~ s al ( nurl_sym_get2 syms up `__alias` )
+        // (A binding some `=` or `:` gave a call's lend, on the runs the
+        // call lent: it owns its value exactly where its flag says, and
+        // holds that lend where it does not - __mlent_note.)
+        ? & == 0 ( nurl_str_len al ) ( __mlent_of syms up ) {
+            : s mf ( mem_udrop_flag_get syms cg up )
+            : s mr ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print mr ) ( nurl_print ` = xor i1 ` ) ( nurl_print mf ) ( nurl_print `, 1\n` )
+            ^ mr
+        } {}
         ? == 0 ( nurl_str_len al ) { ^ ( nurl_str_cat `` `` ) } {}
         : ~ s acc ( mem_udrop_flag_get syms cg up )
         // (Part of a local, `: String s ( gets w )`, is not w's to give:

@@ -350,6 +350,7 @@ class Reader:
             v.byref = bool(flags & 8)      # a capture taken by pointer
             v.carried = bool(flags & 16)   # a join arm's temporary the enclosing statement releases
             v.handon = bool(flags & 128)   # the literal a `\` try hands its failure on in (codegen hands it on whole)
+            v.slot = bool(flags & 256)     # a call's option temporary whose payload codegen takes out of the slot it read (vec_get)
             fn.vars[vid] = v
             if kind == 3:
                 # a closure body's capture: a parameter the closure itself hands it

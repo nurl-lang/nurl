@@ -189,11 +189,11 @@ unsafe @ _Module_ptr Module h → *ModuleImpl { ^ ( arc_ptr [ModuleImpl] . h a )
     ^ . p num_import_funcs
 }
 
-// Record a decode error (first error wins; frees the previous message).
+// Record a decode error (first error wins; the `=` frees the previous
+// message once the new one is made).
 @ __mod_err inout ModuleImpl m s msg → v {
     ? ! . m ok { ^ v } {}
     = . m ok F
-    ( vec_free [u] . m err )
     = . m err ( bytes_from_str msg )
 }
 

@@ -450,10 +450,6 @@ $ `stdlib/std/par.nu`
     ^ != ( slice_at [f] fz 1 ) 0.0
 }
 
-// Let go of `ss` now — what a state stored in a model's heap block is
-// handed to before a new one is written over it.
-@ _ar_ss_free sink ArimaSS ss → v {}
-
 // Build the form from expanded polynomials (ar: "1 − Σ φ B^k" φ's; ma:
 // "1 + Σ θ B^k" θ's) and the differencing δ.
 @ _ar_ss_new ( Vec f ) ar ( Vec f ) ma ( Vec f ) delta → ArimaSS {
@@ -2717,7 +2713,8 @@ $ `stdlib/std/par.nu`
 // before it) — a replay that begins elsewhere than the fit did keeps the
 // seasonal's phase. A model without regressors ignores it.
 @ __arima_restart_at_in inout ArimaModelImpl m i t0 → v {
-    ( _ar_ss_free . m ss )
+    // (The new state first: the `=` releases the old one once it is made,
+    // so a panic while it is built leaves the model with its old state.)
     = . m ss ( __ar_full_ss . m spec . m coef )
     = . m n 0
     = . m last_innovation 0.0
@@ -2830,8 +2827,8 @@ $ `stdlib/std/par.nu`
 }
 
 @ __ar_attach_fourier inout ArimaModelImpl m ( Vec i ) periods i k b trend ( Vec f ) coef i n → v {
-    ( vec_free [i] . m xper )
-    ( vec_free [f] . m xcoef )
+    // (Each `=` releases the field's old value once the new one is made:
+    // a panic while a copy is made leaves the model whole.)
     = . m xper ( __ar_veci_copy periods )
     = . m xk ? > ( vec_len [i] periods ) 0 k 0
     = . m xcoef ( __ar_vec_copy coef )  // the model's own: `coef` stays the caller's
