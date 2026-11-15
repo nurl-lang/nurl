@@ -480,6 +480,7 @@
 : ~ i g_fx_litp -1  // …a literal temporary: the parameters it names whole (a set)
 : ~ i g_fx_lent -1  // …a call's temporary: the arguments the call may hand back whole (a sequence of operands)
 : ~ i g_fx_vsrc -1  // …a binding read out of a field of another: that binding + 1
+: ~ i g_fx_vpath -1  // …and the path of that field
 : i FX_SLOT 1  // the payload of a library getter's option over a container: a slot a consumer may empty
 : i FX_CALL_MIXED 2  // a call's temporary whose value is the caller's own on some calls
 : i FX_CALL_BY_FN 4  // a call's temporary lent by a function of the program
@@ -499,6 +500,8 @@
 : i FX_JOIN_VAR 65536  // a binding given a `?` / `??` join's value whole: nurlc keeps an owner flag for it
 : i FX_TAIL_TOOK 131072  // a value block's temporary that took a local of the block from its tail join
 : ~ i g_fc_cap_loans 0  // the loans closures captured (a set)
+: ~ i g_fc_wb_pairs 0  // (the loan a place holds of a reader's value, the struct cursor whose field store handed it over: eng_cursor_handover), a set
+: ~ i g_fc_wbs 0  // while a call's effects are applied: the cursors it writes back into the slots they were read from (a set)
 : ~ i g_fc_walking 0  // the loans of the loops being walked (a set)
 : ~ i g_fc_ret_watch -1  // the binding a `ret` handed back, while the `;` blocks run after it
 : ~ i g_fc_ret_changed 0
@@ -592,6 +595,7 @@
 : i SM_MODES 22  // the parameters' modes, a sequence in g_sm_w
 : i SM_KEEPS 23  // the parameters that may go back still holding what they held on entry
 : i SM_CATCHES 24  // the closure parameters it runs where a panic in them is caught (`recover`): the body may stop anywhere
+: i SM_PUTBACK 25  // the parameters it writes back into the slot they were read from (mem_put_back): stored as they are, nothing there released
 : i RES_NONE 0
 : i RES_OWN 1
 : i RES_LENT 2
@@ -13145,7 +13149,7 @@ unsafe @ eng_byte s w i k → i {
             : ~ b keep T
             ? & | == eff EF_REPLACE == eff EF_TAKE ( ep_prefix path hp ) { = keep F } {}
             ? & & == eff EF_DROP ( ep_prefix path hp ) > ( ep_len hp ) ( ep_len path ) { = keep F } {}
-            ? keep { ( wv_push tmp he ) } {}
+            ? keep { ( wv_push tmp he ) } { ? != g_fc_wb_pairs 0 { ( wb_released ( he_loan he ) place line ) } {} }
             = k + k 1
         }
         // (the reference makes this value without its `call` mark)
@@ -14737,6 +14741,85 @@ unsafe @ eng_byte s w i k → i {
     }
 }
 
+// A store replacing field `path` of a struct cursor `vid` (a copy of a
+// struct this frame borrows, whose value `cur` is) hands the field's old
+// value to the binding read out of that field: it owns it from here on
+// (nurlc's field viewer, __fs_viewers_take, h196). The places the copy was
+// read from still hold that very value - the store wrote the copy only -
+// so each holds a handle of the binding's value from here on, until it is
+// given a value again: the copy written back into its slot. A parameter
+// that goes back to the caller still holding it is refused, as is a read
+// of it once the binding's value has gone (agora #870).
+@ eng_cursor_handover i st i vid i path i cur → v {
+    ? | | != ( fv_kind vid ) VK_LOCAL ( fx_has vid FX_PAYLOAD ) ( fx_has vid FX_FE ) { ^ } {}
+    : i fty ( eng_ty_of ( pl_make vid path ) )
+    ? | | | == fty ET_NONE ( et_is_view fty ) == ( et_kind fty ) EK_CLOSURE ! ( et_owning fty ) { ^ } {}
+    : i al ( av_alias cur )
+    ? == al 0 { ^ } {}
+    // (where the field stands in the places the copy was read from)
+    : ~ i at 0
+    : ~ i k 0
+    ~ < k ( sq_len al ) {
+        : i a ( sq_at al k )
+        : i a2 ( pl_make ( pl_var a ) ( ep_cat ( pl_path a ) path ) )
+        = at ( sq_add ( sq_add at a2 ) ( pl_make ( pl_var a ) ( ep_take ( pl_path a2 ) PATH_MAX ) ) )
+        = k + k 1
+    }
+    : ~ i r 0
+    ~ < r g_f_nv {
+        : i rav ( st_av st r )
+        ? & & & != rav 0 == ( wv_at g_fx_vsrc r ) + vid 1 == ( wv_at g_fx_vpath r ) path == ( av_own rav ) OW_L {
+            // (…a reader that still holds what the field held: the first
+            // one - one value has one owner)
+            : ~ b holds F
+            = k 0
+            ~ & ! holds < k ( sq_len ( av_alias rav ) ) { ? ( sq_has at ( sq_at ( av_alias rav ) k ) ) { = holds T } {} = k + k 1 }
+            ? holds {
+                // (what it borrowed was the copy's and the field's: it owns
+                // what it holds now)
+                : i loans ( av_loans rav )
+                : ~ i keep 0
+                = k 0
+                ~ < k ( sq_len loans ) {
+                    : i l ( sq_at loans k )
+                    ? ! | ( sq_has ( av_loans cur ) l ) & ( el_is_loan l ) ( sq_has at ( el_place l ) ) { = keep ( sq_add keep l ) } {}
+                    = k + k 1
+                }
+                ( st_put st r ( av_make OW_O keep 0 ( av_held rav ) F ) )
+                ( el_key3 TG_HO r vid )
+                : i hl ( eng_loan st ( pl_make r 0 ) LK_HANDLE )
+                = g_fc_wb_pairs ( sq_add g_fc_wb_pairs ( tp2 hl vid ) )
+                = k 0
+                ~ < k ( sq_len al ) {
+                    : i a ( sq_at al k )
+                    ( store_into st ( pl_make ( pl_var a ) ( ep_take ( ep_cat ( pl_path a ) path ) PATH_MAX ) ) ( sq_add 0 ( he_make 0 hl ) ) 0 F 0 )
+                    = k + k 1
+                }
+                ^
+            } {}
+        } {}
+        = r + r 1
+    }
+}
+
+// `place` lets go of loan `l`, which it held of a reader's value: an
+// effect released what the place held. One that is a hand-over through a
+// struct cursor (eng_cursor_handover) released the value the reader owns
+// - unless the effect is the cursor written back into its slot, which
+// releases nothing there.
+@ wb_released i l i place i line → v {
+    : ~ i k 0
+    ~ < k ( sq_len g_fc_wb_pairs ) {
+        : i p ( sq_at g_fc_wb_pairs k )
+        ? & == ( tp_at p 2 0 ) l ! ( sq_has g_fc_wbs ( tp_at p 2 1 ) ) {
+            : i c ( tp_at p 2 1 )
+            ( eng_err line ( nurl_str_cat4 ( eng_pname place ) ` releases the value ` ( eng_pname ( el_place l ) ) ( nurl_str_cat4 ` took over from the copy ` ( eng_vname c ) `, which was not written back into its slot` `` ) ) )
+            ^
+        } {}
+        = k + k 1
+    }
+}
+
 // ── Ownership engine: what running a closure does ────────────────────
 // What the captures of the closures in `held` hold: the entries below a
 // capture's own (`^i`), re-rooted at the value, and what stands for a
@@ -15787,6 +15870,18 @@ unsafe @ eng_byte s w i k → i {
         = e + e 1
     }
     // effects
+    // (an argument the callee writes back into the slot it was read from
+    // - mem_put_back - is stored there as it is: the slot's old value is
+    // not released, and what a reader took over out of that copy stays
+    // the reader's)
+    : ~ i wbs 0
+    = e 0
+    ~ < e ( sm_n sm SM_PUTBACK ) {
+        : i pk ( sm_at sm SM_PUTBACK e )
+        ? & < pk n ( op_is_place ( wv_at ops pk ) ) { = wbs ( sq_add wbs ( pl_var ( wv_at ops pk ) ) ) } {}
+        = e + e 1
+    }
+    = g_fc_wbs wbs
     = e 0
     ~ < e ne {
         : i t ( sm_at sm SM_EFFECTS e )
@@ -15807,6 +15902,7 @@ unsafe @ eng_byte s w i k → i {
         } {}
         = e + e 1
     }
+    = g_fc_wbs 0
     : i ng ( sm_n sm SM_GONE )
     = e 0
     ~ < e ng {
@@ -17892,7 +17988,7 @@ unsafe @ eng_byte s w i k → i {
     ? & & == rk RV_USE == kind VK_LOCAL ! ( fv_mut vid ) {
         // (a binding read out of a field of another: which one)
         : i uop ( eng_op ( ec + rv 1 ) )
-        ? & ( op_is_place uop ) != ( pl_path uop ) 0 { ( wv_put g_fx_vsrc vid + ( pl_var uop ) 1 ) } {}
+        ? & ( op_is_place uop ) != ( pl_path uop ) 0 { ( wv_put g_fx_vsrc vid + ( pl_var uop ) 1 ) ( wv_put g_fx_vpath vid ( pl_path uop ) ) } {}
     } {}
     ? & != rk RV_NONE == kind VK_TEMP {
         // (a call whose summary says its result is its own)
@@ -18358,7 +18454,9 @@ unsafe @ eng_byte s w i k → i {
     : i add ? == ( av_own new ) OW_L ( sq_union ( held_from ( av_loans new ) 0 ) ( av_held new ) ) ( av_held new )
     ? & & & == cown OW_L != vty ET_NONE == ( et_kind vty ) EK_NAMED != ( ep_at path 0 ) EE_STAR {
         // a struct cursor is a copy of the struct: its field store writes
-        // the copy; the value it replaced stays the owner's
+        // the copy; the value it replaced stays the owner's - unless a
+        // binding read out of the field takes it over
+        ( eng_cursor_handover st vid path cur )
         ( st_put st vid ( av_make OW_L ( av_loans cur ) ( av_alias cur ) ( sq_union ( av_held cur ) ( held_root add path ) ) F ) )
         ? rehome { ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) ) } {}
         ^
@@ -19047,6 +19145,7 @@ unsafe @ eng_byte s w i k → i {
     ? ( seq key `invoke_only` ) { ^ ( __core_tab g_fn_invoke_only f ) } {}
     ? ( seq key `syncd` ) { ^ ( __ws_syncd f np ) } {}
     ? ( seq key `retptr` ) { ^ ( __core_tab g_pending_impl ( nurl_str_cat `retptr##` f ) ) } {}
+    ? ( seq key `putback` ) { ^ ( __core_tab g_pending_impl ( nurl_str_cat `putback##` f ) ) } {}
     ? ( seq key `ret_owned` ) { ^ ( nurl_str_cat ( nurl_sym_get2 syms f `__ret_owned` ) `` ) } {}
     ? ( seq key `ffi_writes` ) { ^ ( nurl_str_cat ( nurl_sym_get2 syms f `__ffi_writes` ) `` ) } {}
     ? ( seq key `lkind` ) {
@@ -19380,6 +19479,10 @@ unsafe @ eng_byte s w i k → i {
     ( sm_put r SM_CONSUMES ( sm_keep ( sq_set_of_wv consumes ) ) )
     ( sm_put r SM_INVOKES ( sm_keep ( sq_set_of_wv invokes ) ) )
     ( sm_put r SM_REGIONS ( sm_keep ( sq_set_of_wv regions ) ) )
+    // (the arguments it writes back into the slots they were read from)
+    ( wv_trunc tmp 0 )
+    ( __ws_idx ( ws_get f tmpl `putback` n ) n tmp )
+    ( sm_put r SM_PUTBACK ( sm_keep ( sq_set_of_wv tmp ) ) )
     ( wv_drop regions ) ( wv_drop syncd )
     ( wv_drop sink ) ( wv_drop keeps ) ( wv_drop stored ) ( wv_drop hand ) ( wv_drop tmp ) ( wv_drop consumes )
     ( wv_drop reallocs ) ( wv_drop mutates ) ( wv_drop effects ) ( wv_drop changed ) ( wv_drop lends ) ( wv_drop rholds )
@@ -19699,7 +19802,7 @@ unsafe @ eng_byte s w i k → i {
     = g_fc_final ? final 1 0
     = g_fc_unsup 0
     ? < g_fx 0 {
-        = g_fx ( wv_new ) = g_fx_nocopy ( wv_new ) = g_fx_agg ( wv_new ) = g_fx_litp ( wv_new ) = g_fx_lent ( wv_new ) = g_fx_vsrc ( wv_new )
+        = g_fx ( wv_new ) = g_fx_nocopy ( wv_new ) = g_fx_agg ( wv_new ) = g_fx_litp ( wv_new ) = g_fx_lent ( wv_new ) = g_fx_vsrc ( wv_new ) = g_fx_vpath ( wv_new )
         = g_fc_rets ( wv_new ) = g_fc_exits ( wv_new ) = g_fc_loops ( wv_new ) = g_fc_defers ( wv_new )
         = g_fc_dfe ( wv_new ) = g_fe_walking ( wv_new )
     } {}
@@ -19707,14 +19810,14 @@ unsafe @ eng_byte s w i k → i {
     = g_fe_outside 0
     = g_fc_dtor ? != 0 ( nurl_str_starts ( eng_str ( ef_at f EF_NAME ) ) `drop__` ) 1 0
     ( wv_fill g_fx g_f_nv 0 ) ( wv_fill g_fx_nocopy g_f_nv 0 ) ( wv_fill g_fx_agg g_f_nv 0 )
-    ( wv_fill g_fx_litp g_f_nv 0 ) ( wv_fill g_fx_lent g_f_nv 0 ) ( wv_fill g_fx_vsrc g_f_nv 0 )
+    ( wv_fill g_fx_litp g_f_nv 0 ) ( wv_fill g_fx_lent g_f_nv 0 ) ( wv_fill g_fx_vsrc g_f_nv 0 ) ( wv_fill g_fx_vpath g_f_nv 0 )
     ( wv_trunc g_fc_rets 0 ) ( wv_trunc g_fc_exits 0 ) ( wv_trunc g_fc_loops 0 )
     ? >= g_fc_dvars 0 { ( wv_drop g_fc_dvars ) ( wv_drop g_fc_dbefore ) } {}
     = g_fc_dvars ( im_new )
     = g_fc_dbefore ( im_new )
     ? >= g_fc_loopmemo 0 { ( wv_drop g_fc_loopmemo ) } {}
     = g_fc_loopmemo ( im_new )
-    = g_fc_cap_loans 0 = g_fc_walking 0
+    = g_fc_cap_loans 0 = g_fc_walking 0 = g_fc_wb_pairs 0 = g_fc_wbs 0
     = g_fc_ret_watch -1 = g_fc_ret_changed 0 = g_fc_ret_fresh 0
     = g_fc_moved_vid -1 = g_fc_moved_own 0
     = g_fc_line ( ef_at f EF_LINE )
@@ -21571,6 +21674,7 @@ unsafe @ core_print_sum i syms s f i np → v {
     ( __core_sum_kv `retlend` ( __core_tab g_pending_impl ( nurl_str_cat `retlend##` f ) ) )
     ( __core_sum_kv `retpart` ( __core_tab g_pending_impl ( nurl_str_cat `retpart##` f ) ) )
     ( __core_sum_kv `retptr` ( __core_tab g_pending_impl ( nurl_str_cat `retptr##` f ) ) )
+    ( __core_sum_kv `putback` ( __core_tab g_pending_impl ( nurl_str_cat `putback##` f ) ) )
     ( __core_sum_kv `retpass` ( __core_tab g_pending_impl ( nurl_str_cat `retpass##` f ) ) )
     ( __core_sum_kv `retread` ( __core_tab g_pending_impl ( nurl_str_cat `retread##` f ) ) )
     ( __core_sum_kv `retdyn` ( __core_tab g_pending_impl ( nurl_str_cat `retdyn##` f ) ) )
