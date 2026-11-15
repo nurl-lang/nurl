@@ -254,6 +254,10 @@
 : ~ i g_core_vb -1  // the temporary of the innermost value block open, -1 none: what is bound inside is that block's
 : ~ i g_core_kw_h 0  // the call with named arguments just read: where its operands begin, and its arguments' parameter positions in the order written (core_kwargs_reorder)
 : ~ s g_core_kw_slots ``
+: ~ i g_core_pend 0  // the arguments of the calls being compiled read as values and not taken yet, 3 words each: stack slot, operand, type interned (0: read in place) (core_arg_read)
+: ~ i g_core_pend_n 0
+: ~ i g_core_pend_cap 0
+: ~ i g_core_pend_base 0  // …the first of them that is the innermost call's own (__gen_call_nested)
 : ~ i g_core_virts 0  // the `dyn` methods' virtual callees the IR called, interned (core_note_virt)
 : ~ i g_core_virt_n 0
 : ~ i g_core_virt_cap 0
@@ -529,6 +533,7 @@
 : i WK_CALL_CLO 12
 : i WK_ARG_CLO 13
 : ~ i g_fc_callee 0  // the callee of the call being applied (interned)
+: ~ b g_rd_given_new F  // the argument eng_read reads is an `inout` one the callee gives a new value before it reads it (eng_apply_call_do)
 : i TG_USE 1  // the keys loans are made under: a `use` read by the statement at an offset
 : i TG_ARG 2  // operand k of the statement at an offset (offset * 256 + k)
 : i TG_RET 3
@@ -654,6 +659,7 @@
 : i CORE_VF_CARRIED 16  // a variable's flag: a temporary of a join's arm that the enclosing statement releases (core_arm_end)
 : i CORE_VF_TAKEN 64  // a capture's flag: the body marks it taken in its env when it gives it away; a later run panics (core_capture_taken)
 : i CORE_VF_SECOND 32  // a variable's flag: a closure binding given an owner's closure that the walk does not move: a second name of it (core_second_name)
+: i CORE_VF_HANDON 128  // a variable's flag: the literal a `\` try hands its failure on in, which codegen hands on whole (core_try)
 : i CORE_VS 1048576
 // Statement words.
 : i CO_LET 1  // vid rvalue
@@ -10304,6 +10310,96 @@ unsafe @ core_call i h0 s ret_ty b ind → v {
     ( core_push ( core_op_var t ) )
 }
 
+// A type whose value an argument is loaded as one word that owns nothing:
+// a number (core_ty_scalar) or a raw string's address. `use` of a place
+// of it is a copy of what the place held there.
+unsafe @ core_ty_word s ty → b {
+    ^ | ( core_ty_scalar ty ) ( seq ty `i8*` )
+}
+
+// The words from `cp` on, with the last `n - at` of them (written at `at`)
+// moved to `cp`: statements written late, put where they ran.
+unsafe @ __core_code_hoist i cp i at → v {
+    : i tail - g_core_code_n at
+    ? | <= tail 0 >= cp at { ^ } {}
+    : s tmp # s ( nurl_alloc * tail 8 )
+    : *i tp # *i tmp
+    : *i c # *i # s g_core_code
+    : ~ i k 0
+    ~ < k tail { = . tp k . c + at k = k + k 1 }
+    = k - at 1
+    ~ >= k cp { = . c + k tail . c k = k - k 1 }
+    = k 0
+    ~ < k tail { = . c + cp k . tp k = k + k 1 }
+    ( nurl_free tmp )
+}
+
+// An argument of the call being compiled has been read; its code began
+// at word `cp`. Codegen loads an argument passed by value where it reads
+// it, and the call takes it only after the arguments that follow have
+// run: `( g . w v ( reset w ) )` hands g what `. w v` held before reset.
+// So an earlier argument of this call left on the stack as a place is
+// read where it was read, once a later argument turns out to run
+// statements of its own (a call, a store, a literal): the IR's order is
+// evaluation order (CORE_IR.md §1). `how` says how this argument is:
+//   1  one word codegen loads (core_ty_word): bound to a temporary there,
+//      `let t use <place>`, a copy of what the place held, and the call
+//      is handed the temporary;
+//   2  an aggregate that owns nothing, loaded whole: read there, `eval
+//      scalar 1 <place>` (what it views must be alive when it is loaded),
+//      and the call is still handed the place - `use` of a whole binding
+//      moves it, and the IR has no copy of an aggregate read in place;
+//   0  neither: passed by address (`inout`), or an owner the call is lent
+//      when it runs.
+unsafe @ core_arg_read i cp i how s ty → v {
+    ? & > g_core_code_n cp > g_core_pend_n g_core_pend_base {
+        : i w0 g_core_code_n
+        : ~ i k g_core_pend_base
+        ~ < k g_core_pend_n {
+            : *i pd # *i # s g_core_pend
+            : i slot . pd * k 3
+            : i op . pd + * k 3 1
+            : i pty . pd + * k 3 2
+            : *i os # *i # s g_core_os
+            ? & < slot g_core_os_n == . os slot op {
+                ? == pty 0 {
+                    ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( core_w 1 ) ( core_w op )
+                } {
+                    : i t ( core_temp # s pty )
+                    ( core_w CO_LET ) ( core_w t ) ( core_w RV_USE ) ( core_w op )
+                    : *i os2 # *i # s g_core_os
+                    = . os2 slot ( core_op_var t )
+                }
+            } {}
+            = k + k 1
+        }
+        = g_core_pend_n g_core_pend_base
+        ( __core_code_hoist cp w0 )
+    } {}
+    ? | == how 0 <= g_core_os_n 0 { ^ } {}
+    : *i os # *i # s g_core_os
+    : i top . os - g_core_os_n 1
+    ? < top 2 { ^ } {}
+    ? > * + g_core_pend_n 1 3 g_core_pend_cap {
+        : i nc ? == g_core_pend_cap 0 48 * g_core_pend_cap 2
+        = g_core_pend ( __core_grown g_core_pend * g_core_pend_n 3 nc )
+        = g_core_pend_cap nc
+    } {}
+    : *i pd # *i # s g_core_pend
+    : i b * g_core_pend_n 3
+    = . pd b - g_core_os_n 1
+    = . pd + b 1 top
+    = . pd + b 2 ? == how 1 ( __core_in ty ) 0
+    = g_core_pend_n + g_core_pend_n 1
+}
+
+// How core_arg_read reads an argument of type `ty` passed by value.
+unsafe @ core_arg_how i syms s ty → i {
+    ? ( core_ty_word ty ) { ^ 1 } {}
+    ? ( __type_needs_drop ty syms ) { ^ 0 } {}
+    ^ 2
+}
+
 unsafe @ core_kw_note i h0 s slots → v {
     = g_core_kw_h h0
     = g_core_kw_slots ( nurl_str_cat slots `` )
@@ -11928,6 +12024,8 @@ unsafe @ eng_keep_fn → v {
 // A closure binding that is a second name of the owner it was given: the
 // walk left the env where it was (CORE_VF_SECOND).
 @ fv_second i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_SECOND }
+// The literal a `\` try hands its failure on in (CORE_VF_HANDON).
+@ fv_handon i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_HANDON }
 
 @ fv_line i vid → i { ? < vid 0 { ^ 0 } {} ^ ( ev vid 5 ) }
 
@@ -13176,7 +13274,7 @@ unsafe @ eng_byte s w i k → i {
         }
     } {}
     ( check_live st ( av_loans av ) 0 WK_VAR vid line )
-    ? & != held 0 == path 0 {
+    ? & & != held 0 == path 0 ! g_rd_given_new {
         // a value that holds a view - one stored into it, or captured by
         // it - is read whole: what the view points into must still be there
         ( check_live st ( av_loans av ) held WK_VAR vid line )
@@ -15214,7 +15312,15 @@ unsafe @ eng_byte s w i k → i {
     : i avs ( wv_new )
     : ~ i i 0
     ~ < i n {
-        : i av ( eng_read st ( wv_at ops i ) line TG_ARG + * site 256 i )
+        // (A binding handed `inout` to a callee whose first statement gives
+        // it a value that views nothing - the summary's credit - is not
+        // read by the call: what it held is never looked at, only released,
+        // so the views it holds need not be alive - unless releasing it runs
+        // a destructor that may read them. MEMORY.md §2.4, agora #386.)
+        : i aop ( wv_at ops i )
+        = g_rd_given_new & & & ( op_is_place aop ) == ( pl_path aop ) 0 & == ( sm_mode sm i ) PM_INOUT ( sm_has sm SM_CREDITS i ) ! ( et_has_udrop ( eng_ty_of aop ) )
+        : i av ( eng_read st aop line TG_ARG + * site 256 i )
+        = g_rd_given_new F
         ? & ( sm_has sm SM_ELEMS i ) != ( av_own av ) OW_N {
             ( check_live st ( av_loans av ) ( av_held av ) WK_VALUE 0 line )
             : i al ( av_alias av )
@@ -17484,8 +17590,12 @@ unsafe @ eng_byte s w i k → i {
                     // (…or an `in` parameter named whole: handed back as it
                     // is, the literal keeps the caller's argument - `ret`)
                     : b keeps_param & & & & tempish ! ( av_call av ) != al 0 whole | ( sq_has ( wv_at g_fx_litp dest ) ov ) & wrapper != 0 ( wv_at g_fx_litp ov )
+                    // (…or the failure a `\` try hands on in its own literal:
+                    // codegen hands it on whole, a lend as the call lent it,
+                    // as `^` of the call's result would - mem_store_hown)
+                    : b handon & & have_dest ( fv_handon dest ) == n 1
                     ? & fown ! ( et_copyable fty ) {
-                        ? | param_parts keeps_param {
+                        ? | | param_parts keeps_param handon {
                             // a part of a parameter, read in place: the literal
                             // is a lend of the caller's value, good to hand
                             // back as it is and nothing else
@@ -21080,7 +21190,11 @@ unsafe @ core_try → v {
     : s rt ? != 0 g_core_fret ( nurl_str_cat # s g_core_fret `` ) ``
     : i e ( core_var_new `` `` 1 0 g_core_line )
     ( core_w CO_LET ) ( core_w e ) ( core_w RV_PAYLOAD ) ( core_w r ) ( core_w ( __core_in `F` ) ) ( core_w 0 )
-    : i x ( core_var_new `` rt 1 0 g_core_line )
+    // (The literal is the try's own, marked: a failure that cannot be
+    // copied is handed on in it whole, a lend as it was lent, and the
+    // caller told per call whether it owns it - mem_store_hown, as `^` of
+    // the call's result would. A literal written `@ !T E { F e }` copies.)
+    : i x ( core_var_new `` rt 1 CORE_VF_HANDON g_core_line )
     ( core_w CO_LET ) ( core_w x ) ( core_w RV_AGG ) ( core_w ( __core_in rt ) ) ( core_w ( __core_in `F` ) ) ( core_w 1 ) ( core_w ( core_op_var e ) )
     ( core_w CO_RET ) ( core_w ( core_op_var x ) )
     ( core_scope_end )
@@ -21591,15 +21705,21 @@ unsafe @ core_flush i syms → v {
     : i __ch0 g_core_os_n
     : i __cc0 g_core_callee
     : b __cind ? != 0 g_core_live ( core_call_begin syms ( nurl_lex_peek_val lex ) ) F
+    // (The arguments read as values from here on are this call's:
+    // core_arg_read. The call takes them when it ends.)
+    : i __cpb0 g_core_pend_base
+    = g_core_pend_base g_core_pend_n
     ? == g_borrowck 0 {
         : s r0 ( gen_call lex syms cg )
         ? != 0 g_core_live { ( core_call __ch0 ( nurl_get_last_type ) __cind ) = g_core_callee __cc0 } {}
+        = g_core_pend_n g_core_pend_base = g_core_pend_base __cpb0
         = g_call_nest - g_call_nest 1
         ^ r0
     } {}
     : s open ( nurl_str_cat ( nurl_sym_get g_bck `copen` ) `` )
     : s r ( gen_call lex syms cg )
     ? != 0 g_core_live { ( core_call __ch0 ( nurl_get_last_type ) __cind ) = g_core_callee __cc0 } {}
+    = g_core_pend_n g_core_pend_base = g_core_pend_base __cpb0
     ? ! ( seq open ( nurl_sym_get g_bck `copen` ) ) { ( bck_put `copen` open ) } {}
     = g_call_nest - g_call_nest 1
     ^ r
@@ -29859,9 +29979,11 @@ inline @ gen_call_kwargs i lex i syms i cg s fname → s {
         ( nurl_sym_def syms `__last_call_guard__` `` )
         : i origin_tt ( nurl_lex_type lex )
         : s origin_value ( nurl_lex_val lex )
+        : i __core_cp g_core_code_n
         : ~ s av ( gen_operand lex syms cg )
         ? != 0 g_core_live { = __ck_slots ( nurl_str_cat3 __ck_slots ( nurl_str_int slot ) ` ` ) } {}
         : ~ s at ( nurl_get_last_type )
+        ? != 0 g_core_live { ( core_arg_read __core_cp ( core_arg_how syms at ) at ) } {}
         // (This path assembles the call in another order than it reads the
         // arguments, and keeps none of the positional path's borrow rows:
         // an owner or a borrow handed here — a binding or a field path of
@@ -32057,6 +32179,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // what the field holds (the `pendfield` row below).
         : ~ s arg_froot ``
         : ~ s arg_vfroot ``
+        // (Where the argument's statements begin: core_arg_read.)
+        : i __core_cp g_core_code_n
         ? is_inout_arg
         { ? == bck_arg_tt TT_DOT
             {  // `inout` field target — `. obj field`.
@@ -32349,6 +32473,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             {}
             = g_arg_ident_log ( nurl_str_cat __al_saved `` )
         }
+        ? != 0 g_core_live { ( core_arg_read __core_cp ? is_inout_arg 0 ( core_arg_how syms at ) at ) } {}
         // (Any other receiver's type is known now that its value is.)
         ? & == arg_idx 0 == 0 ( nurl_str_len __impl_cn ) {
             = __impl_cn ( __static_impl_name fname at __callee_shadowed )
