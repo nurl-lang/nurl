@@ -248,7 +248,7 @@
 : ~ i g_core_ty_n 0
 : ~ i g_core_ty_cap 0
 : ~ i g_core_ty_seen 0  // …and the table that says which are listed already
-: ~ i g_core_fflags 0  // the function being built: bit 0 its body may use raw memory (bck_unsafe_ctx)
+: ~ i g_core_fflags 0  // the function being built: bit 0 its body may use raw memory (bck_unsafe_ctx); bit 3 it may start a panic itself (core_note_panic_point)
 : ~ i g_core_ftmpl 0  // …and the generic it is an instance of, interned (`` none)
 : ~ i g_core_acks 0  // bumped by the hooks of the constructs only a hook can lower (core_expr_exit)
 : ~ i g_core_vb -1  // the temporary of the innermost value block open, -1 none: what is bound inside is that block's
@@ -507,6 +507,8 @@
 : i FX_JOIN_TEMP 32768  // a temporary bound empty: a join's (or a value block's, FX_BLOCK_TEMP; or a try's)
 : i FX_JOIN_VAR 65536  // a binding given a `?` / `??` join's value whole: nurlc keeps an owner flag for it
 : i FX_TAIL_TOOK 131072  // a value block's temporary that took a local of the block from its tail join
+: i FX_CALL_TEMP 262144  // a call's temporary, of a callee nurlc's summary says may lend its result (eng_walk_lends)
+: i FX_CALL_BIND 524288  // a binding (`: T e`, not `: ~`) given a call's temporary whole, or such a binding whole: nurlc keeps the call's per-call answer for it
 : ~ i g_fc_cap_loans 0  // the loans closures captured (a set)
 : ~ i g_fc_wb_pairs 0  // (the loan a place holds of a reader's value, the struct cursor whose field store handed it over: eng_cursor_handover), a set
 : ~ i g_fc_wbs 0  // while a call's effects are applied: the cursors it writes back into the slots they were read from (a set)
@@ -624,6 +626,7 @@
 : ~ i g_fc_trusted -1  // per function of the module: 1 a library function walked for its summary only (its findings are not reported)
 : ~ i g_fc_walked -1  // per function: 1 the engine walks its body
 : ~ i g_fc_unw -1  // per function: whether a call of it may unwind the caller's frame (__eng_unw)
+: ~ i g_eng_dtor_unw -1  // 1: a destructor of the program may start a panic; -1 not asked yet (__eng_dtor_unw_init)
 : ~ i g_sm_dyn 0  // the name `dyn` (interned): boxing a value as a trait object
 : i TG_SC 32
 : i TG_RB 33  // a payload taken out of a temporary: what it holds of itself, of its new holder
@@ -15792,7 +15795,121 @@ unsafe @ eng_byte s w i k → i {
 // twice, …). So a `( panic … )` is such a point, and so is a call of the
 // library that may reach one, as a call of a function of the program is.
 // Asked only where an answer is needed, and kept per function.
-@ eng_may_unwind i name → b { ^ == 1 ( __eng_unw name 0 ) }
+@ eng_may_unwind i name → b {
+    ? < g_eng_dtor_unw 0 { ( __eng_dtor_unw_init ) } {}
+    ^ == 1 ( __eng_unw name 0 )
+}
+
+// May some destructor of the program (`% Drop`, `drop__T`) start a panic?
+// Then a function of the program that holds a value whose release runs
+// one may unwind where its statements name no call.
+@ __eng_dtor_unw_init → v {
+    = g_eng_dtor_unw 0
+    : ~ b any F
+    : ~ i f 0
+    ~ & ! any < f ( ef_n ) {
+        ? & ( ef_reported f ) != 0 ( nurl_str_starts ( eng_str ( ef_at f EF_NAME ) ) `drop__` ) {
+            ? == 1 ( __eng_unw ( ef_at f EF_NAME ) 0 ) { = any T } {}
+        } {}
+        = f + f 1
+    }
+    ? any {
+        // (the answers kept while it was asked knew no such destructor)
+        = g_eng_dtor_unw 1
+        ( wv_fill g_fc_unw ( ef_n ) 0 )
+    } {}
+}
+
+// May function `f` start a panic itself, by no call the IR names: a check
+// codegen writes inline (`fn` flag bit 3, core_note_panic_point). And, for
+// a function of the program: a closure it runs or hands on (a callee that
+// is handed one may run it: what that body does is not this call's to
+// know), or a value it holds whose release runs a destructor of the
+// program's, while one may panic (__eng_dtor_unw_init).
+@ __eng_unw_own i f → b {
+    ? != 0 & ( ef_at f EF_FLAGS ) 8 { ^ T } {}
+    ? ! ( ef_reported f ) { ^ F } {}
+    : i base ( ef_at f EF_VARS )
+    : i nv ( ef_at f EF_VAR_N )
+    : ~ i v 0
+    ~ < v nv {
+        : i tn ( wv_at g_ef_vars + + base * v CORE_VW 1 )
+        ? != tn 0 {
+            ? != 0 ( nurl_str_len ( eng_str tn ) ) {
+                : i ty ( et_of tn )
+                ? ( __eng_ty_has_clo ty 0 ) { ^ T } {}
+                // (a value it holds, and so may release, whose release
+                // runs a destructor of the program's)
+                ? > g_eng_dtor_unw 0 { ? ( __eng_ty_dtor ty 0 ) { ^ T } {} } {}
+            } {}
+        } {}
+        = v + v 1
+    }
+    : i sc g_ec
+    : i sn g_ec_n
+    = g_ec ( ef_at f EF_CODE )
+    = g_ec_n ( ef_at f EF_CODE_N )
+    : ~ b ind F
+    : ~ i at 0
+    ~ & ! ind < at g_ec_n {
+        : i op ( ec at )
+        : ~ i rv -1
+        ? | == op CO_LET == op CO_ASSIGN { = rv + at 2 } {}
+        ? == op CO_EVAL { = rv + at 1 } {}
+        ? >= rv 0 { ? == ( ec rv ) RV_CALLIND { = ind T } {} } {}
+        = at + at ( eng_stmt_len at )
+    }
+    = g_ec sc
+    = g_ec_n sn
+    ^ ind
+}
+
+// Does releasing a value of type `t` run a destructor of the program's
+// (`% Drop`), its own or a part's - a type of numbers only included, which
+// et_reaches_dtor, asking what has something to release, passes over?
+@ __eng_ty_dtor i t i depth → b {
+    ? | < t 0 > depth 6 { ^ F } {}
+    : i kind ( et_kind t )
+    ? == kind EK_SCALAR { ^ F } {}
+    ? & == kind EK_NAMED ( __has_user_drop ( eng_str ( et_at t ET_NAME ) ) ) { ^ T } {}
+    ? != ( et_at t ET_E1 ) ET_NONE { ? ( __eng_ty_dtor ( et_at t ET_E1 ) + depth 1 ) { ^ T } {} } {}
+    ? != ( et_at t ET_E2 ) ET_NONE { ? ( __eng_ty_dtor ( et_at t ET_E2 ) + depth 1 ) { ^ T } {} } {}
+    : ~ i k 0
+    ~ < k ( et_at t ET_F_N ) {
+        ? ( __eng_ty_dtor ( et_field_ty t k ) + depth 1 ) { ^ T } {}
+        = k + k 1
+    }
+    ? ( et_flag t ETF_ENUM ) {
+        : ~ i v 0
+        ~ < v ( et_at t ET_V_N ) {
+            : i at ( __et_variant_at t v )
+            = k 0
+            ~ < k ( wv_at g_et_w + at 1 ) {
+                ? ( __eng_ty_dtor ( et_of ( wv_at g_et_w + + at 2 k ) ) + depth 1 ) { ^ T } {}
+                = k + k 1
+            }
+            = v + v 1
+        }
+    } {}
+    ^ F
+}
+
+// Does a value of type `t` hold a closure (itself one, or a field, an
+// element, a payload that is)?
+@ __eng_ty_has_clo i t i depth → b {
+    ? | == t ET_NONE > depth 6 { ^ F } {}
+    : i kind ( et_kind t )
+    ? == kind EK_CLOSURE { ^ T } {}
+    ? == kind EK_SCALAR { ^ F } {}
+    ? != ( et_at t ET_E1 ) ET_NONE { ? ( __eng_ty_has_clo ( et_at t ET_E1 ) + depth 1 ) { ^ T } {} } {}
+    ? != ( et_at t ET_E2 ) ET_NONE { ? ( __eng_ty_has_clo ( et_at t ET_E2 ) + depth 1 ) { ^ T } {} } {}
+    : ~ i k 0
+    ~ < k ( et_at t ET_F_N ) {
+        ? ( __eng_ty_has_clo ( et_field_ty t k ) + depth 1 ) { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
 
 // …1 it may, 0 it may not, 2 not as far as is known: a function still
 // being asked about (a cycle of calls) was met, so the answer is not kept.
@@ -15807,7 +15924,7 @@ unsafe @ eng_byte s w i k → i {
     ( wv_put g_fc_unw f 3 )
     : i calls ( wv_new )
     ( __eng_calls_of f calls )
-    : ~ i r 0
+    : ~ i r ? ( __eng_unw_own f ) 1 0
     : ~ i k 0
     ~ & != r 1 < k ( wv_len calls ) {
         : i a ( __eng_unw ( wv_at calls k ) + depth 1 )
@@ -15984,7 +16101,7 @@ unsafe @ eng_byte s w i k → i {
                 : ~ i gp -1
                 : ~ i g 0
                 ~ & < gp 0 < g ( sq_len gone ) { ? == ( pl_var ( sq_at gone g ) ) vid { = gp ( sq_at gone g ) } {} = g + g 1 }
-                ? & >= gp 0 | ( ef_reported callee ) ( eng_may_unwind name ) {
+                ? & >= gp 0 ( eng_may_unwind name ) {
                     ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_vname vid ) ` is the caller's and ` ( eng_pname gp ) ) ( nurl_str_cat3 ` was taken out of it while ` ( eng_str name ) ` runs, which may unwind` ) ) )
                 } {}
             } {}
@@ -16324,11 +16441,22 @@ unsafe @ eng_byte s w i k → i {
                     ? ( av_call av ) {
                         // what a call lent is a copy of a handle its owner
                         // keeps: a temporary is handed over as a copy of the
-                        // value, a binding of it is not the binding's to give
+                        // value, and so is a binding of it handed to a
+                        // declared `sink`, where nurlc's summary says the
+                        // callee lends its result: the binding keeps the
+                        // call's own answer of whether it lent, and the copy
+                        // goes where it did (a `: T e ( vec_at v 0 )`, or a
+                        // second name of one). Any other binding of it is
+                        // not the binding's to give
+                        : b cbind & & & == ( fv_kind ov ) VK_LOCAL == ( pl_path op ) 0 ( fx_has ov FX_CALL_BIND ) == ( sm_mode sm ck ) PM_SINK
+                        ? cbind {
+                            ? ( et_copyable ty ) { = copied ( sq_add copied ck ) } { ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) ) }
+                        } {
                         ? | != ( fv_kind ov ) VK_TEMP != ( pl_path op ) 0 {
                             ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes ` ( eng_pname op ) ) `, which is a borrow` ) )
                         } {
                             ? ! ( et_copyable ty ) { ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) ) } {}
+                        }
                         }
                     } {
                         // (a second name of a parameter the caller keeps, or a
@@ -18746,6 +18874,21 @@ unsafe @ eng_byte s w i k → i {
     ( wv_drop declared )
 }
 
+// Does nurlc's own summary say callee `name` (interned) may hand back what
+// it lends out of an argument (`lkind`, mem_fn_lend_kind)? A binding of its
+// result then keeps the call's per-call answer of whether it lent.
+@ eng_walk_lends i name → b {
+    : i f ( ef_find name )
+    ? < f 0 { ^ F } {}
+    : s fn ( eng_str name )
+    : ~ i k 0
+    ~ < k ( ef_nparams f ) {
+        ? != 0 ( mem_fn_lend_kind g_eng_syms fn k ) { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
 // The `let` at `at`.
 @ stmt_let i st i at i ln → v {
     : i vid ( ec + at 1 )
@@ -18769,6 +18912,7 @@ unsafe @ eng_byte s w i k → i {
                 ? & == ( sm_word sm SM_RES ) RES_OWN == 0 ( sm_n sm SM_RHOLDS ) { ( fx_set vid FX_TEMP_FRESH ) } {}
             } {}
         } {}
+        ? & == rk RV_CALL ( eng_walk_lends ( ec + rv 1 ) ) { ( fx_set vid FX_CALL_TEMP ) } { ( fx_clear vid FX_CALL_TEMP ) }
     } {}
     ? == rk RV_NONE {
         ? == kind VK_TEMP { ( fx_set vid FX_JOIN_TEMP ) } {}
@@ -18787,6 +18931,10 @@ unsafe @ eng_byte s w i k → i {
     : i src ( rv_use_var rv )
     : b from_temp & >= src 0 == ( fv_kind src ) VK_TEMP
     ? & & & & from_temp == kind VK_LOCAL ! ( fv_mut vid ) ( fx_has src FX_JOIN_TEMP ) ! ( fx_has src FX_BLOCK_TEMP ) { ( fx_set vid FX_JOIN_VAR ) } {}
+    // (a binding of a call's result, or a second name of one: nurlc gives
+    // it the call's own answer of whether it lent, which a consumer that
+    // takes it reads - a copy goes where it lent)
+    ? & & == kind VK_LOCAL ! ( fv_mut vid ) & >= src 0 | & from_temp ( fx_has src FX_CALL_TEMP ) & & == ( fv_kind src ) VK_LOCAL ! ( fv_mut src ) ( fx_has src FX_CALL_BIND ) { ( fx_set vid FX_CALL_BIND ) } { ( fx_clear vid FX_CALL_BIND ) }
     : b plain_ty & & != vty ET_NONE ! ( et_is_view vty ) != ( et_kind vty ) EK_CLOSURE
     : i nown ( av_own new )
     ? & & & & & & ! mut == kind VK_LOCAL from_temp ! ( av_call new ) != ( av_alias new ) 0 | == nown OW_L & == nown OW_O != ( av_loans new ) 0 & plain_ty ! ( et_scalar vty ) {
@@ -21259,6 +21407,7 @@ unsafe @ eng_byte s w i k → i {
     = g_dt_fn ( im_new ) = g_dt_reach ( im_new )
     ? < g_fc_unw 0 { = g_fc_unw ( wv_new ) } {}
     ( wv_fill g_fc_unw n 0 )
+    = g_eng_dtor_unw -1
     ? < g_fc_order 0 { = g_fc_order ( wv_new ) } {}
     ( wv_trunc g_fc_order 0 )
     // (a depth-first walk from the program's functions: a function is
@@ -21725,6 +21874,15 @@ unsafe @ core_fn_begin s fname s file i line i flags s tmpl → v {
     = g_core_fline line
     = g_core_fflags flags
     = g_core_ftmpl ( __core_in tmpl )
+}
+
+// The function being built may start a panic itself, with no call the
+// IR names: a check codegen writes inline (a division, a remainder or a
+// shift checked at run time, a float-to-integer conversion, a closure's
+// capture read after it was given away). `fn` flag bit 3: a call of it may
+// unwind its caller (eng_may_unwind).
+@ core_note_panic_point → v {
+    ? != 0 g_core_live { = g_core_fflags | g_core_fflags 8 } {}
 }
 
 unsafe @ core_fn_ret s ret_ty → v {
@@ -23283,6 +23441,7 @@ unsafe @ gen_ident i lex i syms i cg → s {
 @ emit_numeric_guard i syms i cg s bad s message → v {
     : s fail ( nurl_cg_lbl cg `numeric_fail` )
     : s ok ( nurl_cg_lbl cg `numeric_ok` )
+    ( core_note_panic_point )
     ( nurl_print `  br i1 ` ) ( nurl_print bad )
     ( nurl_print `, label %` ) ( nurl_print fail )
     ( nurl_print `, label %` ) ( nurl_print ok ) ( nurl_print `\n` )
@@ -81647,6 +81806,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             ( nurl_print obad ) ( nurl_print `:\n` )
             ( __emit_rt_decl syms `declare void @nurl_panic(i8* nocapture) noreturn` )
             ( nurl_print `  call void @nurl_panic(i8* @__cmoved.` ) ( nurl_print closure_fn_name ) ( nurl_print `)\n  unreachable\n` )
+            ( core_note_panic_point )
             ( nurl_print oko ) ( nurl_print `:\n` )
             ( nurl_sym_def body_syms `__cur_lbl__` oko )
             ? != 0 g_core_live { ( core_capture_taken ov ) } {}
@@ -99299,6 +99459,7 @@ unsafe @ __clo_payload_taken i syms i cg s name → v {
     : s tv ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print tv ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print ap ) ( nurl_print `\n` )
     ( nurl_print `  call void @__nurl_taken_check(i1 ` ) ( nurl_print tv ) ( nurl_print `, ptr @__ctaken.` ) ( nurl_print fnn ) ( nurl_print `)\n` )
+    ( core_note_panic_point )
 }
 
 // A capture the body takes over (the consumed-capture rule) is marked taken
