@@ -56,13 +56,14 @@ summarised by the same analysis, to a fixpoint over the program.
 |---|---|---|
 | A use of a value whose loan has ended is the error | §2.10 | `check_live` |
 | A binding given a value that views a shorter-lived one is refused where it is used after that one ended, or where it leaves the function holding it, not where it is stored. Stored at once: a pointer into the frame (§2.7), and a view given to a value whose destructor may read it (§2.14) | §2.10, §2.7, §2.14 | `transfer`, `read` |
-| Storage the caller holds (an `inout` parameter) may not view this frame's values while a function of the program runs, which may unwind: unless the call is handed that storage and its body's first statement gives it a value that views nothing | §3.3d (#386) | `apply_call`, summary `credits` |
+| Storage the caller holds (an `inout` parameter) may not view this frame's values while a function of the program runs, which may unwind: unless the call is handed that storage and its body's first statement gives it a value that views nothing. Temporaries bound before that statement that run nothing and cannot unwind (a literal of operands: `= w @ W { `literal` }`) do not count as the first | §3.3d (#386) | `apply_call`, summary `credits`, `eng_check_fn` (first statement) |
 | A closure that reads, through a capture taken by pointer, a part its body did not give a value first reads what the binding holds when it runs: refused where the closure is made or run while that part holds an ended view | §2.3, §2.11 | `stale`, `stale_capture_check` |
 | What was bound after a `;` block was armed is released before the block runs | §7.2 | `run_defers`, `defer_before` |
 | An owner handed on by name moves; `: ~` of a name is a cursor | §2.2, §7.6 | `transfer`, `move_out` |
 | A value that holds a view is read whole only while what the view points into is there | §2.10 | `read` |
 | A call's arguments are frozen for its duration: its effects end no view another argument holds | §2.4 | `apply_call` |
 | An `inout` argument is the callee's alone for the call: no other argument is the same binding, a part of it or a lend of it. So is one the callee changes without saying `inout`, unless the change is inside a shared handle's payload: that is a change to the one object every share reaches (the `regions` row) | §2.4, §7.7 | `apply_call` |
+| An `inout` parameter (not a by-pointer capture) given whole a lend of another value whose type has a copy is given a copy: it holds what the lent value holds, no handle of where it was lent from (nurlc compares the result with the old value by its buffer at run time and copies anything else in; a lend of the binding itself is the keep rule) | §7.6 (agora #343, #456) | `stmt_assign` (`lcopy`) |
 | A struct literal, or a variant's payload, that names an `in` parameter whole and is handed back as it is keeps the caller's argument: it moves into the result as into a `sink`. Bound, pushed or assigned first, the literal holds a copy; the payload of an option or a result literal is a lend of the caller's value | §1 (temporaries), §7.6 (h207) | `rvalue` (`agg`: `lit_params`), `ret` |
 | The payload of an `in` parameter's option or result, handed back as the value of the `??` over it, takes the caller's argument: the result is the caller's own on that path. Handed back by name inside the arm, or out of an enum of the program's, it is lent | §7.6 (h408–h415) | `ret` |
 | A function that hands a parameter to a callee that detaches it detaches its argument | §2.7 | `s_detaches` |
@@ -223,7 +224,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | What a closure the caller chose hands back may hold what its captures hold (not its handles of the captures themselves): a function that collects such results hands them on | §2.11, §2.10 | `call_closure`, `heldin` |
 | A closure's result is its caller's own: what it lends out of a capture is copied, and a value that cannot be copied is refused | §7.5 | `check_program` |
 | A closure several threads may run changes nothing it captured | §6.5 | `shares` |
-| What an `Arc` shares is not changed in place | §6.5 | `effect` |
+| What an `Arc` shares is not changed in place - unless the change is made inside a value, at or below the payload, that orders every change made through a borrow of it (an Arc, a type the program asserts `unsafe % Sync` with no part asserted `% NotSync`: the walk's `__thr_orders_itself`, the type flag `ETF_ORDERS`) | §6.5 (agora #693, #719) | `effect`, `eng_change_ordered` |
 | A shared payload (`Rc`, `Arc`, `Shared`) is one place per handle type: an effect inside one ends what was lent out of any | proposal D3 | `shared_tails`, `region_effect` |
 | A `dyn` method's call may run any impl of the method | §1 Methods | `summary` (`virt`) |
 | The drop of a value whose destructor may read its views is a use of them | §2.14 | `scope_end` |
