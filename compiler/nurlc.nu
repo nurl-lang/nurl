@@ -642,6 +642,7 @@
 : i WK_DROP 14  // "the drop of <variable>"
 : i TF_LEND_OUTER 32  // …an owner of an outer scope is lent to a temporary (assign's rule for a join)
 : i TF_CURSOR 64  // …a `: ~` cursor given a new value: lent all but a local that owns its value
+: i TF_KEEP_LEND 128  // …a value nurlc hands over as it is, owner flag and all: a lend stays a lend, never copied (eng_kept_lend)
 : ~ i g_ec_line -1  // per word of the function being read: the line in effect there (eng_link)
 : ~ i g_fc_first_stmt -1  // the offset of the body's first statement
 : ~ i g_sx_ix -1  // a function's name (interned) → its summary record + 1, for the ones the engine does not walk (declared, derived)
@@ -14681,6 +14682,10 @@ unsafe @ eng_byte s w i k → i {
     } {}
     : b mixed & == ( av_own av ) OW_O != ( av_loans av ) 0
     ? & | == ( av_own av ) OW_L mixed | own_block > ( local_depth ( av_loans av ) ( av_alias av ) 0 ) dest_depth {
+        // (a value nurlc hands over as it is - with its owner flag, no copy
+        // made - stays the lend it is on the paths it lends: its use after
+        // what it borrows ended is the error, eng_kept_lend)
+        ? & != 0 & flags TF_KEEP_LEND ! own_block { ^ av } {}
         ? & & & copy_ok != dest_ty ET_NONE ( et_copyable dest_ty ) ! ( et_scalar dest_ty ) {
             = av ( av_make OW_O 0 0 ( av_held av ) F )
         } {
@@ -18769,6 +18774,36 @@ unsafe @ eng_byte s w i k → i {
     } {}
 }
 
+// Does nurlc hand what `src` holds over as it is when a binding is assigned
+// it - its owner flag with it, and no copy made where it lends: a binding
+// of a `?` / `??` join (MEMORY.md §7.6: the borrowed path is not released
+// by whoever receives it), or a call's result lent out of bindings? (A
+// join's or a value block's own value assigned directly is copied in on
+// the paths it lends, mem_join_copy_slot, mem_blk_tail_copy_slot; a call's
+// lend of a temporary it was handed is the call's to copy.)
+@ eng_kept_lend i st i src → b {
+    ? < src 0 { ^ F } {}
+    : b jv & == ( fv_kind src ) VK_LOCAL ( fx_has src FX_JOIN_VAR )
+    : b cl & == ( fv_kind src ) VK_TEMP ! ( fx_has src FX_JOIN_TEMP )
+    ? ! | jv cl { ^ F } {}
+    : i av ( st_av st src )
+    ? == av 0 { ^ F } {}
+    ? & cl ! ( av_call av ) { ^ F } {}
+    : i loans ( av_loans av )
+    : ~ b any F
+    : ~ i k 0
+    ~ < k ( sq_len loans ) {
+        : i l ( sq_at loans k )
+        ? ( el_is_loan l ) {
+            : i v ( pl_var ( el_place l ) )
+            ? | < v 0 != ( fv_kind v ) VK_LOCAL { ^ F } {}
+            = any T
+        } {}
+        = k + k 1
+    }
+    ^ any
+}
+
 // The `assign` at `at`, to a place.
 @ stmt_assign i st i at i target i ln → v {
     : i vid ( pl_var target )
@@ -18785,8 +18820,9 @@ unsafe @ eng_byte s w i k → i {
         // (a lend of something that ends before the target - an inner
         // block's local, an arm's - is copied in; an owner is: a cursor
         // given a lend stays a borrow, of whatever it is pointed at now)
-        : i flags | | | ? repoint 0 TF_COPY_OK ? != kind VK_TEMP TF_NAMED 0 ? == kind VK_TEMP TF_LEND_OUTER ? & ( fv_mut vid ) repoint TF_CURSOR 0 ? ( fv_second vid ) TF_LEND_OWNER 0
+        : ~ i flags | | | ? repoint 0 TF_COPY_OK ? != kind VK_TEMP TF_NAMED 0 ? == kind VK_TEMP TF_LEND_OUTER ? & ( fv_mut vid ) repoint TF_CURSOR 0 ? ( fv_second vid ) TF_LEND_OWNER 0
         : i psrc ( rv_use_var rv )
+        = flags ? & & ! repoint != kind VK_TEMP ( eng_kept_lend st psrc ) | flags TF_KEEP_LEND flags
         ( carry_call_lent vid rv )
         ? & & & & == kind VK_TEMP >= psrc 0 != vty ET_NONE ! ( et_is_view vty ) & & != ( et_kind vty ) EK_CLOSURE ( et_owning vty ) & ( fx_has psrc FX_PAYLOAD ) ( eng_own_payload st ( st_av st psrc ) ) {
             // an arm's payload of an option a local owns, handed out by a
@@ -18857,7 +18893,13 @@ unsafe @ eng_byte s w i k → i {
         // (…through a join too: `= x ? c x ( f )` - where the join may
         // select the target, its value is copied in)
         : ~ b own_parts F
-        ? & & | == cown OW_O == cown OW_P | == nown OW_L == nown OW_O != kind VK_TEMP {
+        // (…not a closure given a binding that is a second name of it: nurlc
+        // releases the env the target owned and the target borrows from
+        // then on - MEMORY.md §7.4 - so what the second name views is gone.
+        // Only a right side that names the target itself keeps it: `= a {
+        // … a }`, `= a a`)
+        : b clo_second & & & & >= psrc 0 != psrc vid != ( fv_kind psrc ) VK_TEMP != vty ET_NONE == ( et_kind vty ) EK_CLOSURE
+        ? & & & | == cown OW_O == cown OW_P | == nown OW_L == nown OW_O != kind VK_TEMP ! clo_second {
             : i loans ( av_loans new )
             : ~ i a 0
             ~ & ! own_parts < a ( sq_len loans ) {
@@ -21705,15 +21747,38 @@ unsafe @ core_vblock_begin → i {
 }
 
 // …and ends: the tail's value, if the block left one above `h0`, is the
-// temporary's.
+// temporary's. A tail that is a binding the block made itself is the
+// block's value as it stands: the binding is one of the enclosing scope's,
+// released where that scope ends (MEMORY.md §1, "Where values are
+// dropped"), and what takes the block's value takes the binding as it
+// would take it by name - `: e { : String s … s }` is `: e s`, `= b { … s
+// }` is `= b s`, a call handed `{ … s }` is lent s. (Through the temporary,
+// the block's value owned s, and a call that lent it back handed its
+// result an owner: agora #839.)
 unsafe @ core_vblock_end i t i prev i h0 → v {
+    : ~ i val ( core_op_var t )
     ? > g_core_os_n h0 {
         : i op ( core_pop )
         = g_core_os_n h0
-        ? != op 0 { ( core_w CO_ASSIGN ) ( core_w ( core_op_var t ) ) ( core_w RV_USE ) ( core_w op ) } {}
+        ? ( __core_own_binding op t ) { = val op } {
+            ? != op 0 { ( core_w CO_ASSIGN ) ( core_w ( core_op_var t ) ) ( core_w RV_USE ) ( core_w op ) } {}
+        }
     } {}
-    ( core_push ( core_op_var t ) )
+    ( core_push val )
     = g_core_vb prev
+}
+
+// Is the operand `op` a whole binding made in the value block whose
+// temporary is `t`?
+unsafe @ __core_own_binding i op i t → b {
+    ? < op 2 { ^ F } {}
+    : *i ps # *i # s g_core_pl
+    : i p - op 2
+    ? >= . ps + * p 3 1 0 { ^ F } {}
+    : i vid . ps * p 3
+    ? | < vid 0 >= vid g_core_var_n { ^ F } {}
+    : *i vs # *i # s g_core_vars
+    ^ & == . vs + * vid CORE_VW 2 1 == . vs + * vid CORE_VW 6 t
 }
 
 // `?? s { … }` after its scrutinee `op`.
@@ -22029,9 +22094,11 @@ unsafe @ core_second_op s ty → v {
     ( core_push ( core_op_var t ) )
 }
 
-// The operand on top, a value block's temporary, is given its tail binding's
+// The operand on top, a value block's value, is given its tail binding's
 // closure without its env (__blk_tail_closure: a `;` block in the block may
-// still call the binding): a second name of it (CORE_VF_SECOND).
+// still call the binding): a second name of it (CORE_VF_SECOND). (The
+// block's value is the tail binding itself, core_vblock_end: the second
+// name is a temporary given it, as core_second_op makes one.)
 unsafe @ core_second_top → v {
     ? <= g_core_os_n 0 { ^ } {}
     : *i os # *i # s g_core_os
@@ -22042,6 +22109,10 @@ unsafe @ core_second_top → v {
     : i vid . ps b
     ? | | < vid 0 >= vid g_core_var_n != . ps + b 1 -1 { ^ } {}
     : *i vs # *i # s g_core_vars
+    ? != . vs + * vid CORE_VW 2 2 {
+        ( core_second_op ( nurl_str_cat # s . vs + * vid CORE_VW 1 `` ) )
+        ^
+    } {}
     = . vs + * vid CORE_VW 4 | . vs + * vid CORE_VW 4 CORE_VF_SECOND
 }
 
