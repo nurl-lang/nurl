@@ -4439,6 +4439,14 @@ unsafe @ note_unsafe_item s pos s what → v {
 // words, `c` the `&`-joined `w>sx` that must hold by the final summaries
 // (__cond_holds), as a function's `#pdc:` reads are (agora #639).
 : ~ s g_clo_deriv_c ``
+// A count of what the derivations above and a function's (g_pderiv, its
+// `#pdc:` reads, g_pd_put) have grown by: a call in a loop's body noted
+// at one count is noted again at the body's end when it grew since
+// (__loop_arg_replay, agora #696).
+: ~ i g_deriv_gen 0
+// …and those calls: `largs` in this table, `nest|cdepth|clo|name|callee|
+// aix|gen` words (__loop_arg_note).
+: ~ i g_loop_args 0
 // The effects (g_closure_effects' `~cap:callee:k` words) the body has
 // through such a read only: `<effect>#c` per condition, and `<effect>#`
 // once it has the effect for certain as well (__clo_effect_note_lent_c).
@@ -13850,6 +13858,29 @@ unsafe @ eng_byte s w i k → i {
     ^ F
 }
 
+// A view loan the value `av` is, or holds (a pointer into a place's
+// buffer: what releasing that place ends); -1 for none.
+@ av_view_loan i av → i {
+    ? == av 0 { ^ -1 } {}
+    : i ls ( av_loans av )
+    : ~ i k 0
+    ~ < k ( sq_len ls ) {
+        : i l ( sq_at ls k )
+        ? & ( el_is_loan l ) == ( el_kind l ) LK_VIEW { ^ l } {}
+        = k + k 1
+    }
+    : i held ( av_held av )
+    = k 0
+    ~ < k ( sq_len held ) {
+        : i l ( he_loan ( sq_at held k ) )
+        ? & ( el_is_loan l ) == ( el_kind l ) LK_VIEW { ^ l } {}
+        = k + k 1
+    }
+    ^ -1
+}
+
+@ av_has_view i av → b { ^ >= ( av_view_loan av ) 0 }
+
 // The first element of path `p` (`a` of `a.b.c`), 0 for the empty one.
 @ ep_first i p → i {
     ? == p 0 { ^ 0 } {}
@@ -16540,7 +16571,11 @@ unsafe @ eng_byte s w i k → i {
         : i tk ( tp_at t 5 2 )
         : i tkind ( tp_at t 5 4 )
         ? & & & | == tkind SK_VALUE == tkind LK_HANDLE < tj n < tk n ( op_is_place ( wv_at ops tj ) ) {
-            ? ( held_has_clo ( av_held ( wv_at avs tk ) ) ) {
+            : i sav ( wv_at avs tk )
+            : b sclo ( held_has_clo ( av_held sav ) )
+            // (…and any other value stored there may be read by the other
+            // one: it holds no view - agora #812)
+            ? | sclo ( av_has_view sav ) {
                 : i jty ( eng_ty_of ( wv_at ops tj ) )
                 ? != jty ET_NONE {
                     : ~ b ts & == ( et_kind jty ) EK_NAMED ( et_flag jty ETF_TSHARE )
@@ -16551,7 +16586,12 @@ unsafe @ eng_byte s w i k → i {
                         ~ < q ( wv_len shs ) { ? ( et_flag ( wv_at shs q ) ETF_TSHARE ) { = ts T } {} = q + q 1 }
                         ( wv_drop shs )
                     } {}
-                    ? ts { = dets ( sq_add dets tk ) } {}
+                    ? ts {
+                        ? sclo { = dets ( sq_add dets tk ) } {
+                            : i vl ( av_view_loan sav )
+                            ( eng_err line ( nurl_str_cat3 ( eng_str name ) `: what another thread may receive holds a view of ` ( eng_pname ( el_place vl ) ) ) )
+                        }
+                    } {}
                 } {}
             } {}
         } {}
@@ -35291,6 +35331,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             ( bck_stash_store arg_froot ( nurl_lex_line lex ) __rc ( nurl_str_int arg_idx ) `pendfield` )
             ( __clo_effect_note arg_froot __rc arg_idx )
             ( __drop_note_via syms arg_froot __rc arg_idx at )
+            ( __loop_arg_note syms arg_froot __rc arg_idx )
         } {}
         ? & & != 0 ( nurl_str_len arg_vfroot ) __row_callee ( bck_sound ) {
             ( bck_stash_store arg_vfroot ( nurl_lex_line lex ) __rc ( nurl_str_int arg_idx ) `pendvf` )
@@ -35314,6 +35355,13 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         ? != 0 ( nurl_str_len __lsx ) {
             ( bck_stash_pending_sx __lsx ( nurl_lex_line lex ) __rc arg_idx ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST `pendjoin` `pendlend` )
             ( __clo_effect_note_sx __lsx __rc arg_idx )
+            ? != 0 g_loop_nest {
+                : ~ s __lxs ( __sx_leaf_names __lsx )
+                ~ != 0 ( nurl_str_len __lxs ) {
+                    : s __lxw ( str_first_word __lxs ) = __lxs ( str_skip_word __lxs )
+                    ( __loop_arg_note syms __lxw __rc arg_idx )
+                }
+            } {}
             // (…and what the callee drops of it, this function drops of each
             // parameter its sx leads to where it lends out of that by the
             // final summaries — the names codegen has for it miss a nested
@@ -35334,6 +35382,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                         ( bck_stash_pending_kind __ln ( nurl_lex_line lex ) __rc arg_idx `` ? __arg_join `pendjoin` `pendlend` )
                         ( __clo_effect_note __ln __rc arg_idx )
                     } {}
+                    ( __loop_arg_note syms __ln __rc arg_idx )
                     // (…and what the callee drops of a value lent out of a
                     // parameter, this function drops of that parameter's
                     // elements: its drop summary, agora #443.)
@@ -35449,6 +35498,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             __rc arg_idx fname F )
             ( __clo_effect_note bck_arg_val __rc arg_idx )
             ( __drop_note_via syms bck_arg_val __rc arg_idx at )
+            ( __loop_arg_note syms bck_arg_val __rc arg_idx )
             // A handle it may keep instead (bck_stash_store) — or an option
             // or a result that owns one (`{ i1, … }`): kept, it lives as long
             // as the container does. A parameter too: kept by the callee it
@@ -43083,7 +43133,7 @@ unsafe @ __blk_leave b val → v {
     // between the run and the assignment ends there, as one the body's own
     // call ends does. Replayed after the block closed, the rows landed
     // past the loop, where only its exit saw them; agora #843.)
-    ? __lp_body { ( __loop_clo_replay syms g_loop_nest ) } {}
+    ? __lp_body { ( __loop_clo_replay syms g_loop_nest ) ( __loop_arg_replay syms g_loop_nest ) } {}
     ( expect lex TT_RBRACE )
     ( bck_block_exit __rb_line )
     ( __blk_leave F )
@@ -50948,6 +50998,7 @@ unsafe @ __clo_deriv_add s name s srcs → v {
     ? != 0 ( nurl_str_len out ) {
         : s e ( nurl_str_cat3 name `=` ( bck_swap_char out 32 44 ) )
         = g_clo_deriv ? == 0 ( nurl_str_len g_clo_deriv ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_clo_deriv ` ` e )
+        = g_deriv_gen + g_deriv_gen 1
     } {}
     ? != 0 ( nurl_str_len cout ) { ( __clo_deriv_cadd name cout ) } {}
 }
@@ -50985,6 +51036,7 @@ unsafe @ __clo_deriv_cadd s name s pcs → v {
                         ? >= n 8 { ( __clo_deriv_add name cap ) } {
                             : s e ( nurl_str_cat key c )
                             = g_clo_deriv_c ? == 0 ( nurl_str_len g_clo_deriv_c ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_clo_deriv_c ` ` e )
+                            = g_deriv_gen + g_deriv_gen 1
                         }
                     } {}
                 }
@@ -51337,6 +51389,76 @@ unsafe @ bck_note_closure_caps i syms s name i line → v {
     }
     ( nurl_sym_def g_clo_nodes `cruns` keep )
     ? & flush != 0 g_borrowck { ( bck_flush_moves ) } {}
+}
+
+// A handle local `name` (or a field path of one) bound outside the loop
+// whose body compiles now goes to `callee` as argument `aix`. What the
+// call changes through it is noted where it stands, through what the
+// local was read out of so far (__clo_effect_note, __drop_note_via, the
+// irealloc edges): a capture or a parameter it is given further down the
+// body — `~ … { ( vec_push [i] c j ) = c . a v }` — it holds on the next
+// round, at this call. Kept for the body's end, __loop_arg_replay (agora
+// #696).
+unsafe @ __loop_arg_note i syms s name s callee i aix → v {
+    ? == 0 g_loop_nest { ^ v } {}
+    // (Only a capture or a parameter is read out of: none, none to follow.)
+    ? & == 0 ( nurl_str_len g_clo_caps_now ) == 0 ( nurl_str_len g_cur_params ) { ^ v } {}
+    : s sd ( nurl_sym_get syms `__loop_sdepth__` )
+    ? == 0 ( nurl_str_len sd ) { ^ v } {}
+    : s rt ( __path_root_name name )
+    // (…nor a parameter or a capture itself, which is given none.)
+    ? | ( str_contains_word g_cur_params rt ) ( str_contains_word g_clo_caps_now rt ) { ^ v } {}
+    : i d ( nurl_sym_depth_of syms rt )
+    ? | < d 0 >= d ( nurl_str_to_int sd ) { ^ v } {}
+    ? == 0 g_loop_args { = g_loop_args ( nurl_sym_new ) } {}
+    : s cc ? == 0 ( nurl_str_len g_clo_cur ) ( nurl_str_cat `-` `` ) ( nurl_str_cat g_clo_cur `` )
+    ( nurl_sym_append_word g_loop_args `largs` ( nurl_str_cat4 ( nurl_str_cat4 ( nurl_str_int g_loop_nest ) `|` ( nurl_str_int g_bck_closure_depth ) `|` ) ( nurl_str_cat4 cc `|` name `|` ) ( nurl_str_cat4 callee `|` ( nurl_str_int aix ) `|` ) ( nurl_str_int g_deriv_gen ) ) )
+}
+
+// At the end of a loop's body (nesting `nest`): each call __loop_arg_note
+// kept for it, or for a loop inside it, is noted again where what the
+// locals were read out of grew since — the next round's call, through what
+// they hold by then (agora #696). One whose local is bound outside the
+// enclosing loop too is kept for that loop's end; one whose local is bound
+// in this body is the round's own, and done with.
+unsafe @ __loop_arg_replay i syms i nest → v {
+    ? | == 0 g_loop_args == 0 ( nurl_sym_len g_loop_args `largs` ) { ^ v } {}
+    : s sd ( nurl_sym_get syms `__loop_sdepth__` )
+    : s cc ? == 0 ( nurl_str_len g_clo_cur ) ( nurl_str_cat `-` `` ) ( nurl_str_cat g_clo_cur `` )
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_loop_args `largs` ) `` )
+    : ~ s keep ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s f ( bck_swap_char w 124 32 )
+        : i wn ( nurl_str_to_int ( str_first_word f ) )
+        : s f2 ( str_skip_word f )
+        : i wd ( nurl_str_to_int ( str_first_word f2 ) )
+        : s f3 ( str_skip_word f2 )
+        : s wc ( str_first_word f3 )
+        : s f4 ( str_skip_word f3 )
+        : s nm ( str_first_word f4 )
+        : s f5 ( str_skip_word f4 )
+        : s cal ( str_first_word f5 )
+        : s f6 ( str_skip_word f5 )
+        : i aix ( nurl_str_to_int ( str_first_word f6 ) )
+        : i gen ( nurl_str_to_int ( str_first_word ( str_skip_word f6 ) ) )
+        ? < wn nest { = keep ? == 0 ( nurl_str_len keep ) ( nurl_str_cat w `` ) ( nurl_str_cat3 keep ` ` w ) } {
+            ? & & == wd g_bck_closure_depth ( seq wc cc ) != 0 ( nurl_str_len sd ) {
+                : i d ( nurl_sym_depth_of syms ( __path_root_name nm ) )
+                ? & >= d 0 < d ( nurl_str_to_int sd ) {
+                    ? != gen g_deriv_gen {
+                        ( __clo_effect_note nm cal aix )
+                        ( __clo_eff_fn_note syms nm cal aix F )
+                    } {}
+                    ? > nest 1 {
+                        : s w2 ( nurl_str_cat4 ( nurl_str_cat4 ( nurl_str_int - nest 1 ) `|` ( nurl_str_int wd ) `|` ) ( nurl_str_cat4 wc `|` nm `|` ) ( nurl_str_cat4 cal `|` ( nurl_str_int aix ) `|` ) ( nurl_str_int g_deriv_gen ) )
+                        = keep ? == 0 ( nurl_str_len keep ) ( nurl_str_cat w2 `` ) ( nurl_str_cat3 keep ` ` w2 )
+                    } {}
+                } {}
+            } {}
+        }
+    }
+    ( nurl_sym_def g_loop_args `largs` keep )
 }
 
 // The dual: `name` is being (re)bound to something that is NOT a
@@ -63384,7 +63506,7 @@ unsafe @ __pderiv_put i syms s name s ps0 → v {
 // …into slot `ptr`.
 unsafe @ __pderiv_put_at s ptr s ps0 → v {
     : s pk ( nurl_str_cat3 `|` ptr `|` )
-    ? < ( nurl_str_find g_pd_put pk ) 0 { = g_pd_put ( nurl_str_cat g_pd_put pk ) } {}
+    ? < ( nurl_str_find g_pd_put pk ) 0 { = g_pd_put ( nurl_str_cat g_pd_put pk ) = g_deriv_gen + g_deriv_gen 1 } {}
     // (…under the conditions the words carry, `p#c`: g_cedges' `#pdc:`.)
     : s pcs ( __words_cond ps0 )
     ? != 0 ( nurl_str_len pcs ) { ( __pderiv_cnote ptr pcs ) } {}
@@ -63393,6 +63515,7 @@ unsafe @ __pderiv_put_at s ptr s ps0 → v {
     : s e ( nurl_str_cat3 ptr `=` ( bck_swap_char ps 32 44 ) )
     ? ( str_contains_word g_pderiv e ) { ^ v } {}
     = g_pderiv ? == 0 ( nurl_str_len g_pderiv ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_pderiv ` ` e )
+    = g_deriv_gen + g_deriv_gen 1
 }
 
 // A value written as a literal, or as a join or a block that may be one
@@ -63513,11 +63636,11 @@ unsafe @ __pderiv_alias s from s to → v {
             : s w ( str_first_word rest ) = rest ( str_skip_word rest )
             ? != 0 ( nurl_str_starts w key ) { = add ( nurl_str_cat4 add ` ` to ( nurl_str_slice w ( nurl_str_len from ) - ( nurl_str_len w ) ( nurl_str_len from ) ) ) } {}
         }
-        ? != 0 ( nurl_str_len add ) { = g_pderiv ( nurl_str_cat g_pderiv add ) } {}
+        ? != 0 ( nurl_str_len add ) { = g_pderiv ( nurl_str_cat g_pderiv add ) = g_deriv_gen + g_deriv_gen 1 } {}
     } {}
     ? != 0 g_pderiv_cn { ( __pderiv_cnote to ( nurl_sym_get g_cedges ( nurl_str_cat `#pdc:` from ) ) ) } {}
     ? != 0 ( nurl_str_len g_pd_put ) {
-        ? >= ( nurl_str_find g_pd_put ( nurl_str_cat3 `|` from `|` ) ) 0 { = g_pd_put ( nurl_str_cat3 g_pd_put `|` ( nurl_str_cat to `|` ) ) } {}
+        ? >= ( nurl_str_find g_pd_put ( nurl_str_cat3 `|` from `|` ) ) 0 { = g_pd_put ( nurl_str_cat3 g_pd_put `|` ( nurl_str_cat to `|` ) ) = g_deriv_gen + g_deriv_gen 1 } {}
     } {}
     ? != 0 g_pd_ek { ? ( seq ( nurl_sym_get g_pd_ek from ) `e` ) { ( nurl_sym_def g_pd_ek to `e` ) } {} } {}
 }
@@ -63543,6 +63666,7 @@ unsafe @ __pderiv_alias s from s to → v {
         // a few words long.)
         : s cur ( nurl_sym_get g_cedges sk )
         ? | == 0 ( nurl_str_len cur ) < ( nurl_str_find cur ck ) 0 { ( nurl_sym_append_word g_cedges sk ( nurl_str_cat ck cc ) ) } { ( nurl_sym_set g_cedges sk ( __cond_list_put cur ck cc ) ) }
+        = g_deriv_gen + g_deriv_gen 1
     }
 }
 
@@ -64041,6 +64165,7 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     : s e ( nurl_str_cat3 ptr `=` ( bck_swap_char out 32 44 ) )
     ? ( str_contains_word g_pderiv e ) { ^ v } {}
     = g_pderiv ? == 0 ( nurl_str_len g_pderiv ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_pderiv ` ` e )
+    = g_deriv_gen + g_deriv_gen 1
 }
 
 // Inside a safe function: the binding (or a field path of one) `name` goes
@@ -98177,7 +98302,7 @@ unsafe @ __sk_walk_calc s ty i syms → b {
         : ~ i fi 0
         ~ < fi fc {
             : s ft ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
-            ? ( seq ( __lty_base_name ft ) `Shared` ) {
+            ? | ( seq ( __lty_base_name ft ) `Shared` ) ( __ty_std_arc ft ) {
                 ( __sk_request ( __libh_targ ft 0 ) syms )
             } { ( __sk_request ft syms ) }
             = fi + fi 1
@@ -98253,15 +98378,17 @@ unsafe @ __sk_walk_calc s ty i syms → b {
 // — the first time the walk meets it — its state `st` walked too ("" when
 // that reaches nothing). The runtime compares the counts with the blocks'
 // owners when the walk ends (nurl_sendck_end).
-@ __sk_emit_block s at s k s st s nm → v {
+// (`arc`: an Arc's block, `[ count ][ weak ][ value ]` — its strong count
+// first too, the state one word further on; agora #689.)
+@ __sk_emit_block s at s k s st s nm b arc → v {
     ( nurl_print `  %b` ) ( nurl_print k ) ( nurl_print ` = load ptr, ptr ` ) ( nurl_print at )
     ( nurl_print `\n  %v` ) ( nurl_print k ) ( nurl_print ` = call i32 @nurl_sendck_visit(ptr %b` ) ( nurl_print k )
     ( nurl_print `, ptr ` ) ( nurl_print nm ) ( nurl_print `)\n` )
     ? != 0 ( nurl_str_len st ) {
         ( nurl_print `  %u` ) ( nurl_print k ) ( nurl_print ` = icmp ne i32 %v` ) ( nurl_print k )
         ( nurl_print `, 0\n  br i1 %u` ) ( nurl_print k ) ( nurl_print `, label %s` ) ( nurl_print k ) ( nurl_print `, label %k` ) ( nurl_print k )
-        ( nurl_print `\ns` ) ( nurl_print k ) ( nurl_print `:\n  %t` ) ( nurl_print k ) ( nurl_print ` = getelementptr { i64, ` ) ( nurl_print ( nurl_llty st ) )
-        ( nurl_print ` }, ptr %b` ) ( nurl_print k ) ( nurl_print `, i32 0, i32 1\n  call void ` ) ( nurl_print ( __sk_fn st ) )
+        ( nurl_print `\ns` ) ( nurl_print k ) ( nurl_print `:\n  %t` ) ( nurl_print k ) ( nurl_print ? arc ` = getelementptr { i64, i64, ` ` = getelementptr { i64, ` ) ( nurl_print ( nurl_llty st ) )
+        ( nurl_print ` }, ptr %b` ) ( nurl_print k ) ( nurl_print ? arc `, i32 0, i32 2\n  call void ` `, i32 0, i32 1\n  call void ` ) ( nurl_print ( __sk_fn st ) )
         ( nurl_print `(ptr %t` ) ( nurl_print k ) ( nurl_print `, ptr %w)\n  br label %k` ) ( nurl_print k )
         ( nurl_print `\nk` ) ( nurl_print k ) ( nurl_print `:\n` )
     } {}
@@ -98346,10 +98473,14 @@ unsafe @ __sk_walk_calc s ty i syms → b {
             : s ft ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
             : s k ( nurl_str_int fi )
             : s fp ( nurl_str_cat `%f` k )
-            ? ( seq ( __lty_base_name ft ) `Shared` ) {
+            // (…an Arc's too, where the handle keeps its state in one and
+            // writes it by address, arc_ptr: one state as a Shared's is —
+            // __libh_arc_backed; agora #689.)
+            : b farc ( __ty_std_arc ft )
+            ? | ( seq ( __lty_base_name ft ) `Shared` ) farc {
                 ( nurl_print `  ` ) ( nurl_print fp ) ( nurl_print ` = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 ` ) ( nurl_print k ) ( nurl_print `\n` )
                 : s st ( __libh_targ ft 0 )
-                ( __sk_emit_block fp k ? & != 0 ( nurl_str_len st ) ( __sk_needed st syms ) st `` nm )
+                ( __sk_emit_block fp k ? & != 0 ( nurl_str_len st ) ( __sk_needed st syms ) st `` nm farc )
             } {
                 ? ( __sk_needed ft syms ) {
                     ( nurl_print `  ` ) ( nurl_print fp ) ( nurl_print ` = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 ` ) ( nurl_print k )
