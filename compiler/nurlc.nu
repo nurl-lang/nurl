@@ -10940,6 +10940,12 @@ unsafe @ eng_keep_fn → v {
         = g_ef_ix ( im_new )
     } {}
     : i f / ( wv_len g_ef ) EF_W
+    // (a trusted function whose body crosses the raw boundary is never
+    // read: the walk's answers stand for it, eng_select. Only what its
+    // summary is read with is kept - its parameters - not its statements)
+    : b body ! & != 0 & g_core_fflags 1 != 0 & g_core_fflags 6
+    : i code_n ? body g_core_code_n 0
+    : i pl_n ? body g_core_pl_n 0
     ( wv_push g_ef g_core_fname )
     ( wv_push g_ef g_core_ffile )
     ( wv_push g_ef g_core_fline )
@@ -10948,11 +10954,11 @@ unsafe @ eng_keep_fn → v {
     ( wv_push g_ef g_core_ftmpl )
     ( wv_push g_ef g_core_nparam )
     ( wv_push g_ef ( wv_len g_ef_code ) )
-    ( wv_push g_ef g_core_code_n )
+    ( wv_push g_ef code_n )
     ( wv_push g_ef ( wv_len g_ef_vars ) )
     ( wv_push g_ef g_core_var_n )
     ( wv_push g_ef ( wv_len g_ef_pl ) )
-    ( wv_push g_ef g_core_pl_n )
+    ( wv_push g_ef pl_n )
     // (its parameters and captures, counted once)
     : *i vs # *i ( eng_str g_core_vars )
     : ~ i np 0
@@ -10967,9 +10973,9 @@ unsafe @ eng_keep_fn → v {
     ( wv_push g_ef np )
     ( wv_push g_ef ncap )
     = g_ef_count + g_ef_count 1
-    ( wv_append_raw g_ef_code g_core_code g_core_code_n )
+    ( wv_append_raw g_ef_code g_core_code code_n )
     ( wv_append_raw g_ef_vars g_core_vars * g_core_var_n CORE_VW )
-    ( wv_append_raw g_ef_pl g_core_pl * g_core_pl_n 3 )
+    ( wv_append_raw g_ef_pl g_core_pl * pl_n 3 )
     ( im_put g_ef_ix g_core_fname + f 1 )
 }
 
