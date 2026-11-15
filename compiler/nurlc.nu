@@ -511,6 +511,9 @@
 : ~ i g_fc_moved_vid -1  // the last value moved that holds views of its own parts: the binding, and those loans (a set)
 : ~ i g_fc_moved_own 0
 : ~ i g_fc_tails -1  // a place → the shared handles it reaches through + 1 (shared_tails), for this function
+: ~ i g_fc_priv -1  // per variable of this function: 1 a handle on a payload no other handle reaches (eng_mark_private)
+: ~ i g_fc_priv_src -1  // …per variable: the temporary it was handed whole, -1 none
+: ~ i g_clo_priv -1  // per function: for a closure body, its captures that are such handles wherever it is made (a mask) + 1, 0 not made yet
 : ~ i g_s_effects 0  // the summary being made: what the body does to its parameters (a set of parameter * 2^36 + path * 16 + effect)
 : ~ i g_s_consumes 0  // …the parameters it takes over (a set)
 : ~ i g_s_elems 0
@@ -519,7 +522,7 @@
 : ~ i g_s_stale 0  // …(capture * 2^32 + path): read before the body gave it a value
 : ~ i g_s_credits 0
 : ~ i g_s_cloargs 0  // …(closure parameter, its parameter, the parameter handed, path): a sequence each
-: ~ i g_s_regions 0  // …(shared handle type * 2^36 + tail * 16 + effect)
+: ~ i g_s_regions 0  // …(shared handle type, tail, effect, parameter through + 1): a sequence each
 : ~ i g_s_selfholds 0  // …(where in the result, path, kind): a sequence each
 : i WK_VALUE 0  // what a finding calls its value (eng_what): "value"
 : i WK_VAR 1  // a variable's name
@@ -582,7 +585,7 @@
 : i SM_CLOARGS 9  // (closure parameter, its parameter, the parameter handed, path)
 : i SM_DETACHES 10
 : i SM_SHARES 11
-: i SM_REGIONS 12  // (shared handle type, path below its payload, effect)
+: i SM_REGIONS 12  // (shared handle type, path below its payload, effect, the parameter it is made through + 1 or 0)
 : i SM_SELFHOLDS 13  // (where in the result, path, kind)
 : i SM_RCLOS 14  // (where in the result, closure body)
 : i SM_SCLOS 15  // (parameter, where in it, closure body)
@@ -12084,6 +12087,9 @@ unsafe @ eng_keep_fn → v {
     ( wv_trunc g_el_shared 0 )
     ? >= g_fc_tails 0 { ( wv_drop g_fc_tails ) } {}
     = g_fc_tails ( im_new )
+    ? < g_fc_priv 0 { = g_fc_priv ( wv_new ) = g_fc_priv_src ( wv_new ) } {}
+    ( wv_fill g_fc_priv g_f_nv 0 )
+    ( wv_fill g_fc_priv_src g_f_nv -1 )
     ? >= g_av_all 0 { ( wv_drop g_av_all ) } {}
     = g_av_all ( im_new )
     = g_av_none ( av_make OW_N 0 0 0 F )
@@ -12794,6 +12800,273 @@ unsafe @ eng_byte s w i k → i {
     ^ out
 }
 
+// ── Ownership engine: payloads no other handle reaches ───────────────
+// A handle made fresh - by a constructor that hands back a block of its
+// own (`rc_new`) - and never cloned, stored, handed to anything that may
+// keep it or a share of it, nor given another value, is the one handle on
+// its payload (MEMORY.md §7.6: only a copy of a handle reaches the payload
+// it does). A change made through it is made inside that payload alone:
+// it ends what was lent out of that payload - the handle's own loans - and
+// is no change to the payload the other handles of its type reach, in
+// this function or in its summary. (It does not shield its own payload:
+// what a callee changes through a share it made is still a change to
+// every payload of the type.) g_fc_priv holds the answer per variable,
+// found once a walk (eng_mark_private).
+
+// Can the variable be such a handle: a binding or a temporary of the
+// function's own, of a shared handle type? (A parameter, a capture: the
+// caller's, who may hold another share. An Arc's payload is frozen.)
+@ priv_cand i vid → b {
+    ? | < vid 0 >= vid g_f_nv { ^ F } {}
+    ? == ( fv_kind vid ) VK_PARAM { ^ F } {}
+    : i ty ( fv_ty vid )
+    ? == ty ET_NONE { ^ F } {}
+    ^ & & == ( et_kind ty ) EK_NAMED ( et_flag ty ETF_SHARED ) ! ( et_flag ty ETF_ARC )
+}
+
+@ priv_is i vid → b {
+    ? | | < g_fc_priv 0 < vid 0 >= vid g_f_nv { ^ F } {}
+    ^ == 1 ( wv_at g_fc_priv vid )
+}
+
+@ priv_reject i vid → v {
+    ? & >= vid 0 < vid g_f_nv { ( wv_put g_fc_priv vid 0 ) } {}
+}
+
+// Does the path begin inside a payload (`*…`)?
+@ ep_under_star i p → b { ^ & != p 0 == ( ep_first p ) EE_STAR }
+
+// Is `place` inside the payload of the shared handle its variable is
+// (the first of its shared_tails)?
+@ head_shared i place → b {
+    ? ! ( ep_under_star ( pl_path place ) ) { ^ F } {}
+    : i ty ( fv_ty ( pl_var place ) )
+    ^ & & != ty ET_NONE == ( et_kind ty ) EK_NAMED ( et_flag ty ETF_SHARED )
+}
+
+// …and is that handle one no other reaches?
+@ priv_head i place → b { ^ & ( priv_is ( pl_var place ) ) ( head_shared place ) }
+
+// Does a call under summary `sm` hand back a handle on a block of its
+// own: a declared summary (a raw constructor's: one the engine makes from
+// a body does not see the globals an `unsafe` body reads) whose result is
+// owned, lends nothing, and holds what its arguments hold only inside its
+// payload?
+@ sm_fresh_handle i sm → b {
+    ? < sm 0 { ^ F } {}
+    ? != ( sm_word sm SM_STATE ) 2 { ^ F } {}
+    ? | | != ( sm_word sm SM_RES ) RES_OWN != 0 ( sm_word sm SM_MIXED ) != 0 ( sm_n sm SM_LENDS ) { ^ F } {}
+    : ~ i e 0
+    ~ < e ( sm_n sm SM_RHOLDS ) {
+        ? ! ( ep_under_star ( tp_at ( sm_at sm SM_RHOLDS e ) 4 0 ) ) { ^ F } {}
+        = e + e 1
+    }
+    ^ T
+}
+
+// May a call under summary `sm` keep argument `k` or a share of it where
+// this function reaches it again - hand it back, lend it, store it, hand
+// it to a closure, to another thread - or give it another value? (Taking
+// it over and releasing it is not keeping it; what is inside its payload
+// is the payload's.) `cap`: `k` is a capture of the closure body `sm`,
+// whose runs may happen where its maker is not: nothing of it may leave
+// the body. A summary from the walk's tables (a raw body) may.
+@ sm_may_share i sm i k b cap → b {
+    ? < sm 0 { ^ T } {}
+    : i state ( sm_word sm SM_STATE )
+    ? == state 0 { ^ F } {}
+    ? == state 3 { ^ T } {}
+    ? | ( sm_has sm SM_SHARES k ) ( sm_has sm SM_DETACHES k ) { ^ T } {}
+    ? & cap ( sm_has sm SM_CONSUMES k ) { ^ T } {}
+    : ~ i e 0
+    ~ < e ( sm_n sm SM_RHOLDS ) {
+        : i t ( sm_at sm SM_RHOLDS e )
+        ? & == ( tp_at t 4 1 ) k | cap ! ( ep_under_star ( tp_at t 4 2 ) ) { ^ T } {}
+        = e + e 1
+    }
+    = e 0
+    ~ < e ( sm_n sm SM_LENDS ) {
+        : i t ( sm_at sm SM_LENDS e )
+        ? & == ( tp_at t 3 0 ) k | cap ! ( ep_under_star ( tp_at t 3 1 ) ) { ^ T } {}
+        = e + e 1
+    }
+    = e 0
+    ~ < e ( sm_n sm SM_STORES ) {
+        : i t ( sm_at sm SM_STORES e )
+        ? & == ( tp_at t 5 2 ) k | cap ! ( ep_under_star ( tp_at t 5 3 ) ) { ^ T } {}
+        ? & == ( tp_at t 5 0 ) k ! ( ep_under_star ( tp_at t 5 1 ) ) { ^ T } {}
+        = e + e 1
+    }
+    = e 0
+    ~ < e ( sm_n sm SM_EFFECTS ) {
+        : i t ( sm_at sm SM_EFFECTS e )
+        ? & & == ( tp_at t 3 0 ) k ! ( ep_under_star ( tp_at t 3 1 ) ) != ( tp_at t 3 2 ) EF_DROP { ^ T } {}
+        = e + e 1
+    }
+    = e 0
+    ~ < e ( sm_n sm SM_SCLOS ) { ? == ( tp_at ( sm_at sm SM_SCLOS e ) 3 0 ) k { ^ T } {} = e + e 1 }
+    = e 0
+    ~ < e ( sm_n sm SM_CLOARGS ) { ? == ( tp_at ( sm_at sm SM_CLOARGS e ) 4 2 ) k { ^ T } {} = e + e 1 }
+    ^ F
+}
+
+// One statement's say on which variables are such handles: what gives
+// one a value, and what is done with it. `uses`: per variable, how many
+// operands name it.
+@ priv_stmt i at i uses → v {
+    : i op ( ec at )
+    : ~ i rv -1
+    : ~ i dest -1
+    ? == op CO_LET { = rv + at 2 = dest ( ec + at 1 ) } {}
+    ? == op CO_EVAL { = rv + at 1 } {}
+    ? == op CO_ASSIGN {
+        = rv + at 2
+        : i irop ( ec + at 1 )
+        ? >= irop 2 {
+            : i target ( eng_op irop )
+            ? ( op_is_place target ) {
+                ? == ( pl_path target ) 0 { = dest ( pl_var target ) } { ( priv_reject ( pl_var target ) ) }
+            } {}
+        } {}
+    } {}
+    // (an element of a container, a payload matched out: read out of
+    // something, so no handle of its own)
+    ? == op CO_FOREACH { ( priv_reject ( ec + at 1 ) ) } {}
+    ? | | | | == op CO_IF == op CO_MATCH == op CO_LOOPCOND == op CO_RET == op CO_FOREACH {
+        : i o ( eng_op ( ec + at ? == op CO_FOREACH 2 1 ) )
+        ? ( op_is_place o ) { ( priv_reject ( pl_var o ) ) } {}
+    } {}
+    ? < rv 0 { ^ } {}
+    : i k ( ec rv )
+    ? ( priv_cand dest ) {
+        // what gives it a value: a fresh block, or a temporary handed whole
+        : ~ b ok F
+        ? == k RV_NONE { = ok T } {}
+        ? == k RV_CALL { = ok ( sm_fresh_handle ( eng_summary_of ( ec + rv 1 ) ) ) } {}
+        ? == k RV_USE {
+            : i o ( eng_op ( ec + rv 1 ) )
+            ? & & ( op_is_place o ) == ( pl_path o ) 0 == ( fv_kind ( pl_var o ) ) VK_TEMP {
+                : i w ( pl_var o )
+                : i was ( wv_at g_fc_priv_src dest )
+                ? & ( priv_cand w ) | < was 0 == was w { ( wv_put g_fc_priv_src dest w ) = ok T } {}
+            } {}
+        } {}
+        ? ! ok { ( priv_reject dest ) } {}
+    } {}
+    : ~ i first -1
+    : ~ i n 0
+    ? | == k RV_USE == k RV_PAYLOAD { = first + rv 1 = n 1 } {}
+    ? | | == k RV_CALL == k RV_CLOSURE == k RV_OPAQUE { = n ( ec + rv 2 ) = first + rv 3 } {}
+    ? == k RV_AGG { = n ( ec + rv 3 ) = first + rv 4 } {}
+    ? | == k RV_SCALAR == k RV_CALLIND { = n ( ec + rv 1 ) = first + rv 2 } {}
+    : i sm ? | == k RV_CALL == k RV_CLOSURE ( eng_summary_of ( ec + rv 1 ) ) -1
+    : ~ i j 0
+    ~ < j n {
+        : i o ( eng_op ( ec + first j ) )
+        ? & ( op_is_place o ) ( priv_cand ( pl_var o ) ) {
+            : i u ( pl_var o )
+            ( wv_put uses u + ( wv_at uses u ) 1 )
+            : ~ b ok F
+            ? == ( pl_path o ) 0 {
+                ? == k RV_USE { = ok & >= dest 0 == ( wv_at g_fc_priv_src dest ) u } {}
+                ? == k RV_CALL { = ok ! ( sm_may_share sm j F ) } {}
+                ? == k RV_CLOSURE { = ok ! ( sm_may_share sm j T ) } {}
+            } {}
+            ? ! ok { ( priv_reject u ) } {}
+        } {}
+        = j + j 1
+    }
+}
+
+// The closure body `f` is made here with the captures in mask `m` such
+// handles: what is known of every place it is made. (Whoever read the
+// body's summary is walked again when that changes: what running the
+// body does depends on it.)
+@ clo_priv_meet i f i m → v {
+    ? | < g_clo_priv 0 >= f ( wv_len g_clo_priv ) { ^ } {}
+    : i was ( wv_at g_clo_priv f )
+    : i now + 1 ? == was 0 m & - was 1 m
+    ? == now was { ^ } {}
+    ( wv_put g_clo_priv f now )
+    ? | < g_fc_dirty 0 < g_sm_rd_head 0 { ^ } {}
+    : ~ i e ( wv_at g_sm_rd_head f )
+    ~ != e 0 {
+        ( wv_put g_fc_dirty ( wv_at g_sm_readers - e 1 ) 1 )
+        = e ( wv_at g_sm_readers e )
+    }
+}
+
+// Is capture `k` of closure body `f` such a handle wherever the body is
+// made?
+@ clo_cap_private i f i k → b {
+    ? | | < g_clo_priv 0 < f 0 >= f ( wv_len g_clo_priv ) { ^ F } {}
+    : i m ( wv_at g_clo_priv f )
+    ? | == m 0 >= k 60 { ^ F } {}
+    ^ != 0 & - m 1 << 1 k
+}
+
+// The variables of the function being read that are such handles: every
+// value they are given a fresh block or a temporary that is one, and
+// nothing done with them that may share them.
+@ eng_mark_private → v {
+    : ~ b any F
+    : ~ i v 0
+    ~ < v g_f_nv { ? ( priv_cand v ) { ( wv_put g_fc_priv v 1 ) = any T } {} = v + v 1 }
+    ? any { ( priv_scan ) } {}
+    // the closures made here: which of their captures are such handles
+    : ~ i at 0
+    ~ < at g_ec_n {
+        : i op ( ec at )
+        ? & | == op CO_LET == op CO_ASSIGN == ( ec + at 2 ) RV_CLOSURE {
+            : i rv + at 2
+            : i f ( ef_find ( ec + rv 1 ) )
+            ? >= f 0 {
+                : ~ i m 0
+                : ~ i j 0
+                ~ & < j ( ec + rv 2 ) < j 60 {
+                    : i o ( eng_op ( ec + + rv 3 j ) )
+                    ? & & ( op_is_place o ) == ( pl_path o ) 0 ( priv_is ( pl_var o ) ) { = m | m << 1 j } {}
+                    = j + j 1
+                }
+                ( clo_priv_meet f m )
+            } {}
+        } {}
+        = at + at ( eng_stmt_len at )
+    }
+}
+
+@ priv_scan → v {
+    : i uses ( wv_new )
+    ( wv_fill uses g_f_nv 0 )
+    : ~ i at 0
+    ~ < at g_ec_n {
+        ( priv_stmt at uses )
+        = at + at ( eng_stmt_len at )
+    }
+    // (a temporary handed whole to a binding is named by nothing else)
+    : ~ i v 0
+    ~ < v g_f_nv {
+        : i w ( wv_at g_fc_priv_src v )
+        ? & >= w 0 != 1 ( wv_at uses w ) { ( priv_reject w ) } {}
+        = v + v 1
+    }
+    ( wv_drop uses )
+    // …and is one only if the binding is: the payload is one
+    : ~ b more T
+    ~ more {
+        = more F
+        = v 0
+        ~ < v g_f_nv {
+            : i w ( wv_at g_fc_priv_src v )
+            ? & >= w 0 != ( wv_at g_fc_priv v ) ( wv_at g_fc_priv w ) {
+                ( priv_reject v ) ( priv_reject w )
+                = more T
+            } {}
+            = v + v 1
+        }
+    }
+}
+
 // Is the change at `path` of `vid`, `below` steps under a shared payload,
 // made inside a value that orders every change made through a borrow of it
 // (ETF_ORDERS): the payload itself or a part of it around the changed place?
@@ -12920,9 +13193,12 @@ unsafe @ eng_byte s w i k → i {
     : i ps ( shared_tails p )
     ? == 0 ( sq_len ps ) { ^ F } {}
     : i qs ( shared_tails q )
+    // (…save a payload no other handle reaches: an effect inside it ends
+    // what was lent out of it alone - the loans on its own variable, above)
+    : i b0 ? ( priv_head p ) 2 0
     : ~ i a 0
     ~ < a ( sq_len qs ) {
-        : ~ i b 0
+        : ~ i b b0
         ~ < b ( sq_len ps ) {
             ? & == ( sq_at qs a ) ( sq_at ps b ) ( kills_paths eff ( sq_at ps + b 1 ) q ( sq_at qs + a 1 ) k pscalar ) { ^ T } {}
             = b + b 2
@@ -12933,9 +13209,11 @@ unsafe @ eng_byte s w i k → i {
 }
 
 // An effect at `tail` inside some payload of the shared handle type
-// `ty`: ends what was lent out of any payload of that type.
-@ region_effect i st i ty i tail i eff → v {
-    = g_s_regions ( sq_add g_s_regions ( tp3 ty ( ep_take tail 3 ) eff ) )
+// `ty`: ends what was lent out of any payload of that type. (`via`: the
+// parameter of this function, a handle itself, it is made through + 1,
+// 0 none - kept with it in the summary.)
+@ region_effect i st i ty i tail i eff i via → v {
+    = g_s_regions ( sq_add g_s_regions ( tp4 ty ( ep_take tail 3 ) eff via ) )
     : ~ i dead ( st_dead st )
     : i n ( wv_len g_el_shared )
     : ~ i x 0
@@ -12975,6 +13253,21 @@ unsafe @ eng_byte s w i k → i {
         = v + v 1
     }
     ^ live
+}
+
+// A region a callee made through its parameter, a handle itself, handed
+// `op` (a capture's place, for a closure body): what the call does there.
+// -1 nothing more - the argument is a handle on a payload no other
+// reaches, and the parameter's effect, done to it, ended its own loans.
+// Else the parameter of this function it is made through + 1 (the
+// argument is that parameter whole), 0 none.
+@ region_arg_via i st i op → i {
+    ? ! & ( op_is_place op ) == ( pl_path op ) 0 { ^ 0 } {}
+    : i vid ( pl_var op )
+    ? ( priv_is vid ) { ^ -1 } {}
+    : i av ( st_av st vid )
+    ? & & >= ( fv_pidx vid ) 0 != av 0 != ( av_own av ) OW_L { ^ + ( fv_pidx vid ) 1 } {}
+    ^ 0
 }
 
 // What is done to a place: the loans it ends are dead from here on, and
@@ -13091,10 +13384,20 @@ unsafe @ eng_byte s w i k → i {
         // payload, whichever handle it was reached through: the callers'
         // too (the summary's regions)
         : i ts ( shared_tails place )
+        // (…but not one inside the payload of a handle no other reaches: it
+        // is that payload's alone. One made inside the payload of a
+        // parameter that is a handle itself is said to be made through
+        // that parameter: done to the caller's argument, which its effect
+        // above says, it is done where that argument's payload is - which
+        // the caller may know to be one no other handle reaches.)
+        : b own ( priv_head place )
+        : i via ? & & >= ( fv_pidx vid ) 0 <= ( ep_len path ) 3 ( head_shared place ) + ( fv_pidx vid ) 1 0
         : ~ i a 0
         ~ < a ( sq_len ts ) {
             : i ty ( sq_at ts a )
-            = g_s_regions ( sq_add g_s_regions ( tp3 ty ( ep_take ( sq_at ts + a 1 ) 3 ) eff ) )
+            ? ! & own == a 0 {
+                = g_s_regions ( sq_add g_s_regions ( tp4 ty ( ep_take ( sq_at ts + a 1 ) 3 ) eff ? == a 0 via 0 ) )
+            } {}
             ? & ( et_flag ty ETF_ARC ) ! ( eng_change_ordered vid path ( ep_len ( sq_at ts + a 1 ) ) ) {
                 // every thread holding a copy of the Arc reads its payload:
                 // nothing changes it in place - unless a value the change is
@@ -15051,11 +15354,23 @@ unsafe @ eng_byte s w i k → i {
             ( wv_drop snap )
             // (what the body changes inside a shared payload is changed in
             // the one payload every handle on it reaches)
+            // (…save one made through a capture that is a handle on a
+            // payload no other reaches: here, or wherever the body is made)
             : i nrg ( sm_n f SM_REGIONS )
             = e 0
             ~ < e nrg {
                 : i rg ( sm_at f SM_REGIONS e )
-                ( region_effect st ( tp_at rg 3 0 ) ( tp_at rg 3 1 ) ( tp_at rg 3 2 ) )
+                : i pk - ( tp_at rg 4 3 ) 1
+                : ~ i via 0
+                ? & >= pk 0 < pk ncap {
+                    = via ? ( clo_cap_private f pk ) -1 0
+                    = k 0
+                    ~ < k ( wv_len caps ) {
+                        ? == ( wv_at caps k ) pk { = via ( region_arg_via st ( wv_at caps + k 1 ) ) } {}
+                        = k + k 2
+                    }
+                } {}
+                ? >= via 0 { ( region_effect st ( tp_at rg 4 0 ) ( tp_at rg 4 1 ) ( tp_at rg 4 2 ) via ) } {}
                 = e + e 1
             }
             : i nc ( sm_n f SM_CONSUMES )
@@ -15916,11 +16231,15 @@ unsafe @ eng_byte s w i k → i {
     }
     // what the callee may do inside a shared payload, whichever handle it
     // reaches it through
+    // (…one made through a parameter that is a handle itself is done
+    // where the argument's payload is: region_arg_via)
     : i nr ( sm_n sm SM_REGIONS )
     = e 0
     ~ < e nr {
         : i t ( sm_at sm SM_REGIONS e )
-        ( region_effect st ( tp_at t 3 0 ) ( tp_at t 3 1 ) ( tp_at t 3 2 ) )
+        : i pk - ( tp_at t 4 3 ) 1
+        : i via ? & >= pk 0 < pk n ( region_arg_via st ( wv_at ops pk ) ) 0
+        ? >= via 0 { ( region_effect st ( tp_at t 4 0 ) ( tp_at t 4 1 ) ( tp_at t 4 2 ) via ) } {}
         = e + e 1
     }
     // a closure another thread runs takes what it captured with it (…and
@@ -16811,8 +17130,8 @@ unsafe @ eng_byte s w i k → i {
             : ~ i e 0
             ~ < e ( sm_n f SM_REGIONS ) {
                 : i rg ( sm_at f SM_REGIONS e )
-                : i eff ( tp_at rg 3 2 )
-                ? | | | == eff EF_REPLACE == eff EF_REALLOC == eff EF_DROP == eff EF_TAKE { ( wv_push regs ( tp_at rg 3 0 ) ) } {}
+                : i eff ( tp_at rg 4 2 )
+                ? | | | == eff EF_REPLACE == eff EF_REALLOC == eff EF_DROP == eff EF_TAKE { ( wv_push regs ( tp_at rg 4 0 ) ) } {}
                 = e + e 1
             }
             : i ncap ( ef_ncap f )
@@ -19453,7 +19772,7 @@ unsafe @ eng_byte s w i k → i {
         = e 0
         ~ < e ( wv_len shs ) {
             : i sh ( wv_at shs e )
-            ? ! ( et_flag sh ETF_ARC ) { ( wv_push regions ( tp3 sh 0 EF_REALLOC ) ) } {}
+            ? ! ( et_flag sh ETF_ARC ) { ( wv_push regions ( tp4 sh 0 EF_REALLOC 0 ) ) } {}
             = e + e 1
         }
         ( wv_drop shs )
@@ -19830,6 +20149,8 @@ unsafe @ eng_byte s w i k → i {
     ( eng_mark_blocks 0 g_ec_n )
     // the literals handed back as they are, and the ones nested in them
     ( eng_mark_rets )
+    // the handles on payloads no other handle reaches
+    ( eng_mark_private )
     // the body's first statement, inside the scopes it opens with - past
     // the temporaries bound before it that run nothing and cannot unwind
     // (a literal of operands, `= w @ W { `literal` }`: agora #386)
@@ -20570,6 +20891,8 @@ unsafe @ eng_byte s w i k → i {
         = g_fc_dirty ( wv_new ) = g_fe ( wv_new ) = g_sm_stamp ( wv_new ) = g_sm_edges ( im_new ) = g_sm_readers ( wv_new )
         = g_sm_rd_head ( wv_new )
     } {}
+    ? < g_clo_priv 0 { = g_clo_priv ( wv_new ) } {}
+    ( wv_fill g_clo_priv nf 0 )
     ( wv_fill g_sm_rd_head nf 0 )
     ( wv_fill g_fc_dirty nf 0 )
     ( wv_fill g_fe nf -1 )
