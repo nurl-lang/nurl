@@ -6599,8 +6599,11 @@ unsafe @ __arg_lend_root i syms → s {
         // still due at the `^`. Taken for none, `^ e` of `?? ( vec_get inner
         // 0 )` went to the caller as its own while ov's drop freed it: agora
         // #560.)
-        : s rpb ( nurl_sym_get2 syms r `__plbind` )
-        ? & & & < rdot 0 != 0 ( nurl_str_len up ) != 0 ( nurl_sym_len2 syms up `__alias` ) & != 0 ( nurl_str_len rpb ) == 0 ( nurl_str_len ( str_skip_word rpb ) ) {
+        // (…and a field path of one, `h.a` of `( f0 . h a )`: a field of
+        // the payload is part of it, lent out of the same binding — agora
+        // #762.)
+        : s rpb ( nurl_sym_get2 syms rb `__plbind` )
+        ? & & != 0 ( nurl_str_len up ) != 0 ( nurl_sym_len2 syms up `__alias` ) & != 0 ( nurl_str_len rpb ) == 0 ( nurl_str_len ( str_skip_word rpb ) ) {
             : s bup ( mem_udrop_ptr_of syms rpb )
             ? & & != 0 ( nurl_str_len bup ) == 0 ( nurl_sym_len2 syms bup `__pname` ) == 0 ( nurl_sym_len2 syms bup `__alias` ) {
                 : ~ s bone ``
@@ -6634,8 +6637,8 @@ unsafe @ __arg_lend_root i syms → s {
         // is one of this frame there, and a lend of what it was lent out of
         // on the others. Taken for neither, `^ e` of `?? ( vec_get inner 0 )`
         // went to the caller as its own while inner's drop freed it: agora
-        // #560.)
-        ? & & & & < rdot 0 != 0 ( nurl_str_len up ) ( seq sb `dyn` ) == 0 ( nurl_sym_len2 syms up `__alias` ) == 0 ( nurl_sym_len2 syms r `__plbind` ) {
+        // #560.) (…and a field path of one, `h.a`, as h: agora #762.)
+        ? & & & != 0 ( nurl_str_len up ) ( seq sb `dyn` ) == 0 ( nurl_sym_len2 syms up `__alias` ) == 0 ( nurl_sym_len2 syms rb `__plbind` ) {
             : ~ s done ``
             : ~ i j 0
             ~ < j nroots {
@@ -6646,10 +6649,10 @@ unsafe @ __arg_lend_root i syms → s {
             : s dtri ( nurl_sym_get syms `__last_local_lend__` )
             ? != 0 ( nurl_str_len dl0 ) {
                 : ~ s dfl ( mem_udrop_flag_get syms cg up )
-                ? != 0 ( nurl_sym_len2 syms r `__pljk` ) {
+                ? != 0 ( nurl_sym_len2 syms rb `__pljk` ) {
                     : i __dvia g_pfo_via
                     = g_pfo_via 1
-                    : s dsr ( __pl_chain_sub syms cg r `p` )
+                    : s dsr ( __pl_chain_sub syms cg rb `p` )
                     = g_pfo_via __dvia
                     : i dtb ( nurl_str_find dsr `\t` )
                     : s dsub ( nurl_str_slice dsr 0 dtb )
@@ -6688,7 +6691,7 @@ unsafe @ __arg_lend_root i syms → s {
                     ( nurl_print `  ` ) ( nurl_print bw ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print ( nurl_str_slice sb 1 - ( nurl_str_len sb ) 1 ) ) ( nurl_print `\n` )
                     : s ow ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print ow ) ( nurl_print ` = xor i1 ` ) ( nurl_print bw ) ( nurl_print `, 1\n` )
-                    : s la ( nurl_cg_reg cg )
+                    : ~ s la ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print la ) ( nurl_print ` = and i1 ` ) ( nurl_print l ) ( nurl_print `, ` ) ( nurl_print ow ) ( nurl_print `\n` )
                     // (…and on the runs it did NOT own its value — a lend
                     // out of a parameter's element, `: ( Vec String ) v (
@@ -6704,6 +6707,29 @@ unsafe @ __arg_lend_root i syms → s {
                         ( nurl_print `  ` ) ( nurl_print dlo ) ( nurl_print ` = or i1 ` ) ( nurl_print dl0 ) ( nurl_print `, ` ) ( nurl_print dl ) ( nurl_print `\n` )
                         ( nurl_sym_def syms `__last_pl_dynlent__` dlo )
                     }
+                    // (…and what its call lent it out of on those runs, at
+                    // any depth: a local of this frame there, `hs` of `: H h
+                    // ( vec_at [H] hs 0 )`, makes this call's lend one out of
+                    // it. Taken for none, `^ ( f0 . h a )` and a slice of `h`
+                    // went to the caller as their own while hs's drop freed
+                    // them — agora #762.)
+                    ? != 0 ( nurl_sym_len2 syms rb `__pljk` ) {
+                        : i __yvia g_pfo_via
+                        = g_pfo_via 1
+                        : s ysr ( __pl_chain_sub syms cg rb `p` )
+                        = g_pfo_via __yvia
+                        : i ytb ( nurl_str_find ysr `\t` )
+                        : s ysub ( nurl_str_slice ysr 0 ytb )
+                        : s ysubtri ( nurl_str_slice ysr + ytb 1 - - ( nurl_str_len ysr ) ytb 1 )
+                        ? != 0 ( nurl_str_len ysub ) {
+                            : s yl ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print yl ) ( nurl_print ` = and i1 ` ) ( nurl_print dl ) ( nurl_print `, ` ) ( nurl_print ysub ) ( nurl_print `\n` )
+                            : s yo ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print yo ) ( nurl_print ` = or i1 ` ) ( nurl_print la ) ( nurl_print `, ` ) ( nurl_print yl ) ( nurl_print `\n` )
+                            = la yo
+                            ? != 0 ( nurl_str_len ysubtri ) { = lends ( __tri_union lends ysubtri ) } {}
+                        } {}
+                    } {}
                     = l la
                 } {}
                 ? == 0 ( nurl_str_len acc ) { = acc ( nurl_str_cat l `` ) } {
@@ -6744,11 +6770,19 @@ unsafe @ __arg_lend_root i syms → s {
                     ( __pfo_links_set ( nurl_str_cat4 g_pfo_links ? == 0 ( nurl_str_len g_pfo_links ) `` ` ` ( nurl_str_cat4 ( str_first_word key ) ` ` ( __key_gn key ) ( nurl_str_cat ` ` ( nurl_str_int idx ) ) ) `` ) )
                 } { = g_pfo_via 1 }
                 : s sr ( __pl_chain_sub syms cg rl knd )
+                // (…and a `: ~` binding with both — a view it was bound to, a
+                // payload assigned over it, `cur` of `: ~ ( Slice String ) cur
+                // ( slice_from_vec v ) … = cur s1`: what it holds may be
+                // either, so both are asked. Asked for the payload's only,
+                // the view of v went to the caller as its own while v's drop
+                // freed it — agora #762.)
+                : s srv ? & rpl != 0 ( nurl_str_len ( __vlj_get syms rl `__vljk` ) ) ( __pl_chain_sub syms cg rl `v` ) ``
                 = g_pfo_via __evia
                 ( __pfo_links_set __elinks )
                 : i stb ( nurl_str_find sr `\t` )
-                : s sub ( nurl_str_slice sr 0 stb )
-                : s subtri ( nurl_str_slice sr + stb 1 - - ( nurl_str_len sr ) stb 1 )
+                : i svb ( nurl_str_find srv `\t` )
+                : s sub ( __or_i1 cg ( nurl_str_slice sr 0 stb ) ? < svb 0 `` ( nurl_str_slice srv 0 svb ) )
+                : s subtri ( __tri_union ( nurl_str_slice sr + stb 1 - - ( nurl_str_len sr ) stb 1 ) ? < svb 0 `` ( nurl_str_slice srv + svb 1 - - ( nurl_str_len srv ) svb 1 ) )
                 // (A payload matched out of a field of r, `?? . r o { T e → …
                 // }` with r a `??` payload: part of r, so lent out of a local
                 // wherever r was — no callee to ask. Taken for none, `^ e`
