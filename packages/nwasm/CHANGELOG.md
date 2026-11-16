@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.1.5] — 2026-11-16
+
+### Fixed
+
+- A decode error's message is no longer freed by hand before the new one is
+  made (`__mod_err`): the `=` releases the old message once the new one
+  exists, so a panic in between leaves no freed field behind.
+
 ## [3.1.4] — 2026-11-11
 
 ### Changed

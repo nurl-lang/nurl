@@ -27,6 +27,17 @@ model (`formal/A2`), extended only where NURL has more.
   result, a literal, a join, a value block, a closure and a try each land
   in a temporary. A consumer only ever sees an operand. This is
   [ELABORATION.md](ELABORATION.md)'s rule, applied to every form.
+- **A call's argument is read where it is evaluated.** Codegen loads an
+  argument passed by value where it reads it, before the arguments after
+  it run. When a later argument runs statements of its own (a call, a
+  store, a literal), each earlier argument that is a place is read there
+  (`core_arg_read`): one loaded as a word (a number, a raw string) is
+  bound to a temporary, `let t use <place>`, and the call is handed `t`;
+  an aggregate that owns nothing is read in place, `eval scalar 1
+  <place>`, and the call still names the place (`use` of a whole binding
+  would move it). An `inout` argument, and an owner the call is lent,
+  stay places the call reads when it runs. So `( g . w v ( reset w ) )`
+  is `let t use w/v`, `eval call reset 1 w`, `eval call g 2 t c`.
 
 ## 2. The text `--emit-core` prints
 
@@ -51,11 +62,23 @@ sum   <function> <parameters> (<key>=<words>)…
   the join, for the call that consumes the join to release, so in the IR it
   is the enclosing statement's: of the join's depth, not ended where the
   arm's scope ends, and dropped where that statement drops its own.
+  128: the literal a `\` try hands its failure on in (`let x agg F 1 e`
+  in the try's `F` arm). Codegen hands a failure that cannot be copied
+  on in it whole - a lend as the call lent it, the caller told per call
+  whether it owns it (`mem_store_hown`), as `^` of the call's result
+  would - where a literal written `@ !T E { F e }` copies its field.
+  256: a call's temporary (an option) whose payload codegen reads from a
+  slot it can name (`vec_get`: `mem_note_vec_get`), and takes out of that
+  slot where a consumer takes the payload whole (`mem_vget_consume`) -
+  the element leaves its container rather than going over as a copy.
 - `fn` flags: bit 0 the body may use raw memory (`unsafe`, or a file of the
   standard library); bit 1 it crosses the raw boundary itself (a read or a
   store through a pointer, a cast that makes an address, a call only
   `unsafe` code may make: `bck_check_raw_call`'s rules, asked of every
-  call); bit 2 it calls a foreign function. `template` is the generic an
+  call); bit 2 it calls a foreign function; bit 3 it may start a panic
+  with no call the IR names - a check codegen writes inline (a division,
+  a remainder or a shift checked at run time, a float-to-integer
+  conversion, a closure capture's taken check; `core_note_panic_point`). `template` is the generic an
   instance was made from.
 - `v` kind: 0 parameter, 1 binding, 2 temporary, 3 capture. Flags: 1
   mutable, 2 `inout`, 4 `sink`, 8 a capture taken by pointer (a `: ~`

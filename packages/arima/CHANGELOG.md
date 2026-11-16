@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.4] — 2026-11-16
+
+### Fixed
+
+- A model's state, regressors and coefficients are no longer freed by hand
+  before their new values are made (`__arima_restart_at_in`,
+  `__ar_attach_fourier`): the field's `=` releases the old value once the new
+  one exists, so a panic while it is made (caught by `recover`) leaves the
+  model whole instead of holding freed memory. `_ar_ss_free` is gone.
+
 ## [0.6.3] — 2026-10-21
 
 ### Fixed
