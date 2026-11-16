@@ -3680,7 +3680,7 @@ theorem liftX_underD (h : S.OK) {ξ : Exits} {x : Var} {Γ0 : Ctx} (_ : S.AbsOK 
     obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hE
     obtain ⟨hrb, hdv⟩ := hd E0 h0
     refine ⟨by rw [liftE_mode x hrb]; cases hm : E0.mode <;> simp_all [liftMode], fun hv => ?_⟩
-    rw [liftE_dbind h, if_neg hrb]
+    rw [liftE_dbind h]; simp only [hrb, ↓reduceIte]
     exact hdv (by rwa [liftE_ty' h hab h0] at hv)
   · rw [← canon_exitScope h hab (Or.inl hbx)]
     have hwk := (Weaker.refl hw hn).exitScope x he.2.2

@@ -2085,7 +2085,7 @@ theorem KeepOut.weaker_left {Γ Γ0 Δ : Ctx} {sp : List Var} (hw : Weaker Γ Γ
     and every binding outside the frames as it was (a borrowed parameter's
     entry too: no scope inside its call ends what it borrows). -/
 theorem exit_post {k e0 : Stmt} {n : Nat} (hs : ExitAt k n e0) {Γ Γp : Ctx} {F : List Var} {x : Var}
-    {Ex : Entry} (hx : Γ x = some Ex) (hnrb : Ex.mode ≠ .rootb) (hxF : x ∉ F) (h3 : CtxWF Γp)
+    {Ex : Entry} (hx : Γ x = some Ex) (hxF : x ∉ F) (h3 : CtxWF Γp)
     (h4 : NameWF Γp) (h5 : KeepOut Γ Γp e0.spine) (hend : EndOK Γp x)
     (hanchk : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → Anchored E F) :
     CtxWF (exitScope x Γp) ∧ NameWF (exitScope x Γp) ∧ KeepOut Γ (exitScope x Γp) (x :: e0.spine) := by
@@ -2156,7 +2156,7 @@ theorem ExitAt.typed {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt
           subst h; rw [hx] at hp; cases hp; exact hnrb hm)
       obtain ⟨Γp, h1, h2, h3, h4, h5⟩ := ih hs hw hn hanchk (ξ0.under x)
       obtain ⟨hend, hup⟩ := Exits.under_up h2
-      exact ⟨_, StmtT.scope ⟨Ex, hx, hnrb⟩ hxF h1 hend, hup, exit_post hs hx hnrb hxF h3 h4 h5 hend hanchk⟩
+      exact ⟨_, StmtT.scope ⟨Ex, hx, hnrb⟩ hxF h1 hend, hup, exit_post hs hx hxF h3 h4 h5 hend hanchk⟩
   | @scopeD ξ Γ Δ1 F x f k hxE hxF _ _ _ _ _ _ hself ih =>
     intro n e he hw hn hanch ξ0
     cases he with
@@ -2171,7 +2171,7 @@ theorem ExitAt.typed {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt
       obtain ⟨Γp, h1, h2, h3, h4, h5⟩ := ih hs hw hn hanchk (ξ0.underD x)
       obtain ⟨hend, hdb, hup⟩ := Exits.underD_up h2
       exact ⟨_, StmtT.scopeD ⟨Ex, tx, hx, hmo, hrest⟩ hxF h1 hend h5 h3 h4 hdb hself, hup,
-        exit_post hs hx hnrb hxF h3 h4 h5 hend hanchk⟩
+        exit_post hs hx hxF h3 h4 h5 hend hanchk⟩
   | _ => intro n e he; cases he
 
 /-- Preservation: every step of a well-typed configuration, given the call
