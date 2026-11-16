@@ -280,6 +280,25 @@ class FnCheck:
                         else:
                             blocks(part)
         blocks(fn.body)
+        # Every statement's place in the function's text, in the order
+        # codegen generates them; and which readers codegen links to which
+        # variables, at the first statement that links them (`links`,
+        # handover, agora #881, #886).
+        self.order = {}
+        self.links = {}
+        self.cur_at = -1
+
+        def order(stmts):
+            for s in stmts:
+                self.order[id(s)] = len(self.order)
+                for part in s[1:]:
+                    if isinstance(part, list):
+                        if part and isinstance(part[0], tuple) and part[0] and isinstance(part[0][0], str) and len(part[0]) == 2 and isinstance(part[0][1], list):
+                            for _, arm in part:
+                                order(arm)
+                        else:
+                            order(part)
+        order(fn.body)
         # the literals the function hands back as they are (`^ @ W { … }`),
         # and the literals nested in one (`@ Json { JStr . r str }`): their
         # fields move out of what they name (h264)
@@ -2064,21 +2083,6 @@ class FnCheck:
         return any(isinstance(l, tuple) and isinstance(l[0], tuple) and l[0] and l[0][0] == "ho"
                    and self.loans.get(l, (None,))[0] == place for l in av.loans)
 
-    def call_lent_reader(self, av, place):
-        """Is `av` a binding `=` gave what a call lent of `place` (or of its
-        option's or result's payload): no call mark left (an owner given a
-        call's lend), and every loan it holds on that place made by the
-        call?  Codegen links such a binding to no owner, so it is handed
-        nothing when the place is replaced (agora #881)."""
-        if av.own != "L" or av.call:
-            return False
-        mine = [l for l in av.loans if l in self.loans
-                and self.loans[l][0][0] == place[0]
-                and self.loans[l][0][1][len(place[1]):] in ((), ("#T0",), ("#F0",))
-                and self.loans[l][0][1][:len(place[1])] == place[1]]
-        return bool(mine) and all(isinstance(l, tuple) and isinstance(l[0], tuple)
-                                  and len(l[0]) > 1 and l[0][1] == "l" for l in mine)
-
     def handover(self, st, place):
         """A store replacing a place whose old value a binding reads - the
         place itself, or a part of it - hands that old value over to the
@@ -2102,13 +2106,12 @@ class FnCheck:
             # codegen hands to no one - the borrow ends there, agora #387)
             if self.ho_on(av, place):
                 continue
-            # (…nor a binding `=` gave a call's lend of it - `= o ( id
-            # other )`: codegen's `=` of a call's result keeps the call's
-            # per-run answer and links o to nothing, so `= other` frees the
-            # old value under o. Its loan ends there instead. A `:` binding
-            # of the call keeps the call mark and is linked as an alias is -
-            # agora #881)
-            if self.call_lent_reader(av, place):
+            # (…nor a binding codegen never linked to the place's variable
+            # before this statement - one `=` gave a call's lend of it, `= o
+            # ( id other )`, however often it is given back to itself after:
+            # `= other` frees the old value under it. Its loan ends there
+            # instead - agora #881, #886)
+            if not self.linked(vid, place[0]):
                 continue
             ty = self.fn.vars[vid].ty
             if ty is None or ty[0] in VIEW_TYPES or ty[0] == "closure":
@@ -3442,6 +3445,33 @@ class FnCheck:
         return st
 
     def stmt(self, st, s):
+        at = self.order.get(id(s))
+        if at is not None:
+            self.cur_at = at
+        st = self._stmt(st, s)
+        if at is not None and s[0] in ("let", "assign") and not st.bottom:
+            # codegen links a binding to what it names where a `:` binds it
+            # (by name, a call's lend, a payload) or an `=` gives it a
+            # binding by name - not where an `=` gives it a call's result
+            vid = s[1] if s[0] == "let" else s[1][0]
+            byname = s[0] == "let" or (not s[1][1] and s[2] is not None and s[2][0] == "use"
+                                       and s[2][1][0] == "v" and self.fn.vars[s[2][1][1]].kind != "temp")
+            av = st.vals.get(vid)
+            if byname and av is not None and self.fn.vars[vid].kind != "temp":
+                for a in av.alias:
+                    if (vid, a[0]) not in self.links:
+                        self.links[(vid, a[0])] = at
+        return st
+
+    def linked(self, vid, var):
+        """Was `vid` linked to `var` by a statement before this one?  Codegen
+        hands a replaced owner's old value only to the readers it linked to
+        it in code generated before the replacing statement (agora #881,
+        #886)."""
+        at = self.links.get((vid, var))
+        return at is not None and at < self.cur_at
+
+    def _stmt(self, st, s):
         k = s[0]
         if isinstance(s[-1], int):
             self.cur_line = s[-1]
