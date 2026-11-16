@@ -66,6 +66,9 @@ void nurl__rctx_swap(void *ctx);
 void nurl__rctx_swap(void *ctx) { (void)ctx; }
 void nurl__rctx_release(void *ctx);
 void nurl__rctx_release(void *ctx) { (void)ctx; }
+/* …and the size of what the stub swap exchanges: nothing, so any slot
+ * fits (runtime_bare.c checks its slot against it at the first coroutine). */
+const unsigned long nurl__rctx_bytes = 0;
 
 /* runtime_bare.c §9b panics through runtime_core.c's nurl_panic when a
  * holder asks for an RwLocked it already has. Here the panic ends the
