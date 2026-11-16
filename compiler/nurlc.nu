@@ -43389,7 +43389,6 @@ unsafe @ gen_match i lex i syms i cg → s {
 
 @ gen_loop i lex i syms i cg → s {
     ( nurl_lex_advance lex )
-    ( __loop_mlent_scan lex syms )
     // For-each: ~ IDENT(var) IDENT(slice) { body }, or a field the
     // values are in: ~ IDENT . obj field { body }. (A while condition is
     // one expression: a name followed by another name, or by a member
@@ -101467,46 +101466,6 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
     ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__mlent` ) `1` )
 }
 
-// A loop (lexer just past its `~`) runs its body again after the body's
-// own `=`s: a `: ~` binding of an outer scope that the loop gives a new
-// value (`= e …`) may hold, at a statement above that `=`, the value the
-// `=` gave it on the round before - a call's lend among them. Marked before
-// the loop is compiled (__mlent_note), so what moves it on above the `=`
-// goes by its flag too: marked by the `=` alone, compiled after them,
-// `( keep e )` above `= e ( vec_at v 0 )` released the Vec's element on
-// the second round. A token scan of the loop's header and body (and of a
-// block right after them, where a condition is a block), restoring the
-// lexer; a binding marked that is never given a lend there only has its
-// flag asked where it is moved on.
-@ __loop_mlent_scan i lex i syms → v {
-    : i save ( nurl_lex_cur_start lex )
-    : ~ i depth 0
-    : ~ b done F
-    ~ ! done {
-        : i tt ( nurl_lex_type lex )
-        ? == tt TT_EOF { = done T } {
-            ? | | == tt TT_LPAREN == tt TT_LBRACK == tt TT_LBRACE { = depth + depth 1 ( nurl_lex_advance lex ) } {
-                ? | | == tt TT_RPAREN == tt TT_RBRACK == tt TT_RBRACE {
-                    = depth - depth 1
-                    ( nurl_lex_advance lex )
-                    // (a block closed at the loop's own level: the body,
-                    // or a condition that is a block - then the body
-                    // follows it)
-                    ? & == tt TT_RBRACE <= depth 0 { ? != ( nurl_lex_type lex ) TT_LBRACE { = done T } {} } {}
-                    ? < depth 0 { = done T } {}
-                } {
-                    ? & == tt TT_EQ ( is_ident_tok ( nurl_lex_peek_type lex ) ) {
-                        : s up ( mem_udrop_ptr_of syms ( nurl_lex_peek_val lex ) )
-                        ? & != 0 ( nurl_str_len up ) != 0 ( nurl_sym_len2 syms ( nurl_lex_peek_val lex ) `__mutable` ) { ( __mlent_note syms up `0` ) } {}
-                    } {}
-                    ( nurl_lex_advance lex )
-                }
-            }
-        }
-    }
-    ( nurl_lex_set_pos lex save )
-}
-
 @ __mlent_of i syms s ptr → b {
     ? == 0 ( nurl_sym_len2 syms ptr `__mlent` ) { ^ F } {}
     ^ == 0 ( nurl_sym_len2 syms ptr `__sborrow` )
@@ -101560,19 +101519,6 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
         ? != 0 ( nurl_str_len fl ) { ^ fl } {}
         ? | | ( seq sb `1` ) ( seq sb `local` ) ( seq sb `elem` ) { ^ ( nurl_str_cat `1` `` ) } {}
         ? == ( nurl_str_get sb 0 ) 33 { ^ ( nurl_str_cat sb `` ) } {}
-        // (A `: ~` binding with a provenance slot, `@slot`, that some `=`
-        // may give a call's lend - __mlent_note: the slot says what its
-        // `:` was given, and an `=` since, on this round or the one
-        // before, does not write it. Its flag says what it holds now: lent
-        // wherever it owns nothing. Read by the slot, `( hold v e )` above
-        // `= e ( vec_at … )` in a loop handed the Vec's element over as is.)
-        ? & & & == ( nurl_str_get sb 0 ) 64 != 0 ( nurl_sym_len2 syms up `__mlent` ) != 0 ( nurl_sym_len2 syms val `__mutable` ) == 0 ( nurl_sym_len2 syms up `__alias` ) {
-            : s mf0 ( mem_udrop_flag_get syms cg up )
-            : s mr0 ( nurl_cg_reg cg )
-            ( nurl_print `  ` ) ( nurl_print mr0 ) ( nurl_print ` = xor i1 ` ) ( nurl_print mf0 ) ( nurl_print `, 1
-` )
-            ^ mr0
-        } {}
         ? == ( nurl_str_get sb 0 ) 64 {
             : s lr ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print lr ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print ( nurl_str_slice sb 1 - ( nurl_str_len sb ) 1 ) ) ( nurl_print `\n` )
