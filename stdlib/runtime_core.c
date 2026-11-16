@@ -10876,10 +10876,15 @@ typedef struct NurlRecoverCtx {
     size_t            len, live, jslot_len;
     int               active;
 } NurlRecoverCtx;
-/* runtime_ffi.c reserves NURL_RCTX_WORDS pointers per fiber for it. */
-#define NURL_RCTX_WORDS 16
+/* Every scheduler reserves NURL_RCTX_WORDS pointers per fiber for it
+ * (nurl_rctx.h: the one definition runtime_ffi.c and runtime_bare.c share). */
+#include "nurl_rctx.h"
 _Static_assert(sizeof(NurlRecoverCtx) <= NURL_RCTX_WORDS * sizeof(void *),
-               "NurlRecoverCtx outgrew the per-fiber slot in runtime_ffi.c");
+               "NurlRecoverCtx outgrew the per-fiber slot (NURL_RCTX_WORDS, nurl_rctx.h)");
+/* …and its size, for a scheduler compiled apart from this file to check
+ * its slot against at start (runtime_bare.c): a slot that is too small is
+ * then a stop at the first coroutine, not a heap overrun at a switch. */
+const unsigned long nurl__rctx_bytes = sizeof(NurlRecoverCtx);
 
 /* Exchange a block of the running context's state (`t`, a thread-local)
  * with the fiber's copy (`c`, 8-byte aligned in the fiber): sixteen bytes

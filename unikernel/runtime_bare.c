@@ -167,7 +167,7 @@ typedef enum {
  * interleave on the one context, so each carries its own and the step
  * exchanges it around every switch, as runtime_ffi.c's worker loop does
  * (runtime_core.c: NurlRecoverCtx, which static-asserts the size). */
-#define NURL_RCTX_WORDS 14
+#include "../stdlib/nurl_rctx.h"  /* NURL_RCTX_WORDS: the one definition */
 void nurl__rctx_swap(void *ctx);
 void nurl__rctx_release(void *ctx);
 
@@ -429,7 +429,20 @@ static void nb_entry(void *arg) {
     abort();                                  /* unreachable  */
 }
 
+/* The real size of what nurl__rctx_swap exchanges with c->rctx, from
+ * runtime_core.c, which this file is compiled apart from. */
+extern const unsigned long nurl__rctx_bytes;
+
 static NbCoro *nb_coro_new(void *fn, void *env, int joinable) {
+    /* A slot smaller than the state is a heap overrun at every switch
+     * inside a recover extent, seen only now and then (agora #880): stop
+     * at the first coroutine instead, every run. */
+    if (nurl__rctx_bytes > sizeof(((NbCoro *)0)->rctx)) {
+        fprintf(stderr, "nurl: the coroutine's recovery slot (%lu bytes) is smaller than "
+                        "runtime_core.c's NurlRecoverCtx (%lu bytes): NURL_RCTX_WORDS, nurl_rctx.h\n",
+                (unsigned long)sizeof(((NbCoro *)0)->rctx), nurl__rctx_bytes);
+        abort();
+    }
     NbCoro *c = (NbCoro *)calloc(1, sizeof(NbCoro));
     if (!c) return 0;
 #ifdef NURL_SIM
