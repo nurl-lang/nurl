@@ -75,6 +75,7 @@ theorem Eval.restrict {m : Mem} {e : Expr} {n : Nat} (h : Eval m e n) {a2 : Nat 
   | var hx => exact .var hx
   | add _ _ ih1 ih2 => exact .add ih1 ih2
   | lt _ _ ih1 ih2 => exact .lt ih1 ih2
+  | dec _ ih => exact .dec ih
   | len hv => exact .len (VecOf.restrict hv hav hp)
   | slen hx => exact .slen hx
   | isl hx => exact .isl hx

@@ -843,6 +843,7 @@ inductive Expr where
   | var (x : Var)
   | add (a b : Expr)
   | lt (a b : Expr)
+  | dec (a : Expr)   -- `- a 1`, at least 0: a length's last index (AGORA-888)
   | len (x : Var)    -- `vec_len`
   | slen (x : Var)   -- `slice_len`
   | isl (x : Var)    -- an enum's tag: 1 for the first variant

@@ -395,6 +395,7 @@ inductive ExprT (Γ : Ctx) : Expr → Prop
   | var {x : Var} {E : Entry} : Γ x = some E → E.live = true → E.ty = .int → ExprT Γ (.var x)
   | add {a b : Expr} : ExprT Γ a → ExprT Γ b → ExprT Γ (.add a b)
   | lt {a b : Expr} : ExprT Γ a → ExprT Γ b → ExprT Γ (.lt a b)
+  | dec {a : Expr} : ExprT Γ a → ExprT Γ (.dec a)
   | len {x : Var} {E : Entry} {t : Ty} :
       Γ x = some E → E.live = true → E.ty = .vec t → ExprT Γ (.len x)
   | slen {x : Var} {E : Entry} {t : Ty} :
@@ -1838,6 +1839,7 @@ def Expr.vars : Expr → List Var
   | .var x => [x]
   | .add a b => a.vars ++ b.vars
   | .lt a b => a.vars ++ b.vars
+  | .dec a => a.vars
   | .len x => [x]
   | .slen x => [x]
   | .isl x => [x]

@@ -62,6 +62,8 @@ theorem eval_exists {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Expr} (he : ExprT
     obtain ⟨p, hp⟩ := iha; obtain ⟨q, hq⟩ := ihb; exact ⟨_, Eval.add hp hq⟩
   | lt _ _ iha ihb =>
     obtain ⟨p, hp⟩ := iha; obtain ⟨q, hq⟩ := ihb; exact ⟨_, Eval.lt hp hq⟩
+  | dec _ iha =>
+    obtain ⟨p, hp⟩ := iha; exact ⟨_, Eval.dec hp⟩
   | len hx hl ht =>
     obtain ⟨c, d, es, hvec, _⟩ := hi.vec_node hx hl ht
     exact ⟨_, Eval.len hvec⟩
