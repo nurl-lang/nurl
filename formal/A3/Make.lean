@@ -38,6 +38,7 @@ theorem Redex.globs_hole {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {GT 
   | catchR _ ih => exact ih hs
   | scopeD _ ih => exact ih hs
   | scopeL _ ih => exact ih hs
+  | block _ ih => exact ih hs
 
 theorem Redex.globsAt {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {GT : GTy} {y y' : Stmt}
     (hy : y.globsAt GT) (hy' : (K y').globsAt GT) : (K y).globsAt GT := by
@@ -50,6 +51,7 @@ theorem Redex.globsAt {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {GT : G
   | catchR _ ih => exact ih hy'
   | scopeD _ ih => exact ih hy'
   | scopeL _ ih => exact ih hy'
+  | block _ ih => exact ih hy'
 
 /-- Every thread of a configuration reads its globals at their declared types. -/
 def Cfg.globsAt (C : Cfg) (GT : GTy) : Prop := ∀ t ∈ C.ths, t.s.globsAt GT
@@ -218,7 +220,7 @@ theorem makeStmt_typed {P : Prog} (hP : ProgOK P) {D : List Decl} (hD : DeclsOK 
     split at hE
     · cases hE; exact ⟨by simp [resE], rfl, rfl⟩
     · cases hE
-  have hasg := StmtT.assign (P := P) (F := []) hΓ0 (by simp) (.inl ⟨rfl, rfl⟩) (RhsT.glob (g := g) hsy htok) rfl
+  have hasg := StmtT.assign (ξ := .none) (P := P) (F := []) hΓ0 (by simp) (.inl ⟨rfl, rfl⟩) (RhsT.glob (g := g) hsy htok) rfl
     (by simp [roots, Entry.vdeps, Mode.ownSlot]) (by rw [hΓ0]; rfl) (hplain.endOK 0).1
     (hplain.endOK 0).2.1 rfl
   have hplain' : Plain (setE (kill .replace false 0 (setE (fun _ => none) 0 (resE d.ty))) 0
@@ -230,7 +232,7 @@ theorem makeStmt_typed {P : Prog} (hP : ProgOK P) {D : List Decl} (hD : DeclsOK 
       split at hE
       · contradiction
       · cases hE
-  exact ⟨_, StmtT.letcall rfl rfl (by simp) hcall hasg (hplain'.endOK 0)
+  exact ⟨_, StmtT.letcall rfl rfl (by simp) hcall hasg.ofNone (hplain'.endOK 0)
     (fun fn' hf' _ hd => by rw [hf] at hf'; cases hf'; rw [hrt, Ty.holdsDtor_of_sync hsy] at hd; cases hd)⟩
 
 /-- At the hand-over point, variable 0 is an owner (or, in no context the
@@ -279,7 +281,7 @@ theorem handOver_inv {P : Prog} {Γ : Ctx} {F : List Var} {x g : Nat} {t : Ty} {
     the cells' homes, as `A3.claim` draws them. -/
 theorem reach_inv {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
+    (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C) : CInv P C ∧ CellInv C :=
   (reach_cinv hP hPc (fun h => fun hav hb hp hf => Step.restrict h hav hb hp hf)
     (fun {_ _ _ _ _ _ _ _ _ _ _} h hi hK hsp hf hx hmv => CInv.spawn_of
@@ -513,7 +515,7 @@ theorem made_safe {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgC
 theorem claim_made (P : Prog) (spawn : Nat → Bool) (D : List Decl) (s : Stmt) (Δ : Ctx) (nv : Nat)
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hD : DeclsOK P D)
     (hPG : ProgGlobs P (declTy D))
-    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) (hsg : s.globsAt (declTy D))
+    (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) (hsg : s.globsAt (declTy D))
     (hv : ∀ v ∈ s.vars, v < nv) :
     (∀ i G d, Made P spawn D i G → D[i]? = some d →
       MemorySafe P spawn (Cfg.start G (makeStmt i d) 1) ∧ RaceFree P spawn (Cfg.start G (makeStmt i d) 1)) ∧

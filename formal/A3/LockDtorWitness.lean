@@ -566,6 +566,7 @@ theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic
     show upd m1'.st p none y = _
     rw [upd_ne _ _ hy.1]; exact ih rfl y hy.2
   | frozenP _ ih => cases hr; exact fun y hy => ih rfl y (by simpa [Stmt.spine] using hy)
+  | blockP _ ih => cases hr; exact fun y hy => ih rfl y (by simpa [Stmt.spine] using hy)
   | @scopeDPMoved m1' x' _ _ _ _ ih =>
     cases hr
     intro y hy
@@ -934,7 +935,7 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   have hun : ∀ v, Unnamed K5 v := fun v w E h d hd => by rw [hD5 w E h] at hd; cases hd
   -- the update, under the lock: `ufn` on the payload `inout`, its result to `z`
   have hap : ApplyFn P 1 DT .int := ⟨ufn, .replace, rfl, rfl, rfl, rfl, rfl⟩
-  have hup := StmtT.lockedApply (P := P) (Γ := K5) (F := []) (a := 3) (x := 5) (c := 6) (z := 4) (f := 1)
+  have hup := StmtT.lockedApply (ξ := .none) (P := P) (Γ := K5) (F := []) (a := 3) (x := 5) (c := 6) (z := 4) (f := 1)
     (fn := ufn) (Ea := EL) (Ez := intE) (t := DT) (R := .int) hap rfl
     (by simp [K5, K4, A2.setE]) rfl (Or.inl rfl) rfl (by simp [DT, T, Ty.holdsView]) (by simp [DT, Ty.owning])
     (by simp [K5, K4, K3', K3, K2, K1, A2.setE, upd]) (by simp [K5, K4, K3', K3, K2, K1, A2.setE, upd])
@@ -942,22 +943,22 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
     (by simp [intE, resMode, ufn]) rfl (hK5.noPin 4) (DtorSafe.of_none (fun v E h => (hK5 v E h).2.1) _ _ _)
   have hKf : NoRootb (A2.setE (A2.kill .replace false 4 K5) 4 (outE .int intE.mode)) :=
     (hK5.kill _ _ _).setE (by simp [outE, intE])
-  have hz := StmtT.letv (P := P) (x := 4) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K4) (Γ1 := K4)
-    rfl (by simp [K4, K3', K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hup (hKf.endOK _)
-  have hl := StmtT.letv (P := P) (x := 3) (r := .lockNew DT 2) (E := EL) (F := []) (Γ := K3) (Γ1 := K3')
-    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hnew hz ((hKf.exitScope 4).endOK _) (fun _ => rfl)
+  have hz := StmtT.letv (ξ := .none) (P := P) (x := 4) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K4) (Γ1 := K4)
+    rfl (by simp [K4, K3', K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hup.ofNone (hKf.endOK _)
+  have hl := StmtT.letv (ξ := .none) (P := P) (x := 3) (r := .lockNew DT 2) (E := EL) (F := []) (Γ := K3) (Γ1 := K3')
+    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hnew hz.ofNone ((hKf.exitScope 4).endOK _) (fun _ => rfl)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE]) rfl PushArg.int
       (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
-  have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
+  have hd := StmtT.letd (ξ := .none) (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE]) (by simp) hpair rfl
-    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) hl
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) hl.ofNone
     (((hKf.exitScope 4).exitScope 3).endOK _) (by simp [Stmt.lockedApply, Stmt.callOut, Stmt.assigns])
-  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd
+  have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
     ((((hKf.exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
-    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone
     (((((hKf.exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
 
 /-- `locked_new` of the destructor value names the destructor the program
@@ -1106,7 +1107,7 @@ theorem mainV_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainV Δ := by
   let EW : Entry := lockE (.vec DT)
   have hK74 : K7 4 = some EW := by
     simp [K7, K6, K5, A2.setE, upd, A2.kill, killE, hits, EW, lockE_vecDT, Entry.vdeps, Mode.ownSlot]
-  have hpush := StmtT.push (P := P) (Γ := K6) (Γ1 := K7) (F := []) (x := 4) (y := 5) (Ex := EW) (Ey := ED)
+  have hpush := StmtT.push (ξ := .none) (P := P) (Γ := K6) (Γ1 := K7) (F := []) (x := 4) (y := 5) (Ex := EW) (Ey := ED)
     (Ex1 := EW) (t := DT) (D := ED.held) (by simp [K6, K5, A2.setE, upd, EW]) (by simp [EW])
     (by simp [EW]) (Or.inl (by simp [EW, lockE_vecDT])) (by simp) (by simp [K6, A2.setE])
     (by rw [hEDe]) (by rw [hEDe]) (by decide) hmove2 (by rw [hEDe]; simp [roots]) hK74 (by simp [EW])
@@ -1116,31 +1117,31 @@ theorem mainV_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainV Δ := by
     simp [E4, EW, lockE_vecDT, hEDe, ownHeld]
   let K8 : Ctx := A2.setE (kill .realloc DT.holdsView 4 K7) 4 E4
   have hK8 : NoRootb K8 := (hK7.kill _ _ _).setE (by rw [hE4e]; simp)
-  have hd := StmtT.letd (P := P) (Γ := K5) (Γ1 := K5) (F := []) (x := 5) (f := 0) (r := .pair 0 1)
+  have hd := StmtT.letd (ξ := .none) (P := P) (Γ := K5) (Γ1 := K5) (F := []) (x := 5) (f := 0) (r := .pair 0 1)
     (s := .push 4 5) (E := EP) (t := T) (H := []) rfl (by simp [K5, K4, K3', K3, K2, K1, A2.setE, upd, A2.kill])
-    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) hpush
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) hpush.ofNone
     (hK8.endOK _)
   -- the lock scope's body ends with `w` live, holding a `vec DT` again
-  have hlk := StmtT.withLock (P := P) (Γ := K4) (F := []) (a := 3) (x := 4)
+  have hlk := StmtT.withLock (ξ := .none) (P := P) (Γ := K4) (F := []) (a := 3) (x := 4)
     (s := .letd 5 0 (.pair 0 1) (.push 4 5)) (Ea := ELV) (t := .vec DT) rfl
     (by simp [K4, K3', K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hK43 rfl (Or.inl rfl) hd
     ((hK8.exitScope 5).endOK _) rfl (by simp [Stmt.vars, Rhs.vars])
     ⟨E4, by simp [exitScope, A2.setE, upd, A2.kill, killE, hits, E4, EW, lockE_vecDT, ownHeld,
       DT, T, Ty.holdsView, Entry.vdeps, Mode.ownSlot],
       by rw [hE4e]⟩ (by intro _; simp [Stmt.assigns])
-  have hl := StmtT.letv (P := P) (x := 3) (r := .lockNew (.vec DT) 2) (E := ELV) (F := []) (Γ := K3)
-    (Γ1 := K3') rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hlnew hlk
+  have hl := StmtT.letv (ξ := .none) (P := P) (x := 3) (r := .lockNew (.vec DT) 2) (E := ELV) (F := []) (Γ := K3)
+    (Γ1 := K3') rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hlnew hlk.ofNone
     (((hK8.exitScope 5).exitScope 4).endOK _) (fun _ => rfl)
-  have hdv := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
+  have hdv := StmtT.letd (ξ := .none) (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
     (s := .letv 3 (.lockNew (.vec DT) 2) (.withLock 3 4 (.letd 5 0 (.pair 0 1) (.push 4 5)))) (E := EN)
     (t := T) (H := []) (τ := .vec DT) rfl (by simp [K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) hl
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) hl.ofNone
     ((((hK8.exitScope 5).exitScope 4).exitScope 3).endOK _)
-  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hdv
+  have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hdv.ofNone
     (((((hK8.exitScope 5).exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
-    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone
     ((((((hK8.exitScope 5).exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
 
 /-- `locked_new` of the `Vec` names the elements' destructor, one the program

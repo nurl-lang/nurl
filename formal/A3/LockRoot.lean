@@ -71,6 +71,19 @@ def _root_.A2.Stmt.nm : Stmt → List Var
 theorem nm_vars (s : Stmt) : ∀ v, v ∉ s.vars → v ∉ s.nm := by
   induction s <;> intro v hv <;> simp_all [Stmt.nm, Stmt.vars]
 
+/-- Agora #871: the frames an exit leaves name only what the statement did. -/
+theorem _root_.A2.ExitAt.nm {s e : Stmt} {n : Nat} (h : ExitAt s n e) {v : Var} (hv : v ∈ e.nm) : v ∈ s.nm := by
+  induction h with
+  | exit => simp [Stmt.nm] at hv
+  | seq _ ih => exact List.mem_append_left _ (ih hv)
+  | scope _ ih =>
+    simp only [Stmt.nm, List.mem_cons] at hv ⊢
+    exact hv.imp_right ih
+  | scopeD _ ih =>
+    simp only [Stmt.nm, List.mem_cons] at hv ⊢
+    exact hv.imp_right ih
+  | block _ ih => exact ih hv
+
 theorem nm_rename (ρ : Var → Var) (s : Stmt) : (s.rename ρ).nm = s.nm.map ρ := by
   induction s <;> simp_all [Stmt.rename, Stmt.nm, Rhs.vars_rename, Expr.vars_rename, Edit.vars_rename]
 
@@ -344,6 +357,11 @@ theorem Step.keepSlot {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     show (m1.remove p).st y = _
     simp only [Mem.remove_st]; rw [upd_ne _ _ hyn.1]; exact (ih hck hy hw hyn.2 hlt).1
   | frozenSkip => intro _ _ _ _ _ _ _ _; exact ⟨rfl, fun _ _ he => by cases he; nm_close⟩
+  | blockSkip => intro _ _ _ _ _ _ _ _; exact ⟨rfl, fun _ _ he => by cases he; nm_close⟩
+  | blockExit hx =>
+    intro _ y o w _ _ hyn _
+    exact ⟨rfl, fun _ _ he => by cases he; exact fun h => hyn (hx.nm h)⟩
+  | loop => intro _ y _ _ _ _ hyn _; exact ⟨rfl, fun _ _ he => by cases he; simp_all [Stmt.nm]⟩
   | frozenIn _ ih | blockIn _ ih =>
     intro hck y o w hy hw hyn hlt
     obtain ⟨h1, h2⟩ := ih hck hy hw hyn hlt
@@ -636,9 +654,10 @@ theorem TypedAt.capShr {P : Prog} {m : Mem} (hcd : MemCodes P m) :
   | frozen _ _ ih => exact fun h => ih h.frozen
   | catchR _ _ _ ih => exact fun h => ih h.catchR
   | scopeL _ _ _ _ ih => exact fun h => ih h.scopeL
+  | block _ ih => exact fun h => ih h.block
   | callc x c j zs k _ =>
     intro h
-    obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+    obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
     generalize hs : Stmt.callc x c j zs k = s0 at ht
     induction ht with
     | callc _ _ _ h4 h5 h6 h7 h8 _ h10 => cases hs; exact capShr_callc hi hcd h4 h5 h6 h7 h8 h10 _ _
@@ -671,6 +690,7 @@ def LkRoots (st : Var → Option Slot) : List Var → Stmt → Prop
   | R, .scopeL k _ _ s =>
     (∃ y o w, st y = some ⟨o, some w⟩ ∧ (w = .lk k ∨ w = .cell k) ∧ y ∉ s.nm ∧ (o = false → y ∈ R)) ∧
       LkRoots st R s
+  | R, .block s => LkRoots st R s
   | _, _ => True
 
 /-- A check-out through a borrow is through a borrowed parameter, bound by an
@@ -684,6 +704,7 @@ def RbOK (st : Var → Option Slot) : List Var → Stmt → Prop
   | R, .catchR _ _ s => RbOK st R s
   | R, .scopeL _ _ _ s => RbOK st R s
   | R, .withLock a _ _ => ∀ v, st a = some ⟨false, v⟩ → a ∈ R
+  | R, .block s => RbOK st R s
   | _, _ => True
 
 /-- A statement inside no frame has nothing to keep. -/
@@ -697,6 +718,7 @@ theorem lkRoots_nil (st : Var → Option Slot) : ∀ {s : Stmt} (R : List Var), 
   | frozen _ _ ih => exact ih
   | catchR _ _ _ ih => exact ih
   | scopeL _ _ _ _ _ => intro _ h; cases h
+  | block _ ih => exact ih
   | _ => exact fun _ _ => trivial
 
 /-- A frame's root, from the spine's. -/
@@ -718,6 +740,7 @@ theorem LkRoots.root {st : Var → Option Slot} : ∀ {s : Stmt} {R : List Var},
       obtain ⟨⟨y, o, w, hy, hw, _⟩, _⟩ := hl
       exact ⟨y, o, w, hy, hw⟩
     · exact ih hl.2 hm
+  | block _ ih => exact ih
   | _ => intro _ _ _ _ hm; simp [Stmt.lfr] at hm
 
 /-! ### `RbOK` from the typing -/
@@ -734,13 +757,13 @@ theorem Weaker.rootb {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {p : Var} {E' : Entry} 
     is bound on the spine or by an `rbind` gone through (`R`); a `scope`'s,
     a destructor frame's and a check-out's bindings are no borrowed
     parameters, so one on the spine is an `rbind`'s. -/
-theorem rbOK_of {P : Prog} {m : Mem} : ∀ (s : Stmt) {Γ : Ctx} {F : List Var} {Δ : Ctx} (R : List Var),
+theorem rbOK_of {P : Prog} {m : Mem} : ∀ (s : Stmt) {ξ : Exits} {Γ : Ctx} {F : List Var} {Δ : Ctx} (R : List Var),
     StmtT P ξ Γ F s Δ → MInv m Γ →
     (∀ p E, Γ p = some E → E.mode = .rootb → p ∈ s.spine ∨ p ∈ R) → RbOK m.st R s := by
   intro s
   induction s with
   | seq a b iha _ =>
-    intro Γ F Δ R ht hi hR
+    intro ξ Γ F Δ R ht hi hR
     generalize hs : Stmt.seq a b = s0 at ht hR
     induction ht with
     | seq _ ha _ _ _ => cases hs; exact iha R ha hi hR
@@ -749,7 +772,7 @@ theorem rbOK_of {P : Prog} {m : Mem} : ∀ (s : Stmt) {Γ : Ctx} {F : List Var} 
         obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
     | _ => cases hs
   | scope x b ih =>
-    intro Γ F Δ R ht hi hR
+    intro ξ Γ F Δ R ht hi hR
     generalize hs : Stmt.scope x b = s0 at ht hR
     induction ht with
     | scope hx _ hb _ =>
@@ -766,7 +789,7 @@ theorem rbOK_of {P : Prog} {m : Mem} : ∀ (s : Stmt) {Γ : Ctx} {F : List Var} 
         obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
     | _ => cases hs
   | scopeD x f b ih =>
-    intro Γ F Δ R ht hi hR
+    intro ξ Γ F Δ R ht hi hR
     generalize hs : Stmt.scopeD x f b = s0 at ht hR
     induction ht with
     | scopeD hx _ hb _ _ _ _ _ _ =>
@@ -783,7 +806,7 @@ theorem rbOK_of {P : Prog} {m : Mem} : ∀ (s : Stmt) {Γ : Ctx} {F : List Var} 
         obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
     | _ => cases hs
   | rbind q b ih =>
-    intro Γ F Δ R ht hi hR
+    intro ξ Γ F Δ R ht hi hR
     generalize hs : Stmt.rbind q b = s0 at ht hR
     induction ht with
     | rbind _ _ _ _ _ hb _ =>
@@ -799,7 +822,7 @@ theorem rbOK_of {P : Prog} {m : Mem} : ∀ (s : Stmt) {Γ : Ctx} {F : List Var} 
         obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
     | _ => cases hs
   | frozen z b ih =>
-    intro Γ F Δ R ht hi hR
+    intro ξ Γ F Δ R ht hi hR
     generalize hs : Stmt.frozen z b = s0 at ht hR
     induction ht with
     | frozen hb _ => cases hs; exact ih R hb hi hR
@@ -808,7 +831,7 @@ theorem rbOK_of {P : Prog} {m : Mem} : ∀ (s : Stmt) {Γ : Ctx} {F : List Var} 
         obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
     | _ => cases hs
   | catchR x m0 b ih =>
-    intro Γ F Δ R ht hi hR
+    intro ξ Γ F Δ R ht hi hR
     generalize hs : Stmt.catchR x m0 b = s0 at ht hR
     induction ht with
     | catchR _ hb _ _ _ _ => cases hs; exact ih R hb hi hR
@@ -817,7 +840,7 @@ theorem rbOK_of {P : Prog} {m : Mem} : ∀ (s : Stmt) {Γ : Ctx} {F : List Var} 
         obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
     | _ => cases hs
   | scopeL k t x b ih =>
-    intro Γ F Δ R ht hi hR
+    intro ξ Γ F Δ R ht hi hR
     generalize hs : Stmt.scopeL k t x b = s0 at ht hR
     induction ht with
     | scopeL hx _ hb _ =>
@@ -834,7 +857,7 @@ theorem rbOK_of {P : Prog} {m : Mem} : ∀ (s : Stmt) {Γ : Ctx} {F : List Var} 
         obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
     | _ => cases hs
   | withLock a x b _ =>
-    intro Γ F Δ R ht hi hR
+    intro ξ Γ F Δ R ht hi hR
     generalize hs : Stmt.withLock a x b = s0 at ht hR
     induction ht with
     | withLock _ _ _ h4 _ _ _ _ h9 _ =>
@@ -848,6 +871,15 @@ theorem rbOK_of {P : Prog} {m : Mem} : ∀ (s : Stmt) {Γ : Ctx} {F : List Var} 
         · simp [Stmt.spine] at h
         · exact h
       · rw [hm] at h9; cases h9
+    | sub hw _ _ ih0 =>
+      exact ih0 (hi.weaker hw) hs (fun p E hp hm => by
+        obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
+    | _ => cases hs
+  | block b ih =>
+    intro ξ Γ F Δ R ht hi hR
+    generalize hs : Stmt.block b = s0 at ht hR
+    induction ht with
+    | block hb _ => cases hs; exact ih R hb hi hR
     | sub hw _ _ ih0 =>
       exact ih0 (hi.weaker hw) hs (fun p E hp hm => by
         obtain ⟨E0, h0, hm0⟩ := Weaker.rootb hw hp hm; exact hR p E0 h0 hm0)
@@ -878,21 +910,21 @@ theorem Step.lkRoots {P : Prog} (hP : ProgOK P) {m m' : Mem} {s s' : Stmt} (h : 
     obtain ⟨h1, h2⟩ := Step.keepSlot hb hck hy ⟨k, hw⟩ hyn hlt
     exact ⟨y, o, w, h1.trans hy, hw, h2 _ _ rfl, hyR⟩
   | seqSkip =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (lfr_src ht.seq_src)
+    cases hr; rintro ⟨_, _, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (lfr_src ht.seq_src)
   | letv _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.letv_src])
+    cases hr; rintro ⟨_, _, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.letv_src])
   | iteT _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (lfr_src ht.ite_src.1)
+    cases hr; rintro ⟨_, _, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (lfr_src ht.ite_src.1)
   | iteF _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (lfr_src ht.ite_src.2)
+    cases hr; rintro ⟨_, _, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (lfr_src ht.ite_src.2)
   | withElem _ _ _ _ _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _
+    cases hr; rintro ⟨_, _, _, _, ht⟩ _ _ _ _
     exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.withElem_src])
   | unpair _ _ _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _
+    cases hr; rintro ⟨_, _, _, _, ht⟩ _ _ _ _
     exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.unpair_src])
   | letd _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.letd_src])
+    cases hr; rintro ⟨_, _, _, _, ht⟩ _ _ _ _; exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.letd_src])
   | letcall hf _ _ =>
     cases hr; intro _ _ _ _ _
     exact lkRoots_nil _ _ (by simp [Stmt.lfr, callStmt, lfr_callIn (body_src hP hf)])
@@ -902,7 +934,7 @@ theorem Step.lkRoots {P : Prog} (hP : ProgOK P) {m m' : Mem} {s s' : Stmt} (h : 
   | callc _ _ hf _ _ =>
     cases hr; intro _ _ _ _ _; exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_callIn (body_src hP hf)])
   | @withLock a x s0 k t v hla _ hx _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩ _ _ hrb _
+    cases hr; rintro ⟨_, _, _, _, ht⟩ _ _ hrb _
     obtain ⟨o, ha⟩ := hla
     have hax : a ≠ x := fun e => by
       subst e; rcases ha with ha | ha <;> rw [hx] at ha <;> cases ha
@@ -917,6 +949,12 @@ theorem Step.lkRoots {P : Prog} (hP : ProgOK P) {m m' : Mem} {s s' : Stmt} (h : 
     cases hr; intro _ _ _ _ hl
     obtain ⟨⟨y, o, w, hy, hw, _, hyR⟩, _⟩ := hl
     exact ⟨⟨y, o, w, hy, hw, by simp [Stmt.nm], hyR⟩, trivial⟩
+  | blockIn _ ih => cases hr; intro ht hck hnv hrb hl; have h1 := ih rfl ht.block hck hnv hrb hl; exact h1
+  | blockSkip => cases hr; intro _ _ _ _ _; exact lkRoots_nil _ _ rfl
+  | blockExit he => cases hr; intro _ _ _ _ _; exact lkRoots_nil _ _ he.lfr
+  | loop =>
+    cases hr; rintro ⟨_, _, _, _, ht⟩ _ _ _ _
+    exact lkRoots_nil _ _ (lfr_src (by simp [Stmt.src, ht.loop_src]))
   | _ => first
     | (cases hr; done)
     | (cases hr; intro _ _ _ _ _; exact lkRoots_nil _ _ (by simp [Stmt.lfr, handStmt, handStmtD]))
@@ -934,6 +972,7 @@ theorem Redex.nm_sub {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y : Var
   | catchR _ ih => exact ih (fun h => hy (List.mem_cons_of_mem _ h))
   | scopeD _ ih => exact ih (fun h => hy (List.mem_cons_of_mem _ h))
   | scopeL _ ih => exact ih (fun h => hy (List.mem_cons_of_mem _ h))
+  | block _ ih => exact ih hy
 
 theorem Redex.nm_mono {s r r' : Stmt} {K : Stmt → Stmt} (h : Redex s K r)
     (hr : ∀ y, y ∉ r.nm → y ∉ r'.nm) : ∀ y, y ∉ s.nm → y ∉ (K r').nm := by
@@ -948,6 +987,7 @@ theorem Redex.nm_mono {s r r' : Stmt} {K : Stmt → Stmt} (h : Redex s K r)
     simp only [Stmt.nm, List.mem_cons, not_or] at hy ⊢
     exact ⟨hy.1, ih hr y hy.2⟩
   | frozen _ ih => exact ih hr
+  | block _ ih => exact ih hr
 
 /-- A redex replaced by one inside no frame, that names no more and changes
     only slots the old one names, keeps every frame's root around it. -/
@@ -965,6 +1005,7 @@ theorem Redex.lkRoots {s r r' : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {st 
   | scopeL hb ih =>
     obtain ⟨⟨y, o, w, hy, hw, hyn, hyR⟩, hlb⟩ := hl
     exact ⟨⟨y, o, w, (hst y (hb.nm_sub hyn)).trans hy, hw, hb.nm_mono hnm y hyn, hyR⟩, ih hlb hnm hst⟩
+  | block _ ih => exact ih hl hnm hst
 
 /-- The root of a frame on a statement's spine: a borrowed one is bound by
     an `rbind` around the frame. -/
@@ -1016,6 +1057,12 @@ theorem Redex.lkRoot {s : Stmt} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var}
     rcases hyR ho with h | ⟨K', s', h⟩
     · exact .inl h
     · exact .inr ⟨_, _, .scopeD h⟩
+  | block _ ih =>
+    obtain ⟨y, o, w, hy, hw, hyn, hyR⟩ := ih hl hr
+    refine ⟨y, o, w, hy, hw, hyn, fun ho => ?_⟩
+    rcases hyR ho with h | ⟨K', s', h⟩
+    · exact .inl h
+    · exact .inr ⟨_, _, .block h⟩
   | scopeL _ ih =>
     obtain ⟨y, o, w, hy, hw, hyn, hyR⟩ := ih hl.2 hr
     refine ⟨y, o, w, hy, hw, hyn, fun ho => ?_⟩
@@ -1129,7 +1176,7 @@ theorem RootInv.spawn {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → B
   obtain ⟨a, ha⟩ := part_of hc.len hi
   obtain ⟨hto, _⟩ := hc.ok i t a hi ha
   obtain ⟨Γ, F, Δ, ht, hinv, _⟩ := hto
-  obtain ⟨Γ', F', Δ', ht', _⟩ := hK.typed Γ F Δ ht hinv
+  obtain ⟨_, Γ', F', Δ', ht', _⟩ := hK.typed _ Γ F Δ ht hinv
   have hks : k.src = true := by simpa [Stmt.src] using letcall_src ht'
   have hlfr : (K (.scope x k)).lfr = t.s.lfr := by
     rw [hK.eq]; exact hK.lfr_eq (by simp [Stmt.lfr, lfr_src hks])
@@ -1207,7 +1254,7 @@ theorem RootInv.start {G : Globs} {s : Stmt} (hs : s.src = true) (nv : Nat) : Ro
     check-outs' roots.** -/
 theorem reach_rootInv {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
+    (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C) : RootInv C := by
   have key : ∀ C1 C2, Reach P spawn C1 C2 → Reach P spawn (Cfg.start G s nv) C1 → RootInv C1 → RootInv C2 := by
     intro C1 C2 h
@@ -1228,7 +1275,7 @@ variable {P : Prog} {spawn : Nat → Bool} {G : Globs} {s0 : Stmt} {Δ0 : Ctx} {
     not name; a borrowed one (the slot owns nothing) is a borrowed
     parameter's, bound by an `rbind` on the thread's spine. -/
 theorem reach_frame_root (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (ht : StmtT P .none (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
@@ -1243,7 +1290,7 @@ theorem reach_frame_root (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P sp
 /-- **A frame's block is never removed while the frame is out** (Agora
     #808): the sweep keeps what the root's share refers to. -/
 theorem reach_frame_live (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (ht : StmtT P .none (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) : C.blk k ≠ none :=
@@ -1253,7 +1300,7 @@ theorem reach_frame_live (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P sp
     `⟨u, .lock, none⟩` and (Agora #810) not taken, for every payload type
     (`reach_frame_out` with the block there, `reach_frame_live`). -/
 theorem reach_frame_checked_out (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hG : GlobsOK P G) (ht : StmtT P .none (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
@@ -1274,7 +1321,7 @@ theorem reach_frame_checked_out (hP : ProgOK P) (hPc : ProgCodes P) (hSp : Spawn
     frame's end is the give-back.  (`Step.scopeLFail` and the code-less
     `Release.drop` are not taken.) -/
 theorem reach_scopeL_end_gives_back (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hG : GlobsOK P G) (ht : StmtT P .none (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x .skip))
@@ -1286,7 +1333,7 @@ theorem reach_scopeL_end_gives_back (hP : ProgOK P) (hPc : ProgCodes P) (hSp : S
   obtain ⟨a, ha⟩ := part_of hcp.len hi
   obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
   obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
-  obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK.typed Γ F Δ hth hinv
+  obtain ⟨_, Γ', F', Δ', ht', hinv'⟩ := hK.typed _ Γ F Δ hth hinv
   have hk : CheckedOut (C.view th) k u := reach_frame_checked_out hP hPc hSp hG ht hs hsc hv hr hi hK
   have hno : ¬ Orphan (C.view th) := fun ho => Reach.noOrphan hr hG.noOrphan ho
   obtain ⟨E, hx, hl, hrb, hmo, hty⟩ := LockDtorWitness.scopeL_end_entry ht'
@@ -1307,7 +1354,7 @@ theorem reach_scopeL_end_gives_back (hP : ProgOK P) (hPc : ProgCodes P) (hSp : S
     An integer the binding holds is never dropped: its release is the
     give-back (`LockDtorWitness.release_cases`). -/
 theorem reach_scopeL_panic (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hG : GlobsOK P G) (ht : StmtT P .none (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b))
@@ -1324,7 +1371,7 @@ theorem reach_scopeL_panic (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P 
   obtain ⟨a, ha⟩ := part_of hcp.len hi
   obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
   obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
-  obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK.typed Γ F Δ hth hinv
+  obtain ⟨_, Γ', F', Δ', ht', hinv'⟩ := hK.typed _ Γ F Δ hth hinv
   have hk : CheckedOut (C.view th) k u := reach_frame_checked_out hP hPc hSp hG ht hs hsc hv hr hi hK
   obtain ⟨m1, hb, hres⟩ := scopeL_typed_panic_of (m := C.view th) ht' hinv' rfl rfl hnc h
   -- the body's unwinding leaves the block checked out: the frame is its only one
@@ -1350,7 +1397,7 @@ theorem reach_scopeL_panic (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P 
     premise).  No lock payload holds a read guard (`Ty.ok`, `% NotSend`),
     so the value reaches no view (`LockDtorWitness.noGuard_of_free`). -/
 theorem reach_scopeL_giveCheck (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hG : GlobsOK P G) (ht : StmtT P .none (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
@@ -1361,7 +1408,7 @@ theorem reach_scopeL_giveCheck (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnO
   obtain ⟨a, ha⟩ := part_of hcp.len hi
   obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
   obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
-  obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK.typed Γ F Δ hth hinv
+  obtain ⟨_, Γ', F', Δ', ht', hinv'⟩ := hK.typed _ Γ F Δ hth hinv
   have hk : CheckedOut (C.view th) k u := reach_frame_checked_out hP hPc hSp hG ht hs hsc hv hr hi hK
   refine ⟨fun hb hnc sl hsl => ?_, fun m1 hb hk1 hd sl hsl =>
     LockDtorWitness.scopeL_typed_panic_giveCheck (m := C.view th) ht' hinv' rfl rfl hb hk1 hd hsl⟩
@@ -1373,7 +1420,7 @@ theorem reach_scopeL_giveCheck (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnO
     destructor frame after a failing give-back (the defensive rule's result
     `.seq (.scopeD x f .skip) .panic`; `LockDtorWitness.scopeL_typed_no_scopeLPD`). -/
 theorem reach_no_scopeLPD (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hG : GlobsOK P G) (ht : StmtT P .none (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b))
@@ -1383,7 +1430,7 @@ theorem reach_no_scopeLPD (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P s
   obtain ⟨a, ha⟩ := part_of hcp.len hi
   obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
   obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
-  obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK.typed Γ F Δ hth hinv
+  obtain ⟨_, Γ', F', Δ', ht', hinv'⟩ := hK.typed _ Γ F Δ hth hinv
   exact LockDtorWitness.scopeL_typed_no_scopeLPD (m := C.view th) ht' hinv' rfl rfl h m1 f
 
 theorem _root_.A2.StmtT.rbind_live {P : Prog} {m : Mem} {Γ Δ : Ctx} {F : List Var} {y : Var} {s : Stmt}
@@ -1406,7 +1453,7 @@ theorem _root_.A2.StmtT.rbind_live {P : Prog} {m : Mem} {Γ Δ : Ctx} {F : List 
     A3/Kinds.lean's (`reach_shareKind`), and so `reach_frame_cell_owner`
     below, for any check-out of a cell's block. -/
 theorem reach_frame_root_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hG : GlobsOK P G) (ht : StmtT P .none (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
@@ -1423,7 +1470,7 @@ theorem reach_frame_root_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : S
     obtain ⟨a, ha⟩ := part_of hcp.len hi
     obtain ⟨hto, _⟩ := hcp.ok i th a hi ha
     obtain ⟨Γ, F, Δ, hth, hinv, _⟩ := hto
-    obtain ⟨Γ', F', Δ', ht', hinv'⟩ := hK'.typed Γ F Δ hth hinv
+    obtain ⟨_, Γ', F', Δ', ht', hinv'⟩ := hK'.typed _ Γ F Δ hth hinv
     obtain ⟨Γ'', E, hi'', hE, hl⟩ := ht'.rbind_live hinv'.toMInv
     exact hi''.cell_owned (m := ownView C th a) hE hl hy (Sub.refl _)
 
@@ -1437,7 +1484,7 @@ theorem reach_frame_root_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : S
     `k` by both kinds, which `reach_shareKind` rules out), and an owner's
     share of cell `k` (`reach_frame_root_cell_owner`). -/
 theorem reach_frame_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true)
+    (hG : GlobsOK P G) (ht : StmtT P .none (fun _ => none) [] s0 Δ0) (hs : s0.src = true)
     (hsc : s0.codesOK P) (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) (hc : C.Holds (.cell k)) :
@@ -1450,7 +1497,7 @@ theorem reach_frame_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnO
 
 /-- ... so its next step is a step on the cell (`CellOp`, its second case). -/
 theorem reach_frame_cellOp (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true)
+    (hG : GlobsOK P G) (ht : StmtT P .none (fun _ => none) [] s0 Δ0) (hs : s0.src = true)
     (hsc : s0.codesOK P) (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) (hc : C.Holds (.cell k)) :

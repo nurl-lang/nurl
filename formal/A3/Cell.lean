@@ -614,6 +614,7 @@ theorem _root_.A2.Step.cellKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : S
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact ih.trans (CellKeep.slots (Nat.le_refl _) (fun _ hc => .inl (CellAt.remove hc)) rfl)
   | frozenSkip => exact CellKeep.refl _
+  | blockSkip | blockExit _ | loop => exact CellKeep.refl _
   | frozenIn _ ih | blockIn _ ih => exact ih
   | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he _ _ => exact (he.cellKeep _).congr rfl rfl rfl
@@ -1124,7 +1125,7 @@ theorem CellOp.cellAt {P : Prog} {C : Cfg} (hc : CInv P C) {i : Nat} {t : Thread
       obtain ⟨ps, hcp, _⟩ := hc
       obtain ⟨pa, hpa⟩ := part_of hcp.len hi
       obtain ⟨⟨Γ, F, Δ, hT, hinv, _⟩, _⟩ := hcp.ok i t pa hi hpa
-      obtain ⟨Γ', F', Δ', hT', hinv'⟩ := hR.typed Γ F Δ hT hinv
+      obtain ⟨_, Γ', F', Δ', hT', hinv'⟩ := hR.typed _ Γ F Δ hT hinv
       obtain ⟨Γ'', Ea, hmi, hEa, hla⟩ := withLock_live hT' hinv'
       exact cellAt_of_live rfl hmi hEa hla ha (Sub.refl _)
   · exact hk

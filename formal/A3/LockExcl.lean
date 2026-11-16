@@ -92,6 +92,7 @@ theorem Redex.lfr_mem {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {k : Na
   | catchR _ ih => exact ih hr
   | scopeD _ ih => exact ih hr
   | scopeL _ ih => exact List.mem_cons_of_mem _ (ih hr)
+  | block _ ih => exact ih hr
 
 /-- The frames read a statement's frames only through the hole's. -/
 theorem Redex.lfr_eq {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y y' : Stmt}
@@ -105,6 +106,7 @@ theorem Redex.lfr_eq {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y y' : 
   | catchR _ ih => exact ih
   | scopeD _ ih => exact ih
   | scopeL _ ih => simp only [Stmt.lfr, ih]
+  | block _ ih => exact ih
 
 /-! ### What the typing says of the code a step brings in -/
 
@@ -163,6 +165,22 @@ theorem _root_.A2.StmtT.withLock_src {a x : Var} {s : Stmt} (ht : StmtT P ξ Γ 
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
+theorem _root_.A2.StmtT.loop_src {s : Stmt} (ht : StmtT P ξ Γ F (.loop s) Δ) : s.src = true := by
+  generalize hs : Stmt.loop s = s0 at ht
+  induction ht with
+  | loop h1 => cases hs; exact h1
+  | sub _ _ _ ih => exact ih hs
+  | _ => cases hs
+
+/-- Agora #871: the frames an exit leaves are no lock scopes. -/
+theorem _root_.A2.ExitAt.lfr {s e : Stmt} {n : Nat} (h : ExitAt s n e) : e.lfr = [] := by
+  induction h with
+  | exit => rfl
+  | seq _ ih => exact ih
+  | scope _ ih => exact ih
+  | scopeD _ ih => exact ih
+  | block _ ih => exact ih
+
 end inv
 
 /-- A statement is typed (in some context). -/
@@ -219,6 +237,14 @@ theorem Typed.scopeD {x : Var} {f : Nat} {s : Stmt} (h : Typed P (.scopeD x f s)
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
+theorem Typed.block {s : Stmt} (h : Typed P (.block s)) : Typed P s := by
+  obtain ⟨_, Γ, F, Δ, ht⟩ := h
+  generalize hs : Stmt.block s = s0 at ht
+  induction ht with
+  | block hb _ => cases hs; exact ⟨_, _, _, _, hb⟩
+  | sub _ _ _ ih => exact ih hs
+  | _ => cases hs
+
 theorem Typed.scopeL {k : Nat} {t : Ty} {x : Var} {s : Stmt} (h : Typed P (.scopeL k t x s)) :
     Typed P s := by
   obtain ⟨_, Γ, F, Δ, ht⟩ := h
@@ -265,20 +291,21 @@ theorem Step.lfr {P : Prog} (hP : ProgOK P) {m m' : Mem} {s s' : Stmt} (h : Step
   | catchIn _ ih => cases hr; intro ht; have h1 := ih rfl ht.catchR; exact h1
   | scopeDIn _ ih => cases hr; intro ht; have h1 := ih rfl ht.scopeD; exact h1
   | scopeLIn _ ih => cases hr; intro ht; have h1 := ih rfl ht.scopeL; exact h1.cons _
+  | blockIn _ ih => cases hr; intro ht; have h1 := ih rfl ht.block; exact h1
   | seqSkip =>
-    cases hr; rintro ⟨_, _, _, ht⟩; exact FrStep.nil (lfr_src ht.seq_src)
+    cases hr; rintro ⟨_, _, _, _, ht⟩; exact FrStep.nil (lfr_src ht.seq_src)
   | letv _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩; exact FrStep.nil (by simp [Stmt.lfr, lfr_src ht.letv_src])
+    cases hr; rintro ⟨_, _, _, _, ht⟩; exact FrStep.nil (by simp [Stmt.lfr, lfr_src ht.letv_src])
   | iteT _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩; exact FrStep.nil (lfr_src ht.ite_src.1)
+    cases hr; rintro ⟨_, _, _, _, ht⟩; exact FrStep.nil (lfr_src ht.ite_src.1)
   | iteF _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩; exact FrStep.nil (lfr_src ht.ite_src.2)
+    cases hr; rintro ⟨_, _, _, _, ht⟩; exact FrStep.nil (lfr_src ht.ite_src.2)
   | withElem _ _ _ _ _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩; exact FrStep.nil (by simp [Stmt.lfr, lfr_src ht.withElem_src])
+    cases hr; rintro ⟨_, _, _, _, ht⟩; exact FrStep.nil (by simp [Stmt.lfr, lfr_src ht.withElem_src])
   | unpair _ _ _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩; exact FrStep.nil (by simp [Stmt.lfr, lfr_src ht.unpair_src])
+    cases hr; rintro ⟨_, _, _, _, ht⟩; exact FrStep.nil (by simp [Stmt.lfr, lfr_src ht.unpair_src])
   | letd _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩; exact FrStep.nil (by simp [Stmt.lfr, lfr_src ht.letd_src])
+    cases hr; rintro ⟨_, _, _, _, ht⟩; exact FrStep.nil (by simp [Stmt.lfr, lfr_src ht.letd_src])
   | letcall hf _ _ =>
     cases hr; intro _; exact FrStep.nil (by simp [Stmt.lfr, callStmt, lfr_callIn (body_src hP hf)])
   | letrec hf _ _ =>
@@ -286,10 +313,13 @@ theorem Step.lfr {P : Prog} (hP : ProgOK P) {m m' : Mem} {s s' : Stmt} (h : Step
   | callc _ _ hf _ _ =>
     cases hr; intro _; exact FrStep.nil (by simp [Stmt.lfr, lfr_callIn (body_src hP hf)])
   | @withLock a x s0 k t v _ hk _ _ =>
-    cases hr; rintro ⟨_, _, _, ht⟩
+    cases hr; rintro ⟨_, _, _, _, ht⟩
     refine .inr ⟨k, t, v, by simp [Stmt.lfr, lfr_src ht.withLock_src], hk, ?_⟩
     simp [CheckedOut, Mem.set, upd]
   | scopeLFail _ _ => cases hr; intro _; exact .inl List.prefix_rfl
+  | blockSkip => cases hr; intro _; exact FrStep.nil rfl
+  | blockExit he => cases hr; intro _; exact FrStep.nil he.lfr
+  | loop => cases hr; rintro ⟨_, _, _, _, ht⟩; exact FrStep.nil (lfr_src (by simp [Stmt.src, ht.loop_src]))
   | _ => first
     | (cases hr; done)
     | (cases hr; intro _; exact FrStep.nil (by simp [Stmt.lfr, handStmt, handStmtD]))
@@ -723,7 +753,7 @@ theorem LockInv.spawn {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → B
   obtain ⟨a, ha⟩ := part_of hc.len hi
   obtain ⟨hto, _⟩ := hc.ok i t a hi ha
   obtain ⟨Γ, F, Δ, ht, hinv, _⟩ := hto
-  obtain ⟨Γ', F', Δ', ht', _⟩ := hK.typed Γ F Δ ht hinv
+  obtain ⟨_, Γ', F', Δ', ht', _⟩ := hK.typed _ Γ F Δ ht hinv
   have hks : k.src = true := by simpa [Stmt.src] using letcall_src ht'
   have hlfr : (K (.scope x k)).lfr = t.s.lfr := by
     rw [hK.eq]; exact hK.lfr_eq (by simp [Stmt.lfr, lfr_src hks])
@@ -788,7 +818,7 @@ theorem Reach.snoc {P : Prog} {spawn : Nat → Bool} {C C1 C2 : Cfg} (h : Reach 
     check-outs' invariant.** -/
 theorem reach_lockInv {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
+    (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C) : LockInv C := by
   have key : ∀ C1 C2, Reach P spawn C1 C2 → Reach P spawn (Cfg.start G s nv) C1 → LockInv C1 → LockInv C2 := by
     intro C1 C2 h
@@ -816,6 +846,7 @@ theorem Redex.count_two {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {k : 
   | frozen _ ih => exact ih hr
   | catchR _ ih => exact ih hr
   | scopeD _ ih => exact ih hr
+  | block _ ih => exact ih hr
   | scopeL _ ih =>
     have := ih hr
     simp only [Stmt.lfr, List.map_cons, List.count_cons]
@@ -853,6 +884,9 @@ theorem Redex.frame_unique {s : Stmt} {K1 K2 : Stmt → Stmt} {k : Nat} {u1 u2 :
   | scopeD _ ih =>
     cases h2 with
     | scopeD h2' => obtain ⟨e, rest⟩ := ih h2' hc hr; subst e; exact ⟨rfl, rest⟩
+  | block _ ih =>
+    cases h2 with
+    | block h2' => obtain ⟨e, rest⟩ := ih h2' hc hr; subst e; exact ⟨rfl, rest⟩
   | @scopeL k0 t0 x0 b0 r0 K0 h1' ih =>
     cases h2 with
     | here =>
@@ -872,7 +906,7 @@ variable {P : Prog} {spawn : Nat → Bool} {G : Globs} {s0 : Stmt} {Δ0 : Ctx} {
     is checked out (`⟨u, .lock, none⟩`, and Agora #810 not taken), or gone,
     at a key below `nid`; for every payload type. -/
 theorem reach_frame_out (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (ht : StmtT P .none (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
@@ -885,7 +919,7 @@ theorem reach_frame_out (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spa
     (Agora #810: `locked_restore` fills only a block `locked_take` emptied,
     `Mem.taken`, never one a `withLock` checked out.) -/
 theorem reach_lock_excl (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (ht : StmtT P .none (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i j : Nat} {ti tj : Thread} {K1 K2 : Stmt → Stmt} {k : Nat} {u1 u2 : Ty} {x1 x2 : Var} {b1 b2 : Stmt}
     (hi : C.ths[i]? = some ti) (hj : C.ths[j]? = some tj)

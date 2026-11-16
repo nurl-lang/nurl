@@ -151,29 +151,29 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
       hmv6
   let K9 : Ctx := A2.setE K8' 7 intE
   have hK9 : NoRootb K9 := hK8'.setE (by simp [intE])
-  have hr := StmtT.letv (P := P) (x := 7) (r := .chanSend 5 6) (E := intE) (F := []) (Γ := K8) (Γ1 := K8')
+  have hr := StmtT.letv (ξ := .none) (P := P) (x := 7) (r := .chanSend 5 6) (E := intE) (F := []) (Γ := K8) (Γ1 := K8')
     (s := .skip) rfl (by simp [K8, K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp)
     hsend StmtT.skip (hK9.endOK _)
-  have hx := StmtT.letd (P := P) (Γ := K7) (Γ1 := K7) (F := []) (x := 6) (f := 0) (r := .pair 0 1)
+  have hx := StmtT.letd (ξ := .none) (P := P) (Γ := K7) (Γ1 := K7) (F := []) (x := 6) (f := 0) (r := .pair 0 1)
     (s := .letv 7 (.chanSend 5 6) .skip) (E := EP) (t := T) (H := []) rfl
     (by simp [K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hpair rfl
-    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hr
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hr.ofNone
     ((hK9.exitScope 7).endOK _)
-  have hc := StmtT.letv (P := P) (x := 5) (r := .lockNew GVD 4) (E := EC) (F := []) (Γ := K6) (Γ1 := K6')
-    rfl (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hlnew hx
+  have hc := StmtT.letv (ξ := .none) (P := P) (x := 5) (r := .lockNew GVD 4) (E := EC) (F := []) (Γ := K6) (Γ1 := K6')
+    rfl (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hlnew hx.ofNone
     (((hK9.exitScope 7).exitScope 6).endOK _) (fun _ => rfl)
-  have hg := StmtT.letd (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 4) (f := 7) (r := .pair 2 3)
+  have hg := StmtT.letd (ξ := .none) (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 4) (f := 7) (r := .pair 2 3)
     (s := .letv 5 (.lockNew GVD 4) (.letd 6 0 (.pair 0 1) (.letv 7 (.chanSend 5 6) .skip)))
     (E := EG0) (t := GV) (H := EG0.held) (τ := GVD) rfl
     (by simp [K4, K3, K2, K1, A2.setE, upd]) (by simp) hgp rfl
-    (Or.inl ⟨rfl, Or.inl (by rw [hEG0])⟩) rfl rfl (letd_fn gvdrop_ok) (HeldUp.refl _ _) hc
+    (Or.inl ⟨rfl, Or.inl (by rw [hEG0])⟩) rfl rfl (letd_fn gvdrop_ok) (HeldUp.refl _ _) hc.ofNone
     ((((hK9.exitScope 7).exitScope 6).exitScope 5).endOK _)
-  have h3 := StmtT.letv (P := P) (x := 3) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
-    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hg
+  have h3 := StmtT.letv (ξ := .none) (P := P) (x := 3) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
+    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hg.ofNone
     (((((hK9.exitScope 7).exitScope 6).exitScope 5).exitScope 4).endOK _)
   have hdv := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) h3
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) h3.ofNone
     ((((((hK9.exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).endOK _)
   have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
     rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hdv
@@ -396,29 +396,29 @@ theorem mainC_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainC Δ := by
       hmv7
   let K9 : Ctx := A2.setE K8' 8 intE
   have hK9 : NoRootb K9 := hK8'.setE (by simp [intE])
-  have hr := StmtT.letv (P := P) (x := 8) (r := .chanSend 5 7) (E := intE) (F := []) (Γ := K8) (Γ1 := K8')
+  have hr := StmtT.letv (ξ := .none) (P := P) (x := 8) (r := .chanSend 5 7) (E := intE) (F := []) (Γ := K8) (Γ1 := K8')
     (s := .skip) rfl (by simp [K8, K7c, K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp)
     hsend StmtT.skip (hK9.endOK _)
-  have hx := StmtT.letd (P := P) (Γ := K7c) (Γ1 := K7c) (F := []) (x := 7) (f := 0) (r := .pair 0 1)
+  have hx := StmtT.letd (ξ := .none) (P := P) (Γ := K7c) (Γ1 := K7c) (F := []) (x := 7) (f := 0) (r := .pair 0 1)
     (s := .letv 8 (.chanSend 5 7) .skip) (E := EP) (t := T) (H := []) rfl
     (by simp [K7c, K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hpair rfl
-    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hr
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hr.ofNone
     ((hK9.exitScope 8).endOK _)
-  have hz := StmtT.letv (P := P) (x := 6) (r := .chanClose 5) (E := intE) (F := []) (Γ := K7) (Γ1 := K7)
-    rfl (by simp [K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hclose hx
+  have hz := StmtT.letv (ξ := .none) (P := P) (x := 6) (r := .chanClose 5) (E := intE) (F := []) (Γ := K7) (Γ1 := K7)
+    rfl (by simp [K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hclose hx.ofNone
     (((hK9.exitScope 8).exitScope 7).endOK _) (fun _ => rfl)
-  have hc := StmtT.letv (P := P) (x := 5) (r := .lockNew GVD 4) (E := EC) (F := []) (Γ := K6) (Γ1 := K6')
-    rfl (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hlnew hz
+  have hc := StmtT.letv (ξ := .none) (P := P) (x := 5) (r := .lockNew GVD 4) (E := EC) (F := []) (Γ := K6) (Γ1 := K6')
+    rfl (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hlnew hz.ofNone
     ((((hK9.exitScope 8).exitScope 7).exitScope 6).endOK _) (fun _ => rfl)
-  have hg := StmtT.letd (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 4) (f := 7) (r := .pair 2 3)
+  have hg := StmtT.letd (ξ := .none) (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 4) (f := 7) (r := .pair 2 3)
     (s := .letv 5 (.lockNew GVD 4) (.letv 6 (.chanClose 5)
       (.letd 7 0 (.pair 0 1) (.letv 8 (.chanSend 5 7) .skip))))
     (E := EG0) (t := GV) (H := EG0.held) (τ := GVD) rfl
     (by simp [K4, K3, K2, K1, A2.setE, upd]) (by simp) hgp rfl
-    (Or.inl ⟨rfl, Or.inl (by rw [hEG0])⟩) rfl rfl (letd_fn gvdrop_ok) (HeldUp.refl _ _) hc
+    (Or.inl ⟨rfl, Or.inl (by rw [hEG0])⟩) rfl rfl (letd_fn gvdrop_ok) (HeldUp.refl _ _) hc.ofNone
     (((((hK9.exitScope 8).exitScope 7).exitScope 6).exitScope 5).endOK _)
   have h3 := StmtT.letv (P := P) (x := 3) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
-    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hg
+    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hg.ofNone
     ((((((hK9.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).endOK _)
   have hdv := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K2, K1, A2.setE, upd])
@@ -864,31 +864,31 @@ theorem mainR_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainR Δ := by
   have hEOd : EOd.mode ≠ .rootb ∧ EOd.dtor = false ∧ EOd.dbind = false := by
     simp [EOd, ER, Entry.arm, RDT, RT, DT, T, Ty.dtorViews, Ty.holdsView]
   have hK10 : NoRootb (A2.setE K9 8 EOd) := hK9.setE hEOd
-  have ho := StmtT.letd (P := P) (Γ := K9) (Γ1 := K9) (F := []) (x := 8) (f := 12) (r := .chanRecv true 5)
+  have ho := StmtT.letd (ξ := .none) (P := P) (Γ := K9) (Γ1 := K9) (F := []) (x := 8) (f := 12) (r := .chanRecv true 5)
     (s := .skip) (E := ER) (t := RT) (H := []) (τ := RDT) rfl
     (by simp [K9, K8', K8, K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hrecv rfl
     (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn rdrop_ok) (HeldUp.refl _ _) StmtT.skip (hK10.endOK _)
-  have hr := StmtT.letv (P := P) (x := 7) (r := .chanSend 5 6) (E := intE) (F := []) (Γ := K8) (Γ1 := K8')
+  have hr := StmtT.letv (ξ := .none) (P := P) (x := 7) (r := .chanSend 5 6) (E := intE) (F := []) (Γ := K8) (Γ1 := K8')
     (s := .letd 8 12 (.chanRecv true 5) .skip) rfl
     (by simp [K8, K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp)
-    hsend ho ((hK10.exitScope 8).endOK _)
-  have hx := StmtT.letd (P := P) (Γ := K7) (Γ1 := K7) (F := []) (x := 6) (f := 0) (r := .pair 0 1)
+    hsend ho.ofNone ((hK10.exitScope 8).endOK _)
+  have hx := StmtT.letd (ξ := .none) (P := P) (Γ := K7) (Γ1 := K7) (F := []) (x := 6) (f := 0) (r := .pair 0 1)
     (s := .letv 7 (.chanSend 5 6) (.letd 8 12 (.chanRecv true 5) .skip)) (E := EP) (t := T) (H := []) rfl
     (by simp [K7, K6', K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hpair rfl
-    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hr
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hr.ofNone
     (((hK10.exitScope 8).exitScope 7).endOK _)
-  have hc := StmtT.letv (P := P) (x := 5) (r := .lockNew GVD 4) (E := EC) (F := []) (Γ := K6) (Γ1 := K6')
-    rfl (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hlnew hx
+  have hc := StmtT.letv (ξ := .none) (P := P) (x := 5) (r := .lockNew GVD 4) (E := EC) (F := []) (Γ := K6) (Γ1 := K6')
+    rfl (by simp [K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hlnew hx.ofNone
     ((((hK10.exitScope 8).exitScope 7).exitScope 6).endOK _) (fun _ => rfl)
-  have hg := StmtT.letd (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 4) (f := 7) (r := .pair 2 3)
+  have hg := StmtT.letd (ξ := .none) (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 4) (f := 7) (r := .pair 2 3)
     (s := .letv 5 (.lockNew GVD 4) (.letd 6 0 (.pair 0 1) (.letv 7 (.chanSend 5 6)
       (.letd 8 12 (.chanRecv true 5) .skip))))
     (E := EG0) (t := GV) (H := EG0.held) (τ := GVD) rfl
     (by simp [K4, K3, K2, K1, A2.setE, upd]) (by simp) hgp rfl
-    (Or.inl ⟨rfl, Or.inl (by rw [hEG0])⟩) rfl rfl (letd_fn gvdrop_ok) (HeldUp.refl _ _) hc
+    (Or.inl ⟨rfl, Or.inl (by rw [hEG0])⟩) rfl rfl (letd_fn gvdrop_ok) (HeldUp.refl _ _) hc.ofNone
     (((((hK10.exitScope 8).exitScope 7).exitScope 6).exitScope 5).endOK _)
   have h3 := StmtT.letv (P := P) (x := 3) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
-    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hg
+    rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hg.ofNone
     ((((((hK10.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).endOK _)
   have hdv := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K2, K1, A2.setE, upd])

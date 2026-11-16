@@ -114,7 +114,7 @@ theorem spawnSt_val {fn : Fn} {vs : List Val} {v : Nat} {sl : Slot} {T : Val}
     the body, in the spawned function's own context. -/
 theorem newThread_typed {P : Prog} {fn : Fn} (hok : FnOK P fn)
     (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false) :
-    ∃ Δ, StmtT P ξ (sigCtx fn) [] (wrapParams fn.params 0 0 (.scope fn.params.length fn.body)) Δ := by
+    ∃ Δ, StmtT P .none (sigCtx fn) [] (wrapParams fn.params 0 0 (.scope fn.params.length fn.body)) Δ := by
   obtain ⟨hsrc, -, -, -, -, -, -, -, -, -, -, -, Δb, hbody, hfl, -⟩ := hok
   have hrb : ∀ p E, sigCtx fn p = some E → E.mode ≠ .rootb := fun p E h =>
     (sigCtx_spawn_mode hpar h).1
@@ -123,7 +123,7 @@ theorem newThread_typed {P : Prog} {fn : Fn} (hok : FnOK P fn)
     intro p E hp hm
     obtain ⟨E0, h0, hm0, -⟩ := (hbody.domTy hsrc).2 p E hp
     exact hrb p E0 h0 (hm0.symm.trans hm)
-  have hsc : StmtT P ξ (sigCtx fn) [] (.scope fn.params.length fn.body) (exitScope fn.params.length Δb) :=
+  have hsc : StmtT P .none (sigCtx fn) [] (.scope fn.params.length fn.body) (exitScope fn.params.length Δb) :=
     StmtT.scope ⟨_, sigCtx_res fn, resMode_ne' fn⟩ (fun h => by cases h) hbody.ofNone
       ⟨fun p E hp hm => absurd hm (hrbΔ p E hp), DtorSafe.of_none (fun v E h => (hfl v E h).1) _ _ _,
         DbindSafe.of_none (fun v E h => (hfl v E h).2) _⟩

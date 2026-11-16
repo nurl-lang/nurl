@@ -40,7 +40,7 @@ theorem restrictLemma (P : Prog) : RestrictLemma P :=
     spawn redex always has `TStep.spawn` or `spawnFail` is not proved here.) -/
 theorem reach_thread_total {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
+    (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C)
     {i : Nat} {t : Thread} {m' : Mem} {s' : Stmt} (hi : C.ths[i]? = some t) (hsp : ¬ SpawnRedex spawn t.s)
     (hst : Step P (C.view t) t.s (.ok m' s')) : ∃ C', TStep P spawn C C' :=

@@ -31,7 +31,7 @@ theorem claim : Claim :=
     once every thread has finished. -/
 theorem no_leak_init {P : Prog} {spawn : Nat → Bool} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
+    (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) :
     ∀ C, Reach P spawn (Cfg.init s nv) C → (∀ t ∈ C.ths, t.s = .skip) → ∀ i, C.alloc i = false :=
   NoLeak.empty (claim P spawn Globs.empty s Δ nv hP hPc hSp GlobsOK.empty ht hs hsc hv).2.2

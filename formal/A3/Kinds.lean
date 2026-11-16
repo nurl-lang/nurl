@@ -396,6 +396,7 @@ theorem Step.kinds {P : Prog} {κ : Nat → Bool} {m : Mem} {s : Stmt} {r : Res}
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact (ih).map fun _ h => h.remove _
   | frozenSkip => exact hk.ext
+  | blockSkip | blockExit _ | loop => exact hk.ext
   | frozenIn _ ih | blockIn _ ih => exact ih
   | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he _ _ =>
