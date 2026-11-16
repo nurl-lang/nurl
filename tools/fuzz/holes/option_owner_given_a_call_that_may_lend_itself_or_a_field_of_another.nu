@@ -1,8 +1,7 @@
 // option_owner_given_a_call_that_may_lend_itself_or_a_field_of_another: agora #412 — `= o ( pick o . s y k )`: the other argument the callee may lend is a field of a struct
 // Closed: every argument the callee may lend counts, by position: a field is another (__lend_pos_unnamed, agora #412).
 // main: accepted; AddressSanitizer reported heap-use-after-free.
-// AGORA-869: runs clean now - nurlc tells the runs apart by the payload's key, as it does a String's or a Vec's (#419), whichever argument the call hands back; before, the form was refused (#412).
-// map: §7.6 | A2 | runs-clean | - | agora #412: `= o ( pick o . s y k )`: the other argument the callee may lend is a field of a struct
+// map: §7.6 | A2 | rejected | - | agora #412: `= o ( pick o . s y k )`: the other argument the callee may lend is a field of a struct
 $ `stdlib/core/string.nu`
 
 @ pick ? String a ? String b i k → ?String { ? == k 0 { ^ a } { ^ b } }
