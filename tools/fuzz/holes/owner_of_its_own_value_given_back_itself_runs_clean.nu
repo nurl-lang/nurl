@@ -1,10 +1,12 @@
-// map: §2.10 | A2 | rejected | - | AGORA-873: = o ( id o ) after = o ( id other ), then other replaced
-// main 3358873a: faults under ASan (found by AGORA-869's adversarial pass).
+// owner_of_its_own_value_given_back_itself_runs_clean: o owns its value, `= o ( id o )`, then another binding replaced and o read
+// Control: `=`'s own binding handed to its call keeps refusing nothing where nothing it borrowed ends (agora #873).
+// main 525613db: runs clean (guard).
+// map: §2.10 | A2 | runs-clean | - | AGORA-873: o owns its value, `= o ( id o )`, then another binding replaced and o read
 $ `stdlib/core/string.nu`
 
-@ pick ? String a ? String b i k → ?String { ? == k 0 { ^ a } { ^ b } }
-
 @ id ? String a → ?String { ^ a }
+
+@ gid [T] T a → T { ^ a }
 
 @ mk s t → ?String { ^ @ ?String { T ( string_from t ) } }
 
@@ -13,7 +15,6 @@ $ `stdlib/core/string.nu`
 @ run i k → v {
     : ~ ? String other ( mk `another value long enough for the heap` )
     : ~ ? String o ( mk `a value long enough for the heap here` )
-    = o ( id other )
     = o ( id o )
     = other ( mk `a replacement value long enough for the heap` )
     ( show o )

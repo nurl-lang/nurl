@@ -64204,7 +64204,12 @@ unsafe @ __bck_rv_self_tie i wid s cals → v {
         ^ ( bck_borrow_begin st wid ( __src_plain srcs ) )
     } {}
     // (No call on the line lent anything: nothing to take.)
-    : ~ s out ? == 0 ( nurl_sym_len g_bck `plend` ) ( nurl_str_cat st `` ) ( bck_take_plend st wid ( bck_field rec 3 ) ( bck_field rec 6 ) )
+    // (An `=` row's binding handed to its own call, `= o ( id o )`: the
+    // argument is read before the binding takes its new value, so what it
+    // lends is what the binding borrowed before its `=`, `obs_` - as for a
+    // value block's tail, bck_brw_leaves; agora #873.)
+    : s obs ? & != 0 g_bck_has_borrow ( seq ( bck_field rec 0 ) `assign` ) ( nurl_sym_get g_bck ( bck_bkey `obs_` ( nurl_str_int wid ) ) ) ``
+    : ~ s out ? == 0 ( nurl_sym_len g_bck `plend` ) ( nurl_str_cat st `` ) ( bck_take_plend st wid ( bck_field rec 3 ) ( bck_field rec 6 ) obs )
     ? isv { = out ( bck_view_from_reads out wid ( bck_field rec 7 ) ) } {}
     ^ out
 }
@@ -64286,7 +64291,8 @@ unsafe @ __bck_row_sl s rec → s {
 
 // A call on this line handed back what may be an argument's handle
 // (bck `plend`): the binding it is bound to borrows from that argument.
-@ bck_take_plend s st i wid s line s callee → s {
+// `obs`: for an `=` row, what `wid` borrowed before it (bck_view_bind).
+@ bck_take_plend s st i wid s line s callee s obs → s {
     ? == 0 ( nurl_sym_len g_bck `plend` ) { ^ st } {}
     : s pl ( nurl_sym_get g_bck `plend` )
     ( bck_put `plend` `` )
@@ -64351,6 +64357,15 @@ unsafe @ __bck_row_sl s rec → s {
         } {}
         // (…or of an owner holding one, `ah_`, agora #682.)
         ( __ah_raise ( nurl_str_int wr ) )
+        // (The binding itself, or a part of it: the call read its old value,
+        // which lends what it borrowed - nothing more when it owned it.)
+        ? == wr wid {
+            ? != 0 ( nurl_str_len obs ) {
+                = srcs ? == 0 ( nurl_str_len srcs ) ( nurl_str_cat obs `` ) ( nurl_str_cat3 srcs ` ` obs )
+                ? != 0 ( nurl_str_len wc ) { = wcs ( __word_add wcs wc ) } {}
+            } {}
+            continue
+        } {}
         ? ! ( bck_dead_state v ) {
             : ~ s add ? == v BCK_BORROWED_SHARED ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wr ) ) ) ( nurl_str_cat w `` )
             // (…and the sources the binding's views depend on — a sibling
