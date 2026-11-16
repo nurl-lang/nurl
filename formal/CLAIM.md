@@ -76,7 +76,10 @@ the LLVM / C11 memory model rather than redefining it.
   and the truncation; a remove of a number is each later element set one
   place down, then the truncation. On an empty Vec the truncation leaves
   it as it is, where nurlc's `vec_pop` answers `none`
-  (`A2/PopWitness.lean`: typed and run safe and leak-free). That nurlc's
+  (`A2/PopWitness.lean`: typed and run safe and leak-free; its remove is
+  the three-element case unrolled, and a remove at a general index is a
+  loop of the same typed statements, which the witness does not type).
+  That nurlc's
   `vec_pop` / `vec_remove` lower to these steps is phase C. Outside the
   claim still:
   - a change through a borrow of a Vec whose elements hold views;
