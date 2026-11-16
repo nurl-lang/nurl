@@ -74122,7 +74122,9 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // o t k )`, is copied on every run it lent: the copy is made before
         // the old value goes.)
         : ~ b __cp_call F
-        : s __cc_lr ( __word_union ( nurl_sym_get syms `__last_call_lend_idents__` ) g_call_lend_roots )
+        // (Asked only of a store into a capture: every other `=` skips it.)
+        : ~ s __cc_lr ``
+        ? & & != 0 g_bck_closure_depth != 0 ( nurl_str_len __ud_ptr ) != 0 ( nurl_sym_len2 syms __ud_ptr `__outer_owned` ) { = __cc_lr ( __word_union ( nurl_sym_get syms `__last_call_lend_idents__` ) g_call_lend_roots ) } {}
         // (…a value block whose tail is such a call too, `= o { … ( id t ) }`:
         // copied here wherever the call lent, which covers what the block
         // bound - mem_blk_tail_copy_slot is not run then.)
