@@ -74161,7 +74161,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
                         // (…and where they are not known yet - a generic
                         // instance, a callee below - judged at module end on
                         // the callee's final summary: resolve_cap_nc_lends.)
-                        ( __park_cap_nc_lend lex ( nurl_sym_get syms `__last_call_name__` ) name bck_line ( llvm_to_nurl vt ) )
+                        ( __park_cap_nc_lend lex ( nurl_sym_get syms `__last_call_name__` ) ( __cc_dying_args syms ( nurl_sym_get syms `__last_call_args__` ) name ) name bck_line ( llvm_to_nurl vt ) )
                     }
                 }
             } {}
@@ -100722,7 +100722,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // lends are not known yet — a value that may die with the closure: a local
 // or a parameter of the closure, or a capture its env took over? Not the
 // capture `name` itself, another capture (the caller's value), a global, or
-// a temporary (gen_assign's capture rule, agora
+// a compiler stand-in (gen_assign's capture rule, agora
 // #872).
 @ __cc_dying_lend i syms s ws s name → b {
     : ~ s rest ( nurl_str_cat ws `` )
@@ -100731,7 +100731,9 @@ unsafe @ __sx_names_capture i syms s sx → b {
         : i wd ( nurl_str_find w0 `.` )
         : s w ? > wd 0 ( nurl_str_slice w0 0 wd ) ( nurl_str_cat w0 `` )
         ? | | ( seq w name ) ( seq w `-` ) == 0 ( nurl_sym_len syms w ) { continue } {}
-        ? != 0 ( nurl_str_starts w `__` ) { continue } {}
+        // (A stand-in the compiler made for an argument, `__alr#N`, is no
+        // binding of the closure.)
+        ? >= ( nurl_str_find w `#` ) 0 { continue } {}
         ? ( seq ( nurl_sym_get2 syms w `__captured_byref` ) `1` ) { continue } {}
         ? != 0 ( nurl_sym_len2 syms w `__global` ) { continue } {}
         // (A capture by value the closure does not take over is a copy of
@@ -100746,12 +100748,28 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // A call whose result cannot be copied, stored into capture `name` of a
 // closure, its lends not known where the store is made: judged at module
 // end on the callee's final summary (resolve_cap_nc_lends, agora #872).
-@ __park_cap_nc_lend i lex s cn s name i line s tshow → v {
-    ? == 0 ( nurl_str_len cn ) { ^ v } {}
+// (`ixs`: the positions of the arguments that die with the closure, as
+// `1,3`: only a lend of one of those is refused.)
+@ __park_cap_nc_lend i lex s cn s ixs s name i line s tshow → v {
+    ? | == 0 ( nurl_str_len cn ) == 0 ( nurl_str_len ixs ) { ^ v } {}
     : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `capnc_n` ) )
     ( nurl_sym_def g_pending_impl `capnc_n` ( nurl_str_int + n 1 ) )
     ( nurl_sym_def g_pending_impl ( nurl_str_cat `capnc#` ( nurl_str_int n ) )
-    ( nurl_str_cat4 ( nurl_str_cat3 cn ` ` name ) ` ` ( nurl_str_cat3 ( nurl_str_int line ) ` ` tshow ) ( nurl_str_cat ` ` ( nurl_lex_filename lex ) ) ) )
+    ( nurl_str_cat4 ( nurl_str_cat4 cn ` ` ixs ` ` ) name ` ` ( nurl_str_cat4 ( nurl_str_int line ) ` ` tshow ( nurl_str_cat ` ` ( nurl_lex_filename lex ) ) ) ) )
+}
+
+// The positions, as `0,2`, of the call arguments `args` (one word each) that
+// die with the closure (__cc_dying_lend), `name` aside.
+@ __cc_dying_args i syms s args s name → s {
+    : ~ s rest ( nurl_str_cat args `` )
+    : ~ s out ``
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( __cc_dying_lend syms w name ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_int k ) ( nurl_str_cat3 out `,` ( nurl_str_int k ) ) } {}
+        = k + k 1
+    }
+    ^ out
 }
 
 // The calls parked by __park_cap_nc_lend: one whose callee may lend what it
@@ -100763,10 +100781,20 @@ unsafe @ __sx_names_capture i syms s sx → b {
     ~ < j n {
         : ~ s r ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `capnc#` ( nurl_str_int j ) ) ) `` )
         : s cn ( str_first_word r ) = r ( str_skip_word r )
+        : s ixs ( str_first_word r ) = r ( str_skip_word r )
         : s nm ( str_first_word r ) = r ( str_skip_word r )
         : s line ( str_first_word r ) = r ( str_skip_word r )
         : s tshow ( str_first_word r ) = r ( str_skip_word r )
-        ? ( __callee_lent syms cn cn ) {
+        // (Only a lend of an argument that dies with the closure: one of the
+        // capture itself stays a lend of it.)
+        : s who ? != 0 ( nurl_sym_len2 syms cn `__body_done` ) cn ( bck_generic_base cn )
+        : ~ b lent F
+        : ~ s ir ( bck_swap_char ixs 44 32 )
+        ~ & ! lent != 0 ( nurl_str_len ir ) {
+            : s ix ( str_first_word ir ) = ir ( str_skip_word ir )
+            ? | != 0 ( mem_fn_lend_kind syms who ( nurl_str_to_int ix ) ) != 0 ( mem_fn_lend_kind syms cn ( nurl_str_to_int ix ) ) { = lent T } {}
+        }
+        ? lent {
             ( bck_emit_error r ( nurl_str_to_int line ) ( nurl_str_cat4 ( nurl_str_cat3 `'` nm `' is captured by the closure and given what '` ) ( bck_fn_show cn ) ( nurl_str_cat3 `' may lend, which may be a local or a parameter of the closure - gone when it returns - and a '` tshow `' has no copy to give '` ) ( nurl_str_cat nm `' instead (agora #872). Give it a value of its own, or keep the value outside the closure.` ) ) )
         } {}
         = j + j 1
