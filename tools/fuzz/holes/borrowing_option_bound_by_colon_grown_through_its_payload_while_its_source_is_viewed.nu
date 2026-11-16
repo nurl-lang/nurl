@@ -1,5 +1,7 @@
-// map: §2.10 | A2 | rejected | - | AGORA-874: an owner that borrows another's payload grown through its own payload, a view of the other read
-// main 3358873a: faults under ASan (found by AGORA-869's adversarial pass).
+// borrowing_option_bound_by_colon_grown_through_its_payload_while_its_source_is_viewed: the same with `: ~ ?String o ( id other )`
+// Closed: a change through a `??` payload binding that may move its buffer ends the views of every other payload binding of the same value - its option's other cursors, an enum's other payloads read in place, and, through a borrow, the payload cursors of the owners it borrows from (bck_borrow_sweep, bck_cursor_follow; agora #874).
+// main 525613db: AddressSanitizer: heap-use-after-free.
+// map: §2.10 | A2 | rejected | - | AGORA-874: the same with `: ~ ?String o ( id other )`
 $ `stdlib/core/string.nu`
 
 @ pick ? String a ? String b i k → ?String { ? == k 0 { ^ a } { ^ b } }
@@ -12,8 +14,7 @@ $ `stdlib/core/string.nu`
 
 @ run i k → v {
     : ?String other ( mk `another value long enough for the heap` )
-    : ~ ? String o ( mk `a value long enough for the heap here` )
-    = o ( id other )
+    : ~ ? String o ( id other )
     ?? other { T so → {
             : s view ( string_data so )
             ?? o { T s → { ( string_push_str s `, and a long tail appended to grow the buffer past its room and more` ) } F → {} }
