@@ -550,6 +550,32 @@
 : i WK_GLOBAL 11
 : i WK_CALL_CLO 12
 : i WK_ARG_CLO 13
+// The rule a finding of the engine breaks (eng_err): its diagnostic's
+// `note:` (why, and the docs/MEMORY.md section) and `help:` (a fix) are
+// the group's, eng_grp_note / eng_grp_help / eng_grp_sect.
+: i EG_ENDED 1  // a use of a value whose view or handle ended
+: i EG_MOVED 2  // a use after a move
+: i EG_RELEASED 3  // a use after a release
+: i EG_TAKEN 4  // a part taken out of its owner, used
+: i EG_DROPREAD 5  // a destructor's drop reads what is gone
+: i EG_FRESHSTR 6  // a fresh raw string kept by a value
+: i EG_NOCOPY 7  // a borrowed value that would have to be copied, and has no copy
+: i EG_TAKESBORROW 8  // a callee takes over a borrow
+: i EG_ESCAPE 9  // a view of a released value leaves with its holder
+: i EG_CALLERVIEW 10  // storage that outlives the frame is given a view of it
+: i EG_UNWIND 11  // the caller's storage holds a view of this frame while a call may panic
+: i EG_EXCL 12  // a call's arguments: exclusive access
+: i EG_THREAD 13  // what another thread receives or runs holds a view
+: i EG_CLOSURE 14  // a closure's captures
+: i EG_LOOP 15  // a loop's container changed while it walks it
+: i EG_DEFER 16  // a `;` block releases what is handed back
+: i EG_ARC 17  // what an Arc shares changed in place
+: i EG_INOUTBORROW 18  // a borrowing binding handed to a callee that replaces it
+: i EG_COPYSTORE 19  // a store into a copy of a borrowed value
+: i EG_LENDBACK 20  // a binding given back what a call may lend out of it
+: i EG_INOUTPART 21  // an `inout` parameter goes back without a part
+: i EG_RETLEND 22  // a lend of a parameter taken over on another path handed back
+: i EG_COPYHOOK 23  // a copy hook hands its argument back
 : ~ i g_fc_callee 0  // the callee of the call being applied (interned)
 : ~ b g_rd_given_new F  // the argument eng_read reads is an `inout` one the callee gives a new value before it reads it (eng_apply_call_do)
 : i TG_USE 1  // the keys loans are made under: a `use` read by the statement at an offset
@@ -12813,11 +12839,13 @@ unsafe @ eng_byte s w i k → i {
     ^ | ( seq tail `_clone` ) ( seq tail `_share` )
 }
 
-// A finding about function `f` as a whole.
-@ eng_err_fn i f i line s msg → v {
+// A finding about function `f` as a whole, under rule group `grp`
+// (EG_*): `msg` says what it does, after its name.
+@ eng_err_fn i f i line i grp s msg → v {
     ? < ( wv_at g_fe f ) 0 { ( wv_put g_fe f ( wv_new ) ) } {}
     ( wv_push ( wv_at g_fe f ) line )
-    ( wv_push ( wv_at g_fe f ) ( __core_in msg ) )
+    ( wv_push ( wv_at g_fe f ) ( __core_in ( nurl_str_cat3 ( eng_fname ( ef_at f EF_NAME ) ) ` ` msg ) ) )
+    ( wv_push ( wv_at g_fe f ) grp )
 }
 
 @ eng_unsup_s s why → v { ? == 0 g_fc_unsup { = g_fc_unsup ( __core_in why ) } {} }
@@ -12830,10 +12858,13 @@ unsafe @ eng_byte s w i k → i {
 @ eng_skip_why_s i why → v { ? == 0 g_eng_skip { = g_eng_skip why } {} }
 
 // ── Ownership engine: findings, names, types of places ───────────────
-@ eng_err i line s msg → v {
+// A finding at `line`, under rule group `grp` (EG_*): a function's
+// findings are (line, message, group) triples.
+@ eng_err i line i grp s msg → v {
     ? | == 0 g_fc_final < g_fe_cur 0 { ^ } {}
     ( wv_push g_fe_cur line )
     ( wv_push g_fe_cur ( __core_in msg ) )
+    ( wv_push g_fe_cur grp )
 }
 
 // The function holds something the engine has no rule for: it is not
@@ -12842,12 +12873,109 @@ unsafe @ eng_byte s w i k → i {
     ? == 0 g_fc_unsup { = g_fc_unsup ( __core_in why ) } {}
 }
 
-// A variable's name as a diagnostic writes it (`%t7` a temporary).
+// A variable as a diagnostic writes it: a binding by its name, quoted;
+// a temporary by what made it (the call, the literal, the line); what a
+// parameter holds (the caller's: a negative number) as that.
 @ eng_vname i vid → s {
-    ? < vid 0 { ^ ( nurl_str_cat `what ` ( eng_vname - -1 vid ) ) } {}
+    ? < vid 0 { ^ ( nurl_str_cat3 `what ` ( eng_vname - -1 vid ) ` holds` ) } {}
     : s n ( eng_str ( ev vid 0 ) )
-    ? == 0 ( nurl_str_len n ) { ^ ( nurl_str_cat `%t` ( nurl_str_int vid ) ) } {}
-    ^ ( nurl_str_cat n `` )
+    ? == 0 ( nurl_str_len n ) { ^ ( eng_tmp_name vid ) } {}
+    ^ ( nurl_str_cat3 `'` n `'` )
+}
+
+// A function as a diagnostic writes it: quoted, an instance of a generic
+// by its template's name (`chan_send`, not `chan_send__str`), a closure's
+// body as `the closure`.
+@ eng_fname i name → s {
+    : s n ( eng_str name )
+    ? != 0 ( nurl_str_starts n `__closure_` ) { ^ ( nurl_str_cat `the closure` `` ) } {}
+    : i f ( ef_find name )
+    ? >= f 0 {
+        : i t ( ef_at f EF_TMPL )
+        ? & != t 0 != 0 ( nurl_str_len ( eng_str t ) ) { ^ ( nurl_str_cat3 `'` ( eng_str t ) `'` ) } {}
+        ^ ( nurl_str_cat3 `'` n `'` )
+    } {}
+    // (an instance the module has no body of: its name up to the `__`
+    // its type arguments follow)
+    : i len ( nurl_str_len n )
+    : i at ? > len 1 ( nurl_str_find ( nurl_str_slice n 1 - len 1 ) `__` ) -1
+    ? > at 0 { ^ ( nurl_str_cat3 `'` ( nurl_str_slice n 0 + at 1 ) `'` ) } {}
+    ^ ( nurl_str_cat3 `'` n `'` )
+}
+
+// `in the call to 'f', ` - what a finding about one call's arguments
+// begins with.
+@ eng_in_call i name → s { ^ ( nurl_str_cat3 `in the call to ` ( eng_fname name ) `, ` ) }
+
+// A temporary of the function being read, by the statement that made it
+// (only for the run that reports: the others drop their findings).
+@ eng_tmp_name i vid → s {
+    ? == 0 g_fc_final { ^ ( nurl_str_cat `a temporary value` `` ) } {}
+    : ~ i at 0
+    ~ < at g_ec_n {
+        ? & == ( ec at ) CO_LET == ( ec + at 1 ) vid { ^ ( eng_rv_name + at 2 vid ) } {}
+        = at + at ( eng_stmt_len at )
+    }
+    ^ ( eng_tmp_line vid )
+}
+
+@ eng_tmp_line i vid → s {
+    : i ln ( fv_line vid )
+    ? > ln 0 { ^ ( nurl_str_cat `the value of the expression on line ` ( nurl_str_int ln ) ) } {}
+    ^ ( nurl_str_cat `a temporary value` `` )
+}
+
+// What the rvalue at `rv` that made temporary `vid` is, in words.
+@ eng_rv_name i rv i vid → s {
+    : i k ( ec rv )
+    ? == k RV_CALL { ^ ( nurl_str_cat `the value of the call to ` ( eng_fname ( ec + rv 1 ) ) ) } {}
+    ? == k RV_CALLIND { ^ ( nurl_str_cat `the value of the closure called on line ` ( nurl_str_int ( fv_line vid ) ) ) } {}
+    ? == k RV_CLOSURE { ^ ( nurl_str_cat `the closure made on line ` ( nurl_str_int ( fv_line vid ) ) ) } {}
+    ? == k RV_AGG { ^ ( nurl_str_cat `the literal on line ` ( nurl_str_int ( fv_line vid ) ) ) } {}
+    ? | == k RV_USE == k RV_PAYLOAD {
+        // (a copy of a place: that place's binding)
+        : i irop ( ec + rv 1 )
+        ? >= irop 2 {
+            : ~ i p - irop 2
+            : ~ i parts 0
+            ~ >= ( ep p 1 ) 0 { = p ( ep p 1 ) = parts + parts 1 }
+            : i root ( ep p 0 )
+            ? & >= root 0 != root vid {
+                ? & == parts 0 == k RV_USE { ^ ( eng_vname root ) } {}
+                ^ ( nurl_str_cat `a value read out of ` ( eng_vname root ) )
+            } {}
+        } {}
+    } {}
+    ^ ( eng_tmp_line vid )
+}
+
+// Is `d` a place as the program spells it, quoted (`'x.f'`)?
+@ __eng_quoted s d → b {
+    : i n ( nurl_str_len d )
+    ? < n 2 { ^ F } {}
+    ^ & == ( nurl_str_get d 0 ) 39 == ( nurl_str_get d - n 1 ) 39
+}
+
+// The part at `path` of variable `vid`, in words: `'x.f'`, `an element
+// of 'v'`, `the payload of 'o' (its 'T' arm)`.
+@ __eng_pdesc i vid i path → s {
+    ? == path 0 { ^ ( eng_vname vid ) } {}
+    : i e ( ep_last path )
+    : s up ( __eng_pdesc vid ( ep_parent path ) )
+    ? == e EE_STAR { ^ ( nurl_str_cat `an element of ` up ) } {}
+    ? ( ee_is_pay e ) {
+        : s arm ( nurl_str_cat3 ` (its '` ( eng_str ( ee_variant e ) ) `' arm)` )
+        ? == 0 ( ee_idx e ) { ^ ( nurl_str_cat3 `the payload of ` up arm ) } {}
+        ^ ( nurl_str_cat4 `payload ` ( nurl_str_int + ( ee_idx e ) 1 ) ` of ` ( nurl_str_cat up arm ) )
+    } {}
+    ? ( ee_is_cap e ) {
+        : i c ( ee_cap_no e )
+        ? < c 0 { ^ ( nurl_str_cat `the body of ` up ) } {}
+        ^ ( nurl_str_cat4 `capture ` ( nurl_str_int + c 1 ) ` of ` up )
+    } {}
+    : s fld ( eng_str ( ee_name e ) )
+    ? ( __eng_quoted up ) { ^ ( nurl_str_cat4 ( nurl_str_slice up 0 - ( nurl_str_len up ) 1 ) `.` fld `'` ) } {}
+    ^ ( nurl_str_cat4 `field '` fld `' of ` up )
 }
 
 @ __eng_path_str i path → s {
@@ -12859,7 +12987,7 @@ unsafe @ eng_byte s w i k → i {
     ^ ( nurl_str_cat3 head `.` ( eng_str ( ee_name e ) ) )
 }
 
-@ eng_pname i pl → s { ^ ( nurl_str_cat ( eng_vname ( pl_var pl ) ) ( __eng_path_str ( pl_path pl ) ) ) }
+@ eng_pname i pl → s { ^ ( __eng_pdesc ( pl_var pl ) ( pl_path pl ) ) }
 
 // The type at `path` below a value of type `t`.
 @ eng_ty_at i t i path → i {
@@ -13660,7 +13788,7 @@ unsafe @ eng_byte s w i k → i {
                 // nothing changes it in place - unless a value the change is
                 // made inside, below the payload, orders it itself (the
                 // program's own `unsafe % Sync` promise, MEMORY.md §6.5)
-                ( eng_err line ( nurl_str_cat ( eng_pname place ) ` is inside what an Arc shares, and is changed here` ) )
+                ( eng_err line EG_ARC ( nurl_str_cat ( eng_pname place ) ` is inside what an Arc shares, and is changed here` ) )
             } {}
             = a + a 2
         }
@@ -13744,14 +13872,13 @@ unsafe @ eng_byte s w i k → i {
 }
 
 // ── Ownership engine: reads ──────────────────────────────────────────
+// A loan's kind as a finding says it: `'v' <it> 'x'`.
 @ eng_kind_word i k → s {
-    ? == k LK_HANDLE { ^ `handle` } {}
-    ? == k LK_VIEW { ^ `view` } {}
-    ? == k LK_REF { ^ `ref` } {}
-    ? == k LK_SHARE { ^ `share` } {}
-    ? == k LK_HELD { ^ `held` } {}
-    ? == k LK_HELDIN { ^ `heldin` } {}
-    ^ `stale`
+    ? == k LK_HANDLE { ^ `borrows from` } {}
+    ? == k LK_REF { ^ `uses a pointer to` } {}
+    ? == k LK_SHARE { ^ `uses a share of` } {}
+    ? == k LK_STALE { ^ `uses a stale view of` } {}
+    ^ `uses a view of`
 }
 
 // What a finding calls the value it is about: built only when there is
@@ -13760,18 +13887,18 @@ unsafe @ eng_byte s w i k → i {
     ? == wk WK_VAR { ^ ( eng_vname wa ) } {}
     ? == wk WK_PLACE { ^ ( eng_pname wa ) } {}
     ? == wk WK_RET { ^ ( nurl_str_cat `the returned value` `` ) } {}
-    ? == wk WK_FIELD { ^ ( nurl_str_cat `field ` ( nurl_str_int wa ) ) } {}
-    ? == wk WK_ELEM { ^ ( nurl_str_cat `element ` ( nurl_str_int wa ) ) } {}
+    ? == wk WK_FIELD { ^ ( nurl_str_cat3 `field ` ( nurl_str_int wa ) ` of the literal` ) } {}
+    ? == wk WK_ELEM { ^ ( nurl_str_cat3 `element ` ( nurl_str_int wa ) ` of the literal` ) } {}
     ? == wk WK_CLOARG { ^ ( nurl_str_cat3 `argument ` ( nurl_str_int wa ) ` of the closure` ) } {}
     ? == wk WK_CLO { ^ ( nurl_str_cat `the closure` `` ) } {}
     ? == wk WK_CLO_CALLED { ^ ( nurl_str_cat `the closure called here` `` ) } {}
-    ? == wk WK_MATCH { ^ ( nurl_str_cat `matched value` `` ) } {}
+    ? == wk WK_MATCH { ^ ( nurl_str_cat `the matched value` `` ) } {}
     ? == wk WK_LOOP { ^ ( nurl_str_cat `the loop's container` `` ) } {}
-    ? == wk WK_GLOBAL { ^ ( nurl_str_cat `the global ` ( eng_str wa ) ) } {}
-    ? == wk WK_CALL_CLO { ^ ( nurl_str_cat3 ( eng_str g_fc_callee ) `: the closure in argument ` ( nurl_str_int wa ) ) } {}
+    ? == wk WK_GLOBAL { ^ ( nurl_str_cat3 `the global '` ( eng_str wa ) `'` ) } {}
+    ? == wk WK_CALL_CLO { ^ ( nurl_str_cat3 `the closure in argument ` ( nurl_str_int wa ) ( nurl_str_cat ` of the call to ` ( eng_fname g_fc_callee ) ) ) } {}
     ? == wk WK_ARG_CLO { ^ ( nurl_str_cat `the closure in argument ` ( nurl_str_int wa ) ) } {}
     ? == wk WK_DROP { ^ ( nurl_str_cat `the drop of ` ( eng_vname wa ) ) } {}
-    ^ ( nurl_str_cat `value` `` )
+    ^ ( nurl_str_cat `the value read here` `` )
 }
 
 // A value is used: a loan it is, or (`held`) one it holds, that ended
@@ -13784,8 +13911,8 @@ unsafe @ eng_byte s w i k → i {
     ~ < k ( sq_len all ) {
         : i l ( sq_at all k )
         ? & ( sq_has dead l ) ( el_is_loan l ) {
-            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_what wk wa ) ` uses a ` ( eng_kind_word ( el_kind l ) ) )
-            ( nurl_str_cat3 ` of ` ( eng_pname ( el_place l ) ) `, which was changed or released` ) ) )
+            ( eng_err line EG_ENDED ( nurl_str_cat ( nurl_str_cat3 ( eng_what wk wa ) ` ` ( eng_kind_word ( el_kind l ) ) )
+            ( nurl_str_cat3 ` ` ( eng_pname ( el_place l ) ) `, which was changed or released` ) ) )
             ^ F
         } {}
         = k + k 1
@@ -13820,8 +13947,8 @@ unsafe @ eng_byte s w i k → i {
     : i av ( st_av st vid )
     ? == av 0 { ^ g_av_none } {}
     : i own ( av_own av )
-    ? | == own OW_M == own OW_X { ( eng_err line ( nurl_str_cat ( eng_vname vid ) ` is used after it was moved` ) ) ^ g_av_none } {}
-    ? == own OW_D { ( eng_err line ( nurl_str_cat ( eng_vname vid ) ` is used after it was released` ) ) ^ g_av_none } {}
+    ? | == own OW_M == own OW_X { ( eng_err line EG_MOVED ( nurl_str_cat ( eng_vname vid ) ` is used after it was moved` ) ) ^ g_av_none } {}
+    ? == own OW_D { ( eng_err line EG_RELEASED ( nurl_str_cat ( eng_vname vid ) ` is used after it was released` ) ) ^ g_av_none } {}
     ? == own OW_U { ^ g_av_none } {}
     : i held ( av_held av )
     ? & ( fx_has vid FX_STALE_CAP ) != held 0 {
@@ -13848,7 +13975,7 @@ unsafe @ eng_byte s w i k → i {
     ~ < g ( sq_len gone ) {
         : i gp ( sq_at gone g )
         ? & == ( pl_var gp ) vid | ( ep_prefix ( pl_path gp ) path ) ( ep_prefix path ( pl_path gp ) ) {
-            ( eng_err line ( nurl_str_cat3 ( eng_pname gp ) ` is used after it was taken out of ` ( eng_vname vid ) ) )
+            ( eng_err line EG_TAKEN ( nurl_str_cat3 ( eng_pname gp ) ` is used after it was taken out of ` ( eng_vname vid ) ) )
             ^ g_av_none
         } {}
         = g + g 1
@@ -14155,12 +14282,12 @@ unsafe @ eng_byte s w i k → i {
     ? ! ( op_is_place op ) { ^ } {}
     : i vid ( pl_var op )
     ? & & & & & == ( fv_kind vid ) VK_TEMP == ( et_kind ( fv_ty vid ) ) EK_S != ( fv_ty vid ) ET_NONE == ( av_own cur ) OW_O == ( pl_path op ) 0 & == ( av_held cur ) 0 ( fx_has vid FX_TEMP_FRESH ) {
-        ( eng_err line ( nurl_str_cat3 `a fresh string handed to ` where ` is owned by nothing` ) )
+        ( eng_err line EG_FRESHSTR ( nurl_str_cat3 `a fresh string handed to ` where ` is owned by nothing` ) )
     } {
         // (…and one a call may hand over fresh on some calls, a lend on the
         // rest: on those it is owned by nothing either)
         ? & & & & == ( fv_kind vid ) VK_TEMP != ( fv_ty vid ) ET_NONE == ( et_kind ( fv_ty vid ) ) EK_S == ( av_own cur ) OW_L & == ( pl_path op ) 0 ( fx_has vid FX_CALL_MIXED ) {
-            ( eng_err line ( nurl_str_cat3 `the string handed to ` where ` may be a fresh one, owned by nothing` ) )
+            ( eng_err line EG_FRESHSTR ( nurl_str_cat3 `the string handed to ` where ` may be a fresh one, owned by nothing` ) )
         } {}
     }
 }
@@ -14726,7 +14853,7 @@ unsafe @ eng_byte s w i k → i {
     } {}
     ? & & whole != 0 ( wv_at g_fx_nocopy ovid ) ! is_ret {
         ? to_temp { ( wv_put g_fx_nocopy dest_vid ( wv_at g_fx_nocopy ovid ) ) } {
-            ( eng_err line ( nurl_str_cat3 `field ` ( nurl_str_int ( wv_at g_fx_nocopy ovid ) ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+            ( eng_err line EG_NOCOPY ( nurl_str_cat3 `field ` ( nurl_str_int ( wv_at g_fx_nocopy ovid ) ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
         }
     } {}
     ? & & & isv != opath 0 == ( av_own av ) OW_L ! ( ep_has_star opath ) {
@@ -14897,7 +15024,7 @@ unsafe @ eng_byte s w i k → i {
         // a value block that took a local of its own from its tail join is
         // not handed back: out of a value block whose local it is, the arm
         // is a lend, copied - and this value has no copy (agora #188)
-        ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+        ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_what wk wa ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
     } {}
     ? & & & & is_ret whole ( fx_has ovid FX_SLOT ) == ( av_own av ) OW_L & & != dest_ty ET_NONE ( et_owning dest_ty ) ! ( et_copyable dest_ty ) {
         // the payload of a library getter's option over a container of this
@@ -14940,7 +15067,7 @@ unsafe @ eng_byte s w i k → i {
             : ~ i fm 0
             ~ < fm ( wv_len mine ) { ? != ( pl_path ( wv_at mine fm ) ) 0 { = field_mine T } {} = fm + fm 1 }
             ? field_mine {
-                ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: hands back a field of a local, which is released on the way out, and the field cannot be copied` ) )
+                ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_what wk wa ) `: hands back a field of a local, which is released on the way out, and the field cannot be copied` ) )
                 ( wv_drop mine )
                 ^ av
             } {}
@@ -15002,7 +15129,7 @@ unsafe @ eng_byte s w i k → i {
                 // a value block's join that is fresh on one arm and a local
                 // of the block on another: the local ends with the block, so
                 // its arm is copied - and this value has no copy
-                ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+                ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_what wk wa ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
                 ^ av
             } {}
             ? own_block { ^ av } {}
@@ -15026,7 +15153,7 @@ unsafe @ eng_byte s w i k → i {
                     // (the local a join selected is not moved out from under
                     // a `;` block that may still release it: its arm is a
                     // lend, copied - and this value has no copy)
-                    ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+                    ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_what wk wa ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
                 } {
                     // (an arm that hands out a FIELD of a local - not the local
                     // itself, which the join moves - is a lend of it, copied at
@@ -15041,13 +15168,13 @@ unsafe @ eng_byte s w i k → i {
                             = fk + fk 1
                         }
                     } {}
-                    ? field_local { ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: a borrowed value would have to be copied here, and it cannot be copied` ) ) } {}
+                    ? field_local { ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_what wk wa ) `: a borrowed value would have to be copied here, and it cannot be copied` ) ) } {}
                 }
             } {
                 // (…a return of what a call lent out of a local of this
                 // frame, on the paths that did not make a value of their own,
                 // included: the local is released on the way out)
-                ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: a view of a value released before its holder escapes` ) )
+                ( eng_err line EG_ESCAPE ( nurl_str_cat ( eng_what wk wa ) ` views a value that is released before it leaves` ) )
             }
         }
     } {}
@@ -15089,7 +15216,7 @@ unsafe @ eng_byte s w i k → i {
         }
         : b udrop & & != dest_ty ET_NONE == ( et_kind dest_ty ) EK_NAMED ( et_flag dest_ty ETF_UDROP )
         ? | | | is_ret ! named udrop & != refs 0 > ( local_depth 0 0 refs ) dest_depth {
-            ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: holds a view of a value released before it` ) )
+            ( eng_err line EG_ESCAPE ( nurl_str_cat ( eng_what wk wa ) ` holds a view of a value released before it` ) )
         } {}
     } {}
     ^ av
@@ -15207,7 +15334,7 @@ unsafe @ eng_byte s w i k → i {
         ? | == kind LK_VIEW == kind LK_HANDLE {
             : i src ( pl_var ( el_place l ) )
             ? & & == ( fv_kind src ) VK_LOCAL > src vid >= ( fv_depth src ) ( fv_depth vid ) {
-                ( eng_err g_fc_line ( nurl_str_cat ( nurl_str_cat3 ( eng_vname vid ) ` is given a view of ` ( eng_vname src ) )
+                ( eng_err g_fc_line EG_DROPREAD ( nurl_str_cat ( nurl_str_cat3 ( eng_vname vid ) ` is given a view of ` ( eng_vname src ) )
                 `, which was declared after it and is released first` ) )
                 ^
             } {}
@@ -15480,7 +15607,7 @@ unsafe @ eng_byte s w i k → i {
         : i p ( sq_at g_fc_wb_pairs k )
         ? & == ( tp_at p 2 0 ) l ! ( sq_has g_fc_wbs ( tp_at p 2 1 ) ) {
             : i c ( tp_at p 2 1 )
-            ( eng_err line ( nurl_str_cat4 ( eng_pname place ) ` releases the value ` ( eng_pname ( el_place l ) ) ( nurl_str_cat4 ` took over from the copy ` ( eng_vname c ) `, which was not written back into its slot` `` ) ) )
+            ( eng_err line EG_COPYSTORE ( nurl_str_cat4 ( eng_pname place ) ` releases the value ` ( eng_pname ( el_place l ) ) ( nurl_str_cat4 ` took over from the copy ` ( eng_vname c ) `, which was not written back into its slot` `` ) ) )
             ^
         } {}
         = k + k 1
@@ -15547,7 +15674,7 @@ unsafe @ eng_byte s w i k → i {
             ~ < k ( sq_len held ) {
                 : i he ( sq_at held k )
                 ? & ( sq_has dead ( he_loan he ) ) | ( ep_prefix at ( he_path he ) ) ( ep_prefix ( he_path he ) at ) {
-                    ( eng_err line ( nurl_str_cat3 `a closure reads, through ` ( eng_pname place ) `, a view of a value that has ended` ) )
+                    ( eng_err line EG_CLOSURE ( nurl_str_cat3 `a closure reads, through ` ( eng_pname place ) `, a view of a value that has ended` ) )
                     ^
                 } {}
                 = k + k 1
@@ -15606,7 +15733,7 @@ unsafe @ eng_byte s w i k → i {
             } {
                 ? < phase 0 {
                     ( wv_push snap 0 )
-                    ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: a closure leaves a capture holding a view of another capture, and where it runs that capture is not known` ) )
+                    ( eng_err line EG_CLOSURE ( nurl_str_cat ( eng_what wk wa ) `: a closure leaves a capture holding a view of another capture, and where it runs that capture is not known` ) )
                 } {}
             }
         } { ? < phase 0 { ( wv_push snap 0 ) } {} }
@@ -15666,7 +15793,7 @@ unsafe @ eng_byte s w i k → i {
                                 : i l ( he_loan he )
                                 : i top ( ep_take hp + bl 1 )
                                 ? & & & & & & & > ( ep_len hp ) bl == ( ep_parent top ) base ( ee_is_cap ( ep_last top ) ) == 0 & ( ee_bits ( ep_last top ) ) EE_FN != ( ee_cap_no ( ep_last top ) ) pk0 ( el_is_loan l ) | == ( el_kind l ) LK_VIEW == ( el_kind l ) LK_HANDLE & ! ( sq_has ( st_dead st ) l ) ( eng_kills eff0 ch0 l ) {
-                                    ( eng_err line ( nurl_str_cat4 ( eng_what wk wa ) `: its body changes ` ( eng_pname ch0 ) `, which another of its captures views, when it runs here` ) )
+                                    ( eng_err line EG_CLOSURE ( nurl_str_cat4 ( eng_what wk wa ) `: its body changes ` ( eng_pname ch0 ) `, which another of its captures views, when it runs here` ) )
                                     = self_hit T
                                 } {}
                                 = h + h 1
@@ -16159,7 +16286,7 @@ unsafe @ eng_byte s w i k → i {
                         = j + j 1
                     }
                     ? >= lent 0 {
-                        ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_vname vid ) ` does not own its value: it borrows it from ` ( eng_pname ( el_place lent ) ) ) ( nurl_str_cat3 `, and ` ( eng_str name ) ` gives what it is handed 'inout' a new value` ) ) )
+                        ( eng_err line EG_INOUTBORROW ( nurl_str_cat ( nurl_str_cat3 ( eng_vname vid ) ` does not own its value: it borrows it from ` ( eng_pname ( el_place lent ) ) ) ( nurl_str_cat3 `, and ` ( eng_fname name ) ` gives what it is handed 'inout' a new value` ) ) )
                     } {}
                 } {}
             }
@@ -16233,7 +16360,7 @@ unsafe @ eng_byte s w i k → i {
                             = k + k 1
                         }
                         ? ! credited {
-                            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_vname vid ) ` is the caller's and views a value of this frame while ` ( eng_str name ) ) ` runs, which may unwind` ) )
+                            ( eng_err line EG_UNWIND ( nurl_str_cat ( nurl_str_cat3 ( eng_vname vid ) ` is the caller's and views a value of this frame while ` ( eng_fname name ) ) ` runs, which may unwind` ) )
                         } {}
                     } {}
                 } {}
@@ -16245,7 +16372,7 @@ unsafe @ eng_byte s w i k → i {
                 : ~ i g 0
                 ~ & < gp 0 < g ( sq_len gone ) { ? == ( pl_var ( sq_at gone g ) ) vid { = gp ( sq_at gone g ) } {} = g + g 1 }
                 ? & >= gp 0 ( eng_may_unwind name ) {
-                    ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_vname vid ) ` is the caller's and ` ( eng_pname gp ) ) ( nurl_str_cat3 ` was taken out of it while ` ( eng_str name ) ` runs, which may unwind` ) ) )
+                    ( eng_err line EG_UNWIND ( nurl_str_cat ( nurl_str_cat3 ( eng_vname vid ) ` is the caller's and ` ( eng_pname gp ) ) ( nurl_str_cat3 ` was taken out of it while ` ( eng_fname name ) ` runs, which may unwind` ) ) )
                 } {}
             } {}
             = p + p 1
@@ -16318,13 +16445,13 @@ unsafe @ eng_byte s w i k → i {
                     : i av ( wv_at avs m )
                     ? != m k {
                         ? | ( would_kill st place eff ( sq_union ( av_loans av ) ( held_loans ( av_held av ) ) ) 0 ) & >= shown 0 ( would_kill st shown eff ( shown_loans ( sq_union ( av_loans av ) ( held_loans ( av_held av ) ) ) shown ) 0 ) {
-                            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) `: argument ` ( nurl_str_int + m 1 ) ) ( nurl_str_cat ` views what the call changes through argument ` ( nurl_str_int + k 1 ) ) ) )
+                            ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `argument ` ( nurl_str_int + m 1 ) ) ( nurl_str_cat ` views what the call changes through argument ` ( nurl_str_int + k 1 ) ) ) )
                         } {}
                     } {
                         ? | ( would_kill st place eff ( held_loans ( av_held av ) ) 0 ) & >= shown 0 ( would_kill st shown eff ( shown_loans ( held_loans ( av_held av ) ) shown ) 0 ) {
                             // an argument is frozen for the call - a part of it
                             // may not view what the call changes in another part
-                            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) `: a part of argument ` ( nurl_str_int + k 1 ) ) ` views what the call changes in it` ) )
+                            ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `a part of argument ` ( nurl_str_int + k 1 ) ) ` views what the call changes in it` ) )
                         } {}
                     }
                 } {}
@@ -16359,7 +16486,7 @@ unsafe @ eng_byte s w i k → i {
                     }
                     ? & & ! reach ( op_is_place om ) & == ( pl_var om ) ( pl_var place ) | ( ep_prefix ( pl_path om ) ( pl_path place ) ) ( ep_prefix ( pl_path place ) ( pl_path om ) ) { = reach T } {}
                     ? | reach ( would_kill st place eff ( sq_union ( av_loans other ) ( held_loans ( av_held other ) ) ) 0 ) {
-                        ( eng_err line ( nurl_str_cat ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) `: the closure in argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ` changes ` ( eng_pname place ) `, which argument ` ) ) ( nurl_str_cat ( nurl_str_int + m 1 ) ` also reaches` ) ) )
+                        ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `the closure in argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ` changes ` ( eng_pname place ) `, which argument ` ) ) ( nurl_str_cat ( nurl_str_int + m 1 ) ` also reaches` ) ) )
                     } {
                         ? & & ( sm_has sm SM_INVOKES k ) ( op_is_place om ) | | == eff EF_REALLOC == eff EF_DROP == eff EF_REPLACE {
                             : i tails ( shared_tails place )
@@ -16372,7 +16499,7 @@ unsafe @ eng_byte s w i k → i {
                                 // of a shared handle another argument may be a
                                 // handle on: what the callee views through that
                                 // argument ends under it
-                                ( eng_err line ( nurl_str_cat ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) `: the closure in argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ` changes ` ( eng_pname place ) `, and argument ` ) ) ( nurl_str_cat ( nurl_str_int + m 1 ) ` may be another handle on it` ) ) )
+                                ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `the closure in argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ` changes ` ( eng_pname place ) `, and argument ` ) ) ( nurl_str_cat ( nurl_str_int + m 1 ) ` may be another handle on it` ) ) )
                             } {}
                         } {}
                     }
@@ -16392,7 +16519,7 @@ unsafe @ eng_byte s w i k → i {
             ( wv_trunc cfx 0 )
             ( closure_capture_effects ( av_held ( wv_at avs sk ) ) cfx )
             ? != 0 ( wv_len cfx ) {
-                ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) `: the closure in argument ` ( nurl_str_int + sk 1 ) ) ` changes what it captured, and several threads may run it at once` ) )
+                ( eng_err line EG_THREAD ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `the closure in argument ` ( nurl_str_int + sk 1 ) ) ` changes what it captured, and several threads may run it at once` ) )
             } {}
         } {}
         = e + e 1
@@ -16477,7 +16604,7 @@ unsafe @ eng_byte s w i k → i {
                     }
                     : b lend F
                     ? | same lend {
-                        ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) `: argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ` is handed over to be changed ('inout'), and argument ` ( nurl_str_int + m 1 ) ` reaches it too` ) ) )
+                        ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ` is handed over to be changed ('inout'), and argument ` ( nurl_str_int + m 1 ) ` reaches it too` ) ) )
                         = stop T
                     } {}
                 } {}
@@ -16513,7 +16640,7 @@ unsafe @ eng_byte s w i k → i {
                             = a + a 1
                         }
                         ? reads {
-                            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes ` ( eng_vname ov ) ) ( nurl_str_cat3 ` while argument ` ( nurl_str_int + m 1 ) ` still reads it` ) ) )
+                            ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat3 ( eng_fname name ) ` takes ` ( eng_vname ov ) ) ( nurl_str_cat3 ` while argument ` ( nurl_str_int + m 1 ) ` still reads it` ) ) )
                         } {}
                     } {}
                     = m + m 1
@@ -16576,7 +16703,7 @@ unsafe @ eng_byte s w i k → i {
                 // copy, and the binding keeps its value
                 : i ty ( fv_ty ( pl_var op ) )
                 ? & & & != ty ET_NONE ! ( et_is_view ty ) ( et_owning ty ) ! ( et_copyable ty ) {
-                    ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) )
+                    ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_fname name ) ` takes a borrowed value that cannot be copied` ) )
                 } {}
                 = copied ( sq_add copied ck ) = done T
             } {}
@@ -16607,12 +16734,12 @@ unsafe @ eng_byte s w i k → i {
                         // not the binding's to give
                         : b cbind & & & == ( fv_kind ov ) VK_LOCAL == ( pl_path op ) 0 ( fx_has ov FX_CALL_BIND ) | == ( sm_mode sm ck ) PM_SINK ( sm_keeps_arg sm ck )
                         ? cbind {
-                            ? ( et_copyable ty ) { = copied ( sq_add copied ck ) } { ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) ) }
+                            ? ( et_copyable ty ) { = copied ( sq_add copied ck ) } { ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_fname name ) ` takes a borrowed value that cannot be copied` ) ) }
                         } {
                         ? | != ( fv_kind ov ) VK_TEMP != ( pl_path op ) 0 {
-                            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes ` ( eng_pname op ) ) `, which is a borrow` ) )
+                            ( eng_err line EG_TAKESBORROW ( nurl_str_cat ( nurl_str_cat3 ( eng_fname name ) ` takes ` ( eng_pname op ) ) `, which is a borrow` ) )
                         } {
-                            ? ! ( et_copyable ty ) { ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) ) } {}
+                            ? ! ( et_copyable ty ) { ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_fname name ) ` takes a borrowed value that cannot be copied` ) ) } {}
                         }
                         }
                     } {
@@ -16641,24 +16768,24 @@ unsafe @ eng_byte s w i k → i {
                             }
                         } {}
                         ? second {
-                            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes ` ( eng_vname ov ) ) `, which is a borrow of another binding's value` ) )
+                            ( eng_err line EG_TAKESBORROW ( nurl_str_cat ( nurl_str_cat3 ( eng_fname name ) ` takes ` ( eng_vname ov ) ) `, which is a borrow of another binding's value` ) )
                         } {
                             ? & & & whole ( fx_has ov FX_FE ) ! ( et_copyable ty ) sinkmode {
                                 // a loop's element that cannot be copied stays
                                 // in the container that keeps it
-                                ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a loop element that cannot be copied` ) )
+                                ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_fname name ) ` takes a loop element that cannot be copied` ) )
                             } {
                                 : i rootav ( st_av st ov )
                                 ? & & & & != ( pl_path op ) 0 == ( fv_kind ov ) VK_LOCAL != rootav 0 sinkmode & == ( av_own rootav ) OW_L ( av_call rootav ) {
                                     // a field of a binding of what a call lent:
                                     // the binding is a borrow, and its field is
                                     // not its to hand to a `sink`
-                                    ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, which is a borrow` ) )
+                                    ( eng_err line EG_TAKESBORROW ( nurl_str_cat ( nurl_str_cat3 ( eng_fname name ) ` takes a field of ` ( eng_vname ov ) ) `, which is a borrow` ) )
                                 } { ? & & & & != ( pl_path op ) 0 == ( fv_kind ov ) VK_LOCAL != rootav 0 sinkmode & == ( av_own rootav ) OW_O ( eng_has_handle_loan ( av_loans rootav ) ) {
                                         // (…and of one that is a lend on some paths or
                                         // calls only - a call's result that is its own per
                                         // call: on those, the field is another's)
-                                        ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, which is a borrow on some paths` ) )
+                                        ( eng_err line EG_TAKESBORROW ( nurl_str_cat ( nurl_str_cat3 ( eng_fname name ) ` takes a field of ` ( eng_vname ov ) ) `, which is a borrow on some paths` ) )
                                     } { ? & & & & == ( pl_path op ) 0 ( fx_has ov FX_SLOT ) == ( av_own av ) OW_L sinkmode ! ( sm_keeps_arg sm ck ) {
                                             // the payload of what a library getter lent
                                             // (`vec_get`, `lru_get`) handed to a callee that
@@ -16671,14 +16798,14 @@ unsafe @ eng_byte s w i k → i {
                                             // getter, a closure's capture - the container
                                             // still holds it and releases it again: a borrow
                                             ? ( eng_slot_take st ov line ) {} {
-                                                ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes ` ( eng_vname ov ) ) `, the payload of what a getter lent, which is a borrow` ) )
+                                                ( eng_err line EG_TAKESBORROW ( nurl_str_cat ( nurl_str_cat3 ( eng_fname name ) ` takes ` ( eng_vname ov ) ) `, the payload of what a getter lent, which is a borrow` ) )
                                             }
                                         } { ? & & & == ( pl_path op ) 0 sinkmode ! ( sm_keeps_arg sm ck ) ( eng_viewsrc_lent st ov ) {
                                                 // (…a binding read out of a field of a binding of
                                                 // what a call lent - a `vec_at` copy: that
                                                 // binding is a borrow, and its field is not its
                                                 // to hand over)
-                                                ( eng_err line ( nurl_str_cat4 ( eng_str name ) ` takes ` ( eng_vname ov ) ( nurl_str_cat3 `, a field of ` ( eng_vname - ( wv_at g_fx_vsrc ov ) 1 ) `, which is a borrow` ) ) )
+                                                ( eng_err line EG_TAKESBORROW ( nurl_str_cat4 ( eng_fname name ) ` takes ` ( eng_vname ov ) ( nurl_str_cat3 `, a field of ` ( eng_vname - ( wv_at g_fx_vsrc ov ) 1 ) `, which is a borrow` ) ) )
                                             } { ? & & & == ( pl_path op ) 0 sinkmode ( eng_field_viewer st ov ) ( eng_viewer_of_share_handles st ov ) {
                                                     // a binding read out of a library handle field,
                                                     // handed to a `sink`: the handle there goes with
@@ -16693,13 +16820,13 @@ unsafe @ eng_byte s w i k → i {
                                                         // and the owner releases it again - nor is the
                                                         // viewer, whole, its to hand over where what it
                                                         // views is a borrow itself
-                                                        ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes ` ( eng_pname op ) ) `, read out of a field, which is a borrow` ) )
+                                                        ( eng_err line EG_TAKESBORROW ( nurl_str_cat ( nurl_str_cat3 ( eng_fname name ) ` takes ` ( eng_pname op ) ) `, read out of a field, which is a borrow` ) )
                                                     } { ? & & & & != ( pl_path op ) 0 sinkmode >= ( fv_pidx ov ) 0 < ( fv_pidx ov ) g_f_ncap ! ( fv_byref ov ) {
                                                             // a field of a capture the closure holds by
                                                             // value: the body's copy, made at each call -
                                                             // the binding outside still holds the field,
                                                             // and releases it again (the walk's `pendfc`)
-                                                            ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes a field of ` ( eng_vname ov ) ) `, a capture this closure holds by value` ) )
+                                                            ( eng_err line EG_TAKESBORROW ( nurl_str_cat ( nurl_str_cat3 ( eng_fname name ) ` takes a field of ` ( eng_vname ov ) ) `, a capture this closure holds by value` ) )
                                                         } { ? & sinkmode & != g_fe_outside 0 ( sq_has g_fe_outside ov ) {
                                                                 // a loop's element, or a field of it, in a
                                                                 // `;` block armed in a round, which runs
@@ -16707,7 +16834,7 @@ unsafe @ eng_byte s w i k → i {
                                                                 // is a view of the container's there, not
                                                                 // its to hand to a `sink`, as a `vec_at`
                                                                 // copy's is not (agora #672)
-                                                                ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) ` takes ` ( eng_pname op ) ) `, a loop's element read outside its round, which is a borrow` ) )
+                                                                ( eng_err line EG_TAKESBORROW ( nurl_str_cat ( nurl_str_cat3 ( eng_fname name ) ` takes ` ( eng_pname op ) ) `, a loop's element read outside its round, which is a borrow` ) )
                                                             } {
                                                                 // (a part of an `inout` parameter is the
                                                                 // caller's, who goes on holding the whole:
@@ -16742,7 +16869,7 @@ unsafe @ eng_byte s w i k → i {
                                                                 } {}
                                                                 ? | inout_part enum_part { = copied ( sq_add copied ck ) } {
                                                                     ? & ! ( take_payload st av line != ( pl_path op ) 0 ) ! ( et_copyable ty ) {
-                                                                        ( eng_err line ( nurl_str_cat ( eng_str name ) ` takes a borrowed value that cannot be copied` ) )
+                                                                        ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_fname name ) ` takes a borrowed value that cannot be copied` ) )
                                                                     } {}
                                                                 }
                                                             } } } } } } } }
@@ -16849,7 +16976,7 @@ unsafe @ eng_byte s w i k → i {
                     ? ts {
                         ? sclo { = dets ( sq_add dets tk ) } {
                             : i vl ( av_view_loan sav )
-                            ( eng_err line ( nurl_str_cat3 ( eng_str name ) `: what another thread may receive holds a view of ` ( eng_pname ( el_place vl ) ) ) )
+                            ( eng_err line EG_THREAD ( nurl_str_cat3 ( eng_in_call name ) `what another thread may receive holds a view of ` ( eng_pname ( el_place vl ) ) ) )
                         }
                     } {}
                 } {}
@@ -16902,7 +17029,7 @@ unsafe @ eng_byte s w i k → i {
                     ? cap {
                         // what another thread runs holds no view: this side may
                         // release what it points into while the other runs
-                        ( eng_err line ( nurl_str_cat3 ( eng_str name ) `: what another thread runs holds a view of ` ( eng_pname ( el_place l ) ) ) )
+                        ( eng_err line EG_THREAD ( nurl_str_cat3 ( eng_in_call name ) `what another thread runs holds a view of ` ( eng_pname ( el_place l ) ) ) )
                         = stop T
                     } {}
                 } {}
@@ -16916,7 +17043,7 @@ unsafe @ eng_byte s w i k → i {
                 ? & & & ( el_is_loan l ) != hp 0 ( ee_is_cap ( ep_last hp ) ) == 0 & ( ee_bits ( ep_last hp ) ) EE_FN {
                     : i place ( el_place l )
                     ? == ( el_kind l ) LK_REF {
-                        ( eng_err line ( nurl_str_cat ( nurl_str_cat3 ( eng_str name ) `: the closure points into this frame through ` ( eng_pname place ) ) `, and another thread would run it` ) )
+                        ( eng_err line EG_THREAD ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `the closure points into this frame through ` ( eng_pname place ) ) `, and another thread would run it` ) )
                     } {
                         // (the binding it captured - not what that binding's
                         // value holds a handle of, which stays where it is. A
@@ -17196,7 +17323,7 @@ unsafe @ eng_byte s w i k → i {
                                 } {}
                                 ? ! did {
                                     ? own_ty {
-                                        ( eng_err line ( nurl_str_cat ( eng_str name ) ` keeps a borrowed value that would have to be copied, and it cannot be copied` ) )
+                                        ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_fname name ) ` keeps a borrowed value that would have to be copied, and it cannot be copied` ) )
                                     } {}
                                     = add ( sq_union ( held_from ( av_loans src ) dpath ) ( held_root ( av_held src ) dpath ) )
                                 } {}
@@ -17563,7 +17690,7 @@ unsafe @ eng_byte s w i k → i {
                             ? & ( el_is_loan l ) != ( el_kind l ) LK_SHARE { = bad T } {}
                             = e + e 1
                         }
-                        ? bad { ( eng_err line `a closure leaves a capture or an argument holding a view` ) } {}
+                        ? bad { ( eng_err line EG_CLOSURE `a closure leaves a capture or an argument holding a view` ) } {}
                     } {}
                 } {}
                 // the captures the body hands back a view of
@@ -17585,7 +17712,7 @@ unsafe @ eng_byte s w i k → i {
                         // a view a closure hands back may point into its
                         // arguments, which the call follows, never into what
                         // it captured
-                        ( eng_err line `a closure hands back a view of what it captured` )
+                        ( eng_err line EG_CLOSURE `a closure hands back a view of what it captured` )
                     } {}
                 } {}
                 : i own ( av_own av )
@@ -17680,7 +17807,7 @@ unsafe @ eng_byte s w i k → i {
                                 ~ & ! hit < j ( sq_len ls ) {
                                     : i l ( sq_at ls j )
                                     ? & & ( el_is_loan l ) ! ( sq_has ( st_dead st ) l ) ( eng_kills eff ch l ) {
-                                        ( eng_err line ( nurl_str_cat ( nurl_str_cat3 `argument ` ( nurl_str_int + a 1 ) ` is reached by this call through the closure it calls, which gives ` ) ( nurl_str_cat ( eng_pname ch ) ` a new value when it runs here` ) ) )
+                                        ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat3 `argument ` ( nurl_str_int + a 1 ) ` is reached by this call through the closure it calls, which gives ` ) ( nurl_str_cat ( eng_pname ch ) ` a new value when it runs here` ) ) )
                                         = hit T
                                     } {}
                                     = j + j 1
@@ -17760,7 +17887,7 @@ unsafe @ eng_byte s w i k → i {
                     : ~ i q 0
                     ~ & ! hit < q ( wv_len out ) { ? ( __wv_has regs ( wv_at out q ) ) { = hit T } {} = q + q 1 }
                     ( wv_drop out )
-                    ? hit { ( eng_err line ( nurl_str_cat4 ( eng_str name ) `: argument ` ( nurl_str_int + i 1 ) ( nurl_str_cat3 ` is reached by this call through the closure in argument ` ( nurl_str_int + k 1 ) `, which changes what it shares` ) ) ) } {}
+                    ? hit { ( eng_err line EG_EXCL ( nurl_str_cat4 ( eng_in_call name ) `argument ` ( nurl_str_int + i 1 ) ( nurl_str_cat3 ` is reached by this call through the closure in argument ` ( nurl_str_int + k 1 ) `, which changes what it shares` ) ) ) } {}
                 } {}
             } {}
             = i + i 1
@@ -17978,7 +18105,7 @@ unsafe @ eng_byte s w i k → i {
                     = wp + wp 1
                 }
             } {}
-            ? whit { ( eng_err line ( nurl_str_cat3 `argument ` ( nurl_str_int + wi 1 ) ` of the closure is a container a loop walks, which the closure may change` ) ) } {}
+            ? whit { ( eng_err line EG_LOOP ( nurl_str_cat3 `argument ` ( nurl_str_int + wi 1 ) ` of the closure is a container a loop walks, which the closure may change` ) ) } {}
             = wi + wi 1
         }
     } {}
@@ -18300,7 +18427,7 @@ unsafe @ eng_byte s w i k → i {
             ~ < g ( sq_len gone ) {
                 : i gp ( sq_at gone g )
                 ? & == ( pl_var gp ) vid | ( ep_prefix ( pl_path gp ) tp ) ( ep_prefix tp ( pl_path gp ) ) {
-                    ( eng_err line ( nurl_str_cat4 ( eng_pname gp ) ` is used by the drop of ` ( eng_vname vid ) ( nurl_str_cat3 ` after it was taken out of ` ( eng_vname vid ) `` ) ) )
+                    ( eng_err line EG_DROPREAD ( nurl_str_cat4 ( eng_pname gp ) ` is used by the drop of ` ( eng_vname vid ) ( nurl_str_cat3 ` after it was taken out of ` ( eng_vname vid ) `` ) ) )
                     ^
                 } {}
                 = g + g 1
@@ -18384,7 +18511,7 @@ unsafe @ eng_byte s w i k → i {
             : i gp ( sq_at gone g )
             : i pi ( fv_pidx ( pl_var gp ) )
             ? & >= pi 0 == ( fp_mode pi ) PM_INOUT {
-                ( eng_err line ( nurl_str_cat3 ( eng_vname ( pl_var gp ) ) ` is this closure's 'inout' parameter, and goes back without ` ( eng_pname gp ) ) )
+                ( eng_err line EG_INOUTPART ( nurl_str_cat3 ( eng_vname ( pl_var gp ) ) ` is this closure's 'inout' parameter, and goes back without ` ( eng_pname gp ) ) )
                 ^
             } {}
             = g + g 1
@@ -18404,7 +18531,7 @@ unsafe @ eng_byte s w i k → i {
                 ? ( el_is_loan l ) {
                     : i v ( pl_var ( el_place l ) )
                     ? & != ( fv_kind v ) VK_PARAM != ( el_kind l ) LK_SHARE {
-                        ( eng_err line ( nurl_str_cat3 ( eng_vname vid ) ` is the caller's, and goes back holding a view of ` ( eng_vname v ) ) )
+                        ( eng_err line EG_CALLERVIEW ( nurl_str_cat3 ( eng_vname vid ) ` is the caller's, and goes back holding a view of ` ( eng_vname v ) ) )
                         ^
                     } {}
                 } {}
@@ -18626,7 +18753,7 @@ unsafe @ eng_byte s w i k → i {
         } {}
         ? & == ( av_own av ) OW_L > ( local_depth ( av_loans av ) ( av_alias av ) 0 ) dest_depth {
             ? & & & copy_ok != dest_ty ET_NONE ( et_copyable dest_ty ) ! ( et_scalar dest_ty ) { ^ ( av_make OW_O 0 0 0 F ) } {}
-            ( eng_err line ( nurl_str_cat ( eng_what wk wa ) `: a view of a value released before its holder escapes` ) )
+            ( eng_err line EG_ESCAPE ( nurl_str_cat ( eng_what wk wa ) ` views a value that is released before it leaves` ) )
         } {}
         ^ av
     } {}
@@ -18666,7 +18793,7 @@ unsafe @ eng_byte s w i k → i {
                 // binding keeps its value
                 ( eng_read st op line TG_ARG + * at 256 i )
                 ? ! ( et_copyable fty ) {
-                    ( eng_err line ( nurl_str_cat3 `element ` ( nurl_str_int + i 1 ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+                    ( eng_err line EG_NOCOPY ( nurl_str_cat3 `element ` ( nurl_str_int + i 1 ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
                 } {}
                 = held ( sq_union held ( held_root ( av_held cur ) fp ) )
                 = next T
@@ -18815,7 +18942,7 @@ unsafe @ eng_byte s w i k → i {
                                     = held ( sq_union held ( held_root ( av_held av ) fp ) )
                                     = next T
                                 } {
-                                    ( eng_err line ( nurl_str_cat3 `field ` ( nurl_str_int + i 1 ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+                                    ( eng_err line EG_NOCOPY ( nurl_str_cat3 `field ` ( nurl_str_int + i 1 ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
                                 }
                             }
                         }
@@ -18846,7 +18973,7 @@ unsafe @ eng_byte s w i k → i {
             // a field of its own beside a part of a parameter it only borrows,
             // which cannot be copied: lent whole, the literal's own field is
             // released by no one; owned whole, the borrowed one twice
-            ( eng_err line `a literal holds a value of its own beside a part of a parameter it only borrows, which cannot be copied` )
+            ( eng_err line EG_NOCOPY `a literal holds a value of its own beside a part of a parameter it only borrows, which cannot be copied` )
         } {}
         ? != nc_loans 0 { ^ ( av_make OW_L nc_loans nc_alias held F ) } {}
         ^ ( av_make OW_O 0 0 held F )
@@ -19243,7 +19370,7 @@ unsafe @ eng_byte s w i k → i {
                             // the payload of an option a field keeps: the
                             // struct keeps it, so the binding, which owns its
                             // value on the other arms, would need a copy of it
-                            ( eng_err ln ( nurl_str_cat ( eng_vname vid ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+                            ( eng_err ln EG_NOCOPY ( nurl_str_cat ( eng_vname vid ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
                         } {}
                     } {}
                 }
@@ -19458,7 +19585,7 @@ unsafe @ eng_byte s w i k → i {
                 // is whether the binding still owns its value. (A handle is
                 // told apart at run time by its buffer. An option or a
                 // result has no such key.)
-                ( eng_err ln ( nurl_str_cat ( eng_vname vid ) ` is given back what this call may lend out of itself or out of another argument` ) )
+                ( eng_err ln EG_LENDBACK ( nurl_str_cat ( eng_vname vid ) ` is given back what this call may lend out of itself or out of another argument` ) )
             } {}
             ? & >= src 0 ( fx_has src FX_CALL_MIXED ) {
                 // (…on the calls it answers with a value of its own, the old
@@ -19519,7 +19646,7 @@ unsafe @ eng_byte s w i k → i {
             ? & & & == ( av_own new ) OW_L & != vty ET_NONE ! ( et_is_view vty ) ( et_owning vty ) ! ( et_copyable vty ) {
                 // the caller's binding owns what it is given: a lend is
                 // copied in, and this one has no copy
-                ( eng_err ln ( nurl_str_cat ( eng_vname vid ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+                ( eng_err ln EG_NOCOPY ( nurl_str_cat ( eng_vname vid ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
             } {}
             // (…and one that has a copy, given to an `inout` parameter - not
             // to a capture, the binding outside - is given that copy: it
@@ -19578,7 +19705,7 @@ unsafe @ eng_byte s w i k → i {
         // parameter - given a value that owns memory: the store lands where
         // the owner never looks, and nothing releases the value stored
         // (agora #488, #643)
-        ( eng_err ln ( nurl_str_cat4 `field ` ( eng_str ( ee_name fe0 ) ) ` of ` ( nurl_str_cat3 ( eng_vname vid ) ` is given a value that owns memory, but ` ( nurl_str_cat ( eng_vname vid ) ` is a copy of a value this function borrows` ) ) ) )
+        ( eng_err ln EG_COPYSTORE ( nurl_str_cat4 `field '` ( eng_str ( ee_name fe0 ) ) `' of ` ( nurl_str_cat3 ( eng_vname vid ) ` is given a value that owns memory, but ` ( nurl_str_cat ( eng_vname vid ) ` is a copy of a value this function borrows` ) ) ) )
     } {}
     ? & & >= src 0 != fty ET_NONE == ( et_kind fty ) EK_S {
         // (a fresh raw string stored into a field: a raw string a value
@@ -19629,11 +19756,11 @@ unsafe @ eng_byte s w i k → i {
         ? == ( ec rv ) RV_USE {
             : i rop ( eng_op ( ec + rv 1 ) )
             ? & & ( op_is_place rop ) != ( pl_path rop ) 0 != ( fv_kind ( pl_var rop ) ) VK_TEMP {
-                ( eng_err ln ( nurl_str_cat ( eng_pname target ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
+                ( eng_err ln EG_NOCOPY ( nurl_str_cat ( eng_pname target ) `: a borrowed value would have to be copied here, and it cannot be copied` ) )
             } {}
         } {}
     } {}
-    ? | | == cown OW_M == cown OW_X == cown OW_D { ( eng_err ln ( nurl_str_cat ( eng_vname vid ) ` is used after it was moved` ) ) } {}
+    ? | | == cown OW_M == cown OW_X == cown OW_D { ( eng_err ln EG_MOVED ( nurl_str_cat ( eng_vname vid ) ` is used after it was moved` ) ) } {}
     : i add ? == ( av_own new ) OW_L ( sq_union ( held_from ( av_loans new ) 0 ) ( av_held new ) ) ( av_held new )
     ? & & & == cown OW_L != vty ET_NONE == ( et_kind vty ) EK_NAMED != ( ep_at path 0 ) EE_STAR {
         // a struct cursor is a copy of the struct: its field store writes
@@ -19703,7 +19830,7 @@ unsafe @ eng_byte s w i k → i {
             : ~ b bad | | != 0 g_fc_ret_changed == now 0 != ( av_own now ) ( av_own ( wv_at sel + k 1 ) )
             : ~ i j 0
             ~ < j ( sq_len gn ) { ? == ( pl_var ( sq_at gn j ) ) vid { = bad T } {} = j + j 1 }
-            ? bad { ( eng_err ln ( nurl_str_cat3 `a ';' block releases or changes ` ( eng_vname vid ) `, which was handed back` ) ) } {}
+            ? bad { ( eng_err ln EG_DEFER ( nurl_str_cat3 `a ';' block releases or changes ` ( eng_vname vid ) `, which was handed back` ) ) } {}
             ( st_put st vid ( wv_at after / k 2 ) )
             = k + k 2
         }
@@ -19844,7 +19971,7 @@ unsafe @ eng_byte s w i k → i {
             ? bad {
                 // (…read it: a block that releases or changes it does so to
                 // the value the caller was handed)
-                ( eng_err ln ( nurl_str_cat3 `a ';' block releases or changes ` ( eng_vname ov ) `, which was handed back` ) )
+                ( eng_err ln EG_DEFER ( nurl_str_cat3 `a ';' block releases or changes ` ( eng_vname ov ) `, which was handed back` ) )
             } {}
             ( st_put st ov gone )
         } {}
@@ -19982,7 +20109,7 @@ unsafe @ eng_byte s w i k → i {
     : i conts ( wv_new )
     ( wv_push g_fc_loops breaks ) ( wv_push g_fc_loops conts )
     : i cur ( st_copy head )
-    ? ( sq_meets walk ( st_dead cur ) ) { ( eng_err ln `the loop's container was changed while the loop walks it` ) } {}
+    ? ( sq_meets walk ( st_dead cur ) ) { ( eng_err ln EG_LOOP `the loop's container was changed while the loop walks it` ) } {}
     : ~ i loans ( av_loans src )
     : ~ i k 0
     ~ < k ( sq_len elem_alias ) {
@@ -20093,7 +20220,7 @@ unsafe @ eng_byte s w i k → i {
                 : i held ( av_held av )
                 : ~ i k 0
                 ~ & ! views < k ( sq_len held ) { ? ( el_is_loan ( he_loan ( sq_at held k ) ) ) { = views T } {} = k + k 1 }
-                ? views { ( eng_err ln `a global is given a view of a value it outlives` ) } {}
+                ? views { ( eng_err ln EG_CALLERVIEW `a global is given a view of a value it outlives` ) } {}
             } {}
             ^ ( eng_next at )
         } {}
@@ -21771,12 +21898,12 @@ unsafe @ eng_byte s w i k → i {
         // what a callee lent out of a parameter this function keeps on
         // another path: the parameter is released there, and no copy of
         // the lend was asked for
-        ( eng_err_fn f line `hands back what a call lends out of a parameter it takes over on another path` )
+        ( eng_err_fn f line EG_RETLEND `hands back what a call lends out of a parameter it takes over on another path` )
     } {
         ? & & lent != ret ET_NONE | ! ( et_copyable ret ) elent {
             // the caller cannot both keep an argument the result borrows
             // and have handed it over
-            ( eng_err_fn f line `hands back what it may lend out of a parameter it takes over on another path` )
+            ( eng_err_fn f line EG_RETLEND `hands back what it may lend out of a parameter it takes over on another path` )
         } {}
     }
     // a view of a `sink` parameter kept in what the caller holds (a raw
@@ -21790,10 +21917,10 @@ unsafe @ eng_byte s w i k → i {
         ? & & == ( tp_at t 5 4 ) LK_VIEW ( sm_has f SM_CONSUMES sk ) == ( sm_mode f sk ) PM_SINK { = sinkview T } {}
         = k + k 1
     }
-    ? sinkview { ( eng_err_fn f line `keeps, in storage the caller holds, a view of a sink parameter it releases` ) } {}
+    ? sinkview { ( eng_err_fn f line EG_CALLERVIEW `keeps, in storage the caller holds, a view of a sink parameter it releases` ) } {}
     ? & ( ef_name_ends f ) == ( sm_word f SM_RES ) RES_LENT {
         // a handle's copy hook makes a value of its own
-        ( eng_err_fn f line `a copy hook hands its argument back, whole or in part` )
+        ( eng_err_fn f line EG_COPYHOOK `(a copy hook) hands its argument back, whole or in part` )
     } {}
     ? ( ef_is_closure f ) {
         ? & != ret ET_NONE ! ( et_copyable ret ) {
@@ -21807,7 +21934,7 @@ unsafe @ eng_byte s w i k → i {
             ? caplend {
                 // a closure's result is its caller's own: what it lends out
                 // of a capture has to be copied, and this cannot be
-                ( eng_err_fn f line `a closure hands back, out of what it captured, a value it cannot copy` )
+                ( eng_err_fn f line EG_NOCOPY `hands back, out of what it captured, a value it cannot copy` )
             } {}
         } {}
         // (what an argument or a capture holds, handed on by value, is a
@@ -21851,7 +21978,7 @@ unsafe @ eng_byte s w i k → i {
             // a closure's type does not say what running it stores, so
             // nothing where it runs would follow a view it leaves in a
             // capture or in an argument
-            ( eng_err_fn f line `a closure leaves a capture or an argument holding a view` )
+            ( eng_err_fn f line EG_CLOSURE `leaves a capture or an argument holding a view` )
         } {}
     } {}
 }
@@ -22054,14 +22181,14 @@ unsafe @ eng_print_types → v {
             : ~ i k 0
             ~ < k ( wv_len errs ) {
                 ? != 0 g_eng_decide {
-                    ( eng_report f ( wv_at errs k ) ( eng_str ( wv_at errs + k 1 ) ) )
+                    ( eng_report f ( wv_at errs k ) ( eng_str ( wv_at errs + k 1 ) ) ( wv_at errs + k 2 ) )
                 } {
                     ( __core_o `eng\terr\t` ) ( __core_o ( eng_str ( ef_at f EF_NAME ) ) )
                     ( __core_o `\t` ) ( __core_oi ( wv_at errs k ) )
                     ( __core_o `\t` ) ( __core_o ( eng_str ( wv_at errs + k 1 ) ) ) ( __core_o `\n` )
                 }
                 = ne + ne 1
-                = k + k 2
+                = k + k 3
             }
         } {}
         = f + f 1
@@ -22071,8 +22198,10 @@ unsafe @ eng_print_types → v {
 }
 
 // A finding of the engine as a diagnostic: the file of the function it is
-// in, the line, the source line with a caret under the statement's start.
-@ eng_report i f i line s msg → v {
+// in, the line, the source line with a caret under the statement's start;
+// then its rule group's `note:` (why, in the program's terms, and the
+// docs/MEMORY.md section) and `help:` (a way to satisfy the rule).
+@ eng_report i f i line s msg i grp → v {
     : s file ( eng_str ( ef_at f EF_FILE ) )
     : s src ( compiler_read_source file )
     : s text ? & > line 0 != 0 ( nurl_str_len src ) ( __src_line_text src ( nurl_str_len src ) line ) ``
@@ -22080,6 +22209,93 @@ unsafe @ eng_print_types → v {
     : i at ( nurl_str_find text body )
     : i col ? < at 0 1 + at 1
     ( __diag_pos_emit `error` file line col text msg )
+    ( nurl_eprintln ( nurl_str_cat4 `  note: ` ( eng_grp_note grp ) ` (docs/MEMORY.md §` ( nurl_str_cat ( eng_grp_sect grp ) `)` ) ) )
+    ( nurl_eprintln ( nurl_str_cat `  help: ` ( eng_grp_help grp ) ) )
+}
+
+// The last line of a compile the ownership rules refused: `n` findings
+// of `what` (the walk's borrow-checker violations, the engine's ownership
+// violations) - the same shape for both.
+@ own_abort_line i n s what → s {
+    ^ ( nurl_str_cat4 `error: compilation aborted — ` ( nurl_str_int n ) ( nurl_str_cat what ? > n 1 `s` `` )
+    ` (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)` )
+}
+
+// Why a rule group's findings are refused, in the program's terms.
+@ eng_grp_note i g → s {
+    ? == g EG_ENDED { ^ `a borrow (a slice, what string_data, vec_data or a getter hands back, a field read) lives only while what it points into is unchanged: a change that may move or free the buffer, a new value, a move or a release ends it` } {}
+    ? == g EG_MOVED { ^ `a value has exactly one owner: handed on by name (bound, assigned, stored, given to a 'sink' or to a closure) it moves, and the old name holds nothing after that` } {}
+    ? == g EG_RELEASED { ^ `the value was released (by its scope's end, or by a call that took it over), and the name holds nothing after that` } {}
+    ? == g EG_TAKEN { ^ `a part moved out of its owner (handed on by name, or taken through a '??' binding) leaves the owner without it until the part is given a value again; reading the part, or the owner whole, would read what is gone` } {}
+    ? == g EG_DROPREAD { ^ `a destructor ('% Drop') runs when its value is released, newest first, and reads what the value holds: a part taken out of it, or a view of a binding released before it, would be read after it is gone` } {}
+    ? == g EG_FRESHSTR { ^ `a raw string ('s') held by a struct, an option, an enum or a slice is a view of a string something else owns: a fresh string stored there is owned by nothing, so nothing would ever release it` } {}
+    ? == g EG_NOCOPY { ^ `the value here is borrowed (its owner keeps it), and where it goes needs a value of its own: a borrowed value is copied there, but its type has no copy` } {}
+    ? == g EG_TAKESBORROW { ^ `the callee takes over what it is handed (a 'sink', or a value it keeps), but this value is a borrow: its owner still holds it, and would release it a second time` } {}
+    ? == g EG_ESCAPE { ^ `what leaves here (handed back, or stored into what outlives this frame) still views a value of this frame, which is released on the way out` } {}
+    ? == g EG_CALLERVIEW { ^ `storage the caller or the module holds outlives this call: a view stored there of a value this function releases dangles once it returns` } {}
+    ? == g EG_UNWIND { ^ `the call may panic, and a panic goes straight back to the 'recover' caller: its storage would hold a view of this frame's values, or be missing the part taken out of it` } {}
+    ? == g EG_EXCL { ^ `a call's arguments are frozen while it runs: an argument the callee changes ('inout', or one whose buffer it may move or free) is the callee's alone, so no other argument may reach it, or view what the change ends` } {}
+    ? == g EG_THREAD { ^ `what another thread receives or runs (through a channel, a spawned closure, a shared handle) may be used there after this frame has changed or released what it views` } {}
+    ? == g EG_CLOSURE { ^ `a closure holds its captures, and its type does not say what it reads or keeps: a view among its captures, or one it leaves behind, is not followed where it runs` } {}
+    ? == g EG_LOOP { ^ `a loop over a container reads it in place: a change that may move or free its buffer (a push, a removal, a new value) leaves the loop reading what is gone` } {}
+    ? == g EG_DEFER { ^ `a ';' block runs after the value is handed back, while the return still reads it: one that releases or changes the value leaves the caller with what is gone` } {}
+    ? == g EG_ARC { ^ `every thread holding a copy of an Arc reads its payload: nothing changes it in place, unless the change is made inside a value that orders every change itself (a Mutex, an atomic, the program's own 'unsafe % Sync')` } {}
+    ? == g EG_INOUTBORROW { ^ `the callee gives what it is handed 'inout' a new value, releasing the old one; this binding only borrows its value, whose owner would release it again` } {}
+    ? == g EG_COPYSTORE { ^ `the binding is a copy of a value this function borrows (what a call lent, a field read): a value stored into the copy lands where the owner never looks, and nothing would release it` } {}
+    ? == g EG_LENDBACK { ^ `the call may hand back a lend out of its argument or out of another one, and which a run hands back is not known: neither is whether the binding still owns its value` } {}
+    ? == g EG_INOUTPART { ^ `an 'inout' parameter goes back to the caller whole: a part taken out of it and not given a value again would be missing from the caller's binding` } {}
+    ? == g EG_RETLEND { ^ `on another path the function takes the parameter over and releases it, so a lend of it handed back would view what is gone` } {}
+    ? == g EG_COPYHOOK { ^ `a handle's copy hook ('_clone', '_share') must make a value of its own: one that hands its argument back leaves two owners of one value` } {}
+    ^ `the ownership rules are broken here`
+}
+
+// A way to satisfy a rule group's rule.
+@ eng_grp_help i g → s {
+    ? == g EG_ENDED { ^ `use the value before that change, or take a copy that owns its data where it is bound (string_from, vec_clone, slice_to_vec, mem_dup)` } {}
+    ? == g EG_MOVED { ^ `use it before it is handed on, hand on a copy (string_from, vec_clone, a '_clone'), or give the name a new value first` } {}
+    ? == g EG_RELEASED { ^ `use it before it is released, or give the name a new value first` } {}
+    ? == g EG_TAKEN { ^ `give the part a value again ('= . x f …') before the owner is read or handed on, or take a copy of the part instead (string_from, vec_clone)` } {}
+    ? == g EG_DROPREAD { ^ `give the part its value back before the scope ends, or bind what the value views before the value itself, so it is released after it` } {}
+    ? == g EG_FRESHSTR { ^ `hold a String instead (string_from, string_adopt), or bind the string first (': s x ( … )') and store the binding` } {}
+    ? == g EG_NOCOPY { ^ `hand over the owner itself (move it, or take it out of where it is held), give the type a copy, or keep it where it is and hand on a view` } {}
+    ? == g EG_TAKESBORROW { ^ `hand the call a copy (string_from, vec_clone, a '_clone'), or the owner itself` } {}
+    ? == g EG_ESCAPE { ^ `hand back or store a copy that owns its data (string_from, vec_clone, slice_to_vec), or let the caller own the value and pass it in` } {}
+    ? == g EG_CALLERVIEW { ^ `store a copy that owns its data (string_from, vec_clone, slice_to_vec), or let the caller own the value` } {}
+    ? == g EG_UNWIND { ^ `give the caller's storage a value of its own (or its part back) before the call that may panic` } {}
+    ? == g EG_EXCL { ^ `hand the call a copy that owns its data (string_from, vec_clone, slice_to_vec) as the other argument, or do not hand both to the same call` } {}
+    ? == g EG_THREAD { ^ `send data the other thread owns (string_from, vec_clone, slice_to_vec), or move the values it needs into the closure` } {}
+    ? == g EG_CLOSURE { ^ `capture a copy that owns its data (string_from, vec_clone, slice_to_vec), or take the view inside the body, after the change` } {}
+    ? == g EG_LOOP { ^ `collect the changes and make them after the loop, or walk by index (the loop then reads the container afresh each round)` } {}
+    ? == g EG_DEFER { ^ `hand back a copy (string_from, vec_clone), or leave the returned value out of the ';' block` } {}
+    ? == g EG_ARC { ^ `put the part that changes inside a Mutex or an atomic, or use Rc where one thread holds the value` } {}
+    ? == g EG_INOUTBORROW { ^ `bind a value of its own first (': ~ T x ( string_from … )' / vec_clone) and hand that` } {}
+    ? == g EG_COPYSTORE { ^ `store into the owner itself (an 'inout' parameter, or the field through its struct), or build a new value of your own` } {}
+    ? == g EG_LENDBACK { ^ `bind the result to a new name, or copy it (string_from, vec_clone) before giving it back to the binding` } {}
+    ? == g EG_INOUTPART { ^ `give the part a value again before every way out` } {}
+    ? == g EG_RETLEND { ^ `hand back a copy that owns its data (string_from, vec_clone, slice_to_vec)` } {}
+    ? == g EG_COPYHOOK { ^ `build the copy from the argument's parts (string_from, vec_clone, the fields' own copies)` } {}
+    ^ `see docs/MEMORY.md §2 for the rule and its fixes`
+}
+
+// The docs/MEMORY.md section of a rule group's rule (tools/ncore/RULES.md
+// names the section each of the engine's rules enforces).
+@ eng_grp_sect i g → s {
+    ? == g EG_ENDED { ^ `2.10` } {}
+    ? | == g EG_MOVED == g EG_TAKEN { ^ `2.1` } {}
+    ? == g EG_RELEASED { ^ `2.1` } {}
+    ? == g EG_DROPREAD { ^ `2.14` } {}
+    ? == g EG_FRESHSTR { ^ `2.13` } {}
+    ? | | | | == g EG_NOCOPY == g EG_TAKESBORROW == g EG_COPYSTORE == g EG_LENDBACK | == g EG_RETLEND == g EG_COPYHOOK { ^ `7.6` } {}
+    ? == g EG_ESCAPE { ^ `2.8` } {}
+    ? == g EG_CALLERVIEW { ^ `2.7` } {}
+    ? == g EG_UNWIND { ^ `7.2` } {}
+    ? | == g EG_EXCL == g EG_INOUTBORROW { ^ `2.4` } {}
+    ? | == g EG_THREAD == g EG_ARC { ^ `6.5` } {}
+    ? == g EG_CLOSURE { ^ `2.11` } {}
+    ? == g EG_LOOP { ^ `2.5` } {}
+    ? == g EG_DEFER { ^ `7.1` } {}
+    ? == g EG_INOUTPART { ^ `2.12` } {}
+    ^ `2`
 }
 // A function's (or a closure body's) IR begins. The builder of the
 // function it is compiled inside, if any, is set aside.
@@ -114423,10 +114639,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
             }
         } {}
         ? > g_bck_errors 0
-        { ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 `error: compilation aborted — `
-            ( nurl_str_int g_bck_errors )
-            ? > g_bck_errors 1 ` borrow-checker violations` ` borrow-checker violation` )
-            ` (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)` ) )
+        { ( nurl_eprintln ( own_abort_line g_bck_errors ` borrow-checker violation` ) )
             = compile_error 1 }
         {}
     } {}
@@ -114781,8 +114994,7 @@ unsafe @ main → i {
     ? & != 0 g_eng_decide == compile_error 0 {
         ( core_flush syms )
         ? > g_eng_nref 0 {
-            ( nurl_eprintln ( nurl_str_cat3 `error: compilation aborted — ` ( nurl_str_int g_eng_nref )
-            ? > g_eng_nref 1 ` ownership violations` ` ownership violation` ) )
+            ( nurl_eprintln ( own_abort_line g_eng_nref ` ownership violation` ) )
             = compile_error 1
         } {}
     } {}
