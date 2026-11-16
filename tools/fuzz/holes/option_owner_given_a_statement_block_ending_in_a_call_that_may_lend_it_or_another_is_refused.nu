@@ -1,7 +1,6 @@
-// option_owner_given_a_statement_block_ending_in_a_call_that_may_lend_it_or_another_runs_clean: `= o { ( nurl_println … ) ( pick o other 1 ) }`: the same with a statement before the tail.
+// option_owner_given_a_statement_block_ending_in_a_call_that_may_lend_it_or_another_is_refused: `= o { ( nurl_println … ) ( pick o other 1 ) }`: the same with a statement before the tail.
 // Closed (agora #427), as option_owner_given_a_value_block_ending_in_a_call_that_may_lend_it_or_another_is_refused.
-// AGORA-869: runs clean now - nurlc tells the runs apart by the payload's key, as it does a String's or a Vec's (#419), whichever argument the call hands back; before, the form was refused (#412).
-// map: §7.6 | A2 | runs-clean | - | agora #427: a value block with a statement before a tail call that may lend the owner or another argument
+// map: §7.6 | A2 | rejected | - | agora #427: a value block with a statement before a tail call that may lend the owner or another argument
 $ `stdlib/core/string.nu`
 
 @ pick ? String a ? String b i k → ?String { ? == k 1 { ^ a } {} ^ b }
