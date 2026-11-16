@@ -115191,6 +115191,7 @@ unsafe @ main → i {
         // still stop the compile where they are met, and what the engine
         // finds at the end of the module refuses it too)
         ? ( seq a `--engine-fast2` ) { = g_core_on 1 = g_eng_on 1 = g_eng_decide 1 = g_eng_fast 2 = ai + ai 1 continue } {}
+        ? ( seq a `--core-only` ) { = g_core_on 1 = g_eng_on 0 = g_eng_decide 1 = ai + ai 1 continue } {}
         ? ( seq a `--walk-unsafe-only` ) { = g_eng_fast 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-fast` ) { = g_core_on 1 = g_eng_on 1 = g_eng_decide 1 = g_eng_fast 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-decides` ) { = g_core_on 1 = g_eng_on 1 = g_eng_decide 1 = ai + ai 1 continue } {}
