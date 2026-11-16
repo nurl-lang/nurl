@@ -1286,7 +1286,11 @@ class FnCheck:
                                        f"{self.pname(place)}, which argument {m + 1} also reaches")
                     elif ((inv is None or k in inv) and ops[m][0] == "v" and eff in ("realloc", "drop", "replace")
                           and {t for t, _ in self.shared_tails(place)}
-                          & self.T.shared_in(self.ty_of_place((ops[m][1], ops[m][2])))):
+                          & (self.T.shared_in(self.ty_of_place((ops[m][1], ops[m][2])))
+                             # (…or the argument is a lend out of such a
+                             # payload: `( rc_get r )` beside a closure that
+                             # grows it through another share)
+                             | {t for a in other.alias for t, _ in self.shared_tails(a)})):
                         # the callee runs it, and it changes the payload of
                         # a shared handle another argument may be a handle
                         # on: what the callee views through that argument
@@ -1341,6 +1345,27 @@ class FnCheck:
                     self.err(line, f"{name}: argument {k + 1} is handed over to be changed (`inout`), "
                                    f"and argument {m + 1} reaches it too")
                     break
+        # an `inout` argument beside a closure argument that captured it: the
+        # callee can reach one value under two names (MEMORY.md §2.4)
+        for k, mode in enumerate(sm["modes"][:len(ops)]):
+            if mode != "inout" or ops[k][0] != "v":
+                continue
+            roots = {(ops[k][1], tuple(ops[k][2]))} | {(a[0], tuple(a[1])) for a in avs[k].alias}
+            hit = None
+            for m, av in enumerate(avs):
+                if m == k or hit is not None:
+                    continue
+                for base, _ in self.closures_in(av):
+                    n = len(base)
+                    for hp, l in av.held:
+                        if (hp[:n] == base and len(hp) == n + 1 and hp[n].startswith("^") and hp[n] != "^f"
+                                and l in self.loans):
+                            q = self.loans[l][0]
+                            if any(r[0] == q[0] and (prefix(q[1], r[1]) or prefix(r[1], q[1])) for r in roots):
+                                hit = m
+            if hit is not None:
+                self.err(line, f"{name}: argument {k + 1} is handed over to be changed (`inout`), "
+                               f"and the closure in argument {hit + 1} captured it too")
         # consumed arguments
         copied = set()
         for k in sm["consumes"]:
@@ -1597,9 +1622,10 @@ class FnCheck:
                     dets.add(k)
         for k in sorted(dets):
             if k < len(avs):
-                if ops[k][0] == "v" and not ops[k][2] and ops[k][1] in self.pidx:
+                if ops[k][0] == "v" and ops[k][1] in self.pidx:
                     # (a parameter handed on to a callee that detaches it:
-                    # this function detaches its argument)
+                    # this function detaches its argument - and so does one
+                    # that hands on a part of it, `( thread_spawn . box cb )`)
                     self.s_detaches.add(self.pidx[ops[k][1]])
                 for hp, l in avs[k].held:
                     if (l in self.loans and any(x.startswith("^") for x in hp)
@@ -2450,12 +2476,40 @@ class FnCheck:
                 if hp[:n] == base and len(hp) == n + 1 and hp[n].startswith("^") and hp[n] != "^f" and l in self.loans:
                     caps.setdefault(int(hp[n][1:]), []).append(self.loans[l][0])
             hit = False
+            capl = [p for ps in caps.values() for p in ps]
+            # (an argument the body changes through its parameter that the
+            # body also captured: two names for one value inside it)
+            for (k, path, eff) in sm["effects"]:
+                i = k - ncap
+                if hit or i < 0 or i >= len(avs) or eff not in ("replace", "realloc", "drop", "take"):
+                    continue
+                op = ops[i + 1]
+                if op[0] != "v":
+                    continue
+                mine = {(op[1], tuple(op[2]))} | {(x[0], tuple(x[1])) for x in avs[i].alias}
+                if any(q[0] == r[0] and (prefix(q[1], r[1]) or prefix(r[1], q[1])) for q in capl for r in mine):
+                    self.err(line, f"argument {i + 1} is changed by the closure it is handed to, which also "
+                                   f"captured it: two names for one value inside the body")
+                    hit = True
             for (k, path, eff) in sm["effects"]:
                 if k >= ncap or eff not in ("replace", "realloc", "drop", "take") or hit:
                     continue
                 for place in caps.get(k, ()):
                     ch = (place[0], (place[1] + tuple(path))[:PATH_MAX])
                     for i, a in enumerate(avs):
+                        # (…and an argument that is the place itself, `( c o )`,
+                        # with the body giving o a new value through its
+                        # capture; not one the body takes over, nor a number)
+                        op = ops[i + 1]
+                        mode = sm["modes"][ncap + i] if ncap + i < len(sm["modes"]) else None
+                        oty = self.ty_of_place((op[1], op[2])) if op[0] == "v" else None
+                        if (op[0] == "v" and op[1] == ch[0] and mode != "sink" and oty is not None
+                                and not self.T.is_scalar(oty)
+                                and self.kills_paths(eff, ch, ch[1], (op[1], op[2]), op[2], "handle")):
+                            self.err(line, f"argument {i + 1} is reached by this call through the closure it "
+                                           f"calls, which gives {self.pname(ch)} a new value when it runs here")
+                            hit = True
+                            break
                         if any(l in self.loans and l not in st.dead and self.kills(eff, ch, l) for l in a.loans):
                             self.err(line, f"argument {i + 1} is reached by this call through the closure it "
                                            f"calls, which gives {self.pname(ch)} a new value when it runs here")

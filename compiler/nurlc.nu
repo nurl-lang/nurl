@@ -15126,6 +15126,23 @@ unsafe @ eng_byte s w i k → i {
         ? & slot ( take_payload st av line T ) { = av ( av_make OW_O 0 0 ( av_held av ) F ) } {}
     } {}
     : b own_block & >= dest_vid 0 ( refers_to_block av dest_vid )
+    // (a closure that points into the value block - a capture taken by
+    // pointer, `\ → v { = . c n … }` over a binding of the block - leaves
+    // it holding the address of a binding that ends with the block: no
+    // copy of the closure changes where it points)
+    ? >= dest_vid 0 {
+        : i bh ( av_held av )
+        : ~ b bref F
+        : ~ i bk 0
+        ~ & ! bref < bk ( sq_len bh ) {
+            : i bl ( he_loan ( sq_at bh bk ) )
+            ? & & ( el_is_loan bl ) == ( el_kind bl ) LK_REF == ( fv_blk ( pl_var ( el_place bl ) ) ) dest_vid {
+                ( eng_err line EG_ESCAPE ( nurl_str_cat3 ( eng_what wk wa ) `: a closure that points into the value block, through ` ( nurl_str_cat ( eng_pname ( el_place bl ) ) `, which ends with the block` ) ) )
+                = bref T
+            } {}
+            = bk + bk 1
+        }
+    } {}
     ? & & & & is_ret == ( av_own av ) OW_L ! ( av_call av ) != ( av_alias av ) 0 whole {
         // what a `?` / `??` or a value block selected among this frame's
         // owners goes to the caller with the return: the one selected moves
@@ -15902,6 +15919,46 @@ unsafe @ eng_byte s w i k → i {
                 } {}
                 = e0 + e0 1
             }
+            // (…nor may it change, through one capture, a value another of
+            // its captures is a name of: `cur`, a cursor of `t`, grown while
+            // the body walks `t` - inside the body they are two names, as
+            // two arguments of a call are)
+            = e0 0
+            ~ & ! self_hit < e0 ( sm_n f SM_EFFECTS ) {
+                : i t1 ( sm_at f SM_EFFECTS e0 )
+                : i pk1 ( tp_at t1 3 0 )
+                : i eff1 ( tp_at t1 3 2 )
+                ? & < pk1 ncap | | | == eff1 EF_REPLACE == eff1 EF_REALLOC == eff1 EF_DROP == eff1 EF_TAKE {
+                    : ~ i cp1 -1
+                    = k 0
+                    ~ < k ( wv_len caps ) { ? == ( wv_at caps k ) pk1 { = cp1 ( wv_at caps + k 1 ) } {} = k + k 2 }
+                    ? >= cp1 0 {
+                        : i roots1 ( av_names st cp1 )
+                        = k 0
+                        ~ & ! self_hit < k ( wv_len caps ) {
+                            : i cq ( wv_at caps + k 1 )
+                            : i cqt ( eng_ty_of cq )
+                            ? & & != ( wv_at caps k ) pk1 != cqt ET_NONE ! ( et_scalar cqt ) {
+                                : i mine1 ( av_names st cq )
+                                : ~ i a1 0
+                                ~ & ! self_hit < a1 ( sq_len roots1 ) {
+                                    : ~ i b1 0
+                                    ~ & ! self_hit < b1 ( sq_len mine1 ) {
+                                        ? ( pl_overlap ( sq_at roots1 a1 ) ( sq_at mine1 b1 ) ) {
+                                            ( eng_err line EG_CLOSURE ( nurl_str_cat4 ( eng_what wk wa ) `: its body changes ` ( eng_pname cp1 ) ` through one capture while another of its captures is a name of the same value` ) )
+                                            = self_hit T
+                                        } {}
+                                        = b1 + b1 1
+                                    }
+                                    = a1 + a1 1
+                                }
+                            } {}
+                            = k + k 2
+                        }
+                    } {}
+                } {}
+                = e0 + e0 1
+            }
             : i ne ( sm_n f SM_EFFECTS )
             : ~ i e 0
             ~ < e ne {
@@ -16439,6 +16496,7 @@ unsafe @ eng_byte s w i k → i {
                     : i held ( av_held av )
                     : i dead ( st_dead st )
                     : ~ b views F
+                    : ~ b selfv F
                     : ~ i k 0
                     ~ & ! views < k ( sq_len held ) {
                         : i l ( he_loan ( sq_at held k ) )
@@ -16447,6 +16505,11 @@ unsafe @ eng_byte s w i k → i {
                         // caller's, or the closure maker's: there after
                         // the unwind)
                         ? & & & & & != kind LK_CLO ! ( sq_has dead l ) != kind LK_SHARE != kind LK_HELD != kind LK_HELDIN & != kind LK_STALE != ( fv_kind ( pl_var ( el_place l ) ) ) VK_PARAM { = views T } {}
+                        // (…save one of its own parts: unwound there, the
+                        // `recover` caller gets it back viewing itself - a
+                        // change to the part it views then ends the view it
+                        // still holds, and nothing it is handed back says so)
+                        ? & & & ! views ! ( sq_has dead l ) | == kind LK_VIEW == kind LK_HANDLE == ( pl_var ( el_place l ) ) vid { = views T = selfv T } {}
                         = k + k 1
                     }
                     ? & views ! | ( ef_reported callee ) ( eng_may_unwind name ) { = views F } {}
@@ -16458,7 +16521,11 @@ unsafe @ eng_byte s w i k → i {
                             = k + k 1
                         }
                         ? ! credited {
-                            ( eng_err line EG_UNWIND ( nurl_str_cat ( nurl_str_cat3 ( eng_vname vid ) ` is the caller's and views a value of this frame while ` ( eng_fname name ) ) ` runs, which may unwind` ) )
+                            ? selfv {
+                                ( eng_err line EG_UNWIND ( nurl_str_cat ( nurl_str_cat3 ( eng_vname vid ) ` is the caller's and views a part of itself while ` ( eng_fname name ) ) ` runs, which may unwind` ) )
+                            } {
+                                ( eng_err line EG_UNWIND ( nurl_str_cat ( nurl_str_cat3 ( eng_vname vid ) ` is the caller's and views a value of this frame while ` ( eng_fname name ) ) ` runs, which may unwind` ) )
+                            }
                         } {}
                     } {}
                 } {}
@@ -16592,6 +16659,21 @@ unsafe @ eng_byte s w i k → i {
                             : ~ b hit F
                             : ~ i tt 0
                             ~ & ! hit < tt ( sq_len tails ) { ? ( et_reaches_shared oty ( sq_at tails tt ) ) { = hit T } {} = tt + tt 2 }
+                            // (…or the argument is a lend out of such a payload:
+                            // `( rc_get r )` beside a closure that grows the
+                            // payload through another share, `r2`)
+                            : i oal2 ( av_alias other )
+                            : ~ i oa 0
+                            ~ & ! hit < oa ( sq_len oal2 ) {
+                                : i otl ( shared_tails ( sq_at oal2 oa ) )
+                                = tt 0
+                                ~ & ! hit < tt ( sq_len tails ) {
+                                    : ~ i ut 0
+                                    ~ & ! hit < ut ( sq_len otl ) { ? == ( sq_at otl ut ) ( sq_at tails tt ) { = hit T } {} = ut + ut 2 }
+                                    = tt + tt 2
+                                }
+                                = oa + oa 1
+                            }
                             ? hit {
                                 // the callee runs it, and it changes the payload
                                 // of a shared handle another argument may be a
@@ -16705,6 +16787,39 @@ unsafe @ eng_byte s w i k → i {
                         ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ` is handed over to be changed ('inout'), and argument ` ( nurl_str_int + m 1 ) ` reaches it too` ) ) )
                         = stop T
                     } {}
+                } {}
+                = m + m 1
+            }
+        } {}
+        = k + k 1
+    }
+    // an `inout` argument beside a closure argument that captured it: the
+    // callee can reach one value under two names, the parameter and the
+    // closure's capture, and a write through one ends what was read
+    // through the other (whether the callee runs the closure is its own
+    // business: it may)
+    = k 0
+    ~ & < k n < k ( sm_n sm SM_MODES ) {
+        : i ok ( wv_at ops k )
+        ? & == ( sm_mode sm k ) PM_INOUT ( op_is_place ok ) {
+            : i roots ( sq_union ( sq_add 0 ok ) ( av_alias ( wv_at avs k ) ) )
+            : ~ b stop F
+            : ~ i m 0
+            ~ & ! stop < m n {
+                ? != m k {
+                    : i caps ( clo_cap_places ( av_held ( wv_at avs m ) ) )
+                    : ~ i a 0
+                    ~ & ! stop < a ( sq_len roots ) {
+                        : ~ i b 0
+                        ~ & ! stop < b ( sq_len caps ) {
+                            ? ( pl_overlap ( sq_at roots a ) ( sq_at caps b ) ) {
+                                ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ` is handed over to be changed ('inout'), and the closure in argument ` ( nurl_str_int + m 1 ) ` captured it too` ) ) )
+                                = stop T
+                            } {}
+                            = b + b 1
+                        }
+                        = a + a 1
+                    }
                 } {}
                 = m + m 1
             }
@@ -17088,9 +17203,11 @@ unsafe @ eng_byte s w i k → i {
         : i dk ( sq_at dets e )
         ? < dk n {
             : i ok ( wv_at ops dk )
-            ? & & ( op_is_place ok ) == ( pl_path ok ) 0 >= ( fv_pidx ( pl_var ok ) ) 0 {
+            ? & ( op_is_place ok ) >= ( fv_pidx ( pl_var ok ) ) 0 {
                 // (a parameter handed on to a callee that detaches it: this
-                // function detaches its argument)
+                // function detaches its argument - and so does one that
+                // hands on a part of it, `( thread_spawn . box cb )`: what
+                // the caller's value holds there goes to the other thread)
                 = g_s_detaches ( sq_add g_s_detaches ( fv_pidx ( pl_var ok ) ) )
             } {}
             : i held ( av_held ( wv_at avs dk ) )
@@ -17859,11 +17976,125 @@ unsafe @ eng_byte s w i k → i {
     ( st_put st src ( av_make OW_L ( sq_add 0 ( eng_loan st at LK_HANDLE ) ) ( sq_add 0 at ) ( av_held d ) F ) )
 }
 
+// The places the closures in `held` captured (a sequence of places): what
+// running one of them reaches beside its arguments.
+@ clo_cap_places i held → i {
+    : ~ i out 0
+    ? ! ( held_has_clo held ) { ^ out } {}
+    : i cl ( wv_new )
+    ( closures_in held cl )
+    : ~ i c 0
+    ~ < c ( wv_len cl ) {
+        : i base ( wv_at cl c )
+        : i bl ( ep_len base )
+        : ~ i k 0
+        ~ < k ( sq_len held ) {
+            : i he ( sq_at held k )
+            : i hp ( he_path he )
+            : i l ( he_loan he )
+            ? & & & & == ( ep_len hp ) + bl 1 == ( ep_parent hp ) base ( ee_is_cap ( ep_last hp ) ) == 0 & ( ee_bits ( ep_last hp ) ) EE_FN ( el_is_loan l ) {
+                = out ( sq_add out ( el_place l ) )
+            } {}
+            = k + k 1
+        }
+        = c + c 2
+    }
+    ( wv_drop cl )
+    ^ out
+}
+
+// The places binding place `p` is a name of: itself, what it is an alias
+// of, and what its handle loans are on (a `: ~` cursor of an owner, `: ~
+// ( Vec T ) cur t`, is a copy of t's handle: t's storage).
+@ av_names i st i p → i {
+    : ~ i out ( sq_add 0 p )
+    : i av ( st_av st ( pl_var p ) )
+    ? == av 0 { ^ out } {}
+    = out ( sq_union out ( av_alias av ) )
+    : i ls ( av_loans av )
+    : ~ i k 0
+    ~ < k ( sq_len ls ) {
+        : i l ( sq_at ls k )
+        ? & ( el_is_loan l ) == ( el_kind l ) LK_HANDLE { = out ( sq_add out ( el_place l ) ) } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+// Do places `a` and `b` overlap: one binding, one path a prefix of the
+// other's?
+@ pl_overlap i a i b → b {
+    ^ & == ( pl_var a ) ( pl_var b ) | ( ep_prefix ( pl_path a ) ( pl_path b ) ) ( ep_prefix ( pl_path b ) ( pl_path a ) )
+}
+
+// A closure value's call (`ops`: the closure, then its arguments; `avs`
+// what the arguments are) whose body `f` runs a closure another argument
+// holds: that closure's changes to what it captured may not meet what a
+// third argument reaches - the body views through one while the other
+// changes it (agora #736), as for a function's call (eng_apply_call_do).
+@ clo_arg_clo_conflict i st i f i ops i avs i line → v {
+    ? ! ( sm_have f ) { ^ } {}
+    : i ncap ( ef_ncap f )
+    : i n ( wv_len avs )
+    : i cfx ( wv_new )
+    : ~ b stop F
+    : ~ i k 0
+    ~ & ! stop < k n {
+        ? ( sm_has f SM_INVOKES + ncap k ) {
+            ( wv_trunc cfx 0 )
+            ( closure_capture_effects ( av_held ( wv_at avs k ) ) cfx )
+            : ~ i c 0
+            ~ & ! stop < c ( wv_len cfx ) {
+                : i place ( wv_at cfx c )
+                : i eff ( wv_at cfx + c 1 )
+                ? | | == eff EF_REALLOC == eff EF_DROP == eff EF_REPLACE {
+                    : i tails ( shared_tails place )
+                    : ~ i m 0
+                    ~ & ! stop < m n {
+                        ? != m k {
+                            : i other ( wv_at avs m )
+                            : i om ( wv_at ops + m 1 )
+                            : ~ b hit F
+                            : i oal ( sq_union ( av_alias other ) ? ( op_is_place om ) ( sq_add 0 om ) 0 )
+                            : ~ i a 0
+                            ~ & ! hit < a ( sq_len oal ) {
+                                : i pa ( sq_at oal a )
+                                ? ( pl_overlap pa place ) { = hit T } {}
+                                : i otl ( shared_tails pa )
+                                : ~ i tt 0
+                                ~ & ! hit < tt ( sq_len tails ) {
+                                    : ~ i ut 0
+                                    ~ & ! hit < ut ( sq_len otl ) { ? == ( sq_at otl ut ) ( sq_at tails tt ) { = hit T } {} = ut + ut 2 }
+                                    = tt + tt 2
+                                }
+                                = a + a 1
+                            }
+                            ? & ! hit ( op_is_place om ) {
+                                : i oty ( eng_ty_of om )
+                                : ~ i tt 0
+                                ~ & ! hit < tt ( sq_len tails ) { ? ( et_reaches_shared oty ( sq_at tails tt ) ) { = hit T } {} = tt + tt 2 }
+                            } {}
+                            ? hit {
+                                ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat ( nurl_str_cat3 `in the call of the closure value, the closure in argument ` ( nurl_str_int + k 1 ) ` changes ` ) ( nurl_str_cat3 ( eng_pname place ) `, which argument ` ( nurl_str_int + m 1 ) ) ) ` also reaches` ) )
+                                = stop T
+                            } {}
+                        } {}
+                        = m + m 1
+                    }
+                } {}
+                = c + c 2
+            }
+        } {}
+        = k + k 1
+    }
+    ( wv_drop cfx )
+}
+
 // An argument the body is handed is frozen for the call, as any call's
 // are: the body may not end, through what it captured, what an argument
 // borrows (`( c e )`, e a payload of the option `o` the body replaces) - it
 // reads its parameter after.
-@ clo_args_frozen i st i cav i avs i line → v {
+@ clo_args_frozen i st i cav i ops i avs i line → v {
     : i held ( av_held cav )
     ? ! ( held_has_clo held ) { ^ } {}
     : i cl ( wv_new )
@@ -17888,6 +18119,37 @@ unsafe @ eng_byte s w i k → i {
                 = k + k 1
             }
             : ~ i e 0
+            // (an argument the body changes through its parameter - `inout`,
+            // or one whose buffer it may move or free - that the body also
+            // captured: two names for one value inside it, a write through
+            // one ends what was read through the other)
+            ~ & ! hit < e ( sm_n f SM_EFFECTS ) {
+                : i t ( sm_at f SM_EFFECTS e )
+                : i pk ( tp_at t 3 0 )
+                : i eff ( tp_at t 3 2 )
+                : i ai - pk ncap
+                ? & & >= ai 0 < ai ( wv_len avs ) | | | == eff EF_REPLACE == eff EF_REALLOC == eff EF_DROP == eff EF_TAKE {
+                    : i aop ( wv_at ops + ai 1 )
+                    ? ( op_is_place aop ) {
+                        : i mine ( sq_add ( av_alias ( wv_at avs ai ) ) aop )
+                        = k 0
+                        ~ & ! hit < k ( wv_len caps ) {
+                            : i cp ( wv_at caps + k 1 )
+                            : ~ i a 0
+                            ~ & ! hit < a ( sq_len mine ) {
+                                ? ( pl_overlap ( sq_at mine a ) cp ) {
+                                    ( eng_err line EG_EXCL ( nurl_str_cat3 `argument ` ( nurl_str_int + ai 1 ) ` is changed by the closure it is handed to, which also captured it: two names for one value inside the body` ) )
+                                    = hit T
+                                } {}
+                                = a + a 1
+                            }
+                            = k + k 2
+                        }
+                    } {}
+                } {}
+                = e + e 1
+            }
+            = e 0
             ~ & ! hit < e ( sm_n f SM_EFFECTS ) {
                 : i t ( sm_at f SM_EFFECTS e )
                 : i pk ( tp_at t 3 0 )
@@ -17910,6 +18172,21 @@ unsafe @ eng_byte s w i k → i {
                                     } {}
                                     = j + j 1
                                 }
+                                // (…and an argument that is the place itself, or
+                                // a part of it: the owner handed whole, `( c o )`
+                                // with the body giving `o` a new value through
+                                // its capture - the parameter is o's value,
+                                // released under it. One the body takes over
+                                // (`sink`), or a number, is the body's own.)
+                                : i aop ( wv_at ops + a 1 )
+                                : i aty ( eng_ty_of aop )
+                                ? & & & & ! hit ( op_is_place aop ) == ( pl_var aop ) ( pl_var ch ) != ( sm_mode f + ncap a ) PM_SINK & != aty ET_NONE ! ( et_scalar aty ) {
+                                    : b psc & | | == eff EF_REPLACE == eff EF_DROP == eff EF_TAKE ( eng_owns_nothing ch )
+                                    ? ( kills_paths eff ( pl_path ch ) aop ( pl_path aop ) LK_HANDLE psc ) {
+                                        ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat3 `argument ` ( nurl_str_int + a 1 ) ` is reached by this call through the closure it calls, which gives ` ) ( nurl_str_cat ( eng_pname ch ) ` a new value when it runs here` ) ) )
+                                        = hit T
+                                    } {}
+                                } {}
                                 = a + a 1
                             }
                         } {}
@@ -18077,7 +18354,7 @@ unsafe @ eng_byte s w i k → i {
     : i avs ( wv_new )
     : ~ i i 0
     ~ < i n { ( wv_push avs ( eng_read st ( wv_at ops + i 1 ) line TG_ARG + + * site 256 i 1 ) ) = i + i 1 }
-    ( clo_args_frozen st cav avs line )
+    ( clo_args_frozen st cav ops avs line )
     ( run_closures st ( av_held cav ) WK_CLO_CALLED 0 line )
     ? & ( op_is_place cop ) == ( pl_path cop ) 0 { ( clo_gave_away st ( pl_var cop ) ) } {}
     : i known ( wv_new )
@@ -18092,6 +18369,7 @@ unsafe @ eng_byte s w i k → i {
         = i 0
         ~ < i n { : i o ( wv_at ops + i 1 ) ( wv_push places ? ( op_is_place o ) o -1 ) = i + i 1 }
         ( closure_arg_effects st f places ( av_held cav ) ( wv_at known c ) line )
+        ( clo_arg_clo_conflict st f ops avs line )
         // …and a closure it is handed and runs does, here, what its own
         // body does: to what it captured, and to the arguments the body
         // hands it
@@ -33857,7 +34135,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             } {}
             ? == 0 ( nurl_str_len __ioa_name ) {} { ? is_inout_arg {
                     ? | ( str_contains_word __callee_caps __ioa_name ) ( str_contains_word __call_caps __ioa_name )
-                    { ( die lex ( nurl_str_cat3 `'` __ioa_name `' is passed 'inout' to a closure that also captures it — inside, the parameter and the capture are two names for one value, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
+                    { ( own_die lex ( nurl_str_cat3 `'` __ioa_name `' is passed 'inout' to a closure that also captures it — inside, the parameter and the capture are two names for one value, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
                     = __call_io_roots ( nurl_str_cat3 __call_io_roots ` ` __ioa_name )
                 } {
                     : s __ioa_caps ( nurl_sym_get2 syms __ioa_name `__closure_caps` )
@@ -33866,7 +34144,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                         ~ != 0 ( nurl_str_len __ioa_r ) {
                             : s __ioa_w ( str_first_word __ioa_r ) = __ioa_r ( str_skip_word __ioa_r )
                             ? ( str_contains_word __ioa_caps __ioa_w )
-                            { ( die lex ( nurl_str_cat3 `'` __ioa_w `' is passed 'inout' beside a closure that captures it — the callee can reach one value under two unrelated names, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
+                            { ( own_die lex ( nurl_str_cat3 `'` __ioa_w `' is passed 'inout' beside a closure that captures it — the callee can reach one value under two unrelated names, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
                         }
                         = __call_caps ( nurl_str_cat3 __call_caps ` ` __ioa_caps )
                     } {}
@@ -35226,7 +35504,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 ~ != 0 ( nurl_str_len __il_r ) {
                     : s __il_w ( str_first_word __il_r ) = __il_r ( str_skip_word __il_r )
                     ? ( str_contains_word __il_caps __il_w )
-                    { ( die lex ( nurl_str_cat3 `'` __il_w `' is passed 'inout' beside a closure that captures it — the callee can reach one value under two unrelated names, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
+                    { ( own_die lex ( nurl_str_cat3 `'` __il_w `' is passed 'inout' beside a closure that captures it — the callee can reach one value under two unrelated names, and a write through one leaves what was read through the other dangling. Pass it as the parameter only (do not capture it), or capture it only.` ) ) } {}
                 }
                 = __call_caps ( nurl_str_cat3 __call_caps ` ` __il_caps )
             } {}
