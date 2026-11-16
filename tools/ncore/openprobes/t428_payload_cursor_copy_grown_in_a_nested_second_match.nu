@@ -8,7 +8,7 @@ $ `stdlib/core/string.nu`
     ?? oh {
         T q → {
             : s v ( string_data . q name )
-            ?? oh { T r → { : ~ H c r  ( string_push_str . c name `a long tail that forces the buffer to move to a new allocation, surely, yes indeed, and then some more` ) } F → {} }
+            ?? oh { T r → { : ~ H c r ( string_push_str . c name `a long tail that forces the buffer to move to a new allocation, surely, yes indeed, and then some more` ) } F → {} }
             ( nurl_println v )
         }
         F → {}

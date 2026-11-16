@@ -17203,11 +17203,11 @@ unsafe @ eng_byte s w i k → i {
                         ? cbind {
                             ? ( et_copyable ty ) { = copied ( sq_add copied ck ) } { ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_fname name ) ` takes a borrowed value that cannot be copied` ) ) }
                         } {
-                        ? | != ( fv_kind ov ) VK_TEMP != ( pl_path op ) 0 {
-                            ( eng_err line EG_TAKESBORROW ( nurl_str_cat ( nurl_str_cat3 ( eng_fname name ) ` takes ` ( eng_pname op ) ) `, which is a borrow` ) )
-                        } {
-                            ? ! ( et_copyable ty ) { ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_fname name ) ` takes a borrowed value that cannot be copied` ) ) } {}
-                        }
+                            ? | != ( fv_kind ov ) VK_TEMP != ( pl_path op ) 0 {
+                                ( eng_err line EG_TAKESBORROW ( nurl_str_cat ( nurl_str_cat3 ( eng_fname name ) ` takes ` ( eng_pname op ) ) `, which is a borrow` ) )
+                            } {
+                                ? ! ( et_copyable ty ) { ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_fname name ) ` takes a borrowed value that cannot be copied` ) ) } {}
+                            }
                         }
                     } {
                         // (a second name of a parameter the caller keeps, or a
@@ -17922,21 +17922,21 @@ unsafe @ eng_byte s w i k → i {
                         } {}
                     }
                 } { ? & == kind LK_HANDLE ( sm_has sm SM_CONSUMES rk ) {
-                    // (a handle of an argument the callee takes over - moved
-                    // into the call, or given a copy - is the result's own:
-                    // the callee kept the value there, `retcap`, h305. What
-                    // the argument held comes with it, the `held` row)
-                } {
-                    = held ( sq_union held ( held_from ( av_loans av ) dpath ) )
-                    : i al ( av_alias av )
-                    : ~ i a 0
-                    ~ < a ( sq_len al ) {
-                        : i pa ( sq_at al a )
-                        ( el_key4 TG_R site rk dpath )
-                        = held ( sq_add held ( he_make dpath ( eng_loan st ( pl_make ( pl_var pa ) ( ep_cat ( pl_path pa ) rpath ) ) kind ) ) )
-                        = a + a 1
-                    }
-                } }
+                        // (a handle of an argument the callee takes over - moved
+                        // into the call, or given a copy - is the result's own:
+                        // the callee kept the value there, `retcap`, h305. What
+                        // the argument held comes with it, the `held` row)
+                    } {
+                        = held ( sq_union held ( held_from ( av_loans av ) dpath ) )
+                        : i al ( av_alias av )
+                        : ~ i a 0
+                        ~ < a ( sq_len al ) {
+                            : i pa ( sq_at al a )
+                            ( el_key4 TG_R site rk dpath )
+                            = held ( sq_add held ( he_make dpath ( eng_loan st ( pl_make ( pl_var pa ) ( ep_cat ( pl_path pa ) rpath ) ) kind ) ) )
+                            = a + a 1
+                        }
+                    } }
             }
         } {}
         = e + e 1
@@ -18202,30 +18202,30 @@ unsafe @ eng_byte s w i k → i {
                 : i own ( av_own av )
                 : i cty ? ( op_is_place op ) ( eng_ty_of op ) ET_NONE
                 ? owned {} { ? & & | == own OW_O == own OW_P ( op_is_place op ) & != cty ET_NONE == ( et_kind cty ) EK_CLOSURE {
-                    // a captured closure is a copy of it: the new closure
-                    // holds what that one holds, and no handle of where it sits
-                    = held ( sq_union held ( held_root ( av_held av ) fp ) )
-                } {
-                    ? & & | == own OW_O == own OW_P ( op_is_place op ) & != cty ET_NONE == ( et_kind cty ) EK_S {
-                        // a raw string captured by value is a copy of its
-                        // address: a view of the binding's buffer, which
-                        // stays the binding's
-                        ( el_key2 TG_ARG + * site 256 i )
-                        = held ( sq_add held ( he_make fp ( eng_loan st op LK_VIEW ) ) )
+                        // a captured closure is a copy of it: the new closure
+                        // holds what that one holds, and no handle of where it sits
                         = held ( sq_union held ( held_root ( av_held av ) fp ) )
-                    } { ? & | == own OW_O == own OW_P ( op_is_place op ) {
+                    } {
+                        ? & & | == own OW_O == own OW_P ( op_is_place op ) & != cty ET_NONE == ( et_kind cty ) EK_S {
+                            // a raw string captured by value is a copy of its
+                            // address: a view of the binding's buffer, which
+                            // stays the binding's
                             ( el_key2 TG_ARG + * site 256 i )
-                            : i lid ( eng_loan st op LK_HANDLE )
-                            = g_fc_cap_loans ( sq_add g_fc_cap_loans lid )
-                            = held ( sq_add held ( he_make fp lid ) )
+                            = held ( sq_add held ( he_make fp ( eng_loan st op LK_VIEW ) ) )
                             = held ( sq_union held ( held_root ( av_held av ) fp ) )
-                        } {
-                            // (a captured view, or a lend: the closure reaches
-                            // what it borrows)
-                            = g_fc_cap_loans ( sq_union g_fc_cap_loans ( av_loans av ) )
-                            = held ( sq_union held ( sq_union ( held_from ( av_loans av ) fp ) ( held_root ( av_held av ) fp ) ) )
-                        } }
-                } }
+                        } { ? & | == own OW_O == own OW_P ( op_is_place op ) {
+                                ( el_key2 TG_ARG + * site 256 i )
+                                : i lid ( eng_loan st op LK_HANDLE )
+                                = g_fc_cap_loans ( sq_add g_fc_cap_loans lid )
+                                = held ( sq_add held ( he_make fp lid ) )
+                                = held ( sq_union held ( held_root ( av_held av ) fp ) )
+                            } {
+                                // (a captured view, or a lend: the closure reaches
+                                // what it borrows)
+                                = g_fc_cap_loans ( sq_union g_fc_cap_loans ( av_loans av ) )
+                                = held ( sq_union held ( sq_union ( held_from ( av_loans av ) fp ) ( held_root ( av_held av ) fp ) ) )
+                            } }
+                    } }
             } {}
         }
         = i + i 1
@@ -45365,6 +45365,7 @@ unsafe @ __slice_len_comma s t → b {
 // asks for more, a struct's slice field among them — it goes on past the
 // ones it emitted, g_slicedrop_n.)
 : ~ i g_slicedrop_n 0
+
 @ emit_pending_slice_drops i syms → v {
     : ~ s rest ( str_skip_words ( nurl_sym_get g_impl_name_syms `__pending_slicedrops__` ) g_slicedrop_n )
     ~ != 0 ( nurl_str_len rest ) {
@@ -46425,7 +46426,7 @@ unsafe @ mem_path_to_indices s path → s {
         // the whole group consistently.
         ? ( str_contains_word old_list ptr ) {} {
             ? ( str_contains_word snap ptr ) { ( mem_dkeep_mark ptr ) }
-            { // (A `: ~` slice binding that outlives the struct and holds
+            {  // (A `: ~` slice binding that outlives the struct and holds
                 // this very buffer takes it over first: __scope_slice_handover.)
                 ? ( seq kind `slice` ) { ( __scope_slice_handover syms cg ptr ( nurl_str_cat `%` sname ) ( bck_swap_char path 46 44 ) ( nurl_llty ( nurl_sym_get syms ( nurl_str_cat3 leaf_sname `__idx_` ( nurl_str_cat leaf_idx `__type` ) ) ) ) `1` ) } {}
                 ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
@@ -53095,6 +53096,7 @@ unsafe @ bck_trusted_file s path → b {
 // three answers kept as bits - bck_check_raw_call asks them of every call
 // a function makes.)
 : ~ i g_rawl_memo 0
+
 @ __rawl_bits s base → i {
     ? == 0 ( nurl_str_len base ) { ^ 0 } {}
     ? == g_rawl_memo 0 { = g_rawl_memo ( nurl_sym_new ) } {}

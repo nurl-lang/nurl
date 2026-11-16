@@ -10,7 +10,7 @@ $ `stdlib/core/box.nu`
 
 % Viewer Plain { @ view_of Plain self ( Vec String ) v → ( Slice String ) { ^ ( slice_from_vec [String] v ) } }
 
-@ ext % Viewer d ( Vec String ) v → v {
+@ ext %Viewer d ( Vec String ) v → v {
     : ( Slice String ) sl ( view_of d v )
     ( string_push_str ( slice_at [String] sl 0 ) `a long text appended through the slice, long enough that the element's buffer has to move to a bigger allocation, and then some more text to be sure of it, well past any rounding of the first capacity` )
 }

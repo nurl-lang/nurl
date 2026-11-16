@@ -2,9 +2,9 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
-: Hh { ?( Vec i ) o i n }
+: Hh { ? ( Vec i ) o i n }
 
-@ w inout ?( Vec i ) o → v {
+@ w inout ? ( Vec i ) o → v {
     ?? o { T q → { : ~ i j 0 ~ < j 1000 { ( vec_push [i] q j ) = j + j 1 } } F → {} }
 }
 

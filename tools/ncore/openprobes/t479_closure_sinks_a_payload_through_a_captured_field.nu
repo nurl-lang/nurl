@@ -1,7 +1,7 @@
 // map: §2.10 | A2 | rejected | - | agora #479: a closure body hands a sink a payload read through its struct capture's field, called twice
 $ `stdlib/core/string.nu`
 
-: H { ?String o i n }
+: H { ? String o i n }
 
 @ eat sink String s → i { ^ ( string_len s ) }
 

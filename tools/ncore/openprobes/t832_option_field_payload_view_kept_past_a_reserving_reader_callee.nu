@@ -2,9 +2,9 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
-: Hh { ?( Vec i ) o i n }
+: Hh { ? ( Vec i ) o i n }
 
-@ w ?( Vec i ) o → v { ?? o { T p → ( vec_reserve [i] p 4096 ) F → {} } }
+@ w ? ( Vec i ) o → v { ?? o { T p → ( vec_reserve [i] p 4096 ) F → {} } }
 
 @ main → i {
     : ( Vec i ) xs ( vec_new [i] )

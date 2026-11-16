@@ -2,7 +2,6 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
-
 @ main → i {
     : ( Vec u ) xs ( vec_new [u] )
     ( vec_push [u] xs 7 )
@@ -12,4 +11,5 @@ $ `stdlib/core/slice.nu`
     ( nurl_println_int # i ( slice_at [u] sl 0 ) )
     ^ 0
 }
+
 @ mk ( Vec u ) x → ( @ v ) { ^ \ → v { ( vec_reserve [u] x 4096 ) } }

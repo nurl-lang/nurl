@@ -9,12 +9,16 @@ $ `stdlib/core/vec.nu`
 : Tally { ( Arc TallyImpl ) a }
 
 unsafe @ Tally_share Tally h → Tally { ^ @ Tally { ( arc_clone [TallyImpl] . h a ) } }
+
 unsafe @ Tally_drop sink Tally h → v {}
+
 unsafe @ tally_new → Tally { ^ @ Tally { ( arc_new [TallyImpl] @ TallyImpl { ( vec_new [i] ) } ) } }
+
 unsafe @ tally_add Tally h i x → v {
     : *TallyImpl p ( arc_ptr [TallyImpl] . h a )
     ( vec_push [i] . p v x )
 }
+
 @ tally_len Tally h → i { ^ ( vec_len [i] . ( arc_get [TallyImpl] . h a ) v ) }
 
 @ main → i {

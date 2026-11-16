@@ -3,13 +3,13 @@ $ `stdlib/core/string.nu`
 
 @ eat sink String s → i { ^ ( string_len s ) }
 
-@ use inout ?String o → i {
+@ use inout ? String o → i {
     : ( @ i ) c \ → i { ?? o { T s → { ^ ( eat s ) } F → { ^ 0 } } }
     ^ ( c )
 }
 
 @ main → i {
-    : ~ ?String x @ ?String { T ( string_from `a caller option long enough for the heap buffer, surely` ) }
+    : ~ ? String x @ ?String { T ( string_from `a caller option long enough for the heap buffer, surely` ) }
     ( nurl_println_int ( use x ) )
     ?? x { T s → { ( nurl_println ( string_data s ) ) } F → {} }
     ^ 0

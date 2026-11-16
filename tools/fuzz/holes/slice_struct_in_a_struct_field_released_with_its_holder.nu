@@ -7,7 +7,7 @@ $ `stdlib/core/slice.nu`
 : H { [String names i n }
 : W { H h i k }
 
-@ mk i n → H { ^ @ H { [String | ( string_from `a name long enough for the heap buffer, yes` ) ( string_from `another name long enough for the heap too` ) ] n } }
+@ mk i n → H { ^ @ H { [String | ( string_from `a name long enough for the heap buffer, yes` ) ( string_from `another name long enough for the heap too` )] n } }
 
 @ main → i {
     : W w @ W { ( mk 2 ) 1 }

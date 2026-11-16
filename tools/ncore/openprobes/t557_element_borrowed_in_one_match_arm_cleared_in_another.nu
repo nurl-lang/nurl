@@ -14,7 +14,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ main → i {
-    : ~ ?H oh @ ?H { T ( mkh ) }
+    : ~ ? H oh @ ?H { T ( mkh ) }
     : ~ H h ( mkh )
     : S e ?? oh { T x → ( vec_at [S] . x a 0 ) F → ( vec_at [S] . h a 0 ) }
     : String f . e name

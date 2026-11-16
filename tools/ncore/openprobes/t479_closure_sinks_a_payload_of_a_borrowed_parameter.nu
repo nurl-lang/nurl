@@ -3,7 +3,7 @@ $ `stdlib/core/string.nu`
 
 @ eat sink String s → i { ^ ( string_len s ) }
 
-@ use ?String o → i {
+@ use ? String o → i {
     : ( @ i ) c \ → i { ?? o { T s → { ^ ( eat s ) } F → { ^ 0 } } }
     ^ ( c )
 }

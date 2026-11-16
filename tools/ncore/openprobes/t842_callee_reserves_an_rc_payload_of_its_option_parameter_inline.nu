@@ -3,7 +3,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/rc.nu`
 
-@ g ?( Rc ( Vec i ) ) o → v {
+@ g ? ( Rc ( Vec i ) ) o → v {
     ?? o { T p → { ( vec_reserve [i] ( rc_get [( Vec i )] p ) 4096 ) } F → {} }
 }
 
@@ -12,7 +12,7 @@ $ `stdlib/std/rc.nu`
     ( vec_push [i] xs 1 )
     ( vec_push [i] xs 2 )
     : ( Rc ( Vec i ) ) r ( rc_new [( Vec i )] xs )
-    : ~ ?( Rc ( Vec i ) ) o @ ?( Rc ( Vec i ) ) { T r }
+    : ~ ? ( Rc ( Vec i ) ) o @ ?( Rc ( Vec i ) ) { T r }
     ?? o {
         T p → {
             : ( Slice i ) sl ( slice_from_vec [i] ( rc_get [( Vec i )] p ) )

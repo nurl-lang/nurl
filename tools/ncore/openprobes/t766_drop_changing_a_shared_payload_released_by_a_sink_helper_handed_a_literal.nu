@@ -7,7 +7,7 @@ $ `stdlib/std/rc.nu`
 
 % Drop H { @ drop H h → v { ( vec_clear [u] ( rc_get [( Vec u )] . h a ) ) ( vec_shrink_to_fit [u] ( rc_get [( Vec u )] . h a ) ) } }
 
-@ ch sink H h → v { }
+@ ch sink H h → v {}
 
 @ main → i {
     : ( Vec u ) v0 ( vec_new [u] )

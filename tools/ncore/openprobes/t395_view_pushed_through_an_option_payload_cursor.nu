@@ -3,7 +3,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
 @ main → i {
-    : ? ( Vec s ) ov @ ?( Vec s ) { T ( vec_new [s] ) }
+    : ?( Vec s ) ov @ ?( Vec s ) { T ( vec_new [s] ) }
     {
         : String loc ( string_from `a heap string freed at the end of this block, long enough for the heap` )
         ?? ov { T w → ( vec_push [s] w ( string_data loc ) ) F → {} }

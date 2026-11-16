@@ -19,7 +19,7 @@ $ `stdlib/std/rc.nu`
     : ( Rc ( Vec u ) ) r ( rc_new [( Vec u )] v0 )
     : ( Rc ( Vec u ) ) r2 ( rc_clone [( Vec u )] r )
     : ( Slice u ) sl ( slice_from_vec [u] ( rc_get [( Vec u )] r2 ) )
-    : ? ( Rc ( Vec u ) ) o @ ?( Rc ( Vec u ) ) { T r }
+    : ?( Rc ( Vec u ) ) o @ ?( Rc ( Vec u ) ) { T r }
     ( ch o )
     ( nurl_println_int # i ( slice_at [u] sl 0 ) )
     ^ 0

@@ -5,9 +5,9 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/slice.nu`
 
 : H { [String names i n }
-: | EH { A H  B i }
+: | EH { A H B i }
 
-@ mk i n → H { ^ @ H { [String | ( string_from `a name long enough for the heap buffer, yes` ) ] n } }
+@ mk i n → H { ^ @ H { [String | ( string_from `a name long enough for the heap buffer, yes` )] n } }
 
 @ main → i {
     : EH e @ EH { A ( mk 1 ) }

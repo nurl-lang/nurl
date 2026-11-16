@@ -3,7 +3,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/box.nu`
 
-@ g ?( Box ( Vec i ) ) o → v {
+@ g ? ( Box ( Vec i ) ) o → v {
     ?? o { T p → { ( vec_reserve [i] ( box_get [( Vec i )] p ) 4096 ) } F → {} }
 }
 
@@ -12,7 +12,7 @@ $ `stdlib/core/box.nu`
     ( vec_push [i] xs 1 )
     ( vec_push [i] xs 2 )
     : ( Box ( Vec i ) ) bx ( box_new [( Vec i )] xs )
-    : ~ ?( Box ( Vec i ) ) o @ ?( Box ( Vec i ) ) { T bx }
+    : ~ ? ( Box ( Vec i ) ) o @ ?( Box ( Vec i ) ) { T bx }
     ?? o {
         T p → {
             : ( Slice i ) sl ( slice_from_vec [i] ( box_get [( Vec i )] p ) )

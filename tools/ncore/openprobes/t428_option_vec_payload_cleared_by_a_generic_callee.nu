@@ -2,12 +2,12 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
-@ gclear [A] inout ?( Vec A ) o → v { ?? o { T q → { ( vec_clear [A] q ) } F → {} } }
+@ gclear [A] inout ? ( Vec A ) o → v { ?? o { T q → { ( vec_clear [A] q ) } F → {} } }
 
 @ main → i {
     : ( Vec String ) xs ( vec_new [String] )
     ( vec_push [String] xs ( string_from `a heap string long enough to own a buffer on the heap, surely` ) )
-    : ~ ?( Vec String ) ov @ ?( Vec String ) { T xs }
+    : ~ ? ( Vec String ) ov @ ?( Vec String ) { T xs }
     : s v ?? ov { T q → ( string_data ( vec_at [String] q 0 ) ) F → `none` }
     ( gclear [String] ov )
     ( nurl_println v )

@@ -7,7 +7,7 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) xs ( vec_new [i] )
     : ~ i k 0
     ~ < k 64 { ( vec_push [i] xs k ) = k + k 1 }
-    : ~ ?( Vec i ) o @ ?( Vec i ) { T xs }
+    : ~ ? ( Vec i ) o @ ?( Vec i ) { T xs }
     ?? o {
         T x → {
             : ~ ( Vec i ) c1 x

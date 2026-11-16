@@ -11,7 +11,7 @@ $ `stdlib/std/rc.nu`
 
 % Wiper G { @ wipe_it G g → i { ( vec_clear [String] ( rc_get [( Vec String )] . g r ) ) ^ 0 } }
 
-@ fwd % Wiper d → v { : i z ( wipe_it d ) }
+@ fwd %Wiper d → v { : i z ( wipe_it d ) }
 
 @ each ( Vec % Wiper ) ws → v { ~ w ws { ( fwd w ) } }
 

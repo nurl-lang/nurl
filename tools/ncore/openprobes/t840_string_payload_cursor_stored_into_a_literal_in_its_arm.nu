@@ -4,7 +4,7 @@ $ `stdlib/core/string.nu`
 : W { String s i n }
 
 @ main → i {
-    : ~ ?String o @ ?String { T ( string_from `a heap string long enough to own a buffer on the heap, surely` ) }
+    : ~ ? String o @ ?String { T ( string_from `a heap string long enough to own a buffer on the heap, surely` ) }
     ?? o {
         T x → {
             : ~ String cur x

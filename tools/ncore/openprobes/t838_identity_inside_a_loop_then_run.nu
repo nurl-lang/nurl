@@ -17,4 +17,3 @@ $ `stdlib/core/slice.nu`
     ( nurl_println_int # i ( slice_at [u] sl 0 ) )
     ^ 0
 }
-

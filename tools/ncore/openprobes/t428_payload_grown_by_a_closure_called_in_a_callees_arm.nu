@@ -3,7 +3,7 @@ $ `stdlib/core/string.nu`
 
 : H { String name }
 
-@ each inout ?H o ( @ v H ) f → v { ?? o { T q → { ( f q ) } F → {} } }
+@ each inout ? H o ( @ v H ) f → v { ?? o { T q → { ( f q ) } F → {} } }
 
 @ main → i {
     : ~ ? H oh @ ?H { T @ H { ( string_from `the option payload name, alive and long enough for the heap` ) } }

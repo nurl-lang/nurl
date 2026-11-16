@@ -2,8 +2,8 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
-@ g ?( Vec ( Vec i ) ) p → v {
-    ?? p { T q → { : ~ i k 0  ~ < k 1000 { ( vec_push [i] ( vec_at [( Vec i )] q 0 ) k ) = k + k 1 } } F → {} }
+@ g ? ( Vec ( Vec i ) ) p → v {
+    ?? p { T q → { : ~ i k 0 ~ < k 1000 { ( vec_push [i] ( vec_at [( Vec i )] q 0 ) k ) = k + k 1 } } F → {} }
 }
 
 @ main → i {
@@ -12,7 +12,7 @@ $ `stdlib/core/slice.nu`
     ( vec_push [i] xs 2 )
     : ( Vec ( Vec i ) ) vv ( vec_new [( Vec i )] )
     ( vec_push [( Vec i )] vv xs )
-    : ~ ?( Vec ( Vec i ) ) o @ ?( Vec ( Vec i ) ) { T vv }
+    : ~ ? ( Vec ( Vec i ) ) o @ ?( Vec ( Vec i ) ) { T vv }
     ?? o {
         T q → {
             : ( Slice i ) sl ( slice_from_vec [i] ( vec_at [( Vec i )] q 0 ) )

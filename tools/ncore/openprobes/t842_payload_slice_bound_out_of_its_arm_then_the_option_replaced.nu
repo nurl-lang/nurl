@@ -7,7 +7,7 @@ $ `stdlib/core/slice.nu`
     : ~ i k 0
     ~ < k 64 { ( vec_push [i] xs k ) = k + k 1 }
     : ( Vec i ) ys ( vec_new [i] )
-    : ~ ?( Vec i ) o @ ?( Vec i ) { T xs }
+    : ~ ? ( Vec i ) o @ ?( Vec i ) { T xs }
     : ( Slice i ) v ?? o { T q → ( slice_from_vec [i] q ) F → ( slice_from_vec [i] ys ) }
     = o @ ?( Vec i ) { F }
     ( nurl_println_int ( slice_at [i] v 1 ) )

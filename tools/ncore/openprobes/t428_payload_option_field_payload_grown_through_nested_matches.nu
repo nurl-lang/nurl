@@ -2,7 +2,7 @@
 $ `stdlib/core/string.nu`
 
 : H { String name }
-: P { ?H inner }
+: P { ? H inner }
 
 @ main → i {
     : ~ ? P op @ ?P { T @ P { @ ?H { T @ H { ( string_from `the option payload name, alive and long enough for the heap` ) } } } }
