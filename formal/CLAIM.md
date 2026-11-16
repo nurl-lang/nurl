@@ -103,14 +103,19 @@ the LLVM / C11 memory model rather than redefining it.
   owner only an owned value, and never one that depends on the binding
   itself (`x ∉ roots E.vdeps`).
   - The hand-over of a whole `String` or `Vec` owner to a binding that
-    reads it by name (`= o other`, then `= other …`; MEMORY.md §7.6) is
-    inside the claim through an encoding (AGORA-885,
-    `A2/HANDOVER_DESIGN.md`). The reader is an owner cell and a borrow,
-    and the hand-over is a `take` of the old value into the cell.
-    `A2/HandOver.lean` types it with A2's own rules, both straight-line
-    and with the hand-over decided at run time. It applies `memory_safe`
-    and `no_leak_end` to both. Showing that nurlc's drop flags and its
-    buffer test behave as the cell does is phase C / D.
+    reads it by name (`= o other`, then `= other …`; MEMORY.md §7.6) has
+    an encoding in A2's own rules (AGORA-885, `A2/HANDOVER_DESIGN.md`):
+    the reader is an owner cell and a borrow, and the hand-over is a
+    `take` of the old value into the cell. `A2/HandOver.lean` types the
+    encoding of two programs and applies `memory_safe` and `no_leak_end`
+    to them: `main`, straight-line, and `mainJ c`, where the hand-over is
+    decided at run time, for every value `c` of the condition. The
+    theorems are about these two programs only. There is no general
+    translation of nurlc's hand-over into the encoding, and no theorem
+    that one preserves typing. Such a translation, and the proof that
+    nurlc's drop flags and buffer test behave as the cell does, are
+    phase C / D. Until then a hand-over in another program is inside the
+    claim only as far as it has the shape of these two.
   - Outside the claim still: a field's reader when the field is replaced
     (Agora #265, #354), and an owner kept where a call may give it its
     own value back (`= o ( f … o … )`, #342, #375). DynCell's encoding

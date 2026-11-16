@@ -2,7 +2,7 @@
 
 ## Status
 
-**Covered by A2, through an encoding** (AGORA-885). No rule of the
+**An encoding in A2's own rules, shown on two programs** (AGORA-885). No rule of the
 calculus changes. An owner whose old value nurlc hands over is, in the
 calculus, an **owner cell** plus a **borrow**, as in `DYN_DESIGN.md`. The
 hand-over is a **take** of the old value into the cell (`TAKE_DESIGN.md`).
@@ -12,12 +12,16 @@ crown theorems to it, on Lean's standard axioms only (`../check.sh`):
 - `main_safe`, `main_no_leak`: the straight-line program below, run from
   the empty store, never gets stuck (`memory_safe`) and frees everything
   it allocated (`no_leak_end`);
-- `mainJ_safe`, `mainJ_no_leak`: the same, with the hand-over decided at
-  run time. `o` reads `other` on some runs only, as nurlc's buffer test
+- `mainJ_safe c`, `mainJ_no_leak c`: the same for `mainJ c`, with the
+  hand-over decided at run time, for every value `c` of the condition:
+  `o` reads `other` on the runs where `c ≠ 0`, as nurlc's buffer test
   decides.
 
-What is left is the link from nurlc to the encoding (phase C and D): the
-lowering must behave as the encoded program does.
+The theorems are about these two programs. There is no general
+translation of a program's hand-overs into the encoding, and no theorem
+that one preserves typing. That translation, and the link from nurlc's
+lowering to the encoded program (its drop flags and buffer test behaving
+as the cell does), are phase C and D.
 
 ## What nurlc does
 

@@ -200,9 +200,11 @@ def byName : Stmt :=
 def decide1 : Stmt := .ite (.var 7) byName (.assign 8 (.expr (.lit 0)))
 def decide2 : Stmt := .ite (.var 8) handOver (.assign 4 (.getr 3))
 
-def mainJ : Stmt :=
+/-- The program, for every value `c` of the condition: `c ≠ 0` runs the
+    by-name `=` and the hand-over, `c = 0` neither. -/
+def mainJ (c : Nat) : Stmt :=
   .letv 0 (.expr (.lit 0)) (.letv 1 (.new .int) (.letv 2 (.new .int)
-    (.letv 3 (.inr .int 2) (.letv 4 (.getr 3) (.letv 7 (.expr (.lit 1)) (.letv 8 (.expr (.lit 0))
+    (.letv 3 (.inr .int 2) (.letv 4 (.getr 3) (.letv 7 (.expr (.lit c)) (.letv 8 (.expr (.lit 0))
       (.seq decide1 (.seq decide2
       (.seq (.assign 1 (.new .int))
         (.letv 6 (.expr (.len 4)) .skip))))))))))
@@ -395,7 +397,7 @@ theorem decide2_typed : StmtT P ξ (ctxJ EobJ) [] decide2 (ctxJ Eob) := by
     (StmtT.sub (Weaker.refl wf_EobJ names_EobJ) hk
       (Or.inr (weakerJ hv' h4' (EntryWeaker.refl _) wf_Eob names_Eob)))
 
-theorem mainJ_typed : ∃ Δ, StmtT P .none (fun _ => none) [] mainJ Δ := by
+theorem mainJ_typed (c : Nat) : ∃ Δ, StmtT P .none (fun _ => none) [] (mainJ c) Δ := by
   apply Exists.intro
   refine' StmtT.letv (x := 0) rfl rfl (by simp) (RhsT.expr ExprT.lit) ?_ ?_
   rotate_left
@@ -468,19 +470,25 @@ theorem main_no_leak {m' : Mem} (hr : Steps P (emptyMem 7) main (.ok m' .skip)) 
     (by simp [main, handOver, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
 
 
+/-- The variables do not depend on the condition's value. -/
+theorem mainJ_vars (c : Nat) : (mainJ c).vars = (mainJ 0).vars := rfl
+
+theorem mainJ_vars_lt (c : Nat) : ∀ v ∈ (mainJ c).vars, v < 9 := by
+  rw [mainJ_vars]; decide
+
 /-- The hand-over decided at run time: a run, from the empty store, never
     touches memory it may not, whether or not `o` was given `other`. -/
-theorem mainJ_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 9) mainJ (.ok m' s')) :
+theorem mainJ_safe (c : Nat) {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 9) (mainJ c) (.ok m' s')) :
     ¬ Stuck P m' s' := by
-  obtain ⟨Δ, ht⟩ := mainJ_typed
+  obtain ⟨Δ, ht⟩ := mainJ_typed c
   exact memory_safe prog_ok prog_codes ht rfl
-    (by simp [mainJ, decide1, decide2, byName, handOver, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
+    (by simp [mainJ, decide1, decide2, byName, handOver, Stmt.codesOK, Rhs.codeOK]) (mainJ_vars_lt c) hr
 
 /-- ... and nothing leaks, on either path. -/
-theorem mainJ_no_leak {m' : Mem} (hr : Steps P (emptyMem 9) mainJ (.ok m' .skip)) :
+theorem mainJ_no_leak (c : Nat) {m' : Mem} (hr : Steps P (emptyMem 9) (mainJ c) (.ok m' .skip)) :
     ∀ i, m'.alloc i = false := by
-  obtain ⟨Δ, ht⟩ := mainJ_typed
+  obtain ⟨Δ, ht⟩ := mainJ_typed c
   exact no_leak_end prog_ok prog_codes ht rfl
-    (by simp [mainJ, decide1, decide2, byName, handOver, Stmt.codesOK, Rhs.codeOK]) (by decide) hr
+    (by simp [mainJ, decide1, decide2, byName, handOver, Stmt.codesOK, Rhs.codeOK]) (mainJ_vars_lt c) hr
 
 end A2.HandOver
