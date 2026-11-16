@@ -9,11 +9,14 @@ $ `stdlib/core/slice.nu`
 : H { String name }
 : H2 { String x String y }
 : | E { EN ES H EV ( Vec String ) }
-: W { ?String f1 ?String f2 }
+: W { ? String f1 ? String f2 }
 
 @ id ? String a → ?String { ^ a }
+
 @ mk s t → ?String { ^ @ ?String { T ( string_from t ) } }
+
 @ grow String s → v { ( string_push_str s `, and a long tail appended to grow the buffer past its room and more` ) }
+
 @ main → i {
     : ~ ? String o ( mk `a value long enough for the heap here` )
     : ~ ? ( Vec i ) p @ ?( Vec i ) { T ( vec_new [i] ) }

@@ -67264,53 +67264,6 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // owners, as through a `vec_at` binding of one; agora #350, #471.)
     : s wsrc0 ? < wid 0 `` ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) )
     : s wsrc ? || || < wid 0 != 0 ( nurl_str_len wsrc0 ) != BCK_UNINIT ( bck_st_raw st wroot ) wsrc0 ( nurl_sym_get g_bck ( bck_bkey `fe_` ( nurl_str_int wroot ) ) )
-    // (…and a change through a `??` payload binding moves the buffer that
-    // every other payload binding of the same option points into — `?? o
-    // { T a → { : s v ( string_data a )  ?? o { T b → ( string_push_str b
-    // … ) } … } }` — and, made through a borrow (`= o ( id other )`, then
-    // `?? o { T b → … }`), the payload of the owners it borrows from: the
-    // views of their payload cursors end too. Before, only cursors over the
-    // binding changed were followed, and `v` read freed memory; agora #874.)
-    ? & & != 0 g_bck_has_cursor >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
-        : b srea ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
-        : b sirea & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
-        // (…and one that drops elements in place — `vec_clear`, `vec_pop`:
-        // what points into the elements ends, as for an element's buffer.)
-        : b sdrop & ! | srea sirea ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) )
-        ? | | srea sirea sdrop {
-            : s wrs ( nurl_str_int wroot )
-            : ~ s scus ``
-            : ~ s sowners ( nurl_str_cat wsrc `` )
-            : i sco ( __cursor_src_of wroot )
-            ? >= sco 0 { = sowners ? == 0 ( nurl_str_len sowners ) ( nurl_str_int sco ) ( nurl_str_cat3 sowners ` ` ( nurl_str_int sco ) ) } {}
-            // (…an owner that is itself a payload cursor, `: ~ H c r` with r
-            // a payload of `oh`: what r is a cursor over, in turn.)
-            : ~ s sseen ``
-            ~ != 0 ( nurl_str_len sowners ) {
-                : s sw ( str_first_word sowners ) = sowners ( str_skip_word sowners )
-                ? == 0 ( nurl_str_len sw ) { continue } {}
-                : i swr ( bck_path_root ( nurl_str_to_int sw ) )
-                ? ( str_contains_word sseen ( nurl_str_int swr ) ) { continue } {}
-                = sseen ( nurl_str_cat3 sseen ` ` ( nurl_str_int swr ) )
-                : i swc ( __cursor_src_of swr )
-                ? >= swc 0 { = sowners ? == 0 ( nurl_str_len sowners ) ( nurl_str_int swc ) ( nurl_str_cat3 sowners ` ` ( nurl_str_int swc ) ) } {}
-                : ~ s sc ( nurl_sym_get g_bck ( bck_bkey `cu_` ( nurl_str_int swr ) ) )
-                ~ != 0 ( nurl_str_len sc ) {
-                    : s c1 ( str_first_word sc ) = sc ( str_skip_word sc )
-                    ? & ! ( seq c1 wrs ) ! ( str_contains_word scus c1 ) { = scus ( nurl_str_cat3 scus ` ` c1 ) } {}
-                }
-            }
-            ? != 0 ( nurl_str_len scus ) {
-                // (A value lent OUT of the payload binding handed on — `(
-                // string_push_str ( vec_at b 0 ) … )`: what moves is one of its
-                // elements' buffers, as bck_borrow_sweep's `deep` reads it.)
-                : b sdeep & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
-                : b swhole & srea ! sdeep
-                : s scw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wrs ) ) `', a payload of the same value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? sdrop `', which may drop or replace what it holds` ? swhole `', which may move its buffer` `', which may move the buffer of one of its elements` ) )
-                = out ( __bck_cursor_views_end out scus rec swhole scw ? == wid wroot `` ( __bck_path_sfx ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) ) ) )
-            } {}
-        } {}
-    } {}
     // (A borrow of a cursor payload, or of a field of one — `?? . q inner
     // { T r → … }` with q a cursor over `oh` — changed in place: the change
     // is the option's, as made through the cursor (bck_cursor_edit, agora
@@ -67520,6 +67473,55 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         } {}
         = k + k 1
     }
+    // (Last, so a cause found above — a copy of the handle, an element
+    // through a borrow — is the one a view ends with.)
+    // (…a change through a `??` payload binding moves the buffer that
+    // every other payload binding of the same option points into — `?? o
+    // { T a → { : s v ( string_data a )  ?? o { T b → ( string_push_str b
+    // … ) } … } }` — and, made through a borrow (`= o ( id other )`, then
+    // `?? o { T b → … }`), the payload of the owners it borrows from: the
+    // views of their payload cursors end too. Before, only cursors over the
+    // binding changed were followed, and `v` read freed memory; agora #874.)
+    ? & & != 0 g_bck_has_cursor >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
+        : b srea ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
+        : b sirea & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
+        // (…and one that drops elements in place — `vec_clear`, `vec_pop`:
+        // what points into the elements ends, as for an element's buffer.)
+        : b sdrop & ! | srea sirea ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) )
+        ? | | srea sirea sdrop {
+            : s wrs ( nurl_str_int wroot )
+            : ~ s scus ``
+            : ~ s sowners ( nurl_str_cat wsrc `` )
+            : i sco ( __cursor_src_of wroot )
+            ? >= sco 0 { = sowners ? == 0 ( nurl_str_len sowners ) ( nurl_str_int sco ) ( nurl_str_cat3 sowners ` ` ( nurl_str_int sco ) ) } {}
+            // (…an owner that is itself a payload cursor, `: ~ H c r` with r
+            // a payload of `oh`: what r is a cursor over, in turn.)
+            : ~ s sseen ``
+            ~ != 0 ( nurl_str_len sowners ) {
+                : s sw ( str_first_word sowners ) = sowners ( str_skip_word sowners )
+                ? == 0 ( nurl_str_len sw ) { continue } {}
+                : i swr ( bck_path_root ( nurl_str_to_int sw ) )
+                ? ( str_contains_word sseen ( nurl_str_int swr ) ) { continue } {}
+                = sseen ( nurl_str_cat3 sseen ` ` ( nurl_str_int swr ) )
+                : i swc ( __cursor_src_of swr )
+                ? >= swc 0 { = sowners ? == 0 ( nurl_str_len sowners ) ( nurl_str_int swc ) ( nurl_str_cat3 sowners ` ` ( nurl_str_int swc ) ) } {}
+                : ~ s sc ( nurl_sym_get g_bck ( bck_bkey `cu_` ( nurl_str_int swr ) ) )
+                ~ != 0 ( nurl_str_len sc ) {
+                    : s c1 ( str_first_word sc ) = sc ( str_skip_word sc )
+                    ? & ! ( seq c1 wrs ) ! ( str_contains_word scus c1 ) { = scus ( nurl_str_cat3 scus ` ` c1 ) } {}
+                }
+            }
+            ? != 0 ( nurl_str_len scus ) {
+                // (A value lent OUT of the payload binding handed on — `(
+                // string_push_str ( vec_at b 0 ) … )`: what moves is one of its
+                // elements' buffers, as bck_borrow_sweep's `deep` reads it.)
+                : b sdeep & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
+                : b swhole & srea ! sdeep
+                : s scw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wrs ) ) `', a payload of the same value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? sdrop `', which may drop or replace what it holds` ? swhole `', which may move its buffer` `', which may move the buffer of one of its elements` ) )
+                = out ( __bck_cursor_views_end out scus rec swhole scw ? == wid wroot `` ( __bck_path_sfx ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) ) ) )
+            } {}
+        } {}
+    } {}
     ^ out
 }
 

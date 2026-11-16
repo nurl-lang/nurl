@@ -13,7 +13,7 @@ $ `stdlib/core/string.nu`
 @ show ? String o → v { ?? o { T s → { ( nurl_println ( string_data s ) ) } F → { ( nurl_println `none` ) } } }
 
 @ run i k → v {
-    : ~ ?String other ( mk `another value long enough for the heap` )
+    : ~ ? String other ( mk `another value long enough for the heap` )
     : ~ ? String o ( mk `a value long enough for the heap here` )
     = o ( id other )
     ?? other { T so → {

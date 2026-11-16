@@ -10,7 +10,9 @@ $ `stdlib/core/slice.nu`
 : | E { EN ES H }
 
 @ id ? String a → ?String { ^ a }
+
 @ mk s t → ?String { ^ @ ?String { T ( string_from t ) } }
+
 @ grow String s → v { ( string_push_str s `, and a long tail appended to grow the buffer past its room and more` ) }
 
 @ run i k → v {

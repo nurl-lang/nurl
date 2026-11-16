@@ -10,7 +10,9 @@ $ `stdlib/core/slice.nu`
 : | E { EN ES H }
 
 @ id ? String a → ?String { ^ a }
+
 @ mk s t → ?String { ^ @ ?String { T ( string_from t ) } }
+
 @ grow String s → v { ( string_push_str s `, and a long tail appended to grow the buffer past its room and more` ) }
 
 @ run i k → v {
@@ -18,7 +20,7 @@ $ `stdlib/core/slice.nu`
     ?? o { T a → {
             : s v ( string_data a )
             : ~ i j 0
-            ~ < j 2 { ?? o { T b → { ( string_push_str b `, and a long tail appended to grow the buffer past its room and more` ) } F → {} }  = j + j 1 }
+            ~ < j 2 { ?? o { T b → { ( string_push_str b `, and a long tail appended to grow the buffer past its room and more` ) } F → {} } = j + j 1 }
             ( nurl_println v )
         } F → {} }
 }
