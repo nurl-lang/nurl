@@ -62656,9 +62656,14 @@ unsafe @ __dyn_virtual_drop_edges → v {
     : i tab ? ts g_fn_tdrops g_fn_drops
     // Seeded with the witnessed drops.
     : ~ s fns ( nurl_str_cat g_fn_safe_list `` )
-    : ~ s r0 ( nurl_str_cat fns `` )
-    ~ != 0 ( nurl_str_len r0 ) {
-        : s f ( str_first_word r0 ) = r0 ( str_skip_word r0 )
+    // (Both walks of `fns`, every function, are cursor walks, __word_end /
+    // __span_dup: first_word / skip_word copied the remaining list per
+    // function, O(L^2) on the program's function list, and again on each
+    // round of the closure below.)
+    : i fns_n ( nurl_str_len fns )
+    : ~ i r0_p 0
+    ~ < r0_p fns_n {
+        : i r0_e ( __word_end fns fns_n r0_p ) : s f ( __span_dup fns r0_p r0_e ) = r0_p + r0_e 1
         : s seed ( nurl_sym_get g_drop_base f )
         ? & ts & != 0 ( nurl_str_len seed ) != 0 ( __fn_sync_params f ) {
             : ~ s ws ( nurl_str_cat seed `` )
@@ -62673,9 +62678,9 @@ unsafe @ __dyn_virtual_drop_edges → v {
     : ~ b changed T
     ~ changed {
         = changed F
-        : ~ s rf ( nurl_str_cat fns `` )
-        ~ != 0 ( nurl_str_len rf ) {
-            : s f ( str_first_word rf ) = rf ( str_skip_word rf )
+        : ~ i rf_p 0
+        ~ < rf_p fns_n {
+            : i rf_e ( __word_end fns fns_n rf_p ) : s f ( __span_dup fns rf_p rf_e ) = rf_p + rf_e 1
             : ~ s es ( nurl_sym_get g_drop_edges f )
             ~ != 0 ( nurl_str_len es ) {
                 : s e ( str_first_word es ) = es ( str_skip_word es )
@@ -63456,8 +63461,13 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // the bindings viewing exactly that field take the value it held over
     // (__fs_viewers_take) — owners now, not borrows that end below.
     ? & & == kc 8 >= wid 0 ! ( seq ( bck_field rec 6 ) `e` ) { = out ( bck_fview_take out ( nurl_str_int wid ) ) } {}
-    ~ != 0 ( nurl_str_len rest ) {
-        : s srcs ( str_first_word rest ) = rest ( str_skip_word rest )
+    // (A cursor walk, __word_end / __span_dup: first_word / skip_word
+    // copied the whole remaining list per source and measured it again,
+    // O(L^2) on a row's sources; the sweep runs on every row.)
+    : i rest_n ( nurl_str_len rest )
+    : ~ i rest_p 0
+    ~ < rest_p rest_n {
+        : i rest_e ( __word_end rest rest_n rest_p ) : s srcs ( __span_dup rest rest_p rest_e ) = rest_p + rest_e 1
         : i sid ( nurl_str_to_int srcs )
         // A field lives and dies with its binding.
         : i rid ( bck_path_root sid )
@@ -63671,8 +63681,10 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             : b fown ( nurl_sym_has_word g_fn_ifreallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
             : ~ s frest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
             : ~ s ifw ``
-            ~ != 0 ( nurl_str_len frest ) {
-                : s fsw ( str_first_word frest ) = frest ( str_skip_word frest )
+            : i frest_n ( nurl_str_len frest )
+            : ~ i frest_p 0
+            ~ < frest_p frest_n {
+                : i frest_e ( __word_end frest frest_n frest_p ) : s fsw ( __span_dup frest frest_p frest_e ) = frest_p + frest_e 1
                 : i fsid ( nurl_str_to_int fsw )
                 ? & != fsid wid ( bck_id_holds wid fsid ) {
                     ? == 0 ( nurl_str_len ifw ) { = ifw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) ) ) `', which holds it, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? fown `', which may move the buffer of one of its fields or elements` `', which may move the buffer of one of its elements` ) ) } {}
@@ -82611,12 +82623,17 @@ unsafe @ origin_free → v {
 // module-wide list, stamping the function they belong to. Called once
 // per function, after its body has compiled and its name is known.
 @ __merge_impls i syms s src_key s fname s dst_key → v {
-    : ~ s rest ( nurl_sym_get syms src_key )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s w1 ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s w2 ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s w3 ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s w4 ( str_first_word rest ) = rest ( str_skip_word rest )
+    // (A cursor walk, __word_end / __span_dup: first_word / skip_word
+    // copied the remaining list four times per record. Past the list's end
+    // a word is ``, as str_first_word of `` was.)
+    : s rest ( nurl_sym_get syms src_key )
+    : i rn ( nurl_str_len rest )
+    : ~ i rp 0
+    ~ < rp rn {
+        : i e1 ( __word_end rest rn rp ) : s w1 ( __span_dup rest rp e1 ) = rp + e1 1
+        : i e2 ( __word_end rest rn rp ) : s w2 ( __span_dup rest rp e2 ) = rp + e2 1
+        : i e3 ( __word_end rest rn rp ) : s w3 ( __span_dup rest rp e3 ) = rp + e3 1
+        : i e4 ( __word_end rest rn rp ) : s w4 ( __span_dup rest rp e4 ) = rp + e4 1
         // (A raw-pointer parameter hands nothing over: __fn_param_raw.)
         ? & & != 0 ( nurl_str_len w1 ) != 0 ( nurl_str_len w2 )
         & & != 0 ( nurl_str_len w3 ) != 0 ( nurl_str_len w4 )

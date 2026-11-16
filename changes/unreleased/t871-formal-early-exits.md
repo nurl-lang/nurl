@@ -5,3 +5,7 @@
 ### Fixed
 
 - **A `break` or `continue` in a closure body now gets a clear compile error** (Agora #871). This applies to a `break` or `continue` in a closure literal written inside a `~` loop, outside any loop written in the closure body. The compiler used to emit a branch to the enclosing function's loop label from inside the closure's own function, so the build failed in clang with `use of undefined value '%loop_exit_3'`. nurlc now refuses the program and names the reason. A closure body is a function of its own, so a `break` or `continue` there leaves only a loop written inside it. That is also the formal model's rule: an exit never crosses a call frame. No program that compiled before is affected.
+
+### Performance
+
+- **Large programs compile with about a third less heap traffic** (Agora #871). The compiler now walks three hot word lists with a byte cursor instead of copying the rest of the list at every word. The lists are a borrow-check row's sources, the module's function list (on every round of the drop-summary closure) and a function's parked implication records. The old walk was quadratic in each list's length. When nurlc compiles itself, it allocates 36% fewer bytes (1.39 GB → 0.89 GB) and executes 2.2% fewer instructions. Small programs are unchanged (within ±0.06%), and the generated code is byte-identical on all 1,252 programs of bench/, examples/ and compiler/tests that compile.
