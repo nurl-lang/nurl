@@ -1,0 +1,3 @@
+### Fixed
+
+- **A change made through one `??` payload binding ends the views of the others** (AGORA-874). Two `??` matches of the same option name the same payload. A view taken through the first one was not ended when the second one grew the payload, and reading the view afterwards read freed memory. This happened for an option that owns its value, for one that borrows another binding's value (`= o ( id other )`, where the view was taken from `other`), for a program enum's payloads, for a field of the payload, for a slice of a Vec payload and for an element of it. Such a read is now refused where it happens. Change the payload through one match, or read the view before the second match changes it. This also closes the nested-match shape of AGORA-428.

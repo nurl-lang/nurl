@@ -60027,6 +60027,11 @@ unsafe @ __sx_leaf_roots s sx → s {
 // …the same when what the call was handed is `via`, another payload of o
 // read in place (agora #460): the message names it.
 @ __bck_epy_elems_via s st i o i via i line s cal → s {
+    ^ ( __bck_epy_elems_via_why st o via line cal `, which may drop or replace what it holds` )
+}
+
+// …`tail`: what the call may do to the storage, as the message says it.
+@ __bck_epy_elems_via_why s st i o i via i line s cal s tail → s {
     : s os ( nurl_str_int o )
     : s vs ( nurl_str_int via )
     : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `epy_` os ) )
@@ -60036,8 +60041,21 @@ unsafe @ __sx_leaf_roots s sx → s {
         : i x ( nurl_str_to_int xs )
         ? & & != x via ! ( bck_dead_state ( bck_st_get out x ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `hr_` xs ) ) os ) {
             : s on ( bck_name_show ( nurl_sym_get2 g_bck `rv_` os ) )
-            : s why ( nurl_str_cat4 ( nurl_str_cat3 `it is a payload of '` on `', and '` ) ( bck_name_show ( nurl_sym_get2 g_bck `rv_` vs ) ) ( nurl_str_cat3 `', another payload of '` on `' — the same storage — was passed to '` ) ( nurl_str_cat ( bck_fn_show cal ) `', which may drop or replace what it holds` ) )
+            : s why ( nurl_str_cat4 ( nurl_str_cat3 `it is a payload of '` on `', and '` ) ( bck_name_show ( nurl_sym_get2 g_bck `rv_` vs ) ) ( nurl_str_cat3 `', another payload of '` on `' — the same storage — was passed to '` ) ( nurl_str_cat3 ( bck_fn_show cal ) `'` tail ) )
+            // (…and those taken from its field paths, `( string_data . a name
+            // )`: sources rooted at it, as __bck_cursor_views_end reads them.)
             : ~ s brest ( nurl_sym_get g_bck ( bck_bkey `bb_` xs ) )
+            ? != 0 g_bck_has_paths {
+                : ~ s pr ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+                ~ != 0 ( nurl_str_len pr ) {
+                    : s pw ( str_first_word pr ) = pr ( str_skip_word pr )
+                    : i pwi ( nurl_str_to_int pw )
+                    ? & != pwi x == ( bck_path_root pwi ) x {
+                        : s pb ( nurl_sym_get g_bck ( bck_bkey `bb_` pw ) )
+                        ? != 0 ( nurl_str_len pb ) { = brest ( nurl_str_cat3 brest ` ` pb ) } {}
+                    } {}
+                }
+            } {}
             ~ != 0 ( nurl_str_len brest ) {
                 : s bs ( str_first_word brest ) = brest ( str_skip_word brest )
                 : i b ( nurl_str_to_int bs )
@@ -66857,6 +66875,48 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     ^ == ( nurl_str_get rec off ) 64
 }
 
+// The views of the `??` payload cursors `cus` (and of cursors over them,
+// and of their field paths) end at row `rec`: a callee moved the payload's
+// buffer (`crea`) or the buffer of one of its elements (bck_borrow_sweep,
+// agora #816, #874).
+@ __bck_cursor_views_end s st s cus0 s rec b crea s cuw → s {
+    : ~ s out st
+    : ~ s cus ( nurl_str_cat cus0 `` )
+    : ~ s cseen ``
+    ~ != 0 ( nurl_str_len cus ) {
+        : s cu ( str_first_word cus ) = cus ( str_skip_word cus )
+        ? ! ( str_contains_word cseen cu ) {
+            = cseen ( nurl_str_cat3 cseen ` ` cu )
+            : i cui ( nurl_str_to_int cu )
+            // (…the views of its field paths' too: sources rooted at it.)
+            : ~ s cps ( nurl_str_cat cu `` )
+            ? != 0 g_bck_has_paths {
+                : ~ s pr ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+                ~ != 0 ( nurl_str_len pr ) {
+                    : s pw ( str_first_word pr ) = pr ( str_skip_word pr )
+                    : i pwi ( nurl_str_to_int pw )
+                    ? & != pwi cui == ( bck_path_root pwi ) cui { = cps ( nurl_str_cat3 cps ` ` pw ) } {}
+                }
+            } {}
+            ~ != 0 ( nurl_str_len cps ) {
+                : s cp ( str_first_word cps ) = cps ( str_skip_word cps )
+                : i cpi ( nurl_str_to_int cp )
+                ? crea { = out ( bck_view_end out cpi ( bck_field_int rec 3 ) cuw ) } {
+                    = g_bck_end_elem 1
+                    = out ( bck_view_end ( bck_view_end_ind out cpi ( bck_field_int rec 3 ) cuw ) cpi ( bck_field_int rec 3 ) cuw )
+                    = g_bck_end_elem 0
+                }
+            }
+            // (…and a cursor over this cursor: `?? q { T q2 → … }`.)
+            : s cu2 ( nurl_sym_get g_bck ( bck_bkey `cu_` cu ) )
+            ? != 0 ( nurl_str_len cu2 ) { = cus ( nurl_str_cat3 cus ` ` cu2 ) } {}
+        } {}
+    }
+    // (A value of its own: the views' ends name `cuw`, which the caller's
+    // block ends.)
+    ^ ( nurl_str_cat out `` )
+}
+
 @ bck_borrow_sweep s ist s st s rec i kc → s {
     : ~ s out st
     // (…or, for a row named by a source expression, the storage it is swept
@@ -67144,41 +67204,12 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // only what points into those, as for the value handed itself above.
     // The cursor's handle still reaches the payload. Agora #816.)
     ? & & != 0 g_bck_has_cursor >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
-        : ~ s cus ( nurl_sym_get g_bck ( bck_bkey `cu_` ( nurl_str_int wid ) ) )
+        : s cus ( nurl_sym_get g_bck ( bck_bkey `cu_` ( nurl_str_int wid ) ) )
         : b crea ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
         : b cirea & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
         ? & != 0 ( nurl_str_len cus ) | crea cirea {
             : s cuw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) ) ) `', whose payload it is, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? crea `', which may move its payload's buffer` `', which may move the buffer of one of its payload's elements` ) )
-            : ~ s cseen ``
-            ~ != 0 ( nurl_str_len cus ) {
-                : s cu ( str_first_word cus ) = cus ( str_skip_word cus )
-                ? ! ( str_contains_word cseen cu ) {
-                    = cseen ( nurl_str_cat3 cseen ` ` cu )
-                    : i cui ( nurl_str_to_int cu )
-                    // (…the views of its field paths' too: sources rooted at it.)
-                    : ~ s cps ( nurl_str_cat cu `` )
-                    ? != 0 g_bck_has_paths {
-                        : ~ s pr ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
-                        ~ != 0 ( nurl_str_len pr ) {
-                            : s pw ( str_first_word pr ) = pr ( str_skip_word pr )
-                            : i pwi ( nurl_str_to_int pw )
-                            ? & != pwi cui == ( bck_path_root pwi ) cui { = cps ( nurl_str_cat3 cps ` ` pw ) } {}
-                        }
-                    } {}
-                    ~ != 0 ( nurl_str_len cps ) {
-                        : s cp ( str_first_word cps ) = cps ( str_skip_word cps )
-                        : i cpi ( nurl_str_to_int cp )
-                        ? crea { = out ( bck_view_end out cpi ( bck_field_int rec 3 ) cuw ) } {
-                            = g_bck_end_elem 1
-                            = out ( bck_view_end ( bck_view_end_ind out cpi ( bck_field_int rec 3 ) cuw ) cpi ( bck_field_int rec 3 ) cuw )
-                            = g_bck_end_elem 0
-                        }
-                    }
-                    // (…and a cursor over this cursor: `?? q { T q2 → … }`.)
-                    : s cu2 ( nurl_sym_get g_bck ( bck_bkey `cu_` cu ) )
-                    ? != 0 ( nurl_str_len cu2 ) { = cus ( nurl_str_cat3 cus ` ` cu2 ) } {}
-                } {}
-            }
+            = out ( __bck_cursor_views_end out cus rec crea cuw )
         } {}
     } {}
     // Dropping elements or replacing a field THROUGH a borrow reaches what
@@ -67189,6 +67220,49 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // owners, as through a `vec_at` binding of one; agora #350, #471.)
     : s wsrc0 ? < wid 0 `` ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) )
     : s wsrc ? || || < wid 0 != 0 ( nurl_str_len wsrc0 ) != BCK_UNINIT ( bck_st_raw st wroot ) wsrc0 ( nurl_sym_get g_bck ( bck_bkey `fe_` ( nurl_str_int wroot ) ) )
+    // (…and a change through a `??` payload binding moves the buffer that
+    // every other payload binding of the same option points into — `?? o
+    // { T a → { : s v ( string_data a )  ?? o { T b → ( string_push_str b
+    // … ) } … } }` — and, made through a borrow (`= o ( id other )`, then
+    // `?? o { T b → … }`), the payload of the owners it borrows from: the
+    // views of their payload cursors end too. Before, only cursors over the
+    // binding changed were followed, and `v` read freed memory; agora #874.)
+    ? & & != 0 g_bck_has_cursor >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
+        : b srea ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
+        : b sirea & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
+        ? | srea sirea {
+            : s wrs ( nurl_str_int wroot )
+            : ~ s scus ``
+            : ~ s sowners ( nurl_str_cat wsrc `` )
+            : i sco ( __cursor_src_of wroot )
+            ? >= sco 0 { = sowners ( nurl_str_cat3 sowners ` ` ( nurl_str_int sco ) ) } {}
+            // (…an owner that is itself a payload cursor, `: ~ H c r` with r
+            // a payload of `oh`: what r is a cursor over, in turn.)
+            : ~ s sseen ``
+            ~ != 0 ( nurl_str_len sowners ) {
+                : s sw ( str_first_word sowners ) = sowners ( str_skip_word sowners )
+                : i swr ( bck_path_root ( nurl_str_to_int sw ) )
+                ? ( str_contains_word sseen ( nurl_str_int swr ) ) { continue } {}
+                = sseen ( nurl_str_cat3 sseen ` ` ( nurl_str_int swr ) )
+                : i swc ( __cursor_src_of swr )
+                ? >= swc 0 { = sowners ( nurl_str_cat3 sowners ` ` ( nurl_str_int swc ) ) } {}
+                : ~ s sc ( nurl_sym_get g_bck ( bck_bkey `cu_` ( nurl_str_int swr ) ) )
+                ~ != 0 ( nurl_str_len sc ) {
+                    : s c1 ( str_first_word sc ) = sc ( str_skip_word sc )
+                    ? & ! ( seq c1 wrs ) ! ( str_contains_word scus c1 ) { = scus ( nurl_str_cat3 scus ` ` c1 ) } {}
+                }
+            }
+            ? != 0 ( nurl_str_len scus ) {
+                // (A value lent OUT of the payload binding handed on — `(
+                // string_push_str ( vec_at b 0 ) … )`: what moves is one of its
+                // elements' buffers, as bck_borrow_sweep's `deep` reads it.)
+                : b sdeep & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
+                : b swhole & srea ! sdeep
+                : s scw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wrs ) ) `', a payload of the same value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? swhole `', which may move its buffer` `', which may move the buffer of one of its elements` ) )
+                = out ( __bck_cursor_views_end out scus rec swhole scw )
+            } {}
+        } {}
+    } {}
     // (A borrow of a cursor payload, or of a field of one — `?? . q inner
     // { T r → … }` with q a cursor over `oh` — changed in place: the change
     // is the option's, as made through the cursor (bck_cursor_edit, agora
@@ -67635,6 +67709,18 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             // (…but drops what it holds: a borrow taken from the payload, an
             // element of its Vec, ends with what it borrowed — agora #424,
             // #569.)
+            // (…and one that may move the payload's buffer — `string_push_str`,
+            // `vec_push` — handed another payload of the same value read in
+            // place, `?? e { ES b → ( string_push_str . b name … ) }` inside an
+            // arm of `?? e { ES a → … }`: the same storage moves, and the
+            // borrows taken from those other payloads end; agora #874.)
+            ? & ! ( bck_callee_drops_elems ecal eaix ) | ( nurl_sym_has_word g_fn_reallocs ecal eaix ) & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs ecal eaix ) {
+                : ~ s hrm ( nurl_sym_get g_bck ( bck_bkey `hr_` ( nurl_str_int rid ) ) )
+                ~ != 0 ( nurl_str_len hrm ) {
+                    : s ow ( str_first_word hrm ) = hrm ( str_skip_word hrm )
+                    = out ( __bck_epy_elems_via_why out ( nurl_str_to_int ow ) rid line ecal `, which may move its buffer` )
+                }
+            } {}
             ? ( bck_callee_drops_elems ecal eaix ) {
                 = out ( __bck_epy_elems_end out rid line ecal )
                 // (…and when what the call is handed is itself such a payload
