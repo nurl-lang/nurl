@@ -731,6 +731,10 @@ Inside A2 (nurlc bugs):
   one end, where a `^` (an `exit` of the body's block that ends every
   scope it leaves, `Exits.under`; Agora #871), a `\` exit and the defers
   lead, `catchR`, `DtorSafe`).
+- A `break` or `continue` in a closure literal written inside a loop:
+  #871 (an exit never crosses a call frame: the frames that are not
+  scopes are typed with `Exits.none`). It failed in clang, not at run
+  time; nurlc now refuses it with a diagnostic.
 - A struct built from an owner and a view of it: #294 (`pair`: the owned
   field is no root of the other's dependencies).
 - A view stored through a borrow that nurlc does not follow to its owner:
@@ -766,11 +770,6 @@ Outside A2:
 - A view of an owner kept across the owner's move into a struct field or
   literal, where nurlc hands the view to the field path (Agora #799); A2's
   move ends the owner's views (`RhsT.moveOwn`).
-- An early exit (`break`, `continue`, `^`) out of a frame that is not a
-  scope: a `recover`, a borrow's or a freeze's frame, a lock's check-out
-  or an element's hand-over. Exits out of scopes and loops are A2's
-  (`Stmt.exit`, `Exits`; Agora #871); those frames' bodies are typed with
-  no exits, so the calculus does not type the form yet.
 
 ## Destructors, and a panic while a panic unwinds
 

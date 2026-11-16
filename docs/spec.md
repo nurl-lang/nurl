@@ -1923,6 +1923,12 @@ every loop written `~ > cond { … }`.
 Using either outside a `~` body is a compile error naming the reason,
 not a silent no-op.
 
+A closure literal's body is a function of its own: inside it, the
+innermost enclosing loop is one written inside the body. A `break` or
+`continue` there with no loop of its own is the same compile error; it
+cannot leave a loop around the closure literal (return a value the
+caller tests instead).
+
 Both spellings of a `~` body qualify — the while loop and the foreach. A
 foreach owns a hidden index, so its `continue` lands on the index bump
 rather than on the loop check: the iteration advances exactly as a

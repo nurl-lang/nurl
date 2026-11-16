@@ -145,12 +145,6 @@ rather than a gap in what it proves:
   #253; `CLAIM.md`, Destructors);
 - `Rc` and its cycle collector, which are the standard library's `unsafe`
   base (phase B);
-- an exit out of a frame that is not a scope: a `recover` (`catchR`,
-  `letrec`), a borrow's or a freeze's frame (`rbind`, `frozen`), a lock's
-  check-out (`withLock`, `scopeL`) or an element's (`withElem`). Their
-  bodies are typed with no exits (`Exits.none`), so the calculus refuses
-  a `break` or a `^` there; leaving such a frame early needs its own end
-  run by the exit (a give-back, a thaw) and is a planned refinement;
 
 Leaving early (Agora #871) is in the calculus. A block (`Stmt.block`) is
 what an `exit n` leaves: it jumps out of `n + 1` blocks in one step
@@ -165,8 +159,23 @@ index): an `exit` is typed where every scope it leaves can end
 says no more than the context each exit leaves from (`Exits.blk`,
 `Weaker`). So a block's end is a join of its exits' states
 and its body's, and a `while T`'s of its exits' only, as nurlc's
-`bck_loop` has it (Agora #413, #453). That nurlc's rules for the exits
-agree with these is part of phase C.
+`bck_loop` has it (Agora #413, #453).
+
+The frames that are not scopes take no exits: a `recover` (`catchR`), a
+borrow's or a freeze's frame (`rbind`, `frozen`), a lock's check-out
+(`withLock`, `scopeL`) and an element's hand-over (`withElem`, `insert`)
+are typed with `Exits.none`. In NURL source there is no exit that could
+cross one: each holds a call (`recover f`, `locked_update a f`,
+`( f ( vec_at v i ) )`), or, at run time, a callee's body, whose own
+exits are its body block's. The one way source put a jump across a call
+frame was a `break` or `continue` in a closure literal written inside a
+loop; nurlc emitted a branch to the enclosing function's loop label and
+clang refused the module. nurlc now refuses it with a diagnostic, so its
+rule is the calculus's (Agora #871, `compiler/tests/diag_break_in_closure_body.nu`).
+nurlc's exits end the scopes they leave as `Step.blockExit` does,
+innermost first, each destructor once
+(`compiler/tests/exits_drop_each_scope_once.nu`). That nurlc's rules for
+the exits agree with these in full is part of phase C.
 
 ### A3 — threads and data-race freedom
 

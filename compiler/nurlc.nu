@@ -2395,6 +2395,16 @@ unsafe @ agg_field_count i syms s ot → i {
 // zeroes it, so a field a helper later writes through the pointer replaces
 // a zero value, which drops as nothing.
 : ~ s g_last_alloc_size ``
+// The closure depth (g_bck_closure_depth) at which the innermost loop
+// whose labels `__loop_exit__` / `__loop_check__` hold was opened; set and
+// restored with them by gen_loop. A `break` / `continue` at another depth
+// sits in a closure body written inside that loop, a function of its own:
+// the labels are the enclosing function's blocks, and the branch put an
+// undefined label into the closure's function (`use of undefined value
+// '%loop_exit_3'`). gen_loop_jump refuses it, as the calculus has it: an
+// exit never crosses a call frame (agora #871). An int, so the check adds
+// no symbol entry per closure.
+: ~ i g_loop_clo_depth 0
 : ~ i g_bck_closure_depth 0  // >0 while parsing a closure body — the bck
 //  capture hooks no-op so closure statements do not
 //  inline into the enclosing function's list (so
@@ -39789,6 +39799,8 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms `__loop_snap_dd__` ( nurl_str_cat3 ( nurl_str_int dd_fe ) ` ` ( nurl_str_int dn_fe ) ) )
     ( nurl_sym_def syms `__loop_exit__` le )
     ( nurl_sym_def syms `__loop_check__` lcont )
+    : i old_bc_cdepth g_loop_clo_depth
+    = g_loop_clo_depth g_bck_closure_depth
     : s old_bc_ldepth ( nurl_sym_get syms `__loop_depth__` )
     = g_loop_serial + g_loop_serial 1
     ( nurl_sym_def syms `__loop_depth__` ( nurl_str_int g_loop_serial ) )
@@ -39823,6 +39835,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     = g_loop_nest - g_loop_nest 1
     ( nurl_sym_def syms `__loop_exit__` old_bc_exit )
     ( nurl_sym_def syms `__loop_check__` old_bc_check )
+    = g_loop_clo_depth old_bc_cdepth
     ( nurl_sym_def syms `__loop_snap_strs__` old_bc_strs )
     ( nurl_sym_def syms `__loop_snap_structs__` old_bc_structs )
     ( nurl_sym_def syms `__loop_snap_user__` old_bc_user )
@@ -39904,6 +39917,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     { ( die_pos lex jline jcol ? is_break
         `'break' inside a ';' defer block — the defer chain runs DURING return, after the loop has already exited, so there is no iteration to leave. Move the jump out of the defer, or put the loop it belongs to inside the defer body.`
         `'continue' inside a ';' defer block — the defer chain runs DURING return, after the loop has already exited, so there is no next iteration. Move the jump out of the defer, or put the loop it belongs to inside the defer body.` ) }
+    {}
+    ? & != 0 g_bck_closure_depth | == 0 ( nurl_str_len target ) != g_loop_clo_depth g_bck_closure_depth
+    { ( die_pos lex jline jcol ? is_break
+        `'break' inside a closure body, outside any loop written in it — the closure is a function of its own, so it cannot leave a loop around the closure literal. Return a value the caller tests (e.g. a 'b'), and 'break' there.`
+        `'continue' inside a closure body, outside any loop written in it — the closure is a function of its own, so it cannot go on with a loop around the closure literal. Return a value the caller tests (e.g. a 'b'), and 'continue' there.` ) }
     {}
     ? == 0 ( nurl_str_len target )
     { ( die_pos lex jline jcol ? is_break
@@ -40173,6 +40191,8 @@ unsafe @ gen_match i lex i syms i cg → s {
         ( nurl_sym_def syms `__loop_snap_dd__` ( nurl_str_cat3 ( nurl_str_int dd_lp ) ` ` ( nurl_str_int dn_lp ) ) )
         ( nurl_sym_def syms `__loop_exit__` le )
         ( nurl_sym_def syms `__loop_check__` lc )
+        : i old_bc_cdepth g_loop_clo_depth
+        = g_loop_clo_depth g_bck_closure_depth
         : s old_bc_ldepth ( nurl_sym_get syms `__loop_depth__` )
         = g_loop_serial + g_loop_serial 1
         ( nurl_sym_def syms `__loop_depth__` ( nurl_str_int g_loop_serial ) )
@@ -40199,6 +40219,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         = g_loop_nest - g_loop_nest 1
         ( nurl_sym_def syms `__loop_exit__` old_bc_exit )
         ( nurl_sym_def syms `__loop_check__` old_bc_check )
+        = g_loop_clo_depth old_bc_cdepth
         ( nurl_sym_def syms `__loop_snap_strs__` old_bc_strs )
         ( nurl_sym_def syms `__loop_snap_structs__` old_bc_structs )
         ( nurl_sym_def syms `__loop_snap_user__` old_bc_user )
