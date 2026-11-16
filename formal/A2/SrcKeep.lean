@@ -336,6 +336,31 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
 
+  | @exit _ Γ Δ F _ _ _ _ hdom hm hdk =>
+    intro _ _ _
+    refine CtxRel.ofDomTy ⟨fun v => (hdom v).symm, fun v E hv => by
+      obtain ⟨E0, h0, hm0, ht0, _⟩ := hm v E hv; exact ⟨E0, h0, hm0, ht0⟩⟩ (fun p Ep hp hrb => ?_) hdk
+    have hd := hdom p
+    rw [hp] at hd
+    cases hq : Δ p with
+    | none => rw [hq] at hd; cases hd
+    | some E =>
+      obtain ⟨E0, h0, _, _, hfx⟩ := hm p E hq
+      rw [hp] at h0; cases h0
+      rw [hfx (Or.inl hrb)]
+  | @loop _ Γ Δ F _ _ _ _ _ hdom hm hdk =>
+    intro _ _ _
+    refine CtxRel.ofDomTy ⟨fun v => (hdom v).symm, fun v E hv => by
+      obtain ⟨E0, h0, hm0, ht0, _⟩ := hm v E hv; exact ⟨E0, h0, hm0, ht0⟩⟩ (fun p Ep hp hrb => ?_) hdk
+    have hd := hdom p
+    rw [hp] at hd
+    cases hq : Δ p with
+    | none => rw [hq] at hd; cases hd
+    | some E =>
+      obtain ⟨E0, h0, _, _, hfx⟩ := hm p E hq
+      rw [hp] at h0; cases h0
+      rw [hfx (Or.inl hrb)]
+  | block _ ih => exact ih
 theorem CtxRel.keepOut {Γ Δ : Ctx} (h : CtxRel Γ Δ) : KeepOut Γ Δ [] := by
   have hk := h.keep (s := .skip) (s' := .skip) rfl rfl
   exact ⟨fun v E hv _ => (hk.1 v E hv (by simp [Stmt.spine])).2,

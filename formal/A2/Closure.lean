@@ -2417,7 +2417,7 @@ theorem cloProgress {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x 
 
 set_option maxHeartbeats 400000 in
 theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
-  intro Γ Γ1 F x c j zs k Ec E ms q σ sig Δ m m' s' hk hx hxF hc htc hj hσ hhd hnz hcT hnzs hkT hpx hcd hi hst hnr
+  intro ξ Γ Γ1 F x c j zs k Ec E ms q σ sig Δ m m' s' hk hx hxF hc htc hj hσ hhd hnz hcT hnzs hkT hpx hcd hi hst hnr
   cases hst with
   | reap hrs hrk _ => exact absurd ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | callc hslot hfs hf hmx hb =>
@@ -2663,8 +2663,8 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
       hnint hxe hps hsp hzr hty hown hl hr ho (fun jk h' => (hlends jk h').2) (fun jk h' => (hrholds jk h').2)
       hnz hbl hbr hbo hrb hio hcapW hMr hMc hse hwf hnf'
     -- the residual, typed
-    have hIn := h.typedIn (StmtT.ctxRel hP)
-    have hrbT := StmtT.rbind (P := P) hΓ'e rfl rfl
+    have hIn := h.typedIn (ξ := .none) (StmtT.ctxRel hP)
+    have hrbT := StmtT.rbind (P := P) (ξ := .none) hΓ'e rfl rfl
       (fun d hd hb => List.mem_append_right _ (hZ d hd hb)) hFe' hIn
       (fun d hd hb => by
         -- what the environment may change by name is a binding of the

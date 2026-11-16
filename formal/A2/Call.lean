@@ -230,6 +230,13 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     · exact h0
     · exact h0.trans (DomTy.weaker hwo)
 
+  | exit _ _ _ hdom hm =>
+    exact fun _ => ⟨fun v => (hdom v).symm, fun v E hv => by
+      obtain ⟨E0, h0, hm0, ht0, _⟩ := hm v E hv; exact ⟨E0, h0, hm0, ht0⟩⟩
+  | loop _ _ _ _ hdom hm =>
+    exact fun _ => ⟨fun v => (hdom v).symm, fun v E hv => by
+      obtain ⟨E0, h0, hm0, ht0, _⟩ := hm v E hv; exact ⟨E0, h0, hm0, ht0⟩⟩
+  | block _ ih => exact ih
 /-! ### What the call sets up -/
 
 /-- The dependencies of an integer, or of a dead binding, say nothing; the
@@ -1993,13 +2000,13 @@ theorem exitsP_dbq {base : Nat} {pe : Var → Entry} {Q : Var → Prop}
     | inout b => exact ih p E hp hd hos hg d hdd hnm
 
 theorem wrap_typed {P : Prog} {Γ : Ctx} {Fc : List Var} {base : Nat} {pe : Var → Entry} {s : Stmt}
-    {Δ : Ctx} (hs : StmtT P ξ Γ Fc s Δ) (hpe : ∀ j, ∀ d ∈ (pe j).path ++ (pe j).held, d.root < base)
+    {Δ : Ctx} (hs : StmtT P .none Γ Fc s Δ) (hpe : ∀ j, ∀ d ∈ (pe j).path ++ (pe j).held, d.root < base)
     -- what a borrowed parameter may change by name stays bound to the end
     (hpw : ∀ j, ∀ d ∈ (pe j).path ++ (pe j).held, d.kind.bound ≠ .none →
       ∃ Er, Δ d.root = some Er ∧ Er.mode.isRoot = true)
     (hΔrb : RbQ (· < base) Δ) (hΔdt : DtQ (· < base) Δ) (hΔdb : DbQ (· < base) Δ) :
     ∀ (ps : List (PMode × Ty)) (i : Nat), (∀ k p, ps[k]? = some p → WrapCond Γ Fc base pe (i + k) p) →
-      StmtT P ξ Γ Fc (wrapParams ps base i s) (exitsP ps base i pe Δ) := by
+      StmtT P .none Γ Fc (wrapParams ps base i s) (exitsP ps base i pe Δ) := by
   intro ps
   induction ps with
   | nil => intro i _; exact hs
@@ -2015,7 +2022,7 @@ theorem wrap_typed {P : Prog} {Γ : Ctx} {Fc : List Var} {base : Nat} {pe : Var 
       obtain ⟨E, hE, hm, hl, hr, hF, hp⟩ := h0
       have hvd : E.vdeps = (pe i).path ++ (pe i).held := by
         rw [← hp]; simp [Entry.vdeps, hm, Mode.ownSlot]
-      have := StmtT.rbind (P := P) hE hm hl hr hF (ih (i + 1) hc') (fun d hd hb => by
+      have := StmtT.rbind (P := P) (ξ := .none) hE hm hl hr hF (ih (i + 1) hc') (fun d hd hb => by
         rw [hvd] at hd
         obtain ⟨Er, hEr, hro⟩ := hpw i d hd hb
         have hlt := hpe i d hd
@@ -2031,7 +2038,7 @@ theorem wrap_typed {P : Prog} {Γ : Ctx} {Fc : List Var} {base : Nat} {pe : Var 
     | sink =>
       obtain ⟨hE, hF⟩ := h0
       have hge : ¬ base + i < base := Nat.not_lt.mpr (Nat.le_add_right _ _)
-      exact StmtT.scope hE hF (ih (i + 1) hc') ⟨fun p E hp hm d hd _ he => by
+      exact StmtT.scope hE hF (ih (i + 1) hc').ofNone ⟨fun p E hp hm d hd _ he => by
         have := vlt (exitsP_rblt (Q := (· < base)) hpe ps (i + 1) Δ hΔrb p E hp hm d hd)
         have := veq he
         omega, (exitsP_dtq hpe ps (i + 1) Δ hΔdt).dtorSafe hge _ _,
@@ -2779,7 +2786,7 @@ theorem canon_dbq (h : CallH P Γ F x fn args base) {Δa : Ctx}
 
 theorem typedIn_of (h : CallH P Γ F x fn args base)
     {Δa : Ctx} (habΔ : (callS Γ F fn args base x).AbsOK Δa)
-    (hbody : StmtT P ξ ((callS Γ F fn args base x).canon (sigCtx fn)) (F ++ zN Γ fn args base)
+    (hbody : StmtT P .none ((callS Γ F fn args base x).canon (sigCtx fn)) (F ++ zN Γ fn args base)
       (fn.body.rename (callRen fn.params args base)) ((callS Γ F fn args base x).canon Δa))
     (hΔd : ∀ v E, Δa v = some E → E.dtor = false)
     (hΔb : ∀ v E, Δa v = some E → E.dbind = true → E.mode.ownSlot = true →
@@ -2819,7 +2826,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
   have hwrap := wrap_typed (pe := callPe Γ fn.params args) (base := base) hbody h.pe_lt hpw
     (fun p E hp hm d hd => (h.canon_rbq Δa p E hp hm d hd).1)
     ((h.canon_dtq hΔd).mono fun _ h => h.1) ((h.canon_dbq hΔb).mono fun _ h => h.1) fn.params 0 h.wrapCond
-  have hfz := StmtT.frozen (z := zOf fn args base) hwrap zN_sub
+  have hfz := StmtT.frozen (ξ := .none) (z := zOf fn args base) hwrap zN_sub
   have hQb := exitsP_rblt (base := base) (Q := fun r => r < base ∧ (Γ r).isSome) h.pe_q fn.params 0 _
     (h.canon_rbq Δa)
   have hDb := exitsP_dtq (base := base) (Q := fun r => r < base ∧ (Γ r).isSome) h.pe_q fn.params 0 _
@@ -2845,7 +2852,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
   have hrF : base + fn.params.length ∉ F := fun hm => by have := vlt (h.Flt _ hm); omega
   have hxr' : x ≠ base + fn.params.length := by
     intro he; have := vlt h.xlt; have := veq he; omega
-  have hseq : StmtT P ξ ((callS Γ F fn args base x).canon (sigCtx fn)) F
+  have hseq : StmtT P .none ((callS Γ F fn args base x).canon (sigCtx fn)) F
       (.seq (.frozen (zOf fn args base) (wrapParams fn.params base 0 (fn.body.rename (callRen fn.params args base))))
         (.assign x (.var (base + fn.params.length))))
       (setE (A2.kill .replace false x
@@ -2860,7 +2867,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
         (hQb.noPin fun hq => absurd hq.1 (Nat.not_lt.mpr (Nat.le_add_right _ _)))
         (hDb.dtorSafe hge _ _)
       have hX : (callX fn).mode = .own := by simp [callX, resMode, ho]
-      refine StmtT.seq rfl hfz (StmtT.assign hbx h.xF (Or.inl ⟨hX, rfl⟩) hrhs
+      refine StmtT.seq rfl hfz.ofNone (StmtT.assign hbx h.xF (Or.inl ⟨hX, rfl⟩) hrhs
         (by simp [callX, hrt]) ?_ (by simp [setE, upd_ne _ _ hxr', A2.kill, hbx])
         (hQb.noPin fun hq => by simp [h.fresh] at hq) (((hDb.kill _ _ _).setE_off rfl).dtorSafe hxq _ _)
         (by simp [callX]))
@@ -2871,7 +2878,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
       have hm : Er'.mode = .bor := by rw [hrm]; simp [resMode, ho]
       have hrhs := RhsT.copyBor (F := F) hr hrl hm
       have hX : (callX fn).mode = .bor := by simp [callX, resMode, ho]
-      exact StmtT.seq rfl hfz (StmtT.assign (E := { Er' with dtor := false, dbind := false }) hbx h.xF
+      exact StmtT.seq rfl hfz.ofNone (StmtT.assign (E := { Er' with dtor := false, dbind := false }) hbx h.xF
         (Or.inr (Or.inr ⟨hX, hm⟩)) hrhs
         (by simp [callX, hrt]) hxr (by simp [hbx]) (hQb.noPin fun hq => by simp [h.fresh] at hq)
         (hDb.dtorSafe hxq _ _) (by simp [callX]))
@@ -2885,7 +2892,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
   have hEinm : ((callS Γ F fn args base x).liftE fn.params.length
       ⟨fn.resTy, resMode fn, false, [], [], false, false⟩).mode = resMode fn := by
     rw [RSetup.liftE_mode _ (resMode_ne' fn), RSetup.liftMode_resMode]
-  obtain ⟨Γ3, hΓ3, hseq3⟩ : ∃ Γ3, Γ3 = _ ∧ StmtT P ξ ((callS Γ F fn args base x).canon (sigCtx fn)) F
+  obtain ⟨Γ3, hΓ3, hseq3⟩ : ∃ Γ3, Γ3 = _ ∧ StmtT P .none ((callS Γ F fn args base x).canon (sigCtx fn)) F
       (.seq (.frozen (zOf fn args base) (wrapParams fn.params base 0 (fn.body.rename (callRen fn.params args base))))
         (.assign x (.var (base + fn.params.length)))) Γ3 := ⟨_, rfl, hseq⟩
   have hRb3 : RbQ (fun r => r < base ∧ (Γ r).isSome) Γ3 := by
@@ -2924,7 +2931,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
         (.assign x (.var (base + fn.params.length)))) with hrf | ⟨g, t, ho, hty, hrf⟩
   · rw [hrf]
     exact StmtT.weakenOut hwfin hnmin
-      (StmtT.scope ⟨_, hEinr, by rw [hEinm]; exact resMode_ne' fn⟩ hrF hseq3 hend) (Or.inr hW)
+      (StmtT.scope ⟨_, hEinr, by rw [hEinm]; exact resMode_ne' fn⟩ hrF hseq3.ofNone hend) (Or.inr hW)
   -- A2-drop: an owned result of a destructor type: its frame is a destructor
   -- frame's.  The body is typed against the call's final context with the
   -- (moved-out) result slot added, whose well-formedness is the final one's.
@@ -3049,7 +3056,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
         rw [hfix p E3 hpr h3p (Or.inl hm3)] at hE3
         subst hE3
         exact hge (he ▸ hRb3 p E h3p hm d hd)
-  have hbody' := StmtT.sub (Weaker.refl hwfin hnmin) hseq3 (Or.inr hW3)
+  have hbody' := StmtT.sub (ξ := ξ.underD (base + fn.params.length)) (Weaker.refl hwfin hnmin) hseq3.ofNone (Or.inr hW3)
   have hsd := StmtT.scopeD (P := P) (F := F) (x := base + fn.params.length) (f := g)
     ⟨_, t, hEinr, by rw [hEinm]; exact hown,
       by rw [RSetup.liftE_ty _ (resMode_ne' fn)]; exact hsdt,
@@ -3751,7 +3758,7 @@ theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
         exact ⟨_, by rw [RSetup.canon_ρ h.sOK, h0]; rfl⟩
       · rw [hc] at hv
         exact ⟨E', by rw [RSetup.canon_frame _ hfr]; exact hv⟩
-  refine h.typedIn_of habΔ hren hΔd hΔb hko (h.res_at hEr hErm hErv) hl' hm' ht' ?_
+  refine h.typedIn_of habΔ (hren.mono (ξ' := .none) (fun _ _ h' => RSetup.liftX_none h')) hΔd hΔb hko (h.res_at hEr hErm hErv) hl' hm' ht' ?_
     (fun Γ3 hΓ3 => h.fin_weaker hdt hErl hErt hErm hErp hErh hEr0 hio (hΔd _ Er hEr) hΔf Γ3 hΓ3)
   intro hx
   obtain ⟨d, hd, hdx⟩ := List.mem_map.mp hx
@@ -3768,7 +3775,7 @@ theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
 
 /-- The call's expansion is well-typed where the call was. -/
 theorem typed (h : CallH P Γ F x fn args base) (hsr : SrcRel P) {k : Stmt} {Δ : Ctx} (hk : k.src = true)
-    (hkT : StmtT P ξ (setE (callPost Γ fn args) x (callRes Γ fn args)) F k Δ) (hpx : EndOK Δ x) :
+    (hkT : StmtT P (ξ.under x) (setE (callPost Γ fn args) x (callRes Γ fn args)) F k Δ) (hpx : EndOK Δ x) :
     StmtT P ξ ((callS Γ F fn args base x).canon (sigCtx fn)) F (callStmt fn args base x k) (exitScope x Δ) :=
   StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF (StmtT.seq hk (h.typedIn hsr) hkT) hpx
 

@@ -318,10 +318,10 @@ theorem _root_.A2.StmtT.withTryRead {P : Prog} {Γ Δs : Ctx} {F : List Var} {a 
     (hg : Γ g = none) (hgo : g ≠ o)
     (hgF : g ∉ F) (hpin : NoPin (setE Γ o (tryReadE t)) o)
     (hds : DtorSafe (setE Γ o (tryReadE t)) .replace false o)
-    (hsome : StmtT P ξ (setE (setE (kill .replace false o (setE Γ o (tryReadE t))) o
+    (hsome : StmtT P ((ξ.under o).under g) (setE (setE (kill .replace false o (setE Γ o (tryReadE t))) o
         { tryReadE t with live := false, dtor := false }) g (guardE t)) F (Stmt.readWith g y x s) Δs)
     (hendg : EndOK Δs g)
-    (hnone : StmtT P ξ (setE Γ o (tryReadE t)) F e (exitScope g Δs))
+    (hnone : StmtT P (ξ.under o) (setE Γ o (tryReadE t)) F e (exitScope g Δs))
     (hendo : EndOK (exitScope g Δs) o) :
     StmtT P ξ Γ F (Stmt.withTryRead a o g y x s e) (exitScope o (exitScope g Δs)) := by
   have hgo' : (setE Γ o (tryReadE t)) g = none := by simp [setE, upd_ne _ _ hgo, hg]
@@ -341,9 +341,9 @@ theorem _root_.A2.StmtT.withTryWrite {P : Prog} {Γ Δ : Ctx} {F : List Var} {a 
     {Ea : Entry} {t : Ty} (hs : s.src = true) (he : e.src = true) (ho : Γ o = none) (hoF : o ∉ F)
     (ha : Γ a = some Ea) (hla : Ea.live = true) (hta : Ea.ty = .lk t) (hroot : Ea.mode.isRoot = true)
     (hao : a ≠ o) (hx : Γ x = none) (hxo : x ≠ o) (hxF : x ∉ F) (has : a ∉ s.vars)
-    (hb : StmtT P ξ (setE (setE Γ o tryWriteE) x (lockE t)) F s Δ) (hend : EndOK Δ x)
+    (hb : StmtT P .none (setE (setE Γ o tryWriteE) x (lockE t)) F s Δ) (hend : EndOK Δ x)
     (hlive : ∃ E, Δ x = some E ∧ E.live = true)
-    (hnone : StmtT P ξ (setE Γ o tryWriteE) F e (exitScope x Δ)) (hendo : EndOK (exitScope x Δ) o)
+    (hnone : StmtT P (ξ.under o) (setE Γ o tryWriteE) F e (exitScope x Δ)) (hendo : EndOK (exitScope x Δ) o)
     (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) :
     StmtT P ξ Γ F (Stmt.withTryWrite a o x s e) (exitScope o (exitScope x Δ)) := by
   refine StmtT.letv (by simp [Stmt.src, hs, he]) ho hoF (RhsT.rwTryWrite ha hla hta) ?_ hendo
@@ -536,7 +536,7 @@ theorem _root_.A2.StmtT.callOut {P : Prog} {Γ : Ctx} {F : List Var} {x c z : Va
   have h4z : A2.setE Γ c (outE R (resMode fn)) z = some Ez := by simp [A2.setE, upd_ne _ _ hzc, hz]
   have hu4 : Unnamed (A2.setE Γ c (outE R (resMode fn))) c := huc.setE_nil (outE_vdeps _ _)
   have hpin4 : NoPin (A2.setE Γ c (outE R (resMode fn))) z := NoPin.setE_nil hpin (outE_vdeps _ _)
-  have key : ∃ Δ4, StmtT P ξ (A2.setE Γ c (outE R (resMode fn))) F (.assign z (.var c)) Δ4 ∧
+  have key : ∃ Δ4, StmtT P (ξ.under c) (A2.setE Γ c (outE R (resMode fn))) F (.assign z (.var c)) Δ4 ∧
       Unnamed Δ4 c ∧ exitScope c Δ4 = A2.setE (A2.kill .replace false z Γ) z (outE R Ez.mode) := by
     cases hro : fn.resOwn with
     | true =>
@@ -656,22 +656,22 @@ theorem _root_.A2.StmtT.rwGet {P : Prog} {Γ : Ctx} {F : List Var} {a g y x c z 
     · exact hpin p E hp hm d hd'
   have hds3 : DtorSafe Γ3 .replace false z :=
     ((hds.setE_off rfl).setE_off rfl).setE_off (projE_dtor _ _ _)
-  have h4 := StmtT.callOut (z := z) hcall (show Γ3 c = none by
+  have h4 := StmtT.callOut (ξ := .none) (z := z) hcall (show Γ3 c = none by
       simp [Γ3, Γ2, Γ1, A2.setE, upd_ne _ _ (Ne.symm hxc), upd_ne _ _ (Ne.symm hyc), upd_ne _ _ (Ne.symm hgc), hc])
     hcF hu3c h3z hzF hzt hzm hzd hpin3 hds3
   -- the payload's scope
   have h2x : Γ2 x = none := by simp [Γ2, Γ1, A2.setE, upd_ne _ _ (Ne.symm hyx), upd_ne _ _ (Ne.symm hgx), hx]
   have hu2x : Unnamed Γ2 x := (hux.setE_nil hgE).setE (fun d hd' => by rw [hgv d hd']; exact hgx)
-  have h3 : StmtT P ξ Γ2 F (.letv x (.snd y) (Stmt.callOut x c z f))
+  have h3 : StmtT P ((ξ.under g).under y) Γ2 F (.letv x (.snd y) (Stmt.callOut x c z f))
       (A2.setE (A2.kill .replace false z Γ2) z (outE t Ez.mode)) := by
     rw [← exitScope_out h2x hu2x hzx.symm (by simp) .replace false]
-    refine StmtT.letv rfl h2x hxF (RhsT.snd (show Γ2 y = some (guardGetE g t) from upd_same _ _ _) rfl rfl) h4
+    refine StmtT.letv rfl h2x hxF (RhsT.snd (show Γ2 y = some (guardGetE g t) from upd_same _ _ _) rfl rfl) h4.ofNone
       (Unnamed.endOK ?_)
     exact ((hu2x.setE (fun d hd' => by rw [hsv d hd']; exact hgx)).kill' _ _ _).setE_nil (by simp)
   -- the lend's scope
   have h1y : Γ1 y = none := by simp [Γ1, A2.setE, upd_ne _ _ (Ne.symm hgy), hy]
   have hu1y : Unnamed Γ1 y := huy.setE_nil hgE
-  have h2 : StmtT P ξ Γ1 F (Stmt.readWith g y x (Stmt.callOut x c z f))
+  have h2 : StmtT P (ξ.under g) Γ1 F (Stmt.readWith g y x (Stmt.callOut x c z f))
       (A2.setE (A2.kill .replace false z Γ1) z (outE t Ez.mode)) := by
     rw [← exitScope_out h1y hu1y hzy.symm (by simp) .replace false]
     refine StmtT.letv rfl h1y hyF
@@ -716,7 +716,7 @@ theorem _root_.A2.StmtT.lockedGet {P : Prog} {Γ : Ctx} {F : List Var} {a x c z 
     (show A2.setE Γ x (lockE t) x = some (lockE t) from upd_same _ _ _)
     (lockE_live t) (lockE_ty t) (lockE_held t) (by simp)
   rw [hf] at hf'; cases hf'
-  have h4 := StmtT.callOut (z := z) hcall (by simp [A2.setE, upd_ne _ _ (Ne.symm hxc), hc]) hcF
+  have h4 := StmtT.callOut (ξ := .none) (z := z) hcall (by simp [A2.setE, upd_ne _ _ (Ne.symm hxc), hc]) hcF
     (huc.setE_nil (lockE_vdeps t)) (by simp [A2.setE, upd_ne _ _ hzx, hz]) hzF hzt hzm hzd
     (NoPin.setE_nil hpin (lockE_vdeps t)) (hds.setE_off (lockE_dtor t))
   rw [← exitScope_out hx hux hzx.symm (by simp) .replace false]
@@ -816,7 +816,7 @@ theorem _root_.A2.StmtT.lockedApply {P : Prog} {Γ : Ctx} {F : List Var} {a x c 
     (show A2.setE Γ x (lockE t) x = some (lockE t) from upd_same _ _ _) htv hto hxF
     (hux.setE_nil (lockE_vdeps t))
   rw [hf] at hf'; cases hf'
-  have h4 := StmtT.callOut (z := z) hcall (by simp [A2.setE, upd_ne _ _ (Ne.symm hxc), hc]) hcF
+  have h4 := StmtT.callOut (ξ := .none) (z := z) hcall (by simp [A2.setE, upd_ne _ _ (Ne.symm hxc), hc]) hcF
     (huc.setE_nil (lockE_vdeps t)) (by simp [A2.setE, upd_ne _ _ hzx, hz]) hzF hzt hzm hzd
     (NoPin.setE_nil hpin (lockE_vdeps t)) (hds.setE_off (lockE_dtor t))
   rw [← exitScope_out hx hux hzx.symm (by simp) .replace false]
@@ -922,14 +922,14 @@ theorem _root_.A2.StmtT.lockedSet {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {a b 
     unfold lockE; split
     · exact Or.inr (Or.inr ⟨rfl, rfl⟩)
     · exact Or.inl ⟨rfl, rfl⟩
-  have hasg := StmtT.assign (P := P) (show Γbx x = some (lockE t) from upd_same _ _ _) hxF hmo hr rfl
+  have hasg := StmtT.assign (ξ := .none) (P := P) (show Γbx x = some (lockE t) from upd_same _ _ _) hxF hmo hr rfl
     (by simp [roots]) (by simp [Γbx, A2.setE]) huxx.endOK.1 huxx.endOK.2.1 (lockE_dbind t)
   have hset : A2.setE (A2.kill .replace false x Γbx) x { lockE t with mode := (lockE t).mode } = Γbx := by
     rw [huxx.kill]
     exact setE_self (upd_same _ _ _)
   rw [hset] at hasg
   -- the lock's scope, then the box's
-  have hwl := StmtT.withLock (P := P) (a := a) rfl hbx' hxF (show Γb a = some Ea by
+  have hwl := StmtT.withLock (ξ := ξ.under b) (P := P) (a := a) rfl hbx' hxF (show Γb a = some Ea by
       simp [Γb, A2.setE, upd_ne _ _ hab, h1a]) hla hta hasg huxx.endOK hroot
     (by simp [Stmt.vars, Rhs.vars, hax, hab]) ⟨lockE t, upd_same _ _ _, lockE_live t⟩
     (fun hd => absurd hd (by rw [Ty.holdsDtor_eq_not_free, hvd]; simp))
@@ -967,7 +967,7 @@ theorem _root_.A2.StmtT.lockedAwait {P : Prog} {Γ : Ctx} {F : List Var} {a x c 
     (hq : Γ q = some (awaitE R)) (hqF : q ∉ F) (huq : Unnamed Γ q) (hpin : NoPin Γ q) :
     StmtT P ξ Γ F (Stmt.lockedAwait a x c q f) Γ := by
   have hmo : resMode fn = .own := by simp [resMode, hro]
-  have hb := StmtT.lockedApply (P := P) (F := F) (c := c) hd hf ha hla hta hroot htv hto hx hc hxc hxF hcF
+  have hb := StmtT.lockedApply (ξ := ξ) (P := P) (F := F) (c := c) hd hf ha hla hta hroot htv hto hx hc hxc hxF hcF
     hux huc haq hq hqF rfl (by rw [hmo]; rfl) rfl hpin (huq.endOK.2.1)
   rw [huq.kill] at hb
   have hq' : A2.setE Γ q (outE (.sum .int R) (awaitE R).mode) = Γ := setE_self hq
@@ -1022,7 +1022,7 @@ theorem _root_.A2.RhsT.mutexNew {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry}
     it is put back. -/
 theorem _root_.A2.StmtT.mutexLock {P : Prog} {Γ Δ : Ctx} {F : List Var} {u m : Var} {s : Stmt} {Em : Entry}
     (hs : s.src = true) (hm : Γ m = some Em) (hlm : Em.live = true) (htm : Em.ty = .lk .int)
-    (hu : Γ u = none) (huF : u ∉ F) (hb : StmtT P ξ (A2.setE Γ u intE) F s Δ) (hend : EndOK Δ u) :
+    (hu : Γ u = none) (huF : u ∉ F) (hb : StmtT P (ξ.under u) (A2.setE Γ u intE) F s Δ) (hend : EndOK Δ u) :
     StmtT P ξ Γ F (Stmt.mutexLock u m s) (exitScope u Δ) := by
   have hr := RhsT.lockTake (F := F) hm hlm htm
   rw [mutex_hands_int] at hr
@@ -1033,7 +1033,7 @@ theorem _root_.A2.StmtT.mutexLock {P : Prog} {Γ Δ : Ctx} {F : List Var} {u m :
 theorem _root_.A2.StmtT.mutexUnlock {P : Prog} {Γ Δ : Ctx} {F : List Var} {r m u : Var} {s : Stmt}
     {Em Eu : Entry} (hs : s.src = true) (hm : Γ m = some Em) (hlm : Em.live = true) (htm : Em.ty = .lk .int)
     (hu : Γ u = some Eu) (hlu : Eu.live = true) (htu : Eu.ty = .int)
-    (hr : Γ r = none) (hrF : r ∉ F) (hb : StmtT P ξ (A2.setE Γ r intE) F s Δ) (hend : EndOK Δ r) :
+    (hr : Γ r = none) (hrF : r ∉ F) (hb : StmtT P (ξ.under r) (A2.setE Γ r intE) F s Δ) (hend : EndOK Δ r) :
     StmtT P ξ Γ F (Stmt.mutexUnlock r m u s) (exitScope r Δ) :=
   StmtT.letv hs hr hrF (RhsT.lockRestore hm hlm htm hu hlu htu PushArg.int) hb hend
 
@@ -1043,7 +1043,7 @@ theorem _root_.A2.StmtT.mutexUnlock {P : Prog} {Γ Δ : Ctx} {F : List Var} {r m
 theorem _root_.A2.StmtT.mutexWith {P : Prog} {Γ Δ : Ctx} {F : List Var} {m x : Var} {s : Stmt} {Em : Entry}
     (hs : s.src = true) (hm : Γ m = some Em) (hlm : Em.live = true) (htm : Em.ty = .lk .int)
     (hroot : Em.mode.isRoot = true) (hms : m ∉ s.vars)
-    (hx : Γ x = none) (hxF : x ∉ F) (hb : StmtT P ξ (A2.setE Γ x intE) F s Δ) (hend : EndOK Δ x)
+    (hx : Γ x = none) (hxF : x ∉ F) (hb : StmtT P .none (A2.setE Γ x intE) F s Δ) (hend : EndOK Δ x)
     (hlive : ∃ E, Δ x = some E ∧ E.live = true) :
     StmtT P ξ Γ F (Stmt.mutexWith m x s) (exitScope x Δ) := by
   rw [← mutex_hands_int] at hb
@@ -1078,11 +1078,11 @@ theorem _root_.A2.StmtT.withLockElem {P : Prog} {Γ Δs Δ : Ctx} {F : List Var}
     (hpin : NoPin Γ v) (hds : DtorSafe Γ .replace false v)
     (hdd : DtorSafe (A2.kill .replace false v Γ) .drop t.holdsView v)
     (he : Γ e = none) (heF : e ∉ F) (hx : Γ x = none) (hxF : x ∉ F) (hxe : x ≠ e)
-    (hb : StmtT P ξ (A2.setE (A2.setE (A2.kill .drop t.holdsView v (A2.kill .replace false v Γ)) e
+    (hb : StmtT P .none (A2.setE (A2.setE (A2.kill .drop t.holdsView v (A2.kill .replace false v Γ)) e
       (elemLockE t Ev)) x (lockE t)) F s Δs)
     (hend : EndOK Δs x) (hlive : ∃ E, Δs x = some E ∧ E.live = true) (hes : e ∉ s.vars) (hvs : v ∉ s.vars)
     (hvx : v ≠ x) (hve : v ≠ e)
-    (hpush : StmtT P ξ (exitScope x Δs) F (.push v e) Δ) (hende : EndOK Δ e)
+    (hpush : StmtT P .none (exitScope x Δs) F (.push v e) Δ) (hende : EndOK Δ e)
     (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) :
     StmtT P ξ Γ F (Stmt.withLockElem v i e x s) (exitScope e Δ) := by
   have hkv : A2.kill .replace false v Γ v = some Ev := by simp [A2.kill, hv, killE_nohit hvv]
@@ -1107,10 +1107,10 @@ theorem _root_.A2.StmtT.withLockField {P : Prog} {Γ Δs Δ : Ctx} {F : List Var
     (hl : Γ l = none) (hw : Γ w = none) (hlw : l ≠ w) (hlF : l ∉ F) (hwF : w ∉ F)
     (hx : Γ x = none) (hxF : x ∉ F) (hxl : x ≠ l) (hxw : x ≠ w) (hxy : x ≠ y)
     (hpin : NoPin Γ y) (hds : DtorSafe Γ .replace false y)
-    (hb : StmtT P ξ (A2.setE (A2.setE (A2.setE (A2.setE (A2.kill .replace false y Γ) y
+    (hb : StmtT P .none (A2.setE (A2.setE (A2.setE (A2.setE (A2.kill .replace false y Γ) y
         { Ey with live := false, dtor := false }) l (outE (.lk t) .own)) w (compE Ey b)) x (lockE t)) F s Δs)
     (hend : EndOK Δs x) (hlive : ∃ E, Δs x = some E ∧ E.live = true) (hls : l ∉ s.vars) (_hys : y ∉ s.vars)
-    (hput : StmtT P ξ (exitScope x Δs) F (.assign y (.pair l w)) Δ)
+    (hput : StmtT P ((ξ.under l).under w) (exitScope x Δs) F (.assign y (.pair l w)) Δ)
     (hendw : EndOK Δ w) (hendl : EndOK (exitScope w Δ) l)
     -- (A2-drop.3a: the struct's other field holds no destructor value: it is
     -- put back only after the body, so a panic there would drop it)
@@ -1217,7 +1217,7 @@ theorem glob_not_arc_cell {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {t : Ty} {E : 
 theorem _root_.A2.StmtT.lockGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x : Var} {g : Nat} {t : Ty}
     {s : Stmt} (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F)
     (hxh : x ≠ h) (htok : (Ty.lk t).ok = true) (hhs : h ∉ s.vars)
-    (hb : StmtT P ξ (setE (setE Γ h ⟨.lk t, .own, true, [], [], false, false⟩) x (lockE t)) F s Δ)
+    (hb : StmtT P .none (setE (setE Γ h ⟨.lk t, .own, true, [], [], false, false⟩) x (lockE t)) F s Δ)
     (hend : EndOK Δ x) (hlive : ∃ E, Δ x = some E ∧ E.live = true) (hendh : EndOK (exitScope x Δ) h)
     (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) :
     StmtT P ξ Γ F (Stmt.lockGlobal h x g t s) (exitScope h (exitScope x Δ)) :=
@@ -1229,7 +1229,7 @@ theorem _root_.A2.StmtT.lockGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x 
     owner `h` of a clone of its share. -/
 theorem _root_.A2.StmtT.loadGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x : Var} {g : Nat} {s : Stmt}
     (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F) (hxh : x ≠ h)
-    (hb : StmtT P ξ (setE (setE Γ h ⟨.lk .int, .own, true, [], [], false, false⟩) x intE) F s Δ)
+    (hb : StmtT P ((ξ.under h).under x) (setE (setE Γ h ⟨.lk .int, .own, true, [], [], false, false⟩) x intE) F s Δ)
     (hend : EndOK Δ x) (hendh : EndOK (exitScope x Δ) h) :
     StmtT P ξ Γ F (Stmt.loadGlobal h x g s) (exitScope h (exitScope x Δ)) :=
   StmtT.letv hs hh hhF (RhsT.glob rfl rfl)
@@ -1241,7 +1241,7 @@ theorem _root_.A2.StmtT.loadGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x 
 theorem _root_.A2.StmtT.storeGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x : Var} {g : Nat} {e : Expr}
     {s : Stmt} (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F)
     (hxh : x ≠ h) (he : ExprT (setE Γ h ⟨.lk .int, .own, true, [], [], false, false⟩) e)
-    (hb : StmtT P ξ (setE (setE Γ h ⟨.lk .int, .own, true, [], [], false, false⟩) x intE) F s Δ)
+    (hb : StmtT P ((ξ.under h).under x) (setE (setE Γ h ⟨.lk .int, .own, true, [], [], false, false⟩) x intE) F s Δ)
     (hend : EndOK Δ x) (hendh : EndOK (exitScope x Δ) h) :
     StmtT P ξ Γ F (Stmt.storeGlobal h x g e s) (exitScope h (exitScope x Δ)) :=
   StmtT.letv hs hh hhF (RhsT.glob rfl rfl)
@@ -1302,7 +1302,7 @@ theorem paramE_cell_lockOf (ps : List (PMode × Ty)) (t : Ty) :
 theorem _root_.A2.StmtT.withCellIn {P : Prog} {Γ Δ : Ctx} {F : List Var} {a x : Var} {s : Stmt}
     {ps : List (PMode × Ty)} {t : Ty} (ha : Γ a = some (paramE ps (.inp, .cell t)))
     (hsrc : s.src = true) (hx : Γ x = none) (hxF : x ∉ F)
-    (hs : StmtT P ξ (setE Γ x (lockE t)) F s Δ) (hend : EndOK Δ x) (has : a ∉ s.vars)
+    (hs : StmtT P .none (setE Γ x (lockE t)) F s Δ) (hend : EndOK Δ x) (has : a ∉ s.vars)
     (hxl : ∃ E, Δ x = some E ∧ E.live = true)
     (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) :
     StmtT P ξ Γ F (Stmt.withCell a x s) (exitScope x Δ) :=
@@ -1554,7 +1554,7 @@ theorem _root_.A2.StmtT.callc_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c 
     (hty : Ec.ty = .fn ms q) (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig)
     (hps : sig.params = [(.inp, .fn ms q)]) (hout : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0) (hnt : ¬ ThruFn P σ)
     (hn : ∀ d ∈ Ec.vdeps, d.kind.isName = false)
-    (hk : StmtT P ξ (setE Γ x (recvRes c Ec (callRes Γ sig [c]))) F k Δ) (hend : EndOK Δ x)
+    (hk : StmtT P (ξ.under x) (setE Γ x (recvRes c Ec (callRes Γ sig [c]))) F k Δ) (hend : EndOK Δ x)
     (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
     StmtT P ξ Γ F (.callc x c j [] k) (exitScope x Δ) := by
   have hcT := callT_recv (F := F) hσ (by rw [hps, hty]) hc hl hn hnt
@@ -1584,7 +1584,7 @@ theorem _root_.A2.StmtT.arcCall {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g x :
     (hg : Γ g = none) (hgF : g ∉ F) (hx : Γ x = none) (hxF : x ∉ F) (hxg : x ≠ g)
     (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) (hps : sig.params = [(.inp, .fn ms .sync)])
     (hout : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0) (hnt : ¬ ThruFn P σ)
-    (hk : StmtT P ξ (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync))) x
+    (hk : StmtT P ((ξ.under g).under x) (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync))) x
       (recvRes g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync))
         (callRes (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync)))
           sig [g]))) F k Δ)
@@ -1676,7 +1676,7 @@ theorem _root_.A2.StmtT.callcUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {c c' x 
     {zs : List Var} {k : Stmt} {Ec : Entry} {ms : List Nat} {q q' : Cross}
     (hc : Γ c = some Ec) (hl : Ec.live = true) (hm : Ec.mode = .bor) (hty : Ec.ty = .fn ms q)
     (hle : q.Le q') (hks : k.src = true) (hc' : Γ c' = none) (hc'F : c' ∉ F)
-    (hcall : StmtT P ξ (setE Γ c' { Ec with ty := .fn ms q', dtor := false, dbind := false }) F
+    (hcall : StmtT P (ξ.under c') (setE Γ c' { Ec with ty := .fn ms q', dtor := false, dbind := false }) F
       (.callc x c' j zs k) Δ) (hend : EndOK Δ c') :
     StmtT P ξ Γ F (.letv c' (.var c) (.callc x c' j zs k)) (exitScope c' Δ) :=
   StmtT.letv hks hc' hc'F (RhsT.copyUp hc hl hm hty hle) hcall hend
@@ -1692,7 +1692,7 @@ theorem _root_.A2.StmtT.arcCallUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g g
     (hx : Γ x = none) (hxF : x ∉ F) (hxg : x ≠ g) (hxg' : x ≠ g') (hle : Cross.sync.Le q)
     (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) (hps : sig.params = [(.inp, .fn ms q)])
     (hout : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0) (hnt : ¬ ThruFn P σ)
-    (hk : StmtT P ξ
+    (hk : StmtT P (((ξ.under g).under g').under x)
       (setE (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync))) g'
           { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false⟩ (.fn ms .sync) with
             ty := .fn ms q, dtor := false, dbind := false }) x
@@ -2394,7 +2394,7 @@ theorem _root_.A2.StmtT.callcE_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c
     (hsr : sig.rholds = []) (hso : sig.outHolds = []) (hnt : ¬ ThruFn P σ) (hcF : c ∉ F)
     (hself : ∀ d ∈ Ec.vdeps, d.root ≠ c) (hn : ∀ d ∈ Ec.vdeps, d.kind.isName = false) (hdb : Ec.dbind = false)
     (hny : NoPin Γ c) (hdc : DtorSafe Γ .replace false c)
-    (hk : StmtT P ξ (kill .replace false c (setE (callPost (kill .replace false c Γ) sig [c]) x
+    (hk : StmtT P (ξ.under x) (kill .replace false c (setE (callPost (kill .replace false c Γ) sig [c]) x
       (callRes (kill .replace false c Γ) sig [c]))) F k Δ) (hend : EndOK Δ x)
     (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
     StmtT P ξ Γ F (.callcE x c j [] k) (exitScope x Δ) :=
@@ -2478,7 +2478,7 @@ theorem accum_fits (q : Cross) : q.Fits accEnv [] :=
 theorem accum_hand {Γ Δ : Ctx} {F : List Var} {x acc : Var} {k : Stmt} (hks : k.src = true)
     (hx : Γ x = none) (hxF : x ∉ F) (hacc : Γ acc = some ⟨accTy, .own, true, [], [], false, false⟩)
     (haccF : acc ∉ F) (hny : NoPin Γ acc) (hdc : DtorSafe Γ .replace false acc)
-    (hk : StmtT accP ξ (kill .replace false acc (setE (callPost (kill .replace false acc Γ) accSig [acc]) x
+    (hk : StmtT accP (ξ.under x) (kill .replace false acc (setE (callPost (kill .replace false acc Γ) accSig [acc]) x
       (callRes (kill .replace false acc Γ) accSig [acc]))) F k Δ) (hend : EndOK Δ x) :
     StmtT accP ξ Γ F (.callcE x acc 0 [] k) (exitScope x Δ) :=
   StmtT.callcE_recv (sig := accSig) (ms := [0]) (q := .send) hks hx hxF hacc rfl rfl rfl (by decide) rfl rfl rfl
@@ -2581,38 +2581,38 @@ theorem accCode_ok : FnOK accP accCode := by
   have hpair : RhsT accCtx3 [] (.pair 4 3) ⟨.prod .int .int, .own, true, [], [], false, false⟩ accCtx3 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [accCtx3, setE]) rfl PushArg.int (by simp [accCtx3, setE]) rfl
       PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h)
-  have hA0 : StmtT accP ξ accCtx3 [] (.assign 0 (.pair 4 3)) (setE accCtx3 0 accEp) := by
-    have h := StmtT.assign (P := accP) (F := []) (x := 0) (Ex := accEp)
+  have hA0 : StmtT accP .none accCtx3 [] (.assign 0 (.pair 4 3)) (setE accCtx3 0 accEp) := by
+    have h := StmtT.assign (ξ := .none) (P := accP) (F := []) (x := 0) (Ex := accEp)
       (E := ⟨.prod .int .int, .own, true, [], [], false, false⟩) (by simp [accCtx3, setE, hs0]) (by simp)
       (Or.inr (Or.inl ⟨rfl, rfl⟩)) hpair rfl (by simp [Entry.vdeps, Mode.ownSlot, roots])
       (by simp [accCtx3, setE, hs0]) (hp3.endOK 0).1 (hp3.endOK 0).2.1 rfl
     rw [hp3.kill] at h; exact h
-  have hA1 : StmtT accP ξ (setE accCtx3 0 accEp) [] (.assign 1 (.var 4)) accCtx4 := by
-    have h := StmtT.assign (P := accP) (F := []) (x := 1) (Γ := setE accCtx3 0 accEp)
+  have hA1 : StmtT accP .none (setE accCtx3 0 accEp) [] (.assign 1 (.var 4)) accCtx4 := by
+    have h := StmtT.assign (ξ := .none) (P := accP) (F := []) (x := 1) (Γ := setE accCtx3 0 accEp)
       (Ex := ⟨.int, .bor, false, [], [], false, false⟩) (E := { intE with dtor := false, dbind := false })
       (by simp [accCtx3, setE, hs1]) (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.copyBor (y := 4) (E := intE) (by simp [accCtx3, setE]) rfl rfl) rfl
       (by simp [intE, Entry.vdeps, Mode.ownSlot, roots]) (by simp [accCtx3, setE, hs1])
       (hp3a.endOK 1).1 (hp3a.endOK 1).2.1 rfl
     rw [hp3a.kill] at h; exact h
-  have h4 : StmtT accP ξ (setE (setE (sigCtx accCode) 2 intE) 3 intE) []
+  have h4 : StmtT accP .none (setE (setE (sigCtx accCode) 2 intE) 3 intE) []
       (.letv 4 (.expr (.add (.var 2) (.lit 1))) (.seq (.assign 0 (.pair 4 3)) (.assign 1 (.var 4))))
       (A2.exitScope 4 accCtx4) :=
     StmtT.letv (E := intE) rfl (by simp [setE, sigCtx, accCode]) (by simp)
       (RhsT.expr (ExprT.add (ExprT.var (E := intE) (by simp [setE]) rfl rfl) ExprT.lit))
-      (StmtT.seq rfl hA0 hA1) (hp4.endOK 4)
+      (StmtT.seq rfl hA0.ofNone hA1.ofNone) (hp4.endOK 4)
   have hp5 := hp4.upd_none 4
-  have h3 : StmtT accP ξ (setE (sigCtx accCode) 2 intE) []
+  have h3 : StmtT accP .none (setE (sigCtx accCode) 2 intE) []
       (.letv 3 (.snd 0) (.letv 4 (.expr (.add (.var 2) (.lit 1)))
         (.seq (.assign 0 (.pair 4 3)) (.assign 1 (.var 4)))))
       (A2.exitScope 3 (A2.exitScope 4 accCtx4)) :=
     StmtT.letv (E := projE 0 accEp .int) rfl (by simp [setE, sigCtx, accCode]) (by simp)
-      (RhsT.snd (b := .int) (by simp [setE, hs0]) rfl rfl) h4 (by rw [hp4.exitScope]; exact hp5.endOK 3)
+      (RhsT.snd (b := .int) (by simp [setE, hs0]) rfl rfl) h4.ofNone (by rw [hp4.exitScope]; exact hp5.endOK 3)
   have hp6 := hp5.upd_none 3
-  have h2 : StmtT accP ξ (sigCtx accCode) [] accCode.body
+  have h2 : StmtT accP .none (sigCtx accCode) [] accCode.body
       (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 accCtx4))) :=
     StmtT.letv (E := projE 0 accEp .int) rfl (by simp [sigCtx, accCode]) (by simp)
-      (RhsT.fst (b := .int) hs0 rfl rfl) h3 (by rw [hp4.exitScope, hp5.exitScope]; exact hp6.endOK 2)
+      (RhsT.fst (b := .int) hs0 rfl rfl) h3.ofNone (by rw [hp4.exitScope, hp5.exitScope]; exact hp6.endOK 2)
   have hΔ : A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 accCtx4)) =
       upd (upd (upd accCtx4 4 none) 3 none) 2 none := by
     rw [hp4.exitScope, hp5.exitScope, hp6.exitScope]
@@ -2644,8 +2644,8 @@ theorem accSig_ok : FnOK accP accSig := by
     simp [paramE, accTy, Ty.hasFn, ← hsym, accSig]
   have hs1 : sigCtx accSig 1 = some ⟨.int, .bor, false, [], [], false, false⟩ := by
     simp [sigCtx, accSig, resMode]
-  have hA : StmtT accP ξ (sigCtx accSig) [] accSig.body (setE (sigCtx accSig) 1 intE) := by
-    have h := StmtT.assign (P := accP) (F := []) (x := 1) (r := .expr (.lit 0)) (Γ := sigCtx accSig)
+  have hA : StmtT accP .none (sigCtx accSig) [] accSig.body (setE (sigCtx accSig) 1 intE) := by
+    have h := StmtT.assign (ξ := .none) (P := accP) (F := []) (x := 1) (r := .expr (.lit 0)) (Γ := sigCtx accSig)
       (Ex := ⟨.int, .bor, false, [], [], false, false⟩) hs1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.expr ExprT.lit) rfl (by simp [intE, Entry.vdeps, Mode.ownSlot, roots]) (by simp [hs1])
       (h0.endOK 1).1 (h0.endOK 1).2.1 rfl
@@ -2733,9 +2733,9 @@ theorem accMain_typed : ∃ Δ, StmtT accP ξ (fun _ => none) [] accMain Δ := b
   have hΔc : A2.kill .replace false 3 (setE (callPost (A2.kill .replace false 3 accMainCtx) accSig [3]) 4
       (callRes (A2.kill .replace false 3 accMainCtx) accSig [3])) = setE (setE accMainCtx 3 accCloE) 4 intE := by
     rw [hp4.kill, hcp, hcr]; exact hpc.kill _ _ _
-  have hC : StmtT accP ξ accMainCtx [] (.callcE 4 3 0 [] .skip)
+  have hC : StmtT accP .none accMainCtx [] (.callcE 4 3 0 [] .skip)
       (A2.exitScope 4 (setE (setE accMainCtx 3 accCloE) 4 intE)) := by
-    have h := accum_hand (F := []) (x := 4) (acc := 3) (k := .skip) rfl (by simp [accMainCtx, setE]) (by simp)
+    have h := accum_hand (ξ := .none) (F := []) (x := 4) (acc := 3) (k := .skip) rfl (by simp [accMainCtx, setE]) (by simp)
       (by simp [accMainCtx, setE, accCloE]) (by simp) (hp4.endOK 3).1 (hp4.endOK 3).2.1 StmtT.skip
       (by rw [hΔc]; exact hpc.endOK 4)
     rw [hΔc] at h; exact h
@@ -2752,25 +2752,25 @@ theorem accMain_typed : ∃ Δ, StmtT accP ξ (fun _ => none) [] accMain Δ := b
       (PushArg.move (by simp [accEnv, Ty.owning]) rfl (by simp) (hp3.endOK 2).1 (hp3.endOK 2).2.1)
       ⟨List.nodup_nil, fun _ h => by cases h⟩ (accum_fits .send)
     rw [hp3.kill] at h; exact h
-  have h3 : StmtT accP ξ (setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) []
+  have h3 : StmtT accP .none (setE (setE (setE (fun _ => none) 0 intE) 1 intE) 2 accPairE) []
       (.letv 3 (.pack [1] accEnv [0] 2 []) (.callcE 4 3 0 [] .skip))
       (A2.exitScope 3 (A2.exitScope 4 (setE (setE accMainCtx 3 accCloE) 4 intE))) :=
-    StmtT.letv rfl (by simp [setE]) (by simp) hpack hC (by rw [hpc.exitScope]; exact q4.endOK 3)
-  have h2 : StmtT accP ξ (setE (setE (fun _ => none) 0 intE) 1 intE) []
+    StmtT.letv rfl (by simp [setE]) (by simp) hpack hC.ofNone (by rw [hpc.exitScope]; exact q4.endOK 3)
+  have h2 : StmtT accP .none (setE (setE (fun _ => none) 0 intE) 1 intE) []
       (.letv 2 (.pair 0 1) (.letv 3 (.pack [1] accEnv [0] 2 []) (.callcE 4 3 0 [] .skip)))
       (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 (setE (setE accMainCtx 3 accCloE) 4 intE)))) :=
     StmtT.letv (E := accPairE) rfl (by simp [setE])
       (by simp) (RhsT.pair (Ey := intE) (Ez := intE) (by simp [setE]) rfl PushArg.int (by simp [setE]) rfl
-        PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h)) h3
+        PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h)) h3.ofNone
       (by rw [hpc.exitScope, q4.exitScope]; exact q3.endOK 2)
-  have h1 : StmtT accP ξ (setE (fun _ => none) 0 intE) []
+  have h1 : StmtT accP .none (setE (fun _ => none) 0 intE) []
       (.letv 1 (.expr (.lit 0)) (.letv 2 (.pair 0 1) (.letv 3 (.pack [1] accEnv [0] 2 [])
         (.callcE 4 3 0 [] .skip))))
       (A2.exitScope 1 (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4
         (setE (setE accMainCtx 3 accCloE) 4 intE))))) :=
-    StmtT.letv rfl (by simp [setE]) (by simp) (RhsT.expr ExprT.lit) h2
+    StmtT.letv rfl (by simp [setE]) (by simp) (RhsT.expr ExprT.lit) h2.ofNone
       (by rw [hpc.exitScope, q4.exitScope, q3.exitScope]; exact q2.endOK 1)
-  exact ⟨_, StmtT.letv rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+  exact ⟨_, StmtT.letv rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone
     (by rw [hpc.exitScope, q4.exitScope, q3.exitScope, q2.exitScope]; exact q1.endOK 0)⟩
 
 theorem accMain_codes : accMain.codesOK accP := by

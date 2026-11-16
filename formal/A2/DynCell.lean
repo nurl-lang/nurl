@@ -153,7 +153,7 @@ theorem ctx_noPin {R : Entry} (hR : R.mode ≠ .rootb) (x : Var) : NoPin (ctx R)
 
 /-- The path that lends `p`. -/
 theorem then_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false⟩) [] (.assign 3 (.var 1)) (ctx ErT) := by
-  have h := StmtT.assign (P := P) (Γ := ctx ⟨str, .bor, false, [], [], false, false⟩) (F := []) (x := 3)
+  have h := StmtT.assign (ξ := .none) (P := P) (Γ := ctx ⟨str, .bor, false, [], [], false, false⟩) (F := []) (x := 3)
     (r := .var 1) (Ex := ⟨str, .bor, false, [], [], false, false⟩)
     (E := ⟨str, .bor, true, derive 1 Ep .self, Ep.held, false, false⟩) (Γ1 := ctx ⟨str, .bor, false, [], [], false, false⟩)
     (by simp [ctx]) (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
@@ -167,7 +167,7 @@ theorem then_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false⟩)
     rcases v with _ | _ | _ | _ | v <;>
       simp [ctx, setE, upd, kill, killE, hits, Ecell, Ep, Ec, ErT, derive, Mode.isRoot, rootKind, str,
         Entry.vdeps, Mode.ownSlot]
-  rw [he] at h; exact h
+  rw [he] at h; exact h.ofNone
 
 /-- The fresh-value path's contexts: the callee's, with the local 4. -/
 def ctxL (R L : Entry) : Ctx := setE (ctx R) 4 L
@@ -214,7 +214,7 @@ theorem else_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false⟩)
   have hinr : RhsT (ctxL R0 Enew) [] (.inr .int 4) ⟨.sum .int Enew.ty, .own, true, [], Enew.held, false, false⟩
       (ctxL R0 EnewD) :=
     RhsT.inr (by simp [ctxL, setE, upd]) rfl hpush rfl
-  have ha := StmtT.assign (P := P) (Γ := ctxL R0 Enew) (F := []) (x := 0) (r := .inr .int 4)
+  have ha := StmtT.assign (ξ := .none) (P := P) (Γ := ctxL R0 Enew) (F := []) (x := 0) (r := .inr .int 4)
     (Ex := Ecell) (E := ⟨.sum .int Enew.ty, .own, true, [], Enew.held, false, false⟩) (Γ1 := ctxL R0 EnewD)
     (by simp [ctxL, ctx, setE, upd]) (by simp) (Or.inr (Or.inl ⟨rfl, rfl⟩)) hinr
     (by simp [Enew, Ecell, opt, str]) (by simp [Enew, roots, Entry.vdeps, Mode.ownSlot])
@@ -228,7 +228,7 @@ theorem else_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false⟩)
         Mode.ownSlot]
   rw [h2] at ha
   -- `= r ( payload cell )`: the result borrows what the cell holds
-  have hb := StmtT.assign (P := P) (Γ := ctxL R0 EnewD) (F := []) (x := 3) (r := .getr 0)
+  have hb := StmtT.assign (ξ := .none) (P := P) (Γ := ctxL R0 EnewD) (F := []) (x := 3) (r := .getr 0)
     (Ex := R0) (E := projE 0 Ecell str) (Γ1 := ctxL R0 EnewD)
     (by simp [ctxL, ctx, setE, upd, R0]) (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.getr (E := Ecell) (a := .int) (b := str) (by simp [ctxL, ctx, setE, upd]) rfl rfl) rfl
@@ -243,9 +243,9 @@ theorem else_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false⟩)
         Entry.vdeps, Mode.ownSlot]
   rw [h3] at hb
   have hs := StmtT.seq (P := P) rfl ha hb
-  have hl := StmtT.letv (P := P) (Γ := ctx R0) (F := []) (x := 4) (r := .new .int)
+  have hl := StmtT.letv (ξ := .none) (P := P) (Γ := ctx R0) (F := []) (x := 4) (r := .new .int)
     (s := .seq (.assign 0 (.inr .int 4)) (.assign 3 (.getr 0))) (E := Enew) (Γ1 := ctx R0)
-    rfl (by simp [ctx]) (by simp) (RhsT.new rfl) hs
+    rfl (by simp [ctx]) (by simp) (RhsT.new rfl) hs.ofNone
     ⟨ctxL_noPin (by simp [ErF]) (by simp [EnewD]) _, DtorSafe.of_none (ctxL_dtor rfl rfl) _ _ _,
       DbindSafe.of_none (fun v E hE => by
         by_cases h4 : v = 4
@@ -256,7 +256,7 @@ theorem else_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false⟩)
     rcases v with _ | _ | _ | _ | _ | v <;>
       simp [exitScope, ctxL, ctx, setE, upd, kill, killE, hits, Ecell, Ep, Ec, ErF, Entry.vdeps,
         Mode.ownSlot]
-  rw [h4] at hl; exact hl
+  rw [h4] at hl; exact hl.ofNone
 
 /-- The two paths meet: the result lends the cell's payload or `p`. -/
 theorem body_typed : StmtT P ξ (sigCtx pick) [] pick.body (ctx ErJ) := by
@@ -432,32 +432,32 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   have hK3 : NoRootb (A2.setE (A2.setE (A2.setE (fun _ => none) 0 intE) 1 Ecl) 2 Enew) :=
     hK2.setE (by simp [Enew])
   -- innermost first: `: i n ( vec_len x )`
-  have hn := StmtT.letv (P := P) (Γ := A2.setE K4 4 Ex) (F := []) (x := 5) (r := .expr (.len 4))
+  have hn := StmtT.letv (ξ := .none) (P := P) (Γ := A2.setE K4 4 Ex) (F := []) (x := 5) (r := .expr (.len 4))
     (s := .skip) (E := intE) (Γ1 := A2.setE K4 4 Ex) rfl (by simp [K4, A2.setE, upd]) (by simp)
     (RhsT.expr (ExprT.len (E := Ex) (t := .int) (by simp [A2.setE, upd]) rfl rfl)) StmtT.skip
     (hK6.endOK _)
-  have hc := StmtT.letcall (P := P) (Γ := K4) (F := []) (x := 4) (f := 0) (args := [1, 2, 3])
+  have hc := StmtT.letcall (ξ := .none) (P := P) (Γ := K4) (F := []) (x := 4) (f := 0) (args := [1, 2, 3])
     (s := .letv 5 (.expr (.len 4)) .skip) (E := Ex) (Γ1 := K4) rfl (by simp [K4, A2.setE, upd])
-    (by simp) call_ok hn ((hK6.exitScope 5).endOK _)
+    (by simp) call_ok hn.ofNone ((hK6.exitScope 5).endOK _)
     (fun fn hf ho _ => by simp [P] at hf; subst hf; simp [pick] at ho)
-  have h3 := StmtT.letv (P := P) (x := 3) (r := .expr (.lit 1)) (E := intE) (F := [])
+  have h3 := StmtT.letv (ξ := .none) (P := P) (x := 3) (r := .expr (.lit 1)) (E := intE) (F := [])
     (Γ := A2.setE (A2.setE (A2.setE (fun _ => none) 0 intE) 1 Ecl) 2 Enew)
     (Γ1 := A2.setE (A2.setE (A2.setE (fun _ => none) 0 intE) 1 Ecl) 2 Enew)
-    rfl (by simp [A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hc
+    rfl (by simp [A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hc.ofNone
     (((hK6.exitScope 5).exitScope 4).endOK _)
-  have h2 := StmtT.letv (P := P) (x := 2) (r := .new .int) (E := Enew) (F := [])
+  have h2 := StmtT.letv (ξ := .none) (P := P) (x := 2) (r := .new .int) (E := Enew) (F := [])
     (Γ := A2.setE (A2.setE (fun _ => none) 0 intE) 1 Ecl)
     (Γ1 := A2.setE (A2.setE (fun _ => none) 0 intE) 1 Ecl)
-    rfl (by simp [A2.setE, upd]) (by simp) (RhsT.new rfl) h3
+    rfl (by simp [A2.setE, upd]) (by simp) (RhsT.new rfl) h3.ofNone
     ((((hK6.exitScope 5).exitScope 4).exitScope 3).endOK _)
   have hpush : PushArg (A2.setE (fun _ => none) 0 intE) [] 0 intE intE.ty [] (A2.setE (fun _ => none) 0 intE) :=
     PushArg.int
-  have h1 := StmtT.letv (P := P) (x := 1) (r := .inl 0 str) (E := Ecl) (F := [])
+  have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .inl 0 str) (E := Ecl) (F := [])
     (Γ := A2.setE (fun _ => none) 0 intE) (Γ1 := A2.setE (fun _ => none) 0 intE)
-    rfl (by simp [A2.setE, upd]) (by simp) (RhsT.inl (by simp [A2.setE, upd]) rfl hpush rfl) h2
+    rfl (by simp [A2.setE, upd]) (by simp) (RhsT.inl (by simp [A2.setE, upd]) rfl hpush rfl) h2.ofNone
     (((((hK6.exitScope 5).exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := fun _ => none)
-    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone
     ((((((hK6.exitScope 5).exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
 
 /-- A run of the caller, from the empty store, never touches memory it may

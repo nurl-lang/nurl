@@ -200,16 +200,16 @@ theorem code_body : ∃ Δ, StmtT Pc ξ (sigCtx code) [] code.body Δ ∧
     simp [Kc, Kb, A2.setE, upd, A2.kill, h1, killE, hits, R0, Entry.vdeps]
   let Kd : Ctx := A2.setE (kill .replace false 1 Kc) 1 { intE with mode := R0.mode }
   have hKd : NoRootb Kd := (hKc.kill _ _ _).setE (by simp [intE, R0])
-  have hasg : StmtT Pc ξ Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
+  have hasg : StmtT Pc .none Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
     StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
-  have hlet := StmtT.letd (P := Pc) (Γ := sigCtx code) (Γ1 := Kb) (F := []) (x := 2) (f := 0) (r := .var 0)
+  have hlet := StmtT.letd (ξ := .none) (P := Pc) (Γ := sigCtx code) (Γ1 := Kb) (F := []) (x := 2) (f := 0) (r := .var 0)
     (s := .assign 1 (.expr (.lit 0))) (t := T) (H := EDT.held) (τ := DT) rfl
     (by simp [sigCtx, code]) (by simp) hmv rfl
-    (Or.inl ⟨rfl, Or.inr ⟨0, rfl⟩⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hasg (hKd.endOK _)
+    (Or.inl ⟨rfl, Or.inr ⟨0, rfl⟩⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hasg.ofNone (hKd.endOK _)
     (by simp [Stmt.assigns])
-  refine ⟨_, hlet, hKd.exitScope 2, ?_⟩
+  refine ⟨_, hlet.ofNone, hKd.exitScope 2, ?_⟩
   simp [exitScope, upd, A2.kill, Kd, A2.setE, killE, hits, intE, Entry.vdeps, R0]
 
 theorem code_ok : FnOK Pc code := by
@@ -277,18 +277,18 @@ theorem glue_body : ∃ Δ, StmtT Pc ξ (sigCtx glue) [] glue.body Δ ∧
     simp [Kc, G1, A2.setE, upd, A2.kill, h1, killE, hits, R0, Entry.vdeps]
   let Kd : Ctx := A2.setE (kill .replace false 1 Kc) 1 { intE with mode := R0.mode }
   have hKd : NoRootb Kd := (hKc.kill _ _ _).setE (by simp [intE, R0])
-  have hasg : StmtT Pc ξ Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
+  have hasg : StmtT Pc .none Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
     StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
-  have hce := StmtT.callcE (P := Pc) (Γ := sigCtx glue) (Γ1 := G1) (F := []) (x := 2) (c := 0) (j := 0)
+  have hce := StmtT.callcE (ξ := .none) (P := Pc) (Γ := sigCtx glue) (Γ1 := G1) (F := []) (x := 2) (c := 0) (j := 0)
     (k := .assign 1 (.expr (.lit 0))) (Ec := ECD) (E := intE) (ms := [2]) (q := .dropd) (σ := 2) (sig := glue)
     (b := .replace) rfl h2 (by simp) h0 rfl (Or.inl rfl) (Or.inr rfl) rfl rfl
     -- Agora #609: the interface takes the receiver owned
     (Or.inr ⟨rfl, by simp [ECD, Entry.vdeps, Mode.ownSlot], rfl, rfl, rfl, rfl⟩)
-    rfl rfl rfl (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _) hcall hasg
+    rfl rfl rfl (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _) hcall hasg.ofNone
     (hKd.endOK _) glue_not_thru (fun ho => by simp [glue] at ho)
-  refine ⟨_, hce, hKd.exitScope 2, ?_⟩
+  refine ⟨_, hce.ofNone, hKd.exitScope 2, ?_⟩
   simp [exitScope, upd, A2.kill, Kd, A2.setE, killE, hits, intE, Entry.vdeps, R0]
 
 theorem glue_ok : FnOK Pc glue := by
@@ -358,20 +358,20 @@ theorem main_typed : ∃ Δ, StmtT Pc ξ (fun _ => none) [] main Δ := by
   have hECa : ECa.mode ≠ .rootb ∧ ECa.dtor = false ∧ ECa.dbind = false := by
     simp [ECa, EC0, Entry.arm, CDT, CT, Ty.dtorViews, Ty.holdsView]
   have hK6 : NoRootb (A2.setE K5 3 ECa) := hK5.setE hECa
-  have hg := StmtT.letd (P := Pc) (Γ := K3) (Γ1 := K5) (F := []) (x := 3) (f := 2)
+  have hg := StmtT.letd (ξ := .none) (P := Pc) (Γ := K3) (Γ1 := K5) (F := []) (x := 3) (f := 2)
     (r := .pack [1] DT [2] 2 []) (s := .skip) (E := EC0) (t := CT) (H := EC0.held) (τ := CDT) rfl
     (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hpack rfl
     (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn cdrop_ok) (HeldUp.refl _ _) StmtT.skip
     (hK6.endOK _)
-  have hd := StmtT.letd (P := Pc) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
+  have hd := StmtT.letd (ξ := .none) (P := Pc) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
-    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hg
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hg.ofNone
     ((hK6.exitScope 3).endOK _)
-  have h1 := StmtT.letv (P := Pc) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd
+  have h1 := StmtT.letv (ξ := .none) (P := Pc) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
     (((hK6.exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := Pc) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
-    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone
     ((((hK6.exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
 
 theorem main_codes : main.codesOK Pc := by
@@ -578,16 +578,16 @@ theorem code_body2 : ∃ Δ, StmtT Pd ξ (sigCtx code) [] code.body Δ ∧
     simp [Kc, Kb, A2.setE, upd, A2.kill, h1, killE, hits, R0, Entry.vdeps]
   let Kd : Ctx := A2.setE (kill .replace false 1 Kc) 1 { intE with mode := R0.mode }
   have hKd : NoRootb Kd := (hKc.kill _ _ _).setE (by simp [intE, R0])
-  have hasg : StmtT Pd ξ Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
+  have hasg : StmtT Pd .none Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
     StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
-  have hlet := StmtT.letd (P := Pd) (Γ := sigCtx code) (Γ1 := Kb) (F := []) (x := 2) (f := 0) (r := .var 0)
+  have hlet := StmtT.letd (ξ := .none) (P := Pd) (Γ := sigCtx code) (Γ1 := Kb) (F := []) (x := 2) (f := 0) (r := .var 0)
     (s := .assign 1 (.expr (.lit 0))) (t := T) (H := EDT.held) (τ := DT) rfl
     (by simp [sigCtx, code]) (by simp) hmv rfl
-    (Or.inl ⟨rfl, Or.inr ⟨0, rfl⟩⟩) rfl rfl (letd_fn drop_ok2) (HeldUp.refl _ _) hasg (hKd.endOK _)
+    (Or.inl ⟨rfl, Or.inr ⟨0, rfl⟩⟩) rfl rfl (letd_fn drop_ok2) (HeldUp.refl _ _) hasg.ofNone (hKd.endOK _)
     (by simp [Stmt.assigns])
-  refine ⟨_, hlet, hKd.exitScope 2, ?_⟩
+  refine ⟨_, hlet.ofNone, hKd.exitScope 2, ?_⟩
   simp [exitScope, upd, A2.kill, Kd, A2.setE, killE, hits, intE, Entry.vdeps, R0]
 
 theorem code_ok2 : FnOK Pd code := by
@@ -655,18 +655,18 @@ theorem glue_body2 : ∃ Δ, StmtT Pd ξ (sigCtx glueD) [] glueD.body Δ ∧
     simp [Kc, G1, A2.setE, upd, A2.kill, h1, killE, hits, R0, Entry.vdeps]
   let Kd : Ctx := A2.setE (kill .replace false 1 Kc) 1 { intE with mode := R0.mode }
   have hKd : NoRootb Kd := (hKc.kill _ _ _).setE (by simp [intE, R0])
-  have hasg : StmtT Pd ξ Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
+  have hasg : StmtT Pd .none Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
     StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
-  have hce := StmtT.callcE (P := Pd) (Γ := sigCtx glueD) (Γ1 := G1) (F := []) (x := 2) (c := 0) (j := 0)
+  have hce := StmtT.callcE (ξ := .none) (P := Pd) (Γ := sigCtx glueD) (Γ1 := G1) (F := []) (x := 2) (c := 0) (j := 0)
     (k := .assign 1 (.expr (.lit 0))) (Ec := ECD2) (E := intE) (ms := [2, 4]) (q := .dropd) (σ := 2) (sig := glueD)
     (b := .replace) rfl h2 (by simp) h0 rfl (Or.inl rfl) (Or.inr rfl) rfl rfl
     -- Agora #609: the interface takes the receiver owned
     (Or.inr ⟨rfl, by simp [ECD2, Entry.vdeps, Mode.ownSlot], rfl, rfl, rfl, rfl⟩)
-    rfl rfl rfl (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _) hcall hasg
+    rfl rfl rfl (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _) hcall hasg.ofNone
     (hKd.endOK _) glue_not_thru2 (fun ho => by simp [glueD] at ho)
-  refine ⟨_, hce, hKd.exitScope 2, ?_⟩
+  refine ⟨_, hce.ofNone, hKd.exitScope 2, ?_⟩
   simp [exitScope, upd, A2.kill, Kd, A2.setE, killE, hits, intE, Entry.vdeps, R0]
 
 theorem glue_ok2 : FnOK Pd glueD := by
@@ -828,27 +828,27 @@ theorem main2_typed : ∃ Δ, StmtT Pd ξ (fun _ => none) [] main2 Δ := by
   have hER : ER.mode ≠ .rootb ∧ ER.dtor = false ∧ ER.dbind = false := by
     simp [ER, recvRes, callRes, resMode, callSig]
   have hK7 : NoRootb (A2.setE K6 4 ER) := hK6.setE hER
-  have hcall := StmtT.callc (P := Pd) (Γ := K6) (Γ1 := K6) (F := []) (x := 4) (c := 3) (j := 1) (zs := [])
+  have hcall := StmtT.callc (ξ := .none) (P := Pd) (Γ := K6) (Γ1 := K6) (F := []) (x := 4) (c := 3) (j := 1) (zs := [])
     (k := .skip) (Ec := ECa) (E := callRes K6 callSig [3]) (ms := [2, 4]) (q := .dropd) (σ := 4)
     (sig := callSig) rfl (by simp [K6, K5, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) h63
     (by rw [hECe]; rfl) rfl rfl (by rw [hps]; rfl) (fun o ho => by simp [callSig] at ho) hcT
     (fun _ h => by cases h) StmtT.skip (hK7.endOK _) callSig_not_thru2
     (fun ho => by simp [callSig] at ho)
-  have hg := StmtT.letd (P := Pd) (Γ := K3) (Γ1 := K5) (F := []) (x := 3) (f := 2)
+  have hg := StmtT.letd (ξ := .none) (P := Pd) (Γ := K3) (Γ1 := K5) (F := []) (x := 3) (f := 2)
     (r := .pack [1, 3] DT [2, 4] 2 []) (s := .callc 4 3 1 [] .skip) (E := EC0) (t := CT2) (H := EC0.held)
     (τ := CDT2) rfl
     (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hpack rfl
-    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn cdrop_ok2) (HeldUp.refl _ _) hcall
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn cdrop_ok2) (HeldUp.refl _ _) hcall.ofNone
     ((hK7.exitScope 4).endOK _)
-  have hd := StmtT.letd (P := Pd) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
+  have hd := StmtT.letd (ξ := .none) (P := Pd) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
-    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok2) (HeldUp.refl _ _) hg
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok2) (HeldUp.refl _ _) hg.ofNone
     (((hK7.exitScope 4).exitScope 3).endOK _)
-  have h1 := StmtT.letv (P := Pd) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd
+  have h1 := StmtT.letv (ξ := .none) (P := Pd) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
     ((((hK7.exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := Pd) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
-    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone
     (((((hK7.exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
 
 theorem main2_codes : main2.codesOK Pd := by

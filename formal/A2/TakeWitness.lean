@@ -84,7 +84,7 @@ theorem take_typed : RhsT (ctx R0) [] (.take 0) Eq (ctx R0) := by
 
 /-- `q`'s scope: it ends, and its String is dropped. -/
 theorem letq_typed : StmtT P ξ (ctx R0) [] (.letv 2 (.take 0) .skip) (ctx R0) := by
-  have hl := StmtT.letv (P := P) (Γ := ctx R0) (F := []) (x := 2) (r := .take 0) (s := .skip) (E := Eq)
+  have hl := StmtT.letv (ξ := ξ) (P := P) (Γ := ctx R0) (F := []) (x := 2) (r := .take 0) (s := .skip) (E := Eq)
     (Γ1 := ctx R0) rfl (by simp [ctx]) (by simp) take_typed StmtT.skip
     ⟨fun p E hp hm => by
         by_cases h2 : p = 2
@@ -108,7 +108,7 @@ theorem letq_typed : StmtT P ξ (ctx R0) [] (.letv 2 (.take 0) .skip) (ctx R0) :
 /-- The body: the take, then the answer. -/
 theorem body_typed : StmtT P ξ (sigCtx g) [] g.body (ctx intE) := by
   rw [sig_eq]
-  have ha := StmtT.assign (P := P) (Γ := ctx R0) (F := []) (x := 1) (r := .expr (.lit 0)) (Ex := R0)
+  have ha := StmtT.assign (ξ := ξ) (P := P) (Γ := ctx R0) (F := []) (x := 1) (r := .expr (.lit 0)) (Ex := R0)
     (E := intE) (Γ1 := ctx R0) (by simp [ctx]) (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [ctx])
     (ctx_noPin (by simp [R0]) _) (DtorSafe.of_none (ctx_dtor rfl) _ _ _) rfl
@@ -231,16 +231,16 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   have hK2 : NoRootb (A2.setE K1 1 intE) := K1_noRootb.setE (by simp [intE])
   have hK3 : NoRootb (A2.setE (A2.setE K1 1 intE) 2 intE) := hK2.setE (by simp [intE])
   -- `: i n ( vec_len w )`: `w` is live after the call
-  have hn := StmtT.letv (P := P) (Γ := A2.setE K1 1 intE) (F := []) (x := 2) (r := .expr (.len 0))
+  have hn := StmtT.letv (ξ := .none) (P := P) (Γ := A2.setE K1 1 intE) (F := []) (x := 2) (r := .expr (.len 0))
     (s := .skip) (E := intE) (Γ1 := A2.setE K1 1 intE) rfl (by simp [K1, A2.setE, upd]) (by simp)
     (RhsT.expr (ExprT.len (E := Ew) (t := .int) (by simp [K1, A2.setE, upd]) rfl rfl)) StmtT.skip
     (hK3.endOK _)
-  have hc := StmtT.letcall (P := P) (Γ := K1) (F := []) (x := 1) (f := 0) (args := [0])
+  have hc := StmtT.letcall (ξ := .none) (P := P) (Γ := K1) (F := []) (x := 1) (f := 0) (args := [0])
     (s := .letv 2 (.expr (.len 0)) .skip) (E := intE) (Γ1 := K1) rfl (by simp [K1, A2.setE, upd])
-    (by simp) call_ok hn ((hK3.exitScope 2).endOK _)
+    (by simp) call_ok hn.ofNone ((hK3.exitScope 2).endOK _)
     (fun fn hf ho _ => by simp [P] at hf; subst hf; simp [g] at ho)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .new .int) (E := Ew) (F := []) (Γ := fun _ => none)
-    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.new rfl) hc
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.new rfl) hc.ofNone
     (((hK3.exitScope 2).exitScope 1).endOK _)⟩
 
 /-- A run of the caller, from the empty store, never touches memory it may

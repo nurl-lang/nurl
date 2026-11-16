@@ -118,6 +118,7 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact ih.trans (Grows.of_eq rfl rfl)
   | frozenSkip => exact Grows.refl _
+  | blockSkip | blockExit _ | loop => exact Grows.refl _
   | frozenIn _ ih | blockIn _ ih => exact ih
   | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he _ hd => exact (EvalR.grows he).trans (Grows.shrink (DropSlot.le hd) rfl)

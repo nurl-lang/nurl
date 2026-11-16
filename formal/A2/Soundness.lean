@@ -27,11 +27,17 @@ theorem preservation {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
 
 /-- Progress, with the call cases discharged. -/
 theorem progress' {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P ξ Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hi : Inv m Γ F s) :
-    s = .skip ∨ Blocked m s ∨ ∃ r, Step P m s r :=
-  progress (fun hx hc hi => callProgress hx hc hi)
+    (ht : StmtT P .none Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hi : Inv m Γ F s) :
+    s = .skip ∨ Blocked m s ∨ ∃ r, Step P m s r := by
+  rcases progress (fun hx hc hi => callProgress hx hc hi)
     (fun hx _ hc htc hj hσ hhd hcT hnz hcd hi => cloProgress hP hx hc htc hj hσ hhd hcT hnz hcd hi)
     (fun hx hc htc hcan hj hσ hsp hcT hcd hi => handProgress hx hc htc hcan hj hσ hsp hcT hcd hi) ht hcd hi
+    with h | h | ⟨_, _, he⟩ | h
+  · exact Or.inl h
+  · exact Or.inr (Or.inl h)
+  -- Agora #871: no exit leaves a program's top level
+  · exact (exitAt_none ht he hi).elim
+  · exact Or.inr (Or.inr h)
 
 /-- Every binding is bound by a run-time scope the statement is inside of:
     the program's own top level binds nothing else. -/
@@ -153,7 +159,7 @@ theorem reach_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F
 /-- Type soundness: from a well-typed configuration, every reachable
     configuration is finished or can step. -/
 theorem soundness {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
-    {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
+    {Δ : Ctx} (ht : StmtT P .none Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
     (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt}
     (hs : Steps P m s (.ok m' s')) : ¬ Stuck P m' s' := by
   obtain ⟨Γ', ht', hi', _, hcd', _⟩ := reach_ok hP hPc ht hcd hsc hi hc hs
@@ -205,7 +211,7 @@ theorem codes_empty (P : Prog) (nv : Nat) : MemCodes P (emptyMem nv) :=
 /-- The memory model of stage A2 is sound: a well-typed program, run from
     the empty store, never gets stuck — it finishes, panics, or runs on. -/
 theorem memory_safe {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
+    (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
     (hv : ∀ v ∈ s.vars, v < nv)
     {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem nv) s (.ok m' s')) : ¬ Stuck P m' s' :=
   soundness hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) hr
@@ -223,7 +229,7 @@ theorem no_orphan {P : Prog} {s : Stmt} {nv : Nat} {r : Res} (hr : Steps P (empt
 /-- Nothing leaks: when a well-typed program finishes, every allocation it
     made has been freed. -/
 theorem no_leak_end {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
+    (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
     (hv : ∀ v ∈ s.vars, v < nv)
     {m' : Mem} (hr : Steps P (emptyMem nv) s (.ok m' .skip)) : ∀ i, m'.alloc i = false := by
   obtain ⟨Γ', _, hi', hc', _⟩ :=
@@ -252,7 +258,7 @@ theorem no_leak_end {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {�
 /-- ... and when a panic no `recover` frame catches ends it, the unwinding
     has freed every allocation too. -/
 theorem no_leak_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
+    (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
     (hv : ∀ v ∈ s.vars, v < nv)
     {m' : Mem} (hr : Steps P (emptyMem nv) s (.panic m')) : ∀ i, m'.alloc i = false := by
   obtain ⟨hnone, hcov, hblk⟩ :=
