@@ -67,6 +67,7 @@ theorem Eval.lift {m : Mem} {e : Expr} {n : Nat} (h : Eval m e n) (a2 : Nat → 
   | var hx => exact Eval.var hx
   | add _ _ ih1 ih2 => exact Eval.add ih1 ih2
   | lt _ _ ih1 ih2 => exact Eval.lt ih1 ih2
+  | dec _ ih => exact Eval.dec ih
   | len hv => exact Eval.len (VecOf.lift hv a2)
   | slen hx => exact Eval.slen hx
   | isl hx => exact Eval.isl hx

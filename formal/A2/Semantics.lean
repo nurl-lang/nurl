@@ -572,6 +572,7 @@ inductive Eval (m : Mem) : Expr → Nat → Prop
   | add {a b : Expr} {p q : Nat} : Eval m a p → Eval m b q → Eval m (.add a b) (p + q)
   | lt {a b : Expr} {p q : Nat} :
       Eval m a p → Eval m b q → Eval m (.lt a b) (if p < q then 1 else 0)
+  | dec {a : Expr} {p : Nat} : Eval m a p → Eval m (.dec a) (p - 1)
   | len {x : Var} {t : Ty} {c d : Nat} {es : List Val} :
       VecOf m x t c d es → Eval m (.len x) es.length
   | slen {x : Var} {d o l : Nat} :
@@ -964,6 +965,7 @@ def Expr.rename (ρ : Var → Var) : Expr → Expr
   | .var x => .var (ρ x)
   | .add a b => .add (a.rename ρ) (b.rename ρ)
   | .lt a b => .lt (a.rename ρ) (b.rename ρ)
+  | .dec a => .dec (a.rename ρ)
   | .len x => .len (ρ x)
   | .slen x => .slen (ρ x)
   | .isl x => .isl (ρ x)

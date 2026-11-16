@@ -207,6 +207,11 @@ const MODULE_LAYERS = {
     category: 'Worked Examples',
     summaryEn: 'Per-call ownership through an owner cell: the pick example typed with A2\'s rules, and memory_safe and no_leak_end applied to it (pick_ok, main_safe, main_no_leak).',
   },
+  PopWitness: {
+    layer: 5,
+    category: 'Worked Examples',
+    summaryEn: 'AGORA-888: a pop and a remove through a borrow, read as a truncation to the last index (Expr.dec), the number read before it, and element sets one place down; through a vec_at borrow of a Vec of Vecs and through a cursor, with memory_safe and no_leak_end applied (main_safe, main_no_leak).',
+  },
   TakeWitness: {
     layer: 5,
     category: 'Worked Examples',

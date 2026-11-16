@@ -68,11 +68,25 @@ the LLVM / C11 memory model rather than redefining it.
   forms the calculus has (`RULES.md`, phase C): a function that changes a
   Vec or String it takes as a plain parameter reads as an `inout`
   parameter, and a change through a copy of one owner's whole handle
-  (`( id vs )`, a cursor) as that owner's own change. Outside the claim
-  still:
+  (`( id vs )`, a cursor) as that owner's own change. A pop and a
+  remove through a borrow (AGORA-888) read as those steps:
+  `( vec_pop b )` whose element is dropped is the truncation to the last
+  index (`Expr.dec`), whatever the element type the truncation allows; a
+  pop of a number is that element read (`vec_at`, a number is a copy)
+  and the truncation; a remove of a number is each later element set one
+  place down, then the truncation. On an empty Vec the truncation leaves
+  it as it is, where nurlc's `vec_pop` answers `none`
+  (`A2/PopWitness.lean`: typed and run safe and leak-free; its remove is
+  the three-element case unrolled, and a remove at a general index is a
+  loop of the same typed statements, which the witness does not type).
+  That nurlc's
+  `vec_pop` / `vec_remove` lower to these steps is phase C. Outside the
+  claim still:
   - a change through a borrow of a Vec whose elements hold views;
-  - a pop or a remove through a borrow (the steps are push, truncate and
-    set);
+  - a pop or a remove through a borrow that moves an element which owns
+    memory out to the caller (a `Vec` of Strings popped through a borrow,
+    its result kept): the calculus moves an element out of an owner's
+    tree only from the owner itself (`Rhs.pop`, `Rhs.remove`);
   - what nurlc keeps beside such a change that the calculus ends: two
     parts of one value, copies of the changing borrow, a whole copy beside
     a field viewer (Agora #118, github#1426);

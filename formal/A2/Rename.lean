@@ -938,6 +938,7 @@ theorem exprT_ren (h : S.OK) (hab : S.AbsOK Γa) {e : Expr} (he : ExprT Γa e) :
       (by rw [liftE_ty' h hab hx]; exact ht)
   | add _ _ iha ihb => exact ExprT.add iha ihb
   | lt _ _ iha ihb => exact ExprT.lt iha ihb
+  | dec _ iha => exact ExprT.dec iha
   | len hx hl ht =>
     exact ExprT.len (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl)
       (by rw [liftE_ty' h hab hx]; exact ht)
