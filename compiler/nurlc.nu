@@ -15648,6 +15648,32 @@ unsafe @ eng_byte s w i k → i {
     ^ F
 }
 
+// Is `av` a binding `=` gave what a call lent of `place` (or of its
+// option's or result's payload `t0` / `f0`): it no longer carries the call
+// mark (stmt_assign: an owner given a call's lend), and every loan it holds
+// on that place was made by the call (TG_L)? nurlc links such a binding to
+// no owner, so it is handed nothing when the place is replaced (agora #881).
+@ __eng_call_lent_reader i av i place i t0 i f0 → b {
+    ? | != ( av_own av ) OW_L ( av_call av ) { ^ F } {}
+    : i pv ( pl_var place )
+    : i pp ( pl_path place )
+    : i loans ( av_loans av )
+    : ~ b any F
+    : ~ i k 0
+    ~ < k ( sq_len loans ) {
+        : i l ( sq_at loans k )
+        ? ( el_is_loan l ) {
+            : i lp ( pl_path ( el_place l ) )
+            ? & == ( pl_var ( el_place l ) ) pv | | == lp pp == lp t0 == lp f0 {
+                ? != ( el_tag l ) TG_L { ^ F } {}
+                = any T
+            } {}
+        } {}
+        = k + k 1
+    }
+    ^ any
+}
+
 @ eng_handover i st i place → v {
     : i pv ( pl_var place )
     : i pp ( pl_path place )
@@ -15689,7 +15715,13 @@ unsafe @ eng_byte s w i k → i {
                 // one, `ho`: what replacing the first one releases is the
                 // value it was handed, which nurlc hands to no one - the
                 // borrow ends there, agora #387)
-                ? & & ok ! ( eng_ho_on av place ) ! & == own OW_O == ( av_loans av ) 0 {
+                // (…nor a binding `=` gave a call's lend of it - `= o ( id
+                // other )`: nurlc's `=` of a call's result keeps the call's
+                // per-run answer and links o to nothing, so `= other` frees
+                // the old value under o. Its loan ends there instead, as the
+                // walk has it. A `:` binding of the call keeps the call mark
+                // and is linked, by name, as an alias is - agora #881)
+                ? & & & ok ! ( eng_ho_on av place ) ! & == own OW_O == ( av_loans av ) 0 ! ( __eng_call_lent_reader av place t0 f0 ) {
                     : i ty ( fv_ty vid )
                     ? & & != ty ET_NONE ! ( et_is_view ty ) != ( et_kind ty ) EK_CLOSURE {
                         : i loans ( av_loans av )

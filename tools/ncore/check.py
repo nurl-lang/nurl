@@ -2064,6 +2064,21 @@ class FnCheck:
         return any(isinstance(l, tuple) and isinstance(l[0], tuple) and l[0] and l[0][0] == "ho"
                    and self.loans.get(l, (None,))[0] == place for l in av.loans)
 
+    def call_lent_reader(self, av, place):
+        """Is `av` a binding `=` gave what a call lent of `place` (or of its
+        option's or result's payload): no call mark left (an owner given a
+        call's lend), and every loan it holds on that place made by the
+        call?  Codegen links such a binding to no owner, so it is handed
+        nothing when the place is replaced (agora #881)."""
+        if av.own != "L" or av.call:
+            return False
+        mine = [l for l in av.loans if l in self.loans
+                and self.loans[l][0][0] == place[0]
+                and self.loans[l][0][1][len(place[1]):] in ((), ("#T0",), ("#F0",))
+                and self.loans[l][0][1][:len(place[1])] == place[1]]
+        return bool(mine) and all(isinstance(l, tuple) and isinstance(l[0], tuple)
+                                  and len(l[0]) > 1 and l[0][1] == "l" for l in mine)
+
     def handover(self, st, place):
         """A store replacing a place whose old value a binding reads - the
         place itself, or a part of it - hands that old value over to the
@@ -2086,6 +2101,14 @@ class FnCheck:
             # replacing the first releases the value it was handed, which
             # codegen hands to no one - the borrow ends there, agora #387)
             if self.ho_on(av, place):
+                continue
+            # (…nor a binding `=` gave a call's lend of it - `= o ( id
+            # other )`: codegen's `=` of a call's result keeps the call's
+            # per-run answer and links o to nothing, so `= other` frees the
+            # old value under o. Its loan ends there instead. A `:` binding
+            # of the call keeps the call mark and is linked as an alias is -
+            # agora #881)
+            if self.call_lent_reader(av, place):
                 continue
             ty = self.fn.vars[vid].ty
             if ty is None or ty[0] in VIEW_TYPES or ty[0] == "closure":
