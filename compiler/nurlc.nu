@@ -14707,12 +14707,18 @@ unsafe @ eng_byte s w i k → i {
         // the literal is taken: the bindings it showed move into it
         : ~ i gone 0
         : i moved ( im_new )
+        // (…and a binding that is a call's lend on some calls goes in as
+        // that lend there: the field holds what it borrows, agora #679)
+        : i ext ( wv_new )
         : ~ i k 0
         ~ < k ( sq_len named ) {
             : i w ( sq_at named k )
             : i fname / w 4294967296
             : i b % w 4294967296
             ? == ( st_own st b ) OW_O {
+                : i bls ( av_loans ( st_av st b ) )
+                : ~ i bj 0
+                ~ < bj ( sq_len bls ) { ( wv_push ext ( he_make ( ep_child 0 fname ) ( sq_at bls bj ) ) ) = bj + bj 1 }
                 : i src0 ( st_av st vid )
                 : i held0 ( av_held src0 )
                 : i want ( pl_make b 0 )
@@ -14753,6 +14759,9 @@ unsafe @ eng_byte s w i k → i {
             } {}
             = k + k 1
         }
+        = k 0
+        ~ < k ( wv_len ext ) { ( wv_push tmp ( wv_at ext k ) ) = k + k 1 }
+        ( wv_drop ext )
         ( st_put st vid ( av_make ( av_own src1 ) ( av_loans src1 ) ( av_alias src1 ) ( sq_set_of_wv tmp ) ( av_call src1 ) ) )
         ( wv_drop tmp ) ( wv_drop moved )
     } {}
@@ -17100,6 +17109,17 @@ unsafe @ eng_byte s w i k → i {
             = g_fc_weak ? & & == eff EF_REPLACE == epath 0 ( sm_has sm SM_KEEPS ek ) 1 0
             ( eng_effect st ( pl_make ( pl_var ok ) ( ep_cat ( pl_path ok ) epath ) ) eff line 0 )
             = g_fc_weak 0
+            // (a library function that drops or replaces elements - `vec_clear`
+            // over a Vec of a type with a `% Drop` of the program's own - runs
+            // that destructor on each: what it does is done here, agora #712)
+            ? | == eff EF_DROP & & == eff EF_REPLACE != epath 0 == ( ep_last epath ) EE_STAR {
+                : i lf ( ef_find name )
+                ? | < lf 0 != 0 & ( ef_at lf EF_FLAGS ) 1 {
+                    : i dpl ( pl_make ( pl_var ok ) ( ep_take ( ep_cat ( pl_path ok ) epath ) PATH_MAX ) )
+                    : i dty ( eng_ty_of dpl )
+                    ? & != dty ET_NONE ( et_reaches_dtor dty 0 ) { ( eng_dtor_release st dpl dty line 0 ) } {}
+                } {}
+            } {}
             ? & & & == eff EF_REPLACE == epath 0 == ( pl_path ok ) 0 == ( sm_mode sm ek ) PM_INOUT {
                 // (a binding an `inout` callee may give a value of its own)
                 ( fx_set ( pl_var ok ) FX_VAR_FRESH )
@@ -19220,7 +19240,10 @@ unsafe @ eng_byte s w i k → i {
         // value, payloads and all - a payload is a lend of it)
         ? & & & whole == ( fv_kind ( pl_var op ) ) VK_TEMP == ( av_own av ) OW_O ! ( eng_own_dtor ( fv_ty ( pl_var op ) ) ) {
             : i sub2 ? >= dest 0 ( rebase_self sub ( pl_var op ) tag dest ) sub
-            ^ ( lent_part ( av_make OW_O 0 0 sub2 F ) )
+            // (…of a call's temporary that is its own on some calls and a lend
+            // on the others: the payload is that lend on those calls, agora
+            // #679)
+            ^ ( lent_part ( av_make OW_O ( av_loans av ) 0 sub2 & ( av_call av ) != ( av_loans av ) 0 ) )
         } {}
         ? & & != pty ET_NONE ! ( et_owning pty ) ! ( et_view_capable pty ) {
             // (a payload with no room for a view or a handle - an error code
@@ -19302,14 +19325,17 @@ unsafe @ eng_byte s w i k → i {
 // is no `none`?
 @ note_fresh i vid i rv i new → v {
     : i own ( av_own new )
-    ? | & != own OW_O != own OW_P != ( av_loans new ) 0 { ^ } {}
+    ? & != own OW_O != own OW_P { ^ } {}
     ? == ( ec rv ) RV_USE {
         : i op ( eng_op ( ec + rv 1 ) )
         ? & ( op_is_place op ) == ( pl_path op ) 0 {
-            ? ( fx_has ( pl_var op ) FX_VAR_FRESH ) { ( fx_set vid FX_VAR_FRESH ) } {}
+            // (…and so is one given a call's result that is its own on some
+            // calls and a lend on the others, on those calls: agora #679)
+            ? | ( fx_has ( pl_var op ) FX_VAR_FRESH ) ( fx_has ( pl_var op ) FX_CALL_MIXED ) { ( fx_set vid FX_VAR_FRESH ) } {}
             ^
         } {}
     } {}
+    ? != ( av_loans new ) 0 { ^ } {}
     ? & == ( ec rv ) RV_AGG ( fx_has vid FX_TEMP_NONE ) { ^ } {}
     ( fx_set vid FX_VAR_FRESH )
 }
@@ -19479,6 +19505,11 @@ unsafe @ eng_byte s w i k → i {
     : ~ i new ( eng_rvalue st rv ln ( fv_depth vid ) vty WK_VAR vid ? | mut ( fv_second vid ) TF_LEND_OWNER 0 vid )
     ? != g_fc_unsup 0 { ^ } {}
     ? & & != jalias 0 == ( av_own new ) OW_O == ( av_alias new ) 0 { = new ( av_make OW_O ( av_loans new ) jalias ( av_held new ) ( av_call new ) ) } {}
+    // (…what it selects there is a part of a value - a field, a payload: the
+    // rules for a part below decide, not the one for owners)
+    : ~ b jparts F
+    : ~ i jk 0
+    ~ < jk ( sq_len jalias ) { ? != ( pl_path ( sq_at jalias jk ) ) 0 { = jparts T } {} = jk + jk 1 }
     ? & & & mut == kind VK_LOCAL & != vty ET_NONE == ( et_kind vty ) EK_S == ( av_own new ) OW_L { ( fx_set vid FX_CURSOR ) } {}
     ? & & & & mut == kind VK_LOCAL & != vty ET_NONE == ( et_kind vty ) EK_S == ( av_loans new ) 0 | == ( av_own new ) OW_O & == rk RV_USE == ( ec + rv 1 ) 0 { ( fx_set vid FX_OWN_SLOT ) } {}
     : i src ( rv_use_var rv )
@@ -19491,7 +19522,7 @@ unsafe @ eng_byte s w i k → i {
     ? == kind VK_LOCAL { ( eng_freader_note vid rv ) ( eng_call_bind_note vid rv ) } {}
     : b plain_ty & & != vty ET_NONE ! ( et_is_view vty ) != ( et_kind vty ) EK_CLOSURE
     : i nown ( av_own new )
-    ? & & & & & & ! mut == kind VK_LOCAL from_temp ! ( av_call new ) != ( av_alias new ) 0 | == nown OW_L & == nown OW_O != ( av_loans new ) 0 & plain_ty ! ( et_scalar vty ) {
+    ? & & & & & & & ! mut == kind VK_LOCAL from_temp ! ( av_call new ) != ( av_alias new ) 0 | == nown OW_L & == nown OW_O != ( av_loans new ) 0 & plain_ty ! ( et_scalar vty ) ! jparts {
         // a `?` / `??` (or a value block) that selects among owners moves
         // the one it selects into the binding, on the paths that select it
         // - owners of this frame that live no longer than the binding: a

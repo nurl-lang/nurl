@@ -872,9 +872,13 @@ class FnCheck:
             # the literal is taken: the bindings it showed move into it
             gone = set()
             moved = {}
+            ext = set()
             for fname, b in named.items():
                 cur = st.vals.get(b)
                 if cur is not None and cur.own == "O":
+                    # (a binding that is a call's lend on some calls goes in as
+                    # that lend there: the field holds what it borrows, #679)
+                    ext |= {((fname,), l) for l in cur.loans}
                     gone |= {l for hp, l in src.held if l in self.loans and self.loans[l] == ((b, ()), "handle")}
                     # (what the binding holds of its own parts goes with it:
                     # held of the field it moved into, as `reroot` does)
@@ -889,7 +893,7 @@ class FnCheck:
                     self.rehome_views(st, b, (vid, (fname,)))
             src = st.vals[vid]
             src = AV(src.own, src.loans, src.alias,
-                     {(hp, moved.get(l, l)) for hp, l in src.held if l not in gone}, src.call)
+                     {(hp, moved.get(l, l)) for hp, l in src.held if l not in gone} | ext, src.call)
             st.vals[vid] = src
         if src.own == "P":
             self.s_consumes.add(self.pidx[vid])
@@ -2290,11 +2294,15 @@ class FnCheck:
 
     def note_fresh(self, vid, rv, new):
         """`vid` was given `new`: a value of its own that is no `None`?"""
-        if new.own not in ("O", "P") or new.loans:
+        if new.own not in ("O", "P"):
             return
         if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]:
-            if rv[1][1] in self.var_fresh:
+            # (…and so is one given a call's result that is its own on some
+            # calls and a lend on the others, on those calls: agora #679)
+            if rv[1][1] in self.var_fresh or rv[1][1] in self.call_mixed:
                 self.var_fresh.add(vid)
+            return
+        if new.loans:
             return
         if rv[0] == "agg" and self.temp_none.get(vid):
             return
@@ -3188,7 +3196,9 @@ class FnCheck:
                 # agora #641)
                 if dest_vid is not None:
                     sub = self.rebase_self(sub, op[1], tag, dest_vid)
-                return self.lent_part(AV("O", (), (), sub))
+                # (…of a call's temporary that is its own on some calls and a
+                # lend on the others: the payload is that lend there, #679)
+                return self.lent_part(AV("O", av.loans, (), sub, av.call and bool(av.loans)))
             if pty is not None and not self.T.owning(pty) and not self.T.view_capable(pty):
                 # (a payload with no room for a view or a handle - an error
                 # code and an offset - borrows nothing, whatever its option
@@ -3361,8 +3371,11 @@ class FnCheck:
                 if v.mut and v.kind == "local" and v.ty == ("s",) and not new.loans and (
                         new.own == "O" or (rv[0] == "use" and rv[1][0] == "c")):
                     self.own_slots.add(vid)
+                # (…what it selects there is a part of a value - a field, a
+                # payload: the rules for a part below decide)
+                jparts = any(a[1] for a in jalias)
                 if (not v.mut and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
-                        and self.fn.vars[rv[1][1]].kind == "temp" and not new.call and new.alias
+                        and self.fn.vars[rv[1][1]].kind == "temp" and not new.call and new.alias and not jparts
                         and (new.own == "L" or (new.own == "O" and new.loans))
                         and v.ty is not None and v.ty[0] not in VIEW_TYPES and v.ty[0] != "closure"
                         and not self.T.is_scalar(v.ty)):
