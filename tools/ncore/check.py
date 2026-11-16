@@ -248,6 +248,7 @@ class FnCheck:
         self.s_invokes = set()
         self.s_catches = set()   # the closure parameters run where a panic in them is caught
         self.s_detaches = set()
+        self.s_shares = set()   # parameters handed to a callee that shares them across threads
         self.s_stale = set()     # (capture, path): read before the body gave it a value
         self.s_credits = set()   # parameters the body's first statement gives a value that views nothing
         self.cur_line = fn.line
@@ -485,6 +486,17 @@ class FnCheck:
             for a in self.value_aliases(vid, av.alias):
                 self.effect(st, (a[0], a[1] + path), eff, line, depth + 1, weak)
             return
+        if (av.own == "O" and eff != "end" and av.alias and self.fn.vars[vid].kind == "local"
+                and (self.fn.vars[vid].mut or vid in self.call_mixed)
+                and not (not path and eff in ("replace", "take"))):
+            # a `: ~` binding that owns its value on some paths and borrows
+            # on others (a join of the two), or a binding of a call's result
+            # that is its own on some calls only: what is done through it is
+            # done to what it may borrow too - not its own release, its being
+            # given a new value or moved out whole
+            for a in self.value_aliases(vid, av.alias):
+                if a[0] != vid:
+                    self.effect(st, (a[0], a[1] + path), eff, line, depth + 1, weak)
         shown = self.agg_lends.get(vid)
         if shown and path and path[0] in shown and eff != "end":
             # a field of a literal temporary that shows a binding: what is
@@ -503,6 +515,17 @@ class FnCheck:
                         q = self.loans[l][0]
                         if q[0] >= 0 and q[0] in st.vals:
                             self.effect(st, (q[0], (q[1] + path[len(hp):])[:PATH_MAX]), eff, line, depth + 1, weak)
+        if eff in ("realloc", "drop", "permute") and av.held and not (av.own == "L" and not path):
+            # a part of the value that is a copy of another place's String or
+            # Vec handle (what a callee stored there): the copy shares that
+            # place's control block, so a change to the buffer through it is
+            # a change to that place's buffer too
+            for hp, l in av.held:
+                if path[:len(hp)] == hp and "*" not in hp and l in self.loans and self.loans[l][1] == "handle":
+                    hty = self.ty_of_place((vid, hp))
+                    q = self.loans[l][0]
+                    if hty is not None and hty[0] in ("String", "vec") and q[0] >= 0 and q[0] != vid and q[0] in st.vals:
+                        self.effect(st, (q[0], (q[1] + path[len(hp):])[:PATH_MAX]), eff, line, depth + 1, weak)
         if vid in self.pidx and eff != "end":
             self.s_effects.add((self.pidx[vid], path[:3], eff))
         if eff != "end":
@@ -1300,6 +1323,11 @@ class FnCheck:
         # a closure several threads may run at once changes nothing it
         # captured (MEMORY.md §6.5)
         for k in sm.get("shares", ()):
+            # (…and a parameter of this function handed to it, whole or
+            # inside the value: this function shares it - its callers ask
+            # the same of the closures they hand it)
+            if k < len(avs):
+                self.s_shares |= self.param_roots(avs[k], ops[k] if k < len(ops) else None)
             if k < len(avs) and self.closure_capture_effects(avs[k]):
                 self.err(line, f"{name}: the closure in argument {k + 1} changes what it captured, "
                                f"and several threads may run it at once")
@@ -3384,8 +3412,11 @@ class FnCheck:
                     # what the call handed back is the caller's own on the
                     # calls that made it fresh: the binding owns it there
                     # and releases it, and borrows on the others (owned per
-                    # call, MEMORY.md §7.6 "Call results")
-                    new = AV("O", new.loans, frozenset(), new.held)
+                    # call, MEMORY.md §7.6 "Call results") - and a change
+                    # through it is one to what it may borrow (its alias is
+                    # kept: `effect`)
+                    new = AV("O", new.loans, new.alias, new.held)
+                    self.call_mixed.add(vid)
                 if (new.own == "L" and new.loans and v.kind != "temp" and v.ty is not None
                         and v.ty[0] not in VIEW_TYPES and self.T.copyable(v.ty)
                         and all(l in self.loans and self.loans[l][1] == "handle" for l in new.loans)
@@ -3413,6 +3444,19 @@ class FnCheck:
             if not path:
                 outer = lambda x: self.fn.vars[x].depth <= v.depth and self.fn.vars[x].blk != vid
                 repoint = cur is not None and cur.own == "L"
+                # (…and a `: ~` String or Vec - or a by-pointer capture of
+                # one - given a field read of a binding it does not own, a
+                # parameter, a capture or a lend, `= c . x v`: nurlc releases
+                # its old value by its flag and it borrows the field from
+                # then on, no copy is made - agora #696)
+                if (not repoint and rv[0] == "use" and rv[1][0] == "v" and rv[1][2] and rv[1][1] != vid
+                        and ((v.kind == "local" and v.mut) or v.byref)
+                        and v.ty is not None and v.ty[0] in ("String", "vec")):
+                    src = rv[1][1]
+                    sav = st.vals.get(src)
+                    if sav is not None and (sav.own == "L" or (sav.own == "P" and src in self.pidx and (
+                            self.fn.modes[self.pidx[src]] != "sink"))):
+                        repoint = True
                 # (a lend of something that ends before the target - an inner
                 # block's local, an arm's - is copied in: MEMORY.md §7.6,
                 # "hands it a value of its own")
@@ -3894,6 +3938,23 @@ class FnCheck:
             self.exits.append(end)
         return self.make_summary()
 
+    def param_roots(self, av, op):
+        """The parameters (not captures) the value `av` at operand `op` is,
+        or holds a handle of, or holds what they hold."""
+        out = set()
+        def add(vid):
+            if vid in self.pidx and self.fn.modes[self.pidx[vid]] != "cap":
+                out.add(self.pidx[vid])
+        if op is not None and op[0] == "v":
+            add(op[1])
+        for a in av.alias:
+            add(a[0])
+        for _, l in av.held:
+            pl = self.param_loan(l)
+            if pl and self.fn.modes[pl[0]] != "cap":
+                out.add(pl[0])
+        return out
+
     def param_loan(self, lid):
         if lid not in self.loans:
             return None
@@ -3986,7 +4047,7 @@ class FnCheck:
                 "effects": sorted(self.s_effects), "stores": sorted(stores),
                 "consumes": sorted(consumes), "elems": sorted(self.s_elems),
                 "invokes": sorted(self.s_invokes), "cloargs": sorted(self.s_cloargs),
-                "detaches": sorted(self.s_detaches),
+                "detaches": sorted(self.s_detaches), "shares": sorted(self.s_shares),
                 "regions": sorted(self.s_regions), "selfholds": sorted(self.s_selfholds),
                 "rclos": sorted(rclos), "sclos": sorted(sclos), "calllends": sorted(calllends),
                 "gone": sorted(left_gone), "mixed": [1] if mixed else [], "stale": sorted(self.s_stale),
@@ -4002,7 +4063,7 @@ def initial_summary(prog, fn):
     return {"modes": list(fn.modes), "res": "none" if fn.ret is None or T.is_scalar(fn.ret) or fn.ret[0] in VIEW_TYPES else "own",
             "lends": [], "rholds": [], "effects": [], "stores": [],
             "consumes": [k for k, m in enumerate(fn.modes) if m == "sink"], "elems": [], "invokes": [],
-            "cloargs": [], "regions": [], "selfholds": [], "rclos": [], "sclos": [], "detaches": []}
+            "cloargs": [], "regions": [], "selfholds": [], "rclos": [], "sclos": [], "detaches": [], "shares": []}
 
 
 def check_program(prog, max_rounds=40):
@@ -4103,6 +4164,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "gone", "mixed", "stale", "credits", "keeps", "catches"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "shares", "gone", "mixed", "stale", "credits", "keeps", "catches"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out
