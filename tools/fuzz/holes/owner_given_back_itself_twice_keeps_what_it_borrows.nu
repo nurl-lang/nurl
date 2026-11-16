@@ -5,8 +5,11 @@
 $ `stdlib/core/string.nu`
 
 @ id ? String a → ?String { ^ a }
+
 @ gid [T] T a → T { ^ a }
+
 @ mk s t → ?String { ^ @ ?String { T ( string_from t ) } }
+
 @ show ? String o → v { ?? o { T s → { ( nurl_println ( string_data s ) ) } F → { ( nurl_println `none` ) } } }
 
 @ run i k → v {
