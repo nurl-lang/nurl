@@ -3899,11 +3899,22 @@ unsafe @ emit_coverage_modules s module → b {
     = g_vctl_seen 0
 }
 // The TBAA tag an element access through pointer binding `base` carries:
-// the vec-elem tag for a scalar element through a `__velem` pointer.
+// the vec-elem tag for a scalar or named-struct element through a
+// `__velem` pointer. A struct element (`%Rec`) is buffer memory as a
+// scalar one is: the control block is accessed only at its three header
+// words (`nurl_vctl_get` / `_set`, offsets 0..23), and the buffer is a
+// separate allocation or, packed, starts 24 bytes into the block; an
+// element that is a container handle (`%Vec__T`) is the pointer to its
+// own control block, not the block. LLVM keeps a scalar tag as it is on
+// the pieces of a split aggregate access (AAMDNodes::shiftTBAA), so the
+// pieces stay `nurl vec elem`. Untagged then, a `vec_put` of a struct
+// made the next `vec_at` reload the data pointer and the length, and redo
+// its bounds check, after every element store (agora #879). Literal
+// structs and arrays (`{`, `[`) stay untagged.
 @ mem_velem_tag i syms s base s ety → s {
     ? | == 0 ( nurl_str_len base ) == 0 ( nurl_sym_len2 syms base `__velem` ) { ^ `` } {}
     : i c0 ( nurl_str_get ety 0 )
-    ? | | == c0 37 == c0 123 == c0 91 { ^ `` } {}
+    ? | == c0 123 == c0 91 { ^ `` } {}
     ^ `, !tbaa !94`
 }
 // `--unsafe-report`: what the program asks to be trusted (outside the
@@ -110113,8 +110124,10 @@ unsafe @ __tf_emit i mp i k → v {
     ( nurl_poke # s g_tf_state k 2 )
 }
 
-// The module with every type definition moved to the top, or 0 when it
-// has none out of place to move. The caller releases a non-zero result.
+// The module with every type definition moved to the top, in place: the
+// same bytes, reordered, so its length is unchanged. Before, the reordered
+// module was a second copy of the whole module (38 MB on a self-compile),
+// alive beside the first through the emit — the compile's peak (agora #879).
 // Record the line [st, en) as type definition `k` when it is one; the
 // next k either way.
 unsafe @ __tf_record i mp i st i en i k → i {
@@ -110155,7 +110168,7 @@ unsafe @ __tf_next i mp i mlen i pos → i {
     ^ -1
 }
 
-unsafe @ __types_first s mod i mlen → s {
+unsafe @ __types_first s mod i mlen → v {
     : i mp # i mod
     : *u m # *u mod
     // A type definition is a line that starts with `%` — an instruction
@@ -110185,7 +110198,7 @@ unsafe @ __types_first s mod i mlen → s {
         }
     }
     = n + n nl
-    ? == n 0 { ( nurl_free # s lst ) ^ # s 0 } {}
+    ? == n 0 { ( nurl_free # s lst ) ^ } {}
     = g_tf_st # i # s ( nurl_zalloc * n 8 )
     = g_tf_en # i # s ( nurl_zalloc * n 8 )
     = g_tf_body # i # s ( nurl_zalloc * n 8 )
@@ -110200,32 +110213,43 @@ unsafe @ __types_first s mod i mlen → s {
         = li + li 1
     }
     ( nurl_free # s lst )
-    : ~ s out # s 0
     ? > k 0 {
-        = g_tf_out # i # s ( nurl_alloc + mlen 1 )
+        // The type lines, in their emission order (dependencies first),
+        // into a buffer of their own: each is emitted once (g_tf_state),
+        // so they come to `tl` bytes. A `Buf` releases it.
+        : ~ i tl 0
+        : ~ i ti 0
+        ~ < ti k { = tl + tl - ( nurl_peek # s g_tf_en ti ) ( nurl_peek # s g_tf_st ti ) = ti + ti 1 }
+        : Buf types_own @ Buf { # i ( nurl_alloc + tl 1 ) }
+        = g_tf_out . types_own p
+        = g_tf_olen 0
+        = ti 0
+        ~ < ti k { ( __tf_emit mp ti ) = ti + ti 1 }
         // A banner comment stays first.
         : i head ? & > mlen 0 == & # i . m 0 255 59 ( __tf_eol mp mlen 0 ) 0
-        ( memcpy # s g_tf_out mod head )
-        = g_tf_olen head
-        : ~ i ti 0
-        ~ < ti k { ( __tf_emit mp ti ) = ti + ti 1 }
-        // Then everything else, in its order, without the type lines.
-        : ~ i from head
-        = ti 0
-        ~ < ti k {
-            : i st ( nurl_peek # s g_tf_st ti )
-            ? > st from {
-                ( memcpy # s + g_tf_out g_tf_olen # s + mp from - st from )
-                = g_tf_olen + g_tf_olen - st from
+        // Then everything else, in its order, without the type lines:
+        // each stretch between two type lines moves right, by the type
+        // bytes before it, to end where the next one starts — so the
+        // stretches are moved last first, each to the right of where it
+        // was, and none is overwritten before it moves (memmove).
+        : ~ i dend mlen
+        : ~ i from mlen
+        = ti k
+        ~ > ti 0 {
+            = ti - ti 1
+            : i en ( nurl_peek # s g_tf_en ti )
+            ? > from en {
+                = dend - dend - from en
+                ( nurl_memmove # s + mp dend # s + mp en - from en )
             } {}
-            = from ( nurl_peek # s g_tf_en ti )
-            = ti + ti 1
+            = from ( nurl_peek # s g_tf_st ti )
         }
-        ( memcpy # s + g_tf_out g_tf_olen # s + mp from - mlen from )
-        = g_tf_olen + g_tf_olen - mlen from
-        : *u ob # *u # s g_tf_out
-        = . ob g_tf_olen # u 0
-        = out # s g_tf_out
+        ? > from head {
+            = dend - dend - from head
+            ( nurl_memmove # s + mp dend # s + mp head - from head )
+        } {}
+        // …and the type lines between the banner and the rest.
+        ( memcpy # s + mp head # s g_tf_out tl )
     } {}
     ( nurl_free # s g_tf_st )
     ( nurl_free # s g_tf_en )
@@ -110233,7 +110257,6 @@ unsafe @ __types_first s mod i mlen → s {
     ( nurl_free # s g_tf_state )
     ( nurl_sym_free g_tf_map )
     = g_tf_st 0 = g_tf_en 0 = g_tf_body 0 = g_tf_state 0 = g_tf_map 0 = g_tf_out 0
-    ^ out
 }
 
 // Emit the collected module: everything that is not a function body,
@@ -110260,13 +110283,10 @@ unsafe @ __types_first s mod i mlen → s {
 
 unsafe @ dce_emit_module s mod0 → v {
     : i mlen ( strlen mod0 )
-    // Every type definition goes first (see __types_first).
-    : Buf moved_own @ Buf { # i ( __types_first mod0 mlen ) }
-    : s moved # s . moved_own p
-    ? == # i moved 0 { ( __dce_emit_module mod0 mlen ) } {
-        ( __dce_emit_module moved mlen )
-        = g_dce_mod 0
-    }
+    // Every type definition goes first (see __types_first), in place:
+    // the caller's module is not read again after it is emitted.
+    ( __types_first mod0 mlen )
+    ( __dce_emit_module mod0 mlen )
 }
 
 unsafe @ __dce_emit_module s mod i mlen → v {
