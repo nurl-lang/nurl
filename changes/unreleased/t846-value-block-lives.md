@@ -11,4 +11,4 @@
 
 ### Changed
 
-- **The borrow checker's scope scans read each row's kind from its cached code instead of copying the row** (`__bck_scope_lets`, `bck_scope_restore`). With the #846 fix, compiling nurlc itself takes 0.24 % fewer instructions (callgrind: 25.89 G → 25.83 G), with the same peak memory (243 MB). Every tracked program compiles to the same verdict and the same code as before (tree sweep: 6628 files byte-identical).
+- **The borrow checker's scope scans read each row's kind from its cached code instead of copying the row** (`__bck_scope_lets`, `bck_scope_restore`). With the #846 fix, compiling nurlc itself takes 0.23 % fewer instructions (callgrind: 25.90 G → 25.84 G), with the same peak memory (243 MB). Every tracked program compiles to the same verdict and the same code as before (tree sweep: every tracked file but the new probes byte-identical).
