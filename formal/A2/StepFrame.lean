@@ -92,7 +92,7 @@ theorem panic_none {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic 
   generalize hr : Res.panic m1 = r at hst
   induction hst generalizing m1 with
   | letvP _ | assignP _ | panic => cases hr; exact fun _ h => h
-  | seqP _ ih | frozenP _ ih => cases hr; exact ih rfl
+  | seqP _ ih | frozenP _ ih | blockP _ ih => cases hr; exact ih rfl
   | @scopeP _ y _ _ _ _ _ _ ih | @rbindP _ y _ _ _ _ ih | @scopeDPMoved _ y _ _ _ _ ih =>
     cases hr; intro v hv
     simp only [Mem.remove_st]
@@ -116,7 +116,7 @@ theorem panic_spine {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic
   generalize hr : Res.panic m1 = r at hst
   induction hst generalizing m1 with
   | letvP _ | assignP _ | panic => cases hr; intro v hv; simp [Stmt.spine] at hv
-  | seqP _ ih | frozenP _ ih => cases hr; exact ih rfl
+  | seqP _ ih | frozenP _ ih | blockP _ ih => cases hr; exact ih rfl
   | @scopeP _ y _ _ _ _ _ _ ih | @rbindP _ y _ _ _ _ ih | @scopeDPMoved _ y _ _ _ _ ih =>
     cases hr; intro v hv
     simp only [Mem.remove_st]
@@ -217,7 +217,7 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
   induction hst generalizing m' s' with
   | seqSkip | iteT _ _ | iteF _ | «while» | frozenSkip | catchSkip | scopeLFail _ _ =>
     cases hr; intro v h h'; exact absurd h h'
-  | seqL _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeDIn _ ih | scopeLIn _ ih =>
+  | seqL _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | catchIn _ ih | scopeDIn _ ih | scopeLIn _ ih =>
     cases hr; intro v h h'
     have := ih rfl v h h'
     simp only [Stmt.spine, List.mem_cons]; first | exact this | exact Or.inr this
@@ -362,6 +362,8 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
   | editSetOOB _ ht _ _ _ =>
     cases hr; intro v h h'
     exact absurd (takeVal_none ht h) h'
+  | blockSkip | blockExit _ | loop =>
+    cases hr; intro v h h'; exact absurd h h'
   | _ => cases hr
 
 /-- A step unbinds the scopes it leaves. -/
@@ -369,7 +371,7 @@ theorem step_gone {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m
     (hck : CatchOK m s) : ∀ v ∈ s.spine, v ∉ s'.spine → m'.st v = none := by
   generalize hr : Res.ok m' s' = r at hst
   induction hst generalizing m' s' with
-  | seqL _ ih | frozenIn _ ih =>
+  | seqL _ ih | frozenIn _ ih | blockIn _ ih =>
     cases hr; intro v h h'; exact ih hck rfl v h h'
   | catchIn _ ih =>
     cases hr; intro v h h'; exact ih hck.2.2.2.2 rfl v h h'
@@ -402,6 +404,7 @@ theorem step_gone {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m
     have hvx : v ≠ x := fun e => hck.2.1 (e ▸ h)
     simp [upd_ne _ _ hvx, panic_spine hp v h]
   | reap hsrc _ _ => cases hr; intro v h _; rw [src_spine hsrc] at h; cases h
+  | blockExit he => cases hr; intro v h h'; rw [he.spine] at h'; exact absurd h h'
   | _ => cases hr <;> (intro v h _; simp [Stmt.spine] at h)
 
 end A2

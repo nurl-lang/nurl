@@ -1240,6 +1240,13 @@ inductive Stmt where
                                                           -- takes its receiver `inout`: the
                                                           -- environment is handed over to the
                                                           -- code, and back into `c` after
+  | block (s : Stmt)                                     -- Agora #871: a block that an `exit 0`
+                                                          -- in `s` leaves (a loop, a loop
+                                                          -- round, a function body)
+  | exit (n : Nat)                                        -- Agora #871: leave `n + 1` blocks
+                                                          -- (`break`, `continue`, an early `^`)
+  | loop (s : Stmt)                                       -- Agora #871: `while T`: run `s` again
+                                                          -- and again; left only by an exit
 
 
 /-- A3.5: a library's in-place change of its state (`pncounter_inc a …`,

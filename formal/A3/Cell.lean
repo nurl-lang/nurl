@@ -614,8 +614,9 @@ theorem _root_.A2.Step.cellKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : S
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact ih.trans (CellKeep.slots (Nat.le_refl _) (fun _ hc => .inl (CellAt.remove hc)) rfl)
   | frozenSkip => exact CellKeep.refl _
-  | frozenIn _ ih => exact ih
-  | frozenP _ ih => exact ih
+  | blockSkip | blockExit _ | loop => exact CellKeep.refl _
+  | frozenIn _ ih | blockIn _ ih => exact ih
+  | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he _ _ => exact (he.cellKeep _).congr rfl rfl rfl
   | assignP _ => exact CellKeep.refl _
   | iteT _ _ => exact CellKeep.refl _
@@ -1103,7 +1104,7 @@ theorem CellInv.live_home {C : Cfg} (h : CellInv C) {i j : Nat} {ti tj : Thread}
 
 /-- What a typed `withLock` checks out through is a live binding. -/
 theorem withLock_live {P : Prog} {Γ : Ctx} {F : List Var} {a x : Var} {s : Stmt} {Δ : Ctx} {m : Mem}
-    (h : StmtT P Γ F (.withLock a x s) Δ) (hi : Inv m Γ F (.withLock a x s)) :
+    (h : StmtT P ξ Γ F (.withLock a x s) Δ) (hi : Inv m Γ F (.withLock a x s)) :
     ∃ Γ' Ea, MInv m Γ' ∧ Γ' a = some Ea ∧ Ea.live = true := by
   generalize hS : Stmt.withLock a x s = S at h hi
   induction h with
@@ -1124,7 +1125,7 @@ theorem CellOp.cellAt {P : Prog} {C : Cfg} (hc : CInv P C) {i : Nat} {t : Thread
       obtain ⟨ps, hcp, _⟩ := hc
       obtain ⟨pa, hpa⟩ := part_of hcp.len hi
       obtain ⟨⟨Γ, F, Δ, hT, hinv, _⟩, _⟩ := hcp.ok i t pa hi hpa
-      obtain ⟨Γ', F', Δ', hT', hinv'⟩ := hR.typed Γ F Δ hT hinv
+      obtain ⟨_, Γ', F', Δ', hT', hinv'⟩ := hR.typed _ Γ F Δ hT hinv
       obtain ⟨Γ'', Ea, hmi, hEa, hla⟩ := withLock_live hT' hinv'
       exact cellAt_of_live rfl hmi hEa hla ha (Sub.refl _)
   · exact hk

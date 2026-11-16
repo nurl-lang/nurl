@@ -1038,6 +1038,9 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .insert x i y => .insert (ρ x) (i.rename ρ) (ρ y)
   | .withElem v i x s => .withElem (ρ v) (i.rename ρ) (ρ x) (s.rename ρ)
   | .callcE x c j zs s => .callcE (ρ x) (ρ c) j (zs.map ρ) (s.rename ρ)
+  | .block s => .block (s.rename ρ)
+  | .exit n => .exit n
+  | .loop s => .loop (s.rename ρ)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -1251,6 +1254,24 @@ def Stmt.src : Stmt → Bool
   | .insert _ _ _ => true
   | .withElem _ _ _ s => s.src
   | .callcE _ _ _ _ s => s.src
+  | .block s => s.src
+  | .exit _ => true
+  | .loop s => s.src
+
+/-- Agora #871: `s` is about to take an exit that leaves `n` blocks besides
+    the ones inside `s`: an `exit` at the head of the sequences it is in,
+    inside the run-time scopes and blocks it leaves on its way.  `e` is what
+    the exit leaves behind: the scopes' frames, each around the next one's,
+    the innermost around `skip` — their ends, to run innermost first.  The
+    rest of each sequence is dropped (it does not run), and so are the
+    blocks inside (they are left). -/
+inductive ExitAt : Stmt → Nat → Stmt → Prop
+  | exit {n : Nat} : ExitAt (.exit n) n .skip
+  | seq {a b e : Stmt} {n : Nat} : ExitAt a n e → ExitAt (.seq a b) n e
+  | scope {x : Var} {s e : Stmt} {n : Nat} : ExitAt s n e → ExitAt (.scope x s) n (.scope x e)
+  | scopeD {x : Var} {f : Nat} {s e : Stmt} {n : Nat} :
+      ExitAt s n e → ExitAt (.scopeD x f s) n (.scopeD x f e)
+  | block {s e : Stmt} {n : Nat} : ExitAt s (n + 1) e → ExitAt (.block s) n e
 
 inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | seqSkip {m : Mem} {b : Stmt} : Step P m (.seq .skip b) (.ok m b)
@@ -1624,6 +1645,23 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
         (.ok { (m.set m.nv ⟨true, some p⟩) with
                 nv := m.nv + 1, blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) }
           (.seq (.scopeD m.nv f .skip) r))
+  /-- Agora #871: a block runs its body in place ... -/
+  | blockIn {m m' : Mem} {s s' : Stmt} :
+      Step P m s (.ok m' s') → Step P m (.block s) (.ok m' (.block s'))
+  /-- ... ends with it ... -/
+  | blockSkip {m : Mem} : Step P m (.block .skip) (.ok m .skip)
+  /-- ... is left by an exit of it (`ExitAt s 0 e`): the rest of every
+      sequence the exit is at the head of is dropped, the blocks inside
+      are left, and the scopes it leaves end, innermost first (`e`: their
+      frames, around nothing left to run), each frame's own end dropping
+      what it owns or running its destructor (`scopeSkip`, `scopeDEnd`, …),
+      as nurlc's `break`, `continue` and early `^` run the drops of the
+      scopes they leave ... -/
+  | blockExit {m : Mem} {s e : Stmt} : ExitAt s 0 e → Step P m (.block s) (.ok m e)
+  /-- ... and a panic in it goes on (the block owns nothing). -/
+  | blockP {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Step P m (.block s) (.panic m')
+  /-- Agora #871: `while T`: the body, then the loop again. -/
+  | loop {m : Mem} {s : Stmt} : Step P m (.loop s) (.ok m (.seq s (.loop s)))
 
 /-- Agora #610: an orphan awaits its destructor: some `dead` block still holds
     its payload, which `Step.reap` may move out.  Between the steps of a run
@@ -1685,6 +1723,7 @@ def Blocked (m : Mem) : Stmt → Prop
   | .catchR _ _ s => Blocked m s
   | .scopeD _ _ s => Blocked m s
   | .scopeL _ _ _ s => Blocked m s
+  | .block s => Blocked m s
   | _ => False
 
 /-- A configuration that is neither finished nor able to step, nor (A3.2)

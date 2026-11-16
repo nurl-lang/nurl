@@ -36,6 +36,8 @@ import A2.Soundness
 import A2.Settle
 import A2.DynCell
 import A2.TakeWitness
+import A2.ExitWitness
+import A2.Layout
 import A2.DtorWitness
 import A2.DropCode
 import A2.ClosureDropWitness

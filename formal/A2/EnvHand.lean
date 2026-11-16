@@ -809,7 +809,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
     (hf : P[f]? = some fn) (hps : fn.params = [(.inout b, te)]) (hto : te.owning = true) (hnt : ¬ ThruFn P f)
     (hrt : fn.resTy = sig.resTy) (hro : fn.resOwn = sig.resOwn) (hfl : fn.lends ⊆ sig.lends)
     (hfr : fn.rholds ⊆ sig.rholds) (hfo : fn.outHolds ⊆ sig.outHolds) (hq : q.Fits te []) :
-    ∃ Γe, StmtT P (handCtx Γ c x Ec te m.nv (callX fn)) F
+    ∃ Γe, StmtT P ξ (handCtx Γ c x Ec te m.nv (callX fn)) F
       (.scope m.nv (.seq (.letcall (m.nv + 1) f [m.nv] (.assign x (.var (m.nv + 1))))
         (.assign c (.pack fs te ms m.nv [])))) Γe ∧
       Weaker Γe (kill .replace false c (setE Γ1 x E)) := by
@@ -1048,7 +1048,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
   have hmodes : ((callX fn).mode = .own ∧ Er.mode = .own) ∨ ((callX fn).mode = .inout .replace ∧ Er.mode = .own) ∨
       ((callX fn).mode = .bor ∧ Er.mode = .bor) := by
     rw [hErm]; simp only [callX, callRes, resMode]; split <;> simp
-  have hTasg : StmtT P Γr F (.assign x (.var (m.nv + 1)))
+  have hTasg : StmtT P ((ξ.under m.nv).under (m.nv + 1)) Γr F (.assign x (.var (m.nv + 1)))
       (setE (kill .replace false x Γ2) x { Er with mode := (callX fn).mode }) :=
     StmtT.assign (by simp [Γr, setE, upd_ne _ _ (Ne.symm hrx), h1x]) hxF hmodes hRhs
       (by rw [hErt]; rfl) hxroot (by rw [hΓ2eq]; simp [setE, upd_ne _ _ (Ne.symm hrx), h1x])
@@ -1065,7 +1065,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
     rw [hr, hEr0]; rfl
   have hfrΔ : FrameOK Γ (setE (kill .replace false x Γ2) x Ex1) := by
     rw [hΔr]; exact hfr2.setE (resMode_ne' fn) hErd hErdb
-  have hTcall : StmtT P Γh F (.letcall (m.nv + 1) f [m.nv] (.assign x (.var (m.nv + 1))))
+  have hTcall : StmtT P (ξ.under m.nv) Γh F (.letcall (m.nv + 1) f [m.nv] (.assign x (.var (m.nv + 1))))
       (exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1)) :=
     StmtT.letcall rfl hhr hrF hcT' hTasg (hfrΔ.endOK_fresh hi hΓr)
       -- (A2-drop.3a: the code's result moves into `x` at once, whose
@@ -1111,7 +1111,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
     have hd' : d ∈ HyR := by simpa [Entry.vdeps, Mode.ownSlot, capDeps, Ey1] using hd
     obtain ⟨d0, hd0, hr⟩ := hHyR_Ec d hd'
     exact hnc d0 hd0 (hr ▸ hdr)
-  have hTpack : StmtT P Γ3 F (.assign c (.pack fs te ms m.nv []))
+  have hTpack : StmtT P (ξ.under m.nv) Γ3 F (.assign c (.pack fs te ms m.nv []))
       (setE (kill .replace false c Γ4) c
         { (⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false⟩ : Entry) with mode := Ecd1.mode }) :=
     StmtT.assign h3c hcF (Or.inl ⟨by rw [hEcd1.1, hmo], rfl⟩) hpk (by show Ty.fn ms q = Ecd1.ty; rw [hEcd1.2.1, htc])
@@ -1321,7 +1321,7 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
     (hf : P[f]? = some fn) (hps : fn.params = [(.sink, te)]) (hto : te.owning = true) (hnt : ¬ ThruFn P f)
     (hrt : fn.resTy = sig.resTy) (hro : fn.resOwn = sig.resOwn) (hfl : fn.lends ⊆ sig.lends)
     (hfr : fn.rholds ⊆ sig.rholds) :
-    ∃ Γe, StmtT P (handCtx Γ c x Ec te m.nv (callX fn)) F
+    ∃ Γe, StmtT P ξ (handCtx Γ c x Ec te m.nv (callX fn)) F
       (.scope m.nv (.letcall (m.nv + 1) f [m.nv] (.assign x (.var (m.nv + 1))))) Γe ∧
       Weaker Γe (kill .replace false c (setE Γ1 x E)) := by
   have hcT0 := hcT
@@ -1458,7 +1458,7 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
   have hmodes : ((callX fn).mode = .own ∧ Er.mode = .own) ∨ ((callX fn).mode = .inout .replace ∧ Er.mode = .own) ∨
       ((callX fn).mode = .bor ∧ Er.mode = .bor) := by
     rw [hErm]; simp only [callX, callRes, resMode]; split <;> simp
-  have hTasg : StmtT P Γr F (.assign x (.var (m.nv + 1)))
+  have hTasg : StmtT P ((ξ.under m.nv).under (m.nv + 1)) Γr F (.assign x (.var (m.nv + 1)))
       (setE (kill .replace false x Γ2) x { Er with mode := (callX fn).mode }) :=
     StmtT.assign (by simp [Γr, setE, upd_ne _ _ (Ne.symm hrx), h1x]) hxF hmodes hRhs
       (by rw [hErt]; rfl) hxroot (by rw [hΓ2eq]; simp [setE, upd_ne _ _ (Ne.symm hrx), h1x])
@@ -1472,7 +1472,7 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
     rw [hEx1, hErv0] at hd; cases hd
   have hfrΔ : FrameOK Γ (setE (kill .replace false x Γ2) x Ex1) := by
     rw [hΔr]; exact hfr2.setE (resMode_ne' fn) hErd hErdb
-  have hTcall : StmtT P Γh F (.letcall (m.nv + 1) f [m.nv] (.assign x (.var (m.nv + 1))))
+  have hTcall : StmtT P (ξ.under m.nv) Γh F (.letcall (m.nv + 1) f [m.nv] (.assign x (.var (m.nv + 1))))
       (exitScope (m.nv + 1) (setE (kill .replace false x Γ2) x Ex1)) :=
     StmtT.letcall rfl hhr hrF hcT' hTasg (hfrΔ.endOK_fresh hi hΓr)
       -- (A2-drop.3a: the code's result moves into `x` at once, whose
@@ -1683,10 +1683,10 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
     (hsl : sig.lends = []) (hsr : sig.rholds = []) (hso : sig.outHolds = [])
     (hny : NoPin Γ c) (hdc : DtorSafe Γ .replace false c)
     (hcT : CallT P (kill .replace false c Γ) F σ [c] E Γ1)
-    (hkT : StmtT P (kill .replace false c (setE Γ1 x E)) F k Δ) (hpx : EndOK Δ x)
+    (hkT : StmtT P (ξ.under x) (kill .replace false c (setE Γ1 x E)) F k Δ) (hpx : EndOK Δ x)
     (hcd : MemCodes P m) (hi : Inv m Γ F (.callcE x c j [] k))
     (hst : Step P m (.callcE x c j [] k) (.ok m' s')) (hnr : ¬ IsReap m (.callcE x c j [] k) m' s') :
-    ∃ Γ', StmtT P Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
+    ∃ Γ', StmtT P ξ Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
       Keep Γ Γ' (.callcE x c j [] k) s' ∧ Frz F m m':= by
   obtain ⟨hsp, hvd, hmo, hlc, _, _⟩ := hD
   obtain ⟨fs0, te0, env0, f0, fn0, hslot0, hfs0, hf0, hps, hrt, hro, hl, hr, ho, hnt, hq⟩ :=
@@ -1738,7 +1738,7 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
   -- the run-time form, typed
   obtain ⟨Γe, hTh, hW⟩ := handD_typed hP hi.toMInv hanch hi.nvF hc htu hmo hvd hx hxn hxF hcF hny hcT hσ hsp
     hsl hsr hf0 hps hto hnt hrt hro hl hr
-  have hT : StmtT P (handCtx Γ c x Ec te0 m.nv (callX fn0)) F (handStmtD x f0 [] m.nv k)
+  have hT : StmtT P ξ (handCtx Γ c x Ec te0 m.nv (callX fn0)) F (handStmtD x f0 [] m.nv k)
       (exitScope x Δ) :=
     StmtT.scope ⟨callX fn0, handCtx_x, resMode_ne' fn0⟩ hxF (StmtT.seq hk hTh (hkT.weakenIn hW)) hpx
   -- the hand-over's context: every binding the store had, ended or moved out, and the two new ones
@@ -1884,7 +1884,7 @@ theorem handProgress {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : N
     (`hand_minv`), the run-time form typed (`hand_typed`), and every binding
     outside its new scopes kept. -/
 theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
-  intro Γ Γ1 F x c j k Ec E ms q σ sig b Δ m m' s' hk hx hxF hc htu hcan hj hσ hsp0 hsl hsr hso hny hdc hcT hkT
+  intro ξ Γ Γ1 F x c j k Ec E ms q σ sig b Δ m m' s' hk hx hxF hc htu hcan hj hσ hsp0 hsl hsr hso hny hdc hcT hkT
     hpx hcd hi hst hnr
   rcases hsp0 with ⟨hsp, htc, _⟩ | hD
   rotate_left
@@ -1940,7 +1940,7 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
     -- the run-time form, typed
     obtain ⟨Γe, hTh, hW⟩ := hand_typed hP hi.toMInv hanch hi.nvF hc htc hmo hx hxn hxF hcF hny hdc hcT hσ hsp
       hsl hsr hso hf0 hps hto hnt hrt hro hl hr ho hq (fs := fs0)
-    have hT : StmtT P (handCtx Γ c x Ec te0 m.nv (callX fn0)) F (handStmt x c f0 [] fs0 te0 ms m.nv k)
+    have hT : StmtT P ξ (handCtx Γ c x Ec te0 m.nv (callX fn0)) F (handStmt x c f0 [] fs0 te0 ms m.nv k)
         (exitScope x Δ) :=
       StmtT.scope ⟨callX fn0, handCtx_x, resMode_ne' fn0⟩ hxF (StmtT.seq hk hTh (hkT.weakenIn hW)) hpx
     -- the hand-over's context: every binding the store had, ended or moved out, and the two new ones

@@ -60,7 +60,7 @@ theorem made_safe_full {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : 
 theorem claim_made_full (P : Prog) (spawn : Nat → Bool) (D : List Decl) (s : Stmt) (Δ : Ctx) (nv : Nat)
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hD : DeclsOK P D)
     (hPG : ProgGlobs P (declTy D))
-    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) (hsg : s.globsAt (declTy D))
+    (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) (hsg : s.globsAt (declTy D))
     (hv : ∀ v ∈ s.vars, v < nv) :
     (∀ i G d, Made P spawn D i G → D[i]? = some d →
       MemorySafe P spawn (Cfg.start G (makeStmt i d) 1) ∧ RaceFree P spawn (Cfg.start G (makeStmt i d) 1) ∧

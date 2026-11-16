@@ -102,6 +102,8 @@ The same modules under `A2/`, extended, and:
 | `DYN_DESIGN.md` | why the owner cell, how it corresponds to nurlc's ownership bit, and what phase C / D must show of it |
 | `TakeWitness` | Agora #826: a take out of an `inout .replace` place (`RhsT.take`: the `Vec` moves out, the place keeps a fresh empty one and stays live), nurlc's hand-over of an `inout` handle parameter: the callee checked against its summary (`g_ok`), and a caller that reads its argument after the call run safe and leak-free (`main_safe`, `main_no_leak`) |
 | `TAKE_DESIGN.md` | the take's step and typing, why its `Vec`'s elements hold no view, and how each part of the proof covers it |
+| `ExitWitness` | Agora #871, the early exits: a `break` out of a `while T` from inside a scope whose owned `Vec` the exit drops (`mainB_typed`, `breakB_steps`, `mainB_safe`, `mainB_no_leak`); a `continue`-shaped exit of a loop body's block, the loop left from its head (`mainC_safe`, `mainC_no_leak`); and a `^` from inside a scope of a callee, checked against its summary (`gR_ok`, `returnR_steps`), with its caller run safe and leak-free (`mainR_safe`, `mainR_no_leak`) |
+| `Layout` | Agora #879: a tree's addresses are its nodes' control blocks and buffers (`ctls_datas_perm`), and the control block of a node of any tree the store owns, a slot's or a block's payload, is not the buffer of a node of any tree it owns (`ctl_ne_data`, from `HeapOK` and `BlkOwn`): the fact nurlc's `nurl vec ctl` / `nurl vec elem` TBAA tags assert |
 
 The theorems, `A2.memory_safe`, `A2.soundness`, `A2.no_leak_end` and
 `A2.no_leak_panic` (`check.sh` prints the axioms of each).
@@ -144,18 +146,37 @@ rather than a gap in what it proves:
   #253; `CLAIM.md`, Destructors);
 - `Rc` and its cycle collector, which are the standard library's `unsafe`
   base (phase B);
-- leaving early: `break` and `continue` out of a loop, and a `^` before
-  the end of a function's body. A2's `Stmt` has none of them. Its loop
-  is left only from its head (`Step.while`, `StmtT.while`: the exit is
-  the loop's invariant), and a function returns at the end of its body
-  (`Fn.body`). nurlc's rules for them are therefore not yet rules of the
-  calculus: a loop's exit is the join of its `break`s' states and its
-  head's, except that a loop whose condition is the literal `T` and that
-  has a `break` leaves only by its `break`s (`bck_loop`; Agora #413,
-  #453). The refinement is an early exit as a step result beside
-  `Res.panic`, caught by the innermost loop or by the call, as `catchR`
-  catches a panic. Until it lands, that nurlc's rules for these exits
-  agree with the calculus is part of phase C.
+
+Leaving early (Agora #871) is in the calculus. A block (`Stmt.block`) is
+what an `exit n` leaves: it jumps out of `n + 1` blocks in one step
+(`ExitAt`, `Step.blockExit`), and every scope it leaves ends on the way,
+its drops and destructors run as at the scope's own end. A `break` is an
+`exit` of the block around its loop, a `continue` of the block around
+the loop's body, and a `^` sets the result slot and exits the block that
+is the function's body. `while T` is `Stmt.loop`, left only by its
+exits. Typing carries the exits a statement may take (`StmtT`'s `Exits`
+index): an `exit` is typed where every scope it leaves can end
+(`Exits.under`, `Exits.underD`), and the block's end, its body's end,
+says no more than the context each exit leaves from (`Exits.blk`,
+`Weaker`). So a block's end is a join of its exits' states
+and its body's, and a `while T`'s of its exits' only, as nurlc's
+`bck_loop` has it (Agora #413, #453).
+
+The frames that are not scopes take no exits: a `recover` (`catchR`), a
+borrow's or a freeze's frame (`rbind`, `frozen`), a lock's check-out
+(`withLock`, `scopeL`) and an element's hand-over (`withElem`, `insert`)
+are typed with `Exits.none`. In NURL source there is no exit that could
+cross one: each holds a call (`recover f`, `locked_update a f`,
+`( f ( vec_at v i ) )`), or, at run time, a callee's body, whose own
+exits are its body block's. The one way source put a jump across a call
+frame was a `break` or `continue` in a closure literal written inside a
+loop; nurlc emitted a branch to the enclosing function's loop label and
+clang refused the module. nurlc now refuses it with a diagnostic, so its
+rule is the calculus's (Agora #871, `compiler/tests/diag_break_in_closure_body.nu`).
+nurlc's exits end the scopes they leave as `Step.blockExit` does,
+innermost first, each destructor once
+(`compiler/tests/exits_drop_each_scope_once.nu`). That nurlc's rules for
+the exits agree with these in full is part of phase C.
 
 ### A3 — threads and data-race freedom
 

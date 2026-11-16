@@ -321,14 +321,25 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .rbindP h1 hp, rfl⟩
   | frozenSkip => exact ⟨_, .frozenSkip, rfl, .refl _⟩
+  | blockSkip => exact ⟨_, .blockSkip, rfl, .refl _⟩
+  | blockExit he => exact ⟨_, .blockExit he, rfl, .refl _⟩
+  | loop => exact ⟨_, .loop, rfl, .refl _⟩
   | frozenIn _ ih =>
     obtain ⟨r1, h1, hd⟩ := ih
     obtain ⟨s1, rfl, hg⟩ := ResDown.ok_inv hd
     exact ⟨_, .frozenIn h1, rfl, .frozen _ hg⟩
+  | blockIn _ ih =>
+    obtain ⟨r1, h1, hd⟩ := ih
+    obtain ⟨s1, rfl, hg⟩ := ResDown.ok_inv hd
+    exact ⟨_, .blockIn h1, rfl, .block hg⟩
   | frozenP _ ih =>
     obtain ⟨r1, h1, hd⟩ := ih
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .frozenP h1, rfl⟩
+  | blockP _ ih =>
+    obtain ⟨r1, h1, hd⟩ := ih
+    obtain rfl := ResDown.panic_inv hd
+    exact ⟨_, .blockP h1, rfl⟩
   | assign hx he hx1 hd =>
     exact ⟨_, .assign hx (EvalR.restrict_ok he hav hb hp hf) hx1
       (DropSlot.restrict hx1 hd (EvalR.avoids he hb hav hf).1), rfl, .refl _⟩

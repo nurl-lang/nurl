@@ -69,7 +69,7 @@ theorem owned_part {P : Prog} {C : Cfg} {t : Thread} {a : Nat → Bool} {s : Stm
 /-- The start (A3.6: with the module globals set): one thread, whose part
     is empty; every live address is a payload of a block a global reaches. -/
 theorem CInv.start {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat} {G : Globs}
-    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
+    (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) (hG : GlobsOK P G) : CInv P (Cfg.start G s nv) := by
   refine ⟨[fun _ => false], ⟨rfl, fun i => ?_, fun j k a b hjk hj hk => ?_, fun j a ha i hai _ => ?_,
     fun k k' bl bl' i hk hk' hi hi' => ?_, fun j t a hj ha => ?_⟩,

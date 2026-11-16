@@ -212,6 +212,16 @@ const MODULE_LAYERS = {
     category: 'Worked Examples',
     summaryEn: 'Agora #826: a take out of an inout .replace place (RhsT.take): a callee that hands its inout String on, checked against its summary, and a caller that reads its argument after the call, with memory_safe and no_leak_end applied (g_ok, main_safe, main_no_leak).',
   },
+  Layout: {
+    layer: 4,
+    category: 'Memory Invariant',
+    summaryEn: 'Agora #879: a tree\'s addresses split into its nodes\' control blocks and buffers (ctls_datas_perm); no control block of any owned tree, a slot\'s or a block payload, is a buffer of any owned tree (ctl_ne_data, from HeapOK and BlkOwn), the fact the lowering\'s Vec TBAA tags assert.',
+  },
+  ExitWitness: {
+    layer: 5,
+    category: 'Worked Examples',
+    summaryEn: 'Agora #871: early exits. A break out of while T that drops a live owned Vec on the way (mainB_typed, breakB_steps), a continue-shaped exit of a loop body, and an early ^ across a scope in a callee checked against its summary (gR_ok) with its caller, each run safe and leak-free (mainB_safe, mainC_no_leak, mainR_safe, mainR_no_leak).',
+  },
 };
 
 const A3_MODULE_LAYERS = {

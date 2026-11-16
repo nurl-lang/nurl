@@ -232,7 +232,7 @@ theorem wf_of {Γ : Ctx} (hD : NoDeps Γ) (hf : ∀ v E, Γ v = some E → E.dto
 
 /-- A panic typed at the context it is in. -/
 theorem panic_typed {Γ : Ctx} {F : List Var} (hD : NoDeps Γ)
-    (hf : ∀ v E, Γ v = some E → E.dtor = false ∧ E.dbind = false) : StmtT P Γ F .panic Γ :=
+    (hf : ∀ v E, Γ v = some E → E.dtor = false ∧ E.dbind = false) : StmtT P ξ Γ F .panic Γ :=
   StmtT.panic (wf_of hD hf) hD.names (fun _ => rfl) (fun _ E h => ⟨E, h, rfl, rfl, fun _ => rfl⟩)
     (DKeep.refl _ _) (DStay.refl _ _)
 
@@ -245,7 +245,7 @@ def ES : Entry := ⟨.arc DP, .own, true, [], [], false, false⟩
 theorem tail_typed {Γ : Ctx} (hR : NoRootb Γ) (hD : NoDeps Γ) {a b y s : Var}
     (hab : a ≠ b) (hay : a ≠ y) (has : a ≠ s) (hby : b ≠ y) (hbs : b ≠ s) (hys : y ≠ s)
     (ha : Γ a = none) (hb : Γ b = none) (hy : Γ y = none) (hs : Γ s = none) :
-    ∃ Δ, StmtT P Γ [] (tail a b y s) Δ ∧ NoRootb Δ ∧ NoDeps Δ ∧
+    ∃ Δ, StmtT P ξ Γ [] (tail a b y s) Δ ∧ NoRootb Δ ∧ NoDeps Δ ∧
       ∀ v, v ≠ a → v ≠ b → v ≠ y → v ≠ s → Δ v = Γ v := by
   let K1 : Ctx := A2.setE Γ a intE
   let K2 : Ctx := A2.setE K1 b intE
@@ -274,23 +274,23 @@ theorem tail_typed {Γ : Ctx} (hR : NoRootb Γ) (hD : NoDeps Γ) {a b y s : Var}
   let K4 : Ctx := A2.setE K3' s ES
   have hK4 : NoRootb K4 := hK3'.setE (by simp [ES])
   have hD4 : NoDeps K4 := hD3'.setE rfl
-  have hp := panic_typed (F := []) hD4 (fun v E h => (hK4 v E h).2)
-  have hsc := StmtT.letv (P := P) (x := s) (r := .arcNew DP y) (E := ES) (F := []) (Γ := K3) (Γ1 := K3')
+  have hp := panic_typed (ξ := .none) (F := []) hD4 (fun v E h => (hK4 v E h).2)
+  have hsc := StmtT.letv (ξ := .none) (P := P) (x := s) (r := .arcNew DP y) (E := ES) (F := []) (Γ := K3) (Γ1 := K3')
     rfl (by simp [K3, K2, K1, A2.setE, upd_ne _ _ hys.symm, upd_ne _ _ hbs.symm, upd_ne _ _ has.symm, hs])
-    (by simp) hnew hp (hK4.endOK _) (fun _ => rfl)
+    (by simp) hnew hp.ofNone (hK4.endOK _) (fun _ => rfl)
   have hpair : RhsT K2 [] (.pair a b) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd_ne _ _ hab]) rfl PushArg.int
       (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
-  have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := y) (f := 1) (r := .pair a b)
+  have hd := StmtT.letd (ξ := .none) (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := y) (f := 1) (r := .pair a b)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd_ne _ _ hby.symm, upd_ne _ _ hay.symm, hy])
-    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop1_ok) (HeldUp.refl _ _) hsc
+    (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop1_ok) (HeldUp.refl _ _) hsc.ofNone
     ((hK4.exitScope s).endOK _)
-  have h2 := StmtT.letv (P := P) (x := b) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE, upd_ne _ _ hab.symm, hb]) (by simp) (RhsT.expr ExprT.lit) hd
+  have h2 := StmtT.letv (ξ := .none) (P := P) (x := b) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE, upd_ne _ _ hab.symm, hb]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
     (((hK4.exitScope s).exitScope y).endOK _)
-  have h1 := StmtT.letv (P := P) (x := a) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := Γ) (Γ1 := Γ)
-    rfl ha (by simp) (RhsT.expr ExprT.lit) h2 ((((hK4.exitScope s).exitScope y).exitScope b).endOK _)
-  refine ⟨_, h1, (((hK4.exitScope s).exitScope y).exitScope b).exitScope a, ?_, ?_⟩
+  have h1 := StmtT.letv (ξ := .none) (P := P) (x := a) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := Γ) (Γ1 := Γ)
+    rfl ha (by simp) (RhsT.expr ExprT.lit) h2.ofNone ((((hK4.exitScope s).exitScope y).exitScope b).endOK _)
+  refine ⟨_, h1.ofNone, (((hK4.exitScope s).exitScope y).exitScope b).exitScope a, ?_, ?_⟩
   · rw [hD4.exitScope_eq, (hD4.upd_none s).exitScope_eq, ((hD4.upd_none s).upd_none y).exitScope_eq,
       (((hD4.upd_none s).upd_none y).upd_none b).exitScope_eq]
     exact (((hD4.upd_none s).upd_none y).upd_none b).upd_none a
@@ -305,7 +305,7 @@ theorem tail_typed {Γ : Ctx} (hR : NoRootb Γ) (hD : NoDeps Γ) {a b y s : Var}
 theorem assign_res {fn : Fn} {r : Var} (hc : sigCtx fn r = some R0)
     (hp : ∀ p E, sigCtx fn p = some E → E.mode = .rootb → E.vdeps = [])
     (hflags : ∀ v E, sigCtx fn v = some E → E.dtor = false ∧ E.dbind = false) :
-    StmtT P (sigCtx fn) [] (.assign r (.expr (.lit 0)))
+    StmtT P ξ (sigCtx fn) [] (.assign r (.expr (.lit 0)))
       (setE (kill .replace false r (sigCtx fn)) r { intE with mode := R0.mode }) :=
   StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
@@ -343,7 +343,7 @@ theorem Gp_flags : ∀ v E, Gp v = some E → E.dtor = false ∧ E.dbind = false
     Ty.hasFn] at h <;> subst h <;> (try split) <;> simp [Entry.vdeps]
 
 theorem pfn_ok : FnOK P pfn := by
-  have ha := assign_res (fn := pfn) (r := 1) (by simp [sigCtx, pfn, R0, resMode])
+  have ha := assign_res (ξ := .none) (fn := pfn) (r := 1) (by simp [sigCtx, pfn, R0, resMode])
     (by
       intro p E hp _
       rcases p with _ | _ | p <;> simp [sigCtx, pfn, paramE, resMode, DP, T, Ty.hasFn] at hp <;> subst hp <;>
@@ -351,7 +351,7 @@ theorem pfn_ok : FnOK P pfn := by
     (by
       intro v E h
       rcases v with _ | _ | v <;> simp [sigCtx, pfn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩)
-  have hp := panic_typed (Γ := Gp) (F := []) (fun v E h => (Gp_flags v E h).2.2)
+  have hp := panic_typed (ξ := .none) (Γ := Gp) (F := []) (fun v E h => (Gp_flags v E h).2.2)
     (fun v E h => ⟨(Gp_flags v E h).1, (Gp_flags v E h).2.1⟩)
   refine ⟨rfl, by decide, by decide, rfl, by simp [pfn], ?_, by simp [pfn], by simp [pfn], by simp [pfn],
     by simp [pfn], by simp [pfn], ?_, Gp, StmtT.seq rfl ha hp,
@@ -372,7 +372,7 @@ theorem Gr_eq : Gr = setE (fun _ => none) 0 intE := by
   rcases v with _ | v <;> simp [Gr, setE, upd, kill, sigCtx, rfn, intE, R0]
 
 theorem rfn_ok : FnOK P rfn := by
-  have ha := assign_res (fn := rfn) (r := 0) (by simp [sigCtx, rfn, R0, resMode])
+  have ha := assign_res (ξ := .none) (fn := rfn) (r := 0) (by simp [sigCtx, rfn, R0, resMode])
     (by intro p E hp hm; rcases p with _ | p <;> simp [sigCtx, rfn, resMode] at hp <;> subst hp <;> simp at hm)
     (by intro v E h; rcases v with _ | v <;> simp [sigCtx, rfn, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩)
   have hR : NoRootb Gr := by rw [Gr_eq]; exact noRootb_empty.setE (by simp [intE])
@@ -393,7 +393,7 @@ theorem rfn_ok : FnOK P rfn := by
   · intro i hi; simp [rfn] at hi
 
 /-- `rfn3`'s body after its `= r 0`: the destructor binding, then `tail`. -/
-theorem rfn3_rest_typed : ∃ Δ, StmtT P Gr []
+theorem rfn3_rest_typed : ∃ Δ, StmtT P ξ Gr []
       (.letv 1 (.expr (.lit 1)) (.letv 2 (.expr (.lit 2)) (.letd 3 0 (.pair 1 2) (tail 4 5 6 7)))) Δ ∧
       NoRootb Δ ∧ Δ 0 = some intE := by
   have hR : NoRootb Gr := by rw [Gr_eq]; exact noRootb_empty.setE (by simp [intE])
@@ -416,16 +416,16 @@ theorem rfn3_rest_typed : ∃ Δ, StmtT P Gr []
   have hpair : RhsT K2 [] (.pair 1 2) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE]) rfl PushArg.int
       (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
-  have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 3) (f := 0) (r := .pair 1 2)
+  have hd := StmtT.letd (ξ := .none) (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 3) (f := 0) (r := .pair 1 2)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, Gr_eq]) (by simp) hpair rfl
     (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) ht (hΔR.endOK _)
     (hna := by simp [tail, Stmt.assigns])
-  have h2 := StmtT.letv (P := P) (x := 2) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE, Gr_eq]) (by simp) (RhsT.expr ExprT.lit) hd ((hΔR.exitScope 3).endOK _)
-  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := Gr) (Γ1 := Gr)
-    rfl (by simp [A2.setE, Gr_eq]) (by simp) (RhsT.expr ExprT.lit) h2
+  have h2 := StmtT.letv (ξ := .none) (P := P) (x := 2) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE, Gr_eq]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone ((hΔR.exitScope 3).endOK _)
+  have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := Gr) (Γ1 := Gr)
+    rfl (by simp [A2.setE, Gr_eq]) (by simp) (RhsT.expr ExprT.lit) h2.ofNone
     (((hΔR.exitScope 3).exitScope 2).endOK _)
-  refine ⟨_, h1, ((hΔR.exitScope 3).exitScope 2).exitScope 1, ?_⟩
+  refine ⟨_, h1.ofNone, ((hΔR.exitScope 3).exitScope 2).exitScope 1, ?_⟩
   rw [hΔD.exitScope_eq, (hΔD.upd_none 3).exitScope_eq, ((hΔD.upd_none 3).upd_none 2).exitScope_eq]
   simp only [upd_ne _ _ (show (0 : Nat) ≠ 1 by decide), upd_ne _ _ (show (0 : Nat) ≠ 2 by decide),
     upd_ne _ _ (show (0 : Nat) ≠ 3 by decide)]
@@ -433,7 +433,7 @@ theorem rfn3_rest_typed : ∃ Δ, StmtT P Gr []
   simp [K3, K2, K1, A2.setE, Gr_eq]
 
 theorem rfn3_ok : FnOK P rfn3 := by
-  have ha := assign_res (fn := rfn3) (r := 0) (by simp [sigCtx, rfn3, R0, resMode])
+  have ha := assign_res (ξ := .none) (fn := rfn3) (r := 0) (by simp [sigCtx, rfn3, R0, resMode])
     (by intro p E hp hm; rcases p with _ | p <;> simp [sigCtx, rfn3, resMode] at hp <;> subst hp <;> simp at hm)
     (by intro v E h; rcases v with _ | v <;> simp [sigCtx, rfn3, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩)
   have hG : setE (kill .replace false 0 (sigCtx rfn3)) 0 { intE with mode := R0.mode } = Gr := rfl
@@ -593,7 +593,7 @@ then the panic goes on, uncaught, and the run ends with the sweep. -/
 def main1 : Stmt :=
   .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2)) (.letd 2 0 (.pair 0 1) (tail 3 4 5 6)))
 
-theorem main1_typed : ∃ Δ, StmtT P (fun _ => none) [] main1 Δ := by
+theorem main1_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main1 Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
@@ -612,14 +612,14 @@ theorem main1_typed : ∃ Δ, StmtT P (fun _ => none) [] main1 Δ := by
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE]) rfl PushArg.int
       (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
-  have hd := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
+  have hd := StmtT.letd (ξ := .none) (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE]) (by simp) hpair rfl
     (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) ht (hΔR.endOK _)
     (hna := by simp [tail, Stmt.assigns])
-  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd ((hΔR.exitScope 2).endOK _)
+  have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone ((hΔR.exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
-    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone
     (((hΔR.exitScope 2).exitScope 1).endOK _)⟩
 
 theorem main1_codes : main1.codesOK P := by
@@ -669,7 +669,7 @@ is a panic, `catchR_no_panic`): the run goes on and finishes. -/
 
 def main2 : Stmt := .letrec 0 2 .skip
 
-theorem main2_typed : ∃ Δ, StmtT P (fun _ => none) [] main2 Δ := by
+theorem main2_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main2 Δ := by
   have hpost : callPost (fun _ => none) rfn [] = fun _ => none := by
     funext v; simp [callPost, callPostAux, rfn, killNames, mutNames, argNames]
   have hres : callRes (fun _ => none) rfn [] = intE := by
@@ -739,7 +739,7 @@ theorem main3_body : rfn3.body.rename (callRen rfn3.params [] 1) =
     .seq (.assign 1 (.expr (.lit 0)))
       (.letv 2 (.expr (.lit 1)) (.letv 3 (.expr (.lit 2)) (.letd 4 0 (.pair 2 3) (tail 5 6 7 8)))) := rfl
 
-theorem main3_typed : ∃ Δ, StmtT P (fun _ => none) [] main3 Δ := by
+theorem main3_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main3 Δ := by
   have hpost : callPost (fun _ => none) rfn3 [] = fun _ => none := by
     funext v; simp [callPost, callPostAux, rfn3, killNames, mutNames, argNames]
   have hres : callRes (fun _ => none) rfn3 [] = intE := by

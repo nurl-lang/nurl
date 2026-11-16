@@ -51,6 +51,9 @@ void nurl__rctx_swap(void *ctx);
 void nurl__rctx_swap(void *ctx) { (void)ctx; }
 void nurl__rctx_release(void *ctx);
 void nurl__rctx_release(void *ctx) { (void)ctx; }
+/* …and the size of what the stub swap exchanges: nothing, so any slot
+ * fits (runtime_bare.c checks its slot against it at the first coroutine). */
+const unsigned long nurl__rctx_bytes = 0;
 void nurl_panic(const char *msg);
 void nurl_panic(const char *msg) {
     fprintf(stderr, "pthread_layout: nurl_panic reached (%s)\n", msg);

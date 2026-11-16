@@ -157,8 +157,9 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact ih.remove _
   | frozenSkip => exact hb
-  | frozenIn _ ih => exact ih
-  | frozenP _ ih => exact ih
+  | blockSkip | blockExit _ | loop => exact hb
+  | frozenIn _ ih | blockIn _ ih => exact ih
+  | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he _ _ =>
     have := EvalR.borFree he hb
     exact (this.1.of_st rfl).set _ (SlotFree.ids this.2)

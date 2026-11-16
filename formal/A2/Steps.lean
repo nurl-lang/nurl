@@ -3231,7 +3231,7 @@ theorem Release.blk {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m k t
 
 theorem Step.blk {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : BlkLe m.blk r.mem.blk := by
   induction h with
-  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
+  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | frozenP _ ih | blockP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
   | withLock _ hk _ => exact BlkLe.setLock hk _
   | reap _ hk _ => exact BlkLe.setDead hk _
@@ -3407,7 +3407,7 @@ theorem Step.leafKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     ∀ {k : Nat} {bl : Blk}, m.blk k = some bl → ∀ {w : Val}, w.leaf → Sub w bl.keeps →
       (∃ bl', r.mem.blk k = some bl' ∧ Sub w bl'.keeps) ∨ r.holds w := by
   induction h with
-  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
+  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | frozenP _ ih | blockP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
   | scopeP _ _ _ ih | rbindP _ _ ih | scopeDPMoved _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeLPD _ _ _ _ _ ih
     | scopeDPDrain _ _ ih =>
@@ -3519,7 +3519,7 @@ theorem Release.noDead {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release m 
 theorem Step.noDead {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) :
     NoDead m → NoDead r.mem := by
   induction h with
-  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
+  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | frozenP _ ih | blockP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
   | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeLPD _ _ _ _ _ ih | scopeDPDrain _ _ ih
     | scopeDPMoved _ _ ih => exact fun hn => (ih hn).of_blk rfl
@@ -3585,7 +3585,7 @@ theorem Release.noOrphan {m m' : Mem} {k : Nat} {t : Ty} {x : Var} (h : Release 
 theorem Step.noOrphan {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) :
     NoOrphan m → NoOrphan r.mem := by
   induction h with
-  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
+  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | frozenP _ ih | blockP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
   | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeLPD _ _ _ _ _ ih | scopeDPDrain _ _ ih
     | scopeDPMoved _ _ ih => exact fun hn => (ih hn).of_blk rfl

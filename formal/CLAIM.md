@@ -728,8 +728,13 @@ Inside A2 (nurlc bugs):
 - A borrow ended by a binding's end, replacement or capture, missed:
   #242, #364, #382, #384, #406, #407, #408 and #445 (`exitScope`,
   `assign`'s `kill .replace`, `CapsOK`, `NamesFree`, `FnOK` at the body's
-  one end, where a `^`, a `\` exit and the defers lead, `catchR`,
-  `DtorSafe`).
+  one end, where a `^` (an `exit` of the body's block that ends every
+  scope it leaves, `Exits.under`; Agora #871), a `\` exit and the defers
+  lead, `catchR`, `DtorSafe`).
+- A `break` or `continue` in a closure literal written inside a loop:
+  #871 (an exit never crosses a call frame: the frames that are not
+  scopes are typed with `Exits.none`). It failed in clang, not at run
+  time; nurlc now refuses it with a diagnostic.
 - A struct built from an owner and a view of it: #294 (`pair`: the owned
   field is no root of the other's dependencies).
 - A view stored through a borrow that nurlc does not follow to its owner:

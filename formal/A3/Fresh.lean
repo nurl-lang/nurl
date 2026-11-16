@@ -118,8 +118,9 @@ theorem Step.grows {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact ih.trans (Grows.of_eq rfl rfl)
   | frozenSkip => exact Grows.refl _
-  | frozenIn _ ih => exact ih
-  | frozenP _ ih => exact ih
+  | blockSkip | blockExit _ | loop => exact Grows.refl _
+  | frozenIn _ ih | blockIn _ ih => exact ih
+  | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he _ hd => exact (EvalR.grows he).trans (Grows.shrink (DropSlot.le hd) rfl)
   | assignP _ => exact Grows.refl _
   | iteT _ _ => exact Grows.refl _
@@ -224,8 +225,8 @@ theorem Step.gl {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) : r
   | scopeP _ _ _ ih => exact ih
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact ih
-  | frozenIn _ ih => exact ih
-  | frozenP _ ih => exact ih
+  | frozenIn _ ih | blockIn _ ih => exact ih
+  | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he _ _ => have h := EvalR.gl he; exact h
   | push ht _ _ _ => have h := TakeVal.gl ht; exact h
   | pushRealloc ht _ _ _ => have h := TakeVal.gl ht; exact h

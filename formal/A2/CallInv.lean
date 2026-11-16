@@ -85,6 +85,7 @@ theorem DtorPinOK.of_spine_dbind {Γ : Ctx} {s : Stmt}
   induction s with
   | seq a _ iha _ => exact iha h
   | frozen _ k ih => exact ih h
+  | block k ih => exact ih h
   | catchR _ _ k ih => exact ih h
   | scope x k ih =>
     exact ⟨hin x k (h x (by simp [Stmt.spine])), ih fun v hv => h v (by simp [Stmt.spine, hv])⟩
@@ -508,7 +509,7 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
 
 /-- The call case of preservation. -/
 theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
-  intro Γ F x f args k E Γ1 Δ m m' s' hk hx hxF hc hkT hpx hi hst hnr
+  intro ξ Γ F x f args k E Γ1 Δ m m' s' hk hx hxF hc hkT hpx hi hst hnr
   cases hst with
   | reap hrs hrk _ => exact absurd ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | letcall hf hmx hb =>
@@ -541,7 +542,7 @@ theorem CallH.widen {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {ba
 
 /-- The `recover` case of preservation. -/
 theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
-  intro Γ F x f k E fn Γ1 Δ m m' s' hk hx hxF hf hp hty ho hc hkT hpx hi hst hnr
+  intro ξ Γ F x f k E fn Γ1 Δ m m' s' hk hx hxF hf hp hty ho hc hkT hpx hi hst hnr
   cases hst with
   | reap hrs hrk _ => exact absurd ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | letrec hf' _ hmx =>
@@ -563,7 +564,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
     let G := (List.range m0.nv).filter (· ≠ x)
     have h' := h.widen hp G (fun v hv => (List.mem_range.mp (List.mem_filter.mp hv).1))
       (fun hm => by simp [G] at hm)
-    have hIn := h'.typedIn (StmtT.ctxRel hP)
+    have hIn := h'.typedIn (ξ := .none) (StmtT.ctxRel hP)
     rw [hpost] at hIn hkT
     have hxlt : x < m.nv := h.xlt
     have hrne : x ≠ m.nv + fn.params.length := fun e => by have := vlt hxlt; have := veq e; omega
@@ -628,7 +629,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       rw [hpost] at h1
       exact ⟨E1, by simp [setE, upd_ne _ _ hvx, h1], by rwa [Entry.clean_dbind] at hd,
         by rwa [clean_mode] at hos⟩
-    have hcatch : StmtT P ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) F (.catchR x m0 (callIn fn [] m.nv x))
+    have hcatch : StmtT P (ξ.under x) ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) F (.catchR x m0 (callIn fn [] m.nv x))
         (setE Γ x (callRes Γ fn [])) :=
       StmtT.catchR hxF hIn hM hanchΔ hKO hDS
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF

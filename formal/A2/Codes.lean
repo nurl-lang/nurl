@@ -440,9 +440,19 @@ theorem Stmt.codesOK_rename {P : Prog} (ρ : Var → Var) (s : Stmt) : (s.rename
   | ite c a b iha ihb => simp only [Stmt.rename, Stmt.codesOK, iha, ihb]
   | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
   | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
-  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih | callcE _ _ _ _ _ ih =>
+  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih | callcE _ _ _ _ _ ih | block _ ih | loop _ ih =>
     simp only [Stmt.rename, Stmt.codesOK, ih]
   | _ => exact Iff.rfl
+
+/-- Agora #871: the frames an exit leaves make no package. -/
+theorem ExitAt.codesOK {P : Prog} {s e : Stmt} {n : Nat} (h : ExitAt s n e) (hs : s.codesOK P) :
+    e.codesOK P := by
+  induction h with
+  | exit => trivial
+  | seq _ ih => exact ih hs.1
+  | scope _ ih => exact ih hs
+  | scopeD _ ih => exact ih hs
+  | block _ ih => exact ih hs
 
 theorem wrapParams_codes {P : Prog} {s : Stmt} (hs : s.codesOK P) :
     ∀ (ps : List (PMode × Ty)) (base i : Nat), (wrapParams ps base i s).codesOK P := by
@@ -502,7 +512,7 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
   | scopeSkip _ _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨(hm.of_st rfl).remove _, trivial⟩
-  | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeLIn _ ih =>
+  | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | catchIn _ ih | scopeLIn _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     obtain ⟨h1, h2⟩ := (ih hm hB hs).1 _ _ rfl; exact ⟨h1, h2⟩
   | scopeP _ _ _ ih =>
@@ -539,9 +549,18 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
   | frozenSkip | catchSkip =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm, trivial⟩
-  | frozenP _ ih =>
+  | frozenP _ ih | blockP _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact (ih hm hB hs).2 _ rfl
+  | blockSkip =>
+    intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨hm, trivial⟩
+  | blockExit he =>
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨hm, he.codesOK hs⟩
+  | loop =>
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    exact ⟨hm, hs, hs⟩
   | catchP _ _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨((ih hm hB hs).2 _ rfl).set (fun V e => by cases e; exact pkgOK_int P 1), trivial⟩
@@ -757,6 +776,8 @@ def Stmt.globsAt (GT : GTy) : Stmt → Prop
   | .scopeL _ _ _ s => s.globsAt GT
   | .withElem _ _ _ s => s.globsAt GT
   | .callcE _ _ _ _ s => s.globsAt GT
+  | .block s => s.globsAt GT
+  | .loop s => s.globsAt GT
   | _ => True
 
 /-- **A3.6: the program reads its globals at their declared types**: every
@@ -776,7 +797,7 @@ theorem Stmt.globsAt_rename {GT : GTy} (ρ : Var → Var) (s : Stmt) : (s.rename
   | ite c a b iha ihb => simp only [Stmt.rename, Stmt.globsAt, iha, ihb]
   | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
   | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
-  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih | callcE _ _ _ _ _ ih =>
+  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih | callcE _ _ _ _ _ ih | block _ ih | loop _ ih =>
     simp only [Stmt.rename, Stmt.globsAt, ih]
   | _ => exact Iff.rfl
 
@@ -800,13 +821,23 @@ theorem callIn_globs {P : Prog} {GT : GTy} (hPG : ProgGlobs P GT) {f : Nat} {fn 
   rw [he]
   exact ⟨wrapParams_globs hb _ _ _, trivial⟩
 
+/-- Agora #871: the frames an exit leaves read no global. -/
+theorem ExitAt.globsAt {GT : GTy} {s e : Stmt} {n : Nat} (h : ExitAt s n e) (hs : s.globsAt GT) :
+    e.globsAt GT := by
+  induction h with
+  | exit => trivial
+  | seq _ ih => exact ih hs.1
+  | scope _ ih => exact ih hs
+  | scopeD _ ih => exact ih hs
+  | block _ ih => exact ih hs
+
 /-- **A3.6: a step reads globals only at their declared types**: what it
     leaves to run is a part of the statement, or a function's body. -/
 theorem globs_step {P : Prog} {GT : GTy} (hPG : ProgGlobs P GT) {m : Mem} {s : Stmt} {r : Res}
     (hst : Step P m s r) : s.globsAt GT → ∀ m' s', r = .ok m' s' → s'.globsAt GT := by
   induction hst with
   | seqL _ ih => intro hs _ _ h; cases h; exact ⟨ih hs.1 _ _ rfl, hs.2⟩
-  | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeDIn _ ih | scopeLIn _ ih =>
+  | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | catchIn _ ih | scopeDIn _ ih | scopeLIn _ ih =>
     intro hs _ _ h; cases h; simp only [Stmt.globsAt]; exact ih hs _ _ rfl
   | letcall hf _ _ => intro hs _ _ h; cases h; exact ⟨callIn_globs hPG hf _ _ _, hs⟩
   | letrec hf _ _ => intro hs _ _ h; cases h; exact ⟨callIn_globs hPG hf _ _ _, hs⟩
@@ -815,6 +846,7 @@ theorem globs_step {P : Prog} {GT : GTy} (hPG : ProgGlobs P GT) {m : Mem} {s : S
   | withElem _ _ _ _ _ => intro hs _ _ h; cases h; exact ⟨hs, trivial⟩
   | callcE _ _ _ _ => intro hs _ _ h; cases h; exact ⟨⟨trivial, trivial⟩, hs⟩
   | callcD _ _ _ _ _ => intro hs _ _ h; cases h; exact ⟨trivial, hs⟩
+  | blockExit he => intro hs _ _ h; cases h; exact he.globsAt hs
   | _ => intro hs _ _ h; cases h <;> simp_all [Stmt.globsAt, Rhs.globAt]
 
 end A2

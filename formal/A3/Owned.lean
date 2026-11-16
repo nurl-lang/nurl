@@ -240,8 +240,9 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact fun i hi => ih i (OwnedId.of_remove hi)
   | frozenSkip => exact fun i hi => .inl hi
-  | frozenIn _ ih => exact ih
-  | frozenP _ ih => exact ih
+  | blockSkip | blockExit _ | loop => exact fun i hi => .inl hi
+  | frozenIn _ ih | blockIn _ ih => exact ih
+  | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he _ _ =>
     intro i hi
     rcases OwnedId.set_some hi with ⟨ho, hiv⟩ | hi
@@ -420,7 +421,7 @@ theorem Step.ownedId_panic {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.
   | letvP _ => cases hr; exact fun i hi => hi
   | scopeP _ _ _ ih => cases hr; exact fun i hi => ih rfl i (OwnedId.of_remove hi)
   | rbindP _ _ ih => cases hr; exact fun i hi => ih rfl i (OwnedId.of_remove hi)
-  | frozenP _ ih => exact ih hr
+  | frozenP _ ih | blockP _ ih => exact ih hr
   | assignP _ => cases hr; exact fun i hi => hi
   | panic => cases hr; exact fun i hi => hi
   | waitPanic _ => cases hr; exact fun i hi => hi
@@ -587,7 +588,7 @@ theorem Release.payAt {m m' : Mem} {k0 : Nat} {t : Ty} {x : Var} (hrl : Release 
 theorem Step.payAt {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (hb : BorFree m) :
     ∀ k i, PayAt r.mem.blk k i → PayAt m.blk k i ∨ OwnedId m i := by
   induction h with
-  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
+  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | frozenP _ ih | blockP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
   | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih
     | scopeDPMoved _ _ ih => exact ih

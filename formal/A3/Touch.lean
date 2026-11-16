@@ -73,7 +73,7 @@ theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic
     split at hv
     · cases hv
     · exact ih rfl v sl hv
-  | frozenP _ ih => cases hr; exact ih rfl
+  | frozenP _ ih | blockP _ ih => cases hr; exact ih rfl
   | assignP _ => cases hr; exact fun _ _ h => h
   | panic => cases hr; exact fun _ _ h => h
   | waitPanic _ => cases hr; exact fun _ _ h => h
@@ -99,71 +99,79 @@ theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic
 /-! ### Typing at the touched statement -/
 
 /-- The statement is typed in a context the store agrees with. -/
-def TypedAt (P : Prog) (m : Mem) (s : Stmt) : Prop := ∃ Γ F Δ, StmtT P Γ F s Δ ∧ MInv m Γ
+def TypedAt (P : Prog) (m : Mem) (s : Stmt) : Prop := ∃ ξ Γ F Δ, StmtT P ξ Γ F s Δ ∧ MInv m Γ
 
 theorem TypedAt.of_threadOK {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) : TypedAt P m s := by
   obtain ⟨Γ, F, Δ, ht, hi, _⟩ := h
-  exact ⟨Γ, F, Δ, ht, hi.toMInv⟩
+  exact ⟨.none, Γ, F, Δ, ht, hi.toMInv⟩
 
 theorem TypedAt.seq {P : Prog} {m : Mem} {a b : Stmt} (h : TypedAt P m (.seq a b)) : TypedAt P m a := by
-  obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
   generalize hs : Stmt.seq a b = s at ht
   induction ht with
-  | seq _ ha _ _ _ => cases hs; exact ⟨_, _, _, ha, hi⟩
+  | seq _ ha _ _ _ => cases hs; exact ⟨_, _, _, _, ha, hi⟩
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 
 theorem TypedAt.scope {P : Prog} {m : Mem} {x : Var} {s : Stmt} (h : TypedAt P m (.scope x s)) :
     TypedAt P m s := by
-  obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
   generalize hs : Stmt.scope x s = s0 at ht
   induction ht with
-  | scope _ _ hb _ _ => cases hs; exact ⟨_, _, _, hb, hi⟩
+  | scope _ _ hb _ _ => cases hs; exact ⟨_, _, _, _, hb, hi⟩
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 
 theorem TypedAt.rbind {P : Prog} {m : Mem} {p : Var} {s : Stmt} (h : TypedAt P m (.rbind p s)) :
     TypedAt P m s := by
-  obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
   generalize hs : Stmt.rbind p s = s0 at ht
   induction ht with
-  | rbind _ _ _ _ _ hb _ _ => cases hs; exact ⟨_, _, _, hb, hi⟩
+  | rbind _ _ _ _ _ hb _ _ => cases hs; exact ⟨_, _, _, _, hb, hi⟩
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 
 theorem TypedAt.frozen {P : Prog} {m : Mem} {z : List Var} {s : Stmt} (h : TypedAt P m (.frozen z s)) :
     TypedAt P m s := by
-  obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
   generalize hs : Stmt.frozen z s = s0 at ht
   induction ht with
-  | frozen hb _ _ => cases hs; exact ⟨_, _, _, hb, hi⟩
+  | frozen hb _ _ => cases hs; exact ⟨_, _, _, _, hb, hi⟩
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 
 theorem TypedAt.catchR {P : Prog} {m : Mem} {x : Var} {m0 : Mem} {s : Stmt}
     (h : TypedAt P m (.catchR x m0 s)) : TypedAt P m s := by
-  obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
   generalize hs : Stmt.catchR x m0 s = s0 at ht
   induction ht with
-  | catchR _ hb _ _ _ _ => cases hs; exact ⟨_, _, _, hb, hi⟩
+  | catchR _ hb _ _ _ _ => cases hs; exact ⟨_, _, _, _, hb, hi⟩
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 
 theorem TypedAt.scopeD {P : Prog} {m : Mem} {x : Var} {f : Nat} {s : Stmt}
     (h : TypedAt P m (.scopeD x f s)) : TypedAt P m s := by
-  obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
   generalize hs : Stmt.scopeD x f s = s0 at ht
   induction ht with
-  | scopeD _ _ hb _ _ _ _ _ _ => cases hs; exact ⟨_, _, _, hb, hi⟩
+  | scopeD _ _ hb _ _ _ _ _ _ => cases hs; exact ⟨_, _, _, _, hb, hi⟩
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 
 theorem TypedAt.scopeL {P : Prog} {m : Mem} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
     (h : TypedAt P m (.scopeL k t x s)) : TypedAt P m s := by
-  obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
   generalize hs : Stmt.scopeL k t x s = s0 at ht
   induction ht with
-  | scopeL _ _ hb _ _ => cases hs; exact ⟨_, _, _, hb, hi⟩
+  | scopeL _ _ hb _ _ => cases hs; exact ⟨_, _, _, _, hb, hi⟩
+  | sub hw _ _ ih => exact ih (hi.weaker hw) hs
+  | _ => cases hs
+
+theorem TypedAt.block {P : Prog} {m : Mem} {s : Stmt} (h : TypedAt P m (.block s)) : TypedAt P m s := by
+  obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
+  generalize hs : Stmt.block s = s0 at ht
+  induction ht with
+  | block hb _ => cases hs; exact ⟨_, _, _, _, hb, hi⟩
   | sub hw _ _ ih => exact ih (hi.weaker hw) hs
   | _ => cases hs
 
@@ -180,7 +188,7 @@ theorem rhsT_satLive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {F : List Var} {r : R
 
 theorem TypedAt.letv_sat {P : Prog} {m : Mem} {x : Var} {r : Rhs} {s : Stmt}
     (h : TypedAt P m (.letv x r s)) : SatLive m r := by
-  obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
   generalize hs : Stmt.letv x r s = s0 at ht
   induction ht with
   | letv _ _ _ hr _ _ _ => cases hs; exact rhsT_satLive hi hr
@@ -189,7 +197,7 @@ theorem TypedAt.letv_sat {P : Prog} {m : Mem} {x : Var} {r : Rhs} {s : Stmt}
 
 theorem TypedAt.letd_sat {P : Prog} {m : Mem} {x : Var} {f : Nat} {r : Rhs} {s : Stmt}
     (h : TypedAt P m (.letd x f r s)) : SatLive m r := by
-  obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
   generalize hs : Stmt.letd x f r s = s0 at ht
   induction ht with
   | letd _ _ _ hr _ _ _ _ _ _ _ => cases hs; exact rhsT_satLive hi hr
@@ -198,7 +206,7 @@ theorem TypedAt.letd_sat {P : Prog} {m : Mem} {x : Var} {f : Nat} {r : Rhs} {s :
 
 theorem TypedAt.assign_sat {P : Prog} {m : Mem} {x : Var} {r : Rhs} (h : TypedAt P m (.assign x r)) :
     SatLive m r := by
-  obtain ⟨Γ, F, Δ, ht, hi⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
   generalize hs : Stmt.assign x r = s0 at ht
   induction ht with
   | assign _ _ _ hr _ _ _ _ => cases hs; exact rhsT_satLive hi hr
@@ -283,6 +291,7 @@ theorem touch_seen {P : Prog} {m m1 : Mem} {s : Stmt} {i : Nat} {w : Bool}
   | editSetDrop _ _ _ hy ha => exact .inl ⟨_, _, hy, ha⟩
   | editSetI he => exact .inr ⟨rfl, eReads_seen he⟩
   | scope _ ih => exact ih hty.scope
+  | block _ ih => exact ih hty.block
   | scopeEnd hx hi => exact .inl ⟨_, _, hx, hi⟩
   | scopeUnwind hs hx hi => exact .inl ⟨_, _, Step.panic_st hs _ _ hx, hi⟩
   | rbind _ ih => exact ih hty.rbind

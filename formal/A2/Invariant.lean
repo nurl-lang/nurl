@@ -761,6 +761,7 @@ def Stmt.spine : Stmt → List Var
   | .frozen _ s => s.spine
   | .catchR _ _ s => s.spine
   | .scopeL _ _ x s => x :: s.spine
+  | .block s => s.spine
   | _ => []
 
 /-- An address is covered: a tree some binding owns holds it, or (A3.1) a
@@ -793,6 +794,7 @@ def CatchOK (m : Mem) : Stmt → Prop
         ∃ bl', m.blk k = some bl' ∧ BlkKeep bl bl') ∧
       CatchOK m s
   | .scopeL _ _ _ s => CatchOK m s
+  | .block s => CatchOK m s
   | _ => True
 
 /-- A borrowed parameter depends only on what was bound before its call: on
@@ -806,6 +808,7 @@ def PinOK (Γ : Ctx) : Stmt → Prop
   | .frozen _ s => PinOK Γ s
   | .catchR _ _ s => PinOK Γ s
   | .scopeL _ _ _ s => PinOK Γ s
+  | .block s => PinOK Γ s
   | _ => True
 
 /-- A2-drop.2: a binding `letd` made depends, in memory, on no binding of
@@ -823,6 +826,7 @@ def DtorPinOK (Γ : Ctx) : Stmt → Prop
   | .frozen _ s => DtorPinOK Γ s
   | .catchR _ _ s => DtorPinOK Γ s
   | .scopeL _ _ x s => DtorIn Γ x s ∧ DtorPinOK Γ s
+  | .block s => DtorPinOK Γ s
   | _ => True
 
 /-- A statement inside no run-time scope pins nothing. -/
@@ -830,6 +834,7 @@ theorem DtorPinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : DtorPi
   induction s with
   | seq a _ iha _ => exact iha h
   | frozen _ k ih => exact ih h
+  | block k ih => exact ih h
   | catchR _ _ k ih => exact ih h
   | scope _ _ _ => simp [Stmt.spine] at h
   | scopeD _ _ _ _ => simp [Stmt.spine] at h
@@ -854,6 +859,7 @@ theorem DtorPinOK.of_dbind {Γ Γ' : Ctx}
   | scopeD x _ k ih => exact ⟨hin x k hp.1, ih hp.2⟩
   | rbind p k ih => exact ⟨hin p k hp.1, ih hp.2⟩
   | frozen _ k ih => exact ih hp
+  | block k ih => exact ih hp
   | catchR _ _ k ih => exact ih hp
   | scopeL _ _ x k ih => exact ⟨hin x k hp.1, ih hp.2⟩
   | _ => trivial
@@ -872,6 +878,7 @@ theorem PinOK.of_rootb {Γ Γ' : Ctx} (h : ∀ p E, Γ' p = some E → E.mode = 
   | scopeD _ _ k ih => exact ih hp
   | rbind p k ih => exact ⟨fun E hE hm => hp.1 E (h p E hE hm) hm, ih hp.2⟩
   | frozen _ k ih => exact ih hp
+  | block k ih => exact ih hp
   | catchR _ _ k ih => exact ih hp
   | scopeL _ _ _ k ih => exact ih hp
   | _ => trivial
@@ -881,6 +888,7 @@ theorem PinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : PinOK Γ s
   induction s with
   | seq a _ iha _ => exact iha h
   | frozen _ k ih => exact ih h
+  | block k ih => exact ih h
   | catchR _ _ k ih => exact ih h
   | scope _ _ _ => simp [Stmt.spine] at h
   | scopeD _ _ _ _ => simp [Stmt.spine] at h
@@ -891,6 +899,67 @@ theorem PinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : PinOK Γ s
 theorem pinOut_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) :
     ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∉ s.spine :=
   fun _ _ _ _ _ _ _ hr => by rw [h] at hr; cases hr
+
+/-! ### Agora #871: what an exit leaves behind
+
+The frames an exit leaves (`ExitAt`) are the run-time scopes the statement
+is inside of, each around nothing left to run: the same spine, so what the
+invariant says of the frames it says of them. -/
+
+theorem ExitAt.spine {s e : Stmt} {n : Nat} (h : ExitAt s n e) : e.spine = s.spine := by
+  induction h with
+  | exit => rfl
+  | seq _ ih => exact ih
+  | scope _ ih => simp [Stmt.spine, ih]
+  | scopeD _ ih => simp [Stmt.spine, ih]
+  | block _ ih => exact ih
+
+theorem ExitAt.vars {s e : Stmt} {n : Nat} (h : ExitAt s n e) : ∀ v ∈ e.vars, v ∈ s.vars := by
+  induction h with
+  | exit => intro v hv; simp [Stmt.vars] at hv
+  | seq _ ih => intro v hv; exact List.mem_append_left _ (ih v hv)
+  | scope _ ih =>
+    intro v hv
+    simp only [Stmt.vars, List.mem_cons] at hv ⊢
+    rcases hv with h | h
+    · exact Or.inl h
+    · exact Or.inr (ih v h)
+  | scopeD _ ih =>
+    intro v hv
+    simp only [Stmt.vars, List.mem_cons] at hv ⊢
+    rcases hv with h | h
+    · exact Or.inl h
+    · exact Or.inr (ih v h)
+  | block _ ih => exact ih
+
+theorem ExitAt.catchOK {m : Mem} {s e : Stmt} {n : Nat} (h : ExitAt s n e) (hc : CatchOK m s) :
+    CatchOK m e := by
+  induction h with
+  | exit => trivial
+  | seq _ ih => exact ih hc
+  | scope _ ih => exact ih hc
+  | scopeD _ ih => exact ih hc
+  | block _ ih => exact ih hc
+
+theorem ExitAt.pinOK {Γ : Ctx} {s e : Stmt} {n : Nat} (h : ExitAt s n e) (hc : PinOK Γ s) :
+    PinOK Γ e := by
+  induction h with
+  | exit => trivial
+  | seq _ ih => exact ih hc
+  | scope _ ih => exact ih hc
+  | scopeD _ ih => exact ih hc
+  | block _ ih => exact ih hc
+
+theorem ExitAt.dtorPinOK {Γ : Ctx} {s e : Stmt} {n : Nat} (h : ExitAt s n e) (hc : DtorPinOK Γ s) :
+    DtorPinOK Γ e := by
+  induction h with
+  | exit => trivial
+  | seq _ ih => exact ih hc
+  | scope he ih =>
+    exact ⟨fun E hE hd hos hn d hdd hnm => by rw [he.spine]; exact hc.1 E hE hd hos hn d hdd hnm, ih hc.2⟩
+  | scopeD he ih =>
+    exact ⟨fun E hE hd hos hn d hdd hnm => by rw [he.spine]; exact hc.1 E hE hd hos hn d hdd hnm, ih hc.2⟩
+  | block _ ih => exact ih hc
 
 /-- A borrowed parameter is anchored: what it borrows from, and what the
     closures it holds only read, are lent out (`F`) for as long as it is
@@ -1359,41 +1428,85 @@ macro_rules
       | (intro _ _ _ h; simp_all [Ty.hasDtor, Ty.holdsDtor])
       | (intro fn hf ho; simp_all [Ty.hasDtor, Ty.holdsDtor]))
 
-inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
-  | skip {Γ : Ctx} {F : List Var} : StmtT P Γ F .skip Γ
+/-! ### Agora #871: early exits
+
+A `block` is left by an `exit 0` of it, and an `exit (n + 1)` leaves it
+for the block around it (`Stmt.block`, `Stmt.exit`): nurlc's `break`,
+`continue` and early `^`.  The typing says, of every statement, where its
+exits may be taken: `ξ n Γ` holds of a context `Γ` an `exit n` may be
+taken from.  A scope's body's exits end the scope first (`Exits.under`):
+the frame's end runs then, as at the body's end (`Step.scopeExit`).  A
+block's body's `exit 0` reaches the block's end (`Exits.blk`).  The
+bodies the calculus runs as code — a call's, a closure's, a lock's
+check-out, a `recover` — are left by no exit (`Exits.none`). -/
+
+/-- Where the exits of a statement may be taken from: `ξ n Γ`, an `exit n`
+    from the context `Γ`. -/
+abbrev Exits := Nat → Ctx → Prop
+
+/-- No exit leaves. -/
+protected def Exits.none : Exits := fun _ _ => False
+
+/-- An exit may also be taken from a context stronger than one it may be
+    taken from (`Weaker`): the typing's `sub`. -/
+def Exits.up (ξ : Exits) (n : Nat) (Γ : Ctx) : Prop := ξ n Γ ∨ ∃ Γ0, Weaker Γ Γ0 ∧ ξ n Γ0
+
+/-- The exits of a scope's body (`letv`, a call's result, `unpair`'s
+    fields, `scope`): the scope of `x` ends there (`EndOK`, as at its
+    body's end), and the exit goes on from the context it leaves. -/
+def Exits.under (ξ : Exits) (x : Var) : Exits := fun n Γ =>
+  EndOK Γ x ∧ ξ n (exitScope x Γ)
+
+/-- The exits of a destructor frame's body (`letd`, `scopeD`): as a
+    scope's, and the binding (an owner, no borrowed parameter), of a type
+    that holds views, is `letd`'s (its destructor reads them), as at the
+    frame's end. -/
+def Exits.underD (ξ : Exits) (x : Var) : Exits := fun n Γ =>
+  EndOK Γ x ∧ (∀ E, Γ x = some E → E.mode ≠ .rootb ∧ (E.ty.holdsView = true → E.dbind = true)) ∧
+    ξ n (exitScope x Γ)
+
+/-- The exits of a block's body that ends at `Δ`: an `exit 0` reaches
+    the block's end from a context weaker than `Δ`'s or equal to it; an
+    `exit (n + 1)` is the block's own `exit n`. -/
+def Exits.blk (ξ : Exits) (Δ : Ctx) : Exits
+  | 0, Γ => Γ = Δ ∨ Weaker Γ Δ
+  | n + 1, Γ => ξ n Γ
+
+inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Prop
+  | skip {Γ : Ctx} {F : List Var} : StmtT P ξ Γ F .skip Γ
   | seq {Γ Γ1 Δ : Ctx} {F : List Var} {a b : Stmt} :
-      b.src = true → StmtT P Γ F a Γ1 → StmtT P Γ1 F b Δ → StmtT P Γ F (.seq a b) Δ
+      b.src = true → StmtT P ξ Γ F a Γ1 → StmtT P ξ Γ1 F b Δ → StmtT P ξ Γ F (.seq a b) Δ
   | letv {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {r : Rhs} {s : Stmt} {E : Entry}
       (hs : s.src = true) (hx : Γ x = none) (hxF : x ∉ F) (hr : RhsT Γ F r E Γ1)
-      (hb : StmtT P (setE Γ1 x E) F s Δ) (he : EndOK Δ x)
+      (hb : StmtT P (ξ.under x) (setE Γ1 x E) F s Δ) (he : EndOK Δ x)
       -- A2-drop.3a: an owned value of a destructor type, or of a struct or
       -- an enum holding one, is bound by `letd` (its scope runs the
       -- destructor, a struct's glue), wherever it came from
       (hnd : E.mode = .own → E.ty.holdsDtor = false := by no_dtor) :
-      StmtT P Γ F (.letv x r s) (exitScope x Δ)
+      StmtT P ξ Γ F (.letv x r s) (exitScope x Δ)
   | letcall {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {s : Stmt}
       {E : Entry}
       (h1 : s.src = true) (h2 : Γ x = none) (h3 : x ∉ F) (h4 : CallT P Γ F f args E Γ1)
-      (h5 : StmtT P (setE Γ1 x E) F s Δ) (h6 : EndOK Δ x)
+      (h5 : StmtT P (ξ.under x) (setE Γ1 x E) F s Δ) (h6 : EndOK Δ x)
       -- A2-drop.3a: an owned result of a destructor type goes to its `letd`
       -- first thing, whose scope runs the destructor where `x`'s ends
       -- (and is given no other value in it: its drop would run none, `Stmt.assigns`)
       (hdk : ∀ fn, P[f]? = some fn → fn.resOwn = true → fn.resTy.holdsDtor = true →
         x ∈ s.movedFirst ∧ x ∉ s.assigns := by dtor_head) :
-      StmtT P Γ F (.letcall x f args s) (exitScope x Δ)
+      StmtT P ξ Γ F (.letcall x f args s) (exitScope x Δ)
   | scope {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
-      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
-      StmtT P Γ F (.scope x s) (exitScope x Δ)
+      (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P (ξ.under x) Γ F s Δ → EndOK Δ x →
+      StmtT P ξ Γ F (.scope x s) (exitScope x Δ)
   | rbind {Γ Δ : Ctx} {F : List Var} {p : Var} {s : Stmt} {E : Entry} :
       Γ p = some E → E.mode = .rootb → E.live = true → Anchored E F → p ∉ F →
-      StmtT P Γ F s Δ →
+      StmtT P .none Γ F s Δ →
       -- what the borrowed binding may change by name is not lent, but stays
       -- bound for its scope: it is the caller's
       (∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ p ∧ ∃ Er, Δ d.root = some Er ∧ Er.mode.isRoot = true) →
-      StmtT P Γ F (.rbind p s) (exitRoot p (E.path ++ E.held) Δ)
+      StmtT P ξ Γ F (.rbind p s) (exitRoot p (E.path ++ E.held) Δ)
   | frozen {Γ Δ : Ctx} {F z z' : List Var} {s : Stmt} :
       -- `z` bounds what is lent: the typing lends a part of it
-      StmtT P Γ (F ++ z') s Δ → (∀ v ∈ z', v ∈ z) → StmtT P Γ F (.frozen z s) Δ
+      StmtT P .none Γ (F ++ z') s Δ → (∀ v ∈ z', v ∈ z) → StmtT P ξ Γ F (.frozen z s) Δ
   | assign {Γ Γ1 : Ctx} {F : List Var} {x : Var} {r : Rhs} {Ex E : Entry} :
       Γ x = some Ex → x ∉ F →
       (Ex.mode = .own ∧ E.mode = .own ∨ Ex.mode = .inout .replace ∧ E.mode = .own ∨
@@ -1405,12 +1518,12 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Ex.dbind = false →
       -- (Agora #632: a payload taken out of an enum of a destructor type, as `letd`'s)
       (htk : TakeOK P Γ r := by take_triv) →
-      StmtT P Γ F (.assign x r) (setE (kill .replace false x Γ1) x { E with mode := Ex.mode })
+      StmtT P ξ Γ F (.assign x r) (setE (kill .replace false x Γ1) x { E with mode := Ex.mode })
   | ite {Γ Δ : Ctx} {F : List Var} {c : Expr} {a b : Stmt} :
-      a.src = true → b.src = true → ExprT Γ c → StmtT P Γ F a Δ → StmtT P Γ F b Δ →
-      StmtT P Γ F (.ite c a b) Δ
+      a.src = true → b.src = true → ExprT Γ c → StmtT P ξ Γ F a Δ → StmtT P ξ Γ F b Δ →
+      StmtT P ξ Γ F (.ite c a b) Δ
   | while {Γ : Ctx} {F : List Var} {c : Expr} {s : Stmt} :
-      s.src = true → ExprT Γ c → StmtT P Γ F s Γ → StmtT P Γ F (.while c s) Γ
+      s.src = true → ExprT Γ c → StmtT P ξ Γ F s Γ → StmtT P ξ Γ F (.while c s) Γ
   | push {Γ Γ1 : Ctx} {F : List Var} {x y : Var} {Ex Ey Ex1 : Entry} {t : Ty} {D : List Dep} :
       Γ x = some Ex → Ex.live = true → Ex.ty = .vec t → canDo Ex.mode .realloc → x ∉ F →
       Γ y = some Ey → Ey.live = true → Ey.ty = t → y ≠ x →
@@ -1420,16 +1533,16 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- value pushed into one holds, it records as viewing already (`letd`
       -- may record views of older bindings up front, `HeldUp`)
       (Ex1.dbind = true → ownHeld true t D ⊆ Ex1.held) →
-      StmtT P Γ F (.push x y)
+      StmtT P ξ Γ F (.push x y)
         (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D })
   | free {Γ : Ctx} {F : List Var} {x : Var} {E : Entry} {t : Ty} :
       Γ x = some E → E.live = true → E.mode = .own → E.ty = .vec t → x ∉ F → EndOK Γ x →
       -- (A2-drop.3b: the elements it releases own no destructor value: a `Vec`
       -- of destructor values is drained at its binding's end, not freed)
       t.dtorFree = true →
-      StmtT P Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false, dtor := false })
+      StmtT P ξ Γ F (.free x) (setE (kill .replace false x Γ) x { E with live := false, dtor := false })
   | sub {Γ Γ0 Δ0 Δ : Ctx} {F : List Var} {s : Stmt} :
-      Weaker Γ Γ0 → StmtT P Γ0 F s Δ0 → (Δ0 = Δ ∨ Weaker Δ0 Δ) → StmtT P Γ F s Δ
+      Weaker Γ Γ0 → StmtT P ξ Γ0 F s Δ0 → (Δ0 = Δ ∨ Weaker Δ0 Δ) → StmtT P ξ Γ F s Δ
   | panic {Γ Δ : Ctx} {F : List Var} :
       -- a panic never ends normally: what follows it may assume any context
       -- with the same bindings, modes and types, fixed entries as they were
@@ -1439,11 +1552,11 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- A2-drop.2: ... and no binding `letd` made viewing more than it did,
       -- nor any no longer `letd`'s
       DKeep Γ Δ [] → DStay Γ Δ [] →
-      StmtT P Γ F .panic Δ
+      StmtT P ξ Γ F .panic Δ
   | letrec {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} {E : Entry} {fn : Fn} :
       s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →
-      fn.resOwn = false → CallT P Γ F f [] E Γ1 → StmtT P (setE Γ1 x E) F s Δ →
-      EndOK Δ x → StmtT P Γ F (.letrec x f s) (exitScope x Δ)
+      fn.resOwn = false → CallT P Γ F f [] E Γ1 → StmtT P (ξ.under x) (setE Γ1 x E) F s Δ →
+      EndOK Δ x → StmtT P ξ Γ F (.letrec x f s) (exitScope x Δ)
   | unpair {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt} {E : Entry} {a b : Ty}
       -- (an `inout` struct that may be replaced is taken apart too: a field
       -- replaced in place is the struct taken apart and assigned again)
@@ -1452,7 +1565,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- struct's glue: taking it apart is what its drop does)
       (h5 : E.ty = .prod a b ∨ ∃ f, E.ty = .dtor f (.prod a b) ∧ GlueOK P f (.prod a b)) (h6 : y ∉ F)
       (h7 : Γ x = none) (h8 : Γ z = none) (h9 : x ≠ z) (h10 : x ∉ F) (h11 : z ∉ F)
-      (h12 : StmtT P (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z
+      (h12 : StmtT P ((ξ.under x).under z) (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z
         (compE E b)) F s Δ)
       -- `y` is replaced, not ended: what borrows it by name, and a destructor
       -- that views it, are what replacing it ends
@@ -1461,7 +1574,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- thing, whose scope runs the destructor where the field's binding ends
       (hdx : a.holdsDtor = true → x ∈ s.movedFirst ∧ x ∉ s.assigns := by dtor_head)
       (hdz : b.holdsDtor = true → z ∈ s.movedFirst ∧ z ∉ s.assigns := by dtor_head) :
-      StmtT P Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
+      StmtT P ξ Γ F (.unpair y x z s) (exitScope x (exitScope z Δ))
   | callc {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
       {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn}
       (h1 : k.src = true) (h2 : Γ x = none) (h3 : x ∉ F) (h4 : Γ c = some Ec)
@@ -1476,7 +1589,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- no argument is a binding the package may change by name (it is
       -- handed to the code as an `inout` argument of its own)
       (h11 : ∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z)
-      (h12 : StmtT P (setE Γ1 x (recvRes c Ec E)) F k Δ)
+      (h12 : StmtT P (ξ.under x) (setE Γ1 x (recvRes c Ec E)) F k Δ)
       (h13 : EndOK Δ x)
       -- the interface is not code that changes elements through a borrow
       -- (Agora #295; nor is the code that runs: `Implements`)
@@ -1484,13 +1597,13 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- (A2-drop.3a: as `letcall`'s)
       (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns :=
         by dtor_head) :
-      StmtT P Γ F (.callc x c j zs k) (exitScope x Δ)
+      StmtT P ξ Γ F (.callc x c j zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
-      x ∉ F → StmtT P Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
+      x ∉ F → StmtT P .none Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
       (RootbAnch Δ F) →
       KeepOut Γ Δ s.spine → DStay Γ Δ s.spine →
-      StmtT P Γ F (.catchR x m0 s) Δ
+      StmtT P ξ Γ F (.catchR x m0 s) Δ
   /-- A2-drop: a binding that runs a destructor at its end: of a destructor
       type (armed when the type holds views, A2-drop.2), or of a `Vec` of
       destructor values, drained there (A2-drop.3b). -/
@@ -1509,12 +1622,12 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       LetdTy f t E.ty τ → t.isStruct = true →
       t.hasFn = false → LetdFn P f t E.ty x s ∧ TakeOK P Γ r →
       -- A2-drop.2: the binding, armed, views what the value does, or more
-      HeldUp Γ1 E H → StmtT P (setE Γ1 x (Entry.arm { E with ty := τ, held := H })) F s Δ →
+      HeldUp Γ1 E H → StmtT P (ξ.underD x) (setE Γ1 x (Entry.arm { E with ty := τ, held := H })) F s Δ →
       EndOK Δ x →
       -- A2-drop.3a: and is given no other value in its scope (`Stmt.assigns`):
       -- the old value's drop would run no destructor
       (hna : x ∉ s.assigns := by simp [Stmt.assigns]) →
-      StmtT P Γ F (.letd x f r s) (exitScope x Δ)
+      StmtT P ξ Γ F (.letd x f r s) (exitScope x Δ)
   /-- A3.2: `locked_update a f`: the lock `a` (a live lock share) shares is
       taken, and its payload, a `t`, is checked out to `x` for the body:
       owned (an integer is a plain integer binding), holding nothing (the
@@ -1540,10 +1653,10 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       destructor frame (`Step.scopeLPD`). -/
   | withLock {Γ Δ : Ctx} {F : List Var} {a x : Var} {s : Stmt} {Ea : Entry} {t : Ty} :
       s.src = true → Γ x = none → x ∉ F → Γ a = some Ea → Ea.live = true → Ea.lockOf t →
-      StmtT P (setE Γ x (lockE t)) F s Δ → EndOK Δ x →
+      StmtT P .none (setE Γ x (lockE t)) F s Δ → EndOK Δ x →
       Ea.mode.isRoot = true → a ∉ s.vars → (∃ E, Δ x = some E ∧ E.live = true) →
       (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) →
-      StmtT P Γ F (.withLock a x s) (exitScope x Δ)
+      StmtT P ξ Γ F (.withLock a x s) (exitScope x Δ)
   /-- A3.2: run time: `x`'s lock scope, typed as a `scope`.  `x` is bound
       as `withLock` binds it (`lockE`): an owner, or, for an integer payload,
       a plain integer binding; and (Agora #825, for every payload type) it is
@@ -1557,16 +1670,16 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | scopeL {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt} :
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ E.ty = t ∧ (t ≠ .int → E.mode = .own) ∧
         ∃ E', Δ x = some E' ∧ E'.live = true) →
-      x ∉ F → StmtT P Γ F s Δ → EndOK Δ x →
+      x ∉ F → StmtT P .none Γ F s Δ → EndOK Δ x →
       KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
-      StmtT P Γ F (.scopeL k t x s) (exitScope x Δ)
+      StmtT P ξ Γ F (.scopeL k t x s) (exitScope x Δ)
   /-- A2-elem (Agora #391): `y`'s value moves into `x` at index `i`: a push
       whose element then moves to index `i`.  The invariant does not see the
       order of an owner's elements (`MInv.perm`), so it is typed as the push
       `vec_push x y` is.  It is the give-back of an element handed over
       (`withElem`). -/
   | insert {Γ Δ : Ctx} {F : List Var} {x y : Var} {i : Expr} :
-      ExprT Γ i → x ∉ F → StmtT P Γ F (.push x y) Δ → StmtT P Γ F (.insert x i y) Δ
+      ExprT Γ i → x ∉ F → StmtT P .none Γ F (.push x y) Δ → StmtT P ξ Γ F (.insert x i y) Δ
   /-- A2-elem (Agora #391): element `i` of `v` handed over, as a call hands
       an element to a parameter it changes (`( f ( vec_at v i ) )`, read as
       `withElem v i x (call f x)`).  Element `i` moves out to `x`, which
@@ -1589,12 +1702,12 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
   | withElem {Γ Γ1 Δ1 Δ : Ctx} {F : List Var} {v x : Var} {i : Expr} {s : Stmt} {Ev E : Entry} :
       s.src = true → Γ x = none → x ∉ F → Γ v = some Ev → Ev.mode = .own → ExprT Γ i →
       NoPin Γ v → DtorSafe Γ .replace false v →
-      RhsT (kill .replace false v Γ) F (.pop v) E Γ1 → StmtT P (setE Γ1 x E) F s Δ1 →
-      StmtT P Δ1 F (.push v x) Δ → EndOK Δ x → v ∉ s.vars →
+      RhsT (kill .replace false v Γ) F (.pop v) E Γ1 → StmtT P .none (setE Γ1 x E) F s Δ1 →
+      StmtT P .none Δ1 F (.push v x) Δ → EndOK Δ x → v ∉ s.vars →
       -- (A2-drop.3b: the element checked out owns no destructor value: its
       -- binding is no `letd`'s)
       E.ty.dtorFree = true →
-      StmtT P Γ F (.withElem v i x s) (exitScope x Δ)
+      StmtT P ξ Γ F (.withElem v i x s) (exitScope x Δ)
   /-- A2-envhand: a call through the package `c` of a method whose interface
       `σ` takes the receiver `inout` (at the bound `b`, and nothing else): the
       environment is handed over to the code (`Step.callcE`), which may change
@@ -1638,19 +1751,19 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       (h11 : sig.lends = []) (h12 : sig.rholds = [])
       (h13 : sig.outHolds = []) (h14 : NoPin Γ c) (h15 : DtorSafe Γ .replace false c)
       (h16 : CallT P (kill .replace false c Γ) F σ [c] E Γ1)
-      (h17 : StmtT P (kill .replace false c (setE Γ1 x E)) F k Δ)
+      (h17 : StmtT P (ξ.under x) (kill .replace false c (setE Γ1 x E)) F k Δ)
       (h18 : EndOK Δ x) (h19 : ¬ ThruFn P σ)
       -- (A2-drop.3a: as `letcall`'s)
       (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns :=
         by dtor_head) :
-      StmtT P Γ F (.callcE x c j [] k) (exitScope x Δ)
+      StmtT P ξ Γ F (.callcE x c j [] k) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       -- (A2-drop.3a: of the destructor type `Ty.dtor f t`, whose destructor `f` is)
       -- (A2-drop.3b: or a `Vec` of such values; Agora #782: whose elements may
       -- hold views, the binding then `letd`'s and armed with them)
       (∃ E t, Γ x = some E ∧ E.mode = .own ∧ ScopeDTy f t E.ty ∧ E.ty.hasFn = false ∧
         DropFnOK P f t ∧ t.isStruct = true) → x ∉ F →
-      StmtT P Γ F s Δ → EndOK Δ x →
+      StmtT P (ξ.underD x) Γ F s Δ → EndOK Δ x →
       KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
       -- A2-drop.2: the binding is `letd`'s when its type holds views (its
       -- destructor reads them)
@@ -1658,7 +1771,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       -- Agora #633: ... and views nothing of its own (a panic's unwind moves
       -- it into its glue, a `sink` argument)
       DSelf Γ x →
-      StmtT P Γ F (.scopeD x f s) (exitScope x Δ)
+      StmtT P ξ Γ F (.scopeD x f s) (exitScope x Δ)
   /-- Agora #295: a change of a `Vec`'s elements through a borrow `x` (a
       push, a truncation or an element set), of an element type that holds
       no views. The change lands in the tree of one of the roots `x` reaches
@@ -1676,7 +1789,7 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       ThruOK Γ1 F op Ex.ty Ex1.path →
       -- (A2-drop.3b: a change that drops elements drops no destructor value)
       (op.drops = true → t.dtorFree = true) →
-      StmtT P Γ F (.edit true x op) (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
+      StmtT P ξ Γ F (.edit true x op) (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
   /-- Agora #295: the same change through a borrow `x`, of an element type
       that holds views (and no closure): a push or an element set may store
       a view, valid through what the stored value depends on in memory
@@ -1697,9 +1810,36 @@ inductive StmtT (P : Prog) : Ctx → List Var → Stmt → Ctx → Prop
       Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
       ThruOK Γ1 F op Ex.ty Ex1.path → ThruV Γ1 op Ex.ty Ex1.path (memDeps D) →
       (op.drops = true → t.dtorFree = true) →
-      StmtT P Γ F (.edit true x op)
+      StmtT P ξ Γ F (.edit true x op)
         (setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γ1)) x
           { Ex1 with held := Ex1.held ++ memDeps D })
+  /-- Agora #871: an exit (`break`, `continue`, an early `^`) ends its path
+      as a panic does — what follows it may assume any context with the
+      same bindings, modes and types (the panic rule's premises) — and it
+      is taken only where its target allows it (`Exits.up`): every scope it
+      leaves may end there, and the block it leaves to is reached. -/
+  | exit {Γ Δ : Ctx} {F : List Var} {n : Nat} :
+      ξ.up n Γ →
+      CtxWF Δ → NameWF Δ → (∀ v, (Γ v).isSome = (Δ v).isSome) →
+      (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
+        (E0.fixed → E = E0)) →
+      DKeep Γ Δ [] → DStay Γ Δ [] →
+      StmtT P ξ Γ F (.exit n) Δ
+  /-- Agora #871: a block ends where its body does, or where an `exit 0` of
+      it is taken (`Exits.blk`: from a context weaker than its end's). -/
+  | block {Γ Δ : Ctx} {F : List Var} {s : Stmt} :
+      StmtT P (ξ.blk Δ) Γ F s Δ → StmtT P ξ Γ F (.block s) Δ
+  /-- Agora #871: `while T`: the body keeps the loop's context (an
+      invariant, as `while`'s), and the loop never ends normally: what
+      follows it may assume any context, as after a panic (it is left by
+      an exit, to a block around it, whose end the exit reaches). -/
+  | loop {Γ Δ : Ctx} {F : List Var} {s : Stmt} :
+      s.src = true → StmtT P ξ Γ F s Γ →
+      CtxWF Δ → NameWF Δ → (∀ v, (Γ v).isSome = (Δ v).isSome) →
+      (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
+        (E0.fixed → E = E0)) →
+      DKeep Γ Δ [] → DStay Γ Δ [] →
+      StmtT P ξ Γ F (.loop s) Δ
 
 /-- A2-drop.3a: a function's parameters and result of a type that holds a
     destructor value (`Ty.holdsDtor`).  A `sink` one goes to its `letd`
@@ -1744,7 +1884,7 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
   (∀ jk ∈ fn.lends ++ fn.rholds, kindFits fn jk.1 jk.2) ∧ (∀ o ∈ fn.outHolds, kindFits fn o.2.1 o.2.2) ∧
   -- A2-drop.3a: parameters and a result of a type holding a destructor
   DtorParamsOK P fn ∧
-  ∃ Δ, StmtT P (sigCtx fn) [] fn.body Δ ∧
+  ∃ Δ, StmtT P .none (sigCtx fn) [] fn.body Δ ∧
     -- A2-drop.2: the body's own destructor bindings have ended, and no
     -- parameter or result runs a destructor
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
@@ -1969,6 +2109,8 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .scopeL _ _ _ s => s.codesOK P
   | .withElem _ _ _ s => s.codesOK P
   | .callcE _ _ _ _ s => s.codesOK P
+  | .block s => s.codesOK P
+  | .loop s => s.codesOK P
   | _ => True
 
 def ProgCodes (P : Prog) : Prop := ∀ fn ∈ P, fn.body.codesOK P

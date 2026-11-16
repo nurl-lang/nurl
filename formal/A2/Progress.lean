@@ -538,7 +538,15 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
       obtain ⟨a', hfr⟩ := frees_exists hp.wf m1.alloc hp.nd (fun i hi' => (hp.al i hi').1)
       exact ⟨_, Step.editSetOOB hev htk hno (by omega) hfr⟩
 
-/-- Progress for every statement but a call, given the call case. -/
+/-- Agora #871: no exit is about to leave a statement typed under no exit. -/
+theorem exitAt_none {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} {m : Mem}
+    (ht : StmtT P .none Γ F s Δ) {n : Nat} {e : Stmt} (he : ExitAt s n e) (hi : Inv m Γ F s) : False := by
+  obtain ⟨_, _, h2, -⟩ := ExitAt.typed ht he hi.wf hi.names hi.anch .none
+  exact Exits.none_up h2
+
+/-- Progress for every statement but a call, given the call case: it has
+    finished, waits, is about to take an exit (Agora #871: inside a block,
+    which takes it), or steps. -/
 theorem progress {P : Prog}
     (hcall : ∀ {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {args : List Var} {k : Stmt}
       {E : Entry} {Γ1 : Ctx} {m : Mem}, Γ x = none → CallT P Γ F f args E Γ1 → MInv m Γ →
@@ -557,20 +565,35 @@ theorem progress {P : Prog}
       (sig.params = [(.sink, Ec.ty)] ∧ Ec.vdeps = [] ∧ Ec.mode = .own ∧ Ec.live = true ∧
         q.drops = true ∧ sig.resOwn = false)) → CallT P (kill .replace false c Γ) F σ [c] E Γ1 →
       MemCodes P m → Inv m Γ F (.callcE x c j [] k) → ∃ r, Step P m (.callcE x c j [] k) r)
-    {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P Γ F s Δ) :
-    ∀ {m : Mem}, MemCodes P m → Inv m Γ F s → s = .skip ∨ Blocked m s ∨ ∃ r, Step P m s r := by
+    {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) :
+    ∀ {m : Mem}, MemCodes P m → Inv m Γ F s → s = .skip ∨ Blocked m s ∨ (∃ n e, ExitAt s n e) ∨ ∃ r, Step P m s r := by
   induction ht with
   | skip => exact fun _ _ => Or.inl rfl
+  | exit _ _ _ _ _ _ _ => exact fun _ _ => Or.inr (Or.inr (Or.inl ⟨_, _, ExitAt.exit⟩))
+  | loop _ _ _ _ _ _ _ _ _ => exact fun _ _ => Or.inr <| Or.inr <| Or.inr ⟨_, Step.loop⟩
+  | @block _ Γ Δ F k _ ih =>
+    intro m hcd hi
+    have hik : Inv m Γ F k := hi.respine rfl (fun v hv => hv) hi.catchOK hi.pinIn hi.dtorIn
+    rcases ih hcd hik with rfl | hbl | ⟨n, e, hex⟩ | ⟨r, hr⟩
+    · exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.blockSkip⟩
+    · exact Or.inr (Or.inl hbl)
+    · cases n with
+      | zero => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.blockExit hex⟩
+      | succ n => exact Or.inr (Or.inr (Or.inl ⟨n, e, ExitAt.block hex⟩))
+    · cases r with
+      | ok m' k' => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.blockIn hr⟩
+      | panic => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.blockP hr⟩
   | sub hw _ _ ih => exact fun hcd hi => ih hcd (hi.weaker hw)
   | seq _ _ _ iha _ =>
     intro m hcd hi
-    rcases iha hcd hi.seqIn with rfl | hbl | ⟨r, hr⟩
-    · exact Or.inr <| Or.inr ⟨_, Step.seqSkip⟩
+    rcases iha hcd hi.seqIn with rfl | hbl | ⟨n, e, hex⟩ | ⟨r, hr⟩
+    · exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.seqSkip⟩
     · exact Or.inr (Or.inl hbl)
+    · exact Or.inr (Or.inr (Or.inl ⟨n, e, ExitAt.seq hex⟩))
     · cases r with
-      | ok m' a' => exact Or.inr <| Or.inr ⟨_, Step.seqL hr⟩
-      | panic => exact Or.inr <| Or.inr ⟨_, Step.seqP hr⟩
-  | @letv Γ Γ1 Δ F x r k E _ hx _ hr _ _ _ =>
+      | ok m' a' => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.seqL hr⟩
+      | panic => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.seqP hr⟩
+  | @letv _ Γ Γ1 Δ F x r k E _ hx _ hr _ _ _ =>
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
@@ -578,21 +601,22 @@ theorem progress {P : Prog}
     · exact Or.inr (Or.inl hrb)
     obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr hrb
     cases res with
-    | ok v o m1 => exact Or.inr <| Or.inr ⟨_, Step.letv hmx hres⟩
-    | panic => exact Or.inr <| Or.inr ⟨_, Step.letvP hres⟩
-  | @letcall Γ Γ1 Δ F x f args k E _ hx _ hc _ _ _ _ =>
+    | ok v o m1 => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letv hmx hres⟩
+    | panic => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letvP hres⟩
+  | @letcall _ Γ Γ1 Δ F x f args k E _ hx _ hc _ _ _ _ =>
     intro m hcd hi
-    exact Or.inr <| Or.inr (hcall (k := k) hx hc hi.toMInv)
-  | @scope Γ Δ1 F x k hxE _ _ _ ih =>
+    exact Or.inr <| Or.inr <| Or.inr (hcall (k := k) hx hc hi.toMInv)
+  | @scope _ Γ Δ1 F x k hxE _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, hx, hnrb⟩ := hxE
     have hi0 : Inv m Γ F k := hi.scopeIn hx hnrb
-    rcases ih hcd hi0 with rfl | hbl | ⟨r, hr⟩
+    rcases ih hcd hi0 with rfl | hbl | ⟨n, e, hex⟩ | ⟨r, hr⟩
     · obtain ⟨sl, a', hsl, hd⟩ := dropSlot_exists hi.toMInv hx
-      exact Or.inr <| Or.inr ⟨_, Step.scopeSkip hsl hd⟩
+      exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeSkip hsl hd⟩
     · exact Or.inr (Or.inl hbl)
+    · exact Or.inr (Or.inr (Or.inl ⟨n, _, ExitAt.scope hex⟩))
     · cases r with
-      | ok m' k' => exact Or.inr <| Or.inr ⟨_, Step.scopeIn hr⟩
+      | ok m' k' => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeIn hr⟩
       | panic m1 =>
         obtain ⟨hout, _, hh1, _⟩ := panic_unwind hr hi.heap hi.cover hi0.spineNd
         have hxs : x ∉ k.spine := by
@@ -610,8 +634,8 @@ theorem progress {P : Prog}
               obtain ⟨_, hwf, _⟩ := hown (by simp at hso; exact hso)
               obtain ⟨a', ha⟩ := frees_owned hh1 hsl1 (hwf t rfl)
               exact ⟨a', DropSlot.owned ha⟩
-        exact Or.inr <| Or.inr ⟨_, Step.scopeP hr hsl1 hd⟩
-  | @withLock Γ Δ F a x k Ea t _ hx _ ha hla hta _ _ _ _ _ _ =>
+        exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeP hr hsl1 hd⟩
+  | @withLock _ Γ Δ F a x k Ea t _ hx _ ha hla hta _ _ _ _ _ _ =>
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
@@ -622,22 +646,23 @@ theorem progress {P : Prog}
     · exact Or.inr (Or.inl ⟨kk, t, hv, Or.inr hnv⟩)
     cases ob with
     | none => exact Or.inr (Or.inl ⟨kk, t, hv, Or.inl hk⟩)
-    | some w => exact Or.inr <| Or.inr ⟨_, Step.withLock hv hk hmx hnv⟩
-  | @scopeL Γ Δ1 F kk t x k hxE _ _ _ _ _ _ ih =>
+    | some w => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.withLock hv hk hmx hnv⟩
+  | @scopeL _ Γ Δ1 F kk t x k hxE _ hsB _ _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, hx, hnrb, _⟩ := hxE
     have hi0 : Inv m Γ F k := hi.scopeLIn hx hnrb
-    rcases ih hcd hi0 with rfl | hbl | ⟨r, hr⟩
+    rcases ih hcd hi0 with rfl | hbl | ⟨n, e, hex⟩ | ⟨r, hr⟩
     · obtain ⟨sl, a', hsl, hd⟩ := dropSlot_exists hi.toMInv hx
       -- the payload goes back into its block, or `x`'s slot is dropped
       -- A3.5's second cut: unless it fails the crossing check, which panics
       by_cases hck : GiveCheck m x sl
       · obtain ⟨m', hrl⟩ := Release.exists (k := kk) (t := t) hsl hd fun _ _ _ _ _ => hck
-        exact Or.inr <| Or.inr ⟨_, Step.scopeLSkip hrl fun sl' h => by rw [hsl] at h; cases h; exact hck⟩
-      · exact Or.inr <| Or.inr ⟨_, Step.scopeLFail hsl hck⟩
+        exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeLSkip hrl fun sl' h => by rw [hsl] at h; cases h; exact hck⟩
+      · exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeLFail hsl hck⟩
     · exact Or.inr (Or.inl hbl)
+    · exact (exitAt_none hsB hex hi0).elim
     · cases r with
-      | ok m' k' => exact Or.inr <| Or.inr ⟨_, Step.scopeLIn hr⟩
+      | ok m' k' => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeLIn hr⟩
       | panic m1 =>
         obtain ⟨hout, _, hh1, _⟩ := panic_unwind hr hi.heap hi.cover hi0.spineNd
         have hxs : x ∉ k.spine := by
@@ -659,12 +684,12 @@ theorem progress {P : Prog}
         -- destructor frame
         by_cases hpd : CheckedOut m1 kk t ∧ ∃ n f u, t = Ty.nest n (.dtor f u) ∧ ¬ GiveCheck m1 x sl
         · obtain ⟨hco, n, f, u, ht, hng⟩ := hpd
-          exact Or.inr <| Or.inr ⟨_, Step.scopeLPD hr hco ht hsl1 hng⟩
+          exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeLPD hr hco ht hsl1 hng⟩
         -- A3.3: on the way out too
         obtain ⟨m2, hrl⟩ := Release.exists (k := kk) (t := t) hsl1 hd fun hco n f u ht =>
           Classical.byContradiction fun hng => hpd ⟨hco, n, f, u, ht, hng⟩
-        exact Or.inr <| Or.inr ⟨_, Step.scopeLP hr hrl⟩
-  | @letd Γ Γ1 Δ F x f r k E _ _ _ _ hx _ hr _ _ _ _ _ _ _ _ =>
+        exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeLP hr hrl⟩
+  | @letd _ Γ Γ1 Δ F x f r k E _ _ _ _ hx _ hr _ _ _ _ _ _ _ _ =>
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
@@ -672,9 +697,9 @@ theorem progress {P : Prog}
     · exact Or.inr (Or.inl hrb)
     obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr hrb
     cases res with
-    | ok v o m1 => exact Or.inr <| Or.inr ⟨_, Step.letd hmx hres⟩
-    | panic => exact Or.inr <| Or.inr ⟨_, Step.letdP hres⟩
-  | @scopeD Γ Δ1 F x f k hxE _ _ _ _ _ _ _ _ ih =>
+    | ok v o m1 => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letd hmx hres⟩
+    | panic => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letdP hres⟩
+  | @scopeD _ Γ Δ1 F x f k hxE _ _ _ _ _ _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, _, hx, hmo, _, _, _⟩ := hxE
     have hnrb : Ex.mode ≠ .rootb := by rw [hmo]; simp
@@ -685,77 +710,80 @@ theorem progress {P : Prog}
       intro m' he
       obtain ⟨⟨o, val⟩, hsl, _, hso, _⟩ := hi.slot x Ex hx
       rw [hmo] at hso; simp [Mode.ownSlot] at hso; subst hso; exact ⟨val, by rw [he, hsl]⟩
-    rcases ih hcd hi0 with rfl | hbl | ⟨r, hr⟩
+    rcases ih hcd hi0 with rfl | hbl | ⟨n, e, hex⟩ | ⟨r, hr⟩
     · obtain ⟨val, hsl⟩ := hown m rfl
       cases val with
-      | none => exact Or.inr <| Or.inr ⟨_, Step.scopeDMoved hsl⟩
+      | none => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeDMoved hsl⟩
       | some v =>
         -- (A2-drop.3b: a `Vec`'s node is drained, element by element)
         cases v with
         | node t c d es =>
           cases es with
-          | nil => exact Or.inr <| Or.inr ⟨_, Step.scopeDEmpty hsl⟩
-          | cons e es => exact Or.inr <| Or.inr ⟨_, Step.scopeDDrain hsl⟩
-        | _ => exact Or.inr <| Or.inr ⟨_, Step.scopeDEnd hsl rfl⟩
+          | nil => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeDEmpty hsl⟩
+          | cons e es => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeDDrain hsl⟩
+        | _ => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeDEnd hsl rfl⟩
     · exact Or.inr (Or.inl hbl)
+    · exact Or.inr (Or.inr (Or.inl ⟨n, _, ExitAt.scopeD hex⟩))
     · cases r with
-      | ok m' k' => exact Or.inr <| Or.inr ⟨_, Step.scopeDIn hr⟩
+      | ok m' k' => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeDIn hr⟩
       | panic m1 =>
         obtain ⟨hout, _⟩ := panic_unwind hr hi.heap hi.cover hi0.spineNd
         have hxs : x ∉ k.spine := by
           have := hiS.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
         obtain ⟨val, hsl⟩ := hown m1 (hout x hxs)
         cases val with
-        | none => exact Or.inr <| Or.inr ⟨_, Step.scopeDPMoved hr hsl⟩
+        | none => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeDPMoved hr hsl⟩
         | some v =>
           cases v with
-          | node t c d es => exact Or.inr <| Or.inr ⟨_, Step.scopeDPDrain hr hsl⟩
-          | _ => exact Or.inr <| Or.inr ⟨_, Step.scopeDP hr hsl rfl⟩
-  | @rbind Γ Δ1 F p k Ep hp hm hl hroots _ _ _ ih =>
+          | node t c d es => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeDPDrain hr hsl⟩
+          | _ => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.scopeDP hr hsl rfl⟩
+  | @rbind _ Γ Δ1 F p k Ep hp hm hl hroots _ hsB _ ih =>
     intro m hcd hi
     have hi0 : Inv m Γ F k := hi.rbindIn hp hroots
     obtain ⟨w, hpb⟩ : ∃ w, m.st p = some ⟨false, w⟩ := by
       obtain ⟨⟨o, w⟩, hsl, _, hso, _⟩ := hi.slot p Ep hp
       rw [hm] at hso; simp [Mode.ownSlot] at hso; subst hso; exact ⟨w, hsl⟩
-    rcases ih hcd hi0 with rfl | hbl | ⟨r, hr⟩
-    · exact Or.inr <| Or.inr ⟨_, Step.rbindSkip hpb⟩
+    rcases ih hcd hi0 with rfl | hbl | ⟨n, e, hex⟩ | ⟨r, hr⟩
+    · exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.rbindSkip hpb⟩
     · exact Or.inr (Or.inl hbl)
+    · exact (exitAt_none hsB hex hi0).elim
     · cases r with
-      | ok m' k' => exact Or.inr <| Or.inr ⟨_, Step.rbindIn hr⟩
+      | ok m' k' => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.rbindIn hr⟩
       | panic m1 =>
         obtain ⟨hout, _⟩ := panic_unwind hr hi.heap hi.cover hi0.spineNd
         have hps : p ∉ k.spine := by
           have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
-        exact Or.inr <| Or.inr ⟨_, Step.rbindP hr (by rw [hout p hps]; exact hpb)⟩
-  | frozen _ hz ih =>
+        exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.rbindP hr (by rw [hout p hps]; exact hpb)⟩
+  | frozen hsB hz ih =>
     intro m hcd hi
-    rcases ih hcd (hi.frozenIn hz) with h | hbl | ⟨r, hr⟩
-    · subst h; exact Or.inr <| Or.inr ⟨_, Step.frozenSkip⟩
+    rcases ih hcd (hi.frozenIn hz) with h | hbl | ⟨n, e, hex⟩ | ⟨r, hr⟩
+    · subst h; exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.frozenSkip⟩
     · exact Or.inr (Or.inl hbl)
+    · exact (exitAt_none hsB hex (hi.frozenIn hz)).elim
     · cases r with
-      | ok m' k' => exact Or.inr <| Or.inr ⟨_, Step.frozenIn hr⟩
-      | panic => exact Or.inr <| Or.inr ⟨_, Step.frozenP hr⟩
-  | @assign Γ Γ1 F x r Ex E hx _ _ hr _ _ _ _ =>
+      | ok m' k' => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.frozenIn hr⟩
+      | panic => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.frozenP hr⟩
+  | @assign _ Γ Γ1 F x r Ex E hx _ _ hr _ _ _ _ =>
     intro m hcd hi
     by_cases hrb : RBlocked m r
     · exact Or.inr (Or.inl hrb)
     obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnch rfl) hr hrb
     cases res with
-    | panic => exact Or.inr <| Or.inr ⟨_, Step.assignP hres⟩
+    | panic => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.assignP hres⟩
     | ok v o m1 =>
       obtain ⟨post, _⟩ := rhs_pres hi.toMInv (hi.leafAnch rfl) hr hres
       have hx1 : (Γ1 x).isSome := by rw [post.cdom, hx]; rfl
       obtain ⟨Ex1, hEx1⟩ := Option.isSome_iff_exists.mp hx1
       obtain ⟨sl, a', hsl, hd⟩ := dropSlot_exists post.inv hEx1
-      exact Or.inr <| Or.inr ⟨_, Step.assign (by rw [← hi.dom x, hx]; rfl) hres hsl hd⟩
+      exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.assign (by rw [← hi.dom x, hx]; rfl) hres hsl hd⟩
   | ite _ _ hc _ _ _ _ =>
     intro m hcd hi
     obtain ⟨n, hn⟩ := eval_exists hi.toMInv hc
     by_cases h0 : n = 0
-    · subst h0; exact Or.inr <| Or.inr ⟨_, Step.iteF hn⟩
-    · exact Or.inr <| Or.inr ⟨_, Step.iteT hn h0⟩
-  | «while» _ _ _ _ => exact fun _ _ => Or.inr <| Or.inr ⟨_, Step.while⟩
-  | @push Γ Γ1 F x y Ex Ey Ex1 t D hx hl hty hcan hxF hy hly htyy hyx hpa _ _ _ =>
+    · subst h0; exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.iteF hn⟩
+    · exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.iteT hn h0⟩
+  | «while» _ _ _ _ => exact fun _ _ => Or.inr <| Or.inr <| Or.inr ⟨_, Step.while⟩
+  | @push _ Γ Γ1 F x y Ex Ey Ex1 t D hx hl hty hcan hxF hy hly htyy hyx hpa _ _ _ =>
     intro m hcd hi
     have hmx : Ex.mode = .own := by
       rcases hcan with h | ⟨b, h, _⟩
@@ -775,9 +803,9 @@ theorem progress {P : Prog}
         obtain ⟨v, hv, _⟩ := hi.bor_val hy hly (by rw [h]; rfl)
         exact ⟨v, m, TakeVal.bor hv (hpa.bor_noCell hi.toMInv hy hly htyy hv), rfl, rfl⟩
     obtain ⟨v, m1, htk, hst, hal⟩ := htake
-    exact Or.inr <| Or.inr ⟨_, Step.push htk (by rw [hst]; exact hT) (by rw [hal]; exact hac)
+    exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.push htk (by rw [hst]; exact hT) (by rw [hal]; exact hac)
       (by rw [hal]; exact had)⟩
-  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey' E _ hx _ _ _ he _ _ hr _ _ _ _ _ _ _ =>
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey' E _ hx _ _ _ he _ _ hr _ _ _ _ _ _ _ =>
     -- `y` owns a `Vec`: element `i` moves out, or the index is out of range
     intro m hcd hi
     have hmx : m.st x = none := by
@@ -806,9 +834,9 @@ theorem progress {P : Prog}
       · obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hmy]; rfl); rw [hT] at h; cases h
     obtain ⟨n, hn⟩ := eval_exists hi.toMInv he
     by_cases hlt : n < es.length
-    · exact Or.inr <| Or.inr ⟨_, Step.withElem hlt hT hac had hn hmx⟩
-    · exact Or.inr <| Or.inr ⟨_, Step.withElemOOB hT hac hn (by omega)⟩
-  | @insert Γ Δ F x y i he _ _ ih =>
+    · exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.withElem hlt hT hac had hn hmx⟩
+    · exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.withElemOOB hT hac hn (by omega)⟩
+  | @insert _ Γ Δ F x y i he _ _ ih =>
     -- the push it is typed as has a step, so it has one
     intro m hcd hi
     have hi0 : Inv m Γ F (.push x y) :=
@@ -817,54 +845,56 @@ theorem progress {P : Prog}
         · simp [Stmt.vars, h]
         · simp only [List.mem_singleton] at h; simp [Stmt.vars, h]) trivial trivial trivial
     obtain ⟨n, hn⟩ := eval_exists hi.toMInv he
-    rcases ih hcd hi0 with h | h | ⟨r, hr⟩
+    rcases ih hcd hi0 with h | h | ⟨n, e, hex⟩ | ⟨r, hr⟩
     · cases h
     · exact absurd h (by simp [Blocked])
+    · cases hex
     · cases hr with
-      | push htk hT hc hd => exact Or.inr <| Or.inr ⟨_, Step.insert hn htk hT hc hd⟩
-      | pushRealloc htk hT hc hd => exact Or.inr <| Or.inr ⟨_, Step.insert hn htk hT hc hd⟩
+      | push htk hT hc hd => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.insert hn htk hT hc hd⟩
+      | pushRealloc htk hT hc hd => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.insert hn htk hT hc hd⟩
       | waitPanic hw => exact absurd hw (by simp [Waits])
-      | reap _ hk hnc => exact Or.inr <| Or.inr ⟨_, Step.reap rfl hk hnc⟩
-  | @free Γ F x E t hx hl hm hty _ _ =>
+      | reap _ hk hnc => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.reap rfl hk hnc⟩
+  | @free _ Γ F x E t hx hl hm hty _ _ =>
     intro m hcd hi
     obtain ⟨T, hT, hwf, _⟩ := hi.own_val hx hl (by rw [hm]; rfl)
     obtain ⟨a', ha⟩ := frees_owned hi.heap hT hwf
-    exact Or.inr <| Or.inr ⟨_, Step.free hT ha⟩
+    exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.free hT ha⟩
   | editB hx hmx hl hty _ _ harg hyx hx1 hl1 _ hthru =>
     intro m hcd hi
-    exact Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnch rfl) hx hmx hl hty harg hyx hx1 hl1 hthru)
+    exact Or.inr <| Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnch rfl) hx hmx hl hty harg hyx hx1 hl1 hthru)
   | editBV hx hmx hl hty _ _ _ harg hyx hx1 hl1 _ hthru _ =>
     intro m hcd hi
-    exact Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnch rfl) hx hmx hl hty harg hyx hx1 hl1 hthru)
+    exact Or.inr <| Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnch rfl) hx hmx hl hty harg hyx hx1 hl1 hthru)
 
-  | panic => exact fun _ _ => Or.inr <| Or.inr ⟨_, Step.panic⟩
-  | @letrec Γ Γ1 Δ F x f k E fn _ hx _ hf hp _ _ _ _ _ _ =>
+  | panic => exact fun _ _ => Or.inr <| Or.inr <| Or.inr ⟨_, Step.panic⟩
+  | @letrec _ Γ Γ1 Δ F x f k E fn _ hx _ hf hp _ _ _ _ _ _ =>
     intro m hcd hi
     have hmx : m.st x = none := by
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
-    exact Or.inr <| Or.inr ⟨_, Step.letrec hf hp hmx⟩
+    exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letrec hf hp hmx⟩
   | callc _ hx hxF hc htc hj hσ hhd _ hcT hnz _ _ _ =>
     intro m hcd hi
-    exact Or.inr <| Or.inr (hclo hx hxF hc htc hj hσ hhd hcT hnz hcd hi)
+    exact Or.inr <| Or.inr <| Or.inr (hclo hx hxF hc htc hj hσ hhd hcT hnz hcd hi)
   | callcE _ hx _ hc htc hcan _ hj hσ hsp _ _ _ _ _ hcT _ _ _ _ _ =>
     intro m hcd hi
-    exact Or.inr <| Or.inr (hhand hx hc htc hcan hj hσ hsp hcT hcd hi)
-  | @catchR Γ Δ F x m0 s _ _ hM _ hKO _ ih =>
+    exact Or.inr <| Or.inr <| Or.inr (hhand hx hc htc hcan hj hσ hsp hcT hcd hi)
+  | @catchR _ Γ Δ F x m0 s _ hsB hM _ hKO _ ih =>
     intro m hcd hi
-    rcases ih hcd hi.catchIn with rfl | hbl | ⟨r, hr⟩
-    · exact Or.inr <| Or.inr ⟨_, Step.catchSkip⟩
+    rcases ih hcd hi.catchIn with rfl | hbl | ⟨n, e, hex⟩ | ⟨r, hr⟩
+    · exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.catchSkip⟩
     · exact Or.inr (Or.inl hbl)
+    · exact (exitAt_none hsB hex hi.catchIn).elim
     · cases r with
-      | ok m' s' => exact Or.inr <| Or.inr ⟨_, Step.catchIn hr⟩
+      | ok m' s' => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.catchIn hr⟩
       | panic m1 =>
         obtain ⟨hout, _⟩ := panic_unwind hr hi.heap hi.cover hi.spineNd
         have hxs : x ∉ s.spine := hi.catchOK.2.1
         obtain ⟨Ex, hEx⟩ : ∃ Ex, Δ x = some Ex := by
           have := hM.dom x; simp at this; exact Option.isSome_iff_exists.mp this
         obtain ⟨_, E0, h0⟩ := hKO.2 x Ex hEx
-        exact Or.inr <| Or.inr ⟨_, Step.catchP hr (by rw [hout x hxs, ← hi.dom x, h0]; rfl)⟩
+        exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.catchP hr (by rw [hout x hxs, ← hi.dom x, h0]; rfl)⟩
 
-  | @unpair Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ _ _ _ _ _ =>
+  | @unpair _ Γ Δ F y x z k E a b _ hy hl hm hty _ hx hz hxz _ _ _ _ _ _ _ _ _ _ =>
     intro m hcd hi
     obtain ⟨o, v, w, hv⟩ := pair_slot hi.toMInv hy hl (unpair_undtor hty)
     obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rcases hm with h | ⟨b, h, _⟩ <;> rw [h] <;> rfl)
@@ -873,6 +903,6 @@ theorem progress {P : Prog}
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
     have hmz : m.st z = none := by
       have := hi.dom z; rw [hz] at this; cases h : m.st z <;> simp_all
-    exact Or.inr <| Or.inr ⟨_, Step.unpair hT hmx hmz hxz⟩
+    exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.unpair hT hmx hmz hxz⟩
 
 end A2

@@ -6908,7 +6908,7 @@ typedef enum {
 
 /* Per-fiber recovery state (runtime_core.c: NurlRecoverCtx, which
  * static-asserts it fits). */
-#define NURL_RCTX_WORDS 16
+#include "nurl_rctx.h"  /* NURL_RCTX_WORDS: one definition (runtime_core.c's assert) */
 void nurl__rctx_swap(void *ctx);
 void nurl__rctx_release(void *ctx);
 

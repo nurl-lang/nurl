@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_break_in_closure_body.nu:13:31: error: 'break' inside a closure body, outside any loop written in it — the closure is a function of its own, so it cannot leave a loop around the closure literal. Return a value the caller tests (e.g. a 'b'), and 'break' there.
+        : i r ( app \ → i { break ^ 1 } )
+                              ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

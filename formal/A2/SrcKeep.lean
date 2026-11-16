@@ -146,7 +146,7 @@ theorem CallT.sink0_notF {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {si
     its mode and type, nothing new is bound, and a borrowed parameter whose
     sources are lent out keeps its entry. -/
 theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P Γ F s Δ) : s.src = true → RootbAnch Γ F → NameWF Γ → CtxRel Γ Δ := by
+    (ht : StmtT P ξ Γ F s Δ) : s.src = true → RootbAnch Γ F → NameWF Γ → CtxRel Γ Δ := by
   induction ht with
   | skip => exact fun _ _ _ => CtxRel.refl _
   | seq _ ha _ iha ihb =>
@@ -154,7 +154,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     simp only [Stmt.src, Bool.and_eq_true] at hs
     have h1 := iha hs.1 hanch hn
     exact h1.trans (ihb hs.2 (h1.anch hanch) (StmtT.names hP ha hs.1 hn))
-  | @letv Γ Γ1 Δ F x r k E hks hx hxF hr _ hpin _ ih =>
+  | @letv _ Γ Γ1 Δ F x r k E hks hx hxF hr _ hpin _ ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hr.names hn
     have hx1 : Γ1 x = none := by
@@ -163,7 +163,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       (fun Ex h => by rw [hx1] at h; cases h) hE
     have hnrb : E.mode ≠ .rootb := by rcases (RhsT.out hr).1 with h | h <;> rw [h] <;> simp
     exact CtxRel.bind hanch hx hxF (hr.ctxRel hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
-  | @callcE Γ Γ1 Δ F x c j k Ec E ms q σ sig b hks hx hxF _ _ _ _ _ hσ hsp _ _ _ hny _ hcT _ hpin _ _ ih =>
+  | @callcE _ Γ Γ1 Δ F x c j k Ec E ms q σ sig b hks hx hxF _ _ _ _ _ hσ hsp _ _ _ hny _ hcT _ hpin _ _ ih =>
     intro _ hanch hn
     have hcF : c ∉ F := hsp.elim (fun h => hcT.inout0_notF hσ h.1) (fun h => hcT.sink0_notF hσ h.1)
     have hk0 := CtxRel.kill hanch hcF .replace false (hny.kills .replace false)
@@ -190,7 +190,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       exact hny p Ep h0 hm d hd hb
     have h2 := CtxRel.kill ha hcF .replace false (hny1.kills .replace false)
     exact h2.trans (ih hks (ha.kill _ _ _) (hnx.kill _ _ _))
-  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF _ _ _ hpy _ hr hk _ hpin _ _ ihs ihp =>
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF _ _ _ hpy _ hr hk _ hpin _ _ ihs ihp =>
     intro _ hanch hn
     have hyF : y ∉ F := by cases hr; assumption
     have hk0 := CtxRel.kill hanch hyF .replace false (hpy.kills .replace false)
@@ -205,13 +205,13 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     exact CtxRel.bind hanch hx hxF (hk0.trans (hr.ctxRel hanchk)) hnrb (fun ha => by
       have h2 := ihs hks ha hnx
       exact h2.trans (ihp rfl (h2.anch ha) (StmtT.names hP hk hks hnx))) hpin.1
-  | @withLock Γ Δ F a x k Ea t hks hx hxF _ _ _ _ hpin _ _ _ _ ih =>
+  | @withLock _ Γ Δ F a x k Ea t hks hx hxF _ _ _ _ hpin _ _ _ _ ih =>
     intro _ hanch hn
     have hnx := NameWF.setE hn (E := lockE t) (fun Ex h => by rw [hx] at h; cases h)
       (fun Ex h => by rw [hx] at h; cases h) (fun _ _ => by unfold NameOK; rw [lockE_vdeps]; exact DepsNamed.nil _)
     have hnrb : (lockE t).mode ≠ .rootb := by unfold lockE; split <;> simp [intE]
     exact CtxRel.bind hanch hx hxF (CtxRel.refl _) hnrb (fun ha => ih hks ha hnx) hpin.1
-  | @letd Γ Γ1 Δ F x f r k E t H τ hks hx hxF hr hmo hty hstr _ _ hH _ hpin _ ih =>
+  | @letd _ Γ Γ1 Δ F x f r k E t H τ hks hx hxF hr hmo hty hstr _ _ hH _ hpin _ ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hr.names hn
     have hx1 : Γ1 x = none := by
@@ -222,7 +222,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       (fun Ex h => by rw [hx1] at h; cases h) (fun hl _ => (hE hl (Or.inl hne)).widen hmo hH)
     exact CtxRel.bind (E := Entry.arm { E with ty := τ, held := H }) hanch hx hxF (hr.ctxRel hanch)
       (show E.mode ≠ .rootb by rw [hmo]; simp) (fun ha => ih hks ha hnx) hpin.1
-  | @letcall Γ Γ1 Δ F x f args k E hks hx hxF hc _ hpin _ ih =>
+  | @letcall _ Γ Γ1 Δ F x f args k E hks hx hxF hc _ hpin _ ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hc.names hP hn
     have hx1 : Γ1 x = none := by
@@ -232,7 +232,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnrb : E.mode ≠ .rootb := by
       obtain ⟨fn, _, _, hE', _⟩ := hc.toA hn hanch; rw [hE']; exact resMode_ne' fn
     exact CtxRel.bind hanch hx hxF (hc.ctxRel hn hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
-  | @letrec Γ Γ1 Δ F x f k E fn hks hx hxF _ _ _ _ hc _ hpin ih =>
+  | @letrec _ Γ Γ1 Δ F x f k E fn hks hx hxF _ _ _ _ hc _ hpin ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hc.names hP hn
     have hx1 : Γ1 x = none := by
@@ -242,7 +242,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnrb : E.mode ≠ .rootb := by
       obtain ⟨fn', _, _, hE', _⟩ := hc.toA hn hanch; rw [hE']; exact resMode_ne' fn'
     exact CtxRel.bind hanch hx hxF (hc.ctxRel hn hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
-  | @callc Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF _ _ _ _ _ _ hcT _ _ hpin _ _ ih =>
+  | @callc _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF _ _ _ _ _ _ hcT _ _ hpin _ _ ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hcT.names hP hn
     have hx1 : Γ1 x = none := by
@@ -253,7 +253,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       obtain ⟨fn, _, _, hE', _⟩ := hcT.toA hn hanch
       show E.mode ≠ .rootb; rw [hE']; exact resMode_ne' fn
     exact CtxRel.bind hanch hx hxF (hcT.ctxRel hn hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
-  | @unpair Γ Δ F y x z k E a b hks hy hl hcan hty hyF hx hz hxz hxF hzF _ hpy _ hpz hpx _ _ ih =>
+  | @unpair _ Γ Δ F y x z k E a b hks hy hl hcan hty hyF hx hz hxz hxF hzF _ hpy _ hpz hpx _ _ ih =>
     intro _ hanch hn
     have hnrbE : E.mode ≠ .rootb := by rcases hcan with h | ⟨b, h, _⟩ <;> rw [h] <;> simp
     have h0 : CtxRel Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) :=
@@ -268,7 +268,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     exact h0.trans (CtxRel.bind (h0.anch hanch) hx0 hxF (CtxRel.refl _) (compE_mode_ne E a)
       (fun ha1 => CtxRel.bind ha1 hz1 hzF (CtxRel.refl _) (compE_mode_ne E b)
         (fun ha2 => ih hks ha2 hn2) hpz.1) hpx.1)
-  | @assign Γ Γ1 F x r Ex E hx hxF hmodes hr hty _ hx1s hpin _ =>
+  | @assign _ Γ Γ1 F x r Ex E hx hxF hmodes hr hty _ hx1s hpin _ =>
     intro _ hanch _
     have h1 := hr.ctxRel hanch
     obtain ⟨Ex1, hEx1⟩ := Option.isSome_iff_exists.mp hx1s
@@ -285,7 +285,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     · simp [killE_mode, hm0, hnrbx]
   | ite ha _ _ _ _ iha _ => exact fun _ hanch hn => iha ha hanch hn
   | «while» => exact fun _ _ _ => CtxRel.refl _
-  | @push Γ Γ1 F x y Ex Ey Ex1 t D hx _ hxt hcan hxF hy _ _ _ hpa _ hx1 _ _ hdb =>
+  | @push _ Γ Γ1 F x y Ex Ey Ex1 t D hx _ hxt hcan hxF hy _ _ _ hpa _ hx1 _ _ hdb =>
     intro _ hanch _
     have h1 := hpa.ctxRel hy hanch
     obtain ⟨E0, h0, hm0, ht0⟩ := h1.mode x Ex1 hx1
@@ -307,7 +307,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     exact fun _ hanch _ => CtxRel.editB hanch hx hmx harg hyx hx1 hl1 hthru
   | editBV hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru hV =>
     exact fun _ hanch _ => CtxRel.editBV hanch hx hmx harg hyx hx1 hl1 hthru hV
-  | @free Γ F x E t hx _ hmo _ hxF hpin =>
+  | @free _ Γ F x E t hx _ hmo _ hxF hpin =>
     exact fun _ hanch _ => CtxRel.moved hanch hx (by rw [hmo]; simp) hxF hpin.1
   | insert _ _ _ ih => exact fun _ hanch hn => ih rfl hanch hn
   | sub hw _ ho ih =>
@@ -317,7 +317,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     rcases ho with rfl | hwo
     · exact h0.trans h1
     · exact (h0.trans h1).trans (CtxRel.weaker hwo)
-  | @panic Γ Δ F _ _ hdom hm hdk =>
+  | @panic _ Γ Δ F _ _ hdom hm hdk =>
     intro _ _ _
     refine CtxRel.ofDomTy ⟨fun v => (hdom v).symm, fun v E hv => by
       obtain ⟨E0, h0, hm0, ht0, _⟩ := hm v E hv; exact ⟨E0, h0, hm0, ht0⟩⟩ (fun p Ep hp hrb => ?_) hdk
@@ -336,6 +336,31 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
 
+  | @exit _ Γ Δ F _ _ _ _ hdom hm hdk =>
+    intro _ _ _
+    refine CtxRel.ofDomTy ⟨fun v => (hdom v).symm, fun v E hv => by
+      obtain ⟨E0, h0, hm0, ht0, _⟩ := hm v E hv; exact ⟨E0, h0, hm0, ht0⟩⟩ (fun p Ep hp hrb => ?_) hdk
+    have hd := hdom p
+    rw [hp] at hd
+    cases hq : Δ p with
+    | none => rw [hq] at hd; cases hd
+    | some E =>
+      obtain ⟨E0, h0, _, _, hfx⟩ := hm p E hq
+      rw [hp] at h0; cases h0
+      rw [hfx (Or.inl hrb)]
+  | @loop _ Γ Δ F _ _ _ _ _ hdom hm hdk =>
+    intro _ _ _
+    refine CtxRel.ofDomTy ⟨fun v => (hdom v).symm, fun v E hv => by
+      obtain ⟨E0, h0, hm0, ht0, _⟩ := hm v E hv; exact ⟨E0, h0, hm0, ht0⟩⟩ (fun p Ep hp hrb => ?_) hdk
+    have hd := hdom p
+    rw [hp] at hd
+    cases hq : Δ p with
+    | none => rw [hq] at hd; cases hd
+    | some E =>
+      obtain ⟨E0, h0, _, _, hfx⟩ := hm p E hq
+      rw [hp] at h0; cases h0
+      rw [hfx (Or.inl hrb)]
+  | block _ ih => exact ih
 theorem CtxRel.keepOut {Γ Δ : Ctx} (h : CtxRel Γ Δ) : KeepOut Γ Δ [] := by
   have hk := h.keep (s := .skip) (s' := .skip) rfl rfl
   exact ⟨fun v E hv _ => (hk.1 v E hv (by simp [Stmt.spine])).2,

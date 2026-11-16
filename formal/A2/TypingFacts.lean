@@ -5,11 +5,52 @@ import A2.StepFrame
 namespace A2
 
 
+/-- Agora #871: a typing holds under any exit targets that allow at least as
+    much (`StmtT.mono`): the targets are read only by `exit`. -/
+theorem StmtT.mono {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
+    (h : StmtT P ξ Γ F s Δ) : ∀ {ξ' : Exits}, (∀ n Γ, ξ n Γ → ξ' n Γ) → StmtT P ξ' Γ F s Δ := by
+  induction h with
+  | skip  => intro ξ' hξ; exact StmtT.skip
+  | seq a0 a1 a2 ih0 ih1 => intro ξ' hξ; exact StmtT.seq a0 (ih0 hξ) (ih1 hξ)
+  | letv a0 a1 a2 a3 a4 a5 a6 ih0 => intro ξ' hξ; exact StmtT.letv a0 a1 a2 a3 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a5 a6
+  | letcall a0 a1 a2 a3 a4 a5 a6 ih0 => intro ξ' hξ; exact StmtT.letcall a0 a1 a2 a3 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a5 a6
+  | scope a0 a1 a2 a3 ih0 => intro ξ' hξ; exact StmtT.scope a0 a1 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a3
+  | rbind a0 a1 a2 a3 a4 a5 a6 ih0 => intro ξ' hξ; exact StmtT.rbind a0 a1 a2 a3 a4 a5 a6
+  | frozen a0 a1 ih0 => intro ξ' hξ; exact StmtT.frozen a0 a1
+  | assign a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 => intro ξ' hξ; exact StmtT.assign a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10
+  | ite a0 a1 a2 a3 a4 ih0 ih1 => intro ξ' hξ; exact StmtT.ite a0 a1 a2 (ih0 hξ) (ih1 hξ)
+  | «while» a0 a1 a2 ih0 => intro ξ' hξ; exact StmtT.«while» a0 a1 (ih0 hξ)
+  | push a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 => intro ξ' hξ; exact StmtT.push a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14
+  | free a0 a1 a2 a3 a4 a5 a6 => intro ξ' hξ; exact StmtT.free a0 a1 a2 a3 a4 a5 a6
+  | sub a0 a1 a2 ih0 => intro ξ' hξ; exact StmtT.sub a0 (ih0 hξ) a2
+  | panic a0 a1 a2 a3 a4 a5 => intro ξ' hξ; exact StmtT.panic a0 a1 a2 a3 a4 a5
+  | letrec a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 ih0 => intro ξ' hξ; exact StmtT.letrec a0 a1 a2 a3 a4 a5 a6 a7 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a9
+  | unpair a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 ih0 => intro ξ' hξ; exact StmtT.unpair a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a12 a13 a14 a15 a16 a17
+  | callc a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 ih0 => intro ξ' hξ; exact StmtT.callc a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a12 a13 a14
+  | catchR a0 a1 a2 a3 a4 a5 ih0 => intro ξ' hξ; exact StmtT.catchR a0 a1 a2 a3 a4 a5
+  | letd a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 ih0 => intro ξ' hξ; exact StmtT.letd a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a11 a12
+  | withLock a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 ih0 => intro ξ' hξ; exact StmtT.withLock a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11
+  | scopeL a0 a1 a2 a3 a4 a5 a6 ih0 => intro ξ' hξ; exact StmtT.scopeL a0 a1 a2 a3 a4 a5 a6
+  | insert a0 a1 a2 ih0 => intro ξ' hξ; exact StmtT.insert a0 a1 a2
+  | withElem a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 ih0 ih1 => intro ξ' hξ; exact StmtT.withElem a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13
+  | callcE a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 ih0 => intro ξ' hξ; exact StmtT.callcE a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a17 a18 a19
+  | scopeD a0 a1 a2 a3 a4 a5 a6 a7 a8 ih0 => intro ξ' hξ; exact StmtT.scopeD a0 a1 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a3 a4 a5 a6 a7 a8
+  | editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 => intro ξ' hξ; exact StmtT.editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12
+  | editBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 => intro ξ' hξ; exact StmtT.editBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14
+  | exit a0 a1 a2 a3 a4 a5 a6 => intro ξ' hξ; exact StmtT.exit (a0.elim (fun h => Or.inl (hξ _ _ h)) (fun ⟨Γ0, hw, h⟩ => Or.inr ⟨Γ0, hw, hξ _ _ h⟩)) a1 a2 a3 a4 a5 a6
+  | block a0 ih0 => intro ξ' hξ; exact StmtT.block (ih0 (fun n _ h => by cases n with | zero => exact h | succ n => exact hξ _ _ h))
+  | loop a0 a1 a2 a3 a4 a5 a6 a7 ih0 => intro ξ' hξ; exact StmtT.loop a0 (ih0 hξ) a2 a3 a4 a5 a6 a7
+
+/-- ... so one under no exit holds under any. -/
+theorem StmtT.ofNone {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
+    (h : StmtT P .none Γ F s Δ) {ξ : Exits} : StmtT P ξ Γ F s Δ :=
+  h.mono fun _ _ h => h.elim
+
 theorem StmtT.weakenIn {P : Prog} {Γ Γ0 Δ : Ctx} {F : List Var} {s : Stmt} (hw : Weaker Γ Γ0)
-    (h : StmtT P Γ0 F s Δ) : StmtT P Γ F s Δ := StmtT.sub hw h (Or.inl rfl)
+    (h : StmtT P ξ Γ0 F s Δ) : StmtT P ξ Γ F s Δ := StmtT.sub hw h (Or.inl rfl)
 
 theorem StmtT.weakenOut {P : Prog} {Γ Δ0 Δ : Ctx} {F : List Var} {s : Stmt} (hwf : CtxWF Γ)
-    (hnw : NameWF Γ) (h : StmtT P Γ F s Δ0) (hw : Δ0 = Δ ∨ Weaker Δ0 Δ) : StmtT P Γ F s Δ :=
+    (hnw : NameWF Γ) (h : StmtT P ξ Γ F s Δ0) (hw : Δ0 = Δ ∨ Weaker Δ0 Δ) : StmtT P ξ Γ F s Δ :=
   StmtT.sub (Weaker.refl hwf hnw) h hw
 
 theorem weakerEq_trans {Γ1 Γ2 Γ3 : Ctx} (h1 : Γ1 = Γ2 ∨ Weaker Γ1 Γ2) (h2 : Γ2 = Γ3 ∨ Weaker Γ2 Γ3) :
@@ -21,7 +62,7 @@ theorem weakerEq_trans {Γ1 Γ2 Γ3 : Ctx} (h1 : Γ1 = Γ2 ∨ Weaker Γ1 Γ2) (
   · exact Or.inr (h1.trans h2)
 
 /-- A `skip` only weakens. -/
-theorem skip_inv {P : Prog} {Γ Δ : Ctx} {F : List Var} (h : StmtT P Γ F .skip Δ) :
+theorem skip_inv {P : Prog} {Γ Δ : Ctx} {F : List Var} (h : StmtT P ξ Γ F .skip Δ) :
     Γ = Δ ∨ Weaker Γ Δ := by
   generalize hs : Stmt.skip = s at h
   induction h with
@@ -461,7 +502,7 @@ theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z z' : List Var} {k : Stmt} (hi : I
 
 
 /-- A run-time scope never binds what is lent out. -/
-theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P Γ F s Δ) :
+theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) :
     ∀ v ∈ s.spine, v ∉ F := by
   induction ht with
   | seq _ _ _ iha _ => exact iha
@@ -492,6 +533,7 @@ theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     rcases hv with rfl | hv
     · exact hxF
     · exact ih v hv
+  | block _ ih => exact ih
   | _ => intro v hv; simp [Stmt.spine] at hv
 
 
@@ -778,7 +820,7 @@ theorem DKeep.of_src {Γ Δ : Ctx} {s : Stmt} (hs : s.src = true)
     running scopes, a new view. The one rule that could, a borrowed
     parameter's end (`reroot`), meets none that views the parameter in
     memory (`DtorOut`, which every frame passes inward by `DtorIn`). -/
-theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (h : StmtT P Γ F s Δ) :
+theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (h : StmtT P ξ Γ F s Δ) :
     DtorOut Γ s.spine → DtorPinOK Γ s → DKeep Γ Δ s.spine := by
   induction h with
   | skip => exact fun _ _ => DKeep.refl _ _
@@ -787,14 +829,14 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     exact (iha ho hp).trans ((DKeep.of_src hb ihb).mono fun _ _ h => by cases h) fun _ h => h
   | letv hs _ _ hr _ _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
   | withLock hs _ _ _ _ _ _ _ _ _ _ _ ih => exact fun _ _ => DKeep.bind (DKeep.refl _ _) (DKeep.of_src hs ih)
-  | @scopeL Γ Δ F k t x s0 _ _ _ _ _ _ _ ih =>
+  | @scopeL _ Γ Δ F k t x s0 _ _ _ _ _ _ _ ih =>
     intro ho hp
     exact ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitScope x
   | letcall hs _ _ hc _ _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hs ih)
-  | @scope Γ Δ F x k _ _ _ _ ih =>
+  | @scope _ Γ Δ F x k _ _ _ _ ih =>
     intro ho hp
     exact ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitScope x
-  | @rbind Γ Δ F p k E _ _ _ _ _ _ _ ih =>
+  | @rbind _ Γ Δ F p k E _ _ _ _ _ _ _ ih =>
     intro ho hp
     refine ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitRoot _
       fun v E hv hd hos hn _ hvs d hdd hnm h => ?_
@@ -805,7 +847,7 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     exact (hr.dkeep.kill _ _ _).setE fun hd => absurd hd (by simp [hr.dtor_false.2])
   | ite ha _ _ _ _ iha _ => exact fun _ _ => DKeep.of_src ha iha
   | «while» => exact fun _ _ => DKeep.refl _ _
-  | @push _ _ _ _ _ _ _ Ex1 t D hx _ _ _ _ hy _ _ _ hpa _ hx1 _ _ hdb =>
+  | @push _ _ _ _ _ _ _ _ Ex1 t D hx _ _ _ _ hy _ _ _ hpa _ hx1 _ _ hdb =>
     intro _ _
     refine ((hpa.dkeep hy).kill _ _ _).setE fun hd hos hn _ => ?_
     obtain ⟨E0, h0, hd0, hos0, hn0, hs0⟩ := (hpa.dkeep hy) _ _ hx1 hd hos hn (by simp)
@@ -831,6 +873,9 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     · exact h0.weaker_left hw
     · exact (h0.weaker_right hw').weaker_left hw
   | panic _ _ _ _ hdk => exact fun _ _ => hdk
+  | exit _ _ _ _ _ hdk => exact fun _ _ => hdk
+  | block _ ih => exact ih
+  | loop _ _ _ _ _ _ hdk _ _ => exact fun _ _ => hdk
   | letrec hs _ _ _ _ _ _ hc _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hs ih)
   | unpair hs hy _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ ih =>
     exact fun _ _ => DKeep.bind (DKeep.moveOut hy _ _) (DKeep.bind (DKeep.refl _ []) (DKeep.of_src hs ih))
@@ -840,14 +885,14 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
       (((DKeep.refl _ []).kill _ _ _).trans (DKeep.of_src hk ih) fun _ h => h)
   | catchR _ _ _ _ _ _ ih => exact ih
   | letd hs _ _ hr _ _ _ _ _ _ _ _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
-  | @scopeD Γ Δ F x f k _ _ _ _ _ _ _ _ _ ih =>
+  | @scopeD _ Γ Δ F x f k _ _ _ _ _ _ _ _ _ ih =>
     intro ho hp
     exact ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitScope x
   | editB hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
     intro _ _
     refine (harg.dkeep.killNames _).setE fun _ hos _ _ => ?_
     rw [harg.at_ne hyx hx hx1 hl1, hmx] at hos; cases hos
-  | @editBV Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ _ hV =>
+  | @editBV _ Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ _ hV =>
     intro _ _
     refine (harg.dkeep.thruV hV).setE fun _ hos _ _ => ?_
     have hm : Ex1.mode = .bor := by rw [harg.at_ne hyx hx hx1 hl1, hmx]
@@ -977,7 +1022,7 @@ theorem CallT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List 
 
 /-- A2-drop.2: a statement's typing keeps every binding `letd` made outside
     the running scopes: its flag never changes. -/
-theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (h : StmtT P Γ F s Δ) :
+theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (h : StmtT P ξ Γ F s Δ) :
     DStay Γ Δ s.spine := by
   have src0 : ∀ {Γ Δ : Ctx} {s : Stmt}, s.src = true → DStay Γ Δ s.spine → DStay Γ Δ [] :=
     fun hs h => by rwa [src_spine hs] at h
@@ -1010,8 +1055,11 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     · exact ih.weaker_left hw
     · exact (ih.weaker_right hw').weaker_left hw
   | panic _ _ _ _ _ hst => exact hst
+  | exit _ _ _ _ _ _ hst => exact hst
+  | block _ ih => exact ih
+  | loop _ _ _ _ _ _ _ hst _ => exact hst
   | letrec hs hx _ _ _ _ _ hc _ _ ih => exact DStay.bind hx hc.dstay (src0 hs ih)
-  | @unpair Γ Δ F y x z k E a b hks hy _ _ _ _ hx hz hxz _ _ _ _ _ _ _ _ _ ih =>
+  | @unpair _ Γ Δ F y x z k E a b hks hy _ _ _ _ hx hz hxz _ _ _ _ _ _ _ _ _ ih =>
     have hzy : z ≠ y := fun e => by rw [e, hy] at hz; cases hz
     have hz1 : (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x
         (compE E a)) z = none := by

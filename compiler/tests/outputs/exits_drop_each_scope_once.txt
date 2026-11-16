@@ -1,0 +1,22 @@
+COMPILE OK
+LINK OK
+EXIT 7
+OUTPUT
+drop 10
+drop 100
+drop 11
+after brk loop
+drop 1
+--
+round end
+drop 21
+drop 200
+drop 22
+round end
+drop 23
+--
+drop 30
+drop 300
+drop 31
+drop 3
+--

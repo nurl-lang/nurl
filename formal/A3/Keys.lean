@@ -373,8 +373,9 @@ theorem Step.keys {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact (ih).remove _
   | frozenSkip => exact hk
-  | frozenIn _ ih => exact ih
-  | frozenP _ ih => exact ih
+  | blockSkip | blockExit _ | loop => exact hk
+  | frozenIn _ ih | blockIn _ ih => exact ih
+  | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he _ _ =>
     obtain ⟨h1, h2⟩ := EvalR.keys he hk
     exact (h1.withAlloc _).set _ (fun w hw => by cases hw; exact h2)

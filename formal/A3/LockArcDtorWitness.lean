@@ -242,7 +242,7 @@ theorem drop0_ok : DropFnOK P 0 TA :=
 theorem assign_res {fn : Fn} {r : Var} (hc : sigCtx fn r = some R0)
     (hp : ∀ p E, sigCtx fn p = some E → E.mode = .rootb → E.vdeps = [])
     (hflags : ∀ v E, sigCtx fn v = some E → E.dtor = false ∧ E.dbind = false) :
-    StmtT P (sigCtx fn) [] (.assign r (.expr (.lit 0)))
+    StmtT P ξ (sigCtx fn) [] (.assign r (.expr (.lit 0)))
       (setE (kill .replace false r (sigCtx fn)) r { intE with mode := R0.mode }) :=
   StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
@@ -331,7 +331,7 @@ def EL : Entry := ⟨.lk DA, .own, true, [], [], false, false⟩
     (Agora #803: `Ty.ok` admits `lk (dtor f u)` when `u` holds no cell share,
     `RhsT.lockNew` takes the value), and so is its update through
     `locked_apply` (`StmtT.lockedApply`). -/
-theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
+theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
   have hD0 : NoDeps (fun _ => none) := fun _ _ h => by cases h
@@ -387,7 +387,7 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
   have hun : ∀ v, Unnamed K6 v := fun v w E h d hd => by rw [hD6 w E h] at hd; cases hd
   -- the update, under the lock: `ufnA` on the payload `inout`, its result to `z`
   have hap : ApplyFn P 1 DA .int := ⟨ufnA, .replace, rfl, rfl, rfl, rfl, rfl⟩
-  have hup := StmtT.lockedApply (P := P) (Γ := K6) (F := []) (a := 4) (x := 6) (c := 7) (z := 5) (f := 1)
+  have hup := StmtT.lockedApply (ξ := .none) (P := P) (Γ := K6) (F := []) (a := 4) (x := 6) (c := 7) (z := 5) (f := 1)
     (fn := ufnA) (Ea := EL) (Ez := intE) (t := DA) (R := .int) hap rfl
     (by simp [K6, K5, A2.setE]) rfl (Or.inl rfl) rfl (by simp [DA, TA, Ty.holdsView]) (by simp [DA, Ty.owning])
     (by simp [K6, K5, K4', K4, K3', K3, K2, K1, A2.setE, upd])
@@ -396,24 +396,24 @@ theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
     (by simp [intE, resMode, ufnA]) rfl (hK6.noPin 5) (DtorSafe.of_none (fun v E h => (hK6 v E h).2.1) _ _ _)
   have hKf : NoRootb (A2.setE (A2.kill .replace false 5 K6) 5 (outE .int intE.mode)) :=
     (hK6.kill _ _ _).setE (by simp [outE, intE])
-  have hz := StmtT.letv (P := P) (x := 5) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K5) (Γ1 := K5)
-    rfl (by simp [K5, K4', K4, K3', K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hup
+  have hz := StmtT.letv (ξ := .none) (P := P) (x := 5) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K5) (Γ1 := K5)
+    rfl (by simp [K5, K4', K4, K3', K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hup.ofNone
     (hKf.endOK _)
-  have hl := StmtT.letv (P := P) (x := 4) (r := .lockNew DA 3) (E := EL) (F := []) (Γ := K4) (Γ1 := K4')
-    rfl (by simp [K4, K3', K3, K2, K1, A2.setE, upd]) (by simp) hnew hz ((hKf.exitScope 5).endOK _)
+  have hl := StmtT.letv (ξ := .none) (P := P) (x := 4) (r := .lockNew DA 3) (E := EL) (F := []) (Γ := K4) (Γ1 := K4')
+    rfl (by simp [K4, K3', K3, K2, K1, A2.setE, upd]) (by simp) hnew hz.ofNone ((hKf.exitScope 5).endOK _)
     (fun _ => rfl)
-  have hd := StmtT.letd (P := P) (Γ := K3) (Γ1 := K3') (F := []) (x := 3) (f := 0) (r := .pair 1 2)
+  have hd := StmtT.letd (ξ := .none) (P := P) (Γ := K3) (Γ1 := K3') (F := []) (x := 3) (f := 0) (r := .pair 1 2)
     (E := EP) (t := TA) (H := []) rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hpair rfl
-    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) hl
+    (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop0_ok) (HeldUp.refl _ _) hl.ofNone
     (((hKf.exitScope 5).exitScope 4).endOK _) (by simp [Stmt.lockedApply, Stmt.callOut, Stmt.assigns])
-  have hb := StmtT.letv (P := P) (x := 2) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K2) (Γ1 := K2)
-    rfl (by simp [K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd
+  have hb := StmtT.letv (ξ := .none) (P := P) (x := 2) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K2) (Γ1 := K2)
+    rfl (by simp [K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
     ((((hKf.exitScope 5).exitScope 4).exitScope 3).endOK _)
-  have hs := StmtT.letv (P := P) (x := 1) (r := .arcNew .int 0) (E := EA) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE]) (by simp) harc hb
+  have hs := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .arcNew .int 0) (E := EA) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE]) (by simp) harc hb.ofNone
     (((((hKf.exitScope 5).exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
-    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) hs
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) hs.ofNone
     ((((((hKf.exitScope 5).exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
 
 /-- `arc_new` of an integer names no destructor; `locked_new` of the
