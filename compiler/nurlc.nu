@@ -508,7 +508,8 @@
 : i FX_JOIN_VAR 65536  // a binding given a `?` / `??` join's value whole: nurlc keeps an owner flag for it
 : i FX_TAIL_TOOK 131072  // a value block's temporary that took a local of the block from its tail join
 : i FX_CALL_TEMP 262144  // a call's temporary, of a callee nurlc's summary says may lend its result (eng_walk_lends)
-: i FX_CALL_BIND 524288  // a binding (`: T e`, not `: ~`) given a call's temporary whole, or such a binding whole: nurlc keeps the call's per-call answer for it
+: i FX_CALL_BIND 524288  // a binding given a call's temporary whole, or such a binding whole (by `:`, or by the last `=` of a `: ~` one): nurlc keeps the call's per-call answer for it
+: i FX_FREADER 2097152  // a binding some `:` or `=` gave a part read in place out of another (`. o name`): nurlc keeps field-viewer facts for it, not a call's answer (stmt_assign)
 : i FX_SLOT_TAKE 1048576  // an FX_SLOT payload of a temporary nurlc takes it out of (CORE_VF_SLOT): a consumer that takes it empties the slot
 : ~ i g_fc_cap_loans 0  // the loans closures captured (a set)
 : ~ i g_fc_wb_pairs 0  // (the loan a place holds of a reader's value, the struct cursor whose field store handed it over: eng_cursor_handover), a set
@@ -19083,6 +19084,26 @@ unsafe @ eng_byte s w i k → i {
     ^ F
 }
 
+// Binding `vid` is given the value of `rv` whole (a `let`, or an `=` of
+// a `: ~` one): it keeps nurlc's per-call answer of whether a call lent it
+// (FX_CALL_BIND) exactly when that value is a call's temporary of a callee
+// that may lend its result, or a binding that keeps such an answer itself.
+// Anything else it is given clears it: from there on its lend, if any, is
+// not that answer's (codegen: a `:` binding's provenance slot, a `: ~`
+// one's flag once a call's lend was given it, __mlent_note).
+@ eng_call_bind_note i vid i rv → v {
+    : i src ( rv_use_var rv )
+    ? & >= src 0 | & == ( fv_kind src ) VK_TEMP ( fx_has src FX_CALL_TEMP ) & == ( fv_kind src ) VK_LOCAL ( fx_has src FX_CALL_BIND ) { ( fx_set vid FX_CALL_BIND ) } { ( fx_clear vid FX_CALL_BIND ) }
+}
+
+// Binding `vid` is given `rv`: a part read in place out of another binding
+// (`. o name`) makes it a field reader for good (FX_FREADER).
+@ eng_freader_note i vid i rv → v {
+    ? != ( ec rv ) RV_USE { ^ } {}
+    : i uop ( eng_op ( ec + rv 1 ) )
+    ? & ( op_is_place uop ) != ( pl_path uop ) 0 { ( fx_set vid FX_FREADER ) } {}
+}
+
 // The `let` at `at`.
 @ stmt_let i st i at i ln → v {
     : i vid ( ec + at 1 )
@@ -19127,8 +19148,9 @@ unsafe @ eng_byte s w i k → i {
     ? & & & & from_temp == kind VK_LOCAL ! ( fv_mut vid ) ( fx_has src FX_JOIN_TEMP ) ! ( fx_has src FX_BLOCK_TEMP ) { ( fx_set vid FX_JOIN_VAR ) } {}
     // (a binding of a call's result, or a second name of one: nurlc gives
     // it the call's own answer of whether it lent, which a consumer that
-    // takes it reads - a copy goes where it lent)
-    ? & & == kind VK_LOCAL ! ( fv_mut vid ) & >= src 0 | & from_temp ( fx_has src FX_CALL_TEMP ) & & == ( fv_kind src ) VK_LOCAL ! ( fv_mut src ) ( fx_has src FX_CALL_BIND ) { ( fx_set vid FX_CALL_BIND ) } { ( fx_clear vid FX_CALL_BIND ) }
+    // takes it reads - a copy goes where it lent. A `: ~` one too: what
+    // gives it a new value says again, eng_call_bind_note)
+    ? == kind VK_LOCAL { ( eng_freader_note vid rv ) ( eng_call_bind_note vid rv ) } {}
     : b plain_ty & & != vty ET_NONE ! ( et_is_view vty ) != ( et_kind vty ) EK_CLOSURE
     : i nown ( av_own new )
     ? & & & & & & ! mut == kind VK_LOCAL from_temp ! ( av_call new ) != ( av_alias new ) 0 | == nown OW_L & == nown OW_O != ( av_loans new ) 0 & plain_ty ! ( et_scalar vty ) {
@@ -19301,6 +19323,13 @@ unsafe @ eng_byte s w i k → i {
     : i vid ( pl_var target )
     : i path ( pl_path target )
     : i rv + at 2
+    // (…not a binding ever read out of a field, which nurlc reads by its
+    // field-viewer facts: a field replaced may make it an owner of the
+    // old value, its flag no answer of the call's)
+    ? & == path 0 == ( fv_kind vid ) VK_LOCAL {
+        ( eng_freader_note vid rv )
+        ? ( fx_has vid FX_FREADER ) { ( fx_clear vid FX_CALL_BIND ) } { ( eng_call_bind_note vid rv ) }
+    } {}
     : i cur ( st_av st vid )
     : i cown ? != cur 0 ( av_own cur ) OW_NONE
     : i kind ( fv_kind vid )
@@ -42373,6 +42402,7 @@ unsafe @ gen_match i lex i syms i cg → s {
 
 @ gen_loop i lex i syms i cg → s {
     ( nurl_lex_advance lex )
+    ( __loop_mlent_scan lex syms )
     // For-each: ~ IDENT(var) IDENT(slice) { body }, or a field the
     // values are in: ~ IDENT . obj field { body }. (A while condition is
     // one expression: a name followed by another name, or by a member
@@ -100400,6 +100430,46 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
     ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__mlent` ) `1` )
 }
 
+// A loop (lexer just past its `~`) runs its body again after the body's
+// own `=`s: a `: ~` binding of an outer scope that the loop gives a new
+// value (`= e …`) may hold, at a statement above that `=`, the value the
+// `=` gave it on the round before - a call's lend among them. Marked before
+// the loop is compiled (__mlent_note), so what moves it on above the `=`
+// goes by its flag too: marked by the `=` alone, compiled after them,
+// `( keep e )` above `= e ( vec_at v 0 )` released the Vec's element on
+// the second round. A token scan of the loop's header and body (and of a
+// block right after them, where a condition is a block), restoring the
+// lexer; a binding marked that is never given a lend there only has its
+// flag asked where it is moved on.
+@ __loop_mlent_scan i lex i syms → v {
+    : i save ( nurl_lex_cur_start lex )
+    : ~ i depth 0
+    : ~ b done F
+    ~ ! done {
+        : i tt ( nurl_lex_type lex )
+        ? == tt TT_EOF { = done T } {
+            ? | | == tt TT_LPAREN == tt TT_LBRACK == tt TT_LBRACE { = depth + depth 1 ( nurl_lex_advance lex ) } {
+                ? | | == tt TT_RPAREN == tt TT_RBRACK == tt TT_RBRACE {
+                    = depth - depth 1
+                    ( nurl_lex_advance lex )
+                    // (a block closed at the loop's own level: the body,
+                    // or a condition that is a block - then the body
+                    // follows it)
+                    ? & == tt TT_RBRACE <= depth 0 { ? != ( nurl_lex_type lex ) TT_LBRACE { = done T } {} } {}
+                    ? < depth 0 { = done T } {}
+                } {
+                    ? & == tt TT_EQ ( is_ident_tok ( nurl_lex_peek_type lex ) ) {
+                        : s up ( mem_udrop_ptr_of syms ( nurl_lex_peek_val lex ) )
+                        ? & != 0 ( nurl_str_len up ) != 0 ( nurl_sym_len2 syms ( nurl_lex_peek_val lex ) `__mutable` ) { ( __mlent_note syms up `0` ) } {}
+                    } {}
+                    ( nurl_lex_advance lex )
+                }
+            }
+        }
+    }
+    ( nurl_lex_set_pos lex save )
+}
+
 @ __mlent_of i syms s ptr → b {
     ? == 0 ( nurl_sym_len2 syms ptr `__mlent` ) { ^ F } {}
     ^ == 0 ( nurl_sym_len2 syms ptr `__sborrow` )
@@ -100453,6 +100523,19 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
         ? != 0 ( nurl_str_len fl ) { ^ fl } {}
         ? | | ( seq sb `1` ) ( seq sb `local` ) ( seq sb `elem` ) { ^ ( nurl_str_cat `1` `` ) } {}
         ? == ( nurl_str_get sb 0 ) 33 { ^ ( nurl_str_cat sb `` ) } {}
+        // (A `: ~` binding with a provenance slot, `@slot`, that some `=`
+        // may give a call's lend - __mlent_note: the slot says what its
+        // `:` was given, and an `=` since, on this round or the one
+        // before, does not write it. Its flag says what it holds now: lent
+        // wherever it owns nothing. Read by the slot, `( hold v e )` above
+        // `= e ( vec_at … )` in a loop handed the Vec's element over as is.)
+        ? & & & == ( nurl_str_get sb 0 ) 64 != 0 ( nurl_sym_len2 syms up `__mlent` ) != 0 ( nurl_sym_len2 syms val `__mutable` ) == 0 ( nurl_sym_len2 syms up `__alias` ) {
+            : s mf0 ( mem_udrop_flag_get syms cg up )
+            : s mr0 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print mr0 ) ( nurl_print ` = xor i1 ` ) ( nurl_print mf0 ) ( nurl_print `, 1
+` )
+            ^ mr0
+        } {}
         ? == ( nurl_str_get sb 0 ) 64 {
             : s lr ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print lr ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print ( nurl_str_slice sb 1 - ( nurl_str_len sb ) 1 ) ) ( nurl_print `\n` )
