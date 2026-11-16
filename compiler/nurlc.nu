@@ -13585,6 +13585,14 @@ unsafe @ eng_byte s w i k → i {
     ? ( ep_prefix qp pp ) {
         // the effect is inside the loan's place
         ? & == k LK_HANDLE ( et_holds_views ( eng_ty_of q ) ) { ^ T } {}
+        // (a view of a struct, an option or a result is a view of
+        // something inside it - a summary's place cut short, `o.#T0.inner.#T0`
+        // for `o.#T0.inner.#T0.name`: a buffer that moves or goes in there
+        // may be the one it views, agora #411)
+        ? & == k LK_VIEW | | == eff EF_REALLOC == eff EF_REPLACE == eff EF_DROP {
+            : i qt ( eng_ty_of q )
+            ? & != qt ET_NONE | | == ( et_kind qt ) EK_NAMED == ( et_kind qt ) EK_OPT == ( et_kind qt ) EK_RES { ^ T } {}
+        } {}
         ? & == k LK_HANDLE == eff EF_REPLACE {
             : ~ i r pp
             : ~ b star F
@@ -13816,14 +13824,16 @@ unsafe @ eng_byte s w i k → i {
         }
         ^
     } {}
-    ? & & & & & == ( av_own av ) OW_O != eff EF_END | ( fv_mut vid ) ( fx_has vid FX_CALL_MIXED ) == ( fv_kind vid ) VK_LOCAL != 0 ( av_alias av ) ! & == path 0 | == eff EF_REPLACE == eff EF_TAKE {
-        // a `: ~` binding that owns its value on some paths and borrows on
-        // others (a join of the two: `= c . x v` in one arm or one round of
-        // a loop), or a binding of a call's result that is its own on some
-        // calls and lent on others (FX_CALL_MIXED) - what is done through
-        // it is done to what it may borrow as well as to its own value. (Not its own release, or its being
-        // given a new value or moved out whole: nurlc releases its old value
-        // by its flag, and none of that touches what it borrows.)
+    ? & & & == ( av_own av ) OW_O != eff EF_END != 0 ( av_alias av ) ! & == path 0 | == eff EF_REPLACE == eff EF_TAKE {
+        // a binding that owns its value on some paths and is a second name
+        // of another value on the others - a `: ~` binding given `= c . x v`
+        // in one arm or one round of a loop, a join of a fresh value and a
+        // field (`: j ? c ( vec_new ) . h a`), or a binding of a call's
+        // result that is its own on some calls and lent on others
+        // (FX_CALL_MIXED): what is done to its contents is done to what it
+        // may name as well as to its own value. (Not its own release, or
+        // its being given a new value or moved out whole: nurlc releases its
+        // old value by its flag, and none of that touches what it names.)
         : i al ( av_alias av )
         : b all ! ( eng_alias_typed vid al )
         : ~ i k 0
@@ -14173,6 +14183,7 @@ unsafe @ eng_byte s w i k → i {
         : i al ( av_alias av )
         : ~ i alias 0
         : ~ i loans ( av_loans av )
+        : ~ i rheld sub
         : ~ i k 0
         ~ < k ( sq_len al ) {
             : i a ( sq_at al k )
@@ -14180,9 +14191,21 @@ unsafe @ eng_byte s w i k → i {
             = alias ( sq_add alias a2 )
             ( el_key2 ktag ka )
             = loans ( sq_add loans ( eng_loan st a2 LK_HANDLE ) )
+            // (…and what that part of the value it is a second name of
+            // holds - a view pushed in through another name of it: read,
+            // what the view points into must still be there, MEMORY.md
+            // §2.10, agora #292)
+            : i tav ( st_av st ( pl_var a ) )
+            ? & != tav 0 != ( av_held tav ) 0 {
+                : i hs ( held_sub ( av_held tav ) ( pl_path a2 ) )
+                ? != hs 0 {
+                    ( check_live st 0 hs WK_PLACE a2 line )
+                    = rheld ( sq_union rheld hs )
+                } {}
+            } {}
             = k + k 1
         }
-        ^ ( av_make OW_L loans alias sub F )
+        ^ ( av_make OW_L loans alias rheld F )
     } {}
     ^ av
 }
@@ -14321,6 +14344,19 @@ unsafe @ eng_byte s w i k → i {
     ? == 0 ( nurl_str_len n ) { ^ F } {}
     : i c ( nurl_str_get n 0 )
     ^ & != c 35 != c 94
+}
+
+// Does value `av` hold the borrow the field hand-over made of the first
+// reader at `place` (TG_HO, eng_handover)?
+@ eng_ho_on i av i place → b {
+    : i loans ( av_loans av )
+    : ~ i k 0
+    ~ < k ( sq_len loans ) {
+        : i l ( sq_at loans k )
+        ? & & ( el_is_loan l ) == ( el_tag l ) TG_HO == ( el_place l ) place { ^ T } {}
+        = k + k 1
+    }
+    ^ F
 }
 
 // Is `vid` a binding read out of a field (`: Q e . r q`): a local, not a
@@ -14727,12 +14763,18 @@ unsafe @ eng_byte s w i k → i {
         // the literal is taken: the bindings it showed move into it
         : ~ i gone 0
         : i moved ( im_new )
+        // (…and a binding that is a call's lend on some calls goes in as
+        // that lend there: the field holds what it borrows, agora #679)
+        : i ext ( wv_new )
         : ~ i k 0
         ~ < k ( sq_len named ) {
             : i w ( sq_at named k )
             : i fname / w 4294967296
             : i b % w 4294967296
             ? == ( st_own st b ) OW_O {
+                : i bls ( av_loans ( st_av st b ) )
+                : ~ i bj 0
+                ~ < bj ( sq_len bls ) { ( wv_push ext ( he_make ( ep_child 0 fname ) ( sq_at bls bj ) ) ) = bj + bj 1 }
                 : i src0 ( st_av st vid )
                 : i held0 ( av_held src0 )
                 : i want ( pl_make b 0 )
@@ -14773,6 +14815,9 @@ unsafe @ eng_byte s w i k → i {
             } {}
             = k + k 1
         }
+        = k 0
+        ~ < k ( wv_len ext ) { ( wv_push tmp ( wv_at ext k ) ) = k + k 1 }
+        ( wv_drop ext )
         ( st_put st vid ( av_make ( av_own src1 ) ( av_loans src1 ) ( av_alias src1 ) ( sq_set_of_wv tmp ) ( av_call src1 ) ) )
         ( wv_drop tmp ) ( wv_drop moved )
     } {}
@@ -15618,7 +15663,11 @@ unsafe @ eng_byte s w i k → i {
                     ? & == ( pl_var a ) pv | | == ap pp == ap t0 == ap f0 { = ok T } {}
                     = k + k 1
                 }
-                ? & ok ! & == own OW_O == ( av_loans av ) 0 {
+                // (a later reader the hand-over made a borrow of the first
+                // one, `ho`: what replacing the first one releases is the
+                // value it was handed, which nurlc hands to no one - the
+                // borrow ends there, agora #387)
+                ? & & ok ! ( eng_ho_on av place ) ! & == own OW_O == ( av_loans av ) 0 {
                     : i ty ( fv_ty vid )
                     ? & & != ty ET_NONE ! ( et_is_view ty ) != ( et_kind ty ) EK_CLOSURE {
                         : i loans ( av_loans av )
@@ -16916,10 +16965,13 @@ unsafe @ eng_byte s w i k → i {
     ~ & < k n < k ( sm_n sm SM_MODES ) {
         : i mode ( sm_mode sm k )
         : i ok ( wv_at ops k )
-        // (an `inout` argument the callee gives no new value that releases
-        // or moves anything - it only reads it, or writes numbers into it -
-        // ends nothing another argument views)
-        ? & ( sq_has changed k ) ( op_is_place ok ) {
+        // (an argument the callee gives no new value that releases or moves
+        // anything - it only reads it, or writes numbers into it - ends
+        // nothing another argument views. One declared `inout` is the
+        // callee's alone all the same: the same binding passed again, as
+        // another `inout` or as an ordinary argument, is an error -
+        // MEMORY.md §2.4)
+        ? & | ( sq_has changed k ) == mode PM_INOUT ( op_is_place ok ) {
             : i vid ( pl_var ok )
             : i path ( pl_path ok )
             : ~ b stop F
@@ -16939,8 +16991,11 @@ unsafe @ eng_byte s w i k → i {
                 : i om ( wv_at ops m )
                 ? & ! skip ( op_is_place om ) {
                     : i oty ( eng_ty_of om )
-                    // (a number read out of it is a copy made before the call)
-                    ? & != oty ET_NONE ( et_scalar oty ) { = skip T } {}
+                    // (a number read out of it is a copy made before the call
+                    // - not the `inout` binding itself, or a value it is a
+                    // part of, passed again: MEMORY.md §2.4)
+                    : b whole_again & & == mode PM_INOUT == ( pl_var om ) ( pl_var ok ) ( ep_prefix ( pl_path om ) ( pl_path ok ) )
+                    ? & & != oty ET_NONE ( et_scalar oty ) ! whole_again { = skip T } {}
                 } {}
                 ? ! skip {
                     // (the changed argument is its place and what it is a
@@ -17073,6 +17128,32 @@ unsafe @ eng_byte s w i k → i {
                     = copied ( sq_add copied ck ) = done T
                 } {}
                 ? & ! done ownop {
+                    // (a join's temporary that owns its value on some paths and
+                    // selects owners on the others: the consumer takes what it
+                    // selects on those paths, as a binding of it does - a
+                    // local is moved there; an `inout` parameter, the caller's
+                    // binding, is given a new value by the call, its value
+                    // gone with the consumer - MEMORY.md §2.2)
+                    : i jav ( st_av st ov )
+                    ? & & & == ckind VK_TEMP ( fx_has ov FX_JOIN_TEMP ) == cown OW_O != ( av_alias jav ) 0 {
+                        : i jal ( av_alias jav )
+                        : ~ i ja 0
+                        ~ < ja ( sq_len jal ) {
+                            : i jp ( sq_at jal ja )
+                            : i jv ( pl_var jp )
+                            ? == ( pl_path jp ) 0 {
+                                ? & & & == ( fv_kind jv ) VK_PARAM >= ( fv_pidx jv ) 0 == ( st_own st jv ) OW_P == ( fp_mode ( fv_pidx jv ) ) PM_INOUT {
+                                    = g_s_effects ( sq_add g_s_effects ( tp3 ( fv_pidx jv ) 0 EF_REPLACE ) )
+                                } {
+                                    ? & & == ( fv_kind jv ) VK_LOCAL == ( st_own st jv ) OW_O >= ( fv_depth jv ) ( fv_depth ov ) {
+                                        ( eng_effect st jp EF_REPLACE line 0 )
+                                        ( st_put st jv ( av_make OW_X 0 0 0 F ) )
+                                    } {}
+                                }
+                            } {}
+                            = ja + ja 1
+                        }
+                    } {}
                     : i moved ( move_out st ov line )
                     // (what the callee keeps of it is what the value holds
                     // now that it is taken)
@@ -17156,7 +17237,11 @@ unsafe @ eng_byte s w i k → i {
                                 : i pa ( sq_at al a )
                                 : i pv ( pl_var pa )
                                 : i po ( st_own st pv )
-                                ? ! & == ( pl_path pa ) 0 | & & >= ( fv_pidx pv ) 0 == po OW_P == ( fp_mode ( fv_pidx pv ) ) PM_IN & == po OW_O ( fv_mut ov ) { = second F } {}
+                                // (…or a later reader of a replaced field, which the
+                                // hand-over made a borrow of the first reader, `ho`:
+                                // nurlc hands its handle over and the first reader
+                                // still releases it - agora #387)
+                                ? ! & == ( pl_path pa ) 0 | | & & >= ( fv_pidx pv ) 0 == po OW_P == ( fp_mode ( fv_pidx pv ) ) PM_IN & == po OW_O ( fv_mut ov ) ( eng_ho_on av pa ) { = second F } {}
                                 = a + a 1
                             }
                         } {}
@@ -17305,6 +17390,17 @@ unsafe @ eng_byte s w i k → i {
             = g_fc_weak ? & & == eff EF_REPLACE == epath 0 ( sm_has sm SM_KEEPS ek ) 1 0
             ( eng_effect st ( pl_make ( pl_var ok ) ( ep_cat ( pl_path ok ) epath ) ) eff line 0 )
             = g_fc_weak 0
+            // (a library function that drops or replaces elements - `vec_clear`
+            // over a Vec of a type with a `% Drop` of the program's own - runs
+            // that destructor on each: what it does is done here, agora #712)
+            ? | == eff EF_DROP & & == eff EF_REPLACE != epath 0 == ( ep_last epath ) EE_STAR {
+                : i lf ( ef_find name )
+                ? | < lf 0 != 0 & ( ef_at lf EF_FLAGS ) 1 {
+                    : i dpl ( pl_make ( pl_var ok ) ( ep_take ( ep_cat ( pl_path ok ) epath ) PATH_MAX ) )
+                    : i dty ( eng_ty_of dpl )
+                    ? & != dty ET_NONE ( et_reaches_dtor dty 0 ) { ( eng_dtor_release st dpl dty line 0 ) } {}
+                } {}
+            } {}
             ? & & & == eff EF_REPLACE == epath 0 == ( pl_path ok ) 0 == ( sm_mode sm ek ) PM_INOUT {
                 // (a binding an `inout` callee may give a value of its own)
                 ( fx_set ( pl_var ok ) FX_VAR_FRESH )
@@ -19090,6 +19186,14 @@ unsafe @ eng_byte s w i k → i {
                         ( eng_err line EG_CALLERVIEW ( nurl_str_cat3 ( eng_vname vid ) ` is the caller's, and goes back holding a view of ` ( eng_vname v ) ) )
                         ^
                     } {}
+                    // (…or of a parameter's value this function changed or
+                    // released after the view was made: what the caller
+                    // holds points at the old buffer - the order inside the
+                    // call is not in its summary)
+                    ? & & & >= v 0 == ( fv_kind v ) VK_PARAM != ( el_kind l ) LK_SHARE ( sq_has ( st_dead st ) l ) {
+                        ( eng_err line EG_CALLERVIEW ( nurl_str_cat4 ( eng_vname vid ) ` is the caller's, and goes back holding a view of ` ( eng_pname ( el_place l ) ) `, which this function changed or released after the view was made` ) )
+                        ^
+                    } {}
                 } {}
                 = k + k 1
             }
@@ -19580,7 +19684,10 @@ unsafe @ eng_byte s w i k → i {
         // value, payloads and all - a payload is a lend of it)
         ? & & & whole == ( fv_kind ( pl_var op ) ) VK_TEMP == ( av_own av ) OW_O ! ( eng_own_dtor ( fv_ty ( pl_var op ) ) ) {
             : i sub2 ? >= dest 0 ( rebase_self sub ( pl_var op ) tag dest ) sub
-            ^ ( lent_part ( av_make OW_O 0 0 sub2 F ) )
+            // (…of a call's temporary that is its own on some calls and a lend
+            // on the others: the payload is that lend on those calls, agora
+            // #679)
+            ^ ( lent_part ( av_make OW_O ( av_loans av ) 0 sub2 & ( av_call av ) != ( av_loans av ) 0 ) )
         } {}
         ? & & != pty ET_NONE ! ( et_owning pty ) ! ( et_view_capable pty ) {
             // (a payload with no room for a view or a handle - an error code
@@ -19662,14 +19769,17 @@ unsafe @ eng_byte s w i k → i {
 // is no `none`?
 @ note_fresh i vid i rv i new → v {
     : i own ( av_own new )
-    ? | & != own OW_O != own OW_P != ( av_loans new ) 0 { ^ } {}
+    ? & != own OW_O != own OW_P { ^ } {}
     ? == ( ec rv ) RV_USE {
         : i op ( eng_op ( ec + rv 1 ) )
         ? & ( op_is_place op ) == ( pl_path op ) 0 {
-            ? ( fx_has ( pl_var op ) FX_VAR_FRESH ) { ( fx_set vid FX_VAR_FRESH ) } {}
+            // (…and so is one given a call's result that is its own on some
+            // calls and a lend on the others, on those calls: agora #679)
+            ? | ( fx_has ( pl_var op ) FX_VAR_FRESH ) ( fx_has ( pl_var op ) FX_CALL_MIXED ) { ( fx_set vid FX_VAR_FRESH ) } {}
             ^
         } {}
     } {}
+    ? != ( av_loans new ) 0 { ^ } {}
     ? & == ( ec rv ) RV_AGG ( fx_has vid FX_TEMP_NONE ) { ^ } {}
     ( fx_set vid FX_VAR_FRESH )
 }
@@ -19831,8 +19941,19 @@ unsafe @ eng_byte s w i k → i {
     // only to a binding that lives as long, and from under no `;` block
     // that may still call x)
     : b mut ( fv_mut vid )
+    // (a join's temporary that selects owners on some paths and owns its
+    // value on the others: what it selects is read before the move takes
+    // it, for the rule below - MEMORY.md §2.2)
+    : i jsrc ( rv_use_var rv )
+    : i jalias ? & & & & >= jsrc 0 == kind VK_LOCAL ! mut == ( fv_kind jsrc ) VK_TEMP ( fx_has jsrc FX_JOIN_TEMP ) ? == ( st_own st jsrc ) OW_O ( av_alias ( st_av st jsrc ) ) 0 0
     : ~ i new ( eng_rvalue st rv ln ( fv_depth vid ) vty WK_VAR vid ? | mut ( fv_second vid ) TF_LEND_OWNER 0 vid )
     ? != g_fc_unsup 0 { ^ } {}
+    ? & & != jalias 0 == ( av_own new ) OW_O == ( av_alias new ) 0 { = new ( av_make OW_O ( av_loans new ) jalias ( av_held new ) ( av_call new ) ) } {}
+    // (…what it selects there is a part of a value - a field, a payload: the
+    // rules for a part below decide, not the one for owners)
+    : ~ b jparts F
+    : ~ i jk 0
+    ~ < jk ( sq_len jalias ) { ? != ( pl_path ( sq_at jalias jk ) ) 0 { = jparts T } {} = jk + jk 1 }
     ? & & & mut == kind VK_LOCAL & != vty ET_NONE == ( et_kind vty ) EK_S == ( av_own new ) OW_L { ( fx_set vid FX_CURSOR ) } {}
     ? & & & & mut == kind VK_LOCAL & != vty ET_NONE == ( et_kind vty ) EK_S == ( av_loans new ) 0 | == ( av_own new ) OW_O & == rk RV_USE == ( ec + rv 1 ) 0 { ( fx_set vid FX_OWN_SLOT ) } {}
     : i src ( rv_use_var rv )
@@ -19845,7 +19966,7 @@ unsafe @ eng_byte s w i k → i {
     ? == kind VK_LOCAL { ( eng_freader_note vid rv ) ( eng_call_bind_note vid rv ) } {}
     : b plain_ty & & != vty ET_NONE ! ( et_is_view vty ) != ( et_kind vty ) EK_CLOSURE
     : i nown ( av_own new )
-    ? & & & & & & ! mut == kind VK_LOCAL from_temp ! ( av_call new ) != ( av_alias new ) 0 | == nown OW_L & == nown OW_O != ( av_loans new ) 0 & plain_ty ! ( et_scalar vty ) {
+    ? & & & & & & & ! mut == kind VK_LOCAL from_temp ! ( av_call new ) != ( av_alias new ) 0 | == nown OW_L & == nown OW_O != ( av_loans new ) 0 & plain_ty ! ( et_scalar vty ) ! jparts {
         // a `?` / `??` (or a value block) that selects among owners moves
         // the one it selects into the binding, on the paths that select it
         // - owners of this frame that live no longer than the binding: a
@@ -19864,7 +19985,19 @@ unsafe @ eng_byte s w i k → i {
             ? | | | != ( st_own st pv ) OW_O < ( fv_depth pv ) ( fv_depth vid ) ! ( eng_is_value_place vty ( sq_at al a ) T ) & != pp 0 ( eng_path_fields pp ) { = all F } {}
             = a + a 1
         }
-        ? & all ( take_payload st new ln T ) { = new ( av_make OW_O 0 0 ( av_held new ) F ) } {
+        ? & all ( take_payload st new ln T ) {
+            // (where it owns its value on the other paths, what it selects
+            // is moved on the paths that select it only)
+            ? == nown OW_O {
+                = a 0
+                ~ < a ( sq_len al ) {
+                    : i mv ( pl_var ( sq_at al a ) )
+                    ? == ( st_own st mv ) OW_M { ( st_put st mv ( av_make OW_X 0 0 0 F ) ) } {}
+                    = a + a 1
+                }
+            } {}
+            = new ( av_make OW_O 0 0 ( av_held new ) F )
+        } {
             // (…and one whose other arms lend the caller's values - a
             // parameter, a part of one - moves the owners it selects on
             // their paths, and lends those on the others: the binding owns
@@ -21194,11 +21327,12 @@ unsafe @ eng_byte s w i k → i {
     : i effects ( wv_new )
     = k 0
     ~ < k ( wv_len reallocs ) { ( wv_push effects ( tp3 ( wv_at reallocs k ) 0 EF_REALLOC ) ) = k + k 1 }
-    // (its contents changed, its buffer where it was: what was lent out
-    // of an element ends, a view of the buffer does not)
+    // (its contents changed: what was lent out of an element ends - also
+    // where its buffer may move too, which ends only the views of the
+    // buffer, not the elements a lend handed out: an `lru_put` that evicts)
     = k 0
     ~ < k ( wv_len mutates ) {
-        ? ! ( __wv_has reallocs ( wv_at mutates k ) ) { ( wv_push effects ( tp3 ( wv_at mutates k ) ( ep_child 0 EE_STAR ) EF_REPLACE ) ) } {}
+        ( wv_push effects ( tp3 ( wv_at mutates k ) ( ep_child 0 EE_STAR ) EF_REPLACE ) )
         = k + k 1
     }
     ( wv_trunc tmp 0 )
