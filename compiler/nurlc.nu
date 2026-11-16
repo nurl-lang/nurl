@@ -512,8 +512,7 @@
 : i FX_JOIN_VAR 65536  // a binding given a `?` / `??` join's value whole: nurlc keeps an owner flag for it
 : i FX_TAIL_TOOK 131072  // a value block's temporary that took a local of the block from its tail join
 : i FX_CALL_TEMP 262144  // a call's temporary, of a callee nurlc's summary says may lend its result (eng_walk_lends)
-: i FX_CALL_BIND 524288  // a binding given a call's temporary whole, or such a binding whole (by `:`, or by the last `=` of a `: ~` one): nurlc keeps the call's per-call answer for it
-: i FX_FREADER 2097152  // a binding some `:` or `=` gave a part read in place out of another (`. o name`): nurlc keeps field-viewer facts for it, not a call's answer (stmt_assign)
+: i FX_CALL_BIND 524288  // a binding (`: T e`, not `: ~`) given a call's temporary whole, or such a binding whole: nurlc keeps the call's per-call answer for it
 : i FX_SLOT_TAKE 1048576  // an FX_SLOT payload of a temporary nurlc takes it out of (CORE_VF_SLOT): a consumer that takes it empties the slot
 : ~ i g_fc_cap_loans 0  // the loans closures captured (a set)
 : ~ i g_fc_wb_pairs 0  // (the loan a place holds of a reader's value, the struct cursor whose field store handed it over: eng_cursor_handover), a set
@@ -19884,26 +19883,6 @@ unsafe @ eng_byte s w i k → i {
     ^ F
 }
 
-// Binding `vid` is given the value of `rv` whole (a `let`, or an `=` of
-// a `: ~` one): it keeps nurlc's per-call answer of whether a call lent it
-// (FX_CALL_BIND) exactly when that value is a call's temporary of a callee
-// that may lend its result, or a binding that keeps such an answer itself.
-// Anything else it is given clears it: from there on its lend, if any, is
-// not that answer's (codegen: a `:` binding's provenance slot, a `: ~`
-// one's flag once a call's lend was given it, __mlent_note).
-@ eng_call_bind_note i vid i rv → v {
-    : i src ( rv_use_var rv )
-    ? & >= src 0 | & == ( fv_kind src ) VK_TEMP ( fx_has src FX_CALL_TEMP ) & == ( fv_kind src ) VK_LOCAL ( fx_has src FX_CALL_BIND ) { ( fx_set vid FX_CALL_BIND ) } { ( fx_clear vid FX_CALL_BIND ) }
-}
-
-// Binding `vid` is given `rv`: a part read in place out of another binding
-// (`. o name`) makes it a field reader for good (FX_FREADER).
-@ eng_freader_note i vid i rv → v {
-    ? != ( ec rv ) RV_USE { ^ } {}
-    : i uop ( eng_op ( ec + rv 1 ) )
-    ? & ( op_is_place uop ) != ( pl_path uop ) 0 { ( fx_set vid FX_FREADER ) } {}
-}
-
 // The `let` at `at`.
 @ stmt_let i st i at i ln → v {
     : i vid ( ec + at 1 )
@@ -19959,9 +19938,8 @@ unsafe @ eng_byte s w i k → i {
     ? & & & & from_temp == kind VK_LOCAL ! ( fv_mut vid ) ( fx_has src FX_JOIN_TEMP ) ! ( fx_has src FX_BLOCK_TEMP ) { ( fx_set vid FX_JOIN_VAR ) } {}
     // (a binding of a call's result, or a second name of one: nurlc gives
     // it the call's own answer of whether it lent, which a consumer that
-    // takes it reads - a copy goes where it lent. A `: ~` one too: what
-    // gives it a new value says again, eng_call_bind_note)
-    ? == kind VK_LOCAL { ( eng_freader_note vid rv ) ( eng_call_bind_note vid rv ) } {}
+    // takes it reads - a copy goes where it lent)
+    ? & & == kind VK_LOCAL ! ( fv_mut vid ) & >= src 0 | & from_temp ( fx_has src FX_CALL_TEMP ) & & == ( fv_kind src ) VK_LOCAL ! ( fv_mut src ) ( fx_has src FX_CALL_BIND ) { ( fx_set vid FX_CALL_BIND ) } { ( fx_clear vid FX_CALL_BIND ) }
     : b plain_ty & & != vty ET_NONE ! ( et_is_view vty ) != ( et_kind vty ) EK_CLOSURE
     : i nown ( av_own new )
     ? & & & & & & & ! mut == kind VK_LOCAL from_temp ! ( av_call new ) != ( av_alias new ) 0 | == nown OW_L & == nown OW_O != ( av_loans new ) 0 & plain_ty ! ( et_scalar vty ) ! jparts {
@@ -20148,13 +20126,6 @@ unsafe @ eng_byte s w i k → i {
     : i vid ( pl_var target )
     : i path ( pl_path target )
     : i rv + at 2
-    // (…not a binding ever read out of a field, which nurlc reads by its
-    // field-viewer facts: a field replaced may make it an owner of the
-    // old value, its flag no answer of the call's)
-    ? & == path 0 == ( fv_kind vid ) VK_LOCAL {
-        ( eng_freader_note vid rv )
-        ? ( fx_has vid FX_FREADER ) { ( fx_clear vid FX_CALL_BIND ) } { ( eng_call_bind_note vid rv ) }
-    } {}
     : i cur ( st_av st vid )
     : i cown ? != cur 0 ( av_own cur ) OW_NONE
     : i kind ( fv_kind vid )
