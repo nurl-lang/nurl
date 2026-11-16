@@ -44213,6 +44213,10 @@ unsafe @ __blk_leave b val → v {
         = g_skip_dead_block F
         ( __lex_skip_block_rest lex )
     } {}
+    // (A value block's row says so, `vblock`: what it binds is the
+    // enclosing scope's, and the walk ends it there, as codegen drops it —
+    // agora #846.)
+    ? __vb_mine { ( __bck_vblock_kind ) } {}
     ( bck_block_enter bck_line )
     ? & != 0 g_core_live __blk_scope { ( core_scope_begin ) } {}
     : i __cvb0 g_core_vb
@@ -49707,6 +49711,24 @@ unsafe @ __jt_reg i cg → s {
     ^ ( nurl_str_cat nm `` )
 }
 
+// …and, to the walk, any closure binding the block made that is its tail,
+// owner of its env or not: `|f`, the binding's spelling as the block's
+// frame closed with it (bck_xl_resolve), else ``. The `:` is `: g f` to
+// the walk: one that does not own its env — a copy of a closure another
+// binding owns (`= keep f`, then `f` the tail) — borrows what f borrows,
+// ended where that ends (__clo_bind_class's 5). Read as a block, its borrow
+// row read nothing: the binding was tied to nothing, and kept running the
+// closure after its env was released (agora #846, #638's rest).
+@ __blk_tail_clo_lent i syms i tt s ty i rmin → s {
+    ? | | == g_borrowck 0 != tt TT_LBRACE ! ( __is_closure_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s nm ( nurl_sym_get syms `__tail_name__` )
+    ? == 0 ( nurl_str_len nm ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s tp ( nurl_sym_get syms `__tail_ptr__` )
+    ? | == 0 ( nurl_str_len tp ) ! ( seq tp ( nurl_sym_get2 syms nm `__ptr` ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? | == 0 ( nurl_str_starts tp `%r` ) < ( nurl_str_to_int ( nurl_str_slice tp 2 ( nurl_str_len tp ) ) ) rmin { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat `|` nm )
+}
+
 // A `:` binding's value block (`tt` a `{`, just generated, of type `ty`)
 // whose tail is a binding the block made itself (bound at register
 // `%r<rmin>` or later): that binding's name, else ``. To the new binding's
@@ -50518,6 +50540,12 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ? == 0 ( nurl_str_len deeper ) { ^ v } {}
     : ~ s lp ( mem_local_lend_of syms cg ( nurl_sym_get syms `__last_call_lend_key__` ) deeper )
     ? == 0 ( nurl_str_len lp ) { ^ v } {}
+    // (The binding owns what the call lent of those, copied — here or by
+    // the call itself: to the walk it is no alias of them. A block's own
+    // bindings live on past its `}` to the walk as they do here, so a
+    // handle the call handed back would tie the binding to them — agora
+    // #846.)
+    ( __bck_unalias_copied deeper )
     // (…not where the call already copied its result: a call that may lend
     // a temporary it was handed copies what it hands back on the runs it
     // lent (mem_own_lendback's `part`), and its own bit says so —
@@ -50546,6 +50574,26 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     // parameter as a borrow, it was stored as is and released here; agora
     // #242.)
     ? ( seq ( nurl_sym_get2 syms up `__sborrow` ) `1` ) { ( __sb syms up `dyn` ) } {}
+}
+
+// The statement's stashed aliases (`paliases`, bck_stash_maybe_alias) of a
+// handle a call handed back (`:c`) out of one of `deeper` (names, `-` for
+// none): gone — mem_blk_tail_copy_slot copies that lend, and the binding
+// owns the copy.
+@ __bck_unalias_copied s deeper → v {
+    ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ v } {}
+    : s al ( nurl_sym_get g_bck `paliases` )
+    ? == 0 ( nurl_str_len al ) { ^ v } {}
+    : ~ s rest ( nurl_str_cat al `` )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ln ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s pt ( str_first_word rest ) = rest ( str_skip_word rest )
+        : b drop & & > ( nurl_str_len pt ) 2 != 0 ( nurl_str_ends pt `:c` ) ( str_contains_word deeper nm )
+        ? ! drop { = out ( nurl_str_cat4 out ? == 0 ( nurl_str_len out ) `` ` ` ( nurl_str_cat3 nm ` ` ln ) ( nurl_str_cat ` ` pt ) ) } {}
+    }
+    ( bck_put `paliases` out )
 }
 
 // The `:` binding `up` of a value block whose tail call takes one of the
@@ -54120,8 +54168,11 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
     : ~ s rest ( nurl_str_cat reads `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i dot ( nurl_str_find w `.` )
-        : s t ( nurl_sym_get syms ? > dot 0 ( nurl_str_slice w 0 dot ) w )
+        // (`|f`: a value block's tail binding, by the spelling its frame
+        // closed with — typed as the name it spells, __blk_tail_clo_lent.)
+        : s wn ? == 124 ( nurl_str_get w 0 ) ( nurl_str_slice w 1 - ( nurl_str_len w ) 1 ) ( nurl_str_cat w `` )
+        : i dot ( nurl_str_find wn `.` )
+        : s t ( nurl_sym_get syms ? > dot 0 ( nurl_str_slice wn 0 dot ) wn )
         ? & & != 0 ( nurl_str_len t ) ! ( seq w name ) | | ( __is_handle_ty t ) ( __type_needs_drop t g_root_syms ) ( __is_closure_ty t ) {
             = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w )
         } {}
@@ -57043,6 +57094,29 @@ unsafe @ bck_record_binding s kind s name i line i cls s lty → v {
 @ bck_set_block_kind s kind → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0
     { ( bck_put `pending_kind` kind ) } {}
+}
+
+// Is `rec` a `block` row of a block that scopes its bindings — any but a
+// value block's (`vblock`), whose bindings are the enclosing scope's?
+@ __bck_scoped_block s rec → b {
+    ? == 0 ( nurl_str_starts rec `block\t` ) { ^ F } {}
+    // (Its kind follows the tab: one byte tells a value block's from all
+    // the others — loop, foreach, cond-then, cond-else, match-arm, plain,
+    // defer — then the rest of the word.)
+    ? != 118 ( nurl_str_get rec 6 ) { ^ T } {}
+    ^ == 0 ( nurl_str_starts rec `block\tvblock\t` )
+}
+
+// A value block (gen_block_expr's __vb_mine) is about to open: its row is
+// `vblock` unless a construct armed a kind of its own. Its bindings are
+// the enclosing scope's (docs/MEMORY.md §1, "Where values are dropped"):
+// its `endblock` ends their names (bck_xl_close) but not their lives — they
+// end where the enclosing scope does (__bck_scope_lets, bck_scope_restore
+// descend into it), so a view or a closure of one handed on after the `}`
+// is judged as the unblocked spelling is (agora #846).
+@ __bck_vblock_kind → v {
+    ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ v } {}
+    ? == 0 ( nurl_sym_len g_bck `pending_kind` ) { ( bck_put `pending_kind` `vblock` ) } {}
 }
 
 // Block-boundary markers. enter records a `block` row (carrying any
@@ -61427,7 +61501,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     // must not leave its state on that name.
                     : s blk_pre ( nurl_str_cat st `` )
                     : b isloop | | ( seq bk `loop` ) ( seq bk `loopt` ) ( seq bk `foreach` )
-                    ( bck_scope_push + p 1 eb isloop )
+                    // (A value block is no scope of its own: a way out of it
+                    // ends its bindings with the enclosing scope's, whose
+                    // lets read through it — agora #846.)
+                    : b isvb ( seq bk `vblock` )
+                    ? ! isvb { ( bck_scope_push + p 1 eb isloop ) } {}
                     ? isloop {
                         // Pass the controlling `~ cond` reads (carried in the
                         // block row's reads field) and its line so bck_loop can
@@ -61494,9 +61572,12 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             : s ebrec ( bck_rec eb )
                             ( bck_check_moved_reads ( bck_field ebrec 2 ) ( bck_field_int ebrec 3 ) bwalk )
                         } {}
-                        = st ( bck_scope_close + p 1 eb blk_pre ? & == p 0 != 0 g_bck_has_defers ( __bck_body_defers bwalk eb ( bck_field_int ( bck_rec eb ) 3 ) ) bwalk ( bck_field_int ( bck_rec eb ) 3 ) )
+                        // (A value block's bindings are the enclosing
+                        // scope's: they live on past its `}`, as codegen keeps
+                        // them, and end where that scope does — agora #846.)
+                        = st ? isvb bwalk ( bck_scope_close + p 1 eb blk_pre ? & == p 0 != 0 g_bck_has_defers ( __bck_body_defers bwalk eb ( bck_field_int ( bck_rec eb ) 3 ) ) bwalk ( bck_field_int ( bck_rec eb ) 3 ) )
                     }
-                    = g_bck_sc_n - g_bck_sc_n 1
+                    ? ! isvb { = g_bck_sc_n - g_bck_sc_n 1 } {}
                 }
                 = p + eb 1
                 = done T
@@ -68424,7 +68505,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         : ~ i nx + j 1
         : i cl ? != 0 ( nurl_str_starts rec `cond\t` ) ( bck_match_close j `cond` `endcond` )
         ? != 0 ( nurl_str_starts rec `match\t` ) ( bck_match_close j `match` `endmatch` )
-        ? != 0 ( nurl_str_starts rec `block\t` ) ( bck_match_close j `block` `endblock` ) -1
+        ? ( __bck_scoped_block rec ) ( bck_match_close j `block` `endblock` ) -1
         ? >= cl 0 {
             ? < cl p { = nx + cl 1 } { ? < cl d { ^ j } {} }
         } {}
@@ -68448,7 +68529,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         } {
             : i cl ? != 0 ( nurl_str_starts rec `cond\t` ) ( bck_match_close j `cond` `endcond` )
             ? != 0 ( nurl_str_starts rec `match\t` ) ( bck_match_close j `match` `endmatch` )
-            ? != 0 ( nurl_str_starts rec `block\t` ) ( bck_match_close j `block` `endblock` ) -1
+            ? ( __bck_scoped_block rec ) ( bck_match_close j `block` `endblock` ) -1
             ? & >= cl 0 < cl p { = nx + cl 1 } {}
         }
         = j nx
@@ -69514,7 +69595,7 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
         } {
             : i cl ? != 0 ( nurl_str_starts rec `cond\t` ) ( bck_match_close j `cond` `endcond` )
             ? != 0 ( nurl_str_starts rec `match\t` ) ( bck_match_close j `match` `endmatch` )
-            ? != 0 ( nurl_str_starts rec `block\t` ) ( bck_match_close j `block` `endblock` ) -1
+            ? ( __bck_scoped_block rec ) ( bck_match_close j `block` `endblock` ) -1
             ? & >= cl 0 < cl p { = nx + cl 1 } {}
         }
         = j nx
@@ -69548,15 +69629,19 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
     : ~ s out ``
     : ~ i j lo
     ~ < j hi {
-        : s rec ( bck_rec j )
-        // (The kind by its prefix: no copy of it per row.)
-        ? != 0 ( nurl_str_starts rec `let\t` ) {
-            = out ? == 0 ( nurl_str_len out ) ( nurl_str_int j ) ( nurl_str_cat3 ( nurl_str_int j ) ` ` out )
+        // (The kind by its code, bck_kc: no copy of the row — only a block's
+        // is read, for its kind.)
+        : i kc ( bck_kc j )
+        ? == kc 2 {
+            : s js ( nurl_str_int j )
+            = out ? == 0 ( nurl_str_len out ) js ( nurl_str_cat3 js ` ` out )
             = j + j 1
         } {
-            ? != 0 ( nurl_str_starts rec `cond\t` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
-                ? != 0 ( nurl_str_starts rec `match\t` ) { = j + ( bck_match_close j `match` `endmatch` ) 1 } {
-                    ? != 0 ( nurl_str_starts rec `block\t` ) { = j + ( bck_match_close j `block` `endblock` ) 1 } {
+            ? == kc 25 { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
+                ? == kc 27 { = j + ( bck_match_close j `match` `endmatch` ) 1 } {
+                    // (A value block binds in this scope: its rows are read
+                    // through, agora #846.)
+                    ? ? == kc 23 ( __bck_scoped_block ( bck_rec j ) ) F { = j + ( bck_match_close j `block` `endblock` ) 1 } {
                         = j + j 1
                     }
                 }
@@ -69638,17 +69723,20 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
     : ~ s out ( nurl_str_cat post `` )
     : ~ i j lo
     ~ < j hi {
-        : s rec ( bck_rec j )
-        // (The kind by its prefix: no copy of it per row.)
-        ? != 0 ( nurl_str_starts rec `let\t` ) {
-            : i id ( bck_field_int rec 1 )
+        // (The kind by its code, bck_kc: a row is copied only to read a
+        // `let`'s id or a block's kind.)
+        : i kc ( bck_kc j )
+        ? == kc 2 {
+            : i id ( bck_field_int ( bck_rec j ) 1 )
             = out ( bck_st_set out id ( bck_st_raw pre id ) )
             ( bck_partner_unlink id )
             = j + j 1
         } {
-            ? != 0 ( nurl_str_starts rec `cond\t` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
-                ? != 0 ( nurl_str_starts rec `match\t` ) { = j + ( bck_match_close j `match` `endmatch` ) 1 } {
-                    ? != 0 ( nurl_str_starts rec `block\t` ) { = j + ( bck_match_close j `block` `endblock` ) 1 } {
+            ? == kc 25 { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
+                ? == kc 27 { = j + ( bck_match_close j `match` `endmatch` ) 1 } {
+                    // (A value block binds in this scope: its rows are read
+                    // through, agora #846.)
+                    ? ? == kc 23 ( __bck_scoped_block ( bck_rec j ) ) F { = j + ( bck_match_close j `block` `endblock` ) 1 } {
                         = j + j 1
                     }
                 }
@@ -69809,7 +69897,7 @@ unsafe @ bck_loop_mask s pre s post → s {
                 } {
                     : i cl ? != 0 ( nurl_str_starts rec `cond\t` ) ( bck_match_close j `cond` `endcond` )
                     ? != 0 ( nurl_str_starts rec `match\t` ) ( bck_match_close j `match` `endmatch` )
-                    ? != 0 ( nurl_str_starts rec `block\t` ) ( bck_match_close j `block` `endblock` ) -1
+                    ? ( __bck_scoped_block rec ) ( bck_match_close j `block` `endblock` ) -1
                     ? & >= cl 0 < cl d0 { = nx + cl 1 } {}
                 }
                 = j nx
@@ -72099,6 +72187,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         = g_clo_rhs_at __cra0
         ? | != 0 g_vb_on != 0 g_vb_marks { ( __vb_note_let syms name ) } {}
         : s __bc_tail ( __blk_tail_closure syms bck_rhs_tt ( nurl_get_last_type ) __rhs_r0 )
+        : s __bc_wtail ? & != 0 g_borrowck == bck_rhs_tt TT_LBRACE ( __blk_tail_clo_lent syms bck_rhs_tt ( nurl_get_last_type ) __rhs_r0 ) ``
         ( __note_rawsrc syms name ( nurl_get_last_type ) ( nurl_lex_src_slice lex __rs_at - ( nurl_lex_cur_start lex ) __rs_at ) )
         : s __jpb_mine ( nurl_str_cat g_jpb_list `` )
         = g_jpb_last ( nurl_str_cat __jpb_mine `` )
@@ -72250,8 +72339,8 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // (A value block whose tail is a closure binding of its own is that
         // binding to the walk too, as `: g f`: a move of its env, and what it
         // captured, agora #835.)
-        : i __cbc ? != 0 ( nurl_str_len __bc_tail ) ( __clo_bind_class syms vt val `` ( mem_clo_listed syms __bc_tail ) TT_IDENT name __bc_tail ) ( __clo_bind_class syms vt val rhs_closure_env __src_owned_env bck_rhs_tt name bck_rhs_val )
-        : s __cbr ? & == __cbc 5 != 0 g_borrowck ( nurl_sym_get g_bck `reads` ) ``
+        : i __cbc ? != 0 ( nurl_str_len __bc_tail ) ( __clo_bind_class syms vt val `` ( mem_clo_listed syms __bc_tail ) TT_IDENT name __bc_tail ) ? != 0 ( nurl_str_len __bc_wtail ) 5 ( __clo_bind_class syms vt val rhs_closure_env __src_owned_env bck_rhs_tt name bck_rhs_val )
+        : s __cbr ? & == __cbc 5 != 0 g_borrowck ? != 0 ( nurl_str_len __bc_wtail ) __bc_wtail ( nurl_sym_get g_bck `reads` ) ``
         // (Its own value unless a call lends it one — `arc_get`'s payload,
         // a field accessor's: that value's drop stays its owner's.)
         = g_bck_bind_owns ? & == bck_rhs_tt TT_LPAREN ! | == 0 ( nurl_str_len g_bck_rhs_lend ) ( seq g_bck_rhs_lend `-` ) 0 1
@@ -72552,6 +72641,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             = g_clo_rhs_at __cra0
             ? | != 0 g_vb_on != 0 g_vb_marks { ( __vb_note_let syms name ) } {}
             : s __bc_tail ( __blk_tail_closure syms bck_rhs_tt ( nurl_get_last_type ) __rhs_r0 )
+            : s __bc_wtail ? & != 0 g_borrowck == bck_rhs_tt TT_LBRACE ( __blk_tail_clo_lent syms bck_rhs_tt ( nurl_get_last_type ) __rhs_r0 ) ``
             ( __note_rawsrc syms name ( nurl_llty ptype ) ( nurl_lex_src_slice lex __rs_at - ( nurl_lex_cur_start lex ) __rs_at ) )
             : s __jpb_mine ( nurl_str_cat g_jpb_list `` )
             = g_jpb_last ( nurl_str_cat __jpb_mine `` )
@@ -72685,8 +72775,8 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                 }
             } {}
             ? & != 0 g_bck_closure_depth >= ( bck_walk_class ( nurl_llty ptype ) ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
-            : i __cbc ? != 0 ( nurl_str_len __bc_tail ) ( __clo_bind_class syms ( nurl_llty ptype ) val `` ( mem_clo_listed syms __bc_tail ) TT_IDENT name __bc_tail ) ( __clo_bind_class syms ( nurl_llty ptype ) val rhs_closure_env __src_owned_env bck_rhs_tt name bck_rhs_val )
-            : s __cbr ? & == __cbc 5 != 0 g_borrowck ( nurl_sym_get g_bck `reads` ) ``
+            : i __cbc ? != 0 ( nurl_str_len __bc_tail ) ( __clo_bind_class syms ( nurl_llty ptype ) val `` ( mem_clo_listed syms __bc_tail ) TT_IDENT name __bc_tail ) ? != 0 ( nurl_str_len __bc_wtail ) 5 ( __clo_bind_class syms ( nurl_llty ptype ) val rhs_closure_env __src_owned_env bck_rhs_tt name bck_rhs_val )
+            : s __cbr ? & == __cbc 5 != 0 g_borrowck ? != 0 ( nurl_str_len __bc_wtail ) __bc_wtail ( nurl_sym_get g_bck `reads` ) ``
             = g_bck_bind_owns ? & == bck_rhs_tt TT_LPAREN ! | == 0 ( nurl_str_len g_bck_rhs_lend ) ( seq g_bck_rhs_lend `-` ) 0 1
             ( bck_record_binding `let` name bck_line __cbc ( nurl_llty ptype ) )
             ? == __cbc 5 { ( bck_note_clo_borrow syms name bck_line __cbr ) } {}
