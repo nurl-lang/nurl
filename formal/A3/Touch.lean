@@ -291,6 +291,7 @@ theorem touch_seen {P : Prog} {m m1 : Mem} {s : Stmt} {i : Nat} {w : Bool}
   | editSetDrop _ _ _ hy ha => exact .inl ⟨_, _, hy, ha⟩
   | editSetI he => exact .inr ⟨rfl, eReads_seen he⟩
   | scope _ ih => exact ih hty.scope
+  | block _ ih => exact ih hty.block
   | scopeEnd hx hi => exact .inl ⟨_, _, hx, hi⟩
   | scopeUnwind hs hx hi => exact .inl ⟨_, _, Step.panic_st hs _ _ hx, hi⟩
   | rbind _ ih => exact ih hty.rbind

@@ -3146,6 +3146,10 @@ inductive Touch (P : Prog) (m : Mem) : Stmt → Nat → Bool → Prop
   | editSetI {b : Bool} {x y : Var} {i : Expr} {a : Nat} :
       EReads m i a → Touch P m (.edit b x (.set i y)) a false
   | scope {x : Var} {s : Stmt} {i : Nat} {w : Bool} : Touch P m s i w → Touch P m (.scope x s) i w
+  /-- Agora #871: a step inside a block (`Step.blockIn`) touches what the
+      body's step touches; the block's own steps (its end, an exit, a panic
+      passing through) touch nothing. -/
+  | block {s : Stmt} {i : Nat} {w : Bool} : Touch P m s i w → Touch P m (.block s) i w
   /-- A scope's end releases what its binding owns ... -/
   | scopeEnd {x : Var} {t : Val} {i : Nat} :
       m.st x = some ⟨true, some t⟩ → i ∈ t.ids → Touch P m (.scope x .skip) i true
