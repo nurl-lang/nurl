@@ -1,4 +1,5 @@
-// map: §2.12 | A2 | rejected | - | agora #840: `: ~ H c h  = . c name ( string_from … )  @ W { c }` - a String field replaced through the cursor, then the cursor stored
+// map: §2.12 | A2 | runs-clean | - | agora #840: `: ~ H c h  = . c name ( string_from … )  @ W { c }` - a String field replaced through the cursor, then the cursor stored
+// AGORA-869: runs clean under ASan/LSan with the default compile (main 3358873a: faulted); the ticket's other shapes stay open.
 $ `stdlib/core/string.nu`
 
 : H { String name i n }

@@ -1,9 +1,10 @@
-// map: §2.10 | A2 | rejected | - | agora #479: `?? o { T s → { ^ \ → … s … } }` with a struct field as the argument: the caller's field is freed twice
+// map: §2.10 | A2 | runs-clean | - | agora #479: `?? o { T s → { ^ \ → … s … } }` with a struct field as the argument: the caller's field is freed twice
+// AGORA-869: runs clean under ASan/LSan with the default compile (main 3358873a: faulted); the ticket's other shapes stay open.
 $ `stdlib/core/string.nu`
 
-: H { ?String o i n }
+: H { ? String o i n }
 
-@ cap ?String o → ( @ i ) {
+@ cap ? String o → ( @ i ) {
     ?? o { T s → { ^ \ → i { ^ ( string_len s ) } } F → {} }
     ^ \ → i { ^ 0 }
 }
