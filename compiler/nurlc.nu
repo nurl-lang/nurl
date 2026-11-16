@@ -6235,8 +6235,14 @@ unsafe @ __arg_param_lend_root i syms → s {
     // of its own, gives the binding that value for good: the old value's
     // pairs go, and a fresh value leaves none. Kept, a value that cannot be
     // copied and is owned at the `^` was refused as a lend — agora #335.)
+    // (…not where the value may be the binding's own, handed back by a call
+    // it was given to — `= o ( id o )`: the call read the old value, so what
+    // it may lend of `o` is what that value may be a lend of. Its pairs stay,
+    // as for an `=` in an arm; replaced, `^ o` after `= o ( id loc )  = o (
+    // id o )` handed back loc's buffer uncopied - agora #873.)
+    : b self ( str_contains_word ( bck_swap_char ( __lend_pairs_of syms rhs_tt rhs_val T ) 10 32 ) name )
     : s pd ( nurl_sym_get2 syms name `__pljd` )
-    ? & != 0 ( nurl_str_len pd ) == ( nurl_str_to_int pd ) g_cg_blk_depth {
+    ? & & ! self != 0 ( nurl_str_len pd ) == ( nurl_str_to_int pd ) g_cg_blk_depth {
         ? | != 0 ( nurl_sym_len2 syms name `__pljk` ) != 0 ( nurl_str_len ks ) {
             ( nurl_sym_set_deep syms ( nurl_str_cat name `__pljk` ) ks )
             ( nurl_sym_set_deep syms ( nurl_str_cat name `__pljr` ) ( __lend_pairs_of syms rhs_tt rhs_val T ) )
