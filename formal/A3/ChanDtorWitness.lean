@@ -171,15 +171,15 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   have h3 := StmtT.letv (ξ := .none) (P := P) (x := 3) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
     rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hg.ofNone
     (((((hK9.exitScope 7).exitScope 6).exitScope 5).exitScope 4).endOK _)
-  have hdv := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
+  have hdv := StmtT.letd (ξ := .none) (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K2, K1, A2.setE, upd])
     (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) h3.ofNone
     ((((((hK9.exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).endOK _)
-  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hdv
+  have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hdv.ofNone
     (((((((hK9.exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
-    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone
     ((((((((hK9.exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
 
 /-- `chan_new` of the struct names the glue's check and the elements'
@@ -417,18 +417,18 @@ theorem mainC_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainC Δ := by
     (by simp [K4, K3, K2, K1, A2.setE, upd]) (by simp) hgp rfl
     (Or.inl ⟨rfl, Or.inl (by rw [hEG0])⟩) rfl rfl (letd_fn gvdrop_ok) (HeldUp.refl _ _) hc.ofNone
     (((((hK9.exitScope 8).exitScope 7).exitScope 6).exitScope 5).endOK _)
-  have h3 := StmtT.letv (P := P) (x := 3) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
+  have h3 := StmtT.letv (ξ := .none) (P := P) (x := 3) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
     rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hg.ofNone
     ((((((hK9.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).endOK _)
-  have hdv := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
+  have hdv := StmtT.letd (ξ := .none) (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) h3
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) h3.ofNone
     (((((((hK9.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).endOK _)
-  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hdv
+  have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hdv.ofNone
     ((((((((hK9.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
-    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone
     (((((((((hK9.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
 
 theorem mainC_codes : mainC.codesOK P := by
@@ -575,27 +575,27 @@ theorem RhsT.var_ty {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E : Entry} (h : Rhs
 
 /-- Through a chain of hand-overs a binding stays, at its type. -/
 theorem LetdChain.typed {P : Prog} {s t : Stmt} (hc : LetdChain s t) :
-    ∀ {Γ : Ctx} {F : List Var} {Δ : Ctx} {x : Var} {E : Entry}, StmtT P ξ Γ F s Δ → Γ x = some E →
-      ∃ Γ' F' Δ' E', StmtT P ξ Γ' F' t Δ' ∧ Γ' x = some E' ∧ E'.ty = E.ty := by
+    ∀ {ξ : Exits} {Γ : Ctx} {F : List Var} {Δ : Ctx} {x : Var} {E : Entry}, StmtT P ξ Γ F s Δ → Γ x = some E →
+      ∃ ξ' Γ' F' Δ' E', StmtT P ξ' Γ' F' t Δ' ∧ Γ' x = some E' ∧ E'.ty = E.ty := by
   induction hc with
-  | refl => intro Γ F Δ x E h hx; exact ⟨Γ, F, Δ, E, h, hx, rfl⟩
+  | refl => intro ξ Γ F Δ x E h hx; exact ⟨ξ, Γ, F, Δ, E, h, hx, rfl⟩
   | @letd w f y k t _ ih =>
-    intro Γ F Δ x E h hx
+    intro ξ Γ F Δ x E h hx
     generalize hst : Stmt.letd w f (.var y) k = st at h
     induction h generalizing E with
     | letd _ hw _ hr _ _ _ _ _ _ hb _ _ =>
       cases hst
       have hne : x ≠ w := fun he => by rw [he, hw] at hx; cases hx
       obtain ⟨E1, h1, h1t⟩ := RhsT.var_ty hr hx
-      obtain ⟨Γ', F', Δ', E', h', hx', ht'⟩ := ih hb (x := x) (E := E1) (by simp [setE, upd, hne, h1])
-      exact ⟨Γ', F', Δ', E', h', hx', ht'.trans h1t⟩
+      obtain ⟨ξ', Γ', F', Δ', E', h', hx', ht'⟩ := ih hb (x := x) (E := E1) (by simp [setE, upd, hne, h1])
+      exact ⟨ξ', Γ', F', Δ', E', h', hx', ht'.trans h1t⟩
     | @sub _ Γa Γ0 _ _ _ _ hw _ _ ih2 =>
       obtain ⟨hn, hE⟩ := hw.1 x
       cases hg : Γ0 x with
       | none => exact absurd (hn.mpr hg) (by rw [hx]; simp)
       | some E' =>
-        obtain ⟨Γ', F', Δ', E'', h', hx', ht'⟩ := ih2 hg hst
-        exact ⟨Γ', F', Δ', E'', h', hx', ht'.trans (hE E E' hx hg).ty⟩
+        obtain ⟨ξ', Γ', F', Δ', E'', h', hx', ht'⟩ := ih2 hg hst
+        exact ⟨ξ', Γ', F', Δ', E'', h', hx', ht'.trans (hE E E' hx hg).ty⟩
     | _ => cases hst
 
 theorem compE_ty (E : Entry) (a : Ty) : (compE E a).ty = a := by cases a <;> rfl
@@ -605,12 +605,12 @@ theorem compE_ty (E : Entry) (a : Ty) : (compE E a).ty = a := by cases a <;> rfl
 theorem unpair_body {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt}
     (h : StmtT P ξ Γ F (.unpair y x z s) Δ) :
     ∃ (E : Entry) (a b : Ty), Γ y = some E ∧ E.ty.undtor = .prod a b ∧ x ≠ z ∧
-      ∃ Γ' F' Δ' Ex, StmtT P ξ Γ' F' s Δ' ∧ Γ' x = some Ex ∧ Ex.ty = a := by
+      ∃ ξ' Γ' F' Δ' Ex, StmtT P ξ' Γ' F' s Δ' ∧ Γ' x = some Ex ∧ Ex.ty = a := by
   generalize hst : Stmt.unpair y x z s = st at h
   induction h with
   | unpair _ hy _ _ hty _ _ _ h9 _ _ hb =>
     cases hst
-    exact ⟨_, _, _, hy, unpair_undtor hty, h9, _, _, _, _, hb, by simp [setE, upd, h9]; rfl, compE_ty _ _⟩
+    exact ⟨_, _, _, hy, unpair_undtor hty, h9, _, _, _, _, _, hb, by simp [setE, upd, h9]; rfl, compE_ty _ _⟩
   | @sub _ Γa Γ0 _ _ _ _ hw _ _ ih =>
     obtain ⟨E', a, b, hy', hty, hxz, rest⟩ := ih hst
     obtain ⟨hn, hE⟩ := hw.1 y
@@ -703,7 +703,7 @@ theorem chanGlue_drains {P : Prog} (hP : ProgOK P) {g : Nat} {s : Ty} (h : GlueO
   have hmf := (hdx (by simpa [Ty.holdsDtor] using hs)).1
   obtain ⟨Δ, hb, _⟩ := (hP fn (List.mem_of_getElem? hfn)).2.2.2.2.2.2.2.2.2.2.2.2
   rw [hbody] at hb
-  obtain ⟨E0, a, b, h0, hty, hxz, Γ', F', Δ', Ex, hb', hx', hxt⟩ := unpair_body hb
+  obtain ⟨E0, a, b, h0, hty, hxz, _, Γ', F', Δ', Ex, hb', hx', hxt⟩ := unpair_body hb
   have hE0 : E0.ty = .dtor g (.prod (.vec s) .int) := by
     simp [sigCtx, hps, paramE] at h0
     rw [← h0]
@@ -712,7 +712,7 @@ theorem chanGlue_drains {P : Prog} (hP : ProgOK P) {g : Nat} {s : Ty} (h : GlueO
   obtain ⟨rfl, rfl⟩ := hty
   rcases LetdChain.of_movedFirst hmf with ⟨w, f, k, hc⟩ | ⟨y, hc⟩ | ⟨a', b', k, hc⟩
   · have hnest : ∃ n u, s = Ty.nest n (.dtor f u) := by
-      obtain ⟨Γ'', F'', Δ'', E'', hu, hx'', ht''⟩ := LetdChain.typed hc hb' hx'
+      obtain ⟨_, Γ'', F'', Δ'', E'', hu, hx'', ht''⟩ := LetdChain.typed hc hb' hx'
       exact letd_vec_nest hu hx'' (by rw [ht'', hxt])
     refine ⟨fn, x, z, s', w, f, k, hfn, hps, hbody, hxz, hmf, hc, hnest, fun ρ => ⟨hc.rename ρ,
       fun m q fl hρ h0 hx hz => ?_, fun m q hx hw => Step.letd hw (EvalR.moveOwn hx),
@@ -724,7 +724,7 @@ theorem chanGlue_drains {P : Prog} (hP : ProgOK P) {g : Nat} {s : Ty} (h : GlueO
   · have := LetdChain.pureGlue hc hpure
     simp [Stmt.pureGlue] at this
   · exfalso
-    obtain ⟨Γ'', F'', Δ'', E'', hu, hx'', ht''⟩ := LetdChain.typed hc hb' hx'
+    obtain ⟨_, Γ'', F'', Δ'', E'', hu, hx'', ht''⟩ := LetdChain.typed hc hb' hx'
     obtain ⟨E3, a1, b1, h3, h3t, _⟩ := unpair_body hu
     rw [hx''] at h3; cases h3
     rw [ht'', hxt] at h3t
@@ -887,18 +887,18 @@ theorem mainR_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainR Δ := by
     (by simp [K4, K3, K2, K1, A2.setE, upd]) (by simp) hgp rfl
     (Or.inl ⟨rfl, Or.inl (by rw [hEG0])⟩) rfl rfl (letd_fn gvdrop_ok) (HeldUp.refl _ _) hc.ofNone
     (((((hK10.exitScope 8).exitScope 7).exitScope 6).exitScope 5).endOK _)
-  have h3 := StmtT.letv (P := P) (x := 3) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
+  have h3 := StmtT.letv (ξ := .none) (P := P) (x := 3) (r := .expr (.lit 0)) (E := intE) (F := []) (Γ := K3) (Γ1 := K3)
     rfl (by simp [K3, K2, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hg.ofNone
     ((((((hK10.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).endOK _)
-  have hdv := StmtT.letd (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
+  have hdv := StmtT.letd (ξ := .none) (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K2, K1, A2.setE, upd])
-    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) h3
+    (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) h3.ofNone
     (((((((hK10.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).endOK _)
-  have h1 := StmtT.letv (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hdv
+  have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hdv.ofNone
     ((((((((hK10.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
-    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone
     (((((((((hK10.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
 
 theorem mainR_codes : mainR.codesOK P := by
