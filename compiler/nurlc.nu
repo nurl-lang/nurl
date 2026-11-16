@@ -74285,7 +74285,9 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // what dies with the closure - `= o ? c ( id loc ) ( id x )`: copied
         // where it lent, as a call's lend is above; agora #872.)
         : b __cc_join & & & & != 0 g_bck_closure_depth | == rhs_eff_tt TT_QUEST == rhs_eff_tt TT_QUESTQUEST != 0 ( nurl_str_len __ud_ptr ) != 0 ( nurl_sym_len2 syms __ud_ptr `__outer_owned` )
-        ( __cc_dying_lend syms ( nurl_str_cat3 ( nurl_sym_get syms `__last_join_lend_args__` ) ` ` ( nurl_sym_get syms `__last_phi_idents__` ) ) name )
+        // (Arms that are calls lending it: an arm by name, `= t ? c x … `, moves
+        // out or is copied by its own rule — agora #183, mem_join_copy_slot.)
+        ( __cc_dying_lend syms ( bck_swap_char ( __lend_pairs_of syms bck_rhs_tt bck_rhs_val T ) 10 32 ) name )
         ? & & __cc_join ! ( __clone_supported vt syms ) ! ( nurl_sym_has_word syms `__last_phi_idents__` name ) {
             ( own_die_stmt lex ( nurl_str_cat4 ( nurl_str_cat3 `'` name `' is captured by the closure and given what this join may lend, which may be a local or a parameter of the closure - gone when it returns - and a '` ) ( llvm_to_nurl vt ) `' has no copy to give '` ( nurl_str_cat name `' instead (agora #872). Give it a value of its own, or keep the value outside the closure.` ) ) )
         } {}
