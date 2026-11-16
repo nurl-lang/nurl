@@ -67494,36 +67494,50 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         : b sdrop & ! | srea sirea ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) )
         ? | | srea sirea sdrop {
             : s wrs ( nurl_str_int wroot )
-            : ~ s scus ``
-            : ~ s sowners ( nurl_str_cat wsrc `` )
+            // (A value lent OUT of the payload binding handed on — `(
+            // string_push_str ( vec_at b 0 ) … )`: what moves is one of its
+            // elements' buffers, as bck_borrow_sweep's `deep` reads it.)
+            : b sdeep & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
+            : b swhole & srea ! sdeep
+            : s scw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wrs ) ) `', a payload of the same value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? sdrop `', which may drop or replace what it holds` ? swhole `', which may move its buffer` `', which may move the buffer of one of its elements` ) )
+            // The owners to visit, each with the field path the change is at
+            // in that owner's own value, `<id>:<path>`: the option the binding
+            // is a cursor over at the binding's own path; an owner it borrows
+            // at a path of it - `: ~ Inner b . a2 child`, then `. b x` - at that
+            // path and below it, `.child.x` (a view of `. . a child x` through
+            // another cursor over the same option is of that storage).
+            : s wsfx ? == wid wroot `` ( __bck_path_sfx ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) ) )
+            : ~ s sowners ``
             : i sco ( __cursor_src_of wroot )
-            ? >= sco 0 { = sowners ? == 0 ( nurl_str_len sowners ) ( nurl_str_int sco ) ( nurl_str_cat3 sowners ` ` ( nurl_str_int sco ) ) } {}
+            ? >= sco 0 { = sowners ( nurl_str_cat3 ( nurl_str_int sco ) `:` wsfx ) } {}
+            : ~ s swr0 ( nurl_str_cat wsrc `` )
+            ~ != 0 ( nurl_str_len swr0 ) {
+                : s sw ( str_first_word swr0 ) = swr0 ( str_skip_word swr0 )
+                ? == 0 ( nurl_str_len sw ) { continue } {}
+                : s sent ( nurl_str_cat3 ( nurl_str_int ( bck_path_root ( nurl_str_to_int sw ) ) ) `:` ( nurl_str_cat ( __bck_path_sfx ( nurl_sym_get2 g_bck `rv_` sw ) ) wsfx ) )
+                = sowners ? == 0 ( nurl_str_len sowners ) sent ( nurl_str_cat3 sowners ` ` sent )
+            }
             // (…an owner that is itself a payload cursor, `: ~ H c r` with r
-            // a payload of `oh`: what r is a cursor over, in turn.)
+            // a payload of `oh`: what r is a cursor over, in turn, at the same
+            // path.)
             : ~ s sseen ``
             ~ != 0 ( nurl_str_len sowners ) {
-                : s sw ( str_first_word sowners ) = sowners ( str_skip_word sowners )
-                ? == 0 ( nurl_str_len sw ) { continue } {}
-                : i swr ( bck_path_root ( nurl_str_to_int sw ) )
-                ? ( str_contains_word sseen ( nurl_str_int swr ) ) { continue } {}
-                = sseen ( nurl_str_cat3 sseen ` ` ( nurl_str_int swr ) )
+                : s sent ( str_first_word sowners ) = sowners ( str_skip_word sowners )
+                : i sci ( nurl_str_find sent `:` )
+                ? | < sci 1 ( str_contains_word sseen sent ) { continue } {}
+                = sseen ( nurl_str_cat3 sseen ` ` sent )
+                : i swr ( nurl_str_to_int ( nurl_str_slice sent 0 sci ) )
+                : s es ( nurl_str_slice sent + sci 1 - - ( nurl_str_len sent ) sci 1 )
                 : i swc ( __cursor_src_of swr )
-                ? >= swc 0 { = sowners ? == 0 ( nurl_str_len sowners ) ( nurl_str_int swc ) ( nurl_str_cat3 sowners ` ` ( nurl_str_int swc ) ) } {}
+                ? >= swc 0 { = sowners ( nurl_str_cat3 sowners ` ` ( nurl_str_cat3 ( nurl_str_int swc ) `:` es ) ) } {}
+                : ~ s scus ``
                 : ~ s sc ( nurl_sym_get g_bck ( bck_bkey `cu_` ( nurl_str_int swr ) ) )
                 ~ != 0 ( nurl_str_len sc ) {
                     : s c1 ( str_first_word sc ) = sc ( str_skip_word sc )
                     ? & ! ( seq c1 wrs ) ! ( str_contains_word scus c1 ) { = scus ( nurl_str_cat3 scus ` ` c1 ) } {}
                 }
+                ? != 0 ( nurl_str_len scus ) { = out ( __bck_cursor_views_end out scus rec swhole scw es ) } {}
             }
-            ? != 0 ( nurl_str_len scus ) {
-                // (A value lent OUT of the payload binding handed on — `(
-                // string_push_str ( vec_at b 0 ) … )`: what moves is one of its
-                // elements' buffers, as bck_borrow_sweep's `deep` reads it.)
-                : b sdeep & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
-                : b swhole & srea ! sdeep
-                : s scw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wrs ) ) `', a payload of the same value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? sdrop `', which may drop or replace what it holds` ? swhole `', which may move its buffer` `', which may move the buffer of one of its elements` ) )
-                = out ( __bck_cursor_views_end out scus rec swhole scw ? == wid wroot `` ( __bck_path_sfx ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) ) ) )
-            } {}
         } {}
     } {}
     ^ out
