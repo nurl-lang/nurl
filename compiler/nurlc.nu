@@ -298,8 +298,6 @@
 : i ENG_SQ_MEMO 4096
 
 : ~ i g_eng_on 0  // 1: the ownership engine reads the module's IR and prints its answers (`--emit-core --engine`)
-: ~ i g_eng_fast 0  // PROTOTYPE `--engine-fast`
-: ~ i g_bck_cli 1  // PROTOTYPE: g_borrowck as the command line set it
 : ~ i g_eng_decide 0  // 1: what the engine finds refuses the program, printed as diagnostics; no IR text is made (`--engine-decides`)
 : ~ i g_eng_nref 0  // …how many findings it reported
 : ~ i g_core_flushed 0  // 1 once core_flush has run
@@ -46914,13 +46912,16 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         // hand the argument back WHOLE hands its source over by identity
         // there (agora #459) — not one lending a part of it, `vec_get`'s
         // element, which is a lend on every run.)
-        // (…and a value that cannot be copied lent back whole, `@bn`: the
-        // binding holds it by identity, so it is handed over as it is.)
+        // (…a value that cannot be copied lent back whole, `@bn`, is not:
+        // the binding holds the parameter's value, which the function
+        // releases on the way out on the runs it took it over - handed back
+        // as it is, the caller's binding was freed under the result, as
+        // `^ ( r0 p )` is refused for, AGORA-869.)
         : b __via_nc ( seq ( str_first_word r ) `@bn` )
         : b __via_b | __via_nc ( seq ( str_first_word r ) `@b` )
         ? __via_b { = r ( str_skip_word r ) } {}
         : i lk0 ? ( seq cn `__field__` ) 2 ( mem_fn_lend_kind syms who ( nurl_str_to_int ix ) )
-        : i lk ? & __via_b == lk0 1 ? | __via_nc ( __hown_dyn syms who ) 0 lk0 lk0
+        : i lk ? & & __via_b ! __via_nc == lk0 1 ? ( __hown_dyn syms who ) 0 lk0 lk0
         // (…and, for a call nested in the returned one, each call it went
         // through lends that argument on: `^ ( string_len ( f0 p ) )` hands
         // back a number.)
@@ -71193,7 +71194,7 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
         ? != 0 ( nurl_sym_len g_bck `deferred` )
         { ( bck_defer_fn ( nurl_sym_get syms `__fn_param_names__` ) )
             ( bck_put `deferred` `` ) }
-        { ? == 2 g_eng_fast {} { ( bck_analyze ( nurl_sym_get syms `__fn_param_names__` ) ) } }
+        { ( bck_analyze ( nurl_sym_get syms `__fn_param_names__` ) ) }
     }
 }
 
@@ -91616,10 +91617,6 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // Raw memory is allowed in this body when the function — or the generic
     // it is an instance of — is declared `unsafe` (bck_unsafe_ctx).
     = g_in_unsafe ? == g_unsafe_fns 0 0 ? | != 0 ( nurl_sym_len g_unsafe_fns fname ) & != 0 ( nurl_str_len g_inst_tmpl ) != 0 ( nurl_sym_len g_unsafe_fns g_inst_tmpl ) 1 0
-    // (PROTOTYPE --engine-fast: the walk only for an `unsafe` body, whose
-    // summary the engine takes from it; the engine decides the rest)
-    : i __bck_saved g_borrowck
-    ? == 1 g_eng_fast { = g_borrowck ? ( bck_unsafe_ctx ) g_bck_cli 0 } {}
     = g_rprov_on ? & != 0 g_borrowck ( bck_unsafe_ctx ) 1 0
     = g_rpg_on g_rprov_on
     // Fresh per-function deferred arm-local drop list (see
@@ -92561,7 +92558,6 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // run the analysis pass before the scope is popped. No-op unless
     // --borrowck is set; never emits IR.
     ( borrowck_fn_end lex syms fname )
-    = g_borrowck __bck_saved
     ? != 0 g_core_live { ( core_fn_end ) } {}
     // Lint: warn for this function's `:` bindings that were never read.
     ( lint_fn_end lex )
@@ -115528,10 +115524,6 @@ unsafe @ main → i {
         // (the engine decides beside the walk: the walk's own refusals
         // still stop the compile where they are met, and what the engine
         // finds at the end of the module refuses it too)
-        ? ( seq a `--engine-fast2` ) { = g_core_on 1 = g_eng_on 1 = g_eng_decide 1 = g_eng_fast 2 = ai + ai 1 continue } {}
-        ? ( seq a `--core-only` ) { = g_core_on 1 = g_eng_on 0 = g_eng_decide 1 = ai + ai 1 continue } {}
-        ? ( seq a `--walk-unsafe-only` ) { = g_eng_fast 1 = ai + ai 1 continue } {}
-        ? ( seq a `--engine-fast` ) { = g_core_on 1 = g_eng_on 1 = g_eng_decide 1 = g_eng_fast 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-decides` ) { = g_core_on 1 = g_eng_on 1 = g_eng_decide 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-trace2` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = g_eng_on 1 = g_eng_dbg 2 = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--coverage-link-ir=` ) {
@@ -115593,7 +115585,7 @@ unsafe @ main → i {
                         { ? ( seq a `--borrowck` )
                             { = g_borrowck 1 }
                             { ? ( seq a `--no-borrowck` )
-                                { = g_borrowck 0 = g_bck_cli 0
+                                { = g_borrowck 0
                                     ( nurl_eprintln `warning: --no-borrowck is deprecated and will be removed: without the checker a program is not held to the ownership rules, so nothing guarantees it is memory-safe. A correct program the rules reject is worth reporting at https://github.com/nurl-lang/nurl/issues.` ) }
                                 { ? ( seq a `--no-maybe-moved` )
                                     { = g_maybe_moved 0 }
