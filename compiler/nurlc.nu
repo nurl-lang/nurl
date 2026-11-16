@@ -4177,6 +4177,8 @@ unsafe @ note_unsafe_item s pos s what → v {
 // A `??` arm's payload read in place out of a program enum's binding
 // (`epy_` + owner: the payloads, bck_handle_match): `= o …` releases them.
 : ~ i g_bck_epy_any 0
+// (`pvt_<name>@<line>` → `pv_<id>`: a program enum payload's variant, gen_match.)
+: ~ i g_bck_pvt_any 0
 // Some binding of this function is an `rc_clone` of another: their Rc is
 // one value, a family (`rcr_` the family's first binding, `rcm_` its
 // members) — a dependency stored into one share is every share's (agora
@@ -41946,6 +41948,15 @@ unsafe @ gen_match i lex i syms i cg → s {
             }
             ? == 1 g_rpg_on { = __m_jr ( __join_reads_arm syms __m_jr __m_pb __m_lroots ) } {}
             = __m_pb != 0 ( nurl_str_len __arm_binds )
+            // (Which variant each payload is of, by name and match line: two
+            // payloads of one program enum value read in place by arms of
+            // different variants are never its storage at once —
+            // __bck_epy_elems_via_at, agora #874.)
+            ? & & & != g_borrowck 0 == g_bck_rec_off 0 != 0 ( nurl_str_len pattern_name ) != 0 ( nurl_str_len __arm_binds ) {
+                ? != 0 ( nurl_str_len pv0 ) { ( bck_put ( nurl_str_cat4 `pvt_` pv0 `@` ( nurl_str_int bck_mline ) ) pattern_name ) = g_bck_pvt_any 1 } {}
+                ? != 0 ( nurl_str_len pv1 ) { ( bck_put ( nurl_str_cat4 `pvt_` pv1 `@` ( nurl_str_int bck_mline ) ) pattern_name ) = g_bck_pvt_any 1 } {}
+                ? != 0 ( nurl_str_len pv2 ) { ( bck_put ( nurl_str_cat4 `pvt_` pv2 `@` ( nurl_str_int bck_mline ) ) pattern_name ) = g_bck_pvt_any 1 } {}
+            } {}
             ( bck_record `match-arm-edge` __arm_binds bck_mline )
             ( bck_set_block_kind `match-arm` )
             : i __saved_in_arm g_in_match_arm
@@ -60032,6 +60043,12 @@ unsafe @ __sx_leaf_roots s sx → s {
 
 // …`tail`: what the call may do to the storage, as the message says it.
 @ __bck_epy_elems_via_why s st i o i via i line s cal s tail → s {
+    ^ ( __bck_epy_elems_via_at st o via line cal tail `` )
+}
+
+// …`sfx`: the field path below `via` the call was handed (`.y` for `. b y`),
+// as __bck_cursor_views_end reads it.
+@ __bck_epy_elems_via_at s st i o i via i line s cal s tail s sfx → s {
     : s os ( nurl_str_int o )
     : s vs ( nurl_str_int via )
     : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `epy_` os ) )
@@ -60039,6 +60056,11 @@ unsafe @ __sx_leaf_roots s sx → s {
     ~ != 0 ( nurl_str_len rest ) {
         : s xs ( str_first_word rest ) = rest ( str_skip_word rest )
         : i x ( nurl_str_to_int xs )
+        // (A payload of another variant is never this storage while `via`
+        // is: gen_match's `pvt_`.)
+        : s xvt ? != 0 g_bck_pvt_any ( nurl_sym_get g_bck ( bck_bkey `pv_` xs ) ) ``
+        : s vvt ? != 0 g_bck_pvt_any ( nurl_sym_get g_bck ( bck_bkey `pv_` vs ) ) ``
+        ? & & != 0 ( nurl_str_len xvt ) != 0 ( nurl_str_len vvt ) ! ( seq xvt vvt ) { continue } {}
         ? & & != x via ! ( bck_dead_state ( bck_st_get out x ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `hr_` xs ) ) os ) {
             : s on ( bck_name_show ( nurl_sym_get2 g_bck `rv_` os ) )
             : s why ( nurl_str_cat4 ( nurl_str_cat3 `it is a payload of '` on `', and '` ) ( bck_name_show ( nurl_sym_get2 g_bck `rv_` vs ) ) ( nurl_str_cat3 `', another payload of '` on `' — the same storage — was passed to '` ) ( nurl_str_cat3 ( bck_fn_show cal ) `'` tail ) )
@@ -60050,7 +60072,7 @@ unsafe @ __sx_leaf_roots s sx → s {
                 ~ != 0 ( nurl_str_len pr ) {
                     : s pw ( str_first_word pr ) = pr ( str_skip_word pr )
                     : i pwi ( nurl_str_to_int pw )
-                    ? & != pwi x == ( bck_path_root pwi ) x {
+                    ? & & != pwi x == ( bck_path_root pwi ) x ( __bck_sfx_overlap ( nurl_sym_get2 g_bck `rv_` pw ) sfx ) {
                         : s pb ( nurl_sym_get g_bck ( bck_bkey `bb_` pw ) )
                         ? != 0 ( nurl_str_len pb ) { = brest ( nurl_str_cat3 brest ` ` pb ) } {}
                     } {}
@@ -66875,11 +66897,33 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     ^ == ( nurl_str_get rec off ) 64
 }
 
+// The field path of binding path `name` below its binding: `.y.z` for
+// `b.y.z`, `` for `b`.
+@ __bck_path_sfx s name → s {
+    : i d ( nurl_str_find name `.` )
+    ? < d 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_slice name d - ( nurl_str_len name ) d )
+}
+
+// Does the field path of binding path `name` overlap the field path `sfx`
+// (one a prefix of the other, by fields)? `` overlaps everything.
+@ __bck_sfx_overlap s name s sfx → b {
+    ? == 0 ( nurl_str_len sfx ) { ^ T } {}
+    : s ps ( __bck_path_sfx name )
+    ? == 0 ( nurl_str_len ps ) { ^ T } {}
+    : s a ( nurl_str_cat ps `.` )
+    : s b ( nurl_str_cat sfx `.` )
+    ^ | != 0 ( nurl_str_starts a b ) != 0 ( nurl_str_starts b a )
+}
+
 // The views of the `??` payload cursors `cus` (and of cursors over them,
 // and of their field paths) end at row `rec`: a callee moved the payload's
 // buffer (`crea`) or the buffer of one of its elements (bck_borrow_sweep,
 // agora #816, #874).
-@ __bck_cursor_views_end s st s cus0 s rec b crea s cuw → s {
+// (`sfx`: the field path the change was made at below the binding it went
+// through, `.y` for `. b y`; `` for the whole value — a sibling's paths
+// that do not overlap it are another field's storage, and stay.)
+@ __bck_cursor_views_end s st s cus0 s rec b crea s cuw s sfx → s {
     : ~ s out st
     : ~ s cus ( nurl_str_cat cus0 `` )
     : ~ s cseen ``
@@ -66895,7 +66939,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 ~ != 0 ( nurl_str_len pr ) {
                     : s pw ( str_first_word pr ) = pr ( str_skip_word pr )
                     : i pwi ( nurl_str_to_int pw )
-                    ? & != pwi cui == ( bck_path_root pwi ) cui { = cps ( nurl_str_cat3 cps ` ` pw ) } {}
+                    ? & & != pwi cui == ( bck_path_root pwi ) cui ( __bck_sfx_overlap ( nurl_sym_get2 g_bck `rv_` pw ) sfx ) { = cps ( nurl_str_cat3 cps ` ` pw ) } {}
                 }
             } {}
             ~ != 0 ( nurl_str_len cps ) {
@@ -67209,7 +67253,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         : b cirea & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
         ? & != 0 ( nurl_str_len cus ) | crea cirea {
             : s cuw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) ) ) `', whose payload it is, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? crea `', which may move its payload's buffer` `', which may move the buffer of one of its payload's elements` ) )
-            = out ( __bck_cursor_views_end out cus rec crea cuw )
+            = out ( __bck_cursor_views_end out cus rec crea cuw `` )
         } {}
     } {}
     // Dropping elements or replacing a field THROUGH a borrow reaches what
@@ -67230,22 +67274,26 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     ? & & != 0 g_bck_has_cursor >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
         : b srea ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
         : b sirea & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
-        ? | srea sirea {
+        // (…and one that drops elements in place — `vec_clear`, `vec_pop`:
+        // what points into the elements ends, as for an element's buffer.)
+        : b sdrop & ! | srea sirea ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) )
+        ? | | srea sirea sdrop {
             : s wrs ( nurl_str_int wroot )
             : ~ s scus ``
             : ~ s sowners ( nurl_str_cat wsrc `` )
             : i sco ( __cursor_src_of wroot )
-            ? >= sco 0 { = sowners ( nurl_str_cat3 sowners ` ` ( nurl_str_int sco ) ) } {}
+            ? >= sco 0 { = sowners ? == 0 ( nurl_str_len sowners ) ( nurl_str_int sco ) ( nurl_str_cat3 sowners ` ` ( nurl_str_int sco ) ) } {}
             // (…an owner that is itself a payload cursor, `: ~ H c r` with r
             // a payload of `oh`: what r is a cursor over, in turn.)
             : ~ s sseen ``
             ~ != 0 ( nurl_str_len sowners ) {
                 : s sw ( str_first_word sowners ) = sowners ( str_skip_word sowners )
+                ? == 0 ( nurl_str_len sw ) { continue } {}
                 : i swr ( bck_path_root ( nurl_str_to_int sw ) )
                 ? ( str_contains_word sseen ( nurl_str_int swr ) ) { continue } {}
                 = sseen ( nurl_str_cat3 sseen ` ` ( nurl_str_int swr ) )
                 : i swc ( __cursor_src_of swr )
-                ? >= swc 0 { = sowners ( nurl_str_cat3 sowners ` ` ( nurl_str_int swc ) ) } {}
+                ? >= swc 0 { = sowners ? == 0 ( nurl_str_len sowners ) ( nurl_str_int swc ) ( nurl_str_cat3 sowners ` ` ( nurl_str_int swc ) ) } {}
                 : ~ s sc ( nurl_sym_get g_bck ( bck_bkey `cu_` ( nurl_str_int swr ) ) )
                 ~ != 0 ( nurl_str_len sc ) {
                     : s c1 ( str_first_word sc ) = sc ( str_skip_word sc )
@@ -67258,8 +67306,8 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 // elements' buffers, as bck_borrow_sweep's `deep` reads it.)
                 : b sdeep & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
                 : b swhole & srea ! sdeep
-                : s scw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wrs ) ) `', a payload of the same value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? swhole `', which may move its buffer` `', which may move the buffer of one of its elements` ) )
-                = out ( __bck_cursor_views_end out scus rec swhole scw )
+                : s scw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wrs ) ) `', a payload of the same value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? sdrop `', which may drop or replace what it holds` ? swhole `', which may move its buffer` `', which may move the buffer of one of its elements` ) )
+                = out ( __bck_cursor_views_end out scus rec swhole scw ? == wid wroot `` ( __bck_path_sfx ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) ) ) )
             } {}
         } {}
     } {}
@@ -67718,7 +67766,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 : ~ s hrm ( nurl_sym_get g_bck ( bck_bkey `hr_` ( nurl_str_int rid ) ) )
                 ~ != 0 ( nurl_str_len hrm ) {
                     : s ow ( str_first_word hrm ) = hrm ( str_skip_word hrm )
-                    = out ( __bck_epy_elems_via_why out ( nurl_str_to_int ow ) rid line ecal `, which may move its buffer` )
+                    = out ( __bck_epy_elems_via_at out ( nurl_str_to_int ow ) rid line ecal `, which may move its buffer` ? == rid0 rid `` ( __bck_path_sfx ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int rid0 ) ) ) )
                 }
             } {}
             ? ( bck_callee_drops_elems ecal eaix ) {
@@ -69191,6 +69239,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
                 } {}
                 = binds ? < cm 0 `` ( nurl_str_slice binds + cm 1 - - ( nurl_str_len binds ) cm 1 )
                 : i id ( bck_intern nm )
+                ? != 0 g_bck_pvt_any { ( bck_put ( bck_bkey `pv_` ( nurl_str_int id ) ) ( nurl_sym_get g_bck ( nurl_str_cat4 `pvt_` nm `@` ( bck_field rec 3 ) ) ) ) } {}
                 ? != 0 ( nurl_str_len cursor_src ) {
                     ( bck_add_word ( bck_bkey `cu_` cursor_src ) ( nurl_str_int id ) )
                     ( bck_add_word ( bck_bkey `cul` `` ) ( nurl_str_cat3 ( nurl_str_int id ) `:` cursor_src ) )
