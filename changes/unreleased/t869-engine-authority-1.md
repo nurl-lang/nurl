@@ -15,7 +15,4 @@
 
 - **Breaking (pre-1.0):** a struct whose only owning field is a slice is now an owning value. It moves on `=` and is released wherever it is kept. `= out tmp`, refused before (`diag_owned_fields_alias`), now compiles and runs clean. No in-repo code relied on the refusal.
 - **The ownership engine (`nurlc --engine-decides`, opt-in)** now refuses most of what the borrow walk refuses, in every spelling. That covers 63 of the 89 shapes only the walk caught, and most of the open holes' faulting shapes. The ordinary compile is unchanged; the walk stays the authority. Its diagnostics carry a `note:` and a `help:` for each group.
-
-### Known open
-
-- Five holes found by this change's adversarial pass and filed with their probes: AGORA-872, AGORA-873, AGORA-874, AGORA-875, AGORA-876.
+- Five open holes, found by this change's adversarial pass and present on main too, are listed with their probes: AGORA-872, AGORA-873, AGORA-874, AGORA-875, AGORA-876.
