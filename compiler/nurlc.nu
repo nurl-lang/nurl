@@ -726,9 +726,10 @@
 : i CORE_VW 7
 : i CORE_VF_CARRIED 16  // a variable's flag: a temporary of a join's arm that the enclosing statement releases (core_arm_end)
 : i CORE_VF_TAKEN 64  // a capture's flag: the body marks it taken in its env when it gives it away; a later run panics (core_capture_taken)
-: i CORE_VF_SECOND 32  // a variable's flag: a closure binding given an owner's closure that the walk does not move: a second name of it (core_second_name)
+: i CORE_VF_SECOND 32  // a variable's flag: a closure binding given an owner's closure that the walk does not move: a second name of it (core_name_flag)
 : i CORE_VF_HANDON 128  // a variable's flag: the literal a `\` try hands its failure on in, which codegen hands on whole (core_try)
 : i CORE_VF_SLOT 256  // a variable's flag: a call's temporary whose payload nurlc reads from a slot it can name, and takes out of it where a consumer takes the payload (mem_note_vec_get, mem_vget_consume)
+: i CORE_VF_KEYED 512  // a variable's flag: an option or result owner nurlc tells apart by its payload's key where a `=` gives it what a call may lend out of it or out of another argument (gen_assign)
 : ~ i g_core_slotget 0  // 1: the call just generated read a slot nurlc can name (mem_note_vec_get); its temporary gets CORE_VF_SLOT (core_call)
 : i CORE_VS 1048576
 // Statement words.
@@ -12270,6 +12271,9 @@ unsafe @ eng_keep_fn → v {
 // A call's temporary whose payload nurlc takes out of the slot it read it
 // from, where a consumer takes the payload (CORE_VF_SLOT).
 @ fv_slot i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_SLOT }
+// An option or result owner nurlc tells apart by its payload's key where it
+// is given what a call may lend out of it or another argument (CORE_VF_KEYED).
+@ fv_keyed i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_KEYED }
 
 @ fv_line i vid → i { ? < vid 0 { ^ 0 } {} ^ ( ev vid 5 ) }
 
@@ -19683,11 +19687,13 @@ unsafe @ eng_byte s w i k → i {
             = a 0
             ~ < a ( sq_len lent ) { ? == ( sq_at lent a ) target { = has_self T } { = has_other T } = a + a 1 }
             : b direct & has_self has_other
-            ? & & & != rest 0 ( av_call new ) & != vty ET_NONE ! ( et_is_view vty ) | & | == ( et_kind vty ) EK_OPT == ( et_kind vty ) EK_RES direct ! ( et_copyable vty ) {
+            ? & & & & != rest 0 ( av_call new ) & != vty ET_NONE ! ( et_is_view vty ) ! ( fv_keyed vid ) | & | == ( et_kind vty ) EK_OPT == ( et_kind vty ) EK_RES direct ! ( et_copyable vty ) {
                 // which of them a run hands back is not known, so neither
                 // is whether the binding still owns its value. (A handle is
-                // told apart at run time by its buffer. An option or a
-                // result has no such key.)
+                // told apart at run time by its buffer, and so is an option
+                // or a result whose payload has one, where the IR says nurlc
+                // keys it: CORE_VF_KEYED. Any other option or result has no
+                // such key.)
                 ( eng_err ln EG_LENDBACK ( nurl_str_cat ( eng_vname vid ) ` is given back what this call may lend out of itself or out of another argument` ) )
             } {}
             ? & >= src 0 ( fx_has src FX_CALL_MIXED ) {
@@ -23036,13 +23042,15 @@ unsafe @ core_capture_owned s owned → v {
 // walk did not move (mem_bind_closure_owner: a shorter-lived binding, or
 // one a `;` defer may still call through the other): it is a second name
 // of a closure the other still owns. Flag CORE_VF_SECOND.
-unsafe @ core_second_name i syms s name → v {
+// The binding `name` of the function being lowered given variable flag
+// `flag` (CORE_VF_SECOND, CORE_VF_KEYED).
+unsafe @ core_name_flag i syms s name i flag → v {
     : i cv ( nurl_sym_int2 syms name `__cv` )
     ? | < cv 0 != / cv CORE_VS g_core_serial { ^ } {}
     : i vid % cv CORE_VS
     ? >= vid g_core_var_n { ^ } {}
     : *i vs # *i # s g_core_vars
-    = . vs + * vid CORE_VW 4 | . vs + * vid CORE_VW 4 CORE_VF_SECOND
+    = . vs + * vid CORE_VW 4 | . vs + * vid CORE_VW 4 flag
 }
 
 // The operand on top, a closure binding a `=` gives another without moving
@@ -49053,7 +49061,7 @@ unsafe @ __jt_reg i cg → s {
         { ? & & src_owned ! ( mem_clo_deferred syms rhs_val ) >= ( nurl_sym_depth_of syms rhs_val ) ( nurl_sym_depth syms )
             { = owner ( mem_clo_owner_of syms cg rhs_val ) = owns T
                 ( mem_clo_release_source syms rhs_val ) }
-            { ? & src_owned != 0 g_core_live { ( core_second_name syms name ) } {} } } }
+            { ? & src_owned != 0 g_core_live { ( core_name_flag syms name CORE_VF_SECOND ) } {} } } }
     ( __clo_tmp_set `` )
     ( mem_clo_slot_new syms cg name owner )
     ? owns { ( mem_own_closure_add syms name ) } {}
@@ -73498,7 +73506,17 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // other k ) }`: the same call's value, only spelled inside a block —
         // let through, the run that handed o's own value back freed it under
         // o, agora #427.)
-        ? & & & & __ud_optv __ud_may_self ! __ud_only_self ! ( __is_handle_ty vt ) & __ud_owns == __ud_tt TT_LPAREN {
+        // (…unless the payload has a key: an option or a result of a String,
+        // a Vec, a keyed enum or a library handle is told apart by its active
+        // side's key at run time, as the handle itself is - the run that
+        // hands back o's own value keeps it, any other run releases it and
+        // o borrows what it is given. Answered so only where the callee was
+        // compiled after the call, a callee above refused the same program.)
+        : b __ud_okey & & & __ud_optv __ud_may_self ! __ud_only_self & == __ud_tt TT_LPAREN ( __ud_keyable vt )
+        // (The IR says which owners are keyed so, CORE_VF_KEYED: the engine
+        // reads the flag for what a run of such a call leaves the owner.)
+        ? & & & & != 0 g_core_live __ud_optv == __ud_tt TT_LPAREN != 0 ( nurl_str_len __ud_ptr ) ( __ud_keyable vt ) { ( core_name_flag syms name CORE_VF_KEYED ) } {}
+        ? & & & & & __ud_optv __ud_may_self ! __ud_only_self ! ( __is_handle_ty vt ) & __ud_owns == __ud_tt TT_LPAREN ! __ud_okey {
             : s __q1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of '` )
             : s __q2 ( nurl_str_cat3 name `' itself or out of another argument: nurlc cannot tell which one a run hands back, so it cannot know whether '` name )
             : s __q3 ( nurl_str_cat3 `''s old value is still in use or must be released (agora #412). Give '` name `' a value of its own — a copy of the call's result, ( mem_dup … ) — or bind the result to a new name and keep the two owners apart.` )
@@ -73523,7 +73541,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // (…and a value with a `% Drop` of its own by its first owned
         // field, __udrop_struct_keyable: given back its own value by `( f0
         // o )`, it was released and then read, agora #758.)
-        : b __ud_kty ? | ( __is_handle_ty vt ) __ud_dyn T ? == __ud_tt TT_LPAREN ( __udrop_struct_keyable vt ) F
+        : b __ud_kty ? | | ( __is_handle_ty vt ) __ud_dyn __ud_okey T ? == __ud_tt TT_LPAREN ( __udrop_struct_keyable vt ) F
         ? & & & & __ud_kty __ud_may_self ! __ud_whole ! ( __clone_supported vt syms ) & __ud_owns == __ud_tt TT_LPAREN {
             : s __p1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of a part of '` )
             : s __p2 ( nurl_str_cat3 name `' itself — an element, a payload — and its type has no copy: nurlc cannot keep that part alive once '` name )
@@ -73545,8 +73563,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 ? __ud_kty {
                     : s __ud_ov ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __ud_ov ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ptr ` ) ( nurl_print __ud_ptr ) ( nurl_print `\n` )
-                    : s __ud_ok ? __ud_dyn ( mem_dyn_key cg vt __ud_ov ) ( mem_identity_key cg vt __ud_ov )
-                    : s __ud_nk ? __ud_dyn ( mem_dyn_key cg vt store_val ) ( mem_identity_key cg vt store_val )
+                    : s __ud_ok ? __ud_dyn ( mem_dyn_key cg vt __ud_ov ) ( mem_ud_ident_key cg vt __ud_ov )
+                    : s __ud_nk ? __ud_dyn ( mem_dyn_key cg vt store_val ) ( mem_ud_ident_key cg vt store_val )
                     ? & != 0 ( nurl_str_len __ud_ok ) != 0 ( nurl_str_len __ud_nk ) {
                         = __ud_skey ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print __ud_skey ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print __ud_nk ) ( nurl_print `, ` ) ( nurl_print __ud_ok ) ( nurl_print `\n` )

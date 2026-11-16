@@ -3407,14 +3407,16 @@ class FnCheck:
                     # itself and another argument, and may hand back either)
                     lent = self.call_lent.get(rv[1][1], ()) if rv[0] == "use" and rv[1][0] == "v" else ()
                     direct = ("v", vid, ()) in lent and any(op != ("v", vid, ()) for op in lent)
-                    if rest and new.call and v.ty is not None and v.ty[0] not in VIEW_TYPES and (
+                    if rest and new.call and v.ty is not None and v.ty[0] not in VIEW_TYPES and not v.keyed and (
                             (v.ty[0] in ("opt", "res") and direct) or not self.T.copyable(v.ty)):
                         # which of them a run hands back is not known, so
                         # neither is whether the binding still owns its value.
-                        # (A handle is told apart at run time by its buffer.
-                        # An option or a result has no such key, and no
-                        # binding borrows the call's result to take the old
-                        # value over: agora #412, #425.)
+                        # (A handle is told apart at run time by its buffer,
+                        # and so is an option or a result whose payload has
+                        # one where the IR says codegen keys it (`v` flag
+                        # 512). Any other option or result has no such key,
+                        # and no binding borrows the call's result to take
+                        # the old value over: agora #412, #425.)
                         self.err(ln, f"{v.name} is given back what this call may lend out of itself "
                                      f"or out of another argument")
                     if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] and rv[1][1] in self.call_mixed:
