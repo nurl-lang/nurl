@@ -298,6 +298,7 @@
 : i ENG_SQ_MEMO 4096
 
 : ~ i g_eng_on 0  // 1: the ownership engine reads the module's IR and prints its answers (`--emit-core --engine`)
+: ~ i g_eng_rawwalk 0  // EXPERIMENT AGORA-877: a raw function's summary from the engine's own walk
 : ~ i g_eng_decide 0  // 1: what the engine finds refuses the program, printed as diagnostics; no IR text is made (`--engine-decides`)
 : ~ i g_eng_nref 0  // …how many findings it reported
 : ~ i g_core_flushed 0  // 1 once core_flush has run
@@ -22512,7 +22513,7 @@ unsafe @ eng_byte s w i k → i {
                 : ~ b keep T
                 ? != 0 & flags 1 {
                     ? | >= ( sx_declared name ) 0 >= ( sx_declared_tmpl ( ef_at fn EF_TMPL ) ) 0 { = keep F } {
-                        ? != 0 & flags 6 {
+                        ? & != 0 & flags 6 == 0 g_eng_rawwalk {
                             // its body crosses the raw boundary (raw memory, a
                             // raw callee, a foreign function): the walk's
                             // answers stand for it until a summary is declared
@@ -115425,6 +115426,7 @@ unsafe @ main → i {
         // (the engine decides beside the walk: the walk's own refusals
         // still stop the compile where they are met, and what the engine
         // finds at the end of the module refuses it too)
+        ? ( seq a `--engine-rawwalk` ) { = g_eng_rawwalk 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-decides` ) { = g_core_on 1 = g_eng_on 1 = g_eng_decide 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-trace2` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = g_eng_on 1 = g_eng_dbg 2 = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--coverage-link-ir=` ) {
