@@ -15691,13 +15691,20 @@ unsafe @ eng_byte s w i k → i {
     // the order they are first made, and a set's order is theirs)
     : b aliased ( av_var_aliased pv )
     ? & ! aliased ! ( __el_handle_on place ) { ^ } {}
+    // (an `inout` parameter given a new value hands its old one to no
+    // binding that reads it: it has no drop flag of its own to hand over
+    // from, so codegen frees it outright - `__dropifv`. What read it ends
+    // there, agora #886. A part of another value it was stored into by name
+    // took it out of the slot - agora #598 - and keeps it, below)
+    : i pk ( fv_pidx pv )
+    : b iop & & & == pp 0 >= pk g_f_ncap == ( fv_kind pv ) VK_PARAM == ( fp_mode pk ) PM_INOUT
     : ~ i first -1
     // (no value names a place of the variable: no binding reads it; one
     // does only if it was given such a value in this function, in the
     // order of the variables)
     : i rd ( av_var_readers pv )
     : i nrd ? < rd 0 g_f_nv ( sq_len rd )
-    : ~ i ri ? aliased 0 nrd
+    : ~ i ri ? & aliased ! iop 0 nrd
     : ~ i vid 0
     ~ < ri nrd {
         = vid ? < rd 0 ri ( sq_at rd ri )

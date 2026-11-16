@@ -2089,9 +2089,16 @@ class FnCheck:
         binding (MEMORY.md §7.6, agora #265): it owns it from here on.  A
         binding that owned its value on other paths already (a join) owns
         it on every path then."""
+        # (an `inout` parameter given a new value hands its old one to no
+        # binding that reads it: codegen has no drop flag of its own to hand
+        # over from and frees it outright, agora #886.)
+        # (a part of another value it was stored into by name took it out of
+        # the slot, agora #598, and keeps it: below)
+        iop = (not place[1] and place[0] in self.pidx and self.fn.vars[place[0]].kind == "param"
+               and self.fn.modes[self.pidx[place[0]]] == "inout")
         first = None
         for vid, av in sorted(st.vals.items()):
-            if av.own not in ("L", "O") or not av.alias or self.fn.vars[vid].kind == "temp":
+            if iop or av.own not in ("L", "O") or not av.alias or self.fn.vars[vid].kind == "temp":
                 continue
             # (the place itself, or the payload of an option or a result
             # that is the place - agora #170: not a field, an enum's
