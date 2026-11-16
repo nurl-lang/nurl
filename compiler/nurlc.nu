@@ -20145,6 +20145,25 @@ unsafe @ eng_byte s w i k → i {
 }
 
 // The `assign` at `at`, to a place.
+// Is one of `av`'s loans of a value that dies with the closure being read -
+// a local of it or its own parameter - rather than of `vid` itself or of a
+// capture (stmt_assign, agora #872)?
+@ eng_lends_dying i av i vid → b {
+    : i loans ( av_loans av )
+    : ~ i a 0
+    ~ < a ( sq_len loans ) {
+        : i l ( sq_at loans a )
+        ? ( el_is_loan l ) {
+            : i v ( pl_var ( el_place l ) )
+            ? & & >= v 0 != v vid | < ( fv_pidx v ) 0 >= ( fv_pidx v ) g_f_ncap {
+                ? != ( fv_kind v ) VK_TEMP { ^ T } {}
+            } {}
+        } {}
+        = a + a 1
+    }
+    ^ F
+}
+
 @ stmt_assign i st i at i target i ln → v {
     : i vid ( pl_var target )
     : i path ( pl_path target )
@@ -20248,6 +20267,14 @@ unsafe @ eng_byte s w i k → i {
         } {}
         : ~ i new ( eng_rvalue st rv ln ddepth vty WK_VAR vid flags vid )
         ? != g_fc_unsup 0 { ^ } {}
+        // a capture given what a call lends of what dies with the closure - a
+        // local or a parameter of the closure: it is a place outside the
+        // closure's frame, as an `inout` parameter is, and nurlc copies the
+        // lend in where the call lent - the capture owns the copy (gen_assign,
+        // agora #872). (A lend of another capture is left a lend.)
+        ? & & & & & & == cown OW_P >= ( fv_pidx vid ) 0 < ( fv_pidx vid ) g_f_ncap == ( av_own new ) OW_L ( av_call new ) & & != vty ET_NONE ! ( et_is_view vty ) & != ( et_kind vty ) EK_CLOSURE ( et_copyable vty ) ( eng_lends_dying new vid ) {
+            = new ( av_make OW_O 0 0 ( av_held new ) F )
+        } {}
         : i nown ( av_own new )
         // (…through a join too: `= x ? c x ( f )` - where the join may
         // select the target, its value is copied in)
@@ -74200,6 +74227,56 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // binding's own — the table's element, freed under the table.)
         : b __ud_may_self | | __ud_self_lend ( nurl_sym_has_word syms `__last_call_lend_idents__` name )
         ( nurl_sym_has_word syms `__last_phi_idents__` name )
+        // A binding the closure captured by pointer (`__outer_owned`) is a
+        // place outside the closure's frame, as an `inout` parameter is
+        // (agora #438): what a call lends it of what dies with the closure - a
+        // local or a parameter of the closure, a value its env holds - is
+        // copied in where the call lent, and the capture owns what it holds.
+        // Taken for a lend, it went on pointing at the closure's local after
+        // the closure returned (agora #872). (A call that lends only the
+        // capture itself, `= cur ( next cur )`, or another capture by
+        // pointer, is left as it was. One that may lend either the capture or
+        // a local, `( pick o t k )`, is copied on every run it lent: the copy
+        // is made before the old value goes.)
+        : ~ b __cp_call F
+        // (Asked only of a store into a capture: every other `=` skips it.)
+        : ~ s __cc_lr ``
+        ? & & != 0 g_bck_closure_depth != 0 ( nurl_str_len __ud_ptr ) != 0 ( nurl_sym_len2 syms __ud_ptr `__outer_owned` ) { = __cc_lr ( __word_union ( nurl_sym_get syms `__last_call_lend_idents__` ) g_call_lend_roots ) } {}
+        // (…a value block whose tail is such a call too, `= o { … ( id t ) }`:
+        // copied here wherever the call lent, which covers what the block
+        // bound - mem_blk_tail_copy_slot is not run then.)
+        ? & & & & & ! __cp_clo != 0 g_bck_closure_depth == __ud_tt TT_LPAREN != 0 ( nurl_str_len __ud_ptr ) != 0 ( nurl_sym_len2 syms __ud_ptr `__outer_owned` )
+        // (…and where what it lends is not known yet - a generic instance,
+        // a callee below - one not handed the capture cannot lend its value:
+        // copied where it lent, by the call's answer, as the rest.)
+        // (Only a lend of what may die with the closure: one of another
+        // capture by pointer is that binding's value outside, which the
+        // capture borrows as the same line outside the closure would.)
+        | & g_call_lend_unnamed == 0 ( nurl_str_len __cc_lr ) ( __cc_dying_lend syms ? != 0 ( nurl_str_len __cc_lr ) __cc_lr ( nurl_sym_get syms `__last_call_args__` ) name ) {
+            : s __cc_ro ( mem_call_retown syms cg )
+            ? & != 0 ( nurl_str_len __cc_ro ) ! ( seq __cc_ro `true` ) {
+                ? ( __clone_supported vt syms ) {
+                    : s __cc_c ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __cc_c ) ( nurl_print ` = xor i1 ` ) ( nurl_print __cc_ro ) ( nurl_print `, 1\n` )
+                    = store_val ( mem_emit_cloneif cg vt store_val __cc_c )
+                    = __ud_borrow ``
+                    = __cp_call T
+                } {
+                    // (Refused only where the call is known to lend something
+                    // else, as for an `inout` parameter: a callee with no
+                    // lends known yet — a constructor, a generic instance —
+                    // is no reason to refuse a type that cannot be copied.)
+                    ? | g_call_lend_unnamed != 0 ( nurl_str_len __cc_lr ) {
+                        ( own_die_stmt lex ( nurl_str_cat4 ( nurl_str_cat3 `'` name `' is captured by the closure and given what this call lends, which may be a local or a parameter of the closure - gone when it returns - and a '` ) ( llvm_to_nurl vt ) `' has no copy to give '` ( nurl_str_cat name `' instead (agora #872). Give it a value of its own, or keep the value outside the closure.` ) ) )
+                    } {
+                        // (…and where they are not known yet - a generic
+                        // instance, a callee below - judged at module end on
+                        // the callee's final summary: resolve_cap_nc_lends.)
+                        ( __park_cap_nc_lend lex ( nurl_sym_get syms `__last_call_name__` ) ( __cc_dying_args syms ( nurl_sym_get syms `__last_call_args__` ) name ) name bck_line ( llvm_to_nurl vt ) )
+                    }
+                }
+            } {}
+        } {}
         : ~ s __ud_ro_new ``
         // (…and, for a handle, whether the result is the old value itself.)
         : ~ s __ud_skey ``
@@ -74267,7 +74344,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
             ( own_die_stmt lex ( nurl_str_cat3 __p1 __p2 __p3 ) )
         } {}
         : b __ud_hty | __ud_kty & & __ud_only_self != 0 ( nurl_str_starts vt `{ i1, ` ) ( __type_needs_drop vt syms )
-        ? & & & != 0 ( nurl_str_len __ud_ptr ) == __ud_tt TT_LPAREN __ud_hty | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
+        ? & & & & ! __cp_call != 0 ( nurl_str_len __ud_ptr ) == __ud_tt TT_LPAREN __ud_hty | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
         { = __ud_ro ( mem_call_retown syms cg )
             ? & != 0 ( nurl_str_len __ud_ro ) ! __ud_may_self { = __ud_ro_new __ud_ro = __ud_ro `` } {}
             ? != 0 ( nurl_str_len __ud_ro ) {
@@ -74315,8 +74392,18 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // owns what it holds on every path, and the old value goes by its
         // flag as for any other assignment. (A value that cannot be copied
         // is refused there: the owner has to give it up instead.)
+        // (…and a join stored into a capture by pointer whose arms may lend
+        // what dies with the closure - `= o ? c ( id loc ) ( id x )`: copied
+        // where it lent, as a call's lend is above; agora #872.)
+        : b __cc_join & & & & != 0 g_bck_closure_depth | == rhs_eff_tt TT_QUEST == rhs_eff_tt TT_QUESTQUEST != 0 ( nurl_str_len __ud_ptr ) != 0 ( nurl_sym_len2 syms __ud_ptr `__outer_owned` )
+        // (Arms that are calls lending it: an arm by name, `= t ? c x … `, moves
+        // out or is copied by its own rule — agora #183, mem_join_copy_slot.)
+        ( __cc_dying_lend syms ( bck_swap_char ( __lend_pairs_of syms bck_rhs_tt bck_rhs_val T ) 10 32 ) name )
+        ? & & __cc_join ! ( __clone_supported vt syms ) ! ( nurl_sym_has_word syms `__last_phi_idents__` name ) {
+            ( own_die_stmt lex ( nurl_str_cat4 ( nurl_str_cat3 `'` name `' is captured by the closure and given what this join may lend, which may be a local or a parameter of the closure - gone when it returns - and a '` ) ( llvm_to_nurl vt ) `' has no copy to give '` ( nurl_str_cat name `' instead (agora #872). Give it a value of its own, or keep the value outside the closure.` ) ) )
+        } {}
         ? & & & != 0 ( nurl_str_len __ud_ptr ) | == rhs_eff_tt TT_QUEST == rhs_eff_tt TT_QUESTQUEST
-        ( nurl_sym_has_word syms `__last_phi_idents__` name ) | ( __clone_supported vt syms ) ( __nc_drop_ty vt ) {
+        | ( nurl_sym_has_word syms `__last_phi_idents__` name ) & __cc_join ( __clone_supported vt syms ) | ( __clone_supported vt syms ) ( __nc_drop_ty vt ) {
             : s __sj_jo ( nurl_sym_get syms `__last_join_own__` )
             ? ! ( seq __sj_jo `true` ) {
                 : ~ s __sj_lent `1`
@@ -74533,7 +74620,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         ? != 0 ( nurl_str_len __ud_kept ) { ( mem_udrop_keep_settle syms cg __ud_ptr __ud_kept ) } {}
         // (…a closure parameter copied in over a by-pointer capture is the
         // binding's own: agora #864, above.)
-        ? & __cp_clo ( __clone_supported vt syms ) { ( mem_udrop_flag_set syms cg __ud_ptr `1` ) ( __sb syms __ud_ptr `` ) } {}
+        ? | __cp_call & __cp_clo ( __clone_supported vt syms ) { ( mem_udrop_flag_set syms cg __ud_ptr `1` ) ( __sb syms __ud_ptr `` ) } {}
         // (…a copy of a part of the old value is the binding's own.)
         ? != 0 ( nurl_str_len __ud_pcpy ) {
             : s __ud_pf0 ( mem_udrop_flag_get syms cg __ud_ptr )
@@ -74543,7 +74630,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         } {}
         // A value block whose tail call may lend what was bound below
         // `name`, which dies first: copied in place, owned (agora #190).
-        ? & & != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr -1 store_val ) } {}
+        ? & & & ! __cp_call != 0 ( nurl_str_len ptr ) | == bck_rhs_tt TT_LBRACE == bck_rhs_tt TT_BACKSLASH == g_blk_tail_eff TT_LPAREN { ( mem_blk_tail_copy_slot syms cg ptr vt __ud_ptr -1 store_val ) } {}
         // The binding holds its new value and says whether it owns it: the
         // old one goes now (Agora #621) — an `inout` parameter's too.
         ( mem_udrop_drop_old cg __ud_late )
@@ -100742,6 +100829,89 @@ unsafe @ __sx_names_capture i syms s sx → b {
     } {}
 }
 
+// Is one of `ws` — the bindings a call may lend, or its arguments where its
+// lends are not known yet — a value that may die with the closure: a local
+// or a parameter of the closure, or a capture its env took over? Not the
+// capture `name` itself, another capture (the caller's value), a global, or
+// a compiler stand-in (gen_assign's capture rule, agora
+// #872).
+@ __cc_dying_lend i syms s ws s name → b {
+    : ~ s rest ( nurl_str_cat ws `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w0 ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i wd ( nurl_str_find w0 `.` )
+        : s w ? > wd 0 ( nurl_str_slice w0 0 wd ) ( nurl_str_cat w0 `` )
+        ? | | ( seq w name ) ( seq w `-` ) == 0 ( nurl_sym_len syms w ) { continue } {}
+        // (A stand-in the compiler made for an argument, `__alr#N`, is no
+        // binding of the closure.)
+        ? >= ( nurl_str_find w `#` ) 0 { continue } {}
+        ? ( seq ( nurl_sym_get2 syms w `__captured_byref` ) `1` ) { continue } {}
+        ? != 0 ( nurl_sym_len2 syms w `__global` ) { continue } {}
+        // (A capture by value the closure does not take over is a copy of
+        // the caller's handle, which the env does not release: as the
+        // caller's binding.)
+        ? & != 0 ( nurl_sym_len2 syms w `__envslot` ) ! ( str_contains_word ( nurl_sym_get syms `__clo_consumed__` ) w ) { continue } {}
+        ^ T
+    }
+    ^ F
+}
+
+// A call whose result cannot be copied, stored into capture `name` of a
+// closure, its lends not known where the store is made: judged at module
+// end on the callee's final summary (resolve_cap_nc_lends, agora #872).
+// (`ixs`: the positions of the arguments that die with the closure, as
+// `1,3`: only a lend of one of those is refused.)
+@ __park_cap_nc_lend i lex s cn s ixs s name i line s tshow → v {
+    ? | == 0 ( nurl_str_len cn ) == 0 ( nurl_str_len ixs ) { ^ v } {}
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `capnc_n` ) )
+    ( nurl_sym_def g_pending_impl `capnc_n` ( nurl_str_int + n 1 ) )
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `capnc#` ( nurl_str_int n ) )
+    ( nurl_str_cat4 ( nurl_str_cat4 cn ` ` ixs ` ` ) name ` ` ( nurl_str_cat4 ( nurl_str_int line ) ` ` tshow ( nurl_str_cat ` ` ( nurl_lex_filename lex ) ) ) ) )
+}
+
+// The positions, as `0,2`, of the call arguments `args` (one word each) that
+// die with the closure (__cc_dying_lend), `name` aside.
+@ __cc_dying_args i syms s args s name → s {
+    : ~ s rest ( nurl_str_cat args `` )
+    : ~ s out ``
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( __cc_dying_lend syms w name ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_int k ) ( nurl_str_cat3 out `,` ( nurl_str_int k ) ) } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+// The calls parked by __park_cap_nc_lend: one whose callee may lend what it
+// hands back gives the capture a value someone else owns, which it cannot be
+// given a copy of instead (gen_assign's capture rule, agora #872).
+@ resolve_cap_nc_lends i syms → v {
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `capnc_n` ) )
+    : ~ i j 0
+    ~ < j n {
+        : ~ s r ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `capnc#` ( nurl_str_int j ) ) ) `` )
+        : s cn ( str_first_word r ) = r ( str_skip_word r )
+        : s ixs ( str_first_word r ) = r ( str_skip_word r )
+        : s nm ( str_first_word r ) = r ( str_skip_word r )
+        : s line ( str_first_word r ) = r ( str_skip_word r )
+        : s tshow ( str_first_word r ) = r ( str_skip_word r )
+        // (Only a lend of an argument that dies with the closure: one of the
+        // capture itself stays a lend of it.)
+        : s who ? != 0 ( nurl_sym_len2 syms cn `__body_done` ) cn ( bck_generic_base cn )
+        : ~ b lent F
+        : ~ s ir ( bck_swap_char ixs 44 32 )
+        ~ & ! lent != 0 ( nurl_str_len ir ) {
+            : s ix ( str_first_word ir ) = ir ( str_skip_word ir )
+            ? | != 0 ( mem_fn_lend_kind syms who ( nurl_str_to_int ix ) ) != 0 ( mem_fn_lend_kind syms cn ( nurl_str_to_int ix ) ) { = lent T } {}
+        }
+        ? lent {
+            ( bck_emit_error r ( nurl_str_to_int line ) ( nurl_str_cat4 ( nurl_str_cat3 `'` nm `' is captured by the closure and given what '` ) ( bck_fn_show cn ) ( nurl_str_cat3 `' may lend, which may be a local or a parameter of the closure - gone when it returns - and a '` tshow `' has no copy to give '` ) ( nurl_str_cat nm `' instead (agora #872). Give it a value of its own, or keep the value outside the closure.` ) ) )
+        } {}
+        = j + j 1
+    }
+}
+
 // One call a closure hands back whose result cannot be copied, judged at
 // module end on its callee's final summary (resolve_clo_nc_rets).
 @ __park_clo_nc_ret i lex s cn s gn i line s tshow → v {
@@ -115474,6 +115644,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         ( mem_emit_arg_flags syms )
         ( resolve_nocopy_lends syms )
         ( resolve_clo_nc_rets syms )
+        ( resolve_cap_nc_lends syms )
         ( resolve_nc_lent_stores syms )
         ( resolve_nc_local_lends syms )
         ( resolve_pfo_lends syms )
