@@ -74140,7 +74140,18 @@ unsafe @ gen_assign i lex i syms i cg → s {
                     = __ud_borrow ``
                     = __cp_call T
                 } {
-                    ( own_die_stmt lex ( nurl_str_cat4 ( nurl_str_cat3 `'` name `' is captured by the closure and given what this call lends, which may be a local or a parameter of the closure - gone when it returns - and a '` ) ( llvm_to_nurl vt ) `' has no copy to give '` ( nurl_str_cat name `' instead (agora #872). Give it a value of its own, or keep the value outside the closure.` ) ) )
+                    // (Refused only where the call is known to lend something
+                    // else, as for an `inout` parameter: a callee with no
+                    // lends known yet — a constructor, a generic instance —
+                    // is no reason to refuse a type that cannot be copied.)
+                    ? | g_call_lend_unnamed != 0 ( nurl_str_len __cc_lr ) {
+                        ( own_die_stmt lex ( nurl_str_cat4 ( nurl_str_cat3 `'` name `' is captured by the closure and given what this call lends, which may be a local or a parameter of the closure - gone when it returns - and a '` ) ( llvm_to_nurl vt ) `' has no copy to give '` ( nurl_str_cat name `' instead (agora #872). Give it a value of its own, or keep the value outside the closure.` ) ) )
+                    } {
+                        // (…and where they are not known yet - a generic
+                        // instance, a callee below - judged at module end on
+                        // the callee's final summary: resolve_cap_nc_lends.)
+                        ( __park_cap_nc_lend lex ( nurl_sym_get syms `__last_call_name__` ) name bck_line ( llvm_to_nurl vt ) )
+                    }
                 }
             } {}
         } {}
@@ -100686,6 +100697,36 @@ unsafe @ __sx_names_capture i syms s sx → b {
     } {}
 }
 
+// A call whose result cannot be copied, stored into capture `name` of a
+// closure, its lends not known where the store is made: judged at module
+// end on the callee's final summary (resolve_cap_nc_lends, agora #872).
+@ __park_cap_nc_lend i lex s cn s name i line s tshow → v {
+    ? == 0 ( nurl_str_len cn ) { ^ v } {}
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `capnc_n` ) )
+    ( nurl_sym_def g_pending_impl `capnc_n` ( nurl_str_int + n 1 ) )
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `capnc#` ( nurl_str_int n ) )
+    ( nurl_str_cat4 ( nurl_str_cat3 cn ` ` name ) ` ` ( nurl_str_cat3 ( nurl_str_int line ) ` ` tshow ) ( nurl_str_cat ` ` ( nurl_lex_filename lex ) ) ) )
+}
+
+// The calls parked by __park_cap_nc_lend: one whose callee may lend what it
+// hands back gives the capture a value someone else owns, which it cannot be
+// given a copy of instead (gen_assign's capture rule, agora #872).
+@ resolve_cap_nc_lends i syms → v {
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `capnc_n` ) )
+    : ~ i j 0
+    ~ < j n {
+        : ~ s r ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `capnc#` ( nurl_str_int j ) ) ) `` )
+        : s cn ( str_first_word r ) = r ( str_skip_word r )
+        : s nm ( str_first_word r ) = r ( str_skip_word r )
+        : s line ( str_first_word r ) = r ( str_skip_word r )
+        : s tshow ( str_first_word r ) = r ( str_skip_word r )
+        ? ( __callee_lent syms cn cn ) {
+            ( bck_emit_error r ( nurl_str_to_int line ) ( nurl_str_cat4 ( nurl_str_cat3 `'` nm `' is captured by the closure and given what '` ) ( bck_fn_show cn ) ( nurl_str_cat3 `' may lend, which may be a local or a parameter of the closure - gone when it returns - and a '` tshow `' has no copy to give '` ) ( nurl_str_cat nm `' instead (agora #872). Give it a value of its own, or keep the value outside the closure.` ) ) )
+        } {}
+        = j + j 1
+    }
+}
+
 // One call a closure hands back whose result cannot be copied, judged at
 // module end on its callee's final summary (resolve_clo_nc_rets).
 @ __park_clo_nc_ret i lex s cn s gn i line s tshow → v {
@@ -115418,6 +115459,7 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         ( mem_emit_arg_flags syms )
         ( resolve_nocopy_lends syms )
         ( resolve_clo_nc_rets syms )
+        ( resolve_cap_nc_lends syms )
         ( resolve_nc_lent_stores syms )
         ( resolve_nc_local_lends syms )
         ( resolve_pfo_lends syms )
