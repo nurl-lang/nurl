@@ -1,0 +1,3 @@
+### Fixed
+
+- **A binding given back by its own call keeps what it borrows** (AGORA-873). After `= o ( id other )`, a second `= o ( id o )` (or a forwarder, a generic identity, `( pick o o k )`, `( id { o } )`) made the checker forget that `o` borrows from `other`. Replacing `other` and then reading `o` compiled and read freed memory. The call reads `o`'s old value, so its result borrows what that value borrowed, and the replacement is refused where `o` is read again. The same mistake made `^ o` hand back a borrowed local's buffer without copying it after `= o ( id loc )  = o ( id o )`: it is copied now, as it is without the second line. An `o` that owns its value is given back as before.
