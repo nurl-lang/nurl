@@ -22,7 +22,7 @@ $ `stdlib/core/slice.nu`
     ?? o { T a → { ( vec_push [String] a ( string_from `element zero long enough for the heap` ) ) } F → {} }
     ?? o { T a → {
             : s v ( string_data ( vec_at [String] a 0 ) )
-            ?? o { T b → { ( vec_truncate [String] b 0 ) } F → {} }
+            ?? o { T b → { ( vec_pop [String] b ) } F → {} }
             ( nurl_println v )
         } F → {} }
     ^ 0
