@@ -3586,6 +3586,17 @@ class FnCheck:
                 new = self.rvalue(st, rv, ln, ddepth, v.ty, v.name, copy_ok=not repoint, dest_vid=vid,
                                   named=v.kind != "temp",
                                   lend_owner=outer if v.kind == "temp" else (cursor_lends if v.mut and repoint else (lambda x: False)))
+                if (cur is not None and cur.own == "P" and vid in self.pidx and self.pidx[vid] < self.ncap
+                        and new.own == "L" and new.call and v.ty is not None and v.ty[0] not in VIEW_TYPES
+                        and v.ty[0] != "closure" and self.T.copyable(v.ty)
+                        and not (new.loans and all(self.loans.get(l, ((None,),))[0][0] == vid for l in new.loans))):
+                    # a capture given what a call lends of anything but its
+                    # own value - a local or a parameter of the closure,
+                    # another binding: it is a place outside the closure's
+                    # frame, as an `inout` parameter is, and nurlc copies the
+                    # lend in where the call lent - the capture owns the copy
+                    # (gen_assign, agora #872)
+                    new = AV("O", (), (), new.held)
                 # (…through a join too: `= x ? c x ( f )` - where the join may
                 # select the target, its value is copied in, h373)
                 own_parts = cur is not None and cur.own in ("O", "P") and new.own in ("L", "O") and any(
