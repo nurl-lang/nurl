@@ -328,6 +328,8 @@
 : ~ i g_ec 0  // the function the engine is reading: where its words begin in g_ef_code, and how many
 : ~ i g_ec_n 0
 : ~ i g_ec_f 0  // …its number
+: ~ i g_ec_vb 0  // …where its variables begin in g_ef_vars, and its places in g_ef_pl (ev, ep)
+: ~ i g_ec_pb 0
 : ~ i g_ec_link -1  // per word of it: for a word that opens a block, where the block's next part begins (eng_link)
 : ~ i g_eng_syms 0  // the symbol table the engine asks about types (the module's, at core_flush)
 : ~ i g_et -1  // the types the engine has met, ET_W words each (et_of)
@@ -427,6 +429,7 @@
 : ~ i g_chain_scopes 0  // …the offsets their scopes start at (scope_end's `from`)
 : ~ i g_chain_kept 0  // …the bindings kept, released after the chain
 : ~ i g_hw_memo 0  // held set → its widened form + 1, for the function being read (held_widen)
+: ~ i g_ewl_memo -1  // callee name → eng_walk_lends' answer + 1, for the module (the walk's tables are final)
 : i PV_BIAS 1048576  // a place is a word: (variable + PV_BIAS) * 2^32 + path
 : ~ i g_fv_ty -1  // the function being read: each variable's type
 : ~ i g_fv_pidx -1  // …its number among the parameters, -1 if it is none
@@ -717,6 +720,8 @@
 : ~ i g_av_all -1  // an AV → the loans it is or holds + 1 (a set), for this function
 : ~ i g_al_seen -1  // the alias sets av_make has met in this function (an im_ map: set → 1)
 : ~ i g_f_aliased -1  // per variable (+ g_f_nv + 1): 1 if a place of it is in one of them (eng_handover)
+: ~ i g_f_readers -1  // per variable (+ g_f_nv + 1): the set of the variables a value naming a place of it was given to (eng_handover)
+: ~ i g_f_readers_over 0  // 1: a place's variable was out of that range - every variable may read every one
 : ~ i g_f_alias_over 0  // 1: a place's variable was out of that range - every variable counts as aliased
 : i CORE_VW 7
 : i CORE_VF_CARRIED 16  // a variable's flag: a temporary of a join's arm that the enclosing statement releases (core_arm_end)
@@ -10850,6 +10855,15 @@ unsafe @ wv_diff i a i b i from → i {
     : *i pa # *i # s . r * a 3
     : *i pb # *i # s . r * b 3
     : ~ i k ? < from 0 0 from
+    // (runs of 32 words the two share are passed over a memcmp at a time:
+    // the states of a large function are thousands of words that differ in
+    // a few, and a join asks this of each)
+    : i ba . r * a 3
+    : i bb . r * b 3
+    : ~ b same T
+    ~ & same <= + k 32 n {
+        ? == 0 # i ( memcmp # s + ba * k 8 # s + bb * k 8 256 ) { = k + k 32 } { = same F }
+    }
     ~ < k n {
         ? != . pa k . pb k { ^ k } {}
         = k + k 1
@@ -11316,9 +11330,9 @@ unsafe @ eng_keep_fn → v {
 // statements, ev a word of a variable, ep a word of a place.
 @ ec i at → i { ^ ( wv_at g_ef_code + g_ec at ) }
 
-@ ev i vid i field → i { ^ ( wv_at g_ef_vars + + ( ef_at g_ec_f EF_VARS ) * vid CORE_VW field ) }
+@ ev i vid i field → i { ^ ( wv_at g_ef_vars + + g_ec_vb * vid CORE_VW field ) }
 
-@ ep i place i field → i { ^ ( wv_at g_ef_pl + + ( ef_at g_ec_f EF_PL ) * place 3 field ) }
+@ ep i place i field → i { ^ ( wv_at g_ef_pl + + g_ec_pb * place 3 field ) }
 
 // How many words the rvalue at `at` takes.
 @ eng_rv_len i at → i {
@@ -11405,6 +11419,7 @@ unsafe @ eng_keep_fn → v {
 
 @ eng_open i f → v {
     = g_ec_f f
+    = g_ec_vb ( ef_at f EF_VARS ) = g_ec_pb ( ef_at f EF_PL )
     = g_ec ( ef_at f EF_CODE )
     = g_ec_n ( ef_at f EF_CODE_N )
     ( eng_link )
@@ -12319,6 +12334,9 @@ unsafe @ eng_keep_fn → v {
     ? < g_f_aliased 0 { = g_f_aliased ( wv_new ) } {}
     ( wv_fill g_f_aliased + * g_f_nv 2 2 0 )
     = g_f_alias_over 0
+    ? < g_f_readers 0 { = g_f_readers ( wv_new ) } {}
+    ( wv_fill g_f_readers + * g_f_nv 2 2 0 )
+    = g_f_readers_over 0
     = g_av_none ( av_make OW_N 0 0 0 F )
 }
 
@@ -12530,7 +12548,40 @@ unsafe @ eng_keep_fn → v {
 // The value recorded for `vid`: 0 none.
 @ st_av i st i vid → i { ? | < vid 0 >= vid g_f_nv { ^ 0 } {} ^ ( wv_at st + ST_VARS vid ) }
 
-@ st_put i st i vid i av → v { ( wv_put st + ST_VARS vid av ) }
+@ st_put i st i vid i av → v {
+    ( wv_put st + ST_VARS vid av )
+    ? != av 0 {
+        : i al ( av_alias av )
+        ? != al 0 { ( __note_readers vid al ) } {}
+    } {}
+}
+
+// `vid` is given a value naming the places `alias`: it is a reader of
+// their variables from here on, for the function (eng_handover asks
+// those, not every variable). A state's value is put here, or joined or
+// copied from values put here for the same variable.
+@ __note_readers i vid i alias → v {
+    ? < g_f_readers 0 { = g_f_readers_over 1 ^ } {}
+    : i n ( wv_len g_f_readers )
+    : ~ i k 0
+    ~ < k ( sq_len alias ) {
+        : i slot + + ( pl_var ( sq_at alias k ) ) g_f_nv 1
+        ? & >= slot 0 < slot n {
+            : i rs ( wv_at g_f_readers slot )
+            ? ! ( sq_has rs vid ) { ( wv_put g_f_readers slot ( sq_add rs vid ) ) } {}
+        } { = g_f_readers_over 1 }
+        = k + k 1
+    }
+}
+
+// The variables a value naming a place of `vid` was given to in this
+// function, as a set; -1 when that is not known (every variable may be).
+@ av_var_readers i vid → i {
+    ? | < g_f_readers 0 != 0 g_f_readers_over { ^ -1 } {}
+    : i slot + + vid g_f_nv 1
+    ? | < slot 0 >= slot ( wv_len g_f_readers ) { ^ -1 } {}
+    ^ ( wv_at g_f_readers slot )
+}
 
 // `vid`'s ownership in `st` (OW_NONE: nothing recorded).
 @ st_own i st i vid → i {
@@ -12712,7 +12763,9 @@ unsafe @ eng_keep_fn → v {
     // (the walk of a function reading its own summary: an input of the
     // walk, but for its parameters' modes and count, which the initial
     // summary fixes)
-    ? & & == f g_fc_reading == 0 g_fc_in_make & != field SM_MODES != field SM_NPARAM { = g_fc_selfread 1 } {}
+    ? == f g_fc_reading {
+        ? & == 0 g_fc_in_make & != field SM_MODES != field SM_NPARAM { = g_fc_selfread 1 } {}
+    } {}
     ( sm_note f )
     ^ ( wv_at g_sm + * f SM_W field )
 }
@@ -13614,6 +13667,34 @@ unsafe @ eng_byte s w i k → i {
         = v + v 1
     }
     ^ live
+}
+
+// The loans of the set `want` some value of `st` is or holds: all_loans
+// met with `want`, asked value by value only until every one is found
+// (the values are many in a large function, the loans asked of few).
+@ loans_held_of i st i want → i {
+    : ~ i left want
+    : ~ i found 0
+    : ~ i v 0
+    ~ & != left 0 < v g_f_nv {
+        : i av ( st_av st v )
+        // (a value that is no lend and holds nothing has no loan to ask of)
+        : b some ? | == av 0 == av g_av_none F | != ( av_loans av ) 0 != ( av_held av ) 0
+        ? some {
+            : ~ i mine - ( im_get g_av_all av 0 ) 1
+            ? < mine 0 {
+                = mine ( sq_union ( av_loans av ) ( held_loans ( av_held av ) ) )
+                ( im_put g_av_all av + mine 1 )
+            } {}
+            ? ( sq_meets mine left ) {
+                : i rest ( sq_minus left mine )
+                = found ( sq_union found ( sq_minus left rest ) )
+                = left rest
+            } {}
+        } {}
+        = v + v 1
+    }
+    ^ found
 }
 
 // A region a callee made through its parameter, a handle itself, handed
@@ -15418,15 +15499,24 @@ unsafe @ eng_byte s w i k → i {
     // place was lent: nothing below has a reader to hand it to. Asked
     // after the paths above are made - the module numbers its paths in
     // the order they are first made, and a set's order is theirs)
-    ? & ! ( av_var_aliased pv ) ! ( __el_handle_on place ) { ^ } {}
+    : b aliased ( av_var_aliased pv )
+    ? & ! aliased ! ( __el_handle_on place ) { ^ } {}
     : ~ i first -1
+    // (no value names a place of the variable: no binding reads it; one
+    // does only if it was given such a value in this function, in the
+    // order of the variables)
+    : i rd ( av_var_readers pv )
+    : i nrd ? < rd 0 g_f_nv ( sq_len rd )
+    : ~ i ri ? aliased 0 nrd
     : ~ i vid 0
-    ~ < vid g_f_nv {
+    ~ < ri nrd {
+        = vid ? < rd 0 ri ( sq_at rd ri )
         : i av ( st_av st vid )
-        ? != av 0 {
+        // (most values name no place: asked first, the rest is not read)
+        : i alias ? == av 0 0 ( av_alias av )
+        ? != alias 0 {
             : i own ( av_own av )
-            : i alias ( av_alias av )
-            ? & & | == own OW_L == own OW_O != alias 0 != ( fv_kind vid ) VK_TEMP {
+            ? & | == own OW_L == own OW_O != ( fv_kind vid ) VK_TEMP {
                 // (one of the places it may name is that place: which one it
                 // holds is told at run time by the handle's identity)
                 : ~ b ok F
@@ -15463,8 +15553,12 @@ unsafe @ eng_byte s w i k → i {
                 } {}
             } {}
         } {}
-        = vid + vid 1
+        = ri + ri 1
     }
+    // (what follows hands over only what a handle of the place itself
+    // holds: with no such loan made - the walk above makes its loans on the
+    // first reader - there is nothing)
+    ? ! ( __el_handle_on place ) { ^ } {}
     ? >= first 0 {
         // (a closure that captured a reader of the place holds the reader's
         // copy of the handle: the old value, which the reader owns now - its
@@ -19173,11 +19267,9 @@ unsafe @ eng_byte s w i k → i {
     // later use of its site: only what some value still needs stays ended
     : i dead ( st_dead st )
     ? != dead 0 {
-        : i live ( sq_union ( all_loans st ) g_fc_walking )
-        : ~ i keep 0
-        = k 0
-        ~ < k ( sq_len dead ) { ? ( sq_has live ( sq_at dead k ) ) { = keep ( sq_add keep ( sq_at dead k ) ) } {} = k + k 1 }
-        ( wv_put st ST_DEAD keep )
+        // (dead ∩ (all_loans ∪ walking))
+        : i walked ( sq_minus dead ( sq_minus dead g_fc_walking ) )
+        ( wv_put st ST_DEAD ( sq_union walked ( loans_held_of st ( sq_minus dead walked ) ) ) )
     } {}
     : i gone ( st_gone st )
     ? != gone 0 {
@@ -19200,6 +19292,17 @@ unsafe @ eng_byte s w i k → i {
 // it lends out of an argument (`lkind`, mem_fn_lend_kind)? A binding of its
 // result then keeps the call's per-call answer of whether it lent.
 @ eng_walk_lends i name → b {
+    // (asked at every call bound by a `let`, round after round; the walk's
+    // tables it reads are final once the engine runs: answered once a callee)
+    ? < g_ewl_memo 0 { = g_ewl_memo ( im_new ) } {}
+    : i memo ( im_get g_ewl_memo name 0 )
+    ? != memo 0 { ^ == memo 2 } {}
+    : b r ( __eng_walk_lends name )
+    ( im_put g_ewl_memo name ? r 2 1 )
+    ^ r
+}
+
+@ __eng_walk_lends i name → b {
     : i f ( ef_find name )
     ? < f 0 { ^ F } {}
     : s fn ( eng_str name )
@@ -20279,19 +20382,30 @@ unsafe @ eng_byte s w i k → i {
                 ( st_put st ( pl_var mop ) ( av_make OW_O ( av_loans cur ) 0 ( av_held cur ) F ) )
             } {}
         } {}
-        : i out ( st_new )
-        ( st_set_bottom out )
+        // (what holds after it: the join of the arms - the first arm that
+        // leaves a path open is that join so far, as a join into nothing
+        // is a copy; none, and no path is open)
+        : ~ i out -1
         : ~ i arm ( wv_at g_ec_link at )
         ~ == ( ec arm ) CO_ARM {
             : i nx ( wv_at g_ec_link arm )
             : i c ( st_copy st )
             ( eng_run c + arm 2 nx )
-            ( st_join_into out c )
-            ( st_free c )
+            ? < out 0 {
+                ? ( st_bottom c ) { ( st_free c ) } { = out c }
+            } {
+                ( st_join_into out c )
+                ( st_free c )
+            }
             = arm nx
         }
-        ( wv_copy st out )
-        ( st_free out )
+        ? < out 0 {
+            ( wv_fill st + ST_VARS g_f_nv 0 )
+            ( st_set_bottom st )
+        } {
+            ( wv_copy st out )
+            ( st_free out )
+        }
         ^ + arm 1
     } {}
     ? == op CO_LOOP { ( stmt_loop st at ln ) ^ ( eng_next at ) } {}
@@ -21689,6 +21803,7 @@ unsafe @ eng_byte s w i k → i {
 @ eng_callees i f i out → v {
     // (its words only: the walk's links of its blocks are not read here)
     = g_ec_f f
+    = g_ec_vb ( ef_at f EF_VARS ) = g_ec_pb ( ef_at f EF_PL )
     = g_ec ( ef_at f EF_CODE )
     = g_ec_n ( ef_at f EF_CODE_N )
     : ~ i at 0
@@ -22060,6 +22175,14 @@ unsafe @ eng_byte s w i k → i {
     }
 }
 
+// The engine has judged the module: the functions' statements, variables
+// and places it kept are read no more. They go now, not after the module
+// is written out: a self-compile's are 25 MB, the most memory the engine
+// holds.
+@ eng_release → v {
+    ? >= g_ef_code 0 { ( wv_drop g_ef_code ) ( wv_drop g_ef_vars ) ( wv_drop g_ef_pl ) = g_ef_code -1 = g_ef_vars -1 = g_ef_pl -1 } {}
+}
+
 // ── Ownership engine: what it prints ─────────────────────────────────
 @ __eng_o_ty i t → v {
     ? == t ET_NONE { ( __core_o `-` ) ^ } {}
@@ -22155,6 +22278,7 @@ unsafe @ eng_print_types → v {
 // `skip` with the reason; `eng err` a finding (function, line, message).
 @ eng_main i syms → v {
     = g_eng_syms syms
+    ? >= g_ewl_memo 0 { ( wv_drop g_ewl_memo ) = g_ewl_memo -1 } {}
     = g_ws_syms syms
     = g_sm_dyn ( __core_in `dyn` )
     ( eng_sq_reset )
@@ -23324,7 +23448,12 @@ unsafe @ core_flush i syms → v {
         ( core_print_virts )
         ( core_print_sums syms )
     } {}
-    ? != 0 g_eng_on { ( eng_main syms ) } {}
+    ? != 0 g_eng_on {
+        ( eng_main syms )
+        ( eng_release )
+        // (…and none is kept after: the engine has run, core_flush once)
+        = g_eng_on 0
+    } {}
     ? != 0 g_core_out {
         : *u ob # *u # s g_core_out
         = . ob g_core_out_n # u 0
@@ -25157,6 +25286,22 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
     av
 }
 
+// Where the words of `list` (`n` bytes) past those of `old` begin: a
+// scope's list of owned strings is, mostly, the one it began with and the
+// ones it bound after. Words of that prefix are words of `old`, which the
+// walks below would ask of `old` one by one - a walk quadratic in a long
+// list. (Only a prefix of words that are not empty: an empty word is no
+// word of any list.) 0 when `list` does not begin with `old`.
+@ __old_words_end s list i n s old → i {
+    : i on ( nurl_str_len old )
+    ? | == on 0 > on n { ^ 0 } {}
+    ? | | == ( nurl_str_get old 0 ) 32 == ( nurl_str_get old - on 1 ) 32 >= ( nurl_str_find old `  ` ) 0 { ^ 0 } {}
+    ? == 0 ( nurl_str_starts list old ) { ^ 0 } {}
+    ? == on n { ^ n } {}
+    ? != ( nurl_str_get list on ) 32 { ^ 0 } {}
+    ^ + on 1
+}
+
 // Deferred arm-local drops. A `?`/`??` arm whose VALUE is a pointer
 // cannot drop its local owned strings at the arm's fall-through
 // (mem_arm_drop_safe — the value may reference one of them), and the
@@ -25171,10 +25316,12 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 // The list rides a symbol-table key, not a global string, so the
 // bookkeeping itself is reclaimed at exit.
 @ mem_defer_new_strings i syms s old_list → v {
-    : ~ s rest ( nurl_sym_get syms `__owned_strings__` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s ptr ( str_first_word rest )
-        = rest ( str_skip_word rest )
+    // (A cursor walk, past the words the scope began with.)
+    : s rest ( nurl_sym_get syms `__owned_strings__` )
+    : i rest_n ( nurl_str_len rest )
+    : ~ i rest_p ( __old_words_end rest rest_n old_list )
+    ~ < rest_p rest_n {
+        : i rest_e ( __word_end rest rest_n rest_p ) : s ptr ( __span_dup rest rest_p rest_e ) = rest_p + rest_e 1
         ? ( str_contains_word old_list ptr ) {} {
             : s drop_slot ( mem_guard_drop_slot syms ptr )
             : s cur ( nurl_sym_get g_fn_escapes `__deferred_drops__` )
@@ -45654,10 +45801,11 @@ unsafe @ mem_path_to_indices s path → s {
 
 @ mem_drop_new_strings i syms i cg s old_list → v {
     : s snap ( nurl_sym_get g_fn_escapes `__dsnap_str__` )
-    : ~ s rest ( nurl_sym_get syms `__owned_strings__` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s ptr ( str_first_word rest )
-        = rest ( str_skip_word rest )
+    : s rest ( nurl_sym_get syms `__owned_strings__` )
+    : i rest_n ( nurl_str_len rest )
+    : ~ i rest_p ( __old_words_end rest rest_n old_list )
+    ~ < rest_p rest_n {
+        : i rest_e ( __word_end rest rest_n rest_p ) : s ptr ( __span_dup rest rest_p rest_e ) = rest_p + rest_e 1
         // (One walk of each list per entry: what the scope did not bind is
         // not looked up in the snapshot at all.)
         ? ( str_contains_word old_list ptr ) {} {
@@ -52354,7 +52502,27 @@ unsafe @ bck_trusted_file s path → b {
 // integer (stdlib/hal): the CPU (mmio_*) or the device (a virtio register
 // block, a descriptor the device writes through) reads or writes there,
 // whatever the number is.
-@ bck_raw_addr_call s base → b {
+// (The lists below are fixed: each name is looked up in them once, the
+// three answers kept as bits - bck_check_raw_call asks them of every call
+// a function makes.)
+: ~ i g_rawl_memo 0
+@ __rawl_bits s base → i {
+    ? == 0 ( nurl_str_len base ) { ^ 0 } {}
+    ? == g_rawl_memo 0 { = g_rawl_memo ( nurl_sym_new ) } {}
+    : i m ( nurl_sym_int g_rawl_memo base )
+    ? != m -1 { ^ m } {}
+    : i v | | ? ( __bck_raw_call_l base ) 1 0 ? ( __bck_raw_handle_call_l base ) 2 0 ? ( __bck_raw_addr_call_l base ) 4 0
+    ( nurl_sym_def g_rawl_memo base ( nurl_str_int v ) )
+    ^ v
+}
+
+@ bck_raw_call s base → b { ^ != 0 & ( __rawl_bits base ) 1 }
+
+@ bck_raw_handle_call s base → b { ^ != 0 & ( __rawl_bits base ) 2 }
+
+@ bck_raw_addr_call s base → b { ^ != 0 & ( __rawl_bits base ) 4 }
+
+@ __bck_raw_addr_call_l s base → b {
     ^ ( str_contains_word `mmio_read32 mmio_write32 mmio_set32 mmio_clear32 virtio_probe virtio_vendor virtio_status virtio_set_status virtio_reset virtio_device_features virtio_set_driver_features virtio_init virtio_driver_ok virtio_queue_max virtio_queue_setup virtio_notify virtio_isr virtio_isr_ack virtio_config_u8 virtio_config_generation virtq_desc_set virtq_add_single` base )
 }
 
@@ -52365,11 +52533,11 @@ unsafe @ bck_trusted_file s path → b {
     ^ ( str_contains_word `file_raw file_from_raw` base )
 }
 
-@ bck_raw_handle_call s base → b {
+@ __bck_raw_handle_call_l s base → b {
     ^ ( str_contains_word `tcp_conn_view tcp_conn_adopt tls_attach tls_attach_alpn tls_attach_resume tls_attach_verify tls_attach_alpn_verify tls_attach_full tls_accept tls_accept_alpn tls_accept_rsa tls_accept_rsa_alpn tls_accept_mldsa tls_accept_mldsa_alpn tls_accept_dual_alpn tls_accept_ident tls_accept_ident_dual` base )
 }
 
-@ bck_raw_call s base → b {
+@ __bck_raw_call_l s base → b {
     // (`vec_set_len` declares raw writes initialised: the elements it
     // exposes are whatever the memory held.)
     ^ ( str_contains_word `nurl_alloc nurl_zalloc nurl_free nurl_realloc alloc zalloc mem_forget nurl_peek nurl_poke nurl_vctl_get nurl_vctl_set nurl_vctl_data nurl_memcpy nurl_memmove nurl_memset nurl_mac_row nurl_p256_mulm nurl_p256_sqrm nurl_x25519_mulm nurl_x25519_sqrm malloc calloc realloc free memcpy memmove memset nurl_closure_drop nurl_closure_clone rcbox_ptr rcbox_new rcbox_zero rcbox_share rcbox_release shared_new shared_zero shared_null shared_ptr shared_addr shared_publish_once shared_into_word shared_from_word vec_publish_once arc_into_word arc_from_word arc_word_share mem_take mem_put_back vec_put_back mem_addr mem_drop_range mem_move_drop vec_set_len` base )
@@ -56665,8 +56833,11 @@ unsafe @ bck_paths_release → v {
 
 // State lookup — one bounds check + one byte load. An id past the
 // end of the string is a binding this state never set: Uninit.
+// (`id` is in the state exactly when no NUL comes before its digit:
+// measured that far, not the whole state - a function's state is a digit
+// a binding, and a walk over its bindings asked this of each.)
 unsafe @ bck_st_get s state i id → i {
-    ? < id ( nurl_str_len state ) {
+    ? | < id 0 > ( strnlen state + id 1 ) id {
         : *u sp # *u state
         : i v - # i . sp id 48
         // (A binding that may own its value is a borrow to every rule that
@@ -56678,7 +56849,7 @@ unsafe @ bck_st_get s state i id → i {
 
 // The digit as it is — BCK_MAYBE_OWNED too: a state put back as it was.
 unsafe @ bck_st_raw s state i id → i {
-    ? < id ( nurl_str_len state ) {
+    ? | < id 0 > ( strnlen state + id 1 ) id {
         : *u sp # *u state
         ^ - # i . sp id 48
     } {}
@@ -65298,10 +65469,13 @@ unsafe @ __dyn_virtual_drop_edges → v {
 @ __drops_close b ts → v {
     : i tab ? ts g_fn_tdrops g_fn_drops
     // Seeded with the witnessed drops.
-    : ~ s fns ( nurl_str_cat g_fn_safe_list `` )
-    : ~ s r0 ( nurl_str_cat fns `` )
-    ~ != 0 ( nurl_str_len r0 ) {
-        : s f ( str_first_word r0 ) = r0 ( str_skip_word r0 )
+    // (Cursor walks: a first/skip_word step copied the whole rest of the
+    // list, quadratic in its length.)
+    : s fns ( nurl_str_cat g_fn_safe_list `` )
+    : i fns_n ( nurl_str_len fns )
+    : ~ i r0_p 0
+    ~ < r0_p fns_n {
+        : i r0_e ( __word_end fns fns_n r0_p ) : s f ( __span_dup fns r0_p r0_e ) = r0_p + r0_e 1
         : s seed ( nurl_sym_get g_drop_base f )
         ? & ts & != 0 ( nurl_str_len seed ) != 0 ( __fn_sync_params f ) {
             : ~ s ws ( nurl_str_cat seed `` )
@@ -65316,12 +65490,14 @@ unsafe @ __dyn_virtual_drop_edges → v {
     : ~ b changed T
     ~ changed {
         = changed F
-        : ~ s rf ( nurl_str_cat fns `` )
-        ~ != 0 ( nurl_str_len rf ) {
-            : s f ( str_first_word rf ) = rf ( str_skip_word rf )
-            : ~ s es ( nurl_sym_get g_drop_edges f )
-            ~ != 0 ( nurl_str_len es ) {
-                : s e ( str_first_word es ) = es ( str_skip_word es )
+        : ~ i rf_p 0
+        ~ < rf_p fns_n {
+            : i rf_e ( __word_end fns fns_n rf_p ) : s f ( __span_dup fns rf_p rf_e ) = rf_p + rf_e 1
+            : s es ( nurl_sym_get g_drop_edges f )
+            : i es_n ( nurl_str_len es )
+            : ~ i es_p 0
+            ~ < es_p es_n {
+                : i es_e ( __word_end es es_n es_p ) : s e ( __span_dup es es_p es_e ) = es_p + es_e 1
                 : i c1 ( nurl_str_find e `:` )
                 : s ks ( nurl_str_slice e 0 c1 )
                 : s tail ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
@@ -66099,8 +66275,12 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // the bindings viewing exactly that field take the value it held over
     // (__fs_viewers_take) — owners now, not borrows that end below.
     ? & & == kc 8 >= wid 0 ! ( seq ( bck_field rec 6 ) `e` ) { = out ( bck_fview_take out ( nurl_str_int wid ) ) } {}
-    ~ != 0 ( nurl_str_len rest ) {
-        : s srcs ( str_first_word rest ) = rest ( str_skip_word rest )
+    // (A cursor walk: a first/skip_word step copied the whole rest of the
+    // list, quadratic in its length.)
+    : i rest_n ( nurl_str_len rest )
+    : ~ i rest_p 0
+    ~ < rest_p rest_n {
+        : i rest_e ( __word_end rest rest_n rest_p ) : s srcs ( __span_dup rest rest_p rest_e ) = rest_p + rest_e 1
         : i sid ( nurl_str_to_int srcs )
         // A field lives and dies with its binding.
         : i rid ( bck_path_root sid )
@@ -85451,12 +85631,16 @@ unsafe @ origin_free → v {
 // module-wide list, stamping the function they belong to. Called once
 // per function, after its body has compiled and its name is known.
 @ __merge_impls i syms s src_key s fname s dst_key → v {
-    : ~ s rest ( nurl_sym_get syms src_key )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s w1 ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s w2 ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s w3 ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s w4 ( str_first_word rest ) = rest ( str_skip_word rest )
+    // (A cursor walk: a first/skip_word step copied the whole rest of the
+    // list, quadratic in its length.)
+    : s rest ( nurl_sym_get syms src_key )
+    : i rest_n ( nurl_str_len rest )
+    : ~ i rest_p 0
+    ~ < rest_p rest_n {
+        : i rest_e1 ( __word_end rest rest_n rest_p ) : s w1 ( __span_dup rest rest_p rest_e1 ) = rest_p + rest_e1 1
+        : i rest_e2 ( __word_end rest rest_n rest_p ) : s w2 ( __span_dup rest rest_p rest_e2 ) = rest_p + rest_e2 1
+        : i rest_e3 ( __word_end rest rest_n rest_p ) : s w3 ( __span_dup rest rest_p rest_e3 ) = rest_p + rest_e3 1
+        : i rest_e4 ( __word_end rest rest_n rest_p ) : s w4 ( __span_dup rest rest_p rest_e4 ) = rest_p + rest_e4 1
         // (A raw-pointer parameter hands nothing over: __fn_param_raw.)
         ? & & != 0 ( nurl_str_len w1 ) != 0 ( nurl_str_len w2 )
         & & != 0 ( nurl_str_len w3 ) != 0 ( nurl_str_len w4 )
