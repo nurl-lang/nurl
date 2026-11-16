@@ -20139,17 +20139,23 @@ unsafe @ eng_byte s w i k → i {
 }
 
 // The `assign` at `at`, to a place.
-// Is every loan of `av` (one at least) a loan of `vid` itself?
-@ eng_lends_only i av i vid → b {
+// Is one of `av`'s loans of a value that dies with the closure being read -
+// a local of it or its own parameter - rather than of `vid` itself or of a
+// capture (stmt_assign, agora #872)?
+@ eng_lends_dying i av i vid → b {
     : i loans ( av_loans av )
-    ? == 0 ( sq_len loans ) { ^ F } {}
     : ~ i a 0
     ~ < a ( sq_len loans ) {
         : i l ( sq_at loans a )
-        ? | ! ( el_is_loan l ) != ( pl_var ( el_place l ) ) vid { ^ F } {}
+        ? ( el_is_loan l ) {
+            : i v ( pl_var ( el_place l ) )
+            ? & & >= v 0 != v vid | < ( fv_pidx v ) 0 >= ( fv_pidx v ) g_f_ncap {
+                ? != ( fv_kind v ) VK_TEMP { ^ T } {}
+            } {}
+        } {}
         = a + a 1
     }
-    ^ T
+    ^ F
 }
 
 @ stmt_assign i st i at i target i ln → v {
@@ -20255,12 +20261,12 @@ unsafe @ eng_byte s w i k → i {
         } {}
         : ~ i new ( eng_rvalue st rv ln ddepth vty WK_VAR vid flags vid )
         ? != g_fc_unsup 0 { ^ } {}
-        // a capture given what a call lends of anything but its own value - a
-        // local or a parameter of the closure, another binding: it is a place
-        // outside the closure's frame, as an `inout` parameter is, and nurlc
-        // copies the lend in where the call lent - the capture owns the copy
-        // (gen_assign, agora #872)
-        ? & & & & & & == cown OW_P >= ( fv_pidx vid ) 0 < ( fv_pidx vid ) g_f_ncap == ( av_own new ) OW_L ( av_call new ) & & != vty ET_NONE ! ( et_is_view vty ) & != ( et_kind vty ) EK_CLOSURE ( et_copyable vty ) ! ( eng_lends_only new vid ) {
+        // a capture given what a call lends of what dies with the closure - a
+        // local or a parameter of the closure: it is a place outside the
+        // closure's frame, as an `inout` parameter is, and nurlc copies the
+        // lend in where the call lent - the capture owns the copy (gen_assign,
+        // agora #872). (A lend of another capture is left a lend.)
+        ? & & & & & & == cown OW_P >= ( fv_pidx vid ) 0 < ( fv_pidx vid ) g_f_ncap == ( av_own new ) OW_L ( av_call new ) & & != vty ET_NONE ! ( et_is_view vty ) & != ( et_kind vty ) EK_CLOSURE ( et_copyable vty ) ( eng_lends_dying new vid ) {
             = new ( av_make OW_O 0 0 ( av_held new ) F )
         } {}
         : i nown ( av_own new )
@@ -74112,15 +74118,15 @@ unsafe @ gen_assign i lex i syms i cg → s {
         ( nurl_sym_has_word syms `__last_phi_idents__` name )
         // A binding the closure captured by pointer (`__outer_owned`) is a
         // place outside the closure's frame, as an `inout` parameter is
-        // (agora #438): what a call lends it of anything but its own value
-        // - a local or a parameter of the closure, released when the closure
-        // returns, another binding - is copied in where the call lent, and
-        // the capture owns what it holds. Taken for a lend, it went on
-        // pointing at the closure's local (agora #872). (A call that lends
-        // only the capture itself, `= cur ( next cur )`, is its own value
-        // handed back: below, by its key. One that may lend either, `( pick
-        // o t k )`, is copied on every run it lent: the copy is made before
-        // the old value goes.)
+        // (agora #438): what a call lends it of what dies with the closure - a
+        // local or a parameter of the closure, a value its env holds - is
+        // copied in where the call lent, and the capture owns what it holds.
+        // Taken for a lend, it went on pointing at the closure's local after
+        // the closure returned (agora #872). (A call that lends only the
+        // capture itself, `= cur ( next cur )`, or another capture by
+        // pointer, is left as it was. One that may lend either the capture or
+        // a local, `( pick o t k )`, is copied on every run it lent: the copy
+        // is made before the old value goes.)
         : ~ b __cp_call F
         // (Asked only of a store into a capture: every other `=` skips it.)
         : ~ s __cc_lr ``
@@ -74132,7 +74138,10 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // (…and where what it lends is not known yet - a generic instance,
         // a callee below - one not handed the capture cannot lend its value:
         // copied where it lent, by the call's answer, as the rest.)
-        | | g_call_lend_unnamed & != 0 ( nurl_str_len __cc_lr ) ! ( __words_all_equal __cc_lr name ) & == 0 ( nurl_str_len __cc_lr ) ! ( str_contains_word ( nurl_sym_get syms `__last_call_args__` ) name ) {
+        // (Only a lend of what may die with the closure: one of another
+        // capture by pointer is that binding's value outside, which the
+        // capture borrows as the same line outside the closure would.)
+        | & g_call_lend_unnamed == 0 ( nurl_str_len __cc_lr ) ( __cc_dying_lend syms ? != 0 ( nurl_str_len __cc_lr ) __cc_lr ( nurl_sym_get syms `__last_call_args__` ) name ) {
             : s __cc_ro ( mem_call_retown syms cg )
             ? & != 0 ( nurl_str_len __cc_ro ) ! ( seq __cc_ro `true` ) {
                 ? ( __clone_supported vt syms ) {
@@ -74272,8 +74281,16 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // owns what it holds on every path, and the old value goes by its
         // flag as for any other assignment. (A value that cannot be copied
         // is refused there: the owner has to give it up instead.)
+        // (…and a join stored into a capture by pointer whose arms may lend
+        // what dies with the closure - `= o ? c ( id loc ) ( id x )`: copied
+        // where it lent, as a call's lend is above; agora #872.)
+        : b __cc_join & & & & != 0 g_bck_closure_depth | == rhs_eff_tt TT_QUEST == rhs_eff_tt TT_QUESTQUEST != 0 ( nurl_str_len __ud_ptr ) != 0 ( nurl_sym_len2 syms __ud_ptr `__outer_owned` )
+        ( __cc_dying_lend syms ( nurl_str_cat3 ( nurl_sym_get syms `__last_join_lend_args__` ) ` ` ( nurl_sym_get syms `__last_phi_idents__` ) ) name )
+        ? & & __cc_join ! ( __clone_supported vt syms ) ! ( nurl_sym_has_word syms `__last_phi_idents__` name ) {
+            ( own_die_stmt lex ( nurl_str_cat4 ( nurl_str_cat3 `'` name `' is captured by the closure and given what this join may lend, which may be a local or a parameter of the closure - gone when it returns - and a '` ) ( llvm_to_nurl vt ) `' has no copy to give '` ( nurl_str_cat name `' instead (agora #872). Give it a value of its own, or keep the value outside the closure.` ) ) )
+        } {}
         ? & & & != 0 ( nurl_str_len __ud_ptr ) | == rhs_eff_tt TT_QUEST == rhs_eff_tt TT_QUESTQUEST
-        ( nurl_sym_has_word syms `__last_phi_idents__` name ) | ( __clone_supported vt syms ) ( __nc_drop_ty vt ) {
+        | ( nurl_sym_has_word syms `__last_phi_idents__` name ) & __cc_join ( __clone_supported vt syms ) | ( __clone_supported vt syms ) ( __nc_drop_ty vt ) {
             : s __sj_jo ( nurl_sym_get syms `__last_join_own__` )
             ? ! ( seq __sj_jo `true` ) {
                 : ~ s __sj_lent `1`
@@ -100697,6 +100714,31 @@ unsafe @ __sx_names_capture i syms s sx → b {
         } {}
         ? & != 0 ( nurl_str_len cn ) == 0 ( nurl_sym_len2 syms cn `__ptr` ) { ( __park_clo_nc_ret lex cn gn line tshow ) } {}
     } {}
+}
+
+// Is one of `ws` — the bindings a call may lend, or its arguments where its
+// lends are not known yet — a value that may die with the closure: a local
+// or a parameter of the closure, or a capture its env took over? Not the
+// capture `name` itself, another capture (the caller's value), a global, or
+// a temporary (gen_assign's capture rule, agora
+// #872).
+@ __cc_dying_lend i syms s ws s name → b {
+    : ~ s rest ( nurl_str_cat ws `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w0 ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i wd ( nurl_str_find w0 `.` )
+        : s w ? > wd 0 ( nurl_str_slice w0 0 wd ) ( nurl_str_cat w0 `` )
+        ? | | ( seq w name ) ( seq w `-` ) == 0 ( nurl_sym_len syms w ) { continue } {}
+        ? != 0 ( nurl_str_starts w `__` ) { continue } {}
+        ? ( seq ( nurl_sym_get2 syms w `__captured_byref` ) `1` ) { continue } {}
+        ? != 0 ( nurl_sym_len2 syms w `__global` ) { continue } {}
+        // (A capture by value the closure does not take over is a copy of
+        // the caller's handle, which the env does not release: as the
+        // caller's binding.)
+        ? & != 0 ( nurl_sym_len2 syms w `__envslot` ) ! ( str_contains_word ( nurl_sym_get syms `__clo_consumed__` ) w ) { continue } {}
+        ^ T
+    }
+    ^ F
 }
 
 // A call whose result cannot be copied, stored into capture `name` of a

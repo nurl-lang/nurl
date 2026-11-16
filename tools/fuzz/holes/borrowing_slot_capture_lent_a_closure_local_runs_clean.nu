@@ -5,11 +5,13 @@
 $ `stdlib/core/string.nu`
 
 @ id ? String a → ?String { ^ a }
+
 @ mk s t → ?String { ^ @ ?String { T ( string_from t ) } }
+
 @ show ? String o → v { ?? o { T s → { ( nurl_println ( string_data s ) ) } F → { ( nurl_println `none` ) } } }
 
 @ g ? String p → v {
-    : ~ ?String o ( id p )
+    : ~ ? String o ( id p )
     : ~ ( @ v ) f \ → v {
         : ?String other ( mk `a closure local value long enough for heap` )
         = o ( id other )
