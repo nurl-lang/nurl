@@ -1,0 +1,72 @@
+# containers/runner/compose.yaml — self-hosted GitHub Actions runners for
+# the nurl-lang organization, on any machine with Docker. See README.md.
+#
+#   cp .env.example .env      # then edit: PAT file, slots, name prefix
+#   docker compose up -d --build
+#   docker compose logs -f supervisor
+name: nurl-runner
+
+services:
+  # Builds the runner image; the supervisor starts its containers, one per
+  # job slot. This service itself only runs `true` and exits.
+  runner-image:
+    build:
+      context: ./runner
+      args:
+        RUNNER_VERSION: ${RUNNER_VERSION:-}
+    image: nurl-runner:local
+    entrypoint: ["/bin/true"]
+    restart: "no"
+
+  # Pull-through cache of Docker Hub. Every job starts with an empty inner
+  # Docker, so without this each job would pull nurllang/ci (and whatever
+  # else it uses) from Docker Hub again. A proxy registry refuses pushes:
+  # a job cannot plant an image here for the next one.
+  mirror:
+    image: registry:3
+    restart: unless-stopped
+    environment:
+      REGISTRY_PROXY_REMOTEURL: https://registry-1.docker.io
+      REGISTRY_PROXY_USERNAME: ${DOCKERHUB_USERNAME:-}
+      REGISTRY_PROXY_PASSWORD: ${DOCKERHUB_TOKEN:-}
+    volumes:
+      - mirror-data:/var/lib/registry
+
+  supervisor:
+    build: ./supervisor
+    image: nurl-runner-supervisor:local
+    restart: unless-stopped
+    depends_on:
+      runner-image:
+        condition: service_completed_successfully
+      mirror:
+        condition: service_started
+    # Long enough to deregister every idle runner on `docker compose stop`.
+    stop_grace_period: 60s
+    environment:
+      GITHUB_ORG: ${GITHUB_ORG:-nurl-lang}
+      GITHUB_PAT_FILE: /run/secrets/github_pat
+      RUNNER_SLOTS: ${RUNNER_SLOTS:-2}
+      RUNNER_NAME_PREFIX: ${RUNNER_NAME_PREFIX:?set RUNNER_NAME_PREFIX in .env}
+      RUNNER_LABELS: ${RUNNER_LABELS:-nurl-selfhosted}
+      RUNNER_GROUP_ID: ${RUNNER_GROUP_ID:-1}
+      RUNNER_CPUS: ${RUNNER_CPUS:-}
+      RUNNER_MEMORY: ${RUNNER_MEMORY:-}
+      RUNNER_IMAGE: nurl-runner:local
+      RUNNER_NETWORK: nurl-runner
+      DIND_REGISTRY_MIRROR: http://mirror:5000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    secrets:
+      - github_pat
+
+secrets:
+  github_pat:
+    file: ${NURL_RUNNER_PAT_FILE:?set NURL_RUNNER_PAT_FILE in .env}
+
+volumes:
+  mirror-data:
+
+networks:
+  default:
+    name: nurl-runner
