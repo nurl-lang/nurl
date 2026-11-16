@@ -114,7 +114,8 @@ PRIMS = {
     "vec_shrink_to_fit": S(["in"], effects=[(0, (), "realloc")]),
     "vec_remove": S(["in", "in"], res="own", effects=[(0, (), "drop")], elems=[0],
                     rholds=[(("#T0",), 0, E, "held")]),
-    "vec_data": None,  # raw pointer: unsafe only
+    # a raw pointer to the elements: a view of them (AGORA-877)
+    "vec_data": S(["in"], res="lent", lends=[(0, E, "view")]),
     # ---- Slice ----------------------------------------------------------
     "slice_from_vec": S(["in"], res="lent", lends=[(0, (), "view")]),
     "slice_at": S(["in", "in"], res="lent", lends=[(0, E, "handle")], elems=[0]),

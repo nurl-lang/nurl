@@ -298,6 +298,7 @@
 : i ENG_SQ_MEMO 4096
 
 : ~ i g_eng_on 0  // 1: the ownership engine reads the module's IR and prints its answers (`--emit-core --engine`)
+: ~ i g_eng_rawwalk 0  // EXPERIMENT AGORA-877: a raw function's summary from the engine's own walk
 : ~ i g_eng_decide 0  // 1: what the engine finds refuses the program, printed as diagnostics; no IR text is made (`--engine-decides`)
 : ~ i g_eng_nref 0  // …how many findings it reported
 : ~ i g_core_flushed 0  // 1 once core_flush has run
@@ -11291,7 +11292,9 @@ unsafe @ eng_keep_fn → v {
     // (a trusted function whose body crosses the raw boundary is never
     // read: the walk's answers stand for it, eng_select. Only what its
     // summary is read with is kept - its parameters - not its statements)
-    : b body ! & != 0 & g_core_fflags 1 != 0 & g_core_fflags 6
+    // (…unless the engine walks raw bodies, and this one is the program's
+    // own, not a trusted library file's: AGORA-877)
+    : b body | ! & != 0 & g_core_fflags 1 != 0 & g_core_fflags 6 & != 0 g_eng_rawwalk == 0 & g_core_fflags 16
     : i code_n ? body g_core_code_n 0
     : i pl_n ? body g_core_pl_n 0
     // (its parameters and captures, counted once)
@@ -11735,6 +11738,7 @@ unsafe @ eng_keep_fn → v {
 @ et_is_view i t → b {
     ? < t 0 { ^ F } {}
     : i kind ( et_kind t )
+    ? & == kind EK_PTR != 0 g_eng_rawwalk { ^ T } {}
     ^ | == kind EK_S == kind EK_SLICE
 }
 
@@ -11798,7 +11802,10 @@ unsafe @ eng_keep_fn → v {
 @ __et_scalar i t → b {
     ? < t 0 { ^ T } {}
     : i kind ( et_kind t )
-    ? | == kind EK_SCALAR == kind EK_PTR { ^ T } {}
+    ? == kind EK_SCALAR { ^ T } {}
+    // (a pointer is a view of what it was made from - agora #877 - when
+    // the engine walks raw bodies; else a number, as safe code has none)
+    ? == kind EK_PTR { ^ == 0 g_eng_rawwalk } {}
     ? == kind EK_OPT { ^ ( __et_scalar ( et_at t ET_E1 ) ) } {}
     ? != kind EK_NAMED { ^ F } {}
     ? ( __et_in_seen t ) { ^ F } {}
@@ -21903,6 +21910,8 @@ unsafe @ eng_byte s w i k → i {
     ( eng_prim `string_clone` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `string_concat` `in in` `own` `` `` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `string_data` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `vec_data` `in` `lent` `0 * view` `` `` `` `` `` `` `` `` `` `` )
+    ( eng_prim `slice_data` `in` `lent` `0 * view` `` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `string_free` `sink` `none` `` `` `` `` `0` `` `` `` `` `` `` )
     ( eng_prim `string_from` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `string_len` `in` `none` `` `` `` `` `` `` `` `` `` `` `` )
@@ -22626,7 +22635,7 @@ unsafe @ eng_byte s w i k → i {
                 : ~ b keep T
                 ? != 0 & flags 1 {
                     ? | >= ( sx_declared name ) 0 >= ( sx_declared_tmpl ( ef_at fn EF_TMPL ) ) 0 { = keep F } {
-                        ? != 0 & flags 6 {
+                        ? & != 0 & flags 6 | == 0 g_eng_rawwalk != 0 & flags 16 {
                             // its body crosses the raw boundary (raw memory, a
                             // raw callee, a foreign function): the walk's
                             // answers stand for it until a summary is declared
@@ -23967,7 +23976,7 @@ unsafe @ core_print_fn → v {
     ( __core_o `\t` ) ( __core_oi g_core_nparam )
     ( __core_o `\t` ) ( __core_oi g_core_fline )
     ( __core_o `\t` ) ( __core_o # s g_core_ffile )
-    ( __core_o `\t` ) ( __core_oi g_core_fflags )
+    ( __core_o `\t` ) ( __core_oi & g_core_fflags 15 )
     ( __core_o `\t` ) ( __core_o # s g_core_ftmpl ) ( __core_o `\n` )
     : *i vs # *i # s g_core_vars
     : ~ i k 0
@@ -92039,7 +92048,10 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_set g_fn_escapes `__in_defer_body__` `` )
     // Borrow checker: start a fresh per-function statement list.
     ( bck_fn_begin )
-    ? != 0 g_core_on { ( core_fn_begin fname ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ? ( bck_unsafe_ctx ) 1 0 g_inst_tmpl ) } {}
+    // (bit 4, 16: a function of a trusted library file - its raw body
+    // keeps the walk's summary when the engine walks raw bodies, AGORA-877;
+    // never printed)
+    ? != 0 g_core_on { ( core_fn_begin fname ( nurl_lex_filename lex ) ( nurl_lex_line lex ) | ? ( bck_unsafe_ctx ) 1 0 ? ( bck_trusted_file ( nurl_lex_filename lex ) ) 16 0 g_inst_tmpl ) } {}
     ( nurl_sym_def g_ptrtab `__ptr_src__` `` )
     = g_ptr_own_n 0
     // (A generic instance compiled inside another function keeps its own.)
@@ -115963,6 +115975,7 @@ unsafe @ main → i {
         // (the engine decides beside the walk: the walk's own refusals
         // still stop the compile where they are met, and what the engine
         // finds at the end of the module refuses it too)
+        ? ( seq a `--engine-rawwalk` ) { = g_eng_rawwalk 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-decides` ) { = g_core_on 1 = g_eng_on 1 = g_eng_decide 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-trace2` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = g_eng_on 1 = g_eng_dbg 2 = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--coverage-link-ir=` ) {

@@ -1,0 +1,4 @@
+compiler/tests/fresh_into_borrowed_copy.nu	runs-clean	rejected	main 108 in the call to 'rename_via_helper', a part of argument 1 views what the call changes in it
+compiler/tests/lend_back_to_same_binding.nu	runs-clean	rejected	take_body 59 in the call to 'put_slot', argument 3 views what the call changes through argument 1
+examples/chaotic-aggressor.nu	runs-clean	rejected	main 197 the drop of 'st' uses a view of 'st.mem', which was changed or released
+tools/fuzz/holes/sealed_arc_handle_share_left_behind_at_a_spawn.nu	runs-clean	rejected	__closure_1 29 field 'v' of an element of 't.a' is inside what an Arc shares, and is changed here
