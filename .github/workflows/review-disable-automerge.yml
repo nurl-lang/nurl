@@ -1,0 +1,65 @@
+name: review-disable-automerge
+
+# A review is not required to merge, but a review that requests changes
+# should stop the PR from landing on its own. GitHub only blocks a merge on
+# "changes requested" when approvals are required, so this job does it:
+# when a review with state `changes_requested` is submitted, it turns the
+# PR's auto-merge off and, if the PR is already in the merge queue, takes
+# it out. The author turns auto-merge back on (`gh pr merge <N> --squash
+# --auto`) once the review has been answered.
+#
+# A PR from a fork gets a read-only token on `pull_request_review`, so for
+# those this job cannot change anything and fails visibly instead.
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  disable:
+    if: github.event.review.state == 'changes_requested'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Turn off auto-merge and leave the merge queue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          REVIEWER: ${{ github.event.review.user.login }}
+        run: |
+          set -euo pipefail
+          owner=${REPO%/*}; name=${REPO#*/}
+          read -r id auto queued < <(gh api graphql \
+            -F owner="$owner" -F name="$name" -F pr="$PR" -f query='
+              query($owner:String!,$name:String!,$pr:Int!){
+                repository(owner:$owner,name:$name){
+                  pullRequest(number:$pr){
+                    id
+                    autoMergeRequest{ enabledAt }
+                    mergeQueueEntry{ id }
+                  }
+                }
+              }' --jq '.data.repository.pullRequest
+                | "\(.id) \(.autoMergeRequest != null) \(.mergeQueueEntry != null)"')
+
+          did=""
+          if [ "$auto" = true ]; then
+            gh api graphql -f id="$id" -f query='
+              mutation($id:ID!){ disablePullRequestAutoMerge(input:{pullRequestId:$id}){ clientMutationId } }' >/dev/null
+            did="auto-merge turned off"
+          fi
+          if [ "$queued" = true ]; then
+            gh api graphql -f id="$id" -f query='
+              mutation($id:ID!){ dequeuePullRequest(input:{id:$id}){ clientMutationId } }' >/dev/null
+            did="${did:+$did, }removed from the merge queue"
+          fi
+
+          if [ -z "$did" ]; then
+            echo "PR #$PR had no auto-merge and was not queued; nothing to do."
+            exit 0
+          fi
+          echo "PR #$PR: $did."
+          gh pr comment "$PR" --repo "$REPO" --body "\`$REVIEWER\` requested changes, so this PR was ${did}. Re-enable auto-merge (\`gh pr merge $PR --squash --auto\`) once the review has been addressed."
