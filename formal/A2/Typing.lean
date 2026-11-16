@@ -1484,6 +1484,8 @@ def Stmt.hasThru : Stmt → Bool
   | .scopeL _ _ _ s => s.hasThru
   | .withElem _ _ _ s => s.hasThru
   | .callcE _ _ _ _ s => s.hasThru
+  | .block s => s.hasThru
+  | .loop s => s.hasThru
   | _ => false
 
 /-- The functions a statement calls by index: a call, a `recover` body, a
@@ -1508,6 +1510,8 @@ def Stmt.calls : Stmt → List Nat
   | .scopeL _ _ _ s => s.calls
   | .withElem _ _ _ s => s.calls
   | .callcE _ _ _ _ s => s.calls
+  | .block s => s.calls
+  | .loop s => s.calls
   | _ => []
 
 /-- A function that changes elements through a borrow, or calls one that
@@ -1661,6 +1665,8 @@ def Stmt.assigns : Stmt → List Var
   | .scopeL _ _ _ s => s.assigns
   | .withElem _ _ _ s => s.assigns
   | .callcE _ _ _ _ s => s.assigns
+  | .block s => s.assigns
+  | .loop s => s.assigns
   | _ => []
 
 /-- A2-drop.3a: how many times a statement may give `x` a new value on one
@@ -1687,6 +1693,8 @@ def Stmt.asgMax (x : Var) : Stmt → Nat
   | .scopeL _ _ _ s => s.asgMax x
   | .withElem _ _ _ s => s.asgMax x
   | .callcE _ _ _ _ s => s.asgMax x
+  | .block s => s.asgMax x
+  | .loop s => 2 * s.asgMax x
   | _ => 0
 
 /-! ### Functions -/
@@ -1904,6 +1912,9 @@ def Stmt.vars : Stmt → List Var
   | .insert x i y => x :: y :: i.vars
   | .withElem v i x s => x :: v :: i.vars ++ s.vars
   | .callcE x c _ zs s => x :: c :: zs ++ s.vars
+  | .block s => s.vars
+  | .exit _ => []
+  | .loop s => s.vars
 
 theorem Expr.vars_rename (ρ : Var → Var) (e : Expr) : (e.rename ρ).vars = e.vars.map ρ := by
   induction e <;> simp_all [Expr.rename, Expr.vars]

@@ -1038,6 +1038,9 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .insert x i y => .insert (ρ x) (i.rename ρ) (ρ y)
   | .withElem v i x s => .withElem (ρ v) (i.rename ρ) (ρ x) (s.rename ρ)
   | .callcE x c j zs s => .callcE (ρ x) (ρ c) j (zs.map ρ) (s.rename ρ)
+  | .block s => .block (s.rename ρ)
+  | .exit n => .exit n
+  | .loop s => .loop (s.rename ρ)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -1251,6 +1254,9 @@ def Stmt.src : Stmt → Bool
   | .insert _ _ _ => true
   | .withElem _ _ _ s => s.src
   | .callcE _ _ _ _ s => s.src
+  | .block s => s.src
+  | .exit _ => true
+  | .loop s => s.src
 
 inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | seqSkip {m : Mem} {b : Stmt} : Step P m (.seq .skip b) (.ok m b)
@@ -1624,6 +1630,29 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
         (.ok { (m.set m.nv ⟨true, some p⟩) with
                 nv := m.nv + 1, blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) }
           (.seq (.scopeD m.nv f .skip) r))
+  /-- Agora #871: an exit leaves the rest of a sequence. -/
+  | seqExit {m : Mem} {n : Nat} {b : Stmt} : Step P m (.seq (.exit n) b) (.ok m (.exit n))
+  /-- Agora #871: an exit leaves a scope by its end: the frame's own end
+      drops what it owns (`scopeSkip`), then the exit goes on. -/
+  | scopeExit {m : Mem} {x : Var} {n : Nat} :
+      Step P m (.scope x (.exit n)) (.ok m (.seq (.scope x .skip) (.exit n)))
+  /-- Agora #871: ... and a destructor frame by its end, which runs the
+      destructor (`scopeDEnd`, `scopeDDrain`, …), then the exit goes on. -/
+  | scopeDExit {m : Mem} {x : Var} {f n : Nat} :
+      Step P m (.scopeD x f (.exit n)) (.ok m (.seq (.scopeD x f .skip) (.exit n)))
+  /-- Agora #871: a block runs its body in place ... -/
+  | blockIn {m m' : Mem} {s s' : Stmt} :
+      Step P m s (.ok m' s') → Step P m (.block s) (.ok m' (.block s'))
+  /-- ... ends with it ... -/
+  | blockSkip {m : Mem} : Step P m (.block .skip) (.ok m .skip)
+  /-- ... is left by an `exit 0` of it, which ends there ... -/
+  | blockExit0 {m : Mem} : Step P m (.block (.exit 0)) (.ok m .skip)
+  /-- ... and by an exit of more blocks, which goes on with one block fewer ... -/
+  | blockExit {m : Mem} {n : Nat} : Step P m (.block (.exit (n + 1))) (.ok m (.exit n))
+  /-- ... and a panic in it goes on (the block owns nothing). -/
+  | blockP {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Step P m (.block s) (.panic m')
+  /-- Agora #871: `while T`: the body, then the loop again. -/
+  | loop {m : Mem} {s : Stmt} : Step P m (.loop s) (.ok m (.seq s (.loop s)))
 
 /-- Agora #610: an orphan awaits its destructor: some `dead` block still holds
     its payload, which `Step.reap` may move out.  Between the steps of a run
@@ -1685,6 +1714,7 @@ def Blocked (m : Mem) : Stmt → Prop
   | .catchR _ _ s => Blocked m s
   | .scopeD _ _ s => Blocked m s
   | .scopeL _ _ _ s => Blocked m s
+  | .block s => Blocked m s
   | _ => False
 
 /-- A configuration that is neither finished nor able to step, nor (A3.2)

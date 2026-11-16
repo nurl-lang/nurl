@@ -64,6 +64,9 @@ def _root_.A2.Stmt.nm : Stmt → List Var
   | .insert x i y => x :: y :: i.vars
   | .withElem v i x s => x :: v :: i.vars ++ s.nm
   | .callcE x c _ zs s => x :: c :: zs ++ s.nm
+  | .block s => s.nm
+  | .exit _ => []
+  | .loop s => s.nm
 
 theorem nm_vars (s : Stmt) : ∀ v, v ∉ s.vars → v ∉ s.nm := by
   induction s <;> intro v hv <;> simp_all [Stmt.nm, Stmt.vars]
@@ -238,6 +241,7 @@ def CapShr (P : Prog) (st : Var → Option Slot) (nv : Nat) : Stmt → Prop
   | .frozen _ s => CapShr P st nv s
   | .catchR _ _ s => CapShr P st nv s
   | .scopeL _ _ _ s => CapShr P st nv s
+  | .block s => CapShr P st nv s
   | .callc _ c j zs _ => ∀ o fs te ms env cs f fn, st c = some ⟨o, some (.pkg fs te ms env cs)⟩ →
       fs[j]? = some f → P[f]? = some fn → ∀ p ∈ fn.params.zip (nv :: zs ++ cs.map (·.1)),
       p.1.1 ≠ .inp → p.2 ∈ nv :: zs ∨ ∀ o' w, st p.2 = some ⟨o', some w⟩ → ¬ Shr w
@@ -340,11 +344,11 @@ theorem Step.keepSlot {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     show (m1.remove p).st y = _
     simp only [Mem.remove_st]; rw [upd_ne _ _ hyn.1]; exact (ih hck hy hw hyn.2 hlt).1
   | frozenSkip => intro _ _ _ _ _ _ _ _; exact ⟨rfl, fun _ _ he => by cases he; nm_close⟩
-  | frozenIn _ ih =>
+  | frozenIn _ ih | blockIn _ ih =>
     intro hck y o w hy hw hyn hlt
     obtain ⟨h1, h2⟩ := ih hck hy hw hyn hlt
     exact ⟨h1, fun _ _ he => by cases he; have := h2 _ _ rfl; exact this⟩
-  | frozenP _ ih =>
+  | frozenP _ ih | blockP _ ih =>
     intro hck y o w hy hw hyn hlt
     exact ⟨(ih hck hy hw hyn hlt).1, fun _ _ he => by cases he⟩
   | @assign m1 x r v o0 sl a' _ he hx hd =>

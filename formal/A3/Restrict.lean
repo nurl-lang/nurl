@@ -321,11 +321,11 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .rbindP h1 hp, rfl⟩
   | frozenSkip => exact ⟨_, .frozenSkip, rfl, .refl _⟩
-  | frozenIn _ ih =>
+  | frozenIn _ ih | blockIn _ ih =>
     obtain ⟨r1, h1, hd⟩ := ih
     obtain ⟨s1, rfl, hg⟩ := ResDown.ok_inv hd
     exact ⟨_, .frozenIn h1, rfl, .frozen _ hg⟩
-  | frozenP _ ih =>
+  | frozenP _ ih | blockP _ ih =>
     obtain ⟨r1, h1, hd⟩ := ih
     obtain rfl := ResDown.panic_inv hd
     exact ⟨_, .frozenP h1, rfl⟩

@@ -3206,6 +3206,7 @@ def _root_.A2.Stmt.lkeys : Stmt → List Nat
   | .frozen _ s => s.lkeys
   | .catchR _ _ s => s.lkeys
   | .scopeL k _ _ s => k :: s.lkeys
+  | .block s => s.lkeys
   | _ => []
 
 /-- A3.5: thread `t`'s next step changes the state of cell `k` (a library

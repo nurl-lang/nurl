@@ -261,7 +261,7 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     exact ⟨_, GhostRel.rbind _ hg, Step.rbindIn hs⟩
   | @rbindP m1 _ _ _ _ hp ih => exact Step.rbindP (m1 := liftMem a2 m1) ih hp
   | frozenSkip => exact ⟨_, GhostRel.refl _, Step.frozenSkip⟩
-  | frozenIn _ ih =>
+  | frozenIn _ ih | blockIn _ ih =>
     obtain ⟨s'', hg, hs⟩ := ih
     exact ⟨_, GhostRel.frozen _ hg, Step.frozenIn hs⟩
   | frozenP _ ih => exact Step.frozenP ih

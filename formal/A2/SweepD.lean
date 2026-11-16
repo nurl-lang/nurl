@@ -48,6 +48,9 @@ theorem CatchOK.of_st {m m' : Mem} (hst : m'.st = m.st) (hnv : m.nv ≤ m'.nv) (
   | .insert .., _ => trivial
   | .withElem .., _ => trivial
   | .callcE .., _ => trivial
+  | .block k, h => CatchOK.of_st hst hnv hb (s := k) h
+  | .exit .., _ => trivial
+  | .loop .., _ => trivial
 
 /-- The marking sweep from the roots `R` (which include the store's slots):
     `Mem.sweepD` is the one from the store's own slots (`Mem.sweepD_eq`), A3's

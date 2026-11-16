@@ -75,8 +75,8 @@ theorem Step.keep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact ih
   | frozenSkip => intro _ _; rfl
-  | frozenIn _ ih => exact ih
-  | frozenP _ ih => exact ih
+  | frozenIn _ ih | blockIn _ ih => exact ih
+  | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he hx hd =>
     intro i hi
     have hav1 := (EvalR.avoids he hb hav hf).1

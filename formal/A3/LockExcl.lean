@@ -46,6 +46,7 @@ def _root_.A2.Stmt.lfr : Stmt → List (Nat × Ty)
   | .frozen _ s => s.lfr
   | .catchR _ _ s => s.lfr
   | .scopeL k t _ s => (k, t) :: s.lfr
+  | .block s => s.lfr
   | _ => []
 
 theorem lfr_fst (s : Stmt) : s.lfr.map Prod.fst = s.lkeys := by
@@ -408,12 +409,12 @@ theorem Step.stay {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) {
         ∀ m' s', r = .ok m' s' → s.lkeys.count k ≤ 1 → k ∉ s'.lkeys) := by
   revert hk
   induction h with
-  | seqL _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeDIn _ ih =>
+  | seqL _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | catchIn _ ih | scopeDIn _ ih =>
     intro hk
     rcases ih hk with h1 | ⟨h1, hs, h2⟩
     · exact .inl h1
     · exact .inr ⟨h1, hs, fun m' s' he hc => by cases he; have h3 := h2 _ _ rfl hc; exact h3⟩
-  | seqP _ ih | frozenP _ ih =>
+  | seqP _ ih | frozenP _ ih | blockP _ ih =>
     intro hk
     rcases ih hk with h1 | ⟨h1, hs, _⟩
     · exact .inl h1
@@ -488,7 +489,7 @@ theorem Step.taken_stay {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m 
     (hk : Out m k) : r.mem.taken k = m.taken k := by
   revert hk
   induction h with
-  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | frozenP _ ih | catchIn _ ih
+  | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | frozenP _ ih | blockP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih | scopeP _ _ _ ih | rbindP _ _ ih | scopeDPMoved _ _ ih | catchP _ _ ih
     | scopeDP _ _ _ ih | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih => exact fun hk => ih hk
   | scopeLP _ hrl ih => exact fun hk => (congrFun (Release.taken_eq hrl) k).trans (ih hk)

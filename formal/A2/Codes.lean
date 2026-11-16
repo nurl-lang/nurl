@@ -502,7 +502,7 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
   | scopeSkip _ _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨(hm.of_st rfl).remove _, trivial⟩
-  | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeLIn _ ih =>
+  | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | catchIn _ ih | scopeLIn _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     obtain ⟨h1, h2⟩ := (ih hm hB hs).1 _ _ rfl; exact ⟨h1, h2⟩
   | scopeP _ _ _ ih =>
@@ -539,7 +539,7 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
   | frozenSkip | catchSkip =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact ⟨hm, trivial⟩
-  | frozenP _ ih =>
+  | frozenP _ ih | blockP _ ih =>
     intro hm hB hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact (ih hm hB hs).2 _ rfl
   | catchP _ _ ih =>
@@ -757,6 +757,8 @@ def Stmt.globsAt (GT : GTy) : Stmt → Prop
   | .scopeL _ _ _ s => s.globsAt GT
   | .withElem _ _ _ s => s.globsAt GT
   | .callcE _ _ _ _ s => s.globsAt GT
+  | .block s => s.globsAt GT
+  | .loop s => s.globsAt GT
   | _ => True
 
 /-- **A3.6: the program reads its globals at their declared types**: every
@@ -806,7 +808,7 @@ theorem globs_step {P : Prog} {GT : GTy} (hPG : ProgGlobs P GT) {m : Mem} {s : S
     (hst : Step P m s r) : s.globsAt GT → ∀ m' s', r = .ok m' s' → s'.globsAt GT := by
   induction hst with
   | seqL _ ih => intro hs _ _ h; cases h; exact ⟨ih hs.1 _ _ rfl, hs.2⟩
-  | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | catchIn _ ih | scopeDIn _ ih | scopeLIn _ ih =>
+  | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | catchIn _ ih | scopeDIn _ ih | scopeLIn _ ih =>
     intro hs _ _ h; cases h; simp only [Stmt.globsAt]; exact ih hs _ _ rfl
   | letcall hf _ _ => intro hs _ _ h; cases h; exact ⟨callIn_globs hPG hf _ _ _, hs⟩
   | letrec hf _ _ => intro hs _ _ h; cases h; exact ⟨callIn_globs hPG hf _ _ _, hs⟩

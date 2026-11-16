@@ -593,7 +593,7 @@ theorem Step.panic_blkBack {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.
     cases hr; exact BlkBack.refl _
   | scopeP _ _ _ ih => cases hr; have h := ih rfl; exact h
   | rbindP _ _ ih => cases hr; have h := ih rfl; exact h
-  | frozenP _ ih => cases hr; exact ih rfl
+  | frozenP _ ih | blockP _ ih => cases hr; exact ih rfl
   | scopeDPMoved _ _ ih => cases hr; have h := ih rfl; exact h
   | scopeLP _ hrl ih => cases hr; exact (ih rfl).trans hrl.back
   | _ => cases hr

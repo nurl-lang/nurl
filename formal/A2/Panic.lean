@@ -343,7 +343,7 @@ theorem panic_unwind {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.pani
       · simp [Mem.remove]
       · have hvp : v ≠ p := fun e => hnd.1 (e ▸ hv)
         simp [Mem.remove, upd_ne _ _ hvp, h2 v hv]
-  | frozenP _ ih => cases hr; exact ih hnd rfl
+  | frozenP _ ih | blockP _ ih => cases hr; exact ih hnd rfl
   | letdP _ =>
     cases hr; exact ⟨fun _ _ => rfl, fun v hv => by simp [Stmt.spine] at hv, hh, hc, rfl, rfl, BlkBack.refl _⟩
   | withElemOOB _ _ _ _ =>

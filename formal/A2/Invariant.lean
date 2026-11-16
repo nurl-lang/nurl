@@ -761,6 +761,7 @@ def Stmt.spine : Stmt → List Var
   | .frozen _ s => s.spine
   | .catchR _ _ s => s.spine
   | .scopeL _ _ x s => x :: s.spine
+  | .block s => s.spine
   | _ => []
 
 /-- An address is covered: a tree some binding owns holds it, or (A3.1) a
@@ -793,6 +794,7 @@ def CatchOK (m : Mem) : Stmt → Prop
         ∃ bl', m.blk k = some bl' ∧ BlkKeep bl bl') ∧
       CatchOK m s
   | .scopeL _ _ _ s => CatchOK m s
+  | .block s => CatchOK m s
   | _ => True
 
 /-- A borrowed parameter depends only on what was bound before its call: on
@@ -806,6 +808,7 @@ def PinOK (Γ : Ctx) : Stmt → Prop
   | .frozen _ s => PinOK Γ s
   | .catchR _ _ s => PinOK Γ s
   | .scopeL _ _ _ s => PinOK Γ s
+  | .block s => PinOK Γ s
   | _ => True
 
 /-- A2-drop.2: a binding `letd` made depends, in memory, on no binding of
@@ -823,6 +826,7 @@ def DtorPinOK (Γ : Ctx) : Stmt → Prop
   | .frozen _ s => DtorPinOK Γ s
   | .catchR _ _ s => DtorPinOK Γ s
   | .scopeL _ _ x s => DtorIn Γ x s ∧ DtorPinOK Γ s
+  | .block s => DtorPinOK Γ s
   | _ => True
 
 /-- A statement inside no run-time scope pins nothing. -/
@@ -830,6 +834,7 @@ theorem DtorPinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : DtorPi
   induction s with
   | seq a _ iha _ => exact iha h
   | frozen _ k ih => exact ih h
+  | block k ih => exact ih h
   | catchR _ _ k ih => exact ih h
   | scope _ _ _ => simp [Stmt.spine] at h
   | scopeD _ _ _ _ => simp [Stmt.spine] at h
@@ -854,6 +859,7 @@ theorem DtorPinOK.of_dbind {Γ Γ' : Ctx}
   | scopeD x _ k ih => exact ⟨hin x k hp.1, ih hp.2⟩
   | rbind p k ih => exact ⟨hin p k hp.1, ih hp.2⟩
   | frozen _ k ih => exact ih hp
+  | block k ih => exact ih hp
   | catchR _ _ k ih => exact ih hp
   | scopeL _ _ x k ih => exact ⟨hin x k hp.1, ih hp.2⟩
   | _ => trivial
@@ -872,6 +878,7 @@ theorem PinOK.of_rootb {Γ Γ' : Ctx} (h : ∀ p E, Γ' p = some E → E.mode = 
   | scopeD _ _ k ih => exact ih hp
   | rbind p k ih => exact ⟨fun E hE hm => hp.1 E (h p E hE hm) hm, ih hp.2⟩
   | frozen _ k ih => exact ih hp
+  | block k ih => exact ih hp
   | catchR _ _ k ih => exact ih hp
   | scopeL _ _ _ k ih => exact ih hp
   | _ => trivial
@@ -881,6 +888,7 @@ theorem PinOK.of_spine_nil {Γ : Ctx} {s : Stmt} (h : s.spine = []) : PinOK Γ s
   induction s with
   | seq a _ iha _ => exact iha h
   | frozen _ k ih => exact ih h
+  | block k ih => exact ih h
   | catchR _ _ k ih => exact ih h
   | scope _ _ _ => simp [Stmt.spine] at h
   | scopeD _ _ _ _ => simp [Stmt.spine] at h
@@ -1969,6 +1977,8 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .scopeL _ _ _ s => s.codesOK P
   | .withElem _ _ _ s => s.codesOK P
   | .callcE _ _ _ _ s => s.codesOK P
+  | .block s => s.codesOK P
+  | .loop s => s.codesOK P
   | _ => True
 
 def ProgCodes (P : Prog) : Prop := ∀ fn ∈ P, fn.body.codesOK P

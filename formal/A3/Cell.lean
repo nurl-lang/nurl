@@ -614,8 +614,8 @@ theorem _root_.A2.Step.cellKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : S
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact ih.trans (CellKeep.slots (Nat.le_refl _) (fun _ hc => .inl (CellAt.remove hc)) rfl)
   | frozenSkip => exact CellKeep.refl _
-  | frozenIn _ ih => exact ih
-  | frozenP _ ih => exact ih
+  | frozenIn _ ih | blockIn _ ih => exact ih
+  | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he _ _ => exact (he.cellKeep _).congr rfl rfl rfl
   | assignP _ => exact CellKeep.refl _
   | iteT _ _ => exact CellKeep.refl _

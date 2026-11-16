@@ -73,7 +73,7 @@ theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic
     split at hv
     · cases hv
     · exact ih rfl v sl hv
-  | frozenP _ ih => cases hr; exact ih rfl
+  | frozenP _ ih | blockP _ ih => cases hr; exact ih rfl
   | assignP _ => cases hr; exact fun _ _ h => h
   | panic => cases hr; exact fun _ _ h => h
   | waitPanic _ => cases hr; exact fun _ _ h => h
