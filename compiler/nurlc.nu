@@ -404,6 +404,7 @@
 : i ETF_STRUCT 512
 : i ETF_BOOL 1024  // the scalar `b`
 : i ETF_ZMOVE 2048  // a field of it moves whole out of a local into a returned literal, zeroed at the source (__lit_moves_whole)
+: i ETF_FROZEN 8192  // what it lends through a handle it holds is read-only: a type marked `% Frozen` (a read guard; __thr_marked `Frozen##`)
 : i ETF_ORDERS 4096  // one value of it orders every change made through a borrow of it (an Arc, a type the program asserts `% Sync` with no part asserted `% NotSync`: __thr_orders_itself)
 : i ETM_SCALAR 0
 : i ETM_OWNING 1
@@ -534,6 +535,7 @@
 : ~ i g_s_elems 0
 : ~ i g_s_invokes 0
 : ~ i g_s_detaches 0
+: ~ i g_s_shares 0  // …parameters handed (whole, or inside a value) to a callee that shares them across threads (SM_SHARES)
 : ~ i g_s_stale 0  // …(capture * 2^32 + path): read before the body gave it a value
 : ~ i g_s_credits 0
 : ~ i g_s_cloargs 0  // …(closure parameter, its parameter, the parameter handed, path): a sequence each
@@ -579,6 +581,7 @@
 : i EG_INOUTPART 21  // an `inout` parameter goes back without a part
 : i EG_RETLEND 22  // a lend of a parameter taken over on another path handed back
 : i EG_COPYHOOK 23  // a copy hook hands its argument back
+: i EG_FROZEN 24  // what a `% Frozen` handle lends changed in place
 : ~ i g_fc_callee 0  // the callee of the call being applied (interned)
 : ~ b g_rd_given_new F  // the argument eng_read reads is an `inout` one the callee gives a new value before it reads it (eng_apply_call_do)
 : i TG_USE 1  // the keys loans are made under: a `use` read by the statement at an offset
@@ -11576,6 +11579,7 @@ unsafe @ eng_keep_fn → v {
     ? & == base g_etn_Box == ac 1 { ( wv_put g_et + * t ET_W ET_KIND EK_BOX ) ( wv_put g_et + * t ET_W ET_E1 a0 ) ( wv_put g_et + * t ET_W ET_FLAGS flags ) ^ t } {}
     ? & == base g_etn_Slice == ac 1 { ( wv_put g_et + * t ET_W ET_KIND EK_SLICE ) ( wv_put g_et + * t ET_W ET_E1 a0 ) ( wv_put g_et + * t ET_W ET_FLAGS flags ) ^ t } {}
     ( wv_put g_et + * t ET_W ET_KIND EK_NAMED )
+    ? & != 0 g_frozen_impls ( __thr_marked `Frozen##` ty ( __lty_base_name ty ) ) { = flags | flags ETF_FROZEN } {}
     : b shared | | == base g_etn_Rc == base g_etn_Arc == base g_etn_Shared
     : b of_one | | | | | shared == base g_etn_Channel == base g_etn_Locked == base g_etn_RwLocked == base g_etn_Deque == base g_etn_Set
     ? & == ac 1 | of_one == 0 ( et_at t ET_CLS ) {
@@ -13810,6 +13814,25 @@ unsafe @ eng_byte s w i k → i {
         }
         ^
     } {}
+    ? & & & & & == ( av_own av ) OW_O != eff EF_END | ( fv_mut vid ) ( fx_has vid FX_CALL_MIXED ) == ( fv_kind vid ) VK_LOCAL != 0 ( av_alias av ) ! & == path 0 | == eff EF_REPLACE == eff EF_TAKE {
+        // a `: ~` binding that owns its value on some paths and borrows on
+        // others (a join of the two: `= c . x v` in one arm or one round of
+        // a loop), or a binding of a call's result that is its own on some
+        // calls and lent on others (FX_CALL_MIXED) - what is done through
+        // it is done to what it may borrow as well as to its own value. (Not its own release, or its being
+        // given a new value or moved out whole: nurlc releases its old value
+        // by its flag, and none of that touches what it borrows.)
+        : i al ( av_alias av )
+        : b all ! ( eng_alias_typed vid al )
+        : ~ i k 0
+        ~ < k ( sq_len al ) {
+            : i a ( sq_at al k )
+            ? & != ( pl_var a ) vid | all ( eng_alias_is_value vid a ) {
+                ( eng_effect st ( pl_make ( pl_var a ) ( ep_cat ( pl_path a ) path ) ) eff line + depth 1 )
+            } {}
+            = k + k 1
+        }
+    } {}
     : i shown ( wv_at g_fx_agg vid )
     ? & & != shown 0 != path 0 != eff EF_END {
         // a field of a literal temporary that shows a binding: what is
@@ -13839,6 +13862,31 @@ unsafe @ eng_byte s w i k → i {
                     : i q ( el_place l )
                     : i qv ( pl_var q )
                     ? & >= qv 0 != 0 ( st_av st qv ) {
+                        ( eng_effect st ( pl_make qv ( ep_take ( ep_cat ( pl_path q ) ( ep_drop path ( ep_len hp ) ) ) PATH_MAX ) ) eff line + depth 1 )
+                    } {}
+                } {}
+            } {}
+            = k + k 1
+        }
+    } {}
+    ? & & | | == eff EF_REALLOC == eff EF_DROP == eff EF_PERMUTE != ( av_held av ) 0 ! & == ( av_own av ) OW_L == path 0 {
+        // a part of the value that is a copy of another place's String or
+        // Vec handle (what a callee stored there: `= c . app v` run by a
+        // closure over `c`): the copy shares that place's control block, so
+        // a change to the buffer through it is a change to that place's
+        // buffer too
+        : i hd ( av_held av )
+        : ~ i k 0
+        ~ < k ( sq_len hd ) {
+            : i he ( sq_at hd k )
+            : i hp ( he_path he )
+            : i l ( he_loan he )
+            ? & & & ( ep_prefix hp path ) ( el_is_loan l ) == ( el_kind l ) LK_HANDLE ! ( ep_has_star hp ) {
+                : i hty ( eng_ty_of ( pl_make vid hp ) )
+                ? & != hty ET_NONE | == ( et_kind hty ) EK_VEC == ( et_kind hty ) EK_STRING {
+                    : i q ( el_place l )
+                    : i qv ( pl_var q )
+                    ? & & >= qv 0 != qv vid != 0 ( st_av st qv ) {
                         ( eng_effect st ( pl_make qv ( ep_take ( ep_cat ( pl_path q ) ( ep_drop path ( ep_len hp ) ) ) PATH_MAX ) ) eff line + depth 1 )
                     } {}
                 } {}
@@ -13877,6 +13925,26 @@ unsafe @ eng_byte s w i k → i {
             } {}
             = a + a 2
         }
+        // what a `% Frozen` handle lends - a part of the payload it holds
+        // a handle to, through its own `*` (a read guard's `ctl` share) -
+        // is read by other threads at once: nothing changes it in place,
+        // save inside a value that orders its changes. (The handle's own
+        // fields, changed by its own code - a guard's unlock - are its.)
+        ? != 0 g_frozen_impls {
+            : i fty0 ( fv_ty vid )
+            : ~ i j 0
+            : ~ b frz F
+            ~ & ! frz < j ( ep_len path ) {
+                ? ( et_flag ( eng_ty_at fty0 ( ep_take path j ) ) ETF_FROZEN ) {
+                    : i rest ( ep_drop path j )
+                    ? & ( ep_has_star rest ) ! ( eng_change_ordered vid path - ( ep_len path ) j ) {
+                        = frz T
+                        ( eng_err line EG_FROZEN ( nurl_str_cat ( eng_pname place ) ` is lent by a '% Frozen' handle, and is changed here` ) )
+                    } {}
+                } {}
+                = j + j 1
+            }
+        } {}
     } {}
     : ~ i dead ( st_dead st )
     ? == eff EF_PERMUTE {
@@ -16034,6 +16102,96 @@ unsafe @ eng_byte s w i k → i {
     ( wv_drop cl )
 }
 
+// The parameters (not captures: their summary index) the value `av` at
+// operand `op` is, or holds a handle of, or holds what they hold.
+@ av_param_roots i av i op → i {
+    : ~ i out 0
+    ? & ( op_is_place op ) >= ( fv_pidx ( pl_var op ) ) g_f_ncap { = out ( sq_add out ( fv_pidx ( pl_var op ) ) ) } {}
+    ? == av 0 { ^ out } {}
+    : i al ( av_alias av )
+    : ~ i k 0
+    ~ < k ( sq_len al ) {
+        : i pk ( fv_pidx ( pl_var ( sq_at al k ) ) )
+        ? >= pk g_f_ncap { = out ( sq_add out pk ) } {}
+        = k + k 1
+    }
+    : i hd ( av_held av )
+    = k 0
+    ~ < k ( sq_len hd ) {
+        : i l ( he_loan ( sq_at hd k ) )
+        ? ( el_is_loan l ) {
+            : i qv ( pl_var ( el_place l ) )
+            : i pv ? < qv 0 - -1 qv qv
+            : i pk ( fv_pidx pv )
+            ? >= pk g_f_ncap { = out ( sq_add out pk ) } {}
+        } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+// Is a change at `place` made inside a value that orders every change
+// made through a borrow of it (ETF_ORDERS on a type around it: an Arc's
+// payload, a Locked, an atomic, a type asserted `% Sync`)? A place that is
+// what a parameter holds is read by that parameter's type.
+@ eng_place_ordered i place i eff → b {
+    : i v ( pl_var place )
+    : i ty0 ( fv_ty ? < v 0 - -1 v v )
+    : i path ( pl_path place )
+    // (a change to the buffer of such a value itself - an Arc's payload
+    // grown, said of the handle - is one inside it; given a new value or
+    // moved out, the binding itself changes)
+    ? & & == 0 ( ep_len path ) ( et_flag ty0 ETF_ORDERS ) | | == eff EF_REALLOC == eff EF_DROP == eff EF_PERMUTE { ^ T } {}
+    : ~ i j 0
+    ~ < j ( ep_len path ) {
+        ? ( et_flag ( eng_ty_at ty0 ( ep_take path j ) ) ETF_ORDERS ) { ^ T } {}
+        = j + j 1
+    }
+    ^ F
+}
+
+// Does a closure the value `held` describes change one of its captures
+// when it runs - a part of what its env holds, or what a capture views -
+// other than inside a value that orders its own changes (ETF_ORDERS: an
+// Atomic, a Locked, a type the program asserts `% Sync`)? Where several
+// threads may run it at once, every one of them changes that one place.
+@ closure_changes_capture i held → b {
+    ? ! ( held_has_clo held ) { ^ F } {}
+    : i cl ( wv_new )
+    ( closures_in held cl )
+    : ~ b hit F
+    : ~ i c 0
+    ~ & ! hit < c ( wv_len cl ) {
+        : i f ( wv_at cl + c 1 )
+        ? ( sm_have f ) {
+            : i ncap ( ef_ncap f )
+            : i ne ( sm_n f SM_EFFECTS )
+            : ~ i e 0
+            ~ & ! hit < e ne {
+                : i t ( sm_at f SM_EFFECTS e )
+                : i pk ( tp_at t 3 0 )
+                ? & < pk ncap != ( tp_at t 3 2 ) EF_END {
+                    : i path ( tp_at t 3 1 )
+                    : i cty ( efp_ty f pk )
+                    // (a closure capture run whole: judged by its own captures)
+                    : i ceff ( tp_at t 3 2 )
+                    : ~ b ordered & & == 0 ( ep_len path ) != cty ET_NONE | == ( et_kind cty ) EK_CLOSURE & ( et_flag cty ETF_ORDERS ) | | == ceff EF_REALLOC == ceff EF_DROP == ceff EF_PERMUTE
+                    : ~ i j 0
+                    ~ & ! ordered < j ( ep_len path ) {
+                        ? ( et_flag ( eng_ty_at cty ( ep_take path j ) ) ETF_ORDERS ) { = ordered T } {}
+                        = j + j 1
+                    }
+                    ? ! ordered { = hit T } {}
+                } {}
+                = e + e 1
+            }
+        } {}
+        = c + c 2
+    }
+    ( wv_drop cl )
+    ^ hit
+}
+
 // What capture `cap` of the closure at `base` in `held` holds, at path
 // `sp` into it: what the closure took with it where it was made (the
 // entries below its `^cap`), and what the binding it holds a handle of
@@ -16616,7 +16774,27 @@ unsafe @ eng_byte s w i k → i {
         ? < sk n {
             ( wv_trunc cfx 0 )
             ( closure_capture_effects ( av_held ( wv_at avs sk ) ) cfx )
-            ? != 0 ( wv_len cfx ) {
+            // (…nor what its env holds: a closure stored into a literal
+            // copies its captures in, and every thread runs it on that one
+            // env)
+            // (…and a parameter of this function handed to it, whole or
+            // inside the value: this function shares it - its callers ask
+            // the same of the closures they hand it)
+            : i spar ( av_param_roots ( wv_at avs sk ) ( wv_at ops sk ) )
+            = g_s_shares ( sq_union g_s_shares spar )
+            // (…save a change made inside a value that orders every change
+            // itself: an Arc's payload, a Locked, an atomic, a type the
+            // program asserts `% Sync` - ETF_ORDERS around the place)
+            : ~ b unordered F
+            : ~ i cq 0
+            ~ & ! unordered < cq ( wv_len cfx ) {
+                // (a closure among the captures, run: what it changes is
+                // its own captures', each judged as a closure the value holds)
+                : i cqt ( eng_ty_of ( wv_at cfx cq ) )
+                ? & ! ( eng_place_ordered ( wv_at cfx cq ) ( wv_at cfx + cq 1 ) ) ! & != cqt ET_NONE == ( et_kind cqt ) EK_CLOSURE { = unordered T } {}
+                = cq + cq 2
+            }
+            ? | unordered ( closure_changes_capture ( av_held ( wv_at avs sk ) ) ) {
                 ( eng_err line EG_THREAD ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `the closure in argument ` ( nurl_str_int + sk 1 ) ) ` changes what it captured, and several threads may run it at once` ) )
             } {}
         } {}
@@ -19487,8 +19665,10 @@ unsafe @ eng_byte s w i k → i {
     ? & & & & == ( av_own new ) OW_L == kind VK_LOCAL >= src 0 ( fx_has src FX_CALL_MIXED ) & != vty ET_NONE ! ( et_is_view vty ) {
         // what the call handed back is the caller's own on the calls that
         // made it fresh: the binding owns it there and releases it, and
-        // borrows on the others (owned per call)
-        = new ( av_make OW_O ( av_loans new ) 0 ( av_held new ) F )
+        // borrows on the others (owned per call) - and a change through it
+        // is one to what it may borrow (eng_effect: its alias is kept)
+        = new ( av_make OW_O ( av_loans new ) ( av_alias new ) ( av_held new ) F )
+        ( fx_set vid FX_CALL_MIXED )
     } {}
     ? & & & & == ( av_own new ) OW_L != ( av_loans new ) 0 != kind VK_TEMP & != vty ET_NONE ! ( et_is_view vty ) ( et_copyable vty ) {
         : i loans ( av_loans new )
@@ -19571,7 +19751,26 @@ unsafe @ eng_byte s w i k → i {
     : b first & & == at g_fc_first_stmt == path 0 >= ( fv_pidx vid ) 0
     : i ddepth ? != kind VK_PARAM ( fv_depth vid ) 0
     ? == path 0 {
-        : b repoint == cown OW_L
+        // (…and a `: ~` String or Vec given a field read of a binding it
+        // does not own, `= c . x v`, whatever it held: nurlc releases its old
+        // value by its flag and it borrows the field from then on - no copy
+        // is made (gen_assign: the flag is set down). Read as a copy, a
+        // change through it was not one to the field: a payload an Arc
+        // shares grown by every thread, agora #696)
+        : ~ b frepoint F
+        ? & & & | & == kind VK_LOCAL ( fv_mut vid ) ( fv_byref vid ) == ( ec rv ) RV_USE != vty ET_NONE | == ( et_kind vty ) EK_VEC == ( et_kind vty ) EK_STRING {
+            : i fop ( eng_op ( ec + rv 1 ) )
+            // (…of a binding this function does not own: a parameter or a
+            // capture - not one taken over - or a lend. A field of a local
+            // the function owns is taken or copied out by nurlc, and the
+            // binding owns that)
+            ? & & ( op_is_place fop ) != ( pl_path fop ) 0 != ( pl_var fop ) vid {
+                : i fov ( pl_var fop )
+                : i fown ( st_own st fov )
+                ? | == fown OW_L & & == fown OW_P >= ( fv_pidx fov ) 0 | < ( fv_pidx fov ) g_f_ncap != ( fp_mode ( fv_pidx fov ) ) PM_SINK { = frepoint T } {}
+            } {}
+        } {}
+        : b repoint | == cown OW_L frepoint
         // (a lend of something that ends before the target - an inner
         // block's local, an arm's - is copied in; an owner is: a cursor
         // given a lend stays a borrow, of whatever it is pointed at now)
@@ -21311,7 +21510,7 @@ unsafe @ eng_byte s w i k → i {
     = g_fc_ret_watch -1 = g_fc_ret_changed 0 = g_fc_ret_fresh 0
     = g_fc_moved_vid -1 = g_fc_moved_own 0
     = g_fc_line ( ef_at f EF_LINE )
-    = g_s_effects 0 = g_s_consumes 0 = g_s_elems 0 = g_s_invokes 0 = g_s_detaches 0
+    = g_s_effects 0 = g_s_consumes 0 = g_s_elems 0 = g_s_invokes 0 = g_s_detaches 0 = g_s_shares 0
     = g_s_stale 0 = g_s_credits 0 = g_s_cloargs 0 = g_s_regions 0 = g_s_selfholds 0 = g_s_catches 0
     = g_fc_weak 0
     // the value block temporaries: made empty and given the block's tail
@@ -21658,7 +21857,9 @@ unsafe @ eng_byte s w i k → i {
         ~ < k ( sq_len held ) {
             : i he ( sq_at held k )
             : i pl ( param_loan ( he_loan he ) )
-            ? >= pl 0 { = rholds ( sq_add rholds ( tp4 ( ep_take ( he_path he ) 3 ) ( tp_at pl 3 0 ) ( tp_at pl 3 1 ) ( tp_at pl 3 2 ) ) ) } {}
+            ? >= pl 0 {
+                = rholds ( sq_add rholds ( tp4 ( ep_take ( he_path he ) 3 ) ( tp_at pl 3 0 ) ( tp_at pl 3 1 ) ( tp_at pl 3 2 ) ) )
+            } {}
             = k + k 1
         }
         = r + r 1
@@ -21744,6 +21945,7 @@ unsafe @ eng_byte s w i k → i {
     ? ( sm_merge f SM_INVOKES g_s_invokes ) { = changed T } {}
     ? ( sm_merge f SM_CLOARGS g_s_cloargs ) { = changed T } {}
     ? ( sm_merge f SM_DETACHES g_s_detaches ) { = changed T } {}
+    ? ( sm_merge f SM_SHARES g_s_shares ) { = changed T } {}
     ? ( sm_merge f SM_REGIONS g_s_regions ) { = changed T } {}
     ? ( sm_merge f SM_SELFHOLDS g_s_selfholds ) { = changed T } {}
     ? ( sm_merge f SM_RCLOS rclos ) { = changed T } {}
@@ -22376,6 +22578,7 @@ unsafe @ eng_print_types → v {
     ? == g EG_INOUTPART { ^ `an 'inout' parameter goes back to the caller whole: a part taken out of it and not given a value again would be missing from the caller's binding` } {}
     ? == g EG_RETLEND { ^ `on another path the function takes the parameter over and releases it, so a lend of it handed back would view what is gone` } {}
     ? == g EG_COPYHOOK { ^ `a handle's copy hook ('_clone', '_share') must make a value of its own: one that hands its argument back leaves two owners of one value` } {}
+    ? == g EG_FROZEN { ^ `what a handle marked '% Frozen' lends (a read guard does) is read by other threads at the same time without a lock: nothing changes it in place, unless the change is made inside a value that orders every change itself` } {}
     ^ `the ownership rules are broken here`
 }
 
@@ -22404,6 +22607,7 @@ unsafe @ eng_print_types → v {
     ? == g EG_INOUTPART { ^ `give the part a value again before every way out` } {}
     ? == g EG_RETLEND { ^ `hand back a copy that owns its data (string_from, vec_clone, slice_to_vec)` } {}
     ? == g EG_COPYHOOK { ^ `build the copy from the argument's parts (string_from, vec_clone, the fields' own copies)` } {}
+    ? == g EG_FROZEN { ^ `change it through a handle that holds it exclusively (a write guard: rw_write in stdlib/std/rwlock.nu, or locked_update on a Locked), or copy what you need with mem_dup and change the copy` } {}
     ^ `see docs/MEMORY.md §2 for the rule and its fixes`
 }
 
@@ -22420,7 +22624,7 @@ unsafe @ eng_print_types → v {
     ? == g EG_CALLERVIEW { ^ `2.7` } {}
     ? == g EG_UNWIND { ^ `7.2` } {}
     ? | == g EG_EXCL == g EG_INOUTBORROW { ^ `2.4` } {}
-    ? | == g EG_THREAD == g EG_ARC { ^ `6.5` } {}
+    ? | | == g EG_THREAD == g EG_ARC == g EG_FROZEN { ^ `6.5` } {}
     ? == g EG_CLOSURE { ^ `2.11` } {}
     ? == g EG_LOOP { ^ `2.5` } {}
     ? == g EG_DEFER { ^ `7.1` } {}
