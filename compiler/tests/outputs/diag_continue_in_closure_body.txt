@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_continue_in_closure_body.nu:10:31: error: 'continue' inside a closure body, outside any loop written in it — the closure is a function of its own, so it cannot go on with a loop around the closure literal. Return a value the caller tests (e.g. a 'b'), and 'continue' there.
+compiler/tests/diag_continue_in_closure_body.nu:11:31: error: 'continue' inside a closure body, outside any loop written in it — the closure is a function of its own, so it cannot go on with a loop around the closure literal. Return a value the caller tests (e.g. a 'b'), and 'continue' there.
         : i r ( app \ → i { continue ^ 1 } )
                               ^
 error: aborting due to 1 previous error
