@@ -457,6 +457,14 @@ class FnCheck:
             rest = pp[len(qp):]
             if k == "handle" and self.holds_views(self.ty_of_place(q)):
                 return True
+            if k == "view" and eff in ("realloc", "replace", "drop"):
+                # (a view of a struct, an option or a result is a view of
+                # something inside it - a summary's place cut short: a
+                # buffer that moves or goes in there may be the one it
+                # views, agora #411)
+                qt = self.ty_of_place(q)
+                if qt is not None and qt[0] in ("named", "opt", "res"):
+                    return True
             if k == "handle" and eff == "replace" and "*" not in rest and not (p is not None and self.scalar_place(p)):
                 # (a number given a new value releases nothing: a copy of
                 # the handles around it stays good)
@@ -485,6 +493,14 @@ class FnCheck:
             for a in self.value_aliases(vid, av.alias):
                 self.effect(st, (a[0], a[1] + path), eff, line, depth + 1, weak)
             return
+        if av.own == "O" and av.alias and eff != "end" and (path or eff != "replace"):
+            # (a binding that owns its value on some paths and is a second
+            # name of another value on the others - a join of a fresh value
+            # and a field: what is done to its contents is done to that
+            # value on those paths; a new value given it whole only points
+            # it elsewhere there)
+            for a in self.value_aliases(vid, av.alias):
+                self.effect(st, (a[0], a[1] + path), eff, line, depth + 1, weak)
         shown = self.agg_lends.get(vid)
         if shown and path and path[0] in shown and eff != "end":
             # a field of a literal temporary that shows a binding: what is
@@ -759,9 +775,19 @@ class FnCheck:
                 return AV("L", v.loans | av.loans, v.alias, frozenset())
             alias = {(a[0], a[1] + path) for a in av.alias}
             loans = set(av.loans)
+            held = set(sub)
             for a in alias:
                 loans.add(self.loan(st, site, a, "handle"))
-            return AV("L", loans, alias, sub)
+                # (…and what that part of the value it is a second name of
+                # holds - a view pushed in through another name of it: read,
+                # what the view points into must still be there, agora #292)
+                tav = st.vals.get(a[0])
+                if tav is not None and tav.held:
+                    hs = hsub(tav.held, a[1])
+                    if hs:
+                        self.check_live(st, AV("N", held=hs), line, self.pname(a), held=True)
+                        held |= hs
+            return AV("L", loans, alias, frozenset(held))
         return av
 
     def fresh_string_kept(self, st, op, cur, line, where):
@@ -1394,6 +1420,25 @@ class FnCheck:
                     copied.add(k)
                     continue
                 if cur and cur.own in ("O", "P"):
+                    if cur.own == "O" and cur.alias and self.fn.vars[op[1]].kind == "temp":
+                        # (a join's temporary that owns its value on some paths
+                        # and selects owners on the others: the consumer takes
+                        # what it selects there, as a binding of it does - a
+                        # local is moved; an `inout` parameter, the caller's
+                        # binding, is given a new value by the call - §2.2)
+                        for a in cur.alias:
+                            if a[1]:
+                                continue
+                            av_a = st.vals.get(a[0])
+                            if av_a is None:
+                                continue
+                            if (a[0] in self.pidx and av_a.own == "P"
+                                    and self.fn.modes[self.pidx[a[0]]] == "inout"):
+                                self.s_effects.add((self.pidx[a[0]], (), "replace"))
+                            elif (self.fn.vars[a[0]].kind == "local" and av_a.own == "O"
+                                  and self.fn.vars[a[0]].depth >= self.fn.vars[op[1]].depth):
+                                self.effect(st, (a[0], ()), "replace", line)
+                                st.vals[a[0]] = AV("X")
                     moved = self.move_out(st, op[1], line)
                     # (what the callee keeps of it is what the value holds
                     # now that it is taken)
@@ -1450,7 +1495,10 @@ class FnCheck:
                           and all(not a[1] and st.vals.get(a[0]) is not None
                                   and ((a[0] in self.pidx and st.vals[a[0]].own == "P"
                                         and self.fn.modes[self.pidx[a[0]]] == "in")
-                                       or (st.vals[a[0]].own == "O" and self.fn.vars[op[1]].mut))
+                                       or (st.vals[a[0]].own == "O" and self.fn.vars[op[1]].mut)
+                                       # (…or a later reader of a replaced field, a
+                                       # borrow of the first reader: agora #387)
+                                       or self.ho_on(avs[k], a))
                                   for a in avs[k].alias)):
                         # a second name of a parameter the caller keeps, or
                         # a `: ~` cursor of a binding: a borrow, not this
@@ -1947,6 +1995,12 @@ class FnCheck:
             return AV("L", loans, alias, held, call=True)
         return NONE
 
+    def ho_on(self, av, place):
+        """Does `av` hold the borrow the field hand-over made of the first
+        reader at `place` (`ho`)?"""
+        return any(isinstance(l, tuple) and isinstance(l[0], tuple) and l[0] and l[0][0] == "ho"
+                   and self.loans.get(l, (None,))[0] == place for l in av.loans)
+
     def handover(self, st, place):
         """A store replacing a place whose old value a binding reads - the
         place itself, or a part of it - hands that old value over to the
@@ -1964,6 +2018,11 @@ class FnCheck:
                    or a[1][len(place[1]):] not in ((), ("#T0",), ("#F0",)) for a in av.alias):
                 continue
             if av.own == "O" and not av.loans:
+                continue
+            # (a later reader the hand-over made a borrow of the first one:
+            # replacing the first releases the value it was handed, which
+            # codegen hands to no one - the borrow ends there, agora #387)
+            if self.ho_on(av, place):
                 continue
             ty = self.fn.vars[vid].ty
             if ty is None or ty[0] in VIEW_TYPES or ty[0] == "closure":
@@ -2737,6 +2796,16 @@ class FnCheck:
                     if v.kind != "param" and self.loans[l][1] != "share":
                         self.err(line, f"{self.vname(vid)} is the caller's, and goes back holding a view of {v.name}")
                         return
+                    # (…or of a parameter's value this function changed or
+                    # released after the view was made: the caller's storage
+                    # points at the old buffer - the order inside the call
+                    # is not in its summary)
+                    if (self.loans[l][0][0] >= 0 and v.kind == "param" and self.loans[l][1] != "share"
+                            and l in st.dead):
+                        self.err(line, f"{self.vname(vid)} is the caller's, and goes back holding a view of "
+                                       f"{self.pname(self.loans[l][0])}, which this function changed or released "
+                                       f"after the view was made")
+                        return
 
     def run_defers(self, st):
         """A function's exit runs the `;` blocks armed on the way, newest
@@ -3273,8 +3342,20 @@ class FnCheck:
                 st.vals[vid] = AV("U")
             else:
                 # `: ~ T c x` is a cursor: it borrows the owner x
+                # (a join's temporary that selects owners on some paths and
+                # owns its value on the others: what it selects is read
+                # before the move takes it, for the rule below - §2.2)
+                jalias = frozenset()
+                if (not v.mut and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
+                        and self.fn.vars[rv[1][1]].kind == "temp"):
+                    jsrc = st.vals.get(rv[1][1])
+                    if jsrc is not None and jsrc.own == "O" and jsrc.alias:
+                        jalias = jsrc.alias
                 new = self.rvalue(st, rv, ln, v.depth, v.ty, v.name, dest_vid=vid,
                                   lend_owner=(lambda x: True) if v.mut else (lambda x: False))
+                if jalias and new.own == "O" and not new.alias:
+                    new = AV("O", new.loans, jalias, new.held, new.call)
+                jmixed = bool(jalias) and new.own == "O"
                 if v.mut and v.kind == "local" and v.ty == ("s",) and new.own == "L":
                     self.cursor_slots.add(vid)
                 if v.mut and v.kind == "local" and v.ty == ("s",) and not new.loans and (
@@ -3299,6 +3380,12 @@ class FnCheck:
                             and all(self.fn.vars[a[0]].depth >= v.depth for a in new.alias)
                             and all(self.is_value_place(v.ty, a, True) for a in new.alias)
                             and self.take_payload(st, new, ln)):
+                        if jmixed:
+                            # (owning its value on the other paths, it moved
+                            # what it selects on the paths that select it only)
+                            for a in new.alias:
+                                if st.vals.get(a[0]) is not None and st.vals[a[0]].own == "M":
+                                    st.vals[a[0]] = AV("X")
                         new = AV("O", (), (), new.held)
                 elif (not v.mut and v.kind == "local" and rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]
                       and self.fn.vars[rv[1][1]].kind == "temp" and new.own == "O" and new.loans and not new.call
