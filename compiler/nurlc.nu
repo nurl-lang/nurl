@@ -4177,7 +4177,7 @@ unsafe @ note_unsafe_item s pos s what → v {
 // A `??` arm's payload read in place out of a program enum's binding
 // (`epy_` + owner: the payloads, bck_handle_match): `= o …` releases them.
 : ~ i g_bck_epy_any 0
-// (`pvt_<name>@<line>` → `pv_<id>`: a program enum payload's variant, gen_match.)
+// (`pvt_<name>@<line>` → `pvar_<id>`: a program enum payload's variant, gen_match.)
 : ~ i g_bck_pvt_any 0
 // Some binding of this function is an `rc_clone` of another: their Rc is
 // one value, a family (`rcr_` the family's first binding, `rcm_` its
@@ -60058,8 +60058,8 @@ unsafe @ __sx_leaf_roots s sx → s {
         : i x ( nurl_str_to_int xs )
         // (A payload of another variant is never this storage while `via`
         // is: gen_match's `pvt_`.)
-        : s xvt ? != 0 g_bck_pvt_any ( nurl_sym_get g_bck ( bck_bkey `pv_` xs ) ) ``
-        : s vvt ? != 0 g_bck_pvt_any ( nurl_sym_get g_bck ( bck_bkey `pv_` vs ) ) ``
+        : s xvt ? != 0 g_bck_pvt_any ( nurl_sym_get g_bck ( bck_bkey `pvar_` xs ) ) ``
+        : s vvt ? != 0 g_bck_pvt_any ( nurl_sym_get g_bck ( bck_bkey `pvar_` vs ) ) ``
         ? & & != 0 ( nurl_str_len xvt ) != 0 ( nurl_str_len vvt ) ! ( seq xvt vvt ) { continue } {}
         ? & & != x via ! ( bck_dead_state ( bck_st_get out x ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `hr_` xs ) ) os ) {
             : s on ( bck_name_show ( nurl_sym_get2 g_bck `rv_` os ) )
@@ -69239,7 +69239,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
                 } {}
                 = binds ? < cm 0 `` ( nurl_str_slice binds + cm 1 - - ( nurl_str_len binds ) cm 1 )
                 : i id ( bck_intern nm )
-                ? != 0 g_bck_pvt_any { ( bck_put ( bck_bkey `pv_` ( nurl_str_int id ) ) ( nurl_sym_get g_bck ( nurl_str_cat4 `pvt_` nm `@` ( bck_field rec 3 ) ) ) ) } {}
+                ? != 0 g_bck_pvt_any { ( bck_put ( bck_bkey `pvar_` ( nurl_str_int id ) ) ( nurl_sym_get g_bck ( nurl_str_cat4 `pvt_` nm `@` ( bck_field rec 3 ) ) ) ) } {}
                 ? != 0 ( nurl_str_len cursor_src ) {
                     ( bck_add_word ( bck_bkey `cu_` cursor_src ) ( nurl_str_int id ) )
                     ( bck_add_word ( bck_bkey `cul` `` ) ( nurl_str_cat3 ( nurl_str_int id ) `:` cursor_src ) )
