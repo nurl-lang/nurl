@@ -8,6 +8,9 @@ import A3
 #print axioms A2.soundness
 #print axioms A2.no_leak_end
 #print axioms A2.no_leak_panic
+-- Agora #879: a Vec's control block is never a buffer of any tree the store owns (slots and
+-- blocks), the fact nurlc's `nurl vec ctl` / `nurl vec elem` TBAA tags assert
+#print axioms A2.ctl_ne_data
 -- Agora #610: the marking sweep marks an unreached `Arc` of a destructor value (Agora #755: or of
 -- a drained `Vec` of them) `dead`, and the thread whose step it ended reaps it (`Settle`) before
 -- anything else runs: the invariant through both, the reaps always possible and finite, no

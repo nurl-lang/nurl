@@ -212,6 +212,11 @@ const MODULE_LAYERS = {
     category: 'Worked Examples',
     summaryEn: 'Agora #826: a take out of an inout .replace place (RhsT.take): a callee that hands its inout String on, checked against its summary, and a caller that reads its argument after the call, with memory_safe and no_leak_end applied (g_ok, main_safe, main_no_leak).',
   },
+  Layout: {
+    layer: 4,
+    category: 'Memory Invariant',
+    summaryEn: 'Agora #879: a tree\'s addresses split into its nodes\' control blocks and buffers (ctls_datas_perm); no control block of any owned tree, a slot\'s or a block payload, is a buffer of any owned tree (ctl_ne_data, from HeapOK and BlkOwn), the fact the lowering\'s Vec TBAA tags assert.',
+  },
   ExitWitness: {
     layer: 5,
     category: 'Worked Examples',

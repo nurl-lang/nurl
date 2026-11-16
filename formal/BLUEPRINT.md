@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **18,932 lines of Lean 4**, **927 theorems**, **1105 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **45 modules**, **55,474 lines of Lean 4**, **2394 theorems**, **3018 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **46 modules**, **55,656 lines of Lean 4**, **2406 theorems**, **3035 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -135,7 +135,7 @@ flowchart BT
 ---
 
 <!-- BEGIN generated: A2 module DAG (webdocs/scripts/gen-formal-data.mjs) -->
-## 4. Phase A2 Module Dependency DAG (45 Modules)
+## 4. Phase A2 Module Dependency DAG (46 Modules)
 
 ```mermaid
 flowchart BT
@@ -161,6 +161,7 @@ flowchart BT
   Frame["Frame<br/>(638L, 40 thms)"]
   Heap["Heap<br/>(211L, 14 thms)"]
   Invariant["Invariant<br/>(2119L, 119 thms)"]
+  Layout["Layout<br/>(182L, 12 thms)"]
   Leak["Leak<br/>(665L, 26 thms)"]
   NameWf["NameWf<br/>(969L, 46 thms)"]
   Panic["Panic<br/>(384L, 23 thms)"]
@@ -212,6 +213,7 @@ flowchart BT
   Values --> Frame
   Stability --> Heap
   Typing --> Invariant
+  Basic --> Layout
   Steps --> Leak
   Wf --> NameWf
   Leak --> Panic
@@ -288,6 +290,7 @@ flowchart BT
 | 4. Calls & Closures | [`A2/Closure.lean`](A2/Closure.lean) | 2873 | 103 | 5 | Closure and trait-object package calls (callc, cloCase, cloProgress) and by-name capture soundness. |
 | 4. Calls & Closures | [`A2/Codes.lean`](A2/Codes.lean) | 853 | 43 | 6 | Package code-pointer integrity (ProgCodes, MemCodes, codes_step) across execution steps. |
 | 4. Calls & Closures | [`A2/Rename.lean`](A2/Rename.lean) | 4360 | 185 | 14 | Alpha-renaming of function body variables to fresh variables at a call site. |
+| 4. Memory Invariant | [`A2/Layout.lean`](A2/Layout.lean) | 182 | 12 | 5 | Agora #879: a tree's addresses split into its nodes' control blocks and buffers (ctls_datas_perm); no control block of any owned tree, a slot's or a block payload, is a buffer of any owned tree (ctl_ne_data, from HeapOK and BlkOwn), the fact the lowering's Vec TBAA tags assert. |
 | 5. Soundness Theorems | [`A2/Preservation.lean`](A2/Preservation.lean) | 3878 | 91 | 15 | Preservation theorem (preserve): every execution step preserves typing StmtT and memory invariant Inv. |
 | 5. Soundness Theorems | [`A2/Progress.lean`](A2/Progress.lean) | 909 | 14 | 0 | Progress theorem (progress): a well-typed statement is either .skip or can step (never Stuck). |
 | 5. Soundness Theorems | [`A2/Soundness.lean`](A2/Soundness.lean) | 276 | 17 | 2 | Main theorems: soundness, memory_safe, no_leak_end, and no_leak_panic. |
