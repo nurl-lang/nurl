@@ -57,9 +57,10 @@ def derive(prog, fn, ws):
 
     reallocs, mutates = set(_idx(ws, "reallocs", n)), set(_idx(ws, "mutates", n))
     effects = {(k, (), "realloc") for k in reallocs}
-    # (its contents changed, its buffer where it was: what was lent out of
-    # an element ends, a view of the buffer does not)
-    effects |= {(k, ("*",), "replace") for k in mutates - reallocs}
+    # (its contents changed: what was lent out of an element ends - also
+    # where its buffer may move too, which ends only the views of the
+    # buffer, not the elements a lend handed out: an `lru_put` that evicts)
+    effects |= {(k, ("*",), "replace") for k in mutates}
     effects |= {(k, ("*",), "realloc") for k in _idx(ws, "ireallocs", n)}
     for w in ws.get("drops", "").split():
         k, _, rel = w.partition(".")

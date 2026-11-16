@@ -1,0 +1,32 @@
+// map: §2.10 | A2 | rejected | - | agora #481: a dyn impl declared before the leaf impl hands back its own method called through a dyn field, view arguments swapped
+$ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+
+% Lex [T] { @ toks T self String a String b i d → ( Vec s ) }
+
+: Leaf { i k }
+: Node { % Lex child }
+
+% Lex Node {
+    @ toks Node self String a String b i d → ( Vec s ) { ^ ( toks . self child b a - d 1 ) }
+}
+
+% Lex Leaf {
+    @ toks Leaf self String a String b i d → ( Vec s ) {
+        : ~ ( Vec s ) h ( vec_new [s] )
+        ( vec_push [s] h ( string_data a ) )
+        ^ h
+    }
+}
+
+@ main → i {
+    : %Lex t ( dyn Lex @ Node { ( dyn Lex @ Leaf { 1 } ) } )
+    : String x ( string_from `the first argument string, long enough to own a heap buffer` )
+    : ~ ( Vec s ) r ( vec_new [s] )
+    {
+        : String y ( string_from `the second argument string, freed at the end of the inner block` )
+        = r ( toks t x y 1 )
+    }
+    ( nurl_println ( vec_at [s] r 0 ) )
+    ^ 0
+}
