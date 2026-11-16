@@ -1,4 +1,5 @@
 // adversarial: a maker returns a closure over a fresh Rc that replaces its payload, and a clone of that Rc beside it
+// map: §2.14 | A2 | rejected | - | AGORA-869 adversarial: a fresh Rc captured by two closures; heap-use-after-free under ASan with the walk alone, refused by the ownership engine
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/rc.nu`

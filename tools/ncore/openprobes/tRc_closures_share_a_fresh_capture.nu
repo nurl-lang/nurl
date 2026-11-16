@@ -1,4 +1,5 @@
 // adversarial: two closures over one fresh Rc - one hands back a clone of it, the other replaces its payload; a view through the clone ends under the second
+// map: §2.14 | A2 | rejected | - | AGORA-869 adversarial: a fresh Rc captured by two closures; heap-use-after-free under ASan with the walk alone, refused by the ownership engine
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/rc.nu`

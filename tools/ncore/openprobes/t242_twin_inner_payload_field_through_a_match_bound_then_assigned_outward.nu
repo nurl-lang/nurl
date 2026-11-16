@@ -1,4 +1,5 @@
-// map: §7.6 | A2 | runs-clean | - | agora #242: elaborated twin: a field of an inner block's enum payload through a `??`, bound by `:` then assigned outward
+// map: §7.6 | A2 | rejected | - | agora #242: elaborated twin: a field of an inner block's enum payload through a `??`, bound by `:` then assigned outward
+// AGORA-869: heap-use-after-free under ASan with the walk alone; the ownership engine refuses it (codegen makes no copy here, unlike the unbound spelling).
 // twin of tools/fuzz/holes/inner_payload_field_through_a_match_assigned_outward.nu (tools/fuzz/holes/elab.py)
 $ `stdlib/core/string.nu`
 
