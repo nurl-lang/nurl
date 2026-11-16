@@ -217,6 +217,11 @@ const MODULE_LAYERS = {
     category: 'Worked Examples',
     summaryEn: 'Agora #826: a take out of an inout .replace place (RhsT.take): a callee that hands its inout String on, checked against its summary, and a caller that reads its argument after the call, with memory_safe and no_leak_end applied (g_ok, main_safe, main_no_leak).',
   },
+  HandOver: {
+    layer: 5,
+    category: 'Worked Examples',
+    summaryEn: 'AGORA-885: the by-name owner hand-over as an encoding: the owner is a cell and a borrow, the hand-over a take into the cell. Straight-line and decided at run time (an ite on the flag nurlc reads off the buffer), each run safe and leak-free (main_safe, main_no_leak, mainJ_safe, mainJ_no_leak).',
+  },
   Layout: {
     layer: 4,
     category: 'Memory Invariant',

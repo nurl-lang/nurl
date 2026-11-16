@@ -1,0 +1,3 @@
+### Changed
+
+- **The formal claim covers the hand-over of an owner's old value to the binding that reads it** (AGORA-885). After `= o other`, a later `= other …` gives `other`'s old value to `o` instead of freeing it. `formal/A2/HandOver.lean` reads that as an owner cell and a borrow, with the hand-over a `take` into the cell, and proves the encoded program, straight-line and with the hand-over decided at run time, memory-safe and leak-free with A2's existing rules (`formal/A2/HANDOVER_DESIGN.md`). A field's reader and the keep rule (`= o ( f … o … )`) stay outside the claim, as `formal/CLAIM.md` says.

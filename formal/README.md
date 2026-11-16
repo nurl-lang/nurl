@@ -101,6 +101,8 @@ The same modules under `A2/`, extended, and:
 | `DynCell` | values owned or not per call, as the calculus has them: an owner cell the caller provides (an `inout` option the callee fills when the value is fresh) and a borrow of its payload or of the argument; the per-call function checked against its summary (`pick_ok`) and a caller run safe and leak-free by the crown theorems (`main_safe`, `main_no_leak`) |
 | `DYN_DESIGN.md` | why the owner cell, how it corresponds to nurlc's ownership bit, and what phase C / D must show of it |
 | `PopWitness` | AGORA-888: a pop and a remove through a borrow, read as the steps the calculus has: the truncation to the last index (`Expr.dec`, a saturating decrement), the number read before it, and element sets one place down for a remove; through a `vec_at` borrow of a `Vec` of `Vec`s and through a cursor (an element `Vec` dropped), typed and run safe and leak-free (`main_safe`, `main_no_leak`) |
+| `HandOver` | AGORA-885: nurlc's by-name hand-over of an owner's old value to the binding that reads it (`= o other`, then `= other …`), as an encoding: the reader is an owner cell and a borrow, and the hand-over a `take` into the cell. Straight-line (`main_safe`, `main_no_leak`) and decided at run time by a flag, nurlc's buffer test (`mainJ_safe`, `mainJ_no_leak`) |
+| `HANDOVER_DESIGN.md` | the encoding against nurlc's drop flags and borrower list, what phase C / D must show of it, and the hand-overs it leaves out |
 | `TakeWitness` | Agora #826: a take out of an `inout .replace` place (`RhsT.take`: the `Vec` moves out, the place keeps a fresh empty one and stays live), nurlc's hand-over of an `inout` handle parameter: the callee checked against its summary (`g_ok`), and a caller that reads its argument after the call run safe and leak-free (`main_safe`, `main_no_leak`) |
 | `TAKE_DESIGN.md` | the take's step and typing, why its `Vec`'s elements hold no view, and how each part of the proof covers it |
 | `ExitWitness` | Agora #871, the early exits: a `break` out of a `while T` from inside a scope whose owned `Vec` the exit drops (`mainB_typed`, `breakB_steps`, `mainB_safe`, `mainB_no_leak`); a `continue`-shaped exit of a loop body's block, the loop left from its head (`mainC_safe`, `mainC_no_leak`); and a `^` from inside a scope of a callee, checked against its summary (`gR_ok`, `returnR_steps`), with its caller run safe and leak-free (`mainR_safe`, `mainR_no_leak`) |
@@ -131,6 +133,11 @@ which is how a trait method's result comes back, takes the cell as one
 more `inout` argument the same way. A raw string that may be fresh is
 the same shape over a `Vec` of bytes. That nurlc's ownership bit behaves
 as the cell does is phase C / D (`A2/DYN_DESIGN.md`).
+
+An owner's old value handed over to the binding that reads it by name
+(`= o other`, then `= other …`) is the same encoding (`HandOver`, AGORA-885).
+The reader is an owner cell and a borrow, and the hand-over is a `take` of
+the old value into the cell (`A2/HANDOVER_DESIGN.md`).
 
 What A2 does not model yet, each a planned refinement of the calculus
 rather than a gap in what it proves:

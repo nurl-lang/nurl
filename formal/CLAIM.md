@@ -97,17 +97,29 @@ the LLVM / C11 memory model rather than redefining it.
     directly or through a callee, and a call into a function that does so
     which passes an argument holding views (`ThruFn`).
 
-  One more form nurlc accepts that A2 does not type: an owner given a new
-  value while something still reads its old one, where nurlc hands the
-  old value over instead of dropping it — to a field's reader when the
-  field is replaced (Agora #265, #354), or kept where a call may give the
-  owner its own value back (`= o ( f … o … )`, #342, #375). A2's `assign`
-  gives an owner only an owned value, and never one that depends on the
-  binding itself (`x ∉ roots E.vdeps`). DynCell's encoding
-  (`A2/DYN_DESIGN.md`) covers a per-call result bound to a fresh binding,
-  and an owner given a lend that cannot come out of its old value
-  (`rules/t375.md`); it does not cover the hand-over. Those programs are
-  outside the claim until an A2 rule (or phase C/D) covers the hand-over.
+  One more form nurlc accepts that A2 does not type directly: an owner
+  given a new value while something still reads its old one, where nurlc
+  hands the old value over instead of dropping it. A2's `assign` gives an
+  owner only an owned value, and never one that depends on the binding
+  itself (`x ∉ roots E.vdeps`).
+  - The hand-over of a whole `String` or `Vec` owner to a binding that
+    reads it by name (`= o other`, then `= other …`; MEMORY.md §7.6) is
+    inside the claim through an encoding (AGORA-885,
+    `A2/HANDOVER_DESIGN.md`). The reader is an owner cell and a borrow,
+    and the hand-over is a `take` of the old value into the cell.
+    `A2/HandOver.lean` types it with A2's own rules, both straight-line
+    and with the hand-over decided at run time. It applies `memory_safe`
+    and `no_leak_end` to both. Showing that nurlc's drop flags and its
+    buffer test behave as the cell does is phase C / D.
+  - Outside the claim still: a field's reader when the field is replaced
+    (Agora #265, #354), and an owner kept where a call may give it its
+    own value back (`= o ( f … o … )`, #342, #375). DynCell's encoding
+    (`A2/DYN_DESIGN.md`) covers a per-call result bound to a fresh
+    binding, and an owner given a lend that cannot come out of its old
+    value (`rules/t375.md`). It does not cover these two. Those programs
+    are outside the claim until an A2 rule (or phase C/D) covers them. A
+    reader a call lent the old value to (`= o ( id other )`) is handed
+    nothing by nurlc, and nurlc refuses a later read of it (AGORA-881).
 
   A hand-over out of an `inout` parameter is inside the claim (Agora
   #826): a function that hands its `inout` parameter of a handle type to a
@@ -770,6 +782,9 @@ Outside A2:
   or later-defined callee, a value block) and #450 (shapes the hand-over
   gate does not reach: a struct given a part of itself through a callee
   whose summary is not final, a struct cursor copy).
+  Since AGORA-885 the by-name hand-over of a whole owner is read
+  through an encoding (`A2/HANDOVER_DESIGN.md`). Each entry here stays
+  listed until its shape is checked against that encoding.
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
 - A view stored through a borrow inside closure code: #395's store
