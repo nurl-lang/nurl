@@ -104,8 +104,8 @@ Each frame types its body in the frame's own contexts; `StmtT.sub` may wrap
 it.  So a body that is typed wherever the old one was gives the frame. -/
 
 theorem StmtT.seq_repl {P : Prog} {Γ : Ctx} {F : List Var} {a b : Stmt} {Δ : Ctx}
-    (ht : StmtT P Γ F (.seq a b) Δ) {a' : Stmt}
-    (hrep : ∀ {Γ' F' Δ'}, StmtT P Γ' F' a Δ' → StmtT P Γ' F' a' Δ') : StmtT P Γ F (.seq a' b) Δ := by
+    (ht : StmtT P ξ Γ F (.seq a b) Δ) {a' : Stmt}
+    (hrep : ∀ {Γ' F' Δ'}, StmtT P ξ Γ' F' a Δ' → StmtT P ξ Γ' F' a' Δ') : StmtT P ξ Γ F (.seq a' b) Δ := by
   generalize hs : Stmt.seq a b = s at ht
   induction ht with
   | seq hb ha hbt _ _ => cases hs; exact .seq hb (hrep ha) hbt
@@ -113,8 +113,8 @@ theorem StmtT.seq_repl {P : Prog} {Γ : Ctx} {F : List Var} {a b : Stmt} {Δ : C
   | _ => cases hs
 
 theorem StmtT.scope_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P Γ F (.scope x s) Δ) {s' : Stmt}
-    (hrep : ∀ {Γ' F' Δ'}, StmtT P Γ' F' s Δ' → StmtT P Γ' F' s' Δ') : StmtT P Γ F (.scope x s') Δ := by
+    (ht : StmtT P ξ Γ F (.scope x s) Δ) {s' : Stmt}
+    (hrep : ∀ {Γ' F' Δ'}, StmtT P ξ Γ' F' s Δ' → StmtT P ξ Γ' F' s' Δ') : StmtT P ξ Γ F (.scope x s') Δ := by
   generalize hs : Stmt.scope x s = s0 at ht
   induction ht with
   | scope hE hx hb hp _ => cases hs; exact .scope hE hx (hrep hb) hp
@@ -122,8 +122,8 @@ theorem StmtT.scope_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {s : Stm
   | _ => cases hs
 
 theorem StmtT.rbind_repl {P : Prog} {Γ : Ctx} {F : List Var} {p : Var} {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P Γ F (.rbind p s) Δ) {s' : Stmt}
-    (hrep : ∀ {Γ' F' Δ'}, StmtT P Γ' F' s Δ' → StmtT P Γ' F' s' Δ') : StmtT P Γ F (.rbind p s') Δ := by
+    (ht : StmtT P ξ Γ F (.rbind p s) Δ) {s' : Stmt}
+    (hrep : ∀ {Γ' F' Δ'}, StmtT P ξ Γ' F' s Δ' → StmtT P ξ Γ' F' s' Δ') : StmtT P ξ Γ F (.rbind p s') Δ := by
   generalize hs : Stmt.rbind p s = s0 at ht
   induction ht with
   | rbind hE hm hl ha hp hb hd _ => cases hs; exact .rbind hE hm hl ha hp (hrep hb) hd
@@ -131,8 +131,8 @@ theorem StmtT.rbind_repl {P : Prog} {Γ : Ctx} {F : List Var} {p : Var} {s : Stm
   | _ => cases hs
 
 theorem StmtT.frozen_repl {P : Prog} {Γ : Ctx} {F : List Var} {z : List Var} {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P Γ F (.frozen z s) Δ) {s' : Stmt}
-    (hrep : ∀ {Γ' F' Δ'}, StmtT P Γ' F' s Δ' → StmtT P Γ' F' s' Δ') : StmtT P Γ F (.frozen z s') Δ := by
+    (ht : StmtT P ξ Γ F (.frozen z s) Δ) {s' : Stmt}
+    (hrep : ∀ {Γ' F' Δ'}, StmtT P ξ Γ' F' s Δ' → StmtT P ξ Γ' F' s' Δ') : StmtT P ξ Γ F (.frozen z s') Δ := by
   generalize hs : Stmt.frozen z s = s0 at ht
   induction ht with
   | frozen hb hz _ => cases hs; exact .frozen (hrep hb) hz
@@ -140,9 +140,9 @@ theorem StmtT.frozen_repl {P : Prog} {Γ : Ctx} {F : List Var} {z : List Var} {s
   | _ => cases hs
 
 theorem StmtT.scopeD_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P Γ F (.scopeD x f s) Δ) {s' : Stmt} (hsp : s'.spine = s.spine)
-    (hrep : ∀ {Γ' F' Δ'}, StmtT P Γ' F' s Δ' → StmtT P Γ' F' s' Δ') :
-    StmtT P Γ F (.scopeD x f s') Δ := by
+    (ht : StmtT P ξ Γ F (.scopeD x f s) Δ) {s' : Stmt} (hsp : s'.spine = s.spine)
+    (hrep : ∀ {Γ' F' Δ'}, StmtT P ξ Γ' F' s Δ' → StmtT P ξ Γ' F' s' Δ') :
+    StmtT P ξ Γ F (.scopeD x f s') Δ := by
   generalize hs : Stmt.scopeD x f s = s0 at ht
   induction ht with
   | scopeD hE hx hb hp hk hw hn hΔ hsf _ =>
@@ -151,8 +151,8 @@ theorem StmtT.scopeD_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {f : Na
   | _ => cases hs
 
 theorem StmtT.scopeL_repl {P : Prog} {Γ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
-    {Δ : Ctx} (ht : StmtT P Γ F (.scopeL k t x s) Δ) {s' : Stmt} (hsp : s'.spine = s.spine)
-    (hrep : ∀ {Γ' F' Δ'}, StmtT P Γ' F' s Δ' → StmtT P Γ' F' s' Δ') : StmtT P Γ F (.scopeL k t x s') Δ := by
+    {Δ : Ctx} (ht : StmtT P ξ Γ F (.scopeL k t x s) Δ) {s' : Stmt} (hsp : s'.spine = s.spine)
+    (hrep : ∀ {Γ' F' Δ'}, StmtT P ξ Γ' F' s Δ' → StmtT P ξ Γ' F' s' Δ') : StmtT P ξ Γ F (.scopeL k t x s') Δ := by
   generalize hs : Stmt.scopeL k t x s = s0 at ht
   induction ht with
   | scopeL hE hx hb hp hk hw hn _ => cases hs; exact .scopeL hE hx (hrep hb) hp (by rw [hsp]; exact hk) hw hn
@@ -162,11 +162,11 @@ theorem StmtT.scopeL_repl {P : Prog} {Γ : Ctx} {F : List Var} {k : Nat} {t : Ty
 /-- A `recover` frame whose body is retyped and whose remembered store has
     more addresses live, with the same bindings, `nv` and `nid`. -/
 theorem StmtT.catchR_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt}
-    {Δ : Ctx} (ht : StmtT P Γ F (.catchR x m0 s) Δ) {m0' : Mem} {s' : Stmt}
+    {Δ : Ctx} (ht : StmtT P ξ Γ F (.catchR x m0 s) Δ) {m0' : Mem} {s' : Stmt}
     (hst : m0'.st = m0.st) (hnv : m0'.nv = m0.nv) (hnid : m0'.nid = m0.nid) (hblk : m0'.blk = m0.blk)
     (hal : ∀ i, m0.alloc i = true → m0'.alloc i = true) (hsp : s'.spine = s.spine)
-    (hrep : ∀ {Γ' F' Δ'}, StmtT P Γ' F' s Δ' → StmtT P Γ' F' s' Δ') :
-    StmtT P Γ F (.catchR x m0' s') Δ := by
+    (hrep : ∀ {Γ' F' Δ'}, StmtT P ξ Γ' F' s Δ' → StmtT P ξ Γ' F' s' Δ') :
+    StmtT P ξ Γ F (.catchR x m0' s') Δ := by
   generalize hs : Stmt.catchR x m0 s = s0 at ht
   induction ht with
   | catchR hx hb hmi hra hk hds _ =>
@@ -183,7 +183,7 @@ theorem StmtT.catchR_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {m0 : M
 
 /-- **A statement whose remembered stores grew is typed like the original.** -/
 theorem StmtT.ghost {P : Prog} {s s' : Stmt} (hg : GhostRel s s') :
-    ∀ {Γ F Δ}, StmtT P Γ F s Δ → StmtT P Γ F s' Δ := by
+    ∀ {Γ F Δ}, StmtT P ξ Γ F s Δ → StmtT P ξ Γ F s' Δ := by
   induction hg with
   | refl => exact fun ht => ht
   | seq _ _ ih => exact fun ht => StmtT.seq_repl ht ih

@@ -628,7 +628,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       rw [hpost] at h1
       exact ⟨E1, by simp [setE, upd_ne _ _ hvx, h1], by rwa [Entry.clean_dbind] at hd,
         by rwa [clean_mode] at hos⟩
-    have hcatch : StmtT P ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) F (.catchR x m0 (callIn fn [] m.nv x))
+    have hcatch : StmtT P ξ ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) F (.catchR x m0 (callIn fn [] m.nv x))
         (setE Γ x (callRes Γ fn [])) :=
       StmtT.catchR hxF hIn hM hanchΔ hKO hDS
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF

@@ -145,7 +145,7 @@ def R0 : Entry := ⟨.int, .bor, false, [], [], false, false⟩
 def EDT : Entry := ⟨DT, .own, true, [], [], false, false⟩
 def ECD : Entry := ⟨CDT, .own, true, [], [], false, false⟩
 
-theorem dfn_body : StmtT Pc (sigCtx dfn) [] dfn.body
+theorem dfn_body : StmtT Pc ξ (sigCtx dfn) [] dfn.body
     (setE (kill .replace false 1 (sigCtx dfn)) 1 { intE with mode := R0.mode }) := by
   have hc : sigCtx dfn 1 = some R0 := by simp [sigCtx, dfn, R0, resMode]
   have hflags : ∀ v E, sigCtx dfn v = some E → E.dtor = false ∧ E.dbind = false := by
@@ -175,7 +175,7 @@ theorem dfn_ok : FnOK Pc dfn := by
 
 /-! ### The drop method's code: the environment goes to a `letd` -/
 
-theorem code_body : ∃ Δ, StmtT Pc (sigCtx code) [] code.body Δ ∧
+theorem code_body : ∃ Δ, StmtT Pc ξ (sigCtx code) [] code.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
   have h0 : sigCtx code 0 = some EDT := by simp [sigCtx, code, paramE, EDT, DT, T, Ty.hasFn]
@@ -200,7 +200,7 @@ theorem code_body : ∃ Δ, StmtT Pc (sigCtx code) [] code.body Δ ∧
     simp [Kc, Kb, A2.setE, upd, A2.kill, h1, killE, hits, R0, Entry.vdeps]
   let Kd : Ctx := A2.setE (kill .replace false 1 Kc) 1 { intE with mode := R0.mode }
   have hKd : NoRootb Kd := (hKc.kill _ _ _).setE (by simp [intE, R0])
-  have hasg : StmtT Pc Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
+  have hasg : StmtT Pc ξ Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
     StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
@@ -226,7 +226,7 @@ theorem code_ok : FnOK Pc code := by
 
 /-! ### The glue: the call of the drop method, the receiver owned -/
 
-theorem glue_body : ∃ Δ, StmtT Pc (sigCtx glue) [] glue.body Δ ∧
+theorem glue_body : ∃ Δ, StmtT Pc ξ (sigCtx glue) [] glue.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
   have h0 : sigCtx glue 0 = some ECD := by simp [sigCtx, glue, paramE, ECD, CDT, CT, Ty.hasFn]
@@ -277,7 +277,7 @@ theorem glue_body : ∃ Δ, StmtT Pc (sigCtx glue) [] glue.body Δ ∧
     simp [Kc, G1, A2.setE, upd, A2.kill, h1, killE, hits, R0, Entry.vdeps]
   let Kd : Ctx := A2.setE (kill .replace false 1 Kc) 1 { intE with mode := R0.mode }
   have hKd : NoRootb Kd := (hKc.kill _ _ _).setE (by simp [intE, R0])
-  have hasg : StmtT Pc Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
+  have hasg : StmtT Pc ξ Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
     StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
@@ -330,7 +330,7 @@ def main : Stmt :=
 
 def EP : Entry := ⟨T, .own, true, [], [] ++ [], false, false⟩
 
-theorem main_typed : ∃ Δ, StmtT Pc (fun _ => none) [] main Δ := by
+theorem main_typed : ∃ Δ, StmtT Pc ξ (fun _ => none) [] main Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
@@ -388,7 +388,7 @@ theorem main_safe {m' : Mem} {s' : Stmt} (hr : Steps Pc (emptyMem 4) main (.ok m
 /-- ... and the closure is no `letv`'s: `letv` binds no owned value whose type
     holds a destructor value, which the closure's does. -/
 theorem main_letv_refused {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
-    ¬ StmtT Pc Γ F (.letv x (.pack [1] DT [2] 2 []) s) Δ := by
+    ¬ StmtT Pc ξ Γ F (.letv x (.pack [1] DT [2] 2 []) s) Δ := by
   intro h
   obtain ⟨Γ0, E, Γ1, hr, hnd⟩ := A2.Dtor.letv_owned_no_dtor h
   cases hr with
@@ -523,7 +523,7 @@ theorem pack_codes2 : CodeOK Pd [1, 3] DT [2, 4] [] := by
 
 def ECD2 : Entry := ⟨CDT2, .own, true, [], [], false, false⟩
 
-theorem dfn_body2 : StmtT Pd (sigCtx dfn) [] dfn.body
+theorem dfn_body2 : StmtT Pd ξ (sigCtx dfn) [] dfn.body
     (setE (kill .replace false 1 (sigCtx dfn)) 1 { intE with mode := R0.mode }) := by
   have hc : sigCtx dfn 1 = some R0 := by simp [sigCtx, dfn, R0, resMode]
   have hflags : ∀ v E, sigCtx dfn v = some E → E.dtor = false ∧ E.dbind = false := by
@@ -553,7 +553,7 @@ theorem dfn_ok2 : FnOK Pd dfn := by
 
 /-! ### The drop method's code: the environment goes to a `letd` -/
 
-theorem code_body2 : ∃ Δ, StmtT Pd (sigCtx code) [] code.body Δ ∧
+theorem code_body2 : ∃ Δ, StmtT Pd ξ (sigCtx code) [] code.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
   have h0 : sigCtx code 0 = some EDT := by simp [sigCtx, code, paramE, EDT, DT, T, Ty.hasFn]
@@ -578,7 +578,7 @@ theorem code_body2 : ∃ Δ, StmtT Pd (sigCtx code) [] code.body Δ ∧
     simp [Kc, Kb, A2.setE, upd, A2.kill, h1, killE, hits, R0, Entry.vdeps]
   let Kd : Ctx := A2.setE (kill .replace false 1 Kc) 1 { intE with mode := R0.mode }
   have hKd : NoRootb Kd := (hKc.kill _ _ _).setE (by simp [intE, R0])
-  have hasg : StmtT Pd Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
+  have hasg : StmtT Pd ξ Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
     StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
@@ -604,7 +604,7 @@ theorem code_ok2 : FnOK Pd code := by
 
 /-! ### The glueD: the call of the drop method, the receiver owned -/
 
-theorem glue_body2 : ∃ Δ, StmtT Pd (sigCtx glueD) [] glueD.body Δ ∧
+theorem glue_body2 : ∃ Δ, StmtT Pd ξ (sigCtx glueD) [] glueD.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
   have h0 : sigCtx glueD 0 = some ECD2 := by simp [sigCtx, glueD, paramE, ECD2, CDT2, CT2, Ty.hasFn]
@@ -655,7 +655,7 @@ theorem glue_body2 : ∃ Δ, StmtT Pd (sigCtx glueD) [] glueD.body Δ ∧
     simp [Kc, G1, A2.setE, upd, A2.kill, h1, killE, hits, R0, Entry.vdeps]
   let Kd : Ctx := A2.setE (kill .replace false 1 Kc) 1 { intE with mode := R0.mode }
   have hKd : NoRootb Kd := (hKc.kill _ _ _).setE (by simp [intE, R0])
-  have hasg : StmtT Pd Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
+  have hasg : StmtT Pd ξ Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
     StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
@@ -685,7 +685,7 @@ theorem glue_ok2 : FnOK Pd glueD := by
 
 /-! ### The ordinary method: its code, and its interface (the receiver lent, at `CDT2`) -/
 
-theorem callCode_body2 : StmtT Pd (sigCtx callCode) [] callCode.body
+theorem callCode_body2 : StmtT Pd ξ (sigCtx callCode) [] callCode.body
     (setE (kill .replace false 1 (sigCtx callCode)) 1 { intE with mode := R0.mode }) := by
   have hc : sigCtx callCode 1 = some R0 := by simp [sigCtx, callCode, R0, resMode]
   have hflags : ∀ v E, sigCtx callCode v = some E → E.dtor = false ∧ E.dbind = false := by
@@ -713,7 +713,7 @@ theorem callCode_ok2 : FnOK Pd callCode := by
       by simp [callCode]⟩
   · intro i hi b hb; simp [callCode] at hi; subst hi; simp [callCode] at hb
 
-theorem callSig_body2 : StmtT Pd (sigCtx callSig) [] callSig.body
+theorem callSig_body2 : StmtT Pd ξ (sigCtx callSig) [] callSig.body
     (setE (kill .replace false 1 (sigCtx callSig)) 1 { intE with mode := R0.mode }) := by
   have hc : sigCtx callSig 1 = some R0 := by simp [sigCtx, callSig, R0, resMode]
   have hflags : ∀ v E, sigCtx callSig v = some E → E.dtor = false ∧ E.dbind = false := by
@@ -787,7 +787,7 @@ theorem callT_lent {P : Prog} {Γ : Ctx} {F : List Var} {σ : Nat} {sig : Fn} {c
     binding, is typed**: the call by `StmtT.callc`, the receiver's entry of
     the destructor type `CDT2`, the interface (function 4) taking it lent at
     that type. -/
-theorem main2_typed : ∃ Δ, StmtT Pd (fun _ => none) [] main2 Δ := by
+theorem main2_typed : ∃ Δ, StmtT Pd ξ (fun _ => none) [] main2 Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])

@@ -362,7 +362,7 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
   | editSetOOB _ ht _ _ _ =>
     cases hr; intro v h h'
     exact absurd (takeVal_none ht h) h'
-  | seqExit | scopeExit | scopeDExit | blockSkip | blockExit0 | blockExit | loop =>
+  | blockSkip | blockExit _ | loop =>
     cases hr; intro v h h'; exact absurd h h'
   | _ => cases hr
 
@@ -404,7 +404,7 @@ theorem step_gone {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m
     have hvx : v ≠ x := fun e => hck.2.1 (e ▸ h)
     simp [upd_ne _ _ hvx, panic_spine hp v h]
   | reap hsrc _ _ => cases hr; intro v h _; rw [src_spine hsrc] at h; cases h
-  | scopeExit | scopeDExit => cases hr; intro v h h'; simp_all [Stmt.spine]
+  | blockExit he => cases hr; intro v h h'; rw [he.spine] at h'; exact absurd h h'
   | _ => cases hr <;> (intro v h _; simp [Stmt.spine] at h)
 
 end A2

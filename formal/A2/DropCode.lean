@@ -69,7 +69,7 @@ theorem vecFreeD_typed {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {f : Nat
     (hty : E.ty = .vec (.dtor f t)) (hxF : x ∉ F) (hnp : NoPin Γ x) (hds : DtorSafe Γ .replace false x)
     (hv : t.holdsView = false) (hst : t.isStruct = true) (hfn : t.hasFn = false)
     (hok : DropFnOK P f t) (hy : Γ y = none) (hyF : y ∉ F) (he : EndOK Γ y) :
-    StmtT P Γ F (Stmt.vecFreeD y f x)
+    StmtT P ξ Γ F (Stmt.vecFreeD y f x)
       (setE (kill .replace false x Γ) x { E with live := false, dtor := false }) := by
   have hxy : y ≠ x := fun h => by rw [h, hx] at hy; cases hy
   let Γ1 : Ctx := setE (kill .replace false x Γ) x { E with live := false, dtor := false }
@@ -107,7 +107,7 @@ theorem removeD_typed {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {f : Nat}
     (hfix : kill .drop false x Γ = Γ) (hi : ExprT Γ i)
     (hv : t.holdsView = false) (hst : t.isStruct = true) (hfn : t.hasFn = false)
     (hok : DropFnOK P f t) (hy : Γ y = none) (hyF : y ∉ F) (he : EndOK Γ y) :
-    StmtT P Γ F (.letd y f (.remove x i) .skip) Γ := by
+    StmtT P ξ Γ F (.letd y f (.remove x i) .skip) Γ := by
   have hr : RhsT Γ F (.remove x i) (popE x E (.dtor f t)) (kill .drop (Ty.dtor f t).holdsView x Γ) :=
     RhsT.remove hx hl hty hcd hxF (by simpa [Ty.holdsView, hv] using hds) hi
   have hhv : (Ty.dtor f t).holdsView = false := by simpa [Ty.holdsView] using hv
@@ -133,7 +133,7 @@ theorem vecTruncD_typed {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {f : Na
     (hfix : kill .drop false x Γ = Γ) (hn : ExprT Γ n)
     (hv : t.holdsView = false) (hst : t.isStruct = true) (hfn : t.hasFn = false)
     (hok : DropFnOK P f t) (hy : Γ y = none) (hyF : y ∉ F) (he : EndOK Γ y) :
-    StmtT P Γ F (Stmt.vecTruncD y f x n) Γ :=
+    StmtT P ξ Γ F (Stmt.vecTruncD y f x n) Γ :=
   StmtT.while rfl (ExprT.lt hn (ExprT.len hx hl hty))
     (removeD_typed hw hx hl hcd hty hxF hds hfix hn hv hst hfn hok hy hyF he)
 
@@ -146,7 +146,7 @@ theorem vecClearD_typed {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {f : Na
     (hfix : kill .drop false x Γ = Γ)
     (hv : t.holdsView = false) (hst : t.isStruct = true) (hfn : t.hasFn = false)
     (hok : DropFnOK P f t) (hy : Γ y = none) (hyF : y ∉ F) (he : EndOK Γ y) :
-    StmtT P Γ F (Stmt.vecClearD y f x) Γ :=
+    StmtT P ξ Γ F (Stmt.vecClearD y f x) Γ :=
   vecTruncD_typed hw hx hl hcd hty hxF hds hfix ExprT.lit hv hst hfn hok hy hyF he
 
 /-- **`vec_set` over an element of a `Vec` of destructor values is typed
@@ -162,8 +162,8 @@ theorem vecSetD_typed {P : Prog} {Γ Δ : Ctx} {F : List Var} {x y z : Var} {f :
     (hfix : kill .drop false x Γ = Γ) (hi : ExprT Γ i)
     (hv : t.holdsView = false) (hst : t.isStruct = true) (hfn : t.hasFn = false)
     (hok : DropFnOK P f t) (hy : Γ y = none) (hyF : y ∉ F) (he : EndOK Γ y)
-    (hpush : StmtT P Γ F (.push x z) Δ) :
-    StmtT P Γ F (Stmt.vecSetD y f x i z) Δ :=
+    (hpush : StmtT P ξ Γ F (.push x z) Δ) :
+    StmtT P ξ Γ F (Stmt.vecSetD y f x i z) Δ :=
   StmtT.seq rfl (removeD_typed hw hx hl hcd hty hxF hds hfix hi hv hst hfn hok hy hyF he)
     (StmtT.insert hi hxF hpush)
 
@@ -193,13 +193,13 @@ theorem withElemD_typed {P : Prog} {Γ Δ1 Δ : Ctx} {F : List Var} {v x : Var} 
     (hi : ExprT Γ i) (hv : t.holdsView = false) (hst : t.isStruct = true) (hfn : t.hasFn = false)
     (hok : DropFnOK P f t) (hxn : Γ x = none) (hxF : x ∉ F)
     (hss : s.src = true) (hH : HeldUp (kill .drop false v Γ) (popE v E (.dtor f t)) H)
-    (hs : StmtT P (setE (kill .drop false v Γ) x
+    (hs : StmtT P ξ (setE (kill .drop false v Γ) x
       (Entry.arm { popE v E (.dtor f t) with ty := .dtor f t, held := H })) F s Δ1)
-    (hi1 : ExprT Δ1 i) (hpush : StmtT P Δ1 F (.push v x) Δ) (he : EndOK Δ x)
+    (hi1 : ExprT Δ1 i) (hpush : StmtT P ξ Δ1 F (.push v x) Δ) (he : EndOK Δ x)
     (hna : x ∉ s.assigns)
     -- faithful to the in-place pass (unused by the typing)
     (_hvs : v ∉ s.vars) (_hiv : ∀ w ∈ i.vars, w ∉ s.vars) (_hnp : NoPin Γ v) :
-    StmtT P Γ F (Stmt.withElemD v i x f s) (exitScope x Δ) := by
+    StmtT P ξ Γ F (Stmt.withElemD v i x f s) (exitScope x Δ) := by
   have hr : RhsT Γ F (.remove v i) (popE v E (.dtor f t)) (kill .drop (Ty.dtor f t).holdsView v Γ) :=
     RhsT.remove hx hl hty hcd hvF (by simpa [Ty.holdsView, hv] using hds) hi
   have hhv : (Ty.dtor f t).holdsView = false := by simpa [Ty.holdsView] using hv
@@ -234,7 +234,7 @@ def main6 : Stmt :=
       (.seq (.push 3 2) (.seq (Stmt.vecTruncD 4 0 3 (.lit 0))
         (.seq (Stmt.vecClearD 6 0 3) (Stmt.vecFreeD 5 0 3)))))))
 
-theorem main6_typed : ∃ Δ, StmtT P (fun _ => none) [] main6 Δ := by
+theorem main6_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main6 Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
@@ -338,7 +338,7 @@ def mainSet : Stmt :=
     (.letd 2 0 (.pair 0 1) (.letd 3 0 (.new DT)
       (.seq (.push 3 2) (.letd 4 0 (.pair 0 1) (Stmt.vecSetD 5 0 3 (.lit 0) 4))))))
 
-theorem mainSet_typed : ∃ Δ, StmtT P (fun _ => none) [] mainSet Δ := by
+theorem mainSet_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainSet Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
@@ -464,7 +464,7 @@ def mainElem : Stmt :=
     (.letd 2 0 (.pair 0 1) (.letd 3 0 (.new DT)
       (.seq (.push 3 2) (Stmt.withElemD 3 (.lit 0) 4 0 .skip)))))
 
-theorem mainElem_typed : ∃ Δ, StmtT P (fun _ => none) [] mainElem Δ := by
+theorem mainElem_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainElem Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
@@ -524,7 +524,7 @@ theorem mainElem_typed : ∃ Δ, StmtT P (fun _ => none) [] mainElem Δ := by
     simp [EA, hEV6, popE, DT, T, Entry.arm, Ty.dtorViews, Ty.holdsView]
   let K7 : Ctx := A2.setE K6 4 EA
   have hK7 : NoRootb K7 := hK6.setE (by rw [hEAe]; simp)
-  have hs : StmtT P (A2.setE (kill .drop false 3 K6) 4 EA) [] .skip K7 := by
+  have hs : StmtT P ξ (A2.setE (kill .drop false 3 K6) 4 EA) [] .skip K7 := by
     rw [hfix]; exact StmtT.skip
   have h73 : K7 3 = some EV6 := by simp [K7, K6, A2.setE, upd]
   -- the give-back, typed as `vec_push v x`
@@ -586,7 +586,7 @@ def main9 : Stmt :=
     (.letd 2 0 (.pair 0 1) (.letd 3 0 (.new DT)
       (.seq (.push 3 2) (.letv 4 (.expr (.lit 3)) (.letd 5 7 (.pair 3 4) .skip))))))
 
-theorem main9_typed : ∃ Δ, StmtT P (fun _ => none) [] main9 Δ := by
+theorem main9_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main9 Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])

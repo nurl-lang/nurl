@@ -39,7 +39,7 @@ theorem ES_flags : ES.mode ≠ .rootb ∧ ES.dtor = false ∧ ES.dbind = false :
 
 /-- **An `Arc` of a destructor value is typed** (Agora #610: `Ty.ok` admits
     `arc (dtor f u)`, `RhsT.arcNew` takes the value), as its clone is. -/
-theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
+theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
@@ -167,7 +167,7 @@ theorem ESV_flags : ESV.mode ≠ .rootb ∧ ESV.dtor = false ∧ ESV.dbind = fal
 
 /-- **An `Arc` of a `Vec` of destructor values is typed** (Agora #755:
     `Ty.ok` admits `arc (vec (dtor f u))`, `RhsT.arcNew` takes the `Vec`). -/
-theorem mainV_typed : ∃ Δ, StmtT P (fun _ => none) [] mainV Δ := by
+theorem mainV_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainV Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])

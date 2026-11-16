@@ -242,7 +242,7 @@ theorem drop0_ok : DropFnOK P 0 TA :=
 theorem assign_res {fn : Fn} {r : Var} (hc : sigCtx fn r = some R0)
     (hp : ∀ p E, sigCtx fn p = some E → E.mode = .rootb → E.vdeps = [])
     (hflags : ∀ v E, sigCtx fn v = some E → E.dtor = false ∧ E.dbind = false) :
-    StmtT P (sigCtx fn) [] (.assign r (.expr (.lit 0)))
+    StmtT P ξ (sigCtx fn) [] (.assign r (.expr (.lit 0)))
       (setE (kill .replace false r (sigCtx fn)) r { intE with mode := R0.mode }) :=
   StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
@@ -331,7 +331,7 @@ def EL : Entry := ⟨.lk DA, .own, true, [], [], false, false⟩
     (Agora #803: `Ty.ok` admits `lk (dtor f u)` when `u` holds no cell share,
     `RhsT.lockNew` takes the value), and so is its update through
     `locked_apply` (`StmtT.lockedApply`). -/
-theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
+theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
   have hD0 : NoDeps (fun _ => none) := fun _ _ h => by cases h

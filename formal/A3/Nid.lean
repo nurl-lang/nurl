@@ -44,7 +44,7 @@ theorem heapOK_grow {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
     space: its statement is typed, the invariant holds, its packages' codes
     are typed, and every binding is in a run-time scope it is inside of. -/
 def ThreadOK (P : Prog) (m : Mem) (s : Stmt) : Prop :=
-  ∃ Γ F Δ, StmtT P Γ F s Δ ∧ Inv m Γ F s ∧ MemCodes P m ∧ s.codesOK P ∧ Closed Γ s
+  ∃ Γ F Δ, StmtT P .none Γ F s Δ ∧ Inv m Γ F s ∧ MemCodes P m ∧ s.codesOK P ∧ Closed Γ s
 
 /-- A3.1: an address the payload of a block of `B` owns. -/
 def PayIn (B : Nat → Option Blk) (i : Nat) : Prop := ∃ k bl, B k = some bl ∧ i ∈ bl.tree.ids

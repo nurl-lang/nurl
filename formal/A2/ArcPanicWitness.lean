@@ -232,7 +232,7 @@ theorem wf_of {Γ : Ctx} (hD : NoDeps Γ) (hf : ∀ v E, Γ v = some E → E.dto
 
 /-- A panic typed at the context it is in. -/
 theorem panic_typed {Γ : Ctx} {F : List Var} (hD : NoDeps Γ)
-    (hf : ∀ v E, Γ v = some E → E.dtor = false ∧ E.dbind = false) : StmtT P Γ F .panic Γ :=
+    (hf : ∀ v E, Γ v = some E → E.dtor = false ∧ E.dbind = false) : StmtT P ξ Γ F .panic Γ :=
   StmtT.panic (wf_of hD hf) hD.names (fun _ => rfl) (fun _ E h => ⟨E, h, rfl, rfl, fun _ => rfl⟩)
     (DKeep.refl _ _) (DStay.refl _ _)
 
@@ -245,7 +245,7 @@ def ES : Entry := ⟨.arc DP, .own, true, [], [], false, false⟩
 theorem tail_typed {Γ : Ctx} (hR : NoRootb Γ) (hD : NoDeps Γ) {a b y s : Var}
     (hab : a ≠ b) (hay : a ≠ y) (has : a ≠ s) (hby : b ≠ y) (hbs : b ≠ s) (hys : y ≠ s)
     (ha : Γ a = none) (hb : Γ b = none) (hy : Γ y = none) (hs : Γ s = none) :
-    ∃ Δ, StmtT P Γ [] (tail a b y s) Δ ∧ NoRootb Δ ∧ NoDeps Δ ∧
+    ∃ Δ, StmtT P ξ Γ [] (tail a b y s) Δ ∧ NoRootb Δ ∧ NoDeps Δ ∧
       ∀ v, v ≠ a → v ≠ b → v ≠ y → v ≠ s → Δ v = Γ v := by
   let K1 : Ctx := A2.setE Γ a intE
   let K2 : Ctx := A2.setE K1 b intE
@@ -305,7 +305,7 @@ theorem tail_typed {Γ : Ctx} (hR : NoRootb Γ) (hD : NoDeps Γ) {a b y s : Var}
 theorem assign_res {fn : Fn} {r : Var} (hc : sigCtx fn r = some R0)
     (hp : ∀ p E, sigCtx fn p = some E → E.mode = .rootb → E.vdeps = [])
     (hflags : ∀ v E, sigCtx fn v = some E → E.dtor = false ∧ E.dbind = false) :
-    StmtT P (sigCtx fn) [] (.assign r (.expr (.lit 0)))
+    StmtT P ξ (sigCtx fn) [] (.assign r (.expr (.lit 0)))
       (setE (kill .replace false r (sigCtx fn)) r { intE with mode := R0.mode }) :=
   StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
@@ -393,7 +393,7 @@ theorem rfn_ok : FnOK P rfn := by
   · intro i hi; simp [rfn] at hi
 
 /-- `rfn3`'s body after its `= r 0`: the destructor binding, then `tail`. -/
-theorem rfn3_rest_typed : ∃ Δ, StmtT P Gr []
+theorem rfn3_rest_typed : ∃ Δ, StmtT P ξ Gr []
       (.letv 1 (.expr (.lit 1)) (.letv 2 (.expr (.lit 2)) (.letd 3 0 (.pair 1 2) (tail 4 5 6 7)))) Δ ∧
       NoRootb Δ ∧ Δ 0 = some intE := by
   have hR : NoRootb Gr := by rw [Gr_eq]; exact noRootb_empty.setE (by simp [intE])
@@ -593,7 +593,7 @@ then the panic goes on, uncaught, and the run ends with the sweep. -/
 def main1 : Stmt :=
   .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2)) (.letd 2 0 (.pair 0 1) (tail 3 4 5 6)))
 
-theorem main1_typed : ∃ Δ, StmtT P (fun _ => none) [] main1 Δ := by
+theorem main1_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main1 Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
@@ -669,7 +669,7 @@ is a panic, `catchR_no_panic`): the run goes on and finishes. -/
 
 def main2 : Stmt := .letrec 0 2 .skip
 
-theorem main2_typed : ∃ Δ, StmtT P (fun _ => none) [] main2 Δ := by
+theorem main2_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main2 Δ := by
   have hpost : callPost (fun _ => none) rfn [] = fun _ => none := by
     funext v; simp [callPost, callPostAux, rfn, killNames, mutNames, argNames]
   have hres : callRes (fun _ => none) rfn [] = intE := by
@@ -739,7 +739,7 @@ theorem main3_body : rfn3.body.rename (callRen rfn3.params [] 1) =
     .seq (.assign 1 (.expr (.lit 0)))
       (.letv 2 (.expr (.lit 1)) (.letv 3 (.expr (.lit 2)) (.letd 4 0 (.pair 2 3) (tail 5 6 7 8)))) := rfl
 
-theorem main3_typed : ∃ Δ, StmtT P (fun _ => none) [] main3 Δ := by
+theorem main3_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main3 Δ := by
   have hpost : callPost (fun _ => none) rfn3 [] = fun _ => none := by
     funext v; simp [callPost, callPostAux, rfn3, killNames, mutNames, argNames]
   have hres : callRes (fun _ => none) rfn3 [] = intE := by

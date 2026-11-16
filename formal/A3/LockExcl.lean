@@ -111,21 +111,21 @@ theorem Redex.lfr_eq {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y y' : 
 section inv
 variable {P : Prog} {Γ Δ : Ctx} {F : List Var}
 
-theorem _root_.A2.StmtT.seq_src {a b : Stmt} (ht : StmtT P Γ F (.seq a b) Δ) : b.src = true := by
+theorem _root_.A2.StmtT.seq_src {a b : Stmt} (ht : StmtT P ξ Γ F (.seq a b) Δ) : b.src = true := by
   generalize hs : Stmt.seq a b = s0 at ht
   induction ht with
   | seq hb _ _ _ _ => cases hs; exact hb
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
-theorem _root_.A2.StmtT.letv_src {x : Var} {r : Rhs} {s : Stmt} (ht : StmtT P Γ F (.letv x r s) Δ) : s.src = true := by
+theorem _root_.A2.StmtT.letv_src {x : Var} {r : Rhs} {s : Stmt} (ht : StmtT P ξ Γ F (.letv x r s) Δ) : s.src = true := by
   generalize hs : Stmt.letv x r s = s0 at ht
   induction ht with
   | letv h1 => cases hs; exact h1
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
-theorem _root_.A2.StmtT.ite_src {c : Expr} {a b : Stmt} (ht : StmtT P Γ F (.ite c a b) Δ) :
+theorem _root_.A2.StmtT.ite_src {c : Expr} {a b : Stmt} (ht : StmtT P ξ Γ F (.ite c a b) Δ) :
     a.src = true ∧ b.src = true := by
   generalize hs : Stmt.ite c a b = s0 at ht
   induction ht with
@@ -133,7 +133,7 @@ theorem _root_.A2.StmtT.ite_src {c : Expr} {a b : Stmt} (ht : StmtT P Γ F (.ite
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
-theorem _root_.A2.StmtT.withElem_src {v x : Var} {i : Expr} {s : Stmt} (ht : StmtT P Γ F (.withElem v i x s) Δ) :
+theorem _root_.A2.StmtT.withElem_src {v x : Var} {i : Expr} {s : Stmt} (ht : StmtT P ξ Γ F (.withElem v i x s) Δ) :
     s.src = true := by
   generalize hs : Stmt.withElem v i x s = s0 at ht
   induction ht with
@@ -141,14 +141,14 @@ theorem _root_.A2.StmtT.withElem_src {v x : Var} {i : Expr} {s : Stmt} (ht : Stm
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
-theorem _root_.A2.StmtT.unpair_src {y x z : Var} {s : Stmt} (ht : StmtT P Γ F (.unpair y x z s) Δ) : s.src = true := by
+theorem _root_.A2.StmtT.unpair_src {y x z : Var} {s : Stmt} (ht : StmtT P ξ Γ F (.unpair y x z s) Δ) : s.src = true := by
   generalize hs : Stmt.unpair y x z s = s0 at ht
   induction ht with
   | unpair h1 => cases hs; exact h1
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
-theorem _root_.A2.StmtT.letd_src {x : Var} {f : Nat} {r : Rhs} {s : Stmt} (ht : StmtT P Γ F (.letd x f r s) Δ) :
+theorem _root_.A2.StmtT.letd_src {x : Var} {f : Nat} {r : Rhs} {s : Stmt} (ht : StmtT P ξ Γ F (.letd x f r s) Δ) :
     s.src = true := by
   generalize hs : Stmt.letd x f r s = s0 at ht
   induction ht with
@@ -156,7 +156,7 @@ theorem _root_.A2.StmtT.letd_src {x : Var} {f : Nat} {r : Rhs} {s : Stmt} (ht : 
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
-theorem _root_.A2.StmtT.withLock_src {a x : Var} {s : Stmt} (ht : StmtT P Γ F (.withLock a x s) Δ) : s.src = true := by
+theorem _root_.A2.StmtT.withLock_src {a x : Var} {s : Stmt} (ht : StmtT P ξ Γ F (.withLock a x s) Δ) : s.src = true := by
   generalize hs : Stmt.withLock a x s = s0 at ht
   induction ht with
   | withLock h1 => cases hs; exact h1
@@ -166,7 +166,7 @@ theorem _root_.A2.StmtT.withLock_src {a x : Var} {s : Stmt} (ht : StmtT P Γ F (
 end inv
 
 /-- A statement is typed (in some context). -/
-def Typed (P : Prog) (s : Stmt) : Prop := ∃ Γ F Δ, StmtT P Γ F s Δ
+def Typed (P : Prog) (s : Stmt) : Prop := ∃ Γ F Δ, StmtT P .none Γ F s Δ
 
 section down
 variable {P : Prog}
@@ -788,7 +788,7 @@ theorem Reach.snoc {P : Prog} {spawn : Nat → Bool} {C C1 C2 : Cfg} (h : Reach 
     check-outs' invariant.** -/
 theorem reach_lockInv {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
+    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C) : LockInv C := by
   have key : ∀ C1 C2, Reach P spawn C1 C2 → Reach P spawn (Cfg.start G s nv) C1 → LockInv C1 → LockInv C2 := by
     intro C1 C2 h
@@ -872,7 +872,7 @@ variable {P : Prog} {spawn : Nat → Bool} {G : Globs} {s0 : Stmt} {Δ0 : Ctx} {
     is checked out (`⟨u, .lock, none⟩`, and Agora #810 not taken), or gone,
     at a key below `nid`; for every payload type. -/
 theorem reach_frame_out (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
@@ -885,7 +885,7 @@ theorem reach_frame_out (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spa
     (Agora #810: `locked_restore` fills only a block `locked_take` emptied,
     `Mem.taken`, never one a `withLock` checked out.) -/
 theorem reach_lock_excl (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i j : Nat} {ti tj : Thread} {K1 K2 : Stmt → Stmt} {k : Nat} {u1 u2 : Ty} {x1 x2 : Var} {b1 b2 : Stmt}
     (hi : C.ths[i]? = some ti) (hj : C.ths[j]? = some tj)
@@ -905,7 +905,7 @@ theorem reach_lock_excl (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spa
     removed and the block left as it was; for every payload type that holds
     no cell share (Agora #837: shares included). -/
 theorem scopeL_typed_panic_of {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
-    {m mo m2 : Mem} (ht : StmtT P Γ F (.scopeL k t x s) Δ) (hi : Inv mo Γ F (.scopeL k t x s))
+    {m mo m2 : Mem} (ht : StmtT P ξ Γ F (.scopeL k t x s) Δ) (hi : Inv mo Γ F (.scopeL k t x s))
     (hst0 : mo.st = m.st) (hb0 : mo.blk = m.blk) (hnc : t.hasCell = false)
     (h : Step P m (.scopeL k t x s) (.panic m2)) :
     ∃ m1, Step P m s (.panic m1) ∧

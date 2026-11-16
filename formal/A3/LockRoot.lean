@@ -647,7 +647,7 @@ theorem TypedAt.capShr {P : Prog} {m : Mem} (hcd : MemCodes P m) :
   | _ => exact fun _ => trivial
 
 theorem _root_.A2.StmtT.withLock_a {P : Prog} {Γ Δ : Ctx} {F : List Var} {a x : Var} {s : Stmt}
-    (ht : StmtT P Γ F (.withLock a x s) Δ) : a ∉ s.vars := by
+    (ht : StmtT P ξ Γ F (.withLock a x s) Δ) : a ∉ s.vars := by
   generalize hs : Stmt.withLock a x s = s0 at ht
   induction ht with
   | withLock _ _ _ _ _ _ _ _ _ h10 => cases hs; exact h10
@@ -735,7 +735,7 @@ theorem Weaker.rootb {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {p : Var} {E' : Entry} 
     a destructor frame's and a check-out's bindings are no borrowed
     parameters, so one on the spine is an `rbind`'s. -/
 theorem rbOK_of {P : Prog} {m : Mem} : ∀ (s : Stmt) {Γ : Ctx} {F : List Var} {Δ : Ctx} (R : List Var),
-    StmtT P Γ F s Δ → MInv m Γ →
+    StmtT P ξ Γ F s Δ → MInv m Γ →
     (∀ p E, Γ p = some E → E.mode = .rootb → p ∈ s.spine ∨ p ∈ R) → RbOK m.st R s := by
   intro s
   induction s with
@@ -1207,7 +1207,7 @@ theorem RootInv.start {G : Globs} {s : Stmt} (hs : s.src = true) (nv : Nat) : Ro
     check-outs' roots.** -/
 theorem reach_rootInv {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
+    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C) : RootInv C := by
   have key : ∀ C1 C2, Reach P spawn C1 C2 → Reach P spawn (Cfg.start G s nv) C1 → RootInv C1 → RootInv C2 := by
     intro C1 C2 h
@@ -1228,7 +1228,7 @@ variable {P : Prog} {spawn : Nat → Bool} {G : Globs} {s0 : Stmt} {Δ0 : Ctx} {
     not name; a borrowed one (the slot owns nothing) is a borrowed
     parameter's, bound by an `rbind` on the thread's spine. -/
 theorem reach_frame_root (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
@@ -1243,7 +1243,7 @@ theorem reach_frame_root (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P sp
 /-- **A frame's block is never removed while the frame is out** (Agora
     #808): the sweep keeps what the root's share refers to. -/
 theorem reach_frame_live (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) : C.blk k ≠ none :=
@@ -1253,7 +1253,7 @@ theorem reach_frame_live (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P sp
     `⟨u, .lock, none⟩` and (Agora #810) not taken, for every payload type
     (`reach_frame_out` with the block there, `reach_frame_live`). -/
 theorem reach_frame_checked_out (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
@@ -1274,7 +1274,7 @@ theorem reach_frame_checked_out (hP : ProgOK P) (hPc : ProgCodes P) (hSp : Spawn
     frame's end is the give-back.  (`Step.scopeLFail` and the code-less
     `Release.drop` are not taken.) -/
 theorem reach_scopeL_end_gives_back (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x .skip))
@@ -1307,7 +1307,7 @@ theorem reach_scopeL_end_gives_back (hP : ProgOK P) (hPc : ProgCodes P) (hSp : S
     An integer the binding holds is never dropped: its release is the
     give-back (`LockDtorWitness.release_cases`). -/
 theorem reach_scopeL_panic (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b))
@@ -1350,7 +1350,7 @@ theorem reach_scopeL_panic (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P 
     premise).  No lock payload holds a read guard (`Ty.ok`, `% NotSend`),
     so the value reaches no view (`LockDtorWitness.noGuard_of_free`). -/
 theorem reach_scopeL_giveCheck (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
@@ -1373,7 +1373,7 @@ theorem reach_scopeL_giveCheck (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnO
     destructor frame after a failing give-back (the defensive rule's result
     `.seq (.scopeD x f .skip) .panic`; `LockDtorWitness.scopeL_typed_no_scopeLPD`). -/
 theorem reach_no_scopeLPD (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b))
@@ -1387,7 +1387,7 @@ theorem reach_no_scopeLPD (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P s
   exact LockDtorWitness.scopeL_typed_no_scopeLPD (m := C.view th) ht' hinv' rfl rfl h m1 f
 
 theorem _root_.A2.StmtT.rbind_live {P : Prog} {m : Mem} {Γ Δ : Ctx} {F : List Var} {y : Var} {s : Stmt}
-    (ht : StmtT P Γ F (.rbind y s) Δ) (hi : MInv m Γ) :
+    (ht : StmtT P ξ Γ F (.rbind y s) Δ) (hi : MInv m Γ) :
     ∃ Γ' E, MInv m Γ' ∧ Γ' y = some E ∧ E.live = true := by
   generalize hs : Stmt.rbind y s = s0 at ht
   induction ht with
@@ -1406,7 +1406,7 @@ theorem _root_.A2.StmtT.rbind_live {P : Prog} {m : Mem} {Γ Δ : Ctx} {F : List 
     A3/Kinds.lean's (`reach_shareKind`), and so `reach_frame_cell_owner`
     below, for any check-out of a cell's block. -/
 theorem reach_frame_root_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
+    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true) (hsc : s0.codesOK P)
     (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) :
@@ -1437,7 +1437,7 @@ theorem reach_frame_root_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : S
     `k` by both kinds, which `reach_shareKind` rules out), and an owner's
     share of cell `k` (`reach_frame_root_cell_owner`). -/
 theorem reach_frame_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true)
+    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true)
     (hsc : s0.codesOK P) (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) (hc : C.Holds (.cell k)) :
@@ -1450,7 +1450,7 @@ theorem reach_frame_cell_owner (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnO
 
 /-- ... so its next step is a step on the cell (`CellOp`, its second case). -/
 theorem reach_frame_cellOp (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn)
-    (hG : GlobsOK P G) (ht : StmtT P (fun _ => none) [] s0 Δ0) (hs : s0.src = true)
+    (hG : GlobsOK P G) (ht : StmtT P ξ (fun _ => none) [] s0 Δ0) (hs : s0.src = true)
     (hsc : s0.codesOK P) (hv : ∀ v ∈ s0.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s0 nv) C)
     {i : Nat} {th : Thread} {K : Stmt → Stmt} {k : Nat} {u : Ty} {x : Var} {b : Stmt}
     (hi : C.ths[i]? = some th) (hK : Redex th.s K (.scopeL k u x b)) (hc : C.Holds (.cell k)) :

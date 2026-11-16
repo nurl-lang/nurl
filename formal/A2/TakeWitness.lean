@@ -83,7 +83,7 @@ theorem take_typed : RhsT (ctx R0) [] (.take 0) Eq (ctx R0) := by
   exact h
 
 /-- `q`'s scope: it ends, and its String is dropped. -/
-theorem letq_typed : StmtT P (ctx R0) [] (.letv 2 (.take 0) .skip) (ctx R0) := by
+theorem letq_typed : StmtT P ξ (ctx R0) [] (.letv 2 (.take 0) .skip) (ctx R0) := by
   have hl := StmtT.letv (P := P) (Γ := ctx R0) (F := []) (x := 2) (r := .take 0) (s := .skip) (E := Eq)
     (Γ1 := ctx R0) rfl (by simp [ctx]) (by simp) take_typed StmtT.skip
     ⟨fun p E hp hm => by
@@ -106,7 +106,7 @@ theorem letq_typed : StmtT P (ctx R0) [] (.letv 2 (.take 0) .skip) (ctx R0) := b
   rw [he] at hl; exact hl
 
 /-- The body: the take, then the answer. -/
-theorem body_typed : StmtT P (sigCtx g) [] g.body (ctx intE) := by
+theorem body_typed : StmtT P ξ (sigCtx g) [] g.body (ctx intE) := by
   rw [sig_eq]
   have ha := StmtT.assign (P := P) (Γ := ctx R0) (F := []) (x := 1) (r := .expr (.lit 0)) (Ex := R0)
     (E := intE) (Γ1 := ctx R0) (by simp [ctx]) (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
@@ -227,7 +227,7 @@ theorem call_ok : CallT P K1 [] 0 [0] intE K1 := by
     simp [mutNames, argNames, argE, K1, A2.setE, upd, Ew, nameDeps, Entry.vdeps, Mode.ownSlot, str] at hd
 
 /-- The caller is well-typed from the empty context. -/
-theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
+theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   have hK2 : NoRootb (A2.setE K1 1 intE) := K1_noRootb.setE (by simp [intE])
   have hK3 : NoRootb (A2.setE (A2.setE K1 1 intE) 2 intE) := hK2.setE (by simp [intE])
   -- `: i n ( vec_len w )`: `w` is live after the call

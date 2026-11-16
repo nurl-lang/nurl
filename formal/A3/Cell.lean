@@ -1103,7 +1103,7 @@ theorem CellInv.live_home {C : Cfg} (h : CellInv C) {i j : Nat} {ti tj : Thread}
 
 /-- What a typed `withLock` checks out through is a live binding. -/
 theorem withLock_live {P : Prog} {Γ : Ctx} {F : List Var} {a x : Var} {s : Stmt} {Δ : Ctx} {m : Mem}
-    (h : StmtT P Γ F (.withLock a x s) Δ) (hi : Inv m Γ F (.withLock a x s)) :
+    (h : StmtT P ξ Γ F (.withLock a x s) Δ) (hi : Inv m Γ F (.withLock a x s)) :
     ∃ Γ' Ea, MInv m Γ' ∧ Γ' a = some Ea ∧ Ea.live = true := by
   generalize hS : Stmt.withLock a x s = S at h hi
   induction h with

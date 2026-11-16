@@ -785,7 +785,7 @@ theorem NameWF.unpair {Γ : Ctx} (hn : NameWF Γ) {y x z : Var} {E : Entry} {a b
 
 /-- Source code keeps what contexts hold by name valid. -/
 theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P Γ F s Δ) : s.src = true → NameWF Γ → NameWF Δ := by
+    (ht : StmtT P ξ Γ F s Δ) : s.src = true → NameWF Γ → NameWF Δ := by
   induction ht with
   | skip => exact fun _ h => h
   | seq _ _ _ iha ihb =>
@@ -795,13 +795,13 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
     rcases ho with rfl | ho
     · exact ih hs hw.names
     · exact ho.names
-  | @letv Γ Γ1 Δ F x r k E hks hx _ hr _ _ _ ih =>
+  | @letv _ Γ Γ1 Δ F x r k E hks hx _ hr _ _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hr.names hn
     have hx1 : Γ1 x = none := by
       have := (hr.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hE)).exitScope x
-  | @withElem Γ Γ1 Δ1 Δ F y x i k Ey E hks hx _ _ _ _ _ _ hr _ _ _ _ _ ihs ihp =>
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx _ _ _ _ _ _ hr _ _ _ _ _ ihs ihp =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hr.names (hn.kill .replace false y)
     have hx1 : Γ1 x = none := by
@@ -809,11 +809,11 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       cases h : Γ1 x <;> simp_all
     exact (ihp rfl (ihs hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) hE))).exitScope x
-  | @withLock Γ Δ F a x k Ea t hks hx _ _ _ _ _ _ _ _ _ _ ih =>
+  | @withLock _ Γ Δ F a x k Ea t hks hx _ _ _ _ _ _ _ _ _ _ ih =>
     intro _ hn
     exact (ih hks (NameWF.setE hn (fun Ex h => by rw [hx] at h; cases h) (fun Ex h => by rw [hx] at h; cases h)
       (fun _ _ => by unfold NameOK; rw [lockE_vdeps]; exact DepsNamed.nil _))).exitScope x
-  | @letd Γ Γ1 Δ F x f r k E t H τ hks hx _ hr hmo hty hstr _ _ hH _ _ _ ih =>
+  | @letd _ Γ Γ1 Δ F x f r k E t H τ hks hx _ hr hmo hty hstr _ _ hH _ _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hr.names hn
     have hx1 : Γ1 x = none := by
@@ -822,26 +822,26 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
     exact (ih hks (NameWF.setE hn1 (E := Entry.arm { E with ty := τ, held := H })
       (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h)
       (fun hl _ => (hE hl (Or.inl hne)).widen hmo hH))).exitScope x
-  | @letcall Γ Γ1 Δ F x f args k E hks hx _ hc _ _ _ ih =>
+  | @letcall _ Γ Γ1 Δ F x f args k E hks hx _ hc _ _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hc.names hP hn
     have hx1 : Γ1 x = none := by
       have := (hc.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hE)).exitScope x
-  | @letrec Γ Γ1 Δ F x f k E fn hks hx _ _ _ _ _ hc _ _ ih =>
+  | @letrec _ Γ Γ1 Δ F x f k E fn hks hx _ _ _ _ _ hc _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hc.names hP hn
     have hx1 : Γ1 x = none := by
       have := (hc.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hE)).exitScope x
-  | @callc Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx _ hc htc _ _ _ _ hcT _ _ _ _ _ ih =>
+  | @callc _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx _ hc htc _ _ _ _ hcT _ _ _ _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, hk⟩ := hcT.names hP hn
     have hx1 : Γ1 x = none := by
       have := (hcT.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h)
       (recvRes_named hE))).exitScope x
-  | @callcE Γ Γ1 Δ F x c j k Ec E ms q σ sig b hks hx _ _ _ _ _ _ _ _ _ _ _ _ _ hcT _ _ _ _ ih =>
+  | @callcE _ Γ Γ1 Δ F x c j k Ec E ms q σ sig b hks hx _ _ _ _ _ _ _ _ _ _ _ _ _ hcT _ _ _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hcT.names hP (hn.kill _ _ _)
     have hx1 : Γ1 x = none := by
@@ -849,10 +849,10 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       cases h : Γ1 x <;> simp_all
     exact (ih hks ((NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) hE).kill _ _ _)).exitScope x
-  | @unpair Γ Δ F y x z k E a b hks hy hl _ hty _ hx hz hxz _ _ _ _ _ _ _ _ _ ih =>
+  | @unpair _ Γ Δ F y x z k E a b hks hy hl _ hty _ hx hz hxz _ _ _ _ _ _ _ _ _ ih =>
     intro _ hn
     exact ((ih hks (hn.unpair hy hl (unpair_ne_int hty) hx hz hxz)).exitScope z).exitScope x
-  | @assign Γ Γ1 F x r Ex E hx _ hmodes hr hty hxd _ _ =>
+  | @assign _ Γ Γ1 F x r Ex E hx _ hmodes hr hty hxd _ _ =>
     intro _ hn
     obtain ⟨hn1, hE, X, hk⟩ := hr.names hn
     obtain ⟨Ex1, hx1, ht1, hm1, _⟩ := hk x Ex hx
@@ -875,7 +875,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       rw [vdeps_mode hos]; exact hN
   | ite _ _ _ _ _ iha _ => intro hs hn; simp only [Stmt.src, Bool.and_eq_true] at hs; exact iha hs.1 hn
   | «while» => exact fun _ h => h
-  | @push Γ Γ1 F x y Ex Ey Ex1 t D hx hlx htx _ _ hy hly htyy _ hpa _ hx1 hl1 =>
+  | @push _ Γ Γ1 F x y Ex Ey Ex1 t D hx hlx htx _ _ hy hly htyy _ hpa _ hx1 hl1 =>
     intro _ hn
     obtain ⟨hn1, hD, hky⟩ := hpa.names hy hly htyy hn
     obtain ⟨Ex2, hx2, ht2, _⟩ := hky x Ex hx
@@ -901,7 +901,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       · exact hN d (List.mem_append_left _ hd)
       · exact hN d (List.mem_append_right _ hd)
       · exact hD d (ownHeld_sub _ _ _ hd)
-  | @editB Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
+  | @editB _ Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
     intro _ hn
     have hn1 : NameWF Γ1 := harg.names hn
     have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
@@ -915,7 +915,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       rcases hE'c with rfl | rfl <;> (rw [hm1] at hos; cases hos)
     · exact (hn1 x Ex1 hx1 hl hni).keeps ((Keeps.refl Γ1 []).killNames (thruDeps op Γ1 Ex.ty Ex1.path))
         (fun _ _ _ h => by cases h)
-  | @editBV Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru _ =>
+  | @editBV _ Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru _ =>
     intro _ hn
     have hn1 : NameWF Γ1 := harg.names hn
     have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
@@ -951,7 +951,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       · exact hN d hd' b t' hk'
       · have := memDeps_noName d hd'; rw [hk'] at this; cases this
   | insert _ _ _ ih => exact fun _ hn => ih rfl hn
-  | @free Γ F x E t hx _ _ _ _ _ =>
+  | @free _ Γ F x E t hx _ _ _ _ _ =>
     intro _ hn
     exact hn.moved hx
   | panic _ hnΔ _ _ => exact fun _ _ => hnΔ
@@ -962,4 +962,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
 
+  | exit _ _ hnΔ _ _ => exact fun _ _ => hnΔ
+  | loop _ _ _ hnΔ _ _ => exact fun _ _ => hnΔ
+  | block _ ih => exact ih
 end A2

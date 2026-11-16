@@ -1258,6 +1258,21 @@ def Stmt.src : Stmt → Bool
   | .exit _ => true
   | .loop s => s.src
 
+/-- Agora #871: `s` is about to take an exit that leaves `n` blocks besides
+    the ones inside `s`: an `exit` at the head of the sequences it is in,
+    inside the run-time scopes and blocks it leaves on its way.  `e` is what
+    the exit leaves behind: the scopes' frames, each around the next one's,
+    the innermost around `skip` — their ends, to run innermost first.  The
+    rest of each sequence is dropped (it does not run), and so are the
+    blocks inside (they are left). -/
+inductive ExitAt : Stmt → Nat → Stmt → Prop
+  | exit {n : Nat} : ExitAt (.exit n) n .skip
+  | seq {a b e : Stmt} {n : Nat} : ExitAt a n e → ExitAt (.seq a b) n e
+  | scope {x : Var} {s e : Stmt} {n : Nat} : ExitAt s n e → ExitAt (.scope x s) n (.scope x e)
+  | scopeD {x : Var} {f : Nat} {s e : Stmt} {n : Nat} :
+      ExitAt s n e → ExitAt (.scopeD x f s) n (.scopeD x f e)
+  | block {s e : Stmt} {n : Nat} : ExitAt s (n + 1) e → ExitAt (.block s) n e
+
 inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | seqSkip {m : Mem} {b : Stmt} : Step P m (.seq .skip b) (.ok m b)
   | seqL {m m' : Mem} {a a' b : Stmt} :
@@ -1630,25 +1645,19 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
         (.ok { (m.set m.nv ⟨true, some p⟩) with
                 nv := m.nv + 1, blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) }
           (.seq (.scopeD m.nv f .skip) r))
-  /-- Agora #871: an exit leaves the rest of a sequence. -/
-  | seqExit {m : Mem} {n : Nat} {b : Stmt} : Step P m (.seq (.exit n) b) (.ok m (.exit n))
-  /-- Agora #871: an exit leaves a scope by its end: the frame's own end
-      drops what it owns (`scopeSkip`), then the exit goes on. -/
-  | scopeExit {m : Mem} {x : Var} {n : Nat} :
-      Step P m (.scope x (.exit n)) (.ok m (.seq (.scope x .skip) (.exit n)))
-  /-- Agora #871: ... and a destructor frame by its end, which runs the
-      destructor (`scopeDEnd`, `scopeDDrain`, …), then the exit goes on. -/
-  | scopeDExit {m : Mem} {x : Var} {f n : Nat} :
-      Step P m (.scopeD x f (.exit n)) (.ok m (.seq (.scopeD x f .skip) (.exit n)))
   /-- Agora #871: a block runs its body in place ... -/
   | blockIn {m m' : Mem} {s s' : Stmt} :
       Step P m s (.ok m' s') → Step P m (.block s) (.ok m' (.block s'))
   /-- ... ends with it ... -/
   | blockSkip {m : Mem} : Step P m (.block .skip) (.ok m .skip)
-  /-- ... is left by an `exit 0` of it, which ends there ... -/
-  | blockExit0 {m : Mem} : Step P m (.block (.exit 0)) (.ok m .skip)
-  /-- ... and by an exit of more blocks, which goes on with one block fewer ... -/
-  | blockExit {m : Mem} {n : Nat} : Step P m (.block (.exit (n + 1))) (.ok m (.exit n))
+  /-- ... is left by an exit of it (`ExitAt s 0 e`): the rest of every
+      sequence the exit is at the head of is dropped, the blocks inside
+      are left, and the scopes it leaves end, innermost first (`e`: their
+      frames, around nothing left to run), each frame's own end dropping
+      what it owns or running its destructor (`scopeSkip`, `scopeDEnd`, …),
+      as nurlc's `break`, `continue` and early `^` run the drops of the
+      scopes they leave ... -/
+  | blockExit {m : Mem} {s e : Stmt} : ExitAt s 0 e → Step P m (.block s) (.ok m e)
   /-- ... and a panic in it goes on (the block owns nothing). -/
   | blockP {m m' : Mem} {s : Stmt} : Step P m s (.panic m') → Step P m (.block s) (.panic m')
   /-- Agora #871: `while T`: the body, then the loop again. -/

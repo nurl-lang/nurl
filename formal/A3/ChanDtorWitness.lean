@@ -79,7 +79,7 @@ theorem chan_of : (Ty.lk GVD).ChanOf DT := ⟨GVD, rfl, rfl⟩
     moved into a lock (`Ty.lkPay`: a destructor type holding no cell share), and
     `chan_send` sends a destructor value into it (`RhsT.chanSend` over
     `Ty.ChanOf`). -/
-theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
+theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
@@ -324,7 +324,7 @@ def mainC : Stmt :=
 
 /-- **Closing a channel of destructor values, then sending one, is typed**
     (`RhsT.chanClose`, `RhsT.chanSend` over `Ty.ChanOf`). -/
-theorem mainC_typed : ∃ Δ, StmtT P (fun _ => none) [] mainC Δ := by
+theorem mainC_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainC Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
@@ -575,8 +575,8 @@ theorem RhsT.var_ty {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E : Entry} (h : Rhs
 
 /-- Through a chain of hand-overs a binding stays, at its type. -/
 theorem LetdChain.typed {P : Prog} {s t : Stmt} (hc : LetdChain s t) :
-    ∀ {Γ : Ctx} {F : List Var} {Δ : Ctx} {x : Var} {E : Entry}, StmtT P Γ F s Δ → Γ x = some E →
-      ∃ Γ' F' Δ' E', StmtT P Γ' F' t Δ' ∧ Γ' x = some E' ∧ E'.ty = E.ty := by
+    ∀ {Γ : Ctx} {F : List Var} {Δ : Ctx} {x : Var} {E : Entry}, StmtT P ξ Γ F s Δ → Γ x = some E →
+      ∃ Γ' F' Δ' E', StmtT P ξ Γ' F' t Δ' ∧ Γ' x = some E' ∧ E'.ty = E.ty := by
   induction hc with
   | refl => intro Γ F Δ x E h hx; exact ⟨Γ, F, Δ, E, h, hx, rfl⟩
   | @letd w f y k t _ ih =>
@@ -589,7 +589,7 @@ theorem LetdChain.typed {P : Prog} {s t : Stmt} (hc : LetdChain s t) :
       obtain ⟨E1, h1, h1t⟩ := RhsT.var_ty hr hx
       obtain ⟨Γ', F', Δ', E', h', hx', ht'⟩ := ih hb (x := x) (E := E1) (by simp [setE, upd, hne, h1])
       exact ⟨Γ', F', Δ', E', h', hx', ht'.trans h1t⟩
-    | @sub Γa Γ0 _ _ _ _ hw _ _ ih2 =>
+    | @sub _ Γa Γ0 _ _ _ _ hw _ _ ih2 =>
       obtain ⟨hn, hE⟩ := hw.1 x
       cases hg : Γ0 x with
       | none => exact absurd (hn.mpr hg) (by rw [hx]; simp)
@@ -603,15 +603,15 @@ theorem compE_ty (E : Entry) (a : Ty) : (compE E a).ty = a := by cases a <;> rfl
 /-- What a typed `unpair`'s body is typed in: `y` a struct `prod a b` (under
     its destructor type if it has one), `x` bound at `a`, and `x ≠ z`. -/
 theorem unpair_body {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : Stmt}
-    (h : StmtT P Γ F (.unpair y x z s) Δ) :
+    (h : StmtT P ξ Γ F (.unpair y x z s) Δ) :
     ∃ (E : Entry) (a b : Ty), Γ y = some E ∧ E.ty.undtor = .prod a b ∧ x ≠ z ∧
-      ∃ Γ' F' Δ' Ex, StmtT P Γ' F' s Δ' ∧ Γ' x = some Ex ∧ Ex.ty = a := by
+      ∃ Γ' F' Δ' Ex, StmtT P ξ Γ' F' s Δ' ∧ Γ' x = some Ex ∧ Ex.ty = a := by
   generalize hst : Stmt.unpair y x z s = st at h
   induction h with
   | unpair _ hy _ _ hty _ _ _ h9 _ _ hb =>
     cases hst
     exact ⟨_, _, _, hy, unpair_undtor hty, h9, _, _, _, _, hb, by simp [setE, upd, h9]; rfl, compE_ty _ _⟩
-  | @sub Γa Γ0 _ _ _ _ hw _ _ ih =>
+  | @sub _ Γa Γ0 _ _ _ _ hw _ _ ih =>
     obtain ⟨E', a, b, hy', hty, hxz, rest⟩ := ih hst
     obtain ⟨hn, hE⟩ := hw.1 y
     cases hg : Γa y with
@@ -633,11 +633,11 @@ theorem RhsT.var_out_ty {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E : Entry} (h :
     a nest around `f`'s destructor type), so `f` is the destructor of the
     queue's elements. -/
 theorem letd_vec_nest {P : Prog} {Γ Δ : Ctx} {F : List Var} {w f x : Var} {k : Stmt}
-    (h : StmtT P Γ F (.letd w f (.var x) k) Δ) {E0 : Entry} (hx : Γ x = some E0) {s : Ty}
+    (h : StmtT P ξ Γ F (.letd w f (.var x) k) Δ) {E0 : Entry} (hx : Γ x = some E0) {s : Ty}
     (hE : E0.ty = .vec s) : ∃ n u, s = Ty.nest n (.dtor f u) := by
   generalize hst : Stmt.letd w f (.var x) k = st at h
   induction h generalizing E0 with
-  | @letd _ _ _ _ _ _ _ _ E t _ _ _ _ _ hr _ hlt hstr _ _ _ _ _ _ =>
+  | @letd _ _ _ _ _ _ _ _ _ E t _ _ _ _ _ hr _ hlt hstr _ _ _ _ _ _ =>
     cases hst
     rcases RhsT.var_out_ty hr hx with he | ⟨ms, q, hq⟩
     · rw [hE] at he
@@ -646,7 +646,7 @@ theorem letd_vec_nest {P : Prog} {Γ Δ : Ctx} {F : List Var} {w f x : Var} {k :
       · rw [he] at hg; cases hg
       · rw [he, hτ] at ha; cases ha; exact ⟨n, t, rfl⟩
     · rw [hE] at hq; cases hq
-  | @sub Γa Γ0 _ _ _ _ hw _ _ ih =>
+  | @sub _ Γa Γ0 _ _ _ _ hw _ _ ih =>
     obtain ⟨hn, hEw⟩ := hw.1 x
     cases hg : Γ0 x with
     | none => exact absurd (hn.mpr hg) (by rw [hx]; simp)
@@ -789,7 +789,7 @@ def mainR : Stmt :=
 /-- **A receive of a destructor value is typed**: `chan_recv`'s owned
     `Option DT` is bound by `letd` under the option's glue (`RhsT.chanRecv`,
     `LetdTy` at `RDT`). -/
-theorem mainR_typed : ∃ Δ, StmtT P (fun _ => none) [] mainR Δ := by
+theorem mainR_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainR Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])

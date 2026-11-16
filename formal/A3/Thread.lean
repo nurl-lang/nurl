@@ -8,7 +8,7 @@ open A2
 
 /-- The program's start: the one thread, on the empty store. -/
 theorem ThreadOK.init {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
-    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
+    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) : ThreadOK P (emptyMem nv) s :=
   ⟨fun _ => none, [], Δ, ht, inv_empty hs hv, codes_empty P nv, hsc, closed_empty s⟩
 
@@ -134,7 +134,7 @@ theorem GlobsOK.alloc {P : Prog} {G : Globs} (hG : GlobsOK P G) (i : Nat) : G.al
     thread, with no binding, on the payloads of the blocks the globals'
     `make`s left (the empty store grown to them, `ThreadOK.move`). -/
 theorem ThreadOK.start {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
-    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
+    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) {G : Globs} (hG : GlobsOK P G) :
     ThreadOK P { alloc := union (fun _ => false) (payPart G.blk), nid := G.nid, nv := nv,
                  st := fun _ => none, blk := G.blk, gl := G.gl, taken := G.taken } s := by

@@ -99,7 +99,7 @@ theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic
 /-! ### Typing at the touched statement -/
 
 /-- The statement is typed in a context the store agrees with. -/
-def TypedAt (P : Prog) (m : Mem) (s : Stmt) : Prop := ∃ Γ F Δ, StmtT P Γ F s Δ ∧ MInv m Γ
+def TypedAt (P : Prog) (m : Mem) (s : Stmt) : Prop := ∃ Γ F Δ, StmtT P .none Γ F s Δ ∧ MInv m Γ
 
 theorem TypedAt.of_threadOK {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) : TypedAt P m s := by
   obtain ⟨Γ, F, Δ, ht, hi, _⟩ := h

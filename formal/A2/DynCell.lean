@@ -152,7 +152,7 @@ theorem ctx_noPin {R : Entry} (hR : R.mode ≠ .rootb) (x : Var) : NoPin (ctx R)
 /-! ### The callee: both paths, and the join -/
 
 /-- The path that lends `p`. -/
-theorem then_arm : StmtT P (ctx ⟨str, .bor, false, [], [], false, false⟩) [] (.assign 3 (.var 1)) (ctx ErT) := by
+theorem then_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false⟩) [] (.assign 3 (.var 1)) (ctx ErT) := by
   have h := StmtT.assign (P := P) (Γ := ctx ⟨str, .bor, false, [], [], false, false⟩) (F := []) (x := 3)
     (r := .var 1) (Ex := ⟨str, .bor, false, [], [], false, false⟩)
     (E := ⟨str, .bor, true, derive 1 Ep .self, Ep.held, false, false⟩) (Γ1 := ctx ⟨str, .bor, false, [], [], false, false⟩)
@@ -198,7 +198,7 @@ theorem ctxL_dtor {R L : Entry} (hR : R.dtor = false) (hL : L.dtor = false) :
 
 /-- The path that makes a fresh String: it goes into the cell, and the
     result borrows the cell's payload. -/
-theorem else_arm : StmtT P (ctx ⟨str, .bor, false, [], [], false, false⟩) []
+theorem else_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false⟩) []
     (.letv 4 (.new .int) (.seq (.assign 0 (.inr .int 4)) (.assign 3 (.getr 0)))) (ctx ErF) := by
   let R0 : Entry := ⟨str, .bor, false, [], [], false, false⟩
   -- `= cell ( some y )`: the fresh String moves into the cell
@@ -259,7 +259,7 @@ theorem else_arm : StmtT P (ctx ⟨str, .bor, false, [], [], false, false⟩) []
   rw [h4] at hl; exact hl
 
 /-- The two paths meet: the result lends the cell's payload or `p`. -/
-theorem body_typed : StmtT P (sigCtx pick) [] pick.body (ctx ErJ) := by
+theorem body_typed : StmtT P ξ (sigCtx pick) [] pick.body (ctx ErJ) := by
   rw [sig_eq]
   have hw := Weaker.refl (ctx_wf roots_R0 ⟨rfl, rfl⟩) (ctx_names roots_R0)
   refine StmtT.ite rfl rfl (ExprT.var (E := Ec) (by simp [ctx]) rfl rfl) ?_ ?_
@@ -423,7 +423,7 @@ theorem call_ok : CallT P K4 [] 0 [1, 2, 3] Ex K4 := by
       opt, str] at hd
 
 /-- The caller is well-typed from the empty context. -/
-theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
+theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   -- the contexts the caller's bindings make, none with a borrowed parameter
   have hK5 : NoRootb (A2.setE K4 4 Ex) := K4_noRootb.setE (by simp [Ex])
   have hK6 : NoRootb (A2.setE (A2.setE K4 4 Ex) 5 intE) := hK5.setE (by simp [intE])

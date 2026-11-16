@@ -30,7 +30,7 @@ inductive Reapable : Stmt → Prop
 /-- Every typed statement is one: a source form is source (its body, the
     rest of a sequence and the branches are, `StmtT`), and a run-time form
     is a frame around a typed statement. -/
-theorem StmtT.reapable {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (h : StmtT P Γ F s Δ) :
+theorem StmtT.reapable {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (h : StmtT P ξ Γ F s Δ) :
     Reapable s := by
   induction h
   all_goals first
@@ -65,7 +65,7 @@ theorem Reapable.reap {P : Prog} {m : Mem} {s : Stmt} (hr : Reapable s) {k n f :
     configuration, a `dead` block's payload holds no cell share (its type
     holds none, `MInv.blocks`), so `Step.reap` is a step of the statement, at
     its redex. -/
-theorem orphan_reaps {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P Γ F s Δ)
+theorem orphan_reaps {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ)
     {m : Mem} (hi : MInv m Γ) (ho : Orphan m) : ∃ m1 s1, Step P m s (.ok m1 s1) ∧ ReapMem m m1 := by
   obtain ⟨k, n, f, u, p, hk⟩ := ho
   obtain ⟨_, _, hpay, hcell, _⟩ := hi.blocks k _ hk
@@ -146,9 +146,9 @@ theorem dtorCount_reap {m m1 : Mem} (hh : HeapOK m) (hr : ReapMem m m1) :
     destructor value at its top, or (Agora #755) a drained `Vec` of them (it keeps or marks them): their count below
     `nid`, which neither changes, falls each round. -/
 theorem settle_total {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
-    {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
+    {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
     (hi : Inv m Γ F s) (hc : Closed Γ s) : ∃ m' s', Settle P m s m' s' := by
-  suffices h : ∀ n, ∀ (Γ : Ctx) (s : Stmt) (m : Mem), dtorCount m.blk m.nid < n → StmtT P Γ F s Δ →
+  suffices h : ∀ n, ∀ (Γ : Ctx) (s : Stmt) (m : Mem), dtorCount m.blk m.nid < n → StmtT P ξ Γ F s Δ →
       MemCodes P m → s.codesOK P → Inv m Γ F s → Closed Γ s → ∃ m' s', Settle P m s m' s' from
     h _ Γ s m (Nat.lt_succ_self _) ht hcd hsc hi hc
   intro n
@@ -174,7 +174,7 @@ theorem settle_total {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {
     after it can be taken (`settle_total`), so `Steps` reaches what follows
     it. -/
 theorem steps_step {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
-    {Δ : Ctx} (ht : StmtT P Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
+    {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
     (hi : Inv m Γ F s) (hc : Closed Γ s) {m1 : Mem} {s1 : Stmt} (hst : Step P m s (.ok m1 s1)) :
     ∃ m' s', Steps P m s (.ok m' s') ∧ Settle P m1.sweepD s1 m' s' := by
   obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
@@ -187,7 +187,7 @@ theorem steps_step {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F 
     orphan (`no_orphan`), so no step from it is `Step.reap`'s, which needs
     one: `memory_safe`'s progress is not the reap's. -/
 theorem progress_no_reap {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
+    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
     (hv : ∀ v ∈ s.vars, v < nv) {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem nv) s (.ok m' s')) :
     s' = .skip ∨ Blocked m' s' ∨ ∃ r, Step P m' s' r ∧ ∀ m1, ¬ ReapMem m' m1 := by
   obtain ⟨Γ', ht', hi', _, hcd', _⟩ :=

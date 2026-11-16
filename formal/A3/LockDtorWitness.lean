@@ -410,7 +410,7 @@ theorem scopeL_panic_gives_back {P : Prog} {m m2 : Mem} {k : Nat} {t : Ty} {x : 
     owner unless the payload is an integer (`lockE`: then a plain integer
     binding), for every payload type (`StmtT.scopeL`, through `sub`). -/
 theorem scopeL_entry {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
-    (ht : StmtT P Γ F (.scopeL k t x s) Δ) :
+    (ht : StmtT P ξ Γ F (.scopeL k t x s) Δ) :
     ∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ (t ≠ .int → E.mode = .own) ∧ E.ty = t := by
   generalize hs : Stmt.scopeL k t x s = st at ht
   induction ht with
@@ -418,7 +418,7 @@ theorem scopeL_entry {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} 
     cases hs
     obtain ⟨E, hx, hrb, hty, hmo, _⟩ := hxE
     exact ⟨E, hx, hrb, hmo, hty⟩
-  | @sub Γa Γ0 _ _ _ _ hw _ _ ih =>
+  | @sub _ Γa Γ0 _ _ _ _ hw _ _ ih =>
     obtain ⟨E0, h0, hrb0, hm0, ht0⟩ := ih hs
     obtain ⟨hn, hE⟩ := hw.1 x
     cases hg : Γa x with
@@ -435,7 +435,7 @@ theorem scopeL_entry {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} 
     does; `StmtT.scopeL`) names `x` live, of type `t`, and an owner unless
     the payload is an integer. -/
 theorem scopeL_end_entry {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var}
-    (ht : StmtT P Γ F (.scopeL k t x .skip) Δ) :
+    (ht : StmtT P ξ Γ F (.scopeL k t x .skip) Δ) :
     ∃ E, Γ x = some E ∧ E.live = true ∧ E.mode ≠ .rootb ∧ (t ≠ .int → E.mode = .own) ∧ E.ty = t := by
   generalize hs : Stmt.scopeL k t x .skip = st at ht
   induction ht with
@@ -446,7 +446,7 @@ theorem scopeL_end_entry {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : 
     rcases skip_inv hb with rfl | hw
     · rw [hx] at hΔ; cases hΔ; exact hlv
     · exact (((hw.1 x).2 E E' hx hΔ).live hlv).1
-  | @sub Γa Γ0 _ _ _ _ hw _ _ ih =>
+  | @sub _ Γa Γ0 _ _ _ _ hw _ _ ih =>
     obtain ⟨E0, h0, hl0, hrb0, hm0, ht0⟩ := ih hs
     obtain ⟨hn, hE⟩ := hw.1 x
     cases hg : Γa x with
@@ -506,7 +506,7 @@ theorem frame_slot_live {m : Mem} {Γ : Ctx} {x : Var} {E : Entry} {t : Ty} (hi 
     first hypotheses of `scopeL_end_gives_back`, discharged for a typed
     frame, for every payload type (Agora #825). -/
 theorem scopeL_end_owns {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {m : Mem}
-    (ht : StmtT P Γ F (.scopeL k t x .skip) Δ) (hi : MInv m Γ) :
+    (ht : StmtT P ξ Γ F (.scopeL k t x .skip) Δ) (hi : MInv m Γ) :
     ∃ o v, m.st x = some ⟨o, some v⟩ ∧ WFv t v ∧ (o = true ∨ t = .int) := by
   obtain ⟨E, hx, hl, hrb, hmo, hty⟩ := scopeL_end_entry ht
   exact frame_slot_live hi hx hl hrb hmo hty
@@ -522,7 +522,7 @@ theorem scopeL_end_owns {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : T
     Agora #808 proves of every reached configuration's frame
     (`A3.reach_scopeL_end_gives_back`). -/
 theorem scopeL_typed_end_gives_back {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var}
-    {m : Mem} (ht : StmtT P Γ F (.scopeL k t x .skip) Δ) (hi : MInv m Γ)
+    {m : Mem} (ht : StmtT P ξ Γ F (.scopeL k t x .skip) Δ) (hi : MInv m Γ)
     (hnc : t.hasCell = false) (hk : CheckedOut m k t)
     (hno : ¬ Orphan m) {r : Res} (h : Step P m (.scopeL k t x .skip) r) :
     ∃ o v, m.st x = some ⟨o, some v⟩ ∧
@@ -536,7 +536,7 @@ theorem scopeL_typed_end_gives_back {P : Prog} {Γ Δ : Ctx} {F : List Var} {k :
     every payload type that holds no cell share: `Step.scopeLFail` never
     fires there. -/
 theorem scopeL_typed_end_giveCheck {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var}
-    {m : Mem} (ht : StmtT P Γ F (.scopeL k t x .skip) Δ) (hi : MInv m Γ)
+    {m : Mem} (ht : StmtT P ξ Γ F (.scopeL k t x .skip) Δ) (hi : MInv m Γ)
     (hnc : t.hasCell = false) (hk : CheckedOut m k t) {sl : Slot} (hsl : m.st x = some sl) :
     GiveCheck m x sl := by
   obtain ⟨E, hx, hl, hrb, hmo, hty⟩ := scopeL_end_entry ht
@@ -656,7 +656,7 @@ theorem release_cases {m1 m2 : Mem} {k : Nat} {t : Ty} {x : Var}
     still name blocks, and the checked-out block's type holds no guard
     (`giveCheck_of`). -/
 theorem scopeL_typed_panic_give {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var}
-    {s : Stmt} {mo m m1 : Mem} (ht : StmtT P Γ F (.scopeL k t x s) Δ) (hi : Inv mo Γ F (.scopeL k t x s))
+    {s : Stmt} {mo m m1 : Mem} (ht : StmtT P ξ Γ F (.scopeL k t x s) Δ) (hi : Inv mo Γ F (.scopeL k t x s))
     (hst0 : mo.st = m.st) (hb0 : mo.blk = m.blk) (hs : Step P m s (.panic m1)) (hnc : t.hasCell = false) :
     ∀ o v, m1.st x = some ⟨o, some v⟩ → WFv t v → (o = true ∨ t = .int) → CheckedOut m1 k t →
       Giveable m1.blk t ⟨o, some v⟩ ∧ GiveCheck m1 x ⟨o, some v⟩ := by
@@ -687,7 +687,7 @@ theorem scopeL_typed_panic_give {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat
     (`release_cases`).  Over a store `mo` of the same slots and blocks as the
     one the step runs on (a thread's view, A3). -/
 theorem scopeL_typed_panic_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
-    {mo m m2 : Mem} (ht : StmtT P Γ F (.scopeL k t x s) Δ) (hi : Inv mo Γ F (.scopeL k t x s))
+    {mo m m2 : Mem} (ht : StmtT P ξ Γ F (.scopeL k t x s) Δ) (hi : Inv mo Γ F (.scopeL k t x s))
     (hst0 : mo.st = m.st) (hb0 : mo.blk = m.blk) (hnc : t.hasCell = false)
     (h : Step P m (.scopeL k t x s) (.panic m2)) :
     ∃ m1, Step P m s (.panic m1) ∧
@@ -713,7 +713,7 @@ theorem scopeL_typed_panic_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} 
 
 /-- ... over the store the step runs on. -/
 theorem scopeL_typed_panic {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt}
-    {m m2 : Mem} (ht : StmtT P Γ F (.scopeL k t x s) Δ) (hi : Inv m Γ F (.scopeL k t x s))
+    {m m2 : Mem} (ht : StmtT P ξ Γ F (.scopeL k t x s) Δ) (hi : Inv m Γ F (.scopeL k t x s))
     (hnc : t.hasCell = false)
     (h : Step P m (.scopeL k t x s) (.panic m2)) :
     ∃ m1, Step P m s (.panic m1) ∧
@@ -733,7 +733,7 @@ theorem scopeL_typed_panic {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t 
     So `Step.scopeLPD`'s premise `¬ GiveCheck` never holds of a typed frame
     (`scopeL_typed_no_scopeLPD`). -/
 theorem scopeL_typed_panic_giveCheck {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var}
-    {s : Stmt} {mo m m1 : Mem} (ht : StmtT P Γ F (.scopeL k t x s) Δ) (hi : Inv mo Γ F (.scopeL k t x s))
+    {s : Stmt} {mo m m1 : Mem} (ht : StmtT P ξ Γ F (.scopeL k t x s) Δ) (hi : Inv mo Γ F (.scopeL k t x s))
     (hst0 : mo.st = m.st) (hb0 : mo.blk = m.blk) (hs : Step P m s (.panic m1)) (hk1 : CheckedOut m1 k t)
     (hd : t.dtorFree = false) {sl : Slot} (hsl : m1.st x = some sl) : GiveCheck m1 x sl := by
   have hB1 : BlocksIn m1 := MInv.blocks_back hi.toMInv (by rw [hb0]; exact Step.panic_blkBack hs)
@@ -759,7 +759,7 @@ theorem scopeL_typed_panic_giveCheck {P : Prog} {Γ Δ : Ctx} {F : List Var} {k 
     rule's result is of that form.  The rule stays as a total, defensive
     case of the semantics (the model's runs of an untyped program). -/
 theorem scopeL_typed_no_scopeLPD {P : Prog} {Γ Δ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var}
-    {s : Stmt} {mo m : Mem} (ht : StmtT P Γ F (.scopeL k t x s) Δ) (hi : Inv mo Γ F (.scopeL k t x s))
+    {s : Stmt} {mo m : Mem} (ht : StmtT P ξ Γ F (.scopeL k t x s) Δ) (hi : Inv mo Γ F (.scopeL k t x s))
     (hst0 : mo.st = m.st) (hb0 : mo.blk = m.blk) {r : Res} (h : Step P m (.scopeL k t x s) r)
     (m1 : Mem) (f : Nat) : r ≠ .ok m1 (.seq (.scopeD x f .skip) .panic) := by
   intro hr
@@ -815,7 +815,7 @@ theorem drop0_ok : DropFnOK P 0 T :=
 theorem assign_res {fn : Fn} {r : Var} (hc : sigCtx fn r = some R0)
     (hp : ∀ p E, sigCtx fn p = some E → E.mode = .rootb → E.vdeps = [])
     (hflags : ∀ v E, sigCtx fn v = some E → E.dtor = false ∧ E.dbind = false) :
-    StmtT P (sigCtx fn) [] (.assign r (.expr (.lit 0)))
+    StmtT P ξ (sigCtx fn) [] (.assign r (.expr (.lit 0)))
       (setE (kill .replace false r (sigCtx fn)) r { intE with mode := R0.mode }) :=
   StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
@@ -898,7 +898,7 @@ def EL : Entry := ⟨.lk DT, .own, true, [], [], false, false⟩
     share at all before; `RhsT.lockNew` takes the value),
     and so is its update through `locked_apply` (`StmtT.lockedApply`, A3.2's
     `withLock`: the body gives the checked-out binding no other value). -/
-theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
+theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
@@ -1056,7 +1056,7 @@ theorem lockE_vecDT : lockE (.vec DT) = ⟨.vec DT, .own, true, [], [], false, f
     before, no share), `RhsT.lockNew`
     takes it), and so is a push into the checked-out `Vec` (`StmtT.withLock`:
     the body gives the binding no other value). -/
-theorem mainV_typed : ∃ Δ, StmtT P (fun _ => none) [] mainV Δ := by
+theorem mainV_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainV Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])

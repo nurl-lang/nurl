@@ -202,7 +202,7 @@ theorem Plain.endOK {Γ : Ctx} (h : Plain Γ) (x : Var) : EndOK Γ x :=
 def resE (t : Ty) : Entry := ⟨t, .own, true, [], [], false, false⟩
 
 theorem makeStmt_typed {P : Prog} (hP : ProgOK P) {D : List Decl} (hD : DeclsOK P D) {g : Nat} {d : Decl}
-    (hd : D[g]? = some d) : ∃ Δ, StmtT P (fun _ => none) [] (makeStmt g d) Δ := by
+    (hd : D[g]? = some d) : ∃ Δ, StmtT P ξ (fun _ => none) [] (makeStmt g d) Δ := by
   obtain ⟨hsy, fn, hf, hps, hrt, hro⟩ := hD g d hd
   have htok : d.ty.ok = true := hrt ▸ (hP fn (List.mem_of_getElem? hf)).2.2.2.1
   have hcall : CallT P (fun _ => none) [] d.make [] (resE d.ty) (fun _ => none) := by
@@ -237,7 +237,7 @@ theorem makeStmt_typed {P : Prog} (hP : ProgOK P) {D : List Decl} (hD : DeclsOK 
     invariant admits, an `inout` binding) of the declared type: the
     assignment there is typed only so. -/
 theorem assignGlob_inv {P : Prog} {Γ : Ctx} {F : List Var} {x g : Nat} {t : Ty} {Δ : Ctx}
-    (h : StmtT P Γ F (.assign x (.glob g t)) Δ) :
+    (h : StmtT P ξ Γ F (.assign x (.glob g t)) Δ) :
     ∃ E, Γ x = some E ∧ E.ty = t ∧ (E.mode = .own ∨ E.mode = .inout .replace) := by
   generalize hS : Stmt.assign x (.glob g t) = S at h
   induction h with
@@ -258,7 +258,7 @@ theorem assignGlob_inv {P : Prog} {Γ : Ctx} {F : List Var} {x g : Nat} {t : Ty}
   | _ => cases hS
 
 theorem handOver_inv {P : Prog} {Γ : Ctx} {F : List Var} {x g : Nat} {t : Ty} {Δ : Ctx}
-    (h : StmtT P Γ F (.scope x (.assign x (.glob g t))) Δ) :
+    (h : StmtT P ξ Γ F (.scope x (.assign x (.glob g t))) Δ) :
     ∃ E, Γ x = some E ∧ E.ty = t ∧ (E.mode = .own ∨ E.mode = .inout .replace) := by
   generalize hS : Stmt.scope x (.assign x (.glob g t)) = S at h
   induction h with
@@ -279,7 +279,7 @@ theorem handOver_inv {P : Prog} {Γ : Ctx} {F : List Var} {x g : Nat} {t : Ty} {
     the cells' homes, as `A3.claim` draws them. -/
 theorem reach_inv {P : Prog} {spawn : Nat → Bool} {G : Globs} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hG : GlobsOK P G)
-    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
+    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) {C : Cfg} (hr : Reach P spawn (Cfg.start G s nv) C) : CInv P C ∧ CellInv C :=
   (reach_cinv hP hPc (fun h => fun hav hb hp hf => Step.restrict h hav hb hp hf)
     (fun {_ _ _ _ _ _ _ _ _ _ _} h hi hK hsp hf hx hmv => CInv.spawn_of
@@ -513,7 +513,7 @@ theorem made_safe {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgC
 theorem claim_made (P : Prog) (spawn : Nat → Bool) (D : List Decl) (s : Stmt) (Δ : Ctx) (nv : Nat)
     (hP : ProgOK P) (hPc : ProgCodes P) (hSp : SpawnOK P spawn) (hD : DeclsOK P D)
     (hPG : ProgGlobs P (declTy D))
-    (ht : StmtT P (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) (hsg : s.globsAt (declTy D))
+    (ht : StmtT P ξ (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) (hsg : s.globsAt (declTy D))
     (hv : ∀ v ∈ s.vars, v < nv) :
     (∀ i G d, Made P spawn D i G → D[i]? = some d →
       MemorySafe P spawn (Cfg.start G (makeStmt i d) 1) ∧ RaceFree P spawn (Cfg.start G (makeStmt i d) 1)) ∧

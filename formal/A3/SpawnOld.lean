@@ -196,8 +196,8 @@ theorem Redex.steps {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {P : Prog
     there: the frames type their body in the context they are typed in (a
     `frozen` or `recover` frame lends out more). -/
 theorem Redex.typed {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog} {m : Mem} :
-    ∀ Γ F Δ, StmtT P Γ F s Δ → Inv m Γ F s →
-      ∃ Γ' F' Δ', StmtT P Γ' F' r Δ' ∧ Inv m Γ' F' r := by
+    ∀ Γ F Δ, StmtT P ξ Γ F s Δ → Inv m Γ F s →
+      ∃ Γ' F' Δ', StmtT P ξ Γ' F' r Δ' ∧ Inv m Γ' F' r := by
   induction hR with
   | here => exact fun Γ F Δ ht hi => ⟨Γ, F, Δ, ht, hi⟩
   | @seq a b r K _ ih =>
@@ -264,8 +264,8 @@ theorem Redex.typed {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Pro
     `r`'s spine, then the whole stays typed. -/
 theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog} {m : Mem} {r' : Stmt}
     (hsp : r'.spine = r.spine)
-    (hhole : ∀ Γ F Δ, StmtT P Γ F r Δ → Inv m Γ F r → StmtT P Γ F r' Δ) :
-    ∀ Γ F Δ, StmtT P Γ F s Δ → Inv m Γ F s → StmtT P Γ F (K r') Δ := by
+    (hhole : ∀ Γ F Δ, StmtT P ξ Γ F r Δ → Inv m Γ F r → StmtT P ξ Γ F r' Δ) :
+    ∀ Γ F Δ, StmtT P ξ Γ F s Δ → Inv m Γ F s → StmtT P ξ Γ F (K r') Δ := by
   induction hR with
   | here => exact hhole
   | @seq a b r K _ ih =>
@@ -382,7 +382,7 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
       (∀ a ∈ as, DtorSafe Γc .replace false a) →
       (∀ a ∈ as, ∀ a' ∈ as, a ≠ a' → ∀ d ∈ (argE Γ0 a').vdeps, d.root ≠ a) →
       Γc x = none → CtxWF Γc → NoPin Γc x →
-      StmtT P (callPostAux Γ0 fn args ps as i Γc) F L Δ → StmtT P Γc F (dropSeq x as L) Δ := by
+      StmtT P ξ (callPostAux Γ0 fn args ps as i Γc) F L Δ → StmtT P ξ Γc F (dropSeq x as L) Δ := by
   intro ps
   induction ps with
   | nil =>
@@ -408,7 +408,7 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
         simp [A2.setE, upd_ne _ _ hax.symm, A2.kill, hx]
       have hwf1 : CtxWF (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false }) :=
         hwf.moveOut hca .replace false
-      have ht1 : StmtT P (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false }) F
+      have ht1 : StmtT P ξ (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false }) F
           (dropSeq x as L) Δ := by
         refine ih as (i + 1) _ (fun q hq => hsk q (List.mem_cons_of_mem _ hq)) (by simpa using hlen)
           hnd'.2 (fun a' ha' => ?_)
@@ -421,7 +421,7 @@ theorem drops_typed {P : Prog} {Γ0 : Ctx} {F : List Var} {fn : Fn} {args : List
         have hno := hdep a List.mem_cons_self a' (List.mem_cons_of_mem _ ha') (Ne.symm ha'a)
         simp [A2.setE, upd_ne _ _ ha'a, A2.kill, hca', killE_nohit hno]
       -- `a` moves into `x`, and `x`'s scope ends
-      have hlet : StmtT P Γc F (.letv x (.var a) .skip)
+      have hlet : StmtT P ξ Γc F (.letv x (.var a) .skip)
           (A2.setE (A2.kill .replace false a Γc) a { argE Γ0 a with live := false, dtor := false }) := by
         have h := StmtT.letv (P := P) (s := .skip) rfl hx hxF
           (RhsT.moveOwn hca hl hmo haF hpa (hds0 a List.mem_cons_self))
@@ -453,13 +453,13 @@ theorem spawn_fn {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : SpawnOK
 theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : SpawnOK P spawn) {m : Mem}
     {x f : Nat} {args : List Var} {k : Stmt} {fn : Fn} (hsp : spawn f = true) (hf : P[f]? = some fn)
     (hnd : args.Nodup) :
-    ∀ Γ F Δ, StmtT P Γ F (.letcall x f args k) Δ → Inv m Γ F (.letcall x f args k) →
-      StmtT P Γ F (dropSeq x args (.letv x (.expr (.lit 0)) k)) Δ := by
+    ∀ Γ F Δ, StmtT P ξ Γ F (.letcall x f args k) Δ → Inv m Γ F (.letcall x f args k) →
+      StmtT P ξ Γ F (dropSeq x args (.letv x (.expr (.lit 0)) k)) Δ := by
   obtain ⟨hres, hro, hall⟩ := spawn_fn hP hS hsp hf
   intro Γt Ft Δt ht hi
   generalize hS' : Stmt.letcall x f args k = S at ht hi
   induction ht with
-  | @letcall Γ Γ1 Δ F x0 f0 args0 k0 E hsrc hx hxF hc hk hpin _ _ =>
+  | @letcall _ Γ Γ1 Δ F x0 f0 args0 k0 E hsrc hx hxF hc hk hpin _ _ =>
     cases hS'
     obtain ⟨fn', hf', hlen, hargs, hnf, hds, rfl, rfl, hg⟩ := hc
     rw [hf] at hf'; cases hf'
@@ -540,7 +540,7 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
         (A2.setE (callPost Γ fn args) x (callRes Γ fn args)) :=
       RSetup.PW.weaker (hPW.setE hEW) (CtxWF.add h.postwf hx1 (fun _ _ r hr => h.reswf r hr))
         h.resnames
-    have hlast : StmtT P (callPostAux Γ fn args fn.params args 0 Γ) F (.letv x (.expr (.lit 0)) k)
+    have hlast : StmtT P ξ (callPostAux Γ fn args fn.params args 0 Γ) F (.letv x (.expr (.lit 0)) k)
         (exitScope x Δ) :=
       StmtT.letv hsrc hGx hxF (RhsT.expr ExprT.lit) (StmtT.weakenIn hW hk) hpin
     exact drops_typed (L := .letv x (.expr (.lit 0)) k) hsrc hxF fn.params args 0 Γ
@@ -696,7 +696,7 @@ theorem Redex.codes_hole {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {P :
 /-- A typed call is checked against its callee, in a context of the
     invariant. -/
 theorem letcall_call {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} {x f : Nat} {args : List Var}
-    {k : Stmt} {Δ : Ctx} (ht : StmtT P Γ F (.letcall x f args k) Δ)
+    {k : Stmt} {Δ : Ctx} (ht : StmtT P ξ Γ F (.letcall x f args k) Δ)
     (hi : Inv m Γ F (.letcall x f args k)) : ∃ Γ0 E Γ1, CallT P Γ0 F f args E Γ1 ∧ MInv m Γ0 := by
   generalize hS : Stmt.letcall x f args k = S at ht hi
   induction ht with
@@ -772,7 +772,7 @@ theorem spawner_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
 
 /-- A source call's body is a source statement. -/
 theorem letcall_src {P : Prog} {Γ : Ctx} {F : List Var} {x f : Nat} {args : List Var} {k : Stmt}
-    {Δ : Ctx} (ht : StmtT P Γ F (.letcall x f args k) Δ) : (Stmt.letcall x f args k).src = true := by
+    {Δ : Ctx} (ht : StmtT P ξ Γ F (.letcall x f args k) Δ) : (Stmt.letcall x f args k).src = true := by
   generalize hS : Stmt.letcall x f args k = S at ht
   induction ht with
   | letcall hsrc _ _ _ _ _ => cases hS; exact hsrc

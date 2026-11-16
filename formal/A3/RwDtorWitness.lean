@@ -220,7 +220,7 @@ def EL2 : Entry := ⟨.lk (.vec DT), .own, true, [], [], false, false⟩
     cell share), and the guard borrows nothing of `l` (`RhsT.rwRead` leaves
     the context as it was: the guard holds a share of its own, through the
     view), so `l` moves out (`RhsT.moveOwn`) while `g`, `y` and `z` live. -/
-theorem main_typed : ∃ Δ, StmtT P (fun _ => none) [] main Δ := by
+theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   let K2 : Ctx := A2.setE K1 1 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
