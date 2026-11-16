@@ -147,6 +147,8 @@ inductive Redex : Stmt → (Stmt → Stmt) → Stmt → Prop
       Redex s K r → Redex (.scopeD x f s) (fun y => .scopeD x f (K y)) r
   | scopeL {k : Nat} {t : Ty} {x : Var} {s r : Stmt} {K : Stmt → Stmt} :
       Redex s K r → Redex (.scopeL k t x s) (fun y => .scopeL k t x (K y)) r
+  /-- Agora #871: a block's body. -/
+  | block {s r : Stmt} {K : Stmt → Stmt} : Redex s K r → Redex (.block s) (fun y => .block (K y)) r
 
 /-- A spawned function: every parameter is a `sink` of a type that holds no
     views, and it returns an integer. -/

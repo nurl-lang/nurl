@@ -124,7 +124,7 @@ theorem newThread_typed {P : Prog} {fn : Fn} (hok : FnOK P fn)
     obtain ⟨E0, h0, hm0, -⟩ := (hbody.domTy hsrc).2 p E hp
     exact hrb p E0 h0 (hm0.symm.trans hm)
   have hsc : StmtT P ξ (sigCtx fn) [] (.scope fn.params.length fn.body) (exitScope fn.params.length Δb) :=
-    StmtT.scope ⟨_, sigCtx_res fn, resMode_ne' fn⟩ (fun h => by cases h) hbody
+    StmtT.scope ⟨_, sigCtx_res fn, resMode_ne' fn⟩ (fun h => by cases h) hbody.ofNone
       ⟨fun p E hp hm => absurd hm (hrbΔ p E hp), DtorSafe.of_none (fun v E h => (hfl v E h).1) _ _ _,
         DbindSafe.of_none (fun v E h => (hfl v E h).2) _⟩
   -- (and no binding of its end runs a destructor)

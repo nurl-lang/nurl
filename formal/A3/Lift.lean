@@ -261,10 +261,17 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     exact ⟨_, GhostRel.rbind _ hg, Step.rbindIn hs⟩
   | @rbindP m1 _ _ _ _ hp ih => exact Step.rbindP (m1 := liftMem a2 m1) ih hp
   | frozenSkip => exact ⟨_, GhostRel.refl _, Step.frozenSkip⟩
-  | frozenIn _ ih | blockIn _ ih =>
+  | blockSkip => exact ⟨_, GhostRel.refl _, Step.blockSkip⟩
+  | blockExit he => exact ⟨_, GhostRel.refl _, Step.blockExit he⟩
+  | loop => exact ⟨_, GhostRel.refl _, Step.loop⟩
+  | frozenIn _ ih =>
     obtain ⟨s'', hg, hs⟩ := ih
     exact ⟨_, GhostRel.frozen _ hg, Step.frozenIn hs⟩
+  | blockIn _ ih =>
+    obtain ⟨s'', hg, hs⟩ := ih
+    exact ⟨_, GhostRel.block hg, Step.blockIn hs⟩
   | frozenP _ ih => exact Step.frozenP ih
+  | blockP _ ih => exact Step.blockP ih
   | @assign m1 _ _ _ _ _ _ hx he hx1 hdr =>
     exact ⟨_, GhostRel.refl _, Step.assign (m := liftMem a2 m) (m1 := liftMem a2 m1) hx
       (EvalR.lift he a2 hd) hx1 (DropSlot.lift hdr ((EvalR.grows he).disj hd hf))⟩

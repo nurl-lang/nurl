@@ -52,6 +52,8 @@ inductive GhostRel : Stmt → Stmt → Prop
       m0'.st = m0.st → m0'.nv = m0.nv → m0'.nid = m0.nid → m0'.blk = m0.blk →
       (∀ i, m0.alloc i = true → m0'.alloc i = true) →
       GhostRel s s' → GhostRel (.catchR x m0 s) (.catchR x m0' s')
+  /-- Agora #871: a block's body. -/
+  | block {s s' : Stmt} : GhostRel s s' → GhostRel (.block s) (.block s')
 
 /-- `r1` is the step `r` on the thread's own part: the same outcome, the
     address space without `a2`, and the same statement but for the stores

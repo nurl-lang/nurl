@@ -240,6 +240,7 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact fun i hi => ih i (OwnedId.of_remove hi)
   | frozenSkip => exact fun i hi => .inl hi
+  | blockSkip | blockExit _ | loop => exact fun i hi => .inl hi
   | frozenIn _ ih | blockIn _ ih => exact ih
   | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he _ _ =>

@@ -157,6 +157,7 @@ theorem Step.borFree {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
   | rbindIn _ ih => exact ih
   | rbindP _ _ ih => exact ih.remove _
   | frozenSkip => exact hb
+  | blockSkip | blockExit _ | loop => exact hb
   | frozenIn _ ih | blockIn _ ih => exact ih
   | frozenP _ ih | blockP _ ih => exact ih
   | assign _ he _ _ =>

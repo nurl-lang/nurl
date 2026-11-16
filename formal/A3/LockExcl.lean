@@ -166,65 +166,65 @@ theorem _root_.A2.StmtT.withLock_src {a x : Var} {s : Stmt} (ht : StmtT P ξ Γ 
 end inv
 
 /-- A statement is typed (in some context). -/
-def Typed (P : Prog) (s : Stmt) : Prop := ∃ Γ F Δ, StmtT P .none Γ F s Δ
+def Typed (P : Prog) (s : Stmt) : Prop := ∃ ξ Γ F Δ, StmtT P ξ Γ F s Δ
 
 section down
 variable {P : Prog}
 
 theorem Typed.seq {a b : Stmt} (h : Typed P (.seq a b)) : Typed P a := by
-  obtain ⟨Γ, F, Δ, ht⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht⟩ := h
   generalize hs : Stmt.seq a b = s0 at ht
   induction ht with
-  | seq _ ha _ _ _ => cases hs; exact ⟨_, _, _, ha⟩
+  | seq _ ha _ _ _ => cases hs; exact ⟨_, _, _, _, ha⟩
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
 theorem Typed.scope {x : Var} {s : Stmt} (h : Typed P (.scope x s)) : Typed P s := by
-  obtain ⟨Γ, F, Δ, ht⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht⟩ := h
   generalize hs : Stmt.scope x s = s0 at ht
   induction ht with
-  | scope _ _ hb _ _ => cases hs; exact ⟨_, _, _, hb⟩
+  | scope _ _ hb _ _ => cases hs; exact ⟨_, _, _, _, hb⟩
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
 theorem Typed.rbind {p : Var} {s : Stmt} (h : Typed P (.rbind p s)) : Typed P s := by
-  obtain ⟨Γ, F, Δ, ht⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht⟩ := h
   generalize hs : Stmt.rbind p s = s0 at ht
   induction ht with
-  | rbind _ _ _ _ _ hb _ _ => cases hs; exact ⟨_, _, _, hb⟩
+  | rbind _ _ _ _ _ hb _ _ => cases hs; exact ⟨_, _, _, _, hb⟩
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
 theorem Typed.frozen {z : List Var} {s : Stmt} (h : Typed P (.frozen z s)) : Typed P s := by
-  obtain ⟨Γ, F, Δ, ht⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht⟩ := h
   generalize hs : Stmt.frozen z s = s0 at ht
   induction ht with
-  | frozen hb _ _ => cases hs; exact ⟨_, _, _, hb⟩
+  | frozen hb _ _ => cases hs; exact ⟨_, _, _, _, hb⟩
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
 theorem Typed.catchR {x : Var} {m0 : Mem} {s : Stmt} (h : Typed P (.catchR x m0 s)) : Typed P s := by
-  obtain ⟨Γ, F, Δ, ht⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht⟩ := h
   generalize hs : Stmt.catchR x m0 s = s0 at ht
   induction ht with
-  | catchR _ hb _ _ _ _ => cases hs; exact ⟨_, _, _, hb⟩
+  | catchR _ hb _ _ _ _ => cases hs; exact ⟨_, _, _, _, hb⟩
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
 theorem Typed.scopeD {x : Var} {f : Nat} {s : Stmt} (h : Typed P (.scopeD x f s)) : Typed P s := by
-  obtain ⟨Γ, F, Δ, ht⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht⟩ := h
   generalize hs : Stmt.scopeD x f s = s0 at ht
   induction ht with
-  | scopeD _ _ hb _ _ _ _ _ _ => cases hs; exact ⟨_, _, _, hb⟩
+  | scopeD _ _ hb _ _ _ _ _ _ => cases hs; exact ⟨_, _, _, _, hb⟩
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
 theorem Typed.scopeL {k : Nat} {t : Ty} {x : Var} {s : Stmt} (h : Typed P (.scopeL k t x s)) :
     Typed P s := by
-  obtain ⟨Γ, F, Δ, ht⟩ := h
+  obtain ⟨_, Γ, F, Δ, ht⟩ := h
   generalize hs : Stmt.scopeL k t x s = s0 at ht
   induction ht with
-  | scopeL _ _ hb _ _ => cases hs; exact ⟨_, _, _, hb⟩
+  | scopeL _ _ hb _ _ => cases hs; exact ⟨_, _, _, _, hb⟩
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
@@ -583,7 +583,7 @@ theorem LockInv.put {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → Boo
   obtain ⟨a, ha⟩ := part_of hc.len hi
   obtain ⟨hto, _⟩ := hc.ok i t a hi ha
   have hta : TypedAt P (ownView C t a) t.s := TypedAt.of_threadOK hto
-  have htyp : Typed P t.s := by obtain ⟨Γ, F, Δ, ht, _⟩ := hta; exact ⟨Γ, F, Δ, ht⟩
+  have htyp : Typed P t.s := by obtain ⟨ξ, Γ, F, Δ, ht, _⟩ := hta; exact ⟨ξ, Γ, F, Δ, ht⟩
   have hbat : BlocksAt C.blk C.nid := hto.blocksAt
   have hE := Step.lfr hP hst htyp
   have hg : Grows (C.view t) m' := Step.grows hst
