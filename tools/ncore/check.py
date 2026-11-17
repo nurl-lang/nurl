@@ -2519,6 +2519,30 @@ class FnCheck:
             for k, places in caps.items():
                 for place in places:
                     self.stale_capture_check(st, fname, k, place, line)
+            # (what the body leaves a capture taken by pointer holding of
+            # another capture: the binding it points at holds it here, as an
+            # argument a call leaves holding another does - what the source
+            # holds read before the body's effects, stored after them; one
+            # whose capture is not named here is refused. The engine's
+            # run_cap_stores, agora #887)
+            cap_stores = []
+            for (j, dpath, k, path, kind) in sm["stores"]:
+                if not (j < ncap and k < ncap and j != k and j < len(fn.params)
+                        and getattr(fn.vars[fn.params[j]], "byref", False)):
+                    continue
+                if not caps.get(j) or not caps.get(k):
+                    self.err(line, f"{what}: a closure leaves a capture holding a view of another capture, "
+                                   f"and where it runs that capture is not known")
+                    continue
+                for pj in caps[j]:
+                    for ps in caps[k]:
+                        src = (ps[0], ps[1] + tuple(path))
+                        if kind in ("view", "handle"):
+                            cap_stores.append((pj, None, (j, k, src, kind, tuple(dpath))))
+                        else:
+                            sav = st.vals.get(src[0])
+                            add = hroot(hsub(sav.held, src[1]), tuple(dpath)) if sav is not None else frozenset()
+                            cap_stores.append((pj, add, None))
             # (what the body changes through one capture may end what
             # another of its captures views: the body reads that one too,
             # in this run or the next - MEMORY.md §2.11)
@@ -2558,6 +2582,11 @@ class FnCheck:
                             self.var_fresh.add(place[0])
                             continue
                         self.effect(st, (place[0], place[1] + tuple(path)), eff, line, weak=weak)
+            for pj, add, lk in cap_stores:
+                if lk is not None:
+                    j, k, src, kind, dpath = lk
+                    add = {(dpath, self.loan(st, ("cs", fname, j, k), src, kind))}
+                self.store_into(st, pj, add)
             # (what the body changes inside a shared payload is changed in
             # the one payload every handle on it reaches: MEMORY.md §2.2)
             for (ty, tail, eff) in sm.get("regions", ()):
@@ -4315,6 +4344,12 @@ def check_program(prog, max_rounds=40):
                 # (…nor where the place it is stored in has no room for one)
                 and not (x[4] == "held" and x[0] < len(fn.params)
                          and not T.view_capable(T.at(fn.vars[fn.params[x[0]]].ty, x[1]), ()))
+                # (…nor what it leaves a capture taken by pointer holding of
+                # another capture: the closure points into the frame that
+                # made it, and the binding is given it where it runs -
+                # run_closures; the engine's cap_to_ref, agora #887)
+                and not (x[0] < ncap_ and x[2] < ncap_ and x[0] != x[2]
+                         and getattr(fn.vars[fn.params[x[0]]], "byref", False))
                 and not (x[4] == "handle" and x[0] >= ncap_ and not x[3]
                          and T.at(fn.vars[fn.params[x[0]]].ty, x[1]) is not None
                          and T.at(fn.vars[fn.params[x[0]]].ty, x[1])[0] not in VIEW_TYPES
