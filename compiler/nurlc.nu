@@ -725,6 +725,7 @@
 : ~ i g_f_aliased -1  // per variable (+ g_f_nv + 1): 1 if a place of it is in one of them (eng_handover)
 : ~ i g_f_readers -1  // per variable (+ g_f_nv + 1): the set of the variables a value naming a place of it was given to (eng_handover)
 : ~ i g_f_readers_over 0  // 1: a place's variable was out of that range - every variable may read every one
+: ~ i g_f_putback 0  // the parameter numbers a raw body writes back into the slot they were read from (mem_put_back), as a set: their store changes nothing there (AGORA-877)
 : ~ i g_f_links -1  // (reader, variable) → the offset of the first statement codegen links the reader to the variable at: a `let`, or `=` by name (eng_handover, agora #881, #886)
 : ~ i g_f_alias_over 0  // 1: a place's variable was out of that range - every variable counts as aliased
 : i CORE_VW 7
@@ -12379,6 +12380,14 @@ unsafe @ eng_keep_fn → v {
     = g_f_readers_over 0
     ? >= g_f_links 0 { ( wv_drop g_f_links ) } {}
     = g_f_links ( im_new )
+    = g_f_putback 0
+    ? & != 0 g_eng_rawwalk != 0 & ( ef_at f EF_FLAGS ) 6 {
+        : i pbw ( wv_new )
+        : i np ( ef_at f EF_NPARAMS )
+        ( __ws_idx ( ws_get ( nurl_str_cat ( eng_str ( ef_at f EF_NAME ) ) `` ) ( nurl_str_cat ( eng_str ( ef_at f EF_TMPL ) ) `` ) `putback` np ) np pbw )
+        = g_f_putback ( sq_set_of_wv pbw )
+        ( wv_drop pbw )
+    } {}
     = g_av_none ( av_make OW_N 0 0 0 F )
 }
 
@@ -20563,6 +20572,10 @@ unsafe @ eng_byte s w i k → i {
         ? rehome { ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) ) } {}
         ^
     } {}
+    // (a raw body's store of a parameter it writes back into the slot it
+    // was read from - mem_put_back - puts that value back as it is: the
+    // slot's old value is not released, nothing there changes; AGORA-877)
+    : b putback & & & != g_f_putback 0 >= src 0 >= ( fv_pidx src ) 0 ( sq_has g_f_putback ( fv_pidx src ) )
     ? | == cown OW_O == cown OW_P {
         // (the part's old value is released - unless a `sink` took it, and
         // the store refills it)
@@ -20574,12 +20587,16 @@ unsafe @ eng_byte s w i k → i {
             ? & == ( pl_var gp ) vid ( ep_prefix ( pl_path gp ) path ) { = refill T } {}
             = gi + gi 1
         }
-        ? ! refill { ( eng_dtor_release st target fty ln 0 ) } {}
+        ? & ! refill ! putback { ( eng_dtor_release st target fty ln 0 ) } {}
     } {}
-    ( eng_handover st target at )
-    ( eng_effect st target EF_REPLACE ln 0 )
+    ? ! putback {
+        ( eng_handover st target at )
+        ( eng_effect st target EF_REPLACE ln 0 )
+    } {}
     ? rehome { ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) ) } {}
-    ( store_into st target add 0 F 0 )
+    // (…and the summary says so by SM_PUTBACK alone, as a summary the
+    // walk's tables give does: no store of the parameter into the slot)
+    ? ! putback { ( store_into st target add 0 F 0 ) } {}
     : i gone ( st_gone st )
     ? != gone 0 {
         : ~ i left 0
@@ -22456,6 +22473,17 @@ unsafe @ eng_byte s w i k → i {
     ? ( sm_merge f SM_CREDITS g_s_credits ) { = changed T } {}
     ? ( sm_merge f SM_KEEPS keeps ) { = changed T } {}
     ? ( sm_merge f SM_CATCHES g_s_catches ) { = changed T } {}
+    // (the arguments a raw body writes back into the slots they were read
+    // from - `mem_put_back`, a fact of the body that codegen records and no
+    // callee's walk is needed for: stored as they are, nothing there
+    // released; AGORA-877)
+    ? & != 0 g_eng_rawwalk != 0 & ( ef_at f EF_FLAGS ) 6 {
+        : i np ( sm_word f SM_NPARAM )
+        : i pbw ( wv_new )
+        ( __ws_idx ( ws_get ( nurl_str_cat ( eng_str ( ef_at f EF_NAME ) ) `` ) ( nurl_str_cat ( eng_str ( ef_at f EF_TMPL ) ) `` ) `putback` np ) np pbw )
+        ? ( sm_merge f SM_PUTBACK ( sq_set_of_wv pbw ) ) { = changed T } {}
+        ( wv_drop pbw )
+    } {}
     ? changed { = g_sm_version + g_sm_version 1 } {}
     ^ changed
 }
