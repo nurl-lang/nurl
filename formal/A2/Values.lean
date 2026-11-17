@@ -762,6 +762,14 @@ theorem MInv.bor_mode {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
   have h := hso.symm
   cases hm : E.mode <;> simp_all [Mode.ownSlot]
 
+/-- An owned value is no view: only a slice's is, and a slice owns nothing. -/
+theorem WFv.owning_noView {τ : Ty} {v : Val} (hw : WFv τ v) (ho : τ.owning = true) {d o l : Nat} :
+    v ≠ .view d o l := by
+  induction hw with
+  | view => simp [Ty.owning] at ho
+  | dtor hs _ ih => exact ih (Ty.owning_of_isStruct hs)
+  | int | node | pair | inl | inr | pkg | arc | lk | cell | rguard => intro h; cases h
+
 theorem WFv.view_holdsView {τ : Ty} {d o l : Nat} (h : WFv τ (.view d o l)) : τ.holdsView = true := by
   generalize hv : (Val.view d o l) = v at h
   induction h with

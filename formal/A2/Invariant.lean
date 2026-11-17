@@ -1246,6 +1246,21 @@ theorem PkgNames.remode {m : Mem} {Γ : Ctx} {E E' : Entry} {v : Val} {i : Nat}
   · exact Or.inr (Or.inr (Or.inl ⟨hb hm, hh ▸ hc, hv⟩))
   · exact Or.inr (Or.inr (Or.inr ⟨hos ▸ hm, hh ▸ hc, hv⟩))
 
+/-- What an entry names under one context it names under another entry and
+    context whose clean dependencies its own clean dependencies give. -/
+theorem PkgNames.mapClean {m : Mem} {Γ Γ' : Ctx} {E E' : Entry} {v : Val} {i : Nat}
+    (hb : (E'.mode = .bor ∨ E'.mode = .rootb) → (E.mode = .bor ∨ E.mode = .rootb))
+    (hos : E'.mode.ownSlot = true → E.mode.ownSlot = true)
+    (hp : CleanDeps Γ' E'.path → CleanDeps Γ E.path)
+    (hph : CleanDeps Γ' (E'.path ++ E'.held) → CleanDeps Γ (E.path ++ E.held))
+    (hh : CleanDeps Γ' E'.held → CleanDeps Γ E.held)
+    (hn : PkgNames m Γ' E' v i) : PkgNames m Γ E v i := by
+  rcases hn with ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩
+  · exact Or.inl ⟨hb hm, hp hc, hv⟩
+  · exact Or.inr (Or.inl ⟨hb hm, hph hc, hv⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨hb hm, hh hc, hv⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨hos hm, hh hc, hv⟩))
+
 /-- A value holding no handle and no view names nothing. -/
 theorem PkgNames.none {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
     (hb : ∀ n, Bare n v → n = v) (hs : ∀ n, Sub n v → n = v)

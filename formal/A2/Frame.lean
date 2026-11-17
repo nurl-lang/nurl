@@ -1107,6 +1107,23 @@ theorem PkgFreeId.of_fewer {m m1 : Mem}
     (hsub : ∀ r T, m1.st r = some ⟨true, some T⟩ → m.st r = some ⟨true, some T⟩) {i : Nat}
     (h : PkgFreeId m i) : PkgFreeId m1 i := fun r T hT => h r T (hsub r T hT)
 
+/-- No package of a store whose owned trees are, somewhere, another's holds
+    what none of that other's holds. -/
+theorem PkgFreeId.of_moved {m m1 : Mem}
+    (hsub : ∀ r T, m1.st r = some ⟨true, some T⟩ → ∃ r', m.st r' = some ⟨true, some T⟩) {i : Nat}
+    (h : PkgFreeId m i) : PkgFreeId m1 i := fun r T hT => by
+  obtain ⟨r', hT'⟩ := hsub r T hT; exact h r' T hT'
+
+theorem PkgNames.of_moved {m m1 : Mem} {Γ : Ctx}
+    (hsub : ∀ r T, m1.st r = some ⟨true, some T⟩ → ∃ r', m.st r' = some ⟨true, some T⟩)
+    {E : Entry} {v : Val} {i : Nat} (hn : PkgNames m1 Γ E v i) : PkgNames m Γ E v i := by
+  rcases hn with h1 | h2 | ⟨hm, hc, c, r, T, t, d, es, hb, hT, hsn, hvn⟩ | h4
+  · exact Or.inl h1
+  · exact Or.inr (Or.inl h2)
+  · obtain ⟨r', hT'⟩ := hsub r T hT
+    exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r', T, t, d, es, hb, hT', hsn, hvn⟩))
+  · exact Or.inr (Or.inr (Or.inr h4))
+
 theorem PkgNames.of_fewer {m m1 : Mem} {Γ : Ctx}
     (hsub : ∀ r T, m1.st r = some ⟨true, some T⟩ → m.st r = some ⟨true, some T⟩)
     {E : Entry} {v : Val} {i : Nat} (hn : PkgNames m1 Γ E v i) : PkgNames m Γ E v i := by
