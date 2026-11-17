@@ -220,6 +220,13 @@ theorem ArmOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E'
   obtain ⟨hdt', hsub⟩ := hw.dtor hdt
   exact ⟨hdt', by rw [hw.ty]; exact hv.mono hsub⟩
 
+/-- A clean root stays one in a weaker context's place: modes are kept and
+    a borrowed parameter's entry is fixed. -/
+theorem Clean.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {r : Var} (h : Clean Γ' r) : Clean Γ r :=
+  h.mono fun _ _ hv => by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    exact ⟨E, hE, hwe.mode, fun hm => hwe.fixed (Or.inl hm)⟩
+
 theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ') : MInv m Γ' where
   dom v := by rw [← hw.isSome v]; exact hi.dom v
   slot v E' hv := by
@@ -253,6 +260,19 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     rw [hwe.ty]; exact hi.shares v E sl T hE hsl hown hT
   blocks := hi.blocks
+  pkgFree x E' c hx hm hl hs hcl r T hT := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hx
+    obtain ⟨hl0, hp, _⟩ := hwe.live hl
+    have hm0 : E.mode = .bor ∨ E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    have hsub : E.path ⊆ E'.path := by
+      rcases hm0 with h | h
+      · exact hp (by rw [h]; rfl)
+      · rw [hwe.fixed (Or.inl h)]; exact fun _ h => h
+    have hmd : ∀ d ∈ memDeps E.path, d ∈ memDeps E'.path := fun d hd => by
+      unfold memDeps at hd ⊢
+      exact List.mem_filter.mpr ⟨hsub (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩
+    exact hi.pkgFree x E c hE hm0 hl0 hs
+      (fun d hd => ⟨(hcl d (hmd d hd)).1, (hcl d (hmd d hd)).2.weaker hw⟩) r T hT
 
 theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hw : Weaker Γ Γ') : Inv m Γ' F s where

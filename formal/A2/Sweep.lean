@@ -467,6 +467,7 @@ theorem MInv.sweepR {Γ : Ctx} (hi : MInv m Γ) : MInv (m.sweepR R) Γ where
       have := Kept.pay hr hk0
       rwa [Blk.keeps, hp, Option.getD_some] at this
     exact (h3 p hp).2.sweep hkp
+  pkgFree := hi.pkgFree
 
 end
 

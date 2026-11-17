@@ -217,3 +217,79 @@ theorem MInv.thru_owner {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : En
     exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 end A2
+
+namespace A2
+
+/-! ### AGORA-901: where a borrow's node lies -/
+
+/-- What a block's holders read is the payload of a block: an `Arc`'s own,
+    or, for a read guard's view, its lock block's (`ViewsAt`). -/
+theorem ViewsAt.rd_pay {m : Mem} (hv : ViewsAt m.blk) {k : Nat} {bl : Blk} (hk : m.blk k = some bl)
+    {i : Nat} (h : i ∈ bl.rd.ids) : PayAddr m i := by
+  obtain ⟨t, kd, p⟩ := bl
+  cases kd with
+  | arc => exact ⟨k, _, hk, h⟩
+  | lock => simp [Blk.rd] at h
+  | dead => simp [Blk.rd] at h
+  | view =>
+    obtain ⟨k0, t0, q, hbl, hk0⟩ := hv k _ hk rfl
+    cases hbl
+    refine ⟨k0, _, hk0, ?_⟩
+    simp only [Blk.rd_view, Option.getD_some, Val.ids, List.mem_append] at h
+    rcases h with h | h
+    · simp at h
+    · simpa [Blk.tree] using h
+
+/-- A value inside a payload holders read has only payload addresses. -/
+theorem InPay.payAddr {m : Mem} (hh : HeapOK m) {n : Val} (h : InPay m n) : ∀ i ∈ n.ids, PayAddr m i := by
+  obtain ⟨k, bl, hk, hs⟩ := h
+  exact fun i hi => hh.views.rd_pay hk (hs.ids i hi)
+
+/-- A node a dependency lands on lies in an owned tree or in a payload. -/
+theorem Landed.home {m : Mem} {dep : Dep} {t : Ty} {c d : Nat} {es : List Val}
+    (h : Landed m dep (.node t c d es)) :
+    (∃ x T, m.st x = some ⟨true, some T⟩ ∧ Sub (.node t c d es) T) ∨ InPay m (.node t c d es) := by
+  rcases h with ⟨n0, hr, hla⟩ | ⟨_, _, hp⟩
+  · have hs := hla.sub
+    rcases hr with ⟨T, hT, htop⟩ | ⟨v, c', _, _, hna⟩ | ⟨v, d', o, l, _, _, hda⟩ |
+      ⟨v, k, q, _, _, rfl⟩ | ⟨v, k, _, _, rfl⟩
+    · exact Or.inl ⟨dep.root, T, hT, hs.trans htop.sub⟩
+    · rcases hna with ⟨x, T, hT, hsT, _⟩ | ⟨k, bl, hk, hsb, _⟩
+      · exact Or.inl ⟨x, T, hT, hs.trans hsT⟩
+      · exact Or.inr ⟨k, bl, hk, hs.trans hsb⟩
+    · rcases hda with ⟨x, T, hT, hsT, _⟩ | ⟨k, bl, hk, hsb, _⟩
+      · exact Or.inl ⟨x, T, hT, hs.trans hsT⟩
+      · exact Or.inr ⟨k, bl, hk, hs.trans hsb⟩
+    · rcases hs.cases' with h | ⟨e, hc, _⟩
+      · cases h
+      · cases hc
+    · rcases hs.cases' with h | ⟨e, hc, _⟩
+      · cases h
+      · cases hc
+  · exact Or.inr hp
+
+/-- A handle a borrowed value is lands through one of its dependencies. -/
+theorem ValOK.href_at {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
+    ∀ c, v = .href c → ∃ dep ∈ P, ∃ t, HrefAt m dep c t H := by
+  induction h with
+  | href h =>
+    intro c hc; cases hc
+    obtain ⟨dep, hd, hh⟩ := h
+    exact ⟨dep, hd, _, hh⟩
+  | dtor _ ih => exact ih
+  | _ => intro c hc; cases hc
+
+/-- **A live borrow's node** lies in an owned tree, or its address is a
+    payload's. -/
+theorem MInv.href_home {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hl : E.live = true) (hos : E.mode.ownSlot = false) {c : Nat}
+    (hs : m.st y = some ⟨false, some (.href c)⟩) :
+    (∃ x T, m.st x = some ⟨true, some T⟩ ∧ c ∈ T.ids) ∨ PayAddr m c := by
+  obtain ⟨v, hv, hok⟩ := hi.bor_val hy hl hos
+  rw [hs] at hv; cases hv
+  obtain ⟨dep, _, t, d, es, hlan, _⟩ := hok.href_at c rfl
+  rcases hlan.home with ⟨x, T, hT, hsT⟩ | hp
+  · exact Or.inl ⟨x, T, hT, hsT.ids c (by simp [Val.ids])⟩
+  · exact Or.inr (hp.payAddr hi.heap c (by simp [Val.ids]))
+
+end A2

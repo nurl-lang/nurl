@@ -350,6 +350,49 @@ theorem hmn_of_ne_replace {Γ : Ctx} {e : Eff} (hv : Bool) (he : e ≠ .replace)
   intro _ _ _ _ ⟨r, k⟩ _ hb hk
   cases k <;> cases e <;> simp_all [Kind.bound, Eff.kills]
 
+/-- AGORA-901: what a change of `x` (effect `e`, its slot becoming `ox`)
+    must show for `MInv.pkgFree`: no package of `x`'s new tree holds the node
+    a borrow the change leaves live names, and, if `x` is itself such a
+    borrow, no package of any owned tree holds its node.  (Every other owned
+    tree is as it was.) -/
+def PkgKeep (m m' : Mem) (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) (ox : Option Entry) : Prop :=
+  (∀ T', m'.st x = some ⟨true, some T'⟩ → ∀ y Ey c, y ≠ x → Γ y = some Ey →
+    (Ey.mode = .bor ∨ Ey.mode = .rootb) → (killE e hv x Ey).live = true →
+    m.st y = some ⟨false, some (.href c)⟩ → (∀ d ∈ memDeps Ey.path, d.kind ≠ .share ∧ Clean Γ d.root) →
+    ∀ fs te ms ev cs t d es, Sub (.pkg fs te ms ev cs) T' → ¬ Sub (.node t c d es) ev) ∧
+  (∀ Ex' c, ox = some Ex' → (Ex'.mode = .bor ∨ Ex'.mode = .rootb) → Ex'.live = true →
+    m'.st x = some ⟨false, some (.href c)⟩ → (∀ d ∈ memDeps Ex'.path, d.kind ≠ .share ∧ Clean Γ d.root) →
+    ∀ r T, m'.st r = some ⟨true, some T⟩ →
+    ∀ fs te ms ev cs t d es, Sub (.pkg fs te ms ev cs) T → ¬ Sub (.node t c d es) ev)
+
+/-- A node whose elements are among another's: what lies strictly below it
+    lies below that one. -/
+theorem node_sub_sub {t : Ty} {c d d' : Nat} {es es' : List Val} (h : ∀ e ∈ es', e ∈ es) {P : Val}
+    (hs : Sub P (.node t c d' es')) : P = .node t c d' es' ∨ Sub P (.node t c d es) := by
+  cases hs with
+  | refl => exact Or.inl rfl
+  | child he h' => exact Or.inr (Sub.child (h _ he) h')
+
+/-- A change of an owner `x` whose new tree holds only packages its old tree
+    held keeps what `MInv.pkgFree` asks: a borrow the change leaves live was
+    live before, and its node no package of the old tree held. -/
+theorem PkgKeep.of_pkgs {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Eff} {hv : Bool} {x : Var}
+    {Ex : Entry} {ox : Option Entry} (hos : Ex.mode.ownSlot = true)
+    (hox : ∀ Ex', ox = some Ex' → Ex'.mode = Ex.mode) {T : Val} (hT : m.st x = some ⟨true, some T⟩)
+    (hpk : ∀ T', m'.st x = some ⟨true, some T'⟩ → ∀ fs te ms ev cs,
+      Sub (.pkg fs te ms ev cs) T' → Sub (.pkg fs te ms ev cs) T) :
+    PkgKeep m m' Γ e hv x ox := by
+  refine ⟨fun T' hT' y Ey c _ hEy hm hl hs hc fs te ms ev cs t d es hP hN => ?_,
+    fun Ex' _ hx' hm => ?_⟩
+  · rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
+    exact hi.pkgFree y Ey c hEy hm hl.1 hs hc x T hT fs te ms ev cs t d es (hpk T' hT' _ _ _ _ _ hP) hN
+  · rw [hox Ex' hx'] at hm; rcases hm with hm | hm <;> rw [hm] at hos <;> cases hos
+
+/-- A change that leaves `x` holding no value keeps what `MInv.pkgFree` asks. -/
+theorem PkgKeep.noval {m m' : Mem} {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} {ox : Option Entry}
+    (h : ∀ o v, m'.st x ≠ some ⟨o, some v⟩) : PkgKeep m m' Γ e hv x ox :=
+  ⟨fun T' hT' => absurd hT' (h _ _), fun _ _ _ _ _ hs => absurd hs (h _ _)⟩
+
 /-- One binding `x` changes (effect `e`), its slot becomes `ox`: every other
     binding stays valid, or is ended by `kill`. -/
 theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
@@ -366,6 +409,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hrem : ox = none → e = .replace)
     (hnew : e ≠ .replace → ∀ Ex', ox = some Ex' → Ex.live = true → Ex.held = [] →
       Ex.ty.holdsView = false → Ex'.live = true ∧ Ex'.held = [])
+    (hpk : PkgKeep m m' Γ e hv x ox)
     (hblk : m'.blk = m.blk := by rfl) :
     MInv m' (upd (kill e hv x Γ) x ox) := by
   have depKeep : ∀ v E, Γ v = some E → (killE e hv x E).live = true → E.ty ≠ .int →
@@ -633,5 +677,34 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     rw [hblk] at hk
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hblk⟩, h4⟩
+  · -- AGORA-901: the borrows the change leaves name nodes no package holds
+    have hcl : ∀ r, Clean (upd (kill e hv x Γ) x ox) r → Clean Γ r := fun r h => h.mono fun v E' hv' => by
+      by_cases hvx : v = x
+      · subst hvx
+        have := getX E' hv'; subst this
+        obtain ⟨_, _, _, _, hm, _⟩ := hox
+        exact ⟨Ex, hx, hm, fun h => absurd h hxr⟩
+      · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+        exact ⟨E, hE, killE_mode .., fun hrb => killE_rootb hanch hxF e hv hmn hE hrb⟩
+    intro y Ey' c hy hm hl hs hc r T hT fs te ms ev cs t d es hP hN
+    have hc0 : ∀ d ∈ memDeps Ey'.path, d.kind ≠ .share ∧ Clean Γ d.root :=
+      fun d hd => ⟨(hc d hd).1, hcl _ (hc d hd).2⟩
+    by_cases hyx : y = x
+    · subst hyx
+      exact hpk.2 Ey' c (getX Ey' hy) hm hl hs hc0 r T hT fs te ms ev cs t d es hP hN
+    · obtain ⟨Ey, hEy, rfl⟩ := getE y Ey' hy hyx
+      have hEq : killE e hv x Ey = Ey := by
+        have hl' := hl
+        unfold killE at hl' ⊢; split at hl'
+        · simp at hl'
+        · rename_i hh; simp [hh]
+      rw [hst y hyx] at hs
+      by_cases hrx : r = x
+      · subst hrx
+        exact hpk.1 T hT y Ey c hyx hEy (by rw [← killE_mode e hv r Ey]; exact hm) hl hs
+          (by rw [hEq] at hc0; exact hc0) fs te ms ev cs t d es hP hN
+      · rw [hst r hrx] at hT
+        rw [hEq] at hm hl hc0
+        exact hi.pkgFree y Ey c hEy hm hl hs hc0 r T hT fs te ms ev cs t d es hP hN
 
 end A2

@@ -144,6 +144,7 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
     rw [hb] at hk
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb⟩, h4⟩
+  pkgFree := by rw [h]; exact hi.pkgFree
 
 /-! ### A3.1: more blocks
 
@@ -268,6 +269,7 @@ theorem MInv.grow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (h
     (RootKeep.of_st (r := dep.root) h hb).vkeep hb
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).grow hb
   blocks := hB
+  pkgFree := by rw [h]; exact hi.pkgFree
 
 /-- A3.2's second cut: **the invariant of the slots over another store that
     keeps only the blocks the slots reach through payloads that are read**
@@ -327,7 +329,8 @@ theorem MInv.regrow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) 
       have hsl0 : m.st v = some sl := by rw [h] at hsl; exact hsl
       exact (((hi.shares v E sl T hE hsl0 hown hT).grow (m' := mb) hb1).sweep
         (Kept.of_slot hR (hslot v sl hsl0) T hT)).grow hb2
-    blocks := hB }
+    blocks := hB
+    pkgFree := by rw [h]; exact hi.pkgFree }
 
 /-- What a right-hand side hands to the binding that takes it. -/
 structure RhsOut (m1 : Mem) (Γ1 : Ctx) (E : Entry) (v : Val) (o : Bool) : Prop where
@@ -2180,7 +2183,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     refine hi.change hanch hy hyF (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb)
       hrb hst hheap rfl
       (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ hds (fun h => by cases h) (by simp)
-      (fun h => absurd rfl h)
+      (fun h => absurd rfl h) (PkgKeep.noval (by simp))
     refine ⟨⟨true, none⟩, by simp, hok, ⟨by simp [hos], fun _ => ⟨hvec, fun T h => by simp at h,
       fun h => by simp at h⟩, fun h => by simp [hos] at h⟩, rfl, fun h => by simp at h, rfl,
       fun h => by simp at h, fun h => by simp at h, fun T h => by simp at h, fun hd _ hn dep hdd hnm => ?_,
@@ -2564,6 +2567,14 @@ theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
     (fun k _ => ⟨hev.perm_vkeep hp k, hev.perm_hkeep hp k hshN⟩) ?_ (DtorSafe.none _ _ _)
     (fun h => by cases h) (fun h => by cases h)
     (fun _ Ex' hx' hl hh _ => by cases hx'; exact ⟨hl, hh⟩)
+    ⟨fun T' hT' y Ey c' hyx hEy hm hl hs hc fs te ms ev cs t1 d1 es1 hP hN => by
+      rw [hm'x] at hT'; cases hT'
+      rw [killE_none] at hl
+      rcases Sub.perm hp hP with h0 | h0
+      · cases h0
+      · exact hi.pkgFree y Ey c' hEy hm hl hs hc x _ hT fs te ms ev cs t1 d1 es1 h0 hN,
+     fun Ex' _ hx' hm => by
+      cases hx'; rcases hm with hm | hm <;> rw [hm] at hos <;> cases hos⟩
   · have heq : upd (kill .none false x Γ) x (some Ex) = Γ := by
       rw [kill_none]; funext v
       by_cases hvx : v = x
@@ -2700,6 +2711,11 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       (fun _ Ex' hx' hl0 hh0 _ => by
         simp only [Option.some.injEq] at hx'; subst hx'
         rw [killE_nil (root_vdeps (by rw [hm]; rfl) hh0)]; exact ⟨hl0, hh0⟩)
+      (PkgKeep.of_pkgs hi hos (fun Ex' h => by cases h; exact killE_mode ..) hT fun T' hT' _ _ _ _ _ hP => by
+        simp [m1] at hT'; subst hT'
+        rcases node_sub_sub (fun x hx => List.mem_append_left _ hx) hP with h | h
+        · cases h
+        · exact h)
     · intro k hk
       by_cases hn : ∃ b t, k = .name b t
       · obtain ⟨b, t, rfl⟩ := hn; exact ⟨vkeep_name _ _ _ _ _, hkeep_name _ _ _ _ _⟩

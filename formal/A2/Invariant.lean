@@ -1035,6 +1035,31 @@ theorem Blk.DtorOK.of_eq {bl bl' : Blk} (h : bl.DtorOK) (ht : bl'.ty = bl.ty) (h
   · rw [ht]; exact h2 (hk ▸ a)
   · rw [ht, hk] at *; exact h3 a
 
+/-- AGORA-901: a root through which a borrow reaches only memory outside
+    every closure's environment: an owner, or a borrowed parameter each of
+    whose memory dependencies is no share and on such a root.  A call's
+    environment (`envE`) carries a share of what the package reaches, so it
+    is none: what is lent from it lies inside a package. -/
+inductive Clean (Γ : Ctx) : Var → Prop
+  | own {r : Var} {Er : Entry} : Γ r = some Er → Er.mode.ownSlot = true → Clean Γ r
+  | rootb {p : Var} {Ep : Entry} : Γ p = some Ep → Ep.mode = .rootb →
+      (∀ d ∈ memDeps Ep.path, d.kind ≠ .share) → (∀ d ∈ memDeps Ep.path, Clean Γ d.root) → Clean Γ p
+
+/-- A context whose entries keep their modes, and whose borrowed parameters
+    are as they were, keeps the clean roots of the other. -/
+theorem Clean.mono {Γ Γ' : Ctx}
+    (h : ∀ v E', Γ' v = some E' → ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ (E.mode = .rootb → E' = E))
+    {r : Var} (hc : Clean Γ' r) : Clean Γ r := by
+  induction hc with
+  | own hr ho =>
+    obtain ⟨E, hE, hm, _⟩ := h _ _ hr
+    exact .own hE (by rw [← hm]; exact ho)
+  | rootb hp hm hns _ ih =>
+    obtain ⟨E, hE, hm', hfix⟩ := h _ _ hp
+    have hm0 : E.mode = .rootb := by rw [← hm']; exact hm
+    obtain rfl := hfix hm0
+    exact .rootb hE hm0 hns ih
+
 /-- What memory and context guarantee, whatever is running. -/
 structure MInv (m : Mem) (Γ : Ctx) : Prop where
   dom       : ∀ v, (Γ v).isSome = (m.st v).isSome
@@ -1078,6 +1103,15 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
                 -- and a view's type is `prod (lk u) u` of a lock's `u`): a
                 -- guard is `% NotSend`
                 bl.ty.hasGuard = false
+  /-- AGORA-901: no package of an owned tree holds the node a live borrow
+      of a `Vec` names when its path reaches memory through clean roots only
+      and through no share (`Clean`).  A closure is opaque: the one lend into
+      a package, a call's environment (`envE`), carries a share. -/
+  pkgFree   : ∀ x Ex c, Γ x = some Ex → (Ex.mode = .bor ∨ Ex.mode = .rootb) → Ex.live = true →
+                m.st x = some ⟨false, some (.href c)⟩ →
+                (∀ d ∈ memDeps Ex.path, d.kind ≠ .share ∧ Clean Γ d.root) →
+                ∀ r T, m.st r = some ⟨true, some T⟩ →
+                ∀ fs te ms e cs t d es, Sub (.pkg fs te ms e cs) T → ¬ Sub (.node t c d es) e
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/

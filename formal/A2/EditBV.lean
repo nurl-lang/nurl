@@ -402,13 +402,6 @@ theorem node_names_sub {t : Ty} {c d d' : Nat} {es es' : List Val} (h : ∀ e �
   obtain ⟨e, he, hxe⟩ := namesL_mem hx
   exact names_elem (h e he) x hxe
 
-/-- ... and what lies strictly below it lies below that one. -/
-theorem node_sub_sub {t : Ty} {c d d' : Nat} {es es' : List Val} (h : ∀ e ∈ es', e ∈ es) {P : Val}
-    (hs : Sub P (.node t c d' es')) : P = .node t c d' es' ∨ Sub P (.node t c d es) := by
-  cases hs with
-  | refl => exact Or.inl rfl
-  | child he h' => exact Or.inr (Sub.child (h _ he) h')
-
 /-- The owner's new slot, when the change lands in its tree by `.drop` and
     may store views: the tree is well-formed at its type, its views are the
     old tree's, valid through what the owner held, or the stored values',
