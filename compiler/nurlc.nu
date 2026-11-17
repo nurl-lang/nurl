@@ -15368,11 +15368,14 @@ unsafe @ eng_byte s w i k → i {
         ? & slot ( take_payload st av line T ) { = av ( av_make OW_O 0 0 ( av_held av ) F ) } {}
     } {}
     : b mixed & == ( av_own av ) OW_O != ( av_loans av ) 0
-    ? & | == ( av_own av ) OW_L mixed | own_block > ( local_depth ( av_loans av ) ( av_alias av ) 0 ) dest_depth {
-        // (a value nurlc hands over as it is - with its owner flag, no copy
-        // made - stays the lend it is on the paths it lends: its use after
-        // what it borrows ended is the error, eng_kept_lend)
-        ? & != 0 & flags TF_KEEP_LEND ! own_block { ^ av } {}
+    // (a value nurlc hands over as it is - with its owner flag, no copy made
+    // - stays the lend it is on the paths it lends: its use after what it
+    // borrows ended is the error, eng_kept_lend. It skips the copy decision
+    // only: what it holds is still checked below - a pointer into the frame,
+    // or a view a destructor may read, is refused where it is stored,
+    // agora #896)
+    : b kept_lend & != 0 & flags TF_KEEP_LEND ! own_block
+    ? & ! kept_lend & | == ( av_own av ) OW_L mixed | own_block > ( local_depth ( av_loans av ) ( av_alias av ) 0 ) dest_depth {
         ? & & & copy_ok != dest_ty ET_NONE ( et_copyable dest_ty ) ! ( et_scalar dest_ty ) {
             = av ( av_make OW_O 0 0 ( av_held av ) F )
         } {
