@@ -1,7 +1,6 @@
-// part_of_owner_behind_a_box_handed_back_by_a_pick: `= o ( npick o ( tail o ) k )`, a part of o behind a Box or o itself
-// AGORA-875: refused - npick may hand back o itself or what tail lends (a part of o, named by no argument), and nurlc cannot tell which a run hands back (#412's rule; the call `( tail o )` lends on some runs). main 81530211: accepted, leak on the run that hands back the part
-// map: §7.6 | A2 | rejected | - | AGORA-875: = o ( npick o ( tail o ) k ), a part of o behind a Box
-// main 3358873a: faults under ASan (found by AGORA-869's adversarial pass).
+// part_of_owner_behind_a_box_handed_back_by_a_forwarder_of_a_callee_defined_below_runs_clean: as …_by_a_forwarder_runs_clean, tail defined below forward
+// AGORA-907: accepted - forward is recorded as handing on what a callee compiled later may hand back
+// map: §7.6 | A2 | runs-clean | - | AGORA-907
 $ `stdlib/core/string.nu`
 
 @ pick ? String a ? String b i k → ?String { ? == k 0 { ^ a } { ^ b } }
@@ -16,22 +15,23 @@ $ `stdlib/core/box.nu`
 
 @ npick ? N a ? N b i k → ?N { ? == k 0 { ^ a } { ^ b } }
 
-@ tail ? N o → ?N {
-    ?? o { T n → { ?? . n next { T b → { ^ @ ?N { T ( box_get [N] b ) } } F → {} } } F → {} }
-    ^ @ ?N { F }
-}
+@ forward ? N o → ?N { ^ ( tail o ) }
 
 @ nshow ? N o → v { ?? o { T n → { ( nurl_println ( string_data . n s ) ) } F → { ( nurl_println `none` ) } } }
 
 @ run i k → v {
     : N inner @ N { ( string_from `the inner node string long enough for the heap` ) @ ?( Box N ) { F } }
     : ~ ? N o @ ?N { T @ N { ( string_from `the outer node string long enough for the heap` ) @ ?( Box N ) { T ( box_new [N] inner ) } } }
-    = o ( npick o ( tail o ) k )
+    = o ( forward o )
     ( nshow o )
 }
 
 @ main → i {
-    ( run 0 )
     ( run 1 )
     ^ 0
+}
+
+@ tail ? N o → ?N {
+    ?? o { T n → { ?? . n next { T b → { ^ @ ?N { T ( box_get [N] b ) } } F → {} } } F → {} }
+    ^ @ ?N { F }
 }

@@ -3389,8 +3389,12 @@ class FnCheck:
                     if fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES and self.T.copyable(fty):
                         dv = self.fn.vars[dest_vid] if dest_vid is not None else None
                         if (dv is not None
-                                and (dv.kind == "temp" or dv.name.startswith("%t")) and not av.call
-                                and av.alias and all(a[0] in self.pidx and a[1] for a in av.alias)):
+                                and ((dv.kind == "temp" or dv.name.startswith("%t")) and not av.call
+                                     and av.alias and all(a[0] in self.pidx and a[1] for a in av.alias)
+                                     # (…or a returned literal codegen built without
+                                     # copying the field it was given lent:
+                                     # CORE_VF_AGGLEND, agora #907)
+                                     or getattr(dv, "agglend", False))):
                             # a part of a parameter, read in place: handed
                             # back as it is, the literal is a lend of the
                             # caller's value (no copy is made); taken by
@@ -3826,6 +3830,14 @@ class FnCheck:
                     # stored value (cpcopy, agora #884). (A lend of another
                     # capture is left a lend.)
                     new = AV("O", (), (), new.held)
+                if (cur is not None and cur.own in ("O", "P", "L") and getattr(src_var, "cpcopy", False)
+                        and (new.own == "L" or (new.own == "O" and new.loans))):
+                    # (…and any binding codegen copied a call's lend into where
+                    # the call lent: a part of its own old value, or itself,
+                    # handed back by a call that may hand back a literal around
+                    # a lend out of its parameter - gen_assign's part copy,
+                    # agora #906, #907. The binding owns it.)
+                    new = AV("O", (), (), new.held)
                 # (…through a join too: `= x ? c x ( f )` - where the join may
                 # select the target, its value is copied in, h373)
                 own_parts = cur is not None and cur.own in ("O", "P") and new.own in ("L", "O") and any(
@@ -3838,7 +3850,16 @@ class FnCheck:
                     # itself and another argument, and may hand back either)
                     lent = self.call_lent.get(rv[1][1], ()) if rv[0] == "use" and rv[1][0] == "v" else ()
                     direct = ("v", vid, ()) in lent and any(op != ("v", vid, ()) for op in lent)
-                    if rest and new.call and v.ty is not None and v.ty[0] not in VIEW_TYPES and (
+                    # (…or o itself on some runs and a PART of it on others -
+                    # `( npick o ( tail o ) k )`: no per-run key tells them
+                    # apart either; agora #907)
+                    mine = [self.loans[l][0] for l in new.loans if self.loans.get(l, ((None,),))[0][0] == vid]
+                    # (…the binding alone too, whole on one run and a part on
+                    # another: refused below for a value with no copy)
+                    whole_part = any(not pl[1] for pl in mine) and any(pl[1] for pl in mine)
+                    # (…whole_part on an owned result too: a fresh temporary
+                    # the call may hand back beside the binding and its part)
+                    if (rest or whole_part) and (new.call or whole_part) and v.ty is not None and v.ty[0] not in VIEW_TYPES and (
                             (v.ty[0] in ("opt", "res") and direct) or not self.T.copyable(v.ty)):
                         # which of them a run hands back is not known, so
                         # neither is whether the binding still owns its value.
