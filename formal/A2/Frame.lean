@@ -1133,4 +1133,53 @@ theorem PkgNames.of_fewer {m m1 : Mem} {Γ : Ctx}
   · exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T, t, d, es, hb, hsub r T hT, hsn, hvn⟩))
   · exact Or.inr (Or.inr (Or.inr h4))
 
+/-- **Binding a fresh variable over an empty slot keeps `MInv.pkgFree`**:
+    the slot owns nothing and holds no value, and no other binding's clean
+    roots reach the new one. -/
+theorem MInv.pkgFree_addNone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} {o : Bool}
+    (hx : Γ x = none) :
+    ∀ y Ey o' vy, setE Γ x E y = some Ey → Alive Ey → (m.set x ⟨o, none⟩).st y = some ⟨o', some vy⟩ →
+      ∀ i, PkgNames (m.set x ⟨o, none⟩) (setE Γ x E) Ey vy i → PkgFreeId (m.set x ⟨o, none⟩) i := by
+  intro y Ey o' vy hy hl hs i hn
+  have hsub : ∀ r T, (m.set x ⟨o, none⟩).st r = some ⟨true, some T⟩ → m.st r = some ⟨true, some T⟩ := by
+    intro r T hT
+    by_cases hrx : r = x
+    · subst hrx; simp at hT
+    · simpa [upd_ne _ _ hrx] using hT
+  by_cases hyx : y = x
+  · subst hyx; simp at hs
+  rw [setE, upd_ne _ _ hyx] at hy
+  simp only [Mem.set_st, upd_ne _ _ hyx] at hs
+  replace hn := PkgNames.of_fewer hsub hn
+  refine PkgFreeId.of_fewer hsub (hi.pkgFree y Ey o' vy hy hl hs i ?_)
+  obtain ⟨sl, hsl, _, hso, hown, hbor⟩ := hi.slot y Ey hy
+  rw [hs] at hsl; cases hsl
+  have hint : Ey.ty ≠ .int ∨ Ey.mode = .rootb := by
+    by_cases ht : Ey.ty = .int
+    · by_cases hrb : Ey.mode = .rootb
+      · exact Or.inr hrb
+      · exfalso
+        cases hos : Ey.mode.ownSlot
+        · have hm : Ey.mode = .bor ∨ Ey.mode = .rootb := by
+            cases hme : Ey.mode <;> simp_all [Mode.ownSlot]
+          obtain ⟨w, hw, hok⟩ := hbor hos (hl.live_of_bor hm)
+          cases hw
+          rw [ht] at hok; obtain ⟨k, rfl⟩ := valOK_int.mp hok
+          exact PkgNames.none_int hn
+        · have := (hown hos).1; rw [ht] at this; simp [Ty.owning] at this
+    · exact Or.inl ht
+  have hbound : ∀ d ∈ Ey.vdeps, d.kind.isName = false → (Γ d.root).isSome := fun d hd hnm => by
+    rcases hl with hl | ⟨hdb, hos⟩
+    · obtain ⟨Er, hEr, _⟩ := hi.wf y Ey hy hl hint d.root (List.mem_map_of_mem hd)
+      rw [hEr]; rfl
+    · obtain ⟨Er, hEr, _⟩ := hi.wf.dtor y Ey hy hdb hos hint d hd hnm
+      rw [hEr]; rfl
+  have hvd : ∀ D, D ⊆ Ey.vdeps → ∀ d ∈ memDeps D, (Γ d.root).isSome := fun D hD d hd =>
+    hbound d (hD (List.mem_filter.mp hd).1) (by simpa using (List.mem_filter.mp hd).2)
+  have hpv : (Ey.mode = .bor ∨ Ey.mode = .rootb) → Ey.path ⊆ Ey.vdeps := fun hm d hd => by
+    have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+    simp [Entry.vdeps, hos, hd]
+  have hhv : Ey.held ⊆ Ey.vdeps := fun d hd => by simp [Entry.vdeps, hd]
+  exact PkgNames.of_setE hi.rootb_bound hx (fun hm => hvd _ (hpv hm)) (hvd _ hhv) hn
+
 end A2

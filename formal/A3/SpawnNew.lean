@@ -257,6 +257,18 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
       · have h0 : spawnSt fn vs fn.params.length = some sl := hsl
         rw [spawnSt_res] at h0; cases h0; cases hT
     blocks := fun k bl hk => (hB k bl hk).ok
+    pkgFree := fun y E o v hy _ hst i hn => by
+      -- AGORA-901: a new thread's parameters hold no view
+      exfalso
+      rcases sigCtx_spawn hpar hy with ⟨t, hp, ht, rfl⟩ | ⟨rfl, rfl⟩
+      · have hvl : y < vs.length := by rw [hlen]; exact (List.getElem?_eq_some_iff.mp hp).1
+        obtain ⟨w, hw⟩ : ∃ w, vs[y]? = some w := ⟨_, List.getElem?_eq_getElem hvl⟩
+        change spawnSt fn vs y = _ at hst
+        rw [spawnSt_of hlen hw] at hst; cases hst
+        obtain ⟨_, _, _, hv⟩ := hn.own rfl
+        exact (hwf y v _ hw hp).noView ht hv
+      · change spawnSt fn vs _ = _ at hst
+        rw [spawnSt_res] at hst; cases hst
     nvS := fun v hv => by
       show v < fn.nvars
       rw [vars_wrap] at hv

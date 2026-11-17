@@ -32,6 +32,7 @@ theorem inv_emptyGl {s : Stmt} {nv : Nat} (g : Nat → Option Val) (T : Nat → 
   armed _ _ _ h := by cases h
   shares _ _ _ _ h := by cases h
   blocks _ _ h := by cases h
+  pkgFree _ _ _ _ h := by cases h
   nvS := hv
   nvF _ h := by cases h
   anch _ _ h := by cases h

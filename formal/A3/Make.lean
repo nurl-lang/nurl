@@ -334,6 +334,7 @@ theorem MInv.unbind {m : Mem} {Γ : Ctx} (hi : MInv m Γ) (a : Nat → Bool) (ha
   armed _ _ _ h := by cases h
   shares _ _ _ _ h := by cases h
   blocks := hi.blocks
+  pkgFree _ _ _ _ h := by cases h
 
 /-- **One `make`, handed over**: from a start `GlobsOK` holds of, global `i`'s
     `make` run to the hand-over point leaves, once its result is global `i`,

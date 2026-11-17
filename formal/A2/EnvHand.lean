@@ -152,6 +152,7 @@ theorem MInv.addUnset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
   · intro k bl hk
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk rfl⟩, h4⟩
+  · exact hi.pkgFree_addNone hx
 
 /-- A tree of an owning type is owned. -/
 theorem WFv.owns_owning {t : Ty} {v : Val} (hw : WFv t v) (ho : t.owning = true) : v.owns = true :=

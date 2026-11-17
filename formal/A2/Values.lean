@@ -396,7 +396,7 @@ theorem PkgFreeAt.child {m : Mem} (hh : HeapOK m) {r0 : Var} {T0 n0 n : Val}
       subst heq
       exact Below.irrefl ⟨ev, Child.pkg, hse.trans hN⟩
 
-theorem WFv.not_href {τ : Ty} {c : Nat} (h : WFv τ (.href c)) : False := by
+theorem WFv.href_false {τ : Ty} {c : Nat} (h : WFv τ (.href c)) : False := by
   generalize hv : (Val.href c) = v at h
   induction h with
   | dtor _ _ ih => exact ih hv
@@ -407,7 +407,7 @@ theorem lendOf_href {τ : Ty} {e : Val} (hw : WFv τ e) {c : Nat} (h : lendOf e 
     ∃ t d es, e = .node t c d es := by
   cases e with
   | node t c' d es => simp [lendOf] at h; subst h; exact ⟨t, d, es, rfl⟩
-  | href => exact hw.not_href.elim
+  | href => exact hw.href_false.elim
   | _ => simp [lendOf] at h
 
 theorem comp_isName {a b : Kind} (ha : a.isName = false) (hb : b.isName = false) :
