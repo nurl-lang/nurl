@@ -128,9 +128,12 @@ the LLVM / C11 memory model rather than redefining it.
   reaches, so the node the store rewrites lies in no package.
   `A2/EditBVFnWitness.lean` pushes a view beside a closure whose
   environment is that view through `vec_at vv 0`, typed and run safe and
-  leak-free. nurlc stores such closures, capturing by value; it refuses a
-  closure that captures a stack binding by name before it can reach any
-  Vec (`compiler/tests/closure_beside_view_stored_through_borrow.nu`).
+  leak-free. nurlc stores such closures, capturing by value
+  (`compiler/tests/closure_beside_view_stored_through_borrow.nu`). The rule
+  admits more than nurlc does, which is sound: it also admits a by-name
+  capture that the owners already hold, while nurlc's escape rule refuses
+  every by-name capture of a stack binding before it can reach a Vec
+  (`compiler/tests/diag_closure_by_name_stored_through_borrow.nu`).
   That nurlc's
   `vec_pop` / `vec_remove` lower to these steps is phase C. Outside the
   claim still:
