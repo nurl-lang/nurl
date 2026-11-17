@@ -45101,6 +45101,22 @@ unsafe @ __slice_len_comma s t → b {
     ( mem_udrop_flag_set syms cg ptr bit )
 }
 
+// …and a slice field of a literal given that call directly (`@ Bag { ( pick
+// a f ) 2 }`): the runs the call lent, as an i1 the copy is made on, or ``
+// where the call has no per-run answer (the literal copies it whole then).
+// Copied on every run, the fresh slice of the runs it owned was nobody's
+// (agora #878).
+@ __slice_field_call_lent i syms i cg → s {
+    : s __scn ( nurl_sym_get syms `__last_call_name__` )
+    : s __sfwd ? >= g_call_own_slc 0 ( nurl_str_cat `%r` ( nurl_str_int g_call_own_slc ) ) ( nurl_str_cat `` `` )
+    ? ! | ( __hown_dyn syms __scn ) != 0 ( nurl_str_len __sfwd ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s bit ? != 0 ( nurl_str_len __sfwd ) ( nurl_str_cat __sfwd `` ) ( mem_call_retown syms cg )
+    ? == 0 ( nurl_str_len bit ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = xor i1 ` ) ( nurl_print bit ) ( nurl_print `, 1\n` )
+    ^ r
+}
+
 // A `: ~` slice binding may be given a buffer of its own or a borrowed one
 // later (gen_assign), so whether it owns what it holds is its drop flag from
 // here — set at its `:`, 1 where it owns its first value — and it is on the
@@ -79312,8 +79328,12 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // (In `unsafe` code too: the drop releases it there as well.)
         // (…and an option's slice payload, which the option owns the same
         // way: __opt_slice_payload, agora #841.)
+        // (…a call that hands back a fresh slice on some runs and a lend on
+        // others is copied on the runs it lent only: the fresh one is the
+        // literal's, agora #878.)
         ? & & & & != 0 g_auto_drop_strings ! is_slice_fresh ( __owned_slice_ty ( nurl_llty fty ) ) ? agg_is_wrap != 0 ( nurl_str_len ( __opt_slice_payload ( nurl_llty agg_ty ) ) ) T | != enum_paycount -1 ( __agg_drop_takes_fields agg_ty ) {
-            = fval ( mem_emit_clone_on cg ( nurl_llty fty ) fval `1` )
+            : s __fsl ? == fld_first_tt TT_LPAREN ( __slice_field_call_lent syms cg ) ( nurl_str_cat `` `` )
+            = fval ( mem_emit_clone_on cg ( nurl_llty fty ) fval ? == 0 ( nurl_str_len __fsl ) ( nurl_str_cat `1` `` ) __fsl )
         } {}
         // (…and an owned slice the literal holds by type - a struct's slice
         // field, an option's slice payload: fresh, moved in or copied in
