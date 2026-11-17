@@ -20687,12 +20687,14 @@ unsafe @ eng_byte s w i k → i {
         }
     } {}
     : i aown ( av_own av )
-    ? & & & & & & | == aown OW_L == aown OW_O ! ( av_call av ) != ( av_loans av ) 0 & != g_f_ret ET_NONE ! ( et_is_view g_f_ret ) ( et_owning g_f_ret ) & whole == ( fv_kind ov ) VK_TEMP & == 0 ( wv_at g_fx_nocopy ov ) ! ( fx_has ov FX_LENDCOPY ) {
+    ? & & & & & & | == aown OW_L == aown OW_O ! ( av_call av ) != ( av_loans av ) 0 & != g_f_ret ET_NONE ! ( et_is_view g_f_ret ) ( et_owning g_f_ret ) & whole | == ( fv_kind ov ) VK_TEMP ( fx_has ov FX_JOIN_VAR ) & == 0 ( wv_at g_fx_nocopy ov ) ! ( fx_has ov FX_LENDCOPY ) {
         // the payload of an `in` parameter's option or result, handed back
-        // as the value of the `??` over it: the function moves the value
-        // on, so the caller's argument is taken as by a `sink` and the
-        // result is the caller's own on that path. (Handed back by name
-        // inside the arm, or out of an enum of the program's, it is lent.)
+        // as the value of the `??` over it - or by a binding given that
+        // value whole (`: String r ?? o {…} ^ r`, h409, agora #887): the
+        // function moves the value on, so the caller's argument is taken
+        // as by a `sink` and the result is the caller's own on that path.
+        // (Handed back by name inside the arm, or out of an enum of the
+        // program's, it is lent.)
         : i loans ( av_loans av )
         : ~ i places ( av_alias av )
         : ~ i k 0

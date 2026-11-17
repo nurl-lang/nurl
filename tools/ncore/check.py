@@ -4055,13 +4055,15 @@ class FnCheck:
                                         {(hp, l) for hp, l in av.held if l not in mine}, av.call and bool(rest))
                 if (av.own in ("L", "O") and not av.call and av.loans and self.fn.ret is not None
                         and self.fn.ret[0] not in VIEW_TYPES and self.T.owning(self.fn.ret)
-                        and op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "temp"
+                        and op[0] == "v" and not op[2]
+                        and (self.fn.vars[op[1]].kind == "temp" or op[1] in self.join_vars)
                         and op[1] not in self.lit_nocopy and op[1] not in self.lit_lendcopy):
                     # the payload of an `in` parameter's option or result,
                     # handed back as the value of the `??` over it: the
                     # function moves the value on, so the caller's argument
                     # is taken as by a `sink` and the result is the caller's
-                    # own on that path (MEMORY.md §7.6, h408-h415). (Handed
+                    # own on that path (MEMORY.md §7.6, h408-h415; or by a
+                    # binding given that value whole, h409, agora #887). (Handed
                     # back by name inside the arm, or out of an enum of the
                     # program's, it is lent: RULES.md, "One operation".)
                     places = {self.loans[l][0] for l in av.loans
