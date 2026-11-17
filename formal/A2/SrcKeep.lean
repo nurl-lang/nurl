@@ -313,6 +313,11 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     exact CtxRel.bind hanch hy hyF
       (CtxRel.editB hanch hx hmx (EditArg.trunc (t := t) hie) (fun _ h => by cases h) hx hl hthru)
       hnrb (fun ha => ih hks ha (takeB_nameWF hn hy hx hmx hl hty)) hend.1
+  | @takeBV _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty _ _ hie _ hthru hV _ _ hend ih =>
+    intro _ hanch hn
+    have hnrb : (compE Ex t).mode ≠ .rootb := by cases t <;> simp [compE, intE]
+    exact CtxRel.bind hanch hy hyF (CtxRel.editBV_trunc (t := t) hanch hx hmx hl hie hthru hV)
+      hnrb (fun ha => ih hks ha (takeBV_nameWF hn hy hx hmx hl hty)) hend.1
   | @free _ Γ F x E t hx _ hmo _ hxF hpin =>
     exact fun _ hanch _ => CtxRel.moved hanch hx (by rw [hmo]; simp) hxF hpin.1
   | insert _ _ _ ih => exact fun _ hanch hn => ih rfl hanch hn

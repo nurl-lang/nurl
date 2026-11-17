@@ -1235,6 +1235,15 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
       simp only [A2.setE, upd_ne _ _ hry, upd_ne _ _ hrx, killThru]; exact h2)
     exact ⟨killE .replace false y E3, by simp [A2.exitScope, upd_ne _ _ hry, A2.kill, h3],
       by rw [killE_mode, hm3]; rcases hE2 with rfl | rfl <;> rfl⟩
+  | @takeBV _ Γ Δ F x y i k Ex t _ _ hyF _ _ _ _ _ hxF _ _ _ _ _ _ _ ih =>
+    intro r hr E h
+    have hrx : r ≠ x := fun e => hxF (e ▸ hr)
+    have hry : r ≠ y := fun e => hyF (e ▸ hr)
+    obtain ⟨E2, h2, hE2⟩ := killHv_entry (thruKills (.trunc i) Γ Ex.ty Ex.path) h
+    obtain ⟨E3, h3, hm3⟩ := ih r hr E2 (by
+      simp only [A2.setE, upd_ne _ _ hry, upd_ne _ _ hrx, killThruV]; exact h2)
+    exact ⟨killE .replace false y E3, by simp [A2.exitScope, upd_ne _ _ hry, A2.kill, h3],
+      by rw [killE_mode, hm3]; rcases hE2 with rfl | rfl <;> rfl⟩
 
   | @exit _ Γ Δ F _ _ _ _ hdom hmode =>
     intro r _ E h
@@ -1284,6 +1293,41 @@ theorem takeB_ctxWF {Γ : Ctx} (h : CtxWF Γ) {x y : Var} {i : Expr} {Ex : Entry
       obtain ⟨hrx, E2, h2, hro⟩ := hroot dd.root (h x Ex hx hl (Or.inl hnint) dd.root
         (List.mem_map_of_mem (by unfold Entry.vdeps; exact List.mem_append_right _ hd')))
       exact ⟨E2, by simp only [A2.setE, upd_ne _ _ hrx, killThru]; exact h2, hro⟩
+    exact h1.add hy1 hE
+
+/-- AGORA-897: the same for an element type that holds views: `editBV`'s
+    truncation, then `y` bound to what moved out. -/
+theorem takeBV_ctxWF {Γ : Ctx} (h : CtxWF Γ) {x y : Var} {i : Expr} {Ex : Entry} {t : Ty}
+    (hy : Γ y = none) (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
+    (hty : Ex.ty = .vec t) :
+    CtxWF (A2.setE (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) y (compE Ex t)) := by
+    have hk := h.killHv (thruKills (.trunc i) Γ Ex.ty Ex.path)
+    obtain ⟨E', hE', hE'c⟩ := killHv_entry (thruKills (.trunc i) Γ Ex.ty Ex.path) hx
+    have hroot : ∀ r, (∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) →
+        r ≠ x ∧ ∃ E2, killHv (thruKills (.trunc i) Γ Ex.ty Ex.path) Γ r = some E2 ∧ E2.mode.isRoot = true := by
+      rintro r ⟨Er, hEr, hro⟩
+      have hrx : r ≠ x := fun e => by subst e; rw [hx] at hEr; cases hEr; rw [hmx] at hro; cases hro
+      obtain ⟨E2, h2, hE2⟩ := killHv_entry (thruKills (.trunc i) Γ Ex.ty Ex.path) hEr
+      exact ⟨hrx, E2, h2, by rcases hE2 with rfl | rfl <;> exact hro⟩
+    have h1 : CtxWF (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
+      hk.setE ⟨E', hE', fun hro => by rcases hE'c with rfl | rfl <;> exact hro⟩
+        (fun _ hn r hr => Or.inr (hroot r (h x Ex hx hl hn r hr)))
+        (fun _ hos => by rw [hmx] at hos; cases hos)
+        (fun ha => h.arm x Ex hx ha) (fun hd => h.view x Ex hx hd)
+    have hy1 : (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) y = none := by
+      have hyx : y ≠ x := fun e => by rw [e, hx] at hy; cases hy
+      simp only [A2.setE, upd_ne _ _ hyx, killThruV]
+      exact killHv_none hy _
+    have hnint : Ex.ty ≠ .int := by rw [hty]; simp
+    have hE : (compE Ex t).live = true → ((compE Ex t).ty ≠ .int ∨ (compE Ex t).mode = .rootb) →
+        ∀ r ∈ roots (compE Ex t).vdeps, ∃ Er, (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) r = some Er ∧
+          Er.mode.isRoot = true := by
+      intro _ _ r hr
+      obtain ⟨dd, hdd, rfl⟩ := List.mem_map.mp hr
+      have hd' := compE_vdeps_sub Ex t dd hdd
+      obtain ⟨hrx, E2, h2, hro⟩ := hroot dd.root (h x Ex hx hl (Or.inl hnint) dd.root
+        (List.mem_map_of_mem (by unfold Entry.vdeps; exact List.mem_append_right _ hd')))
+      exact ⟨E2, by simp only [A2.setE, upd_ne _ _ hrx, killThruV]; exact h2, hro⟩
     exact h1.add hy1 hE
 
 /-- Every rule keeps a well-formed context well-formed. -/
@@ -1502,6 +1546,9 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
   | @takeB _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ _ _ _ _ _ hpx ih =>
     -- AGORA-889: `editB`'s truncation, then `y` bound as `letv` binds
     exact fun h => (ih (takeB_ctxWF h hy hx hmx hl hty)).exitScope y hpx.2.2
+  | @takeBV _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ _ _ _ _ _ _ hpx ih =>
+    -- AGORA-897: `editBV`'s truncation, then `y` bound as `letv` binds
+    exact fun h => (ih (takeBV_ctxWF h hy hx hmx hl hty)).exitScope y hpx.2.2
   | @editBV _ Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru _ =>
     intro h
     have hw1 := harg.wf h

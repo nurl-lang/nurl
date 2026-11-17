@@ -148,6 +148,7 @@ theorem _root_.A2.StmtT.takeB_src {x y : Var} {i : Expr} {s : Stmt} (ht : StmtT 
   generalize hs : Stmt.takeB x i y s = s0 at ht
   induction ht with
   | takeB h1 => cases hs; exact h1
+  | takeBV h1 => cases hs; exact h1
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 

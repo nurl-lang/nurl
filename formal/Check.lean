@@ -336,6 +336,27 @@ import A3
 #print axioms A2.TakeBWitness.main_typed
 #print axioms A2.TakeBWitness.main_safe
 #print axioms A2.TakeBWitness.main_no_leak
+-- AGORA-897: ... and one whose type holds views (`StmtT.takeBV`; A2/TakeB.lean,
+-- A2/TakeBVWitness.lean)
+#print axioms A2.takeBV_pres
+#print axioms A2.MInv.editBV_take
+#print axioms A2.takeB_viewsOK
+#print axioms A2.takeBV_out
+#print axioms A2.TakeBVWitness.main_typed
+#print axioms A2.TakeBVWitness.main_safe
+#print axioms A2.TakeBVWitness.main_no_leak
+-- AGORA-898: ... and one whose type holds views and a closure (a closure whose
+-- environment is a view, moved out; `NewSlot.editV`'s closure case)
+#print axioms A2.TakeBVWitness.main2_typed
+#print axioms A2.TakeBVWitness.main2_safe
+#print axioms A2.TakeBVWitness.main2_no_leak
+#print axioms A2.node_names_sub
+-- AGORA-900: ... and one that holds a destructor value, handed to its `letd`
+-- first thing (A2/TakeBDWitness.lean; the typing's guarantee `A2.Dtor.takeB_typed`)
+#print axioms A2.Dtor.takeB_typed
+#print axioms A2.TakeBDWitness.main12_typed
+#print axioms A2.TakeBDWitness.main12_safe
+#print axioms A2.TakeBDWitness.main12_no_leak
 -- AGORA-885: the by-name owner hand-over, as an encoding (A2/HandOver.lean)
 #print axioms A2.HandOver.main_safe
 #print axioms A2.HandOver.main_no_leak

@@ -809,6 +809,32 @@ theorem takeB_nameWF {Γ : Ctx} (hn : NameWF Γ) {x y : Var} {i : Expr} {Ex : En
       (fun _ _ => (hn2 x Ex hx2 hl (Or.inl hnint)).mono (fun dd hdd => by
         unfold Entry.vdeps; exact List.mem_append_right _ (compE_vdeps_sub Ex t dd hdd)))
 
+/-- AGORA-897: the same for an element type that holds views (`editBV`'s
+    truncation). -/
+theorem takeBV_nameWF {Γ : Ctx} (hn : NameWF Γ) {x y : Var} {i : Expr} {Ex : Entry} {t : Ty}
+    (hy : Γ y = none) (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
+    (hty : Ex.ty = .vec t) :
+    NameWF (A2.setE (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) y (compE Ex t)) := by
+    obtain ⟨E', hE', hE'c⟩ := killHv_entry (thruKills (.trunc i) Γ Ex.ty Ex.path) hx
+    have hn2 : NameWF (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) := by
+      refine NameWF.setE (hn.killHv _) (fun Ex' h => ?_) (fun Ex' h hnm => ?_) (fun hl' hni => ?_)
+      · obtain rfl : E' = Ex' := Option.some.inj (hE'.symm.trans h)
+        rcases hE'c with rfl | rfl <;> exact ⟨rfl, rfl⟩
+      · obtain rfl : E' = Ex' := Option.some.inj (hE'.symm.trans h)
+        have hos := hnm.2.2.1
+        rcases hE'c with rfl | rfl <;> (rw [hmx] at hos; cases hos)
+      · exact (hn x Ex hx hl hni).keeps ((Keeps.refl Γ []).killHv (thruKills (.trunc i) Γ Ex.ty Ex.path))
+          (fun _ _ _ h => by cases h)
+    have hyx : y ≠ x := fun e => by rw [e, hx] at hy; cases hy
+    have hy2 : (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) y = none := by
+      simp only [A2.setE, upd_ne _ _ hyx, killThruV]; exact killHv_none hy _
+    have hx2 : (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) x = some Ex := by simp [A2.setE]
+    have hnint : Ex.ty ≠ .int := by rw [hty]; simp
+    exact NameWF.setE hn2 (fun Ex' h => by rw [hy2] at h; cases h)
+      (fun Ex' h => by rw [hy2] at h; cases h)
+      (fun _ _ => (hn2 x Ex hx2 hl (Or.inl hnint)).mono (fun dd hdd => by
+        unfold Entry.vdeps; exact List.mem_append_right _ (compE_vdeps_sub Ex t dd hdd)))
+
 /-- Source code keeps what contexts hold by name valid. -/
 theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     (ht : StmtT P ξ Γ F s Δ) : s.src = true → NameWF Γ → NameWF Δ := by
@@ -944,6 +970,9 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
   | @takeB _ Γ Δ F x y i k Ex t hks hy _ hx hmx hl hty _ _ _ _ _ _ _ _ ih =>
     -- AGORA-889: `editB`'s truncation, then `y` bound as `letv` binds
     exact fun _ hn => (ih hks (takeB_nameWF hn hy hx hmx hl hty)).exitScope y
+  | @takeBV _ Γ Δ F x y i k Ex t hks hy _ hx hmx hl hty _ _ _ _ _ _ _ _ _ ih =>
+    -- AGORA-897: `editBV`'s truncation, then `y` bound as `letv` binds
+    exact fun _ hn => (ih hks (takeBV_nameWF hn hy hx hmx hl hty)).exitScope y
   | @editBV _ Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru _ =>
     intro _ hn
     have hn1 : NameWF Γ1 := harg.names hn

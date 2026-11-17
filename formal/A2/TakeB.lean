@@ -119,6 +119,39 @@ theorem MInv.editB_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref
 
+/-- A change that stores nothing leaves its roots holding what they held. -/
+theorem holdThru_nil (P : List Dep) (Γ : Ctx) : holdThru [] P Γ = Γ := by
+  funext v
+  unfold holdThru holdOn
+  cases h : Γ v with
+  | none => rfl
+  | some E =>
+    show some (if v ∈ _ then E.hold [] else E) = some E
+    split
+    · cases E; simp [Entry.hold, ownHeld]
+    · rfl
+
+/-- AGORA-897: **the owner's change, for an element type that holds views**
+    (`MInv.editBV_trunc`'s, its node's `n`-th element taken out instead of a
+    tail freed): every memory root of `x`'s path ends what a truncation
+    there ends, with the views among its elements if its type holds views,
+    and `x` stays live. -/
+theorem MInv.editBV_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
+    (hanch : RootbAnch Γ F) {x : Var} {i : Expr} {Ex : Entry} {t : Ty} (hx : Γ x = some Ex)
+    (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
+    (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path)
+    (hV : ThruV Γ (.trunc i) Ex.ty Ex.path [])
+    {o : Var} {T T' : Val} {t' : Ty} {c d n : Nat} {es : List Val} (hn : n < es.length)
+    (hno : NodeOf m x o T t' c d es)
+    (hr : Repl (.node t' c d es) (.node t' c d (es.eraseIdx n)) T T') :
+    MInv (m.set o ⟨true, some T'⟩) (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) := by
+  have h := MInv.editBV_drops (a' := m.alloc) hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hV
+    (fun _ h => by cases h) (fun _ h => by cases h) hno
+    (fun _ _ _ _ _ _ => HeapOK.editTake hi.heap hno.2.2.1 hn hr)
+    (fun e he => Or.inl (List.mem_of_mem_eraseIdx he)) hr (Or.inr fun e he => List.mem_of_mem_eraseIdx he)
+  rw [holdThru_nil, List.append_nil] at h
+  exact h
+
 /-! ### The element moved out -/
 
 /-- `vec_pop`'s entry for an element that owns memory. -/
@@ -176,6 +209,13 @@ theorem killNames_none {Γ : Ctx} {v : Var} (hv : Γ v = none) : ∀ ds : List D
     show (A2.killNames ds Γ v).map _ = none
     rw [killNames_none hv ds]; rfl
 
+/-- `killHv` binds nothing new. -/
+theorem killHv_none {Γ : Ctx} {v : Var} (hv : Γ v = none) : ∀ ks : List (Eff × Bool × Var), A2.killHv ks Γ v = none
+  | [] => hv
+  | (_, _, _) :: ks => by
+    show (A2.killHv ks Γ v).map _ = none
+    rw [killHv_none hv ks]; rfl
+
 /-- A field-like owner's entry (`compE`) for an element type that owns memory
     and holds no views: owned, holding nothing. -/
 theorem compE_ownNoView {E : Entry} {t : Ty} (ho : t.owning = true) (hhv : t.holdsView = false) :
@@ -187,5 +227,103 @@ theorem compE_vdeps_sub (E : Entry) (t : Ty) : ∀ d ∈ (compE E t).vdeps, d �
   intro d hd
   cases t <;> simp only [compE, intE, Entry.vdeps, Mode.ownSlot, ownHeld] at hd <;>
     (try split at hd) <;> simp_all
+
+/-! ### An element that holds views (AGORA-897, `StmtT.takeBV`) -/
+
+/-- The node a borrow of a `Vec` names is the one its value is valid as:
+    its views are valid through what the borrow holds. -/
+theorem MInv.thru_owner_views {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry} {t : Ty}
+    (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
+    (hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ d.root = some Er ∧ Er.mode.ownSlot = true)
+    (hnsh : ∀ d ∈ memDeps Ex.path, d.kind ≠ .share)
+    {o : Var} {T : Val} {t' : Ty} {c d : Nat} {es : List Val} (hno : NodeOf m x o T t' c d es) :
+    ViewsOK m (.vec t') (.node t' c d es) Ex.held ∧ NamesIn (.node t' c d es) Ex.held := by
+  obtain ⟨dep, hdm, T0, n0, c0, d0, es0, hxs, hT0, _, _, ⟨d1, es1, hlan, _, hvs, hns, _⟩, _, _, huniq, _⟩ :=
+    hi.thru_owner hx hmx hl hty hro hnsh
+  obtain ⟨n1, hr1, hla1⟩ := hlan.root (hnsh dep hdm)
+  have hsub : Sub (.node t c0 d1 es1) T0 := hla1.sub.trans (rootNode_own hT0 hr1).sub
+  have ha := hi.heap.alloc dep.root T0 hT0
+  have hno1 : NodeOf m x dep.root T0 t c0 d1 es1 :=
+    ⟨(ha c0 (hsub.ids c0 (by simp))).1, (ha d1 (hsub.ids d1 (by simp))).1, hT0, Or.inr ⟨hxs, hsub⟩⟩
+  obtain ⟨_, _, _, _, h1, h2⟩ := huniq _ _ _ _ _ _ hno1
+  obtain ⟨_, _, h3, h4, h5, h6⟩ := huniq _ _ _ _ _ _ hno
+  subst h1 h2 h3 h4 h5 h6
+  exact ⟨hvs, hns⟩
+
+/-- A field-like owner's entry (`compE`) for an element type that owns memory
+    and holds views: owned, holding what the entry it came from holds. -/
+theorem compE_ownView {E : Entry} {t : Ty} (ho : t.owning = true) (hhv : t.holdsView = true) :
+    compE E t = ⟨t, .own, true, [], E.held, false, false⟩ := by
+  cases t <;> simp_all [compE, Ty.owning, ownHeld]
+
+/-- **The views of what moves out stay valid** after its owner's tree loses
+    it: each is valid through what the borrow holds; one through the owner
+    itself is through a share of it (no tree views itself), whose block
+    lives on; every other root keeps its slot (`rootKeep_frame`). -/
+theorem takeB_viewsOK {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
+    {x : Var} {Ex : Entry} (hx : Γ x = some Ex) (hl : Ex.live = true) (hnint : Ex.ty ≠ .int)
+    {o : Var} {T T' : Val} (hT : m.st o = some ⟨true, some T⟩) (hoF : o ∉ F)
+    {t : Ty} {c d : Nat} {es : List Val} {e : Val} (he : e ∈ es) (hsub : Sub e T)
+    (hvs : ViewsOK m (.vec t) (.node t c d es) Ex.held) :
+    ViewsOK (m.set o ⟨true, some T'⟩) t e Ex.held := by
+  intro s v hin
+  obtain ⟨d0, o0, l0, rfl, dep, hd, ha⟩ := hvs s v (ViewIn.child he hin)
+  refine ⟨d0, o0, l0, rfl, dep, hd, ?_⟩
+  obtain ⟨r, k⟩ := dep
+  by_cases hro : r = o
+  · subst hro
+    by_cases hks : k = .share
+    · subst hks
+      exact vkeep_share (m := m) (m' := m.set r ⟨true, some T'⟩) (BlkLe.of_le fun _ _ h => h)
+        (RootMem.own (o := some T') (by simp)) d0 o0 l0 s ha
+    · exfalso
+      obtain ⟨c', es', _, hla, _, _⟩ := ha
+      obtain ⟨n0, hr, hk⟩ := hla.root hks
+      exact hi.heap.self r T hT d0 o0 l0 (hin.sub.trans hsub) s c' es'
+        (hk.sub.trans (rootNode_own hT hr).sub)
+  · obtain ⟨Er, hEr, hroot⟩ := hi.wf x Ex hx hl (Or.inl hnint) r
+      (List.mem_map_of_mem (f := Dep.root) (show (⟨r, k⟩ : Dep) ∈ Ex.vdeps by
+        unfold Entry.vdeps; exact List.mem_append_right _ hd))
+    have hk : RootKeep m (m.set o ⟨true, some T'⟩) r := rootKeep_frame hi hanch
+      (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ o from fun e => hoF (e ▸ hw))])
+      hEr hroot (by rw [Mem.set_st, upd_ne _ _ hro])
+    exact RootKeep.vkeep (dep := ⟨r, k⟩) hk (BlkLe.of_le fun _ _ h => h) d0 o0 l0 s ha
+
+/-- **What moves out, for an element type that holds views**: owned,
+    holding what the borrow holds, or, a slice, borrowed through that; its
+    views are valid through it (`takeB_viewsOK`), and what it captures by
+    name it holds (the node's `NamesIn`, `HrefAt`). -/
+theorem takeBV_out {m1 : Mem} {Γ1 : Ctx} {Ex : Entry} {t : Ty} {e : Val}
+    (hn1 : NameOK Γ1 Ex) (hwf1 : ∀ r ∈ roots Ex.held, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
+    (htok : t.ok = true) (hw : WFv t e) (hhv : t.holdsView = true)
+    (hvs : ViewsOK m1 t e Ex.held) (hnm : NamesIn e Ex.held)
+    (hnd : e.ids.Nodup) (hal : ∀ i ∈ e.ids, m1.alloc i = true ∧ i < m1.nid)
+    (hdisj : ∀ x U, OwnedAt m1 x U → ∀ i ∈ e.ids, i ∉ U.ids) (hsf : SelfFree e)
+    (hpay : ∀ i ∈ e.ids, ¬ PayAddr m1 i) (hpk : PkgsOK e) (hsh : SharesOK m1 t e) :
+    RhsOut m1 Γ1 (compE Ex t) e e.owns := by
+  have hnames : NameOK Γ1 (compE Ex t) := DepsNamed.sub hn1 fun dd hdd => by
+    unfold Entry.vdeps; exact List.mem_append_right _ (compE_vdeps_sub Ex t dd hdd)
+  have hwfc : ∀ r ∈ roots (compE Ex t).vdeps, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true := by
+    intro r hr
+    obtain ⟨dd, hdd, rfl⟩ := List.mem_map.mp hr
+    exact hwf1 _ (List.mem_map_of_mem (compE_vdeps_sub Ex t dd hdd))
+  cases ho : t.owning with
+  | false =>
+    cases t with
+    | int => simp [Ty.holdsView] at hhv
+    | slice s =>
+      cases hw with
+      | view =>
+        refine ⟨rfl, Or.inr rfl, rfl, htok, fun _ => hwfc, (fun h => by cases h), fun _ => ?_,
+          fun _ => hnames, hnm, hpk, (fun h => by cases h)⟩
+        obtain ⟨d', o', l', heq, dep, hd, ha⟩ := hvs s _ ViewIn.here
+        cases heq
+        exact ValOK.view ⟨dep, hd, ha⟩
+    | _ => simp [Ty.owning] at ho
+  | true =>
+    rw [compE_ownView ho hhv] at hnames hwfc ⊢
+    rw [hw.owns ho]
+    exact ⟨rfl, Or.inl rfl, rfl, htok, fun _ => hwfc, fun _ => ⟨ho, hw, hvs, hnd, hal, hdisj, hsf, hpay⟩,
+      (fun h => by cases h), fun _ => hnames, hnm, hpk, fun _ => hsh⟩
 
 end A2
