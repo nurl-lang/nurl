@@ -79347,6 +79347,15 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         ? & & & & != 0 g_auto_drop_strings ! is_slice_fresh ( __owned_slice_ty ( nurl_llty fty ) ) ? agg_is_wrap != 0 ( nurl_str_len ( __opt_slice_payload ( nurl_llty agg_ty ) ) ) T | != enum_paycount -1 ( __agg_drop_takes_fields agg_ty ) {
             : s __fsl ? == fld_first_tt TT_LPAREN ( __slice_field_call_lent syms cg ) ( nurl_str_cat `` `` )
             = fval ( mem_emit_clone_on cg ( nurl_llty fty ) fval ? == 0 ( nurl_str_len __fsl ) ( nurl_str_cat `1` `` ) __fsl )
+            // (…copied wherever the call lent, the field hands back none of
+            // the call's arguments: what the call could hand back
+            // (`__last_phi_idents__`, read by gen_ret as the returned
+            // literal's handles) is not the literal's. Left standing, a
+            // returned `@ Bag { ( pick a f ) 2 }` made its function a
+            // lender of `a`, and the caller never released the Bag -
+            // agora #890.)
+            ( nurl_sym_def syms `__last_phi_idents__` `` )
+            ( nurl_sym_def syms `__last_call_part_idents__` `` )
         } {}
         // (…and an owned slice the literal holds by type - a struct's slice
         // field, an option's slice payload: fresh, moved in or copied in
