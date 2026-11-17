@@ -1156,10 +1156,12 @@ class FnCheck:
         if (av.own == "L" or mixed) and (own_block or self.local_depth(AV("L", av.loans, av.alias)) > dest_depth):
             # (a value nurlc hands over as it is - with its owner flag, no
             # copy made - stays the lend it is on the paths it lends: its use
-            # after what it borrows ended is the error, kept_lend)
+            # after what it borrows ended is the error, kept_lend. What it
+            # holds is still checked below: a pointer into the frame is
+            # refused where it is stored.)
             if keep_lend and not own_block:
-                return av
-            if copy_ok and dest_ty is not None and self.T.copyable(dest_ty) and not self.T.is_scalar(dest_ty):
+                pass
+            elif copy_ok and dest_ty is not None and self.T.copyable(dest_ty) and not self.T.is_scalar(dest_ty):
                 av = AV("O", (), (), av.held)
             elif own_block and mixed and dest_ty is not None and self.T.owning(dest_ty):
                 # a value block's join that is fresh on one arm and a local
