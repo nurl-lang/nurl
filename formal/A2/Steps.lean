@@ -2072,7 +2072,10 @@ theorem rhs_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : R
   refine ⟨rfl, Or.inl rfl, rfl, out1.tyok, fun hn r hr => post3.root (out1.wf hn r hr),
     fun _ => ⟨by rw [hty]; rfl, hwv, ViewsOK.none (by rw [hty]; simpa [Ty.holdsView] using hhv) _ _,
       hnd, fun i hi' => ?_, fun x U hU i hi' hiU => ?_, hsf, fun i hi' hp => hnp1 i hi' hp⟩,
-    (fun h => by cases h), fun _ => ?_, out1.held, out1.pkgs, fun _ => (out1.shares rfl).of_blk hb3⟩
+    (fun h => by cases h), fun _ => ?_, out1.held, out1.pkgs, (fun _ => (out1.shares rfl).of_blk hb3),
+    fun i hn => by
+      obtain ⟨_, o, l, hv⟩ := hn.own rfl
+      exact absurd hv (hwv.noView (by rw [hty]; simpa [Ty.holdsView] using hhv))⟩
   · obtain ⟨ha, hlt⟩ := hal1 i hi'
     exact ⟨by rw [hal i hlt]; exact ha, by show i < m.nid + 2; simp at hlt; omega⟩
   · rcases ownedAt_set.mp hU with ⟨_, h⟩ | ⟨hxy, h⟩
@@ -2429,7 +2432,7 @@ theorem step_free {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (by rw [hm]; simp) (fun o ho => by simp [upd_ne _ _ ho])
     (hi.heap.release ht (DropSlot.owned hf) ⟨true, none⟩ (fun _ T hT => by cases hT)) rfl
     (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ hpin.2.1 (fun h => by cases h) (by simp)
-    (fun h => absurd rfl h)
+    (fun h => absurd rfl h) (PkgKeep.noval hi (fun o ho => by simp [upd_ne _ _ ho]) (by simp))
   have hs : SlotOK ({ m with alloc := a' }.set x ⟨true, none⟩) { E with live := false, dtor := false } ⟨true, none⟩ :=
     ⟨by simp [hos], fun _ => ⟨hvec, fun T h => (by cases h), fun h => (by simp at h)⟩,
       fun h => (by simp [hos] at h)⟩
@@ -2471,6 +2474,7 @@ theorem step_scopeExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hi.heap.remove hsl hd) rfl
     (fun k hk => by cases k <;> simp [Eff.kills] at hk) (show _ = none by simp) hpin.2.1 (fun _ => hpin.2.2)
     (fun _ => rfl) (fun _ _ h => by cases h)
+    (PkgKeep.noval hi (fun o ho => by simp [Mem.remove, upd_ne _ _ ho]) (by simp [Mem.remove]))
 
 /-- Growing a tree by one element, its buffer moving or not. -/
 theorem HeapOK.grow {m : Mem} (hh : HeapOK m) {x : Var} {t : Ty} {c d : Nat} {es : List Val}
