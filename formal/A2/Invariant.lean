@@ -1099,6 +1099,19 @@ theorem CleanDeps.mono {Γ Γ' : Ctx} (h : ∀ r, Clean Γ' r → Clean Γ r) {D
 theorem CleanDeps.sub {Γ : Ctx} {D D' : List Dep} (hs : D ⊆ D') (hc : CleanDeps Γ D') : CleanDeps Γ D :=
   fun d hd => hc d (List.mem_filter.mpr ⟨hs (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩)
 
+theorem CleanDeps.append {Γ : Ctx} {a b : List Dep} (ha : CleanDeps Γ a) (hb : CleanDeps Γ b) :
+    CleanDeps Γ (a ++ b) := fun d hd => by
+  obtain ⟨hd, hn⟩ := List.mem_filter.mp hd
+  rcases List.mem_append.mp hd with hd | hd
+  · exact ha d (List.mem_filter.mpr ⟨hd, hn⟩)
+  · exact hb d (List.mem_filter.mpr ⟨hd, hn⟩)
+
+theorem CleanDeps.left {Γ : Ctx} {a b : List Dep} (h : CleanDeps Γ (a ++ b)) : CleanDeps Γ a :=
+  h.sub (List.subset_append_left _ _)
+
+theorem CleanDeps.right {Γ : Ctx} {a b : List Dep} (h : CleanDeps Γ (a ++ b)) : CleanDeps Γ b :=
+  h.sub (List.subset_append_right _ _)
+
 /-- AGORA-901: an address a live binding of entry `E` and value `v` names,
     and that no package of an owned tree may hold: a borrow reaching memory
     through clean roots only and no share names the nodes of the handles it
@@ -1123,6 +1136,37 @@ theorem PkgNames.href {Γ : Ctx} {E : Entry} (hm : E.mode = .bor ∨ E.mode = .r
 theorem PkgNames.view {Γ : Ctx} {E : Entry} (hm : E.mode = .bor ∨ E.mode = .rootb)
     (hc : CleanDeps Γ E.path) (d o l : Nat) : PkgNames Γ E (.view d o l) d :=
   Or.inl ⟨hm, hc, Or.inr ⟨o, l, rfl⟩⟩
+
+/-- What an entry names it names under a weaker entry of the same mode that
+    depends on at least what it does. -/
+theorem PkgNames.weaken {Γ : Ctx} {E E' : Entry} {v : Val} {i : Nat} (hm : E'.mode = E.mode)
+    (hp : E.path ⊆ E'.path) (hvd : E.vdeps ⊆ E'.vdeps) (h : PkgNames Γ E' v i) : PkgNames Γ E v i := by
+  rcases h with ⟨hm', hc, hv⟩ | ⟨hc, hv⟩
+  · exact Or.inl ⟨by rw [← hm]; exact hm', hc.sub hp, hv⟩
+  · exact Or.inr ⟨hc.sub hvd, hv⟩
+
+/-- A value holding no handle and no view names nothing. -/
+theorem PkgNames.none_int {Γ : Ctx} {E : Entry} {n i : Nat} : ¬ PkgNames Γ E (.int n) i := by
+  rintro (⟨_, _, ⟨c, hb, _⟩ | ⟨o, l, h⟩⟩ | ⟨_, o, l, hs⟩)
+  · cases hb
+  · cases h
+  · cases hs
+theorem PkgNames.none_arc {Γ : Ctx} {E : Entry} {k : Nat} {p : Val} {i : Nat} :
+    ¬ PkgNames Γ E (.arc k p) i := by
+  rintro (⟨_, _, ⟨c, hb, _⟩ | ⟨o, l, h⟩⟩ | ⟨_, o, l, hs⟩)
+  · cases hb
+  · cases h
+  · cases hs
+theorem PkgNames.none_lk {Γ : Ctx} {E : Entry} {k i : Nat} : ¬ PkgNames Γ E (.lk k) i := by
+  rintro (⟨_, _, ⟨c, hb, _⟩ | ⟨o, l, h⟩⟩ | ⟨_, o, l, hs⟩)
+  · cases hb
+  · cases h
+  · cases hs
+theorem PkgNames.none_cell {Γ : Ctx} {E : Entry} {k i : Nat} : ¬ PkgNames Γ E (.cell k) i := by
+  rintro (⟨_, _, ⟨c, hb, _⟩ | ⟨o, l, h⟩⟩ | ⟨_, o, l, hs⟩)
+  · cases hb
+  · cases h
+  · cases hs
 
 /-- What memory and context guarantee, whatever is running. -/
 structure MInv (m : Mem) (Γ : Ctx) : Prop where
