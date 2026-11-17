@@ -935,4 +935,87 @@ theorem MInv.pkgFree_add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : En
   · exact Or.inr (Or.inr (Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ hhv), hv⟩))
   · exact Or.inr (Or.inr (Or.inr ⟨hm, hc.of_setE hx hwf (hvd _ hhv), hv⟩))
 
+/-! ### AGORA-901: an owner's tree rewritten -/
+
+/-- An address of no owned tree and no payload: a fresh one. -/
+def FreshAddr (m : Mem) (i : Nat) : Prop := (∀ r U, m.st r = some ⟨true, some U⟩ → i ∉ U.ids) ∧ ¬ PayAddr m i
+
+/-- **An owner's tree rewritten keeps `MInv.pkgFree`**: each package of the
+    new tree is one of the old tree's or of fresh addresses only; each node is
+    at a fresh address, or at one of the old tree's whose views it keeps, or
+    it is the old tree's top, rewritten by an effect that ends every borrow of
+    the owner's handle and view (who alone names it, `MInv.root_namer`); and
+    what the owner names, no package holds. -/
+theorem PkgKeep.of_edit {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
+    {e : Eff} {hv : Bool} {x : Var} {Ex : Entry} {ox : Option Entry} (hx : Γ x = some Ex) (hxF : x ∉ F)
+    {t0 : Ty} {c0 d0 : Nat} {es0 : List Val} (hT : m.st x = some ⟨true, some (.node t0 c0 d0 es0)⟩)
+    (hst : ∀ o, o ≠ x → m'.st o = m.st o)
+    (hpk : ∀ T', m'.st x = some ⟨true, some T'⟩ → ∀ fs te ms ev cs, Sub (.pkg fs te ms ev cs) T' →
+      Sub (.pkg fs te ms ev cs) (.node t0 c0 d0 es0) ∨ ∀ i ∈ (Val.pkg fs te ms ev cs).ids, FreshAddr m i)
+    (hnode : ∀ T', m'.st x = some ⟨true, some T'⟩ → ∀ t c d es, Sub (.node t c d es) T' →
+      (∃ t1 d1 es1, Sub (.node t1 c d1 es1) (.node t0 c0 d0 es0) ∧ ∀ i o l, Sub (.view i o l) (.node t c d es) →
+        Sub (.view i o l) (.node t1 c d1 es1)) ∨ FreshAddr m c ∨
+      (c = c0 ∧ e.kills hv .self = true ∧ e.kills hv .view = true))
+    (hself : ∀ Ex' o v, ox = some Ex' → Ex'.live = true → m'.st x = some ⟨o, some v⟩ →
+      ∀ i, PkgNames m' Γ Ex' v i → PkgFreeId m i ∧ ¬ FreshAddr m i) :
+    PkgKeep m m' Γ e hv x ox := by
+  -- what lies in memory, no fresh package holds
+  have hfr : ∀ i, ¬ FreshAddr m i → PkgFreeId m i → PkgFreeId m' i := by
+    intro i hnf h r T hT' fs te ms ev cs hP t c d es hN
+    by_cases hrx : r = x
+    · subst hrx
+      rcases hpk T hT' fs te ms ev cs hP with hP0 | hfp
+      · exact h r _ hT fs te ms ev cs hP0 t c d es hN
+      · have hsN : ∀ j ∈ (Val.node t c d es).ids, FreshAddr m j := fun j hj =>
+          hfp j (Child.ids Child.pkg j (hN.ids j hj))
+        exact ⟨fun h1 => hnf (h1 ▸ hsN c (by simp [Val.ids])), fun h2 => hnf (h2 ▸ hsN d (by simp [Val.ids]))⟩
+    · rw [hst r hrx] at hT'; exact h r T hT' fs te ms ev cs hP t c d es hN
+  have hhome : ∀ i, ((∃ r T, m.st r = some ⟨true, some T⟩ ∧ i ∈ T.ids) ∨ PayAddr m i) → ¬ FreshAddr m i := by
+    rintro i (⟨r, T, hT', hiT⟩ | hp) ⟨h1, h2⟩
+    · exact h1 r T hT' hiT
+    · exact h2 hp
+  refine ⟨fun y Ey o v hyx hEy hl hs i hn => ?_, fun Ex' o v hx' hl hs i hn => ?_⟩
+  · have hl0 : Ey.live = true := by rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl; exact hl.1
+    have hn0 : PkgNames m Γ Ey v i := by
+      rcases hn with h1 | h2 | ⟨hm, hc, c, r, T1, t, d, es, hb, hT1, hs1, o', l, hvn⟩ | h4
+      · exact Or.inl h1
+      · exact Or.inr (Or.inl h2)
+      · by_cases hrx : r = x
+        · subst hrx
+          rcases hnode T1 hT1 t c d es hs1 with ⟨t1, d1, es1, hs0, hvw⟩ | hfc | ⟨rfl, hks, hkv⟩
+          · exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, _, t1, d1, es1, hb, hT, hs0, o', l, hvw i o' l hvn⟩))
+          · exfalso
+            have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+            obtain ⟨w, hw, hok⟩ := hi.bor_val hEy hl0 hos
+            rw [hs] at hw; cases hw
+            obtain ⟨dep, t', H', d', es', hlan, _⟩ := hok.bare_href c hb
+            refine hhome c ?_ hfc
+            rcases hlan.home with ⟨x', T', hT', hsT'⟩ | hp
+            · exact Or.inl ⟨x', T', hT', hsT'.ids c (by simp [Val.ids])⟩
+            · exact Or.inr (hp.payAddr hi.heap c (by simp [Val.ids]))
+          · exfalso
+            have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+            obtain ⟨sl, hsl, _, hso, _⟩ := hi.slot y Ey hEy
+            rw [hs] at hsl; cases hsl
+            have ho : o = false := by have := hso; simp only at this; rw [this, hos]
+            subst ho
+            obtain ⟨dep, hdv, hdr, hdk⟩ := hi.root_namer hanch hxF hT hEy hl0 hs hb
+            have hhit : hits e hv r Ey = true := by
+              unfold hits
+              have hnt : (Ey.ty != .int || Ey.mode == .rootb) = true := by
+                cases hty : Ey.ty <;> simp_all
+                obtain ⟨w, hw, hok⟩ := hi.bor_val hEy hl0 hos
+                rw [hs] at hw; cases hw
+                rw [hty] at hok; obtain ⟨k, rfl⟩ := valOK_int.mp hok; cases hb
+              rw [hnt, Bool.true_and, List.any_eq_true]
+              exact ⟨dep, hdv, by rcases hdk with h | h <;> simp [hdr, h, hks, hkv]⟩
+            rw [killE_live, hhit] at hl; simp at hl
+        · rw [hst r hrx] at hT1
+          exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T1, t, d, es, hb, hT1, hs1, o', l, hvn⟩))
+      · exact Or.inr (Or.inr (Or.inr h4))
+    have hs' : m.st y = some ⟨o, some v⟩ := hs
+    exact hfr i (hhome i (hi.named_home hEy hl0 hs' hn0)) (hi.pkgFree y Ey o v hEy hl0 hs' i hn0)
+  · obtain ⟨h1, h2⟩ := hself Ex' o v hx' hl hs i hn
+    exact hfr i h2 h1
+
 end A2
