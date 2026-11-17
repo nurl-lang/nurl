@@ -370,6 +370,14 @@ structure RhsPost (m m1 : Mem) (Γ Γ1 : Ctx) (F : List Var) : Prop where
   /-- A3.1: a right-hand side keeps every block (`arcNew` adds one). -/
   blk   : BlkLe m.blk m1.blk
 
+/-- AGORA-901: a right-hand side keeps the clean roots: modes are kept, and
+    borrowed parameters stay as they were. -/
+theorem RhsPost.clean {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (post : RhsPost m m1 Γ Γ1 F) {r : Var}
+    (h : Clean Γ1 r) : Clean Γ r :=
+  h.mono fun v E' hv => by
+    obtain ⟨E0, h0, hm, _⟩ := post.cmode v E' hv
+    exact ⟨E0, h0, hm, fun hrb => by have := post.rootb v E0 h0 hrb; rw [hv] at this; cases this; rfl⟩
+
 /-- What a right-hand side hands over does not depend on whether its
     entry runs a destructor (A2-drop.2). -/
 theorem RhsOut.setDtor {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}

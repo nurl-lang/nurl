@@ -389,7 +389,8 @@ theorem Pushed.mem {m1 : Mem} {Γ1 : Ctx} {t : Ty} {v : Val} {D : List Dep} (h :
   ⟨h.wf, h.vs.memDeps, h.nd, h.al, h.dis, fun r hr => h.root r (by
       obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr; exact List.mem_map_of_mem (List.mem_filter.mp hd).1), h.sf,
     NamesIn.nil _ (h.wf.names_nil_fn hf), h.pk, fun d hd => h.nok d (List.mem_filter.mp hd).1, h.sh,
-    h.np⟩
+    h.np, fun hc => h.pf fun d hd => hc d (List.mem_filter.mpr ⟨List.mem_filter.mpr ⟨(List.mem_filter.mp hd).1,
+      (List.mem_filter.mp hd).2⟩, (List.mem_filter.mp hd).2⟩)⟩
 
 /-! ### The owner's change -/
 
