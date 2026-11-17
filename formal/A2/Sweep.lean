@@ -467,7 +467,11 @@ theorem MInv.sweepR {Γ : Ctx} (hi : MInv m Γ) : MInv (m.sweepR R) Γ where
       have := Kept.pay hr hk0
       rwa [Blk.keeps, hp, Option.getD_some] at this
     exact (h3 p hp).2.sweep hkp
-  pkgFree x E o v hx hl hs i hn := (hi.pkgFree x E o v hx hl hs i hn).of_st rfl
+  pkgFree x E o v hx hl hs i hn := by
+    refine (hi.pkgFree x E o v hx hl hs i (hn.ofMem fun c n hna => ?_)).of_st rfl
+    rcases hna with ⟨x', t, ht, hs', hn'⟩ | ⟨k, bl, hk, hs', hn'⟩
+    · exact Or.inl ⟨x', t, ht, hs', hn'⟩
+    · exact Or.inr ⟨k, bl, (Mem.sweepR_blk.mp hk).1, hs', hn'⟩
 
 end
 

@@ -356,11 +356,10 @@ theorem hmn_of_ne_replace {Γ : Ctx} {e : Eff} (hv : Bool) (he : e ≠ .replace)
     borrow, no package of any owned tree holds its node.  (Every other owned
     tree is as it was.) -/
 def PkgKeep (m m' : Mem) (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) (ox : Option Entry) : Prop :=
-  (∀ T', m'.st x = some ⟨true, some T'⟩ → ∀ y Ey o v, y ≠ x → Γ y = some Ey →
-    (killE e hv x Ey).live = true → m.st y = some ⟨o, some v⟩ →
-    ∀ i, PkgNames Γ Ey v i → PkgFreeIn T' i) ∧
+  (∀ y Ey o v, y ≠ x → Γ y = some Ey → (killE e hv x Ey).live = true → m.st y = some ⟨o, some v⟩ →
+    ∀ i, PkgNames m' Γ Ey v i → PkgFreeId m' i) ∧
   (∀ Ex' o v, ox = some Ex' → Ex'.live = true → m'.st x = some ⟨o, some v⟩ →
-    ∀ i, PkgNames Γ Ex' v i → PkgFreeId m' i)
+    ∀ i, PkgNames m' Γ Ex' v i → PkgFreeId m' i)
 
 /-- What no package of an owned tree holds stays so when only `x`'s tree
     changes, to one whose packages its old tree held. -/
@@ -383,33 +382,75 @@ theorem node_sub_sub {t : Ty} {c d d' : Nat} {es es' : List Val} (h : ∀ e ∈ 
   | refl => exact Or.inl rfl
   | child he h' => exact Or.inr (Sub.child (h _ he) h')
 
-/-- A change of an owner `x` whose new tree holds only packages its old tree
-    held keeps what `MInv.pkgFree` asks: a borrow the change leaves live was
-    live before, and its node no package of the old tree held. -/
+/-- **A change of an owner `x` within its own tree**: its new tree holds
+    only packages its old tree held, each of its nodes is at the address of
+    one of the old tree's, and every view the new tree stores is one the old
+    tree stored at that place, or one of an address no package holds.  It
+    keeps what `MInv.pkgFree` asks. -/
 theorem PkgKeep.of_pkgs {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Eff} {hv : Bool} {x : Var}
     {Ex : Entry} {ox : Option Entry} (hx : Γ x = some Ex) (hos : Ex.mode.ownSlot = true)
-    (hox : ∀ Ex', ox = some Ex' → Ex'.mode = Ex.mode ∧ Ex.vdeps ⊆ Ex'.vdeps ∧ (Ex'.live = true → Ex.live = true))
+    (hox : ∀ Ex', ox = some Ex' → Ex'.mode = Ex.mode ∧ Ex.held ⊆ Ex'.held ∧ (Ex'.live = true → Ex.live = true))
     {T : Val} (hT : m.st x = some ⟨true, some T⟩) (hst : ∀ o, o ≠ x → m'.st o = m.st o)
+    (hblk : m'.blk = m.blk)
     (hpk : ∀ T', m'.st x = some ⟨true, some T'⟩ → ∀ fs te ms ev cs,
       Sub (.pkg fs te ms ev cs) T' → Sub (.pkg fs te ms ev cs) T)
-    (hvw : ∀ o T', m'.st x = some ⟨o, some T'⟩ → ∀ d o l, Sub (.view d o l) T' → Sub (.view d o l) T) :
+    (hvw : ∀ o T', m'.st x = some ⟨o, some T'⟩ → ∀ i o' l, Sub (.view i o' l) T' →
+      Sub (.view i o' l) T ∨ PkgFreeId m i)
+    (hnode : ∀ T', m'.st x = some ⟨true, some T'⟩ → ∀ t c d es, Sub (.node t c d es) T' →
+      ∃ t0 d0 es0, Sub (.node t0 c d0 es0) T ∧ ∀ i o l, Sub (.view i o l) (.node t c d es) →
+        Sub (.view i o l) (.node t0 c d0 es0) ∨ PkgFreeId m i) :
     PkgKeep m m' Γ e hv x ox := by
   have hfr : ∀ i, PkgFreeId m i → PkgFreeId m' i := fun i h =>
     h.frame hst fun T' hT' fs te ms ev cs hP => ⟨T, hT, hpk T' hT' fs te ms ev cs hP⟩
-  refine ⟨fun T' hT' y Ey o v _ hEy hl hs i hn fs te ms ev cs hP => ?_,
-    fun Ex' o v hx' hl hs i hn => ?_⟩
+  -- a node found in the new store, by address, is one found in the old, its
+  -- views the old one's or of addresses no package holds
+  have hat : ∀ c n', NodeAt m' c n' → ∃ n, NodeAt m c n ∧ ∀ i o l, Sub (.view i o l) n' →
+      Sub (.view i o l) n ∨ PkgFreeId m i := by
+    intro c n' hna
+    rcases hna with ⟨r, t', ht', hs', t, d, es, rfl⟩ | ⟨k, bl, hk, hs', t, d, es, rfl⟩
+    · by_cases hrx : r = x
+      · subst hrx
+        obtain ⟨t0, d0, es0, hs0, hv0⟩ := hnode t' ht' t c d es hs'
+        exact ⟨_, Or.inl ⟨r, T, hT, hs0, t0, d0, es0, rfl⟩, hv0⟩
+      · rw [hst r hrx] at ht'
+        exact ⟨_, Or.inl ⟨r, t', ht', hs', t, d, es, rfl⟩, fun _ _ _ h => Or.inl h⟩
+    · rw [hblk] at hk
+      exact ⟨_, Or.inr ⟨k, bl, hk, hs', t, d, es, rfl⟩, fun _ _ _ h => Or.inl h⟩
+  refine ⟨fun y Ey o v hyx hEy hl hs i hn => ?_, fun Ex' o v hx' hl hs i hn => ?_⟩
   · rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
-    exact hi.pkgFree y Ey o v hEy hl.1 hs i hn x T hT fs te ms ev cs (hpk T' hT' _ _ _ _ _ hP)
-  · obtain ⟨hm, hvd, hlv⟩ := hox Ex' hx'
-    rcases hn with ⟨hm', _, _⟩ | ⟨hc, d0, l0, hv'⟩
-    · rw [hm] at hm'; rcases hm' with hm' | hm' <;> rw [hm'] at hos <;> cases hos
-    · exact hfr i (hi.pkgFree x Ex true T hx (hlv hl) hT i
-        (Or.inr ⟨hc.sub hvd, d0, l0, hvw o v hs i d0 l0 hv'⟩))
+    rcases hn with h1 | h2 | ⟨hm, hc, c, n', hb, hna, o', l, hvn⟩ | ⟨hm, hc, o', l, hvn⟩
+    · exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (Or.inl h1))
+    · exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (Or.inr (Or.inl h2)))
+    · obtain ⟨n, hna0, hvw0⟩ := hat c n' hna
+      rcases hvw0 i o' l hvn with hvn0 | hf
+      · exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (Or.inr (Or.inr (Or.inl ⟨hm, hc, c, n, hb, hna0, o', l, hvn0⟩))))
+      · exact hfr i hf
+    · exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (Or.inr (Or.inr (Or.inr ⟨hm, hc, o', l, hvn⟩))))
+  · obtain ⟨hm, hhd, hlv⟩ := hox Ex' hx'
+    have hnb : ¬ (Ex'.mode = .bor ∨ Ex'.mode = .rootb) := by
+      rw [hm]; rintro (h | h) <;> rw [h] at hos <;> cases hos
+    rcases hn with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ | ⟨_, hc, o', l, hvn⟩
+    · exact absurd h hnb
+    · exact absurd h hnb
+    · exact absurd h hnb
+    · rcases hvw o v hs i o' l hvn with hvn0 | hf
+      · exact hfr i (hi.pkgFree x Ex true T hx (hlv hl) hT i
+          (Or.inr (Or.inr (Or.inr ⟨hos, hc.sub hhd, o', l, hvn0⟩))))
+      · exact hfr i hf
 
 /-- A change that leaves `x` holding no value keeps what `MInv.pkgFree` asks. -/
-theorem PkgKeep.noval {m m' : Mem} {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} {ox : Option Entry}
-    (h : ∀ o v, m'.st x ≠ some ⟨o, some v⟩) : PkgKeep m m' Γ e hv x ox :=
-  ⟨fun T' hT' => absurd hT' (h _ _), fun _ _ _ _ _ hs => absurd hs (h _ _)⟩
+theorem PkgKeep.noval {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Eff} {hv : Bool} {x : Var}
+    {ox : Option Entry} (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hblk : m'.blk = m.blk)
+    (h : ∀ o v, m'.st x ≠ some ⟨o, some v⟩) : PkgKeep m m' Γ e hv x ox := by
+  have hfr : ∀ i, PkgFreeId m i → PkgFreeId m' i := fun i hf =>
+    hf.frame hst fun T' hT' => absurd hT' (h _ _)
+  refine ⟨fun y Ey o v hyx hEy hl hs i hn => ?_, fun _ _ _ _ _ hs => absurd hs (h _ _)⟩
+  rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
+  refine hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (hn.ofMem fun c n hna => ?_))
+  rcases hna with ⟨r, t, ht, hs', hn'⟩ | ⟨k, bl, hk, hs', hn'⟩
+  · have hrx : r ≠ x := fun hr => h _ _ (hr ▸ ht)
+    exact Or.inl ⟨r, t, by rw [← hst r hrx]; exact ht, hs', hn'⟩
+  · exact Or.inr ⟨k, bl, by rw [← hblk]; exact hk, hs', hn'⟩
 
 /-- One binding `x` changes (effect `e`), its slot becomes `ox`: every other
     binding stays valid, or is ended by `kill`. -/
@@ -704,11 +745,11 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         exact ⟨Ex, hx, hm, fun h => absurd h hxr⟩
       · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
         exact ⟨E, hE, killE_mode .., fun hrb => killE_rootb hanch hxF e hv hmn hE hrb⟩
-    intro y Ey' o v hy hl hs i hn r T hT
-    have hn0 : PkgNames Γ Ey' v i := hn.mono hcl
+    intro y Ey' o v hy hl hs i hn
+    have hn0 : PkgNames m' Γ Ey' v i := hn.mono hcl
     by_cases hyx : y = x
     · subst hyx
-      exact hpk.2 Ey' o v (getX Ey' hy) hl hs i hn0 r T hT
+      exact hpk.2 Ey' o v (getX Ey' hy) hl hs i hn0
     · obtain ⟨Ey, hEy, rfl⟩ := getE y Ey' hy hyx
       have hEq : killE e hv x Ey = Ey := by
         have hl' := hl
@@ -716,11 +757,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         · simp at hl'
         · rename_i hh; simp [hh]
       rw [hst y hyx] at hs
-      by_cases hrx : r = x
-      · subst hrx
-        exact hpk.1 T hT y Ey o v hyx hEy hl hs i (by rw [hEq] at hn0; exact hn0)
-      · rw [hst r hrx] at hT
-        rw [hEq] at hl hn0
-        exact hi.pkgFree y Ey o v hEy hl hs i hn0 r T hT
+      rw [hEq] at hn0
+      exact hpk.1 y Ey o v hyx hEy hl hs i hn0
 
 end A2

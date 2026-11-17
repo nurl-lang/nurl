@@ -1113,60 +1113,91 @@ theorem CleanDeps.right {Γ : Ctx} {a b : List Dep} (h : CleanDeps Γ (a ++ b)) 
   h.sub (List.subset_append_right _ _)
 
 /-- AGORA-901: an address a live binding of entry `E` and value `v` names,
-    and that no package of an owned tree may hold: a borrow reaching memory
-    through clean roots only and no share names the nodes of the handles it
-    holds directly (`Bare`) and the buffer of the view it is; a binding all
-    of whose dependencies are such names the buffer of every view its value
-    holds. -/
-def PkgNames (Γ : Ctx) (E : Entry) (v : Val) (i : Nat) : Prop :=
+    and that no package of an owned tree may hold.  Each view and handle is
+    taken through the dependencies it is valid through (`ValOK`, `HrefAt`,
+    `ViewsOK`), when all of those reach memory through clean roots only and
+    no share:
+    * a borrow's handles held directly (`Bare`) and the view it is, through
+      its path;
+    * the views a borrow holds directly, through its path and what it holds;
+    * the views stored in the nodes a borrow's handles name, through what it
+      holds;
+    * the views an owner's tree stores, through what it holds. -/
+def PkgNames (m : Mem) (Γ : Ctx) (E : Entry) (v : Val) (i : Nat) : Prop :=
   ((E.mode = .bor ∨ E.mode = .rootb) ∧ CleanDeps Γ E.path ∧
     ((∃ c, Bare (.href c) v ∧ i = c) ∨ ∃ o l, v = .view i o l)) ∨
-  (CleanDeps Γ E.vdeps ∧ ∃ o l, Sub (.view i o l) v)
+  ((E.mode = .bor ∨ E.mode = .rootb) ∧ CleanDeps Γ (E.path ++ E.held) ∧ ∃ o l, Bare (.view i o l) v) ∨
+  ((E.mode = .bor ∨ E.mode = .rootb) ∧ CleanDeps Γ E.held ∧
+    ∃ c n, Bare (.href c) v ∧ NodeAt m c n ∧ ∃ o l, Sub (.view i o l) n) ∨
+  (E.mode.ownSlot = true ∧ CleanDeps Γ E.held ∧ ∃ o l, Sub (.view i o l) v)
 
-theorem PkgNames.mono {Γ Γ' : Ctx} (h : ∀ r, Clean Γ' r → Clean Γ r) {E : Entry} {v : Val} {i : Nat}
-    (hn : PkgNames Γ' E v i) : PkgNames Γ E v i := by
-  rcases hn with ⟨hm, hc, hv⟩ | ⟨hc, hv⟩
+theorem PkgNames.mono {m : Mem} {Γ Γ' : Ctx} (h : ∀ r, Clean Γ' r → Clean Γ r) {E : Entry} {v : Val}
+    {i : Nat} (hn : PkgNames m Γ' E v i) : PkgNames m Γ E v i := by
+  rcases hn with ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩
   · exact Or.inl ⟨hm, hc.mono h, hv⟩
-  · exact Or.inr ⟨hc.mono h, hv⟩
+  · exact Or.inr (Or.inl ⟨hm, hc.mono h, hv⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨hm, hc.mono h, hv⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨hm, hc.mono h, hv⟩))
 
-theorem PkgNames.href {Γ : Ctx} {E : Entry} (hm : E.mode = .bor ∨ E.mode = .rootb)
-    (hc : CleanDeps Γ E.path) (c : Nat) : PkgNames Γ E (.href c) c :=
+theorem PkgNames.href {m : Mem} {Γ : Ctx} {E : Entry} (hm : E.mode = .bor ∨ E.mode = .rootb)
+    (hc : CleanDeps Γ E.path) (c : Nat) : PkgNames m Γ E (.href c) c :=
   Or.inl ⟨hm, hc, Or.inl ⟨c, .refl _, rfl⟩⟩
 
-theorem PkgNames.view {Γ : Ctx} {E : Entry} (hm : E.mode = .bor ∨ E.mode = .rootb)
-    (hc : CleanDeps Γ E.path) (d o l : Nat) : PkgNames Γ E (.view d o l) d :=
+theorem PkgNames.view {m : Mem} {Γ : Ctx} {E : Entry} (hm : E.mode = .bor ∨ E.mode = .rootb)
+    (hc : CleanDeps Γ E.path) (d o l : Nat) : PkgNames m Γ E (.view d o l) d :=
   Or.inl ⟨hm, hc, Or.inr ⟨o, l, rfl⟩⟩
 
 /-- What an entry names it names under a weaker entry of the same mode that
     depends on at least what it does. -/
-theorem PkgNames.weaken {Γ : Ctx} {E E' : Entry} {v : Val} {i : Nat} (hm : E'.mode = E.mode)
-    (hp : E.path ⊆ E'.path) (hvd : E.vdeps ⊆ E'.vdeps) (h : PkgNames Γ E' v i) : PkgNames Γ E v i := by
-  rcases h with ⟨hm', hc, hv⟩ | ⟨hc, hv⟩
-  · exact Or.inl ⟨by rw [← hm]; exact hm', hc.sub hp, hv⟩
-  · exact Or.inr ⟨hc.sub hvd, hv⟩
+theorem PkgNames.weaken {m : Mem} {Γ : Ctx} {E E' : Entry} {v : Val} {i : Nat} (hm : E'.mode = E.mode)
+    (hp : E.mode.ownSlot = false → E.path ⊆ E'.path) (hh : E.held ⊆ E'.held) (h : PkgNames m Γ E' v i) :
+    PkgNames m Γ E v i := by
+  have hos : E.mode = .bor ∨ E.mode = .rootb → E.mode.ownSlot = false := by
+    rintro (h | h) <;> rw [h] <;> rfl
+  have hph : E.mode.ownSlot = false → E.path ++ E.held ⊆ E'.path ++ E'.held := fun ho d hd => by
+    rcases List.mem_append.mp hd with hd | hd
+    · exact List.mem_append_left _ (hp ho hd)
+    · exact List.mem_append_right _ (hh hd)
+  rcases h with ⟨hm', hc, hv⟩ | ⟨hm', hc, hv⟩ | ⟨hm', hc, hv⟩ | ⟨hm', hc, hv⟩ <;> rw [hm] at hm'
+  · exact Or.inl ⟨hm', hc.sub (hp (hos hm')), hv⟩
+  · exact Or.inr (Or.inl ⟨hm', hc.sub (hph (hos hm')), hv⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨hm', hc.sub hh, hv⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨hm', hc.sub hh, hv⟩))
+
+/-- What an entry names in one store it names in another where each node it
+    finds by address is one the other finds. -/
+theorem PkgNames.ofMem {m m' : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
+    (h : ∀ c n, NodeAt m' c n → NodeAt m c n) (hn : PkgNames m' Γ E v i) : PkgNames m Γ E v i := by
+  rcases hn with h1 | h2 | ⟨hm, hc, c, n, hb, hna, hv⟩ | h4
+  · exact Or.inl h1
+  · exact Or.inr (Or.inl h2)
+  · exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, n, hb, h c n hna, hv⟩))
+  · exact Or.inr (Or.inr (Or.inr h4))
 
 /-- A value holding no handle and no view names nothing. -/
-theorem PkgNames.none_int {Γ : Ctx} {E : Entry} {n i : Nat} : ¬ PkgNames Γ E (.int n) i := by
-  rintro (⟨_, _, ⟨c, hb, _⟩ | ⟨o, l, h⟩⟩ | ⟨_, o, l, hs⟩)
-  · cases hb
-  · cases h
-  · cases hs
-theorem PkgNames.none_arc {Γ : Ctx} {E : Entry} {k : Nat} {p : Val} {i : Nat} :
-    ¬ PkgNames Γ E (.arc k p) i := by
-  rintro (⟨_, _, ⟨c, hb, _⟩ | ⟨o, l, h⟩⟩ | ⟨_, o, l, hs⟩)
-  · cases hb
-  · cases h
-  · cases hs
-theorem PkgNames.none_lk {Γ : Ctx} {E : Entry} {k i : Nat} : ¬ PkgNames Γ E (.lk k) i := by
-  rintro (⟨_, _, ⟨c, hb, _⟩ | ⟨o, l, h⟩⟩ | ⟨_, o, l, hs⟩)
-  · cases hb
-  · cases h
-  · cases hs
-theorem PkgNames.none_cell {Γ : Ctx} {E : Entry} {k i : Nat} : ¬ PkgNames Γ E (.cell k) i := by
-  rintro (⟨_, _, ⟨c, hb, _⟩ | ⟨o, l, h⟩⟩ | ⟨_, o, l, hs⟩)
-  · cases hb
-  · cases h
-  · cases hs
+theorem PkgNames.none {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
+    (hb : ∀ n, Bare n v → n = v) (hs : ∀ n, Sub n v → n = v)
+    (hh : ∀ c, v ≠ .href c) (hw : ∀ d o l, v ≠ .view d o l) : ¬ PkgNames m Γ E v i := by
+  rintro (⟨_, _, ⟨c, hb', _⟩ | ⟨o, l, h⟩⟩ | ⟨_, _, o, l, hb'⟩ | ⟨_, _, c, n, hb', _⟩ | ⟨_, _, o, l, hs'⟩)
+  · exact hh c (hb _ hb').symm
+  · exact hw i o l h
+  · exact hw i o l (hb _ hb').symm
+  · exact hh c (hb _ hb').symm
+  · exact hw i o l (hs _ hs').symm
+
+theorem PkgNames.none_int {m : Mem} {Γ : Ctx} {E : Entry} {n i : Nat} : ¬ PkgNames m Γ E (.int n) i :=
+  PkgNames.none (fun _ h => by cases h; rfl) (fun _ h => by cases h; rfl) (fun _ h => by cases h)
+    (fun _ _ _ h => by cases h)
+theorem PkgNames.none_arc {m : Mem} {Γ : Ctx} {E : Entry} {k : Nat} {p : Val} {i : Nat} :
+    ¬ PkgNames m Γ E (.arc k p) i :=
+  PkgNames.none (fun _ h => by cases h; rfl) (fun _ h => by cases h; rfl) (fun _ h => by cases h)
+    (fun _ _ _ h => by cases h)
+theorem PkgNames.none_lk {m : Mem} {Γ : Ctx} {E : Entry} {k i : Nat} : ¬ PkgNames m Γ E (.lk k) i :=
+  PkgNames.none (fun _ h => by cases h; rfl) (fun _ h => by cases h; rfl) (fun _ h => by cases h)
+    (fun _ _ _ h => by cases h)
+theorem PkgNames.none_cell {m : Mem} {Γ : Ctx} {E : Entry} {k i : Nat} : ¬ PkgNames m Γ E (.cell k) i :=
+  PkgNames.none (fun _ h => by cases h; rfl) (fun _ h => by cases h; rfl) (fun _ h => by cases h)
+    (fun _ _ _ h => by cases h)
 
 /-- What memory and context guarantee, whatever is running. -/
 structure MInv (m : Mem) (Γ : Ctx) : Prop where
@@ -1216,7 +1247,7 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
       (`Clean`).  A closure is opaque: the one lend into
       a package, a call's environment (`envE`), carries a share. -/
   pkgFree   : ∀ x Ex o v, Γ x = some Ex → Ex.live = true → m.st x = some ⟨o, some v⟩ →
-                ∀ i, PkgNames Γ Ex v i → PkgFreeId m i
+                ∀ i, PkgNames m Γ Ex v i → PkgFreeId m i
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/

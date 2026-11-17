@@ -264,23 +264,10 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
     obtain ⟨E, hE, hwe⟩ := hw.get' hx
     obtain ⟨hl0, hp, hh⟩ := hwe.live hl
     refine hi.pkgFree x E o v hE hl0 hs i ?_
-    have hpath : E.mode.ownSlot = false → E.path ⊆ E'.path := fun hos => by
-      by_cases hrb : E.mode = .rootb
-      · rw [hwe.fixed (Or.inl hrb)]; exact fun _ h => h
-      · exact hp hos
-    rcases hn.mono (fun r h => h.weaker hw) with ⟨hm, hc, hv⟩ | ⟨hc, hv⟩
-    · have hm0 : E.mode = .bor ∨ E.mode = .rootb := by rw [← hwe.mode]; exact hm
-      have hos : E.mode.ownSlot = false := by rcases hm0 with h | h <;> rw [h] <;> rfl
-      exact Or.inl ⟨hm0, hc.sub (hpath hos), hv⟩
-    · refine Or.inr ⟨hc.sub fun d hd => ?_, hv⟩
-      unfold Entry.vdeps at hd ⊢
-      rw [hwe.mode]
-      cases hos : E.mode.ownSlot
-      · simp only [hos, Bool.false_eq_true, ↓reduceIte, List.mem_append] at hd ⊢
-        rcases hd with hd | hd
-        · exact Or.inl (hpath hos hd)
-        · exact Or.inr (hh hd)
-      · simp only [hos, ↓reduceIte, List.nil_append] at hd ⊢; exact hh hd
+    refine (hn.mono (fun r h => h.weaker hw)).weaken hwe.mode (fun hos => ?_) hh
+    by_cases hrb : E.mode = .rootb
+    · rw [hwe.fixed (Or.inl hrb)]; exact fun _ h => h
+    · exact hp hos
 
 theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hw : Weaker Γ Γ') : Inv m Γ' F s where
