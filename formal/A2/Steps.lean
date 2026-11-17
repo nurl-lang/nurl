@@ -2643,16 +2643,16 @@ theorem viewAt_not_in {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     · exact owned_pay_head hi.heap hT hk hsub (hN.trans hsP) (i := d) (by simp [Val.head])
         (by simp [Val.head])
 
-theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
+theorem push_growN {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hanch : RootbAnch Γ1 F)
     {x : Var} {Ex : Entry} (hx : Γ1 x = some Ex) (hl : Ex.live = true) (hcan : canDo Ex.mode .realloc)
     (hxF : x ∉ F) {t : Ty} (hty : Ex.ty = .vec t)
     {t' : Ty} {c d : Nat} {es : List Val} (hT : m1.st x = some ⟨true, some (.node t' c d es)⟩)
-    {v : Val} {D : List Dep} (hp : Pushed m1 Γ1 t v D) (hxD : x ∉ roots D)
+    {v : Val} {D N : List Dep} (hp : PushedN m1 Γ1 t v D N) (hxD : x ∉ roots D)
     (hD : t.holdsView = false → D = []) {d' : Nat} {A' : Nat → Bool} {N' : Nat}
     (hre : (d' = d ∧ A' = m1.alloc ∧ N' = m1.nid) ∨
       (d' = m1.nid ∧ A' = upd (upd m1.alloc d false) m1.nid true ∧ N' = m1.nid + 1))
-    (hds : DtorSafe Γ1 .realloc t.holdsView x) :
+    (hds : DtorSafe Γ1 .realloc t.holdsView x) (hnin : NamesIn v (Ex.held ++ D)) :
     MInv ({ m1 with alloc := A', nid := N' }.set x ⟨true, some (.node t' c d' (es ++ [v]))⟩)
       (setE (kill .realloc t.holdsView x Γ1) x { Ex with held := Ex.held ++ D }) := by
   have hm : Ex.mode = .own := by
@@ -2877,7 +2877,7 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       rcases hc with hc | hc
       · exact List.mem_append_left _ (hi.held x Ex _ _ hx hl hT rfl c (by simpa [Val.names] using hc))
       · simp only [namesL, List.append_nil] at hc
-        exact List.mem_append_right _ (hp.nin c hc)
+        exact hnin c hc
     · simp only [Option.some.injEq] at hT; subst hT
       intro fs te ms e cs hs
       rcases hs.cases' with h | ⟨e', hc, hs'⟩
@@ -2887,6 +2887,21 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
           rcases List.mem_append.mp he with he | he
           · exact (hi.pkgs x _ _ hT rfl) fs te ms e cs (Sub.child he hs')
           · simp only [List.mem_singleton] at he; subst he; exact hp.pk fs te ms e cs hs'
+
+/-- The owner's own push of a value it holds what it captures by name for. -/
+theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
+    (hanch : RootbAnch Γ1 F)
+    {x : Var} {Ex : Entry} (hx : Γ1 x = some Ex) (hl : Ex.live = true) (hcan : canDo Ex.mode .realloc)
+    (hxF : x ∉ F) {t : Ty} (hty : Ex.ty = .vec t)
+    {t' : Ty} {c d : Nat} {es : List Val} (hT : m1.st x = some ⟨true, some (.node t' c d es)⟩)
+    {v : Val} {D : List Dep} (hp : Pushed m1 Γ1 t v D) (hxD : x ∉ roots D)
+    (hD : t.holdsView = false → D = []) {d' : Nat} {A' : Nat → Bool} {N' : Nat}
+    (hre : (d' = d ∧ A' = m1.alloc ∧ N' = m1.nid) ∨
+      (d' = m1.nid ∧ A' = upd (upd m1.alloc d false) m1.nid true ∧ N' = m1.nid + 1))
+    (hds : DtorSafe Γ1 .realloc t.holdsView x) :
+    MInv ({ m1 with alloc := A', nid := N' }.set x ⟨true, some (.node t' c d' (es ++ [v]))⟩)
+      (setE (kill .realloc t.holdsView x Γ1) x { Ex with held := Ex.held ++ D }) :=
+  push_growN hi hanch hx hl hcan hxF hty hT hp hxD hD hre hds fun c hc => List.mem_append_right _ (hp.nin c hc)
 
 /-- Removing a borrowed slot leaves every other root's memory as it was. -/
 theorem rootKeep_rmbor {m : Mem} {p : Var} {w : Option Val} (hp : m.st p = some ⟨false, w⟩)

@@ -2957,7 +2957,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     have hanch := hi.leafAnch rfl
     have hrel := CtxRel.editBV hanch hx hmx harg hyx hx1 hl1 hthru hV
     have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
-    rw [hE1] at hx1 hl1 hthru hV hrel ht0 ⊢
+    rw [hE1] at hx1 hl1 hthru hV hrel ht0 hfn ⊢
+    -- AGORA-901: what the stored value captures by name, `x` and its owners hold
+    have hvnOf : ∀ {m0 : Mem} {v : Val}, Pushed m0 Γ1 t v D → NamesHeld Γ1 Ex v := fun hp cc hcc => by
+      rcases hfn with hf | hf
+      · rw [hp.wf.names_nil_fn hf] at hcc; cases hcc
+      · exact hf _ (hp.nin cc hcc) rfl
     -- the roots own their slots, so the change lands in one of their trees
     have hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ1 d.root = some Er ∧ Er.mode.ownSlot = true :=
       fun d hd => by
@@ -2982,8 +2987,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           post.inv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
-        exact fin (MInv.editBV_push post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hfn hthru hV
-            memDeps_noName (hp.mem hfn) hno (Or.inl ⟨rfl, rfl, rfl⟩) hr) (by simp [post.nv])
+        exact fin (MInv.editBV_push post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hthru hV
+            memDeps_noName hp.mem (hvnOf hp) hno (Or.inl ⟨rfl, rfl, rfl⟩) hr) (by simp [post.nv])
           (covers_editPush (covers_takeVal hi.cover htk) hno.2.2.1 hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
       | editPushRealloc htk hno hr =>
@@ -2992,8 +2997,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           post.inv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
-        exact fin (MInv.editBV_push post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hfn hthru hV
-            memDeps_noName (hp.mem hfn) hno (Or.inr ⟨rfl, rfl, rfl⟩) hr) (by simp [post.nv])
+        exact fin (MInv.editBV_push post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hthru hV
+            memDeps_noName hp.mem (hvnOf hp) hno (Or.inr ⟨rfl, rfl, rfl⟩) hr) (by simp [post.nv])
           (covers_editPushRealloc (covers_takeVal hi.cover htk) hno.2.2.1 hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
     | trunc _ =>
@@ -3004,7 +3009,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           hi.toMInv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
-        exact fin (MInv.editBV_trunc hi.toMInv hanch hx1 hmx hl1 hty hhv hfn hthru hV hno hfr hr) (by simp)
+        exact fin (MInv.editBV_trunc hi.toMInv hanch hx1 hmx hl1 hty hhv hthru hV hno hfr hr) (by simp)
           (covers_editTrunc hi.cover hno.2.2.1 hfr hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))])
     | @set i y Ey _ _ _ _ hy hly htyy hpa =>
@@ -3016,14 +3021,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           post.inv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
-        exact fin (MInv.editBV_set post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hfn hthru hV
-            memDeps_noName (hp.mem hfn) hn hno hfr hr) (by simp [post.nv])
+        exact fin (MInv.editBV_set post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hthru hV
+            memDeps_noName hp.mem (hvnOf hp) hn hno hfr hr) (by simp [post.nv])
           (covers_editSet (covers_takeVal hi.cover htk) hno.2.2.1 hn hfr hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
       | editSetOOB _ htk hno _ hfr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy hpa htk
-        exact fin (MInv.editBV_setOOB post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hfn hthru hV
-            memDeps_noName (hp.mem hfn) hno hfr)
+        exact fin (MInv.editBV_setOOB post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hthru hV
+            memDeps_noName hp.mem hno hfr)
           (by simp [post.nv]) (covers_editSetOOB (covers_takeVal hi.cover htk) hfr) post.frz
   | @withElem ξ Γ Γ1 Δ1 Δ F y x i k Ey E hsrc hx hxF _ _ _ hpin _ hr hs hpush hpx _ _ _ _ =>
     -- element `n` moves out to `x`, as a pop of it moved to the end (`elem_pres`)

@@ -3572,7 +3572,10 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
     {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty} {D : List Dep}
     (hw : CtxWF Γa) (hn : NameWF Γa)
     (hx : Γa x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
-    (hty : Ex.ty = .vec t) (hhv : t.holdsView = true) (hfn : t.hasFn = false) (hxF : x ∉ Fa)
+    (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
+    (hfn : t.hasFn = false ∨ ∀ d ∈ D, d.kind.isName = true →
+      d ∈ Ex1.held ∧ ∀ r ∈ roots (memDeps Ex1.path), (argE Γa1 r).ty.holdsView = true →
+        d ∈ (argE Γa1 r).held) (hxF : x ∉ Fa)
     (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γa1 x = some Ex1)
     (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path)
     (hV : ThruV Γa1 op Ex.ty Ex1.path (memDeps D)) (hdf : op.drops = true → t.dtorFree = true) :
@@ -3606,18 +3609,55 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
       exact mem_rds.mpr ⟨d0, List.mem_filter.mpr ⟨hd0, hd'.2⟩, rfl⟩
     · have : d ∈ memDeps S.A := List.mem_filter.mpr ⟨h1, hd'.2⟩
       rw [hmemA] at this; cases this
-  obtain ⟨D', harg', hD'⟩ : ∃ D', EditArg (S.canon Γa) S.Fc (op.rename S.ρ) t D' (S.canon Γa1) ∧
-      memDeps D' ⊆ rds S.ρ (memDeps D) := by
+  obtain ⟨D', harg', hD', hsD'⟩ : ∃ D', EditArg (S.canon Γa) S.Fc (op.rename S.ρ) t D' (S.canon Γa1) ∧
+      memDeps D' ⊆ rds S.ρ (memDeps D) ∧ D' ⊆ rds S.ρ D ++ S.A := by
     cases harg with
     | push hy hly htyy hpa =>
       obtain ⟨D', hpa', hs, _⟩ := pushArg_ren h hab hy hpa
       exact ⟨D', EditArg.push (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_live]; exact hly)
-        (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmemsub hs⟩
-    | trunc hie => exact ⟨[], EditArg.trunc (exprT_ren h hab hie), fun _ h => by cases h⟩
+        (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmemsub hs, hs⟩
+    | trunc hie => exact ⟨[], EditArg.trunc (exprT_ren h hab hie), (fun _ h => by cases h), (fun _ h => by cases h)⟩
     | set hie hy hly htyy hpa =>
       obtain ⟨D', hpa', hs, _⟩ := pushArg_ren h hab hy hpa
       exact ⟨D', EditArg.set (exprT_ren h hab hie) (by rw [canon_ρ h, hy]; rfl)
-        (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmemsub hs⟩
+        (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmemsub hs, hs⟩
+  -- AGORA-901: what the stored value captures by name, where the call places
+  -- it: its own names, renamed, which the borrow and its view-holding owners
+  -- held, renamed; or what the call's arguments hold by name, which the lift
+  -- adds to the borrow and to every owner whose type holds views
+  have hfn' : t.hasFn = false ∨ ∀ d ∈ D', d.kind.isName = true →
+      d ∈ (S.liftE x Ex1).held ∧ ∀ r ∈ roots (memDeps (S.liftE x Ex1).path),
+        (argE (S.canon Γa1) r).ty.holdsView = true → d ∈ (argE (S.canon Γa1) r).held := by
+    rcases hfn with hf | hf
+    · exact Or.inl hf
+    refine Or.inr fun d hd hnm => ?_
+    have hlx : (S.liftE x Ex1).held = rds S.ρ Ex1.held ++ S.A := by
+      rw [liftE_held hrb]; simp [hmx, Mode.ownSlot, ownHeld]
+    have hlo : ∀ r, r ∈ roots (memDeps Ex1.path) → ∃ Er, Γa1 r = some Er ∧ argE (S.canon Γa1) (S.ρ r) =
+        S.liftE r Er ∧ (Er.ty.holdsView = true → (S.liftE r Er).held = rds S.ρ Er.held ++ S.A) ∧
+        (S.liftE r Er).ty = Er.ty := by
+      intro r hr
+      obtain ⟨Er, hEr, hos, _⟩ := hthru.root hr
+      have hrbr : Er.mode ≠ .rootb := fun h' => by rw [h'] at hos; cases hos
+      exact ⟨Er, hEr, argE_canon h hEr, fun hv => by rw [liftE_held hrbr]; simp [hos, ownHeld, hv],
+        liftE_ty _ hrbr⟩
+    rw [hroots]
+    rcases List.mem_append.mp (hsD' hd) with h1 | h1
+    · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
+      obtain ⟨hx0, hr0⟩ := hf d0 hd0 hnm
+      refine ⟨by rw [hlx]; exact List.mem_append_left _ (mem_rds.mpr ⟨d0, hx0, rfl⟩), fun r' hr' hv' => ?_⟩
+      obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hr'
+      obtain ⟨Er, hEr, hae, hheld, hty'⟩ := hlo r hr
+      have hae0 : argE Γa1 r = Er := by unfold argE; rw [hEr]; rfl
+      rw [hae, hty'] at hv'
+      rw [hae, hheld hv']
+      exact List.mem_append_left _ (mem_rds.mpr ⟨d0, by rw [← hae0]; exact hr0 r hr (by rw [hae0]; exact hv'), rfl⟩)
+    · refine ⟨by rw [hlx]; exact List.mem_append_right _ h1, fun r' hr' hv' => ?_⟩
+      obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hr'
+      obtain ⟨Er, hEr, hae, hheld, hty'⟩ := hlo r hr
+      rw [hae, hty'] at hv'
+      rw [hae, hheld hv']
+      exact List.mem_append_right _ h1
   have hyx' : ∀ y, (op.rename S.ρ).stored = some y → y ≠ S.ρ x := by
     intro y hy
     rw [Edit.stored_rename] at hy
@@ -3626,7 +3666,7 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
   have hV' := hVg (memDeps D') hD'
   have hT := StmtT.editBV (P := P) (ξ := ξ) (x := S.ρ x) (Ex := S.liftE x Ex1) (Ex1 := S.liftE x Ex1)
     (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
-    (by rw [hty1]; exact hty) hhv hfn (h.Fcout x) harg' hyx' (by rw [canon_ρ h, hx1]; rfl)
+    (by rw [hty1]; exact hty) hhv hfn' (h.Fcout x) harg' hyx' (by rw [canon_ρ h, hx1]; rfl)
     (by rw [liftE_live]; exact hl1) (by rw [hmem]; simpa [rds] using hne) hthru' hV'
     (by rw [Edit.drops_rename]; exact hdf)
   -- the roots are owners or `inout` parameters made by no `letd`
