@@ -293,6 +293,11 @@ class FnCheck:
         # engine's FX_JOIN_TEMP / FX_JOIN_VAR, eng_kept_lend; agora #887)
         self.join_temps = set()
         self.join_vars = set()
+        # A binding (`: T e`, not `: ~`) given a call's temporary whole, or
+        # such a binding whole: nurlc keeps the call's per-call answer for it
+        # (the engine's FX_CALL_TEMP / FX_CALL_BIND; agora #902)
+        self.call_temps = set()
+        self.call_binds = set()
 
         def joins(stmts):
             for s in stmts:
@@ -321,6 +326,24 @@ class FnCheck:
                             join_vars(part)
         joins(fn.body)
         join_vars(fn.body)
+
+        def call_binds(stmts):
+            for s in stmts:
+                if s[0] == "let" and s[2] is not None:
+                    v = self.fn.vars[s[1]]
+                    if s[2][0] == "call" and v.kind == "temp":
+                        self.call_temps.add(s[1])
+                    elif (s[2][0] == "use" and s[2][1][0] == "v" and not s[2][1][2] and v.kind == "local"
+                          and not v.mut and (s[2][1][1] in self.call_temps or s[2][1][1] in self.call_binds)):
+                        self.call_binds.add(s[1])
+                for part in s[1:]:
+                    if isinstance(part, list):
+                        if part and isinstance(part[0], tuple) and part[0] and isinstance(part[0][0], str) and len(part[0]) == 2 and isinstance(part[0][1], list):
+                            for _, arm in part:
+                                call_binds(arm)
+                        else:
+                            call_binds(part)
+        call_binds(fn.body)
 
         def order(stmts):
             for s in stmts:
@@ -1484,6 +1507,20 @@ class FnCheck:
             if k >= len(ops):
                 continue
             op = ops[k]
+            if (avs[k].own == "O" and avs[k].loans and op[0] == "v"
+                    and (avs[k].call or op[1] in self.call_binds)
+                    and ((k < len(sm["modes"]) and sm["modes"][k] == "sink")
+                         or any(r[1] == k for r in sm.get("rholds", ()))
+                         or any(x[2] == k for x in sm.get("stores", ())))):
+                # a binding of what a call lends on some runs only, handed to
+                # a callee that takes it: on the runs the call lent, it is a
+                # copy of a handle its owner keeps, and a value with no copy
+                # cannot stand in - refused as for one the call always lends
+                # (the engine's FX_CALL_BIND rule, agora #902)
+                ty = self.ty_of_place((op[1], op[2]))
+                if (ty is not None and ty[0] not in VIEW_TYPES and self.T.owns_handle(ty)
+                        and not self.T.copyable(ty)):
+                    self.err(line, f"{name} takes a borrowed value that cannot be copied")
             if op[0] == "v" and not op[2]:
                 for m, av in enumerate(avs):
                     if m != k and (any(a[0] == op[1] for a in av.alias) or
@@ -2329,7 +2366,7 @@ class FnCheck:
             taken = body is not None and i < len(body.params) and getattr(body.vars[body.params[i]], "taken", False)
             moved_in = False
             if (taken and op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "local"
-                    and av.call and av.loans):
+                    and (av.call or op[1] in self.call_binds) and av.loans):
                 # (a binding of what a call lent, on some runs: the env would
                 # keep or release it while its owner still holds it, as a
                 # `sink` given it would - refused as there, agora #899)

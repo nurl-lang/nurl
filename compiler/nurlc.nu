@@ -17206,6 +17206,16 @@ unsafe @ eng_byte s w i k → i {
                     // the capture itself.)
                     = copied ( sq_add copied ck ) = done T
                 } {}
+                ? & & & & & ! done ownop == ckind VK_LOCAL == cown OW_O ( fx_has ov FX_CALL_BIND ) != ( av_loans ( wv_at avs ck ) ) 0 {
+                    // a binding of what a call lends on some runs only, handed
+                    // to a callee that takes it: on the runs the call lent, it
+                    // is a copy of a handle its owner keeps, and a value with
+                    // no copy cannot stand in - refused as for one the call
+                    // always lends (agora #902)
+                    ? & & & & != cty ET_NONE ! ( et_is_view cty ) ( et_owns_handle cty ) ! ( et_copyable cty ) | == ( sm_mode sm ck ) PM_SINK ( sm_keeps_arg sm ck ) {
+                        ( eng_err line EG_NOCOPY ( nurl_str_cat ( eng_fname name ) ` takes a borrowed value that cannot be copied` ) )
+                    } {}
+                } {}
                 ? & ! done ownop {
                     // (a join's temporary that owns its value on some paths and
                     // selects owners on the others: the consumer takes what it
@@ -18226,10 +18236,12 @@ unsafe @ eng_byte s w i k → i {
             // agora #868)
             : i okind ? ( op_is_place op ) ( fv_kind ( pl_var op ) ) -1
             : b taken & & != 0 & ( efp_flags f i ) 4 ( op_is_place op ) == ( pl_path op ) 0
-            ? & & & taken == okind VK_LOCAL ( av_call av ) != ( av_loans av ) 0 {
+            ? & & & taken == okind VK_LOCAL | ( av_call av ) ( fx_has ( pl_var op ) FX_CALL_BIND ) != ( av_loans av ) 0 {
                 // (a binding of what a call lent, on some runs: the env would
                 // keep or release it while its owner still holds it, as a
-                // `sink` given it would - refused as there, agora #899)
+                // `sink` given it would - refused as there, agora #899. One
+                // the call lends on some runs only is its own on the others,
+                // and holds the call's loans: FX_CALL_BIND, agora #902)
                 ( eng_err line EG_NOCOPY `a closure takes over a borrowed value that cannot be copied` )
             } {}
             : b owned & taken | & == okind VK_LOCAL == ( av_own av ) OW_O & == okind VK_PARAM | == ( av_own av ) OW_O == ( av_own av ) OW_P
