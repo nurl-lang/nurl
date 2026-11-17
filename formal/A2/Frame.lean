@@ -796,4 +796,130 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [hEq] at hn0
       exact hpk.1 y Ey o v hyx hEy hl hs i hn0
 
+/-! ### AGORA-901: a fresh binding -/
+
+/-- A clean root of a context with one binding more is that binding, or one
+    the context had: what a borrowed parameter depends on is bound. -/
+theorem Clean.of_setE {Γ : Ctx} {x : Var} {E : Entry} (hx : Γ x = none)
+    (hwf : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps Ep.path, (Γ d.root).isSome)
+    {r : Var} (h : Clean (setE Γ x E) r) : r = x ∨ Clean Γ r := by
+  induction h with
+  | @own r' Er hr ho =>
+    by_cases hrx : r' = x
+    · exact Or.inl hrx
+    · rw [setE, upd_ne _ _ hrx] at hr; exact Or.inr (.own hr ho)
+  | @rootb p Ep hp hm hns _ ih =>
+    by_cases hpx : p = x
+    · exact Or.inl hpx
+    · rw [setE, upd_ne _ _ hpx] at hp
+      refine Or.inr (.rootb hp hm hns fun d hd => (ih d hd).resolve_left fun h => ?_)
+      have := hwf p Ep hp hm d hd
+      rw [h, hx] at this; cases this
+
+theorem CleanDeps.of_setE {Γ : Ctx} {x : Var} {E : Entry} (hx : Γ x = none)
+    (hwf : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps Ep.path, (Γ d.root).isSome)
+    {D : List Dep} (hb : ∀ d ∈ memDeps D, (Γ d.root).isSome) (h : CleanDeps (setE Γ x E) D) :
+    CleanDeps Γ D := fun d hd => by
+  refine ⟨(h d hd).1, ((h d hd).2.of_setE hx hwf).resolve_left fun hr => ?_⟩
+  have := hb d hd; rw [hr, hx] at this; cases this
+
+/-- What a borrowed parameter depends on is bound. -/
+theorem MInv.rootb_bound {m : Mem} {Γ : Ctx} (hi : MInv m Γ) :
+    ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps Ep.path, (Γ d.root).isSome := by
+  intro p Ep hp hm d hd
+  have hos : Ep.mode.ownSlot = false := by rw [hm]; rfl
+  obtain ⟨Er, hEr, _⟩ := hi.wf p Ep hp (hi.rootbLive p Ep hp hm) (Or.inr hm) d.root
+    (List.mem_map_of_mem (by simp [Entry.vdeps, hos]; exact Or.inl (List.mem_filter.mp hd).1))
+  rw [hEr]; rfl
+
+/-- **A fresh binding keeps `MInv.pkgFree`** for every other: what they name
+    lies in memory, where the fresh value's addresses, of no owned tree and no
+    payload, are not; and it is clean where it was. -/
+theorem MInv.pkgFree_add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} {o : Bool} {v : Val}
+    (hx : Γ x = none)
+    (hfresh : o = true → ∀ i ∈ v.ids, (∀ r U, m.st r = some ⟨true, some U⟩ → i ∉ U.ids) ∧ ¬ PayAddr m i)
+    (hself : ∀ i, PkgNames (m.set x ⟨o, some v⟩) (setE Γ x E) E v i → PkgFreeId (m.set x ⟨o, some v⟩) i) :
+    ∀ y Ey o' vy, setE Γ x E y = some Ey → Ey.live = true → (m.set x ⟨o, some v⟩).st y = some ⟨o', some vy⟩ →
+      ∀ i, PkgNames (m.set x ⟨o, some v⟩) (setE Γ x E) Ey vy i → PkgFreeId (m.set x ⟨o, some v⟩) i := by
+  intro y Ey o' vy hy hl hs i hn
+  by_cases hyx : y = x
+  · subst hyx
+    simp only [setE, upd_same, Option.some.injEq] at hy; subst hy
+    simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hs
+    obtain ⟨rfl, rfl⟩ := hs
+    exact hself i hn
+  rw [setE, upd_ne _ _ hyx] at hy
+  simp only [Mem.set_st, upd_ne _ _ hyx] at hs
+  have hst : ∀ r, r ≠ x → (m.set x ⟨o, some v⟩).st r = m.st r := fun r hr => by simp [upd_ne _ _ hr]
+  -- a fresh owned tree holds none of what memory names
+  have hnot : ∀ i, ((∃ r T, m.st r = some ⟨true, some T⟩ ∧ i ∈ T.ids) ∨ PayAddr m i) →
+      o = true → i ∉ v.ids := by
+    rintro i hh ho hiv
+    obtain ⟨h1, h2⟩ := hfresh ho i hiv
+    rcases hh with ⟨r, T, hT, hiT⟩ | hp
+    · exact h1 r T hT hiT
+    · exact h2 hp
+  have hfr : ∀ i, ((∃ r T, m.st r = some ⟨true, some T⟩ ∧ i ∈ T.ids) ∨ PayAddr m i) →
+      PkgFreeId m i → PkgFreeId (m.set x ⟨o, some v⟩) i := by
+    intro i hh h r T hT fs te ms ev cs hP t c d es hN
+    by_cases hrx : r = x
+    · subst hrx
+      simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hT
+      obtain ⟨ho, rfl⟩ := hT
+      have hsT := hN.trans ((Sub.pkg (Sub.refl _)).trans hP)
+      refine ⟨fun h1 => hnot i hh ho (h1 ▸ hsT.ids c (by simp [Val.ids])),
+        fun h2 => hnot i hh ho (h2 ▸ hsT.ids d (by simp [Val.ids]))⟩
+    · rw [hst r hrx] at hT; exact h r T hT fs te ms ev cs hP t c d es hN
+  -- the deps of a binding that names anything are bound
+  have hbound : (Ey.ty ≠ .int ∨ Ey.mode = .rootb) → ∀ d ∈ Ey.vdeps, (Γ d.root).isSome := fun hn d hd => by
+    obtain ⟨Er, hEr, _⟩ := hi.wf y Ey hy hl hn d.root (List.mem_map_of_mem hd)
+    rw [hEr]; rfl
+  have hint : Ey.ty ≠ .int ∨ Ey.mode = .rootb := by
+    by_cases ht : Ey.ty = .int
+    · by_cases hrb : Ey.mode = .rootb
+      · exact Or.inr hrb
+      · exfalso
+        obtain ⟨sl, hsl, _, hso, hown, hbor⟩ := hi.slot y Ey hy
+        rw [hs] at hsl; cases hsl
+        cases hos : Ey.mode.ownSlot
+        · obtain ⟨w, hw, hok⟩ := hbor hos hl
+          cases hw
+          rw [ht] at hok; obtain ⟨k, rfl⟩ := valOK_int.mp hok
+          exact PkgNames.none_int hn
+        · have := (hown hos).1; rw [ht] at this; simp [Ty.owning] at this
+    · exact Or.inl ht
+  have hvd : ∀ D, D ⊆ Ey.vdeps → ∀ d ∈ memDeps D, (Γ d.root).isSome := fun D hD d hd =>
+    hbound hint d (hD (List.mem_filter.mp hd).1)
+  have hpv : (Ey.mode = .bor ∨ Ey.mode = .rootb) → Ey.path ⊆ Ey.vdeps := fun hm d hd => by
+    have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+    simp [Entry.vdeps, hos, hd]
+  have hhv : Ey.held ⊆ Ey.vdeps := fun d hd => by simp [Entry.vdeps, hd]
+  have hwf := hi.rootb_bound
+  -- what it names, it named before
+  have hn0 : PkgNames m Γ Ey vy i := by
+    rcases hn with ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, c, r, T, t, d, es, hb, hT, hsn, hvn⟩ | ⟨hm, hc, hv⟩
+    · exact Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ (hpv hm)), hv⟩
+    · exact Or.inr (Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ fun d hd => by
+        rcases List.mem_append.mp hd with h | h
+        · exact hpv hm h
+        · exact hhv h), hv⟩)
+    · refine Or.inr (Or.inr (Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ hhv), c, r, T, t, d, es, hb, ?_, hsn, hvn⟩))
+      by_cases hrx : r = x
+      · exfalso
+        subst hrx
+        simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hT
+        obtain ⟨ho, rfl⟩ := hT
+        have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+        obtain ⟨w, hw, hok⟩ := hi.bor_val hy hl hos
+        rw [hs] at hw; cases hw
+        obtain ⟨dep, t', H', d', es', hlan, _⟩ := hok.bare_href c hb
+        have hh : (∃ r T, m.st r = some ⟨true, some T⟩ ∧ c ∈ T.ids) ∨ PayAddr m c := by
+          rcases hlan.home with ⟨x', T', hT', hsT'⟩ | hp
+          · exact Or.inl ⟨x', T', hT', hsT'.ids c (by simp [Val.ids])⟩
+          · exact Or.inr (hp.payAddr hi.heap c (by simp [Val.ids]))
+        exact hnot c hh ho (hsn.ids c (by simp [Val.ids]))
+      · rw [hst r hrx] at hT; exact hT
+    · exact Or.inr (Or.inr (Or.inr ⟨hm, hc.of_setE hx hwf (hvd _ hhv), hv⟩))
+  exact hfr i (hi.named_home hy hl hs hn0) (hi.pkgFree y Ey o' vy hy hl hs i hn0)
+
 end A2

@@ -235,6 +235,69 @@ theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = no
   · intro k bl hk
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk rfl⟩, h4⟩
+  · -- AGORA-901: what the fresh binding names, the right-hand side named
+    have hownE : o = true → E.mode = .own := fun ho => by
+      rcases hout.mode with h | h
+      · exact h
+      · rw [hout.own, h] at ho; cases ho
+    have hfresh : o = true → ∀ i ∈ v.ids, (∀ r U, m.st r = some ⟨true, some U⟩ → i ∉ U.ids) ∧ ¬ PayAddr m i :=
+      fun ho i hiv => by
+        obtain ⟨_, _, _, _, _, hdisj, _, hnp⟩ := hout.valOwn (hownE ho)
+        exact ⟨fun r U hU hiU => hdisj r U hU i hiv hiU, hnp i hiv⟩
+    refine hi.pkgFree_add hx hfresh (fun i hn => ?_)
+    have hst : ∀ r, r ≠ x → (m.set x ⟨o, some v⟩).st r = m.st r := fun r hr => by simp [upd_ne _ _ hr]
+    -- the right-hand side's value names something only if it holds memory
+    have hint : E.ty ≠ .int := by
+      intro ht
+      rcases hout.mode with h | h
+      · have := (hout.valOwn h).1; rw [ht] at this; simp [Ty.owning] at this
+      · have hok := hout.valBor h; rw [ht] at hok
+        obtain ⟨k, rfl⟩ := valOK_int.mp hok
+        exact PkgNames.none_int hn
+    have hvd : ∀ D, D ⊆ E.vdeps → ∀ d ∈ memDeps D, (Γ d.root).isSome := fun D hD d hd => by
+      obtain ⟨Er, hEr, _⟩ := hout.wf hint d.root (List.mem_map_of_mem (hD (List.mem_filter.mp hd).1))
+      rw [hEr]; rfl
+    have hpv : (E.mode = .bor ∨ E.mode = .rootb) → E.path ⊆ E.vdeps := fun hm d hd => by
+      have hos : E.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+      simp [Entry.vdeps, hos, hd]
+    have hhv : E.held ⊆ E.vdeps := fun d hd => by simp [Entry.vdeps, hd]
+    have hwf := hi.rootb_bound
+    have hn0 : PkgNames m Γ E v i := by
+      rcases hn with ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, c, r, T, t, d, es, hb, hT, hsn, hvn⟩ | ⟨hm, hc, hv⟩
+      · exact Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ (hpv hm)), hv⟩
+      · exact Or.inr (Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ fun d hd => by
+          rcases List.mem_append.mp hd with h | h
+          · exact hpv hm h
+          · exact hhv h), hv⟩)
+      · refine Or.inr (Or.inr (Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ hhv), c, r, T, t, d, es, hb, ?_, hsn, hvn⟩))
+        by_cases hrx : r = x
+        · exfalso
+          subst hrx
+          simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hT
+          have hos : E.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+          rw [hout.own, hos] at hT; cases hT.1
+        · rw [hst r hrx] at hT; exact hT
+      · exact Or.inr (Or.inr (Or.inr ⟨hm, hc.of_setE hx hwf (hvd _ hhv), hv⟩))
+    have hf0 := hout.pkgFree i hn0
+    intro r T hT fs te ms ev cs hP t c d es hN
+    by_cases hrx : r = x
+    · subst hrx
+      simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hT
+      obtain ⟨ho, rfl⟩ := hT
+      have hown := hownE ho
+      have hos : E.mode.ownSlot = true := by rw [hown]; rfl
+      obtain ⟨_, hwv, hvsv, _, _, hdisj, _, hnp⟩ := hout.valOwn hown
+      obtain ⟨_, o', l, hvi⟩ := hn0.own hos
+      obtain ⟨s', hin⟩ := hwv.viewIn hvi
+      obtain ⟨d0, o0, l0, hvv, dep, _, hva⟩ := hvsv s' _ hin
+      cases hvv
+      have hsT := hN.trans ((Sub.pkg (Sub.refl _)).trans hP)
+      have hfr : i ∉ v.ids := fun hiv => by
+        rcases hva.home hi.heap with ⟨r', U, hU, hiU⟩ | hp
+        · exact hdisj r' U hU i hiv hiU
+        · exact hnp i hiv hp
+      exact ⟨fun h1 => hfr (h1 ▸ hsT.ids c (by simp [Val.ids])), fun h2 => hfr (h2 ▸ hsT.ids d (by simp [Val.ids]))⟩
+    · rw [hst r hrx] at hT; exact hf0 r T hT fs te ms ev cs hP t c d es hN
 
 theorem hanch_of {Γ Γ1 : Ctx} {F : List Var}
     (hanch : RootbAnch Γ F)
