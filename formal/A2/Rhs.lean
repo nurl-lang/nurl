@@ -144,7 +144,7 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
     rw [hb] at hk
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hb⟩, h4⟩
-  pkgFree x Ex o v hx hl hs i hn := (hi.pkgFree x Ex o v hx hl (by rw [← h]; exact hs) i hn).of_st h
+  pkgFree x Ex o v hx hl hs i hn := (hi.pkgFree x Ex o v hx hl (by rw [← h]; exact hs) i (hn.ofSt h)).of_st h
 
 /-! ### A3.1: more blocks
 
@@ -269,7 +269,7 @@ theorem MInv.grow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (h
     (RootKeep.of_st (r := dep.root) h hb).vkeep hb
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE (by rw [h] at hsl; exact hsl) hown hT).grow hb
   blocks := hB
-  pkgFree x Ex o v hx hl hs i hn := (hi.pkgFree x Ex o v hx hl (by rw [← h]; exact hs) i hn).of_st h
+  pkgFree x Ex o v hx hl hs i hn := (hi.pkgFree x Ex o v hx hl (by rw [← h]; exact hs) i (hn.ofSt h)).of_st h
 
 /-- A3.2's second cut: **the invariant of the slots over another store that
     keeps only the blocks the slots reach through payloads that are read**
@@ -330,7 +330,7 @@ theorem MInv.regrow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) 
       exact (((hi.shares v E sl T hE hsl0 hown hT).grow (m' := mb) hb1).sweep
         (Kept.of_slot hR (hslot v sl hsl0) T hT)).grow hb2
     blocks := hB
-    pkgFree x Ex o v hx hl hs i hn := (hi.pkgFree x Ex o v hx hl (by rw [← h]; exact hs) i hn).of_st h }
+    pkgFree x Ex o v hx hl hs i hn := (hi.pkgFree x Ex o v hx hl (by rw [← h]; exact hs) i (hn.ofSt h)).of_st h }
 
 /-- What a right-hand side hands to the binding that takes it. -/
 structure RhsOut (m1 : Mem) (Γ1 : Ctx) (E : Entry) (v : Val) (o : Bool) : Prop where
@@ -352,7 +352,7 @@ structure RhsOut (m1 : Mem) (Γ1 : Ctx) (E : Entry) (v : Val) (o : Bool) : Prop 
   shares : E.mode.ownSlot = true → SharesOK m1 E.ty v
   /-- AGORA-901: a `Vec` handle lent names a node no package holds, when it
       reaches memory through clean roots only and no share (`MInv.pkgFree`). -/
-  pkgFree : ∀ i, PkgNames Γ1 E v i → PkgFreeId m1 i
+  pkgFree : ∀ i, PkgNames m1 Γ1 E v i → PkgFreeId m1 i
 
 /-- The context and memory after a right-hand side, and how they relate to
     before. -/
@@ -385,8 +385,7 @@ theorem RhsOut.widen {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
   have hv1 : ({ E with held := H } : Entry).vdeps = H := by simp [Entry.vdeps, hos]
   refine ⟨h.own, h.mode, h.live, h.tyok, fun ht r hr => ?_, fun hm => ?_, fun hb => ?_,
     fun hn => (h.names hn).widen hmo hH, h.held.mono hH.1, h.pkgs, h.shares,
-    fun i hn => h.pkgFree i (PkgNames.weaken (E' := { E with held := H }) rfl (fun _ h => h)
-      (by rw [hv1]; simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append]; exact hH.1) hn)⟩
+    fun i hn => h.pkgFree i (PkgNames.weaken (E' := { E with held := H }) rfl (fun _ _ h => h) hH.1 hn)⟩
   · rw [hv1] at hr
     obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
     exact hH.root hmo (h.wf ht) d hd
@@ -1193,25 +1192,33 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
     rcases hroot with hrb | ⟨hown, t, hty⟩
     · obtain ⟨w, hw, _⟩ := hi.bor_val hy hl (by rw [hrb]; rfl)
       rcases hv with hv | ⟨_, _, _, _, hv, _⟩
-      · have hcy : CleanDeps Γ (derive y E .self) → Clean Γ y := fun h =>
-          (derive_clean rfl h).1 (by rw [hrb]; rfl)
-        have hvd : E.vdeps = E.path ++ E.held := by simp [Entry.vdeps, hrb, Mode.ownSlot]
+      · have hcy : CleanDeps Γ (derive y E .self) → CleanDeps Γ E.path := fun h =>
+          ((derive_clean rfl h).1 (by rw [hrb]; rfl)).rootb_inv hy hrb
         refine hi.pkgFree y E _ _ hy hl hv i ?_
-        rcases hn with ⟨_, hc, hv'⟩ | ⟨hc, hv'⟩
-        · exact Or.inl ⟨Or.inr hrb, (hcy hc).rootb_inv hy hrb, hv'⟩
-        · have hc' : CleanDeps Γ (derive y E .self ++ E.held) := by
-            simpa [Entry.vdeps, Mode.ownSlot] using hc
-          exact Or.inr ⟨by rw [hvd]; exact ((hcy hc'.left).rootb_inv hy hrb).append hc'.right, hv'⟩
+        rcases hn with ⟨_, hc, hv'⟩ | ⟨_, hc, hv'⟩ | ⟨_, hc, hv'⟩ | ⟨h, _⟩
+        · exact Or.inl ⟨Or.inr hrb, hcy hc, hv'⟩
+        · exact Or.inr (Or.inl ⟨Or.inr hrb, (hcy hc.left).append hc.right, hv'⟩)
+        · exact Or.inr (Or.inr (Or.inl ⟨Or.inr hrb, hc, hv'⟩))
+        · cases h
       · rw [hv] at hw; cases hw
     · obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rw [hown]; rfl)
       rcases hv with hv | ⟨t', c', d', es', hv, rfl⟩
       · rw [hv] at hT; cases hT
-      · rcases hn with ⟨_, _, ⟨c, hb, rfl⟩ | ⟨o, l, h⟩⟩ | ⟨_, o, l, hs⟩
-        · cases hb
-          exact (PkgFreeAt.top hi.heap hv (i := c) (by simp [Val.ids])).toId hi.heap
+      · rcases hn with ⟨_, _, ⟨c, hb, hic⟩ | ⟨o, l, h⟩⟩ | ⟨_, _, o, l, hb⟩ |
+          ⟨_, hc, c, r, T1, t1, d1, es1, hb, hT1, hs1, o, l, hvn⟩ | ⟨h, _⟩
+        · have h2 := hb.href_eq
+          subst hic; subst h2
+          exact (PkgFreeAt.top hi.heap hv (i := i) (by simp [Val.ids])).toId hi.heap
             (Or.inl ⟨y, _, hv, Sub.refl _⟩) (by simp [Val.head])
         · cases h
-        · cases hs
+        · cases hb
+        · have h2 := hb.href_eq
+          subst h2
+          obtain ⟨_, heq⟩ := owned_unique hi.heap hT1 hv hs1 (Sub.refl _) (i := c) (by simp [Val.head])
+            (by simp [Val.head])
+          rw [heq] at hvn
+          exact hi.pkgFree y E true _ hy hl hv i (Or.inr (Or.inr (Or.inr ⟨by rw [hown]; rfl, hc, o, l, hvn⟩)))
+        · cases h
 
 /-- A value stored in memory, lent out: every node at its top (the ones
     lending hands out) is reached through `P`, every view it stores is valid

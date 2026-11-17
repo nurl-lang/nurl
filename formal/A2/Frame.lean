@@ -391,7 +391,6 @@ theorem PkgKeep.of_pkgs {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Eff} {hv :
     {Ex : Entry} {ox : Option Entry} (hx : Γ x = some Ex) (hos : Ex.mode.ownSlot = true)
     (hox : ∀ Ex', ox = some Ex' → Ex'.mode = Ex.mode ∧ Ex.held ⊆ Ex'.held ∧ (Ex'.live = true → Ex.live = true))
     {T : Val} (hT : m.st x = some ⟨true, some T⟩) (hst : ∀ o, o ≠ x → m'.st o = m.st o)
-    (hblk : m'.blk = m.blk)
     (hpk : ∀ T', m'.st x = some ⟨true, some T'⟩ → ∀ fs te ms ev cs,
       Sub (.pkg fs te ms ev cs) T' → Sub (.pkg fs te ms ev cs) T)
     (hvw : ∀ o T', m'.st x = some ⟨o, some T'⟩ → ∀ i o' l, Sub (.view i o' l) T' →
@@ -402,28 +401,27 @@ theorem PkgKeep.of_pkgs {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Eff} {hv :
     PkgKeep m m' Γ e hv x ox := by
   have hfr : ∀ i, PkgFreeId m i → PkgFreeId m' i := fun i h =>
     h.frame hst fun T' hT' fs te ms ev cs hP => ⟨T, hT, hpk T' hT' fs te ms ev cs hP⟩
-  -- a node found in the new store, by address, is one found in the old, its
-  -- views the old one's or of addresses no package holds
-  have hat : ∀ c n', NodeAt m' c n' → ∃ n, NodeAt m c n ∧ ∀ i o l, Sub (.view i o l) n' →
-      Sub (.view i o l) n ∨ PkgFreeId m i := by
-    intro c n' hna
-    rcases hna with ⟨r, t', ht', hs', t, d, es, rfl⟩ | ⟨k, bl, hk, hs', t, d, es, rfl⟩
-    · by_cases hrx : r = x
-      · subst hrx
-        obtain ⟨t0, d0, es0, hs0, hv0⟩ := hnode t' ht' t c d es hs'
-        exact ⟨_, Or.inl ⟨r, T, hT, hs0, t0, d0, es0, rfl⟩, hv0⟩
-      · rw [hst r hrx] at ht'
-        exact ⟨_, Or.inl ⟨r, t', ht', hs', t, d, es, rfl⟩, fun _ _ _ h => Or.inl h⟩
-    · rw [hblk] at hk
-      exact ⟨_, Or.inr ⟨k, bl, hk, hs', t, d, es, rfl⟩, fun _ _ _ h => Or.inl h⟩
+  -- a node of an owned tree of the new store is at the address of one of the
+  -- old's, its views the old one's or of addresses no package holds
+  have hat : ∀ r T1 t c d es, m'.st r = some ⟨true, some T1⟩ → Sub (.node t c d es) T1 →
+      ∃ r0 T0 t0 d0 es0, m.st r0 = some ⟨true, some T0⟩ ∧ Sub (.node t0 c d0 es0) T0 ∧
+        ∀ i o l, Sub (.view i o l) (.node t c d es) → Sub (.view i o l) (.node t0 c d0 es0) ∨ PkgFreeId m i := by
+    intro r T1 t c d es hT1 hs1
+    by_cases hrx : r = x
+    · subst hrx
+      obtain ⟨t0, d0, es0, hs0, hv0⟩ := hnode T1 hT1 t c d es hs1
+      exact ⟨r, T, t0, d0, es0, hT, hs0, hv0⟩
+    · rw [hst r hrx] at hT1
+      exact ⟨r, T1, t, d, es, hT1, hs1, fun _ _ _ h => Or.inl h⟩
   refine ⟨fun y Ey o v hyx hEy hl hs i hn => ?_, fun Ex' o v hx' hl hs i hn => ?_⟩
   · rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
-    rcases hn with h1 | h2 | ⟨hm, hc, c, n', hb, hna, o', l, hvn⟩ | ⟨hm, hc, o', l, hvn⟩
+    rcases hn with h1 | h2 | ⟨hm, hc, c, r, T1, t, d, es, hb, hT1, hs1, o', l, hvn⟩ | ⟨hm, hc, o', l, hvn⟩
     · exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (Or.inl h1))
     · exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (Or.inr (Or.inl h2)))
-    · obtain ⟨n, hna0, hvw0⟩ := hat c n' hna
+    · obtain ⟨r0, T0, t0, d0, es0, hT0, hs0, hvw0⟩ := hat r T1 t c d es hT1 hs1
       rcases hvw0 i o' l hvn with hvn0 | hf
-      · exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (Or.inr (Or.inr (Or.inl ⟨hm, hc, c, n, hb, hna0, o', l, hvn0⟩))))
+      · exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i
+          (Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r0, T0, t0, d0, es0, hb, hT0, hs0, o', l, hvn0⟩))))
       · exact hfr i hf
     · exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (Or.inr (Or.inr (Or.inr ⟨hm, hc, o', l, hvn⟩))))
   · obtain ⟨hm, hhd, hlv⟩ := hox Ex' hx'
@@ -440,17 +438,19 @@ theorem PkgKeep.of_pkgs {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Eff} {hv :
 
 /-- A change that leaves `x` holding no value keeps what `MInv.pkgFree` asks. -/
 theorem PkgKeep.noval {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) {e : Eff} {hv : Bool} {x : Var}
-    {ox : Option Entry} (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hblk : m'.blk = m.blk)
+    {ox : Option Entry} (hst : ∀ o, o ≠ x → m'.st o = m.st o)
     (h : ∀ o v, m'.st x ≠ some ⟨o, some v⟩) : PkgKeep m m' Γ e hv x ox := by
   have hfr : ∀ i, PkgFreeId m i → PkgFreeId m' i := fun i hf =>
     hf.frame hst fun T' hT' => absurd hT' (h _ _)
   refine ⟨fun y Ey o v hyx hEy hl hs i hn => ?_, fun _ _ _ _ _ hs => absurd hs (h _ _)⟩
   rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
-  refine hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (hn.ofMem fun c n hna => ?_))
-  rcases hna with ⟨r, t, ht, hs', hn'⟩ | ⟨k, bl, hk, hs', hn'⟩
-  · have hrx : r ≠ x := fun hr => h _ _ (hr ▸ ht)
-    exact Or.inl ⟨r, t, by rw [← hst r hrx]; exact ht, hs', hn'⟩
-  · exact Or.inr ⟨k, bl, by rw [← hblk]; exact hk, hs', hn'⟩
+  rcases hn with h1 | h2 | ⟨hm, hc, c, r, T1, t, d, es, hb, hT1, hs1, hvn⟩ | h4
+  · exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (Or.inl h1))
+  · exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (Or.inr (Or.inl h2)))
+  · have hrx : r ≠ x := fun hr => h _ _ (hr ▸ hT1)
+    exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i
+      (Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T1, t, d, es, hb, by rw [← hst r hrx]; exact hT1, hs1, hvn⟩))))
+  · exact hfr i (hi.pkgFree y Ey o v hEy hl.1 hs i (Or.inr (Or.inr (Or.inr h4))))
 
 /-- One binding `x` changes (effect `e`), its slot becomes `ox`: every other
     binding stays valid, or is ended by `kill`. -/

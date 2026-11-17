@@ -1054,6 +1054,19 @@ inductive Bare : Val → Val → Prop
   | inl {n a : Val} : Bare n a → Bare n (.inl a)
   | inr {n a : Val} : Bare n a → Bare n (.inr a)
 
+theorem Bare.of_leaf {n v : Val} (h : Bare n v) (hp : ∀ a b, v ≠ .pair a b) (hl : ∀ a, v ≠ .inl a)
+    (hr : ∀ a, v ≠ .inr a) : n = v := by
+  cases h with
+  | refl => rfl
+  | fst => exact absurd rfl (hp _ _)
+  | snd => exact absurd rfl (hp _ _)
+  | inl => exact absurd rfl (hl _)
+  | inr => exact absurd rfl (hr _)
+
+theorem Bare.href_eq {c c' : Nat} (h : Bare (.href c) (.href c')) : c = c' := by
+  have := h.of_leaf (fun _ _ h => by cases h) (fun _ h => by cases h) (fun _ h => by cases h)
+  cases this; rfl
+
 theorem PkgFreeId.of_st {m m' : Mem} (h : m'.st = m.st) {i : Nat} (hc : PkgFreeId m i) :
     PkgFreeId m' i := fun r T hT => hc r T (by rw [← h]; exact hT)
 
@@ -1121,14 +1134,15 @@ theorem CleanDeps.right {Γ : Ctx} {a b : List Dep} (h : CleanDeps Γ (a ++ b)) 
       its path;
     * the views a borrow holds directly, through its path and what it holds;
     * the views stored in the nodes a borrow's handles name, through what it
-      holds;
+      holds (in an owned tree: no payload holds a view);
     * the views an owner's tree stores, through what it holds. -/
 def PkgNames (m : Mem) (Γ : Ctx) (E : Entry) (v : Val) (i : Nat) : Prop :=
   ((E.mode = .bor ∨ E.mode = .rootb) ∧ CleanDeps Γ E.path ∧
     ((∃ c, Bare (.href c) v ∧ i = c) ∨ ∃ o l, v = .view i o l)) ∨
   ((E.mode = .bor ∨ E.mode = .rootb) ∧ CleanDeps Γ (E.path ++ E.held) ∧ ∃ o l, Bare (.view i o l) v) ∨
   ((E.mode = .bor ∨ E.mode = .rootb) ∧ CleanDeps Γ E.held ∧
-    ∃ c n, Bare (.href c) v ∧ NodeAt m c n ∧ ∃ o l, Sub (.view i o l) n) ∨
+    ∃ c r T t d es, Bare (.href c) v ∧ m.st r = some ⟨true, some T⟩ ∧ Sub (.node t c d es) T ∧
+      ∃ o l, Sub (.view i o l) (.node t c d es)) ∨
   (E.mode.ownSlot = true ∧ CleanDeps Γ E.held ∧ ∃ o l, Sub (.view i o l) v)
 
 theorem PkgNames.mono {m : Mem} {Γ Γ' : Ctx} (h : ∀ r, Clean Γ' r → Clean Γ r) {E : Entry} {v : Val}
@@ -1164,21 +1178,21 @@ theorem PkgNames.weaken {m : Mem} {Γ : Ctx} {E E' : Entry} {v : Val} {i : Nat} 
   · exact Or.inr (Or.inr (Or.inl ⟨hm', hc.sub hh, hv⟩))
   · exact Or.inr (Or.inr (Or.inr ⟨hm', hc.sub hh, hv⟩))
 
-/-- What an entry names in one store it names in another where each node it
-    finds by address is one the other finds. -/
-theorem PkgNames.ofMem {m m' : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
-    (h : ∀ c n, NodeAt m' c n → NodeAt m c n) (hn : PkgNames m' Γ E v i) : PkgNames m Γ E v i := by
-  rcases hn with h1 | h2 | ⟨hm, hc, c, n, hb, hna, hv⟩ | h4
+/-- What an entry names it names in a store of the same slots. -/
+theorem PkgNames.ofSt {m m' : Mem} (h : m'.st = m.st) {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
+    (hn : PkgNames m' Γ E v i) : PkgNames m Γ E v i := by
+  rcases hn with h1 | h2 | ⟨hm, hc, c, r, T, t, d, es, hb, hT, hs, hv⟩ | h4
   · exact Or.inl h1
   · exact Or.inr (Or.inl h2)
-  · exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, n, hb, h c n hna, hv⟩))
+  · exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T, t, d, es, hb, by rw [← h]; exact hT, hs, hv⟩))
   · exact Or.inr (Or.inr (Or.inr h4))
 
 /-- A value holding no handle and no view names nothing. -/
 theorem PkgNames.none {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
     (hb : ∀ n, Bare n v → n = v) (hs : ∀ n, Sub n v → n = v)
     (hh : ∀ c, v ≠ .href c) (hw : ∀ d o l, v ≠ .view d o l) : ¬ PkgNames m Γ E v i := by
-  rintro (⟨_, _, ⟨c, hb', _⟩ | ⟨o, l, h⟩⟩ | ⟨_, _, o, l, hb'⟩ | ⟨_, _, c, n, hb', _⟩ | ⟨_, _, o, l, hs'⟩)
+  rintro (⟨_, _, ⟨c, hb', _⟩ | ⟨o, l, h⟩⟩ | ⟨_, _, o, l, hb'⟩ | ⟨_, _, c, _, _, _, _, _, hb', _⟩ |
+    ⟨_, _, o, l, hs'⟩)
   · exact hh c (hb _ hb').symm
   · exact hw i o l h
   · exact hw i o l (hb _ hb').symm

@@ -480,4 +480,168 @@ theorem home_child {m : Mem} {n0 n : Val} (hc : Child n n0)
   · exact Or.inl ⟨r0, T0, hT0, (hc.sub (Sub.refl _)).trans hs0⟩
   · exact Or.inr (hp.sub (hc.sub (Sub.refl _)))
 
+/-! ### AGORA-901: what is lent of a part no package holds -/
+
+/-- Where a value lies: in an owned tree, or in a payload. -/
+abbrev Home (m : Mem) (e : Val) : Prop :=
+  (∃ r0 T0, m.st r0 = some ⟨true, some T0⟩ ∧ Sub e T0) ∨ InPay m e
+
+theorem bare_lend_ids : ∀ (e : Val), (∀ c', ¬ Sub (.href c') e) → ∀ {c : Nat},
+    Bare (.href c) (lendOf e) → c ∈ e.ids
+  | .node t c0 d es, _, c, hb => by
+    have := Bare.href_eq (by simpa [lendOf] using hb); subst this; simp [Val.ids]
+  | .pair a b, hnh, c, hb => by
+    simp only [lendOf] at hb
+    cases hb with
+    | fst h => simp [Val.ids, bare_lend_ids a (fun c' h' => hnh c' (Sub.fst h')) h]
+    | snd h => simp [Val.ids, bare_lend_ids b (fun c' h' => hnh c' (Sub.snd h')) h]
+  | .inl a, hnh, c, hb => by
+    simp only [lendOf] at hb
+    cases hb with
+    | inl h => simpa [Val.ids] using bare_lend_ids a (fun c' h' => hnh c' (Sub.inl h')) h
+  | .inr a, hnh, c, hb => by
+    simp only [lendOf] at hb
+    cases hb with
+    | inr h => simpa [Val.ids] using bare_lend_ids a (fun c' h' => hnh c' (Sub.inr h')) h
+  | .href c0, hnh, _, _ => absurd (Sub.refl _) (hnh c0)
+  | .int _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .view _ _ _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .pkg _ _ _ _ _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .arc _ _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .lk _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .cell _, _, _, hb => by simp only [lendOf] at hb; cases hb
+
+/-- **What is lent of a part no package holds** names, by its handles, only
+    nodes no package holds, each a part of it: lending replaces each node at
+    the top of the part, through fields and payloads only (never a package's
+    environment, which `lendOf` lends whole), by its handle. -/
+theorem lend_href_free {m : Mem} (hh : HeapOK m) : ∀ (e : Val), Home m e → PkgFreeAt m e →
+    (∀ c', ¬ Sub (.href c') e) → ∀ {c : Nat}, Bare (.href c) (lendOf e) →
+      PkgFreeId m c ∧ ∃ t d es, Sub (.node t c d es) e
+  | .node t c0 d es, hhome, hf, _, c, hb => by
+    have := Bare.href_eq (by simpa [lendOf] using hb); subst this
+    exact ⟨hf.toId hh hhome (by simp [Val.head]), t, d, es, Sub.refl _⟩
+  | .pair a b, hhome, hf, hnh, c, hb => by
+    simp only [lendOf] at hb
+    cases hb with
+    | fst h =>
+      have hna : ∀ c', ¬ Sub (.href c') a := fun c' h' => hnh c' (Sub.fst h')
+      obtain ⟨hfr, t, d, es, hs⟩ := lend_href_free hh a (home_child Child.fst hhome)
+        (hf.child' hh hhome (fun _ _ _ _ _ h => by cases h) Child.fst (bare_lend_ids a hna h)) hna h
+      exact ⟨hfr, t, d, es, Sub.fst hs⟩
+    | snd h =>
+      have hnb : ∀ c', ¬ Sub (.href c') b := fun c' h' => hnh c' (Sub.snd h')
+      obtain ⟨hfr, t, d, es, hs⟩ := lend_href_free hh b (home_child Child.snd hhome)
+        (hf.child' hh hhome (fun _ _ _ _ _ h => by cases h) Child.snd (bare_lend_ids b hnb h)) hnb h
+      exact ⟨hfr, t, d, es, Sub.snd hs⟩
+  | .inl a, hhome, hf, hnh, c, hb => by
+    simp only [lendOf] at hb
+    cases hb with
+    | inl h =>
+      have hna : ∀ c', ¬ Sub (.href c') a := fun c' h' => hnh c' (Sub.inl h')
+      obtain ⟨hfr, t, d, es, hs⟩ := lend_href_free hh a (home_child Child.inl hhome)
+        (hf.child' hh hhome (fun _ _ _ _ _ h => by cases h) Child.inl (bare_lend_ids a hna h)) hna h
+      exact ⟨hfr, t, d, es, Sub.inl hs⟩
+  | .inr a, hhome, hf, hnh, c, hb => by
+    simp only [lendOf] at hb
+    cases hb with
+    | inr h =>
+      have hna : ∀ c', ¬ Sub (.href c') a := fun c' h' => hnh c' (Sub.inr h')
+      obtain ⟨hfr, t, d, es, hs⟩ := lend_href_free hh a (home_child Child.inr hhome)
+        (hf.child' hh hhome (fun _ _ _ _ _ h => by cases h) Child.inr (bare_lend_ids a hna h)) hna h
+      exact ⟨hfr, t, d, es, Sub.inr hs⟩
+  | .href c0, _, _, hnh, _, _ => absurd (Sub.refl _) (hnh c0)
+  | .int _, _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .view _ _ _, _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .pkg _ _ _ _ _, _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .arc _ _, _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .lk _, _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .cell _, _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+
+/-- A view lent of a value is one it holds, through fields and payloads. -/
+theorem bare_lend_view : ∀ (e : Val) {d o l : Nat}, Bare (.view d o l) (lendOf e) → Sub (.view d o l) e
+  | .node _ _ _ _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .pair a b, _, _, _, hb => by
+    simp only [lendOf] at hb
+    cases hb with
+    | fst h => exact Sub.fst (bare_lend_view a h)
+    | snd h => exact Sub.snd (bare_lend_view b h)
+  | .inl a, _, _, _, hb => by
+    simp only [lendOf] at hb
+    cases hb with
+    | inl h => exact Sub.inl (bare_lend_view a h)
+  | .inr a, _, _, _, hb => by
+    simp only [lendOf] at hb
+    cases hb with
+    | inr h => exact Sub.inr (bare_lend_view a h)
+  | .view _ _ _, _, _, _, hb => by
+    simp only [lendOf] at hb; cases hb; exact Sub.refl _
+  | .href _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .int _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .pkg _ _ _ _ _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .arc _ _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .lk _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .cell _, _, _, _, hb => by simp only [lendOf] at hb; cases hb
+
+theorem bare_lend_node : ∀ (e : Val), (∀ c', ¬ Sub (.href c') e) → ∀ {c : Nat},
+    Bare (.href c) (lendOf e) → ∃ t d es, Sub (.node t c d es) e
+  | .node t c0 d es, _, c, hb => by
+    have := Bare.href_eq (by simpa [lendOf] using hb); subst this; exact ⟨t, d, es, Sub.refl _⟩
+  | .pair a b, hnh, c, hb => by
+    simp only [lendOf] at hb
+    cases hb with
+    | fst h =>
+      obtain ⟨t, d, es, hs⟩ := bare_lend_node a (fun c' h' => hnh c' (Sub.fst h')) h
+      exact ⟨t, d, es, Sub.fst hs⟩
+    | snd h =>
+      obtain ⟨t, d, es, hs⟩ := bare_lend_node b (fun c' h' => hnh c' (Sub.snd h')) h
+      exact ⟨t, d, es, Sub.snd hs⟩
+  | .inl a, hnh, c, hb => by
+    simp only [lendOf] at hb
+    cases hb with
+    | inl h =>
+      obtain ⟨t, d, es, hs⟩ := bare_lend_node a (fun c' h' => hnh c' (Sub.inl h')) h
+      exact ⟨t, d, es, Sub.inl hs⟩
+  | .inr a, hnh, c, hb => by
+    simp only [lendOf] at hb
+    cases hb with
+    | inr h =>
+      obtain ⟨t, d, es, hs⟩ := bare_lend_node a (fun c' h' => hnh c' (Sub.inr h')) h
+      exact ⟨t, d, es, Sub.inr hs⟩
+  | .href c0, hnh, _, _ => absurd (Sub.refl _) (hnh c0)
+  | .int _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .view _ _ _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .pkg _ _ _ _ _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .arc _ _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .lk _, _, _, hb => by simp only [lendOf] at hb; cases hb
+  | .cell _, _, _, hb => by simp only [lendOf] at hb; cases hb
+
+theorem lendOf_view {e : Val} {d o l : Nat} (h : lendOf e = .view d o l) : e = .view d o l := by
+  cases e <;> simp_all [lendOf]
+
+/-- **The projection lemma** (AGORA-901): what a borrow lent out of a part
+    `e` of an owned tree or a payload names, `e`'s own place and views say:
+    its handles' nodes are parts of `e` no package holds, given that none
+    holds `e` (`lend_href_free`); the views it holds or that those nodes store
+    are `e`'s. -/
+theorem lend_pkgNames {m : Mem} {Γ : Ctx} (hh : HeapOK m) {e : Val} (hhome : Home m e)
+    (hnh : ∀ c', ¬ Sub (.href c') e) {E' : Entry} (hm : E'.mode = .bor)
+    (hf : CleanDeps Γ E'.path → PkgFreeAt m e)
+    (hvw : CleanDeps Γ E'.held → ∀ i o l, Sub (.view i o l) e → PkgFreeId m i)
+    (hvtop : CleanDeps Γ E'.path → ∀ i o l, e = .view i o l → PkgFreeId m i)
+    {i : Nat} (hn : PkgNames m Γ E' (lendOf e) i) : PkgFreeId m i := by
+  rcases hn with ⟨_, hc, ⟨c, hb, hic⟩ | ⟨o, l, hv⟩⟩ | ⟨_, hc, o, l, hb⟩ |
+      ⟨_, hc, c, r, T, t, d, es, hb, hT, hs, o, l, hv⟩ | ⟨hos, _⟩
+  · subst hic; exact (lend_href_free hh e hhome (hf hc) hnh hb).1
+  · exact hvtop hc i o l (lendOf_view hv)
+  · exact hvw hc.right i o l (bare_lend_view e hb)
+  · obtain ⟨t', d', es', hse⟩ := bare_lend_node e hnh hb
+    rcases hhome with ⟨r0, T0, hT0, hs0⟩ | hp
+    · obtain ⟨_, heq⟩ := owned_unique hh hT hT0 hs (hse.trans hs0) (i := c) (by simp [Val.head])
+        (by simp [Val.head])
+      rw [heq] at hv
+      exact hvw hc i o l (hv.trans hse)
+    · exact (hh.notPay hT (hs.ids c (by simp [Val.ids])) ((hp.sub hse).payAddr hh c (by simp [Val.ids]))).elim
+  · rw [hm] at hos; cases hos
+
 end A2
