@@ -2325,13 +2325,18 @@ class FnCheck:
             # the function takes it over there, and its caller hands it over
             # - the engine's make_closure, agora #868, #887)
             taken = body is not None and i < len(body.params) and getattr(body.vars[body.params[i]], "taken", False)
+            moved_in = False
             if taken and op[0] == "v" and not op[2]:
                 okind = self.fn.vars[op[1]].kind
                 if (okind == "local" and av.own == "O") or (okind == "param" and av.own in ("O", "P")):
                     moved = self.move_out(st, op[1], line)
+                    # (consumed here, per capture: a later capture's move
+                    # would overwrite it. What the moved value held of its
+                    # own parts stays held, of a binding nothing changes now)
+                    self.moved_from = None
                     held.add((fp, self.loan(st, (site, i, "take"), (op[1], op[2]), "share")))
                     held |= hroot(moved.held, fp)
-                    continue
+                    moved_in = True
             if (body is not None
                     and any(x[4] == "held" and x[2] == i and x[0] < len(body.params)
                             and self.T.view_capable(body.vars[body.params[i]].ty)
@@ -2349,7 +2354,11 @@ class FnCheck:
                 # which the call follows, never into what it captured (§7.5)
                 self.err(line, "a closure hands back a view of what it captured")
             cty = self.ty_of_place((op[1], op[2])) if op[0] == "v" else None
-            if av.own in ("O", "P") and op[0] == "v" and cty is not None and cty[0] == "closure":
+            if moved_in:
+                # (moved into the env above: no handle of the binding; the
+                # checks above still ran, as the engine's do)
+                pass
+            elif av.own in ("O", "P") and op[0] == "v" and cty is not None and cty[0] == "closure":
                 # a captured closure is a copy of it: the new closure holds
                 # what that one holds, and no handle of where it sits
                 held |= hroot(av.held, fp)
