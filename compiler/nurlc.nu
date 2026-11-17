@@ -26939,6 +26939,24 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty dty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
         } {}
     } {}
+    // …and an owned slice: a call's by its answer (__slice_call_own_bit:
+    // always fresh, per run, or `` for a lend), a slice join's by its bit
+    // (g_slice_join_own). `( mk )` or `? c ( mk ) a` as a statement leaked
+    // the fresh slice (AGORA-903).
+    : b __dsj && == tt TT_QUEST != 0 ( nurl_str_len g_slice_join_own )
+    // (…or a slice literal, `[i | 1 2]` on its own: always fresh.)
+    : b __dsl && == tt TT_LBRACK != 0 ( nurl_sym_len syms `__last_slice_owned__` )
+    // (Asked as far as needed: most statements are no call, join or
+    // literal of a slice, and pay int tests only.)
+    ? && && && && || || __dcall __dsj __dsl != 0 g_auto_drop_strings != 0 ( nurl_str_len val ) && != 0 ( nurl_str_len dty ) == 123 ( nurl_str_get dty 0 ) ( __owned_slice_ty dty ) {
+        : s sro ? __dsl ( nurl_str_cat `true` `` ) ? __dsj ( nurl_str_cat g_slice_join_own `` ) ( __slice_call_own_bit syms cg )
+        ? != 0 ( nurl_str_len sro ) {
+            ( __handle_drop_ensure dty )
+            ( __dropifv_request dty )
+            ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle dty ) ) ( nurl_print `(i1 ` ) ( nurl_print sro )
+            ( nurl_print `, ` ) ( nurl_print ( nurl_llty dty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
+        } {}
+    } {}
     // …and one that cannot be copied (a `% Drop` value, a struct or enum
     // holding one): dropped exactly when the call handed it over (h231).
     ? & & & | __dcall __jt != 0 ( nurl_str_len val ) != 0 g_auto_drop_strings & ! ( __is_handle_ty dty ) ( __nc_drop_ty dty ) {
@@ -26953,9 +26971,12 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
     // A discarded `?T` / `!T E` a call handed over (`( vec_remove v 0 )`)
     // owns its payload as a binding of it would (__opt_payload): dropped
     // when the tag says it is there.
-    : s __dop ( __opt_payload dty )
-    : s __doe ( __opt_err_payload dty )
-    ? & & & | __dcall __jt != 0 ( nurl_str_len val ) != 0 g_auto_drop_strings | != 0 ( nurl_str_len __dop ) != 0 ( nurl_str_len __doe ) {
+    // (Asked only of a value a call or a join handed over: every other
+    // statement, a void call among them, pays int tests.)
+    : b __dq && && || __dcall __jt != 0 ( nurl_str_len val ) != 0 g_auto_drop_strings
+    : s __dop ? __dq ( __opt_payload dty ) ``
+    : s __doe ? __dq ( __opt_err_payload dty ) ``
+    ? & __dq | != 0 ( nurl_str_len __dop ) != 0 ( nurl_str_len __doe ) {
         : s ro ? __jt __jown ( mem_call_retown syms cg )
         ? != 0 ( nurl_str_len ro ) {
             : s tag ( nurl_cg_reg cg )
