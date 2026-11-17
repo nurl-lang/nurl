@@ -1,0 +1,3 @@
+### Fixed
+
+- **A literal handed back with a slice a call returns fresh on some runs and lent on others no longer leaks** (AGORA-890). An example is `^ @ Bag { ( pick a f ) 2 }`. Since AGORA-878 the literal copies the slice on the runs the call lent, but the function was still summarised as handing back `a`. The caller therefore bound the result as a borrow and never released it. The call's arguments are no longer counted as handed back where the literal copied, so the caller owns and releases the Bag. A join of such literals, an option literal and a literal with a second slice field work too. A fresh slice handed through a call that returns its parameter still leaks (AGORA-891).
