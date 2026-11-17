@@ -77,8 +77,14 @@ the LLVM / C11 memory model rather than redefining it.
   place down, then the truncation. On an empty Vec the truncation leaves
   it as it is, where nurlc's `vec_pop` answers `none`
   (`A2/PopWitness.lean`: typed and run safe and leak-free; its remove is
-  the three-element case unrolled, and a remove at a general index is a
-  loop of the same typed statements, which the witness does not type).
+  the three-element case unrolled). A remove of a number at a general
+  index is that loop (`while`, each round `t := b[j+1]`, `b[j] := t`,
+  `j := j + 1`, then the truncation): `A2/RemoveLoopWitness.lean` types
+  it through a `vec_at` borrow, for every index `i`, and runs it safe and
+  leak-free (AGORA-889). Both are witness programs, not a rule: the
+  loop's body is shown to keep its context where nothing but the borrow
+  depends on the owner (`LoopCtx`). Out of range the witness leaves the
+  Vec as it is, where nurlc's `vec_remove` panics.
   That nurlc's
   `vec_pop` / `vec_remove` lower to these steps is phase C. Outside the
   claim still:
@@ -86,7 +92,11 @@ the LLVM / C11 memory model rather than redefining it.
   - a pop or a remove through a borrow that moves an element which owns
     memory out to the caller (a `Vec` of Strings popped through a borrow,
     its result kept): the calculus moves an element out of an owner's
-    tree only from the owner itself (`Rhs.pop`, `Rhs.remove`);
+    tree only from the owner itself (`Rhs.pop`, `Rhs.remove`). Taking it
+    out through a borrow needs a new step, the reverse of `editSet` (a
+    subtree moved out of its node in place, through `NodeOf` / `Repl`, to
+    a fresh owned binding), typed as `editB`'s truncation is; open as
+    AGORA-889's rest;
   - what nurlc keeps beside such a change that the calculus ends: two
     parts of one value, copies of the changing borrow, a whole copy beside
     a field viewer (Agora #118, github#1426);
