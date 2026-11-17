@@ -2784,6 +2784,18 @@ unsafe @ __fn_io_add s name → v { = g_fn_io_names ( nurl_str_cat3 g_fn_io_name
 // written and read for a join only.
 : ~ i g_arg_join_set 0
 
+// A slice `?` join's ownership bit, for the call it is handed to straight
+// (mem_arg_temps) and for an outer join it is an arm of: `true`, the phi
+// of its arms' bits, or `` (AGORA-893). A global, not a symbol: the
+// table's hot keys pay for every name it holds.
+: ~ s g_slice_join_own ``
+
+// …and that bit for the argument being collected, a `?` join's: set
+// where its value is generated, read where its temporary is set up
+// (`__argtmp_joinown__`); every other argument clears the flag.
+: ~ i g_arg_slc_set 0
+: ~ s g_arg_slc_join ``
+
 // Set by a call's temporary given an owner of its own (h233, h330) just
 // before registering it: its journal registration is made once the value
 // and its flag are in place (mem_journal_push_tmpown), not by the
@@ -34726,7 +34738,6 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // (…and whether a `?` / `??` join made as it owns what it yields,
         // before mem_lent_cond takes the bit: mem_arg_temps.)
         : ~ s arg_join_own ``
-        : ~ s arg_slc_join ``
         : ~ b arg_join_io F
         // (…the one `inout` parameter of a handle type those paths select,
         // whose slot is emptied on them: __join_io_handle, agora #776.)
@@ -34957,7 +34968,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             = arg_eff_tt ( __val_eff_tt bck_arg_tt )
             = arg_join_own ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_join_own__` ) ``
             // (…and a slice join's, its own channel: AGORA-893.)
-            = arg_slc_join ? == bck_arg_tt TT_QUEST ( nurl_sym_get syms `__last_slice_join_own__` ) ``
+            ? == bck_arg_tt TT_QUEST { = g_arg_slc_join ( nurl_str_cat g_slice_join_own `` ) = g_arg_slc_set 1 } { = g_arg_slc_set 0 }
             = arg_join_ids ? & == 0 ( nurl_str_len arg_join_own ) | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_phi_idents__` ) ``
             // (The bindings the join may select are all whole `inout`
             // parameters: what it hands a `sink` on those paths is taken
@@ -37252,8 +37263,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // whether the result is it (mem_arg_temps).
         ? != 0 ( nurl_str_len arg_lit_own ) { ( nurl_sym_def syms `__argtmp_litown__` arg_lit_own ) = g_arg_litown_set 1 } {}
         // (Only a join's: every other argument pays one int test for it.)
-        ? != 0 ( nurl_str_len arg_join_own ) { ( nurl_sym_def syms `__argtmp_joinown__` arg_join_own ) = g_arg_join_set 1 } {
-            ? != 0 ( nurl_str_len arg_slc_join ) { ( nurl_sym_def syms `__argtmp_joinown__` arg_slc_join ) = g_arg_join_set 1 } {}
+        ? != 0 ( nurl_str_len arg_join_own ) { ( nurl_sym_def syms `__argtmp_joinown__` arg_join_own ) = g_arg_join_set 1 = g_arg_slc_set 0 } {
+            ? != 0 g_arg_slc_set { ? != 0 ( nurl_str_len g_arg_slc_join ) { ( nurl_sym_def syms `__argtmp_joinown__` g_arg_slc_join ) = g_arg_join_set 1 } {} = g_arg_slc_set 0 } {}
         }
         // (A value block that ends in a call is that call's result, for what
         // it leaves the caller to drop: `( string_len { : String s … (
@@ -39412,11 +39423,12 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // arm drops the temporary it made, and an assignment's value stays
     // the assigned binding's (mem_clo_arm_discard).
     ? ( __is_closure_ty tt2 ) { ? c_valu { = tv ( mem_clo_into_owner syms cg tt2 tv t_tt0 ) } { ( mem_clo_arm_discard syms cg tt2 tv t_tt0 ) } } {}
-    : s t_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
+    // (Whether the arm's value is a fresh slice: a length test, no copy.)
+    : b t_slice_lit != 0 ( nurl_sym_len syms `__last_slice_owned__` )
     // (…or a call's slice, by its answer: AGORA-893.)
     // (Asked only of a literal's, a call's or a join's arm: every other
     // arm pays two int tests.)
-    : s t_slice_bit ? || != 0 ( nurl_str_len t_slice_flag ) || == t_tt0 TT_LPAREN == t_tt0 TT_QUEST ( __arm_slice_bit syms cg t_tt0 tt2 t_slice_flag ) ``
+    : s t_slice_bit ? t_slice_lit `true` ? || == t_tt0 TT_LPAREN == t_tt0 TT_QUEST ( __arm_slice_bit syms cg t_tt0 tt2 ) ``
     : s t_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b t_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s t_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
@@ -39702,8 +39714,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : s et2 ( nurl_get_last_type )
     : s e_cm ? & != 0 g_borrowck ( __is_closure_ty et2 ) ( __clo_val_members syms e_tt0 e_v0 ) ``
     ? ( __is_closure_ty et2 ) { ? c_valu { = ev ( mem_clo_into_owner syms cg et2 ev e_tt0 ) } { ( mem_clo_arm_discard syms cg et2 ev e_tt0 ) } } {}
-    : s e_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
-    : s e_slice_bit ? || != 0 ( nurl_str_len e_slice_flag ) || == e_tt0 TT_LPAREN == e_tt0 TT_QUEST ( __arm_slice_bit syms cg e_tt0 et2 e_slice_flag ) ``
+    : b e_slice_lit != 0 ( nurl_sym_len syms `__last_slice_owned__` )
+    : s e_slice_bit ? e_slice_lit `true` ? || == e_tt0 TT_LPAREN == e_tt0 TT_QUEST ( __arm_slice_bit syms cg e_tt0 et2 ) ``
     : s e_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b e_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
@@ -40181,8 +40193,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // since `__last_join_own__` also steers a join's lends, AGORA-893.)
     // (Written for a slice join, or to clear a slice join's bit no later
     // join may take for its own; every other join pays one length test.)
-    ? || | __slice_res __slice_mix != 0 ( nurl_sym_len syms `__last_slice_join_own__` ) {
-        ( nurl_sym_def syms `__last_slice_join_own__` ? __slice_res ( nurl_str_cat `true` `` ) ? __slice_mix ( nurl_sym_get syms `__last_slice_own_bit__` ) `` )
+    ? || | __slice_res __slice_mix != 0 ( nurl_str_len g_slice_join_own ) {
+        = g_slice_join_own ? __slice_res ( nurl_str_cat `true` `` ) ? __slice_mix ( nurl_sym_get syms `__last_slice_own_bit__` ) ``
     } {}
     // The join's phis are all printed: an aggregate's value is read from
     // its slot (__ll_is_agg).
@@ -45161,18 +45173,17 @@ unsafe @ __slice_len_comma s t → b {
     ^ ( __slice_call_run_bit syms cg )
 }
 
-// A `?` arm's slice: a literal's (`1`, owned), or a call's by its answer
+// A `?` arm's slice (a literal's is `true` at the arm, owned): a call's by its answer
 // (__slice_call_own_bit): `true`, a per-run bit, or `` for one that is
 // never the caller's. Read at the arm's end, in its block, before its
 // branch to the join (AGORA-893: a call arm counted as a borrow, its
 // fresh slice leaked).
-@ __arm_slice_bit i syms i cg i tt0 s ty s flag → s {
-    ? != 0 ( nurl_str_len flag ) { ^ ( nurl_str_cat `true` `` ) } {}
+@ __arm_slice_bit i syms i cg i tt0 s ty → s {
     // (Asked as far as needed: most arms are no call and no join.)
     ? || || != 0 g_did_ret && != tt0 TT_LPAREN != tt0 TT_QUEST ! ( mem_is_slice_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
     // (…an arm that is itself a slice join, `? c ? d ( mk ) a b`: its own
     // bit, published as it ended, in this arm's block.)
-    ? == tt0 TT_QUEST { ^ ( nurl_str_cat ( nurl_sym_get syms `__last_slice_join_own__` ) `` ) } {}
+    ? == tt0 TT_QUEST { ^ ( nurl_str_cat g_slice_join_own `` ) } {}
     ^ ( __slice_call_own_bit syms cg )
 }
 
