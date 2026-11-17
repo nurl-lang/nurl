@@ -1,4 +1,5 @@
-// map: §7.4 | A2 | rejected | - | AGORA-882: a closure gives capture o a lend of capture other; other replaced after the call, o read
+// map: §7.4 | A2 | runs-clean | - | AGORA-882: a closure gives capture o a lend of capture other; other replaced after the call, o read - closed by AGORA-904: the capture is given its own copy
+// AGORA-882, closed by AGORA-904: the by-pointer capture is given its own copy of what the call lends (the caller's frame cannot follow a lend of another capture); main 05206020: heap-use-after-free
 // main 525613db: faults under ASan (found by AGORA-873's finders).
 $ `stdlib/core/string.nu`
 
