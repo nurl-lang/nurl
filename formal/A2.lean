@@ -37,6 +37,7 @@ import A2.Settle
 import A2.DynCell
 import A2.TakeWitness
 import A2.PopWitness
+import A2.RemoveLoopWitness
 import A2.HandOver
 import A2.ExitWitness
 import A2.Layout

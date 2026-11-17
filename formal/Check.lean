@@ -324,6 +324,10 @@ import A3
 -- index (`Expr.dec`) and element sets (A2/PopWitness.lean)
 #print axioms A2.PopWitness.main_safe
 #print axioms A2.PopWitness.main_no_leak
+-- AGORA-889: a remove of a number at a general index through a borrow, as a loop
+-- (A2/RemoveLoopWitness.lean)
+#print axioms A2.RemoveLoop.main_safe
+#print axioms A2.RemoveLoop.main_no_leak
 -- AGORA-885: the by-name owner hand-over, as an encoding (A2/HandOver.lean)
 #print axioms A2.HandOver.main_safe
 #print axioms A2.HandOver.main_no_leak

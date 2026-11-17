@@ -212,6 +212,11 @@ const MODULE_LAYERS = {
     category: 'Worked Examples',
     summaryEn: 'AGORA-888: a pop and a remove through a borrow, read as a truncation to the last index (Expr.dec), the number read before it, and element sets one place down; through a vec_at borrow of a Vec of Vecs and through a cursor, with memory_safe and no_leak_end applied (main_safe, main_no_leak).',
   },
+  RemoveLoopWitness: {
+    layer: 5,
+    category: 'Worked Examples',
+    summaryEn: 'AGORA-889: vec_remove of a number at a general index through a vec_at borrow, as a while loop of element sets one place down and the truncation, typed for every index (step_typed: the loop body keeps its context), with memory_safe and no_leak_end applied (main_safe, main_no_leak).',
+  },
   TakeWitness: {
     layer: 5,
     category: 'Worked Examples',
