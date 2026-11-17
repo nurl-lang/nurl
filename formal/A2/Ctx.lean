@@ -222,10 +222,10 @@ theorem ArmOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E'
 
 /-- A clean root stays one in a weaker context's place: modes are kept and
     a borrowed parameter's entry is fixed. -/
-theorem Clean.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {r : Var} (h : Clean Γ' r) : Clean Γ r :=
-  h.mono fun _ _ hv => by
+theorem CleanLe.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') : CleanLe Γ' Γ :=
+  CleanLe.of_entries fun _ _ hv => by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
-    exact ⟨E, hE, hwe.mode, fun hm => by rw [hwe.fixed (Or.inl hm)]⟩
+    exact ⟨E, hE, hwe.mode, fun hm => by rw [hwe.fixed (Or.inl hm)]; exact ⟨rfl, rfl⟩⟩
 
 theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ') : MInv m Γ' where
   dom v := by rw [← hw.isSome v]; exact hi.dom v
@@ -262,7 +262,7 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
   blocks := hi.blocks
   pkgFree x E' o v hx hl hs i hn := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hx
-    have hn' := hn.mono (fun r h => h.weaker hw)
+    have hn' := hn.mono (CleanLe.weaker hw)
     rcases hl with hl | ⟨hdb, hos⟩
     · obtain ⟨hl0, hp, hh⟩ := hwe.live hl
       refine hi.pkgFree x E o v hE (Or.inl hl0) hs i ?_

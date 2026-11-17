@@ -593,9 +593,9 @@ theorem MInv.clean {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : MInv m (cleanC Γ) wh
     -- AGORA-901: cleaning keeps modes and borrowed parameters' paths, and
     -- what a live or armed binding names
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
-    have hcl : ∀ r, Clean (cleanC Γ) r → Clean Γ r := fun r h => h.mono fun y E' hy => by
+    have hcl : CleanLe (cleanC Γ) Γ := CleanLe.of_entries fun y E' hy => by
       obtain ⟨E1, h1, rfl⟩ := cleanC_some hy
-      exact ⟨E1, h1, clean_mode E1, fun hm => by rw [clean_rootb hm]⟩
+      exact ⟨E1, h1, clean_mode E1, fun hm => by rw [clean_rootb hm]; exact ⟨rfl, rfl⟩⟩
     obtain ⟨sl', hsl', _, _, hown, hbor⟩ := hi.slot v E0 h0
     rw [hsl] at hsl'; cases hsl'
     cases hos : E0.mode.ownSlot
@@ -2173,8 +2173,8 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
     intro i hn
     exfalso
     have hshP : ∀ dep ∈ (envE0 c Ec te cs).path ++ (envE0 c Ec te cs).held, dep.kind.isName = false →
-        ¬ CleanDeps Γ (envE c Ec te cs).path := by
-      intro dep hd hnm hc
+        RootMem m dep.root → ¬ CleanDeps Γ (envE c Ec te cs).path := by
+      intro dep hd hnm hrm hc
       have hd' : dep ∈ derive c Ec .self ++ Ec.held := by
         rcases List.mem_append.mp hd with hd | hd
         · exact envDeps_sub _ _ hd
@@ -2182,24 +2182,24 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       have hm : (⟨dep.root, .share⟩ : Dep) ∈ (envE c Ec te cs).path :=
         mem_envDeps.mpr ⟨List.mem_append_right _ (mem_shareOf.mpr ⟨rfl, dep,
           List.mem_filter.mpr ⟨hd', by simp [hnm]⟩, rfl⟩), by simp [ownWriter, Kind.bound]⟩
-      exact (hc _ (List.mem_filter.mpr ⟨hm, rfl⟩)).1 rfl
+      exact (hc _ (List.mem_filter.mpr ⟨hm, rfl⟩)).1.elim (fun hk => hk rfl) fun hh => hh.noMem hi.toMInv hrm
     have hshH : ∀ dep ∈ (envE0 c Ec te cs).held, dep.kind.isName = false →
-        ¬ CleanDeps Γ (envE c Ec te cs).held := by
-      intro dep hd hnm hc
+        RootMem m dep.root → ¬ CleanDeps Γ (envE c Ec te cs).held := by
+      intro dep hd hnm hrm hc
       have hm : (⟨dep.root, .share⟩ : Dep) ∈ (envE c Ec te cs).held :=
         mem_envDeps.mpr ⟨List.mem_append_right _ (mem_shareOf.mpr ⟨rfl, dep,
           List.mem_filter.mpr ⟨envDeps_sub _ _ hd, by simp [hnm]⟩, rfl⟩), by simp [ownWriter, Kind.bound]⟩
-      exact (hc _ (List.mem_filter.mpr ⟨hm, rfl⟩)).1 rfl
+      exact (hc _ (List.mem_filter.mpr ⟨hm, rfl⟩)).1.elim (fun hk => hk rfl) fun hh => hh.noMem hi.toMInv hrm
     rcases hn with ⟨_, hc, ⟨c', hb, _⟩ | ⟨o, l, hv⟩⟩ | ⟨_, hc, o, l, hb⟩ |
         ⟨_, hc, c', r, T, t, d, es, hb, hT, hs, o, l, hv⟩ | ⟨h, _⟩
     · obtain ⟨dep, hd, _, _, _, hl, _⟩ := hval00.bare_href_held c' hb
-      exact hshP dep hd hl.notName hc
+      exact hshP dep hd hl.notName hl.rootMem hc
     · obtain ⟨dep, hd, _, _, _, _, hl, _⟩ := hval00.bare_view_in i o l (by rw [hv]; exact Bare.refl _)
-      exact hshP dep hd hl.notName hc
+      exact hshP dep hd hl.notName hl.rootMem hc
     · obtain ⟨dep, hd, _, _, _, _, hl, _⟩ := hval00.bare_view_in i o l hb
-      exact hshP dep hd hl.notName hc.left
-    · obtain ⟨dep, hd, hnm⟩ := hval00.named_view_held hi.heap hb hT hs hv
-      exact hshH dep hd hnm hc
+      exact hshP dep hd hl.notName hl.rootMem hc.left
+    · obtain ⟨dep, hd, hnm, hrm⟩ := hval00.named_view_held hi.heap hb hT hs hv
+      exact hshH dep hd hnm hrm hc
     · cases h
   have hie : MInv (envMem m env) (setE Γ m.nv (envE c Ec te cs)) :=
     hin.addRootb hΓe0 (Nat.lt_succ_self _) rfl rfl hteok hval hEw

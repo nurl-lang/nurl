@@ -299,7 +299,7 @@ theorem MInv.kill_pin {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanc
   pkgFree y Ey' o v hy hl hs i hn := by
     simp only [A2.kill] at hy
     obtain ⟨Ey, hEy, rfl⟩ := Option.map_eq_some_iff.mp hy
-    exact hi.pkgFree y Ey o v hEy hl.of_killE hs i (hn.of_killE.mono fun _ h => Clean.of_kill hanch hrF hmn h)
+    exact hi.pkgFree y Ey o v hEy hl.of_killE hs i (hn.of_killE.mono (Clean.of_kill hanch hrF hmn))
 
 /-- ... which an effect below `replace` never ends. -/
 theorem MInv.kill_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
@@ -426,12 +426,12 @@ theorem MInv.reset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex E0 : Entr
     · simp only [A2.setE, upd_ne _ _ hvx] at h; exact hi.shares v E' sl T h hsl hown hT
   blocks := hi.blocks
   pkgFree y Ey o v hy hl hs i hn := by
-    have hcl : ∀ r, Clean (A2.setE Γ x Ex) r → Clean Γ r := fun r h => h.mono fun v E' hv => by
+    have hcl : CleanLe (A2.setE Γ x Ex) Γ := CleanLe.of_entries fun v E' hv => by
       by_cases hvx : v = x
       · subst hvx
         simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv
         exact ⟨E0, hx, hm0.symm, fun h => by rw [hm0, hmx] at h; cases h⟩
-      · rw [A2.setE, upd_ne _ _ hvx] at hv; exact ⟨E', hv, rfl, fun _ => rfl⟩
+      · rw [A2.setE, upd_ne _ _ hvx] at hv; exact ⟨E', hv, rfl, fun _ => ⟨rfl, rfl⟩⟩
     by_cases hyx : y = x
     · subst hyx
       simp only [A2.setE, upd_same, Option.some.injEq] at hy; subst hy
@@ -467,7 +467,8 @@ theorem MInv.editB_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) (
     (by rcases hE'c with rfl | rfl <;> rfl) (by rcases hE'c with rfl | rfl <;> rfl)
     (by rcases hE'c with rfl | rfl <;> rfl) hmx hxs (by rw [hty]; exact .href ⟨dep, (List.mem_filter.mp hdep).1, hhref⟩) (fun hn' r hr => ?_)
     (fun _ hn' => ?_) (fun c' hc' => by simp [Val.names] at hc')
-    (fun i hn' => hpf i (hn'.mono fun _ h => h.of_same fun v E' hv => killNames_back _ hv))
+    (fun i hn' => hpf i (hn'.mono (Clean.of_same fun v E' hv => by
+      obtain ⟨E, hE, hm, hp, hh⟩ := killNames_back _ hv; exact ⟨E, hE, hm, hp, fun _ => hh⟩)))
   · obtain ⟨Er, hEr, hro⟩ := hw x Ex hx hl hn' r hr
     obtain ⟨Er', hEr', hEr'c⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex.path) hEr
     exact ⟨Er', hEr', by rcases hEr'c with rfl | rfl <;> exact hro⟩
@@ -1755,7 +1756,7 @@ theorem MInv.thru_free {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {x :
     PkgFreeId m c := by
   refine hi.pkgFree x Ex false _ hx (Or.inl hl) hxs c (PkgNames.href (Or.inl hmx) (fun d hd => ?_) c)
   obtain ⟨_, _, Er, hEr, _, hcan, _, hns⟩ := hthru d hd
-  exact ⟨hns, .own hEr hcan.ownSlot⟩
+  exact ⟨.of_kind hns, .own hEr hcan.ownSlot⟩
 
 /-- AGORA-901: an address of memory no package held stays so when one node of
     an owner's tree is rewritten, no package having held it, with old or

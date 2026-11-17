@@ -1048,7 +1048,7 @@ theorem out_pair {m1 m2 : Mem} {Γ1 Γ2 : Ctx} {F : List Var} (hi1 : MInv m1 Γ1
     · cases h
     · cases hce with
       | fst =>
-        have h1 := pu1.pf (hc.left.mono fun _ h => post2.clean h) i o l hse
+        have h1 := pu1.pf (hc.left.mono post2.clean) i o l hse
         intro r T hT fs te ms ev cs hP
         have hT1 : m1.st r = some ⟨true, some T⟩ := by
           rcases hcase with ⟨_, _, _, rfl⟩ | ⟨_, rfl⟩

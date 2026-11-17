@@ -372,11 +372,12 @@ structure RhsPost (m m1 : Mem) (Γ Γ1 : Ctx) (F : List Var) : Prop where
 
 /-- AGORA-901: a right-hand side keeps the clean roots: modes are kept, and
     borrowed parameters stay as they were. -/
-theorem RhsPost.clean {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (post : RhsPost m m1 Γ Γ1 F) {r : Var}
-    (h : Clean Γ1 r) : Clean Γ r :=
-  h.mono fun v E' hv => by
+theorem RhsPost.clean {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (post : RhsPost m m1 Γ Γ1 F) :
+    CleanLe Γ1 Γ :=
+  CleanLe.of_entries fun v E' hv => by
     obtain ⟨E0, h0, hm, _⟩ := post.cmode v E' hv
-    exact ⟨E0, h0, hm, fun hrb => by have := post.rootb v E0 h0 hrb; rw [hv] at this; cases this; rfl⟩
+    exact ⟨E0, h0, hm, fun hrb => by
+      have := post.rootb v E0 h0 hrb; rw [hv] at this; cases this; exact ⟨rfl, rfl⟩⟩
 
 /-- AGORA-901: **a right-hand side's value, put in a slot**, names only what
     no package holds: what it named before, of addresses its fresh tree does
@@ -2463,9 +2464,9 @@ theorem move_pkgFree {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch
   intro i hn
   have hrb : E.mode ≠ .rootb := fun h => by rw [h] at hos; cases hos
   obtain ⟨hc, o, l, hs⟩ := hn.own rfl
-  have hc0 : CleanDeps Γ E.held := hc.mono fun r h =>
-    Clean.of_change (e := .replace) (hv := false) (ox := some { E with live := false, dtor := false })
-      hanch hy hyF (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb) hrb (fun E' h => by cases h; rfl) h
+  have hc0 : CleanDeps Γ E.held := hc.mono
+    (Clean.of_change (e := .replace) (hv := false) (ox := some { E with live := false, dtor := false })
+      hanch hy hyF (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb) hrb (fun E' h => by cases h; rfl))
   have h0 := hi.pkgFree y E true v hy (Or.inl hl) hT i (Or.inr (Or.inr (Or.inr ⟨hos, hc0, o, l, hs⟩)))
   exact h0.frame (x := y) (fun o ho => by simp [upd_ne _ _ ho]) (fun T' hT' => by simp at hT')
 
@@ -2948,7 +2949,7 @@ theorem idsL_sub_append (es : List Val) (e : Val) : List.Sublist (idsL es) (idsL
 theorem out_views_pkgFree {m m1 : Mem} {Γ Γ1 : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {T : Val}
     (hy : Γ y = some E) (hl : E.live = true) (hos : E.mode.ownSlot = true)
     (hT : m.st y = some ⟨true, some T⟩) {e : Val} (hse : Sub e T) (hwe : ∀ c, ¬ Sub (.href c) e)
-    (hcl : ∀ r, Clean Γ1 r → Clean Γ r) (hfr : ∀ i, PkgFreeId m i → PkgFreeId m1 i)
+    (hcl : CleanLe Γ1 Γ) (hfr : ∀ i, PkgFreeId m i → PkgFreeId m1 i)
     {E' : Entry} (hp : E'.mode.ownSlot = true ∨ E'.path = E'.held) (hh : E'.held = E.held) :
     ∀ i, PkgNames m1 Γ1 E' e i → PkgFreeId m1 i := by
   intro i hn
@@ -3148,7 +3149,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         ∀ i, PkgNames (m.set y ⟨true, some (.node t' c d es)⟩) (kill .drop t'.holdsView y Γ) E' e i →
           PkgFreeId (m.set y ⟨true, some (.node t' c d es)⟩) i :=
       fun E' hp hh => out_views_pkgFree hi hy hl hos hT (Sub.child hemem (Sub.refl _)) (fun _ => hwe.noHref)
-        (fun r h => Clean.of_kill hanch hyF popMn h)
+        (Clean.of_kill hanch hyF popMn)
         (fun i h => h.frame (x := y) (fun o ho => by simp [upd_ne _ _ ho]) fun T' hT' fs te ms ev cs hP => by
           simp at hT'; subst hT'
           refine ⟨_, hT, ?_⟩

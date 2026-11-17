@@ -399,8 +399,8 @@ theorem Clean.of_change {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : 
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
       e.kills hv d.kind = true → d.root ≠ x)
     (hxr : Ex.mode ≠ .rootb) {ox : Option Entry} (hox : ∀ E', ox = some E' → E'.mode = Ex.mode)
-    {r : Var} (h : Clean (upd (kill e hv x Γ) x ox) r) : Clean Γ r :=
-  h.mono fun v E' hv' => by
+    : CleanLe (upd (kill e hv x Γ) x ox) Γ :=
+  CleanLe.of_entries fun v E' hv' => by
     by_cases hvx : v = x
     · subst hvx
       simp only [upd_same] at hv'
@@ -411,7 +411,7 @@ theorem Clean.of_change {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : 
       | none => rw [hE] at hv'; cases hv'
       | some E =>
         rw [hE] at hv'; cases hv'
-        exact ⟨E, rfl, killE_mode .., fun _ => killE_path ..⟩
+        exact ⟨E, rfl, killE_mode .., fun _ => ⟨killE_path .., killE_held ..⟩⟩
 
 /-- AGORA-901: a kill keeps the clean roots: modes are kept, and a borrowed
     parameter it ends none of. -/
@@ -419,38 +419,38 @@ theorem Clean.of_kill {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : Va
     {e : Eff} {hv : Bool}
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
       e.kills hv d.kind = true → d.root ≠ x)
-    {r : Var} (h : Clean (kill e hv x Γ) r) : Clean Γ r :=
-  h.mono fun v E' hv' => by
+    : CleanLe (kill e hv x Γ) Γ :=
+  CleanLe.of_entries fun v E' hv' => by
     unfold kill at hv'
     cases hE : Γ v with
     | none => rw [hE] at hv'; cases hv'
     | some E =>
       rw [hE] at hv'; cases hv'
-      exact ⟨E, rfl, killE_mode .., fun _ => killE_path ..⟩
+      exact ⟨E, rfl, killE_mode .., fun _ => ⟨killE_path .., killE_held ..⟩⟩
 
 /-- AGORA-901: the clean roots of a context whose entries keep their modes
     and paths (a kill, a weakening of what is held) are the other's. -/
 theorem Clean.of_same {Γ Γ' : Ctx}
-    (h : ∀ v E', Γ' v = some E' → ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ E'.path = E.path)
-    {r : Var} (hc : Clean Γ' r) : Clean Γ r :=
-  hc.mono fun v E' hv => by
-    obtain ⟨E, hE, hm, hp⟩ := h v E' hv
-    exact ⟨E, hE, hm, fun _ => hp⟩
+    (h : ∀ v E', Γ' v = some E' → ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ E'.path = E.path ∧
+      (E.mode = .rootb → E'.held = E.held)) : CleanLe Γ' Γ :=
+  CleanLe.of_entries fun v E' hv => by
+    obtain ⟨E, hE, hm, hp, hh⟩ := h v E' hv
+    exact ⟨E, hE, hm, fun hr => ⟨hp, hh hr⟩⟩
 
 theorem kill_back {Γ : Ctx} {e : Eff} {hv : Bool} {x v : Var} {E' : Entry} (h : kill e hv x Γ v = some E') :
-    ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ E'.path = E.path := by
+    ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ E'.path = E.path ∧ E'.held = E.held := by
   unfold kill at h
   cases hE : Γ v with
   | none => rw [hE] at h; cases h
-  | some E => rw [hE] at h; cases h; exact ⟨E, rfl, killE_mode .., killE_path ..⟩
+  | some E => rw [hE] at h; cases h; exact ⟨E, rfl, killE_mode .., killE_path .., killE_held ..⟩
 
 theorem killNames_back {Γ : Ctx} : ∀ (ds : List Dep) {v : Var} {E' : Entry}, killNames ds Γ v = some E' →
-    ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ E'.path = E.path
-  | [], _, E', h => ⟨E', h, rfl, rfl⟩
+    ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ E'.path = E.path ∧ E'.held = E.held
+  | [], _, E', h => ⟨E', h, rfl, rfl, rfl⟩
   | d :: ds, v, E', h => by
-    obtain ⟨E1, h1, hm1, hp1⟩ := kill_back (Γ := killNames ds Γ) h
-    obtain ⟨E, h0, hm0, hp0⟩ := killNames_back ds h1
-    exact ⟨E, h0, hm1.trans hm0, hp1.trans hp0⟩
+    obtain ⟨E1, h1, hm1, hp1, hh1⟩ := kill_back (Γ := killNames ds Γ) h
+    obtain ⟨E, h0, hm0, hp0, hh0⟩ := killNames_back ds h1
+    exact ⟨E, h0, hm1.trans hm0, hp1.trans hp0, hh1.trans hh0⟩
 
 /-- A node whose elements are among another's: what lies strictly below it
     lies below that one. -/
@@ -815,14 +815,14 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hblk⟩, h4⟩
   · -- AGORA-901: the borrows the change leaves name nodes no package holds
-    have hcl : ∀ r, Clean (upd (kill e hv x Γ) x ox) r → Clean Γ r := fun r h => h.mono fun v E' hv' => by
+    have hcl : CleanLe (upd (kill e hv x Γ) x ox) Γ := CleanLe.of_entries fun v E' hv' => by
       by_cases hvx : v = x
       · subst hvx
         have := getX E' hv'; subst this
         obtain ⟨_, _, _, _, hm, _⟩ := hox
         exact ⟨Ex, hx, hm, fun h => absurd h hxr⟩
       · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
-        exact ⟨E, hE, killE_mode .., fun _ => killE_path ..⟩
+        exact ⟨E, hE, killE_mode .., fun _ => ⟨killE_path .., killE_held ..⟩⟩
     intro y Ey' o v hy hl hs i hn
     have hn0 : PkgNames m' Γ Ey' v i := hn.mono hcl
     by_cases hyx : y = x
@@ -836,9 +836,24 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
 
 /-- A clean root of a context with one binding more is that binding, or one
     the context had: what a borrowed parameter depends on is bound. -/
+theorem Hollow.of_setE {Γ : Ctx} {x : Var} {E : Entry} (hx : Γ x = none)
+    (hwf : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps (Ep.path ++ Ep.held), (Γ d.root).isSome)
+    {r : Var} (h : Hollow (setE Γ x E) r) : r = x ∨ Hollow Γ r := by
+  induction h with
+  | @rootb p Ep hp hm _ ih =>
+    by_cases hpx : p = x
+    · exact Or.inl hpx
+    · rw [setE, upd_ne _ _ hpx] at hp
+      refine Or.inr (.rootb hp hm fun d hd => (ih d hd).resolve_left fun h => ?_)
+      have := hwf p Ep hp hm d hd
+      rw [h, hx] at this; cases this
+
 theorem Clean.of_setE {Γ : Ctx} {x : Var} {E : Entry} (hx : Γ x = none)
-    (hwf : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps Ep.path, (Γ d.root).isSome)
+    (hwf : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps (Ep.path ++ Ep.held), (Γ d.root).isSome)
     {r : Var} (h : Clean (setE Γ x E) r) : r = x ∨ Clean Γ r := by
+  have hpb : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps Ep.path, (Γ d.root).isSome :=
+    fun p Ep hp hm d hd => hwf p Ep hp hm d (List.mem_filter.mpr
+      ⟨List.mem_append_left _ (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩)
   induction h with
   | @own r' Er hr ho =>
     by_cases hrx : r' = x
@@ -848,24 +863,31 @@ theorem Clean.of_setE {Γ : Ctx} {x : Var} {E : Entry} (hx : Γ x = none)
     by_cases hpx : p = x
     · exact Or.inl hpx
     · rw [setE, upd_ne _ _ hpx] at hp
-      refine Or.inr (.rootb hp hm hns fun d hd => (ih d hd).resolve_left fun h => ?_)
-      have := hwf p Ep hp hm d hd
-      rw [h, hx] at this; cases this
+      have hne : ∀ d ∈ memDeps Ep.path, d.root ≠ x := fun d hd h => by
+        have := hpb p Ep hp hm d hd
+        rw [h, hx] at this; cases this
+      refine Or.inr (.rootb hp hm (fun d hd => (hns d hd).imp id fun hh =>
+        (hh.of_setE hx hwf).resolve_left (hne d hd)) fun d hd => (ih d hd).resolve_left (hne d hd))
+
+theorem ShareOK.of_setE {Γ : Ctx} {x : Var} {E : Entry} (hx : Γ x = none)
+    (hwf : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps (Ep.path ++ Ep.held), (Γ d.root).isSome)
+    {d : Dep} (hb : (Γ d.root).isSome) (h : ShareOK (setE Γ x E) d) : ShareOK Γ d :=
+  h.imp id fun hh => (hh.of_setE hx hwf).resolve_left fun hr => by rw [hr, hx] at hb; cases hb
 
 theorem CleanDeps.of_setE {Γ : Ctx} {x : Var} {E : Entry} (hx : Γ x = none)
-    (hwf : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps Ep.path, (Γ d.root).isSome)
+    (hwf : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps (Ep.path ++ Ep.held), (Γ d.root).isSome)
     {D : List Dep} (hb : ∀ d ∈ memDeps D, (Γ d.root).isSome) (h : CleanDeps (setE Γ x E) D) :
     CleanDeps Γ D := fun d hd => by
-  refine ⟨(h d hd).1, ((h d hd).2.of_setE hx hwf).resolve_left fun hr => ?_⟩
+  refine ⟨(h d hd).1.of_setE hx hwf (hb d hd), ((h d hd).2.of_setE hx hwf).resolve_left fun hr => ?_⟩
   have := hb d hd; rw [hr, hx] at this; cases this
 
 /-- What a borrowed parameter depends on is bound. -/
 theorem MInv.rootb_bound {m : Mem} {Γ : Ctx} (hi : MInv m Γ) :
-    ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps Ep.path, (Γ d.root).isSome := by
+    ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps (Ep.path ++ Ep.held), (Γ d.root).isSome := by
   intro p Ep hp hm d hd
   have hos : Ep.mode.ownSlot = false := by rw [hm]; rfl
   obtain ⟨Er, hEr, _⟩ := hi.wf p Ep hp (hi.rootbLive p Ep hp hm) (Or.inr hm) d.root
-    (List.mem_map_of_mem (by simp [Entry.vdeps, hos]; exact Or.inl (List.mem_filter.mp hd).1))
+    (List.mem_map_of_mem (by simp [Entry.vdeps, hos]; exact List.mem_append.mp (List.mem_filter.mp hd).1))
   rw [hEr]; rfl
 
 /-- **A slot set to a fresh value keeps what every other binding names
@@ -1082,7 +1104,7 @@ theorem PkgKeep.of_edit {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) 
 /-- AGORA-901: what an entry depending on bound roots names in a context with
     a fresh binding more, it names in the context. -/
 theorem PkgNames.of_setE {m : Mem} {Γ : Ctx}
-    (hwf : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps Ep.path, (Γ d.root).isSome)
+    (hwf : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps (Ep.path ++ Ep.held), (Γ d.root).isSome)
     {x : Var} {E1 E : Entry} {v : Val} {i : Nat}
     (hx : Γ x = Option.none)
     (hbp : (E.mode = .bor ∨ E.mode = .rootb) → ∀ d ∈ memDeps E.path, (Γ d.root).isSome)

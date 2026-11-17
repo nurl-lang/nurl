@@ -735,6 +735,39 @@ theorem armed_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem
   refine (Entry.clean_vdeps_mem hdb1 hos1 hn1 hnm).mpr ?_
   rw [hh2, hh0]; exact hd''.1
 
+/-- AGORA-901: a caller binding hollow in the callee's context is hollow in
+    the caller's: a borrowed parameter of the caller keeps its entry. -/
+theorem hollow_back (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {r : Var}
+    (hc : Hollow ((callS Γ F fn args m.nv x).canon (sigCtx fn)) r) (hr : (Γ r).isSome) : Hollow Γ r := by
+  have hlow : ∀ {y : Var}, (Γ y).isSome → y < m.nv := fun hy =>
+    hi.nvSt _ (by rw [← hi.dom]; exact hy)
+  induction hc with
+  | @rootb p Ep hEp hm _ ih =>
+    obtain ⟨E0, h0⟩ := Option.isSome_iff_exists.mp hr
+    rcases h.ctx_cases p with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨k, t, _, rfl, _⟩ | ⟨k, t, _, rfl, _⟩ |
+        ⟨k, b, t, hk, rfl, hc⟩ | ⟨hy, hyx, hc⟩ | ⟨hc, _⟩
+    · rw [h.fresh] at h0; cases h0
+    · exact absurd (hlow hr) (Nat.not_lt.mpr (by simp))
+    · exact absurd (hlow hr) (Nat.not_lt.mpr (by simp))
+    · exact absurd (hlow hr) (Nat.not_lt.mpr (by simp))
+    · rw [hc] at hEp; cases hEp; cases hm
+    · rw [hc] at hEp
+      obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hEp
+      rw [clean_mode] at hm
+      obtain ⟨E0', h0', hm0⟩ := h.postdm.2 p E1 h1
+      rw [hm] at hm0
+      have hpost := h.post_rootb h0' hm0.symm
+      rw [h1] at hpost; cases hpost
+      have hl := h.rbLive p E1 h0' hm
+      rw [clean_id (Or.inr hm) hl] at ih
+      have hos : E1.mode.ownSlot = false := by rw [hm]; rfl
+      refine .rootb h0' hm fun d hd => ih d hd ?_
+      obtain ⟨Er, hEr, _⟩ := hi.wf.live p E1 h0' hl (Or.inr hm) d.root (by
+        simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte]
+        exact List.mem_map.mpr ⟨d, (List.mem_filter.mp hd).1, rfl⟩)
+      rw [hEr]; rfl
+    · rw [hc] at hEp; cases hEp
+
 /-- AGORA-901: a caller binding clean in the callee's context is clean in the
     caller's: the call keeps every frame binding's mode, an `inout` argument
     owns its slot, and a borrowed parameter of the caller keeps its entry. -/
@@ -777,17 +810,19 @@ theorem clean_back (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {r : Var}
       rw [h1] at hpost; cases hpost
       have hl := h.rbLive p E1 h0' hm
       rw [clean_id (Or.inr hm) hl] at hns ih
-      refine .rootb h0' hm hns fun d hd => ih d hd ?_
-      obtain ⟨Er, hEr, _⟩ := hi.wf.live p E1 h0' hl (Or.inr hm) d.root (by
-        unfold Entry.vdeps; rw [hm]
-        exact List.mem_map.mpr ⟨d, List.mem_append_left _ (List.mem_filter.mp hd).1, rfl⟩)
-      rw [hEr]; rfl
+      have hdom : ∀ d ∈ memDeps E1.path, (Γ d.root).isSome := fun d hd => by
+        obtain ⟨Er, hEr, _⟩ := hi.wf.live p E1 h0' hl (Or.inr hm) d.root (by
+          unfold Entry.vdeps; rw [hm]
+          exact List.mem_map.mpr ⟨d, List.mem_append_left _ (List.mem_filter.mp hd).1, rfl⟩)
+        rw [hEr]; rfl
+      exact .rootb h0' hm (fun d hd => (hns d hd).imp id fun hh => h.hollow_back hi hh (hdom d hd))
+        fun d hd => ih d hd (hdom d hd)
     · rw [hc] at hEp; cases hEp
 
 theorem cleanDeps_back (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {D : List Dep}
     (hc : CleanDeps ((callS Γ F fn args m.nv x).canon (sigCtx fn)) D)
     (hr : ∀ d ∈ memDeps D, (Γ d.root).isSome) : CleanDeps Γ D :=
-  fun d hd => ⟨(hc d hd).1, h.clean_back hi (hc d hd).2 (hr d hd)⟩
+  fun d hd => ⟨(hc d hd).1.imp id fun hh => h.hollow_back hi hh (hr d hd), h.clean_back hi (hc d hd).2 (hr d hd)⟩
 
 /-- Every tree the call's store owns, the store before owned. -/
 theorem own_back (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
@@ -829,17 +864,28 @@ theorem own_param_free (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {j : N
     (hc : CleanDeps ((callS Γ F fn args m.nv x).canon (sigCtx fn)) (H ++ ownHeld true Ea.ty (callS Γ F fn args m.nv x).A))
     {i o l : Nat} (hv : Sub (.view i o l) T) : PkgFreeId m i := by
   have hos : Ea.mode.ownSlot = true := by rw [hm]; rfl
-  obtain ⟨T', hT', hw, _⟩ := hi.own_val hEa hl hos
+  obtain ⟨T', hT', hw, hvs⟩ := hi.own_val hEa hl hos
   rw [hT] at hT'; cases hT'
   cases hhv : Ea.ty.holdsView
   · exact absurd hv (hw.noView hhv)
-  · have hn : Ea.ty ≠ .int := fun e => by rw [e] at hhv; cases hhv
-    refine hi.pkgFree _ Ea true T hEa (Or.inl hl) hT i (Or.inr (Or.inr (Or.inr ⟨hos, fun d hd => ?_, o, l, hv⟩)))
-    have hA := h.arg_held_share hj hEa hn hd
+  · -- the view is valid through what the argument holds in memory, a root
+    -- that reaches memory; the callee holds a share of it
+    exfalso
+    have hn : Ea.ty ≠ .int := fun e => by rw [e] at hhv; cases hhv
+    obtain ⟨s, hvi⟩ := hw.viewIn hv
+    obtain ⟨_, _, _, _, dep, hd, _, _, _, hla, _⟩ := hvs s _ hvi
+    have hdm : dep ∈ memDeps Ea.held := List.mem_filter.mpr ⟨hd, by simp [hla.notName]⟩
+    have hA := h.arg_held_share hj hEa hn hdm
     have hoh : ownHeld true Ea.ty (callS Γ F fn args m.nv x).A = (callS Γ F fn args m.nv x).A := by
       simp [ownHeld, hhv]
     rw [hoh] at hc
-    exact absurd rfl (hc ⟨d.root, .share⟩ (List.mem_filter.mpr ⟨List.mem_append_right _ hA, rfl⟩)).1
+    rcases (hc ⟨dep.root, .share⟩ (List.mem_filter.mpr ⟨List.mem_append_right _ hA, rfl⟩)).1 with hk | hh
+    · exact hk rfl
+    · have hdom : (Γ dep.root).isSome := by
+        obtain ⟨Er, hEr, _⟩ := hi.wf.live _ Ea hEa hl (Or.inl hn) dep.root (by
+          unfold Entry.vdeps; exact List.mem_map.mpr ⟨dep, List.mem_append_right _ hd, rfl⟩)
+        rw [hEr]; rfl
+      exact (h.hollow_back hi hh hdom).noMem hi hla.rootMem
 
 /-- The invariant of memory, in the context the call sets up. -/
 theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}

@@ -1086,21 +1086,69 @@ theorem Bare.href_eq {c c' : Nat} (h : Bare (.href c) (.href c')) : c = c' := by
 theorem PkgFreeId.of_st {m m' : Mem} (h : m'.st = m.st) {i : Nat} (hc : PkgFreeId m i) :
     PkgFreeId m' i := fun r T hT => hc r T (by rw [← h]; exact hT)
 
+/-- AGORA-901: a borrowed parameter that reaches no memory: each root it
+    depends on in memory is one too (so none at the bottom: a borrowed value
+    is valid through what it depends on and holds, and every handle, view or
+    share it holds lands through a dependency on memory). -/
+inductive Hollow (Γ : Ctx) : Var → Prop
+  | rootb {p : Var} {Ep : Entry} : Γ p = some Ep → Ep.mode = .rootb →
+      (∀ d ∈ memDeps (Ep.path ++ Ep.held), Hollow Γ d.root) → Hollow Γ p
+
+/-- AGORA-901: a dependency that marks nothing as inside a package: no
+    share, or a share of a root that reaches no memory. -/
+def ShareOK (Γ : Ctx) (d : Dep) : Prop := d.kind ≠ .share ∨ Hollow Γ d.root
+
+theorem ShareOK.of_kind {Γ : Ctx} {d : Dep} (h : d.kind ≠ .share) : ShareOK Γ d := Or.inl h
+
+/-- A context whose borrowed parameters keep their paths and what they hold
+    keeps the hollow roots of the other. -/
+theorem Hollow.mono {Γ Γ' : Ctx}
+    (h : ∀ v E', Γ' v = some E' → E'.mode = .rootb →
+      ∃ E, Γ v = some E ∧ E.mode = .rootb ∧ E.path = E'.path ∧ E.held = E'.held)
+    {r : Var} (hc : Hollow Γ' r) : Hollow Γ r := by
+  induction hc with
+  | rootb hp hm _ ih =>
+    obtain ⟨E, hE, hm', hpe, hhe⟩ := h _ _ hp hm
+    exact .rootb hE hm' (fun d hd => ih d (by rw [hpe, hhe] at hd; exact hd))
+
 /-- AGORA-901: a root through which a borrow reaches only memory outside
     every closure's environment: an owner, or a borrowed parameter each of
-    whose memory dependencies is no share and on such a root.  A call's
-    environment (`envE`) carries a share of what the package reaches, so it
-    is none: what is lent from it lies inside a package. -/
+    whose memory dependencies marks nothing as inside a package (`ShareOK`)
+    and is on such a root.  A call's environment (`envE`) carries a share
+    of each root the package reaches memory by, so it is none: what is lent
+    from it lies inside a package. -/
 inductive Clean (Γ : Ctx) : Var → Prop
   | own {r : Var} {Er : Entry} : Γ r = some Er → Er.mode.ownSlot = true → Clean Γ r
   | rootb {p : Var} {Ep : Entry} : Γ p = some Ep → Ep.mode = .rootb →
-      (∀ d ∈ memDeps Ep.path, d.kind ≠ .share) → (∀ d ∈ memDeps Ep.path, Clean Γ d.root) → Clean Γ p
+      (∀ d ∈ memDeps Ep.path, ShareOK Γ d) → (∀ d ∈ memDeps Ep.path, Clean Γ d.root) → Clean Γ p
+
+/-- AGORA-901: what is clean, or hollow, in one context is in another. -/
+structure CleanLe (Γ' Γ : Ctx) : Prop where
+  clean  : ∀ r, Clean Γ' r → Clean Γ r
+  hollow : ∀ r, Hollow Γ' r → Hollow Γ r
+
+theorem ShareOK.mono {Γ Γ' : Ctx} (h : CleanLe Γ' Γ) {d : Dep} (hs : ShareOK Γ' d) : ShareOK Γ d :=
+  hs.imp id (h.hollow _)
 
 /-- A context whose entries keep their modes, and whose borrowed parameters
-    their paths, keeps the clean roots of the other. -/
-theorem Clean.mono {Γ Γ' : Ctx}
-    (h : ∀ v E', Γ' v = some E' → ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ (E.mode = .rootb → E'.path = E.path))
-    {r : Var} (hc : Clean Γ' r) : Clean Γ r := by
+    their paths and what they hold, keeps the clean and hollow roots of the
+    other. -/
+theorem CleanLe.of_entries' {Γ Γ' : Ctx}
+    (h : ∀ v E', Γ' v = some E' → ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧
+      (E.mode = .rootb → E'.path = E.path ∧ ∀ d ∈ memDeps E.held, d ∈ E'.held)) :
+    CleanLe Γ' Γ := by
+  have hh : ∀ r, Hollow Γ' r → Hollow Γ r := fun r hc => by
+    induction hc with
+    | rootb hp hm _ ih =>
+      obtain ⟨E, hE, hm', hfix⟩ := h _ _ hp
+      have hm0 : E.mode = .rootb := by rw [← hm']; exact hm
+      obtain ⟨hpe, hhe⟩ := hfix hm0
+      refine .rootb hE hm0 fun d hd => ih d ?_
+      obtain ⟨hd1, hd2⟩ := List.mem_filter.mp hd
+      rcases List.mem_append.mp hd1 with hd1 | hd1
+      · exact List.mem_filter.mpr ⟨List.mem_append_left _ (hpe ▸ hd1), hd2⟩
+      · exact List.mem_filter.mpr ⟨List.mem_append_right _ (hhe d (List.mem_filter.mpr ⟨hd1, hd2⟩)), hd2⟩
+  refine ⟨fun r hc => ?_, hh⟩
   induction hc with
   | own hr ho =>
     obtain ⟨E, hE, hm, _⟩ := h _ _ hr
@@ -1108,22 +1156,33 @@ theorem Clean.mono {Γ Γ' : Ctx}
   | rootb hp hm hns _ ih =>
     obtain ⟨E, hE, hm', hfix⟩ := h _ _ hp
     have hm0 : E.mode = .rootb := by rw [← hm']; exact hm
-    have hpe := hfix hm0
-    exact .rootb hE hm0 (fun d hd => hns d (hpe ▸ hd)) (fun d hd => ih d (hpe ▸ hd))
+    have hpe := (hfix hm0).1
+    exact .rootb hE hm0 (fun d hd => (hns d (hpe ▸ hd)).imp id (hh _)) (fun d hd => ih d (hpe ▸ hd))
 
-/-- A clean borrowed parameter's memory dependencies are clean, and none is a share. -/
+theorem CleanLe.of_entries {Γ Γ' : Ctx}
+    (h : ∀ v E', Γ' v = some E' → ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧
+      (E.mode = .rootb → E'.path = E.path ∧ E'.held = E.held)) :
+    CleanLe Γ' Γ :=
+  CleanLe.of_entries' fun v E' hv => by
+    obtain ⟨E, hE, hm, hf⟩ := h v E' hv
+    exact ⟨E, hE, hm, fun hr => ⟨(hf hr).1, fun d hd => by rw [(hf hr).2]; exact (List.mem_filter.mp hd).1⟩⟩
+
+theorem CleanLe.refl (Γ : Ctx) : CleanLe Γ Γ := ⟨fun _ h => h, fun _ h => h⟩
+
+/-- A clean borrowed parameter's memory dependencies are clean, and none
+    marks anything as inside a package. -/
 theorem Clean.rootb_inv {Γ : Ctx} {p : Var} {Ep : Entry} (h : Clean Γ p) (hp : Γ p = some Ep)
-    (hm : Ep.mode = .rootb) : ∀ d ∈ memDeps Ep.path, d.kind ≠ .share ∧ Clean Γ d.root := by
+    (hm : Ep.mode = .rootb) : ∀ d ∈ memDeps Ep.path, ShareOK Γ d ∧ Clean Γ d.root := by
   cases h with
   | own hr ho => rw [hp] at hr; cases hr; rw [hm] at ho; cases ho
   | rootb hr _ hns hcl => rw [hp] at hr; cases hr; exact fun d hd => ⟨hns d hd, hcl d hd⟩
 
-/-- AGORA-901: dependencies that reach memory through clean roots only and
-    through no share. -/
-def CleanDeps (Γ : Ctx) (D : List Dep) : Prop := ∀ d ∈ memDeps D, d.kind ≠ .share ∧ Clean Γ d.root
+/-- AGORA-901: dependencies that reach memory through clean roots only, and
+    mark nothing as inside a package. -/
+def CleanDeps (Γ : Ctx) (D : List Dep) : Prop := ∀ d ∈ memDeps D, ShareOK Γ d ∧ Clean Γ d.root
 
-theorem CleanDeps.mono {Γ Γ' : Ctx} (h : ∀ r, Clean Γ' r → Clean Γ r) {D : List Dep}
-    (hc : CleanDeps Γ' D) : CleanDeps Γ D := fun d hd => ⟨(hc d hd).1, h _ (hc d hd).2⟩
+theorem CleanDeps.mono {Γ Γ' : Ctx} (h : CleanLe Γ' Γ) {D : List Dep}
+    (hc : CleanDeps Γ' D) : CleanDeps Γ D := fun d hd => ⟨(hc d hd).1.mono h, h.clean _ (hc d hd).2⟩
 
 theorem CleanDeps.sub {Γ : Ctx} {D D' : List Dep} (hs : D ⊆ D') (hc : CleanDeps Γ D') : CleanDeps Γ D :=
   fun d hd => hc d (List.mem_filter.mpr ⟨hs (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩)
@@ -1161,7 +1220,7 @@ def PkgNames (m : Mem) (Γ : Ctx) (E : Entry) (v : Val) (i : Nat) : Prop :=
       ∃ o l, Sub (.view i o l) (.node t c d es)) ∨
   (E.mode.ownSlot = true ∧ CleanDeps Γ E.held ∧ ∃ o l, Sub (.view i o l) v)
 
-theorem PkgNames.mono {m : Mem} {Γ Γ' : Ctx} (h : ∀ r, Clean Γ' r → Clean Γ r) {E : Entry} {v : Val}
+theorem PkgNames.mono {m : Mem} {Γ Γ' : Ctx} (h : CleanLe Γ' Γ) {E : Entry} {v : Val}
     {i : Nat} (hn : PkgNames m Γ' E v i) : PkgNames m Γ E v i := by
   rcases hn with ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩
   · exact Or.inl ⟨hm, hc.mono h, hv⟩

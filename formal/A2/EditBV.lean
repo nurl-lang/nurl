@@ -799,9 +799,12 @@ theorem MInv.holdOn {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {rs : List Var} {D : L
   blocks := hi.blocks
   pkgFree y E' o v hy hl hs i hn := by
     obtain ⟨E, hE, rfl⟩ := holdOn_get hy
-    have hcl : ∀ r, Clean (A2.holdOn rs D Γ) r → Clean Γ r := fun r h => h.of_same fun w Ew hw => by
+    have hcl : CleanLe (A2.holdOn rs D Γ) Γ := CleanLe.of_entries' fun w Ew hw => by
       obtain ⟨E0, h0, rfl⟩ := holdOn_get hw
-      exact ⟨E0, h0, by split <;> rfl, by split <;> rfl⟩
+      refine ⟨E0, h0, by split <;> rfl, fun _ => ⟨by split <;> rfl, fun d hd => ?_⟩⟩
+      split
+      · exact List.mem_append_left _ (List.mem_filter.mp hd).1
+      · exact (List.mem_filter.mp hd).1
     have hn' := hn.mono hcl
     by_cases hyr : y ∈ rs
     · rw [ite_eq_left hyr] at hl hn'
@@ -899,10 +902,10 @@ theorem MInv.editBV_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) 
     (by show ValOK m' Ex.ty (.href c) Ex.path (Ex.held ++ D); rw [hty]
         exact .href ⟨dep, (List.mem_filter.mp hdep).1, hhref⟩) (fun _ r hr => ?_) (fun _ _ => ?_)
     (fun c' hc' => by simp [Val.names] at hc')
-    (fun i hn' => hpf i (hn'.mono fun _ h => h.mono fun v E' hv => by
+    (fun i hn' => hpf i (hn'.mono (CleanLe.of_entries' fun v E' hv => by
       obtain ⟨E1, hE1, h1⟩ := holdOn_get hv
       obtain ⟨E0, h0, hm0, _, hvd0, hh0, _⟩ := killHv_same hE1
-      refine ⟨E0, h0, ?_, fun hrb => ?_⟩
+      refine ⟨E0, h0, ?_, fun hrb => ⟨?_, fun d hd => ?_⟩⟩
       · rw [h1]; split <;> simp [Entry.hold, hm0]
       · have hos0 : E0.mode.ownSlot = false := by rw [hrb]; rfl
         have hos1 : E1.mode.ownSlot = false := by rw [hm0, hos0]
@@ -910,7 +913,11 @@ theorem MInv.editBV_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) 
           have := hvd0
           simp only [Entry.vdeps, hos0, hos1, Bool.false_eq_true, ↓reduceIte, hh0] at this
           exact List.append_cancel_right this
-        rw [h1]; split <;> simp [Entry.hold, hp1]))
+        rw [h1]; split <;> simp [Entry.hold, hp1]
+      · have hd' : d ∈ E1.held := by rw [hh0]; exact (List.mem_filter.mp hd).1
+        rw [h1]; split
+        · exact List.mem_append_left _ hd'
+        · exact hd')))
   · -- its roots are bound: what it depended on, and what was stored
     have hr' : r ∈ roots Ex.vdeps ∨ r ∈ roots D := by
       simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, roots, List.map_append,

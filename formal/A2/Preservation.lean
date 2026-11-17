@@ -352,18 +352,18 @@ theorem takeBV_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch 
       · cases hUe; exact hsepT j hjU j hj rfl
       · exact hi.heap.disj _ w _ U (Ne.symm hw0') hT0 hU' j (hsube.ids j hj) hjU
     · -- AGORA-901: what the element's views read, the borrow's node's did
-      have hc0 : CleanDeps Γ Ex.held := hc.mono fun _ h => h.mono fun v E' hv' => by
+      have hc0 : CleanDeps Γ Ex.held := hc.mono (CleanLe.of_entries fun v E' hv' => by
         by_cases hvx : v = x
         · subst hvx; simp only [setE, upd_same, Option.some.injEq] at hv'; subst hv'
-          exact ⟨_, hx, rfl, fun _ => rfl⟩
+          exact ⟨_, hx, rfl, fun _ => ⟨rfl, rfl⟩⟩
         · rw [setE, upd_ne _ _ hvx] at hv'
           obtain ⟨E0, h0, hm0, _, hvd0, hh0, _⟩ := killHv_same hv'
-          refine ⟨E0, h0, hm0, fun hrb => ?_⟩
+          refine ⟨E0, h0, hm0, fun hrb => ⟨?_, hh0⟩⟩
           have hos0 : E0.mode.ownSlot = false := by rw [hrb]; rfl
           have hos1 : E'.mode.ownSlot = false := by rw [hm0, hos0]
           have := hvd0
           simp only [Entry.vdeps, hos0, hos1, Bool.false_eq_true, ↓reduceIte, hh0] at this
-          exact List.append_cancel_right this
+          exact List.append_cancel_right this)
       have hn0 : PkgNames m Γ Ex (.href c) j :=
         Or.inr (Or.inr (Or.inl ⟨Or.inl hmx, hc0, c, dep.root, T, t, d, es, .refl _, hT0, hsubN, o', l',
           Sub.child hem hv⟩))
@@ -1193,11 +1193,11 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
   -- AGORA-901: what the revived owner names it named, armed or live; the rest is as it was
   have hpf : ∀ y Ey o w, setE Γ x (Ex.revive x) y = some Ey → Alive Ey → m.st y = some ⟨o, some w⟩ →
       ∀ i, PkgNames m (setE Γ x (Ex.revive x)) Ey w i → PkgFreeId m i := by
-    have hcl : ∀ r, Clean (setE Γ x (Ex.revive x)) r → Clean Γ r := fun r h => h.mono fun w E' hw => by
+    have hcl : CleanLe (setE Γ x (Ex.revive x)) Γ := CleanLe.of_entries fun w E' hw => by
       by_cases hwx : w = x
       · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
-        exact ⟨Ex, hx, rfl, fun _ => rfl⟩
-      · rw [setE, upd_ne _ _ hwx] at hw; exact ⟨E', hw, rfl, fun _ => rfl⟩
+        exact ⟨Ex, hx, rfl, fun hrb => by have := hos; rw [hrb] at this; cases this⟩
+      · rw [setE, upd_ne _ _ hwx] at hw; exact ⟨E', hw, rfl, fun _ => ⟨rfl, rfl⟩⟩
     intro y Ey o w hy hl hs i hn
     by_cases hyx : y = x
     · subst hyx
@@ -1219,7 +1219,7 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
               rcases hk with h | h <;> simp [h]
             exact (hc.mono hcl) d (List.mem_filter.mpr ⟨hdr, (List.mem_filter.mp hd).2⟩)
           · simp only [not_or, ne_eq, Decidable.not_not] at hk
-            refine ⟨hk.2, ?_⟩
+            refine ⟨.of_kind hk.2, ?_⟩
             rw [hk.1]; exact .own hx hos
         exact hi.pkgFree y Ex true v hx (Or.inr ⟨hdb, hos⟩) hsl i (Or.inr (Or.inr (Or.inr ⟨hos, hc0, o', l, hv⟩)))
     · rw [setE, upd_ne _ _ hyx] at hy
@@ -1346,11 +1346,11 @@ theorem MInv.rearm {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} (
   have hpf : ∀ y Ey o w, setE Γ x { E with dtor := true, dbind := true } y = some Ey → Alive Ey →
       m.st y = some ⟨o, some w⟩ →
       ∀ i, PkgNames m (setE Γ x { E with dtor := true, dbind := true }) Ey w i → PkgFreeId m i := by
-    have hcl : ∀ r, Clean (setE Γ x { E with dtor := true, dbind := true }) r → Clean Γ r := fun r h =>
-      h.mono fun w E' hw => by
+    have hcl : CleanLe (setE Γ x { E with dtor := true, dbind := true }) Γ :=
+      CleanLe.of_entries fun w E' hw => by
         rcases hcase w E' hw with ⟨rfl, rfl⟩ | ⟨_, hw'⟩
-        · exact ⟨E, hx, rfl, fun _ => rfl⟩
-        · exact ⟨E', hw', rfl, fun _ => rfl⟩
+        · exact ⟨E, hx, rfl, fun _ => ⟨rfl, rfl⟩⟩
+        · exact ⟨E', hw', rfl, fun _ => ⟨rfl, rfl⟩⟩
     intro y Ey o w hy hly hs i hn
     rcases hcase y Ey hy with ⟨rfl, rfl⟩ | ⟨_, hy'⟩
     · exact hi.pkgFree y E o w hx (Or.inl hl) hs i
@@ -1701,14 +1701,14 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
     · rw [← hout r hr]; exact hT
   have hpf : ∀ y Ey o w, unwindCtx k.spine x Γ y = some Ey → Alive Ey → m1.st y = some ⟨o, some w⟩ →
       ∀ i, PkgNames m1 (unwindCtx k.spine x Γ) Ey w i → PkgFreeId m1 i := by
-    have hcl : ∀ r, Clean (unwindCtx k.spine x Γ) r → Clean Γ r := fun r h => h.mono fun w E' hw => by
+    have hcl : CleanLe (unwindCtx k.spine x Γ) Γ := CleanLe.of_entries fun w E' hw => by
       by_cases hwx : w = x
       · subst hwx; rw [hux] at hw; cases hw
-        exact ⟨Ex, hx, rfl, fun _ => rfl⟩
+        exact ⟨Ex, hx, rfl, fun hrb => by have := hos; rw [hrb] at this; cases this⟩
       · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
         rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩
-        · exact ⟨E0, h0, rfl, fun _ => rfl⟩
-        · exact ⟨_, h0, rfl, fun _ => rfl⟩
+        · exact ⟨E0, h0, rfl, fun _ => ⟨rfl, rfl⟩⟩
+        · exact ⟨_, h0, rfl, fun _ => ⟨rfl, rfl⟩⟩
     intro y Ey o w hy hl hs i hn
     have hn0 := (hn.mono hcl).of_fewer hfew
     by_cases hyx : y = x
@@ -1730,7 +1730,7 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
               rcases hk with h | h <;> simp [h]
             exact hc d (List.mem_filter.mpr ⟨hdr, (List.mem_filter.mp hd).2⟩)
           · simp only [not_or, ne_eq, Decidable.not_not] at hk
-            refine ⟨hk.2, ?_⟩
+            refine ⟨.of_kind hk.2, ?_⟩
             rw [hk.1]; exact .own hx hos
         exact (hi.pkgFree y Ex true v0 hx (Or.inr ⟨hdb, hos⟩) hslm i
           (Or.inr (Or.inr (Or.inr ⟨hos, hc0, o', l, hv⟩)))).of_fewer hfew

@@ -421,9 +421,8 @@ theorem comp_share {a b : Kind} (hb : b.isName = false) (h : comp a b ≠ .share
     through clean roots only: `y` is clean, if it is a root, or else every
     memory dependency of its path is clean and no share. -/
 theorem derive_clean {Γ : Ctx} {y : Var} {E : Entry} {k : Kind} (hkn : k.isName = false)
-    (h : ∀ d ∈ memDeps (derive y E k), d.kind ≠ .share ∧ Clean Γ d.root) :
-    (E.mode.isRoot = true → Clean Γ y) ∧
-    (E.mode.isRoot = false → ∀ d ∈ memDeps E.path, d.kind ≠ .share ∧ Clean Γ d.root) := by
+    (h : CleanDeps Γ (derive y E k)) :
+    (E.mode.isRoot = true → Clean Γ y) ∧ (E.mode.isRoot = false → CleanDeps Γ E.path) := by
   refine ⟨fun hr => ?_, fun hr d hd => ?_⟩
   · have hmem : (⟨y, rootKind E.ty k⟩ : Dep) ∈ memDeps (derive y E k) := by
       unfold derive memDeps; rw [ite_eq_left hr]
@@ -438,14 +437,14 @@ theorem derive_clean {Γ : Ctx} {y : Var} {E : Entry} {k : Kind} (hkn : k.isName
       simp only [Bool.not_eq_true'] at hdn ⊢
       simpa using comp_isName (by simpa using hdn) hkn
     obtain ⟨h1, h2⟩ := h _ hmem
-    exact ⟨comp_share hkn h1, h2⟩
+    exact ⟨h1.imp (comp_share hkn) id, h2⟩
 
 /-- **The node a live binding names**, through clean roots only, no package
     holds, and it lies in an owned tree or in a payload. -/
 theorem MInv.vecOf_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
     (hl : E.live = true) {t : Ty} {c d : Nat} {es : List Val} (hvec : VecOf m y t c d es)
     {k : Kind} (hkn : k.isName = false)
-    (hcl : ∀ d ∈ memDeps (derive y E k), d.kind ≠ .share ∧ Clean Γ d.root) :
+    (hcl : CleanDeps Γ (derive y E k)) :
     PkgFreeAt m (.node t c d es) ∧
       ((∃ r0 T0, m.st r0 = some ⟨true, some T0⟩ ∧ Sub (.node t c d es) T0) ∨ InPay m (.node t c d es)) := by
   obtain ⟨_, _, hv⟩ := hvec
@@ -929,6 +928,35 @@ theorem ValOK.bare_href' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : Val
   | lk => intro c hb; cases hb
   | cell => intro c hb; cases hb
 
+/-- AGORA-901: **a hollow root reaches no memory**: a borrowed parameter's
+    value is valid through what it depends on and holds; every handle, view
+    or share at its top lands through a dependency on memory, whose root is
+    hollow in turn. -/
+theorem Hollow.noMem {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {r : Var} (h : Hollow Γ r) : ¬ RootMem m r := by
+  induction h with
+  | @rootb p Ep hp hm _ ih =>
+    have hos : Ep.mode.ownSlot = false := by rw [hm]; rfl
+    obtain ⟨w, hw, hok⟩ := hi.bor_val hp (hi.rootbLive p Ep hp hm) hos
+    have key : ∀ dep ∈ Ep.path ++ Ep.held, dep.kind.isName = false → ¬ RootMem m dep.root :=
+      fun dep hd hn => ih dep (List.mem_filter.mpr ⟨hd, by simp [hn]⟩)
+    rintro (⟨o, ho⟩ | ⟨n0, hr⟩)
+    · rw [hw] at ho; cases ho
+    · rcases hr with ⟨T, hT, _⟩ | ⟨v, c, hv, ht, hn⟩ | ⟨v, d, o, l, hv, ht, hn⟩ | ⟨v, k, q, hv, ht, _⟩ |
+          ⟨v, k, hv, ht, _⟩
+      · rw [hw] at hT; cases hT
+      · rw [hw] at hv; cases hv
+        obtain ⟨dep, hd, hla⟩ := valOK_href hi.heap hn hok ht
+        exact key dep hd hla.notName hla.rootMem
+      · rw [hw] at hv; cases hv
+        obtain ⟨dep, hd, _, hla⟩ := valOK_view hi.heap hn hok ht
+        exact key dep hd hla.notName hla.rootMem
+      · rw [hw] at hv; cases hv
+        obtain ⟨dep, hd, hla⟩ := valOK_arc hok ht
+        exact key dep hd hla.notName hla.rootMem
+      · rw [hw] at hv; cases hv
+        obtain ⟨dep, hd, hla⟩ := valOK_cell hok ht
+        exact key dep hd hla.landed.notName hla.landed.rootMem
+
 /-- AGORA-901: a handle a value holds directly lands through a dependency of
     it, and the node it names stores views valid through what it holds. -/
 theorem ValOK.bare_href_held {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
@@ -987,7 +1015,7 @@ theorem ValOK.bare_view_in {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : V
 theorem ValOK.named_view_held {m : Mem} (hh : HeapOK m) {τ : Ty} {v : Val} {P H : List Dep}
     (h : ValOK m τ v P H) {c : Nat} (hb : Bare (.href c) v) {r : Var} {T : Val} {t : Ty} {d : Nat}
     {es : List Val} (hT : m.st r = some ⟨true, some T⟩) (hs : Sub (.node t c d es) T) {i o l : Nat}
-    (hv : Sub (.view i o l) (.node t c d es)) : ∃ dep ∈ H, dep.kind.isName = false := by
+    (hv : Sub (.view i o l) (.node t c d es)) : ∃ dep ∈ H, dep.kind.isName = false ∧ RootMem m dep.root := by
   obtain ⟨dep0, _, t0, d', es', hl, hw, hvs, _⟩ := h.bare_href_held c hb
   have heq : Val.node t c d es = .node t0 c d' es' := by
     rcases hl.home with ⟨x, T', hT', hs'⟩ | hp
@@ -996,7 +1024,7 @@ theorem ValOK.named_view_held {m : Mem} (hh : HeapOK m) {τ : Ty} {v : Val} {P H
   rw [heq] at hv
   obtain ⟨s, hvi⟩ := hw.viewIn hv
   obtain ⟨_, _, _, _, dep, hd, _, _, _, hla, _⟩ := hvs s _ hvi
-  exact ⟨dep, hd, hla.notName⟩
+  exact ⟨dep, hd, hla.notName, hla.rootMem⟩
 
 theorem sub_antisymm {a b : Val} (h1 : Sub a b) (h2 : Sub b a) : a = b := by
   rcases h1.cases' with h | ⟨e, hc, hs⟩
