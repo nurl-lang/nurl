@@ -45,7 +45,12 @@ current value as a parameter.
 
 - `envE`: the receiver's entry. It keeps only the *readers* of what the
   package depends on and holds, so it never reaches a capture the package
-  may change (`envE_cap_out`).
+  may change (`envE_cap_out`). AGORA-901: it also carries a share of each
+  root the package reaches memory by (`shareOf`, on its path and on what it
+  holds), as `recvRes` does after the call: the environment lies inside the
+  package, so nothing lent from it, nor stored in it, is clean, and
+  `MInv.pkgFree` (no package holds what a clean binding names) says nothing
+  of it (`open_pkg`'s `hpfE`).
 - `pkg_cap`, `pkg_cap_mutName`, `pkg_cap_mut`: a capture is live, owned,
   view-free and holds nothing. A capture the package may change is one of
   the names the call through the package changes (`mutNames`), so

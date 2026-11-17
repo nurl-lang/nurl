@@ -1100,16 +1100,19 @@ def ShareOK (Γ : Ctx) (d : Dep) : Prop := d.kind ≠ .share ∨ Hollow Γ d.roo
 
 theorem ShareOK.of_kind {Γ : Ctx} {d : Dep} (h : d.kind ≠ .share) : ShareOK Γ d := Or.inl h
 
-/-- A context whose borrowed parameters keep their paths and what they hold
-    keeps the hollow roots of the other. -/
+/-- **Hollow roots are stable** (AGORA-901): a context whose borrowed
+    parameters depend on and hold in memory at most what the other's do
+    keeps the other's hollow roots. A borrowed parameter's entry is fixed
+    for its scope (`Entry.fixed`: kills, weakenings, cleaning and the end of
+    another parameter's scope leave it as it is), so every step keeps them. -/
 theorem Hollow.mono {Γ Γ' : Ctx}
     (h : ∀ v E', Γ' v = some E' → E'.mode = .rootb →
-      ∃ E, Γ v = some E ∧ E.mode = .rootb ∧ E.path = E'.path ∧ E.held = E'.held)
+      ∃ E, Γ v = some E ∧ E.mode = .rootb ∧ ∀ d ∈ memDeps (E.path ++ E.held), d ∈ memDeps (E'.path ++ E'.held))
     {r : Var} (hc : Hollow Γ' r) : Hollow Γ r := by
   induction hc with
   | rootb hp hm _ ih =>
-    obtain ⟨E, hE, hm', hpe, hhe⟩ := h _ _ hp hm
-    exact .rootb hE hm' (fun d hd => ih d (by rw [hpe, hhe] at hd; exact hd))
+    obtain ⟨E, hE, hm', hsub⟩ := h _ _ hp hm
+    exact .rootb hE hm' (fun d hd => ih d (hsub d hd))
 
 /-- AGORA-901: a root through which a borrow reaches only memory outside
     every closure's environment: an owner, or a borrowed parameter each of
@@ -1137,17 +1140,15 @@ theorem CleanLe.of_entries' {Γ Γ' : Ctx}
     (h : ∀ v E', Γ' v = some E' → ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧
       (E.mode = .rootb → E'.path = E.path ∧ ∀ d ∈ memDeps E.held, d ∈ E'.held)) :
     CleanLe Γ' Γ := by
-  have hh : ∀ r, Hollow Γ' r → Hollow Γ r := fun r hc => by
-    induction hc with
-    | rootb hp hm _ ih =>
-      obtain ⟨E, hE, hm', hfix⟩ := h _ _ hp
-      have hm0 : E.mode = .rootb := by rw [← hm']; exact hm
-      obtain ⟨hpe, hhe⟩ := hfix hm0
-      refine .rootb hE hm0 fun d hd => ih d ?_
-      obtain ⟨hd1, hd2⟩ := List.mem_filter.mp hd
-      rcases List.mem_append.mp hd1 with hd1 | hd1
-      · exact List.mem_filter.mpr ⟨List.mem_append_left _ (hpe ▸ hd1), hd2⟩
-      · exact List.mem_filter.mpr ⟨List.mem_append_right _ (hhe d (List.mem_filter.mpr ⟨hd1, hd2⟩)), hd2⟩
+  have hh : ∀ r, Hollow Γ' r → Hollow Γ r := fun r hc => hc.mono fun v E' hv hm => by
+    obtain ⟨E, hE, hm', hfix⟩ := h _ _ hv
+    have hm0 : E.mode = .rootb := by rw [← hm']; exact hm
+    obtain ⟨hpe, hhe⟩ := hfix hm0
+    refine ⟨E, hE, hm0, fun d hd => ?_⟩
+    obtain ⟨hd1, hd2⟩ := List.mem_filter.mp hd
+    rcases List.mem_append.mp hd1 with hd1 | hd1
+    · exact List.mem_filter.mpr ⟨List.mem_append_left _ (hpe ▸ hd1), hd2⟩
+    · exact List.mem_filter.mpr ⟨List.mem_append_right _ (hhe d (List.mem_filter.mpr ⟨hd1, hd2⟩)), hd2⟩
   refine ⟨fun r hc => ?_, hh⟩
   induction hc with
   | own hr ho =>
