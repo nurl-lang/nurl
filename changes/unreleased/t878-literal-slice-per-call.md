@@ -1,0 +1,3 @@
+### Fixed
+
+- **A struct or option literal given a slice that a call hands back fresh on some runs and lent on others no longer leaks the fresh slice** (AGORA-878). Example: `@ Bag { ( pick a fresh ) 2 }`, where `pick` returns a new slice or its parameter. The literal owns its slice field, so it copied the call's result on every run, and the fresh slice was released by no one. It now goes by the call's own answer: it copies only on the runs the call lent and moves the fresh slice in on the others. A literal handed back from a function with such a field still leaks (AGORA-890). Until that is fixed, bind the call's result to a name first.
