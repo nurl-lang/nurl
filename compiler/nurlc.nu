@@ -26176,6 +26176,14 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
     : s key ( nurl_str_cat `dropifv##` vt )
     ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ v } {}
     ( nurl_sym_def g_impl_name_syms key `1` )
+    // (An owned slice's drops its elements through `__slice_drop__<m>`,
+    // asked for now: the `__dropifv_`s are written after the module's last
+    // element drops are, and a `[String` temporary's called one nothing
+    // defined - agora #891.)
+    ? ( __owned_slice_ty vt ) {
+        : s __de ( __owned_slice_elem ( nurl_llty vt ) )
+        ? & ! ( __is_closure_ty __de ) ( __slice_owns_elems __de ) { ( __slice_drop_request __de ) } {}
+    } {}
     ( __park_append g_impl_name_syms `__pending_dropifvs__` ( __park_ty vt ) )
 }
 
@@ -45093,6 +45101,31 @@ unsafe @ __slice_len_comma s t → b {
     ( __slice_mut_flag syms cg name ptr vt is_mut )
 }
 
+// Whether the slice the call just emitted hands back is its caller's own on
+// this run, as an i1, for a callee that answers per run: one captured
+// right after the call (g_call_own_slc: a callee compiled after this
+// caller, its `@.__nurl_retslc.N`, or a temporary it may have handed back
+// whole, mem_own_lendback), else a NURL function's own answer
+// (mem_capture_hown). `` where the call has no per-run answer. (Only a
+// NURL function's: a closure or function-value call has no module-end
+// answer of its own, and one handing back its borrowed argument would
+// have been released by it; agora #841.)
+@ __slice_call_run_bit i syms i cg → s {
+    ? >= g_call_own_slc 0 { ^ ( nurl_str_cat `%r` ( nurl_str_int g_call_own_slc ) ) } {}
+    ? ! ( __hown_dyn syms ( nurl_sym_get syms `__last_call_name__` ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( mem_call_retown syms cg )
+}
+
+// …and on every run: `true` for a call whose summary says its slice is
+// always fresh (`__last_call_ret_owned__`, `: [i t ( mk )`), else its
+// per-run answer; `` where it is never the caller's (a view: `(
+// slice_from_vec … )`, a lend). A temporary of it handed to a call goes
+// by this answer, as a binding of it does (mem_arg_temps; agora #891).
+@ __slice_call_own_bit i syms i cg → s {
+    ? ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` ) { ^ ( nurl_str_cat `true` `` ) } {}
+    ^ ( __slice_call_run_bit syms cg )
+}
+
 // (…and a callee compiled after this caller — defined below it, or a
 // generic instance — has no summary yet, so the static answer took its
 // slice for a lend and nobody released it. It answers by its module-end
@@ -45100,14 +45133,7 @@ unsafe @ __slice_len_comma s t → b {
 @ __slice_call_flag i syms i cg s name s ptr s vt i rhs_tt → v {
     ? | | != rhs_tt TT_LPAREN ! ( mem_is_slice_ty vt ) ( mem_slice_owned syms name ) { ^ v } {}
     ? | == 0 ( nurl_str_len ptr ) != 37 ( nurl_str_get ptr 0 ) { ^ v } {}
-    : s __scn ( nurl_sym_get syms `__last_call_name__` )
-    // (Only a NURL function's, captured right after its call — mem_capture_hown:
-    // a closure or function-value call has no module-end answer of its own,
-    // and one handing back its borrowed argument would have been released
-    // here; agora #841.)
-    : s __sfwd ? >= g_call_own_slc 0 ( nurl_str_cat `%r` ( nurl_str_int g_call_own_slc ) ) ( nurl_str_cat `` `` )
-    ? ! | ( __hown_dyn syms __scn ) != 0 ( nurl_str_len __sfwd ) { ^ v } {}
-    : s bit ? != 0 ( nurl_str_len __sfwd ) ( nurl_str_cat __sfwd `` ) ( mem_call_retown syms cg )
+    : s bit ( __slice_call_run_bit syms cg )
     ? == 0 ( nurl_str_len bit ) { ^ v } {}
     ( mem_own_add syms name )
     ( mem_slice_decl_add syms name )
@@ -45120,10 +45146,7 @@ unsafe @ __slice_len_comma s t → b {
 // Copied on every run, the fresh slice of the runs it owned was nobody's
 // (agora #878).
 @ __slice_field_call_lent i syms i cg → s {
-    : s __scn ( nurl_sym_get syms `__last_call_name__` )
-    : s __sfwd ? >= g_call_own_slc 0 ( nurl_str_cat `%r` ( nurl_str_int g_call_own_slc ) ) ( nurl_str_cat `` `` )
-    ? ! | ( __hown_dyn syms __scn ) != 0 ( nurl_str_len __sfwd ) { ^ ( nurl_str_cat `` `` ) } {}
-    : s bit ? != 0 ( nurl_str_len __sfwd ) ( nurl_str_cat __sfwd `` ) ( mem_call_retown syms cg )
+    : s bit ( __slice_call_run_bit syms cg )
     ? == 0 ( nurl_str_len bit ) { ^ ( nurl_str_cat `` `` ) } {}
     : s r ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = xor i1 ` ) ( nurl_print bit ) ( nurl_print `, 1\n` )
@@ -48222,6 +48245,26 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     } {}
 }
 
+// A call's result type `t` that holds no address: void, a number, an
+// option / result of numbers, a Vec of numbers - a result that cannot
+// point into a temporary the call was handed (mem_arg_temps).
+@ __ret_holds_no_address s t → b {
+    ^ || || || || || || || || ( seq t `i64` ) ( seq t `void` ) ( seq t `i1` ) ( seq t `i32` ) ( seq t `double` ) ( seq t `i8` ) ( seq t `float` ) ( __wrap_of_numbers t ) ( __is_vec_num_ty t )
+}
+
+// Can a slice result `ty` that a call lends in part out of a slice
+// temporary be copied there (mem_own_lendback's `part`, mem_emit_cloneif)?
+// Its buffer always, its elements where they own nothing or copy
+// (mem_emit_clone_on). Taken for one that cannot be copied, the temporary
+// had to outlive its call and the program was refused where a String's is
+// copied - agora #891. (Asked of a slice temporary only: elsewhere a slice
+// is still taken for a value with no copy, __clone_supported.)
+@ __slice_result_copies s ty i syms → b {
+    ? ! ( __owned_slice_ty ty ) { ^ F } {}
+    : s __se ( nurl_llty ( __owned_slice_elem ( nurl_llty ty ) ) )
+    ^ | ! ( __elem_owns __se syms ) ( __clone_supported __se syms )
+}
+
 // The temporaries argument `arg_idx` (`av`, type `at`, spelled from token
 // `arg_tt`) of a call to `call_name` leaves its caller: published as
 // `__argtmp_owned__` (drop words for after the call, mem_drop_arg_temps),
@@ -48240,8 +48283,8 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // (An option / result of numbers holds no address either: `( vec_get [i]
     // ( mk ) 0 )` cannot hand back a pointer into the temporary — deferred
     // for a consumer that never came, the Vec leaked.)
-    : b __scalar_ret | | | | ( seq __crt `void` ) ( seq __crt `i64` ) ( seq __crt `i1` ) ( __wrap_of_numbers __crt )
-    | | | | ( seq __crt `i32` ) ( seq __crt `double` ) ( seq __crt `i8` ) ( seq __crt `float` ) ( __is_vec_num_ty __crt )
+    // (Asked where needed, __ret_holds_no_address: most arguments are no
+    // temporary at all.)
     // A trait object boxed right in the argument: its box is freed after
     // the call unless the callee keeps the argument (argdrop).
     ? & & != 0 g_auto_drop_strings
@@ -48407,7 +48450,7 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         // the result neither is nor views the argument.)
         : b __dt_fresh & & | | ( __is_handle_ty __crt ) ( __wrap_of_values __crt ) ( __ty_no_address __crt 0 ) == 0 ( nurl_sym_len g_fn_ret_view call_name )
         == 0 ( nurl_sym_len2 syms call_name `__ret_borrow` )
-        ? | __scalar_ret __dt_fresh {
+        ? | ( __ret_holds_no_address __crt ) __dt_fresh {
             : s __dtw ( nurl_str_cat __dtmp `` )
             : s __dti ( nurl_sym_get syms `__deferred_ids__` )
             // (A closure's parameters are always borrowed, gen_closure_expr.)
@@ -48428,17 +48471,12 @@ unsafe @ __pfo_bind_lends i syms s name → v {
             ( nurl_sym_def syms `__deferred_ids__` `` )
         } {}
     } {}
-    // An option / result temporary owns its payload (and error) the way
-    // a binding of it would: those are dropped, by the tag.
-    : s __top ( __opt_payload at )
-    : s __toe ( __opt_err_payload at )
-    : b __topt | != 0 ( nurl_str_len __top ) != 0 ( nurl_str_len __toe )
     // (…and one that cannot be copied, a `% Drop` value or a struct
     // holding one: it leaked, h234. Not a trait object: its box has a
     // rule of its own, above.)
     // (…or a field taken out of a call's result, `( len . ( mk ) name )`:
     // a value of its own, h266.)
-    : b __tfo & & == arg_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) ( __is_handle_ty at )
+    : b __tfo && && == arg_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) ( __is_handle_ty at )
     // (…or a `?` / `??` join of owning values, by the phi of its arms'
     // ownership bits — a literal's, a call's (mem_arm_hown,
     // mem_arm_struct_hown): a value of its own, which nothing dropped when
@@ -48451,22 +48489,41 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // the join first — agora #181.)
     // (The type is asked only of a join that owns on some path.)
     : b __tjo ? | | == 0 ( nurl_str_len __jown ) == 0 g_auto_drop_strings ( seq __jown `false` ) F | ( __is_handle_ty at ) ( __is_hown_ty at )
+    // An option / result temporary owns its payload (and error) the way
+    // a binding of it would: those are dropped, by the tag. (Asked only of
+    // an argument that may be a temporary: a call's, a field of one, a
+    // join.)
+    : b __tq || || __tfo __tjo && != 0 g_auto_drop_strings == arg_tt TT_LPAREN
+    : s __top ? __tq ( __opt_payload at ) ( nurl_str_cat `` `` )
+    : s __toe ? __tq ( __opt_err_payload at ) ( nurl_str_cat `` `` )
+    : b __topt | != 0 ( nurl_str_len __top ) != 0 ( nurl_str_len __toe )
     // (A call that hands back a view of its argument but answers per call
     // whether it lent goes by that answer: __call_answers, agora #185. So
     // does one handed a temporary it lends back: its bit says whether the
     // result is the caller's — the temporary moved in, or a copy —
     // mem_own_lendback.)
-    ? | | __tfo __tjo & & & & != 0 g_auto_drop_strings == arg_tt TT_LPAREN | | ( __is_handle_ty at ) __topt & ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
-    == 0 ( nurl_sym_len syms `__last_value_borrow__` ) | | == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms arg_tt )
+    // (…and an owned slice a call made, `( ln ( mk ) )`: it owns its
+    // buffer and its elements as a binding of it does, by the call's
+    // answer, __slice_call_own_bit. Asked of handles only, every slice a
+    // call handed to another call leaked - agora #891. Not yet to a closure
+    // whose result may hold it: the closure answers at its return only
+    // whether its result is its own, not whether it is this argument, so
+    // nothing could release the temporary on the runs it is not - AGORA-894.)
+    : b __tsl && && == arg_tt TT_LPAREN ( __owned_slice_ty at ) || ! shadowed ! ( __ty_holds_view_p __crt )
+    // (Asked as far as needed, `&&` / `||`: of every argument, most of them
+    // no call's temporary.)
+    ? || || __tfo __tjo && && && && != 0 g_auto_drop_strings == arg_tt TT_LPAREN || || || ( __is_handle_ty at ) __topt __tsl && ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
+    == 0 ( nurl_sym_len syms `__last_value_borrow__` ) || || == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) ( __call_answers syms arg_tt )
     ( seq ( nurl_sym_get syms `__last_call_lendback__` ) `1` ) {
-        : ~ s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ? __tjo ( nurl_str_cat __jown `` ) ( mem_call_retown syms cg )
+        : b __scalar_ret ( __ret_holds_no_address __crt )
+        : ~ s __tro ? __tfo ( nurl_sym_get syms `__last_tmp_field_own__` ) ? __tjo ( nurl_str_cat __jown `` ) ? __tsl ( __slice_call_own_bit syms cg ) ( mem_call_retown syms cg )
         // a `( mem_dup x )` copy: owned, with no call to ask (gen_mem_dup)
         ? & == 0 ( nurl_str_len __tro ) ( seq ( nurl_sym_get syms `__last_fresh_reg__` ) av ) { = __tro `true` } {}
         ? != 0 ( nurl_str_len __tro ) {
             // (The constant that says whether it is owned, for a temporary
             // nothing ends up consuming: resolve_view_temps.)
             // (A join's arms differ per path: owned on some, so owned.)
-            : s __trk ? __tfo ( nurl_sym_get syms `__last_tmp_field_rk__` ) ? | __tjo ( seq __tro `true` ) ( nurl_str_cat `true` `` ) ( nurl_sym_get syms `__last_retown_const__` )
+            : s __trk ? __tfo ( nurl_sym_get syms `__last_tmp_field_rk__` ) ? | __tjo ( seq __tro `true` ) ( nurl_str_cat `true` `` ) ? __tsl ( mem_call_retown_const syms ) ( nurl_sym_get syms `__last_retown_const__` )
             : s __tnk ( mem_arg_not_kept cg call_name fname arg_idx shadowed )
             : ~ s __tc ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __tc ) ( nurl_print ` = and i1 ` ) ( nurl_print __tro ) ( nurl_print `, ` ) ( nurl_print __tnk ) ( nurl_print `\n` )
@@ -48475,7 +48532,9 @@ unsafe @ __pfo_bind_lends i syms s name → v {
             // `% Drop` struct, an owning option or result, by its twin's):
             // only handles were, and a callee's panic left the temporary
             // to nobody, its destructor never run.)
-            : s __tjf ? ( __is_handle_ty at ) `` ( __jthunk_of at )
+            // (…and an owned slice, by its elements' drop and its buffer's:
+            // __slice_jthunk_of.)
+            : s __tjf ? ( __is_handle_ty at ) `` ? ( __owned_slice_ty at ) ( __slice_jthunk_of at ) ( __jthunk_of at )
             : s __tj ? ( __is_handle_ty at ) ( mem_journal_push_temp cg at av __tc ) ? != 0 ( nurl_str_len __tjf ) ( mem_journal_push_temp_fn cg at av __tc __tjf ) ``
             ? != 0 ( nurl_str_len __tj ) { = owned ? == 0 ( nurl_str_len owned ) __tj ( nurl_str_cat3 owned ` ` __tj ) } {}
             // A callee that lends this argument back — to a caller that
@@ -48496,7 +48555,7 @@ unsafe @ __pfo_bind_lends i syms s name → v {
                 ( nurl_sym_def syms `__argtmp_one__` __tlb )
                 = __tlb_one __tlb
                 : ~ s __tlany ( nurl_str_cat __tlo `` )
-                ? ( __clone_supported __crt syms ) {
+                ? || ( __clone_supported __crt syms ) && __tsl ( __slice_result_copies __crt syms ) {
                     : s __tlq ( nurl_cg_reg cg )
                     ( emit_sink_flag_load ( mem_lend_const syms `part` call_name fname arg_idx ) __tlq )
                     = __tlp ( nurl_cg_reg cg )
@@ -48567,7 +48626,13 @@ unsafe @ __pfo_bind_lends i syms s name → v {
             // this temporary. Taken for a view-holder, an Rc result kept
             // `( g ( rc_new … ) F )` from dropping its temporary on the runs
             // g made a new one, agora #760.)
-            ? & & != 0 ( nurl_str_len __tlb_one ) | | ( __is_handle_ty at ) __tfopt ( __nc_drop_ty at ) ! ( __ty_holds_view_p __crt ) {
+            // (…and an owned slice, where the result is a slice of its own
+            // whose elements cannot point into this temporary: a fresh `[i`
+            // holds nothing of it. The temporary went nowhere on those runs:
+            // `( pick ( mk ) T )` leaked it, agora #891.)
+            : b __tf_sl && __tsl ( __owned_slice_ty ( nurl_llty __crt ) )
+            : b __tf_hv ? __tf_sl ( __ty_holds_view_p ( nurl_llty ( __owned_slice_elem ( nurl_llty __crt ) ) ) ) ( __ty_holds_view_p __crt )
+            ? & & != 0 ( nurl_str_len __tlb_one ) | | | ( __is_handle_ty at ) __tfopt ( __nc_drop_ty at ) __tf_sl ! __tf_hv {
                 : s __tfr ( nurl_cg_reg cg )
                 ? __tfopt { ( gen_drop_for_type at syms ) } { ( __handle_drop_ensure at ) }
                 ( __dropifv_request at )
@@ -48885,7 +48950,9 @@ unsafe @ __src_has_raw_ptr s text → b {
     } {
         ( __handle_drop_ensure at )
         ( __dropifv_request at )
-        = __tw ( nurl_str_cat4 `h|` c ( nurl_str_cat3 `|` at `|` ) av )
+        // (A type with blanks - an owned slice - parked by its drop name,
+        // as a payload is: agora #891.)
+        = __tw ( nurl_str_cat4 `h|` c ( nurl_str_cat3 `|` ( __park_ty at ) `|` ) av )
     }
     ^ __tw
 }
@@ -48900,7 +48967,9 @@ unsafe @ __src_has_raw_ptr s text → b {
     // it, handed back: then it is the caller's own — h230 asks.)
     ( nurl_sym_def syms `__last_call_lendback__` ? | != 0 ( nurl_str_len one ) != 0 ( nurl_str_len part ) `1` `` )
     ? | & == 0 ( nurl_str_len one ) == 0 ( nurl_str_len part ) == 0 ( nurl_sym_len syms `__last_call_own__` ) { ^ res } {}
-    : s own0 ( nurl_sym_get syms `__last_call_own__` )
+    // (A slice from a callee compiled after this caller answers by its
+    // `@.__nurl_retslc.N`, as a binding of it does: __slice_call_run_bit.)
+    : s own0 ? & ( mem_is_slice_ty rlt ) >= g_call_own_slc 0 ( nurl_str_cat `%r` ( nurl_str_int g_call_own_slc ) ) ( nurl_sym_get syms `__last_call_own__` )
     // (The call's own answer, for a temporary it may hand back whole:
     // dropped by mem_drop_arg_temps where it says owned, agora #457.)
     ( nurl_sym_def syms `__call_own0__` own0 )
@@ -48938,6 +49007,10 @@ unsafe @ __src_has_raw_ptr s text → b {
     : s own ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print own ) ( nurl_print ` = or i1 ` ) ( nurl_print own0 ) ( nurl_print `, ` ) ( nurl_print any ) ( nurl_print `\n` )
     ( nurl_sym_def syms `__last_call_own__` own )
+    // (A slice handed back whole is the binding's by this bit, whatever
+    // the callee is: one that always lends has no per-run answer of its
+    // own, and `: [i x ( id ( mk ) )` leaked the temporary - agora #891.)
+    ? & ( mem_is_slice_ty rlt ) != 0 ( nurl_str_len one ) { = g_call_own_slc ( nurl_str_to_int ( nurl_str_slice own 2 - ( nurl_str_len own ) 2 ) ) } {}
     // (Where it copied a part, the result is the caller's on those runs
     // whatever the call's borrow channels say: `own` answers for it. A
     // binding of it owns it by that bit — __call_copied_own, agora #477.)
@@ -49536,6 +49609,21 @@ unsafe @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
         ( __park_append g_impl_name_syms `__pending_hjdrops__` vt )
     } {}
     ^ ( nurl_str_cat `@__jdrop_` m )
+}
+
+// The journal thunk of an owned slice temporary of type `ty`: its
+// elements and its buffer, released from its slot as its `__dropifv_` does
+// (emit_pending_dropifs). Unjournaled, a callee's panic left the slice a
+// call made for it to nobody (agora #891).
+@ __slice_jthunk_of s ty → s {
+    : s m ( __slice_mangle ty )
+    ( __dropifv_request ty )
+    : s key ( nurl_str_cat `sjdrop##` m )
+    ? == 0 ( nurl_sym_len g_impl_name_syms key ) {
+        ( nurl_sym_def g_impl_name_syms key `1` )
+        ( __park_append g_impl_name_syms `__pending_sjdrops__` m )
+    } {}
+    ^ ( nurl_str_cat `@__sjdrop_` m )
 }
 
 // A handle temporary `av` made for an argument is the caller's while the
@@ -73842,7 +73930,16 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // none of the new one; taken for z's own, z's literal leaked and its
         // drop freed h's field under h — agora #664's shape through a join.)
         : ~ s __slc_jkeep ``
-        ? & & & __slc_fl | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST ! __slc_mix ! | __slc_fresh __slc_lent {
+        // (…and a call that answers per run whether its slice is the
+        // caller's own - `= x ( pick a f )` - or always lends one, `= x ( id
+        // a )`: x owns the new value by that answer (__slice_call_run_bit,
+        // `false` where it has none), and its old value goes unless the new
+        // one lies inside it (`= x ( id x )`), decided by the buffer as for a
+        // join. Left with its old flag, x released a's buffer under a - a
+        // double free - and leaked its own; agora #891.)
+        : b __slc_call && && __slc_fl == bck_rhs_tt TT_LPAREN ! | | __slc_fresh __slc_mix __slc_lent
+        : s __slc_cbit ? __slc_call ( __slice_call_run_bit syms cg ) ( nurl_str_cat `` `` )
+        ? & & & __slc_fl | | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST __slc_call ! __slc_mix ! | __slc_fresh __slc_lent {
             : s __jlt ( nurl_llty vt )
             : s __jo ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __jo ) ( nurl_print ` = load ` ) ( nurl_print __jlt ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `
@@ -73875,6 +73972,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
 ` )
             ( mem_emit_slice_free_flagged cg ( nurl_sym_get2 g_fn_escapes ptr `__slt` ) ptr ( __and_i1 cg __jf __jnk ) )
             = __slc_jkeep ( __and_i1 cg __jf __slc_jkeep )
+            // (A call's value outside the old buffer is x's by the call's answer.)
+            ? & __slc_call != 0 ( nurl_str_len __slc_cbit ) { = __slc_jkeep ( __or_i1 cg __slc_jkeep ( __and_i1 cg __jnk __slc_cbit ) ) } {}
         } {}
         ? __slc_fl {
             ? | | __slc_fresh __slc_mix __slc_lent { ( mem_emit_slice_free_key syms cg ptr ) } {}
@@ -96206,9 +96305,11 @@ unsafe @ __holds_user_drop s ty i depth → b {
 }
 
 // An owned slice type's name in drop and copy function names: `sl.` and
-// its spelling with `{` `L`, `}` `R`, `,` `_`, `*` `P`, `%` and blanks
-// dropped — an identifier, which `{ T*, i64 }` is not. Read back through
-// `slicelit##` (__park_ty / __unpark_ty).
+// its spelling with `{` `L`, `}` `R`, `,` `_`, `*` `P`, `(` `$`, `)` `-`,
+// `%` and blanks dropped — an identifier, which `{ T*, i64 }` is not. Read
+// back through `slicelit##` (__park_ty / __unpark_ty). (A slice of
+// closures has parentheses in its spelling: kept, its drop's name was no
+// LLVM identifier, agora #891.)
 unsafe @ __slice_mangle s ty → s {
     : i n ( nurl_str_len ty )
     : *u p # *u ty
@@ -96216,7 +96317,7 @@ unsafe @ __slice_mangle s ty → s {
     : ~ i k 0
     ~ < k n {
         : i ch ( nurl_str_at p n k )
-        = out ( nurl_str_cat out ? == ch 42 `P` ? == ch 123 `L` ? == ch 125 `R` ? == ch 44 `_` ? | == ch 32 == ch 37 `` ( nurl_str_slice ty k 1 ) )
+        = out ( nurl_str_cat out ? == ch 42 `P` ? == ch 123 `L` ? == ch 125 `R` ? == ch 44 `_` ? == ch 40 `$` ? == ch 41 `-` ? | == ch 32 == ch 37 `` ( nurl_str_slice ty k 1 ) )
         = k + k 1
     }
     ? == 0 ( nurl_sym_len2 g_impl_name_syms `slicelit##` out ) { ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `slicelit##` out ) ty ) } {}
@@ -97253,6 +97354,16 @@ unsafe @ __type_needs_drop s ty i syms → b {
     ~ != 0 ( nurl_str_len hrest ) {
         : s hv ( str_first_word hrest ) = hrest ( str_skip_word hrest )
         ( emit_jdrop_thunk ( nurl_llty hv ) ( __drop_mangle hv ) )
+    }
+    // …of owned slice temporaries (__slice_jthunk_of): a slice has no
+    // `drop__` of its own, so through its `__dropifv_`.
+    : ~ s srest ( nurl_sym_get g_impl_name_syms `__pending_sjdrops__` )
+    ~ != 0 ( nurl_str_len srest ) {
+        : s sm ( str_first_word srest ) = srest ( str_skip_word srest )
+        : s sll ( nurl_llty ( __unpark_ty sm ) )
+        ( nurl_print `define linkonce_odr void @__sjdrop_` ) ( nurl_print sm ) ( nurl_print `(i8* %p) {\nentry:\n  %v = load ` )
+        ( nurl_print sll ) ( nurl_print `, ptr %p\n  call void @__dropifv_` ) ( nurl_print sm ) ( nurl_print `(i1 true, ` )
+        ( nurl_print sll ) ( nurl_print ` %v)\n  ret void\n}\n` )
     }
     // …and of values with a typed drop journaled before their thunk was
     // out (mem_journal_push_userdrop); one emitted since is not repeated.
