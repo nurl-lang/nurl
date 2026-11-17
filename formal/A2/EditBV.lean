@@ -4,8 +4,9 @@ import A2.EditB
 
 `StmtT.editB` changes a `Vec`'s elements through a borrow `x` when the
 elements hold no views. `StmtT.editBV` takes elements that do (a slice, a
-struct holding one; not a closure, `t.hasFn = false`): a push or an element
-set may store a view, so the tree it lands in comes to hold a view of what
+struct holding one, AGORA-901: or a closure, when what the stored value
+captures by name the borrow and its view-holding owners hold already,
+`NamesHeld`): a push or an element set may store a view, so the tree it lands in comes to hold a view of what
 the stored value depends on (`D`, its memory dependencies). The typing cannot
 tell which memory root of `x`'s path owns that tree (`MInv.thru_owner`), so
 each of them holds `D` (`holdThru`, as the owner of a `push` holds what it
@@ -503,10 +504,11 @@ theorem node_names_sub {t : Ty} {c d d' : Nat} {es es' : List Val} (h : ∀ e �
 /-- The owner's new slot, when the change lands in its tree by `.drop` and
     may store views: the tree is well-formed at its type, its views are the
     old tree's, valid through what the owner held, or the stored values',
-    valid through `D` (`NSE_viewIn'`, `keepV`), what it captures by name and
-    its packages are as before or fewer (the new node holds none: its
-    elements hold no closure), and the owner, made by no `letd`, holds `D`
-    too. -/
+    valid through `D` (`NSE_viewIn'`, `keepV`), what it captures by name is
+    the old tree's or what the owner holds (`hnN`), its packages are the old
+    tree's or the new node's (`hpkN`), and none of them holds the rewritten
+    node (AGORA-901, `hfree`: no package's environment holds what a clean
+    borrow reaches); and the owner, made by no `letd`, holds `D` too. -/
 theorem NewSlot.editV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hanch : RootbAnch Γ1 F) {o : Var} {Eo : Entry} (ho : Γ1 o = some Eo) (hoF : o ∉ F)
     (hmo : Eo.mode = .own) (hdb : Eo.dbind = false) (hEv : Eo.ty.holdsView = true)

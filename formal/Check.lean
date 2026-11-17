@@ -351,6 +351,11 @@ import A3
 #print axioms A2.TakeBVWitness.main2_safe
 #print axioms A2.TakeBVWitness.main2_no_leak
 #print axioms A2.node_names_sub
+-- AGORA-901: a store through a borrow of an element that holds views and a closure
+-- (`StmtT.editBV`'s right disjunct: nothing captured by name; A2/EditBVFnWitness.lean)
+#print axioms A2.EditBVFnWitness.main_typed
+#print axioms A2.EditBVFnWitness.main_safe
+#print axioms A2.EditBVFnWitness.main_no_leak
 -- AGORA-900: ... and one that holds a destructor value, handed to its `letd`
 -- first thing (A2/TakeBDWitness.lean; the typing's guarantee `A2.Dtor.takeB_typed`)
 #print axioms A2.Dtor.takeB_typed
