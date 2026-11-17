@@ -3208,6 +3208,46 @@ theorem rerootE_rootb {Γ : Ctx} {F : List Var}
   unfold rerootE
   rw [reroot_id h1, reroot_id h2]
 
+theorem comp_share_right {k : Kind} (h : k.isName = false) : comp k .share = .share := by
+  cases k <;> simp_all [comp, Kind.isName]
+
+/-- AGORA-901: **what reaches memory through clean roots after a borrowed
+    parameter's scope ends did before**: a dependency on `p` became one on
+    each of what `p` depended on or held, of the composed kind. Every one
+    of those is clean, so `p` was clean; and if the dependency was a share,
+    each was one too, of a root that reaches no memory, so `p` reached none
+    either. -/
+theorem CleanDeps.of_reroot {Γ Γ' : Ctx} (hle : CleanLe Γ' Γ) {p : Var} {Ep : Entry} (hp : Γ p = some Ep)
+    (hm : Ep.mode = .rootb) {X : List Dep} (hc : CleanDeps Γ' (reroot p (Ep.path ++ Ep.held) X)) :
+    CleanDeps Γ X := by
+  intro d hd
+  obtain ⟨hdX, hdn⟩ := List.mem_filter.mp hd
+  have hkn : d.kind.isName = false := by simpa using hdn
+  by_cases hdp : d.root = p
+  · -- each of what `p` depended on or held, composed with `d`'s kind
+    have hcomp : ∀ d' ∈ memDeps (Ep.path ++ Ep.held),
+        ShareOK Γ ⟨d'.root, comp d'.kind d.kind⟩ ∧ Clean Γ d'.root := fun d' hd' => by
+      have hdX' : (⟨p, d.kind⟩ : Dep) ∈ X := by rw [← hdp]; exact hdX
+      have hmem := mem_reroot_of_eq hdX' (List.mem_filter.mp hd').1
+      have hkn' : d'.kind.isName = false := by simpa using (List.mem_filter.mp hd').2
+      obtain ⟨h1, h2⟩ := hc _ (List.mem_filter.mpr ⟨hmem, by simp [comp_isName hkn' hkn]⟩)
+      exact ⟨h1.mono hle, hle.clean _ h2⟩
+    have hpath : ∀ d' ∈ memDeps Ep.path, d' ∈ memDeps (Ep.path ++ Ep.held) := fun d' hd' =>
+      List.mem_filter.mpr ⟨List.mem_append_left _ (List.mem_filter.mp hd').1, (List.mem_filter.mp hd').2⟩
+    have hcl : Clean Γ p := .rootb hp hm
+      (fun d' hd' => (hcomp d' (hpath d' hd')).1.imp (comp_share hkn) id)
+      (fun d' hd' => (hcomp d' (hpath d' hd')).2)
+    refine ⟨?_, hdp ▸ hcl⟩
+    by_cases hks : d.kind = .share
+    · refine Or.inr (hdp ▸ .rootb hp hm fun d' hd' => ?_)
+      have hkn' : d'.kind.isName = false := by simpa using (List.mem_filter.mp hd').2
+      rcases (hcomp d' hd').1 with h | h
+      · rw [hks, comp_share_right hkn'] at h; exact absurd rfl h
+      · exact h
+    · exact Or.inl hks
+  · obtain ⟨h1, h2⟩ := hc d (List.mem_filter.mpr ⟨mem_reroot_of_ne hdX hdp, hdn⟩)
+    exact ⟨h1.mono hle, hle.clean _ h2⟩
+
 /-- The end of a borrowed parameter's scope. -/
 theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
@@ -3360,7 +3400,28 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   · intro k bl hk
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk rfl⟩, h4⟩
-  · sorry -- PKGFREE-TODO rbindExit
+  · -- AGORA-901: what a binding names now, through clean roots, it named
+    -- before (`CleanDeps.of_reroot`); the slot removed owned nothing
+    intro y Ey' o v hy hal hs i hn
+    have hyp : y ≠ p := fun h => by subst h; simp [exitRoot] at hy
+    obtain ⟨E, hE, rfl⟩ := getE y Ey' hy hyp
+    have hsub : ∀ r T, (m.remove p).st r = some ⟨true, some T⟩ → m.st r = some ⟨true, some T⟩ := by
+      intro r T hT
+      by_cases hrp : r = p
+      · subst hrp; simp at hT
+      · simpa [Mem.remove_st, upd_ne _ _ hrp] using hT
+    have hs0 : m.st y = some ⟨o, some v⟩ := by simpa [Mem.remove_st, upd_ne _ _ hyp] using hs
+    have hle : CleanLe (exitRoot p (Ep.path ++ Ep.held) Γ) Γ := CleanLe.of_entries fun w E' hw => by
+      have hwp : w ≠ p := fun h => by subst h; simp [exitRoot] at hw
+      obtain ⟨E0, h0, rfl⟩ := getE w E' hw hwp
+      exact ⟨E0, h0, rfl, fun hrb => by rw [hnorb w E0 h0 hrb]; exact ⟨rfl, rfl⟩⟩
+    have hal0 : Alive E := hal
+    refine PkgFreeId.of_fewer hsub (hi.pkgFree y E o v hE hal0 hs0 i ?_)
+    refine PkgNames.mapClean (E' := rerootE p (Ep.path ++ Ep.held) E) (fun h => h) (fun h => h)
+      (fun hc => hc.of_reroot hle hp hm) (fun hc => ?_) (fun hc => hc.of_reroot hle hp hm)
+      (PkgNames.of_fewer hsub hn)
+    refine CleanDeps.of_reroot hle hp hm ?_
+    simpa [rerootE, reroot, List.flatMap_append] using hc
 
 /-! ### A3.1: the counted blocks only grow -/
 
