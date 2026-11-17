@@ -120,12 +120,23 @@ the LLVM / C11 memory model rather than redefining it.
   typing's guarantee `A2.Dtor.takeB_typed`). `A2/TakeBDWitness.lean` pops a
   destructor value through `vec_at vv 0` of a `letd` Vec of Vecs of them
   into its `letd`, typed and run safe and leak-free.
+  A store through a borrow (a push or an element set) of an element whose
+  type holds both views and a closure is `StmtT.editBV` (AGORA-901), when
+  what the stored value captures by name the borrow, and every owner of a
+  view-holding type it may land in, holds already. Its proof rests on
+  `MInv.pkgFree`: no closure's environment holds what a clean borrow
+  reaches, so the node the store rewrites lies in no package.
+  `A2/EditBVFnWitness.lean` pushes a view beside a closure whose
+  environment is that view through `vec_at vv 0`, typed and run safe and
+  leak-free. nurlc stores such closures, capturing by value
+  (`compiler/tests/closure_beside_view_stored_through_borrow.nu`). The rule
+  admits more than nurlc does, which is sound: it also admits a by-name
+  capture that the owners already hold, while nurlc's escape rule refuses
+  every by-name capture of a stack binding before it can reach a Vec
+  (`compiler/tests/diag_closure_by_name_stored_through_borrow.nu`).
   That nurlc's
   `vec_pop` / `vec_remove` lower to these steps is phase C. Outside the
   claim still:
-  - a store through a borrow (a push or an element set) of an element
-    whose type holds both views and a closure (`StmtT.editBV` asks
-    `Ty.hasFn = false`);
   - what nurlc keeps beside such a change that the calculus ends: two
     parts of one value, copies of the changing borrow, a whole copy beside
     a field viewer (Agora #118, github#1426);

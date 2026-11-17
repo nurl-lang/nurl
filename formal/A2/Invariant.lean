@@ -2135,7 +2135,12 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
   | editBV {Γ Γ1 : Ctx} {F : List Var} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
       {D : List Dep} :
       Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = true →
-      t.hasFn = false → x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
+      -- AGORA-901: what the stored value captures by name, the borrow and
+      -- every owner it may land in (one whose type holds views) hold already
+      (t.hasFn = false ∨ ∀ d ∈ D, d.kind.isName = true →
+        d ∈ Ex1.held ∧ ∀ r ∈ roots (memDeps Ex1.path), (argE Γ1 r).ty.holdsView = true →
+          d ∈ (argE Γ1 r).held) →
+      x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
       Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
       ThruOK Γ1 F op Ex.ty Ex1.path → ThruV Γ1 op Ex.ty Ex1.path (memDeps D) →
       (op.drops = true → t.dtorFree = true) →

@@ -153,7 +153,7 @@ theorem MInv.editBV_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   have h := MInv.editBV_drops (a' := m.alloc) hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hV
     (fun _ h => by cases h) (fun _ h => by cases h) hno
     (fun _ _ _ _ _ _ => HeapOK.editTake hi.heap hno.2.2.1 hn hr)
-    (fun e he => Or.inl (List.mem_of_mem_eraseIdx he)) hr (Or.inr fun e he => List.mem_of_mem_eraseIdx he)
+    (N := []) (fun e he => Or.inl (List.mem_of_mem_eraseIdx he)) hr
   rw [holdThru_nil, List.append_nil] at h
   exact h
 
