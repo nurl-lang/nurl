@@ -226,6 +226,7 @@ class FnCheck:
         self.temp_fresh = {}
         self.call_lent = {}      # a call's temporary -> the arguments it may hand back whole
         self.cap_loans = set()   # the loans that are a closure's own handle of a binding it captured
+        self.dep_loans = set()   # what a taken-over capture borrows: the closure depends on it, a part taken ends it (agora #887)
         self.lit_nocopy = {}     # a literal temporary -> its field that borrows a value with no copy
         self.lit_lendcopy = set()  # literal temporaries around a part of a parameter that can be copied
         self.call_by_fn = {}     # a call's temporary -> the callee is a function of the program
@@ -423,7 +424,8 @@ class FnCheck:
         (q, k) = self.loans[lid]
         if q[0] == p[0] and self.kills_paths(eff, p, p[1], q, q[1], k):
             return True
-        if eff == "take" and lid in self.cap_loans and q[0] == p[0] and prefix(q[1], p[1]) and k != "ref":
+        if (eff == "take" and (lid in self.cap_loans or lid in self.dep_loans) and q[0] == p[0]
+                and prefix(q[1], p[1]) and k != "ref"):
             # (a closure that captured the value around the part taken may
             # read that part when it runs)
             return True
@@ -2342,6 +2344,7 @@ class FnCheck:
                     # the closure on moves its captures, never an owner one
                     # of them only borrows from)
                     held |= hfrom(moved.loans, fp)
+                    self.dep_loans |= moved.loans
                     moved_in = True
             if (body is not None
                     and any(x[4] == "held" and x[2] == i and x[0] < len(body.params)
