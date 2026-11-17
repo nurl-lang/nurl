@@ -23366,15 +23366,42 @@ unsafe @ core_assign i target → v {
 // copies in where the call lent (gen_assign, `__cp_call`): its operand's
 // variable says so (CORE_VF_CPCOPY), so the engine reads the capture as
 // owning it on exactly the fact codegen copied on (agora #884).
-unsafe @ core_cpcopy_mark → v {
-    : i op g_core_asn_op
-    ? < op 2 { ^ } {}
+@ core_cpcopy_mark → v {
+    : i vid ( core_op_root_var g_core_asn_op )
+    ? >= vid 0 { ( core_var_or_flag vid CORE_VF_CPCOPY ) } {}
+}
+
+// The variable an operand names itself (not a part of it: its place has no
+// parent), or -1 (AGORA-905: the core IR's tables are read here, so the
+// flaggers above need no pointer work of their own).
+unsafe @ core_op_root_var i op → i {
+    ? < op 2 { ^ -1 } {}
     : *i ps # *i # s g_core_pl
     : i b * - op 2 3
     : i vid . ps b
-    ? | | < vid 0 >= vid g_core_var_n != . ps + b 1 -1 { ^ } {}
+    ? | | < vid 0 >= vid g_core_var_n != . ps + b 1 -1 { ^ -1 } {}
+    ^ vid
+}
+
+// Variable `vid`'s flags gain `flag` (a variable out of range: nothing).
+unsafe @ core_var_or_flag i vid i flag → v {
+    ? | < vid 0 >= vid g_core_var_n { ^ } {}
     : *i vs # *i # s g_core_vars
-    = . vs + * vid CORE_VW 4 | . vs + * vid CORE_VW 4 CORE_VF_CPCOPY
+    = . vs + * vid CORE_VW 4 | . vs + * vid CORE_VW 4 flag
+}
+
+// The capture named `nm` (interned) of the closure body being built gains
+// `flag`: the first one, or every one (`all`).
+unsafe @ core_capture_flag i nm i flag b all → v {
+    : *i vs # *i # s g_core_vars
+    : ~ i k 0
+    ~ < k g_core_var_n {
+        ? & == . vs + * k CORE_VW 2 3 == . vs * k CORE_VW nm {
+            = . vs + * k CORE_VW 4 | . vs + * k CORE_VW 4 flag
+            ? ! all { ^ } {}
+        } {}
+        = k + k 1
+    }
 }
 
 // ── Core IR: joins and loops ─────────────────────────────────────────
@@ -23755,34 +23782,20 @@ unsafe @ core_try → v {
 
 // The capture `name` of the closure body being built is taken by pointer
 // (a `: ~` binding the body assigns, MEMORY.md §2.3): flag 8.
-unsafe @ core_capture_byref s name → v {
-    : i nm ( __core_in name )
-    : *i vs # *i # s g_core_vars
-    : ~ i k 0
-    ~ < k g_core_var_n {
-        ? & == . vs + * k CORE_VW 2 3 == . vs * k CORE_VW nm {
-            = . vs + * k CORE_VW 4 | . vs + * k CORE_VW 4 8
-            ^
-        } {}
-        = k + k 1
-    }
+@ core_capture_byref s name → v {
+    ( core_capture_flag ( __core_in name ) 8 F )
 }
 
 // The captures of the closure body being built whose binding moves into
 // the env when the literal is made (`owned`: g_nc_own_caps, values that
 // cannot be copied in a closure that may leave its frame, h239-h243): flag
 // 4, the closure takes them over as a `sink` takes its argument.
-unsafe @ core_capture_owned s owned → v {
-    : *i vs # *i # s g_core_vars
+@ core_capture_owned s owned → v {
     : ~ s rest ( nurl_str_cat owned `` )
     ~ != 0 ( nurl_str_len rest ) {
         : i nm ( __core_in ( str_first_word rest ) )
         = rest ( str_skip_word rest )
-        : ~ i k 0
-        ~ < k g_core_var_n {
-            ? & == . vs + * k CORE_VW 2 3 == . vs * k CORE_VW nm { = . vs + * k CORE_VW 4 | . vs + * k CORE_VW 4 4 } {}
-            = k + k 1
-        }
+        ( core_capture_flag nm 4 T )
     }
 }
 
@@ -23790,13 +23803,10 @@ unsafe @ core_capture_owned s owned → v {
 // walk did not move (mem_bind_closure_owner: a shorter-lived binding, or
 // one a `;` defer may still call through the other): it is a second name
 // of a closure the other still owns. Flag CORE_VF_SECOND.
-unsafe @ core_second_name i syms s name → v {
+@ core_second_name i syms s name → v {
     : i cv ( nurl_sym_int2 syms name `__cv` )
     ? | < cv 0 != / cv CORE_VS g_core_serial { ^ } {}
-    : i vid % cv CORE_VS
-    ? >= vid g_core_var_n { ^ } {}
-    : *i vs # *i # s g_core_vars
-    = . vs + * vid CORE_VW 4 | . vs + * vid CORE_VW 4 CORE_VF_SECOND
+    ( core_var_or_flag % cv CORE_VS CORE_VF_SECOND )
 }
 
 // The operand on top, a closure binding a `=` gives another without moving
@@ -23836,17 +23846,8 @@ unsafe @ core_second_top → v {
 // The capture `name` of the closure body being built is the env's own,
 // which the body marks taken where it gives it away (__clo_capture_gone):
 // a later run of the closure panics before it reads it. Flag CORE_VF_TAKEN.
-unsafe @ core_capture_taken s name → v {
-    : i nm ( __core_in name )
-    : *i vs # *i # s g_core_vars
-    : ~ i k 0
-    ~ < k g_core_var_n {
-        ? & == . vs + * k CORE_VW 2 3 == . vs * k CORE_VW nm {
-            = . vs + * k CORE_VW 4 | . vs + * k CORE_VW 4 CORE_VF_TAKEN
-            ^
-        } {}
-        = k + k 1
-    }
+@ core_capture_taken s name → v {
+    ( core_capture_flag ( __core_in name ) CORE_VF_TAKEN F )
 }
 
 // A closure literal before its body: what it captures (`caps`, names of
