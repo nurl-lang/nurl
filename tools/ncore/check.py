@@ -287,6 +287,39 @@ class FnCheck:
         self.order = {}
         self.links = {}
         self.cur_at = -1
+        # A join's temporary (bound empty, given each arm's value) and a
+        # binding given one whole - nurlc keeps an owner flag for it (the
+        # engine's FX_JOIN_TEMP / FX_JOIN_VAR, eng_kept_lend; agora #887)
+        self.join_temps = set()
+        self.join_vars = set()
+
+        def joins(stmts):
+            for s in stmts:
+                if s[0] == "let" and s[2] is None and self.fn.vars[s[1]].kind == "temp":
+                    self.join_temps.add(s[1])
+                for part in s[1:]:
+                    if isinstance(part, list):
+                        if part and isinstance(part[0], tuple) and part[0] and isinstance(part[0][0], str) and len(part[0]) == 2 and isinstance(part[0][1], list):
+                            for _, arm in part:
+                                joins(arm)
+                        else:
+                            joins(part)
+
+        def join_vars(stmts):
+            for s in stmts:
+                if (s[0] == "let" and s[2] is not None and s[2][0] == "use" and s[2][1][0] == "v" and not s[2][1][2]
+                        and s[2][1][1] in self.join_temps and s[2][1][1] not in self.block_temps
+                        and self.fn.vars[s[1]].kind == "local" and not self.fn.vars[s[1]].mut):
+                    self.join_vars.add(s[1])
+                for part in s[1:]:
+                    if isinstance(part, list):
+                        if part and isinstance(part[0], tuple) and part[0] and isinstance(part[0][0], str) and len(part[0]) == 2 and isinstance(part[0][1], list):
+                            for _, arm in part:
+                                join_vars(arm)
+                        else:
+                            join_vars(part)
+        joins(fn.body)
+        join_vars(fn.body)
 
         def order(stmts):
             for s in stmts:
@@ -950,7 +983,7 @@ class FnCheck:
         return any(self.fn.vars[a[0]].blk == blk for a in av.alias)
 
     def transfer(self, st, op, line, site, dest_depth, dest_ty, what, copy_ok=False, is_ret=False,
-                 lend_owner=lambda vid: False, dest_vid=None, named=False, stored=False):
+                 lend_owner=lambda vid: False, dest_vid=None, named=False, stored=False, keep_lend=False):
         """A value handed to a new holder (a let, `=`, a return, a field): an
         owner moves; a lend is copied with its loans, or - where it would
         outlive a local it borrows from - deep-copied (a join's value, a
@@ -1121,7 +1154,14 @@ class FnCheck:
         # that lend it, where its new holder outlives what it borrows)
         mixed = av.own == "O" and av.loans
         if (av.own == "L" or mixed) and (own_block or self.local_depth(AV("L", av.loans, av.alias)) > dest_depth):
-            if copy_ok and dest_ty is not None and self.T.copyable(dest_ty) and not self.T.is_scalar(dest_ty):
+            # (a value nurlc hands over as it is - with its owner flag, no
+            # copy made - stays the lend it is on the paths it lends: its use
+            # after what it borrows ended is the error, kept_lend. What it
+            # holds is still checked below: a pointer into the frame is
+            # refused where it is stored.)
+            if keep_lend and not own_block:
+                pass
+            elif copy_ok and dest_ty is not None and self.T.copyable(dest_ty) and not self.T.is_scalar(dest_ty):
                 av = AV("O", (), (), av.held)
             elif own_block and mixed and dest_ty is not None and self.T.owning(dest_ty):
                 # a value block's join that is fresh on one arm and a local
@@ -3104,11 +3144,11 @@ class FnCheck:
 
     # -- rvalues ---------------------------------------------------------------
     def rvalue(self, st, rv, line, dest_depth, dest_ty, what, copy_ok=False, lend_owner=lambda vid: False,
-               dest_vid=None, named=False):
+               dest_vid=None, named=False, keep_lend=False):
         k = rv[0]
         if k == "use":
             return self.transfer(st, rv[1], line, ("use", id(rv)), dest_depth, dest_ty, what, copy_ok=copy_ok,
-                                 lend_owner=lend_owner, dest_vid=dest_vid, named=named)
+                                 lend_owner=lend_owner, dest_vid=dest_vid, named=named, keep_lend=keep_lend)
         if k == "call":
             av = self.apply_call(st, rv, line, dest_vid)
             if av.own == "L" and dest_ty is not None and dest_ty[0] == "closure":
@@ -3487,6 +3527,29 @@ class FnCheck:
                         self.links[(vid, a[0])] = at
         return st
 
+    def kept_lend(self, st, src):
+        """Does nurlc hand `src`'s value over as it is - with its owner flag,
+        no copy made: a join's binding, or a call's temporary that holds a
+        lend of locals only?  Then a lend of it stays the lend it is, and its
+        use after what it borrows ended is the error (the engine's
+        eng_kept_lend, agora #887)."""
+        if src is None or src not in self.fn.vars:
+            return False
+        v = self.fn.vars[src]
+        jv = v.kind == "local" and src in self.join_vars
+        cl = v.kind == "temp" and src not in self.join_temps
+        if not (jv or cl):
+            return False
+        av = st.vals.get(src)
+        if av is None or (cl and not av.call):
+            return False
+        mine = [l for l in av.loans if l in self.loans and self.loans[l][1] != "clo"]
+        for l in mine:
+            pv = self.loans[l][0][0]
+            if pv is None or pv not in self.fn.vars or self.fn.vars[pv].kind != "local":
+                return False
+        return bool(mine)
+
     def linked(self, vid, var):
         """Was `vid` linked to `var` by a statement before this one?  Codegen
         hands a replaced owner's old value only to the readers it linked to
@@ -3674,7 +3737,8 @@ class FnCheck:
                     st.vals[psrc] = AV("O", (), (), self.held_of_own(st.vals[psrc], psrc))
                 new = self.rvalue(st, rv, ln, ddepth, v.ty, v.name, copy_ok=not repoint, dest_vid=vid,
                                   named=v.kind != "temp",
-                                  lend_owner=outer if v.kind == "temp" else (cursor_lends if v.mut and repoint else (lambda x: False)))
+                                  lend_owner=outer if v.kind == "temp" else (cursor_lends if v.mut and repoint else (lambda x: False)),
+                                  keep_lend=not repoint and v.kind != "temp" and self.kept_lend(st, psrc))
                 src_var = self.fn.vars.get(rv[1][1]) if (rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]) else None
                 if (cur is not None and cur.own == "P" and vid in self.pidx and self.pidx[vid] < self.ncap
                         and new.own == "L" and getattr(src_var, "cpcopy", False)):
@@ -3755,7 +3819,14 @@ class FnCheck:
                         # (MEMORY.md §2.12, agora #697)
                         self.err(ln, f"{v.name}: a borrowed value would have to be copied here, "
                                      f"and it cannot be copied")
-                    held = (new.held | hfrom(new.loans)) if new.own == "L" else new.held
+                    # (…and one that has a copy, given to an `inout` parameter -
+                    # not to a capture - is given that copy: it holds what the
+                    # lent value holds, and no handle of where it was lent
+                    # from; the engine's lcopy, agora #887)
+                    lcopy = (new.own == "L" and self.pidx[vid] >= self.ncap and self.fn.modes[self.pidx[vid]] == "inout"
+                             and v.ty is not None and v.ty[0] not in VIEW_TYPES and v.ty[0] != "closure"
+                             and self.T.owning(v.ty) and self.T.copyable(v.ty))
+                    held = (new.held | hfrom(new.loans)) if (new.own == "L" and not lcopy) else new.held
                     st.vals[vid] = AV("P", (), (), held)
                     if first and not held:
                         self.s_credits.add(self.pidx[vid])
