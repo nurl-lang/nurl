@@ -20,6 +20,7 @@ import A2.TypingFacts
 import A2.EditB
 import A2.EditBV
 import A2.Elem
+import A2.TakeB
 import A2.Preservation
 import A2.Progress
 import A2.Wf
@@ -38,6 +39,7 @@ import A2.DynCell
 import A2.TakeWitness
 import A2.PopWitness
 import A2.RemoveLoopWitness
+import A2.TakeBWitness
 import A2.HandOver
 import A2.ExitWitness
 import A2.Layout

@@ -53,10 +53,9 @@ stores nothing and is typed too.
   the new view, so they end; the borrow `x` holds it and stays live.
 * What is still not typed. A closure stored through a borrow (`t.hasFn`: a
   package enclosing the node would capture by name what the closure does,
-  `PkgsOK`); a pop or remove through a borrow, an element taken out as an
-  owned result (`vec_pop` is an `Rhs` on the owner's own slot; it needs a
-  step and a rule of its own); a change through a borrow inside a closure's
-  or a destructor's code (`Implements`, `DtorOK`) or in a callee handed
+  `PkgsOK`); a pop or remove through a borrow of such an element (one
+  that owns memory and holds no views is `Stmt.takeB`, `A2/TakeB.lean`);
+  a change through a borrow inside a closure's or a destructor's code (`Implements`, `DtorOK`) or in a callee handed
   views (`StmtT.ren`'s `S.R = []`), as for `editB`; and a root that is a
   `letd` binding, a borrowed parameter or reached through a share.
 * Probes. The five probes mapped to `StmtT.editB` (`field_arg_*_then_set`,

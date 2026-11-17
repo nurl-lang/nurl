@@ -446,7 +446,13 @@ theorem Step.keys {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (
         · exact .inl (List.mem_of_mem_take h)
         · exact .inl (List.mem_of_mem_drop h))
     · cases hw; exact hT.node_elem (List.getElem_mem h)
-  | withElemOOB _ _ _ _ => exact hk
+  | withElemOOB _ _ _ _ | takeBOOB _ _ _ => exact hk
+  | takeB hlt _ hno _ hr =>
+    obtain ⟨hT, hN⟩ := hk.nodeOf hno
+    refine (hk.set _ (fun w hw => ?_)).set _ (fun w hw => ?_)
+    · cases hw
+      exact hT.repl hr (hN.node_of (KB.int (j := 0)) (fun e he => .inl (List.mem_of_mem_eraseIdx he)))
+    · cases hw; exact hN.node_elem (List.getElem_mem hlt)
   | free _ _ => exact (hk.withAlloc _).set _ (fun _ h => by cases h)
   | panic => exact hk
   | waitPanic _ => exact hk

@@ -551,7 +551,7 @@ theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic
   generalize hr : Res.panic m1 = r at h
   induction h generalizing m1 with
   | seqP _ ih => cases hr; exact fun y hy => ih rfl y (by simpa [Stmt.spine] using hy)
-  | letvP _ | assignP _ | letdP _ | panic | waitPanic _ | withElemOOB _ _ _ _ =>
+  | letvP _ | assignP _ | letdP _ | panic | waitPanic _ | withElemOOB _ _ _ _ | takeBOOB _ _ _ =>
     cases hr; exact fun _ _ => rfl
   | @scopeP m1' x' _ _ _ _ _ _ ih =>
     cases hr
@@ -590,7 +590,7 @@ theorem Step.panic_blkBack {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.
   generalize hr : Res.panic m1 = r at h
   induction h generalizing m1 with
   | seqP _ ih => cases hr; exact ih rfl
-  | letvP _ | assignP _ | letdP _ | panic | waitPanic _ | withElemOOB _ _ _ _ =>
+  | letvP _ | assignP _ | letdP _ | panic | waitPanic _ | withElemOOB _ _ _ _ | takeBOOB _ _ _ =>
     cases hr; exact BlkBack.refl _
   | scopeP _ _ _ ih => cases hr; have h := ih rfl; exact h
   | rbindP _ _ ih => cases hr; have h := ih rfl; exact h

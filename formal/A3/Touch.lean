@@ -78,7 +78,7 @@ theorem Step.panic_st {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.panic
   | panic => cases hr; exact fun _ _ h => h
   | waitPanic _ => cases hr; exact fun _ _ h => h
   | letdP _ => cases hr; exact fun _ _ h => h
-  | withElemOOB _ _ _ _ => cases hr; exact fun _ _ h => h
+  | withElemOOB _ _ _ _ | takeBOOB _ _ _ => cases hr; exact fun _ _ h => h
   | scopeDPMoved _ _ ih =>
     cases hr
     intro v sl hv

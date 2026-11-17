@@ -440,7 +440,8 @@ theorem Stmt.codesOK_rename {P : Prog} (ρ : Var → Var) (s : Stmt) : (s.rename
   | ite c a b iha ihb => simp only [Stmt.rename, Stmt.codesOK, iha, ihb]
   | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
   | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
-  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih | callcE _ _ _ _ _ ih | block _ ih | loop _ ih =>
+  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih | callcE _ _ _ _ _ ih | block _ ih | loop _ ih
+  | takeB _ _ _ _ ih =>
     simp only [Stmt.rename, Stmt.codesOK, ih]
   | _ => exact Iff.rfl
 
@@ -604,7 +605,7 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
         · exact pkgOK_elem hT (List.mem_of_mem_take he)
         · exact pkgOK_elem hT (List.mem_of_mem_drop he)
     · cases e; exact pkgOK_elem hT (List.getElem_mem hn)
-  | withElemOOB _ _ _ _ =>
+  | withElemOOB _ _ _ _ | takeBOOB _ _ _ =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     exact hm
   | insert _ ht hx _ _ =>
@@ -648,6 +649,19 @@ theorem codes_step {P : Prog} (hPc : ProgCodes P) {m : Mem} {s : Stmt} {r : Res}
     refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
     cases hc with
     | elem he => exact pkgOK_elem hn0 (List.mem_of_mem_take he)
+  | takeB hlt _ hn _ hr =>
+    -- AGORA-889: the owner keeps the node's other elements, and `y` the one
+    -- moved out
+    intro hm _ hs; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
+    have hT := hm.slot hn.2.2.1
+    have hn0 := hT.sub hr.sub
+    refine ⟨((hm.of_st rfl).set (fun V e => ?_)).set (fun V e => ?_), hs⟩
+    · cases e
+      refine hr.pkgOK_new hT ?_
+      refine pkgOK_of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with
+      | elem he => exact pkgOK_elem hn0 (List.mem_of_mem_eraseIdx he)
+    · cases e; exact pkgOK_elem hn0 (List.getElem_mem hlt)
   | editSet _ _ ht hn _ hr =>
     intro hm _ _; refine ⟨fun _ _ h => ?_, fun _ h => ?_⟩ <;> cases h
     obtain ⟨hv, hm1⟩ := ht.codes hm
@@ -778,6 +792,7 @@ def Stmt.globsAt (GT : GTy) : Stmt → Prop
   | .callcE _ _ _ _ s => s.globsAt GT
   | .block s => s.globsAt GT
   | .loop s => s.globsAt GT
+  | .takeB _ _ _ s => s.globsAt GT
   | _ => True
 
 /-- **A3.6: the program reads its globals at their declared types**: every
@@ -797,7 +812,8 @@ theorem Stmt.globsAt_rename {GT : GTy} (ρ : Var → Var) (s : Stmt) : (s.rename
   | ite c a b iha ihb => simp only [Stmt.rename, Stmt.globsAt, iha, ihb]
   | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
   | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
-  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih | callcE _ _ _ _ _ ih | block _ ih | loop _ ih =>
+  | scopeL _ _ _ _ ih | withElem _ _ _ _ ih | callcE _ _ _ _ _ ih | block _ ih | loop _ ih
+  | takeB _ _ _ _ ih =>
     simp only [Stmt.rename, Stmt.globsAt, ih]
   | _ => exact Iff.rfl
 
@@ -844,6 +860,7 @@ theorem globs_step {P : Prog} {GT : GTy} (hPG : ProgGlobs P GT) {m : Mem} {s : S
   | callc _ _ hf _ _ => intro hs _ _ h; cases h; exact ⟨callIn_globs hPG hf _ _ _, hs⟩
   | «while» => intro hs _ _ h; cases h; exact ⟨⟨hs, hs⟩, trivial⟩
   | withElem _ _ _ _ _ => intro hs _ _ h; cases h; exact ⟨hs, trivial⟩
+  | takeB _ _ _ _ _ => intro hs _ _ h; cases h; exact hs
   | callcE _ _ _ _ => intro hs _ _ h; cases h; exact ⟨⟨trivial, trivial⟩, hs⟩
   | callcD _ _ _ _ _ => intro hs _ _ h; cases h; exact ⟨trivial, hs⟩
   | blockExit he => intro hs _ _ h; cases h; exact he.globsAt hs

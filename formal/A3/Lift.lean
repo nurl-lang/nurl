@@ -295,6 +295,9 @@ theorem Step.lifts {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
     exact ⟨_, GhostRel.refl _, Step.withElem (m := liftMem a2 m) hn hv (union_true a2 hc) (union_true a2 hdd)
       (Eval.lift he a2) hx⟩
   | withElemOOB hv hc he hle => exact Step.withElemOOB (m := liftMem a2 m) hv (union_true a2 hc) (Eval.lift he a2) hle
+  | takeB hlt he hn hy hr =>
+    exact ⟨_, GhostRel.refl _, Step.takeB (m := liftMem a2 m) hlt (Eval.lift he a2) (NodeOf.lift hn a2) hy hr⟩
+  | takeBOOB he hn hle => exact Step.takeBOOB (m := liftMem a2 m) (Eval.lift he a2) (NodeOf.lift hn a2) hle
   | insert he ht hx hc hdd =>
     exact ⟨_, GhostRel.refl _,
       Step.insert (Eval.lift he a2) (TakeVal.lift ht a2) hx (union_true a2 hc) (union_true a2 hdd)⟩

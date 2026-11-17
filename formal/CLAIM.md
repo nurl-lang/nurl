@@ -85,18 +85,27 @@ the LLVM / C11 memory model rather than redefining it.
   loop's body is shown to keep its context where nothing but the borrow
   depends on the owner (`LoopCtx`). Out of range the witness leaves the
   Vec as it is, where nurlc's `vec_remove` panics.
+  A pop or a remove through a borrow whose element is kept, whatever it
+  owns, is a rule of the calculus (AGORA-889): `Stmt.takeB x i y s`,
+  `: y ( vec_remove x i )` through the borrow `x` (a pop is its last
+  index). `Step.takeB` moves element `i` out of the node `x` names, in
+  place in its owner's tree (`NodeOf`, `Repl`: `editSet`'s reverse), to
+  the new owner `y`, and the body runs in `y`'s scope; out of range it
+  panics, as `vec_remove` does. `StmtT.takeB` types it as `editB`'s
+  truncation on every owner `x`'s path may reach (`ThruOK`, `killThru`),
+  for an element type that holds no views and no destructor value, and
+  binds `y` as the owner of what moved out (`compE`: it captures nothing
+  by name). The soundness and leak theorems cover it
+  (`takeB_pres`, `HeapOK.editTake`, `MInv.editB_take`, `A2/TakeB.lean`).
+  `A2/TakeBWitness.lean` is a witness program: two Strings moved out
+  through `vec_at vv 0`, one popped and one removed, kept and read,
+  typed and run safe and leak-free.
   That nurlc's
   `vec_pop` / `vec_remove` lower to these steps is phase C. Outside the
   claim still:
-  - a change through a borrow of a Vec whose elements hold views;
-  - a pop or a remove through a borrow that moves an element which owns
-    memory out to the caller (a `Vec` of Strings popped through a borrow,
-    its result kept): the calculus moves an element out of an owner's
-    tree only from the owner itself (`Rhs.pop`, `Rhs.remove`). Taking it
-    out through a borrow needs a new step, the reverse of `editSet` (a
-    subtree moved out of its node in place, through `NodeOf` / `Repl`, to
-    a fresh owned binding), typed as `editB`'s truncation is; open as
-    AGORA-889's rest;
+  - a change through a borrow of a Vec whose elements hold views (and a
+    move-out through a borrow of such an element, or of one that holds a
+    destructor value);
   - what nurlc keeps beside such a change that the calculus ends: two
     parts of one value, copies of the changing borrow, a whole copy beside
     a field viewer (Agora #118, github#1426);

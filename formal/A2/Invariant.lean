@@ -1813,6 +1813,26 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       StmtT P ξ Γ F (.edit true x op)
         (setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γ1)) x
           { Ex1 with held := Ex1.held ++ memDeps D })
+  /-- AGORA-889: an element moved out through a borrow `x` (`: y ( vec_remove
+      x i )`, a `vec_pop` its last index), of an element type that holds no
+      views.  The element leaves the tree of one of the roots `x` reaches in
+      memory, which the typing cannot tell apart: each of them undergoes the
+      effect of a truncation there (`.drop`: the borrows of its elements end;
+      `killThru`), and must allow it, not be lent out and end no view a
+      destructor will read (`ThruOK`), as `editB`'s truncation asks.  `x`
+      stays live: its node is changed in place.  The element moves out to
+      `y`, which owns it as a field taken out of a struct is owned (`compE`:
+      an element of a type that holds no views captures nothing by name, so
+      it holds nothing), and the body runs in `y`'s scope, as `letv`'s does.  What moves out owns no destructor value: its binding is no
+      `letd`'s. -/
+  | takeB {Γ Δ : Ctx} {F : List Var} {x y : Var} {i : Expr} {s : Stmt} {Ex : Entry} {t : Ty} :
+      s.src = true → Γ y = none → y ∉ F →
+      Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = false →
+      x ∉ F → ExprT Γ i → memDeps Ex.path ≠ [] → ThruOK Γ F (.trunc i) Ex.ty Ex.path →
+      t.holdsDtor = false →
+      StmtT P (ξ.under y) (setE (setE (killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) y (compE Ex t)) F s Δ →
+      EndOK Δ y →
+      StmtT P ξ Γ F (.takeB x i y s) (exitScope y Δ)
   /-- Agora #871: an exit (`break`, `continue`, an early `^`) ends its path
       as a panic does — what follows it may assume any context with the
       same bindings, modes and types (the panic rule's premises) — and it
@@ -2111,6 +2131,7 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .callcE _ _ _ _ s => s.codesOK P
   | .block s => s.codesOK P
   | .loop s => s.codesOK P
+  | .takeB _ _ _ s => s.codesOK P
   | _ => True
 
 def ProgCodes (P : Prog) : Prop := ∀ fn ∈ P, fn.body.codesOK P

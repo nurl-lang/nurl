@@ -469,7 +469,13 @@ theorem Step.kinds {P : Prog} {κ : Nat → Bool} {m : Mem} {s : Stmt} {r : Res}
         · exact .inl (List.mem_of_mem_take h)
         · exact .inl (List.mem_of_mem_drop h))
     · cases hw; exact hT.node_elem (List.getElem_mem h)
-  | withElemOOB _ _ _ _ => exact hk.ext
+  | withElemOOB _ _ _ _ | takeBOOB _ _ _ => exact hk.ext
+  | takeB hlt _ hno _ hr =>
+    obtain ⟨hT, hN⟩ := hk.nodeOf hno
+    refine ((hk.set _ (fun w hw => ?_)).set _ (fun w hw => ?_)).ext
+    · cases hw
+      exact hT.repl hr (hN.node_of (KK.int (j := 0)) (fun e he => .inl (List.mem_of_mem_eraseIdx he)))
+    · cases hw; exact hN.node_elem (List.getElem_mem hlt)
   | free _ _ => exact ((hk.withAlloc _).set _ (fun _ h => by cases h)).ext
   | panic => exact hk.ext
   | waitPanic _ => exact hk.ext

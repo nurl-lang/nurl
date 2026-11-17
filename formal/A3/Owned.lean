@@ -271,7 +271,25 @@ theorem Step.ownedId {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r
     · rcases OwnedId.set_some hi with ⟨_, hiv⟩ | hi
       · exact .inl (hsub i hiv)
       · exact .inl hi
-  | withElemOOB _ _ _ _ => exact fun i hi => .inl hi
+  | withElemOOB _ _ _ _ | takeBOOB _ _ _ => exact fun i hi => .inl hi
+  | takeB hlt _ hn _ hr =>
+    -- AGORA-889: the element moved out and what the owner keeps were the
+    -- owner's tree's
+    intro i hi
+    rcases OwnedId.set_some hi with ⟨_, hiv⟩ | hi
+    · exact .inl (OwnedId.of_slot hn.2.2.1
+        (hr.sub.ids i (Child.ids (Child.elem (List.getElem_mem hlt)) i hiv)))
+    · rcases OwnedId.set_some hi with ⟨_, hiv⟩ | hi
+      · rcases hr.mem_ids hiv with hi | hi
+        · refine .inl (OwnedId.of_slot hn.2.2.1 (hr.sub.ids i ?_))
+          simp only [ids_node, List.mem_cons] at hi ⊢
+          rcases hi with hi | hi | hi
+          · exact .inl hi
+          · exact .inr (.inl hi)
+          · obtain ⟨e, he, hie⟩ := mem_idsL_iff.mp hi
+            exact .inr (.inr (mem_idsL (List.mem_of_mem_eraseIdx he) hie))
+        · exact .inl (OwnedId.of_slot hn.2.2.1 hi)
+      · exact .inl hi
   | insert _ ht hx _ _ =>
     obtain ⟨a1, b1⟩ := TakeVal.ownedId ht hb
     intro i hi
@@ -426,7 +444,7 @@ theorem Step.ownedId_panic {P : Prog} {m m1 : Mem} {s : Stmt} (h : Step P m s (.
   | panic => cases hr; exact fun i hi => hi
   | waitPanic _ => cases hr; exact fun i hi => hi
   | letdP _ => cases hr; exact fun i hi => hi
-  | withElemOOB _ _ _ _ => cases hr; exact fun i hi => hi
+  | withElemOOB _ _ _ _ | takeBOOB _ _ _ => cases hr; exact fun i hi => hi
   | scopeDPMoved _ _ ih => cases hr; exact fun i hi => ih rfl i (OwnedId.of_remove hi)
   | scopeLP _ hrl ih => cases hr; exact fun i hi => ih rfl i (Release.ownedId hrl hi)
   | _ => cases hr

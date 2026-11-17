@@ -328,6 +328,14 @@ import A3
 -- (A2/RemoveLoopWitness.lean)
 #print axioms A2.RemoveLoop.main_safe
 #print axioms A2.RemoveLoop.main_no_leak
+-- AGORA-889: an element that owns memory moved out through a borrow, kept
+-- (`Stmt.takeB`; A2/TakeB.lean, A2/TakeBWitness.lean)
+#print axioms A2.takeB_pres
+#print axioms A2.HeapOK.editTake
+#print axioms A2.MInv.editB_take
+#print axioms A2.TakeBWitness.main_typed
+#print axioms A2.TakeBWitness.main_safe
+#print axioms A2.TakeBWitness.main_no_leak
 -- AGORA-885: the by-name owner hand-over, as an encoding (A2/HandOver.lean)
 #print axioms A2.HandOver.main_safe
 #print axioms A2.HandOver.main_no_leak

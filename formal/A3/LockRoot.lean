@@ -67,6 +67,7 @@ def _root_.A2.Stmt.nm : Stmt → List Var
   | .block s => s.nm
   | .exit _ => []
   | .loop s => s.nm
+  | .takeB x i y s => y :: x :: i.vars ++ s.nm
 
 theorem nm_vars (s : Stmt) : ∀ v, v ∉ s.vars → v ∉ s.nm := by
   induction s <;> intro v hv <;> simp_all [Stmt.nm, Stmt.vars]
@@ -436,7 +437,13 @@ theorem Step.keepSlot {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     refine ⟨?_, fun _ _ he => by cases he; nm_close⟩
     show ((m.set v _).set x _).st y = _
     simp only [Mem.set_st]; rw [upd_ne _ _ hyn.1, upd_ne _ _ hyn.2.1]
-  | withElemOOB _ _ _ _ => intro _ _ _ _ _ _ _ _; exact ⟨rfl, fun _ _ he => by cases he⟩
+  | withElemOOB _ _ _ _ | takeBOOB _ _ _ => intro _ _ _ _ _ _ _ _; exact ⟨rfl, fun _ _ he => by cases he⟩
+  | @takeB x y' ow i s0 n T T' t c d es _ _ hn _ _ =>
+    intro _ y o w hy hw hyn _
+    simp only [Stmt.nm, List.cons_append, List.mem_cons, List.mem_append, not_or] at hyn
+    refine ⟨?_, fun _ _ he => by cases he; nm_close⟩
+    show ((m.set ow _).set y' _).st y = _
+    simp only [Mem.set_st]; rw [upd_ne _ _ hyn.1, upd_ne _ _ (nodeOf_ne hn hy hw hyn.2.1)]
   | @free x t a' _ _ =>
     intro _ y o w _ _ hyn _
     simp only [Stmt.nm, List.mem_cons, List.not_mem_nil, or_false] at hyn
@@ -920,6 +927,9 @@ theorem Step.lkRoots {P : Prog} (hP : ProgOK P) {m m' : Mem} {s s' : Stmt} (h : 
   | withElem _ _ _ _ _ _ =>
     cases hr; rintro ⟨_, _, _, _, ht⟩ _ _ _ _
     exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.withElem_src])
+  | takeB _ _ _ _ _ =>
+    cases hr; rintro ⟨_, _, _, _, ht⟩ _ _ _ _
+    exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.takeB_src])
   | unpair _ _ _ _ =>
     cases hr; rintro ⟨_, _, _, _, ht⟩ _ _ _ _
     exact lkRoots_nil _ _ (by simp [Stmt.lfr, lfr_src ht.unpair_src])
