@@ -765,4 +765,114 @@ theorem WFv.view_holdsView {τ : Ty} {d o l : Nat} (h : WFv τ (.view d o l)) : 
   | dtor _ _ ih => simpa [Ty.holdsView] using ih hv
   | _ => cases hv
 
+/-- Every view a well-formed value holds is one `ViewIn` reaches. -/
+theorem WFv.viewIn {τ : Ty} {T : Val} (hw : WFv τ T) {d o l : Nat} (hs : Sub (.view d o l) T) :
+    ∃ s, ViewIn τ T s (.view d o l) := by
+  induction hw with
+  | int => cases hs
+  | view => cases hs; exact ⟨_, .here⟩
+  | arc => cases hs
+  | lk => cases hs
+  | cell => cases hs
+  | rguard => cases hs
+  | node _ ih =>
+    cases hs with
+    | child he hs' => obtain ⟨s, h⟩ := ih _ he hs'; exact ⟨s, .child he h⟩
+  | pair _ _ iha ihb =>
+    cases hs with
+    | fst h => obtain ⟨s, h'⟩ := iha h; exact ⟨s, .fst h'⟩
+    | snd h => obtain ⟨s, h'⟩ := ihb h; exact ⟨s, .snd h'⟩
+  | inl _ ih => cases hs with | inl h => obtain ⟨s, h'⟩ := ih h; exact ⟨s, .inl h'⟩
+  | inr _ ih => cases hs with | inr h => obtain ⟨s, h'⟩ := ih h; exact ⟨s, .inr h'⟩
+  | @pkg fs te ms q v cs hw' hq ih =>
+    cases hs with
+    | pkg h =>
+      cases q with
+      | any => obtain ⟨s, h'⟩ := ih h; exact ⟨s, .pkg h'⟩
+      | _ => exact absurd h (hw'.noView (hq.1 rfl).1)
+  | dtor _ _ ih => obtain ⟨s, h⟩ := ih hs; exact ⟨s, .dtor h⟩
+
+theorem ViewAt.home {m : Mem} (hh : HeapOK m) {dep : Dep} {d o l : Nat} {t : Ty} (h : ViewAt m dep d o l t) :
+    (∃ r T, m.st r = some ⟨true, some T⟩ ∧ d ∈ T.ids) ∨ PayAddr m d := by
+  obtain ⟨c, es, _, hlan, _⟩ := h
+  rcases hlan.home with ⟨x, T, hT, hsT⟩ | hp
+  · exact Or.inl ⟨x, T, hT, hsT.ids d (by simp [Val.ids])⟩
+  · exact Or.inr (hp.payAddr hh d (by simp [Val.ids]))
+
+theorem ValOK.bare_href {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
+    ∀ c, Bare (.href c) v → ∃ dep t H', HrefAt m dep c t H' := by
+  induction h with
+  | href h =>
+    intro c hb
+    obtain rfl := hb.href_eq
+    obtain ⟨dep, _, hh⟩ := h
+    exact ⟨dep, _, _, hh⟩
+  | pair _ _ iha ihb =>
+    intro c hb
+    cases hb with
+    | fst h => exact iha c h
+    | snd h => exact ihb c h
+  | inl _ ih => intro c hb; cases hb with | inl h => exact ih c h
+  | inr _ ih => intro c hb; cases hb with | inr h => exact ih c h
+  | dtor _ ih => exact ih
+  | _ => intro c hb; cases hb
+
+theorem ValOK.bare_view {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
+    ∀ d o l, Bare (.view d o l) v → ∃ dep t, ViewAt m dep d o l t := by
+  induction h with
+  | view h =>
+    intro d o l hb
+    have := hb.of_leaf (fun _ _ h => by cases h) (fun _ h => by cases h) (fun _ h => by cases h)
+    cases this
+    obtain ⟨dep, _, hv⟩ := h
+    exact ⟨dep, _, hv⟩
+  | pair _ _ iha ihb =>
+    intro d o l hb
+    cases hb with
+    | fst h => exact iha d o l h
+    | snd h => exact ihb d o l h
+  | inl _ ih => intro d o l hb; cases hb with | inl h => exact ih d o l h
+  | inr _ ih => intro d o l hb; cases hb with | inr h => exact ih d o l h
+  | dtor _ ih => exact ih
+  | _ => intro d o l hb; cases hb
+
+/-- **What a live binding names lies in memory**: in an owned tree, or in a
+    payload (each name is valid: `ValOK`, `HrefAt`, `ViewsOK`). -/
+theorem MInv.named_home {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {Ey : Entry} (hy : Γ y = some Ey)
+    (hl : Ey.live = true) {o : Bool} {v : Val} (hs : m.st y = some ⟨o, some v⟩) {i : Nat}
+    (hn : PkgNames m Γ Ey v i) : (∃ r T, m.st r = some ⟨true, some T⟩ ∧ i ∈ T.ids) ∨ PayAddr m i := by
+  have hbor : (Ey.mode = .bor ∨ Ey.mode = .rootb) → ValOK m Ey.ty v Ey.path Ey.held := fun hm => by
+    have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+    obtain ⟨w, hw, hok⟩ := hi.bor_val hy hl hos
+    rw [hs] at hw; cases hw; exact hok
+  have hhref : ∀ c, Bare (.href c) v → (Ey.mode = .bor ∨ Ey.mode = .rootb) →
+      (∃ r T, m.st r = some ⟨true, some T⟩ ∧ c ∈ T.ids) ∨ PayAddr m c := fun c hb hm => by
+    obtain ⟨dep, t, H', d, es, hlan, _⟩ := (hbor hm).bare_href c hb
+    rcases hlan.home with ⟨x, T, hT, hsT⟩ | hp
+    · exact Or.inl ⟨x, T, hT, hsT.ids c (by simp [Val.ids])⟩
+    · exact Or.inr (hp.payAddr hi.heap c (by simp [Val.ids]))
+  rcases hn with ⟨hm, _, ⟨c, hb, rfl⟩ | ⟨o', l, rfl⟩⟩ | ⟨hm, _, o', l, hb⟩ |
+      ⟨hm, _, c, r, T, t, d, es, hb, hT, hsn, o', l, hv⟩ | ⟨hos, _, o', l, hv⟩
+  · exact hhref _ hb hm
+  · obtain ⟨dep, t, hva⟩ := (hbor hm).bare_view i o' l (.refl _)
+    exact hva.home hi.heap
+  · obtain ⟨dep, t, hva⟩ := (hbor hm).bare_view i o' l hb
+    exact hva.home hi.heap
+  · obtain ⟨dep, t', H', d', es', hlan, hwn, hvs, _⟩ := (hbor hm).bare_href c hb
+    have heq : Val.node t' c d' es' = .node t c d es := by
+      rcases hlan.home with ⟨x, T', hT', hsT'⟩ | hp
+      · exact (owned_unique hi.heap hT' hT hsT' hsn (i := c) (by simp [Val.head]) (by simp [Val.head])).2
+      · exact (hi.heap.notPay hT (hsn.ids c (by simp [Val.ids])) (hp.payAddr hi.heap c (by simp [Val.ids]))).elim
+    rw [← heq] at hv
+    obtain ⟨s, hin⟩ := hwn.viewIn hv
+    obtain ⟨d0, o0, l0, hvv, dep', _, hva⟩ := hvs s _ hin
+    cases hvv
+    exact hva.home hi.heap
+  · obtain ⟨T', hT', hwT, hvsT⟩ := hi.own_val hy hl hos
+    rw [hs] at hT'; cases hT'
+    obtain ⟨s, hin⟩ := hwT.viewIn hv
+    obtain ⟨d0, o0, l0, hvv, dep', _, hva⟩ := hvsT s _ hin
+    cases hvv
+    exact hva.home hi.heap
+
 end A2
