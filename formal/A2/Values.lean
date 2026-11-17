@@ -626,13 +626,13 @@ theorem lendOf_view {e : Val} {d o l : Nat} (h : lendOf e = .view d o l) : e = .
     are `e`'s. -/
 theorem lend_pkgNames {m : Mem} {Γ : Ctx} (hh : HeapOK m) {e : Val} (hhome : Home m e)
     (hnh : ∀ c', ¬ Sub (.href c') e) {E' : Entry} (hm : E'.mode = .bor)
-    (hf : CleanDeps Γ E'.path → PkgFreeAt m e)
+    (hf : CleanDeps Γ E'.path → (∃ c, Bare (.href c) (lendOf e)) → PkgFreeAt m e)
     (hvw : CleanDeps Γ E'.held → ∀ i o l, Sub (.view i o l) e → PkgFreeId m i)
     (hvtop : CleanDeps Γ E'.path → ∀ i o l, e = .view i o l → PkgFreeId m i)
     {i : Nat} (hn : PkgNames m Γ E' (lendOf e) i) : PkgFreeId m i := by
   rcases hn with ⟨_, hc, ⟨c, hb, hic⟩ | ⟨o, l, hv⟩⟩ | ⟨_, hc, o, l, hb⟩ |
       ⟨_, hc, c, r, T, t, d, es, hb, hT, hs, o, l, hv⟩ | ⟨hos, _⟩
-  · subst hic; exact (lend_href_free hh e hhome (hf hc) hnh hb).1
+  · subst hic; exact (lend_href_free hh e hhome (hf hc ⟨_, hb⟩) hnh hb).1
   · exact hvtop hc i o l (lendOf_view hv)
   · exact hvw hc.right i o l (bare_lend_view e hb)
   · obtain ⟨t', d', es', hse⟩ := bare_lend_node e hnh hb
@@ -643,5 +643,119 @@ theorem lend_pkgNames {m : Mem} {Γ : Ctx} (hh : HeapOK m) {e : Val} (hhome : Ho
       exact hvw hc i o l (hv.trans hse)
     · exact (hh.notPay hT (hs.ids c (by simp [Val.ids])) ((hp.sub hse).payAddr hh c (by simp [Val.ids]))).elim
   · rw [hm] at hos; cases hos
+
+/-- A value of a type that holds no view holds none. -/
+theorem WFv.noView {τ : Ty} {v : Val} (hw : WFv τ v) (hhv : τ.holdsView = false) {d o l : Nat} :
+    ¬ Sub (.view d o l) v := by
+  induction hw with
+  | int => intro h; cases h
+  | view => simp [Ty.holdsView] at hhv
+  | arc => intro h; cases h
+  | lk => intro h; cases h
+  | cell => intro h; cases h
+  | rguard => intro h; cases h
+  | pkg _ hq ih => intro h; cases h with | pkg h => exact ih (hq.1 hhv).1 h
+  | node _ ih =>
+    intro h
+    cases h with
+    | child he hs => exact ih _ he (by simpa [Ty.holdsView] using hhv) hs
+  | pair _ _ iha ihb =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv
+    intro h
+    cases h with
+    | fst h => exact iha hhv.1 h
+    | snd h => exact ihb hhv.2 h
+  | inl _ ih =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv
+    intro h; cases h with | inl h => exact ih hhv.1 h
+  | inr _ ih =>
+    simp only [Ty.holdsView, Bool.or_eq_false_iff] at hhv
+    intro h; cases h with | inr h => exact ih hhv.2 h
+  | dtor _ _ ih => exact ih (by simpa [Ty.holdsView] using hhv)
+
+/-- An owned value holds no handle. -/
+theorem WFv.noHref {τ : Ty} {v : Val} (hw : WFv τ v) {c : Nat} : ¬ Sub (.href c) v := by
+  induction hw with
+  | int => intro h; cases h
+  | view => intro h; cases h
+  | arc => intro h; cases h
+  | lk => intro h; cases h
+  | cell => intro h; cases h
+  | rguard => intro h; cases h
+  | pkg _ _ ih => intro h; cases h with | pkg h => exact ih h
+  | node _ ih =>
+    intro h
+    cases h with
+    | child he hs => exact ih _ he hs
+  | pair _ _ iha ihb =>
+    intro h
+    cases h with
+    | fst h => exact iha h
+    | snd h => exact ihb h
+  | inl _ ih => intro h; cases h with | inl h => exact ih h
+  | inr _ ih => intro h; cases h with | inr h => exact ih h
+  | dtor _ _ ih => exact ih
+
+/-- No payload holders read holds a view (`MInv.blocks`: no block's type
+    holds one). -/
+theorem MInv.noViewPay {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {d o l : Nat} : ¬ InPay m (.view d o l) := by
+  rintro ⟨k', bl, hk, hs⟩
+  obtain ⟨_, hhv, hpay, _⟩ := hi.blocks k' bl hk
+  have hrd : bl.rd = .int 0 ∨ ∃ p, bl.pay = some p ∧ bl.rd = p := by
+    obtain ⟨ty, kd, pay⟩ := bl
+    cases kd <;> cases pay <;> simp [Blk.rd, Blk.tree]
+  rcases hrd with h | ⟨p, hp, h⟩
+  · rw [h] at hs; cases hs
+  · rw [h] at hs
+    exact (hpay p hp).1.noView hhv hs
+
+/-- **The views of the node a live binding names** have addresses no
+    package holds, when what it holds reaches memory through clean roots only
+    and no share: an owner's tree's views, or a borrow's pointee's (in an
+    owned tree: no payload holds a view). -/
+theorem MInv.vecOf_views {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hl : E.live = true) {t : Ty} {c d : Nat} {es : List Val} (hvec : VecOf m y t c d es)
+    (hc : CleanDeps Γ E.held) : ∀ i o l, Sub (.view i o l) (.node t c d es) → PkgFreeId m i := by
+  intro i o l hv
+  obtain ⟨sl, hsl, _, hso, _⟩ := hi.slot y E hy
+  obtain ⟨_, _, hvv⟩ := hvec
+  rcases hvv with hst | ⟨hst, hna⟩
+  · rw [hst] at hsl; cases hsl
+    exact hi.pkgFree y E true _ hy hl hst i (Or.inr (Or.inr (Or.inr ⟨hso.symm, hc, o, l, hv⟩)))
+  · rw [hst] at hsl; cases hsl
+    have hm : E.mode = .bor ∨ E.mode = .rootb := by
+      have h := hso.symm
+      cases hm : E.mode <;> simp_all [Mode.ownSlot]
+    rcases hna with ⟨r, T, hT, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
+    · exact hi.pkgFree y E false _ hy hl hst i
+        (Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T, t, d, es, .refl _, hT, hs, o, l, hv⟩)))
+    · exact (hi.noViewPay ⟨k, bl, hk, hv.trans hs⟩).elim
+
+theorem VecOf.home {m : Mem} {y : Var} {t : Ty} {c d : Nat} {es : List Val} (h : VecOf m y t c d es) :
+    Home m (.node t c d es) := by
+  obtain ⟨_, _, hv⟩ := h
+  rcases hv with hv | ⟨_, hna⟩
+  · exact Or.inl ⟨y, _, hv, Sub.refl _⟩
+  · rcases hna with ⟨x, T, hT, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
+    · exact Or.inl ⟨x, T, hT, hs⟩
+    · exact Or.inr ⟨k, bl, hk, hs⟩
+
+/-- What is borrowed from a borrow or a borrowed parameter through clean
+    roots only and no share depends, through its path, on clean roots only. -/
+theorem derive_clean_path {Γ : Ctx} {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hm : E.mode = .bor ∨ E.mode = .rootb) {k : Kind} (hkn : k.isName = false)
+    (h : CleanDeps Γ (derive y E k)) : CleanDeps Γ E.path := by
+  obtain ⟨hr, hb⟩ := derive_clean hkn h
+  rcases hm with hm | hm
+  · exact hb (by rw [hm]; rfl)
+  · exact (hr (by rw [hm]; rfl)).rootb_inv hy hm
+
+/-- A borrowed slot is a borrow's or a borrowed parameter's. -/
+theorem MInv.bor_mode {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    {v : Val} (hv : m.st y = some ⟨false, some v⟩) : E.mode = .bor ∨ E.mode = .rootb := by
+  obtain ⟨sl, hsl, _, hso, _⟩ := hi.slot y E hy
+  rw [hv] at hsl; cases hsl
+  have h := hso.symm
+  cases hm : E.mode <;> simp_all [Mode.ownSlot]
 
 end A2

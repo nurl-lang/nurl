@@ -1344,22 +1344,44 @@ theorem elemE_mode (y : Var) (E : Entry) (t : Ty) : (elemE y E t).mode = .bor :=
     element is a part of it but a package's environment. -/
 theorem elem_pkgFree {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
     (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty = .vec t)
-    {t' : Ty} {c d n : Nat} {es : List Val} (hn : n < es.length) (hvec : VecOf m y t' c d es)
-    {c' : Nat} (hc : lendOf es[n] = .href c')
-    (hcl : ∀ d ∈ memDeps (elemE y E t).path, d.kind ≠ .share ∧ Clean Γ d.root) : PkgFreeNode m c' := by
+    {t' : Ty} {c d n : Nat} {es : List Val} (hn : n < es.length) (hvec : VecOf m y t' c d es) :
+    ∀ i, PkgNames m Γ (elemE y E t) (lendOf es[n]) i → PkgFreeId m i := by
   obtain ⟨c0, d0, es0, hvec0, hw, _⟩ := hi.vec_node hy hl hty
   have heq := VecOf.unique hi.heap hvec0 hvec
   cases heq
   have hmem : es[n] ∈ es := List.getElem_mem hn
   have hwe : WFv t es[n] := hw.elem rfl hmem
-  obtain ⟨t1, d1, es1, he⟩ := lendOf_href hwe hc
-  have hpath : (elemE y E t).path = derive y E .inner := by
-    rw [he] at hwe; cases t <;> first | rfl | (cases hwe)
-  rw [hpath] at hcl
-  obtain ⟨hf, hhome⟩ := hi.vecOf_free hy hl hvec rfl hcl
-  have hc' : Child (.node t1 c' d1 es1) (.node t c d es) := he ▸ Child.elem hmem
-  exact (PkgFreeAt.child' hi.heap hhome hf (fun _ _ _ _ _ h => by cases h) hc' (i := c')
-    (by simp [Val.ids])).toNode hi.heap (home_child hc' hhome)
+  generalize es[n] = e at hmem hwe ⊢
+  have hce : Child e (.node t c d es) := Child.elem hmem
+  have hviews := hi.vecOf_views hy hl hvec
+  have hf : CleanDeps Γ (elemE y E t).path → (∃ c', Bare (.href c') (lendOf e)) → PkgFreeAt m e := by
+    rintro hcl ⟨c', hb⟩
+    have hpath : (elemE y E t).path = derive y E .inner := by
+      cases t with
+      | int => cases hwe; simp [lendOf] at hb; cases hb
+      | slice s => cases hwe; simp [lendOf] at hb; cases hb
+      | _ => rfl
+    rw [hpath] at hcl
+    obtain ⟨hf, hhome⟩ := hi.vecOf_free hy hl hvec rfl hcl
+    exact hf.child' hi.heap hhome (fun _ _ _ _ _ h => by cases h) hce
+      (bare_lend_ids _ (fun _ => hwe.noHref) hb)
+  have hvw : CleanDeps Γ (elemE y E t).held → ∀ i o l, Sub (.view i o l) e → PkgFreeId m i := by
+    intro hc i o l hv
+    have hh : (elemE y E t).held = E.held := by
+      cases t with
+      | int => cases hwe; cases hv
+      | _ => rfl
+    rw [hh] at hc
+    exact hviews hc i o l (hv.trans (hce.sub (Sub.refl _)))
+  have hvtop : CleanDeps Γ (elemE y E t).path → ∀ i o l, e = .view i o l → PkgFreeId m i := by
+    intro hcl i o l he
+    subst he
+    cases t with
+    | slice s => exact hviews hcl i o l (hce.sub (Sub.refl _))
+    | dtor f a => cases hwe with | dtor hst hw' => cases hw' <;> simp [Ty.isStruct] at hst
+    | _ => cases hwe
+  exact fun i hni => lend_pkgNames hi.heap (home_child hce hvec.home) (fun _ => hwe.noHref)
+    (elemE_mode ..) hf hvw hvtop hni
 
 theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
     (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty = .vec t)
@@ -1484,7 +1506,7 @@ theorem out_at {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : 
     · subst ht; exact NamesIn.noView (hw.elem rfl hmem) rfl _
     · rw [elemE_held _ _ ht]; exact (hns.sub (names_elem hmem)).lendOf
   pkgs := ((hi.vecOf_pkgs hvec).elem (List.getElem_mem hn)).lendOf
-  pkgFree _ _ hc hcl := elem_pkgFree hi hy hl hty hn hvec hc hcl
+  pkgFree := elem_pkgFree hi hy hl hty hn hvec
 
 theorem out_view {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t : Ty}
     (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty = .vec t) (hhv : t.holdsView = false)
@@ -1515,6 +1537,16 @@ theorem out_view {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t 
     show DepsNamed Γ (derive y E .view ++ E.held); exact (derive_named h rfl).append h.held
   held := NamesIn.nil _ rfl
   pkgs := PkgsOK.leaf (fun _ h => by cases h) (fun _ _ _ _ _ h => by cases h)
+  pkgFree i hn := by
+    have key : CleanDeps Γ (derive y E .view) → PkgFreeId m d := fun hc => by
+      obtain ⟨hf, hhome⟩ := hi.vecOf_free hy hl hvec (k := .view) rfl hc
+      exact hf.toId hi.heap hhome (by simp [Val.head])
+    rcases hn with ⟨_, hc, ⟨c', hb, _⟩ | ⟨o, l, hv⟩⟩ | ⟨_, hc, o, l, hb⟩ | ⟨_, _, c', _, _, _, _, _, hb, _⟩ | ⟨h, _⟩
+    · cases hb
+    · cases hv; exact key hc
+    · cases hb; exact key hc.left
+    · cases hb
+    · cases h
 
 /-- A3.1's slices of shares: the node a slice views, found in memory, holds
     the shares its type says (an owned tree's, `MInv.shares`, or a frozen
@@ -1656,6 +1688,41 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
     replace hok := Ty.ok_slice hok
     exact NamesIn.noView (hw.elem rfl (List.getElem_mem hn)) hok.2 _
   pkgs := ((hi.dataAt_pkgs hda).elem (List.getElem_mem hn)).lendOf
+  pkgFree := by
+    obtain ⟨d0, o0, l0, c0, es0, hs0, hda0, _, _, hw, _, _⟩ := hi.slice_node hy hl hty
+    rw [hv] at hs0; cases hs0
+    have heq := dataAt_unique hi.heap hda0 hda
+    cases heq
+    have hok := hi.tyok hy; rw [hty] at hok
+    replace hok := Ty.ok_slice hok
+    have hmem : es[o + n] ∈ es := List.getElem_mem hn
+    have hwe : WFv t es[o + n] := hw.elem rfl hmem
+    generalize es[o + n] = e at hmem hwe ⊢
+    have hce : Child e (.node t c d es) := Child.elem hmem
+    have hhome : Home m (.node t c d es) := by
+      rcases hda0 with ⟨x, T, hx, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
+      · exact Or.inl ⟨x, T, hx, hs⟩
+      · exact Or.inr ⟨k, bl, hk, hs⟩
+    have hos := hi.bor_mode hy hv
+    intro i hni
+    refine lend_pkgNames hi.heap (home_child hce hhome) (fun _ => hwe.noHref) (elemE_mode ..)
+      (fun hcl ⟨c', hb⟩ => ?_) (fun _ i o l hv' => absurd hv' (hwe.noView hok.2))
+      (fun _ i o l he => ?_) hni
+    · have hpath : (elemE y E t).path = derive y E .inner := by
+        cases t with
+        | int => cases hwe; simp [lendOf] at hb; cases hb
+        | slice s => simp [Ty.holdsView] at hok
+        | _ => rfl
+      rw [hpath] at hcl
+      have hd := hi.pkgFree y E false _ hy hl hv d
+        (PkgNames.view hos (derive_clean_path hy hos rfl hcl) d o l)
+      exact (hd.at (by simp [Val.head] : d ∈ (Val.node t c d es).head)).child' hi.heap hhome
+        (fun _ _ _ _ _ h => by cases h) hce (bare_lend_ids _ (fun _ => hwe.noHref) hb)
+    · subst he
+      cases t with
+      | slice s => simp [Ty.holdsView] at hok
+      | dtor f a => cases hwe with | dtor hst hw' => cases hw' <;> simp [Ty.isStruct] at hst
+      | _ => cases hwe
 
 /-- A field read out of the struct `y`: what the field holds, lent. -/
 theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
@@ -2243,7 +2310,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     refine hi.change hanch hy hyF (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb)
       hrb hst hheap rfl
       (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ hds (fun h => by cases h) (by simp)
-      (fun h => absurd rfl h) (PkgKeep.noval (by simp))
+      (fun h => absurd rfl h) (PkgKeep.noval hi hst (by simp))
     refine ⟨⟨true, none⟩, by simp, hok, ⟨by simp [hos], fun _ => ⟨hvec, fun T h => by simp at h,
       fun h => by simp at h⟩, fun h => by simp [hos] at h⟩, rfl, fun h => by simp at h, rfl,
       fun h => by simp at h, fun h => by simp at h, fun T h => by simp at h, fun hd _ hn dep hdd hnm => ?_,
