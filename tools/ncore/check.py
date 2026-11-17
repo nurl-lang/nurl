@@ -1791,6 +1791,21 @@ class FnCheck:
                 if jty is not None and ((jty[0] == "named" and jty[1] in tshare)
                                         or self.T.shared_in(jty) & set(tshare)):
                     dets.add(k)
+        for (j, dpath, k, path, kind) in sm["stores"]:
+            # (a value stored into what two threads may share - `chan_send`'s,
+            # into a channel - goes to whichever thread takes it out: a view
+            # in it may not point into this side's storage, as a spawned
+            # closure's may not; agora #812)
+            if kind == "value" and j < len(ops) and k < len(avs) and ops[j][0] == "v":
+                jty = self.ty_of_place((ops[j][1], ops[j][2]))
+                if jty is not None and ((jty[0] == "named" and jty[1] in tshare)
+                                        or self.T.shared_in(jty) & set(tshare)):
+                    vl = [l for l in avs[k].loans | hloans(avs[k].held)
+                          if l in self.loans and self.loans[l][1] == "view"
+                          and not self.fn.vars[self.loans[l][0][0]].kind == "global"]
+                    if vl:
+                        self.err(line, f"{name}: what another thread receives holds a view of "
+                                       f"{self.pname(self.loans[vl[0]][0])}")
         for k in sorted(dets):
             if k < len(avs):
                 if ops[k][0] == "v" and ops[k][1] in self.pidx:
