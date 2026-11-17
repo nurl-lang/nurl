@@ -358,6 +358,7 @@ class Reader:
                 fn.params.append(vid)
                 fn.modes.append("cap")
                 fn.ncap += 1
+                v.taken = bool(flags & 4)   # its env takes the value over (agora #868, #887)
             elif kind == 0:
                 fn.params.append(vid)
                 fn.modes.append("inout" if flags & 2 else "sink" if flags & 4 else "in")
