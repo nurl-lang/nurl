@@ -45162,7 +45162,11 @@ unsafe @ __slice_len_comma s t → b {
 // fresh slice leaked).
 @ __arm_slice_bit i syms i cg i tt0 s ty s flag → s {
     ? != 0 ( nurl_str_len flag ) { ^ ( nurl_str_cat `true` `` ) } {}
-    ? || || != 0 g_did_ret != tt0 TT_LPAREN ! ( mem_is_slice_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? || != 0 g_did_ret ! ( mem_is_slice_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    // (…an arm that is itself a slice join, `? c ? d ( mk ) a b`: its own
+    // bit, published as it ended, in this arm's block.)
+    ? == tt0 TT_QUEST { ^ ( nurl_str_cat ( nurl_sym_get syms `__last_slice_join_own__` ) `` ) } {}
+    ? != tt0 TT_LPAREN { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( __slice_call_own_bit syms cg )
 }
 
@@ -48532,7 +48536,7 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // call, released by it — AGORA-893; not to a closure whose result may
     // hold it, as for a call's slice, AGORA-894.)
     : b __tjo ? | | == 0 ( nurl_str_len __jown ) == 0 g_auto_drop_strings ( seq __jown `false` ) F
-    || || ( __is_handle_ty at ) ( __is_hown_ty at ) && ( __owned_slice_ty at ) || ! shadowed ! ( __ty_holds_view_p __crt )
+    ? ( __owned_slice_ty at ) || ! shadowed ! ( __ty_holds_view_p __crt ) || ( __is_handle_ty at ) ( __is_hown_ty at )
     // An option / result temporary owns its payload (and error) the way
     // a binding of it would: those are dropped, by the tag. (Asked only of
     // an argument that may be a temporary: a call's, a field of one, a
