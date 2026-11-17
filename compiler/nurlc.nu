@@ -251,6 +251,8 @@
 : ~ i g_core_fflags 0  // the function being built: bit 0 its body may use raw memory (bck_unsafe_ctx); bit 3 it may start a panic itself (core_note_panic_point)
 : ~ i g_core_ftmpl 0  // …and the generic it is an instance of, interned (`` none)
 : ~ i g_core_acks 0  // bumped by the hooks of the constructs only a hook can lower (core_expr_exit)
+: ~ i g_core_last_agg -1  // the temporary core_agg made last
+: ~ i g_agg_lit_lends 0  // the literal being built keeps a field as the lend it is - no copy, the return answers per run (CORE_VF_AGGLEND, agora #907)
 : ~ i g_core_vb -1  // the temporary of the innermost value block open, -1 none: what is bound inside is that block's
 : ~ i g_core_vb_tail -1  // the operand a value block just ended stands for when it is a binding of its own (core_vblock_end), -1 none
 : ~ i g_core_vb_tail_t -1  // …that block's temporary
@@ -731,6 +733,7 @@
 : i CORE_VF_TAKEN 64  // a capture's flag: the body marks it taken in its env when it gives it away; a later run panics (core_capture_taken)
 : i CORE_VF_SECOND 32  // a variable's flag: a closure binding given an owner's closure that the walk does not move: a second name of it (core_second_name)
 : i CORE_VF_HANDON 128  // a variable's flag: the literal a `\` try hands its failure on in, which codegen hands on whole (core_try)
+: i CORE_VF_AGGLEND 1024  // a variable's flag: a returned literal codegen made without copying a field it was given lent: the literal is a lend of what that field borrows, on the runs the function answers lent (__gen_agg_lit_body, agora #907)
 : i CORE_VF_CPCOPY 512  // a variable's flag: the value a `=` gave a by-pointer capture, which codegen copied in on the runs the call lent (gen_assign's capture copy-in, agora #872): the capture owns it (agora #884)
 : ~ i g_core_asn_op 0  // the operand the last core_assign stored (core_cpcopy_mark)
 : i CORE_VF_SLOT 256  // a variable's flag: a call's temporary whose payload nurlc reads from a slot it can name, and takes out of it where a consumer takes the payload (mem_note_vec_get, mem_vget_consume)
@@ -12323,6 +12326,8 @@ unsafe @ eng_keep_fn → v {
 // from, where a consumer takes the payload (CORE_VF_SLOT).
 @ fv_cpcopy i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_CPCOPY }
 
+@ fv_agglend i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_AGGLEND }
+
 @ fv_slot i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_SLOT }
 
 @ fv_line i vid → i { ? < vid 0 { ^ 0 } {} ^ ( ev vid 5 ) }
@@ -19544,6 +19549,10 @@ unsafe @ eng_byte s w i k → i {
         : ~ b uncopy_lent F
         : ~ b owned_fresh F
         : b wrapper & != ty ET_NONE | == ( et_kind ty ) EK_OPT == ( et_kind ty ) EK_RES
+        // (a returned literal codegen built without copying a field it was
+        // given lent - CORE_VF_AGGLEND: the literal is a lend of what that
+        // field borrows, on the runs the function answers lent; agora #907)
+        : b agglend & have_dest ( fv_agglend dest )
         : ~ i i 0
         ~ < i n {
             : i op ( eng_op ( ec + + at 4 i ) )
@@ -19677,7 +19686,7 @@ unsafe @ eng_byte s w i k → i {
                     // as `^` of the call's result would - mem_store_hown)
                     : b handon & & have_dest ( fv_handon dest ) == n 1
                     ? & fown ! ( et_copyable fty ) {
-                        ? | | param_parts keeps_param handon {
+                        ? | | | param_parts keeps_param handon agglend {
                             // a part of a parameter, read in place: the literal
                             // is a lend of the caller's value, good to hand
                             // back as it is and nothing else
@@ -19718,7 +19727,7 @@ unsafe @ eng_byte s w i k → i {
                         }
                     } {}
                     ? & & ! next fown ( et_copyable fty ) {
-                        ? param_parts {
+                        ? | param_parts agglend {
                             // a part of a parameter, read in place: handed back
                             // as it is, the literal is a lend of the caller's
                             // value (no copy is made); taken by anything else,
@@ -20392,7 +20401,19 @@ unsafe @ eng_byte s w i k → i {
             = a 0
             ~ < a ( sq_len lent ) { ? == ( sq_at lent a ) target { = has_self T } { = has_other T } = a + a 1 }
             : b direct & has_self has_other
-            ? & & & != rest 0 ( av_call new ) & != vty ET_NONE ! ( et_is_view vty ) | & | == ( et_kind vty ) EK_OPT == ( et_kind vty ) EK_RES direct ! ( et_copyable vty ) {
+            // (…or o itself on some runs and a PART of it on others - `(
+            // npick o ( tail o ) k )`, tail lending what it read out of o:
+            // no per-run key tells them apart either; agora #907)
+            : ~ b whole_l F
+            : ~ b part_l F
+            = a 0
+            ~ < a ( sq_len loans ) {
+                : i l ( sq_at loans a )
+                ? & ( el_is_loan l ) == ( pl_var ( el_place l ) ) vid { ? == ( pl_path ( el_place l ) ) 0 { = whole_l T } { = part_l T } } {}
+                = a + a 1
+            }
+            : b whole_part & & direct whole_l part_l
+            ? & & & | != rest 0 whole_part ( av_call new ) & != vty ET_NONE ! ( et_is_view vty ) | & | == ( et_kind vty ) EK_OPT == ( et_kind vty ) EK_RES direct ! ( et_copyable vty ) {
                 // which of them a run hands back is not known, so neither
                 // is whether the binding still owns its value. (A handle is
                 // told apart at run time by its buffer. An option or a
@@ -23348,6 +23369,7 @@ unsafe @ core_agg i h0 → v {
     ( core_note_ty ty )
     : i t ( core_temp ty )
     ( core_w CO_LET ) ( core_w t ) ( core_w RV_AGG ) ( core_w ( __core_in ty ) ) ( core_w g_core_agg_var ) ( __core_w_ops h0 )
+    = g_core_last_agg t
     ( core_push ( core_op_var t ) )
     = g_core_acks + g_core_acks 1
 }
@@ -47254,6 +47276,7 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         // __cursor_lent_local: then it lends it on no run; agora #824.)
         ? & & != 0 ( nurl_sym_len2 syms src `__pname` ) ! ( __param_owned_slot syms src ) == 0 g_cur_lent_local
         { ( nurl_sym_set_deep syms ? __pcall `__agg_lends_call__` `__agg_lends__` `1` )
+            = g_agg_lit_lends 1
             ( __record_param_idx syms `__fn_retpart__` ( nurl_sym_get2 syms src `__pname` ) ) } {}
         // (Not the whole the cursor's value is part of: __part_src.)
         // (…by the identity key when the cursor's flag is a call's answer, as
@@ -78400,8 +78423,12 @@ inline unsafe @ gen_agg_lit i lex i syms i cg → s {
     : i var0 g_core_agg_var
     = g_core_agg_ty 0
     = g_core_agg_var 0
+    : i lends0 g_agg_lit_lends
+    = g_agg_lit_lends 0
     : s r ( __gen_agg_lit_body lex syms cg )
     ( core_agg h0 )
+    ? != 0 g_agg_lit_lends { ( core_var_or_flag g_core_last_agg CORE_VF_AGGLEND ) } {}
+    = g_agg_lit_lends lends0
     = g_core_agg_ty ty0
     = g_core_agg_var var0
     ^ r
@@ -79162,6 +79189,7 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
                         ( mem_hown_mark_dyn syms )
                         = fval ( mem_emit_cloneif cg fty fval ( mem_hown_static syms cg __cc ) )
                         ( nurl_sym_set_deep syms `__agg_take_own__` __tk )
+                        = g_agg_lit_lends 1
                         ( nurl_sym_set_deep syms `__agg_take_ost__` ( __ost_of_ptr syms fs_ptr 0 ) )
                     } { = fval ( mem_emit_cloneif cg fty fval __tl ) }
                 } {}
@@ -79251,6 +79279,7 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         } {}
         ? & & agg_moves_fields ( seq fld_lent `1` ) == g_bck_closure_depth 0
         { ( nurl_sym_set_deep syms `__agg_lends__` `1` )
+            = g_agg_lit_lends 1
             // A field of a parameter is part of the caller's value; what
             // else a literal lends is unexplained.
             ? & == fld_first_tt TT_DOT >= ( nurl_sym_word_index syms `__fn_param_names__` fld_dot_obj ) 0
@@ -79305,6 +79334,7 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
                     = __down __dor
                 } {}
                 ( nurl_sym_set_deep syms `__agg_take_own__` __down )
+                = g_agg_lit_lends 1
                 ( nurl_sym_set_deep syms `__agg_take_ost__` ? & ( is_ident_tok fld_first_tt ) == 0 ( nurl_str_len fld_idown ) ( __ost_of_ident syms fld_first_val ) ( nurl_str_cat `!` `` ) )
             } { = fval ( mem_emit_cloneif cg fty fval fld_lent ) } }
         // Whether this field holds an owning value lent from what it read
