@@ -1190,6 +1190,40 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
   have hroot' : ∀ d ∈ (Ex.revive x).vdeps,
       ∃ Er, setE Γ x (Ex.revive x) d.root = some Er ∧ Er.mode.isRoot = true :=
     fun d hd => hgen d.root (hroots d hd)
+  -- AGORA-901: what the revived owner names it named, armed or live; the rest is as it was
+  have hpf : ∀ y Ey o w, setE Γ x (Ex.revive x) y = some Ey → Alive Ey → m.st y = some ⟨o, some w⟩ →
+      ∀ i, PkgNames m (setE Γ x (Ex.revive x)) Ey w i → PkgFreeId m i := by
+    have hcl : ∀ r, Clean (setE Γ x (Ex.revive x)) r → Clean Γ r := fun r h => h.mono fun w E' hw => by
+      by_cases hwx : w = x
+      · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+        exact ⟨Ex, hx, rfl, fun _ => rfl⟩
+      · rw [setE, upd_ne _ _ hwx] at hw; exact ⟨E', hw, rfl, fun _ => rfl⟩
+    intro y Ey o w hy hl hs i hn
+    by_cases hyx : y = x
+    · subst hyx
+      simp only [setE, upd_same, Option.some.injEq] at hy; subst hy
+      rw [hsl] at hs; cases hs
+      obtain ⟨hc, o', l, hv⟩ := PkgNames.own (E := Ex.revive y) (by simp [Entry.revive, hos]) hn
+      cases hdb : Ex.dbind
+      · have hhv : Ex.ty.holdsView = false := by
+          cases h : Ex.ty.holdsView with
+          | false => rfl
+          | true => rw [hdbv h] at hdb; cases hdb
+        exact absurd hv (hwfv.noView hhv)
+      · -- what it held, but for views of its own, which are through an owner, clean
+        have hc0 : CleanDeps Γ Ex.held := fun d hd => by
+          by_cases hk : d.root ≠ y ∨ d.kind = .share
+          · have hdr : d ∈ (Ex.revive y).held := by
+              simp only [Entry.revive, hdb, ↓reduceIte]
+              refine List.mem_filter.mpr ⟨hd, ?_⟩
+              rcases hk with h | h <;> simp [h]
+            exact (hc.mono hcl) d (List.mem_filter.mpr ⟨hdr, (List.mem_filter.mp hd).2⟩)
+          · simp only [not_or, ne_eq, Decidable.not_not] at hk
+            refine ⟨hk.2, ?_⟩
+            rw [hk.1]; exact .own hx hos
+        exact hi.pkgFree y Ex true v hx (Or.inr ⟨hdb, hos⟩) hsl i (Or.inr (Or.inr (Or.inr ⟨hos, hc0, o', l, hv⟩)))
+    · rw [setE, upd_ne _ _ hyx] at hy
+      exact hi.pkgFree y Ey o w hy hl hs i (hn.mono hcl)
   refine
     { dom := fun w => ?_
       slot := fun w E hw => ?_
@@ -1209,6 +1243,7 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
       names := ?_
       held := fun w E sl T hw hl hsw hT => ?_
       pkgs := hi.pkgs
+      pkgFree := hpf
       armed := fun w E sl hw hsw => ?_ }
   · by_cases hwx : w = x
     · subst hwx; simp [setE, hsl]
@@ -1307,11 +1342,27 @@ theorem MInv.rearm {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} (
     by_cases hwx : w = x
     · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; exact Or.inl ⟨rfl, hw.symm⟩
     · simp only [setE, upd_ne _ _ hwx] at hw; exact Or.inr ⟨hwx, hw⟩
+  -- AGORA-901: arming changes nothing the binding names
+  have hpf : ∀ y Ey o w, setE Γ x { E with dtor := true, dbind := true } y = some Ey → Alive Ey →
+      m.st y = some ⟨o, some w⟩ →
+      ∀ i, PkgNames m (setE Γ x { E with dtor := true, dbind := true }) Ey w i → PkgFreeId m i := by
+    have hcl : ∀ r, Clean (setE Γ x { E with dtor := true, dbind := true }) r → Clean Γ r := fun r h =>
+      h.mono fun w E' hw => by
+        rcases hcase w E' hw with ⟨rfl, rfl⟩ | ⟨_, hw'⟩
+        · exact ⟨E, hx, rfl, fun _ => rfl⟩
+        · exact ⟨E', hw', rfl, fun _ => rfl⟩
+    intro y Ey o w hy hly hs i hn
+    rcases hcase y Ey hy with ⟨rfl, rfl⟩ | ⟨_, hy'⟩
+    · exact hi.pkgFree y E o w hx (Or.inl hl) hs i
+        ((hn.mono hcl).weaken (E' := { E with dtor := true, dbind := true }) rfl (fun _ _ h => h)
+          (fun _ h => (List.mem_filter.mp h).1))
+    · exact hi.pkgFree y Ey o w hy' hly hs i (hn.mono hcl)
   refine
     { dom := fun w => ?_
       slot := fun w Ew hw => ?_
       heap := hi.heap
       shares := fun w Ew sl T hw hsw hown hT => ?_
+      pkgFree := hpf
       blocks := hi.blocks
       nvSt := hi.nvSt
       noInout := fun w Ew b hw => ?_
@@ -1642,9 +1693,64 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
     · rw [hrx, hux]; exact ⟨_, rfl, by simp [Entry.revive, hmo, Mode.isRoot]⟩
     · rw [unwindCtx_other hrs hrx, hEr]
       exact ⟨_, rfl, by rw [unwE_mode]; exact hro⟩
+  -- AGORA-901: the unwound store's owned trees are the old store's; what is
+  -- named is what was, and the frame's binding names what it did, revived
+  have hfew : ∀ r T, m1.st r = some ⟨true, some T⟩ → m.st r = some ⟨true, some T⟩ := fun r T hT => by
+    by_cases hr : r ∈ k.spine
+    · rw [hin r hr] at hT; cases hT
+    · rw [← hout r hr]; exact hT
+  have hpf : ∀ y Ey o w, unwindCtx k.spine x Γ y = some Ey → Alive Ey → m1.st y = some ⟨o, some w⟩ →
+      ∀ i, PkgNames m1 (unwindCtx k.spine x Γ) Ey w i → PkgFreeId m1 i := by
+    have hcl : ∀ r, Clean (unwindCtx k.spine x Γ) r → Clean Γ r := fun r h => h.mono fun w E' hw => by
+      by_cases hwx : w = x
+      · subst hwx; rw [hux] at hw; cases hw
+        exact ⟨Ex, hx, rfl, fun _ => rfl⟩
+      · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
+        rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩
+        · exact ⟨E0, h0, rfl, fun _ => rfl⟩
+        · exact ⟨_, h0, rfl, fun _ => rfl⟩
+    intro y Ey o w hy hl hs i hn
+    have hn0 := (hn.mono hcl).of_fewer hfew
+    by_cases hyx : y = x
+    · subst hyx
+      rw [hux] at hy; cases hy
+      rw [hsl] at hs; cases hs
+      obtain ⟨hc, o', l, hv⟩ := PkgNames.own (E := Ex.revive y) (by simp [Entry.revive, hos]) hn0
+      cases hdb : Ex.dbind
+      · have hhv : Ex.ty.holdsView = false := by
+          cases h : Ex.ty.holdsView with
+          | false => rfl
+          | true => rw [hdbv h] at hdb; cases hdb
+        exact absurd hv (hwfv.noView hhv)
+      · have hc0 : CleanDeps Γ Ex.held := fun d hd => by
+          by_cases hk : d.root ≠ y ∨ d.kind = .share
+          · have hdr : d ∈ (Ex.revive y).held := by
+              simp only [Entry.revive, hdb, ↓reduceIte]
+              refine List.mem_filter.mpr ⟨hd, ?_⟩
+              rcases hk with h | h <;> simp [h]
+            exact hc d (List.mem_filter.mpr ⟨hdr, (List.mem_filter.mp hd).2⟩)
+          · simp only [not_or, ne_eq, Decidable.not_not] at hk
+            refine ⟨hk.2, ?_⟩
+            rw [hk.1]; exact .own hx hos
+        exact (hi.pkgFree y Ex true v0 hx (Or.inr ⟨hdb, hos⟩) hslm i
+          (Or.inr (Or.inr (Or.inr ⟨hos, hc0, o', l, hv⟩)))).of_fewer hfew
+    · obtain ⟨hys, E0, h0, hc⟩ := unwindCtx_cases hy hyx
+      rw [hout y hys] at hs
+      have hl0 : Alive E0 := by
+        rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩
+        · rcases hl with h | h
+          · cases h
+          · exact Or.inr h
+        · exact hl
+      have hn1 : PkgNames m Γ E0 w i := by
+        rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩
+        · exact hn0.weaken (E' := { E0 with live := false }) rfl (fun _ _ h => h) (fun _ h => (List.mem_filter.mp h).1)
+        · exact hn0
+      exact (hi.pkgFree y E0 o w h0 hl0 hs i hn1).of_fewer hfew
   refine
     { dom := fun w => ?_
       slot := fun w E hw => ?_
+      pkgFree := hpf
       heap := hh1
       nvSt := fun w hw => ?_
       noInout := fun w E b hw => ?_

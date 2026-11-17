@@ -1100,4 +1100,20 @@ theorem PkgNames.of_setE {m : Mem} {Γ : Ctx}
   · exact Or.inr (Or.inr (Or.inl ⟨hm, hc.of_setE hx hwf hbh, hv⟩))
   · exact Or.inr (Or.inr (Or.inr ⟨hm, hc.of_setE hx hwf hbh, hv⟩))
 
+/-- AGORA-901: a store whose owned trees are some of another's: what no
+    package of the other's holds, none of its holds, and what it names, the
+    other names. -/
+theorem PkgFreeId.of_fewer {m m1 : Mem}
+    (hsub : ∀ r T, m1.st r = some ⟨true, some T⟩ → m.st r = some ⟨true, some T⟩) {i : Nat}
+    (h : PkgFreeId m i) : PkgFreeId m1 i := fun r T hT => h r T (hsub r T hT)
+
+theorem PkgNames.of_fewer {m m1 : Mem} {Γ : Ctx}
+    (hsub : ∀ r T, m1.st r = some ⟨true, some T⟩ → m.st r = some ⟨true, some T⟩)
+    {E : Entry} {v : Val} {i : Nat} (hn : PkgNames m1 Γ E v i) : PkgNames m Γ E v i := by
+  rcases hn with h1 | h2 | ⟨hm, hc, c, r, T, t, d, es, hb, hT, hsn, hvn⟩ | h4
+  · exact Or.inl h1
+  · exact Or.inr (Or.inl h2)
+  · exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T, t, d, es, hb, hsub r T hT, hsn, hvn⟩))
+  · exact Or.inr (Or.inr (Or.inr h4))
+
 end A2
