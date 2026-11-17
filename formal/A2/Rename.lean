@@ -3248,9 +3248,9 @@ theorem allowed_canDo_false (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa
     its effect as a callee binding did (`canDo_lift`, `Allowed`), and the
     kills commute with the lift (`canon_killNames`). -/
 theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
-    {P : Prog} {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
+    {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
     {D : List Dep} (hx : Γa x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
-    (hty : Ex.ty = .vec t) (hhv : t.holdsView = false)
+    (hty : Ex.ty = .vec t)
     (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γa1 x = some Ex1)
     (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path)
     :
@@ -3349,88 +3349,17 @@ theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
     (hdf : op.drops = true → t.dtorFree = true) :
     StmtT P ξ (S.canon Γa) S.Fc ((Stmt.edit true x op).rename S.ρ)
       (S.canon (A2.setE (A2.killThru op Ex.ty Ex1.path Γa1) x Ex1)) := by
-  have hab1 : S.AbsOK Γa1 := EditArg.absOK harg hab
+  obtain ⟨⟨D', harg'⟩, hyx', hthru', hne', heq⟩ :=
+    editB_ren_facts h hab hR hx hmx hl hty harg hyx hx1 hl1 hne hthru
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   subst hE1
   have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
-  -- the lift adds names only: what the outer call's arguments held by name
-  have hmemA : memDeps S.A = [] := by
-    unfold RSetup.A; rw [hR]
-    simp only [allKinds, List.flatMap_nil, List.nil_append]
-    exact List.filter_eq_nil_iff.mpr fun d hd => by simp [h.N_name d hd]
-  have hpath : (S.liftE x Ex1).path = rds S.ρ Ex1.path ++ S.A := by
-    simp [liftE, hmx, Mode.ownSlot]
-  have hmem : memDeps (S.liftE x Ex1).path = rds S.ρ (memDeps Ex1.path) := by
-    rw [hpath]
-    unfold memDeps at hmemA ⊢
-    rw [List.filter_append, hmemA, List.append_nil]
-    simp only [rds, List.filter_map]; rfl
   have hty1 : (S.liftE x Ex1).ty = Ex1.ty := liftE_ty x hrb
-  -- every root keeps its type where the call places it
-  have hargty : ∀ r, (argE (S.canon Γa1) (S.ρ r)).ty = (argE Γa1 r).ty := by
-    intro r
-    cases hr : Γa1 r with
-    | none => unfold argE; rw [canon_ρ h, hr]; rfl
-    | some Er => rw [argE_canon h hr, liftE_ty' h hab1 hr]; unfold argE; rw [hr]; rfl
-  have hal : ∀ d ∈ thruDeps op Γa1 Ex1.ty Ex1.path, Allowed S d.kind.bound false d.root := by
-    intro d hd
-    obtain ⟨d0, hd0, rfl⟩ := mem_thruDeps.mp hd
-    obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
-    have hae : argE Γa1 d0.root = Er := by unfold argE; rw [hEr]; rfl
-    show Allowed S (op.effAt d0.kind (decide ((argE Γa1 d0.root).ty = Ex1.ty))) false d0.root
-    rw [hae]; exact allowed_canDo_false hab1 hEr hcan
-  -- what the change is handed, where the call places it
-  obtain ⟨D', harg'⟩ : ∃ D', EditArg (S.canon Γa) S.Fc (op.rename S.ρ) t D' (S.canon Γa1) := by
-    cases harg with
-    | push hy hly htyy hpa =>
-      obtain ⟨D', hpa', _⟩ := pushArg_ren h hab hy hpa
-      exact ⟨D', EditArg.push (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_live]; exact hly)
-        (by rw [liftE_ty' h hab hy]; exact htyy) hpa'⟩
-    | trunc hie => exact ⟨[], EditArg.trunc (exprT_ren h hab hie)⟩
-    | set hie hy hly htyy hpa =>
-      obtain ⟨D', hpa', _⟩ := pushArg_ren h hab hy hpa
-      exact ⟨D', EditArg.set (exprT_ren h hab hie) (by rw [canon_ρ h, hy]; rfl)
-        (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hpa'⟩
-  have hyx' : ∀ y, (op.rename S.ρ).stored = some y → y ≠ S.ρ x := by
-    intro y hy
-    rw [Edit.stored_rename] at hy
-    obtain ⟨y0, hy0, rfl⟩ := Option.map_eq_some_iff.mp hy
-    exact fun e => hyx y0 hy0 (h.inj _ _ e)
-  have hthru' : ThruOK (S.canon Γa1) S.Fc (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path := by
-    intro d hd
-    rw [hmem] at hd
-    obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd
-    obtain ⟨_, hy0, Er, hEr, hlr, hcan, hds, hsh⟩ := hthru d0 hd0
-    have hrbr : Er.mode ≠ .rootb := by rcases hcan with h' | ⟨b, h', _⟩ <;> rw [h'] <;> simp
-    refine ⟨h.Fcout _, fun y hy => ?_, S.liftE d0.root Er, by
-      show S.canon Γa1 (S.ρ d0.root) = _; rw [canon_ρ h, hEr]; rfl, by rw [liftE_live]; exact hlr, ?_, ?_,
-      by simpa [Dep.ren] using hsh⟩
-    · rw [Edit.stored_rename] at hy
-      obtain ⟨y0, hy0', rfl⟩ := Option.map_eq_some_iff.mp hy
-      exact fun e => hy0 y0 hy0' (h.inj _ _ e)
-    · rw [liftE_mode _ hrbr, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
-      exact canDo_lift hcan
-    · rw [liftE_ty _ hrbr, hty1, Edit.effAt_rename]
-      exact DtorSafe.canon h (allowed_canDo_false hab1 hEr hcan) hds
   have hT := StmtT.editB (P := P) (ξ := ξ) (x := S.ρ x) (Ex := S.liftE x Ex1) (Ex1 := S.liftE x Ex1)
     (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
     (by rw [hty1]; exact hty) hhv (h.Fcout x) harg' hyx' (by rw [canon_ρ h, hx1]; rfl)
-    (by rw [liftE_live]; exact hl1) (by rw [hmem]; simpa [rds] using hne) hthru'
+    (by rw [liftE_live]; exact hl1) hne' hthru'
     (by rw [Edit.drops_rename]; exact hdf)
-  -- the kills commute with the lift
-  have heq : S.canon (A2.setE (A2.killThru op Ex1.ty Ex1.path Γa1) x Ex1) =
-      A2.setE (A2.killThru (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path (S.canon Γa1)) (S.ρ x)
-        (S.liftE x Ex1) := by
-    rw [canon_setE h]
-    unfold A2.killThru
-    rw [canon_killNames h hab1 _ hal]
-    congr 2
-    unfold thruDeps
-    rw [hmem, hty1]
-    simp only [rds, List.map_map]
-    apply List.map_congr_left
-    intro d _
-    simp only [Function.comp, Dep.ren, Edit.effAt_rename, hargty]
   rw [heq]; exact hT
 
 /-! ### Agora #295: a view stored through a borrow, where the call places it -/
@@ -4399,7 +4328,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- (`editB_ren_facts`), then `y` bound to the element, as `letv` binds
     intro _ hab hw hn hT
     have hR : S.R = [] := hT (.inl rfl)
-    obtain ⟨-, -, hthru', hne', heq⟩ := editB_ren_facts (P := P) h hab hR hx hmx hl hty hhv
+    obtain ⟨-, -, hthru', hne', heq⟩ := editB_ren_facts h hab hR hx hmx hl hty
       (EditArg.trunc (t := t) hie) (fun _ h' => by cases h') hx hl hne hthru
     have hrb : Ex.mode ≠ .rootb := by rw [hmx]; simp
     have hab2 : S.AbsOK (A2.setE (A2.killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
