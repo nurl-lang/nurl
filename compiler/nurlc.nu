@@ -101387,7 +101387,8 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // behind a Box or in a Vec of nodes, `: N { String s ? ( Box N ) next }`?
 // Only then can what a call lends out of a binding of it be a PART of the
 // binding's value and still be assigned over it (agora #906). (A walk over
-// the named types its fields and payloads mention, 32 at most.)
+// the named types its fields and payloads mention, 32 at most; past that,
+// yes.)
 @ __ty_reaches_self s vt i syms → b {
     // (Asked once per type: the answer is the type's.)
     : s memo ( nurl_sym_get2 g_pending_impl `tyself##` vt )
@@ -101432,6 +101433,9 @@ unsafe @ __sx_names_capture i syms s sx → b {
             } {}
         }
     }
+    // (Out of budget with types still to look at: it may, and the rules
+    // that ask copy or refuse - the safe answer.)
+    ? != 0 ( nurl_str_len queue ) { ^ T } {}
     ^ F
 }
 
