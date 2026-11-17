@@ -34726,6 +34726,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // (…and whether a `?` / `??` join made as it owns what it yields,
         // before mem_lent_cond takes the bit: mem_arg_temps.)
         : ~ s arg_join_own ``
+        : ~ s arg_slc_join ``
         : ~ b arg_join_io F
         // (…the one `inout` parameter of a handle type those paths select,
         // whose slot is emptied on them: __join_io_handle, agora #776.)
@@ -34955,6 +34956,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // value: __val_eff_tt, agora #189, #198, #199.)
             = arg_eff_tt ( __val_eff_tt bck_arg_tt )
             = arg_join_own ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_join_own__` ) ``
+            // (…and a slice join's, its own channel: AGORA-893.)
+            = arg_slc_join ? == bck_arg_tt TT_QUEST ( nurl_sym_get syms `__last_slice_join_own__` ) ``
             = arg_join_ids ? & == 0 ( nurl_str_len arg_join_own ) | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( nurl_sym_get syms `__last_phi_idents__` ) ``
             // (The bindings the join may select are all whole `inout`
             // parameters: what it hands a `sink` on those paths is taken
@@ -37249,7 +37252,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // whether the result is it (mem_arg_temps).
         ? != 0 ( nurl_str_len arg_lit_own ) { ( nurl_sym_def syms `__argtmp_litown__` arg_lit_own ) = g_arg_litown_set 1 } {}
         // (Only a join's: every other argument pays one int test for it.)
-        ? != 0 ( nurl_str_len arg_join_own ) { ( nurl_sym_def syms `__argtmp_joinown__` arg_join_own ) = g_arg_join_set 1 } {}
+        ? != 0 ( nurl_str_len arg_join_own ) { ( nurl_sym_def syms `__argtmp_joinown__` arg_join_own ) = g_arg_join_set 1 } {
+            ? != 0 ( nurl_str_len arg_slc_join ) { ( nurl_sym_def syms `__argtmp_joinown__` arg_slc_join ) = g_arg_join_set 1 } {}
+        }
         // (A value block that ends in a call is that call's result, for what
         // it leaves the caller to drop: `( string_len { : String s … (
         // string_concat s s ) } )` released the concatenation nowhere —
@@ -39408,6 +39413,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // the assigned binding's (mem_clo_arm_discard).
     ? ( __is_closure_ty tt2 ) { ? c_valu { = tv ( mem_clo_into_owner syms cg tt2 tv t_tt0 ) } { ( mem_clo_arm_discard syms cg tt2 tv t_tt0 ) } } {}
     : s t_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
+    // (…or a call's slice, by its answer: AGORA-893.)
+    : s t_slice_bit ( __arm_slice_bit syms cg t_tt0 tt2 t_slice_flag )
     : s t_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b t_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s t_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
@@ -39694,6 +39701,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : s e_cm ? & != 0 g_borrowck ( __is_closure_ty et2 ) ( __clo_val_members syms e_tt0 e_v0 ) ``
     ? ( __is_closure_ty et2 ) { ? c_valu { = ev ( mem_clo_into_owner syms cg et2 ev e_tt0 ) } { ( mem_clo_arm_discard syms cg et2 ev e_tt0 ) } } {}
     : s e_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
+    : s e_slice_bit ( __arm_slice_bit syms cg e_tt0 et2 e_slice_flag )
     : s e_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b e_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
@@ -40144,8 +40152,11 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // slice and the join type is a slice. A returning (`^`) arm never reaches
     // the phi, so it does not gate; a borrow/alias arm leaves its flag clear,
     // keeping mixed cases unregistered (leak-not-UAF) as before.
-    : b __t_slice_ok ? != 0 tdr T != 0 ( nurl_str_len t_slice_flag )
-    : b __e_slice_ok ? != 0 edr T != 0 ( nurl_str_len e_slice_flag )
+    // (An arm counts as fresh by its bit: a literal's `1`, or a call's
+    // answer — `true` when its slice is always the caller's, else the
+    // per-run bit, which the mixed phi below carries: AGORA-893.)
+    : b __t_slice_ok ? != 0 tdr T ( seq t_slice_bit `true` )
+    : b __e_slice_ok ? != 0 edr T ( seq e_slice_bit `true` )
     : b __slice_live | == 0 tdr == 0 edr
     : b __slice_res & & & __t_slice_ok __e_slice_ok __slice_live ( mem_is_slice_ty phi_ty )
     ( nurl_sym_def syms `__last_slice_owned__` ? __slice_res `1` `` )
@@ -40155,14 +40166,18 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // owner phi. A binding of it owns the buffer by that flag (agora
     // #664); taken for a borrow, the fresh one leaked.)
     : b __slice_mix & & & & & ! __slice_res __slice_live ( mem_is_slice_ty phi_ty ) == 0 tdr == 0 edr
-    | != 0 ( nurl_str_len t_slice_flag ) != 0 ( nurl_str_len e_slice_flag )
+    | != 0 ( nurl_str_len t_slice_bit ) != 0 ( nurl_str_len e_slice_bit )
     ? __slice_mix {
         : s sb ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print sb ) ( nurl_print ` = phi i1 [ ` ) ( nurl_print ? != 0 ( nurl_str_len t_slice_flag ) `true` `false` )
-        ( nurl_print `, %` ) ( nurl_print tlbl ) ( nurl_print ` ], [ ` ) ( nurl_print ? != 0 ( nurl_str_len e_slice_flag ) `true` `false` )
+        ( nurl_print `  ` ) ( nurl_print sb ) ( nurl_print ` = phi i1 [ ` ) ( nurl_print ? != 0 ( nurl_str_len t_slice_bit ) t_slice_bit `false` )
+        ( nurl_print `, %` ) ( nurl_print tlbl ) ( nurl_print ` ], [ ` ) ( nurl_print ? != 0 ( nurl_str_len e_slice_bit ) e_slice_bit `false` )
         ( nurl_print `, %` ) ( nurl_print elbl ) ( nurl_print ` ]\n` )
         ( nurl_sym_def syms `__last_slice_own_bit__` sb )
     } { ( nurl_sym_def syms `__last_slice_own_bit__` `` ) }
+    // (The join's own bit, for a call it is handed to straight —
+    // mem_arg_temps, through `__argtmp_joinown__`: a channel of its own,
+    // since `__last_join_own__` also steers a join's lends, AGORA-893.)
+    ( nurl_sym_def syms `__last_slice_join_own__` ? __slice_res ( nurl_str_cat `true` `` ) ? __slice_mix ( nurl_sym_get syms `__last_slice_own_bit__` ) `` )
     // The join's phis are all printed: an aggregate's value is read from
     // its slot (__ll_is_agg).
     ? != 0 ( nurl_str_len c_jload ) { ( __agg_slot_get c_jload c_jslot ( nurl_llty phi_ty ) ) = c_jload `` } {}
@@ -45140,6 +45155,17 @@ unsafe @ __slice_len_comma s t → b {
     ^ ( __slice_call_run_bit syms cg )
 }
 
+// A `?` arm's slice: a literal's (`1`, owned), or a call's by its answer
+// (__slice_call_own_bit): `true`, a per-run bit, or `` for one that is
+// never the caller's. Read at the arm's end, in its block, before its
+// branch to the join (AGORA-893: a call arm counted as a borrow, its
+// fresh slice leaked).
+@ __arm_slice_bit i syms i cg i tt0 s ty s flag → s {
+    ? != 0 ( nurl_str_len flag ) { ^ ( nurl_str_cat `true` `` ) } {}
+    ? || || != 0 g_did_ret != tt0 TT_LPAREN ! ( mem_is_slice_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( __slice_call_own_bit syms cg )
+}
+
 // (…and a callee compiled after this caller — defined below it, or a
 // generic instance — has no summary yet, so the static answer took its
 // slice for a lend and nobody released it. It answers by its module-end
@@ -48502,7 +48528,11 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // a call's temporary is: the view may not outlive its statement — bind
     // the join first — agora #181.)
     // (The type is asked only of a join that owns on some path.)
-    : b __tjo ? | | == 0 ( nurl_str_len __jown ) == 0 g_auto_drop_strings ( seq __jown `false` ) F | ( __is_handle_ty at ) ( __is_hown_ty at )
+    // (…or of owned slices: a slice join's bit, `? c ( mk ) a` handed to a
+    // call, released by it — AGORA-893; not to a closure whose result may
+    // hold it, as for a call's slice, AGORA-894.)
+    : b __tjo ? | | == 0 ( nurl_str_len __jown ) == 0 g_auto_drop_strings ( seq __jown `false` ) F
+    || || ( __is_handle_ty at ) ( __is_hown_ty at ) && ( __owned_slice_ty at ) || ! shadowed ! ( __ty_holds_view_p __crt )
     // An option / result temporary owns its payload (and error) the way
     // a binding of it would: those are dropped, by the tag. (Asked only of
     // an argument that may be a temporary: a call's, a field of one, a
