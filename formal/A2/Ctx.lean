@@ -220,6 +220,13 @@ theorem ArmOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E'
   obtain ⟨hdt', hsub⟩ := hw.dtor hdt
   exact ⟨hdt', by rw [hw.ty]; exact hv.mono hsub⟩
 
+/-- A clean root stays one in a weaker context's place: modes are kept and
+    a borrowed parameter's entry is fixed. -/
+theorem CleanLe.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') : CleanLe Γ' Γ :=
+  CleanLe.of_entries fun _ _ hv => by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    exact ⟨E, hE, hwe.mode, fun hm => by rw [hwe.fixed (Or.inl hm)]; exact ⟨rfl, rfl⟩⟩
+
 theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ') : MInv m Γ' where
   dom v := by rw [← hw.isSome v]; exact hi.dom v
   slot v E' hv := by
@@ -253,6 +260,24 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     rw [hwe.ty]; exact hi.shares v E sl T hE hsl hown hT
   blocks := hi.blocks
+  pkgFree x E' o v hx hl hs i hn := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hx
+    have hn' := hn.mono (CleanLe.weaker hw)
+    rcases hl with hl | ⟨hdb, hos⟩
+    · obtain ⟨hl0, hp, hh⟩ := hwe.live hl
+      refine hi.pkgFree x E o v hE (Or.inl hl0) hs i ?_
+      refine hn'.weaken hwe.mode (fun hos => ?_) (fun d hd => hh (List.mem_filter.mp hd).1)
+      by_cases hrb : E.mode = .rootb
+      · rw [hwe.fixed (Or.inl hrb)]; exact fun _ h => h
+      · exact hp hos
+    · -- an owner made by `letd`, live or not: it views what it viewed
+      have hdb0 : E.dbind = true := by rw [← hwe.dbind]; exact hdb
+      have hos0 : E.mode.ownSlot = true := by rw [← hwe.mode]; exact hos
+      have hnint : E.ty ≠ .int := fun ht => by have := hi.wf.view x E hE hdb0; rw [ht] at this; cases this
+      refine hi.pkgFree x E o v hE (Or.inr ⟨hdb0, hos0⟩) hs i ?_
+      refine hn'.weaken hwe.mode (fun h => by rw [hos0] at h; cases h) (fun d hd => ?_)
+      exact (hwe.dheld hdb0 hos0 (Or.inl hnint) d (by simpa using (List.mem_filter.mp hd).2)).mpr
+        (List.mem_filter.mp hd).1
 
 theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hw : Weaker Γ Γ') : Inv m Γ' F s where

@@ -110,14 +110,19 @@ theorem MInv.editB_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   have hsh' : SharesOK (m.set dep.root ⟨true, some T'⟩) (.vec t) (.node t c d (es.eraseIdx n)) :=
     hsh0.node_sub (fun e he => List.mem_of_mem_eraseIdx he) rfl
   have hhref := editB_hrefAt (H := Ex.held) hT' (hi.heap.nodup _ _ hT0) htop hla hr hw' hhv hsh'
+  have hes : ∀ e ∈ es.eraseIdx n, e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m i := fun e he =>
+    Or.inl (List.mem_of_mem_eraseIdx he)
+  obtain ⟨hfree, hpfx⟩ := hi.editB_names hx hmx hl hthru hxs hT0 hst hT' hr hes
+    (fun _ _ _ h => hw'.noView (by simpa [Ty.holdsView] using hhv) h)
+    (fun _ _ _ h => hw0.noView (by simpa [Ty.holdsView] using hhv) h)
   have hown : MInv (m.set dep.root ⟨true, some T'⟩)
       (A2.kill ((Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty))) false dep.root Γ) := by
     have hdrop : (Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) = .drop := rfl
     rw [hdrop] at hcan hds ⊢
     exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst (HeapOK.editTake hi.heap hT0 hn hr)
-      (by simp) hhv hr hw' rfl hsh'
+      (by simp) hhv hr hw' rfl hsh' hfree hes
   exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
-    (by rw [hst x hxo]; exact hxs) hhref
+    (by rw [hst x hxo]; exact hxs) hhref hpfx
 
 /-- A change that stores nothing leaves its roots holding what they held. -/
 theorem holdThru_nil (P : List Dep) (Γ : Ctx) : holdThru [] P Γ = Γ := by
@@ -175,7 +180,8 @@ theorem takeB_outOwn {m1 : Mem} {Γ1 : Ctx} {t : Ty} {e : Val} {H : List Dep}
   exact ⟨rfl, Or.inl rfl, rfl, htok,
     fun _ r hr => hwf r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr),
     fun _ => ⟨ho, hw, ViewsOK.none hhv _ _, hnd, hal, hdisj, hsf, hpay⟩, (fun h => by cases h),
-    fun _ => hnk, (fun x hx => by rw [hw.names_nil hhv] at hx; cases hx), hpk, fun _ => hsh⟩
+    fun _ => hnk, (fun x hx => by rw [hw.names_nil hhv] at hx; cases hx), hpk, (fun _ => hsh),
+    fun i hn => by obtain ⟨_, o, l, hv⟩ := hn.own rfl; exact absurd hv (hw.noView hhv)⟩
 
 /-- **What the store covers after the move-out**: what the owner's tree
     covered, but for the element's addresses, which the moved-out value
@@ -299,7 +305,8 @@ theorem takeBV_out {m1 : Mem} {Γ1 : Ctx} {Ex : Entry} {t : Ty} {e : Val}
     (hvs : ViewsOK m1 t e Ex.held) (hnm : NamesIn e Ex.held)
     (hnd : e.ids.Nodup) (hal : ∀ i ∈ e.ids, m1.alloc i = true ∧ i < m1.nid)
     (hdisj : ∀ x U, OwnedAt m1 x U → ∀ i ∈ e.ids, i ∉ U.ids) (hsf : SelfFree e)
-    (hpay : ∀ i ∈ e.ids, ¬ PayAddr m1 i) (hpk : PkgsOK e) (hsh : SharesOK m1 t e) :
+    (hpay : ∀ i ∈ e.ids, ¬ PayAddr m1 i) (hpk : PkgsOK e) (hsh : SharesOK m1 t e)
+    (hpv : CleanDeps Γ1 Ex.held → ∀ i o l, Sub (.view i o l) e → PkgFreeId m1 i) :
     RhsOut m1 Γ1 (compE Ex t) e e.owns := by
   have hnames : NameOK Γ1 (compE Ex t) := DepsNamed.sub hn1 fun dd hdd => by
     unfold Entry.vdeps; exact List.mem_append_right _ (compE_vdeps_sub Ex t dd hdd)
@@ -315,7 +322,10 @@ theorem takeBV_out {m1 : Mem} {Γ1 : Ctx} {Ex : Entry} {t : Ty} {e : Val}
       cases hw with
       | view =>
         refine ⟨rfl, Or.inr rfl, rfl, htok, fun _ => hwfc, (fun h => by cases h), fun _ => ?_,
-          fun _ => hnames, hnm, hpk, (fun h => by cases h)⟩
+          fun _ => hnames, hnm, hpk, (fun h => by cases h), fun i hn => ?_⟩
+        rotate_left
+        · obtain ⟨hc, o', l', hv⟩ := hn.views_of (Or.inr rfl) (fun _ h => by cases h)
+          exact hpv hc i o' l' hv
         obtain ⟨d', o', l', heq, dep, hd, ha⟩ := hvs s _ ViewIn.here
         cases heq
         exact ValOK.view ⟨dep, hd, ha⟩
@@ -324,6 +334,8 @@ theorem takeBV_out {m1 : Mem} {Γ1 : Ctx} {Ex : Entry} {t : Ty} {e : Val}
     rw [compE_ownView ho hhv] at hnames hwfc ⊢
     rw [hw.owns ho]
     exact ⟨rfl, Or.inl rfl, rfl, htok, fun _ => hwfc, fun _ => ⟨ho, hw, hvs, hnd, hal, hdisj, hsf, hpay⟩,
-      (fun h => by cases h), fun _ => hnames, hnm, hpk, fun _ => hsh⟩
+      (fun h => by cases h), fun _ => hnames, hnm, hpk, (fun _ => hsh), fun i hn => by
+        obtain ⟨hc, o', l', hv⟩ := hn.own rfl
+        exact hpv hc i o' l' hv⟩
 
 end A2

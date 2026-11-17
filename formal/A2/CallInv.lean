@@ -583,7 +583,8 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
                               · exact absurd hEty hn
                               · rw [hEc] at hn; cases hn
         held := NamesIn.nil _ rfl
-        pkgs := PkgsOK.leaf (fun e hc => by cases hc) (fun _ _ _ _ _ he => by cases he) }
+        pkgs := PkgsOK.leaf (fun e hc => by cases hc) (fun _ _ _ _ _ he => by cases he)
+        pkgFree := fun _ hn => absurd hn PkgNames.none_int }
     have hM1 := hi.toMInv.add hx hxlt hout
     have hM : MInv (m0.set x ⟨false, some (.int 1)⟩) (setE Γ x (callRes Γ fn [])) :=
       hM1.of_st (by funext v; by_cases hv : v = x <;> simp [m0, hv])

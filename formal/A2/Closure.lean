@@ -97,9 +97,48 @@ theorem pkg_caps {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {Ec : Entry} (h
 /-- The environment of a package, opened for a call: a borrowed parameter of
     the caller, valid through what the package depends on and what it holds
     but its changes by name — its by-name captures are handed to the call as
-    arguments of their own, and the environment never names them. -/
+    arguments of their own, and the environment never names them.
+    AGORA-901: it also depends on a share of each root the package reaches
+    in memory, by what it derives or holds, as the call's result does
+    (`recvRes`, `allKinds (recvRoots c Ec)`): the environment lies inside
+    the package, so nothing lent from it, nor anything it stores, is clean
+    (`Clean`). -/
+def shareOf (D : List Dep) : List Dep := (memDeps D).map (fun d => ⟨d.root, .share⟩)
+
+theorem mem_shareOf {D : List Dep} {d : Dep} :
+    d ∈ shareOf D ↔ d.kind = .share ∧ ∃ d0 ∈ memDeps D, d0.root = d.root := by
+  unfold shareOf
+  constructor
+  · intro h; obtain ⟨d0, hd0, rfl⟩ := List.mem_map.mp h; exact ⟨rfl, d0, hd0, rfl⟩
+  · rintro ⟨hk, d0, hd0, hr⟩
+    exact List.mem_map.mpr ⟨d0, hd0, by obtain ⟨r, k⟩ := d; simp_all⟩
+
 def envE (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Entry :=
+  ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held ++ shareOf (derive c Ec .self ++ Ec.held)),
+    envDeps cs (Ec.held ++ shareOf Ec.held), false, false⟩
+
+/-- The environment's entry without the shares: what its value is valid
+    through. -/
+def envE0 (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Entry :=
   ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held), envDeps cs Ec.held, false, false⟩
+
+theorem envE0_path_sub (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) :
+    (envE0 c Ec te cs).path ⊆ (envE c Ec te cs).path :=
+  envDeps_mono (List.subset_append_left _ _)
+
+theorem envE0_held_sub (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) :
+    (envE0 c Ec te cs).held ⊆ (envE c Ec te cs).held :=
+  envDeps_mono (List.subset_append_left _ _)
+
+/-- The roots the environment holds in memory, the package holds. -/
+theorem envE_heldRoots {c : Var} {Ec : Entry} {te : Ty} {cs : List (Var × PMode × Ty)} {r : Var}
+    (hr : r ∈ roots (memDeps (envE c Ec te cs).held)) : r ∈ roots (memDeps Ec.held) := by
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+  obtain ⟨hd, hn⟩ := List.mem_filter.mp hd
+  rcases List.mem_append.mp (envDeps_sub _ _ hd) with hd | hd
+  · exact List.mem_map_of_mem (List.mem_filter.mpr ⟨hd, hn⟩)
+  · obtain ⟨_, d0, hd0, hr0⟩ := mem_shareOf.mp hd
+    rw [← hr0]; exact List.mem_map_of_mem hd0
 
 theorem derive_bor_self {y : Var} {E : Entry} (h : E.mode.isRoot = false) : derive y E .self = E.path := by
   unfold derive
@@ -114,6 +153,7 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
     (hwf : ∀ r ∈ roots E.vdeps, ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true)
     (hlt : ∀ r ∈ roots E.vdeps, r < x)
     (hvnames : NamesIn v E.held) (hvpkgs : PkgsOK v) (hnameOK : NameOK (setE Γ x E) E)
+    (hpf : ∀ i, PkgNames m Γ E v i → PkgFreeId m i)
     (hdt : E.dtor = false := by rfl) (hdb : E.dbind = false := by rfl) :
     MInv (m.set x ⟨false, some v⟩) (setE Γ x E) := by
   have hmx : m.st x = none := by
@@ -205,6 +245,20 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
       rw [Mem.set_st, upd_ne _ _ hwx] at hsl
       exact hi.shares w Ew sl T hw hsl hown hT
   · exact hi.blocks
+  · -- AGORA-901: what the parameter names, `hpf` says is free of packages
+    refine hi.pkgFree_add hx (fun h => by cases h) (fun i hn => ?_)
+    have hsub : ∀ r T, (m.set x ⟨false, some v⟩).st r = some ⟨true, some T⟩ → m.st r = some ⟨true, some T⟩ := by
+      intro r T hT
+      by_cases hrx : r = x
+      · subst hrx; simp at hT
+      · simpa [upd_ne _ _ hrx] using hT
+    have hvd : E.vdeps = E.path ++ E.held := by simp [Entry.vdeps, hos]
+    have hdom : ∀ D, D ⊆ E.vdeps → ∀ d ∈ memDeps D, (Γ d.root).isSome := fun D hD d hd => by
+      obtain ⟨Er, hEr, _⟩ := hwf d.root (List.mem_map_of_mem (hD (List.mem_filter.mp hd).1))
+      rw [hEr]; rfl
+    exact PkgFreeId.of_fewer hsub (hpf i (PkgNames.of_setE hi.rootb_bound hx
+      (fun _ => hdom _ (hvd ▸ List.subset_append_left _ _)) (hdom _ (hvd ▸ List.subset_append_right _ _))
+      (PkgNames.of_fewer hsub hn)))
 
 /-- The receiver of a call through a package is live. -/
 theorem callT_recv_live {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {c : Var} {zs : List Var}
@@ -252,17 +306,44 @@ theorem memDeps_mono {a b : List Dep} (h : a ⊆ b) : memDeps a ⊆ memDeps b :=
 
 theorem roots_subset {a b : List Dep} (h : a ⊆ b) : roots a ⊆ roots b := List.map_subset _ h
 
+theorem Kind.bound_of_isName {k : Kind} (h : k.isName = false) : k.bound = .none := by
+  cases k <;> simp_all [Kind.bound, Kind.isName]
+
+theorem memDeps_app {a b : List Dep} {d : Dep} (h : d ∈ memDeps (a ++ b)) :
+    d ∈ memDeps a ∨ d ∈ memDeps b := by
+  obtain ⟨h1, h2⟩ := List.mem_filter.mp h
+  rcases List.mem_append.mp h1 with h1 | h1
+  · exact Or.inl (List.mem_filter.mpr ⟨h1, h2⟩)
+  · exact Or.inr (List.mem_filter.mpr ⟨h1, h2⟩)
+
 /-- What the opened environment depends on is what the package derives or
-    holds, and it changes nothing by name. -/
+    holds, or a share on a root it derives or holds in memory (AGORA-901),
+    and it changes nothing by name. -/
 theorem mem_envE_deps {c : Var} {Ec : Entry} {te : Ty} {cs : List (Var × PMode × Ty)} {d : Dep}
     (hd : d ∈ (envE c Ec te cs).path ++ (envE c Ec te cs).held) :
-    (d ∈ derive c Ec .self ∨ d ∈ Ec.held) ∧ ownWriter cs d = false := by
+    (d ∈ derive c Ec .self ∨ d ∈ Ec.held ∨
+      (d.kind = .share ∧ ∃ d0 ∈ memDeps (derive c Ec .self ++ Ec.held), d0.root = d.root)) ∧
+      ownWriter cs d = false := by
+  have hsh : ∀ {D : List Dep}, (∀ d0 ∈ memDeps D, d0 ∈ memDeps (derive c Ec .self ++ Ec.held)) →
+      d ∈ shareOf D → d.kind = .share ∧ ∃ d0 ∈ memDeps (derive c Ec .self ++ Ec.held), d0.root = d.root :=
+    fun hD h => by
+      obtain ⟨hk, d0, hd0, hr⟩ := mem_shareOf.mp h; exact ⟨hk, d0, hD d0 hd0, hr⟩
   simp only [envE, List.mem_append] at hd
   rcases hd with hd | hd
   · obtain ⟨hd, hb⟩ := mem_envDeps.mp hd
-    exact ⟨List.mem_append.mp hd, hb⟩
+    refine ⟨?_, hb⟩
+    rcases List.mem_append.mp hd with hd | hd
+    · rcases List.mem_append.mp hd with hd | hd
+      · exact Or.inl hd
+      · exact Or.inr (Or.inl hd)
+    · exact Or.inr (Or.inr (hsh (fun _ h => h) hd))
   · obtain ⟨hd, hb⟩ := mem_envDeps.mp hd
-    exact ⟨Or.inr hd, hb⟩
+    refine ⟨?_, hb⟩
+    rcases List.mem_append.mp hd with hd | hd
+    · exact Or.inr (Or.inl hd)
+    · refine Or.inr (Or.inr (hsh (fun d0 h => ?_) hd))
+      obtain ⟨h1, h2⟩ := List.mem_filter.mp h
+      exact List.mem_filter.mpr ⟨List.mem_append_right _ h1, h2⟩
 
 theorem envE_vdeps (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) :
     (envE c Ec te cs).vdeps = (envE c Ec te cs).path ++ (envE c Ec te cs).held := by
@@ -286,9 +367,10 @@ theorem envE_names {c : Var} {Ec : Entry} {te : Ty} {cs : List (Var × PMode × 
   simp only [nameDeps, List.mem_filter] at hd ⊢
   refine ⟨?_, hd.2⟩
   rw [envE_vdeps] at hd
-  rcases (mem_envE_deps hd.1).1 with hdd | hh
+  rcases (mem_envE_deps hd.1).1 with hdd | hh | ⟨hk, _⟩
   · exact derive_name_vdeps hdd hd.2
   · unfold Entry.vdeps; exact List.mem_append_right _ hh
+  · have := hd.2; rw [hk] at this; cases this
 
 /-- The roots the opened environment depends on: the package, or what it
     depends on. -/
@@ -297,11 +379,17 @@ theorem envE_roots {c : Var} {Ec : Entry} {te : Ty} {cs : List (Var × PMode × 
     r = c ∨ r ∈ roots Ec.vdeps := by
   obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
   rw [envE_vdeps] at hd
-  rcases (mem_envE_deps hd).1 with hd | hd
-  · rcases derive_roots_cases (List.mem_map_of_mem (f := Dep.root) hd) with ⟨h, _⟩ | ⟨_, h⟩
+  have hder : ∀ d' ∈ derive c Ec .self, d'.root = c ∨ d'.root ∈ roots Ec.vdeps := fun d' hd' => by
+    rcases derive_roots_cases (List.mem_map_of_mem (f := Dep.root) hd') with ⟨h, _⟩ | ⟨_, h⟩
     · exact Or.inl h
     · exact Or.inr h
+  rcases (mem_envE_deps hd).1 with hd | hd | ⟨_, d0, hd0, hr0⟩
+  · exact hder d hd
   · exact Or.inr (held_vdeps (List.mem_map_of_mem (f := Dep.root) hd))
+  · rw [← hr0]
+    rcases memDeps_app hd0 with h | h
+    · exact hder d0 (List.mem_filter.mp h).1
+    · exact Or.inr (held_vdeps (List.mem_map_of_mem (f := Dep.root) (List.mem_filter.mp h).1))
 
 /-! ### The cleaned context
 
@@ -501,6 +589,44 @@ theorem MInv.clean {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : MInv m (cleanC Γ) wh
   rootbLt p E hp hm := by
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
     rw [clean_mode] at hm; rw [clean_rootb hm]; exact hi.rootbLt p E0 h0 hm
+  pkgFree v E o w hv hal hsl i hn := by
+    -- AGORA-901: cleaning keeps modes and borrowed parameters' paths, and
+    -- what a live or armed binding names
+    obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
+    have hcl : CleanLe (cleanC Γ) Γ := CleanLe.of_entries fun y E' hy => by
+      obtain ⟨E1, h1, rfl⟩ := cleanC_some hy
+      exact ⟨E1, h1, clean_mode E1, fun hm => by rw [clean_rootb hm]; exact ⟨rfl, rfl⟩⟩
+    obtain ⟨sl', hsl', _, _, hown, hbor⟩ := hi.slot v E0 h0
+    rw [hsl] at hsl'; cases hsl'
+    cases hos : E0.mode.ownSlot
+    · have hmb : E0.mode = .bor ∨ E0.mode = .rootb := by
+        rcases hi.mode_cases h0 with hm | hm | hm <;> simp [hm, Mode.ownSlot] at hos ⊢
+      have hl : E0.live = true := by
+        have := Alive.live_of_bor hal (by rw [clean_mode]; exact hmb); rwa [clean_live] at this
+      by_cases hint : E0.ty = .int
+      · obtain ⟨w', hw', hok⟩ := hbor hos hl
+        change some w = some w' at hw'; cases hw'
+        rw [hint] at hok; obtain ⟨n, rfl⟩ := valOK_int.mp hok; exact absurd hn PkgNames.none_int
+      · rw [clean_id (Or.inl hint) hl] at hn
+        exact hi.pkgFree v E0 o w h0 (Or.inl hl) hsl i (hn.mono hcl)
+    · obtain ⟨hc, o', l', hvw⟩ := hn.own (by rw [clean_mode]; exact hos)
+      have hint : E0.ty ≠ .int := fun e => by have := (hown hos).1; rw [e] at this; cases this
+      have hal0 : Alive E0 := by
+        rcases hal with h | ⟨hd, _⟩
+        · exact Or.inl (by rwa [clean_live] at h)
+        · exact Or.inr ⟨by simpa using hd, hos⟩
+      have hheld : ∀ d ∈ memDeps E0.held, d ∈ E0.clean.held := by
+        intro d hd
+        obtain ⟨hd', hnm'⟩ := List.mem_filter.mp hd
+        by_cases hl : E0.live = true
+        · rw [clean_id (Or.inl hint) hl]; exact hd'
+        · have hd1 : E0.dbind = true := by
+            rcases hal with h' | ⟨h', _⟩
+            · rw [clean_live] at h'; exact absurd h' hl
+            · simpa using h'
+          exact (Entry.clean_vdeps_mem hd1 hos (Or.inl hint) (by simpa using hnm')).mpr hd'
+      exact hi.pkgFree v E0 o w h0 hal0 hsl i
+        (Or.inr (Or.inr (Or.inr ⟨hos, (hc.subMem hheld).mono hcl, o', l', hvw⟩)))
 
 theorem Inv.clean {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
     Inv m (cleanC Γ) F s :=
@@ -848,8 +974,7 @@ theorem heldOfArgs_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode
     · rw [hE] at hr
       split at hr
       · simp at hr
-      · have hr' : r ∈ roots (memDeps Ec.held) :=
-          roots_subset (memDeps_mono (envDeps_sub _ _)) (by simpa [envE] using hr)
+      · have hr' : r ∈ roots (memDeps Ec.held) := envE_heldRoots hr
         refine ⟨by simp only [List.flatMap_cons, List.mem_append, hEc, htc, ↓reduceIte]; exact Or.inl hr', ?_⟩
         intro hre
         obtain ⟨Er, hEr, _⟩ := hw c Ec hc hlc (Or.inl htc) r (held_vdeps (roots_memDeps hr'))
@@ -953,9 +1078,10 @@ theorem deps_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode = .ro
         rw [hk]; cases k <;> rfl
       rw [hcomp]
       have hdEc : d' ∈ Ec.vdeps := by
-        rcases hd' with hd' | hd'
+        rcases hd' with hd' | hd' | ⟨hk', _⟩
         · exact derive_name_vdeps hd' hnm
         · exact (by unfold Entry.vdeps; exact List.mem_append_right _ hd')
+        · rw [hk'] at hnm; cases hnm
       refine List.mem_append_left _ (List.mem_append_right _ (List.mem_append_right _ ?_))
       simp only [argNames, List.flatMap_cons, List.mem_append]
       refine Or.inl ?_
@@ -969,11 +1095,16 @@ theorem deps_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode = .ro
             simp_all [comp, Kind.isName]⟩)
       show d'.root ∈ recvRoots c Ec
       unfold recvRoots
-      have hd'm : d' ∈ memDeps (derive c Ec .self) ∨ d' ∈ memDeps Ec.held := by
-        rcases hd' with hd' | hd'
-        · exact Or.inl (List.mem_filter.mpr ⟨hd', by simp only [Bool.not_eq_true] at hnm; simp [hnm]⟩)
-        · exact Or.inr (List.mem_filter.mpr ⟨hd', by simp only [Bool.not_eq_true] at hnm; simp [hnm]⟩)
-      rcases hd'm with h | h
+      have hd'm : ∃ d0 ∈ memDeps (derive c Ec .self ++ Ec.held), d0.root = d'.root := by
+        rcases hd' with hd' | hd' | ⟨_, hd0⟩
+        · exact ⟨d', List.mem_filter.mpr ⟨List.mem_append_left _ hd',
+            by simp only [Bool.not_eq_true] at hnm; simp [hnm]⟩, rfl⟩
+        · exact ⟨d', List.mem_filter.mpr ⟨List.mem_append_right _ hd',
+            by simp only [Bool.not_eq_true] at hnm; simp [hnm]⟩, rfl⟩
+        · exact hd0
+      obtain ⟨d0, h, hr0⟩ := hd'm
+      rw [← hr0]
+      rcases memDeps_app h with h | h
       · exact List.mem_append_left _ (List.mem_map_of_mem (f := Dep.root) h)
       · exact List.mem_append_right _ (List.mem_map_of_mem (f := Dep.root) h)
 
@@ -1666,18 +1797,33 @@ theorem envE_cap_out {P : Prog} {m : Mem} {Γ Γ1 : Ctx} (hi : MInv m Γ) {F : L
   obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
   rw [envE_vdeps] at hd
   obtain ⟨hd, hb0⟩ := mem_envE_deps hd
+  have hdvOf : ∀ d' ∈ derive c Ec .self, d'.root = ci.1 → d' ∈ Ec.vdeps := by
+    intro d' hd hdr
+    by_cases hrt : Ec.mode.isRoot
+    · unfold derive at hd; rw [ite_eq_left hrt] at hd
+      simp only [List.mem_singleton] at hd; subst hd
+      exact absurd (show ci.1 ∈ c :: zs by
+        rw [← (show c = ci.1 from hdr)]; exact List.mem_cons_self) hA
+    · rw [derive_bor_self (by simpa using hrt)] at hd
+      have hos : Ec.mode.ownSlot = false := by
+        cases hm : Ec.mode <;> simp_all [Mode.isRoot, Mode.ownSlot]
+      unfold Entry.vdeps; rw [hos]; exact List.mem_append_left _ hd
   have hdv : d ∈ Ec.vdeps := by
-    rcases hd with hd | hd
-    · by_cases hrt : Ec.mode.isRoot
-      · unfold derive at hd; rw [ite_eq_left hrt] at hd
-        simp only [List.mem_singleton] at hd; subst hd
-        exact absurd (show ci.1 ∈ c :: zs by
-          rw [← (show c = ci.1 from hdr)]; exact List.mem_cons_self) hA
-      · rw [derive_bor_self (by simpa using hrt)] at hd
-        have hos : Ec.mode.ownSlot = false := by
-          cases hm : Ec.mode <;> simp_all [Mode.isRoot, Mode.ownSlot]
-        unfold Entry.vdeps; rw [hos]; exact List.mem_append_left _ hd
+    rcases hd with hd | hd | ⟨_, d0, hd0, hr0⟩
+    · exact hdvOf d hd hdr
     · unfold Entry.vdeps; exact List.mem_append_right _ hd
+    · -- AGORA-901: a share on a root the package derives in memory: that
+      -- root's dependency is no name, so the package reaches no capture by it
+      have hdv0 : d0 ∈ Ec.vdeps := by
+        rcases memDeps_app hd0 with h | h
+        · exact hdvOf d0 (List.mem_filter.mp h).1 (hr0.trans hdr)
+        · unfold Entry.vdeps; exact List.mem_append_right _ (List.mem_filter.mp h).1
+      have hbd0 := hx c List.mem_cons_self (by rw [hae]; exact Or.inl hnint) d0 (by rw [hae]; exact hdv0)
+        (hr0.trans hdr)
+      have hnb : d0.kind.bound = .none := by
+        have hn0 := (List.mem_filter.mp hd0).2
+        obtain ⟨r0, k0⟩ := d0; cases k0 <;> simp_all [Kind.bound, Kind.isName]
+      exact absurd (hbd0.symm.trans hnb) hbn
   -- the package reaches its capture only by its own change of it, which the
   -- environment does not hold
   have hbd := hx c List.mem_cons_self (by rw [hae]; exact Or.inl hnint) d (by rw [hae]; exact hdv) hdr
@@ -1753,26 +1899,43 @@ theorem envNames_own {env : Val} {cs : List (Var × PMode × Ty)}
 
 /-- A dependency of the opened environment: the package's own handle, or one
     of the package's. -/
+theorem derive_self_vdeps {c : Var} {Ec : Entry} {d : Dep} (hd : d ∈ derive c Ec .self) :
+    (d = ⟨c, rootKind Ec.ty .self⟩ ∧ Ec.mode.isRoot = true) ∨ d ∈ Ec.vdeps := by
+  unfold derive at hd
+  cases hrt : Ec.mode.isRoot with
+  | true =>
+    simp only [hrt, ↓reduceIte, List.mem_singleton] at hd
+    exact Or.inl ⟨hd, rfl⟩
+  | false =>
+    simp only [hrt, Bool.false_eq_true, ↓reduceIte, List.mem_map] at hd
+    obtain ⟨d0, hd0, rfl⟩ := hd
+    have hos : Ec.mode.ownSlot = false := by cases hm : Ec.mode <;> simp_all [Mode.isRoot, Mode.ownSlot]
+    have hc : (⟨d0.root, comp d0.kind .self⟩ : Dep) = d0 := by obtain ⟨r0, k0⟩ := d0; cases k0 <;> rfl
+    rw [hc]
+    refine Or.inr ?_
+    simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte]
+    exact List.mem_append_left _ hd0
+
+/-- A dependency of the opened environment: the package's own handle, one
+    of the package's, or (AGORA-901) a share on a root of one of those that
+    is no name. -/
 theorem envE_dep_vdeps {c : Var} {Ec : Entry} {te : Ty} {cs : List (Var × PMode × Ty)} {d : Dep}
     (hd : d ∈ (envE c Ec te cs).vdeps) :
-    (d = ⟨c, rootKind Ec.ty .self⟩ ∧ Ec.mode.isRoot = true) ∨ d ∈ Ec.vdeps := by
+    (d = ⟨c, rootKind Ec.ty .self⟩ ∧ Ec.mode.isRoot = true) ∨ d ∈ Ec.vdeps ∨
+      (d.kind = .share ∧ ∃ d0, ((d0 = ⟨c, rootKind Ec.ty .self⟩ ∧ Ec.mode.isRoot = true) ∨ d0 ∈ Ec.vdeps) ∧
+        d0.kind.isName = false ∧ d0.root = d.root) := by
   rw [envE_vdeps] at hd
-  rcases (mem_envE_deps hd).1 with hd | hd
-  · unfold derive at hd
-    cases hrt : Ec.mode.isRoot with
-    | true =>
-      simp only [hrt, ↓reduceIte, List.mem_singleton] at hd
-      exact Or.inl ⟨hd, rfl⟩
-    | false =>
-      simp only [hrt, Bool.false_eq_true, ↓reduceIte, List.mem_map] at hd
-      obtain ⟨d0, hd0, rfl⟩ := hd
-      have hos : Ec.mode.ownSlot = false := by cases hm : Ec.mode <;> simp_all [Mode.isRoot, Mode.ownSlot]
-      have hc : (⟨d0.root, comp d0.kind .self⟩ : Dep) = d0 := by obtain ⟨r0, k0⟩ := d0; cases k0 <;> rfl
-      rw [hc]
-      refine Or.inr ?_
-      simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte]
-      exact List.mem_append_left _ hd0
-  · exact Or.inr (by unfold Entry.vdeps; exact List.mem_append_right _ hd)
+  rcases (mem_envE_deps hd).1 with hd | hd | ⟨hk, d0, hd0, hr0⟩
+  · rcases derive_self_vdeps hd with h | h
+    · exact Or.inl h
+    · exact Or.inr (Or.inl h)
+  · exact Or.inr (Or.inl (by unfold Entry.vdeps; exact List.mem_append_right _ hd))
+  · have hn0 : d0.kind.isName = false := by simpa using (List.mem_filter.mp hd0).2
+    rcases memDeps_app hd0 with h | h
+    · exact Or.inr (Or.inr ⟨hk, d0, derive_self_vdeps (List.mem_filter.mp h).1, hn0, hr0⟩)
+    · have hv0 : d0 ∈ Ec.vdeps := by
+        unfold Entry.vdeps; exact List.mem_append_right _ (List.mem_filter.mp h).1
+      exact Or.inr (Or.inr ⟨hk, d0, Or.inr hv0, hn0, hr0⟩)
 
 /-- A root the opened environment depends on in memory: the package, or a
     root the package depends on in memory. -/
@@ -1780,9 +1943,11 @@ theorem envE_memRoots {c : Var} {Ec : Entry} {te : Ty} {cs : List (Var × PMode 
     (hr : r ∈ roots (memDeps (envE c Ec te cs).vdeps)) : r = c ∨ r ∈ roots (memDeps Ec.vdeps) := by
   obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
   obtain ⟨hd, hn⟩ := List.mem_filter.mp hd
-  rcases envE_dep_vdeps hd with ⟨rfl, _⟩ | hd
+  rcases envE_dep_vdeps hd with ⟨rfl, _⟩ | hd | ⟨_, d0, ⟨rfl, _⟩ | hd0, hn0, hr0⟩
   · exact Or.inl rfl
   · exact Or.inr (List.mem_map_of_mem (List.mem_filter.mpr ⟨hd, hn⟩))
+  · exact Or.inl hr0.symm
+  · rw [← hr0]; exact Or.inr (List.mem_map_of_mem (List.mem_filter.mpr ⟨hd0, by simp [hn0]⟩))
 
 /-- What the opened call's closures may change, the call through the package
     may: the environment holds what the package holds, the captures nothing. -/
@@ -1810,9 +1975,10 @@ theorem mutNames_open {Γ : Ctx} {e c : Var} {Ec : Entry} {te : Ty} {zs : List V
       refine ⟨c, List.mem_cons_self, ?_⟩
       rw [hae, ite_eq_right hnint]
       refine List.mem_filter.mpr ⟨?_, hdn⟩
-      rcases envE_dep_vdeps hdv with ⟨rfl, _⟩ | hdv
+      rcases envE_dep_vdeps hdv with ⟨rfl, _⟩ | hdv | ⟨hk, _⟩
       · exfalso; revert hdn; cases Ec.ty <;> simp [rootKind, Kind.isName]
       · exact hdv
+      · rw [hk] at hdn; cases hdn
   · rw [hΓe a (hzs a ha)] at hda
     exact ⟨a, List.mem_cons_of_mem _ ha, hda⟩
   · rw [hΓe _ (hcv ci hci).1] at hda
@@ -1928,15 +2094,20 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
     intro r hr
     obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
     rw [envE_vdeps] at hd
-    rcases (mem_envE_deps hd).1 with hd | hd
+    rcases (mem_envE_deps hd).1 with hd | hd | ⟨_, d0, hd0, hr0⟩
     · exact derive_roots hi.wf hc hlc (Or.inl hnint) .self d.root (List.mem_map_of_mem hd)
     · exact hi.wf c Ec hc hlc (Or.inl hnint) d.root (held_vdeps (List.mem_map_of_mem hd))
+    · rw [← hr0]
+      rcases memDeps_app hd0 with h | h
+      · exact derive_roots hi.wf hc hlc (Or.inl hnint) .self d0.root
+          (List.mem_map_of_mem (List.mem_filter.mp h).1)
+      · exact hi.wf c Ec hc hlc (Or.inl hnint) d0.root (held_vdeps (List.mem_map_of_mem (List.mem_filter.mp h).1))
   have hpkE : PkgsOK env := (hi.pkgs c _ _ hslot rfl).sub (Sub.pkg (Sub.refl _))
   have hdis := (hi.pkgs c _ _ hslot rfl fs te ms env cs (Sub.refl _)).2.2
   have hnmE : NamesIn env (envDeps cs Ec.held) := fun c' hc' =>
     mem_envDeps.mpr ⟨hi.held c Ec _ _ hc hlc hslot rfl c'
       (by simp only [Val.names, List.mem_append]; exact Or.inr hc'), envNames_own hdis c' hc'⟩
-  have hval0 : ValOK m te (lendOf env) (envE c Ec te cs).path (envE c Ec te cs).held := by
+  have hval00 : ValOK m te (lendOf env) (envE0 c Ec te cs).path (envE0 c Ec te cs).held := by
     rcases hi.mode_cases hc with hm | hm | hm
     · obtain ⟨T, hT, hw, hvs⟩ := hi.own_val hc hlc (by rw [hm]; rfl)
       rw [hslot] at hT; cases hT
@@ -1947,7 +2118,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
           simp only [derive, hm, Mode.isRoot, if_true, rootKind_self_fn htc]
         have hvr : ViewsOK m te env (envDeps cs Ec.held) :=
           ViewsOK.mono (readers_sub_envDeps _ _) (ViewsOK.readers (hvs.pkg hq))
-        have hsub : envDeps cs Ec.held ⊆ (envE c Ec te cs).path :=
+        have hsub : envDeps cs Ec.held ⊆ (envE0 c Ec te cs).path :=
           envDeps_mono (List.subset_append_right _ _)
         refine lend_valOK' hwe hpkE (fun t c' d es ht => ⟨⟨c, .view⟩, ?_,
           Or.inl ⟨_, Or.inl ⟨_, hslot, Top.pkg ht⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩⟩) (fun k q ht => ⟨⟨c, .view⟩, ?_,
@@ -1955,7 +2126,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
           _, Or.inl ⟨_, hslot, Top.pkg ht⟩, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩) hvr hnmE
           (by have := hi.shares c Ec _ _ hc hslot rfl rfl; rw [← SharesOK.undtor_iff, htc] at this; exact this.pkg' hq)
           (fun s _ => ViewsOK.mono hsub hvr)
-        all_goals simp [envE, hd, mem_envDeps, ownWriter, Kind.bound]
+        all_goals simp [envE0, hd, mem_envDeps, ownWriter, Kind.bound]
     · obtain ⟨v, hv, hok⟩ := hi.bor_val hc hlc (by rw [hm]; rfl)
       rw [hslot] at hv; cases hv
       rw [← valOK_undtor, htc] at hok
@@ -1964,7 +2135,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
         have hd : derive c Ec .self = [⟨c, .view⟩] := by
           simp only [derive, hm, Mode.isRoot, if_true, rootKind_self_fn htc]
         rw [hokE.lend]
-        exact valOK_via hslot hokE (Top.pkg (Top.refl _)) (by simp [envE, hd, mem_envDeps, ownWriter, Kind.bound])
+        exact valOK_via hslot hokE (Top.pkg (Top.refl _)) (by simp [envE0, hd, mem_envDeps, ownWriter, Kind.bound])
     · obtain ⟨v, hv, hok⟩ := hi.bor_val hc hlc (by rw [hm]; rfl)
       rw [hslot] at hv; cases hv
       rw [← valOK_undtor, htc] at hok
@@ -1972,11 +2143,13 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       | pkg hokE _ =>
         rw [hokE.lend]
         refine hokE.onlyReaders (fun d hd hb => ?_)
-        simp only [envE, derive_bor_self (show Ec.mode.isRoot = false by rw [hm]; rfl)]
+        simp only [envE0, derive_bor_self (show Ec.mode.isRoot = false by rw [hm]; rfl)]
         refine mem_envDeps_of_mem ?_ hb
         rcases List.mem_append.mp hd with hd | hd
         · exact List.mem_append_left _ hd
         · exact List.mem_append_right _ (envDeps_sub _ _ hd)
+  have hval0 : ValOK m te (lendOf env) (envE c Ec te cs).path (envE c Ec te cs).held :=
+    hval00.mono (envE0_path_sub c Ec te cs) (envE0_held_sub c Ec te cs)
   let mn : Mem := { m with nv := m.nv + 1 }
   have hin : MInv mn Γ :=
     hi.toMInv.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self, hi.heap.blk, hi.heap.views⟩ (Nat.le_succ _)
@@ -1993,10 +2166,45 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       hi.names c Ec hc hlc (Or.inl hnint) d (List.mem_filter.mp hdn).1 b t hk
     have hne : d.root ≠ m.nv := fun e => by rw [e, hΓe0] at hEr; cases hEr
     exact ⟨Er, by rw [hΓe _ hne]; exact hEr, hrest⟩
+  -- AGORA-901: the environment names nothing clean: whatever its value
+  -- holds lands through something the package derives or holds in memory,
+  -- and the environment shares each of those
+  have hpfE : ∀ i, PkgNames mn Γ (envE c Ec te cs) (lendOf env) i → PkgFreeId mn i := by
+    intro i hn
+    exfalso
+    have hshP : ∀ dep ∈ (envE0 c Ec te cs).path ++ (envE0 c Ec te cs).held, dep.kind.isName = false →
+        RootMem m dep.root → ¬ CleanDeps Γ (envE c Ec te cs).path := by
+      intro dep hd hnm hrm hc
+      have hd' : dep ∈ derive c Ec .self ++ Ec.held := by
+        rcases List.mem_append.mp hd with hd | hd
+        · exact envDeps_sub _ _ hd
+        · exact List.mem_append_right _ (envDeps_sub _ _ hd)
+      have hm : (⟨dep.root, .share⟩ : Dep) ∈ (envE c Ec te cs).path :=
+        mem_envDeps.mpr ⟨List.mem_append_right _ (mem_shareOf.mpr ⟨rfl, dep,
+          List.mem_filter.mpr ⟨hd', by simp [hnm]⟩, rfl⟩), by simp [ownWriter, Kind.bound]⟩
+      exact (hc _ (List.mem_filter.mpr ⟨hm, rfl⟩)).1.elim (fun hk => hk rfl) fun hh => hh.noMem hi.toMInv hrm
+    have hshH : ∀ dep ∈ (envE0 c Ec te cs).held, dep.kind.isName = false →
+        RootMem m dep.root → ¬ CleanDeps Γ (envE c Ec te cs).held := by
+      intro dep hd hnm hrm hc
+      have hm : (⟨dep.root, .share⟩ : Dep) ∈ (envE c Ec te cs).held :=
+        mem_envDeps.mpr ⟨List.mem_append_right _ (mem_shareOf.mpr ⟨rfl, dep,
+          List.mem_filter.mpr ⟨envDeps_sub _ _ hd, by simp [hnm]⟩, rfl⟩), by simp [ownWriter, Kind.bound]⟩
+      exact (hc _ (List.mem_filter.mpr ⟨hm, rfl⟩)).1.elim (fun hk => hk rfl) fun hh => hh.noMem hi.toMInv hrm
+    rcases hn with ⟨_, hc, ⟨c', hb, _⟩ | ⟨o, l, hv⟩⟩ | ⟨_, hc, o, l, hb⟩ |
+        ⟨_, hc, c', r, T, t, d, es, hb, hT, hs, o, l, hv⟩ | ⟨h, _⟩
+    · obtain ⟨dep, hd, _, _, _, hl, _⟩ := hval00.bare_href_held c' hb
+      exact hshP dep hd hl.notName hl.rootMem hc
+    · obtain ⟨dep, hd, _, _, _, _, hl, _⟩ := hval00.bare_view_in i o l (by rw [hv]; exact Bare.refl _)
+      exact hshP dep hd hl.notName hl.rootMem hc
+    · obtain ⟨dep, hd, _, _, _, _, hl, _⟩ := hval00.bare_view_in i o l hb
+      exact hshP dep hd hl.notName hl.rootMem hc.left
+    · obtain ⟨dep, hd, hnm, hrm⟩ := hval00.named_view_held hi.heap hb hT hs hv
+      exact hshH dep hd hnm hrm hc
+    · cases h
   have hie : MInv (envMem m env) (setE Γ m.nv (envE c Ec te cs)) :=
     hin.addRootb hΓe0 (Nat.lt_succ_self _) rfl rfl hteok hval hEw
       (fun r hr => by obtain ⟨Er, hEr, _⟩ := hEw r hr; exact hlt r Er hEr)
-      (NamesIn.lendOf hnmE) hpkE.lendOf hnameE
+      (NamesIn.lendOf (hnmE.mono (envE0_held_sub c Ec te cs))) hpkE.lendOf hnameE hpfE
   -- the opened call's closures change what the call through the package may
   have hmo : ∀ d ∈ mutNames (setE Γ m.nv (envE c Ec te cs)) (m.nv :: zs ++ cs.map (·.1)),
       d ∈ mutNames Γ (c :: zs) :=
@@ -2026,10 +2234,11 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
         obtain ⟨hne, hnr, hns, hnb⟩ := hdist 0 (by rw [hsp]; simp) (by omega)
         rw [openArgs_z _ _ hiz] at ha
         simp only [List.getD_cons_zero, List.getD_cons_succ] at hne hnr hns hnb
-        rcases envE_dep_vdeps hd with ⟨rfl, _⟩ | hdv
-        · exact hne ha
-        · -- the environment's reader on the argument: the argument, moved,
-          -- is reached by nothing (`sink`) or by names of its bound (`inout`)
+        -- the environment's reader on the argument (AGORA-901: or a share
+        -- on a root it reads in memory): the argument, moved, is reached by
+        -- nothing (`sink`) or by names of its bound (`inout`)
+        have hrd : ∀ d0 : Dep, d0 ∈ Ec.vdeps → d0.root = (zs.getD i 0) → d0.kind.bound = .none → False := by
+          intro d0 hdv ha hb
           revert hmoves hns hnb
           rw [hget]; obtain ⟨pm, t⟩ := p
           cases pm with
@@ -2037,8 +2246,13 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
           | sink => intro _ hns _; exact hns rfl (by rw [hae, ← ha]; exact List.mem_map_of_mem hdv)
           | inout b =>
             intro _ _ hnb
-            have := hnb b rfl d (by rw [hae]; exact hdv) ha
+            have := hnb b rfl d0 (by rw [hae]; exact hdv) ha
             exact this.2 (this.1 ▸ hb)
+        rcases envE_dep_vdeps hd with ⟨rfl, _⟩ | hdv | ⟨_, d0, ⟨rfl, _⟩ | hdv0, hn0, hr0⟩
+        · exact hne ha
+        · exact hrd d hdv ha hb
+        · exact hne (hr0.trans ha)
+        · exact hrd d0 hdv0 (hr0.trans ha) (Kind.bound_of_isName hn0)
       · rw [openArgs_c _ _ hk] at ha
         rw [hps, show zs.length + 1 + k = rest.length + 1 + k by omega, openParams_c hk] at hp
         cases hp
@@ -2052,13 +2266,19 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       have hdm' := hmo dm hdm
       obtain ⟨_, _, _, _, hoth⟩ := hnf dm hdm'
       have hbd : dm.kind.bound ≠ .none := by simpa using (List.mem_filter.mp hdm').2
-      rcases envE_dep_vdeps hd with ⟨rfl, _⟩ | hdv
-      · -- the package itself: a closure, not a `Vec` a closure changes
+      have hpk : dm.root ≠ c := fun hdc => by
+        -- the package itself: a closure, not a `Vec` a closure changes
         obtain ⟨_, ⟨s, hts, _⟩, _⟩ := hnf dm hdm'
-        have hdc : dm.root = c := hdr
         rw [hdc, hae] at hts; rw [hts] at htc; cases htc
-      · have := hoth c List.mem_cons_self (by rw [hae]; exact Or.inl hnint) d (by rw [hae]; exact hdv) hdr.symm
-        exact hbd (this ▸ hb)
+      have hrd : ∀ d0 : Dep, d0 ∈ Ec.vdeps → d0.root = dm.root → d0.kind.bound = .none → False :=
+        fun d0 hdv hr hb => by
+          have := hoth c List.mem_cons_self (by rw [hae]; exact Or.inl hnint) d0 (by rw [hae]; exact hdv) hr
+          exact hbd (this ▸ hb)
+      rcases envE_dep_vdeps hd with ⟨rfl, _⟩ | hdv | ⟨_, d0, ⟨rfl, _⟩ | hdv0, hn0, hr0⟩
+      · exact hpk hdr
+      · exact hrd d hdv hdr.symm hb
+      · exact hpk (hdr.trans hr0.symm)
+      · exact hrd d0 hdv0 (hr0.trans hdr.symm) (Kind.bound_of_isName hn0)
   refine ⟨hie, hZ, fn, hf, ?_, fun i hil => ?_, ?_, ?_, rfl, rfl, fun ht => absurd ht hnt⟩
   · simp [hplen]; omega
   rotate_left
@@ -2131,10 +2351,19 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       simp only [List.cons_append, List.mem_cons, List.mem_append, List.mem_map] at ha
       rcases ha with rfl | ha | ⟨ci, hci, rfl⟩
       · rw [hEe] at hd''
-        rcases envE_dep_vdeps hd'' with ⟨rfl, _⟩ | hdv
-        · obtain ⟨s, hts, _⟩ := hvec
-          rw [← hdr, hae] at hts; rw [hts] at htc; cases htc
+        have hpk : d.root ≠ c := fun hdc => by
+          obtain ⟨s, hts, _⟩ := hvec
+          rw [hdc, hae] at hts; rw [hts] at htc; cases htc
+        rcases envE_dep_vdeps hd'' with ⟨rfl, _⟩ | hdv | ⟨_, d0, ⟨rfl, _⟩ | hdv0, hn0, hr0⟩
+        · exact absurd hdr.symm hpk
         · exact hoth c List.mem_cons_self (by rw [hae]; exact Or.inl hnint) d' (by rw [hae]; exact hdv) hdr
+        · exact absurd (hr0.trans hdr).symm hpk
+        · -- AGORA-901: a share on a root the package reads in memory: none
+          -- reaches the changed binding
+          have := hoth c List.mem_cons_self (by rw [hae]; exact Or.inl hnint) d0 (by rw [hae]; exact hdv0)
+            (hr0.trans hdr)
+          have hbd : d.kind.bound ≠ .none := by simpa using (List.mem_filter.mp hd').2
+          exact absurd (this.symm.trans (Kind.bound_of_isName hn0)) hbd
       · rw [hargE a (hze a ha)] at hty hd''
         exact hoth a (List.mem_cons_of_mem _ ha) hty d' hd'' hdr
       · rw [hargE _ (hkne ci hci), hcapv ci hci] at hd''; cases hd''
@@ -2273,9 +2502,12 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
           · rcases envE_roots hr with h | h
             · exact hne h.symm
             · exact hns0 (by rw [← hpe]; exact hs) (by rw [hae]; exact h)
-          · rcases envE_dep_vdeps hd with ⟨rfl, _⟩ | hdv
+          · rcases envE_dep_vdeps hd with ⟨rfl, _⟩ | hdv | ⟨_, d0, ⟨rfl, _⟩ | hdv0, hn0, hr0⟩
             · exact absurd hdr hne
             · exact hnb0 b (by rw [← hpe]; exact hb) d (by rw [hae]; exact hdv) hdr
+            · exact absurd (hr0.trans hdr) hne
+            · have := hnb0 b (by rw [← hpe]; exact hb) d0 (by rw [hae]; exact hdv0) (hr0.trans hdr)
+              exact absurd (this.1.symm.trans (Kind.bound_of_isName hn0)) this.2
         · obtain ⟨hne, hnr0, hns0, hnb0⟩ := hdist (j + 1) (by rw [hsp]; simp; omega) (by omega)
           simp only [List.getD_cons_succ] at hne hnr0 hns0 hnb0
           rw [openArgs_z _ _ hjz, hargE _ (hze _ (hzs j hjz))]
@@ -2296,7 +2528,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
         obtain ⟨_, _, _, _, hdist⟩ := hmva hmoves
         obtain ⟨hne0, _, hns0, hnb0⟩ := hdist 0 (by rw [hsp]; simp) (by omega)
         simp only [List.getD_cons_zero] at hne0 hns0 hnb0
-        rcases envE_dep_vdeps hd with ⟨rfl, _⟩ | hdv
+        rcases envE_dep_vdeps hd with ⟨rfl, _⟩ | hdv | ⟨_, d0, ⟨rfl, _⟩ | hdv0, hn0, hr0⟩
         · exact hne0 hdr
         · rcases hs with hs | hs
           · exact hns0 hs (by rw [hae, ← hdr]; exact List.mem_map_of_mem hdv)
@@ -2310,6 +2542,12 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
               · exact hb h'
               · exact h' this.1
             | _ => exact hb rfl
+        · exact hne0 (hr0.trans hdr)
+        · -- AGORA-901: a share on a root the package reads in memory
+          rcases hs with hs | hs
+          · exact hns0 hs (by rw [hae, ← hdr, ← hr0]; exact List.mem_map_of_mem hdv0)
+          · have := hnb0 .replace hs d0 (by rw [hae]; exact hdv0) (hr0.trans hdr)
+            rw [Kind.bound_of_isName hn0] at this; cases this.1
       · rw [hΓe _ hpe'] at hp; exact hpin hs p Ep hp hm d hd hb
   · -- a capture
     have hci := hck k hk
@@ -2674,9 +2912,15 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
           obtain ⟨d', hd', hdd⟩ := List.mem_map.mp hr
           rw [← hdd]
           simp only [Ee] at hd'; rw [envE_vdeps] at hd'
-          rcases (mem_envE_deps hd').1 with hd' | hd'
+          rcases (mem_envE_deps hd').1 with hd' | hd' | ⟨_, d0, hd0, hr0⟩
           · exact derive_roots hi.wf hc hlc (Or.inl hnint) .self d'.root (List.mem_map_of_mem hd')
           · exact hi.wf c Ec hc hlc (Or.inl hnint) d'.root (held_vdeps (List.mem_map_of_mem hd'))
+          · rw [← hr0]
+            rcases memDeps_app hd0 with h | h
+            · exact derive_roots hi.wf hc hlc (Or.inl hnint) .self d0.root
+                (List.mem_map_of_mem (List.mem_filter.mp h).1)
+            · exact hi.wf c Ec hc hlc (Or.inl hnint) d0.root
+                (held_vdeps (List.mem_map_of_mem (List.mem_filter.mp h).1))
         have hne : d.root ≠ m.nv := fun e => by rw [e, hΓe0] at hEr; cases hEr
         have hnx : d.root ≠ x := fun e => by rw [e, hx] at hEr; cases hEr
         refine ⟨hne, ?_⟩

@@ -735,6 +735,158 @@ theorem armed_frame (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem
   refine (Entry.clean_vdeps_mem hdb1 hos1 hn1 hnm).mpr ?_
   rw [hh2, hh0]; exact hd''.1
 
+/-- AGORA-901: a caller binding hollow in the callee's context is hollow in
+    the caller's: a borrowed parameter of the caller keeps its entry. -/
+theorem hollow_back (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {r : Var}
+    (hc : Hollow ((callS Γ F fn args m.nv x).canon (sigCtx fn)) r) (hr : (Γ r).isSome) : Hollow Γ r := by
+  have hlow : ∀ {y : Var}, (Γ y).isSome → y < m.nv := fun hy =>
+    hi.nvSt _ (by rw [← hi.dom]; exact hy)
+  induction hc with
+  | @rootb p Ep hEp hm _ ih =>
+    obtain ⟨E0, h0⟩ := Option.isSome_iff_exists.mp hr
+    rcases h.ctx_cases p with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨k, t, _, rfl, _⟩ | ⟨k, t, _, rfl, _⟩ |
+        ⟨k, b, t, hk, rfl, hc⟩ | ⟨hy, hyx, hc⟩ | ⟨hc, _⟩
+    · rw [h.fresh] at h0; cases h0
+    · exact absurd (hlow hr) (Nat.not_lt.mpr (by simp))
+    · exact absurd (hlow hr) (Nat.not_lt.mpr (by simp))
+    · exact absurd (hlow hr) (Nat.not_lt.mpr (by simp))
+    · rw [hc] at hEp; cases hEp; cases hm
+    · rw [hc] at hEp
+      obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hEp
+      rw [clean_mode] at hm
+      obtain ⟨E0', h0', hm0⟩ := h.postdm.2 p E1 h1
+      rw [hm] at hm0
+      have hpost := h.post_rootb h0' hm0.symm
+      rw [h1] at hpost; cases hpost
+      have hl := h.rbLive p E1 h0' hm
+      rw [clean_id (Or.inr hm) hl] at ih
+      have hos : E1.mode.ownSlot = false := by rw [hm]; rfl
+      refine .rootb h0' hm fun d hd => ih d hd ?_
+      obtain ⟨Er, hEr, _⟩ := hi.wf.live p E1 h0' hl (Or.inr hm) d.root (by
+        simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte]
+        exact List.mem_map.mpr ⟨d, (List.mem_filter.mp hd).1, rfl⟩)
+      rw [hEr]; rfl
+    · rw [hc] at hEp; cases hEp
+
+/-- AGORA-901: a caller binding clean in the callee's context is clean in the
+    caller's: the call keeps every frame binding's mode, an `inout` argument
+    owns its slot, and a borrowed parameter of the caller keeps its entry. -/
+theorem clean_back (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {r : Var}
+    (hc : Clean ((callS Γ F fn args m.nv x).canon (sigCtx fn)) r) (hr : (Γ r).isSome) : Clean Γ r := by
+  have hlow : ∀ {y : Var}, (Γ y).isSome → y < m.nv := fun hy =>
+    hi.nvSt _ (by rw [← hi.dom]; exact hy)
+  induction hc with
+  | @own r Er hEr ho =>
+    obtain ⟨E0, h0⟩ := Option.isSome_iff_exists.mp hr
+    rcases h.ctx_cases r with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨k, t, _, rfl, _⟩ | ⟨k, t, _, rfl, _⟩ |
+        ⟨k, b, t, hk, rfl, _⟩ | ⟨hy, hyx, hc⟩ | ⟨hc, _⟩
+    · rw [h.fresh] at h0; cases h0
+    · exact absurd (hlow hr) (Nat.not_lt.mpr (by simp))
+    · exact absurd (hlow hr) (Nat.not_lt.mpr (by simp))
+    · exact absurd (hlow hr) (Nat.not_lt.mpr (by simp))
+    · obtain ⟨Ea, hEa, _, hok, _⟩ := h.arg k (lt_of_get hk)
+      rw [get_of hk] at hok
+      exact .own hEa hok.2.1.ownSlot
+    · rw [hc] at hEr
+      obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hEr
+      obtain ⟨E0', h0', hm⟩ := h.postdm.2 r E1 h1
+      exact .own h0' (by rw [← hm, ← clean_mode]; exact ho)
+    · rw [hc] at hEr; cases hEr
+  | @rootb p Ep hEp hm hns _ ih =>
+    obtain ⟨E0, h0⟩ := Option.isSome_iff_exists.mp hr
+    rcases h.ctx_cases p with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨k, t, _, rfl, _⟩ | ⟨k, t, _, rfl, _⟩ |
+        ⟨k, b, t, hk, rfl, hc⟩ | ⟨hy, hyx, hc⟩ | ⟨hc, _⟩
+    · rw [h.fresh] at h0; cases h0
+    · exact absurd (hlow hr) (Nat.not_lt.mpr (by simp))
+    · exact absurd (hlow hr) (Nat.not_lt.mpr (by simp))
+    · exact absurd (hlow hr) (Nat.not_lt.mpr (by simp))
+    · rw [hc] at hEp; cases hEp; cases hm
+    · rw [hc] at hEp
+      obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hEp
+      rw [clean_mode] at hm
+      obtain ⟨E0', h0', hm0⟩ := h.postdm.2 p E1 h1
+      rw [hm] at hm0
+      have hpost := h.post_rootb h0' hm0.symm
+      rw [h1] at hpost; cases hpost
+      have hl := h.rbLive p E1 h0' hm
+      rw [clean_id (Or.inr hm) hl] at hns ih
+      have hdom : ∀ d ∈ memDeps E1.path, (Γ d.root).isSome := fun d hd => by
+        obtain ⟨Er, hEr, _⟩ := hi.wf.live p E1 h0' hl (Or.inr hm) d.root (by
+          unfold Entry.vdeps; rw [hm]
+          exact List.mem_map.mpr ⟨d, List.mem_append_left _ (List.mem_filter.mp hd).1, rfl⟩)
+        rw [hEr]; rfl
+      exact .rootb h0' hm (fun d hd => (hns d hd).imp id fun hh => h.hollow_back hi hh (hdom d hd))
+        fun d hd => ih d hd (hdom d hd)
+    · rw [hc] at hEp; cases hEp
+
+theorem cleanDeps_back (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {D : List Dep}
+    (hc : CleanDeps ((callS Γ F fn args m.nv x).canon (sigCtx fn)) D)
+    (hr : ∀ d ∈ memDeps D, (Γ d.root).isSome) : CleanDeps Γ D :=
+  fun d hd => ⟨(hc d hd).1.imp id fun hh => h.hollow_back hi hh (hr d hd), h.clean_back hi (hc d hd).2 (hr d hd)⟩
+
+/-- Every tree the call's store owns, the store before owned. -/
+theorem own_back (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
+    (hb : BindParams m fn.params args m.nv 0 m1) :
+    ∀ r T, (callMem m m1 fn x).st r = some ⟨true, some T⟩ → ∃ r', m.st r' = some ⟨true, some T⟩ := by
+  intro r T hT
+  rcases h.own_src hi hb hT with ⟨_, _, _, _, hT'⟩ | ⟨hT', _⟩ <;> exact ⟨_, hT'⟩
+
+theorem _root_.A2.CleanDeps.typed {Γ : Ctx} {t : Ty} {D : List Dep} :
+    CleanDeps Γ (typedDeps t D) ↔ CleanDeps Γ D := by
+  have hm : ∀ d, d ∈ memDeps (typedDeps t D) ↔ d ∈ memDeps D := fun d => by
+    unfold typedDeps; split
+    · exact Iff.rfl
+    · simp [memDeps, List.mem_filter]
+  exact ⟨fun h d hd => h d ((hm d).mpr hd), fun h d hd => h d ((hm d).mp hd)⟩
+
+theorem _root_.A2.MInv.dom_roots {Γ : Ctx} {D : List Dep}
+    (h : ∀ r ∈ roots D, ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) :
+    ∀ d ∈ memDeps D, (Γ d.root).isSome := fun d hd => by
+  obtain ⟨Er, hEr, _⟩ := h d.root (List.mem_map.mpr ⟨d, (List.mem_filter.mp hd).1, rfl⟩)
+  rw [hEr]; rfl
+
+/-- What a moved or changed argument holds in memory, the callee holds as
+    shares of its roots (`allKinds`): no clean dependency of the callee's
+    reaches it. -/
+theorem arg_held_share (h : CallH P Γ F x fn args m.nv) {j : Nat} (hj : j < fn.params.length)
+    {Ea : Entry} (hEa : Γ (args.getD j 0) = some Ea) (hn : Ea.ty ≠ .int) {d : Dep}
+    (hd : d ∈ memDeps Ea.held) : (⟨d.root, .share⟩ : Dep) ∈ (callS Γ F fn args m.nv x).A := by
+  have hae : argE Γ (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl
+  have hmem : args.getD j 0 ∈ args := by simp [List.getD, show j < args.length from h.len ▸ hj]
+  exact List.mem_append_left _ (RSetup.mem_allKinds_iff.mpr ⟨mem_callR.mpr ⟨_, hmem,
+    by rw [hae]; exact hn, by rw [hae]; exact List.mem_map.mpr ⟨d, hd, rfl⟩⟩, rfl⟩)
+
+/-- An owned parameter's tree is an owned argument's: what it names, the
+    argument names (or nothing, when what it holds is a share). -/
+theorem own_param_free (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {j : Nat}
+    (hj : j < fn.params.length) {Ea : Entry} (hEa : Γ (args.getD j 0) = some Ea) (hl : Ea.live = true)
+    (hm : Ea.mode = .own) {T : Val} (hT : m.st (args.getD j 0) = some ⟨true, some T⟩) {H : List Dep}
+    (hc : CleanDeps ((callS Γ F fn args m.nv x).canon (sigCtx fn)) (H ++ ownHeld true Ea.ty (callS Γ F fn args m.nv x).A))
+    {i o l : Nat} (hv : Sub (.view i o l) T) : PkgFreeId m i := by
+  have hos : Ea.mode.ownSlot = true := by rw [hm]; rfl
+  obtain ⟨T', hT', hw, hvs⟩ := hi.own_val hEa hl hos
+  rw [hT] at hT'; cases hT'
+  cases hhv : Ea.ty.holdsView
+  · exact absurd hv (hw.noView hhv)
+  · -- the view is valid through what the argument holds in memory, a root
+    -- that reaches memory; the callee holds a share of it
+    exfalso
+    have hn : Ea.ty ≠ .int := fun e => by rw [e] at hhv; cases hhv
+    obtain ⟨s, hvi⟩ := hw.viewIn hv
+    obtain ⟨_, _, _, _, dep, hd, _, _, _, hla, _⟩ := hvs s _ hvi
+    have hdm : dep ∈ memDeps Ea.held := List.mem_filter.mpr ⟨hd, by simp [hla.notName]⟩
+    have hA := h.arg_held_share hj hEa hn hdm
+    have hoh : ownHeld true Ea.ty (callS Γ F fn args m.nv x).A = (callS Γ F fn args m.nv x).A := by
+      simp [ownHeld, hhv]
+    rw [hoh] at hc
+    rcases (hc ⟨dep.root, .share⟩ (List.mem_filter.mpr ⟨List.mem_append_right _ hA, rfl⟩)).1 with hk | hh
+    · exact hk rfl
+    · have hdom : (Γ dep.root).isSome := by
+        obtain ⟨Er, hEr, _⟩ := hi.wf.live _ Ea hEa hl (Or.inl hn) dep.root (by
+          unfold Entry.vdeps; exact List.mem_map.mpr ⟨dep, List.mem_append_right _ hd, rfl⟩)
+        rw [hEr]; rfl
+      exact (h.hollow_back hi hh hdom).noMem hi hla.rootMem
+
 /-- The invariant of memory, in the context the call sets up. -/
 theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     (hb : BindParams m fn.params args m.nv 0 m1) :
@@ -1080,6 +1232,200 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       rw [h1'] at this; cases this
       rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)] at hr
       exact hi.rootbLt p E1' h0 (hm ▸ hrb) r hr
+  pkgFree y E o v hy hal hst i hn := by
+    -- AGORA-901: what the callee names, the caller's bindings name
+    have hfr := PkgFreeId.of_moved (h.own_back hi hb) (i := i)
+    have hnm := PkgNames.of_moved (h.own_back hi hb) hn
+    rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
+        ⟨k, b', t, hk, rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, w, hw, rfl⟩ <;> rw [hc] at hy <;> (try cases hy)
+    · rcases hal with h' | ⟨h', _⟩ <;> simp [callX] at h'
+    · rcases hal with h' | ⟨h', _⟩ <;> simp at h'
+    · -- an `in` parameter: the argument's value, lent
+      rw [h.st_inp hb hk] at hst
+      simp only [Option.some.injEq, Slot.mk.injEq] at hst
+      obtain ⟨-, hsv⟩ := hst
+      have hkl := lt_of_get hk
+      obtain ⟨Ea, hEa, hae⟩ := h.argE_eq hkl
+      obtain ⟨_, h1, hla, _⟩ := h.arg k hkl
+      rw [hEa] at h1; cases h1
+      obtain ⟨v', hv', hok⟩ := h.slot_inp hi hb hk
+      rw [hsv] at hv'; cases hv'
+      by_cases hint : Ea.ty = .int
+      · have hcp : callPe Γ fn.params args k = ⟨.int, .rootb, true, [], [], false, false⟩ := by
+          unfold callPe; rw [hk]; simp only; rw [hae]; simp [hint]
+        rw [hcp] at hok
+        obtain ⟨n, rfl⟩ := valOK_int.mp hok
+        exact absurd hn PkgNames.none_int
+      · have hcp : callPe Γ fn.params args k = ⟨Ea.ty, .rootb, true,
+            typedDeps Ea.ty (derive (args.getD k 0) Ea .self), typedDeps Ea.ty Ea.held, false, false⟩ := by
+          unfold callPe; rw [hk]; simp only; rw [hae]; simp [hint]
+        rw [hcp] at hnm
+        have hdD := MInv.dom_roots (wf_derive hi hEa hla hint .self)
+        have hdH := MInv.dom_roots (wf_held hi hEa hla hint)
+        have hnΓ : PkgNames m Γ ⟨Ea.ty, .rootb, true, derive (args.getD k 0) Ea .self, Ea.held, false, false⟩
+            v i :=
+          PkgNames.mapClean (fun h => by exact h) (fun h => by exact h)
+            (fun hc => h.cleanDeps_back hi (CleanDeps.typed.mp hc) hdD)
+            (fun hc => (h.cleanDeps_back hi (CleanDeps.typed.mp hc.left) hdD).append
+              (h.cleanDeps_back hi (CleanDeps.typed.mp hc.right) hdH))
+            (fun hc => h.cleanDeps_back hi (CleanDeps.typed.mp hc) hdH) hnm
+        refine hfr ?_
+        cases hsa : m.st (args.getD k 0) with
+        | none => rw [hsa] at hsv; cases hsv
+        | some sa =>
+          rw [hsa] at hsv
+          obtain ⟨o', val⟩ := sa
+          cases val with
+          | none => cases o' <;> cases hsv
+          | some V =>
+            obtain ⟨sl, hsl, _, hso, hown, _⟩ := hi.slot _ Ea hEa
+            rw [hsa] at hsl; cases hsl
+            cases o'
+            · -- a borrow's value, as it is
+              simp only [Option.bind, lendSlot, Option.some.injEq] at hsv; subst hsv
+              have hos : Ea.mode.ownSlot = false := by simpa using hso.symm
+              have hmb : Ea.mode = .bor ∨ Ea.mode = .rootb := by
+                rcases hi.mode_cases hEa with hm | hm | hm <;> simp [hm, Mode.ownSlot] at hos ⊢
+              have hcy := derive_clean_path hEa hmb (k := .self) rfl
+              refine hi.pkgFree _ Ea false V hEa (Or.inl hla) hsa i ?_
+              rcases hnΓ with ⟨_, hc, hv'⟩ | ⟨_, hc, hv'⟩ | ⟨_, hc, hv'⟩ | ⟨h', _⟩
+              · exact Or.inl ⟨hmb, hcy hc, hv'⟩
+              · exact Or.inr (Or.inl ⟨hmb, (hcy hc.left).append hc.right, hv'⟩)
+              · exact Or.inr (Or.inr (Or.inl ⟨hmb, hc, hv'⟩))
+              · cases h'
+            · -- an owner's tree, lent: the projection lemma
+              simp only [Option.bind, lendSlot, Option.some.injEq] at hsv; subst hsv
+              have hos : Ea.mode.ownSlot = true := by simpa using hso.symm
+              obtain ⟨T', hT', hw, _⟩ := hi.own_val hEa hla hos
+              rw [hsa] at hT'; cases hT'
+              have hnh : ∀ c', ¬ Sub (.href c') V := fun _ => hw.noHref
+              have hvw : CleanDeps Γ Ea.held → ∀ i o l, Sub (.view i o l) V → PkgFreeId m i :=
+                fun hcl i o l hv =>
+                  hi.pkgFree _ Ea true V hEa (Or.inl hla) hsa i (Or.inr (Or.inr (Or.inr ⟨hos, hcl, o, l, hv⟩)))
+              exact lend_pkgNames
+                (E' := ⟨Ea.ty, .bor, true, derive (args.getD k 0) Ea .self, Ea.held, false, false⟩)
+                hi.heap (Or.inl ⟨_, V, hsa, Sub.refl _⟩) hnh rfl
+                (fun _ ⟨_, hb'⟩ => PkgFreeAt.top hi.heap hsa (bare_lend_ids V hnh hb'))
+                hvw (fun _ i o l he => absurd he (hw.owning_noView (hown hos).1))
+                (PkgNames.remode (hn := hnΓ) (by rfl) (by rfl) (by rfl) (fun _ => by exact Or.inl rfl))
+    · -- a `sink` parameter: the argument's tree, moved
+      rw [h.st_sink hb hk] at hst
+      simp only [Option.some.injEq, Slot.mk.injEq] at hst
+      obtain ⟨-, hsv⟩ := hst
+      have hkl := lt_of_get hk
+      obtain ⟨Ea, hEa, hla, hok, _⟩ := h.arg k hkl
+      rw [get_of hk] at hok
+      obtain ⟨hty, hm, _⟩ := hok
+      simp only at hty
+      obtain ⟨T', hT', _⟩ := h.slot_ownArg hi hb hkl hEa hla hm
+      rw [hT'] at hsv
+      change some T' = some v at hsv; cases hsv
+      obtain ⟨hc, o', l', hv⟩ := hnm.own rfl
+      subst hty
+      exact hfr (h.own_param_free hi hkl hEa hla hm hT' hc hv)
+    · -- an `inout` parameter: the argument itself
+      have hkl := lt_of_get hk
+      obtain ⟨Ea, hEa, hla, hok, _⟩ := h.arg k hkl
+      rw [get_of hk] at hok
+      obtain ⟨hty, hcan, _⟩ := hok
+      simp only at hty
+      have hm : Ea.mode = .own := by
+        rcases hcan with hm | ⟨b'', hm, _⟩
+        · exact hm
+        · exact absurd hm (h.noInout _ Ea b'' hEa)
+      obtain ⟨T', hT', _⟩ := h.slot_ownArg hi hb hkl hEa hla hm
+      have hu := h.untouched_lt (h.argLt hkl) (h.arg_ne hkl).1 (fun k' t' hk' he => by
+        have := h.moving (lt_of_get hk') hkl (by rw [get_of hk']; rfl) he.symm
+        subst this; rw [hk] at hk'; cases hk')
+      rw [h.st_other hb hu, hT'] at hst; cases hst
+      obtain ⟨hc, o', l', hv⟩ := hnm.own rfl
+      subst hty
+      exact hfr (h.own_param_free hi hkl hEa hla hm hT' hc hv)
+    · -- the frame: as the caller has it
+      obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hy
+      by_cases hs : ∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ args.getD k 0 = y
+      · obtain ⟨k, t, hk, rfl⟩ := hs
+        rw [h.st_sinkArg hb hk] at hst; cases hst
+      rw [h.st_other hb (h.frame_untouched hy' hyx (fun k t hk he => hs ⟨k, t, hk, he⟩))] at hst
+      have hmv : ∀ pa ∈ fn.params.zip args, pa.1.1.moves = true → pa.2 ≠ y := by
+        intro pa hpa hmo hpy
+        obtain ⟨k, hk, _, rfl⟩ := RSetup.mem_zip_getD hpa
+        simp only at hmo hpy
+        have hget : fn.params[k]? = some fn.params[k] := List.getElem?_eq_getElem hk
+        generalize hp : fn.params[k] = p at hmo hget
+        obtain ⟨pm, t⟩ := p
+        cases pm with
+        | inp => cases hmo
+        | sink => exact hs ⟨k, t, hget, hpy⟩
+        | inout b => exact hy' k (by unfold callRen; rw [hget]; exact hpy)
+      obtain ⟨E2, h2, ht2, hm2, hp2, hh2, hl2⟩ := killNames_get _ h1'
+      obtain ⟨E0, h0, ht0, hm0, hp0, hh0, hl0⟩ := callPostAux_frame fn.params args 0 Γ hmv E2 h2
+      obtain ⟨E0', h0', _, hdb0⟩ := h.post_frame_flags hmv h1'
+      rw [h0] at h0'; cases h0'
+      have hmE : E1'.mode = E0.mode := hm2.trans hm0
+      have htE : E1'.ty = E0.ty := ht2.trans ht0
+      have hpE : E1'.path = E0.path := hp2.trans hp0
+      have hhE : E1'.held = E0.held := hh2.trans hh0
+      have hlE : E1'.live = true → E0.live = true := fun hl => (hl0 (hl2 hl).1).1
+      refine hfr ?_
+      cases hos : E0.mode.ownSlot
+      · -- a borrow: live, as the caller has it
+        have hmb : E0.mode = .bor ∨ E0.mode = .rootb := by
+          rcases hi.mode_cases h0 with hm | hm | hm <;> simp [hm, Mode.ownSlot] at hos ⊢
+        have hl1 : E1'.live = true := by
+          have := Alive.live_of_bor hal (by rw [clean_mode, hmE]; exact hmb)
+          rwa [clean_live] at this
+        have hl0' := hlE hl1
+        obtain ⟨w, hw, hok⟩ := hi.bor_val h0 hl0' hos
+        rw [hst] at hw; cases hw
+        by_cases hint : E0.ty = .int
+        · rw [hint] at hok; obtain ⟨n, rfl⟩ := valOK_int.mp hok; exact absurd hn PkgNames.none_int
+        rw [clean_id (Or.inl (by rw [htE]; exact hint)) hl1] at hnm
+        have hdV := MInv.dom_roots (hi.wf y E0 h0 hl0' (Or.inl hint))
+        have hvd : E0.vdeps = E0.path ++ E0.held := by simp [Entry.vdeps, hos]
+        have hdom : ∀ D, D ⊆ E0.vdeps → ∀ d ∈ memDeps D, (Γ d.root).isSome := fun D hD d hd =>
+          hdV d (List.mem_filter.mpr ⟨hD (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩)
+        refine hi.pkgFree y E0 _ _ h0 (Or.inl hl0') hst i (PkgNames.mapClean
+          (by rw [hmE]; exact id) (by rw [hmE]; exact id)
+          (fun hc => h.cleanDeps_back hi (D := E0.path) (by rw [← hpE]; exact hc)
+            (hdom _ (hvd ▸ List.subset_append_left _ _)))
+          (fun hc => h.cleanDeps_back hi (D := E0.path ++ E0.held) (by rw [← hpE, ← hhE]; exact hc)
+            (hdom _ (hvd ▸ List.Subset.refl _)))
+          (fun hc => h.cleanDeps_back hi (D := E0.held) (by rw [← hhE]; exact hc)
+            (hdom _ (hvd ▸ List.subset_append_right _ _))) hnm)
+      · -- an owner: what its tree stores, through what it holds
+        have hos1 : E1'.clean.mode.ownSlot = true := by rw [clean_mode, hmE]; exact hos
+        obtain ⟨hc, o', l', hv⟩ := hnm.own hos1
+        have hint : E0.ty ≠ .int := by
+          obtain ⟨sl, _, _, _, hown, _⟩ := hi.slot y E0 h0
+          intro e; have := (hown hos).1; rw [e] at this; cases this
+        have hal0 : Alive E0 := by
+          rcases hal with hl | ⟨hd, _⟩
+          · exact Or.inl (hlE (by rwa [clean_live] at hl))
+          · exact Or.inr ⟨by rw [← hdb0]; simpa using hd, hos⟩
+        have hheld : ∀ d ∈ memDeps E0.held, d ∈ E1'.clean.held := by
+          intro d hd
+          obtain ⟨hd', hnm'⟩ := List.mem_filter.mp hd
+          have hk : d.kind.isName = false := by simpa using hnm'
+          by_cases hl : E1'.live = true
+          · rw [clean_id (Or.inl (by rw [htE]; exact hint)) hl, hhE]; exact hd'
+          · have hd1 : E1'.dbind = true := by
+              rcases hal with h' | ⟨h', _⟩
+              · rw [clean_live] at h'; exact absurd h' hl
+              · simpa using h'
+            exact (Entry.clean_vdeps_mem hd1 (by rw [hmE]; exact hos) (Or.inl (by rw [htE]; exact hint)) hk).mpr
+              (by rw [hhE]; exact hd')
+        have hdom : ∀ d ∈ memDeps E0.held, (Γ d.root).isSome := by
+          intro d hd
+          have hdv : d ∈ E0.vdeps := by simp [Entry.vdeps, hos]; exact (List.mem_filter.mp hd).1
+          rcases hal0 with hl | ⟨hdb, _⟩
+          · obtain ⟨Er, hEr, _⟩ := hi.wf y E0 h0 hl (Or.inl hint) d.root (List.mem_map_of_mem hdv)
+            rw [hEr]; rfl
+          · obtain ⟨Er, hEr, _⟩ := hi.wf.dtor y E0 h0 hdb hos (Or.inl hint) d hdv
+              (by simpa using (List.mem_filter.mp hd).2)
+            rw [hEr]; rfl
+        exact hi.pkgFree y E0 o v h0 hal0 hst i (Or.inr (Or.inr (Or.inr
+          ⟨hos, h.cleanDeps_back hi (hc.subMem hheld) hdom, o', l', hv⟩)))
 
 end CallH
 
