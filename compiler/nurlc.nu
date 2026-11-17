@@ -36051,7 +36051,13 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // (…and a value block whose tail is a binding or a field read
             // of one: it hands that on as it is — agora #566.)
             : b __blk_lendy & == arg_eff_tt TT_LBRACE | != 0 ( nurl_sym_len syms `__tail_ptr__` ) != 0 ( nurl_sym_len syms `__tail_root_ptr__` )
-            ? | | | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( is_ident_tok arg_eff_tt ) & == arg_eff_tt TT_LPAREN g_call_may_lend __blk_lendy {
+            // (…or one whose result is lent on some runs by an answer that
+            // names no argument - a literal around a lend out of its
+            // parameter: what it lends is not known by name, agora #875.)
+            // (…only one handed a binding: a call lends nothing it was not
+            // given - `( mk `…` )` hands over its own.)
+            : b __dyn_lendy & & & == arg_eff_tt TT_LPAREN != 0 ( nurl_sym_len2 g_pending_impl `retdyn##` ( nurl_sym_get syms `__last_call_name__` ) ) ( __call_args_bind syms ) ( __ty_reaches_self at g_root_syms )
+            ? | | | | | | == arg_eff_tt TT_DOT == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST ( is_ident_tok arg_eff_tt ) & == arg_eff_tt TT_LPAREN g_call_may_lend __blk_lendy __dyn_lendy {
                 = arg_lendy ( nurl_str_cat3 arg_lendy ` ` ( nurl_str_int arg_idx ) )
                 ? & != 0 g_bck_closure_depth ! ( seq arg_lendy_nm `*` ) {
                     = arg_lendy_nm ? | | == 0 ( nurl_str_len arg_sx ) ( seq arg_sx `*` ) ( seq arg_sx `-` ) ( nurl_str_cat `*` `` ) ( __word_union arg_lendy_nm ( __sx_bind_names arg_sx ) )
@@ -74700,6 +74706,29 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 }
             } {}
         } {}
+        // (…and a call handed this binding whose result is lent on some runs
+        // by an answer that names no argument - a literal the callee hands
+        // back around a lend it read out of its parameter, `^ @ ?N { T (
+        // box_get [N] b ) }` or `( vec_at [N] . n kids 0 )`: on the runs it
+        // lent, the result may be a part of the binding's old value, which
+        // goes below. Copied there, the binding owns its copy; a type with
+        // no copy is refused. Taken as it was, the old value was released
+        // under it, agora #906, #875.)
+        ? & & & & & & & & ! __cp_call ! __cp_clo == __ud_tt TT_LPAREN != 0 ( nurl_str_len __ud_ptr ) != 0 ( nurl_sym_len2 g_pending_impl `retdyn##` ( nurl_sym_get syms `__last_call_name__` ) ) == 0 ( nurl_sym_len syms `__last_call_lend_idents__` ) == 0 ( nurl_sym_len syms `__last_phi_idents__` ) ( __call_args_name syms name ) ( __ty_reaches_self vt g_root_syms ) {
+            : s __pr_ro ( mem_call_retown syms cg )
+            ? & != 0 ( nurl_str_len __pr_ro ) ! ( seq __pr_ro `true` ) {
+                ? ( __clone_supported vt syms ) {
+                    : s __pr_nro ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __pr_nro ) ( nurl_print ` = xor i1 ` ) ( nurl_print __pr_ro ) ( nurl_print `, 1\n` )
+                    = store_val ( mem_emit_cloneif cg vt store_val __pr_nro )
+                    = __ud_borrow ``
+                    = __cp_call T
+                    ? != 0 g_core_live { ( core_cpcopy_mark ) } {}
+                } {
+                    ( own_die_stmt lex ( nurl_str_cat4 ( nurl_str_cat3 `'` name `' is given back what '` ) ( bck_fn_show ( nurl_sym_get syms `__last_call_name__` ) ) ( nurl_str_cat3 `' may lend on some runs - a part of '` name `''s old value, which is released here - and a '` ) ( nurl_str_cat3 ( llvm_to_nurl vt ) `' has no copy to give instead (agora #906). Bind the result to a new name, or take the part out of '` ( nurl_str_cat name `' first.` ) ) ) )
+                }
+            } {}
+        } {}
         // (…and a binding of the closure given such a lend first, by name -
         // `: ?String x ( id other )  = o x`, its roots another capture: the
         // value is copied in on the runs the binding does not own it, as the
@@ -101322,6 +101351,112 @@ unsafe @ __sx_names_capture i syms s sx → b {
         ? >= ( nurl_str_find w `#` ) 0 { continue } {}
         ? != 0 ( nurl_sym_len2 syms w `__global` ) { continue } {}
         ^ T
+    }
+    ^ F
+}
+
+// The names a type spelling mentions - `{ i1, %Box__N }` gives `Box__N`,
+// `Box` and `N` - one per word: what a part of a value of it may be.
+@ __ty_name_words s t → s {
+    // (Every mark of a type spelling - `{ } , % * [ ] ( ) .` - is a space.)
+    : ~ s sp ( nurl_str_cat t `` )
+    = sp ( bck_swap_char sp 123 32 ) = sp ( bck_swap_char sp 125 32 ) = sp ( bck_swap_char sp 44 32 )
+    = sp ( bck_swap_char sp 37 32 ) = sp ( bck_swap_char sp 42 32 ) = sp ( bck_swap_char sp 91 32 )
+    = sp ( bck_swap_char sp 93 32 ) = sp ( bck_swap_char sp 40 32 ) = sp ( bck_swap_char sp 41 32 )
+    = sp ( bck_swap_char sp 46 32 )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len sp ) {
+        : s cur ( str_first_word sp ) = sp ( str_skip_word sp )
+        ? != 0 ( nurl_str_len cur ) {
+            = out ( nurl_str_cat3 out ` ` cur )
+            // (…and the parts of a mangled name: `Box__N` holds an N.)
+            : ~ s rest ( nurl_str_cat cur `` )
+            : ~ i u ( nurl_str_find rest `__` )
+            ~ >= u 0 {
+                ? > u 0 { = out ( nurl_str_cat3 out ` ` ( nurl_str_slice rest 0 u ) ) } {}
+                = rest ( nurl_str_slice rest + u 2 - - ( nurl_str_len rest ) u 2 )
+                = u ( nurl_str_find rest `__` )
+            }
+            ? & != 0 ( nurl_str_len rest ) ! ( seq rest cur ) { = out ( nurl_str_cat3 out ` ` rest ) } {}
+        } {}
+    }
+    ^ out
+}
+
+// Can a value of `vt` hold, among its parts, a value of its own type - a node
+// behind a Box or in a Vec of nodes, `: N { String s ? ( Box N ) next }`?
+// Only then can what a call lends out of a binding of it be a PART of the
+// binding's value and still be assigned over it (agora #906). (A walk over
+// the named types its fields and payloads mention, 32 at most.)
+@ __ty_reaches_self s vt i syms → b {
+    // (Asked once per type: the answer is the type's.)
+    : s memo ( nurl_sym_get2 g_pending_impl `tyself##` vt )
+    ? != 0 ( nurl_str_len memo ) { ^ ( seq memo `1` ) } {}
+    : b r ( __ty_reaches_self_walk vt syms )
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `tyself##` vt ) ? r `1` `0` )
+    ^ r
+}
+
+@ __ty_reaches_self_walk s vt i syms → b {
+    : i vn ( nurl_str_len vt )
+    : s core ? & != 0 ( nurl_str_starts vt `{ i1, %` ) > vn 9 ( nurl_str_slice vt 7 - vn 9 ) ? & > vn 1 == ( nurl_str_get vt 0 ) 37 ( nurl_str_slice vt 1 - vn 1 ) ``
+    ? == 0 ( nurl_str_len core ) { ^ F } {}
+    : ~ s queue ( nurl_str_cat core `` )
+    : ~ s seen ( nurl_str_cat core `` )
+    : ~ i steps 0
+    ~ & != 0 ( nurl_str_len queue ) < steps 32 {
+        : s nm ( str_first_word queue ) = queue ( str_skip_word queue )
+        = steps + steps 1
+        : ~ s fts ``
+        : s fc ( nurl_sym_get2 syms nm `__field_count` )
+        ? != 0 ( nurl_str_len fc ) {
+            : i nf ( nurl_str_to_int fc )
+            : ~ i i 0
+            ~ < i nf { = fts ( nurl_str_cat3 fts ` ` ( nurl_sym_get syms ( nurl_str_cat3 nm `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) ) ) = i + i 1 }
+        } {}
+        : ~ s vs ( nurl_sym_get2 syms nm `__variants` )
+        ~ != 0 ( nurl_str_len vs ) {
+            : s vname ( str_first_word vs ) = vs ( str_skip_word vs )
+            : s pcs ( nurl_sym_get2 syms vname `__paycount` )
+            : i pc ? != 0 ( nurl_str_len pcs ) ( nurl_str_to_int pcs ) 0
+            : ~ i j 0
+            ~ < j pc { = fts ( nurl_str_cat3 fts ` ` ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int j ) ) ) ) = j + j 1 }
+        }
+        : ~ s ws ( __ty_name_words fts )
+        ~ != 0 ( nurl_str_len ws ) {
+            : s w ( str_first_word ws ) = ws ( str_skip_word ws )
+            ? ( seq w core ) { ^ T } {}
+            ? & ! ( str_contains_word seen w ) | != 0 ( nurl_sym_len2 syms w `__field_count` ) != 0 ( nurl_sym_len2 syms w `__variants` ) {
+                = seen ( nurl_str_cat3 seen ` ` w )
+                = queue ( nurl_str_cat3 queue ` ` w )
+            } {}
+        }
+    }
+    ^ F
+}
+
+// Was the last call handed a binding at all (`__last_call_args__` names
+// one; a literal, a number or a call is `-`)?
+@ __call_args_bind i syms → b {
+    : ~ s rest ( nurl_sym_get syms `__last_call_args__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w0 ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i wd ( nurl_str_find w0 `.` )
+        : s w ? > wd 0 ( nurl_str_slice w0 0 wd ) ( nurl_str_cat w0 `` )
+        ? & ! ( seq w `-` ) != 0 ( nurl_sym_len syms w ) { ^ T } {}
+    }
+    ^ F
+}
+
+// Is `name` - whole, or a field of it (`name.f`) - one of the arguments
+// the last call was handed (`__last_call_args__`)?
+@ __call_args_name i syms s name → b {
+    : ~ s rest ( nurl_sym_get syms `__last_call_args__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w0 ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i wd ( nurl_str_find w0 `.` )
+        : s w ? > wd 0 ( nurl_str_slice w0 0 wd ) ( nurl_str_cat w0 `` )
+        ? ( seq w name ) { ^ T } {}
     }
     ^ F
 }
