@@ -303,12 +303,16 @@ theorem Below.irrefl {a : Val} (h : Below a a) : False := by
   obtain ⟨e, hc, hs⟩ := h
   exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt hs.sizeOf_le hc.sizeOf_lt)
 
-theorem Sub.nodup {a t : Val} (h : Sub a t) (hn : t.ids.Nodup) : a.ids.Nodup := by
-  rcases h.cases' with h | ⟨e, hc, hs⟩
-  · subst h; exact hn
-  · exact hs.nodup (hc.nodup hn)
-termination_by sizeOf t
-decreasing_by exact hc.sizeOf_lt
+/-- A part of a tree whose addresses are distinct has distinct addresses. -/
+theorem Sub.nodup {a b : Val} (h : Sub a b) (hn : b.ids.Nodup) : a.ids.Nodup := by
+  induction h with
+  | refl => exact hn
+  | child he _ ih => exact ih (Child.nodup (Child.elem he) hn)
+  | fst _ ih => exact ih (Child.nodup Child.fst hn)
+  | snd _ ih => exact ih (Child.nodup Child.snd hn)
+  | inl _ ih => exact ih (Child.nodup Child.inl hn)
+  | inr _ ih => exact ih (Child.nodup Child.inr hn)
+  | pkg _ ih => exact ih (Child.nodup Child.pkg hn)
 
 /-- In a tree whose addresses are distinct, two subtrees sharing an address
     lie one inside the other. -/

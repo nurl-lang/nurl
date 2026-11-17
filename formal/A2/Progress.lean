@@ -458,17 +458,6 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨bl, hbl, _⟩ := (hi.lends_val ha hl hty hv).1
     exact ⟨_, EvalR.arcGet hv hbl⟩
 
-/-- A part of a tree whose addresses are distinct has distinct addresses. -/
-theorem Sub.nodup {a b : Val} (h : Sub a b) (hn : b.ids.Nodup) : a.ids.Nodup := by
-  induction h with
-  | refl => exact hn
-  | child he _ ih => exact ih (Child.nodup (Child.elem he) hn)
-  | fst _ ih => exact ih (Child.nodup Child.fst hn)
-  | snd _ ih => exact ih (Child.nodup Child.snd hn)
-  | inl _ ih => exact ih (Child.nodup Child.inl hn)
-  | inr _ ih => exact ih (Child.nodup Child.inr hn)
-  | pkg _ ih => exact ih (Child.nodup Child.pkg hn)
-
 /-- Well-formed elements whose addresses are distinct and live can be freed. -/
 theorem freesL_exists {τ : Ty} : ∀ {l : List Val}, (∀ e ∈ l, WFv τ e) → ∀ a : Nat → Bool,
     (idsL l).Nodup → (∀ i ∈ idsL l, a i = true) → ∃ a', FreesL a l a'
