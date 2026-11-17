@@ -424,6 +424,45 @@ theorem RhsOut.pkgFree_set {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {E : Entry} {v 
     exact ⟨fun h1 => hfr (h1 ▸ hsT.ids c (by simp [Val.ids])), fun h2 => hfr (h2 ▸ hsT.ids d (by simp [Val.ids]))⟩
   · rw [hst r hrx] at hT; exact hf0 r T hT fs te ms ev cs hP t c d es hN
 
+/-- AGORA-901: what a right-hand side's value names lies in memory (its
+    validity: `ValOK`, `HrefAt`, `ViewsOK`). -/
+theorem RhsOut.named_home {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {E : Entry} {v : Val} {o : Bool}
+    (hout : RhsOut m Γ E v o) {i : Nat} (hn : PkgNames m Γ E v i) :
+    (∃ r T, m.st r = some ⟨true, some T⟩ ∧ i ∈ T.ids) ∨ PayAddr m i := by
+  have hbor : (E.mode = .bor ∨ E.mode = .rootb) → ValOK m E.ty v E.path E.held := fun hm => by
+    rcases hout.mode with h | h
+    · rw [h] at hm; rcases hm with h' | h' <;> cases h'
+    · exact hout.valBor h
+  rcases hn with ⟨hm, _, ⟨c, hb, rfl⟩ | ⟨o', l, rfl⟩⟩ | ⟨hm, _, o', l, hb⟩ |
+      ⟨hm, _, c, r, T, t, d, es, hb, hT, hsn, o', l, hv⟩ | ⟨hos, _, o', l, hv⟩
+  · obtain ⟨dep, t', H', d', es', hlan, _⟩ := (hbor hm).bare_href _ hb
+    rcases hlan.home with ⟨x, T, hT, hsT⟩ | hp
+    · exact Or.inl ⟨x, T, hT, hsT.ids _ (by simp [Val.ids])⟩
+    · exact Or.inr (hp.payAddr hi.heap _ (by simp [Val.ids]))
+  · obtain ⟨dep, t, hva⟩ := (hbor hm).bare_view i o' l (.refl _)
+    exact hva.home hi.heap
+  · obtain ⟨dep, t, hva⟩ := (hbor hm).bare_view i o' l hb
+    exact hva.home hi.heap
+  · obtain ⟨dep, t', H', d', es', hlan, hwn, hvs, _⟩ := (hbor hm).bare_href c hb
+    have heq : Val.node t' c d' es' = .node t c d es := by
+      rcases hlan.home with ⟨x, T', hT', hsT'⟩ | hp
+      · exact (owned_unique hi.heap hT' hT hsT' hsn (i := c) (by simp [Val.head]) (by simp [Val.head])).2
+      · exact (hi.heap.notPay hT (hsn.ids c (by simp [Val.ids])) (hp.payAddr hi.heap c (by simp [Val.ids]))).elim
+    rw [← heq] at hv
+    obtain ⟨s, hin⟩ := hwn.viewIn hv
+    obtain ⟨d0, o0, l0, hvv, dep', _, hva⟩ := hvs s _ hin
+    cases hvv
+    exact hva.home hi.heap
+  · have hown : E.mode = .own := by
+      rcases hout.mode with h | h
+      · exact h
+      · rw [h] at hos; cases hos
+    obtain ⟨_, hwv, hvsv, _⟩ := hout.valOwn hown
+    obtain ⟨s, hin⟩ := hwv.viewIn hv
+    obtain ⟨d0, o0, l0, hvv, dep', _, hva⟩ := hvsv s _ hin
+    cases hvv
+    exact hva.home hi.heap
+
 /-- The fresh value a right-hand side hands over has addresses no owned
     tree and no payload holds. -/
 theorem RhsOut.fresh {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {o : Bool} (hout : RhsOut m Γ E v o) :

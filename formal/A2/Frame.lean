@@ -1061,4 +1061,25 @@ theorem PkgKeep.of_edit {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) 
   · obtain ⟨h1, h2⟩ := hself Ex' o v hx' hl hs i hn
     exact hfr i h2 h1
 
+/-- AGORA-901: what an entry depending on bound roots names in a context with
+    a fresh binding more, it names in the context. -/
+theorem PkgNames.of_setE {m : Mem} {Γ : Ctx}
+    (hwf : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d ∈ memDeps Ep.path, (Γ d.root).isSome)
+    {x : Var} {E1 E : Entry} {v : Val} {i : Nat}
+    (hx : Γ x = Option.none)
+    (hbp : (E.mode = .bor ∨ E.mode = .rootb) → ∀ d ∈ memDeps E.path, (Γ d.root).isSome)
+    (hbh : ∀ d ∈ memDeps E.held, (Γ d.root).isSome)
+    (hn : PkgNames m (setE Γ x E1) E v i) : PkgNames m Γ E v i := by
+  have hb : (E.mode = .bor ∨ E.mode = .rootb) → ∀ d ∈ memDeps (E.path ++ E.held), (Γ d.root).isSome :=
+    fun hm d hd => by
+      obtain ⟨hd, hnm⟩ := List.mem_filter.mp hd
+      rcases List.mem_append.mp hd with h | h
+      · exact hbp hm d (List.mem_filter.mpr ⟨h, hnm⟩)
+      · exact hbh d (List.mem_filter.mpr ⟨h, hnm⟩)
+  rcases hn with ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩
+  · exact Or.inl ⟨hm, hc.of_setE hx hwf (hbp hm), hv⟩
+  · exact Or.inr (Or.inl ⟨hm, hc.of_setE hx hwf (hb hm), hv⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨hm, hc.of_setE hx hwf hbh, hv⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨hm, hc.of_setE hx hwf hbh, hv⟩))
+
 end A2

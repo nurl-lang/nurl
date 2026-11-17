@@ -347,10 +347,32 @@ theorem takeBV_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch 
       (fun j hj => hi.heap.alloc _ _ hT0 j (hsube.ids j hj))
       (fun w U hU j hj hjU => ?_) ((hi.heap.self _ _ hT0).sub hsube)
       (fun j hj => hi.heap.notPay hT0 (hsube.ids j hj))
-      ((hi.pkgs _ _ _ hT0 rfl).sub hsube) ((hsh0.elem hem).of_blk rfl)
-    rcases ownedAt_set.mp hU with ⟨rfl, hUe⟩ | ⟨hw0', hU'⟩
-    · cases hUe; exact hsepT j hjU j hj rfl
-    · exact hi.heap.disj _ w _ U (Ne.symm hw0') hT0 hU' j (hsube.ids j hj) hjU
+      ((hi.pkgs _ _ _ hT0 rfl).sub hsube) ((hsh0.elem hem).of_blk rfl) (fun hc j o' l' hv => ?_)
+    · rcases ownedAt_set.mp hU with ⟨rfl, hUe⟩ | ⟨hw0', hU'⟩
+      · cases hUe; exact hsepT j hjU j hj rfl
+      · exact hi.heap.disj _ w _ U (Ne.symm hw0') hT0 hU' j (hsube.ids j hj) hjU
+    · -- AGORA-901: what the element's views read, the borrow's node's did
+      have hc0 : CleanDeps Γ Ex.held := hc.mono fun _ h => h.mono fun v E' hv' => by
+        by_cases hvx : v = x
+        · subst hvx; simp only [setE, upd_same, Option.some.injEq] at hv'; subst hv'
+          exact ⟨_, hx, rfl, fun _ => rfl⟩
+        · rw [setE, upd_ne _ _ hvx] at hv'
+          obtain ⟨E0, h0, hm0, _, hvd0, hh0, _⟩ := killHv_same hv'
+          refine ⟨E0, h0, hm0, fun hrb => ?_⟩
+          have hos0 : E0.mode.ownSlot = false := by rw [hrb]; rfl
+          have hos1 : E'.mode.ownSlot = false := by rw [hm0, hos0]
+          have := hvd0
+          simp only [Entry.vdeps, hos0, hos1, Bool.false_eq_true, ↓reduceIte, hh0] at this
+          exact List.append_cancel_right this
+      have hn0 : PkgNames m Γ Ex (.href c) j :=
+        Or.inr (Or.inr (Or.inl ⟨Or.inl hmx, hc0, c, dep.root, T, t, d, es, .refl _, hT0, hsubN, o', l',
+          Sub.child hem hv⟩))
+      have hfree : PkgFreeIn T c := hi.thru_free hx hmx hl hthru hxs dep.root T hT0
+      refine PkgFreeId.of_repl hst hT0 (by simp) hr hfree
+        (fun e he => Or.inl (List.mem_of_mem_eraseIdx he)) (fun ⟨h1, h2⟩ => ?_) (hi.pkgFree x Ex false _ hx hl hxs j hn0)
+      rcases hi.named_home hx hl hxs hn0 with ⟨r, U, hU, hiU⟩ | hp
+      · exact h1 r U hU hiU
+      · exact h2 hp
   refine ⟨⟨hinv, rfl, Nat.le_refl _, fun w => ?_, fun w hw => hst w (fun e => hoF (e ▸ hw)),
     hrel.rootb, hrel.dom, hrel.mode, hrel.dkeep, BlkLe.refl _⟩, hout, fun hc => covers_takeB hc hT0 hn hr⟩
   by_cases hw' : w = dep.root
@@ -659,9 +681,11 @@ theorem Keep.weaker {Γ Γ0 Γ' : Ctx} {s s' : Stmt} (hw : Weaker Γ Γ0) (h : K
 
 /-- What a right-hand side hands over stays valid when a fresh binding takes
     another value beside it. -/
-theorem RhsOut.add {m : Mem} {Γ : Ctx} {E2 : Entry} {w : Val} {o2 : Bool} (hout : RhsOut m Γ E2 w o2)
+theorem RhsOut.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {E2 : Entry} {w : Val} {o2 : Bool}
+    (hout : RhsOut m Γ E2 w o2)
     {x : Var} (hx : Γ x = none) (hmx : m.st x = none) {E1 : Entry} {v : Val} {o1 : Bool}
-    (hdisj : ∀ i ∈ w.ids, i ∉ v.ids) : RhsOut (m.set x ⟨o1, some v⟩) (setE Γ x E1) E2 w o2 := by
+    (hdisj : ∀ i ∈ w.ids, i ∉ v.ids) (hfr : o1 = true → ∀ i ∈ v.ids, FreshAddr m i) :
+    RhsOut (m.set x ⟨o1, some v⟩) (setE Γ x E1) E2 w o2 := by
   have hext : ∀ o', m.st o' ≠ none → (m.set x ⟨o1, some v⟩).st o' = m.st o' := by
     intro o' ho'
     have : o' ≠ x := fun h => ho' (h ▸ hmx)
@@ -672,7 +696,62 @@ theorem RhsOut.add {m : Mem} {Γ : Ctx} {E2 : Entry} {w : Val} {o2 : Bool} (hout
     fun hn => (hout.names hn).transport (fun r Er _ hr hl hh _ => ⟨Er, by
       have hrx : r ≠ x := fun h => by rw [h, hx] at hr; cases hr
       simp [setE, upd_ne _ _ hrx, hr], hl, hh, rfl, rfl⟩) (List.Subset.refl _), hout.held, hout.pkgs,
-    fun h => (hout.shares h).of_blk rfl⟩
+    (fun h => (hout.shares h).of_blk rfl), fun i hn => ?_⟩
+  rotate_right
+  · -- AGORA-901: what the value names lies in memory, where the fresh value does not
+    have hst : ∀ r, r ≠ x → (m.set x ⟨o1, some v⟩).st r = m.st r := fun r hr => by simp [upd_ne _ _ hr]
+    have hint : E2.ty ≠ .int := by
+      intro ht
+      rcases hout.mode with h | h
+      · have := (hout.valOwn h).1; rw [ht] at this; simp [Ty.owning] at this
+      · have hok := hout.valBor h; rw [ht] at hok
+        obtain ⟨k, rfl⟩ := valOK_int.mp hok
+        exact PkgNames.none_int hn
+    have hbd : ∀ d ∈ E2.vdeps, (Γ d.root).isSome := fun d hd => by
+      obtain ⟨Er, hEr, _⟩ := hout.wf hint d.root (List.mem_map_of_mem hd)
+      rw [hEr]; rfl
+    have hn1 : PkgNames (m.set x ⟨o1, some v⟩) Γ E2 w i := hn.of_setE hi.rootb_bound hx
+      (fun hm d hd => hbd d (by
+        have hos : E2.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+        simp [Entry.vdeps, hos]; exact Or.inl (List.mem_filter.mp hd).1))
+      (fun d hd => hbd d (by simp [Entry.vdeps]; exact Or.inr (List.mem_filter.mp hd).1))
+    have hhome : ∀ j, ((∃ r T, m.st r = some ⟨true, some T⟩ ∧ j ∈ T.ids) ∨ PayAddr m j) →
+        o1 = true → j ∉ v.ids := by
+      rintro j (⟨r, T, hT, hjT⟩ | hp) ho hjv
+      · exact (hfr ho j hjv).1 r T hT hjT
+      · exact (hfr ho j hjv).2 hp
+    have hn0 : PkgNames m Γ E2 w i := by
+      rcases hn1 with h1 | h2 | ⟨hm, hc, c, r, T, t, d, es, hb, hT, hsn, hvn⟩ | h4
+      · exact Or.inl h1
+      · exact Or.inr (Or.inl h2)
+      · refine Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T, t, d, es, hb, ?_, hsn, hvn⟩))
+        by_cases hrx : r = x
+        · exfalso
+          subst hrx
+          simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hT
+          obtain ⟨ho, rfl⟩ := hT
+          have hbm : E2.mode = .bor := by
+            rcases hout.mode with h | h
+            · rw [h] at hm; rcases hm with h' | h' <;> cases h'
+            · exact h
+          obtain ⟨dep, t', H', d', es', hlan, _⟩ := (hout.valBor hbm).bare_href c hb
+          refine hhome c ?_ ho (hsn.ids c (by simp [Val.ids]))
+          rcases hlan.home with ⟨x', T', hT', hsT'⟩ | hp
+          · exact Or.inl ⟨x', T', hT', hsT'.ids c (by simp [Val.ids])⟩
+          · exact Or.inr (hp.payAddr hi.heap c (by simp [Val.ids]))
+        · rw [hst r hrx] at hT; exact hT
+      · exact Or.inr (Or.inr (Or.inr h4))
+    have hf0 := hout.pkgFree i hn0
+    have hh0 := hout.named_home hi hn0
+    intro r T hT fs te ms ev cs hP t c d es hN
+    by_cases hrx : r = x
+    · subst hrx
+      simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hT
+      obtain ⟨ho, rfl⟩ := hT
+      have hsT := hN.trans ((Sub.pkg (Sub.refl _)).trans hP)
+      exact ⟨fun h1 => hhome i hh0 ho (h1 ▸ hsT.ids c (by simp [Val.ids])),
+        fun h2 => hhome i hh0 ho (h2 ▸ hsT.ids d (by simp [Val.ids]))⟩
+    · rw [hst r hrx] at hT; exact hf0 r T hT fs te ms ev cs hP t c d es hN
   · obtain ⟨Er, hEr, hro⟩ := hout.wf hn r hr
     have hrx : r ≠ x := fun h => by rw [h, hx] at hEr; cases hEr
     exact ⟨Er, by simp [setE, upd_ne _ _ hrx, hEr], hro⟩
@@ -898,7 +977,7 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
       simp only [ids_pair, List.nodup_append] at hnd
       exact fun i hi hi' => hnd.2.2 i hi' i hi rfl
     have hmx1 : (m.set y ⟨true, none⟩).st x = none := by simp [upd_ne _ _ hxy, hmx]
-    have outz' := outz.add (E1 := compE E a) (o1 := v.owns) hx1 hmx1 hdisj
+    have outz' := outz.add (E1 := compE E a) (o1 := v.owns) post.inv hx1 hmx1 hdisj outx.fresh
     have hz2 : setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a) z = none := by
       simp [setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, kill, hz]
     have hi3 := hi2.add hz2 hzn outz'
