@@ -839,18 +839,6 @@ class FnCheck:
             # the rest: on those it is owned by nothing either)
             self.err(line, f"the string handed to {where} may be a fresh one, owned by nothing")
 
-    def _dying_loan(self, l, vid):
-        # a loan of a value that dies with the closure being read - a local
-        # of it or its own parameter - not of `vid` itself or of a capture
-        # (the assign rule's capture copy-in, agora #872)
-        e = self.loans.get(l)
-        if e is None:
-            return False
-        v = e[0][0]
-        if v is None or v == vid or v not in self.fn.vars or self.fn.vars[v].kind == "temp":
-            return False
-        return v not in self.pidx or self.pidx[v] >= self.ncap
-
     def reroot(self, st, av, dest, base=()):
         """The value just moved into `dest` (at path `base`) holds views of
         its own parts: they are views of `dest`'s parts now."""
@@ -3658,16 +3646,17 @@ class FnCheck:
                 new = self.rvalue(st, rv, ln, ddepth, v.ty, v.name, copy_ok=not repoint, dest_vid=vid,
                                   named=v.kind != "temp",
                                   lend_owner=outer if v.kind == "temp" else (cursor_lends if v.mut and repoint else (lambda x: False)))
+                src_var = self.fn.vars.get(rv[1][1]) if (rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]) else None
                 if (cur is not None and cur.own == "P" and vid in self.pidx and self.pidx[vid] < self.ncap
-                        and new.own == "L" and new.call and v.ty is not None and v.ty[0] not in VIEW_TYPES
-                        and v.ty[0] != "closure" and self.T.copyable(v.ty)
-                        and any(self._dying_loan(l, vid) for l in new.loans)):
+                        and new.own == "L" and getattr(src_var, "cpcopy", False)):
                     # a capture given what a call lends of what dies with the
                     # closure - a local or a parameter of it: it is a place
                     # outside the closure's frame, as an `inout` parameter is,
                     # and nurlc copies the lend in where the call lent - the
-                    # capture owns the copy (gen_assign, agora #872). (A lend
-                    # of another capture is left a lend.)
+                    # capture owns the copy (gen_assign, agora #872). Read off
+                    # the fact codegen copied on, which the IR carries on the
+                    # stored value (cpcopy, agora #884). (A lend of another
+                    # capture is left a lend.)
                     new = AV("O", (), (), new.held)
                 # (…through a join too: `= x ? c x ( f )` - where the join may
                 # select the target, its value is copied in, h373)

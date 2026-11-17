@@ -731,6 +731,8 @@
 : i CORE_VF_TAKEN 64  // a capture's flag: the body marks it taken in its env when it gives it away; a later run panics (core_capture_taken)
 : i CORE_VF_SECOND 32  // a variable's flag: a closure binding given an owner's closure that the walk does not move: a second name of it (core_second_name)
 : i CORE_VF_HANDON 128  // a variable's flag: the literal a `\` try hands its failure on in, which codegen hands on whole (core_try)
+: i CORE_VF_CPCOPY 512  // a variable's flag: the value a `=` gave a by-pointer capture, which codegen copied in on the runs the call lent (gen_assign's capture copy-in, agora #872): the capture owns it (agora #884)
+: ~ i g_core_asn_op 0  // the operand the last core_assign stored (core_cpcopy_mark)
 : i CORE_VF_SLOT 256  // a variable's flag: a call's temporary whose payload nurlc reads from a slot it can name, and takes out of it where a consumer takes the payload (mem_note_vec_get, mem_vget_consume)
 : ~ i g_core_slotget 0  // 1: the call just generated read a slot nurlc can name (mem_note_vec_get); its temporary gets CORE_VF_SLOT (core_call)
 : i CORE_VS 1048576
@@ -12307,6 +12309,8 @@ unsafe @ eng_keep_fn → v {
 @ fv_handon i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_HANDON }
 // A call's temporary whose payload nurlc takes out of the slot it read it
 // from, where a consumer takes the payload (CORE_VF_SLOT).
+@ fv_cpcopy i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_CPCOPY }
+
 @ fv_slot i vid → b { ? < vid 0 { ^ F } {} ^ != 0 & ( ev vid 4 ) CORE_VF_SLOT }
 
 @ fv_line i vid → i { ? < vid 0 { ^ 0 } {} ^ ( ev vid 5 ) }
@@ -20197,25 +20201,6 @@ unsafe @ eng_byte s w i k → i {
 }
 
 // The `assign` at `at`, to a place.
-// Is one of `av`'s loans of a value that dies with the closure being read -
-// a local of it or its own parameter - rather than of `vid` itself or of a
-// capture (stmt_assign, agora #872)?
-@ eng_lends_dying i av i vid → b {
-    : i loans ( av_loans av )
-    : ~ i a 0
-    ~ < a ( sq_len loans ) {
-        : i l ( sq_at loans a )
-        ? ( el_is_loan l ) {
-            : i v ( pl_var ( el_place l ) )
-            ? & & >= v 0 != v vid | < ( fv_pidx v ) 0 >= ( fv_pidx v ) g_f_ncap {
-                ? != ( fv_kind v ) VK_TEMP { ^ T } {}
-            } {}
-        } {}
-        = a + a 1
-    }
-    ^ F
-}
-
 @ stmt_assign i st i at i target i ln → v {
     : i vid ( pl_var target )
     : i path ( pl_path target )
@@ -20324,7 +20309,10 @@ unsafe @ eng_byte s w i k → i {
         // closure's frame, as an `inout` parameter is, and nurlc copies the
         // lend in where the call lent - the capture owns the copy (gen_assign,
         // agora #872). (A lend of another capture is left a lend.)
-        ? & & & & & & == cown OW_P >= ( fv_pidx vid ) 0 < ( fv_pidx vid ) g_f_ncap == ( av_own new ) OW_L ( av_call new ) & & != vty ET_NONE ! ( et_is_view vty ) & != ( et_kind vty ) EK_CLOSURE ( et_copyable vty ) ( eng_lends_dying new vid ) {
+        // (…on the fact codegen copied on - the call's own per-run answer,
+        // which the IR carries on the stored value: CORE_VF_CPCOPY, agora
+        // #884 - not on a re-derivation of it)
+        ? & & & & == cown OW_P >= ( fv_pidx vid ) 0 < ( fv_pidx vid ) g_f_ncap == ( av_own new ) OW_L ( fv_cpcopy ( rv_use_var rv ) ) {
             = new ( av_make OW_O 0 0 ( av_held new ) F )
         } {}
         : i nown ( av_own new )
@@ -23333,8 +23321,24 @@ unsafe @ core_agg i h0 → v {
 // name); the statement's own value is what the binding now holds.
 unsafe @ core_assign i target → v {
     : i op ( core_pop )
+    = g_core_asn_op op
     ( core_w CO_ASSIGN ) ( core_w target ) ( core_w RV_USE ) ( core_w op )
     ( core_push target )
+}
+
+// The assignment just emitted gave a by-pointer capture a value codegen
+// copies in where the call lent (gen_assign, `__cp_call`): its operand's
+// variable says so (CORE_VF_CPCOPY), so the engine reads the capture as
+// owning it on exactly the fact codegen copied on (agora #884).
+unsafe @ core_cpcopy_mark → v {
+    : i op g_core_asn_op
+    ? < op 2 { ^ } {}
+    : *i ps # *i # s g_core_pl
+    : i b * - op 2 3
+    : i vid . ps b
+    ? | | < vid 0 >= vid g_core_var_n != . ps + b 1 -1 { ^ } {}
+    : *i vs # *i # s g_core_vars
+    = . vs + * vid CORE_VW 4 | . vs + * vid CORE_VW 4 CORE_VF_CPCOPY
 }
 
 // ── Core IR: joins and loops ─────────────────────────────────────────
@@ -74503,6 +74507,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
                     = store_val ( mem_emit_cloneif cg vt store_val __cc_c )
                     = __ud_borrow ``
                     = __cp_call T
+                    ? != 0 g_core_live { ( core_cpcopy_mark ) } {}
                 } {
                     // (Refused only where the call is known to lend something
                     // else, as for an `inout` parameter: a callee with no
