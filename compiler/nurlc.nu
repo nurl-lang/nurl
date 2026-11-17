@@ -43130,6 +43130,11 @@ unsafe @ gen_match i lex i syms i cg → s {
     : s fe_v0 ( nurl_lex_val lex )
     : i fe_sxn0 g_sx_n
     : s slice_val ( gen_expr lex syms cg )
+    // (What the iterated expression read, for raw code's provenance graph:
+    // the element is part of it. Raw code's only — g_rprov_on; a safe
+    // function handing back a view records the graph too, g_rpg_on 1, and
+    // its walk answers for the element.)
+    : s fe_rp_reads ? & == 1 g_rpg_on != 0 g_rprov_on ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` ) ``
     // (What the container holds of closures — an element of a holder is one
     // of what it holds: __clo_hold_elem; agora #736.)
     : s fe_hms ? == 0 g_clo_hold_n `` ( __clo_val_members syms fe_tt0 fe_v0 )
@@ -43303,6 +43308,12 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms ( nurl_str_cat var_name `__eslot_dd` ) ( nurl_str_int g_defer_body_depth ) )
     // (…and what it is an element of, by name or path: __fe_moved_drop_note.)
     ( nurl_sym_def syms ( nurl_str_cat var_name `__econt` ) fe_cont )
+    // (…and, in raw code, derived from it in the provenance graph, as a `:`
+    // binding of a read out of it is: a view of the element handed back
+    // points into what the loop iterates — a parameter, nested loops
+    // followed to it (retptr; agora #489). Safe code's walk answers that
+    // itself, `^k`.)
+    ? != 0 ( nurl_str_len fe_rp_reads ) { ( __rprov_bind syms var_name ( nurl_llty elem_ty ) fe_rp_reads TT_IDENT F ) } {}
     ? & != 0 ( nurl_str_len fe_hms ) ! ( seq fe_hms `*` ) { ( __clo_hold_payload syms var_name `` fe_hms ) } {}
     = g_pl_seen 1
     // (…and, for the drop summaries, the parameters the element was read
