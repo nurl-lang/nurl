@@ -1097,9 +1097,9 @@ inductive Clean (Γ : Ctx) : Var → Prop
       (∀ d ∈ memDeps Ep.path, d.kind ≠ .share) → (∀ d ∈ memDeps Ep.path, Clean Γ d.root) → Clean Γ p
 
 /-- A context whose entries keep their modes, and whose borrowed parameters
-    are as they were, keeps the clean roots of the other. -/
+    their paths, keeps the clean roots of the other. -/
 theorem Clean.mono {Γ Γ' : Ctx}
-    (h : ∀ v E', Γ' v = some E' → ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ (E.mode = .rootb → E' = E))
+    (h : ∀ v E', Γ' v = some E' → ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ (E.mode = .rootb → E'.path = E.path))
     {r : Var} (hc : Clean Γ' r) : Clean Γ r := by
   induction hc with
   | own hr ho =>
@@ -1108,8 +1108,8 @@ theorem Clean.mono {Γ Γ' : Ctx}
   | rootb hp hm hns _ ih =>
     obtain ⟨E, hE, hm', hfix⟩ := h _ _ hp
     have hm0 : E.mode = .rootb := by rw [← hm']; exact hm
-    obtain rfl := hfix hm0
-    exact .rootb hE hm0 hns ih
+    have hpe := hfix hm0
+    exact .rootb hE hm0 (fun d hd => hns d (hpe ▸ hd)) (fun d hd => ih d (hpe ▸ hd))
 
 /-- A clean borrowed parameter's memory dependencies are clean, and none is a share. -/
 theorem Clean.rootb_inv {Γ : Ctx} {p : Var} {Ep : Entry} (h : Clean Γ p) (hp : Γ p = some Ep)

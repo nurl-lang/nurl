@@ -225,7 +225,7 @@ theorem ArmOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E'
 theorem Clean.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') {r : Var} (h : Clean Γ' r) : Clean Γ r :=
   h.mono fun _ _ hv => by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
-    exact ⟨E, hE, hwe.mode, fun hm => hwe.fixed (Or.inl hm)⟩
+    exact ⟨E, hE, hwe.mode, fun hm => by rw [hwe.fixed (Or.inl hm)]⟩
 
 theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ') : MInv m Γ' where
   dom v := by rw [← hw.isSome v]; exact hi.dom v

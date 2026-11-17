@@ -296,6 +296,16 @@ theorem MInv.kill_pin {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanc
     obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
     rw [killE_ty]; exact hi.shares v E sl T hE hsl hown hT
   blocks := hi.blocks
+  pkgFree y Ey' o v hy hl hs i hn := by
+    simp only [A2.kill] at hy
+    obtain ⟨Ey, hEy, rfl⟩ := Option.map_eq_some_iff.mp hy
+    have hEq : killE e hv r Ey = Ey := by
+      have hl' := hl
+      unfold killE at hl' ⊢; split at hl'
+      · simp at hl'
+      · rename_i hh; simp [hh]
+    rw [hEq] at hl hn
+    exact hi.pkgFree y Ey o v hEy hl hs i (hn.mono fun _ h => Clean.of_kill hanch hrF hmn h)
 
 /-- ... which an effect below `replace` never ends. -/
 theorem MInv.kill_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
@@ -374,7 +384,8 @@ theorem MInv.reset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex E0 : Entr
     (hroots : (Ex.ty ≠ .int ∨ Ex.mode = .rootb) → ∀ r ∈ roots Ex.vdeps,
       ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true)
     (hN : Ex.live = true → (Ex.ty ≠ .int ∨ Ex.mode = .rootb) → NameOK Γ Ex)
-    (hnm : NamesIn w Ex.held) : MInv m (A2.setE Γ x Ex) where
+    (hnm : NamesIn w Ex.held)
+    (hpf : ∀ i, PkgNames m Γ Ex w i → PkgFreeId m i) : MInv m (A2.setE Γ x Ex) where
   dom v := by
     by_cases hvx : v = x
     · subst hvx; simp [A2.setE, hw]
@@ -420,6 +431,20 @@ theorem MInv.reset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex E0 : Entr
     · subst hvx; rw [hw] at hsl; cases hsl; cases hown
     · simp only [A2.setE, upd_ne _ _ hvx] at h; exact hi.shares v E' sl T h hsl hown hT
   blocks := hi.blocks
+  pkgFree y Ey o v hy hl hs i hn := by
+    have hcl : ∀ r, Clean (A2.setE Γ x Ex) r → Clean Γ r := fun r h => h.mono fun v E' hv => by
+      by_cases hvx : v = x
+      · subst hvx
+        simp only [A2.setE, upd_same, Option.some.injEq] at hv; subst hv
+        exact ⟨E0, hx, hm0.symm, fun h => by rw [hm0, hmx] at h; cases h⟩
+      · rw [A2.setE, upd_ne _ _ hvx] at hv; exact ⟨E', hv, rfl, fun _ => rfl⟩
+    by_cases hyx : y = x
+    · subst hyx
+      simp only [A2.setE, upd_same, Option.some.injEq] at hy; subst hy
+      rw [hw] at hs; cases hs
+      exact hpf i (hn.mono hcl)
+    · rw [A2.setE, upd_ne _ _ hyx] at hy
+      exact hi.pkgFree y Ey o v hy hl hs i (hn.mono hcl)
 
 /-- The rest of a change through a borrow, once its owner's tree is changed
     (`hown`): every memory root of `x`'s path ends what its effect ends
@@ -431,7 +456,8 @@ theorem MInv.editB_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) (
     (hthru : ThruOK Γ1 F op Ex.ty Ex.path) {dep : Dep} (hdep : dep ∈ memDeps Ex.path)
     (hown : MInv m' (A2.kill (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty))) false
       dep.root Γ1))
-    {c : Nat} (hxs : m'.st x = some ⟨false, some (.href c)⟩) (hhref : HrefAt m' dep c t Ex.held) :
+    {c : Nat} (hxs : m'.st x = some ⟨false, some (.href c)⟩) (hhref : HrefAt m' dep c t Ex.held)
+    (hpf : ∀ i, PkgNames m' Γ1 Ex (.href c) i → PkgFreeId m' i) :
     MInv m' (A2.setE (killThru op Ex.ty Ex.path Γ1) x Ex) := by
   have hd0 : (⟨dep.root, .name (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty))) .int⟩ : Dep) ∈
       thruDeps op Γ1 Ex.ty Ex.path := mem_thruDeps.mpr ⟨dep, hdep, rfl⟩
@@ -447,6 +473,7 @@ theorem MInv.editB_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) (
     (by rcases hE'c with rfl | rfl <;> rfl) (by rcases hE'c with rfl | rfl <;> rfl)
     (by rcases hE'c with rfl | rfl <;> rfl) hmx hxs (by rw [hty]; exact .href ⟨dep, (List.mem_filter.mp hdep).1, hhref⟩) (fun hn' r hr => ?_)
     (fun _ hn' => ?_) (fun c' hc' => by simp [Val.names] at hc')
+    (fun i hn' => hpf i (hn'.mono fun _ h => h.of_same fun v E' hv => killNames_back _ hv))
   · obtain ⟨Er, hEr, hro⟩ := hw x Ex hx hl hn' r hr
     obtain ⟨Er', hEr', hEr'c⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex.path) hEr
     exact ⟨Er', hEr', by rcases hEr'c with rfl | rfl <;> exact hro⟩
@@ -1644,6 +1671,177 @@ theorem NewSlot.edit {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     rw [killE_ty]
     exact SharesOK.repl hsh' hr hwT ((hi.shares o Eo ⟨true, some T⟩ T ho hT rfl rfl).of_blk hblk)
 
+/-! ### AGORA-901: what the owner's change keeps free of packages -/
+
+/-- A package with the hole rewritten in it is one with the hole in its
+    environment (the replacement, a node, is no package). -/
+theorem Repl.pkg_inv {t : Ty} {c d d' : Nat} {es es' : List Val} {P0 : Val} {fs : List Nat} {te : Ty}
+    {ms : List Nat} {ev : Val} {cs : List (Var × PMode × Ty)}
+    (h : Repl (.node t c d es) (.node t c d' es') P0 (.pkg fs te ms ev cs)) :
+    ∃ ev0, P0 = .pkg fs te ms ev0 cs ∧ Sub (.node t c d es) ev0 := by
+  cases h with
+  | pkg h' => exact ⟨_, rfl, h'.sub⟩
+
+/-- A node with the hole rewritten in it is at the address of the node it
+    was. -/
+theorem Repl.node_inv {t : Ty} {c d d' : Nat} {es es' : List Val} {P0 : Val} {t1 : Ty} {c1 d1 : Nat}
+    {es1 : List Val} (h : Repl (.node t c d es) (.node t c d' es') P0 (.node t1 c1 d1 es1)) :
+    ∃ t0 d0 es0, P0 = .node t0 c1 d0 es0 := by
+  cases h with
+  | here => exact ⟨t, d, es, rfl⟩
+  | elem _ => exact ⟨_, _, _, rfl⟩
+
+/-- The views of a part with the hole rewritten in it are the old part's or
+    the replacement's. -/
+theorem Repl.views {n n' P0 P : Val} (h : Repl n n' P0 P) (hn' : ∀ d o l, n' ≠ .view d o l)
+    {d o l : Nat} (hv : Sub (.view d o l) P) : Sub (.view d o l) P0 ∨ Sub (.view d o l) n' := by
+  rcases NSE_sub h hv with h1 | h1 | ⟨Q, hQ, hr⟩
+  · exact Or.inr h1
+  · exact Or.inl h1
+  · cases hr with
+    | here => exact absurd rfl (hn' d o l)
+
+/-- **The owner's change of one node keeps `MInv.pkgFree`** (`PkgKeep.of_edit`):
+    no package held the node (`hfree`, the borrow's own `MInv.pkgFree`), so
+    none is rewritten with it; its new elements are old or fresh; and its
+    views are none, or the change ends every borrow into the owner. -/
+theorem PkgKeep.of_repl {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
+    {e : Eff} {hv : Bool} {x : Var} {Ex : Entry} {ox : Option Entry} (hx : Γ x = some Ex) (hxF : x ∉ F)
+    {T T' : Val} {t : Ty} {c d d' : Nat} {es es' : List Val}
+    (hT : m.st x = some ⟨true, some T⟩) (hT' : m'.st x = some ⟨true, some T'⟩)
+    (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hr : Repl (.node t c d es) (.node t c d' es') T T')
+    (hfree : PkgFreeIn T c) (hes : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m i)
+    (hvw : (∀ i o l, ¬ Sub (.view i o l) (.node t c d' es')) ∨
+      (e.kills hv .self = true ∧ e.kills hv .view = true ∧ e.kills hv .inner = true))
+    (hself : ∀ Ex' o v, ox = some Ex' → Ex'.live = true → m'.st x = some ⟨o, some v⟩ →
+      ∀ i, PkgNames m' Γ Ex' v i → PkgFreeId m i ∧ ¬ FreshAddr m i) :
+    PkgKeep m m' Γ e hv x ox := by
+  have hnv' : ∀ i o l, (Val.node t c d' es') ≠ .view i o l := fun _ _ _ h => by cases h
+  refine PkgKeep.of_edit hi hanch hx hxF hT hst (fun T'' hT'' fs te ms ev cs hP => ?_)
+    (fun T'' hT'' t1 c1 d1 es1 hs => ?_) hself
+  · rw [hT'] at hT''; cases hT''
+    rcases NSE_sub hr hP with h | h | ⟨P0, hP0, hrP⟩
+    · rcases h.cases' with h | ⟨e', hc', hs'⟩
+      · cases h
+      · cases hc' with
+        | elem he =>
+          rcases hes _ he with hold | hfr
+          · exact Or.inl ((Sub.child hold hs').trans hr.sub)
+          · exact Or.inr fun i hi' => hfr i (hs'.ids i hi')
+    · exact Or.inl h
+    · obtain ⟨ev0, rfl, hsub⟩ := hrP.pkg_inv
+      exact ((hfree fs te ms ev0 cs hP0 t c d es hsub).1 rfl).elim
+  · rw [hT'] at hT''; cases hT''
+    rcases NSE_sub hr hs with h | h | ⟨P0, hP0, hrP⟩
+    · rcases h.cases' with h | ⟨e', hc', hs'⟩
+      · cases h
+        rcases hvw with hnv | hk
+        · exact Or.inl ⟨t, d, es, hr.sub, fun i o l hv' => absurd hv' (hnv i o l)⟩
+        · exact Or.inr (Or.inr (Or.inr ⟨hr.sub.ids c (by simp [Val.ids]), hk⟩))
+      · cases hc' with
+        | elem he =>
+          rcases hes _ he with hold | hfr
+          · exact Or.inl ⟨t1, d1, es1, (Sub.child hold hs').trans hr.sub, fun _ _ _ h => h⟩
+          · exact Or.inr (Or.inl (hfr c1 (hs'.ids c1 (by simp [Val.ids]))))
+    · exact Or.inl ⟨t1, d1, es1, h, fun _ _ _ h' => h'⟩
+    · obtain ⟨t0, d0, es0, rfl⟩ := hrP.node_inv
+      rcases hvw with hnv | hk
+      · exact Or.inl ⟨t0, d0, es0, hP0, fun i o l hv' => by
+          rcases hrP.views hnv' hv' with h' | h'
+          · exact h'
+          · exact absurd h' (hnv i o l)⟩
+      · exact Or.inr (Or.inr (Or.inr ⟨hP0.ids c1 (by simp [Val.ids]), hk⟩))
+
+/-- AGORA-901: **what a change through a borrow writes no package holds**:
+    every memory root of its path is an owner (`canDo`), clean, and none is a
+    share (`ThruOK`), so the borrow's own `MInv.pkgFree` applies. -/
+theorem MInv.thru_free {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {x : Var} {Ex : Entry}
+    (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) {op : Edit}
+    (hthru : ThruOK Γ F op Ex.ty Ex.path) {c : Nat} (hxs : m.st x = some ⟨false, some (.href c)⟩) :
+    PkgFreeId m c := by
+  refine hi.pkgFree x Ex false _ hx hl hxs c (PkgNames.href (Or.inl hmx) (fun d hd => ?_) c)
+  obtain ⟨_, _, Er, hEr, _, hcan, _, hns⟩ := hthru d hd
+  exact ⟨hns, .own hEr hcan.ownSlot⟩
+
+/-- AGORA-901: an address of memory no package held stays so when one node of
+    an owner's tree is rewritten, no package having held it, with old or
+    fresh elements. -/
+theorem PkgFreeId.of_repl {m m' : Mem} {x : Var} (hst : ∀ o, o ≠ x → m'.st o = m.st o)
+    {T T' : Val} {t : Ty} {c d d' : Nat} {es es' : List Val}
+    (hT : m.st x = some ⟨true, some T⟩) (hT' : m'.st x = some ⟨true, some T'⟩)
+    (hr : Repl (.node t c d es) (.node t c d' es') T T') (hfree : PkgFreeIn T c)
+    (hes : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m i)
+    {i : Nat} (hnf : ¬ FreshAddr m i) (h : PkgFreeId m i) : PkgFreeId m' i := by
+  intro r U hU fs te ms ev cs hP t1 c1 d1 es1 hN
+  by_cases hrx : r = x
+  · subst hrx
+    rw [hT'] at hU; cases hU
+    rcases NSE_sub hr hP with h1 | h1 | ⟨P0, hP0, hrP⟩
+    · rcases h1.cases' with h2 | ⟨e', hc', hs'⟩
+      · cases h2
+      · cases hc' with
+        | elem he =>
+          rcases hes _ he with hold | hfr
+          · exact h r T hT fs te ms ev cs ((Sub.child hold hs').trans hr.sub) t1 c1 d1 es1 hN
+          · have hsN : ∀ j ∈ (Val.node t1 c1 d1 es1).ids, FreshAddr m j := fun j hj =>
+              hfr j (hs'.ids j (Child.ids Child.pkg j (hN.ids j hj)))
+            exact ⟨fun h1 => hnf (h1 ▸ hsN c1 (by simp [Val.ids])),
+              fun h2 => hnf (h2 ▸ hsN d1 (by simp [Val.ids]))⟩
+    · exact h r T hT fs te ms ev cs h1 t1 c1 d1 es1 hN
+    · obtain ⟨ev0, rfl, hsub⟩ := hrP.pkg_inv
+      exact ((hfree fs te ms ev0 cs hP0 t c d es hsub).1 rfl).elim
+  · rw [hst r hrx] at hU; exact h r U hU fs te ms ev cs hP t1 c1 d1 es1 hN
+
+/-- AGORA-901: **what the borrow names after a change through it** no
+    package holds: its node, which no package held before and none holds now
+    (`PkgFreeId.of_repl`), and that node's views, none. -/
+theorem MInv.editB_names {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1) {x : Var} {Ex : Entry}
+    (hx : Γ1 x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) {op : Edit}
+    (hthru : ThruOK Γ1 F op Ex.ty Ex.path) {c : Nat} (hxs : m1.st x = some ⟨false, some (.href c)⟩)
+    {o : Var} {T T' : Val} {t : Ty} {d d' : Nat} {es es' : List Val}
+    (hT0 : m1.st o = some ⟨true, some T⟩) (hst : ∀ w, w ≠ o → m'.st w = m1.st w)
+    (hT' : m'.st o = some ⟨true, some T'⟩) (hr : Repl (.node t c d es) (.node t c d' es') T T')
+    (hes : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m1 i)
+    (hnv : ∀ i o l, ¬ Sub (.view i o l) (.node t c d' es'))
+    (hnv0 : ∀ i o l, ¬ Sub (.view i o l) (.node t c d es)) :
+    PkgFreeIn T c ∧ ∀ i, PkgNames m' Γ1 Ex (.href c) i → PkgFreeId m' i := by
+  have hf0 := hi.thru_free hx hmx hl hthru hxs
+  have hfree : PkgFreeIn T c := hf0 o T hT0
+  have hcT : c ∈ T.ids := hr.sub.ids c (by simp [Val.ids])
+  have hnf : ¬ FreshAddr m1 c := fun ⟨h1, _⟩ => h1 o T hT0 hcT
+  refine ⟨hfree, fun i hn => ?_⟩
+  rcases hn with ⟨_, _, ⟨c', hb, rfl⟩ | ⟨o', l, h⟩⟩ | ⟨_, _, o', l, hb⟩ |
+      ⟨_, _, c', r, U, t1, d1, es1, hb, hU, hsU, o', l, hv⟩ | ⟨h, _⟩
+  · obtain rfl := hb.href_eq
+    exact PkgFreeId.of_repl hst hT0 hT' hr hfree hes hnf hf0
+  · cases h
+  · cases hb
+  · obtain rfl := hb.href_eq
+    by_cases hro : r = o
+    · subst hro
+      rw [hT'] at hU; cases hU
+      have hnd := hi.heap.nodup r T hT0
+      have hn0 : ∀ {N : Val}, Sub N T → c' ∈ N.head → N = .node t c' d es := fun hN hh =>
+        sub_unique hnd hN hr.sub hh (by simp [Val.head])
+      rcases NSE_sub hr hsU with h1 | h1 | ⟨P0, hP0, hrP⟩
+      · rcases h1.cases' with h2 | ⟨e', hc', hs'⟩
+        · cases h2; exact absurd hv (hnv _ _ _)
+        · cases hc' with
+          | elem he =>
+            rcases hes _ he with hold | hfr
+            · exact (head_not_below (hr.sub.nodup hnd) (Child.elem hold) hs' (i := c')
+                (by simp [Val.head]) (by simp [Val.head])).elim
+            · exact (hnf (hfr c' (hs'.ids c' (by simp [Val.ids])))).elim
+      · rw [hn0 h1 (by simp [Val.head])] at hv; exact absurd hv (hnv0 _ _ _)
+      · obtain ⟨t0, d0, es0, rfl⟩ := hrP.node_inv
+        rw [hn0 hP0 (by simp [Val.head])] at hrP
+        rcases hrP.views (fun _ _ _ h => by cases h) hv with h2 | h2
+        · exact absurd h2 (hnv0 _ _ _)
+        · exact absurd h2 (hnv _ _ _)
+    · rw [hst r hro] at hU
+      exact (hi.heap.disj r o U T hro hU hT0 c' (hsU.ids c' (by simp [Val.ids])) hcT).elim
+  · rw [hmx] at h; cases h
+
 /-! ### The owner's change -/
 
 /-- The owner's change by `.drop`: one node of its tree rewritten in place
@@ -1658,7 +1856,9 @@ theorem MInv.edit_drop {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
     (hst : ∀ v, v ≠ o → m'.st v = m1.st v) (hheap : HeapOK m') (hnv : m'.nv = m1.nv)
     (hhv : t.holdsView = false) (hr : Repl (.node t c d es) (.node t c d' es') T T')
     (hw' : WFv (.vec t) (.node t c d' es')) (hblk : m'.blk = m1.blk)
-    (hsh' : SharesOK m' (.vec t) (.node t c d' es')) : MInv m' (A2.kill .drop false o Γ1) := by
+    (hsh' : SharesOK m' (.vec t) (.node t c d' es'))
+    (hfree : PkgFreeIn T c) (hes : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m1 i) :
+    MInv m' (A2.kill .drop false o Γ1) := by
   have hmo : Eo.mode = .own := by
     rcases hcan with h | ⟨b, h, _⟩
     · exact h
@@ -1681,7 +1881,26 @@ theorem MInv.edit_drop {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
     rw [killE_nil (root_vdeps (by rw [hmo]; rfl) hh0)]; exact ⟨hl0, hh0⟩
   have h := hi.change hanch ho hoF (hmn_of_ne_replace false (by decide) o) (by rw [hmo]; simp) hst hheap
     hnv hkeep (NewSlot.edit hi hanch ho hoF hmo hT hT' hst hhv hr hw' hblk hsh') hds (fun h => by cases h)
-    (fun h => by cases h) hnew hblk
+    (fun h => by cases h) hnew
+    (PkgKeep.of_repl hi hanch ho hoF hT hT' hst hr hfree hes
+      (Or.inl fun i o l hv => hw'.noView (by simpa [Ty.holdsView] using hhv) hv)
+      (fun Ex' o' w hx' hl' hs i hn => by
+        simp only [Option.some.injEq] at hx'; subst hx'
+        rw [hT'] at hs; cases hs
+        have hos : Eo.mode.ownSlot = true := by rw [hmo]; rfl
+        obtain ⟨hc, o2, l, hv⟩ := PkgNames.own (E := killE .drop false o Eo) (by rw [killE_mode]; exact hos) hn
+        rw [killE_held] at hc
+        have hl0 : Eo.live = true := by rw [killE_live] at hl'; simp only [Bool.and_eq_true] at hl'; exact hl'.1
+        have hv0 : Sub (.view i o2 l) T := by
+          rcases hr.views (fun _ _ _ h => by cases h) hv with h | h
+          · exact h
+          · exact absurd h (hw'.noView (by simpa [Ty.holdsView] using hhv))
+        have hn0 : PkgNames m1 Γ1 Eo T i := Or.inr (Or.inr (Or.inr ⟨hos, hc, o2, l, hv0⟩))
+        refine ⟨hi.pkgFree o Eo true T ho hl0 hT i hn0, fun ⟨h1, h2⟩ => ?_⟩
+        rcases hi.named_home ho hl0 hT hn0 with ⟨r, U, hU, hiU⟩ | hp
+        · exact h1 r U hU hiU
+        · exact h2 hp))
+    hblk
   have heq : upd (A2.kill .drop false o Γ1) o (some (killE .drop false o Eo)) = A2.kill .drop false o Γ1 := by
     funext v
     by_cases hv : v = o
@@ -1760,6 +1979,15 @@ theorem MInv.editB_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
   have hsh' : SharesOK (m1.set dep.root ⟨true, some T'⟩) (.vec t) (.node t c d (es ++ [v])) :=
     hsh0.node_push hp.sh rfl
   have hhref := editB_hrefAt (H := Ex.held) hT' (hi.heap.nodup _ _ hT0) htop hla hr hw' hhv hsh'
+  -- AGORA-901: the new element moved in, fresh; the borrow's node no package holds
+  have hes : ∀ e ∈ es ++ [v], e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m1 i := fun e he => by
+    rcases List.mem_append.mp he with h | h
+    · exact Or.inl h
+    · simp only [List.mem_singleton] at h; subst h
+      exact Or.inr fun i hi' => ⟨fun r U hU hiU => hp.dis r U hU i hi' hiU, hp.np i hi'⟩
+  obtain ⟨hfree, hpfx⟩ := hi.editB_names hx hmx hl hthru hxs hT0 hst hT' hr hes
+    (fun _ _ _ h => hw'.noView (by simpa [Ty.holdsView] using hhv) h)
+    (fun _ _ _ h => hw0.noView (by simpa [Ty.holdsView] using hhv) h)
   have hown : MInv (m1.set dep.root ⟨true, some T'⟩)
       (A2.kill ((Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty))) false dep.root Γ1) := by
     by_cases hre : (Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) = .realloc
@@ -1799,9 +2027,9 @@ theorem MInv.editB_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst
         (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hp.np (fun _ _ _ h => absurd h (hvv _ _ _)) hp.sf
           hvT (Or.inl ⟨rfl, rfl, rfl⟩) hr) (by simp)
-        hhv hr hw' rfl hsh'
+        hhv hr hw' rfl hsh' hfree hes
   exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
-    (by rw [hst x hxo]; exact hxs) hhref
+    (by rw [hst x hxo]; exact hxs) hhref hpfx
 
 /-- `editPushRealloc`: the same, the node's buffer moving to a fresh one. -/
 theorem MInv.editB_pushRealloc {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
@@ -1842,6 +2070,15 @@ theorem MInv.editB_pushRealloc {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv 
       dep.root ⟨true, some T'⟩) (.vec t) (.node t c m1.nid (es ++ [v])) :=
     hsh0.node_push hp.sh rfl
   have hhref := editB_hrefAt (H := Ex.held) hT' (hi.heap.nodup _ _ hT0) htop hla hr hw' hhv hsh'
+  -- AGORA-901: the new element moved in, fresh; the borrow's node no package holds
+  have hes : ∀ e ∈ es ++ [v], e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m1 i := fun e he => by
+    rcases List.mem_append.mp he with h | h
+    · exact Or.inl h
+    · simp only [List.mem_singleton] at h; subst h
+      exact Or.inr fun i hi' => ⟨fun r U hU hiU => hp.dis r U hU i hi' hiU, hp.np i hi'⟩
+  obtain ⟨hfree, hpfx⟩ := hi.editB_names hx hmx hl hthru hxs hT0 hst hT' hr hes
+    (fun _ _ _ h => hw'.noView (by simpa [Ty.holdsView] using hhv) h)
+    (fun _ _ _ h => hw0.noView (by simpa [Ty.holdsView] using hhv) h)
   have hown :
       MInv ({ m1 with alloc := upd (upd m1.alloc d false) m1.nid true, nid := m1.nid + 1 }.set dep.root ⟨true, some T'⟩)
         (A2.kill ((Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty))) false dep.root Γ1) := by
@@ -1881,9 +2118,9 @@ theorem MInv.editB_pushRealloc {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv 
       exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst
         (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hp.np (fun _ _ _ h => absurd h (hvv _ _ _)) hp.sf
           hvT (Or.inr ⟨rfl, rfl, rfl⟩) hr) (by simp)
-        hhv hr hw' rfl hsh'
+        hhv hr hw' rfl hsh' hfree hes
   exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
-    (by rw [hst x hxo]; exact hxs) hhref
+    (by rw [hst x hxo]; exact hxs) hhref hpfx
 
 /-- `editTrunc`: the node's elements from the `n`-th on are freed. -/
 theorem MInv.editB_trunc {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
@@ -1916,14 +2153,18 @@ theorem MInv.editB_trunc {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       (.node t c d (es.take n)) :=
     hsh0.node_sub (fun e he => List.mem_of_mem_take he) rfl
   have hhref := editB_hrefAt (H := Ex.held) hT' (hi.heap.nodup _ _ hT0) htop hla hr hw' hhv hsh'
+  have hes : ∀ e ∈ es.take n, e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m i := fun e he => Or.inl (List.mem_of_mem_take he)
+  obtain ⟨hfree, hpfx⟩ := hi.editB_names hx hmx hl hthru hxs hT0 hst hT' hr hes
+    (fun _ _ _ h => hw'.noView (by simpa [Ty.holdsView] using hhv) h)
+    (fun _ _ _ h => hw0.noView (by simpa [Ty.holdsView] using hhv) h)
   have hown : MInv ({ m with alloc := a' }.set dep.root ⟨true, some T'⟩)
       (A2.kill ((Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty))) false dep.root Γ) := by
     have hdrop : (Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) = .drop := rfl
     rw [hdrop] at hcan hds ⊢
     exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst (HeapOK.editTrunc hi.heap hT0 hf hr)
-      (by simp) hhv hr hw' rfl hsh'
+      (by simp) hhv hr hw' rfl hsh' hfree hes
   exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
-    (by rw [hst x hxo]; exact hxs) hhref
+    (by rw [hst x hxo]; exact hxs) hhref hpfx
 
 /-! ### An element set (`vec_set`) -/
 
@@ -2109,7 +2350,8 @@ theorem MInv.editB_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
     (hno : NodeOf m1 x o T t' c d es)
     (hheap : HeapOK ({ m1 with alloc := a' }.set o ⟨true, some T'⟩))
     (hwe : ∀ e ∈ es', e ∈ es ∨ WFv t' e) (hse : ∀ e ∈ es', e ∈ es ∨ SharesOK m1 t' e)
-    (hr : Repl (.node t' c d es) (.node t' c d es') T T') :
+    (hr : Repl (.node t' c d es) (.node t' c d es') T T')
+    (hfe : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m1 i) :
     MInv ({ m1 with alloc := a' }.set o ⟨true, some T'⟩)
       (A2.setE (killThru op Ex.ty Ex.path Γ1) x Ex) := by
   have hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ1 d.root = some Er ∧ Er.mode.ownSlot = true :=
@@ -2133,13 +2375,16 @@ theorem MInv.editB_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
   have hsh' : SharesOK ({ m1 with alloc := a' }.set dep.root ⟨true, some T'⟩) (.vec t) (.node t c d es') :=
     hsh0.node_mem hse rfl
   have hhref := editB_hrefAt (H := Ex.held) hT' (hi.heap.nodup _ _ hT0) htop hla hr hw' hhv hsh'
+  obtain ⟨hfree, hpfx⟩ := hi.editB_names hx hmx hl hthru hxs hT0 hst hT' hr hfe
+    (fun _ _ _ h => hw'.noView (by simpa [Ty.holdsView] using hhv) h)
+    (fun _ _ _ h => hw0.noView (by simpa [Ty.holdsView] using hhv) h)
   have hown : MInv ({ m1 with alloc := a' }.set dep.root ⟨true, some T'⟩)
       (A2.kill (op.effAt dep.kind (decide (Eo.ty = Ex.ty))) false dep.root Γ1) := by
     have hd := hdrop dep.kind (decide (Eo.ty = Ex.ty))
     rw [hd] at hcan hds ⊢
-    exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst hheap (by simp) hhv hr hw' rfl hsh'
+    exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst hheap (by simp) hhv hr hw' rfl hsh' hfree hfe
   exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
-    (by rw [hst x hxo]; exact hxs) hhref
+    (by rw [hst x hxo]; exact hxs) hhref hpfx
 
 /-- `editSet`: the node's `n`-th element is replaced by the value taken in,
     the old one freed. -/
@@ -2179,6 +2424,8 @@ theorem MInv.editB_set {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       hf hr)
     (fun e he => (List.mem_or_eq_of_mem_set he).elim Or.inl fun h => Or.inr (h ▸ hp.wf))
     (fun e he => (List.mem_or_eq_of_mem_set he).elim Or.inl fun h => Or.inr (h ▸ hp.sh)) hr
+    (fun e he => (List.mem_or_eq_of_mem_set he).elim Or.inl fun h => Or.inr fun i hi' =>
+      ⟨fun r U hU hiU => hp.dis r U hU i (h ▸ hi') hiU, hp.np i (h ▸ hi')⟩)
 
 /-- `editSetOOB`: out of range nothing is stored, and the value taken in,
     which no owner holds, is freed; the node is as it was. -/
@@ -2196,6 +2443,6 @@ theorem MInv.editB_setOOB {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
     rw [heq]; exact HeapOK.freeV hi.heap hp.dis hp.np hf
   rw [← heq]
   exact MInv.editB_drops hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hno hh
-    (fun e he => Or.inl he) (fun e he => Or.inl he) (Repl.self hno.sub)
+    (fun e he => Or.inl he) (fun e he => Or.inl he) (Repl.self hno.sub) (fun e he => Or.inl he)
 
 end A2

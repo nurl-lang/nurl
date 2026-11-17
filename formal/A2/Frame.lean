@@ -393,7 +393,7 @@ theorem Clean.of_change {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : 
       | none => rw [hE] at hv'; cases hv'
       | some E =>
         rw [hE] at hv'; cases hv'
-        exact ⟨E, rfl, killE_mode .., fun hrb => killE_rootb hanch hxF e hv hmn hE hrb⟩
+        exact ⟨E, rfl, killE_mode .., fun _ => killE_path ..⟩
 
 /-- AGORA-901: a kill keeps the clean roots: modes are kept, and a borrowed
     parameter it ends none of. -/
@@ -408,7 +408,31 @@ theorem Clean.of_kill {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : Va
     | none => rw [hE] at hv'; cases hv'
     | some E =>
       rw [hE] at hv'; cases hv'
-      exact ⟨E, rfl, killE_mode .., fun hrb => killE_rootb hanch hxF e hv hmn hE hrb⟩
+      exact ⟨E, rfl, killE_mode .., fun _ => killE_path ..⟩
+
+/-- AGORA-901: the clean roots of a context whose entries keep their modes
+    and paths (a kill, a weakening of what is held) are the other's. -/
+theorem Clean.of_same {Γ Γ' : Ctx}
+    (h : ∀ v E', Γ' v = some E' → ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ E'.path = E.path)
+    {r : Var} (hc : Clean Γ' r) : Clean Γ r :=
+  hc.mono fun v E' hv => by
+    obtain ⟨E, hE, hm, hp⟩ := h v E' hv
+    exact ⟨E, hE, hm, fun _ => hp⟩
+
+theorem kill_back {Γ : Ctx} {e : Eff} {hv : Bool} {x v : Var} {E' : Entry} (h : kill e hv x Γ v = some E') :
+    ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ E'.path = E.path := by
+  unfold kill at h
+  cases hE : Γ v with
+  | none => rw [hE] at h; cases h
+  | some E => rw [hE] at h; cases h; exact ⟨E, rfl, killE_mode .., killE_path ..⟩
+
+theorem killNames_back {Γ : Ctx} : ∀ (ds : List Dep) {v : Var} {E' : Entry}, killNames ds Γ v = some E' →
+    ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧ E'.path = E.path
+  | [], _, E', h => ⟨E', h, rfl, rfl⟩
+  | d :: ds, v, E', h => by
+    obtain ⟨E1, h1, hm1, hp1⟩ := kill_back (Γ := killNames ds Γ) h
+    obtain ⟨E, h0, hm0, hp0⟩ := killNames_back ds h1
+    exact ⟨E, h0, hm1.trans hm0, hp1.trans hp0⟩
 
 /-- A node whose elements are among another's: what lies strictly below it
     lies below that one. -/
@@ -780,7 +804,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         obtain ⟨_, _, _, _, hm, _⟩ := hox
         exact ⟨Ex, hx, hm, fun h => absurd h hxr⟩
       · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
-        exact ⟨E, hE, killE_mode .., fun hrb => killE_rootb hanch hxF e hv hmn hE hrb⟩
+        exact ⟨E, hE, killE_mode .., fun _ => killE_path ..⟩
     intro y Ey' o v hy hl hs i hn
     have hn0 : PkgNames m' Γ Ey' v i := hn.mono hcl
     by_cases hyx : y = x
