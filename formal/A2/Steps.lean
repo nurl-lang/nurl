@@ -2755,6 +2755,65 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       simp only [Option.some.injEq] at hx'; subst hx'
       rw [hty] at hhv
       exact ⟨hl0, by simp [hh0, hD hhv]⟩)
+    (PkgKeep.of_edit hi hanch hx hxF hT hst
+      (fun T' hT' fs te ms ev cs hP => by
+        simp only [m', Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq, true_and] at hT'
+        subst hT'
+        rcases hP.cases' with h | ⟨e, hc, hs⟩
+        · cases h
+        · cases hc with
+          | elem he =>
+            rcases List.mem_append.mp he with h | h
+            · exact Or.inl (Sub.child h hs)
+            · simp at h; subst h
+              exact Or.inr fun i hi' => ⟨fun r U hU hiU => hp.dis r U hU i (hs.ids i hi') hiU,
+                hp.np i (hs.ids i hi')⟩)
+      (fun T' hT' t1 c1 d1 es1 hs => by
+        simp only [m', Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq, true_and] at hT'
+        subst hT'
+        rcases hs.cases' with h | ⟨e, hc, hs'⟩
+        · cases h
+          cases hhv : t'.holdsView
+          · refine Or.inl ⟨t', d, es, Sub.refl _, fun i o l hv' => ?_⟩
+            rcases hv'.cases' with h | ⟨e, hc, hsv⟩
+            · cases h
+            · cases hc with
+              | elem he =>
+                rcases List.mem_append.mp he with h | h
+                · exact Sub.child h hsv
+                · simp at h; subst h; exact absurd hsv (hp.wf.noView hhv)
+          · exact Or.inr (Or.inr (Or.inl ⟨t', d, es, rfl, by simp [Eff.kills, hhv], by simp [Eff.kills]⟩))
+        · cases hc with
+          | elem he =>
+            rcases List.mem_append.mp he with h | h
+            · exact Or.inl ⟨t1, d1, es1, Sub.child h hs', fun _ _ _ h => h⟩
+            · simp at h; subst h
+              exact Or.inr (Or.inl ⟨fun r U hU hiU => hp.dis r U hU c1 (hs'.ids c1 (by simp [Val.ids])) hiU,
+                hp.np c1 (hs'.ids c1 (by simp [Val.ids]))⟩))
+      (fun Ex' o w hx' hl' hs i hn => by
+        simp only [Option.some.injEq] at hx'; subst hx'
+        simp only [m', Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hs
+        obtain ⟨_, rfl⟩ := hs
+        obtain ⟨hc, o', l, hvi⟩ := PkgNames.own (E := { Ex with held := Ex.held ++ D }) hos hn
+        have hnf : ∀ i, ((∃ r T, m1.st r = some ⟨true, some T⟩ ∧ i ∈ T.ids) ∨ PayAddr m1 i) →
+            ¬ FreshAddr m1 i := by
+          rintro i (⟨r, T, hT1, hiT⟩ | hpa) ⟨h1, h2⟩
+          · exact h1 r T hT1 hiT
+          · exact h2 hpa
+        rcases hvi.cases' with h | ⟨e, hce, hse⟩
+        · cases h
+        · cases hce with
+          | elem he =>
+            rcases List.mem_append.mp he with h | h
+            · have hn0 : PkgNames m1 Γ1 Ex (.node t' c d es) i :=
+                Or.inr (Or.inr (Or.inr ⟨hos, hc.left, o', l, Sub.child h hse⟩))
+              exact ⟨hi.pkgFree x Ex true _ hx hl hT i hn0, hnf i (hi.named_home hx hl hT hn0)⟩
+            · simp at h; subst h
+              refine ⟨hp.pf hc.right i o' l hse, hnf i ?_⟩
+              obtain ⟨s', hin⟩ := hp.wf.viewIn hse
+              obtain ⟨d0, o0, l0, hvv, dep, _, hva⟩ := hp.vs s' _ hin
+              cases hvv
+              exact hva.home hi.heap))
   · intro k hk
     have hev : Evolve m1 m' x t' c d d' es (es ++ [v]) := ⟨hT, by simp [m'], hwT', rfl⟩
     have hpre : ∀ e ∈ es, e ∈ es ++ [v] := fun e he => List.mem_append_left _ he
@@ -3302,6 +3361,7 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   · intro k bl hk
     obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
     exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk rfl⟩, h4⟩
+  · sorry -- PKGFREE-TODO rbindExit
 
 /-! ### A3.1: the counted blocks only grow -/
 

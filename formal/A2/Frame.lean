@@ -948,14 +948,15 @@ def FreshAddr (m : Mem) (i : Nat) : Prop := (∀ r U, m.st r = some ⟨true, som
     what the owner names, no package holds. -/
 theorem PkgKeep.of_edit {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     {e : Eff} {hv : Bool} {x : Var} {Ex : Entry} {ox : Option Entry} (hx : Γ x = some Ex) (hxF : x ∉ F)
-    {t0 : Ty} {c0 d0 : Nat} {es0 : List Val} (hT : m.st x = some ⟨true, some (.node t0 c0 d0 es0)⟩)
+    {T0 : Val} (hT : m.st x = some ⟨true, some T0⟩)
     (hst : ∀ o, o ≠ x → m'.st o = m.st o)
     (hpk : ∀ T', m'.st x = some ⟨true, some T'⟩ → ∀ fs te ms ev cs, Sub (.pkg fs te ms ev cs) T' →
-      Sub (.pkg fs te ms ev cs) (.node t0 c0 d0 es0) ∨ ∀ i ∈ (Val.pkg fs te ms ev cs).ids, FreshAddr m i)
+      Sub (.pkg fs te ms ev cs) T0 ∨ ∀ i ∈ (Val.pkg fs te ms ev cs).ids, FreshAddr m i)
     (hnode : ∀ T', m'.st x = some ⟨true, some T'⟩ → ∀ t c d es, Sub (.node t c d es) T' →
-      (∃ t1 d1 es1, Sub (.node t1 c d1 es1) (.node t0 c0 d0 es0) ∧ ∀ i o l, Sub (.view i o l) (.node t c d es) →
+      (∃ t1 d1 es1, Sub (.node t1 c d1 es1) T0 ∧ ∀ i o l, Sub (.view i o l) (.node t c d es) →
         Sub (.view i o l) (.node t1 c d1 es1)) ∨ FreshAddr m c ∨
-      (c = c0 ∧ e.kills hv .self = true ∧ e.kills hv .view = true))
+      (∃ t0 d0 es0, T0 = .node t0 c d0 es0 ∧ e.kills hv .self = true ∧ e.kills hv .view = true) ∨
+      (c ∈ T0.ids ∧ e.kills hv .self = true ∧ e.kills hv .view = true ∧ e.kills hv .inner = true))
     (hself : ∀ Ex' o v, ox = some Ex' → Ex'.live = true → m'.st x = some ⟨o, some v⟩ →
       ∀ i, PkgNames m' Γ Ex' v i → PkgFreeId m i ∧ ¬ FreshAddr m i) :
     PkgKeep m m' Γ e hv x ox := by
@@ -982,7 +983,8 @@ theorem PkgKeep.of_edit {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) 
       · exact Or.inr (Or.inl h2)
       · by_cases hrx : r = x
         · subst hrx
-          rcases hnode T1 hT1 t c d es hs1 with ⟨t1, d1, es1, hs0, hvw⟩ | hfc | ⟨rfl, hks, hkv⟩
+          rcases hnode T1 hT1 t c d es hs1 with ⟨t1, d1, es1, hs0, hvw⟩ | hfc | ⟨t0, d0, es0, rfl, hks, hkv⟩ |
+              ⟨hcT, hks, hkv, hki⟩
           · exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, _, t1, d1, es1, hb, hT, hs0, o', l, hvw i o' l hvn⟩))
           · exfalso
             have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
@@ -1009,6 +1011,23 @@ theorem PkgKeep.of_edit {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) 
                 rw [hty] at hok; obtain ⟨k, rfl⟩ := valOK_int.mp hok; cases hb
               rw [hnt, Bool.true_and, List.any_eq_true]
               exact ⟨dep, hdv, by rcases hdk with h | h <;> simp [hdr, h, hks, hkv]⟩
+            rw [killE_live, hhit] at hl; simp at hl
+          · exfalso
+            have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+            obtain ⟨sl, hsl, _, hso, _⟩ := hi.slot y Ey hEy
+            rw [hs] at hsl; cases hsl
+            have ho : o = false := by have := hso; simp only at this; rw [this, hos]
+            subst ho
+            obtain ⟨dep, hdv, hdr, hdk⟩ := hi.namer hanch hxF hT hcT hEy hl0 hs hb
+            have hhit : hits e hv r Ey = true := by
+              unfold hits
+              have hnt : (Ey.ty != .int || Ey.mode == .rootb) = true := by
+                cases hty : Ey.ty <;> simp_all
+                obtain ⟨w, hw, hok⟩ := hi.bor_val hEy hl0 hos
+                rw [hs] at hw; cases hw
+                rw [hty] at hok; obtain ⟨k, rfl⟩ := valOK_int.mp hok; cases hb
+              rw [hnt, Bool.true_and, List.any_eq_true]
+              exact ⟨dep, hdv, by rcases hdk with h | h | h <;> simp [hdr, h, hks, hkv, hki]⟩
             rw [killE_live, hhit] at hl; simp at hl
         · rw [hst r hrx] at hT1
           exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T1, t, d, es, hb, hT1, hs1, o', l, hvn⟩))
