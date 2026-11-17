@@ -1,0 +1,3 @@
+### Fixed
+
+- **A `% Drop` parameter bound to another name and handed back is no longer leaked when the function takes it over on another path** (AGORA-876). Take `@ f ( Vec R ) log R p b keep → R { ? keep { ( vec_push [R] log p ) … } {} : R r p ^ r }`. The caller hands `p` over, since `f` may keep it. On the run that hands `r` back, the result was answered "lent", so neither side released the value. `^ r` is now answered as `^ p` already was: `r`'s drop flag, which is `p`'s moved to it, says on each run whether the caller gets the value back owned. A value block (`^ { : R r p r }`) and a chain of such bindings work too.

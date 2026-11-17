@@ -4261,7 +4261,18 @@ def check_program(prog, max_rounds=40):
         fc = FnCheck(prog, fn, summ, final=True)
         sm = fc.check()
         errors += fc.errors
-        lent = {k for (k, _, _) in sm["lends"]} & set(sm["consumes"])
+        # (a lend of a whole plain parameter is that parameter handed back:
+        # its flag says per run whether the caller gets it back owned, as
+        # for `^ p`; a part of it, a view, a `sink` parameter or a closure
+        # is a lend the caller could not keep, agora #876)
+        def whole_back(k, path, kind):
+            # the parameter itself, a plain by-value one (not `sink`, not a
+            # closure), handed back as a handle: codegen answers per run by
+            # its flag (`^ p`)
+            ty = fn.vars[fn.params[k]].ty if k < len(fn.params) else None
+            return (not path and kind == "handle" and k < len(fn.modes) and fn.modes[k] != "sink"
+                    and ty is not None and ty[0] not in VIEW_TYPES and ty[0] != "closure")
+        lent = {k for (k, path, kind) in sm["lends"] if not whole_back(k, path, kind)} & set(sm["consumes"])
         kept = {k for k in sm.get("calllends", ()) if k in sm["consumes"] and fn.modes[k] != "sink"}
         if kept:
             # what a callee lent out of a parameter this function keeps on

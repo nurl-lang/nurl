@@ -1,5 +1,7 @@
-// map: §7.6 | A2 | rejected | - | AGORA-876: : R r p ^ r with p kept on another path
-// main 3358873a: faults under ASan (found by AGORA-869's adversarial pass).
+// drop_parameter_bound_and_handed_back_kept_on_another_path_runs_clean: `? keep { ( vec_push [R] log p ) … } {} : R r p ^ r`: the run that hands r back hands p's value back owned
+// Closed (agora #876): a binding holding a parameter's own value (`: R r p`, __pmove) handed back is answered as `^ p` is - its flag, p's moved to it, says per run whether the caller gets it back owned.
+// main fcf68942: LeakSanitizer reported the value never released (`run F`).
+// map: §7.6 | A2 | runs-clean | - | AGORA-876: `? keep { ( vec_push [R] log p ) … } {} : R r p ^ r`: the run that hands r back hands p's value back owned
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 

@@ -8936,7 +8936,12 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // answered "owned", and the caller released the value it still held on
     // the run that handed it back: agora #388.)
     ? & & ( is_ident_tok ret_first_tt ) | | ( __is_handle_ty ( nurl_get_last_type ) ) ( __nc_held_ty ( nurl_get_last_type ) ) ( __is_hown_ty ( nurl_get_last_type ) ) ! ( __is_clo_param syms ret_first_val ) {
-        ? >= ( nurl_sym_word_index syms `__fn_param_names__` ret_first_val ) 0
+        // (…a binding holding a parameter's own value, `: R r p` (__pmove,
+        // agora #759), handed back is that parameter handed back: lent by
+        // the same rule, its flag - p's, moved to it - the answer. Taken for
+        // a borrowed local, it answered "lent" on a run where the function
+        // had taken p over, and nobody released it - agora #876.)
+        ? >= ( nurl_sym_word_index syms `__fn_param_names__` ( __pmove_param syms ret_first_val ) ) 0
         { ( __record_param_idx syms `__fn_retlend__` ret_first_val )
             ( nurl_sym_set_deep syms `__ret_path_lends__` `1` )
             // (A `sink` parameter is this function's own: its flag says
@@ -22702,7 +22707,15 @@ unsafe @ eng_byte s w i k → i {
     : ~ b elent F
     ~ < k ( sm_n f SM_LENDS ) {
         : i lt ( sm_at f SM_LENDS k )
-        ? ( sm_has f SM_CONSUMES ( tp_at lt 3 0 ) ) {
+        // (a lend of a whole plain parameter is that parameter handed back:
+        // its flag says per run whether the caller gets it back owned, as
+        // for `^ p` - mem_store_hown; a part of it, a view, a `sink`
+        // parameter or a closure is a lend the caller could not keep,
+        // agora #876)
+        : i lk ( tp_at lt 3 0 )
+        : i lpt ? < lk ( sm_word f SM_NPARAM ) ( efp_ty f lk ) ET_NONE
+        : b whole & & & & == ( tp_at lt 3 1 ) 0 == ( tp_at lt 3 2 ) LK_HANDLE != ( sm_mode f lk ) PM_SINK != lpt ET_NONE & ! ( et_is_view lpt ) != ( et_kind lpt ) EK_CLOSURE
+        ? & ( sm_has f SM_CONSUMES lk ) ! whole {
             = lent T
             ? & != ( sm_mode f ( tp_at lt 3 0 ) ) PM_SINK ( ep_has_star ( tp_at lt 3 1 ) ) { = elent T } {}
         } {}
