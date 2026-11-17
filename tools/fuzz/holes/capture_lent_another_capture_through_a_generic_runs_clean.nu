@@ -1,4 +1,5 @@
-// map: §7.4 | A2 | rejected | - | AGORA-882: an inner closure gives the outer function's binding a lend of the outer closure's local
+// map: §7.4 | A2 | runs-clean | - | AGORA-882: through a generic identity, other replaced after the call - closed by AGORA-904: the capture is given its own copy
+// AGORA-882, closed by AGORA-904: the by-pointer capture is given its own copy of what the call lends (the caller's frame cannot follow a lend of another capture); main 05206020: heap-use-after-free
 // main 525613db: faults under ASan (found by AGORA-872's skeptic).
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -18,13 +19,11 @@ $ `stdlib/core/vec.nu`
 @ show ? String o → v { ?? o { T s → { ( nurl_println ( string_data s ) ) } F → { ( nurl_println `none` ) } } }
 
 @ main → i {
+    : ~ ? String other ( mk `other value long enough for the heap here` )
     : ~ ? String o ( mk `a value long enough for the heap here` )
-    : ~ ( @ v ) f \ → v {
-        : ?String a ( mk `closure a local long enough for heap ok` )
-        : ~ ( @ v ) g \ → v { = o ( id a ) }
-        ( g )
-    }
+    : ~ ( @ v ) f \ → v { = o ( gid [? String] other ) }
     ( f )
-    ( show o )
+    = other ( mk `replacement value long enough for the heap ok` )
+    ( show o ) ( show other )
     ^ 0
 }
