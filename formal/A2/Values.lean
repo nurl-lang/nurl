@@ -292,4 +292,192 @@ theorem MInv.href_home {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entr
   · exact Or.inl ⟨x, T, hT, hsT.ids c (by simp [Val.ids])⟩
   · exact Or.inr (hp.payAddr hi.heap c (by simp [Val.ids]))
 
+/-! ### AGORA-901: nodes no package holds -/
+
+/-- No package of an owned tree holds `n` in its environment. -/
+def PkgFreeAt (m : Mem) (n : Val) : Prop :=
+  ∀ r T, m.st r = some ⟨true, some T⟩ → ∀ fs te ms ev cs, Sub (.pkg fs te ms ev cs) T → ¬ Sub n ev
+
+/-- Nothing lies strictly inside itself. -/
+theorem Below.irrefl {a : Val} (h : Below a a) : False := by
+  obtain ⟨e, hc, hs⟩ := h
+  exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt hs.sizeOf_le hc.sizeOf_lt)
+
+theorem Sub.nodup {a t : Val} (h : Sub a t) (hn : t.ids.Nodup) : a.ids.Nodup := by
+  rcases h.cases' with h | ⟨e, hc, hs⟩
+  · subst h; exact hn
+  · exact hs.nodup (hc.nodup hn)
+termination_by sizeOf t
+decreasing_by exact hc.sizeOf_lt
+
+/-- In a tree whose addresses are distinct, two subtrees sharing an address
+    lie one inside the other. -/
+theorem sub_nested {t a b : Val} (hn : t.ids.Nodup) (ha : Sub a t) (hb : Sub b t) {i : Nat}
+    (hia : i ∈ a.ids) (hib : i ∈ b.ids) : Sub a b ∨ Sub b a := by
+  rcases ha.cases' with h | ⟨ea, hca, hsa⟩
+  · subst h; exact Or.inr hb
+  rcases hb.cases' with h | ⟨eb, hcb, hsb⟩
+  · subst h; exact Or.inl ha
+  have heq := Child.same hca hcb hn (hsa.ids i hia) (hsb.ids i hib)
+  subst heq
+  exact sub_nested (hca.nodup hn) hsa hsb hia hib
+termination_by sizeOf t
+decreasing_by exact hca.sizeOf_lt
+
+/-- An address of a node no package holds, by value, is one no package
+    holds by address, wherever the node lies. -/
+theorem PkgFreeAt.toId {m : Mem} (hh : HeapOK m) {n : Val}
+    (hhome : (∃ r0 T0, m.st r0 = some ⟨true, some T0⟩ ∧ Sub n T0) ∨ InPay m n)
+    (h : PkgFreeAt m n) {i : Nat} (hi : i ∈ n.head) : PkgFreeId m i := by
+  intro r T hT fs te ms ev cs hP t c d es hN
+  have key : i ∈ (Val.node t c d es).head → False := fun hi' => by
+    have hsT : Sub (.node t c d es) T := hN.trans ((Sub.pkg (Sub.refl _)).trans hP)
+    rcases hhome with ⟨r0, T0, hT0, hs0⟩ | hp
+    · obtain ⟨_, heq⟩ := owned_unique hh hT hT0 hsT hs0 hi' hi
+      rw [heq] at hN
+      exact h r T hT fs te ms ev cs hP hN
+    · exact hh.notPay hT (hsT.ids i (Val.head_ids _ i hi')) (hp.payAddr hh i (Val.head_ids _ i hi))
+  exact ⟨fun h1 => key (by simp [Val.head, h1]), fun h2 => key (by simp [Val.head, h2])⟩
+
+/-- A node of an address no package holds no package holds. -/
+theorem PkgFreeId.at {m : Mem} {i : Nat} (h : PkgFreeId m i) {n : Val} (hn : i ∈ n.head) :
+    PkgFreeAt m n := by
+  intro r T hT fs te ms ev cs hP hN
+  cases n with
+  | node t c d es =>
+    obtain ⟨h1, h2⟩ := h r T hT fs te ms ev cs hP t c d es hN
+    simp [Val.head] at hn
+    rcases hn with rfl | rfl
+    · exact h1 rfl
+    · exact h2 rfl
+  | _ => simp [Val.head] at hn
+
+/-- What lies in no owned tree no package of one holds. -/
+theorem PkgFreeAt.of_notOwned {m : Mem} {n : Val} {i : Nat} (hi : i ∈ n.ids)
+    (h : ∀ r T, m.st r = some ⟨true, some T⟩ → i ∉ T.ids) : PkgFreeAt m n :=
+  fun r T hT _ _ _ _ _ hP hN => h r T hT (hP.ids i (Child.ids Child.pkg i (hN.ids i hi)))
+
+/-- An owned tree's top no package holds. -/
+theorem PkgFreeAt.top {m : Mem} (hh : HeapOK m) {y : Var} {Ty0 : Val} (hy : m.st y = some ⟨true, some Ty0⟩)
+    {i : Nat} (hi : i ∈ Ty0.ids) : PkgFreeAt m Ty0 := by
+  intro r T hT fs te ms ev cs hP hN
+  have hiT : i ∈ T.ids := hP.ids i (Child.ids Child.pkg i (hN.ids i hi))
+  by_cases hry : r = y
+  · subst hry; rw [hy] at hT; cases hT
+    exact Below.irrefl ⟨ev, Child.pkg, hP.trans hN⟩
+  · exact hh.disj r y T Ty0 hry hT hy i hiT hi
+
+/-- **A part no package holds passes it on** to each of its parts but a
+    package's environment: within the owned tree it lies in, a package
+    holding the part holds it, or lies inside it, at the part itself. -/
+theorem PkgFreeAt.child {m : Mem} (hh : HeapOK m) {r0 : Var} {T0 n0 n : Val}
+    (hT0 : m.st r0 = some ⟨true, some T0⟩) (hs0 : Sub n0 T0) (hf : PkgFreeAt m n0)
+    (hnp : ∀ fs te ms ev cs, n0 ≠ .pkg fs te ms ev cs) (hc : Child n n0) {i : Nat} (hi : i ∈ n.ids) :
+    PkgFreeAt m n := by
+  intro r T hT fs te ms ev cs hP hN
+  have hiP : i ∈ (Val.pkg fs te ms ev cs).ids := Child.ids Child.pkg i (hN.ids i hi)
+  have hi0 : i ∈ n0.ids := hc.ids i hi
+  have hrr : r = r0 := Classical.byContradiction fun hne =>
+    hh.disj r r0 T T0 hne hT hT0 i (hP.ids i hiP) (hs0.ids i hi0)
+  subst hrr; rw [hT0] at hT; cases hT
+  have hnd := hh.nodup _ _ hT0
+  rcases sub_nested hnd hs0 hP hi0 hiP with h | h
+  · rcases h.cases' with h | ⟨e, hce, hse⟩
+    · exact hnp fs te ms ev cs h
+    · cases hce
+      exact hf _ _ hT0 fs te ms ev cs hP hse
+  · rcases h.cases' with h | ⟨e, hce, hse⟩
+    · exact hnp fs te ms ev cs h.symm
+    · have heq := Child.same hce hc (hs0.nodup hnd) (hse.ids i hiP) hi
+      subst heq
+      exact Below.irrefl ⟨ev, Child.pkg, hse.trans hN⟩
+
+theorem WFv.not_href {τ : Ty} {c : Nat} (h : WFv τ (.href c)) : False := by
+  generalize hv : (Val.href c) = v at h
+  induction h with
+  | dtor _ _ ih => exact ih hv
+  | _ => cases hv
+
+/-- A handle lent out of an owned value is a node's. -/
+theorem lendOf_href {τ : Ty} {e : Val} (hw : WFv τ e) {c : Nat} (h : lendOf e = .href c) :
+    ∃ t d es, e = .node t c d es := by
+  cases e with
+  | node t c' d es => simp [lendOf] at h; subst h; exact ⟨t, d, es, rfl⟩
+  | href => exact hw.not_href.elim
+  | _ => simp [lendOf] at h
+
+theorem comp_isName {a b : Kind} (ha : a.isName = false) (hb : b.isName = false) :
+    (comp a b).isName = false := by
+  cases a <;> cases b <;> simp_all [comp, Kind.isName]
+
+theorem comp_share {a b : Kind} (hb : b.isName = false) (h : comp a b ≠ .share) : a ≠ .share := by
+  rintro rfl; cases b <;> simp_all [comp, Kind.isName]
+
+/-- What is borrowed from `y` in a way `k` (no share, nothing by name)
+    through clean roots only: `y` is clean, if it is a root, or else every
+    memory dependency of its path is clean and no share. -/
+theorem derive_clean {Γ : Ctx} {y : Var} {E : Entry} {k : Kind} (hkn : k.isName = false)
+    (h : ∀ d ∈ memDeps (derive y E k), d.kind ≠ .share ∧ Clean Γ d.root) :
+    (E.mode.isRoot = true → Clean Γ y) ∧
+    (E.mode.isRoot = false → ∀ d ∈ memDeps E.path, d.kind ≠ .share ∧ Clean Γ d.root) := by
+  refine ⟨fun hr => ?_, fun hr d hd => ?_⟩
+  · have hmem : (⟨y, rootKind E.ty k⟩ : Dep) ∈ memDeps (derive y E k) := by
+      unfold derive memDeps; rw [ite_eq_left hr]
+      rcases rootKind_cases E.ty k with h | ⟨_, h⟩ <;> rw [h]
+      · simp only [List.filter_cons, List.filter_nil, hkn, Bool.not_false, if_true, List.mem_singleton]
+      · simp [Kind.isName]
+    exact (h _ hmem).2
+  · obtain ⟨hd, hdn⟩ := List.mem_filter.mp hd
+    have hmem : (⟨d.root, comp d.kind k⟩ : Dep) ∈ memDeps (derive y E k) := by
+      unfold derive memDeps; rw [if_neg (by simp [hr])]
+      refine List.mem_filter.mpr ⟨List.mem_map_of_mem hd, ?_⟩
+      simp only [Bool.not_eq_true'] at hdn ⊢
+      simpa using comp_isName (by simpa using hdn) hkn
+    obtain ⟨h1, h2⟩ := h _ hmem
+    exact ⟨comp_share hkn h1, h2⟩
+
+/-- **The node a live binding names**, through clean roots only, no package
+    holds, and it lies in an owned tree or in a payload. -/
+theorem MInv.vecOf_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hl : E.live = true) {t : Ty} {c d : Nat} {es : List Val} (hvec : VecOf m y t c d es)
+    {k : Kind} (hkn : k.isName = false)
+    (hcl : ∀ d ∈ memDeps (derive y E k), d.kind ≠ .share ∧ Clean Γ d.root) :
+    PkgFreeAt m (.node t c d es) ∧
+      ((∃ r0 T0, m.st r0 = some ⟨true, some T0⟩ ∧ Sub (.node t c d es) T0) ∨ InPay m (.node t c d es)) := by
+  obtain ⟨_, _, hv⟩ := hvec
+  rcases hv with hv | ⟨hv, hna⟩
+  · exact ⟨PkgFreeAt.top hi.heap hv (i := c) (by simp [Val.ids]), Or.inl ⟨y, _, hv, Sub.refl _⟩⟩
+  · obtain ⟨sl, hsl, _, hso, _⟩ := hi.slot y E hy
+    rw [hv] at hsl; cases hsl
+    have hos : E.mode.ownSlot = false := hso.symm
+    have hfree : PkgFreeId m c := by
+      obtain ⟨hroot, hbor⟩ := derive_clean hkn hcl
+      cases hm : E.mode with
+      | bor => exact hi.pkgFree y E _ _ hy hl hv c (PkgNames.href (Or.inl hm) (hbor (by rw [hm]; rfl)) c)
+      | rootb =>
+        exact hi.pkgFree y E _ _ hy hl hv c
+          (PkgNames.href (Or.inr hm) ((hroot (by rw [hm]; rfl)).rootb_inv hy hm) c)
+      | _ => rw [hm] at hos; cases hos
+    refine ⟨hfree.at (by simp [Val.head]), ?_⟩
+    rcases hna with ⟨x, T, hT, hs, _⟩ | ⟨k', bl, hk, hs, _⟩
+    · exact Or.inl ⟨x, T, hT, hs⟩
+    · exact Or.inr ⟨k', bl, hk, hs⟩
+
+/-- ... and so is each of a part's parts but a package's environment. -/
+theorem PkgFreeAt.child' {m : Mem} (hh : HeapOK m) {n0 n : Val}
+    (hhome : (∃ r0 T0, m.st r0 = some ⟨true, some T0⟩ ∧ Sub n0 T0) ∨ InPay m n0) (hf : PkgFreeAt m n0)
+    (hnp : ∀ fs te ms ev cs, n0 ≠ .pkg fs te ms ev cs) (hc : Child n n0) {i : Nat} (hi : i ∈ n.ids) :
+    PkgFreeAt m n := by
+  rcases hhome with ⟨r0, T0, hT0, hs0⟩ | hp
+  · exact PkgFreeAt.child hh hT0 hs0 hf hnp hc hi
+  · exact PkgFreeAt.of_notOwned hi fun r T hT hiT =>
+      hh.notPay hT hiT ((hp.sub (hc.sub (Sub.refl _))).payAddr hh i hi)
+
+theorem home_child {m : Mem} {n0 n : Val} (hc : Child n n0)
+    (hhome : (∃ r0 T0, m.st r0 = some ⟨true, some T0⟩ ∧ Sub n0 T0) ∨ InPay m n0) :
+    (∃ r0 T0, m.st r0 = some ⟨true, some T0⟩ ∧ Sub n T0) ∨ InPay m n := by
+  rcases hhome with ⟨r0, T0, hT0, hs0⟩ | hp
+  · exact Or.inl ⟨r0, T0, hT0, (hc.sub (Sub.refl _)).trans hs0⟩
+  · exact Or.inr (hp.sub (hc.sub (Sub.refl _)))
+
 end A2

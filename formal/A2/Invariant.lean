@@ -1035,6 +1035,28 @@ theorem Blk.DtorOK.of_eq {bl bl' : Blk} (h : bl.DtorOK) (ht : bl'.ty = bl.ty) (h
   · rw [ht]; exact h2 (hk ▸ a)
   · rw [ht, hk] at *; exact h3 a
 
+/-- AGORA-901: no package of `T` holds, in its environment, a node whose
+    handle or buffer address is `i`. -/
+def PkgFreeIn (T : Val) (i : Nat) : Prop :=
+  ∀ fs te ms ev cs, Sub (.pkg fs te ms ev cs) T → ∀ t c d es, Sub (.node t c d es) ev → i ≠ c ∧ i ≠ d
+
+/-- AGORA-901: ... nor does any package of an owned tree. -/
+def PkgFreeId (m : Mem) (i : Nat) : Prop :=
+  ∀ r T, m.st r = some ⟨true, some T⟩ → PkgFreeIn T i
+
+/-- AGORA-901: `n` is `v` or one of its parts through struct fields and enum
+    payloads, never through a package's environment: a handle a borrowed
+    value holds directly, which a field of it lends. -/
+inductive Bare : Val → Val → Prop
+  | refl (v : Val) : Bare v v
+  | fst {n a b : Val} : Bare n a → Bare n (.pair a b)
+  | snd {n a b : Val} : Bare n b → Bare n (.pair a b)
+  | inl {n a : Val} : Bare n a → Bare n (.inl a)
+  | inr {n a : Val} : Bare n a → Bare n (.inr a)
+
+theorem PkgFreeId.of_st {m m' : Mem} (h : m'.st = m.st) {i : Nat} (hc : PkgFreeId m i) :
+    PkgFreeId m' i := fun r T hT => hc r T (by rw [← h]; exact hT)
+
 /-- AGORA-901: a root through which a borrow reaches only memory outside
     every closure's environment: an owner, or a borrowed parameter each of
     whose memory dependencies is no share and on such a root.  A call's
@@ -1059,6 +1081,48 @@ theorem Clean.mono {Γ Γ' : Ctx}
     have hm0 : E.mode = .rootb := by rw [← hm']; exact hm
     obtain rfl := hfix hm0
     exact .rootb hE hm0 hns ih
+
+/-- A clean borrowed parameter's memory dependencies are clean, and none is a share. -/
+theorem Clean.rootb_inv {Γ : Ctx} {p : Var} {Ep : Entry} (h : Clean Γ p) (hp : Γ p = some Ep)
+    (hm : Ep.mode = .rootb) : ∀ d ∈ memDeps Ep.path, d.kind ≠ .share ∧ Clean Γ d.root := by
+  cases h with
+  | own hr ho => rw [hp] at hr; cases hr; rw [hm] at ho; cases ho
+  | rootb hr _ hns hcl => rw [hp] at hr; cases hr; exact fun d hd => ⟨hns d hd, hcl d hd⟩
+
+/-- AGORA-901: dependencies that reach memory through clean roots only and
+    through no share. -/
+def CleanDeps (Γ : Ctx) (D : List Dep) : Prop := ∀ d ∈ memDeps D, d.kind ≠ .share ∧ Clean Γ d.root
+
+theorem CleanDeps.mono {Γ Γ' : Ctx} (h : ∀ r, Clean Γ' r → Clean Γ r) {D : List Dep}
+    (hc : CleanDeps Γ' D) : CleanDeps Γ D := fun d hd => ⟨(hc d hd).1, h _ (hc d hd).2⟩
+
+theorem CleanDeps.sub {Γ : Ctx} {D D' : List Dep} (hs : D ⊆ D') (hc : CleanDeps Γ D') : CleanDeps Γ D :=
+  fun d hd => hc d (List.mem_filter.mpr ⟨hs (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩)
+
+/-- AGORA-901: an address a live binding of entry `E` and value `v` names,
+    and that no package of an owned tree may hold: a borrow reaching memory
+    through clean roots only and no share names the nodes of the handles it
+    holds directly (`Bare`) and the buffer of the view it is; a binding all
+    of whose dependencies are such names the buffer of every view its value
+    holds. -/
+def PkgNames (Γ : Ctx) (E : Entry) (v : Val) (i : Nat) : Prop :=
+  ((E.mode = .bor ∨ E.mode = .rootb) ∧ CleanDeps Γ E.path ∧
+    ((∃ c, Bare (.href c) v ∧ i = c) ∨ ∃ o l, v = .view i o l)) ∨
+  (CleanDeps Γ E.vdeps ∧ ∃ o l, Sub (.view i o l) v)
+
+theorem PkgNames.mono {Γ Γ' : Ctx} (h : ∀ r, Clean Γ' r → Clean Γ r) {E : Entry} {v : Val} {i : Nat}
+    (hn : PkgNames Γ' E v i) : PkgNames Γ E v i := by
+  rcases hn with ⟨hm, hc, hv⟩ | ⟨hc, hv⟩
+  · exact Or.inl ⟨hm, hc.mono h, hv⟩
+  · exact Or.inr ⟨hc.mono h, hv⟩
+
+theorem PkgNames.href {Γ : Ctx} {E : Entry} (hm : E.mode = .bor ∨ E.mode = .rootb)
+    (hc : CleanDeps Γ E.path) (c : Nat) : PkgNames Γ E (.href c) c :=
+  Or.inl ⟨hm, hc, Or.inl ⟨c, .refl _, rfl⟩⟩
+
+theorem PkgNames.view {Γ : Ctx} {E : Entry} (hm : E.mode = .bor ∨ E.mode = .rootb)
+    (hc : CleanDeps Γ E.path) (d o l : Nat) : PkgNames Γ E (.view d o l) d :=
+  Or.inl ⟨hm, hc, Or.inr ⟨o, l, rfl⟩⟩
 
 /-- What memory and context guarantee, whatever is running. -/
 structure MInv (m : Mem) (Γ : Ctx) : Prop where
@@ -1103,15 +1167,12 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
                 -- and a view's type is `prod (lk u) u` of a lock's `u`): a
                 -- guard is `% NotSend`
                 bl.ty.hasGuard = false
-  /-- AGORA-901: no package of an owned tree holds the node a live borrow
-      of a `Vec` names when its path reaches memory through clean roots only
-      and through no share (`Clean`).  A closure is opaque: the one lend into
+  /-- AGORA-901: no package of an owned tree holds what a live binding
+      names (`PkgNames`) through clean roots only and through no share
+      (`Clean`).  A closure is opaque: the one lend into
       a package, a call's environment (`envE`), carries a share. -/
-  pkgFree   : ∀ x Ex c, Γ x = some Ex → (Ex.mode = .bor ∨ Ex.mode = .rootb) → Ex.live = true →
-                m.st x = some ⟨false, some (.href c)⟩ →
-                (∀ d ∈ memDeps Ex.path, d.kind ≠ .share ∧ Clean Γ d.root) →
-                ∀ r T, m.st r = some ⟨true, some T⟩ →
-                ∀ fs te ms e cs t d es, Sub (.pkg fs te ms e cs) T → ¬ Sub (.node t c d es) e
+  pkgFree   : ∀ x Ex o v, Γ x = some Ex → Ex.live = true → m.st x = some ⟨o, some v⟩ →
+                ∀ i, PkgNames Γ Ex v i → PkgFreeId m i
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/

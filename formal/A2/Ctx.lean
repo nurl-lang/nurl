@@ -260,19 +260,27 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     rw [hwe.ty]; exact hi.shares v E sl T hE hsl hown hT
   blocks := hi.blocks
-  pkgFree x E' c hx hm hl hs hcl r T hT := by
+  pkgFree x E' o v hx hl hs i hn := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hx
-    obtain ⟨hl0, hp, _⟩ := hwe.live hl
-    have hm0 : E.mode = .bor ∨ E.mode = .rootb := by rw [← hwe.mode]; exact hm
-    have hsub : E.path ⊆ E'.path := by
-      rcases hm0 with h | h
-      · exact hp (by rw [h]; rfl)
-      · rw [hwe.fixed (Or.inl h)]; exact fun _ h => h
-    have hmd : ∀ d ∈ memDeps E.path, d ∈ memDeps E'.path := fun d hd => by
-      unfold memDeps at hd ⊢
-      exact List.mem_filter.mpr ⟨hsub (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩
-    exact hi.pkgFree x E c hE hm0 hl0 hs
-      (fun d hd => ⟨(hcl d (hmd d hd)).1, (hcl d (hmd d hd)).2.weaker hw⟩) r T hT
+    obtain ⟨hl0, hp, hh⟩ := hwe.live hl
+    refine hi.pkgFree x E o v hE hl0 hs i ?_
+    have hpath : E.mode.ownSlot = false → E.path ⊆ E'.path := fun hos => by
+      by_cases hrb : E.mode = .rootb
+      · rw [hwe.fixed (Or.inl hrb)]; exact fun _ h => h
+      · exact hp hos
+    rcases hn.mono (fun r h => h.weaker hw) with ⟨hm, hc, hv⟩ | ⟨hc, hv⟩
+    · have hm0 : E.mode = .bor ∨ E.mode = .rootb := by rw [← hwe.mode]; exact hm
+      have hos : E.mode.ownSlot = false := by rcases hm0 with h | h <;> rw [h] <;> rfl
+      exact Or.inl ⟨hm0, hc.sub (hpath hos), hv⟩
+    · refine Or.inr ⟨hc.sub fun d hd => ?_, hv⟩
+      unfold Entry.vdeps at hd ⊢
+      rw [hwe.mode]
+      cases hos : E.mode.ownSlot
+      · simp only [hos, Bool.false_eq_true, ↓reduceIte, List.mem_append] at hd ⊢
+        rcases hd with hd | hd
+        · exact Or.inl (hpath hos hd)
+        · exact Or.inr (hh hd)
+      · simp only [hos, ↓reduceIte, List.nil_append] at hd ⊢; exact hh hd
 
 theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hw : Weaker Γ Γ') : Inv m Γ' F s where
