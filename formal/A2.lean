@@ -40,6 +40,7 @@ import A2.TakeWitness
 import A2.PopWitness
 import A2.RemoveLoopWitness
 import A2.TakeBWitness
+import A2.TakeBVWitness
 import A2.HandOver
 import A2.ExitWitness
 import A2.Layout

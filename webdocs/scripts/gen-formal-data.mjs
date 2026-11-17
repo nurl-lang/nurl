@@ -135,7 +135,7 @@ const MODULE_LAYERS = {
   TakeB: {
     layer: 3,
     category: 'Proof Infrastructure',
-    summaryEn: 'AGORA-889: an element that owns memory moved out through a borrow (Stmt.takeB, editSet\'s reverse): the owner\'s tree loses it in place (HeapOK.editTake, MInv.editB_take, typed as editB\'s truncation), and the new owner takes it (takeB_outOwn, covers_takeB; takeB_pres in Preservation).',
+    summaryEn: 'AGORA-889: an element that owns memory moved out through a borrow (Stmt.takeB, editSet\'s reverse): the owner\'s tree loses it in place (HeapOK.editTake, MInv.editB_take, typed as editB\'s truncation), and the new owner takes it (takeB_outOwn, covers_takeB; takeB_pres in Preservation). AGORA-897: the same for an element type that holds views (StmtT.takeBV: MInv.editBV_take; its views stay valid, takeB_viewsOK, takeBV_out; takeBV_pres).',
   },
   EnvHand: {
     layer: 3,
@@ -226,6 +226,11 @@ const MODULE_LAYERS = {
     layer: 5,
     category: 'Worked Examples',
     summaryEn: 'AGORA-889: a String popped and one removed through a vec_at borrow of a Vec of Vecs of Strings, both kept and read (Stmt.takeB), with memory_safe and no_leak_end applied (main_typed, main_safe, main_no_leak).',
+  },
+  TakeBVWitness: {
+    layer: 5,
+    category: 'Worked Examples',
+    summaryEn: 'AGORA-897: two views of a String\'s buffer, one popped and one removed through a vec_at borrow of a Vec of Vecs of views, both kept and read (StmtT.takeBV), with memory_safe and no_leak_end applied (main_typed, main_safe, main_no_leak).',
   },
   TakeWitness: {
     layer: 5,

@@ -336,6 +336,15 @@ import A3
 #print axioms A2.TakeBWitness.main_typed
 #print axioms A2.TakeBWitness.main_safe
 #print axioms A2.TakeBWitness.main_no_leak
+-- AGORA-897: ... and one whose type holds views (`StmtT.takeBV`; A2/TakeB.lean,
+-- A2/TakeBVWitness.lean)
+#print axioms A2.takeBV_pres
+#print axioms A2.MInv.editBV_take
+#print axioms A2.takeB_viewsOK
+#print axioms A2.takeBV_out
+#print axioms A2.TakeBVWitness.main_typed
+#print axioms A2.TakeBVWitness.main_safe
+#print axioms A2.TakeBVWitness.main_no_leak
 -- AGORA-885: the by-name owner hand-over, as an encoding (A2/HandOver.lean)
 #print axioms A2.HandOver.main_safe
 #print axioms A2.HandOver.main_no_leak

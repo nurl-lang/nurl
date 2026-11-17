@@ -100,12 +100,23 @@ the LLVM / C11 memory model rather than redefining it.
   `A2/TakeBWitness.lean` is a witness program: two Strings moved out
   through `vec_at vv 0`, one popped and one removed, kept and read,
   typed and run safe and leak-free.
+  The same move-out of an element whose type holds views and no closure
+  (a `[s`, a struct with a view field) is `StmtT.takeBV` (AGORA-897), on
+  the same step. It is typed as `editBV`'s truncation (`ThruV` with
+  nothing stored, `killThruV`: the views among the owners' elements end
+  too), and binds `y` holding what `x` holds. The element's views stay
+  valid through that, since no tree views itself (`takeB_viewsOK`,
+  `takeBV_out`, `takeBV_pres`, `MInv.editBV_take`).
+  `A2/TakeBVWitness.lean` is a witness program: two views of a String's
+  buffer moved out through `vec_at vv 0`, one popped and one removed,
+  kept and read, typed and run safe and leak-free.
   That nurlc's
   `vec_pop` / `vec_remove` lower to these steps is phase C. Outside the
   claim still:
-  - a change through a borrow of a Vec whose elements hold views (and a
-    move-out through a borrow of such an element, or of one that holds a
-    destructor value);
+  - a change or a move-out through a borrow of an element whose type
+    holds both views and a closure (`StmtT.editBV` and `StmtT.takeBV`
+    ask `Ty.hasFn = false`), and a move-out through a borrow of an
+    element that holds a destructor value;
   - what nurlc keeps beside such a change that the calculus ends: two
     parts of one value, copies of the changing borrow, a whole copy beside
     a field viewer (Agora #118, github#1426);

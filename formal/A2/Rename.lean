@@ -3466,31 +3466,22 @@ theorem PW.holdOn_canon (h : S.OK) {Γ : Ctx} {rs : List Var} {D D' : List Dep} 
       simp only [A2.holdOn, hc, hE, Option.map_some, Option.some.injEq, ite_eq_right hyr] at h1
       subst h1; cases Option.some.inj h2; exact EntryWeaker.refl _
 
-/-- Agora #295, a view stored through a borrow in a callee's body, where the
-    call places it: as `editB_ren`; what the stored value depends on in
-    memory, where the call places it, is what it did in the callee, renamed
-    (the call passes no views, `S.R = []`), so what the rule makes each root
-    and the borrow hold is at most what the lifted context says (`PW`). -/
-theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP : ProgOK P)
-    {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty} {D : List Dep}
-    (hw : CtxWF Γa) (hn : NameWF Γa)
-    (hx : Γa x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
-    (hty : Ex.ty = .vec t) (hhv : t.holdsView = true) (hfn : t.hasFn = false) (hxF : x ∉ Fa)
-    (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γa1 x = some Ex1)
-    (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path)
-    (hV : ThruV Γa1 op Ex.ty Ex1.path (memDeps D)) (hdf : op.drops = true → t.dtorFree = true) :
-    StmtT P ξ (S.canon Γa) S.Fc ((Stmt.edit true x op).rename S.ρ)
-      (S.canon (A2.setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γa1)) x
-        { Ex1 with held := Ex1.held ++ memDeps D })) ∧
-    S.AbsOK (A2.setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γa1)) x
-        { Ex1 with held := Ex1.held ++ memDeps D }) := by
-  -- the callee's own typing, for what its context guarantees
-  have hT0 := StmtT.editBV (P := P) (ξ := ξ) hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV hdf
-  have hwo := hT0.wf hP hw
-  have hno := hT0.names hP rfl hn
-  have hab1 : S.AbsOK Γa1 := EditArg.absOK harg hab
-  have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
-  subst hE1
+/-- Agora #295: what `editBV_ren` needs of a change through a borrow `x`
+    of element type that holds views, where a call places it: the path's
+    memory dependencies renamed, the roots allowing it there (`ThruOK`), the
+    kills commuting with the lift, and `ThruV` for anything stored that is
+    the renamed `DD` or less.  (Shared with `takeBV`, AGORA-897.) -/
+theorem editBV_ren_facts (h : S.OK) (hR : S.R = [])
+    {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex1 : Entry} {DD : List Dep}
+    (hab1 : S.AbsOK Γa1) (hx1 : Γa1 x = some Ex1) (hmx : Ex1.mode = .bor)
+    (hyx : ∀ y, op.stored = some y → y ≠ x)
+    (hthru : ThruOK Γa1 Fa op Ex1.ty Ex1.path) (hV : ThruV Γa1 op Ex1.ty Ex1.path DD) :
+    memDeps (S.liftE x Ex1).path = rds S.ρ (memDeps Ex1.path) ∧
+    ThruOK (S.canon Γa1) S.Fc (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path ∧
+    S.canon (killThruV op Ex1.ty Ex1.path Γa1) =
+      killThruV (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path (S.canon Γa1) ∧
+    ∀ D2, D2 ⊆ rds S.ρ DD →
+      ThruV (S.canon Γa1) (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path D2 := by
   have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
   -- the lift adds names only: what the outer call's arguments held by name
   have hmemA : memDeps S.A = [] := by
@@ -3534,6 +3525,77 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
   have heqK : S.canon (killThruV op Ex1.ty Ex1.path Γa1) =
       killThruV (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path (S.canon Γa1) := by
     unfold killThruV; rw [canon_killHv h hab1 _ hal, hkills]
+  have hthru' : ThruOK (S.canon Γa1) S.Fc (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path := by
+    intro d hd
+    rw [hmem] at hd
+    obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd
+    obtain ⟨_, hy0, Er, hEr, hlr, hcan, hds, hsh⟩ := hthru d0 hd0
+    have hrbr : Er.mode ≠ .rootb := by rcases hcan with h' | ⟨b, h', _⟩ <;> rw [h'] <;> simp
+    refine ⟨h.Fcout _, fun y hy => ?_, S.liftE d0.root Er, by
+      show S.canon Γa1 (S.ρ d0.root) = _; rw [canon_ρ h, hEr]; rfl, by rw [liftE_live]; exact hlr, ?_, ?_,
+      by simpa [Dep.ren] using hsh⟩
+    · rw [Edit.stored_rename] at hy
+      obtain ⟨y0, hy0', rfl⟩ := Option.map_eq_some_iff.mp hy
+      exact fun e => hy0 y0 hy0' (h.inj _ _ e)
+    · rw [liftE_mode _ hrbr, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
+      exact canDo_lift hcan
+    · rw [liftE_ty _ hrbr, hty1, Edit.effAt_rename]
+      exact DtorSafe.canon h (allowed_canDo_false hab1 hEr hcan) hds
+  refine ⟨hmem, hthru', heqK, fun D2 hD2 d hd => ?_⟩
+  rw [hmem] at hd
+  obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd
+  obtain ⟨hds, hdb, hrD⟩ := hV d0 hd0
+  obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
+  have hrbr : Er.mode ≠ .rootb := by rcases hcan with h' | ⟨b, h', _⟩ <;> rw [h'] <;> simp
+  have hae : argE Γa1 d0.root = Er := by unfold argE; rw [hEr]; rfl
+  have hae' : argE (S.canon Γa1) (S.ρ d0.root) = S.liftE d0.root Er := argE_canon h hEr
+  rw [hae] at hds hdb
+  refine ⟨?_, ?_, fun hr => ?_⟩
+  · show DtorSafe (S.canon Γa1) ((op.rename S.ρ).effAt d0.kind
+      (decide ((argE (S.canon Γa1) (S.ρ d0.root)).ty = (S.liftE x Ex1).ty)))
+      (argE (S.canon Γa1) (S.ρ d0.root)).ty.holdsView (S.ρ d0.root)
+    rw [hae', liftE_ty _ hrbr, hty1, Edit.effAt_rename]
+    have := allowed_canDo' hab1 hEr hcan
+    rw [elem_holdsView] at this
+    exact DtorSafe.canon h this hds
+  · show (argE (S.canon Γa1) (S.ρ d0.root)).dbind = false
+    rw [hae', liftE_dbind h, ite_eq_right hrbr]; exact hdb
+  · obtain ⟨d1, hd1, he⟩ := List.mem_map.mp hr
+    obtain ⟨d2, hd2, rfl⟩ := mem_rds.mp (hD2 hd1)
+    exact hrD (by rw [← h.inj _ _ he]; exact List.mem_map_of_mem hd2)
+
+/-- Agora #295, a view stored through a borrow in a callee's body, where the
+    call places it: as `editB_ren`; what the stored value depends on in
+    memory, where the call places it, is what it did in the callee, renamed
+    (the call passes no views, `S.R = []`), so what the rule makes each root
+    and the borrow hold is at most what the lifted context says (`PW`). -/
+theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP : ProgOK P)
+    {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty} {D : List Dep}
+    (hw : CtxWF Γa) (hn : NameWF Γa)
+    (hx : Γa x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
+    (hty : Ex.ty = .vec t) (hhv : t.holdsView = true) (hfn : t.hasFn = false) (hxF : x ∉ Fa)
+    (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γa1 x = some Ex1)
+    (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path)
+    (hV : ThruV Γa1 op Ex.ty Ex1.path (memDeps D)) (hdf : op.drops = true → t.dtorFree = true) :
+    StmtT P ξ (S.canon Γa) S.Fc ((Stmt.edit true x op).rename S.ρ)
+      (S.canon (A2.setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γa1)) x
+        { Ex1 with held := Ex1.held ++ memDeps D })) ∧
+    S.AbsOK (A2.setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γa1)) x
+        { Ex1 with held := Ex1.held ++ memDeps D }) := by
+  -- the callee's own typing, for what its context guarantees
+  have hT0 := StmtT.editBV (P := P) (ξ := ξ) hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV hdf
+  have hwo := hT0.wf hP hw
+  have hno := hT0.names hP rfl hn
+  have hab1 : S.AbsOK Γa1 := EditArg.absOK harg hab
+  have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
+  subst hE1
+  have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
+  obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hR hab1 hx1 hmx hyx hthru hV
+  have hmemA : memDeps S.A = [] := by
+    unfold RSetup.A; rw [hR]
+    simp only [allKinds, List.flatMap_nil, List.nil_append]
+    exact List.filter_eq_nil_iff.mpr fun d hd => by simp [h.N_name d hd]
+  have hty1 : (S.liftE x Ex1).ty = Ex1.ty := liftE_ty x hrb
   have hroots : roots (memDeps (S.liftE x Ex1).path) = (roots (memDeps Ex1.path)).map S.ρ := by
     rw [hmem]; simp [roots, rds, List.map_map, Function.comp_def, Dep.ren]
   -- what the change is handed, where the call places it: what it was, renamed, in memory
@@ -3562,45 +3624,7 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
     rw [Edit.stored_rename] at hy
     obtain ⟨y0, hy0, rfl⟩ := Option.map_eq_some_iff.mp hy
     exact fun e => hyx y0 hy0 (h.inj _ _ e)
-  have hthru' : ThruOK (S.canon Γa1) S.Fc (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path := by
-    intro d hd
-    rw [hmem] at hd
-    obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd
-    obtain ⟨_, hy0, Er, hEr, hlr, hcan, hds, hsh⟩ := hthru d0 hd0
-    have hrbr : Er.mode ≠ .rootb := by rcases hcan with h' | ⟨b, h', _⟩ <;> rw [h'] <;> simp
-    refine ⟨h.Fcout _, fun y hy => ?_, S.liftE d0.root Er, by
-      show S.canon Γa1 (S.ρ d0.root) = _; rw [canon_ρ h, hEr]; rfl, by rw [liftE_live]; exact hlr, ?_, ?_,
-      by simpa [Dep.ren] using hsh⟩
-    · rw [Edit.stored_rename] at hy
-      obtain ⟨y0, hy0', rfl⟩ := Option.map_eq_some_iff.mp hy
-      exact fun e => hy0 y0 hy0' (h.inj _ _ e)
-    · rw [liftE_mode _ hrbr, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
-      exact canDo_lift hcan
-    · rw [liftE_ty _ hrbr, hty1, Edit.effAt_rename]
-      exact DtorSafe.canon h (allowed_canDo_false hab1 hEr hcan) hds
-  have hV' : ThruV (S.canon Γa1) (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path (memDeps D') := by
-    intro d hd
-    rw [hmem] at hd
-    obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd
-    obtain ⟨hds, hdb, hrD⟩ := hV d0 hd0
-    obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
-    have hrbr : Er.mode ≠ .rootb := by rcases hcan with h' | ⟨b, h', _⟩ <;> rw [h'] <;> simp
-    have hae : argE Γa1 d0.root = Er := by unfold argE; rw [hEr]; rfl
-    have hae' : argE (S.canon Γa1) (S.ρ d0.root) = S.liftE d0.root Er := argE_canon h hEr
-    rw [hae] at hds hdb
-    refine ⟨?_, ?_, fun hr => ?_⟩
-    · show DtorSafe (S.canon Γa1) ((op.rename S.ρ).effAt d0.kind
-        (decide ((argE (S.canon Γa1) (S.ρ d0.root)).ty = (S.liftE x Ex1).ty)))
-        (argE (S.canon Γa1) (S.ρ d0.root)).ty.holdsView (S.ρ d0.root)
-      rw [hae', liftE_ty _ hrbr, hty1, Edit.effAt_rename]
-      have := allowed_canDo' hab1 hEr hcan
-      rw [elem_holdsView] at this
-      exact DtorSafe.canon h this hds
-    · show (argE (S.canon Γa1) (S.ρ d0.root)).dbind = false
-      rw [hae', liftE_dbind h, ite_eq_right hrbr]; exact hdb
-    · obtain ⟨d1, hd1, he⟩ := List.mem_map.mp hr
-      obtain ⟨d2, hd2, rfl⟩ := mem_rds.mp (hD' hd1)
-      exact hrD (by rw [← h.inj _ _ he]; exact List.mem_map_of_mem hd2)
+  have hV' := hVg (memDeps D') hD'
   have hT := StmtT.editBV (P := P) (ξ := ξ) (x := S.ρ x) (Ex := S.liftE x Ex1) (Ex1 := S.liftE x Ex1)
     (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
     (by rw [hty1]; exact hty) hhv hfn (h.Fcout x) harg' hyx' (by rw [canon_ρ h, hx1]; rfl)
@@ -3733,6 +3757,16 @@ theorem compE_liftE_weaker {x y : Var} {Ex : Entry} {t : Ty} (hhv : t.holdsView 
   · have heq : S.liftE y (compE Ex t) = compE (S.liftE x Ex) t := by
       cases t <;> simp_all [liftE, compE, liftMode, ownHeld, rds, Mode.ownSlot, Ty.holdsView]
     rw [heq]; exact EntryWeaker.refl _
+
+/-- AGORA-897: ... and for an element type that holds views, the owner
+    (or the slice's borrow) `compE` makes of the lifted borrow is the lifted
+    one: both hold what the borrow holds, renamed, and what the call's
+    arguments hold. -/
+theorem compE_liftE_eqV {x y : Var} {Ex : Entry} {t : Ty} (hmx : Ex.mode = .bor)
+    (hhv : t.holdsView = true) : S.liftE y (compE Ex t) = compE (S.liftE x Ex) t := by
+  cases t <;> first
+    | (simp [Ty.holdsView] at hhv; done)
+    | simp [liftE, compE, liftMode, ownHeld, rds, Mode.ownSlot, intE, hhv, hmx]
 
 /-- The renaming lemma: a callee's source statement, typed in its own
     contexts, is typed where the call places it, in the caller's view of
@@ -4351,6 +4385,36 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
       hty1 hhv (h.Fcout x) (exprT_ren h hab hie) hne' hthru' hnd
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (compE_liftE_weaker hhv), hwc, hnc⟩ tk)
+      (EndOK.lift h abk hbx hpe)
+  | @takeBV _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hfn hxF hie hne hthru hV hnd hk hpe ih =>
+    -- AGORA-897: `editBV`'s truncation where the call places it
+    -- (`editBV_ren_facts`), then `y` bound to the element, as `letv` binds
+    intro _ hab hw hn hT
+    have hR : S.R = [] := hT (.inl rfl)
+    obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hR hab hx hmx (fun _ h' => by cases h') hthru hV
+    have hne' : memDeps (S.liftE x Ex).path ≠ [] := by rw [hmem]; simpa [rds] using hne
+    have hrb : Ex.mode ≠ .rootb := by rw [hmx]; simp
+    have hab2 : S.AbsOK (A2.setE (A2.killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
+      (hab.killHv _).setE' hab hx rfl rfl hrb (fun hf => absurd hf (by simp [Entry.fixed, hmx]))
+    have hmo : (compE Ex t).mode = .own ∨ (compE Ex t).mode = .bor := by
+      cases t <;> simp [compE, intE]
+    have habb := hab.add hab2 hy hmo
+    have hwb := takeBV_ctxWF (i := i) hw hy hx hmx hl hty
+    have hnb := takeBV_nameWF (i := i) hn hy hx hmx hl hty
+    obtain ⟨tk, abk⟩ := ih hks habb hwb hnb (fun _ => hR)
+    have hbx := hab.fresh hy
+    have tk := tk.mono (S.liftX_under h hbx)
+    refine ⟨?_, abk.exitScope hbx⟩
+    rw [canon_exitScope h abk (Or.inl hbx)]
+    have hwc := canon_wf h habb hwb
+    have hnc := canon_names h habb hnb
+    rw [canon_setE h, canon_setE h, heqK] at hwc hnc tk
+    have hty1 : (S.liftE x Ex).ty = .vec t := by rw [liftE_ty x hrb, hty]
+    exact StmtT.takeBV (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hy]; rfl) (h.Fcout y)
+      (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
+      hty1 hhv hfn (h.Fcout x) (exprT_ren h hab hie) hne' hthru' (hVg [] (fun _ h' => by cases h')) hnd
+      (StmtT.weakenIn ⟨PW.setE (PW.refl _) (by rw [compE_liftE_eqV hmx hhv]; exact EntryWeaker.refl _),
+        hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
   | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF hy hmy he hpin hds hr hk hpush hpe hyv hdf ihs ihp =>
     intro _ hab hw hn hT
