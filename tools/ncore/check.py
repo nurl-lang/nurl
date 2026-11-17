@@ -2336,6 +2336,11 @@ class FnCheck:
                     self.moved_from = None
                     held.add((fp, self.loan(st, (site, i, "take"), (op[1], op[2]), "share")))
                     held |= hroot(moved.held, fp)
+                    # (…and what it borrows - a value a call lends on some
+                    # paths - the closure reaches as it reaches any captured
+                    # lend: those owners must outlive it)
+                    self.cap_loans |= moved.loans
+                    held |= hfrom(moved.loans, fp)
                     moved_in = True
             if (body is not None
                     and any(x[4] == "held" and x[2] == i and x[0] < len(body.params)
