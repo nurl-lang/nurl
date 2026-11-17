@@ -33,6 +33,4 @@ $ `stdlib/core/box.nu`
     ^ @ ?N { F }
 }
 
-
 @ npick ? N a ? N b i k → ?N { ? == k 0 { ^ a } { ^ b } }
-
