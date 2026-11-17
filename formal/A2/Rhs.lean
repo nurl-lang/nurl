@@ -490,7 +490,8 @@ theorem RhsOut.widen {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}
   have hv1 : ({ E with held := H } : Entry).vdeps = H := by simp [Entry.vdeps, hos]
   refine ⟨h.own, h.mode, h.live, h.tyok, fun ht r hr => ?_, fun hm => ?_, fun hb => ?_,
     fun hn => (h.names hn).widen hmo hH, h.held.mono hH.1, h.pkgs, h.shares,
-    fun i hn => h.pkgFree i (PkgNames.weaken (E' := { E with held := H }) rfl (fun _ _ h => h) hH.1 hn)⟩
+    fun i hn => h.pkgFree i (PkgNames.weaken (E' := { E with held := H }) rfl (fun _ _ h => h)
+      (fun d hd => hH.1 (List.mem_filter.mp hd).1) hn)⟩
   · rw [hv1] at hr
     obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
     exact hH.root hmo (h.wf ht) d hd
@@ -1146,7 +1147,7 @@ theorem out_copyBor {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} 
   names hn := hi.names y E hy hl hn
   held := hi.held y E _ v hy hl hv rfl
   pkgs := hi.pkgs y _ v hv rfl
-  pkgFree i hn := hi.pkgFree y E _ _ hy hl hv i hn
+  pkgFree i hn := hi.pkgFree y E _ _ hy (Or.inl hl) hv i hn
 
 /-- A borrow of a whole binding `y` (`var` of a borrowed parameter, or
     `borrow`): its handle, or its view if it is a slice. -/
@@ -1299,7 +1300,7 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
       rcases hv with hv | ⟨_, _, _, _, hv, _⟩
       · have hcy : CleanDeps Γ (derive y E .self) → CleanDeps Γ E.path := fun h =>
           ((derive_clean rfl h).1 (by rw [hrb]; rfl)).rootb_inv hy hrb
-        refine hi.pkgFree y E _ _ hy hl hv i ?_
+        refine hi.pkgFree y E _ _ hy (Or.inl hl) hv i ?_
         rcases hn with ⟨_, hc, hv'⟩ | ⟨_, hc, hv'⟩ | ⟨_, hc, hv'⟩ | ⟨h, _⟩
         · exact Or.inl ⟨Or.inr hrb, hcy hc, hv'⟩
         · exact Or.inr (Or.inl ⟨Or.inr hrb, (hcy hc.left).append hc.right, hv'⟩)
@@ -1322,7 +1323,7 @@ theorem out_borrowWhole {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
           obtain ⟨_, heq⟩ := owned_unique hi.heap hT1 hv hs1 (Sub.refl _) (i := c) (by simp [Val.head])
             (by simp [Val.head])
           rw [heq] at hvn
-          exact hi.pkgFree y E true _ hy hl hv i (Or.inr (Or.inr (Or.inr ⟨by rw [hown]; rfl, hc, o, l, hvn⟩)))
+          exact hi.pkgFree y E true _ hy (Or.inl hl) hv i (Or.inr (Or.inr (Or.inr ⟨by rw [hown]; rfl, hc, o, l, hvn⟩)))
         · cases h
 
 /-- A value stored in memory, lent out: every node at its top (the ones
@@ -1819,7 +1820,7 @@ theorem out_sat {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t :
         | slice s => simp [Ty.holdsView] at hok
         | _ => rfl
       rw [hpath] at hcl
-      have hd := hi.pkgFree y E false _ hy hl hv d
+      have hd := hi.pkgFree y E false _ hy (Or.inl hl) hv d
         (PkgNames.view hos (derive_clean_path hy hos rfl hcl) d o l)
       exact (hd.at (by simp [Val.head] : d ∈ (Val.node t c d es).head)).child' hi.heap hhome
         (fun _ _ _ _ _ h => by cases h) hce (bare_lend_ids _ (fun _ => hwe.noHref) hb)
@@ -1893,7 +1894,7 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
         rw [hT'] at hv; cases hv
         obtain ⟨hwx, _, _⟩ := hown hwT hvsT (hi.shares y E _ T hy hT' rfl rfl)
         have hvw : CleanDeps Γ E.held → ∀ i o l, Sub (.view i o l) x → PkgFreeId m i := fun hcl i o l hv =>
-          hi.pkgFree y E true T hy hl hT' i (Or.inr (Or.inr (Or.inr ⟨hos, hcl, o, l, hv.trans (hc.sub (Sub.refl _))⟩)))
+          hi.pkgFree y E true T hy (Or.inl hl) hT' i (Or.inr (Or.inr (Or.inr ⟨hos, hcl, o, l, hv.trans (hc.sub (Sub.refl _))⟩)))
         refine lend_pkgNames (E' := ⟨t, .bor, true, projDeps y E ++ E.held, E.held, false, false⟩) hi.heap
           (Or.inl ⟨y, T, hT', hc.sub (Sub.refl _)⟩) (fun _ => hwx.noHref) rfl
           (fun _ ⟨c', hb⟩ => ?_) hvw (fun hcl i o l he => hvw hcl.right i o l (he ▸ Sub.refl _)) hn
@@ -1906,7 +1907,7 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
         rw [hT'] at hv; cases hv
         have hmb : E.mode = .bor ∨ E.mode = .rootb := by rw [hm]; simp
         rw [(hbor hok).lend] at hn
-        refine hi.pkgFree y E false T hy hl hT' i ?_
+        refine hi.pkgFree y E false T hy (Or.inl hl) hT' i ?_
         rcases hn with ⟨_, hcl, ⟨c', hb, hic⟩ | ⟨o, l, hxv⟩⟩ | ⟨_, hcl, o, l, hb⟩ |
             ⟨_, hcl, c', r, T1, t1, d1, es1, hb, hT1, hs1, hv1⟩ | ⟨h, _⟩
         · exact Or.inl ⟨hmb, hpd hcl.left hos, Or.inl ⟨c', hb.trans hbx, hic⟩⟩
@@ -2465,7 +2466,7 @@ theorem move_pkgFree {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch
   have hc0 : CleanDeps Γ E.held := hc.mono fun r h =>
     Clean.of_change (e := .replace) (hv := false) (ox := some { E with live := false, dtor := false })
       hanch hy hyF (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb) hrb (fun E' h => by cases h; rfl) h
-  have h0 := hi.pkgFree y E true v hy hl hT i (Or.inr (Or.inr (Or.inr ⟨hos, hc0, o, l, hs⟩)))
+  have h0 := hi.pkgFree y E true v hy (Or.inl hl) hT i (Or.inr (Or.inr (Or.inr ⟨hos, hc0, o, l, hs⟩)))
   exact h0.frame (x := y) (fun o ho => by simp [upd_ne _ _ ho]) (fun T' hT' => by simp at hT')
 
 theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
@@ -2953,7 +2954,7 @@ theorem out_views_pkgFree {m m1 : Mem} {Γ Γ1 : Ctx} (hi : MInv m Γ) {y : Var}
   intro i hn
   obtain ⟨hc, o, l, hv⟩ := hn.views_of hp hwe
   rw [hh] at hc
-  exact hfr i (hi.pkgFree y E true T hy hl hT i (Or.inr (Or.inr (Or.inr ⟨hos, hc.mono hcl, o, l, hv.trans hse⟩))))
+  exact hfr i (hi.pkgFree y E true T hy (Or.inl hl) hT i (Or.inr (Or.inr (Or.inr ⟨hos, hc.mono hcl, o, l, hv.trans hse⟩))))
 
 theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
@@ -3048,8 +3049,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         rw [killE_nil (root_vdeps (by rw [hm]; rfl) hh0)]; exact ⟨hl0, hh0⟩)
       (PkgKeep.of_pkgs hi hy hos (fun Ex' h => by
           cases h
-          refine ⟨killE_mode .., by rw [killE_held]; exact fun _ h => h, fun hl' => ?_⟩
-          rw [killE_live] at hl'; simp only [Bool.and_eq_true] at hl'; exact hl'.1) hT hst
+          exact ⟨killE_mode .., by rw [killE_held]; exact fun _ h => h, fun hl' => hl'.of_killE⟩) hT hst
         (fun T' hT' _ _ _ _ _ hP => by
           simp [m1] at hT'; subst hT'
           rcases node_sub_sub (fun x hx => List.mem_append_left _ hx) hP with h | h

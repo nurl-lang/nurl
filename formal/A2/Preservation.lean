@@ -369,8 +369,8 @@ theorem takeBV_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch 
           Sub.child hem hv⟩))
       have hfree : PkgFreeIn T c := hi.thru_free hx hmx hl hthru hxs dep.root T hT0
       refine PkgFreeId.of_repl hst hT0 (by simp) hr hfree
-        (fun e he => Or.inl (List.mem_of_mem_eraseIdx he)) (fun ⟨h1, h2⟩ => ?_) (hi.pkgFree x Ex false _ hx hl hxs j hn0)
-      rcases hi.named_home hx hl hxs hn0 with ⟨r, U, hU, hiU⟩ | hp
+        (fun e he => Or.inl (List.mem_of_mem_eraseIdx he)) (fun ⟨h1, h2⟩ => ?_) (hi.pkgFree x Ex false _ hx (Or.inl hl) hxs j hn0)
+      rcases hi.named_home hx (Or.inl hl) hxs hn0 with ⟨r, U, hU, hiU⟩ | hp
       · exact h1 r U hU hiU
       · exact h2 hp
   refine ⟨⟨hinv, rfl, Nat.le_refl _, fun w => ?_, fun w hw => hst w (fun e => hoF (e ▸ hw)),

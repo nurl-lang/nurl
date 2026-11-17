@@ -479,7 +479,7 @@ theorem push_take {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
       · exact wf_append (wf_derive hi hy hl hnint _) (wf_held hi hy hl hnint)
       · cases hv'
         have hos := hi.bor_mode hy hv
-        exact hi.pkgFree y Ey false _ hy hl hv d (PkgNames.view hos (derive_clean_path hy hos rfl hc.left) d o l)
+        exact hi.pkgFree y Ey false _ hy (Or.inl hl) hv d (PkgNames.view hos (derive_clean_path hy hos rfl hc.left) d o l)
 
 /-- A3.1, `arc_new`: the tree taken from `y`, of a type that holds no view
     and no closure, moves into a fresh block, whose key no share names yet:
@@ -1931,9 +1931,8 @@ theorem assign_post {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var}
       (hpin1.kills _ _) hnrb hst hheap rfl
       (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ hds1 (fun h => by cases h) (by simp)
       (fun h => absurd rfl h)
-      ⟨fun y Ey o' vy hyx hEy hl hs i hn => by
-        rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
-        exact (post.inv.pkgFree_setFresh out.fresh y Ey o' vy hyx hEy hl.1 hs i (hn.ofSt rfl)).of_st rfl,
+      ⟨fun y Ey o' vy hyx hEy hl hs i hn =>
+        (post.inv.pkgFree_setFresh out.fresh y Ey o' vy hyx hEy hl.of_killE hs i (hn.ofSt rfl)).of_st rfl,
        fun Ex' o' v' hx' hl hs i hn => by
         cases hx'
         simp only [m', Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hs
@@ -2807,7 +2806,7 @@ theorem push_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
             rcases List.mem_append.mp he with h | h
             · have hn0 : PkgNames m1 Γ1 Ex (.node t' c d es) i :=
                 Or.inr (Or.inr (Or.inr ⟨hos, hc.left, o', l, Sub.child h hse⟩))
-              exact ⟨hi.pkgFree x Ex true _ hx hl hT i hn0, hnf i (hi.named_home hx hl hT hn0)⟩
+              exact ⟨hi.pkgFree x Ex true _ hx (Or.inl hl) hT i hn0, hnf i (hi.named_home hx (Or.inl hl) hT hn0)⟩
             · simp at h; subst h
               refine ⟨hp.pf hc.right i o' l hse, hnf i ?_⟩
               obtain ⟨s', hin⟩ := hp.wf.viewIn hse

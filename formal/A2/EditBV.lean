@@ -437,9 +437,9 @@ theorem MInv.editBV_names {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1
     have hn0 : PkgNames m1 Γ1 Ex (.href c) i :=
       Or.inr (Or.inr (Or.inl ⟨Or.inl hmx, hc, c, o, T, t, d, es, .refl _, hT0, hr.sub, o', l, hv⟩))
     exact htr i (fun hfa => by
-      rcases hi.named_home hx hl hxs hn0 with ⟨r, U, hU, hiU⟩ | hp
+      rcases hi.named_home hx (Or.inl hl) hxs hn0 with ⟨r, U, hU, hiU⟩ | hp
       · exact hfa.1 r U hU hiU
-      · exact hfa.2 hp) (hi.pkgFree x Ex false _ hx hl hxs i hn0)
+      · exact hfa.2 hp) (hi.pkgFree x Ex false _ hx (Or.inl hl) hxs i hn0)
   refine ⟨hfree, fun i hn => ?_⟩
   rcases hn with ⟨_, _, ⟨c', hb, rfl⟩ | ⟨o', l, h⟩⟩ | ⟨_, _, o', l, hb⟩ |
       ⟨_, hc, c', r, U, t1, d1, es1, hb, hU, hsU, o', l, hv⟩ | ⟨h, _⟩
@@ -672,8 +672,7 @@ theorem MInv.edit_dropV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 �
         obtain ⟨hc, o2, l, hv⟩ := PkgNames.own (E := (killE .drop true o Eo).hold D)
           (by rw [Entry.hold_mode, killE_mode]; exact hos) hn
         rw [Entry.hold_held, killE_held, killE_ty, ownHeld_views true hEv] at hc
-        have hl0 : Eo.live = true := by
-          rw [Entry.hold_live, killE_live] at hl'; simp only [Bool.and_eq_true] at hl'; exact hl'.1
+        have hl0 : Alive Eo := (show Alive (killE .drop true o Eo) from hl').of_killE
         have hold : Sub (.view i o2 l) T → PkgFreeId m1 i ∧ ¬ FreshAddr m1 i := fun hv0 => by
           have hn0 : PkgNames m1 Γ1 Eo T i := Or.inr (Or.inr (Or.inr ⟨hos, hc.left, o2, l, hv0⟩))
           refine ⟨hi.pkgFree o Eo true T ho hl0 hT i hn0, fun ⟨h1, h2⟩ => ?_⟩
@@ -807,7 +806,8 @@ theorem MInv.holdOn {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {rs : List Var} {D : L
     by_cases hyr : y ∈ rs
     · rw [ite_eq_left hyr] at hl hn'
       exact hi.pkgFree y E o v hE hl hs i
-        (PkgNames.weaken (E' := E.hold D) rfl (fun _ _ h => h) (fun _ h => List.mem_append_left _ h) hn')
+        (PkgNames.weaken (E' := E.hold D) rfl (fun _ _ h => h)
+          (fun _ h => List.mem_append_left _ (List.mem_filter.mp h).1) hn')
     · rw [ite_eq_right hyr] at hl hn'
       exact hi.pkgFree y E o v hE hl hs i hn'
 

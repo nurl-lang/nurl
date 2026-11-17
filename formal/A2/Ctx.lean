@@ -262,12 +262,22 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
   blocks := hi.blocks
   pkgFree x E' o v hx hl hs i hn := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hx
-    obtain ⟨hl0, hp, hh⟩ := hwe.live hl
-    refine hi.pkgFree x E o v hE hl0 hs i ?_
-    refine (hn.mono (fun r h => h.weaker hw)).weaken hwe.mode (fun hos => ?_) hh
-    by_cases hrb : E.mode = .rootb
-    · rw [hwe.fixed (Or.inl hrb)]; exact fun _ h => h
-    · exact hp hos
+    have hn' := hn.mono (fun r h => h.weaker hw)
+    rcases hl with hl | ⟨hdb, hos⟩
+    · obtain ⟨hl0, hp, hh⟩ := hwe.live hl
+      refine hi.pkgFree x E o v hE (Or.inl hl0) hs i ?_
+      refine hn'.weaken hwe.mode (fun hos => ?_) (fun d hd => hh (List.mem_filter.mp hd).1)
+      by_cases hrb : E.mode = .rootb
+      · rw [hwe.fixed (Or.inl hrb)]; exact fun _ h => h
+      · exact hp hos
+    · -- an owner made by `letd`, live or not: it views what it viewed
+      have hdb0 : E.dbind = true := by rw [← hwe.dbind]; exact hdb
+      have hos0 : E.mode.ownSlot = true := by rw [← hwe.mode]; exact hos
+      have hnint : E.ty ≠ .int := fun ht => by have := hi.wf.view x E hE hdb0; rw [ht] at this; cases this
+      refine hi.pkgFree x E o v hE (Or.inr ⟨hdb0, hos0⟩) hs i ?_
+      refine hn'.weaken hwe.mode (fun h => by rw [hos0] at h; cases h) (fun d hd => ?_)
+      exact (hwe.dheld hdb0 hos0 (Or.inl hnint) d (by simpa using (List.mem_filter.mp hd).2)).mpr
+        (List.mem_filter.mp hd).1
 
 theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hw : Weaker Γ Γ') : Inv m Γ' F s where

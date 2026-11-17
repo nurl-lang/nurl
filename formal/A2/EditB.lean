@@ -299,13 +299,7 @@ theorem MInv.kill_pin {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanc
   pkgFree y Ey' o v hy hl hs i hn := by
     simp only [A2.kill] at hy
     obtain ⟨Ey, hEy, rfl⟩ := Option.map_eq_some_iff.mp hy
-    have hEq : killE e hv r Ey = Ey := by
-      have hl' := hl
-      unfold killE at hl' ⊢; split at hl'
-      · simp at hl'
-      · rename_i hh; simp [hh]
-    rw [hEq] at hl hn
-    exact hi.pkgFree y Ey o v hEy hl hs i (hn.mono fun _ h => Clean.of_kill hanch hrF hmn h)
+    exact hi.pkgFree y Ey o v hEy hl.of_killE hs i (hn.of_killE.mono fun _ h => Clean.of_kill hanch hrF hmn h)
 
 /-- ... which an effect below `replace` never ends. -/
 theorem MInv.kill_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
@@ -1713,7 +1707,7 @@ theorem PkgKeep.of_repl {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) 
     (hfree : PkgFreeIn T c) (hes : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m i)
     (hvw : (∀ i o l, ¬ Sub (.view i o l) (.node t c d' es')) ∨
       (e.kills hv .self = true ∧ e.kills hv .view = true ∧ e.kills hv .inner = true))
-    (hself : ∀ Ex' o v, ox = some Ex' → Ex'.live = true → m'.st x = some ⟨o, some v⟩ →
+    (hself : ∀ Ex' o v, ox = some Ex' → Alive Ex' → m'.st x = some ⟨o, some v⟩ →
       ∀ i, PkgNames m' Γ Ex' v i → PkgFreeId m i ∧ ¬ FreshAddr m i) :
     PkgKeep m m' Γ e hv x ox := by
   have hnv' : ∀ i o l, (Val.node t c d' es') ≠ .view i o l := fun _ _ _ h => by cases h
@@ -1759,7 +1753,7 @@ theorem MInv.thru_free {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {x :
     (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) {op : Edit}
     (hthru : ThruOK Γ F op Ex.ty Ex.path) {c : Nat} (hxs : m.st x = some ⟨false, some (.href c)⟩) :
     PkgFreeId m c := by
-  refine hi.pkgFree x Ex false _ hx hl hxs c (PkgNames.href (Or.inl hmx) (fun d hd => ?_) c)
+  refine hi.pkgFree x Ex false _ hx (Or.inl hl) hxs c (PkgNames.href (Or.inl hmx) (fun d hd => ?_) c)
   obtain ⟨_, _, Er, hEr, _, hcan, _, hns⟩ := hthru d hd
   exact ⟨hns, .own hEr hcan.ownSlot⟩
 
@@ -1890,7 +1884,7 @@ theorem MInv.edit_drop {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
         have hos : Eo.mode.ownSlot = true := by rw [hmo]; rfl
         obtain ⟨hc, o2, l, hv⟩ := PkgNames.own (E := killE .drop false o Eo) (by rw [killE_mode]; exact hos) hn
         rw [killE_held] at hc
-        have hl0 : Eo.live = true := by rw [killE_live] at hl'; simp only [Bool.and_eq_true] at hl'; exact hl'.1
+        have hl0 : Alive Eo := hl'.of_killE
         have hv0 : Sub (.view i o2 l) T := by
           rcases hr.views (fun _ _ _ h => by cases h) hv with h | h
           · exact h

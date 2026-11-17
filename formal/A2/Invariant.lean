@@ -1179,20 +1179,24 @@ theorem PkgNames.view {m : Mem} {Γ : Ctx} {E : Entry} (hm : E.mode = .bor ∨ E
 
 /-- What an entry names it names under a weaker entry of the same mode that
     depends on at least what it does. -/
+theorem CleanDeps.subMem {Γ : Ctx} {D D' : List Dep} (hs : ∀ d ∈ memDeps D, d ∈ D') (hc : CleanDeps Γ D') :
+    CleanDeps Γ D := fun d hd => hc d (List.mem_filter.mpr ⟨hs d hd, (List.mem_filter.mp hd).2⟩)
+
 theorem PkgNames.weaken {m : Mem} {Γ : Ctx} {E E' : Entry} {v : Val} {i : Nat} (hm : E'.mode = E.mode)
-    (hp : E.mode.ownSlot = false → E.path ⊆ E'.path) (hh : E.held ⊆ E'.held) (h : PkgNames m Γ E' v i) :
-    PkgNames m Γ E v i := by
+    (hp : E.mode.ownSlot = false → E.path ⊆ E'.path) (hh : ∀ d ∈ memDeps E.held, d ∈ E'.held)
+    (h : PkgNames m Γ E' v i) : PkgNames m Γ E v i := by
   have hos : E.mode = .bor ∨ E.mode = .rootb → E.mode.ownSlot = false := by
     rintro (h | h) <;> rw [h] <;> rfl
-  have hph : E.mode.ownSlot = false → E.path ++ E.held ⊆ E'.path ++ E'.held := fun ho d hd => by
-    rcases List.mem_append.mp hd with hd | hd
-    · exact List.mem_append_left _ (hp ho hd)
-    · exact List.mem_append_right _ (hh hd)
+  have hph : E.mode.ownSlot = false → ∀ d ∈ memDeps (E.path ++ E.held), d ∈ E'.path ++ E'.held := fun ho d hd => by
+    obtain ⟨hd', hn⟩ := List.mem_filter.mp hd
+    rcases List.mem_append.mp hd' with h | h
+    · exact List.mem_append_left _ (hp ho h)
+    · exact List.mem_append_right _ (hh d (List.mem_filter.mpr ⟨h, hn⟩))
   rcases h with ⟨hm', hc, hv⟩ | ⟨hm', hc, hv⟩ | ⟨hm', hc, hv⟩ | ⟨hm', hc, hv⟩ <;> rw [hm] at hm'
   · exact Or.inl ⟨hm', hc.sub (hp (hos hm')), hv⟩
-  · exact Or.inr (Or.inl ⟨hm', hc.sub (hph (hos hm')), hv⟩)
-  · exact Or.inr (Or.inr (Or.inl ⟨hm', hc.sub hh, hv⟩))
-  · exact Or.inr (Or.inr (Or.inr ⟨hm', hc.sub hh, hv⟩))
+  · exact Or.inr (Or.inl ⟨hm', hc.subMem (hph (hos hm')), hv⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨hm', hc.subMem hh, hv⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨hm', hc.subMem hh, hv⟩))
 
 /-- What an entry names it names in a store of the same slots. -/
 theorem PkgNames.ofSt {m m' : Mem} (h : m'.st = m.st) {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
@@ -1268,6 +1272,17 @@ theorem PkgNames.none_cell {m : Mem} {Γ : Ctx} {E : Entry} {k i : Nat} : ¬ Pkg
   PkgNames.none (fun _ h => by cases h; rfl) (fun _ h => by cases h; rfl) (fun _ h => by cases h)
     (fun _ _ _ h => by cases h)
 
+/-- AGORA-901: a binding whose value the invariant speaks of: a live one, or
+    an owner made by `letd`, whose views stay valid dead or alive
+    (`MInv.armed`), for its destructor to read. -/
+def Alive (E : Entry) : Prop := E.live = true ∨ (E.dbind = true ∧ E.mode.ownSlot = true)
+
+theorem Alive.live_of_bor {E : Entry} (h : Alive E) (hm : E.mode = .bor ∨ E.mode = .rootb) :
+    E.live = true := by
+  rcases h with h | ⟨_, ho⟩
+  · exact h
+  · rcases hm with hm | hm <;> rw [hm] at ho <;> cases ho
+
 /-- What memory and context guarantee, whatever is running. -/
 structure MInv (m : Mem) (Γ : Ctx) : Prop where
   dom       : ∀ v, (Γ v).isSome = (m.st v).isSome
@@ -1315,7 +1330,7 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
       names (`PkgNames`) through clean roots only and through no share
       (`Clean`).  A closure is opaque: the one lend into
       a package, a call's environment (`envE`), carries a share. -/
-  pkgFree   : ∀ x Ex o v, Γ x = some Ex → Ex.live = true → m.st x = some ⟨o, some v⟩ →
+  pkgFree   : ∀ x Ex o v, Γ x = some Ex → Alive Ex → m.st x = some ⟨o, some v⟩ →
                 ∀ i, PkgNames m Γ Ex v i → PkgFreeId m i
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`

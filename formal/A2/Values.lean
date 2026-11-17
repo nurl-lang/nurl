@@ -453,9 +453,9 @@ theorem MInv.vecOf_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
     have hfree : PkgFreeId m c := by
       obtain ⟨hroot, hbor⟩ := derive_clean hkn hcl
       cases hm : E.mode with
-      | bor => exact hi.pkgFree y E _ _ hy hl hv c (PkgNames.href (Or.inl hm) (hbor (by rw [hm]; rfl)) c)
+      | bor => exact hi.pkgFree y E _ _ hy (Or.inl hl) hv c (PkgNames.href (Or.inl hm) (hbor (by rw [hm]; rfl)) c)
       | rootb =>
-        exact hi.pkgFree y E _ _ hy hl hv c
+        exact hi.pkgFree y E _ _ hy (Or.inl hl) hv c
           (PkgNames.href (Or.inr hm) ((hroot (by rw [hm]; rfl)).rootb_inv hy hm) c)
       | _ => rw [hm] at hos; cases hos
     refine ⟨hfree.at (by simp [Val.head]), ?_⟩
@@ -721,13 +721,13 @@ theorem MInv.vecOf_views {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : En
   obtain ⟨_, _, hvv⟩ := hvec
   rcases hvv with hst | ⟨hst, hna⟩
   · rw [hst] at hsl; cases hsl
-    exact hi.pkgFree y E true _ hy hl hst i (Or.inr (Or.inr (Or.inr ⟨hso.symm, hc, o, l, hv⟩)))
+    exact hi.pkgFree y E true _ hy (Or.inl hl) hst i (Or.inr (Or.inr (Or.inr ⟨hso.symm, hc, o, l, hv⟩)))
   · rw [hst] at hsl; cases hsl
     have hm : E.mode = .bor ∨ E.mode = .rootb := by
       have h := hso.symm
       cases hm : E.mode <;> simp_all [Mode.ownSlot]
     rcases hna with ⟨r, T, hT, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
-    · exact hi.pkgFree y E false _ hy hl hst i
+    · exact hi.pkgFree y E false _ hy (Or.inl hl) hst i
         (Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T, t, d, es, .refl _, hT, hs, o, l, hv⟩)))
     · exact (hi.noViewPay ⟨k, bl, hk, hv.trans hs⟩).elim
 
@@ -839,11 +839,11 @@ theorem ValOK.bare_view {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValO
 /-- **What a live binding names lies in memory**: in an owned tree, or in a
     payload (each name is valid: `ValOK`, `HrefAt`, `ViewsOK`). -/
 theorem MInv.named_home {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {Ey : Entry} (hy : Γ y = some Ey)
-    (hl : Ey.live = true) {o : Bool} {v : Val} (hs : m.st y = some ⟨o, some v⟩) {i : Nat}
+    (hl : Alive Ey) {o : Bool} {v : Val} (hs : m.st y = some ⟨o, some v⟩) {i : Nat}
     (hn : PkgNames m Γ Ey v i) : (∃ r T, m.st r = some ⟨true, some T⟩ ∧ i ∈ T.ids) ∨ PayAddr m i := by
   have hbor : (Ey.mode = .bor ∨ Ey.mode = .rootb) → ValOK m Ey.ty v Ey.path Ey.held := fun hm => by
     have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
-    obtain ⟨w, hw, hok⟩ := hi.bor_val hy hl hos
+    obtain ⟨w, hw, hok⟩ := hi.bor_val hy (hl.live_of_bor hm) hos
     rw [hs] at hw; cases hw; exact hok
   have hhref : ∀ c, Bare (.href c) v → (Ey.mode = .bor ∨ Ey.mode = .rootb) →
       (∃ r T, m.st r = some ⟨true, some T⟩ ∧ c ∈ T.ids) ∨ PayAddr m c := fun c hb hm => by
@@ -868,8 +868,15 @@ theorem MInv.named_home {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {Ey : En
     obtain ⟨d0, o0, l0, hvv, dep', _, hva⟩ := hvs s _ hin
     cases hvv
     exact hva.home hi.heap
-  · obtain ⟨T', hT', hwT, hvsT⟩ := hi.own_val hy hl hos
-    rw [hs] at hT'; cases hT'
+  · -- an owner's views: live, or made by `letd` (`MInv.armed`)
+    obtain ⟨sl, hsl, _, hso, hown, _⟩ := hi.slot y Ey hy
+    rw [hs] at hsl; cases hsl
+    have hwT : WFv Ey.ty v := (hown hos).2.1 v rfl
+    have hvsT : ViewsOK m Ey.ty v Ey.held := by
+      rcases hl with hl | ⟨hdb, _⟩
+      · obtain ⟨T', hT', _, hvs⟩ := hi.own_val hy hl hos
+        rw [hs] at hT'; cases hT'; exact hvs
+      · exact (hi.armed y Ey _ hy hs hdb hos v rfl).2
     obtain ⟨s, hin⟩ := hwT.viewIn hv
     obtain ⟨d0, o0, l0, hvv, dep', _, hva⟩ := hvsT s _ hin
     cases hvv
