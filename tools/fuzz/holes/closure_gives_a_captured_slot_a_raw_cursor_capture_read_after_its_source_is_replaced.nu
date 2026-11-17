@@ -3,6 +3,7 @@
 // main e659a702 (--no-borrowck): AddressSanitizer: heap-use-after-free.
 // map: §2.11 | A2 | rejected | - | AGORA-887: `= dst cur` in a closure, cur a `: ~ s` cursor over src; src replaced, dst read
 $ `stdlib/core/string.nu`
+
 @ main → i {
     : ~ String src ( string_from `a source string long enough for the heap here` )
     : ~ s cur ( string_data src )

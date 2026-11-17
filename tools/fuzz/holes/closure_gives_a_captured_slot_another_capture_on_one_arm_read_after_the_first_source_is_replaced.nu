@@ -3,6 +3,7 @@
 // main e659a702 (--no-borrowck): AddressSanitizer: heap-use-after-free.
 // map: §2.11 | A2 | rejected | - | AGORA-887: `? c { = dst other } {}` in a closure, dst viewing x; x replaced, dst read
 $ `stdlib/core/string.nu`
+
 @ main → i {
     : ~ String x ( string_from `the first viewed string long enough for heap` )
     : ~ String y ( string_from `the second viewed string long enough for hp` )
