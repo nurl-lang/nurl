@@ -345,6 +345,12 @@ import A3
 #print axioms A2.TakeBVWitness.main_typed
 #print axioms A2.TakeBVWitness.main_safe
 #print axioms A2.TakeBVWitness.main_no_leak
+-- AGORA-898: ... and one whose type holds views and a closure (a closure whose
+-- environment is a view, moved out; `NewSlot.editV`'s closure case)
+#print axioms A2.TakeBVWitness.main2_typed
+#print axioms A2.TakeBVWitness.main2_safe
+#print axioms A2.TakeBVWitness.main2_no_leak
+#print axioms A2.node_names_sub
 -- AGORA-885: the by-name owner hand-over, as an encoding (A2/HandOver.lean)
 #print axioms A2.HandOver.main_safe
 #print axioms A2.HandOver.main_no_leak

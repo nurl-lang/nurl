@@ -4386,7 +4386,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       hty1 hhv (h.Fcout x) (exprT_ren h hab hie) hne' hthru' hnd
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (compE_liftE_weaker hhv), hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
-  | @takeBV _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hfn hxF hie hne hthru hV hnd hk hpe ih =>
+  | @takeBV _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hxF hie hne hthru hV hnd hk hpe ih =>
     -- AGORA-897: `editBV`'s truncation where the call places it
     -- (`editBV_ren_facts`), then `y` bound to the element, as `letv` binds
     intro _ hab hw hn hT
@@ -4412,7 +4412,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hty1 : (S.liftE x Ex).ty = .vec t := by rw [liftE_ty x hrb, hty]
     exact StmtT.takeBV (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hy]; rfl) (h.Fcout y)
       (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
-      hty1 hhv hfn (h.Fcout x) (exprT_ren h hab hie) hne' hthru' (hVg [] (fun _ h' => by cases h')) hnd
+      hty1 hhv (h.Fcout x) (exprT_ren h hab hie) hne' hthru' (hVg [] (fun _ h' => by cases h')) hnd
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (by rw [compE_liftE_eqV hmx hhv]; exact EntryWeaker.refl _),
         hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)

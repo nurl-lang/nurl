@@ -230,7 +230,7 @@ const MODULE_LAYERS = {
   TakeBVWitness: {
     layer: 5,
     category: 'Worked Examples',
-    summaryEn: 'AGORA-897: two views of a String\'s buffer, one popped and one removed through a vec_at borrow of a Vec of Vecs of views, both kept and read (StmtT.takeBV), with memory_safe and no_leak_end applied (main_typed, main_safe, main_no_leak).',
+    summaryEn: 'AGORA-897: two views of a String\'s buffer, one popped and one removed through a vec_at borrow of a Vec of Vecs of views, both kept and read (StmtT.takeBV), with memory_safe and no_leak_end applied (main_typed, main_safe, main_no_leak); AGORA-898: a closure whose environment is a view moved out the same way (main2_*).',
   },
   TakeWitness: {
     layer: 5,

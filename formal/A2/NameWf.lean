@@ -970,7 +970,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
   | @takeB _ Γ Δ F x y i k Ex t hks hy _ hx hmx hl hty _ _ _ _ _ _ _ _ ih =>
     -- AGORA-889: `editB`'s truncation, then `y` bound as `letv` binds
     exact fun _ hn => (ih hks (takeB_nameWF hn hy hx hmx hl hty)).exitScope y
-  | @takeBV _ Γ Δ F x y i k Ex t hks hy _ hx hmx hl hty _ _ _ _ _ _ _ _ _ _ ih =>
+  | @takeBV _ Γ Δ F x y i k Ex t hks hy _ hx hmx hl hty _ _ _ _ _ _ _ _ _ ih =>
     -- AGORA-897: `editBV`'s truncation, then `y` bound as `letv` binds
     exact fun _ hn => (ih hks (takeBV_nameWF hn hy hx hmx hl hty)).exitScope y
   | @editBV _ Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru _ =>

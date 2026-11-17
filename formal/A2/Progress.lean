@@ -891,7 +891,7 @@ theorem progress {P : Prog}
 
   | @takeB _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ hie _ hthru _ _ _ _ =>
     exact fun _ hi => Or.inr <| Or.inr <| Or.inr (progress_takeB hi.toMInv hy hx hmx hl hty hie hthru)
-  | @takeBV _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ _ hie _ hthru _ _ _ _ _ =>
+  | @takeBV _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ hie _ hthru _ _ _ _ _ =>
     exact fun _ hi => Or.inr <| Or.inr <| Or.inr (progress_takeB hi.toMInv hy hx hmx hl hty hie hthru)
 
   | panic => exact fun _ _ => Or.inr <| Or.inr <| Or.inr ⟨_, Step.panic⟩

@@ -299,7 +299,7 @@ theorem CtxRel.editBV_trunc {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {
     valid (`takeB_viewsOK`); the store covers all but it (`covers_takeB`). -/
 theorem takeBV_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     {x : Var} {i : Expr} {Ex : Entry} {t : Ty} (hx : Γ x = some Ex) (hmx : Ex.mode = .bor)
-    (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true) (hfn : t.hasFn = false)
+    (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
     (hie : ExprT Γ i) (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path)
     (hV : ThruV Γ (.trunc i) Ex.ty Ex.path [])
     {o : Var} {T T' : Val} {t' : Ty} {c d n : Nat} {es : List Val} (hn : n < es.length)
@@ -313,14 +313,14 @@ theorem takeBV_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch 
     fun d hd => by
       obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
       exact ⟨Er, hEr, hcan.ownSlot⟩
-  have hvs0 := hi.thru_owner_views hx hmx hl hty hro hthru.noShare hno
+  obtain ⟨hvs0, hns0⟩ := hi.thru_owner_views hx hmx hl hty hro hthru.noShare hno
   obtain ⟨dep, hdm, T0, n0, c0, d0, es0, hxs, hT0, _, _, _, hw0, _, huniq, hsh0⟩ :=
     hi.thru_owner hx hmx hl hty hro hthru.noShare
   obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
   subst t'
   have hoF := (hthru dep hdm).1
   have hrel := CtxRel.editBV_trunc (t := t) hanch hx hmx hl hie hthru hV
-  have hinv := MInv.editBV_take hi hanch hx hmx hl hty hhv hfn hthru hV hn hno hr
+  have hinv := MInv.editBV_take hi hanch hx hmx hl hty hhv hthru hV hn hno hr
   have hst : ∀ w, w ≠ dep.root → (m.set dep.root ⟨true, some T'⟩).st w = m.st w :=
     fun w hw => by simp [upd_ne _ _ hw]
   have hx1 : (setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) x = some Ex := by simp [setE]
@@ -342,7 +342,8 @@ theorem takeBV_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch 
       (fun r hr => hinv.wf x Ex hx1 hl (Or.inl hnint) r (by
         obtain ⟨dd, hdd, rfl⟩ := List.mem_map.mp hr
         exact List.mem_map_of_mem (show dd ∈ Ex.vdeps by unfold Entry.vdeps; exact List.mem_append_right _ hdd)))
-      htok hw hhv hfn (takeB_viewsOK hi hanch hx hl hnint hT0 hoF hem hsube hvs0) hnde
+      htok hw hhv (takeB_viewsOK hi hanch hx hl hnint hT0 hoF hem hsube hvs0)
+      (fun cc hcc => hns0 cc (names_elem hem cc hcc)) hnde
       (fun j hj => hi.heap.alloc _ _ hT0 j (hsube.ids j hj))
       (fun w U hU j hj hjU => ?_) ((hi.heap.self _ _ hT0).sub hsube)
       (fun j hj => hi.heap.notPay hT0 (hsube.ids j hj))
@@ -2982,7 +2983,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨by simp [Stmt.spine], E0, h0⟩
       · have hvy : v ≠ y := fun e => hyF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvy]; exact post.frz v hv
-  | @takeBV ξ Γ Δ F x y i k Ex t hsrc hy hyF hx hmx hl hty hhv hfn _ hie _ hthru hV _ hs hend _ =>
+  | @takeBV ξ Γ Δ F x y i k Ex t hsrc hy hyF hx hmx hl hty hhv _ hie _ hthru hV _ hs hend _ =>
     -- AGORA-897: element `n`, which holds views, moves out to `y` through
     -- the borrow `x` (`takeBV_pres`), and
     -- the body runs in `y`'s scope, as a `letv`'s does
@@ -2992,7 +2993,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     | @takeB _ _ o _ _ n T T' t' c d es hn _ hno hmx' hr =>
       have hanch := hi.leafAnch rfl
       obtain ⟨Γ1, hΓ1⟩ : ∃ Γ1, Γ1 = setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex := ⟨_, rfl⟩
-      obtain ⟨post, out, hcov⟩ := takeBV_pres hi.toMInv hanch hx hmx hl hty hhv hfn hie hthru hV hn hno hr
+      obtain ⟨post, out, hcov⟩ := takeBV_pres hi.toMInv hanch hx hmx hl hty hhv hie hthru hV hn hno hr
       rw [← hΓ1] at post out hs
       have hy1 : Γ1 y = none := by
         have := post.cdom y; rw [hy] at this; cases h : Γ1 y <;> simp_all

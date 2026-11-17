@@ -224,7 +224,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
   | @takeB _ Γ Δ F x y i k Ex t hks hy _ hx _ _ _ _ _ _ _ _ _ _ _ ih =>
     exact fun _ => DomTy.exitScope_fresh hy (((DomTy.refl Γ).killNames
       (thruDeps (.trunc i) Γ Ex.ty Ex.path)).setE ⟨Ex, hx, rfl, rfl⟩) (ih hks)
-  | @takeBV _ Γ Δ F x y i k Ex t hks hy _ hx _ _ _ _ _ _ _ _ _ _ _ _ _ ih =>
+  | @takeBV _ Γ Δ F x y i k Ex t hks hy _ hx _ _ _ _ _ _ _ _ _ _ _ _ ih =>
     exact fun _ => DomTy.exitScope_fresh hy (((DomTy.refl Γ).killHv
       (thruKills (.trunc i) Γ Ex.ty Ex.path)).setE ⟨Ex, hx, rfl, rfl⟩) (ih hks)
   | @free _ Γ F x E t hx _ _ _ _ _ => exact fun _ => ((DomTy.refl Γ).kill _ _ _).setE ⟨E, hx, rfl, rfl⟩

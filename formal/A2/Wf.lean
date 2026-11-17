@@ -1235,7 +1235,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
       simp only [A2.setE, upd_ne _ _ hry, upd_ne _ _ hrx, killThru]; exact h2)
     exact ⟨killE .replace false y E3, by simp [A2.exitScope, upd_ne _ _ hry, A2.kill, h3],
       by rw [killE_mode, hm3]; rcases hE2 with rfl | rfl <;> rfl⟩
-  | @takeBV _ Γ Δ F x y i k Ex t _ _ hyF _ _ _ _ _ _ hxF _ _ _ _ _ _ _ ih =>
+  | @takeBV _ Γ Δ F x y i k Ex t _ _ hyF _ _ _ _ _ hxF _ _ _ _ _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     have hry : r ≠ y := fun e => hyF (e ▸ hr)
@@ -1546,7 +1546,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
   | @takeB _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ _ _ _ _ _ hpx ih =>
     -- AGORA-889: `editB`'s truncation, then `y` bound as `letv` binds
     exact fun h => (ih (takeB_ctxWF h hy hx hmx hl hty)).exitScope y hpx.2.2
-  | @takeBV _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ _ _ _ _ _ _ _ hpx ih =>
+  | @takeBV _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ _ _ _ _ _ _ hpx ih =>
     -- AGORA-897: `editBV`'s truncation, then `y` bound as `letv` binds
     exact fun h => (ih (takeBV_ctxWF h hy hx hmx hl hty)).exitScope y hpx.2.2
   | @editBV _ Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru _ =>

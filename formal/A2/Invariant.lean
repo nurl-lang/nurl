@@ -1834,19 +1834,20 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       EndOK Δ y →
       StmtT P ξ Γ F (.takeB x i y s) (exitScope y Δ)
   /-- AGORA-897: the same move-out through a borrow `x`, of an element type
-      that holds views (and no closure): `: [s y ( vec_pop x )` where `x`
-      borrows a `Vec` of slices.  The owner's change is `editBV`'s
+      that holds views (AGORA-898: closures among them too): `: [s y
+      ( vec_pop x )` where `x` borrows a `Vec` of slices.  The owner's change is `editBV`'s
       truncation (`ThruOK`, and `ThruV` with nothing stored): each memory
       root `x` reaches ends what a truncation there ends, with the views
       among its elements if its type holds views (`killThruV`), and `x`
       stays live.  The element moves out to `y`, which owns it and holds
       what `x` holds (`compE`: an element's views are valid through what its
       `Vec`'s borrow holds, `HrefAt`), or borrows it through that if it is a
-      slice itself.  What moves out owns no destructor value. -/
+      slice itself, and what it captures by name it holds.  What moves out
+      owns no destructor value. -/
   | takeBV {Γ Δ : Ctx} {F : List Var} {x y : Var} {i : Expr} {s : Stmt} {Ex : Entry} {t : Ty} :
       s.src = true → Γ y = none → y ∉ F →
       Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = true →
-      t.hasFn = false → x ∉ F → ExprT Γ i → memDeps Ex.path ≠ [] →
+      x ∉ F → ExprT Γ i → memDeps Ex.path ≠ [] →
       ThruOK Γ F (.trunc i) Ex.ty Ex.path → ThruV Γ (.trunc i) Ex.ty Ex.path [] →
       t.holdsDtor = false →
       StmtT P (ξ.under y) (setE (setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) y (compE Ex t)) F s Δ →

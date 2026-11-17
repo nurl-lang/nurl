@@ -139,16 +139,16 @@ theorem holdThru_nil (P : List Dep) (Γ : Ctx) : holdThru [] P Γ = Γ := by
 theorem MInv.editBV_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F) {x : Var} {i : Expr} {Ex : Entry} {t : Ty} (hx : Γ x = some Ex)
     (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
-    (hfn : t.hasFn = false) (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path)
+    (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path)
     (hV : ThruV Γ (.trunc i) Ex.ty Ex.path [])
     {o : Var} {T T' : Val} {t' : Ty} {c d n : Nat} {es : List Val} (hn : n < es.length)
     (hno : NodeOf m x o T t' c d es)
     (hr : Repl (.node t' c d es) (.node t' c d (es.eraseIdx n)) T T') :
     MInv (m.set o ⟨true, some T'⟩) (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) := by
-  have h := MInv.editBV_drops (a' := m.alloc) hi hanch hx hmx hl hty hhv hfn (fun _ _ => rfl) hthru hV
+  have h := MInv.editBV_drops (a' := m.alloc) hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hV
     (fun _ h => by cases h) (fun _ h => by cases h) hno
     (fun _ _ _ _ _ _ => HeapOK.editTake hi.heap hno.2.2.1 hn hr)
-    (fun e he => Or.inl (List.mem_of_mem_eraseIdx he)) hr
+    (fun e he => Or.inl (List.mem_of_mem_eraseIdx he)) hr (Or.inr fun e he => List.mem_of_mem_eraseIdx he)
   rw [holdThru_nil, List.append_nil] at h
   exact h
 
@@ -237,8 +237,8 @@ theorem MInv.thru_owner_views {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E
     (hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ d.root = some Er ∧ Er.mode.ownSlot = true)
     (hnsh : ∀ d ∈ memDeps Ex.path, d.kind ≠ .share)
     {o : Var} {T : Val} {t' : Ty} {c d : Nat} {es : List Val} (hno : NodeOf m x o T t' c d es) :
-    ViewsOK m (.vec t') (.node t' c d es) Ex.held := by
-  obtain ⟨dep, hdm, T0, n0, c0, d0, es0, hxs, hT0, _, _, ⟨d1, es1, hlan, _, hvs, _, _⟩, _, _, huniq, _⟩ :=
+    ViewsOK m (.vec t') (.node t' c d es) Ex.held ∧ NamesIn (.node t' c d es) Ex.held := by
+  obtain ⟨dep, hdm, T0, n0, c0, d0, es0, hxs, hT0, _, _, ⟨d1, es1, hlan, _, hvs, hns, _⟩, _, _, huniq, _⟩ :=
     hi.thru_owner hx hmx hl hty hro hnsh
   obtain ⟨n1, hr1, hla1⟩ := hlan.root (hnsh dep hdm)
   have hsub : Sub (.node t c0 d1 es1) T0 := hla1.sub.trans (rootNode_own hT0 hr1).sub
@@ -248,7 +248,7 @@ theorem MInv.thru_owner_views {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E
   obtain ⟨_, _, _, _, h1, h2⟩ := huniq _ _ _ _ _ _ hno1
   obtain ⟨_, _, h3, h4, h5, h6⟩ := huniq _ _ _ _ _ _ hno
   subst h1 h2 h3 h4 h5 h6
-  exact hvs
+  exact ⟨hvs, hns⟩
 
 /-- A field-like owner's entry (`compE`) for an element type that owns memory
     and holds views: owned, holding what the entry it came from holds. -/
@@ -289,13 +289,14 @@ theorem takeB_viewsOK {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanc
       hEr hroot (by rw [Mem.set_st, upd_ne _ _ hro])
     exact RootKeep.vkeep (dep := ⟨r, k⟩) hk (BlkLe.of_le fun _ _ h => h) d0 o0 l0 s ha
 
-/-- **What moves out, for an element type that holds views** (and no
-    closure): owned, holding what the borrow holds, or, a slice, borrowed
-    through that; its views are valid through it (`takeB_viewsOK`). -/
+/-- **What moves out, for an element type that holds views**: owned,
+    holding what the borrow holds, or, a slice, borrowed through that; its
+    views are valid through it (`takeB_viewsOK`), and what it captures by
+    name it holds (the node's `NamesIn`, `HrefAt`). -/
 theorem takeBV_out {m1 : Mem} {Γ1 : Ctx} {Ex : Entry} {t : Ty} {e : Val}
     (hn1 : NameOK Γ1 Ex) (hwf1 : ∀ r ∈ roots Ex.held, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
-    (htok : t.ok = true) (hw : WFv t e) (hhv : t.holdsView = true) (hfn : t.hasFn = false)
-    (hvs : ViewsOK m1 t e Ex.held)
+    (htok : t.ok = true) (hw : WFv t e) (hhv : t.holdsView = true)
+    (hvs : ViewsOK m1 t e Ex.held) (hnm : NamesIn e Ex.held)
     (hnd : e.ids.Nodup) (hal : ∀ i ∈ e.ids, m1.alloc i = true ∧ i < m1.nid)
     (hdisj : ∀ x U, OwnedAt m1 x U → ∀ i ∈ e.ids, i ∉ U.ids) (hsf : SelfFree e)
     (hpay : ∀ i ∈ e.ids, ¬ PayAddr m1 i) (hpk : PkgsOK e) (hsh : SharesOK m1 t e) :
@@ -306,7 +307,6 @@ theorem takeBV_out {m1 : Mem} {Γ1 : Ctx} {Ex : Entry} {t : Ty} {e : Val}
     intro r hr
     obtain ⟨dd, hdd, rfl⟩ := List.mem_map.mp hr
     exact hwf1 _ (List.mem_map_of_mem (compE_vdeps_sub Ex t dd hdd))
-  have hnm : NamesIn e Ex.held := fun c hc => by rw [hw.names_nil_fn hfn] at hc; cases hc
   cases ho : t.owning with
   | false =>
     cases t with
