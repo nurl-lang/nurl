@@ -3247,6 +3247,99 @@ theorem allowed_canDo_false (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa
     the callee's own, renamed, none of them frozen (`Fcout`), each allowing
     its effect as a callee binding did (`canDo_lift`, `Allowed`), and the
     kills commute with the lift (`canon_killNames`). -/
+theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
+    {P : Prog} {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
+    {D : List Dep} (hx : Γa x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
+    (hty : Ex.ty = .vec t) (hhv : t.holdsView = false)
+    (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γa1 x = some Ex1)
+    (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path)
+    :
+    (∃ D', EditArg (S.canon Γa) S.Fc (op.rename S.ρ) t D' (S.canon Γa1)) ∧
+    (∀ y, (op.rename S.ρ).stored = some y → y ≠ S.ρ x) ∧
+    ThruOK (S.canon Γa1) S.Fc (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path ∧
+    memDeps (S.liftE x Ex1).path ≠ [] ∧
+    S.canon (A2.setE (A2.killThru op Ex.ty Ex1.path Γa1) x Ex1) =
+      A2.setE (A2.killThru (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path (S.canon Γa1)) (S.ρ x)
+        (S.liftE x Ex1) := by
+  have hab1 : S.AbsOK Γa1 := EditArg.absOK harg hab
+  have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
+  subst hE1
+  have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
+  -- the lift adds names only: what the outer call's arguments held by name
+  have hmemA : memDeps S.A = [] := by
+    unfold RSetup.A; rw [hR]
+    simp only [allKinds, List.flatMap_nil, List.nil_append]
+    exact List.filter_eq_nil_iff.mpr fun d hd => by simp [h.N_name d hd]
+  have hpath : (S.liftE x Ex1).path = rds S.ρ Ex1.path ++ S.A := by
+    simp [liftE, hmx, Mode.ownSlot]
+  have hmem : memDeps (S.liftE x Ex1).path = rds S.ρ (memDeps Ex1.path) := by
+    rw [hpath]
+    unfold memDeps at hmemA ⊢
+    rw [List.filter_append, hmemA, List.append_nil]
+    simp only [rds, List.filter_map]; rfl
+  have hty1 : (S.liftE x Ex1).ty = Ex1.ty := liftE_ty x hrb
+  -- every root keeps its type where the call places it
+  have hargty : ∀ r, (argE (S.canon Γa1) (S.ρ r)).ty = (argE Γa1 r).ty := by
+    intro r
+    cases hr : Γa1 r with
+    | none => unfold argE; rw [canon_ρ h, hr]; rfl
+    | some Er => rw [argE_canon h hr, liftE_ty' h hab1 hr]; unfold argE; rw [hr]; rfl
+  have hal : ∀ d ∈ thruDeps op Γa1 Ex1.ty Ex1.path, Allowed S d.kind.bound false d.root := by
+    intro d hd
+    obtain ⟨d0, hd0, rfl⟩ := mem_thruDeps.mp hd
+    obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
+    have hae : argE Γa1 d0.root = Er := by unfold argE; rw [hEr]; rfl
+    show Allowed S (op.effAt d0.kind (decide ((argE Γa1 d0.root).ty = Ex1.ty))) false d0.root
+    rw [hae]; exact allowed_canDo_false hab1 hEr hcan
+  -- what the change is handed, where the call places it
+  obtain ⟨D', harg'⟩ : ∃ D', EditArg (S.canon Γa) S.Fc (op.rename S.ρ) t D' (S.canon Γa1) := by
+    cases harg with
+    | push hy hly htyy hpa =>
+      obtain ⟨D', hpa', _⟩ := pushArg_ren h hab hy hpa
+      exact ⟨D', EditArg.push (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_live]; exact hly)
+        (by rw [liftE_ty' h hab hy]; exact htyy) hpa'⟩
+    | trunc hie => exact ⟨[], EditArg.trunc (exprT_ren h hab hie)⟩
+    | set hie hy hly htyy hpa =>
+      obtain ⟨D', hpa', _⟩ := pushArg_ren h hab hy hpa
+      exact ⟨D', EditArg.set (exprT_ren h hab hie) (by rw [canon_ρ h, hy]; rfl)
+        (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hpa'⟩
+  have hyx' : ∀ y, (op.rename S.ρ).stored = some y → y ≠ S.ρ x := by
+    intro y hy
+    rw [Edit.stored_rename] at hy
+    obtain ⟨y0, hy0, rfl⟩ := Option.map_eq_some_iff.mp hy
+    exact fun e => hyx y0 hy0 (h.inj _ _ e)
+  have hthru' : ThruOK (S.canon Γa1) S.Fc (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path := by
+    intro d hd
+    rw [hmem] at hd
+    obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd
+    obtain ⟨_, hy0, Er, hEr, hlr, hcan, hds, hsh⟩ := hthru d0 hd0
+    have hrbr : Er.mode ≠ .rootb := by rcases hcan with h' | ⟨b, h', _⟩ <;> rw [h'] <;> simp
+    refine ⟨h.Fcout _, fun y hy => ?_, S.liftE d0.root Er, by
+      show S.canon Γa1 (S.ρ d0.root) = _; rw [canon_ρ h, hEr]; rfl, by rw [liftE_live]; exact hlr, ?_, ?_,
+      by simpa [Dep.ren] using hsh⟩
+    · rw [Edit.stored_rename] at hy
+      obtain ⟨y0, hy0', rfl⟩ := Option.map_eq_some_iff.mp hy
+      exact fun e => hy0 y0 hy0' (h.inj _ _ e)
+    · rw [liftE_mode _ hrbr, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
+      exact canDo_lift hcan
+    · rw [liftE_ty _ hrbr, hty1, Edit.effAt_rename]
+      exact DtorSafe.canon h (allowed_canDo_false hab1 hEr hcan) hds
+  -- the kills commute with the lift
+  have heq : S.canon (A2.setE (A2.killThru op Ex1.ty Ex1.path Γa1) x Ex1) =
+      A2.setE (A2.killThru (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path (S.canon Γa1)) (S.ρ x)
+        (S.liftE x Ex1) := by
+    rw [canon_setE h]
+    unfold A2.killThru
+    rw [canon_killNames h hab1 _ hal]
+    congr 2
+    unfold thruDeps
+    rw [hmem, hty1]
+    simp only [rds, List.map_map]
+    apply List.map_congr_left
+    intro d _
+    simp only [Function.comp, Dep.ren, Edit.effAt_rename, hargty]
+  exact ⟨⟨D', harg'⟩, hyx', hthru', by rw [hmem]; simpa [rds] using hne, heq⟩
+
 theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
     {P : Prog} {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
     {D : List Dep} (hx : Γa x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
@@ -3694,6 +3787,23 @@ theorem liftX_blk (h : S.OK) {ξ : Exits} {Δa : Ctx} (habΔ : S.AbsOK Δa) (hw�
     · exact Or.inl rfl
     · exact Or.inr (canon_weaker h habΔ hwΔ hx)
   · exact ⟨Γa, rfl, hab, hw, hn, hx⟩
+
+/-- AGORA-889: what moves out through a borrow, where a call places it: the
+    owner `compE` makes of the lifted borrow holds no more than the lifted
+    owner does (an integer's lift only adds what the call's arguments hold by
+    name). -/
+theorem compE_liftE_weaker {x y : Var} {Ex : Entry} {t : Ty} (hhv : t.holdsView = false) :
+    EntryWeaker (compE (S.liftE x Ex) t) (S.liftE y (compE Ex t)) := by
+  by_cases hint : t = .int
+  · subst hint
+    refine ⟨rfl, rfl, fun hf => ?_, fun _ => ⟨rfl, fun _ d hd => by simp [compE, intE] at hd,
+      fun d hd => by simp [compE, intE] at hd⟩,
+      fun h => by simp [compE, intE] at h, rfl, fun h => by simp [liftE, compE, intE] at h,
+      fun h => by simp [compE, intE] at h⟩
+    simp [Entry.fixed, compE, intE] at hf
+  · have heq : S.liftE y (compE Ex t) = compE (S.liftE x Ex) t := by
+      cases t <;> simp_all [liftE, compE, liftMode, ownHeld, rds, Mode.ownSlot, Ty.holdsView]
+    rw [heq]; exact EntryWeaker.refl _
 
 /-- The renaming lemma: a callee's source statement, typed in its own
     contexts, is typed where the call places it, in the caller's view of
@@ -4284,6 +4394,35 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | @editBV _ Γ Γ1 F x op Ex Ex1 t D hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV hdf =>
     intro _ hab hw hn hT
     exact editBV_ren h hab (hT (.inl rfl)) hP hw hn hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV hdf
+  | @takeB _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hxF hie hne hthru hnd hk hpe ih =>
+    -- AGORA-889: `editB`'s truncation where the call places it
+    -- (`editB_ren_facts`), then `y` bound to the element, as `letv` binds
+    intro _ hab hw hn hT
+    have hR : S.R = [] := hT (.inl rfl)
+    obtain ⟨-, -, hthru', hne', heq⟩ := editB_ren_facts (P := P) h hab hR hx hmx hl hty hhv
+      (EditArg.trunc (t := t) hie) (fun _ h' => by cases h') hx hl hne hthru
+    have hrb : Ex.mode ≠ .rootb := by rw [hmx]; simp
+    have hab2 : S.AbsOK (A2.setE (A2.killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
+      (hab.killNames _).setE' hab hx rfl rfl hrb (fun hf => absurd hf (by simp [Entry.fixed, hmx]))
+    have hmo : (compE Ex t).mode = .own ∨ (compE Ex t).mode = .bor := by
+      cases t <;> simp [compE, intE]
+    have habb := hab.add hab2 hy hmo
+    have hwb := takeB_ctxWF (i := i) hw hy hx hmx hl hty
+    have hnb := takeB_nameWF (i := i) hn hy hx hmx hl hty
+    obtain ⟨tk, abk⟩ := ih hks habb hwb hnb (fun _ => hR)
+    have hbx := hab.fresh hy
+    have tk := tk.mono (S.liftX_under h hbx)
+    refine ⟨?_, abk.exitScope hbx⟩
+    rw [canon_exitScope h abk (Or.inl hbx)]
+    have hwc := canon_wf h habb hwb
+    have hnc := canon_names h habb hnb
+    rw [canon_setE h, heq] at hwc hnc tk
+    have hty1 : (S.liftE x Ex).ty = .vec t := by rw [liftE_ty x hrb, hty]
+    exact StmtT.takeB (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hy]; rfl) (h.Fcout y)
+      (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
+      hty1 hhv (h.Fcout x) (exprT_ren h hab hie) hne' hthru' hnd
+      (StmtT.weakenIn ⟨PW.setE (PW.refl _) (compE_liftE_weaker hhv), hwc, hnc⟩ tk)
+      (EndOK.lift h abk hbx hpe)
   | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF hy hmy he hpin hds hr hk hpush hpe hyv hdf ihs ihp =>
     intro _ hab hw hn hT
     -- an owner of the callee is bound to no argument: what depends on it ends where it is placed

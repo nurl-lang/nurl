@@ -868,6 +868,24 @@ theorem progress {P : Prog}
     intro m hcd hi
     exact Or.inr <| Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnch rfl) hx hmx hl hty harg hyx hx1 hl1 hthru)
 
+  | @takeB _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ hie _ hthru _ _ _ _ =>
+    -- AGORA-889: the node `x` names is found as for `editB`; in range, the
+    -- element moves out, and out of range it panics
+    intro m hcd hi
+    have hmy : m.st y = none := by
+      have := hi.dom y; rw [hy] at this; cases h : m.st y <;> simp_all
+    have hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ d.root = some Er ∧ Er.mode.ownSlot = true :=
+      fun d hd => by
+        obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
+        exact ⟨Er, hEr, hcan.ownSlot⟩
+    obtain ⟨n, hev⟩ := eval_exists hi.toMInv hie
+    obtain ⟨_, _, T, _, c, d, es, _, _, _, _, _, _, hno, _⟩ :=
+      hi.toMInv.thru_owner hx hmx hl hty hro hthru.noShare
+    by_cases hn : n < es.length
+    · obtain ⟨T', hr⟩ := Repl.exists hno.sub (.node t c d (es.eraseIdx n))
+      exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.takeB hn hev hno hmy hr⟩
+    · exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.takeBOOB hev hno (by omega)⟩
+
   | panic => exact fun _ _ => Or.inr <| Or.inr <| Or.inr ⟨_, Step.panic⟩
   | @letrec _ Γ Γ1 Δ F x f k E fn _ hx _ hf hp _ _ _ _ _ _ =>
     intro m hcd hi

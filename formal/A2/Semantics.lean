@@ -1043,6 +1043,7 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .block s => .block (s.rename ρ)
   | .exit n => .exit n
   | .loop s => .loop (s.rename ρ)
+  | .takeB x i y s => .takeB (ρ x) (i.rename ρ) (ρ y) (s.rename ρ)
 
 /-- The renaming of a call of a function with parameters `ps` on `args`,
     its variables placed from `base`. -/
@@ -1259,6 +1260,7 @@ def Stmt.src : Stmt → Bool
   | .block s => s.src
   | .exit _ => true
   | .loop s => s.src
+  | .takeB _ _ _ s => s.src
 
 /-- Agora #871: `s` is about to take an exit that leaves `n` blocks besides
     the ones inside `s`: an `exit` at the head of the sequences it is in,
@@ -1392,6 +1394,24 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
   | withElemOOB {m : Mem} {v x : Var} {i : Expr} {s : Stmt} {t : Ty} {c d n : Nat} {es : List Val} :
       m.st v = some ⟨true, some (.node t c d es)⟩ → m.alloc c = true → Eval m i n → es.length ≤ n →
       Step P m (.withElem v i x s) (.panic m)
+  /-- AGORA-889: an element moved out through a borrow (`vec_remove x i`, a
+      `vec_pop` its last index).  Element `n` of the node `x` names leaves
+      its owner's tree where it lies (`NodeOf`, `Repl`: the reverse of
+      `editSet`, which moves a value into it), and the ones after it close
+      up; it becomes the new owner `y`'s (an owner moves in, an integer is a
+      plain integer binding, as `vec_pop` takes it), and the body runs in
+      `y`'s scope.  Nothing is freed and the buffer does not move: the
+      runtime closes the gap in place. -/
+  | takeB {m : Mem} {x y o : Var} {i : Expr} {s : Stmt} {n : Nat} {T T' : Val} {t : Ty}
+      {c d : Nat} {es : List Val} (h : n < es.length) :
+      Eval m i n → NodeOf m x o T t c d es → m.st y = none →
+      Repl (.node t c d es) (.node t c d (es.eraseIdx n)) T T' →
+      Step P m (.takeB x i y s)
+        (.ok ((m.set o ⟨true, some T'⟩).set y ⟨es[n].owns, some es[n]⟩) (.scope y s))
+  /-- ... and out of range it panics, as `vec_remove` does. -/
+  | takeBOOB {m : Mem} {x o : Var} {i : Expr} {y : Var} {s : Stmt} {n : Nat} {T : Val} {t : Ty}
+      {c d : Nat} {es : List Val} :
+      Eval m i n → NodeOf m x o T t c d es → es.length ≤ n → Step P m (.takeB x i y s) (.panic m)
   | free {m : Mem} {x : Var} {t : Val} {a' : Nat → Bool} :
       m.st x = some ⟨true, some t⟩ → Frees m.alloc t a' →
       Step P m (.free x) (.ok ({ m with alloc := a' }.set x ⟨true, none⟩) .skip)

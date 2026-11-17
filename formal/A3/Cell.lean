@@ -643,7 +643,18 @@ theorem _root_.A2.Step.cellKeep {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : S
         · exact .of_slot hv (Sub.child (List.mem_of_mem_take he) hse)
         · exact .of_slot hv (Sub.child (List.mem_of_mem_drop he) hse)
       · exact hc
-  | withElemOOB _ _ _ _ => exact CellKeep.refl _
+  | withElemOOB _ _ _ _ | takeBOOB _ _ _ => exact CellKeep.refl _
+  | takeB hlt _ hn _ hr =>
+    refine CellKeep.slots (Nat.le_refl _) (fun k hc => .inl ?_) rfl
+    rcases CellAt.set hc with ⟨w, hw, hs⟩ | hc
+    · cases hw; exact .of_slot hn.2.2.1 ((Sub.child (List.getElem_mem hlt) hs).trans hr.sub)
+    · rcases CellAt.set hc with ⟨w, hw, hs⟩ | hc
+      · cases hw
+        rcases hr.cell hs with h | h
+        · exact .of_slot hn.2.2.1 h
+        · exact .of_slot hn.2.2.1
+            ((sub_cell_node_sub h fun e he => List.mem_of_mem_eraseIdx he).trans hr.sub)
+      · exact hc
   | insert _ ht hx _ _ =>
     refine CellKeep.shrink (Nat.le_of_eq (TakeVal.nid_eq ht).symm) (fun k hc => .inl ?_)
       (fun _ _ h => LockHolds.of_blk (TakeVal.blk ht) h)

@@ -1487,6 +1487,8 @@ def Stmt.hasThru : Stmt → Bool
   | .callcE _ _ _ _ s => s.hasThru
   | .block s => s.hasThru
   | .loop s => s.hasThru
+  -- (AGORA-889: a move-out through a borrow is a change through it)
+  | .takeB _ _ _ _ => true
   | _ => false
 
 /-- The functions a statement calls by index: a call, a `recover` body, a
@@ -1513,6 +1515,7 @@ def Stmt.calls : Stmt → List Nat
   | .callcE _ _ _ _ s => s.calls
   | .block s => s.calls
   | .loop s => s.calls
+  | .takeB _ _ _ s => s.calls
   | _ => []
 
 /-- A function that changes elements through a borrow, or calls one that
@@ -1665,6 +1668,7 @@ def Stmt.assigns : Stmt → List Var
   | .withLock _ _ s => s.assigns
   | .scopeL _ _ _ s => s.assigns
   | .withElem _ _ _ s => s.assigns
+  | .takeB _ _ _ s => s.assigns
   | .callcE _ _ _ _ s => s.assigns
   | .block s => s.assigns
   | .loop s => s.assigns
@@ -1693,6 +1697,7 @@ def Stmt.asgMax (x : Var) : Stmt → Nat
   | .withLock _ _ s => s.asgMax x
   | .scopeL _ _ _ s => s.asgMax x
   | .withElem _ _ _ s => s.asgMax x
+  | .takeB _ _ _ s => s.asgMax x
   | .callcE _ _ _ _ s => s.asgMax x
   | .block s => s.asgMax x
   | .loop s => 2 * s.asgMax x
@@ -1917,6 +1922,7 @@ def Stmt.vars : Stmt → List Var
   | .block s => s.vars
   | .exit _ => []
   | .loop s => s.vars
+  | .takeB x i y s => y :: x :: i.vars ++ s.vars
 
 theorem Expr.vars_rename (ρ : Var → Var) (e : Expr) : (e.rename ρ).vars = e.vars.map ρ := by
   induction e <;> simp_all [Expr.rename, Expr.vars]

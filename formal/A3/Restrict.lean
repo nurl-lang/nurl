@@ -358,6 +358,10 @@ theorem Step.restrict {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
   | withElemOOB hv hc he hle =>
     exact ⟨_, .withElemOOB hv (minus_true hc (hav _ (OwnedId.of_slot hv (by simp))))
       (Eval.restrict he hav hp) hle, rfl⟩
+  | takeB hlt he hn hy hr =>
+    exact ⟨_, .takeB hlt (Eval.restrict he hav hp) (NodeOf.restrict hn hav) hy hr, rfl, .refl _⟩
+  | takeBOOB he hn hle =>
+    exact ⟨_, .takeBOOB (Eval.restrict he hav hp) (NodeOf.restrict hn hav) hle, rfl⟩
   | insert he ht hx hc hd =>
     have hav1 := (TakeVal.avoids ht hb hav).1
     exact ⟨_, .insert (Eval.restrict he hav hp) (TakeVal.restrict ht a2) hx

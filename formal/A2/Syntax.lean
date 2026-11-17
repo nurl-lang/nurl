@@ -1248,6 +1248,11 @@ inductive Stmt where
                                                           -- (`break`, `continue`, an early `^`)
   | loop (s : Stmt)                                       -- Agora #871: `while T`: run `s` again
                                                           -- and again; left only by an exit
+  | takeB (x : Var) (i : Expr) (y : Var) (body : Stmt)   -- AGORA-889: `: y ( vec_remove x i )`
+                                                          -- through a borrow `x`: element `i`
+                                                          -- of the node `x` names moves out of
+                                                          -- its owner's tree to the new owner
+                                                          -- `y`, for `body`
 
 
 /-- A3.5: a library's in-place change of its state (`pncounter_inc a …`,

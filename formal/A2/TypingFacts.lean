@@ -37,6 +37,9 @@ theorem StmtT.mono {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} 
   | scopeD a0 a1 a2 a3 a4 a5 a6 a7 a8 ih0 => intro ξ' hξ; exact StmtT.scopeD a0 a1 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a3 a4 a5 a6 a7 a8
   | editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 => intro ξ' hξ; exact StmtT.editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12
   | editBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 => intro ξ' hξ; exact StmtT.editBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14
+  | takeB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 _ a14 ih0 =>
+    intro ξ' hξ
+    exact StmtT.takeB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a14
   | exit a0 a1 a2 a3 a4 a5 a6 => intro ξ' hξ; exact StmtT.exit (a0.elim (fun h => Or.inl (hξ _ _ h)) (fun ⟨Γ0, hw, h⟩ => Or.inr ⟨Γ0, hw, hξ _ _ h⟩)) a1 a2 a3 a4 a5 a6
   | block a0 ih0 => intro ξ' hξ; exact StmtT.block (ih0 (fun n _ h => by cases n with | zero => exact h | succ n => exact hξ _ _ h))
   | loop a0 a1 a2 a3 a4 a5 a6 a7 ih0 => intro ξ' hξ; exact StmtT.loop a0 (ih0 hξ) a2 a3 a4 a5 a6 a7
@@ -897,6 +900,9 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     refine (harg.dkeep.thruV hV).setE fun _ hos _ _ => ?_
     have hm : Ex1.mode = .bor := by rw [harg.at_ne hyx hx hx1 hl1, hmx]
     exact absurd hos (by show ¬ (Ex1.mode.ownSlot = true); rw [hm]; decide)
+  | takeB hs _ _ _ hmx _ _ _ _ _ _ _ _ _ _ ih =>
+    exact fun _ _ => DKeep.bind ((((DKeep.refl _ []).killNames _).setE fun _ hos _ _ => by
+      rw [hmx] at hos; cases hos)) (DKeep.of_src hs ih)
 
 /-! ### A2-drop.2: a binding `letd` made stays one -/
 
@@ -1078,6 +1084,9 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
   | editBV hx hmx _ _ _ _ _ harg _ _ _ _ _ _ =>
     refine ((harg.dstay.killHv _).holdOn _ _).setE fun E0 h0 _ hos _ => ?_
     rw [hx] at h0; cases h0; rw [hmx] at hos; cases hos
+  | takeB hs hy _ hx hmx _ _ _ _ _ _ _ _ _ _ ih =>
+    exact DStay.bind hy (((DStay.refl _ []).killNames _).setE fun E0 h0 _ hos _ => by
+      rw [hx] at h0; cases h0; rw [hmx] at hos; cases hos) (src0 hs ih)
 
 theorem HeapOK.set_bor {m : Mem} (hh : HeapOK m) (x : Var) (w : Option Val) :
     HeapOK (m.set x ⟨false, w⟩) := by

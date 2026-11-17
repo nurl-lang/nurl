@@ -132,6 +132,11 @@ const MODULE_LAYERS = {
     category: 'Proof Infrastructure',
     summaryEn: 'An element handed over (withElem, insert): the invariant does not see the order of an owned Vec\'s elements (MInv.perm).',
   },
+  TakeB: {
+    layer: 3,
+    category: 'Proof Infrastructure',
+    summaryEn: 'AGORA-889: an element that owns memory moved out through a borrow (Stmt.takeB, editSet\'s reverse): the owner\'s tree loses it in place (HeapOK.editTake, MInv.editB_take, typed as editB\'s truncation), and the new owner takes it (takeB_outOwn, covers_takeB; takeB_pres in Preservation).',
+  },
   EnvHand: {
     layer: 3,
     category: 'Proof Infrastructure',
@@ -216,6 +221,11 @@ const MODULE_LAYERS = {
     layer: 5,
     category: 'Worked Examples',
     summaryEn: 'AGORA-889: vec_remove of a number at a general index through a vec_at borrow, as a while loop of element sets one place down and the truncation, typed for every index (step_typed: the loop body keeps its context), with memory_safe and no_leak_end applied (main_safe, main_no_leak).',
+  },
+  TakeBWitness: {
+    layer: 5,
+    category: 'Worked Examples',
+    summaryEn: 'AGORA-889: a String popped and one removed through a vec_at borrow of a Vec of Vecs of Strings, both kept and read (Stmt.takeB), with memory_safe and no_leak_end applied (main_typed, main_safe, main_no_leak).',
   },
   TakeWitness: {
     layer: 5,

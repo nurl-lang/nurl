@@ -143,6 +143,14 @@ theorem _root_.A2.StmtT.withElem_src {v x : Var} {i : Expr} {s : Stmt} (ht : Stm
   | sub _ _ _ ih => exact ih hs
   | _ => cases hs
 
+theorem _root_.A2.StmtT.takeB_src {x y : Var} {i : Expr} {s : Stmt} (ht : StmtT P ξ Γ F (.takeB x i y s) Δ) :
+    s.src = true := by
+  generalize hs : Stmt.takeB x i y s = s0 at ht
+  induction ht with
+  | takeB h1 => cases hs; exact h1
+  | sub _ _ _ ih => exact ih hs
+  | _ => cases hs
+
 theorem _root_.A2.StmtT.unpair_src {y x z : Var} {s : Stmt} (ht : StmtT P ξ Γ F (.unpair y x z s) Δ) : s.src = true := by
   generalize hs : Stmt.unpair y x z s = s0 at ht
   induction ht with
@@ -302,6 +310,8 @@ theorem Step.lfr {P : Prog} (hP : ProgOK P) {m m' : Mem} {s s' : Stmt} (h : Step
     cases hr; rintro ⟨_, _, _, _, ht⟩; exact FrStep.nil (lfr_src ht.ite_src.2)
   | withElem _ _ _ _ _ _ =>
     cases hr; rintro ⟨_, _, _, _, ht⟩; exact FrStep.nil (by simp [Stmt.lfr, lfr_src ht.withElem_src])
+  | takeB _ _ _ _ _ =>
+    cases hr; rintro ⟨_, _, _, _, ht⟩; exact FrStep.nil (by simp [Stmt.lfr, lfr_src ht.takeB_src])
   | unpair _ _ _ _ =>
     cases hr; rintro ⟨_, _, _, _, ht⟩; exact FrStep.nil (by simp [Stmt.lfr, lfr_src ht.unpair_src])
   | letd _ _ =>

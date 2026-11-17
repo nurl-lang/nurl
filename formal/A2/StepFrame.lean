@@ -107,7 +107,7 @@ theorem panic_none {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic 
     · rw [upd_ne _ _ h]; exact ih rfl v hv
   | letdP _ => cases hr; exact fun _ h => h
   | waitPanic _ => cases hr; exact fun _ h => h
-  | withElemOOB _ _ _ _ => cases hr; exact fun _ h => h
+  | withElemOOB _ _ _ _ | takeBOOB _ _ _ => cases hr; exact fun _ h => h
   | _ => cases hr
 
 /-- A panic unbinds the scopes it leaves. -/
@@ -125,7 +125,7 @@ theorem panic_spine {P : Prog} {m m1 : Mem} {s : Stmt} (hst : Step P m s (.panic
     · rw [upd_ne _ _ h]
       simp only [Stmt.spine, List.mem_cons] at hv
       exact ih rfl v (hv.resolve_left h)
-  | letdP _ | withElemOOB _ _ _ _ => cases hr; intro v hv; simp [Stmt.spine] at hv
+  | letdP _ | withElemOOB _ _ _ _ | takeBOOB _ _ _ => cases hr; intro v hv; simp [Stmt.spine] at hv
   | waitPanic hw => cases hr; intro v hv; rw [hw.spine] at hv; cases hv
   | @scopeLP _ _ _ _ y _ _ hrl ih =>
     cases hr; intro v hv
@@ -362,6 +362,12 @@ theorem step_new {P : Prog} {m m' : Mem} {s s' : Stmt} (hst : Step P m s (.ok m'
   | editSetOOB _ ht _ _ _ =>
     cases hr; intro v h h'
     exact absurd (takeVal_none ht h) h'
+  | @takeB _ y _ _ _ _ _ _ _ _ _ _ _ _ hno _ _ =>
+    cases hr; intro v h h'
+    by_cases hvy : v = y
+    · subst hvy; simp [Stmt.spine]
+    · rw [Mem.set_st, upd_ne _ _ hvy] at h'
+      exact absurd h (Mem.set_bound_ne_none hno.2.2.1 h')
   | blockSkip | blockExit _ | loop =>
     cases hr; intro v h h'; exact absurd h h'
   | _ => cases hr
