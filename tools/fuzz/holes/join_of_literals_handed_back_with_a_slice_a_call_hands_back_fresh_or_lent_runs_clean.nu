@@ -9,5 +9,5 @@ $ `stdlib/core/slice.nu`
 : Two { [i s [i t }
 @ pick [i a b fresh → [i { ? fresh { ^ [i | 7 8 9] } {} ^ a }
 @ mk [i a b fresh b c → Bag { ^ ? c @ Bag { ( pick a fresh ) 2 } @ Bag { a 3 } }
-@ run b fresh → v { : [i a [i | 1 2] : Bag g ( mk a fresh fresh ) ( nurl_println_int . . g s 1 ) : Bag h ( mk a fresh F ) ( nurl_println_int . . h s 1 ) }
+@ run b fresh → v { : [i a [i | 1 2] : Bag g ( mk a fresh T ) ( nurl_println_int . . g s 1 ) : Bag h ( mk a fresh F ) ( nurl_println_int . . h s 1 ) }
 @ main → i { ( run T ) ( run F ) ^ 0 }
