@@ -137,7 +137,7 @@ theorem take_typed {ξ : Exits} {Γ Δ : Ctx} (hn : NoRootb Γ) {y : Var} {i : E
       (compE Eb sl)) [] s Δ) (hend : EndOK Δ y) :
     StmtT P ξ Γ [] (.takeB 4 i y s) (A2.exitScope y Δ) :=
   StmtT.takeBV hsrc hy (by simp) hb rfl rfl rfl rfl (by simp) hie (by simp [Eb, memDeps, Kind.isName])
-    (thru_ok hn h3) (thru_v hn h3) rfl hs hend
+    (thru_ok hn h3) (thru_v hn h3) (fun h => by simp [sl, Ty.holdsDtor] at h) hs hend
 
 theorem main_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main Δ := by
   apply Exists.intro
@@ -377,7 +377,7 @@ theorem main2_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main2 Δ := by
                 (by lookF) rfl rfl rfl rfl (by simp)
                 (ExprT.dec (ExprT.len (E := EbF) (t := FT) (by lookF) rfl rfl))
                 (by simp [EbF, memDeps, Kind.isName]) (thru_okF (by norootF) (by lookF))
-                (thru_vF (by norootF) (by lookF)) rfl ?_ ?_
+                (thru_vF (by norootF) (by lookF)) (fun h => by simp [FT, Ty.holdsDtor] at h) ?_ ?_
               rotate_left
               · refine' StmtT.letv (x := 7) (E := intE) rfl (by lookF) (by simp)
                   (RhsT.expr (ExprT.len (E := EbF) (t := FT) (by lookF) rfl rfl)) ?_ ?_

@@ -121,6 +121,28 @@ theorem unpair_typed {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : 
       exact ⟨E, a, b, rfl, by rw [← hw'.ty]; exact hty, hdx, hdz⟩
   | _ => cases hst
 
+/-- AGORA-899: a typed move-out through a borrow (`takeB`) of an element
+    that holds a destructor value hands it to its `letd` first thing, and
+    the binding is assigned nothing: `x` borrows a `Vec` of `t`, and if `t`
+    holds a destructor value, `y` is moved first in its scope. -/
+theorem takeB_typed {P : Prog} {Γ Δ : Ctx} {F : List Var} {x y : Var} {i : Expr} {s : Stmt}
+    (h : StmtT P ξ Γ F (.takeB x i y s) Δ) :
+    ∃ (E : Entry) (t : Ty), Γ x = some E ∧ E.ty = .vec t ∧
+      (t.holdsDtor = true → y ∈ s.movedFirst ∧ y ∉ s.assigns) := by
+  generalize hst : Stmt.takeB x i y s = st at h
+  induction h with
+  | takeB _ _ _ hx _ _ hty _ _ _ _ _ hdk _ _ _ => cases hst; exact ⟨_, _, hx, hty, hdk⟩
+  | takeBV _ _ _ hx _ _ hty _ _ _ _ _ _ hdk _ _ _ => cases hst; exact ⟨_, _, hx, hty, hdk⟩
+  | @sub _ Γa _ _ _ _ _ hw _ _ ih =>
+    obtain ⟨E', t, hx', hty, hdk⟩ := ih hst
+    obtain ⟨hn, hE⟩ := hw.1 x
+    cases hg : Γa x with
+    | none => rw [hn.mp hg] at hx'; cases hx'
+    | some E =>
+      have hw' := hE E E' hg hx'
+      exact ⟨E, t, rfl, by rw [← hw'.ty]; exact hty, hdk⟩
+  | _ => cases hst
+
 /-- **Agora #616: a destructor value changes its destructor type only where
     its own destructor's work is done.**  A `letd x f` that binds a value of
     another destructor type `Ty.dtor g t` (`g ≠ f`): `g` is the glue of a

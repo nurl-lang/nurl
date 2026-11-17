@@ -3473,8 +3473,7 @@ theorem PW.holdOn_canon (h : S.OK) {Γ : Ctx} {rs : List Var} {D D' : List Dep} 
     the renamed `DD` or less.  (Shared with `takeBV`, AGORA-897.) -/
 theorem editBV_ren_facts (h : S.OK) (hR : S.R = [])
     {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex1 : Entry} {DD : List Dep}
-    (hab1 : S.AbsOK Γa1) (hx1 : Γa1 x = some Ex1) (hmx : Ex1.mode = .bor)
-    (hyx : ∀ y, op.stored = some y → y ≠ x)
+    (hab1 : S.AbsOK Γa1) (hmx : Ex1.mode = .bor)
     (hthru : ThruOK Γa1 Fa op Ex1.ty Ex1.path) (hV : ThruV Γa1 op Ex1.ty Ex1.path DD) :
     memDeps (S.liftE x Ex1).path = rds S.ρ (memDeps Ex1.path) ∧
     ThruOK (S.canon Γa1) S.Fc (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path ∧
@@ -3590,7 +3589,7 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   subst hE1
   have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
-  obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hR hab1 hx1 hmx hyx hthru hV
+  obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hR hab1 hmx hthru hV
   have hmemA : memDeps S.A = [] := by
     unfold RSetup.A; rw [hR]
     simp only [allKinds, List.flatMap_nil, List.nil_append]
@@ -4383,7 +4382,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hty1 : (S.liftE x Ex).ty = .vec t := by rw [liftE_ty x hrb, hty]
     exact StmtT.takeB (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hy]; rfl) (h.Fcout y)
       (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
-      hty1 hhv (h.Fcout x) (exprT_ren h hab hie) hne' hthru' hnd
+      hty1 hhv (h.Fcout x) (exprT_ren h hab hie) hne' hthru' (fun hd => dtorHead_rename h.inj (hnd hd))
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (compE_liftE_weaker hhv), hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
   | @takeBV _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hxF hie hne hthru hV hnd hk hpe ih =>
@@ -4391,7 +4390,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- (`editBV_ren_facts`), then `y` bound to the element, as `letv` binds
     intro _ hab hw hn hT
     have hR : S.R = [] := hT (.inl rfl)
-    obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hR hab hx hmx (fun _ h' => by cases h') hthru hV
+    obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hR hab hmx hthru hV
     have hne' : memDeps (S.liftE x Ex).path ≠ [] := by rw [hmem]; simpa [rds] using hne
     have hrb : Ex.mode ≠ .rootb := by rw [hmx]; simp
     have hab2 : S.AbsOK (A2.setE (A2.killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
@@ -4412,7 +4411,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hty1 : (S.liftE x Ex).ty = .vec t := by rw [liftE_ty x hrb, hty]
     exact StmtT.takeBV (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hy]; rfl) (h.Fcout y)
       (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
-      hty1 hhv (h.Fcout x) (exprT_ren h hab hie) hne' hthru' (hVg [] (fun _ h' => by cases h')) hnd
+      hty1 hhv (h.Fcout x) (exprT_ren h hab hie) hne' hthru' (hVg [] (fun _ h' => by cases h'))
+      (fun hd => dtorHead_rename h.inj (hnd hd))
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (by rw [compE_liftE_eqV hmx hhv]; exact EntryWeaker.refl _),
         hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)

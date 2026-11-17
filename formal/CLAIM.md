@@ -114,13 +114,18 @@ the LLVM / C11 memory model rather than redefining it.
   environment is such a view, moved out the same way (`main2_*`): what it
   captures, the new binding holds as the borrow did (`HrefAt`'s
   `NamesIn`; a move-out keeps only old elements, `node_names_sub`).
+  An element that holds a destructor value moves out the same way
+  (AGORA-899), when its new binding hands it to its `letd` first thing
+  and is assigned nothing, as a call's owned result does (A2-drop.3a; the
+  typing's guarantee `A2.Dtor.takeB_typed`). `A2/TakeBDWitness.lean` pops a
+  destructor value through `vec_at vv 0` of a `letd` Vec of Vecs of them
+  into its `letd`, typed and run safe and leak-free.
   That nurlc's
   `vec_pop` / `vec_remove` lower to these steps is phase C. Outside the
   claim still:
   - a store through a borrow (a push or an element set) of an element
     whose type holds both views and a closure (`StmtT.editBV` asks
-    `Ty.hasFn = false`), and a move-out through a borrow of an element
-    that holds a destructor value;
+    `Ty.hasFn = false`);
   - what nurlc keeps beside such a change that the calculus ends: two
     parts of one value, copies of the changing borrow, a whole copy beside
     a field viewer (Agora #118, github#1426);
