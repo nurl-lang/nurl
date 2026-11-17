@@ -1,7 +1,6 @@
-// part_of_owner_behind_a_box_handed_back_by_a_pick: `= o ( npick o ( tail o ) k )`, a part of o behind a Box or o itself
-// AGORA-875: refused - npick may hand back o itself or what tail lends (a part of o, named by no argument), and nurlc cannot tell which a run hands back (#412's rule; the call `( tail o )` lends on some runs). main 81530211: accepted, leak on the run that hands back the part
-// map: §7.6 | A2 | rejected | - | AGORA-875: = o ( npick o ( tail o ) k ), a part of o behind a Box
-// main 3358873a: faults under ASan (found by AGORA-869's adversarial pass).
+// part_of_owner_behind_a_box_handed_back_by_a_pick_runs_clean: `= o ( npick o ( tail o ) k )`, npick handing back o itself or what tail lends - a part of o behind its Box
+// AGORA-875/907: accepted - on the runs the call lends, o is given its own copy and its old value goes, whichever of the two a run hands back (main 81530211: a leak on the run that hands back the part; github#1936 refused it in one definition order only)
+// map: §7.6 | A2 | runs-clean | - | AGORA-907: whole or part per run, copied in
 $ `stdlib/core/string.nu`
 
 @ pick ? String a ? String b i k → ?String { ? == k 0 { ^ a } { ^ b } }

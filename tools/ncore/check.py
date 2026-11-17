@@ -3830,6 +3830,14 @@ class FnCheck:
                     # stored value (cpcopy, agora #884). (A lend of another
                     # capture is left a lend.)
                     new = AV("O", (), (), new.held)
+                if (cur is not None and cur.own in ("O", "P") and getattr(src_var, "cpcopy", False)
+                        and (new.own == "L" or (new.own == "O" and new.loans))):
+                    # (…and any binding codegen copied a call's lend into where
+                    # the call lent: a part of its own old value, or itself,
+                    # handed back by a call that may hand back a literal around
+                    # a lend out of its parameter - gen_assign's part copy,
+                    # agora #906, #907. The binding owns it.)
+                    new = AV("O", (), (), new.held)
                 # (…through a join too: `= x ? c x ( f )` - where the join may
                 # select the target, its value is copied in, h373)
                 own_parts = cur is not None and cur.own in ("O", "P") and new.own in ("L", "O") and any(
