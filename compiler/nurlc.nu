@@ -18225,7 +18225,14 @@ unsafe @ eng_byte s w i k → i {
             // nurlc summarises it consumed, and its caller hands it over;
             // agora #868)
             : i okind ? ( op_is_place op ) ( fv_kind ( pl_var op ) ) -1
-            : b owned & & != 0 & ( efp_flags f i ) 4 ( op_is_place op ) & == ( pl_path op ) 0 | & == okind VK_LOCAL == ( av_own av ) OW_O & == okind VK_PARAM | == ( av_own av ) OW_O == ( av_own av ) OW_P
+            : b taken & & != 0 & ( efp_flags f i ) 4 ( op_is_place op ) == ( pl_path op ) 0
+            ? & & & taken == okind VK_LOCAL ( av_call av ) != ( av_loans av ) 0 {
+                // (a binding of what a call lent, on some runs: the env would
+                // keep or release it while its owner still holds it, as a
+                // `sink` given it would - refused as there, agora #899)
+                ( eng_err line EG_NOCOPY `a closure takes over a borrowed value that cannot be copied` )
+            } {}
+            : b owned & taken | & == okind VK_LOCAL == ( av_own av ) OW_O & == okind VK_PARAM | == ( av_own av ) OW_O == ( av_own av ) OW_P
             ? owned {
                 : i moved ( move_out st ( pl_var op ) line )
                 // (the capture is still named, by a loan nothing ends - it
@@ -82173,6 +82180,10 @@ unsafe @ __bck_made_from s name → s {
         // over, as a literal that stores it does - the env owns the value
         // from here on, so its caller hands it over; agora #868.)
         ( mem_record_kept_param syms ov ) ( bck_record_inferred_sink syms ov )
+        // (A binding a call lent - `: R x ( pick a )` - the env would keep
+        // or release while its owner still holds it, as a `sink` would:
+        // refused where the call is known to lend, agora #899.)
+        ? != 0 g_ncl_n { ( __nc_bind_store_park syms g_stmt_lex g_stmt_line ov ( nurl_sym_get syms ov ) `\\` 0 ov ) } {}
         : s op ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print op ) ( nurl_print ` = getelementptr ` ) ( nurl_print struct_name )
         ( nurl_print `, ` ) ( nurl_print struct_name ) ( nurl_print `* ` ) ( nurl_print typed_ptr )
@@ -101555,13 +101566,14 @@ unsafe @ __sx_names_capture i syms s sx → b {
         : s tshow ? < tb 0 `` ( nurl_str_slice r + tb 1 - - ( nurl_str_len r ) tb 1 )
         = r ? < tb 0 r ( nurl_str_slice r 0 tb )
         : b lit | ( seq tg `@` ) ( seq tg `=` )
-        : b stores | | | lit ( nurl_sym_has_word g_fn_sink tg ix ) ( nurl_sym_has_word g_fn_keeps tg ix ) ( nurl_sym_has_word g_fn_escapes tg ix )
+        : b clo ( seq tg `\\` )
+        : b stores | | | | lit clo ( nurl_sym_has_word g_fn_sink tg ix ) ( nurl_sym_has_word g_fn_keeps tg ix ) ( nurl_sym_has_word g_fn_escapes tg ix )
         ? & stores | ( __callee_lent syms cn gn ) != 0 ( nurl_sym_len2 syms cn `__ret_borrow_x` ) {
-            : s where ? ( seq tg `=` ) `a place that owns what it holds (a field, an element, a literal's field)` ? lit `a literal, which owns its fields` ( nurl_str_cat3 `'` show `', which keeps or releases it` )
+            : s where ? clo ( nurl_str_cat3 `a closure that takes '` show `' over (it cannot be copied, and the closure may outlive this frame)` ) ? ( seq tg `=` ) `a place that owns what it holds (a field, an element, a literal's field)` ? lit `a literal, which owns its fields` ( nurl_str_cat3 `'` show `', which keeps or releases it` )
             ( bck_emit_error r ( nurl_str_to_int line ) ( nurl_str_cat4
             ( nurl_str_cat3 `'` ( bck_fn_show cn ) `' lends what it hands back, and this hands it to ` ) where
             ( nurl_str_cat3 ` while its owner still holds it; a '` tshow `' cannot be copied, so no copy can stand in. ` )
-            `Pass a value the caller owns — one a call hands over, or the owner itself (take it out of the container: vec_remove, vec_pop).` ) )
+            ? clo `Capture a value this frame owns — the owner itself, or one a call hands over.` `Pass a value the caller owns — one a call hands over, or the owner itself (take it out of the container: vec_remove, vec_pop).` ) )
         } {}
         = j + j 1
     }

@@ -2328,6 +2328,12 @@ class FnCheck:
             # - the engine's make_closure, agora #868, #887)
             taken = body is not None and i < len(body.params) and getattr(body.vars[body.params[i]], "taken", False)
             moved_in = False
+            if (taken and op[0] == "v" and not op[2] and self.fn.vars[op[1]].kind == "local"
+                    and av.call and av.loans):
+                # (a binding of what a call lent, on some runs: the env would
+                # keep or release it while its owner still holds it, as a
+                # `sink` given it would - refused as there, agora #899)
+                self.err(line, "a closure takes over a borrowed value that cannot be copied")
             if taken and op[0] == "v" and not op[2]:
                 okind = self.fn.vars[op[1]].kind
                 if (okind == "local" and av.own == "O") or (okind == "param" and av.own in ("O", "P")):

@@ -1,0 +1,3 @@
+### Fixed
+
+- **A closure that takes over a value a call lent is refused** (AGORA-899). Take a value that cannot be copied, captured by a closure that may outlive its frame: the closure takes it over, as a `sink` parameter would. When that value was only a call's lend (`: R x ( pick a )` where `pick` hands its parameter back), the closure kept a borrow of `a` past `a`'s release, and running it read freed memory. The compiler now refuses that program with the same error as for handing the lend to a `sink`, and suggests capturing a value the frame owns: the owner itself, or one a call hands over. No in-repo code was affected.
