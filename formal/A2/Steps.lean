@@ -1407,6 +1407,7 @@ theorem out_ownNoView {m : Mem} {Γ : Ctx} {t : Ty} {v : Val} (htok : t.ok = tru
   own := rfl
   mode := Or.inl rfl
   live := rfl
+  pkgFree i hn := by obtain ⟨_, o, l, hv⟩ := hn.own rfl; exact absurd hv (hw.noView hvf)
   tyok := htok
   wf := fun _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
   valOwn := fun _ => ⟨ho, hw, ViewsOK.none hvf _ _, hnd, hal, hdis, hw.selfFree_noView hvf, hnp⟩
@@ -1719,6 +1720,7 @@ theorem acquire_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k : N
       own := rfl
       mode := Or.inl rfl
       live := rfl
+      pkgFree i hn := by obtain ⟨_, o, l, hv⟩ := hn.own rfl; exact absurd hv (hwv.noView hvf)
       tyok := htok
       wf := fun _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
       valOwn := fun _ => ⟨Ty.owning_of hti hvf, hwv, ViewsOK.none hvf _ _, hnd,
@@ -1795,6 +1797,7 @@ theorem reap_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {k n f : 
     own := rfl
     mode := Or.inl rfl
     live := rfl
+    pkgFree i hn := by obtain ⟨_, o, l, hv⟩ := hn.own rfl; exact absurd hv (hwv.noView hvf)
     tyok := htok
     wf := fun _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
     valOwn := fun _ => ⟨Ty.owning_of hti hvf, hwv, ViewsOK.none hvf _ _, hnd,
@@ -1924,10 +1927,23 @@ theorem assign_post {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var}
         · simp [Entry.vdeps, hE, Mode.ownSlot, hd']
         · simp [Entry.vdeps, hE, Mode.ownSlot, hd']
   have hinv : MInv m' (setE (kill .replace false x Γ1) x { E with mode := Ex.mode }) := by
-    refine post.inv.change hanch1 hx1 hxF
+    refine post.inv.change (ox := some { E with mode := Ex.mode }) hanch1 hx1 hxF
       (hpin1.kills _ _) hnrb hst hheap rfl
       (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ hds1 (fun h => by cases h) (by simp)
       (fun h => absurd rfl h)
+      ⟨fun y Ey o' vy hyx hEy hl hs i hn => by
+        rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
+        exact (post.inv.pkgFree_setFresh out.fresh y Ey o' vy hyx hEy hl.1 hs i (hn.ofSt rfl)).of_st rfl,
+       fun Ex' o' v' hx' hl hs i hn => by
+        cases hx'
+        simp only [m', Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hs
+        obtain ⟨rfl, rfl⟩ := hs
+        refine (out.pkgFree_set post.inv (x := x) i (PkgNames.remode (E' := { E with mode := Ex.mode })
+          rfl rfl hos (fun hm => ?_) (hn.ofSt rfl))).of_st rfl
+        rcases hmodes with ⟨h1, h2⟩ | ⟨h1, h2⟩ | ⟨h1, h2⟩ <;> simp only [h1] at hm
+        · rcases hm with h | h <;> cases h
+        · rcases hm with h | h <;> cases h
+        · exact Or.inl h2⟩
     refine ⟨⟨o, some v⟩, by simp [m'], out.tyok, hslot, hm1.symm, fun hl hn r hr' => Or.inr ?_,
       by rw [ht1]; exact hty, fun _ hn => ?_, fun _ T hT => ?_, fun T hT => ?_,
       fun _ _ hn d hdd _ => Or.inr ?_, fun hd => absurd hd (by simp [hdf.1]),

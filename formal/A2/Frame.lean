@@ -832,26 +832,15 @@ theorem MInv.rootb_bound {m : Mem} {Γ : Ctx} (hi : MInv m Γ) :
     (List.mem_map_of_mem (by simp [Entry.vdeps, hos]; exact Or.inl (List.mem_filter.mp hd).1))
   rw [hEr]; rfl
 
-/-- **A fresh binding keeps `MInv.pkgFree`** for every other: what they name
-    lies in memory, where the fresh value's addresses, of no owned tree and no
-    payload, are not; and it is clean where it was. -/
-theorem MInv.pkgFree_add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} {o : Bool} {v : Val}
-    (hx : Γ x = none)
-    (hfresh : o = true → ∀ i ∈ v.ids, (∀ r U, m.st r = some ⟨true, some U⟩ → i ∉ U.ids) ∧ ¬ PayAddr m i)
-    (hself : ∀ i, PkgNames (m.set x ⟨o, some v⟩) (setE Γ x E) E v i → PkgFreeId (m.set x ⟨o, some v⟩) i) :
-    ∀ y Ey o' vy, setE Γ x E y = some Ey → Ey.live = true → (m.set x ⟨o, some v⟩).st y = some ⟨o', some vy⟩ →
-      ∀ i, PkgNames (m.set x ⟨o, some v⟩) (setE Γ x E) Ey vy i → PkgFreeId (m.set x ⟨o, some v⟩) i := by
-  intro y Ey o' vy hy hl hs i hn
-  by_cases hyx : y = x
-  · subst hyx
-    simp only [setE, upd_same, Option.some.injEq] at hy; subst hy
-    simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hs
-    obtain ⟨rfl, rfl⟩ := hs
-    exact hself i hn
-  rw [setE, upd_ne _ _ hyx] at hy
-  simp only [Mem.set_st, upd_ne _ _ hyx] at hs
+/-- **A slot set to a fresh value keeps what every other binding names
+    free of packages**: what they name lies in memory, where the fresh value's
+    addresses, of no owned tree and no payload, are not. -/
+theorem MInv.pkgFree_setFresh {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {o : Bool} {v : Val}
+    (hfresh : o = true → ∀ i ∈ v.ids, (∀ r U, m.st r = some ⟨true, some U⟩ → i ∉ U.ids) ∧ ¬ PayAddr m i) :
+    ∀ y Ey o' vy, y ≠ x → Γ y = some Ey → Ey.live = true → m.st y = some ⟨o', some vy⟩ →
+      ∀ i, PkgNames (m.set x ⟨o, some v⟩) Γ Ey vy i → PkgFreeId (m.set x ⟨o, some v⟩) i := by
+  intro y Ey o' vy hyx hy hl hs i hn
   have hst : ∀ r, r ≠ x → (m.set x ⟨o, some v⟩).st r = m.st r := fun r hr => by simp [upd_ne _ _ hr]
-  -- a fresh owned tree holds none of what memory names
   have hnot : ∀ i, ((∃ r T, m.st r = some ⟨true, some T⟩ ∧ i ∈ T.ids) ∨ PayAddr m i) →
       o = true → i ∉ v.ids := by
     rintro i hh ho hiv
@@ -870,6 +859,47 @@ theorem MInv.pkgFree_add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : En
       refine ⟨fun h1 => hnot i hh ho (h1 ▸ hsT.ids c (by simp [Val.ids])),
         fun h2 => hnot i hh ho (h2 ▸ hsT.ids d (by simp [Val.ids]))⟩
     · rw [hst r hrx] at hT; exact h r T hT fs te ms ev cs hP t c d es hN
+  have hn0 : PkgNames m Γ Ey vy i := by
+    rcases hn with h1 | h2 | ⟨hm, hc, c, r, T, t, d, es, hb, hT, hsn, hvn⟩ | h4
+    · exact Or.inl h1
+    · exact Or.inr (Or.inl h2)
+    · refine Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T, t, d, es, hb, ?_, hsn, hvn⟩))
+      by_cases hrx : r = x
+      · exfalso
+        subst hrx
+        simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hT
+        obtain ⟨ho, rfl⟩ := hT
+        have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+        obtain ⟨w, hw, hok⟩ := hi.bor_val hy hl hos
+        rw [hs] at hw; cases hw
+        obtain ⟨dep, t', H', d', es', hlan, _⟩ := hok.bare_href c hb
+        have hh : (∃ r T, m.st r = some ⟨true, some T⟩ ∧ c ∈ T.ids) ∨ PayAddr m c := by
+          rcases hlan.home with ⟨x', T', hT', hsT'⟩ | hp
+          · exact Or.inl ⟨x', T', hT', hsT'.ids c (by simp [Val.ids])⟩
+          · exact Or.inr (hp.payAddr hi.heap c (by simp [Val.ids]))
+        exact hnot c hh ho (hsn.ids c (by simp [Val.ids]))
+      · rw [hst r hrx] at hT; exact hT
+    · exact Or.inr (Or.inr (Or.inr h4))
+  exact hfr i (hi.named_home hy hl hs hn0) (hi.pkgFree y Ey o' vy hy hl hs i hn0)
+
+/-- **A fresh binding keeps `MInv.pkgFree`** for every other: what they name
+    lies in memory, where the fresh value's addresses are not; and it is clean
+    where it was. -/
+theorem MInv.pkgFree_add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} {o : Bool} {v : Val}
+    (hx : Γ x = none)
+    (hfresh : o = true → ∀ i ∈ v.ids, (∀ r U, m.st r = some ⟨true, some U⟩ → i ∉ U.ids) ∧ ¬ PayAddr m i)
+    (hself : ∀ i, PkgNames (m.set x ⟨o, some v⟩) (setE Γ x E) E v i → PkgFreeId (m.set x ⟨o, some v⟩) i) :
+    ∀ y Ey o' vy, setE Γ x E y = some Ey → Ey.live = true → (m.set x ⟨o, some v⟩).st y = some ⟨o', some vy⟩ →
+      ∀ i, PkgNames (m.set x ⟨o, some v⟩) (setE Γ x E) Ey vy i → PkgFreeId (m.set x ⟨o, some v⟩) i := by
+  intro y Ey o' vy hy hl hs i hn
+  by_cases hyx : y = x
+  · subst hyx
+    simp only [setE, upd_same, Option.some.injEq] at hy; subst hy
+    simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hs
+    obtain ⟨rfl, rfl⟩ := hs
+    exact hself i hn
+  rw [setE, upd_ne _ _ hyx] at hy
+  simp only [Mem.set_st, upd_ne _ _ hyx] at hs
   -- the deps of a binding that names anything are bound
   have hbound : (Ey.ty ≠ .int ∨ Ey.mode = .rootb) → ∀ d ∈ Ey.vdeps, (Γ d.root).isSome := fun hn d hd => by
     obtain ⟨Er, hEr, _⟩ := hi.wf y Ey hy hl hn d.root (List.mem_map_of_mem hd)
@@ -895,31 +925,14 @@ theorem MInv.pkgFree_add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : En
     simp [Entry.vdeps, hos, hd]
   have hhv : Ey.held ⊆ Ey.vdeps := fun d hd => by simp [Entry.vdeps, hd]
   have hwf := hi.rootb_bound
-  -- what it names, it named before
-  have hn0 : PkgNames m Γ Ey vy i := by
-    rcases hn with ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, c, r, T, t, d, es, hb, hT, hsn, hvn⟩ | ⟨hm, hc, hv⟩
-    · exact Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ (hpv hm)), hv⟩
-    · exact Or.inr (Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ fun d hd => by
-        rcases List.mem_append.mp hd with h | h
-        · exact hpv hm h
-        · exact hhv h), hv⟩)
-    · refine Or.inr (Or.inr (Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ hhv), c, r, T, t, d, es, hb, ?_, hsn, hvn⟩))
-      by_cases hrx : r = x
-      · exfalso
-        subst hrx
-        simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hT
-        obtain ⟨ho, rfl⟩ := hT
-        have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
-        obtain ⟨w, hw, hok⟩ := hi.bor_val hy hl hos
-        rw [hs] at hw; cases hw
-        obtain ⟨dep, t', H', d', es', hlan, _⟩ := hok.bare_href c hb
-        have hh : (∃ r T, m.st r = some ⟨true, some T⟩ ∧ c ∈ T.ids) ∨ PayAddr m c := by
-          rcases hlan.home with ⟨x', T', hT', hsT'⟩ | hp
-          · exact Or.inl ⟨x', T', hT', hsT'.ids c (by simp [Val.ids])⟩
-          · exact Or.inr (hp.payAddr hi.heap c (by simp [Val.ids]))
-        exact hnot c hh ho (hsn.ids c (by simp [Val.ids]))
-      · rw [hst r hrx] at hT; exact hT
-    · exact Or.inr (Or.inr (Or.inr ⟨hm, hc.of_setE hx hwf (hvd _ hhv), hv⟩))
-  exact hfr i (hi.named_home hy hl hs hn0) (hi.pkgFree y Ey o' vy hy hl hs i hn0)
+  refine hi.pkgFree_setFresh hfresh y Ey o' vy hyx hy hl hs i ?_
+  rcases hn with ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩
+  · exact Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ (hpv hm)), hv⟩
+  · exact Or.inr (Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ fun d hd => by
+      rcases List.mem_append.mp hd with h | h
+      · exact hpv hm h
+      · exact hhv h), hv⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨hm, hc.of_setE hx hwf (hvd _ hhv), hv⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨hm, hc.of_setE hx hwf (hvd _ hhv), hv⟩))
 
 end A2

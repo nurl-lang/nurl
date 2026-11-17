@@ -378,6 +378,64 @@ theorem RhsPost.clean {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} (post : RhsPost
     obtain ⟨E0, h0, hm, _⟩ := post.cmode v E' hv
     exact ⟨E0, h0, hm, fun hrb => by have := post.rootb v E0 h0 hrb; rw [hv] at this; cases this; rfl⟩
 
+/-- AGORA-901: **a right-hand side's value, put in a slot**, names only what
+    no package holds: what it named before, of addresses its fresh tree does
+    not hold. -/
+theorem RhsOut.pkgFree_set {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {E : Entry} {v : Val} {o : Bool}
+    (hout : RhsOut m Γ E v o) {x : Var} :
+    ∀ i, PkgNames (m.set x ⟨o, some v⟩) Γ E v i → PkgFreeId (m.set x ⟨o, some v⟩) i := by
+  intro i hn
+  have hst : ∀ r, r ≠ x → (m.set x ⟨o, some v⟩).st r = m.st r := fun r hr => by simp [upd_ne _ _ hr]
+  have hownE : o = true → E.mode = .own := fun ho => by
+    rcases hout.mode with h | h
+    · exact h
+    · rw [hout.own, h] at ho; cases ho
+  have hn0 : PkgNames m Γ E v i := by
+    rcases hn with h1 | h2 | ⟨hm, hc, c, r, T, t, d, es, hb, hT, hsn, hvn⟩ | h4
+    · exact Or.inl h1
+    · exact Or.inr (Or.inl h2)
+    · refine Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T, t, d, es, hb, ?_, hsn, hvn⟩))
+      by_cases hrx : r = x
+      · exfalso
+        subst hrx
+        simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hT
+        have hos : E.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+        rw [hout.own, hos] at hT; cases hT.1
+      · rw [hst r hrx] at hT; exact hT
+    · exact Or.inr (Or.inr (Or.inr h4))
+  have hf0 := hout.pkgFree i hn0
+  intro r T hT fs te ms ev cs hP t c d es hN
+  by_cases hrx : r = x
+  · subst hrx
+    simp only [Mem.set_st, upd_same, Option.some.injEq, Slot.mk.injEq] at hT
+    obtain ⟨ho, rfl⟩ := hT
+    have hown := hownE ho
+    have hos : E.mode.ownSlot = true := by rw [hown]; rfl
+    obtain ⟨_, hwv, hvsv, _, _, hdisj, _, hnp⟩ := hout.valOwn hown
+    obtain ⟨_, o', l, hvi⟩ := hn0.own hos
+    obtain ⟨s', hin⟩ := hwv.viewIn hvi
+    obtain ⟨d0, o0, l0, hvv, dep, _, hva⟩ := hvsv s' _ hin
+    cases hvv
+    have hsT := hN.trans ((Sub.pkg (Sub.refl _)).trans hP)
+    have hfr : i ∉ v.ids := fun hiv => by
+      rcases hva.home hi.heap with ⟨r', U, hU, hiU⟩ | hp
+      · exact hdisj r' U hU i hiv hiU
+      · exact hnp i hiv hp
+    exact ⟨fun h1 => hfr (h1 ▸ hsT.ids c (by simp [Val.ids])), fun h2 => hfr (h2 ▸ hsT.ids d (by simp [Val.ids]))⟩
+  · rw [hst r hrx] at hT; exact hf0 r T hT fs te ms ev cs hP t c d es hN
+
+/-- The fresh value a right-hand side hands over has addresses no owned
+    tree and no payload holds. -/
+theorem RhsOut.fresh {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {o : Bool} (hout : RhsOut m Γ E v o) :
+    o = true → ∀ i ∈ v.ids, (∀ r U, m.st r = some ⟨true, some U⟩ → i ∉ U.ids) ∧ ¬ PayAddr m i := by
+  intro ho i hiv
+  have hown : E.mode = .own := by
+    rcases hout.mode with h | h
+    · exact h
+    · rw [hout.own, h] at ho; cases ho
+  obtain ⟨_, _, _, _, _, hdisj, _, hnp⟩ := hout.valOwn hown
+  exact ⟨fun r U hU hiU => hdisj r U hU i hiv hiU, hnp i hiv⟩
+
 /-- What a right-hand side hands over does not depend on whether its
     entry runs a destructor (A2-drop.2). -/
 theorem RhsOut.setDtor {m1 : Mem} {Γ1 : Ctx} {E : Entry} {v : Val} {o : Bool}

@@ -1230,6 +1230,18 @@ theorem PkgNames.views_of {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
   · exact absurd hb.sub (hnh c)
   · exact ⟨hc, hv⟩
 
+/-- What an entry names depends on its mode only through whether it is a
+    borrow and whether it owns its slot. -/
+theorem PkgNames.remode {m : Mem} {Γ : Ctx} {E E' : Entry} {v : Val} {i : Nat}
+    (hp : E'.path = E.path) (hh : E'.held = E.held) (hos : E'.mode.ownSlot = E.mode.ownSlot)
+    (hb : (E'.mode = .bor ∨ E'.mode = .rootb) → (E.mode = .bor ∨ E.mode = .rootb))
+    (hn : PkgNames m Γ E' v i) : PkgNames m Γ E v i := by
+  rcases hn with ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩
+  · exact Or.inl ⟨hb hm, hp ▸ hc, hv⟩
+  · exact Or.inr (Or.inl ⟨hb hm, hp ▸ hh ▸ hc, hv⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨hb hm, hh ▸ hc, hv⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨hos ▸ hm, hh ▸ hc, hv⟩))
+
 /-- A value holding no handle and no view names nothing. -/
 theorem PkgNames.none {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
     (hb : ∀ n, Bare n v → n = v) (hs : ∀ n, Sub n v → n = v)
