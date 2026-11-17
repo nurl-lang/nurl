@@ -153,6 +153,7 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
     (hwf : ∀ r ∈ roots E.vdeps, ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true)
     (hlt : ∀ r ∈ roots E.vdeps, r < x)
     (hvnames : NamesIn v E.held) (hvpkgs : PkgsOK v) (hnameOK : NameOK (setE Γ x E) E)
+    (hpf : ∀ i, PkgNames m Γ E v i → PkgFreeId m i)
     (hdt : E.dtor = false := by rfl) (hdb : E.dbind = false := by rfl) :
     MInv (m.set x ⟨false, some v⟩) (setE Γ x E) := by
   have hmx : m.st x = none := by
@@ -244,6 +245,20 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
       rw [Mem.set_st, upd_ne _ _ hwx] at hsl
       exact hi.shares w Ew sl T hw hsl hown hT
   · exact hi.blocks
+  · -- AGORA-901: what the parameter names, `hpf` says is free of packages
+    refine hi.pkgFree_add hx (fun h => by cases h) (fun i hn => ?_)
+    have hsub : ∀ r T, (m.set x ⟨false, some v⟩).st r = some ⟨true, some T⟩ → m.st r = some ⟨true, some T⟩ := by
+      intro r T hT
+      by_cases hrx : r = x
+      · subst hrx; simp at hT
+      · simpa [upd_ne _ _ hrx] using hT
+    have hvd : E.vdeps = E.path ++ E.held := by simp [Entry.vdeps, hos]
+    have hdom : ∀ D, D ⊆ E.vdeps → ∀ d ∈ memDeps D, (Γ d.root).isSome := fun D hD d hd => by
+      obtain ⟨Er, hEr, _⟩ := hwf d.root (List.mem_map_of_mem (hD (List.mem_filter.mp hd).1))
+      rw [hEr]; rfl
+    exact PkgFreeId.of_fewer hsub (hpf i (PkgNames.of_setE hi.rootb_bound hx
+      (fun _ => hdom _ (hvd ▸ List.subset_append_left _ _)) (hdom _ (hvd ▸ List.subset_append_right _ _))
+      (PkgNames.of_fewer hsub hn)))
 
 /-- The receiver of a call through a package is live. -/
 theorem callT_recv_live {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {c : Var} {zs : List Var}
@@ -574,6 +589,44 @@ theorem MInv.clean {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : MInv m (cleanC Γ) wh
   rootbLt p E hp hm := by
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
     rw [clean_mode] at hm; rw [clean_rootb hm]; exact hi.rootbLt p E0 h0 hm
+  pkgFree v E o w hv hal hsl i hn := by
+    -- AGORA-901: cleaning keeps modes and borrowed parameters' paths, and
+    -- what a live or armed binding names
+    obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
+    have hcl : ∀ r, Clean (cleanC Γ) r → Clean Γ r := fun r h => h.mono fun y E' hy => by
+      obtain ⟨E1, h1, rfl⟩ := cleanC_some hy
+      exact ⟨E1, h1, clean_mode E1, fun hm => by rw [clean_rootb hm]⟩
+    obtain ⟨sl', hsl', _, _, hown, hbor⟩ := hi.slot v E0 h0
+    rw [hsl] at hsl'; cases hsl'
+    cases hos : E0.mode.ownSlot
+    · have hmb : E0.mode = .bor ∨ E0.mode = .rootb := by
+        rcases hi.mode_cases h0 with hm | hm | hm <;> simp [hm, Mode.ownSlot] at hos ⊢
+      have hl : E0.live = true := by
+        have := Alive.live_of_bor hal (by rw [clean_mode]; exact hmb); rwa [clean_live] at this
+      by_cases hint : E0.ty = .int
+      · obtain ⟨w', hw', hok⟩ := hbor hos hl
+        change some w = some w' at hw'; cases hw'
+        rw [hint] at hok; obtain ⟨n, rfl⟩ := valOK_int.mp hok; exact absurd hn PkgNames.none_int
+      · rw [clean_id (Or.inl hint) hl] at hn
+        exact hi.pkgFree v E0 o w h0 (Or.inl hl) hsl i (hn.mono hcl)
+    · obtain ⟨hc, o', l', hvw⟩ := hn.own (by rw [clean_mode]; exact hos)
+      have hint : E0.ty ≠ .int := fun e => by have := (hown hos).1; rw [e] at this; cases this
+      have hal0 : Alive E0 := by
+        rcases hal with h | ⟨hd, _⟩
+        · exact Or.inl (by rwa [clean_live] at h)
+        · exact Or.inr ⟨by simpa using hd, hos⟩
+      have hheld : ∀ d ∈ memDeps E0.held, d ∈ E0.clean.held := by
+        intro d hd
+        obtain ⟨hd', hnm'⟩ := List.mem_filter.mp hd
+        by_cases hl : E0.live = true
+        · rw [clean_id (Or.inl hint) hl]; exact hd'
+        · have hd1 : E0.dbind = true := by
+            rcases hal with h' | ⟨h', _⟩
+            · rw [clean_live] at h'; exact absurd h' hl
+            · simpa using h'
+          exact (Entry.clean_vdeps_mem hd1 hos (Or.inl hint) (by simpa using hnm')).mpr hd'
+      exact hi.pkgFree v E0 o w h0 hal0 hsl i
+        (Or.inr (Or.inr (Or.inr ⟨hos, (hc.subMem hheld).mono hcl, o', l', hvw⟩)))
 
 theorem Inv.clean {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
     Inv m (cleanC Γ) F s :=
@@ -2054,8 +2107,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
   have hnmE : NamesIn env (envDeps cs Ec.held) := fun c' hc' =>
     mem_envDeps.mpr ⟨hi.held c Ec _ _ hc hlc hslot rfl c'
       (by simp only [Val.names, List.mem_append]; exact Or.inr hc'), envNames_own hdis c' hc'⟩
-  have hval0 : ValOK m te (lendOf env) (envE c Ec te cs).path (envE c Ec te cs).held := by
-    refine ValOK.mono (envE0_path_sub c Ec te cs) (envE0_held_sub c Ec te cs) ?_
+  have hval00 : ValOK m te (lendOf env) (envE0 c Ec te cs).path (envE0 c Ec te cs).held := by
     rcases hi.mode_cases hc with hm | hm | hm
     · obtain ⟨T, hT, hw, hvs⟩ := hi.own_val hc hlc (by rw [hm]; rfl)
       rw [hslot] at hT; cases hT
@@ -2096,6 +2148,8 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
         rcases List.mem_append.mp hd with hd | hd
         · exact List.mem_append_left _ hd
         · exact List.mem_append_right _ (envDeps_sub _ _ hd)
+  have hval0 : ValOK m te (lendOf env) (envE c Ec te cs).path (envE c Ec te cs).held :=
+    hval00.mono (envE0_path_sub c Ec te cs) (envE0_held_sub c Ec te cs)
   let mn : Mem := { m with nv := m.nv + 1 }
   have hin : MInv mn Γ :=
     hi.toMInv.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self, hi.heap.blk, hi.heap.views⟩ (Nat.le_succ _)
@@ -2112,10 +2166,45 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       hi.names c Ec hc hlc (Or.inl hnint) d (List.mem_filter.mp hdn).1 b t hk
     have hne : d.root ≠ m.nv := fun e => by rw [e, hΓe0] at hEr; cases hEr
     exact ⟨Er, by rw [hΓe _ hne]; exact hEr, hrest⟩
+  -- AGORA-901: the environment names nothing clean: whatever its value
+  -- holds lands through something the package derives or holds in memory,
+  -- and the environment shares each of those
+  have hpfE : ∀ i, PkgNames mn Γ (envE c Ec te cs) (lendOf env) i → PkgFreeId mn i := by
+    intro i hn
+    exfalso
+    have hshP : ∀ dep ∈ (envE0 c Ec te cs).path ++ (envE0 c Ec te cs).held, dep.kind.isName = false →
+        ¬ CleanDeps Γ (envE c Ec te cs).path := by
+      intro dep hd hnm hc
+      have hd' : dep ∈ derive c Ec .self ++ Ec.held := by
+        rcases List.mem_append.mp hd with hd | hd
+        · exact envDeps_sub _ _ hd
+        · exact List.mem_append_right _ (envDeps_sub _ _ hd)
+      have hm : (⟨dep.root, .share⟩ : Dep) ∈ (envE c Ec te cs).path :=
+        mem_envDeps.mpr ⟨List.mem_append_right _ (mem_shareOf.mpr ⟨rfl, dep,
+          List.mem_filter.mpr ⟨hd', by simp [hnm]⟩, rfl⟩), by simp [ownWriter, Kind.bound]⟩
+      exact (hc _ (List.mem_filter.mpr ⟨hm, rfl⟩)).1 rfl
+    have hshH : ∀ dep ∈ (envE0 c Ec te cs).held, dep.kind.isName = false →
+        ¬ CleanDeps Γ (envE c Ec te cs).held := by
+      intro dep hd hnm hc
+      have hm : (⟨dep.root, .share⟩ : Dep) ∈ (envE c Ec te cs).held :=
+        mem_envDeps.mpr ⟨List.mem_append_right _ (mem_shareOf.mpr ⟨rfl, dep,
+          List.mem_filter.mpr ⟨envDeps_sub _ _ hd, by simp [hnm]⟩, rfl⟩), by simp [ownWriter, Kind.bound]⟩
+      exact (hc _ (List.mem_filter.mpr ⟨hm, rfl⟩)).1 rfl
+    rcases hn with ⟨_, hc, ⟨c', hb, _⟩ | ⟨o, l, hv⟩⟩ | ⟨_, hc, o, l, hb⟩ |
+        ⟨_, hc, c', r, T, t, d, es, hb, hT, hs, o, l, hv⟩ | ⟨h, _⟩
+    · obtain ⟨dep, hd, _, _, _, hl, _⟩ := hval00.bare_href_held c' hb
+      exact hshP dep hd hl.notName hc
+    · obtain ⟨dep, hd, _, _, _, _, hl, _⟩ := hval00.bare_view_in i o l (by rw [hv]; exact Bare.refl _)
+      exact hshP dep hd hl.notName hc
+    · obtain ⟨dep, hd, _, _, _, _, hl, _⟩ := hval00.bare_view_in i o l hb
+      exact hshP dep hd hl.notName hc.left
+    · obtain ⟨dep, hd, hnm⟩ := hval00.named_view_held hi.heap hb hT hs hv
+      exact hshH dep hd hnm hc
+    · cases h
   have hie : MInv (envMem m env) (setE Γ m.nv (envE c Ec te cs)) :=
     hin.addRootb hΓe0 (Nat.lt_succ_self _) rfl rfl hteok hval hEw
       (fun r hr => by obtain ⟨Er, hEr, _⟩ := hEw r hr; exact hlt r Er hEr)
-      (NamesIn.lendOf (hnmE.mono (envE0_held_sub c Ec te cs))) hpkE.lendOf hnameE
+      (NamesIn.lendOf (hnmE.mono (envE0_held_sub c Ec te cs))) hpkE.lendOf hnameE hpfE
   -- the opened call's closures change what the call through the package may
   have hmo : ∀ d ∈ mutNames (setE Γ m.nv (envE c Ec te cs)) (m.nv :: zs ++ cs.map (·.1)),
       d ∈ mutNames Γ (c :: zs) :=

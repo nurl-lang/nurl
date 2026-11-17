@@ -929,6 +929,75 @@ theorem ValOK.bare_href' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : Val
   | lk => intro c hb; cases hb
   | cell => intro c hb; cases hb
 
+/-- AGORA-901: a handle a value holds directly lands through a dependency of
+    it, and the node it names stores views valid through what it holds. -/
+theorem ValOK.bare_href_held {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
+    ∀ c, Bare (.href c) v → ∃ dep ∈ P ++ H, ∃ t, HrefAt m dep c t H := by
+  induction h with
+  | href h =>
+    intro c hb
+    obtain rfl := hb.href_eq
+    obtain ⟨dep, hd, hh⟩ := h
+    exact ⟨dep, List.mem_append_left _ hd, _, hh⟩
+  | pair _ _ iha ihb =>
+    intro c hb
+    cases hb with
+    | fst h => obtain ⟨dep, hd, r⟩ := iha c h; exact ⟨dep, mem_PHH hd, r⟩
+    | snd h => obtain ⟨dep, hd, r⟩ := ihb c h; exact ⟨dep, mem_PHH hd, r⟩
+  | inl _ ih =>
+    intro c hb
+    cases hb with
+    | inl h => obtain ⟨dep, hd, r⟩ := ih c h; exact ⟨dep, mem_PHH hd, r⟩
+  | inr _ ih =>
+    intro c hb
+    cases hb with
+    | inr h => obtain ⟨dep, hd, r⟩ := ih c h; exact ⟨dep, mem_PHH hd, r⟩
+  | dtor _ ih => exact ih
+  | _ => intro c hb; cases hb
+
+/-- AGORA-901: a view a value holds directly is valid through a dependency
+    of it. -/
+theorem ValOK.bare_view_in {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) :
+    ∀ d o l, Bare (.view d o l) v → ∃ dep ∈ P ++ H, ∃ t, ViewAt m dep d o l t := by
+  induction h with
+  | view h =>
+    intro d o l hb
+    have := hb.of_leaf (fun _ _ h => by cases h) (fun _ h => by cases h) (fun _ h => by cases h)
+    cases this
+    obtain ⟨dep, hd, hv⟩ := h
+    exact ⟨dep, List.mem_append_left _ hd, _, hv⟩
+  | pair _ _ iha ihb =>
+    intro d o l hb
+    cases hb with
+    | fst h => obtain ⟨dep, hd, r⟩ := iha d o l h; exact ⟨dep, mem_PHH hd, r⟩
+    | snd h => obtain ⟨dep, hd, r⟩ := ihb d o l h; exact ⟨dep, mem_PHH hd, r⟩
+  | inl _ ih =>
+    intro d o l hb
+    cases hb with
+    | inl h => obtain ⟨dep, hd, r⟩ := ih d o l h; exact ⟨dep, mem_PHH hd, r⟩
+  | inr _ ih =>
+    intro d o l hb
+    cases hb with
+    | inr h => obtain ⟨dep, hd, r⟩ := ih d o l h; exact ⟨dep, mem_PHH hd, r⟩
+  | dtor _ ih => exact ih
+  | _ => intro d o l hb; cases hb
+
+/-- AGORA-901: a view stored in the node of an owned tree that a value's
+    handle names is valid through something the value holds in memory. -/
+theorem ValOK.named_view_held {m : Mem} (hh : HeapOK m) {τ : Ty} {v : Val} {P H : List Dep}
+    (h : ValOK m τ v P H) {c : Nat} (hb : Bare (.href c) v) {r : Var} {T : Val} {t : Ty} {d : Nat}
+    {es : List Val} (hT : m.st r = some ⟨true, some T⟩) (hs : Sub (.node t c d es) T) {i o l : Nat}
+    (hv : Sub (.view i o l) (.node t c d es)) : ∃ dep ∈ H, dep.kind.isName = false := by
+  obtain ⟨dep0, _, t0, d', es', hl, hw, hvs, _⟩ := h.bare_href_held c hb
+  have heq : Val.node t c d es = .node t0 c d' es' := by
+    rcases hl.home with ⟨x, T', hT', hs'⟩ | hp
+    · exact (owned_unique hh hT hT' hs hs' (i := c) (by simp [Val.head]) (by simp [Val.head])).2
+    · exact absurd (hp.payAddr hh c (by simp [Val.ids])) (hh.notPay hT (hs.ids c (by simp [Val.ids])))
+  rw [heq] at hv
+  obtain ⟨s, hvi⟩ := hw.viewIn hv
+  obtain ⟨_, _, _, _, dep, hd, _, _, _, hla, _⟩ := hvs s _ hvi
+  exact ⟨dep, hd, hla.notName⟩
+
 theorem sub_antisymm {a b : Val} (h1 : Sub a b) (h2 : Sub b a) : a = b := by
   rcases h1.cases' with h | ⟨e, hc, hs⟩
   · exact h
