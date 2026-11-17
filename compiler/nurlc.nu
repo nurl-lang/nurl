@@ -20422,7 +20422,10 @@ unsafe @ eng_byte s w i k → i {
                 ? & ( el_is_loan l ) == ( pl_var ( el_place l ) ) vid { ? == ( pl_path ( el_place l ) ) 0 { = whole_l T } { = part_l T } } {}
                 = a + a 1
             }
-            : b whole_part & & direct whole_l part_l
+            // (…the binding alone too, whole on one run and a part on
+            // another, `( pk o k )`: refused below for a value with no copy,
+            // as the walk refuses it - one with a copy is copied in there)
+            : b whole_part & whole_l part_l
             ? & & & | != rest 0 whole_part ( av_call new ) & != vty ET_NONE ! ( et_is_view vty ) | & | == ( et_kind vty ) EK_OPT == ( et_kind vty ) EK_RES direct ! ( et_copyable vty ) {
                 // which of them a run hands back is not known, so neither
                 // is whether the binding still owns its value. (A handle is
