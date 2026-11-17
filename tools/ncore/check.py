@@ -3830,7 +3830,7 @@ class FnCheck:
                     # stored value (cpcopy, agora #884). (A lend of another
                     # capture is left a lend.)
                     new = AV("O", (), (), new.held)
-                if (cur is not None and cur.own in ("O", "P") and getattr(src_var, "cpcopy", False)
+                if (cur is not None and cur.own in ("O", "P", "L") and getattr(src_var, "cpcopy", False)
                         and (new.own == "L" or (new.own == "O" and new.loans))):
                     # (…and any binding codegen copied a call's lend into where
                     # the call lent: a part of its own old value, or itself,
