@@ -2318,6 +2318,20 @@ class FnCheck:
             if av.own == "N":
                 # (a number, a string literal: nothing a view could outlive)
                 continue
+            # (taken over: a value that cannot be copied, in a closure that
+            # may leave its frame - the IR's capture flag 4. The binding moves
+            # into the env, which releases it: the closure holds what it
+            # held, and no handle of the binding. A by-value parameter too:
+            # the function takes it over there, and its caller hands it over
+            # - the engine's make_closure, agora #868, #887)
+            taken = body is not None and i < len(body.params) and getattr(body.vars[body.params[i]], "taken", False)
+            if taken and op[0] == "v" and not op[2]:
+                okind = self.fn.vars[op[1]].kind
+                if (okind == "local" and av.own == "O") or (okind == "param" and av.own in ("O", "P")):
+                    moved = self.move_out(st, op[1], line)
+                    held.add((fp, self.loan(st, (site, i, "take"), (op[1], op[2]), "share")))
+                    held |= hroot(moved.held, fp)
+                    continue
             if (body is not None
                     and any(x[4] == "held" and x[2] == i and x[0] < len(body.params)
                             and self.T.view_capable(body.vars[body.params[i]].ty)
