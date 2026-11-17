@@ -20426,7 +20426,10 @@ unsafe @ eng_byte s w i k → i {
             // another, `( pk o k )`: refused below for a value with no copy,
             // as the walk refuses it - one with a copy is copied in there)
             : b whole_part & whole_l part_l
-            ? & & & | != rest 0 whole_part ( av_call new ) & != vty ET_NONE ! ( et_is_view vty ) | & | == ( et_kind vty ) EK_OPT == ( et_kind vty ) EK_RES direct ! ( et_copyable vty ) {
+            // (…whole_part on an owned result too: a fresh temporary the call
+            // may hand back beside the binding and its part - the result
+            // holds the binding's loans all the same, agora #907)
+            ? & & & | != rest 0 whole_part | ( av_call new ) whole_part & != vty ET_NONE ! ( et_is_view vty ) | & | == ( et_kind vty ) EK_OPT == ( et_kind vty ) EK_RES direct ! ( et_copyable vty ) {
                 // which of them a run hands back is not known, so neither
                 // is whether the binding still owns its value. (A handle is
                 // told apart at run time by its buffer. An option or a

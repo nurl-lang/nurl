@@ -3857,7 +3857,9 @@ class FnCheck:
                     # (…the binding alone too, whole on one run and a part on
                     # another: refused below for a value with no copy)
                     whole_part = any(not pl[1] for pl in mine) and any(pl[1] for pl in mine)
-                    if (rest or whole_part) and new.call and v.ty is not None and v.ty[0] not in VIEW_TYPES and (
+                    # (…whole_part on an owned result too: a fresh temporary
+                    # the call may hand back beside the binding and its part)
+                    if (rest or whole_part) and (new.call or whole_part) and v.ty is not None and v.ty[0] not in VIEW_TYPES and (
                             (v.ty[0] in ("opt", "res") and direct) or not self.T.copyable(v.ty)):
                         # which of them a run hands back is not known, so
                         # neither is whether the binding still owns its value.
