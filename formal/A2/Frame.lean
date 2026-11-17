@@ -374,6 +374,42 @@ theorem PkgFreeId.frame {m m' : Mem} {x : Var} (hst : ∀ o, o ≠ x → m'.st o
     exact h r T hT fs te ms ev cs hP'
   · rw [hst r hrx] at hT'; exact h r T' hT' fs te ms ev cs hP
 
+/-- AGORA-901: a change of `x`, not a borrowed parameter, keeps the clean
+    roots: modes are kept, and a borrowed parameter no kill ends. -/
+theorem Clean.of_change {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : Var} {Ex : Entry}
+    (hx : Γ x = some Ex) (hxF : x ∉ F) {e : Eff} {hv : Bool}
+    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      e.kills hv d.kind = true → d.root ≠ x)
+    (hxr : Ex.mode ≠ .rootb) {ox : Option Entry} (hox : ∀ E', ox = some E' → E'.mode = Ex.mode)
+    {r : Var} (h : Clean (upd (kill e hv x Γ) x ox) r) : Clean Γ r :=
+  h.mono fun v E' hv' => by
+    by_cases hvx : v = x
+    · subst hvx
+      simp only [upd_same] at hv'
+      exact ⟨Ex, hx, hox E' hv', fun h => absurd h hxr⟩
+    · rw [upd_ne _ _ hvx] at hv'
+      unfold kill at hv'
+      cases hE : Γ v with
+      | none => rw [hE] at hv'; cases hv'
+      | some E =>
+        rw [hE] at hv'; cases hv'
+        exact ⟨E, rfl, killE_mode .., fun hrb => killE_rootb hanch hxF e hv hmn hE hrb⟩
+
+/-- AGORA-901: a kill keeps the clean roots: modes are kept, and a borrowed
+    parameter it ends none of. -/
+theorem Clean.of_kill {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : Var} (hxF : x ∉ F)
+    {e : Eff} {hv : Bool}
+    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      e.kills hv d.kind = true → d.root ≠ x)
+    {r : Var} (h : Clean (kill e hv x Γ) r) : Clean Γ r :=
+  h.mono fun v E' hv' => by
+    unfold kill at hv'
+    cases hE : Γ v with
+    | none => rw [hE] at hv'; cases hv'
+    | some E =>
+      rw [hE] at hv'; cases hv'
+      exact ⟨E, rfl, killE_mode .., fun hrb => killE_rootb hanch hxF e hv hmn hE hrb⟩
+
 /-- A node whose elements are among another's: what lies strictly below it
     lies below that one. -/
 theorem node_sub_sub {t : Ty} {c d d' : Nat} {es es' : List Val} (h : ∀ e ∈ es', e ∈ es) {P : Val}

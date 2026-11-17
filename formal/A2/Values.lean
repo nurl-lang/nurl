@@ -758,4 +758,11 @@ theorem MInv.bor_mode {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
   have h := hso.symm
   cases hm : E.mode <;> simp_all [Mode.ownSlot]
 
+theorem WFv.view_holdsView {τ : Ty} {d o l : Nat} (h : WFv τ (.view d o l)) : τ.holdsView = true := by
+  generalize hv : (Val.view d o l) = v at h
+  induction h with
+  | view => rfl
+  | dtor _ _ ih => simpa [Ty.holdsView] using ih hv
+  | _ => cases hv
+
 end A2

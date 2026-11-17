@@ -1063,6 +1063,22 @@ theorem Bare.of_leaf {n v : Val} (h : Bare n v) (hp : ∀ a b, v ≠ .pair a b) 
   | inl => exact absurd rfl (hl _)
   | inr => exact absurd rfl (hr _)
 
+theorem Bare.trans {a b c : Val} (h1 : Bare a b) (h2 : Bare b c) : Bare a c := by
+  induction h2 with
+  | refl => exact h1
+  | fst _ ih => exact .fst ih
+  | snd _ ih => exact .snd ih
+  | inl _ ih => exact .inl ih
+  | inr _ ih => exact .inr ih
+
+theorem Bare.sub {a b : Val} (h : Bare a b) : Sub a b := by
+  induction h with
+  | refl => exact Sub.refl _
+  | fst _ ih => exact Sub.fst ih
+  | snd _ ih => exact Sub.snd ih
+  | inl _ ih => exact Sub.inl ih
+  | inr _ ih => exact Sub.inr ih
+
 theorem Bare.href_eq {c c' : Nat} (h : Bare (.href c) (.href c')) : c = c' := by
   have := h.of_leaf (fun _ _ h => by cases h) (fun _ h => by cases h) (fun _ h => by cases h)
   cases this; rfl
@@ -1186,6 +1202,33 @@ theorem PkgNames.ofSt {m m' : Mem} (h : m'.st = m.st) {Γ : Ctx} {E : Entry} {v 
   · exact Or.inr (Or.inl h2)
   · exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T, t, d, es, hb, by rw [← h]; exact hT, hs, hv⟩))
   · exact Or.inr (Or.inr (Or.inr h4))
+
+/-- What an owner names: the views its tree stores, through what it holds. -/
+theorem PkgNames.own {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat} (hos : E.mode.ownSlot = true)
+    (hn : PkgNames m Γ E v i) : CleanDeps Γ E.held ∧ ∃ o l, Sub (.view i o l) v := by
+  have hnb : ¬ (E.mode = .bor ∨ E.mode = .rootb) := by rintro (h | h) <;> rw [h] at hos <;> cases hos
+  rcases hn with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ | ⟨_, hc, hv⟩
+  · exact absurd h hnb
+  · exact absurd h hnb
+  · exact absurd h hnb
+  · exact ⟨hc, hv⟩
+
+/-- What an owner, or a borrow depending on what it holds only, names of a
+    value holding no handle: the views it holds, through what it holds. -/
+theorem PkgNames.views_of {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
+    (hp : E.mode.ownSlot = true ∨ E.path = E.held) (hnh : ∀ c, ¬ Sub (.href c) v)
+    (hn : PkgNames m Γ E v i) : CleanDeps Γ E.held ∧ ∃ o l, Sub (.view i o l) v := by
+  have hos : E.mode = .bor ∨ E.mode = .rootb → E.mode.ownSlot = false := by
+    rintro (h | h) <;> rw [h] <;> rfl
+  rcases hn with ⟨hm, hc, ⟨c, hb, _⟩ | ⟨o, l, hv⟩⟩ | ⟨_, hc, o, l, hb⟩ | ⟨_, _, c, _, _, _, _, _, hb, _⟩ |
+      ⟨_, hc, hv⟩
+  · exact absurd hb.sub (hnh c)
+  · rcases hp with hp | hp
+    · rw [hos hm] at hp; cases hp
+    · rw [hp] at hc; exact ⟨hc, o, l, hv ▸ Sub.refl _⟩
+  · exact ⟨hc.right, o, l, hb.sub⟩
+  · exact absurd hb.sub (hnh c)
+  · exact ⟨hc, hv⟩
 
 /-- A value holding no handle and no view names nothing. -/
 theorem PkgNames.none {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
