@@ -121,7 +121,7 @@ theorem unpair_typed {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : 
       exact ⟨E, a, b, rfl, by rw [← hw'.ty]; exact hty, hdx, hdz⟩
   | _ => cases hst
 
-/-- AGORA-899: a typed move-out through a borrow (`takeB`) of an element
+/-- AGORA-900: a typed move-out through a borrow (`takeB`) of an element
     that holds a destructor value hands it to its `letd` first thing, and
     the binding is assigned nothing: `x` borrows a `Vec` of `t`, and if `t`
     holds a destructor value, `y` is moved first in its scope. -/

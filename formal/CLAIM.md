@@ -115,7 +115,7 @@ the LLVM / C11 memory model rather than redefining it.
   captures, the new binding holds as the borrow did (`HrefAt`'s
   `NamesIn`; a move-out keeps only old elements, `node_names_sub`).
   An element that holds a destructor value moves out the same way
-  (AGORA-899), when its new binding hands it to its `letd` first thing
+  (AGORA-900), when its new binding hands it to its `letd` first thing
   and is assigned nothing, as a call's owned result does (A2-drop.3a; the
   typing's guarantee `A2.Dtor.takeB_typed`). `A2/TakeBDWitness.lean` pops a
   destructor value through `vec_at vv 0` of a `letd` Vec of Vecs of them

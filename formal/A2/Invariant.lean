@@ -1824,13 +1824,13 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       `y`, which owns it as a field taken out of a struct is owned (`compE`:
       an element of a type that holds no views captures nothing by name, so
       it holds nothing), and the body runs in `y`'s scope, as `letv`'s does.  What moves out
-      may own a destructor value (AGORA-899): `y` then hands it to its
+      may own a destructor value (AGORA-900): `y` then hands it to its
       `letd` first thing, whose frame runs the destructor. -/
   | takeB {Γ Δ : Ctx} {F : List Var} {x y : Var} {i : Expr} {s : Stmt} {Ex : Entry} {t : Ty} :
       s.src = true → Γ y = none → y ∉ F →
       Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = false →
       x ∉ F → ExprT Γ i → memDeps Ex.path ≠ [] → ThruOK Γ F (.trunc i) Ex.ty Ex.path →
-      -- (AGORA-899: what moves out may own a destructor value: then `y`
+      -- (AGORA-900: what moves out may own a destructor value: then `y`
       -- hands it to its `letd` first thing, and is assigned nothing, as a
       -- call's owned result does, A2-drop.3a)
       (t.holdsDtor = true → y ∈ s.movedFirst ∧ y ∉ s.assigns) →

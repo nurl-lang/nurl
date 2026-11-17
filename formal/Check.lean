@@ -351,7 +351,7 @@ import A3
 #print axioms A2.TakeBVWitness.main2_safe
 #print axioms A2.TakeBVWitness.main2_no_leak
 #print axioms A2.node_names_sub
--- AGORA-899: ... and one that holds a destructor value, handed to its `letd`
+-- AGORA-900: ... and one that holds a destructor value, handed to its `letd`
 -- first thing (A2/TakeBDWitness.lean; the typing's guarantee `A2.Dtor.takeB_typed`)
 #print axioms A2.Dtor.takeB_typed
 #print axioms A2.TakeBDWitness.main12_typed

@@ -230,7 +230,7 @@ const MODULE_LAYERS = {
   TakeBDWitness: {
     layer: 5,
     category: 'Worked Examples',
-    summaryEn: 'AGORA-899: a destructor value popped through a vec_at borrow of a letd Vec of Vecs of them, handed to its own letd first thing (StmtT.takeB; the guarantee A2.Dtor.takeB_typed), with memory_safe and no_leak_end applied (main12_typed, main12_safe, main12_no_leak).',
+    summaryEn: 'AGORA-900: a destructor value popped through a vec_at borrow of a letd Vec of Vecs of them, handed to its own letd first thing (StmtT.takeB; the guarantee A2.Dtor.takeB_typed), with memory_safe and no_leak_end applied (main12_typed, main12_safe, main12_no_leak).',
   },
   TakeBVWitness: {
     layer: 5,

@@ -2,7 +2,7 @@ import A2.DtorWitness
 import A2.TakeBWitness
 
 /-!
-  A2 — a destructor value moved out through a borrow (AGORA-899).
+  A2 — a destructor value moved out through a borrow (AGORA-900).
 
       : a 1  : b 2  :drop x ( pair a b )        -- x of the destructor type DT
       :drop v ( vec_new DT )  ( vec_push v x )
