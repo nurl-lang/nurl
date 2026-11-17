@@ -324,6 +324,11 @@ import A3
 -- index (`Expr.dec`) and element sets (A2/PopWitness.lean)
 #print axioms A2.PopWitness.main_safe
 #print axioms A2.PopWitness.main_no_leak
+-- AGORA-885: the by-name owner hand-over, as an encoding (A2/HandOver.lean)
+#print axioms A2.HandOver.main_safe
+#print axioms A2.HandOver.main_no_leak
+#print axioms A2.HandOver.mainJ_safe
+#print axioms A2.HandOver.mainJ_no_leak
 -- A2-drop.3a: the destructor on the type (A2/DtorWitness.lean): the typing's
 -- guarantee for each binder, the destructor frame's end and panic, a witness
 #print axioms A2.Dtor.letv_owned_no_dtor
