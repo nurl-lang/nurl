@@ -724,6 +724,7 @@
 : ~ i g_f_aliased -1  // per variable (+ g_f_nv + 1): 1 if a place of it is in one of them (eng_handover)
 : ~ i g_f_readers -1  // per variable (+ g_f_nv + 1): the set of the variables a value naming a place of it was given to (eng_handover)
 : ~ i g_f_readers_over 0  // 1: a place's variable was out of that range - every variable may read every one
+: ~ i g_f_links -1  // (reader, variable) → the offset of the first statement codegen links the reader to the variable at: a `let`, or `=` by name (eng_handover, agora #881, #886)
 : ~ i g_f_alias_over 0  // 1: a place's variable was out of that range - every variable counts as aliased
 : i CORE_VW 7
 : i CORE_VF_CARRIED 16  // a variable's flag: a temporary of a join's arm that the enclosing statement releases (core_arm_end)
@@ -12369,6 +12370,8 @@ unsafe @ eng_keep_fn → v {
     ? < g_f_readers 0 { = g_f_readers ( wv_new ) } {}
     ( wv_fill g_f_readers + * g_f_nv 2 2 0 )
     = g_f_readers_over 0
+    ? >= g_f_links 0 { ( wv_drop g_f_links ) } {}
+    = g_f_links ( im_new )
     = g_av_none ( av_make OW_N 0 0 0 F )
 }
 
@@ -15648,7 +15651,36 @@ unsafe @ eng_byte s w i k → i {
     ^ F
 }
 
-@ eng_handover i st i place → v {
+// Codegen hands a replaced owner's old value only to the bindings it
+// linked to that owner (`__borrowers`, mem_udrop_link_alias) in code it
+// generated before the replacing statement: a `:` binding of a value that
+// names it - by name, a call's lend, a payload - or an `=` of it by name.
+// An `=` of a call's result keeps the call's per-run answer and links
+// nothing (gen_assign), and a link made later in the source - a loop's
+// body below the `=` - is not asked (agora #634). The engine reads the
+// same: `vid` is linked to the places `alias` names at statement `at`,
+// the first time only.
+@ __eng_key_link i vid i pv → i { ^ + * vid + * g_f_nv 2 2 + + pv g_f_nv 1 }
+
+@ __eng_link i vid i alias i at → v {
+    ? | < g_f_links 0 == alias 0 { ^ } {}
+    : ~ i k 0
+    ~ < k ( sq_len alias ) {
+        : i key ( __eng_key_link vid ( pl_var ( sq_at alias k ) ) )
+        : i was ( im_get g_f_links key -1 )
+        ? | < was 0 > was at { ( im_put g_f_links key at ) } {}
+        = k + k 1
+    }
+}
+
+// Was `vid` linked to variable `pv` by a statement before `at`?
+@ __eng_linked i vid i pv i at → b {
+    ? < g_f_links 0 { ^ T } {}
+    : i was ( im_get g_f_links ( __eng_key_link vid pv ) -1 )
+    ^ & >= was 0 < was at
+}
+
+@ eng_handover i st i place i sat → v {
     : i pv ( pl_var place )
     : i pp ( pl_path place )
     : i t0 ( ep_child pp ( ee_pay g_etn_T 0 ) )
@@ -15659,13 +15691,20 @@ unsafe @ eng_byte s w i k → i {
     // the order they are first made, and a set's order is theirs)
     : b aliased ( av_var_aliased pv )
     ? & ! aliased ! ( __el_handle_on place ) { ^ } {}
+    // (an `inout` parameter given a new value hands its old one to no
+    // binding that reads it: it has no drop flag of its own to hand over
+    // from, so codegen frees it outright - `__dropifv`. What read it ends
+    // there, agora #886. A part of another value it was stored into by name
+    // took it out of the slot - agora #598 - and keeps it, below)
+    : i pk ( fv_pidx pv )
+    : b iop & & & == pp 0 >= pk g_f_ncap == ( fv_kind pv ) VK_PARAM == ( fp_mode pk ) PM_INOUT
     : ~ i first -1
     // (no value names a place of the variable: no binding reads it; one
     // does only if it was given such a value in this function, in the
     // order of the variables)
     : i rd ( av_var_readers pv )
     : i nrd ? < rd 0 g_f_nv ( sq_len rd )
-    : ~ i ri ? aliased 0 nrd
+    : ~ i ri ? & aliased ! iop 0 nrd
     : ~ i vid 0
     ~ < ri nrd {
         = vid ? < rd 0 ri ( sq_at rd ri )
@@ -15689,7 +15728,13 @@ unsafe @ eng_byte s w i k → i {
                 // one, `ho`: what replacing the first one releases is the
                 // value it was handed, which nurlc hands to no one - the
                 // borrow ends there, agora #387)
-                ? & & ok ! ( eng_ho_on av place ) ! & == own OW_O == ( av_loans av ) 0 {
+                // (…nor a binding codegen never linked to the place's
+                // variable before this statement - one `=` gave a call's
+                // lend of it, `= o ( id other )`, however often it is given
+                // back to itself after: `= other` frees the old value under
+                // it. Its loan ends there instead, as the walk has it -
+                // agora #881, #886)
+                ? & & & ok ! ( eng_ho_on av place ) ! & == own OW_O == ( av_loans av ) 0 ( __eng_linked vid pv sat ) {
                     : i ty ( fv_ty vid )
                     ? & & != ty ET_NONE ! ( et_is_view ty ) != ( et_kind ty ) EK_CLOSURE {
                         : i loans ( av_loans av )
@@ -20362,7 +20407,7 @@ unsafe @ eng_byte s w i k → i {
         ? | == cown OW_O == cown OW_P {
             // (the old value is released: its destructor runs on it)
             ( eng_dtor_release st target vty ln 0 )
-            ( eng_handover st target )
+            ( eng_handover st target at )
             ( eng_effect st target EF_REPLACE ln 0 )
         } {}
         = new ( eng_reroot st new vid 0 )
@@ -20524,7 +20569,7 @@ unsafe @ eng_byte s w i k → i {
         }
         ? ! refill { ( eng_dtor_release st target fty ln 0 ) } {}
     } {}
-    ( eng_handover st target )
+    ( eng_handover st target at )
     ( eng_effect st target EF_REPLACE ln 0 )
     ? rehome { ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) ) } {}
     ( store_into st target add 0 F 0 )
@@ -20941,7 +20986,12 @@ unsafe @ eng_byte s w i k → i {
     : i ln ( eng_line at )
     = g_fc_line ln
     ? == g_eng_dbg 2 { ( nurl_eprintln ( nurl_str_cat3 ( nurl_str_cat3 `estmt ` ( nurl_str_int ln ) ` op=` ) ( nurl_str_int op ) ( nurl_str_cat ` paths=` ( nurl_str_int / ( wv_len g_ep ) 3 ) ) ) ) } {}
-    ? == op CO_LET { ( stmt_let st at ln ) ^ ( eng_next at ) } {}
+    ? == op CO_LET {
+        ( stmt_let st at ln )
+        : i lv ( ec + at 1 )
+        ? != ( fv_kind lv ) VK_TEMP { : i lav ( st_av st lv ) ? != lav 0 { ( __eng_link lv ( av_alias lav ) at ) } {} } {}
+        ^ ( eng_next at )
+    } {}
     ? == op CO_ASSIGN {
         : i irop ( ec + at 1 )
         // a store into a global of numbers: nothing to track; into a
@@ -20970,6 +21020,14 @@ unsafe @ eng_byte s w i k → i {
             ^ ( eng_next at )
         } {}
         ( stmt_assign st at target ln )
+        // (`=` of a binding by name links the target to what it names)
+        ? & == ( pl_path target ) 0 == ( ec + at 2 ) RV_USE {
+            : i uop ( eng_op ( ec + at 3 ) )
+            ? & ( op_is_place uop ) != ( fv_kind ( pl_var uop ) ) VK_TEMP {
+                : i tav ( st_av st ( pl_var target ) )
+                ? != tav 0 { ( __eng_link ( pl_var target ) ( av_alias tav ) at ) } {}
+            } {}
+        } {}
         ^ ( eng_next at )
     } {}
     ? == op CO_EVAL { ( eng_rvalue st + at 1 ln 99 ET_NONE WK_VALUE 0 0 -1 ) ^ ( eng_next at ) } {}

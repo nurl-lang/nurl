@@ -1,0 +1,3 @@
+### Fixed
+
+- **The ownership engine hands a replaced owner's old value only to a reader the generated code links to it** (AGORA-886). Giving a binding a call's lend and then giving it back to itself (`= o ( id other )  = o ( id o )`, or a forwarder, a generic identity, `pick`, or a value block argument) made `nurlc --engine` take `o` for the owner of `other`'s old value once `other` was replaced. The generated code never links `o` to `other` at an `=` of a call, so the program read freed memory. The borrow walk has refused these programs since AGORA-873, so the default compile was not affected. The engine and the reference checker in tools/ncore now refuse them too. A reader linked earlier by a `:` binding or by name keeps the old value.
