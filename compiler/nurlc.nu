@@ -7734,14 +7734,25 @@ unsafe @ __arg_lend_root i syms → s {
 // instance compiled at module end, so its `retcloeff` is not there where the
 // call is. The binding of the result is given placeholders, one per argument
 // it was handed (__rce_placeholders), resolved at the walk (agora #813).
+// Callees already found to return no closure (__rce_pending): a callee's
+// declared return type does not change, so it is parsed once, not at every
+// call of a library function compiled later (lazily) - the parse was paid
+// by nearly every call of a compile.
+: ~ i g_rce_noclo 0
+
 @ __rce_pending i syms s cn → b {
     ? | == 0 g_borrowck == 0 ( nurl_str_len cn ) { ^ F } {}
     // (Cheapest first, asked of every call: a callee compiled already —
     // nearly every one — has its answer.)
     ? != 0 ( nurl_sym_len g_fn_compiled cn ) { ^ F } {}
+    ? & != 0 g_rce_noclo != 0 ( nurl_sym_len g_rce_noclo cn ) { ^ F } {}
     : s rt ( nurl_sym_get g_root_syms cn )
     ? == 0 ( nurl_str_len rt ) { ^ F } {}
-    ? ! ( __is_closure_ty rt ) { ^ F } {}
+    ? ! ( __is_closure_ty rt ) {
+        ? == 0 g_rce_noclo { = g_rce_noclo ( nurl_sym_new ) } {}
+        ( nurl_sym_def g_rce_noclo cn `1` )
+        ^ F
+    } {}
     ^ == 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` cn )
 }
 
