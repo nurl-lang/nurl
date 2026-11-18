@@ -504,6 +504,7 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
     reswf := hE
     nfree := hnf
     names := hi.names
+    freshOK := hi.fresh
     postdt := hdt
     resnames := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn }
 

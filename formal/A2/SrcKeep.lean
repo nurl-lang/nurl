@@ -1,4 +1,5 @@
 import A2.Call
+import A2.Fresh
 
 /-! A2 — what source typing keeps, for the frame a destructor's binding opens.
 
@@ -380,7 +381,8 @@ theorem CtxRel.keepOut {Γ Δ : Ctx} (h : CtxRel Γ Δ) : KeepOut Γ Δ [] := by
 /-- **What a destructor's frame needs of its body**, from the body's typing
     alone: `letd` takes no premise for it. -/
 theorem srcCase {P : Prog} (hP : ProgOK P) : SrcCase P :=
-  fun ht hs hanch hw hn =>
-    ⟨(StmtT.ctxRel hP ht hs hanch hn).keepOut, StmtT.wf hP ht hw, StmtT.names hP ht hs hn⟩
+  fun ht hs hanch hw hn hf =>
+    ⟨(StmtT.ctxRel hP ht hs hanch hn).keepOut, StmtT.wf hP ht hw, StmtT.names hP ht hs hn,
+      StmtT.freshOK hP ht hs hf⟩
 
 end A2

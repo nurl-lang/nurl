@@ -272,6 +272,16 @@ theorem callPe_live (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) (v : 
 theorem with_live_true (E : Entry) (h : E.live = true) : { E with live := true } = E := by
   cases E; simp_all
 
+theorem callPe_fresh (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) (v : Var) :
+    (callPe Γ ps args v).fresh = false := by
+  unfold callPe; split
+  · split <;> rfl
+  · rfl
+
+theorem with_live_fresh (E : Entry) (h : E.live = true) (hf : E.fresh = false) :
+    { E with live := true, fresh := false } = E := by
+  cases E; simp_all
+
 @[simp] theorem callS_R : (callS Γ F fn args base x).R = callR Γ args := rfl
 @[simp] theorem callS_pe : (callS Γ F fn args base x).pe = callPe Γ fn.params args := rfl
 
@@ -280,17 +290,17 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
     (y = x ∧ (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some (callX fn)) ∨
     (y = m.nv + fn.params.length ∧ (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
       some ⟨fn.resTy, resMode fn, false, if (resMode fn).ownSlot then [] else (callS Γ F fn args m.nv x).A,
-        ownHeld (resMode fn).ownSlot fn.resTy (callS Γ F fn args m.nv x).A, false, false⟩) ∨
+        ownHeld (resMode fn).ownSlot fn.resTy (callS Γ F fn args m.nv x).A, false, false, false⟩) ∨
     (∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.inp, t) ∧ y = m.nv + 0 + k ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some (callPe Γ fn.params args k)) ∨
     (∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ y = m.nv + 0 + k ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
         some ⟨t, .own, true, [], rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
-          ownHeld true t (callS Γ F fn args m.nv x).A, false, false⟩) ∨
+          ownHeld true t (callS Γ F fn args m.nv x).A, false, false, false⟩) ∨
     (∃ (k : Nat) (b : Eff) (t : Ty), fn.params[k]? = some (PMode.inout b, t) ∧ y = args.getD k 0 ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
         some ⟨t, .own, true, [], rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
-          ownHeld true t (callS Γ F fn args m.nv x).A, false, false⟩) ∨
+          ownHeld true t (callS Γ F fn args m.nv x).A, false, false, false⟩) ∨
     ((∀ v, callRen fn.params args m.nv v ≠ y) ∧ y ≠ x ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = (callPost Γ fn args y).map Entry.clean) ∨
     ((callS Γ F fn args m.nv x).canon (sigCtx fn) y = none ∧ ∃ v, fn.params.length < v ∧ y = m.nv + v) := by
@@ -314,8 +324,8 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
           refine Or.inr (Or.inr (Or.inl ⟨v, t, hget, by simp, ?_⟩))
           simp only [RSetup.liftE, paramE, ↓reduceIte, Option.map_some]
           congr 1
-          show { callPe Γ fn.params args v with live := true } = _
-          rw [with_live_true _ (callPe_live _ _ _ _)]
+          show { callPe Γ fn.params args v with live := true, fresh := false } = _
+          rw [with_live_fresh _ (callPe_live _ _ _ _) (callPe_fresh _ _ _ _)]
         | sink =>
           refine Or.inr (Or.inr (Or.inr (Or.inl ⟨v, t, hget, by simp, ?_⟩)))
           simp [RSetup.liftE, paramE, liftMode, Mode.ownSlot, callS, rds]
@@ -887,6 +897,45 @@ theorem own_param_free (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {j : N
         rw [hEr]; rfl
       exact (h.hollow_back hi hh hdom).noMem hi hla.rootMem
 
+/-- Agora #909: at a call, the callee's view of the context keeps fresh
+    borrows fresh: the caller's own entries are as they were, cleaned, and
+    their roots are the caller's bindings, an `inout` argument among them
+    owning its slot; the frame's own entries are not fresh. -/
+theorem fresh_canon (h : CallH P Γ F x fn args m.nv) :
+    FreshOK ((callS Γ F fn args m.nv x).canon (sigCtx fn)) := by
+  have hpost := (callPost_fresh h.freshOK fn args).1
+  have hlt : ∀ r Er, callPost Γ fn args r = some Er → r < m.nv := by
+    intro r Er hr
+    cases hg : Γ r with
+    | none => have := h.postdm.1 r; rw [hg, hr] at this; cases this
+    | some E => exact h.domlt r E hg
+  have hk : KeepsFrame (callPost Γ fn args) ((callS Γ F fn args m.nv x).canon (sigCtx fn)) := by
+    intro r Er hr hm
+    rcases h.ctx_cases r with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
+        ⟨k, b, t, hk, rfl, hc⟩ | ⟨_, _, hc⟩ | ⟨hc, v, hv, rfl⟩
+    · exfalso; have := h.postdm.1 r; rw [h.fresh, hr] at this; cases this
+    · exact absurd (hlt _ _ hr) (Nat.not_lt.mpr (by simp))
+    · exact absurd (hlt _ _ hr) (Nat.not_lt.mpr (by simp))
+    · exact absurd (hlt _ _ hr) (Nat.not_lt.mpr (by simp))
+    · exact ⟨_, hc, Or.inl rfl⟩
+    · rw [hr] at hc; exact ⟨_, hc, by rw [clean_mode]; exact hm⟩
+    · exact absurd (hlt _ _ hr) (Nat.not_lt.mpr (by simp))
+  intro y E hy
+  rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk', rfl, hc⟩ | ⟨k, t, hk', rfl, hc⟩ |
+      ⟨k, b, t, hk', rfl, hc⟩ | ⟨_, _, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hy
+  · cases hy; exact FreshE.of_fresh rfl
+  · cases hy; exact FreshE.of_fresh rfl
+  · cases hy; exact FreshE.of_fresh (callPe_fresh _ _ _ _)
+  · cases hy; exact FreshE.of_fresh rfl
+  · cases hy; exact FreshE.of_fresh rfl
+  · obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hy
+    intro hl hn hb hf
+    rw [clean_live] at hl
+    have hn0 : E0.ty ≠ .int := by rwa [clean_ty] at hn
+    rw [Entry.clean_eq hl hn0] at hb hf ⊢
+    exact (hpost y E0 h0).mono hk hl hn0 hb hf
+  · cases hy
+
 /-- The invariant of memory, in the context the call sets up. -/
 theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     (hb : BindParams m fn.params args m.nv 0 m1) :
@@ -1002,6 +1051,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       rw [clean_mode, hm]; exact hi.noInout y E0 b h0
   wf := RSetup.canon_wf h.sOK h.sig_abs (sigCtx_wf fn)
   names := RSetup.canon_names h.sOK h.sig_abs (sigCtx_names fn)
+  fresh := h.fresh_canon
   held y E sl T hy hl hst hT := by
     rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
         ⟨k, b', t, hk, rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hy <;> (try cases hy)
@@ -1251,18 +1301,18 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       obtain ⟨v', hv', hok⟩ := h.slot_inp hi hb hk
       rw [hsv] at hv'; cases hv'
       by_cases hint : Ea.ty = .int
-      · have hcp : callPe Γ fn.params args k = ⟨.int, .rootb, true, [], [], false, false⟩ := by
+      · have hcp : callPe Γ fn.params args k = ⟨.int, .rootb, true, [], [], false, false, false⟩ := by
           unfold callPe; rw [hk]; simp only; rw [hae]; simp [hint]
         rw [hcp] at hok
         obtain ⟨n, rfl⟩ := valOK_int.mp hok
         exact absurd hn PkgNames.none_int
       · have hcp : callPe Γ fn.params args k = ⟨Ea.ty, .rootb, true,
-            typedDeps Ea.ty (derive (args.getD k 0) Ea .self), typedDeps Ea.ty Ea.held, false, false⟩ := by
+            typedDeps Ea.ty (derive (args.getD k 0) Ea .self), typedDeps Ea.ty Ea.held, false, false, false⟩ := by
           unfold callPe; rw [hk]; simp only; rw [hae]; simp [hint]
         rw [hcp] at hnm
         have hdD := MInv.dom_roots (wf_derive hi hEa hla hint .self)
         have hdH := MInv.dom_roots (wf_held hi hEa hla hint)
-        have hnΓ : PkgNames m Γ ⟨Ea.ty, .rootb, true, derive (args.getD k 0) Ea .self, Ea.held, false, false⟩
+        have hnΓ : PkgNames m Γ ⟨Ea.ty, .rootb, true, derive (args.getD k 0) Ea .self, Ea.held, false, false, false⟩
             v i :=
           PkgNames.mapClean (fun h => by exact h) (fun h => by exact h)
             (fun hc => h.cleanDeps_back hi (CleanDeps.typed.mp hc) hdD)
@@ -1303,7 +1353,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
                 fun hcl i o l hv =>
                   hi.pkgFree _ Ea true V hEa (Or.inl hla) hsa i (Or.inr (Or.inr (Or.inr ⟨hos, hcl, o, l, hv⟩)))
               exact lend_pkgNames
-                (E' := ⟨Ea.ty, .bor, true, derive (args.getD k 0) Ea .self, Ea.held, false, false⟩)
+                (E' := ⟨Ea.ty, .bor, true, derive (args.getD k 0) Ea .self, Ea.held, false, false, false⟩)
                 hi.heap (Or.inl ⟨_, V, hsa, Sub.refl _⟩) hnh rfl
                 (fun _ ⟨_, hb'⟩ => PkgFreeAt.top hi.heap hsa (bare_lend_ids V hnh hb'))
                 hvw (fun _ i o l he => absurd he (hw.owning_noView (hown hos).1))

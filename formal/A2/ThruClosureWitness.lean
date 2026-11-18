@@ -79,10 +79,10 @@ theorem code_thru : ThruFn P 1 := ThruFn.here rfl rfl
 
 /-! ### Contexts whose borrowed parameters hold nothing -/
 
-def R0 : Entry := ⟨.int, .bor, false, [], [], false, false⟩
-def Eloc : Entry := ⟨vvi, .own, true, [], [], false, false⟩
-def Ein : Entry := ⟨vi, .own, true, [], [], false, false⟩
-def Eb : Entry := ⟨vi, .bor, true, [⟨2, .inner⟩], [], false, false⟩
+def R0 : Entry := ⟨.int, .bor, false, [], [], false, false, false⟩
+def Eloc : Entry := ⟨vvi, .own, true, [], [], false, false, false⟩
+def Ein : Entry := ⟨vi, .own, true, [], [], false, false, false⟩
+def Eb : Entry := ⟨vi, .bor, true, [⟨2, .inner⟩], [], false, false, false⟩
 
 /-- No borrowed parameter depends on anything (so none pins a binding), and
     no binding runs a destructor. -/
@@ -225,7 +225,7 @@ theorem thru_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (
     have := RhsT.at (Γ := G4) (F := []) (E := Eloc) (t := vi) (i := .lit 0) hG42 rfl rfl ExprT.lit
     simpa [elemE, Eloc, Eb, vi, vvi, derive, Mode.isRoot, rootKind] using this
   -- the push through the borrow
-  have hed := StmtT.editB (P := Q) (ξ := .none) (Γ := G5) (Γ1 := G5) (F := []) (x := 4) (op := .push n)
+  have hed := StmtT.editB (b := true) (P := Q) (ξ := .none) (Γ := G5) (Γ1 := G5) (F := []) (x := 4) (op := .push n)
     (Ex := Eb) (Ex1 := Eb) (t := .int) (D := []) (by simp [G5, A2.setE]) rfl rfl rfl rfl (by simp)
     (EditArg.push (Ey := En) (by simp [G5, A2.setE, hn4, hG4n]) hnl hnt PushArg.int)
     (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hn4)
@@ -270,7 +270,7 @@ theorem body_typed {Q : Prog} {Γ : Ctx} {s : Stmt}
 theorem code_body : ∃ Δ, StmtT P .none (sigCtx code) [] code.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } :=
-  body_typed (thru_typed calm_code (En := ⟨.int, .rootb, true, [], [], false, false⟩)
+  body_typed (thru_typed calm_code (En := ⟨.int, .rootb, true, [], [], false, false, false⟩)
     (by simp [sigCtx, code, paramE, Ty.hasFn]) rfl rfl (by decide) (by decide) (by decide)
     (by simp [sigCtx, code]) (by simp [sigCtx, code]) (by simp [sigCtx, code])
     (by simp [sigCtx, code, R0, resMode]))
@@ -372,7 +372,7 @@ theorem callT_recv {P : Prog} {Γ : Ctx} {F : List Var} {σ : Nat} {sig : Fn} {c
 theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
-  let EC : Entry := ⟨CT, .own, true, [], [] ++ capDeps [], false, false⟩
+  let EC : Entry := ⟨CT, .own, true, [], [] ++ capDeps [], false, false, false⟩
   have hpack : RhsT K1 [] (.pack [1] .int [0] 0 []) EC K1 :=
     RhsT.pack (q := .any) (Ey := intE) (by simp [K1, A2.setE]) rfl rfl PushArg.int
       ⟨List.nodup_nil, fun _ h => by cases h⟩ (Cross.fits_any _ _ rfl)

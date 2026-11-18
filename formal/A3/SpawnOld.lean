@@ -331,25 +331,25 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     intro ξ Γ F Δ ht hi
     generalize hS : Stmt.scopeD x f s = S at ht hi
     induction ht with
-    | scopeD hxE hxF hs hpx hKO hWd hNd hΔd hself _ =>
+    | scopeD hxE hxF hs hpx hKO hWd hNd hΔd hself hfd _ =>
       cases hS
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
       obtain ⟨Ex, tx, hx, hmo, hrest⟩ := hxE
       exact StmtT.scopeD ⟨Ex, tx, hx, hmo, hrest⟩ hxF
         (ih hsp hhole _ _ _ _ hs ((Inv.scopeD_iff.mp hi).scopeIn hx (by rw [hmo]; simp))) hpx
-        (by rw [hsp']; exact hKO) hWd hNd hΔd hself
+        (by rw [hsp']; exact hKO) hWd hNd hΔd hself hfd
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
   | @scopeL k t x s r K h ih =>
     intro ξ Γ F Δ ht hi
     generalize hS : Stmt.scopeL k t x s = S at ht hi
     induction ht with
-    | scopeL hxE hxF hs hpx hKO hWd hNd _ =>
+    | scopeL hxE hxF hs hpx hKO hWd hNd hfd _ =>
       cases hS
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
       obtain ⟨Ex, hx, hnrb, hty, hdl⟩ := hxE
       exact StmtT.scopeL ⟨Ex, hx, hnrb, hty, hdl⟩ hxF (ih hsp hhole _ _ _ _ hs (hi.scopeLIn hx hnrb)) hpx
-        (by rw [hsp']; exact hKO) hWd hNd
+        (by rw [hsp']; exact hKO) hWd hNd hfd
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
   | @block s r K _ ih =>
@@ -558,7 +558,8 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
       refine ⟨by simp [callRes, intE, hres], by simp [callRes, intE, resMode, hro], fun hfx => ?_,
         fun _ => ⟨rfl, fun _ => List.nil_subset _, List.nil_subset _⟩,
         fun h => by simp [intE] at h, by simp [callRes, intE], fun h => by simp [callRes] at h,
-        fun h => by simp [intE] at h⟩
+        fun h => by simp [intE] at h,
+      fun _ _ _ hfr => by fresh_ew⟩
       exfalso; simp [Entry.fixed, intE] at hfx
     have hW : Weaker (A2.setE (callPostAux Γ fn args fn.params args 0 Γ) x intE)
         (A2.setE (callPost Γ fn args) x (callRes Γ fn args)) :=
@@ -820,7 +821,7 @@ theorem spawnFail_ok {P : Prog} {m : Mem} {s : Stmt} (hok : ThreadOK P m s) {K :
   have ht' := hR.plug hsp (fun _ Γ0 F0 Δ0 h0 hi0 =>
     StmtT.seq (letcall_src h0)
       (StmtT.panic hi0.wf hi0.names (fun _ => rfl) (fun _ E h => ⟨E, h, rfl, rfl, fun _ => rfl⟩)
-        (DKeep.refl _ _) (DStay.refl _ _)) h0) _ Γ F Δ ht hi
+        (DKeep.refl _ _) (DStay.refl _ _) id) h0) _ Γ F Δ ht hi
   have hi' : Inv m Γ F (K (.seq .panic (.letcall x f args k))) :=
     hi.respine hsp' (hR.vars_sub fun v hv => by simpa [Stmt.vars] using hv)
       (hR.catchOK hsp trivial hi.catchOK) (hR.pinOK hsp trivial hi.pinIn) (hR.dtorPinOK hsp trivial hi.dtorIn)

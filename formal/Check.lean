@@ -516,3 +516,30 @@ import A3
 #print axioms A3.claim_full
 #print axioms A3.made_safe_full
 #print axioms A3.claim_made_full
+-- Agora #909 (design e): a destructor of a type that holds views changes elements through a
+-- fresh borrow of its own local, an `edit false`, and is not through-changing
+-- (A2/FreshWitness.lean); no new premise removes a typing (A2/Unfresh.lean)
+#print axioms A2.FreshWitness.dtor_not_thru
+#print axioms A2.FreshWitness.dtor_ok
+#print axioms A2.FreshWitness.prog_ok
+#print axioms A2.FreshWitness.main_typed
+#print axioms A2.FreshWitness.main_safe
+#print axioms A2.FreshWitness.main_no_leak
+#print axioms A2.FreshWitness.edit_false_fresh
+#print axioms A2.FreshWitness.at_rootb_not_fresh
+#print axioms A2.FreshWitness.at_bor_not_fresh
+#print axioms A2.StmtT.unfresh
+#print axioms A2.weaker_unfreshC
+#print axioms A2.freshOK_unfreshC
+#print axioms A2.unfreshC_panic
+-- ... and a closure over a slice whose code does so, called through its package
+-- (A2/FreshClosureWitness.lean)
+#print axioms A2.FreshClosureWitness.code_impl
+#print axioms A2.FreshClosureWitness.prog_ok
+#print axioms A2.FreshClosureWitness.main_typed
+#print axioms A2.FreshClosureWitness.main_safe
+#print axioms A2.FreshClosureWitness.main_no_leak
+#print axioms A2.freshOK_of_noFresh
+#print axioms A2.EntryWeaker.fresh_of_not
+#print axioms A2.RhsT.borrow_unfresh
+#print axioms A2.RhsT.at_unfresh

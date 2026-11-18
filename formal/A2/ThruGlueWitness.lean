@@ -153,7 +153,7 @@ theorem glue_glueOK : GlueOK P 1 GT :=
 
 theorem gluedrop_ok : DropFnOK P 1 GT := Or.inr (Or.inl glue_glueOK)
 
-def EG : Entry := ⟨GDT, .own, true, [], [], false, false⟩
+def EG : Entry := ⟨GDT, .own, true, [], [], false, false, false⟩
 
 theorem glue_body : ∃ Δ, StmtT P ξ (sigCtx glue) [] glue.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
@@ -170,16 +170,16 @@ theorem glue_body : ∃ Δ, StmtT P ξ (sigCtx glue) [] glue.body Δ ∧
     { EG with live := false, dtor := false }) 2 (compE EG DT)) 3 (compE EG .int)
   have hKa : NoRootb Ka :=
     (((hS.kill _ _ _).setE (by simp [EG])).setE (by simp [compE, DT])).setE (by simp [compE, intE])
-  have hEx : compE EG DT = ⟨DT, .own, true, [], [], false, false⟩ := by
+  have hEx : compE EG DT = ⟨DT, .own, true, [], [], false, false, false⟩ := by
     simp [compE, DT, EG, ownHeld]
   let Kb : Ctx := A2.setE (kill .replace false 2 Ka) 2 { compE EG DT with live := false, dtor := false }
   have hKb : NoRootb Kb := (hKa.kill _ _ _).setE (by rw [hEx]; simp)
-  have hmv : RhsT Ka [] (.var 2) ⟨(compE EG DT).ty, .own, true, [], (compE EG DT).held, false, false⟩ Kb :=
+  have hmv : RhsT Ka [] (.var 2) ⟨(compE EG DT).ty, .own, true, [], (compE EG DT).held, false, false, false⟩ Kb :=
     RhsT.moveOwn (by simp [Ka, A2.setE, upd]) (by rw [hEx]) (by rw [hEx]) (by simp) (hKa.noPin _)
       (DtorSafe.of_none (fun v E h => (hKa v E h).2.1) _ _ _)
-  let ED : Entry := Entry.arm { (⟨(compE EG DT).ty, .own, true, [], (compE EG DT).held, false, false⟩ : Entry)
+  let ED : Entry := Entry.arm { (⟨(compE EG DT).ty, .own, true, [], (compE EG DT).held, false, false, false⟩ : Entry)
     with ty := DT, held := (compE EG DT).held }
-  have hED : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+  have hED : ED = ⟨DT, .own, true, [], [], false, false, false⟩ := by
     simp only [ED]; rw [hEx]; simp [Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let Kc : Ctx := A2.setE Kb 4 ED
   have hKc : NoRootb Kc := hKb.setE (by rw [hED]; simp)
@@ -272,7 +272,7 @@ theorem glue2_implOK : ImplGlueOK P 3 GT 1 2 :=
 
 theorem impldrop_ok : DropFnOK P 3 GT := Or.inr (Or.inr (Or.inl ⟨1, 2, glue2_implOK⟩))
 
-def ES2 : Entry := ⟨SDT2, .own, true, [], [], false, false⟩
+def ES2 : Entry := ⟨SDT2, .own, true, [], [], false, false, false⟩
 
 theorem glue2_body : ∃ Δ, StmtT P ξ (sigCtx glue2) [] glue2.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
@@ -287,10 +287,10 @@ theorem glue2_body : ∃ Δ, StmtT P ξ (sigCtx glue2) [] glue2.body Δ ∧
     · simp [sigCtx, glue2] at h
   let Ka : Ctx := A2.setE (kill .replace false 0 (sigCtx glue2)) 0 { ES2 with live := false, dtor := false }
   have hKa : NoRootb Ka := (hS.kill _ _ _).setE (by simp [ES2])
-  have hmv : RhsT (sigCtx glue2) [] (.var 0) ⟨ES2.ty, .own, true, [], ES2.held, false, false⟩ Ka :=
+  have hmv : RhsT (sigCtx glue2) [] (.var 0) ⟨ES2.ty, .own, true, [], ES2.held, false, false, false⟩ Ka :=
     RhsT.moveOwn h0 rfl rfl (by simp) (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _)
-  let EW : Entry := Entry.arm { (⟨ES2.ty, .own, true, [], ES2.held, false, false⟩ : Entry) with ty := GDT, held := ES2.held }
-  have hEW : EW = ⟨GDT, .own, true, [], [], false, false⟩ := by
+  let EW : Entry := Entry.arm { (⟨ES2.ty, .own, true, [], ES2.held, false, false, false⟩ : Entry) with ty := GDT, held := ES2.held }
+  have hEW : EW = ⟨GDT, .own, true, [], [], false, false, false⟩ := by
     simp [EW, ES2, Entry.arm, GDT, GT, DT, T, Ty.dtorViews, Ty.holdsView]
   let Kb : Ctx := A2.setE Ka 2 EW
   have hKb : NoRootb Kb := hKa.setE (by rw [hEW]; simp)
@@ -372,7 +372,7 @@ def main : Stmt :=
   .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2))
     (.letd 2 0 (.pair 0 1) (.letv 3 (.expr (.lit 3)) (.letd 4 3 (.pair 2 3) .skip))))
 
-def EP : Entry := ⟨T, .own, true, [], [] ++ [], false, false⟩
+def EP : Entry := ⟨T, .own, true, [], [] ++ [], false, false, false⟩
 
 /-- **The caller of a struct whose own `% Drop` changes elements through a
     borrow is typed**: the struct, which holds a destructor value and a
@@ -383,7 +383,7 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
   have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
   let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
-  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false, false⟩ := by
     simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K3 : Ctx := A2.setE K2 2 ED
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
@@ -399,7 +399,7 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
       (hK4.noPin _) (DtorSafe.of_none (fun v E h => (hK4 v E h).2.1) _ _ _)
   have hK53 : K5 3 = some intE := by
     simp [K5, K4, A2.setE, upd, A2.kill, killE, hits, intE, Entry.vdeps, Mode.ownSlot]
-  let EG0 : Entry := ⟨.prod ED.ty intE.ty, .own, true, [], ED.held ++ [], false, false⟩
+  let EG0 : Entry := ⟨.prod ED.ty intE.ty, .own, true, [], ED.held ++ [], false, false, false⟩
   have hgp : RhsT K4 [] (.pair 2 3) EG0 K5 :=
     RhsT.pair (Ey := ED) (Ez := intE) (by simp [K4, K3, A2.setE, upd]) (by rw [hEDe]) hmove
       hK53 rfl PushArg.int (by simp [intE, Mode.ownSlot])

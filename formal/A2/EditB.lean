@@ -278,6 +278,7 @@ theorem MInv.kill_pin {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanc
     rw [killE_mode] at hm; rw [killE_vdeps]
     exact hi.rootbLt p E hE hm
   names := hi.names.kill e hv r
+  fresh := hi.fresh.kill e hv r
   held v E' sl T h hl hsl hT := by
     simp only [A2.kill] at h
     obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
@@ -379,7 +380,8 @@ theorem MInv.reset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex E0 : Entr
       ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true)
     (hN : Ex.live = true → (Ex.ty ≠ .int ∨ Ex.mode = .rootb) → NameOK Γ Ex)
     (hnm : NamesIn w Ex.held)
-    (hpf : ∀ i, PkgNames m Γ Ex w i → PkgFreeId m i) : MInv m (A2.setE Γ x Ex) where
+    (hpf : ∀ i, PkgNames m Γ Ex w i → PkgFreeId m i) (hfe : FreshE Γ Ex := by fresh_e) :
+    MInv m (A2.setE Γ x Ex) where
   dom v := by
     by_cases hvx : v = x
     · subst hvx; simp [A2.setE, hw]
@@ -409,6 +411,9 @@ theorem MInv.reset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex E0 : Entr
     · subst hpx; simp only [A2.setE, upd_same, Option.some.injEq] at h; subst h; rw [hmx] at hm; cases hm
     · simp only [A2.setE, upd_ne _ _ hpx] at h; exact hi.rootbLt p E' h hm
   names := hi.names.reset hx hm0 (by rw [hmx]; rfl) hN
+  fresh := hi.fresh.setE (hfe.mono (KeepsFrame.setE (fun Ek hEk hm => by
+    rw [hx] at hEk; cases hEk; rw [← hm0]; exact hm))) (fun Ek hEk hm => by
+    rw [hx] at hEk; cases hEk; rw [← hm0]; exact hm)
   held v E' sl T h hl hsl hT := by
     by_cases hvx : v = x
     · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at h; subst h
@@ -445,6 +450,7 @@ theorem MInv.reset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex E0 : Entr
     (`MInv.kill_more`; the owner's own kill is absorbed), and `x` is live
     again, valid through the dependency that reached the changed node. -/
 theorem MInv.editB_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) (hn : NameWF Γ1)
+    (hfr : FreshOK Γ1)
     (hanch : RootbAnch Γ1 F) {x : Var} {op : Edit} {Ex : Entry} {t : Ty}
     (hx : Γ1 x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
     (hthru : ThruOK Γ1 F op Ex.ty Ex.path) {dep : Dep} (hdep : dep ∈ memDeps Ex.path)
@@ -469,6 +475,7 @@ theorem MInv.editB_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) (
     (fun _ hn' => ?_) (fun c' hc' => by simp [Val.names] at hc')
     (fun i hn' => hpf i (hn'.mono (Clean.of_same fun v E' hv => by
       obtain ⟨E, hE, hm, hp, hh⟩ := killNames_back _ hv; exact ⟨E, hE, hm, hp, fun _ => hh⟩)))
+    ((hfr x Ex hx).mono ((KeepsFrame.refl Γ1).killNames _))
   · obtain ⟨Er, hEr, hro⟩ := hw x Ex hx hl hn' r hr
     obtain ⟨Er', hEr', hEr'c⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex.path) hEr
     exact ⟨Er', hEr', by rcases hEr'c with rfl | rfl <;> exact hro⟩
@@ -1588,7 +1595,8 @@ theorem NewSlot.edit {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     killE_mode .., fun hl' _ r hr' => ?_, killE_ty .., fun hl' _ => ?_, fun hl' U hU => ?_,
     fun U hU => ?_, fun hdb _ _ dd hdd hnm => ?_,
     fun h => by rw [killE_dtor] at h; rw [killE_dbind]; exact hi.wf.arm o Eo ho h,
-    fun h => by rw [killE_dbind] at h; rw [killE_ty]; exact hi.wf.view o Eo ho h, ?_, ?_⟩
+    fun h => by rw [killE_dbind] at h; rw [killE_ty]; exact hi.wf.view o Eo ho h, ?_, ?_,
+    FreshE.of_ownSlot (by rw [killE_mode]; exact hos)⟩
   · -- the views of the live owner
     have hl := hlive hl'
     obtain ⟨T1, hT1, hv1⟩ := hlv0 hl
@@ -2023,7 +2031,7 @@ theorem MInv.editB_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
         (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hp.np (fun _ _ _ h => absurd h (hvv _ _ _)) hp.sf
           hvT (Or.inl ⟨rfl, rfl, rfl⟩) hr) (by simp)
         hhv hr hw' rfl hsh' hfree hes
-  exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
+  exact MInv.editB_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref hpfx
 
 /-- `editPushRealloc`: the same, the node's buffer moving to a fresh one. -/
@@ -2114,7 +2122,7 @@ theorem MInv.editB_pushRealloc {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv 
         (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hp.np (fun _ _ _ h => absurd h (hvv _ _ _)) hp.sf
           hvT (Or.inr ⟨rfl, rfl, rfl⟩) hr) (by simp)
         hhv hr hw' rfl hsh' hfree hes
-  exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
+  exact MInv.editB_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref hpfx
 
 /-- `editTrunc`: the node's elements from the `n`-th on are freed. -/
@@ -2158,7 +2166,7 @@ theorem MInv.editB_trunc {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     rw [hdrop] at hcan hds ⊢
     exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst (HeapOK.editTrunc hi.heap hT0 hf hr)
       (by simp) hhv hr hw' rfl hsh' hfree hes
-  exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
+  exact MInv.editB_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref hpfx
 
 /-! ### An element set (`vec_set`) -/
@@ -2378,7 +2386,7 @@ theorem MInv.editB_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
     have hd := hdrop dep.kind (decide (Eo.ty = Ex.ty))
     rw [hd] at hcan hds ⊢
     exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst hheap (by simp) hhv hr hw' rfl hsh' hfree hfe
-  exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
+  exact MInv.editB_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref hpfx
 
 /-- `editSet`: the node's `n`-th element is replaced by the value taken in,

@@ -115,12 +115,12 @@ theorem mem_shareOf {D : List Dep} {d : Dep} :
 
 def envE (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Entry :=
   ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held ++ shareOf (derive c Ec .self ++ Ec.held)),
-    envDeps cs (Ec.held ++ shareOf Ec.held), false, false⟩
+    envDeps cs (Ec.held ++ shareOf Ec.held), false, false, false⟩
 
 /-- The environment's entry without the shares: what its value is valid
     through. -/
 def envE0 (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Entry :=
-  ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held), envDeps cs Ec.held, false, false⟩
+  ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held), envDeps cs Ec.held, false, false, false⟩
 
 theorem envE0_path_sub (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) :
     (envE0 c Ec te cs).path ⊆ (envE c Ec te cs).path :=
@@ -214,6 +214,7 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
         ⟨Ey, by have hne : y ≠ x := fun e => by rw [e, hx] at hy; cases hy
                 simp [setE, upd_ne _ _ hne, hy], rfl, rfl, fun _ h => h⟩
       exact (hi.names w Ew hw hl' hn).keeps hk (fun d hd hkd hX => by cases hX)
+  · exact hi.fresh.bind hx (fun _ _ hb _ => by rw [hm] at hb; cases hb)
   · intro w Ew sl T hw hl' hsl hT
     by_cases hwx : w = x
     · subst hwx
@@ -431,7 +432,9 @@ theorem clean_weaker (E : Entry) : EntryWeaker E.clean E := by
     fun hd => Or.inl (by rw [Entry.clean_dtor]; exact hd),
     fun hd hos hn d hnm => by
       rw [Entry.clean_dbind] at hd; rw [clean_mode] at hos; rw [clean_ty, clean_mode] at hn
-      exact (Entry.clean_vdeps_mem hd hos hn hnm).symm⟩
+      exact (Entry.clean_vdeps_mem hd hos hn hnm).symm,
+      fun hl hn _ hfr => by
+        rw [Entry.clean_eq hl hn]; exact ⟨hfr, List.Subset.refl _⟩⟩
 
 theorem clean_rootb {E : Entry} (h : E.mode = .rootb) : E.clean = E :=
   clean_fixed (Or.inl h)
@@ -547,8 +550,19 @@ theorem CtxWF.clean {Γ : Ctx} (hw : CtxWF Γ) : CtxWF (cleanC Γ) where
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
     rw [Entry.clean_dbind] at hd; rw [clean_ty]; exact hw.view v E0 h0 hd
 
+/-- Agora #909: cleaning keeps fresh borrows fresh: a live one is untouched. -/
+theorem cleanC_fresh {Γ : Ctx} (h : FreshOK Γ) : FreshOK (cleanC Γ) := by
+  refine h.of_le (fun v E hv hl hn hb hf => ?_) (fun r Er hr hm => ⟨Er.clean, by simp [cleanC, hr],
+    by rw [clean_mode]; exact hm⟩)
+  obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
+  rw [clean_live] at hl
+  have hn0 : E0.ty ≠ .int := by rwa [clean_ty] at hn
+  rw [Entry.clean_eq hl hn0] at hb hf ⊢
+  exact ⟨E0, h0, hl, hn0, hb, hf, List.Subset.refl _, List.Subset.refl _⟩
+
 theorem MInv.clean {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : MInv m (cleanC Γ) where
   names := cleanC_names hi.names
+  fresh := cleanC_fresh hi.fresh
   shares v E sl T hv hsl hown hT := by
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
     rw [clean_ty]; exact hi.shares v E0 sl T h0 hsl hown hT
@@ -864,6 +878,9 @@ theorem post_rel {Γe Γ : Ctx} {fn sig : Fn} {A C : List Var} {e : Var}
           refine RSetup.EntryWeaker.mk' (by simp [clean_ty]) (by simp [clean_mode])
             (by rw [fixed_setHeld, clean_fixed_iff]; exact hrba (by simp)) (by simp [clean_live])
             (fun _ => clean_path_sub _) ?_ (hdh := fun hd => absurd hd (by simp [hdba]))
+            (hf := fun hl hn _ hfr => by
+              simp [clean_live, clean_ty] at hl hn hfr ⊢
+              rw [Entry.clean_eq hl hn]; exact ⟨hfr, List.Subset.refl _⟩)
           intro d hd
           by_cases hvv : t.holdsView = true
           · rw [ite_eq_left hvv] at hd ⊢
@@ -1174,7 +1191,13 @@ theorem rerootE_noE {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker E 
       fun h => ⟨(hw.dtor h).1, by show reroot p D E.held ⊆ E'.held; rw [hh]; exact (hw.dtor h).2⟩,
       hw.dbind, hw.raise, fun hd hos hn d hnm => by
         show d ∈ E'.held ↔ d ∈ reroot p D E.held
-        rw [hh]; exact hw.dheld hd hos hn d hnm⟩
+        rw [hh]; exact hw.dheld hd hos hn d hnm,
+      fun hl hn hb hfr => by
+        obtain ⟨h1, h2⟩ := hw.fresh hl hn hb hfr
+        have hEb : E.mode = .bor := by rw [← hw.mode]; exact hb
+        refine ⟨h1, ?_⟩
+        show E'.path ⊆ reroot p D E.path
+        rw [hp (by rw [hEb]; rfl)]; exact h2⟩
   · have hf : E.fixed := by simp only [Entry.fixed_def] at h ⊢; rw [rerootE] at h; exact h
     have := hw.fixed hf
     rw [this]; unfold rerootE
@@ -1388,7 +1411,15 @@ theorem weaker_killAll_more {Mc M : List Dep} {Ed Es : Entry} (hw : EntryWeaker 
       fun h => by rw [(hkd _ _).1] at h; rw [(hkd _ _).1, (hkd _ _).2.2]; exact hw.raise h,
       fun hd hos hn d hnm => by
         rw [(hkd _ _).2.2] at hd; rw [(hkt _ _).2] at hos; rw [(hkt _ _).1, (hkt _ _).2] at hn
-        rw [(hkd _ _).2.1, (hkd _ _).2.1]; exact hw.dheld hd hos hn d hnm⟩
+        rw [(hkd _ _).2.1, (hkd _ _).2.1]; exact hw.dheld hd hos hn d hnm,
+      fun hl hn hb hfr => by
+        have hkf : ∀ (ds : List Dep) (E0 : Entry), (RSetup.killAll ds E0).fresh = E0.fresh ∧
+            (RSetup.killAll ds E0).path = E0.path ∧
+            ((RSetup.killAll ds E0).live = true → E0.live = true) := by
+          intro ds E0; unfold RSetup.killAll; split <;> simp
+        rw [(hkf _ _).1] at hfr ⊢; rw [(hkf _ _).2.1, (hkf _ _).2.1]
+        rw [(hkt _ _).1] at hn; rw [(hkt _ _).2] at hb
+        exact hw.fresh ((hkf _ _).2.2 hl) hn hb hfr⟩
   · have hf' := killAll_fixed.mp hf
     have hM := hfix hf'
     rw [hw.fixed hf', hMc hM, killAll_id hM]

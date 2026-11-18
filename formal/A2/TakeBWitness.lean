@@ -55,10 +55,10 @@ def main : Stmt :=
 
 /-! ### Entries -/
 
-def Evv : Entry := ⟨vvstr, .own, true, [], [], false, false⟩
-def Ew : Entry := ⟨vstr, .own, true, [], [], false, false⟩
-def Es : Entry := ⟨str, .own, true, [], [], false, false⟩
-def Eb : Entry := ⟨vstr, .bor, true, [⟨0, .inner⟩], [], false, false⟩
+def Evv : Entry := ⟨vvstr, .own, true, [], [], false, false, false⟩
+def Ew : Entry := ⟨vstr, .own, true, [], [], false, false, false⟩
+def Es : Entry := ⟨str, .own, true, [], [], false, false, false⟩
+def Eb : Entry := ⟨vstr, .bor, true, [⟨0, .inner⟩], [], false, false, false⟩
 
 syntax "noroot9" : tactic
 macro_rules

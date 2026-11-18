@@ -151,8 +151,8 @@ theorem StmtT.scopeD_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {f : Na
     StmtT P ξ Γ F (.scopeD x f s') Δ := by
   generalize hs : Stmt.scopeD x f s = s0 at ht
   induction ht with
-  | scopeD hE hx hb hp hk hw hn hΔ hsf _ =>
-    cases hs; exact .scopeD hE hx (hrep hb) hp (by rw [hsp]; exact hk) hw hn hΔ hsf
+  | scopeD hE hx hb hp hk hw hn hΔ hsf hfd _ =>
+    cases hs; exact .scopeD hE hx (hrep hb) hp (by rw [hsp]; exact hk) hw hn hΔ hsf hfd
   | sub hw _ hd ih => exact .sub hw (ih hs) hd
   | _ => cases hs
 
@@ -161,7 +161,7 @@ theorem StmtT.scopeL_repl {P : Prog} {Γ : Ctx} {F : List Var} {k : Nat} {t : Ty
     (hrep : ∀ {ξ' Γ' F' Δ'}, StmtT P ξ' Γ' F' s Δ' → StmtT P ξ' Γ' F' s' Δ') : StmtT P ξ Γ F (.scopeL k t x s') Δ := by
   generalize hs : Stmt.scopeL k t x s = s0 at ht
   induction ht with
-  | scopeL hE hx hb hp hk hw hn _ => cases hs; exact .scopeL hE hx (hrep hb) hp (by rw [hsp]; exact hk) hw hn
+  | scopeL hE hx hb hp hk hw hn hfd _ => cases hs; exact .scopeL hE hx (hrep hb) hp (by rw [hsp]; exact hk) hw hn hfd
   | sub hw _ hd ih => exact .sub hw (ih hs) hd
   | _ => cases hs
 

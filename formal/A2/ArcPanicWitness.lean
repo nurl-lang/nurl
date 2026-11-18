@@ -234,10 +234,10 @@ theorem wf_of {Γ : Ctx} (hD : NoDeps Γ) (hf : ∀ v E, Γ v = some E → E.dto
 theorem panic_typed {Γ : Ctx} {F : List Var} (hD : NoDeps Γ)
     (hf : ∀ v E, Γ v = some E → E.dtor = false ∧ E.dbind = false) : StmtT P ξ Γ F .panic Γ :=
   StmtT.panic (wf_of hD hf) hD.names (fun _ => rfl) (fun _ E h => ⟨E, h, rfl, rfl, fun _ => rfl⟩)
-    (DKeep.refl _ _) (DStay.refl _ _)
+    (DKeep.refl _ _) (DStay.refl _ _) id
 
 /-- The share's entry: owned, holding nothing. -/
-def ES : Entry := ⟨.arc DP, .own, true, [], [], false, false⟩
+def ES : Entry := ⟨.arc DP, .own, true, [], [], false, false, false⟩
 
 /-- **`tail` is typed** in any context with no views and no borrowed
     parameter that leaves its four bindings unbound; it ends in that

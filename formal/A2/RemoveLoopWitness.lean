@@ -112,7 +112,7 @@ theorem step_typed {ξ : Exits} {Γ : Ctx} (hc : LoopCtx Γ) (h5 : Γ 5 = none) 
     ⟨nr5, by simp [A2.setE, upd, hc.h0], by simp [A2.setE, upd, hc.h3],
       by simp [A2.setE, upd, hc.h4], hc.set5⟩
   -- `b[j] := t`
-  have hset := StmtT.editB (P := P) (ξ := ξ.under 5) (F := []) (op := .set (.var 4) 5) (t := .int)
+  have hset := StmtT.editB (b := true) (P := P) (ξ := ξ.under 5) (F := []) (op := .set (.var 4) 5) (t := .int)
     (D := []) (Ex := Eb) (Ex1 := Eb) (Γ := A2.setE Γ 5 intE) (Γ1 := A2.setE Γ 5 intE) (x := 3)
     c5.h3 rfl rfl rfl rfl (by simp)
     (EditArg.set (Ey := intE) (ExprT.var c5.h4 rfl rfl) (by simp [A2.setE, upd]) rfl rfl PushArg.int)

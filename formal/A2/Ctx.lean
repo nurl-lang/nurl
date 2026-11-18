@@ -1,4 +1,5 @@
 import A2.Basic
+import A2.FreshBase
 
 /-! A2 — facts about contexts and about validity. -/
 
@@ -6,15 +7,23 @@ namespace A2
 
 theorem EntryWeaker.refl (E : Entry) : EntryWeaker E E := by
   refine ⟨rfl, rfl, fun _ => rfl, fun h => ⟨h, fun _ => List.Subset.refl _, List.Subset.refl _⟩,
-    fun h => ⟨h, List.Subset.refl _⟩, (by simp_all), (fun _ => by simp_all), fun _ _ _ _ _ => Iff.rfl⟩
+    fun h => ⟨h, List.Subset.refl _⟩, (by simp_all), (fun _ => by simp_all), fun _ _ _ _ _ => Iff.rfl,
+    fun _ _ _ h => ⟨h, List.Subset.refl _⟩⟩
 
 theorem EntryWeaker.trans {E1 E2 E3 : Entry} (h1 : EntryWeaker E1 E2) (h2 : EntryWeaker E2 E3) :
     EntryWeaker E1 E3 := by
-  obtain ⟨t1, m1, r1, l1, d1, b1, a1, k1⟩ := h1
-  obtain ⟨t2, m2, r2, l2, d2, b2, a2, k2⟩ := h2
+  obtain ⟨t1, m1, r1, l1, d1, b1, a1, k1, f1⟩ := h1
+  obtain ⟨t2, m2, r2, l2, d2, b2, a2, k2, f2⟩ := h2
   refine ⟨t2.trans t1, m2.trans m1, fun h => ?_, fun h => ?_, fun h => ?_, b2.trans b1, fun h => ?_,
     fun h hos hn d hnm => (k2 (by rw [b1]; exact h) (by rw [m1]; exact hos) (by rw [t1, m1]; exact hn) d hnm).trans
-      (k1 h hos hn d hnm)⟩
+      (k1 h hos hn d hnm),
+    fun hl hn hb h => by
+      have hl2 := (l2 hl).1
+      have hn2 : E2.ty ≠ .int := by rw [← t2]; exact hn
+      have hb2 : E2.mode = .bor := by rw [← m2]; exact hb
+      obtain ⟨h2, p2⟩ := f2 hl hn hb h
+      obtain ⟨h1, p1⟩ := f1 hl2 hn2 hb2 h2
+      exact ⟨h1, p2.trans p1⟩⟩
   rotate_right
   · rcases a2 h with h2 | h2
     · exact a1 h2
@@ -239,6 +248,7 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     rw [hwe.mode]; exact hi.noInout v E b hE
   wf := hw.wf
+  fresh := hi.fresh.weaker hw
   rootbLive p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm

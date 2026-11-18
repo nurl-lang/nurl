@@ -185,6 +185,7 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
   rootbLive _ _ h := by cases h
   rootbLt _ _ h := by cases h
   names _ _ h := by cases h
+  fresh _ _ h := by cases h
   held _ _ _ _ h := by cases h
   pkgs _ _ _ h := by cases h
   armed _ _ _ h := by cases h

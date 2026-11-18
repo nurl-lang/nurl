@@ -175,31 +175,74 @@ the LLVM / C11 memory model rather than redefining it.
   - a callee that changes a plain parameter's elements when its caller
     hands it an element, a field viewer or a call's result rather than an
     owner;
-  - a destructor that changes elements through a borrow, directly or
+  - a destructor that changes elements through a borrow that is not
+    fresh (one that may reach memory an argument views), or whose
+    changed elements hold views (`StmtT.editBV`, which stays `edit
+    true`), directly or
     through a callee, or drop glue that does so, of a type that holds
     views, and a call into a function that does so which passes an
     argument holding views (`ThruFn`);
-  - a closure whose code does so, when the call through its package passes
-    an argument holding views, or its environment holds views, or it takes
-    the environment handed over (`StmtT.callcE`). nurlc accepts the first:
-    a closure that pushes its `s` argument through `vec_at` of its own local
-    runs clean, outside the claim. Agora #909 records why it stays out. A
-    call is placed by `RSetup.liftE`, which adds everything the arguments
-    hold (`S.A`) to every borrow's path, and the edit rules then need
-    `S.R = []`. Making that path precise at the lift is unsound, for two
-    reasons:
-    - a callee cannot see what its parameters view: `paramE` records
-      none of an argument's memory roots (only symbolic names, for a
-      parameter whose type holds a closure). So a slice element derived
-      from a parameter looks local while it views caller memory;
-    - `comp .view .inner = .inner`, so a structural kind does not survive
-      `derive`.
+  - a closure whose code does so, through a borrow that is not fresh,
+    when the call through its package passes an argument holding views, or
+    its environment holds views, or it takes the environment handed over
+    (`StmtT.callcE`). A closure's code is `ThruFn` by the same
+    `Stmt.hasThru` as a function's, so code whose changes are all through
+    fresh borrows is in by the argument below: `A2/FreshClosureWitness.lean`
+    types a closure whose environment is a slice and whose code pushes
+    through `vec_at` of its own local, called through its package, safe
+    and leak-free. nurlc accepts it, and it runs clean.
 
-    Whether a borrow reaches only callee-own memory is therefore not
-    readable off an entry. The sound route is a per-entry `fresh` bit, set
-    by `bor`/`derive` from an own local and cleared by any view or held
-    step, plus a lemma that what the arguments hold cannot alias a fresh
-    callee block. It touches every `Entry` literal.
+  Agora #909 takes in what changes elements only through a fresh borrow.
+  An entry carries a `fresh` bit (`Entry.fresh`): the borrow reaches only
+  blocks of the frame's own bindings (an owner's, or an `inout`
+  parameter's), never memory an argument views. `RhsT.borrow` and `RhsT.at` may set it when they
+  borrow from a frame's own binding (an owner or an `inout` parameter) or
+  from a fresh borrow (`FreshSrc`), never from a borrowed parameter or a
+  borrow that is not fresh: a callee cannot see what those view
+  (`at_rootb_not_fresh`, `at_bor_not_fresh`). `FreshOK` says each live
+  fresh borrow's path is structural and rooted at the frame's own
+  bindings; it is part of the runtime invariant (`MInv.fresh`), every rule
+  keeps it (`StmtT.freshOK`), and a call's lift adds nothing the
+  arguments hold to a fresh borrow's path (`RSetup.liftE`), since what
+  they hold cannot alias a block the callee owns. An edit through a fresh
+  borrow is `edit false` (`StmtT.editB` with `Ex.fresh`;
+  `edit_false_fresh`: no other typing of it). It does not make its
+  function `ThruFn`. It may change an `inout` parameter's block, which the
+  call already treats as changed, but no memory an argument views. So a
+  destructor of a type that holds views may push through `vec_at` of its
+  own local, when the changed elements hold no views. A change of
+  elements that hold views (`StmtT.editBV`) stays `edit true` even
+  through a fresh borrow: its stored views need `S.R = []` when renamed.
+  `A2/FreshWitness.lean` types one, a struct holding a slice and a number,
+  run by its armed `letd`'s frame end, safe and leak-free (`main_safe`,
+  `main_no_leak`). nurlc accepts it, and it runs clean. The modelling
+  claim (phase C): the walk emits `edit false` for an edit through a
+  borrow of the frame's own memory, and `edit true` for every other.
+  Four compiler tests pin nurlc's side in both directions. It accepts a
+  push through an element of a local the destructor or closure made
+  (`drop_of_a_view_type_pushes_through_its_own_element`,
+  `closure_over_a_slice_pushes_through_its_own_element`). It ends a view
+  of an element pushed through a parameter or a by-name capture
+  (`borrow_push_through_a_parameters_element_ends_the_callers_view`,
+  `borrow_closure_push_through_a_captures_element_ends_a_view`), which is
+  what `edit true` does there.
+
+  Each new premise holds with the bit off (`A2/Unfresh.lean`):
+  - `RhsT.borrow_unfresh` and `RhsT.at_unfresh`: the rules with the bit
+    off ask nothing of the source;
+  - `EntryWeaker.fresh_of_not`: the weakening premise holds when the
+    weaker entry is not fresh;
+  - `freshOK_of_noFresh`, for `panic`, `exit`, `loop` and a scope's end: a
+    context with no fresh borrow is `FreshOK`;
+  - an `edit true` asks nothing of the bit.
+
+  Clearing every fresh bit (`unfreshC`) is a weakening (`weaker_unfreshC`)
+  that keeps every binding, mode, type and fixed entry
+  (`unfreshC_panic`). `StmtT.unfresh` is the result side: a typing still
+  holds with its result's fresh bits cleared. The claim that every program
+  typed before design (e) is typed now rests on these lemmas: an old
+  derivation is a new one with every bit off. It is not a proven
+  translation, because the old relation is no longer in the tree.
 
   One more form nurlc accepts that A2 does not type directly: an owner
   given a new value while something still reads its old one, where nurlc

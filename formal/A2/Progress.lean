@@ -477,8 +477,8 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
     (hanch : RootbAnch Γ F) {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty} {D : List Dep}
     (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
     (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γ1 x = some Ex1)
-    (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) :
-    ∃ r, Step P m (.edit true x op) r := by
+    (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) {b : Bool} :
+    ∃ r, Step P m (.edit b x op) r := by
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   rw [hE1] at hx1 hthru
   have hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ1 d.root = some Er ∧ Er.mode.ownSlot = true :=
@@ -532,7 +532,7 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
 /-- Agora #871: no exit is about to leave a statement typed under no exit. -/
 theorem exitAt_none {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} {m : Mem}
     (ht : StmtT P .none Γ F s Δ) {n : Nat} {e : Stmt} (he : ExitAt s n e) (hi : Inv m Γ F s) : False := by
-  obtain ⟨_, _, h2, -⟩ := ExitAt.typed ht he hi.wf hi.names hi.anch .none
+  obtain ⟨_, _, h2, -⟩ := ExitAt.typed ht he hi.wf hi.names hi.toMInv.fresh hi.anch .none
   exact Exits.none_up h2
 
 /-- AGORA-889: `takeB` steps: the node `x` names is found as for `editB`; in
@@ -659,7 +659,7 @@ theorem progress {P : Prog}
     cases ob with
     | none => exact Or.inr (Or.inl ⟨kk, t, hv, Or.inl hk⟩)
     | some w => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.withLock hv hk hmx hnv⟩
-  | @scopeL _ Γ Δ1 F kk t x k hxE _ hsB _ _ _ _ ih =>
+  | @scopeL _ Γ Δ1 F kk t x k hxE _ hsB _ _ _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, hx, hnrb, _⟩ := hxE
     have hi0 : Inv m Γ F k := hi.scopeLIn hx hnrb
@@ -711,7 +711,7 @@ theorem progress {P : Prog}
     cases res with
     | ok v o m1 => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letd hmx hres⟩
     | panic => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letdP hres⟩
-  | @scopeD _ Γ Δ1 F x f k hxE _ _ _ _ _ _ _ _ ih =>
+  | @scopeD _ Γ Δ1 F x f k hxE _ _ _ _ _ _ _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, _, hx, hmo, _, _, _⟩ := hxE
     have hnrb : Ex.mode ≠ .rootb := by rw [hmo]; simp
