@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #811: a trait impl whose field is a closure that captured an Rc share; its dyn method runs it to clear the payload
+// map: §2.10 | A2 | rejected | - | AGORA-811: a trait impl whose field is a closure that captured an Rc share; its dyn method runs it to clear the payload
+// AGORA-811: refused - the dyn box holds the struct's closures: a call handed it replays their effects, as one handed the struct does (main 3ffe18f9: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
