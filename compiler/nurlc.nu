@@ -8696,7 +8696,15 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // kind is none (mem_fn_lend_kind; __rprov_bind_x's `10`).
     : ~ s __ret_l0 ``
     ? == ret_eff_tt TT_LPAREN {
-        : s cro ( mem_call_retown syms cg )
+        // (A slice goes by the bit its call left, as a binding of it does:
+        // a temporary the call handed back whole is this function's own on
+        // those runs - `^ ( id ( mk ) )` handed it back as a lend, and no
+        // one released it; agora #895.)
+        : b __rsl & ( mem_is_slice_ty ( nurl_get_last_type ) ) ( __call_own_slc_live )
+        : s cro ? ( mem_is_slice_ty ( nurl_get_last_type ) ) ( __slice_call_own_bit syms cg ) ( mem_call_retown syms cg )
+        // (That bit is per run: this function answers per call too, and its
+        // callers ask it - __hown_dyn.)
+        ? __rsl { ( mem_hown_mark_dyn syms ) } {}
         ? != 0 ( nurl_str_len cro ) {
             : s __cre ( __ost_of_bit cro )
             ? != 0 ( nurl_str_len __cre ) { = __rost_reg ( nurl_str_cat cro `` ) = __rost ( nurl_str_cat __cre `` ) } {}
@@ -28222,6 +28230,8 @@ unsafe @ __fn_lends_arg s fname s ai → b {
 // (mem_capture_hown); -1 where none was. A global, not a symbol: it is reset
 // at every call (agora #510).
 : ~ i g_call_own_slc -1
+// Did the call just emitted leave a per-run bit for its slice (gen_ret)?
+@ __call_own_slc_live → b { ^ >= g_call_own_slc 0 }
 
 // Does `fname` answer per call whether its result is owned — itself, or
 // by handing back as is (`^ ( g … )`) the result of a callee that does?
