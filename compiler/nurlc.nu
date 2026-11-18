@@ -55792,8 +55792,12 @@ unsafe @ resolve_arc_mut → v {
     ? ( bck_is_heap_lty lty ) {
         ? ! ( bck_sound ) { ^ 0 } {}
         = g_thv_precise 1
-        : b hv ( __ty_holds_view lty 0 )
+        : ~ b hv ( __ty_holds_view lty 0 )
         = g_thv_precise 0
+        // (…but a handle whose drop hook is the program's own holds what
+        // its fields can: its own `s name` beside a `T x` is a view that
+        // hook may read - agora #384. Asked here, once per type.)
+        ? & ! hv ( __libh_hook_own lty ) { = hv ( __ty_holds_view lty 0 ) } {}
         ^ ? hv 3 0
     } {}
     // (4: a closure — a scalar to the borrow rules, its captures tracked as
@@ -96696,6 +96700,32 @@ unsafe @ __hmemo_close s key i mark b r → v {
     ^ ! & != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty ) == 0 ( nurl_sym_len2 g_impl_name_syms `handledrop##` ty )
 }
 
+// Is the drop hook of handle type `ty` (`S_drop` of its base, a generic
+// template or a plain struct) the program's own, not the standard
+// library's, and one that does something - an empty body, `{}`, the way
+// a package marks a type a handle, reads nothing (agora #384)? Decided
+// once per type (`hko##`).
+@ __libh_hook_own s ty → b {
+    : s mk ( nurl_sym_get2 g_impl_name_syms `hko##` ty )
+    ? != 0 ( nurl_str_len mk ) { ^ ( seq mk `1` ) } {}
+    : b r ( __libh_hook_own0 ty )
+    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `hko##` ty ) ? r `1` `0` )
+    ^ r
+}
+
+@ __libh_hook_own0 s ty → b {
+    : s sn ( __libh_base ty )
+    ? == 0 ( nurl_str_len sn ) { ^ F } {}
+    : s hk ( nurl_str_cat sn `_drop` )
+    ? ( seq ( nurl_sym_get2 g_root_syms hk `__emptybody` ) `1` ) { ^ F } {}
+    : s f0 ( nurl_sym_get2 g_vis_syms hk `__src_file` )
+    // (A generic template's hook is recorded with no file: the type it
+    // releases is, and the library's hooks are the library's types'.)
+    : s f ? != 0 ( nurl_str_len f0 ) f0 ( nurl_sym_get2 g_vis_syms sn `__src_file` )
+    ? == 0 ( nurl_str_len f ) { ^ F } {}
+    ^ ! ( bck_trusted_file f )
+}
+
 @ __libh_plain_base s ty → s {
     ? ! ( __libh_plain_is ty ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( nurl_str_cat ( nurl_sym_get2 g_impl_name_syms `libhp##` ty ) `` )
@@ -96967,7 +96997,11 @@ unsafe @ __hmemo_close s key i mark b r → v {
     // what it owns: what it holds of the program's — its type arguments,
     // `libhta##`, each parsed as the type it names (`?W` an option of W) —
     // is asked instead (agora #363).
+    // (…the standard library's: a hook of the program's own, `@ H_drop
+    // sink H h → v { … . h v … }`, may read any view its value holds, as a
+    // `% Drop` may - agora #384.)
     ? ( __is_libh ty ) {
+        ? ( __libh_hook_own ty ) { ^ ( __ty_holds_view ty 0 ) } {}
         : ~ s rest ( nurl_sym_get2 g_impl_name_syms `libhta##` ty )
         : ~ i k 0
         ~ != 0 ( nurl_str_len rest ) {
