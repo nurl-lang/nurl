@@ -19337,7 +19337,12 @@ unsafe @ eng_byte s w i k → i {
                         : ~ i hq 0
                         ~ < hq ( sq_len chs ) {
                             : i he ( sq_at chs hq )
-                            ? > ( ep_len ( he_path he ) ) ( ep_len cbase ) { = below ( sq_add below he ) } {}
+                            // (…and a closure parameter's placeholder at the
+                            // capture itself - a closure-typed capture handed
+                            // back, `\ → ( @ v ) { ^ f }`: what it holds; agora
+                            // #838)
+                            : i hk ( el_kind ( he_loan he ) )
+                            ? | > ( ep_len ( he_path he ) ) ( ep_len cbase ) & == ( he_path he ) cbase | == hk LK_HELD == hk LK_HELDIN { = below ( sq_add below he ) } {}
                             = hq + hq 1
                         }
                         = out ( sq_union out ( held_root ( held_sub below cbase ) dpath ) )

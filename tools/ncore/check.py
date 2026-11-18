@@ -2956,8 +2956,13 @@ class FnCheck:
                     # where the closure value holds them)
                     # (below the capture: not the closure's own handle of
                     # the binding it captured)
+                    # (…but a closure parameter's placeholder sitting at the
+                    # capture itself - a closure-typed capture, `\ → ( @ v ) {
+                    # ^ f }` with f a parameter - is what it holds: kept, as
+                    # captured_held keeps it; agora #838)
                     cb = base + (f"^{k}",) + tuple(path)
-                    out |= hroot(hsub({(hp, l) for hp, l in cav.held if len(hp) > len(cb)}, cb), tuple(dpath))
+                    out |= hroot(hsub({(hp, l) for hp, l in cav.held if len(hp) > len(cb) or (
+                        hp == cb and isinstance(l, tuple) and len(l) == 3 and l[2] in ("held", "heldin"))}, cb), tuple(dpath))
                     continue
                 if not (0 <= i < len(avs)):
                     continue
