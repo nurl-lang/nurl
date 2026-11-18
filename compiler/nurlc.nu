@@ -28024,11 +28024,13 @@ unsafe @ __fn_lends_arg s fname s ai → b {
 @ resolve_retfwd_lends i syms → v {
     : s fns ( nurl_sym_get g_pending_impl `retfwd_fns` )
     ? == 0 ( nurl_str_len fns ) { ^ v } {}
+    // (Until nothing changes: the answers only grow, over finitely many
+    // words - a parameter index per function - so the rounds are bounded by
+    // that lattice's height. A round cap stopped a long chain short, its
+    // first links lending nothing back.)
     : ~ b changed T
-    : ~ i rounds 0
-    ~ & changed < rounds 16 {
+    ~ changed {
         = changed F
-        = rounds + rounds 1
         : ~ s fr ( nurl_str_cat fns `` )
         ~ != 0 ( nurl_str_len fr ) {
             : s fn ( str_first_word fr ) = fr ( str_skip_word fr )
@@ -99967,11 +99969,12 @@ unsafe @ __cc_store_ref i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     ? == n 0 { ^ v } {}
     // `?pK` in a record of function E: E's parameter K flows wherever the
     // record's value does — E's callers decide. To a fixed point.
+    // (Until nothing changes: `ccprop##` sets only grow, over the program's
+    // finitely many owners, so no round cap is needed - and one stopped a
+    // long forwarding chain before its callers heard of the owners.)
     : ~ b changed T
-    : ~ i rounds 0
-    ~ & changed < rounds 32 {
+    ~ changed {
         = changed F
-        = rounds + rounds 1
         : ~ i i 0
         ~ < i n {
             : s ns ( nurl_str_int i )
