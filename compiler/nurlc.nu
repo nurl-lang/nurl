@@ -35265,7 +35265,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // (…and a parameter of this function sent whole: this function
             // sends it, and its callers' arguments cross - sendreq, as a
             // detach's parameter does; CodeRabbit on github#1942.)
-            ? & & & ( seq fname `chan_send` ) == arg_idx 1 ( is_ident_tok bck_arg_tt ) >= ( str_word_index g_cur_params bck_arg_val ) 0 {
+            ? & & & & ( seq fname `chan_send` ) == arg_idx 1 ( is_ident_tok bck_arg_tt ) >= ( str_word_index g_cur_params bck_arg_val ) 0 ! __callee_shadowed {
                 ( nurl_sym_def g_pending_impl ( nurl_str_cat4 `sendreq##` ( nurl_sym_get syms `__fn_self_name__` ) `##` ( nurl_str_int ( str_word_index g_cur_params bck_arg_val ) ) ) `1` )
             } {}
             ? & & & & __sx_cand ! __callee_shadowed >= __sx_c0 2 ! ( seq arg_sx `-` ) | ( __summarised_callee syms fname call_name ) & ( seq fname `chan_send` ) == arg_idx 1 {
