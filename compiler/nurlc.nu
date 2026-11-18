@@ -4562,6 +4562,9 @@ unsafe @ note_unsafe_item s pos s what → v {
 // ids, one a word, are g_bck's `fmv`, asked when their binding is handed on
 // whole (agora #280).
 : ~ i g_bck_fmv_any 0
+// 1 once a walk saw a field of a borrowed copy taken by its reader
+// (`pbo_`, bck_fview_take): its write-back is owed (agora #870).
+: ~ i g_bck_pbo_any 0
 // …and whether it has an `inout` parameter (g_bck's `inp`, their ids): each
 // exit hands those back to the caller whole (agora #280).
 : ~ i g_bck_inp_any 0
@@ -61020,6 +61023,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
         : i kc ( bck_kc p )
         : ~ b done F
         = g_sxe_arc -1
+        ? & != 0 g_bck_pbo_any | == kc 9 == kc 12 { ( __bck_pbo_settle rec ) } {}
         // (A row handing a call something of a binding — kind 32: a value
         // lent out of it, it as an arm of a join, a closure that runs here
         // passing it on — while a `~` loop is walked, where that binding, or
@@ -61104,6 +61108,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 = done T
             } {}
             ? & ! done == kc 20 {
+                ? != 0 g_bck_pbo_any { ( __bck_pbo_check ) } {}
                 // (A binding handed back whole while a field of it is taken:
                 // agora #280.)
                 ? & != 0 g_bck_fmv_any != 0 ( nurl_str_len ( bck_field rec 1 ) ) { ( __bck_partly_moved_check ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) st ) } {}
@@ -67979,7 +67984,20 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // A field replaced (`= . s v x`, directly or through a borrow of `s`):
     // the bindings viewing exactly that field take the value it held over
     // (__fs_viewers_take) — owners now, not borrows that end below.
-    ? & & == kc 8 >= wid 0 ! ( seq ( bck_field rec 6 ) `e` ) { = out ( bck_fview_take out ( nurl_str_int wid ) ) } {}
+    ? & & == kc 8 >= wid 0 ! ( seq ( bck_field rec 6 ) `e` ) {
+        : s __pb0 ( nurl_str_cat out `` )
+        = out ( bck_fview_take out ( nurl_str_int wid ) )
+        // (…of a copy that only borrows its value - `: Slot s ( vec_at t k
+        // )`, a raw getter's - the value it took is still in the slot the
+        // copy was read out of: both own it unless the copy is written back
+        // into that slot (`putback##`, vec_put_back), which is owed from
+        // here; __bck_pbo_check, agora #870.)
+        ? & & & ! ( seq __pb0 out ) != wroot wid == BCK_BORROWED_SHARED ( bck_st_get out wroot ) == 0 ( nurl_sym_len g_bck ( bck_bkey `hct_` ( nurl_str_int wroot ) ) ) {
+            ( bck_put ( bck_bkey `pbo_` ( nurl_str_int wroot ) ) ( nurl_str_cat3 ( bck_field rec 3 ) ` ` ( bck_field rec 4 ) ) )
+            ( bck_add_word_once `pbol` ( nurl_str_int wroot ) )
+            = g_bck_pbo_any 1
+        } {}
+    } {}
     // (A cursor walk: a first/skip_word step copied the whole rest of the
     // list, quadratic in its length.)
     : i rest_n ( nurl_str_len rest )
@@ -69046,6 +69064,36 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
 // value: a borrow of the reader that owns it now, ended where that one
 // is consumed or given a new value, and never handed over itself (agora
 // #387).
+// A call writing a borrowed copy back into its slot (`putback##` names the
+// argument, vec_put_back): the write-back its taken field owed is made -
+// where the call is no deeper than the take, so on every path after it.
+@ __bck_pbo_settle s rec → v {
+    : s ids ( bck_field rec 1 )
+    : s pk ( nurl_sym_get g_bck ( bck_bkey `pbo_` ids ) )
+    ? == 0 ( nurl_str_len pk ) { ^ v } {}
+    : s cal ( bck_field rec 5 )
+    : s aix ( bck_field rec 6 )
+    ? ! | ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `putback##` cal ) aix ) ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `putback##` ( bck_generic_base cal ) ) aix ) { ^ v } {}
+    ? > ( bck_field_int rec 4 ) ( nurl_str_to_int ( str_skip_word pk ) ) { ^ v } {}
+    ( bck_put ( bck_bkey `pbo_` ids ) `` )
+}
+
+// A function leaving - a `^`, or its end - with a borrowed copy's taken
+// field not written back: the reader and the slot own one value (agora
+// #870). Reported once, at the store that handed it over.
+@ __bck_pbo_check → v {
+    : ~ s rest ( nurl_sym_get g_bck `pbol` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ids ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s pk ( nurl_sym_get g_bck ( bck_bkey `pbo_` ids ) )
+        ? != 0 ( nurl_str_len pk ) {
+            : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ids ) )
+            ( bck_emit_error ( nurl_sym_get g_bck `file` ) ( nurl_str_to_int ( str_first_word pk ) ) ( nurl_str_cat4 `giving a field of '` nm `' a new value hands its old value to the binding that read it, but '` ( nurl_str_cat nm `' is a copy of a value its container still holds - the old value is still there, and both would release it. Take the value out of the container itself (( vec_replace v i new ) hands the old element over, its option's payload), or read a copy of the field (( mem_dup . … )) instead of the field itself` ) ) )
+            ( bck_put ( bck_bkey `pbo_` ids ) `` )
+        } {}
+    }
+}
+
 @ bck_fview_take s st s wids → s {
     : ~ s out st
     : ~ s takers ``
@@ -71902,6 +71950,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ? != 0 g_bck_vs_any { ( bck_put `vscand` `` ) ( bck_put `vsperm` `` ) ( bck_put `vspanic` `` ) = g_bck_vs_any 0 } {}
     = g_bck_row_at -1
     ? != 0 g_bck_fmv_any { ( bck_put `fmv` `` ) = g_bck_fmv_any 0 } {}
+    ? != 0 g_bck_pbo_any { ( bck_put `pbol` `` ) = g_bck_pbo_any 0 } {}
     ? != 0 g_bck_inp_any { ( bck_put `inp` `` ) = g_bck_inp_any 0 } {}
     ( bck_put `pml` `` )
     = g_bck_ab_any 0
@@ -72022,6 +72071,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     }
     // Walk from the seeded state. n == 0 (no records) walks nothing.
     : s final ( bck_walk_seq 0 n seed )
+    ? != 0 g_bck_pbo_any { ( __bck_pbo_check ) } {}
     ? ! ( seq final `!` ) {
         // (The body's end hands every `inout` parameter back, as a `^`
         // does: agora #280.)

@@ -7,7 +7,7 @@
 // release it (lend_back_to_same_binding.nu's take_body with its put_slot
 // removed).
 //
-// map: §7.6 | A2 | rejected | - | agora #870: a field of a borrowed copy handed to its reader by the store that replaces it, the copy never written back: the slot and the result own one body
+// map: §7.6 | A2 | rejected | - | AGORA-870: a field of a borrowed copy handed to its reader by the store that replaces it, the copy never written back: the slot and the result own one body
 
 $ `stdlib/core/vec.nu`
 

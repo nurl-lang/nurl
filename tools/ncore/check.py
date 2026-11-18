@@ -153,20 +153,23 @@ def join_own(a, b):
 
 
 class State:
-    __slots__ = ("vals", "dead", "bottom", "defers", "gone")
+    __slots__ = ("vals", "dead", "bottom", "defers", "gone", "pb")
 
-    def __init__(self, vals=None, dead=frozenset(), bottom=False, defers=(), gone=frozenset()):
+    def __init__(self, vals=None, dead=frozenset(), bottom=False, defers=(), gone=frozenset(), pb=frozenset()):
         self.vals = dict(vals or {})
         self.dead = frozenset(dead)
         self.bottom = bottom
         self.defers = tuple(defers)      # the `;` blocks armed so far, oldest first
         self.gone = frozenset(gone)      # (variable, path): a field taken out of its owner
+        # (variable, line): a borrowed copy whose field's old value its reader
+        # was handed - owed back to the slot it was read from (agora #870)
+        self.pb = frozenset(pb)
 
     def copy(self):
-        return State(self.vals, self.dead, self.bottom, self.defers, self.gone)
+        return State(self.vals, self.dead, self.bottom, self.defers, self.gone, self.pb)
 
     def key(self):
-        return (self.bottom, self.dead, self.defers, self.gone,
+        return (self.bottom, self.dead, self.defers, self.gone, self.pb,
                 tuple(sorted(((k, v.key()) for k, v in self.vals.items()), key=repr)))
 
 
@@ -185,7 +188,7 @@ def join(a, b):
                      x.call or y.call)
     # a block armed on one path may run: it is checked as if it does
     defers = a.defers + tuple(d for d in b.defers if d not in a.defers)
-    return State(vals, a.dead | b.dead, defers=defers, gone=a.gone | b.gone)
+    return State(vals, a.dead | b.dead, defers=defers, gone=a.gone | b.gone, pb=a.pb | b.pb)
 
 
 VIEW_TYPES = ("s", "slice")
@@ -215,6 +218,7 @@ class FnCheck:
             self.hvid[h] = i
         self.s_effects = set()
         self.s_consumes = set()
+        self.s_putback = set()
         self.s_elems = set()
         self.rets = []
         self.exits = []
@@ -1366,6 +1370,31 @@ class FnCheck:
     def apply_call_(self, st, rv, line, dest_vid=None):
         _, name, ops, site = rv
         sm = self.summary(name)
+        if st.pb:
+            # a copy written back into its slot (`mem_put_back`, or a callee
+            # that does it for this argument): what its field's reader was
+            # handed is that reader's alone from here (agora #870)
+            pbk = {0} if name == "mem_put_back" else set(sm.get("putback", ()))
+            back = {ops[k][1] for k in pbk if k < len(ops) and ops[k][0] == "v" and not ops[k][2]}
+            for (pv, _, pp) in [p for p in st.pb if p[0] in back]:
+                # (…and its reader owns the old value outright: the slot has
+                # the copy's new one now - what it lent of the slot's field
+                # is no loan any more, nor ended by the write-back)
+                cv = st.vals.get(pv)
+                rd = {frozenset({(pv, pp)})}
+                if cv is not None:
+                    rd.add(frozenset((a, tuple(ap) + tuple(pp)) for a, ap in cv.alias))
+                for ow, ov in list(st.vals.items()):
+                    if ow != pv and ov is not None and ov.own == "L" and ov.alias in rd:
+                        def into_slot(l, al=ov.alias):
+                            tg = self.loans.get(l, (None,))[0]
+                            return tg is not None and any(tg[0] == a and prefix(tuple(tg[1]), tuple(ap)) for a, ap in al)
+                        st.vals[ow] = AV("O", frozenset(l for l in ov.loans if not into_slot(l)), frozenset(), ov.held)
+            if back:
+                st.pb = frozenset(p for p in st.pb if p[0] not in back)
+            for k in pbk:
+                if k < len(ops) and ops[k][0] == "v" and not ops[k][2] and ops[k][1] in self.pidx:
+                    self.s_putback.add(self.pidx[ops[k][1]])
         if name in self.prog.fns and name not in getattr(self.prog, "trusted", ()):
             # a function of the program may unwind: storage the caller
             # holds may not view this frame's values across the call -
@@ -4103,7 +4132,19 @@ class FnCheck:
             vty = v.ty
             if cur is not None and cur.own == "L" and vty is not None and vty[0] == "named" and path[0] != "*":
                 # a struct cursor is a copy of the struct: its field store
-                # writes the copy; the value it replaced stays the owner's
+                # writes the copy; the value it replaced stays the owner's -
+                # unless a binding reads exactly that field: codegen hands
+                # it the old value (the field viewer, h196), which the slot
+                # the copy was read from still holds, until the copy is
+                # written back there (`putback`, agora #870)
+                fty0 = self.ty_of_place((vid, tuple(path)))
+                # (the reader's alias is flattened onto the copy's own sources)
+                rd = {frozenset({(vid, tuple(path))}),
+                      frozenset((a, tuple(ap) + tuple(path)) for a, ap in cur.alias)}
+                if fty0 is not None and self.T.owning(fty0) and fty0[0] not in VIEW_TYPES and cur.alias and any(
+                        ov is not None and ov.own == "L" and self.fn.vars[ow].kind != "temp" and ov.alias in rd
+                        for ow, ov in st.vals.items() if ow != vid):
+                    st.pb = st.pb | {(vid, ln, tuple(path))}
                 st.vals[vid] = AV("L", cur.loans, cur.alias, cur.held | hroot(add, path))
                 return st
             self.handover(st, (vid, path))
@@ -4249,6 +4290,7 @@ class FnCheck:
                     st = self.run_defers(st)
                 self.check_live(st, av, ln, "the returned value", held=True)
                 self.params_hold_locals(st, ln)
+                self.pb_check(st)
                 self.rets.append((av, st.copy()))
                 if av.own in ("O", "P") and (not av.loans or av.own == "O") and not (
                         op[0] == "v" and not op[2] and op[1] not in self.var_fresh):
@@ -4260,6 +4302,7 @@ class FnCheck:
             else:
                 st = self.run_defers(st)
                 self.params_hold_locals(st, ln)
+                self.pb_check(st)
                 self.exits.append(st.copy())
                 self.exit_drops(st, ln)
             return State(bottom=True)
@@ -4383,8 +4426,18 @@ class FnCheck:
         if not end.bottom:
             end = self.run_defers(end)
             self.params_hold_locals(end, self.fn.line)
+            self.pb_check(end)
             self.exits.append(end)
         return self.make_summary()
+
+    def pb_check(self, st):
+        """A way out with a borrowed copy's field handed to its reader and
+        the copy not written back: the reader and the slot own one value
+        (MEMORY.md §7.6, agora #870)."""
+        for vid, ln, _ in sorted(st.pb, key=repr):
+            self.err(ln, f"a field of {self.fn.vars[vid].name}, a copy of a value its container still holds, "
+                         f"hands its old value to the binding that read it, and the copy is not written back")
+        st.pb = frozenset()
 
     def param_roots(self, av, op):
         """The parameters (not captures) the value `av` at operand `op` is,
@@ -4499,7 +4552,8 @@ class FnCheck:
                 "regions": sorted(self.s_regions), "selfholds": sorted(self.s_selfholds),
                 "rclos": sorted(rclos), "sclos": sorted(sclos), "calllends": sorted(calllends),
                 "gone": sorted(left_gone), "mixed": [1] if mixed else [], "stale": sorted(self.s_stale),
-                "credits": sorted(self.s_credits), "keeps": sorted(keeps), "catches": sorted(self.s_catches)}
+                "credits": sorted(self.s_credits), "keeps": sorted(keeps), "catches": sorted(self.s_catches),
+                "putback": sorted(self.s_putback)}
 
 
 def initial_summary(prog, fn):
@@ -4634,6 +4688,6 @@ def merge_summary(a, b):
     """Summaries only grow, so the fixpoint terminates."""
     order = {"none": 0, "own": 1, "lent": 2}
     out = {"modes": a["modes"], "res": a["res"] if order[a["res"]] >= order[b["res"]] else b["res"]}
-    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "shares", "gone", "mixed", "stale", "credits", "keeps", "catches"):
+    for key in ("lends", "rholds", "effects", "stores", "consumes", "elems", "invokes", "cloargs", "regions", "selfholds", "rclos", "sclos", "calllends", "detaches", "shares", "gone", "mixed", "stale", "credits", "keeps", "catches", "putback"):
         out[key] = sorted(set(map(tuple_ify, a.get(key, ()))) | set(map(tuple_ify, b.get(key, ()))), key=repr)
     return out
