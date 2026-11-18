@@ -50,5 +50,6 @@ import A2.DtorWitness
 import A2.DropCode
 import A2.ClosureDropWitness
 import A2.ThruClosureWitness
+import A2.ThruDtorWitness
 import A2.ArcDtorWitness
 import A2.ArcPanicWitness

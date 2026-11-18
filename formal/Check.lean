@@ -412,6 +412,14 @@ import A3
 #print axioms A2.ThruClosureWitness.main_typed
 #print axioms A2.ThruClosureWitness.main_safe
 #print axioms A2.ThruClosureWitness.main_no_leak
+-- A destructor that changes elements through a borrow of its own local, on a type that holds no
+-- views, run by its `letd` frame's end (A2/ThruDtorWitness.lean)
+#print axioms A2.ThruDtorWitness.dtor_thru
+#print axioms A2.ThruDtorWitness.dtor_ok
+#print axioms A2.ThruDtorWitness.prog_ok
+#print axioms A2.ThruDtorWitness.main_typed
+#print axioms A2.ThruDtorWitness.main_safe
+#print axioms A2.ThruDtorWitness.main_no_leak
 -- Agora #632: an enum's drop glue takes the enum owned and the payload out
 #print axioms A2.Dtor.enum_dtor_is_glue
 #print axioms A2.Dtor.enum_glue_body

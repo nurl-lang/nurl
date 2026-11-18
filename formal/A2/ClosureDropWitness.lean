@@ -104,7 +104,7 @@ theorem glue_not_thru : ¬ ThruFn Pc 2 := by
   | call hf hg _ => simp [Pc] at hf; subst hf; simp [glue, Stmt.calls] at hg
 
 theorem dtor_ok : DtorOK Pc 0 DT :=
-  ⟨dfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, dfn_not_thru⟩
+  ⟨dfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h dfn_not_thru⟩
 
 theorem drop_ok : DropFnOK Pc 0 T := Or.inl ⟨dtor_ok, by decide⟩
 
@@ -489,7 +489,7 @@ theorem callSig_not_thru2 : ¬ ThruFn Pd 4 := by
   | call hf hg _ => simp [Pd] at hf; subst hf; simp [callSig, Stmt.calls] at hg
 
 theorem dtor_ok2 : DtorOK Pd 0 DT :=
-  ⟨dfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, dfn_not_thru2⟩
+  ⟨dfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h dfn_not_thru2⟩
 
 theorem drop_ok2 : DropFnOK Pd 0 T := Or.inl ⟨dtor_ok2, by decide⟩
 

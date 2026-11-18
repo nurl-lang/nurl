@@ -150,6 +150,14 @@ the LLVM / C11 memory model rather than redefining it.
   (`open_pkg_callR`). `A2/ThruClosureWitness.lean` types such a closure,
   which pushes through `vec_at` of its own local and is called through its
   package. nurlc accepts it (a closure over an `i` argument).
+  A destructor whose code does so is in the claim when the value it runs
+  on holds no views (`DtorOK`: `ThruFn P f → t.holdsView = false`, the
+  call the frame's end makes passing none, as `CallT` asks). Such a value
+  was bound by no `letd` that records views (`CtxWF.view`), so revived at
+  its frame's end it holds nothing. `A2/ThruDtorWitness.lean` types a
+  struct of two integers whose `% Drop` pushes through `vec_at` of its own
+  local, run by its `letd`'s frame end, safe and leak-free. nurlc accepts
+  it.
   That nurlc's
   `vec_pop` / `vec_remove` lower to these steps is phase C. Outside the
   claim still:
@@ -160,8 +168,9 @@ the LLVM / C11 memory model rather than redefining it.
     hands it an element, a field viewer or a call's result rather than an
     owner;
   - a destructor that changes elements through a borrow, directly or
-    through a callee, and a call into a function that does so which passes
-    an argument holding views (`ThruFn`);
+    through a callee, run on a value that holds views (a struct's or an
+    enum's glue keeps `¬ ThruFn`), and a call into a function that does so
+    which passes an argument holding views (`ThruFn`);
   - a closure whose code does so, when the call through its package passes
     an argument holding views, or its environment holds views, or it takes
     the environment handed over (`StmtT.callcE`). nurlc accepts the first:

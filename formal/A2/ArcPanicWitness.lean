@@ -207,10 +207,10 @@ theorem pfn_not_thru : ¬ ThruFn P 1 := by
   | call hf hg _ => simp [P] at hf; subst hf; simp [pfn, Stmt.calls] at hg
 
 theorem drop0_ok : DropFnOK P 0 T :=
-  Or.inl ⟨⟨dfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, dfn_not_thru⟩, by decide⟩
+  Or.inl ⟨⟨dfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h dfn_not_thru⟩, by decide⟩
 
 theorem drop1_ok : DropFnOK P 1 T :=
-  Or.inl ⟨⟨pfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, pfn_not_thru⟩, by decide⟩
+  Or.inl ⟨⟨pfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h pfn_not_thru⟩, by decide⟩
 
 /-! ### Typing -/
 

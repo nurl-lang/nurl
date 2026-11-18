@@ -189,11 +189,12 @@ theorem thru_ok {Γ : Ctx} (hc : Calm Γ) {n : Var} {E : Entry} (h2 : Γ 2 = som
   exact fun h => hn h.symm
 
 /-- `thru n` typed in a calm context where `n` is a live number, the result
-    slot `1` untouched. -/
-theorem thru_typed {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (hn : Γ n = some En)
+    slot `1` untouched — in any program: it calls nothing (the destructor
+    witness `A2.ThruDtorWitness` types the same body). -/
+theorem thru_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (hn : Γ n = some En)
     (hnl : En.live = true) (hnt : En.ty = .int) (hn2 : n ≠ 2) (hn3 : n ≠ 3) (hn4 : n ≠ 4)
     (h2 : Γ 2 = none) (h3 : Γ 3 = none) (h4 : Γ 4 = none) (h1 : Γ 1 = some R0) :
-    ∃ Δ, StmtT P .none Γ [] (thru n) Δ ∧ Calm Δ ∧ Δ 1 = some R0 := by
+    ∃ Δ, StmtT Q .none Γ [] (thru n) Δ ∧ Calm Δ ∧ Δ 1 = some R0 := by
   -- `: ( Vec ( Vec i ) ) loc`
   let G2 := A2.setE Γ 2 Eloc
   have hG2 : Calm G2 := hc.setE (by simp [Eloc])
@@ -204,7 +205,7 @@ theorem thru_typed {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (hn : Γ n =
   -- the inner `Vec` moved into `loc`
   let G3' := A2.setE (A2.kill .replace false 3 G3) 3 { Ein with live := false, dtor := false }
   have hG3' : Calm G3' := (hG3.kill _ _ _).setE (by simp [Ein])
-  have hpush : StmtT P .none G3 [] (.push 2 3)
+  have hpush : StmtT Q .none G3 [] (.push 2 3)
       (A2.setE (A2.kill .realloc vi.holdsView 2 G3') 2 { Eloc with held := Eloc.held ++ ownHeld true vi Ein.held }) :=
     StmtT.push (Ex := Eloc) (Ey := Ein) (Ex1 := Eloc) (t := vi) (by simp [G3, G2, A2.setE, upd]) rfl rfl
       (Or.inl rfl) (by simp) (by simp [G3, A2.setE]) rfl rfl (by decide)
@@ -224,7 +225,7 @@ theorem thru_typed {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (hn : Γ n =
     have := RhsT.at (Γ := G4) (F := []) (E := Eloc) (t := vi) (i := .lit 0) hG42 rfl rfl ExprT.lit
     simpa [elemE, Eloc, Eb, vi, vvi, derive, Mode.isRoot, rootKind] using this
   -- the push through the borrow
-  have hed := StmtT.editB (P := P) (ξ := .none) (Γ := G5) (Γ1 := G5) (F := []) (x := 4) (op := .push n)
+  have hed := StmtT.editB (P := Q) (ξ := .none) (Γ := G5) (Γ1 := G5) (F := []) (x := 4) (op := .push n)
     (Ex := Eb) (Ex1 := Eb) (t := .int) (D := []) (by simp [G5, A2.setE]) rfl rfl rfl rfl (by simp)
     (EditArg.push (Ey := En) (by simp [G5, A2.setE, hn4, hG4n]) hnl hnt PushArg.int)
     (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hn4)
@@ -233,14 +234,14 @@ theorem thru_typed {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (hn : Γ n =
     (fun h => by simp [Edit.drops] at h)
   have hD5 : Calm (A2.setE (A2.killThru (.push n) (Ty.vec .int) [⟨2, .inner⟩] G5) 4 Eb) :=
     (hG5.killThru _ _ _).setE (by simp [Eb])
-  have hl4 := StmtT.letv (P := P) (ξ := .none) (x := 4) (Γ := G4) (Γ1 := G4) (F := []) (E := Eb)
+  have hl4 := StmtT.letv (P := Q) (ξ := .none) (x := 4) (Γ := G4) (Γ1 := G4) (F := []) (E := Eb)
     (s := .edit true 4 (.push n)) rfl (by simp [G4, A2.setE, upd, G3', A2.kill, G3, G2, h4]) (by simp) hat
     hed.ofNone (hD5.endOK _) (fun h => by simp [Eb] at h)
-  have hs := StmtT.seq (P := P) (ξ := .none) rfl hpush hl4
-  have hl3 := StmtT.letv (P := P) (ξ := .none) (x := 3) (Γ := G2) (Γ1 := G2) (F := []) (E := Ein)
+  have hs := StmtT.seq (P := Q) (ξ := .none) rfl hpush hl4
+  have hl3 := StmtT.letv (P := Q) (ξ := .none) (x := 3) (Γ := G2) (Γ1 := G2) (F := []) (E := Ein)
     rfl (by simp [G2, A2.setE, h3]) (by simp) (RhsT.new (t := .int) rfl) hs.ofNone
     ((hD5.exitScope 4).endOK _) (fun _ => rfl)
-  have hl2 := StmtT.letv (P := P) (ξ := .none) (x := 2) (Γ := Γ) (Γ1 := Γ) (F := []) (E := Eloc)
+  have hl2 := StmtT.letv (P := Q) (ξ := .none) (x := 2) (Γ := Γ) (Γ1 := Γ) (F := []) (E := Eloc)
     rfl h2 (by simp) (RhsT.new (t := vi) rfl) hl3.ofNone
     (((hD5.exitScope 4).exitScope 3).endOK _) (fun _ => rfl)
   refine ⟨_, hl2, ((hD5.exitScope 4).exitScope 3).exitScope 2, ?_⟩
@@ -250,16 +251,16 @@ theorem thru_typed {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (hn : Γ n =
     (r0_setE (by decide) (r0_killNames hG51 _))))
 
 /-- The result set last: `= r 0`. -/
-theorem assign_typed {Γ : Ctx} (hc : Calm Γ) (h1 : Γ 1 = some R0) :
-    StmtT P .none Γ [] (.assign 1 (.expr (.lit 0)))
+theorem assign_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) (h1 : Γ 1 = some R0) :
+    StmtT Q .none Γ [] (.assign 1 (.expr (.lit 0)))
       (A2.setE (kill .replace false 1 Γ) 1 { intE with mode := R0.mode }) :=
   StmtT.assign (Ex := R0) (E := intE) h1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [h1])
     (hc.noPin _) (hc.dtor _ _ _) rfl
 
-theorem body_typed {Γ : Ctx} {s : Stmt}
-    (h : ∃ Δ, StmtT P .none Γ [] s Δ ∧ Calm Δ ∧ Δ 1 = some R0) :
-    ∃ Δ, StmtT P .none Γ [] (.seq s (.assign 1 (.expr (.lit 0)))) Δ ∧
+theorem body_typed {Q : Prog} {Γ : Ctx} {s : Stmt}
+    (h : ∃ Δ, StmtT Q .none Γ [] s Δ ∧ Calm Δ ∧ Δ 1 = some R0) :
+    ∃ Δ, StmtT Q .none Γ [] (.seq s (.assign 1 (.expr (.lit 0)))) Δ ∧
       (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
       Δ 1 = some { intE with mode := R0.mode } := by
   obtain ⟨Δ, ht, hcΔ, h1⟩ := h
