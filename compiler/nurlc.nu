@@ -27085,7 +27085,10 @@ unsafe @ __udrop_sink_params i syms s fname s sinks → v {
     ? != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) { ? ! ( __call_answers syms tt ) { ^ v } {} } {}
     : s dty ( nurl_get_last_type )
     : s rty ( __udrop_regty dty )
-    ? ! ( __is_handle_ty rty ) { ^ v } {}
+    // (…or a value that cannot be copied — a `% Drop` value, a struct or
+    // an enum holding one — owned the same way: left to nobody, it leaked
+    // and its destructor never ran, agora #917.)
+    ? ! | ( __is_handle_ty rty ) ( __nc_drop_ty dty ) { ^ v } {}
     : s ro ( mem_call_retown syms cg )
     ? == 0 ( nurl_str_len ro ) { ^ v } {}
     : s ptr ( nurl_cg_reg cg )
