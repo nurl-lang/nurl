@@ -1,3 +1,6 @@
+// wrap_of_a_builder_call: `( wrap ( mk xs ) )`, wrap returning `\ → v { ( f ) }` over its parameter, run beside a view
+// Closed (agora #813): a callee that hands back the closure it was handed (`retclo`) hands back its effects too (`__ce_by_arg`), and a call of a builder whose answer is not there yet gives placeholders resolved at the walk; the result's run replays them.
+// main e35ded15: accepted; the read after the run prints a freed buffer's bytes (167).
 // map: §2.10 | A2 | rejected | - | agora #838: `( wrap ( mk xs ) )`, wrap returning `\ → v { ( f ) }` over its parameter, run beside a view
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
