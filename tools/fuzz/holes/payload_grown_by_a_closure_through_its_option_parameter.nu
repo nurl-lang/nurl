@@ -1,4 +1,5 @@
-// map: §2.11 | A2 | rejected | - | agora #428: a view of an option payload kept while a closure grows it through a plain `?H` parameter
+// map: §2.11 | A2 | rejected | - | AGORA-428: a view of an option payload kept while a closure grows it through a plain `?H` parameter
+// AGORA-428 (closed by AGORA-842 part 1): refused - the view of the payload, named past its arm, points into the option, which the growth ends (main 34edc2a1: accepted)
 $ `stdlib/core/string.nu`
 
 : H { String name }
