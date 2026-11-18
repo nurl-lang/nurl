@@ -26926,7 +26926,9 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
 // __drop_note_rcv) — so a caller's view through another handle on that Rc
 // ends at the call (agora #766).
 @ __udrop_bind_note i syms s ty s sx → v {
-    ? == 0 g_user_drop_seen { ^ v } {}
+    // (Called after its binding's row: a value that reaches an Rc is noted
+    // there, g_bck_rcty — none noted, none here.)
+    ? | == 0 g_user_drop_seen == 0 ( nurl_str_len g_bck_rcty ) { ^ v } {}
     // (Only a function a parameter of which reaches an Rc can drop one's
     // payload this way: asked once per function, __fn_rc_param.)
     ? ! ( __fn_rc_param syms ) { ^ v } {}
@@ -26946,7 +26948,7 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
 // at module end) — so the caller's view of the Rc payload the impl changes,
 // taken through another handle, ends at the call (agora #766).
 @ __udrop_param_old i syms s name s ty → v {
-    ? | == 0 g_user_drop_seen == 0 ( nurl_str_len g_cur_params ) { ^ v } {}
+    ? | | == 0 g_user_drop_seen == 0 ( nurl_str_len g_cur_params ) == 0 ( nurl_str_len g_bck_rcty ) { ^ v } {}
     ? < ( str_word_index g_cur_params name ) 0 { ^ v } {}
     ? ! ( __fn_rc_param syms ) { ^ v } {}
     : s lt ( nurl_llty ty )
@@ -48823,7 +48825,7 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // (__udrop_release_tmp_at); one the callee takes is the callee's to
     // release, which its summary answers. Agora #766.)
     // (Nested: `&` evaluates both sides, and most calls hand no such value.)
-    ? & != 0 g_user_drop_seen != 0 ( nurl_str_len owned ) { ? ( __argtmp_has_val owned av ) {
+    ? & != 0 g_user_drop_seen >= ( nurl_str_find owned av ) 0 { ? ( __argtmp_has_val owned av ) {
             ? != 0 ( nurl_str_len ( __udrop_fns ( nurl_llty at ) ) ) { ? ! | ( nurl_sym_has_word g_fn_sink call_name ( nurl_str_int arg_idx ) ) ( nurl_sym_has_word g_fn_sink fname ( nurl_str_int arg_idx ) ) {
                     = g_argtmp_udrop_n + g_argtmp_udrop_n 1
                     ( nurl_sym_append_word syms `__argtmp_udrop__` av )
@@ -61059,8 +61061,10 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // (Its old value, where codegen still holds it, is released
                 // here: one whose type runs a `% Drop` of the program's own
                 // is handed to it — agora #766.)
-                : i aold ( bck_st_get st asid )
-                ? ! | | == aold BCK_UNINIT == aold BCK_MOVED == aold BCK_STORED { = st ( __bck_udrop_sweep st asid ( bck_field_int rec 3 ) `as the old value of '='` ) } {}
+                ? & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) {
+                    : i aold ( bck_st_get st asid )
+                    ? ! | | == aold BCK_UNINIT == aold BCK_MOVED == aold BCK_STORED { = st ( __bck_udrop_sweep st asid ( bck_field_int rec 3 ) `as the old value of '='` ) } {}
+                } {}
                 // (What it borrowed before, kept for its new value's borrow row
                 // — a value block or a join of it, `= j { j }`, hands on that
                 // very handle: bck_brw_leaves; agora #554.)
@@ -70209,7 +70213,7 @@ unsafe @ bck_scope_drop s st s lets i line → s {
         // stored away, or never bound on this path. The walk's own state
         // may call such a holder a borrow; its owner is codegen's
         // registration, noted by bck_note_rc_arg — agora #766.)
-        ? ! | | == v BCK_UNINIT == v BCK_MOVED == v BCK_STORED { = out ( __bck_udrop_sweep out id line `at the end of its block` ) } {}
+        ? & & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) ! | | == v BCK_UNINIT == v BCK_MOVED == v BCK_STORED { = out ( __bck_udrop_sweep out id line `at the end of its block` ) } {}
         ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_root_end out id line `it went out of scope at the end of its block` ) } {}
         = g_bck_ending ? == 0 ( nurl_str_len g_bck_ending ) ( nurl_str_int id ) ( nurl_str_cat3 g_bck_ending ` ` ( nurl_str_int id ) )
     }
@@ -73064,8 +73068,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // (Its own value unless a call lends it one — `arc_get`'s payload,
         // a field accessor's: that value's drop stays its owner's.)
         = g_bck_bind_owns ? & == bck_rhs_tt TT_LPAREN ! | == 0 ( nurl_str_len g_bck_rhs_lend ) ( seq g_bck_rhs_lend `-` ) 0 1
-        ? != 0 g_bck_bind_owns { ( __udrop_bind_note syms vt g_bck_rhs_sx ) } {}
+        : b __udo != 0 g_bck_bind_owns
         ( bck_record_binding `let` name bck_line __cbc vt )
+        ? __udo { ( __udrop_bind_note syms vt g_bck_rhs_sx ) } {}
         ? == __cbc 5 { ( bck_note_clo_borrow syms name bck_line __cbr ) } {}
         = g_bck_rhs_callee ``
         = g_bck_let_sx_last ( nurl_str_cat g_bck_rhs_sx `` )
@@ -73499,8 +73504,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             : i __cbc ? != 0 ( nurl_str_len __bc_tail ) ( __clo_bind_class syms ( nurl_llty ptype ) val `` ( mem_clo_listed syms __bc_tail ) TT_IDENT name __bc_tail ) ? != 0 ( nurl_str_len __bc_wtail ) 5 ( __clo_bind_class syms ( nurl_llty ptype ) val rhs_closure_env __src_owned_env bck_rhs_tt name bck_rhs_val )
             : s __cbr ? & == __cbc 5 != 0 g_borrowck ? != 0 ( nurl_str_len __bc_wtail ) __bc_wtail ( nurl_sym_get g_bck `reads` ) ``
             = g_bck_bind_owns ? & == bck_rhs_tt TT_LPAREN ! | == 0 ( nurl_str_len g_bck_rhs_lend ) ( seq g_bck_rhs_lend `-` ) 0 1
-            ? != 0 g_bck_bind_owns { ( __udrop_bind_note syms ptype g_bck_rhs_sx ) } {}
+            : b __udo != 0 g_bck_bind_owns
             ( bck_record_binding `let` name bck_line __cbc ( nurl_llty ptype ) )
+            ? __udo { ( __udrop_bind_note syms ptype g_bck_rhs_sx ) } {}
             ? == __cbc 5 { ( bck_note_clo_borrow syms name bck_line __cbr ) } {}
             = g_bck_rhs_callee ``
             = g_bck_let_sx_last ( nurl_str_cat g_bck_rhs_sx `` )
@@ -74111,12 +74117,13 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // (`= j j` gives j no new value: its walk rows read it and change
         // nothing — an `assign` row ended what it borrowed, agora #554.)
         = g_bck_self_asn & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name )
-        ? != 0 g_bck_bind_owns { ( __udrop_bind_note syms vt g_bck_rhs_sx ) } {}
+        : b __udo != 0 g_bck_bind_owns
+        ( bck_record_binding `assign` name bck_line __acbc vt )
+        ? __udo { ( __udrop_bind_note syms vt g_bck_rhs_sx ) } {}
         // (…and the old value it releases, when it is a parameter's — an
         // `inout` one's, the caller's value: what its `% Drop` impls drop of
         // their parameter, this function drops of that one; agora #766.)
         ( __udrop_param_old syms name vt )
-        ( bck_record_binding `assign` name bck_line __acbc vt )
         = g_bck_self_asn F
         ( __rp_note_assign syms name )
         ? == __acbc 5 { ( bck_note_clo_borrow syms name bck_line __acbr ) } {}
