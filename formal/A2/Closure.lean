@@ -431,7 +431,9 @@ theorem clean_weaker (E : Entry) : EntryWeaker E.clean E := by
     fun hd => Or.inl (by rw [Entry.clean_dtor]; exact hd),
     fun hd hos hn d hnm => by
       rw [Entry.clean_dbind] at hd; rw [clean_mode] at hos; rw [clean_ty, clean_mode] at hn
-      exact (Entry.clean_vdeps_mem hd hos hn hnm).symm⟩
+      exact (Entry.clean_vdeps_mem hd hos hn hnm).symm,
+      fun hl hn _ hfr => by
+        rw [Entry.clean_eq hl hn]; exact ⟨hfr, List.Subset.refl _⟩⟩
 
 theorem clean_rootb {E : Entry} (h : E.mode = .rootb) : E.clean = E :=
   clean_fixed (Or.inl h)
@@ -864,6 +866,9 @@ theorem post_rel {Γe Γ : Ctx} {fn sig : Fn} {A C : List Var} {e : Var}
           refine RSetup.EntryWeaker.mk' (by simp [clean_ty]) (by simp [clean_mode])
             (by rw [fixed_setHeld, clean_fixed_iff]; exact hrba (by simp)) (by simp [clean_live])
             (fun _ => clean_path_sub _) ?_ (hdh := fun hd => absurd hd (by simp [hdba]))
+            (hf := fun hl hn _ hfr => by
+              simp [clean_live, clean_ty] at hl hn hfr ⊢
+              rw [Entry.clean_eq hl hn]; exact ⟨hfr, List.Subset.refl _⟩)
           intro d hd
           by_cases hvv : t.holdsView = true
           · rw [ite_eq_left hvv] at hd ⊢
@@ -1174,7 +1179,13 @@ theorem rerootE_noE {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker E 
       fun h => ⟨(hw.dtor h).1, by show reroot p D E.held ⊆ E'.held; rw [hh]; exact (hw.dtor h).2⟩,
       hw.dbind, hw.raise, fun hd hos hn d hnm => by
         show d ∈ E'.held ↔ d ∈ reroot p D E.held
-        rw [hh]; exact hw.dheld hd hos hn d hnm⟩
+        rw [hh]; exact hw.dheld hd hos hn d hnm,
+      fun hl hn hb hfr => by
+        obtain ⟨h1, h2⟩ := hw.fresh hl hn hb hfr
+        have hEb : E.mode = .bor := by rw [← hw.mode]; exact hb
+        refine ⟨h1, ?_⟩
+        show E'.path ⊆ reroot p D E.path
+        rw [hp (by rw [hEb]; rfl)]; exact h2⟩
   · have hf : E.fixed := by simp only [Entry.fixed_def] at h ⊢; rw [rerootE] at h; exact h
     have := hw.fixed hf
     rw [this]; unfold rerootE
@@ -1388,7 +1399,15 @@ theorem weaker_killAll_more {Mc M : List Dep} {Ed Es : Entry} (hw : EntryWeaker 
       fun h => by rw [(hkd _ _).1] at h; rw [(hkd _ _).1, (hkd _ _).2.2]; exact hw.raise h,
       fun hd hos hn d hnm => by
         rw [(hkd _ _).2.2] at hd; rw [(hkt _ _).2] at hos; rw [(hkt _ _).1, (hkt _ _).2] at hn
-        rw [(hkd _ _).2.1, (hkd _ _).2.1]; exact hw.dheld hd hos hn d hnm⟩
+        rw [(hkd _ _).2.1, (hkd _ _).2.1]; exact hw.dheld hd hos hn d hnm,
+      fun hl hn hb hfr => by
+        have hkf : ∀ (ds : List Dep) (E0 : Entry), (RSetup.killAll ds E0).fresh = E0.fresh ∧
+            (RSetup.killAll ds E0).path = E0.path ∧
+            ((RSetup.killAll ds E0).live = true → E0.live = true) := by
+          intro ds E0; unfold RSetup.killAll; split <;> simp
+        rw [(hkf _ _).1] at hfr ⊢; rw [(hkf _ _).2.1, (hkf _ _).2.1]
+        rw [(hkt _ _).1] at hn; rw [(hkt _ _).2] at hb
+        exact hw.fresh ((hkf _ _).2.2 hl) hn hb hfr⟩
   · have hf' := killAll_fixed.mp hf
     have hM := hfix hf'
     rw [hw.fixed hf', hMc hM, killAll_id hM]

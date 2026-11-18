@@ -272,6 +272,16 @@ theorem callPe_live (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) (v : 
 theorem with_live_true (E : Entry) (h : E.live = true) : { E with live := true } = E := by
   cases E; simp_all
 
+theorem callPe_fresh (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) (v : Var) :
+    (callPe Γ ps args v).fresh = false := by
+  unfold callPe; split
+  · split <;> rfl
+  · rfl
+
+theorem with_live_fresh (E : Entry) (h : E.live = true) (hf : E.fresh = false) :
+    { E with live := true, fresh := false } = E := by
+  cases E; simp_all
+
 @[simp] theorem callS_R : (callS Γ F fn args base x).R = callR Γ args := rfl
 @[simp] theorem callS_pe : (callS Γ F fn args base x).pe = callPe Γ fn.params args := rfl
 
@@ -314,8 +324,8 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
           refine Or.inr (Or.inr (Or.inl ⟨v, t, hget, by simp, ?_⟩))
           simp only [RSetup.liftE, paramE, ↓reduceIte, Option.map_some]
           congr 1
-          show { callPe Γ fn.params args v with live := true } = _
-          rw [with_live_true _ (callPe_live _ _ _ _)]
+          show { callPe Γ fn.params args v with live := true, fresh := false } = _
+          rw [with_live_fresh _ (callPe_live _ _ _ _) (callPe_fresh _ _ _ _)]
         | sink =>
           refine Or.inr (Or.inr (Or.inr (Or.inl ⟨v, t, hget, by simp, ?_⟩)))
           simp [RSetup.liftE, paramE, liftMode, Mode.ownSlot, callS, rds]

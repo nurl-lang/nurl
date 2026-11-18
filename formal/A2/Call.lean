@@ -821,6 +821,15 @@ theorem fixed_setHeld (E : Entry) (H : List Dep) : ({E with held := H} : Entry).
 theorem clean_mode (E : Entry) : E.clean.mode = E.mode := by unfold Entry.clean; split <;> rfl
 theorem clean_ty (E : Entry) : E.clean.ty = E.ty := by unfold Entry.clean; split <;> rfl
 theorem clean_live (E : Entry) : E.clean.live = E.live := by unfold Entry.clean; split <;> rfl
+
+@[simp] theorem Entry.clean_fresh (E : Entry) : E.clean.fresh = E.fresh := by
+  unfold Entry.clean; split <;> rfl
+
+/-- A live binding that holds memory is not cleaned. -/
+theorem Entry.clean_eq {E : Entry} (hl : E.live = true) (hn : E.ty ≠ .int) : E.clean = E := by
+  unfold Entry.clean; rw [if_neg]; rintro ⟨_, h | h⟩
+  · exact hn h
+  · rw [hl] at h; cases h
 theorem clean_fixed {E : Entry} (h : E.fixed) : E.clean = E := by
   unfold Entry.clean; rw [ite_eq_right (fun hc => hc.1 h)]
 theorem clean_id {E : Entry} (h : E.ty ≠ .int ∨ E.mode = .rootb) (hl : E.live = true) : E.clean = E := by
@@ -2255,7 +2264,8 @@ theorem entryWeaker_killE {e : Eff} {hv : Bool} {x : Var} {E : Entry}
   · rw [hfix hf]; exact EntryWeaker.refl E
   · unfold killE; split
     · exact ⟨rfl, rfl, fun h => absurd h hf, fun h => by simp at h,
-        fun h => ⟨h, List.Subset.refl _⟩, rfl, fun h => Or.inl h, fun _ _ _ _ _ => Iff.rfl⟩
+        fun h => ⟨h, List.Subset.refl _⟩, rfl, fun h => Or.inl h, fun _ _ _ _ _ => Iff.rfl,
+      fun _ _ _ hfr => by fresh_ew⟩
     · exact EntryWeaker.refl E
 
 /-! ### What the parameters' frames keep (`KeepOut`)
@@ -3399,7 +3409,8 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
         exact ⟨rfl, rfl, fun hf => absurd hf hcl.1,
           fun hl => ⟨hl, fun _ => List.nil_subset _, fun d h => (List.mem_filter.mp h).1⟩,
           fun hd => ⟨hd, fun d h => (List.mem_filter.mp h).1⟩, rfl, fun hd => Or.inl hd,
-          fun _ _ _ d hnm => by simp [memDeps, List.mem_filter, hnm]⟩
+          fun _ _ _ d hnm => by simp [memDeps, List.mem_filter, hnm],
+      fun _ _ _ hfr => by fresh_ew⟩
     · have hce : E1.clean = { E1 with path := [], held := [] } := by
         unfold Entry.clean; rw [ite_eq_left hcl, ite_eq_right hdk]
       have hrr : rrE fn.params base 0 (callPe Γ fn.params args) E1.clean = { E1 with path := [], held := [] } := by
@@ -3411,7 +3422,8 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
       · rw [hrr, hv0]; intro d hd; cases hd
       · rw [hrr]
         refine ⟨rfl, rfl, fun hf => absurd hf hcl.1, fun hl => ⟨hl, fun _ => by simp, by simp⟩,
-          by intro h; simp_all, rfl, fun hd => Or.inl hd, fun hdb hos hn => absurd ⟨hdb, hos, ?_⟩ hdk⟩
+          by intro h; simp_all, rfl, fun hd => Or.inl hd, fun hdb hos hn => absurd ⟨hdb, hos, ?_⟩ hdk,
+      fun _ _ _ hfr => by fresh_ew⟩
         rcases hn with hn | hn
         · exact hn
         · simp only at hos hn; rw [hn] at hos; cases hos
@@ -3460,7 +3472,10 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
         show rrL fn.params base 0 (callPe Γ fn.params args) E1.held ⊆ E1.held
         rw [hheld]; exact List.Subset.refl _⟩, rfl, fun hd => Or.inl hd, fun _ _ _ d _ => by
         show d ∈ E1.held ↔ d ∈ rrL fn.params base 0 (callPe Γ fn.params args) E1.held
-        rw [hheld]⟩
+        rw [hheld],
+      fun _ _ hb hfr => ⟨hfr, by
+        show E1.path ⊆ rrL fn.params base 0 (callPe Γ fn.params args) E1.path
+        rw [hpath (by rw [hb]; rfl)]; exact List.Subset.refl _⟩⟩
       · have hrb' : E1.mode = .rootb := by
           rcases hrb with hrb | ⟨b, hb, _⟩
           · exact hrb
@@ -3663,7 +3678,8 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
           fun hd => absurd hd (by simp [rrE, liftE_eq _ hrb, (hΔf v Ei hEi).1]),
           by rw [hEtb]; simp [rrE, liftE_eq _ hrb, (hΔf v Ei hEi).2],
           fun hd => absurd (h.postwf.arm _ Et hEt hd) (by rw [hEtb]; simp),
-          fun hd => absurd hd (by simp [rrE, liftE_eq _ hrb, (hΔf v Ei hEi).2])⟩
+          fun hd => absurd hd (by simp [rrE, liftE_eq _ hrb, (hΔf v Ei hEi).2]),
+          fun _ _ hb _ => by rw [hpm, hown] at hb; cases hb⟩
         · rw [hpt, hty]; simp [rrE, liftE_eq _ hrb, ht0]
         · rw [hpm, hown]; simp [rrE, liftE_eq _ hrb, hm0, liftMode]
         · simp [rrE, liftE_eq _ hrb, hm0, liftMode, Mode.ownSlot] at ho

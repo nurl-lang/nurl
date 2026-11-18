@@ -474,10 +474,14 @@ theorem MInv.rooted {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {v : Var} {E : Entry} 
 /-- An entry not fixed is not changed by a weaker one's being taken as it is. -/
 theorem EntryWeaker.killR {E E' : Entry} (hw : EntryWeaker E E') {e : Eff} {hb : Bool} {v : Var}
     (hfix : E.fixed → killE e hb v E' = E') : EntryWeaker E (killE e hb v E') := by
-  obtain ⟨ht, hm, hr, hlv, hd, hdb, ha, hk⟩ := hw
+  obtain ⟨ht, hm, hr, hlv, hd, hdb, ha, hk, hf⟩ := hw
   refine ⟨by rw [killE_ty, ht], by rw [killE_mode, hm], fun h => by rw [hfix h, hr h], fun h => ?_,
     fun h => by rw [killE_dtor, killE_held]; exact hd h, by rw [killE_dbind, hdb],
-    fun h => by rw [killE_dtor] at h; exact ha h, fun h hos hn d hnm => by rw [killE_held]; exact hk h hos hn d hnm⟩
+    fun h => by rw [killE_dtor] at h; exact ha h, fun h hos hn d hnm => by rw [killE_held]; exact hk h hos hn d hnm,
+    fun hl hn hb h => by
+      rw [killE_fresh] at h; rw [killE_path]; rw [killE_ty] at hn; rw [killE_mode] at hb
+      rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
+      exact hf hl.1 hn hb h⟩
   rw [killE_live] at h
   simp only [Bool.and_eq_true] at h
   obtain ⟨hl, hp, hh⟩ := hlv h.1
@@ -1199,7 +1203,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
       (by simp [Ec1, Epk, hck, hlc]) (fun _ => by show [] ⊆ _; exact List.nil_subset _)
       (fun d hd => by simpa [Ec1, Epk, capDeps] using hHyS (by simpa [Epk, capDeps, Ey1] using hd))
       (fun h => by simp [Epk] at h) (by simp [Ec1, Epk, hck, hdbc]) (fun h => by simp [Ec1, hck, hdtc] at h)
-      (fun h => by simp [Epk] at h)
+      (fun h => by simp [Epk] at h) (fun _ _ hb _ => by simp [Ec1, hck, hmo] at hb)
   have hwc : EntryWeaker Epk (killE .replace false c (RSetup.killAll (mutNames (kill .replace false c Γ) [c]) Ec1)) := by
     have h1 := weaker_killAll_more (Mc := []) (M := mutNames (kill .replace false c Γ) [c]) hw0
       (fun d hd => by cases hd) (fun hf => absurd hf hEpkF)

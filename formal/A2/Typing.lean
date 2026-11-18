@@ -317,6 +317,26 @@ structure EntryWeaker (E E' : Entry) : Prop where
   raise : E'.dtor = true → E.dtor = true ∨ E.dbind = true
   dheld : E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
             ∀ d, d.kind.isName = false → (d ∈ E'.held ↔ d ∈ E.held)
+  /-- Agora #909: a fresh entry stays fresh only as it was: a weakening that
+      makes it fresh, or widens a fresh entry's path, would let it reach
+      what the frame does not own. (A join of a fresh and a non-fresh
+      borrow is not fresh.) Only a live borrow that holds memory matters:
+      `FreshOK` asks nothing of the others (an owner's lift adds nothing
+      the arguments hold already). -/
+  fresh : E'.live = true → E'.ty ≠ .int → E'.mode = .bor → E'.fresh = true →
+    E.fresh = true ∧ E'.path ⊆ E.path
+
+/-- Closes `EntryWeaker.fresh` where the weaker entry is not fresh (a literal,
+    a lift, an armed or held entry): the hypothesis `hfr` is false. -/
+syntax "fresh_ew" : tactic
+set_option hygiene false in
+macro_rules
+  | `(tactic| fresh_ew) => `(tactic| first
+      | (exact absurd hfr Bool.false_ne_true)
+      | (cases hfr; done)
+      | (simp at hfr; done)
+      | (simp [Entry.arm] at hfr; done)
+      | (simp_all; done))
 
 /-- A context's live entries depend only on roots it has.  (An integer's
     dependencies say nothing: it holds no memory.)  A2-drop.2: so does, in
