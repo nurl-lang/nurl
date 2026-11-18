@@ -67903,6 +67903,22 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 ? deep { = g_bck_end_elem 2 } {}
                 ? != 0 ( nurl_str_len fcx ) { = g_bck_end_fcx ( nurl_str_to_int fcx ) } {}
                 = out ( bck_view_end_ind out ( nurl_str_to_int o ) ( bck_field_int rec 3 ) rwhy )
+                // (…and of every field path of that owner a view was taken
+                // through - `: I ii . ww inner` handed on, a slice of `(
+                // vec_at . . ww inner rows 0 )` read past it: those views
+                // point into the same elements, as where `. ww inner`
+                // itself is handed (bck_id_holds); agora #789.)
+                ? != 0 g_bck_has_paths {
+                    : i oid ( nurl_str_to_int o )
+                    : ~ s prest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
+                    : i prest_n ( nurl_str_len prest )
+                    : ~ i prest_p 0
+                    ~ < prest_p prest_n {
+                        : i pe ( __word_end prest prest_n prest_p ) : s pw ( __span_dup prest prest_p pe ) = prest_p + pe 1
+                        : i pid ( nurl_str_to_int pw )
+                        ? & != pid oid ( bck_id_holds oid pid ) { = out ( bck_view_end_ind out pid ( bck_field_int rec 3 ) rwhy ) } {}
+                    }
+                } {}
                 = g_bck_end_fcx -1
                 = g_bck_end_elem 0
                 // (…and the views recorded of the owner itself: a view taken
