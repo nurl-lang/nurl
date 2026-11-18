@@ -3063,6 +3063,10 @@ unsafe @ __fn_io_add s name → v { = g_fn_io_names ( nurl_str_cat3 g_fn_io_name
 : ~ i g_rc_direct_memo 0
 // __udrop_fns's answers, per lowered type (the bar list, `-` for none).
 : ~ i g_udfn_memo 0
+// How many call temporaries mem_arg_temps listed for a release swept as a
+// `% Drop` call (`__argtmp_udrop__`) that mem_drop_arg_temps has not met
+// yet: 0, and it asks nothing (agora #766).
+: ~ i g_argtmp_udrop_n 0
 // The Rc type sets the borrow walk notes, interned: each set is written
 // once, and a note names it by its number (`#3`) — a struct of sixty Rc
 // fields bound six hundred times noted the sixty names twelve hundred
@@ -26185,8 +26189,9 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
                         // (Its release runs a `% Drop` of the program's own
                         // where its type has one and the callee did not take
                         // it, mem_arg_temps: agora #766.)
-                        : s __udq ( nurl_sym_get syms `__argtmp_udrop__` )
+                        : s __udq ? == 0 g_argtmp_udrop_n `` ( nurl_sym_get syms `__argtmp_udrop__` )
                         ? & != 0 ( nurl_str_len __udq ) ( str_contains_word __udq v ) {
+                            = g_argtmp_udrop_n - g_argtmp_udrop_n 1
                             ( nurl_sym_def syms `__argtmp_udrop__` ( __word_drop __udq v ) )
                             ( __udrop_release_tmp_at syms ty F ( nurl_sym_get syms ( nurl_str_cat `__argtmp_udk__` v ) ) )
                         } {}
@@ -26922,6 +26927,9 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
 // ends at the call (agora #766).
 @ __udrop_bind_note i syms s ty s sx → v {
     ? == 0 g_user_drop_seen { ^ v } {}
+    // (Only a function a parameter of which reaches an Rc can drop one's
+    // payload this way: asked once per function, __fn_rc_param.)
+    ? ! ( __fn_rc_param syms ) { ^ v } {}
     : s lt ( nurl_llty ty )
     ? == 0 ( nurl_str_len ( __rc_reach lt ) ) { ^ v } {}
     : ~ s fns ( __udrop_fns lt )
@@ -26940,6 +26948,7 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
 @ __udrop_param_old i syms s name s ty → v {
     ? | == 0 g_user_drop_seen == 0 ( nurl_str_len g_cur_params ) { ^ v } {}
     ? < ( str_word_index g_cur_params name ) 0 { ^ v } {}
+    ? ! ( __fn_rc_param syms ) { ^ v } {}
     : s lt ( nurl_llty ty )
     ? == 0 ( nurl_str_len ( __rc_reach lt ) ) { ^ v } {}
     : ~ s fns ( __udrop_fns lt )
@@ -48813,12 +48822,14 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // own: that release is a call of it, swept after this call's rows
     // (__udrop_release_tmp_at); one the callee takes is the callee's to
     // release, which its summary answers. Agora #766.)
-    ? & & != 0 g_user_drop_seen != 0 ( nurl_str_len owned ) ! | ( nurl_sym_has_word g_fn_sink call_name ( nurl_str_int arg_idx ) ) ( nurl_sym_has_word g_fn_sink fname ( nurl_str_int arg_idx ) ) {
-        ? & != 0 ( nurl_str_len ( __udrop_fns ( nurl_llty at ) ) ) ( __argtmp_has_val owned av ) {
-            ( nurl_sym_append_word syms `__argtmp_udrop__` av )
-            ( nurl_sym_def syms ( nurl_str_cat `__argtmp_udk__` av ) ( nurl_str_cat3 call_name `/` ( nurl_str_int arg_idx ) ) )
-        } {}
-    } {}
+    // (Nested: `&` evaluates both sides, and most calls hand no such value.)
+    ? & != 0 g_user_drop_seen != 0 ( nurl_str_len owned ) { ? ( __argtmp_has_val owned av ) {
+            ? != 0 ( nurl_str_len ( __udrop_fns ( nurl_llty at ) ) ) { ? ! | ( nurl_sym_has_word g_fn_sink call_name ( nurl_str_int arg_idx ) ) ( nurl_sym_has_word g_fn_sink fname ( nurl_str_int arg_idx ) ) {
+                    = g_argtmp_udrop_n + g_argtmp_udrop_n 1
+                    ( nurl_sym_append_word syms `__argtmp_udrop__` av )
+                    ( nurl_sym_def syms ( nurl_str_cat `__argtmp_udk__` av ) ( nurl_str_cat3 call_name `/` ( nurl_str_int arg_idx ) ) )
+                } {} } {}
+        } {} } {}
     ( nurl_sym_def syms `__argtmp_owned__` owned )
 }
 
@@ -57077,9 +57088,11 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
 // temporary a call was handed, released after it (mem_drop_arg_temps): `ck`
 // that call and argument (`callee/k`), `` for a value no call was handed.
 @ __udrop_release_tmp_at i syms s ty b now s ck → v {
+    ? == 0 g_user_drop_seen { ^ v } {}
     : s lt ( nurl_llty ty )
     : s fns0 ( __udrop_fns lt )
-    ? | == 0 ( nurl_str_len fns0 ) == 0 ( nurl_str_len ( __rc_reach lt ) ) { ^ v } {}
+    ? == 0 ( nurl_str_len fns0 ) { ^ v } {}
+    ? == 0 ( nurl_str_len ( __rc_reach lt ) ) { ^ v } {}
     : ~ s fns ( nurl_str_cat fns0 `` )
     : b walk & != g_borrowck 0 == g_bck_rec_off 0
     : ~ s nm ``
@@ -67546,9 +67559,6 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
 }
 
 @ bck_borrow_sweep s ist s st s rec i kc → s {
-    // (A call's temporary its callee keeps is released by no row here:
-    // agora #766.)
-    ? & == kc 42 ( __bck_rel_kept ( bck_field rec 1 ) ) { ^ st } {}
     : ~ s out st
     // (…or, for a row named by a source expression, the storage it is swept
     // for now: g_bck_sx_wid.)
@@ -67731,7 +67741,10 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             : b sind ( __bar_meets wty sreach )
             : s sty ? sind sreach sty0
             : b wsame & & | != rid wroot wfield != 0 ( nurl_str_len wty ) & ! ( __bar_meets ( bck_rc_type_of ( nurl_sym_get2 g_bck `rv_` wn ) ) sty ) & >= wroot 0 ( str_contains_word ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `bs_` ( nurl_str_int wroot ) ) ) ) srcs )
-            ? & & & != 0 ( nurl_str_len wty ) | != rid wroot wfield ! wsame ( __bar_meets wty sty ) {
+            // (…not a `pendsink` row of a call's temporary its callee keeps:
+            // no release there, agora #766. Asked only where the Rc types
+            // meet, so no other row pays for it.)
+            ? & & & & != 0 ( nurl_str_len wty ) | != rid wroot wfield ! wsame ( __bar_meets wty sty ) ? == kc 42 ! ( __bck_rel_kept wn ) T {
                 : b rlent & == kc 32 | g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
                 // (A library dropper or element replacer handed the value whole
                 // — `( vec_clear hs )`, `( vec_put hs 0 x )` of a Vec of shares,
@@ -70068,7 +70081,10 @@ unsafe @ bck_scope_leave s st i line → s {
 // scope end's to end. The row carries `how` in field 7, which no sweep
 // reads otherwise, for its diagnostics (__bck_rc_passed).
 @ __bck_udrop_sweep s st i id i line s how → s {
-    ? | ( seq st `!` ) < id 0 { ^ st } {}
+    // (No `% Drop` of the program's own, or no Rc noted in this function:
+    // nothing to ask — and the note index is not built for it.)
+    ? | | == 0 g_user_drop_seen == 0 ( nurl_str_len g_bck_rcty ) < id 0 { ^ st } {}
+    ? ( seq st `!` ) { ^ st } {}
     : ~ s fns ( __bck_rc_noted ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) ) `+d=` )
     ? == 0 ( nurl_str_len fns ) { ^ st } {}
     : ~ s out ( nurl_str_cat st `` )
