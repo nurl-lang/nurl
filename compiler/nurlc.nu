@@ -65985,6 +65985,16 @@ unsafe @ __sx_names_any s sx → b {
 // parameter the sx leads to, where the sx lends out of what it names by the
 // final summaries: g_cedges' `#pdc:<ptr>`, as __clo_deriv_note falls back to the
 // names (agora #449, #461).)
+// A binding of type `vt` can hold a parameter's storage: a handle, or a
+// slice - of a parameter's Vec, its elements are the parameter's, and a
+// change made through it (`( vec_clear ( slice_at sl 0 ) )`, `slice_put`)
+// is the parameter's (agora #844). (…or a struct holding such a slice.)
+@ __pd_holds_storage s vt → b {
+    : s ll ( nurl_llty vt )
+    // (…or a struct holding such a slice, `@ SH { ( slice_from_vec v ) }`.)
+    ^ | | ( bck_is_heap_lty ll ) != 0 ( nurl_str_starts ll `%Slice__` ) & == ( nurl_str_get ll 0 ) 37 ( __ty_holds_view_p ll )
+}
+
 unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // (A number or a string view holds no handle: most bindings stop here.)
     ? <= ( nurl_str_len vt ) 1 { ^ v } {}
@@ -66027,7 +66037,7 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
         // (__sx_lendy's cheap tests first — most values here lend nothing
         // — then the type, whose LLVM spelling nurl_llty builds, and the
         // scan for a name the sx carries last.)
-        ? | | | ( is_ident_tok rhs_tt ) ! ( __sx_lends_any sx ) >= ( nurl_str_find sx `*` ) 0 ! ( bck_is_heap_lty ( nurl_llty vt ) ) { ^ v } {}
+        ? | | | ( is_ident_tok rhs_tt ) ! ( __sx_lends_any sx ) >= ( nurl_str_find sx `*` ) 0 ! ( __pd_holds_storage vt ) { ^ v } {}
         ? ! ( __sx_names_any sx ) { ^ v } {}
         ? ! ( __val_may_lend syms rhs_tt ) { ^ v } {}
         ? == rhs_tt TT_LPAREN { ? ( __shared_cell_get ( bck_generic_base ( nurl_sym_get syms `__last_call_name__` ) ) ) { ^ v } {} } {}
@@ -66035,7 +66045,7 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
         ? != 0 ( nurl_str_len xptr ) { ( __pderiv_cnote xptr ( __sx_param_reach syms sx F ) ) } {}
         ^ v
     } {}
-    ? ! ( bck_is_heap_lty ( nurl_llty vt ) ) { ^ v } {}
+    ? ! ( __pd_holds_storage vt ) { ^ v } {}
     ? == rhs_tt TT_LPAREN { ? ( __shared_cell_get ( bck_generic_base ( nurl_sym_get syms `__last_call_name__` ) ) ) { ^ v } {} } {}
     : ~ s out ``
     // (…and what those were read out of only where an expression lends.)
@@ -66147,9 +66157,12 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // read OUT of a parameter is not followed: a drop edge names no path,
     // and a borrow of what was read beside it would end — agora #495.)
     : b __dnv_put & & & != 0 ( nurl_str_len g_pd_put ) == 0 ( nurl_str_starts at `%Vec__` ) | == ( nurl_str_get at 0 ) 37 == ( nurl_str_get at 0 ) 123 ( __pd_is_put syms ( __path_root_name name ) )
+    // (…or a slice of one: its elements are the Vec's, `( slice_put sl 0 x )`
+    // replaces one of them - agora #844.)
+    : b __dnv_slc != 0 ( nurl_str_starts at `%Slice__` )
     ? & & ! __dnv_rc ! __dnv_put ! ( seq at `%String` ) {
-        ? == 0 ( nurl_str_starts at `%Vec__` ) { ^ v } {}
-        ? ! ( __elem_owns ( __vec_elem_llvm at ) syms ) { ^ v } {}
+        ? & == 0 ( nurl_str_starts at `%Vec__` ) ! __dnv_slc { ^ v } {}
+        ? ! ( __elem_owns ? __dnv_slc ( demangle_type ( nurl_str_slice at 8 - ( nurl_str_len at ) 8 ) ) ( __vec_elem_llvm at ) syms ) { ^ v } {}
     } {}
     : s root ( __path_root_name name )
     ? | ( str_contains_word g_cur_params root ) & inclo ( str_contains_word g_clo_params root ) { ^ v } {}

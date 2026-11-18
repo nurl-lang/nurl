@@ -1,4 +1,5 @@
 // map: §2.10 | A2 | rejected | - | agora #844: a `( Vec ( Vec i ) )` parameter's element bound out of a local Slice of it, then grown
+// AGORA-844: refused - a slice of a parameter's Vec reaches the parameter's elements: what changes through it is in the function's drop summary (__pd_holds_storage; main f9356928: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
