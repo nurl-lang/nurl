@@ -1,4 +1,6 @@
-// map: §2.10 | A2 | rejected | - | agora #844: an element grown through a struct holding a Slice of a parameter's Vec
+// param_elements_read_through_a_struct_holding_the_slice_runs_clean: as param_element_grown_through_a_struct_holding_the_slice, ext only reads through the held slice
+// AGORA-910 guard: accepted - reading changes nothing, so the caller's view stays good
+// map: §2.10 | A2 | runs-clean | - | AGORA-910
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
@@ -7,7 +9,7 @@ $ `stdlib/core/slice.nu`
 
 @ ext ( Vec String ) v → v {
     : SH h @ SH { ( slice_from_vec [String] v ) }
-    ( string_push_str ( slice_at [String] . h s 0 ) `a long text appended through the held slice, long enough that the element's buffer has to move to a bigger allocation, and then some more text to be sure of it, well past any rounding` )
+    ( nurl_println ( string_data ( slice_at [String] . h s 0 ) ) )
 }
 
 @ main → i {
