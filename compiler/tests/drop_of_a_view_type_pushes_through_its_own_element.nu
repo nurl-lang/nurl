@@ -8,12 +8,12 @@ $ `stdlib/core/slice.nu`
 : V { ( Slice i ) s i k }
 
 % Drop V { @ drop V d → v {
-    : ( Vec ( Vec i ) ) loc ( vec_new [( Vec i )] )
-    ( vec_push [( Vec i )] loc ( vec_new [i] ) )
-    ( vec_push [i] ( vec_at [( Vec i )] loc 0 ) 7 )
-    ( nurl_println_int ( vec_len [i] ( vec_at [( Vec i )] loc 0 ) ) )
-    ( nurl_println_int ( slice_at [i] . d s 0 ) )
-} }
+        : ( Vec ( Vec i ) ) loc ( vec_new [( Vec i )] )
+        ( vec_push [( Vec i )] loc ( vec_new [i] ) )
+        ( vec_push [i] ( vec_at [( Vec i )] loc 0 ) 7 )
+        ( nurl_println_int ( vec_len [i] ( vec_at [( Vec i )] loc 0 ) ) )
+        ( nurl_println_int ( slice_at [i] . d s 0 ) )
+    } }
 
 @ main → i {
     : ( Vec i ) v ( vec_new [i] )
