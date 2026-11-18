@@ -3063,10 +3063,6 @@ unsafe @ __fn_io_add s name → v { = g_fn_io_names ( nurl_str_cat3 g_fn_io_name
 : ~ i g_rc_direct_memo 0
 // __udrop_fns's answers, per lowered type (the bar list, `-` for none).
 : ~ i g_udfn_memo 0
-// How the binding the walk sweeps as released with no call was released
-// (`at the end of its block`, …): its `pendsink` rows' diagnostics name the
-// release, not a call (__bck_udrop_sweep). Empty everywhere else.
-: ~ s g_bck_rel_how ``
 // The Rc type sets the borrow walk notes, interned: each set is written
 // once, and a note names it by its number (`#3`) — a struct of sixty Rc
 // fields bound six hundred times noted the sixty names twelve hundred
@@ -26900,7 +26896,7 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
 // types noted under it), with the statement's calls; and what an impl
 // drops of its parameter this function drops of the parameter the path is
 // rooted at, if it is one (__drop_note). Agora #766.
-unsafe @ __udrop_release_field i syms s path s fty i line → v {
+@ __udrop_release_field i syms s path s fty i line → v {
     ? == 0 g_user_drop_seen { ^ v } {}
     : s lt ( nurl_llty fty )
     ? == 0 ( nurl_str_len ( __rc_reach lt ) ) { ^ v } {}
@@ -26924,7 +26920,7 @@ unsafe @ __udrop_release_field i syms s path s fty i line → v {
 // of those whose Rc types meet its own, for one it does not spell out;
 // __drop_note_rcv) — so a caller's view through another handle on that Rc
 // ends at the call (agora #766).
-unsafe @ __udrop_bind_note i syms s ty s sx → v {
+@ __udrop_bind_note i syms s ty s sx → v {
     ? == 0 g_user_drop_seen { ^ v } {}
     : s lt ( nurl_llty ty )
     ? == 0 ( nurl_str_len ( __rc_reach lt ) ) { ^ v } {}
@@ -26943,7 +26939,7 @@ unsafe @ __udrop_bind_note i syms s ty s sx → v {
 // impl drops of its parameter, this function drops of that one (a drop
 // edge, __drop_note; the edges close at module end), so its caller's
 // `pendsink` row asks the impl's effect (agora #766).
-unsafe @ __udrop_sink_params i syms s fname s sinks → v {
+@ __udrop_sink_params i syms s fname s sinks → v {
     ? | == 0 g_user_drop_seen == 0 ( nurl_str_len sinks ) { ^ v } {}
     : ~ s rest ( nurl_str_cat sinks `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -57043,7 +57039,7 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
 // and the next statement's reads come after; and this function drops of
 // each parameter that may share such an Rc what the impl drops of it
 // (__drop_note_rcv). Agora #766.
-unsafe @ __udrop_release_tmp i syms s ty → v { ( __udrop_release_tmp_at syms ty T `` ) }
+@ __udrop_release_tmp i syms s ty → v { ( __udrop_release_tmp_at syms ty T `` ) }
 
 // Is the value row `wn` releases (`%rcvN`) a call's temporary that the
 // callee keeps, takes or stores — so it is not released after the call
@@ -57062,7 +57058,7 @@ unsafe @ __udrop_release_tmp i syms s ty → v { ( __udrop_release_tmp_at syms t
 // statement's calls (`ppends`), behind the call whose argument it was — a
 // temporary a call was handed, released after it (mem_drop_arg_temps): `ck`
 // that call and argument (`callee/k`), `` for a value no call was handed.
-unsafe @ __udrop_release_tmp_at i syms s ty b now s ck → v {
+@ __udrop_release_tmp_at i syms s ty b now s ck → v {
     : s lt ( nurl_llty ty )
     : s fns0 ( __udrop_fns lt )
     ? | == 0 ( nurl_str_len fns0 ) == 0 ( nurl_str_len ( __rc_reach lt ) ) { ^ v } {}
@@ -67060,7 +67056,7 @@ unsafe @ __rc_runs_user_drop s lty → b {
 // nothing. Each is a call of the program's code, handed what is released,
 // wherever the release is (agora #766). The type graph is finite, so the
 // walk is whole and its answer final for the type asked.
-unsafe @ __udrop_fns s lty → s {
+@ __udrop_fns s lty → s {
     ? | == 0 g_user_drop_seen == 0 ( nurl_str_len lty ) { ^ ( nurl_str_cat `` `` ) } {}
     ? == 0 g_udfn_memo { = g_udfn_memo ( nurl_sym_new ) } {}
     : s memo ( nurl_sym_get g_udfn_memo lty )
@@ -67421,11 +67417,11 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
 // …and, for a source that holds that Rc only further in — a Vec of
 // shares, viewed through an element's payload (agora #726) — why its views
 // through an element end: the call `callee` handed `wn` `what`s.
-@ __bck_rc_ind_why s wn s srcs s callee s what → s {
+@ __bck_rc_ind_why s wn s srcs s rec s what → s {
     : s wnm ( nurl_sym_get2 g_bck `rv_` wn )
     : s me ? != 0 ( nurl_str_starts wnm `%rcv` ) `a value no binding names (a call's result, a literal)` ( nurl_str_cat3 `'` ( bck_name_show wnm ) `'` )
     : s sn ( nurl_str_cat3 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` srcs ) ) `'` )
-    ^ ( nurl_str_cat4 ( nurl_str_cat me ( __bck_rc_passed callee what ) ) ( nurl_str_cat4 `; it may be another handle on an Rc value ` sn ` holds, and the view reads that value's payload through an element of ` sn ) `` `` )
+    ^ ( nurl_str_cat4 ( nurl_str_cat me ( __bck_rc_passed rec what ) ) ( nurl_str_cat4 `; it may be another handle on an Rc value ` sn ` holds, and the view reads that value's payload through an element of ` sn ) `` `` )
 }
 
 // The Rc types `name` was seen reaching in this function (every note of
@@ -67731,8 +67727,8 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 : s dbase ( bck_generic_base ( bck_field rec 5 ) )
                 : b dlib & & & | ( bck_lib_dropper dbase ) ( str_contains_word `vec_put slice_put vec_set map_set map_remove` dbase ) == 0 ( nurl_str_len ( __bck_rc_noted ( nurl_sym_get2 g_bck `rv_` wn ) `+=` ) ) ! rlent ! ( __bar_meets ( __bck_rc_type_via_r out wn wroot F ) sty )
                 ? & ! dlib ( bck_callee_drops_elems ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
-                    : s dw ( nurl_str_cat ( __bck_rc_arg_show out wn wroot sty ) ( __bck_rc_passed ( bck_field rec 5 ) `may drop or replace what it holds` ) )
-                    ? sind { = out ( bck_view_end_rcp out sid ( bck_field_int rec 3 ) ( __bck_rc_ind_why wn srcs ( bck_field rec 5 ) `may drop or replace what it holds` ) wty ) } {
+                    : s dw ( nurl_str_cat ( __bck_rc_arg_show out wn wroot sty ) ( __bck_rc_passed rec `may drop or replace what it holds` ) )
+                    ? sind { = out ( bck_view_end_rcp out sid ( bck_field_int rec 3 ) ( __bck_rc_ind_why wn srcs rec `may drop or replace what it holds` ) wty ) } {
                         = why dw
                         = eonly T
                     }
@@ -67743,7 +67739,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                     // `: ( Vec i ) p ( rc_get r )` then `( slice_from_vec p )`
                     // points into the buffer the call moves.
                     ? & ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) ( __bar_meets ( __bck_rc_type_via_r out wn wroot rlent ) sty ) {
-                        : s rcw ? sind ( __bck_rc_ind_why wn srcs ( bck_field rec 5 ) `may move or free its buffer` ) ( nurl_str_cat ( __bck_rc_arg_show out wn wroot sty ) ( __bck_rc_passed ( bck_field rec 5 ) `may move or free its buffer` ) )
+                        : s rcw ? sind ( __bck_rc_ind_why wn srcs rec `may move or free its buffer` ) ( nurl_str_cat ( __bck_rc_arg_show out wn wroot sty ) ( __bck_rc_passed rec `may move or free its buffer` ) )
                         ? sind { = out ( bck_view_end_rcp out sid ( bck_field_int rec 3 ) rcw wty ) } {
                             = out ( bck_view_end_ind ( bck_view_end out sid ( bck_field_int rec 3 ) rcw ) sid ( bck_field_int rec 3 ) rcw )
                         }
@@ -67753,7 +67749,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                         // this source's elements ends, as for the argument's
                         // own below (agora #497).
                         ? & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
-                            : s rciw ? sind ( __bck_rc_ind_why wn srcs ( bck_field rec 5 ) `may move the buffer of one of its elements` ) ( nurl_str_cat ( __bck_rc_arg_show out wn wroot sty ) ( __bck_rc_passed ( bck_field rec 5 ) `may move the buffer of one of its elements` ) )
+                            : s rciw ? sind ( __bck_rc_ind_why wn srcs rec `may move the buffer of one of its elements` ) ( nurl_str_cat ( __bck_rc_arg_show out wn wroot sty ) ( __bck_rc_passed rec `may move the buffer of one of its elements` ) )
                             ? sind { = out ( bck_view_end_rcp out sid ( bck_field_int rec 3 ) rciw wty ) } {
                                 = g_bck_end_elem 1
                                 = out ( bck_view_end ( bck_view_end_ind out sid ( bck_field_int rec 3 ) rciw ) sid ( bck_field_int rec 3 ) rciw )
@@ -70051,33 +70047,35 @@ unsafe @ bck_scope_leave s st i line → s {
 // what the impl's final summary drops, replaces or moves of the payload
 // of an Rc the value reaches ends the views another handle on that Rc
 // took (MEMORY.md §2.14; agora #766). The binding's own borrows are its
-// scope end's to end. (`unsafe` for g_bck_rel_how, set and cleared within
-// this call by the single-threaded walk.)
-unsafe @ __bck_udrop_sweep s st i id i line s how → s {
+// scope end's to end. The row carries `how` in field 7, which no sweep
+// reads otherwise, for its diagnostics (__bck_rc_passed).
+@ __bck_udrop_sweep s st i id i line s how → s {
     ? | ( seq st `!` ) < id 0 { ^ st } {}
     : ~ s fns ( __bck_rc_noted ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) ) `+d=` )
     ? == 0 ( nurl_str_len fns ) { ^ st } {}
-    : ~ s out st
-    = g_bck_rel_how how
+    : ~ s out ( nurl_str_cat st `` )
     ~ != 0 ( nurl_str_len fns ) {
         : s f ( __bar_first fns ) = fns ( __bar_rest fns )
-        : s rec ( nurl_str_cat4 ( nurl_str_cat4 `pendsink\t` ( nurl_str_int id ) `\t\t` ( nurl_str_int line ) ) `\t0\t` f `\t0` )
-        = out ( bck_borrow_sweep out out rec 42 )
+        : s rec ( nurl_str_cat4 ( nurl_str_cat4 `pendsink\t` ( nurl_str_int id ) `\t\t` ( nurl_str_int line ) ) `\t0\t` f ( nurl_str_cat `\t0\t` how ) )
+        // (A state of its own: the sweep's answer may read the row.)
+        = out ( nurl_str_cat ( bck_borrow_sweep out out rec 42 ) `` )
     }
-    = g_bck_rel_how ``
     ^ out
 }
 
-// What a diagnostic says the row did with the value: handed it to `callee`
-// — or, for a release with no call (g_bck_rel_how), released it, which runs
-// its `% Drop` — and that this `what`.
-@ __bck_rc_passed s callee s what → s {
-    ? != 0 ( nurl_str_len g_bck_rel_how ) { ^ ( nurl_str_cat4 ` was released ` g_bck_rel_how `, which runs its type's 'drop', which ` what ) } {}
-    // (A `% Drop` impl a row hands a value released with no call — a
-    // temporary its statement or call is done with, a field's old value:
-    // __udrop_release_tmp_at, __udrop_release_field. No program calls one
-    // by name.)
-    ? != 0 ( nurl_str_starts callee `drop__` ) { ^ ( nurl_str_cat3 ` was released here, which runs its type's 'drop', which ` what `` ) } {}
+// What a diagnostic says row `rec` did with the value: handed it to its
+// callee (field 5) — or, for a release with no call, released it, which
+// runs its `% Drop` (`how` in field 7, __bck_udrop_sweep; or a `% Drop`
+// impl as the callee, a temporary or a field's old value,
+// __udrop_release_tmp_at, __udrop_release_field: no program calls one by
+// name) — and that this `what`.
+@ __bck_rc_passed s rec s what → s {
+    : s callee ( bck_field rec 5 )
+    ? ( seq ( bck_field rec 0 ) `pendsink` ) {
+        : s how ( bck_field rec 7 )
+        ? != 0 ( nurl_str_len how ) { ^ ( nurl_str_cat4 ` was released ` how `, which runs its type's 'drop', which ` what ) } {}
+        ? != 0 ( nurl_str_starts callee `drop__` ) { ^ ( nurl_str_cat3 ` was released here, which runs its type's 'drop', which ` what `` ) } {}
+    } {}
     ^ ( nurl_str_cat4 ` was passed to '` ( bck_fn_show callee ) `', which ` what )
 }
 
