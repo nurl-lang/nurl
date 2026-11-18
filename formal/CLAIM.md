@@ -183,7 +183,22 @@ the LLVM / C11 memory model rather than redefining it.
     an argument holding views, or its environment holds views, or it takes
     the environment handed over (`StmtT.callcE`). nurlc accepts the first:
     a closure that pushes its `s` argument through `vec_at` of its own local
-    runs clean, outside the claim.
+    runs clean, outside the claim. Agora #909 records why it stays out. A
+    call is placed by `RSetup.liftE`, which adds everything the arguments
+    hold (`S.A`) to every borrow's path, and the edit rules then need
+    `S.R = []`. Making that path precise at the lift is unsound, for two
+    reasons:
+    - a callee cannot see what its parameters hold (`paramE` gives
+      `held = []`), so a slice element derived from a parameter looks
+      local while it views caller memory;
+    - `comp .view .inner = .inner`, so a structural kind does not survive
+      `derive`.
+
+    Whether a borrow reaches only callee-own memory is therefore not
+    readable off an entry. The sound route is a per-entry `fresh` bit, set
+    by `bor`/`derive` from an own local and cleared by any view or held
+    step, plus a lemma that what the arguments hold cannot alias a fresh
+    callee block. It touches every `Entry` literal.
 
   One more form nurlc accepts that A2 does not type directly: an owner
   given a new value while something still reads its old one, where nurlc
