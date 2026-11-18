@@ -3621,7 +3621,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         · rw [hv] at hnn; cases hnn
       have hsc : StmtT P ξ (setE Γ x (Ex.revive x)) F (.scope x (.letcall m.nv f [x] .skip)) (exitScope x Γ) := by
         rcases hdtor with ⟨hdt, _⟩ | hg
-        · obtain ⟨fn, hfn, hps, _, hro, _, _, _, hnt⟩ : DtorOK P f Ex.ty := by rw [htx']; exact hdt
+        · obtain ⟨fn, hfn, hps, _, hro, _, _, _, hthr⟩ : DtorOK P f Ex.ty := by rw [htx']; exact hdt
           have hm1 := hiS.toMInv.revive hx hmo hhf hdbv hsl
           -- the destructor's result goes to a fresh variable
           have hxn : x < m.nv := hiS.nvS x (by simp [Stmt.vars])
@@ -3644,7 +3644,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               (setE Γ x (Ex.revive x)) := by
             refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_,
           CallDtorSafe.of_inp (by simp [hps]) hnm, rfl, (callPost_dtor hps hnm).symm,
-          fun h => absurd h hnt⟩
+          fun h => ?_⟩
             · have hi0 : i = 0 := by simp [hps] at hi; omega
               subst hi0
               refine ⟨(Ex.revive x), by simp [setE], rfl, ?_, fun h => ?_, fun h => ?_⟩
@@ -3652,6 +3652,17 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               · simp [hps, PMode.moves] at h
               · simp [hps] at h
             · rw [hnm] at hd; cases hd
+            · -- (a destructor that changes elements through a borrow takes
+              -- a type that holds no views, so the entry is unarmed (`dbind
+              -- = false`: an armed entry's type holds views, `CtxWF.view`),
+              -- so revived it holds nothing, whatever its `letd` recorded,
+              -- and the call passes no views — `CallT`'s `ThruFn` premise)
+              have hv : Ex.ty.holdsView = false := hthr h
+              have hdb : Ex.dbind = false := by
+                cases hd : Ex.dbind
+                · rfl
+                · have := hiS.toMInv.wf.view x Ex hx hd; rw [hv] at this; cases this
+              simp [callR, argE, setE, Entry.revive, hdb, memDeps, roots]
           have hNoPinΓ : EndOK Γ x := by
             rcases skip_inv hs with rfl | hw
             · exact hpx

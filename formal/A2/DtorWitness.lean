@@ -1306,7 +1306,7 @@ theorem dfn_not_thru : ¬ ThruFn P 0 := by
   | call hf hg _ => simp [P] at hf; subst hf; simp [dfn, Stmt.calls] at hg
 
 theorem dtor_ok : DtorOK P 0 DT :=
-  ⟨dfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, dfn_not_thru⟩
+  ⟨dfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h dfn_not_thru⟩
 
 theorem drop_ok : DropFnOK P 0 T := Or.inl ⟨dtor_ok, by decide⟩
 
@@ -1681,7 +1681,7 @@ theorem impl_not_thru : ¬ ThruFn P 5 := by
   | call hf hg _ => simp [P] at hf; subst hf; simp [impl, Stmt.calls] at hg
 
 theorem impl_dtorOK : DtorOK P 5 GDT :=
-  ⟨impl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, impl_not_thru⟩
+  ⟨impl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h impl_not_thru⟩
 
 theorem impl_body : StmtT P ξ (sigCtx impl) [] impl.body
     (setE (kill .replace false 1 (sigCtx impl)) 1 { intE with mode := R0.mode }) := by
@@ -2301,7 +2301,7 @@ theorem implS_not_thru : ¬ ThruFn P 10 := by
   | call hf hg _ => simp [P] at hf; subst hf; simp [implS, Stmt.calls] at hg
 
 theorem implS_dtorOK : DtorOK P 10 GSD :=
-  ⟨implS, rfl, rfl, rfl, rfl, rfl, rfl, rfl, implS_not_thru⟩
+  ⟨implS, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h implS_not_thru⟩
 
 theorem implS_body : StmtT P ξ (sigCtx implS) [] implS.body
     (setE (kill .replace false 1 (sigCtx implS)) 1 { intE with mode := R0.mode }) := by

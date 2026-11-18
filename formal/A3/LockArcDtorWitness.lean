@@ -236,7 +236,7 @@ theorem dfnA_not_thru : ¬ ThruFn P 0 := by
   | call hf hg _ => simp [P] at hf; subst hf; simp [dfnA, Stmt.calls] at hg
 
 theorem drop0_ok : DropFnOK P 0 TA :=
-  Or.inl ⟨⟨dfnA, rfl, rfl, rfl, rfl, rfl, rfl, rfl, dfnA_not_thru⟩, by decide⟩
+  Or.inl ⟨⟨dfnA, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h dfnA_not_thru⟩, by decide⟩
 
 /-- `= r 0`, the result slot `r` of a function of an integer result. -/
 theorem assign_res {fn : Fn} {r : Var} (hc : sigCtx fn r = some R0)

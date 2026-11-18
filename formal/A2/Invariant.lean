@@ -1595,8 +1595,10 @@ theorem ScopeDTy.nest (n f : Nat) (t : Ty) : ScopeDTy f t (Ty.nest n (.dtor f t)
 def DtorOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
   ∃ fn, P[f]? = some fn ∧ fn.params = [(.inp, t)] ∧ fn.resTy = .int ∧ fn.resOwn = false ∧
     fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧
-    -- a destructor changes no elements through a borrow (Agora #295)
-    ¬ ThruFn P f
+    -- a destructor that changes elements through a borrow (Agora #295) is
+    -- handed a value that holds no views, as any call into such code must
+    -- be (`CallT`'s `ThruFn` premise): the value it runs on passes none
+    (ThruFn P f → t.holdsView = false)
 
 /-- Agora #616: `f` is the drop glue of the struct `t`: a function that
     takes one value of the destructor type `Ty.dtor f t` *owned* (`sink`)
