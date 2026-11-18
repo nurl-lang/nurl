@@ -1,16 +1,15 @@
-// map: §2.10 | A2 | rejected | - | agora #811: `~ w ws { ( wipe_it w ) }` over a parameter's Vec, a static trait method clearing the payload of `w`'s share
+// map: §2.10 | A2 | rejected | - | AGORA-811: `~ w ws { ( wipe w ) }` over a parameter's Vec, `wipe` clearing the payload of `w`'s share
+// AGORA-811 (closed with AGORA-495): refused - a loop element of a parameter, a struct handed to a callee that clears through it, makes a drop edge on the parameter (main fd008190: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/rc.nu`
 
-% Wiper [T] { @ wipe_it T self → i }
-
 : G { ( Rc ( Vec String ) ) r }
 
-% Wiper G { @ wipe_it G g → i { ( vec_clear [String] ( rc_get [( Vec String )] . g r ) ) ^ 0 } }
+@ wipe G g → v { ( vec_clear [String] ( rc_get [( Vec String )] . g r ) ) }
 
-@ each ( Vec G ) ws → v { ~ w ws { : i z ( wipe_it w ) } }
+@ each ( Vec G ) ws → v { ~ w ws { ( wipe w ) } }
 
 @ main → i {
     : ( Vec String ) v0 ( vec_new [String] )

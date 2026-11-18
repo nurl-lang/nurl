@@ -66039,6 +66039,13 @@ unsafe @ __sx_names_any s sx → b {
 // slice - of a parameter's Vec, its elements are the parameter's, and a
 // change made through it (`( vec_clear ( slice_at sl 0 ) )`, `slice_put`)
 // is the parameter's (agora #844). (…or a struct holding such a slice.)
+// A field path spelled out (`q.p`, `q.p.h`): names and dots - none of the
+// marks a source expression spells a call, a join or a copy with.
+@ __pd_plain_path s sx → b {
+    ? | < ( nurl_str_len sx ) 3 < ( nurl_str_find sx `.` ) 1 { ^ F } {}
+    ^ & & & & < ( nurl_str_find sx `(` ) 0 < ( nurl_str_find sx `|` ) 0 < ( nurl_str_find sx `*` ) 0 < ( nurl_str_find sx `-` ) 0 & & & < ( nurl_str_find sx ` ` ) 0 < ( nurl_str_find sx `:` ) 0 < ( nurl_str_find sx `%` ) 0 & & < ( nurl_str_find sx `#` ) 0 < ( nurl_str_find sx `>` ) 0 < ( nurl_str_find sx `~` ) 0
+}
+
 @ __pd_holds_storage s vt → b {
     : s ll ( nurl_llty vt )
     // (…or a struct holding such a slice, `@ SH { ( slice_from_vec v ) }`.)
@@ -66090,6 +66097,10 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
         : s __lptr ( nurl_sym_get2 syms name `__ptr` )
         ? & != 0 ( nurl_str_len __lptr ) != 0 ( nurl_str_len sx ) { ( __pderiv_cnote __lptr ( __sx_param_reach syms sx F ) ) } {}
     } {}
+    // (…and a field of a parameter read whole, `: P e . q p`, the path it
+    // was read at: what a callee drops through a field of it, `( wipe . e
+    // h )`, is at `q.p.h` - __drop_note_via, agora #495.)
+    ? & & & == rhs_tt TT_DOT ! __pclo ( __pd_plain_path sx ) ( str_contains_word g_cur_params ( __path_root_name sx ) ) { ( nurl_sym_def syms ( nurl_str_cat name `__pdpath` ) sx ) } {}
     : s srcs ? == rhs_tt TT_LPAREN lend ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( is_ident_tok rhs_tt ) rhs_val ? __sx_one ( __path_root_name sx ) ? & & ( __pd_litlike rhs_tt ) ( __pd_rc_scope ) != 0 ( nurl_str_len ( __rc_reach ( nurl_llty vt ) ) ) ( __pd_lit_names syms sx ) ``
     ? ( __lend_unnamed srcs ) {
         // (__sx_lendy's cheap tests first — most values here lend nothing
@@ -66211,14 +66222,30 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     : b __dnv_rc != 0 ( nurl_str_starts at `%Rc__` )
     // (…or a struct, an option, a Box a parameter was PUT into — `: W w @ W
     // { h }`, `( box_new h )`: the local holds the parameter's value whole,
-    // and what a callee changes of it is the parameter's (agora #770). One
-    // read OUT of a parameter is not followed: a drop edge names no path,
-    // and a borrow of what was read beside it would end — agora #495.)
+    // and what a callee changes of it is the parameter's (agora #770).)
     : b __dnv_put & & & != 0 ( nurl_str_len g_pd_put ) == 0 ( nurl_str_starts at `%Vec__` ) | == ( nurl_str_get at 0 ) 37 == ( nurl_str_get at 0 ) 123 ( __pd_is_put syms ( __path_root_name name ) )
     // (…or a slice of one: its elements are the Vec's, `( slice_put sl 0 x )`
     // replaces one of them - agora #844.)
     : b __dnv_slc != 0 ( nurl_str_starts at `%Slice__` )
-    ? & & ! __dnv_rc ! __dnv_put ! ( seq at `%String` ) {
+    // (…or a struct or an option read OUT of a parameter that owns
+    // something - `: H e ( vec_at [H] hs 0 )` then `( wipe e )`: the edge
+    // carries the callee's own field path (`0.rows`, __drop_ks), as the
+    // inline `( wipe ( vec_at [H] hs 0 ) )` does through __drop_note_sx, so
+    // a borrow of what was read beside it stays; agora #495. Handed whole,
+    // or a field of it where it is an element, whose path the inline form
+    // does not keep either (__pd_may_field); a field of a struct read some
+    // other way - `. cl transport` of `( rc_get . . call client a )` - would
+    // end every borrow of the parameter, the edge naming no path into it.)
+    : b __dnv_rd0 & & == 0 ( nurl_str_starts at `%Vec__` ) | == ( nurl_str_get at 0 ) 37 == ( nurl_str_get at 0 ) 123 & ! __dnv_slc ( __type_needs_drop at syms )
+    : i __dnv_dot ( nurl_str_find name `.` )
+    : b __dnv_rd & __dnv_rd0 | < __dnv_dot 0 ! ( __pd_may_field syms ( __path_root_name name ) )
+    // (…a field of a parameter's field read whole, by the path it was read
+    // at: `: P e . q p` then `( wipe . e h )` drops at `q.p.h`, agora #495.)
+    ? & & __dnv_rd0 ! __dnv_rd > __dnv_dot 0 {
+        : s __dnv_pp ( nurl_sym_get2 syms ( nurl_str_slice name 0 __dnv_dot ) `__pdpath` )
+        ? != 0 ( nurl_str_len __dnv_pp ) { ( __drop_note ( nurl_str_cat __dnv_pp ( nurl_str_slice name __dnv_dot - ( nurl_str_len name ) __dnv_dot ) ) callee aix ) ^ v } {}
+    } {}
+    ? & & & ! __dnv_rc ! __dnv_put ! __dnv_rd ! ( seq at `%String` ) {
         ? & == 0 ( nurl_str_starts at `%Vec__` ) ! __dnv_slc { ^ v } {}
         ? ! ( __elem_owns ? __dnv_slc ( demangle_type ( nurl_str_slice at 8 - ( nurl_str_len at ) 8 ) ) ( __vec_elem_llvm at ) syms ) { ^ v } {}
     } {}

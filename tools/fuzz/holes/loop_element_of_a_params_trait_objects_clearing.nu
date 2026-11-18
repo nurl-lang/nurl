@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #811: `~ w ws { ( wipe_it w ) }` over a parameter's `( Vec % Wiper )`, the dyn method clearing the payload of its share
+// map: §2.10 | A2 | rejected | - | AGORA-811: `~ w ws { ( wipe_it w ) }` over a parameter's `( Vec % Wiper )`, the dyn method clearing the payload of its share
+// AGORA-811 (closed with AGORA-495): refused - a loop element of a parameter, a struct handed to a callee that clears through it, makes a drop edge on the parameter (main fd008190: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`

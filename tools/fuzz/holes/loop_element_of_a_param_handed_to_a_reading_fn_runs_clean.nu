@@ -1,4 +1,6 @@
-// map: §2.10 | A2 | rejected | - | agora #811: `~ w ws { ( wipe w ) }` over a parameter's Vec, `wipe` clearing the payload of `w`'s share
+// loop_element_of_a_param_handed_to_a_reading_fn_runs_clean: as loop_element_of_a_param_handed_to_a_clearing_fn, with the callee only reading the payload of w's share
+// AGORA-811 guard: accepted - reading drops nothing
+// map: §2.10 | A2 | runs-clean | - | AGORA-811
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
@@ -6,7 +8,7 @@ $ `stdlib/std/rc.nu`
 
 : G { ( Rc ( Vec String ) ) r }
 
-@ wipe G g → v { ( vec_clear [String] ( rc_get [( Vec String )] . g r ) ) }
+@ wipe G g → v { ( nurl_println_int ( vec_len [String] ( rc_get [( Vec String )] . g r ) ) ) }
 
 @ each ( Vec G ) ws → v { ~ w ws { ( wipe w ) } }
 
