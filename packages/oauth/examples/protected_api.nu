@@ -83,7 +83,7 @@ $ `../src/oauth.nu`
                 F _ → { ( nurl_eprintln `protected-api: cannot bind` ) }
                 T l → {
                     ? > ( string_len scope ) 0 {
-                        : HttpServer srv ( server_new l ( with_oidc_scope p pol ( string_data scope )
+                        : HttpServer srv ( server_new l ( with_oidc_scope p pol ( string_from ( string_data scope ) )
                         \ HttpRequest req OidcIdentity id → HttpResponse { ^ ( api_handle req id ) } ) )
                         ?? ( server_run srv ) { T _ → { = rc 0 } F _ → {} }
                     } {

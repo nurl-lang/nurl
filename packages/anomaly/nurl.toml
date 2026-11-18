@@ -12,7 +12,7 @@ http = { path = "../http", version = "^0.7" }
 cli = { path = "../cli", version = "^0.4" }
 gpukit = { path = "../gpukit", version = "^0.11.7" }
 mlp = { path = "../mlp", version = "^0.3.8" }
-oauth = { path = "../oauth", version = "^0.2" }
+oauth = { path = "../oauth", version = "^0.3" }
 http-client = { path = "../http-client", version = "^0.3" }
 arima = { path = "../arima", version = "^0.6" }
 

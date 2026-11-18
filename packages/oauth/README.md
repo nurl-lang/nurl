@@ -66,7 +66,7 @@ $ `deps/oauth/src/oauth.nu`
 $ `stdlib/ext/http_server.nu`
 
 : HttpServer srv ( server_new listener
-    ( with_oidc_scope p pol `read:things`
+    ( with_oidc_scope p pol ( string_from `read:things` )
         \ HttpRequest req OidcIdentity id → HttpResponse {
             ^ ( response_text 200 ( string_data ( oidc_identity_key id ) ) )
         } ) )

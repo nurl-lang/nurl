@@ -13,4 +13,4 @@ assets = ["static"]
 [dependencies]
 http = { path = "../http", version = "^0.7" }
 cli = { path = "../cli", version = "^0.4" }
-oauth = { path = "../oauth", version = "^0.2.1" }
+oauth = { path = "../oauth", version = "^0.3" }

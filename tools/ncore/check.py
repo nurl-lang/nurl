@@ -1796,7 +1796,9 @@ class FnCheck:
             # into a channel - goes to whichever thread takes it out: a view
             # in it may not point into this side's storage, as a spawned
             # closure's may not; agora #812)
-            if kind == "value" and j < len(ops) and k < len(avs) and ops[j][0] == "v":
+            # (…a `held` store too: a wrapper that sends its parameter on
+            # summarises it so - CodeRabbit on github#1942)
+            if kind in ("value", "held") and j < len(ops) and k < len(avs) and ops[j][0] == "v":
                 jty = self.ty_of_place((ops[j][1], ops[j][2]))
                 if jty is not None and ((jty[0] == "named" and jty[1] in tshare)
                                         or self.T.shared_in(jty) & set(tshare)):
