@@ -237,7 +237,7 @@ theorem panic_typed {Γ : Ctx} {F : List Var} (hD : NoDeps Γ)
     (DKeep.refl _ _) (DStay.refl _ _)
 
 /-- The share's entry: owned, holding nothing. -/
-def ES : Entry := ⟨.arc DP, .own, true, [], [], false, false⟩
+def ES : Entry := ⟨.arc DP, .own, true, [], [], false, false, false⟩
 
 /-- **`tail` is typed** in any context with no views and no borrowed
     parameter that leaves its four bindings unbound; it ends in that

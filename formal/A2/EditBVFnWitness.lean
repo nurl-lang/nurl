@@ -66,13 +66,13 @@ def main : Stmt :=
 /-- What the view depends on: `buf`'s buffer. -/
 def D0 : List Dep := [⟨0, .view⟩]
 
-def Es : Entry := ⟨str, .own, true, [], [], false, false⟩
-def Ev : Entry := ⟨sl, .bor, true, D0, [], false, false⟩
-def Ef : Entry := ⟨FT, .own, true, [], D0, false, false⟩
-def Ee : Entry := ⟨S, .own, true, [], D0 ++ D0, false, false⟩
-def Ew0 : Entry := ⟨vS, .own, true, [], [], false, false⟩
-def Evv0 : Entry := ⟨vvS, .own, true, [], [], false, false⟩
-def Eb : Entry := ⟨vS, .bor, true, [⟨5, .inner⟩], [], false, false⟩
+def Es : Entry := ⟨str, .own, true, [], [], false, false, false⟩
+def Ev : Entry := ⟨sl, .bor, true, D0, [], false, false, false⟩
+def Ef : Entry := ⟨FT, .own, true, [], D0, false, false, false⟩
+def Ee : Entry := ⟨S, .own, true, [], D0 ++ D0, false, false, false⟩
+def Ew0 : Entry := ⟨vS, .own, true, [], [], false, false, false⟩
+def Evv0 : Entry := ⟨vvS, .own, true, [], [], false, false, false⟩
+def Eb : Entry := ⟨vS, .bor, true, [⟨5, .inner⟩], [], false, false, false⟩
 
 theorem NoRootb.killHv {Γ : Ctx} (h : NoRootb Γ) : ∀ ks, NoRootb (A2.killHv ks Γ)
   | [] => h

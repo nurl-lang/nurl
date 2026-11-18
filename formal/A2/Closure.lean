@@ -115,12 +115,12 @@ theorem mem_shareOf {D : List Dep} {d : Dep} :
 
 def envE (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Entry :=
   ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held ++ shareOf (derive c Ec .self ++ Ec.held)),
-    envDeps cs (Ec.held ++ shareOf Ec.held), false, false⟩
+    envDeps cs (Ec.held ++ shareOf Ec.held), false, false, false⟩
 
 /-- The environment's entry without the shares: what its value is valid
     through. -/
 def envE0 (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Entry :=
-  ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held), envDeps cs Ec.held, false, false⟩
+  ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held), envDeps cs Ec.held, false, false, false⟩
 
 theorem envE0_path_sub (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) :
     (envE0 c Ec te cs).path ⊆ (envE c Ec te cs).path :=

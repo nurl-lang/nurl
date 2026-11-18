@@ -161,7 +161,7 @@ theorem MInv.editBV_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
 
 /-- `vec_pop`'s entry for an element that owns memory. -/
 theorem popE_owning {x : Var} {E : Entry} {t : Ty} (ho : t.owning = true) :
-    popE x E t = ⟨t, .own, true, [], E.held, false, false⟩ := by
+    popE x E t = ⟨t, .own, true, [], E.held, false, false, false⟩ := by
   cases t <;> simp_all [popE, Ty.owning]
 
 /-- **What moves out is an owned value**, for an element type that owns
@@ -173,9 +173,9 @@ theorem takeB_outOwn {m1 : Mem} {Γ1 : Ctx} {t : Ty} {e : Val} {H : List Dep}
     (hdisj : ∀ x U, OwnedAt m1 x U → ∀ i ∈ e.ids, i ∉ U.ids) (hsf : SelfFree e)
     (hpay : ∀ i ∈ e.ids, ¬ PayAddr m1 i)
     (hwf : ∀ r ∈ roots H, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
-    (hnk : NameOK Γ1 ⟨t, .own, true, [], H, false, false⟩) (hpk : PkgsOK e)
+    (hnk : NameOK Γ1 ⟨t, .own, true, [], H, false, false, false⟩) (hpk : PkgsOK e)
     (hsh : SharesOK m1 t e) :
-    RhsOut m1 Γ1 ⟨t, .own, true, [], H, false, false⟩ e e.owns := by
+    RhsOut m1 Γ1 ⟨t, .own, true, [], H, false, false, false⟩ e e.owns := by
   rw [hw.owns ho]
   exact ⟨rfl, Or.inl rfl, rfl, htok,
     fun _ r hr => hwf r (by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr),
@@ -225,7 +225,7 @@ theorem killHv_none {Γ : Ctx} {v : Var} (hv : Γ v = none) : ∀ ks : List (Eff
 /-- A field-like owner's entry (`compE`) for an element type that owns memory
     and holds no views: owned, holding nothing. -/
 theorem compE_ownNoView {E : Entry} {t : Ty} (ho : t.owning = true) (hhv : t.holdsView = false) :
-    compE E t = ⟨t, .own, true, [], [], false, false⟩ := by
+    compE E t = ⟨t, .own, true, [], [], false, false, false⟩ := by
   cases t <;> simp_all [compE, Ty.owning, ownHeld]
 
 /-- What a `compE` entry depends on, the entry it came from holds. -/
@@ -259,7 +259,7 @@ theorem MInv.thru_owner_views {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E
 /-- A field-like owner's entry (`compE`) for an element type that owns memory
     and holds views: owned, holding what the entry it came from holds. -/
 theorem compE_ownView {E : Entry} {t : Ty} (ho : t.owning = true) (hhv : t.holdsView = true) :
-    compE E t = ⟨t, .own, true, [], E.held, false, false⟩ := by
+    compE E t = ⟨t, .own, true, [], E.held, false, false, false⟩ := by
   cases t <;> simp_all [compE, Ty.owning, ownHeld]
 
 /-- **The views of what moves out stay valid** after its owner's tree loses

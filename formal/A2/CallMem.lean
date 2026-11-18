@@ -280,17 +280,17 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
     (y = x ∧ (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some (callX fn)) ∨
     (y = m.nv + fn.params.length ∧ (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
       some ⟨fn.resTy, resMode fn, false, if (resMode fn).ownSlot then [] else (callS Γ F fn args m.nv x).A,
-        ownHeld (resMode fn).ownSlot fn.resTy (callS Γ F fn args m.nv x).A, false, false⟩) ∨
+        ownHeld (resMode fn).ownSlot fn.resTy (callS Γ F fn args m.nv x).A, false, false, false⟩) ∨
     (∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.inp, t) ∧ y = m.nv + 0 + k ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some (callPe Γ fn.params args k)) ∨
     (∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ y = m.nv + 0 + k ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
         some ⟨t, .own, true, [], rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
-          ownHeld true t (callS Γ F fn args m.nv x).A, false, false⟩) ∨
+          ownHeld true t (callS Γ F fn args m.nv x).A, false, false, false⟩) ∨
     (∃ (k : Nat) (b : Eff) (t : Ty), fn.params[k]? = some (PMode.inout b, t) ∧ y = args.getD k 0 ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
         some ⟨t, .own, true, [], rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
-          ownHeld true t (callS Γ F fn args m.nv x).A, false, false⟩) ∨
+          ownHeld true t (callS Γ F fn args m.nv x).A, false, false, false⟩) ∨
     ((∀ v, callRen fn.params args m.nv v ≠ y) ∧ y ≠ x ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = (callPost Γ fn args y).map Entry.clean) ∨
     ((callS Γ F fn args m.nv x).canon (sigCtx fn) y = none ∧ ∃ v, fn.params.length < v ∧ y = m.nv + v) := by
@@ -1251,18 +1251,18 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       obtain ⟨v', hv', hok⟩ := h.slot_inp hi hb hk
       rw [hsv] at hv'; cases hv'
       by_cases hint : Ea.ty = .int
-      · have hcp : callPe Γ fn.params args k = ⟨.int, .rootb, true, [], [], false, false⟩ := by
+      · have hcp : callPe Γ fn.params args k = ⟨.int, .rootb, true, [], [], false, false, false⟩ := by
           unfold callPe; rw [hk]; simp only; rw [hae]; simp [hint]
         rw [hcp] at hok
         obtain ⟨n, rfl⟩ := valOK_int.mp hok
         exact absurd hn PkgNames.none_int
       · have hcp : callPe Γ fn.params args k = ⟨Ea.ty, .rootb, true,
-            typedDeps Ea.ty (derive (args.getD k 0) Ea .self), typedDeps Ea.ty Ea.held, false, false⟩ := by
+            typedDeps Ea.ty (derive (args.getD k 0) Ea .self), typedDeps Ea.ty Ea.held, false, false, false⟩ := by
           unfold callPe; rw [hk]; simp only; rw [hae]; simp [hint]
         rw [hcp] at hnm
         have hdD := MInv.dom_roots (wf_derive hi hEa hla hint .self)
         have hdH := MInv.dom_roots (wf_held hi hEa hla hint)
-        have hnΓ : PkgNames m Γ ⟨Ea.ty, .rootb, true, derive (args.getD k 0) Ea .self, Ea.held, false, false⟩
+        have hnΓ : PkgNames m Γ ⟨Ea.ty, .rootb, true, derive (args.getD k 0) Ea .self, Ea.held, false, false, false⟩
             v i :=
           PkgNames.mapClean (fun h => by exact h) (fun h => by exact h)
             (fun hc => h.cleanDeps_back hi (CleanDeps.typed.mp hc) hdD)
@@ -1303,7 +1303,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
                 fun hcl i o l hv =>
                   hi.pkgFree _ Ea true V hEa (Or.inl hla) hsa i (Or.inr (Or.inr (Or.inr ⟨hos, hcl, o, l, hv⟩)))
               exact lend_pkgNames
-                (E' := ⟨Ea.ty, .bor, true, derive (args.getD k 0) Ea .self, Ea.held, false, false⟩)
+                (E' := ⟨Ea.ty, .bor, true, derive (args.getD k 0) Ea .self, Ea.held, false, false, false⟩)
                 hi.heap (Or.inl ⟨_, V, hsa, Sub.refl _⟩) hnh rfl
                 (fun _ ⟨_, hb'⟩ => PkgFreeAt.top hi.heap hsa (bare_lend_ids V hnh hb'))
                 hvw (fun _ i o l he => absurd he (hw.owning_noView (hown hos).1))

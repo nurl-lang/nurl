@@ -54,6 +54,13 @@ structure Entry where
       views reads only what the binding owns: it needs no care.)  It never
       changes. -/
   dbind : Bool
+  /-- Agora #909: the binding is a borrow that reaches only blocks the
+      frame owns: its path is structural (`.self` / `.inner`) and rooted at
+      bindings of the frame's own (an owner or an `inout` parameter), never
+      at a borrowed parameter, whose holdings the frame cannot see. A call
+      lifting such a borrow adds nothing the arguments hold to its path
+      (`RSetup.liftE`). `false` unless a rule says so. -/
+  fresh : Bool
 deriving DecidableEq, Repr
 
 abbrev Ctx := Var → Option Entry
@@ -388,7 +395,7 @@ def NoPin (Γ : Ctx) (x : Var) : Prop :=
     may run a destructor views it (`DtorSafe`, A2-drop.2). -/
 def EndOK (Γ : Ctx) (x : Var) : Prop := NoPin Γ x ∧ DtorSafe Γ .replace false x ∧ DbindSafe Γ x
 
-def intE : Entry := ⟨.int, .bor, true, [], [], false, false⟩
+def intE : Entry := ⟨.int, .bor, true, [], [], false, false, false⟩
 
 inductive ExprT (Γ : Ctx) : Expr → Prop
   | lit {n : Nat} : ExprT Γ (.lit n)
@@ -409,34 +416,34 @@ inductive ExprT (Γ : Ctx) : Expr → Prop
     `Vec` is lent. -/
 def elemE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
-  | .slice s => ⟨.slice s, .bor, true, E.held, E.held, false, false⟩
-  | .vec s => ⟨.vec s, .bor, true, derive y E .inner, E.held, false, false⟩
-  | .prod a b => ⟨.prod a b, .bor, true, derive y E .inner, E.held, false, false⟩
-  | .sum a b => ⟨.sum a b, .bor, true, derive y E .inner, E.held, false, false⟩
-  | .fn ms q => ⟨.fn ms q, .bor, true, derive y E .inner, E.held, false, false⟩
-  | .arc t => ⟨.arc t, .bor, true, derive y E .inner, E.held, false, false⟩
-  | .lk t => ⟨.lk t, .bor, true, derive y E .inner, E.held, false, false⟩
-  | .cell t => ⟨.cell t, .bor, true, derive y E .inner, E.held, false, false⟩
-  | .dtor f t => ⟨.dtor f t, .bor, true, derive y E .inner, E.held, false, false⟩
-  | .rguard t => ⟨.rguard t, .bor, true, derive y E .inner, E.held, false, false⟩
+  | .slice s => ⟨.slice s, .bor, true, E.held, E.held, false, false, false⟩
+  | .vec s => ⟨.vec s, .bor, true, derive y E .inner, E.held, false, false, false⟩
+  | .prod a b => ⟨.prod a b, .bor, true, derive y E .inner, E.held, false, false, false⟩
+  | .sum a b => ⟨.sum a b, .bor, true, derive y E .inner, E.held, false, false, false⟩
+  | .fn ms q => ⟨.fn ms q, .bor, true, derive y E .inner, E.held, false, false, false⟩
+  | .arc t => ⟨.arc t, .bor, true, derive y E .inner, E.held, false, false, false⟩
+  | .lk t => ⟨.lk t, .bor, true, derive y E .inner, E.held, false, false, false⟩
+  | .cell t => ⟨.cell t, .bor, true, derive y E .inner, E.held, false, false, false⟩
+  | .dtor f t => ⟨.dtor f t, .bor, true, derive y E .inner, E.held, false, false, false⟩
+  | .rguard t => ⟨.rguard t, .bor, true, derive y E .inner, E.held, false, false, false⟩
 
 /-- An element moved out of `y` by `vec_pop`: an element `Vec` or struct is
     owned. -/
 def popE (y : Var) (E : Entry) : Ty → Entry
-  | .vec s => ⟨.vec s, .own, true, [], E.held, false, false⟩
-  | .prod a b => ⟨.prod a b, .own, true, [], E.held, false, false⟩
-  | .sum a b => ⟨.sum a b, .own, true, [], E.held, false, false⟩
-  | .fn ms q => ⟨.fn ms q, .own, true, [], E.held, false, false⟩
-  | .arc t => ⟨.arc t, .own, true, [], E.held, false, false⟩
-  | .lk t => ⟨.lk t, .own, true, [], E.held, false, false⟩
-  | .cell t => ⟨.cell t, .own, true, [], E.held, false, false⟩
-  | .dtor f t => ⟨.dtor f t, .own, true, [], E.held, false, false⟩
-  | .rguard t => ⟨.rguard t, .own, true, [], E.held, false, false⟩
+  | .vec s => ⟨.vec s, .own, true, [], E.held, false, false, false⟩
+  | .prod a b => ⟨.prod a b, .own, true, [], E.held, false, false, false⟩
+  | .sum a b => ⟨.sum a b, .own, true, [], E.held, false, false, false⟩
+  | .fn ms q => ⟨.fn ms q, .own, true, [], E.held, false, false, false⟩
+  | .arc t => ⟨.arc t, .own, true, [], E.held, false, false, false⟩
+  | .lk t => ⟨.lk t, .own, true, [], E.held, false, false, false⟩
+  | .cell t => ⟨.cell t, .own, true, [], E.held, false, false, false⟩
+  | .dtor f t => ⟨.dtor f t, .own, true, [], E.held, false, false, false⟩
+  | .rguard t => ⟨.rguard t, .own, true, [], E.held, false, false, false⟩
   | t => elemE y E t
 
 /-- Agora #607: what moves out of a drained `Vec` is owned, at its own type. -/
 @[simp] theorem popE_nest (y : Var) (E : Entry) (n f : Nat) (t : Ty) :
-    popE y E (Ty.nest n (.dtor f t)) = ⟨Ty.nest n (.dtor f t), .own, true, [], E.held, false, false⟩ := by
+    popE y E (Ty.nest n (.dtor f t)) = ⟨Ty.nest n (.dtor f t), .own, true, [], E.held, false, false, false⟩ := by
   cases n <;> rfl
 
 /-- What a field of the struct `y` (entry `E`) lends: what is inside an
@@ -449,7 +456,7 @@ def projDeps (y : Var) (E : Entry) : List Dep :=
     is copied with what it depends on). -/
 def projE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
-  | t => ⟨t, .bor, true, projDeps y E ++ E.held, E.held, false, false⟩
+  | t => ⟨t, .bor, true, projDeps y E ++ E.held, E.held, false, false, false⟩
 
 /-- A field read is lent (A2-drop.3a: so `letv` binds it, whatever its type). -/
 @[simp] theorem projE_mode (y : Var) (E : Entry) (t : Ty) : (projE y E t).mode = .bor := by
@@ -462,7 +469,7 @@ def projE (y : Var) (E : Entry) : Ty → Entry
     writes. -/
 def getE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
-  | t => ⟨t, .bor, true, derive y E .share, E.held, false, false⟩
+  | t => ⟨t, .bor, true, derive y E .share, E.held, false, false, false⟩
 
 /-- A3.3: `rguard_get g` of a read guard `g` (`rw_read`'s owned share, of
     type `rguard t` (Agora #837; before, `arc (prod (lk t) t)`), holding
@@ -472,7 +479,7 @@ def getE (y : Var) (E : Entry) : Ty → Entry
     through it (a copy of it is a borrow too, which `paramOK` refuses as an
     `inout` argument), and the guard's scope ends it (`exitScope g`). -/
 theorem rguard_get_path {t : Ty} (ht : t ≠ .int) (g y : Var) :
-    (projE y (getE g ⟨.rguard t, .own, true, [], [], false, false⟩ (.prod (.lk t) t)) t).path =
+    (projE y (getE g ⟨.rguard t, .own, true, [], [], false, false, false⟩ (.prod (.lk t) t)) t).path =
       [⟨g, .share⟩] := by
   cases t <;> simp_all [projE, getE, derive, projDeps, rootKind, Mode.isRoot, Mode.ownSlot]
 
@@ -486,7 +493,7 @@ def Entry.lockOf (E : Entry) (t : Ty) : Prop :=
 /-- A3.2: the binding a lock's payload is checked out to (`withLock`): owned,
     holding nothing (a payload views nothing); an integer is a plain integer
     binding, as `unpair` binds an integer field. -/
-def lockE (t : Ty) : Entry := if t = .int then intE else ⟨t, .own, true, [], [], false, false⟩
+def lockE (t : Ty) : Entry := if t = .int then intE else ⟨t, .own, true, [], [], false, false, false⟩
 
 @[simp] theorem lockE_dtor (t : Ty) : (lockE t).dtor = false := by unfold lockE; split <;> rfl
 @[simp] theorem lockE_dbind (t : Ty) : (lockE t).dbind = false := by unfold lockE; split <;> rfl
@@ -504,8 +511,8 @@ def ownHeld (o : Bool) (t : Ty) (H : List Dep) : List Dep := if o && !t.holdsVie
 /-- A field moved out of a struct that is taken apart. -/
 def compE (E : Entry) : Ty → Entry
   | .int => intE
-  | .slice s => ⟨.slice s, .bor, true, E.held, E.held, false, false⟩
-  | t => ⟨t, .own, true, [], ownHeld true t E.held, false, false⟩
+  | .slice s => ⟨.slice s, .bor, true, E.held, E.held, false, false, false⟩
+  | t => ⟨t, .own, true, [], ownHeld true t E.held, false, false, false⟩
 
 /-- What `takel` / `taker` take a payload out of is an enum under its
     destructor type, if any. -/
@@ -587,14 +594,14 @@ def CapsOK (Γ : Ctx) (F : List Var) (D : List Dep) (cs : List (Var × PMode × 
 inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | expr {e : Expr} : ExprT Γ e → RhsT Γ F (.expr e) intE Γ
   | new {t : Ty} : (Ty.vec t).ok = true →  -- (A2-drop.3b: its elements hold no destructor value)
-      RhsT Γ F (.new t) ⟨.vec t, .own, true, [], [], false, false⟩ Γ
+      RhsT Γ F (.new t) ⟨.vec t, .own, true, [], [], false, false, false⟩ Γ
   | moveOwn {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .own → y ∉ F → NoPin Γ y → DtorSafe Γ .replace false y →
-      RhsT Γ F (.var y) ⟨E.ty, .own, true, [], E.held, false, false⟩
+      RhsT Γ F (.var y) ⟨E.ty, .own, true, [], E.held, false, false, false⟩
         (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
   | copyRoot {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .rootb →
-      RhsT Γ F (.var y) ⟨E.ty, .bor, true, derive y E .self, E.held, false, false⟩ Γ
+      RhsT Γ F (.var y) ⟨E.ty, .bor, true, derive y E .self, E.held, false, false, false⟩ Γ
   | copyBor {y : Var} {E : Entry} :
       Γ y = some E → E.live = true → E.mode = .bor →
       RhsT Γ F (.var y) { E with dtor := false, dbind := false } Γ
@@ -605,7 +612,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | moveUp {y : Var} {E : Entry} {ms : List Nat} {q q' : Cross} :
       Γ y = some E → E.live = true → E.mode = .own → y ∉ F → NoPin Γ y → DtorSafe Γ .replace false y →
       E.ty = .fn ms q → q.Le q' →
-      RhsT Γ F (.var y) ⟨.fn ms q', .own, true, [], E.held, false, false⟩
+      RhsT Γ F (.var y) ⟨.fn ms q', .own, true, [], E.held, false, false, false⟩
         (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
   /-- ... and a borrowed closure copied as one of a class above its own (the
       step is `copyBor`'s). -/
@@ -614,7 +621,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       RhsT Γ F (.var y) { E with ty := .fn ms q', dtor := false, dbind := false } Γ
   | borrow {y : Var} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t →
-      RhsT Γ F (.borrow y) ⟨E.ty, .bor, true, derive y E .self, E.held, false, false⟩ Γ
+      RhsT Γ F (.borrow y) ⟨E.ty, .bor, true, derive y E .self, E.held, false, false, false⟩ Γ
   | at {y : Var} {i : Expr} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t → ExprT Γ i →
       RhsT Γ F (.at y i) (elemE y E t) Γ
@@ -622,7 +629,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some E → E.live = true → E.ty = .vec t → t.holdsView = false →
       -- (A3.1's slices of shares: its elements may be shares, lent as
       -- `vec_at` lends them)
-      RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false⟩ Γ
+      RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false, false⟩ Γ
   | sat {y : Var} {i : Expr} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .slice t → ExprT Γ i →
       RhsT Γ F (.sat y i) (elemE y E t) Γ
@@ -641,17 +648,17 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty Dy Γ1 →
       Γ1 z = some Ez → Ez.live = true → PushArg Γ1 F z Ez Ez.ty Dz Γ2 →
       (Ez.mode.ownSlot = true → z ∉ roots Dy) →
-      RhsT Γ F (.pair y z) ⟨.prod Ey.ty Ez.ty, .own, true, [], Dy ++ Dz, false, false⟩ Γ2
+      RhsT Γ F (.pair y z) ⟨.prod Ey.ty Ez.ty, .own, true, [], Dy ++ Dz, false, false, false⟩ Γ2
   | fst {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.ty.undtor = .prod a b → RhsT Γ F (.fst y) (projE y E a) Γ
   | snd {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.ty.undtor = .prod a b → RhsT Γ F (.snd y) (projE y E b) Γ
   | inl {y : Var} {b : Ty} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → b.ok = true →
-      RhsT Γ F (.inl y b) ⟨.sum Ey.ty b, .own, true, [], D, false, false⟩ Γ1
+      RhsT Γ F (.inl y b) ⟨.sum Ey.ty b, .own, true, [], D, false, false, false⟩ Γ1
   | inr {a : Ty} {y : Var} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → a.ok = true →
-      RhsT Γ F (.inr a y) ⟨.sum a Ey.ty, .own, true, [], D, false, false⟩ Γ1
+      RhsT Γ F (.inr a y) ⟨.sum a Ey.ty, .own, true, [], D, false, false, false⟩ Γ1
   -- (A2-drop.3a: a payload of a destructor enum is lent through the type,
   -- as a field of a destructor struct is; the destructor stays with the
   -- whole value.  Taking one out, `takel` / `taker`, stays refused there:
@@ -685,7 +692,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       q.Fits te cs →
       -- (a closure the environment holds that may change a binding by name:
       -- running this package changes it, its name is among what it holds)
-      RhsT Γ F (.pack fs te ms y cs) ⟨.fn ms q, .own, true, [], D ++ capDeps cs, false, false⟩ Γ1
+      RhsT Γ F (.pack fs te ms y cs) ⟨.fn ms q, .own, true, [], D ++ capDeps cs, false, false, false⟩ Γ1
   /-- A3.1: `y`'s value, of a type that holds no view and no closure, moves
       into a fresh block (an owner moves its tree, which becomes the block's
       payload; an integer is copied); the result is an owned share, which
@@ -704,11 +711,11 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- Agora #837: nor a read guard (`% NotSend`, nurlc's `RGuard`)
       t.hasGuard = false →
       PushArg Γ F y Ey t D Γ1 →
-      RhsT Γ F (.arcNew t y) ⟨.arc t, .own, true, [], [], false, false⟩ Γ1
+      RhsT Γ F (.arcNew t y) ⟨.arc t, .own, true, [], [], false, false, false⟩ Γ1
   /-- A3.1: a new share of the block `a` shares: owned, holding nothing. -/
   | arcClone {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .arc t →
-      RhsT Γ F (.arcClone a) ⟨.arc t, .own, true, [], [], false, false⟩ Γ
+      RhsT Γ F (.arcClone a) ⟨.arc t, .own, true, [], [], false, false, false⟩ Γ
   /-- A3.1: the payload, lent through a share of `a` (`getE`), so it ends
       with `a` like any borrow. A handle into the payload lands through that
       share (`Landed`), so it is valid while the block lives. The payload
@@ -732,12 +739,12 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- may hand it to another thread)
       t.hasGuard = false →
       PushArg Γ F y Ey t D Γ1 →
-      RhsT Γ F (.lockNew t y) ⟨.lk t, .own, true, [], [], false, false⟩ Γ1
+      RhsT Γ F (.lockNew t y) ⟨.lk t, .own, true, [], [], false, false, false⟩ Γ1
   /-- A3.2: `Locked_share`: a new share of the lock block `a` shares: owned,
       holding nothing. -/
   | lockClone {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .lk t →
-      RhsT Γ F (.lockClone a) ⟨.lk t, .own, true, [], [], false, false⟩ Γ
+      RhsT Γ F (.lockClone a) ⟨.lk t, .own, true, [], [], false, false, false⟩ Γ
   /-- A3.3: `rw_read a`: a read guard of the lock (an `RwLocked`) `a` (a
       live share) shares: an owned `arc` share of a new view of its payload,
       holding nothing.  What `arcGet` lends through it is frozen (`getE`'s
@@ -752,7 +759,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- sweep and no reap of the view drops it; the lock block's last share
       -- does, once, `Ty.rview`)
       t.hasCell = false →
-      RhsT Γ F (.rwRead a) ⟨.rguard t, .own, true, [], [], false, false⟩ Γ
+      RhsT Γ F (.rwRead a) ⟨.rguard t, .own, true, [], [], false, false, false⟩ Γ
   /-- A3.3: `rw_try_read a`: `rw_read`'s guard as an owned option
       (`Option` is `sum int _`), holding nothing; matched by value
       (`taker`), its `some` is `rw_read`'s entry.  A read guard lends the
@@ -760,12 +767,12 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       (a cell share is not Sync, A3.5). -/
   | rwTryRead {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .lk t → t.hasCell = false →
-      RhsT Γ F (.rwTryRead a) ⟨.sum .int (.rguard t), .own, true, [], [], false, false⟩ Γ
+      RhsT Γ F (.rwTryRead a) ⟨.sum .int (.rguard t), .own, true, [], [], false, false, false⟩ Γ
   /-- A3.3: `rw_try_write a`'s answer: an owned option of an integer, holding
       nothing; the write itself is `withLock`'s check-out (`Stmt.withTryWrite`). -/
   | rwTryWrite {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .lk t →
-      RhsT Γ F (.rwTryWrite a) ⟨.sum .int .int, .own, true, [], [], false, false⟩ Γ
+      RhsT Γ F (.rwTryWrite a) ⟨.sum .int .int, .own, true, [], [], false, false, false⟩ Γ
   /-- A3.4: an `Atomic`'s operation, through a live share of an integer lock
       block (`Atomic` is `lk int`): an integer. -/
   | atomic {op : AOp} {a : Var} {e1 e2 : Expr} {E : Entry} :
@@ -787,7 +794,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       `Ty.ok`; the shares it holds the queue's block kept alive). -/
   | chanRecv {w : Bool} {a : Var} {E : Entry} {s : Ty} :
       Γ a = some E → E.live = true → E.ty.ChanOf s →
-      RhsT Γ F (.chanRecv w a) ⟨.sum .int s, .own, true, [], [], false, false⟩ Γ
+      RhsT Γ F (.chanRecv w a) ⟨.sum .int s, .own, true, [], [], false, false, false⟩ Γ
   /-- A3.4: `chan_close`, through a live share of a channel. -/
   | chanClose {a : Var} {E : Entry} {s : Ty} :
       Γ a = some E → E.live = true → E.ty.ChanOf s →
@@ -801,14 +808,14 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some Ey → Ey.live = true → Ey.ty = t →
       t.lkPay = true → t.holdsView = false ∧ t.hasFn = false → t.hasGuard = false →
       PushArg Γ F y Ey t D Γ1 →
-      RhsT Γ F (.cellNew t y) ⟨.cell t, .own, true, [], [], false, false⟩ Γ1
+      RhsT Γ F (.cellNew t y) ⟨.cell t, .own, true, [], [], false, false, false⟩ Γ1
   /-- A3.5: a copy of a library handle (`PNCounter_share`): a new owned cell
       share, from one a live binding holds — an owner's, or (A3.5's third
       cut) a borrow's: a lent cell share is the share (`lendOf`), as the
       runtime's `PNCounter_share` copies a handle it was lent. -/
   | cellClone {a : Var} {E : Entry} {t : Ty} :
       Γ a = some E → E.live = true → E.ty = .cell t →
-      RhsT Γ F (.cellClone a) ⟨.cell t, .own, true, [], [], false, false⟩ Γ
+      RhsT Γ F (.cellClone a) ⟨.cell t, .own, true, [], [], false, false, false⟩ Γ
   /-- A3.6: a read of a module global set at start: an owned share of its
       block, holding nothing (a clone of the global's handle, which the global
       keeps).  Its type synchronises itself (`Ty.sync`: a lock share, or an
@@ -816,7 +823,7 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       cell share or any owned tree; and no rule writes a global. -/
   | glob {g : Nat} {t : Ty} :
       t.sync = true → t.ok = true →
-      RhsT Γ F (.glob g t) ⟨t, .own, true, [], [], false, false⟩ Γ
+      RhsT Γ F (.glob g t) ⟨t, .own, true, [], [], false, false, false⟩ Γ
   /-- A3.2's second cut: `locked_take a`, through a live lock share of a
       `Locked t`: the payload, owned, of its type, holding nothing (it views
       nothing; its shares the block kept alive) — `withLock`'s `lockE t`
@@ -848,8 +855,8 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ y = some E → E.live = true → E.ty = .vec t → t.holdsView = false → canDo E.mode .replace →
       -- (no `letd` binding: one is of a type that holds views, `CtxWF.view`)
       E.dbind = false → y ∉ F → NoPin Γ y → DtorSafe Γ .replace false y →
-      RhsT Γ F (.take y) ⟨E.ty, .own, true, [], E.held, false, false⟩
-        (setE (kill .replace false y Γ) y ⟨E.ty, E.mode, true, [], [], false, false⟩)
+      RhsT Γ F (.take y) ⟨E.ty, .own, true, [], E.held, false, false, false⟩
+        (setE (kill .replace false y Γ) y ⟨E.ty, E.mode, true, [], [], false, false, false⟩)
 
 /-! ### Calls -/
 
@@ -1060,7 +1067,7 @@ def recvRes (c : Var) (Ec : Entry) (E : Entry) : Entry :=
 def callRes (Γ : Ctx) (fn : Fn) (args : List Var) : Entry :=
   ⟨fn.resTy, resMode fn, true,
    fn.lends.flatMap (argDeps Γ args) ++ heldOfArgs Γ args,
-   ownHeld fn.resOwn fn.resTy (fn.rholds.flatMap (argDeps Γ args) ++ heldOfArgs Γ args), false, false⟩
+   ownHeld fn.resOwn fn.resTy (fn.rholds.flatMap (argDeps Γ args) ++ heldOfArgs Γ args), false, false, false⟩
 
 @[simp] theorem callRes_dtor (Γ : Ctx) (fn : Fn) (args : List Var) : (callRes Γ fn args).dtor = false := rfl
 @[simp] theorem recvRes_dtor (c : Var) (Ec E : Entry) : (recvRes c Ec E).dtor = E.dtor := rfl
@@ -1807,16 +1814,16 @@ theorem Cross.Fits.holdsView {q : Cross} {te : Ty} {cs : List (Var × PMode × T
     see; every parameter whose type may hold a closure holds the symbolic
     names (what it was handed may change any `inout` parameter). -/
 def paramE (ps : List (PMode × Ty)) : PMode × Ty → Entry
-  | (.inp, t) => ⟨t, .rootb, true, [], if t.hasFn then symNames ps else [], false, false⟩
-  | (.inout b, t) => ⟨t, .inout b, true, [], if t.hasFn then symNames ps else [], false, false⟩
-  | (.sink, t) => ⟨t, .own, true, [], if t.hasFn then symNames ps else [], false, false⟩
+  | (.inp, t) => ⟨t, .rootb, true, [], if t.hasFn then symNames ps else [], false, false, false⟩
+  | (.inout b, t) => ⟨t, .inout b, true, [], if t.hasFn then symNames ps else [], false, false, false⟩
+  | (.sink, t) => ⟨t, .own, true, [], if t.hasFn then symNames ps else [], false, false, false⟩
 
 /-- The callee's own view of its parameters: they depend on nothing it can
     see, but a closure it is handed, which may change its `inout`
     parameters.  The result slot starts empty. -/
 def sigCtx (fn : Fn) : Ctx := fun v =>
   if h : v < fn.params.length then some (paramE fn.params fn.params[v])
-  else if v = fn.params.length then some ⟨fn.resTy, resMode fn, false, [], [], false, false⟩
+  else if v = fn.params.length then some ⟨fn.resTy, resMode fn, false, [], [], false, false, false⟩
   else none
 
 /-- A summary pair names a parameter the caller still has after the call. -/

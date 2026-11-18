@@ -260,7 +260,7 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
     -- Agora #826: `y` replaced by a fresh empty `Vec`: it holds nothing, so it
     -- may be held by name as before
     have hos := hcan.ownSlot
-    have hk : Keeps Γ (A2.setE (A2.kill .replace false y Γ) y ⟨Ey.ty, Ey.mode, true, [], [], false, false⟩) [] :=
+    have hk : Keeps Γ (A2.setE (A2.kill .replace false y Γ) y ⟨Ey.ty, Ey.mode, true, [], [], false, false, false⟩) [] :=
       ((Keeps.refl Γ []).kill _ _ _).setE fun E0 h0 => by
         rw [hy] at h0; cases h0
         exact ⟨rfl, rfl, fun _ _ => ⟨rfl, rfl, hos, by rw [hty]; simpa [Ty.holdsView] using hhv⟩⟩

@@ -63,11 +63,11 @@ def main : Stmt :=
 /-! ### Entries -/
 
 /-- `ob` reading the cell's payload. -/
-def Eob : Entry := ⟨str, .bor, true, [⟨3, .inner⟩], [], false, false⟩
+def Eob : Entry := ⟨str, .bor, true, [⟨3, .inner⟩], [], false, false, false⟩
 /-- `ob` reading `other`. -/
-def Eoth : Entry := ⟨str, .bor, true, [⟨1, .self⟩], [], false, false⟩
+def Eoth : Entry := ⟨str, .bor, true, [⟨1, .self⟩], [], false, false, false⟩
 /-- The cell holding `none`. -/
-def Enone : Entry := ⟨opt, .own, true, [], [], false, false⟩
+def Enone : Entry := ⟨opt, .own, true, [], [], false, false, false⟩
 
 /-! ### Contexts with no borrowed parameter and no destructor binding -/
 
@@ -210,7 +210,7 @@ def mainJ (c : Nat) : Stmt :=
         (.letv 6 (.expr (.len 4)) .skip))))))))))
 
 /-- `ob` reading `other` or the cell's payload. -/
-def EobJ : Entry := ⟨str, .bor, true, [⟨1, .self⟩, ⟨3, .inner⟩], [], false, false⟩
+def EobJ : Entry := ⟨str, .bor, true, [⟨1, .self⟩, ⟨3, .inner⟩], [], false, false, false⟩
 
 /-- The contexts around the decisions, with `ob`'s entry `E4`. -/
 def ctxJ (E4 : Entry) : Ctx := fun v =>

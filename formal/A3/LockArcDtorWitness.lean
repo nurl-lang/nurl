@@ -321,11 +321,11 @@ def main : Stmt :=
     (.letv 4 (.lockNew DA 3) (.letv 5 (.expr (.lit 0)) (Stmt.lockedApply 4 6 7 5 1))))))
 
 /-- The `Arc` share's entry: owned, holding nothing. -/
-def EA : Entry := ⟨.arc .int, .own, true, [], [], false, false⟩
+def EA : Entry := ⟨.arc .int, .own, true, [], [], false, false, false⟩
 /-- The struct's entry, as `pair` makes it. -/
-def EP : Entry := ⟨TA, .own, true, [], [] ++ [], false, false⟩
+def EP : Entry := ⟨TA, .own, true, [], [] ++ [], false, false, false⟩
 /-- The lock share's entry: owned, holding nothing. -/
-def EL : Entry := ⟨.lk DA, .own, true, [], [], false, false⟩
+def EL : Entry := ⟨.lk DA, .own, true, [], [], false, false, false⟩
 
 /-- **A `Locked` of a destructor value that holds an `Arc` share is typed**
     (Agora #803: `Ty.ok` admits `lk (dtor f u)` when `u` holds no cell share,

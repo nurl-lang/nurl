@@ -223,7 +223,7 @@ theorem hand_minv {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
 /-! ### The code's call, typed from the interface's -/
 
 theorem compE_owning (E : Entry) {t : Ty} (h : t.owning = true) :
-    compE E t = ⟨t, .own, true, [], ownHeld true t E.held, false, false⟩ := by
+    compE E t = ⟨t, .own, true, [], ownHeld true t E.held, false, false, false⟩ := by
   cases t <;> simp_all [compE, Ty.owning]
 
 /-- What a package that is live where every dependency on it has ended
@@ -318,7 +318,7 @@ theorem callT_hand {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
   have hxy : x ≠ m.nv := fun e => by rw [e] at hxn; exact Nat.lt_irrefl _ hxn
   have hxc : x ≠ c := fun e => by rw [e, hc] at hx; cases hx
   have hyc : m.nv ≠ c := fun e => by rw [← e] at hcn; exact Nat.lt_irrefl _ hcn
-  have hEy : compE Ec te = ⟨te, .own, true, [], ownHeld true te Ec.held, false, false⟩ := compE_owning Ec hto
+  have hEy : compE Ec te = ⟨te, .own, true, [], ownHeld true te Ec.held, false, false, false⟩ := compE_owning Ec hto
   have hy : handCtx Γ c x Ec te m.nv E0 m.nv = some (compE Ec te) := handCtx_y hxy
   have hyE : argE (handCtx Γ c x Ec te m.nv E0) m.nv = compE Ec te := by
     simp only [argE, hy, Option.getD_some]
@@ -869,7 +869,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
     · exact absurd hm (hi.noInout v E0 b' hv)
   -- the environment's binding
   let Γh := handCtx Γ c x Ec te m.nv (callX fn)
-  have hEy : compE Ec te = ⟨te, .own, true, [], ownHeld true te Ec.held, false, false⟩ := compE_owning Ec hto
+  have hEy : compE Ec te = ⟨te, .own, true, [], ownHeld true te Ec.held, false, false, false⟩ := compE_owning Ec hto
   have hEyt : (compE Ec te).ty ≠ .int := by
     rw [hEy]; intro h; simp only at h; subst h; simp [Ty.owning] at hto
   have hEyv : (compE Ec te).vdeps ⊆ Ec.vdeps := by
@@ -1094,7 +1094,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
       (setE (kill .replace false m.nv Γ3) m.nv { Ey1 with live := false, dtor := false }) :=
     PushArg.move hto hEy1o hyF (hfr3.noPin_fresh hi hΓy) (hfr3.dtorSafe (DtorSafe.of_fresh hi.wf hΓy _ _))
   have hpk : RhsT Γ3 F (.pack fs te ms m.nv [])
-      ⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false⟩
+      ⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false, false⟩
       (setE (kill .replace false m.nv Γ3) m.nv { Ey1 with live := false, dtor := false }) :=
     RhsT.pack h3y (by simp [Ey1, hEy]) (by simp [Ey1, hEy]) hpush ⟨List.nodup_nil, fun _ h => by cases h⟩ hq
   let Γ4 := setE (kill .replace false m.nv Γ3) m.nv { Ey1 with live := false, dtor := false }
@@ -1106,7 +1106,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
   have h4c : Γ4 c = some Ecd1 := by
     simp only [Γ4, setE, upd_ne _ _ (Ne.symm hyc), kill, h3c', Option.map_some]
     rw [killE_dead hEcd1.2.2.2]
-  have hcroot : c ∉ roots ((⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false⟩ : Entry).vdeps) := by
+  have hcroot : c ∉ roots ((⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false, false⟩ : Entry).vdeps) := by
     intro h
     obtain ⟨d, hd, hdr⟩ := List.mem_map.mp h
     have hd' : d ∈ HyR := by simpa [Entry.vdeps, Mode.ownSlot, capDeps, Ey1] using hd
@@ -1114,11 +1114,11 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
     exact hnc d0 hd0 (hr ▸ hdr)
   have hTpack : StmtT P (ξ.under m.nv) Γ3 F (.assign c (.pack fs te ms m.nv []))
       (setE (kill .replace false c Γ4) c
-        { (⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false⟩ : Entry) with mode := Ecd1.mode }) :=
+        { (⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false, false⟩ : Entry) with mode := Ecd1.mode }) :=
     StmtT.assign h3c hcF (Or.inl ⟨by rw [hEcd1.1, hmo], rfl⟩) hpk (by show Ty.fn ms q = Ecd1.ty; rw [hEcd1.2.1, htc])
       hcroot (by simp [Γ4, setE, upd_ne _ _ (Ne.symm hyc), kill, h3c']) (hfr3.noPin hny) (hfr4.dtorSafe hdc)
       (by rw [hEcd1.2.2.1, hdbc])
-  let Epk : Entry := { (⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false⟩ : Entry) with mode := Ecd1.mode }
+  let Epk : Entry := { (⟨.fn ms q, .own, true, [], Ey1.held ++ capDeps [], false, false, false⟩ : Entry) with mode := Ecd1.mode }
   have hEpkR : Rooted Γ Epk := Rooted.of_roots fun d hd => by
     have hd' : d ∈ HyR := by simpa [Epk, Entry.vdeps, Mode.ownSlot, capDeps, Ey1, hEcd1.1, hmo] using hd
     obtain ⟨d0, hd0, hr⟩ := hHyR_Ec d hd'
@@ -1364,7 +1364,7 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
     · exact absurd hm (hi.noInout v E0 b' hv)
   -- the environment's binding
   let Γh := handCtx Γ c x Ec te m.nv (callX fn)
-  have hEy : compE Ec te = ⟨te, .own, true, [], [], false, false⟩ := by
+  have hEy : compE Ec te = ⟨te, .own, true, [], [], false, false, false⟩ := by
     rw [compE_owning Ec hto, hEh]; simp [ownHeld]
   have hEyt : (compE Ec te).ty ≠ .int := by
     rw [hEy]; intro h; simp only at h; subst h; simp [Ty.owning] at hto
@@ -1428,7 +1428,7 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
   have hfr1 : FrameOK Γ (callPost Γh fn [m.nv]) := by
     rw [hΓ1']; exact hfrh.setE (by simp [Eyd, hEy]) rfl (by simp [Eyd, hEy])
   -- the inner call's result holds nothing
-  have hres : callRes Γh fn [m.nv] = ⟨fn.resTy, resMode fn, true, [], [], false, false⟩ := by
+  have hres : callRes Γh fn [m.nv] = ⟨fn.resTy, resMode fn, true, [], [], false, false, false⟩ := by
     simp [callRes, hfl0, hfr0, heldOfArgs, argNames, hyE, hEy, Entry.vdeps, nameDeps, memDeps, roots, allKinds,
       ownHeld, Mode.ownSlot]
   have hE'R : Rooted Γ (callRes Γh fn [m.nv]) := Rooted.of_roots fun d hd => by
@@ -1505,7 +1505,7 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
   have hΓ1s : callPost (kill .replace false c Γ) sig [c] =
       setE (kill .replace false c (kill .replace false c Γ)) c { Ec with live := false, dtor := false } := by
     simp [callPost, hnmS, killNames, hsp, callPostAux, hck]
-  have hEs : callRes (kill .replace false c Γ) sig [c] = ⟨sig.resTy, resMode sig, true, [], [], false, false⟩ := by
+  have hEs : callRes (kill .replace false c Γ) sig [c] = ⟨sig.resTy, resMode sig, true, [], [], false, false, false⟩ := by
     simp [callRes, hsl, hsr, heldOfArgs, argNames, hck, hvd, hEh, Entry.vdeps, nameDeps, memDeps, roots, allKinds,
       ownHeld, hos]
   have hwx : EntryWeaker Ex1 (callRes (kill .replace false c Γ) sig [c]) := by
@@ -1762,7 +1762,7 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
     simp only [kill] at hv
     obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hv
     exact Or.inr (Or.inr (Or.inr ⟨hvx, hvy, hvc, E1, h1, rfl⟩))
-  have hEyE : compE Ec te0 = ⟨te0, .own, true, [], ownHeld true te0 Ec.held, false, false⟩ := compE_owning Ec hto
+  have hEyE : compE Ec te0 = ⟨te0, .own, true, [], ownHeld true te0 Ec.held, false, false, false⟩ := compE_owning Ec hto
   have hkrb : ∀ v E1, Γ v = some E1 → E1.mode = .rootb → killE .replace false c E1 = E1 :=
     fun v E1 hv hm => killE_rootb hanch hcF .replace false (hny.kills .replace false) hv hm
   -- its borrowed parameters and `letd` bindings are the store's
@@ -1969,7 +1969,7 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
       simp only [kill] at hv
       obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hv
       exact Or.inr (Or.inr (Or.inr ⟨hvx, hvy, hvc, E1, h1, rfl⟩))
-    have hEyE : compE Ec te0 = ⟨te0, .own, true, [], ownHeld true te0 Ec.held, false, false⟩ := compE_owning Ec hto
+    have hEyE : compE Ec te0 = ⟨te0, .own, true, [], ownHeld true te0 Ec.held, false, false, false⟩ := compE_owning Ec hto
     have hkrb : ∀ v E1, Γ v = some E1 → E1.mode = .rootb → killE .replace false c E1 = E1 :=
       fun v E1 hv hm => killE_rootb hanch hcF .replace false (hny.kills .replace false) hv hm
     -- its borrowed parameters and `letd` bindings are the store's

@@ -28,7 +28,7 @@ namespace A2.ExitWitness
 def str : Ty := .vec .int
 
 /-- An owned `String`. -/
-def Ew : Entry := ⟨str, .own, true, [], [], false, false⟩
+def Ew : Entry := ⟨str, .own, true, [], [], false, false, false⟩
 
 /-- A context of plain bindings: no borrowed parameter, nothing that runs a
     destructor, nothing that depends on anything. -/
@@ -257,7 +257,7 @@ def gR : Fn where
 
 def PR : Prog := [gR]
 
-def R0 : Entry := ⟨.int, .bor, false, [], [], false, false⟩
+def R0 : Entry := ⟨.int, .bor, false, [], [], false, false, false⟩
 
 /-- `g`'s context with the result slot `r0`. -/
 def ctxR (r0 : Entry) : Ctx := fun v => if v = 0 then some r0 else none
