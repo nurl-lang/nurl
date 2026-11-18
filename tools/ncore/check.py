@@ -3344,9 +3344,30 @@ class FnCheck:
         src = rv[1][1]
         if self.fn.vars[src].kind != "temp":
             return True
-        av = st.vals.get(src)
-        return av is not None and any(
-            p and p[0][:1] == "^" and p[0][1:].isdigit() for p, _ in av.held)
+        caps = self.closure_lit_caps().get(src)
+        # (a temporary bound to anything but a closure literal may own one)
+        return caps is None or caps > 0
+
+    def closure_lit_caps(self):
+        """The temporaries this function binds to a closure literal, each
+        with how many values it captures, scalars included: every capture
+        has a place in the environment (agora #851)."""
+        if getattr(self, "_clo_caps", None) is None:
+            found = {}
+
+            def walk(x):
+                if isinstance(x, tuple):
+                    if (len(x) >= 3 and x[0] == "let" and isinstance(x[2], tuple)
+                            and x[2] and x[2][0] == "closure"):
+                        found[x[1]] = len(x[2][2])
+                    for y in x:
+                        walk(y)
+                elif isinstance(x, list):
+                    for y in x:
+                        walk(y)
+            walk(self.fn.body)
+            self._clo_caps = found
+        return self._clo_caps
 
     def borrowed_copy(self, vid):
         """Is `vid` a copy of a value this frame only borrows: a by-value
