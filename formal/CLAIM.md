@@ -134,6 +134,22 @@ the LLVM / C11 memory model rather than redefining it.
   capture that the owners already hold, while nurlc's escape rule refuses
   every by-name capture of a stack binding before it can reach a Vec
   (`compiler/tests/diag_closure_by_name_stored_through_borrow.nu`).
+  A closure whose code changes elements through a borrow (Agora #295) is
+  in the claim too (AGORA-395), under three conditions:
+  - its interface is such code too, so a call through the package passes
+    no argument holding views (`CallT`);
+  - its environment holds no views;
+  - it takes its environment lent (`Implements`).
+
+  `Stmt.callc` names the interface it calls, so `ThruFn` propagates
+  through a call through a package as it does through a direct call, and
+  the callers of a function that makes such a call pass no views either
+  (`Rename`). Every borrow the code changes through is rooted in its own
+  frame or in what the call passed. What it captures by name holds
+  nothing (`CapsOK`), and the environment holds what the receiver holds
+  (`open_pkg_callR`). `A2/ThruClosureWitness.lean` types such a closure,
+  which pushes through `vec_at` of its own local and is called through its
+  package. nurlc accepts it (a closure over an `i` argument).
   That nurlc's
   `vec_pop` / `vec_remove` lower to these steps is phase C. Outside the
   claim still:
@@ -143,9 +159,14 @@ the LLVM / C11 memory model rather than redefining it.
   - a callee that changes a plain parameter's elements when its caller
     hands it an element, a field viewer or a call's result rather than an
     owner;
-  - a closure or a destructor that changes elements through a borrow,
-    directly or through a callee, and a call into a function that does so
-    which passes an argument holding views (`ThruFn`).
+  - a destructor that changes elements through a borrow, directly or
+    through a callee, and a call into a function that does so which passes
+    an argument holding views (`ThruFn`);
+  - a closure whose code does so, when the call through its package passes
+    an argument holding views, or its environment holds views, or it takes
+    the environment handed over (`StmtT.callcE`). nurlc accepts the first:
+    a closure that pushes its `s` argument through `vec_at` of its own local
+    runs clean, outside the claim.
 
   One more form nurlc accepts that A2 does not type directly: an owner
   given a new value while something still reads its old one, where nurlc

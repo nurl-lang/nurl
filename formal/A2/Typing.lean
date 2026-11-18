@@ -1477,7 +1477,7 @@ def Stmt.hasThru : Stmt → Bool
   | .letrec _ _ s => s.hasThru
   | .catchR _ _ s => s.hasThru
   | .unpair _ _ _ s => s.hasThru
-  | .callc _ _ _ _ s => s.hasThru
+  | .callc _ _ _ _ _ s => s.hasThru
   | .letd _ _ _ s => s.hasThru
   | .scopeD _ _ s => s.hasThru
   | .edit b _ _ => b
@@ -1493,7 +1493,8 @@ def Stmt.hasThru : Stmt → Bool
 
 /-- The functions a statement calls by index: a call, a `recover` body, a
     destructor (Agora #295). A call through a package is not listed: the
-    code it runs is never a `ThruFn` (`Implements`). -/
+    code it runs is a `ThruFn` only where its interface is (`Implements`),
+    and a call through one lists the interface (AGORA-395). -/
 def Stmt.calls : Stmt → List Nat
   | .seq a b => a.calls ++ b.calls
   | .ite _ a b => a.calls ++ b.calls
@@ -1506,7 +1507,9 @@ def Stmt.calls : Stmt → List Nat
   | .letrec _ f s => f :: s.calls
   | .catchR _ _ s => s.calls
   | .unpair _ _ _ s => s.calls
-  | .callc _ _ _ _ s => s.calls
+  -- (AGORA-395: and the interface it calls through, so a function calling
+  -- one that changes elements through a borrow is such a function too)
+  | .callc _ _ _ σ _ s => σ :: s.calls
   | .letd _ f _ s => f :: s.calls
   | .scopeD _ f s => f :: s.calls
   | .withLock _ _ s => s.calls
@@ -1567,8 +1570,8 @@ theorem letrec {x : Var} {f : Nat} {k : Stmt} (h : k.Thru P) : (Stmt.letrec x f 
   h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
 theorem unpair {y x z : Var} {k : Stmt} (h : k.Thru P) : (Stmt.unpair y x z k).Thru P :=
   h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
-theorem callc {x c : Var} {j : Nat} {zs : List Var} {k : Stmt} (h : k.Thru P) :
-    (Stmt.callc x c j zs k).Thru P :=
+theorem callc {x c : Var} {j σ : Nat} {zs : List Var} {k : Stmt} (h : k.Thru P) :
+    (Stmt.callc x c j σ zs k).Thru P :=
   h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
 theorem letd {x : Var} {f : Nat} {r : Rhs} {k : Stmt} (h : k.Thru P) : (Stmt.letd x f r k).Thru P :=
   h.mono (fun h => by simp [hasThru, h]) (fun g hg => by simp [calls, hg])
@@ -1662,7 +1665,7 @@ def Stmt.assigns : Stmt → List Var
   | .letrec _ _ s => s.assigns
   | .catchR _ _ s => s.assigns
   | .unpair _ _ _ s => s.assigns
-  | .callc _ _ _ _ s => s.assigns
+  | .callc _ _ _ _ _ s => s.assigns
   | .letd _ _ _ s => s.assigns
   | .scopeD _ _ s => s.assigns
   | .withLock _ _ s => s.assigns
@@ -1691,7 +1694,7 @@ def Stmt.asgMax (x : Var) : Stmt → Nat
   | .letrec _ _ s => s.asgMax x
   | .catchR _ _ s => s.asgMax x
   | .unpair _ _ _ s => s.asgMax x
-  | .callc _ _ _ _ s => s.asgMax x
+  | .callc _ _ _ _ _ s => s.asgMax x
   | .letd _ _ _ s => s.asgMax x
   | .scopeD _ _ s => s.asgMax x
   | .withLock _ _ s => s.asgMax x
@@ -1910,7 +1913,7 @@ def Stmt.vars : Stmt → List Var
   | .letrec x _ s => x :: s.vars
   | .catchR x _ s => x :: s.vars
   | .unpair y x z s => y :: x :: z :: s.vars
-  | .callc x c _ zs s => x :: c :: zs ++ s.vars
+  | .callc x c _ _ zs s => x :: c :: zs ++ s.vars
   | .letd x _ r s => x :: r.vars ++ s.vars
   | .scopeD x _ s => x :: s.vars
   | .edit _ x op => x :: op.vars

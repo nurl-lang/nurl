@@ -278,7 +278,8 @@ theorem pkg_code_recv {P : Prog} {m : Mem} (hcd : MemCodes P m) {c : Var} {o : B
       fn.params = (sig.recvMode, te) :: sig.params.tail ++ cs.map (·.2) ∧
       (sig.recvMode ≠ .inp → cs = []) ∧
       fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧
-      fn.rholds ⊆ sig.rholds ∧ fn.outHolds ⊆ sig.outHolds ∧ ¬ ThruFn P f := by
+      fn.rholds ⊆ sig.rholds ∧ fn.outHolds ⊆ sig.outHolds ∧
+      (ThruFn P f → ThruFn P σ ∧ te.holdsView = false ∧ sig.recvMode = .inp) := by
   obtain ⟨hlen, himpl⟩ := hcd.1 c o _ fs te ms env cs hslot (Sub.refl _)
   have hjl : j < fs.length := by rw [hlen]; exact (List.getElem?_eq_some_iff.mp hj).1
   have hfs : fs[j]? = some fs[j] := List.getElem?_eq_getElem hjl
@@ -296,7 +297,8 @@ theorem pkg_code {P : Prog} {m : Mem} (hcd : MemCodes P m) {c : Var} {o : Bool} 
     ∃ f fn, fs[j]? = some f ∧ P[f]? = some fn ∧
       fn.params = (.inp, te) :: sig.params.tail ++ cs.map (·.2) ∧
       fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧
-      fn.rholds ⊆ sig.rholds ∧ fn.outHolds ⊆ sig.outHolds ∧ ¬ ThruFn P f := by
+      fn.rholds ⊆ sig.rholds ∧ fn.outHolds ⊆ sig.outHolds ∧
+      (ThruFn P f → ThruFn P σ ∧ te.holdsView = false ∧ sig.recvMode = .inp) := by
   obtain ⟨f, fn, hfs, hf, hps, _, h⟩ := pkg_code_recv hcd hslot hj hσ
   rw [Fn.recvMode_of_head hhd (by simp)] at hps
   exact ⟨f, fn, hfs, hf, hps, h⟩
@@ -1986,6 +1988,51 @@ theorem mutNames_open {Γ : Ctx} {e c : Var} {Ec : Entry} {te : Ty} {zs : List V
     · cases hda
     · rw [(hcv ci hci).2] at hda; cases hda
 
+/-- The `ThruFn` guard of a call (Agora #295): into code that changes
+    elements through a borrow, no argument holds views. -/
+theorem CallT.thru {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
+    {Γ' : Ctx} (h : CallT P Γ F f args E Γ') : ThruFn P f → callR Γ args = [] := by
+  obtain ⟨_, _, _, _, _, _, _, _, h⟩ := h
+  exact h
+
+/-- AGORA-395: the call of a package's code holds no views where the call
+    through the package did not: the environment holds what the receiver
+    holds (and its shares, of the same roots), the other arguments are the
+    call's own, and what the package captures by name holds nothing. -/
+theorem open_pkg_callR {Γ : Ctx} {c n : Var} {Ec : Entry} {te : Ty} {cs : List (Var × PMode × Ty)}
+    {zs : List Var} (hc : Γ c = some Ec) (hnint : Ec.ty ≠ .int)
+    (hEe : argE (setE Γ n (envE c Ec te cs)) n = envE c Ec te cs)
+    (hargE : ∀ a, a ≠ n → argE (setE Γ n (envE c Ec te cs)) a = argE Γ a)
+    (hze : ∀ a ∈ zs, a ≠ n) (hkne : ∀ ci ∈ cs, ci.1 ≠ n)
+    (hcapv : ∀ ci ∈ cs, (argE Γ ci.1).vdeps = [])
+    (h0 : callR Γ (c :: zs) = []) :
+    callR (setE Γ n (envE c Ec te cs)) (n :: zs ++ cs.map (·.1)) = [] := by
+  have hae : argE Γ c = Ec := by unfold argE; rw [hc]; rfl
+  have hno : ∀ r, r ∉ callR Γ (c :: zs) := fun r hr => by rw [h0] at hr; cases hr
+  -- a memory dependency of the receiver's is in the call's
+  have hrecv : ∀ d ∈ memDeps Ec.held, False := fun d hd =>
+    hno d.root (mem_callR.mpr ⟨c, List.mem_cons_self, by rw [hae]; exact hnint,
+      by rw [hae]; exact List.mem_map_of_mem hd⟩)
+  refine List.eq_nil_iff_forall_not_mem.mpr fun r hr => ?_
+  obtain ⟨a, ha, hty, hra⟩ := mem_callR.mp hr
+  rcases List.mem_cons.mp (List.cons_append ▸ ha) with rfl | ha
+  · rw [hEe] at hra
+    obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hra
+    obtain ⟨hdh, hdn⟩ := List.mem_filter.mp hd
+    obtain ⟨hdh, _⟩ := mem_envDeps.mp hdh
+    rcases List.mem_append.mp hdh with hdh | hdh
+    · exact hrecv d (List.mem_filter.mpr ⟨hdh, hdn⟩)
+    · obtain ⟨_, d0, hd0, _⟩ := mem_shareOf.mp hdh
+      exact hrecv d0 hd0
+  · rcases List.mem_append.mp ha with ha | ha
+    · rw [hargE a (hze a ha)] at hty hra
+      exact hno r (mem_callR.mpr ⟨a, List.mem_cons_of_mem _ ha, hty, hra⟩)
+    · obtain ⟨ci, hci, rfl⟩ := List.mem_map.mp ha
+      rw [hargE _ (hkne ci hci)] at hra
+      obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hra
+      have hv : d ∈ (argE Γ ci.1).vdeps := by simp [Entry.vdeps, (List.mem_filter.mp hd).1]
+      rw [hcapv ci hci] at hv; cases hv
+
 /-- Opening a package for a call: the environment bound to `e` as a borrowed
     parameter, and the call of the code on it, the arguments and the captures,
     well-typed. -/
@@ -1995,12 +2042,13 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
     (hσ : P[σ]? = some sig) (hhd : sig.params.head? = some (.inp, Ec.ty))
     (hcT : CallT P Γ F σ (c :: zs) E Γ1)
     (hnz : ∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z)
-    (hi : Inv m Γ F (.callc x c j zs k))
+    (hi : Inv m Γ F (.callc x c j σ zs k))
     (hcl : ∀ v E, Γ v = some E → E.clean = E)
     {o : Bool} {fs : List Nat} {te : Ty} {env : Val} {cs : List (Var × PMode × Ty)}
     (hslot : m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩)
     {f : Nat} {fn : Fn} (hf : P[f]? = some fn)
-    (hps : fn.params = (.inp, te) :: sig.params.tail ++ cs.map (·.2)) (hnt : ¬ ThruFn P f) :
+    (hps : fn.params = (.inp, te) :: sig.params.tail ++ cs.map (·.2))
+    (hthr : ThruFn P f → ThruFn P σ ∧ te.holdsView = false ∧ sig.recvMode = .inp) :
     MInv (envMem m env) (setE Γ m.nv (envE c Ec te cs)) ∧
     (∀ d ∈ (envE c Ec te cs).vdeps, d.kind.bound = .none →
       d.root ∈ heldN (setE Γ m.nv (envE c Ec te cs)) fn.params (m.nv :: zs ++ cs.map (·.1)) m.nv x) ∧
@@ -2279,7 +2327,13 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       · exact hrd d hdv hdr.symm hb
       · exact hpk (hdr.trans hr0.symm)
       · exact hrd d0 hdv0 (hr0.trans hdr.symm) (Kind.bound_of_isName hn0)
-  refine ⟨hie, hZ, fn, hf, ?_, fun i hil => ?_, ?_, ?_, rfl, rfl, fun ht => absurd ht hnt⟩
+  -- code that changes elements through a borrow implements an interface
+  -- that does, whose call passes no argument holding views: neither does the
+  -- opened call — the environment holds what the receiver does, and what
+  -- it captures by name holds nothing (AGORA-395)
+  have hthru : ThruFn P f → callR (setE Γ m.nv (envE c Ec te cs)) (m.nv :: zs ++ cs.map (·.1)) = [] :=
+    fun ht => open_pkg_callR hc hnint hEe hargE hze hkne hcapv (CallT.thru hcT0 (hthr ht).1)
+  refine ⟨hie, hZ, fn, hf, ?_, fun i hil => ?_, ?_, ?_, rfl, rfl, hthru⟩
   · simp [hplen]; omega
   rotate_left
   · -- what the opened call's closures may change is changed by it
@@ -2632,8 +2686,8 @@ theorem cloProgress {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x 
     (hσ : P[σ]? = some sig) (hhd : sig.params.head? = some (.inp, Ec.ty))
     (hcT : CallT P Γ F σ (c :: zs) E Γ1)
     (hnz : ∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) (hcd : MemCodes P m)
-    (hi : Inv m Γ F (.callc x c j zs k)) :
-    ∃ s, Step P m (.callc x c j zs k) s := by
+    (hi : Inv m Γ F (.callc x c j σ zs k)) :
+    ∃ s, Step P m (.callc x c j σ zs k) s := by
   have hlc := callT_recv_live hcT hc
   obtain ⟨o, fs, te, env, cs, hslot⟩ := pkg_slot hi.toMInv hc hlc htc
   obtain ⟨f, fn, hfs, hf, hps, _, _, _, _, _, hnt⟩ := pkg_code hcd hslot hj hσ hhd
@@ -2651,7 +2705,7 @@ theorem cloProgress {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x 
     rw [hf] at hf'; cases hf'
     exact ⟨_, Step.callc hslot hfs hf (by simpa [envMem, Mem.set, upd_ne _ _ hxe] using hmx) hb⟩
   | waitPanic hw => simp [Waits] at hw
-  | reap hrs hrk hnc => exact ⟨_, Step.reap (r := .callc x c j zs k) hrs hrk hnc⟩
+  | reap hrs hrk hnc => exact ⟨_, Step.reap (r := .callc x c j σ zs k) hrs hrk hnc⟩
 
 set_option maxHeartbeats 400000 in
 theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by

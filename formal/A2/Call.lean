@@ -183,7 +183,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
   | letd hks hx _ hr _ _ _ _ _ _ _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hr.domTy (ih hks)
   | letcall hks hx _ hc _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
   | letrec hks hx _ _ _ _ _ hc _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hc.domTy (ih hks)
-  | callc hks hx _ _ _ _ _ _ _ hcT _ _ _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hcT.domTy (ih hks)
+  | callc hks hx _ _ _ _ _ _ _ hcT _ _ _ _ ih => exact fun _ => DomTy.exitScope_fresh hx hcT.domTy (ih hks)
   | callcE hks hx _ _ _ _ _ _ _ _ _ _ _ _ _ hcT _ _ _ _ ih =>
     exact fun _ => DomTy.exitScope_fresh hx (((DomTy.refl _).kill _ _ _).trans hcT.domTy)
       (((DomTy.refl _).kill _ _ _).trans (ih hks))

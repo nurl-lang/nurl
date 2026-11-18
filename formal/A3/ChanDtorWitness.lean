@@ -545,7 +545,7 @@ theorem LetdChain.of_movedFirst {x : Var} : ∀ {s : Stmt}, x ∈ s.movedFirst �
     simp only [Stmt.movedFirst, List.mem_singleton] at h; subst h; exact .inr (.inr ⟨a, b, k, .refl⟩)
   | .skip, h | .seq _ _, h | .letv _ _ _, h | .letcall _ _ _ _, h | .ite _ _ _, h | .while _ _, h
   | .push _ _, h | .free _, h | .scope _ _, h | .rbind _ _, h | .frozen _ _, h | .panic, h
-  | .letrec _ _ _, h | .catchR _ _ _, h | .callc _ _ _ _ _, h | .scopeD _ _ _, h | .edit _ _ _, h
+  | .letrec _ _ _, h | .catchR _ _ _, h | .callc _ _ _ _ _ _, h | .scopeD _ _ _, h | .edit _ _ _, h
   | .withLock _ _ _, h | .scopeL _ _ _ _, h | .insert _ _ _, h | .withElem _ _ _ _, h
   | .callcE _ _ _ _ _, h => by simp [Stmt.movedFirst] at h
 

@@ -1920,13 +1920,13 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (h11 : ∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z)
       (h12 : StmtT P (ξ.under x) (setE Γ1 x (recvRes c Ec E)) F k Δ)
       (h13 : EndOK Δ x)
-      -- the interface is not code that changes elements through a borrow
-      -- (Agora #295; nor is the code that runs: `Implements`)
-      (h14 : ¬ ThruFn P σ)
+      -- (an interface that is code changing elements through a borrow is
+      -- called with no argument that holds views, `CallT`; the code that
+      -- runs is so only where its interface is, `Implements`; AGORA-395)
       -- (A2-drop.3a: as `letcall`'s)
       (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns :=
         by dtor_head) :
-      StmtT P ξ Γ F (.callc x c j zs k) (exitScope x Δ)
+      StmtT P ξ Γ F (.callc x c j σ zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P .none Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
@@ -2320,8 +2320,14 @@ def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (
     (sig.recvMode ≠ .inp → cs = []) ∧
     fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧ fn.rholds ⊆ sig.rholds ∧
     fn.outHolds ⊆ sig.outHolds ∧
-    -- a closure's code changes no elements through a borrow (Agora #295)
-    ¬ ThruFn P f
+    -- a closure's code changes elements through a borrow (Agora #295) only
+    -- where the interface is code that does so too — a call through it then
+    -- passes no argument that holds views, `CallT` — its environment holds no
+    -- views, and it takes it lent (AGORA-395; an environment handed over,
+    -- `StmtT.callcE`, goes to no such code); what it captures by name holds nothing
+    -- (`CapsOK`), so every borrow its body changes through is rooted in its
+    -- own frame or in what the call passed
+    (ThruFn P f → ThruFn P σ ∧ te.holdsView = false ∧ sig.recvMode = .inp)
 
 /-- A package's code implements its interfaces, method by method. -/
 def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var × PMode × Ty)) : Prop :=
@@ -2480,7 +2486,7 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .letrec _ _ s => s.codesOK P
   | .catchR _ _ s => s.codesOK P
   | .unpair _ _ _ s => s.codesOK P
-  | .callc _ _ _ _ s => s.codesOK P
+  | .callc _ _ _ _ _ s => s.codesOK P
   | .letd _ _ r s => r.codeOK P ∧ s.codesOK P
   | .scopeD _ _ s => s.codesOK P
   | .withLock _ _ s => s.codesOK P

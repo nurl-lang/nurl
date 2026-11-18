@@ -576,10 +576,10 @@ def CloCase (P : Prog) : Prop :=
     P[σ]? = some sig → sig.params.head? = some (.inp, Ec.ty) → (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) →
     CallT P Γ F σ (c :: zs) E Γ1 → (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
     StmtT P (ξ.under x) (setE Γ1 x (recvRes c Ec E)) F k Δ →
-    EndOK Δ x → MemCodes P m → Inv m Γ F (.callc x c j zs k) →
-    Step P m (.callc x c j zs k) (.ok m' s') → ¬ IsReap m (.callc x c j zs k) m' s' →
+    EndOK Δ x → MemCodes P m → Inv m Γ F (.callc x c j σ zs k) →
+    Step P m (.callc x c j σ zs k) (.ok m' s') → ¬ IsReap m (.callc x c j σ zs k) m' s' →
     ∃ Γ', StmtT P ξ Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.callc x c j zs k) s' ∧ Frz F m m'
+      Keep Γ Γ' (.callc x c j σ zs k) s' ∧ Frz F m m'
 
 /-- A2-envhand: the case of a call that hands the environment over, proven with
     the store it leaves and the typing of its run-time form (`EnvHand.lean`). -/

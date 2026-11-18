@@ -439,7 +439,7 @@ theorem Stmt.codesOK_rename {P : Prog} (ρ : Var → Var) (s : Stmt) : (s.rename
   | assign x r => simp only [Stmt.rename, Stmt.codesOK, Rhs.codeOK_rename]
   | ite c a b iha ihb => simp only [Stmt.rename, Stmt.codesOK, iha, ihb]
   | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
-  | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
+  | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
   | scopeL _ _ _ _ ih | withElem _ _ _ _ ih | callcE _ _ _ _ _ ih | block _ ih | loop _ ih
   | takeB _ _ _ _ ih =>
     simp only [Stmt.rename, Stmt.codesOK, ih]
@@ -783,7 +783,7 @@ def Stmt.globsAt (GT : GTy) : Stmt → Prop
   | .letrec _ _ s => s.globsAt GT
   | .catchR _ _ s => s.globsAt GT
   | .unpair _ _ _ s => s.globsAt GT
-  | .callc _ _ _ _ s => s.globsAt GT
+  | .callc _ _ _ _ _ s => s.globsAt GT
   | .letd _ _ r s => r.globAt GT ∧ s.globsAt GT
   | .scopeD _ _ s => s.globsAt GT
   | .withLock _ _ s => s.globsAt GT
@@ -811,7 +811,7 @@ theorem Stmt.globsAt_rename {GT : GTy} (ρ : Var → Var) (s : Stmt) : (s.rename
   | assign x r => simp only [Stmt.rename, Stmt.globsAt, Rhs.globAt_rename]
   | ite c a b iha ihb => simp only [Stmt.rename, Stmt.globsAt, iha, ihb]
   | letcall _ _ _ _ ih | «while» _ _ ih | scope _ _ ih | rbind _ _ ih | frozen _ _ ih | letrec _ _ _ ih
-  | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
+  | catchR _ _ _ ih | unpair _ _ _ _ ih | callc _ _ _ _ _ _ ih | scopeD _ _ _ ih | withLock _ _ _ ih
   | scopeL _ _ _ _ ih | withElem _ _ _ _ ih | callcE _ _ _ _ _ ih | block _ ih | loop _ ih
   | takeB _ _ _ _ ih =>
     simp only [Stmt.rename, Stmt.globsAt, ih]

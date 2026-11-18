@@ -1211,8 +1211,10 @@ inductive Stmt where
   | catchR (x : Var) (m0 : Mem) (body : Stmt)             -- run time: a `recover` frame; `m0`
                                                           -- is the caller's store (a ghost)
   | unpair (y x z : Var) (body : Stmt)                    -- a struct moved apart into its fields
-  | callc (x c : Var) (j : Nat) (zs : List Var) (body : Stmt)  -- `: x ( m c zs… )`: a call of
-                                                          -- method `j` of the package `c`
+  | callc (x c : Var) (j σ : Nat) (zs : List Var) (body : Stmt)  -- `: x ( m c zs… )`: a call of
+                                                          -- method `j` of the package `c`, of
+                                                          -- interface `σ` (its type's, known
+                                                          -- statically; AGORA-395)
   | letd (x : Var) (f : Nat) (r : Rhs) (body : Stmt)      -- `: x r` with the destructor `f`
                                                           -- of its type (`% Drop`, A2-drop)
   | scopeD (x : Var) (f : Nat) (body : Stmt)              -- run time: `x` is bound, and its

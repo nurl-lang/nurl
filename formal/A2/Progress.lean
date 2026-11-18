@@ -568,7 +568,7 @@ theorem progress {P : Prog}
       Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty.undtor = .fn ms q → ms[j]? = some σ → P[σ]? = some sig →
       sig.params.head? = some (.inp, Ec.ty) → CallT P Γ F σ (c :: zs) E Γ1 →
       (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
-      MemCodes P m → Inv m Γ F (.callc x c j zs k) → ∃ r, Step P m (.callc x c j zs k) r)
+      MemCodes P m → Inv m Γ F (.callc x c j σ zs k) → ∃ r, Step P m (.callc x c j σ zs k) r)
     (hhand : ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt} {Ec E : Entry}
       {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff} {m : Mem},
       Γ x = none → Γ c = some Ec → Ec.ty.undtor = .fn ms q → canDo Ec.mode .replace → ms[j]? = some σ →

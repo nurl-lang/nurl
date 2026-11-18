@@ -26,7 +26,7 @@ theorem StmtT.mono {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} 
   | panic a0 a1 a2 a3 a4 a5 => intro ξ' hξ; exact StmtT.panic a0 a1 a2 a3 a4 a5
   | letrec a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 ih0 => intro ξ' hξ; exact StmtT.letrec a0 a1 a2 a3 a4 a5 a6 a7 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a9
   | unpair a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 ih0 => intro ξ' hξ; exact StmtT.unpair a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a12 a13 a14 a15 a16 a17
-  | callc a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 ih0 => intro ξ' hξ; exact StmtT.callc a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a12 a13 a14
+  | callc a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 ih0 => intro ξ' hξ; exact StmtT.callc a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a12 a13
   | catchR a0 a1 a2 a3 a4 a5 ih0 => intro ξ' hξ; exact StmtT.catchR a0 a1 a2 a3 a4 a5
   | letd a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 ih0 => intro ξ' hξ; exact StmtT.letd a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a11 a12
   | withLock a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 ih0 => intro ξ' hξ; exact StmtT.withLock a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11
@@ -885,7 +885,7 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
   | letrec hs _ _ _ _ _ _ hc _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hs ih)
   | unpair hs hy _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ ih =>
     exact fun _ _ => DKeep.bind (DKeep.moveOut hy _ _) (DKeep.bind (DKeep.refl _ []) (DKeep.of_src hs ih))
-  | callc hk _ _ _ _ _ _ _ _ hc _ _ _ _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hk ih)
+  | callc hk _ _ _ _ _ _ _ _ hc _ _ _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hk ih)
   | callcE hk _ _ _ _ _ _ _ _ _ _ _ _ _ _ hc _ _ _ _ ih =>
     exact fun _ _ => DKeep.bind (((DKeep.refl _ []).kill _ _ _).trans hc.dkeep fun _ h => h)
       (((DKeep.refl _ []).kill _ _ _).trans (DKeep.of_src hk ih) fun _ h => h)
@@ -1077,7 +1077,7 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
         (compE E a)) z = none := by
       simp [A2.setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, A2.kill, hz]
     exact DStay.bind hx (DStay.moveOut hy _ _) (DStay.bind hz1 (DStay.refl _ []) (src0 hks ih))
-  | callc hk hx _ _ _ _ _ _ _ hc _ _ _ _ _ ih => exact DStay.bind hx hc.dstay (src0 hk ih)
+  | callc hk hx _ _ _ _ _ _ _ hc _ _ _ _ ih => exact DStay.bind hx hc.dstay (src0 hk ih)
   | callcE hk hx _ _ _ _ _ _ _ _ _ _ _ _ _ hc _ _ _ _ ih =>
     exact DStay.bind hx (((DStay.refl _ []).kill _ _ _).trans hc.dstay fun _ h => h)
       (((DStay.refl _ []).kill _ _ _).trans (src0 hk ih) fun _ h => h)
