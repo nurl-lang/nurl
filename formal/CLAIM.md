@@ -188,9 +188,10 @@ the LLVM / C11 memory model rather than redefining it.
     hold (`S.A`) to every borrow's path, and the edit rules then need
     `S.R = []`. Making that path precise at the lift is unsound, for two
     reasons:
-    - a callee cannot see what its parameters hold (`paramE` gives
-      `held = []`), so a slice element derived from a parameter looks
-      local while it views caller memory;
+    - a callee cannot see what its parameters view: `paramE` records
+      none of an argument's memory roots (only symbolic names, for a
+      parameter whose type holds a closure). So a slice element derived
+      from a parameter looks local while it views caller memory;
     - `comp .view .inner = .inner`, so a structural kind does not survive
       `derive`.
 
