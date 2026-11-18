@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #495: `: H e ( vec_at [H] hs 0 ) ( wipe e )` inside a callee
+// map: §2.10 | A2 | rejected | - | AGORA-495: `: H e ( vec_at [H] hs 0 ) ( wipe e )` inside a callee
+// AGORA-495: refused - a struct read out of a parameter's element, handed to a callee clearing its field, makes a drop edge carrying that field's path (main 852f1f66: accepted, heap-use-after-free)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
