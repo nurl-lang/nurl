@@ -68293,7 +68293,11 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                     : s dw ( nurl_str_cat4 ( __bck_rc_arg_show out wn wroot sty ) ` was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` ) `` )
                     ? sind { = out ( bck_view_end_rcp out sid ( bck_field_int rec 3 ) ( __bck_rc_ind_why wn srcs ( bck_field rec 5 ) `may drop or replace what it holds` ) wty ) } {
                         = why dw
-                        = eonly T
+                        // (…elements only, unless the call may move a buffer
+                        // too - `( vec_clear … ) ( vec_shrink_to_fit … )`: a
+                        // `~` loop's cursor over the payload reads that
+                        // buffer; agora #774.)
+                        = eonly ! | ( nurl_sym_has_word g_fn_reallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) )
                     }
                 } {
                     // …or move its buffer: the views of it end (agora #169),
