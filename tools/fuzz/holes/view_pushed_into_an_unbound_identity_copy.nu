@@ -1,3 +1,6 @@
+// view_pushed_into_an_unbound_identity_copy: a view pushed into `( id vs )`, an unbound call as the container, read after its source's block
+// Closed (agora #395): the store lands in the owner an unbound call container lends or an option payload cursor reads (__bck_store_roots, __cursor_src_of), as through a bound borrow (agora #292).
+// main 6005efcb: refused.
 // map: §2.13 | A2 | rejected | - | agora #395: a view pushed into `( id vs )`, an unbound call as the container, read after its source's block
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

@@ -61757,6 +61757,8 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             ~ != 0 ( nurl_str_len vholders ) {
                                 : s vhs ( str_first_word vholders ) = vholders ( str_skip_word vholders )
                                 : i vroot ( nurl_str_to_int vhs )
+                                // (Only in a walk with captures to ask of, g_bck_has_cv.)
+                                ? != 0 g_bck_has_cv { ( __bck_cap_holder_check st vroot vs ( bck_field_int rec 3 ) ) } {}
                                 ( bck_dep_add vroot vs )
                                 // (A field given one, `= . x w v`, lands in the
                                 // binding's own bytes: a struct of views holding
@@ -62374,6 +62376,19 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `a closure cannot give '` dn `' ` ) what ( nurl_str_cat3 `: '` dn ? ( seq ccm `v` ) `' is the closure's own parameter, storage its caller holds` ? prm `' is the closure's own inout parameter` `' is captured by the closure` ) `, and a closure's type does not say what running it stores, so nothing where it runs follows the view: ` )
     : s m2 ( nurl_str_cat4 sn ( nurl_str_cat3 ` can be released while '` dn `' still points into it. Give the view through a function's inout parameter instead, which every call follows (` ) ? prm `make the closure a function with that parameter` ( nurl_str_cat3 `@ keep inout T ` dn ` … → v { … }` ) `), or store a value that owns its data (string_from, slice_to_vec).` )
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat m1 m2 ) )
+}
+
+// …the same question of a holder a store lands in through a borrow — the
+// owner a borrow of a capture, an element or a payload of one, or an
+// unbound call's lend is read out of (__bck_store_owners,
+// __bck_store_roots): a capture or the closure's own parameter given the
+// view as the borrow's bytes are, refused as storing it by name is (agora
+// #395). Asked once per target and line (bck_clo_cap_view_diag's tag).
+@ __bck_cap_holder_check s st i h s vs i line → v {
+    : i r ( bck_path_root h )
+    : s cc ( nurl_sym_get g_bck ( bck_bkey `cc_` ( nurl_str_int r ) ) )
+    ? == 0 ( nurl_str_len cc ) { ^ v } {}
+    ? ? ( seq cc `v` ) ( __srcs_any_capture st vs ) | ( seq vs `*` ) != 0 ( nurl_str_len ( __src_plain vs ) ) { ( bck_clo_cap_view_diag r vs line ) } {}
 }
 
 // Does any source of `srcs` root at a capture of the closure being walked:

@@ -818,11 +818,6 @@ Inside A2 (nurlc bugs):
   time; nurlc now refuses it with a diagnostic.
 - A struct built from an owner and a view of it: #294 (`pair`: the owned
   field is no root of the other's dependencies).
-- A view stored through a borrow that nurlc does not follow to its owner:
-  #395's call as the container and its option payload cursor
-  (`StmtT.editBV`: the stored view's dependencies land on every
-  view-holding root of the borrow's path, `holdThru`, as nurlc's
-  `__bck_store_owners` does; `rules/t292.md`).
 - A changed parameter handed an element of the caller's owner: #391
   (`( f 1 ( vec_at vv 0 ) src )`, and a local bound from the element).
   The call reads as handing the element over (`Stmt.withElem`: the
@@ -842,9 +837,6 @@ Outside A2:
   listed until its shape is checked against that encoding.
 - An `Rc`'s shared state, which is the standard library's (B): #345 and
   #392.
-- A view stored through a borrow inside closure code: #395's store
-  through a borrow of a capture (`StmtT.editBV` types a store through a
-  borrow outside closures).
 - #391's other forms: a changed parameter handed an element of an
   `inout` or borrowed parameter, or a borrow that is not an element (a
   cursor of a whole `Vec`, a field viewer), or a call that also names the
