@@ -420,6 +420,15 @@ import A3
 #print axioms A2.ThruDtorWitness.main_typed
 #print axioms A2.ThruDtorWitness.main_safe
 #print axioms A2.ThruDtorWitness.main_no_leak
+-- drop glue whose struct's own `% Drop` changes elements through a borrow, on
+-- a value that holds no views (A2/ThruGlueWitness.lean)
+#print axioms A2.ThruGlueWitness.implT_thru
+#print axioms A2.ThruGlueWitness.glue2_thru
+#print axioms A2.ThruGlueWitness.glue2_implOK
+#print axioms A2.ThruGlueWitness.prog_ok
+#print axioms A2.ThruGlueWitness.main_typed
+#print axioms A2.ThruGlueWitness.main_safe
+#print axioms A2.ThruGlueWitness.main_no_leak
 -- Agora #632: an enum's drop glue takes the enum owned and the payload out
 #print axioms A2.Dtor.enum_dtor_is_glue
 #print axioms A2.Dtor.enum_glue_body

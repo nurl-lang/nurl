@@ -1611,7 +1611,7 @@ def DtorOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
     moves it into the glue as any `sink` argument, `glueCall_typed`.) -/
 def GlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
   ∃ fn a b, P[f]? = some fn ∧ t = .prod a b ∧ fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
-    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ (ThruFn P f → t.holdsView = false) ∧
     ∃ x z s, fn.body = .unpair 0 x z s ∧ s.pureGlue = true
 
 /-- Agora #632: `f` is the drop glue of the enum `t`: a function that takes
@@ -1625,7 +1625,7 @@ def GlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
 def EnumGlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
   ∃ fn a b sa sb, P[f]? = some fn ∧ t = .sum a b ∧
     fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
-    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ (ThruFn P f → t.holdsView = false) ∧
     fn.body = .ite (.isl 0) sa sb ∧ sa.pureGlue = true ∧ sb.pureGlue = true ∧
     (a.holdsDtor = true → ∃ y g k, sa = .letd y g (.takel 0) k) ∧
     (b.holdsDtor = true → ∃ z g k, sb = .letd z g (.taker 0) k)
@@ -1641,7 +1641,7 @@ def EnumGlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
 def ImplGlueOK (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Prop :=
   ∃ fn w r e, P[f]? = some fn ∧ t.isStruct = true ∧
     fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
-    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ (ThruFn P f → t.holdsView = false) ∧
     (GlueOK P h t ∨ EnumGlueOK P h t) ∧ DtorOK P i (.dtor h t) ∧
     fn.body = .letd w h (.var 0) (.letcall r i [w] (.assign 1 (.expr e)))
 
@@ -1656,7 +1656,7 @@ def ImplGlueOK (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Prop :=
 def ClosureGlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
   ∃ fn ms j σ sig r e, P[f]? = some fn ∧ t = .fn ms .dropd ∧
     fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
-    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ (ThruFn P f → t.holdsView = false) ∧
     ms[j]? = some σ ∧ P[σ]? = some sig ∧ sig.params = [(.sink, .dtor f t)] ∧
     fn.body = .callcE r 0 j [] (.assign 1 (.expr e))
 
@@ -1683,7 +1683,7 @@ def DropFnOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
 theorem sinkOf {P : Prog} {f : Nat} {t : Ty}
     (hg : GlueOK P f t ∨ (∃ h i, ImplGlueOK P f t h i) ∨ EnumGlueOK P f t ∨ ClosureGlueOK P f t) :
     ∃ fn, P[f]? = some fn ∧ fn.params = [(.sink, .dtor f t)] ∧
-      fn.resOwn = false ∧ ¬ ThruFn P f := by
+      fn.resOwn = false ∧ (ThruFn P f → t.holdsView = false) := by
   rcases hg with ⟨fn, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩ |
     ⟨_, _, fn, _, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩ |
     ⟨fn, _, _, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩ |

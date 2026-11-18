@@ -1103,6 +1103,22 @@ def Entry.revive (x : Var) (E : Entry) : Entry :=
     dbind := false
     held := if E.dbind = true then (memDeps E.held).filter (fun d => d.root != x || d.kind == .share) else [] }
 
+/-- An entry of a type that holds no views is unarmed: an armed one's type
+    holds views (`CtxWF.view`). -/
+theorem CtxWF.dbind_of_noView {Γ : Ctx} (hw : CtxWF Γ) {x : Var} {E : Entry} (hx : Γ x = some E)
+    (hv : E.ty.holdsView = false) : E.dbind = false := by
+  cases h : E.dbind
+  · rfl
+  · have := hw.view x E hx h; rw [hv] at this; cases this
+
+/-- **Revived, an entry of a type that holds no views holds nothing**, whatever
+    its `letd` recorded (`HeldUp`): it is unarmed, and `Entry.revive` keeps
+    held dependencies only for an armed entry.  So a call handed it passes no
+    views — `CallT`'s `ThruFn` premise, for the drop a frame's end makes. -/
+theorem callR_revive_noView {Γ : Ctx} (hw : CtxWF Γ) {x : Var} {E : Entry} (hx : Γ x = some E)
+    (hv : E.ty.holdsView = false) : callR (setE Γ x (E.revive x)) [x] = [] := by
+  simp [callR, argE, setE, Entry.revive, hw.dbind_of_noView hx hv, memDeps, roots]
+
 theorem revive_dep {x : Var} {E : Entry} (hos : E.mode.ownSlot = true) {d : Dep}
     (hd : d ∈ (E.revive x).vdeps) :
     E.dbind = true ∧ d ∈ E.held ∧ d.kind.isName = false ∧ (d.root ≠ x ∨ d.kind = .share) := by
@@ -1297,11 +1313,9 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
       obtain ⟨Er, hEr, hlr, hhr, htr, hor, hbr, htv⟩ := hi.names w E hw hl hni d hd b t hk
       by_cases hrx : d.root = x
       · rw [hrx] at hEr; rw [hx] at hEr; cases hEr
-        -- what is captured by name holds no views: it is no binding `letd` made
-        have hdb : Ex.dbind = false := by
-          cases h : Ex.dbind with
-          | false => rfl
-          | true => have := hi.wf.view _ Ex hx h; rw [htr, htv] at this; cases this
+        -- what is captured by name holds no views, so its entry is unarmed
+        -- (`CtxWF.dbind_of_noView`) and `Entry.revive` clears its held list
+        have hdb : Ex.dbind = false := hi.wf.dbind_of_noView hx (by rw [htr, htv])
         refine ⟨Ex.revive x, by rw [hrx]; simp [setE], rfl, by simp [Entry.revive, hdb], htr,
           by simp [Entry.revive, hos], hbr, htv⟩
       · exact ⟨Er, by simp [setE, upd_ne _ _ hrx, hEr], hlr, hhr, htr, hor, hbr, htv⟩
@@ -1863,11 +1877,9 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
         have hrk : d.root ∉ k.spine := fun h => hns ⟨d.root, List.mem_map_of_mem hd, h⟩
         by_cases hrx : d.root = x
         · rw [hrx] at hEr; rw [hx] at hEr; cases hEr
-          -- what is captured by name holds no views: it is no binding `letd` made
-          have hdb : Ex.dbind = false := by
-            cases h : Ex.dbind with
-            | false => rfl
-            | true => have := hi.wf.view x Ex hx h; rw [htr, htv] at this; cases this
+          -- what is captured by name holds no views, so its entry is unarmed
+          -- (`CtxWF.dbind_of_noView`) and `Entry.revive` clears its held list
+          have hdb : Ex.dbind = false := hi.wf.dbind_of_noView hx (by rw [htr, htv])
           exact ⟨Ex.revive x, by rw [hrx]; exact hux, rfl, by simp [Entry.revive, hdb], htr,
             by simp [Entry.revive, hos], hbr, htv⟩
         · have hnr : ¬ HitsSp k.spine Er := fun ⟨r, hr, _⟩ => by
@@ -2056,7 +2068,7 @@ theorem glueCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
     (hfn : P[f]? = some fn)
     (hps : fn.params = [(.sink, E.ty)]) (hown : E.ty.owning = true)
     (hro : fn.resOwn = false) (hxF : x ∉ F) (hnF : m.nv ∉ F) (hpin : EndOK Γ0 x)
-    (hnt : ¬ ThruFn P f) :
+    (hthr : ThruFn P f → callR Γ0 [x] = []) :
     StmtT P ξ Γ0 F (.scope x (.letcall m.nv f [x] .skip)) (exitScope x Γ0) := by
   have hmr : m.st m.nv = none := by
     cases h : m.st m.nv with
@@ -2077,8 +2089,7 @@ theorem glueCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
   have hpost : callPost Γ0 fn [x] = Γp := by
     simp [callPost, hnm, killNames, hps, callPostAux, argE, hx, Γp]
   have hcall : CallT P Γ0 F f [x] (callRes Γ0 fn [x]) Γp := by
-    refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm,
-      fun h => absurd h hnt⟩
+    refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm, hthr⟩
     · have hi0 : i = 0 := by simp [hps] at hi; omega
       subst hi0
       refine ⟨E, by simp [hx], hlive, ?_, fun _ => ⟨by simpa using hxF, by simpa using hmem,
@@ -3456,10 +3467,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         | zero => exact Or.inl rfl
         | succ n => exact Or.inr ⟨n, rfl⟩
       have hvx : Ex.ty.holdsView = false := by rw [hty]; exact hvf
-      have hdb : Ex.dbind = false := by
-        cases h : Ex.dbind with
-        | false => rfl
-        | true => have := hi.wf.view x Ex hx h; rw [hvx] at this; cases this
+      have hdb : Ex.dbind = false := hi.wf.dbind_of_noView hx hvx
       have hself : DSelf Γ x := DSelf.of_dbind fun E hE => by rw [hx] at hE; cases hE; exact hdb
       -- `x` owns its value: one, as it fails the check
       obtain ⟨v, hv⟩ : ∃ v, sl.val = some v := by
@@ -3657,12 +3665,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               -- = false`: an armed entry's type holds views, `CtxWF.view`),
               -- so revived it holds nothing, whatever its `letd` recorded,
               -- and the call passes no views — `CallT`'s `ThruFn` premise)
-              have hv : Ex.ty.holdsView = false := hthr h
-              have hdb : Ex.dbind = false := by
-                cases hd : Ex.dbind
-                · rfl
-                · have := hiS.toMInv.wf.view x Ex hx hd; rw [hv] at this; cases this
-              simp [callR, argE, setE, Entry.revive, hdb, memDeps, roots]
+              exact callR_revive_noView hiS.toMInv.wf hx (hthr h)
           have hNoPinΓ : EndOK Γ x := by
             rcases skip_inv hs with rfl | hw
             · exact hpx
@@ -3699,7 +3702,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             · simp [exitScope, upd_ne _ _ hwx, A2.kill, setE]
           rw [hex] at hsc
           exact hsc
-        · obtain ⟨fn, hfn, hps, hro, hnt⟩ := sinkOf hg
+        · obtain ⟨fn, hfn, hps, hro, hthg⟩ := sinkOf hg
           have hmr : m.st m.nv = none := by
             cases h : m.st m.nv with
             | none => rfl
@@ -3718,7 +3721,15 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           have hsc := glueCall_typed (ξ := ξ) (hiS.toMInv.revive hx hmo hhf hdbv hsl) (by simp [setE])
             (by simp [Entry.revive, hmo]) rfl (fun d hd => (revive_dep hos hd).2.2.1)
             (revive_self hx hos (by rw [htx']; simp) hNoPinΓ.2.2.self) hfn
-            (by rw [hps]; simp [Entry.revive, htx']) (by simp [Entry.revive, htx', Ty.owning]) hro hxF hrF hNoPinΓ' hnt
+            (by rw [hps]; simp [Entry.revive, htx']) (by simp [Entry.revive, htx', Ty.owning]) hro hxF hrF hNoPinΓ'
+            (fun h => by
+              -- (a glue that changes elements through a borrow — one calling a
+              -- through-changing impl — takes apart a type that holds no views,
+              -- so the entry is unarmed (`dbind = false`, `CtxWF.view`), so
+              -- revived it holds nothing, whatever its `letd` recorded, and the
+              -- call passes no views, as for a destructor called lent)
+              exact callR_revive_noView hiS.toMInv.wf hx
+                (by rw [htx']; simpa [Ty.holdsView] using hthg h))
           have hex : exitScope x (setE Γ x (Ex.revive x)) = exitScope x Γ := by
             funext w
             by_cases hwx : w = x
