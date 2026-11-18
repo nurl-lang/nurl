@@ -1,4 +1,6 @@
-// map: §2.5 | A2 | rejected | - | agora #580: `~ x b` over `b`, `( vec_at vv 0 )`, grown through `c`, a second `( vec_at vv 0 )` borrow, in the body
+// loop_over_a_lent_row_reading_a_second_borrow_of_it_runs_clean: as loop_over_a_lent_row_grown_through_a_second_borrow_of_it, c only read
+// AGORA-580 guard: accepted - reading moves nothing
+// map: §2.5 | A2 | runs-clean | - | AGORA-580
 $ `stdlib/core/vec.nu`
 
 @ main → i {
@@ -12,7 +14,7 @@ $ `stdlib/core/vec.nu`
     : ~ i n 0
     ~ x b {
         : ~ i j 0
-        ~ < j 64 { ( vec_push [i] c j ) = j + j 1 }
+        = n + n ( vec_len [i] c )
         = n + n x
     }
     ( nurl_println_int n )

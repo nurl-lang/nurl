@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #842: `( wr o sl )` - sl a slice of o's `??` payload, wr growing that payload then reading sl
+// map: §2.10 | A2 | rejected | - | AGORA-842: `( wr o sl )` - sl a slice of o's `??` payload, wr growing that payload then reading sl
+// AGORA-842 part 2: refused (main 5c4740fa: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 

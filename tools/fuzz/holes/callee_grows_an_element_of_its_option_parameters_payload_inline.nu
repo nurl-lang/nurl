@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #842: a callee pushing into `( vec_at q 0 )` of its option parameter's payload inline - no summary, the caller's element slice dangles
+// map: §2.10 | A2 | rejected | - | AGORA-842: a callee pushing into `( vec_at q 0 )` of its option parameter's payload inline - no summary, the caller's element slice dangles
+// AGORA-842 part 2: refused (main 5c4740fa: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
