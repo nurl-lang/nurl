@@ -1437,7 +1437,7 @@ theorem glue_not_thru : ¬ ThruFn P 4 := by
   | call hf hg ht => simp [P] at hf; subst hf; simp [glue, Stmt.calls] at hg; subst hg; exact dfn_not_thru ht
 
 theorem glue_glueOK : GlueOK P 4 GT :=
-  ⟨glue, DT, .int, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glue_not_thru, 2, 3, _, rfl, rfl⟩
+  ⟨glue, DT, .int, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h glue_not_thru, 2, 3, _, rfl, rfl⟩
 
 theorem gluedrop_ok : DropFnOK P 4 GT := Or.inr (Or.inl glue_glueOK)
 
@@ -1519,7 +1519,7 @@ theorem glueV_not_thru : ¬ ThruFn P 7 := by
   | call hf hg ht => simp [P] at hf; subst hf; simp [glueV, Stmt.calls] at hg; subst hg; exact dfn_not_thru ht
 
 theorem glueV_glueOK : GlueOK P 7 GV :=
-  ⟨glueV, .vec DT, .int, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glueV_not_thru, 2, 3, _, rfl, rfl⟩
+  ⟨glueV, .vec DT, .int, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h glueV_not_thru, 2, 3, _, rfl, rfl⟩
 
 theorem gvdrop_ok : DropFnOK P 7 GV := Or.inr (Or.inl glueV_glueOK)
 
@@ -1602,7 +1602,7 @@ theorem glueS_not_thru : ¬ ThruFn P 8 := by
   | call hf hg ht => simp [P] at hf; subst hf; simp [glueS, Stmt.calls] at hg; subst hg; exact dfn_not_thru ht
 
 theorem glueS_glueOK : GlueOK P 8 GS :=
-  ⟨glueS, DT, .slice .int, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glueS_not_thru, 2, 3, _, rfl, rfl⟩
+  ⟨glueS, DT, .slice .int, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h glueS_not_thru, 2, 3, _, rfl, rfl⟩
 
 theorem gsdrop_ok : DropFnOK P 8 GS := Or.inr (Or.inl glueS_glueOK)
 
@@ -1722,7 +1722,7 @@ theorem glue2_not_thru : ¬ ThruFn P 6 := by
     · exact impl_not_thru ht
 
 theorem glue2_implOK : ImplGlueOK P 6 GT 4 5 :=
-  ⟨glue2, 2, 3, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glue2_not_thru,
+  ⟨glue2, 2, 3, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h glue2_not_thru,
     Or.inl glue_glueOK, impl_dtorOK, rfl⟩
 
 theorem impldrop_ok : DropFnOK P 6 GT := Or.inr (Or.inr (Or.inl ⟨4, 5, glue2_implOK⟩))
@@ -1817,7 +1817,7 @@ theorem ofn_not_thru : ¬ ThruFn P 2 := by
   | call hf hg ht => simp [P] at hf; subst hf; simp [ofn, Stmt.calls] at hg; subst hg; exact dfn_not_thru ht
 
 theorem ofn_enumOK : EnumGlueOK P 2 OT :=
-  ⟨ofn, DT, .int, _, _, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, ofn_not_thru, rfl, rfl, rfl,
+  ⟨ofn, DT, .int, _, _, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h ofn_not_thru, rfl, rfl, rfl,
     fun _ => ⟨2, 0, _, rfl⟩, fun h => absurd h (by decide)⟩
 
 theorem odrop_ok : DropFnOK P 2 OT := Or.inr (Or.inr (Or.inr (Or.inl ofn_enumOK)))
@@ -1964,7 +1964,7 @@ theorem gfn_not_thru : ¬ ThruFn P 3 := by
   | call hf hg ht => simp [P] at hf; subst hf; simp [gfn, Stmt.calls] at hg; subst hg; exact glue_not_thru ht
 
 theorem gfn_enumOK : EnumGlueOK P 3 ST :=
-  ⟨gfn, AT, .int, _, _, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, gfn_not_thru, rfl, rfl, rfl,
+  ⟨gfn, AT, .int, _, _, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h gfn_not_thru, rfl, rfl, rfl,
     fun _ => ⟨2, 4, _, rfl⟩, fun h => absurd h (by decide)⟩
 
 theorem gdrop_ok : DropFnOK P 3 ST := Or.inr (Or.inr (Or.inr (Or.inl gfn_enumOK)))
@@ -2113,7 +2113,7 @@ theorem ofnV_not_thru : ¬ ThruFn P 9 := by
   | call hf hg ht => simp [P] at hf; subst hf; simp [ofnV, Stmt.calls] at hg; subst hg; exact dfn_not_thru ht
 
 theorem ofnV_enumOK : EnumGlueOK P 9 OV :=
-  ⟨ofnV, DT, .slice .int, _, _, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, ofnV_not_thru, rfl, rfl, rfl,
+  ⟨ofnV, DT, .slice .int, _, _, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h ofnV_not_thru, rfl, rfl, rfl,
     fun _ => ⟨2, 0, _, rfl⟩, fun h => absurd h (by decide)⟩
 
 theorem ovdrop_ok : DropFnOK P 9 OV := Or.inr (Or.inr (Or.inr (Or.inl ofnV_enumOK)))
@@ -2343,7 +2343,7 @@ theorem glueS2_not_thru : ¬ ThruFn P 11 := by
     · exact implS_not_thru ht
 
 theorem glueS2_implOK : ImplGlueOK P 11 GS 8 10 :=
-  ⟨glueS2, 2, 3, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glueS2_not_thru,
+  ⟨glueS2, 2, 3, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h glueS2_not_thru,
     Or.inl glueS_glueOK, implS_dtorOK, rfl⟩
 
 theorem gs2drop_ok : DropFnOK P 11 GS := Or.inr (Or.inr (Or.inl ⟨8, 10, glueS2_implOK⟩))
@@ -2466,7 +2466,7 @@ theorem ofnR_not_thru : ¬ ThruFn P 12 := by
   | call hf hg ht => simp [P] at hf; subst hf; simp [ofnR, Stmt.calls] at hg; subst hg; exact dfn_not_thru ht
 
 theorem ofnR_enumOK : EnumGlueOK P 12 RT :=
-  ⟨ofnR, .int, DT, _, _, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, ofnR_not_thru, rfl, rfl, rfl,
+  ⟨ofnR, .int, DT, _, _, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h ofnR_not_thru, rfl, rfl, rfl,
     fun h => absurd h (by decide), fun _ => ⟨2, 0, _, rfl⟩⟩
 
 theorem rdrop_ok : DropFnOK P 12 RT := Or.inr (Or.inr (Or.inr (Or.inl ofnR_enumOK)))

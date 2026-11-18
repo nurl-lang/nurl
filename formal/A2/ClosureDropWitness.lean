@@ -113,7 +113,7 @@ theorem drop_ok : DropFnOK Pc 0 T := Or.inl ⟨dtor_ok, by decide⟩
     `CDT`, and its body is the call of method 0, whose interface (function 2
     again) takes the receiver owned; then it sets its integer result. -/
 theorem glue_calls_drop : ClosureGlueOK Pc 2 CT :=
-  ⟨glue, [2], 0, 2, glue, 2, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glue_not_thru, rfl, rfl, rfl, rfl⟩
+  ⟨glue, [2], 0, 2, glue, 2, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h glue_not_thru, rfl, rfl, rfl, rfl⟩
 
 theorem cdrop_ok : DropFnOK Pc 2 CT := Or.inr (Or.inr (Or.inr (Or.inr glue_calls_drop)))
 
@@ -498,7 +498,7 @@ theorem drop_ok2 : DropFnOK Pd 0 T := Or.inl ⟨dtor_ok2, by decide⟩
     `CDT2`, and its body is the call of method 0, whose interface (function 2
     again) takes the receiver owned; then it sets its integer result. -/
 theorem glue_calls_drop2 : ClosureGlueOK Pd 2 CT2 :=
-  ⟨glueD, [2, 4], 0, 2, glueD, 2, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glue_not_thru2, rfl, rfl, rfl, rfl⟩
+  ⟨glueD, [2, 4], 0, 2, glueD, 2, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h glue_not_thru2, rfl, rfl, rfl, rfl⟩
 
 theorem cdrop_ok2 : DropFnOK Pd 2 CT2 := Or.inr (Or.inr (Or.inr (Or.inr glue_calls_drop2)))
 

@@ -2056,7 +2056,7 @@ theorem glueCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
     (hfn : P[f]? = some fn)
     (hps : fn.params = [(.sink, E.ty)]) (hown : E.ty.owning = true)
     (hro : fn.resOwn = false) (hxF : x ∉ F) (hnF : m.nv ∉ F) (hpin : EndOK Γ0 x)
-    (hnt : ¬ ThruFn P f) :
+    (hthr : ThruFn P f → callR Γ0 [x] = []) :
     StmtT P ξ Γ0 F (.scope x (.letcall m.nv f [x] .skip)) (exitScope x Γ0) := by
   have hmr : m.st m.nv = none := by
     cases h : m.st m.nv with
@@ -2077,8 +2077,7 @@ theorem glueCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
   have hpost : callPost Γ0 fn [x] = Γp := by
     simp [callPost, hnm, killNames, hps, callPostAux, argE, hx, Γp]
   have hcall : CallT P Γ0 F f [x] (callRes Γ0 fn [x]) Γp := by
-    refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm,
-      fun h => absurd h hnt⟩
+    refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm, hthr⟩
     · have hi0 : i = 0 := by simp [hps] at hi; omega
       subst hi0
       refine ⟨E, by simp [hx], hlive, ?_, fun _ => ⟨by simpa using hxF, by simpa using hmem,
@@ -3699,7 +3698,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             · simp [exitScope, upd_ne _ _ hwx, A2.kill, setE]
           rw [hex] at hsc
           exact hsc
-        · obtain ⟨fn, hfn, hps, hro, hnt⟩ := sinkOf hg
+        · obtain ⟨fn, hfn, hps, hro, hthg⟩ := sinkOf hg
           have hmr : m.st m.nv = none := by
             cases h : m.st m.nv with
             | none => rfl
@@ -3718,7 +3717,19 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           have hsc := glueCall_typed (ξ := ξ) (hiS.toMInv.revive hx hmo hhf hdbv hsl) (by simp [setE])
             (by simp [Entry.revive, hmo]) rfl (fun d hd => (revive_dep hos hd).2.2.1)
             (revive_self hx hos (by rw [htx']; simp) hNoPinΓ.2.2.self) hfn
-            (by rw [hps]; simp [Entry.revive, htx']) (by simp [Entry.revive, htx', Ty.owning]) hro hxF hrF hNoPinΓ' hnt
+            (by rw [hps]; simp [Entry.revive, htx']) (by simp [Entry.revive, htx', Ty.owning]) hro hxF hrF hNoPinΓ'
+            (fun h => by
+              -- (a glue that changes elements through a borrow — one calling a
+              -- through-changing impl — takes apart a value whose type holds no
+              -- views: no `letd` that records views made it, `CtxWF.view`, so
+              -- revived it holds nothing and the call passes no views, as for a
+              -- destructor called lent)
+              have hv : Ex.ty.holdsView = false := by rw [htx']; simpa [Ty.holdsView] using hthg h
+              have hdb : Ex.dbind = false := by
+                cases hd : Ex.dbind
+                · rfl
+                · have := hiS.toMInv.wf.view x Ex hx hd; rw [hv] at this; cases this
+              simp [callR, argE, setE, Entry.revive, hdb, memDeps, roots])
           have hex : exitScope x (setE Γ x (Ex.revive x)) = exitScope x Γ := by
             funext w
             by_cases hwx : w = x
