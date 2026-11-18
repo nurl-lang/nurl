@@ -120,7 +120,8 @@ theorem cdrop_ok : DropFnOK Pc 2 CT := Or.inr (Or.inr (Or.inr (Or.inr glue_calls
 /-- The code implements the drop method's interface: it takes the
     environment owned where the interface takes the receiver owned. -/
 theorem code_impl : Implements Pc 1 DT [] 2 :=
-  ⟨code, glue, rfl, rfl, rfl, fun _ => rfl, rfl, rfl, fun _ h => h, fun _ h => h, fun _ h => h, code_not_thru⟩
+  ⟨code, glue, rfl, rfl, rfl, fun _ => rfl, rfl, rfl, fun _ h => h, fun _ h => h, fun _ h => h,
+    fun ht => absurd ht code_not_thru⟩
 
 theorem pack_codes : CodeOK Pc [1] DT [2] [] := by
   refine ⟨rfl, fun j f σ hf hσ => ?_⟩
@@ -504,13 +505,14 @@ theorem cdrop_ok2 : DropFnOK Pd 2 CT2 := Or.inr (Or.inr (Or.inr (Or.inr glue_cal
 /-- The code implements the drop method's interface: it takes the
     environment owned where the interface takes the receiver owned. -/
 theorem code_impl2 : Implements Pd 1 DT [] 2 :=
-  ⟨code, glueD, rfl, rfl, rfl, fun _ => rfl, rfl, rfl, fun _ h => h, fun _ h => h, fun _ h => h, code_not_thru2⟩
+  ⟨code, glueD, rfl, rfl, rfl, fun _ => rfl, rfl, rfl, fun _ h => h, fun _ h => h, fun _ h => h,
+    fun ht => absurd ht code_not_thru2⟩
 
 /-- The method's code implements its interface: it takes the environment
     lent where the interface takes the receiver lent, at the binding's type. -/
 theorem call_impl2 : Implements Pd 3 DT [] 4 :=
   ⟨callCode, callSig, rfl, rfl, rfl, fun h => absurd rfl h, rfl, rfl, fun _ h => h, fun _ h => h, fun _ h => h,
-    callCode_not_thru2⟩
+    fun ht => absurd ht callCode_not_thru2⟩
 
 theorem pack_codes2 : CodeOK Pd [1, 3] DT [2, 4] [] := by
   refine ⟨rfl, fun j f σ hf hσ => ?_⟩
@@ -761,7 +763,7 @@ theorem prog_codes2 : ProgCodes Pd := by
 
 def main2 : Stmt :=
   .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2))
-    (.letd 2 0 (.pair 0 1) (.letd 3 2 (.pack [1, 3] DT [2, 4] 2 []) (.callc 4 3 1 [] .skip))))
+    (.letd 2 0 (.pair 0 1) (.letd 3 2 (.pack [1, 3] DT [2, 4] 2 []) (.callc 4 3 1 4 [] .skip))))
 
 /-- A call that takes only the receiver, lent, of a receiver that names
     nothing (`A3`'s `callT_recv`, which this file cannot import). -/
@@ -832,10 +834,10 @@ theorem main2_typed : ∃ Δ, StmtT Pd ξ (fun _ => none) [] main2 Δ := by
     (k := .skip) (Ec := ECa) (E := callRes K6 callSig [3]) (ms := [2, 4]) (q := .dropd) (σ := 4)
     (sig := callSig) rfl (by simp [K6, K5, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) h63
     (by rw [hECe]; rfl) rfl rfl (by rw [hps]; rfl) (fun o ho => by simp [callSig] at ho) hcT
-    (fun _ h => by cases h) StmtT.skip (hK7.endOK _) callSig_not_thru2
+    (fun _ h => by cases h) StmtT.skip (hK7.endOK _)
     (fun ho => by simp [callSig] at ho)
   have hg := StmtT.letd (ξ := .none) (P := Pd) (Γ := K3) (Γ1 := K5) (F := []) (x := 3) (f := 2)
-    (r := .pack [1, 3] DT [2, 4] 2 []) (s := .callc 4 3 1 [] .skip) (E := EC0) (t := CT2) (H := EC0.held)
+    (r := .pack [1, 3] DT [2, 4] 2 []) (s := .callc 4 3 1 4 [] .skip) (E := EC0) (t := CT2) (H := EC0.held)
     (τ := CDT2) rfl
     (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hpack rfl
     (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn cdrop_ok2) (HeldUp.refl _ _) hcall.ofNone

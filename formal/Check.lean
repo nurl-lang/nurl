@@ -405,6 +405,13 @@ import A3
 -- Agora #651: ... and such a closure is called through its `letd` binding, lent, then dropped by its glue
 #print axioms A2.ClosureDropWitness.main2_typed
 #print axioms A2.ClosureDropWitness.main2_safe
+-- AGORA-395: a closure whose code changes elements through a borrow of its own local, called
+-- through its package: the code implements a through-changing interface (A2/ThruClosureWitness.lean)
+#print axioms A2.ThruClosureWitness.code_impl
+#print axioms A2.ThruClosureWitness.prog_ok
+#print axioms A2.ThruClosureWitness.main_typed
+#print axioms A2.ThruClosureWitness.main_safe
+#print axioms A2.ThruClosureWitness.main_no_leak
 -- Agora #632: an enum's drop glue takes the enum owned and the payload out
 #print axioms A2.Dtor.enum_dtor_is_glue
 #print axioms A2.Dtor.enum_glue_body

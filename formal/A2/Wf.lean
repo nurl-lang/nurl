@@ -1135,7 +1135,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hm2⟩ := ih r hr E1 (by simp [A2.setE, upd_ne _ _ hrx, h1])
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2, hm1]⟩
-  | @callc _ Γ Γ1 Δ F x c j zs k Ec E0 ms q σ sig _ hx hxF _ _ _ _ _ _ hcT _ _ _ _ _ ih =>
+  | @callc _ Γ Γ1 Δ F x c j zs k Ec E0 ms q σ sig _ hx hxF _ _ _ _ _ _ hcT _ _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E1, h1, hm1⟩ := hcT.domMode.get h
@@ -1382,7 +1382,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       (fun _ _ _ d hd _ => by rw [hv1] at hd; exact hroot d hd)
       (fun h => h) (fun h => by simp only [Entry.arm, Ty.dtorViews, Bool.and_eq_true] at h; exact h.2)
       )).exitScope x hpx.2.2
-  | @callc _ Γ Γ1 Δ F x c j zs k Ec E0 ms q σ sig _ hx _ hc htc _ _ _ _ hcT _ _ hpx _ _ ih =>
+  | @callc _ Γ Γ1 Δ F x c j zs k Ec E0 ms q σ sig _ hx _ hc htc _ _ _ _ hcT _ _ hpx _ ih =>
     intro h
     obtain ⟨hw1, hdm, hE⟩ := hcT.wf hP h
     have hx1 : Γ1 x = none := by have := hdm.1 x; rw [hx] at this; cases h' : Γ1 x <;> simp_all

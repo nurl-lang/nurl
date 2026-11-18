@@ -1432,7 +1432,8 @@ theorem spawn_not_any {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) {
     names is the environment's ... -/
 theorem _root_.A2.Implements.env_recv {P : Prog} {f : Nat} {te : Ty} {cs : List (Var × PMode × Ty)}
     {σ : Nat} (h : Implements P f te cs σ) : ∃ fn sig, P[f]? = some fn ∧ P[σ]? = some sig ∧
-      fn.params.head? = some (sig.recvMode, te) ∧ ¬ ThruFn P f := by
+      fn.params.head? = some (sig.recvMode, te) ∧
+      (ThruFn P f → ThruFn P σ ∧ te.holdsView = false ∧ sig.recvMode = .inp) := by
   obtain ⟨fn, sig, hf, hσ, hps, _, _, _, _, _, _, hnt⟩ := h
   exact ⟨fn, sig, hf, hσ, by rw [hps]; rfl, hnt⟩
 
@@ -1442,10 +1443,10 @@ theorem _root_.A2.Implements.env_recv {P : Prog} {f : Nat} {te : Ty} {cs : List 
 theorem _root_.A2.Implements.env_lent {P : Prog} {f : Nat} {te : Ty} {cs : List (Var × PMode × Ty)}
     {σ : Nat} (h : Implements P f te cs σ) {sig : Fn} (hσ : P[σ]? = some sig)
     (hr : sig.recvMode = .inp) : ∃ fn, P[f]? = some fn ∧ fn.params.head? = some (.inp, te) ∧
-      ¬ ThruFn P f := by
+      (ThruFn P f → ThruFn P σ ∧ te.holdsView = false) := by
   obtain ⟨fn, sig', hf, hσ', hhd, hnt⟩ := h.env_recv
   rw [hσ] at hσ'; cases hσ'
-  exact ⟨fn, hf, by rw [hhd, hr], hnt⟩
+  exact ⟨fn, hf, by rw [hhd, hr], fun ht => ⟨(hnt ht).1, (hnt ht).2.1⟩⟩
 
 /-- h339 (`closure_in_an_arc_captures_a_library_handle`): a closure whose
     environment may hold a library handle (a cell share, A3.5) is not Sync:
@@ -1558,7 +1559,7 @@ theorem _root_.A2.StmtT.callc_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c 
     (hn : ∀ d ∈ Ec.vdeps, d.kind.isName = false)
     (hk : StmtT P (ξ.under x) (setE Γ x (recvRes c Ec (callRes Γ sig [c]))) F k Δ) (hend : EndOK Δ x)
     (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
-    StmtT P ξ Γ F (.callc x c j [] k) (exitScope x Δ) := by
+    StmtT P ξ Γ F (.callc x c j σ [] k) (exitScope x Δ) := by
   have hcT := callT_recv (F := F) hσ (by rw [hps, hty]) hc hl hn hnt
   have hmut : mutNames Γ [c] = [] := by
     have : nameDeps (argE Γ c).vdeps = [] := by
@@ -1568,7 +1569,7 @@ theorem _root_.A2.StmtT.callc_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c 
   have hpost := callPost_recv (Γ := Γ) (c := c) hps hmut
   rw [hpost] at hcT
   exact StmtT.callc hks hx hxF hc (by rw [hty]; rfl) hj hσ (by rw [hps, hty]; rfl) hout hcT (fun _ h => by cases h) hk hend
-    hnt hdk
+    hdk
 
 /-- What `arc_get` lends of an owned share names nothing by name: a call
     through it is `callc_recv`'s. -/
@@ -1592,7 +1593,7 @@ theorem _root_.A2.StmtT.arcCall {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g x :
           sig [g]))) F k Δ)
     (hend : EndOK Δ x) (hendg : EndOK (exitScope x Δ) g)
     (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
-    StmtT P ξ Γ F (.letv g (.arcGet a) (.callc x g j [] k)) (exitScope g (exitScope x Δ)) :=
+    StmtT P ξ Γ F (.letv g (.arcGet a) (.callc x g j σ [] k)) (exitScope g (exitScope x Δ)) :=
   StmtT.letv hks hg hgF (arcGet_sync ha rfl rfl)
     (StmtT.callc_recv hks (by simp [setE, upd_ne _ _ hxg, hx]) hxF (upd_same _ _ _) rfl rfl hj hσ hps hout
       hnt getE_own_noName hk hend hdk) hendg
@@ -1679,8 +1680,8 @@ theorem _root_.A2.StmtT.callcUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {c c' x 
     (hc : Γ c = some Ec) (hl : Ec.live = true) (hm : Ec.mode = .bor) (hty : Ec.ty = .fn ms q)
     (hle : q.Le q') (hks : k.src = true) (hc' : Γ c' = none) (hc'F : c' ∉ F)
     (hcall : StmtT P (ξ.under c') (setE Γ c' { Ec with ty := .fn ms q', dtor := false, dbind := false }) F
-      (.callc x c' j zs k) Δ) (hend : EndOK Δ c') :
-    StmtT P ξ Γ F (.letv c' (.var c) (.callc x c' j zs k)) (exitScope c' Δ) :=
+      (.callc x c' j σ zs k) Δ) (hend : EndOK Δ c') :
+    StmtT P ξ Γ F (.letv c' (.var c) (.callc x c' j σ zs k)) (exitScope c' Δ) :=
   StmtT.letv hks hc' hc'F (RhsT.copyUp hc hl hm hty hle) hcall hend
 
 /-- **h342's fix through an interface declared at `any`**: the Sync handler an
@@ -1705,7 +1706,7 @@ theorem _root_.A2.StmtT.arcCallUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g g
               ty := .fn ms q, dtor := false, dbind := false }) sig [g']))) F k Δ)
     (hend : EndOK Δ x) (hendg' : EndOK (exitScope x Δ) g') (hendg : EndOK (exitScope g' (exitScope x Δ)) g)
     (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
-    StmtT P ξ Γ F (.letv g (.arcGet a) (.letv g' (.var g) (.callc x g' j [] k)))
+    StmtT P ξ Γ F (.letv g (.arcGet a) (.letv g' (.var g) (.callc x g' j σ [] k)))
       (exitScope g (exitScope g' (exitScope x Δ))) := by
   refine StmtT.letv hks hg hgF (arcGet_sync ha rfl rfl) ?_ hendg
   refine StmtT.callcUp (upd_same _ _ _) rfl rfl rfl hle hks (by simp [setE, upd_ne _ _ hgg, hg'])
@@ -1816,10 +1817,10 @@ theorem TraitBound.fits_sendSync {te : Ty} {cs : List (Var × PMode × Ty)} :
     (or, Agora #651, a destructor type over one: a closure of the dropping
     class), whose method `j` is an interface that takes it at its type. -/
 theorem _root_.A2.StmtT.callc_recv_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
-    {zs : List Var} {k : Stmt} {Ec : Entry} (h : StmtT P ξ Γ F (.callc x c j zs k) Δ) (hc : Γ c = some Ec) :
+    {zs : List Var} {k : Stmt} {Ec : Entry} (h : StmtT P ξ Γ F (.callc x c j σ zs k) Δ) (hc : Γ c = some Ec) :
     ∃ ms q σ sig, Ec.ty.undtor = .fn ms q ∧ ms[j]? = some σ ∧ P[σ]? = some sig ∧
       sig.params.head? = some (.inp, Ec.ty) := by
-  generalize hs : Stmt.callc x c j zs k = s at h
+  generalize hs : Stmt.callc x c j σ zs k = s at h
   induction h generalizing Ec with
   | callc _ _ _ hc' hty hj hσ hhd =>
     cases hs
@@ -1838,7 +1839,7 @@ theorem _root_.A2.StmtT.callc_recv_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x
     is `b.cross`. -/
 theorem _root_.A2.StmtT.callc_bound {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
     {zs : List Var} {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} {b : TraitBound}
-    (h : StmtT P ξ Γ F (.callc x c j zs k) Δ) (hc : Γ c = some Ec) (hty : Ec.ty.undtor = .fn ms q)
+    (h : StmtT P ξ Γ F (.callc x c j σ zs k) Δ) (hc : Γ c = some Ec) (hty : Ec.ty.undtor = .fn ms q)
     (hb : TraitAt P ms b) : Ec.ty = .fn ms q ∧ q = b.cross := by
   -- (Agora #651: a receiver bound at a destructor type over the trait's
   -- object type is no receiver of the trait's methods: the interface takes
@@ -1859,19 +1860,20 @@ theorem _root_.A2.StmtT.callc_bound {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c
 theorem callc_not_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
     {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} {b : TraitBound} (hb : TraitAt P ms b)
     (hc : Γ c = some Ec) (hty : Ec.ty.undtor = .fn ms q) (hq : q ≠ b.cross) :
-    ¬ StmtT P ξ Γ F (.callc x c j zs k) Δ :=
+    ¬ StmtT P ξ Γ F (.callc x c j σ zs k) Δ :=
   fun h => hq (h.callc_bound hc hty hb).2
 
 /-- Every method's code of a package takes the environment as its receiver,
-    and changes nothing through a borrow (`Implements.env_recv`, method by
-    method): an impl's code takes its box, whichever method a call picks
+    and changes elements through a borrow only lent, of an environment that
+    holds no views (`Implements.env_recv`, method by method; AGORA-395): an impl's code takes its box, whichever method a call picks
     (lent, or, A2-envhand, handed over where its interface takes it `inout`). -/
 theorem _root_.A2.CodeOK.env_recv {P : Prog} {fs : List Nat} {te : Ty} {ms : List Nat}
     {cs : List (Var × PMode × Ty)} (h : CodeOK P fs te ms cs) {j f : Nat} (hf : fs[j]? = some f) :
-    ∃ fn pm, P[f]? = some fn ∧ fn.params.head? = some (pm, te) ∧ ¬ ThruFn P f := by
+    ∃ fn pm, P[f]? = some fn ∧ fn.params.head? = some (pm, te) ∧
+      (ThruFn P f → te.holdsView = false ∧ pm = .inp) := by
   have hj : j < ms.length := h.1 ▸ (List.getElem?_eq_some_iff.mp hf).1
   obtain ⟨fn, sig, hfn, _, hhd, hnt⟩ := (h.2 j f ms[j] hf (List.getElem?_eq_getElem hj)).env_recv
-  exact ⟨fn, sig.recvMode, hfn, hhd, hnt⟩
+  exact ⟨fn, sig.recvMode, hfn, hhd, fun ht => (hnt ht).2⟩
 
 /-- An impl's code fixes the type of the box it is packed with: its first
     method takes it, as its receiver. -/
@@ -2045,7 +2047,7 @@ theorem spawn_dyn_none {P : Prog} {spawn : Nat → Bool} (hS : SpawnOK P spawn) 
     (hsp : spawn f = true) {fn : Fn} (hf : P[f]? = some fn) {ms : List Nat} (hb : TraitAt P ms .none)
     {pm : PMode} {q : Cross} (hin : (pm, Ty.fn ms q) ∈ fn.params) {Γ Δ : Ctx} {F : List Var} {x c : Var}
     {j : Nat} {zs : List Var} {k : Stmt} {Ec : Entry} (hc : Γ c = some Ec) (hty : Ec.ty.undtor = .fn ms q) :
-    ¬ StmtT P ξ Γ F (.callc x c j zs k) Δ := by
+    ¬ StmtT P ξ Γ F (.callc x c j σ zs k) Δ := by
   refine callc_not_at hb hc hty fun hq => ?_
   rw [hq] at hin
   exact spawn_not_any hS hsp hf hin
@@ -2160,7 +2162,7 @@ theorem TraitBound.Holds.arc {t : Ty} (h : TraitBound.sendSync.Holds t) :
 /-- A call through a package hands its receiver to an interface that takes it
     `inp` ... -/
 theorem _root_.A2.StmtT.callc_inp {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
-    {zs : List Var} {k : Stmt} {Ec : Entry} (h : StmtT P ξ Γ F (.callc x c j zs k) Δ) (hc : Γ c = some Ec) :
+    {zs : List Var} {k : Stmt} {Ec : Entry} (h : StmtT P ξ Γ F (.callc x c j σ zs k) Δ) (hc : Γ c = some Ec) :
     ∃ ms q σ sig, Ec.ty.undtor = .fn ms q ∧ ms[j]? = some σ ∧ P[σ]? = some sig ∧
       ∃ t, sig.params.head? = some (.inp, t) := by
   obtain ⟨ms, q, σ, sig, hty, hj, hσ, hhd⟩ := h.callc_recv_at hc
@@ -2173,7 +2175,7 @@ theorem _root_.A2.StmtT.callc_inp {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c :
 theorem callc_not_inout {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var}
     {k : Stmt} {Ec : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} (hc : Γ c = some Ec)
     (hty : Ec.ty.undtor = .fn ms q) (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) {b : Eff} {t : Ty}
-    (hio : sig.params.head? = some (.inout b, t)) : ¬ StmtT P ξ Γ F (.callc x c j zs k) Δ := by
+    (hio : sig.params.head? = some (.inout b, t)) : ¬ StmtT P ξ Γ F (.callc x c j σ zs k) Δ := by
   intro h
   obtain ⟨ms', q', σ', sig', hty', hj', hσ', t', hhd⟩ := h.callc_inp hc
   rw [hty] at hty'; cases hty'
@@ -2459,7 +2461,7 @@ theorem accP_noThru (f : Nat) : ¬ ThruFn accP f := by
     interface's bound — the environment handed over, which it changes. -/
 theorem accum_impl : Implements accP 1 accEnv [] 0 :=
   ⟨accCode, accSig, rfl, rfl, by simp [Fn.recvMode, accCode, accSig], fun _ => rfl, rfl, rfl,
-    List.Subset.refl _, List.Subset.refl _, List.Subset.refl _, accP_noThru 1⟩
+    List.Subset.refl _, List.Subset.refl _, List.Subset.refl _, fun ht => absurd ht (accP_noThru 1)⟩
 
 theorem accum_codes : CodeOK accP [1] accEnv [0] [] := by
   refine ⟨rfl, fun j f σ hf hσ => ?_⟩

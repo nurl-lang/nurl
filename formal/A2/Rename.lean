@@ -3995,9 +3995,12 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
           · exact key _ hry (Or.inr rfl)) hH'
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) hEW, hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe) (not_mem_assigns_rename h.inj hna)
-  | @callc _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk hpe hnσ hdk ih =>
+  | @callc _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk hpe hdk ih =>
     intro _ hab hw hn hT
-    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT (fun ht => absurd ht hnσ)
+    -- (the interface is a function the statement calls: a call through one
+    -- that changes elements through a borrow is a call of such a function,
+    -- AGORA-395)
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT (fun ht => hT (.inr ⟨σ, by simp [Stmt.calls], ht⟩))
     obtain ⟨hn1, hEn, _⟩ := hcT.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hcT hab
     obtain ⟨hw1, hdm, hE⟩ := hcT.wf hP hw
@@ -4024,7 +4027,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (by rw [liftE_ty' h hab hc]; exact hhd) hout hc'
       (fun z hz d hd hb hdr => ?_)
       (StmtT.weakenIn ⟨PW.setE hpw (recvRes_lift h hab hc hmo hdb0 x (hE' x)), hwc, hnc⟩ tk)
-      (EndOK.lift h abk hbx hpe) hnσ (fun ho hd => dtorHead_rename h.inj (hdk ho hd))
+      (EndOK.lift h abk hbx hpe) (fun ho hd => dtorHead_rename h.inj (hdk ho hd))
     -- no argument is a binding the receiver may change: in the callee, nor
     -- where the call places it (what the arguments held names the frame; a
     -- symbolic name's image names an `inout` argument the receiver names)

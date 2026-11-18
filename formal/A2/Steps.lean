@@ -3802,7 +3802,7 @@ theorem Step.noDead {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r)
   | reap _ hk _ => exact fun hn => absurd rfl (hn _ _ hk)
   | letv _ he | letd _ he | assign _ he _ _ => exact fun hn => (he.noDead hn).of_blk rfl
   | letcall _ _ hb => exact fun hn => (hn.of_blk (BindParams.blk hb)).of_blk rfl
-  | @callc m1 _ _ _ _ _ _ _ _ _ env _ _ _ _ _ _ _ hb =>
+  | @callc m1 _ _ _ _ _ _ _ _ _ _ env _ _ _ _ _ _ _ hb =>
     exact fun hn => ((hn.of_blk (m' := envMem m env) rfl).of_blk (BindParams.blk hb)).of_blk rfl
   | push ht _ _ _ | pushRealloc ht _ _ _ | insert _ ht _ _ _ | editPush ht _ _ | editPushRealloc ht _ _
     | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ => exact fun hn => (hn.of_blk (TakeVal.blk ht)).of_blk rfl
@@ -3868,7 +3868,7 @@ theorem Step.noOrphan {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
   | reap _ hk _ => exact fun hn => absurd ⟨_, _, _, _, _, hk⟩ hn
   | letv _ he | letd _ he | assign _ he _ _ => exact fun hn => (he.noOrphan hn).of_blk rfl
   | letcall _ _ hb => exact fun hn => (hn.of_blk (BindParams.blk hb)).of_blk rfl
-  | @callc m1 _ _ _ _ _ _ _ _ _ env _ _ _ _ _ _ _ hb =>
+  | @callc m1 _ _ _ _ _ _ _ _ _ _ env _ _ _ _ _ _ _ hb =>
     exact fun hn => ((hn.of_blk (m' := envMem m env) rfl).of_blk (BindParams.blk hb)).of_blk rfl
   | push ht _ _ _ | pushRealloc ht _ _ _ | insert _ ht _ _ _ | editPush ht _ _ | editPushRealloc ht _ _
     | editSet _ _ ht _ _ _ | editSetOOB _ ht _ _ _ => exact fun hn => (hn.of_blk (TakeVal.blk ht)).of_blk rfl

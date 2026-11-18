@@ -1635,7 +1635,10 @@ theorem hand_found {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv
   have hcs0 : cs = [] := hcs (by rw [hrm]; simp)
   subst hcs0
   rw [hrm, hsp] at hps
-  exact ⟨hlc, hmo, fs, te, env, f, fn, hslot, hfs, hf, by simpa using hps, hrt, hro, hl, hr, ho, hnt⟩
+  -- (code that changes elements through a borrow takes its environment
+  -- lent, `Implements`: this one is handed it)
+  exact ⟨hlc, hmo, fs, te, env, f, fn, hslot, hfs, hf, by simpa using hps, hrt, hro, hl, hr, ho,
+    fun ht => by have := (hnt ht).2.2; rw [hrm] at this; cases this⟩
 
 /-- Agora #609: what the hand-over to a drop method finds: the package `c`,
     an owner whose slot owns a package of the interfaces; its code for the
@@ -1658,7 +1661,8 @@ theorem hand_foundD {P : Prog} {m : Mem} {Γ : Ctx} (hi : MInv m Γ) (hcd : MemC
     have hcs0 : cs = [] := hcs (by rw [hrm]; simp)
     subst hcs0
     rw [hrm, hsp] at hps
-    exact ⟨fs, te, env, f, fn, hT, hfs, hf, by simpa using hps, hrt, hro, hl', hr, ho, hnt, hq⟩
+    exact ⟨fs, te, env, f, fn, hT, hfs, hf, by simpa using hps, hrt, hro, hl', hr, ho,
+      (fun ht => by have := (hnt ht).2.2; rw [hrm] at this; cases this), hq⟩
 
 /-- Agora #609: progress of the hand-over to a drop method. -/
 theorem handProgressD {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt} {Ec E : Entry}
