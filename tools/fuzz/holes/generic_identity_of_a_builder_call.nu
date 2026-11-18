@@ -1,3 +1,6 @@
+// generic_identity_of_a_builder_call: `( idg [( @ v )] ( mk xs ) )` run beside a view of xs
+// Closed (agora #813): a generic callee instance is compiled after its caller, so its `retclo` is not there yet at the call; the result gets placeholders that the walk resolves against the instance's summary, and the run replays the builder's effects.
+// main 431ca15e: accepted; the read after the run prints a freed buffer's bytes (172), and ASan reports heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #838: `( idg [( @ v )] ( mk xs ) )` run beside a view of xs
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
