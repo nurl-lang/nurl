@@ -7719,11 +7719,13 @@ unsafe @ __arg_lend_root i syms → s {
 // it was handed (__rce_placeholders), resolved at the walk (agora #813).
 @ __rce_pending i syms s cn → b {
     ? | == 0 g_borrowck == 0 ( nurl_str_len cn ) { ^ F } {}
-    ? != 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` cn ) { ^ F } {}
+    // (Cheapest first, asked of every call: a callee compiled already —
+    // nearly every one — has its answer.)
     ? != 0 ( nurl_sym_len g_fn_compiled cn ) { ^ F } {}
     : s rt ( nurl_sym_get g_root_syms cn )
     ? == 0 ( nurl_str_len rt ) { ^ F } {}
-    ^ ( __is_closure_ty ( nurl_llty rt ) )
+    ? ! ( __is_closure_ty rt ) { ^ F } {}
+    ^ == 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` cn )
 }
 
 // The placeholders for a call of `cn`, its arguments' roster `effr` (`-`, a
@@ -7794,40 +7796,47 @@ unsafe @ __arg_lend_root i syms → s {
 // as a run of one whose answer was known makes (bck_closure_effects_run).
 // None where it does nothing to k: a closure that only reads stays clean.
 @ __bck_rce_expand s stmts → s {
-    // (A row it makes may be a placeholder in turn — a builder handing back
-    // another's closure, a forwarder's, a chain of them: expanded again until
-    // none is left. One already expanded — a builder handing back its own
-    // closure makes the same row again — adds nothing and is dropped
-    // (the walk's `rceseen#` keys): there are finitely many, so the passes
-    // end, and no row is dropped before its effects are in.)
-    : ~ s cur ( __bck_rce_pass stmts )
-    ~ >= ( nurl_str_find cur `pendrce\t` ) 0 { = cur ( __bck_rce_pass cur ) }
-    ^ cur
-}
-
-@ __bck_rce_pass s stmts → s {
     : ~ s out ``
     : ~ s rest ( nurl_str_cat stmts `` )
     ~ != 0 ( nurl_str_len rest ) {
         : i nl ( nurl_str_find rest `\n` )
         : s row ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
         = rest ? < nl 0 ( nurl_str_cat `` `` ) ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
-        : s rows ? ( nurl_str_starts row `pendrce\t` ) ( __bck_rce_once row ) ( nurl_str_cat row `` )
+        : s rows ? ( nurl_str_starts row `pendrce\t` ) ( __bck_rce_run row ) ( nurl_str_cat row `` )
         ? != 0 ( nurl_str_len rows ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat rows `` ) ( nurl_str_cat3 out `\n` rows ) } {}
     }
     ^ out
 }
 
-// A placeholder tag with its value lent out of the name (`L` 1).
-// A `pendrce` row's rows, or none where it was expanded already.
-@ __bck_rce_once s row → s {
-    : s id ( nurl_str_cat4 ( bck_field row 1 ) `|` ( bck_field row 5 ) ( nurl_str_cat4 `|` ( bck_field row 6 ) `|` ( bck_field row 3 ) ) )
-    : s key ( nurl_str_cat4 `rceseen#` g_bck_fn `|` id )
-    ? != 0 ( nurl_sym_len g_bck key ) { ^ ( nurl_str_cat `` `` ) } {}
-    ( bck_put key `1` )
-    ^ ( __bck_rce_rows row )
+// One run's `pendrce` row, expanded in place until no placeholder is left.
+// A row it makes may be a placeholder in turn — a builder handing back
+// another's closure, a forwarder's, a chain of them — expanded the same way,
+// depth first, so the rows keep their order. One this run's expansion has
+// made already — a builder handing back its own closure makes the same row
+// again — adds nothing and is dropped: there are finitely many, so the
+// expansion ends, and no row is dropped before its effects are in. (Kept per
+// run: two runs of one closure are two runs, on one line too.)
+@ __bck_rce_run s row → s {
+    : ~ s out ``
+    : ~ s seen `\n`
+    : ~ s work ( nurl_str_cat row `` )
+    ~ != 0 ( nurl_str_len work ) {
+        : i nl ( nurl_str_find work `\n` )
+        : s r ? < nl 0 ( nurl_str_cat work `` ) ( nurl_str_slice work 0 nl )
+        = work ? < nl 0 ( nurl_str_cat `` `` ) ( nurl_str_slice work + nl 1 - - ( nurl_str_len work ) nl 1 )
+        ? ( nurl_str_starts r `pendrce\t` ) {
+            : s id ( nurl_str_cat4 ( bck_field r 1 ) `|` ( bck_field r 5 ) ( nurl_str_cat4 `|` ( bck_field r 6 ) `|` ( bck_field r 3 ) ) )
+            ? < ( nurl_str_find seen ( nurl_str_cat3 `\n` id `\n` ) ) 0 {
+                = seen ( nurl_str_cat3 seen id `\n` )
+                : s rs ( __bck_rce_rows r )
+                ? != 0 ( nurl_str_len rs ) { = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat rs `` ) ( nurl_str_cat3 rs `\n` work ) } {}
+            } {}
+        } { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat r `` ) ( nurl_str_cat3 out `\n` r ) }
+    }
+    ^ out
 }
 
+// A placeholder tag with its value lent out of the name (`L` 1).
 @ __rce_tag_lent s tag b lent → s {
     ? ! lent { ^ ( nurl_str_cat tag `` ) } {}
     ? ( nurl_str_starts tag `rcq#` ) {
@@ -7843,7 +7852,7 @@ unsafe @ __arg_lend_root i syms → s {
 }
 
 // One row of an effect `cal`:`aix` on `nm`: a placeholder's (`rce#`, `rcq#`)
-// is a `pendrce` row again, expanded on the next pass.
+// is a `pendrce` row again, expanded in turn (__bck_rce_run).
 @ __bck_rce_one s nm s mid s cal s aix s tail b lent → s {
     : b ph | ( nurl_str_starts cal `rce#` ) ( nurl_str_starts cal `rcq#` )
     : s kind ? ph `pendrce` ? lent `pendlend` `pendeff`
@@ -34630,7 +34639,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // (`retcloeff`), whose storage each argument is: its name, its field
     // path, or the bindings a call written there lends out of, `~a,b` —
     // `-` for none; agora #802.)
-    : b __want_effr | & != 0 g_retcloeff_n != 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` call_name ) & ! __callee_shadowed ( __rce_pending syms call_name )
+    : b __rce_pend & ! __callee_shadowed ( __rce_pending syms call_name )
+    : b __want_effr | & != 0 g_retcloeff_n != 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` call_name ) __rce_pend
     : ~ s arg_effr ``
     : ~ s __clo_args ``
     // What the closures handed to this call (and, through a closure value,
@@ -38134,7 +38144,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     } {}
     // (…and, of a builder whose answer is not there yet — compiled below its
     // caller, a generic instance — placeholders the walk resolves: agora #813.)
-    ? & ! __callee_shadowed ( __rce_pending syms __lend_cn ) {
+    ? __rce_pend {
         = __cle_all ( __word_union __cle_all ( __rce_placeholders __lend_cn arg_effr ) )
         // (…and a closure handed to it, whose effects are the result's if it
         // hands that argument back, `retclo` — known only once it has
