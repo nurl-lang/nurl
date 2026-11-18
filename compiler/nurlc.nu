@@ -66065,6 +66065,14 @@ unsafe @ __pderiv_note i syms s name s vt i rhs_tt s rhs_val s lend s sx → v {
     // (…a literal, `@ H { h 1 }`: the bindings that may share an Rc's
     // payload it was made of; a call's result: what the call keeps of its
     // arguments too, g_pk_last — agora #770.)
+    // (…a struct literal holding a view of what a call lent out of a
+    // parameter, `@ SH { ( slice_from_vec v ) }`: read out of each parameter
+    // its source expression reaches, where it lends there - a change made
+    // through the held slice is the parameter's; agora #910.)
+    ? & & == rhs_tt TT_AT ! ( bck_is_heap_lty ( nurl_llty vt ) ) ( __pd_holds_storage vt ) {
+        : s __lptr ( nurl_sym_get2 syms name `__ptr` )
+        ? & != 0 ( nurl_str_len __lptr ) != 0 ( nurl_str_len sx ) { ( __pderiv_cnote __lptr ( __sx_param_reach syms sx F ) ) } {}
+    } {}
     : s srcs ? == rhs_tt TT_LPAREN lend ? == rhs_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( is_ident_tok rhs_tt ) rhs_val ? __sx_one ( __path_root_name sx ) ? & & ( __pd_litlike rhs_tt ) ( __pd_rc_scope ) != 0 ( nurl_str_len ( __rc_reach ( nurl_llty vt ) ) ) ( __pd_lit_names syms sx ) ``
     ? ( __lend_unnamed srcs ) {
         // (__sx_lendy's cheap tests first — most values here lend nothing
