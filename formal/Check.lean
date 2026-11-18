@@ -539,3 +539,7 @@ import A3
 #print axioms A2.FreshClosureWitness.main_typed
 #print axioms A2.FreshClosureWitness.main_safe
 #print axioms A2.FreshClosureWitness.main_no_leak
+#print axioms A2.freshOK_of_noFresh
+#print axioms A2.EntryWeaker.fresh_of_not
+#print axioms A2.RhsT.borrow_unfresh
+#print axioms A2.RhsT.at_unfresh

@@ -176,7 +176,9 @@ the LLVM / C11 memory model rather than redefining it.
     hands it an element, a field viewer or a call's result rather than an
     owner;
   - a destructor that changes elements through a borrow that is not
-    fresh (one that may reach memory its caller sees), directly or
+    fresh (one that may reach memory an argument views), or whose
+    changed elements hold views (`StmtT.editBV`, which stays `edit
+    true`), directly or
     through a callee, or drop glue that does so, of a type that holds
     views, and a call into a function that does so which passes an
     argument holding views (`ThruFn`);
@@ -192,7 +194,8 @@ the LLVM / C11 memory model rather than redefining it.
 
   Agora #909 takes in what changes elements only through a fresh borrow.
   An entry carries a `fresh` bit (`Entry.fresh`): the borrow reaches only
-  memory the frame owns. `RhsT.borrow` and `RhsT.at` may set it when they
+  blocks of the frame's own bindings (an owner's, or an `inout`
+  parameter's), never memory an argument views. `RhsT.borrow` and `RhsT.at` may set it when they
   borrow from a frame's own binding (an owner or an `inout` parameter) or
   from a fresh borrow (`FreshSrc`), never from a borrowed parameter or a
   borrow that is not fresh: a callee cannot see what those view
@@ -203,9 +206,13 @@ the LLVM / C11 memory model rather than redefining it.
   arguments hold to a fresh borrow's path (`RSetup.liftE`), since what
   they hold cannot alias a block the callee owns. An edit through a fresh
   borrow is `edit false` (`StmtT.editB` with `Ex.fresh`;
-  `edit_false_fresh`: no other typing of it), which reaches no caller
-  memory and does not make its function `ThruFn`. So a destructor of a
-  type that holds views may push through `vec_at` of its own local.
+  `edit_false_fresh`: no other typing of it). It does not make its
+  function `ThruFn`. It may change an `inout` parameter's block, which the
+  call already treats as changed, but no memory an argument views. So a
+  destructor of a type that holds views may push through `vec_at` of its
+  own local, when the changed elements hold no views. A change of
+  elements that hold views (`StmtT.editBV`) stays `edit true` even
+  through a fresh borrow: its stored views need `S.R = []` when renamed.
   `A2/FreshWitness.lean` types one, a struct holding a slice and a number,
   run by its armed `letd`'s frame end, safe and leak-free (`main_safe`,
   `main_no_leak`). nurlc accepts it, and it runs clean. The modelling
@@ -220,15 +227,22 @@ the LLVM / C11 memory model rather than redefining it.
   `borrow_closure_push_through_a_captures_element_ends_a_view`), which is
   what `edit true` does there.
 
-  No new premise removes a typing (`A2/Unfresh.lean`). Each premise that
-  reads the bit is met with it off: `borrow` / `at` choose it; clearing
-  every fresh bit of a context (`unfreshC`) is a weakening
-  (`weaker_unfreshC`, so `EntryWeaker.fresh` may target it) to a context
-  that is `FreshOK` vacuously (`freshOK_unfreshC`, for `panic`, `exit`,
-  `loop` and a scope's end) and keeps every binding, mode, type and fixed
-  entry (`unfreshC_panic`). `StmtT.unfresh`: every typing still holds with
-  its result's fresh bits cleared. So what was typed before is typed now,
-  and "the walk implements the calculus" stays true.
+  Each new premise holds with the bit off (`A2/Unfresh.lean`):
+  - `RhsT.borrow_unfresh` and `RhsT.at_unfresh`: the rules with the bit
+    off ask nothing of the source;
+  - `EntryWeaker.fresh_of_not`: the weakening premise holds when the
+    weaker entry is not fresh;
+  - `freshOK_of_noFresh`, for `panic`, `exit`, `loop` and a scope's end: a
+    context with no fresh borrow is `FreshOK`;
+  - an `edit true` asks nothing of the bit.
+
+  Clearing every fresh bit (`unfreshC`) is a weakening (`weaker_unfreshC`)
+  that keeps every binding, mode, type and fixed entry
+  (`unfreshC_panic`). `StmtT.unfresh` is the result side: a typing still
+  holds with its result's fresh bits cleared. The claim that every program
+  typed before design (e) is typed now rests on these lemmas: an old
+  derivation is a new one with every bit off. It is not a proven
+  translation, because the old relation is no longer in the tree.
 
   One more form nurlc accepts that A2 does not type directly: an owner
   given a new value while something still reads its old one, where nurlc

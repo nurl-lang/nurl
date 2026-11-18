@@ -20,8 +20,9 @@ argument holding views (`CallT`'s `ThruFn` premise), because a call's lift
 added everything the arguments hold to every borrow's path (`RSetup.liftE`).
 
 Now the borrow `( vec_at loc 0 )` is fresh (`RhsT.at` with the bit set, from
-`loc`, an owner: `FreshSrc`), and the push through it is an `edit false`: one
-that reaches no caller memory (`StmtT.editB` with `Ex.fresh`).  So the
+`loc`, an owner: `FreshSrc`), and the push through it is an `edit false`
+(`StmtT.editB` with `Ex.fresh`). It reaches only `loc`'s blocks, never
+memory an argument views.  So the
 destructor is not `ThruFn` (`dtor_not_thru`), and the call needs nothing of
 its argument.
 

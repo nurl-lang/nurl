@@ -330,33 +330,6 @@ theorem FreshOK.reset {Γ1 Γ2 : Ctx} (h : FreshOK Γ1) (hl : FreshLe Γ1 Γ2) (
   · rw [hx] at hEx; cases hEx; rw [hm]; exact hm'
 
 
-/-- A slot emptied by a replace: a fresh borrow rooted at it ends with it. -/
-theorem FreshOK.remove {Γ : Ctx} (h : FreshOK Γ) (hv : Bool) (x : Var) :
-    FreshOK (upd (A2.kill .replace hv x Γ) x none) := by
-  have hk := FreshOK.kill h .replace hv x
-  intro v E' hv' hl hn hb hf
-  by_cases hvx : v = x
-  · subst hvx; simp at hv'
-  simp only [upd_ne _ _ hvx] at hv'
-  obtain ⟨hne, hd⟩ := hk v E' hv' hl hn hb hf
-  refine ⟨hne, fun d hdd => ?_⟩
-  obtain ⟨hkd, Er, hEr, hm⟩ := hd d hdd
-  refine ⟨hkd, Er, ?_, hm⟩
-  have hdx : d.root ≠ x := by
-    intro hdx
-    simp only [A2.kill] at hv'
-    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp hv'
-    have hp : (killE .replace hv x E).path = E.path := by unfold killE; split <;> rfl
-    have hmo : (killE .replace hv x E).mode = E.mode := by unfold killE; split <;> rfl
-    have hty : (killE .replace hv x E).ty = E.ty := by unfold killE; split <;> rfl
-    rw [hp] at hdd; rw [hmo] at hb; rw [hty] at hn
-    have hhit : hits .replace hv x E = true := by
-      unfold hits
-      simp only [Bool.and_eq_true, Bool.or_eq_true, bne_iff_ne, ne_eq, List.any_eq_true, beq_iff_eq]
-      refine ⟨Or.inl hn, d, ?_, hdx, by cases d.kind <;> rfl⟩
-      simp [Entry.vdeps, hb, Mode.ownSlot, hdd]
-    unfold killE at hl; rw [if_pos hhit] at hl; cases hl
-  simpa [upd_ne _ _ hdx] using hEr
 
 /-- An owner's entry is no borrow, fresh or not. -/
 theorem FreshE.of_ownSlot {Γ : Ctx} {E : Entry} (h : E.mode.ownSlot = true) : FreshE Γ E :=

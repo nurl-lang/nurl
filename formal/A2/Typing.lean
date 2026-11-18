@@ -432,34 +432,38 @@ theorem FreshOK.setE_same {Γ : Ctx} (h : FreshOK Γ) {x : Var} {E : Entry}
   h.setE (by rcases hE with hE | hE; exact FreshE.of_fresh hE; exact FreshE.of_live hE)
     (fun Ex hEx hm => by rw [← hx Ex hEx]; exact hm)
 
-/-- Ending `x`'s scope: a fresh borrow rooted at `x` is ended with it. -/
-theorem FreshOK.exitScope {Γ : Ctx} (h : FreshOK Γ) (x : Var) : FreshOK (A2.exitScope x Γ) := by
-  have hk := h.kill .replace false x
-  intro v E' hv'
+/-- A slot emptied by a replace: a fresh borrow rooted at it ends with it. -/
+theorem FreshOK.remove {Γ : Ctx} (h : FreshOK Γ) (hv : Bool) (x : Var) :
+    FreshOK (upd (A2.kill .replace hv x Γ) x none) := by
+  have hk := FreshOK.kill h .replace hv x
+  intro v E' hv' hl hn hb hf
   by_cases hvx : v = x
-  · subst hvx; simp [A2.exitScope, upd] at hv'
-  simp only [A2.exitScope, upd, hvx, ite_false] at hv'
-  intro hl hn hb hf
+  · subst hvx; simp [upd] at hv'
+  simp only [upd, hvx, ite_false] at hv'
   obtain ⟨hne, hd⟩ := hk v E' hv' hl hn hb hf
   refine ⟨hne, fun d hdd => ?_⟩
   obtain ⟨hkd, Er, hEr, hm⟩ := hd d hdd
   refine ⟨hkd, Er, ?_, hm⟩
   have hdx : d.root ≠ x := by
     intro hdx
-    -- the borrow depends on `x` in memory, so replacing `x` ended it
     simp only [A2.kill] at hv'
     obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp hv'
-    have hp : (killE .replace false x E).path = E.path := by unfold killE; split <;> rfl
-    have hmo : (killE .replace false x E).mode = E.mode := by unfold killE; split <;> rfl
-    have hty : (killE .replace false x E).ty = E.ty := by unfold killE; split <;> rfl
+    have hp : (killE .replace hv x E).path = E.path := by unfold killE; split <;> rfl
+    have hmo : (killE .replace hv x E).mode = E.mode := by unfold killE; split <;> rfl
+    have hty : (killE .replace hv x E).ty = E.ty := by unfold killE; split <;> rfl
     rw [hp] at hdd; rw [hmo] at hb; rw [hty] at hn
-    have hhit : hits .replace false x E = true := by
+    have hhit : hits .replace hv x E = true := by
       unfold hits
       simp only [Bool.and_eq_true, Bool.or_eq_true, bne_iff_ne, ne_eq, List.any_eq_true, beq_iff_eq]
       refine ⟨Or.inl hn, d, ?_, hdx, by cases d.kind <;> rfl⟩
       simp [Entry.vdeps, hb, Mode.ownSlot, hdd]
     unfold killE at hl; rw [if_pos hhit] at hl; cases hl
-  simpa [A2.exitScope, upd, hdx] using hEr
+  simpa [upd, hdx] using hEr
+
+/-- Ending `x`'s scope: a fresh borrow rooted at `x` is ended with it
+    (`FreshOK.remove` at `hv = false`). -/
+theorem FreshOK.exitScope {Γ : Ctx} (h : FreshOK Γ) (x : Var) : FreshOK (A2.exitScope x Γ) :=
+  h.remove false x
 
 /-- A context's live entries depend only on roots it has.  (An integer's
     dependencies say nothing: it holds no memory.)  A2-drop.2: so does, in

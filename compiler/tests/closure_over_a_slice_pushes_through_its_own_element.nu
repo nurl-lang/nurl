@@ -1,6 +1,6 @@
 // A closure that captures a slice, called while the slice is live: its
 // body pushes through `( vec_at loc 0 )` of a local it made (Agora #909).
-// The push reaches only memory the call owns, so it changes nothing the
+// The push reaches only blocks the call owns, so it changes nothing the
 // slice views. formal/A2/FreshClosureWitness.lean types this program,
 // memory safe and leak-free.
 $ `stdlib/core/vec.nu`

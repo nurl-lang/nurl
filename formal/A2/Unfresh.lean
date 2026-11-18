@@ -2,18 +2,26 @@ import A2.TypingFacts
 import A2.NameWf
 import A2.Wf
 
-/-! # Agora #909: no new premise removes a typing
+/-! # Agora #909: each new premise holds with the fresh bit off
 
-Design (e) added `Entry.fresh` and premises that read it: the fresh bit of
-`RhsT.borrow` / `RhsT.at` (`FreshSrc` when set), `EntryWeaker.fresh`,
-`FreshOK` after `panic` / `exit` / `loop` and at a scope's end, and `editB`'s
-`edit false` (a fresh borrow).  None of them removes a typing: each is met by
-choosing the fresh bit off.  The rules' own bits are the rule's choice; for
-the rest, clearing every fresh bit of a context (`unfreshC`) is a weakening
-(`weaker_unfreshC`) to a context that is `FreshOK` vacuously
-(`freshOK_unfreshC`) and keeps every binding, mode, type and fixed entry
-(`unfreshC_panic`).  So every typing still holds with its fresh bits off
-(`StmtT.unfresh`): what the walk typed before design (e), it types now. -/
+Design (e) added `Entry.fresh` and premises that read it:
+- the fresh bit of `RhsT.borrow` / `RhsT.at` (`FreshSrc` when set);
+- `EntryWeaker.fresh`;
+- `FreshOK` after `panic` / `exit` / `loop` and at a scope's end;
+- `editB`'s `edit false` (a fresh borrow).
+
+Each is met by choosing the bit off. That is what this file proves, premise by premise:
+- `RhsT.borrow_unfresh`, `RhsT.at_unfresh`: the rules with the bit off ask nothing of the source.
+- `EntryWeaker.fresh_of_not`: the weakening premise holds when the weaker entry is not fresh.
+- `freshOK_of_noFresh`: a context with no fresh borrow is `FreshOK`.
+- `freshOK_unfreshC`: the same holds of any context with every fresh bit cleared (`unfreshC`).
+- `weaker_unfreshC`: clearing every fresh bit is a weakening.
+- `unfreshC_panic`: the cleared context keeps every binding, mode, type and fixed entry.
+- An `edit true` asks nothing of the bit (`editB`'s `hbf` is vacuous).
+
+`StmtT.unfresh` is the result side: any typing still holds with its result's fresh bits cleared.
+
+What is NOT proven here is a translation from the typing relation as it stood before design (e). That relation is no longer in the tree. The claim that every program it typed is typed now rests on the lemmas above: an old derivation is a new one with every bit off, and each new premise of it is one of the cases above. -/
 
 namespace A2
 
@@ -106,12 +114,37 @@ theorem unfreshC_panic (Γ : Ctx) :
   obtain ⟨E0, h0, rfl⟩ := unfreshC_inv h
   exact ⟨E0, h0, by simp, by simp, (EntryWeaker.unfresh E0).fixed⟩
 
-/-- **No new premise removes a typing** (Agora #909, design (e)): any typing
-    of a source statement from a well-formed context still holds when its
-    result has every fresh bit cleared, a context that is `FreshOK`
-    vacuously.  With the rules' own bits (`borrow`, `at`) chosen off, the
-    fresh bits never set, and every premise that reads them holds: what was
-    typed before is typed now. -/
+
+/-- **A context with no fresh borrow is `FreshOK`**: the premise `panic`,
+    `exit`, `loop` and a scope's end ask holds of every context in which the
+    bit was never set. -/
+theorem freshOK_of_noFresh {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.mode = .bor → E.fresh = false) :
+    FreshOK Γ := by
+  intro v E hv _ _ hm hf
+  rw [h v E hv hm] at hf; cases hf
+
+/-- **`EntryWeaker.fresh` holds whenever the weaker entry is not fresh.** -/
+theorem EntryWeaker.fresh_of_not {E E' : Entry} (h : E'.fresh = false) :
+    E'.live = true → E'.ty ≠ .int → E'.mode = .bor → E'.fresh = true → E.fresh = true ∧ E'.path ⊆ E.path :=
+  fun _ _ _ hf => absurd (h ▸ hf) Bool.false_ne_true
+
+/-- **A borrow with the bit off asks nothing of its source.** -/
+theorem RhsT.borrow_unfresh {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {t : Ty}
+    (hy : Γ y = some E) (hl : E.live = true) (ht : E.ty = .vec t) :
+    RhsT Γ F (.borrow y) ⟨E.ty, .bor, true, derive y E .self, E.held, false, false, false⟩ Γ :=
+  RhsT.borrow hy hl ht (fun h => by cases h)
+
+/-- **Nor does an element borrow.** -/
+theorem RhsT.at_unfresh {Γ : Ctx} {F : List Var} {y : Var} {i : Expr} {E : Entry} {t : Ty}
+    (hy : Γ y = some E) (hl : E.live = true) (ht : E.ty = .vec t) (hi : ExprT Γ i) :
+    RhsT Γ F (.at y i) { elemE y E t with fresh := false } Γ :=
+  RhsT.at hy hl ht hi (fun h => by cases h)
+
+/-- **The result side** (Agora #909, design (e)): any typing of a source
+    statement from a well-formed context still holds when its result has
+    every fresh bit cleared, a context that is `FreshOK` vacuously.  This is
+    a weakening of the result, not a translation of derivations: see the
+    module comment for what the per-premise lemmas above add. -/
 theorem StmtT.unfresh {P : Prog} (hP : ProgOK P) {ξ : Exits} {Γ Δ : Ctx} {F : List Var} {s : Stmt}
     (ht : StmtT P ξ Γ F s Δ) (hsrc : s.src = true) (hw : CtxWF Γ) (hn : NameWF Γ) :
     StmtT P ξ Γ F s (unfreshC Δ) ∧ FreshOK (unfreshC Δ) :=

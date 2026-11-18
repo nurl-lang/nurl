@@ -2125,8 +2125,11 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       ThruOK Γ1 F op Ex.ty Ex1.path →
       -- (A2-drop.3b: a change that drops elements drops no destructor value)
       (op.drops = true → t.dtorFree = true) →
-      -- Agora #909: an edit that reaches no caller memory (`edit false`) is
-      -- one through a fresh borrow
+      -- Agora #909: an `edit false` is one through a fresh borrow, and does
+      -- not count as through-changing (`Stmt.hasThru`). It reaches only
+      -- blocks of the frame's own bindings: an owner's, or an `inout`
+      -- parameter's, which the call already treats as changed. It never
+      -- reaches memory an argument views.
       (hbf : b = false → Ex.fresh = true := by intro h; cases h) →
       StmtT P ξ Γ F (.edit b x op) (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
   /-- Agora #295: the same change through a borrow `x`, of an element type
