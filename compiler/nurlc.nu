@@ -4577,6 +4577,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // hold a view: its calls are recorded as points a panic may unwind from
 // (`unw` rows, agora #382).
 : ~ i g_fn_unw 0
+// 1 once a binding was bound to what a borrow lent (`lpa_`, agora #580).
+: ~ i g_bck_lpa_any 0
+// The binding a growth sweep went through, `wroot` (agora #580).
+: ~ i g_bck_end_wroot_id -1
 // 1 once this walk recorded the owner of a `??` payload cursor (`cuo_`):
 // bck_sx_name asks a name past its arm only then.
 : ~ i g_bck_cuo_any 0
@@ -62745,6 +62749,22 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     ^ out
 }
 
+// Is `bs` a `~` loop's cursor whose container was lent out of the borrow a
+// growth sweep went through (`fcp_` is g_bck_end_wroot_id), or out of
+// another borrow of the same storage - lent out of the same owners
+// (`bs_`) by the same chain (`lpa_`), which may be the same element
+// (agora #580)?
+@ __bck_fcp_is_wroot s bs → b {
+    ? < g_bck_end_wroot_id 0 { ^ F } {}
+    : s p ( nurl_sym_get g_bck ( bck_bkey `fcp_` bs ) )
+    ? == 0 ( nurl_str_len p ) { ^ F } {}
+    : s w ( nurl_str_int g_bck_end_wroot_id )
+    ? ( seq p w ) { ^ T } {}
+    : s pb ( nurl_sym_get g_bck ( bck_bkey `bs_` p ) )
+    ? | == 0 ( nurl_str_len pb ) ! ( seq pb ( nurl_sym_get g_bck ( bck_bkey `bs_` w ) ) ) { ^ F } {}
+    ^ ( seq ( nurl_sym_get g_bck ( bck_bkey `lpa_` p ) ) ( nurl_sym_get g_bck ( bck_bkey `lpa_` w ) ) )
+}
+
 // A `~` loop's cursor `fcs` (its `fevar` row's field 7) bound for this
 // round, from UNINIT: a view of the storage the loop iterates (agora #493).
 @ __bck_fe_cursor_bind s st s fcs s fesx → s {
@@ -62778,6 +62798,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
             // buffer moving does - element handles moved - leaves it be,
             // bck_view_end_ind.)
             ( bck_put ( bck_bkey `fcl_` fcs ) `1` )
+            // (…and its lend parent, when the container was lent out of a
+            // borrow - two lends deep, `: a ( vec_at vvv 0 )  : b ( vec_at a
+            // 0 )`: a growth of an element of that parent is at b's level,
+            // though deep to the owner the sources flatten to; agora #580.)
+            ? != 0 g_bck_lpa_any { ( bck_put ( bck_bkey `fcp_` fcs ) ( nurl_sym_get g_bck ( bck_bkey `lpa_` fesx ) ) ) } {}
             = g_bck_has_borrow 1
             ( bck_put_bf `vi_` fcs ind )
             // (A borrow of the container binding it walks, whose end ends
@@ -65490,6 +65515,11 @@ unsafe @ __bck_row_sl s rec → s {
         : b wvf & >= wpc 0 ( seq ( nurl_str_slice wc0 + wpc 1 - - ( nurl_str_len wc0 ) wpc 1 ) `v` )
         ? & & >= wpc 0 ! wvf == 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` ( nurl_str_int wid ) ) ) { continue } {}
         ? & & != 0 ( nurl_str_len callee ) != 0 ( nurl_str_len wc ) ! ( seq wc callee ) { continue } {}
+        // (An argument that is itself a borrow lends what it borrows from,
+        // flattened below - its own name kept as this binding's lend parent,
+        // `lpa_`: a `~` loop over this binding reads a buffer at that
+        // parent's elements' level; agora #580.)
+        ? == BCK_BORROWED_SHARED ( bck_st_get st ( nurl_str_to_int w ) ) { ( bck_put ( bck_bkey `lpa_` ( nurl_str_int wid ) ) w ) = g_bck_lpa_any 1 } {}
         // A number holds nothing to borrow from.
         ? ( bck_holds_nothing w ) { continue } {}
         // A field (`s.items`) is as alive as its binding; a field of a borrow
@@ -68547,7 +68577,14 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 // element handles - not an element's: a cursor over an
                 // element's buffer, `fcl_`, stays; agora #580.)
                 = g_bck_end_hc ? hcopy 1 0
+                // (A `~` loop's cursor over a container lent out of the borrow
+                // this went through, wroot - its lend parent, `fcp_` - ends
+                // exactly on a growth a level below wroot, the container's
+                // own level, and never on wroot's own buffer moving, which
+                // moves only the containers' handles; agora #580.)
+                = g_bck_end_wroot_id ? != 0 g_bck_lpa_any wroot -1
                 = out ( bck_view_end_ind out ( nurl_str_to_int o ) ( bck_field_int rec 3 ) rwhy )
+                = g_bck_end_wroot_id -1
                 = g_bck_end_hc 0
                 // (…and of every field path of that owner a view was taken
                 // through - `: I ii . ww inner` handed on, a slice of `(
@@ -69257,7 +69294,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         // (…nor a cursor over an element's own buffer, `fcl_`, where what
         // moves is the owner's own buffer through a copy of its handle,
         // g_bck_end_hc: agora #580.)
-        ? & & & & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vi_` bs ) ) sids ) ! & == g_bck_end_elem 2 != 0 ( nurl_sym_len g_bck ( bck_bkey `fcu_` bs ) ) != b g_bck_end_fcx ! & != 0 g_bck_end_hc != 0 ( nurl_sym_len g_bck ( bck_bkey `fcl_` bs ) ) {
+        ? & & & & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vi_` bs ) ) sids ) ! ? ( __bck_fcp_is_wroot bs ) != g_bck_end_elem 2 & == g_bck_end_elem 2 != 0 ( nurl_sym_len g_bck ( bck_bkey `fcu_` bs ) ) != b g_bck_end_fcx ! & != 0 g_bck_end_hc != 0 ( nurl_sym_len g_bck ( bck_bkey `fcl_` bs ) ) {
             = out ( bck_st_set out b BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` bs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` ` why ) ) )
             = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) 1 )
@@ -72190,6 +72227,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_row_at -1
     ? != 0 g_bck_fmv_any { ( bck_put `fmv` `` ) = g_bck_fmv_any 0 } {}
     = g_bck_cuo_any 0
+    = g_bck_lpa_any 0
     ? != 0 g_bck_pbo_any { ( bck_put `pbol` `` ) = g_bck_pbo_any 0 } {}
     ? != 0 g_bck_inp_any { ( bck_put `inp` `` ) = g_bck_inp_any 0 } {}
     ( bck_put `pml` `` )
