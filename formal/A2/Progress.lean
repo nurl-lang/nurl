@@ -477,8 +477,8 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
     (hanch : RootbAnch Γ F) {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty} {D : List Dep}
     (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
     (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γ1 x = some Ex1)
-    (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) :
-    ∃ r, Step P m (.edit true x op) r := by
+    (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) {b : Bool} :
+    ∃ r, Step P m (.edit b x op) r := by
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   rw [hE1] at hx1 hthru
   have hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ1 d.root = some Er ∧ Er.mode.ownSlot = true :=

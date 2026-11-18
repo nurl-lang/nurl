@@ -2118,14 +2118,17 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       read (`killThru`). `x` itself stays live: its node is changed in
       place. -/
   | editB {Γ Γ1 : Ctx} {F : List Var} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
-      {D : List Dep} :
+      {D : List Dep} {b : Bool} :
       Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = false →
       x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
       Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
       ThruOK Γ1 F op Ex.ty Ex1.path →
       -- (A2-drop.3b: a change that drops elements drops no destructor value)
       (op.drops = true → t.dtorFree = true) →
-      StmtT P ξ Γ F (.edit true x op) (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
+      -- Agora #909: an edit that reaches no caller memory (`edit false`) is
+      -- one through a fresh borrow
+      (hbf : b = false → Ex.fresh = true := by intro h; cases h) →
+      StmtT P ξ Γ F (.edit b x op) (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
   /-- Agora #295: the same change through a borrow `x`, of an element type
       that holds views (and no closure): a push or an element set may store
       a view, valid through what the stored value depends on in memory

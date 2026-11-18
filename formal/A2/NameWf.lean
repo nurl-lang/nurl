@@ -953,7 +953,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       · exact hN d (List.mem_append_left _ hd)
       · exact hN d (List.mem_append_right _ hd)
       · exact hD d (ownHeld_sub _ _ _ hd)
-  | @editB _ Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
+  | @editB _ Γ Γ1 F x op Ex Ex1 t D _ hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
     intro _ hn
     have hn1 : NameWF Γ1 := harg.names hn
     have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1

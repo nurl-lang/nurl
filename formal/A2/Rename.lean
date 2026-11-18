@@ -3563,17 +3563,18 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
     simp only [Function.comp, Dep.ren, Edit.effAt_rename, hargty]
   exact ⟨⟨D', harg'⟩, hyx', hthru', by rw [hmem]; simpa [rds] using hne, heq⟩
 
-theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
+theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa)
     {P : Prog} {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
-    {D : List Dep} (hx : Γa x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
+    {D : List Dep} {b : Bool} (hx : Γa x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
     (hty : Ex.ty = .vec t) (hhv : t.holdsView = false)
     (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γa1 x = some Ex1)
     (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path)
-    (hdf : op.drops = true → t.dtorFree = true) :
-    StmtT P ξ (S.canon Γa) S.Fc ((Stmt.edit true x op).rename S.ρ)
+    (hdf : op.drops = true → t.dtorFree = true) (hbf : b = false → Ex.fresh = true)
+    (hloc : S.R = [] ∨ Ex.fresh = true) :
+    StmtT P ξ (S.canon Γa) S.Fc ((Stmt.edit b x op).rename S.ρ)
       (S.canon (A2.setE (A2.killThru op Ex.ty Ex1.path Γa1) x Ex1)) := by
   obtain ⟨⟨D', harg'⟩, hyx', hthru', hne', heq⟩ :=
-    editB_ren_facts h hab hx hmx hl hty harg hyx hx1 hl1 hne hthru (Or.inl hR)
+    editB_ren_facts h hab hx hmx hl hty harg hyx hx1 hl1 hne hthru hloc
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   subst hE1
   have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
@@ -3582,7 +3583,8 @@ theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
     (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
     (by rw [hty1]; exact hty) hhv (h.Fcout x) harg' hyx' (by rw [canon_ρ h, hx1]; rfl)
     (by rw [liftE_live]; exact hl1) hne' hthru'
-    (by rw [Edit.drops_rename]; exact hdf)
+    (by rw [Edit.drops_rename]; exact hdf) (b := b)
+    (fun hb0 => by rw [S.liftE_fresh_of hrb]; exact hbf hb0)
   rw [heq]; exact hT
 
 /-! ### Agora #295: a view stored through a borrow, where the call places it -/
@@ -4642,11 +4644,16 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
           · exact Or.inl h1
           · exact Or.inr (Or.inl h1)))) (DtorSafe.canon h hal hdy) hpz hpx
       (fun ha => dtorHead_rename h.inj (hdx ha)) (fun hb => dtorHead_rename h.inj (hdz hb))
-  | @editB _ Γ Γ1 F x op Ex Ex1 t D hx hmx hl hty hhv _ harg hyx hx1 hl1 hne hthru hdf =>
+  | @editB _ Γ Γ1 F x op Ex Ex1 t D b hx hmx hl hty hhv _ harg hyx hx1 hl1 hne hthru hdf hbf =>
     intro _ hab _ _ hT
     have hab1 : S.AbsOK Γ1 := EditArg.absOK harg hab
     have hm1 : Ex1.mode = .bor := by rw [harg.at_ne hyx hx hx1 hl1, hmx]
-    refine ⟨editB_ren h hab (hT (.inl rfl)) hx hmx hl hty hhv harg hyx hx1 hl1 hne hthru hdf, ?_⟩
+    -- Agora #909: an edit through a fresh borrow (`edit false`) needs no S.R = []
+    have hloc : S.R = [] ∨ Ex.fresh = true := by
+      cases b with
+      | false => exact Or.inr (hbf rfl)
+      | true => exact Or.inl (hT (.inl rfl))
+    refine ⟨editB_ren h hab hx hmx hl hty hhv harg hyx hx1 hl1 hne hthru hdf hbf hloc, ?_⟩
     exact (hab1.killNames (thruDeps op Γ1 Ex.ty Ex1.path)).setE' hab1 hx1 rfl rfl (by rw [hm1]; simp)
       (fun hf => absurd hf (by simp [Entry.fixed, hm1]))
   | @editBV _ Γ Γ1 F x op Ex Ex1 t D hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV hdf =>

@@ -139,7 +139,7 @@ theorem pop_typed {ξ : Exits} {Γ : Ctx} (hn : NoRootb Γ) {x : Var} {E : Entry
     (hud : u.dtorFree = true) (hkn : k.isName = false) (hk : k ≠ .share) :
     StmtT P ξ Γ [] (popB x) (A2.setE (A2.killThru (.trunc (.dec (.len x))) (.vec u) [⟨0, k⟩] Γ) x E) := by
   subst hE
-  have h := StmtT.editB (P := P) (ξ := ξ) (F := []) (op := .trunc (.dec (.len x))) (t := u) (D := [])
+  have h := StmtT.editB (b := true) (P := P) (ξ := ξ) (F := []) (op := .trunc (.dec (.len x))) (t := u) (D := [])
     hx rfl rfl rfl hu (by simp)
     (EditArg.trunc (ExprT.dec (ExprT.len hx rfl rfl))) (fun _ h => by cases h) hx rfl
     (by simp [memDeps, hkn]) (thru_ok hn h0 (fun _ h => by cases h) hkn hk rfl) (fun _ => hud)
@@ -152,7 +152,7 @@ theorem set_typed {ξ : Exits} {Γ : Ctx} (hn : NoRootb Γ) {x f : Var} {E : Ent
     StmtT P ξ Γ [] (.edit true x (.set (.lit 0) f))
       (A2.setE (A2.killThru (.set (.lit 0) f) str [⟨0, .inner⟩] Γ) x Eb) := by
   subst hE
-  have h := StmtT.editB (P := P) (ξ := ξ) (F := []) (op := .set (.lit 0) f) (t := .int) (D := [])
+  have h := StmtT.editB (b := true) (P := P) (ξ := ξ) (F := []) (op := .set (.lit 0) f) (t := .int) (D := [])
     hx rfl rfl rfl rfl (by simp)
     (EditArg.set ExprT.lit hf rfl rfl PushArg.int) (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hfx)
     hx rfl (by simp [Eb, memDeps, Kind.isName])

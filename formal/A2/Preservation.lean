@@ -2935,7 +2935,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (fun h => by simp [ownHeld, h])
         (Or.inr ⟨rfl, rfl, rfl⟩) hds) rfl (covers_pushRealloc (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
-  | @editB ξ Γ Γ1 F x op Ex Ex1 t D hx hmx hl hty hhv hxF harg hyx hx1 hl1 _ hthru =>
+  | @editB ξ Γ Γ1 F x op Ex Ex1 t D _ hx hmx hl hty hhv hxF harg hyx hx1 hl1 _ hthru =>
     intro m m' s' hcd hi hst
     have hanch := hi.leafAnch rfl
     have hrel := CtxRel.editB hanch hx hmx harg hyx hx1 hl1 hthru

@@ -120,7 +120,7 @@ theorem StmtT.freshOK {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : 
   | @free _ Γ F x E t hx _ _ _ _ _ =>
     intro _ h
     exact (h.moved hx).1
-  | @editB _ Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
+  | @editB _ Γ Γ1 F x op Ex Ex1 t D _ hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
     intro _ h
     obtain ⟨h1, _⟩ := harg.freshOK h
     exact h1.reset ((FreshLe.refl Γ1).killNames _) ((KeepsFrame.refl Γ1).killNames _) hx1 rfl rfl rfl rfl rfl

@@ -225,7 +225,7 @@ theorem thru_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (
     have := RhsT.at (Γ := G4) (F := []) (E := Eloc) (t := vi) (i := .lit 0) hG42 rfl rfl ExprT.lit
     simpa [elemE, Eloc, Eb, vi, vvi, derive, Mode.isRoot, rootKind] using this
   -- the push through the borrow
-  have hed := StmtT.editB (P := Q) (ξ := .none) (Γ := G5) (Γ1 := G5) (F := []) (x := 4) (op := .push n)
+  have hed := StmtT.editB (b := true) (P := Q) (ξ := .none) (Γ := G5) (Γ1 := G5) (F := []) (x := 4) (op := .push n)
     (Ex := Eb) (Ex1 := Eb) (t := .int) (D := []) (by simp [G5, A2.setE]) rfl rfl rfl rfl (by simp)
     (EditArg.push (Ey := En) (by simp [G5, A2.setE, hn4, hG4n]) hnl hnt PushArg.int)
     (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hn4)

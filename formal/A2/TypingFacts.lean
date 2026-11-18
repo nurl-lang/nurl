@@ -35,7 +35,7 @@ theorem StmtT.mono {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} 
   | withElem a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 ih0 ih1 => intro ξ' hξ; exact StmtT.withElem a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13
   | callcE a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 ih0 => intro ξ' hξ; exact StmtT.callcE a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a17 a18 a19
   | scopeD a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 ih0 => intro ξ' hξ; exact StmtT.scopeD a0 a1 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a3 a4 a5 a6 a7 a8 a9
-  | editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 => intro ξ' hξ; exact StmtT.editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12
+  | editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 => intro ξ' hξ; exact StmtT.editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13
   | editBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 => intro ξ' hξ; exact StmtT.editBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14
   | takeB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 _ a14 ih0 =>
     intro ξ' hξ
