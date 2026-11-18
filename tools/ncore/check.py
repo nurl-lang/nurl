@@ -153,9 +153,10 @@ def join_own(a, b):
 
 
 class State:
-    __slots__ = ("vals", "dead", "bottom", "defers", "gone", "pb")
+    __slots__ = ("vals", "dead", "bottom", "defers", "gone", "pb", "pbd")
 
-    def __init__(self, vals=None, dead=frozenset(), bottom=False, defers=(), gone=frozenset(), pb=frozenset()):
+    def __init__(self, vals=None, dead=frozenset(), bottom=False, defers=(), gone=frozenset(), pb=frozenset(),
+                 pbd=frozenset()):
         self.vals = dict(vals or {})
         self.dead = frozenset(dead)
         self.bottom = bottom
@@ -164,12 +165,15 @@ class State:
         # (variable, line): a borrowed copy whose field's old value its reader
         # was handed - owed back to the slot it was read from (agora #870)
         self.pb = frozenset(pb)
+        # the parameters written back into their slots on this path (a
+        # function's `putback` answer: on every way out)
+        self.pbd = frozenset(pbd)
 
     def copy(self):
-        return State(self.vals, self.dead, self.bottom, self.defers, self.gone, self.pb)
+        return State(self.vals, self.dead, self.bottom, self.defers, self.gone, self.pb, self.pbd)
 
     def key(self):
-        return (self.bottom, self.dead, self.defers, self.gone, self.pb,
+        return (self.bottom, self.dead, self.defers, self.gone, self.pb, self.pbd,
                 tuple(sorted(((k, v.key()) for k, v in self.vals.items()), key=repr)))
 
 
@@ -188,7 +192,7 @@ def join(a, b):
                      x.call or y.call)
     # a block armed on one path may run: it is checked as if it does
     defers = a.defers + tuple(d for d in b.defers if d not in a.defers)
-    return State(vals, a.dead | b.dead, defers=defers, gone=a.gone | b.gone, pb=a.pb | b.pb)
+    return State(vals, a.dead | b.dead, defers=defers, gone=a.gone | b.gone, pb=a.pb | b.pb, pbd=a.pbd & b.pbd)
 
 
 VIEW_TYPES = ("s", "slice")
@@ -218,7 +222,7 @@ class FnCheck:
             self.hvid[h] = i
         self.s_effects = set()
         self.s_consumes = set()
-        self.s_putback = set()
+        self.in_defer = False
         self.s_elems = set()
         self.rets = []
         self.exits = []
@@ -1282,12 +1286,18 @@ class FnCheck:
         impls = getattr(self.prog, "virt", {}).get(name)
         if impls:
             out = None
+            pb = None
             for m in impls:
                 sm = self.summ.get(m)
                 if sm is None:
                     continue
                 out = sm if out is None else merge_summary(out, sm)
+                # (a write-back is a guarantee: every implementation's, or
+                # none - agora #870)
+                pb = set(sm.get("putback", ())) if pb is None else pb & set(sm.get("putback", ()))
             if out is not None:
+                out = dict(out)
+                out["putback"] = sorted(pb or ())
                 return out
         # a generic's instance answers as its template does
         tmpl = getattr(self.prog, "fn_tmpl", {}).get(name)
@@ -1370,31 +1380,44 @@ class FnCheck:
     def apply_call_(self, st, rv, line, dest_vid=None):
         _, name, ops, site = rv
         sm = self.summary(name)
-        if st.pb:
+        pbk = {0} if name == "mem_put_back" else set(sm.get("putback", ()))
+        if pbk:
             # a copy written back into its slot (`mem_put_back`, or a callee
-            # that does it for this argument): what its field's reader was
-            # handed is that reader's alone from here (agora #870)
-            pbk = {0} if name == "mem_put_back" else set(sm.get("putback", ()))
+            # that does it for this argument on every way out): a parameter
+            # handed there is written back on this path - this function's
+            # own `putback` answer, which holds on every way out (pbd) -
+            # and, not inside a `;` block that may run on some paths only,
+            # what its field's reader was handed is that reader's alone
+            # (agora #870)
             back = {ops[k][1] for k in pbk if k < len(ops) and ops[k][0] == "v" and not ops[k][2]}
-            for (pv, _, pp) in [p for p in st.pb if p[0] in back]:
-                # (…and its reader owns the old value outright: the slot has
-                # the copy's new one now - what it lent of the slot's field
-                # is no loan any more, nor ended by the write-back)
-                cv = st.vals.get(pv)
-                rd = {frozenset({(pv, pp)})}
-                if cv is not None:
-                    rd.add(frozenset((a, tuple(ap) + tuple(pp)) for a, ap in cv.alias))
-                for ow, ov in list(st.vals.items()):
-                    if ow != pv and ov is not None and ov.own == "L" and ov.alias in rd:
-                        def into_slot(l, al=ov.alias):
-                            tg = self.loans.get(l, (None,))[0]
-                            return tg is not None and any(tg[0] == a and prefix(tuple(tg[1]), tuple(ap)) for a, ap in al)
-                        st.vals[ow] = AV("O", frozenset(l for l in ov.loans if not into_slot(l)), frozenset(), ov.held)
-            if back:
+            st.pbd = st.pbd | {self.pidx[b] for b in back if b in self.pidx}
+            if st.pb and not self.in_defer:
+                for (pv, _, pp) in sorted(p for p in st.pb if p[0] in back):
+                    cv = st.vals.get(pv)
+                    rd = {frozenset({(pv, pp)})}
+                    if cv is not None:
+                        rd.add(frozenset((a, tuple(ap) + tuple(pp)) for a, ap in cv.alias))
+                    first = None
+                    for ow in sorted(st.vals):
+                        ov = st.vals[ow]
+                        if ow == pv or ov is None or ov.own != "L" or ov.alias not in rd:
+                            continue
+                        if first is None:
+                            # (the first reader owns the old value outright:
+                            # the slot has the copy's new one now)
+                            first = ow
+                            al = ov.alias
+                            def into_slot(ln_, al=al):
+                                tg = self.loans.get(ln_, (None,))[0]
+                                return tg is not None and any(tg[0] == a and prefix(tuple(tg[1]), tuple(ap)) for a, ap in al)
+                            st.vals[ow] = AV("O", frozenset(x for x in ov.loans if not into_slot(x)), frozenset(), ov.held)
+                        else:
+                            # (a later reader borrows from the first, as at a
+                            # hand-over - one value has one owner)
+                            at = (first, ())
+                            st.vals[ow] = AV("L", frozenset({self.loan(st, ("ho", ow, first), at, "handle")}),
+                                             frozenset({at}), ov.held)
                 st.pb = frozenset(p for p in st.pb if p[0] not in back)
-            for k in pbk:
-                if k < len(ops) and ops[k][0] == "v" and not ops[k][2] and ops[k][1] in self.pidx:
-                    self.s_putback.add(self.pidx[ops[k][1]])
         if name in self.prog.fns and name not in getattr(self.prog, "trusted", ()):
             # a function of the program may unwind: storage the caller
             # holds may not view this frame's values across the call -
@@ -1433,6 +1456,11 @@ class FnCheck:
             place = (ops[k][1], ops[k][2] + tuple(path))
             for m, av in enumerate(avs):
                 if eff == "replace" and (k, m) in stored_back:
+                    continue
+                # (…nor an argument the call writes back into the slot it was
+                # read from (`putback`): a copy written back over what it
+                # views is the point of the call - agora #870)
+                if m in sm.get("putback", ()):
                     continue
                 if m != k and self.would_kill(st, place, eff, av.loans | hloans(av.held)):
                     self.err(line, f"{name}: argument {m + 1} views what the call changes through argument {k + 1}")
@@ -1498,12 +1526,20 @@ class FnCheck:
             # argument views: `__tpl_seg_eq inout r … nm`, nm read out of r)
             if k not in changed or ops[k][0] != "v":
                 continue
+            if mode != "inout" and k in sm.get("putback", ()):
+                # (a copy written back into its slot is not changed by the
+                # call: it is stored as it is - agora #870)
+                continue
             _, vid, path = ops[k]
             by_value = {src for (j, dp, src, pth, kind) in sm["stores"] if kind == "value" and j == k}
             for m, op in enumerate(ops):
                 if m == k or (mode != "inout" and m in by_value):
                     # (an argument the callee keeps by value is read - copied
                     # or taken - before it changes the other)
+                    continue
+                if mode != "inout" and m in sm.get("putback", ()):
+                    # (…or writes back into the slot it was read from: the
+                    # copy over what it views is the point - agora #870)
                     continue
                 if op[0] == "v":
                     oty = self.ty_of_place((op[1], op[2]))
@@ -3175,6 +3211,13 @@ class FnCheck:
             self.chain_scopes, self.chain_kept = set(), []
         pending = st.defers
         st.defers = ()
+        was_in_defer, self.in_defer = self.in_defer, True
+        try:
+            return self.run_defers_(st, pending, outer)
+        finally:
+            self.in_defer = was_in_defer
+
+    def run_defers_(self, st, pending, outer):
         for d in reversed(pending):
             for x in self.defer_bodies[d]:
                 if x[0] == "scope" and isinstance(x[1], list):
@@ -3879,6 +3922,13 @@ class FnCheck:
             _, (vid, path), rv, ln = s
             v = self.fn.vars[vid]
             cur = st.vals.get(vid)
+            if not path and st.pb and any(p[0] == vid for p in st.pb):
+                # (a copy that still owes its write-back given another value:
+                # the old copy is never written back - agora #870)
+                for p in sorted(x for x in st.pb if x[0] == vid):
+                    self.err(p[1], f"a field of {v.name}, a copy of a value its container still holds, "
+                                   f"hands its old value to the binding that read it, and the copy is not written back")
+                st.pb = frozenset(x for x in st.pb if x[0] != vid)
             first = s is self.first_stmt and not path and vid in self.pidx
             ddepth = v.depth if v.kind != "param" else 0
             if not path:
@@ -4430,6 +4480,17 @@ class FnCheck:
             self.exits.append(end)
         return self.make_summary()
 
+    def putback_on_every_exit(self):
+        """The parameters written back into their slots on every way out
+        (agora #870): a guarantee, so an intersection, not a union."""
+        outs = [x for _, x in self.rets] + self.exits
+        if not outs:
+            return set()
+        g = set(outs[0].pbd)
+        for x in outs[1:]:
+            g &= set(x.pbd)
+        return g
+
     def pb_check(self, st):
         """A way out with a borrowed copy's field handed to its reader and
         the copy not written back: the reader and the slot own one value
@@ -4553,7 +4614,7 @@ class FnCheck:
                 "rclos": sorted(rclos), "sclos": sorted(sclos), "calllends": sorted(calllends),
                 "gone": sorted(left_gone), "mixed": [1] if mixed else [], "stale": sorted(self.s_stale),
                 "credits": sorted(self.s_credits), "keeps": sorted(keeps), "catches": sorted(self.s_catches),
-                "putback": sorted(self.s_putback)}
+                "putback": sorted(self.putback_on_every_exit())}
 
 
 def initial_summary(prog, fn):

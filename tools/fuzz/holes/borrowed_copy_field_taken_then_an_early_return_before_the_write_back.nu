@@ -12,7 +12,7 @@ unsafe @ put_slot ( Vec Slot ) t i k Slot s → v { ( vec_put_back [Slot] t k s 
     : Slot s ( vec_at [Slot] t k )
     : ( Vec u ) out . s body
     = . s body ( vec_new [u] )
-    ? > c 5 { ^ out } {}
+    ? > c 0 { ^ out } {}
     ( put_slot t k s )
     ^ out
 }

@@ -51758,6 +51758,10 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 @ mem_putback_pass i syms s name s callee s fname i idx → v {
     : i pi ( nurl_sym_word_index syms `__fn_param_names__` name )
     ? < pi 0 { ^ v } {}
+    // (Only a call on every path through the body - its top block: one in
+    // an arm or a loop writes back on some runs only, and a caller's copy
+    // owing the write-back is settled by none of the others; agora #870.)
+    ? > g_bck_depth 1 { ^ v } {}
     : s a ( nurl_str_int idx )
     ? ! | ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `putback##` callee ) ) a )
     ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `putback##` fname ) ) a ) { ^ v } {}
@@ -61024,6 +61028,9 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
         : ~ b done F
         = g_sxe_arc -1
         ? & != 0 g_bck_pbo_any | == kc 9 == kc 12 { ( __bck_pbo_settle rec ) } {}
+        // (…and one given another value whole while it owes the write-back:
+        // the copy that owed it is never written back, agora #870.)
+        ? & != 0 g_bck_pbo_any == kc 3 { ( __bck_pbo_report ( bck_field rec 1 ) ) } {}
         // (A row handing a call something of a binding — kind 32: a value
         // lent out of it, it as an arm of a join, a closure that runs here
         // passing it on — while a `~` loop is walked, where that binding, or
@@ -69085,13 +69092,19 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     : ~ s rest ( nurl_sym_get g_bck `pbol` )
     ~ != 0 ( nurl_str_len rest ) {
         : s ids ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s pk ( nurl_sym_get g_bck ( bck_bkey `pbo_` ids ) )
-        ? != 0 ( nurl_str_len pk ) {
-            : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ids ) )
-            ( bck_emit_error ( nurl_sym_get g_bck `file` ) ( nurl_str_to_int ( str_first_word pk ) ) ( nurl_str_cat4 `giving a field of '` nm `' a new value hands its old value to the binding that read it, but '` ( nurl_str_cat nm `' is a copy of a value its container still holds - the old value is still there, and both would release it. Take the value out of the container itself (( vec_replace v i new ) hands the old element over, its option's payload), or read a copy of the field (( mem_dup . … )) instead of the field itself` ) ) )
-            ( bck_put ( bck_bkey `pbo_` ids ) `` )
-        } {}
+        ( __bck_pbo_report ids )
     }
+}
+
+// The write-back copy `ids` owes, if it owes one: reported at the store
+// that handed its field over, and settled.
+@ __bck_pbo_report s ids → v {
+    : s pk ( nurl_sym_get g_bck ( bck_bkey `pbo_` ids ) )
+    ? != 0 ( nurl_str_len pk ) {
+        : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ids ) )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) ( nurl_str_to_int ( str_first_word pk ) ) ( nurl_str_cat4 `giving a field of '` nm `' a new value hands its old value to the binding that read it, but '` ( nurl_str_cat nm `' is a copy of a value its container still holds - the old value is still there, and both would release it. Take the value out of the container itself (( vec_replace v i new ) hands the old element over, its option's payload), or read a copy of the field (( mem_dup . … )) instead of the field itself` ) ) )
+        ( bck_put ( bck_bkey `pbo_` ids ) `` )
+    } {}
 }
 
 @ bck_fview_take s st s wids → s {
