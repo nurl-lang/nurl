@@ -6049,14 +6049,16 @@ unsafe @ __arg_param_lend_root i syms → s {
 // The binding a `??` payload's value is part of — the binding it was
 // matched out of or whose field it was, through payloads of payloads
 // (`__plroot`); `name` itself when it is no payload of a binding.
+// (However deep the chain: a name already met ends it, no hop count -
+// a count would stop short of the root, agora #842's review.)
 @ __payload_root_binding i syms s name → s {
     : ~ s cur ( nurl_str_cat name `` )
-    : ~ i hops 0
-    ~ < hops 6 {
+    : ~ s seen ``
+    ~ T {
         : s up ( nurl_sym_get2 syms cur `__plroot` )
-        ? | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) { ^ cur } {}
+        ? | | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) | ( seq up name ) ( str_contains_word seen up ) { ^ cur } {}
+        = seen ( nurl_str_cat3 seen ` ` up )
         = cur ( nurl_str_cat up `` )
-        = hops + hops 1
     }
     ^ cur
 }
@@ -6107,14 +6109,16 @@ unsafe @ __arg_param_lend_root i syms → s {
     } {}
     : ~ s cur ( nurl_str_cat name `` )
     : ~ b view F
-    : ~ i hops 0
-    ~ < hops 8 {
+    // (To the end of the chain, however deep: a name already met ends it.)
+    : ~ s seen ``
+    : ~ b go T
+    ~ go {
         : s lv ? != 0 g_lview_n ( nurl_sym_get2 syms cur `__lvroot` ) ``
         ? != 0 ( nurl_str_len lv ) { = view T } {}
         : s up ? != 0 ( nurl_str_len lv ) lv ( nurl_sym_get2 syms cur `__plroot` )
-        ? | | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) ( seq up cur ) { = hops 8 } {
+        ? | | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) | ( seq up name ) ( str_contains_word seen up ) { = go F } {
+            = seen ( nurl_str_cat3 seen ` ` up )
             = cur ( nurl_str_cat up `` )
-            = hops + hops 1
         }
     }
     ? ( seq cur name ) { ^ ( nurl_str_cat `` `` ) } {}
@@ -6166,14 +6170,15 @@ unsafe @ __arg_param_lend_root i syms → s {
 // that holds the payload), or a binding that owns its value on every path.
 @ __payload_owner_flag i syms i cg s name → s {
     : ~ s cur ( nurl_str_cat name `` )
-    : ~ i hops 0
-    ~ < hops 6 {
+    // (However deep the chain: a name already met ends it.)
+    : ~ s seen ``
+    ~ T {
         : s up ( nurl_sym_get2 syms cur `__plbind` )
-        ? | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) { ^ ( nurl_str_cat `` `` ) } {}
+        ? | | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) | ( seq up name ) ( str_contains_word seen up ) { ^ ( nurl_str_cat `` `` ) } {}
         : s uptr ( mem_udrop_ptr_of syms up )
         ? & != 0 ( nurl_str_len uptr ) != 0 ( nurl_sym_len2 syms uptr `__live` ) { ^ ( mem_udrop_flag_get syms cg uptr ) } {}
+        = seen ( nurl_str_cat3 seen ` ` up )
         = cur ( nurl_str_cat up `` )
-        = hops + hops 1
     }
     ^ ( nurl_str_cat `` `` )
 }
@@ -35913,7 +35918,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     : s __prr ? == 0 ( nurl_str_len __pr ) `` ( __pderiv_reach syms ( __path_root_name __pr ) )
                     : ~ s __pd ( __words_plain __prr )
                     : ~ s __pc ( __words_cond __prr )
-                    ? != 0 ( nurl_str_len arg_xsx ) { = __pc ( __word_union __pc ( __sx_param_reach syms arg_xsx F ) ) } {}
+                    // (…through a `??` payload of a parameter too, `( vec_at q 0 )`
+                    // of `?? p { T q → … }`: deep where a payload was read
+                    // in this function, g_pl_seen - agora #842.)
+                    ? != 0 ( nurl_str_len arg_xsx ) { = __pc ( __word_union __pc ( __sx_param_reach syms arg_xsx != 0 g_pl_seen ) ) } {}
                     : ~ s __pl ? | __arg_shared != 0 ( nurl_str_len arg_xsx ) `` ( nurl_str_cat arg_lend_srcs `` )
                     ~ != 0 ( nurl_str_len __pl ) {
                         : s __pw ( str_first_word __pl ) = __pl ( str_skip_word __pl )
@@ -51062,13 +51070,16 @@ unsafe @ __jt_reg i cg → s {
     ? == 0 ( nurl_sym_len2 syms name `__plend` ) { ^ v } {}
     : ~ s cur ( nurl_str_cat name `` )
     : ~ b via_enum F
-    : ~ i hops 0
-    ~ < hops 6 {
+    // (To the end of the chain, however deep: a name already met ends it -
+    // a hop count would stop short, agora #842's review.)
+    : ~ s seen ``
+    : ~ b go T
+    ~ go {
         ? ( seq ( nurl_sym_get2 syms cur `__enum_pl` ) `1` ) { = via_enum T } {}
         : s up ( nurl_sym_get2 syms cur `__plend` )
-        ? | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) { = hops 6 } {
+        ? | | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) | ( seq up name ) ( str_contains_word seen up ) { = go F } {
+            = seen ( nurl_str_cat3 seen ` ` up )
             = cur ( nurl_str_cat up `` )
-            = hops + hops 1
         }
     }
     ? & via_enum ( nurl_sym_has_word syms `__fn_param_names__` cur ) { ( __record_param_idx syms `__fn_retpart__` cur ) } {}
@@ -51112,12 +51123,15 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     // a match's temporary: mem_enum_take_note.)
     ? & != 0 g_etake_n != 0 ( nurl_str_len ( __etake_rec syms root ) ) { ^ T } {}
     : ~ s cur ( nurl_str_cat root `` )
-    : ~ i hops 0
-    ~ < hops 6 {
+    // (To the end of the chain, however deep: a name already met ends it -
+    // a hop count would stop short, agora #842's review.)
+    : ~ s seen ``
+    : ~ b go T
+    ~ go {
         : s up ( nurl_sym_get2 syms cur `__plend` )
-        ? | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) { = hops 6 } {
+        ? | | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) | ( seq up root ) ( str_contains_word seen up ) { = go F } {
+            = seen ( nurl_str_cat3 seen ` ` up )
             = cur ( nurl_str_cat up `` )
-            = hops + hops 1
         }
     }
     : i pi ( nurl_sym_word_index syms `__fn_param_names__` cur )
@@ -51261,12 +51275,15 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 @ __arm_src_depth i syms i tt0 s v0 s froot → i {
     ? != 0 ( nurl_str_len froot ) {
         : ~ s cur ( nurl_str_cat froot `` )
-        : ~ i hops 0
-        ~ < hops 6 {
+        // (To the end of the chain, however deep: a name already met ends it -
+        // a hop count would stop short, agora #842's review.)
+        : ~ s seen ``
+        : ~ b go T
+        ~ go {
             : s up ( nurl_sym_get2 syms cur `__plend` )
-            ? | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) { = hops 6 } {
+            ? | | == 0 ( nurl_str_len up ) != 0 ( nurl_str_len ( str_skip_word up ) ) | ( seq up froot ) ( str_contains_word seen up ) { = go F } {
+                = seen ( nurl_str_cat3 seen ` ` up )
                 = cur ( nurl_str_cat up `` )
-                = hops + hops 1
             }
         }
         : s p ( mem_udrop_ptr_of syms cur )
@@ -64016,6 +64033,32 @@ unsafe @ __sx_mut_roots s st s e b named → s {
 // moving ends what points into it directly; an element's own buffer moving
 // (`^`, through a borrow of it) what points into elements' buffers;
 // elements dropped, both.
+// Sources `ss` with each live `??` payload cursor's owners added beside it,
+// under the same mark (`^`, `~`): its storage is that owner's payload, and
+// so on up a payload of a payload.
+@ __srcs_cursor_up s ss → s {
+    : ~ s out ( nurl_str_cat ss `` )
+    : ~ s rest ( nurl_str_cat ss `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s pl ( __src_plain w )
+        : i pi ( nurl_str_find w pl )
+        : s mark ? > pi 0 ( nurl_str_slice w 0 pi ) ``
+        // (…every owner up the chain, however deep: a payload of an option
+        // that is itself a payload, up to the binding that is no cursor. An
+        // owner already met ends it - a cursor is never its own owner's
+        // owner, but the walk does not lean on that to stop.)
+        : ~ i co ( __cursor_src_of ( nurl_str_to_int pl ) )
+        : ~ s seen ``
+        ~ & >= co 0 ! | ( seq ( nurl_str_int co ) pl ) ( str_contains_word seen ( nurl_str_int co ) ) {
+            = seen ( nurl_str_cat3 seen ` ` ( nurl_str_int co ) )
+            = out ( __word_union out ( nurl_str_cat mark ( nurl_str_int co ) ) )
+            = co ( __cursor_src_of co )
+        }
+    }
+    ^ out
+}
+
 @ bck_alias_conflict s ms s ss b drops → s {
     : ~ s mr ( nurl_str_cat ms `` )
     ~ != 0 ( nurl_str_len mr ) {
@@ -64085,7 +64128,11 @@ unsafe @ __sx_mut_roots s st s e b named → s {
                     // shares with the other is then the ownership rules' to
                     // settle, a borrow handed over or a value written back.)
                     ? & & != k j ! ( seq ak `-` ) ! ( bck_callee_keeps cal ( nurl_str_int k ) ) {
-                        : s sk ( bck_sx_arg_sources st ak )
+                        : s sk0 ( bck_sx_arg_sources st ak )
+                        // (…a `??` payload cursor among them points into its
+                        // option's payload: `( wr o sl )`, sl a slice of o's
+                        // payload q - agora #842.)
+                        : s sk ? & != 0 g_bck_has_cursor ! ( seq sk0 `*` ) ( __srcs_cursor_up sk0 ) sk0
                         : s hit ? ( seq sk `*` ) `` ( bck_alias_conflict mj sk dj )
                         ? != 0 ( nurl_str_len hit ) {
                             : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int hit ) ) ) ) )
@@ -67086,8 +67133,11 @@ unsafe @ resolve_irealloc_summaries → v {
 // function drops an element of that container (agora #588).
 @ __fe_moved_drop_note i syms s x → v {
     : ~ s c ( nurl_str_cat ( nurl_sym_get2 syms x `__econt` ) `` )
-    : ~ i hops 0
-    ~ & != 0 ( nurl_str_len c ) < hops 8 {
+    // (To the end of the chain, however deep: a name already met ends it -
+    // a hop count would stop short, agora #842's review.)
+    : ~ s seen ``
+    ~ & != 0 ( nurl_str_len c ) ! ( str_contains_word seen c ) {
+        = seen ( nurl_str_cat3 seen ` ` c )
         : i dot ( nurl_str_find c `.` )
         : s root ? > dot 0 ( nurl_str_slice c 0 dot ) ( nurl_str_cat c `` )
         : s up ( nurl_sym_get2 syms root `__econt` )
@@ -67099,7 +67149,6 @@ unsafe @ resolve_irealloc_summaries → v {
             ^ v
         } {}
         = c ( nurl_str_cat up `` )
-        = hops + hops 1
     }
 }
 
@@ -70395,6 +70444,16 @@ unsafe @ __bck_body_defers s st i p i line → s {
                 = binds ? < cm 0 `` ( nurl_str_slice binds + cm 1 - - ( nurl_str_len binds ) cm 1 )
                 : i id ( bck_intern nm )
                 ? != 0 g_bck_pvt_any { ( bck_put ( bck_bkey `pvar_` ( nurl_str_int id ) ) ( nurl_sym_get g_bck ( nurl_str_cat4 `pvt_` nm `@` ( bck_field rec 3 ) ) ) ) } {}
+                // (…and a payload read in place as a part of the binding it
+                // was matched out of, `part_of` - an enum of the program's
+                // keeps it: its storage is that binding's, for a view of it
+                // named past the arm, as a cursor's owner is; agora #842.
+                // Not one lent: what it is lent out of may itself be a
+                // borrow, whose own sources a view of it reaches.)
+                ? & ! lent != 0 ( nurl_str_len part_of ) {
+                    ( bck_put ( bck_bkey `cuo_` ( nurl_str_int id ) ) ( nurl_str_cat part_of `` ) )
+                    = g_bck_cuo_any 1
+                } {}
                 ? != 0 ( nurl_str_len cursor_src ) {
                     ( bck_add_word ( bck_bkey `cu_` cursor_src ) ( nurl_str_int id ) )
                     ( bck_add_word ( bck_bkey `cul` `` ) ( nurl_str_cat3 ( nurl_str_int id ) `:` cursor_src ) )
@@ -72927,15 +72986,16 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
 @ __ptr_root_owner i syms s cont → s {
     : ~ s up ( mem_udrop_ptr_of syms cont )
     : ~ s nm ( nurl_str_cat cont `` )
-    : ~ i hops 0
     // A payload binding with no drop of its own (`T x →` over a `vec_get`)
-    // points into what its match read.
-    ~ & == 0 ( nurl_str_len up ) < hops 4 {
+    // points into what its match read - to the end of the chain, however
+    // deep: a name already met ends it (agora #842's review).
+    : ~ s seen ``
+    ~ == 0 ( nurl_str_len up ) {
         : s pl ( nurl_sym_get2 syms nm `__plend` )
-        ? | == 0 ( nurl_str_len pl ) != ( nurl_str_len ( str_first_word pl ) ) ( nurl_str_len pl ) { ^ ( nurl_str_cat `` `` ) } {}
+        ? | | == 0 ( nurl_str_len pl ) != ( nurl_str_len ( str_first_word pl ) ) ( nurl_str_len pl ) | ( seq pl cont ) ( str_contains_word seen pl ) { ^ ( nurl_str_cat `` `` ) } {}
+        = seen ( nurl_str_cat3 seen ` ` pl )
         = nm ( nurl_str_cat pl `` )
         = up ( mem_udrop_ptr_of syms nm )
-        = hops + hops 1
     }
     : ~ i guard 0
     ~ & != 0 ( nurl_str_len up ) < guard 8 {
@@ -101942,11 +102002,11 @@ unsafe @ __die_at_fn s fname s what s msg → v {
     // (…a view's root: a `~` loop's element, agora #635.)
     = work ( __words_join work ( nurl_sym_get2 syms name `__lvroot` ) )
     : ~ s seen ( nurl_str_cat name `` )
-    : ~ i hops 0
-    ~ & != 0 ( nurl_str_len work ) < hops 16 {
+    // (Every root once, however many: `seen` ends the work, no count -
+    // agora #842's review.)
+    ~ != 0 ( nurl_str_len work ) {
         : s w ( str_first_word work ) = work ( str_skip_word work )
         : s r ( __path_root_name w )
-        = hops + hops 1
         ? & != 0 ( nurl_str_len r ) ! ( str_contains_word seen r ) {
             = seen ( nurl_str_cat3 seen ` ` r )
             ? | ( __is_clo_capture syms r ) ( __is_clo_param syms r ) { ^ ( nurl_str_cat r `` ) } {}
