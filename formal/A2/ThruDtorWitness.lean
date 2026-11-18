@@ -15,9 +15,10 @@ A destructor whose code changes elements through a borrow (`ThruFn`, Agora
 #295).  Before, `DtorOK` refused such code outright (`¬ ThruFn P f`).  Now a
 destructor may be through-changing when the type it runs on holds no views
 (`ThruFn P f → t.holdsView = false`): that is `CallT`'s `ThruFn` premise for
-the call the frame's end makes, no argument holding views.  At the end of
-the `letd`'s frame the value is revived holding nothing — no `letd` of a type
-that holds no views records any (`CtxWF.view`) — so the call passes none
+the call the frame's end makes, no argument holding views.  A `letd` of a
+type that holds no views is unarmed (`dbind = false`, `CtxWF.view`), and at
+the end of its frame an unarmed entry is revived holding nothing, whatever
+the `letd` recorded (`Entry.revive`) — so the call passes none
 (`Step.scopeDEnd`'s case of `preserve`).
 
 A program of one function:

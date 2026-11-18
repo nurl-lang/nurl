@@ -3652,10 +3652,11 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               · simp [hps, PMode.moves] at h
               · simp [hps] at h
             · rw [hnm] at hd; cases hd
-            · -- (a destructor that changes elements through a borrow runs on
-              -- a value whose type holds no views: no `letd` made it (those
-              -- hold views, `CtxWF.view`), so revived it holds nothing, and
-              -- the call passes no views — `CallT`'s `ThruFn` premise)
+            · -- (a destructor that changes elements through a borrow takes
+              -- a type that holds no views, so the entry is unarmed (`dbind
+              -- = false`: an armed entry's type holds views, `CtxWF.view`),
+              -- so revived it holds nothing, whatever its `letd` recorded,
+              -- and the call passes no views — `CallT`'s `ThruFn` premise)
               have hv : Ex.ty.holdsView = false := hthr h
               have hdb : Ex.dbind = false := by
                 cases hd : Ex.dbind
