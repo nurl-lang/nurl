@@ -707,6 +707,18 @@ class FnCheck:
                                            for a in av.alias)
                    for l in hloans(av.held))
 
+    def store_target(self, st, vid, base=()):
+        """The place a store into `vid` (at `base`) lands in: a `: ~` cursor's
+        own target where it is one (a lend of a single place), else `vid`'s.
+        What is rebased there - a moved payload's views of itself - ends
+        when that place changes, not only the cursor (agora #840)."""
+        av = st.vals.get(vid)
+        if av is not None and av.own == "L" and len(av.alias) == 1:
+            (a, p), = av.alias
+            if "*" not in p:
+                return a, tuple(p) + tuple(base)
+        return vid, tuple(base)
+
     def held_of_own(self, av, vid, base=()):
         """What the payload `av`, taken out of its option into `vid` (at
         `base` inside it), holds: its views of the payload itself are views
@@ -1993,7 +2005,7 @@ class FnCheck:
                         # (MEMORY.md §7.6, h389-h404, h421-h423) - and so is
                         # a local option's payload; its views of itself move
                         # with it (held_of_own, agora #840)
-                        add = hroot(self.held_of_own(src, ops[j][1], ops[j][2] + dpath), dpath)
+                        add = hroot(self.held_of_own(src, *self.store_target(st, ops[j][1], ops[j][2] + dpath)), dpath)
                     elif (ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and not src.call
                           and src.alias
                           and all(a[1] and all(e.startswith("#") for e in a[1])
@@ -2006,7 +2018,7 @@ class FnCheck:
                         # `?? o { T x → { : ~ cur x  @ H { cur 0 } } }`
                         # moves o (MEMORY.md §7.6, agora #840); its views
                         # of itself move with it (held_of_own)
-                        add = hroot(self.held_of_own(src, ops[j][1], ops[j][2] + dpath), dpath)
+                        add = hroot(self.held_of_own(src, *self.store_target(st, ops[j][1], ops[j][2] + dpath)), dpath)
                     elif ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and self.T.copyable(ty):
                         # a lend stored as an owner is copied, with the views it holds
                         add = hroot(src.held, dpath)
