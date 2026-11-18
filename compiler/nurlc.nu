@@ -2451,6 +2451,7 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ s g_msealed_ty ``
 : ~ i g_clo_lend_set 0  // 1 while `__last_call_clo_lend_idents__` holds the last call's answer (else it is empty)
 : ~ i g_retcloeff_n 0  // functions with a `retcloeff##` summary so far (gen_call skips the lookup while 0)
+: ~ i g_rce_n 0  // `pendrce` rows made so far: a run of a closure whose builder had no answer yet (agora #813)
 : ~ i g_clo_eff_set 0  // 1 while `__last_call_clo_effects__` holds the last call's answer
 : ~ i g_clo_ret_n 0  // the call results given a node member of their own so far (agora #813)
 : ~ i g_clo_cap_set 0  // …and `__last_call_clo_cap_idents__` (retcap)
@@ -7709,6 +7710,106 @@ unsafe @ __arg_lend_root i syms → s {
     ? | == 0 ( nurl_str_len a0 ) ( seq a0 `-` ) { ^ v } {}
     : s up ( nurl_sym_get2 syms a0 `__rcof` )
     ( nurl_sym_def syms ( nurl_str_cat name `__rcof` ) ? == 0 ( nurl_str_len up ) ( nurl_str_cat a0 `` ) up )
+}
+
+// Does a call of `cn` hand back a closure whose effects no answer says yet:
+// `cn` is compiled after its caller (declared below it) or is a generic
+// instance compiled at module end, so its `retcloeff` is not there where the
+// call is. The binding of the result is given placeholders, one per argument
+// it was handed (__rce_placeholders), resolved at the walk (agora #813).
+@ __rce_pending i syms s cn → b {
+    ? | == 0 g_borrowck == 0 ( nurl_str_len cn ) { ^ F } {}
+    ? != 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` cn ) { ^ F } {}
+    ? != 0 ( nurl_sym_len g_fn_compiled cn ) { ^ F } {}
+    : s rt ( nurl_sym_get g_root_syms cn )
+    ? == 0 ( nurl_str_len rt ) { ^ F } {}
+    ^ ( __is_closure_ty ( nurl_llty rt ) )
+}
+
+// The placeholders for a call of `cn`, its arguments' roster `effr` (`-`, a
+// name or path, `~a,b` lent out of them, `+a,~b` any of them): per argument
+// k and name, `name:rce#cn#k#L:0` — `L` 1 where what the closure does to it
+// is done to a value lent out of the name. The walk replaces each run of one
+// with the effects `cn`'s answer gives parameter k (__bck_rce_expand).
+@ __rce_placeholders s cn s effr → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat effr `` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s tag ( nurl_str_cat4 `rce#` cn `#` ( nurl_str_int k ) )
+        ? & != 0 ( nurl_str_len nm ) ! ( seq nm `-` ) {
+            : i c0 ( nurl_str_get nm 0 )
+            ? | == c0 126 == c0 43 {
+                : b plus == c0 43
+                : ~ s ls ( bck_swap_char ( nurl_str_slice nm 1 - ( nurl_str_len nm ) 1 ) 44 32 )
+                ~ != 0 ( nurl_str_len ls ) {
+                    : s lw0 ( str_first_word ls ) = ls ( str_skip_word ls )
+                    : b lwl == ( nurl_str_get lw0 0 ) 126
+                    : s lw ? lwl ( nurl_str_slice lw0 1 - ( nurl_str_len lw0 ) 1 ) ( nurl_str_cat lw0 `` )
+                    = out ( __word_union out ( nurl_str_cat4 lw `:` tag ( nurl_str_cat ? | ! plus lwl `#1:0` `#0:0` `` ) ) )
+                }
+            } {
+                = out ( __word_union out ( nurl_str_cat4 nm `:` tag `#0:0` ) )
+            }
+        } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+// AGORA-813: the rows of a run of such a closure (`pendrce`, field 5
+// `rce#cn#k#L`), expanded at the walk — a walk with one is parked until the
+// module has compiled, so `cn`'s answer is final — into the rows the
+// closure's effects on parameter k make (`pendeff`, `pendlend` where lent),
+// as a run of one whose answer was known makes (bck_closure_effects_run).
+// None where it does nothing to k: a closure that only reads stays clean.
+@ __bck_rce_expand s stmts → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat stmts `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s row ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 ( nurl_str_cat `` `` ) ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : s rows ? ( nurl_str_starts row `pendrce\t` ) ( __bck_rce_rows row ) ( nurl_str_cat row `` )
+        ? != 0 ( nurl_str_len rows ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat rows `` ) ( nurl_str_cat3 out `\n` rows ) } {}
+    }
+    ^ out
+}
+
+@ __bck_rce_rows s row → s {
+    : s tag ( bck_field row 5 )
+    : s t1 ( nurl_str_slice tag 4 - ( nurl_str_len tag ) 4 )
+    : i h1 ( nurl_str_find t1 `#` )
+    : s cn ( nurl_str_slice t1 0 h1 )
+    : s t2 ( nurl_str_slice t1 + h1 1 - - ( nurl_str_len t1 ) h1 1 )
+    : i h2 ( nurl_str_find t2 `#` )
+    : s ks ( nurl_str_slice t2 0 h2 )
+    : b lent0 ( seq ( nurl_str_slice t2 + h2 1 - - ( nurl_str_len t2 ) h2 1 ) `1` )
+    : s nm ( bck_field row 1 )
+    : s mid ( nurl_str_cat4 `\t` ( bck_field row 2 ) `\t` ( nurl_str_cat4 ( bck_field row 3 ) `\t` ( bck_field row 4 ) `\t` ) )
+    // (What follows the call index — `\t\t:S`, the statement's line.)
+    : s f6 ( bck_field row 6 )
+    : i o6 ( __bck_field_off row 6 )
+    : s tail ( nurl_str_slice row + o6 ( nurl_str_len f6 ) - - ( nurl_str_len row ) o6 ( nurl_str_len f6 ) )
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcloeff##` cn ) ) `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s e ( str_first_word rest ) = rest ( str_skip_word rest )
+        : b lw == ( nurl_str_get e 0 ) 126
+        : s e1 ? lw ( nurl_str_slice e 1 - ( nurl_str_len e ) 1 ) ( nurl_str_cat e `` )
+        : i p ( nurl_str_find e1 `.` )
+        : i c1 ( nurl_str_find e1 `:` )
+        : i end ? & > p 0 < p c1 p c1
+        ? & > c1 1 ( seq ( nurl_str_slice e1 1 - end 1 ) ks ) {
+            : s path ( nurl_str_slice e1 end - c1 end )
+            : s ct ( nurl_str_slice e1 + c1 1 - - ( nurl_str_len e1 ) c1 1 )
+            : i c2 ( nurl_str_find ct `:` )
+            : s r ( nurl_str_cat4 ? | lent0 lw `pendlend` `pendeff` `\t` ( nurl_str_cat nm path ) ( nurl_str_cat4 mid ( nurl_str_slice ct 0 c2 ) `\t` ( nurl_str_cat ( nurl_str_slice ct + c2 1 - - ( nurl_str_len ct ) c2 1 ) tail ) ) )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat r `` ) ( nurl_str_cat3 out `\n` r )
+        } {}
+    }
+    ^ out
 }
 
 // A closure this function hands back — a literal written there, a binding
@@ -34431,7 +34532,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // (`retcloeff`), whose storage each argument is: its name, its field
     // path, or the bindings a call written there lends out of, `~a,b` —
     // `-` for none; agora #802.)
-    : b __want_effr & != 0 g_retcloeff_n != 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` call_name )
+    : b __want_effr | & != 0 g_retcloeff_n != 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` call_name ) & ! __callee_shadowed ( __rce_pending syms call_name )
     : ~ s arg_effr ``
     : ~ s __clo_args ``
     // What the closures handed to this call (and, through a closure value,
@@ -34440,6 +34541,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // last argument) and `e` an effect (`name:callee:aix`, __clo_effect_note):
     // the exclusive-call check of the walk (`clox`, bck_clo_route_check).
     : ~ s __clo_routes ``
+    // (…and, per argument, what running the closure it is does to its
+    // captures — `k|e1,e2` — for a callee that hands that argument back,
+    // `retclo`: the result's effects; agora #813.)
+    : ~ s __ce_by_arg ``
     // The closures this call is handed (node members): each argument that
     // is a binding able to hold closures may now hold them (`( vec_push fs
     // g )`; __clo_hold_add, agora #736).
@@ -35985,6 +36090,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             : s __ce_effs ? == bck_arg_tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_effects__` )
             ? ( is_ident_tok bck_arg_tt ) ( __clo_run_attr syms bck_arg_val `__closure_effects` `le` ) ( __clo_members_attr __ce_ms `le` )
             ( bck_closure_effects_run syms __ce_effs ( nurl_lex_line lex ) )
+            ? != 0 ( nurl_str_len __ce_effs ) { = __ce_by_arg ( nurl_str_cat4 __ce_by_arg ` ` ( nurl_str_int arg_idx ) ( nurl_str_cat `|` ( bck_swap_char __ce_effs 32 44 ) ) ) } {}
             ? ( is_ident_tok bck_arg_tt ) { ( __loop_clo_note syms bck_arg_val ( nurl_lex_line lex ) ) } {}
             : s __ce_asg ? == bck_arg_tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_assigns__` )
             ? ( is_ident_tok bck_arg_tt ) ( __clo_run_attr syms bck_arg_val `__closure_assigns` `la` ) ( __clo_members_attr __ce_ms `la` )
@@ -37906,12 +38012,32 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // captured (`retcloeff`, `%k` for argument k), rewritten onto them for
     // the binding of the result (agora #656).
     ? != 0 g_clo_eff_set { ( nurl_sym_def syms `__last_call_clo_effects__` `` ) = g_clo_eff_set 0 } {}
+    : ~ s __cle_all ``
     ? != 0 g_retcloeff_n {
         ? != 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` __lend_cn ) {
-            : s __cle ( __clo_effs_onto_args ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcloeff##` __lend_cn ) ) ? __want_effr arg_effr arg_idents )
-            ? != 0 ( nurl_str_len __cle ) { ( __clo_ret_member_note syms __cle ) } {}
+            = __cle_all ( __clo_effs_onto_args ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcloeff##` __lend_cn ) ) ? __want_effr arg_effr arg_idents )
         } {}
     } {}
+    // (…and a closure handed to it that it hands back — `@ pick ( @ v ) f
+    // → ( @ v ) { ^ f }`, `retclo`: the literal's effects are the result's,
+    // replayed where it runs; agora #813.)
+    ? & != 0 ( nurl_str_len __ce_by_arg ) != 0 g_retclo_n {
+        : s __rck ( nurl_sym_get g_pending_impl ( nurl_str_cat `retclo##` __lend_cn ) )
+        ? != 0 ( nurl_str_len __rck ) {
+            : ~ s __cba ( nurl_str_cat __ce_by_arg `` )
+            ~ != 0 ( nurl_str_len __cba ) {
+                : s __cbw ( str_first_word __cba ) = __cba ( str_skip_word __cba )
+                : i __cbp ( nurl_str_find __cbw `|` )
+                ? & > __cbp 0 ( str_contains_word __rck ( nurl_str_slice __cbw 0 __cbp ) ) {
+                    = __cle_all ( __word_union __cle_all ( bck_swap_char ( nurl_str_slice __cbw + __cbp 1 - - ( nurl_str_len __cbw ) __cbp 1 ) 44 32 ) )
+                } {}
+            }
+        } {}
+    } {}
+    // (…and, of a builder whose answer is not there yet — compiled below its
+    // caller, a generic instance — placeholders the walk resolves: agora #813.)
+    ? & ! __callee_shadowed ( __rce_pending syms __lend_cn ) { = __cle_all ( __word_union __cle_all ( __rce_placeholders __lend_cn arg_effr ) ) } {}
+    ? != 0 ( nurl_str_len __cle_all ) { ( __clo_ret_member_note syms __cle_all ) } {}
     // …and the ones it takes over (`retcap`: a wrapper handing its own
     // `sink` parameter on takes it over too — gen_ret).
     ? != 0 g_clo_cap_set { ( nurl_sym_def syms `__last_call_clo_cap_idents__` `` ) = g_clo_cap_set 0 } {}
@@ -53013,6 +53139,13 @@ unsafe @ __clo_cap_marks i syms s caps i line → v {
         : i c2 ( nurl_str_find tail `:` )
         : s cal ( nurl_str_slice tail 0 c2 )
         : i aix ( nurl_str_to_int ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 ) )
+        // (A placeholder of a builder's answer not there yet: a row the walk
+        // expands, __bck_rce_expand; agora #813.)
+        ? ( nurl_str_starts cal `rce#` ) {
+            ( bck_stash_pending_kind nm line cal aix `` `pendrce` )
+            = g_rce_n + g_rce_n 1
+            continue
+        } {}
         // (`~`: through a value lent out of the capture, agora #353.)
         : b lent & > ( nurl_str_len nm ) 1 == ( nurl_str_get nm 0 ) 126
         : s pn ? lent ( nurl_str_slice nm 1 - ( nurl_str_len nm ) 1 ) ( nurl_str_cat nm `` )
@@ -71415,6 +71548,9 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
 }
 
 @ bck_analyze s params → v {
+    // (A run of a closure whose builder's answer was not there yet: its rows
+    // now, every answer final — __bck_rce_expand, agora #813.)
+    ? != 0 g_rce_n { ? >= ( nurl_str_find ( nurl_sym_get g_bck `stmts` ) `pendrce` ) 0 { ( bck_put `stmts` ( __bck_rce_expand ( nurl_sym_get g_bck `stmts` ) ) ) } {} } {}
     ? != 0 # i ( getenv `NURL_BCK_DUMP` ) { ( nurl_eprintln ( nurl_str_cat `── rows: ` ( nurl_sym_get g_bck `stmts` ) ) ) } {}
     // (Its parameters in order, and what bck_note_vkeeps finds.)
     ( bck_put `vkparams` params )
