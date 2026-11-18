@@ -7758,6 +7758,35 @@ unsafe @ __arg_lend_root i syms → s {
     ^ out
 }
 
+// The `rcq#` placeholders of a call of `cn` not compiled yet, from what the
+// closures it was handed do (`k|e1,e2`, each `name:cal:aix`): per effect,
+// `name:rcq#cn#k#0#aix#cal:0` — the effect, if `cn` hands argument k back.
+@ __rcq_placeholders s cn s byarg → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat byarg `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i bp ( nurl_str_find w `|` )
+        ? > bp 0 {
+            : s k ( nurl_str_slice w 0 bp )
+            : ~ s es ( bck_swap_char ( nurl_str_slice w + bp 1 - - ( nurl_str_len w ) bp 1 ) 44 32 )
+            ~ != 0 ( nurl_str_len es ) {
+                : s e ( str_first_word es ) = es ( str_skip_word es )
+                : i c1 ( nurl_str_find e `:` )
+                : s et ? > c1 0 ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 ) ( nurl_str_cat `` `` )
+                : i c2r ( nurl_str_find et `:` )
+                ? & > c1 0 > c2r 0 {
+                    : s nm ( nurl_str_slice e 0 c1 )
+                    : s cal ( nurl_str_slice et 0 c2r )
+                    : s aix ( nurl_str_slice et + c2r 1 - - ( nurl_str_len et ) c2r 1 )
+                    = out ( __word_union out ( nurl_str_cat4 nm ( nurl_str_cat4 `:rcq#` cn `#` k ) ( nurl_str_cat4 `#0#` aix `#` cal ) `:0` ) )
+                } {}
+            }
+        } {}
+    }
+    ^ out
+}
+
 // AGORA-813: the rows of a run of such a closure (`pendrce`, field 5
 // `rce#cn#k#L`), expanded at the walk — a walk with one is parked until the
 // module has compiled, so `cn`'s answer is final — into the rows the
@@ -7765,6 +7794,33 @@ unsafe @ __arg_lend_root i syms → s {
 // as a run of one whose answer was known makes (bck_closure_effects_run).
 // None where it does nothing to k: a closure that only reads stays clean.
 @ __bck_rce_expand s stmts → s {
+    // (A row it makes may be a placeholder in turn — a builder handing back
+    // another's closure, a forwarder's: expanded again, until none is left.
+    // A builder that hands back its own makes the same rows again; what is
+    // left after the passes adds nothing the earlier ones did not.)
+    : ~ s cur ( __bck_rce_pass stmts )
+    : ~ i n 0
+    ~ & < n 8 >= ( nurl_str_find cur `pendrce\t` ) 0 {
+        = cur ( __bck_rce_pass cur )
+        = n + n 1
+    }
+    ? >= ( nurl_str_find cur `pendrce\t` ) 0 { = cur ( __bck_rce_pass_drop cur ) } {}
+    ^ cur
+}
+
+@ __bck_rce_pass_drop s stmts → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat stmts `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s row ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 ( nurl_str_cat `` `` ) ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        ? == 0 ( nurl_str_starts row `pendrce\t` ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat row `` ) ( nurl_str_cat3 out `\n` row ) } {}
+    }
+    ^ out
+}
+
+@ __bck_rce_pass s stmts → s {
     : ~ s out ``
     : ~ s rest ( nurl_str_cat stmts `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -7777,8 +7833,56 @@ unsafe @ __arg_lend_root i syms → s {
     ^ out
 }
 
+// A placeholder tag with its value lent out of the name (`L` 1).
+@ __rce_tag_lent s tag b lent → s {
+    ? ! lent { ^ ( nurl_str_cat tag `` ) } {}
+    ? ( nurl_str_starts tag `rcq#` ) {
+        // (`rcq#cn#k#L#…`: the fourth field.)
+        : s t1 ( nurl_str_slice tag 4 - ( nurl_str_len tag ) 4 )
+        : i h1 ( nurl_str_find t1 `#` )
+        : s t2 ( nurl_str_slice t1 + h1 1 - - ( nurl_str_len t1 ) h1 1 )
+        : i h2 ( nurl_str_find t2 `#` )
+        : s t3 ( nurl_str_slice t2 + h2 1 - - ( nurl_str_len t2 ) h2 1 )
+        ^ ( nurl_str_cat4 ( nurl_str_slice tag 0 + + 4 h1 + 1 + h2 1 ) `1` ( nurl_str_slice t3 1 - ( nurl_str_len t3 ) 1 ) `` )
+    } {}
+    ^ ( nurl_str_cat ( nurl_str_slice tag 0 - ( nurl_str_len tag ) 1 ) `1` )
+}
+
+// One row of an effect `cal`:`aix` on `nm`: a placeholder's (`rce#`, `rcq#`)
+// is a `pendrce` row again, expanded on the next pass.
+@ __bck_rce_one s nm s mid s cal s aix s tail b lent → s {
+    : b ph | ( nurl_str_starts cal `rce#` ) ( nurl_str_starts cal `rcq#` )
+    : s kind ? ph `pendrce` ? lent `pendlend` `pendeff`
+    : s c ? ph ( __rce_tag_lent cal lent ) ( nurl_str_cat cal `` )
+    ^ ( nurl_str_cat4 kind `\t` nm ( nurl_str_cat4 mid c `\t` ( nurl_str_cat aix tail ) ) )
+}
+
 @ __bck_rce_rows s row → s {
     : s tag ( bck_field row 5 )
+    : s nm0 ( bck_field row 1 )
+    : s mid0 ( nurl_str_cat4 `\t` ( bck_field row 2 ) `\t` ( nurl_str_cat4 ( bck_field row 3 ) `\t` ( bck_field row 4 ) `\t` ) )
+    : s f60 ( bck_field row 6 )
+    : i o60 ( __bck_field_off row 6 )
+    : s tail0 ( nurl_str_slice row + o60 ( nurl_str_len f60 ) - - ( nurl_str_len row ) o60 ( nurl_str_len f60 ) )
+    // (`rcq#cn#k#L#aix#cal`: a closure handed to `cn` as argument k, whose
+    // effect `cal`:`aix` is the result's where `cn` hands that argument back
+    // — its `retclo`, final now; agora #813.)
+    ? ( nurl_str_starts tag `rcq#` ) {
+        : s q1 ( nurl_str_slice tag 4 - ( nurl_str_len tag ) 4 )
+        : i g1 ( nurl_str_find q1 `#` )
+        : s qcn ( nurl_str_slice q1 0 g1 )
+        : s q2 ( nurl_str_slice q1 + g1 1 - - ( nurl_str_len q1 ) g1 1 )
+        : i g2 ( nurl_str_find q2 `#` )
+        : s qk ( nurl_str_slice q2 0 g2 )
+        : s q3 ( nurl_str_slice q2 + g2 1 - - ( nurl_str_len q2 ) g2 1 )
+        : b ql ( seq ( nurl_str_slice q3 0 1 ) `1` )
+        : s q4 ( nurl_str_slice q3 2 - ( nurl_str_len q3 ) 2 )
+        : i g4 ( nurl_str_find q4 `#` )
+        : s qaix ( nurl_str_slice q4 0 g4 )
+        : s qcal ( nurl_str_slice q4 + g4 1 - - ( nurl_str_len q4 ) g4 1 )
+        ? ! ( str_contains_word ( nurl_sym_get g_pending_impl ( nurl_str_cat `retclo##` qcn ) ) qk ) { ^ ( nurl_str_cat `` `` ) } {}
+        ^ ( __bck_rce_one nm0 mid0 qcal qaix tail0 ql )
+    } {}
     : s t1 ( nurl_str_slice tag 4 - ( nurl_str_len tag ) 4 )
     : i h1 ( nurl_str_find t1 `#` )
     : s cn ( nurl_str_slice t1 0 h1 )
@@ -7805,7 +7909,7 @@ unsafe @ __arg_lend_root i syms → s {
             : s path ( nurl_str_slice e1 end - c1 end )
             : s ct ( nurl_str_slice e1 + c1 1 - - ( nurl_str_len e1 ) c1 1 )
             : i c2 ( nurl_str_find ct `:` )
-            : s r ( nurl_str_cat4 ? | lent0 lw `pendlend` `pendeff` `\t` ( nurl_str_cat nm path ) ( nurl_str_cat4 mid ( nurl_str_slice ct 0 c2 ) `\t` ( nurl_str_cat ( nurl_str_slice ct + c2 1 - - ( nurl_str_len ct ) c2 1 ) tail ) ) )
+            : s r ( __bck_rce_one ( nurl_str_cat nm path ) mid ( nurl_str_slice ct 0 c2 ) ( nurl_str_slice ct + c2 1 - - ( nurl_str_len ct ) c2 1 ) tail | lent0 lw )
             = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat r `` ) ( nurl_str_cat3 out `\n` r )
         } {}
     }
@@ -38036,7 +38140,13 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     } {}
     // (…and, of a builder whose answer is not there yet — compiled below its
     // caller, a generic instance — placeholders the walk resolves: agora #813.)
-    ? & ! __callee_shadowed ( __rce_pending syms __lend_cn ) { = __cle_all ( __word_union __cle_all ( __rce_placeholders __lend_cn arg_effr ) ) } {}
+    ? & ! __callee_shadowed ( __rce_pending syms __lend_cn ) {
+        = __cle_all ( __word_union __cle_all ( __rce_placeholders __lend_cn arg_effr ) )
+        // (…and a closure handed to it, whose effects are the result's if it
+        // hands that argument back, `retclo` — known only once it has
+        // compiled: `rcq#` placeholders, resolved at the walk.)
+        ? != 0 ( nurl_str_len __ce_by_arg ) { = __cle_all ( __word_union __cle_all ( __rcq_placeholders __lend_cn __ce_by_arg ) ) } {}
+    } {}
     ? != 0 ( nurl_str_len __cle_all ) { ( __clo_ret_member_note syms __cle_all ) } {}
     // …and the ones it takes over (`retcap`: a wrapper handing its own
     // `sink` parameter on takes it over too — gen_ret).
@@ -53141,8 +53251,11 @@ unsafe @ __clo_cap_marks i syms s caps i line → v {
         : i aix ( nurl_str_to_int ( nurl_str_slice tail + c2 1 - - ( nurl_str_len tail ) c2 1 ) )
         // (A placeholder of a builder's answer not there yet: a row the walk
         // expands, __bck_rce_expand; agora #813.)
-        ? ( nurl_str_starts cal `rce#` ) {
-            ( bck_stash_pending_kind nm line cal aix `` `pendrce` )
+        ? | ( nurl_str_starts cal `rce#` ) ( nurl_str_starts cal `rcq#` ) {
+            // (`~name`: on a value lent out of it — the tag says so, the row
+            // names the binding.)
+            : b rl & > ( nurl_str_len nm ) 1 == ( nurl_str_get nm 0 ) 126
+            ( bck_stash_pending_kind ? rl ( nurl_str_slice nm 1 - ( nurl_str_len nm ) 1 ) ( nurl_str_cat nm `` ) line ( __rce_tag_lent cal rl ) aix `` `pendrce` )
             = g_rce_n + g_rce_n 1
             continue
         } {}
