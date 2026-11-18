@@ -1,4 +1,5 @@
-// map: §2.5 | A2 | rejected | - | agora #774: `~ x pl` over the payload of `( vec_at hs 0 )`, a Vec of shares, `( wipe r )` in the body clearing and shrinking it
+// map: §2.5 | A2 | rejected | - | AGORA-774: `~ x pl` over the payload of `( vec_at hs 0 )`, a Vec of shares, `( wipe r )` in the body clearing and shrinking it
+// AGORA-774 (closed with AGORA-580): refused - the loop's cursor over a container lent out of an element is a view of those elements (main 5faa22f8: accepted)
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/rc.nu`
 
