@@ -159,7 +159,13 @@ the LLVM / C11 memory model rather than redefining it.
   recorded (`HeldUp`). `A2/ThruDtorWitness.lean` types a
   struct of two integers whose `% Drop` pushes through `vec_at` of its own
   local, run by its `letd`'s frame end, safe and leak-free. nurlc accepts
-  it.
+  it. So is drop glue that does so, directly or through the struct's own
+  `% Drop` it runs, when the type it takes apart holds no views
+  (`GlueOK`, `ImplGlueOK`, `EnumGlueOK`, `ClosureGlueOK`: the same
+  premise; `glueCall_typed`). `A2/ThruGlueWitness.lean` types a struct
+  holding a destructor field and a number whose own `% Drop` pushes
+  through `vec_at` of its own local, run by its glue, safe and
+  leak-free. nurlc accepts it.
   That nurlc's
   `vec_pop` / `vec_remove` lower to these steps is phase C. Outside the
   claim still:
@@ -170,9 +176,9 @@ the LLVM / C11 memory model rather than redefining it.
     hands it an element, a field viewer or a call's result rather than an
     owner;
   - a destructor that changes elements through a borrow, directly or
-    through a callee, of a type that holds views (a struct's or an
-    enum's glue keeps `¬ ThruFn`), and a call into a function that does so
-    which passes an argument holding views (`ThruFn`);
+    through a callee, or drop glue that does so, of a type that holds
+    views, and a call into a function that does so which passes an
+    argument holding views (`ThruFn`);
   - a closure whose code does so, when the call through its package passes
     an argument holding views, or its environment holds views, or it takes
     the environment handed over (`StmtT.callcE`). nurlc accepts the first:

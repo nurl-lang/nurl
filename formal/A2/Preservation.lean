@@ -3720,10 +3720,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             (by rw [hps]; simp [Entry.revive, htx']) (by simp [Entry.revive, htx', Ty.owning]) hro hxF hrF hNoPinΓ'
             (fun h => by
               -- (a glue that changes elements through a borrow — one calling a
-              -- through-changing impl — takes apart a value whose type holds no
-              -- views: no `letd` that records views made it, `CtxWF.view`, so
-              -- revived it holds nothing and the call passes no views, as for a
-              -- destructor called lent)
+              -- through-changing impl — takes apart a type that holds no views,
+              -- so the entry is unarmed (`dbind = false`, `CtxWF.view`), so
+              -- revived it holds nothing, whatever its `letd` recorded, and the
+              -- call passes no views, as for a destructor called lent)
               have hv : Ex.ty.holdsView = false := by rw [htx']; simpa [Ty.holdsView] using hthg h
               have hdb : Ex.dbind = false := by
                 cases hd : Ex.dbind
