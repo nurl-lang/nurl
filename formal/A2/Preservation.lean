@@ -1313,7 +1313,8 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
       obtain ⟨Er, hEr, hlr, hhr, htr, hor, hbr, htv⟩ := hi.names w E hw hl hni d hd b t hk
       by_cases hrx : d.root = x
       · rw [hrx] at hEr; rw [hx] at hEr; cases hEr
-        -- what is captured by name holds no views: it is no binding `letd` made
+        -- what is captured by name holds no views, so its entry is unarmed
+        -- (`CtxWF.dbind_of_noView`) and `Entry.revive` clears its held list
         have hdb : Ex.dbind = false := hi.wf.dbind_of_noView hx (by rw [htr, htv])
         refine ⟨Ex.revive x, by rw [hrx]; simp [setE], rfl, by simp [Entry.revive, hdb], htr,
           by simp [Entry.revive, hos], hbr, htv⟩
@@ -1876,7 +1877,8 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
         have hrk : d.root ∉ k.spine := fun h => hns ⟨d.root, List.mem_map_of_mem hd, h⟩
         by_cases hrx : d.root = x
         · rw [hrx] at hEr; rw [hx] at hEr; cases hEr
-          -- what is captured by name holds no views: it is no binding `letd` made
+          -- what is captured by name holds no views, so its entry is unarmed
+          -- (`CtxWF.dbind_of_noView`) and `Entry.revive` clears its held list
           have hdb : Ex.dbind = false := hi.wf.dbind_of_noView hx (by rw [htr, htv])
           exact ⟨Ex.revive x, by rw [hrx]; exact hux, rfl, by simp [Entry.revive, hdb], htr,
             by simp [Entry.revive, hos], hbr, htv⟩
