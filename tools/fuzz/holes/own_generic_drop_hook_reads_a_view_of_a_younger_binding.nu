@@ -1,4 +1,5 @@
-// map: §7.6 | A2 | rejected | - | agora #384: a program's own generic handle's `Holder_drop` hook reads a view field whose source is declared after the holder
+// map: §7.6 | A2 | rejected | - | AGORA-384: a program's own generic handle's `Holder_drop` hook reads a view field whose source is declared after the holder
+// AGORA-384 (closed): refused - a drop hook of the program's own may read the views its value holds, as a `% Drop` may (main 2c54f01f: accepted, heap-use-after-free)
 $ `stdlib/core/string.nu`
 
 : Holder [T] { s name T x }
