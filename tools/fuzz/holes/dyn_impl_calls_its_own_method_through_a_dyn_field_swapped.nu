@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #481: a dyn impl declared before the leaf impl hands back its own method called through a dyn field, view arguments swapped
+// map: §2.10 | A2 | rejected | - | AGORA-481: a dyn impl hands back its own method called through a dyn field with its view arguments swapped
+// AGORA-481: refused - the impl asks its own answer through the virtual callee, so its walk settles with its fellows as a component (main 393d7473: accepted, heap-use-after-free)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
@@ -7,16 +8,16 @@ $ `stdlib/core/vec.nu`
 : Leaf { i k }
 : Node { % Lex child }
 
-% Lex Node {
-    @ toks Node self String a String b i d → ( Vec s ) { ^ ( toks . self child b a - d 1 ) }
-}
-
 % Lex Leaf {
     @ toks Leaf self String a String b i d → ( Vec s ) {
         : ~ ( Vec s ) h ( vec_new [s] )
         ( vec_push [s] h ( string_data a ) )
         ^ h
     }
+}
+
+% Lex Node {
+    @ toks Node self String a String b i d → ( Vec s ) { ^ ( toks . self child b a - d 1 ) }
 }
 
 @ main → i {

@@ -63369,7 +63369,16 @@ unsafe @ __vk_assumptions_check → v {
 // safe code it evaluates (bck_bind_class); codegen's question is
 // __rv_waits'.
 @ __rv_holder_result s cal → b {
-    : s rt ( nurl_sym_get g_root_syms cal )
+    : ~ s rt ( nurl_sym_get g_root_syms cal )
+    // (A virtual callee - a `dyn` call's, a closure node's - has no type of
+    // its own here: its members' result is its result; agora #481.)
+    ? == 0 ( nurl_str_len rt ) {
+        : ~ s ms ( __indirect_members cal )
+        ~ & == 0 ( nurl_str_len rt ) != 0 ( nurl_str_len ms ) {
+            : s m ( str_first_word ms ) = ms ( str_skip_word ms )
+            ? ! ( seq m `*` ) { = rt ( nurl_sym_get g_root_syms m ) } {}
+        }
+    } {}
     ? == 0 ( nurl_str_len rt ) { ^ F } {}
     ^ == ( bck_bind_class ( nurl_llty rt ) ) 3
 }
@@ -71991,7 +72000,7 @@ unsafe @ __bck_walk_deferred i i → v {
     // (Its own result answer asked by a call of itself, `q`: its walk asks
     // what it makes. A call of itself its `bK` rows ask is answered by its
     // own walk, bck_vkeeps_self.)
-    : b selfq ( str_contains_word ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) ) )
+    : ~ b selfq ( str_contains_word ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) ) )
     : ~ s cs ( __word_union ( __vbuf_callees ( nurl_sym_get g_deferred_bck ( nurl_str_cat `s` ix ) ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) )
     : ~ s seen ``
     ~ != 0 ( nurl_str_len cs ) {
@@ -72016,6 +72025,12 @@ unsafe @ __bck_walk_deferred i i → v {
         // (An indirect callee answers with what it may run: those first.)
         : s cms ( __indirect_members c )
         ? != 0 ( nurl_str_len cms ) { = cs ( __words_join cs cms ) } {}
+        // (…itself among them - an impl of a `dyn` method calling that method
+        // through a field, `^ ( toks . self child b a )`: it asks its own
+        // answer, as a call of itself does, and settles it as a component -
+        // walked once on an empty answer, it handed back no view of b;
+        // agora #481.)
+        ? & ! selfq != 0 ( nurl_str_len cms ) { = selfq ( str_contains_word cms ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) ) ) } {}
     }
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `dl` ix ) ( nurl_str_int low ) )
     // (Not its component's root: the root walks it with the others.)

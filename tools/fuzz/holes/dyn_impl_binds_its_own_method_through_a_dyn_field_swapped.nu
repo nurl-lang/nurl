@@ -1,4 +1,6 @@
-// map: §2.10 | A2 | rejected | - | agora #481: a dyn impl hands back its own method called through a dyn field with its view arguments swapped
+// dyn_impl_binds_its_own_method_through_a_dyn_field_swapped: as dyn_impl_calls_its_own_method_through_a_dyn_field_swapped, the result bound before it is handed back
+// AGORA-481: refused
+// map: §2.10 | A2 | rejected | - | AGORA-481
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
@@ -16,7 +18,7 @@ $ `stdlib/core/vec.nu`
 }
 
 % Lex Node {
-    @ toks Node self String a String b i d → ( Vec s ) { ^ ( toks . self child b a - d 1 ) }
+    @ toks Node self String a String b i d → ( Vec s ) { : ( Vec s ) r ( toks . self child b a - d 1 ) ^ r }
 }
 
 @ main → i {
