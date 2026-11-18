@@ -1990,8 +1990,10 @@ class FnCheck:
                         # value is taken out of it: the function owns the
                         # parameter from here and releases the rest of it,
                         # and the caller's argument moves into the call
-                        # (MEMORY.md §7.6, h389-h404, h421-h423)
-                        add = hroot(src.held, dpath)
+                        # (MEMORY.md §7.6, h389-h404, h421-h423) - and so is
+                        # a local option's payload; its views of itself move
+                        # with it (held_of_own, agora #840)
+                        add = hroot(self.held_of_own(src, ops[j][1], ops[j][2] + dpath), dpath)
                     elif (ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and not src.call
                           and src.alias
                           and all(a[1] and all(e.startswith("#") for e in a[1])
