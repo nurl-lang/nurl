@@ -564,7 +564,8 @@ theorem NewSlot.editV {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
       fun h => by rw [hm'] at h; cases h⟩,
     by rw [Entry.hold_mode, killE_mode], fun hl' _ r hr' => ?_, ht', fun hl' _ => ?_, fun hl' U hU => ?_,
     fun U hU => ?_, fun h => absurd (h.symm.trans hdb') (by decide), fun h => ?_,
-    fun h => absurd (h.symm.trans hdb') (by decide), fun h => absurd (h.symm.trans hdb') (by decide), ?_⟩
+    fun h => absurd (h.symm.trans hdb') (by decide), fun h => absurd (h.symm.trans hdb') (by decide), ?_,
+    FreshE.of_ownSlot (by simpa [killE_mode] using hos)⟩
   · cases hU; rw [ht']; exact hwT'
   · -- the views of the live owner
     rw [Entry.hold_live] at hl'
@@ -784,6 +785,7 @@ theorem MInv.holdOn {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {rs : List Var} {D : L
       have := (hrs p hpr E hE).1; rw [hm] at this; cases this
     · rw [ite_eq_right hpr] at hm ⊢; exact hi.rootbLt p E hE hm
   names := hi.names.holdOn hnm
+  fresh := hi.fresh.of_le (FreshLe.holdOn _ _ _) (KeepsFrame.holdOn _ _ _)
   held v E' sl T h hl hsl hT := by
     obtain ⟨E, hE, rfl⟩ := holdOn_get h
     by_cases hvr : v ∈ rs
@@ -825,6 +827,7 @@ theorem MInv.holdOn {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {rs : List Var} {D : L
     `D` too (`MInv.holdOn`), and `x` is live again, holding `D` too, valid
     through the dependency that reached the changed node. -/
 theorem MInv.editBV_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) (hn : NameWF Γ1)
+    (hfr : FreshOK Γ1)
     (hanch : RootbAnch Γ1 F) {x : Var} {op : Edit} {Ex : Entry} {t : Ty}
     (hx : Γ1 x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
     (hthru : ThruOK Γ1 F op Ex.ty Ex.path) {D : List Dep} (hV : ThruV Γ1 op Ex.ty Ex.path D)
@@ -922,6 +925,7 @@ theorem MInv.editBV_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) 
         rw [h1]; split
         · exact List.mem_append_left _ hd'
         · exact hd')))
+    ((hfr x Ex hx).mono (((KeepsFrame.refl Γ1).killHv _).trans (KeepsFrame.holdOn _ _ _)))
   · -- its roots are bound: what it depended on, and what was stored
     have hr' : r ∈ roots Ex.vdeps ∨ r ∈ roots D := by
       simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, roots, List.map_append,
@@ -1003,7 +1007,7 @@ theorem MInv.editBV_fin {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 �
     · exact hns0 cc h
     · exact h)
   obtain ⟨_, hpfx⟩ := hi.editBV_names hx hmx hl hthru hxs hT0 hst hT' hr hes hvf
-  exact MInv.editBV_rest hi.wf hi.names hanch hx hmx hl hty hthru hV hDn hDr hdep hown
+  exact MInv.editBV_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hV hDn hDr hdep hown
     (by rw [hst x hxo]; exact hxs)
     (editB_hrefAt' hT' (hi.heap.nodup _ _ hT0) htop hla hr hw' hV' hN' hsh') hpfx
 

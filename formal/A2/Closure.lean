@@ -214,6 +214,7 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
         ⟨Ey, by have hne : y ≠ x := fun e => by rw [e, hx] at hy; cases hy
                 simp [setE, upd_ne _ _ hne, hy], rfl, rfl, fun _ h => h⟩
       exact (hi.names w Ew hw hl' hn).keeps hk (fun d hd hkd hX => by cases hX)
+  · exact hi.fresh.bind hx (fun _ _ hb _ => by rw [hm] at hb; cases hb)
   · intro w Ew sl T hw hl' hsl hT
     by_cases hwx : w = x
     · subst hwx
@@ -549,8 +550,19 @@ theorem CtxWF.clean {Γ : Ctx} (hw : CtxWF Γ) : CtxWF (cleanC Γ) where
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
     rw [Entry.clean_dbind] at hd; rw [clean_ty]; exact hw.view v E0 h0 hd
 
+/-- Agora #909: cleaning keeps fresh borrows fresh: a live one is untouched. -/
+theorem cleanC_fresh {Γ : Ctx} (h : FreshOK Γ) : FreshOK (cleanC Γ) := by
+  refine h.of_le (fun v E hv hl hn hb hf => ?_) (fun r Er hr hm => ⟨Er.clean, by simp [cleanC, hr],
+    by rw [clean_mode]; exact hm⟩)
+  obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
+  rw [clean_live] at hl
+  have hn0 : E0.ty ≠ .int := by rwa [clean_ty] at hn
+  rw [Entry.clean_eq hl hn0] at hb hf ⊢
+  exact ⟨E0, h0, hl, hn0, hb, hf, List.Subset.refl _, List.Subset.refl _⟩
+
 theorem MInv.clean {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : MInv m (cleanC Γ) where
   names := cleanC_names hi.names
+  fresh := cleanC_fresh hi.fresh
   shares v E sl T hv hsl hown hT := by
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
     rw [clean_ty]; exact hi.shares v E0 sl T h0 hsl hown hT

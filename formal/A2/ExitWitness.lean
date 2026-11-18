@@ -69,7 +69,7 @@ theorem int_plain : intE.mode ≠ .rootb ∧ intE.dtor = false ∧ intE.dbind = 
 theorem exit_typed {P : Prog} {ξ : Exits} {Γ : Ctx} {n : Nat} (hp : Plain Γ) (hx : ξ.up n Γ) :
     StmtT P ξ Γ [] (.exit n) Γ :=
   StmtT.exit hx hp.wf hp.names (fun _ => rfl) (fun _ E h => ⟨E, h, rfl, rfl, fun _ => rfl⟩)
-    (DKeep.refl _ _) (DStay.refl _ _)
+    (DKeep.refl _ _) (DStay.refl _ _) id
 
 /-- A binding's scope ends where the binding was not: `exitScope` of a fresh
     plain binding gives the context back. -/
@@ -133,7 +133,7 @@ theorem roundB_typed :
     by the `break`, to the block's end. -/
 theorem loopB_typed : StmtT P0 (Exits.none.under 0) KB1 [] (.block (.loop (.letv 1 (.new .int) (.exit 0)))) KB1 :=
   StmtT.block (StmtT.loop rfl roundB_typed kb1_plain.wf kb1_plain.names (fun _ => rfl)
-    (fun _ E h => ⟨E, h, rfl, rfl, fun _ => rfl⟩) (DKeep.refl _ _) (DStay.refl _ _))
+    (fun _ E h => ⟨E, h, rfl, rfl, fun _ => rfl⟩) (DKeep.refl _ _) (DStay.refl _ _) id)
 
 /-- The program: `v` is still live, and read, after the loop. -/
 theorem mainB_typed : ∃ Δ, StmtT P0 .none (fun _ => none) [] mainB Δ := by

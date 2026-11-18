@@ -1,4 +1,5 @@
 import A2.Basic
+import A2.FreshBase
 
 /-! A2 — facts about contexts and about validity. -/
 
@@ -247,6 +248,7 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     rw [hwe.mode]; exact hi.noInout v E b hE
   wf := hw.wf
+  fresh := hi.fresh.weaker hw
   rootbLive p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm

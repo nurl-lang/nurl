@@ -135,6 +135,7 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   rootbLive := hi.rootbLive
   rootbLt := hi.rootbLt
   names := hi.names
+  fresh := hi.fresh
   held v E sl T hE hl hsl hT := hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
   pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
   armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
@@ -263,6 +264,7 @@ theorem MInv.grow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (h
   rootbLive := hi.rootbLive
   rootbLt := hi.rootbLt
   names := hi.names
+  fresh := hi.fresh
   held v E sl T hE hl hsl hT := hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
   pkgs v sl T hsl hT := hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
   armed v E sl hE hsl := (hi.armed v E sl hE (by rw [h] at hsl; exact hsl)).keep fun _ _ _ dep _ =>
@@ -317,6 +319,7 @@ theorem MInv.regrow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) 
     rootbLive := hi.rootbLive
     rootbLt := hi.rootbLt
     names := hi.names
+    fresh := hi.fresh
     held := fun v E sl T hE hl hsl hT => hi.held v E sl T hE hl (by rw [h] at hsl; exact hsl) hT
     pkgs := fun v sl T hsl hT => hi.pkgs v sl T (by rw [h] at hsl; exact hsl) hT
     armed := fun v E sl hE hsl => by
@@ -2503,7 +2506,8 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     refine ⟨⟨true, none⟩, by simp, hok, ⟨by simp [hos], fun _ => ⟨hvec, fun T h => by simp at h,
       fun h => by simp at h⟩, fun h => by simp [hos] at h⟩, rfl, fun h => by simp at h, rfl,
       fun h => by simp at h, fun h => by simp at h, fun T h => by simp at h, fun hd _ hn dep hdd hnm => ?_,
-      fun h => by simp at h, fun hd => hi.wf.view y E hy hd, ArmOK.of_none rfl, fun _ T h => by simp at h⟩
+      fun h => by simp at h, fun hd => hi.wf.view y E hy hd, ArmOK.of_none rfl, fun _ T h => by simp at h,
+      FreshE.of_ownSlot hos⟩
     obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor y E hy hd hos (Or.inl hn) dep hdd hnm
     by_cases hry : dep.root = y
     · exact Or.inl ⟨hry, Mode.isRoot_of_ownSlot hos⟩
@@ -2921,7 +2925,7 @@ theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
       fun hl hn r hr => ?_, rfl, fun hl hn => by rw [hupd]; exact hi.names x Ex hx hl hn,
       fun hl T hT' => ?_, fun T hT' => ?_, fun hd hos' hn dep hdd hnm => ?_,
       fun hd => hi.wf.arm x Ex hx hd, fun hd => hi.wf.view x Ex hx hd, ?_,
-      fun _ T hT' => by cases hT'; rw [hty]; exact hshN⟩
+      fun _ T hT' => by cases hT'; rw [hty]; exact hshN, FreshE.of_ownSlot hos⟩
     · obtain ⟨T, hT0, hvs⟩ := hlv hl
       cases hT0; rw [hty] at hvs ⊢
       exact hviews _ rfl (fun dep hd hne => hkeepR dep hd hne fun _ =>
@@ -3124,7 +3128,8 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
             cases h with
             | child hm' hin => exact ViewIn.child (List.mem_append_left _ hm') hin) hkeepF ⟨_, hm1y⟩),
         fun _ T hT' => by
-          simp only [Option.some.injEq] at hT'; subst hT'; rw [killE_ty, hty]; exact hshS⟩
+          simp only [Option.some.injEq] at hT'; subst hT'; rw [killE_ty, hty]; exact hshS,
+        FreshE.of_ownSlot (by rw [killE_mode]; exact hos)⟩
       rw [killE_vdeps] at hr
       rw [killE_ty] at hn
       obtain ⟨Er, hEr, hroot⟩ := hi.wf y E hy hl (Or.inl hn) r hr

@@ -454,6 +454,7 @@ theorem MInv.sweepR {Γ : Ctx} (hi : MInv m Γ) : MInv (m.sweepR R) Γ where
   rootbLive := hi.rootbLive
   rootbLt := hi.rootbLt
   names := hi.names
+  fresh := hi.fresh
   held := hi.held
   pkgs := hi.pkgs
   armed v E sl hE hsl := (hi.armed v E sl hE hsl).sweep hR (Kept.of_slot hR hsl)

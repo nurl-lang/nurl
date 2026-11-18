@@ -406,6 +406,8 @@ structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args :
   noio    : ∀ v E b, Γ v = some E → E.mode ≠ .inout b
   Flt     : ∀ v ∈ F, v < base
   wf      : CtxWF Γ
+  /-- Agora #909: the caller's fresh borrows reach only its frame's own blocks. -/
+  freshOK : FreshOK Γ
   noInout : ∀ v E b, Γ v = some E → E.mode ≠ .inout b
   rbLive  : ∀ p E, Γ p = some E → E.mode = .rootb → E.live = true
   postwf  : CtxWF (callPost Γ fn args)
@@ -3086,6 +3088,19 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
       rw [hEinr] at hE; cases hE
       have hv := hwfin.view _ _ hEinr hdb
       rw [RSetup.liftE_ty _ (resMode_ne' fn), hsdt.holdsView, htv] at hv; cases hv)
+    (by
+      have hpn : ∀ v, Γ v = none → callPost Γ fn args v = none := fun v hv => by
+        have := h.postdm.1 v; rw [hv] at this; cases h' : callPost Γ fn args v <;> simp_all
+      have h1 := (callPost_fresh h.freshOK fn args).1
+      have h2 := h1.bind (E := callRes Γ fn args) (hpn x h.fresh) (FreshE.of_fresh rfl)
+      refine h2.setE (FreshE.of_live rfl) (fun Ek hEk _ => ?_)
+      have hbn : base + fn.params.length ≠ x :=
+        Nat.ne_of_gt (Nat.lt_of_lt_of_le h.xlt (Nat.le_add_right _ _))
+      have hbΓ : Γ (base + fn.params.length) = none := by
+        cases hg : Γ (base + fn.params.length) with
+        | none => rfl
+        | some E => exact absurd (h.domlt _ E hg) (Nat.not_lt.mpr (Nat.le_add_right _ _))
+      simp [A2.setE, upd_ne _ _ hbn, hpn _ hbΓ] at hEk)
   rw [exitScope_setE_fresh hwfF hfr] at hsd
   exact hsd
 

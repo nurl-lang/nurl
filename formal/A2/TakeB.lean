@@ -121,7 +121,7 @@ theorem MInv.editB_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     rw [hdrop] at hcan hds ⊢
     exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst (HeapOK.editTake hi.heap hT0 hn hr)
       (by simp) hhv hr hw' rfl hsh' hfree hes
-  exact MInv.editB_rest hi.wf hi.names hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
+  exact MInv.editB_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref hpfx
 
 /-- A change that stores nothing leaves its roots holding what they held. -/

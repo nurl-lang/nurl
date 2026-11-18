@@ -310,7 +310,9 @@ def NewSlot (m' : Mem) (Γ0 : Ctx) (x : Var) (Ex : Entry) : Option Entry → Pro
       (Ex'.dtor = true → Ex'.dbind = true) ∧ (Ex'.dbind = true → Ex'.ty.holdsView = true) ∧
       ArmOK m' Ex' sl ∧
       -- A3.1: the shares its tree holds name live blocks
-      (sl.own = true → ∀ T, sl.val = some T → SharesOK m' Ex'.ty T)
+      (sl.own = true → ∀ T, sl.val = some T → SharesOK m' Ex'.ty T) ∧
+      -- Agora #909: a fresh borrow reaches only the frame's own blocks
+      FreshE (upd Γ0 x (some Ex')) Ex'
 
 /-- An integer holds no closure, so captures nothing by name. -/
 theorem names_nil_of_int {m : Mem} {E : Entry} {sl : Slot} {T : Val} (h : SlotOK m E sl)
@@ -758,6 +760,14 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       · exact ⟨killE e hv x Er, by rw [upd_ne _ _ hdx]; unfold kill; rw [hEr]; rfl,
           by rw [killE_nil (root_vdeps ho hhr)]; exact hlr, by rw [killE_nil (root_vdeps ho hhr)]; exact hhr,
           by rw [killE_ty]; exact ht, by rw [killE_mode]; exact ho, by rw [killE_mode]; exact hc⟩
+  · -- Agora #909: the new slot's entry is fresh in the new context; an emptied
+    -- slot ended the fresh borrows through it (a replace)
+    cases ox with
+    | none => rw [hrem rfl]; exact hi.fresh.remove hv x
+    | some Ex' =>
+      obtain ⟨_, _, _, _, hmx, _, _, _, _, _, _, _, _, _, _, hfx⟩ := hox
+      exact (hi.fresh.kill e hv x).setE hfx (fun Ek hEk hm => by
+        simp [A2.kill, hx] at hEk; rw [← hEk, killE_mode] at hm; rw [hmx]; exact hm)
   · intro v E' sl T hv' hl hsl hT
     by_cases hvx : v = x
     · subst hvx
@@ -808,7 +818,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     by_cases hvx : v = x
     · subst hvx
       have := getX E' hv'; subst this
-      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, _, hsh⟩ := hox
+      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, _, hsh, _⟩ := hox
       rw [hsl'] at hsl; cases hsl; exact hsh hown T hT
     · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
       rw [hst v hvx] at hsl

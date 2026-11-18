@@ -23,18 +23,18 @@ theorem StmtT.mono {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} 
   | push a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 => intro ξ' hξ; exact StmtT.push a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14
   | free a0 a1 a2 a3 a4 a5 a6 => intro ξ' hξ; exact StmtT.free a0 a1 a2 a3 a4 a5 a6
   | sub a0 a1 a2 ih0 => intro ξ' hξ; exact StmtT.sub a0 (ih0 hξ) a2
-  | panic a0 a1 a2 a3 a4 a5 => intro ξ' hξ; exact StmtT.panic a0 a1 a2 a3 a4 a5
+  | panic a0 a1 a2 a3 a4 a5 a6 => intro ξ' hξ; exact StmtT.panic a0 a1 a2 a3 a4 a5 a6
   | letrec a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 ih0 => intro ξ' hξ; exact StmtT.letrec a0 a1 a2 a3 a4 a5 a6 a7 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a9
   | unpair a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 ih0 => intro ξ' hξ; exact StmtT.unpair a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a12 a13 a14 a15 a16 a17
   | callc a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 ih0 => intro ξ' hξ; exact StmtT.callc a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a12 a13
   | catchR a0 a1 a2 a3 a4 a5 ih0 => intro ξ' hξ; exact StmtT.catchR a0 a1 a2 a3 a4 a5
   | letd a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 ih0 => intro ξ' hξ; exact StmtT.letd a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a11 a12
   | withLock a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 ih0 => intro ξ' hξ; exact StmtT.withLock a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11
-  | scopeL a0 a1 a2 a3 a4 a5 a6 ih0 => intro ξ' hξ; exact StmtT.scopeL a0 a1 a2 a3 a4 a5 a6
+  | scopeL a0 a1 a2 a3 a4 a5 a6 a7 ih0 => intro ξ' hξ; exact StmtT.scopeL a0 a1 a2 a3 a4 a5 a6 a7
   | insert a0 a1 a2 ih0 => intro ξ' hξ; exact StmtT.insert a0 a1 a2
   | withElem a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 ih0 ih1 => intro ξ' hξ; exact StmtT.withElem a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13
   | callcE a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 ih0 => intro ξ' hξ; exact StmtT.callcE a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a17 a18 a19
-  | scopeD a0 a1 a2 a3 a4 a5 a6 a7 a8 ih0 => intro ξ' hξ; exact StmtT.scopeD a0 a1 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a3 a4 a5 a6 a7 a8
+  | scopeD a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 ih0 => intro ξ' hξ; exact StmtT.scopeD a0 a1 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a3 a4 a5 a6 a7 a8 a9
   | editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 => intro ξ' hξ; exact StmtT.editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12
   | editBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 => intro ξ' hξ; exact StmtT.editBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14
   | takeB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 _ a14 ih0 =>
@@ -43,9 +43,9 @@ theorem StmtT.mono {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} 
   | takeBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 _ a15 ih0 =>
     intro ξ' hξ
     exact StmtT.takeBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a15
-  | exit a0 a1 a2 a3 a4 a5 a6 => intro ξ' hξ; exact StmtT.exit (a0.elim (fun h => Or.inl (hξ _ _ h)) (fun ⟨Γ0, hw, h⟩ => Or.inr ⟨Γ0, hw, hξ _ _ h⟩)) a1 a2 a3 a4 a5 a6
+  | exit a0 a1 a2 a3 a4 a5 a6 a7 => intro ξ' hξ; exact StmtT.exit (a0.elim (fun h => Or.inl (hξ _ _ h)) (fun ⟨Γ0, hw, h⟩ => Or.inr ⟨Γ0, hw, hξ _ _ h⟩)) a1 a2 a3 a4 a5 a6 a7
   | block a0 ih0 => intro ξ' hξ; exact StmtT.block (ih0 (fun n _ h => by cases n with | zero => exact h | succ n => exact hξ _ _ h))
-  | loop a0 a1 a2 a3 a4 a5 a6 a7 ih0 => intro ξ' hξ; exact StmtT.loop a0 (ih0 hξ) a2 a3 a4 a5 a6 a7
+  | loop a0 a1 a2 a3 a4 a5 a6 a7 a8 ih0 => intro ξ' hξ; exact StmtT.loop a0 (ih0 hξ) a2 a3 a4 a5 a6 a7 a8
 
 /-- ... so one under no exit holds under any. -/
 theorem StmtT.ofNone {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
@@ -273,7 +273,7 @@ theorem rerootE_weaker {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker
   refine ⟨ht, hm, fun h => by rw [hr h], fun hl => ?_,
       fun h => ⟨(hd h).1, reroot_subset (hd h).2⟩, hb, ha,
       fun h hos hn d hnm => reroot_mem_congr (hk h hos hn) hnm,
-      fun hl hn hb h => ⟨(hf hl hn hb h).1, reroot_subset (hf hl hn hb h).2⟩⟩
+      fun hl' hn' hbo h => ⟨(hf hl' hn' hbo h).1, reroot_subset (hf hl' hn' hbo h).2⟩⟩
   obtain ⟨hl', hp, hh⟩ := hlv hl
   exact ⟨hl', fun ho => reroot_subset (hp ho), reroot_subset hh⟩
 
@@ -532,13 +532,13 @@ theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     · exact ih v hv
   | frozen _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
   | catchR _ _ _ _ _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
-  | scopeD _ hxF _ _ _ _ _ _ _ ih =>
+  | scopeD _ hxF _ _ _ _ _ _ _ _ ih =>
     intro v hv
     simp only [Stmt.spine, List.mem_cons] at hv
     rcases hv with rfl | hv
     · exact hxF
     · exact ih v hv
-  | scopeL _ hxF _ _ _ _ _ ih =>
+  | scopeL _ hxF _ _ _ _ _ _ ih =>
     intro v hv
     simp only [Stmt.spine, List.mem_cons] at hv
     rcases hv with rfl | hv
@@ -840,7 +840,7 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     exact (iha ho hp).trans ((DKeep.of_src hb ihb).mono fun _ _ h => by cases h) fun _ h => h
   | letv hs _ _ hr _ _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
   | withLock hs _ _ _ _ _ _ _ _ _ _ _ ih => exact fun _ _ => DKeep.bind (DKeep.refl _ _) (DKeep.of_src hs ih)
-  | @scopeL _ Γ Δ F k t x s0 _ _ _ _ _ _ _ ih =>
+  | @scopeL _ Γ Δ F k t x s0 _ _ _ _ _ _ _ _ ih =>
     intro ho hp
     exact ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitScope x
   | letcall hs _ _ hc _ _ _ ih => exact fun _ _ => DKeep.bind hc.dkeep (DKeep.of_src hs ih)
@@ -896,7 +896,7 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
       (((DKeep.refl _ []).kill _ _ _).trans (DKeep.of_src hk ih) fun _ h => h)
   | catchR _ _ _ _ _ _ ih => exact ih
   | letd hs _ _ hr _ _ _ _ _ _ _ _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
-  | @scopeD _ Γ Δ F x f k _ _ _ _ _ _ _ _ _ ih =>
+  | @scopeD _ Γ Δ F x f k _ _ _ _ _ _ _ _ _ _ ih =>
     intro ho hp
     exact ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitScope x
   | editB hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
@@ -1048,7 +1048,7 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
   | seq hb _ _ iha ihb => exact iha.trans (src0 hb ihb) fun _ _ h => by cases h
   | letv hs hx _ hr _ _ _ ih => exact DStay.bind hx hr.dstay (src0 hs ih)
   | withLock hs hx _ _ _ _ _ _ _ _ _ _ ih => exact DStay.bind hx (DStay.refl _ _) (src0 hs ih)
-  | scopeL _ _ _ _ _ _ _ ih => exact ih.exitScope
+  | scopeL _ _ _ _ _ _ _ _ ih => exact ih.exitScope
   | letcall hs hx _ hc _ _ _ ih => exact DStay.bind hx hc.dstay (src0 hs ih)
   | scope _ _ _ _ ih => exact ih.exitScope
   | rbind _ _ _ _ _ _ _ ih => exact ih.exitRoot _
@@ -1088,7 +1088,7 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
       (((DStay.refl _ []).kill _ _ _).trans (src0 hk ih) fun _ h => h)
   | catchR _ _ _ _ _ hst _ => exact hst
   | letd hs hx _ hr _ _ _ _ _ _ _ _ _ ih => exact DStay.bind hx hr.dstay (src0 hs ih)
-  | scopeD _ _ _ _ _ _ _ _ _ ih => exact ih.exitScope
+  | scopeD _ _ _ _ _ _ _ _ _ _ ih => exact ih.exitScope
   | editB hx hmx _ _ _ _ harg _ _ _ _ _ =>
     refine (harg.dstay.killNames _).setE fun E0 h0 _ hos _ => ?_
     rw [hx] at h0; cases h0; rw [hmx] at hos; cases hos

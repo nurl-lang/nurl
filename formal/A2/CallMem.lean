@@ -897,6 +897,45 @@ theorem own_param_free (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {j : N
         rw [hEr]; rfl
       exact (h.hollow_back hi hh hdom).noMem hi hla.rootMem
 
+/-- Agora #909: at a call, the callee's view of the context keeps fresh
+    borrows fresh: the caller's own entries are as they were, cleaned, and
+    their roots are the caller's bindings, an `inout` argument among them
+    owning its slot; the frame's own entries are not fresh. -/
+theorem fresh_canon (h : CallH P Γ F x fn args m.nv) :
+    FreshOK ((callS Γ F fn args m.nv x).canon (sigCtx fn)) := by
+  have hpost := (callPost_fresh h.freshOK fn args).1
+  have hlt : ∀ r Er, callPost Γ fn args r = some Er → r < m.nv := by
+    intro r Er hr
+    cases hg : Γ r with
+    | none => have := h.postdm.1 r; rw [hg, hr] at this; cases this
+    | some E => exact h.domlt r E hg
+  have hk : KeepsFrame (callPost Γ fn args) ((callS Γ F fn args m.nv x).canon (sigCtx fn)) := by
+    intro r Er hr hm
+    rcases h.ctx_cases r with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
+        ⟨k, b, t, hk, rfl, hc⟩ | ⟨_, _, hc⟩ | ⟨hc, v, hv, rfl⟩
+    · exfalso; have := h.postdm.1 r; rw [h.fresh, hr] at this; cases this
+    · exact absurd (hlt _ _ hr) (Nat.not_lt.mpr (by simp))
+    · exact absurd (hlt _ _ hr) (Nat.not_lt.mpr (by simp))
+    · exact absurd (hlt _ _ hr) (Nat.not_lt.mpr (by simp))
+    · exact ⟨_, hc, Or.inl rfl⟩
+    · rw [hr] at hc; exact ⟨_, hc, by rw [clean_mode]; exact hm⟩
+    · exact absurd (hlt _ _ hr) (Nat.not_lt.mpr (by simp))
+  intro y E hy
+  rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk', rfl, hc⟩ | ⟨k, t, hk', rfl, hc⟩ |
+      ⟨k, b, t, hk', rfl, hc⟩ | ⟨_, _, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hy
+  · cases hy; exact FreshE.of_fresh rfl
+  · cases hy; exact FreshE.of_fresh rfl
+  · cases hy; exact FreshE.of_fresh (callPe_fresh _ _ _ _)
+  · cases hy; exact FreshE.of_fresh rfl
+  · cases hy; exact FreshE.of_fresh rfl
+  · obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hy
+    intro hl hn hb hf
+    rw [clean_live] at hl
+    have hn0 : E0.ty ≠ .int := by rwa [clean_ty] at hn
+    rw [Entry.clean_eq hl hn0] at hb hf ⊢
+    exact (hpost y E0 h0).mono hk hl hn0 hb hf
+  · cases hy
+
 /-- The invariant of memory, in the context the call sets up. -/
 theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     (hb : BindParams m fn.params args m.nv 0 m1) :
@@ -1012,6 +1051,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       rw [clean_mode, hm]; exact hi.noInout y E0 b h0
   wf := RSetup.canon_wf h.sOK h.sig_abs (sigCtx_wf fn)
   names := RSetup.canon_names h.sOK h.sig_abs (sigCtx_names fn)
+  fresh := h.fresh_canon
   held y E sl T hy hl hst hT := by
     rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |
         ⟨k, b', t, hk, rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hy <;> (try cases hy)

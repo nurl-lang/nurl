@@ -53,6 +53,9 @@ def liftE (v : Var) (E : Entry) : Entry :=
 @[simp] theorem liftE_fresh (v : Var) (E : Entry) : (S.liftE v E).fresh = false := by
   unfold liftE; split <;> rfl
 
+/-- ... and a lift does not read the bit. -/
+theorem liftE_fresh_irrel (v : Var) (E : Entry) (f : Bool) : S.liftE v { E with fresh := f } = S.liftE v E := rfl
+
 noncomputable def canon (Γa : Ctx) : Ctx := fun y =>
   match S.inv y with
   | some v => (Γa v).map (S.liftE v)
@@ -1630,19 +1633,20 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
         { S.liftE y Ey with ty := .fn ms q', dtor := false, dbind := false } := by
       simp [liftE, hm, Mode.ownSlot]
     rw [he]; exact EntryWeaker.refl _
-  | @borrow y Ey t hy hl ht =>
+  | @borrow y Ey t _ hy hl ht =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
-    refine ⟨_, RhsT.borrow hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht),
+    refine ⟨_, RhsT.borrow (f := false) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht),
       fun x => ?_⟩
     refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]; exact (liftE_ty' h hab hy).symm)
       (by simp [liftE, liftMode]) (by simp) (by simp [liftE]) (fun _ => ?_) ?_
     · simp only [liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true]
       exact derive_lift h hab hy .self rfl
     · simp only [liftE, reduceCtorEq, ↓reduceIte]; exact held_lift h hab hy
-  | @«at» y i Ey t hy hl ht hi =>
+  | @«at» y i Ey t _ hy hl ht hi =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
-    exact ⟨_, RhsT.at hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
-      (exprT_ren h hab hi), fun x => elemE_lift h hab hy t x⟩
+    exact ⟨_, RhsT.at (f := false) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
+      (exprT_ren h hab hi), fun x => by
+        rw [liftE_fresh_irrel, Entry.with_fresh_eq (by cases t <;> rfl)]; exact elemE_lift h hab hy t x⟩
   | @view y Ey t hy hl ht hhv =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     refine ⟨_, RhsT.view hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht) hhv,
@@ -3222,6 +3226,30 @@ theorem AbsOK.of_same {Γa Δa : Ctx} (hab : S.AbsOK Γa) (hdom : ∀ v, (Γa v)
     have hf1 : E0.fixed := by simp only [Entry.fixed_def] at hf ⊢; rw [hm1, ht1] at hf; exact hf
     rw [he hf1]; exact hf0 hf1
 
+/-- Agora #909: a context the callee may assume after a panic or an exit keeps
+    the caller's fresh borrows fresh, seen from the call: their entries are
+    the frame's own (`S.Φ`), and its roots keep their modes; a lifted entry
+    is never fresh. -/
+theorem canon_freshT {Γa Δa : Ctx}
+    (hdom' : ∀ y, (S.canon Γa y).isSome = (S.canon Δa y).isSome)
+    (hm' : ∀ y E, S.canon Δa y = some E → ∃ E0, S.canon Γa y = some E0 ∧ E.mode = E0.mode ∧
+      E.ty = E0.ty ∧ (E0.fixed → E = E0)) :
+    FreshOK (S.canon Γa) → FreshOK (S.canon Δa) := by
+  intro hf y E hy
+  unfold canon at hy
+  split at hy
+  · obtain ⟨E1, _, rfl⟩ := Option.map_eq_some_iff.mp hy
+    exact FreshE.of_fresh (liftE_fresh _ _ _)
+  · rename_i hinv
+    have hyΓ : S.canon Γa y = some E := by unfold canon; rw [hinv]; exact hy
+    refine (hf y E hyΓ).mono (fun r Er hr hmr => ?_)
+    cases hE : S.canon Δa r with
+    | none => have := hdom' r; rw [hr, hE] at this; cases this
+    | some E' =>
+      obtain ⟨E0, h0, hme, _⟩ := hm' r E' hE
+      rw [hr] at h0; cases h0
+      exact ⟨E', rfl, hme ▸ hmr⟩
+
 theorem canon_same (h : S.OK) {Γa Δa : Ctx} (hab : S.AbsOK Γa)
     (hdom : ∀ v, (Γa v).isSome = (Δa v).isSome)
     (hm : ∀ v E, Δa v = some E → ∃ E0, Γa v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
@@ -4145,12 +4173,12 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | scopeL => intro hs; simp [Stmt.src] at hs
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
-  | panic hwf hnΔ hdom hm hdk hst =>
+  | panic hwf hnΔ hdom hm hdk hst _ =>
     intro _ hab _ _ _
     have habΔ := hab.of_same hdom hm
     obtain ⟨hdom', hm'⟩ := canon_same h hab hdom hm
     exact ⟨StmtT.panic (canon_wf h habΔ hwf) (canon_names h habΔ hnΔ) hdom' hm' (DKeep.canon h hdk hm)
-      (DStay.canon h hst), habΔ⟩
+      (DStay.canon h hst) (canon_freshT hdom' hm'), habΔ⟩
   | @letrec _ Γ Γ1 Δ F x f k E fn hks hx hxF hf hp hty ho hc hk hpe ih =>
     intro _ hab hw hn hT
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (.inr ⟨f, by simp [Stmt.calls], ht⟩))
@@ -4537,19 +4565,19 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     · have abΔ := abΔ0.weaker hwo
       exact ⟨StmtT.sub hwc t (Or.inr (canon_weaker h abΔ hwo.2.1 hwo)), abΔ⟩
 
-  | exit hup hwf hnΔ hdom hm hdk hst =>
+  | exit hup hwf hnΔ hdom hm hdk hst _ =>
     intro _ hab hw hn _
     have habΔ := hab.of_same hdom hm
     obtain ⟨hdom', hm'⟩ := canon_same h hab hdom hm
     exact ⟨StmtT.exit (S.liftX_up h hab hw hn hup) (canon_wf h habΔ hwf) (canon_names h habΔ hnΔ) hdom' hm'
-      (DKeep.canon h hdk hm) (DStay.canon h hst), habΔ⟩
-  | loop hsrc _ hwf hnΔ hdom hm hdk hst ih =>
+      (DKeep.canon h hdk hm) (DStay.canon h hst) (canon_freshT hdom' hm'), habΔ⟩
+  | loop hsrc _ hwf hnΔ hdom hm hdk hst _ ih =>
     intro hs hab hw hn hT
     obtain ⟨tb, _⟩ := ih hsrc hab hw hn (fun ht => hT (ht.mono (fun h => h) (fun _ hg => hg)))
     have habΔ := hab.of_same hdom hm
     obtain ⟨hdom', hm'⟩ := canon_same h hab hdom hm
     exact ⟨StmtT.loop (by rw [src_rename]; exact hsrc) tb (canon_wf h habΔ hwf) (canon_names h habΔ hnΔ)
-      hdom' hm' (DKeep.canon h hdk hm) (DStay.canon h hst), habΔ⟩
+      hdom' hm' (DKeep.canon h hdk hm) (DStay.canon h hst) (canon_freshT hdom' hm'), habΔ⟩
   | block hb ih =>
     intro hs hab hw hn hT
     obtain ⟨tb, abΔ⟩ := ih hs hab hw hn hT

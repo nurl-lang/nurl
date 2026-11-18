@@ -796,6 +796,7 @@ theorem mix_globsTyped (P : Prog) : GlobsTyped P mixG where
     rootbLive := fun _ _ h => by cases h
     rootbLt := fun _ _ h => by cases h
     names := fun _ _ h => by cases h
+    fresh := fun _ _ h => by cases h
     held := fun _ _ _ _ h => by cases h
     pkgs := fun _ _ _ h => by cases h
     pkgFree := fun _ _ _ _ h => by cases h

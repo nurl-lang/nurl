@@ -243,6 +243,7 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
     rootbLive := fun p E hp hm => absurd hm (hrb p E hp)
     rootbLt := fun p E hp hm => absurd hm (hrb p E hp)
     names := sigCtx_names fn
+    fresh := sigCtx_freshOK fn
     held := fun v E sl T hv hl hsl hT => by
       rcases sigCtx_spawn hpar hv with ⟨t, hp, ht, rfl⟩ | ⟨rfl, rfl⟩
       · intro c hc

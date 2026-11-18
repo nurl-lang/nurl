@@ -314,15 +314,15 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
         exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
   | @copyUp y Ey ms q q' hy hl hm hty _ =>
     exact ⟨h, fun _ => rfl, same, fun _ _ r hr => h y _ hy hl (Or.inl (by rw [hty]; simp)) r hr⟩
-  | @borrow y Ey t hy hl ht =>
+  | @borrow y Ey t _ hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ _ => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
     rw [bor_vdeps _ rfl]
     exact app _ _ (hderive y Ey .self hy hl hn') (hheld y Ey hy hl hn')
-  | @«at» y i Ey t hy hl ht _ =>
+  | @«at» y i Ey t _ hy hl ht _ =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
-    rw [bor_vdeps _ (elemE_mode ..)]
+    rw [Entry.fresh_vdeps, bor_vdeps _ (elemE_mode ..)]
     cases t with
     | int => simp [elemE, intE] at hn
     | slice s => exact app _ _ (hheld y Ey hy hl hn') (hheld y Ey hy hl hn')
@@ -1121,8 +1121,8 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hm2⟩ := ih r hr E (by simp [A2.setE, upd_ne _ _ hrx, h])
     exact ⟨killE .replace false x E2, by simp [A2.exitScope, upd_ne _ _ hrx, A2.kill, h2],
       by rw [killE_mode, hm2]⟩
-  | @scope _ Γ Δ F x k _ hxF _ _ ih | @scopeD _ Γ Δ F x _ k _ hxF _ _ _ _ _ _ _ ih
-    | @scopeL _ Γ Δ F _ _ x k _ hxF _ _ _ _ _ ih =>
+  | @scope _ Γ Δ F x k _ hxF _ _ ih | @scopeD _ Γ Δ F x _ k _ hxF _ _ _ _ _ _ _ _ ih
+    | @scopeL _ Γ Δ F _ _ x k _ hxF _ _ _ _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E2, h2, hm2⟩ := ih r hr E h
@@ -1351,7 +1351,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       (fun ha => absurd ha (by simp [hc.dtor_false.1])) (fun hd => absurd hd (by simp [hc.dtor_false.2])))).exitScope
       x hpx.2.2
   | scope _ _ _ hpx ih => exact fun h => (ih h).exitScope _ hpx.2.2
-  | scopeL _ _ _ hpx _ _ _ ih => exact fun h => (ih h).exitScope _ hpx.2.2
+  | scopeL _ _ _ hpx _ _ _ _ ih => exact fun h => (ih h).exitScope _ hpx.2.2
   | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E _ hx _ _ _ _ _ _ hr _ _ hpx _ _ ihs ihp =>
     intro h
     obtain ⟨hw1, hdom, _, hE⟩ := hr.wf (h.kill .replace false y)
@@ -1364,7 +1364,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     intro h
     exact (ih (h.add hx (fun _ _ r hr => by simp [roots] at hr) (fun hd => absurd hd (by simp))
       (fun ha => absurd ha (by simp)) (fun hd => absurd hd (by simp)))).exitScope x hpx.2.2
-  | scopeD _ _ _ hpx _ _ _ _ _ ih => exact fun h => (ih h).exitScope _ hpx.2.2
+  | scopeD _ _ _ hpx _ _ _ _ _ _ ih => exact fun h => (ih h).exitScope _ hpx.2.2
   | @letd _ Γ Γ1 Δ F x f r k E t H τ _ hx _ hr hmo hty hstr _ _ hH _ hpx _ ih =>
     intro h
     obtain ⟨hw1, hdom, _, hE⟩ := hr.wf h

@@ -123,6 +123,7 @@ theorem MInv.addUnset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
     · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw; rw [hl] at hlw; cases hlw
     · simp only [setE, upd_ne _ _ hwx] at hw
       exact (hi.names w Ew hw hlw hn).transport (fun r Er _ => hΓ r Er) (List.Subset.refl _)
+  · exact hi.fresh.bind hx (FreshE.of_live hl)
   · intro w Ew sl T hw hlw hsl hT
     by_cases hwx : w = x
     · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw; rw [hl] at hlw; cases hlw

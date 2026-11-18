@@ -1369,6 +1369,8 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   rootbLive : ∀ p E, Γ p = some E → E.mode = .rootb → E.live = true
   rootbLt   : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r < p
   names     : NameWF Γ
+  /-- Agora #909: a fresh borrow reaches only the frame's own blocks. -/
+  fresh     : FreshOK Γ
   held      : ∀ v E sl T, Γ v = some E → E.live = true → m.st v = some sl → sl.val = some T →
                 NamesIn T E.held
   pkgs      : ∀ v sl T, m.st v = some sl → sl.val = some T → PkgsOK T
@@ -1883,6 +1885,9 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       -- A2-drop.2: ... and no binding `letd` made viewing more than it did,
       -- nor any no longer `letd`'s
       DKeep Γ Δ [] → DStay Γ Δ [] →
+      -- Agora #909: ... and its fresh borrows reach only the frame's own
+      -- blocks, if `Γ`'s do (a caller's frame, seen from a call, may not)
+      (FreshOK Γ → FreshOK Δ) →
       StmtT P ξ Γ F .panic Δ
   | letrec {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} {E : Entry} {fn : Fn} :
       s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →
@@ -2002,7 +2007,7 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ E.ty = t ∧ (t ≠ .int → E.mode = .own) ∧
         ∃ E', Δ x = some E' ∧ E'.live = true) →
       x ∉ F → StmtT P .none Γ F s Δ → EndOK Δ x →
-      KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
+      KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ → FreshOK Δ →
       StmtT P ξ Γ F (.scopeL k t x s) (exitScope x Δ)
   /-- A2-elem (Agora #391): `y`'s value moves into `x` at index `i`: a push
       whose element then moves to index `i`.  The invariant does not see the
@@ -2101,7 +2106,7 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (∀ E, Δ x = some E → E.ty.holdsView = true → E.dbind = true) →
       -- Agora #633: ... and views nothing of its own (a panic's unwind moves
       -- it into its glue, a `sink` argument)
-      DSelf Γ x →
+      DSelf Γ x → FreshOK Δ →
       StmtT P ξ Γ F (.scopeD x f s) (exitScope x Δ)
   /-- Agora #295: a change of a `Vec`'s elements through a borrow `x` (a
       push, a truncation or an element set), of an element type that holds
@@ -2204,6 +2209,9 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
         (E0.fixed → E = E0)) →
       DKeep Γ Δ [] → DStay Γ Δ [] →
+      -- Agora #909: ... and its fresh borrows reach only the frame's own
+      -- blocks, if `Γ`'s do (a caller's frame, seen from a call, may not)
+      (FreshOK Γ → FreshOK Δ) →
       StmtT P ξ Γ F (.exit n) Δ
   /-- Agora #871: a block ends where its body does, or where an `exit 0` of
       it is taken (`Exits.blk`: from a context weaker than its end's). -/
@@ -2219,6 +2227,9 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
         (E0.fixed → E = E0)) →
       DKeep Γ Δ [] → DStay Γ Δ [] →
+      -- Agora #909: ... and its fresh borrows reach only the frame's own
+      -- blocks, if `Γ`'s do (a caller's frame, seen from a call, may not)
+      (FreshOK Γ → FreshOK Δ) →
       StmtT P ξ Γ F (.loop s) Δ
 
 /-- A2-drop.3a: a function's parameters and result of a type that holds a

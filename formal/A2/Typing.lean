@@ -338,6 +338,129 @@ macro_rules
       | (simp [Entry.arm] at hfr; done)
       | (simp_all; done))
 
+/-- Agora #909: an own root of a fresh borrow: an owner, or an `inout`
+    parameter (whose block is the caller's argument's own). -/
+def Mode.frame (m : Mode) : Prop := m = .own ∨ ∃ b, m = .inout b
+
+/-- Agora #909: a fresh binding is a live borrow, holding memory, whose
+    path is structural (`.self` / `.inner`) and rooted at the frame's own
+    bindings (`Mode.frame`), never at a borrowed parameter: a frame cannot
+    see what a borrowed parameter views. So nothing the call's arguments
+    hold is reached through it (`RSetup.liftE`). -/
+def FreshE (Γ : Ctx) (E : Entry) : Prop :=
+  E.live = true → E.ty ≠ .int → E.mode = .bor → E.fresh = true →
+    E.path ≠ [] ∧ ∀ d ∈ E.path, (d.kind = .self ∨ d.kind = .inner) ∧
+      ∃ Er, Γ d.root = some Er ∧ Er.mode.frame
+
+def FreshOK (Γ : Ctx) : Prop := ∀ v E, Γ v = some E → FreshE Γ E
+
+/-- Agora #909: what a fresh borrow may be taken from: a frame's own
+    binding, or a live fresh borrow (its structural steps stay fresh). -/
+def FreshSrc (Γ : Ctx) (y : Var) : Prop :=
+  ∃ E, Γ y = some E ∧ (E.mode.frame ∨ (E.mode = .bor ∧ E.fresh = true ∧ E.live = true ∧ E.ty ≠ .int))
+
+@[simp] theorem Entry.fresh_vdeps (E : Entry) (f : Bool) : ({ E with fresh := f } : Entry).vdeps = E.vdeps := rfl
+
+theorem Entry.with_fresh_eq {E : Entry} (h : E.fresh = false) : ({ E with fresh := false } : Entry) = E := by
+  cases E; simp_all
+
+/-- Closes a rule's `f = true → …` premise where the bit is not set. -/
+syntax "fresh_src" : tactic
+macro_rules
+  | `(tactic| fresh_src) => `(tactic| first
+      | (intro h; exact absurd h Bool.false_ne_true)
+      | (intro h; cases h))
+
+theorem FreshE.of_fresh {Γ : Ctx} {E : Entry} (h : E.fresh = false) : FreshE Γ E :=
+  fun _ _ _ hf => absurd (h ▸ hf) Bool.false_ne_true
+
+theorem FreshE.of_live {Γ : Ctx} {E : Entry} (h : E.live = false) : FreshE Γ E :=
+  fun hl => absurd (h ▸ hl) Bool.false_ne_true
+
+/-- A context of entries none of which is fresh. -/
+theorem FreshOK.of_none {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.fresh = false) : FreshOK Γ :=
+  fun v E hv => FreshE.of_fresh (h v E hv)
+
+/-- An entry's freshness survives a context whose roots keep their modes. -/
+theorem FreshE.mono {Γ Γ' : Ctx} {E : Entry} (h : FreshE Γ E)
+    (hr : ∀ r Er, Γ r = some Er → Er.mode.frame → ∃ Er', Γ' r = some Er' ∧ Er'.mode.frame) :
+    FreshE Γ' E := fun hl hn hb hf => by
+  obtain ⟨hne, hd⟩ := h hl hn hb hf
+  refine ⟨hne, fun d hdd => ?_⟩
+  obtain ⟨hk, Er, hEr, hm⟩ := hd d hdd
+  exact ⟨hk, hr d.root Er hEr hm⟩
+
+theorem killE_live_le {e : Eff} {hv : Bool} {x : Var} {E : Entry} (h : (killE e hv x E).live = true) :
+    E.live = true := by
+  unfold killE at h; split at h
+  · simp at h
+  · exact h
+
+theorem FreshOK.kill {Γ : Ctx} (h : FreshOK Γ) (e : Eff) (hv : Bool) (x : Var) : FreshOK (kill e hv x Γ) := by
+  intro v E' hv'
+  simp only [A2.kill] at hv'
+  obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp hv'
+  have hk : ∀ E0 : Entry, (killE e hv x E0).ty = E0.ty ∧ (killE e hv x E0).mode = E0.mode ∧
+      (killE e hv x E0).fresh = E0.fresh ∧ (killE e hv x E0).path = E0.path := by
+    intro E0; unfold killE; split <;> simp
+  intro hl hn hb hf
+  rw [(hk E).1] at hn; rw [(hk E).2.1] at hb; rw [(hk E).2.2.1] at hf; rw [(hk E).2.2.2]
+  obtain ⟨hne, hd⟩ := h v E hE (killE_live_le hl) hn hb hf
+  refine ⟨hne, fun d hdd => ?_⟩
+  obtain ⟨hkd, Er, hEr, hm⟩ := hd d hdd
+  exact ⟨hkd, killE e hv x Er, by simp [A2.kill, hEr], by rw [(hk Er).2.1]; exact hm⟩
+
+/-- Binding `x` to `E`: `E` is fresh in the new context, and `x` keeps a
+    frame mode if it had one (a fresh borrow may be rooted at it). -/
+theorem FreshOK.setE {Γ : Ctx} (h : FreshOK Γ) {x : Var} {E : Entry} (hE : FreshE (A2.setE Γ x E) E)
+    (hx : ∀ Ex, Γ x = some Ex → Ex.mode.frame → E.mode.frame) : FreshOK (A2.setE Γ x E) := by
+  have hr : ∀ r Er, Γ r = some Er → Er.mode.frame → ∃ Er', A2.setE Γ x E r = some Er' ∧ Er'.mode.frame := by
+    intro r Er hEr hm
+    by_cases hrx : r = x
+    · subst hrx; exact ⟨E, by simp [A2.setE, upd], hx Er hEr hm⟩
+    · exact ⟨Er, by simp [A2.setE, upd, hrx, hEr], hm⟩
+  intro v E' hv'
+  by_cases hvx : v = x
+  · subst hvx; simp only [A2.setE, upd, ite_true, Option.some.injEq] at hv'; subst hv'; exact hE
+  · simp only [A2.setE, upd, hvx, ite_false] at hv'
+    exact (h v E' hv').mono hr
+
+/-- ... in particular an entry that is not fresh, where `x` keeps its mode. -/
+theorem FreshOK.setE_same {Γ : Ctx} (h : FreshOK Γ) {x : Var} {E : Entry}
+    (hE : E.fresh = false ∨ E.live = false) (hx : ∀ Ex, Γ x = some Ex → Ex.mode = E.mode) :
+    FreshOK (A2.setE Γ x E) :=
+  h.setE (by rcases hE with hE | hE; exact FreshE.of_fresh hE; exact FreshE.of_live hE)
+    (fun Ex hEx hm => by rw [← hx Ex hEx]; exact hm)
+
+/-- Ending `x`'s scope: a fresh borrow rooted at `x` is ended with it. -/
+theorem FreshOK.exitScope {Γ : Ctx} (h : FreshOK Γ) (x : Var) : FreshOK (A2.exitScope x Γ) := by
+  have hk := h.kill .replace false x
+  intro v E' hv'
+  by_cases hvx : v = x
+  · subst hvx; simp [A2.exitScope, upd] at hv'
+  simp only [A2.exitScope, upd, hvx, ite_false] at hv'
+  intro hl hn hb hf
+  obtain ⟨hne, hd⟩ := hk v E' hv' hl hn hb hf
+  refine ⟨hne, fun d hdd => ?_⟩
+  obtain ⟨hkd, Er, hEr, hm⟩ := hd d hdd
+  refine ⟨hkd, Er, ?_, hm⟩
+  have hdx : d.root ≠ x := by
+    intro hdx
+    -- the borrow depends on `x` in memory, so replacing `x` ended it
+    simp only [A2.kill] at hv'
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp hv'
+    have hp : (killE .replace false x E).path = E.path := by unfold killE; split <;> rfl
+    have hmo : (killE .replace false x E).mode = E.mode := by unfold killE; split <;> rfl
+    have hty : (killE .replace false x E).ty = E.ty := by unfold killE; split <;> rfl
+    rw [hp] at hdd; rw [hmo] at hb; rw [hty] at hn
+    have hhit : hits .replace false x E = true := by
+      unfold hits
+      simp only [Bool.and_eq_true, Bool.or_eq_true, bne_iff_ne, ne_eq, List.any_eq_true, beq_iff_eq]
+      refine ⟨Or.inl hn, d, ?_, hdx, by cases d.kind <;> rfl⟩
+      simp [Entry.vdeps, hb, Mode.ownSlot, hdd]
+    unfold killE at hl; rw [if_pos hhit] at hl; cases hl
+  simpa [A2.exitScope, upd, hdx] using hEr
+
 /-- A context's live entries depend only on roots it has.  (An integer's
     dependencies say nothing: it holds no memory.)  A2-drop.2: so does, in
     memory, an owner that may run a destructor, live or not: its views are
@@ -639,12 +762,17 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   | copyUp {y : Var} {E : Entry} {ms : List Nat} {q q' : Cross} :
       Γ y = some E → E.live = true → E.mode = .bor → E.ty = .fn ms q → q.Le q' →
       RhsT Γ F (.var y) { E with ty := .fn ms q', dtor := false, dbind := false } Γ
-  | borrow {y : Var} {E : Entry} {t : Ty} :
+  | borrow {y : Var} {E : Entry} {t : Ty} {f : Bool} :
       Γ y = some E → E.live = true → E.ty = .vec t →
-      RhsT Γ F (.borrow y) ⟨E.ty, .bor, true, derive y E .self, E.held, false, false, false⟩ Γ
-  | at {y : Var} {i : Expr} {E : Entry} {t : Ty} :
+      -- Agora #909: the borrow may be fresh if `y` is the frame's own
+      (hf : f = true → FreshSrc Γ y := by fresh_src) →
+      RhsT Γ F (.borrow y) ⟨E.ty, .bor, true, derive y E .self, E.held, false, false, f⟩ Γ
+  | at {y : Var} {i : Expr} {E : Entry} {t : Ty} {f : Bool} :
       Γ y = some E → E.live = true → E.ty = .vec t → ExprT Γ i →
-      RhsT Γ F (.at y i) (elemE y E t) Γ
+      -- Agora #909: an element (not a slice: that one borrows what `y`
+      -- holds) borrowed from the frame's own memory may be fresh
+      (hf : f = true → FreshSrc Γ y ∧ ∀ s, t ≠ .slice s := by fresh_src) →
+      RhsT Γ F (.at y i) { elemE y E t with fresh := f } Γ
   | view {y : Var} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t → t.holdsView = false →
       -- (A3.1's slices of shares: its elements may be shares, lent as
@@ -1845,6 +1973,17 @@ def sigCtx (fn : Fn) : Ctx := fun v =>
   if h : v < fn.params.length then some (paramE fn.params fn.params[v])
   else if v = fn.params.length then some ⟨fn.resTy, resMode fn, false, [], [], false, false, false⟩
   else none
+
+/-- Agora #909: a function's signature binds nothing fresh. -/
+theorem sigCtx_freshOK (fn : Fn) : FreshOK (sigCtx fn) := by
+  refine FreshOK.of_none fun v E hv => ?_
+  unfold sigCtx at hv
+  split at hv
+  · simp only [Option.some.injEq] at hv; subst hv
+    unfold paramE; split <;> (try split) <;> rfl
+  · split at hv
+    · simp only [Option.some.injEq] at hv; subst hv; rfl
+    · cases hv
 
 /-- A summary pair names a parameter the caller still has after the call. -/
 def lendable (fn : Fn) (j : Nat) : Prop :=
