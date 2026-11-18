@@ -15,6 +15,9 @@ $ `stdlib/core/vec.nu`
         : ( Vec s ) w ( id mine )
         ( vec_push [s] w ( string_data loc ) )
         ( nurl_println ( vec_at [s] mine 0 ) )
+        // (vs is captured, so the walk has captures to ask of: the store
+        // into mine goes through the holder check and is not refused)
+        ( nurl_print_int ( vec_len [s] vs ) )
     }
     ( f )
     ( nurl_print_int ( vec_len [s] vs ) )
