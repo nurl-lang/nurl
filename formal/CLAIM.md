@@ -187,12 +187,14 @@ the LLVM / C11 memory model rather than redefining it.
     its environment holds views, or it takes the environment handed over
     (`StmtT.callcE`). A closure's code is `ThruFn` by the same
     `Stmt.hasThru` as a function's, so code whose changes are all through
-    fresh borrows is in by the argument below: `A2/FreshClosureWitness.lean`
+    fresh borrows, of elements that hold no views, is in by the argument
+    below: `A2/FreshClosureWitness.lean`
     types a closure whose environment is a slice and whose code pushes
     through `vec_at` of its own local, called through its package, safe
     and leak-free. nurlc accepts it, and it runs clean.
 
-  Agora #909 takes in what changes elements only through a fresh borrow.
+  Agora #909 takes in what changes elements that hold no views only
+  through a fresh borrow.
   An entry carries a `fresh` bit (`Entry.fresh`): the borrow reaches only
   blocks of the frame's own bindings (an owner's, or an `inout`
   parameter's), never memory an argument views. `RhsT.borrow` and `RhsT.at` may set it when they
@@ -204,10 +206,11 @@ the LLVM / C11 memory model rather than redefining it.
   bindings; it is part of the runtime invariant (`MInv.fresh`), every rule
   keeps it (`StmtT.freshOK`), and a call's lift adds nothing the
   arguments hold to a fresh borrow's path (`RSetup.liftE`), since what
-  they hold cannot alias a block the callee owns. An edit through a fresh
-  borrow is `edit false` (`StmtT.editB` with `Ex.fresh`;
-  `edit_false_fresh`: no other typing of it). It does not make its
-  function `ThruFn`. It may change an `inout` parameter's block, which the
+  they hold cannot alias a block the callee owns. An edit of elements
+  that hold no views, through a fresh borrow, can be typed `edit false`
+  (`StmtT.editB` with `Ex.fresh`, when its other premises hold), and an
+  `edit false` has no other typing (`edit_false_fresh`). Such an edit
+  does not make its function `ThruFn`. It may change an `inout` parameter's block, which the
   call already treats as changed, but no memory an argument views. So a
   destructor of a type that holds views may push through `vec_at` of its
   own local, when the changed elements hold no views. A change of
@@ -216,8 +219,9 @@ the LLVM / C11 memory model rather than redefining it.
   `A2/FreshWitness.lean` types one, a struct holding a slice and a number,
   run by its armed `letd`'s frame end, safe and leak-free (`main_safe`,
   `main_no_leak`). nurlc accepts it, and it runs clean. The modelling
-  claim (phase C): the walk emits `edit false` for an edit through a
-  borrow of the frame's own memory, and `edit true` for every other.
+  claim (phase C): the walk emits `edit false` for an edit of elements
+  that hold no views through a borrow of the frame's own memory, and
+  `edit true` for every other.
   Four compiler tests pin nurlc's side in both directions. It accepts a
   push through an element of a local the destructor or closure made
   (`drop_of_a_view_type_pushes_through_its_own_element`,
