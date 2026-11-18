@@ -1,4 +1,4 @@
-// map: §2.12 | A2 | rejected | - | agora #840: `?? o { T x → { : ~ String cur x  : W q @ W { cur 0 } } }` over a `?String` - the literal takes the payload unseen, then o is read
+// map: §2.12 | A2 | rejected | - | AGORA-840: `?? o { T x → { : ~ String cur x  : W q @ W { cur 0 } } }` over a `?String` - the literal takes the payload unseen, then o is read
 $ `stdlib/core/string.nu`
 
 : W { String s i n }

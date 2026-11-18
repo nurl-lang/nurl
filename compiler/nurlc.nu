@@ -28126,11 +28126,13 @@ unsafe @ __fn_lends_arg s fname s ai → b {
 @ resolve_retfwd_lends i syms → v {
     : s fns ( nurl_sym_get g_pending_impl `retfwd_fns` )
     ? == 0 ( nurl_str_len fns ) { ^ v } {}
+    // (Until nothing changes: the answers only grow, over finitely many
+    // words - a parameter index per function - so the rounds are bounded by
+    // that lattice's height. A round cap stopped a long chain short, its
+    // first links lending nothing back.)
     : ~ b changed T
-    : ~ i rounds 0
-    ~ & changed < rounds 16 {
+    ~ changed {
         = changed F
-        = rounds + rounds 1
         : ~ s fr ( nurl_str_cat fns `` )
         ~ != 0 ( nurl_str_len fr ) {
             : s fn ( str_first_word fr ) = fr ( str_skip_word fr )
@@ -34121,7 +34123,13 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
                     { ( __park_append syms `__fn_pending_keep_impl__` ( nurl_str_cat4 ( nurl_str_int api ) ` ` call_name
                         ( nurl_str_cat4 ` ` fname ` ` ( nurl_str_int arg_idx ) ) ) ) } {}
                     // (Not the whole the cursor's value is part of: __part_src.)
-                    ? & positional ( __src_keeps syms uptr asrc ) {} { ( mem_udrop_flag_clear_if syms cg asrc sflag ) } } }
+                    // (…nor a source of a join cursor that only borrows, `:
+                    // ~ String cur ? k a b  ( vec_push d cur )`: the call is
+                    // handed a copy for certain, and each source keeps and
+                    // drops its own value - handed over too, the original
+                    // was released by no one, as #824 found for a literal;
+                    // agora #840.)
+                    ? | & positional ( __src_keeps syms uptr asrc ) & & ( seq __usb `1` ) ( __alias_whole_srcs_many syms uptr ) ( __clone_supported at syms ) {} { ( mem_udrop_flag_clear_if syms cg asrc sflag ) } } }
         } {}
     } {}
 }
@@ -61702,6 +61710,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 : ~ s __svl ( nurl_str_cat svn `` )
                 ? & & & takes != 0 g_bck_hc_any == BCK_BORROWED_SHARED ( bck_st_raw st svid ) != 0 ( nurl_sym_len g_bck ( bck_bkey `hct_` svn ) ) {
                     : ~ s __hs ( nurl_sym_get g_bck ( bck_bkey `bs_` svn ) )
+                    : ~ s __hseen ( nurl_str_cat svn `` )
                     ~ != 0 ( nurl_str_len __hs ) {
                         : s __hw ( str_first_word __hs ) = __hs ( str_skip_word __hs )
                         : i __hid ( nurl_str_to_int __hw )
@@ -61711,7 +61720,28 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         ? & & & == ( bck_path_root __hid ) __hid == BCK_OWNED ( bck_st_get st __hid ) ! __hpar ! ( str_contains_word __svl __hw ) {
                             = __svl ( nurl_str_cat3 __svl ` ` __hw )
                             ( bck_put ( bck_bkey `hcv_` __hw ) svn )
-                        } {}
+                            // (…and a `??` payload is a cursor over its option
+                            // (`cul`): what the store was given is the option's
+                            // value, which goes with it as at `@ H { x 0 }` -
+                            // `?? o { T x → { : ~ cur x  @ H { cur 0 } } }`;
+                            // agora #840.)
+                            : ~ i __hco ( __cursor_src_of __hid )
+                            ~ >= __hco 0 {
+                                : s __hcs ( nurl_str_int __hco )
+                                ? & & == BCK_OWNED ( bck_st_get st __hco ) ! ( str_contains_word __svl __hcs ) ! ( seq ( nurl_sym_get g_bck ( bck_bkey `pp_` __hcs ) ) `1` ) {
+                                    = __svl ( nurl_str_cat3 __svl ` ` __hcs )
+                                    ( bck_put ( bck_bkey `hcv_` __hcs ) svn )
+                                    = __hco ( __cursor_src_of __hco )
+                                } { = __hco -1 }
+                            }
+                        } {
+                            // (…or another `: ~` copy of a handle, `: ~ c2 c1`
+                            // of `: ~ c1 x`: what that one is a copy of.)
+                            ? & & == BCK_BORROWED_SHARED ( bck_st_raw st __hid ) != 0 ( nurl_sym_len g_bck ( bck_bkey `hct_` __hw ) ) ! ( str_contains_word __hseen __hw ) {
+                                = __hseen ( nurl_str_cat3 __hseen ` ` __hw )
+                                = __hs ( nurl_str_cat3 __hs ` ` ( nurl_sym_get g_bck ( bck_bkey `bs_` __hw ) ) )
+                            } {}
+                        }
                     }
                 } {}
                 ~ != 0 ( nurl_str_len __svl ) {
@@ -63492,7 +63522,16 @@ unsafe @ __vk_assumptions_check → v {
 // safe code it evaluates (bck_bind_class); codegen's question is
 // __rv_waits'.
 @ __rv_holder_result s cal → b {
-    : s rt ( nurl_sym_get g_root_syms cal )
+    : ~ s rt ( nurl_sym_get g_root_syms cal )
+    // (A virtual callee - a `dyn` call's, a closure node's - has no type of
+    // its own here: its members' result is its result; agora #481.)
+    ? == 0 ( nurl_str_len rt ) {
+        : ~ s ms ( __indirect_members cal )
+        ~ & == 0 ( nurl_str_len rt ) != 0 ( nurl_str_len ms ) {
+            : s m ( str_first_word ms ) = ms ( str_skip_word ms )
+            ? ! ( seq m `*` ) { = rt ( nurl_sym_get g_root_syms m ) } {}
+        }
+    } {}
     ? == 0 ( nurl_str_len rt ) { ^ F } {}
     ^ == ( bck_bind_class ( nurl_llty rt ) ) 3
 }
@@ -72114,7 +72153,7 @@ unsafe @ __bck_walk_deferred i i → v {
     // (Its own result answer asked by a call of itself, `q`: its walk asks
     // what it makes. A call of itself its `bK` rows ask is answered by its
     // own walk, bck_vkeeps_self.)
-    : b selfq ( str_contains_word ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) ) )
+    : ~ b selfq ( str_contains_word ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) ) )
     : ~ s cs ( __word_union ( __vbuf_callees ( nurl_sym_get g_deferred_bck ( nurl_str_cat `s` ix ) ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) )
     : ~ s seen ``
     ~ != 0 ( nurl_str_len cs ) {
@@ -72139,6 +72178,12 @@ unsafe @ __bck_walk_deferred i i → v {
         // (An indirect callee answers with what it may run: those first.)
         : s cms ( __indirect_members c )
         ? != 0 ( nurl_str_len cms ) { = cs ( __words_join cs cms ) } {}
+        // (…itself among them - an impl of a `dyn` method calling that method
+        // through a field, `^ ( toks . self child b a )`: it asks its own
+        // answer, as a call of itself does, and settles it as a component -
+        // walked once on an empty answer, it handed back no view of b;
+        // agora #481.)
+        ? & ! selfq != 0 ( nurl_str_len cms ) { = selfq ( str_contains_word cms ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) ) ) } {}
     }
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `dl` ix ) ( nurl_str_int low ) )
     // (Not its component's root: the root walks it with the others.)
@@ -100069,11 +100114,12 @@ unsafe @ __cc_store_ref i syms s call_name s fname s arg_cs s arg_tys s arg_ids 
     ? == n 0 { ^ v } {}
     // `?pK` in a record of function E: E's parameter K flows wherever the
     // record's value does — E's callers decide. To a fixed point.
+    // (Until nothing changes: `ccprop##` sets only grow, over the program's
+    // finitely many owners, so no round cap is needed - and one stopped a
+    // long forwarding chain before its callers heard of the owners.)
     : ~ b changed T
-    : ~ i rounds 0
-    ~ & changed < rounds 32 {
+    ~ changed {
         = changed F
-        = rounds + rounds 1
         : ~ i i 0
         ~ < i n {
             : s ns ( nurl_str_int i )
