@@ -1,0 +1,3 @@
+### Fixed
+
+- **A function returning a slice that a lending call handed back no longer leaks it** (AGORA-895, in part). `@ f → [i { ^ ( id ( mk ) ) }` returned the fresh slice `mk` made, handed back through `id`, as a loan. No one released it. Bound with `:`, the same expression already went by the bit the call left (AGORA-891). A `^` now does the same, and the function answers per call whether its result is the caller's. A `pick`-shaped return, fresh on some runs and a view of a parameter on others, is right on both. NURL source is unchanged. Still open: a slice kept in a returned struct or option, and a literal temporary read only for a field (`tools/fuzz/holes/open/t895.md`).
