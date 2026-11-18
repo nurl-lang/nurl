@@ -7795,29 +7795,14 @@ unsafe @ __arg_lend_root i syms → s {
 // None where it does nothing to k: a closure that only reads stays clean.
 @ __bck_rce_expand s stmts → s {
     // (A row it makes may be a placeholder in turn — a builder handing back
-    // another's closure, a forwarder's: expanded again, until none is left.
-    // A builder that hands back its own makes the same rows again; what is
-    // left after the passes adds nothing the earlier ones did not.)
+    // another's closure, a forwarder's, a chain of them: expanded again until
+    // none is left. One already expanded — a builder handing back its own
+    // closure makes the same row again — adds nothing and is dropped
+    // (the walk's `rceseen#` keys): there are finitely many, so the passes
+    // end, and no row is dropped before its effects are in.)
     : ~ s cur ( __bck_rce_pass stmts )
-    : ~ i n 0
-    ~ & < n 8 >= ( nurl_str_find cur `pendrce\t` ) 0 {
-        = cur ( __bck_rce_pass cur )
-        = n + n 1
-    }
-    ? >= ( nurl_str_find cur `pendrce\t` ) 0 { = cur ( __bck_rce_pass_drop cur ) } {}
+    ~ >= ( nurl_str_find cur `pendrce\t` ) 0 { = cur ( __bck_rce_pass cur ) }
     ^ cur
-}
-
-@ __bck_rce_pass_drop s stmts → s {
-    : ~ s out ``
-    : ~ s rest ( nurl_str_cat stmts `` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : i nl ( nurl_str_find rest `\n` )
-        : s row ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
-        = rest ? < nl 0 ( nurl_str_cat `` `` ) ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
-        ? == 0 ( nurl_str_starts row `pendrce\t` ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat row `` ) ( nurl_str_cat3 out `\n` row ) } {}
-    }
-    ^ out
 }
 
 @ __bck_rce_pass s stmts → s {
@@ -7827,13 +7812,22 @@ unsafe @ __arg_lend_root i syms → s {
         : i nl ( nurl_str_find rest `\n` )
         : s row ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
         = rest ? < nl 0 ( nurl_str_cat `` `` ) ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
-        : s rows ? ( nurl_str_starts row `pendrce\t` ) ( __bck_rce_rows row ) ( nurl_str_cat row `` )
+        : s rows ? ( nurl_str_starts row `pendrce\t` ) ( __bck_rce_once row ) ( nurl_str_cat row `` )
         ? != 0 ( nurl_str_len rows ) { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat rows `` ) ( nurl_str_cat3 out `\n` rows ) } {}
     }
     ^ out
 }
 
 // A placeholder tag with its value lent out of the name (`L` 1).
+// A `pendrce` row's rows, or none where it was expanded already.
+@ __bck_rce_once s row → s {
+    : s id ( nurl_str_cat4 ( bck_field row 1 ) `|` ( bck_field row 5 ) ( nurl_str_cat4 `|` ( bck_field row 6 ) `|` ( bck_field row 3 ) ) )
+    : s key ( nurl_str_cat4 `rceseen#` g_bck_fn `|` id )
+    ? != 0 ( nurl_sym_len g_bck key ) { ^ ( nurl_str_cat `` `` ) } {}
+    ( bck_put key `1` )
+    ^ ( __bck_rce_rows row )
+}
+
 @ __rce_tag_lent s tag b lent → s {
     ? ! lent { ^ ( nurl_str_cat tag `` ) } {}
     ? ( nurl_str_starts tag `rcq#` ) {
