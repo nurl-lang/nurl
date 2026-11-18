@@ -7736,6 +7736,7 @@ unsafe @ __arg_lend_root i syms → s {
 // call of a library function compiled later (lazily) - the parse was paid
 // by nearly every call of a compile.
 : ~ i g_rce_noclo 0
+
 @ __rce_pending i syms s cn → b {
     ? | == 0 g_borrowck == 0 ( nurl_str_len cn ) { ^ F } {}
     // (Cheapest first, asked of every call: a callee compiled already —
