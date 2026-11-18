@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #832: `?? . h o { T q → … ( w . h o ) … }` - a view of the payload outlives a callee growing it
+// map: §2.10 | A2 | rejected | - | AGORA-832: `?? . h o { T q → … ( w . h o ) … }` - a view of the payload outlives a callee growing it
+// AGORA-832: refused - the payload of `?? . h o` is lent out of the field path h.o, whose growth by the callee ends its views (main 7fbdcef9: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 

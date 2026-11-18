@@ -35475,7 +35475,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // of: a change made through it is that parameter's, agora #411.)
             : ~ s __me_root ``
             ? != 0 ( nurl_sym_len syms `__fn_storage_params__` ) {
-                : s __mr ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ``
+                // (An `inout` field, `( w . h o )`: gen_inout_field_addr
+                // publishes no member root, so `__last_member_root__` is
+                // another field's — the argument's own root, agora #832.)
+                : s __mr ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ? is_inout_arg ( nurl_str_cat bck_arg_root `` ) ( nurl_sym_get syms `__last_member_root__` ) ``
                 : s __mp ? == 0 ( nurl_str_len __mr ) `` ( __payload_root_binding syms __mr )
                 ? ( __rprov_param syms __mp ) {
                     = __me_root __mp
@@ -40738,7 +40741,16 @@ unsafe @ gen_match i lex i syms i cg → s {
     : i __m_hcol0 g_m_heldcol
     = g_m_heldtys ``
     = g_m_heldcol 1
+    // (The field path a `?? . h o` scrutinee names, `h.o`: its payload is
+    // lent out of that field, not of all of h — a callee handed `. h o`
+    // that grows the payload moves what a view of it points into; agora
+    // #832.)
+    : i __m_mp0 g_member_path_on
+    = g_member_path_on ? & != 0 g_borrowck == match_first_tt TT_DOT 1 g_member_path_on
+    = g_member_path ``
     : s match_val ( gen_operand lex syms cg )
+    = g_member_path_on __m_mp0
+    : s __m_spath ? & & == match_first_tt TT_DOT == 0 g_member_path_raw > ( nurl_str_find g_member_path `.` ) 0 ( nurl_str_cat g_member_path `` ) ``
     : i __cm_op ? != 0 g_core_live ( core_pop ) 0
     : s __m_heldtys ( nurl_str_cat g_m_heldtys `` )
     = g_m_heldcol __m_hcol0
@@ -42168,7 +42180,12 @@ unsafe @ gen_match i lex i syms i cg → s {
                     // whatever its type spells — `?? String` included.)
                     : s __abown ( bck_owning_reads syms bck_mreads `+` )
                     : b __abpadd & __scrut_param ! ( str_contains_word ( bck_swap_char __abown 43 32 ) match_var_name )
-                    : s __absrc ? __abpadd ( nurl_str_cat3 __abown ? == 0 ( nurl_str_len __abown ) `` `+` match_var_name ) ( nurl_str_cat __abown `` )
+                    : s __absrc0 ? __abpadd ( nurl_str_cat3 __abown ? == 0 ( nurl_str_len __abown ) `` `+` match_var_name ) ( nurl_str_cat __abown `` )
+                    // (…out of the field path itself where the scrutinee is
+                    // one of a binding the payload is read in place out of —
+                    // `h.o` for h — agora #832.)
+                    : s __abroot ? != 0 ( nurl_str_len __m_spath ) ( nurl_str_slice __m_spath 0 ( nurl_str_find __m_spath `.` ) ) ``
+                    : s __absrc ? & != 0 ( nurl_str_len __abroot ) ( seq __absrc0 __abroot ) ( nurl_str_cat __m_spath `` ) ( nurl_str_cat __absrc0 `` )
                     : s __abn0 ? __lent ( nurl_str_cat3 __ab `^` __absrc ) ( nurl_str_cat __ab `` )
                     // A payload that owns something, whose lending cannot be
                     // decided here: the walk decides at module end (`&`), from
