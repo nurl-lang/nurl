@@ -3335,6 +3335,40 @@ class FnCheck:
                 and not av.call and bool(av.alias)
                 and all(a[1] and all(not e.startswith(("#", "*", "^")) for e in a[1]) for a in av.alias))
 
+    def clo_has_env(self, st, rv):
+        """Does the closure value `rv` stored into a field own an environment
+        there?  A literal does when it captured anything (a `^k` capture
+        among what it holds); any other closure value may (agora #851)."""
+        if rv[0] != "use" or rv[1][0] != "v" or rv[1][2]:
+            return True
+        src = rv[1][1]
+        if self.fn.vars[src].kind != "temp":
+            return True
+        caps = self.closure_lit_caps().get(src)
+        # (a temporary bound to anything but a closure literal may own one)
+        return caps is None or caps > 0
+
+    def closure_lit_caps(self):
+        """The temporaries this function binds to a closure literal, each
+        with how many values it captures, scalars included: every capture
+        has a place in the environment (agora #851)."""
+        if getattr(self, "_clo_caps", None) is None:
+            found = {}
+
+            def walk(x):
+                if isinstance(x, tuple):
+                    if (len(x) >= 3 and x[0] == "let" and isinstance(x[2], tuple)
+                            and x[2] and x[2][0] == "closure"):
+                        found[x[1]] = len(x[2][2])
+                    for y in x:
+                        walk(y)
+                elif isinstance(x, list):
+                    for y in x:
+                        walk(y)
+            walk(self.fn.body)
+            self._clo_caps = found
+        return self._clo_caps
+
     def borrowed_copy(self, vid):
         """Is `vid` a copy of a value this frame only borrows: a by-value
         (`in`) parameter (not a destructor's receiver), a `~` loop's
@@ -4125,12 +4159,17 @@ class FnCheck:
                 return st
             fty = self.ty_of_place((vid, path))
             if (fty is not None and path[0] not in ("*",) and not path[0].startswith(("#", "^"))
-                    and (self.T.owning(fty) or self.T.has_udrop(fty)) and self.borrowed_copy(vid)):
+                    and (self.T.owning(fty) or self.T.has_udrop(fty)
+                         or (fty[0] == "closure" and self.clo_has_env(st, rv)))
+                    and self.borrowed_copy(vid)):
                 # a field of a copy of a value this frame only borrows - a
                 # by-value parameter's, a loop's element, a closure's
                 # by-value capture or parameter - given a value that owns
                 # memory: the store lands where the owner never looks, and
                 # nothing releases the value stored (agora #488, #643)
+                # (a closure with an environment owns it once stored in a
+                # field - nurlc adopts or copies it - so it is one too:
+                # agora #851)
                 self.err(ln, f"field {path[0]} of {v.name} is given a value that owns memory, "
                              f"but {v.name} is a copy of a value this function borrows")
             src = rv[1][1] if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] else None
