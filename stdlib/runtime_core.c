@@ -813,7 +813,9 @@ const char* nurl_print_buf_stop(void) {
      * buffer (outbuf_init). A small frame is copied as before, so a
      * capture at the start of the buffer does not cost a new buffer each
      * time. The block is counted as the copy was (nurl__outbuf_adopt): its
-     * owner releases it with nurl_free. */
+     * owner releases it with nurl_free. (realloc here is nurl__xrealloc:
+     * it aborts rather than return NULL, so a shrink cannot lose the
+     * buffer.) */
     if (start == 0 && g_outbuf_len >= OUTBUF_INIT_CAP) {
         char *whole = nurl__outbuf_adopt((char *)realloc(g_outbuf, g_outbuf_len + 1));
         g_outbuf      = NULL;
