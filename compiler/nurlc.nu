@@ -64019,20 +64019,28 @@ unsafe @ __sx_mut_roots s st s e b named → s {
 // moving ends what points into it directly; an element's own buffer moving
 // (`^`, through a borrow of it) what points into elements' buffers;
 // elements dropped, both.
-// Sources `ss` with each live `??` payload cursor's owner added beside it,
-// under the same mark (`^`, `~`): its storage is that owner's payload.
+// Sources `ss` with each live `??` payload cursor's owners added beside it,
+// under the same mark (`^`, `~`): its storage is that owner's payload, and
+// so on up a payload of a payload.
 @ __srcs_cursor_up s ss → s {
     : ~ s out ( nurl_str_cat ss `` )
     : ~ s rest ( nurl_str_cat ss `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
         : s pl ( __src_plain w )
-        : i co ( __cursor_src_of ( nurl_str_to_int pl ) )
-        ? >= co 0 {
-            : i pi ( nurl_str_find w pl )
-            : s mark ? > pi 0 ( nurl_str_slice w 0 pi ) ``
+        : i pi ( nurl_str_find w pl )
+        : s mark ? > pi 0 ( nurl_str_slice w 0 pi ) ``
+        // (…every owner up the chain: a payload of an option that is
+        // itself a payload, up to the binding that is no cursor. A cursor
+        // is never its own owner's owner, so the walk up ends; the count
+        // bounds it besides.)
+        : ~ i co ( __cursor_src_of ( nurl_str_to_int pl ) )
+        : ~ i hops 0
+        ~ & >= co 0 < hops 64 {
             = out ( __word_union out ( nurl_str_cat mark ( nurl_str_int co ) ) )
-        } {}
+            = co ( __cursor_src_of co )
+            = hops + hops 1
+        }
     }
     ^ out
 }
