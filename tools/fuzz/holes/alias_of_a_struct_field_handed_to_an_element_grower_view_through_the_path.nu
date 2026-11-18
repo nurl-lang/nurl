@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #789: `: I ii . ww inner` handed to a grower of `( vec_at . i rows 0 )`, past a slice taken through `. . ww inner rows`
+// map: §2.10 | A2 | rejected | - | AGORA-789: `: I ii . ww inner` handed to a grower of `( vec_at . i rows 0 )`, past a slice taken through `. . ww inner rows`
+// AGORA-789: refused - handing the alias on ends the views of every field path of what it was read out of (main fd008190: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
