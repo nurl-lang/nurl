@@ -35913,7 +35913,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     : s __prr ? == 0 ( nurl_str_len __pr ) `` ( __pderiv_reach syms ( __path_root_name __pr ) )
                     : ~ s __pd ( __words_plain __prr )
                     : ~ s __pc ( __words_cond __prr )
-                    ? != 0 ( nurl_str_len arg_xsx ) { = __pc ( __word_union __pc ( __sx_param_reach syms arg_xsx F ) ) } {}
+                    // (…through a `??` payload of a parameter too, `( vec_at q 0 )`
+                    // of `?? p { T q → … }`: deep where a payload was read
+                    // in this function, g_pl_seen - agora #842.)
+                    ? != 0 ( nurl_str_len arg_xsx ) { = __pc ( __word_union __pc ( __sx_param_reach syms arg_xsx != 0 g_pl_seen ) ) } {}
                     : ~ s __pl ? | __arg_shared != 0 ( nurl_str_len arg_xsx ) `` ( nurl_str_cat arg_lend_srcs `` )
                     ~ != 0 ( nurl_str_len __pl ) {
                         : s __pw ( str_first_word __pl ) = __pl ( str_skip_word __pl )
@@ -64016,6 +64019,24 @@ unsafe @ __sx_mut_roots s st s e b named → s {
 // moving ends what points into it directly; an element's own buffer moving
 // (`^`, through a borrow of it) what points into elements' buffers;
 // elements dropped, both.
+// Sources `ss` with each live `??` payload cursor's owner added beside it,
+// under the same mark (`^`, `~`): its storage is that owner's payload.
+@ __srcs_cursor_up s ss → s {
+    : ~ s out ( nurl_str_cat ss `` )
+    : ~ s rest ( nurl_str_cat ss `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s pl ( __src_plain w )
+        : i co ( __cursor_src_of ( nurl_str_to_int pl ) )
+        ? >= co 0 {
+            : i pi ( nurl_str_find w pl )
+            : s mark ? > pi 0 ( nurl_str_slice w 0 pi ) ``
+            = out ( __word_union out ( nurl_str_cat mark ( nurl_str_int co ) ) )
+        } {}
+    }
+    ^ out
+}
+
 @ bck_alias_conflict s ms s ss b drops → s {
     : ~ s mr ( nurl_str_cat ms `` )
     ~ != 0 ( nurl_str_len mr ) {
@@ -64085,7 +64106,11 @@ unsafe @ __sx_mut_roots s st s e b named → s {
                     // shares with the other is then the ownership rules' to
                     // settle, a borrow handed over or a value written back.)
                     ? & & != k j ! ( seq ak `-` ) ! ( bck_callee_keeps cal ( nurl_str_int k ) ) {
-                        : s sk ( bck_sx_arg_sources st ak )
+                        : s sk0 ( bck_sx_arg_sources st ak )
+                        // (…a `??` payload cursor among them points into its
+                        // option's payload: `( wr o sl )`, sl a slice of o's
+                        // payload q - agora #842.)
+                        : s sk ? & != 0 g_bck_has_cursor ! ( seq sk0 `*` ) ( __srcs_cursor_up sk0 ) sk0
                         : s hit ? ( seq sk `*` ) `` ( bck_alias_conflict mj sk dj )
                         ? != 0 ( nurl_str_len hit ) {
                             : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int hit ) ) ) ) )
@@ -70395,6 +70420,16 @@ unsafe @ __bck_body_defers s st i p i line → s {
                 = binds ? < cm 0 `` ( nurl_str_slice binds + cm 1 - - ( nurl_str_len binds ) cm 1 )
                 : i id ( bck_intern nm )
                 ? != 0 g_bck_pvt_any { ( bck_put ( bck_bkey `pvar_` ( nurl_str_int id ) ) ( nurl_sym_get g_bck ( nurl_str_cat4 `pvt_` nm `@` ( bck_field rec 3 ) ) ) ) } {}
+                // (…and a payload read in place as a part of the binding it
+                // was matched out of, `part_of` - an enum of the program's
+                // keeps it: its storage is that binding's, for a view of it
+                // named past the arm, as a cursor's owner is; agora #842.
+                // Not one lent: what it is lent out of may itself be a
+                // borrow, whose own sources a view of it reaches.)
+                ? & ! lent != 0 ( nurl_str_len part_of ) {
+                    ( bck_put ( bck_bkey `cuo_` ( nurl_str_int id ) ) ( nurl_str_cat part_of `` ) )
+                    = g_bck_cuo_any 1
+                } {}
                 ? != 0 ( nurl_str_len cursor_src ) {
                     ( bck_add_word ( bck_bkey `cu_` cursor_src ) ( nurl_str_int id ) )
                     ( bck_add_word ( bck_bkey `cul` `` ) ( nurl_str_cat3 ( nurl_str_int id ) `:` cursor_src ) )
