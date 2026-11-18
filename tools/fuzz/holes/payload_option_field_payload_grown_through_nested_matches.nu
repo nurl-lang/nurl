@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #428: a view of an option held in another option's payload kept while nested `??`s grow it
+// map: §2.10 | A2 | rejected | - | AGORA-428: a view of an option held in another option's payload kept while nested `??`s grow it
+// AGORA-428 (this shape): refused on main 4db4cf5b by both nurlc and tools/ncore - closed by earlier work (AGORA-842's payload-cursor owners, AGORA-580, AGORA-428's copies); moved out of the open probes
 $ `stdlib/core/string.nu`
 
 : H { String name }

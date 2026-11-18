@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #793: a share of a parameter pushed into `. x hs` of a `~` loop element `x`, then replaced through the owner
+// map: §2.10 | A2 | rejected | - | AGORA-793: a share of a parameter pushed into `. x hs` of a `~` loop element `x`, then replaced through the owner
+// AGORA-793 (this shape): refused on main 4db4cf5b by both nurlc and tools/ncore - closed by earlier work; moved out of the open probes
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/box.nu`

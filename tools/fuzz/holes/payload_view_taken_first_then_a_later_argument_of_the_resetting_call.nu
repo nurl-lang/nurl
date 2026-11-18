@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #569: a view of the payload taken first, then passed after `( reset_ret o )` in one call
+// map: §2.10 | A2 | rejected | - | AGORA-569: a view of the payload taken first, then passed after `( reset_ret o )` in one call
+// AGORA-569 (this shape): refused on main 4db4cf5b by both nurlc and tools/ncore - closed by earlier work (AGORA-842's payload-cursor owners, AGORA-580, AGORA-428's copies); moved out of the open probes
 $ `stdlib/core/string.nu`
 
 : | Msg { MNone MSome String }

@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #811: a trait impl whose field is a closure that captured an Rc share; its static method runs it to clear the payload
+// map: §2.10 | A2 | rejected | - | AGORA-811: a trait impl whose field is a closure that captured an Rc share; its static method runs it to clear the payload
+// AGORA-811 (this shape): refused on main 4db4cf5b by both nurlc and tools/ncore - closed by earlier work; moved out of the open probes
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/string.nu`
