@@ -211,6 +211,14 @@ the LLVM / C11 memory model rather than redefining it.
   `main_no_leak`). nurlc accepts it, and it runs clean. The modelling
   claim (phase C): the walk emits `edit false` for an edit through a
   borrow of the frame's own memory, and `edit true` for every other.
+  Four compiler tests pin nurlc's side in both directions. It accepts a
+  push through an element of a local the destructor or closure made
+  (`drop_of_a_view_type_pushes_through_its_own_element`,
+  `closure_over_a_slice_pushes_through_its_own_element`). It ends a view
+  of an element pushed through a parameter or a by-name capture
+  (`borrow_push_through_a_parameters_element_ends_the_callers_view`,
+  `borrow_closure_push_through_a_captures_element_ends_a_view`), which is
+  what `edit true` does there.
 
   No new premise removes a typing (`A2/Unfresh.lean`). Each premise that
   reads the bit is met with it off: `borrow` / `at` choose it; clearing
