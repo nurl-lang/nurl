@@ -23,6 +23,25 @@ import os
 import sys
 
 from prims import PRIMS
+
+
+# The runtime entries that may start a panic on this thread, as nurlc's
+# rt_starts_panic table and __call_may_unwind have them (agora #382).
+RT_PANICS = {"nurl_panic", "nurl_panic_index", "nurl_sendck_end", "nurl_mutex_lock",
+             "nurl_mutex_unlock", "nurl_rwlock_rdlock", "nurl_rwlock_wrlock",
+             "nurl_lk_enter", "nurl_lk_take", "nurl_lk_await"}
+
+
+def call_may_unwind(name):
+    """May a call of `name` start a panic?  A function of the program or
+    the library may; a runtime entry (`nurl_…`) only by nurlc's table."""
+    if not name.startswith("nurl_"):
+        return True
+    if name.startswith(("nurl_vec_drop", "nurl_vec_clone", "nurl_closure_", "nurl_call", "nurl_cpu_launch")):
+        return True
+    if name in RT_PANICS or (name.startswith("nurl_cpu_") and name.endswith("_missing")):
+        return True
+    return any(w in name for w in ("fiber", "park", "yield", "sched", "async"))
 from lower import SCALARS, Types, Var
 
 # NCORE_DERIVE=1: a library function's derived summary (derive.py) answers
@@ -1422,13 +1441,18 @@ class FnCheck:
                             st.vals[ow] = AV("L", frozenset({self.loan(st, ("ho", ow, first), at, "handle")}),
                                              frozenset({at}), ov.held)
                 st.pb = frozenset(p for p in st.pb if p[0] not in back)
-        if name in self.prog.fns and name not in getattr(self.prog, "trusted", ()):
-            # a function of the program may unwind: storage the caller
-            # holds may not view this frame's values across the call -
-            # unless the call is handed that storage and gives it a value
-            # that views nothing before anything else (MEMORY.md §3.3d)
+        if name in self.prog.fns or call_may_unwind(name):
+            # a function may unwind - the program's, and the library's too
+            # (an index past the end, `panic` itself; a runtime entry by
+            # nurlc's rt_starts_panic table, __call_may_unwind): storage
+            # the caller holds may not view this frame's values across the
+            # call - unless the call is handed that storage and gives it a
+            # value that views nothing before anything else (MEMORY.md
+            # §3.3d; agora #382) - an `inout` parameter, or in a closure
+            # body a capture taken by pointer: the binding outside
             for vid, k in self.pidx.items():
-                if self.fn.modes[k] != "inout":
+                if self.fn.modes[k] != "inout" and not (
+                        self.fn.modes[k] == "cap" and getattr(self.fn.vars[vid], "byref", False)):
                     continue
                 av = st.vals.get(vid)
                 if av is None or not any(
