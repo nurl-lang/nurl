@@ -1,3 +1,6 @@
+// literal_running_a_builder_closure_handed_to_a_runner: `( run \ → v { ( c ) } )` with c from a builder call, beside a view of xs
+// Closed (agora #838): refused already: the literal handed to the call runs there, with c's effects (agora #817).
+// main 431ca15e: refused.
 // map: §2.10 | A2 | rejected | - | agora #838: `( run \ → v { ( c ) } )` with c from a builder call, beside a view of xs
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`

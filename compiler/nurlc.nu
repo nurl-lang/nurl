@@ -7937,25 +7937,7 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
         : b __hcar ? == tt TT_AT != 0 ( nurl_str_len ( nurl_sym_get syms `__last_agg_clo__` ) ) ? == tt TT_LPAREN != 0 g_clo_eff_set & & != 0 g_clo_hold_n ( is_ident_tok tt ) != 0 ( nurl_sym_len2 syms tv `__clonode` )
         ? ! __hcar { ^ v } {}
     } {}
-    // (A binding: under any name the closure may have, a literal assigned
-    // in an arm too — __clo_run_attr; agora #802.)
-    : s effs0 ? == tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_effects__` ) ? ( is_ident_tok tt ) ( __clo_run_attr syms tv `__closure_effects` `le` ) ? & == tt TT_LPAREN != 0 g_clo_eff_set ( nurl_sym_get syms `__last_call_clo_effects__` ) ? == tt TT_AT ( __clo_members_attr ( nurl_sym_get syms `__last_agg_clo__` ) `le` ) ``
-    : ~ s effs ( nurl_str_cat effs0 `` )
-    // (…and a join's or a block's arms, `^ ? k c1 c2`: the literals they
-    // may be, #686's nodes.)
-    ? & != 0 g_clo_nodes | | == tt TT_QUEST == tt TT_QUESTQUEST == tt TT_LBRACE {
-        : ~ s ms ( __clo_val_members syms tt tv )
-        ~ != 0 ( nurl_str_len ms ) {
-            : s m ( str_first_word ms ) = ms ( str_skip_word ms )
-            ? ! ( seq m `*` ) {
-                : ~ s ls ( __clo_lits_of m )
-                ~ != 0 ( nurl_str_len ls ) {
-                    : s l ( str_first_word ls ) = ls ( str_skip_word ls )
-                    = effs ( __word_union effs ( nurl_sym_get g_clo_nodes ( nurl_str_cat `le#` l ) ) )
-                }
-            } {}
-        }
-    } {}
+    : s effs ( __ret_clo_val_effs syms tt tv )
     ? == 0 ( nurl_str_len effs ) { ^ v } {}
     : ~ s out ``
     : ~ s rest ( nurl_str_cat effs `` )
@@ -7982,6 +7964,108 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
     : s cur ( nurl_sym_get g_pending_impl key )
     ? == 0 ( nurl_str_len cur ) { = g_retcloeff_n + g_retcloeff_n 1 } {}
     ( nurl_sym_def g_pending_impl key ( __word_union cur out ) )
+}
+
+// What running the closure value returned (`tt`/`tv`) does, on the names
+// it is written with: a literal's, a binding's under any name the closure
+// may have, a call's answer, a join's or a block's arms.
+@ __ret_clo_val_effs i syms i tt s tv → s {
+    // (A binding: under any name the closure may have, a literal assigned
+    // in an arm too — __clo_run_attr; agora #802.)
+    : s effs0 ? == tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_effects__` ) ? ( is_ident_tok tt ) ( __clo_run_attr syms tv `__closure_effects` `le` ) ? & == tt TT_LPAREN != 0 g_clo_eff_set ( nurl_sym_get syms `__last_call_clo_effects__` ) ? == tt TT_AT ( __clo_members_attr ( nurl_sym_get syms `__last_agg_clo__` ) `le` ) ``
+    : ~ s effs ( nurl_str_cat effs0 `` )
+    // (…and a join's or a block's arms, `^ ? k c1 c2`: the literals they
+    // may be, #686's nodes.)
+    ? & != 0 g_clo_nodes | | == tt TT_QUEST == tt TT_QUESTQUEST == tt TT_LBRACE {
+        : ~ s ms ( __clo_val_members syms tt tv )
+        ~ != 0 ( nurl_str_len ms ) {
+            : s m ( str_first_word ms ) = ms ( str_skip_word ms )
+            ? ! ( seq m `*` ) {
+                : ~ s ls ( __clo_lits_of m )
+                ~ != 0 ( nurl_str_len ls ) {
+                    : s l ( str_first_word ls ) = ls ( str_skip_word ls )
+                    = effs ( __word_union effs ( nurl_sym_get g_clo_nodes ( nurl_str_cat `le#` l ) ) )
+                }
+            } {}
+        }
+    } {}
+    ^ effs
+}
+
+// A closure a closure literal's body hands back (`^`, or its tail): what
+// running it does, for a binding of a call of the literal to replay where
+// it runs (`lr#<literal>`, the body's `__clo_self__`), as a function's `retcloeff`
+// is (agora #838). On the bindings it names outside the literal by those
+// names — the call sees them — and on the literal's own parameter k as
+// `%k`, rewritten onto the call's argument.
+@ __clo_note_ret_effs i syms s lt i tt s tv → v {
+    ? ! ( __is_closure_ty lt ) { ^ v } {}
+    // (…and which closure it is, by a name the call sees: a capture handed
+    // back, `^ f` — or what a binding it hands back was lent from — is a
+    // lend of that name to the call's result (`lv#`, gen_call's
+    // `__last_call_clo_lend_idents__`), so a function handing back its
+    // closure parameter through a literal's call lends it on: its
+    // `retclo`; agora #838.)
+    ? ( is_ident_tok tt ) {
+        : s lvn ? != 0 ( nurl_sym_len2 syms tv `__clolend` ) ( nurl_sym_get2 syms tv `__clolend` ) ( nurl_str_cat tv `` )
+        ? == 0 g_clo_nodes { = g_clo_nodes ( nurl_sym_new ) } {}
+        : s lvk ( nurl_str_cat `lv#` ( nurl_sym_get syms `__clo_self__` ) )
+        ( nurl_sym_def g_clo_nodes lvk ( __word_union ( nurl_sym_get g_clo_nodes lvk ) lvn ) )
+    } {}
+    : s effs ( __ret_clo_val_effs syms tt tv )
+    ? == 0 ( nurl_str_len effs ) { ^ v } {}
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat effs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s e ( str_first_word rest ) = rest ( str_skip_word rest )
+        : b lent == ( nurl_str_get e 0 ) 126
+        : s e1 ? lent ( nurl_str_slice e 1 - ( nurl_str_len e ) 1 ) ( nurl_str_cat e `` )
+        : i c1 ( nurl_str_find e1 `:` )
+        ? > c1 0 {
+            : s r ( __path_root_name ( nurl_str_slice e1 0 c1 ) )
+            // (…or a share of one — an `rc_clone` of the literal's parameter,
+            // one Rc value with it: what replaces or grows its payload does
+            // the parameter's, as mem_note_ret_clo_effs has it; agora #845.)
+            : s rp ( nurl_sym_get2 syms r `__rcof` )
+            : i k ( nurl_sym_word_index syms `__fn_param_names__` ? == 0 ( nurl_str_len rp ) r rp )
+            : s w ? >= k 0 ( nurl_str_cat4 ? lent `~%` `%` ( nurl_str_int k ) ( nurl_str_slice e1 ( nurl_str_len r ) - ( nurl_str_len e1 ) ( nurl_str_len r ) ) `` ) ( nurl_str_cat e `` )
+            = out ( __word_union out w )
+        } {}
+    }
+    ? == 0 ( nurl_str_len out ) { ^ v } {}
+    ? == 0 g_clo_nodes { = g_clo_nodes ( nurl_sym_new ) } {}
+    : s key ( nurl_str_cat `lr#` ( nurl_sym_get syms `__clo_self__` ) )
+    ( nurl_sym_def g_clo_nodes key ( __word_union ( nurl_sym_get g_clo_nodes key ) out ) )
+}
+
+// The effects of the closure arguments (`byarg`, `k|e1,e2` words) at the
+// argument indexes `ks` names: those a callee hands back.
+@ __ce_by_arg_at s byarg s ks → s {
+    : ~ s out ``
+    : ~ s r ( nurl_str_cat byarg `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s w ( str_first_word r ) = r ( str_skip_word r )
+        : i p ( nurl_str_find w `|` )
+        ? & > p 0 ( str_contains_word ks ( nurl_str_slice w 0 p ) ) {
+            = out ( __word_union out ( bck_swap_char ( nurl_str_slice w + p 1 - - ( nurl_str_len w ) p 1 ) 44 32 ) )
+        } {}
+    }
+    ^ out
+}
+
+// A literal's `lr` words onto a call of it: `%k` words onto the call's
+// argument k (__clo_effs_onto_args), the rest as they are.
+@ __clo_lr_onto_args s effs s idents → s {
+    : ~ s out ``
+    : ~ s pk ``
+    : ~ s rest ( nurl_str_cat effs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s e ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i o ? == ( nurl_str_get e 0 ) 126 1 0
+        ? == ( nurl_str_get e o ) 37 { = pk ( __word_union pk e ) } { = out ( __word_union out e ) }
+    }
+    ? != 0 ( nurl_str_len pk ) { = out ( __word_union out ( __clo_effs_onto_args pk idents ) ) } {}
+    ^ out
 }
 
 // What a call written as an argument lends out of, as a roster entry:
@@ -9721,7 +9805,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     = lt ( nurl_get_last_type )
     ? | != 0 g_clo_lend_set != 0 g_clolend_n { ( mem_check_ret_clo_lend lex syms lt ret_first_tt ret_first_val ) } {}
     ? & != 0 g_clo_cap_set == ret_first_tt TT_LPAREN { ( mem_note_ret_clo_cap syms lt ) } {}
-    ? == 0 g_bck_closure_depth { ( mem_note_ret_clo_effs syms lt ret_first_tt ret_first_val ) } {}
+    ? == 0 g_bck_closure_depth { ( mem_note_ret_clo_effs syms lt ret_first_tt ret_first_val ) } { ? != 0 g_borrowck { ( __clo_note_ret_effs syms lt ret_first_tt ret_first_val ) } {} }
     // Determine which owned-slice binding (if any) is escaping as the return value.
     // Ownership transfers only when the return type is itself a slice AND the
     // returned expression resolved to a simple identifier load.
@@ -19166,12 +19250,14 @@ unsafe @ eng_byte s w i k → i {
             : i f ( wv_at known + c 1 )
             ? ( sm_have f ) {
                 : i ncap ( ef_ncap f )
-                ? & & == ( sm_word f SM_RES ) RES_LENT != 0 ( ef_at f EF_RET ) == ( et_kind ( et_of ( ef_at f EF_RET ) ) ) EK_SLICE {
+                ? & & == ( sm_word f SM_RES ) RES_LENT != 0 ( ef_at f EF_RET ) | == ( et_kind ( et_of ( ef_at f EF_RET ) ) ) EK_SLICE == ( et_kind ( et_of ( ef_at f EF_RET ) ) ) EK_CLOSURE {
                     // a slice the body hands back is that view: what it lends
                     // of its parameters, the result of this call lends of
                     // these arguments - and of what its captures point at (a
                     // value it hands back is copied - a raw string too, h220;
-                    // a slice has no copy)
+                    // a slice has no copy). A closure it hands back out of a
+                    // capture is that closure, lent out of the capture as a
+                    // slice is (agora #838).
                     : i base ( wv_at known c )
                     : i bl ( ep_len base )
                     : ~ i e 0
@@ -19223,7 +19309,16 @@ unsafe @ eng_byte s w i k → i {
                         = e + e 1
                     }
                 } {}
+                // (the closure bodies its result may run: a closure the body
+                // builds and hands back runs on what it holds below - as a
+                // function's `rclos`; agora #838)
                 : ~ i e 0
+                ~ < e ( sm_n f SM_RCLOS ) {
+                    : i t ( sm_at f SM_RCLOS e )
+                    = out ( sq_add out ( he_make ( tp_at t 2 0 ) ( clo_marker ( tp_at t 2 1 ) ) ) )
+                    = e + e 1
+                }
+                = e 0
                 ~ < e ( sm_n f SM_RHOLDS ) {
                     : i t ( sm_at f SM_RHOLDS e )
                     : i dpath ( tp_at t 4 0 )
@@ -19242,7 +19337,12 @@ unsafe @ eng_byte s w i k → i {
                         : ~ i hq 0
                         ~ < hq ( sq_len chs ) {
                             : i he ( sq_at chs hq )
-                            ? > ( ep_len ( he_path he ) ) ( ep_len cbase ) { = below ( sq_add below he ) } {}
+                            // (…and a closure parameter's placeholder at the
+                            // capture itself - a closure-typed capture handed
+                            // back, `\ → ( @ v ) { ^ f }`: what it holds; agora
+                            // #838)
+                            : i hk ( el_kind ( he_loan he ) )
+                            ? | > ( ep_len ( he_path he ) ) ( ep_len cbase ) & == ( he_path he ) cbase | == hk LK_HELD == hk LK_HELDIN { = below ( sq_add below he ) } {}
                             = hq + hq 1
                         }
                         = out ( sq_union out ( held_root ( held_sub below cbase ) dpath ) )
@@ -23019,7 +23119,9 @@ unsafe @ eng_byte s w i k → i {
         ( eng_err_fn f line EG_COPYHOOK `(a copy hook) hands its argument back, whole or in part` )
     } {}
     ? ( ef_is_closure f ) {
-        ? & != ret ET_NONE ! ( et_copyable ret ) {
+        // (a closure value it captured, handed back whole, is that closure:
+        // the caller's result is lent out of the capture; agora #838)
+        ? & & != ret ET_NONE ! ( et_copyable ret ) != ( et_kind ret ) EK_CLOSURE {
             : ~ b caplend F
             = k 0
             ~ < k ( sm_n f SM_LENDS ) {
@@ -38140,18 +38242,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // (…and a closure handed to it that it hands back — `@ pick ( @ v ) f
     // → ( @ v ) { ^ f }`, `retclo`: the literal's effects are the result's,
     // replayed where it runs; agora #813.)
-    ? & != 0 ( nurl_str_len __ce_by_arg ) != 0 g_retclo_n {
+    ? & & != 0 ( nurl_str_len __ce_by_arg ) != 0 g_retclo_n ! __callee_shadowed {
         : s __rck ( nurl_sym_get g_pending_impl ( nurl_str_cat `retclo##` __lend_cn ) )
-        ? != 0 ( nurl_str_len __rck ) {
-            : ~ s __cba ( nurl_str_cat __ce_by_arg `` )
-            ~ != 0 ( nurl_str_len __cba ) {
-                : s __cbw ( str_first_word __cba ) = __cba ( str_skip_word __cba )
-                : i __cbp ( nurl_str_find __cbw `|` )
-                ? & > __cbp 0 ( str_contains_word __rck ( nurl_str_slice __cbw 0 __cbp ) ) {
-                    = __cle_all ( __word_union __cle_all ( bck_swap_char ( nurl_str_slice __cbw + __cbp 1 - - ( nurl_str_len __cbw ) __cbp 1 ) 44 32 ) )
-                } {}
-            }
-        } {}
+        ? != 0 ( nurl_str_len __rck ) { = __cle_all ( __word_union __cle_all ( __ce_by_arg_at __ce_by_arg __rck ) ) } {}
     } {}
     // (…and, of a builder whose answer is not there yet — compiled below its
     // caller, a generic instance — placeholders the walk resolves: agora #813.)
@@ -38161,6 +38254,31 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // hands that argument back, `retclo` — known only once it has
         // compiled: `rcq#` placeholders, resolved at the walk.)
         ? != 0 ( nurl_str_len __ce_by_arg ) { = __cle_all ( __word_union __cle_all ( __rcq_placeholders __lend_cn __ce_by_arg ) ) } {}
+    } {}
+    // (…and a closure value called whose literal hands back a closure: what
+    // running that does, its `lr`, the literal's parameters onto the
+    // arguments; agora #838.)
+    // (…and the closures handed to it that the literal hands back, its
+    // own `retclo`, `lq`: theirs; agora #838.)
+    ? & __callee_shadowed != 0 g_clo_nodes {
+        : s __lre ( __clo_run_attr syms fname `__closure_reteffs` `lr` )
+        ? != 0 ( nurl_str_len __lre ) { = __cle_all ( __word_union __cle_all ( __clo_lr_onto_args __lre arg_idents ) ) } {}
+        : s __lqk ( __clo_run_attr syms fname `__closure_retclo` `lq` )
+        ? & != 0 ( nurl_str_len __ce_by_arg ) != 0 ( nurl_str_len __lqk ) { = __cle_all ( __word_union __cle_all ( __ce_by_arg_at __ce_by_arg __lqk ) ) } {}
+        // (…and what the result is lent from: the names the literal hands
+        // back (`lv`), and the arguments at its `lq` indexes, as a named
+        // callee's `retclo` gives them.)
+        : ~ s __lvi ( __clo_run_attr syms fname `__closure_retlend` `lv` )
+        : ~ s __lqr ( nurl_str_cat __lqk `` )
+        ~ != 0 ( nurl_str_len __lqr ) {
+            : s __lqw ( str_first_word __lqr ) = __lqr ( str_skip_word __lqr )
+            : s __lqa ( bck_nth_word arg_idents ( nurl_str_to_int __lqw ) )
+            ? & != 0 ( nurl_str_len __lqa ) ! ( seq __lqa `-` ) { = __lvi ( __word_union __lvi __lqa ) } {}
+        }
+        ? != 0 ( nurl_str_len __lvi ) {
+            ( nurl_sym_def syms `__last_call_clo_lend_idents__` ( __word_union ( nurl_sym_get syms `__last_call_clo_lend_idents__` ) __lvi ) )
+            = g_clo_lend_set 1
+        } {}
     } {}
     ? != 0 ( nurl_str_len __cle_all ) { ( __clo_ret_member_note syms __cle_all ) } {}
     // …and the ones it takes over (`retcap`: a wrapper handing its own
@@ -53284,8 +53402,13 @@ unsafe @ __clo_cap_marks i syms s caps i line → v {
             // (`~name`: on a value lent out of it — the tag says so, the row
             // names the binding.)
             : b rl & > ( nurl_str_len nm ) 1 == ( nurl_str_get nm 0 ) 126
-            ( bck_stash_pending_kind ? rl ( nurl_str_slice nm 1 - ( nurl_str_len nm ) 1 ) ( nurl_str_cat nm `` ) line ( __rce_tag_lent cal rl ) aix `` `pendrce` )
+            : s rn ? rl ( nurl_str_slice nm 1 - ( nurl_str_len nm ) 1 ) ( nurl_str_cat nm `` )
+            ( bck_stash_pending_kind rn line ( __rce_tag_lent cal rl ) aix `` `pendrce` )
             = g_rce_n + g_rce_n 1
+            // (Run inside another closure's body: its effect too, the
+            // placeholder as it is — a run of that literal replays it, as
+            // the effects of a call written there; agora #838.)
+            ? != 0 g_bck_closure_depth { ? rl { ( __clo_effect_note_lent rn cal aix ) } { ( __clo_effect_note rn cal aix ) } } {}
             continue
         } {}
         // (`~`: through a value lent out of the capture, agora #353.)
@@ -83946,9 +84069,12 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             // (…and one a call handed back reaches the bindings its effects
             // name — `: c ( mk xs )` captured, its effects on xs: running it
             // in the body does to them what it does, as a literal's captures;
-            // agora #817.)
-            ? & __cap_clo != 0 ( nurl_sym_len2 syms __cap_w `__closure_effects` ) {
-                : ~ s __cer ( __clo_eff_roots ( nurl_sym_get2 syms __cap_w `__closure_effects` ) )
+            // agora #817. Under any name the closure has: a copy `: d c`, an
+            // arm's `= d c`, holds no effects of its own, and its node reaches
+            // them — __clo_run_attr, as a run of it does; agora #838.)
+            : s __cap_ce ? __cap_clo ( __clo_run_attr syms __cap_w `__closure_effects` `le` ) ``
+            ? != 0 ( nurl_str_len __cap_ce ) {
+                : ~ s __cer ( __clo_eff_roots __cap_ce )
                 ~ != 0 ( nurl_str_len __cer ) {
                     : s __crw ( str_first_word __cer ) = __cer ( str_skip_word __cer )
                     ? & != 0 ( nurl_str_len ( nurl_sym_get syms __crw ) ) ! ( str_contains_word __cap_heap __crw ) { = __cap_heap ? == 0 ( nurl_str_len __cap_heap ) ( nurl_str_cat __crw `` ) ( nurl_str_cat3 __cap_heap ` ` __crw ) } {}
@@ -84048,6 +84174,9 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // last emitted), which clang rejects as `use of undefined value`.
     ( nurl_sym_def body_syms `__cur_lbl__` `entry` )
     ( nurl_sym_def body_syms `__clo_cap_ptrs__` `` )
+    // (The literal whose body this is: what a closure it hands back does is
+    // recorded under it, `lr#`, __clo_note_ret_effs; agora #838.)
+    ( nurl_sym_def body_syms `__clo_self__` closure_fn_name )
     // The per-expression channels that describe the last call / value
     // describe one of the ENCLOSING function's, and may name its registers
     // (`__last_call_own__`, the bit mem_capture_hown reserved after it).
@@ -84973,7 +85102,8 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     ? & == g_did_ret 0 ! ( seq ret_type `void` )
     { = body_val ( ret_ty_agree lex body_syms cg __cl_tail_lt body_val
         ( nurl_str_to_int ( nurl_sym_get body_syms `__tail_first_tt__` ) )
-        ( nurl_sym_get body_syms `__tail_first_val__` ) F T ) }
+        ( nurl_sym_get body_syms `__tail_first_val__` ) F T )
+        ? != 0 g_borrowck { ( __clo_note_ret_effs body_syms ret_type ( nurl_str_to_int ( nurl_sym_get body_syms `__tail_first_tt__` ) ) ( nurl_sym_get body_syms `__tail_first_val__` ) ) } {} }
     {}
     // Emit return
     ? == g_did_ret 0
@@ -85016,7 +85146,15 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     }
     : s __cfa ( nurl_sym_get syms `__clo_fassigned__` )
     : s __cci ( nurl_sym_get syms `__clo_cap_impl__` )
+    // (The parameters the body hands back — its own `retclo`: a call of the
+    // literal hands back what those arguments do, gen_call's `lq`; agora
+    // #838.)
+    : s __clq ( nurl_sym_get syms `__fn_retclo__` )
     ( nurl_sym_pop syms )
+    ? & != 0 g_borrowck != 0 ( nurl_str_len __clq ) {
+        ? == 0 g_clo_nodes { = g_clo_nodes ( nurl_sym_new ) } {}
+        ( nurl_sym_def g_clo_nodes ( nurl_str_cat `lq#` closure_fn_name ) __clq )
+    } {}
     // A capture that carries its binding's drop flag (g_nc_flag_caps), which
     // the body clears where it gives the value away: given away for certain
     // (clo_released), or to a callee that may keep it (`__clo_cap_impl__`,
@@ -85323,6 +85461,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         ( nurl_sym_def g_clo_nodes ( nurl_str_cat `le#` closure_fn_name ) __cl_effs )
         ( nurl_sym_def g_clo_nodes ( nurl_str_cat `la#` closure_fn_name ) __cl_asg )
     } {}
+
     // A body that may move a capture's buffer or drop its elements must not
     // also hold another capture that reaches it — a view or a borrow of it,
     // a closure that captured it: inside the body the two are unrelated

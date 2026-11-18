@@ -1,3 +1,6 @@
+// builder_closure_run_in_a_loop: a builder's closure bound by `:` and run in a loop beside a view of xs
+// Closed (agora #838): refused already: the binding's run replays the builder's `retcloeff` (agora #656).
+// main 431ca15e: refused.
 // map: §2.10 | A2 | rejected | - | agora #838: a builder's closure bound by `:` and run in a loop beside a view of xs
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`

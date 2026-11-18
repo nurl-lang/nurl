@@ -2080,8 +2080,17 @@ class FnCheck:
                 held |= hroot(captured_held(avs[k].held), dpath)
                 continue
             if kind == "held":
-                # (a closure the result keeps copies in what it can, §7.5)
-                held |= hroot(self.closure_owned(hsub(avs[k].held, tuple(path))), dpath)
+                # (a closure the result keeps copies in what it can, §7.5 -
+                # but a closure value handed back whole, `@ pick ( @ v ) f →
+                # ( @ v ) { ^ f }` or through a forwarder, or captured whole
+                # by a literal the callee hands back, `^ \ → v { ( f ) }`, is
+                # that same closure: its environment, the handles it holds of
+                # what it captured, comes back with it; agora #838)
+                whole_clo = (not path and ops[k][0] == "v" and not ops[k][2]
+                             and self.fn.vars[ops[k][1]].ty is not None
+                             and self.fn.vars[ops[k][1]].ty[0] == "closure")
+                sub = hsub(avs[k].held, tuple(path))
+                held |= hroot(sub if whole_clo else self.closure_owned(sub), dpath)
                 if not path and not dpath and avs[k].own == "L" and dest_vid is not None:
                     ty = self.fn.vars[dest_vid].ty
                     if ty is not None and ty[0] in VIEW_TYPES:
@@ -2931,12 +2940,14 @@ class FnCheck:
             if sm is None or body is None:
                 continue
             ncap = getattr(body, "ncap", 0)
-            if sm["res"] == "lent" and body.ret is not None and body.ret[0] == "slice":
+            if sm["res"] == "lent" and body.ret is not None and body.ret[0] in ("slice", "closure"):
                 # a slice the body hands back is that view: what it lends of
                 # its parameters, the result of this call lends of these
                 # arguments - and of what its captures point at (a value it
                 # hands back is copied, MEMORY.md §7.5 - a raw string too,
-                # h220; a slice has no copy)
+                # h220; a slice has no copy). A closure it hands back out of a
+                # capture is that closure, lent out of the capture as a slice
+                # is (agora #838).
                 for (k, path, kind) in sm["lends"]:
                     i = k - ncap
                     places = set()
@@ -2958,6 +2969,12 @@ class FnCheck:
                         pl = (a[0], (a[1] + tuple(path))[:PATH_MAX])
                         valias.add(pl)
                         vloans.add(self.loan(st, (site, "cv", k), pl, kind))
+            # (the closure bodies its result may run: a closure the body
+            # builds and hands back, `\ ( Vec u ) p → ( @ v ) { ^ ( mk p ) }`,
+            # runs on what it holds below - as a function's `rclos`; agora
+            # #838)
+            for (dpath, f2) in sm.get("rclos", ()):
+                out.add((tuple(dpath), ("clo", f2)))
             for (dpath, k, path, kind) in sm.get("rholds", ()):
                 i = k - ncap
                 if 0 <= k < ncap and kind == "held":
@@ -2966,8 +2983,13 @@ class FnCheck:
                     # where the closure value holds them)
                     # (below the capture: not the closure's own handle of
                     # the binding it captured)
+                    # (…but a closure parameter's placeholder sitting at the
+                    # capture itself - a closure-typed capture, `\ → ( @ v ) {
+                    # ^ f }` with f a parameter - is what it holds: kept, as
+                    # captured_held keeps it; agora #838)
                     cb = base + (f"^{k}",) + tuple(path)
-                    out |= hroot(hsub({(hp, l) for hp, l in cav.held if len(hp) > len(cb)}, cb), tuple(dpath))
+                    out |= hroot(hsub({(hp, l) for hp, l in cav.held if len(hp) > len(cb) or (
+                        hp == cb and isinstance(l, tuple) and len(l) == 3 and l[2] in ("held", "heldin"))}, cb), tuple(dpath))
                     continue
                 if not (0 <= i < len(avs)):
                     continue
@@ -3486,6 +3508,11 @@ class FnCheck:
             av = self.call_closure(st, rv, line, dest_ty)
             if dest_ty is not None and self.T.is_scalar(dest_ty):
                 return NONE
+            if av.own == "L" and dest_ty is not None and dest_ty[0] == "closure":
+                # (a closure a closure's call hands back is its caller's own
+                # copy too, as a named call's: it holds what the lent one
+                # holds, and is no borrow of where that one sat - §7.5)
+                av = AV("O", (), (), av.held)
             return av
         if k == "scalar":
             for i, op in enumerate(rv[1]):
@@ -4545,7 +4572,12 @@ def check_program(prog, max_rounds=40):
         if (name.endswith("_clone") or name.endswith("_share")) and sm["res"] == "lent":
             # a handle's copy hook makes a value of its own (§7.6)
             errors.append((name, fn.line, "a copy hook hands its argument back, whole or in part"))
-        if getattr(fn, "is_closure", False) and fn.ret is not None and not T.copyable(fn.ret):
+        # (a closure value it captured, handed back whole, is that closure: a
+        # copy of its handle, its environment the one it has, and the
+        # caller's result is lent out of the capture - the call's rule
+        # below, `ret_lends_capture`; agora #838)
+        if (getattr(fn, "is_closure", False) and fn.ret is not None and not T.copyable(fn.ret)
+                and fn.ret[0] != "closure"):
             ncap = getattr(fn, "ncap", 0)
             if any(k < ncap and kind == "handle" for (k, _, kind) in sm["lends"]):
                 # a closure's result is its caller's own: what it lends out

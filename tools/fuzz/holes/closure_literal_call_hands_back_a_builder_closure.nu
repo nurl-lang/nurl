@@ -1,3 +1,6 @@
+// closure_literal_call_hands_back_a_builder_closure: a closure literal's call hands back a builder's closure it captured, run beside a view of xs
+// Closed (agora #838): a literal's body records what a closure it hands back does (`lr#`, its own parameters as `%k`) and which of its closure parameters it hands back (`lq#`); a call of it gives its binding those effects, as a function's `retcloeff` / `retclo` do.
+// main 431ca15e: accepted; the read after the run prints a freed buffer's bytes (57), and ASan reports heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #838: a closure literal's call hands back a builder's closure it captured, run beside a view of xs
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
