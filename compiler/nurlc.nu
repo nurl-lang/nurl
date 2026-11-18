@@ -26931,6 +26931,24 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
     }
 }
 
+// Binding `name`, of type `ty`, given a new value here: its old value is
+// released. Where `name` is a parameter of the function compiling now (an
+// `inout` one: the caller's value), each `% Drop` impl that release runs
+// is a call of it, handed that parameter (__drop_note: a drop edge, closed
+// at module end) — so the caller's view of the Rc payload the impl changes,
+// taken through another handle, ends at the call (agora #766).
+@ __udrop_param_old i syms s name s ty → v {
+    ? | == 0 g_user_drop_seen == 0 ( nurl_str_len g_cur_params ) { ^ v } {}
+    ? < ( str_word_index g_cur_params name ) 0 { ^ v } {}
+    : s lt ( nurl_llty ty )
+    ? == 0 ( nurl_str_len ( __rc_reach lt ) ) { ^ v } {}
+    : ~ s fns ( __udrop_fns lt )
+    ~ != 0 ( nurl_str_len fns ) {
+        : s f ( __bar_first fns ) = fns ( __bar_rest fns )
+        ( __drop_note name f 0 )
+    }
+}
+
 // The `sink` parameters (positions `sinks`) of function `fname`, compiling now,
 // whose type runs a `% Drop` of the program's own that reaches an Rc: the
 // function takes them over and releases them where it lets them go — its
@@ -74078,6 +74096,10 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // nothing — an `assign` row ended what it borrowed, agora #554.)
         = g_bck_self_asn & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name )
         ? != 0 g_bck_bind_owns { ( __udrop_bind_note syms vt g_bck_rhs_sx ) } {}
+        // (…and the old value it releases, when it is a parameter's — an
+        // `inout` one's, the caller's value: what its `% Drop` impls drop of
+        // their parameter, this function drops of that one; agora #766.)
+        ( __udrop_param_old syms name vt )
         ( bck_record_binding `assign` name bck_line __acbc vt )
         = g_bck_self_asn F
         ( __rp_note_assign syms name )
