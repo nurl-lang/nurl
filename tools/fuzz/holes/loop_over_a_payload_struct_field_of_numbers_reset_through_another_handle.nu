@@ -1,4 +1,5 @@
-// map: §2.5 | A2 | rejected | - | agora #774: `~ x pl` over `. ( rc_get r2 ) data`, a payload struct's field of numbers, `( wipe r )` in the body clearing and shrinking it
+// map: §2.5 | A2 | rejected | - | AGORA-774: `~ x pl` over `. ( rc_get r2 ) data`, a payload struct's field of numbers, `( wipe r )` in the body clearing and shrinking it
+// AGORA-774 (this shape, closed): refused - a call that drops a payload's elements and may move its buffer ends a `~` cursor over it, not only the element views (main 4db4cf5b: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/rc.nu`
 

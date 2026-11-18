@@ -1,8 +1,9 @@
-// map: §2.5 | A2 | rejected | - | agora #774: `~ x pl` over an Rc payload of numbers taken through `r2`, `( wipe r )` in the body clearing and shrinking it
+// loop_over_a_payload_of_numbers_read_through_another_handle_runs_clean: AGORA-774 guard — `~ x pl` over an Rc payload of numbers, a callee that only reads it through another handle: accepted
+// map: §2.5 | A2 | runs-clean | - | AGORA-774 guard: a read through another handle
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/rc.nu`
 
-@ wipe ( Rc ( Vec u ) ) r → v { ( vec_clear [u] ( rc_get [( Vec u )] r ) ) ( vec_shrink_to_fit [u] ( rc_get [( Vec u )] r ) ) }
+@ wipe ( Rc ( Vec u ) ) r → v { ( nurl_println_int ( vec_len [u] ( rc_get [( Vec u )] r ) ) ) }
 
 @ main → i {
     : ( Vec u ) v0 ( vec_new [u] )
