@@ -34021,7 +34021,13 @@ unsafe @ bck_check_lit_moves i lex i line i col s what s tab i scmask s moved s 
                     { ( __park_append syms `__fn_pending_keep_impl__` ( nurl_str_cat4 ( nurl_str_int api ) ` ` call_name
                         ( nurl_str_cat4 ` ` fname ` ` ( nurl_str_int arg_idx ) ) ) ) } {}
                     // (Not the whole the cursor's value is part of: __part_src.)
-                    ? & positional ( __src_keeps syms uptr asrc ) {} { ( mem_udrop_flag_clear_if syms cg asrc sflag ) } } }
+                    // (…nor a source of a join cursor that only borrows, `:
+                    // ~ String cur ? k a b  ( vec_push d cur )`: the call is
+                    // handed a copy for certain, and each source keeps and
+                    // drops its own value - handed over too, the original
+                    // was released by no one, as #824 found for a literal;
+                    // agora #840.)
+                    ? | & positional ( __src_keeps syms uptr asrc ) & & ( seq __usb `1` ) ( __alias_whole_srcs_many syms uptr ) ( __clone_supported at syms ) {} { ( mem_udrop_flag_clear_if syms cg asrc sflag ) } } }
         } {}
     } {}
 }
