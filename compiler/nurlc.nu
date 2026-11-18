@@ -111164,6 +111164,12 @@ unsafe @ dyn_method_decltrait s tname s m → s {
     ( nurl_sym_def syms `__in_call_arg__` `` )
     = g_arg_dyn_box vdynarg
     : s ct ( nurl_get_last_type )
+    // (The closures the boxed value holds - `( dyn Runner @ C { \ → … } )`,
+    // a struct with a closure field: the box holds them, and a call handed
+    // it that runs them runs theirs, as one handed the struct does: its
+    // binding's node, as a call that hands back a holder publishes it,
+    // __clo_val_members; agora #811.)
+    : s __dyn_hms ? & & != 0 g_borrowck != 0 g_clo_hold_n ! ( __is_closure_ty ct ) ( __clo_val_members syms vtt vname ) ``
     // The object holds what the operand was, so it is returned, stored and
     // bound as the operand would be: its stack referent (§2.8), the
     // parameters it may be (a function returning it returns them), and
@@ -111222,6 +111228,10 @@ unsafe @ dyn_method_decltrait s tname s m → s {
     ( nurl_print `  ` ) ( nurl_print f1 ) ( nurl_print ` = insertvalue ` ) ( nurl_print dynty ) ( nurl_print ` ` ) ( nurl_print f0 ) ( nurl_print `, i8* ` ) ( nurl_print vti8 ) ( nurl_print `, 1\n` )
     ( __sx_publish __me __dsx )
     = g_dyn_box_reg ( nurl_str_to_int ( nurl_str_slice f1 2 - ( nurl_str_len f1 ) 2 ) )
+    ? & != 0 ( nurl_str_len __dyn_hms ) ! ( seq __dyn_hms `*` ) {
+        ( nurl_sym_set syms `__last_call_hold_ms__` __dyn_hms )
+        = g_call_hold_set 1
+    } {}
     ( nurl_set_last_type dynty )
     ^ f1
 }
