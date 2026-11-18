@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #832: `: ~ Hh c h  ?? . c o { T q → … ( w . c o ) … }` - a cursor's option field payload viewed past a callee growing it (#842 item 4)
+// map: §2.10 | A2 | rejected | - | AGORA-832: `: ~ Hh c h  ?? . c o { T q → … ( w . c o ) … }` - a cursor's option field payload viewed past a callee growing it (#842 item 4)
+// AGORA-832: refused (already on main 7fbdcef9, by the cursor c over h - kept with the others of its family)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 

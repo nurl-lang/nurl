@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #832: `?? . h o { T q → … ( w . h o ) … }` - a plain-parameter callee reserving the field option's payload while a slice of it lives
+// map: §2.10 | A2 | rejected | - | AGORA-832: `?? . h o { T q → … ( w . h o ) … }` - a plain-parameter callee reserving the field option's payload while a slice of it lives
+// AGORA-832: refused - the payload of `?? . h o` is lent out of the field path h.o, whose growth by the callee ends its views (main 7fbdcef9: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
