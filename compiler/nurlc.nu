@@ -77081,6 +77081,7 @@ inline @ gen_field_store i lex i syms i cg → s {
                             : i __fs_px0 g_agg_fpfx_st
                             = g_agg_fpfx_st 1
                             : s rhs ( gen_field_rhs lex syms cg )
+                            : b __fs_cenv != 0 ( nurl_sym_len syms `__last_closure_env__` )
                             = g_agg_fpfx_st __fs_px0
                             ( nurl_sym_def syms `__last_field_fld__` `` )
                             ? ( __store_type_clash ( nurl_get_last_type ) ftype )
@@ -77114,6 +77115,22 @@ inline @ gen_field_store i lex i syms i cg → s {
                             ( __clo_note_fassigned syms __rp_root ftype )
                             ( __clo_field_cs syms __rp_root ftype __fs_tt __fs_v0 )
                             ( __clo_cond_off_field __rp_root ftype )
+                            // (A nested path into a borrowed copy - a loop
+                            // element, a by-value parameter or capture - lands
+                            // in that copy, as `= . p f v` does: an owning
+                            // value stored there is refused the same way;
+                            // agora #851.)
+                            ? & != 0 ( nurl_str_len __nl_root ) | ( __type_needs_drop ftype syms ) ( __fs_clo_owns ftype __fs_tt __fs_cenv ) {
+                                : i __nl_k ( __fs_borrowed_copy_kind syms __nl_root )
+                                ? & != __nl_k 0 != __nl_k 4 { ( own_die_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_msg __nl_k __nl_root ( nurl_str_cat3 ( nurl_sym_get syms `__last_nested_names__` ) `.` fname ) ( llvm_to_nurl ( nurl_sym_get syms __nl_root ) ) ) ) } {}
+                            } {
+                                // (…and a value owning nothing is lost there,
+                                // said as for `= . p f v`.)
+                                ? != 0 ( nurl_str_len __nl_root ) {
+                                    : i __nl_k ( __fs_borrowed_copy_kind syms __nl_root )
+                                    ? & & & != __nl_k 0 != __nl_k 1 != __nl_k 4 != __nl_k 5 { ( warn_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_lost __nl_k __nl_root ( nurl_str_cat3 ( nurl_sym_get syms `__last_nested_names__` ) `.` fname ) ( llvm_to_nurl ( nurl_sym_get syms __nl_root ) ) ) ) } {}
+                                } {}
+                            }
                             ? & != 0 ( nurl_str_len __nl_root ) ( __type_needs_drop ftype syms ) {
                                 ( __iter_assign_check lex __fs_l0 ( nurl_str_cat4 __nl_root `.` ( nurl_sym_get syms `__last_nested_names__` ) ( nurl_str_cat `.` fname ) ) )
                                 ? != 0 g_bck_closure_depth { ( __clo_assign_note syms ( nurl_str_cat4 __nl_root `.` ( nurl_sym_get syms `__last_nested_names__` ) ( nurl_str_cat `.` fname ) ) ftype ) } {}
@@ -77291,6 +77308,7 @@ inline @ gen_field_store i lex i syms i cg → s {
                 : i __fs_px0 g_agg_fpfx_st
                 = g_agg_fpfx_st 1
                 : s rhs ( gen_field_rhs lex syms cg )
+                : b __fs_cenv != 0 ( nurl_sym_len syms `__last_closure_env__` )
                 = g_agg_fpfx_st __fs_px0
                 ( nurl_sym_def syms `__last_field_fld__` `` )
                 : b __fs_fresh ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
@@ -77328,7 +77346,10 @@ inline @ gen_field_store i lex i syms i cg → s {
                     = __bck_k 0
                 } {}
                 ? != __bck_k 0 {
-                    ? ( __type_needs_drop ftype syms ) { ( own_die_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_msg __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {
+                    // (A closure owns its environment once stored in a field,
+                    // mem_clo_into_store: one with an environment stored into
+                    // the copy leaks it - __fs_clo_owns; agora #851.)
+                    ? | ( __type_needs_drop ftype syms ) ( __fs_clo_owns ftype __fs_tt __fs_cenv ) { ( own_die_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_msg __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {
                         ? & != __bck_k 1 != __bck_k 5 { ( warn_pos lex __fs_ol __fs_oc ( __fs_borrowed_copy_lost __bck_k obj_name fname ( llvm_to_nurl pt ) ) ) } {}
                     }
                 } {}
@@ -102760,6 +102781,17 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
 // 0: none of
 // those (an owned local, an `inout` or `sink` parameter, a by-pointer
 // capture, a destructor's receiver).
+// Does the closure of type `ty` just stored, its first token `tt`, own an
+// environment there (mem_clo_into_store adopts or copies it)? A literal
+// does when it captured anything (`env`: `__last_closure_env__`, which
+// every literal publishes, read right after it); any other closure value
+// may (agora #851).
+@ __fs_clo_owns s ty i tt b env → b {
+    ? ! ( __is_closure_ty ty ) { ^ F } {}
+    ? != tt TT_BACKSLASH { ^ T } {}
+    ^ env
+}
+
 @ __fs_borrowed_copy_kind i syms s obj → i {
     ? == 0 ( nurl_str_len obj ) { ^ 0 } {}
     : s op ( nurl_sym_get2 syms obj `__ptr` )
