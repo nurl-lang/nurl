@@ -3463,13 +3463,13 @@ theorem allowed_canDo_false (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa
     the callee's own, renamed, none of them frozen (`Fcout`), each allowing
     its effect as a callee binding did (`canDo_lift`, `Allowed`), and the
     kills commute with the lift (`canon_killNames`). -/
-theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
+theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
     {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
     {D : List Dep} (hx : Γa x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
     (hty : Ex.ty = .vec t)
     (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γa1 x = some Ex1)
     (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path)
-    :
+    (hloc : S.R = [] ∨ Ex.fresh = true) :
     (∃ D', EditArg (S.canon Γa) S.Fc (op.rename S.ρ) t D' (S.canon Γa1)) ∧
     (∀ y, (op.rename S.ρ).stored = some y → y ≠ S.ρ x) ∧
     ThruOK (S.canon Γa1) S.Fc (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path ∧
@@ -3482,19 +3482,24 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
   subst hE1
   have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
   -- the lift adds names only: what the outer call's arguments held by name
-  have hmemA : memDeps S.A = [] := by
-    unfold RSetup.A; rw [hR]
-    simp only [allKinds, List.flatMap_nil, List.nil_append]
-    exact List.filter_eq_nil_iff.mpr fun d hd => by simp [h.N_name d hd]
   have hpath : (S.liftE x Ex1).path = rds S.ρ Ex1.path ++ (if Ex1.fresh && Ex1.ty != .int then [] else S.A) := by
     simp [liftE, hmx, Mode.ownSlot]
+  -- the lift adds names only: what the outer call's arguments held by name; or
+  -- (Agora #909) nothing at all, for a fresh borrow
   have hmem : memDeps (S.liftE x Ex1).path = rds S.ρ (memDeps Ex1.path) := by
     rw [hpath]
-    unfold memDeps at hmemA ⊢
     split
-    · rw [List.append_nil]; simp only [rds, List.filter_map]; rfl
-    · rw [List.filter_append, hmemA, List.append_nil]
-      simp only [rds, List.filter_map]; rfl
+    · rw [List.append_nil]; unfold memDeps; simp only [rds, List.filter_map]; rfl
+    · rename_i hnf
+      rcases hloc with hR | hf
+      · have hmemA : memDeps S.A = [] := by
+          unfold RSetup.A; rw [hR]
+          simp only [allKinds, List.flatMap_nil, List.nil_append]
+          exact List.filter_eq_nil_iff.mpr fun d hd => by simp [h.N_name d hd]
+        unfold memDeps at hmemA ⊢
+        rw [List.filter_append, hmemA, List.append_nil]
+        simp only [rds, List.filter_map]; rfl
+      · exfalso; apply hnf; simp [hf, hty]
   have hty1 : (S.liftE x Ex1).ty = Ex1.ty := liftE_ty x hrb
   -- every root keeps its type where the call places it
   have hargty : ∀ r, (argE (S.canon Γa1) (S.ρ r)).ty = (argE Γa1 r).ty := by
@@ -3568,7 +3573,7 @@ theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = [])
     StmtT P ξ (S.canon Γa) S.Fc ((Stmt.edit true x op).rename S.ρ)
       (S.canon (A2.setE (A2.killThru op Ex.ty Ex1.path Γa1) x Ex1)) := by
   obtain ⟨⟨D', harg'⟩, hyx', hthru', hne', heq⟩ :=
-    editB_ren_facts h hab hR hx hmx hl hty harg hyx hx1 hl1 hne hthru
+    editB_ren_facts h hab hx hmx hl hty harg hyx hx1 hl1 hne hthru (Or.inl hR)
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   subst hE1
   have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
@@ -3690,10 +3695,11 @@ theorem PW.holdOn_canon (h : S.OK) {Γ : Ctx} {rs : List Var} {D D' : List Dep} 
     memory dependencies renamed, the roots allowing it there (`ThruOK`), the
     kills commuting with the lift, and `ThruV` for anything stored that is
     the renamed `DD` or less.  (Shared with `takeBV`, AGORA-897.) -/
-theorem editBV_ren_facts (h : S.OK) (hR : S.R = [])
+theorem editBV_ren_facts (h : S.OK)
     {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex1 : Entry} {DD : List Dep}
     (hab1 : S.AbsOK Γa1) (hmx : Ex1.mode = .bor)
-    (hthru : ThruOK Γa1 Fa op Ex1.ty Ex1.path) (hV : ThruV Γa1 op Ex1.ty Ex1.path DD) :
+    (hthru : ThruOK Γa1 Fa op Ex1.ty Ex1.path) (hV : ThruV Γa1 op Ex1.ty Ex1.path DD)
+    (hloc : S.R = [] ∨ (Ex1.fresh = true ∧ Ex1.ty ≠ .int)) :
     memDeps (S.liftE x Ex1).path = rds S.ρ (memDeps Ex1.path) ∧
     ThruOK (S.canon Γa1) S.Fc (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path ∧
     S.canon (killThruV op Ex1.ty Ex1.path Γa1) =
@@ -3702,19 +3708,24 @@ theorem editBV_ren_facts (h : S.OK) (hR : S.R = [])
       ThruV (S.canon Γa1) (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path D2 := by
   have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
   -- the lift adds names only: what the outer call's arguments held by name
-  have hmemA : memDeps S.A = [] := by
-    unfold RSetup.A; rw [hR]
-    simp only [allKinds, List.flatMap_nil, List.nil_append]
-    exact List.filter_eq_nil_iff.mpr fun d hd => by simp [h.N_name d hd]
   have hpath : (S.liftE x Ex1).path = rds S.ρ Ex1.path ++ (if Ex1.fresh && Ex1.ty != .int then [] else S.A) := by
     simp [liftE, hmx, Mode.ownSlot]
+  -- the lift adds names only: what the outer call's arguments held by name; or
+  -- (Agora #909) nothing at all, for a fresh borrow
   have hmem : memDeps (S.liftE x Ex1).path = rds S.ρ (memDeps Ex1.path) := by
     rw [hpath]
-    unfold memDeps at hmemA ⊢
     split
-    · rw [List.append_nil]; simp only [rds, List.filter_map]; rfl
-    · rw [List.filter_append, hmemA, List.append_nil]
-      simp only [rds, List.filter_map]; rfl
+    · rw [List.append_nil]; unfold memDeps; simp only [rds, List.filter_map]; rfl
+    · rename_i hnf
+      rcases hloc with hR | hf
+      · have hmemA : memDeps S.A = [] := by
+          unfold RSetup.A; rw [hR]
+          simp only [allKinds, List.flatMap_nil, List.nil_append]
+          exact List.filter_eq_nil_iff.mpr fun d hd => by simp [h.N_name d hd]
+        unfold memDeps at hmemA ⊢
+        rw [List.filter_append, hmemA, List.append_nil]
+        simp only [rds, List.filter_map]; rfl
+      · exfalso; apply hnf; simp [hf.1, hf.2]
   have hty1 : (S.liftE x Ex1).ty = Ex1.ty := liftE_ty x hrb
   -- every root keeps its type where the call places it
   have hargty : ∀ r, (argE (S.canon Γa1) (S.ρ r)).ty = (argE Γa1 r).ty := by
@@ -3813,7 +3824,7 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   subst hE1
   have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
-  obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hR hab1 hmx hthru hV
+  obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hab1 hmx hthru hV (Or.inl hR)
   have hmemA : memDeps S.A = [] := by
     unfold RSetup.A; rw [hR]
     simp only [allKinds, List.flatMap_nil, List.nil_append]
@@ -4646,8 +4657,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- (`editB_ren_facts`), then `y` bound to the element, as `letv` binds
     intro _ hab hw hn hT
     have hR : S.R = [] := hT (.inl rfl)
-    obtain ⟨-, -, hthru', hne', heq⟩ := editB_ren_facts h hab hR hx hmx hl hty
-      (EditArg.trunc (t := t) hie) (fun _ h' => by cases h') hx hl hne hthru
+    obtain ⟨-, -, hthru', hne', heq⟩ := editB_ren_facts h hab hx hmx hl hty
+      (EditArg.trunc (t := t) hie) (fun _ h' => by cases h') hx hl hne hthru (Or.inl hR)
     have hrb : Ex.mode ≠ .rootb := by rw [hmx]; simp
     have hab2 : S.AbsOK (A2.setE (A2.killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
       (hab.killNames _).setE' hab hx rfl rfl hrb (fun hf => absurd hf (by simp [Entry.fixed, hmx]))
@@ -4675,7 +4686,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- (`editBV_ren_facts`), then `y` bound to the element, as `letv` binds
     intro _ hab hw hn hT
     have hR : S.R = [] := hT (.inl rfl)
-    obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hR hab hmx hthru hV
+    obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hab hmx hthru hV (Or.inl hR)
     have hne' : memDeps (S.liftE x Ex).path ≠ [] := by rw [hmem]; simpa [rds] using hne
     have hrb : Ex.mode ≠ .rootb := by rw [hmx]; simp
     have hab2 : S.AbsOK (A2.setE (A2.killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
