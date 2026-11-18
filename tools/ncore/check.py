@@ -1992,6 +1992,18 @@ class FnCheck:
                         # and the caller's argument moves into the call
                         # (MEMORY.md §7.6, h389-h404, h421-h423)
                         add = hroot(src.held, dpath)
+                    elif (ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and not src.call
+                          and src.alias
+                          and all(a[1] and all(e.startswith("#") for e in a[1])
+                                  and st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
+                                  and self.fn.vars[a[0]].kind == "local" for a in src.alias)
+                          and self.take_payload(st, src, line)):
+                        # a `??` payload of a local option, read in place -
+                        # by its own name or a `: ~` cursor of it - kept by
+                        # value is handed over with its option, not copied:
+                        # `?? o { T x → { : ~ cur x  @ H { cur 0 } } }`
+                        # moves o (MEMORY.md §7.6, agora #840)
+                        add = hroot(src.held, dpath)
                     elif ty is not None and self.T.owning(ty) and ty[0] not in VIEW_TYPES and self.T.copyable(ty):
                         # a lend stored as an owner is copied, with the views it holds
                         add = hroot(src.held, dpath)
@@ -3403,6 +3415,20 @@ class FnCheck:
                         else:
                             self.err(line, f"field {i + 1}: a borrowed value would have to be copied here, "
                                            f"and it cannot be copied")
+                    if (fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES and not av.call
+                            and av.alias and op[0] == "v" and not op[2]
+                            and all(a[1] and all(e.startswith("#") for e in a[1])
+                                    and st.vals.get(a[0]) is not None and st.vals[a[0]].own == "O"
+                                    and self.fn.vars[a[0]].kind == "local" for a in av.alias)
+                            and self.take_payload(st, av, line)):
+                        # a `??` payload of a local option, read in place -
+                        # by its own name or a `: ~` cursor of it - named in
+                        # a literal: codegen hands the option's payload over,
+                        # and the option with it, not a copy (`?? o { T x →
+                        # { : ~ cur x  @ H { cur 0 } } }`; MEMORY.md §7.6,
+                        # agora #840)
+                        held |= hroot(av.held, fp)
+                        continue
                     if fty is not None and self.T.owning(fty) and fty[0] not in VIEW_TYPES and self.T.copyable(fty):
                         dv = self.fn.vars[dest_vid] if dest_vid is not None else None
                         if (dv is not None

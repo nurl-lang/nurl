@@ -61329,6 +61329,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 : ~ s __svl ( nurl_str_cat svn `` )
                 ? & & & takes != 0 g_bck_hc_any == BCK_BORROWED_SHARED ( bck_st_raw st svid ) != 0 ( nurl_sym_len g_bck ( bck_bkey `hct_` svn ) ) {
                     : ~ s __hs ( nurl_sym_get g_bck ( bck_bkey `bs_` svn ) )
+                    : ~ s __hseen ( nurl_str_cat svn `` )
                     ~ != 0 ( nurl_str_len __hs ) {
                         : s __hw ( str_first_word __hs ) = __hs ( str_skip_word __hs )
                         : i __hid ( nurl_str_to_int __hw )
@@ -61338,7 +61339,28 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         ? & & & == ( bck_path_root __hid ) __hid == BCK_OWNED ( bck_st_get st __hid ) ! __hpar ! ( str_contains_word __svl __hw ) {
                             = __svl ( nurl_str_cat3 __svl ` ` __hw )
                             ( bck_put ( bck_bkey `hcv_` __hw ) svn )
-                        } {}
+                            // (…and a `??` payload is a cursor over its option
+                            // (`cul`): what the store was given is the option's
+                            // value, which goes with it as at `@ H { x 0 }` -
+                            // `?? o { T x → { : ~ cur x  @ H { cur 0 } } }`;
+                            // agora #840.)
+                            : ~ i __hco ( __cursor_src_of __hid )
+                            ~ >= __hco 0 {
+                                : s __hcs ( nurl_str_int __hco )
+                                ? & & == BCK_OWNED ( bck_st_get st __hco ) ! ( str_contains_word __svl __hcs ) ! ( seq ( nurl_sym_get g_bck ( bck_bkey `pp_` __hcs ) ) `1` ) {
+                                    = __svl ( nurl_str_cat3 __svl ` ` __hcs )
+                                    ( bck_put ( bck_bkey `hcv_` __hcs ) svn )
+                                    = __hco ( __cursor_src_of __hco )
+                                } { = __hco -1 }
+                            }
+                        } {
+                            // (…or another `: ~` copy of a handle, `: ~ c2 c1`
+                            // of `: ~ c1 x`: what that one is a copy of.)
+                            ? & & == BCK_BORROWED_SHARED ( bck_st_raw st __hid ) != 0 ( nurl_sym_len g_bck ( bck_bkey `hct_` __hw ) ) ! ( str_contains_word __hseen __hw ) {
+                                = __hseen ( nurl_str_cat3 __hseen ` ` __hw )
+                                = __hs ( nurl_str_cat3 __hs ` ` ( nurl_sym_get g_bck ( bck_bkey `bs_` __hw ) ) )
+                            } {}
+                        }
                     }
                 } {}
                 ~ != 0 ( nurl_str_len __svl ) {
