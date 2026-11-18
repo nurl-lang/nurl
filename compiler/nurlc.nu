@@ -35259,7 +35259,16 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // that may keep it in that owner (a container's element, a
             // struct's field) or send it to another thread: a closure
             // always, anything else to a container or a spawner (`vpass`).
-            ? & & & & __sx_cand ! __callee_shadowed >= __sx_c0 2 ! ( seq arg_sx `-` ) ( __summarised_callee syms fname call_name ) {
+            // (…and the value `chan_send` hands to whichever thread
+            // receives it: a view in it may not point into this side's
+            // storage, as a spawned closure's may not - agora #812.)
+            // (…and a parameter of this function sent whole: this function
+            // sends it, and its callers' arguments cross - sendreq, as a
+            // detach's parameter does; CodeRabbit on github#1942.)
+            ? & & & & ( seq fname `chan_send` ) == arg_idx 1 ( is_ident_tok bck_arg_tt ) >= ( str_word_index g_cur_params bck_arg_val ) 0 ! __callee_shadowed {
+                ( nurl_sym_def g_pending_impl ( nurl_str_cat4 `sendreq##` ( nurl_sym_get syms `__fn_self_name__` ) `##` ( nurl_str_int ( str_word_index g_cur_params bck_arg_val ) ) ) `1` )
+            } {}
+            ? & & & & __sx_cand ! __callee_shadowed >= __sx_c0 2 ! ( seq arg_sx `-` ) | ( __summarised_callee syms fname call_name ) & ( seq fname `chan_send` ) == arg_idx 1 {
                 = g_vp_tag __vp_me
                 ( bck_stash_vpass ? & > arg_idx 0 != 0 ( nurl_str_len __sx_arg0 ) __sx_arg0 `-` ( nurl_lex_line lex ) call_name arg_idx arg_sx )
                 = g_vp_tag 0
@@ -61607,7 +61616,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // `bK.H` is, its sources what a copy of the argument holds.)
                 : b vheld == vb0 37
                 : b vpair | vbuf vheld
-                ? & ! vpair | ( __thr_is_detach ( bck_generic_base vcal ) ) != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `sendreq##` vcal `##` vaix ) ) {
+                ? & ! vpair | | ( __thr_is_detach ( bck_generic_base vcal ) ) & ( seq ( bck_generic_base vcal ) `chan_send` ) ( seq vaix `1` ) != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `sendreq##` vcal `##` vaix ) ) {
                     ( bck_send_view_check st ( bck_field rec 8 ) vcal ( bck_field_int rec 3 ) )
                 } {
                     // (Kept INTO it: the callee keeps the value and changes the
@@ -63798,7 +63807,8 @@ unsafe @ bck_sx_is_id s e → b {
         : s ph ( nurl_sym_get g_bck ( bck_bkey `ph_` ( nurl_str_int r ) ) )
         ? & ! ( bck_id_is_global r ) == 0 ( nurl_str_len ph ) {
             : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int r ) ) )
-            ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `what '` ( bck_fn_show cal ) `' runs on another thread holds a view of '` ( nurl_str_cat4 nm `' (an address into its storage), which this side may release while the other runs. Give it a value that owns its data — a String or a Vec, moved in (string_from, slice_to_vec), or one shared through Arc — and drop the view of '` nm `'.` ) ) )
+            : s __svw ? ( __thr_is_detach ( bck_generic_base cal ) ) `' runs on another thread holds a view of '` ? ( seq ( bck_generic_base cal ) `chan_send` ) `' sends to another thread holds a view of '` `' hands to another thread holds a view of '`
+            ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `what '` ( bck_fn_show cal ) __svw ( nurl_str_cat4 nm `' (an address into its storage), which this side may release while the other runs. Give it a value that owns its data — a String or a Vec, moved in (string_from, slice_to_vec), or one shared through Arc — and drop the view of '` nm `'.` ) ) )
             ^
         } {}
         // What a parameter holds, its pseudo `%p`: views into what the
@@ -63808,9 +63818,17 @@ unsafe @ bck_sx_is_id s e → b {
         // its own handle crosses too (`~p`, a closure that captured it or
         // a value built of it) — then what it holds goes as an owner's
         // views do, and whether an owner of views may cross is agora #469's.
+        // (…a parameter that goes along whole: this function sends it, and
+        // its callers' arguments cross - sendreq, for wrappers of wrappers;
+        // CodeRabbit on github#1942.)
+        ? & & ! ( bck_id_is_global r ) != 0 ( nurl_str_len ph ) ( nurl_sym_has_word g_fn_escapes g_bck_fn ph ) {
+            // (`ph` is the parameter's position.)
+            ( nurl_sym_def g_pending_impl ( nurl_str_cat4 `sendreq##` g_bck_fn `##` ph ) `1` )
+        } {}
         ? & & & & ! ( bck_id_is_global r ) != 0 ( nurl_str_len ph ) ! ( nurl_sym_has_word g_fn_escapes g_bck_fn ph ) ! ( str_contains_word raw ( nurl_str_cat `~` ( nurl_str_int ( __bck_pseudo_param r ) ) ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `pcl_` ( nurl_str_int r ) ) ) {
             : s nm ( __bck_pseudo_show r )
-            ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `what '` ( bck_fn_show cal ) `' runs on another thread holds a copy of the views '` ( nurl_str_cat4 nm `' holds — into its caller's storage, which the caller may release while the other runs. Give it values that own their data — Strings moved in (string_from), a Vec of them — or ones shared through Arc.` `` `` ) ) )
+            : s __svc ? ( __thr_is_detach ( bck_generic_base cal ) ) `' runs on another thread holds a copy of the views '` ? ( seq ( bck_generic_base cal ) `chan_send` ) `' sends to another thread holds a copy of the views '` `' hands to another thread holds a copy of the views '`
+            ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 `what '` ( bck_fn_show cal ) __svc ( nurl_str_cat4 nm `' holds — into its caller's storage, which the caller may release while the other runs. Give it values that own their data — Strings moved in (string_from), a Vec of them — or ones shared through Arc.` `` `` ) ) )
             ^
         } {}
     }

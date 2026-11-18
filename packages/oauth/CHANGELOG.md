@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.0] — 2026-11-18
+
+### Changed
+
+- **Breaking:** `with_oidc_scope` takes the scope as an owned `String` (`sink String scope`), not a string view. The server runs the wrapped route on its worker threads, and a view of the caller's string could outlive that string there. NURL now refuses this (agora #812: a view may not cross to another thread through a channel). Migrate by passing `( string_from `read:things` )`, or a String you own, where you passed `` `read:things` `` or `( string_data s )`.
+
 ## [0.2.7] — 2026-11-11
 
 ### Changed
