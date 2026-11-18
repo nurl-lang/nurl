@@ -1,4 +1,5 @@
-// map: §2.12 | A2 | rejected | - | agora #840: `?? o { T x → { : ~ c1 x  : ~ c2 c1  : H q @ H { c2 0 } } }` - a cursor of a cursor of the payload stored, then o is read
+// map: §2.12 | A2 | rejected | - | AGORA-840: `?? o { T x → { : ~ c1 x  : ~ c2 c1  : H q @ H { c2 0 } } }` - a cursor of a cursor of the payload stored, then o is read
+// AGORA-840: refused - the store of a `: ~` copy of a `??` payload (or of a copy of one) takes the option's value, as `@ H { x 0 }` does (main fd008190: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 
 : H { ( Vec i ) v i n }

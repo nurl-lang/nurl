@@ -1,4 +1,6 @@
-// map: §2.12 | A2 | rejected | - | agora #840: `?? o { T x → { : ~ cur x  : H q @ H { cur 0 } } }` - the literal takes the option's payload unseen, then o is read
+// payload_cursor_stored_into_a_literal_in_its_arm_o_not_read_again_runs_clean: `?? o { T x → { : ~ cur x  : H q @ H { cur 0 } } }`, o never read again
+// AGORA-840 guard: accepted - the literal takes the option's payload, freed once
+// map: §2.12 | A2 | runs-clean | - | AGORA-840
 $ `stdlib/core/vec.nu`
 
 : H { ( Vec i ) v i n }
@@ -16,6 +18,5 @@ $ `stdlib/core/vec.nu`
         }
         F → {}
     }
-    ?? o { T x → ( nurl_println_int ( vec_at [i] x 1 ) ) F → {} }
     ^ 0
 }

@@ -1,4 +1,4 @@
-// map: §2.12 | A2 | runs-clean | - | agora #840: `: ~ H c h  = . c items ( vec_new )  @ W { c }` - the store takes c's new field and h keeps its own, the field freed twice
+// map: §2.12 | A2 | runs-clean | - | AGORA-840: `: ~ H c h  = . c items ( vec_new )  @ W { c }` - the store takes c's new field and h keeps its own, the field freed twice
 // AGORA-869: runs clean under ASan/LSan with the default compile (main 3358873a: faulted); the ticket's other shapes stay open.
 $ `stdlib/core/vec.nu`
 
