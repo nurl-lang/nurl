@@ -4047,14 +4047,20 @@ unsafe @ emit_coverage_modules s module → b {
 : ~ b g_skip_dead_block F
 : ~ i g_unsafe_report 0
 : ~ s g_unsafe_list ``
+// The report's lines so far, as keys: one asked twice is listed once.
+: ~ i g_unsafe_seen 0
 
 unsafe @ note_unsafe_fn s pos s name → v { ( note_unsafe_item pos name ) }
 
 // One line of the report, once: a file imported by several importers is
 // scanned once per importer. (`pos` is `file:line`; the standard library is
 // asked of the file — of `file:line` it never answered yes, and the report
-// listed the standard library's own unsafe functions.)
+// listed the standard library's own unsafe functions.) Only `--unsafe-report`
+// reads the list, so without it nothing is noted; with it, a line already
+// listed is found by its key in g_unsafe_seen, not by searching the list
+// (which made the scan quadratic in the number of unsafe items).
 unsafe @ note_unsafe_item s pos s what → v {
+    ? == 0 g_unsafe_report { ^ v } {}
     : i n ( nurl_str_len pos )
     : *u pp # *u pos
     : ~ i k - n 1
@@ -4062,7 +4068,9 @@ unsafe @ note_unsafe_item s pos s what → v {
     : i fl ? & > k 0 & < k - n 1 == # i . pp k 58 k n
     ? ( bck_trusted_file ( nurl_str_slice pos 0 fl ) ) { ^ v } {}
     : s rec ( nurl_str_cat3 pos ` ` what )
-    ? ( str_contains_line g_unsafe_list rec ) { ^ v } {}
+    ? == 0 g_unsafe_seen { = g_unsafe_seen ( nurl_sym_new ) } {}
+    ? != 0 ( nurl_str_len ( nurl_sym_get g_unsafe_seen rec ) ) { ^ v } {}
+    ( nurl_sym_def g_unsafe_seen rec `1` )
     = g_unsafe_list ? == 0 ( nurl_str_len g_unsafe_list ) rec ( nurl_str_cat3 g_unsafe_list `\n` rec )
 }
 
