@@ -1442,27 +1442,7 @@ class FnCheck:
                                              frozenset({at}), ov.held)
                 st.pb = frozenset(p for p in st.pb if p[0] not in back)
         if name in self.prog.fns or call_may_unwind(name):
-            # a function may unwind - the program's, and the library's too
-            # (an index past the end, `panic` itself; a runtime entry by
-            # nurlc's rt_starts_panic table, __call_may_unwind): storage
-            # the caller holds may not view this frame's values across the
-            # call - unless the call is handed that storage and gives it a
-            # value that views nothing before anything else (MEMORY.md
-            # §3.3d; agora #382) - an `inout` parameter, or in a closure
-            # body a capture taken by pointer: the binding outside
-            for vid, k in self.pidx.items():
-                if self.fn.modes[k] != "inout" and not (
-                        self.fn.modes[k] == "cap" and getattr(self.fn.vars[vid], "byref", False)):
-                    continue
-                av = st.vals.get(vid)
-                if av is None or not any(
-                        l in self.loans and l not in st.dead and self.loans[l][1] not in ("share", "held", "heldin", "stale")
-                        and self.fn.vars[self.loans[l][0][0]].kind != "param" for _, l in av.held):
-                    continue
-                credited = any(op == ("v", vid, ()) and i in sm.get("credits", ()) for i, op in enumerate(ops))
-                if not credited:
-                    self.err(line, f"{self.vname(vid)} is the caller's and views a value of this frame "
-                                   f"while {name} runs, which may unwind")
+            self.unwind_check(st, ops, line, name, sm)
         avs = []
         for i, op in enumerate(ops):
             av = self.read(st, op, line, (site, i), f"argument {i + 1} of {name}")
@@ -2866,10 +2846,37 @@ class FnCheck:
                                 self.s_consumes.add(self.pidx[place[0]])
                             st.vals[place[0]] = AV("X")
 
+    def unwind_check(self, st, ops, line, name, sm):
+        """A call that may unwind - a function of the program's, the
+        library's (an index past the end, `panic` itself), a runtime entry
+        by nurlc's rt_starts_panic table (__call_may_unwind), a closure's
+        whose body is not known here: storage the caller holds may not
+        view this frame's values across it - unless the call is handed that
+        storage and gives it a value that views nothing before anything
+        else (MEMORY.md §3.3d; agora #382). That is an `inout` parameter,
+        or in a closure body a capture taken by pointer: the binding
+        outside."""
+        for vid, k in self.pidx.items():
+            if self.fn.modes[k] != "inout" and not (
+                    self.fn.modes[k] == "cap" and getattr(self.fn.vars[vid], "byref", False)):
+                continue
+            av = st.vals.get(vid)
+            if av is None or not any(
+                    l in self.loans and l not in st.dead and self.loans[l][1] not in ("share", "held", "heldin", "stale")
+                    and self.fn.vars[self.loans[l][0][0]].kind != "param" for _, l in av.held):
+                continue
+            credited = sm is not None and any(
+                op == ("v", vid, ()) and i in sm.get("credits", ()) for i, op in enumerate(ops))
+            if not credited:
+                self.err(line, f"{self.vname(vid)} is the caller's and views a value of this frame "
+                               f"while {name} runs, which may unwind")
+
     def call_closure(self, st, rv, line, dest_ty=None):
         """A call through a closure value: its arguments are lent, its result
         is its caller's own (§7.5)."""
         _, ops, site = rv
+        # (a closure's body is not known here: it may unwind, agora #382)
+        self.unwind_check(st, ops[1:], line, "the closure", None)
         cav = self.read(st, ops[0], line, (site, 0), "the closure")
         avs = []
         for i, op in enumerate(ops[1:]):
