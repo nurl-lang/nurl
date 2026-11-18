@@ -1,3 +1,6 @@
+// identity_inside_a_loop_then_run: a builder call handed through an identity inside a loop, run beside a view of xs
+// Closed (agora #813): a callee that hands back the closure it was handed (`retclo`) hands back its effects too (`__ce_by_arg`), and a call of a builder whose answer is not there yet gives placeholders resolved at the walk; the result's run replays them.
+// main e35ded15: accepted; the read after the run prints a freed buffer's bytes (192).
 // map: §2.10 | A2 | rejected | - | agora #838: a builder call handed through an identity inside a loop, run beside a view of xs
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`

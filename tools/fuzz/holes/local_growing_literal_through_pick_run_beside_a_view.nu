@@ -1,3 +1,6 @@
+// local_growing_literal_through_pick_run_beside_a_view: a local growing literal handed through `pick`, which returns its argument, then run while a view lives
+// Closed (agora #813): a callee that hands back the closure it was handed (`retclo`) hands back its effects too: the literal's effects (`__ce_by_arg`) are the result's, replayed where it runs.
+// main e35ded15: accepted; the read after the run prints a freed buffer's bytes (194, not 7).
 // map: §2.10 | A2 | rejected | - | agora #813: a local growing literal handed through `pick` returning its argument, run beside a view
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
