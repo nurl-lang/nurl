@@ -19234,12 +19234,14 @@ unsafe @ eng_byte s w i k → i {
             : i f ( wv_at known + c 1 )
             ? ( sm_have f ) {
                 : i ncap ( ef_ncap f )
-                ? & & == ( sm_word f SM_RES ) RES_LENT != 0 ( ef_at f EF_RET ) == ( et_kind ( et_of ( ef_at f EF_RET ) ) ) EK_SLICE {
+                ? & & == ( sm_word f SM_RES ) RES_LENT != 0 ( ef_at f EF_RET ) | == ( et_kind ( et_of ( ef_at f EF_RET ) ) ) EK_SLICE == ( et_kind ( et_of ( ef_at f EF_RET ) ) ) EK_CLOSURE {
                     // a slice the body hands back is that view: what it lends
                     // of its parameters, the result of this call lends of
                     // these arguments - and of what its captures point at (a
                     // value it hands back is copied - a raw string too, h220;
-                    // a slice has no copy)
+                    // a slice has no copy). A closure it hands back out of a
+                    // capture is that closure, lent out of the capture as a
+                    // slice is (agora #838).
                     : i base ( wv_at known c )
                     : i bl ( ep_len base )
                     : ~ i e 0
@@ -19291,7 +19293,16 @@ unsafe @ eng_byte s w i k → i {
                         = e + e 1
                     }
                 } {}
+                // (the closure bodies its result may run: a closure the body
+                // builds and hands back runs on what it holds below - as a
+                // function's `rclos`; agora #838)
                 : ~ i e 0
+                ~ < e ( sm_n f SM_RCLOS ) {
+                    : i t ( sm_at f SM_RCLOS e )
+                    = out ( sq_add out ( he_make ( tp_at t 2 0 ) ( clo_marker ( tp_at t 2 1 ) ) ) )
+                    = e + e 1
+                }
+                = e 0
                 ~ < e ( sm_n f SM_RHOLDS ) {
                     : i t ( sm_at f SM_RHOLDS e )
                     : i dpath ( tp_at t 4 0 )
@@ -23087,7 +23098,9 @@ unsafe @ eng_byte s w i k → i {
         ( eng_err_fn f line EG_COPYHOOK `(a copy hook) hands its argument back, whole or in part` )
     } {}
     ? ( ef_is_closure f ) {
-        ? & != ret ET_NONE ! ( et_copyable ret ) {
+        // (a closure value it captured, handed back whole, is that closure:
+        // the caller's result is lent out of the capture; agora #838)
+        ? & & != ret ET_NONE ! ( et_copyable ret ) != ( et_kind ret ) EK_CLOSURE {
             : ~ b caplend F
             = k 0
             ~ < k ( sm_n f SM_LENDS ) {
