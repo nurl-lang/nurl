@@ -4570,6 +4570,9 @@ unsafe @ note_unsafe_item s pos s what → v {
 // ids, one a word, are g_bck's `fmv`, asked when their binding is handed on
 // whole (agora #280).
 : ~ i g_bck_fmv_any 0
+// 1 while a copy of an owner's own handle grown ends the views through its
+// elements: a `~` loop's cursor over an element's buffer stays (agora #580).
+: ~ i g_bck_end_hc 0
 // 1 once this walk recorded the owner of a `??` payload cursor (`cuo_`):
 // bck_sx_name asks a name past its arm only then.
 : ~ i g_bck_cuo_any 0
@@ -62689,6 +62692,29 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     : s fall ( __bck_fe_cursor_srcs st fesx )
     : ~ s srcs ( __src_direct_only fall )
     ? & == 0 ( nurl_str_len srcs ) != 0 ( nurl_str_len fall ) { = srcs ( __src_rc_lent fall ) } {}
+    // (…and a container lent out of an element of one, `: b ( vec_at vv 0
+    // )`, `~ x b`: the buffer it walks is an element's own, which a growth
+    // of that element - through another borrow of it, `( vec_push c … )`
+    // with c a second `( vec_at vv 0 )` - moves. The cursor is a view of
+    // those elements (`vi_` only: growing vv itself moves element handles,
+    // not their buffers); a growth a level further down leaves it be, as
+    // g_bck_end_elem 2 says. Agora #580.)
+    ? & == 0 ( nurl_str_len srcs ) != 0 ( nurl_str_len fall ) {
+        : s ind ( __src_indirect fall )
+        ? != 0 ( nurl_str_len ind ) {
+            ( bck_put ( bck_bkey `vw_` fcs ) `1` )
+            ( bck_put ( bck_bkey `fcu_` fcs ) `1` )
+            // (…a cursor over an element's own buffer: what the owner's own
+            // buffer moving does - element handles moved - leaves it be,
+            // bck_view_end_ind.)
+            ( bck_put ( bck_bkey `fcl_` fcs ) `1` )
+            = g_bck_has_borrow 1
+            ( bck_put_bf `vi_` fcs ind )
+            // (A borrow of the container binding it walks, whose end ends
+            // it; the elements' growth reaches it through `vi_`.)
+            ^ ( bck_borrow_begin st fc ( nurl_str_cat fesx `` ) )
+        } {}
+    } {}
     ? == 0 ( nurl_str_len srcs ) { ^ st } {}
     ( bck_put ( bck_bkey `vw_` fcs ) `1` )
     ( bck_put ( bck_bkey `fcu_` fcs ) `1` )
@@ -68378,7 +68404,12 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 : s o ( str_first_word irest ) = irest ( str_skip_word irest )
                 ? deep { = g_bck_end_elem 2 } {}
                 ? != 0 ( nurl_str_len fcx ) { = g_bck_end_fcx ( nurl_str_to_int fcx ) } {}
+                // (A copy of o's own handle grown moves o's own buffer -
+                // element handles - not an element's: a cursor over an
+                // element's buffer, `fcl_`, stays; agora #580.)
+                = g_bck_end_hc ? hcopy 1 0
                 = out ( bck_view_end_ind out ( nurl_str_to_int o ) ( bck_field_int rec 3 ) rwhy )
+                = g_bck_end_hc 0
                 // (…and of every field path of that owner a view was taken
                 // through - `: I ii . ww inner` handed on, a slice of `(
                 // vec_at . . ww inner rows 0 )` read past it: those views
@@ -69084,7 +69115,10 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         // (Not a `~` loop's cursor where what moved is a level below the
         // lent container it walks, g_bck_end_elem 2 — or the buffer of that
         // loop's own element, g_bck_end_fcx.)
-        ? & & & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vi_` bs ) ) sids ) ! & == g_bck_end_elem 2 != 0 ( nurl_sym_len g_bck ( bck_bkey `fcu_` bs ) ) != b g_bck_end_fcx {
+        // (…nor a cursor over an element's own buffer, `fcl_`, where what
+        // moves is the owner's own buffer through a copy of its handle,
+        // g_bck_end_hc: agora #580.)
+        ? & & & & == BCK_BORROWED_SHARED ( bck_st_get out b ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vi_` bs ) ) sids ) ! & == g_bck_end_elem 2 != 0 ( nurl_sym_len g_bck ( bck_bkey `fcu_` bs ) ) != b g_bck_end_fcx ! & != 0 g_bck_end_hc != 0 ( nurl_sym_len g_bck ( bck_bkey `fcl_` bs ) ) {
             = out ( bck_st_set out b BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` bs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` ` why ) ) )
             = out ( bck_borrow_end out b line ( nurl_str_cat3 `what it borrows from ended (` why `)` ) 1 )

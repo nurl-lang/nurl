@@ -1,4 +1,5 @@
-// map: §2.5 | A2 | rejected | - | agora #580: `~ x b` over `b`, `( vec_at vv 0 )`, grown through `( vec_push ( vec_at vv 0 ) … )` in the body
+// map: §2.5 | A2 | rejected | - | AGORA-580: `~ x b` over `b`, `( vec_at vv 0 )`, grown through `( vec_push ( vec_at vv 0 ) … )` in the body
+// AGORA-580: refused - the loop's cursor over a container lent out of an element is a view of those elements, which the growth ends (main 5c4740fa: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 
 @ main → i {
