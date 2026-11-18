@@ -4570,6 +4570,9 @@ unsafe @ note_unsafe_item s pos s what → v {
 // ids, one a word, are g_bck's `fmv`, asked when their binding is handed on
 // whole (agora #280).
 : ~ i g_bck_fmv_any 0
+// 1 once this walk recorded the owner of a `??` payload cursor (`cuo_`):
+// bck_sx_name asks a name past its arm only then.
+: ~ i g_bck_cuo_any 0
 // 1 once a walk saw a field of a borrowed copy taken by its reader
 // (`pbo_`, bck_fview_take): its write-back is owed (agora #870).
 : ~ i g_bck_pbo_any 0
@@ -60289,6 +60292,15 @@ unsafe @ __sx_view_at s st s e → b {
     ? == vr BCK_UNINIT {
         : s fe ( nurl_sym_get g_bck ( bck_bkey `fe_` rs ) )
         ? != 0 ( nurl_str_len fe ) { ^ ( __word_union ( __word_union ids deps ) ( __src_as_ind fe ) ) } {}
+        // (…and a `??` payload read in place out of an owner, a cursor
+        // over it (`cul`), named after its arm has ended - `: [u v ?? o { T
+        // q → ( slice_from_vec q ) … }`: its storage is that owner's
+        // payload, so what views it points into the owner, which ends it
+        // when replaced, grown or released; agora #842.)
+        ? != 0 g_bck_cuo_any {
+            : s co ( nurl_sym_get g_bck ( bck_bkey `cuo_` rs ) )
+            ? != 0 ( nurl_str_len co ) { ^ ( __word_union ( __word_union ids deps ) co ) } {}
+        } {}
     } {}
     ^ ( __word_union ids deps )
 }
@@ -70331,6 +70343,12 @@ unsafe @ __bck_body_defers s st i p i line → s {
                 ? != 0 ( nurl_str_len cursor_src ) {
                     ( bck_add_word ( bck_bkey `cu_` cursor_src ) ( nurl_str_int id ) )
                     ( bck_add_word ( bck_bkey `cul` `` ) ( nurl_str_cat3 ( nurl_str_int id ) `:` cursor_src ) )
+                    // (…and, past its arm, which owner it was read out of:
+                    // bck_sx_name, agora #842.)
+                    // (Not through bck_put: its value is the same on every
+                    // pass of a loop, so the loop's digest need not hash it.)
+                    ( nurl_sym_set g_bck ( bck_bkey `cuo_` ( nurl_str_int id ) ) cursor_src )
+                    = g_bck_cuo_any 1
                     ( bck_cursor_watch )
                     = g_bck_has_cursor 1
                     = cursors ( nurl_str_cat4 cursors ` ` ( nurl_str_int id ) ( nurl_str_cat `:` cursor_src ) )
@@ -71980,6 +71998,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     ? != 0 g_bck_vs_any { ( bck_put `vscand` `` ) ( bck_put `vsperm` `` ) ( bck_put `vspanic` `` ) = g_bck_vs_any 0 } {}
     = g_bck_row_at -1
     ? != 0 g_bck_fmv_any { ( bck_put `fmv` `` ) = g_bck_fmv_any 0 } {}
+    = g_bck_cuo_any 0
     ? != 0 g_bck_pbo_any { ( bck_put `pbol` `` ) = g_bck_pbo_any 0 } {}
     ? != 0 g_bck_inp_any { ( bck_put `inp` `` ) = g_bck_inp_any 0 } {}
     ( bck_put `pml` `` )

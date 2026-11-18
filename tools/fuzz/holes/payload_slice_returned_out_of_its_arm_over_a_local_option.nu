@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #842: `^ ?? o { T q → ( slice_from_vec q ) … }` over a local owned option - the slice outlives o
+// map: §2.10 | A2 | rejected | - | AGORA-842: `^ ?? o { T q → ( slice_from_vec q ) … }` over a local owned option - the slice outlives o
+// AGORA-842: refused - a view of a `??` payload named past its arm points into the option it was read out of (`cuo_`) (main 34edc2a1: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
