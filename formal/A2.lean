@@ -54,3 +54,5 @@ import A2.ThruDtorWitness
 import A2.ThruGlueWitness
 import A2.ArcDtorWitness
 import A2.ArcPanicWitness
+import A2.FreshWitness
+import A2.Unfresh

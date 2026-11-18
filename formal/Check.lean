@@ -516,3 +516,19 @@ import A3
 #print axioms A3.claim_full
 #print axioms A3.made_safe_full
 #print axioms A3.claim_made_full
+-- Agora #909 (design e): a destructor of a type that holds views changes elements through a
+-- fresh borrow of its own local, an `edit false`, and is not through-changing
+-- (A2/FreshWitness.lean); no new premise removes a typing (A2/Unfresh.lean)
+#print axioms A2.FreshWitness.dtor_not_thru
+#print axioms A2.FreshWitness.dtor_ok
+#print axioms A2.FreshWitness.prog_ok
+#print axioms A2.FreshWitness.main_typed
+#print axioms A2.FreshWitness.main_safe
+#print axioms A2.FreshWitness.main_no_leak
+#print axioms A2.FreshWitness.edit_false_fresh
+#print axioms A2.FreshWitness.at_rootb_not_fresh
+#print axioms A2.FreshWitness.at_bor_not_fresh
+#print axioms A2.StmtT.unfresh
+#print axioms A2.weaker_unfreshC
+#print axioms A2.freshOK_unfreshC
+#print axioms A2.unfreshC_panic
