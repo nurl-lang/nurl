@@ -62749,6 +62749,26 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     ^ out
 }
 
+// Do word lists `a` and `b` hold the same words, in any order?
+@ __words_same s a s b → b {
+    ? ( seq a b ) { ^ T } {}
+    : ~ s ra ( nurl_str_cat a `` )
+    : ~ i na 0
+    ~ != 0 ( nurl_str_len ra ) {
+        : s w ( str_first_word ra ) = ra ( str_skip_word ra )
+        ? ! ( str_contains_word b w ) { ^ F } {}
+        = na + na 1
+    }
+    : ~ s rb ( nurl_str_cat b `` )
+    : ~ i nb 0
+    ~ != 0 ( nurl_str_len rb ) {
+        : s w ( str_first_word rb ) = rb ( str_skip_word rb )
+        ? ! ( str_contains_word a w ) { ^ F } {}
+        = nb + nb 1
+    }
+    ^ == na nb
+}
+
 // Is `bs` a `~` loop's cursor whose container was lent out of the borrow a
 // growth sweep went through (`fcp_` is g_bck_end_wroot_id), or out of
 // another borrow of the same storage - lent out of the same owners
@@ -62767,7 +62787,8 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     ~ != 0 ( nurl_str_len ps ) {
         : s p ( str_first_word ps ) = ps ( str_skip_word ps )
         : s pb ( nurl_sym_get g_bck ( bck_bkey `bs_` p ) )
-        ? & & != 0 ( nurl_str_len pb ) ( seq pb wb ) ( seq ( nurl_sym_get g_bck ( bck_bkey `lpa_` p ) ) wl ) { ^ T } {}
+        // (As sets: one call's arguments may come in another order.)
+        ? & & != 0 ( nurl_str_len pb ) ( __words_same pb wb ) ( __words_same ( nurl_sym_get g_bck ( bck_bkey `lpa_` p ) ) wl ) { ^ T } {}
     }
     ^ F
 }
