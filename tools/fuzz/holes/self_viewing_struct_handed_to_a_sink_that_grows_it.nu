@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #563: a struct whose field views its other field, handed to a `sink` parameter that grows the storage and reads the view
+// map: §2.10 | A2 | rejected | - | AGORA-563: a struct whose field views its other field, handed to a `sink` parameter that grows the storage and reads the view
+// AGORA-563 (this shape): refused on main 4db4cf5b by both nurlc and tools/ncore - closed by earlier work (AGORA-842's payload-cursor owners, AGORA-580, AGORA-428's copies); moved out of the open probes
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 

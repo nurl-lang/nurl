@@ -1,4 +1,5 @@
-// map: §2.1 | A2 | rejected | - | agora #280: `^ { h }` after a sink took `. h buf`
+// map: §2.1 | A2 | rejected | - | AGORA-280: `^ { h }` after a sink took `. h buf`
+// AGORA-280 (this shape): refused on main 4db4cf5b by both nurlc and tools/ncore - closed by earlier work; moved out of the open probes
 $ `stdlib/core/string.nu`
 
 : Holder { String buf }

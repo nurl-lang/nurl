@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #557: `: e ?? oh { T x → ( vec_at . x a 0 ) … }` then `?? oh { T x → ( vec_clear . x a ) … }`
+// map: §2.10 | A2 | rejected | - | AGORA-557: `: e ?? oh { T x → ( vec_at . x a 0 ) … }` then `?? oh { T x → ( vec_clear . x a ) … }`
+// AGORA-557 (this shape): refused on main 4db4cf5b by both nurlc and tools/ncore - closed by earlier work (AGORA-842's payload-cursor owners, AGORA-580, AGORA-428's copies); moved out of the open probes
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 

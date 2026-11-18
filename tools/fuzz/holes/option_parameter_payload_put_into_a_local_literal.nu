@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #793: a `??` payload of an option parameter put into a local literal `@ W { h }`, then replaced
+// map: §2.10 | A2 | rejected | - | AGORA-793: a `??` payload of an option parameter put into a local literal `@ W { h }`, then replaced
+// AGORA-793 (this shape): refused on main 4db4cf5b by both nurlc and tools/ncore - closed by earlier work; moved out of the open probes
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/rc.nu`
