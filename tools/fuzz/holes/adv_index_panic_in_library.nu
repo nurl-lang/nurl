@@ -1,4 +1,5 @@
 // map: §2.14 | A2 | rejected | - | adversarial: a library call that may panic (an index past the end) while the inout holder views a local
+// AGORA-382 (closed): refused - an `inout` parameter (or a capture taken by pointer) may not view a value of this frame across a call that may panic
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/panic.nu`

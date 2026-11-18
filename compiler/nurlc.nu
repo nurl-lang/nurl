@@ -4573,6 +4573,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // 1 while a copy of an owner's own handle grown ends the views through its
 // elements: a `~` loop's cursor over an element's buffer stays (agora #580).
 : ~ i g_bck_end_hc 0
+// 1 while the function being compiled has an `inout` parameter that can
+// hold a view: its calls are recorded as points a panic may unwind from
+// (`unw` rows, agora #382).
+: ~ i g_fn_unw 0
 // 1 once this walk recorded the owner of a `??` payload cursor (`cuo_`):
 // bck_sx_name asks a name past its arm only then.
 : ~ i g_bck_cuo_any 0
@@ -34185,7 +34189,9 @@ unsafe @ gen_call i lex i syms i cg → s {
     : s __clc0 ( nurl_str_cat g_clolend_cur `` )
     = g_clolend_cur ``
     : i __gct0 g_calls_total
+    : s __unw_fn ? != 0 g_fn_unw ( nurl_str_cat ( nurl_lex_peek_val lex ) `` ) ``
     : s __gcr ( gen_call_body lex syms cg )
+    ? != 0 g_fn_unw { ? ( __call_may_unwind __unw_fn ) { ( bck_note_unwind ( nurl_lex_line lex ) ) } {} } {}
     // (…or a call in a defer body, which runs at a scope's exit, not here;
     // or one after the Vec it was read out of moved, __clolend_moved.)
     ? & != 0 ( nurl_str_len g_clolend_cur ) | | | != 0 g_win_done != g_calls_total __gct0 != 0 g_defer_body_depth != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `clolendmv##` g_clolend_cur ) ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `clolendbad##` g_clolend_cur ) `1` ) } {}
@@ -53787,6 +53793,30 @@ unsafe @ bck_add_cap_name s name → v {
 // argument index of a `pendcall` row. Kept in the ROW rather than in a
 // side map keyed by name+line: line numbers repeat across files, and
 // these rows outlive their function (the walk runs after the module).
+// May a call of `fname` start a panic? A function of the program or the
+// library may (what it calls is known only to the module pass, agora
+// #537); a runtime entry only by its own table (rt_starts_panic, and a
+// fiber switch runs other code), as journal elision asks it (agora #382).
+@ __call_may_unwind s fname → b {
+    ? == 0 ( nurl_str_len fname ) { ^ T } {}
+    ? | == 0 g_root_syms != 0 ( nurl_sym_len2 g_root_syms fname `__nurlfn` ) { ^ T } {}
+    ? == 0 ( nurl_str_starts fname `nurl_` ) { ^ T } {}
+    ? | != 0 ( nurl_str_starts fname `nurl_vec_drop` ) != 0 ( nurl_str_starts fname `nurl_vec_clone` ) { ^ T } {}
+    ? | != 0 ( nurl_str_starts fname `nurl_closure_` ) != 0 ( nurl_str_starts fname `nurl_call` ) { ^ T } {}
+    ? ( rt_starts_panic fname ) { ^ T } {}
+    ^ | | | | >= ( nurl_str_find fname `fiber` ) 0 >= ( nurl_str_find fname `park` ) 0 >= ( nurl_str_find fname `yield` ) 0 >= ( nurl_str_find fname `sched` ) 0 >= ( nurl_str_find fname `async` ) 0
+}
+
+// A call that may panic, on `line` (agora #382): a row of its own, `unw`,
+// with no reads - what the statement read so far stays for its own row.
+@ bck_note_unwind i line → v {
+    ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ v } {}
+    : s r0 ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` )
+    ? != 0 ( nurl_str_len r0 ) { ( bck_put `reads` `` ) } {}
+    ( bck_record2 `unw` `` line `` `` )
+    ? != 0 ( nurl_str_len r0 ) { ( bck_put `reads` r0 ) } {}
+}
+
 @ bck_record2 s kind s wname i line s x5 s x6 → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : s reads ( nurl_sym_get g_bck `reads` )
@@ -58561,6 +58591,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 99 { ^ ? ( seq k `cdep` ) 17 ? ( seq k `cmove` ) 18 ? ( seq k `cnt` ) 22 ? ( seq k `cond` ) 25 ? ( seq k `callx` ) 31 ? ( seq k `clox` ) 34 ? ( seq k `cborrow` ) 7 0 } {}
     ? == c 118 { ^ ? ( seq k `vpass` ) 19 ? ( seq k `vborrow` ) 7 ? ( seq k `vcborrow` ) 7 0 } {}
     ? == c 114 { ^ ? ( seq k `ret` ) 20 0 } {}
+    ? == c 117 { ^ ? ( seq k `unw` ) 45 0 } {}
     ^ 0
 }
 
@@ -62041,6 +62072,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 = p + p 1
                 = done T
             } {}
+            ? & ! done == kc 45 {
+                // A call that may panic: an `inout` parameter may not view
+                // a value of this frame across it (__bck_unwind_check).
+                ? != 0 g_bck_inp_any { ( __bck_unwind_check st ( bck_field_int rec 3 ) ) } {}
+                = p + p 1
+                = done T
+            } {}
             ? & ! done == kc 31 {
                 // A call two of whose arguments may share storage
                 // (bck_call_alias_check).
@@ -63136,6 +63174,43 @@ unsafe @ bck_ret_drop_check s st i line → v {
             }
         } {}
         = gone ? == 0 ( nurl_str_len gone ) ( nurl_str_cat ds `` ) ( nurl_str_cat3 gone ` ` ds )
+    }
+}
+
+// A call that may panic, on `line`: its unwind frees this frame's values
+// and hands every `inout` parameter back to its caller - one viewing such a
+// value (`: String b …  = w @ W { ( string_data b ) }`, then the call)
+// would be read through after its storage is gone, by a `recover` caller.
+// Refused where the call is, as the caller cannot see it (agora #382; as
+// tools/ncore's rule for a call of the program's, MEMORY.md §3.3d).
+@ __bck_unwind_check s st i line → v {
+    : ~ s ip ( nurl_sym_get g_bck `inp` )
+    ~ != 0 ( nurl_str_len ip ) {
+        : s ps ( str_first_word ip ) = ip ( str_skip_word ip )
+        : i pid ( nurl_str_to_int ps )
+        : i pv ( bck_st_get st pid )
+        ? ! | ( bck_dead_state pv ) == BCK_UNINIT pv {
+            // (What it holds views of, `vds_` - and, a view itself (a struct
+            // of views), what it borrows from, `bs_`.)
+            : s vd ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `vds_` ps ) ) )
+            : ~ s ds ? == pv BCK_BORROWED_SHARED ( __word_union vd ( nurl_sym_get g_bck ( bck_bkey `bs_` ps ) ) ) vd
+            ~ != 0 ( nurl_str_len ds ) {
+                : s c ( str_first_word ds ) = ds ( str_skip_word ds )
+                : i r ( bck_local_source st ( nurl_str_to_int c ) )
+                ? & & >= r 0 != r pid != BCK_MOVED ( bck_st_get st r ) {
+                    : s tag ( nurl_str_cat4 `uw:` ps `:` ( nurl_str_int r ) )
+                    : s ws ( nurl_sym_get g_bck `warnset` )
+                    ? ! ( str_contains_word ws tag ) {
+                        ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+                        : s pn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ps ) )
+                        : s sn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int r ) ) )
+                        : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `'` pn `' is an 'inout' parameter, and it holds a view of '` ) sn `', a value of this function, across a call that may panic. ` `` )
+                        : s m2 ( nurl_str_cat4 `The unwind frees '` sn ( nurl_str_cat3 `' and hands '` pn `' back to its caller, which a 'recover' lets go on reading it: freed memory. Point '` ) pn )
+                        ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 `' back at what the caller passed before the call, or have it hold a copy that owns its data (string_from, slice_to_vec).` ) )
+                    } {}
+                } {}
+            }
+        } {}
     }
 }
 
@@ -94601,6 +94676,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
 // (`unsafe` code and the standard library manage a `sink s` by hand, and
 // their consuming parameters are still inferred.)
 @ __own_sink_str_params i syms i cg s fname s sinks → v {
+    = g_fn_unw 0
     ? | == 0 g_auto_drop_strings ! ( __auto_str_ctx ) { ^ v } {}
     : ~ s names ( nurl_sym_get syms `__fn_param_names__` )
     : ~ i index 0
@@ -94688,6 +94764,9 @@ unsafe @ __alloca_struct_params i syms i cg → v {
             ? ( __drop_may_read_view __ivt ) {
                 ( nurl_sym_def syms `__fn_ownstr_params__` ( nurl_str_cat4 ( nurl_sym_get syms `__fn_ownstr_params__` ) ` ` `^` name ) )
             } {}
+            // (…and one that can hold a view: each call in the body is a
+            // point a panic may unwind from, `unw` - agora #382.)
+            ? ( __ty_holds_view_p __ivt ) { = g_fn_unw 1 } {}
         } {}
         = index + index 1
     }
