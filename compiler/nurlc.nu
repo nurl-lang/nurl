@@ -8000,6 +8000,18 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
 // `%k`, rewritten onto the call's argument.
 @ __clo_note_ret_effs i syms s lt i tt s tv → v {
     ? ! ( __is_closure_ty lt ) { ^ v } {}
+    // (…and which closure it is, by a name the call sees: a capture handed
+    // back, `^ f` — or what a binding it hands back was lent from — is a
+    // lend of that name to the call's result (`lv#`, gen_call's
+    // `__last_call_clo_lend_idents__`), so a function handing back its
+    // closure parameter through a literal's call lends it on: its
+    // `retclo`; agora #838.)
+    ? ( is_ident_tok tt ) {
+        : s lvn ? != 0 ( nurl_sym_len2 syms tv `__clolend` ) ( nurl_sym_get2 syms tv `__clolend` ) ( nurl_str_cat tv `` )
+        ? == 0 g_clo_nodes { = g_clo_nodes ( nurl_sym_new ) } {}
+        : s lvk ( nurl_str_cat `lv#` ( nurl_sym_get syms `__clo_self__` ) )
+        ( nurl_sym_def g_clo_nodes lvk ( __word_union ( nurl_sym_get g_clo_nodes lvk ) lvn ) )
+    } {}
     : s effs ( __ret_clo_val_effs syms tt tv )
     ? == 0 ( nurl_str_len effs ) { ^ v } {}
     : ~ s out ``
@@ -38238,9 +38250,21 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     ? & __callee_shadowed != 0 g_clo_nodes {
         : s __lre ( __clo_run_attr syms fname `__closure_reteffs` `lr` )
         ? != 0 ( nurl_str_len __lre ) { = __cle_all ( __word_union __cle_all ( __clo_lr_onto_args __lre arg_idents ) ) } {}
-        ? != 0 ( nurl_str_len __ce_by_arg ) {
-            : s __lqk ( __clo_run_attr syms fname `__closure_retclo` `lq` )
-            ? != 0 ( nurl_str_len __lqk ) { = __cle_all ( __word_union __cle_all ( __ce_by_arg_at __ce_by_arg __lqk ) ) } {}
+        : s __lqk ( __clo_run_attr syms fname `__closure_retclo` `lq` )
+        ? & != 0 ( nurl_str_len __ce_by_arg ) != 0 ( nurl_str_len __lqk ) { = __cle_all ( __word_union __cle_all ( __ce_by_arg_at __ce_by_arg __lqk ) ) } {}
+        // (…and what the result is lent from: the names the literal hands
+        // back (`lv`), and the arguments at its `lq` indexes, as a named
+        // callee's `retclo` gives them.)
+        : ~ s __lvi ( __clo_run_attr syms fname `__closure_retlend` `lv` )
+        : ~ s __lqr ( nurl_str_cat __lqk `` )
+        ~ != 0 ( nurl_str_len __lqr ) {
+            : s __lqw ( str_first_word __lqr ) = __lqr ( str_skip_word __lqr )
+            : s __lqa ( bck_nth_word arg_idents ( nurl_str_to_int __lqw ) )
+            ? & != 0 ( nurl_str_len __lqa ) ! ( seq __lqa `-` ) { = __lvi ( __word_union __lvi __lqa ) } {}
+        }
+        ? != 0 ( nurl_str_len __lvi ) {
+            ( nurl_sym_def syms `__last_call_clo_lend_idents__` ( __word_union ( nurl_sym_get syms `__last_call_clo_lend_idents__` ) __lvi ) )
+            = g_clo_lend_set 1
         } {}
     } {}
     ? != 0 ( nurl_str_len __cle_all ) { ( __clo_ret_member_note syms __cle_all ) } {}

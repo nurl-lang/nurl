@@ -3460,6 +3460,11 @@ class FnCheck:
             av = self.call_closure(st, rv, line, dest_ty)
             if dest_ty is not None and self.T.is_scalar(dest_ty):
                 return NONE
+            if av.own == "L" and dest_ty is not None and dest_ty[0] == "closure":
+                # (a closure a closure's call hands back is its caller's own
+                # copy too, as a named call's: it holds what the lent one
+                # holds, and is no borrow of where that one sat - §7.5)
+                av = AV("O", (), (), av.held)
             return av
         if k == "scalar":
             for i, op in enumerate(rv[1]):
