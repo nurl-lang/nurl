@@ -70345,9 +70345,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
                     ( bck_add_word ( bck_bkey `cul` `` ) ( nurl_str_cat3 ( nurl_str_int id ) `:` cursor_src ) )
                     // (…and, past its arm, which owner it was read out of:
                     // bck_sx_name, agora #842.)
-                    // (Not through bck_put: its value is the same on every
-                    // pass of a loop, so the loop's digest need not hash it.)
-                    ( nurl_sym_set g_bck ( bck_bkey `cuo_` ( nurl_str_int id ) ) cursor_src )
+                    ( bck_put ( bck_bkey `cuo_` ( nurl_str_int id ) ) cursor_src )
                     = g_bck_cuo_any 1
                     ( bck_cursor_watch )
                     = g_bck_has_cursor 1
