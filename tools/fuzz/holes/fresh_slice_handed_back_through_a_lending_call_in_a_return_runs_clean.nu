@@ -8,13 +8,16 @@ $ `stdlib/core/slice.nu`
 @ mk → [i { ^ [i | 7 8 9] }
 @ id [i a → [i { ^ a }
 @ f → [i { ^ ( id ( mk ) ) }
+@ direct → [i { ^ ( mk ) }
 @ pick [i a b fresh → [i { ? fresh { ^ [i | 7 8 9] } {} ^ a }
 @ g [i a b fresh → [i { ^ ( pick ( pick a fresh ) F ) }
 @ run b fresh → v {
     : [i a [i | 1 2]
     : [i x ( f )
+    : [i d ( direct )
     : [i y ( g a fresh )
     ( nurl_println_int . x 1 )
+    ( nurl_println_int . d 1 )
     ( nurl_println_int . y 1 )
 }
 @ main → i { ( run T ) ( run F ) ^ 0 }
