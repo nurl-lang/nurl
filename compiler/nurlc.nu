@@ -4045,6 +4045,11 @@ unsafe @ note_unsafe_fn s pos s name → v { ( note_unsafe_item pos name ) }
 // asked of the file — of `file:line` it never answered yes, and the report
 // listed the standard library's own unsafe functions.)
 unsafe @ note_unsafe_item s pos s what → v {
+    // (The list is read by `--unsafe-report` only: without it, nothing is
+    // kept — each item searched the whole list so far, quadratic in the
+    // program's `unsafe` items: 844 in nurlc's self-compile, 0.4 % of its
+    // instructions.)
+    ? == 0 g_unsafe_report { ^ v } {}
     : i n ( nurl_str_len pos )
     : *u pp # *u pos
     : ~ i k - n 1
@@ -48825,8 +48830,10 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // (__udrop_release_tmp_at); one the callee takes is the callee's to
     // release, which its summary answers. Agora #766.)
     // (Nested: `&` evaluates both sides, and most calls hand no such value.)
-    ? & != 0 g_user_drop_seen >= ( nurl_str_find owned av ) 0 { ? ( __argtmp_has_val owned av ) {
-            ? != 0 ( nurl_str_len ( __udrop_fns ( nurl_llty at ) ) ) { ? ! | ( nurl_sym_has_word g_fn_sink call_name ( nurl_str_int arg_idx ) ) ( nurl_sym_has_word g_fn_sink fname ( nurl_str_int arg_idx ) ) {
+    // (`at` is the lowered type, as __has_user_drop reads it above: one
+    // memo lookup, __udrop_fns.)
+    ? & != 0 g_user_drop_seen != 0 ( nurl_str_len owned ) { ? != 0 ( nurl_str_len ( __udrop_fns at ) ) {
+            ? ( __argtmp_has_val owned av ) { ? ! | ( nurl_sym_has_word g_fn_sink call_name ( nurl_str_int arg_idx ) ) ( nurl_sym_has_word g_fn_sink fname ( nurl_str_int arg_idx ) ) {
                     = g_argtmp_udrop_n + g_argtmp_udrop_n 1
                     ( nurl_sym_append_word syms `__argtmp_udrop__` av )
                     ( nurl_sym_def syms ( nurl_str_cat `__argtmp_udk__` av ) ( nurl_str_cat3 call_name `/` ( nurl_str_int arg_idx ) ) )
