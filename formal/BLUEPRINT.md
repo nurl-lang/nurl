@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,033 lines of Lean 4**, **928 theorems**, **1106 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **61 modules**, **65,511 lines of Lean 4**, **2841 theorems**, **3619 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **62 modules**, **65,753 lines of Lean 4**, **2859 theorems**, **3644 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -135,7 +135,7 @@ flowchart BT
 ---
 
 <!-- BEGIN generated: A2 module DAG (webdocs/scripts/gen-formal-data.mjs) -->
-## 4. Phase A2 Module Dependency DAG (61 Modules)
+## 4. Phase A2 Module Dependency DAG (62 Modules)
 
 ```mermaid
 flowchart BT
@@ -162,6 +162,7 @@ flowchart BT
   Frame["Frame<br/>(1221L, 67 thms)"]
   Fresh["Fresh<br/>(153L, 3 thms)"]
   FreshBase["FreshBase<br/>(375L, 33 thms)"]
+  FreshClosureWitness["FreshClosureWitness<br/>(242L, 18 thms)"]
   FreshWitness["FreshWitness<br/>(297L, 19 thms)"]
   HandOver["HandOver<br/>(496L, 30 thms)"]
   Heap["Heap<br/>(211L, 14 thms)"]
@@ -230,6 +231,7 @@ flowchart BT
   Values --> Frame
   NameWf --> Fresh
   Basic --> FreshBase
+  FreshWitness --> FreshClosureWitness
   ThruDtorWitness --> FreshWitness
   DynCell --> HandOver
   Stability --> Heap
@@ -313,6 +315,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/EnvHand.lean`](A2/EnvHand.lean) | 2082 | 57 | 5 | Closure and trait-object environment hand-over (StmtT.callcE) for inout receivers. |
 | 3. Proof Infrastructure | [`A2/Fresh.lean`](A2/Fresh.lean) | 153 | 3 | 0 |  |
 | 3. Proof Infrastructure | [`A2/FreshBase.lean`](A2/FreshBase.lean) | 375 | 33 | 2 |  |
+| 3. Proof Infrastructure | [`A2/FreshClosureWitness.lean`](A2/FreshClosureWitness.lean) | 242 | 18 | 7 |  |
 | 3. Proof Infrastructure | [`A2/FreshWitness.lean`](A2/FreshWitness.lean) | 297 | 19 | 7 |  |
 | 3. Proof Infrastructure | [`A2/Repl.lean`](A2/Repl.lean) | 387 | 21 | 0 | One-hole replacement (Repl): a change through a borrowed handle rewrites one node of its owner's tree and leaves the rest. |
 | 3. Proof Infrastructure | [`A2/Settle.lean`](A2/Settle.lean) | 213 | 12 | 3 |  |

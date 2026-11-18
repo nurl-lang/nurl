@@ -532,3 +532,10 @@ import A3
 #print axioms A2.weaker_unfreshC
 #print axioms A2.freshOK_unfreshC
 #print axioms A2.unfreshC_panic
+-- ... and a closure over a slice whose code does so, called through its package
+-- (A2/FreshClosureWitness.lean)
+#print axioms A2.FreshClosureWitness.code_impl
+#print axioms A2.FreshClosureWitness.prog_ok
+#print axioms A2.FreshClosureWitness.main_typed
+#print axioms A2.FreshClosureWitness.main_safe
+#print axioms A2.FreshClosureWitness.main_no_leak

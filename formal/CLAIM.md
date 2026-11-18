@@ -184,9 +184,11 @@ the LLVM / C11 memory model rather than redefining it.
     when the call through its package passes an argument holding views, or
     its environment holds views, or it takes the environment handed over
     (`StmtT.callcE`). A closure's code is `ThruFn` by the same
-    `Stmt.hasThru` as a function's, so one that pushes its `s` argument
-    through `vec_at` of its own local (nurlc accepts it, and it runs
-    clean) is in by the argument below; no witness types that one yet.
+    `Stmt.hasThru` as a function's, so code whose changes are all through
+    fresh borrows is in by the argument below: `A2/FreshClosureWitness.lean`
+    types a closure whose environment is a slice and whose code pushes
+    through `vec_at` of its own local, called through its package, safe
+    and leak-free. nurlc accepts it, and it runs clean.
 
   Agora #909 takes in what changes elements only through a fresh borrow.
   An entry carries a `fresh` bit (`Entry.fresh`): the borrow reaches only
