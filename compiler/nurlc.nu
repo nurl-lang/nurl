@@ -62756,13 +62756,20 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
 // (agora #580)?
 @ __bck_fcp_is_wroot s bs → b {
     ? < g_bck_end_wroot_id 0 { ^ F } {}
-    : s p ( nurl_sym_get g_bck ( bck_bkey `fcp_` bs ) )
-    ? == 0 ( nurl_str_len p ) { ^ F } {}
+    : ~ s ps ( nurl_sym_get g_bck ( bck_bkey `fcp_` bs ) )
+    ? == 0 ( nurl_str_len ps ) { ^ F } {}
     : s w ( nurl_str_int g_bck_end_wroot_id )
-    ? ( seq p w ) { ^ T } {}
-    : s pb ( nurl_sym_get g_bck ( bck_bkey `bs_` p ) )
-    ? | == 0 ( nurl_str_len pb ) ! ( seq pb ( nurl_sym_get g_bck ( bck_bkey `bs_` w ) ) ) { ^ F } {}
-    ^ ( seq ( nurl_sym_get g_bck ( bck_bkey `lpa_` p ) ) ( nurl_sym_get g_bck ( bck_bkey `lpa_` w ) ) )
+    // (Any of its lend parents: a container a call lent out of several
+    // borrows may be any one's.)
+    ? ( str_contains_word ps w ) { ^ T } {}
+    : s wb ( nurl_sym_get g_bck ( bck_bkey `bs_` w ) )
+    : s wl ( nurl_sym_get g_bck ( bck_bkey `lpa_` w ) )
+    ~ != 0 ( nurl_str_len ps ) {
+        : s p ( str_first_word ps ) = ps ( str_skip_word ps )
+        : s pb ( nurl_sym_get g_bck ( bck_bkey `bs_` p ) )
+        ? & & != 0 ( nurl_str_len pb ) ( seq pb wb ) ( seq ( nurl_sym_get g_bck ( bck_bkey `lpa_` p ) ) wl ) { ^ T } {}
+    }
+    ^ F
 }
 
 // A `~` loop's cursor `fcs` (its `fevar` row's field 7) bound for this
@@ -65519,7 +65526,9 @@ unsafe @ __bck_row_sl s rec → s {
         // flattened below - its own name kept as this binding's lend parent,
         // `lpa_`: a `~` loop over this binding reads a buffer at that
         // parent's elements' level; agora #580.)
-        ? == BCK_BORROWED_SHARED ( bck_st_get st ( nurl_str_to_int w ) ) { ( bck_put ( bck_bkey `lpa_` ( nurl_str_int wid ) ) w ) = g_bck_lpa_any 1 } {}
+        // (Every one, when a call lends out of several: CodeRabbit on
+        // github#1972.)
+        ? == BCK_BORROWED_SHARED ( bck_st_get st ( nurl_str_to_int w ) ) { ( bck_add_word_once ( bck_bkey `lpa_` ( nurl_str_int wid ) ) w ) = g_bck_lpa_any 1 } {}
         // A number holds nothing to borrow from.
         ? ( bck_holds_nothing w ) { continue } {}
         // A field (`s.items`) is as alive as its binding; a field of a borrow
