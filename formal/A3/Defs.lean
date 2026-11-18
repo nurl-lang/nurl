@@ -1717,8 +1717,9 @@ theorem _root_.A2.StmtT.arcCallUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g g
 
 /-! A3.5b: a closure that changes a capture it moved in (an accumulator).  The
 moved-in capture is the environment's own state.  A call that lends the code the
-environment (`callc`: a copy in a fresh slot, `envMem`; the code changes nothing
-through a borrow, `Implements.env_lent`) reads it only.  The owner of a `send`
+environment (`callc`: a copy in a fresh slot, `envMem`; the code takes it lent,
+`Implements.env_lent`, and what it may change through a borrow is its own
+frame's, AGORA-395) reads it only.  The owner of a `send`
 closure changes it by handing the environment over (A2-envhand, `StmtT.callcE`,
 below: `accum_hand`), which no `sync` closure allows (`callcE_not_sync`).  What
 several threads may change at once is the state in a share the environment
