@@ -1290,6 +1290,8 @@ class FnCheck:
             for m in impls:
                 sm = self.summ.get(m)
                 if sm is None:
+                    # (one whose summary is not here guarantees no write-back)
+                    pb = set()
                     continue
                 out = sm if out is None else merge_summary(out, sm)
                 # (a write-back is a guarantee: every implementation's, or
@@ -1390,7 +1392,9 @@ class FnCheck:
             # what its field's reader was handed is that reader's alone
             # (agora #870)
             back = {ops[k][1] for k in pbk if k < len(ops) and ops[k][0] == "v" and not ops[k][2]}
-            st.pbd = st.pbd | {self.pidx[b] for b in back if b in self.pidx}
+            if not self.in_defer:
+                # (a `;` block may run on some paths only: no credit)
+                st.pbd = st.pbd | {self.pidx[b] for b in back if b in self.pidx}
             if st.pb and not self.in_defer:
                 for (pv, _, pp) in sorted(p for p in st.pb if p[0] in back):
                     cv = st.vals.get(pv)
@@ -1460,7 +1464,8 @@ class FnCheck:
                 # (…nor an argument the call writes back into the slot it was
                 # read from (`putback`): a copy written back over what it
                 # views is the point of the call - agora #870)
-                if m in sm.get("putback", ()):
+                if m in sm.get("putback", ()) and eff == "replace" and "*" in tuple(path):
+                    # (only the write-back's own store into an element)
                     continue
                 if m != k and self.would_kill(st, place, eff, av.loans | hloans(av.held)):
                     self.err(line, f"{name}: argument {m + 1} views what the call changes through argument {k + 1}")
@@ -1537,9 +1542,11 @@ class FnCheck:
                     # (an argument the callee keeps by value is read - copied
                     # or taken - before it changes the other)
                     continue
-                if mode != "inout" and m in sm.get("putback", ()):
-                    # (…or writes back into the slot it was read from: the
-                    # copy over what it views is the point - agora #870)
+                if mode != "inout" and m in sm.get("putback", ()) and self.only_elem_replace(sm, k):
+                    # (…or writes back into the slot it was read from - the
+                    # copy over what it views is the point - where all the
+                    # call changes of the other is an element's value,
+                    # agora #870)
                     continue
                 if op[0] == "v":
                     oty = self.ty_of_place((op[1], op[2]))
@@ -4479,6 +4486,12 @@ class FnCheck:
             self.pb_check(end)
             self.exits.append(end)
         return self.make_summary()
+
+    def only_elem_replace(self, sm, k):
+        """Are all the effects a call has on its argument `k` the
+        replacement of an element (a write-back's store)?"""
+        effs = [(p, e) for (j, p, e) in sm["effects"] if j == k]
+        return bool(effs) and all(e == "replace" and "*" in tuple(p) for p, e in effs)
 
     def putback_on_every_exit(self):
         """The parameters written back into their slots on every way out
