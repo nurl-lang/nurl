@@ -3290,9 +3290,9 @@ theorem lift_nosink (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hrb
 
 theorem liftE_eq (S : RSetup) {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) :
     S.liftE v E = ⟨E.ty, liftMode E.mode, E.live,
-      rds S.ρ E.path ++ (if E.mode.ownSlot then [] else S.A),
-      rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind, false⟩ := by
-  simp [RSetup.liftE, hrb]
+      rds S.ρ E.path ++ (if E.mode.ownSlot || (E.fresh && E.ty != .int) then [] else S.A),
+      rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh⟩ := by
+  simp only [RSetup.liftE, hrb, ↓reduceIte]
 
 /-- The callee's result, where the exits leave it. -/
 theorem res_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {Er : Entry}
@@ -3327,7 +3327,7 @@ theorem res_props (h : CallH P Γ F x fn args base) {Er : Entry} (hErl : Er.live
   · simp only [ho, Bool.false_eq_true, ↓reduceIte]
     exact h.lift_sub (fun d0 hd0 => ⟨(hlends _ (hErp d0 hd0)).1, hl _ (hErp d0 hd0),
       (hlends _ (hErp d0 hd0)).2, hfits _ (List.mem_append_left _ (hErp d0 hd0))⟩)
-      (fun d hd => List.mem_append_right _ hd) (List.Subset.refl _)
+      (fun d hd => List.mem_append_right _ hd) (by split <;> simp)
   · rw [RSetup.resMode_ownSlot, hErt]
     by_cases hc0 : (fn.resOwn && !fn.resTy.holdsView) = true
     · -- an owned result of a type that holds no views holds nothing
