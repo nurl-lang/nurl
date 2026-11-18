@@ -58253,8 +58253,17 @@ unsafe @ bck_intern s name → i {
         ( nurl_poke # s g_bck_pr idn rid )
         ( nurl_poke # s g_bck_pn idn # i ( nurl_strdup name ) )
         = g_bck_has_paths 1
+        // (…and that binding has field paths of its own: bck_root_has_paths.)
+        ( bck_put ( bck_bkey `hp_` ( nurl_str_int rid ) ) `1` )
     } {}
     idn
+}
+
+// Has any field path of the binding `id` is (or is a path of) been named in
+// this function? Asked before a scan over every source for its paths.
+unsafe @ bck_root_has_paths i id → b {
+    ? == 0 g_bck_has_paths { ^ F } {}
+    ^ != 0 ( nurl_sym_len g_bck ( bck_bkey `hp_` ( nurl_str_int ( bck_path_root id ) ) ) )
 }
 
 // The binding a field path's id belongs to (`s.items` → s); any other id
@@ -68320,7 +68329,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 // vec_at . . ww inner rows 0 )` read past it: those views
                 // point into the same elements, as where `. ww inner`
                 // itself is handed (bck_id_holds); agora #789.)
-                ? != 0 g_bck_has_paths {
+                ? ( bck_root_has_paths ( nurl_str_to_int o ) ) {
                     : i oid ( nurl_str_to_int o )
                     : ~ s prest ( nurl_sym_get g_bck ( bck_bkey `bsrcs` `` ) )
                     : i prest_n ( nurl_str_len prest )
