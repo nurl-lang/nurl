@@ -8011,7 +8011,11 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
         : i c1 ( nurl_str_find e1 `:` )
         ? > c1 0 {
             : s r ( __path_root_name ( nurl_str_slice e1 0 c1 ) )
-            : i k ( nurl_sym_word_index syms `__fn_param_names__` r )
+            // (…or a share of one — an `rc_clone` of the literal's parameter,
+            // one Rc value with it: what replaces or grows its payload does
+            // the parameter's, as mem_note_ret_clo_effs has it; agora #845.)
+            : s rp ( nurl_sym_get2 syms r `__rcof` )
+            : i k ( nurl_sym_word_index syms `__fn_param_names__` ? == 0 ( nurl_str_len rp ) r rp )
             : s w ? >= k 0 ( nurl_str_cat4 ? lent `~%` `%` ( nurl_str_int k ) ( nurl_str_slice e1 ( nurl_str_len r ) - ( nurl_str_len e1 ) ( nurl_str_len r ) ) `` ) ( nurl_str_cat e `` )
             = out ( __word_union out w )
         } {}
