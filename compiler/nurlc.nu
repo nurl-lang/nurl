@@ -29158,6 +29158,35 @@ unsafe @ origin_guard_retained i root → b {
     ^ & & != 0 g_auto_drop_strings ( seq ( nurl_llty rlt ) `i8*` ) ! ( bck_unsafe_ctx )
 }
 
+// …and an owned slice whose elements hold no view and can be copied (`[i`,
+// `[String`): a call through a closure value hands its caller a slice of
+// its own, the closure's when it said so at its return, else a copy
+// (mem_clo_ret_own_slice_copy). Then what the call was handed — a slice a
+// call made right in the argument — is not the result, and goes after the
+// call as a String's does (mem_arg_temps). Before, such a temporary, which
+// the closure might have handed back, was released by no one (agora #894).
+@ mem_clo_ret_copies_slc s rlt i syms → b {
+    ? | == 0 g_auto_drop_strings ( bck_unsafe_ctx ) { ^ F } {}
+    : s ll ( nurl_llty rlt )
+    ? ! ( __owned_slice_ty ll ) { ^ F } {}
+    ? ( __ty_holds_view_p ( nurl_llty ( __owned_slice_elem ll ) ) ) { ^ F } {}
+    ^ ( __slice_result_copies ll syms )
+}
+
+// The slice result `res` of a call through a closure value, which the
+// closure said per run is its caller's own (g_call_own_slc,
+// mem_clo_ret_own_slice): a copy on the runs it is not. The result is the
+// caller's on every run then (`__last_call_ret_owned__`).
+@ mem_clo_ret_own_slice_copy i syms i cg s rlt s res → s {
+    ? < g_call_own_slc 0 { ^ res } {}
+    : s nown ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nown ) ( nurl_print ` = xor i1 %r` ) ( nurl_print ( nurl_str_int g_call_own_slc ) ) ( nurl_print `, 1\n` )
+    : s out ( mem_emit_cloneif cg ( nurl_llty rlt ) res nown )
+    = g_call_own_slc -1
+    ( nurl_sym_def syms `__last_call_ret_owned__` `1` )
+    ^ out
+}
+
 @ mem_clo_ret_own_str i cg s res → s {
     : s fl ( nurl_cg_reg cg )
     : s c ( nurl_cg_reg cg )
@@ -33856,7 +33885,7 @@ unsafe @ __sx_publish i me s sx → v {
 // closure literal holds its captures (`\(…)`, bck_sx_ev).
 @ __clo_call_sx i syms s name s args → s {
     : s rt ( extract_fn_ptr_return_type ( nurl_sym_get syms name ) )
-    ? | < ( bck_walk_class rt ) 2 ( mem_clo_ret_copies rt ) { ^ ( nurl_str_cat `-` `` ) } {}
+    ? || || < ( bck_walk_class rt ) 2 ( mem_clo_ret_copies rt ) ( mem_clo_ret_copies_slc rt syms ) { ^ ( nurl_str_cat `-` `` ) } {}
     // (…and what the closure holds: a copy of an element of a Vec it
     // captured — `iter_from_vec`'s — points into what that Vec held, which
     // the closure holds too (`\\~v(…)`, agora #472). Not where it hands
@@ -38994,6 +39023,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 ( nurl_sym_def syms `__last_call_ret_owned__` `` )
                 ( nurl_sym_def syms `__last_call_guard__`
                 ( mem_capture_return_guard cg final_result ( nurl_get_last_type ) ) )
+                ? ( mem_clo_ret_copies_slc ( nurl_get_last_type ) syms ) { = final_result ( mem_clo_ret_own_slice_copy syms cg ( nurl_get_last_type ) final_result ) } {}
             }
         }
         {
@@ -39031,6 +39061,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     ( nurl_sym_def syms `__last_call_ret_owned__` `` )
                     ( nurl_sym_def syms `__last_call_guard__`
                     ( mem_capture_return_guard cg final_result ( nurl_get_last_type ) ) )
+                    ? ( mem_clo_ret_copies_slc ( nurl_get_last_type ) syms ) { = final_result ( mem_clo_ret_own_slice_copy syms cg ( nurl_get_last_type ) final_result ) } {}
                 }
             }
             {  // Simple function pointer parameter - call directly
@@ -49467,7 +49498,9 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // whose result may hold it: the closure answers at its return only
     // whether its result is its own, not whether it is this argument, so
     // nothing could release the temporary on the runs it is not - AGORA-894.)
-    : b __tsl && && == arg_tt TT_LPAREN ( __owned_slice_ty at ) || ! shadowed ! ( __ty_holds_view_p __crt )
+    // (…a call through a closure value whose slice result is its own on
+    // every run, a copy where it lent, mem_clo_ret_copies_slc: agora #894.)
+    : b __tsl && && == arg_tt TT_LPAREN ( __owned_slice_ty at ) || || ! shadowed ! ( __ty_holds_view_p __crt ) ( mem_clo_ret_copies_slc __crt syms )
     // (Asked as far as needed, `&&` / `||`: of every argument, most of them
     // no call's temporary.)
     ? || || __tfo __tjo && && && && != 0 g_auto_drop_strings == arg_tt TT_LPAREN || || || ( __is_handle_ty at ) __topt __tsl && ( __nc_drop_ty at ) == 0 ( nurl_str_starts at `%dyn.` )
@@ -49602,7 +49635,10 @@ unsafe @ __pfo_bind_lends i syms s name → v {
                 : s __tpw ( mem_temp_drop_words cg __tlp at av __top __toe )
                 = owned ? == 0 ( nurl_str_len owned ) __tpw ( nurl_str_cat3 owned ` ` __tpw )
             } {}
-            ? | __scalar_ret __hret
+            // (…and a call through a closure value whose result is its
+            // caller's own on every run, a copy where the closure lent it
+            // (mem_clo_ret_copies_slc): this temporary is not the result.)
+            ? || || __scalar_ret __hret && shadowed ( mem_clo_ret_copies_slc __crt syms )
             { = owned ? == 0 ( nurl_str_len owned ) __tw ( nurl_str_cat3 owned ` ` __tw ) }
             { : ~ s __twd ( nurl_str_cat __tw `` )
                 // A result of a pointer-carrying type that, by the callee's
