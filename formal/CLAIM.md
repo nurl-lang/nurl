@@ -204,7 +204,9 @@ the LLVM / C11 memory model rather than redefining it.
     (`g_not_thru`), and the call asks nothing of the view. What keeps the
     view from reaching the changed argument is `CallT`'s exclusivity of a
     moved or changed argument (no other argument reaches it in memory), not
-    `callR`. Safe and leak-free (`main_safe`, `main_no_leak`); nurlc accepts
+    `callR`. Safe and leak-free (`main_safe`, `main_no_leak`; `main` fills
+    `vv` and `src` before they are read, so every read is in bounds and a
+    run can end normally); nurlc accepts
     it (`inout_push_through_its_element_called_with_a_view_read_after`) and
     it runs clean. With `s` a view of `vv`'s element instead (AGORA-923,
     github#2072, fixed in nurlc by github#2076), no typing of the call exists (`call_refused`).
@@ -215,17 +217,22 @@ the LLVM / C11 memory model rather than redefining it.
     may, and held-fresh, as a view may, when its source is a binding of the
     frame's own (an owner or an `inout` parameter) or a fresh, held-fresh
     borrow, of a type that holds no views, holding nothing, and the field
-    is not a slice: its path is then the source's own (`[⟨b, .inner⟩]` for
-    a frame binding), and a call lifts such a source to one that still
-    holds nothing. For a held-fresh borrow that rests on the lift adding no
-    name to a type that holds no closure: `heldA` of a held-fresh borrow of
-    a closure-free type is `[]`, for every such borrow, not only a
-    projection (`RSetup.heldA`; a value of such a type holds no name,
+    is not a slice: a field that is not an integer is then lent with the
+    source's own path (`[⟨b, .inner⟩]` for a frame binding; an integer
+    field is copied, `intE`, and holds nothing), and a call lifts such a
+    source to one that still holds nothing. For a held-fresh borrow that
+    rests on the lift adding no name to a type that holds no closure:
+    `heldA` of a held-fresh borrow of a closure-free type that is not an
+    integer is `[]` (`heldA_P`, whose premise `HeldP` asks a held-fresh
+    borrow of a type other than `int`), for every such borrow, not only a
+    projection; the `Bag` read meets it (`RSetup.heldA`; a value of such a type holds no name,
     `WFv.names_nil_fn`, and a type that holds no views holds no closure,
     `hasFn_holdsView`). So the renamed read is exact
     (`RSetup.projE_fresh_lift`). So the push is an `edit false`, `add` is
     not through-changing (`g_not_thru`), and the call is typed, safe and
-    leak-free (`main_safe`, `main_no_leak`). A nested projection is fresh
+    leak-free (`main_safe`, `main_no_leak`; `main` fills `src` before it
+    views it, so the read after the call is in bounds and a run can end
+    normally, which is what `main_no_leak` speaks of). A nested projection is fresh
     exactly where every step is (`proj_of_proj_fresh`):
     `A2/FreshNestWitness.lean` types `( vec_push . . o bag items x )` in
     the same call shape, safe and leak-free. nurlc accepts both
@@ -246,7 +253,8 @@ the LLVM / C11 memory model rather than redefining it.
     sources (`FreshSrc`: a binding of the frame's own, or a fresh borrow),
     and not a slice element: its path is the view's, `[⟨vv, .inner⟩]`. So
     the push is an `edit false`, `g` is not through-changing, and the call
-    is safe and leak-free (`main_safe`, `main_no_leak`). nurlc accepts it
+    is safe and leak-free (`main_safe`, `main_no_leak`; `main` fills `vv`
+    and `src` first, as the nurlc test does, so every read is in bounds). nurlc accepts it
     (`inout_push_through_an_element_of_its_view_called_with_a_view_read_after`)
     and it runs clean. Through a borrowed slice parameter, a view that is
     not fresh (a view of a borrowed parameter among them), or for an

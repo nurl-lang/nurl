@@ -191,31 +191,44 @@ theorem prog_codes : ProgCodes P := by
 
 /-! ### The caller: `( g vv s )` with `s` a view of `src`, read after the call -/
 
-/-- `: vv ( new ( Vec i ) )  : src ( new i )  : s ( view src )  : r ( g vv s )
-    : x ( slice_at s 0 )`: `vv` 0, `src` 1, `s` 2, `r` 3, `x` 4. -/
+/-- `: vv ( new ( Vec i ) )  : w ( new i )  ( vec_push vv w )  : src ( new i )  : k 5
+    ( vec_push src k )  : s ( view src )  : r ( g vv s )  : x ( slice_at s 0 )`:
+    `vv` 0, `src` 1, `s` 2, `r` 3, `x` 4, `w` 5, `k` 6. `vv` and `src` each hold an
+    element before they are read, so every read is in bounds and a run can end
+    normally. -/
 def main : Stmt :=
-  .letv 0 (.new vi) (.letv 1 (.new .int) (.letv 2 (.view 1)
-    (.letcall 3 0 [0, 2] (.letv 4 (.sat 2 (.lit 0)) .skip))))
+  .letv 0 (.new vi) (.letv 5 (.new .int) (.seq (.push 0 5) (.letv 1 (.new .int)
+    (.letv 6 (.expr (.lit 5)) (.seq (.push 1 6) (.letv 2 (.view 1)
+      (.letcall 3 0 [0, 2] (.letv 4 (.sat 2 (.lit 0)) .skip))))))))
 
 def Evv : Entry := ⟨vvi, .own, true, [], [], false, false, false, false⟩
 def Esrc : Entry := ⟨vi, .own, true, [], [], false, false, false, false⟩
 def Esv : Entry := ⟨sl, .bor, true, [⟨1, .view⟩], [], false, false, false, false⟩
 
+def Ew0 : Entry := { Esrc with live := false, dtor := false }
+
 def K1 : Ctx := A2.setE (fun _ => none) 0 Evv
-def K2 : Ctx := A2.setE K1 1 Esrc
-def K3 : Ctx := A2.setE K2 2 Esv
+def K1a : Ctx := A2.setE K1 5 Esrc
+def K1b : Ctx := A2.setE (A2.kill .replace false 5 K1a) 5 Ew0
+def K1c : Ctx := A2.setE K1 5 Ew0
+def K2 : Ctx := A2.setE K1c 1 Esrc
+def K2a : Ctx := A2.setE K2 6 intE
+def K3 : Ctx := A2.setE K2a 2 Esv
+
+theorem K1c_noRootb : NoRootb K1c := (noRootb_empty.setE (by simp [Evv])).setE (by simp [Ew0, Esrc])
 
 theorem K3_noRootb : NoRootb K3 :=
-  ((noRootb_empty.setE (by simp [Evv])).setE (by simp [Esrc])).setE (by simp [Esv])
+  ((K1c_noRootb.setE (by simp [Esrc])).setE (by simp [intE])).setE (by simp [Esv])
 
-theorem K3_0 : K3 0 = some Evv := by simp [K3, K2, K1, A2.setE, upd]
+theorem K3_0 : K3 0 = some Evv := by simp [K3, K2a, K2, K1c, K1, A2.setE, upd]
 theorem K3_2 : K3 2 = some Esv := by simp [K3, A2.setE]
 
 theorem callPost_eq : callPost K3 g [0, 2] = K3 := by
   funext v
   simp only [callPost, callPostAux, g, killNames, mutNames, argNames]
-  rcases v with _ | _ | _ | v <;>
-    simp [argE, K3, K2, K1, A2.setE, upd, A2.kill, killE, hits, Evv, Esrc, Esv, Entry.vdeps, Mode.ownSlot,
+  rcases v with _ | _ | _ | _ | _ | _ | _ | v <;>
+    simp [argE, K3, K2a, K2, K1c, K1, A2.setE, upd, A2.kill, killE, hits, Evv, Esrc, Ew0, Esv, intE, Entry.vdeps,
+      Mode.ownSlot,
       vvi, vi, sl, Ty.holdsView, Ty.elem, nameDeps, Eff.kills, Kind.bound]
 
 /-- **The call is typed**: `vv` is handed `inout`, and no other argument
@@ -258,38 +271,80 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
     simpa [elemE, intE] using this
   have hL4 : NoRootb (A2.setE (A2.setE K3 3 ER) 4 intE) := hL.setE (by simp [intE])
   have h4 := StmtT.letv (ξ := .none) (P := P) (x := 4) (r := .sat 2 (.lit 0)) (s := .skip) (E := intE) (F := [])
-    (Γ := A2.setE K3 3 ER) (Γ1 := A2.setE K3 3 ER) rfl (by simp [A2.setE, upd, K3, K2, K1]) (by simp) hsat
-    StmtT.skip (hL4.endOK _)
+    (Γ := A2.setE K3 3 ER) (Γ1 := A2.setE K3 3 ER) rfl (by simp [A2.setE, upd, K3, K2a, K2, K1c, K1]) (by simp)
+    hsat StmtT.skip (hL4.endOK _)
   have hc := StmtT.letcall (ξ := .none) (P := P) (Γ := K3) (F := []) (x := 3) (f := 0) (args := [0, 2])
-    (s := .letv 4 (.sat 2 (.lit 0)) .skip) (E := ER) (Γ1 := K3) rfl (by simp [K3, K2, K1, A2.setE, upd])
-    (by simp) call_ok h4.ofNone ((hL4.exitScope 4).endOK _)
+    (s := .letv 4 (.sat 2 (.lit 0)) .skip) (E := ER) (Γ1 := K3) rfl
+    (by simp [K3, K2a, K2, K1c, K1, A2.setE, upd]) (by simp) call_ok h4.ofNone ((hL4.exitScope 4).endOK _)
     (fun fn hf ho _ => by simp [P] at hf; subst hf; simp [g] at ho)
-  have hK2 : NoRootb K2 := (noRootb_empty.setE (by simp [Evv])).setE (by simp [Esrc])
-  have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [Evv])
-  have hview : RhsT K2 [] (.view 1) Esv K2 := by
-    have := RhsT.view (Γ := K2) (F := []) (y := 1) (E := Esrc) (t := .int) (by simp [K2, A2.setE]) rfl rfl rfl
+  have hK2a : NoRootb K2a := (K1c_noRootb.setE (by simp [Esrc])).setE (by simp [intE])
+  have hK2 : NoRootb K2 := K1c_noRootb.setE (by simp [Esrc])
+  have hview : RhsT K2a [] (.view 1) Esv K2a := by
+    have := RhsT.view (Γ := K2a) (F := []) (y := 1) (E := Esrc) (t := .int) (by simp [K2a, K2, A2.setE, upd])
+      rfl rfl rfl
     simpa [derive, Mode.isRoot, rootKind, Esrc, Esv, vi, sl] using this
-  have h2 := StmtT.letv (ξ := .none) (P := P) (x := 2) (r := .view 1) (E := Esv) (F := []) (Γ := K2) (Γ1 := K2)
-    rfl (by simp [K2, K1, A2.setE, upd]) (by simp) hview hc.ofNone (((hL4.exitScope 4).exitScope 3).endOK _)
-  have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .new .int) (E := Esrc) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.new rfl) h2.ofNone
-    ((((hL4.exitScope 4).exitScope 3).exitScope 2).endOK _)
+  have h2 := StmtT.letv (ξ := .none) (P := P) (x := 2) (r := .view 1) (E := Esv) (F := []) (Γ := K2a) (Γ1 := K2a)
+    rfl (by simp [K2a, K2, K1c, K1, A2.setE, upd]) (by simp) hview hc.ofNone
+    (((hL4.exitScope 4).exitScope 3).endOK _)
+  -- `( vec_push src k )`: a number, so nothing moves and nothing ends
+  have hpk : A2.setE (A2.kill .realloc Ty.int.holdsView 1 K2a) 1 { Esrc with held := Esrc.held ++ ownHeld true .int [] }
+      = K2a := by
+    funext v
+    rcases v with _ | _ | _ | _ | _ | _ | _ | v <;>
+      simp [K2a, K2, K1c, K1, A2.setE, upd, A2.kill, killE, hits, Evv, Esrc, Ew0, intE, Entry.vdeps,
+        Mode.ownSlot, ownHeld, Ty.holdsView]
+  have hpush1 : StmtT P .none K2a [] (.push 1 6) K2a := by
+    have := StmtT.push (ξ := .none) (P := P) (Γ := K2a) (Γ1 := K2a) (F := []) (x := 1) (y := 6) (Ex := Esrc)
+      (Ey := intE) (Ex1 := Esrc) (t := .int) (D := []) (by simp [K2a, K2, A2.setE, upd]) rfl rfl (Or.inl rfl)
+      (by simp) (by simp [K2a, A2.setE]) rfl rfl (by decide) PushArg.int (by simp [roots])
+      (by simp [K2a, K2, A2.setE, upd]) rfl (DtorSafe.of_none (fun v E h => (hK2a v E h).2.1) _ _ _)
+      (fun h => by simp [Esrc] at h)
+    rwa [hpk] at this
+  have h6 := StmtT.letv (ξ := .none) (P := P) (x := 6) (r := .expr (.lit 5)) (E := intE) (F := []) (Γ := K2)
+    (Γ1 := K2) rfl (by simp [K2, K1c, K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit)
+    (StmtT.seq (ξ := .none) rfl hpush1 h2.ofNone).ofNone ((((hL4.exitScope 4).exitScope 3).exitScope 2).endOK _)
+  have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .new .int) (E := Esrc) (F := []) (Γ := K1c)
+    (Γ1 := K1c) rfl (by simp [K1c, K1, A2.setE, upd]) (by simp) (RhsT.new rfl) h6.ofNone
+    (((((hL4.exitScope 4).exitScope 3).exitScope 2).exitScope 6).endOK _)
+  -- `( vec_push vv w )`: the inner `Vec` moves into `vv`
+  have hK1a : NoRootb K1a := (noRootb_empty.setE (by simp [Evv])).setE (by simp [Esrc])
+  have hK1b : NoRootb K1b := NoRootb.setE (fun v E h => A2.DynCell.NoRootb.kill (fun v E h => hK1a v E h)
+    .replace false 5 v E h) (by simp [Ew0, Esrc])
+  have hpv : A2.setE (A2.kill .realloc vi.holdsView 0 K1b) 0 { Evv with held := Evv.held ++ ownHeld true vi Esrc.held }
+      = K1c := by
+    funext v
+    rcases v with _ | _ | _ | _ | _ | _ | v <;>
+      simp [K1b, K1a, K1c, K1, A2.setE, upd, A2.kill, killE, hits, Evv, Esrc, Ew0, Entry.vdeps, Mode.ownSlot,
+        ownHeld, Ty.holdsView, vi]
+  have hpush0 : StmtT P .none K1a [] (.push 0 5) K1c := by
+    have := StmtT.push (ξ := .none) (P := P) (Γ := K1a) (Γ1 := K1b) (F := []) (x := 0) (y := 5) (Ex := Evv)
+      (Ey := Esrc) (Ex1 := Evv) (t := vi) (D := Esrc.held) (by simp [K1a, K1, A2.setE, upd]) rfl rfl (Or.inl rfl)
+      (by simp) (by simp [K1a, A2.setE]) rfl rfl (by decide)
+      (PushArg.move (by simp [vi, Ty.owning]) rfl (by simp) (A2.DynCell.NoRootb.noPin (fun v E h => hK1a v E h) _)
+        (DtorSafe.of_none (fun v E h => (hK1a v E h).2.1) _ _ _))
+      (by simp [Esrc, roots]) (by simp [K1b, K1a, K1, A2.setE, upd, A2.kill, killE, hits, Evv, Entry.vdeps,
+        Mode.ownSlot]) rfl (DtorSafe.of_none (fun v E h => (hK1b v E h).2.1) _ _ _) (fun h => by simp [Evv] at h)
+    rwa [hpv] at this
+  have h5 := StmtT.letv (ξ := .none) (P := P) (x := 5) (r := .new .int) (E := Esrc) (F := []) (Γ := K1)
+    (Γ1 := K1) rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.new rfl)
+    (StmtT.seq (ξ := .none) rfl hpush0 h1.ofNone).ofNone
+    ((((((hL4.exitScope 4).exitScope 3).exitScope 2).exitScope 6).exitScope 1).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .new vi) (E := Evv) (F := []) (Γ := fun _ => none)
-    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.new rfl) h1.ofNone
-    (((((hL4.exitScope 4).exitScope 3).exitScope 2).exitScope 1).endOK _)⟩
+    (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.new rfl) h5.ofNone
+    (((((((hL4.exitScope 4).exitScope 3).exitScope 2).exitScope 6).exitScope 1).exitScope 5).endOK _)⟩
 
 theorem main_codes : main.codesOK P := by simp [main, Stmt.codesOK, Rhs.codeOK]
 
 /-- **The program is memory safe**: an `inout` callee that changes elements
     through a borrow of its parameter, called with an argument that holds a
     view, which is read after the call. -/
-theorem main_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 5) main (.ok m' s')) :
+theorem main_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 7) main (.ok m' s')) :
     ¬ Stuck P m' s' := by
   obtain ⟨Δ, ht⟩ := main_typed (ξ := .none)
   exact memory_safe prog_ok prog_codes ht rfl main_codes (by decide) hr
 
 /-- ... and leaks nothing when it ends. -/
-theorem main_no_leak {m' : Mem} (hr : Steps P (emptyMem 5) main (.ok m' .skip)) :
+theorem main_no_leak {m' : Mem} (hr : Steps P (emptyMem 7) main (.ok m' .skip)) :
     ∀ i, m'.alloc i = false := by
   obtain ⟨Δ, ht⟩ := main_typed (ξ := .none)
   exact no_leak_end prog_ok prog_codes ht rfl main_codes (by decide) hr

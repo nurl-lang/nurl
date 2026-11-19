@@ -205,8 +205,8 @@ theorem prog_codes : ProgCodes P := by
     `items` 0, `n` 1, `bg` 2, `tag` 3, `o` 4, `src` 5, `s` 6, `r` 7, `x` 8. -/
 def main : Stmt :=
   .letv 0 (.new .int) (.letv 1 (.expr (.lit 5)) (.letv 2 (.pair 0 1) (.letv 3 (.expr (.lit 9))
-    (.letv 4 (.pair 2 3) (.letv 5 (.new .int) (.letv 6 (.view 5)
-      (.letcall 7 0 [4, 6] (.letv 8 (.sat 6 (.lit 0)) .skip))))))))
+    (.letv 4 (.pair 2 3) (.letv 5 (.new .int) (.letv 9 (.expr (.lit 5)) (.seq (.push 5 9) (.letv 6 (.view 5)
+      (.letcall 7 0 [4, 6] (.letv 8 (.sat 6 (.lit 0)) .skip))))))))))
 
 def Ev : Entry := ⟨vi, .own, true, [], [], false, false, false, false⟩
 def Ev0 : Entry := { Ev with live := false, dtor := false }
@@ -223,7 +223,8 @@ def K4 : Ctx := A2.setE K3 3 intE
 def K4' : Ctx := A2.setE (A2.kill .replace false 2 K4) 2 Eb0
 def K5 : Ctx := A2.setE K4' 4 Eo
 def K6 : Ctx := A2.setE K5 5 Ev
-def K7 : Ctx := A2.setE K6 6 Esv
+def K6p : Ctx := A2.setE K6 9 intE
+def K7 : Ctx := A2.setE K6p 6 Esv
 
 theorem K2_noRootb : NoRootb K2 := (noRootb_empty.setE (by simp [Ev])).setE (by simp [intE])
 
@@ -243,16 +244,16 @@ theorem K4'_noRootb : NoRootb K4' := by
     simp [Ev, Eb, intE]
 
 theorem K7_noRootb : NoRootb K7 :=
-  ((K4'_noRootb.setE (by simp [Eo])).setE (by simp [Ev])).setE (by simp [Esv])
+  (((K4'_noRootb.setE (by simp [Eo])).setE (by simp [Ev])).setE (by simp [intE])).setE (by simp [Esv])
 
-theorem K7_4 : K7 4 = some Eo := by simp [K7, K6, K5, A2.setE, upd]
+theorem K7_4 : K7 4 = some Eo := by simp [K7, K6p, K6, K5, A2.setE, upd]
 theorem K7_6 : K7 6 = some Esv := by simp [K7, A2.setE]
 
 theorem callPost_eq : callPost K7 g [4, 6] = K7 := by
   funext v
   simp only [callPost, callPostAux, g, killNames, mutNames, argNames]
   rcases v with _ | _ | _ | _ | _ | _ | _ | v <;>
-    simp [argE, K7, K6, K5, K4', K4, K3, K2', K2, K1, A2.setE, upd, A2.kill, killE, hits, Ev, Ev0, Eb, Eb0,
+    simp [argE, K7, K6p, K6, K5, K4', K4, K3, K2', K2, K1, A2.setE, upd, A2.kill, killE, hits, Ev, Ev0, Eb, Eb0,
       Eo, Esv, intE, Entry.vdeps, Mode.ownSlot, box, bag, vi, sl, Ty.holdsView, Ty.elem, nameDeps, Eff.kills,
       Kind.bound]
 
@@ -293,22 +294,42 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   have hL8 : NoRootb (A2.setE (A2.setE K7 7 ER) 8 intE) := hL.setE (by simp [intE])
   have h8 := StmtT.letv (ξ := .none) (P := P) (x := 8) (r := .sat 6 (.lit 0)) (s := .skip) (E := intE) (F := [])
     (Γ := A2.setE K7 7 ER) (Γ1 := A2.setE K7 7 ER) rfl
-    (by simp [A2.setE, upd, K7, K6, K5, K4', K4, K3, K2', K2, K1, A2.kill]) (by simp) hsat StmtT.skip (hL8.endOK _)
+    (by simp [A2.setE, upd, K7, K6p, K6, K5, K4', K4, K3, K2', K2, K1, A2.kill]) (by simp) hsat StmtT.skip (hL8.endOK _)
   have hc := StmtT.letcall (ξ := .none) (P := P) (Γ := K7) (F := []) (x := 7) (f := 0) (args := [4, 6])
     (s := .letv 8 (.sat 6 (.lit 0)) .skip) (E := ER) (Γ1 := K7) rfl
-    (by simp [K7, K6, K5, K4', K4, K3, K2', K2, K1, A2.setE, upd, A2.kill])
+    (by simp [K7, K6p, K6, K5, K4', K4, K3, K2', K2, K1, A2.setE, upd, A2.kill])
     (by simp) call_ok h8.ofNone ((hL8.exitScope 8).endOK _)
     (fun fn hf ho _ => by simp [P] at hf; subst hf; simp [g] at ho)
   have hK6 : NoRootb K6 := (K4'_noRootb.setE (by simp [Eo])).setE (by simp [Ev])
-  have hview : RhsT K6 [] (.view 5) Esv K6 := by
-    have := RhsT.view (Γ := K6) (F := []) (y := 5) (E := Ev) (t := .int) (by simp [K6, A2.setE]) rfl rfl rfl
+  have hK6p : NoRootb K6p := hK6.setE (by simp [intE])
+  have hview : RhsT K6p [] (.view 5) Esv K6p := by
+    have := RhsT.view (Γ := K6p) (F := []) (y := 5) (E := Ev) (t := .int) (by simp [K6p, K6, A2.setE, upd])
+      rfl rfl rfl
     simpa [derive, Mode.isRoot, rootKind, Ev, Esv, vi, sl] using this
-  have h6 := StmtT.letv (ξ := .none) (P := P) (x := 6) (r := .view 5) (E := Esv) (F := []) (Γ := K6) (Γ1 := K6)
-    rfl (by simp [K6, K5, K4', K4, K3, K2', K2, K1, A2.setE, upd, A2.kill]) (by simp) hview hc.ofNone
-    (((hL8.exitScope 8).exitScope 7).endOK _)
+  have h6 := StmtT.letv (ξ := .none) (P := P) (x := 6) (r := .view 5) (E := Esv) (F := []) (Γ := K6p)
+    (Γ1 := K6p) rfl (by simp [K6p, K6, K5, K4', K4, K3, K2', K2, K1, A2.setE, upd, A2.kill]) (by simp) hview
+    hc.ofNone (((hL8.exitScope 8).exitScope 7).endOK _)
+  -- `( vec_push src k )`: a number, so nothing moves and nothing ends
+  have hpk : A2.setE (A2.kill .realloc Ty.int.holdsView 5 K6p) 5 { Ev with held := Ev.held ++ ownHeld true .int [] }
+      = K6p := by
+    funext v
+    rcases v with _ | _ | _ | _ | _ | _ | _ | _ | _ | _ | v <;>
+      simp [K6p, K6, K5, K4', K4, K3, K2', K2, K1, A2.setE, upd, A2.kill, killE, hits, Ev, Ev0, Eb, Eb0, Eo,
+        intE, Entry.vdeps, Mode.ownSlot, ownHeld, Ty.holdsView]
+  have hpush : StmtT P .none K6p [] (.push 5 9) K6p := by
+    have := StmtT.push (ξ := .none) (P := P) (Γ := K6p) (Γ1 := K6p) (F := []) (x := 5) (y := 9) (Ex := Ev)
+      (Ey := intE) (Ex1 := Ev) (t := .int) (D := []) (by simp [K6p, K6, A2.setE, upd]) rfl rfl (Or.inl rfl)
+      (by simp) (by simp [K6p, A2.setE]) rfl rfl (by decide) PushArg.int (by simp [roots])
+      (by simp [K6p, K6, A2.setE, upd]) rfl (DtorSafe.of_none (fun v E h => (hK6p v E h).2.1) _ _ _)
+      (fun h => by simp [Ev] at h)
+    rwa [hpk] at this
+  have hseq := StmtT.seq (ξ := .none) rfl hpush h6.ofNone
+  have h9 := StmtT.letv (ξ := .none) (P := P) (x := 9) (r := .expr (.lit 5)) (E := intE) (F := []) (Γ := K6)
+    (Γ1 := K6) rfl (by simp [K6, K5, K4', K4, K3, K2', K2, K1, A2.setE, upd, A2.kill]) (by simp)
+    (RhsT.expr ExprT.lit) hseq.ofNone ((((hL8.exitScope 8).exitScope 7).exitScope 6).endOK _)
   have h5 := StmtT.letv (ξ := .none) (P := P) (x := 5) (r := .new .int) (E := Ev) (F := []) (Γ := K5) (Γ1 := K5)
-    rfl (by simp [K5, K4', K4, K3, K2', K2, K1, A2.setE, upd, A2.kill]) (by simp) (RhsT.new rfl) h6.ofNone
-    ((((hL8.exitScope 8).exitScope 7).exitScope 6).endOK _)
+    rfl (by simp [K5, K4', K4, K3, K2', K2, K1, A2.setE, upd, A2.kill]) (by simp) (RhsT.new rfl) h9.ofNone
+    (((((hL8.exitScope 8).exitScope 7).exitScope 6).exitScope 9).endOK _)
   have hpair4 : RhsT K4 [] (.pair 2 3) Eo K4' := by
     have := RhsT.pair (Γ := K4) (F := []) (y := 2) (z := 3) (Ey := Eb) (Ez := intE)
       (by simp [K4, K3, A2.setE, upd]) rfl
@@ -319,10 +340,10 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
     simpa [Eo, Eb, Eb0, K4', intE, box] using this
   have h4 := StmtT.letv (ξ := .none) (P := P) (x := 4) (r := .pair 2 3) (E := Eo) (F := []) (Γ := K4) (Γ1 := K4')
     rfl (by simp [K4, K3, K2', K2, K1, A2.setE, upd, A2.kill]) (by simp) hpair4 h5.ofNone
-    (((((hL8.exitScope 8).exitScope 7).exitScope 6).exitScope 5).endOK _)
+    ((((((hL8.exitScope 8).exitScope 7).exitScope 6).exitScope 9).exitScope 5).endOK _)
   have h3 := StmtT.letv (ξ := .none) (P := P) (x := 3) (r := .expr (.lit 9)) (E := intE) (F := []) (Γ := K3)
     (Γ1 := K3) rfl (by simp [K3, K2', K2, K1, A2.setE, upd, A2.kill]) (by simp) (RhsT.expr ExprT.lit) h4.ofNone
-    ((((((hL8.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).endOK _)
+    (((((((hL8.exitScope 8).exitScope 7).exitScope 6).exitScope 9).exitScope 5).exitScope 4).endOK _)
   have hpair2 : RhsT K2 [] (.pair 0 1) Eb K2' := by
     have := RhsT.pair (Γ := K2) (F := []) (y := 0) (z := 1) (Ey := Ev) (Ez := intE)
       (by simp [K2, K1, A2.setE, upd]) rfl
@@ -333,13 +354,13 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
     simpa [Eb, Ev, Ev0, K2', intE, bag] using this
   have h2 := StmtT.letv (ξ := .none) (P := P) (x := 2) (r := .pair 0 1) (E := Eb) (F := []) (Γ := K2) (Γ1 := K2')
     rfl (by simp [K2, K1, A2.setE, upd]) (by simp) hpair2 h3.ofNone
-    (((((((hL8.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).endOK _)
+    ((((((((hL8.exitScope 8).exitScope 7).exitScope 6).exitScope 9).exitScope 5).exitScope 4).exitScope 3).endOK _)
   have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .expr (.lit 5)) (E := intE) (F := []) (Γ := K1)
     (Γ1 := K1) rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) h2.ofNone
-    ((((((((hL8.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).exitScope 2).endOK _)
+    (((((((((hL8.exitScope 8).exitScope 7).exitScope 6).exitScope 9).exitScope 5).exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .new .int) (E := Ev) (F := []) (Γ := fun _ => none)
     (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.new rfl) h1.ofNone
-    (((((((((hL8.exitScope 8).exitScope 7).exitScope 6).exitScope 5).exitScope 4).exitScope 3).exitScope 2).exitScope
+    ((((((((((hL8.exitScope 8).exitScope 7).exitScope 6).exitScope 9).exitScope 5).exitScope 4).exitScope 3).exitScope 2).exitScope
       1).endOK _)⟩
 
 theorem main_codes : main.codesOK P := by simp [main, Stmt.codesOK, Rhs.codeOK]
@@ -347,13 +368,13 @@ theorem main_codes : main.codesOK P := by simp [main, Stmt.codesOK, Rhs.codeOK]
 /-- **The program is memory safe**: a callee that pushes through a field of
     a field of its `inout` parameter, called with an argument that holds a
     view, which is read after the call. -/
-theorem main_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 9) main (.ok m' s')) :
+theorem main_safe {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem 10) main (.ok m' s')) :
     ¬ Stuck P m' s' := by
   obtain ⟨Δ, ht⟩ := main_typed (ξ := .none)
   exact memory_safe prog_ok prog_codes ht rfl main_codes (by decide) hr
 
 /-- ... and leaks nothing when it ends. -/
-theorem main_no_leak {m' : Mem} (hr : Steps P (emptyMem 9) main (.ok m' .skip)) :
+theorem main_no_leak {m' : Mem} (hr : Steps P (emptyMem 10) main (.ok m' .skip)) :
     ∀ i, m'.alloc i = false := by
   obtain ⟨Δ, ht⟩ := main_typed (ξ := .none)
   exact no_leak_end prog_ok prog_codes ht rfl main_codes (by decide) hr
