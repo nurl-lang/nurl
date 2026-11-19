@@ -2070,7 +2070,7 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       such a closure may: the binding is moved out after (`CallT`'s `sink`
       argument), so its frame runs nothing.  The method returns no owned value
       (a choice of this cut, not a need of the proof). -/
-  | callcE {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt}
+  | callcE {Γ Γ1 Δ : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt}
       {Ec E : Entry} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff}
       (h1 : k.src = true) (h2 : Γ x = none) (h3 : x ∉ F) (h4 : Γ c = some Ec)
       (h5 : Ec.ty.undtor = .fn ms q)
@@ -2081,18 +2081,25 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       -- closure whose environment holds destructor values, called on a closure
       -- that holds nothing the code cannot see (its glue's own parameter); the
       -- environment goes to the code for good
-      (h10 : (sig.params = [(.inout b, .fn ms q)] ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q) ∨
-        (sig.params = [(.sink, Ec.ty)] ∧ Ec.vdeps = [] ∧ Ec.mode = .own ∧ Ec.live = true ∧
+      -- (AGORA-927: the `inout` interface may take parameters beside the
+      -- receiver, `zs`, each of whose dependencies is a binding's, an integer's
+      -- too: the run-time form passes them beside the fresh binding the
+      -- environment is handed to, which none of them may name. An integer
+      -- argument with stale dependencies is not typed through `callcE`; no
+      -- nurlc program produces one. The owned interface takes none)
+      (h10 : (∃ ps, sig.params = (.inout b, .fn ms q) :: ps ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q ∧
+          ∀ z ∈ zs, ∀ d ∈ (argE Γ z).vdeps, (Γ d.root).isSome) ∨
+        (sig.params = [(.sink, Ec.ty)] ∧ zs = [] ∧ Ec.vdeps = [] ∧ Ec.mode = .own ∧ Ec.live = true ∧
           q.drops = true ∧ sig.resOwn = false))
       (h11 : sig.lends = []) (h12 : sig.rholds = [])
       (h13 : sig.outHolds = []) (h14 : NoPin Γ c) (h15 : DtorSafe Γ .replace false c)
-      (h16 : CallT P (kill .replace false c Γ) F σ [c] E Γ1)
+      (h16 : CallT P (kill .replace false c Γ) F σ (c :: zs) E Γ1)
       (h17 : StmtT P (ξ.under x) (kill .replace false c (setE Γ1 x E)) F k Δ)
       (h18 : EndOK Δ x) (h19 : ¬ ThruFn P σ)
       -- (A2-drop.3a: as `letcall`'s)
       (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns :=
         by dtor_head) :
-      StmtT P ξ Γ F (.callcE x c j [] k) (exitScope x Δ)
+      StmtT P ξ Γ F (.callcE x c j zs k) (exitScope x Δ)
   | scopeD {Γ Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} :
       -- (A2-drop.3a: of the destructor type `Ty.dtor f t`, whose destructor `f` is)
       -- (A2-drop.3b: or a `Vec` of such values; Agora #782: whose elements may

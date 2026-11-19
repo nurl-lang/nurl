@@ -2518,6 +2518,38 @@ theorem argE_canon (h : S.OK) {a : Var} {Ea : Entry} (ha : Γa a = some Ea) :
     argE (S.canon Γa) (S.ρ a) = S.liftE a Ea := by
   unfold argE; rw [canon_ρ h, ha]; rfl
 
+/-- AGORA-927: an argument whose dependencies are all bindings' keeps them so
+    under the renaming: a renamed one is the renamed binding's, and what a
+    lift adds is the caller's frame's. -/
+theorem argE_canon_rooted (h : S.OK) (hab : S.AbsOK Γa) {a : Var}
+    (hr : ∀ d ∈ (argE Γa a).vdeps, (Γa d.root).isSome) :
+    ∀ d ∈ (argE (S.canon Γa) (S.ρ a)).vdeps, (S.canon Γa d.root).isSome := by
+  intro d hd
+  cases hE : Γa a with
+  | none =>
+    unfold argE at hd; rw [canon_ρ h, hE] at hd
+    simp [intE, Entry.vdeps, Mode.ownSlot] at hd
+  | some E =>
+    rw [argE_canon h hE] at hd
+    unfold argE at hr; rw [hE] at hr
+    by_cases hrb : E.mode = .rootb
+    · have hvd : (S.liftE a E).vdeps = (S.pe a).vdeps := by simp [liftE, hrb, Entry.vdeps]
+      rw [hvd] at hd
+      rcases pe_dep h hd with ⟨hout, hex⟩ | ⟨hs, _⟩
+      · obtain ⟨E', hE', _⟩ := canon_frameRoot (Γa := Γa) h hout hex
+        rw [hE']; rfl
+      · obtain ⟨w, b, t, rfl, hb, _, _, _⟩ := sym_ren h hs
+        obtain ⟨Ew, hEw, _, _⟩ := hab.2.2 w (b, false) hb
+        show (S.canon Γa (S.ρ w)).isSome = true
+        rw [canon_ρ h, hEw]; rfl
+    · rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
+      · have := hr d0 (by simpa using hd0)
+        cases h0 : Γa d0.root with
+        | none => rw [h0] at this; cases this
+        | some E0 => show (S.canon Γa (S.ρ d0.root)).isSome = true; rw [canon_ρ h, h0]; rfl
+      · obtain ⟨E', hE', _⟩ := canon_frameRoot (Γa := Γa) h (A_out h ha) (A_root h ha)
+        rw [hE']; rfl
+
 theorem sub_rds_append {a b : List Dep} {L : List Dep} (ha : a ⊆ rds S.ρ L ++ S.A)
     (hb : b ⊆ rds S.ρ L ++ S.A) : a ++ b ⊆ rds S.ρ L ++ S.A := by
   intro d hd; rcases List.mem_append.mp hd with h | h
@@ -4863,7 +4895,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     · rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
       · exact hnz z0 hz0 d0 hd0 hb (h.inj _ _ hdr)
       · exact A_out h ha z0 hdr.symm
-  | @callcE _ Γ Γ1 Δ F x c j k Ec E ms q σ sig b hks hx hxF hc htc hcan hq hj hσ hsp hsl hsr hso hny hdc hcT hk
+  | @callcE _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig b hks hx hxF hc htc hcan hq hj hσ hsp hsl hsr hso hny hdc hcT hk
       hpe hnσ hdk ih =>
     intro _ hab hw hn hT
     -- the package may be replaced: what depends on it ends where it is placed
@@ -4899,12 +4931,15 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       rcases canDo_replace_cases hcan with h0 | h0
       · exact Or.inl h0
       · exact Or.inr (Or.inl h0)
-    have hsp' : (sig.params = [(.inout b, .fn ms q)] ∧ (S.liftE c Ec).ty = .fn ms q ∧ Cross.send.Le q) ∨
-        (sig.params = [(.sink, (S.liftE c Ec).ty)] ∧ (S.liftE c Ec).vdeps = [] ∧ (S.liftE c Ec).mode = .own ∧
-          (S.liftE c Ec).live = true ∧ q.drops = true ∧ sig.resOwn = false) := by
-      rcases hsp with ⟨h1, h2, h3⟩ | ⟨h1, hv, hm, hl, hd, hr⟩
-      · exact Or.inl ⟨h1, by rw [liftE_ty' h hab hc]; exact h2, h3⟩
-      · refine Or.inr ⟨by rw [liftE_ty' h hab hc]; exact h1, ?_, by rw [liftE_mode c hrb, hm]; rfl,
+    have hsp' : (∃ ps, sig.params = (.inout b, .fn ms q) :: ps ∧ (S.liftE c Ec).ty = .fn ms q ∧ Cross.send.Le q ∧
+          ∀ z ∈ zs.map S.ρ, ∀ d ∈ (argE (S.canon Γ) z).vdeps, (S.canon Γ d.root).isSome) ∨
+        (sig.params = [(.sink, (S.liftE c Ec).ty)] ∧ zs.map S.ρ = [] ∧ (S.liftE c Ec).vdeps = [] ∧
+          (S.liftE c Ec).mode = .own ∧ (S.liftE c Ec).live = true ∧ q.drops = true ∧ sig.resOwn = false) := by
+      rcases hsp with ⟨ps, h1, h2, h3, h4⟩ | ⟨h1, hz, hv, hm, hl, hd, hr⟩
+      · refine Or.inl ⟨ps, h1, by rw [liftE_ty' h hab hc]; exact h2, h3, fun z' hz' => ?_⟩
+        obtain ⟨z, hz, rfl⟩ := List.mem_map.mp hz'
+        exact argE_canon_rooted h hab (h4 z hz)
+      · refine Or.inr ⟨by rw [liftE_ty' h hab hc]; exact h1, by rw [hz]; rfl, ?_, by rw [liftE_mode c hrb, hm]; rfl,
           by rw [liftE_live]; exact hl, hd, hr⟩
         have ho : Ec.mode.ownSlot = true := by rw [hm]; rfl
         have hh : Ec.held = [] := by simpa [Entry.vdeps, ho] using hv

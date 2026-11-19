@@ -79,7 +79,7 @@ theorem StmtT.freshOK {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : 
     have hEf : E.fresh = false := by
       obtain ⟨_, _, _, _, _, _, hE, _, _⟩ := hcT; rw [hE]; rfl
     exact FreshOK.exitScope (ih hks (h1.bind hx1 (FreshE.of_fresh (by rw [recvRes_fresh]; exact hEf)))) x
-  | @callcE _ Γ Γ1 Δ F x c j k Ec E ms q σ sig b hks hx _ _ _ _ _ _ _ _ _ _ _ _ _ hcT _ _ _ _ ih =>
+  | @callcE _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig b hks hx _ _ _ _ _ _ _ _ _ _ _ _ _ hcT _ _ _ _ ih =>
     intro _ h
     obtain ⟨h1, hE, _⟩ := hcT.freshOK (h.kill _ _ _)
     have hx1 : Γ1 x = none := by

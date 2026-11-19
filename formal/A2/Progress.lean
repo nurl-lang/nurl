@@ -569,14 +569,15 @@ theorem progress {P : Prog}
       sig.params.head? = some (.inp, Ec.ty) → CallT P Γ F σ (c :: zs) E Γ1 →
       (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
       MemCodes P m → Inv m Γ F (.callc x c j σ zs k) → ∃ r, Step P m (.callc x c j σ zs k) r)
-    (hhand : ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt} {Ec E : Entry}
+    (hhand : ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt} {Ec E : Entry}
       {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff} {m : Mem},
       Γ x = none → Γ c = some Ec → Ec.ty.undtor = .fn ms q → canDo Ec.mode .replace → ms[j]? = some σ →
       P[σ]? = some sig →
-      ((sig.params = [(.inout b, .fn ms q)] ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q) ∨
-      (sig.params = [(.sink, Ec.ty)] ∧ Ec.vdeps = [] ∧ Ec.mode = .own ∧ Ec.live = true ∧
-        q.drops = true ∧ sig.resOwn = false)) → CallT P (kill .replace false c Γ) F σ [c] E Γ1 →
-      MemCodes P m → Inv m Γ F (.callcE x c j [] k) → ∃ r, Step P m (.callcE x c j [] k) r)
+      ((∃ ps, sig.params = (.inout b, .fn ms q) :: ps ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q ∧
+          ∀ z ∈ zs, ∀ d ∈ (argE Γ z).vdeps, (Γ d.root).isSome) ∨
+      (sig.params = [(.sink, Ec.ty)] ∧ zs = [] ∧ Ec.vdeps = [] ∧ Ec.mode = .own ∧ Ec.live = true ∧
+        q.drops = true ∧ sig.resOwn = false)) → CallT P (kill .replace false c Γ) F σ (c :: zs) E Γ1 →
+      MemCodes P m → Inv m Γ F (.callcE x c j zs k) → ∃ r, Step P m (.callcE x c j zs k) r)
     {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) :
     ∀ {m : Mem}, MemCodes P m → Inv m Γ F s → s = .skip ∨ Blocked m s ∨ (∃ n e, ExitAt s n e) ∨ ∃ r, Step P m s r := by
   induction ht with
@@ -917,9 +918,15 @@ theorem progress {P : Prog}
     obtain ⟨T, hT, _⟩ := hi.own_val hy hl (by rcases hm with h | ⟨b, h, _⟩ <;> rw [h] <;> rfl)
     rw [hT] at hv; cases hv
     have hmx : m.st x = none := by
-      have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
+      have := hi.dom x; rw [hx] at this
+      cases h : m.st x with
+      | none => rfl
+      | some _ => rw [h] at this; simp at this
     have hmz : m.st z = none := by
-      have := hi.dom z; rw [hz] at this; cases h : m.st z <;> simp_all
+      have := hi.dom z; rw [hz] at this
+      cases h : m.st z with
+      | none => rfl
+      | some _ => rw [h] at this; simp at this
     exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.unpair hT hmx hmz hxz⟩
 
 end A2

@@ -286,7 +286,7 @@ theorem glue_body : ∃ Δ, StmtT Pc ξ (sigCtx glue) [] glue.body Δ ∧
     (k := .assign 1 (.expr (.lit 0))) (Ec := ECD) (E := intE) (ms := [2]) (q := .dropd) (σ := 2) (sig := glue)
     (b := .replace) rfl h2 (by simp) h0 rfl (Or.inl rfl) (Or.inr rfl) rfl rfl
     -- Agora #609: the interface takes the receiver owned
-    (Or.inr ⟨rfl, by simp [ECD, Entry.vdeps, Mode.ownSlot], rfl, rfl, rfl, rfl⟩)
+    (Or.inr ⟨rfl, rfl, by simp [ECD, Entry.vdeps, Mode.ownSlot], rfl, rfl, rfl, rfl⟩)
     rfl rfl rfl (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _) hcall hasg.ofNone
     (hKd.endOK _) glue_not_thru (fun ho => by simp [glue] at ho)
   refine ⟨_, hce.ofNone, hKd.exitScope 2, ?_⟩
@@ -665,7 +665,7 @@ theorem glue_body2 : ∃ Δ, StmtT Pd ξ (sigCtx glueD) [] glueD.body Δ ∧
     (k := .assign 1 (.expr (.lit 0))) (Ec := ECD2) (E := intE) (ms := [2, 4]) (q := .dropd) (σ := 2) (sig := glueD)
     (b := .replace) rfl h2 (by simp) h0 rfl (Or.inl rfl) (Or.inr rfl) rfl rfl
     -- Agora #609: the interface takes the receiver owned
-    (Or.inr ⟨rfl, by simp [ECD2, Entry.vdeps, Mode.ownSlot], rfl, rfl, rfl, rfl⟩)
+    (Or.inr ⟨rfl, rfl, by simp [ECD2, Entry.vdeps, Mode.ownSlot], rfl, rfl, rfl, rfl⟩)
     rfl rfl rfl (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _) hcall hasg.ofNone
     (hKd.endOK _) glue_not_thru2 (fun ho => by simp [glueD] at ho)
   refine ⟨_, hce.ofNone, hKd.exitScope 2, ?_⟩

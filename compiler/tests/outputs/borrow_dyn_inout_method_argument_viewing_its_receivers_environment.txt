@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_dyn_inout_method_argument_viewing_its_receivers_environment.nu:30:5: error: 'k' reaches 'add' through argument 1, whose buffer it may move or free, and through argument 2, which points into it or borrows from it: inside the call the two are unrelated names, and the change through one leaves the other dangling. Pass a copy that owns its data as one of them (mem_dup, string_from, slice_to_vec), or take what the second one reaches inside the callee.
+    ( nurl_println_int ( add k s ) )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
