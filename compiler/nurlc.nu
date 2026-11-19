@@ -115392,7 +115392,10 @@ unsafe @ __jrnl_elide i n b lib → v {
             ( __jrnl_argxfer_plain fi )
         } {}
         // A function no panic can reach journals none of its bindings.
-        ? & != 0 ( nurl_peek # s g_dce_live fi ) == 0 ( nurl_peek # s g_mp fi ) {
+        // (Asked only of one that may run inside an extent: outside one,
+        // every journal call is blanked above already, so these scans and
+        // the one below find nothing — each was a pass over the body.)
+        ? & & != 0 ( nurl_peek # s g_dce_live fi ) == 0 ( nurl_peek # s g_mp fi ) != 0 ( nurl_peek # s g_ext fi ) {
             ( __jrnl_blank_calls fi `  call void @nurl_journal_push_drop2(` 37 )
             ( __jrnl_blank_calls fi `  call void @nurl_journal_forget_slot(` 38 )
             // (…nor, an env's drop method, the env's block: the runtime
@@ -115404,7 +115407,7 @@ unsafe @ __jrnl_elide i n b lib → v {
         ? & & != 0 ( nurl_peek # s g_dce_live fi ) != 0 ( nurl_peek # s g_mp fi ) != 0 ( nurl_peek # s g_ext fi ) {
             ( __jrnl_slot_elide fi )
         } {}
-        ? != 0 ( nurl_peek # s g_dce_live fi ) {
+        ? & != 0 ( nurl_peek # s g_dce_live fi ) != 0 ( nurl_peek # s g_ext fi ) {
             : i en ( nurl_peek # s g_dce_end fi )
             : ~ i p ( nurl_peek # s g_dce_start fi )
             ~ < p en {
