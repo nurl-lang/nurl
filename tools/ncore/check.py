@@ -1595,6 +1595,19 @@ class FnCheck:
             if k >= len(ops):
                 continue
             op = ops[k]
+            # a binding taken into a literal argument, beside another
+            # argument that views it: `( use2 @ S { b 0 } sv )`, as `( use3
+            # b sv )` is - inside the call the two are unrelated names
+            # (agora #926)
+            if op[0] == "v" and self.fn.vars[op[1]].kind == "temp":
+                for m, av in enumerate(avs):
+                    if m == k:
+                        continue
+                    hit = self.views_into(av, self.handle_places(avs[k]))
+                    if hit is not None:
+                        self.err(line, f"{name} takes {self.vname(hit)} in argument {k + 1} "
+                                       f"while argument {m + 1} views it")
+                        break
             if (avs[k].own == "O" and avs[k].loans and op[0] == "v"
                     and (avs[k].call or op[1] in self.call_binds)
                     and ((k < len(sm["modes"]) and sm["modes"][k] == "sink")
@@ -2587,6 +2600,25 @@ class FnCheck:
                               {(dest, a[1]) if a[0] == src else a for a in av.alias},
                               {(hp, sub.get(l, l)) for hp, l in av.held}, av.call)
         st.dead = frozenset(st.dead) - set(sub.values())
+
+    def handle_places(self, av):
+        """The places a value holds the handle of (a binding taken into a
+        literal)."""
+        ls = set(av.loans) | hloans(av.held)
+        return [self.loans[l][0] for l in ls if l in self.loans and self.loans[l][1] == "handle"]
+
+    def views_into(self, av, places):
+        """The binding of one of `places` that value `av` views into, or None."""
+        if not places:
+            return None
+        ls = set(av.loans) | hloans(av.held)
+        for l in ls:
+            if l in self.loans and self.loans[l][1] == "view":
+                v = self.loans[l][0]
+                for h in places:
+                    if v[0] == h[0] and tuple(v[1][:len(h[1])]) == tuple(h[1]):
+                        return h[0]
+        return None
 
     def rehome_views(self, st, src, went):
         """A binding moved into a container or a holder (`went`): a view of
