@@ -36895,7 +36895,17 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         : b __sink_bare & & ( str_has_index callee_sink arg_idx ) ( is_ident_tok bck_arg_tt ) ! __sink_plain_wrap
         ? & __sink_bare ! ? __sink_bare ( __plain_scalar_lty at ) F
         { : s sink_ptr ( nurl_sym_get2 syms bck_arg_val `__ptr` )
-            ? & ! ( __is_autodrop_enum at syms ) | ( mem_slice_owned syms bck_arg_val )
+            // AGORA-892: a slice binding that owns its buffer moves to the
+            // `sink`, as a Vec does: the callee owns it from entry on
+            // (__own_sink_slice_params), and this binding's slot is left
+            // empty, so its own release frees nothing (the journal is keyed
+            // by the buffer, which the callee's release ends). A later use
+            // is a use after move.
+            : b __sink_slice_mv & & ! ( __is_autodrop_enum at syms ) ( mem_slice_owned syms bck_arg_val ) ( mem_is_slice_ty ( nurl_llty ( nurl_sym_get syms bck_arg_val ) ) )
+            ? __sink_slice_mv {
+                ( __slice_slot_empty syms bck_arg_val ( nurl_llty ( nurl_sym_get syms bck_arg_val ) ) )
+            } {}
+            ? & & ! __sink_slice_mv ! ( __is_autodrop_enum at syms ) | ( mem_slice_owned syms bck_arg_val )
             ( nurl_sym_has_word syms `__owned_struct_fields__` sink_ptr )
             { ( die lex ( nurl_str_cat3
                 `'` bck_arg_val
@@ -94548,6 +94558,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_sym_def syms `__owned_closure_envs__` `` )
     // (after the set exists: a `sink` closure parameter joins it.)
     ( __own_sink_closure_params syms cg sink_acc )
+    ( __own_sink_slice_params syms cg sink_acc )
     // Register names restart per function: no temporary outlives one.
     ( __clo_tmp_set `` )
 
@@ -95557,6 +95568,36 @@ unsafe @ __alloca_struct_params i syms i cg → v {
             ( nurl_print `  ` ) ( nurl_print env ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
             ( mem_clo_slot_new syms cg name env )
             ( mem_own_closure_add syms name )
+        } {}
+        = index + index 1
+    }
+}
+
+// A `sink` slice parameter is this function's own from entry on, exactly
+// like a local bound to a fresh slice: its buffer (and its elements, where
+// the slice owns them) is released on every way out unless it moves on —
+// returned, handed to another `sink`, stored into an owner. The caller
+// hands over a slice it owns, or a copy of anything else
+// (mem_sink_slice_arg), so what lands here is always this frame's to free
+// (AGORA-892: before, nobody released it).
+@ __own_sink_slice_params i syms i cg s sinks → v {
+    ? == 0 ( nurl_str_len sinks ) { ^ v } {}
+    : ~ s names ( nurl_sym_get syms `__fn_param_names__` )
+    : ~ i index 0
+    ~ != 0 ( nurl_str_len names ) {
+        : s name ( str_first_word names ) = names ( str_skip_word names )
+        : s ll ( nurl_llty ( nurl_sym_get syms name ) )
+        ? & & ( mem_is_slice_ty ll ) ( str_has_index sinks index ) == 0 ( nurl_sym_len2 syms name `__inout` ) {
+            : ~ s pptr ( nurl_sym_get2 syms name `__ptr` )
+            ? == 0 ( nurl_str_len pptr ) {
+                = pptr ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print pptr ) ( nurl_print ` = alloca ` ) ( nurl_print ll ) ( nurl_print `\n` )
+                ( nurl_print `  store ` ) ( nurl_print ll ) ( nurl_print ` %` ) ( nurl_print name ) ( nurl_print `, ptr ` ) ( nurl_print pptr ) ( nurl_print `\n` )
+                ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) pptr )
+            } {}
+            ( mem_own_add syms name )
+            ( mem_slice_decl_add syms name )
+            ( mem_journal_push_slice cg ll pptr )
         } {}
         = index + index 1
     }
