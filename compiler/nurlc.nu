@@ -62403,7 +62403,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // of views too — __bck_sv_carry; not into its own new
                         // value, nor a closure's capture; agora #563.)
                         ? & ! s_self != 0 ( nurl_sym_len g_bck ( bck_bkey `vsv_` ( nurl_str_int ( bck_path_root svid ) ) ) ) {
-                            ? == 0 ( nurl_sym_len g_bck ( nurl_str_cat4 `sk_` ( nurl_sym_get2 g_bck `rv_` svn ) `_` ( bck_field rec 3 ) ) ) { ( __bck_sv_carry svid s_own ? == 0 ( nurl_str_len s_pko ) ( bck_field rec 6 ) `` ) } {}
+                            ? == 0 ( nurl_sym_len g_bck ( nurl_str_cat4 `sk_` ( nurl_sym_get2 g_bck `rv_` svn ) `_` ( bck_field rec 3 ) ) ) { ( __bck_sv_carry svid s_own ? == 0 ( nurl_str_len s_pko ) ( bck_field rec 6 ) `` ( bck_field_int rec 3 ) ) } {}
                         } {}
                         : i cur ? s_self BCK_UNINIT ( bck_st_get st svid )
                         ? & ! s_self == cur BCK_STORED { ( bck_diag_stored svid ( bck_field_int rec 3 ) T ) } {}
@@ -70493,7 +70493,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
 // fields at their new place, so the owner they went to depends on those —
 // `: P p @ P { o 0 }` ties `p` to `p.s.buf`, and growing that field ends
 // `p` as growing `o.buf` ended `o` (agora #563).
-@ __bck_sv_carry i svid s own s f6 → v {
+@ __bck_sv_carry i svid s own s f6 i line → v {
     : s svs ( nurl_str_int svid )
     : s vd ( nurl_sym_get g_bck ( bck_bkey `vds_` svs ) )
     : s vi ( nurl_sym_get g_bck ( bck_bkey `vdi_` svs ) )
@@ -70528,6 +70528,23 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // taken back out of it views those fields of its own (__bck_sv_inherit).)
     ? == ( nurl_str_get own 0 ) 61 {
         : s cr ( nurl_str_int ( bck_path_root ( nurl_str_to_int ( nurl_str_slice own 1 - ( nurl_str_len own ) 1 ) ) ) )
+        // (…a container the caller holds — a parameter this function does
+        // not own: the caller is told nothing of what its elements view, and
+        // a value it takes back out and grows would read freed memory —
+        // refused; agora #563.)
+        ? & != 0 ( nurl_sym_len g_bck ( bck_bkey `pp_` cr ) ) == 0 ( nurl_sym_len g_bck ( bck_bkey `po_` cr ) ) {
+            : s tag ( nurl_str_cat4 `svp:` svs `:` cr )
+            : s ws ( nurl_sym_get g_bck `warnset` )
+            ? ! ( str_contains_word ws tag ) {
+                ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+                : s on ( bck_name_show ( nurl_sym_get2 g_bck `rv_` svs ) )
+                : s pn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` cr ) )
+                : s m1 ( nurl_str_cat4 `'` on `' holds views of its own fields, and it is stored into '` ( nurl_str_cat pn `', which its caller holds: the caller cannot see that the elements view their own storage, so a value it takes back out and grows would leave the view dangling. ` ) )
+                : s m2 ( nurl_str_cat3 `Hand the value back instead (its caller ties it), or store views that own their data in '` on `' (slice_to_vec, string_from).` )
+                ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat m1 m2 ) )
+            } {}
+            ^ v
+        } {}
         : s ck ( bck_bkey `svr_` cr )
         : ~ s rels ( nurl_sym_get g_bck ck )
         : ~ s mr ( nurl_str_cat mine `` )
