@@ -555,3 +555,4 @@ import A3
 #print axioms A2.RSetup.heldSrc_lift
 #print axioms A2.RSetup.heldSrc_held_lift
 #print axioms A2.RSetup.memDeps_heldA
+#print axioms A2.heldFresh_view_witness

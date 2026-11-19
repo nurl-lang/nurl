@@ -116,6 +116,21 @@ theorem StmtT.unheld {P : Prog} (hP : ProgOK P) {ξ : Exits} {Γ Δ : Ctx} {F : 
     StmtT P ξ Γ F s (unheldC Δ) :=
   StmtT.weakenOut hw hn ht (Or.inr (weaker_unheldC (ht.wf hP hw) (ht.names hP hsrc hn)))
 
+/-! ### A witness: the rule fires -/
+
+/-- **A held-fresh view**: a view of a local `Vec int` (an owner of a type that
+    holds no views) may carry the bit; its `held` is the owner's, `[]`. -/
+theorem heldFresh_view_witness {F : List Var} :
+    RhsT (upd (fun _ => none) 0 (some ⟨.vec .int, .own, true, [], [], false, false, false, false⟩)) F
+      (.view 0) ⟨.slice .int, .bor, true, [⟨0, .view⟩], [], false, false, false, true⟩
+      (upd (fun _ => none) 0 (some ⟨.vec .int, .own, true, [], [], false, false, false, false⟩)) := by
+  have h := RhsT.view (Γ := upd (fun _ => none) 0 (some ⟨.vec .int, .own, true, [], [], false, false, false, false⟩))
+    (F := F) (y := 0) (E := ⟨.vec .int, .own, true, [], [], false, false, false, false⟩) (t := .int) (h := true)
+    (by simp [upd]) rfl rfl rfl
+    (fun _ => ⟨⟨.vec .int, .own, true, [], [], false, false, false, false⟩, by simp [upd],
+      Or.inl ⟨rfl, by simp [Ty.holdsView]⟩⟩)
+  simpa [derive, Mode.isRoot, rootKind] using h
+
 /-! ### The negative side: a borrowed parameter's holdings are its caller's -/
 
 /-- **A borrowed parameter is no held-fresh source**: what it holds, in
