@@ -58,4 +58,5 @@ import A2.FreshWitness
 import A2.Unfresh
 import A2.UnheldFresh
 import A2.StoreViewWitness
+import A2.ParamViewWitness
 import A2.FreshClosureWitness

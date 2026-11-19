@@ -575,3 +575,20 @@ import A3
 #print axioms A2.StoreViewWitness.main_typed
 #print axioms A2.StoreViewWitness.main_safe
 #print axioms A2.StoreViewWitness.main_no_leak
+-- Agora #3932 (#909's own example): a fresh borrow that is not held-fresh may store anything, a
+-- view of a borrowed parameter too: a call lifts it, and every owner of a type that holds views,
+-- with all the arguments hold, and that is where the store's dependencies land (pushArg_ren_sub,
+-- its borrowed-parameter case derive_lift_rootb); no `edit false` of a value that is not the
+-- frame's own leaves its borrow held-fresh (A2/ParamViewWitness.lean)
+#print axioms A2.RSetup.derive_lift_rootb
+#print axioms A2.RSetup.pushArg_ren_sub
+#print axioms A2.ParamViewWitness.edit_false_unfresh_unheld
+#print axioms A2.ParamViewWitness.param_store_unheld
+#print axioms A2.ParamViewWitness.stale_store_unheld
+#print axioms A2.ParamViewWitness.edit_typed
+#print axioms A2.ParamViewWitness.dtor_not_thru
+#print axioms A2.ParamViewWitness.dtor_ok
+#print axioms A2.ParamViewWitness.prog_ok
+#print axioms A2.ParamViewWitness.main_typed
+#print axioms A2.ParamViewWitness.main_safe
+#print axioms A2.ParamViewWitness.main_no_leak
