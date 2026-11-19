@@ -598,3 +598,12 @@ import A3
 -- (a root of its own memory dependencies; a `sink` one, of any) admits no `CallT`
 #print axioms A2.CallT.not_self_view
 #print axioms A2.CallT.not_self_dep_sink
+-- AGORA-909 (github#2041): closure code, called through its package with an argument that holds
+-- views, that stores that view through a fresh borrow of its own local: an `edit false`, not
+-- through-changing (A2/ClosureParamViewWitness.lean)
+#print axioms A2.ClosureParamViewWitness.code_not_thru
+#print axioms A2.ClosureParamViewWitness.code_impl
+#print axioms A2.ClosureParamViewWitness.prog_ok
+#print axioms A2.ClosureParamViewWitness.main_typed
+#print axioms A2.ClosureParamViewWitness.main_safe
+#print axioms A2.ClosureParamViewWitness.main_no_leak

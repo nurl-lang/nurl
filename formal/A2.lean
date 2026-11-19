@@ -59,5 +59,6 @@ import A2.Unfresh
 import A2.UnheldFresh
 import A2.StoreViewWitness
 import A2.ParamViewWitness
+import A2.ClosureParamViewWitness
 import A2.FreshClosureWitness
 import A2.SelfViewCall

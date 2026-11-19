@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,034 lines of Lean 4**, **928 theorems**, **1106 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **65 modules**, **67,304 lines of Lean 4**, **2940 theorems**, **3750 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **66 modules**, **67,645 lines of Lean 4**, **2958 theorems**, **3774 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -135,7 +135,7 @@ flowchart BT
 ---
 
 <!-- BEGIN generated: A2 module DAG (webdocs/scripts/gen-formal-data.mjs) -->
-## 4. Phase A2 Module Dependency DAG (65 Modules)
+## 4. Phase A2 Module Dependency DAG (66 Modules)
 
 ```mermaid
 flowchart BT
@@ -148,6 +148,7 @@ flowchart BT
   CallMem["CallMem<br/>(1489L, 58 thms)"]
   Closure["Closure<br/>(3213L, 113 thms)"]
   ClosureDropWitness["ClosureDropWitness<br/>(869L, 51 thms)"]
+  ClosureParamViewWitness["ClosureParamViewWitness<br/>(341L, 18 thms)"]
   Codes["Codes<br/>(870L, 43 thms)"]
   Ctx["Ctx<br/>(339L, 31 thms)"]
   DropCode["DropCode<br/>(694L, 15 thms)"]
@@ -217,6 +218,8 @@ flowchart BT
   CallInv --> Closure
   DtorWitness --> ClosureDropWitness
   EnvHand --> ClosureDropWitness
+  ParamViewWitness --> ClosureParamViewWitness
+  FreshClosureWitness --> ClosureParamViewWitness
   Closure --> Codes
   Repl --> Codes
   Basic --> Ctx
@@ -313,6 +316,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/ArcDtorWitness.lean`](A2/ArcDtorWitness.lean) | 304 | 13 | 4 |  |
 | 3. Proof Infrastructure | [`A2/ArcPanicWitness.lean`](A2/ArcPanicWitness.lean) | 795 | 52 | 15 |  |
 | 3. Proof Infrastructure | [`A2/ClosureDropWitness.lean`](A2/ClosureDropWitness.lean) | 869 | 51 | 21 |  |
+| 3. Proof Infrastructure | [`A2/ClosureParamViewWitness.lean`](A2/ClosureParamViewWitness.lean) | 341 | 18 | 6 |  |
 | 3. Proof Infrastructure | [`A2/DropCode.lean`](A2/DropCode.lean) | 694 | 15 | 9 |  |
 | 3. Proof Infrastructure | [`A2/DtorWitness.lean`](A2/DtorWitness.lean) | 3599 | 165 | 67 |  |
 | 3. Proof Infrastructure | [`A2/EditB.lean`](A2/EditB.lean) | 2452 | 67 | 0 | Element edits through borrows (StmtT.editB): push, truncate, and element set through borrowed paths. |
