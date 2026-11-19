@@ -616,6 +616,10 @@ import A3
 #print axioms A2.InoutViewArgWitness.main_safe
 #print axioms A2.InoutViewArgWitness.main_no_leak
 #print axioms A2.InoutViewArgWitness.call_refused
+-- (A2/HeldViewThruWitness.lean, AGORA-933): a callee changing a Vec reached through a slice its
+-- parameter holds is through-changing, and no call of it passes an argument holding views
+#print axioms A2.HeldViewThruWitness.call_refused
+#print axioms A2.HeldViewThruWitness.call_alone_refused
 -- AGORA-909: a field or payload read of a frame binding of a view-free type that holds
 -- nothing may be fresh (RhsT.fst/snd/getl/getr), so a push through `. b items` of an
 -- `inout` parameter is an `edit false` (A2/FreshProjWitness.lean)

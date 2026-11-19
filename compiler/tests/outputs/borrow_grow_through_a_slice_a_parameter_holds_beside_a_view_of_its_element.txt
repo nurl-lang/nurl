@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_grow_through_a_slice_a_parameter_holds_beside_a_view_of_its_element.nu:25:5: error: 'w' reaches 'f' through argument 1, which holds a view of it - an element of which it may grow or move - and through argument 2, which points into it or borrows from it: inside the call the two are unrelated names, and the change through one leaves the other dangling. Pass a copy of argument 2 that owns its data instead (slice_to_vec, mem_dup, string_from), bound to a name that lives across the call - a copy of the first still holds its views - or take what the second one reaches inside the callee.
+    ( nurl_println_int ( f vv s2 ) )
+    ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)

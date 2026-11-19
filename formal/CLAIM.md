@@ -211,6 +211,13 @@ the LLVM / C11 memory model rather than redefining it.
     it (`inout_push_through_its_element_called_with_a_view_read_after`) and
     it runs clean. With `s` a view of `vv`'s element instead (AGORA-923,
     github#2072, fixed in nurlc by github#2076), no typing of the call exists (`call_refused`).
+    A callee that changes a `Vec` it reaches through a slice its parameter
+    holds, `( vec_reserve ( slice_at ( vec_at vv 0 ) 0 ) … )` with `vv : Vec
+    (Slice (Vec i))`, changes through a borrow that is not fresh (an
+    element of a slice never is), landing in memory `vv`'s slices view: no
+    call of it passes an argument holding views
+    (`A2/HeldViewThruWitness.lean`: `call_refused`, `call_alone_refused`;
+    AGORA-933, which nurlc accepted and fixes in github#2100).
     `A2/FreshProjWitness.lean` types the same call through a field:
     `add inout Bag b` pushes through `. b items`, called with a view of
     another value that is read after the call. A field or payload read
