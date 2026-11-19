@@ -68332,9 +68332,12 @@ unsafe @ __sx_nroots s e b ns → s {
 }
 
 // Words `ws` (`p` or `p#cond`, parameter names) a call keeps, among
-// arguments one of which is a parameter `ps` (a container the caller
-// holds): each parameter not the container itself, by its index, onto
-// this function's __fn_rckeep__ (agora #793).
+// arguments some of which are parameters `ps` (containers the caller may
+// hold): each parameter, by its index, onto this function's __fn_rckeep__
+// (agora #793) — unless it is the only parameter among them, the container
+// itself. (A parameter handed beside its share, `( save xs h ( rc_clone h
+// ) )`, is no container of it: left out for being among them, the share in
+// xs was summarised nowhere.)
 @ __rck_note i syms s ws s ps → v {
     : ~ s cur ( nurl_sym_get syms `__fn_rckeep__` )
     : ~ s rest ( nurl_str_cat ws `` )
@@ -68343,7 +68346,7 @@ unsafe @ __sx_nroots s e b ns → s {
         : i h ( nurl_str_find w `#` )
         : s nm ? < h 0 ( nurl_str_cat w `` ) ( nurl_str_slice w 0 h )
         : s cd ? < h 0 `` ( nurl_str_slice w h - ( nurl_str_len w ) h )
-        ? ! ( str_contains_word ps nm ) {
+        ? | ! ( str_contains_word ps nm ) != 0 ( nurl_str_len ( __word_drop ps nm ) ) {
             : i ix ( nurl_sym_word_index syms `__fn_param_names__` nm )
             ? >= ix 0 { = cur ( __word_union cur ( nurl_str_cat ( nurl_str_int ix ) cd ) ) } {}
         } {}
@@ -68369,11 +68372,11 @@ unsafe @ __sx_nroots s e b ns → s {
     ? == 0 g_rck_pend { ^ v } {}
     : s fns ( nurl_sym_get g_rck_pend `__fns__` )
     ? == 0 ( nurl_str_len fns ) { ^ v } {}
+    // (To a fixed point, however long the chain: a pass only adds words, so
+    // the loop ends.)
     : ~ b changed T
-    : ~ i guard 0
-    ~ & changed < guard 64 {
+    ~ changed {
         = changed F
-        = guard + guard 1
         : ~ s fr ( nurl_str_cat fns `` )
         ~ != 0 ( nurl_str_len fr ) {
             : s f ( str_first_word fr ) = fr ( str_skip_word fr )
