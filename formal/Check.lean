@@ -594,6 +594,10 @@ import A3
 #print axioms A2.ParamViewWitness.main_typed
 #print axioms A2.ParamViewWitness.main_safe
 #print axioms A2.ParamViewWitness.main_no_leak
+-- AGORA-606, AGORA-563: an argument the callee moves or may change that views its own storage
+-- (a root of its own memory dependencies; a `sink` one, of any) admits no `CallT`
+#print axioms A2.CallT.not_self_view
+#print axioms A2.CallT.not_self_dep_sink
 -- AGORA-909 (github#2041): closure code, called through its package with an argument that holds
 -- views, that stores that view through a fresh borrow of its own local: an `edit false`, not
 -- through-changing (A2/ClosureParamViewWitness.lean)

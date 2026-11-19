@@ -585,6 +585,27 @@ function that grows `v` and then reads `s`, called as
 `( grow_then_read v ( slice_from_vec [i] v ) )`, reads freed memory. The
 message names both arguments; take a copy, or split the call.
 
+One argument can be such a pair too. A struct whose field views another of
+its fields — `. a idx` holding views of the Strings in `. a arena` —
+handed whole to a callee that may drop, replace or move what `. a arena`
+holds (clear it, pop it, grow one of its Strings), directly, through a
+function that hands it on, or to a `sink` parameter: inside the callee the
+two fields of the parameter are unrelated, so a read of `. p idx` after
+`( vec_clear . p arena )` reads freed memory. The call is refused
+(AGORA-606). A callee that only reads, or pushes into the arena (its
+Strings stay where they are), is not. Make the change outside the call
+and take the views again after it, or store views that own their data.
+
+Such a value takes those views with it when it moves into a struct's
+field (`@ P { o 0 }`): the struct is tied to the field at its new place,
+so growing `. . p s buf` ends the view, as growing `. o buf` did. A
+literal written as an argument that holds an owner and a view of it
+(`( use @ S { sv b } )`), or such a value, is refused where the callee
+may grow, clear or replace what the view points into (AGORA-563). Pushed
+into a container, it is followed there: a value taken back out (popped,
+matched) views its own fields again, so growing the field then ends the
+view.
+
 ### 2.5 Iterator invalidation
 
 A foreach loop `~ x xs { … }` borrows `xs` for its body. Mutating `xs`

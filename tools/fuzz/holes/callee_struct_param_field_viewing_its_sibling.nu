@@ -1,3 +1,6 @@
+// callee_struct_param_field_viewing_its_sibling: `@ bad A p` clears `. p arena` and reads `. p idx`, handed `a` whose `idx` views `arena`'s Strings
+// Closed: a call handed a value whose field views another of its own fields (`vds_`, or a callee's `h>.^rel`), where the callee's final summaries say it may drop, replace or move the buffer of what that field holds, is refused: inside the callee the two are one parameter's unrelated fields (agora #606).
+// main 029b01d: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.10 | A2 | rejected | - | agora #606: inside a callee, a struct parameter whose field views another field (vec_clear . p arena, then read . p idx)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

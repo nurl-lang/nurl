@@ -1,4 +1,7 @@
-// map: §2.10 | A2 | rejected | - | agora #563: a struct whose field views its other field, pushed into a Vec, popped, and grown
+// self_viewing_struct_pushed_popped_read_runs_clean: `o`, viewing its own `buf`, pushed into a Vec, popped and its view read, nothing grown
+// Closed: only a change of the viewed field, after the move or inside a callee that changes it, is refused (agora #563): the shape the fix must keep.
+// main 029b01d: accepted, runs clean.
+// map: §2.10 | A2 | runs-clean | - | agora #563: o pushed into a Vec, popped and its view read, nothing grown
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
@@ -16,8 +19,6 @@ $ `stdlib/core/slice.nu`
     ?? ( vec_pop [S] vs ) {
         T x → {
             : ~ S y x
-            : ~ i k 0
-            ~ < k 1000 { ( vec_push [i] . y buf k ) = k + k 1 }
             ( nurl_println_int ( slice_at [i] . y v 1 ) )
         }
         F → {}

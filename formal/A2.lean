@@ -62,3 +62,4 @@ import A2.ParamViewWitness
 import A2.ClosureParamViewWitness
 import A2.InoutViewArgWitness
 import A2.FreshClosureWitness
+import A2.SelfViewCall
