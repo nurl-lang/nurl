@@ -824,6 +824,7 @@ theorem fixed_setHeldFresh (E : Entry) (f : Bool) (H : List Dep) :
     ({E with heldFresh := f, held := H} : Entry).fixed ↔ E.fixed := by
   simp [Entry.fixed_def]
 theorem clean_mode (E : Entry) : E.clean.mode = E.mode := by unfold Entry.clean; split <;> rfl
+@[simp] theorem clean_heldFresh (E : Entry) : E.clean.heldFresh = E.heldFresh := by unfold Entry.clean; split <;> rfl
 theorem clean_ty (E : Entry) : E.clean.ty = E.ty := by unfold Entry.clean; split <;> rfl
 theorem clean_live (E : Entry) : E.clean.live = E.live := by unfold Entry.clean; split <;> rfl
 
@@ -2271,7 +2272,7 @@ theorem entryWeaker_killE {e : Eff} {hv : Bool} {x : Var} {E : Entry}
     · exact ⟨rfl, rfl, fun h => absurd h hf, fun h => by simp at h,
         fun h => ⟨h, List.Subset.refl _⟩, rfl, fun h => Or.inl h, fun _ _ _ _ _ => Iff.rfl,
       fun _ _ _ hfr => (by fresh_ew),
-      fun _ _ _ hhf => by heldfresh_ew⟩
+      fun _ _ hhf => by heldfresh_ew⟩
     · exact EntryWeaker.refl E
 
 /-! ### What the parameters' frames keep (`KeepOut`)
@@ -3430,7 +3431,7 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
           fun hd => ⟨hd, fun d h => (List.mem_filter.mp h).1⟩, rfl, fun hd => Or.inl hd,
           fun _ _ _ d hnm => by simp [memDeps, List.mem_filter, hnm],
       fun _ _ _ hfr => (by fresh_ew),
-      fun _ _ _ hhf => by heldfresh_ew⟩
+      fun _ _ hhf => by heldfresh_ew⟩
     · have hce : E1.clean = { E1 with path := [], held := [] } := by
         unfold Entry.clean; rw [ite_eq_left hcl, ite_eq_right hdk]
       have hrr : rrE fn.params base 0 (callPe Γ fn.params args) E1.clean = { E1 with path := [], held := [] } := by
@@ -3444,7 +3445,7 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
         refine ⟨rfl, rfl, fun hf => absurd hf hcl.1, fun hl => ⟨hl, fun _ => by simp, by simp⟩,
           by intro h; simp_all, rfl, fun hd => Or.inl hd, fun hdb hos hn => absurd ⟨hdb, hos, ?_⟩ hdk,
       fun _ _ _ hfr => (by fresh_ew),
-      fun hl hn _ _ => by rcases hcl.2 with h' | h' <;> simp_all⟩
+      fun _ _ hhf => hhf⟩
         rcases hn with hn | hn
         · exact hn
         · simp only at hos hn; rw [hn] at hos; cases hos
@@ -3497,9 +3498,7 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
       fun _ _ hb hfr => ⟨hfr, by
         show E1.path ⊆ rrL fn.params base 0 (callPe Γ fn.params args) E1.path
         rw [hpath (by rw [hb]; rfl)]; exact List.Subset.refl _⟩,
-      fun _ _ _ hhf => ⟨hhf, by
-        show memDeps E1.held ⊆ memDeps (rrL fn.params base 0 (callPe Γ fn.params args) E1.held)
-        rw [hheld]; exact List.Subset.refl _⟩⟩
+      fun _ _ hhf => hhf⟩
       · have hrb' : E1.mode = .rootb := by
           rcases hrb with hrb | ⟨b, hb, _⟩
           · exact hrb

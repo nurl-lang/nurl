@@ -483,10 +483,9 @@ theorem EntryWeaker.killR {E E' : Entry} (hw : EntryWeaker E E') {e : Eff} {hb :
       rw [killE_fresh] at h; rw [killE_path]; rw [killE_ty] at hn; rw [killE_mode] at hb
       rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
       exact hf hl.1 hn hb h,
-    fun hl hn hb hhf => by
-      rw [killE_heldFresh] at hhf; rw [killE_held]; rw [killE_ty] at hn; rw [killE_mode] at hb
-      rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
-      exact hg hl.1 hn hb hhf⟩
+    fun hn hb hhf => by
+      rw [killE_heldFresh] at hhf; rw [killE_ty] at hn; rw [killE_mode] at hb
+      exact hg hn hb hhf⟩
   rw [killE_live] at h
   simp only [Bool.and_eq_true] at h
   obtain ⟨hl, hp, hh⟩ := hlv h.1

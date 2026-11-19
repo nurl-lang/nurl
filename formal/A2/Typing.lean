@@ -338,13 +338,11 @@ structure EntryWeaker (E E' : Entry) : Prop where
       the arguments hold already). -/
   fresh : E'.live = true → E'.ty ≠ .int → E'.mode = .bor → E'.fresh = true →
     E.fresh = true ∧ E'.path ⊆ E.path
-  /-- Agora #916: an entry holding frame-own memory only stays one only as it
-      was: a weakening that sets the bit, or adds memory to such an entry's
-      `held`, would let it hold what the frame does not own. Only a live
-      borrow that holds memory matters, as for `fresh`: an owner's type says
-      what it may hold. -/
-  heldFresh : E'.live = true → E'.ty ≠ .int → E'.mode = .bor → E'.heldFresh = true →
-    E.heldFresh = true ∧ memDeps E'.held ⊆ memDeps E.held
+  /-- Agora #916: no weakening sets the held-freshness bit of a borrow that
+      holds memory: a call lifts such a borrow's `held` without what the
+      arguments hold in memory (`RSetup.liftE`), so the stronger entry must
+      be lifted so too. (An owner's type says what it may hold.) -/
+  heldFresh : E'.ty ≠ .int → E'.mode = .bor → E'.heldFresh = true → E.heldFresh = true
 
 /-- Closes `EntryWeaker.heldFresh` where the weaker entry's bit is not set
     (a literal, a lift): the hypothesis `hhf` is false. -/
@@ -1243,7 +1241,7 @@ def recvRoots (c : Var) (Ec : Entry) : List Var :=
     the method may lend part of the receiver, anything the package reaches. -/
 def recvRes (c : Var) (Ec : Entry) (E : Entry) : Entry :=
   { E with path := E.path ++ allKinds (recvRoots c Ec),
-           held := ownHeld E.mode.ownSlot E.ty (E.held ++ allKinds (recvRoots c Ec)) }
+           held := ownHeld E.mode.ownSlot E.ty (E.held ++ allKinds (recvRoots c Ec)), heldFresh := false }
 
 /-- The call's result: it borrows what the summary says it borrows, and
     may hold whatever the arguments held. -/

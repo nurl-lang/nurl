@@ -264,7 +264,7 @@ theorem ew_J {E : Entry} (hE : E = Eoth ∨ E = Eob) : EntryWeaker E EobJ := by
   exact ⟨rfl, rfl, fun h => by simp [Eoth, Eob] at h, fun _ => ⟨rfl, fun _ => by simp [Eoth, Eob, EobJ], by simp [Eoth, Eob]⟩,
     fun h => by simp [Eoth, Eob] at h, rfl, fun h => by simp [EobJ] at h, fun h => by simp [Eoth, Eob] at h,
       fun _ _ _ hfr => by fresh_ew,
-      fun _ _ _ hhf => by heldfresh_ew⟩
+      fun _ _ hhf => by heldfresh_ew⟩
 
 /-- A context that agrees with `ctxJ E4` but at `ob`, whose entry is weaker. -/
 theorem weakerJ {Γ : Ctx} {E4 E4' : Entry} (h : ∀ v, v ≠ 4 → Γ v = ctxJ E4 v) (h4 : Γ 4 = some E4')

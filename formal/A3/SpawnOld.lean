@@ -560,7 +560,7 @@ theorem spawn_hole {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hS : Spawn
         fun h => by simp [intE] at h, by simp [callRes, intE], fun h => by simp [callRes] at h,
         fun h => by simp [intE] at h,
       fun _ _ _ hfr => by fresh_ew,
-      fun _ _ _ hhf => by heldfresh_ew⟩
+      fun _ _ hhf => by heldfresh_ew⟩
       exfalso; simp [Entry.fixed, intE] at hfx
     have hW : Weaker (A2.setE (callPostAux Γ fn args fn.params args 0 Γ) x intE)
         (A2.setE (callPost Γ fn args) x (callRes Γ fn args)) :=

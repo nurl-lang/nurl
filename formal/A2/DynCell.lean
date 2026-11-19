@@ -131,7 +131,7 @@ theorem ctx_weaker {R R' : Entry} (hR' : RootsOK R') (ht : R'.ty = R.ty) (hm : R
         fun h => absurd h (by rw [hf.1]; simp), by rw [hf.2, hf'.2], fun h => absurd h (by rw [hf'.1]; simp),
         fun h => absurd h (by rw [hf.2]; simp),
         fun _ _ _ hfr => absurd hfr (by rw [hfz]; simp),
-        fun _ _ _ hhf => absurd hhf (by rw [hhz]; simp)⟩
+        fun _ _ hhf => absurd hhf (by rw [hhz]; simp)⟩
       simp [Entry.fixed, hb] at hf0
 
 theorem roots_R0 : RootsOK ⟨str, .bor, false, [], [], false, false, false, false⟩ := by

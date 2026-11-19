@@ -64,7 +64,7 @@ theorem EntryWeaker.unfresh (E : Entry) : EntryWeaker E E.unfresh := by
     refine ⟨rfl, rfl, fun hf => ?_, fun h => ⟨h, fun _ => List.Subset.refl _, List.Subset.refl _⟩,
       fun h => ⟨h, List.Subset.refl _⟩, (by simp_all), (fun _ => by simp_all), fun _ _ _ _ _ => Iff.rfl,
       fun _ _ _ h => (by cases h),
-      fun _ _ _ hhf => by heldfresh_ew⟩
+      fun _ _ hhf => by heldfresh_ew⟩
     rcases hf with h | ⟨b, h, _⟩ <;> rw [hm] at h <;> cases h
   · exact EntryWeaker.refl E
 

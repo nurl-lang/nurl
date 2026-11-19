@@ -1930,7 +1930,7 @@ theorem ofn_body : ∃ Δ, StmtT P ξ (sigCtx ofn) [] ofn.body Δ ∧
       exact ⟨rfl, rfl, fun hf => by simp [Entry.fixed, E0] at hf, fun hl => by simp at hl,
         fun hd => by simp [E0] at hd, rfl, fun hd => by simp at hd, fun hd => by simp [E0] at hd,
       fun _ _ _ hfr => by fresh_ew,
-      fun _ _ _ hhf => by heldfresh_ew⟩
+      fun _ _ hhf => by heldfresh_ew⟩
     · simp [hv2, hv1, hv0]
   have harm2 : StmtT P .none (sigCtx ofn) [] (.assign 1 (.expr (.lit 0))) Δ1 :=
     StmtT.sub (Weaker.refl (hSd.wf hS) hSd.names) hasg2 (Or.inr hw)
@@ -2079,7 +2079,7 @@ theorem gfn_body : ∃ Δ, StmtT P ξ (sigCtx gfn) [] gfn.body Δ ∧
       exact ⟨rfl, rfl, fun hf => by simp [Entry.fixed, E0] at hf, fun hl => by simp at hl,
         fun hd => by simp [E0] at hd, rfl, fun hd => by simp at hd, fun hd => by simp [E0] at hd,
       fun _ _ _ hfr => by fresh_ew,
-      fun _ _ _ hhf => by heldfresh_ew⟩
+      fun _ _ hhf => by heldfresh_ew⟩
     · simp [hv2, hv1, hv0]
   have harm2 : StmtT P .none (sigCtx gfn) [] (.assign 1 (.expr (.lit 0))) Δ1 :=
     StmtT.sub (Weaker.refl (hSd.wf hS) hSd.names) hasg2 (Or.inr hw)
@@ -2230,7 +2230,7 @@ theorem ofnV_body : ∃ Δ, StmtT P ξ (sigCtx ofnV) [] ofnV.body Δ ∧
       exact ⟨rfl, rfl, fun hf => by simp [Entry.fixed, E0] at hf, fun hl => by simp at hl,
         fun hd => by simp [E0] at hd, rfl, fun hd => by simp at hd, fun hd => by simp [E0] at hd,
       fun _ _ _ hfr => by fresh_ew,
-      fun _ _ _ hhf => by heldfresh_ew⟩
+      fun _ _ hhf => by heldfresh_ew⟩
     · simp [hv2, hv1, hv0]
   have harm2 : StmtT P .none (sigCtx ofnV) [] (.assign 1 (.expr (.lit 0))) Δ1 :=
     StmtT.sub (Weaker.refl (hSd.wf hS) hSd.names) hasg2 (Or.inr hw)
@@ -2585,7 +2585,7 @@ theorem ofnR_body : ∃ Δ, StmtT P ξ (sigCtx ofnR) [] ofnR.body Δ ∧
       exact ⟨rfl, rfl, fun hf => by simp [Entry.fixed, E0] at hf, fun hl => by simp at hl,
         fun hd => by simp [E0] at hd, rfl, fun hd => by simp at hd, fun hd => by simp [E0] at hd,
       fun _ _ _ hfr => by fresh_ew,
-      fun _ _ _ hhf => by heldfresh_ew⟩
+      fun _ _ hhf => by heldfresh_ew⟩
     · simp [hv2, hv1, hv0]
   have harm2 : StmtT P .none (sigCtx ofnR) [] (.assign 1 (.expr (.lit 0))) Δ1 :=
     StmtT.sub (Weaker.refl (hSd.wf hS) hSd.names) hasg2 (Or.inr hw)
