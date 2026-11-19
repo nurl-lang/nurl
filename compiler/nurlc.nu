@@ -33958,7 +33958,10 @@ unsafe @ __sx_publish i me s sx → v {
     } {}
     // A literal is static or fresh; a cast outside raw code makes no
     // address (only the null pointer).
-    ? | | | | | | == tt TT_INT == tt TT_STR == tt TT_BOOL == tt TT_FLOAT == tt TT_SIZEOF == tt TT_LBRACK == tt TT_HASH { ^ ( nurl_str_cat `-` `` ) } {}
+    // (A slice literal's buffer is fresh; what its elements view, it
+    // holds: what it published, agora #930.)
+    ? == tt TT_LBRACK { ^ ? == g_sx_at + n0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `-` `` ) } {}
+    ? | | | | | == tt TT_INT == tt TT_STR == tt TT_BOOL == tt TT_FLOAT == tt TT_SIZEOF == tt TT_HASH { ^ ( nurl_str_cat `-` `` ) } {}
     ^ ( nurl_str_cat `*` `` )
 }
 
@@ -80466,6 +80469,28 @@ unsafe @ gen_cast i lex i syms i cg → s {
     ^ ( nurl_str_cat inner_tfo `` )
 }
 
+// …and for an owned slice read for a field (`. ( mk ) 1`, `. ( mk )
+// length`, `. ( mk ) i`): the call's answer for a slice, `true`, its per-run
+// bit (__slice_call_own_bit), or `` where it is never the caller's; ``
+// where the object is no temporary (agora #925).
+@ __mb_slice_tmp_flag i syms i cg i mb_tt s inner_tfo b tobj s ot → s {
+    ? | | ! tobj == 0 g_auto_drop_strings ! ( __owned_slice_ty ( nurl_llty ot ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? & == mb_tt TT_LPAREN == g_dup_nest + g_call_nest 1 { ^ ( nurl_str_cat `true` `` ) } {}
+    ? == mb_tt TT_LPAREN { ^ ( __slice_call_own_bit syms cg ) } {}
+    ^ ( nurl_str_cat inner_tfo `` )
+}
+
+// The slice temporary `ov` (type `ot`) a read took what it needs from goes
+// now, where `fl` says it is the caller's. A read of a number out of it left
+// it to no one: `( n . ( mk ) 1 )` leaked the slice (agora #925).
+unsafe @ __mb_slice_tmp_drop i cg s fl s ot s ov → v {
+    ? == 0 ( nurl_str_len fl ) { ^ v } {}
+    ( __handle_drop_ensure ot )
+    ( __dropifv_request ot )
+    ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ot ) ) ( nurl_print `(i1 ` ) ( nurl_print fl )
+    ( nurl_print `, ` ) ( nurl_print ( nurl_llty ot ) ) ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `)` ) ( emit_dbg_eol )
+}
+
 inline unsafe @ gen_member i lex i syms i cg → s {
     ? == 0 g_core_live { ^ ( __gen_member_body lex syms cg ) } {}
     : i h0 g_core_os_n
@@ -80762,6 +80787,8 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                 ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ot ) )
                 ( nurl_print ` ` ) ( nurl_print ov )
                 ( nurl_print `, ` ) ( nurl_print ( nurl_str_int idx ) ) ( nurl_print `\n` )
+                // (A slice temporary's length read: the slice goes now.)
+                ? & __mb_tobj ! ( is_ptr_ty ft ) { ( __mb_slice_tmp_drop cg ( __mb_slice_tmp_flag syms cg __mb_tt __mb_inner_tfo __mb_tobj ot ) ot ov ) } {}
                 ( nurl_set_last_type ft )
                 ^ res
             }
@@ -80800,6 +80827,7 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                             ( nurl_print `  ` ) ( nurl_print res )
                             ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ot ) )
                             ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `, 1\n` )
+                            ? __mb_tobj { ( __mb_slice_tmp_drop cg ( __mb_slice_tmp_flag syms cg __mb_tt __mb_inner_tfo __mb_tobj ot ) ot ov ) } {}
                             ( nurl_set_last_type `i64` )
                             ^ res
                         }
@@ -80843,6 +80871,26 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                             ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty elem_ty ) )
                             ( nurl_print `, ` ) ( nurl_print ( nurl_llty elem_ty ) )
                             ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
+                            // (An element read out of a slice temporary: a number,
+                            // and the slice goes now; a String or a Vec, copied on
+                            // the runs the slice is the caller's — the read that
+                            // copy's own by the same bit, as a field taken out of a
+                            // struct temporary is (h266) — and the slice goes.
+                            // Anything else stays a view of a slice nothing
+                            // releases, as before. Agora #925.)
+                            ? __mb_tobj {
+                                : s __msf ( __mb_slice_tmp_flag syms cg __mb_tt __mb_inner_tfo __mb_tobj ot )
+                                ? & != 0 ( nurl_str_len __msf ) ! | | ( is_ptr_ty elem_ty ) ( __type_needs_drop elem_ty syms ) ( __is_closure_ty elem_ty ) { ( __mb_slice_tmp_drop cg __msf ot ov ) } {
+                                    ? & & != 0 ( nurl_str_len __msf ) ( __is_handle_ty elem_ty ) ( __clone_supported elem_ty syms ) {
+                                        : s __mse ( mem_emit_cloneif cg elem_ty res __msf )
+                                        ( __mb_slice_tmp_drop cg __msf ot ov )
+                                        ( nurl_sym_def syms `__last_tmp_field_own__` __msf )
+                                        ( nurl_sym_def syms `__last_tmp_field_rk__` ? == __mb_tt TT_LPAREN ( mem_call_retown_const syms ) __mb_inner_rk )
+                                        ( nurl_set_last_type elem_ty )
+                                        ^ __mse
+                                    } {}
+                                }
+                            } {}
                             ( nurl_set_last_type elem_ty )
                             ^ res
                         }
@@ -83240,6 +83288,13 @@ inline @ gen_slice_literal i lex i syms i cg → s {
     ( nurl_lex_advance lex )  // consume '['
     : s elem_ty ( parse_type lex )  // e.g. "i64"
     ( expect lex TT_PIPE )  // consume '|'
+    // This literal's number as a source-expression producer: what its
+    // elements view is what it holds, as a struct literal's fields' is
+    // (agora #930). The buffer is fresh, but an `s` element, or a struct
+    // element with a view field, is a copy of a view: `: [s sl [s | w ]`
+    // read after w's source was given a new value read freed memory.
+    : i __sx_me ( __sx_enter )
+    : ~ s lit_sx ``
     // Collect value registers (space-separated) and count
     : ~ s vals ``
     : ~ i count 0
@@ -83252,8 +83307,16 @@ inline @ gen_slice_literal i lex i syms i cg → s {
         : i __sec ( nurl_lex_col lex )
         ( __clo_tmp_set `` )
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+        : i __esxn0 g_sx_n
         : ~ s v ( gen_expr lex syms cg )
         : ~ s vt ( nurl_get_last_type )
+        // (What the element views: only an element that can hold a view
+        // — one that owns all it holds, a `String`, is copied in or moved
+        // in whole, and the copy depends on nothing.)
+        ? & != 0 __sx_me ( __ty_holds_view_p ( nurl_llty vt ) ) {
+            : s __esx ( __sx_operand syms __setok __sev0 vt ( __sx_froot syms __setok vt ) __esxn0 )
+            = lit_sx ( __sx_join lit_sx ? & ( __is_closure_ty vt ) ! | ( seq __esx `-` ) ( seq __esx `*` ) ( nurl_str_cat3 `\\a(` __esx `)` ) __esx )
+        } {}
         // A raw string element is a view (docs/MEMORY.md §2.13): the slice
         // owns its buffer, not what the strings in it point at, so a fresh
         // one there is owned by nothing (h140) — and one a call may hand
@@ -83427,6 +83490,7 @@ inline @ gen_slice_literal i lex i syms i cg → s {
     // leaks at function exit. gen_cond forwards the flag when both live arms
     // carry it; every other reader resets it before its own gen_expr.
     ( nurl_sym_def syms `__last_slice_owned__` `1` )
+    ? != 0 __sx_me { ( __sx_publish __sx_me ? == 0 ( nurl_str_len lit_sx ) `-` lit_sx ) } {}
     r1
 }
 
@@ -89012,6 +89076,11 @@ unsafe @ str_has_index s list i k → b {
 // regardless of --no-borrowck. Cheap symbol-table append; no IR.
 @ bck_mark_param_valueread i syms s name → v {
     ? == 0 ( nurl_str_len name ) { ^ v } {}
+    // (Only a parameter's name is ever asked of the set - the invoke-only
+    // summary and the argument save above - so a local's read is not
+    // recorded: every identifier a body read went into one list, searched
+    // word by word on each read, quadratic in a long function.)
+    ? < ( nurl_sym_word_index syms `__fn_param_names__` name ) 0 { ^ v } {}
     : s cur ( nurl_sym_get syms `__fn_param_valueread__` )
     ? ( str_contains_word cur name ) {} {
         ( nurl_sym_set_deep syms `__fn_param_valueread__`

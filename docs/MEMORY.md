@@ -604,7 +604,9 @@ literal written as an argument that holds an owner and a view of it
 may grow, clear or replace what the view points into (AGORA-563). Pushed
 into a container, it is followed there: a value taken back out (popped,
 matched) views its own fields again, so growing the field then ends the
-view.
+view. The refusals are inside the formal claim. Accepting such a move, and
+the views read at the new place, is not yet: `formal/CLAIM.md` lists it
+under "Outside A2".
 
 ### 2.5 Iterator invalidation
 
@@ -2784,7 +2786,11 @@ are dropped, moved and copied by the same rules:
   its elements as a `Vec` does, and as a slice of closures owns their
   environments (§7.5): freeing its buffer drops them. A slice literal
   takes a fresh element as it is and copies any other in — a binding
-  too, which stays its own owner. An element store (`= . sl k v`) drops
+  too, which stays its own owner. What its elements view, it holds: a
+  raw string element, or a struct element with a view field, is a copy
+  of that view, so the slice borrows from what the view points into,
+  as a struct literal of it does (`: [s sl [s | w ]` is a view of w's
+  source; agora #930). An element store (`= . sl k v`) drops
   the element it replaces, takes a fresh value as it is and copies a
   borrowed one; a binding stored there is refused (store a copy). An
   element that cannot be copied must be a fresh value.
@@ -2859,6 +2865,12 @@ are dropped, moved and copied by the same rules:
   leaves the temporary instead (h266, h323).
   Where a copy would be needed (stored into an owner, handed to a keeping
   callee), compilation stops with an error naming the type.
+- **A slice a call made, read for a field** (`. ( mk ) 1`, `. ( mk )
+  length`, `. ( mk ) k`), is released after the read where the call's own
+  answer says the slice is the caller's. A read of a String or Vec
+  element out of it takes a copy on those runs, which the read then owns.
+  A read of `ptr` keeps the slice, since what it reads points into it
+  (agora #925).
 - **Joins.** A `?` / `??` yielding an owning value hands its binding what
   the chosen arm owned; an arm that yields an outer binding lends it, and
   an arm that ends in a lending call lends what that call does — returned

@@ -1,0 +1,3 @@
+### Fixed
+
+- **A slice literal holds what its elements view** (AGORA-930). In `: s w ( string_data src )  : [s sl [s | w ]`, `sl` holds a view of `src`. Before, the compiler did not record that, so `sl` could be read after `src` was given a new value or released, a use-after-free. The same applied to a slice of structs with a raw view field, and to a closure that hands such a slice back. It also applied to a function that hands back a slice literal holding a view of its own local (`^ [s | ( string_data t ) ]`), which the caller read after the local was released. Both are now refused, as they are for a struct literal holding the same view. A slice of values that own their data, such as `[String | a ]`, is unaffected: the literal copies them in.
