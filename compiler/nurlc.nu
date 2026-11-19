@@ -27413,8 +27413,13 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
         : s r1 ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
         : i c2 ( nurl_str_find r1 `:` )
         : s ud ( nurl_str_slice r1 0 c2 )
-        : s rc ( nurl_str_slice r1 + c2 1 - - ( nurl_str_len r1 ) c2 1 )
-        ( __bck_rc_note ( nurl_str_cat4 name `+dk=` cal ( nurl_str_cat4 `/` k `/` ud ) ) )
+        : s r2 ( nurl_str_slice r1 + c2 1 - - ( nurl_str_len r1 ) c2 1 )
+        // (`:chain`, an argument closure's: the makers and positions its
+        // set came through, __udrop_clo_arg.)
+        : i c3 ( nurl_str_find r2 `:` )
+        : s rc ? < c3 0 ( nurl_str_cat r2 `` ) ( nurl_str_slice r2 0 c3 )
+        : s ch ? < c3 0 `` ( nurl_str_cat `/` ( nurl_str_slice r2 + c3 1 - - ( nurl_str_len r2 ) c3 1 ) )
+        ( __bck_rc_note ( nurl_str_cat4 name `+dk=` cal ( nurl_str_cat4 `/` k `/` ( nurl_str_cat ud ch ) ) ) )
         ( __bck_rc_note ( nurl_str_cat3 name `=` rc ) )
         ( bck_put `deferred` `1` )
     }
@@ -27431,43 +27436,63 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
 }
 
 // A closure argument `k` (first token `tt`, a binding `nm` or a call's
-// result) of a call that may hand back a closure: what releasing it runs is
-// what that closure took over — a binding's own notes (`+d=`, and every
-// `+dk=` set), or the call's arguments that hold a `% Drop` reaching an Rc
-// (`__last_call_udargs__`). Its entry `k:#ud:#rc` for `__uda#` (gen_call),
-// or ``: the closure the call hands back may hold it (agora #919). Every
-// set counts, whether or not the inner callee took its value over — the
-// release a forwarder makes cannot ask that callee here.
+// result, directly or as a value block's tail) of a call that may hand back
+// a closure: what releasing it runs is what that closure took over — a
+// binding's own notes (`+d=`, and each `+dk=` entry), or the call's
+// arguments that hold a `% Drop` reaching an Rc (`__last_call_udargs__`).
+// Its entries for `__uda#` (gen_call), space-separated, or ``: the closure
+// the call hands back may hold them (agora #919). Each set an inner maker
+// brought keeps that maker and position (`k:#ud:#rc:maker/k'…`, the chain
+// it came through), so the release counts it only where every one of them
+// took it over (__bck_udrop_fns_of): a maker that drops its `sink` value
+// before it returns hands back a closure over nothing of it.
 @ __udrop_clo_arg i syms i k i tt s nm → s {
-    : ~ s ud ``
-    : ~ s rc ``
+    : ~ s out ``
+    : s ks ( nurl_str_cat ( nurl_str_int k ) `:` )
     ? ( is_ident_tok tt ) {
-        ? != 0 ( nurl_str_len g_bck_rcty ) {
-            = ud ( __bck_rc_noted nm `+d=` )
-            : ~ s dk ( __bck_rc_noted nm `+dk=` )
-            ~ != 0 ( nurl_str_len dk ) {
-                : s e ( __bar_first dk ) = dk ( __bar_rest dk )
-                : i s2 ( __str_rfind_char e 47 )
-                ? >= s2 0 { = ud ( __bar_union ud ( nurl_sym_get g_rc_idset ( nurl_str_slice e + s2 1 - - ( nurl_str_len e ) s2 1 ) ) ) } {}
-            }
-            = rc ( bck_rc_type_of nm )
-        } {}
-    } {
-        ? & == tt TT_LPAREN != 0 g_udargs_set {
-            : s ua ( nurl_sym_get syms `__last_call_udargs__` )
-            : ~ s rest ( str_skip_word ua )
-            ~ != 0 ( nurl_str_len rest ) {
-                : s e ( str_first_word rest ) = rest ( str_skip_word rest )
-                : i c1 ( nurl_str_find e `:` )
-                : s r1 ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
-                : i c2 ( nurl_str_find r1 `:` )
-                = ud ( __bar_union ud ( nurl_sym_get g_rc_idset ( nurl_str_slice r1 0 c2 ) ) )
-                = rc ( __bar_union rc ( nurl_sym_get g_rc_idset ( nurl_str_slice r1 + c2 1 - - ( nurl_str_len r1 ) c2 1 ) ) )
-            }
-        } {}
+        ? == 0 ( nurl_str_len g_bck_rcty ) { ^ out } {}
+        : s rc ( bck_rc_type_of nm )
+        ? == 0 ( nurl_str_len rc ) { ^ out } {}
+        : s rcs ( nurl_str_cat `:` ( __rc_set_id rc ) )
+        : s ud0 ( __bck_rc_noted nm `+d=` )
+        ? != 0 ( nurl_str_len ud0 ) { = out ( nurl_str_cat3 ks ( __rc_set_id ud0 ) rcs ) } {}
+        : ~ s dk ( __bck_rc_noted nm `+dk=` )
+        ~ != 0 ( nurl_str_len dk ) {
+            : s e ( __bar_first dk ) = dk ( __bar_rest dk )
+            // (`cal/k'/#ud[/chain]`: the set, and the chain with this maker
+            // and position first.)
+            : i s1 ( nurl_str_find e `/` )
+            : s r1 ( nurl_str_slice e + s1 1 - - ( nurl_str_len e ) s1 1 )
+            : i s2 ( nurl_str_find r1 `/` )
+            : s r2 ( nurl_str_slice r1 + s2 1 - - ( nurl_str_len r1 ) s2 1 )
+            : i s3 ( nurl_str_find r2 `/` )
+            : s ud ? < s3 0 ( nurl_str_cat r2 `` ) ( nurl_str_slice r2 0 s3 )
+            : s tail ? < s3 0 `` ( nurl_str_slice r2 s3 - ( nurl_str_len r2 ) s3 )
+            : s ch ( nurl_str_cat ( nurl_str_slice e 0 + + s1 1 s2 ) tail )
+            : s ent ( nurl_str_cat4 ks ud rcs ( nurl_str_cat `:` ch ) )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ent `` ) ( nurl_str_cat3 out ` ` ent )
+        }
+        ^ out
+    } {}
+    ? | == 0 g_udargs_set ! ( __udclo_rhs syms tt ) { ^ out } {}
+    : s ua ( nurl_sym_get syms `__last_call_udargs__` )
+    : s ical ( str_first_word ua )
+    : ~ s rest ( str_skip_word ua )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s e ( str_first_word rest ) = rest ( str_skip_word rest )
+        // (`k':#ud:#rc[:chain]` of the inner call `ical`.)
+        : i c1 ( nurl_str_find e `:` )
+        : s ik ( nurl_str_slice e 0 c1 )
+        : s r1 ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
+        : i c2 ( nurl_str_find r1 `:` )
+        : s r2 ( nurl_str_slice r1 + c2 1 - - ( nurl_str_len r1 ) c2 1 )
+        : i c3 ( nurl_str_find r2 `:` )
+        : s udrc ( nurl_str_slice e + c1 1 ? < c3 0 - - ( nurl_str_len e ) c1 1 + + c2 1 c3 )
+        : s tail ? < c3 0 `` ( nurl_str_cat `/` ( nurl_str_slice r2 + c3 1 - - ( nurl_str_len r2 ) c3 1 ) )
+        : s ent ( nurl_str_cat4 ks udrc ( nurl_str_cat3 `:` ical `/` ) ( nurl_str_cat ik tail ) )
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ent `` ) ( nurl_str_cat3 out ` ` ent )
     }
-    ? | == 0 ( nurl_str_len ud ) == 0 ( nurl_str_len rc ) { ^ `` } {}
-    ^ ( nurl_str_cat4 ( nurl_str_int k ) `:` ( __rc_set_id ud ) ( nurl_str_cat `:` ( __rc_set_id rc ) ) )
+    ^ out
 }
 
 // The `sink` parameters (positions `sinks`) of function `fname`, compiling now,
@@ -71432,8 +71457,23 @@ unsafe @ bck_scope_leave s st i line → s {
         : s r1 ( nurl_str_slice e + s1 1 - - ( nurl_str_len e ) s1 1 )
         : i s2 ( nurl_str_find r1 `/` )
         : s k ( nurl_str_slice r1 0 s2 )
-        : s ud ( nurl_str_slice r1 + s2 1 - - ( nurl_str_len r1 ) s2 1 )
-        ? | ( __fn_retcap_arg cal k ) ( __fn_retcap_arg ( bck_generic_base cal ) k ) { = out ( __bar_union out ( nurl_sym_get g_rc_idset ud ) ) } {}
+        : s r2 ( nurl_str_slice r1 + s2 1 - - ( nurl_str_len r1 ) s2 1 )
+        // (`/maker/k'…`: an argument closure's set, counted only where
+        // each maker on its way took it over too, __udrop_clo_arg.)
+        : i s3 ( nurl_str_find r2 `/` )
+        : s ud ? < s3 0 ( nurl_str_cat r2 `` ) ( nurl_str_slice r2 0 s3 )
+        : ~ b took | ( __fn_retcap_arg cal k ) ( __fn_retcap_arg ( bck_generic_base cal ) k )
+        : ~ s ch ? < s3 0 `` ( nurl_str_slice r2 + s3 1 - - ( nurl_str_len r2 ) s3 1 )
+        ~ & took != 0 ( nurl_str_len ch ) {
+            : i q1 ( nurl_str_find ch `/` )
+            : s mc ( nurl_str_slice ch 0 q1 )
+            : s cr ( nurl_str_slice ch + q1 1 - - ( nurl_str_len ch ) q1 1 )
+            : i q2 ( nurl_str_find cr `/` )
+            : s mk ? < q2 0 ( nurl_str_cat cr `` ) ( nurl_str_slice cr 0 q2 )
+            = ch ? < q2 0 `` ( nurl_str_slice cr + q2 1 - - ( nurl_str_len cr ) q2 1 )
+            = took | ( __fn_retcap_arg mc mk ) ( __fn_retcap_arg ( bck_generic_base mc ) mk )
+        }
+        ? took { = out ( __bar_union out ( nurl_sym_get g_rc_idset ud ) ) } {}
     }
     ^ out
 }
