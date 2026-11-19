@@ -3879,6 +3879,15 @@ class FnCheck:
                 for i, (fty0, fname) in enumerate(self.prog.structs[ty[1]]):
                     from lower import norm
                     self.run_dtor(st, (place[0], place[1] + (fname or str(i),)), norm(fty0), line, depth + 1)
+            elif ty[1] in getattr(self.prog, "enums", ()):
+                # (an enum: whichever variant it holds, that payload goes)
+                for vname, ftys in (self.T.variants(ty) or ()):
+                    for i, fty in enumerate(ftys):
+                        self.run_dtor(st, (place[0], place[1] + (f"#{vname}{i}",)), fty, line, depth + 1)
+            elif ty[1] in getattr(self.prog, "handle_elem", {}):
+                # (a handle over one payload - a Box, an Rc released by what
+                # may be its last share: the payload goes with it)
+                self.run_dtor(st, (place[0], place[1] + ("*",)), self.prog.handle_elem[ty[1]], line, depth + 1)
             return
         if k in ("vec", "slice", "box"):
             self.run_dtor(st, (place[0], place[1] + ("*",)), ty[1], line, depth + 1)
