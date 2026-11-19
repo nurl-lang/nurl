@@ -693,6 +693,9 @@ def compE (E : Entry) : Ty → Entry
   | .slice s => ⟨.slice s, .bor, true, E.held, E.held, false, false, false, false⟩
   | t => ⟨t, .own, true, [], ownHeld true t E.held, false, false, false, false⟩
 
+@[simp] theorem compE_heldFresh (E : Entry) (t : Ty) : (compE E t).heldFresh = false := by
+  unfold compE; split <;> rfl
+
 /-- What `takel` / `taker` take a payload out of is an enum under its
     destructor type, if any. -/
 theorem take_undtor {τ a b : Ty} {G : Nat → Prop} (h : τ = .sum a b ∨ ∃ f, τ = .dtor f (.sum a b) ∧ G f) :
