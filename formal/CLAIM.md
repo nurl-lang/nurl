@@ -204,9 +204,10 @@ the LLVM / C11 memory model rather than redefining it.
     (`g_not_thru`), and the call asks nothing of the view. What keeps the
     view from reaching the changed argument is `CallT`'s exclusivity of a
     moved or changed argument (no other argument reaches it in memory), not
-    `callR`. Safe and leak-free (`main_safe`, `main_no_leak`; `main` fills
-    `vv` and `src` before they are read, so every read is in bounds and a
-    run can end normally); nurlc accepts
+    `callR`. Every reachable state is safe (`main_safe`), and a run that
+    ends normally leaks nothing (`main_no_leak`); `main` fills `vv` and
+    `src` before they are read, so every read is in bounds. No trace of a
+    normal run is proven. nurlc accepts
     it (`inout_push_through_its_element_called_with_a_view_read_after`) and
     it runs clean. With `s` a view of `vv`'s element instead (AGORA-923,
     github#2072, fixed in nurlc by github#2076), no typing of the call exists (`call_refused`).
@@ -229,10 +230,11 @@ the LLVM / C11 memory model rather than redefining it.
     `WFv.names_nil_fn`, and a type that holds no views holds no closure,
     `hasFn_holdsView`). So the renamed read is exact
     (`RSetup.projE_fresh_lift`). So the push is an `edit false`, `add` is
-    not through-changing (`g_not_thru`), and the call is typed, safe and
-    leak-free (`main_safe`, `main_no_leak`; `main` fills `src` before it
-    views it, so the read after the call is in bounds and a run can end
-    normally, which is what `main_no_leak` speaks of). A nested projection is fresh
+    not through-changing (`g_not_thru`), and the call is typed. Every
+    reachable state is safe (`main_safe`), and a run that ends normally
+    leaks nothing (`main_no_leak`); `main` fills `src` before it views it,
+    so the read after the call is in bounds. No trace of a normal run is
+    proven. A nested projection is fresh
     exactly where every step is (`proj_of_proj_fresh`):
     `A2/FreshNestWitness.lean` types `( vec_push . . o bag items x )` in
     the same call shape, safe and leak-free. nurlc accepts both
@@ -253,8 +255,10 @@ the LLVM / C11 memory model rather than redefining it.
     sources (`FreshSrc`: a binding of the frame's own, or a fresh borrow),
     and not a slice element: its path is the view's, `[⟨vv, .inner⟩]`. So
     the push is an `edit false`, `g` is not through-changing, and the call
-    is safe and leak-free (`main_safe`, `main_no_leak`; `main` fills `vv`
-    and `src` first, as the nurlc test does, so every read is in bounds). nurlc accepts it
+    is typed. Every reachable state is safe (`main_safe`), and a run that
+    ends normally leaks nothing (`main_no_leak`); `main` fills `vv` and
+    `src` first, as the nurlc test does, so every read is in bounds. No
+    trace of a normal run is proven. nurlc accepts it
     (`inout_push_through_an_element_of_its_view_called_with_a_view_read_after`)
     and it runs clean. Through a borrowed slice parameter, a view that is
     not fresh (a view of a borrowed parameter among them), or for an
