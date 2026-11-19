@@ -28656,6 +28656,7 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
     : s f ( nurl_str_cat want `` )
     ( nurl_eprintln ( nurl_str_cat4 `summary ` f ` sink=` ( nurl_sym_get g_fn_sink f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  keeps=` ( nurl_sym_get g_fn_keeps f ) ` stores=` ( nurl_sym_get g_fn_stores f ) ) )
+    ( nurl_eprintln ( nurl_str_cat4 `  rckeeps=` ( nurl_sym_get g_fn_rckeeps f ) ` rckpend=` ( nurl_sym_get g_rck_pend f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  vkeeps=` ( nurl_sym_get g_fn_vkeeps f ) ` rviews=` ( nurl_sym_get g_fn_rviews f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  escapes=` ( nurl_sym_get g_fn_escapes f ) ` handkeeps=` ( nurl_sym_get g_fn_handkeeps f ) ) )
     ( nurl_eprintln ( nurl_str_cat `  vcopies=` ( nurl_sym_get g_fn_vcopies f ) ) )
@@ -37674,7 +37675,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // of — agora #786.)
         : b __pk_nm | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT
         : b __pk_ll ( __pd_litlike bck_arg_tt )
-        ? & & & != 0 g_srcx_on | | __pk_nm __pk_ll & == bck_arg_tt TT_LPAREN != 0 ( nurl_str_len g_pk_last ) | != 0 g_cur_rc & != 0 g_bck_closure_depth ( __fn_rc_param syms ) != 0 ( nurl_str_len ( __rc_reach ( nurl_llty at ) ) ) {
+        // (…an `inout` argument by its pointee's type, `%W*`: agora #793.)
+        ? & & & != 0 g_srcx_on | | __pk_nm __pk_ll & == bck_arg_tt TT_LPAREN != 0 ( nurl_str_len g_pk_last ) | != 0 g_cur_rc & != 0 g_bck_closure_depth ( __fn_rc_param syms ) != 0 ( nurl_str_len ( __rc_reach ( nurl_llty ? & is_inout_arg != 0 ( nurl_str_ends at `*` ) ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 ) at ) ) ) {
             : s __pkr ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ``
             : s __pklit ? __pk_ll ( __pd_lit_names syms ( __sx_operand_c syms bck_arg_tt bck_arg_val 0 `` __sx_n0 ) ) ``
             : s __pkps ? != 0 ( nurl_str_len __pkr ) ( __word_union ( __pderiv_params syms __pkr ) ( __pderiv_cparams syms __pkr ) ) ? __pk_ll ( __pd_names_params syms __pklit ) ( nurl_str_cat g_pk_last `` )
@@ -66953,12 +66955,21 @@ unsafe @ __pderiv_put_at s ptr s ps0 → v {
 // is g_sx_n before the value was made.
 unsafe @ __pd_field_put i syms s obj i tt s val s ftype i n0 → v {
     ? | == 0 g_srcx_on == 0 ( nurl_str_len obj ) { ^ v } {}
-    ? | ( str_contains_word g_cur_params obj ) ( __pderiv_clo_param obj ) { ^ v } {}
+    ? ( __pderiv_clo_param obj ) { ^ v } {}
     ? == 0 ( nurl_str_len ( __rc_reach ( nurl_llty ftype ) ) ) { ^ v } {}
-    ? == tt TT_LPAREN { ( __pderiv_put syms obj g_pk_last ) ^ v } {}
+    // (A field of a parameter, a struct its caller holds — `= . w a (
+    // rc_clone h )` into an `inout` one: what the value leads to of the
+    // parameters, a share of each, is this function's to report,
+    // __fn_rckeep__; agora #793.)
+    : b par ( str_contains_word g_cur_params obj )
+    ? == tt TT_LPAREN {
+        ? par { ( __rck_note syms g_pk_last obj ) } { ( __pderiv_put syms obj g_pk_last ) }
+        ^ v
+    } {}
     : s r ? ( is_ident_tok tt ) ( nurl_str_cat val `` ) ? == tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ? ( __pd_litlike tt ) ( __pd_lit_names syms ( __sx_operand_c syms tt val ( bck_walk_class ftype ) `` n0 ) ) ``
     ? == 0 ( nurl_str_len r ) { ^ v } {}
-    ( __pderiv_put syms obj ( __pd_names_params syms r ) )
+    : s ps ( __pd_names_params syms r )
+    ? par { ( __rck_note syms ps obj ) } { ( __pderiv_put syms obj ps ) }
 }
 
 // Was a parameter put into local `name` (g_pd_put)?
