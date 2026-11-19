@@ -55027,7 +55027,8 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
     // other paths.)
     ? & & & != 0 g_bck_let_jv ! raw != 0 ( nurl_str_len g_bck_let_sx_last ) ! ( seq g_bck_let_sx_last `-` ) {
         ( bck_put `brwsx` g_bck_let_sx_last )
-        ( bck_put `brwmode` ( nurl_str_cat ? == g_bck_let_jv 3 `b` ? == g_bck_let_jv 2 `n` `p` ? ( seq how `sx` ) `d` `` ) )
+        // (`m`: a `??` join's, g_bck_let_jv 4 - bck_brw_leaves, agora #557.)
+        ( bck_put `brwmode` ( nurl_str_cat ? == g_bck_let_jv 3 `b` ? == g_bck_let_jv 2 `n` ? == g_bck_let_jv 4 `m` `p` ? ( seq how `sx` ) `d` `` ) )
         = g_bck_brw_on 1
     } {}
     ( bck_record ? taker ? hfield `fborrowh` `fborrow` ? hc ? vb `vcborrow` `cborrow` ? vb `vborrow` `borrow` name ( nurl_str_to_int ( nurl_sym_get g_bck `lastline` ) ) )
@@ -60797,7 +60798,12 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         // (The binding itself, given a value of its own handle — `= j { j }`:
         // what it borrowed before its `=`, `obs_`; agora #554.)
         ? & == r wid == r id { = out ( __word_union out ( nurl_sym_get g_bck ( bck_bkey `obs_` ( nurl_str_int wid ) ) ) ) } {}
-        : b take ? == m 116 & lent != r wid ? | == r wid > ( bck_id_dser r ) ( bck_id_dser wid ) F ? ( bck_dead_state lv ) F ? == m 98 T ? lent F ? == m 110 T != r id
+        // (`m`, a `??` join whose source expression is the matched binding
+        // alone - `: k ?? ev { A p → . p a  B q → . q a }`: its arms read
+        // parts of that binding's payload, which no row of theirs names,
+        // so k borrows from the binding; otherwise as `p`: agora #557.)
+        : b mwhole & == m 109 < ( nurl_str_find sx `{` ) 0
+        : b take ? == m 116 & lent != r wid ? | == r wid > ( bck_id_dser r ) ( bck_id_dser wid ) F ? ( bck_dead_state lv ) F ? == m 98 T ? lent F ? | == m 110 mwhole T != r id
         ? take { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) } {}
     }
     ^ out
@@ -61397,7 +61403,14 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // reads, taken by the arms' rows, no longer name; agora #360,
                 // #498, #499.)
                 : s bsx ( bck_field rec 8 )
-                : s bmode ? == 0 ( nurl_str_len bsx ) `` ( bck_field rec 7 )
+                : s bmode0 ? == 0 ( nurl_str_len bsx ) `` ( bck_field rec 7 )
+                // (A `??` join, `m`, whose arm hands its payload over whole -
+                // `: c ?? cr { T x → x … }`, the next row on its line moving
+                // the payload - takes it out of the binding: a move, its alias
+                // rows say, as `p`; agora #557.)
+                : s bnext ( bck_rec + p 1 )
+                : b bmoved & & ( seq bmode0 `m` ) != 0 ( nurl_str_starts bnext `move	` ) ( seq ( bck_field bnext 3 ) ( bck_field rec 3 ) )
+                : s bmode ? bmoved `p` bmode0
                 : s bsrcs ? == 0 ( nurl_str_len bsx ) ( bck_field rec 2 ) ( __word_union ( bck_field rec 2 ) ( bck_brw_leaves st bmode bsx bwid ) )
                 // (What its bytes are a copy of, told from the state its
                 // source is in before the borrow begins: bck_byte_root. A
@@ -73887,7 +73900,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         ? == __cbc 5 { ( bck_note_clo_borrow syms name bck_line __cbr ) } {}
         = g_bck_rhs_callee ``
         = g_bck_let_sx_last ( nurl_str_cat g_bck_rhs_sx `` )
-        = g_bck_let_jv ? == bck_rhs_tt TT_LBRACE 3 ? | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST ? is_mutable 2 1 0
+        = g_bck_let_jv ? == bck_rhs_tt TT_LBRACE 3 ? | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST ? is_mutable 2 ? == bck_rhs_tt TT_QUESTQUEST 4 1 0
         = g_bck_rhs_sx ``
         ? | != 0 g_rprov_on != 0 g_rpg_on { ( __rprov_bind syms name vt __rp_reads bck_rhs_tt F ) } {}
         ( __rprov_alias syms ( __rpg_oname name ) ( __rpg_demark __rp_oval ) )
@@ -74321,7 +74334,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ? == __cbc 5 { ( bck_note_clo_borrow syms name bck_line __cbr ) } {}
             = g_bck_rhs_callee ``
             = g_bck_let_sx_last ( nurl_str_cat g_bck_rhs_sx `` )
-            = g_bck_let_jv ? == bck_rhs_tt TT_LBRACE 3 ? | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST ? is_mutable 2 1 0
+            = g_bck_let_jv ? == bck_rhs_tt TT_LBRACE 3 ? | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST ? is_mutable 2 ? == bck_rhs_tt TT_QUESTQUEST 4 1 0
             = g_bck_rhs_sx ``
             ? | != 0 g_rprov_on != 0 g_rpg_on { ( __rprov_bind syms name ( nurl_llty ptype ) __rp_reads bck_rhs_tt F ) } {}
             ( __rprov_alias syms ( __rpg_oname name ) ( __rpg_demark __rp_oval ) )
