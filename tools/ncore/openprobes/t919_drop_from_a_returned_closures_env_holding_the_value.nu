@@ -1,4 +1,4 @@
-// map: §2.14 | A2 | rejected | - | agora #918: drop from a returned closures env holding the value
+// map: §2.14 | A2 | rejected | - | agora #919: drop from a returned closures env holding the value
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/rc.nu`

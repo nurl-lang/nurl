@@ -1126,7 +1126,7 @@ destructor when released. A destructor that only reads the payload ends
 nothing. Read the view before the release, or take it again after.
 A function's exit counts too: a return that hands back a view read through
 the payload such a destructor changes is refused. One release is not checked
-yet (AGORA-918): a destructor that runs when a returned closure's
+yet (AGORA-919): a destructor that runs when a returned closure's
 environment is released.
 
 ## 3. Outside the rules
