@@ -98071,6 +98071,16 @@ unsafe @ __brace_close s s → i {
 
 // The payload type of an option `{ i1, T }` whose T is a String, a Vec or
 // an owning struct; `` otherwise.
+// Does option (or result) type `ty` own something, so that it is dropped
+// through a twin of its own: what __wrap_twin answers, without building the
+// twin. Its payload or its error owns. (Asked through __wrap_twin, an option
+// of an option of … built each level's twin twice - once here, once
+// through __drop_mangle - exponential in the depth; agora #914.)
+@ __opt_owns s ty → b {
+    ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ F } {}
+    ^ | != 0 ( nurl_str_len ( __opt_payload ty ) ) != 0 ( nurl_str_len ( __opt_err_payload ty ) )
+}
+
 @ __opt_payload s ty → s {
     : i n ( nurl_str_len ty )
     // An option of an option that owns something (`??String`, `??Res`):
@@ -98078,7 +98088,7 @@ unsafe @ __brace_close s s → i {
     ? & & > n 12 != 0 ( nurl_str_starts ty `{ i1, { i1, ` ) == ( nurl_str_get ty - n 1 ) 125 {
         : s ip ( nurl_str_slice ty 6 - n 8 )
         ? == ( __brace_close ip ) - ( nurl_str_len ip ) 1 {
-            ? != 0 ( nurl_str_len ( __wrap_twin ip ) ) { ^ ip } {}
+            ? ( __opt_owns ip ) { ^ ip } {}
         } {
             // …or a result of one (`! ?String E`): T up to its brace, an
             // error of plain words or one that owns (its own drop).
@@ -98086,7 +98096,7 @@ unsafe @ __brace_close s s → i {
             ? >= te 0 {
                 : s t ( nurl_str_slice ip 0 te )
                 : s e ( nurl_str_slice ip + te 2 - - ( nurl_str_len ip ) te 2 )
-                ? & != 0 ( nurl_str_len ( __wrap_twin t ) ) | < ( nurl_str_find e ` ` ) 0 | ( __opt_of_words e ) != 0 ( nurl_str_len ( __wrap_twin e ) ) { ^ t } {}
+                ? & ( __opt_owns t ) | < ( nurl_str_find e ` ` ) 0 | ( __opt_of_words e ) ( __opt_owns e ) { ^ t } {}
             } {}
         }
         ^ ( nurl_str_cat `` `` )
