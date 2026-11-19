@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #428: a slice taken through a `?` join of two copies of a Vec kept while the owner itself is pushed
+// map: §2.10 | A2 | rejected | - | AGORA-428: a slice taken through a `?` join of two copies of a Vec kept while the owner itself is pushed
+// AGORA-428 (this shape, closed): refused - a view through a copy of an owner's own handle points into that owner's buffer, not an element's (main 54e5c459: accepted)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
