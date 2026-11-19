@@ -146,6 +146,8 @@ $ `web.nu`
 // oldest first, each followed by its `t<N>:` comments.
 @ ag_gh_mirror_mode AgStore st i mode i now → v {
     : i was ( __ghm_setting st `gh_mirror_mode` 0 )
+    // Never enabled before (off → on again keeps what live wrote).
+    : b first == ( __ghm_setting st `gh_mirror_since` 0 ) 0
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
@@ -159,7 +161,7 @@ $ `web.nu`
                 ?? ( sqlite_prepare db `DELETE FROM gh_comments WHERE id <= 0` ) { F _ → {} T q → { ( _ag_run q ) } }
                 // A PR tie is noted only by a live write (a dry run never marks
                 // one), so only the first enabling starts the ties afresh.
-                ? == was 0 { ?? ( sqlite_prepare db `UPDATE gh_task_prs SET noted = 0` ) { F _ → {} T q → { ( _ag_run q ) } } } {}
+                ? first { ?? ( sqlite_prepare db `UPDATE gh_task_prs SET noted = 0` ) { F _ → {} T q → { ( _ag_run q ) } } } {}
                 ? == mode 2 { ?? ( sqlite_prepare db `DELETE FROM gh_labels` ) { F _ → {} T q → { ( _ag_run q ) } } } {}
                 ?? ( sqlite_prepare db `UPDATE gh_outbox SET done = 1, error = 'superseded by a back-fill' WHERE done = 0` ) { F _ → {} T q → { ( _ag_run q ) } }
                 ?? ( sqlite_prepare db `INSERT INTO gh_outbox (task, kind, msg, created) SELECT task, kind, msg, ?1 FROM (SELECT t.id AS task, 'post' AS kind, 0 AS msg, t.id AS o1, 0 AS o2 FROM tasks t WHERE t.status IN ('open', 'claimed') UNION ALL SELECT t.id, 'comment', m.id, t.id, m.id FROM tasks t JOIN messages m ON m.channel = 'dev' AND (m.body LIKE 't' || t.id || ':%') WHERE (t.status IN ('open', 'claimed') OR (t.status IN ('done', 'cancelled') AND EXISTS (SELECT 1 FROM gh_issues g2 WHERE g2.task = t.id AND g2.number > 0 AND g2.state != 'closed'))) UNION ALL SELECT t.id, 'pr', p.pr, t.id, 1000000000 + p.pr FROM tasks t JOIN gh_task_prs p ON p.task = t.id WHERE (t.status IN ('open', 'claimed') OR (t.status IN ('done', 'cancelled') AND EXISTS (SELECT 1 FROM gh_issues g2 WHERE g2.task = t.id AND g2.number > 0 AND g2.state != 'closed'))) UNION ALL SELECT t.id, CASE WHEN t.status = 'done' THEN 'done' ELSE 'cancel' END, 0, t.id, 2000000000 FROM tasks t JOIN gh_issues g ON g.task = t.id AND g.number > 0 AND g.state != 'closed' WHERE t.status IN ('done', 'cancelled')) ORDER BY o1, o2` ) {

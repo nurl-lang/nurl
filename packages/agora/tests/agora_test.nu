@@ -1963,6 +1963,25 @@ $ `src/service.nu`
     ( string_push_str closep ` {"state":"closed","state_reason":"completed"}` )
     ( check & > real 0 ( has ( gh_sent_text dr ) ( string_data closep ) ) `mirror: a task finished during a dry run is closed once live again` )
     ( check ( has ( gh_sent_text dr ) `(Agora): t` ) `mirror: … with the comments it had meanwhile` )
+    // Live → off → live: a PR tie written live is not written again.
+    : i tk ( ag_task_post dr `Tied` `` `` `ann` 0 now )
+    ?? ( _ag_conn dr ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `INSERT INTO gh_task_prs (task, pr, ts, noted) VALUES (?1, 4242, 0, 0)` ) {
+                F _ → {}
+                T q → { ( _ag_bind_i q 1 tk ) ( _ag_run q ) }
+            }
+        }
+    }
+    ( ag_gh_mirror_mode dr 0 now )
+    ( ag_gh_mirror_mode dr 2 now )
+    ( gh_drain dr now )
+    : i ties1 ( count_of ( gh_sent_text dr ) `Pull request #4242` )
+    ( ag_gh_mirror_mode dr 0 now )
+    ( ag_gh_mirror_mode dr 2 now )
+    ( gh_drain dr now )
+    ( check & == ties1 1 == ( count_of ( gh_sent_text dr ) `Pull request #4242` ) 1 `mirror: off and on again does not repeat a PR link` )
     ( ag_gh_off )
 }
 
