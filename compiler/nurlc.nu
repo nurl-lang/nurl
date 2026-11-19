@@ -81560,6 +81560,15 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // moves in as a local does — `rcbox_new [T] @ T { a b }` in a
         // constructor copied every Vec it was handed, then dropped it.)
         : i __fpc_i ( nurl_sym_word_index syms `__fn_param_names__` fld_first_val )
+        // (…and a slice parameter in any literal that owns its slice field
+        // by type - a struct whose drop releases it, an enum's boxed
+        // payload, an option's payload: the field is a copy of it (below,
+        // as for any slice not the literal's own), so the function keeps
+        // the copy, not its argument. Recorded as kept, the caller handed
+        // its temporary over and nobody released it: `( wrapb ( mk ) )`
+        // with `@ wrapb [i t → Bag { ^ @ Bag { t 3 } }`, AGORA-895.)
+        : s __fpc_ty ? >= __fpc_i 0 ( nurl_llty ( nurl_sym_get syms fld_first_val ) ) ``
+        : b __fpc_slice && && && && && && >= __fpc_i 0 ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fpc_i ) ) != 0 ( nurl_str_len __fpc_ty ) == 123 ( nurl_str_get __fpc_ty 0 ) ( __owned_slice_ty __fpc_ty ) != 0 g_auto_drop_strings ? agg_is_wrap != 0 ( nurl_str_len ( __opt_slice_payload ( nurl_llty agg_ty ) ) ) | != enum_paycount -1 ( __agg_drop_takes_fields agg_ty )
         : b fld_param_copy & & & & & ( is_ident_tok fld_first_tt ) ! agg_returned ! agg_nested_wrap
         >= __fpc_i 0
         ( __clone_supported ( nurl_sym_get syms fld_first_val ) syms )
@@ -81639,7 +81648,14 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // the unwind drops it once (Agora #741). A last field is the `}`.
         : b __fj_defer & ( is_ident_tok fld_first_tt ) != ( nurl_lex_peek_type lex ) TT_RBRACE
         ? __fj_defer { ( nurl_print_buf_start ) } {}
-        ? & & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ! fld_param_lend | agg_returned == 0 ( nurl_str_len __argk ) ! __fk_rawparam
+        // (A slice parameter copied into a field the literal owns by type,
+        // __fpc_slice: the copy is the literal's outright - `__agg_copied__`
+        // - and the parameter is not kept.)
+        ? & __fpc_slice ( is_ident_tok fld_first_tt ) {
+            : s __acs ( nurl_sym_get syms `__agg_copied__` )
+            ( nurl_sym_set_deep syms `__agg_copied__` ? == 0 ( nurl_str_len __acs ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __acs ` ` fld_first_val ) )
+        } {}
+        ? & & & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ! __fpc_slice ! fld_param_lend | agg_returned == 0 ( nurl_str_len __argk ) ! __fk_rawparam
         // (Where it is copied — fld_lent, read before the move — its
         // sources keep their own, agora #476. Not a returned option's or
         // result's payload: one lent on some runs only is not copied there,
@@ -82360,8 +82376,15 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // still points where the parameter's did, so it carries them.)
         // (Asked precisely, as mem_dup asks whether a copy owns its data.)
         = g_thv_precise 1
-        : b __fpc_own & fld_param_copy ! ( __ty_holds_view ( nurl_llty fty ) 0 )
+        : b __fpc_own0 & fld_param_copy ! ( __ty_holds_view ( nurl_llty fty ) 0 )
         = g_thv_precise 0
+        // (…and a slice parameter copied into a field the literal owns by
+        // type, __fpc_slice: the copy's buffer is its own, and it holds a
+        // view of the parameter's sources only where its elements do - a
+        // `[i`'s copy lends nothing back. Taken for a lend, the caller
+        // treated `( wrapb ( mk ) )`'s result as its temporary and released
+        // it nowhere, AGORA-895.)
+        : b __fpc_own || __fpc_own0 && __fpc_slice ! ( __ty_holds_view_p ( __owned_slice_elem ( nurl_llty fty ) ) )
         ? & & ( is_ident_tok fld_first_tt ) ! __fpc_own
         ( seq ( nurl_sym_get syms `__last_ident_name__` ) fld_first_val )
         { : s __fc0 ( bck_param_carriers syms fld_first_val )
