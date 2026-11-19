@@ -1,3 +1,0 @@
-### Fixed
-
-- **An enum arm's payload is no longer readable after its enum is replaced by any route** (AGORA-569). These were accepted and read freed memory: a nested enum's payload after the outer enum is reset or assigned; a payload after a closure that assigns the enum runs; a payload view as a later argument of the call that resets the enum (`( show ( reset_ret o ) ( string_data s ) )`); the enum and its own payload handed to one call that resets it (`( reset_read o s )`); and a `string_data` view of the payload kept past a callee that grows the payload through the enum. All are refused now. Read the payload first, or take a copy that owns its data (`string_clone`).
