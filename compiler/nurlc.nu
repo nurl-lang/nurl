@@ -27625,11 +27625,19 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
     : b __dsj && == tt TT_QUEST != 0 ( nurl_str_len g_slice_join_own )
     // (…or a slice literal, `[i | 1 2]` on its own: always fresh.)
     : b __dsl && == tt TT_LBRACK != 0 ( nurl_sym_len syms `__last_slice_owned__` )
+    // (…or a call that copied a lent-back part of its temporary: it owns
+    // that copy by the copy's bit, whatever its borrow channels say -
+    // __call_copied_own. `( pick T ( mk ) a )` as a statement leaked the
+    // copy, AGORA-903.)
+    : s __dcp ? == tt TT_LPAREN ( __call_copied_own val ) ``
     // (Asked as far as needed: most statements are no call, join or
     // literal of a slice, and pay int tests only.)
-    ? && && && && || || __dcall __dsj __dsl != 0 g_auto_drop_strings != 0 ( nurl_str_len val ) && != 0 ( nurl_str_len dty ) == 123 ( nurl_str_get dty 0 ) ( __owned_slice_ty dty ) {
-        : s sro ? __dsl ( nurl_str_cat `true` `` ) ? __dsj ( nurl_str_cat g_slice_join_own `` ) ( __slice_call_own_bit syms cg )
+    ? && && && && || || || __dcall __dsj __dsl != 0 ( nurl_str_len __dcp ) != 0 g_auto_drop_strings != 0 ( nurl_str_len val ) && != 0 ( nurl_str_len dty ) == 123 ( nurl_str_get dty 0 ) ( __owned_slice_ty dty ) {
+        : s sro ? __dsl ( nurl_str_cat `true` `` ) ? __dsj ( nurl_str_cat g_slice_join_own `` ) ? != 0 ( nurl_str_len __dcp ) __dcp ( __slice_call_own_bit syms cg )
         ? != 0 ( nurl_str_len sro ) {
+            // (…released here, which runs its elements' `% Drop` where they
+            // have one: agora #931, as #766 for a value of its own.)
+            ( __udrop_release_tmp syms dty )
             ( __handle_drop_ensure dty )
             ( __dropifv_request dty )
             ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle dty ) ) ( nurl_print `(i1 ` ) ( nurl_print sro )
@@ -27720,9 +27728,28 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
 // dropped when the arm ends.
 @ mem_arm_tail_own i syms i cg s val i tt → v {
     ? | | | != 0 g_did_ret != tt TT_LPAREN == 0 ( nurl_str_len val ) == 0 g_auto_drop_strings { ^ v } {}
-    ? != 0 ( nurl_sym_len syms `__last_value_borrow__` ) { ^ v } {}
-    ? != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) { ? ! ( __call_answers syms tt ) { ^ v } {} } {}
+    // (A call that copied a lent-back part of its temporary owns the copy
+    // by its bit, whatever its borrow channels say: __call_copied_own.)
+    : s __acp ( __call_copied_own val )
+    ? & == 0 ( nurl_str_len __acp ) != 0 ( nurl_sym_len syms `__last_value_borrow__` ) { ^ v } {}
+    ? & == 0 ( nurl_str_len __acp ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) { ? ! ( __call_answers syms tt ) { ^ v } {} } {}
     : s dty ( nurl_get_last_type )
+    // (…an owned slice a call made, by the call's answer
+    // (__slice_call_own_bit: always fresh, per run, or `` for a lend), as
+    // the same call discarded as a statement is: `? c { ( mk ) } {}`
+    // leaked the fresh slice, AGORA-903.)
+    ? && && != 0 ( nurl_str_len dty ) == 123 ( nurl_str_get dty 0 ) ( __owned_slice_ty dty ) {
+        : s sro ? != 0 ( nurl_str_len __acp ) __acp ( __slice_call_own_bit syms cg )
+        ? != 0 ( nurl_str_len sro ) {
+            ( __udrop_release_tmp syms dty )
+            ( __handle_drop_ensure dty )
+            ( __dropifv_request dty )
+            ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle dty ) ) ( nurl_print `(i1 ` ) ( nurl_print sro )
+            ( nurl_print `, ` ) ( nurl_print ( nurl_llty dty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
+        } {}
+        ( nurl_set_last_type dty )
+        ^ v
+    } {}
     : s rty ( __udrop_regty dty )
     // (…or a value that cannot be copied — a `% Drop` value, a struct or
     // an enum holding one — owned the same way: left to nobody, it leaked
@@ -68743,8 +68770,11 @@ unsafe @ __rc_reach s lty → s {
                 = found ( __bar_add found ( nurl_str_cat `%Rc__` ( nurl_str_slice item 7 - ( nurl_str_len item ) 7 ) ) )
             } {}
             // (A trait object boxes a value of one of the types implementing
-            // its trait: what those reach, it may — agora #738.)
-            : s kids ? != 0 ( nurl_str_starts item `%dyn.` ) ( __dyn_impl_tys item ) ( __ty_kids g_root_syms item T )
+            // its trait: what those reach, it may — agora #738. An owned
+            // slice holds its elements, which hold what they reach: agora
+            // #931.)
+            : s kids0 ? != 0 ( nurl_str_starts item `%dyn.` ) ( __dyn_impl_tys item ) ( __ty_kids g_root_syms item T )
+            : s kids ? ( __owned_slice_ty item ) ( __bar_push kids0 ( __owned_slice_elem item ) ) kids0
             ? != 0 ( nurl_str_len kids ) { = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat kids `` ) ( nurl_str_cat3 kids `|` work ) } {}
         } {}
     }
@@ -68880,6 +68910,9 @@ unsafe @ __rc_runs_user_drop s lty → b {
         }
         ^ F
     } {}
+    // (An owned slice releases its elements: what they run, it runs —
+    // agora #931.)
+    ? ( __owned_slice_ty lty ) { ^ ( __rc_runs_user_drop ( __owned_slice_elem lty ) ) } {}
     : s first ( __inst_targ lty 0 )
     ? & != 0 ( nurl_str_len first ) ( __ty_std_named lty ( __lty_base_name lty ) ) {
         : ~ s a ( nurl_str_cat first `` )
@@ -68917,7 +68950,13 @@ unsafe @ __rc_runs_user_drop s lty → b {
         ? & & != 0 ( nurl_str_len item ) == 0 ( nurl_str_ends item `*` ) < ( nurl_str_find seen ( nurl_str_cat3 `|` item `|` ) ) 0 {
             = seen ( nurl_str_cat3 seen item `|` )
             ? ( __has_user_drop item ) { = found ( __bar_add found ( nurl_str_cat `drop__` ( nurl_sym_get2 g_impl_name_syms `drop##` item ) ) ) } {}
-            : s kids ? != 0 ( nurl_str_starts item `%dyn.` ) ( __dyn_impl_tys item ) ( __ty_kids g_root_syms item T )
+            // (An owned slice, `{ T*, i64 }`, owns its elements as a Vec
+            // does, and releasing it releases them: its buffer is asked by
+            // its element type, not passed over as a pointer. A `[H` of a
+            // `% Drop` type released with no call ran each H's destructor
+            // where the borrow walk saw none: agora #931.)
+            : s kids0 ? != 0 ( nurl_str_starts item `%dyn.` ) ( __dyn_impl_tys item ) ( __ty_kids g_root_syms item T )
+            : s kids ? ( __owned_slice_ty item ) ( __bar_push kids0 ( __owned_slice_elem item ) ) kids0
             ? != 0 ( nurl_str_len kids ) { = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat kids `` ) ( nurl_str_cat3 kids `|` work ) } {}
         } {}
     }

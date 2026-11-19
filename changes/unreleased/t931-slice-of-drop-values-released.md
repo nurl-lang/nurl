@@ -1,0 +1,3 @@
+### Fixed
+
+- **Releasing a slice of `% Drop` values runs their destructors for the borrow checker** (AGORA-931). If `H` has a `% Drop` that changes a payload shared through an `Rc`, a view of that payload through another handle stayed usable after an owned `[H` was released. That happened when the slice was discarded (`( mks r )`), when its binding went out of scope, and when it was a then-only arm's discarded value. Reading the view then read freed memory. A single `H` released the same way was already refused, and now the slice is too. A `( Slice H )` view releases nothing and is unaffected.
