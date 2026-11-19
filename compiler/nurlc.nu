@@ -64947,38 +64947,68 @@ unsafe @ __sx_mut_roots s st s e b named → s {
         : s js ( nurl_str_int j )
         : b jtake | | | ( bck_callee_keeps cal js ) ( nurl_sym_has_word g_fn_sink cal js ) ( bck_callee_drops_elems cal js ) | ( nurl_sym_has_word g_fn_reallocs cal js ) ( nurl_sym_has_word g_fn_mutates cal js )
         ? & & jtake != 0 ( nurl_str_len aj ) == 123 ( nurl_str_get aj 0 ) {
-            : s fs ( __sx_lit_fields aj )
-            : ~ s fa_rest ( nurl_str_cat fs `` )
-            ~ != 0 ( nurl_str_len fa_rest ) {
-                : i anl ( nurl_str_find fa_rest `\n` )
-                : s fa ? < anl 0 ( nurl_str_cat fa_rest `` ) ( nurl_str_slice fa_rest 0 anl )
-                = fa_rest ? < anl 0 `` ( nurl_str_slice fa_rest + anl 1 - - ( nurl_str_len fa_rest ) anl 1 )
-                // (A field that takes an owner in - a binding that owns its
-                // value, not a view or a borrow of one: its storage.)
-                : i faid ? ( bck_sx_is_id fa ) ( nurl_str_to_int fa ) -1
-                : b fown & >= faid 0 & == BCK_OWNED ( bck_st_get st faid ) == 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` ( nurl_str_int ( bck_path_root faid ) ) ) )
-                : s ma ? fown ( bck_sx_mut_storage st fa ) ``
-                ? & ! ( seq ma `*` ) != 0 ( nurl_str_len ma ) {
-                    : ~ s fb_rest ( nurl_str_cat fs `` )
-                    ~ != 0 ( nurl_str_len fb_rest ) {
-                        : i bnl ( nurl_str_find fb_rest `\n` )
-                        : s fb ? < bnl 0 ( nurl_str_cat fb_rest `` ) ( nurl_str_slice fb_rest 0 bnl )
-                        = fb_rest ? < bnl 0 `` ( nurl_str_slice fb_rest + bnl 1 - - ( nurl_str_len fb_rest ) bnl 1 )
-                        ? & ! ( seq fb fa ) != 0 ( nurl_str_len fb ) {
-                            : s sb ( bck_sx_arg_sources st fb )
-                            : s hit ? ( seq sb `*` ) `` ( bck_alias_conflict ma sb T )
-                            ? != 0 ( nurl_str_len hit ) {
-                                : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int hit ) ) ) ) )
-                                ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 ( nurl_str_cat3 `the literal handed to '` ( bck_fn_show cal ) `' as argument ` ) ( nurl_str_int + j 1 ) ( nurl_str_cat3 ` would view its own field: it is given '` nm `' and holds a view of '` ) ( nurl_str_cat3 nm `' at once, so growing or replacing that field (vec_reserve, a push, a new value) would leave the view dangling inside it - wherever it goes. Keep the view and its owner in different values, or take the view again from the field when you need it.` `` ) ) )
-                                ^ v
-                            } {}
-                        } {}
-                    }
-                } {}
-            }
+            ? ( __bck_lit_fields_check st aj cal j line ) { ^ v } {}
         } {}
         = j + j 1
     }
+}
+
+// The storage a literal field takes in: a binding that owns its value (not
+// a view or a borrow of one), or the owners a nested literal takes in, at
+// any depth (`@ Outer { @ Inner { b } sv }`: b; github#2086's review).
+@ __bck_lit_owner_storage s st s fa → s {
+    ? ( bck_sx_is_id fa ) {
+        : i faid ( nurl_str_to_int fa )
+        : b fown & == BCK_OWNED ( bck_st_get st faid ) == 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` ( nurl_str_int ( bck_path_root faid ) ) ) )
+        ^ ? fown ( bck_sx_mut_storage st fa ) ( nurl_str_cat `` `` )
+    } {}
+    ? | == 0 ( nurl_str_len fa ) != 123 ( nurl_str_get fa 0 ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s out ``
+    : ~ s fr ( __sx_lit_fields fa )
+    ~ != 0 ( nurl_str_len fr ) {
+        : i k ( nurl_str_find fr `\n` )
+        : s f ? < k 0 ( nurl_str_cat fr `` ) ( nurl_str_slice fr 0 k )
+        = fr ? < k 0 `` ( nurl_str_slice fr + k 1 - - ( nurl_str_len fr ) k 1 )
+        : s m ( __bck_lit_owner_storage st f )
+        ? & != 0 ( nurl_str_len m ) ! ( seq m `*` ) { = out ( __word_union out m ) } {}
+    }
+    ^ out
+}
+
+// One literal argument `aj` (argument j of `cal`): a field whose owners
+// (__bck_lit_owner_storage) another field points into or borrows from, or
+// the same inside a literal nested in it. T where it was refused.
+@ __bck_lit_fields_check s st s aj s cal i j i line → b {
+    : s fs ( __sx_lit_fields aj )
+    : ~ s fa_rest ( nurl_str_cat fs `` )
+    ~ != 0 ( nurl_str_len fa_rest ) {
+        : i anl ( nurl_str_find fa_rest `\n` )
+        : s fa ? < anl 0 ( nurl_str_cat fa_rest `` ) ( nurl_str_slice fa_rest 0 anl )
+        = fa_rest ? < anl 0 `` ( nurl_str_slice fa_rest + anl 1 - - ( nurl_str_len fa_rest ) anl 1 )
+        // (A nested literal is a value of its own as well.)
+        ? & != 0 ( nurl_str_len fa ) == 123 ( nurl_str_get fa 0 ) {
+            ? ( __bck_lit_fields_check st fa cal j line ) { ^ T } {}
+        } {}
+        : s ma ( __bck_lit_owner_storage st fa )
+        ? & ! ( seq ma `*` ) != 0 ( nurl_str_len ma ) {
+            : ~ s fb_rest ( nurl_str_cat fs `` )
+            ~ != 0 ( nurl_str_len fb_rest ) {
+                : i bnl ( nurl_str_find fb_rest `\n` )
+                : s fb ? < bnl 0 ( nurl_str_cat fb_rest `` ) ( nurl_str_slice fb_rest 0 bnl )
+                = fb_rest ? < bnl 0 `` ( nurl_str_slice fb_rest + bnl 1 - - ( nurl_str_len fb_rest ) bnl 1 )
+                ? & ! ( seq fb fa ) != 0 ( nurl_str_len fb ) {
+                    : s sb ( bck_sx_arg_sources st fb )
+                    : s hit ? ( seq sb `*` ) `` ( bck_alias_conflict ma sb T )
+                    ? != 0 ( nurl_str_len hit ) {
+                        : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int hit ) ) ) ) )
+                        ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 ( nurl_str_cat3 `the literal handed to '` ( bck_fn_show cal ) `' as argument ` ) ( nurl_str_int + j 1 ) ( nurl_str_cat3 ` would view its own field: it is given '` nm `' and holds a view of '` ) ( nurl_str_cat3 nm `' at once, so growing or replacing that field (vec_reserve, a push, a new value) would leave the view dangling inside it - wherever it goes. Put a copy that owns its data in the literal instead of the view (slice_to_vec, string_from, mem_dup), or take the view again from the field where it is read.` `` ) ) )
+                        ^ T
+                    } {}
+                } {}
+            }
+        } {}
+    }
+    ^ F
 }
 
 @ bck_call_alias_check s st s sx i line → v {
