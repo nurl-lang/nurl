@@ -289,7 +289,7 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   have hsat : RhsT (A2.setE K7 7 ER) [] (.sat 6 (.lit 0)) intE (A2.setE K7 7 ER) := by
     have := RhsT.sat (Γ := A2.setE K7 7 ER) (F := []) (y := 6) (E := Esv) (t := .int) (i := .lit 0)
       hL6 rfl rfl ExprT.lit
-    simpa [elemE] using this
+    simpa [elemE, intE] using this
   have hL8 : NoRootb (A2.setE (A2.setE K7 7 ER) 8 intE) := hL.setE (by simp [intE])
   have h8 := StmtT.letv (ξ := .none) (P := P) (x := 8) (r := .sat 6 (.lit 0)) (s := .skip) (E := intE) (F := [])
     (Γ := A2.setE K7 7 ER) (Γ1 := A2.setE K7 7 ER) rfl

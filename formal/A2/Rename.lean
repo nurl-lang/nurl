@@ -2146,10 +2146,30 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
           (append_sub (List.Subset.refl _) ?_)
         simp only [ht, Ty.hasFn]
         by_cases ht' : t.hasFn = true <;> simp [ht']
-  | @sat y i Ey t hy hl ht hi =>
+  | @sat y i Ey t f hy hl ht hi hf =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
-    exact ⟨_, RhsT.sat hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
-      (exprT_ren h hab hi), fun x => elemE_lift h hab hy t x⟩
+    refine ⟨_, RhsT.sat (f := f) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
+      (exprT_ren h hab hi) (fun hft => ⟨freshSrc_lift h hy (hf hft).1, (hf hft).2⟩), fun x => ?_⟩
+    cases f with
+    | false =>
+      rw [Entry.with_fresh_eq (by cases t <;> rfl), Entry.with_fresh_eq (by cases t <;> rfl)]
+      exact elemE_lift h hab hy t x
+    | true =>
+      -- AGORA-909: a fresh element read through a slice is renamed exactly (`derive_lift_eq`)
+      obtain ⟨hs, hns⟩ := hf rfl
+      have heq := derive_lift_eq h hab hy hs .inner
+      cases t
+      case int =>
+        exact EntryWeaker.mk' (by simp [elemE, liftE, intE]) (by simp [elemE, liftE, intE, liftMode])
+          (by simp [elemE, intE]) (by simp [elemE, liftE, intE]) (fun _ d hd => by simp [elemE, intE] at hd)
+          (fun d hd => by simp [elemE, intE] at hd) (hf := fun _ hn _ _ => absurd (by simp [liftE, elemE, intE]) hn)
+      case slice s => exact absurd rfl (hns s)
+      all_goals
+        refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode]) (by simp [elemE])
+          (by simp [elemE, liftE]) (fun _ => ?_) ?_ (hf := fun _ _ _ _ => ⟨rfl, ?_⟩)
+        · simp only [elemE]; rw [heq]; simp [liftE, Mode.ownSlot]
+        · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact held_lift h hab hy
+        · simp only [elemE]; rw [heq]; simp [liftE, Mode.ownSlot]
   | @pop y Ey t hy hl ht hcan hyF hds =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     have hrb : Ey.mode ≠ .rootb := by

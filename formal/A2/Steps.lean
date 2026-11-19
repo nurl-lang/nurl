@@ -2195,7 +2195,7 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
     | view hvec => exact ⟨RhsPost.same hi, ((out_view hi hy hl ht hhv hvec).setFresh _).setHeldFresh _⟩
   | sat hy hl ht hx =>
     cases he with
-    | sat hn hv _ _ _ hda => exact ⟨RhsPost.same hi, out_sat hi hy hl ht hn hv hda⟩
+    | sat hn hv _ _ _ hda => exact ⟨RhsPost.same hi, (out_sat hi hy hl ht hn hv hda).setFresh _⟩
   | pop hy hl ht hcan hyF hds =>
     cases he with
     | pop hT _ _ => exact rhs_pop hi hanch hy hl ht hcan hyF hT hds

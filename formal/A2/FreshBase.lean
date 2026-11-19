@@ -169,6 +169,32 @@ theorem PushArg.freshOK {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E : Entry} {t :
   | int => exact ⟨h, KeepsFrame.refl _⟩
   | slice => exact ⟨h, KeepsFrame.refl _⟩
 
+/-- AGORA-909: `derive_freshE` of a source of any type. -/
+theorem derive_freshE_any {Γ : Ctx} (h : FreshOK Γ) {y : Var} {E : Entry} {k : Kind}
+    (hy : Γ y = some E) (hk : k = .self ∨ k = .inner ∨ k = .view) (hs : FreshSrc Γ y) :
+    derive y E k ≠ [] ∧ ∀ d ∈ derive y E k, (d.kind = .self ∨ d.kind = .inner ∨ d.kind = .view) ∧
+      ∃ Er, Γ d.root = some Er ∧ Er.mode.frame := by
+  obtain ⟨E', hE', hc⟩ := hs
+  rw [hy] at hE'; cases hE'
+  rcases hc with hfr | ⟨hb, hf, hl, hn⟩
+  · have hroot : E.mode.isRoot = true := by rcases hfr with h' | ⟨b, h'⟩ <;> rw [h'] <;> rfl
+    have hd : derive y E k = [⟨y, rootKind E.ty k⟩] := by unfold derive; rw [if_pos hroot]
+    rw [hd]
+    refine ⟨by simp, fun d hd' => ?_⟩
+    simp only [List.mem_singleton] at hd'; subst hd'
+    refine ⟨?_, E, hy, hfr⟩
+    rcases rootKind_cases E.ty k with h1 | ⟨_, h1⟩ <;> rw [h1] <;> first | exact hk | simp
+  · have hroot : E.mode.isRoot = false := by rw [hb]; rfl
+    have hd : derive y E k = E.path.map (fun d => ⟨d.root, comp d.kind k⟩) := by
+      unfold derive; rw [if_neg (by rw [hroot]; simp)]
+    obtain ⟨hne, hpd⟩ := h y E hy hl hn hb hf
+    rw [hd]
+    refine ⟨by simpa using hne, fun d hd' => ?_⟩
+    obtain ⟨d0, hd0, rfl⟩ := List.mem_map.mp hd'
+    obtain ⟨hk0, Er, hEr, hm⟩ := hpd d0 hd0
+    refine ⟨?_, Er, hEr, hm⟩
+    rcases hk0 with h0 | h0 | h0 <;> rcases hk with rfl | rfl | rfl <;> simp [h0, comp]
+
 /-- Agora #909: a structural borrow of a `Vec` taken from a fresh source
     reaches only the frame's own blocks. -/
 theorem derive_freshE {Γ : Ctx} (h : FreshOK Γ) {y : Var} {E : Entry} {t : Ty} {k : Kind}
@@ -251,6 +277,13 @@ theorem RhsT.freshOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : R
     | int => exact absurd rfl hn
     | slice s => exact absurd rfl (hns s)
     | _ => exact derive_freshE h hy ht (Or.inr (Or.inl rfl)) hs
+  | @sat y i E t f hy hl ht _ hf =>
+    refine ⟨h, fun _ hn _ hfr => ?_, KeepsFrame.refl _⟩
+    obtain ⟨hs, hns⟩ := hf hfr
+    cases t with
+    | int => exact absurd rfl hn
+    | slice s => exact absurd rfl (hns s)
+    | _ => exact derive_freshE_any h hy (Or.inr (Or.inl rfl)) hs
   | @fst y E a b f hy hl ht hf =>
     refine ⟨h, fun _ hn _ hfr => ?_, KeepsFrame.refl _⟩
     obtain ⟨hsrc, _, hh, hns⟩ := hf hfr

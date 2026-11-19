@@ -274,7 +274,7 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   have hsat : RhsT (A2.setE K3 3 ER) [] (.sat 2 (.lit 0)) intE (A2.setE K3 3 ER) := by
     have := RhsT.sat (Γ := A2.setE K3 3 ER) (F := []) (y := 2) (E := Esv) (t := .int) (i := .lit 0)
       hL2 rfl rfl ExprT.lit
-    simpa [elemE] using this
+    simpa [elemE, intE] using this
   have hL4 : NoRootb (A2.setE (A2.setE K3 3 ER) 4 intE) := hL.setE (by simp [intE])
   have h4 := StmtT.letv (ξ := .none) (P := P) (x := 4) (r := .sat 2 (.lit 0)) (s := .skip) (E := intE) (F := [])
     (Γ := A2.setE K3 3 ER) (Γ1 := A2.setE K3 3 ER) rfl (by simp [A2.setE, upd, K3, K2, K1]) (by simp) hsat

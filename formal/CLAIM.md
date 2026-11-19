@@ -239,6 +239,20 @@ the LLVM / C11 memory model rather than redefining it.
     that does not read the bit (`payload_fresh_killed`,
     `hits_fresh_irrel`). With the bit off each read is `projE` as before
     (`RhsT.fst_unfresh` and the others).
+    `A2/FreshSatWitness.lean` types the same call through a slice:
+    `g` views its `inout` `vv` (a fresh view) and pushes through
+    `( slice_at sl 0 )`. An element read through a slice (`RhsT.sat`) may
+    be fresh as one read through a `Vec` (`RhsT.at`) may, from the same
+    sources (`FreshSrc`: a binding of the frame's own, or a fresh borrow),
+    and not a slice element: its path is the view's, `[⟨vv, .inner⟩]`. So
+    the push is an `edit false`, `g` is not through-changing, and the call
+    is safe and leak-free (`main_safe`, `main_no_leak`). nurlc accepts it
+    (`inout_push_through_an_element_of_its_view_called_with_a_view_read_after`)
+    and it runs clean. Through a borrowed slice parameter, a view that is
+    not fresh (a view of a borrowed parameter among them), or for an
+    element that is itself a slice, the read is never fresh
+    (`sat_rootb_not_fresh`, `sat_stale_not_fresh`,
+    `sat_of_view_of_rootb_not_fresh`, `sat_slice_elem_not_fresh`).
 
   Agora #909 takes in what changes elements that hold no views only
   through a fresh borrow.

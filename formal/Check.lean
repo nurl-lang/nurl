@@ -649,3 +649,17 @@ import A3
 #print axioms A2.FreshNestWitness.main_typed
 #print axioms A2.FreshNestWitness.main_safe
 #print axioms A2.FreshNestWitness.main_no_leak
+-- AGORA-909: an element read through a slice may be fresh (RhsT.sat), as one through a Vec
+#print axioms A2.derive_freshE_any
+#print axioms A2.RhsT.sat_unfresh
+#print axioms A2.FreshSatWitness.view_typed
+#print axioms A2.FreshSatWitness.sat_typed
+#print axioms A2.FreshSatWitness.g_not_thru
+#print axioms A2.FreshSatWitness.call_ok
+#print axioms A2.FreshSatWitness.main_typed
+#print axioms A2.FreshSatWitness.main_safe
+#print axioms A2.FreshSatWitness.main_no_leak
+#print axioms A2.FreshSatWitness.sat_rootb_not_fresh
+#print axioms A2.FreshSatWitness.sat_stale_not_fresh
+#print axioms A2.FreshSatWitness.sat_slice_elem_not_fresh
+#print axioms A2.FreshSatWitness.sat_of_view_of_rootb_not_fresh

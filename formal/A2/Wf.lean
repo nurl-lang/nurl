@@ -340,10 +340,10 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
     rw [bor_vdeps _ rfl]
     exact app _ _ (hderive y Ey .view hy hl hn') (hheld y Ey hy hl hn')
-  | @sat y i Ey t hy hl ht _ =>
+  | @sat y i Ey t _ hy hl ht _ =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
-    rw [bor_vdeps _ (elemE_mode ..)]
+    rw [Entry.fresh_vdeps, bor_vdeps _ (elemE_mode ..)]
     cases t with
     | int => simp [elemE, intE] at hn
     | slice s => exact app _ _ (hheld y Ey hy hl hn') (hheld y Ey hy hl hn')

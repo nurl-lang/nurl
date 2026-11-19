@@ -838,9 +838,13 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- ... and held-fresh if what `y` holds is
       (hh : h = true → HeldSrc Γ y := by fresh_src) →
       RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false, f, h⟩ Γ
-  | sat {y : Var} {i : Expr} {E : Entry} {t : Ty} :
+  -- (AGORA-909: an element read through a slice may be fresh, as one read
+  -- through a `Vec` (`RhsT.at`) may: the slice is the frame's own, or a fresh
+  -- view of a binding of the frame's own. Not a slice element.)
+  | sat {y : Var} {i : Expr} {E : Entry} {t : Ty} {f : Bool} :
       Γ y = some E → E.live = true → E.ty = .slice t → ExprT Γ i →
-      RhsT Γ F (.sat y i) (elemE y E t) Γ
+      (hf : f = true → FreshSrc Γ y ∧ ∀ s, t ≠ .slice s := by fresh_src) →
+      RhsT Γ F (.sat y i) { elemE y E t with fresh := f } Γ
   | pop {y : Var} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t → canDo E.mode .drop → y ∉ F →
       DtorSafe Γ .drop t.holdsView y →

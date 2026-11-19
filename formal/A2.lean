@@ -63,5 +63,6 @@ import A2.ClosureParamViewWitness
 import A2.InoutViewArgWitness
 import A2.FreshProjWitness
 import A2.FreshNestWitness
+import A2.FreshSatWitness
 import A2.FreshClosureWitness
 import A2.SelfViewCall
