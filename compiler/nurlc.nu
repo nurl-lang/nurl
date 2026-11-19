@@ -36630,7 +36630,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
         ( nurl_str_cat bck_arg_nm `` )
         ( nurl_str_cat3 arg_idents ` ` bck_arg_nm )
-        ? != 0 g_user_drop_seen {
+        // (Only for a callee that may hand back a closure — its return
+        // type lowered, `__cal_ll`, or a generic's instance: no other result
+        // can hold what it took over.)
+        ? & != 0 g_user_drop_seen | ( __is_closure_ll __cal_ll ) != 0 ( nurl_str_len call_targs ) {
             : s __uda ( __udrop_fns ( nurl_llty at ) )
             ? != 0 ( nurl_str_len __uda ) {
                 : s __udr ( __rc_reach ( nurl_llty at ) )
@@ -61590,9 +61593,10 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // whose drop reads a view, after what that view points into.)
                 // (…and what the exit releases, past the value it hands back:
                 // its source expression, `retsx`, agora #918.)
-                ( bck_put `retsx` ? >= ( __bck_field_off rec 8 ) 0 ( bck_field rec 8 ) `` )
+                : b __rsx_on & & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) >= ( __bck_field_off rec 8 ) 0
+                ? __rsx_on { ( bck_put `retsx` ( bck_field rec 8 ) ) } {}
                 ( bck_ret_drop_check after_defers ( bck_field_int rec 3 ) )
-                ( bck_put `retsx` `` )
+                ? __rsx_on { ( bck_put `retsx` `` ) } {}
                 = st ( nurl_str_cat `!` `` )
                 = p hi
                 = done T
@@ -63483,8 +63487,8 @@ unsafe @ bck_younger_view_check i holder s srcs i p i line → v {
 unsafe @ bck_ret_drop_check s st i line → v {
     // (…and, where the return hands back a value read through an Rc's
     // payload, what each binding it releases runs: `retsx`, agora #918.)
-    : s rsx ( nurl_sym_get g_bck `retsx` )
-    : b udc & & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) != 0 ( nurl_str_len rsx )
+    : s rsx ? & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) ( nurl_sym_get g_bck `retsx` ) ``
+    : b udc != 0 ( nurl_str_len rsx )
     ? | ( seq st `!` ) & == 0 g_bck_udrop_any ! udc { ^ v } {}
     // (Not the owner handed back by name, gen_ret: the caller drops it.)
     : s rtn ( nurl_sym_get g_bck ( nurl_str_cat4 `rto_` ( nurl_sym_get g_bck `file` ) `:` ( nurl_str_int line ) ) )
