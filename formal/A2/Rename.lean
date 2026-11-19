@@ -281,10 +281,10 @@ theorem liftMode_rootb {m : Mode} : liftMode m = .rootb ↔ m = .rootb := by cas
 /-- What a lift adds to an entry's dependencies that matter: to a borrow's
     path, what the arguments hold (none to a fresh one's), and to `held`,
     `heldA`. -/
-def liftX (E : Entry) : List Dep :=
+def liftDeps (E : Entry) : List Dep :=
   (if E.mode.ownSlot || (E.fresh && E.ty != .int) then [] else S.A) ++ ownHeld E.mode.ownSlot E.ty (S.heldA E)
 
-theorem liftX_sub (E : Entry) : S.liftX E ⊆ S.A := by
+theorem liftDeps_sub (E : Entry) : S.liftDeps E ⊆ S.A := by
   intro d hd
   rcases List.mem_append.mp hd with h | h
   · split at h
@@ -292,18 +292,18 @@ theorem liftX_sub (E : Entry) : S.liftX E ⊆ S.A := by
     · exact h
   · exact S.heldA_sub E (ownHeld_sub _ _ _ h)
 
-theorem liftX_own {E : Entry} (h : E.mode.ownSlot = true) : S.liftX E = ownHeld true E.ty S.A := by
-  simp [liftX, h, S.heldA_own h]
+theorem liftDeps_own {E : Entry} (h : E.mode.ownSlot = true) : S.liftDeps E = ownHeld true E.ty S.A := by
+  simp [liftDeps, h, S.heldA_own h]
 
 theorem mem_liftE_vdeps {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) {d : Dep} :
-    d ∈ (S.liftE v E).vdeps ↔ (∃ d0 ∈ E.vdeps, d = d0.ren S.ρ) ∨ d ∈ S.liftX E := by
+    d ∈ (S.liftE v E).vdeps ↔ (∃ d0 ∈ E.vdeps, d = d0.ren S.ρ) ∨ d ∈ S.liftDeps E := by
   have hv : (S.liftE v E).vdeps = (if E.mode.ownSlot then [] else
         rds S.ρ E.path ++ (if E.fresh && E.ty != .int then [] else S.A)) ++
       (rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty (S.heldA E)) := by
     simp only [liftE, hrb, ↓reduceIte, Entry.vdeps, liftMode_ownSlot]
     cases E.mode.ownSlot <;> simp
   rw [hv]
-  unfold Entry.vdeps liftX
+  unfold Entry.vdeps liftDeps
   cases ho : E.mode.ownSlot
   · split <;> simp [mem_rds] <;> grind
   · simp [mem_rds]
@@ -311,7 +311,7 @@ theorem mem_liftE_vdeps {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) {d : Dep
 
 theorem liftE_vdeps_cases {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) {d : Dep}
     (hd : d ∈ (S.liftE v E).vdeps) : (∃ d0 ∈ E.vdeps, d = d0.ren S.ρ) ∨ d ∈ S.A :=
-  ((mem_liftE_vdeps hrb).mp hd).imp id (fun h => S.liftX_sub E h)
+  ((mem_liftE_vdeps hrb).mp hd).imp id (fun h => S.liftDeps_sub E h)
 
 theorem liftE_ty (v : Var) {E : Entry} (hrb : E.mode ≠ .rootb) : (S.liftE v E).ty = E.ty := by
   simp [liftE, hrb]
@@ -508,7 +508,7 @@ theorem hitsMem_lift (h : S.OK) {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) 
       simp only [Bool.and_eq_true, beq_iff_eq, Dep.ren] at hk ⊢
       exact ⟨⟨h.inj _ _ hk.1.1, hk.1.2⟩, hk.2⟩
     · simp only [Bool.and_eq_true, beq_iff_eq] at hk
-      exact absurd hk.1.1.symm (A_out h (S.liftX_sub E ha) x)
+      exact absurd hk.1.1.symm (A_out h (S.liftDeps_sub E ha) x)
   · intro ⟨d0, hd0, hk⟩
     refine ⟨d0.ren S.ρ, (mem_liftE_vdeps hrb).mpr (Or.inl ⟨d0, hd0, rfl⟩), ?_⟩
     simp only [Bool.and_eq_true, beq_iff_eq, Dep.ren] at hk ⊢
@@ -1525,7 +1525,7 @@ theorem DKeep.canon (h : S.OK) {Δa : Ctx} (hdk : DKeep Γa Δa [])
       · exact (mem_liftE_vdeps hrb0).mpr
           (Or.inl ⟨d0, hs0 d0 hd0' (by simpa [Dep.ren] using hnm), rfl⟩)
       · refine (mem_liftE_vdeps hrb0).mpr (Or.inr ?_)
-        rw [S.liftX_own hos1] at ha; rw [S.liftX_own hos0, ← ht0]; exact ha
+        rw [S.liftDeps_own hos1] at ha; rw [S.liftDeps_own hos0, ← ht0]; exact ha
   · rw [hc] at hy
     exact ⟨E', by rw [canon_frame Γa hyf]; exact hy, hd, hos, hn, fun d hdd _ => hdd⟩
 
@@ -1767,7 +1767,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
       (NoPin.lift h hab (bnd_replace hab hy hm3')) (DtorSafe.canon h hal hds), fun x => ?_⟩
     have he : S.liftE x ⟨Ey.ty, .own, true, [], Ey.held, false, false, false, false⟩ =
         ⟨(S.liftE y Ey).ty, .own, true, [], (S.liftE y Ey).held, false, false, false, false⟩ := by
-      simp [liftE, heldA, hrb, liftMode, rds, hos, show Mode.ownSlot .own = true from rfl]
+      simp [liftE, hrb, liftMode, rds, hos, S.heldA_own hos, heldA_own, show Mode.ownSlot .own = true from rfl]
     rw [he]; exact EntryWeaker.refl _
   | @copyRoot y Ey hy hl hm =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
@@ -2742,7 +2742,7 @@ theorem recvRes_lift (h : S.OK) (hab : S.AbsOK Γa) {c : Var} {Ec E E' : Entry} 
   have hos : (liftMode E.mode).ownSlot = E.mode.ownSlot := liftMode_ownSlot _
   have hpath : (S.liftE x E).path = rds S.ρ E.path ++ (if E.mode.ownSlot then [] else S.A) := by
     simp [liftE, hrb, hEf]
-  have hheld : (S.liftE x E).held = rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A := liftE_held hrb
+  have hheld : (S.liftE x E).held ⊆ rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A := S.liftE_held_sub hrb
   have hrrb : (recvRes c Ec E).mode ≠ .rootb := hrb
   have hpath2 : (S.liftE x (recvRes c Ec E)).path =
       rds S.ρ (E.path ++ allKinds (recvRoots c Ec)) ++ (if E.mode.ownSlot then [] else S.A) := by
@@ -2758,7 +2758,7 @@ theorem recvRes_lift (h : S.OK) (hab : S.AbsOK Γa) {c : Var} {Ec E E' : Entry} 
     intro hh1
     show ownHeld E'.mode.ownSlot E'.ty (E'.held ++ _) ⊆ (S.liftE x (recvRes c Ec E)).held
     rw [hE'os, hE'ty, hheld2]
-    rw [hheld] at hh1
+    replace hh1 := hh1.trans hheld
     by_cases hc0 : (E.mode.ownSlot && !E.ty.holdsView) = true
     · simp only [ownHeld, hc0, ↓reduceIte]; intro d hd; cases hd
     · simp only [ownHeld, hc0, Bool.false_eq_true, ↓reduceIte] at hh1 ⊢
@@ -2864,7 +2864,7 @@ theorem liftE_callRes (Γ : Ctx) (fn : Fn) (args : List Var) (x : Var) :
          (if (resMode fn).ownSlot then [] else S.A),
        rds S.ρ (ownHeld fn.resOwn fn.resTy (fn.rholds.flatMap (argDeps Γ args) ++ heldOfArgs Γ args)) ++
          ownHeld fn.resOwn fn.resTy S.A, false, false, false, false⟩ := by
-  simp only [liftE, callRes, resMode_ne fn, ↓reduceIte, liftMode_resMode, resMode_ownSlot, Bool.false_and,
+  simp only [liftE, heldA, callRes, resMode_ne fn, ↓reduceIte, liftMode_resMode, resMode_ownSlot, Bool.false_and,
     Bool.or_false]
 
 theorem callRes_lift (h : S.OK) (hab : S.AbsOK Γa) {fn : Fn} {args : List Var}
