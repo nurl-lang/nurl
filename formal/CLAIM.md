@@ -196,6 +196,18 @@ the LLVM / C11 memory model rather than redefining it.
     (`code_not_thru`), and `Implements` and `CallT` ask nothing of the
     environment or the argument; safe and leak-free (`main_safe`,
     `main_no_leak`). nurlc accepts both, and they run clean.
+    `A2/InoutViewArgWitness.lean` types the issue's direct-call form: a
+    function that pushes through `vec_at` of its `inout` parameter, called
+    with a view of another value that is read after the call. The borrow is
+    rooted at the `inout` parameter, a binding of the frame's own, so it is
+    fresh and the push an `edit false`. The function is not through-changing
+    (`g_not_thru`), and the call asks nothing of the view. What keeps the
+    view from reaching the changed argument is `CallT`'s exclusivity of a
+    moved or changed argument (no other argument reaches it in memory), not
+    `callR`. Safe and leak-free (`main_safe`, `main_no_leak`); nurlc accepts
+    it (`inout_push_through_its_element_called_with_a_view_read_after`) and
+    it runs clean. With `s` a view of `vv`'s element instead (AGORA-923,
+    github#2072, fixed in nurlc by github#2076), no typing of the call exists (`call_refused`).
 
   Agora #909 takes in what changes elements that hold no views only
   through a fresh borrow.
