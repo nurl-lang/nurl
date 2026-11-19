@@ -5,4 +5,4 @@
   - a change reached through a view or an element ends more at the caller than in the callee (`A2/ThruLiftKinds.lean` proves this case by case);
   - a move out of a parameter erases what it points into.
 
-  It also records what typing the call would take: symbolic provenance for parameters that hold views. nurlc refuses these programs, so this is a gap in what the proof covers, not a hole. NURL source is unchanged.
+  It also records what typing the call would take: symbolic provenance for parameters that hold views. nurlc refuses such a call when another argument views what the callee may move. It accepts `( f vv )` alone and ends the caller's views of what `vv`'s elements view at the call, a program A2 does not type yet. NURL source is unchanged.

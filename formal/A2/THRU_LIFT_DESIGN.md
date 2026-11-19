@@ -6,9 +6,11 @@
 into a function that changes elements through a borrow, or that calls one
 that does, passes no argument holding views.
 `A2/HeldViewThruWitness.lean` (AGORA-933) shows that this refuses both of
-AGORA-933's shapes. nurlc refuses them too (github#2100), and ends the
-caller's views after `( f vv )`. So the gap is one of precision: nurlc
-accepts nothing here that A2 refuses.
+AGORA-933's shapes. nurlc refuses the call with a view of the grown
+element beside `vv` (github#2100). It accepts `( f vv )` alone, and ends
+the caller's views of what `vv`'s elements view at the call, while A2
+refuses that call (`call_alone_refused`). That shape is the open typing
+gap. The program is sound under nurlc's rule, but A2 does not type it yet.
 
 `A2/ThruLiftKinds.lean` proves the facts below on Lean's standard axioms
 only.
