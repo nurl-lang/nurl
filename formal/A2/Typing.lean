@@ -61,8 +61,9 @@ structure Entry where
       lifting such a borrow adds nothing the arguments hold to its path
       (`RSetup.liftE`). `false` unless a rule says so. -/
   fresh : Bool
-  /-- Agora #916: what the binding holds in memory is only blocks of the
-      frame's own bindings: each memory dependency of `held` is structural
+  /-- Agora #916: the binding is a borrow, and what it holds in memory is
+      only blocks of the frame's own bindings: each memory dependency of
+      `held` is structural
       (`.self` / `.inner`) and rooted at an owner or an `inout` parameter,
       never at a borrowed parameter or a share, whose memory may be an
       argument's. A call lifting such an entry adds nothing the arguments
@@ -339,8 +340,10 @@ structure EntryWeaker (E E' : Entry) : Prop where
     E.fresh = true ∧ E'.path ⊆ E.path
   /-- Agora #916: an entry holding frame-own memory only stays one only as it
       was: a weakening that sets the bit, or adds memory to such an entry's
-      `held`, would let it hold what the frame does not own. -/
-  heldFresh : E'.live = true → E'.heldFresh = true →
+      `held`, would let it hold what the frame does not own. Only a live
+      borrow that holds memory matters, as for `fresh`: an owner's type says
+      what it may hold. -/
+  heldFresh : E'.live = true → E'.ty ≠ .int → E'.mode = .bor → E'.heldFresh = true →
     E.heldFresh = true ∧ memDeps E'.held ⊆ memDeps E.held
 
 /-- Closes `EntryWeaker.heldFresh` where the weaker entry's bit is not set

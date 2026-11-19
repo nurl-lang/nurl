@@ -9,7 +9,7 @@ theorem EntryWeaker.refl (E : Entry) : EntryWeaker E E := by
   refine ⟨rfl, rfl, fun _ => rfl, fun h => ⟨h, fun _ => List.Subset.refl _, List.Subset.refl _⟩,
     fun h => ⟨h, List.Subset.refl _⟩, (by simp_all), (fun _ => by simp_all), fun _ _ _ _ _ => Iff.rfl,
     fun _ _ _ h => ⟨h, List.Subset.refl _⟩,
-      fun _ hhf => by heldfresh_ew⟩
+      fun _ _ _ hhf => by heldfresh_ew⟩
 
 theorem EntryWeaker.trans {E1 E2 E3 : Entry} (h1 : EntryWeaker E1 E2) (h2 : EntryWeaker E2 E3) :
     EntryWeaker E1 E3 := by
@@ -25,9 +25,11 @@ theorem EntryWeaker.trans {E1 E2 E3 : Entry} (h1 : EntryWeaker E1 E2) (h2 : Entr
       obtain ⟨h2, p2⟩ := f2 hl hn hb h
       obtain ⟨h1, p1⟩ := f1 hl2 hn2 hb2 h2
       exact ⟨h1, p2.trans p1⟩,
-    fun hl hhf => by
-      obtain ⟨g2h, s2⟩ := g2 hl hhf
-      obtain ⟨g1h, s1⟩ := g1 (l2 hl).1 g2h
+    fun hl hn hb hhf => by
+      have hn2 : E2.ty ≠ .int := by rw [← t2]; exact hn
+      have hb2 : E2.mode = .bor := by rw [← m2]; exact hb
+      obtain ⟨g2h, s2⟩ := g2 hl hn hb hhf
+      obtain ⟨g1h, s1⟩ := g1 (l2 hl).1 hn2 hb2 g2h
       exact ⟨g1h, s2.trans s1⟩⟩
   rotate_right
   · rcases a2 h with h2 | h2
