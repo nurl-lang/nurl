@@ -133,6 +133,15 @@ $ `service.nu`
         ( nurl_eprintln ( string_data why ) )
         ^ 2
     } {}
+    // [github]: the GitHub App, when there is one (github.nu).
+    : String gwhy ( string_new )
+    ? ( ag_gh_apply_config cfg gwhy ) {} {
+        ? > ( string_len gwhy ) 0 {
+            ( nurl_eprint `agora: ` )
+            ( nurl_eprintln ( string_data gwhy ) )
+            ^ 2
+        } {}
+    }
     // Local mode serves the one file; signed-in mode opens an
     // organisation's file per request and needs none here.
     ? oidc {

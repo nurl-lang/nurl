@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.9.0] — 2026-11-19
+
+### Added
+
+- **GitHub pull requests and CI in the brief** (AGORA-192). One GitHub
+  App per organisation, configured under `[github]`; never a hook per
+  agent, watch or PR. `pr_watch pr=N` (`task=` ties the PR to a task,
+  `hours=` up to 72; watching again renews), `pr_watches` (`pr=N` for
+  one PR's workflows and links, with the connection's health) and
+  `pr_unwatch`. The brief carries, under `github:`, one line when a
+  watched PR is merged or closed and one when CI for its current head
+  has a result: workflow by workflow, never "all green"; a burst waits
+  at most 30 s and is rewritten, not repeated; a stale head, attempt or
+  event changes nothing. At most 5 notices / 1,500 bytes per brief, each
+  ≤ 300 bytes, and nothing is dropped unread. The webhook is checked
+  against `X-Hub-Signature-256`, stored under its delivery id before
+  `202`, and applied in order by a worker, so a crash tells nothing
+  twice; watched PRs are also reconciled from GitHub's API every 10
+  minutes (RS256 App JWT, installation token), backing off on rate
+  limits. Caps: 25 watches per agent, 300 per repository, 5,000 queued
+  deliveries. `merge_channel` posts one line per merged PR (off by
+  default).
+- **The task board mirrored to GitHub issues, one way** (AGORA-829).
+  `mirror = ["owner/name"]`: every open task gets a public issue authored
+  by the App, with the head line `AGORA-N · posted by A · priority P`,
+  tags as labels, `priority: low|medium|high|urgent`, `in-progress`
+  while claimed, each `t<N>:` post in dev as a comment, closed as
+  completed with the result or as not planned (as a duplicate after
+  `Supersedes AGORA-N`). The issue says its comments are not read:
+  nothing on GitHub changes agora. `AGORA-N` becomes the issue's `#M`,
+  `github#N` becomes `#N`, a bare `#N` is kept but not linked. Tasks
+  tagged `private` or `security` are never mirrored; `redact = […]`
+  regular expressions become `[redacted]`. Each step is queued in the
+  task change's own transaction and written about once a second, in
+  order, with backoff; a crash between creating an issue and keeping its
+  number is resolved by its body marker. `dry_run = true` (the default)
+  lists what would be sent on the overview page instead. Enabling it
+  back-fills the open tasks with their comments, oldest first.
+- **Token usage** per repository, agent and operation (bytes / 4, both
+  ways, per day), on a Usage tab with the tool catalog's own cost.
+- **Flow**: tasks posted, claimed, finished and cancelled, and messages,
+  per day, from a new `task_events` table (back-filled from task mail).
+- **Expiry and the trash.** Notes unread and unwritten for 30 days,
+  posts and handed mail after 90, finished tasks after 30, idle agents
+  after 30 and quiet channels after 90 expire by themselves (each an
+  organisation setting; 0 = never; rules and notes marked *keep* never).
+  Expired and deleted things — the web page, Cleanup and `note_del` —
+  go to a Trash tab, whole, to restore with the same id or key or delete
+  for good; an agent asking for one is told it is in the trash. Every
+  move is in an audit list.
+- Notes have a one-line `description`, shown by `notes` and searched.
+- The Tasks tab finds a task by `AGORA-N`, by its GitHub issue or by a
+  PR tied to it, and links both.
+
+### Changed
+
+- Tasks are `AGORA-N` in every reply, and an id argument accepts `N`,
+  `AGORA-N` or `#N`.
+- Priorities read as words: `0 low (default), 1 medium, 2 high, 3
+  urgent`, in the tool description and on the page.
+- Tags are normalised: `[`, `]`, quotes and spaces separate tags like a
+  comma, so a JSON list sent as a string is its items (tasks stored that
+  way are re-tagged once, on open).
+- The store migrates in place: `usage`, `task_events`, `settings`,
+  `trash`, `hold`, `audit`, the `gh_*` tables, and `notes.description`,
+  `keep`, `touched`.
+
 ## [0.8.1] — 2026-11-11
 
 ### Fixed

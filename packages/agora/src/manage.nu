@@ -23,6 +23,7 @@
 // operation, BEGIN IMMEDIATE around anything that writes twice.
 
 $ `store.nu`
+$ `trash.nu`
 
 : s AG_ROLE_ADMIN `admin`
 : s AG_ROLE_MEMBER `member`
@@ -136,6 +137,8 @@ $ `store.nu`
                 F _ → {}
             }
             ?? ( sqlite_exec db AG_SKILLS_TABLE ) { T _ → {} F _ → { = ok F } }
+            ?? ( sqlite_exec db AG_USAGE_TABLE ) { T _ → {} F _ → { = ok F } }
+            ?? ( sqlite_exec db AG_SETTINGS_TABLE ) { T _ → {} F _ → { = ok F } }
         }
     }
     ^ @ AgStore { ( string_from path ) ok @ ?Database { F } }
@@ -425,6 +428,18 @@ $ `store.nu`
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
+            // A state a person sets is a step of the task's history.
+            : ~ String was ( string_new )
+            ?? ( sqlite_prepare db `SELECT status FROM tasks WHERE id = ?1` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_i q 1 id )
+                    ? ( _ag_row q ) { = was ( sqlite_column_text q 0 ) } {}
+                }
+            }
+            ? & > ( string_len was ) 0 == 0 ( nurl_str_eq ( string_data was ) status ) {
+                ( _ag_task_event_on db id status `web` now )
+            } { ( _ag_mirror_on db id `edit` 0 now ) }
             ?? ( sqlite_prepare db `UPDATE tasks SET title = ?2, body = ?3, tags = ?4, priority = ?5, status = ?6, updated = ?7, owner = CASE WHEN ?6 = 'open' THEN '' ELSE owner END, lease_until = CASE WHEN ?6 = 'open' THEN 0 ELSE lease_until END WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
@@ -455,7 +470,41 @@ $ `store.nu`
 // The filter every task listing of the page shares: ?1 status, ?2
 // holder, ?3 a LIKE pattern for title, body or tags ('' = any of each),
 // ?4 1 = leave out what is finished (done, cancelled).
-: s AG_TASK_WHERE ` FROM tasks WHERE (?1 = '' OR status = ?1) AND (?2 = '' OR owner = ?2) AND (?3 = '' OR title LIKE ?3 ESCAPE '\\' OR body LIKE ?3 ESCAPE '\\' OR tags LIKE ?3 ESCAPE '\\') AND (?4 = 0 OR status NOT IN ('done', 'cancelled'))`
+: s AG_TASK_WHERE ` FROM tasks WHERE (?1 = '' OR status = ?1) AND (?2 = '' OR owner = ?2) AND ((?3 = '' AND ?7 = 0 AND ?8 = 0) OR (?3 != '' AND (title LIKE ?3 ESCAPE '\\' OR body LIKE ?3 ESCAPE '\\' OR tags LIKE ?3 ESCAPE '\\')) OR (?7 > 0 AND id = ?7) OR (?8 > 0 AND (id IN (SELECT task FROM gh_issues WHERE number = ?8) OR id IN (SELECT task FROM gh_task_prs WHERE pr = ?8)))) AND (?4 = 0 OR status NOT IN ('done', 'cancelled'))`
+
+// What a task search names: text (a LIKE pattern), a task (AGORA-851 or
+// a bare 851) and a GitHub issue or PR (#1970, github#1970, or a bare
+// number). A bare number is all three; the rest are only what they say.
+: AgTaskFind {
+    String like
+    i id
+    i gh
+}
+
+@ __ag_digits_at String t i from → i {
+    : i n ( string_len t )
+    ? >= from n { ^ 0 } {}
+    : ~ i k from
+    : ~ i num 0
+    ~ < k n {
+        : i c ( string_get t k )
+        ? & >= c 48 <= c 57 { = num + * num 10 - c 48 } { ^ 0 }
+        = k + k 1
+    }
+    ^ num
+}
+
+@ ag_task_find s text → AgTaskFind {
+    : String raw ( string_trim ( string_from text ) )
+    : String t ( string_to_lower raw )
+    : i id ? ( string_starts_with t `agora-` ) ( __ag_digits_at t 6 ) 0
+    : i gh ? ( string_starts_with t `github#` ) ( __ag_digits_at t 7 ) ? ( string_starts_with t `#` ) ( __ag_digits_at t 1 ) 0
+    : i bare ( __ag_digits_at t 0 )
+    ? > id 0 { ^ @ AgTaskFind { ( string_from `` ) id 0 } } {}
+    ? > gh 0 { ^ @ AgTaskFind { ( string_from `` ) 0 gh } } {}
+    ? > bare 0 { ^ @ AgTaskFind { ( _ag_like_pat ( string_data raw ) ) bare bare } } {}
+    ^ @ AgTaskFind { ( _ag_like_pat ( string_data raw ) ) 0 0 }
+}
 
 // The column a page is sorted by: one of a fixed list, so nothing a
 // caller writes reaches the SQL. Anything else is `updated`.
@@ -493,12 +542,15 @@ $ `store.nu`
             ?? ( sqlite_prepare db ( string_data sql ) ) {
                 F _ → {}
                 T q → {
+                    : AgTaskFind f ( ag_task_find text )
                     ( _ag_bind_s q 1 status )
                     ( _ag_bind_s q 2 holder )
-                    ( _ag_bind_str q 3 ( _ag_like_pat text ) )
+                    ( _ag_bind_s q 3 ( string_data . f like ) )
                     ( _ag_bind_i q 4 ? hide_done 1 0 )
                     ( _ag_bind_i q 5 limit )
                     ( _ag_bind_i q 6 offset )
+                    ( _ag_bind_i q 7 . f id )
+                    ( _ag_bind_i q 8 . f gh )
                     ~ ( _ag_row q ) { ( vec_push [AgTask] out ( _ag_read_task q ) ) }
                 }
             }
@@ -517,10 +569,13 @@ $ `store.nu`
             ?? ( sqlite_prepare db ( string_data sql ) ) {
                 F _ → {}
                 T q → {
+                    : AgTaskFind f ( ag_task_find text )
                     ( _ag_bind_s q 1 status )
                     ( _ag_bind_s q 2 holder )
-                    ( _ag_bind_str q 3 ( _ag_like_pat text ) )
+                    ( _ag_bind_s q 3 ( string_data . f like ) )
                     ( _ag_bind_i q 4 ? hide_done 1 0 )
+                    ( _ag_bind_i q 7 . f id )
+                    ( _ag_bind_i q 8 . f gh )
                     ? ( _ag_row q ) { = n ( sqlite_column_int q 0 ) } {}
                 }
             }
@@ -533,7 +588,7 @@ $ `store.nu`
 
 // The filter of the page's notes: ?1 a LIKE pattern for key or body ('' =
 // any), ?2 `rules` (only rules), `notes` (only plain notes) or '' (both).
-: s AG_NOTE_WHERE ` FROM notes WHERE (?1 = '' OR key LIKE ?1 ESCAPE '\\' OR body LIKE ?1 ESCAPE '\\') AND (?2 = '' OR (?2 = 'rules' AND rule = 1) OR (?2 = 'notes' AND rule = 0))`
+: s AG_NOTE_WHERE ` FROM notes WHERE (?1 = '' OR key LIKE ?1 ESCAPE '\\' OR body LIKE ?1 ESCAPE '\\' OR description LIKE ?1 ESCAPE '\\') AND (?2 = '' OR (?2 = 'rules' AND rule = 1) OR (?2 = 'notes' AND rule = 0))`
 
 // A page of notes with their bodies: rules first, then by key (`sort`
 // `updated`: the most recently written first).
@@ -632,6 +687,11 @@ $ `store.nu`
 : s AG_STALE_CHANNELS `SELECT name FROM channels c WHERE name != 'public' AND created < ?1 AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.channel = c.name AND m.ts >= ?1) ORDER BY name`
 
 @ ag_cleanup AgStore st i agents_before i tasks_before i msgs_before i channels_before b dry i now → AgCleanup {
+    ^ ( ag_cleanup_by st agents_before tasks_before msgs_before channels_before dry `web` now )
+}
+
+// The same, done by `by`: what goes, goes to the trash (trash.nu).
+@ ag_cleanup_by AgStore st i agents_before i tasks_before i msgs_before i channels_before b dry s by i now → AgCleanup {
     : ~ AgCleanup r @ AgCleanup { 0 0 0 0 }
     ?? ( _ag_conn st ) {
         F _ → {}
@@ -639,43 +699,26 @@ $ `store.nu`
             ? ( _ag_begin db ) {} { ^ r }
             : ~ b ok T
             ? > agents_before 0 {
-                : ( Vec String ) ids ( __ag_names_on db `SELECT id FROM agents WHERE seen < ?1 ORDER BY id` agents_before )
-                : i n ( vec_len [String] ids )
-                = . r agents n
-                ? dry {} {
-                    : ~ i k 0
-                    ~ < k n {
-                        ?? ( vec_get [String] ids k ) {
-                            T id → { = ok & ok ( __ag_agent_delete_on db ( string_data id ) now ) }
-                            F _ → {}
-                        }
-                        = k + k 1
-                    }
+                ? dry { = . r agents ( __ag_count_on db `SELECT COUNT(*) FROM agents WHERE seen < ?1` agents_before ) } {
+                    = . r agents ( _ag_trash_on db `agent` `x.seen < ?2` `` agents_before `` F `cleanup` by now )
                 }
             } {}
             ? > tasks_before 0 {
-                = . r tasks ( __ag_count_on db `SELECT COUNT(*) FROM tasks WHERE status IN ('done', 'cancelled') AND updated < ?1` tasks_before )
-                ? dry {} { = ok & ok ( __ag_on_i db `DELETE FROM tasks WHERE status IN ('done', 'cancelled') AND updated < ?1` tasks_before ) }
-            } {}
-            ? > msgs_before 0 {
-                = . r messages ( __ag_count_on db `SELECT COUNT(*) FROM messages WHERE ts < ?1` msgs_before )
-                ? dry {} { = ok & ok ( __ag_on_i db `DELETE FROM messages WHERE ts < ?1` msgs_before ) }
-            } {}
-            ? > channels_before 0 {
-                : ( Vec String ) names ( __ag_names_on db AG_STALE_CHANNELS channels_before )
-                : i n ( vec_len [String] names )
-                = . r channels n
-                ? dry {} {
-                    : ~ i k 0
-                    ~ < k n {
-                        ?? ( vec_get [String] names k ) {
-                            T c → { = ok & ok ( __ag_channel_delete_on db ( string_data c ) ) }
-                            F _ → {}
-                        }
-                        = k + k 1
-                    }
+                ? dry { = . r tasks ( __ag_count_on db `SELECT COUNT(*) FROM tasks WHERE status IN ('done', 'cancelled') AND updated < ?1` tasks_before ) } {
+                    = . r tasks ( _ag_trash_on db `task` `x.status IN ('done', 'cancelled') AND x.updated < ?2` `` tasks_before `` F `cleanup` by now )
                 }
             } {}
+            ? > msgs_before 0 {
+                ? dry { = . r messages ( __ag_count_on db `SELECT COUNT(*) FROM messages WHERE ts < ?1` msgs_before ) } {
+                    = . r messages ( _ag_trash_on db `message` `x.ts < ?2` `` msgs_before `` F `cleanup` by now )
+                }
+            } {}
+            ? > channels_before 0 {
+                ? dry { = . r channels ( vec_len [String] ( __ag_names_on db AG_STALE_CHANNELS channels_before ) ) } {
+                    = . r channels ( _ag_trash_on db `channel` `x.name != 'public' AND x.created < ?2 AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.channel = x.name AND m.ts >= ?2)` `` channels_before `` F `cleanup` by now )
+                }
+            } {}
+            = ok & & & ok >= . r agents 0 >= . r tasks 0 & >= . r messages 0 >= . r channels 0
             ? & ok ! dry {
                 ? ( _ag_commit db ) {} { ( _ag_rollback db ) = r @ AgCleanup { -1 -1 -1 -1 } }
             } {

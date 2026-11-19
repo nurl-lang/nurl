@@ -24,6 +24,8 @@
   section { display:none; } section.on { display:block; }
   h2 { font-size:16px; margin:4px 0 14px; }
   .muted { color:var(--muted); } .mono { font-family:var(--mono); }
+  main a[href] { color:var(--accent); }
+  td.acts { white-space:nowrap; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; margin-bottom:20px; }
   .tile { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px; }
   .tile .n { font-size:24px; font-weight:600; } .tile .l { color:var(--muted); font-size:12px; margin-top:4px; }
@@ -64,6 +66,7 @@
   .note.rule { border-color:var(--rule); }
   .note .h { display:flex; gap:10px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
   .note .k { font-family:var(--mono); color:var(--accent2); }
+  .note .desc { color:var(--fg); font-size:13px; margin:-2px 0 6px; }
   .note .b { white-space:pre-wrap; font-family:var(--mono); font-size:12.5px; word-break:break-word; }
   .note .acts { margin-left:auto; display:flex; gap:6px; }
   .note details summary { cursor:pointer; color:var(--muted); font-size:12px; margin-top:4px; }
@@ -80,6 +83,40 @@
   dialog input, dialog select { width:100%; } dialog input[type=checkbox] { width:auto; }
   dialog .hint { font-size:12px; color:var(--muted); margin-top:4px; }
   dialog .acts { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; }
+  /* usage: one series (tokens), so one hue — the dark-surface blue step, validated against --panel */
+  :root { --viz:#3987e5; --grid:#232b38; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  tr.pick { cursor:pointer; } tr.pick:hover td { background:var(--panel2); }
+  .share { display:flex; align-items:center; gap:8px; min-width:140px; }
+  .share .track { flex:1; max-width:220px; height:8px; }
+  .share .fill { height:8px; background:var(--viz); border-radius:0 4px 4px 0; min-width:2px; }
+  .share .pct { color:var(--muted); font-size:12px; width:42px; font-variant-numeric:tabular-nums; }
+  .cols { position:relative; height:180px; display:flex; align-items:flex-end; gap:2px; border-bottom:1px solid var(--grid);
+          padding-top:18px; }
+  .cols .c { flex:1 1 0; min-width:0; height:100%; display:flex; flex-direction:column; justify-content:flex-end;
+             align-items:center; position:relative; cursor:default; }
+  .cols .c .m { width:100%; max-width:24px; background:var(--viz); border-radius:4px 4px 0 0; min-height:0; }
+  .cols .c:hover .m { filter:brightness(1.25); }
+  .cols .c .v { position:absolute; font-size:11px; color:var(--muted); white-space:nowrap; transform:translateY(-16px); }
+  .cols .gl { position:absolute; left:0; right:0; border-top:1px solid var(--grid); pointer-events:none; }
+  .cols .gl span { position:absolute; left:0; top:-15px; font-size:11px; color:var(--muted); }
+  .xaxis { display:flex; justify-content:space-between; color:var(--muted); font-size:11px; margin-top:4px; }
+  #tip { position:fixed; z-index:60; pointer-events:none; background:var(--panel2); border:1px solid var(--border);
+         border-radius:6px; padding:6px 9px; font-size:12px; display:none; white-space:nowrap; }
+  #tip b { font-weight:600; }
+  #tip .sw { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:6px; vertical-align:-1px; }
+  #tip table { border-collapse:collapse; } #tip td { padding:1px 6px 1px 0; border:0; } #tip td.v { text-align:right; font-variant-numeric:tabular-nums; }
+  /* flow: categorical dark-surface steps, validated against --panel (adjacent pairs pass CVD and normal-vision checks) */
+  :root { --c-open:#3987e5; --c-claimed:#d95926; --c-done:#199e70; --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; }
+  .chart svg { display:block; width:100%; overflow:visible; }
+  .chart text { fill:var(--muted); font-size:11px; font-family:var(--sans); }
+  .chart text.lab { fill:var(--fg); font-size:12px; }
+  .chart .grid line { stroke:var(--grid); stroke-width:1; }
+  .legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--fg); margin:0 0 8px; }
+  .legend span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px;
+                         vertical-align:-1px; background:var(--sw); }
+  .cardhead { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; } .cardhead h2 { margin-bottom:8px; }
+  .cardhead .muted { font-size:12px; }
 </style>
 </head>
 <body>
@@ -89,11 +126,14 @@
     <a data-tab="overview" class="on">Overview</a>
     <a data-tab="messages">Messages</a>
     <a data-tab="tasks">Tasks</a>
+    <a data-tab="flow">Flow</a>
     <a data-tab="notes">Notes</a>
     <a data-tab="agents">Agents</a>
+    <a data-tab="usage">Usage</a>
     <a data-tab="skills">Skills</a>
     <a data-tab="feedback">Feedback</a>
     <a data-tab="cleanup">Cleanup</a>
+    <a data-tab="trash">Trash</a>
     <a data-tab="people" id="nav-people" hidden>People</a>
     <a data-tab="orgs" id="nav-orgs" hidden>Organisations</a>
     <span class="spacer"></span>
@@ -118,6 +158,15 @@
         and <span class="mono">github.com/org/repo</span> are one repository.</p>
     </div>
     <div class="card"><h2>Repositories</h2><div id="repos" class="muted"></div></div>
+    <div class="card" id="gh-card" hidden>
+      <h2>GitHub</h2>
+      <p class="muted" id="gh-state"></p>
+      <div id="gh-dry-wrap" hidden>
+        <p class="muted">Dry run: nothing is written to GitHub yet. These are the newest requests the mirror would send —
+          read them for anything that must not be public (redaction is already applied).</p>
+        <div id="gh-dry"></div>
+      </div>
+    </div>
   </section>
 
   <section id="messages">
@@ -142,7 +191,7 @@
         <option value="done">done</option><option value="cancelled">cancelled</option>
       </select>
       <select id="t-holder" title="Held (or finished) by"><option value="">anyone</option></select>
-      <input id="t-q" placeholder="search title, body, tags" size="22">
+      <input id="t-q" placeholder="text, AGORA-851, #1970 (issue or PR)" size="30" title="Text in the title, body or tags; AGORA-N for a task; #N or github#N for its GitHub issue or a pull request tied to it; a bare number finds all three">
       <label class="chk"><input type="checkbox" id="t-hide"> hide finished</label>
       <button id="t-go">Refresh</button>
       <span class="grow"></span>
@@ -153,6 +202,28 @@
       <th data-sort="updated">Updated</th><th></th></tr></thead>
       <tbody id="t-list"></tbody></table>
     <div class="pager" id="t-pager"></div>
+  </section>
+
+  <section id="flow">
+    <p class="muted">How work moves through this repository's task board. The history is every step agora saw: claims made
+      by a task's own poster before 0.9.0 sent no mail and are missing from it, so lead times start from then.</p>
+    <div class="bar">
+      <select id="fl-days" title="Period"><option value="30">last 30 days</option><option value="90" selected>last 90 days</option>
+        <option value="365">last year</option><option value="0">all time</option></select>
+      <label class="chk"><input type="checkbox" id="fl-done" checked> include done in the flow</label>
+    </div>
+    <div class="grid" id="fl-tiles"></div>
+    <div class="card"><div class="cardhead"><h2>Cumulative flow</h2><span class="muted">tasks in each state at the end of each day —
+      a widening open band is a growing backlog</span></div><div id="fl-cfd" class="chart"></div>
+      <div class="cardhead" style="margin-top:14px"><h2 style="font-size:14px">Posts per day</h2><span class="muted">busiest channels; all mailboxes together as direct mail</span></div>
+      <div id="fl-msgs" class="chart"></div></div>
+    <div class="card"><div class="cardhead"><h2>Lead time, claim → done</h2><span class="muted" id="fl-lt-note"></span></div>
+      <div id="fl-lt" class="chart"></div></div>
+    <div class="card"><div class="cardhead"><h2>Abandoned claims</h2><span class="muted">leases that ran out with no task_done — where agents stall</span></div>
+      <div id="fl-ab" class="chart"></div>
+      <table style="margin-top:12px"><thead><tr id="fl-ag-head"><th data-sort="agent">Agent</th><th data-sort="claims" class="num">Claims</th>
+        <th data-sort="done" class="num">Done</th><th data-sort="released" class="num">Released</th><th data-sort="expired" class="num">Lease ran out</th>
+        <th data-sort="rate" class="num">Abandoned</th></tr></thead><tbody id="fl-ag"></tbody></table></div>
   </section>
 
   <section id="notes">
@@ -177,6 +248,29 @@
     <table><thead><tr id="a-head"><th data-sort="id">Agent</th><th data-sort="about">About / status</th>
       <th data-sort="seen">Seen</th><th data-sort="created">Joined</th><th></th></tr></thead>
       <tbody id="a-list"></tbody></table>
+  </section>
+
+  <section id="usage">
+    <p class="muted">What your agents' calls to agora over MCP carried through their context windows: <b>in</b> is what an
+      agent wrote (the tool call's arguments), <b>out</b> is what agora answered and the agent read back. Tokens are
+      estimated as bytes / <span id="us-bpt">4</span>; agora never sees the model's tokenizer. Click a row to narrow down.</p>
+    <p class="muted" id="us-catalog"></p>
+    <div class="bar">
+      <select id="us-days" title="Period"><option value="1">today (UTC)</option><option value="7">last 7 days</option>
+        <option value="30" selected>last 30 days</option><option value="90">last 90 days</option><option value="0">all time</option></select>
+      <select id="us-scope" title="Scope"><option value="org">whole organisation</option><option value="repo">selected repository</option></select>
+      <span id="us-filter"></span>
+    </div>
+    <div class="grid" id="us-tiles"></div>
+    <div class="card"><h2>Tokens per day</h2><div id="us-daily"></div></div>
+    <div class="card" id="us-orgs-card" hidden><h2>By organisation</h2>
+      <table><thead><tr id="us-orgs-head"></tr></thead><tbody id="us-orgs"></tbody></table></div>
+    <div class="card" id="us-repos-card"><h2>By repository</h2>
+      <table><thead><tr id="us-repos-head"></tr></thead><tbody id="us-repos"></tbody></table></div>
+    <div class="card"><h2>By agent</h2>
+      <table><thead><tr id="us-agents-head"></tr></thead><tbody id="us-agents"></tbody></table></div>
+    <div class="card"><h2>By command</h2>
+      <table><thead><tr id="us-ops-head"></tr></thead><tbody id="us-ops"></tbody></table></div>
   </section>
 
   <section id="skills">
@@ -210,7 +304,7 @@
       <h2>Clean up this repository's agora</h2>
       <p class="muted">Agent names are made on first use and are nobody's, so a busy repository collects agents that
         came once, finished tasks and channels nobody posts to. Preview counts what would go; nothing changes until you
-        clean up. A deleted agent loses its mailbox, and a task it held is open again.</p>
+        clean up. What goes moves to the <a href="#trash" data-goto="trash">trash</a>, which restores it; a task an agent held is open again.</p>
       <table class="cleanup">
         <tr><td><label class="chk"><input type="checkbox" id="c-agents" checked> Agents not seen for</label></td>
           <td><input type="number" id="c-agents-d" value="14" min="1"> days</td><td class="mono" id="c-agents-n"></td></tr>
@@ -224,6 +318,42 @@
       <div class="bar" style="margin-top:14px"><button id="c-preview">Preview</button>
         <button id="c-run" class="danger" disabled>Clean up</button><span class="muted" id="c-note"></span></div>
     </div>
+    <div class="card">
+      <h2>Expiry</h2>
+      <p class="muted">The same happens by itself: what has not been touched for its time expires into the
+        <a href="#trash" data-goto="trash">trash</a> — never deleted outright. Rules, notes marked to keep, open and claimed
+        tasks and unread direct mail never expire. A note's clock restarts whenever it is written or read. The times are your
+        organisation's, for every repository; 0 = never. <span id="x-who"></span></p>
+      <table class="cleanup" id="x-table"></table>
+      <div class="bar" style="margin-top:14px"><button id="x-save" class="primary">Save</button>
+        <button id="x-now">Expire now</button><span class="muted" id="x-note"></span></div>
+    </div>
+    <div class="card">
+      <h2>Audit</h2>
+      <p class="muted">Everything that went into the trash or out of it, in this repository: who or what, and when.</p>
+      <table><thead><tr><th>When</th><th>What</th><th>Item</th><th>By</th></tr></thead><tbody id="x-audit"></tbody></table>
+      <div class="pager" id="x-audit-pager"></div>
+    </div>
+  </section>
+
+  <section id="trash">
+    <p class="muted">What expired or was deleted, kept whole: agents see none of it. Restore puts an item back exactly as it
+      was — same id, same key — and keeps it from expiring again for one period; delete removes it for good.</p>
+    <div class="bar">
+      <select id="tr-kind" title="Kind"></select>
+      <input id="tr-author" placeholder="author" size="14">
+      <select id="tr-days" title="In the trash for"><option value="0">any time in the trash</option><option value="7">at least 7 days</option>
+        <option value="30">at least 30 days</option><option value="90">at least 90 days</option></select>
+      <input id="tr-q" placeholder="search key or text" size="20">
+      <button id="tr-go">Search</button>
+      <span class="grow"></span>
+      <button id="tr-restore" disabled>Restore selected</button>
+      <button id="tr-del" class="danger" disabled>Delete selected for good</button>
+      <button id="tr-del-all" class="danger">Delete all shown for good</button>
+    </div>
+    <table><thead><tr><th><input type="checkbox" id="tr-all" title="Select all on this page"></th><th>Kind</th><th>Item</th>
+      <th>Author</th><th>Last touched</th><th>In the trash</th><th></th></tr></thead><tbody id="tr-list"></tbody></table>
+    <div class="pager" id="tr-pager"></div>
   </section>
 
   <section id="people">
@@ -244,6 +374,7 @@
 <dialog id="dlg"><form method="dialog" id="dlg-form"><h2 id="dlg-title"></h2><div id="dlg-body"></div>
   <div class="acts"><button value="cancel">Cancel</button><button value="ok" class="primary" id="dlg-ok">Save</button></div></form></dialog>
 <div id="toast"></div>
+<div id="tip"></div>
 
 <script src="/auth.js"></script>
 <script>
@@ -314,7 +445,13 @@ function dialog(title, fields, okLabel) {
     d.returnValue = ""; d.showModal();
   });
 }
+// Agora's priority is a number, higher more urgent: 0 low, 1 medium, 2 high, 3 urgent.
+const PRIO_OPTS = [["0", "low"], ["1", "medium"], ["2", "high"], ["3", "urgent"]];
+const prioOf = (p) => Math.max(0, Math.min(3, p || 0));
+const prioName = (p) => PRIO_OPTS[prioOf(p)][1];
 const confirmDel = (what) => confirm("Delete " + what + "? This cannot be undone.");
+// What a delete moves to the trash, where the Trash tab restores it from.
+const confirmTrash = (what) => confirm("Move " + what + " to the trash? The Trash tab restores it, or deletes it for good.");
 
 // "‹ Prev · 51–100 of 230 · Next ›" with a page size; onPage(offset, limit) loads one.
 function pager(el, total, offset, limit, onPage) {
@@ -394,7 +531,7 @@ function show(tab) {
   document.querySelectorAll("main section").forEach(s => s.classList.toggle("on", s.id === tab));
   if (location.hash !== "#" + tab) history.replaceState(null, "", "#" + tab);
   const load = { overview: loadOverview, messages: () => loadMessages(0), tasks: () => loadTasks(0), notes: () => loadNotes(0),
-                 agents: loadAgents, skills: loadSkills, feedback: () => loadFeedback(0), cleanup: resetCleanup,
+                 agents: loadAgents, usage: loadUsage, flow: loadFlow, skills: loadSkills, feedback: () => loadFeedback(0), cleanup: () => { resetCleanup(); loadExpiry(); loadAudit(0); }, trash: () => loadTrash(0),
                  people: loadPeople, orgs: loadOrgs }[tab];
   if (load) run(load);
 }
@@ -427,7 +564,31 @@ async function loadOverview() {
     ? `claude mcp add --transport http --scope user --client-id ${cfg.client_id} --callback-port 8765 agora ${url}`
     : `claude mcp add --transport http agora ${url}`;
   $("#nav-people").hidden = !ME.is_admin || ME.mode !== "oidc";
+  run(loadGitHub);
   $("#nav-orgs").hidden = !ME.is_owner_admin;
+}
+
+async function loadGitHub() {
+  const d = await api("GET", REPO ? R("/m/github") : "/m/github");
+  $("#gh-card").hidden = !d.connected;
+  if (!d.connected) return;
+  const m = d.mirror, when = (t) => t ? ago(t) : "never";
+  $("#gh-state").textContent = `Events last arrived ${when(d.last_event)}; agora last asked GitHub ${when(d.last_reconcile)}. ` +
+    `Task mirror: ${m.mode}` + (m.mode === "off" ? "." : `, ${m.queue} waiting` + (m.queue ? ` (oldest ${ago(m.oldest)})` : "") +
+    `, last write ${when(m.last_write)}` + (m.error ? `; last error ${ago(m.error_at)}: ${m.error}` : "") + ".");
+  $("#gh-dry-wrap").hidden = m.mode !== "dry run";
+  const list = $("#gh-dry"); list.innerHTML = "";
+  for (const e of d.dry) {
+    const div = document.createElement("div"); div.className = "msg";
+    div.innerHTML = `<div class="h"><span class="mono">${esc(e.method)} ${esc(e.path)}</span>
+      <span class="ch">AGORA-${e.task}</span><span>${ago(e.ts)}</span></div><div class="b"></div>`;
+    const b = e.body || {};
+    div.querySelector(".b").textContent = [b.title ? "title: " + b.title : "", b.labels ? "labels: " + b.labels.join(", ") : "",
+      b.state ? "state: " + b.state + (b.state_reason ? " (" + b.state_reason + ")" : "") : "", b.body || "",
+      b.name ? "label: " + b.name : ""].filter(Boolean).join("\n");
+    list.appendChild(div);
+  }
+  if (!d.dry.length && m.mode === "dry run") list.innerHTML = '<div class="empty">nothing logged yet</div>';
 }
 
 // ── messages ───────────────────────────────────────────────────────
@@ -470,7 +631,7 @@ function messageCard(m) {
       m.body = r.body; div.querySelector(".b").textContent = r.body; toast("saved");
     }));
     acts.appendChild(button("Delete", "danger", async () => {
-      if (!confirmDel("message #" + m.id)) return;
+      if (!confirmTrash("message #" + m.id)) return;
       await api("DELETE", R("/m/messages/" + m.id)); div.remove(); toast("deleted");
     }));
   }
@@ -505,7 +666,7 @@ $("#m-channel").onchange = $("#m-order").onchange = () => run(() => loadMessages
 $("#m-new").onclick = () => run(() => newMessage(null));
 $("#m-delch").onclick = () => run(async () => {
   const ch = $("#m-channel").value;
-  if (!ch || !confirmDel("channel " + ch + " and every message in it")) return;
+  if (!ch || !confirmTrash("channel " + ch + " and every message in it")) return;
   await api("DELETE", R("/m/channels", { name: ch }));
   $("#m-channel").value = ""; toast("deleted"); await loadMessages(0);
 });
@@ -527,26 +688,31 @@ async function loadTasks(offset, limit) {
   const tb = $("#t-list"); tb.innerHTML = "";
   for (const t of d.tasks) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td class="mono">${t.id}</td>
+    // GitHub: the repository of this agora (github.com/owner/name) links its issue and PRs.
+    const gh = REPO.startsWith("github.com/") ? "https://" + REPO : "";
+    const ghl = (n, what) => gh ? `<a href="${esc(gh)}/${what}/${n}" target="_blank" rel="noopener">#${n}</a>` : "#" + n;
+    const refs = [t.issue ? "issue " + ghl(t.issue, "issues") : "", (t.prs || []).length ? "PR " + t.prs.map(n => ghl(n, "pull")).join(", ") : ""]
+      .filter(Boolean).join(" · ");
+    tr.innerHTML = `<td class="mono">AGORA-${t.id}${refs ? `<div class="muted" style="font-size:12px">${refs}</div>` : ""}</td>
       <td><div>${esc(t.title)}</div>${t.tags.length ? `<div class="muted mono">[${esc(t.tags.join(","))}]</div>` : ""}
         ${t.result ? `<div class="muted">→ ${esc(t.result)}</div>` : ""}</td>
-      <td class="mono">${t.priority || ""}</td>
+      <td><span class="pill">${prioName(t.priority)}</span></td>
       <td><span class="pill ${esc(t.status)}">${esc(t.status)}</span></td>
       <td class="mono">${esc(t.poster)}</td><td class="mono">${esc(t.owner)}</td><td>${ago(t.updated)}</td><td></td>`;
     if (t.may_change) {
       tr.lastElementChild.append(button("Edit", "", async () => {
-        const r = await dialog("Task #" + t.id, [
+        const r = await dialog("Task AGORA-" + t.id, [
           { key: "title", label: "Title", value: t.title },
           { key: "body", label: "Body", value: t.body, type: "textarea" },
           { key: "tags", label: "Tags (comma-separated)", value: t.tags.join(",") },
-          { key: "priority", label: "Priority", value: t.priority, type: "number" },
+          { key: "priority", label: "Priority", value: String(prioOf(t.priority)), type: "select", options: PRIO_OPTS },
           { key: "status", label: "Status", value: t.status, type: "select", options: ["open", "claimed", "done", "cancelled"] }]);
         if (!r) return;
         await api("PUT", R("/m/tasks/" + t.id), { title: r.title, body: r.body, tags: r.tags,
           priority: parseInt(r.priority, 10) || 0, status: r.status });
         toast("saved"); await loadTasks(tPage.offset, tPage.limit);
       }), " ", button("Delete", "danger", async () => {
-        if (!confirmDel("task #" + t.id)) return; await api("DELETE", R("/m/tasks/" + t.id)); toast("deleted");
+        if (!confirmTrash("task AGORA-" + t.id)) return; await api("DELETE", R("/m/tasks/" + t.id)); toast("moved to the trash");
         await loadTasks(tPage.offset, tPage.limit);
       }));
     }
@@ -561,11 +727,11 @@ async function newTask() {
     { key: "title", label: "Title", value: "" },
     { key: "body", label: "Details", value: "", type: "textarea" },
     { key: "tags", label: "Tags (comma-separated)", value: "" },
-    { key: "priority", label: "Priority (higher is more urgent)", value: 0, type: "number" }], "Post");
+    { key: "priority", label: "Priority", value: "0", type: "select", options: PRIO_OPTS }], "Post");
   if (!r) return;
   const d = await api("POST", R("/m/tasks"), { as: r.as.trim(), title: r.title, body: r.body, tags: r.tags,
     priority: parseInt(r.priority, 10) || 0 });
-  remember("agora.as", d.as); toast("task #" + d.id + " posted"); AGENTS = null; await loadTasks(0);
+  remember("agora.as", d.as); toast("AGORA-" + d.id + " posted"); AGENTS = null; await loadTasks(0);
 }
 sortable($("#t-head"), tSort, () => loadTasks(0, tPage.limit));
 $("#t-go").onclick = () => run(() => loadTasks(0));
@@ -573,6 +739,234 @@ $("#t-q").onkeydown = (e) => { if (e.key === "Enter") run(() => loadTasks(0, tPa
 $("#t-status").onchange = $("#t-holder").onchange = () => run(() => loadTasks(0, tPage.limit));
 $("#t-hide").onchange = () => { remember("agora.hide_done", $("#t-hide").checked ? "1" : "0"); run(() => loadTasks(0, tPage.limit)); };
 $("#t-new").onclick = () => run(newTask);
+
+// ── charts (flow) ──────────────────────────────────────────────────
+const SVGNS = "http://www.w3.org/2000/svg";
+function sv(tag, attrs, parent) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const niceTop = (max) => { if (max <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(max)));
+  return [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map(m => m * p).find(v => v >= max); };
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function tipShow(html, e) {
+  const tip = $("#tip"); tip.innerHTML = html; tip.style.display = "block";
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(e.clientX + 14, window.innerWidth - w - 8) + "px";
+  tip.style.top = Math.min(e.clientY + 14, window.innerHeight - h - 8) + "px";
+}
+const tipHide = () => { $("#tip").style.display = "none"; };
+const sw = (c) => `<span class="sw" style="background:${c}"></span>`;
+function legend(el, series) {
+  const lg = document.createElement("div"); lg.className = "legend";
+  for (const s of series) { const sp = document.createElement("span"); sp.style.setProperty("--sw", s.color); sp.textContent = s.name; lg.appendChild(sp); }
+  el.appendChild(lg);
+}
+// A day-indexed time series: stacked areas (bottom series first) or 2px lines. One y-axis, a crosshair that
+// snaps to the day, one tooltip listing every series, the series named at the right end.
+function timeChart(el, days, series, opt) {
+  el.innerHTML = "";
+  if (series.length > 1) legend(el, opt.stacked ? series.slice().reverse() : series);
+  const W = Math.max(el.clientWidth, 320), H = opt.height || 220, L = 44, R = series.length > 1 ? 96 : 16, T = 8, B = 22;
+  const n = days.length, iw = W - L - R, ih = H - T - B;
+  const x = (i) => L + (n > 1 ? i * iw / (n - 1) : iw / 2);
+  const tops = days.map((_, i) => opt.stacked ? series.reduce((a, s) => a + s.values[i], 0) : Math.max(0, ...series.map(s => s.values[i])));
+  const top = niceTop(Math.max(0, ...tops));
+  const y = (v) => T + ih - ih * v / top;
+  const g = sv("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img" }, el);
+  const grid = sv("g", { class: "grid" }, g);
+  for (const v of [0, top / 2, top]) {
+    sv("line", { x1: L, x2: L + iw, y1: y(v), y2: y(v) }, grid);
+    sv("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, g).textContent = fmtC(v);
+  }
+  for (const i of [0, Math.floor((n - 1) / 2), n - 1]) if (n) {
+    sv("text", { x: x(i), y: H - 6, "text-anchor": i === 0 ? "start" : i === n - 1 ? "end" : "middle" }, g).textContent = dayDate(days[i]);
+  }
+  const surface = cssVar("--panel");
+  const base = days.map(() => 0);
+  const ends = [];
+  for (const s of series) {
+    if (opt.stacked) {
+      const lo = base.slice(), hi = base.map((b, i) => b + s.values[i]);
+      const pts = hi.map((v, i) => `${x(i)},${y(v)}`).concat(lo.map((v, i) => `${x(i)},${y(v)}`).reverse()).join(" ");
+      sv("polygon", { points: pts, fill: s.color, "fill-opacity": 0.85 }, g);
+      sv("polyline", { points: hi.map((v, i) => `${x(i)},${y(v)}`).join(" "), fill: "none", stroke: surface, "stroke-width": 2 }, g);
+      for (let i = 0; i < n; i++) base[i] = hi[i];
+      if (n) ends.push({ s, y: (y(lo[n - 1]) + y(hi[n - 1])) / 2 });
+    } else {
+      sv("polyline", { points: s.values.map((v, i) => `${x(i)},${y(v)}`).join(" "), fill: "none", stroke: s.color,
+        "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, g);
+      if (n) ends.push({ s, y: y(s.values[n - 1]) });
+    }
+  }
+  // Direct labels at the right end, nudged apart so none overlaps.
+  if (series.length > 1) {
+    ends.sort((a, b) => a.y - b.y);
+    for (let k = 1; k < ends.length; k++) if (ends[k].y - ends[k - 1].y < 14) ends[k].y = ends[k - 1].y + 14;
+    for (const e of ends) {
+      sv("rect", { x: L + iw + 8, y: e.y - 5, width: 10, height: 10, rx: 2, fill: e.s.color }, g);
+      sv("text", { x: L + iw + 22, y: e.y + 4, class: "lab" }, g).textContent = e.s.name;
+    }
+  }
+  const hair = sv("line", { x1: 0, x2: 0, y1: T, y2: T + ih, stroke: cssVar("--muted"), "stroke-width": 1, visibility: "hidden" }, g);
+  const hit = sv("rect", { x: L, y: T, width: iw, height: ih, fill: "transparent" }, g);
+  hit.addEventListener("pointermove", (e) => {
+    const r = g.getBoundingClientRect(), px = (e.clientX - r.left) * W / r.width;
+    const i = Math.max(0, Math.min(n - 1, Math.round((px - L) / (n > 1 ? iw / (n - 1) : 1))));
+    hair.setAttribute("x1", x(i)); hair.setAttribute("x2", x(i)); hair.setAttribute("visibility", "visible");
+    const rows = (opt.stacked ? series.slice().reverse() : series).map(s =>
+      `<tr><td>${sw(s.color)}${esc(s.name)}</td><td class="v">${fmtN(s.values[i])}</td></tr>`).join("");
+    const tot = opt.stacked && series.length > 1 ? `<tr><td>total</td><td class="v">${fmtN(tops[i])}</td></tr>` : "";
+    tipShow(`<b>${dayDate(days[i])}</b><table>${rows}${tot}</table>`, e);
+  });
+  hit.addEventListener("pointerleave", () => { hair.setAttribute("visibility", "hidden"); tipHide(); });
+}
+// Columns over categories, ≤24px wide with 4px rounded tops; the tallest is labelled, every one has a tooltip.
+function columnChart(el, labels, values, opt) {
+  el.innerHTML = "";
+  const W = Math.max(el.clientWidth, 320), H = opt.height || 180, L = 44, R = 16, T = 16, B = 22;
+  const n = labels.length, iw = W - L - R, ih = H - T - B, slot = iw / Math.max(n, 1), bw = Math.min(24, slot - 2);
+  const top = niceTop(Math.max(0, ...values));
+  const y = (v) => T + ih - ih * v / top;
+  const g = sv("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img" }, el);
+  const grid = sv("g", { class: "grid" }, g);
+  for (const v of [0, top]) {
+    sv("line", { x1: L, x2: L + iw, y1: y(v), y2: y(v) }, grid);
+    sv("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, g).textContent = fmtC(v);
+  }
+  const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(iw / 70))));
+  const peak = values.indexOf(Math.max(...values));
+  const color = opt.color || cssVar("--viz");
+  labels.forEach((lab, i) => {
+    const cx = L + slot * i + slot / 2, v = values[i], h = ih * v / top;
+    if (v > 0) {
+      const r = Math.min(4, bw / 2, h);
+      sv("path", { d: `M${cx - bw / 2},${T + ih} V${T + ih - h + r} Q${cx - bw / 2},${T + ih - h} ${cx - bw / 2 + r},${T + ih - h} H${cx + bw / 2 - r} Q${cx + bw / 2},${T + ih - h} ${cx + bw / 2},${T + ih - h + r} V${T + ih} Z`, fill: color }, g);
+    }
+    if (i === peak && v > 0) sv("text", { x: cx, y: y(v) - 4, "text-anchor": "middle", class: "lab" }, g).textContent = fmtN(v);
+    if (i % every === 0 || n <= 12) sv("text", { x: cx, y: H - 6, "text-anchor": "middle" }, g).textContent = lab;
+    const hit = sv("rect", { x: cx - slot / 2, y: T, width: slot, height: ih, fill: "transparent" }, g);
+    hit.addEventListener("pointermove", (e) => tipShow(opt.tip(i), e));
+    hit.addEventListener("pointerleave", tipHide);
+  });
+}
+
+// ── flow ───────────────────────────────────────────────────────────
+let FL = null;
+const flAgSort = { sort: "claims", desc: true };
+let flAgRows = [];
+const STATE_OF = { post: "open", release: "open", expire: "open", open: "open", claim: "claimed", claimed: "claimed",
+  done: "done", cancel: "cancelled", cancelled: "cancelled" };
+function fmtDur(s) {
+  if (s < 3600) return Math.max(1, Math.round(s / 60)) + "m";
+  if (s < 48 * 3600) return (s / 3600).toFixed(s < 36000 ? 1 : 0) + "h";
+  return (s / 86400).toFixed(1) + "d";
+}
+async function loadFlow() {
+  FL = await api("GET", R("/m/flow", { days: $("#fl-days").value }));
+  renderFlow();
+}
+$("#fl-days").onchange = () => run(loadFlow);
+$("#fl-done").onchange = () => renderFlow();
+function renderFlow() {
+  if (!FL) return;
+  const ev = FL.events, since = FL.since * 86400;
+  // From the period's start, or from the first step of the history when that is later.
+  const first = Math.max(FL.since, ev.length ? Math.floor(ev[0][1] / 86400) : FL.today);
+  const days = []; for (let d = Math.max(first, FL.today - 730); d <= FL.today; d++) days.push(d);
+  // State of every task at the end of each day.
+  const state = new Map(), cnt = { open: 0, claimed: 0, done: 0, cancelled: 0 }, snaps = [];
+  // Lead times and claims, within the period.
+  const lastClaim = new Map(), leads = [], per = new Map(), expPerDay = new Map();
+  const agentRow = (a) => { if (!per.has(a)) per.set(a, { agent: a, claims: 0, done: 0, released: 0, expired: 0 }); return per.get(a); };
+  let k = 0;
+  // The first day's turn also replays everything before it, so its state is whole.
+  for (const d of days) {
+    const end = (d + 1) * 86400;
+    for (; k < ev.length && ev[k][1] < end; k++) {
+      const [t, ts, kind, agent] = ev[k];
+      const ns = STATE_OF[kind];
+      if (ns) { const os = state.get(t); if (os) cnt[os]--; state.set(t, ns); cnt[ns]++; }
+      const inP = ts >= since;
+      if (kind === "claim" || kind === "claimed") { lastClaim.set(t, ts); if (inP && agent) agentRow(agent).claims++; }
+      else if (kind === "done") {
+        if (lastClaim.has(t) && inP) leads.push(ts - lastClaim.get(t));
+        lastClaim.delete(t); if (inP && agent && agent !== "web") agentRow(agent).done++;
+      } else if (kind === "release") { lastClaim.delete(t); if (inP && agent) agentRow(agent).released++; }
+      else if (kind === "expire") {
+        lastClaim.delete(t);
+        if (inP) { if (agent) agentRow(agent).expired++; const dd = Math.floor(ts / 86400); expPerDay.set(dd, (expPerDay.get(dd) || 0) + 1); }
+      } else if (kind === "open" || kind === "cancel" || kind === "cancelled") lastClaim.delete(t);
+    }
+    snaps.push({ ...cnt });
+  }
+  const last = snaps[snaps.length - 1] || cnt;
+  const doneIn = ev.filter(e => e[2] === "done" && e[1] >= since).length;
+  const expIn = [...expPerDay.values()].reduce((a, b) => a + b, 0);
+  const sorted = leads.slice().sort((a, b) => a - b);
+  const q = (p) => sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] : 0;
+  $("#fl-tiles").innerHTML = [["open now", fmtN(last.open)], ["claimed now", fmtN(last.claimed)], ["done in period", fmtN(doneIn)],
+    ["median lead time", sorted.length ? fmtDur(q(0.5)) : "—"], ["90% done within", sorted.length ? fmtDur(q(0.9)) : "—"],
+    ["abandoned claims", fmtN(expIn)]]
+    .map(([l, n]) => `<div class="tile"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`).join("");
+
+  const withDone = $("#fl-done").checked;
+  const cfd = [];
+  if (withDone) cfd.push({ name: "done", color: cssVar("--c-done"), values: snaps.map(s => s.done) });
+  cfd.push({ name: "claimed", color: cssVar("--c-claimed"), values: snaps.map(s => s.claimed) });
+  cfd.push({ name: "open", color: cssVar("--c-open"), values: snaps.map(s => s.open) });
+  timeChart($("#fl-cfd"), days, cfd, { stacked: true, height: 240 });
+
+  // Posts per day: the three busiest channels, the rest as other.
+  const tot = new Map(); for (const [c, , n] of FL.messages) tot.set(c, (tot.get(c) || 0) + n);
+  const topCh = [...tot.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(e => e[0]);
+  const name = (c) => c === "@mail" ? "direct mail" : c;
+  const colors = ["--s1", "--s2", "--s3", "--s4"].map(cssVar);
+  const ms = topCh.map((c, i) => ({ key: c, name: name(c), color: colors[i], values: days.map(() => 0) }));
+  const other = { key: "", name: "other", color: colors[3], values: days.map(() => 0) };
+  const at = new Map(days.map((d, i) => [d, i]));
+  for (const [c, d, n] of FL.messages) {
+    const i = at.get(d); if (i === undefined) continue;
+    const s = ms.find(m => m.key === c) || other; s.values[i] += n;
+  }
+  if (other.values.some(v => v)) ms.push(other);
+  if (ms.length) timeChart($("#fl-msgs"), days, ms, { height: 130 });
+  else $("#fl-msgs").innerHTML = '<div class="empty">no posts in this period</div>';
+
+  // Lead time distribution.
+  const buckets = [["<1h", 3600], ["1–4h", 4 * 3600], ["4–12h", 12 * 3600], ["12–24h", 86400], ["1–3d", 3 * 86400], ["3–7d", 7 * 86400], [">7d", Infinity]];
+  const bc = buckets.map(() => 0);
+  for (const s of sorted) bc[buckets.findIndex(b => s < b[1])]++;
+  $("#fl-lt-note").textContent = sorted.length ? `${fmtN(sorted.length)} tasks done in the period with a known claim` : "no task done in the period with a known claim";
+  if (sorted.length) columnChart($("#fl-lt"), buckets.map(b => b[0]), bc,
+    { height: 170, tip: (i) => `<b>${buckets[i][0]}</b><br>${fmtN(bc[i])} tasks (${(100 * bc[i] / sorted.length).toFixed(0)}%)` });
+  else $("#fl-lt").innerHTML = '<div class="empty">nothing to show yet — lead times are recorded from 0.9.0 on</div>';
+
+  // Abandoned claims per day, and per agent.
+  const ab = days.map(d => expPerDay.get(d) || 0);
+  if (expIn) columnChart($("#fl-ab"), days.map(d => dayDate(d).slice(5)), ab,
+    { height: 150, tip: (i) => `<b>${dayDate(days[i])}</b><br>${fmtN(ab[i])} leases ran out` });
+  else $("#fl-ab").innerHTML = '<div class="empty">no lease ran out in this period</div>';
+  flAgRows = [...per.values()].map(r => Object.assign(r, { rate: r.claims ? r.expired / r.claims : 0 }));
+  renderFlowAgents();
+}
+function renderFlowAgents() {
+  const tb = $("#fl-ag"); tb.innerHTML = "";
+  for (const r of sortRows(flAgRows, flAgSort)) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="mono">${esc(r.agent)}</td><td class="num">${fmtN(r.claims)}</td><td class="num">${fmtN(r.done)}</td>
+      <td class="num">${fmtN(r.released)}</td><td class="num">${fmtN(r.expired)}</td>
+      <td class="num">${r.claims ? (100 * r.rate).toFixed(0) + "%" : "—"}</td>`;
+    tb.appendChild(tr);
+  }
+  if (!flAgRows.length) tb.innerHTML = '<tr><td colspan="6" class="empty">no claims in this period</td></tr>';
+}
+sortable($("#fl-ag-head"), flAgSort, async () => renderFlowAgents(), ["claims", "done", "released", "expired", "rate"]);
+let flResize = 0;
+window.addEventListener("resize", () => { clearTimeout(flResize); flResize = setTimeout(() => {
+  if ($("#flow").classList.contains("on")) renderFlow(); }, 150); });
 
 // ── notes ──────────────────────────────────────────────────────────
 const nPage = { offset: 0, limit: 50 };
@@ -584,9 +978,9 @@ async function loadNotes(offset, limit) {
   for (const n of d.notes) {
     const div = document.createElement("div"); div.className = "note" + (n.rule ? " rule" : "");
     const ref = (n.project ? n.project + "/" : "") + n.key;
-    div.innerHTML = `<div class="h">${n.rule ? '<span class="pill rule">rule</span>' : ""}<span class="k">${esc(ref)}</span>
-      <span class="muted">${esc(n.author)} · ${ago(n.updated)}${n.rule && n.promoted_by ? " · rule by " + esc(n.promoted_by) : ""}</span>
-      <span class="acts"></span></div><div class="b"></div>`;
+    div.innerHTML = `<div class="h">${n.rule ? '<span class="pill rule">rule</span>' : ""}${n.keep ? '<span class="pill on" title="never expires">kept</span>' : ""}<span class="k">${esc(ref)}</span>
+      <span class="muted">${esc(n.author)} · ${ago(n.updated)}${n.touched ? " · read " + ago(n.touched) : ""}${n.rule && n.promoted_by ? " · rule by " + esc(n.promoted_by) : ""}</span>
+      <span class="acts"></span></div>${n.description ? `<div class="desc">${esc(n.description)}</div>` : ""}<div class="b"></div>`;
     div.querySelector(".b").textContent = n.body;
     div.querySelector(".acts").append(
       button(n.rule ? "Make plain note" : "Promote to rule", "", async () => {
@@ -596,7 +990,7 @@ async function loadNotes(offset, limit) {
       }),
       button("Edit", "", () => editNote(n)),
       button("Delete", "danger", async () => {
-        if (!confirmDel((n.rule ? "rule " : "note ") + ref)) return;
+        if (!confirmTrash((n.rule ? "rule " : "note ") + ref)) return;
         await api("DELETE", R("/m/notes", { key: n.key, project: n.project })); toast("deleted");
         await loadNotes(nPage.offset, nPage.limit);
       }));
@@ -608,11 +1002,13 @@ async function loadNotes(offset, limit) {
 async function editNote(n) {
   const r = await dialog(n ? (n.rule ? "Rule" : "Note") : "New note", [
     { key: "key", label: "Key", value: n ? n.key : "" },
+    { key: "description", label: "Description (one line, shown in the agents' notes list)", value: n ? n.description : "" },
     { key: "body", label: "Text", value: n ? n.body : "", type: "textarea",
-      hint: n && n.rule ? "Rewriting a rule shows it again to every agent, in its next brief." : "" }]);
+      hint: n && n.rule ? "Rewriting a rule shows it again to every agent, in its next brief." : "" },
+    { key: "keep", label: "Keep: never expires", value: n ? n.keep : false, type: "checkbox" }]);
   if (!r) return;
   const project = n ? n.project : "";
-  await api("PUT", R("/m/notes"), { key: r.key, body: r.body, project });
+  await api("PUT", R("/m/notes"), { key: r.key, body: r.body, description: r.description, keep: r.keep, project });
   if (n && r.key !== n.key) {
     if (n.rule) await api("PUT", R("/m/rules"), { key: r.key, project, rule: true });
     await api("DELETE", R("/m/notes", { key: n.key, project }));
@@ -644,7 +1040,7 @@ function renderAgents() {
         const r = await dialog("Agent " + a.id, [{ key: "about", label: "About", value: a.about }]);
         if (!r) return; await api("PUT", R("/m/agents/" + encodeURIComponent(a.id)), r); toast("saved"); await loadAgents();
       }), " ", button("Delete", "danger", async () => {
-        if (!confirmDel("agent " + a.id + " (its mailbox goes with it; its channel posts stay)")) return;
+        if (!confirmTrash("agent " + a.id + " (its mailbox goes with it; its channel posts stay)")) return;
         await api("DELETE", R("/m/agents/" + encodeURIComponent(a.id))); toast("deleted"); await loadAgents();
       }));
     }
@@ -653,6 +1049,134 @@ function renderAgents() {
   if (!aRows.length) tb.innerHTML = '<tr><td colspan="5" class="empty">no agents yet</td></tr>';
 }
 sortable($("#a-head"), aSort, async () => renderAgents(), ["seen", "created"]);
+
+// ── usage ──────────────────────────────────────────────────────────
+const fmtN = (n) => (n || 0).toLocaleString("en-US");
+const fmtC = (n) => new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(n || 0);
+const dayDate = (d) => new Date(d * 86400000).toISOString().slice(0, 10);
+const usFilter = { repo: "", agent: "" };
+let US = null;
+// One sort state per table; every table is the same shape.
+const usTables = {
+  orgs:   { key: "org",   label: "Organisation", state: { sort: "tokens", desc: true } },
+  repos:  { key: "repo",  label: "Repository",   state: { sort: "tokens", desc: true } },
+  agents: { key: "agent", label: "Agent",        state: { sort: "tokens", desc: true } },
+  ops:    { key: "op",    label: "Command",      state: { sort: "tokens", desc: true } },
+};
+const usNum = ["calls", "tokens_in", "tokens_out", "tokens", "per_call"];
+for (const [id, t] of Object.entries(usTables)) {
+  const head = $("#us-" + id + "-head");
+  head.innerHTML = `<th data-sort="${t.key}">${t.label}</th><th data-sort="calls" class="num">Calls</th>
+    <th data-sort="tokens_in" class="num">≈ Tokens in</th><th data-sort="tokens_out" class="num">≈ Tokens out</th>
+    <th data-sort="tokens" class="num">≈ Tokens</th><th>Share of tokens</th><th data-sort="per_call" class="num">≈ Per call</th>`;
+  sortable(head, t.state, async () => renderUsage(), usNum);
+}
+$("#us-days").onchange = $("#us-scope").onchange = () => run(loadUsage);
+
+async function loadUsage() {
+  if (!ME) ME = await api("GET", "/m/me");
+  const local = ME.mode !== "oidc";
+  $("#us-scope").hidden = local;
+  const q = { days: $("#us-days").value };
+  const repo = local ? "" : ($("#us-scope").value === "repo" ? REPO : usFilter.repo);
+  if (repo) q.repo = repo;
+  if (usFilter.agent) q.agent = usFilter.agent;
+  US = await api("GET", "/m/usage?" + new URLSearchParams(q));
+  US.local = local;
+  renderUsage();
+}
+
+function usLabel(r, key) {
+  if (key === "org") {
+    const own = US.orgs && ME && r.org === ME.org;
+    return esc(r.org) + (own ? ' <span class="pill mine">yours</span>' : "");
+  }
+  if (key === "repo") return r.repo ? esc(r.repo) : '<span class="muted">(local)</span>';
+  if (key === "agent") return (r.agent ? esc(r.agent) : '<span class="muted">(unnamed)</span>') +
+    (!US.local && !US.repo ? `<div class="muted">${esc(r.repo)}</div>` : "");
+  return esc(r.op);
+}
+
+function renderUsage() {
+  if (!US) return;
+  $("#us-bpt").textContent = US.bytes_per_token;
+  const cat = Math.ceil((US.catalog_bytes || 0) / US.bytes_per_token);
+  $("#us-catalog").textContent = `Not counted here: agora's tool definitions and instructions, ≈ ${fmtN(cat)} tokens, which an agent's ` +
+    `client loads once per session before any call (a client that defers tools loads only the ones it uses). ` +
+    `Calls made through the REST API are not counted either.`;
+  // The narrowing in force, each with a way out.
+  const f = $("#us-filter"); f.innerHTML = "";
+  const chip = (label, clear) => { const b = button(label + " ✕", "", async () => { clear(); await loadUsage(); }); b.title = "clear"; f.append(b, " "); };
+  if (usFilter.repo && $("#us-scope").value !== "repo") chip("repository: " + usFilter.repo, () => { usFilter.repo = ""; usFilter.agent = ""; });
+  if (usFilter.agent) chip("agent: " + usFilter.agent, () => { usFilter.agent = ""; });
+  if ($("#us-scope").value === "repo" && !US.local) f.append(Object.assign(document.createElement("span"), { className: "muted", textContent: "repository: " + (REPO || "none") }));
+
+  const t = US.total || {};
+  $("#us-tiles").innerHTML = [["≈ tokens", fmtC(t.tokens), fmtN(t.tokens)], ["≈ tokens in (written)", fmtC(t.tokens_in), fmtN(t.tokens_in)],
+    ["≈ tokens out (read)", fmtC(t.tokens_out), fmtN(t.tokens_out)], ["calls", fmtC(t.calls), fmtN(t.calls)],
+    ["≈ tokens per call", t.calls ? fmtN(Math.round(t.tokens / t.calls)) : "—", ""]]
+    .map(([l, n, full]) => `<div class="tile" title="${esc(full)}"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`).join("");
+
+  renderDaily();
+  $("#us-orgs-card").hidden = !US.orgs;
+  $("#us-repos-card").hidden = US.local;
+  const ctx = { orgs: US.orgs || [], repos: US.repos, agents: US.agents, ops: US.ops };
+  for (const [id, tdef] of Object.entries(usTables)) {
+    const rows = ctx[id].map(r => Object.assign({}, r, { per_call: r.calls ? Math.round(r.tokens / r.calls) : 0 }));
+    const sum = rows.reduce((a, r) => a + r.tokens, 0);
+    const tb = $("#us-" + id); tb.innerHTML = "";
+    for (const r of sortRows(rows, tdef.state)) {
+      const pct = sum ? (100 * r.tokens / sum) : 0;
+      const tr = document.createElement("tr");
+      tr.title = `${fmtN(r.bytes_in)} bytes in · ${fmtN(r.bytes_out)} bytes out`;
+      tr.innerHTML = `<td class="mono">${usLabel(r, tdef.key)}</td><td class="num">${fmtN(r.calls)}</td>
+        <td class="num">${fmtN(r.tokens_in)}</td><td class="num">${fmtN(r.tokens_out)}</td><td class="num"><b>${fmtN(r.tokens)}</b></td>
+        <td><div class="share"><div class="track"><div class="fill" style="width:${pct.toFixed(1)}%"></div></div>
+          <span class="pct">${pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}%</span></div></td>
+        <td class="num">${fmtN(r.per_call)}</td>`;
+      if (id === "repos" && r.repo) { tr.className = "pick"; tr.onclick = () => run(async () => { usFilter.repo = r.repo; usFilter.agent = ""; $("#us-scope").value = "org"; await loadUsage(); }); }
+      if (id === "agents" && r.agent) { tr.className = "pick"; tr.onclick = () => run(async () => { if (r.repo) usFilter.repo = r.repo; usFilter.agent = r.agent; await loadUsage(); }); }
+      tb.appendChild(tr);
+    }
+    if (!rows.length) tb.innerHTML = '<tr><td colspan="7" class="empty">nothing in this period</td></tr>';
+  }
+}
+
+// One column per day of the period (every day, empty ones too), height = tokens.
+function renderDaily() {
+  const el = $("#us-daily");
+  const byDay = new Map(US.daily.map(d => [d.day, d]));
+  let first = US.since || (US.daily.length ? US.daily[0].day : US.today);
+  first = Math.max(first, US.today - 365);
+  const days = [];
+  for (let d = first; d <= US.today; d++) days.push(byDay.get(d) || { day: d, calls: 0, tokens: 0, tokens_in: 0, tokens_out: 0 });
+  const max = Math.max(0, ...days.map(d => d.tokens));
+  if (!max) { el.innerHTML = '<div class="empty">nothing in this period</div>'; return; }
+  // A clean top for the one gridline: a round step × 10^k just above the peak.
+  const p = Math.pow(10, Math.floor(Math.log10(max)));
+  const top = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map(m => m * p).find(v => v >= max);
+  const peak = days.reduce((a, d) => d.tokens > a.tokens ? d : a, days[0]);
+  const cols = days.map(d => {
+    const h = (100 * d.tokens / top).toFixed(2);
+    const lab = d === peak ? `<span class="v" style="bottom:${h}%">${fmtC(d.tokens)}</span>` : "";
+    return `<div class="c" data-day="${d.day}">${lab}<div class="m" style="height:${h}%"></div></div>`;
+  }).join("");
+  el.innerHTML = `<div class="cols"><div class="gl" style="top:18px"><span>${fmtC(top)}</span></div>${cols}</div>
+    <div class="xaxis"><span>${dayDate(days[0].day)}</span><span>${dayDate(days[days.length - 1].day)}</span></div>`;
+  const tip = $("#tip");
+  el.querySelectorAll(".c").forEach(c => {
+    const d = byDay.get(+c.dataset.day) || { day: +c.dataset.day, calls: 0, tokens: 0, tokens_in: 0, tokens_out: 0 };
+    c.onmouseenter = () => {
+      tip.innerHTML = `<b>${dayDate(d.day)}</b><br>≈ ${fmtN(d.tokens)} tokens (${fmtN(d.tokens_in)} in · ${fmtN(d.tokens_out)} out)<br>${fmtN(d.calls)} calls`;
+      tip.style.display = "block";
+    };
+    c.onmousemove = (e) => {
+      const w = tip.offsetWidth;
+      tip.style.left = Math.min(e.clientX + 12, window.innerWidth - w - 8) + "px"; tip.style.top = (e.clientY + 14) + "px";
+    };
+    c.onmouseleave = () => { tip.style.display = "none"; };
+  });
+}
 
 // ── skills ─────────────────────────────────────────────────────────
 async function loadSkills() {
@@ -768,10 +1292,129 @@ $("#c-preview").onclick = () => run(async () => {
   $("#c-note").textContent = any ? "" : "nothing to clear";
 });
 $("#c-run").onclick = () => run(async () => {
-  if (!confirm("Clean up " + (REPO || "this agora") + " as previewed? This cannot be undone.")) return;
+  if (!confirm("Clean up " + (REPO || "this agora") + " as previewed? It all goes to the trash, which restores it.")) return;
   const d = await api("POST", R("/m/cleanup"), cleanupArgs(false));
-  for (const k of KINDS) $("#c-" + k + "-n").textContent = $("#c-" + k).checked ? d[k] + " cleared" : "";
-  $("#c-run").disabled = true; AGENTS = null; toast("cleaned up");
+  for (const k of KINDS) $("#c-" + k + "-n").textContent = $("#c-" + k).checked ? d[k] + " moved to the trash" : "";
+  $("#c-run").disabled = true; AGENTS = null; toast("moved to the trash"); await loadAudit(0);
+});
+
+// ── expiry and audit (cleanup page) ────────────────────────────────
+const X_KINDS = [["notes", "Notes not written or read for"], ["posts", "Channel posts older than"],
+  ["mail", "Direct mail, once read, older than"], ["tasks", "Finished tasks (done, cancelled) older than"],
+  ["agents", "Agents not seen for"], ["channels", "Channels with no post for"], ["empty_days", "Empty the trash of what has been in it for"]];
+async function loadExpiry() {
+  const d = await api("GET", "/m/expiry");
+  $("#x-table").innerHTML = X_KINDS.map(([k, l]) => `<tr><td>${esc(l)}</td><td><input type="number" min="0" id="x-${k}"
+    value="${d.expiry[k]}" ${d.may_change ? "" : "disabled"}> days</td><td class="muted">${k === "empty_days"
+    ? "default never" : "default " + d.defaults[k]}</td></tr>`).join("");
+  $("#x-save").hidden = !d.may_change;
+  $("#x-who").textContent = d.may_change ? "" : "Your organisation's administrators set them.";
+}
+$("#x-save").onclick = () => run(async () => {
+  const b = {}; for (const [k] of X_KINDS) b[k] = parseInt($("#x-" + k).value, 10) || 0;
+  await api("PUT", "/m/expiry", b); toast("saved"); await loadExpiry();
+});
+$("#x-now").onclick = () => run(async () => {
+  const d = await api("POST", R("/m/sweep"));
+  const n = d.notes + d.posts + d.mail + d.tasks + d.agents + d.channels;
+  $("#x-note").textContent = n ? `${n} moved to the trash` + (d.emptied ? `, ${d.emptied} emptied from it` : "") : "nothing has had its time";
+  AGENTS = null; await loadAudit(0);
+});
+const aPage = { offset: 0, limit: 25 };
+const AUDIT_WORD = { expire: "expired", trash: "deleted to the trash", restore: "restored", delete: "deleted for good", empty: "emptied from the trash" };
+async function loadAudit(offset, limit) {
+  aPage.offset = offset; if (limit) aPage.limit = limit;
+  const d = await api("GET", R("/m/audit", { limit: aPage.limit, offset: aPage.offset }));
+  const tb = $("#x-audit"); tb.innerHTML = "";
+  for (const a of d.audit) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${ago(a.ts)}</td><td>${esc(AUDIT_WORD[a.action] || a.action)}</td>
+      <td><span class="pill">${esc(a.kind)}</span> <span class="mono">${esc((KIND_REF[a.kind] || String)(a.ref))}</span><div class="muted">${esc(a.label)}</div></td>
+      <td class="mono">${esc(a.by)}</td>`;
+    tb.appendChild(tr);
+  }
+  if (!d.audit.length) tb.innerHTML = '<tr><td colspan="4" class="empty">nothing yet</td></tr>';
+  pager($("#x-audit-pager"), d.total, aPage.offset, aPage.limit, loadAudit);
+}
+
+// ── trash ──────────────────────────────────────────────────────────
+const trPage = { offset: 0, limit: 50 };
+const trSel = new Set();
+const trFilter = () => ({ kind: $("#tr-kind").value, author: $("#tr-author").value.trim(), days: $("#tr-days").value, q: $("#tr-q").value });
+const KIND_REF = { note: (r) => r, message: (r) => "#" + r, task: (r) => "AGORA-" + r, agent: (r) => r, channel: (r) => r };
+function trSelChanged() {
+  $("#tr-restore").disabled = $("#tr-del").disabled = !trSel.size;
+  $("#tr-restore").textContent = trSel.size ? `Restore ${trSel.size}` : "Restore selected";
+  $("#tr-del").textContent = trSel.size ? `Delete ${trSel.size} for good` : "Delete selected for good";
+}
+async function loadTrash(offset, limit) {
+  trPage.offset = offset; if (limit) trPage.limit = limit;
+  const d = await api("GET", R("/m/trash", Object.assign(trFilter(), { limit: trPage.limit, offset: trPage.offset })));
+  const sel = $("#tr-kind"), cur = sel.value, all = Object.values(d.kinds).reduce((a, b) => a + b, 0);
+  sel.innerHTML = `<option value="">every kind (${all})</option>` +
+    Object.entries(d.kinds).map(([k, n]) => `<option value="${k}">${k}s (${n})</option>`).join("");
+  sel.value = cur;
+  trSel.clear(); trSelChanged(); $("#tr-all").checked = false;
+  const tb = $("#tr-list"); tb.innerHTML = "";
+  for (const t of d.items) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><input type="checkbox"></td><td><span class="pill">${esc(t.kind)}</span></td>
+      <td><span class="mono">${esc((KIND_REF[t.kind] || String)(t.ref))}</span><div class="muted">${esc(t.label)}</div></td>
+      <td class="mono">${esc(t.author)}</td><td>${ago(t.touched)}</td>
+      <td>${ago(t.trashed)}<div class="muted">${t.reason === "expired" ? "expired" : esc(t.reason) + (t.by ? " by " + esc(t.by) : "")}</div></td><td class="acts"></td>`;
+    const cb = tr.querySelector("input");
+    cb.onchange = () => { cb.checked ? trSel.add(t.id) : trSel.delete(t.id); trSelChanged(); };
+    tr.lastElementChild.append(button("Preview", "", () => previewTrash(t)), " ",
+      button("Restore", "", () => restoreTrash([t.id], t)), " ",
+      button("Delete", "danger", async () => {
+        if (!confirmDel(t.kind + " " + (KIND_REF[t.kind] || String)(t.ref) + " for good")) return;
+        await api("POST", R("/m/trash/delete"), { ids: [t.id] }); toast("deleted for good"); await loadTrash(trPage.offset, trPage.limit);
+      }));
+    tb.appendChild(tr);
+  }
+  if (!d.items.length) tb.innerHTML = '<tr><td colspan="7" class="empty">the trash is empty</td></tr>';
+  pager($("#tr-pager"), d.total, trPage.offset, trPage.limit, loadTrash);
+}
+async function previewTrash(t) {
+  const d = await api("GET", R("/m/trash/" + t.id));
+  await dialog(t.kind + " " + (KIND_REF[t.kind] || String)(t.ref) + " — what it holds",
+    [{ key: "data", label: "Every row, as it will be restored", value: JSON.stringify(d.data, null, 2), type: "textarea", rows: 18 }], "Close");
+}
+// Restore; an item whose key or name is in use again asks what to do.
+async function restoreTrash(ids, one) {
+  const d = await api("POST", R("/m/trash/restore"), { ids });
+  let msg = `${d.restored} restored`;
+  const taken = d.results.filter(r => r.result === "taken");
+  if (taken.length && one) {
+    const isNote = one.kind === "note";
+    const r = await dialog(`${one.kind} ${one.ref} is in use again`, [
+      { key: "mode", label: isNote ? "Something else has this key now. Restore under a new key, or replace what is there?"
+        : "Something else has this name now. Replace it with the copy from the trash?", type: "select",
+        value: isNote ? "rename" : "overwrite",
+        options: (isNote ? [["rename", "restore under a new key"]] : []).concat([["overwrite", "replace what is there"]]) },
+      ...(isNote ? [{ key: "key", label: "New key", value: one.ref.split("/").pop() + "-restored" }] : [])], "Restore");
+    if (!r) return;
+    await api("POST", R("/m/trash/restore"), { ids, mode: r.mode, key: r.key || "" });
+    msg = "restored";
+  } else if (taken.length) msg += `; ${taken.length} skipped: their key or name is in use again (restore them one by one)`;
+  toast(msg); AGENTS = null; await loadTrash(trPage.offset, trPage.limit);
+}
+$("#tr-go").onclick = () => run(() => loadTrash(0, trPage.limit));
+$("#tr-q").onkeydown = $("#tr-author").onkeydown = (e) => { if (e.key === "Enter") run(() => loadTrash(0, trPage.limit)); };
+$("#tr-kind").onchange = $("#tr-days").onchange = () => run(() => loadTrash(0, trPage.limit));
+$("#tr-all").onchange = () => {
+  document.querySelectorAll("#tr-list input[type=checkbox]").forEach(cb => { cb.checked = $("#tr-all").checked; cb.onchange(); });
+};
+$("#tr-restore").onclick = () => run(() => restoreTrash([...trSel], null));
+$("#tr-del").onclick = () => run(async () => {
+  if (!confirmDel(trSel.size + " items for good")) return;
+  const d = await api("POST", R("/m/trash/delete"), { ids: [...trSel] }); toast(d.deleted + " deleted for good");
+  await loadTrash(trPage.offset, trPage.limit);
+});
+$("#tr-del-all").onclick = () => run(async () => {
+  if (!confirmDel("everything the filter shows (every page)")) return;
+  const d = await api("POST", R("/m/trash/delete"), Object.assign({ all: true }, trFilter())); toast(d.deleted + " deleted for good");
+  await loadTrash(0, trPage.limit);
 });
 
 // ── people ─────────────────────────────────────────────────────────

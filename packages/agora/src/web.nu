@@ -127,13 +127,18 @@ $ `auth.nu`
 // The same, inside the repository the request's `?repo=` names.
 @ ag_who_in HttpRequest req i now → AgWho {
     : AgWho w ( ag_who req now )
-    ? | != . w status 0 ! ( ag_auth_oidc ) { ^ w } {}
+    ? != . w status 0 { ^ w } {}
+    ? ( ag_auth_oidc ) {} {
+        ( ag_sweep_maybe . w rs . w st now )
+        ^ w
+    }
     : String raw ( __ag_query req `repo` )
     ?? ( ag_repo_key ( string_data raw ) ) {
         F → { ^ @ AgWho { 400 . w who . w st ( __ag_no_store ) ( string_new ) } }
         T k → {
             : AgStore rs ( ag_repo_store ( string_data . . w who org ) ( string_data k ) )
             ? . rs ok {} { ^ @ AgWho { 500 . w who . w st rs k } }
+            ( ag_sweep_maybe rs . w st now )
             ^ @ AgWho { 0 . w who . w st rs k }
         }
     }
@@ -345,7 +350,7 @@ $ `auth.nu`
 }
 
 // A query parameter as a whole number; `dflt` when absent, kept to lo…hi.
-@ __ag_query_int HttpRequest req s key i dflt i lo i hi → i {
+@ _ag_query_int HttpRequest req s key i dflt i lo i hi → i {
     : String v ( __ag_query req key )
     : ~ i x dflt
     ? > ( string_len v ) 0 { = x ( nurl_str_to_int ( string_data v ) ) } {}
@@ -489,7 +494,9 @@ $ `auth.nu`
     : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String id ( __ag_param req p `id` )
-    ? ( ag_agent_delete . w rs ( string_data id ) now ) {} { ^ ( ag_json_err 404 `no such agent` ) }
+    : i moved ( ag_trash_agent . w rs ( string_data id ) ( string_data ( __ag_person w ) ) now )
+    ? < moved 0 { ^ ( ag_json_err 500 `could not delete the agent` ) } {}
+    ? == moved 0 { ^ ( ag_json_err 404 `no such agent` ) } {}
     ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
@@ -542,7 +549,7 @@ $ `auth.nu`
         = k + k 1
     }
     ? found {} { ^ ( ag_json_err 404 `no such channel` ) }
-    ? ( ag_channel_delete . w rs ( string_data name ) ) {} { ^ ( ag_json_err 500 `could not delete the channel` ) }
+    ? > ( ag_trash_channel . w rs ( string_data name ) ( string_data ( __ag_person w ) ) now ) 0 {} { ^ ( ag_json_err 500 `could not delete the channel` ) }
     ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
@@ -556,9 +563,9 @@ $ `auth.nu`
     : String channel ( __ag_query req `channel` )
     : String from ( __ag_query req `from` )
     : String q ( __ag_query req `q` )
-    : i before ( __ag_query_int req `before` 0 0 9223372036854775807 )
-    : i limit ( __ag_query_int req `limit` 100 1 500 )
-    : i offset ( __ag_query_int req `offset` 0 0 1000000000 )
+    : i before ( _ag_query_int req `before` 0 0 9223372036854775807 )
+    : i limit ( _ag_query_int req `limit` 100 1 500 )
+    : i offset ( _ag_query_int req `offset` 0 0 1000000000 )
     : String order ( __ag_query req `order` )
     : b oldest != 0 ( nurl_str_eq ( string_data order ) `oldest` )
     : ( Vec AgMsg ) v ( ag_messages_page . w rs ( string_data channel ) ( string_data from ) ( string_data q ) before oldest limit offset )
@@ -623,7 +630,7 @@ $ `auth.nu`
     ?? ( ag_msg_get . w rs id ) {
         F _ → { ^ ( ag_json_err 404 `no such message` ) }
         T m → {
-            ? ( ag_msg_delete . w rs id ) {} { ^ ( ag_json_err 500 `could not delete the message` ) }
+            ? > ( ag_trash_message . w rs id ( string_data ( __ag_person w ) ) now ) 0 {} { ^ ( ag_json_err 500 `could not delete the message` ) }
             ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
         }
     }
@@ -647,8 +654,8 @@ $ `auth.nu`
     : String sort ( __ag_query req `sort` )
     : String dir ( __ag_query req `dir` )
     : b desc == 0 ( nurl_str_eq ( string_data dir ) `asc` )
-    : i limit ( __ag_query_int req `limit` 50 1 500 )
-    : i offset ( __ag_query_int req `offset` 0 0 1000000000 )
+    : i limit ( _ag_query_int req `limit` 50 1 500 )
+    : i offset ( _ag_query_int req `offset` 0 0 1000000000 )
     : ( Vec AgTask ) v ( ag_tasks_page . w rs ( string_data status ) ( string_data holder ) ( string_data q ) hide ( string_data sort ) desc limit offset now )
     : Json arr ( json_arr_new )
     : i n ( vec_len [AgTask] v )
@@ -658,6 +665,14 @@ $ `auth.nu`
             T t → {
                 : Json o ( _ag_task_json t )
                 ( json_obj_set o `may_change` ( json_bool T ) )
+                // Where it is on GitHub: its mirrored issue, the PRs tied to it.
+                : GhTaskRefs g ( ag_gh_task_refs . w rs . t id )
+                ? > . g issue 0 { ( json_obj_set o `issue` ( json_int . g issue ) ) } {}
+                : Json pa ( json_arr_new )
+                : i np ( vec_len [i] . g prs )
+                : ~ i j 0
+                ~ < j np { ?? ( vec_get [i] . g prs j ) { T x → { ( json_arr_push pa ( json_int x ) ) } F _ → {} } = j + j 1 }
+                ( json_obj_set o `prs` pa )
                 ( json_arr_push arr o )
             }
             F _ → {}
@@ -725,7 +740,7 @@ $ `auth.nu`
     ?? ( ag_task_get . w rs id now ) {
         F _ → { ^ ( ag_json_err 404 `no such task` ) }
         T t → {
-            ? ( ag_task_delete . w rs id ) {} { ^ ( ag_json_err 500 `could not delete the task` ) }
+            ? > ( ag_trash_task . w rs id ( string_data ( __ag_person w ) ) now ) 0 {} { ^ ( ag_json_err 500 `could not delete the task` ) }
             ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
         }
     }
@@ -742,8 +757,8 @@ $ `auth.nu`
     : String q ( __ag_query req `q` )
     : String kind ( __ag_query req `kind` )
     : String sort ( __ag_query req `sort` )
-    : i limit ( __ag_query_int req `limit` 50 1 500 )
-    : i offset ( __ag_query_int req `offset` 0 0 1000000000 )
+    : i limit ( _ag_query_int req `limit` 50 1 500 )
+    : i offset ( _ag_query_int req `offset` 0 0 1000000000 )
     : ( Vec AgNote ) v ( ag_notes_page . w rs ( string_data q ) ( string_data kind ) ( string_data sort ) limit offset )
     : Json arr ( json_arr_new )
     : i n ( vec_len [AgNote] v )
@@ -773,9 +788,18 @@ $ `auth.nu`
     ? > ( string_len body ) AG_BODY_MAX { ^ ( ag_json_err 400 `body: at most 16 KiB` ) } {}
     : ~ String author ( string_from `web` )
     ? ( ag_auth_oidc ) { = author ( string_from ( string_data . . w who email ) ) } {}
-    ? ( ag_note_set . w rs ( string_data project ) ( string_data key ) ( string_data body ) ( string_data author ) now ) {} {
+    // `{key, keep}` alone marks a note to keep (or not) and writes nothing else.
+    ? & ( _ag_has_arg b `keep` ) ! ( _ag_has_arg b `body` ) {
+        ? ( ag_note_set_keep . w rs ( string_data project ) ( string_data key ) ( _ag_arg_bool b `keep` F ) ) {} { ^ ( ag_json_err 404 `no such note` ) }
+        ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+    } {}
+    : b set_desc ( _ag_has_arg b `description` )
+    : String desc ( _ag_one_line ( _ag_arg_str b `description` ) )
+    ? > ( string_len desc ) 200 { ^ ( ag_json_err 400 `description: one line, at most 200 characters` ) } {}
+    ? ( ag_note_write . w rs ( string_data project ) ( string_data key ) ( string_data body ) set_desc ( string_data desc ) ( string_data author ) now ) {} {
         ^ ( ag_json_err 500 `could not save the note` )
     }
+    ? ( _ag_has_arg b `keep` ) { ( ag_note_set_keep . w rs ( string_data project ) ( string_data key ) ( _ag_arg_bool b `keep` F ) ) } {}
     ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
@@ -788,7 +812,9 @@ $ `auth.nu`
     : String raw ( __ag_query req `project` )
     : ~ String project ( string_new )
     ?? ( ag_project_norm ( string_data raw ) ) { T pr → { = project pr } F → { ^ ( ag_json_err 400 `bad project` ) } }
-    ? ( ag_note_del . w rs ( string_data project ) ( string_data key ) ) {} { ^ ( ag_json_err 404 `no such note` ) }
+    : i moved ( ag_trash_note . w rs ( string_data project ) ( string_data key ) ( string_data ( __ag_person w ) ) now )
+    ? < moved 0 { ^ ( ag_json_err 500 `could not delete the note` ) } {}
+    ? == moved 0 { ^ ( ag_json_err 404 `no such note` ) } {}
     ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
@@ -850,6 +876,495 @@ $ `auth.nu`
     ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
+// ── Expiry and the trash ─────────────────────────────────────────────
+
+@ __ag_expiry_json AgExpiry e → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `notes` ( json_int . e notes ) )
+    ( json_obj_set o `posts` ( json_int . e posts ) )
+    ( json_obj_set o `mail` ( json_int . e mail ) )
+    ( json_obj_set o `tasks` ( json_int . e tasks ) )
+    ( json_obj_set o `agents` ( json_int . e agents ) )
+    ( json_obj_set o `channels` ( json_int . e channels ) )
+    ( json_obj_set o `empty_days` ( json_int . e empty_days ) )
+    ^ o
+}
+
+// May this person change the organisation's expiry times? Its admins
+// (anyone, locally).
+@ __ag_may_set_expiry AgWho w → b {
+    ? ( ag_auth_oidc ) { ^ ( ag_principal_is_admin . w who ) } {}
+    ^ T
+}
+
+// GET /m/expiry — the organisation's expiry times (days; 0 = never) and
+// the defaults. PUT /m/expiry {notes, posts, mail, tasks, agents,
+// channels, empty_days} — admins; what is left out stays.
+@ ag_h_expiry HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : Json o ( json_obj_new )
+    ( json_obj_set o `expiry` ( __ag_expiry_json ( ag_expiry_get . w st ) ) )
+    ( json_obj_set o `defaults` ( __ag_expiry_json ( ag_expiry_defaults ) ) )
+    ( json_obj_set o `may_change` ( json_bool ( __ag_may_set_expiry w ) ) )
+    ^ ( __ag_json_ok o )
+}
+
+@ __ag_days_arg Json b s key i cur → i {
+    ? ( _ag_has_arg b key ) {} { ^ cur }
+    : i d ( _ag_arg_int b key cur )
+    ? < d 0 { ^ 0 } {}
+    ? > d 36500 { ^ 36500 } {}
+    ^ d
+}
+
+@ ag_h_expiry_put HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    ? ( __ag_may_set_expiry w ) {} { ^ ( ag_json_err 403 `the organisation's administrators set the expiry times` ) }
+    : Json b ( __ag_body_obj req )
+    : AgExpiry c ( ag_expiry_get . w st )
+    : AgExpiry e @ AgExpiry { ( __ag_days_arg b `notes` . c notes ) ( __ag_days_arg b `posts` . c posts ) ( __ag_days_arg b `mail` . c mail )
+        ( __ag_days_arg b `tasks` . c tasks ) ( __ag_days_arg b `agents` . c agents ) ( __ag_days_arg b `channels` . c channels )
+        ( __ag_days_arg b `empty_days` . c empty_days ) }
+    ? ( ag_expiry_set . w st e ) {} { ^ ( ag_json_err 500 `could not save the expiry times` ) }
+    ^ ( __ag_json_ok ( __ag_expiry_json e ) )
+}
+
+// POST /m/sweep?repo= — expire what has had its time, now.
+@ ag_h_sweep HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who_in req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : AgSwept r ( ag_sweep . w rs ( ag_expiry_get . w st ) T now )
+    : Json o ( json_obj_new )
+    ( json_obj_set o `notes` ( json_int . r notes ) )
+    ( json_obj_set o `posts` ( json_int . r posts ) )
+    ( json_obj_set o `mail` ( json_int . r mail ) )
+    ( json_obj_set o `tasks` ( json_int . r tasks ) )
+    ( json_obj_set o `agents` ( json_int . r agents ) )
+    ( json_obj_set o `channels` ( json_int . r channels ) )
+    ( json_obj_set o `emptied` ( json_int . r emptied ) )
+    ^ ( __ag_json_ok o )
+}
+
+@ __ag_trash_json AgTrash t → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `id` ( json_int . t id ) )
+    ( json_obj_set o `kind` ( __ag_jstr . t kind ) )
+    ( json_obj_set o `ref` ( __ag_jstr . t ref ) )
+    ( json_obj_set o `label` ( __ag_jstr . t label ) )
+    ( json_obj_set o `author` ( __ag_jstr . t author ) )
+    ( json_obj_set o `touched` ( json_int . t touched ) )
+    ( json_obj_set o `trashed` ( json_int . t trashed ) )
+    ( json_obj_set o `reason` ( __ag_jstr . t reason ) )
+    ( json_obj_set o `by` ( __ag_jstr . t by ) )
+    ^ o
+}
+
+// The filter of a trash listing or a bulk action: kind, author, in the
+// trash at least `days` days, text.
+: AgTrashQ {
+    String kind
+    String author
+    i before
+    String text
+}
+
+@ __ag_trash_q Json b i now → AgTrashQ {
+    : i days ( _ag_arg_int b `days` 0 )
+    ^ @ AgTrashQ { ( _ag_arg_str b `kind` ) ( _ag_arg_str b `author` ) ? > days 0 - now * days 86400 0 ( _ag_arg_str b `q` ) }
+}
+
+@ __ag_query_obj HttpRequest req → Json {
+    : Json o ( json_obj_new )
+    : s qs ( string_data . req query )
+    : ( Vec QueryPair ) pairs ( parse_query qs )
+    : i n ( vec_len [QueryPair] pairs )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [QueryPair] pairs k ) {
+            T qp → { ( json_obj_set o ( string_data . qp key ) ( json_str_lit ( string_data . qp value ) ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ o
+}
+
+// GET /m/trash?repo=&kind=&author=&days=&q=&limit=&offset= — newest first.
+@ ag_h_trash HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who_in req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : AgTrashQ f ( __ag_trash_q ( __ag_query_obj req ) now )
+    : i limit ( _ag_query_int req `limit` 50 1 500 )
+    : i offset ( _ag_query_int req `offset` 0 0 1000000000 )
+    : ( Vec AgTrash ) v ( ag_trash_page . w rs ( string_data . f kind ) ( string_data . f author ) . f before ( string_data . f text ) limit offset )
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [AgTrash] v )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [AgTrash] v k ) { T t → { ( json_arr_push arr ( __ag_trash_json t ) ) } F _ → {} }
+        = k + k 1
+    }
+    : Json out ( json_obj_new )
+    ( json_obj_set out `items` arr )
+    ( json_obj_set out `total` ( json_int ( ag_trash_count . w rs ( string_data . f kind ) ( string_data . f author ) . f before ( string_data . f text ) ) ) )
+    : Json kinds ( json_obj_new )
+    : ( Vec String ) ks ( vec_new [String] )
+    ( vec_push [String] ks ( string_from `note` ) )
+    ( vec_push [String] ks ( string_from `message` ) )
+    ( vec_push [String] ks ( string_from `task` ) )
+    ( vec_push [String] ks ( string_from `agent` ) )
+    ( vec_push [String] ks ( string_from `channel` ) )
+    : ~ i j 0
+    ~ < j 5 {
+        ?? ( vec_get [String] ks j ) {
+            T kk → { ( json_obj_set kinds ( string_data kk ) ( json_int ( ag_trash_count . w rs ( string_data kk ) `` 0 `` ) ) ) }
+            F _ → {}
+        }
+        = j + j 1
+    }
+    ( json_obj_set out `kinds` kinds )
+    ^ ( __ag_json_ok out )
+}
+
+// GET /m/trash/:id?repo= — one item with every row it holds.
+@ ag_h_trash_item HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who_in req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : i id ( nurl_str_to_int ( string_data ( __ag_param req p `id` ) ) )
+    : String data ( ag_trash_data . w rs id )
+    ? == ( string_len data ) 0 { ^ ( ag_json_err 404 `no such item in the trash` ) } {}
+    : Json o ( json_obj_new )
+    ( json_obj_set o `id` ( json_int id ) )
+    ?? ( json_parse ( string_data data ) ) { T j → { ( json_obj_set o `data` j ) } F _ → {} }
+    ^ ( __ag_json_ok o )
+}
+
+// The ids a bulk action names: `ids` [..], or `all` with the listing's filter.
+@ __ag_trash_targets AgWho w Json b i now → ( Vec i ) {
+    ? ( _ag_arg_bool b `all` F ) {
+        : AgTrashQ f ( __ag_trash_q b now )
+        ^ ( ag_trash_ids . w rs ( string_data . f kind ) ( string_data . f author ) . f before ( string_data . f text ) )
+    } {}
+    : ( Vec i ) out ( vec_new [i] )
+    ?? ( json_obj_get b `ids` ) {
+        T a → {
+            : i n ( json_arr_len a )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( json_arr_get a k ) { T x → { ( vec_push [i] out ( json_as_int x ) ) } F → {} }
+                = k + k 1
+            }
+        }
+        F → {}
+    }
+    ^ out
+}
+
+// POST /m/trash/restore?repo= {ids | all + filter, mode?, key?} — put back.
+// An item whose key or name is taken again answers `taken` unless `mode`
+// is overwrite (or rename, with `key`, for a note).
+@ ag_h_trash_restore HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who_in req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : Json b ( __ag_body_obj req )
+    : String mode ( _ag_arg_str b `mode` )
+    : String key ( _ag_arg_str b `key` )
+    ? != 0 ( nurl_str_eq ( string_data mode ) `rename` ) {
+        ? ( ag_name_ok ( string_data key ) ) {} { ^ ( ag_json_err 400 `key must be 1–48 of a-z 0-9 . _ -` ) }
+    } {}
+    : ( Vec i ) ids ( __ag_trash_targets w b now )
+    : AgExpiry e ( ag_expiry_get . w st )
+    : String by ( __ag_person w )
+    : Json res ( json_arr_new )
+    : ~ i restored 0
+    : ~ i taken 0
+    : i n ( vec_len [i] ids )
+    : ~ i k 0
+    ~ < k n {
+        : i id ?? ( vec_get [i] ids k ) { T x → x F _ → 0 }
+        // Held from expiring for one period of its kind (30 days if it never expires).
+        : String kind ( __ag_trash_kind_of . w rs id )
+        : i d ( ag_expiry_days e ( string_data kind ) )
+        : i rc ( ag_trash_restore . w rs id ( string_data mode ) ( string_data key ) ? > d 0 d 30 ( string_data by ) now )
+        : Json o ( json_obj_new )
+        ( json_obj_set o `id` ( json_int id ) )
+        ( json_obj_set o `result` ( json_str_lit ? == rc AG_RESTORED `restored` ? == rc AG_RESTORE_TAKEN `taken` ? == rc AG_RESTORE_GONE `gone` `failed` ) )
+        ( json_arr_push res o )
+        ? == rc AG_RESTORED { = restored + restored 1 } {}
+        ? == rc AG_RESTORE_TAKEN { = taken + taken 1 } {}
+        = k + k 1
+    }
+    : Json out ( json_obj_new )
+    ( json_obj_set out `restored` ( json_int restored ) )
+    ( json_obj_set out `taken` ( json_int taken ) )
+    ( json_obj_set out `results` res )
+    ^ ( __ag_json_ok out )
+}
+
+@ __ag_trash_kind_of AgStore st i id → String {
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT kind FROM trash WHERE id = ?1` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_i q 1 id )
+                    ? ( _ag_row q ) { ^ ( sqlite_column_text q 0 ) } {}
+                }
+            }
+        }
+    }
+    ^ ( string_new )
+}
+
+// POST /m/trash/delete?repo= {ids | all + filter} — delete for good.
+@ ag_h_trash_delete HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who_in req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : Json b ( __ag_body_obj req )
+    : ( Vec i ) ids ( __ag_trash_targets w b now )
+    : String by ( __ag_person w )
+    : ~ i gone 0
+    : i n ( vec_len [i] ids )
+    : ~ i k 0
+    ~ < k n {
+        : i id ?? ( vec_get [i] ids k ) { T x → x F _ → 0 }
+        ? ( ag_trash_delete . w rs id ( string_data by ) now ) { = gone + gone 1 } {}
+        = k + k 1
+    }
+    ^ ( __ag_json_ok ( _ag_obj_int `deleted` gone ) )
+}
+
+// GET /m/audit?repo=&limit=&offset= — what went into or out of the trash.
+@ ag_h_audit HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who_in req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : i limit ( _ag_query_int req `limit` 50 1 500 )
+    : i offset ( _ag_query_int req `offset` 0 0 1000000000 )
+    : ( Vec AgAudit ) v ( ag_audit_page . w rs limit offset )
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [AgAudit] v )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [AgAudit] v k ) {
+            T a → {
+                : Json o ( json_obj_new )
+                ( json_obj_set o `ts` ( json_int . a ts ) )
+                ( json_obj_set o `action` ( __ag_jstr . a action ) )
+                ( json_obj_set o `kind` ( __ag_jstr . a kind ) )
+                ( json_obj_set o `ref` ( __ag_jstr . a ref ) )
+                ( json_obj_set o `label` ( __ag_jstr . a label ) )
+                ( json_obj_set o `by` ( __ag_jstr . a by ) )
+                ( json_arr_push arr o )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    : Json out ( json_obj_new )
+    ( json_obj_set out `audit` arr )
+    ( json_obj_set out `total` ( json_int ( ag_audit_count . w rs ) ) )
+    ^ ( __ag_json_ok out )
+}
+
+// ── Flow ─────────────────────────────────────────────────────────────
+
+// GET /m/flow?repo=&days= — a repository's task history and its posts
+// per channel per day over the last `days` days (0 = all; default 90).
+// The history is whole (a state at the start of the period needs what
+// came before); the page draws the cumulative flow, lead times claim →
+// done and abandoned claims from it.
+@ ag_h_flow HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who_in req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : i days ( _ag_query_int req `days` 90 0 36500 )
+    : i today / now 86400
+    : i since ? > days 0 + - today days 1 0
+    : Json out ( json_obj_new )
+    ( json_obj_set out `days` ( json_int days ) )
+    ( json_obj_set out `today` ( json_int today ) )
+    ( json_obj_set out `since` ( json_int since ) )
+    ( json_obj_set out `now` ( json_int now ) )
+    ( json_obj_set out `events` ( ag_task_events_json . w rs ) )
+    ( json_obj_set out `messages` ( ag_msg_daily_json . w rs since ) )
+    ^ ( __ag_json_ok out )
+}
+
+// ── Usage ────────────────────────────────────────────────────────────
+
+// Estimated tokens for `bytes` (AG_BYTES_PER_TOKEN, rounded up).
+@ __ag_tokens i bytes → i { ^ / + bytes - AG_BYTES_PER_TOKEN 1 AG_BYTES_PER_TOKEN }
+
+@ __ag_usage_json AgUsage u → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `repo` ( json_str_lit ( string_data . u repo ) ) )
+    ( json_obj_set o `agent` ( json_str_lit ( string_data . u agent ) ) )
+    ( json_obj_set o `op` ( json_str_lit ( string_data . u op ) ) )
+    ( json_obj_set o `day` ( json_int . u day ) )
+    ( json_obj_set o `calls` ( json_int . u calls ) )
+    ( json_obj_set o `bytes_in` ( json_int . u bytes_in ) )
+    ( json_obj_set o `bytes_out` ( json_int . u bytes_out ) )
+    ( json_obj_set o `tokens_in` ( json_int ( __ag_tokens . u bytes_in ) ) )
+    ( json_obj_set o `tokens_out` ( json_int ( __ag_tokens . u bytes_out ) ) )
+    ( json_obj_set o `tokens` ( json_int + ( __ag_tokens . u bytes_in ) ( __ag_tokens . u bytes_out ) ) )
+    ^ o
+}
+
+@ __ag_usage_arr AgStore st s by i since s repo s agent → Json {
+    : ( Vec AgUsage ) v ( ag_usage_rows st by since repo agent )
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [AgUsage] v )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [AgUsage] v k ) { T u → { ( json_arr_push arr ( __ag_usage_json u ) ) } F _ → {} }
+        = k + k 1
+    }
+    ^ arr
+}
+
+// Every organisation's total since `since`, largest first: one row per
+// organisation file under <home>/orgs ({org, calls, bytes…, tokens…}).
+// The row's `repo` field carries the organisation while sorting.
+@ __ag_usage_orgs i since → Json {
+    : ( Vec AgUsage ) rows ( vec_new [AgUsage] )
+    : String home ( ag_auth_home )
+    : String dir ( path_join ( string_data home ) `orgs` )
+    ?? ( dir_list ( string_data dir ) ) {
+        F _ → {}
+        T names → {
+            : i n ( vec_len [String] names )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( vec_get [String] names k ) {
+                    T f → {
+                        : i fl ( string_len f )
+                        ? & > fl 3 ( string_ends_with f `.db` ) {
+                            : String org ( string_substr f 0 - fl 3 )
+                            : AgStore st ( ag_org_store ( string_data org ) )
+                            : ( Vec AgUsage ) t ( ag_usage_rows st `total` since `` `` )
+                            ?? ( vec_get [AgUsage] t 0 ) {
+                                T u → {
+                                    ? > . u calls 0 {
+                                        : i mine + . u bytes_in . u bytes_out
+                                        // Sorted as they come: there are few.
+                                        : ~ i m ( vec_len [AgUsage] rows )
+                                        : ~ i at 0
+                                        ~ < at m {
+                                            ?? ( vec_get [AgUsage] rows at ) {
+                                                T x → { ? > mine + . x bytes_in . x bytes_out { = m at } { = at + at 1 } }
+                                                F _ → { = at + at 1 }
+                                            }
+                                        }
+                                        ( vec_insert [AgUsage] rows at @ AgUsage { ( string_from ( string_data org ) ) ( string_new ) ( string_new ) 0 . u calls . u bytes_in . u bytes_out } )
+                                    } {}
+                                }
+                                F _ → {}
+                            }
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+        }
+    }
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [AgUsage] rows )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [AgUsage] rows k ) {
+            T u → {
+                : Json o ( __ag_usage_json u )
+                ( json_obj_set o `org` ( json_str_lit ( string_data . u repo ) ) )
+                ( json_obj_set o `repo` ( json_str_lit `` ) )
+                ( json_arr_push arr o )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ arr
+}
+
+// The bytes of the tool definitions a client lists (name, description,
+// input schema of each, as tools/list sends them) and of the
+// instructions: what an agent's context holds before its first call.
+@ __ag_catalog_bytes → i {
+    : b oidc ( ag_auth_oidc )
+    : ( Vec AgOpDef ) cat ( ag_op_catalog_for oidc )
+    : ~ i total ( nurl_str_len ? oidc AG_INSTRUCTIONS_OIDC AG_INSTRUCTIONS )
+    : i n ( vec_len [AgOpDef] cat )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [AgOpDef] cat k ) {
+            T d → {
+                : String sc ( json_stringify . d schema )
+                // {"name":"…","description":"…","inputSchema":…},
+                = total + total + + + ( string_len . d name ) ( string_len . d desc ) ( string_len sc ) 46
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ total
+}
+
+// GET /m/usage?days=&repo=&agent= — what went through the MCP face: the
+// total, and by repository, agent, operation and day, over the last
+// `days` days (0 = all; default 30), within a repository and/or an
+// agent when named. The owner organisation's administrators also get
+// every organisation's total. Tokens are bytes / AG_BYTES_PER_TOKEN.
+@ ag_h_usage HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : i days ( _ag_query_int req `days` 30 0 36500 )
+    : i today / now 86400
+    : i since ? > days 0 + - today days 1 0
+    : ~ String repo ( string_new )
+    : String raw ( __ag_query req `repo` )
+    ? > ( string_len raw ) 0 {
+        ?? ( ag_repo_key ( string_data raw ) ) { T k → { = repo k } F → { ^ ( ag_json_err 400 `repo= names the repository: a git remote URL or host/owner/repo` ) } }
+    } {}
+    : String agent ( string_to_lower ( __ag_query req `agent` ) )
+    : s r ( string_data repo )
+    : s a ( string_data agent )
+    : Json out ( json_obj_new )
+    ( json_obj_set out `days` ( json_int days ) )
+    ( json_obj_set out `today` ( json_int today ) )
+    ( json_obj_set out `since` ( json_int since ) )
+    ( json_obj_set out `bytes_per_token` ( json_int AG_BYTES_PER_TOKEN ) )
+    // What a client loads once per session and no call counts: the tool
+    // definitions (tools/list) and the instructions.
+    ( json_obj_set out `catalog_bytes` ( json_int ( __ag_catalog_bytes ) ) )
+    ( json_obj_set out `repo` ( json_str_lit r ) )
+    ( json_obj_set out `agent` ( json_str_lit a ) )
+    : Json tot ( __ag_usage_arr . w st `total` since r a )
+    ?? ( json_arr_get tot 0 ) {
+        T t → { ( json_obj_set out `total` ( json_clone t ) ) }
+        F → { ( json_obj_set out `total` ( json_obj_new ) ) }
+    }
+    ( json_obj_set out `repos` ( __ag_usage_arr . w st `repo` since r a ) )
+    ( json_obj_set out `agents` ( __ag_usage_arr . w st `agent` since r a ) )
+    ( json_obj_set out `ops` ( __ag_usage_arr . w st `op` since r a ) )
+    ( json_obj_set out `daily` ( __ag_usage_arr . w st `day` since r a ) )
+    ? & ( ag_auth_oidc ) ( __ag_is_owner_admin w ) {
+        ( json_obj_set out `orgs` ( __ag_usage_orgs since ) )
+    } {}
+    ^ ( __ag_json_ok out )
+}
+
 // Where feedback is kept: the service's file when signed in, the one
 // local file otherwise.
 @ __ag_feedback_st AgWho w → AgStore {
@@ -870,8 +1385,8 @@ $ `auth.nu`
     ? & ! triage == ( string_len org ) 0 { ^ ( ag_json_err 403 `no organisation to show the feedback of` ) } {}
     : String status ( __ag_query req `status` )
     : String kind ( __ag_query req `kind` )
-    : i limit ( __ag_query_int req `limit` 50 1 500 )
-    : i offset ( __ag_query_int req `offset` 0 0 1000000000 )
+    : i limit ( _ag_query_int req `limit` 50 1 500 )
+    : i offset ( _ag_query_int req `offset` 0 0 1000000000 )
     : String order ( __ag_query req `order` )
     : b oldest != 0 ( nurl_str_eq ( string_data order ) `oldest` )
     : AgStore fs ( __ag_feedback_st w )
@@ -985,8 +1500,8 @@ $ `auth.nu`
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : Json b ( __ag_body_obj req )
     : b dry ( _ag_arg_bool b `dry_run` T )
-    : AgCleanup r ( ag_cleanup . w rs ( __ag_days_ago b `agents_days` now ) ( __ag_days_ago b `tasks_days` now )
-    ( __ag_days_ago b `messages_days` now ) ( __ag_days_ago b `channels_days` now ) dry now )
+    : AgCleanup r ( ag_cleanup_by . w rs ( __ag_days_ago b `agents_days` now ) ( __ag_days_ago b `tasks_days` now )
+    ( __ag_days_ago b `messages_days` now ) ( __ag_days_ago b `channels_days` now ) dry ( string_data ( __ag_person w ) ) now )
     ? < . r agents 0 { ^ ( ag_json_err 500 `the cleanup failed; nothing was changed` ) } {}
     : Json o ( json_obj_new )
     ( json_obj_set o `agents` ( json_int . r agents ) )
