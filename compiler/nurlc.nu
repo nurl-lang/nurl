@@ -70467,6 +70467,9 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     : s aix ( bck_field rec 6 )
     : b rea ( nurl_sym_has_word g_fn_reallocs cal aix )
     : b irea & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs cal aix )
+    // (…or the buffer at a field path of it, which a direct view of that
+    // field's storage points into: g_fn_ifreallocs, agora #647.)
+    : b ifr & != 0 g_fn_ifreallocs ( nurl_sym_has_word g_fn_ifreallocs cal aix )
     : ~ s rest ( nurl_str_cat vd `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -70474,8 +70477,8 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         ? & != sid wr == ( bck_path_root sid ) wr {
             : b ind ( str_contains_word vi w )
             : b dr ( __drops_reach cal aix sid wid )
-            ? | | dr & rea ! ind & irea ind {
-                : s how ? dr `may drop or replace what it holds` ? ind `may move the buffer of one of its elements` `may move or free its buffer`
+            ? | | dr & | rea ifr ! ind & irea ind {
+                : s how ? dr `may drop or replace what it holds` ? ind `may move the buffer of one of its elements` ? rea `may move or free its buffer` `may move the buffer of one of its fields`
                 ( __bck_sva_hit wr sid wid ( bck_field_int rec 3 ) ( nurl_str_cat4 `it was handed to '` ( bck_fn_show cal ) `', which takes it and ` how ) )
                 ^ v
             } {}
