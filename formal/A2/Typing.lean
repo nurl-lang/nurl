@@ -407,6 +407,10 @@ def HeldSrc (Γ : Ctx) (y : Var) : Prop :=
 theorem Entry.with_fresh_eq {E : Entry} (h : E.fresh = false) : ({ E with fresh := false } : Entry) = E := by
   cases E; simp_all
 
+theorem Entry.with_fresh_held_eq {E : Entry} (h : E.fresh = false) (h' : E.heldFresh = false) :
+    ({ E with fresh := false, heldFresh := false } : Entry) = E := by
+  cases E; simp_all
+
 /-- Closes a rule's `f = true → …` premise where the bit is not set. -/
 syntax "fresh_src" : tactic
 macro_rules
@@ -834,9 +838,13 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- ... and held-fresh if what `y` holds is
       (hh : h = true → HeldSrc Γ y := by fresh_src) →
       RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false, f, h⟩ Γ
-  | sat {y : Var} {i : Expr} {E : Entry} {t : Ty} :
+  -- (AGORA-909: an element read through a slice may be fresh, as one read
+  -- through a `Vec` (`RhsT.at`) may: the slice is the frame's own, or a fresh
+  -- view of a binding of the frame's own. Not a slice element.)
+  | sat {y : Var} {i : Expr} {E : Entry} {t : Ty} {f : Bool} :
       Γ y = some E → E.live = true → E.ty = .slice t → ExprT Γ i →
-      RhsT Γ F (.sat y i) (elemE y E t) Γ
+      (hf : f = true → FreshSrc Γ y ∧ ∀ s, t ≠ .slice s := by fresh_src) →
+      RhsT Γ F (.sat y i) { elemE y E t with fresh := f } Γ
   | pop {y : Var} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .vec t → canDo E.mode .drop → y ∉ F →
       DtorSafe Γ .drop t.holdsView y →
@@ -853,10 +861,26 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       Γ1 z = some Ez → Ez.live = true → PushArg Γ1 F z Ez Ez.ty Dz Γ2 →
       (Ez.mode.ownSlot = true → z ∉ roots Dy) →
       RhsT Γ F (.pair y z) ⟨.prod Ey.ty Ez.ty, .own, true, [], Dy ++ Dz, false, false, false, false⟩ Γ2
-  | fst {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty.undtor = .prod a b → RhsT Γ F (.fst y) (projE y E a) Γ
-  | snd {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty.undtor = .prod a b → RhsT Γ F (.snd y) (projE y E b) Γ
+  -- (AGORA-909: a field read of the frame's own memory may be fresh, as an
+  -- element borrow (`RhsT.at`) may, and held-fresh, as a view (`RhsT.view`)
+  -- may: its path, `projDeps`, is structural and rooted at the frame, when
+  -- the source is a binding of the frame's own (an owner or an `inout`
+  -- parameter) or a fresh, held-fresh borrow, of a type that holds no views,
+  -- holding nothing (`projE`'s path is `projDeps` and what the source holds).
+  -- A call lifts such a source to one that holds nothing still (`heldA`: a
+  -- type that holds no views holds no closure by name), so a nested read
+  -- `. . b x items` is fresh where each step is. Not a slice field: its view
+  -- reaches what the field holds, not the frame.)
+  | fst {y : Var} {E : Entry} {a b : Ty} {f : Bool} :
+      Γ y = some E → E.live = true → E.ty.undtor = .prod a b →
+      (hf : f = true → (E.mode.frame ∨ (E.mode = .bor ∧ E.fresh = true ∧ E.heldFresh = true)) ∧
+        E.ty.holdsView = false ∧ E.held = [] ∧ ∀ s, a ≠ .slice s := by fresh_src) →
+      RhsT Γ F (.fst y) { projE y E a with fresh := f, heldFresh := f } Γ
+  | snd {y : Var} {E : Entry} {a b : Ty} {f : Bool} :
+      Γ y = some E → E.live = true → E.ty.undtor = .prod a b →
+      (hf : f = true → (E.mode.frame ∨ (E.mode = .bor ∧ E.fresh = true ∧ E.heldFresh = true)) ∧
+        E.ty.holdsView = false ∧ E.held = [] ∧ ∀ s, b ≠ .slice s := by fresh_src) →
+      RhsT Γ F (.snd y) { projE y E b with fresh := f, heldFresh := f } Γ
   | inl {y : Var} {b : Ty} {Ey : Entry} {Γ1 : Ctx} {D : List Dep} :
       Γ y = some Ey → Ey.live = true → PushArg Γ F y Ey Ey.ty D Γ1 → b.ok = true →
       RhsT Γ F (.inl y b) ⟨.sum Ey.ty b, .own, true, [], D, false, false, false, false⟩ Γ1
@@ -867,10 +891,18 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
   -- as a field of a destructor struct is; the destructor stays with the
   -- whole value.  Taking one out, `takel` / `taker`, stays refused there:
   -- the enum's destructor would never run.)
-  | getl {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty.undtor = .sum a b → RhsT Γ F (.getl y) (projE y E a) Γ
-  | getr {y : Var} {E : Entry} {a b : Ty} :
-      Γ y = some E → E.live = true → E.ty.undtor = .sum a b → RhsT Γ F (.getr y) (projE y E b) Γ
+  -- (AGORA-909: a payload read in place may be fresh on the premise a
+  -- field read's is, `fst`)
+  | getl {y : Var} {E : Entry} {a b : Ty} {f : Bool} :
+      Γ y = some E → E.live = true → E.ty.undtor = .sum a b →
+      (hf : f = true → (E.mode.frame ∨ (E.mode = .bor ∧ E.fresh = true ∧ E.heldFresh = true)) ∧
+        E.ty.holdsView = false ∧ E.held = [] ∧ ∀ s, a ≠ .slice s := by fresh_src) →
+      RhsT Γ F (.getl y) { projE y E a with fresh := f, heldFresh := f } Γ
+  | getr {y : Var} {E : Entry} {a b : Ty} {f : Bool} :
+      Γ y = some E → E.live = true → E.ty.undtor = .sum a b →
+      (hf : f = true → (E.mode.frame ∨ (E.mode = .bor ∧ E.fresh = true ∧ E.heldFresh = true)) ∧
+        E.ty.holdsView = false ∧ E.held = [] ∧ ∀ s, b ≠ .slice s := by fresh_src) →
+      RhsT Γ F (.getr y) { projE y E b with fresh := f, heldFresh := f } Γ
   | takel {y : Var} {E : Entry} {a b : Ty} :
       Γ y = some E → E.live = true → E.mode = .own →
       -- (Agora #632: or an enum under its destructor type, the payload one
@@ -1063,6 +1095,34 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
         (setE (kill .replace false y Γ) y ⟨E.ty, E.mode, true, [], [], false, false, false, false⟩)
 
 /-! ### Calls -/
+
+/-- A field read with the fresh bit clear: `projE` itself. -/
+theorem RhsT.fst_unfresh {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {a b : Ty}
+    (hy : Γ y = some E) (hl : E.live = true) (ht : E.ty.undtor = .prod a b) :
+    RhsT Γ F (.fst y) (projE y E a) Γ := by
+  have h := RhsT.fst (F := F) (f := false) hy hl ht
+  rwa [Entry.with_fresh_held_eq (by cases a <;> rfl) (by cases a <;> rfl)] at h
+
+/-- A field read with the fresh bit clear: `projE` itself. -/
+theorem RhsT.snd_unfresh {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {a b : Ty}
+    (hy : Γ y = some E) (hl : E.live = true) (ht : E.ty.undtor = .prod a b) :
+    RhsT Γ F (.snd y) (projE y E b) Γ := by
+  have h := RhsT.snd (F := F) (f := false) hy hl ht
+  rwa [Entry.with_fresh_held_eq (by cases b <;> rfl) (by cases b <;> rfl)] at h
+
+/-- A payload read with the fresh bit clear: `projE` itself. -/
+theorem RhsT.getl_unfresh {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {a b : Ty}
+    (hy : Γ y = some E) (hl : E.live = true) (ht : E.ty.undtor = .sum a b) :
+    RhsT Γ F (.getl y) (projE y E a) Γ := by
+  have h := RhsT.getl (F := F) (f := false) hy hl ht
+  rwa [Entry.with_fresh_held_eq (by cases a <;> rfl) (by cases a <;> rfl)] at h
+
+/-- A payload read with the fresh bit clear: `projE` itself. -/
+theorem RhsT.getr_unfresh {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {a b : Ty}
+    (hy : Γ y = some E) (hl : E.live = true) (ht : E.ty.undtor = .sum a b) :
+    RhsT Γ F (.getr y) (projE y E b) Γ := by
+  have h := RhsT.getr (F := F) (f := false) hy hl ht
+  rwa [Entry.with_fresh_held_eq (by cases b <;> rfl) (by cases b <;> rfl)] at h
 
 /-- A2-drop.2: a right-hand side makes a value no binding has made its own
     yet: it runs no destructor (only `letd` arms a binding). -/

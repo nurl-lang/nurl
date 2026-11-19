@@ -667,7 +667,7 @@ theorem _root_.A2.StmtT.rwGet {P : Prog} {Γ : Ctx} {F : List Var} {a g y x c z 
   have h3 : StmtT P ((ξ.under g).under y) Γ2 F (.letv x (.snd y) (Stmt.callOut x c z f))
       (A2.setE (A2.kill .replace false z Γ2) z (outE t Ez.mode)) := by
     rw [← exitScope_out h2x hu2x hzx.symm (by simp) .replace false]
-    refine StmtT.letv rfl h2x hxF (RhsT.snd (show Γ2 y = some (guardGetE g t) from upd_same _ _ _) rfl rfl) h4.ofNone
+    refine StmtT.letv rfl h2x hxF (RhsT.snd_unfresh (show Γ2 y = some (guardGetE g t) from upd_same _ _ _) rfl rfl) h4.ofNone
       (Unnamed.endOK ?_)
     exact ((hu2x.setE (fun d hd' => by rw [hsv d hd']; exact hgx)).kill' _ _ _).setE_nil (by simp)
   -- the lend's scope
@@ -2612,12 +2612,12 @@ theorem accCode_ok : FnOK accP accCode := by
         (.seq (.assign 0 (.pair 4 3)) (.assign 1 (.var 4)))))
       (A2.exitScope 3 (A2.exitScope 4 accCtx4)) :=
     StmtT.letv (E := projE 0 accEp .int) rfl (by simp [setE, sigCtx, accCode]) (by simp)
-      (RhsT.snd (b := .int) (by simp [setE, hs0]) rfl rfl) h4.ofNone (by rw [hp4.exitScope]; exact hp5.endOK 3)
+      (RhsT.snd_unfresh (b := .int) (by simp [setE, hs0]) rfl rfl) h4.ofNone (by rw [hp4.exitScope]; exact hp5.endOK 3)
   have hp6 := hp5.upd_none 3
   have h2 : StmtT accP .none (sigCtx accCode) [] accCode.body
       (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 accCtx4))) :=
     StmtT.letv (E := projE 0 accEp .int) rfl (by simp [sigCtx, accCode]) (by simp)
-      (RhsT.fst (b := .int) hs0 rfl rfl) h3.ofNone (by rw [hp4.exitScope, hp5.exitScope]; exact hp6.endOK 2)
+      (RhsT.fst_unfresh (b := .int) hs0 rfl rfl) h3.ofNone (by rw [hp4.exitScope, hp5.exitScope]; exact hp6.endOK 2)
   have hΔ : A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 accCtx4)) =
       upd (upd (upd accCtx4 4 none) 3 none) 2 none := by
     rw [hp4.exitScope, hp5.exitScope, hp6.exitScope]

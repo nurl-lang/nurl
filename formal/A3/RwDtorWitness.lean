@@ -290,7 +290,7 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   let K11 : Ctx := A2.setE K10 7 EX
   have hK11 : NoRootb K11 := hK10.setE (by simp [EX, projE])
   have hsnd : RhsT K10 [] (.snd 6) EX K10 :=
-    RhsT.snd (a := .lk (.vec DT)) (by simp [K10, A2.setE]) rfl rfl
+    RhsT.snd_unfresh (a := .lk (.vec DT)) (by simp [K10, A2.setE]) rfl rfl
   -- `: l2 l`: the lock's only share moves out of `l`, the guard still bound
   have hK114 : K11 4 = some ELV := by simp [K11, K10, K9, K8, A2.setE, upd]
   let K12 : Ctx := A2.setE (kill .replace false 4 K11) 4 { ELV with live := false, dtor := false }

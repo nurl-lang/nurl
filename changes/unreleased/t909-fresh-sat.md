@@ -1,0 +1,3 @@
+### Changed
+
+- **The formal proof covers a call that hands a view to a function pushing through an element of a slice of its `inout` parameter** (AGORA-909). In A2, an element read through a slice (`( slice_at sl 0 )`) may now be fresh as one read through a `Vec` may: when the slice is the function's own or a fresh view of its own binding. So `( vec_push ( slice_at sl 0 ) x )` with `sl` a view of `inout` `vv` no longer makes the function through-changing, and a call with a view of another value, read after the call, is typed, memory safe and leak-free (`A2/FreshSatWitness.lean`). nurlc already accepted the program, and NURL source is unchanged.

@@ -3364,7 +3364,7 @@ theorem main4_letv_refused {Γ Δ : Ctx} {F : List Var} {x : Var} {s : Stmt} :
 theorem enum_lends {Γ : Ctx} {F : List Var} {E0 : Entry} {f : Nat} {a b : Ty}
     (h0 : Γ 0 = some E0) (hl : E0.live = true) (ht : E0.ty = .dtor f (.sum a b)) :
     RhsT Γ F (.getl 0) (projE 0 E0 a) Γ ∧ RhsT Γ F (.getr 0) (projE 0 E0 b) Γ :=
-  ⟨RhsT.getl h0 hl (by rw [ht]; rfl), RhsT.getr h0 hl (by rw [ht]; rfl)⟩
+  ⟨RhsT.getl_unfresh h0 hl (by rw [ht]; rfl), RhsT.getr_unfresh h0 hl (by rw [ht]; rfl)⟩
 
 /-- …but a payload that holds no destructor value is not taken out of it
     (`takel` / `taker`): the enum's destructor would never run.  (Agora #632:

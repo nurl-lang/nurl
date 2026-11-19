@@ -5,13 +5,20 @@ import A2.Wf
 /-! # Agora #909: each new premise holds with the fresh bit off
 
 Design (e) added `Entry.fresh` and premises that read it:
-- the fresh bit of `RhsT.borrow` / `RhsT.at` (`FreshSrc` when set);
+- the fresh bit of `RhsT.borrow` / `RhsT.at` / `RhsT.sat` (`FreshSrc` when set), and of the field and
+  payload reads `RhsT.fst` / `snd` / `getl` / `getr` (AGORA-909: a frame binding or a
+  fresh, held-fresh borrow, of a view-free type, holding nothing, when set; the bit sets
+  `heldFresh` too);
 - `EntryWeaker.fresh`;
 - `FreshOK` after `panic` / `exit` / `loop` and at a scope's end;
 - `editB`'s `edit false` (a fresh borrow).
 
 Each is met by choosing the bit off. That is what this file proves, premise by premise:
-- `RhsT.borrow_unfresh`, `RhsT.at_unfresh`: the rules with the bit off ask nothing of the source.
+- `RhsT.borrow_unfresh`, `RhsT.at_unfresh`, `RhsT.sat_unfresh`: the rules with the bit off ask nothing of
+  the source.
+- `RhsT.fst_unfresh`, `RhsT.snd_unfresh`, `RhsT.getl_unfresh`, `RhsT.getr_unfresh` (in
+  `Typing.lean`, where A3 uses them): a field or payload read with the bit off is `projE`
+  itself, `fresh` and `heldFresh` clear, as before AGORA-909.
 - `EntryWeaker.fresh_of_not`: the weakening premise holds when the weaker entry is not fresh.
 - `freshOK_of_noFresh`: a context with no fresh borrow is `FreshOK`.
 - `freshOK_unfreshC`: the same holds of any context with every fresh bit cleared (`unfreshC`).
@@ -140,6 +147,12 @@ theorem RhsT.at_unfresh {Γ : Ctx} {F : List Var} {y : Var} {i : Expr} {E : Entr
     (hy : Γ y = some E) (hl : E.live = true) (ht : E.ty = .vec t) (hi : ExprT Γ i) :
     RhsT Γ F (.at y i) { elemE y E t with fresh := false } Γ :=
   RhsT.at hy hl ht hi (fun h => by cases h)
+
+/-- **Nor does an element read through a slice** (AGORA-909). -/
+theorem RhsT.sat_unfresh {Γ : Ctx} {F : List Var} {y : Var} {i : Expr} {E : Entry} {t : Ty}
+    (hy : Γ y = some E) (hl : E.live = true) (ht : E.ty = .slice t) (hi : ExprT Γ i) :
+    RhsT Γ F (.sat y i) { elemE y E t with fresh := false } Γ :=
+  RhsT.sat hy hl ht hi (fun h => by cases h)
 
 /-- **The result side** (Agora #909, design (e)): any typing of a source
     statement from a well-formed context still holds when its result has

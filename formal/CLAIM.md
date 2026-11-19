@@ -204,10 +204,63 @@ the LLVM / C11 memory model rather than redefining it.
     (`g_not_thru`), and the call asks nothing of the view. What keeps the
     view from reaching the changed argument is `CallT`'s exclusivity of a
     moved or changed argument (no other argument reaches it in memory), not
-    `callR`. Safe and leak-free (`main_safe`, `main_no_leak`); nurlc accepts
+    `callR`. Safe and leak-free (`main_safe`, `main_no_leak`; `main` fills
+    `vv` and `src` before they are read, so every read is in bounds and a
+    run can end normally); nurlc accepts
     it (`inout_push_through_its_element_called_with_a_view_read_after`) and
     it runs clean. With `s` a view of `vv`'s element instead (AGORA-923,
     github#2072, fixed in nurlc by github#2076), no typing of the call exists (`call_refused`).
+    `A2/FreshProjWitness.lean` types the same call through a field:
+    `add inout Bag b` pushes through `. b items`, called with a view of
+    another value that is read after the call. A field or payload read
+    (`RhsT.fst`, `snd`, `getl`, `getr`) may be fresh, as an element borrow
+    may, and held-fresh, as a view may, when its source is a binding of the
+    frame's own (an owner or an `inout` parameter) or a fresh, held-fresh
+    borrow, of a type that holds no views, holding nothing, and the field
+    is not a slice: a field that is not an integer is then lent with the
+    source's own path (`[⟨b, .inner⟩]` for a frame binding; an integer
+    field is copied, `intE`, and holds nothing), and a call lifts such a
+    source to one that still holds nothing. For a held-fresh borrow that
+    rests on the lift adding no name to a type that holds no closure:
+    `heldA` of a held-fresh borrow of a closure-free type that is not an
+    integer is `[]` (`heldA_P`, whose premise `HeldP` asks a held-fresh
+    borrow of a type other than `int`), for every such borrow, not only a
+    projection; the `Bag` read meets it (`RSetup.heldA`; a value of such a type holds no name,
+    `WFv.names_nil_fn`, and a type that holds no views holds no closure,
+    `hasFn_holdsView`). So the renamed read is exact
+    (`RSetup.projE_fresh_lift`). So the push is an `edit false`, `add` is
+    not through-changing (`g_not_thru`), and the call is typed, safe and
+    leak-free (`main_safe`, `main_no_leak`; `main` fills `src` before it
+    views it, so the read after the call is in bounds and a run can end
+    normally, which is what `main_no_leak` speaks of). A nested projection is fresh
+    exactly where every step is (`proj_of_proj_fresh`):
+    `A2/FreshNestWitness.lean` types `( vec_push . . o bag items x )` in
+    the same call shape, safe and leak-free. nurlc accepts both
+    (`inout_push_through_its_field_called_with_a_view_read_after`,
+    `inout_push_through_a_field_of_its_field_called_with_a_view_read_after`)
+    and they run clean. A read of a borrowed parameter, of a borrow that is
+    not fresh and held-fresh, or of a type that holds views is never fresh
+    (`proj_fresh_src`, `fst_rootb_not_fresh`, `proj_stale_not_fresh`,
+    `nested_view_not_fresh`), and a change through it stays `edit true`. A
+    fresh payload borrow ends when its enum is given a new value, by a kill
+    that does not read the bit (`payload_fresh_killed`,
+    `hits_fresh_irrel`). With the bit off each read is `projE` as before
+    (`RhsT.fst_unfresh` and the others).
+    `A2/FreshSatWitness.lean` types the same call through a slice:
+    `g` views its `inout` `vv` (a fresh view) and pushes through
+    `( slice_at sl 0 )`. An element read through a slice (`RhsT.sat`) may
+    be fresh as one read through a `Vec` (`RhsT.at`) may, from the same
+    sources (`FreshSrc`: a binding of the frame's own, or a fresh borrow),
+    and not a slice element: its path is the view's, `[⟨vv, .inner⟩]`. So
+    the push is an `edit false`, `g` is not through-changing, and the call
+    is safe and leak-free (`main_safe`, `main_no_leak`; `main` fills `vv`
+    and `src` first, as the nurlc test does, so every read is in bounds). nurlc accepts it
+    (`inout_push_through_an_element_of_its_view_called_with_a_view_read_after`)
+    and it runs clean. Through a borrowed slice parameter, a view that is
+    not fresh (a view of a borrowed parameter among them), or for an
+    element that is itself a slice, the read is never fresh
+    (`sat_rootb_not_fresh`, `sat_stale_not_fresh`,
+    `sat_of_view_of_rootb_not_fresh`, `sat_slice_elem_not_fresh`).
 
   Agora #909 takes in what changes elements that hold no views only
   through a fresh borrow.
