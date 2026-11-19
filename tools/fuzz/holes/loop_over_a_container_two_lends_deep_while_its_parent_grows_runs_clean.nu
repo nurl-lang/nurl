@@ -1,4 +1,5 @@
-// map: §2.5 | A2 | rejected | - | agora #580: a `~` loop over a container two lends deep, grown through a shallower borrow
+// loop_over_a_container_two_lends_deep_while_its_parent_grows_runs_clean: AGORA-580 guard — `~ x b` with b two lends deep, while the container it was lent out of grows: that moves row handles, not b's buffer
+// map: §2.5 | A2 | runs-clean | - | AGORA-580 guard: `~ x b` with b two lends deep, while the container it was lent out of grows: that moves row handles, not b's buffer
 $ `stdlib/core/vec.nu`
 
 @ main → i {
@@ -14,7 +15,7 @@ $ `stdlib/core/vec.nu`
     : ~ i n 0
     ~ x b {
         : ~ i j 0
-        ~ < j 64 { ( vec_push [i] ( vec_at [( Vec i )] a 0 ) j ) = j + j 1 }
+        ~ < j 64 { ( vec_push [( Vec i )] a ( vec_new [i] ) ) = j + j 1 }
         = n + n x
     }
     ( nurl_println_int n )
