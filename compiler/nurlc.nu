@@ -80417,6 +80417,28 @@ unsafe @ gen_cast i lex i syms i cg → s {
     ^ ( nurl_str_cat inner_tfo `` )
 }
 
+// …and for an owned slice read for a field (`. ( mk ) 1`, `. ( mk )
+// length`, `. ( mk ) i`): the call's answer for a slice, `true`, its per-run
+// bit (__slice_call_own_bit), or `` where it is never the caller's; ``
+// where the object is no temporary (agora #925).
+@ __mb_slice_tmp_flag i syms i cg i mb_tt s inner_tfo b tobj s ot → s {
+    ? | | ! tobj == 0 g_auto_drop_strings ! ( __owned_slice_ty ( nurl_llty ot ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? & == mb_tt TT_LPAREN == g_dup_nest + g_call_nest 1 { ^ ( nurl_str_cat `true` `` ) } {}
+    ? == mb_tt TT_LPAREN { ^ ( __slice_call_own_bit syms cg ) } {}
+    ^ ( nurl_str_cat inner_tfo `` )
+}
+
+// The slice temporary `ov` (type `ot`) a read took what it needs from goes
+// now, where `fl` says it is the caller's. A read of a number out of it left
+// it to no one: `( n . ( mk ) 1 )` leaked the slice (agora #925).
+unsafe @ __mb_slice_tmp_drop i cg s fl s ot s ov → v {
+    ? == 0 ( nurl_str_len fl ) { ^ v } {}
+    ( __handle_drop_ensure ot )
+    ( __dropifv_request ot )
+    ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ot ) ) ( nurl_print `(i1 ` ) ( nurl_print fl )
+    ( nurl_print `, ` ) ( nurl_print ( nurl_llty ot ) ) ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `)` ) ( emit_dbg_eol )
+}
+
 inline unsafe @ gen_member i lex i syms i cg → s {
     ? == 0 g_core_live { ^ ( __gen_member_body lex syms cg ) } {}
     : i h0 g_core_os_n
@@ -80713,6 +80735,8 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                 ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ot ) )
                 ( nurl_print ` ` ) ( nurl_print ov )
                 ( nurl_print `, ` ) ( nurl_print ( nurl_str_int idx ) ) ( nurl_print `\n` )
+                // (A slice temporary's length read: the slice goes now.)
+                ? & __mb_tobj ! ( is_ptr_ty ft ) { ( __mb_slice_tmp_drop cg ( __mb_slice_tmp_flag syms cg __mb_tt __mb_inner_tfo __mb_tobj ot ) ot ov ) } {}
                 ( nurl_set_last_type ft )
                 ^ res
             }
@@ -80751,6 +80775,7 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                             ( nurl_print `  ` ) ( nurl_print res )
                             ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ot ) )
                             ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `, 1\n` )
+                            ? __mb_tobj { ( __mb_slice_tmp_drop cg ( __mb_slice_tmp_flag syms cg __mb_tt __mb_inner_tfo __mb_tobj ot ) ot ov ) } {}
                             ( nurl_set_last_type `i64` )
                             ^ res
                         }
@@ -80794,6 +80819,26 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                             ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty elem_ty ) )
                             ( nurl_print `, ` ) ( nurl_print ( nurl_llty elem_ty ) )
                             ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
+                            // (An element read out of a slice temporary: a number,
+                            // and the slice goes now; a String or a Vec, copied on
+                            // the runs the slice is the caller's — the read that
+                            // copy's own by the same bit, as a field taken out of a
+                            // struct temporary is (h266) — and the slice goes.
+                            // Anything else stays a view of a slice nothing
+                            // releases, as before. Agora #925.)
+                            ? __mb_tobj {
+                                : s __msf ( __mb_slice_tmp_flag syms cg __mb_tt __mb_inner_tfo __mb_tobj ot )
+                                ? & != 0 ( nurl_str_len __msf ) ! | | ( is_ptr_ty elem_ty ) ( __type_needs_drop elem_ty syms ) ( __is_closure_ty elem_ty ) { ( __mb_slice_tmp_drop cg __msf ot ov ) } {
+                                    ? & & != 0 ( nurl_str_len __msf ) ( __is_handle_ty elem_ty ) ( __clone_supported elem_ty syms ) {
+                                        : s __mse ( mem_emit_cloneif cg elem_ty res __msf )
+                                        ( __mb_slice_tmp_drop cg __msf ot ov )
+                                        ( nurl_sym_def syms `__last_tmp_field_own__` __msf )
+                                        ( nurl_sym_def syms `__last_tmp_field_rk__` ? == __mb_tt TT_LPAREN ( mem_call_retown_const syms ) __mb_inner_rk )
+                                        ( nurl_set_last_type elem_ty )
+                                        ^ __mse
+                                    } {}
+                                }
+                            } {}
                             ( nurl_set_last_type elem_ty )
                             ^ res
                         }

@@ -53,6 +53,10 @@ class FnIR:
         self.params = []      # vids
         self.modes = []
         self.ret = None
+        # (the result is an owned slice `[T`, not a view `( Slice T )`: both
+        # are ("slice", T); a closure's owned one is copied where it lends,
+        # check.clo_slice_copies)
+        self.ret_owned_slice = False
         self.body = []
         self.vars = {}
 
@@ -306,8 +310,10 @@ class Types:
         (a raw string, a slice, a closure, a pointer, anywhere in it)?"""
         if ty is None:
             return True
-        if self.is_scalar(ty):
-            return False
+        # (the parts first, a number last: is_scalar counts a pointer - and
+        # a struct or option of pointers - as a number, but what one points
+        # at may be anyone's storage; nurlc's __ty_holds_view asks for a
+        # pointer anywhere in the value)
         k = ty[0]
         if k in ("s", "slice", "closure", "ptr"):
             return True
@@ -319,6 +325,8 @@ class Types:
             return self.view_capable(ty[1], seen) or self.view_capable(ty[2], seen)
         if k == "named":
             return self._named("view_capable", ty[1], seen, False, lambda ns: self._view_capable_named(ty[1], ns))
+        if self.is_scalar(ty):
+            return False
         return True
 
     def _view_capable_named(self, name, nseen):

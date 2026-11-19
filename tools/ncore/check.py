@@ -264,6 +264,7 @@ class FnCheck:
         self.ret_fresh = False   # some return hands back a value of the function's own that holds something
         self.temp_none = {}      # a literal temporary -> it is an option's `None`
         self.var_fresh = set()   # the variables given a value of their own that is no `None`
+        self.join_ty = {}        # a join's untyped temporary -> the type of a `% Drop` value an arm gave it
         self.ret_watch = None    # the binding a return handed back, while its `;` blocks run
         self.defer_vars = {}     # a `;` block -> the variables its body names
         self.defer_before = {}   # a `;` block -> the variables bound when it was armed
@@ -810,6 +811,23 @@ class FnCheck:
         """The element type of `ty` for value_aliases: every number is one."""
         e = ("u",) if ty[0] == "s" else self.T.elem(ty)
         return ("num",) if e is not None and e[0] in SCALARS else e
+
+    def lit_places(self, av, path):
+        # The places a change at `path` inside value `av` reaches through the
+        # bindings a literal took in (its `lit` handle loans, held at the
+        # field each binding went to): the binding's own place, the rest of
+        # the path below it.
+        out = []
+        for hp, ln in av.held:
+            if not (isinstance(ln, tuple) and len(ln) == 3 and isinstance(ln[0], tuple)
+                    and ln[0] and ln[0][-1] == "lit" and ln[2] == "handle"):
+                continue
+            hp = tuple(hp)
+            if tuple(path[:len(hp)]) != hp:
+                continue
+            tv, tp = ln[1]
+            out.append((tv, tuple(tp) + tuple(path[len(hp):])))
+        return out
 
     def would_kill(self, st, place, eff, loans, depth=0):
         vid, path = place
@@ -1472,11 +1490,21 @@ class FnCheck:
                 if m in sm.get("putback", ()) and eff == "replace" and "*" in tuple(path):
                     # (only the write-back's own store into an element)
                     continue
-                if m != k and self.would_kill(st, place, eff, av.loans | hloans(av.held)):
+                if m != k and any(self.would_kill(st, pl, eff, av.loans | hloans(av.held))
+                                  for pl in [place] + (self.lit_places(avs[k], tuple(path)) if k < len(avs) else [])):
+                    # (…a literal's field that took a binding in is that
+                    # binding: another argument viewing the binding views
+                    # what the call changes there)
                     self.err(line, f"{name}: argument {m + 1} views what the call changes through argument {k + 1}")
-                elif m == k and self.would_kill(st, place, eff, hloans(av.held)):
+                elif m == k and any(self.would_kill(st, pl, eff, hloans(av.held))
+                                    for pl in [place] + self.lit_places(av, tuple(path))):
                     # A2: an argument is frozen for the call - a part of it may
                     # not view what the call changes in another part
+                    # (…a literal's field that took a binding in is that
+                    # binding: what the call changes there is what the
+                    # literal's views of the binding view - `( use @ S { sv b
+                    # } )`, `( eat @ P { o 0 } )` with o viewing its own buf;
+                    # A2.CallT.not_self_view, agora #563)
                     self.err(line, f"{name}: a part of argument {k + 1} views what the call changes in it")
         # a closure that changes what it captured is a second route to it: it
         # may not meet another argument that reaches that capture (§2.4, §2.11)
@@ -2298,7 +2326,8 @@ class FnCheck:
         place itself, or a part of it - hands that old value over to the
         binding (MEMORY.md §7.6, agora #265): it owns it from here on.  A
         binding that owned its value on other paths already (a join) owns
-        it on every path then."""
+        it on every path then.  Answers whether it handed the old value to
+        someone: then the store releases nothing, and runs no `% Drop`."""
         # (an `inout` parameter given a new value hands its old one to no
         # binding that reads it: codegen has no drop flag of its own to hand
         # over from and frees it outright, agora #886.)
@@ -2352,7 +2381,8 @@ class FnCheck:
                         and l not in self.cap_loans and not any(e.startswith("^") for e in hp)}
                 if mine and av.own in ("O", "P"):
                     st.vals[vid] = AV(av.own, av.loans, av.alias, av.held - mine, av.call)
-                    break
+                    return True
+        return first is not None
 
     def take_payload(self, st, av, line, direct=True):
         """A value read in place out of what owns it - a binding a cursor or
@@ -3076,12 +3106,16 @@ class FnCheck:
             if sm is None or body is None:
                 continue
             ncap = getattr(body, "ncap", 0)
-            if sm["res"] == "lent" and body.ret is not None and body.ret[0] in ("slice", "closure"):
+            if (sm["res"] == "lent" and body.ret is not None and body.ret[0] in ("slice", "closure")
+                    and not (getattr(body, "ret_owned_slice", False) and self.clo_slice_copies(body.ret))):
                 # a slice the body hands back is that view: what it lends of
                 # its parameters, the result of this call lends of these
                 # arguments - and of what its captures point at (a value it
                 # hands back is copied, MEMORY.md §7.5 - a raw string too,
-                # h220; a slice has no copy). A closure it hands back out of a
+                # h220; a slice has no copy, but one of elements that hold no
+                # view and can be copied, `[i` or `[String`, is copied where the
+                # body lent it - nurlc's mem_clo_ret_copies_slc, agora #894).
+                # A closure it hands back out of a
                 # capture is that closure, lent out of the capture as a slice
                 # is (agora #838).
                 for (k, path, kind) in sm["lends"]:
@@ -3143,6 +3177,19 @@ class FnCheck:
         if vloans or valias:
             return AV("L", vloans, valias, out)
         return AV("O", (), (), out)
+
+    def clo_slice_copies(self, ty):
+        """Is a slice of type `ty` that a closure hands back, declared an owned
+        `[T` (FnIR.ret_owned_slice; a `( Slice T )` is a view, kept), its
+        caller's own copy on every run: elements that hold no view and can be
+        copied (nurlc's mem_clo_ret_copies_slc, agora #894)?  (Asked of the
+        element all the way down, as nurlc's __ty_holds_view_p asks it: a
+        struct with a `String` field and a raw view field copies, but its
+        copy still holds the view.)"""
+        if ty is None or ty[0] != "slice" or len(ty) < 2 or ty[1] is None:
+            return False
+        et = ty[1]
+        return not self.T.view_capable(et) and self.T.copyable(et)
 
     def view_result(self, ty):
         """Is a value of type `ty` a view, or a container of views (`?s`, a
@@ -3225,11 +3272,22 @@ class FnCheck:
         first: the drop of a value whose destructor may read its views is a
         use of them (MEMORY.md §2.14)."""
         udrop = getattr(self.prog, "udrop", ())
+        killed = set()
         if st.bottom or not udrop:
-            return
+            return killed
         for vid in sorted(st.vals, reverse=True):
             av = st.vals[vid]
             v = self.fn.vars[vid]
+            if (v.kind == "param" and av.own == "P" and vid in self.pidx and vid != keep
+                    and self.fn.modes[self.pidx[vid]] == "sink"):
+                # (a `sink` parameter still held at the exit is released by
+                # this function: its `% Drop` runs here, and what it changes
+                # of a shared payload is in this summary's regions - so a
+                # caller's view through another handle ends at the call)
+                d0 = st.dead
+                self.run_dtor(st, (vid, ()), v.ty, line)
+                killed |= st.dead - d0
+                continue
             if av.own not in ("O", "X") or v.kind == "param" or vid == keep:
                 continue
             if av.held and v.ty is not None and v.ty[0] == "named" and v.ty[1] in udrop:
@@ -3237,9 +3295,31 @@ class FnCheck:
                 # formal's DtorSafe join rule, agora #252)
                 self.check_live(st, AV("N", held=av.held), line, f"the drop of {v.name}", held=True)
             if av.own != "O":
+                # (…and its `% Drop` runs on those paths: what it changes of
+                # a shared payload is changed when this frame is left)
+                d0 = st.dead
+                self.run_dtor(st, (vid, ()), v.ty, line)
+                killed |= st.dead - d0
                 continue
+            d0 = st.dead
+            self.run_dtor(st, (vid, ()), v.ty, line)
+            killed |= st.dead - d0
             self.effect(st, (vid, ()), "replace", line)
             st.vals[vid] = AV("D")
+        return killed
+
+    def params_hold_dead(self, st, line, dk):
+        """Storage the caller holds - a parameter, or what one points into -
+        may not be left holding a view that a destructor run at this exit
+        changed (`dk`, exit_drops' kills): the caller would read it after
+        the call (agora #918)."""
+        if st.bottom or not dk:
+            return
+        for vid in self.pidx:
+            av = st.vals.get(vid)
+            if av is not None and hloans(av.held) & dk:
+                self.err(line, f"{self.vname(vid)} is left holding a view of what a destructor run "
+                               f"at the function's exit changes")
 
     def params_hold_locals(self, st, line):
         """Storage the caller holds - a parameter, or what one points into -
@@ -3301,9 +3381,16 @@ class FnCheck:
             for vid in sorted(st.vals, reverse=True):
                 av = st.vals[vid]
                 v = self.fn.vars[vid]
-                if (vid in seen or av.own != "O" or v.kind != "local" or vid == self.ret_watch
+                if (vid in seen or av.own not in ("O", "X") or v.kind != "local" or vid == self.ret_watch
                         or vid in self.defer_reads_of(d) or vid in self.chain_kept):
                     continue
+                if av.own == "X":
+                    # (moved on some paths only: released on the others,
+                    # before the block runs)
+                    self.run_dtor(st, (vid, ()), v.ty, v.line)
+                    continue
+                # (released here: its `% Drop` runs, as at a scope end)
+                self.run_dtor(st, (vid, ()), v.ty, v.line)
                 self.effect(st, (vid, ()), "replace", v.line)
                 self.effect(st, (vid, ()), "end", v.line)
                 st.vals[vid] = AV("D")
@@ -3327,7 +3414,11 @@ class FnCheck:
                     if av is None:
                         continue
                     if av.own == "O":
+                        self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, self.fn.vars[vid].line)
                         self.effect(st, (vid, ()), "replace", self.fn.vars[vid].line)
+                    elif av.own == "X":
+                        # (moved on some paths only: released on the others)
+                        self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, self.fn.vars[vid].line)
                     self.effect(st, (vid, ()), "end", self.fn.vars[vid].line)
                     if av.own != "M":
                         st.vals[vid] = AV("D")
@@ -3817,6 +3908,121 @@ class FnCheck:
                         work.append(w)
         return out
 
+    def dtor_parts(self, ty):
+        """The parts of a value of type `ty` that are released with it, each
+        with its path below the value: a struct's fields, an enum's and a
+        result's payloads, an option's, a container's or a handle's element
+        (an Rc released by what may be its last share)."""
+        k = ty[0]
+        if k == "named":
+            if ty[1] in self.prog.structs:
+                from lower import norm
+                return [((fname or str(i),), norm(fty0)) for i, (fty0, fname) in enumerate(self.prog.structs[ty[1]])]
+            if ty[1] in getattr(self.prog, "enums", ()):
+                return [((f"#{vname}{i}",), fty) for vname, ftys in (self.T.variants(ty) or ()) for i, fty in enumerate(ftys)]
+            if ty[1] in getattr(self.prog, "handle_elem", {}):
+                return [(("*",), self.prog.handle_elem[ty[1]])]
+            return []
+        if k in ("vec", "slice", "box"):
+            return [(("*",), ty[1])]
+        if k == "opt":
+            # (its payload's place, as lowering spells it: `#T0`)
+            return [(("#T0",), ty[1])]
+        if k == "res":
+            return [(("#T0",), ty[1]), (("#F0",), ty[2])]
+        return []
+
+    def dtor_runs(self, ty):
+        """Does releasing a value of type `ty` run a `% Drop` of the
+        program's own - its own, or one a part of it holds (a slice's
+        elements included, which `has_udrop` does not ask)?"""
+        if ty is None:
+            return False
+        if self.T.has_udrop(ty):
+            return True
+        return ty[0] == "slice" and self.dtor_runs(ty[1])
+
+    def run_dtor(self, st, place, ty, line, seen=frozenset()):
+        """A value of type `ty` at `place` is released: each `% Drop` of the
+        program's own it holds runs, the value's own first (`drop__T`, a
+        function of the program's whose summary says what it changes of its
+        parameter, and inside which shared payloads), then its parts'. A
+        type already being walked (a recursive one) is not walked again:
+        its parts' destructors were reached on the way in. Released with no
+        effect of its own, a `% Drop` that cleared a shared Rc payload left
+        another handle's view of it live (agora #766, #918, #919; nurlc's
+        `+d=` / `+dk=` notes, __bck_udrop_*)."""
+        if not getattr(self.prog, "udrop", ()) or (ty is not None and ty in seen):
+            return
+        k = ty[0] if ty is not None else None
+        if not seen:
+            # (a closure released with the value releases its environment:
+            # each value the environment took over runs its `% Drop` - a
+            # capture's place is the environment's own, so only what the
+            # destructor changes inside shared payloads reaches anything
+            # else; agora #919. Asked once, at the top of the walk, of every
+            # closure held at or under `place`: one in a struct's field is
+            # released with the struct, whatever the struct's own type runs)
+            av = st.vals.get(place[0])
+            if av is not None:
+                n = len(place[1])
+                for base, fname in self.closures_in(av):
+                    if tuple(base[:n]) != tuple(place[1]):
+                        continue
+                    body = self.prog.fns.get(fname)
+                    if body is None:
+                        continue
+                    for c in body.params[:getattr(body, "ncap", 0)]:
+                        cv = body.vars.get(c)
+                        if cv is not None and getattr(cv, "taken", False):
+                            self.dtor_regions(st, cv.ty)
+        if ty is None or k == "closure":
+            return
+        if not self.dtor_runs(ty):
+            return
+        seen = seen | {ty}
+        if k == "named" and f"drop__{ty[1]}" in self.prog.fns:
+            sm = self.summary(f"drop__{ty[1]}")
+            if sm is not None:
+                for (pk, path, eff) in sm["effects"]:
+                    if pk == 0 and eff in ("replace", "realloc", "drop", "take"):
+                        self.effect(st, (place[0], (place[1] + tuple(path))[:PATH_MAX]), eff, line)
+                for (rty, tail, eff) in sm.get("regions", ()):
+                    self.region_effect(st, rty, tuple(tail), eff)
+        # (…but a field a literal names a binding at, its `lit` handle loan,
+        # is still that binding's: a literal handed to a callee that only
+        # borrows it leaves the binding the owner, and releasing the
+        # literal releases the field nowhere - lit_places)
+        av = st.vals.get(place[0])
+        lit = {tuple(hp) for hp, ln in av.held
+               if isinstance(ln, tuple) and len(ln) == 3 and isinstance(ln[0], tuple)
+               and ln[0] and ln[0][-1] == "lit" and ln[2] == "handle"} if av is not None else set()
+        # (A part handed on - `st.gone` - still runs its destructor here:
+        # gone is a union at joins, so a part taken on one path only is
+        # still the owner's on the other, and skipping it there would miss
+        # what its `% Drop` changes. On the path that took it, the effects
+        # come early: a refusal, never a missed change.)
+        for sub, pty in self.dtor_parts(ty):
+            p2 = (place[1] + sub)[:PATH_MAX]
+            if tuple(p2) in lit:
+                continue
+            self.run_dtor(st, (place[0], p2), pty, line, seen)
+
+    def dtor_regions(self, st, ty, seen=frozenset()):
+        """What the `% Drop`s a value of type `ty` holds change inside shared
+        payloads, done: a value released where nothing else reaches it (a
+        closure's environment). The same walk as run_dtor's."""
+        if ty is None or ty in seen or not self.dtor_runs(ty):
+            return
+        seen = seen | {ty}
+        if ty[0] == "named" and f"drop__{ty[1]}" in self.prog.fns:
+            sm = self.summary(f"drop__{ty[1]}")
+            if sm is not None:
+                for (rty, tail, eff) in sm.get("regions", ()):
+                    self.region_effect(st, rty, tuple(tail), eff)
+        for _sub, pty in self.dtor_parts(ty):
+            self.dtor_regions(st, pty, seen)
+
     def scope_end(self, st, stmts, line):
         if st.bottom:
             return st
@@ -3844,7 +4050,12 @@ class FnCheck:
                     # (formal's DtorSafe join rule, agora #252)
                     self.check_live(st, AV("N", held=av.held), line, f"the drop of {self.vname(vid)}", held=True)
             if av.own == "O":
+                self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, line)
                 self.effect(st, (vid, ()), "replace", line)
+            elif av.own == "X":
+                # (moved on some paths only, it is released on the others:
+                # what its `% Drop` changes of a shared payload is changed)
+                self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, line)
             # (the binding itself is gone: what points at it ends)
             self.effect(st, (vid, ()), "end", line)
             if av.own != "M":
@@ -4041,6 +4252,14 @@ class FnCheck:
             _, (vid, path), rv, ln = s
             v = self.fn.vars[vid]
             cur = st.vals.get(vid)
+            if (not path and v.kind == "temp" and v.ty in (None, ("v",)) and rv[0] == "use"
+                    and rv[1][0] == "v" and not rv[1][2]):
+                # (a join's temporary the core IR leaves untyped, `? c { ( mk
+                # ) } {}`: released, it runs the arm value's `% Drop` - the
+                # type the arm gave it; agora #917, #766)
+                sty = self.fn.vars[rv[1][1]].ty
+                if sty is not None and (self.dtor_runs(sty) or sty[0] == "closure"):
+                    self.join_ty[vid] = sty
             if not path and st.pb and any(p[0] == vid for p in st.pb):
                 # (a copy that still owes its write-back given another value:
                 # the old copy is never written back - agora #870)
@@ -4173,7 +4392,10 @@ class FnCheck:
                     st.vals[vid] = AV(cur.own, new.loans, frozenset(), cur.held | (new.held - inside))
                     return st
                 if cur is not None and cur.own in ("O", "P"):
-                    self.handover(st, (vid, ()))
+                    # (the old value is released - unless a binding that reads
+                    # it was handed it - and its `% Drop` runs: agora #766)
+                    if not self.handover(st, (vid, ())):
+                        self.run_dtor(st, (vid, ()), v.ty, ln)
                     self.effect(st, (vid, ()), "replace", ln)
                 new = self.reroot(st, new, vid)
                 if cur is not None and cur.own == "P" and v.ty is not None and v.ty[0] == "closure":
@@ -4321,7 +4543,9 @@ class FnCheck:
                     st.pb = st.pb | {(vid, ln, tuple(path))}
                 st.vals[vid] = AV("L", cur.loans, cur.alias, cur.held | hroot(add, path))
                 return st
-            self.handover(st, (vid, path))
+            # (…and a field's old value, `= . h x v`: its `% Drop` runs)
+            if not self.handover(st, (vid, path)):
+                self.run_dtor(st, (vid, tuple(path)), self.ty_of_place((vid, tuple(path))), ln)
             self.effect(st, (vid, path), "replace", ln)
             self.store_into(st, (vid, path), add)
             if st.gone:
@@ -4343,6 +4567,7 @@ class FnCheck:
             _, vid, ln = s
             av = st.vals.get(vid)
             if av and av.own == "O":
+                self.run_dtor(st, (vid, ()), self.join_ty.get(vid, self.fn.vars[vid].ty), ln)
                 self.effect(st, (vid, ()), "replace", ln)
                 st.vals[vid] = AV("D")
             elif av and self.fn.vars[vid].carried and av.own != "M":
@@ -4472,13 +4697,22 @@ class FnCheck:
                     # `None` hands no storage over, nor does a binding that
                     # was only ever given one)
                     self.ret_fresh = True
-                self.exit_drops(st, ln)
+                # (…and what the frame's destructors change as it is left: a
+                # `% Drop` of a local that clears a shared payload the
+                # returned value views - agora #918)
+                # (…a `sink` parameter handed back whole goes to the caller
+                # with the result: not released here)
+                rk = op[1] if op[0] == "v" and not op[2] else None
+                dk = self.exit_drops(st, ln, keep=rk)
+                if dk and (av.loans | hloans(av.held)) & dk:
+                    self.err(ln, "the returned value views what a destructor run at the function's exit changes")
+                self.params_hold_dead(st, ln, dk)
             else:
                 st = self.run_defers(st)
                 self.params_hold_locals(st, ln)
                 self.pb_check(st)
                 self.exits.append(st.copy())
-                self.exit_drops(st, ln)
+                self.params_hold_dead(st, ln, self.exit_drops(st, ln))
             return State(bottom=True)
         if k == "break":
             if self.loop_stack:
@@ -4602,6 +4836,9 @@ class FnCheck:
             self.params_hold_locals(end, self.fn.line)
             self.pb_check(end)
             self.exits.append(end)
+            # (falling off the end leaves the frame too: a `sink` parameter
+            # still held is released here, as at a `^`)
+            self.params_hold_dead(end, self.fn.line, self.exit_drops(end, self.fn.line))
         return self.make_summary()
 
     def only_elem_replace(self, sm, k):

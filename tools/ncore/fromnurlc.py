@@ -342,6 +342,7 @@ class Reader:
         fn.ncap = 0
         fn.is_closure = raw["name"].startswith("__closure_")
         fn.ret = self.conv(raw["ret"])
+        fn.ret_owned_slice = isinstance(raw["ret"], str) and raw["ret"].startswith("{") and fn.ret is not None and fn.ret[0] == "slice"
         for vid, kind, depth, flags, line, blk, name, ty in raw["vars"]:
             v = Var(vid, name or f"%t{vid}", self.conv(ty) if ty else None, KINDS.get(kind, "local"),
                     line, depth)

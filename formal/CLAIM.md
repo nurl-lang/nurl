@@ -1072,9 +1072,8 @@ Inside A2 (nurlc bugs):
   literal argument, or an owner and a view of it written as one). `CallT`
   refuses it: the argument is a root of its own memory dependencies
   (`CallT.not_self_view`, `CallT.not_self_dep_sink`, A2/SelfViewCall.lean).
-  A self-viewing value moved into a struct's field, or into a container
-  and back out, keeps its own-path roots there, as `outHolds` restates a
-  returned one (rules/t600.md).
+  (Accepting such a value moved into a struct's field, or into a container
+  and back out, is outside A2: below.)
 - A changed parameter handed an element of the caller's owner: #391
   (`( f 1 ( vec_at vv 0 ) src )`, and a local bound from the element).
   The call reads as handing the element over (`Stmt.withElem`: the
@@ -1103,6 +1102,21 @@ Outside A2:
 - A view of an owner kept across the owner's move into a struct field or
   literal, where nurlc hands the view to the field path (Agora #799); A2's
   move ends the owner's views (`RhsT.moveOwn`).
+- The same for a value that views its own storage (`= . o v (
+  slice_from_vec . o buf )`, Agora #563), as nurlc accepts it since
+  github#2074. Moved into a struct field, a literal or a container, it
+  takes its views with it and they are read at the new place. Taken back
+  out of a container (popped, removed, matched), it views its own fields
+  again (`__bck_sv_carry`, `svr_`, `__bck_sv_inherit`). A2's move ends
+  the views, and A2's element dependencies are paths (`vs.*.buf`). Such a
+  path does not tell an element's view of its own buffer from a view of a
+  sibling's, and a pop leaves the second dangling. So A2 does not type a
+  read of the popped element's view: `RhsT.pop` kills what depends on the
+  container's elements (`kill .drop t.holdsView`), and nothing re-roots
+  the element's own dependencies at the taken value. The extension: a per-element
+  self bit on a `Vec` entry, so a pop re-roots the element's own
+  dependencies at the taken value. What nurlc refuses of #563, a call
+  that changes what such a value views, is inside A2 (rules/t563.md).
 
 ## Destructors, and a panic while a panic unwinds
 
