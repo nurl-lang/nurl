@@ -185,11 +185,17 @@ the LLVM / C11 memory model rather than redefining it.
     its environment holds views, or it takes the environment handed over
     (`StmtT.callcE`). A closure's code is `ThruFn` by the same
     `Stmt.hasThru` as a function's, so code whose changes are all through
-    fresh borrows, of elements that hold no views, is in by the argument
-    below: `A2/FreshClosureWitness.lean`
-    types a closure whose environment is a slice and whose code pushes
-    through `vec_at` of its own local, called through its package, safe
-    and leak-free. nurlc accepts it, and it runs clean.
+    fresh borrows is in by the arguments below, whatever the call passes.
+    `A2/FreshClosureWitness.lean` types a closure whose environment is a
+    slice and whose code pushes through `vec_at` of its own local, called
+    through its package, safe and leak-free. `A2/ClosureParamViewWitness.lean`
+    types AGORA-909's own program (github#2041), whose code stores the view
+    the call passed (its environment, a slice of the caller's `Vec`) through
+    `vec_at` of its own `Vec (Vec [i)`: an `edit false` through a fresh borrow
+    that is not held-fresh (Agora #3932), so the code is not through-changing
+    (`code_not_thru`), and `Implements` and `CallT` ask nothing of the
+    environment or the argument; safe and leak-free (`main_safe`,
+    `main_no_leak`). nurlc accepts both, and they run clean.
 
   Agora #909 takes in what changes elements that hold no views only
   through a fresh borrow.
@@ -273,7 +279,7 @@ the LLVM / C11 memory model rather than redefining it.
   off (`A2/UnheldFresh.lean`: `RhsT.view_unheld`,
   `EntryWeaker.heldFresh_of_not`, `weaker_unheldC`; `StmtT.unheld` on
   the result side).
-  Nine compiler tests pin nurlc's side in both directions. It accepts a
+  Ten compiler tests pin nurlc's side in both directions. It accepts a
   push through an element of a local the destructor or closure made
   (`drop_of_a_view_type_pushes_through_its_own_element`,
   `closure_over_a_slice_pushes_through_its_own_element`), and a store of
@@ -288,6 +294,9 @@ the LLVM / C11 memory model rather than redefining it.
   lives (`parameter_view_stored_through_an_element_borrow_read_while_the_callers_source_lives`);
   it refuses the same read after that source ended
   (`diag_parameter_view_stored_through_an_element_borrow_read_after_the_callers_source_ended`).
+  It accepts AGORA-909's closure handed a view argument that stores it
+  through an element of its own local
+  (`closure_stores_its_view_argument_through_its_own_element`).
   It ends a view
   of an element pushed through a parameter or a by-name capture
   (`borrow_push_through_a_parameters_element_ends_the_callers_view`,
