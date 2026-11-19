@@ -1490,7 +1490,11 @@ class FnCheck:
                 if m in sm.get("putback", ()) and eff == "replace" and "*" in tuple(path):
                     # (only the write-back's own store into an element)
                     continue
-                if m != k and self.would_kill(st, place, eff, av.loans | hloans(av.held)):
+                if m != k and any(self.would_kill(st, pl, eff, av.loans | hloans(av.held))
+                                  for pl in [place] + (self.lit_places(avs[k], tuple(path)) if k < len(avs) else [])):
+                    # (…a literal's field that took a binding in is that
+                    # binding: another argument viewing the binding views
+                    # what the call changes there)
                     self.err(line, f"{name}: argument {m + 1} views what the call changes through argument {k + 1}")
                 elif m == k and any(self.would_kill(st, pl, eff, hloans(av.held))
                                     for pl in [place] + self.lit_places(av, tuple(path))):
@@ -3407,6 +3411,9 @@ class FnCheck:
                     if av.own == "O":
                         self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, self.fn.vars[vid].line)
                         self.effect(st, (vid, ()), "replace", self.fn.vars[vid].line)
+                    elif av.own == "X":
+                        # (moved on some paths only: released on the others)
+                        self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, self.fn.vars[vid].line)
                     self.effect(st, (vid, ()), "end", self.fn.vars[vid].line)
                     if av.own != "M":
                         st.vals[vid] = AV("D")
@@ -3985,9 +3992,12 @@ class FnCheck:
         lit = {tuple(hp) for hp, ln in av.held
                if isinstance(ln, tuple) and len(ln) == 3 and isinstance(ln[0], tuple)
                and ln[0] and ln[0][-1] == "lit" and ln[2] == "handle"} if av is not None else set()
+        # (…nor a part already handed on - a field a call's result took
+        # over, `st.gone`: its new owner releases it)
+        gone = {tuple(gp) for gv, gp in st.gone if gv == place[0]}
         for sub, pty in self.dtor_parts(ty):
             p2 = (place[1] + sub)[:PATH_MAX]
-            if tuple(p2) in lit:
+            if tuple(p2) in lit or any(tuple(p2)[:len(g)] == g for g in gone):
                 continue
             self.run_dtor(st, (place[0], p2), pty, line, seen)
 
