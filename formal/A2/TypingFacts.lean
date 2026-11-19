@@ -110,7 +110,8 @@ theorem killE_weaker {e : Eff} {hv : Bool} {x : Var} {E E' : Entry} (hw : EntryW
       fun hl hn hb h => by
         rw [killE_fresh] at h ⊢; rw [killE_path, killE_path]; rw [killE_ty] at hn; rw [killE_mode] at hb
         rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
-        exact hf hl.1 hn hb h⟩
+        exact hf hl.1 hn hb h,
+      fun _ hhf => by heldfresh_ew⟩
   · unfold Entry.fixed at h; rw [killE_mode, killE_ty] at h; rw [hr h]
   · rw [killE_live] at h
     simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
@@ -273,7 +274,8 @@ theorem rerootE_weaker {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker
   refine ⟨ht, hm, fun h => by rw [hr h], fun hl => ?_,
       fun h => ⟨(hd h).1, reroot_subset (hd h).2⟩, hb, ha,
       fun h hos hn d hnm => reroot_mem_congr (hk h hos hn) hnm,
-      fun hl' hn' hbo h => ⟨(hf hl' hn' hbo h).1, reroot_subset (hf hl' hn' hbo h).2⟩⟩
+      fun hl' hn' hbo h => ⟨(hf hl' hn' hbo h).1, reroot_subset (hf hl' hn' hbo h).2⟩,
+      fun _ hhf => by heldfresh_ew⟩
   obtain ⟨hl', hp, hh⟩ := hlv hl
   exact ⟨hl', fun ho => reroot_subset (hp ho), reroot_subset hh⟩
 
