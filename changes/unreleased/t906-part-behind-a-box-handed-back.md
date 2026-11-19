@@ -1,3 +1,0 @@
-### Fixed
-
-- **A value assigned back the part of itself that a call handed back in a literal no longer reads freed memory** (AGORA-906, AGORA-875). Take `= o ( tail o )`, where `tail` hands back `@ ?N { T ( box_get [N] b ) }`, a node behind `o`'s own `Box` (or a `Vec` element of `o`'s, through `vec_at`). It released `o`'s old value under the node it had just been given. Now `o` gets its own copy of the node on the runs where `tail` lent it, and its old value goes. A type with no copy is refused there. `= o ( npick o ( tail o ) k )`, which may hand back `o` itself or that part, is refused like its bound-first form (agora #412). Before, it leaked the old value. Only types that can hold a value of their own type are affected. No in-repo code changes.

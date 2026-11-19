@@ -61224,6 +61224,26 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // bck_note_moved_field). A leaf released or moved,
 // or one of a scope inside the binding's, is none; the binding itself
 // stands for what it borrowed before its `=` (`obs_`).
+// Is every leaf of join source expression `sx` (`{{a;a};a}`) one and the
+// same name?
+@ __sx_one_leaf s sx → b {
+    // (Split at every `{`, `}` and `;`: the pieces that are not empty are
+    // the leaves.)
+    : ~ s rest ( bck_swap_char ( bck_swap_char sx 123 59 ) 125 59 )
+    : ~ s w0 ``
+    : ~ b more T
+    ~ more {
+        : i k ( nurl_str_find rest `;` )
+        : s w ? < k 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 k )
+        = rest ? < k 0 `` ( nurl_str_slice rest + k 1 - - ( nurl_str_len rest ) k 1 )
+        = more >= k 0
+        ? != 0 ( nurl_str_len w ) {
+            ? == 0 ( nurl_str_len w0 ) { = w0 ( nurl_str_cat w `` ) } { ? ! ( seq w w0 ) { ^ F } {} }
+        } {}
+    }
+    ^ != 0 ( nurl_str_len w0 )
+}
+
 @ bck_brw_leaves s st s mode s sx i wid → s {
     : s all ( bck_sx_hpaths sx )
     : i m ? == 0 ( nurl_str_len mode ) 112 ( nurl_str_get mode 0 )
@@ -61244,7 +61264,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         // alone - `: k ?? ev { A p → . p a  B q → . q a }`: its arms read
         // parts of that binding's payload, which no row of theirs names,
         // so k borrows from the binding; otherwise as `p`: agora #557.)
-        : b mwhole & == m 109 < ( nurl_str_find sx `{` ) 0
+        // (…or a join of joins of it alone - an arm that is itself a
+        // ternary of its parts, `? == c 1 . p a . p b`: `{{ev;ev};ev}`.)
+        : b mwhole & == m 109 | < ( nurl_str_find sx `{` ) 0 ( __sx_one_leaf sx )
         : b take ? == m 116 & lent != r wid ? | == r wid > ( bck_id_dser r ) ( bck_id_dser wid ) F ? ( bck_dead_state lv ) F ? == m 98 T ? lent F ? | == m 110 mwhole T != r id
         ? take { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) } {}
     }
@@ -64806,6 +64828,26 @@ unsafe @ __sx_mut_roots s st s e b named → s {
     ^ out
 }
 
+// The owner in `ms` (a call's argument storage) a view among `ss` (another
+// argument's sources) reaches through an element of - `^id`, overlapping:
+// the callee may move that element's buffer (g_fn_ireallocs; agora #923).
+// Not a view of the owner's own buffer, nor a copy of an element's handle.
+@ __bck_elem_view_conflict s ms s ss → s {
+    : ~ s mr ( nurl_str_cat ms `` )
+    ~ != 0 ( nurl_str_len mr ) {
+        : s m0 ( str_first_word mr ) = mr ( str_skip_word mr )
+        : i mid ( nurl_str_to_int ? == ( nurl_str_get m0 0 ) 94 ( nurl_str_slice m0 1 - ( nurl_str_len m0 ) 1 ) m0 )
+        : ~ s sr ( nurl_str_cat ss `` )
+        ~ != 0 ( nurl_str_len sr ) {
+            : s s0 ( str_first_word sr ) = sr ( str_skip_word sr )
+            ? == ( nurl_str_get s0 0 ) 94 {
+                ? ( bck_paths_overlap mid ( nurl_str_to_int ( nurl_str_slice s0 1 - ( nurl_str_len s0 ) 1 ) ) ) { ^ ( nurl_str_int mid ) } {}
+            } {}
+        }
+    }
+    ^ ``
+}
+
 @ bck_alias_conflict s ms s ss b drops → s {
     : ~ s mr ( nurl_str_cat ms `` )
     ~ != 0 ( nurl_str_len mr ) {
@@ -64847,7 +64889,9 @@ unsafe @ __sx_mut_roots s st s e b named → s {
     // callee's to release, agora #494.)
     // (…nor one that gives none a new value: agora #569.)
     : b anyrepl & != 0 g_bck_epy_any != 0 ( nurl_sym_len g_fn_replaces cal )
-    : b anymut | | | | | anyrepl == lk 1 != 0 ( nurl_sym_len g_fn_reallocs cal ) & != 0 ( nurl_sym_len g_fn_safe cal ) != 0 ( nurl_sym_len g_fn_drops cal ) & & == lk 0 == 0 ( nurl_sym_len g_fn_safe cal ) != 0 ( nurl_sym_len g_fn_mutates cal ) != 0 ( nurl_sym_len g_fn_sink cal )
+    // (…nor one that grows an element of none: agora #923.)
+    : b anyirealloc & != 0 g_irealloc_any != 0 ( nurl_sym_len g_fn_ireallocs cal )
+    : b anymut | | | | | | anyirealloc anyrepl == lk 1 != 0 ( nurl_sym_len g_fn_reallocs cal ) & != 0 ( nurl_sym_len g_fn_safe cal ) != 0 ( nurl_sym_len g_fn_drops cal ) & & == lk 0 == 0 ( nurl_sym_len g_fn_safe cal ) != 0 ( nurl_sym_len g_fn_mutates cal ) != 0 ( nurl_sym_len g_fn_sink cal )
     ? ! anymut { ^ } {}
     : s args ( bck_sx_split ( nurl_str_slice sx + lp 1 - - ( nurl_str_len sx ) lp 2 ) )
     : ~ s rest ( nurl_str_cat args `` )
@@ -64869,7 +64913,11 @@ unsafe @ __sx_mut_roots s st s e b named → s {
         : b pj & anyrepl != 0 ( nurl_str_len ( __repl_of cal js ) )
         : b dj | | sj pj ( bck_callee_drops_elems cal js )
         : b rj | dj ( nurl_sym_has_word g_fn_reallocs cal js )
-        ? & rj ! ( seq aj `-` ) {
+        // (…or the buffer of an element of it, `( vec_push ( vec_at vv 0 ) …
+        // )` through a borrowed `vv` - g_fn_ireallocs: a view of that
+        // element handed beside it dangles inside the call; agora #923.)
+        : b ij & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs cal js )
+        ? & | rj ij ! ( seq aj `-` ) {
             : s mj ( bck_sx_mut_storage st aj )
             ? & ! ( seq mj `*` ) != 0 ( nurl_str_len mj ) {
                 : ~ s krest ( nurl_str_cat args `` )
@@ -64890,11 +64938,16 @@ unsafe @ __sx_mut_roots s st s e b named → s {
                         // (…and a program enum's payload read in place out of
                         // it, `hr_`, is its storage: agora #569.)
                         : s sk ? & pj ! ( seq sk1 `*` ) ( __srcs_payload_up sk1 ) sk1
-                        : s hit ? ( seq sk `*` ) `` ( bck_alias_conflict mj sk dj )
+                        // (Both checks where both apply - a callee that grows
+                        // the owner's buffer and an element of it: the first
+                        // conflict found.)
+                        : s hit0 ? | ( seq sk `*` ) ! rj `` ( bck_alias_conflict mj sk dj )
+                        : b eh & & == 0 ( nurl_str_len hit0 ) ij ! ( seq sk `*` )
+                        : s hit ? eh ( __bck_elem_view_conflict mj sk ) hit0
                         ? != 0 ( nurl_str_len hit ) {
                             : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int hit ) ) ) ) )
                             : s c1 ( nurl_str_cat4 `'` nm `' reaches '` ( bck_fn_show cal ) )
-                            : s c2 ( nurl_str_cat3 `' through argument ` ( nurl_str_int + j 1 ) ? sj `, which it takes over and may release,` ? pj `, which it may give a new value, releasing the old one,` ? dj `, whose elements it may drop or replace,` `, whose buffer it may move or free,` )
+                            : s c2 ( nurl_str_cat3 `' through argument ` ( nurl_str_int + j 1 ) ? eh `, an element of which it may grow or move,` ? sj `, which it takes over and may release,` ? pj `, which it may give a new value, releasing the old one,` ? dj `, whose elements it may drop or replace,` `, whose buffer it may move or free,` )
                             : s c3 ( nurl_str_cat4 ` and through argument ` ( nurl_str_int + k 1 ) `, which points into it or borrows from it: inside the call the two are unrelated names, and the change through one leaves the other dangling. Pass a copy that owns its data as one of them (mem_dup, string_from, slice_to_vec), or take what the second one reaches inside the callee.` `` )
                             ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 c1 c2 c3 ) )
                             ^

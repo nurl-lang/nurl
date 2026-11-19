@@ -1,3 +1,0 @@
-### Fixed
-
-- **A function cannot hand back a view whose payload its exit's destructors change** (AGORA-918). A function could hand back a view of a parameter's `Rc` payload (`^ ( slice_from_vec ( rc_get x ) )`) while a local holding a share of the same `Rc` was released at its exit, and that local's `% Drop` cleared or grew the payload. The caller then read freed memory. Such a return is now refused, whether it is a `^`, an early `^` in an arm, or the body's fall-off value. Release the local in a block that ends before the view is made, or hand back a copy that owns its data. A destructor that only reads the payload is not affected.

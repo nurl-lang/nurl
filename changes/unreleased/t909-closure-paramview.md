@@ -1,3 +1,0 @@
-### Changed
-
-- **The formal proof covers a closure that stores a view it was handed through a borrow of its own local** (AGORA-909, github#2041). Before, A2 counted such closure code as changing memory its caller could see, and refused a call into it that passed a view. A2 now types the store as one that changes only the closure's own memory (Agora #3932), so the call may pass the view. Take `: ( @ i ( Slice i ) ) f \ ( Slice i ) x → i { … ( vec_push [( Slice i )] ( vec_at [( Vec ( Slice i ) )] loc 0 ) x ) … }` called as `( f ( slice_from_vec [i] v ) )`. nurlc accepts it, it runs clean, and `A2/ClosureParamViewWitness.lean` types the closure form called through its package, memory safe and leak-free. This changes the calculus's coverage only; NURL source is unchanged.
