@@ -177,9 +177,10 @@ the LLVM / C11 memory model rather than redefining it.
     owner;
   - a destructor that changes elements through a borrow that is not
     fresh (one that may reach memory an argument views), or whose
-    changed elements hold views (`StmtT.editBV`, which stays `edit
-    true`), directly or
-    through a callee, or drop glue that does so, of a type that holds
+    changed elements hold views when what it stores is not the frame's
+    own in path and in what it holds (a view of a borrowed parameter,
+    Agora #909's own example: `StmtT.editBV` then stays `edit true`),
+    directly or through a callee, or drop glue that does so, of a type that holds
     views, and a call into a function that does so which passes an
     argument holding views (`ThruFn`);
   - a closure whose code does so, through a borrow that is not fresh,
@@ -213,24 +214,54 @@ the LLVM / C11 memory model rather than redefining it.
   does not make its function `ThruFn`. It may change an `inout` parameter's block, which the
   call already treats as changed, but no memory an argument views. So a
   destructor of a type that holds views may push through `vec_at` of its
-  own local, when the changed elements hold no views. A change of
-  elements that hold views (`StmtT.editBV`) stays `edit true` even
-  through a fresh borrow: its stored views need `S.R = []` when renamed.
-  (Agora #916 records which borrows hold only the frame's own memory,
-  `Entry.heldFresh`, and a call lifts their `held` without the arguments'
-  memory; a view of a local `Vec` of a type that holds no views may carry
-  the bit. That makes a stored view's `held` precise, but not yet its
-  path, so `editBV` is unchanged.)
+  own local, when the changed elements hold no views.
   `A2/FreshWitness.lean` types one, a struct holding a slice and a number,
   run by its armed `letd`'s frame end, safe and leak-free (`main_safe`,
   `main_no_leak`). nurlc accepts it, and it runs clean. The modelling
   claim (phase C): the walk emits `edit false` for an edit of elements
   that hold no views through a borrow of the frame's own memory, and
   `edit true` for every other.
-  Four compiler tests pin nurlc's side in both directions. It accepts a
+
+  Agora #916 takes in a change of elements that hold views too, through
+  a fresh borrow, when what it stores is the frame's own in path and in
+  what it holds. A view (`RhsT.view`) may be fresh when it views an owner
+  or an `inout` parameter: its path, of kind `.view`, reaches only that
+  binding's buffer (`derive_freshE` over `.self`, `.inner` and `.view`).
+  A view of a borrowed parameter or of a borrow never is
+  (`view_rootb_not_fresh`, `view_bor_not_fresh`). It may be held-fresh
+  (`Entry.heldFresh`) when its source is an owner or an `inout`
+  parameter of a type that holds no views, or a held-fresh borrow
+  (`HeldSrc`), never a borrowed parameter (`view_rootb_not_heldFresh`).
+  The bit is a typing artefact the rename consumes: neither the semantics
+  nor the runtime invariant reads it. A call lifts a held-fresh borrow's
+  `held` with only the names its arguments hold (`RSetup.heldA`), and the
+  rename's weakening obligations carry the bit (`heldA_mono`,
+  `heldSrc_lift`, `heldSrc_held_lift`); a kill reads neither bit
+  (`hits_fresh_irrel`). `StmtT.editBV` then types the store `edit false`
+  (`hbf`, `hbs`), and the rename needs `S.R = []` only for `edit true`
+  (`pushArg_ren_held`). `A2/StoreViewWitness.lean` types a destructor of
+  a type that holds views that pushes `( slice_from_vec w )` of its own
+  local into `( vec_at loc 0 )` of its own `Vec (Vec [i)`: not
+  through-changing, run by an armed `letd` that hands it a value holding
+  views, safe and leak-free (`main_safe`, `main_no_leak`). nurlc accepts
+  it, and it runs clean. A store of a view of a borrowed parameter stays
+  `edit true` (Agora #909's own example): what such a view holds is its
+  caller's memory, which the callee cannot see, and no rule makes it
+  held-fresh. The modelling claim of phase C does not change: the walk
+  emits `edit true` for every edit of elements that hold views, which
+  the calculus takes conservatively. Each new premise holds with the bit
+  off (`A2/UnheldFresh.lean`: `RhsT.view_unheld`,
+  `EntryWeaker.heldFresh_of_not`, `weaker_unheldC`; `StmtT.unheld` on
+  the result side).
+  Six compiler tests pin nurlc's side in both directions. It accepts a
   push through an element of a local the destructor or closure made
   (`drop_of_a_view_type_pushes_through_its_own_element`,
-  `closure_over_a_slice_pushes_through_its_own_element`). It ends a view
+  `closure_over_a_slice_pushes_through_its_own_element`), and a store of
+  a view of its own local through one
+  (`drop_of_a_view_type_stores_a_view_of_its_own_local_through_its_own_element`);
+  it refuses a read of that store after the view's source ended
+  (`diag_view_stored_through_an_element_borrow_read_after_its_source_ended`).
+  It ends a view
   of an element pushed through a parameter or a by-name capture
   (`borrow_push_through_a_parameters_element_ends_the_callers_view`,
   `borrow_closure_push_through_a_captures_element_ends_a_view`), which is
