@@ -74231,7 +74231,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // (A `:` copy of a capture's whole value, `: ?String y x`: what a
         // sink is handed of it is the capture's, __clo_cap_source; agora
         // #479.)
-        ? & & != 0 g_bck_closure_depth ( is_ident_tok bck_rhs_tt ) ( __is_clo_capture syms bck_rhs_val ) { ( nurl_sym_def syms ( nurl_str_cat name `__capcopy` ) bck_rhs_val ) } {}
+        // (…and a copy of such a copy, `: String z y`, to the end of the
+        // chain: the capture it copies.)
+        ? & != 0 g_bck_closure_depth ( is_ident_tok bck_rhs_tt ) { ( __clo_capcopy_note syms name bck_rhs_val ) } {}
         // (A value block whose tail is a closure binding of its own is that
         // binding to the walk too, as `: g f`: a move of its env, and what it
         // captured, agora #835.)
@@ -74674,7 +74676,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             } {}
             ? & != 0 g_bck_closure_depth >= ( bck_walk_class ( nurl_llty ptype ) ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
             // (…and a `:` copy of a capture's whole value, as above: agora #479.)
-            ? & & != 0 g_bck_closure_depth ( is_ident_tok bck_rhs_tt ) ( __is_clo_capture syms bck_rhs_val ) { ( nurl_sym_def syms ( nurl_str_cat name `__capcopy` ) bck_rhs_val ) } {}
+            ? & != 0 g_bck_closure_depth ( is_ident_tok bck_rhs_tt ) { ( __clo_capcopy_note syms name bck_rhs_val ) } {}
             : i __cbc ? != 0 ( nurl_str_len __bc_tail ) ( __clo_bind_class syms ( nurl_llty ptype ) val `` ( mem_clo_listed syms __bc_tail ) TT_IDENT name __bc_tail ) ? != 0 ( nurl_str_len __bc_wtail ) 5 ( __clo_bind_class syms ( nurl_llty ptype ) val rhs_closure_env __src_owned_env bck_rhs_tt name bck_rhs_val )
             : s __cbr ? & == __cbc 5 != 0 g_borrowck ? != 0 ( nurl_str_len __bc_wtail ) __bc_wtail ( nurl_sym_get g_bck `reads` ) ``
             = g_bck_bind_owns ? & == bck_rhs_tt TT_LPAREN ! | == 0 ( nurl_str_len g_bck_rhs_lend ) ( seq g_bck_rhs_lend `-` ) 0 1
@@ -102714,6 +102716,14 @@ unsafe @ __die_at_fn s fname s what s msg → v {
     ? & & != 0 ( nurl_str_len __sk_cap ) ( __is_clo_capture syms __sk_cap ) ! __sk_took {
         ( own_die lex ( nurl_str_cat4 ( nurl_str_cat3 `'` name `' is handed to a 'sink' parameter of '` ) fname ( nurl_str_cat3 `', but it is a copy or a part of '` __sk_cap `', a capture of this closure: the closure's environment still holds that value and releases it, so it would be released twice - on a second call, or when the closure is dropped. ` ) ( nurl_str_cat3 `Hand the sink a copy that owns its data (string_clone, mem_dup), or hand it '` __sk_cap `' itself, which the closure then gives up when it runs.` ) ) )
     } {}
+}
+
+// In a closure body, `: T name src`: when src is a capture, or a `:` copy
+// of one (`__capcopy`, however many copies deep), name copies that capture
+// (agora #479).
+@ __clo_capcopy_note i syms s name s src → v {
+    : s cap ? ( __is_clo_capture syms src ) ( nurl_str_cat src `` ) ( nurl_sym_get2 syms src `__capcopy` )
+    ? != 0 ( nurl_str_len cap ) { ( nurl_sym_def syms ( nurl_str_cat name `__capcopy` ) cap ) } {}
 }
 
 // The capture of the closure being compiled that `name` is derived from -
