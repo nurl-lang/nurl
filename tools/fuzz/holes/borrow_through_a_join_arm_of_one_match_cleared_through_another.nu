@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #557: a borrow through `?? ev { A p → ? == c 1 . p a . p b … }` not ended by a clear of `. p a` in a later `??`
+// map: §2.10 | A2 | rejected | - | AGORA-557: a borrow through `?? ev { A p → ? == c 1 . p a . p b … }` not ended by a clear of `. p a` in a later `??`
+// AGORA-557 (this shape, closed): refused (main: accepted, heap-use-after-free)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
