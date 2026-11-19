@@ -61799,6 +61799,28 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
             // (…and `= h2 h`, a `maybealias` row: h's value goes to h2 whole;
             // agora #929.)
             ? | | | | | | | == kc 4 == kc 5 == kc 6 == kc 9 == kc 11 == kc 12 == kc 14 == kc 16 { ( __bck_partly_moved_check ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) st ) } {}
+            // (…and a closure that runs here with an effect on a taken path -
+            // `( g )`, g pushing to `. h buf` after `( take . h buf )`: a
+            // `pendeff` row; agora #929.)
+            ? & == kc 32 ( seq ( bck_field rec 0 ) `pendeff` ) {
+                : s pes ( bck_field rec 1 )
+                ? & != 0 ( nurl_str_len pes ) & >= ( nurl_str_get pes 0 ) 48 <= ( nurl_str_get pes 0 ) 57 {
+                    ( __bck_fmv_check ( nurl_str_to_int pes ) ( bck_field_int rec 3 ) st )
+                    ( __bck_fmv_rel_check ( nurl_str_to_int pes ) ( bck_field_int rec 3 ) st )
+                } {}
+            } {}
+            // (…and one made with such an effect and handed back on its own
+            // line, `^ \ → v { ( string_push_str . h buf … ) }`: nothing gives
+            // the field a value before it runs; agora #929.)
+            ? == kc 34 {
+                : s cxs ( bck_field rec 1 )
+                ? & & != 0 ( nurl_str_len cxs ) & >= ( nurl_str_get cxs 0 ) 48 <= ( nurl_str_get cxs 0 ) 57 ( seq ( bck_field ( bck_rec + p 1 ) 0 ) `ret` ) {
+                    ? ( seq ( bck_field ( bck_rec + p 1 ) 3 ) ( bck_field rec 3 ) ) {
+                        ( __bck_fmv_check ( nurl_str_to_int cxs ) ( bck_field_int rec 3 ) st )
+                        ( __bck_fmv_rel_check ( nurl_str_to_int cxs ) ( bck_field_int rec 3 ) st )
+                    } {}
+                } {}
+            } {}
             // (…and a value block handed to a call, `( grow { h } )`, a
             // `pendlend` row of `@h`: h whole; agora #929.)
             ? & == kc 32 ( seq ( bck_field rec 0 ) `pendlend` ) {

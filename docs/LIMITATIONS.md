@@ -33,10 +33,9 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   round or after it, the taken field handed back itself (`^ . h buf`,
   `^ @ Holder { . h buf }`, `= h @ Holder { . h buf }`; agora #351), a path
   under or over the taken one, and `h` handed on whole by `= h2 h`, `^ @
-  Outer { h }`, a value block `{ h }` or `= . g buf . h buf` (AGORA-929).
+  Outer { h }`, a value block `{ h }` or `= . g buf . h buf`, and a closure made after the take that runs while it is empty or is handed back (AGORA-929).
   These are still accepted, and run into the null handle or freed memory:
-  `h` handed on whole by `^ ? c h h2`; a closure made after the take, `h`
-  captured and returned, or a closure's own `inout` parameter; a `% Drop`
+  `h` handed on whole by `^ ? c h h2`; a closure's own `inout` parameter; a `% Drop`
   destructor that reads the taken field; and an `inout` callee that panics
   between the take and its refill, caught by a `recover` closure that
   captured the struct. Until the fix ships, give the field a value right

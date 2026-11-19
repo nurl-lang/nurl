@@ -1,4 +1,5 @@
-// map: §2.1 | A2 | rejected | - | agora #280: a closure capturing `h` returned after a sink took `. h buf`
+// map: §2.1 | A2 | rejected | - | AGORA-929: a closure capturing `h` returned after a sink took `. h buf`
+// AGORA-929 (this shape, closed; AGORA-280's rest): refused (main 85a31ca6: accepted, a null handle)
 $ `stdlib/core/string.nu`
 
 : Holder { String buf }
