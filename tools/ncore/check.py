@@ -264,6 +264,7 @@ class FnCheck:
         self.ret_fresh = False   # some return hands back a value of the function's own that holds something
         self.temp_none = {}      # a literal temporary -> it is an option's `None`
         self.var_fresh = set()   # the variables given a value of their own that is no `None`
+        self.join_ty = {}        # a join's untyped temporary -> the type of a `% Drop` value an arm gave it
         self.ret_watch = None    # the binding a return handed back, while its `;` blocks run
         self.defer_vars = {}     # a `;` block -> the variables its body names
         self.defer_before = {}   # a `;` block -> the variables bound when it was armed
@@ -4084,6 +4085,14 @@ class FnCheck:
             _, (vid, path), rv, ln = s
             v = self.fn.vars[vid]
             cur = st.vals.get(vid)
+            if (not path and v.kind == "temp" and v.ty in (None, ("v",)) and rv[0] == "use"
+                    and rv[1][0] == "v" and not rv[1][2]):
+                # (a join's temporary the core IR leaves untyped, `? c { ( mk
+                # ) } {}`: released, it runs the arm value's `% Drop` - the
+                # type the arm gave it; agora #917, #766)
+                sty = self.fn.vars[rv[1][1]].ty
+                if sty is not None and self.T.has_udrop(sty):
+                    self.join_ty[vid] = sty
             if not path and st.pb and any(p[0] == vid for p in st.pb):
                 # (a copy that still owes its write-back given another value:
                 # the old copy is never written back - agora #870)
@@ -4390,7 +4399,7 @@ class FnCheck:
             _, vid, ln = s
             av = st.vals.get(vid)
             if av and av.own == "O":
-                self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, ln)
+                self.run_dtor(st, (vid, ()), self.join_ty.get(vid, self.fn.vars[vid].ty), ln)
                 self.effect(st, (vid, ()), "replace", ln)
                 st.vals[vid] = AV("D")
             elif av and self.fn.vars[vid].carried and av.own != "M":
