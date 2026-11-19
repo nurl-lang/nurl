@@ -310,6 +310,10 @@ class Types:
         (a raw string, a slice, a closure, a pointer, anywhere in it)?"""
         if ty is None:
             return True
+        # (a pointer first: is_scalar counts one as a number, but what it
+        # points at may be anyone's storage - nurlc's __ty_holds_view)
+        if ty[0] == "ptr":
+            return True
         if self.is_scalar(ty):
             return False
         k = ty[0]

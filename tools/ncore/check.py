@@ -3914,7 +3914,8 @@ class FnCheck:
         if k in ("vec", "slice", "box"):
             return [(("*",), ty[1])]
         if k == "opt":
-            return [((), ty[1])]
+            # (its payload's place, as lowering spells it: `#T0`)
+            return [(("#T0",), ty[1])]
         if k == "res":
             return [(("#T0",), ty[1]), (("#F0",), ty[2])]
         return []
@@ -3976,8 +3977,19 @@ class FnCheck:
                         self.effect(st, (place[0], (place[1] + tuple(path))[:PATH_MAX]), eff, line)
                 for (rty, tail, eff) in sm.get("regions", ()):
                     self.region_effect(st, rty, tuple(tail), eff)
+        # (…but a field a literal names a binding at, its `lit` handle loan,
+        # is still that binding's: a literal handed to a callee that only
+        # borrows it leaves the binding the owner, and releasing the
+        # literal releases the field nowhere - lit_places)
+        av = st.vals.get(place[0])
+        lit = {tuple(hp) for hp, ln in av.held
+               if isinstance(ln, tuple) and len(ln) == 3 and isinstance(ln[0], tuple)
+               and ln[0] and ln[0][-1] == "lit" and ln[2] == "handle"} if av is not None else set()
         for sub, pty in self.dtor_parts(ty):
-            self.run_dtor(st, (place[0], (place[1] + sub)[:PATH_MAX]), pty, line, seen)
+            p2 = (place[1] + sub)[:PATH_MAX]
+            if tuple(p2) in lit:
+                continue
+            self.run_dtor(st, (place[0], p2), pty, line, seen)
 
     def dtor_regions(self, st, ty, seen=frozenset()):
         """What the `% Drop`s a value of type `ty` holds change inside shared
