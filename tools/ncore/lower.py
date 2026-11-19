@@ -221,6 +221,10 @@ class Types:
             return True   # an owned raw string (nurl_str_cat) owns; a view does not
         if k == "opt":
             return self.owning(ty[1], seen)
+        if k == "res":
+            # (a result whose success or error payload owns memory: as
+            # `owns_handle` already reads it)
+            return any(t is not None and self.owning(t, seen) for t in ty[1:3])
         if k == "named" and ty[1] in getattr(self.prog, "nodrop", ()):
             return False      # nurlc's own answer: it has nothing to release
         if k == "named" and ty[1] in getattr(self.prog, "handle_elem", ()):

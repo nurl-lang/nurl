@@ -103862,10 +103862,11 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
     ? & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__fe_copy` ) { ^ 2 } {}
     ? & & & & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__pslot` ) ! ( seq ( nurl_sym_get2 syms obj `__inout` ) `1` ) == 0 ( nurl_sym_len2 syms obj `__sinkp` ) == 0 ( nurl_str_len g_drop_glue_ty ) { ^ ? ( seq ( nurl_sym_get2 syms obj `__cloparam` ) `1` ) 5 1 } {}
     ? != 0 g_lendcopy_any { ? != 0 ( nurl_sym_len2 syms obj `__lendcopy` ) { ^ 4 } {} } {}
-    // (A `??` arm's payload of a program enum a binding holds: the enum
-    // lends it to the arm, read in place - MEMORY.md, h231 - and the arm
-    // works on a copy of it; agora #883.)
-    ? & != 0 g_epl_n & != 0 ( nurl_sym_len2 syms obj `__enum_pl` ) != 0 ( nurl_sym_len2 syms obj `__plroot` ) { ^ 6 } {}
+    // (A `??` arm's payload of a program enum: the enum lends it to the
+    // arm, read in place - MEMORY.md, h231 - and the arm works on a copy of
+    // it; a matched temporary's too, which drops the old value and leaves
+    // the new one to no one. Agora #883.)
+    ? & != 0 g_epl_n != 0 ( nurl_sym_len2 syms obj `__enum_pl` ) { ^ 6 } {}
     ^ 0
 }
 
