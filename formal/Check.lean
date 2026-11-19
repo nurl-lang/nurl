@@ -543,3 +543,15 @@ import A3
 #print axioms A2.EntryWeaker.fresh_of_not
 #print axioms A2.RhsT.borrow_unfresh
 #print axioms A2.RhsT.at_unfresh
+-- Agora #916: a held-fresh view (a view of an owner of a type that holds no views, or of a
+-- held-fresh borrow) is lifted by a call without the arguments' memory; no new premise removes a
+-- typing, and no view of a borrowed parameter is held-fresh (A2/UnheldFresh.lean)
+#print axioms A2.StmtT.unheld
+#print axioms A2.weaker_unheldC
+#print axioms A2.RhsT.view_unheld
+#print axioms A2.heldSrc_not_rootb
+#print axioms A2.view_rootb_not_heldFresh
+#print axioms A2.view_bor_not_heldFresh
+#print axioms A2.RSetup.heldSrc_lift
+#print axioms A2.RSetup.heldSrc_held_lift
+#print axioms A2.RSetup.memDeps_heldA
