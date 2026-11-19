@@ -217,7 +217,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro _
     obtain ⟨E0, h0, hm0, ht0⟩ := harg.domTy.2 x Ex1 hx1
     exact (harg.domTy.killNames (thruDeps op Γ1 Ex.ty Ex1.path)).setE ⟨E0, h0, hm0, ht0⟩
-  | @editBV _ Γ Γ1 F x op Ex Ex1 t D _ _ _ _ _ _ _ harg _ hx1 _ _ _ _ =>
+  | @editBV _ Γ Γ1 F x op Ex Ex1 t D _ _ _ _ _ _ _ _ harg _ hx1 _ _ _ _ =>
     intro _
     obtain ⟨E0, h0, hm0, ht0⟩ := harg.domTy.2 x Ex1 hx1
     exact ((harg.domTy.killHv (thruKills op Γ1 Ex.ty Ex1.path)).holdOn _ _).setE ⟨E0, h0, hm0, ht0⟩

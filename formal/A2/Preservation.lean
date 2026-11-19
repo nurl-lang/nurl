@@ -3004,7 +3004,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy hpa htk
         exact fin (MInv.editB_setOOB post.inv (post.rel.anch hanch) hx1 hmx hl1 hty hhv hthru hp hno hfr)
           (by simp [post.nv]) (covers_editSetOOB (covers_takeVal hi.cover htk) hfr) post.frz
-  | @editBV ξ Γ Γ1 F x op Ex Ex1 t D hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 _ hthru hV =>
+  | @editBV ξ Γ Γ1 F x op Ex Ex1 t D bb hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 _ hthru hV =>
     intro m m' s' hcd hi hst
     have hanch := hi.leafAnch rfl
     have hrel := CtxRel.editBV hanch hx hmx harg hyx hx1 hl1 hthru hV

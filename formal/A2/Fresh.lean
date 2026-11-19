@@ -124,7 +124,7 @@ theorem StmtT.freshOK {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : 
     intro _ h
     obtain ⟨h1, _⟩ := harg.freshOK h
     exact h1.reset ((FreshLe.refl Γ1).killNames _) ((KeepsFrame.refl Γ1).killNames _) hx1 rfl rfl rfl rfl rfl
-  | @editBV _ Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru _ =>
+  | @editBV _ Γ Γ1 F x op Ex Ex1 t D _ hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru _ =>
     intro _ h
     obtain ⟨h1, _⟩ := harg.freshOK h
     exact h1.reset (((FreshLe.refl Γ1).killHv _).trans (FreshLe.holdOn _ _ _))

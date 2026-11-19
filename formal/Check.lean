@@ -556,3 +556,22 @@ import A3
 #print axioms A2.RSetup.heldSrc_held_lift
 #print axioms A2.RSetup.memDeps_heldA
 #print axioms A2.heldFresh_view_witness
+-- Agora #916, option (a): a view of an owner or `inout` parameter may be fresh, never one of a
+-- borrowed parameter or a borrow; a kill does not read the bits; an edit of view-holding elements
+-- through a fresh borrow, storing a value the frame's own, is an `edit false`
+#print axioms A2.hits_fresh_irrel
+#print axioms A2.view_rootb_not_fresh
+#print axioms A2.view_bor_not_fresh
+#print axioms A2.derive_freshE
+#print axioms A2.RSetup.pushArg_ren_held
+#print axioms A2.RSetup.editBV_ren
+-- ... and a destructor of a type that holds views stores a fresh, held-fresh view of its own local
+-- through a fresh borrow of its own local: an `edit false`, not through-changing, run by an armed
+-- `letd` handed a value that holds views (A2/StoreViewWitness.lean)
+#print axioms A2.StoreViewWitness.edit_typed
+#print axioms A2.StoreViewWitness.dtor_not_thru
+#print axioms A2.StoreViewWitness.dtor_ok
+#print axioms A2.StoreViewWitness.prog_ok
+#print axioms A2.StoreViewWitness.main_typed
+#print axioms A2.StoreViewWitness.main_safe
+#print axioms A2.StoreViewWitness.main_no_leak
