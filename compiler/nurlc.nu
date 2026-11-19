@@ -34930,6 +34930,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // exclusive call checks — `callx`.)
     : ~ i __sx_naddr 0
     : ~ i __sx_nown 0
+    // (A literal argument that takes two names or more in, `@ S { sv b }`:
+    // one may view another, which the value would then hold - agora #563.)
+    : ~ b __sx_litn F
     // The first argument when it is a bare binding: the container a
     // keeping callee (vec_push's element) stores the others into — or a
     // field of one that holds storage (`. tk arena`).
@@ -35877,6 +35880,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // name of its own rows, agora #499.)
             ? & ! ( is_ident_tok bck_arg_tt ) == 0 ( nurl_str_len arg_froot ) { = arg_sxl | ( __sx_lendy arg_sx ) & & == bck_arg_tt TT_LBRACE ! ( __sx_lends_any arg_sx ) & < ( nurl_str_find arg_sx `*` ) 0 ( __sx_names_any arg_sx ) } {}
             ? & & | == __sx_c0 0 == __sx_c0 3 != bck_arg_tt TT_DOT arg_sxl { = __sx_nown + __sx_nown 1 } {}
+            // (…and a struct literal that takes a binding in, `@ S { b 0 }`:
+            // what the callee may grow or release is that binding's storage,
+            // which another argument may view - agora #563.)
+            ? & & & ! arg_sxl == bck_arg_tt TT_AT | == __sx_c0 0 == __sx_c0 3 & != 0 ( nurl_str_len arg_sx ) ( __sx_names_any arg_sx ) { = __sx_nown + __sx_nown 1 } {}
             // (A holder the caller sees changed: one passed `inout`, or a
             // value with storage of its own a callee can push into — not a
             // view or a struct of views, the callee's own copy.)
@@ -37626,6 +37633,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // move, the literal's own stores say who owns them; agora #799.)
         // (The names the literal takes, not those a call in it reads — `@
         // X { ( vec_clone xs ) }` holds a copy: __sx_top_names.)
+        ? & & & != 0 g_borrowck == bck_arg_tt TT_AT != 0 ( nurl_str_len arg_sx ) == 123 ( nurl_str_get arg_sx 0 ) {
+            ? >= ( nurl_str_find ( __sx_top_names arg_sx ) ` ` ) 0 { = __sx_litn T } {}
+        } {}
         ? & & & != 0 g_borrowck == bck_arg_tt TT_AT __row_callee != 0 ( nurl_str_len arg_sx ) {
             : ~ s __lns ( __sx_top_names arg_sx )
             ~ != 0 ( nurl_str_len __lns ) {
@@ -38604,7 +38614,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // Two arguments that may share storage: whether the callee may move
         // or free one's buffer, or drop its elements, while the other points
         // into it is decided at the walk (an exclusive call: `callx`).
-        ? & & & >= __sx_naddr 2 >= __sx_nown 1 __sx_sum ! __callee_shadowed {
+        ? & & | & >= __sx_naddr 2 >= __sx_nown 1 __sx_litn __sx_sum ! __callee_shadowed {
             // (On the call's own line: the lexer stands past its `)`, at
             // the next statement — or the `}` — by now; agora #773.)
             ( bck_stash_vpass `-` __call_line call_name -1 ( nurl_str_cat4 call_name `(` call_sx `)` ) )
@@ -64967,10 +64977,137 @@ unsafe @ __sx_mut_roots s st s e b named → s {
 // storage with another argument — the same owner passed twice, or a view
 // or a borrow of it. Inside the callee the two are unrelated names, and
 // the mutation through one leaves the other dangling.
+// The top-level fields of literal source expression `sx` (`{a;f(b|c);{d;e}}`),
+// one per line.
+@ __sx_lit_fields s sx → s {
+    : i n ( nurl_str_len sx )
+    ? | < n 2 == 0 ( nurl_str_starts sx `{` ) { ^ ( nurl_str_cat `` `` ) } {}
+    // (Split at each `;`, joined back while the piece so far opens more
+    // than it closes: a call's or a nested literal's own `;`.)
+    : ~ s rest ( nurl_str_slice sx 1 - n 2 )
+    : ~ s out ``
+    : ~ s cur ``
+    : ~ b more T
+    ~ more {
+        : i k ( nurl_str_find rest `;` )
+        : s piece ? < k 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 k )
+        = rest ? < k 0 `` ( nurl_str_slice rest + k 1 - - ( nurl_str_len rest ) k 1 )
+        = more >= k 0
+        = cur ? == 0 ( nurl_str_len cur ) ( nurl_str_cat piece `` ) ( nurl_str_cat3 cur `;` piece )
+        ? | ! more == 0 ( __sx_depth cur ) {
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat cur `` ) ( nurl_str_cat3 out `\n` cur )
+            = cur ``
+        } {}
+    }
+    ^ out
+}
+
+// How many more `(` and `{` than `)` and `}` source expression `s` has.
+@ __sx_depth s s → i {
+    ^ - + ( __ch_count s `(` ) ( __ch_count s `{` ) + ( __ch_count s `)` ) ( __ch_count s `}` )
+}
+
+// How many times one-character `c` occurs in `s`.
+@ __ch_count s s s c → i {
+    : ~ i n 0
+    : ~ s rest ( nurl_str_cat s `` )
+    : ~ i k ( nurl_str_find rest c )
+    ~ >= k 0 {
+        = n + n 1
+        = rest ( nurl_str_slice rest + k 1 - - ( nurl_str_len rest ) k 1 )
+        = k ( nurl_str_find rest c )
+    }
+    ^ n
+}
+
+// Each literal among a call's arguments (`args`, its `|`-joined source
+// expressions): a field whose storage another field of it points into or
+// borrows from - the value built would view its own field (agora #563).
+@ __bck_lit_self_view_check s st s args s cal i line → v {
+    : ~ s rest ( bck_sx_split args )
+    : ~ i j 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s aj ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        // (Only a literal the callee keeps, takes over or changes: one it
+        // only reads is gone with the statement, agora #563's guard.)
+        : s js ( nurl_str_int j )
+        : b jtake | | | ( bck_callee_keeps cal js ) ( nurl_sym_has_word g_fn_sink cal js ) ( bck_callee_drops_elems cal js ) | ( nurl_sym_has_word g_fn_reallocs cal js ) ( nurl_sym_has_word g_fn_mutates cal js )
+        ? & & jtake != 0 ( nurl_str_len aj ) == 123 ( nurl_str_get aj 0 ) {
+            ? ( __bck_lit_fields_check st aj cal j line ) { ^ v } {}
+        } {}
+        = j + j 1
+    }
+}
+
+// The storage a literal field takes in: a binding that owns its value (not
+// a view or a borrow of one), or the owners a nested literal takes in, at
+// any depth (`@ Outer { @ Inner { b } sv }`: b; github#2086's review).
+@ __bck_lit_owner_storage s st s fa → s {
+    ? ( bck_sx_is_id fa ) {
+        : i faid ( nurl_str_to_int fa )
+        : b fown & == BCK_OWNED ( bck_st_get st faid ) == 0 ( nurl_sym_len g_bck ( bck_bkey `vw_` ( nurl_str_int ( bck_path_root faid ) ) ) )
+        ^ ? fown ( bck_sx_mut_storage st fa ) ( nurl_str_cat `` `` )
+    } {}
+    ? | == 0 ( nurl_str_len fa ) != 123 ( nurl_str_get fa 0 ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s out ``
+    : ~ s fr ( __sx_lit_fields fa )
+    ~ != 0 ( nurl_str_len fr ) {
+        : i k ( nurl_str_find fr `\n` )
+        : s f ? < k 0 ( nurl_str_cat fr `` ) ( nurl_str_slice fr 0 k )
+        = fr ? < k 0 `` ( nurl_str_slice fr + k 1 - - ( nurl_str_len fr ) k 1 )
+        : s m ( __bck_lit_owner_storage st f )
+        ? & != 0 ( nurl_str_len m ) ! ( seq m `*` ) { = out ( __word_union out m ) } {}
+    }
+    ^ out
+}
+
+// One literal argument `aj` (argument j of `cal`): a field whose owners
+// (__bck_lit_owner_storage) another field points into or borrows from, or
+// the same inside a literal nested in it. T where it was refused.
+@ __bck_lit_fields_check s st s aj s cal i j i line → b {
+    : s fs ( __sx_lit_fields aj )
+    : ~ s fa_rest ( nurl_str_cat fs `` )
+    ~ != 0 ( nurl_str_len fa_rest ) {
+        : i anl ( nurl_str_find fa_rest `\n` )
+        : s fa ? < anl 0 ( nurl_str_cat fa_rest `` ) ( nurl_str_slice fa_rest 0 anl )
+        = fa_rest ? < anl 0 `` ( nurl_str_slice fa_rest + anl 1 - - ( nurl_str_len fa_rest ) anl 1 )
+        // (A nested literal is a value of its own as well.)
+        ? & != 0 ( nurl_str_len fa ) == 123 ( nurl_str_get fa 0 ) {
+            ? ( __bck_lit_fields_check st fa cal j line ) { ^ T } {}
+        } {}
+        : s ma ( __bck_lit_owner_storage st fa )
+        ? & ! ( seq ma `*` ) != 0 ( nurl_str_len ma ) {
+            : ~ s fb_rest ( nurl_str_cat fs `` )
+            ~ != 0 ( nurl_str_len fb_rest ) {
+                : i bnl ( nurl_str_find fb_rest `\n` )
+                : s fb ? < bnl 0 ( nurl_str_cat fb_rest `` ) ( nurl_str_slice fb_rest 0 bnl )
+                = fb_rest ? < bnl 0 `` ( nurl_str_slice fb_rest + bnl 1 - - ( nurl_str_len fb_rest ) bnl 1 )
+                ? & ! ( seq fb fa ) != 0 ( nurl_str_len fb ) {
+                    : s sb ( bck_sx_arg_sources st fb )
+                    : s hit ? ( seq sb `*` ) `` ( bck_alias_conflict ma sb T )
+                    ? != 0 ( nurl_str_len hit ) {
+                        : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int hit ) ) ) ) )
+                        ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat4 ( nurl_str_cat3 `the literal handed to '` ( bck_fn_show cal ) `' as argument ` ) ( nurl_str_int + j 1 ) ( nurl_str_cat3 ` would view its own field: it is given '` nm `' and holds a view of '` ) ( nurl_str_cat3 nm `' at once, so growing or replacing that field (vec_reserve, a push, a new value) would leave the view dangling inside it - wherever it goes. Put a copy that owns its data in the literal instead of the view (slice_to_vec, string_from, mem_dup), or take the view again from the field where it is read.` `` ) ) )
+                        ^ T
+                    } {}
+                } {}
+            }
+        } {}
+    }
+    ^ F
+}
+
 @ bck_call_alias_check s st s sx i line → v {
     : i lp ( nurl_str_find sx `(` )
     ? < lp 0 { ^ } {}
     : s cal ( nurl_str_slice sx 0 lp )
+    // (A literal argument whose fields share storage - one taken in, `b`,
+    // another viewing it, `sv`: the value built views its own field, A2's
+    // SelfFree, refused as `: S y @ S { sv b }` is wherever the literal goes;
+    // agora #563.)
+    ? != 0 g_bck_has_borrow { ( __bck_lit_self_view_check st ( nurl_str_slice sx + lp 1 - - ( nurl_str_len sx ) lp 2 ) cal line ) } {}
     // (A callee that moves or drops nothing it is handed: nothing to check.)
     : i lk ( bck_lib_kind ( bck_generic_base cal ) )
     // (…nor one that takes over none: a `sink` parameter's value is the
@@ -97979,6 +98116,16 @@ unsafe @ __brace_close s s → i {
 
 // The payload type of an option `{ i1, T }` whose T is a String, a Vec or
 // an owning struct; `` otherwise.
+// Does option (or result) type `ty` own something, so that it is dropped
+// through a twin of its own: what __wrap_twin answers, without building the
+// twin. Its payload or its error owns. (Asked through __wrap_twin, an option
+// of an option of … built each level's twin twice - once here, once
+// through __drop_mangle - exponential in the depth; agora #914.)
+@ __opt_owns s ty → b {
+    ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ F } {}
+    ^ | != 0 ( nurl_str_len ( __opt_payload ty ) ) != 0 ( nurl_str_len ( __opt_err_payload ty ) )
+}
+
 @ __opt_payload s ty → s {
     : i n ( nurl_str_len ty )
     // An option of an option that owns something (`??String`, `??Res`):
@@ -97986,7 +98133,7 @@ unsafe @ __brace_close s s → i {
     ? & & > n 12 != 0 ( nurl_str_starts ty `{ i1, { i1, ` ) == ( nurl_str_get ty - n 1 ) 125 {
         : s ip ( nurl_str_slice ty 6 - n 8 )
         ? == ( __brace_close ip ) - ( nurl_str_len ip ) 1 {
-            ? != 0 ( nurl_str_len ( __wrap_twin ip ) ) { ^ ip } {}
+            ? ( __opt_owns ip ) { ^ ip } {}
         } {
             // …or a result of one (`! ?String E`): T up to its brace, an
             // error of plain words or one that owns (its own drop).
@@ -97994,7 +98141,7 @@ unsafe @ __brace_close s s → i {
             ? >= te 0 {
                 : s t ( nurl_str_slice ip 0 te )
                 : s e ( nurl_str_slice ip + te 2 - - ( nurl_str_len ip ) te 2 )
-                ? & != 0 ( nurl_str_len ( __wrap_twin t ) ) | < ( nurl_str_find e ` ` ) 0 | ( __opt_of_words e ) != 0 ( nurl_str_len ( __wrap_twin e ) ) { ^ t } {}
+                ? & ( __opt_owns t ) | < ( nurl_str_find e ` ` ) 0 | ( __opt_of_words e ) ( __opt_owns e ) { ^ t } {}
             } {}
         }
         ^ ( nurl_str_cat `` `` )
