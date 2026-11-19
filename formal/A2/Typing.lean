@@ -389,6 +389,14 @@ def FreshOK (Γ : Ctx) : Prop := ∀ v E, Γ v = some E → FreshE Γ E
 def FreshSrc (Γ : Ctx) (y : Var) : Prop :=
   ∃ E, Γ y = some E ∧ (E.mode.frame ∨ (E.mode = .bor ∧ E.fresh = true ∧ E.live = true ∧ E.ty ≠ .int))
 
+/-- Agora #916: what a held-fresh borrow may be taken from: an owner (or an
+    `inout` parameter) of a type that holds no views, which holds no memory
+    an argument could, or a live held-fresh borrow. Never a borrowed
+    parameter: what it holds is its caller's. -/
+def HeldSrc (Γ : Ctx) (y : Var) : Prop :=
+  ∃ E, Γ y = some E ∧ ((E.mode.ownSlot = true ∧ E.ty.holdsView = false) ∨
+    (E.mode = .bor ∧ E.heldFresh = true ∧ E.live = true))
+
 @[simp] theorem Entry.fresh_vdeps (E : Entry) (f : Bool) : ({ E with fresh := f } : Entry).vdeps = E.vdeps := rfl
 
 theorem Entry.with_fresh_eq {E : Entry} (h : E.fresh = false) : ({ E with fresh := false } : Entry) = E := by
@@ -810,11 +818,13 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- holds) borrowed from the frame's own memory may be fresh
       (hf : f = true → FreshSrc Γ y ∧ ∀ s, t ≠ .slice s := by fresh_src) →
       RhsT Γ F (.at y i) { elemE y E t with fresh := f } Γ
-  | view {y : Var} {E : Entry} {t : Ty} :
+  | view {y : Var} {E : Entry} {t : Ty} {h : Bool} :
       Γ y = some E → E.live = true → E.ty = .vec t → t.holdsView = false →
       -- (A3.1's slices of shares: its elements may be shares, lent as
       -- `vec_at` lends them)
-      RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false, false, false⟩ Γ
+      -- Agora #916: the view may be held-fresh if what `y` holds is the frame's own
+      (hh : h = true → HeldSrc Γ y := by fresh_src) →
+      RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false, false, h⟩ Γ
   | sat {y : Var} {i : Expr} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .slice t → ExprT Γ i →
       RhsT Γ F (.sat y i) (elemE y E t) Γ
