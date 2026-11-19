@@ -4682,6 +4682,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hnc := canon_names h habo hno
     rw [canon_setE h, canon_kill h hab1 (allowed_canDo hab hx hty hcan)] at hwc hnc ⊢
     have hty1 : Ex1.ty = .vec t := by rw [PushArg.ty_at hpa hy hx hx1, hty]
+    -- (Agora #916: an owner, or an `inout` parameter, is lifted with all the
+    -- arguments hold)
+    have hhA1 : S.heldA Ex1 = S.A :=
+      S.heldA_own (by rw [PushArg.mode_at hpa hy hx hx1]; exact hcan.ownSlot)
+    have hhA1' : S.heldA { Ex1 with held := Ex1.held ++ ownHeld true t D } = S.A := hhA1
     have hD'' : D' ⊆ rds S.ρ D ++ ownHeld Ex1.mode.ownSlot Ex1.ty S.A := by
       intro d hd
       rcases List.mem_append.mp (hD'o htyy hd) with h1 | h1
@@ -4701,7 +4706,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       · rw [ownHeld_views true hv D']
         have hD0 : rds S.ρ D ⊆ rds S.ρ Ex1.held := by
           rw [← ownHeld_views true hv D]; exact rds_subset hsub
-        simp only [liftE, hrb1, ↓reduceIte]
+        simp only [liftE, hrb1, ↓reduceIte, hhA1]
         exact fun d hd' => (append_sub hD0 (List.Subset.refl _)) (hD'' hd')
       · have hv' : t.holdsView = false := by simpa using hv
         simp [ownHeld, hv']
@@ -4722,10 +4727,13 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (hf := fun _ _ hb _ => absurd hb (by
         rw [show Ex1.mode = Ex.mode from PushArg.mode_at hpa hy hx hx1]
         rcases hcan with h1 | ⟨b', h1, _⟩ <;> simp [liftE, hrb1, h1, liftMode]))
+      (hg := fun _ hb _ => absurd hb (by
+        rw [show Ex1.mode = Ex.mode from PushArg.mode_at hpa hy hx hx1]
+        rcases hcan with h1 | ⟨b', h1, _⟩ <;> simp [liftE, hrb1, h1, liftMode]))
       (hdh := fun hh _ _ d _ => by
         have hd0 : Ex1.dbind = true := by simpa [liftE, hrb1] using hh
         have hsub := hdb hd0
-        simp only [liftE, hrb1, ↓reduceIte, rds, List.map_append, List.mem_append]
+        simp only [liftE, hrb1, ↓reduceIte, hhA1, hhA1', rds, List.map_append, List.mem_append]
         constructor
         · rintro ((h1 | h1) | h1)
           · exact Or.inl (Or.inl h1)
@@ -4743,7 +4751,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
               · exact Or.inr h2
             · have hv' : t.holdsView = false := by simpa using hv
               simp [ownHeld, hv'] at h1)
-    simp only [liftE, hrb1, ↓reduceIte]
+    simp only [liftE, hrb1, ↓reduceIte, hhA1, hhA1']
     by_cases hv : t.holdsView = true
     · have h1 : ownHeld true t D' = D' := ownHeld_views true hv D'
       have h2 : ownHeld true t D = D := ownHeld_views true hv D
