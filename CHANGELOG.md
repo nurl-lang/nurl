@@ -24,7 +24,7 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
 
 ### Changed
 
-- **The list of open soundness holes in `docs/LIMITATIONS.md` is re-checked against main** (2026-11-15 sweep). Every open-hole entry and every open hole task was re-run under ASan. Seventeen entries whose holes are closed are gone, among them #424, #460, #462, #466, #487, #545, #560, #575, #631, #637, #647, #669, #677, #738, #776, #797 and #800. The entries for #242, #479 and #838 now say only what still faults. #638's rest moves under #846, and #656's keep twin becomes #868. Ten open holes that had no entry now have one: #563, #569, #606, #762, #789, #812, #842, #844, #846 and #847. That made 37 known open at the sweep; twelve are open at this release (Known issues, below). Ten elaborated twins in `open/twins.txt` no longer fault, and `check.sh` runs them again.
+- **The list of open soundness holes in `docs/LIMITATIONS.md` is re-checked against main** (2026-11-15 sweep). Every open-hole entry and every open hole task was re-run under ASan. Seventeen entries whose holes are closed are gone, among them #424, #460, #462, #466, #487, #545, #560, #575, #631, #637, #647, #669, #677, #738, #776, #797 and #800. The entries for #242, #479 and #838 now say only what still faults. #638's rest moves under #846, and #656's keep twin becomes #868. Ten open holes that had no entry now have one: #563, #569, #606, #762, #789, #812, #842, #844, #846 and #847. That made 37 known open at the sweep; eleven are open at this release (Known issues, below). Ten elaborated twins in `open/twins.txt` no longer fault, and `check.sh` runs them again.
 
 - **nurlc compiles itself in 15.7% less memory and 1.2% fewer instructions.** Self-compile on a fixed input: peak RSS 248,406 → 209,113 KB (−39 MB); callgrind 24,819.7M → 24,520.7M instructions. Two causes:
   - **The print buffer.** `nurl_print_buf_stop` copied the captured bytes into a new string. nurlc captures its whole module IR, tens of megabytes, so the copy and its buffer were both live at the compile's peak. A frame that holds the whole buffer, at least 64 KB, now hands the buffer itself back, shrunk to fit. The next write starts a new buffer. A smaller frame is copied as before. The block is counted as the copy was, so allocation and leak accounting are unchanged.
@@ -91,6 +91,8 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
 - **The formal proof covers a destructor of a type that holds views when it stores a view of its own local through a borrow of its own local** (Agora #916). Before, A2 typed every store of a view through a borrow as a change that may reach the caller's memory, so such a destructor was outside the claim. A2 now lets a view of a local `Vec` be fresh (it reaches only that `Vec`'s buffer) and held-fresh (it holds nothing an argument does), and types a store of such a view through a fresh borrow as one that changes only the destructor's own memory. Take a `% Drop` of `: V { ( Slice i ) s i k }` that pushes `( slice_from_vec w )` of a local `Vec i` into `( vec_at loc 0 )` of a local `Vec ( Vec ( Slice i ) )`. nurlc accepts it, it runs clean, and `A2/StoreViewWitness.lean` types it, memory safe and leak-free. This changes the calculus only; NURL source is unchanged. `formal/CLAIM.md` moves the case into the claim. A store of a view of a borrowed parameter stayed outside here, since what it holds is the caller's memory. Agora #909's own example (above) brings it in where the borrow it is stored through is not held-fresh.
 
 - **The formal proof records which borrows hold only the frame's own memory, and a call no longer adds its arguments' memory to them** (Agora #916, first part). Before, a call's setup added everything its arguments hold to what every borrow of the callee holds, so a view stored into a vector through a borrow always counted as holding the caller's memory. A2 now records, for each borrow, whether what it holds in memory is only blocks of the frame's own bindings (`Entry.heldFresh`). A view of a local `Vec` of a type that holds no views may carry this bit; a view of a borrowed parameter never does. A call lifts such a borrow with only the names its arguments hold. Two places clear the bit, since they add argument memory: an `inout` argument after a call, and a closure call's result. This changes the calculus only; NURL source is unchanged. Each new premise holds with the bit off (`A2/UnheldFresh.lean`), so a program typed before is typed with every bit off. The claim does not change yet: a change of elements that hold views is still typed as one that may change the caller's memory.
+
+- **The formal proof covers a call that hands a view to a function changing the elements of its `inout` parameter** (AGORA-909, github#2041). A2 now has a witness for `( g vv s )` where `g` pushes through `( vec_at vv 0 )` of its `inout` parameter and `s`, a view of another value, is read after the call: `A2/InoutViewArgWitness.lean` types it, memory safe and leak-free. No rule changed: the push is through a borrow of the function's own `inout` parameter, so the call asks nothing of the view. A view of `vv` itself stays refused. NURL source is unchanged.
 
 ### Performance
 
@@ -246,37 +248,39 @@ Unreleased changes are fragments in [`changes/unreleased/`](changes/unreleased/)
 
 - **Releasing a closure runs the destructors of what it took over, and the check sees it** (AGORA-919). Take a closure that a call hands back, built over a `sink` argument with a `% Drop` that clears or grows a shared `Rc` payload (`@ mkf sink H h → ( @ i ) { ^ \ → i { … h … } }`). Releasing it ran that destructor. A view taken through another handle on the same `Rc` stayed live, and reading it read freed memory. Such a read is now refused where it happens. This covers a closure bound by `:` or given by `=`, one made through a forwarder or in a value block's tail, and one a wrapper builds over such a closure (`( wrap c )`, `( wrap ( mkf h ) )`, `( wrap { ( mkf h ) } )`, `( wrap { c } )`, a wrapper of a wrapper). A wrapper over a closure whose maker dropped the value before it returned runs no `drop` when released, and is not refused. A closure whose maker does not take the value over, and a destructor that only reads, are not affected.
 
+- **A borrow taken through a `??` whose arm is a ternary of payload fields ends when a later `??` changes that payload** (AGORA-557, the join-arm shape). `: k ?? ev { A p → ? == c 1 . p a . p b … }` borrowed nothing, so an element of `k` read after `?? ev { A p → { ( vec_clear . p a ) } … }` read freed memory. It is refused now: read the borrow before the second match.
+
+- **A view of an argument's element can no longer be handed beside it to a callee that grows that element** (AGORA-923). `( g vv s )`, where s is a slice of `( vec_at vv 0 )` and g pushes through `( vec_at vv 0 )` of its borrowed `vv` before reading s, was accepted and read freed memory. It is refused now: pass a copy that owns its data (`slice_to_vec`), or read what s reaches inside the callee. A view of an unrelated `Vec` handed beside it is still accepted.
+
 ### Security
 
 - **The documentation site is built with Next.js 16.4.6.** 16.4.3 is inside the range of GHSA-mfr8-8qww-v76h (information disclosure across root params when a `'use cache'` function is called through `unstable_cache()`, moderate), which `pnpm audit` in CI refused. Only `next` and its `@next/*` packages change in the lockfile.
 
 ### Known issues
 
-- **Twelve soundness holes are open, each with a fix in progress**:
+- **Eleven soundness holes are open, each with a fix in progress**:
   agora #242 (a join or a value block bound by `:` and then handed on by
   name, in seven remaining shapes), #280 (a field a `sink` took, used
   again by a route the check does not see), #479 (a closure body handing
   a `sink` a value derived from its capture, and a statement-form match
-  arm returning a closure over a borrowed field), #557 (a borrow through
-  one `??` and a change of the payload's field in another, the join-arm
-  shape), #563 (a value that views its own field, moved out of its frame
-  or passed as a temporary literal), #606 (a struct parameter whose
-  field views another field, inside the callee), #793 (a parameter put
-  into a local by a spelling the keep summary or the put tracking
-  misses), #883 (a field of a program enum's `??` payload given a new
-  value through the payload binding), #892 (a `sink` slice parameter),
-  #894 (a slice a call made, handed to a closure whose slice result may
-  be it), #895 (a slice a call made, kept by its callee in a struct or
-  option it returns, and a literal temporary read only for a field) and
-  #903 (a slice join's fresh arm in more places). `docs/LIMITATIONS.md`
-  gives each one's shape and how to stay clear of it. Closed in this
-  release: agora #292, #351, #382, #384, #395, #402, #424, #428, #460,
-  #462, #466, #481, #487, #489, #495, #545, #560, #569, #575, #580,
-  #583, #627, #631, #637, #638, #647, #656, #669, #677, #689, #696,
-  #738, #762, #766, #774, #776, #789, #797, #800, #811, #812, #813,
-  #832, #833, #834, #838, #839, #840, #841, #842, #844, #846, #847,
-  #848, #851, #868. A release does not say "no hole is known open" while
-  one is.
+  arm returning a closure over a borrowed field), #563 (a value that
+  views its own field, moved out of its frame or passed as a temporary
+  literal), #606 (a struct parameter whose field views another field,
+  inside the callee), #793 (a parameter put into a local by a spelling
+  the keep summary or the put tracking misses), #883 (a field of a
+  program enum's `??` payload given a new value through the payload
+  binding), #892 (a `sink` slice parameter), #894 (a slice a call made,
+  handed to a closure whose slice result may be it), #895 (a slice a
+  call made, kept by its callee in a struct or option it returns, and a
+  literal temporary read only for a field) and #903 (a slice join's
+  fresh arm in more places). `docs/LIMITATIONS.md` gives each one's
+  shape and how to stay clear of it. Closed in this release: agora #292,
+  #351, #382, #384, #395, #402, #424, #428, #460, #462, #466, #481,
+  #487, #489, #495, #545, #557, #560, #569, #575, #580, #583, #627,
+  #631, #637, #638, #647, #656, #669, #677, #689, #696, #738, #762,
+  #766, #774, #776, #789, #797, #800, #811, #812, #813, #832, #833,
+  #834, #838, #839, #840, #841, #842, #844, #846, #847, #848, #851,
+  #868. A release does not say "no hole is known open" while one is.
 
 ## [0.92.1] — 2026-11-14
 
