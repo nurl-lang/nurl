@@ -4060,17 +4060,17 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
   · -- the borrow holds what was stored, renamed or less
     have hl' : S.liftE x Ex1 = ⟨Ex1.ty, liftMode Ex1.mode, Ex1.live,
         rds S.ρ Ex1.path ++ (if Ex1.fresh && Ex1.ty != .int then [] else S.A),
-        rds S.ρ Ex1.held ++ S.A, Ex1.dtor, Ex1.dbind, Ex1.fresh, false⟩ := by
-      simp [RSetup.liftE, hmx, Mode.ownSlot]
+        rds S.ρ Ex1.held ++ S.heldA Ex1, Ex1.dtor, Ex1.dbind, Ex1.fresh, Ex1.heldFresh⟩ := by
+      simp [RSetup.liftE, hmx, Mode.ownSlot, ownHeld, RSetup.heldA]
     have hl'' : S.liftE x { Ex1 with held := Ex1.held ++ memDeps D } = ⟨Ex1.ty, liftMode Ex1.mode,
         Ex1.live, rds S.ρ Ex1.path ++ (if Ex1.fresh && Ex1.ty != .int then [] else S.A),
-        rds S.ρ (Ex1.held ++ memDeps D) ++ S.A, Ex1.dtor, Ex1.dbind, Ex1.fresh, false⟩ := by
-      simp [RSetup.liftE, hmx, Mode.ownSlot]
+        rds S.ρ (Ex1.held ++ memDeps D) ++ S.heldA Ex1, Ex1.dtor, Ex1.dbind, Ex1.fresh, Ex1.heldFresh⟩ := by
+      simp [RSetup.liftE, hmx, Mode.ownSlot, ownHeld, RSetup.heldA]
     rw [hl', hl'']
     refine ⟨rfl, rfl, fun hf => absurd hf ?_, fun hl' => ⟨hl', fun _ => List.Subset.refl _, ?_⟩,
       fun h' => ⟨h', ?_⟩, rfl, fun h' => Or.inl h', fun _ hos => ?_,
       fun _ _ _ hfr => ⟨hfr, List.Subset.refl _⟩,
-      fun _ _ hhf => by heldfresh_ew⟩
+      fun _ _ hhf => hhf⟩
     · intro hf
       rcases hf with h' | ⟨b, h', _⟩ <;> rw [hmx] at h' <;> simp [liftMode] at h'
     rotate_right
@@ -4171,11 +4171,32 @@ theorem compE_liftE_weaker {x y : Var} {Ex : Entry} {t : Ty} (hhv : t.holdsView 
     (or the slice's borrow) `compE` makes of the lifted borrow is the lifted
     one: both hold what the borrow holds, renamed, and what the call's
     arguments hold. -/
-theorem compE_liftE_eqV {x y : Var} {Ex : Entry} {t : Ty} (hmx : Ex.mode = .bor)
-    (hhv : t.holdsView = true) : S.liftE y (compE Ex t) = compE (S.liftE x Ex) t := by
-  cases t <;> first
-    | (simp [Ty.holdsView] at hhv; done)
-    | simp [liftE, compE, liftMode, ownHeld, rds, Mode.ownSlot, intE, hhv, hmx]
+theorem compE_liftE_weakerV {x y : Var} {Ex : Entry} {t : Ty} (hmx : Ex.mode = .bor)
+    (hhv : t.holdsView = true) : EntryWeaker (compE (S.liftE x Ex) t) (S.liftE y (compE Ex t)) := by
+  have hrb : Ex.mode ≠ .rootb := by rw [hmx]; simp
+  -- (Agora #916: a held-fresh borrow's lift holds less, so the field taken
+  -- out of it, as the rule makes it, holds at most what the lift says)
+  have hH : (S.liftE x Ex).held ⊆ rds S.ρ Ex.held ++ S.A := by
+    rw [liftE_held hrb]; simp only [hmx, Mode.ownSlot, ownHeld, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
+    exact append_sub (List.Subset.refl _) (S.heldA_sub _)
+  by_cases hs : ∃ s, t = .slice s
+  · obtain ⟨s, rfl⟩ := hs
+    have hR : S.liftE y (compE Ex (.slice s)) =
+        ⟨.slice s, .bor, true, rds S.ρ Ex.held ++ S.A, rds S.ρ Ex.held ++ S.A, false, false, false, false⟩ := by
+      simp [compE, liftE, heldA, liftMode, Mode.ownSlot, ownHeld, Ty.holdsView]
+    rw [hR]; simp only [compE]
+    exact EntryWeaker.mk' rfl rfl (by simp [Entry.fixed]) rfl (fun _ => hH) hH (by simp) rfl (by simp) (by simp)
+      (by intro _ _ _ hfr; simp at hfr) (by intro _ _ hhf; simp at hhf)
+  · have hc : ∀ E : Entry, compE E t = ⟨t, .own, true, [], ownHeld true t E.held, false, false, false, false⟩ := by
+      intro E; cases t <;> first | (simp [Ty.holdsView] at hhv; done) | (exact absurd ⟨_, rfl⟩ hs) | rfl
+    have hoh : ∀ X : List Dep, ownHeld true t X = X := fun X => by simp [ownHeld, hhv]
+    have hR : S.liftE y ⟨t, .own, true, [], ownHeld true t Ex.held, false, false, false, false⟩ =
+        ⟨t, .own, true, [], rds S.ρ Ex.held ++ S.A, false, false, false, false⟩ := by
+      simp [liftE, heldA, liftMode, Mode.ownSlot, hoh, rds]
+    rw [hc, hc, hR]
+    exact EntryWeaker.mk' rfl rfl (by simp [Entry.fixed]) rfl (fun h => by simp [Mode.ownSlot] at h)
+      (by rw [hoh]; exact hH) (by simp) rfl (by simp) (by simp)
+      (by intro _ _ hb; simp at hb) (by intro _ hb; simp at hb)
 
 /-- The renaming lemma: a callee's source statement, typed in its own
     contexts, is typed where the call places it, in the caller's view of
@@ -4849,7 +4870,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
       hty1 hhv (h.Fcout x) (exprT_ren h hab hie) hne' hthru' (hVg [] (fun _ h' => by cases h'))
       (fun hd => dtorHead_rename h.inj (hnd hd))
-      (StmtT.weakenIn ⟨PW.setE (PW.refl _) (by rw [compE_liftE_eqV hmx hhv]; exact EntryWeaker.refl _),
+      (StmtT.weakenIn ⟨PW.setE (PW.refl _) (compE_liftE_weakerV hmx hhv),
         hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
   | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF hy hmy he hpin hds hr hk hpush hpe hyv hdf ihs ihp =>
