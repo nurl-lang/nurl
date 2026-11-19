@@ -885,7 +885,7 @@ theorem post_rel {Γe Γ : Ctx} {fn sig : Fn} {A C : List Var} {e : Var}
             (hg := fun _ _ hhf => by
               by_cases hvv : t.holdsView = true
               · simp [hvv] at hhf
-              · simp [hvv] at hhf; rw [clean_heldFresh]; exact hhf)
+              · simp [hvv] at hhf ⊢; exact hhf)
           intro d hd
           by_cases hvv : t.holdsView = true
           · rw [ite_eq_left hvv] at hd ⊢

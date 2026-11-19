@@ -1209,7 +1209,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
       (fun d hd => by simpa [Ec1, Epk, capDeps] using hHyS (by simpa [Epk, capDeps, Ey1] using hd))
       (fun h => by simp [Epk] at h) (by simp [Ec1, Epk, hck, hdbc]) (fun h => by simp [Ec1, hck, hdtc] at h)
       (fun h => by simp [Epk] at h) (fun _ _ hb _ => by simp [Ec1, hck, hmo] at hb)
-      (fun _ _ hb _ => by simp [Ec1, hck, hmo] at hb)
+      (fun _ hb _ => by simp [Ec1, hck, hmo] at hb)
   have hwc : EntryWeaker Epk (killE .replace false c (RSetup.killAll (mutNames (kill .replace false c Γ) [c]) Ec1)) := by
     have h1 := weaker_killAll_more (Mc := []) (M := mutNames (kill .replace false c Γ) [c]) hw0
       (fun d hd => by cases hd) (fun hf => absurd hf hEpkF)
