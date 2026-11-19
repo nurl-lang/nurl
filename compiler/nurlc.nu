@@ -62026,6 +62026,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             // the next `let` / `assign` on this line.
                             : s pe ( nurl_str_cat3 pvn `:` pcal )
                             ( bck_plend_note pe ( __bck_pl_line rec ) )
+                            ( __plpart_note pvn pcal paix )
                             // (Lent through an Arc parameter: a view of the
                             // payload, §6.5.)
                             ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` pcal ) paix ) {
@@ -62040,7 +62041,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     {
                         // …or its result may point into the argument (retptr):
                         // a view the statement binds borrows it (`:p`).
-                        ? & & ( bck_sound ) ! ptake ( mem_fn_retptr_arg pcal paix ) { ( bck_plend_add pvn pcal `:p` ( __bck_pl_line rec ) ) } {}
+                        ? & & ( bck_sound ) ! ptake ( mem_fn_retptr_arg pcal paix ) { ( bck_plend_add pvn pcal `:p` ( __bck_pl_line rec ) ) ( __plpart_note pvn pcal paix ) } {}
                     } }
                 ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
@@ -62061,6 +62062,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     ~ != 0 ( nurl_str_len lrest ) {
                         : s lw ( str_first_word lrest ) = lrest ( str_skip_word lrest )
                         ( bck_plend_add lw ( bck_field rec 5 ) `` ( __bck_pl_line rec ) )
+                        ( __plpart_note lw ( bck_field rec 5 ) ( bck_field rec 6 ) )
                     }
                 } {}
                 // (A closure that runs here and gives a borrowing binding a
@@ -62352,7 +62354,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // field holds no storage, so nothing else of a `pendfield`
                 // row's applies (agora #566).
                 : s vfc ( bck_field rec 5 )
-                ? ( mem_fn_lends_arg vfc ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) vfc `:v` ( __bck_pl_line rec ) ) } {}
+                ? ( mem_fn_lends_arg vfc ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) vfc `:v` ( __bck_pl_line rec ) ) ( __plpart_note ( bck_field rec 1 ) vfc ( bck_field rec 6 ) ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -62374,12 +62376,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 = st ( bck_inout_borrow_check st rec )
                 ? ( mem_fn_lends_arg fcal ( bck_field rec 6 ) ) {
                     ( bck_plend_add ( bck_field rec 1 ) fcal `` ( __bck_pl_line rec ) )
+                    ( __plpart_note ( bck_field rec 1 ) fcal ( bck_field rec 6 ) )
                     ? & != 0 g_arcp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `arcp##` fcal ) ( bck_field rec 6 ) ) {
                         ( bck_add_word_once `plarc` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) )
                         ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzp##` fcal ) ( bck_field rec 6 ) ) { ( bck_add_word_once `plfrz` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
                         ? & != 0 g_frzp_any ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `frzh##` fcal ) ( bck_field rec 6 ) ) { ( bck_add_word_once `plfrh` ( nurl_str_cat3 ( bck_field rec 1 ) `:` fcal ) ) } {}
                     } {}
-                } { ? ( mem_fn_retptr_arg fcal ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) fcal `:p` ( __bck_pl_line rec ) ) } {} }
+                } { ? ( mem_fn_retptr_arg fcal ( bck_field rec 6 ) ) { ( bck_plend_add ( bck_field rec 1 ) fcal `:p` ( __bck_pl_line rec ) ) ( __plpart_note ( bck_field rec 1 ) fcal ( bck_field rec 6 ) ) } {} }
                 // A field a `sink` parameter takes (`( take . h buf )`) is
                 // emptied where it lives: moved, as a binding handed to one
                 // is, until it is given a value again (a `fieldset` row).
@@ -65468,6 +65471,13 @@ unsafe @ __bck_row_sl s rec → s {
     ^ ( __span_dup rec + p 1 n )
 }
 
+// …and that what it lends of argument `aix` is a part of it, by the
+// callee's answer for that argument (`retpart##`): the binding the line
+// binds then has `id` as its lend parent (bck_take_plend, agora #580).
+@ __plpart_note s id s callee s aix → v {
+    ? ( nurl_sym_has_word g_pending_impl ( nurl_str_cat `retpart##` callee ) aix ) { ( bck_add_word_once `plpart` ( nurl_str_cat3 id `:` callee ) ) } {}
+}
+
 // Note that the call on `line` lends argument binding `id` (`tag` `:p`
 // when only its pointer result points into it): the binding the line
 // binds takes it (bck_take_plend).
@@ -65507,6 +65517,8 @@ unsafe @ __bck_row_sl s rec → s {
     ? == 0 ( nurl_sym_len g_bck `plend` ) { ^ st } {}
     : s pl ( nurl_sym_get g_bck `plend` )
     ( bck_put `plend` `` )
+    : s plpart ( nurl_str_cat ( nurl_sym_get g_bck `plpart` ) `` )
+    ? != 0 ( nurl_str_len plpart ) { ( bck_put `plpart` `` ) } {}
     : ~ s plarc ``
     : ~ s plfrz ``
     : ~ s plfrh ``
@@ -65553,8 +65565,11 @@ unsafe @ __bck_row_sl s rec → s {
         // element, `( vec_at a 0 )`: one that hands the borrow back whole,
         // `( same a )`, makes the binding that borrow itself, whose own
         // growth ends a cursor over it; CodeRabbit on github#1972.)
+        // (…by the callee's answer for this argument itself - one that hands
+        // `a` back whole on one path and a part of another on the next
+        // lends no part of `a`: `plpart`, noted per argument.)
         : s __lpc ? != 0 ( nurl_str_len wc ) wc callee
-        ? & == BCK_BORROWED_SHARED ( bck_st_get st ( nurl_str_to_int w ) ) != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `retpart##` __lpc ) ) { ( bck_add_word_once ( bck_bkey `lpa_` ( nurl_str_int wid ) ) w ) = g_bck_lpa_any 1 } {}
+        ? & == BCK_BORROWED_SHARED ( bck_st_get st ( nurl_str_to_int w ) ) ( str_contains_word plpart ( nurl_str_cat3 w `:` __lpc ) ) { ( bck_add_word_once ( bck_bkey `lpa_` ( nurl_str_int wid ) ) w ) = g_bck_lpa_any 1 } {}
         // A number holds nothing to borrow from.
         ? ( bck_holds_nothing w ) { continue } {}
         // A field (`s.items`) is as alive as its binding; a field of a borrow
