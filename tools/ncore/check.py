@@ -3237,6 +3237,16 @@ class FnCheck:
         for vid in sorted(st.vals, reverse=True):
             av = st.vals[vid]
             v = self.fn.vars[vid]
+            if (v.kind == "param" and av.own == "P" and vid in self.pidx and vid != keep
+                    and self.fn.modes[self.pidx[vid]] == "sink"):
+                # (a `sink` parameter still held at the exit is released by
+                # this function: its `% Drop` runs here, and what it changes
+                # of a shared payload is in this summary's regions - so a
+                # caller's view through another handle ends at the call)
+                d0 = st.dead
+                self.run_dtor(st, (vid, ()), v.ty, line)
+                killed |= st.dead - d0
+                continue
             if av.own not in ("O", "X") or v.kind == "param" or vid == keep:
                 continue
             if av.held and v.ty is not None and v.ty[0] == "named" and v.ty[1] in udrop:
@@ -4664,6 +4674,9 @@ class FnCheck:
             self.params_hold_locals(end, self.fn.line)
             self.pb_check(end)
             self.exits.append(end)
+            # (falling off the end leaves the frame too: a `sink` parameter
+            # still held is released here, as at a `^`)
+            self.exit_drops(end, self.fn.line)
         return self.make_summary()
 
     def only_elem_replace(self, sm, k):
