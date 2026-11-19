@@ -1116,14 +1116,17 @@ when it is dropped and is not affected. A value lent by a call
 What the destructor changes, it changes where the value is released, as
 a call of it would. A destructor that clears or grows the payload of an
 `Rc` the value holds a share of ends the views that another handle on the
-same `Rc` took (§2.10), at every place the value is released without a
-call written there: the end of its block or of a loop's round, a `break`,
+same `Rc` took (§2.10), at each of these places where the value is
+released without a call written there: the end of its block or of a loop's round, a `break`,
 the old value of `=` or of a field it was in, a temporary that its
 statement or the call it was lent to is done with, and a `sink` parameter
 its callee lets go, which the callee's summary carries to the caller. A
 container, a `Box`, an option or an enum holding such a value runs its
 destructor when released. A destructor that only reads the payload ends
 nothing. Read the view before the release, or take it again after.
+Two releases are not checked yet (AGORA-918): a destructor that runs at a
+function's exit under a view the function hands back, and one that runs
+when a returned closure's environment is released.
 
 ## 3. Outside the rules
 

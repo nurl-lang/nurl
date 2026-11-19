@@ -75199,11 +75199,12 @@ unsafe @ gen_assign i lex i syms i cg → s {
         = g_bck_self_asn & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name )
         : b __udo != 0 g_bck_bind_owns
         ( bck_record_binding `assign` name bck_line __acbc vt )
-        ? __udo { ( __udrop_bind_note syms vt g_bck_rhs_sx ) } {}
+        // (`= x x` binds no new value and releases none: no edge either.)
+        ? & __udo ! g_bck_self_asn { ( __udrop_bind_note syms vt g_bck_rhs_sx ) } {}
         // (…and the old value it releases, when it is a parameter's — an
         // `inout` one's, the caller's value: what its `% Drop` impls drop of
         // their parameter, this function drops of that one; agora #766.)
-        ( __udrop_param_old syms name vt )
+        ? ! g_bck_self_asn { ( __udrop_param_old syms name vt ) } {}
         = g_bck_self_asn F
         ( __rp_note_assign syms name )
         ? == __acbc 5 { ( bck_note_clo_borrow syms name bck_line __acbr ) } {}
