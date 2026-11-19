@@ -14245,6 +14245,65 @@ unsafe @ eng_byte s w i k → i {
     ^ T
 }
 
+// An effect at `path` inside a part of `vid`'s value that is a view (`hd`:
+// what the value holds, as held entries): it is done to what the view points
+// into. (check.py's effect_in_views.)
+@ eng_effect_in_views i st i vid i hd i path i eff i line i depth → v {
+    : ~ i k 0
+    ~ < k ( sq_len hd ) {
+        : i he ( sq_at hd k )
+        : i hp ( he_path he )
+        : i l ( he_loan he )
+        ? & & & & != hp 0 < ( ep_len hp ) ( ep_len path ) ( ep_prefix hp path ) ( el_is_loan l ) == ( el_kind l ) LK_VIEW {
+            : i hty ( eng_ty_of ( pl_make vid hp ) )
+            ? & != hty ET_NONE ( et_is_view hty ) {
+                : i q ( el_place l )
+                : i qv ( pl_var q )
+                ? & >= qv 0 != 0 ( st_av st qv ) {
+                    ( eng_effect st ( pl_make qv ( ep_take ( ep_cat ( pl_path q ) ( ep_drop path ( ep_len hp ) ) ) PATH_MAX ) ) eff line + depth 1 )
+                } {}
+            } {}
+        } {}
+        = k + k 1
+    }
+}
+
+// The places a call changes through the view parts of its argument `k`
+// (`ok`, its value `av`): an effect of the callee's at a path inside a part
+// that is a view is at what that view points into. (check.py's
+// changed_in_views, agora #933.)
+@ eng_changed_in_views i sm i k i ok i av → i {
+    : ~ i out 0
+    : i hd ( av_held av )
+    ? == hd 0 { ^ 0 } {}
+    : ~ i e 0
+    ~ < e ( sm_n sm SM_EFFECTS ) {
+        : i t ( sm_at sm SM_EFFECTS e )
+        : i eff ( tp_at t 3 2 )
+        : i p ( tp_at t 3 1 )
+        ? & == ( tp_at t 3 0 ) k | | | == eff EF_REALLOC == eff EF_DROP == eff EF_REPLACE == eff EF_TAKE {
+            : ~ i j 0
+            ~ < j ( sq_len hd ) {
+                : i he ( sq_at hd j )
+                : i hp ( he_path he )
+                : i l ( he_loan he )
+                ? & & & & != hp 0 < ( ep_len hp ) ( ep_len p ) ( ep_prefix hp p ) ( el_is_loan l ) == ( el_kind l ) LK_VIEW {
+                    : i hty ( eng_ty_of ( pl_make ( pl_var ok ) ( ep_take ( ep_cat ( pl_path ok ) hp ) PATH_MAX ) ) )
+                    ? & != hty ET_NONE ( et_is_view hty ) {
+                        : i q ( el_place l )
+                        ? >= ( pl_var q ) 0 {
+                            = out ( sq_add out ( pl_make ( pl_var q ) ( ep_take ( ep_cat ( pl_path q ) ( ep_drop p ( ep_len hp ) ) ) PATH_MAX ) ) )
+                        } {}
+                    } {}
+                } {}
+                = j + j 1
+            }
+        } {}
+        = e + e 1
+    }
+    ^ out
+}
+
 @ eng_effect i st i place i eff i line i depth → v {
     : i vid ( pl_var place )
     : i path ( pl_path place )
@@ -14302,24 +14361,7 @@ unsafe @ eng_byte s w i k → i {
         // another binding's buffer (`= . x w ( slice_from_vec … )`, then
         // `( slice_put . x w 0 … )`): what is done there is done to what the
         // view points into, as for a binding that is a view
-        : i hd ( av_held av )
-        : ~ i k 0
-        ~ < k ( sq_len hd ) {
-            : i he ( sq_at hd k )
-            : i hp ( he_path he )
-            : i l ( he_loan he )
-            ? & & & & != hp 0 < ( ep_len hp ) ( ep_len path ) ( ep_prefix hp path ) ( el_is_loan l ) == ( el_kind l ) LK_VIEW {
-                : i hty ( eng_ty_of ( pl_make vid hp ) )
-                ? & != hty ET_NONE ( et_is_view hty ) {
-                    : i q ( el_place l )
-                    : i qv ( pl_var q )
-                    ? & >= qv 0 != 0 ( st_av st qv ) {
-                        ( eng_effect st ( pl_make qv ( ep_take ( ep_cat ( pl_path q ) ( ep_drop path ( ep_len hp ) ) ) PATH_MAX ) ) eff line + depth 1 )
-                    } {}
-                } {}
-            } {}
-            = k + k 1
-        }
+        ( eng_effect_in_views st vid ( av_held av ) path eff line depth )
     } {}
     ? & & | | == eff EF_REALLOC == eff EF_DROP == eff EF_PERMUTE != ( av_held av ) 0 ! & == ( av_own av ) OW_L == path 0 {
         // a part of the value that is a copy of another place's String or
@@ -17507,6 +17549,29 @@ unsafe @ eng_byte s w i k → i {
                         ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ` is handed over to be changed ('inout'), and argument ` ( nurl_str_int + m 1 ) ` reaches it too` ) ) )
                         = stop T
                     } {}
+                    // (…or what the call changes inside a part of it that is a
+                    // view - a grow through an element of one of the slices a
+                    // `Vec` of slices holds - is what argument m reaches: the
+                    // change is to what that view points into, agora #933)
+                    ? ! stop {
+                        : i thru ( eng_changed_in_views sm k ok ( wv_at avs k ) )
+                        : ~ i hit -1
+                        : ~ i a2 0
+                        ~ & < hit 0 < a2 ( sq_len thru ) {
+                            : i ta ( sq_at thru a2 )
+                            : ~ i b2 0
+                            ~ & < hit 0 < b2 ( sq_len mine ) {
+                                : i qa ( sq_at mine b2 )
+                                ? & == ( pl_var qa ) ( pl_var ta ) | ( ep_prefix ( pl_path qa ) ( pl_path ta ) ) ( ep_prefix ( pl_path ta ) ( pl_path qa ) ) { = hit ta } {}
+                                = b2 + b2 1
+                            }
+                            = a2 + a2 1
+                        }
+                        ? >= hit 0 {
+                            ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ( nurl_str_cat3 ` holds a view of ` ( eng_pname hit ) `, which the call may change, and argument ` ) ( nurl_str_int + m 1 ) ` reaches it too` ) ) )
+                            = stop T
+                        } {}
+                    } {}
                 } {}
                 = m + m 1
             }
@@ -17885,6 +17950,14 @@ unsafe @ eng_byte s w i k → i {
             = g_fc_weak ? & & == eff EF_REPLACE == epath 0 ( sm_has sm SM_KEEPS ek ) 1 0
             ( eng_effect st ( pl_make ( pl_var ok ) ( ep_cat ( pl_path ok ) epath ) ) eff line 0 )
             = g_fc_weak 0
+            : i cav ( st_av st ( pl_var ok ) )
+            ? & & & != epath 0 == ( pl_path ok ) 0 != cav 0 & == ( av_own cav ) OW_M != ( av_held ( wv_at avs ek ) ) 0 {
+                // (an argument the callee took: what it does inside a part of
+                // it that is a view - a grow through an element of one of the
+                // slices a `Vec` of slices holds - is done to what that view
+                // points into, which the caller still has; agora #933)
+                ( eng_effect_in_views st ( pl_var ok ) ( av_held ( wv_at avs ek ) ) epath eff line 0 )
+            } {}
             // (a library function that drops or replaces elements - `vec_clear`
             // over a Vec of a type with a `% Drop` of the program's own - runs
             // that destructor on each: what it does is done here, agora #712)
