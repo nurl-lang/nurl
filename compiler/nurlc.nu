@@ -27435,7 +27435,7 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
     ^ == TT_LPAREN ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
 }
 
-// A closure argument `k` (first token `tt`, a binding `nm` or a call's
+// A closure argument `k` (first token `tt0`, a binding `nm0` or a call's
 // result, directly or as a value block's tail) of a call that may hand back
 // a closure: what releasing it runs is what that closure took over — a
 // binding's own notes (`+d=`, and each `+dk=` entry), or the call's
@@ -27446,9 +27446,17 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
 // it came through), so the release counts it only where every one of them
 // took it over (__bck_udrop_fns_of): a maker that drops its `sink` value
 // before it returns hands back a closure over nothing of it.
-@ __udrop_clo_arg i syms i k i tt s nm → s {
+@ __udrop_clo_arg i syms i k i tt0 s nm0 → s {
     : ~ s out ``
     : s ks ( nurl_str_cat ( nurl_str_int k ) `:` )
+    // (A value block whose tail is a binding, `( wrap { c } )`, however
+    // deep (`__tail_first_tt__`): that binding's, as written bare.)
+    : ~ i tt tt0
+    : ~ s nm ( nurl_str_cat nm0 `` )
+    ? == tt0 TT_LBRACE {
+        : i ttt ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
+        ? ( is_ident_tok ttt ) { = tt ttt = nm ( nurl_sym_get syms `__tail_first_val__` ) } {}
+    } {}
     ? ( is_ident_tok tt ) {
         ? == 0 ( nurl_str_len g_bck_rcty ) { ^ out } {}
         : s rc ( bck_rc_type_of nm )
