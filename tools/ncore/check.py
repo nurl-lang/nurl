@@ -811,6 +811,23 @@ class FnCheck:
         e = ("u",) if ty[0] == "s" else self.T.elem(ty)
         return ("num",) if e is not None and e[0] in SCALARS else e
 
+    def lit_places(self, av, path):
+        # The places a change at `path` inside value `av` reaches through the
+        # bindings a literal took in (its `lit` handle loans, held at the
+        # field each binding went to): the binding's own place, the rest of
+        # the path below it.
+        out = []
+        for hp, ln in av.held:
+            if not (isinstance(ln, tuple) and len(ln) == 3 and isinstance(ln[0], tuple)
+                    and ln[0] and ln[0][-1] == "lit" and ln[2] == "handle"):
+                continue
+            hp = tuple(hp)
+            if tuple(path[:len(hp)]) != hp:
+                continue
+            tv, tp = ln[1]
+            out.append((tv, tuple(tp) + tuple(path[len(hp):])))
+        return out
+
     def would_kill(self, st, place, eff, loans, depth=0):
         vid, path = place
         av = st.vals.get(vid)
@@ -1474,9 +1491,15 @@ class FnCheck:
                     continue
                 if m != k and self.would_kill(st, place, eff, av.loans | hloans(av.held)):
                     self.err(line, f"{name}: argument {m + 1} views what the call changes through argument {k + 1}")
-                elif m == k and self.would_kill(st, place, eff, hloans(av.held)):
+                elif m == k and any(self.would_kill(st, pl, eff, hloans(av.held))
+                                    for pl in [place] + self.lit_places(av, tuple(path))):
                     # A2: an argument is frozen for the call - a part of it may
                     # not view what the call changes in another part
+                    # (…a literal's field that took a binding in is that
+                    # binding: what the call changes there is what the
+                    # literal's views of the binding view - `( use @ S { sv b
+                    # } )`, `( eat @ P { o 0 } )` with o viewing its own buf;
+                    # A2.CallT.not_self_view, agora #563)
                     self.err(line, f"{name}: a part of argument {k + 1} views what the call changes in it")
         # a closure that changes what it captured is a second route to it: it
         # may not meet another argument that reaches that capture (§2.4, §2.11)
