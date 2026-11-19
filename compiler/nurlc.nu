@@ -37682,7 +37682,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // `. ( box_get bx ) hs`: by that binding; agora #793.)
             : s __pkr ? & & == bck_arg_tt TT_DOT == 0 ( nurl_str_len __pkr0 ) != 0 ( nurl_str_len arg_sx ) ( __sx_one_root arg_sx ) __pkr0
             : s __pklit ? __pk_ll ( __pd_lit_names syms ( __sx_operand_c syms bck_arg_tt bck_arg_val 0 `` __sx_n0 ) ) ``
-            : s __pkps ? != 0 ( nurl_str_len __pkr ) ( __word_union ( __pderiv_params syms __pkr ) ( __pderiv_cparams syms __pkr ) ) ? __pk_ll ( __pd_names_params syms __pklit ) ( nurl_str_cat g_pk_last `` )
+            : s __pkps ? != 0 ( nurl_str_len __pkr ) ( __pd_name_params syms __pkr ) ? __pk_ll ( __pd_names_params syms __pklit ) ( nurl_str_cat g_pk_last `` )
             : b __pkloc & != 0 ( nurl_str_len __pkr ) ! | ( str_contains_word g_cur_params __pkr ) ( __pderiv_clo_param __pkr )
             ? & == arg_idx 0 __pkloc { = __pk_a0 ( nurl_str_cat __pkr `` ) } {}
             // (…and the locals among the later arguments: a callee of the
@@ -66962,9 +66962,17 @@ unsafe @ __pderiv_put_at s ptr s ps0 → v {
     : ~ s rest ( nurl_str_cat ns `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        = out ( __word_union out ( __word_union ( __pderiv_params syms w ) ( __pderiv_cparams syms w ) ) )
+        = out ( __word_union out ( __pd_name_params syms w ) )
     }
     ^ out
+}
+
+// …those binding `w` leads to: a parameter, a local read out of one, plain
+// and conditioned — and a `??` payload by what its match read, `T h` of an
+// option parameter `oh` part of oh (agora #793).
+@ __pd_name_params i syms s w → s {
+    ? | != 0 ( nurl_sym_len2 syms w `__plroot` ) != 0 ( nurl_sym_len2 syms w `__plend` ) { ^ ( __word_union ( __pderiv_params syms w ) ( __pderiv_reach syms w ) ) } {}
+    ^ ( __word_union ( __pderiv_params syms w ) ( __pderiv_cparams syms w ) )
 }
 
 // A field of local `obj` given a value (`= . w a h`, `= . . w a b h`) whose
