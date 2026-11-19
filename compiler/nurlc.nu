@@ -60366,7 +60366,13 @@ unsafe @ __sx_view_at s st s e → b {
         ? != 0 ( nurl_str_len fvp ) { ^ ( __word_union fvp deps ) } {}
         // A view points where it points; a borrowed element or field
         // handle into ITS value's own storage, which its owners hold.
-        : s ind ? != 0 ( nurl_str_len vwm ) ( nurl_sym_get g_bck ( bck_bkey `vi_` rs ) ) ( nurl_str_cat bsl `` )
+        // (…but a copy of an owner's own handle - `: ~ ( Vec i ) w vs`,
+        // `hc_`, bck_byte_root's odd code - IS that owner's storage, as
+        // bck_sx_mut_storage has it: a slice of w points into vs's own
+        // buffer, which a push through vs moves; agora #428.)
+        : i hbr ? == 0 ( nurl_str_len vwm ) ( bck_br_get rs ) -1
+        : b hcopy & == 0 ( nurl_str_len vwm ) | & >= hbr 0 == 1 & hbr 1 & != 0 g_bck_hc_any != 0 ( nurl_sym_len g_bck ( bck_bkey `hc_` rs ) )
+        : s ind ? hcopy `` ? != 0 ( nurl_str_len vwm ) ( nurl_sym_get g_bck ( bck_bkey `vi_` rs ) ) ( nurl_str_cat bsl `` )
         : s bv ( __word_union ( __src_mark bsl ind ) deps )
         // (A guarded `s` lent this time may own what it holds next; one
         // that may own what it holds now, BCK_MAYBE_OWNED, points into its
