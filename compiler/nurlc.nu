@@ -74240,6 +74240,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         // (…and a copy of such a copy, `: String z y`, to the end of the
         // chain: the capture it copies.)
         ? & != 0 g_bck_closure_depth ( is_ident_tok bck_rhs_tt ) { ( __clo_capcopy_note syms name bck_rhs_val ) } {}
+        // (…and a value block whose tail is one, `{ x }`: its source
+        // expression is that name; github#2068's review.)
+        ? & & != 0 g_bck_closure_depth == bck_rhs_tt TT_LBRACE ( __sx_bare_name g_bck_rhs_sx ) { ( __clo_capcopy_note syms name g_bck_rhs_sx ) } {}
         // (A value block whose tail is a closure binding of its own is that
         // binding to the walk too, as `: g f`: a move of its env, and what it
         // captured, agora #835.)
@@ -74683,6 +74686,9 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ? & != 0 g_bck_closure_depth >= ( bck_walk_class ( nurl_llty ptype ) ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
             // (…and a `:` copy of a capture's whole value, as above: agora #479.)
             ? & != 0 g_bck_closure_depth ( is_ident_tok bck_rhs_tt ) { ( __clo_capcopy_note syms name bck_rhs_val ) } {}
+            // (…and a value block whose tail is one, `{ x }`: its source
+            // expression is that name; github#2068's review.)
+            ? & & != 0 g_bck_closure_depth == bck_rhs_tt TT_LBRACE ( __sx_bare_name g_bck_rhs_sx ) { ( __clo_capcopy_note syms name g_bck_rhs_sx ) } {}
             : i __cbc ? != 0 ( nurl_str_len __bc_tail ) ( __clo_bind_class syms ( nurl_llty ptype ) val `` ( mem_clo_listed syms __bc_tail ) TT_IDENT name __bc_tail ) ? != 0 ( nurl_str_len __bc_wtail ) 5 ( __clo_bind_class syms ( nurl_llty ptype ) val rhs_closure_env __src_owned_env bck_rhs_tt name bck_rhs_val )
             : s __cbr ? & == __cbc 5 != 0 g_borrowck ? != 0 ( nurl_str_len __bc_wtail ) __bc_wtail ( nurl_sym_get g_bck `reads` ) ``
             = g_bck_bind_owns ? & == bck_rhs_tt TT_LPAREN ! | == 0 ( nurl_str_len g_bck_rhs_lend ) ( seq g_bck_rhs_lend `-` ) 0 1
@@ -102741,6 +102747,17 @@ unsafe @ __die_at_fn s fname s what s msg → v {
 @ __clo_capcopy_carry i syms s name s root → v {
     : s cap ( nurl_sym_get2 syms root `__capcopy` )
     ? != 0 ( nurl_str_len cap ) { ( nurl_sym_def syms ( nurl_str_cat name `__capcopy` ) cap ) } {}
+}
+
+// Is source expression `sx` a bare name - no call, join, path or mark?
+@ __sx_bare_name s sx → b {
+    ? == 0 ( nurl_str_len sx ) { ^ F } {}
+    : ~ s bad `( ) { } ; | . * - ^ ~ @`
+    ~ != 0 ( nurl_str_len bad ) {
+        : s c ( str_first_word bad ) = bad ( str_skip_word bad )
+        ? >= ( nurl_str_find sx c ) 0 { ^ F } {}
+    }
+    ^ < ( nurl_str_find sx ` ` ) 0
 }
 
 @ __clo_capcopy_note i syms s name s src → v {
