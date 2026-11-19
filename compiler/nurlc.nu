@@ -37677,7 +37677,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         : b __pk_ll ( __pd_litlike bck_arg_tt )
         // (…an `inout` argument by its pointee's type, `%W*`: agora #793.)
         ? & & & != 0 g_srcx_on | | __pk_nm __pk_ll & == bck_arg_tt TT_LPAREN != 0 ( nurl_str_len g_pk_last ) | != 0 g_cur_rc & != 0 g_bck_closure_depth ( __fn_rc_param syms ) != 0 ( nurl_str_len ( __rc_reach ( nurl_llty ? & is_inout_arg != 0 ( nurl_str_ends at `*` ) ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 ) at ) ) ) {
-            : s __pkr ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ``
+            : s __pkr0 ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ``
+            // (…a field path rooted at a call that lends out of one binding,
+            // `. ( box_get bx ) hs`: by that binding; agora #793.)
+            : s __pkr ? & & == bck_arg_tt TT_DOT == 0 ( nurl_str_len __pkr0 ) != 0 ( nurl_str_len arg_sx ) ( __sx_one_root arg_sx ) __pkr0
             : s __pklit ? __pk_ll ( __pd_lit_names syms ( __sx_operand_c syms bck_arg_tt bck_arg_val 0 `` __sx_n0 ) ) ``
             : s __pkps ? != 0 ( nurl_str_len __pkr ) ( __word_union ( __pderiv_params syms __pkr ) ( __pderiv_cparams syms __pkr ) ) ? __pk_ll ( __pd_names_params syms __pklit ) ( nurl_str_cat g_pk_last `` )
             : b __pkloc & != 0 ( nurl_str_len __pkr ) ! | ( str_contains_word g_cur_params __pkr ) ( __pderiv_clo_param __pkr )
@@ -66892,6 +66895,15 @@ unsafe @ __pderiv_put i syms s name s ps0 → v {
     : s ptr ( nurl_sym_get2 syms name `__ptr` )
     ? | == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len ps0 ) { ^ v } {}
     ( __pderiv_put_at ptr ps0 )
+    // (A view local — an element a `vec_at` binding reads, a `~` loop's
+    // element: what is put into it is put into what it reads, whose name
+    // the change may be spelled by; agora #793.)
+    : ~ s al ( nurl_str_cat3 ( nurl_sym_get2 syms name `__alias` ) ` ` ( __econt_of syms name ) )
+    ~ != 0 ( nurl_str_len al ) {
+        : s w ( str_first_word al ) = al ( str_skip_word al )
+        : s wp ( nurl_sym_get2 syms ( __path_root_name w ) `__ptr` )
+        ? & != 0 ( nurl_str_len wp ) ! ( seq wp ptr ) { ( __pderiv_put_at wp ps0 ) } {}
+    }
     // (A closure body's capture: the enclosing binding holds it too — a
     // handle copied into the env shares its storage — and so on out
     // (g_cap_outer); agora #784.)
@@ -68244,6 +68256,20 @@ unsafe @ __sx_nroots s e b ns → s {
     } {}
     ? | ( seq w `-` ) ( seq w `*` ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( __path_root_name w )
+}
+
+// The one binding a source expression's names are all rooted at, or ``:
+// the storage a field path rooted at a call that lends out of it reaches
+// (`. ( box_get bx ) hs` — bx; agora #793).
+@ __sx_one_root s sx → s {
+    : ~ s r ``
+    : ~ s rest ( __sx_leaf_names sx )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s wr ( __path_root_name w )
+        ? == 0 ( nurl_str_len r ) { = r ( nurl_str_cat wr `` ) } { ? ! ( seq r wr ) { ^ `` } {} }
+    }
+    ^ r
 }
 
 // Words `ws` (`p` or `p#cond`, parameter names) a call keeps, among
