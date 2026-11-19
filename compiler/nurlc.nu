@@ -6096,6 +6096,8 @@ unsafe @ __arg_param_lend_root i syms → s {
     // and the provenance graph, which follow a `~` element by its own row.)
     ( nurl_sym_def syms ( nurl_str_cat name `__lvroot` ) root )
     = g_lview_n + g_lview_n 1
+    // (…and so is a `~` element of one: mem_note_plroot.)
+    ? != 0 g_bck_closure_depth { ( __clo_capcopy_carry syms name root ) } {}
 }
 
 // The binding the value of `name` is part of, when `name` holds a value
@@ -51660,6 +51662,10 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // through it changes that parameter (agora #411).
 @ mem_note_plroot i syms s pv s root → v {
     ( nurl_sym_def syms ( nurl_str_cat pv `__plroot` ) root )
+    // (A payload of a copy of a closure's capture is that capture's, from
+    // here on - however the copy is given a new value later: agora #479,
+    // github#2068's review.)
+    ? & != 0 g_bck_closure_depth != 0 ( nurl_str_len root ) { ( __clo_capcopy_carry syms pv root ) } {}
     = g_pl_seen 1
     ? & != 0 ( nurl_str_len root ) ( __rpg_live ) { ( __rpg_push 1 ( __rpg_slot syms pv ) ( __rpg_slot syms root ) 0 0 ) } {}
 }
@@ -102729,6 +102735,14 @@ unsafe @ __die_at_fn s fname s what s msg → v {
 // In a closure body, `: T name src`: when src is a capture, or a `:` copy
 // of one (`__capcopy`, however many copies deep), name copies that capture
 // (agora #479).
+// A payload or an element `name` read out of `root`, a `:` copy of a
+// capture (`__capcopy`) or of such a copy: it carries the capture, so a
+// later new value of root does not cut it off (agora #479).
+@ __clo_capcopy_carry i syms s name s root → v {
+    : s cap ( nurl_sym_get2 syms root `__capcopy` )
+    ? != 0 ( nurl_str_len cap ) { ( nurl_sym_def syms ( nurl_str_cat name `__capcopy` ) cap ) } {}
+}
+
 @ __clo_capcopy_note i syms s name s src → v {
     : s cap ? ( __is_clo_capture syms src ) ( nurl_str_cat src `` ) ( nurl_sym_get2 syms src `__capcopy` )
     ? != 0 ( nurl_str_len cap ) { ( nurl_sym_def syms ( nurl_str_cat name `__capcopy` ) cap ) } {}
