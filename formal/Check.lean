@@ -611,3 +611,4 @@ import A3
 #print axioms A2.InoutViewArgWitness.main_typed
 #print axioms A2.InoutViewArgWitness.main_safe
 #print axioms A2.InoutViewArgWitness.main_no_leak
+#print axioms A2.InoutViewArgWitness.call_refused

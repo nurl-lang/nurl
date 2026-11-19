@@ -313,4 +313,27 @@ theorem main_no_leak {m' : Mem} (hr : Steps P (emptyMem 5) main (.ok m' .skip)) 
   obtain ⟨Δ, ht⟩ := main_typed (ξ := .none)
   exact no_leak_end prog_ok prog_codes ht rfl main_codes (by decide) hr
 
+/-! ### What stays refused: a view of the changed argument itself (AGORA-923, github#2072)
+
+    : s ( slice_from_vec ( vec_at vv 0 ) )  ( g vv s )
+
+Here `s` views an element of `vv`, and `g` may reallocate that element's
+buffer while `s` is still its parameter. No typing of the call exists:
+`CallT`'s exclusivity premise asks that the changed argument `vv` be
+reached by no other argument in memory, and `s` reaches it. -/
+
+/-- `s` viewing `vv`'s element. -/
+def EsBad : Entry := ⟨sl, .bor, true, [⟨0, .inner⟩], [], false, false, false, false⟩
+
+def KBad : Ctx := A2.setE K2 2 EsBad
+
+/-- **No typing of `( g vv s )` exists when `s` views `vv`.** -/
+theorem call_refused (E : Entry) (Γ' : Ctx) : ¬ CallT P KBad [] 0 [0, 2] E Γ' := by
+  rintro ⟨fn, hf, _, hargs, _⟩
+  simp [P] at hf; subst hf
+  obtain ⟨Ea, _, _, _, hmv, _⟩ := hargs 0 (by simp [g])
+  have h1 := ((hmv rfl).2.2.2.2 1 (by simp [g]) (by decide)).2.1
+  apply h1
+  simp [argE, KBad, A2.setE, upd, EsBad, roots, memDeps, Entry.vdeps, Mode.ownSlot, Kind.isName]
+
 end A2.InoutViewArgWitness
