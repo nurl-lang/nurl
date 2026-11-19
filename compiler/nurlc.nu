@@ -102732,9 +102732,9 @@ unsafe @ __die_at_fn s fname s what s msg → v {
     } {}
 }
 
-// In a closure body, `: T name src`: when src is a capture, or a `:` copy
-// of one (`__capcopy`, however many copies deep), name copies that capture
-// (agora #479).
+// In a closure body, `: T name src`: when src is a capture, a `:` copy of
+// one (`__capcopy`, however many copies deep), or derived from one, name
+// copies that capture (agora #479).
 // A payload or an element `name` read out of `root`, a `:` copy of a
 // capture (`__capcopy`) or of such a copy: it carries the capture, so a
 // later new value of root does not cut it off (agora #479).
@@ -102744,7 +102744,10 @@ unsafe @ __die_at_fn s fname s what s msg → v {
 }
 
 @ __clo_capcopy_note i syms s name s src → v {
-    : s cap ? ( __is_clo_capture syms src ) ( nurl_str_cat src `` ) ( nurl_sym_get2 syms src `__capcopy` )
+    // (…or of anything derived from one - a payload read straight out of
+    // a capture, `: String y p` in `?? x { T p → … }`: the whole walk,
+    // __clo_cap_source; github#2068's review.)
+    : s cap ( __clo_cap_source syms src )
     ? != 0 ( nurl_str_len cap ) { ( nurl_sym_def syms ( nurl_str_cat name `__capcopy` ) cap ) } {}
 }
 
