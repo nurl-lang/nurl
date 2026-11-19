@@ -2211,12 +2211,12 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
       obtain ⟨post2, pu2⟩ := push_take post1.inv hanch1 hz hlz rfl hpa2 htk2
       exact ⟨post1.trans post2, out_pair post1.inv hanch1 pu1 post2 pu2 hz hlz rfl hpa2 htk2 hzd
         ⟨hi.tyok hy, post1.inv.tyok hz⟩⟩
-  | fst hy hl hty =>
+  | @fst _ _ _ _ f hy hl hty =>
     cases he with
-    | fst hv => exact ⟨RhsPost.same hi, out_fst hi hy hl hty hv⟩
-  | snd hy hl hty =>
+    | fst hv => exact ⟨RhsPost.same hi, (out_fst hi hy hl hty hv).setFresh f⟩
+  | @snd _ _ _ _ f hy hl hty =>
     cases he with
-    | snd hv => exact ⟨RhsPost.same hi, out_snd hi hy hl hty hv⟩
+    | snd hv => exact ⟨RhsPost.same hi, (out_snd hi hy hl hty hv).setFresh f⟩
   | @inl y b Ey Γ1 D hy hly hpa hb =>
     cases he with
     | inl htk =>
@@ -2269,12 +2269,12 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
             · exact absurd hcc.symm (hnD _ hd)
         · cases hc with
           | pkg => exact pu.pk _ _ _ _ _ hs'
-  | getl hy hl hty =>
+  | @getl _ _ _ _ f hy hl hty =>
     cases he with
-    | getl hv => exact ⟨RhsPost.same hi, out_getl hi hy hl hty hv⟩
-  | getr hy hl hty =>
+    | getl hv => exact ⟨RhsPost.same hi, (out_getl hi hy hl hty hv).setFresh f⟩
+  | @getr _ _ _ _ f hy hl hty =>
     cases he with
-    | getr hv => exact ⟨RhsPost.same hi, out_getr hi hy hl hty hv⟩
+    | getr hv => exact ⟨RhsPost.same hi, (out_getr hi hy hl hty hv).setFresh f⟩
   | takel hy hl hm hty hyF hpin hds =>
     cases he with
     | takel hv =>

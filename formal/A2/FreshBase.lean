@@ -196,6 +196,25 @@ theorem derive_freshE {Γ : Ctx} (h : FreshOK Γ) {y : Var} {E : Entry} {t : Ty}
     refine ⟨?_, Er, hEr, hm⟩
     rcases hk0 with h0 | h0 | h0 <;> rcases hk with rfl | rfl | rfl <;> simp [h0, comp]
 
+/-- AGORA-909: a field read's path, `projDeps`, of a fresh source: the
+    source's own slot, if it is the frame's, or a fresh borrow's path. -/
+theorem projDeps_freshE {Γ : Ctx} (h : FreshOK Γ) {y : Var} {E : Entry} (hy : Γ y = some E)
+    (hs : FreshSrc Γ y) :
+    projDeps y E ≠ [] ∧ ∀ d ∈ projDeps y E, (d.kind = .self ∨ d.kind = .inner ∨ d.kind = .view) ∧
+      ∃ Er, Γ d.root = some Er ∧ Er.mode.frame := by
+  obtain ⟨E', hE', hc⟩ := hs
+  rw [hy] at hE'; cases hE'
+  rcases hc with hfr | ⟨hb, hf, hl, hn⟩
+  · have hos : E.mode.ownSlot = true := by rcases hfr with h' | ⟨b, h'⟩ <;> rw [h'] <;> rfl
+    simp only [projDeps, hos, ↓reduceIte]
+    refine ⟨by simp, fun d hd => ?_⟩
+    simp only [List.mem_singleton] at hd; subst hd
+    exact ⟨Or.inr (Or.inl rfl), E, hy, hfr⟩
+  · have hos : E.mode.ownSlot = false := by rw [hb]; rfl
+    have hrb : E.mode ≠ .rootb := by rw [hb]; simp
+    simp only [projDeps, hos, hrb, ↓reduceIte, Bool.false_eq_true]
+    exact h y E hy hl hn hb hf
+
 theorem RhsT.freshOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT Γ F r E Γ1)
     (h : FreshOK Γ) : FreshOK Γ1 ∧ FreshE Γ1 E ∧ KeepsFrame Γ Γ1 := by
   cases hr with
@@ -232,6 +251,38 @@ theorem RhsT.freshOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : R
     | int => exact absurd rfl hn
     | slice s => exact absurd rfl (hns s)
     | _ => exact derive_freshE h hy ht (Or.inr (Or.inl rfl)) hs
+  | @fst y E a b f hy hl ht hf =>
+    refine ⟨h, fun _ hn _ hfr => ?_, KeepsFrame.refl _⟩
+    obtain ⟨hfr0, _, hh, hns⟩ := hf hfr
+    have hs : FreshSrc Γ y := ⟨E, hy, Or.inl hfr0⟩
+    cases a with
+    | int => simp [projE, intE] at hn
+    | slice s => exact absurd rfl (hns s)
+    | _ => simpa [projE, hh] using projDeps_freshE h hy hs
+  | @snd y E a b f hy hl ht hf =>
+    refine ⟨h, fun _ hn _ hfr => ?_, KeepsFrame.refl _⟩
+    obtain ⟨hfr0, _, hh, hns⟩ := hf hfr
+    have hs : FreshSrc Γ y := ⟨E, hy, Or.inl hfr0⟩
+    cases b with
+    | int => simp [projE, intE] at hn
+    | slice s => exact absurd rfl (hns s)
+    | _ => simpa [projE, hh] using projDeps_freshE h hy hs
+  | @getl y E a b f hy hl ht hf =>
+    refine ⟨h, fun _ hn _ hfr => ?_, KeepsFrame.refl _⟩
+    obtain ⟨hfr0, _, hh, hns⟩ := hf hfr
+    have hs : FreshSrc Γ y := ⟨E, hy, Or.inl hfr0⟩
+    cases a with
+    | int => simp [projE, intE] at hn
+    | slice s => exact absurd rfl (hns s)
+    | _ => simpa [projE, hh] using projDeps_freshE h hy hs
+  | @getr y E a b f hy hl ht hf =>
+    refine ⟨h, fun _ hn _ hfr => ?_, KeepsFrame.refl _⟩
+    obtain ⟨hfr0, _, hh, hns⟩ := hf hfr
+    have hs : FreshSrc Γ y := ⟨E, hy, Or.inl hfr0⟩
+    cases b with
+    | int => simp [projE, intE] at hn
+    | slice s => exact absurd rfl (hns s)
+    | _ => simpa [projE, hh] using projDeps_freshE h hy hs
   | @take y E t hy =>
     have hk : ∀ Ex, A2.kill .replace false y Γ y = some Ex → Ex.mode = E.mode := by
       intro Ex hEx; simp [A2.kill, hy] at hEx; rw [← hEx]; unfold killE; split <;> rfl

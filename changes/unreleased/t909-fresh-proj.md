@@ -1,0 +1,3 @@
+### Changed
+
+- **The formal proof covers a call that hands a view to a function pushing through a field of its `inout` parameter** (AGORA-909). In A2, a field or payload read of the function's own binding may now be fresh, as an element borrow may: an owner or an `inout` parameter, of a type that holds no views and that holds nothing. So `( vec_push . b items x )` in `@ add inout Bag b ( Slice i ) s` no longer makes `add` through-changing, and a call `( add b s )` with `s` a view of another value is typed, memory safe and leak-free (`A2/FreshProjWitness.lean`). A read of a borrowed parameter or of a borrow is never fresh. nurlc already accepted the program, and NURL source is unchanged.

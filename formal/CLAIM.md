@@ -208,6 +208,26 @@ the LLVM / C11 memory model rather than redefining it.
     it (`inout_push_through_its_element_called_with_a_view_read_after`) and
     it runs clean. With `s` a view of `vv`'s element instead (AGORA-923,
     github#2072, fixed in nurlc by github#2076), no typing of the call exists (`call_refused`).
+    `A2/FreshProjWitness.lean` types the same call through a field:
+    `add inout Bag b` pushes through `. b items`, called with a view of
+    another value that is read after the call. A field or payload read
+    (`RhsT.fst`, `snd`, `getl`, `getr`) may be fresh, as an element borrow
+    may, when its source is a binding of the frame's own (an owner or an
+    `inout` parameter) of a type that holds no views and that holds
+    nothing, and the field is not a slice: its path is then
+    `[⟨b, .inner⟩]`, and a call lifts such a source to an owner that still
+    holds nothing. So the push is an `edit false`, `add` is not
+    through-changing (`g_not_thru`), and the call is typed, safe and
+    leak-free (`main_safe`, `main_no_leak`). nurlc accepts it
+    (`inout_push_through_its_field_called_with_a_view_read_after`) and it
+    runs clean. A read of a borrowed parameter or of a borrow is never
+    fresh (`proj_fresh_frame`, `fst_rootb_not_fresh`). So a nested
+    projection `. . b x items` is fresh at its first step at most
+    (`proj_of_proj_not_fresh`), and a change through its second step stays
+    `edit true`. A fresh payload borrow ends when its enum is given a new
+    value, by a kill that does not read the bit (`payload_fresh_killed`,
+    `hits_fresh_irrel`). With the bit off each read is `projE` as before
+    (`RhsT.fst_unfresh` and the others).
 
   Agora #909 takes in what changes elements that hold no views only
   through a fresh borrow.

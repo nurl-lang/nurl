@@ -114,7 +114,7 @@ theorem main_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main Δ := by
         rotate_left
         · -- `ob`: o is read through the cell
           refine' StmtT.letv (x := 4) (E := Eob) rfl (by look) (by simp)
-            (RhsT.getr (E := Ecl) (a := .int) (b := str) (by look) rfl rfl) ?_ ?_
+            (RhsT.getr_unfresh (E := Ecl) (a := .int) (b := str) (by look) rfl rfl) ?_ ?_
           rotate_left
           · -- `= o other`: the cell's old value goes ...
             refine' StmtT.seq rfl ?_ ?_
@@ -153,7 +153,7 @@ theorem main_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main Δ := by
                       · look
                       · simp
                       · exact (Or.inr (Or.inr ⟨rfl, rfl⟩))
-                      · exact (RhsT.getr (E := Ecl) (a := .int) (b := str) (by look) rfl rfl)
+                      · exact (RhsT.getr_unfresh (E := Ecl) (a := .int) (b := str) (by look) rfl rfl)
                       all_goals first | rfl | exact nrPin (by noroot) _ | exact nrDtor (by noroot) _ _ _ | (look; done)
                   · exact nrEnd (by noroot) _
                 · -- `= other ( mk )`, then `string_len o`
@@ -369,7 +369,7 @@ theorem handOver_typed : ∃ Δ, StmtT P ξ (ctxJ EobJ) [] handOver Δ ∧ Δ 4 
     · lookJ
     · simp
     · exact Or.inr (Or.inr ⟨rfl, rfl⟩)
-    · exact RhsT.getr (E := Ecl) (a := .int) (b := str) (by lookJ) rfl rfl
+    · exact RhsT.getr_unfresh (E := Ecl) (a := .int) (b := str) (by lookJ) rfl rfl
     assignRest
   case e => exact nrEnd (by norootJ) _
   case h4 => lookJ
@@ -381,7 +381,7 @@ theorem handOver_typed : ∃ Δ, StmtT P ξ (ctxJ EobJ) [] handOver Δ ∧ Δ 4 
 theorem repoint_typed : ∃ Δ, StmtT P ξ (ctxJ EobJ) [] (.assign 4 (.getr 3)) Δ ∧ Δ 4 = some Eob ∧
     ∀ v, v ≠ 4 → Δ v = ctxJ Eob v := by
   refine' ⟨_, StmtT.assign (Ex := EobJ) (E := Eob) ?g1 ?g2 (Or.inr (Or.inr ⟨rfl, rfl⟩))
-    (RhsT.getr (E := Ecl) (a := .int) (b := str) (by lookJ) rfl rfl) ?g5 ?g6 ?g7 ?g8 ?g9 ?g10, ?h4, ?hv⟩
+    (RhsT.getr_unfresh (E := Ecl) (a := .int) (b := str) (by lookJ) rfl rfl) ?g5 ?g6 ?g7 ?g8 ?g9 ?g10, ?h4, ?hv⟩
   case g2 => simp
   all_goals try (first | rfl | exact nrPin (by norootJ) _ | exact nrDtor (by norootJ) _ _ _ | (lookJ; done))
   case hv =>
@@ -413,7 +413,7 @@ theorem mainJ_typed (c : Nat) : ∃ Δ, StmtT P .none (fun _ => none) [] (mainJ 
               (nrDtor (by noroot) _ _ _)) rfl) ?_ ?_
         rotate_left
         · refine' StmtT.letv (x := 4) (E := Eob) rfl (by look) (by simp)
-            (RhsT.getr (E := Ecl) (a := .int) (b := str) (by look) rfl rfl) ?_ ?_
+            (RhsT.getr_unfresh (E := Ecl) (a := .int) (b := str) (by look) rfl rfl) ?_ ?_
           rotate_left
           · refine' StmtT.letv (x := 7) rfl (by look) (by simp) (RhsT.expr ExprT.lit) ?_ ?_
             rotate_left

@@ -616,3 +616,21 @@ import A3
 #print axioms A2.InoutViewArgWitness.main_safe
 #print axioms A2.InoutViewArgWitness.main_no_leak
 #print axioms A2.InoutViewArgWitness.call_refused
+-- AGORA-909: a field or payload read of a frame binding of a view-free type that holds
+-- nothing may be fresh (RhsT.fst/snd/getl/getr), so a push through `. b items` of an
+-- `inout` parameter is an `edit false` (A2/FreshProjWitness.lean)
+#print axioms A2.RhsT.fst_unfresh
+#print axioms A2.RhsT.snd_unfresh
+#print axioms A2.RhsT.getl_unfresh
+#print axioms A2.RhsT.getr_unfresh
+#print axioms A2.FreshProjWitness.fst_typed
+#print axioms A2.FreshProjWitness.g_not_thru
+#print axioms A2.FreshProjWitness.call_ok
+#print axioms A2.FreshProjWitness.main_typed
+#print axioms A2.FreshProjWitness.main_safe
+#print axioms A2.FreshProjWitness.main_no_leak
+#print axioms A2.FreshProjWitness.proj_fresh_frame
+#print axioms A2.FreshProjWitness.proj_not_frame_not_fresh
+#print axioms A2.FreshProjWitness.fst_rootb_not_fresh
+#print axioms A2.FreshProjWitness.proj_of_proj_not_fresh
+#print axioms A2.FreshProjWitness.payload_fresh_killed

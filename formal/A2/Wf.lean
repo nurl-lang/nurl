@@ -413,8 +413,9 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
         rw [hEr] at h0; cases h0
         exact ⟨E2, h2', by rw [hm0]; exact hro⟩
       · exact hr2 r hr
-  | @fst y Ey a b hy hl ht =>
+  | @fst y Ey a b _ hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
+    simp only [Entry.fresh_vdeps] at hn ⊢
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of ht)
     have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false, false⟩ := by
       cases a with
@@ -430,8 +431,9 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       · rename_i hrb; intro r hr; simp [roots] at hr; subst hr
         exact ⟨Ey, hy, by simp_all [Mode.isRoot]⟩
       · rename_i hos _; exact hpath y Ey hy hl hn' (by simpa using hos)
-  | @snd y Ey a b hy hl ht =>
+  | @snd y Ey a b _ hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
+    simp only [Entry.fresh_vdeps] at hn ⊢
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of ht)
     have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false, false⟩ := by
       cases b with
@@ -465,8 +467,9 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       obtain ⟨c, hc, rfl⟩ := capDeps_mem hd
       obtain ⟨Ev, hEv, _, _, ho, _⟩ := hcaps.2 c hc
       exact ⟨Ev, hEv, by cases hm : Ev.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
-  | @getl y Ey a b hy hl ht =>
+  | @getl y Ey a b _ hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
+    simp only [Entry.fresh_vdeps] at hn ⊢
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of_sum ht)
     have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false, false⟩ := by
       cases a with
@@ -482,8 +485,9 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       · rename_i hrb; intro r hr; simp [roots] at hr; subst hr
         exact ⟨Ey, hy, by simp_all [Mode.isRoot]⟩
       · rename_i hos _; exact hpath y Ey hy hl hn' (by simpa using hos)
-  | @getr y Ey a b hy hl ht =>
+  | @getr y Ey a b _ hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
+    simp only [Entry.fresh_vdeps] at hn ⊢
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of_sum ht)
     have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false, false⟩ := by
       cases b with
