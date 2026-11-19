@@ -117,7 +117,8 @@ theorem ctx_names {R : Entry} (hR : RootsOK R) : NameWF (ctx R) := by
 theorem ctx_weaker {R R' : Entry} (hR' : RootsOK R') (ht : R'.ty = R.ty) (hm : R'.mode = R.mode)
     (hb : R.mode = .bor) (hl : R'.live = true → R.live = true)
     (hp : R.path ⊆ R'.path) (hh : R.held ⊆ R'.held) (hf : R.dtor = false ∧ R.dbind = false)
-    (hf' : R'.dtor = false ∧ R'.dbind = false) (hfz : R'.fresh = false := by rfl) :
+    (hf' : R'.dtor = false ∧ R'.dbind = false) (hfz : R'.fresh = false := by rfl)
+    (hhz : R'.heldFresh = false := by rfl) :
     Weaker (ctx R) (ctx R') := by
   refine ⟨fun v => ⟨?_, ?_⟩, ctx_wf hR' hf', ctx_names hR'⟩
   · rcases v with _ | _ | _ | _ | v <;> simp [ctx]
@@ -130,7 +131,7 @@ theorem ctx_weaker {R R' : Entry} (hR' : RootsOK R') (ht : R'.ty = R.ty) (hm : R
         fun h => absurd h (by rw [hf.1]; simp), by rw [hf.2, hf'.2], fun h => absurd h (by rw [hf'.1]; simp),
         fun h => absurd h (by rw [hf.2]; simp),
         fun _ _ _ hfr => absurd hfr (by rw [hfz]; simp),
-      fun _ _ _ hhf => by heldfresh_ew⟩
+        fun _ _ _ hhf => absurd hhf (by rw [hhz]; simp)⟩
       simp [Entry.fixed, hb] at hf0
 
 theorem roots_R0 : RootsOK ⟨str, .bor, false, [], [], false, false, false, false⟩ := by
