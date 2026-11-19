@@ -3296,7 +3296,7 @@ theorem lift_nosink (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hrb
 theorem liftE_eq (S : RSetup) {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) :
     S.liftE v E = ⟨E.ty, liftMode E.mode, E.live,
       rds S.ρ E.path ++ (if E.mode.ownSlot || (E.fresh && E.ty != .int) then [] else S.A),
-      rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh, false⟩ := by
+      rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty (S.heldA E), E.dtor, E.dbind, E.fresh, E.heldFresh⟩ := by
   simp only [RSetup.liftE, hrb, ↓reduceIte]
 
 /-- The callee's result, where the exits leave it. -/
@@ -3343,11 +3343,11 @@ theorem res_props (h : CallH P Γ F x fn args base) {Er : Entry} (hErl : Er.live
         simp only [callRes, ownHeld, hc0, Bool.false_eq_true, ↓reduceIte]
       have hX : ownHeld fn.resOwn fn.resTy (callS Γ F fn args base x).A = (callS Γ F fn args base x).A := by
         simp only [ownHeld, hc0, Bool.false_eq_true, ↓reduceIte]
-      rw [hT, hX]
+      rw [hT]
       exact h.lift_sub (fun d0 hd0 => ⟨(hrholds _ (hErh d0 hd0)).1,
         fun d hd => List.mem_append_left _ (List.mem_flatMap.mpr ⟨_, hErh d0 hd0, hd⟩),
         (hrholds _ (hErh d0 hd0)).2, hfits _ (List.mem_append_right _ (hErh d0 hd0))⟩)
-        (fun d hd => List.mem_append_right _ hd) (List.Subset.refl _)
+        (fun d hd => List.mem_append_right _ hd) ((ownHeld_sub _ _ _).trans ((callS Γ F fn args base x).heldA_sub _))
 
 /-- An `inout` argument, where the exits leave it. -/
 theorem inout_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {i : Nat} {b : Eff} {t : Ty}
@@ -3375,7 +3375,7 @@ theorem inout_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {i : Nat} {b : Ef
   · simp only [rrE, liftE_eq _ hrb]
     refine h.lift_sub (fun d0 hd0 => ⟨(houts _ (hEih d0 hd0)).1, fun d hd => ?_,
       (houts _ (hEih d0 hd0)).2, hofits _ (hEih d0 hd0)⟩)
-      (fun d hd => List.mem_append_right _ hd) (ownHeld_sub _ _ _)
+      (fun d hd => List.mem_append_right _ hd) ((ownHeld_sub _ _ _).trans ((callS Γ F fn args base x).heldA_sub _))
     refine List.mem_append_left _ (List.mem_append_right _ ?_)
     unfold outHeld
     exact List.mem_flatMap.mpr ⟨(i, d0.root, d0.kind), List.mem_filter.mpr ⟨hEih d0 hd0, by simp⟩, hd⟩
@@ -3703,7 +3703,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
           fun hd => absurd (h.postwf.arm _ Et hEt hd) (by rw [hEtb]; simp),
           fun hd => absurd hd (by simp [rrE, liftE_eq _ hrb, (hΔf v Ei hEi).2]),
           fun _ _ hb _ => (by rw [hpm, hown] at hb; cases hb),
-          fun _ _ hb _ => (by rw [hpm, hown] at hb; cases hb)⟩
+          fun _ hb _ => (by rw [hpm, hown] at hb; cases hb)⟩
         · rw [hpt, hty]; simp [rrE, liftE_eq _ hrb, ht0]
         · rw [hpm, hown]; simp [rrE, liftE_eq _ hrb, hm0, liftMode]
         · simp [rrE, liftE_eq _ hrb, hm0, liftMode, Mode.ownSlot] at ho
