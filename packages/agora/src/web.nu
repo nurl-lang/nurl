@@ -1012,6 +1012,8 @@ $ `auth.nu`
     : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : AgTrashQ f ( __ag_trash_q ( __ag_query_obj req ) now )
+    // Read before the page: anything trashed while it is read is past it.
+    : i max_id ( ag_trash_max_id . w rs )
     : i limit ( _ag_query_int req `limit` 50 1 500 )
     : i offset ( _ag_query_int req `offset` 0 0 1000000000 )
     : ( Vec AgTrash ) v ( ag_trash_page . w rs ( string_data . f kind ) ( string_data . f author ) . f before ( string_data . f text ) limit offset )
@@ -1024,7 +1026,7 @@ $ `auth.nu`
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `items` arr )
-    ( json_obj_set out `max_id` ( json_int ( ag_trash_max_id . w rs ) ) )
+    ( json_obj_set out `max_id` ( json_int max_id ) )
     ( json_obj_set out `before` ( json_int . f before ) )
     ( json_obj_set out `total` ( json_int ( ag_trash_count . w rs ( string_data . f kind ) ( string_data . f author ) . f before ( string_data . f text ) ) ) )
     : Json kinds ( json_obj_new )

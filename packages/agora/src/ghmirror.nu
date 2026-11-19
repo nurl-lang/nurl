@@ -157,10 +157,12 @@ $ `web.nu`
                 // A dry run's stand-ins go; live starts from nothing.
                 ?? ( sqlite_prepare db `DELETE FROM gh_issues WHERE number <= 0` ) { F _ → {} T q → { ( _ag_run q ) } }
                 ?? ( sqlite_prepare db `DELETE FROM gh_comments WHERE id <= 0` ) { F _ → {} T q → { ( _ag_run q ) } }
-                ?? ( sqlite_prepare db `UPDATE gh_task_prs SET noted = 0` ) { F _ → {} T q → { ( _ag_run q ) } }
+                // A PR tie is noted only by a live write (a dry run never marks
+                // one), so only the first enabling starts the ties afresh.
+                ? == was 0 { ?? ( sqlite_prepare db `UPDATE gh_task_prs SET noted = 0` ) { F _ → {} T q → { ( _ag_run q ) } } } {}
                 ? == mode 2 { ?? ( sqlite_prepare db `DELETE FROM gh_labels` ) { F _ → {} T q → { ( _ag_run q ) } } } {}
                 ?? ( sqlite_prepare db `UPDATE gh_outbox SET done = 1, error = 'superseded by a back-fill' WHERE done = 0` ) { F _ → {} T q → { ( _ag_run q ) } }
-                ?? ( sqlite_prepare db `INSERT INTO gh_outbox (task, kind, msg, created) SELECT task, kind, msg, ?1 FROM (SELECT t.id AS task, 'post' AS kind, 0 AS msg, t.id AS o1, 0 AS o2 FROM tasks t WHERE t.status IN ('open', 'claimed') UNION ALL SELECT t.id, 'comment', m.id, t.id, m.id FROM tasks t JOIN messages m ON m.channel = 'dev' AND (m.body LIKE 't' || t.id || ':%') WHERE t.status IN ('open', 'claimed') UNION ALL SELECT t.id, 'pr', p.pr, t.id, 1000000000 + p.pr FROM tasks t JOIN gh_task_prs p ON p.task = t.id WHERE t.status IN ('open', 'claimed') UNION ALL SELECT t.id, CASE WHEN t.status = 'done' THEN 'done' ELSE 'cancel' END, 0, t.id, 2000000000 FROM tasks t JOIN gh_issues g ON g.task = t.id AND g.number > 0 AND g.state != 'closed' WHERE t.status IN ('done', 'cancelled')) ORDER BY o1, o2` ) {
+                ?? ( sqlite_prepare db `INSERT INTO gh_outbox (task, kind, msg, created) SELECT task, kind, msg, ?1 FROM (SELECT t.id AS task, 'post' AS kind, 0 AS msg, t.id AS o1, 0 AS o2 FROM tasks t WHERE t.status IN ('open', 'claimed') UNION ALL SELECT t.id, 'comment', m.id, t.id, m.id FROM tasks t JOIN messages m ON m.channel = 'dev' AND (m.body LIKE 't' || t.id || ':%') WHERE (t.status IN ('open', 'claimed') OR (t.status IN ('done', 'cancelled') AND EXISTS (SELECT 1 FROM gh_issues g2 WHERE g2.task = t.id AND g2.number > 0 AND g2.state != 'closed'))) UNION ALL SELECT t.id, 'pr', p.pr, t.id, 1000000000 + p.pr FROM tasks t JOIN gh_task_prs p ON p.task = t.id WHERE (t.status IN ('open', 'claimed') OR (t.status IN ('done', 'cancelled') AND EXISTS (SELECT 1 FROM gh_issues g2 WHERE g2.task = t.id AND g2.number > 0 AND g2.state != 'closed'))) UNION ALL SELECT t.id, CASE WHEN t.status = 'done' THEN 'done' ELSE 'cancel' END, 0, t.id, 2000000000 FROM tasks t JOIN gh_issues g ON g.task = t.id AND g.number > 0 AND g.state != 'closed' WHERE t.status IN ('done', 'cancelled')) ORDER BY o1, o2` ) {
                     F _ → {}
                     T q → { ( _ag_bind_i q 1 now ) ( _ag_run q ) }
                 }
@@ -352,7 +354,13 @@ $ `web.nu`
 }
 
 // `["a","b","priority: high","in-progress"]`
-@ __ghm_labels GhmTask t → Json {
+// A tag a redaction pattern touches is not published as a label at all.
+@ __ghm_label_ok String tag ( Vec String ) pats → b {
+    : String r ( gh_redact ( string_clone tag ) pats )
+    ^ ( string_eq r tag )
+}
+
+@ __ghm_labels GhmTask t ( Vec String ) pats → Json {
     : Json arr ( json_arr_new )
     : s tg ( string_data . t tags )
     : ( Slice u ) v ( slice_of_str tg )
@@ -362,7 +370,10 @@ $ `web.nu`
     ~ < k n {
         : i c ( slice_byte v k )
         ? == c 44 {
-            ? > ( string_len cur ) 0 { ( json_arr_push arr ( json_str_lit ( string_data cur ) ) ) ( string_clear cur ) } {}
+            ? > ( string_len cur ) 0 {
+                ? ( __ghm_label_ok cur pats ) { ( json_arr_push arr ( json_str_lit ( string_data cur ) ) ) } {}
+                ( string_clear cur )
+            } {}
         } { ( string_push_char cur c ) }
         = k + k 1
     }
@@ -605,7 +616,9 @@ $ `web.nu`
                 : Json u ( _gh_obj it `user` )
                 : b by_app & != 0 ( nurl_str_eq ( string_data ( _gh_s u `type` ) ) `Bot` ) ( string_eq ( _gh_s u `login` ) bot )
                 : b is_pr ! ( json_is_null ( _gh_obj it `pull_request` ) )
-                ? & & by_app ! is_pr ( string_contains b ( string_data marker ) ) {
+                // The marker agora appends ends the body; one quoted inside a
+                // task's text is not it.
+                ? & & by_app ! is_pr ( string_ends_with b ( string_data marker ) ) {
                     : Json r ( json_obj_new )
                     ( json_obj_set r `number` ( json_int ( _gh_i it `number` ) ) )
                     ^ @ GhmOut { 200 r 0 ( string_new ) }
@@ -668,7 +681,7 @@ $ `web.nu`
     : String base ( string_from `/repos/` )
     ( string_push_str base full )
     ( string_push_str base `/issues` )
-    : Json labels ( __ghm_labels t )
+    : Json labels ( __ghm_labels t pats )
     : String lab_s ( json_stringify labels )
     : String head ( string_clone title )
     ( string_push_str head `\n` )

@@ -1839,6 +1839,11 @@ $ `src/service.nu`
     ( gh_drain st now )
     ( check == ( gh_sent st `POST` `` ) before2 `mirror: a security task, notes, mail and other posts are never written` )
 
+    // A tag a pattern touches is no label.
+    : i tl ( ag_task_post st `Tagged` `` `,api,secret.example,` `ann` 0 now )
+    ( gh_drain st now )
+    ( check & ( has ( gh_sent_text st ) `"labels":["api","priority: low"]` ) ! ( has ( gh_sent_text st ) `"secret.example"` ) `mirror: a redacted tag is not published as a label` )
+
     // Superseded: closed as a duplicate of its successor.
     : i tf ( ag_task_post st `Old plan` `` `` `ann` 0 now )
     : String sup ( string_from `Supersedes AGORA-` )
@@ -1943,6 +1948,10 @@ $ `src/service.nu`
     : i real ( gh_issue_of dr tj )
     ( ag_gh_mirror_mode dr 1 now )
     ( ag_task_claim dr tj `bob` 600 now )
+    : String dc ( string_from `t` )
+    ( string_push_int dc tj )
+    ( string_push_str dc `: a note while dry` )
+    : i _dp ( ag_post dr `dev` `bob` ( string_data dc ) 0 now )
     ( ag_task_done dr tj `bob` `done while dry` now )
     ( gh_drain dr now )
     // What the dry run logged is not what live writes.
@@ -1953,6 +1962,7 @@ $ `src/service.nu`
     ( string_push_int closep real )
     ( string_push_str closep ` {"state":"closed","state_reason":"completed"}` )
     ( check & > real 0 ( has ( gh_sent_text dr ) ( string_data closep ) ) `mirror: a task finished during a dry run is closed once live again` )
+    ( check ( has ( gh_sent_text dr ) `(Agora): t` ) `mirror: … with the comments it had meanwhile` )
     ( ag_gh_off )
 }
 
