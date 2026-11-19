@@ -1,4 +1,4 @@
-// drop_at_a_functions_exit_under_the_view_an_early_return_hands_back: an early `^` in an arm hands the view back past the exit's release
+// drop_at_a_functions_exit_under_the_view_an_early_return_hands_back: an early `^` in an arm hands the view back past the release of the arm's own `H` (the fall-off path holds none)
 // Closed: a return hands back a value read through an Rc's payload; a binding the exit releases whose `% Drop` may drop, replace or move what its parameter reaches, on an Rc type the value is read through, refuses the return (agora #918).
 // main 5916ad5: accepted; AddressSanitizer: heap-use-after-free.
 // map: §2.14 | A2 | rejected | - | agora #918: an early ^ in an arm hands the view back past the exit's release
@@ -11,8 +11,10 @@ $ `stdlib/std/rc.nu`
 % Drop H { @ drop H h → v { ( vec_clear [u] ( rc_get [( Vec u )] . h a ) ) ( vec_shrink_to_fit [u] ( rc_get [( Vec u )] . h a ) ) } }
 
 @ f ( Rc ( Vec u ) ) x → ( Slice u ) {
-    : H h @ H { ( rc_clone [( Vec u )] x ) }
-    ? > ( vec_len [u] ( rc_get [( Vec u )] x ) ) 0 { ^ ( slice_from_vec [u] ( rc_get [( Vec u )] x ) ) } {}
+    ? > ( vec_len [u] ( rc_get [( Vec u )] x ) ) 0 {
+        : H h @ H { ( rc_clone [( Vec u )] x ) }
+        ^ ( slice_from_vec [u] ( rc_get [( Vec u )] x ) )
+    } {}
     ^ ( slice_from_vec [u] ( rc_get [( Vec u )] x ) )
 }
 
