@@ -1,4 +1,7 @@
-// map: §2.10 | A2 | rejected | - | agora #793: a helper keeping its parameter into `x0`, a `( vec_at xss 0 )` binding, then replaced through the owner
+// parameter_kept_by_a_helper_into_an_element_view_local: a helper keeping its parameter into `x0`, a `( vec_at xss 0 )` binding, then the payload replaced through `xss`
+// Closed: a parameter that may share an Rc, put into a local by any spelling — a helper keeping it or a share of it into another argument or a field of an `inout` struct, a view local, a container reached through a call, a `??` payload of an option parameter — leads to the parameter in the function's drop summary (agora #793).
+// main 977a74c: accepted; AddressSanitizer: heap-use-after-free.
+// map: §2.10 | A2 | rejected | - | agora #793: a helper keeping its parameter into x0, a ( vec_at xss 0 ) binding, then the payload replaced through xss
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/box.nu`

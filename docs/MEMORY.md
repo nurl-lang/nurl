@@ -1662,6 +1662,25 @@ unless dropping an element runs a `% Drop` of the program's. The answer
 is by type: two
 structs that each made their own Rc look like one value to it; take the
 view again after the call.
+What a call may change through an argument includes what the callee
+changes through a local it put that argument into: a Vec it pushed the
+parameter onto, a struct field it stored it in, a literal made of it. The
+callee's own summary says so however the put is spelled (Agora #793).
+
+- The put may be a helper's. `( addto h xs )` may keep `h`, a share of it
+  (`( rc_clone h )`) or a literal of it into another argument, or a field
+  of an `inout` struct.
+- The local may be a view of another: `x0` of `( vec_at xss 0 )`, or a
+  `~` loop's element. A put into it is a put into `xss`.
+- The container may be reached through a call: `. ( box_get bx ) hs` is
+  `bx`'s.
+- The value may be a `??` payload: `T h` of an option parameter `oh` is
+  part of `oh`.
+
+A helper that keeps a share of its parameter in a container its caller
+holds tells the caller so, and the caller ends the views through any
+handle on that Rc value when the payload is then replaced.
+
 And `vec_put_back` took on trust that `x` came out of slot `i`: written
 back into another slot, two slots held one value (h248). It is raw, for
 `unsafe` code, as `mem_put_back` is.

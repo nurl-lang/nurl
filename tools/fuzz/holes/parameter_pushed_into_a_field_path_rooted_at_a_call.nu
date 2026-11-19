@@ -1,4 +1,7 @@
-// map: §2.10 | A2 | rejected | - | agora #793: a parameter pushed into `. ( box_get bx ) hs`, a container field path rooted at a call, then replaced
+// parameter_pushed_into_a_field_path_rooted_at_a_call: a parameter pushed into `. ( box_get bx ) hs`, then the payload replaced through it
+// Closed: a parameter that may share an Rc, put into a local by any spelling — a helper keeping it or a share of it into another argument or a field of an `inout` struct, a view local, a container reached through a call, a `??` payload of an option parameter — leads to the parameter in the function's drop summary (agora #793).
+// main 977a74c: accepted; AddressSanitizer: heap-use-after-free.
+// map: §2.10 | A2 | rejected | - | agora #793: a parameter pushed into . ( box_get bx ) hs, then the payload replaced through it
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/core/box.nu`
