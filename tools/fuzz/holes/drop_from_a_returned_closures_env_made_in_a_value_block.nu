@@ -1,4 +1,7 @@
-// map: §2.14 | A2 | rejected | - | agora #918: drop from a returned closures env holding the value
+// drop_from_a_returned_closures_env_made_in_a_value_block: `: ( @ i ) f { ( mkf @ H { r } ) }`: the closure is a value block's tail
+// Closed: a closure bound to a call's result holds what the callee's returned closure took over (`retcap`): releasing it runs those values' `% Drop` impls, swept as a call of each, so what they change of an Rc's payload ends the views another handle took (agora #919).
+// main 029b01d: accepted; AddressSanitizer: heap-use-after-free.
+// map: §2.14 | A2 | rejected | - | agora #919: f { ( mkf @ H { r } ) }: the closure is a value block's tail
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/rc.nu`
@@ -16,7 +19,7 @@ $ `stdlib/std/panic.nu`
     : ( Rc ( Vec u ) ) r ( rc_new [( Vec u )] v0 )
     : ( Rc ( Vec u ) ) r2 ( rc_clone [( Vec u )] r )
     : ( Slice u ) sl ( slice_from_vec [u] ( rc_get [( Vec u )] r2 ) )
-    { : ( @ i ) f ( mkf @ H { r } ) ( nurl_println_int ( f ) ) }
+    { : ( @ i ) f { ( mkf @ H { r } ) } ( nurl_println_int ( f ) ) }
     ( nurl_println_int # i ( slice_at [u] sl 0 ) )
     ^ 0
 }

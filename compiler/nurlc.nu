@@ -3083,6 +3083,9 @@ unsafe @ __fn_io_add s name → v { = g_fn_io_names ( nurl_str_cat3 g_fn_io_name
 // `% Drop` call (`__argtmp_udrop__`) that mem_drop_arg_temps has not met
 // yet: 0, and it asks nothing (agora #766).
 : ~ i g_argtmp_udrop_n 0
+// 1 while `__last_call_udargs__` holds the arguments of the call made last
+// (gen_call), so the next call clears it.
+: ~ i g_udargs_set 0
 // The Rc type sets the borrow walk notes, interned: each set is written
 // once, and a note names it by its number (`#3`) — a struct of sixty Rc
 // fields bound six hundred times noted the sixty names twelve hundred
@@ -27395,6 +27398,117 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
     }
 }
 
+// Closure binding `name` (type `ty`) bound to a call's result: the
+// closure may hold what the callee's returned closure took over — a
+// `sink` argument it captured (`retcap`, known at module end). Each
+// argument of the call whose type holds a `% Drop` that reaches an Rc
+// (`__last_call_udargs__`) is noted on the binding — `name+dk=` its call,
+// position and impls, and its Rc types as the binding's — and the walk
+// counts the impls where the callee takes that argument over
+// (__bck_udrop_fns_of): releasing the closure runs them (agora #919).
+@ __udrop_clo_note i syms s name s ty → v {
+    ? | == 0 g_udargs_set ! ( __is_closure_ty ( nurl_llty ty ) ) { ^ v } {}
+    : s ua ( nurl_sym_get syms `__last_call_udargs__` )
+    ? == 0 ( nurl_str_len ua ) { ^ v } {}
+    : s cal ( str_first_word ua )
+    : ~ s rest ( str_skip_word ua )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s e ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i c1 ( nurl_str_find e `:` )
+        : s k ( nurl_str_slice e 0 c1 )
+        : s r1 ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
+        : i c2 ( nurl_str_find r1 `:` )
+        : s ud ( nurl_str_slice r1 0 c2 )
+        : s r2 ( nurl_str_slice r1 + c2 1 - - ( nurl_str_len r1 ) c2 1 )
+        // (`:chain`, an argument closure's: the makers and positions its
+        // set came through, __udrop_clo_arg.)
+        : i c3 ( nurl_str_find r2 `:` )
+        : s rc ? < c3 0 ( nurl_str_cat r2 `` ) ( nurl_str_slice r2 0 c3 )
+        : s ch ? < c3 0 `` ( nurl_str_cat `/` ( nurl_str_slice r2 + c3 1 - - ( nurl_str_len r2 ) c3 1 ) )
+        ( __bck_rc_note ( nurl_str_cat4 name `+dk=` cal ( nurl_str_cat4 `/` k `/` ( nurl_str_cat ud ch ) ) ) )
+        ( __bck_rc_note ( nurl_str_cat3 name `=` rc ) )
+        ( bck_put `deferred` `1` )
+    }
+}
+
+// Is a right-hand side of first token `tt` a call's result for
+// __udrop_clo_note: the call itself, or a value block whose tail is one
+// (`{ ( mkf h ) }`, however deep: `__tail_first_tt__`), the last call the
+// block made?
+@ __udclo_rhs i syms i tt → b {
+    ? == tt TT_LPAREN { ^ T } {}
+    ? != tt TT_LBRACE { ^ F } {}
+    ^ == TT_LPAREN ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
+}
+
+// A closure argument `k` (first token `tt0`, a binding `nm0` or a call's
+// result, directly or as a value block's tail) of a call that may hand back
+// a closure: what releasing it runs is what that closure took over — a
+// binding's own notes (`+d=`, and each `+dk=` entry), or the call's
+// arguments that hold a `% Drop` reaching an Rc (`__last_call_udargs__`).
+// Its entries for `__uda#` (gen_call), space-separated, or ``: the closure
+// the call hands back may hold them (agora #919). Each set an inner maker
+// brought keeps that maker and position (`k:#ud:#rc:maker/k'…`, the chain
+// it came through), so the release counts it only where every one of them
+// took it over (__bck_udrop_fns_of): a maker that drops its `sink` value
+// before it returns hands back a closure over nothing of it.
+@ __udrop_clo_arg i syms i k i tt0 s nm0 → s {
+    : ~ s out ``
+    : s ks ( nurl_str_cat ( nurl_str_int k ) `:` )
+    // (A value block whose tail is a binding, `( wrap { c } )`, however
+    // deep (`__tail_first_tt__`): that binding's, as written bare.)
+    : ~ i tt tt0
+    : ~ s nm ( nurl_str_cat nm0 `` )
+    ? == tt0 TT_LBRACE {
+        : i ttt ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
+        ? ( is_ident_tok ttt ) { = tt ttt = nm ( nurl_sym_get syms `__tail_first_val__` ) } {}
+    } {}
+    ? ( is_ident_tok tt ) {
+        ? == 0 ( nurl_str_len g_bck_rcty ) { ^ out } {}
+        : s rc ( bck_rc_type_of nm )
+        ? == 0 ( nurl_str_len rc ) { ^ out } {}
+        : s rcs ( nurl_str_cat `:` ( __rc_set_id rc ) )
+        : s ud0 ( __bck_rc_noted nm `+d=` )
+        ? != 0 ( nurl_str_len ud0 ) { = out ( nurl_str_cat3 ks ( __rc_set_id ud0 ) rcs ) } {}
+        : ~ s dk ( __bck_rc_noted nm `+dk=` )
+        ~ != 0 ( nurl_str_len dk ) {
+            : s e ( __bar_first dk ) = dk ( __bar_rest dk )
+            // (`cal/k'/#ud[/chain]`: the set, and the chain with this maker
+            // and position first.)
+            : i s1 ( nurl_str_find e `/` )
+            : s r1 ( nurl_str_slice e + s1 1 - - ( nurl_str_len e ) s1 1 )
+            : i s2 ( nurl_str_find r1 `/` )
+            : s r2 ( nurl_str_slice r1 + s2 1 - - ( nurl_str_len r1 ) s2 1 )
+            : i s3 ( nurl_str_find r2 `/` )
+            : s ud ? < s3 0 ( nurl_str_cat r2 `` ) ( nurl_str_slice r2 0 s3 )
+            : s tail ? < s3 0 `` ( nurl_str_slice r2 s3 - ( nurl_str_len r2 ) s3 )
+            : s ch ( nurl_str_cat ( nurl_str_slice e 0 + + s1 1 s2 ) tail )
+            : s ent ( nurl_str_cat4 ks ud rcs ( nurl_str_cat `:` ch ) )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ent `` ) ( nurl_str_cat3 out ` ` ent )
+        }
+        ^ out
+    } {}
+    ? | == 0 g_udargs_set ! ( __udclo_rhs syms tt ) { ^ out } {}
+    : s ua ( nurl_sym_get syms `__last_call_udargs__` )
+    : s ical ( str_first_word ua )
+    : ~ s rest ( str_skip_word ua )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s e ( str_first_word rest ) = rest ( str_skip_word rest )
+        // (`k':#ud:#rc[:chain]` of the inner call `ical`.)
+        : i c1 ( nurl_str_find e `:` )
+        : s ik ( nurl_str_slice e 0 c1 )
+        : s r1 ( nurl_str_slice e + c1 1 - - ( nurl_str_len e ) c1 1 )
+        : i c2 ( nurl_str_find r1 `:` )
+        : s r2 ( nurl_str_slice r1 + c2 1 - - ( nurl_str_len r1 ) c2 1 )
+        : i c3 ( nurl_str_find r2 `:` )
+        : s udrc ( nurl_str_slice e + c1 1 ? < c3 0 - - ( nurl_str_len e ) c1 1 + + c2 1 c3 )
+        : s tail ? < c3 0 `` ( nurl_str_cat `/` ( nurl_str_slice r2 + c3 1 - - ( nurl_str_len r2 ) c3 1 ) )
+        : s ent ( nurl_str_cat4 ks udrc ( nurl_str_cat3 `:` ical `/` ) ( nurl_str_cat ik tail ) )
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ent `` ) ( nurl_str_cat3 out ` ` ent )
+    }
+    ^ out
+}
+
 // The `sink` parameters (positions `sinks`) of function `fname`, compiling now,
 // whose type runs a `% Drop` of the program's own that reaches an Rc: the
 // function takes them over and releases them where it lets them go — its
@@ -34900,6 +35014,15 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // argument was not one) — the returned-handle propagation below
     // maps the callee's ret-alias indices back to caller bindings.
     : ~ s arg_idents ``
+    // (The arguments whose type holds a `% Drop` of the program's own that
+    // reaches an Rc, `k:#ud:#rc`: a closure the call hands back may have
+    // taken them over, __udrop_clo_note; agora #919. Asked only of a callee
+    // that may hand back a closure — its return type lowered, or a generic's
+    // instance — once per call; kept under a key of this call's nesting,
+    // made only when there is one, so a call with none allocates nothing.)
+    : b __udclo ? == 0 g_user_drop_seen F | ( __is_closure_ll __cal_ll ) != 0 ( nurl_str_len call_targs )
+    : ~ i __udk 0
+    : i __udd g_nest_depth
     // (…and the bindings a join argument's arms select, published with the
     // call: `__last_call_join_phi__`, agora #775.)
     : ~ s __call_jphi ``
@@ -36601,6 +36724,27 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
         ( nurl_str_cat bck_arg_nm `` )
         ( nurl_str_cat3 arg_idents ` ` bck_arg_nm )
+        ? __udclo {
+            : s __uda ( __udrop_fns ( nurl_llty at ) )
+            ? != 0 ( nurl_str_len __uda ) {
+                : s __udr ( __rc_reach ( nurl_llty at ) )
+                ? != 0 ( nurl_str_len __udr ) {
+                    : s __ude ( nurl_str_cat4 ( nurl_str_int arg_idx ) `:` ( __rc_set_id __uda ) ( nurl_str_cat `:` ( __rc_set_id __udr ) ) )
+                    ( nurl_sym_append_word syms ( nurl_str_cat `__uda#` ( nurl_str_int __udd ) ) __ude )
+                    = __udk + __udk 1
+                } {}
+            } {
+                // (…and a closure argument, whose type names nothing it
+                // holds: what it took over, __udrop_clo_arg.)
+                ? ( __is_closure_ty ( nurl_llty at ) ) {
+                    : s __udc ( __udrop_clo_arg syms arg_idx bck_arg_tt bck_arg_val )
+                    ? != 0 ( nurl_str_len __udc ) {
+                        ( nurl_sym_append_word syms ( nurl_str_cat `__uda#` ( nurl_str_int __udd ) ) __udc )
+                        = __udk + __udk 1
+                    } {}
+                } {}
+            }
+        } {}
         : s __arg_onm ? & & == bck_arg_tt TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) == 0 ( nurl_sym_len syms `__tail_first_deep__` ) ( nurl_sym_get syms `__tail_first_val__` ) bck_arg_nm
         = arg_onames ? == 0 ( nurl_str_len arg_onames ) ( nurl_str_cat __arg_onm `` ) ( nurl_str_cat3 arg_onames ` ` __arg_onm )
         ? __want_effr {
@@ -38477,6 +38621,16 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // …and the ones it takes over (`retcap`: a wrapper handing its own
     // `sink` parameter on takes it over too — gen_ret).
     ? != 0 g_clo_cap_set { ( nurl_sym_def syms `__last_call_clo_cap_idents__` `` ) = g_clo_cap_set 0 } {}
+    // (…and its arguments of a type with a `% Drop` that reaches an Rc,
+    // with the callee that took them: __udrop_clo_note, agora #919.)
+    ? | != 0 __udk != 0 g_udargs_set {
+        ? != 0 __udk {
+            : s __udkey ( nurl_str_cat `__uda#` ( nurl_str_int __udd ) )
+            ( nurl_sym_def syms `__last_call_udargs__` ( nurl_str_cat3 __lend_cn ` ` ( nurl_sym_get syms __udkey ) ) )
+            ( nurl_sym_def syms __udkey `` )
+        } { ( nurl_sym_def syms `__last_call_udargs__` `` ) }
+        = g_udargs_set ? == 0 __udk 0 1
+    } {}
     ? != 0 g_retcap_n {
         ? != 0 ( nurl_sym_len2 g_pending_impl `retcap##` __lend_cn ) {
             ( nurl_sym_def syms `__last_call_clo_cap_idents__` ( bck_ret_alias_idents ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcap##` __lend_cn ) ) arg_idents ) )
@@ -61577,7 +61731,12 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 } {}
                 // (…and then what the scopes still hold is dropped: an owner
                 // whose drop reads a view, after what that view points into.)
+                // (…and what the exit releases, past the value it hands back:
+                // its source expression, `retsx`, agora #918.)
+                : b __rsx_on & & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) >= ( __bck_field_off rec 8 ) 0
+                ? __rsx_on { ( bck_put `retsx` ( bck_field rec 8 ) ) } {}
                 ( bck_ret_drop_check after_defers ( bck_field_int rec 3 ) )
+                ? __rsx_on { ( bck_put `retsx` `` ) } {}
                 = st ( nurl_str_cat `!` `` )
                 = p hi
                 = done T
@@ -63473,7 +63632,11 @@ unsafe @ bck_younger_view_check i holder s srcs i p i line → v {
 }
 
 unsafe @ bck_ret_drop_check s st i line → v {
-    ? | == 0 g_bck_udrop_any ( seq st `!` ) { ^ v } {}
+    // (…and, where the return hands back a value read through an Rc's
+    // payload, what each binding it releases runs: `retsx`, agora #918.)
+    : s rsx ? & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) ( nurl_sym_get g_bck `retsx` ) ``
+    : b udc != 0 ( nurl_str_len rsx )
+    ? | ( seq st `!` ) & == 0 g_bck_udrop_any ! udc { ^ v } {}
     // (Not the owner handed back by name, gen_ret: the caller drops it.)
     : s rtn ( nurl_sym_get g_bck ( nurl_str_cat4 `rto_` ( nurl_sym_get g_bck `file` ) `:` ( nurl_str_int line ) ) )
     : i rto ? != 0 ( nurl_str_len rtn ) ( bck_intern rtn ) -1
@@ -63491,9 +63654,14 @@ unsafe @ bck_ret_drop_check s st i line → v {
             // the value its destructor runs on, `vdu_`.)
             : b udr ( seq ( nurl_sym_get g_bck ( bck_bkey `vdu_` ( nurl_str_int id ) ) ) `1` )
             ? & != id rto | | == v BCK_OWNED == v BCK_MAYBE_MOVED & udr | == v BCK_BORROWED_SHARED == v BCK_BORROWED_MUT { = order ? == 0 ( nurl_str_len order ) ( nurl_str_int id ) ( nurl_str_cat3 order ` ` ( nurl_str_int id ) ) } {}
+            // (…and every one codegen may still release, whatever the walk's
+            // state calls it — not moved, stored away or unbound — judged
+            // against the value handed back; agora #918.)
+            ? udc { ? & != id rto ! | | == v BCK_UNINIT == v BCK_MOVED == v BCK_STORED { ( __bck_ret_udrop_check rsx ( nurl_str_int id ) line ) } {} } {}
         }
         = k - k 1
     }
+    ? == 0 g_bck_udrop_any { ^ v } {}
     : ~ s gone ``
     : ~ s rest2 ( nurl_str_cat order `` )
     ~ != 0 ( nurl_str_len rest2 ) {
@@ -63511,6 +63679,55 @@ unsafe @ bck_ret_drop_check s st i line → v {
             }
         } {}
         = gone ? == 0 ( nurl_str_len gone ) ( nurl_str_cat ds `` ) ( nurl_str_cat3 gone ` ` ds )
+    }
+}
+
+// A return at `line` hands back a value of source expression `sx` (walk
+// ids), read through the payloads of the Rc types __bck_rcp_scan names.
+// What the exit then releases — the bindings `ids`, still holding their
+// values, not the one handed back (bck_ret_drop_check) — runs the `% Drop`
+// impls their types hold (`+d=`, bck_note_rc_arg). One whose impl may drop, replace or move what its
+// parameter reaches (its final summary), on an Rc type the value is read
+// through, frees what the caller would read: the return is refused
+// (agora #918). The caller cannot see it: what it is handed is a lend made
+// after the callee's effects.
+@ __bck_ret_udrop_check s sx s ids i line → v {
+    : s rcp ( __bck_rcp_scan sx )
+    ? == 0 ( nurl_str_len rcp ) { ^ v } {}
+    : b any ( str_contains_word rcp `*` )
+    : ~ s rest ( nurl_str_cat ids `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ids1 ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s nm ( nurl_sym_get2 g_bck `rv_` ids1 )
+        : ~ s fns ( __bck_udrop_fns_of nm )
+        ? != 0 ( nurl_str_len fns ) {
+            // (The Rc types it reaches meet those the value is read
+            // through — `*`: any.)
+            : s rts ( bck_rc_type_of nm )
+            : ~ b meets any
+            : ~ s rw ( nurl_str_cat rcp `` )
+            ~ & ! meets != 0 ( nurl_str_len rw ) {
+                : s w ( str_first_word rw ) = rw ( str_skip_word rw )
+                ? ( __bar_has rts w ) { = meets T } {}
+            }
+            ~ & meets != 0 ( nurl_str_len fns ) {
+                : s f ( __bar_first fns ) = fns ( __bar_rest fns )
+                : b chg | | ( bck_callee_drops_elems f `0` ) ( nurl_sym_has_word g_fn_reallocs f `0` ) & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs f `0` )
+                ? chg {
+                    : s tag ( nurl_str_cat4 `rd:` ids1 `:` ( nurl_str_int line ) )
+                    : s ws ( nurl_sym_get g_bck `warnset` )
+                    ? ! ( str_contains_word ws tag ) {
+                        ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+                        : s hn ( bck_name_show nm )
+                        : s m1 ( nurl_str_cat3 `the value this return hands back is read through the payload of an 'Rc' that '` hn `' may hold another handle on. '` )
+                        : s m2 ( nurl_str_cat3 hn `' is released when the function returns, after the value is made, and its type's 'drop' may drop or replace what it holds: the caller would read freed memory. Release '` hn )
+                        : s m3 `' before the value is made (in a block that ends first), or hand back a copy that owns its data (slice_to_vec, string_from).`
+                        ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 m3 ) )
+                    } {}
+                    = fns ``
+                } {}
+            }
+        } {}
     }
 }
 
@@ -71332,7 +71549,7 @@ unsafe @ bck_scope_leave s st i line → s {
     // nothing to ask — and the note index is not built for it.)
     ? | | == 0 g_user_drop_seen == 0 ( nurl_str_len g_bck_rcty ) < id 0 { ^ st } {}
     ? ( seq st `!` ) { ^ st } {}
-    : ~ s fns ( __bck_rc_noted ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) ) `+d=` )
+    : ~ s fns ( __bck_udrop_fns_of ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) ) )
     ? == 0 ( nurl_str_len fns ) { ^ st } {}
     : ~ s out ( nurl_str_cat st `` )
     ~ != 0 ( nurl_str_len fns ) {
@@ -71340,6 +71557,41 @@ unsafe @ bck_scope_leave s st i line → s {
         : s rec ( nurl_str_cat4 ( nurl_str_cat4 `pendsink\t` ( nurl_str_int id ) `\t\t` ( nurl_str_int line ) ) `\t0\t` f ( nurl_str_cat `\t0\t` how ) )
         // (A state of its own: the sweep's answer may read the row.)
         = out ( nurl_str_cat ( bck_borrow_sweep out out rec 42 ) `` )
+    }
+    ^ out
+}
+
+// The `% Drop` impls releasing binding `nm` runs: its own type's (`+d=`),
+// and, for a closure bound to a call's result, those of the arguments the
+// callee's returned closure took over (`+dk=` `callee/k/#ud`, by the final
+// `retcap` summaries; agora #919).
+@ __bck_udrop_fns_of s nm → s {
+    : ~ s out ( __bck_rc_noted nm `+d=` )
+    : ~ s dk ( __bck_rc_noted nm `+dk=` )
+    ~ != 0 ( nurl_str_len dk ) {
+        : s e ( __bar_first dk ) = dk ( __bar_rest dk )
+        : i s1 ( nurl_str_find e `/` )
+        : s cal ( nurl_str_slice e 0 s1 )
+        : s r1 ( nurl_str_slice e + s1 1 - - ( nurl_str_len e ) s1 1 )
+        : i s2 ( nurl_str_find r1 `/` )
+        : s k ( nurl_str_slice r1 0 s2 )
+        : s r2 ( nurl_str_slice r1 + s2 1 - - ( nurl_str_len r1 ) s2 1 )
+        // (`/maker/k'…`: an argument closure's set, counted only where
+        // each maker on its way took it over too, __udrop_clo_arg.)
+        : i s3 ( nurl_str_find r2 `/` )
+        : s ud ? < s3 0 ( nurl_str_cat r2 `` ) ( nurl_str_slice r2 0 s3 )
+        : ~ b took | ( __fn_retcap_arg cal k ) ( __fn_retcap_arg ( bck_generic_base cal ) k )
+        : ~ s ch ? < s3 0 `` ( nurl_str_slice r2 + s3 1 - - ( nurl_str_len r2 ) s3 1 )
+        ~ & took != 0 ( nurl_str_len ch ) {
+            : i q1 ( nurl_str_find ch `/` )
+            : s mc ( nurl_str_slice ch 0 q1 )
+            : s cr ( nurl_str_slice ch + q1 1 - - ( nurl_str_len ch ) q1 1 )
+            : i q2 ( nurl_str_find cr `/` )
+            : s mk ? < q2 0 ( nurl_str_cat cr `` ) ( nurl_str_slice cr 0 q2 )
+            = ch ? < q2 0 `` ( nurl_str_slice cr + q2 1 - - ( nurl_str_len cr ) q2 1 )
+            = took | ( __fn_retcap_arg mc mk ) ( __fn_retcap_arg ( bck_generic_base mc ) mk )
+        }
+        ? took { = out ( __bar_union out ( nurl_sym_get g_rc_idset ud ) ) } {}
     }
     ^ out
 }
@@ -74328,6 +74580,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         : b __udo != 0 g_bck_bind_owns
         ( bck_record_binding `let` name bck_line __cbc vt )
         ? __udo { ( __udrop_bind_note syms vt g_bck_rhs_sx ) } {}
+        ? & __udo ( __udclo_rhs syms bck_rhs_tt ) { ( __udrop_clo_note syms name vt ) } {}
         ? == __cbc 5 { ( bck_note_clo_borrow syms name bck_line __cbr ) } {}
         = g_bck_rhs_callee ``
         = g_bck_let_sx_last ( nurl_str_cat g_bck_rhs_sx `` )
@@ -74764,6 +75017,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             : b __udo != 0 g_bck_bind_owns
             ( bck_record_binding `let` name bck_line __cbc ( nurl_llty ptype ) )
             ? __udo { ( __udrop_bind_note syms ptype g_bck_rhs_sx ) } {}
+            ? & __udo ( __udclo_rhs syms bck_rhs_tt ) { ( __udrop_clo_note syms name ptype ) } {}
             ? == __cbc 5 { ( bck_note_clo_borrow syms name bck_line __cbr ) } {}
             = g_bck_rhs_callee ``
             = g_bck_let_sx_last ( nurl_str_cat g_bck_rhs_sx `` )
@@ -75378,6 +75632,9 @@ unsafe @ gen_assign i lex i syms i cg → s {
         ( bck_record_binding `assign` name bck_line __acbc vt )
         // (`= x x` binds no new value and releases none: no edge either.)
         ? & __udo ! g_bck_self_asn { ( __udrop_bind_note syms vt g_bck_rhs_sx ) } {}
+        // (…a closure's env by its own test, __asn_clo_owned: a call's
+        // result the binding takes, agora #919.)
+        ? & & | __udo __asn_clo_owned ! g_bck_self_asn ( __udclo_rhs syms bck_rhs_tt ) { ( __udrop_clo_note syms name vt ) } {}
         // (…and the old value it releases, when it is a parameter's — an
         // `inout` one's, the caller's value: what its `% Drop` impls drop of
         // their parameter, this function drops of that one; agora #766.)
