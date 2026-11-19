@@ -3067,12 +3067,16 @@ class FnCheck:
             if sm is None or body is None:
                 continue
             ncap = getattr(body, "ncap", 0)
-            if sm["res"] == "lent" and body.ret is not None and body.ret[0] in ("slice", "closure"):
+            if (sm["res"] == "lent" and body.ret is not None and body.ret[0] in ("slice", "closure")
+                    and not self.clo_slice_copies(body.ret)):
                 # a slice the body hands back is that view: what it lends of
                 # its parameters, the result of this call lends of these
                 # arguments - and of what its captures point at (a value it
                 # hands back is copied, MEMORY.md §7.5 - a raw string too,
-                # h220; a slice has no copy). A closure it hands back out of a
+                # h220; a slice has no copy, but one of elements that hold no
+                # view and can be copied, `[i` or `[String`, is copied where the
+                # body lent it - nurlc's mem_clo_ret_copies_slc, agora #894).
+                # A closure it hands back out of a
                 # capture is that closure, lent out of the capture as a slice
                 # is (agora #838).
                 for (k, path, kind) in sm["lends"]:
@@ -3134,6 +3138,15 @@ class FnCheck:
         if vloans or valias:
             return AV("L", vloans, valias, out)
         return AV("O", (), (), out)
+
+    def clo_slice_copies(self, ty):
+        """Is a slice of type `ty` that a closure hands back its caller's own
+        copy on every run: an owned slice whose elements hold no view and can
+        be copied (nurlc's mem_clo_ret_copies_slc, agora #894)?"""
+        if ty is None or ty[0] != "slice" or len(ty) < 2 or ty[1] is None:
+            return False
+        et = ty[1]
+        return not self.holds_views(et) and self.T.copyable(et)
 
     def view_result(self, ty):
         """Is a value of type `ty` a view, or a container of views (`?s`, a
