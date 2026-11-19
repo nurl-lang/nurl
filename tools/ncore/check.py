@@ -3381,8 +3381,13 @@ class FnCheck:
             for vid in sorted(st.vals, reverse=True):
                 av = st.vals[vid]
                 v = self.fn.vars[vid]
-                if (vid in seen or av.own != "O" or v.kind != "local" or vid == self.ret_watch
+                if (vid in seen or av.own not in ("O", "X") or v.kind != "local" or vid == self.ret_watch
                         or vid in self.defer_reads_of(d) or vid in self.chain_kept):
+                    continue
+                if av.own == "X":
+                    # (moved on some paths only: released on the others,
+                    # before the block runs)
+                    self.run_dtor(st, (vid, ()), v.ty, v.line)
                     continue
                 # (released here: its `% Drop` runs, as at a scope end)
                 self.run_dtor(st, (vid, ()), v.ty, v.line)
@@ -3947,9 +3952,9 @@ class FnCheck:
         effect of its own, a `% Drop` that cleared a shared Rc payload left
         another handle's view of it live (agora #766, #918, #919; nurlc's
         `+d=` / `+dk=` notes, __bck_udrop_*)."""
-        if ty is None or ty in seen or not getattr(self.prog, "udrop", ()):
+        if not getattr(self.prog, "udrop", ()) or (ty is not None and ty in seen):
             return
-        k = ty[0]
+        k = ty[0] if ty is not None else None
         if not seen:
             # (a closure released with the value releases its environment:
             # each value the environment took over runs its `% Drop` - a
@@ -3971,7 +3976,7 @@ class FnCheck:
                         cv = body.vars.get(c)
                         if cv is not None and getattr(cv, "taken", False):
                             self.dtor_regions(st, cv.ty)
-        if k == "closure":
+        if ty is None or k == "closure":
             return
         if not self.dtor_runs(ty):
             return
@@ -3992,12 +3997,14 @@ class FnCheck:
         lit = {tuple(hp) for hp, ln in av.held
                if isinstance(ln, tuple) and len(ln) == 3 and isinstance(ln[0], tuple)
                and ln[0] and ln[0][-1] == "lit" and ln[2] == "handle"} if av is not None else set()
-        # (…nor a part already handed on - a field a call's result took
-        # over, `st.gone`: its new owner releases it)
-        gone = {tuple(gp) for gv, gp in st.gone if gv == place[0]}
+        # (A part handed on - `st.gone` - still runs its destructor here:
+        # gone is a union at joins, so a part taken on one path only is
+        # still the owner's on the other, and skipping it there would miss
+        # what its `% Drop` changes. On the path that took it, the effects
+        # come early: a refusal, never a missed change.)
         for sub, pty in self.dtor_parts(ty):
             p2 = (place[1] + sub)[:PATH_MAX]
-            if tuple(p2) in lit or any(tuple(p2)[:len(g)] == g for g in gone):
+            if tuple(p2) in lit:
                 continue
             self.run_dtor(st, (place[0], p2), pty, line, seen)
 
@@ -4251,7 +4258,7 @@ class FnCheck:
                 # ) } {}`: released, it runs the arm value's `% Drop` - the
                 # type the arm gave it; agora #917, #766)
                 sty = self.fn.vars[rv[1][1]].ty
-                if sty is not None and self.dtor_runs(sty):
+                if sty is not None and (self.dtor_runs(sty) or sty[0] == "closure"):
                     self.join_ty[vid] = sty
             if not path and st.pb and any(p[0] == vid for p in st.pb):
                 # (a copy that still owes its write-back given another value:
