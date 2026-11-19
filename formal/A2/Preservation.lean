@@ -584,21 +584,22 @@ def CloCase (P : Prog) : Prop :=
 /-- A2-envhand: the case of a call that hands the environment over, proven with
     the store it leaves and the typing of its run-time form (`EnvHand.lean`). -/
 def HandCase (P : Prog) : Prop :=
-  ∀ {ξ : Exits} {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt} {Ec E : Entry}
+  ∀ {ξ : Exits} {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt} {Ec E : Entry}
     {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff} {Δ : Ctx} {m m' : Mem} {s' : Stmt},
     k.src = true → Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty.undtor = .fn ms q → canDo Ec.mode .replace →
     ms[j]? = some σ → P[σ]? = some sig →
-    ((sig.params = [(.inout b, .fn ms q)] ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q) ∨
-      (sig.params = [(.sink, Ec.ty)] ∧ Ec.vdeps = [] ∧ Ec.mode = .own ∧ Ec.live = true ∧
+    ((∃ ps, sig.params = (.inout b, .fn ms q) :: ps ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q ∧
+          ∀ z ∈ zs, ∀ d ∈ (argE Γ z).vdeps, (Γ d.root).isSome) ∨
+      (sig.params = [(.sink, Ec.ty)] ∧ zs = [] ∧ Ec.vdeps = [] ∧ Ec.mode = .own ∧ Ec.live = true ∧
         q.drops = true ∧ sig.resOwn = false)) →
     sig.lends = [] → sig.rholds = [] → sig.outHolds = [] →
     NoPin Γ c → DtorSafe Γ .replace false c →
-    CallT P (kill .replace false c Γ) F σ [c] E Γ1 →
+    CallT P (kill .replace false c Γ) F σ (c :: zs) E Γ1 →
     StmtT P (ξ.under x) (kill .replace false c (setE Γ1 x E)) F k Δ →
-    EndOK Δ x → MemCodes P m → Inv m Γ F (.callcE x c j [] k) →
-    Step P m (.callcE x c j [] k) (.ok m' s') → ¬ IsReap m (.callcE x c j [] k) m' s' →
+    EndOK Δ x → MemCodes P m → Inv m Γ F (.callcE x c j zs k) →
+    Step P m (.callcE x c j zs k) (.ok m' s') → ¬ IsReap m (.callcE x c j zs k) m' s' →
     ∃ Γ', StmtT P ξ Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.callcE x c j [] k) s' ∧ Frz F m m'
+      Keep Γ Γ' (.callcE x c j zs k) s' ∧ Frz F m m'
 
 /-- What source typing keeps of a context (`StmtT.ctxRel`, `A2/SrcKeep.lean`),
     as a hypothesis of the call's typing, which is stated before it. -/

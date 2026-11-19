@@ -127,8 +127,8 @@ theorem CtxRel.bind {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {E : Entry}
 
 /-- An `inout` argument of a call is not lent out. -/
 theorem CallT.inout0_notF {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {sig : Fn} {c : Var} {E : Entry}
-    {b : Eff} {t : Ty} (hcT : CallT P Γ F σ [c] E Γ1) (hσ : P[σ]? = some sig)
-    (hsp : sig.params = [(.inout b, t)]) : c ∉ F := by
+    {b : Eff} {t : Ty} {zs : List Var} {ps : List (PMode × Ty)} (hcT : CallT P Γ F σ (c :: zs) E Γ1)
+    (hσ : P[σ]? = some sig) (hsp : sig.params = (.inout b, t) :: ps) : c ∉ F := by
   obtain ⟨sig', hσ', _, hargs, _⟩ := hcT
   rw [hσ] at hσ'; cases hσ'
   obtain ⟨_, _, _, _, hmv, _⟩ := hargs 0 (by simp [hsp])
@@ -137,6 +137,15 @@ theorem CallT.inout0_notF {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {s
 /-- ... and so is one it takes owned (Agora #609). -/
 theorem CallT.sink0_notF {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {sig : Fn} {c : Var} {E : Entry}
     {t : Ty} (hcT : CallT P Γ F σ [c] E Γ1) (hσ : P[σ]? = some sig)
+    (hsp : sig.params = [(.sink, t)]) : c ∉ F := by
+  obtain ⟨sig', hσ', _, hargs, _⟩ := hcT
+  rw [hσ] at hσ'; cases hσ'
+  obtain ⟨_, _, _, _, hmv, _⟩ := hargs 0 (by simp [hsp])
+  exact (hmv (by simp [hsp, PMode.moves])).1
+
+/-- ... with any arguments beside it (AGORA-909). -/
+theorem CallT.sink0_notF' {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {sig : Fn} {c : Var} {E : Entry}
+    {t : Ty} {zs : List Var} (hcT : CallT P Γ F σ (c :: zs) E Γ1) (hσ : P[σ]? = some sig)
     (hsp : sig.params = [(.sink, t)]) : c ∉ F := by
   obtain ⟨sig', hσ', _, hargs, _⟩ := hcT
   rw [hσ] at hσ'; cases hσ'
@@ -164,9 +173,9 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       (fun Ex h => by rw [hx1] at h; cases h) hE
     have hnrb : E.mode ≠ .rootb := by rcases (RhsT.out hr).1 with h | h <;> rw [h] <;> simp
     exact CtxRel.bind hanch hx hxF (hr.ctxRel hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
-  | @callcE _ Γ Γ1 Δ F x c j k Ec E ms q σ sig b hks hx hxF _ _ _ _ _ hσ hsp _ _ _ hny _ hcT _ hpin _ _ ih =>
+  | @callcE _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig b hks hx hxF _ _ _ _ _ hσ hsp _ _ _ hny _ hcT _ hpin _ _ ih =>
     intro _ hanch hn
-    have hcF : c ∉ F := hsp.elim (fun h => hcT.inout0_notF hσ h.1) (fun h => hcT.sink0_notF hσ h.1)
+    have hcF : c ∉ F := hsp.elim (fun ⟨_, h, _⟩ => hcT.inout0_notF hσ h) (fun h => hcT.sink0_notF' hσ h.1)
     have hk0 := CtxRel.kill hanch hcF .replace false (hny.kills .replace false)
     have hanchk : RootbAnch (A2.kill .replace false c Γ) F := hanch.kill _ _ _
     obtain ⟨hn1, hE, _⟩ := hcT.names hP (hn.kill .replace false c)

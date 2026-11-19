@@ -912,10 +912,16 @@ the LLVM / C11 memory model rather than redefining it.
       what an `Arc` or a read guard lends is never an `inout` argument,
       h364). An accumulator is typed whole and `memory_safe` / `no_leak`
       apply to it (`accMain_safe`, `accMain_no_leak`), and h365's and
-      h366's rules are named (`hand_ends`, `canDo_inout_replace`). Not
-      typed yet: an interface with parameters beside the receiver, or
-      whose result borrows from the receiver; a hand-over through a
-      borrowed closure parameter.
+      h366's rules are named (`hand_ends`, `canDo_inout_replace`). The
+      interface may take parameters beside the receiver (AGORA-927), which
+      the code is passed as they are: none of them may be the package, view
+      it or its environment, or be moved or changed while the package views
+      it (`callcE_arg_is_pkg`, `callcE_arg_views_pkg`,
+      `callcE_pkg_views_arg`), and every dependency of each is a binding's
+      (a premise of `StmtT.callcE`; a well-formed context gives it every
+      argument but a plain integer). Not typed yet: an interface whose
+      result borrows from the receiver; a hand-over through a borrowed
+      closure parameter.
     - **Trait objects (A3.5c).** A trait object is a package as a closure
       is (`Rhs.pack`), so A3.5b's class covers it: its class is the
       trait's bound (`TraitBound`: none, `: Send`, `: Send Sync` give

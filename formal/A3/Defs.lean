@@ -2217,14 +2217,15 @@ package:
   refused by the type. -/
 
 /-- A hand-over takes the package as an owner, at a class at least `send`,
-    through an interface that takes it `inout` and nothing else; or (Agora
+    through an interface that takes it `inout` first (AGORA-927: perhaps with
+    parameters beside it); or (Agora
     #609) owned, a package of the dropping class that holds nothing, through
     an interface that takes it `sink` and nothing else. -/
 theorem _root_.A2.StmtT.callcE_recv_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat}
     {zs : List Var} {k : Stmt} {Ec : Entry} (h : StmtT P ξ Γ F (.callcE x c j zs k) Δ) (hc : Γ c = some Ec) :
     ∃ ms q σ sig, Ec.ty.undtor = .fn ms q ∧ canDo Ec.mode .replace ∧ ms[j]? = some σ ∧
       P[σ]? = some sig ∧
-      ((∃ b, sig.params = [(.inout b, .fn ms q)] ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q) ∨
+      ((∃ b ps, sig.params = (.inout b, .fn ms q) :: ps ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q) ∨
         (sig.params = [(.sink, Ec.ty)] ∧ q.drops = true)) := by
   generalize hs : Stmt.callcE x c j zs k = s at h
   induction h generalizing Ec with
@@ -2232,7 +2233,7 @@ theorem _root_.A2.StmtT.callcE_recv_at {P : Prog} {Γ Δ : Ctx} {F : List Var} {
     cases hs
     rw [hc] at hc'; cases hc'
     exact ⟨_, _, _, _, hty, hcan, hj, hσ,
-      hsp.imp (fun h => ⟨_, h⟩) (fun h => ⟨h.1, h.2.2.2.2.1⟩)⟩
+      hsp.imp (fun ⟨ps, h1, h2, h3, _⟩ => ⟨_, ps, h1, h2, h3⟩) (fun h => ⟨h.1, h.2.2.2.2.2.1⟩)⟩
   | sub hw _ _ ih =>
     obtain ⟨hn, hwe⟩ := hw.1 c
     obtain ⟨E0, hE0⟩ : ∃ E0, _ = some E0 :=
@@ -2250,7 +2251,7 @@ theorem callcE_send {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c : Var} {j : Nat
     (hc : Γ c = some Ec) (hty : Ec.ty = .fn ms q) : Cross.send.Le q ∨ q.drops = true := by
   obtain ⟨ms', q', _, _, hty', _, _, _, hbr⟩ := h.callcE_recv_at hc
   rw [hty] at hty'; cases hty'
-  rcases hbr with ⟨_, _, _, hq⟩ | ⟨_, hd⟩
+  rcases hbr with ⟨_, _, _, _, hq⟩ | ⟨_, hd⟩
   · exact Or.inl hq
   · exact Or.inr hd
 
@@ -2288,7 +2289,7 @@ theorem _root_.A2.StmtT.callcE_bound {P : Prog} {Γ Δ : Ctx} {F : List Var} {x 
   rw [hty] at hty'; cases hty'
   obtain ⟨sig', hσ', pm, hpm, hhd'⟩ := hb j σ hj
   rw [hσ] at hσ'; cases hσ'
-  rcases hbr with ⟨e, hsp, _, _⟩ | ⟨hsp, _⟩
+  rcases hbr with ⟨e, _, hsp, _, _⟩ | ⟨hsp, _⟩
   · rw [hsp] at hhd'
     simp only [List.head?_cons, Option.some.injEq, Prod.mk.injEq, Ty.fn.injEq, true_and] at hhd'
     exact hhd'.2
@@ -2403,7 +2404,7 @@ theorem _root_.A2.StmtT.callcE_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c
       (callRes (kill .replace false c Γ) sig [c]))) F k Δ) (hend : EndOK Δ x)
     (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
     StmtT P ξ Γ F (.callcE x c j [] k) (exitScope x Δ) :=
-  StmtT.callcE hks hx hxF hc (by rw [hty]; rfl) (Or.inl hm) (Or.inl hq) hj hσ (Or.inl ⟨hps, hty, hq⟩) hsl hsr hso hny hdc
+  StmtT.callcE hks hx hxF hc (by rw [hty]; rfl) (Or.inl hm) (Or.inl hq) hj hσ (Or.inl ⟨[], hps, hty, hq, fun _ hz => by cases hz⟩) hsl hsr hso hny hdc
     (callT_recv_inout hσ (by rw [hty]; exact hps) hc hl hm (by rw [hty]; rfl) hcF hself hn hdb hny hdc hnt)
     hk hend hnt hdk
 

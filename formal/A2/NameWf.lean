@@ -893,7 +893,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       have := (hcT.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h)
       (recvRes_named hE))).exitScope x
-  | @callcE _ Γ Γ1 Δ F x c j k Ec E ms q σ sig b hks hx _ _ _ _ _ _ _ _ _ _ _ _ _ hcT _ _ _ _ ih =>
+  | @callcE _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig b hks hx _ _ _ _ _ _ _ _ _ _ _ _ _ hcT _ _ _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, _⟩ := hcT.names hP (hn.kill _ _ _)
     have hx1 : Γ1 x = none := by

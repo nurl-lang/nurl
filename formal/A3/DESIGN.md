@@ -4684,14 +4684,21 @@ nothing by name (`cs = []`).
 - *The code's call* (`callT_hand`): typed from the interface's; `y` is fresh
   and holds what `c` held, so it is reached by no other binding, what its
   closures may change the interface's call may change, and no destructor
-  views it.
+  views it. AGORA-927: the interface may take parameters beside the receiver,
+  passed to the code as they are; none of them reaches `y`
+  (`hand_args_apart`: each depends only on bindings, a premise of
+  `StmtT.callcE`, and `y` is fresh).
 - *The run-time form* (`hand_typed`): typed by A2's own rules, and the context
   it leaves is `Weaker` than the one the source's continuation is typed in.
   `HandRel` compares the two binding by binding outside `x`, `y`, `r`, `c`
   (each step: a kill of a fresh binding, one both make, the closures' kills
   by name, sets of the excluded bindings); `FrameOK` keeps the borrowed
-  parameters and destructor bindings the store's; `recv_keep`: the call's
-  changes by name do not end `y`.
+  parameters and destructor bindings the store's; the call's changes by
+  name, and its changes to the parameters beside the receiver, do not end
+  `y` (what `y` is handed is ended by them no more than the package is). The
+  parameters beside the receiver are the identity part of the comparison:
+  the same entries on both sides, moved and changed alike
+  (`handRel_tail`).
 - *Preservation* (`handCase`, a case of `preserve` as `CloCase` is),
   *progress* (`handProgress`: the package's code takes the environment
   `inout`, and it captures nothing by name), and the inductions over typing
