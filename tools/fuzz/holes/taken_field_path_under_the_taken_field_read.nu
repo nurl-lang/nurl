@@ -1,4 +1,5 @@
-// map: §2.1 | A2 | rejected | - | agora #280: `. o a` taken by a sink, then `. . o a buf` pushed to
+// map: §2.1 | A2 | rejected | - | AGORA-929: `. o a` taken by a sink, then `. . o a buf` pushed to
+// AGORA-929 (this shape, closed; AGORA-280's rest): refused (main 85a31ca6: accepted, a null handle or freed memory)
 $ `stdlib/core/string.nu`
 
 : Inner { String buf }
