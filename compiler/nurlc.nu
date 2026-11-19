@@ -46145,6 +46145,15 @@ unsafe @ __slice_len_comma s t → b {
             ( mem_udrop_flag_set syms cg ptr ( nurl_sym_get syms `__last_slice_own_bit__` ) )
         } {}
     } {}
+    // (A slice field taken out of a temporary, `: [i x . ( mkb ) s`: the
+    // binding owns it by the read's flag (`__last_tmp_field_own__`, h266),
+    // as a join's slice by its bit. Released by nobody, it leaked; agora
+    // #895.)
+    ? & == rhs_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) {
+        ( mem_own_add syms name )
+        ( mem_slice_decl_add syms name )
+        ( mem_udrop_flag_set syms cg ptr ( nurl_sym_get syms `__last_tmp_field_own__` ) )
+    } {}
     ? ( __slice_let_moves syms rhs_tt rhs_val name vt is_mut ) {
         ( __slice_slot_empty syms rhs_val vt )
         ( mem_own_add syms name )
@@ -49557,7 +49566,8 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // rule of its own, above.)
     // (…or a field taken out of a call's result, `( len . ( mk ) name )`:
     // a value of its own, h266.)
-    : b __tfo && && == arg_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) ( __is_handle_ty at )
+    // (…an owned slice's too: agora #895.)
+    : b __tfo && && == arg_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) || ( __is_handle_ty at ) ( __owned_slice_ty ( nurl_llty at ) )
     // (…or a `?` / `??` join of owning values, by the phi of its arms'
     // ownership bits — a literal's, a call's (mem_arm_hown,
     // mem_arm_struct_hown): a value of its own, which nothing dropped when
@@ -80639,6 +80649,10 @@ unsafe @ gen_cast i lex i syms i cg → s {
     // read, as __arm_is_mem_dup asks it of an arm.)
     ? & == mb_tt TT_LPAREN == g_dup_nest + g_call_nest 1 { ^ ( nurl_str_cat `true` `` ) } {}
     ? == mb_tt TT_LPAREN { ^ ( mem_call_retown syms cg ) } {}
+    // (A struct literal read for a field, `. @ SB { ( mk ) 3 } s`: the
+    // literal took in what it holds, so it is the read's own temporary.
+    // Seen as no temporary, it leaked - agora #895.)
+    ? == mb_tt TT_AT { ^ ( nurl_str_cat `true` `` ) } {}
     ^ ( nurl_str_cat inner_tfo `` )
 }
 
@@ -80755,7 +80769,7 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
     // field of something, nothing released it (agora #474).
     : s __mb_inner_tfo ? == __mb_tt TT_DOT ( nurl_sym_get syms `__last_tmp_field_own__` ) ``
     : s __mb_inner_rk ? == __mb_tt TT_DOT ( nurl_sym_get syms `__last_tmp_field_rk__` ) ``
-    : b __mb_tobj | == __mb_tt TT_LPAREN & == __mb_tt TT_DOT != 0 ( nurl_str_len __mb_inner_tfo )
+    : b __mb_tobj | | == __mb_tt TT_LPAREN & == __mb_tt TT_DOT != 0 ( nurl_str_len __mb_inner_tfo ) & == __mb_tt TT_AT ( __type_needs_drop ot syms )
     ( nurl_sym_def syms `__last_field_read__` `` )
     ( nurl_sym_def syms `__last_tmp_field_own__` `` )
     // Where the object itself was loaded from, when it was read through a
@@ -81109,10 +81123,21 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                     // A field that owns nothing read out of a call's result
                     // (`. ( mk ) n`): the rest of that temporary is dropped
                     // here, when the call handed it over (h232) — it leaked.
-                    ? & & & & __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
-                    ! ( __type_needs_drop ftype syms ) ! ( __is_closure_ty ftype ) {
+                    // (An owned slice owns its buffer, which __type_needs_drop
+                    // does not count: it leaves with the read, below. Taken
+                    // for a field that owns nothing, `( ln . ( mkb ) s )`
+                    // released the struct under the slice it handed on: a
+                    // use-after-free, agora #895.)
+                    ? & & & & & __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
+                    ! ( __type_needs_drop ftype syms ) ! ( __is_closure_ty ftype ) ! ( __owned_slice_ty ( nurl_llty ftype ) ) {
                         : s tro ( __mb_tmp_flag syms cg __mb_tt __mb_inner_tfo )
                         ? != 0 ( nurl_str_len tro ) {
+                            // (…a release the borrow walk sees: a `% Drop` it
+                            // runs is a call of that drop, as a discarded
+                            // value's is (__udrop_release_tmp, #766). Unseen,
+                            // `. ( mk r ) n` cleared a payload a view of it
+                            // through another handle read on: a use-after-free.)
+                            ( __udrop_release_tmp syms ot )
                             ( __handle_drop_ensure ot )
                             ( __dropifv_request ot )
                             ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ot ) ) ( nurl_print `(i1 ` ) ( nurl_print tro )
@@ -81130,8 +81155,9 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                     // literal takes over.
                     : ~ s __tf_res ( nurl_str_cat res `` )
                     : ~ b __tf_taken F
-                    ? & & & & & __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
-                    ( __is_handle_ty ftype ) ! ( __has_user_drop ot ) ( __clone_supported ftype syms ) {
+                    // (…and an owned slice the same: agora #895.)
+                    ? & & & & __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
+                    ! ( __has_user_drop ot ) | & ( __is_handle_ty ftype ) ( __clone_supported ftype syms ) ( __owned_slice_ty ( nurl_llty ftype ) ) {
                         // (Exactly when the call handed its result over — its
                         // flag: a lent one, `. ( arc_get a ) file`, stays a
                         // view of its owner.)
@@ -81144,6 +81170,7 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                             ( nurl_print `  ` ) ( nurl_print rest ) ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty ot ) )
                             ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ftype ) )
                             ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
+                            ( __udrop_release_tmp syms ot )
                             ( __handle_drop_ensure ot )
                             ( __dropifv_request ot )
                             ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ot ) ) ( nurl_print `(i1 ` ) ( nurl_print tro2 )
