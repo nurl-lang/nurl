@@ -65549,7 +65549,12 @@ unsafe @ __bck_row_sl s rec → s {
         // parent's elements' level; agora #580.)
         // (Every one, when a call lends out of several: CodeRabbit on
         // github#1972.)
-        ? == BCK_BORROWED_SHARED ( bck_st_get st ( nurl_str_to_int w ) ) { ( bck_add_word_once ( bck_bkey `lpa_` ( nurl_str_int wid ) ) w ) = g_bck_lpa_any 1 } {}
+        // (…only where the call lends a PART of it, `retpart##` - an
+        // element, `( vec_at a 0 )`: one that hands the borrow back whole,
+        // `( same a )`, makes the binding that borrow itself, whose own
+        // growth ends a cursor over it; CodeRabbit on github#1972.)
+        : s __lpc ? != 0 ( nurl_str_len wc ) wc callee
+        ? & == BCK_BORROWED_SHARED ( bck_st_get st ( nurl_str_to_int w ) ) != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `retpart##` __lpc ) ) { ( bck_add_word_once ( bck_bkey `lpa_` ( nurl_str_int wid ) ) w ) = g_bck_lpa_any 1 } {}
         // A number holds nothing to borrow from.
         ? ( bck_holds_nothing w ) { continue } {}
         // A field (`s.items`) is as alive as its binding; a field of a borrow
