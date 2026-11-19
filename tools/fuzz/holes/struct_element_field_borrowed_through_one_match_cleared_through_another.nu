@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #557: the task's prelude form - `: S e ( vec_at k 0 )  : String f . e name` across a clear of `. p a` in a later `??`
+// map: §2.10 | A2 | rejected | - | AGORA-557: the task's prelude form - `: S e ( vec_at k 0 )  : String f . e name` across a clear of `. p a` in a later `??`
+// AGORA-557 (this shape, closed): refused - a `??` join of payload projections borrows the matched binding, and a change through another match's payload sweeps it (main 54e5c459: accepted)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
