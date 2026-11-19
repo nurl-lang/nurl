@@ -3230,8 +3230,9 @@ class FnCheck:
         first: the drop of a value whose destructor may read its views is a
         use of them (MEMORY.md §2.14)."""
         udrop = getattr(self.prog, "udrop", ())
+        killed = set()
         if st.bottom or not udrop:
-            return
+            return killed
         for vid in sorted(st.vals, reverse=True):
             av = st.vals[vid]
             v = self.fn.vars[vid]
@@ -3243,8 +3244,12 @@ class FnCheck:
                 self.check_live(st, AV("N", held=av.held), line, f"the drop of {v.name}", held=True)
             if av.own != "O":
                 continue
+            d0 = st.dead
+            self.run_dtor(st, (vid, ()), v.ty, line)
+            killed |= st.dead - d0
             self.effect(st, (vid, ()), "replace", line)
             st.vals[vid] = AV("D")
+        return killed
 
     def params_hold_locals(self, st, line):
         """Storage the caller holds - a parameter, or what one points into -
@@ -3822,6 +3827,38 @@ class FnCheck:
                         work.append(w)
         return out
 
+    def run_dtor(self, st, place, ty, line, depth=0):
+        """A value of type `ty` at `place` is released: each `% Drop` of the
+        program's own it holds runs, the value's own first (`drop__T`, a
+        function of the program's whose summary says what it changes of its
+        parameter, and inside which shared payloads), then its fields', its
+        elements' and its payload's. Released with no effect of its own, a
+        `% Drop` that cleared a shared Rc payload left another handle's view
+        of it live (agora #766, #918, #919; nurlc's `+d=` / `+dk=` notes,
+        __bck_udrop_*)."""
+        udrop = getattr(self.prog, "udrop", ())
+        if ty is None or depth > 4 or not udrop or not self.T.has_udrop(ty):
+            return
+        k = ty[0]
+        if k == "named":
+            sm = self.summary(f"drop__{ty[1]}") if f"drop__{ty[1]}" in self.prog.fns else None
+            if sm is not None:
+                for (pk, path, eff) in sm["effects"]:
+                    if pk == 0 and eff in ("replace", "realloc", "drop", "take"):
+                        self.effect(st, (place[0], (place[1] + tuple(path))[:PATH_MAX]), eff, line)
+                for (rty, tail, eff) in sm.get("regions", ()):
+                    self.region_effect(st, rty, tuple(tail), eff)
+            if ty[1] in self.prog.structs:
+                for i, (fty0, fname) in enumerate(self.prog.structs[ty[1]]):
+                    from lower import norm
+                    self.run_dtor(st, (place[0], place[1] + (fname or str(i),)), norm(fty0), line, depth + 1)
+            return
+        if k in ("vec", "slice", "box"):
+            self.run_dtor(st, (place[0], place[1] + ("*",)), ty[1], line, depth + 1)
+            return
+        if k == "opt":
+            self.run_dtor(st, place, ty[1], line, depth + 1)
+
     def scope_end(self, st, stmts, line):
         if st.bottom:
             return st
@@ -3849,6 +3886,7 @@ class FnCheck:
                     # (formal's DtorSafe join rule, agora #252)
                     self.check_live(st, AV("N", held=av.held), line, f"the drop of {self.vname(vid)}", held=True)
             if av.own == "O":
+                self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, line)
                 self.effect(st, (vid, ()), "replace", line)
             # (the binding itself is gone: what points at it ends)
             self.effect(st, (vid, ()), "end", line)
@@ -4348,6 +4386,7 @@ class FnCheck:
             _, vid, ln = s
             av = st.vals.get(vid)
             if av and av.own == "O":
+                self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, ln)
                 self.effect(st, (vid, ()), "replace", ln)
                 st.vals[vid] = AV("D")
             elif av and self.fn.vars[vid].carried and av.own != "M":
@@ -4477,7 +4516,12 @@ class FnCheck:
                     # `None` hands no storage over, nor does a binding that
                     # was only ever given one)
                     self.ret_fresh = True
-                self.exit_drops(st, ln)
+                # (…and what the frame's destructors change as it is left: a
+                # `% Drop` of a local that clears a shared payload the
+                # returned value views - agora #918)
+                dk = self.exit_drops(st, ln)
+                if dk and (av.loans | hloans(av.held)) & dk:
+                    self.err(ln, "the returned value views what a destructor run at the function's exit changes")
             else:
                 st = self.run_defers(st)
                 self.params_hold_locals(st, ln)
