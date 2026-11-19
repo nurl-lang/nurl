@@ -8710,6 +8710,8 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // )` is: below.)
     // (The call's own per-call answer, when hbit is it: below.)
     : ~ b ret_call_bit F
+    // (…the bit a slice join's arms left, `^ ? c ( mk ) a`: agora #903.)
+    : ~ b ret_join_bit F
     // (…and a binding's flag that is a call's own answer: below.)
     : ~ b ret_bind_bit F
     ? & != 0 g_ncl_n ( is_ident_tok ret_first_tt ) {
@@ -8770,6 +8772,15 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // lends it and no copy is made — it keeps the argument too, so its lend
     // kind is none (mem_fn_lend_kind; __rprov_bind_x's `10`).
     : ~ s __ret_l0 ``
+    // (…and a slice join, `^ ? c ( mk ) a`: by the bit its arms left, the
+    // join's (g_slice_join_own) - per run, so this function answers per call.
+    // Taken for a lend, the fresh arm's slice was released by no one; agora
+    // #903.)
+    ? & & == ret_eff_tt TT_QUEST ( mem_is_slice_ty ( nurl_get_last_type ) ) != 0 ( nurl_str_len g_slice_join_own ) {
+        = hbit ( nurl_str_cat g_slice_join_own `` )
+        = ret_join_bit T
+        ( mem_hown_mark_dyn syms )
+    } {}
     ? == ret_eff_tt TT_LPAREN {
         // (A slice goes by the bit its call left, as a binding of it does:
         // a temporary the call handed back whole is this function's own on
@@ -9610,7 +9621,12 @@ unsafe @ __gen_ret i lex i syms i cg → s {
         : s __jo0 ( nurl_str_cat ( nurl_sym_get syms `__last_join_own__` ) `` )
         : s __jost ( __join_ost __jo0 )
         : s __rj ( mem_ret_join_own lex syms cg ( nurl_get_last_type ) val __jmove )
-        ? != 0 ( nurl_str_len __rj ) { = hbit ( str_first_word __rj ) = val ( str_skip_word __rj ) } {}
+        // (A slice join's bit, the fresh arm's, stands: the result is the
+        // caller's where that arm made it or where an arm lending this
+        // frame's own value was copied here - agora #903.)
+        : s __rjb ( str_first_word __rj )
+        : s __rjh ? ret_join_bit ? | == 0 ( nurl_str_len __rj ) ( seq __rjb `false` ) ( nurl_str_cat hbit `` ) ( __or_i1 cg hbit __rjb ) ( nurl_str_cat __rjb `` )
+        ? != 0 ( nurl_str_len __rj ) { = hbit __rjh = val ( str_skip_word __rj ) } {}
         ? ( seq hbit __jo0 ) { = __rost_reg ( nurl_str_cat __jo0 `` ) = __rost ( nurl_str_cat __jost `` ) } {}
     } {}
     // What a returned closure can capture: the function's answer at every
@@ -10067,7 +10083,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
         // here, a forwarder of a function that hands back a fresh value on
         // some runs and a lend on others leaked the fresh one at every
         // caller that took it over: agora #375.)
-        = hbit ? | ret_call_bit ret_bind_bit ( nurl_str_cat hbit `` ) ( nurl_str_cat `false` `` ) }
+        = hbit ? | | ret_call_bit ret_bind_bit ret_join_bit ( nurl_str_cat hbit `` ) ( nurl_str_cat `false` `` ) }
     {}
     // A String / Vec read out of a field or through a cast (`^ . impl
     // value` in arc_get) belongs to whatever holds it: lent, not given.
