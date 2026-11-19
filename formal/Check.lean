@@ -594,3 +594,7 @@ import A3
 #print axioms A2.ParamViewWitness.main_typed
 #print axioms A2.ParamViewWitness.main_safe
 #print axioms A2.ParamViewWitness.main_no_leak
+-- AGORA-606, AGORA-563: an argument the callee moves or may change that views its own storage
+-- (a root of its own memory dependencies; a `sink` one, of any) admits no `CallT`
+#print axioms A2.CallT.not_self_view
+#print axioms A2.CallT.not_self_dep_sink

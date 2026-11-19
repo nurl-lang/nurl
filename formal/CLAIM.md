@@ -982,6 +982,14 @@ Inside A2 (nurlc bugs):
   time; nurlc now refuses it with a diagnostic.
 - A struct built from an owner and a view of it: #294 (`pair`: the owned
   field is no root of the other's dependencies).
+- A value that views its own storage handed to a call that moves or
+  changes it: #606 (an argument whose field views another, the callee
+  clearing or growing the viewed one) and #563 (such a value moved into a
+  literal argument, or an owner and a view of it written as one). `CallT`
+  refuses it: the argument is a root of its own memory dependencies
+  (`CallT.not_self_view`, `CallT.not_self_dep_sink`, A2/SelfViewCall.lean).
+  A self-viewing value moved into a struct's field keeps its own-path
+  roots there, as `outHolds` restates a returned one (rules/t600.md).
 - A changed parameter handed an element of the caller's owner: #391
   (`( f 1 ( vec_at vv 0 ) src )`, and a local bound from the element).
   The call reads as handing the element over (`Stmt.withElem`: the
