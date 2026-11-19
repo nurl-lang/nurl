@@ -1,3 +1,0 @@
-### Changed
-
-- **The formal proof covers a pop and a remove through a borrow, except when an element that owns memory is moved out to the caller** (AGORA-888). A2 had push, truncate and set through a borrow. It now has a saturating decrement (`Expr.dec`), so `( vec_pop b )` whose element is dropped is the truncation to the last index. A pop of a number is the number read, then that truncation. A remove of a number is the later elements set one place down, then the truncation. `formal/A2/PopWitness.lean` types such a program through a `vec_at` borrow of a `Vec` of `Vec`s and through a cursor, and proves it memory-safe and leak-free. Still outside the claim: moving an element that owns memory (a String in a `Vec`) out through a borrow, as `formal/CLAIM.md` says.

@@ -1,3 +1,0 @@
-### Fixed
-
-- **The ownership engine no longer hands a replaced owner's old value to a binding that a call lent it to** (AGORA-881). After `= o ( id other )`, nurlc's code frees `other`'s old value at `= other …`, whatever `o` holds. The engine (`nurlc --engine`, still in shadow mode) took `o` for a by-name alias and made it the owner of that value, so `nurlc --engine` called a program that then read `o` safe, and it read freed memory. The default compile was never affected: the borrow walk refuses the program. The engine and the reference checker in tools/ncore now refuse it too, through a forwarder, a generic identity, `pick`, a loop or a closure that reads `o`. A binding given the other by name (`= o other`) or bound to the call with `:` is still handed the old value.
