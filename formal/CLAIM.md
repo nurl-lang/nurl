@@ -1097,6 +1097,19 @@ Outside A2:
 - A view of an owner kept across the owner's move into a struct field or
   literal, where nurlc hands the view to the field path (Agora #799); A2's
   move ends the owner's views (`RhsT.moveOwn`).
+- The same for a value that views its own storage (`= . o v (
+  slice_from_vec . o buf )`, Agora #563), as nurlc accepts it since
+  github#2074. Moved into a struct field, a literal or a container, it
+  takes its views with it and they are read at the new place. Taken back
+  out of a container (popped, removed, matched), it views its own fields
+  again (`__bck_sv_carry`, `svr_`, `__bck_sv_inherit`). A2's move ends
+  the views, and A2's element dependencies are paths (`vs.*.buf`). Such a
+  path does not tell an element's view of its own buffer from a view of a
+  sibling's, and a pop leaves the second dangling. So `( vec_pop vs )` is
+  refused by `CallT.not_self_view`'s premise. The extension: a per-element
+  self bit on a `Vec` entry, so a pop re-roots the element's own
+  dependencies at the taken value. What nurlc refuses of #563, a call
+  that changes what such a value views, is inside A2 (rules/t563.md).
 
 ## Destructors, and a panic while a panic unwinds
 

@@ -604,7 +604,9 @@ literal written as an argument that holds an owner and a view of it
 may grow, clear or replace what the view points into (AGORA-563). Pushed
 into a container, it is followed there: a value taken back out (popped,
 matched) views its own fields again, so growing the field then ends the
-view.
+view. The refusals are inside the formal claim. Accepting such a move, and
+the views read at the new place, is not yet: `formal/CLAIM.md` lists it
+under "Outside A2".
 
 ### 2.5 Iterator invalidation
 
