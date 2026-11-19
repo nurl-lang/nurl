@@ -239,7 +239,8 @@ theorem RhsT.freshOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : R
     exact (KeepsFrame.kill Γ _ _ _).trans (KeepsFrame.setE (fun Ex hEx hm => by
       rw [hk Ex hEx] at hm; exact hm))
   | @view y E t f hb hy hl ht _ hf _ =>
-    exact ⟨h, fun _ _ _ hfr => derive_freshE h hy ht (Or.inr (Or.inr rfl)) (hf hfr), KeepsFrame.refl _⟩
+    exact ⟨h, fun _ _ _ hfr => derive_freshE h hy ht (Or.inr (Or.inr rfl))
+      (by obtain ⟨Ey, h1, h2⟩ := hf hfr; exact ⟨Ey, h1, Or.inl h2⟩), KeepsFrame.refl _⟩
   | _ => first
     | exact ⟨h, FreshE.of_fresh rfl, KeepsFrame.refl _⟩
     | (refine ⟨h, FreshE.of_fresh ?_, KeepsFrame.refl _⟩; simp; done)

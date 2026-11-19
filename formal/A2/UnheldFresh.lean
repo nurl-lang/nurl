@@ -167,4 +167,31 @@ theorem view_bor_not_heldFresh {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E Ev : E
       · rw [hm] at hos; cases hos
       · rw [hf] at hf'; cases hf'
 
+/-- **Agora #916: no view of a borrowed parameter is fresh**: a fresh view's
+    source is an owner or an `inout` parameter (claude-formal's condition 4,
+    the analogue of `at_rootb_not_fresh`). -/
+theorem view_rootb_not_fresh {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E Ev : Entry}
+    (hy : Γ y = some E) (hm : E.mode = .rootb) (hr : RhsT Γ F (.view y) Ev Γ1) : Ev.fresh = false := by
+  cases hr with
+  | @view _ _ _ f _ _ _ _ _ hf _ =>
+    cases f with
+    | false => rfl
+    | true =>
+      obtain ⟨E0, h0, hfr⟩ := hf rfl
+      rw [hy] at h0; cases h0
+      rcases hfr with h1 | ⟨b, h1⟩ <;> rw [hm] at h1 <;> cases h1
+
+/-- **... nor a view of a borrow**, fresh or not: what a borrow reaches the
+    frame may not own. -/
+theorem view_bor_not_fresh {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E Ev : Entry}
+    (hy : Γ y = some E) (hm : E.mode = .bor) (hr : RhsT Γ F (.view y) Ev Γ1) : Ev.fresh = false := by
+  cases hr with
+  | @view _ _ _ f _ _ _ _ _ hf _ =>
+    cases f with
+    | false => rfl
+    | true =>
+      obtain ⟨E0, h0, hfr⟩ := hf rfl
+      rw [hy] at h0; cases h0
+      rcases hfr with h1 | ⟨b, h1⟩ <;> rw [hm] at h1 <;> cases h1
+
 end A2

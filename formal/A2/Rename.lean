@@ -1955,10 +1955,20 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
         · simp only [elemE]; rw [heq]; simp [liftE, Mode.ownSlot]
         · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact held_lift h hab hy
         · simp only [elemE]; rw [heq]; simp [liftE, Mode.ownSlot]
-  | @view y Ey t fv hv hy hl ht hhv hfs hhs =>
+  | @view y Ey t fv hv hy hl ht hhv hfs0 hhs =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
+    -- (Agora #916: a fresh view's source is an owner or an `inout` parameter,
+    -- lifted to an owner)
+    have hfs : fv = true → FreshSrc Γa y := fun hf => by
+      obtain ⟨E0, h0, hm⟩ := hfs0 hf; exact ⟨E0, h0, Or.inl hm⟩
+    have hfl : fv = true → ∃ E', S.canon Γa (S.ρ y) = some E' ∧ E'.mode.frame := fun hf => by
+      obtain ⟨E0, h0, hm⟩ := hfs0 hf
+      rw [hy] at h0; cases h0
+      have hrb : Ey.mode ≠ .rootb := by rcases hm with h1 | ⟨b, h1⟩ <;> rw [h1] <;> simp
+      refine ⟨S.liftE y Ey, hc, ?_⟩
+      rw [liftE_mode y hrb]; rcases hm with h1 | ⟨b, h1⟩ <;> rw [h1] <;> exact Or.inl rfl
     refine ⟨_, RhsT.view (f := fv) (h := hv) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht) hhv
-      (fun hf => freshSrc_lift h hy (hfs hf)) (fun hh => heldSrc_lift h hy (hhs hh)), fun x => ?_⟩
+      hfl (fun hh => heldSrc_lift h hy (hhs hh)), fun x => ?_⟩
     refine EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode])
       (by simp) (by simp [liftE]) (fun _ => ?_) ?_ (hg := fun _ _ hhf => by simpa [liftE] using hhf)
       (hf := fun _ _ _ hfr => by
