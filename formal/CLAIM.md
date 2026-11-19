@@ -207,7 +207,7 @@ the LLVM / C11 memory model rather than redefining it.
     `callR`. Safe and leak-free (`main_safe`, `main_no_leak`); nurlc accepts
     it (`inout_push_through_its_element_called_with_a_view_read_after`) and
     it runs clean. With `s` a view of `vv`'s element instead (AGORA-923,
-    github#2072), no typing of the call exists (`call_refused`).
+    github#2072, fixed in nurlc by github#2076), no typing of the call exists (`call_refused`).
 
   Agora #909 takes in what changes elements that hold no views only
   through a fresh borrow.

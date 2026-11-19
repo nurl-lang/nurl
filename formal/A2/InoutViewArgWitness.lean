@@ -313,7 +313,7 @@ theorem main_no_leak {m' : Mem} (hr : Steps P (emptyMem 5) main (.ok m' .skip)) 
   obtain ⟨Δ, ht⟩ := main_typed (ξ := .none)
   exact no_leak_end prog_ok prog_codes ht rfl main_codes (by decide) hr
 
-/-! ### What stays refused: a view of the changed argument itself (AGORA-923, github#2072)
+/-! ### What stays refused: a view of the changed argument itself (AGORA-923, github#2072, fixed in nurlc by github#2076)
 
     : s ( slice_from_vec ( vec_at vv 0 ) )  ( g vv s )
 
