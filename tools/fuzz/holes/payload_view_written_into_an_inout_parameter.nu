@@ -1,4 +1,5 @@
-// map: §2.7 | A2 | rejected | - | agora #774: `= out ( slice_from_vec ( rc_get ( vec_at hs 0 ) ) )` into an `inout` parameter, the caller's view kept past a payload reset through another handle
+// map: §2.7 | A2 | rejected | - | AGORA-774: `= out ( slice_from_vec ( rc_get ( vec_at hs 0 ) ) )` into an `inout` parameter, the caller's view kept past a payload reset through another handle
+// AGORA-774 (closed): refused - a holder of a view of a source that holds an Rc in its elements ends when that Rc's payload is reset through another handle, whatever value it held before (main 54e5c459: accepted, heap-use-after-free)
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/rc.nu`
