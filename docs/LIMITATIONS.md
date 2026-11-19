@@ -42,7 +42,7 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   after the take (`= . h buf ( vec_new [u] )`), or hand the callee a copy
   (`( mem_dup . h buf )`) and keep the field.
 - **agora #935: a slice of view-holding elements copied from a parameter into a struct.** `@ wraps [s t → SBag { ^ @ SBag { t 2 } }` with `( wraps ( mks ) )` leaks the temporary's buffer: the copy is published to the borrow walk as the parameter itself, so the caller keeps the temporary for the result's sake and releases it nowhere. (A slice of elements that hold no view is closed: agora #895.) Until the fix ships, bind the slice to a name first (`: [s t ( mks )  ( wraps t )`).
-- **agora #936: an owned slice field taken out of a struct temporary, returned or stored in a literal.** `@ rs → [i { ^ . ( mkb ) s }` with `( ln ( rs ) )`, and `: Bag d @ Bag { . ( mkb ) s 4 }`, leak the slice: the read takes it out of the temporary (agora #895), but the return answers it lent and the literal copies it. Until the fix ships, bind it first (`: [i x . ( mkb ) s`), which owns it.
+- **agora #936: an owned slice field taken out of a struct temporary and returned.** `@ rs → [i { ^ . ( mkb ) s }` with `( ln ( rs ) )` or `: [i y ( rs )` leaks the slice: the read takes it out of the temporary (agora #895), but `rs` answers its callers that it lent it. (Stored into a literal's field it is the literal's: closed, `slice_field_taken_out_of_a_temporary_into_a_literal_runs_clean`.) Until the fix ships, bind it first and return the binding (`: [i x . ( mkb ) s  ^ x`).
 <!-- END open holes -->
 
 Every other safe program found accepted and faulting is closed, and held

@@ -81936,8 +81936,10 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         ? ! ( is_ident_tok fld_first_tt ) { = fld_lent ( mem_lent_cond syms cg fty fld_eff_tt fld_first_val ) } {}
         // (…but a field taken out of a call's result is a value of its own,
         // h266: it moves in.)
+        : ~ s __fld_tfo ``
         ? & == fld_first_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) {
             : s __tfo ( nurl_sym_get syms `__last_tmp_field_own__` )
+            = __fld_tfo ( nurl_str_cat __tfo `` )
             ? ( seq __tfo `true` ) { = fld_lent `` } {
                 = fld_lent ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print fld_lent ) ( nurl_print ` = xor i1 ` ) ( nurl_print __tfo ) ( nurl_print `, 1\n` )
@@ -82491,7 +82493,12 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         ? & & & & != 0 g_auto_drop_strings ! is_str_fresh ( seq ( nurl_llty fty ) `i8*` ) == fld_first_tt TT_LPAREN ! ( bck_unsafe_ctx ) {
             ? != 0 ( nurl_sym_len syms `__last_call_guard__` ) { ( mem_note_owned_string_field lex syms __fld_line ) } {}
         } {}
-        : b is_slice_fresh & ( mem_is_slice_ty fty ) | | fld_is_slice_lit ( seq ret_owned `1` ) fld_moved_slice
+        // (…or a slice taken out of a temporary by its read, `@ Bag { . (
+        // mkb ) s 4 }` (h266): the literal's own on every run - taken where
+        // the read owned it, copied above where it was lent (`fld_lent`).
+        // Copied again here, the taken-out slice or the first copy leaked;
+        // agora #936.)
+        : b is_slice_fresh & ( mem_is_slice_ty fty ) | | | fld_is_slice_lit ( seq ret_owned `1` ) fld_moved_slice != 0 ( nurl_str_len __fld_tfo )
         // A slice field of a literal that owns it by type — a struct whose
         // drop releases it (__owned_slice_ty), an enum's boxed payload —
         // takes a slice that is not its own (a parameter's, a borrow, a
