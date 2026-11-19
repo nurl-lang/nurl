@@ -66898,10 +66898,18 @@ unsafe @ __pderiv_put i syms s name s ps0 → v {
     // (A view local — an element a `vec_at` binding reads, a `~` loop's
     // element: what is put into it is put into what it reads, whose name
     // the change may be spelled by; agora #793.)
-    : ~ s al ( nurl_str_cat3 ( nurl_sym_get2 syms name `__alias` ) ` ` ( __econt_of syms name ) )
+    // (`__alias` names slots, `__econt` a binding.)
+    : ~ s al ( nurl_sym_get2 syms ptr `__alias` )
     ~ != 0 ( nurl_str_len al ) {
         : s w ( str_first_word al ) = al ( str_skip_word al )
-        : s wp ( nurl_sym_get2 syms ( __path_root_name w ) `__ptr` )
+        ? ! ( seq w ptr ) { ( __pderiv_put_at w ps0 ) } {}
+    }
+    // (…and a binding a call lent — `: ( Vec T ) x0 ( vec_at xss 0 )`: its
+    // `__pljr` roots, by position, one call a line — is part of them.)
+    : ~ s rs ( nurl_str_cat3 ( __econt_of syms name ) ` ` ( bck_swap_char ( nurl_sym_get2 syms name `__pljr` ) 10 32 ) )
+    ~ != 0 ( nurl_str_len rs ) {
+        : s w ( str_first_word rs ) = rs ( str_skip_word rs )
+        : s wp ? | ( seq w `-` ) ( seq w name ) `` ( nurl_sym_get2 syms ( __path_root_name w ) `__ptr` )
         ? & != 0 ( nurl_str_len wp ) ! ( seq wp ptr ) { ( __pderiv_put_at wp ps0 ) } {}
     }
     // (A closure body's capture: the enclosing binding holds it too — a
