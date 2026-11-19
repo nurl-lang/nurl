@@ -46189,6 +46189,15 @@ unsafe @ __slice_len_comma s t → b {
     ^ r
 }
 
+// …and a slice join's (g_slice_join_own): the runs its arms lent, as an i1;
+// `true` where every arm is fresh needs no copy at all (`false`).
+@ __slice_join_lent i cg → s {
+    ? ( seq g_slice_join_own `true` ) { ^ ( nurl_str_cat `0` `` ) } {}
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = xor i1 ` ) ( nurl_print g_slice_join_own ) ( nurl_print `, 1\n` )
+    ^ r
+}
+
 // A `: ~` slice binding may be given a buffer of its own or a borrowed one
 // later (gen_assign), so whether it owns what it holds is its drop flag from
 // here — set at its `:`, 1 where it owns its first value — and it is on the
@@ -82245,7 +82254,9 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // others is copied on the runs it lent only: the fresh one is the
         // literal's, agora #878.)
         ? & & & & != 0 g_auto_drop_strings ! is_slice_fresh ( __owned_slice_ty ( nurl_llty fty ) ) ? agg_is_wrap != 0 ( nurl_str_len ( __opt_slice_payload ( nurl_llty agg_ty ) ) ) T | != enum_paycount -1 ( __agg_drop_takes_fields agg_ty ) {
-            : s __fsl ? == fld_first_tt TT_LPAREN ( __slice_field_call_lent syms cg ) ( nurl_str_cat `` `` )
+            // (…and a slice join, `@ P { ? c ( mk ) a 3 }`, on the runs its
+            // arms lent: the fresh arm's slice is the literal's - agora #903.)
+            : s __fsl ? == fld_first_tt TT_LPAREN ( __slice_field_call_lent syms cg ) ? & == fld_first_tt TT_QUEST != 0 ( nurl_str_len g_slice_join_own ) ( __slice_join_lent cg ) ( nurl_str_cat `` `` )
             = fval ( mem_emit_clone_on cg ( nurl_llty fty ) fval ? == 0 ( nurl_str_len __fsl ) ( nurl_str_cat `1` `` ) __fsl )
             // (…copied wherever the call lent, the field hands back none of
             // the call's arguments: what the call could hand back
