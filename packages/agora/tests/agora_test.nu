@@ -1327,6 +1327,25 @@ $ `src/service.nu`
     ( check == ( ag_trash_restore st tid2 `overwrite` `` 30 `web` now ) AG_RESTORED `restore: or overwriting` )
     ?? ( ag_note_get st `` `n-two-old` ) { T n → { ( check ( seq ( string_data . n body ) `first` ) `restore: the trash's copy wins` ) } F _ → { ( check F `restore: the trash's copy wins` ) } }
 
+    // A channel restored with its posts: they are held with it.
+    ( ag_channel_create st `quiet` `` `ann` t0 )
+    : i p_q ( ag_post st `quiet` `ann` `kept with its channel` 0 t0 )
+    ( check == ( ag_trash_channel st `quiet` `bob` now ) 1 `trash: a person deletes a channel` )
+    : i qid ( trash_id_of st `channel` `quiet` )
+    ( check == ( ag_trash_restore st qid `` `` 30 `web` now ) AG_RESTORED `restore: the channel comes back` )
+    : AgSwept rq ( ag_sweep st @ AgExpiry { 0 1 0 0 0 0 0 } T + now 3600 )
+    ?? ( ag_msg_get st p_q ) { T _ → { ( check T `restore: its posts are held with it` ) } F _ → { ( check F `restore: its posts are held with it` ) } }
+
+    // "Everything shown" stops at the newest item the listing saw.
+    : i seen_max ( ag_trash_max_id st )
+    ( check == ( ag_trash_message st p_q `bob` now ) 1 `trash: one more, after the listing` )
+    : ( Vec i ) upto ( ag_trash_ids st `` `` 0 `` seen_max )
+    : ~ b has_new F
+    : i nu ( vec_len [i] upto )
+    : ~ i ui 0
+    ~ < ui nu { ?? ( vec_get [i] upto ui ) { T x → { ? > x seen_max { = has_new T } {} } F _ → {} } = ui + ui 1 }
+    ( check & > nu 0 ! has_new `trash: a bulk action never reaches what was trashed after the list was read` )
+
     // Gone for good.
     : i did ( trash_id_of st `task` ( string_data ( int_str t_done ) ) )
     ( check ( ag_trash_delete st did `web` now ) `trash: delete for good` )
@@ -1615,6 +1634,7 @@ $ `src/service.nu`
     : ~ i lk 0
     ~ < lk 301 { ( string_push_str longt `x` ) = lk + lk 1 }
     ( check <= ( string_len ( gh_line longt 300 ) ) 300 `github: a cut line, … included, fits its limit` )
+    ( check & & ( _gh_loopback_url ( string_from `http://127.0.0.1:8080` ) ) ( _gh_loopback_url ( string_from `http://localhost` ) ) ! ( _gh_loopback_url ( string_from `http://localhost.example.com` ) ) `github: only a real loopback URL may be plain http` )
 
     // The App's JWT: RS256 that verifies with the key's public half.
     : ~ String kp ( string_new )

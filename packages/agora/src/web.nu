@@ -1021,6 +1021,7 @@ $ `auth.nu`
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `items` arr )
+    ( json_obj_set out `max_id` ( json_int ( ag_trash_max_id . w rs ) ) )
     ( json_obj_set out `total` ( json_int ( ag_trash_count . w rs ( string_data . f kind ) ( string_data . f author ) . f before ( string_data . f text ) ) ) )
     : Json kinds ( json_obj_new )
     : ( Vec String ) ks ( vec_new [String] )
@@ -1057,9 +1058,11 @@ $ `auth.nu`
 
 // The ids a bulk action names: `ids` [..], or `all` with the listing's filter.
 @ __ag_trash_targets AgWho w Json b i now → ( Vec i ) {
+    // `all`: only up to `max_id`, the newest item the listing saw — what
+    // was trashed since was not shown, and is not touched.
     ? ( _ag_arg_bool b `all` F ) {
         : AgTrashQ f ( __ag_trash_q b now )
-        ^ ( ag_trash_ids . w rs ( string_data . f kind ) ( string_data . f author ) . f before ( string_data . f text ) )
+        ^ ( ag_trash_ids . w rs ( string_data . f kind ) ( string_data . f author ) . f before ( string_data . f text ) ( _ag_arg_int b `max_id` 0 ) )
     } {}
     : ( Vec i ) out ( vec_new [i] )
     ?? ( json_obj_get b `ids` ) {
@@ -1081,7 +1084,7 @@ $ `auth.nu`
 // is overwrite (or rename, with `key`, for a note).
 @ ag_h_trash_restore HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who_in req now )
+    : AgWho w ( _ag_who_in_sweep req F now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : Json b ( __ag_body_obj req )
     : String mode ( _ag_arg_str b `mode` )
@@ -1138,7 +1141,7 @@ $ `auth.nu`
 // POST /m/trash/delete?repo= {ids | all + filter} — delete for good.
 @ ag_h_trash_delete HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who_in req now )
+    : AgWho w ( _ag_who_in_sweep req F now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : Json b ( __ag_body_obj req )
     : ( Vec i ) ids ( __ag_trash_targets w b now )

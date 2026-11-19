@@ -854,6 +854,20 @@ $ `store.nu`
     }
 }
 
+// PR `number` asked about and not seen (404): kept as an open PR with no
+// head and no time, so any real event or read replaces it.
+@ ag_gh_pr_placeholder AgStore st i number i now → v {
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `INSERT INTO gh_prs (number, title, url, state, head_sha, merge_sha, updated, seen) VALUES (?1, '', '', 'open', '', '', 0, ?2) ON CONFLICT (number) DO NOTHING` ) {
+                F _ → {}
+                T q → { ( _ag_bind_i q 1 number ) ( _ag_bind_i q 2 now ) ( _ag_run q ) }
+            }
+        }
+    }
+}
+
 // Is PR `number` known (has GitHub been asked about it, or told us)?
 @ ag_gh_pr_known AgStore st i number → b {
     : ~ b known F
@@ -1144,6 +1158,10 @@ $ `store.nu`
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
+            // What is read and what is marked delivered are one transaction:
+            // a CI result rewritten in between would otherwise be marked
+            // delivered unread.
+            ? ( _ag_begin db ) {} { ^ @ GhTake { lines 0 0 } }
             : ( Vec i ) ids ( vec_new [i] )
             : ~ i bytes 0
             ?? ( sqlite_prepare db `SELECT id, text FROM gh_notices WHERE agent = ?1 AND delivered = 0 AND due <= ?2 ORDER BY id` ) {
@@ -1162,14 +1180,22 @@ $ `store.nu`
                 }
             }
             : i n ( vec_len [i] ids )
+            : ~ b marked T
             : ~ i k 0
             ~ < k n {
                 : i id ?? ( vec_get [i] ids k ) { T x → x F _ → 0 }
                 ?? ( sqlite_prepare db `UPDATE gh_notices SET delivered = 1, key = key || ':' || id WHERE id = ?1` ) {
-                    F _ → {}
-                    T q → { ( _ag_bind_i q 1 id ) ( _ag_run q ) }
+                    F _ → { = marked F }
+                    T q → { ( _ag_bind_i q 1 id ) = marked & marked ( _ag_run q ) }
                 }
                 = k + k 1
+            }
+            // Not marked, not shown: the next brief has them all again.
+            : ~ b done F
+            ? marked { = done ( _ag_commit db ) } {}
+            ? done {} {
+                ( _ag_rollback db )
+                ^ @ GhTake { ( vec_new [String] ) 0 0 }
             }
             ?? ( sqlite_prepare db `SELECT COUNT(*) FROM gh_notices WHERE agent = ?1 AND delivered = 0 AND due > ?2` ) {
                 F _ → {}

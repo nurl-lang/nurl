@@ -716,6 +716,18 @@ $ `store.nu`
                         = ok ( _ag_run q )
                     }
                 }
+                // A channel or an agent comes back with its messages: they are
+                // held as long as it is, or the next sweep takes them again.
+                ? & ok ! is_note {
+                    ?? ( sqlite_prepare db `INSERT INTO hold (kind, ref, until) SELECT 'message', CAST(json_extract(value, '$.id') AS TEXT), ?2 FROM json_each(?1, '$.messages') WHERE json_extract(value, '$.id') IS NOT NULL ON CONFLICT (kind, ref) DO UPDATE SET until = MAX(until, excluded.until)` ) {
+                        F _ → { = ok F }
+                        T q → {
+                            ( _ag_bind_s q 1 ( string_data data ) )
+                            ( _ag_bind_i q 2 + now * hold_days 86400 )
+                            = ok ( _ag_run q )
+                        }
+                    }
+                } {}
             } {}
             : String alabel ? != 0 ( nurl_str_eq ( string_data kind ) `message` ) ( __ag_msg_label_channel label ) ( string_clone label )
             ? ok { = ok ( __ag_audit_on db now `restore` ( string_data kind ) ( string_data ref ) ( string_data alabel ) by ) } {}
@@ -856,11 +868,18 @@ $ `store.nu`
 }
 
 // The ids a filter selects (for "restore / delete all of these").
-@ ag_trash_ids AgStore st s kind s author i before s text → ( Vec i ) {
+// The newest item's id (0: empty): what a listing saw, so a bulk action
+// on "everything shown" can be held to it.
+@ ag_trash_max_id AgStore st → i {
+    ?? ( _ag_conn st ) { F _ → { ^ 0 } T db → { ^ ( __ag_max_trash_on db ) } }
+}
+
+// Every matching item up to id `max_id` (what a listing saw).
+@ ag_trash_ids AgStore st s kind s author i before s text i max_id → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
     : String sql ( string_from `SELECT id` )
     ( string_push_str sql AG_TRASH_WHERE )
-    ( string_push_str sql ` ORDER BY id` )
+    ( string_push_str sql ` AND id <= ?5 ORDER BY id` )
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
@@ -868,6 +887,7 @@ $ `store.nu`
                 F _ → {}
                 T q → {
                     ( __ag_trash_bind q kind author before text )
+                    ( _ag_bind_i q 5 max_id )
                     ~ ( _ag_row q ) { ( vec_push [i] out ( sqlite_column_int q 0 ) ) }
                 }
             }

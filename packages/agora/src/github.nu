@@ -237,7 +237,7 @@ $ `ghstore.nu`
     : String mc ( ag_config_str cfg `github.merge_channel` `` )
     : String api ( ag_config_str cfg `github.api` AG_GH_API )
     // Credentials go only over TLS (a loopback stand-in excepted).
-    ? | | ( string_starts_with api `https://` ) ( string_starts_with api `http://127.0.0.1` ) ( string_starts_with api `http://localhost` ) {} {
+    ? | ( string_starts_with api `https://` ) ( _gh_loopback_url api ) {} {
         ( string_push_str why `[github] api: must be an https:// URL` )
         ^ F
     } {}
@@ -599,6 +599,32 @@ $ `ghstore.nu`
     }
 }
 
+// `http://127.0.0.1`, `http://[::1]` or `http://localhost`, then nothing,
+// `:` or `/` — a loopback stand-in, not `http://localhost.example.com`.
+@ _gh_loopback_url String u → b {
+    : ( Vec String ) hosts ( vec_new [String] )
+    ( vec_push [String] hosts ( string_from `http://127.0.0.1` ) )
+    ( vec_push [String] hosts ( string_from `http://[::1]` ) )
+    ( vec_push [String] hosts ( string_from `http://localhost` ) )
+    : i n ( vec_len [String] hosts )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] hosts k ) {
+            T h → {
+                ? ( string_starts_with u ( string_data h ) ) {
+                    : i hl ( string_len h )
+                    ? == ( string_len u ) hl { ^ T } {}
+                    : String nx ( string_substr u hl 1 )
+                    ? | ( string_eq nx ( string_from `:` ) ) ( string_eq nx ( string_from `/` ) ) { ^ T } {}
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ F
+}
+
 // ── Asking GitHub ────────────────────────────────────────────────────
 
 // Not before this time (a rate limit or an error said so).
@@ -705,6 +731,9 @@ $ `ghstore.nu`
             = miss ( string_from `GET pulls/` )
             ( string_push_int miss p )
             ( string_push_str miss `: HTTP 404 (no such PR, or the App cannot see it)` )
+            // Known from now on (an open placeholder, no head): asked again
+            // with every watched PR, every 10 minutes, not every second.
+            ( ag_gh_pr_placeholder st p now )
         } {
             ? != . r status 200 {
                 ( _gh_bo_note T . r retry_at now )
@@ -761,7 +790,7 @@ $ `ghstore.nu`
         = x + x 1
     }
     ( _gh_bo_note F 0 now )
-    ( __gh_health_note st T `` now )
-    ? > ( string_len miss ) 0 { ( ag_gh_health_set st `error` now ( string_data miss ) ) } {}
+    // Healthy only when every watched PR could be read.
+    ? > ( string_len miss ) 0 { ( ag_gh_health_set st `error` now ( string_data miss ) ) } { ( __gh_health_note st T `` now ) }
     ^ T
 }

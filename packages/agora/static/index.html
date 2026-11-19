@@ -1380,7 +1380,9 @@ async function loadTrash(offset, limit) {
   trStale();
   const d = await api("GET", R("/m/trash", Object.assign({}, filter, { limit: trPage.limit, offset: trPage.offset })));
   if (seq !== trSeq || repo !== REPO) return;
-  trShown = { repo, filter }; trRendered = repo; $("#tr-del-all").disabled = false;
+  // max_id: the newest item there was when this list was read; a bulk
+  // delete never reaches past it (anything trashed since was not shown).
+  trShown = { repo, filter, max_id: d.max_id || 0, total: d.total }; trRendered = repo; $("#tr-del-all").disabled = false;
   const sel = $("#tr-kind"), cur = sel.value, all = Object.values(d.kinds).reduce((a, b) => a + b, 0);
   sel.innerHTML = `<option value="">every kind (${all})</option>` +
     Object.entries(d.kinds).map(([k, n]) => `<option value="${k}">${k}s (${n})</option>`).join("");
@@ -1454,8 +1456,8 @@ $("#tr-del").onclick = () => run(async () => {
 $("#tr-del-all").onclick = () => run(async () => {
   const shown = trShown;
   if (!shown || shown.repo !== REPO) return;
-  if (!confirmDel("everything the filter shows (every page)")) return;
-  const d = await api("POST", R("/m/trash/delete"), Object.assign({ all: true }, shown.filter)); toast(d.deleted + " deleted for good");
+  if (!confirmDel(`everything the filter shows (every page, ${shown.total ?? "all"} items)`)) return;
+  const d = await api("POST", R("/m/trash/delete"), Object.assign({ all: true, max_id: shown.max_id }, shown.filter)); toast(d.deleted + " deleted for good");
   await loadTrash(0, trPage.limit);
 });
 
