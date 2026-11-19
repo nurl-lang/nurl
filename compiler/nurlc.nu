@@ -61814,8 +61814,12 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
             // the field a value before it runs; agora #929.)
             ? == kc 34 {
                 : s cxs ( bck_field rec 1 )
-                ? & & != 0 ( nurl_str_len cxs ) & >= ( nurl_str_get cxs 0 ) 48 <= ( nurl_str_get cxs 0 ) 57 ( seq ( bck_field ( bck_rec + p 1 ) 0 ) `ret` ) {
-                    ? ( seq ( bck_field ( bck_rec + p 1 ) 3 ) ( bck_field rec 3 ) ) {
+                // (One `clox` row per capture effect: past the closure's other
+                // ones to the row after them; github#2097's review.)
+                : ~ i cq + p 1
+                ~ ( seq ( bck_field ( bck_rec cq ) 0 ) `clox` ) { = cq + cq 1 }
+                ? & & != 0 ( nurl_str_len cxs ) & >= ( nurl_str_get cxs 0 ) 48 <= ( nurl_str_get cxs 0 ) 57 ( seq ( bck_field ( bck_rec cq ) 0 ) `ret` ) {
+                    ? ( seq ( bck_field ( bck_rec cq ) 3 ) ( bck_field rec 3 ) ) {
                         ( __bck_fmv_check ( nurl_str_to_int cxs ) ( bck_field_int rec 3 ) st )
                         ( __bck_fmv_rel_check ( nurl_str_to_int cxs ) ( bck_field_int rec 3 ) st )
                     } {}
@@ -61832,13 +61836,15 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
             // }`: the `store` rows of its line come after the `ret` row, which
             // ends the path, so they are asked here; agora #929.)
             ? == kc 20 {
-                : s rln ( bck_field rec 3 )
+                // (The `store` rows the `^`'s value flushed follow it at once,
+                // on whatever line each operand stands - `^ @ Outer {` and
+                // `h }` on the next; github#2097's review.)
                 : ~ i rq + p 1
                 : ~ b rmore T
                 ~ rmore {
                     : s rr ( bck_rec rq )
-                    ? | == 0 ( nurl_str_len rr ) ! ( seq ( bck_field rr 3 ) rln ) { = rmore F } {
-                        ? ( seq ( bck_field rr 0 ) `store` ) { ( __bck_partly_moved_check ( bck_field_int rr 1 ) ( bck_field_int rr 3 ) st ) } {}
+                    ? | == 0 ( nurl_str_len rr ) ! ( seq ( bck_field rr 0 ) `store` ) { = rmore F } {
+                        ( __bck_partly_moved_check ( bck_field_int rr 1 ) ( bck_field_int rr 3 ) st )
                         = rq + rq 1
                     }
                 }
