@@ -4184,6 +4184,14 @@ unsafe @ note_unsafe_item s pos s what → v {
 // Whether this walk has noted a parameter left viewing its own storage
 // (`vscand`, __vk_note_self; agora #584).
 : ~ i g_bck_vs_any 0
+// The call row being swept now (bck_borrow_sweep0: a `pendcall`,
+// `pendkeep` or `pendfield` row): its argument's binding root and path id,
+// -1 when none. A holder the sweep ends that is that very binding, through
+// a field of its own the argument holds, was handed to the callee with views
+// of that field in another one — inside the callee the two are one
+// parameter's unrelated fields (__bck_sva_hit, agora #606).
+: ~ i g_bck_sva_root -1
+: ~ i g_bck_sva_wid -1
 // …and whether a call's `sK` rows wait, unflushed, on the statement's
 // lists (__vself_place): a `?`'s condition, a loop's, a return's are
 // walked with them (agora #584).
@@ -37723,6 +37731,13 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 } {}
             }
         } {}
+        // (…and a binding handed to a `sink` parameter whose type may view
+        // its own storage: a `pendsva` row, agora #606.)
+        ? & __row_callee ( is_ident_tok bck_arg_tt ) {
+            ? ( str_has_index callee_sink arg_idx ) {
+                ? ( __sva_ty syms ( nurl_llty at ) ) { ( bck_stash_sva_sink bck_arg_val ( nurl_lex_line lex ) __rc arg_idx ) } {}
+            } {}
+        } {}
         // (A value that holds nothing — a number, a struct of numbers — is
         // a copy: there is no move to decide and nothing to lend.)
         ? & & & ( is_ident_tok bck_arg_tt )
@@ -57807,6 +57822,25 @@ unsafe @ bck_stash_rc_sink s name i line s callee i argidx s at → v {
     ( bck_put `deferred` `1` )
 }
 
+// A binding handed to a `sink` parameter, of a type with a field that holds
+// storage and one that may hold views (__sva_ty): a `pendsva` row — the walk
+// asks whether it views its own fields, and the callee's final summaries
+// whether it changes what those views point into (__bck_sva_sink, agora
+// #606).
+@ bck_stash_sva_sink s name i line s callee i argidx → v {
+    ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ } {}
+    ( bck_add_word `ppends` ( nurl_str_cat3 ( nurl_str_cat3 name ` ` ( __bck_pend_line line ) ) ( nurl_str_cat3 ` ` callee ` ` ) ( nurl_str_cat ( nurl_str_int argidx ) ` pendsva` ) ) )
+    ( bck_put `deferred` `1` )
+}
+
+// May a value of struct type `lty` view its own storage: a field holding
+// views beside one holding storage (__vself_fb_rels)?
+@ __sva_ty i syms s lty → b {
+    ? != 37 ( nurl_str_get lty 0 ) { ^ F } {}
+    ? ! ( __ty_own_view_p lty ) { ^ F } {}
+    ^ != 0 ( nurl_str_len ( __vself_fb_rels syms lty `` ) )
+}
+
 // …and a value no binding names, handed to `callee` — a call's result, a
 // literal, a join or a block of such: the row names it by a name no program
 // can spell, `%rcvN`, under which its Rc types are noted (bck_note_rc_arg).
@@ -58971,7 +59005,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
     ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 ? ( seq k `fborrow` ) 7 ? ( seq k `fborrowh` ) 7 0 } {}
     ? == c 116 { ^ ? ( seq k `take` ) 37 ? ( seq k `tborrow` ) 7 ? ( seq k `tryret` ) 39 0 } {}
-    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 0 } {}
+    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 ? ( seq k `pendsva` ) 46 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
     ? == c 99 { ^ ? ( seq k `cdep` ) 17 ? ( seq k `cmove` ) 18 ? ( seq k `cnt` ) 22 ? ( seq k `cond` ) 25 ? ( seq k `callx` ) 31 ? ( seq k `clox` ) 34 ? ( seq k `cborrow` ) 7 0 } {}
@@ -61598,7 +61632,10 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
         // read where its call runs — __bck_sxr_note.)
         ? == kc 43 { = st ( __bck_sxr_begin st rec ) } {}
         ? == kc 44 { = st ( __bck_sxr_read st rec ) } {}
-        ? | | | == kc 1 == kc 40 == kc 43 == kc 44 { = p + p 1 } {
+        // (`pendsva`: a binding handed to a `sink` parameter, viewing its
+        // own fields — __bck_sva_sink, agora #606.)
+        ? == kc 46 { ( __bck_sva_sink rec ) } {}
+        ? | | | | == kc 1 == kc 40 == kc 43 == kc 44 == kc 46 { = p + p 1 } {
             ? | == kc 21 == kc 22 {
                 // Into the innermost loop's exit / back-edge accumulator —
                 // leaving every block up to its body, whose bindings go here.
@@ -68952,6 +68989,13 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     : b wfield | | == kc 8 == kc 13 & >= g_bck_sx_wid 0 != wroot wid
     // (A field handed to a parameter that takes it: asked once per row.)
     : b w13sink ? == kc 13 ( nurl_sym_has_word g_fn_sink ( bck_field rec 5 ) ( bck_field rec 6 ) ) F
+    // (A call row: what it ends of its own argument's self-views is checked
+    // where they end, __bck_sva_hit; agora #606.)
+    : i sva0 g_bck_sva_root
+    : i svw0 g_bck_sva_wid
+    // (Not the sweep of a `??` cursor's owners, bck_borrow_sweep: the call
+    // was handed the payload, not the owner.)
+    ? & & >= wid 0 == 0 g_bck_cuo_sweep | | == kc 9 == kc 12 == kc 13 { = g_bck_sva_root wroot = g_bck_sva_wid wid } { = g_bck_sva_root -1 }
     // A field replaced (`= . s v x`, directly or through a borrow of `s`):
     // the bindings viewing exactly that field take the value it held over
     // (__fs_viewers_take) — owners now, not borrows that end below.
@@ -69538,6 +69582,8 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             }
         } {}
     } {}
+    = g_bck_sva_root sva0
+    = g_bck_sva_wid svw0
     ^ out
 }
 
@@ -70049,6 +70095,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         : s ds ( str_first_word drest ) = drest ( str_skip_word drest )
         : i d ( nurl_str_to_int ds )
         ? & ! ( bck_dead_state ( bck_st_get out d ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdi_` ds ) ) sids ) {
+            ? == d g_bck_sva_root { ( __bck_sva_hit d sid g_bck_sva_wid line why ) } {}
             = out ( bck_st_set out d BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` ds ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` !vdep ` why ) ) )
         } {}
@@ -70310,6 +70357,9 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             // (Storage the caller holds outlives this function: a view of a
             // binding that ends here, stored into it, is an error now.)
             ? ! moved { ( bck_caller_view_diag d ( nurl_str_to_int sids ) line ) } {}
+            // (…and a holder that is the argument of the call ending it:
+            // agora #606.)
+            ? == d g_bck_sva_root { ( __bck_sva_hit d ( nurl_str_to_int sids ) g_bck_sva_wid line why ) } {}
             ( bck_drop_view_diag d ( nurl_str_to_int sids ) line why F )
             = out ( bck_st_set out d BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` ds ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ? dn ` !vdepn ` ` !vdep ` why ) ) )
@@ -70317,6 +70367,67 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         } {}
     }
     ^ out
+}
+
+// Holder `d` — the binding a call row is sweeping (g_bck_sva_root) —
+// ends at `line` because what it views of `sid` ended (`why`), and `sid` is
+// a field of `d`'s own storage: another field of it views that one (`= . a
+// idx …( string_data ( vec_at . a arena 0 ) )`, or a callee's `h>.^rel`).
+// Where the argument handed holds `sid` and is not `sid` alone — the binding
+// whole, or a struct field of it that holds `sid` — the callee was handed
+// both fields in one parameter, which it sees as unrelated fields: it may
+// read the views after the change that freed what they point into, and
+// nothing in it can tell (agora #606). Refused at the call, as two
+// arguments that alias are (bck_call_alias_check).
+@ __bck_sva_hit i d i sid i w i line s why → v {
+    ? | == sid d != ( bck_path_root sid ) d { ^ v } {}
+    ? & != w d | == w sid ! ( bck_id_holds w sid ) { ^ v } {}
+    : s tag ( nurl_str_cat4 `sva:` ( nurl_str_int d ) `:` ( nurl_str_int line ) )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s dn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int d ) ) )
+    : s sn ( bck_name_show ( __bck_id_spelling sid ) )
+    : s m1 ( nurl_str_cat4 `'` dn `' holds views of '` ( nurl_str_cat3 sn `' in another field of its own, and the call is handed both: '` sn ) )
+    : s m2 ( nurl_str_cat4 `' ended here — ` why `. Inside the callee the views are a field of its parameter that nothing ties to '` sn )
+    : s m3 ( nurl_str_cat3 `', so a read of them after the change reads freed memory. Make the change where '` dn `' is not handed with it, and take the views again after it; or store views that own their data (string_from, slice_to_vec).` )
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 m3 ) )
+}
+
+// A `pendsva` row (bck_stash_sva_sink): binding (field 1) handed to the
+// `sink` parameter `aix` (field 6) of `cal` (field 5). Taken over, it is
+// moved, so no view of it ends at the call — but the callee owns it now,
+// and may change one field of it and read another that views it. Where
+// the binding views a field of its own (`vds_`, `^` through the field's
+// elements: `vdi_`) that the callee's final summaries say it may drop,
+// replace, or move the buffer of, the call is refused as one that borrows
+// is (__bck_sva_hit; agora #606).
+@ __bck_sva_sink s rec → v {
+    : i wid ( bck_field_int rec 1 )
+    ? < wid 0 { ^ v } {}
+    : i wr ( bck_path_root wid )
+    : s wrs ( nurl_str_int wr )
+    : s vd ( nurl_sym_get g_bck ( bck_bkey `vds_` wrs ) )
+    ? == 0 ( nurl_str_len vd ) { ^ v } {}
+    : s vi ( nurl_sym_get g_bck ( bck_bkey `vdi_` wrs ) )
+    : s cal ( bck_field rec 5 )
+    : s aix ( bck_field rec 6 )
+    : b rea ( nurl_sym_has_word g_fn_reallocs cal aix )
+    : b irea & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs cal aix )
+    : ~ s rest ( nurl_str_cat vd `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i sid ( nurl_str_to_int w )
+        ? & != sid wr == ( bck_path_root sid ) wr {
+            : b ind ( str_contains_word vi w )
+            : b dr ( __drops_reach cal aix sid wid )
+            ? | | dr & rea ! ind & irea ind {
+                : s how ? dr `may drop or replace what it holds` ? ind `may move the buffer of one of its elements` `may move or free its buffer`
+                ( __bck_sva_hit wr sid wid ( bck_field_int rec 3 ) ( nurl_str_cat4 `it was handed to '` ( bck_fn_show cal ) `', which takes it and ` how ) )
+                ^ v
+            } {}
+        } {}
+    }
 }
 
 // A `~` loop's element `xs` is a part of what it iterates no longer: its
