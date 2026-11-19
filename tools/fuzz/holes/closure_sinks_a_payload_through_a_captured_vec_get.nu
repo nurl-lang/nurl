@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #479: a closure body hands a sink a payload read through `vec_get` of its Vec capture, called twice
+// map: §2.10 | A2 | rejected | - | AGORA-479: a closure body hands a sink a payload read through `vec_get` of its Vec capture, called twice
+// AGORA-479 (this shape, closed): refused - a closure body may not hand a sink a copy or a part of its capture, which the environment still releases (main b215deb5: accepted, heap-use-after-free)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 

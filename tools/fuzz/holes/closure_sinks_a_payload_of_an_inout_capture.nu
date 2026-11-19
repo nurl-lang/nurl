@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #479: a closure over an inout parameter hands a sink its payload; the caller's option is read after
+// map: §2.10 | A2 | rejected | - | AGORA-479: a closure over an inout parameter hands a sink its payload; the caller's option is read after
+// AGORA-479 (this shape, closed): refused - a closure body may not hand a sink a copy or a part of its capture, which the environment still releases (main b215deb5: accepted, heap-use-after-free)
 $ `stdlib/core/string.nu`
 
 @ eat sink String s → i { ^ ( string_len s ) }

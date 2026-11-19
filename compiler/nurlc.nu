@@ -36750,7 +36750,15 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             { ( die lex ( nurl_str_cat3
                 `'` bck_arg_val
                 `' is a compiler-auto-dropped value; passing it to a 'sink' parameter is not yet supported - pass a Vec or other manually-managed handle, or pass it as an ordinary parameter` ) ) }
-            { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) fname )
+            {  // (In a closure body, a value derived from one of its captures
+                // - a copy of its handle, `: String y x`, a payload or a part
+                // of it - is the capture's, which the environment still
+                // holds and releases: handed to a `sink`, it is released
+                // twice, on a second call or at the environment's drop. The
+                // capture itself is the closure's to give: that is the
+                // run-once case, `( eat x )`. Agora #479.)
+                ? != 0 g_bck_closure_depth { ( __clo_sink_check syms lex fname bck_arg_val ) } {}
+                ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) fname )
                 // Auto-sink cascade: if THIS fn passes its own
                 // parameter as a sink arg to another fn, mark this
                 // parameter as auto-sink too — the caller of this fn
@@ -74220,6 +74228,10 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             }
         } {}
         ? & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
+        // (A `:` copy of a capture's whole value, `: ?String y x`: what a
+        // sink is handed of it is the capture's, __clo_cap_source; agora
+        // #479.)
+        ? & & != 0 g_bck_closure_depth ( is_ident_tok bck_rhs_tt ) ( __is_clo_capture syms bck_rhs_val ) { ( nurl_sym_def syms ( nurl_str_cat name `__capcopy` ) bck_rhs_val ) } {}
         // (A value block whose tail is a closure binding of its own is that
         // binding to the walk too, as `: g f`: a move of its env, and what it
         // captured, agora #835.)
@@ -74661,6 +74673,8 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                 }
             } {}
             ? & != 0 g_bck_closure_depth >= ( bck_walk_class ( nurl_llty ptype ) ) 2 { ( __clo_view_note syms name g_bck_rhs_sx T ) } {}
+            // (…and a `:` copy of a capture's whole value, as above: agora #479.)
+            ? & & != 0 g_bck_closure_depth ( is_ident_tok bck_rhs_tt ) ( __is_clo_capture syms bck_rhs_val ) { ( nurl_sym_def syms ( nurl_str_cat name `__capcopy` ) bck_rhs_val ) } {}
             : i __cbc ? != 0 ( nurl_str_len __bc_tail ) ( __clo_bind_class syms ( nurl_llty ptype ) val `` ( mem_clo_listed syms __bc_tail ) TT_IDENT name __bc_tail ) ? != 0 ( nurl_str_len __bc_wtail ) 5 ( __clo_bind_class syms ( nurl_llty ptype ) val rhs_closure_env __src_owned_env bck_rhs_tt name bck_rhs_val )
             : s __cbr ? & == __cbc 5 != 0 g_borrowck ? != 0 ( nurl_str_len __bc_wtail ) __bc_wtail ( nurl_sym_get g_bck `reads` ) ``
             = g_bck_bind_owns ? & == bck_rhs_tt TT_LPAREN ! | == 0 ( nurl_str_len g_bck_rhs_lend ) ( seq g_bck_rhs_lend `-` ) 0 1
@@ -84951,7 +84965,12 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         ~ != 0 ( nurl_str_len __tkr ) {
             : s __tkw ( str_first_word __tkr ) = __tkr ( str_skip_word __tkr )
             : s __tkt ( nurl_sym_get syms __tkw )
-            ? & & ! ( __is_capture_byref __tkw syms ) ( __env_handle_ty __tkt syms ) ( __clone_supported __tkt syms ) { = clo_tk_cands ? == 0 ( nurl_str_len clo_tk_cands ) ( nurl_str_cat __tkw `` ) ( nurl_str_cat3 clo_tk_cands ` ` __tkw ) } {}
+            // (…and the frame's own: a parameter it does not take over -
+            // borrowed or `inout` - is the caller's, which a taken payload
+            // would release under it; agora #479.)
+            : i __tkpi ( nurl_sym_word_index syms `__fn_param_names__` __tkw )
+            : b __tklent & >= __tkpi 0 ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __tkpi ) )
+            ? & & & ! __tklent ! ( __is_capture_byref __tkw syms ) ( __env_handle_ty __tkt syms ) ( __clone_supported __tkt syms ) { = clo_tk_cands ? == 0 ( nurl_str_len clo_tk_cands ) ( nurl_str_cat __tkw `` ) ( nurl_str_cat3 clo_tk_cands ` ` __tkw ) } {}
         }
     } {}
 
@@ -102671,6 +102690,74 @@ unsafe @ __die_at_fn s fname s what s msg → v {
     ? ( __is_clo_capture syms name ) { ^ T } {}
     : s r ( __clo_nc_derived syms name )
     ^ & != 0 ( nurl_str_len r ) ( __is_clo_capture syms r )
+}
+
+// In a closure body, a value handed to a `sink` (`name`, of callee
+// `fname`) that is derived from one of the closure's captures is the
+// capture's - which the environment still holds and releases: refused.
+// Kept out of gen_call_body so its register pressure does not grow
+// (agora #479).
+@ __clo_sink_check i syms i lex s fname s name → v {
+    ? ( __is_clo_capture syms name ) { ^ v } {}
+    // (A `~` loop's element itself is moved out of what the loop iterates,
+    // `__econt`: the container no longer holds it - agora #588. A payload or
+    // a copy of one moves nothing, and is checked.)
+    ? != 0 ( nurl_sym_len2 syms name `__econt` ) { ^ v } {}
+    : s __sk_cap ( __clo_cap_source syms name )
+    // (…but a payload read straight out of the capture is
+    // the takeover's: a capture the body may take over
+    // (`__capk`), or any in a closure returned right here,
+    // whose sink is handed a copy - agora #463.)
+    : b __sk_direct & != 0 ( nurl_str_len __sk_cap ) ( seq ( nurl_sym_get2 syms name `__plend` ) __sk_cap )
+    : s __sk_cp ( nurl_sym_get2 syms __sk_cap `__ptr` )
+    : b __sk_took & __sk_direct | != 0 g_clo_ret_body & != 0 ( nurl_str_len __sk_cp ) != 0 ( nurl_sym_len2 syms __sk_cp `__capk` )
+    ? & & != 0 ( nurl_str_len __sk_cap ) ( __is_clo_capture syms __sk_cap ) ! __sk_took {
+        ( own_die lex ( nurl_str_cat4 ( nurl_str_cat3 `'` name `' is handed to a 'sink' parameter of '` ) fname ( nurl_str_cat3 `', but it is a copy or a part of '` __sk_cap `', a capture of this closure: the closure's environment still holds that value and releases it, so it would be released twice - on a second call, or when the closure is dropped. ` ) ( nurl_str_cat3 `Hand the sink a copy that owns its data (string_clone, mem_dup), or hand it '` __sk_cap `' itself, which the closure then gives up when it runs.` ) ) )
+    } {}
+}
+
+// The capture of the closure being compiled that `name` is derived from -
+// a payload, a part, a copy of its handle (__clo_nc_derived), or a `:` copy
+// of a binding that is (its slot's `__alias`, `: String y x`), to the end
+// of the chain; `` for none (agora #479).
+@ __clo_cap_source i syms s name → s {
+    : ~ s cur ( nurl_str_cat name `` )
+    : ~ s seen ( nurl_str_cat name `` )
+    ~ T {
+        ? ( __is_clo_capture syms cur ) { ^ ( nurl_str_cat cur `` ) } {}
+        : s cc ( nurl_sym_get2 syms cur `__capcopy` )
+        ? != 0 ( nurl_str_len cc ) { ^ ( nurl_str_cat cc `` ) } {}
+        : s d ( __clo_nc_derived syms cur )
+        ? & != 0 ( nurl_str_len d ) ! ( str_contains_word seen d ) {
+            = seen ( nurl_str_cat3 seen ` ` d )
+            = cur ( nurl_str_cat d `` )
+        } {
+            // (…a payload or a view, read out of a binding that is not a
+            // capture itself: that binding, one step, `__plroot`, `__lvroot`.)
+            : s pr0 ( nurl_sym_get2 syms cur `__plroot` )
+            : s pr ? != 0 ( nurl_str_len pr0 ) pr0 ( nurl_sym_get2 syms cur `__lvroot` )
+            ? & & != 0 ( nurl_str_len pr ) == ( nurl_str_len ( str_first_word pr ) ) ( nurl_str_len pr ) ! ( str_contains_word seen pr ) {
+                = seen ( nurl_str_cat3 seen ` ` pr )
+                = cur ( nurl_str_cat pr `` )
+                continue
+            } {}
+            // (A `:` copy's slot names the slot it copied, `__alias`: the
+            // capture whose own slot that is.)
+            : s up ( mem_udrop_ptr_of syms cur )
+            : s al ? == 0 ( nurl_str_len up ) `` ( nurl_sym_get2 syms up `__alias` )
+            ? | == 0 ( nurl_str_len al ) ( str_contains_word seen al ) { ^ ( nurl_str_cat `` `` ) } {}
+            = seen ( nurl_str_cat3 seen ` ` al )
+            : ~ s crest ( nurl_str_cat g_clo_caps_now `` )
+            : ~ s hit ``
+            ~ & != 0 ( nurl_str_len crest ) == 0 ( nurl_str_len hit ) {
+                : s c ( str_first_word crest ) = crest ( str_skip_word crest )
+                ? | ( seq ( mem_udrop_ptr_of syms c ) al ) ( seq ( nurl_sym_get2 syms c `__ptr` ) al ) { = hit ( nurl_str_cat c `` ) } {}
+            }
+            ? == 0 ( nurl_str_len hit ) { ^ ( nurl_str_cat `` `` ) } {}
+            = cur ( nurl_str_cat hit `` )
+        }
+    }
+    ^ ( nurl_str_cat `` `` )
 }
 
 @ __is_clo_capture i syms s name → b {
