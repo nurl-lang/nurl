@@ -37705,7 +37705,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         : b __pk_nm | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_DOT
         : b __pk_ll ( __pd_litlike bck_arg_tt )
         // (…an `inout` argument by its pointee's type, `%W*`: agora #793.)
-        ? & & & != 0 g_srcx_on | | __pk_nm __pk_ll & == bck_arg_tt TT_LPAREN != 0 ( nurl_str_len g_pk_last ) | != 0 g_cur_rc & != 0 g_bck_closure_depth ( __fn_rc_param syms ) != 0 ( nurl_str_len ( __rc_reach ( nurl_llty ? & is_inout_arg != 0 ( nurl_str_ends at `*` ) ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 ) at ) ) ) {
+        ? & & & != 0 g_srcx_on | | __pk_nm __pk_ll & == bck_arg_tt TT_LPAREN != 0 ( nurl_str_len g_pk_last ) | != 0 g_cur_rc & != 0 g_bck_closure_depth ( __fn_rc_param syms ) != 0 ( nurl_str_len ( __rc_reach ( nurl_llty ? is_inout_arg ( __inout_pointee at ) at ) ) ) {
             : s __pkr0 ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` ) ? == bck_arg_tt TT_DOT ( nurl_sym_get syms `__last_member_root__` ) ``
             // (…a field path rooted at a call that lends out of one binding,
             // `. ( box_get bx ) hs`: by that binding; agora #793.)
@@ -68323,6 +68323,12 @@ unsafe @ __sx_nroots s e b ns → s {
         ? == 0 ( nurl_str_len r ) { = r ( nurl_str_cat wr `` ) } { ? ! ( seq r wr ) { ^ `` } {} }
     }
     ^ r
+}
+
+// The type an `inout` argument of type `at` points at: `%W*` is a `%W`.
+@ __inout_pointee s at → s {
+    ? == 0 ( nurl_str_ends at `*` ) { ^ ( nurl_str_cat at `` ) } {}
+    ^ ( nurl_str_slice at 0 - ( nurl_str_len at ) 1 )
 }
 
 // Words `ws` (`p` or `p#cond`, parameter names) a call keeps, among
