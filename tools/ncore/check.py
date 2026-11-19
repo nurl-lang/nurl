@@ -3068,7 +3068,7 @@ class FnCheck:
                 continue
             ncap = getattr(body, "ncap", 0)
             if (sm["res"] == "lent" and body.ret is not None and body.ret[0] in ("slice", "closure")
-                    and not self.clo_slice_copies(body.ret)):
+                    and not (getattr(body, "ret_owned_slice", False) and self.clo_slice_copies(body.ret))):
                 # a slice the body hands back is that view: what it lends of
                 # its parameters, the result of this call lends of these
                 # arguments - and of what its captures point at (a value it
@@ -3140,9 +3140,10 @@ class FnCheck:
         return AV("O", (), (), out)
 
     def clo_slice_copies(self, ty):
-        """Is a slice of type `ty` that a closure hands back its caller's own
-        copy on every run: an owned slice whose elements hold no view and can
-        be copied (nurlc's mem_clo_ret_copies_slc, agora #894)?"""
+        """Is a slice of type `ty` that a closure hands back, declared an owned
+        `[T` (FnIR.ret_owned_slice; a `( Slice T )` is a view, kept), its
+        caller's own copy on every run: elements that hold no view and can be
+        copied (nurlc's mem_clo_ret_copies_slc, agora #894)?"""
         if ty is None or ty[0] != "slice" or len(ty) < 2 or ty[1] is None:
             return False
         et = ty[1]

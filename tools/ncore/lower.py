@@ -53,6 +53,10 @@ class FnIR:
         self.params = []      # vids
         self.modes = []
         self.ret = None
+        # (the result is an owned slice `[T`, not a view `( Slice T )`: both
+        # are ("slice", T); a closure's owned one is copied where it lends,
+        # check.clo_slice_copies)
+        self.ret_owned_slice = False
         self.body = []
         self.vars = {}
 
