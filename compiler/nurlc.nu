@@ -34927,8 +34927,13 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     : ~ s arg_idents ``
     // (The arguments whose type holds a `% Drop` of the program's own that
     // reaches an Rc, `k:#ud:#rc`: a closure the call hands back may have
-    // taken them over, __udrop_clo_note; agora #919.)
-    : ~ s __udargs ``
+    // taken them over, __udrop_clo_note; agora #919. Asked only of a callee
+    // that may hand back a closure — its return type lowered, or a generic's
+    // instance — once per call; kept under a key of this call's nesting,
+    // made only when there is one, so a call with none allocates nothing.)
+    : b __udclo ? == 0 g_user_drop_seen F | ( __is_closure_ll __cal_ll ) != 0 ( nurl_str_len call_targs )
+    : ~ i __udk 0
+    : i __udd g_nest_depth
     // (…and the bindings a join argument's arms select, published with the
     // call: `__last_call_join_phi__`, agora #775.)
     : ~ s __call_jphi ``
@@ -36630,16 +36635,14 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         = arg_idents ? == 0 ( nurl_str_len arg_idents )
         ( nurl_str_cat bck_arg_nm `` )
         ( nurl_str_cat3 arg_idents ` ` bck_arg_nm )
-        // (Only for a callee that may hand back a closure — its return
-        // type lowered, `__cal_ll`, or a generic's instance: no other result
-        // can hold what it took over.)
-        ? & != 0 g_user_drop_seen | ( __is_closure_ll __cal_ll ) != 0 ( nurl_str_len call_targs ) {
+        ? __udclo {
             : s __uda ( __udrop_fns ( nurl_llty at ) )
             ? != 0 ( nurl_str_len __uda ) {
                 : s __udr ( __rc_reach ( nurl_llty at ) )
                 ? != 0 ( nurl_str_len __udr ) {
                     : s __ude ( nurl_str_cat4 ( nurl_str_int arg_idx ) `:` ( __rc_set_id __uda ) ( nurl_str_cat `:` ( __rc_set_id __udr ) ) )
-                    = __udargs ? == 0 ( nurl_str_len __udargs ) ( nurl_str_cat __ude `` ) ( nurl_str_cat3 __udargs ` ` __ude )
+                    ( nurl_sym_append_word syms ( nurl_str_cat `__uda#` ( nurl_str_int __udd ) ) __ude )
+                    = __udk + __udk 1
                 } {}
             } {}
         } {}
@@ -38521,9 +38524,13 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     ? != 0 g_clo_cap_set { ( nurl_sym_def syms `__last_call_clo_cap_idents__` `` ) = g_clo_cap_set 0 } {}
     // (…and its arguments of a type with a `% Drop` that reaches an Rc,
     // with the callee that took them: __udrop_clo_note, agora #919.)
-    ? | != 0 ( nurl_str_len __udargs ) != 0 g_udargs_set {
-        ( nurl_sym_def syms `__last_call_udargs__` ? == 0 ( nurl_str_len __udargs ) `` ( nurl_str_cat3 __lend_cn ` ` __udargs ) )
-        = g_udargs_set ? == 0 ( nurl_str_len __udargs ) 0 1
+    ? | != 0 __udk != 0 g_udargs_set {
+        ? != 0 __udk {
+            : s __udkey ( nurl_str_cat `__uda#` ( nurl_str_int __udd ) )
+            ( nurl_sym_def syms `__last_call_udargs__` ( nurl_str_cat3 __lend_cn ` ` ( nurl_sym_get syms __udkey ) ) )
+            ( nurl_sym_def syms __udkey `` )
+        } { ( nurl_sym_def syms `__last_call_udargs__` `` ) }
+        = g_udargs_set ? == 0 __udk 0 1
     } {}
     ? != 0 g_retcap_n {
         ? != 0 ( nurl_sym_len2 g_pending_impl `retcap##` __lend_cn ) {
@@ -63495,9 +63502,6 @@ unsafe @ bck_ret_drop_check s st i line → v {
     : i rto ? != 0 ( nurl_str_len rtn ) ( bck_intern rtn ) -1
     // The bindings still holding their values, in the order they drop.
     : ~ s order ``
-    // (…and every one codegen may still release, whatever the walk's
-    // state calls it: not moved, stored away or unbound.)
-    : ~ s ulist ``
     : ~ i k - g_bck_sc_n 1
     ~ >= k 0 {
         : i b * k 3
@@ -63510,11 +63514,13 @@ unsafe @ bck_ret_drop_check s st i line → v {
             // the value its destructor runs on, `vdu_`.)
             : b udr ( seq ( nurl_sym_get g_bck ( bck_bkey `vdu_` ( nurl_str_int id ) ) ) `1` )
             ? & != id rto | | == v BCK_OWNED == v BCK_MAYBE_MOVED & udr | == v BCK_BORROWED_SHARED == v BCK_BORROWED_MUT { = order ? == 0 ( nurl_str_len order ) ( nurl_str_int id ) ( nurl_str_cat3 order ` ` ( nurl_str_int id ) ) } {}
-            ? & & udc != id rto ! | | == v BCK_UNINIT == v BCK_MOVED == v BCK_STORED { = ulist ? == 0 ( nurl_str_len ulist ) ( nurl_str_int id ) ( nurl_str_cat3 ulist ` ` ( nurl_str_int id ) ) } {}
+            // (…and every one codegen may still release, whatever the walk's
+            // state calls it — not moved, stored away or unbound — judged
+            // against the value handed back; agora #918.)
+            ? udc { ? & != id rto ! | | == v BCK_UNINIT == v BCK_MOVED == v BCK_STORED { ( __bck_ret_udrop_check rsx ( nurl_str_int id ) line ) } {} } {}
         }
         = k - k 1
     }
-    ? != 0 ( nurl_str_len ulist ) { ( __bck_ret_udrop_check rsx ulist line ) } {}
     ? == 0 g_bck_udrop_any { ^ v } {}
     : ~ s gone ``
     : ~ s rest2 ( nurl_str_cat order `` )
