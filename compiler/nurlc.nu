@@ -61157,6 +61157,26 @@ unsafe @ bck_sx_ev s st s e b arg → s {
 // bck_note_moved_field). A leaf released or moved,
 // or one of a scope inside the binding's, is none; the binding itself
 // stands for what it borrowed before its `=` (`obs_`).
+// Is every leaf of join source expression `sx` (`{{a;a};a}`) one and the
+// same name?
+@ __sx_one_leaf s sx → b {
+    // (Split at every `{`, `}` and `;`: the pieces that are not empty are
+    // the leaves.)
+    : ~ s rest ( bck_swap_char ( bck_swap_char sx 123 59 ) 125 59 )
+    : ~ s w0 ``
+    : ~ b more T
+    ~ more {
+        : i k ( nurl_str_find rest `;` )
+        : s w ? < k 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 k )
+        = rest ? < k 0 `` ( nurl_str_slice rest + k 1 - - ( nurl_str_len rest ) k 1 )
+        = more >= k 0
+        ? != 0 ( nurl_str_len w ) {
+            ? == 0 ( nurl_str_len w0 ) { = w0 ( nurl_str_cat w `` ) } { ? ! ( seq w w0 ) { ^ F } {} }
+        } {}
+    }
+    ^ != 0 ( nurl_str_len w0 )
+}
+
 @ bck_brw_leaves s st s mode s sx i wid → s {
     : s all ( bck_sx_hpaths sx )
     : i m ? == 0 ( nurl_str_len mode ) 112 ( nurl_str_get mode 0 )
@@ -61177,7 +61197,9 @@ unsafe @ bck_sx_ev s st s e b arg → s {
         // alone - `: k ?? ev { A p → . p a  B q → . q a }`: its arms read
         // parts of that binding's payload, which no row of theirs names,
         // so k borrows from the binding; otherwise as `p`: agora #557.)
-        : b mwhole & == m 109 < ( nurl_str_find sx `{` ) 0
+        // (…or a join of joins of it alone - an arm that is itself a
+        // ternary of its parts, `? == c 1 . p a . p b`: `{{ev;ev};ev}`.)
+        : b mwhole & == m 109 | < ( nurl_str_find sx `{` ) 0 ( __sx_one_leaf sx )
         : b take ? == m 116 & lent != r wid ? | == r wid > ( bck_id_dser r ) ( bck_id_dser wid ) F ? ( bck_dead_state lv ) F ? == m 98 T ? lent F ? | == m 110 mwhole T != r id
         ? take { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) } {}
     }
