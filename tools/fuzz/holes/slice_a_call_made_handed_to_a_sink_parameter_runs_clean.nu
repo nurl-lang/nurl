@@ -1,4 +1,4 @@
-// map: §7.6 | A2 | runs-clean | - | AGORA-892: a `sink` slice parameter is released by no one
+// map: §7.6 | A2 | runs-clean | - | agora #892: `( eat ( mk ) )`, `eat sink [i a`: the callee releases the slice the call made
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 
