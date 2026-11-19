@@ -22310,6 +22310,10 @@ unsafe @ eng_byte s w i k → i {
 //   cloargs   closure-parameter its-parameter parameter path
 // A path is its elements joined by `/`, `-` the empty one.
 @ eng_prims → v {
+    // (A slice parameter's copy in a literal that owns its slice field by
+    // type, of elements that hold no view: its own buffer, nothing of its
+    // argument - gen_agg_lit, AGORA-895.)
+    ( eng_prim `__nurl_slice_copy` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `arc_clone` `in` `own` `` `- 0 - held` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `arc_get` `in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
     ( eng_prim `arc_new` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `0` `` )
@@ -81802,9 +81806,16 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // (A block whose tail is a call, or a join, hands on that one's
         // value: __val_eff_tt.)
         : i fld_eff_tt ( __val_eff_tt fld_first_tt )
+        // (A slice parameter the literal copies, __fpc_slice — the slice-field
+        // copy below, its buffer neither moved nor fresh — of elements that
+        // hold no view: the copy is a value of its own, holding nothing of
+        // the parameter: `-` to the walk, `__nurl_slice_copy` to the engine.
+        // Read as the parameter, `( wrapb ( mk ) )`'s result was taken for
+        // a view of its temporary and refused, AGORA-895.)
+        : b __fpc_cp && && && __fpc_slice ! fld_moved_slice ! ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` ) ! ( __ty_holds_view_p ( __owned_slice_elem ( nurl_llty fty ) ) )
         // (A closure field is adopted — mem_clo_into_store: `\\a(…)`.)
         ? != 0 __sx_me {
-            : s __fsx ( __sx_operand syms fld_first_tt fld_first_val fty ( __sx_froot syms fld_first_tt fty ) __fsxn0 )
+            : s __fsx ? __fpc_cp ( nurl_str_cat `-` `` ) ( __sx_operand syms fld_first_tt fld_first_val fty ( __sx_froot syms fld_first_tt fty ) __fsxn0 )
             = agg_sx ( __sx_join agg_sx ? & ( __is_closure_ty fty ) ! | ( seq __fsx `-` ) ( seq __fsx `*` ) ( nurl_str_cat3 `\\a(` __fsx `)` ) __fsx )
         } {}
         // A pointer field of a returned literal points where what it was
@@ -82471,6 +82482,12 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
             // arms lent: the fresh arm's slice is the literal's - agora #903.)
             : s __fsl ? == fld_first_tt TT_LPAREN ( __slice_field_call_lent syms cg ) ? & == fld_first_tt TT_QUEST != 0 ( nurl_str_len g_slice_join_own ) ( __slice_join_lent cg ) ( nurl_str_cat `` `` )
             = fval ( mem_emit_clone_on cg ( nurl_llty fty ) fval ? == 0 ( nurl_str_len __fsl ) ( nurl_str_cat `1` `` ) __fsl )
+            // (…and a parameter's slice copied so, __fpc_cp, is the copy it
+            // is to the engine: `__nurl_slice_copy`, AGORA-895.)
+            ? && && != 0 g_core_live __fpc_cp > g_core_os_n 0 {
+                = g_core_callee ( __core_in `__nurl_slice_copy` )
+                ( core_call - g_core_os_n 1 fty F )
+            } {}
             // (…copied wherever the call lent, the field hands back none of
             // the call's arguments: what the call could hand back
             // (`__last_phi_idents__`, read by gen_ret as the returned

@@ -1,0 +1,3 @@
+### Fixed
+
+- **A slice parameter copied into a struct, option or enum no longer keeps its argument's temporary alive** (AGORA-895). With `@ wrapb [i t → Bag { ^ @ Bag { t 3 } }`, the literal copies `t` into the `Bag` it owns, but the compiler still treated the result as a view of the argument. So `( wrapb ( mk ) )`, the option form `@ ?[i { T a }` and a join `( wrapb ? c ( mk ) a )` leaked the temporary from `( mk )`. The copy is now known to hold nothing of its argument, and the temporary is released at the end of the statement. No source change is needed. A slice whose elements hold views (`[s`) still views what those elements view.
