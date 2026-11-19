@@ -565,3 +565,13 @@ import A3
 #print axioms A2.derive_freshE
 #print axioms A2.RSetup.pushArg_ren_held
 #print axioms A2.RSetup.editBV_ren
+-- ... and a destructor of a type that holds views stores a fresh, held-fresh view of its own local
+-- through a fresh borrow of its own local: an `edit false`, not through-changing, run by an armed
+-- `letd` handed a value that holds views (A2/StoreViewWitness.lean)
+#print axioms A2.StoreViewWitness.edit_typed
+#print axioms A2.StoreViewWitness.dtor_not_thru
+#print axioms A2.StoreViewWitness.dtor_ok
+#print axioms A2.StoreViewWitness.prog_ok
+#print axioms A2.StoreViewWitness.main_typed
+#print axioms A2.StoreViewWitness.main_safe
+#print axioms A2.StoreViewWitness.main_no_leak
