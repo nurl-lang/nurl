@@ -123,7 +123,7 @@ $ `ghstore.nu`
 }
 
 // "a, b" or a TOML array (ag_config_list joins it) → trimmed lowercase items.
-@ __gh_split String raw b lower → ( Vec String ) {
+@ _gh_split String raw b lower → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     : String cur ( string_new )
     : s t ( string_data raw )
@@ -144,7 +144,7 @@ $ `ghstore.nu`
 
 // A TOML array of strings, each whole (a redaction pattern may hold a
 // comma); a lone string is a list of one.
-@ __gh_cfg_strings AgConfig cfg s key → ( Vec String ) {
+@ _gh_cfg_strings AgConfig cfg s key → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     ? . cfg loaded {} { ^ out }
     ?? ( toml_get_path . cfg root key ) {
@@ -229,11 +229,11 @@ $ `ghstore.nu`
             }
         }
     }
-    : ( Vec String ) repos ( __gh_split ( _gh_cfg_list cfg `github.repos` ) T )
+    : ( Vec String ) repos ( _gh_split ( _gh_cfg_list cfg `github.repos` ) T )
     ? == ( vec_len [String] repos ) 0 { ( string_push_str why `[github] repos: name at least one owner/name` ) ^ F } {}
     : String org ( ag_config_str cfg `github.org` `` )
     ? & ( ag_auth_oidc ) == ( string_len org ) 0 { ( string_push_str why `[github] org: the organisation (tenant) the repositories belong to` ) ^ F } {}
-    : ( Vec String ) wf ( __gh_split ( _gh_cfg_list cfg `github.workflows` ) F )
+    : ( Vec String ) wf ( _gh_split ( _gh_cfg_list cfg `github.workflows` ) F )
     : String mc ( ag_config_str cfg `github.merge_channel` `` )
     : String api ( ag_config_str cfg `github.api` AG_GH_API )
     // Credentials go only over TLS (a loopback stand-in excepted).
@@ -245,47 +245,6 @@ $ `ghstore.nu`
     // (repository binding, outbox) would be shared, so one repository.
     ? & ! ( ag_auth_oidc ) > ( vec_len [String] repos ) 1 { ( string_push_str why `[github] repos: a local agora is one file, so one repository (signed in, each has its own)` ) ^ F } {}
     ( ag_gh_configure app_id ( string_data secret ) inst ( string_data key_path ) ( string_data ( ag_org_key ( string_data org ) ) ) repos ( string_data mc ) wf ( string_data api ) )
-    // The task board's mirror (ghmirror.nu): off unless named; dry run
-    // unless told otherwise.
-    : ( Vec String ) mirror ( __gh_split ( _gh_cfg_list cfg `github.mirror` ) T )
-    : ( Vec String ) redact ( __gh_cfg_strings cfg `github.redact` )
-    : i nre ( vec_len [String] redact )
-    : ~ i k 0
-    ~ < k nre {
-        ?? ( vec_get [String] redact k ) {
-            T pat → {
-                ?? ( regex_compile ( string_data pat ) ) {
-                    T _ → {}
-                    F _ → {
-                        ( string_push_str why `[github] redact: not a pattern: ` )
-                        ( string_push_str why ( string_data pat ) )
-                        ^ F
-                    }
-                }
-            }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    : i nm ( vec_len [String] mirror )
-    : ~ i j 0
-    ~ < j nm {
-        ?? ( vec_get [String] mirror j ) {
-            T m → {
-                ? ( _gh_repo_in repos ( string_data m ) ) {} {
-                    ( string_push_str why `[github] mirror: ` )
-                    ( string_push_str why ( string_data m ) )
-                    ( string_push_str why ` is not in repos` )
-                    ^ F
-                }
-            }
-            F _ → {}
-        }
-        = j + j 1
-    }
-    ? & > nm 0 == ( string_len ( _gh_slug ) ) 0 { ( string_push_str why `[github] mirror: the app file needs the App's slug (from the manifest answer)` ) ^ F } {}
-    : String alert ( ag_config_str cfg `github.mirror_alert` `` )
-    ( ag_gh_mirror_configure mirror ( ag_config_bool cfg `github.dry_run` T ) redact ( string_data alert ) )
     ^ T
 }
 

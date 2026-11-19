@@ -174,6 +174,56 @@ $ `web.nu`
     }
 }
 
+// `[github]` whole: the App and its routes (github.nu), then the task
+// board's mirror. F with `why` empty: no [github] table; with `why` set:
+// a configuration error.
+@ ag_gh_config AgConfig cfg String why → b {
+    ? ( ag_gh_apply_config cfg why ) {} { ^ F }
+    : ( Vec String ) repos ( _gh_split ( _gh_cfg_list cfg `github.repos` ) T )
+    // The task board's mirror (ghmirror.nu): off unless named; dry run
+    // unless told otherwise.
+    : ( Vec String ) mirror ( _gh_split ( _gh_cfg_list cfg `github.mirror` ) T )
+    : ( Vec String ) redact ( _gh_cfg_strings cfg `github.redact` )
+    : i nre ( vec_len [String] redact )
+    : ~ i k 0
+    ~ < k nre {
+        ?? ( vec_get [String] redact k ) {
+            T pat → {
+                ?? ( regex_compile ( string_data pat ) ) {
+                    T _ → {}
+                    F _ → {
+                        ( string_push_str why `[github] redact: not a pattern: ` )
+                        ( string_push_str why ( string_data pat ) )
+                        ^ F
+                    }
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    : i nm ( vec_len [String] mirror )
+    : ~ i j 0
+    ~ < j nm {
+        ?? ( vec_get [String] mirror j ) {
+            T m → {
+                ? ( _gh_repo_in repos ( string_data m ) ) {} {
+                    ( string_push_str why `[github] mirror: ` )
+                    ( string_push_str why ( string_data m ) )
+                    ( string_push_str why ` is not in repos` )
+                    ^ F
+                }
+            }
+            F _ → {}
+        }
+        = j + j 1
+    }
+    ? & > nm 0 == ( string_len ( _gh_slug ) ) 0 { ( string_push_str why `[github] mirror: the app file needs the App's slug (from the manifest answer)` ) ^ F } {}
+    : String alert ( ag_config_str cfg `github.mirror_alert` `` )
+    ( ag_gh_mirror_configure mirror ( ag_config_bool cfg `github.dry_run` T ) redact ( string_data alert ) )
+    ^ T
+}
+
 // Every configured repository's mirror set from the configuration (and
 // those no longer named switched off is left to whoever removed them:
 // a file never mirrored has the setting 0 already).

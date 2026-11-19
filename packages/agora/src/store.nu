@@ -58,6 +58,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/ext/sqlite.nu`
 $ `stdlib/core/slice.nu`
+$ `stdlib/ext/json.nu`
 
 : AgStore {
     String path
@@ -395,15 +396,39 @@ $ `stdlib/core/slice.nu`
 // expired — in either spelling, `task #N` or `AGORA-N`) happened when
 // that mail was sent; a task finished or held with no such mail (its
 // poster did it) is dated by its last change.
+// A setting of this file (key → integer; `dflt` when unset).
+@ _ag_setting_on Database db s key i dflt → i {
+    : ~ i v dflt
+    ?? ( sqlite_prepare db `SELECT value FROM settings WHERE key = ?1` ) {
+        F _ → {}
+        T q → {
+            ( _ag_bind_s q 1 key )
+            ? ( _ag_row q ) { = v ( sqlite_column_int q 0 ) } {}
+        }
+    }
+    ^ v
+}
+
+@ _ag_setting_put_on Database db s key i value → b {
+    ?? ( sqlite_prepare db `INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value` ) {
+        F _ → { ^ F }
+        T q → {
+            ( _ag_bind_s q 1 key )
+            ( _ag_bind_i q 2 value )
+            ^ ( _ag_run q )
+        }
+    }
+}
+
 // 0.9.0: task_events filled from what is known (task rows, task mail),
 // once per file: the `task_events_filled` setting says it is done. The
 // check, the filling and the mark are one transaction, and any statement
 // failing rolls it all back (the next open tries again). A file with
 // events already (filled before the mark existed) is only marked.
 @ __ag_task_events_backfill Database db → v {
-    ? > ( __ag_setting_on db `task_events_filled` 0 ) 0 { ^ v } {}
+    ? > ( _ag_setting_on db `task_events_filled` 0 ) 0 { ^ v } {}
     ? ( _ag_begin db ) {} { ^ v }
-    ? > ( __ag_setting_on db `task_events_filled` 0 ) 0 { ( _ag_rollback db ) ^ v } {}
+    ? > ( _ag_setting_on db `task_events_filled` 0 ) 0 { ( _ag_rollback db ) ^ v } {}
     : ~ i have -1
     ?? ( sqlite_prepare db `SELECT COUNT(*) FROM task_events` ) {
         F _ → {}
@@ -428,7 +453,7 @@ $ `stdlib/core/slice.nu`
             = k + k 1
         }
     } {}
-    ? ok { = ok ( __ag_setting_put_on db `task_events_filled` 1 ) } {}
+    ? ok { = ok ( _ag_setting_put_on db `task_events_filled` 1 ) } {}
     ? ok { ? ( _ag_commit db ) {} { ( _ag_rollback db ) } } { ( _ag_rollback db ) }
 }
 
