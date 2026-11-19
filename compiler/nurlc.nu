@@ -28656,7 +28656,7 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
     : s f ( nurl_str_cat want `` )
     ( nurl_eprintln ( nurl_str_cat4 `summary ` f ` sink=` ( nurl_sym_get g_fn_sink f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  keeps=` ( nurl_sym_get g_fn_keeps f ) ` stores=` ( nurl_sym_get g_fn_stores f ) ) )
-    ( nurl_eprintln ( nurl_str_cat4 `  rckeeps=` ( nurl_sym_get g_fn_rckeeps f ) ` rckpend=` ( nurl_sym_get g_rck_pend f ) ) )
+    ( nurl_eprintln ( nurl_str_cat4 `  rckeeps=` ? == 0 g_fn_rckeeps `` ( nurl_sym_get g_fn_rckeeps f ) ` rckpend=` ? == 0 g_rck_pend `` ( nurl_sym_get g_rck_pend f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  vkeeps=` ( nurl_sym_get g_fn_vkeeps f ) ` rviews=` ( nurl_sym_get g_fn_rviews f ) ) )
     ( nurl_eprintln ( nurl_str_cat4 `  escapes=` ( nurl_sym_get g_fn_escapes f ) ` handkeeps=` ( nurl_sym_get g_fn_handkeeps f ) ) )
     ( nurl_eprintln ( nurl_str_cat `  vcopies=` ( nurl_sym_get g_fn_vcopies f ) ) )
@@ -68314,6 +68314,7 @@ unsafe @ __sx_nroots s e b ns → s {
 @ __rck_publish i syms s fname → v {
     : s ws ( nurl_sym_get syms `__fn_rckeep__` )
     ? == 0 ( nurl_str_len ws ) { ^ v } {}
+    ? == 0 g_rck_pend { = g_rck_pend ( nurl_sym_new ) = g_fn_rckeeps ( nurl_sym_new ) } {}
     ( nurl_sym_def g_rck_pend fname ( __word_union ( nurl_sym_get g_rck_pend fname ) ws ) )
     : s fs ( nurl_sym_get g_rck_pend `__fns__` )
     ? ! ( str_contains_word fs fname ) { ( nurl_sym_def g_rck_pend `__fns__` ( __word_union fs fname ) ) } {}
@@ -68323,6 +68324,7 @@ unsafe @ __sx_nroots s e b ns → s {
 // its g_fn_rckeeps — to a fixed point, a condition naming another's
 // (`%K:callee:k`, __cond_keeps), a wrapper's through what it wraps.
 @ resolve_rckeeps → v {
+    ? == 0 g_rck_pend { ^ v } {}
     : s fns ( nurl_sym_get g_rck_pend `__fns__` )
     ? == 0 ( nurl_str_len fns ) { ^ v } {}
     : ~ b changed T
@@ -68362,7 +68364,7 @@ unsafe @ __sx_nroots s e b ns → s {
     // function that puts a share of its parameter into a container its
     // caller holds keeps that much of it, g_fn_rckeeps; agora #793.)
     ? & ( seq gb `rc_clone` ) ( seq k `0` ) { ^ T } {}
-    ? | ( nurl_sym_has_word g_fn_rckeeps cal k ) ( nurl_sym_has_word g_fn_rckeeps gb k ) { ^ T } {}
+    ? != 0 g_fn_rckeeps { ? | ( nurl_sym_has_word g_fn_rckeeps cal k ) ( nurl_sym_has_word g_fn_rckeeps gb k ) { ^ T } {} } {}
     ? | | ( nurl_sym_has_word g_fn_keeps cal k ) ( nurl_sym_has_word g_fn_sink cal k ) | ( nurl_sym_has_word g_fn_stores cal k ) ( nurl_sym_has_word g_fn_escapes cal k ) { ^ T } {}
     ? ( seq gb cal ) { ^ F } {}
     ^ | | ( nurl_sym_has_word g_fn_keeps gb k ) ( nurl_sym_has_word g_fn_sink gb k ) | ( nurl_sym_has_word g_fn_stores gb k ) ( nurl_sym_has_word g_fn_escapes gb k )
@@ -119086,8 +119088,10 @@ unsafe @ main → i {
     = g_fn_inout ( nurl_sym_new )
     = g_fn_sink ( nurl_sym_new )
     = g_fn_keeps ( nurl_sym_new )
-    = g_fn_rckeeps ( nurl_sym_new )
-    = g_rck_pend ( nurl_sym_new )
+    // (Made at the first share-keep a function reports, __rck_publish: most
+    // modules have none, and a table is 36 KB before its first entry.)
+    = g_fn_rckeeps 0
+    = g_rck_pend 0
     = g_fn_vkeeps ( nurl_sym_new )
     = g_fn_vkpend ( nurl_sym_new )
     = g_fn_rviews ( nurl_sym_new )
