@@ -68130,7 +68130,13 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         // (A holder's own value says nothing of what was stored into it
         // since: one that holds views reached through an element of `sid`,
         // `vdi_`, ends as at an element's buffer moved.)
-        ? & ! ( bck_dead_state ( bck_st_get out d ) ) | ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdi_` ds ) ) sids ) ( __rcp_meets ( nurl_sym_get g_bck ( bck_bkey `rcp_` ds ) ) wty ) {
+        // (…or one that holds a view of `sid` at all: a callee that left an
+        // `inout` holder viewing `( rc_get ( vec_at hs 0 ) )` is answered as
+        // viewing `hs`, and what is not known may be that payload. A borrow's
+        // `pf_` - its own value proven read through no payload - says
+        // nothing of what was stored into the holder since; agora #774.)
+        : b dviu ( str_contains_word ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `vds_` ds ) ) ) sids )
+        ? & ! ( bck_dead_state ( bck_st_get out d ) ) | | dviu ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `vdi_` ds ) ) sids ) ( __rcp_meets ( nurl_sym_get g_bck ( bck_bkey `rcp_` ds ) ) wty ) {
             = out ( bck_st_set out d BCK_INVALID )
             ( bck_put ( bck_bkey `bv_` ds ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` sids ( nurl_str_cat ` !vdep ` why ) ) )
         } {}
