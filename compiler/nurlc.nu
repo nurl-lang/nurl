@@ -64930,6 +64930,20 @@ unsafe @ __sx_mut_roots s st s e b named → s {
 // argument's sources) reaches through an element of - `^id`, overlapping:
 // the callee may move that element's buffer (g_fn_ireallocs; agora #923).
 // Not a view of the owner's own buffer, nor a copy of an element's handle.
+// The sources the storage ids `ms` (of one argument) hold views of, `vds_`
+// of each root: what an element read out of it as a view points into
+// (agora #933).
+@ __bck_held_view_srcs s ms → s {
+    : ~ s out ``
+    : ~ s mr ( nurl_str_cat ms `` )
+    ~ != 0 ( nurl_str_len mr ) {
+        : s m0 ( str_first_word mr ) = mr ( str_skip_word mr )
+        : i mid ( nurl_str_to_int ? == ( nurl_str_get m0 0 ) 94 ( nurl_str_slice m0 1 - ( nurl_str_len m0 ) 1 ) m0 )
+        ? >= mid 0 { = out ( __word_union out ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `vds_` ( nurl_str_int ( bck_path_root mid ) ) ) ) ) ) } {}
+    }
+    ^ out
+}
+
 @ __bck_elem_view_conflict s ms s ss → s {
     : ~ s mr ( nurl_str_cat ms `` )
     ~ != 0 ( nurl_str_len mr ) {
@@ -65168,12 +65182,23 @@ unsafe @ __sx_mut_roots s st s e b named → s {
                         // conflict found.)
                         : s hit0 ? | ( seq sk `*` ) ! rj `` ( bck_alias_conflict mj sk dj )
                         : b eh & & == 0 ( nurl_str_len hit0 ) ij ! ( seq sk `*` )
-                        : s hit ? eh ( __bck_elem_view_conflict mj sk ) hit0
+                        : s hit1 ? eh ( __bck_elem_view_conflict mj sk ) hit0
+                        // (…or of what it holds a view of, `vds_`: an element
+                        // it reads out of the argument may be a view it hands
+                        // back a copy of - a `Vec` of slices, `( slice_at (
+                        // vec_at vv 0 ) 0 )` grown - and the other argument
+                        // points into an element of what that view points
+                        // into; agora #933.)
+                        : b ev & eh == 0 ( nurl_str_len hit1 )
+                        : s hit ? ev ( __bck_elem_view_conflict ( __bck_held_view_srcs mj ) sk ) hit1
                         ? != 0 ( nurl_str_len hit ) {
                             : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int hit ) ) ) ) )
                             : s c1 ( nurl_str_cat4 `'` nm `' reaches '` ( bck_fn_show cal ) )
-                            : s c2 ( nurl_str_cat3 `' through argument ` ( nurl_str_int + j 1 ) ? eh `, an element of which it may grow or move,` ? sj `, which it takes over and may release,` ? pj `, which it may give a new value, releasing the old one,` ? dj `, whose elements it may drop or replace,` `, whose buffer it may move or free,` )
-                            : s c3 ( nurl_str_cat4 ` and through argument ` ( nurl_str_int + k 1 ) `, which points into it or borrows from it: inside the call the two are unrelated names, and the change through one leaves the other dangling. Pass a copy that owns its data as one of them (mem_dup, string_from, slice_to_vec), or take what the second one reaches inside the callee.` `` )
+                            : s c2 ( nurl_str_cat3 `' through argument ` ( nurl_str_int + j 1 ) ? ev `, which holds a view of it - an element of which it may grow or move -` ? eh `, an element of which it may grow or move,` ? sj `, which it takes over and may release,` ? pj `, which it may give a new value, releasing the old one,` ? dj `, whose elements it may drop or replace,` `, whose buffer it may move or free,` )
+                            // (…where argument j holds a view of it, a copy of
+                            // argument j keeps that view: only a copy of
+                            // argument k is clear of it; agora #933.)
+                            : s c3 ( nurl_str_cat4 ` and through argument ` ( nurl_str_int + k 1 ) ? ev ( nurl_str_cat3 `, which points into it or borrows from it: inside the call the two are unrelated names, and the change through one leaves the other dangling. Pass a copy of argument ` ( nurl_str_int + k 1 ) ` that owns its data instead (slice_to_vec, mem_dup, string_from), bound to a name that lives across the call - a copy of the first still holds its views - or take what the second one reaches inside the callee.` ) `, which points into it or borrows from it: inside the call the two are unrelated names, and the change through one leaves the other dangling. Pass a copy that owns its data as one of them (mem_dup, string_from, slice_to_vec), or take what the second one reaches inside the callee.` `` )
                             ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 c1 c2 c3 ) )
                             ^
                         } {}
@@ -68460,7 +68485,16 @@ unsafe @ __sx_nroots s e b ns → s {
         : ~ b more ! & < g_sxe_pos n == # i . ep g_sxe_pos 41
         ? ! more { = g_sxe_pos + g_sxe_pos 1 } {}
         ~ more {
-            ? & past ( mem_fn_lends_arg w ( nurl_str_int j ) ) { = out ( __word_union out ( __sx_nroots e ns ) ) } { ( bck_sx_skip e ) }
+            // (An irealloc edge's, `ns`: an element accessor's container
+            // too, where the element is a view it hands back a copy of -
+            // `( slice_at ( vec_at vv 0 ) 0 )` of a `Vec` of slices grows a
+            // buffer `vv`'s elements view, which its callers' views of what
+            // `vv` views end at (the summary's `srcs`); agora #933.)
+            // (The accessor test only where it can decide: `&` evaluates
+            // every operand, and most calls lend or are not asked so.)
+            : ~ b take & past ( mem_fn_lends_arg w ( nurl_str_int j ) )
+            ? & & & ! take past ns == j 0 { = take ( __elem_accessor_call w ) } {}
+            ? take { = out ( __word_union out ( __sx_nroots e ns ) ) } { ( bck_sx_skip e ) }
             ? & < g_sxe_pos n == # i . ep g_sxe_pos 124 { = g_sxe_pos + g_sxe_pos 1 = j + j 1 } {
                 = more F
                 ? & < g_sxe_pos n == # i . ep g_sxe_pos 41 { = g_sxe_pos + g_sxe_pos 1 } {}
@@ -69709,6 +69743,21 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                         = out ( bck_view_end out fsid ( bck_field_int rec 3 ) ifw )
                         = g_bck_end_elem 1
                     } {}
+                } {}
+            }
+            // (…and through the views it holds: an element it reads out of
+            // the argument may be a view it hands back a copy of - a `Vec`
+            // of slices, `( slice_at ( vec_at vv 0 ) 0 )` grown - whose
+            // elements are those of what the view points into. What points
+            // into the buffers of the elements of each source the argument
+            // holds a view of (`vds_`) ends too; agora #933.)
+            : ~ s vdrest ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `vds_` ( nurl_str_int wid ) ) ) )
+            ~ != 0 ( nurl_str_len vdrest ) {
+                : s vdw ( str_first_word vdrest ) = vdrest ( str_skip_word vdrest )
+                : i vdid ( nurl_str_to_int vdw )
+                ? & >= vdid 0 != vdid wid {
+                    : s vdy ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) ) ) `', which holds a view of it, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may move the buffer of one of the elements it views` ) )
+                    = out ( bck_view_end_ind out vdid ( bck_field_int rec 3 ) vdy )
                 } {}
             }
             = g_bck_end_elem 0
