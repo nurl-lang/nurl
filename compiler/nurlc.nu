@@ -61537,7 +61537,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 } {}
                 // (…and then what the scopes still hold is dropped: an owner
                 // whose drop reads a view, after what that view points into.)
+                // (…and what the exit releases, past the value it hands back:
+                // its source expression, `retsx`, agora #918.)
+                ( bck_put `retsx` ? >= ( __bck_field_off rec 8 ) 0 ( bck_field rec 8 ) `` )
                 ( bck_ret_drop_check after_defers ( bck_field_int rec 3 ) )
+                ( bck_put `retsx` `` )
                 = st ( nurl_str_cat `!` `` )
                 = p hi
                 = done T
@@ -63426,12 +63430,19 @@ unsafe @ bck_younger_view_check i holder s srcs i p i line → v {
 }
 
 unsafe @ bck_ret_drop_check s st i line → v {
-    ? | == 0 g_bck_udrop_any ( seq st `!` ) { ^ v } {}
+    // (…and, where the return hands back a value read through an Rc's
+    // payload, what each binding it releases runs: `retsx`, agora #918.)
+    : s rsx ( nurl_sym_get g_bck `retsx` )
+    : b udc & & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) != 0 ( nurl_str_len rsx )
+    ? | ( seq st `!` ) & == 0 g_bck_udrop_any ! udc { ^ v } {}
     // (Not the owner handed back by name, gen_ret: the caller drops it.)
     : s rtn ( nurl_sym_get g_bck ( nurl_str_cat4 `rto_` ( nurl_sym_get g_bck `file` ) `:` ( nurl_str_int line ) ) )
     : i rto ? != 0 ( nurl_str_len rtn ) ( bck_intern rtn ) -1
     // The bindings still holding their values, in the order they drop.
     : ~ s order ``
+    // (…and every one codegen may still release, whatever the walk's
+    // state calls it: not moved, stored away or unbound.)
+    : ~ s ulist ``
     : ~ i k - g_bck_sc_n 1
     ~ >= k 0 {
         : i b * k 3
@@ -63444,9 +63455,12 @@ unsafe @ bck_ret_drop_check s st i line → v {
             // the value its destructor runs on, `vdu_`.)
             : b udr ( seq ( nurl_sym_get g_bck ( bck_bkey `vdu_` ( nurl_str_int id ) ) ) `1` )
             ? & != id rto | | == v BCK_OWNED == v BCK_MAYBE_MOVED & udr | == v BCK_BORROWED_SHARED == v BCK_BORROWED_MUT { = order ? == 0 ( nurl_str_len order ) ( nurl_str_int id ) ( nurl_str_cat3 order ` ` ( nurl_str_int id ) ) } {}
+            ? & & udc != id rto ! | | == v BCK_UNINIT == v BCK_MOVED == v BCK_STORED { = ulist ? == 0 ( nurl_str_len ulist ) ( nurl_str_int id ) ( nurl_str_cat3 ulist ` ` ( nurl_str_int id ) ) } {}
         }
         = k - k 1
     }
+    ? != 0 ( nurl_str_len ulist ) { ( __bck_ret_udrop_check rsx ulist line ) } {}
+    ? == 0 g_bck_udrop_any { ^ v } {}
     : ~ s gone ``
     : ~ s rest2 ( nurl_str_cat order `` )
     ~ != 0 ( nurl_str_len rest2 ) {
@@ -63464,6 +63478,55 @@ unsafe @ bck_ret_drop_check s st i line → v {
             }
         } {}
         = gone ? == 0 ( nurl_str_len gone ) ( nurl_str_cat ds `` ) ( nurl_str_cat3 gone ` ` ds )
+    }
+}
+
+// A return at `line` hands back a value of source expression `sx` (walk
+// ids), read through the payloads of the Rc types __bck_rcp_scan names.
+// What the exit then releases — the bindings `ids`, still holding their
+// values, not the one handed back (bck_ret_drop_check) — runs the `% Drop`
+// impls their types hold (`+d=`, bck_note_rc_arg). One whose impl may drop, replace or move what its
+// parameter reaches (its final summary), on an Rc type the value is read
+// through, frees what the caller would read: the return is refused
+// (agora #918). The caller cannot see it: what it is handed is a lend made
+// after the callee's effects.
+@ __bck_ret_udrop_check s sx s ids i line → v {
+    : s rcp ( __bck_rcp_scan sx )
+    ? == 0 ( nurl_str_len rcp ) { ^ v } {}
+    : b any ( str_contains_word rcp `*` )
+    : ~ s rest ( nurl_str_cat ids `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ids1 ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s nm ( nurl_sym_get2 g_bck `rv_` ids1 )
+        : ~ s fns ( __bck_rc_noted nm `+d=` )
+        ? != 0 ( nurl_str_len fns ) {
+            // (The Rc types it reaches meet those the value is read
+            // through — `*`: any.)
+            : s rts ( bck_rc_type_of nm )
+            : ~ b meets any
+            : ~ s rw ( nurl_str_cat rcp `` )
+            ~ & ! meets != 0 ( nurl_str_len rw ) {
+                : s w ( str_first_word rw ) = rw ( str_skip_word rw )
+                ? ( __bar_has rts w ) { = meets T } {}
+            }
+            ~ & meets != 0 ( nurl_str_len fns ) {
+                : s f ( __bar_first fns ) = fns ( __bar_rest fns )
+                : b chg | | ( bck_callee_drops_elems f `0` ) ( nurl_sym_has_word g_fn_reallocs f `0` ) & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs f `0` )
+                ? chg {
+                    : s tag ( nurl_str_cat4 `rd:` ids1 `:` ( nurl_str_int line ) )
+                    : s ws ( nurl_sym_get g_bck `warnset` )
+                    ? ! ( str_contains_word ws tag ) {
+                        ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+                        : s hn ( bck_name_show nm )
+                        : s m1 ( nurl_str_cat3 `the value this return hands back is read through the payload of an 'Rc' that '` hn `' may hold another handle on. '` )
+                        : s m2 ( nurl_str_cat3 hn `' is released when the function returns, after the value is made, and its type's 'drop' may drop or replace what it holds: the caller would read freed memory. Release '` hn )
+                        : s m3 `' before the value is made (in a block that ends first), or hand back a copy that owns its data (slice_to_vec, string_from).`
+                        ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 m3 ) )
+                    } {}
+                    = fns ``
+                } {}
+            }
+        } {}
     }
 }
 
