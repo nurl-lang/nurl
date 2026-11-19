@@ -410,7 +410,9 @@ Skills: skills lists your organisation's playbooks; skill name=X reads one. Some
     : i n ( nurl_str_len l )
     : ~ i from 0
     ? ( string_starts_with low `agora-` ) { = from 6 } {
-        ? ( string_starts_with low `#` ) { = from 1 } {}
+        ? ( string_starts_with low `github#` ) { = from 7 } {
+            ? ( string_starts_with low `#` ) { = from 1 } {}
+        }
     }
     ^ ( string_substr low from - n from )
 }
@@ -1214,6 +1216,8 @@ Skills: skills lists your organisation's playbooks; skill name=X reads one. Some
 @ __ag_op_pr_unwatch AgStore st AgCaller c Json args i now → AgRes {
     ? ( ag_gh_connected ( string_data ( __ag_gh_key c ) ) ) {} { ^ ( __ag_gh_off ) }
     : i pr ( _ag_arg_int args `pr` 0 )
+    // Left out: every PR. Given but not a number: an error, never "all".
+    ? & ( _ag_has_arg args `pr` ) < pr 1 { ^ ( _ag_err 400 `pr: a pull request number (e.g. 1970 or github#1970); leave it out to unwatch every PR` ) } {}
     : i n ( ag_gh_unwatch st ( string_data . c agent ) pr )
     : String t ( string_from ? > pr 0 `unwatched github#` `unwatched ` )
     ? > pr 0 { ( string_push_int t pr ) } { ( string_push_int t n ) ( string_push_str t ` PRs` ) }

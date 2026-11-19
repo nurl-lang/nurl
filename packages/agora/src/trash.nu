@@ -103,18 +103,25 @@ $ `store.nu`
     }
 }
 
+// A field < 0 is left as it is (a person changing one of them does not
+// write back what another changed meanwhile).
+@ __ag_ttl_put_on Database db s key i v → b {
+    ? < v 0 { ^ T } {}
+    ^ ( __ag_setting_put_on db key v )
+}
+
 @ ag_expiry_set AgStore st AgExpiry e → b {
     ?? ( _ag_conn st ) {
         F _ → { ^ F }
         T db → {
             ? ( _ag_begin db ) {} { ^ F }
-            : b ok & & & & & & ( __ag_setting_put_on db `ttl_notes` . e notes )
-            ( __ag_setting_put_on db `ttl_posts` . e posts )
-            ( __ag_setting_put_on db `ttl_mail` . e mail )
-            ( __ag_setting_put_on db `ttl_tasks` . e tasks )
-            ( __ag_setting_put_on db `ttl_agents` . e agents )
-            ( __ag_setting_put_on db `ttl_channels` . e channels )
-            ( __ag_setting_put_on db `trash_empty_days` . e empty_days )
+            : b ok & & & & & & ( __ag_ttl_put_on db `ttl_notes` . e notes )
+            ( __ag_ttl_put_on db `ttl_posts` . e posts )
+            ( __ag_ttl_put_on db `ttl_mail` . e mail )
+            ( __ag_ttl_put_on db `ttl_tasks` . e tasks )
+            ( __ag_ttl_put_on db `ttl_agents` . e agents )
+            ( __ag_ttl_put_on db `ttl_channels` . e channels )
+            ( __ag_ttl_put_on db `trash_empty_days` . e empty_days )
             ? ok { ^ ( _ag_commit db ) } {}
             ( _ag_rollback db )
             ^ F
@@ -128,6 +135,7 @@ $ `store.nu`
     ? != 0 ( nurl_str_eq kind `task` ) { ^ . e tasks } {}
     ? != 0 ( nurl_str_eq kind `agent` ) { ^ . e agents } {}
     ? != 0 ( nurl_str_eq kind `channel` ) { ^ . e channels } {}
+    ? != 0 ( nurl_str_eq kind `mail` ) { ^ . e mail } {}
     ^ . e posts
 }
 
@@ -344,6 +352,10 @@ $ `store.nu`
     ^ m
 }
 
+// What the audit keeps of an item's label: a message's channel only (its
+// text is gone once deleted for good; the audit stays).
+: s AG_AUDIT_LABEL `CASE WHEN kind = 'message' THEN substr(label, 1, instr(label || ':', ':') - 1) ELSE label END`
+
 // Move every `kind` row `x` that `cond` selects into the trash, inside
 // the caller's transaction. `cond` may use ?1 (text `a`), ?2 (integer
 // `n`), ?6 (now) and ?7 (text `b`); `held` T leaves out what a restore
@@ -402,12 +414,16 @@ $ `store.nu`
     }
     ? ok {} { ^ -1 }
     ?? ( sqlite_prepare db `DELETE FROM hold WHERE (kind, ref) IN (SELECT kind, ref FROM trash WHERE id > ?1)` ) {
-        F _ → {}
-        T q → { ( _ag_bind_i q 1 m ) ( _ag_run q ) }
+        F _ → { ^ -1 }
+        T q → { ( _ag_bind_i q 1 m ) ? ( _ag_run q ) {} { ^ -1 } }
     }
-    ?? ( sqlite_prepare db `INSERT INTO audit (ts, action, kind, ref, label, by) SELECT trashed, CASE WHEN reason = 'expired' THEN 'expire' ELSE 'trash' END, kind, ref, label, by FROM trash WHERE id > ?1 ORDER BY id` ) {
-        F _ → {}
-        T q → { ( _ag_bind_i q 1 m ) ( _ag_run q ) }
+    : String au ( string_from `INSERT INTO audit (ts, action, kind, ref, label, by) SELECT trashed, CASE WHEN reason = 'expired' THEN 'expire' ELSE 'trash' END, kind, ref, ` )
+    ( string_push_str au AG_AUDIT_LABEL )
+    ( string_push_str au `, by FROM trash WHERE id > ?1 ORDER BY id` )
+    // No move without its audit line.
+    ?? ( sqlite_prepare db ( string_data au ) ) {
+        F _ → { ^ -1 }
+        T q → { ( _ag_bind_i q 1 m ) ? ( _ag_run q ) {} { ^ -1 } }
     }
     ^ moved
 }
@@ -420,7 +436,11 @@ $ `store.nu`
         T db → {
             ? ( _ag_begin db ) {} { ^ -1 }
             : i r ( _ag_trash_on db kind cond a n b F reason by now )
-            ? > r 0 { ? ( _ag_commit db ) { ^ r } {} } {}
+            ? > r 0 {
+                ? ( _ag_commit db ) { ^ r } {}
+                ( _ag_rollback db )
+                ^ -1
+            } {}
             ( _ag_rollback db )
             ^ r
         }
@@ -541,27 +561,31 @@ $ `store.nu`
                 = . r agents ( _ag_trash_on db `agent` `x.seen < ?2 AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.status = 'claimed' AND t.owner = x.id)` `` ( __ag_cutoff . e agents now ) `` T `expired` `agora` now )
             } {}
             ? > . e channels 0 {
-                = . r channels ( _ag_trash_on db `channel` `x.name != 'public' AND x.created < ?2 AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.channel = x.name AND m.ts >= ?2)` `` ( __ag_cutoff . e channels now ) `` T `expired` `agora` now )
+                = . r channels ( _ag_trash_on db `channel` `x.name != 'public' AND x.created < ?2 AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.channel = x.name AND m.ts >= ?2) AND NOT EXISTS (SELECT 1 FROM messages m JOIN hold h ON h.kind = 'message' AND h.ref = CAST(m.id AS TEXT) AND h.until > ?6 WHERE m.channel = x.name)` `` ( __ag_cutoff . e channels now ) `` T `expired` `agora` now )
             } {}
             = ok & & & & & & ok >= . r tasks 0 >= . r notes 0 >= . r posts 0 >= . r mail 0 >= . r agents 0 >= . r channels 0
             ? & ok > . e empty_days 0 {
                 : i cut ( __ag_cutoff . e empty_days now )
-                ?? ( sqlite_prepare db `INSERT INTO audit (ts, action, kind, ref, label, by) SELECT ?2, 'empty', kind, ref, label, 'agora' FROM trash WHERE trashed < ?1` ) {
-                    F _ → {}
-                    T q → { ( _ag_bind_i q 1 cut ) ( _ag_bind_i q 2 now ) ( _ag_run q ) }
+                : String au ( string_from `INSERT INTO audit (ts, action, kind, ref, label, by) SELECT ?2, 'empty', kind, ref, ` )
+                ( string_push_str au AG_AUDIT_LABEL )
+                ( string_push_str au `, 'agora' FROM trash WHERE trashed < ?1` )
+                ?? ( sqlite_prepare db ( string_data au ) ) {
+                    F _ → { = ok F }
+                    T q → { ( _ag_bind_i q 1 cut ) ( _ag_bind_i q 2 now ) = ok ( _ag_run q ) }
                 }
                 ?? ( sqlite_prepare db `DELETE FROM trash WHERE trashed < ?1` ) {
                     F _ → { = ok F }
                     T q → {
                         ( _ag_bind_i q 1 cut )
-                        = ok ( _ag_run q )
+                        = ok & ok ( _ag_run q )
                         = . r emptied ( sqlite_changes db )
                     }
                 }
             } {}
-            ? ok { ? ( _ag_commit db ) {} { ( _ag_rollback db ) = r @ AgSwept { 0 0 0 0 0 0 0 } } } {
+            // A sweep that failed says so: notes = -1 (nothing moved).
+            ? ok { ? ( _ag_commit db ) {} { ( _ag_rollback db ) = r @ AgSwept { -1 0 0 0 0 0 0 } } } {
                 ( _ag_rollback db )
-                = r @ AgSwept { 0 0 0 0 0 0 0 }
+                = r @ AgSwept { -1 0 0 0 0 0 0 }
             }
         }
     }
@@ -677,22 +701,25 @@ $ `store.nu`
                 = k + k 1
             }
             ? ok {} { ( _ag_rollback db ) ^ AG_RESTORE_FAILED }
+            // Out of the trash, held, audited — all of it or none.
             ?? ( sqlite_prepare db `DELETE FROM trash WHERE id = ?1` ) {
-                F _ → {}
-                T q → { ( _ag_bind_i q 1 id ) ( _ag_run q ) }
+                F _ → { = ok F }
+                T q → { ( _ag_bind_i q 1 id ) = ok & ( _ag_run q ) > ( sqlite_changes db ) 0 }
             }
-            ? > hold_days 0 {
+            ? & ok > hold_days 0 {
                 ?? ( sqlite_prepare db `INSERT INTO hold (kind, ref, until) VALUES (?1, ?2, ?3) ON CONFLICT (kind, ref) DO UPDATE SET until = excluded.until` ) {
-                    F _ → {}
+                    F _ → { = ok F }
                     T q → {
                         ( _ag_bind_s q 1 ( string_data kind ) )
                         ( _ag_bind_s q 2 ( string_data ref ) )
                         ( _ag_bind_i q 3 + now * hold_days 86400 )
-                        ( _ag_run q )
+                        = ok ( _ag_run q )
                     }
                 }
             } {}
-            ( __ag_audit_on db now `restore` ( string_data kind ) ( string_data ref ) ( string_data label ) by )
+            : String alabel ? != 0 ( nurl_str_eq ( string_data kind ) `message` ) ( __ag_msg_label_channel label ) ( string_clone label )
+            ? ok { = ok ( __ag_audit_on db now `restore` ( string_data kind ) ( string_data ref ) ( string_data alabel ) by ) } {}
+            ? ok {} { ( _ag_rollback db ) ^ AG_RESTORE_FAILED }
             ? ( _ag_commit db ) { ^ AG_RESTORED } {}
             ( _ag_rollback db )
             ^ AG_RESTORE_FAILED
@@ -700,7 +727,18 @@ $ `store.nu`
     }
 }
 
-@ __ag_audit_on Database db i now s action s kind s ref s label s by → v {
+// `general: hello` → `general` (the audit keeps no message text).
+@ __ag_msg_label_channel String label → String {
+    : s t ( string_data label )
+    : ( Slice u ) v ( slice_of_str t )
+    : i n ( nurl_str_len t )
+    : ~ i k 0
+    ~ & < k n != ( slice_byte v k ) 58 { = k + k 1 }
+    ^ ( string_substr label 0 k )
+}
+
+@ __ag_audit_on Database db i now s action s kind s ref s label s by → b {
+    : ~ b ok F
     ?? ( sqlite_prepare db `INSERT INTO audit (ts, action, kind, ref, label, by) VALUES (?1, ?2, ?3, ?4, ?5, ?6)` ) {
         F _ → {}
         T q → {
@@ -710,9 +748,10 @@ $ `store.nu`
             ( _ag_bind_s q 4 ref )
             ( _ag_bind_s q 5 label )
             ( _ag_bind_s q 6 by )
-            ( _ag_run q )
+            = ok ( _ag_run q )
         }
     }
+    ^ ok
 }
 
 // Delete item `id` for good. F: no such item.
@@ -721,15 +760,20 @@ $ `store.nu`
         F _ → { ^ F }
         T db → {
             ? ( _ag_begin db ) {} { ^ F }
-            ?? ( sqlite_prepare db `INSERT INTO audit (ts, action, kind, ref, label, by) SELECT ?2, 'delete', kind, ref, label, ?3 FROM trash WHERE id = ?1` ) {
+            : String au ( string_from `INSERT INTO audit (ts, action, kind, ref, label, by) SELECT ?2, 'delete', kind, ref, ` )
+            ( string_push_str au AG_AUDIT_LABEL )
+            ( string_push_str au `, ?3 FROM trash WHERE id = ?1` )
+            : ~ b logged F
+            ?? ( sqlite_prepare db ( string_data au ) ) {
                 F _ → {}
                 T q → {
                     ( _ag_bind_i q 1 id )
                     ( _ag_bind_i q 2 now )
                     ( _ag_bind_s q 3 by )
-                    ( _ag_run q )
+                    = logged ( _ag_run q )
                 }
             }
+            ? logged {} { ( _ag_rollback db ) ^ F }
             : ~ b gone F
             ?? ( sqlite_prepare db `DELETE FROM trash WHERE id = ?1` ) {
                 F _ → {}

@@ -428,7 +428,9 @@ $ `trash.nu`
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            // A state a person sets is a step of the task's history.
+            // The change and its step (history, mirror) in one transaction,
+            // the step queued after the change so the mirror reads it.
+            ? ( _ag_begin db ) {} { ^ F }
             : ~ String was ( string_new )
             ?? ( sqlite_prepare db `SELECT status FROM tasks WHERE id = ?1` ) {
                 F _ → {}
@@ -437,9 +439,6 @@ $ `trash.nu`
                     ? ( _ag_row q ) { = was ( sqlite_column_text q 0 ) } {}
                 }
             }
-            ? & > ( string_len was ) 0 == 0 ( nurl_str_eq ( string_data was ) status ) {
-                ( _ag_task_event_on db id status `web` now )
-            } { ( _ag_mirror_on db id `edit` 0 now ) }
             ?? ( sqlite_prepare db `UPDATE tasks SET title = ?2, body = ?3, tags = ?4, priority = ?5, status = ?6, updated = ?7, owner = CASE WHEN ?6 = 'open' THEN '' ELSE owner END, lease_until = CASE WHEN ?6 = 'open' THEN 0 ELSE lease_until END WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
@@ -453,6 +452,15 @@ $ `trash.nu`
                     = ok & ( _ag_run q ) > ( sqlite_changes db ) 0
                 }
             }
+            ? ok {
+                // A state a person sets is a step of the task's history.
+                ? & > ( string_len was ) 0 == 0 ( nurl_str_eq ( string_data was ) status ) {
+                    = ok ( _ag_task_event_ok_on db id status `web` now )
+                } { = ok ( _ag_mirror_ok_on db id `edit` 0 now ) }
+            } {}
+            ? ok {
+                ? ( _ag_commit db ) {} { ( _ag_rollback db ) = ok F }
+            } { ( _ag_rollback db ) }
         }
     }
     ^ ok

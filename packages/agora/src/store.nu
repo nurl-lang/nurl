@@ -397,28 +397,45 @@ $ `stdlib/core/slice.nu`
 // that mail was sent; a task finished or held with no such mail (its
 // poster did it) is dated by its last change.
 @ __ag_task_events_backfill Database db → v {
+    // Several processes may open a pre-0.9 file at once: one fills it,
+    // in one transaction, and only while it is empty.
+    ? ( _ag_begin db ) {} { ^ v }
+    : ~ i have 1
+    ?? ( sqlite_prepare db `SELECT COUNT(*) FROM task_events` ) {
+        F _ → {}
+        T q → { ? ( _ag_row q ) { = have ( sqlite_column_int q 0 ) } {} }
+    }
+    ? > have 0 { ( _ag_rollback db ) ^ v } {}
     ?? ( sqlite_exec db `INSERT INTO task_events (task, ts, kind, agent) SELECT id, created, 'post', poster FROM tasks ORDER BY id` ) { T _ → {} F _ → {} }
     ?? ( sqlite_exec db `WITH m AS (SELECT id, ts, sender, channel, body, CAST(substr(body, 7) AS INTEGER) AS n FROM messages WHERE channel LIKE '@%' AND (body LIKE 'task #%' OR body LIKE 'AGORA-%')), r AS (SELECT id, ts, sender, channel, n, substr(body, 7 + length(CAST(n AS TEXT))) AS rest FROM m WHERE n > 0) INSERT INTO task_events (task, ts, kind, agent) SELECT n, ts, CASE WHEN rest LIKE ' claimed by %' THEN 'claim' WHEN rest LIKE ' lease expired%' THEN 'expire' WHEN rest LIKE ' done by %' THEN 'done' WHEN rest LIKE ' released by %' THEN 'release' ELSE 'cancel' END, CASE WHEN rest LIKE ' lease expired%' THEN substr(channel, 2) ELSE sender END FROM r WHERE rest LIKE ' claimed by %' OR rest LIKE ' lease expired%' OR rest LIKE ' done by %' OR rest LIKE ' released by %' OR rest LIKE ' cancelled by %' ORDER BY ts, id` ) { T _ → {} F _ → {} }
     ?? ( sqlite_exec db `INSERT INTO task_events (task, ts, kind, agent) SELECT id, updated, 'done', owner FROM tasks t WHERE status = 'done' AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'done')` ) { T _ → {} F _ → {} }
     ?? ( sqlite_exec db `INSERT INTO task_events (task, ts, kind, agent) SELECT id, updated, 'cancel', poster FROM tasks t WHERE status = 'cancelled' AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'cancel')` ) { T _ → {} F _ → {} }
     ?? ( sqlite_exec db `INSERT INTO task_events (task, ts, kind, agent) SELECT id, updated, 'claim', owner FROM tasks t WHERE status = 'claimed' AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'claim')` ) { T _ → {} F _ → {} }
+    ? ( _ag_commit db ) {} { ( _ag_rollback db ) }
 }
 
 // One step of task `task`: post | claim | done | release | expire |
 // cancel, or a state a person set on the web page (open | claimed |
 // done | cancelled). Mirrored to GitHub too, when this agora is.
 @ _ag_task_event_on Database db i task s kind s agent i now → v {
-    ( _ag_mirror_on db task kind 0 now )
+    : b _ok ( _ag_task_event_ok_on db task kind agent now )
+}
+
+// The same, saying whether both rows were written (a caller that must not
+// commit a task change without its mirror step rolls back on F).
+@ _ag_task_event_ok_on Database db i task s kind s agent i now → b {
+    : ~ b ok ( _ag_mirror_ok_on db task kind 0 now )
     ?? ( sqlite_prepare db `INSERT INTO task_events (task, ts, kind, agent) VALUES (?1, ?2, ?3, ?4)` ) {
-        F _ → {}
+        F _ → { = ok F }
         T q → {
             ( _ag_bind_i q 1 task )
             ( _ag_bind_i q 2 now )
             ( _ag_bind_s q 3 kind )
             ( _ag_bind_s q 4 agent )
-            ( _ag_run q )
+            = ok & ok ( _ag_run q )
         }
     }
+    ^ ok
 }
 
 // Queue a step of task `task` for its GitHub issue (ghmirror.nu) — in the
@@ -426,6 +443,11 @@ $ `stdlib/core/slice.nu`
 // together. Nothing at all unless this file is mirrored (settings
 // gh_mirror = 1, set by github.nu from the configuration).
 @ _ag_mirror_on Database db i task s kind i msg i now → v {
+    : b _ok ( _ag_mirror_ok_on db task kind msg now )
+}
+
+@ _ag_mirror_ok_on Database db i task s kind i msg i now → b {
+    : ~ b ok F
     ?? ( sqlite_prepare db `INSERT INTO gh_outbox (task, kind, msg, created) SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM settings WHERE key = 'gh_mirror' AND value = 1)` ) {
         F _ → {}
         T q → {
@@ -433,9 +455,10 @@ $ `stdlib/core/slice.nu`
             ( _ag_bind_s q 2 kind )
             ( _ag_bind_i q 3 msg )
             ( _ag_bind_i q 4 now )
-            ( _ag_run q )
+            = ok ( _ag_run q )
         }
     }
+    ^ ok
 }
 
 // `t<N>: …` — the task a dev post is about (0: none).
@@ -894,7 +917,7 @@ $ `stdlib/core/slice.nu`
     // A task's comment thread is its `t<N>:` posts in dev.
     ? & > id 0 != 0 ( nurl_str_eq channel `dev` ) {
         : i t ( _ag_tpost_task body )
-        ? > t 0 { ( _ag_mirror_on db t `comment` id now ) } {}
+        ? > t 0 { ? ( _ag_mirror_ok_on db t `comment` id now ) {} { = id 0 } } {}
     } {}
     ^ id
 }
@@ -910,8 +933,17 @@ $ `stdlib/core/slice.nu`
             // the write lock from the start made concurrent posters queue in
             // SQLite's busy handler (p99 55 ms vs 29 ms at 16 writers). The
             // cursor step is safe on its own: it never passes a message
-            // anyone else wrote.
-            = id ( _ag_post_on db channel sender body reply_to now )
+            // anyone else wrote. A task comment (`t<N>:` in dev) is the
+            // exception: it and its mirror step commit together.
+            : b tpost & != 0 ( nurl_str_eq channel `dev` ) > ( _ag_tpost_task body ) 0
+            ? tpost {
+                ? ( _ag_begin db ) {
+                    = id ( _ag_post_on db channel sender body reply_to now )
+                    ? > id 0 {
+                        ? ( _ag_commit db ) {} { ( _ag_rollback db ) = id 0 }
+                    } { ( _ag_rollback db ) }
+                } {}
+            } { = id ( _ag_post_on db channel sender body reply_to now ) }
             ? > id 0 { ( __ag_cursor_past_own_on db sender channel id ) } {}
         }
     }
@@ -1308,6 +1340,8 @@ $ `stdlib/core/slice.nu`
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
+            // The task and its first step (history, mirror) in one transaction.
+            ? ( _ag_begin db ) {} { ^ 0 }
             ?? ( sqlite_prepare db `INSERT INTO tasks (title, body, tags, poster, status, priority, created, updated, ref) VALUES (?1, ?2, ?3, ?4, 'open', ?5, ?6, ?6, ?7)` ) {
                 F _ → {}
                 T q → {
@@ -1319,9 +1353,12 @@ $ `stdlib/core/slice.nu`
                     ( _ag_bind_i q 6 now )
                     ( _ag_bind_i q 7 ref )
                     ? ( _ag_run q ) { = id ( sqlite_last_insert_rowid db ) } {}
-                    ? > id 0 { ( _ag_task_event_on db id `post` poster now ) } {}
+                    ? > id 0 { ? ( _ag_task_event_ok_on db id `post` poster now ) {} { = id 0 } } {}
                 }
             }
+            ? > id 0 {
+                ? ( _ag_commit db ) {} { ( _ag_rollback db ) = id 0 }
+            } { ( _ag_rollback db ) }
         }
     }
     ^ id

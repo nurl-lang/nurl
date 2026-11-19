@@ -130,8 +130,14 @@ $ `store.nu`
         }
         : ~ i e + k 6
         : ~ i num 0
-        ~ & & hit < e n & >= ( slice_byte v e ) 48 <= ( slice_byte v e ) 57 { = num + * num 10 - ( slice_byte v e ) 48 = e + e 1 }
-        ? & hit > num 0 {
+        : ~ b over F
+        ~ & & hit < e n & >= ( slice_byte v e ) 48 <= ( slice_byte v e ) 57 {
+            : i d - ( slice_byte v e ) 48
+            // Past the largest `i`: not a task number (it would wrap).
+            ? | > num 922337203685477580 & == num 922337203685477580 > d 7 { = over T } { = num + * num 10 d }
+            = e + e 1
+        }
+        ? & & hit ! over > num 0 {
             : ~ b dup F
             : i m ( vec_len [i] out )
             : ~ i x 0
@@ -275,7 +281,8 @@ $ `store.nu`
     : i n ( nurl_str_len t )
     : ~ i lim n
     ? > n maxb {
-        = lim maxb
+        // Room for the `…` (3 bytes) inside maxb.
+        = lim ? > maxb 3 - maxb 3 0
         ~ & > lim 0 & >= ( slice_byte v lim ) 128 < ( slice_byte v lim ) 192 { = lim - lim 1 }
     } {}
     : ~ i k 0
@@ -407,7 +414,8 @@ $ `store.nu`
 // Tell PR `pr`'s audience `text`. `kind` ci: one pending per agent and PR,
 // rewritten while it waits (its time to go is fixed when it is first
 // made); state: at once, once per `key`, replacing a pending CI notice.
-@ __gh_notify_on Database db i pr s kind s key s text i now → v {
+@ __gh_notify_on Database db i pr s kind s key s text i now → b {
+    : ~ b ok T
     : ( Vec String ) who ( __gh_audience_on db pr now )
     : b ci != 0 ( nurl_str_eq kind `ci` )
     : i n ( vec_len [String] who )
@@ -415,17 +423,18 @@ $ `store.nu`
     ~ < k n {
         ?? ( vec_get [String] who k ) {
             T a → {
-                ? ci {} {
+                // Only a merge or close makes a pending CI result moot.
+                ? != 0 ( nurl_str_eq kind `state` ) {
                     ?? ( sqlite_prepare db `DELETE FROM gh_notices WHERE agent = ?1 AND pr = ?2 AND kind = 'ci' AND delivered = 0` ) {
                         F _ → {}
                         T q → { ( _ag_bind_s q 1 ( string_data a ) ) ( _ag_bind_i q 2 pr ) ( _ag_run q ) }
                     }
-                }
+                } {}
                 : s sql ? ci
                 `INSERT INTO gh_notices (agent, pr, kind, key, text, created, due) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT (agent, key) DO UPDATE SET text = excluded.text WHERE delivered = 0`
                 `INSERT INTO gh_notices (agent, pr, kind, key, text, created, due) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT (agent, key) DO NOTHING`
                 ?? ( sqlite_prepare db sql ) {
-                    F _ → {}
+                    F _ → { = ok F }
                     T q → {
                         ( _ag_bind_s q 1 ( string_data a ) )
                         ( _ag_bind_i q 2 pr )
@@ -434,7 +443,7 @@ $ `store.nu`
                         ( _ag_bind_s q 5 text )
                         ( _ag_bind_i q 6 now )
                         ( _ag_bind_i q 7 ? ci + now AG_GH_COALESCE now )
-                        ( _ag_run q )
+                        = ok & ok ( _ag_run q )
                     }
                 }
                 // An agent nobody reads for: its oldest waiting CI notices go
@@ -448,6 +457,7 @@ $ `store.nu`
         }
         = k + k 1
     }
+    ^ ok
 }
 
 // Tell everyone who watches anything here about the connection itself
@@ -469,7 +479,7 @@ $ `store.nu`
             : ~ i k 0
             ~ < k n {
                 : i pr ?? ( vec_get [i] prs k ) { T x → x F _ → 0 }
-                ( __gh_notify_on db pr `health` key text now )
+                : b _told ( __gh_notify_on db pr `health` key text now )
                 = k + k 1
             }
         }
@@ -522,7 +532,11 @@ $ `store.nu`
 
 // A pull_request event (or what reconciliation read). `silent`: take the
 // state, tell nobody (a watch's first look at a PR is not news).
-@ _gh_apply_pr_on Database db GhPr e GhRoute rt b silent i now → v {
+@ _gh_apply_pr_on Database db GhPr e GhRoute rt b silent i now → b {
+    : ~ b ok T
+    : GhPrRow old ( __gh_pr_row_on db . e number )
+    // Older than what is kept: GitHub delivered it late.
+    ? & . old found < . e updated . old updated { ^ T } {}
     // A PR that names a task is tied to it, watched or not.
     : i nr ( vec_len [i] . e refs )
     : ~ i ri 0
@@ -530,15 +544,19 @@ $ `store.nu`
         ?? ( vec_get [i] . e refs ri ) { T t → { ( _gh_tie_on db t . e number now ) } F _ → {} }
         = ri + ri 1
     }
-    : GhPrRow old ( __gh_pr_row_on db . e number )
-    // Older than what is kept: GitHub delivered it late.
-    ? & . old found < . e updated . old updated { ^ v } {}
+    // A new head: a CI result still waiting is for the old one.
+    ? & . old found == 0 ( nurl_str_eq ( string_data . old head ) ( string_data . e head ) ) {
+        ?? ( sqlite_prepare db `DELETE FROM gh_notices WHERE pr = ?1 AND kind = 'ci' AND delivered = 0` ) {
+            F _ → {}
+            T q → { ( _ag_bind_i q 1 . e number ) ( _ag_run q ) }
+        }
+    } {}
     : b merged != 0 ( nurl_str_eq ( string_data . e state ) `merged` )
     : b feed & merged > ( string_len . rt merge_channel ) 0
     : b want | feed ( __gh_interested_on db . e number now )
-    ? want {} { ^ v } {}
+    ? want {} { ^ T } {}
     ?? ( sqlite_prepare db `INSERT INTO gh_prs (number, title, url, state, head_sha, merge_sha, updated, seen) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT (number) DO UPDATE SET title = excluded.title, url = excluded.url, state = excluded.state, head_sha = excluded.head_sha, merge_sha = excluded.merge_sha, updated = excluded.updated, seen = excluded.seen, ci_noted = CASE WHEN gh_prs.head_sha = excluded.head_sha THEN gh_prs.ci_noted ELSE '' END` ) {
-        F _ → {}
+        F _ → { = ok F }
         T q → {
             ( _ag_bind_i q 1 . e number )
             ( _ag_bind_s q 2 ( string_data ( gh_line ( string_from ( string_data . e title ) ) 200 ) ) )
@@ -548,7 +566,7 @@ $ `store.nu`
             ( _ag_bind_s q 6 ( string_data . e merge ) )
             ( _ag_bind_i q 7 . e updated )
             ( _ag_bind_i q 8 now )
-            ( _ag_run q )
+            = ok & ok ( _ag_run q )
         }
     }
     : b was_open | ! . old found != 0 ( nurl_str_eq ( string_data . old state ) `open` )
@@ -568,7 +586,7 @@ $ `store.nu`
         : String key ( string_from `state:` )
         ( string_push_int key . e number )
         ( string_push_str key ? merged `:merged` `:closed` )
-        ( __gh_notify_on db . e number `state` ( string_data key ) ( string_data ( gh_line t AG_GH_NOTICE_MAX ) ) now )
+        = ok & ok ( __gh_notify_on db . e number `state` ( string_data key ) ( string_data ( gh_line t AG_GH_NOTICE_MAX ) ) now )
         // The merge feed: one post per merged PR, in the chosen channel.
         ? & feed ! . old announced {
             : String fp ( string_from `merged: ` )
@@ -584,6 +602,7 @@ $ `store.nu`
         ?? ( sqlite_prepare db `DELETE FROM gh_watches WHERE pr = ?1` ) { F _ → {} T q → { ( _ag_bind_i q 1 . e number ) ( _ag_run q ) } }
         ?? ( sqlite_prepare db `DELETE FROM gh_links WHERE pr = ?1` ) { F _ → {} T q → { ( _ag_bind_i q 1 . e number ) ( _ag_run q ) } }
     } {}
+    ^ ok
 }
 
 // The CI of PR `pr` at head `head`: the latest run of each workflow that
@@ -655,8 +674,9 @@ $ `store.nu`
 }
 
 // A workflow_run event (or one reconciliation read).
-@ _gh_apply_run_on Database db GhRun r GhRoute rt b silent i now → v {
-    ? ( __gh_workflow_counts rt ( string_data . r workflow ) ) {} { ^ v } {}
+@ _gh_apply_run_on Database db GhRun r GhRoute rt b silent i now → b {
+    : ~ b ok T
+    ? ( __gh_workflow_counts rt ( string_data . r workflow ) ) {} { ^ T } {}
     // The PRs it is about: those it names (same-repository PRs) and any
     // watched PR whose head it ran on (a fork's PR names none).
     : ( Vec i ) prs ( vec_new [i] )
@@ -681,7 +701,7 @@ $ `store.nu`
         ? & ! dup ( __gh_interested_on db p now ) { ( vec_push [i] prs p ) } {}
         = k + k 1
     }
-    ? == ( vec_len [i] prs ) 0 { ^ v } {}
+    ? == ( vec_len [i] prs ) 0 { ^ T } {}
     // An older attempt, or a late "in progress" for an attempt that has
     // finished, changes nothing.
     : ~ b stale F
@@ -699,20 +719,20 @@ $ `store.nu`
             } {}
         }
     }
-    ? stale { ^ v } {}
+    ? stale { ^ T } {}
     ?? ( sqlite_prepare db `INSERT INTO gh_runs (run_id, attempt, workflow, head_sha, pr, status, conclusion, url, updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT (run_id) DO UPDATE SET attempt = excluded.attempt, status = excluded.status, conclusion = excluded.conclusion, url = excluded.url, updated = excluded.updated` ) {
-        F _ → {}
+        F _ → { = ok F }
         T q → {
             ( _ag_bind_i q 1 . r id )
             ( _ag_bind_i q 2 . r attempt )
-            ( _ag_bind_s q 3 ( string_data ( gh_line ( string_from ( string_data . r workflow ) ) 60 ) ) )
+            ( _ag_bind_s q 3 ( string_data ( gh_line ( string_from ( string_data . r workflow ) ) 200 ) ) )
             ( _ag_bind_s q 4 ( string_data . r head ) )
             ( _ag_bind_i q 5 ?? ( vec_get [i] prs 0 ) { T x → x F _ → 0 } )
             ( _ag_bind_s q 6 ( string_data . r status ) )
             ( _ag_bind_s q 7 ( string_data . r conclusion ) )
             ( _ag_bind_s q 8 ( string_data . r url ) )
             ( _ag_bind_i q 9 . r updated )
-            ( _ag_run q )
+            = ok & ok ( _ag_run q )
         }
     }
     // Each PR whose CURRENT head this is: tell what changed.
@@ -747,12 +767,13 @@ $ `store.nu`
                     ( string_push_str t ( string_data ( gh_line ( string_from ( string_data . row title ) ) 80 ) ) )
                     : String key ( string_from `ci:` )
                     ( string_push_int key p )
-                    ( __gh_notify_on db p `ci` ( string_data key ) ( string_data ( gh_line t AG_GH_NOTICE_MAX ) ) now )
+                    = ok & ok ( __gh_notify_on db p `ci` ( string_data key ) ( string_data ( gh_line t AG_GH_NOTICE_MAX ) ) now )
                 }
             } {}
         } {}
         = x + x 1
     }
+    ^ ok
 }
 
 // Apply what is waiting in the queue, oldest first, each delivery in a
@@ -780,16 +801,21 @@ $ `store.nu`
                 ?? ( vec_get [String] ids k ) {
                     T id → {
                         ? ( _ag_begin db ) {
+                            : ~ b ok T
                             ?? ( vec_get [String] datas k ) {
-                                T d → { ( __gh_apply_data_on db ( string_data d ) rt F now ) }
+                                T d → { = ok ( __gh_apply_data_on db ( string_data d ) rt F now ) }
                                 F _ → {}
                             }
                             ?? ( sqlite_prepare db `UPDATE gh_deliveries SET done = 1 WHERE id = ?1` ) {
-                                F _ → {}
-                                T q → { ( _ag_bind_s q 1 ( string_data id ) ) ( _ag_run q ) }
+                                F _ → { = ok F }
+                                T q → { ( _ag_bind_s q 1 ( string_data id ) ) = ok & ok ( _ag_run q ) }
                             }
-                            ? ( _ag_commit db ) { = applied + applied 1 } { ( _ag_rollback db ) }
-                        } {}
+                            // A part that failed leaves the delivery waiting, in
+                            // order: the rest go after it, next round.
+                            : ~ b done F
+                            ? ok { = done ( _ag_commit db ) } {}
+                            ? done { = applied + applied 1 } { ( _ag_rollback db ) = k n }
+                        } { = k n }
                     }
                     F _ → {}
                 }
@@ -800,15 +826,16 @@ $ `store.nu`
     ^ applied
 }
 
-@ __gh_apply_data_on Database db s data GhRoute rt b silent i now → v {
+@ __gh_apply_data_on Database db s data GhRoute rt b silent i now → b {
     ?? ( json_parse data ) {
-        F _ → {}
+        F _ → { ^ T }
         T o → {
             : String t ( _gh_s o `t` )
-            ? != 0 ( nurl_str_eq ( string_data t ) `pr` ) { ( _gh_apply_pr_on db ( gh_pr_of o ) rt silent now ) } {}
-            ? != 0 ( nurl_str_eq ( string_data t ) `run` ) { ( _gh_apply_run_on db ( gh_run_of o ) rt silent now ) } {}
+            ? != 0 ( nurl_str_eq ( string_data t ) `pr` ) { ^ ( _gh_apply_pr_on db ( gh_pr_of o ) rt silent now ) } {}
+            ? != 0 ( nurl_str_eq ( string_data t ) `run` ) { ^ ( _gh_apply_run_on db ( gh_run_of o ) rt silent now ) } {}
         }
     }
+    ^ T
 }
 
 // What reconciliation read, applied in one transaction; `silent` for a
@@ -818,8 +845,9 @@ $ `store.nu`
         F _ → { ^ F }
         T db → {
             ? ( _ag_begin db ) {} { ^ F }
-            ( __gh_apply_data_on db data rt silent now )
-            ? ( _ag_commit db ) { ^ T } {}
+            ? ( __gh_apply_data_on db data rt silent now ) {
+                ? ( _ag_commit db ) { ^ T } {}
+            } {}
             ( _ag_rollback db )
             ^ F
         }

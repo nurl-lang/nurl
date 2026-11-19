@@ -86,6 +86,23 @@ $ `ghstore.nu`
 
 : ( Locked AgGhConf ) g_gh_conf ( __gh_conf_blank )
 
+// The App's slug (`github-app.json`): its issues are by `<slug>[bot]`.
+@ __gh_slug_blank → ( Locked String ) { ^ ( locked_new [String] ( string_new ) ) }
+
+: ( Locked String ) g_gh_slug ( __gh_slug_blank )
+
+@ ag_gh_set_slug s slug → v {
+    : String old ( locked_take [String] g_gh_slug )
+    ( locked_restore [String] g_gh_slug ( string_from slug ) )
+}
+
+@ _gh_slug → String {
+    : String c ( locked_take [String] g_gh_slug )
+    : String out ( string_clone c )
+    ( locked_restore [String] g_gh_slug c )
+    ^ out
+}
+
 @ _gh_conf → AgGhConf {
     : AgGhConf c ( locked_take [AgGhConf] g_gh_conf )
     : AgGhConf out @ AgGhConf { . c on . c app_id ( string_clone . c secret ) . c installation ( string_clone . c key_path ) ( string_clone . c org )
@@ -197,6 +214,7 @@ $ `ghstore.nu`
                     = app_id ( _gh_i j `id` )
                     = secret ( _gh_s j `webhook_secret` )
                     = inst ( _gh_i j `installation_id` )
+                    ( ag_gh_set_slug ( string_data ( _gh_s j `slug` ) ) )
                 }
             }
         }
@@ -218,6 +236,14 @@ $ `ghstore.nu`
     : ( Vec String ) wf ( __gh_split ( _gh_cfg_list cfg `github.workflows` ) F )
     : String mc ( ag_config_str cfg `github.merge_channel` `` )
     : String api ( ag_config_str cfg `github.api` AG_GH_API )
+    // Credentials go only over TLS (a loopback stand-in excepted).
+    ? | | ( string_starts_with api `https://` ) ( string_starts_with api `http://127.0.0.1` ) ( string_starts_with api `http://localhost` ) {} {
+        ( string_push_str why `[github] api: must be an https:// URL` )
+        ^ F
+    } {}
+    // Locally every repository is the one file: its integration state
+    // (repository binding, outbox) would be shared, so one repository.
+    ? & ! ( ag_auth_oidc ) > ( vec_len [String] repos ) 1 { ( string_push_str why `[github] repos: a local agora is one file, so one repository (signed in, each has its own)` ) ^ F } {}
     ( ag_gh_configure app_id ( string_data secret ) inst ( string_data key_path ) ( string_data ( ag_org_key ( string_data org ) ) ) repos ( string_data mc ) wf ( string_data api ) )
     // The task board's mirror (ghmirror.nu): off unless named; dry run
     // unless told otherwise.
@@ -529,6 +555,15 @@ $ `ghstore.nu`
     }
 }
 
+// A client for GitHub's API: bounded, and never following a redirect,
+// which would carry the Authorization header to wherever it points.
+@ _gh_client → HttpClient {
+    : HttpClient h ( http_client_new )
+    ( http_client_set_timeout h 15000 )
+    ( http_client_set_follow h F )
+    ^ h
+}
+
 // `token <installation token>`, fetched when the kept one is near its end.
 @ _gh_auth HttpClient h AgGhConf c i now → GhResp {
     : AgGhTok t ( locked_take [AgGhTok] g_gh_tok )
@@ -642,8 +677,7 @@ $ `ghstore.nu`
         ? only_new {} { ( ag_gh_health_set st `reconcile` now `` ) }
         ^ T
     } {}
-    : HttpClient h ( http_client_new )
-    ( http_client_set_timeout h 15000 )
+    : HttpClient h ( _gh_client )
     : GhResp a ( _gh_auth h c now )
     ? != . a status 200 {
         ( _gh_bo_note T . a retry_at now )
@@ -654,6 +688,7 @@ $ `ghstore.nu`
     } {}
     : GhRoute rt ( _gh_route c )
     : i m ( vec_len [i] todo )
+    : ~ String miss ( string_new )
     : ~ i x 0
     ~ < x m {
         : i p ?? ( vec_get [i] todo x ) { T y → y F _ → 0 }
@@ -665,8 +700,11 @@ $ `ghstore.nu`
         ( string_push_int url p )
         : GhResp r ( _gh_req h `GET` ( string_data url ) ( string_data . a body ) `` now )
         ? == . r status 404 {
-            // No such PR: forget the watches on it rather than ask forever.
-            ( ag_gh_unwatch_all st p )
+            // No such PR — or the App lost access to it: GitHub answers the
+            // same. Keep the watches (they expire by themselves) and say so.
+            = miss ( string_from `GET pulls/` )
+            ( string_push_int miss p )
+            ( string_push_str miss `: HTTP 404 (no such PR, or the App cannot see it)` )
         } {
             ? != . r status 200 {
                 ( _gh_bo_note T . r retry_at now )
@@ -690,6 +728,15 @@ $ `ghstore.nu`
                     ( string_push_str ru `/actions/runs?per_page=50&head_sha=` )
                     ( string_push_str ru ( string_data head ) )
                     : GhResp rr ( _gh_req h `GET` ( string_data ru ) ( string_data . a body ) `` now )
+                    ? != . rr status 200 {
+                        ( _gh_bo_note T . rr retry_at now )
+                        : String why ( string_from `GET actions/runs for pulls/` )
+                        ( string_push_int why p )
+                        ( string_push_str why `: ` )
+                        ? > . rr status 0 { ( string_push_str why `HTTP ` ) ( string_push_int why . rr status ) } { ( string_push_str why ( string_data . rr body ) ) }
+                        ( __gh_health_note st F ( string_data why ) now )
+                        ^ F
+                    } {}
                     ? == . rr status 200 {
                         ?? ( json_parse ( string_data . rr body ) ) {
                             F _ → {}
@@ -715,5 +762,6 @@ $ `ghstore.nu`
     }
     ( _gh_bo_note F 0 now )
     ( __gh_health_note st T `` now )
+    ? > ( string_len miss ) 0 { ( ag_gh_health_set st `error` now ( string_data miss ) ) } {}
     ^ T
 }

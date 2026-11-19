@@ -44,6 +44,8 @@
   button:disabled { opacity:.45; cursor:default; } button:disabled:hover { border-color:var(--border); }
   button.primary { background:var(--accent); border-color:var(--accent); color:#06122b; font-weight:600; }
   button.danger { color:var(--danger); } button.danger:hover { border-color:var(--danger); }
+  button.link { background:none; border:none; padding:0; color:inherit; font:inherit; text-align:left; text-decoration:underline dotted; }
+  button.link:hover { color:var(--accent); }
   table { width:100%; border-collapse:collapse; }
   th, td { text-align:left; padding:8px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
   th { color:var(--muted); font-weight:500; font-size:12px; white-space:nowrap; }
@@ -223,7 +225,7 @@
       <div id="fl-ab" class="chart"></div>
       <table style="margin-top:12px"><thead><tr id="fl-ag-head"><th data-sort="agent">Agent</th><th data-sort="claims" class="num">Claims</th>
         <th data-sort="done" class="num">Done</th><th data-sort="released" class="num">Released</th><th data-sort="expired" class="num">Lease ran out</th>
-        <th data-sort="rate" class="num">Abandoned</th></tr></thead><tbody id="fl-ag"></tbody></table></div>
+        <th data-sort="rate" class="num" title="Of the claims made in the period, the share whose lease later ran out">Abandoned</th></tr></thead><tbody id="fl-ag"></tbody></table></div>
   </section>
 
   <section id="notes">
@@ -705,7 +707,9 @@ async function loadTasks(offset, limit) {
           { key: "title", label: "Title", value: t.title },
           { key: "body", label: "Body", value: t.body, type: "textarea" },
           { key: "tags", label: "Tags (comma-separated)", value: t.tags.join(",") },
-          { key: "priority", label: "Priority", value: String(prioOf(t.priority)), type: "select", options: PRIO_OPTS },
+          // A priority outside 0..3 (from before the four names) is kept as it is unless changed.
+          { key: "priority", label: "Priority", value: String(t.priority || 0), type: "select",
+            options: PRIO_OPTS.some(o => o[0] === String(t.priority || 0)) ? PRIO_OPTS : PRIO_OPTS.concat([[String(t.priority), t.priority + " (as stored)"]]) },
           { key: "status", label: "Status", value: t.status, type: "select", options: ["open", "claimed", "done", "cancelled"] }]);
         if (!r) return;
         await api("PUT", R("/m/tasks/" + t.id), { title: r.title, body: r.body, tags: r.tags,
@@ -864,23 +868,28 @@ function fmtDur(s) {
   if (s < 48 * 3600) return (s / 3600).toFixed(s < 36000 ? 1 : 0) + "h";
   return (s / 86400).toFixed(1) + "d";
 }
+let flSeq = 0;
 async function loadFlow() {
-  FL = await api("GET", R("/m/flow", { days: $("#fl-days").value }));
-  renderFlow();
+  // Only the latest request draws: an older answer arriving late is dropped.
+  const seq = ++flSeq;
+  const d = await api("GET", R("/m/flow", { days: $("#fl-days").value }));
+  if (seq !== flSeq) return;
+  FL = d; renderFlow();
 }
 $("#fl-days").onchange = () => run(loadFlow);
 $("#fl-done").onchange = () => renderFlow();
 function renderFlow() {
   if (!FL) return;
   const ev = FL.events, since = FL.since * 86400;
-  // From the period's start, or from the first step of the history when that is later.
-  const first = Math.max(FL.since, ev.length ? Math.floor(ev[0][1] / 86400) : FL.today);
+  // From the period's start, or from the first task step or post when that is later.
+  const firstMsg = FL.messages.reduce((a, m) => Math.min(a, m[1]), Infinity);
+  const first = Math.max(FL.since, Math.min(ev.length ? Math.floor(ev[0][1] / 86400) : FL.today, firstMsg, FL.today));
   const days = []; for (let d = Math.max(first, FL.today - 730); d <= FL.today; d++) days.push(d);
   // State of every task at the end of each day.
   const state = new Map(), cnt = { open: 0, claimed: 0, done: 0, cancelled: 0 }, snaps = [];
-  // Lead times and claims, within the period.
+  // Lead times and claims, within the period. lastClaim: task → [claimed at, its agent's row if claimed in the period].
   const lastClaim = new Map(), leads = [], per = new Map(), expPerDay = new Map();
-  const agentRow = (a) => { if (!per.has(a)) per.set(a, { agent: a, claims: 0, done: 0, released: 0, expired: 0 }); return per.get(a); };
+  const agentRow = (a) => { if (!per.has(a)) per.set(a, { agent: a, claims: 0, done: 0, released: 0, expired: 0, lost: 0 }); return per.get(a); };
   let k = 0;
   // The first day's turn also replays everything before it, so its state is whole.
   for (const d of days) {
@@ -890,12 +899,15 @@ function renderFlow() {
       const ns = STATE_OF[kind];
       if (ns) { const os = state.get(t); if (os) cnt[os]--; state.set(t, ns); cnt[ns]++; }
       const inP = ts >= since;
-      if (kind === "claim" || kind === "claimed") { lastClaim.set(t, ts); if (inP && agent) agentRow(agent).claims++; }
-      else if (kind === "done") {
-        if (lastClaim.has(t) && inP) leads.push(ts - lastClaim.get(t));
+      if (kind === "claim" || kind === "claimed") {
+        const row = inP && agent ? agentRow(agent) : null; if (row) row.claims++; lastClaim.set(t, [ts, row]);
+      } else if (kind === "done") {
+        if (lastClaim.has(t) && inP) leads.push(ts - lastClaim.get(t)[0]);
         lastClaim.delete(t); if (inP && agent && agent !== "web") agentRow(agent).done++;
       } else if (kind === "release") { lastClaim.delete(t); if (inP && agent) agentRow(agent).released++; }
       else if (kind === "expire") {
+        // The abandonment rate counts only claims made in the period, so it never passes 100%.
+        const c = lastClaim.get(t); if (c && c[1]) c[1].lost++;
         lastClaim.delete(t);
         if (inP) { if (agent) agentRow(agent).expired++; const dd = Math.floor(ts / 86400); expPerDay.set(dd, (expPerDay.get(dd) || 0) + 1); }
       } else if (kind === "open" || kind === "cancel" || kind === "cancelled") lastClaim.delete(t);
@@ -949,7 +961,7 @@ function renderFlow() {
   if (expIn) columnChart($("#fl-ab"), days.map(d => dayDate(d).slice(5)), ab,
     { height: 150, tip: (i) => `<b>${dayDate(days[i])}</b><br>${fmtN(ab[i])} leases ran out` });
   else $("#fl-ab").innerHTML = '<div class="empty">no lease ran out in this period</div>';
-  flAgRows = [...per.values()].map(r => Object.assign(r, { rate: r.claims ? r.expired / r.claims : 0 }));
+  flAgRows = [...per.values()].map(r => Object.assign(r, { rate: r.claims ? r.lost / r.claims : 0 }));
   renderFlowAgents();
 }
 function renderFlowAgents() {
@@ -1134,8 +1146,16 @@ function renderUsage() {
         <td><div class="share"><div class="track"><div class="fill" style="width:${pct.toFixed(1)}%"></div></div>
           <span class="pct">${pct < 0.1 && pct > 0 ? "<0.1" : pct.toFixed(1)}%</span></div></td>
         <td class="num">${fmtN(r.per_call)}</td>`;
-      if (id === "repos" && r.repo) { tr.className = "pick"; tr.onclick = () => run(async () => { usFilter.repo = r.repo; usFilter.agent = ""; $("#us-scope").value = "org"; await loadUsage(); }); }
-      if (id === "agents" && r.agent) { tr.className = "pick"; tr.onclick = () => run(async () => { if (r.repo) usFilter.repo = r.repo; usFilter.agent = r.agent; await loadUsage(); }); }
+      const pick = id === "repos" && r.repo ? async () => { usFilter.repo = r.repo; usFilter.agent = ""; $("#us-scope").value = "org"; await loadUsage(); }
+        : id === "agents" && r.agent ? async () => { if (r.repo) usFilter.repo = r.repo; usFilter.agent = r.agent; await loadUsage(); } : null;
+      if (pick) {
+        tr.className = "pick"; tr.onclick = () => run(pick);
+        // The name as a button too, so the keyboard reaches it.
+        const td = tr.firstElementChild, b = button(id === "repos" ? r.repo : r.agent, "link", pick);
+        b.title = "narrow the report to this " + (id === "repos" ? "repository" : "agent");
+        b.onclick = (e) => { e.stopPropagation(); run(pick); };
+        td.replaceChild(b, td.firstChild);
+      }
       tb.appendChild(tr);
     }
     if (!rows.length) tb.innerHTML = '<tr><td colspan="7" class="empty">nothing in this period</td></tr>';
@@ -1317,7 +1337,8 @@ $("#x-save").onclick = () => run(async () => {
 $("#x-now").onclick = () => run(async () => {
   const d = await api("POST", R("/m/sweep"));
   const n = d.notes + d.posts + d.mail + d.tasks + d.agents + d.channels;
-  $("#x-note").textContent = n ? `${n} moved to the trash` + (d.emptied ? `, ${d.emptied} emptied from it` : "") : "nothing has had its time";
+  const said = [n ? `${n} moved to the trash` : "", d.emptied ? `${d.emptied} emptied from the trash` : ""].filter(Boolean);
+  $("#x-note").textContent = said.length ? said.join(", ") : "nothing has had its time";
   AGENTS = null; await loadAudit(0);
 });
 const aPage = { offset: 0, limit: 25 };
@@ -1347,9 +1368,19 @@ function trSelChanged() {
   $("#tr-restore").textContent = trSel.size ? `Restore ${trSel.size}` : "Restore selected";
   $("#tr-del").textContent = trSel.size ? `Delete ${trSel.size} for good` : "Delete selected for good";
 }
+// The repository and filter of the list on the page; "Delete all shown" sends exactly these.
+let trShown = null, trSeq = 0, trRendered = null;
+function trStale() { trShown = null; $("#tr-del-all").disabled = true; }
 async function loadTrash(offset, limit) {
   trPage.offset = offset; if (limit) trPage.limit = limit;
-  const d = await api("GET", R("/m/trash", Object.assign(trFilter(), { limit: trPage.limit, offset: trPage.offset })));
+  // Only the latest request draws, and only for the repository it asked about.
+  const seq = ++trSeq, repo = REPO, filter = trFilter();
+  // Another repository's rows must not stay clickable while this one loads.
+  if (trRendered !== repo) { $("#tr-list").innerHTML = ""; trSel.clear(); trSelChanged(); }
+  trStale();
+  const d = await api("GET", R("/m/trash", Object.assign({}, filter, { limit: trPage.limit, offset: trPage.offset })));
+  if (seq !== trSeq || repo !== REPO) return;
+  trShown = { repo, filter }; trRendered = repo; $("#tr-del-all").disabled = false;
   const sel = $("#tr-kind"), cur = sel.value, all = Object.values(d.kinds).reduce((a, b) => a + b, 0);
   sel.innerHTML = `<option value="">every kind (${all})</option>` +
     Object.entries(d.kinds).map(([k, n]) => `<option value="${k}">${k}s (${n})</option>`).join("");
@@ -1394,13 +1425,22 @@ async function restoreTrash(ids, one) {
         options: (isNote ? [["rename", "restore under a new key"]] : []).concat([["overwrite", "replace what is there"]]) },
       ...(isNote ? [{ key: "key", label: "New key", value: one.ref.split("/").pop() + "-restored" }] : [])], "Restore");
     if (!r) return;
-    await api("POST", R("/m/trash/restore"), { ids, mode: r.mode, key: r.key || "" });
-    msg = "restored";
+    let d2 = await api("POST", R("/m/trash/restore"), { ids, mode: r.mode, key: r.key || "" });
+    // The new key may be taken too: ask for another until it is free, or the dialog is cancelled.
+    while (d2.taken && r.mode === "rename") {
+      const k = prompt(`The key ${r.key} is in use too. Restore under which key?`, r.key + "-2");
+      if (!k) { toast("not restored: the key is in use"); await loadTrash(trPage.offset, trPage.limit); return; }
+      r.key = k.trim();
+      d2 = await api("POST", R("/m/trash/restore"), { ids, mode: "rename", key: r.key });
+    }
+    msg = d2.restored ? "restored" : "not restored: " + ((d2.results[0] || {}).result || "failed");
   } else if (taken.length) msg += `; ${taken.length} skipped: their key or name is in use again (restore them one by one)`;
   toast(msg); AGENTS = null; await loadTrash(trPage.offset, trPage.limit);
 }
 $("#tr-go").onclick = () => run(() => loadTrash(0, trPage.limit));
 $("#tr-q").onkeydown = $("#tr-author").onkeydown = (e) => { if (e.key === "Enter") run(() => loadTrash(0, trPage.limit)); };
+// A changed filter no longer matches the list shown: no bulk delete until it is searched.
+$("#tr-q").oninput = $("#tr-author").oninput = trStale;
 $("#tr-kind").onchange = $("#tr-days").onchange = () => run(() => loadTrash(0, trPage.limit));
 $("#tr-all").onchange = () => {
   document.querySelectorAll("#tr-list input[type=checkbox]").forEach(cb => { cb.checked = $("#tr-all").checked; cb.onchange(); });
@@ -1412,8 +1452,10 @@ $("#tr-del").onclick = () => run(async () => {
   await loadTrash(trPage.offset, trPage.limit);
 });
 $("#tr-del-all").onclick = () => run(async () => {
+  const shown = trShown;
+  if (!shown || shown.repo !== REPO) return;
   if (!confirmDel("everything the filter shows (every page)")) return;
-  const d = await api("POST", R("/m/trash/delete"), Object.assign({ all: true }, trFilter())); toast(d.deleted + " deleted for good");
+  const d = await api("POST", R("/m/trash/delete"), Object.assign({ all: true }, shown.filter)); toast(d.deleted + " deleted for good");
   await loadTrash(0, trPage.limit);
 });
 

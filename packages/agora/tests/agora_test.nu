@@ -1424,6 +1424,41 @@ $ `src/service.nu`
     ^ n
 }
 
+// Every undelivered notice of `agent`, in order, one per line.
+@ gh_pending_text AgStore st s agent → String {
+    : String out ( string_new )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT text FROM gh_notices WHERE agent = ?1 AND delivered = 0 ORDER BY id` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 agent )
+                    ~ ( _ag_row q ) {
+                        : String t ( sqlite_column_text q 0 )
+                        ( string_push_str out ( string_data t ) )
+                        ( string_push_str out `\n` )
+                    }
+                }
+            }
+        }
+    }
+    ^ out
+}
+
+// How many times `needle` occurs in `hay`.
+@ count_of String hay s needle → i {
+    : s h ( string_data hay )
+    : i n ( nurl_str_len h )
+    : i m ( nurl_str_len needle )
+    : ~ i c 0
+    : ~ i k 0
+    ~ <= + k m n {
+        ? ( string_eq ( string_substr hay k m ) ( string_from needle ) ) { = c + c 1 = k + k m } { = k + k 1 }
+    }
+    ^ c
+}
+
 @ test_github Router r → v {
     : ( Vec String ) repos ( vec_new [String] )
     ( vec_push [String] repos ( string_from `o/r` ) )
@@ -1500,6 +1535,7 @@ $ `src/service.nu`
     ( ag_gh_process st rt now )
     ( check <= ( gh_pending st `dan` ) 1 `github: 1000 callbacks leave at most one pending notice per agent` )
     : i before ( gh_pending st `carol` )
+    : String before_t ( gh_pending_text st `carol` )
     ( ag_gh_accept st `stale-1` `workflow_run` ( string_data ( gh_run_data 73 1 `CI` `0ld0000` `completed` `failure` 5000 ) ) now )
     ( ag_gh_accept st `stale-2` `workflow_run` ( string_data ( gh_run_data 72 1 `lint` `aaa1111bbbb` `completed` `success` 9000 ) ) now )
     ( ag_gh_process st rt now )
@@ -1518,6 +1554,7 @@ $ `src/service.nu`
         F _ → { ( check F `github: an older attempt cannot replace a newer one` ) }
     }
     ( check == ( gh_pending st `carol` ) before `github: a stale head or attempt tells nobody anything` )
+    ( check ( string_eq ( gh_pending_text st `carol` ) before_t ) `github: … and rewrites nothing waiting` )
 
     // The merge: at once, once per agent, replacing a pending CI notice;
     // the merge feed posts once; watches and links end.
@@ -1535,7 +1572,7 @@ $ `src/service.nu`
     ( check ! ( has . eb2 text `github` ) `github: a second brief repeats nothing` )
     : AgRes mh ( call `erin` `history` `{"channel":"merges"}` now )
     ( check ( has . mh text `merged: github#5 merged` ) `github: the merge feed posts it` )
-    ( check ! ( has . mh text `#2` ) `github: once` )
+    ( check == ( count_of . mh text `merged: github#5 merged` ) 1 `github: once` )
     ( check == ( vec_len [GhWatch] ( ag_gh_watches st `dan` now ) ) 0 `github: a merged PR's watches end` )
     : AgRes rl ( call `erin` `notes` `{"rules":true}` now )
     ( check ! ( has . rl text `obey me` ) `github: a title is data, never a rule` )
@@ -1568,6 +1605,16 @@ $ `src/service.nu`
     ( check & ( has . wd text `github#5 merged` ) ( has . wd text `lint ` ) `github: one PR in full` )
     : AgRes uw ( call `dan` `pr_unwatch` `{"pr":99}` now )
     ( check ( has . uw text `you were not watching it` ) `github: pr_unwatch` )
+    : AgRes uw2 ( call `dan` `pr_unwatch` `{"pr":"latest"}` now )
+    ( check == . uw2 status 400 `github: pr_unwatch with a pr that is no number is refused, not "all"` )
+    : AgRes uw3 ( call `dan` `pr_unwatch` `{"pr":"github#99"}` now )
+    ( check ( has . uw3 text `unwatched github#99` ) `github: pr_unwatch takes github#N` )
+    : ( Vec i ) big ( gh_task_refs ( string_from `AGORA-18446744073709551617 and AGORA-42` ) )
+    ( check & == ( vec_len [i] big ) 1 == ?? ( vec_get [i] big 0 ) { T x → x F _ → 0 } 42 `github: a task number past the largest integer is no reference` )
+    : String longt ( string_new )
+    : ~ i lk 0
+    ~ < lk 301 { ( string_push_str longt `x` ) = lk + lk 1 }
+    ( check <= ( string_len ( gh_line longt 300 ) ) 300 `github: a cut line, … included, fits its limit` )
 
     // The App's JWT: RS256 that verifies with the key's public half.
     : ~ String kp ( string_new )
@@ -1678,6 +1725,7 @@ $ `src/service.nu`
     : ( Vec String ) pats ( vec_new [String] )
     ( vec_push [String] pats ( string_from `/home/[a-z]+` ) )
     ( vec_push [String] pats ( string_from `secret\.example` ) )
+    ( vec_push [String] pats ( string_from `internal #[0-9]+` ) )
     ( ag_gh_mirror_configure repos F pats `ops` )
     ( ag_gh_fake T 0 0 )
     ( _gh_bo_note F 0 0 )
@@ -1783,6 +1831,24 @@ $ `src/service.nu`
     : String sb ( string_from `Superseded by #` )
     ( string_push_int sb ( gh_issue_of st tg ) )
     ( check & ( has s4 ( string_data sb ) ) ( has s4 `"state_reason":"duplicate"` ) `mirror: a superseded task closes as a duplicate` )
+    // `Supersedes AGORA-<N>9` is about another task, not N.
+    : i tx ( ag_task_post st `Lone plan` `` `` `ann` 0 now )
+    : String sup2 ( string_from `Supersedes AGORA-` )
+    ( string_push_int sup2 tx )
+    ( string_push_str sup2 `9: someone else's` )
+    : i _ty ( ag_task_post st `Other plan` ( string_data sup2 ) `` `ann` 0 now )
+    ( gh_drain st now )
+    : i np0 ( count_of ( gh_sent_text st ) `"state_reason":"not_planned"` )
+    ( ag_task_cancel st tx `ann` now )
+    ( gh_drain st now )
+    ( check == ( count_of ( gh_sent_text st ) `"state_reason":"not_planned"` ) + np0 1 `mirror: a supersede names the whole task number` )
+    // A pattern written against the text as typed applies before rewriting.
+    : String ic ( string_from `t` )
+    ( string_push_int ic tg )
+    ( string_push_str ic `: see internal #77 for it` )
+    : i _p5 ( ag_post st `dev` `ann` ( string_data ic ) 0 now )
+    ( gh_drain st now )
+    ( check & ( has ( gh_sent_text st ) `see [redacted] for it` ) ! ( has ( gh_sent_text st ) `internal #` ) `mirror: redaction runs on the text as written` )
 
     // GitHub failing: the agent's call is untouched, the queue waits in order.
     ( ag_gh_fake T 3 502 )

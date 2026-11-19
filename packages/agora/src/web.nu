@@ -45,7 +45,7 @@ $ `auth.nu`
     ^ r
 }
 
-@ __ag_json_ok Json o → HttpResponse {
+@ _ag_json_ok Json o → HttpResponse {
     : HttpResponse r ( response_json 200 o )
     ( response_set_header r `Cache-Control` `no-store` )
     ^ r
@@ -125,11 +125,15 @@ $ `auth.nu`
 }
 
 // The same, inside the repository the request's `?repo=` names.
-@ ag_who_in HttpRequest req i now → AgWho {
+@ ag_who_in HttpRequest req i now → AgWho { ^ ( _ag_who_in_sweep req T now ) }
+
+// The same, `sweep` F: without the automatic expiry first (a preview or
+// an explicit sweep must count what is there, not what is left).
+@ _ag_who_in_sweep HttpRequest req b sweep i now → AgWho {
     : AgWho w ( ag_who req now )
     ? != . w status 0 { ^ w } {}
     ? ( ag_auth_oidc ) {} {
-        ( ag_sweep_maybe . w rs . w st now )
+        ? sweep { ( ag_sweep_maybe . w rs . w st now ) } {}
         ^ w
     }
     : String raw ( __ag_query req `repo` )
@@ -138,7 +142,7 @@ $ `auth.nu`
         T k → {
             : AgStore rs ( ag_repo_store ( string_data . . w who org ) ( string_data k ) )
             ? . rs ok {} { ^ @ AgWho { 500 . w who . w st rs k } }
-            ( ag_sweep_maybe rs . w st now )
+            ? sweep { ( ag_sweep_maybe rs . w st now ) } {}
             ^ @ AgWho { 0 . w who . w st rs k }
         }
     }
@@ -305,7 +309,7 @@ $ `auth.nu`
     ( string_push_str mcp `/mcp` )
     ( json_obj_set o `mcp_url` ( json_str_lit ( string_data mcp ) ) )
     ( json_obj_set o `version` ( json_str_lit AG_VERSION ) )
-    ^ ( __ag_json_ok o )
+    ^ ( _ag_json_ok o )
 }
 
 // ── /m: the web page's API ───────────────────────────────────────────
@@ -422,7 +426,7 @@ $ `auth.nu`
     ( json_obj_set tj `skills` ( json_int ( ag_skill_count . w st ) ) )
     ( json_obj_set o `totals` tj )
     ( json_obj_set o `version` ( json_str_lit AG_VERSION ) )
-    ^ ( __ag_json_ok o )
+    ^ ( _ag_json_ok o )
 }
 
 // GET /m/repos — the repositories the organisation has an agora for.
@@ -442,7 +446,7 @@ $ `auth.nu`
         }
     } { ( json_obj_set out `local` ( json_bool T ) ) }
     ( json_obj_set out `repos` arr )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // GET /m/agents?repo= — every agent of the repository's agora.
@@ -473,7 +477,7 @@ $ `auth.nu`
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `agents` arr )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // PUT /m/agents/:id {about}  ·  DELETE /m/agents/:id
@@ -486,7 +490,7 @@ $ `auth.nu`
     : String about ( _ag_arg_str b `about` )
     ? > ( string_len about ) 1024 { ^ ( ag_json_err 400 `about: at most 1024 characters` ) } {}
     ? ( ag_agent_set_about . w rs ( string_data id ) ( string_data about ) ) {} { ^ ( ag_json_err 404 `no such agent` ) }
-    ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+    ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
 @ ag_h_agent_del HttpRequest req Params p → HttpResponse {
@@ -497,7 +501,7 @@ $ `auth.nu`
     : i moved ( ag_trash_agent . w rs ( string_data id ) ( string_data ( __ag_person w ) ) now )
     ? < moved 0 { ^ ( ag_json_err 500 `could not delete the agent` ) } {}
     ? == moved 0 { ^ ( ag_json_err 404 `no such agent` ) } {}
-    ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+    ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
 // GET /m/channels
@@ -526,7 +530,7 @@ $ `auth.nu`
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `channels` arr )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // DELETE /m/channels?repo=&name= — the channel and everything in it. (A
@@ -550,7 +554,7 @@ $ `auth.nu`
     }
     ? found {} { ^ ( ag_json_err 404 `no such channel` ) }
     ? > ( ag_trash_channel . w rs ( string_data name ) ( string_data ( __ag_person w ) ) now ) 0 {} { ^ ( ag_json_err 500 `could not delete the channel` ) }
-    ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+    ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
 // GET /m/messages?channel=&from=&q=&before=&limit=&offset=&order= — a
@@ -586,7 +590,7 @@ $ `auth.nu`
     : Json out ( json_obj_new )
     ( json_obj_set out `messages` arr )
     ( json_obj_set out `total` ( json_int ( ag_messages_count . w rs ( string_data channel ) ( string_data from ) ( string_data q ) ) ) )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // POST /m/messages?repo= {as, channel | to, body, reply_to} — a person
@@ -616,7 +620,7 @@ $ `auth.nu`
             ? == ( string_len body ) 0 { ^ ( ag_json_err 400 `body is empty — delete the message instead` ) } {}
             ? > ( string_len body ) AG_BODY_MAX { ^ ( ag_json_err 400 `body: at most 16 KiB` ) } {}
             ? ( ag_msg_set_body . w rs id ( string_data body ) ) {} { ^ ( ag_json_err 500 `could not save the message` ) }
-            ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+            ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
         }
     }
 }
@@ -631,7 +635,7 @@ $ `auth.nu`
         F _ → { ^ ( ag_json_err 404 `no such message` ) }
         T m → {
             ? > ( ag_trash_message . w rs id ( string_data ( __ag_person w ) ) now ) 0 {} { ^ ( ag_json_err 500 `could not delete the message` ) }
-            ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+            ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
         }
     }
 }
@@ -682,7 +686,7 @@ $ `auth.nu`
     : Json out ( json_obj_new )
     ( json_obj_set out `tasks` arr )
     ( json_obj_set out `total` ( json_int ( ag_tasks_count . w rs ( string_data status ) ( string_data holder ) ( string_data q ) hide ) ) )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // POST /m/tasks?repo= {as, title, body, tags, priority} — a person offers
@@ -726,7 +730,7 @@ $ `auth.nu`
             ? ( ag_task_edit . w rs id ( string_data title ) ( string_data body ) ( string_data tags ) prio ( string_data status ) now ) {} {
                 ^ ( ag_json_err 400 `status must be open, claimed, done or cancelled` )
             }
-            ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+            ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
         }
     }
 }
@@ -741,7 +745,7 @@ $ `auth.nu`
         F _ → { ^ ( ag_json_err 404 `no such task` ) }
         T t → {
             ? > ( ag_trash_task . w rs id ( string_data ( __ag_person w ) ) now ) 0 {} { ^ ( ag_json_err 500 `could not delete the task` ) }
-            ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+            ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
         }
     }
 }
@@ -770,7 +774,7 @@ $ `auth.nu`
     : Json out ( json_obj_new )
     ( json_obj_set out `notes` arr )
     ( json_obj_set out `total` ( json_int ( ag_notes_count . w rs ( string_data q ) ( string_data kind ) ) ) )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // PUT /m/notes?repo= {key, body, project?} — the author is the person.
@@ -791,7 +795,7 @@ $ `auth.nu`
     // `{key, keep}` alone marks a note to keep (or not) and writes nothing else.
     ? & ( _ag_has_arg b `keep` ) ! ( _ag_has_arg b `body` ) {
         ? ( ag_note_set_keep . w rs ( string_data project ) ( string_data key ) ( _ag_arg_bool b `keep` F ) ) {} { ^ ( ag_json_err 404 `no such note` ) }
-        ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+        ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
     } {}
     : b set_desc ( _ag_has_arg b `description` )
     : String desc ( _ag_one_line ( _ag_arg_str b `description` ) )
@@ -799,8 +803,12 @@ $ `auth.nu`
     ? ( ag_note_write . w rs ( string_data project ) ( string_data key ) ( string_data body ) set_desc ( string_data desc ) ( string_data author ) now ) {} {
         ^ ( ag_json_err 500 `could not save the note` )
     }
-    ? ( _ag_has_arg b `keep` ) { ( ag_note_set_keep . w rs ( string_data project ) ( string_data key ) ( _ag_arg_bool b `keep` F ) ) } {}
-    ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+    ? ( _ag_has_arg b `keep` ) {
+        ? ( ag_note_set_keep . w rs ( string_data project ) ( string_data key ) ( _ag_arg_bool b `keep` F ) ) {} {
+            ^ ( ag_json_err 500 `the note was saved, but not marked to keep` )
+        }
+    } {}
+    ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
 // DELETE /m/notes?repo=&key=[&project=]
@@ -815,7 +823,7 @@ $ `auth.nu`
     : i moved ( ag_trash_note . w rs ( string_data project ) ( string_data key ) ( string_data ( __ag_person w ) ) now )
     ? < moved 0 { ^ ( ag_json_err 500 `could not delete the note` ) } {}
     ? == moved 0 { ^ ( ag_json_err 404 `no such note` ) } {}
-    ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+    ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
 // The name a person's edits are signed with: their e-mail, `web` locally.
@@ -851,7 +859,7 @@ $ `auth.nu`
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `skills` arr )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // PUT /m/skills/:name {description?, body?, enabled?} — make or change a
@@ -873,7 +881,7 @@ $ `auth.nu`
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String name ( __ag_param req p `name` )
     ? ( ag_skill_del . w st ( string_data name ) ) {} { ^ ( ag_json_err 404 `no such skill` ) }
-    ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+    ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
 // ── Expiry and the trash ─────────────────────────────────────────────
@@ -908,7 +916,7 @@ $ `auth.nu`
     ( json_obj_set o `expiry` ( __ag_expiry_json ( ag_expiry_get . w st ) ) )
     ( json_obj_set o `defaults` ( __ag_expiry_json ( ag_expiry_defaults ) ) )
     ( json_obj_set o `may_change` ( json_bool ( __ag_may_set_expiry w ) ) )
-    ^ ( __ag_json_ok o )
+    ^ ( _ag_json_ok o )
 }
 
 @ __ag_days_arg Json b s key i cur → i {
@@ -925,20 +933,21 @@ $ `auth.nu`
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     ? ( __ag_may_set_expiry w ) {} { ^ ( ag_json_err 403 `the organisation's administrators set the expiry times` ) }
     : Json b ( __ag_body_obj req )
-    : AgExpiry c ( ag_expiry_get . w st )
-    : AgExpiry e @ AgExpiry { ( __ag_days_arg b `notes` . c notes ) ( __ag_days_arg b `posts` . c posts ) ( __ag_days_arg b `mail` . c mail )
-        ( __ag_days_arg b `tasks` . c tasks ) ( __ag_days_arg b `agents` . c agents ) ( __ag_days_arg b `channels` . c channels )
-        ( __ag_days_arg b `empty_days` . c empty_days ) }
+    // Only what was given is written (-1: left as it is).
+    : AgExpiry e @ AgExpiry { ( __ag_days_arg b `notes` -1 ) ( __ag_days_arg b `posts` -1 ) ( __ag_days_arg b `mail` -1 )
+        ( __ag_days_arg b `tasks` -1 ) ( __ag_days_arg b `agents` -1 ) ( __ag_days_arg b `channels` -1 )
+        ( __ag_days_arg b `empty_days` -1 ) }
     ? ( ag_expiry_set . w st e ) {} { ^ ( ag_json_err 500 `could not save the expiry times` ) }
-    ^ ( __ag_json_ok ( __ag_expiry_json e ) )
+    ^ ( _ag_json_ok ( __ag_expiry_json ( ag_expiry_get . w st ) ) )
 }
 
 // POST /m/sweep?repo= — expire what has had its time, now.
 @ ag_h_sweep HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who_in req now )
+    : AgWho w ( _ag_who_in_sweep req F now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : AgSwept r ( ag_sweep . w rs ( ag_expiry_get . w st ) T now )
+    ? < . r notes 0 { ^ ( ag_json_err 500 `the sweep failed; nothing was moved` ) } {}
     : Json o ( json_obj_new )
     ( json_obj_set o `notes` ( json_int . r notes ) )
     ( json_obj_set o `posts` ( json_int . r posts ) )
@@ -947,7 +956,7 @@ $ `auth.nu`
     ( json_obj_set o `agents` ( json_int . r agents ) )
     ( json_obj_set o `channels` ( json_int . r channels ) )
     ( json_obj_set o `emptied` ( json_int . r emptied ) )
-    ^ ( __ag_json_ok o )
+    ^ ( _ag_json_ok o )
 }
 
 @ __ag_trash_json AgTrash t → Json {
@@ -1029,7 +1038,7 @@ $ `auth.nu`
         = j + j 1
     }
     ( json_obj_set out `kinds` kinds )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // GET /m/trash/:id?repo= — one item with every row it holds.
@@ -1043,7 +1052,7 @@ $ `auth.nu`
     : Json o ( json_obj_new )
     ( json_obj_set o `id` ( json_int id ) )
     ?? ( json_parse ( string_data data ) ) { T j → { ( json_obj_set o `data` j ) } F _ → {} }
-    ^ ( __ag_json_ok o )
+    ^ ( _ag_json_ok o )
 }
 
 // The ids a bulk action names: `ids` [..], or `all` with the listing's filter.
@@ -1106,14 +1115,15 @@ $ `auth.nu`
     ( json_obj_set out `restored` ( json_int restored ) )
     ( json_obj_set out `taken` ( json_int taken ) )
     ( json_obj_set out `results` res )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 @ __ag_trash_kind_of AgStore st i id → String {
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT kind FROM trash WHERE id = ?1` ) {
+            // Mail lives on its own clock: a message in a mailbox is `mail`.
+            ?? ( sqlite_prepare db `SELECT CASE WHEN kind = 'message' AND json_extract(data, '$.messages[0].channel') LIKE '@%' THEN 'mail' ELSE kind END FROM trash WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
                     ( _ag_bind_i q 1 id )
@@ -1141,7 +1151,7 @@ $ `auth.nu`
         ? ( ag_trash_delete . w rs id ( string_data by ) now ) { = gone + gone 1 } {}
         = k + k 1
     }
-    ^ ( __ag_json_ok ( _ag_obj_int `deleted` gone ) )
+    ^ ( _ag_json_ok ( _ag_obj_int `deleted` gone ) )
 }
 
 // GET /m/audit?repo=&limit=&offset= — what went into or out of the trash.
@@ -1174,7 +1184,7 @@ $ `auth.nu`
     : Json out ( json_obj_new )
     ( json_obj_set out `audit` arr )
     ( json_obj_set out `total` ( json_int ( ag_audit_count . w rs ) ) )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // ── Flow ─────────────────────────────────────────────────────────────
@@ -1198,7 +1208,7 @@ $ `auth.nu`
     ( json_obj_set out `now` ( json_int now ) )
     ( json_obj_set out `events` ( ag_task_events_json . w rs ) )
     ( json_obj_set out `messages` ( ag_msg_daily_json . w rs since ) )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // ── Usage ────────────────────────────────────────────────────────────
@@ -1362,7 +1372,7 @@ $ `auth.nu`
     ? & ( ag_auth_oidc ) ( __ag_is_owner_admin w ) {
         ( json_obj_set out `orgs` ( __ag_usage_orgs since ) )
     } {}
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // Where feedback is kept: the service's file when signed in, the one
@@ -1402,7 +1412,7 @@ $ `auth.nu`
     ( json_obj_set out `feedback` arr )
     ( json_obj_set out `total` ( json_int ( ag_feedback_count fs ( string_data org ) ( string_data status ) ( string_data kind ) ) ) )
     ( json_obj_set out `can_triage` ( json_bool triage ) )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // POST /m/feedback {kind, title, body} — from a person, not an agent.
@@ -1444,7 +1454,7 @@ $ `auth.nu`
             }
             : b changed | ! ( string_eq status . f status ) ! ( string_eq reply . f reply )
             ? changed { ( __ag_feedback_tell f ( string_data status ) ( string_data reply ) now ) } {}
-            ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+            ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
         }
     }
 }
@@ -1479,7 +1489,7 @@ $ `auth.nu`
     : i id ( nurl_str_to_int ( string_data ( __ag_param req p `id` ) ) )
     : AgStore fs ( __ag_feedback_st w )
     ? ( ag_feedback_del fs id ) {} { ^ ( ag_json_err 404 `no such feedback` ) }
-    ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+    ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
 // A cutoff `days` ago from `now`; 0 days = none (that kind is left alone).
@@ -1496,7 +1506,7 @@ $ `auth.nu`
 // kind left out or 0 is left alone. `dry_run` (the default) only counts.
 @ ag_h_cleanup HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who_in req now )
+    : AgWho w ( _ag_who_in_sweep req F now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : Json b ( __ag_body_obj req )
     : b dry ( _ag_arg_bool b `dry_run` T )
@@ -1509,7 +1519,7 @@ $ `auth.nu`
     ( json_obj_set o `messages` ( json_int . r messages ) )
     ( json_obj_set o `channels` ( json_int . r channels ) )
     ( json_obj_set o `dry_run` ( json_bool dry ) )
-    ^ ( __ag_json_ok o )
+    ^ ( _ag_json_ok o )
 }
 
 // GET /m/users — admins only: it names everyone who has signed in.
@@ -1541,7 +1551,7 @@ $ `auth.nu`
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `users` arr )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 // PUT /m/users/:sub {role}  ·  DELETE /m/users/:sub
@@ -1559,7 +1569,7 @@ $ `auth.nu`
         ^ ( ag_json_err 409 `no such person, or that would leave the organisation without an administrator` )
     }
     ( ag_auth_forget_all )
-    ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+    ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
 @ ag_h_user_del HttpRequest req Params p → HttpResponse {
@@ -1572,7 +1582,7 @@ $ `auth.nu`
         ^ ( ag_json_err 409 `no such person, or that would leave the organisation without an administrator` )
     }
     ( ag_auth_forget_all )
-    ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+    ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
 // GET /m/tenants · PUT /m/tenants/:tid {state} — administrators of the
@@ -1585,7 +1595,7 @@ $ `auth.nu`
     : Json out ( json_obj_new )
     ( json_obj_set out `owner` ( __ag_jstr ( ag_auth_owner ) ) )
     ( json_obj_set out `tenants` ( ag_tenants_json ) )
-    ^ ( __ag_json_ok out )
+    ^ ( _ag_json_ok out )
 }
 
 @ ag_h_tenant_put HttpRequest req Params p → HttpResponse {
@@ -1600,5 +1610,5 @@ $ `auth.nu`
     ? ( ag_tenant_set_state ( string_data tid ) ( string_data state ) ( string_data by ) now ) {} {
         ^ ( ag_json_err 400 `state must be pending, allowed or blocked` )
     }
-    ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
+    ^ ( _ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }

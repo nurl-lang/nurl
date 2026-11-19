@@ -248,7 +248,8 @@ $ `web.nu`
         }
         : ~ i e + k skip
         ~ & > skip 0 & < e n ( __ghm_digit ( slice_byte v e ) ) { = e + e 1 }
-        ? & > skip 0 & > e + k skip | == e n ! ( __ghm_word ( slice_byte v e ) ) {
+        // At most 18 digits: a longer run is no task number (and would wrap).
+        ? & & > skip 0 & > e + k skip <= - e + k skip 18 | == e n ! ( __ghm_word ( slice_byte v e ) ) {
             : ~ i num 0
             : ~ i j + k skip
             ~ < j e { = num + * num 10 - ( slice_byte v j ) 48 = j + j 1 }
@@ -299,8 +300,11 @@ $ `web.nu`
     ^ out
 }
 
+// Redacted as written (a pattern may name `#123` the way the author
+// wrote it), then rewritten, then redacted again (for what rewriting made).
 @ __ghm_public Database db String text ( Vec String ) pats → String {
-    : String r ( gh_rewrite db text )
+    : String r0 ( gh_redact text pats )
+    : String r ( gh_rewrite db r0 )
     : String out ( gh_redact r pats )
     ^ out
 }
@@ -373,12 +377,12 @@ $ `web.nu`
     : String b ( string_from `AGORA-` )
     ( string_push_int b . t id )
     ( string_push_str b ` · posted by ` )
-    ( string_push_str b ( string_data . t poster ) )
+    ( string_push_str b ( string_data ( gh_redact ( string_clone . t poster ) pats ) ) )
     ( string_push_str b ` · priority ` )
     ( string_push_str b ( gh_prio_name . t priority ) )
     ? != 0 ( nurl_str_eq ( string_data . t status ) `claimed` ) {
         ( string_push_str b ` · claimed by ` )
-        ( string_push_str b ( string_data . t owner ) )
+        ( string_push_str b ( string_data ( gh_redact ( string_clone . t owner ) pats ) ) )
     } {}
     ( string_push_str b `\n\n` )
     ( string_push_str b ( string_data ( __ghm_public db ( string_clone . t body ) pats ) ) )
@@ -433,6 +437,10 @@ $ `web.nu`
             ? > ftask 0 {
                 : Json it ( json_obj_new )
                 ( json_obj_set it `number` ( json_int fnum ) )
+                : Json u ( json_obj_new )
+                ( json_obj_set u `type` ( json_str_lit `Bot` ) )
+                ( json_obj_set u `login` ( json_str_lit `agora-test[bot]` ) )
+                ( json_obj_set it `user` u )
                 : String mk ( string_from `…\n\n<!-- agora-task: ` )
                 ( string_push_int mk ftask )
                 ( string_push_str mk ` -->` )
@@ -567,12 +575,23 @@ $ `web.nu`
 
 // Find the issue of task `task` among the App's own recent issues by its
 // body marker (after a crash between creating it and keeping its number).
-@ __ghm_find AgStore st AgGhConf c HttpClient h s auth i task s full i now → i {
+// 200 with `number` (0: not there — make it); anything else: the read
+// failed, so try again later rather than make a second one. Only an
+// issue (not a PR) by the App's own bot counts: anyone can write a marker.
+@ __ghm_find AgStore st AgGhConf c HttpClient h s auth i task s full i now → GhmOut {
+    : String slug ( _gh_slug )
+    : String bot ( string_clone slug )
+    ( string_push_str bot `[bot]` )
     : String path ( string_from `/repos/` )
     ( string_push_str path full )
     ( string_push_str path `/issues?state=all&sort=created&direction=desc&per_page=100` )
+    ? > ( string_len slug ) 0 {
+        ( string_push_str path `&creator=` )
+        ( string_push_str path ( string_data slug ) )
+        ( string_push_str path `%5Bbot%5D` )
+    } {}
     : GhmOut o ( __ghm_send st c h auth F task `GET` ( string_data path ) ( json_null ) now )
-    ? != . o status 200 { ^ 0 } {}
+    ? != . o status 200 { ^ o } {}
     : String marker ( string_from `<!-- agora-task: ` )
     ( string_push_int marker task )
     ( string_push_str marker ` -->` )
@@ -582,13 +601,22 @@ $ `web.nu`
         ?? ( json_arr_get . o body k ) {
             T it → {
                 : String b ( _gh_s it `body` )
-                ? ( string_contains b ( string_data marker ) ) { ^ ( _gh_i it `number` ) } {}
+                : Json u ( _gh_obj it `user` )
+                : b by_app & != 0 ( nurl_str_eq ( string_data ( _gh_s u `type` ) ) `Bot` ) | == ( string_len slug ) 0 ( string_eq ( _gh_s u `login` ) bot )
+                : b is_pr ! ( json_is_null ( _gh_obj it `pull_request` ) )
+                ? & & by_app ! is_pr ( string_contains b ( string_data marker ) ) {
+                    : Json r ( json_obj_new )
+                    ( json_obj_set r `number` ( json_int ( _gh_i it `number` ) ) )
+                    ^ @ GhmOut { 200 r 0 ( string_new ) }
+                } {}
             }
             F → {}
         }
         = k + k 1
     }
-    ^ 0
+    : Json none ( json_obj_new )
+    ( json_obj_set none `number` ( json_int 0 ) )
+    ^ @ GhmOut { 200 none 0 ( string_new ) }
 }
 
 // ── One queued step ──────────────────────────────────────────────────
@@ -654,7 +682,10 @@ $ `web.nu`
     } {}
     // A crash between creating it and keeping its number: find it.
     ? & & . iss found == number 0 ! dry {
-        = number ( __ghm_find st c h auth task full now )
+        : GhmOut fo ( __ghm_find st c h auth task full now )
+        // Never a second issue on a failed read: always try again later.
+        ? != . fo status 200 { ^ @ GhmStep { GHM_RETRY . fo retry_at ( string_clone . fo err ) writes } } {}
+        = number ( _gh_i . fo body `number` )
         ? > number 0 { ( __ghm_exec st `UPDATE gh_issues SET number = ?2 WHERE task = ?1` task number `` ) } {}
     } {}
     ? == number 0 {
@@ -684,7 +715,9 @@ $ `web.nu`
             : GhmOut o ( __ghm_send st c h auth dry task `PATCH` ( string_data ipath ) b now )
             = writes + writes 1
             ? != . o status 200 { ^ ( __ghm_fail o writes ) } {}
-            ( __ghm_exec st `UPDATE gh_issues SET head = ?3 WHERE task = ?1` task 0 ( string_data head ) )
+            // A dry run never moves a real issue's checkpoints: live
+            // must still write what the dry run only pretended to.
+            ? | ! dry < number 0 { ( __ghm_exec st `UPDATE gh_issues SET head = ?3 WHERE task = ?1` task 0 ( string_data head ) ) } {}
         } {}
         ? ! ( string_eq lab_s . iss labels ) {
             ?? ( __ghm_labels_on st c h auth dry task full labels now writes ) { T _ → {} F o → { ^ ( __ghm_fail o writes ) } }
@@ -696,7 +729,7 @@ $ `web.nu`
             : GhmOut o ( __ghm_send st c h auth dry task `PUT` ( string_data lpath ) b now )
             = writes + writes 1
             ? != . o status 200 { ^ ( __ghm_fail o writes ) } {}
-            ( __ghm_exec st `UPDATE gh_issues SET labels = ?3 WHERE task = ?1` task 0 ( string_data lab_s ) )
+            ? | ! dry < number 0 { ( __ghm_exec st `UPDATE gh_issues SET labels = ?3 WHERE task = ?1` task 0 ( string_data lab_s ) ) } {}
         } {}
     }
     : String ipath ( string_clone base )
@@ -728,7 +761,7 @@ $ `web.nu`
         ? had {} {
             ( __ghm_pace writes dry )
             : String cb ( string_from `**` )
-            ( string_push_str cb ( string_data who ) )
+            ( string_push_str cb ( string_data ( gh_redact ( string_clone who ) pats ) ) )
             ( string_push_str cb `** (Agora): ` )
             ( string_push_str cb ( string_data text ) )
             : Json b ( json_obj_new )
@@ -785,7 +818,7 @@ $ `web.nu`
             ?? ( _ag_conn st ) { F _ → {} T db → { = text ( __ghm_public db ( string_clone . t result ) pats ) } }
             ( __ghm_pace writes dry )
             : String cb ( string_from `**` )
-            ( string_push_str cb ( string_data . t owner ) )
+            ( string_push_str cb ( string_data ( gh_redact ( string_clone . t owner ) pats ) ) )
             ( string_push_str cb `** (Agora) finished it: ` )
             ( string_push_str cb ( string_data text ) )
             : Json b ( json_obj_new )
@@ -806,14 +839,27 @@ $ `web.nu`
             ?? ( _ag_conn st ) {
                 F _ → {}
                 T db → {
-                    ?? ( sqlite_prepare db `SELECT g.number FROM tasks s JOIN gh_issues g ON g.task = s.id WHERE g.number > 0 AND (s.body LIKE 'Supersedes AGORA-' || ?1 || '%' OR s.body LIKE 'Supersedes #' || ?1 || '%') ORDER BY s.id DESC LIMIT 1` ) {
+                    ?? ( sqlite_prepare db `SELECT g.number FROM tasks s JOIN gh_issues g ON g.task = s.id WHERE g.number > 0 AND ((s.body LIKE 'Supersedes AGORA-' || ?1 || '%' AND substr(s.body, length('Supersedes AGORA-' || ?1) + 1, 1) NOT GLOB '[0-9]') OR (s.body LIKE 'Supersedes #' || ?1 || '%' AND substr(s.body, length('Supersedes #' || ?1) + 1, 1) NOT GLOB '[0-9]')) ORDER BY s.id DESC LIMIT 1` ) {
                         F _ → {}
                         T q → { ( _ag_bind_i q 1 task ) ? ( _ag_row q ) { = dup ( sqlite_column_int q 0 ) } {} }
                     }
                 }
             }
         } {}
-        ? > dup 0 {
+        // The "Superseded by" comment is kept under its own key, so a close
+        // that fails after it is retried without writing it twice.
+        : i skey - 0 + 1000000000000 task
+        : ~ b said F
+        ?? ( _ag_conn st ) {
+            F _ → {}
+            T db → {
+                ?? ( sqlite_prepare db `SELECT COUNT(*) FROM gh_comments WHERE msg = ?1` ) {
+                    F _ → {}
+                    T q → { ( _ag_bind_i q 1 skey ) ? ( _ag_row q ) { = said > ( sqlite_column_int q 0 ) 0 } {} }
+                }
+            }
+        }
+        ? & > dup 0 ! said {
             ( __ghm_pace writes dry )
             : String cb ( string_from `Superseded by #` )
             ( string_push_int cb dup )
@@ -823,6 +869,7 @@ $ `web.nu`
             : GhmOut o ( __ghm_send st c h auth dry task `POST` ( string_data cpath ) b now )
             = writes + writes 1
             ? != . o status 201 { ^ ( __ghm_fail o writes ) } {}
+            ( __ghm_exec st `INSERT OR IGNORE INTO gh_comments (msg, task, id) VALUES (?1, ?2, CAST(?3 AS INTEGER))` skey task ( string_data ( __ghm_int_str ( _gh_i . o body `id` ) ) ) )
         } {}
         ( __ghm_pace writes dry )
         : Json b ( json_obj_new )
@@ -831,7 +878,7 @@ $ `web.nu`
         : GhmOut o ( __ghm_send st c h auth dry task `PATCH` ( string_data ipath ) b now )
         = writes + writes 1
         ? != . o status 200 { ^ ( __ghm_fail o writes ) } {}
-        ( __ghm_exec st `UPDATE gh_issues SET state = ?3 WHERE task = ?1` task 0 ? want_closed `closed` `open` )
+        ? | ! dry < number 0 { ( __ghm_exec st `UPDATE gh_issues SET state = ?3 WHERE task = ?1` task 0 ? want_closed `closed` `open` ) } {}
     } {}
     ^ ( __ghm_ok GHM_DONE writes )
 }
@@ -851,8 +898,7 @@ $ `web.nu`
     : b dry == mode 1
     ? ( _gh_bo_ok now ) {} { ^ 0 }
     : AgGhMirror m ( _ghm_conf )
-    : HttpClient h ( http_client_new )
-    ( http_client_set_timeout h 15000 )
+    : HttpClient h ( _gh_client )
     : ~ String auth ( string_new )
     : AgGhFake f ( locked_take [AgGhFake] g_ghf )
     : b fake . f on
@@ -980,7 +1026,7 @@ $ `web.nu`
     : Json o ( json_obj_new )
     : b on ( ag_gh_connected ( string_data . w repo ) )
     ( json_obj_set o `connected` ( json_bool on ) )
-    ? on {} { ^ ( response_json 200 o ) }
+    ? on {} { ^ ( _ag_json_ok o ) }
     : GhMirrorHealth hh ( ag_gh_mirror_health . w rs )
     : Json mj ( json_obj_new )
     ( json_obj_set mj `mode` ( json_str_lit ? == . hh mode 2 `live` ? == . hh mode 1 `dry run` `off` ) )
@@ -1020,7 +1066,7 @@ $ `web.nu`
         }
     }
     ( json_obj_set o `dry` arr )
-    ^ ( response_json 200 o )
+    ^ ( _ag_json_ok o )
 }
 
 // ── The worker ───────────────────────────────────────────────────────

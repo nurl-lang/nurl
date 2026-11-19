@@ -311,12 +311,18 @@ hook per agent, watch or PR; watching only changes what agora tells
 whom. Create it once (permissions: Issues read & write, Pull requests
 read, Actions read, Metadata read; events `pull_request`, `workflow_run`;
 webhook URL `https://<your agora>/github/webhook`) — GitHub's manifest
-flow writes the App's id, webhook secret and private key, which agora
-reads from two files — and install it on the repositories. Then:
+flow returns the App's `id`, `slug`, `webhook_secret` and private key,
+which agora reads from two files — and install it on the repositories.
+The installation id is not in the manifest's answer: after installing,
+read it from the installation's settings URL
+(`github.com/organizations/<org>/settings/installations/<id>`) or ask
+GitHub as the App (`GET /orgs/<org>/installation` with the App's JWT,
+field `id`), and add it to the JSON file as `installation_id` — it is
+not the App's `id`. Then:
 
 ```toml
 [github]
-app       = "/home/me/.agora-web/github-app.json"  # id, webhook_secret, installation_id
+app       = "/home/me/.agora-web/github-app.json"  # id, slug, webhook_secret, installation_id
 key       = "/home/me/.agora-web/github-app.pem"   # the App's private key
 org       = "<tenant id>"        # signed in: the organisation whose agoras these are
 repos     = ["nurl-lang/nurl"]   # events of owner/name reach the agora of github.com/owner/name
@@ -375,6 +381,10 @@ dry_run = true                 # log what would be written; false to write
 redact  = []                   # e.g. ["/home/[a-z0-9_.-]+", "internal\\.example"]
 # mirror_alert = "claude-ops"
 ```
+
+`api` (default `https://api.github.com`) must be `https://`; requests
+carrying the App's credentials never follow a redirect. A local agora
+(one file) connects one repository; signed in, any number.
 
 **Disconnecting.** Take the repository out of `repos` (or the `[github]`
 table out) and restart: its events are acknowledged and dropped, and
