@@ -4191,6 +4191,9 @@ unsafe @ note_unsafe_item s pos s what → v {
 // of that field in another one — inside the callee the two are one
 // parameter's unrelated fields (__bck_sva_hit, agora #606).
 : ~ i g_bck_sva_root -1
+// Some store has put an owner into a field path whose id it knows (`sfo_`,
+// bck_sx_name; agora #563).
+: ~ i g_bck_sfo_any 0
 : ~ i g_bck_sva_wid -1
 // …and whether a call's `sK` rows wait, unflushed, on the statement's
 // lists (__vself_place): a `?`'s condition, a loop's, a return's are
@@ -37559,6 +37562,11 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 : s __lnr ( str_first_word __lns ) = __lns ( str_skip_word __lns )
                 ? & ( bck_is_heap_lty ( nurl_llty ( nurl_sym_get syms __lnr ) ) ) < ( nurl_sym_word_index syms `__fn_param_names__` __lnr ) 0 { ( bck_stash_pending_kind __lnr ( nurl_lex_line lex ) __rc arg_idx `` `pendlit` ) } {}
             }
+            // (…and one of a type that may view its own storage: a
+            // `pendslit` row asks whether it does — an owner beside a view
+            // of it, or a value that views its own fields — and what the
+            // callee does to it, __bck_slit_check; agora #563.)
+            ? ( __sva_ty syms ( nurl_llty at ) ) { ( bck_stash_slit arg_sx ( nurl_lex_line lex ) __rc arg_idx ) } {}
         } {}
         // (A handle local of a closure body handed to an `inout` parameter
         // may be given a new value there: __clo_cond_off_note.)
@@ -57833,6 +57841,15 @@ unsafe @ bck_stash_rc_sink s name i line s callee i argidx s at → v {
     ( bck_put `deferred` `1` )
 }
 
+// A literal argument of a type that may view its own storage (__sva_ty),
+// by its source expression `sx`: a `pendslit` row (__bck_slit_check,
+// agora #563).
+@ bck_stash_slit s sx i line s callee i argidx → v {
+    ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ } {}
+    ( bck_add_word `ppends` ( nurl_str_cat4 ( nurl_str_cat3 `@` sx ` ` ) ( __bck_pend_line line ) ( nurl_str_cat3 ` ` callee ` ` ) ( nurl_str_cat3 ( nurl_str_int argidx ) ` ` `pendslit` ) ) )
+    ( bck_put `deferred` `1` )
+}
+
 // May a value of struct type `lty` view its own storage: a field holding
 // views beside one holding storage (__vself_fb_rels)?
 @ __sva_ty i syms s lty → b {
@@ -59005,7 +59022,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
     ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 ? ( seq k `fborrow` ) 7 ? ( seq k `fborrowh` ) 7 0 } {}
     ? == c 116 { ^ ? ( seq k `take` ) 37 ? ( seq k `tborrow` ) 7 ? ( seq k `tryret` ) 39 0 } {}
-    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 ? ( seq k `pendsva` ) 46 0 } {}
+    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 ? ( seq k `pendsva` ) 46 ? ( seq k `pendslit` ) 47 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
     ? == c 99 { ^ ? ( seq k `cdep` ) 17 ? ( seq k `cmove` ) 18 ? ( seq k `cnt` ) 22 ? ( seq k `cond` ) 25 ? ( seq k `callx` ) 31 ? ( seq k `clox` ) 34 ? ( seq k `cborrow` ) 7 0 } {}
@@ -60763,6 +60780,14 @@ unsafe @ __sx_view_at s st s e → b {
     // (As an argument a callee stores, only a view counts: g_sxe_vonly.)
     ? & g_sxe_vonly == 0 ( nurl_str_len vwm ) { ^ ( nurl_str_cat deps `` ) } {}
     : b own & ( seq vwm `o` ) | arg ! g_sxe_handover
+    // (A field path of a holder of views that an owner was stored into, `:
+    // ~ S o @ S { b ( slice_from_vec e ) }`'s `o.buf`: its storage is that
+    // owner's, now the path's own — not what `o` borrows (`sfo_`; agora
+    // #563). A view of it, `= . o v ( slice_from_vec . o buf )`, is one of
+    // `o`'s own storage.)
+    ? & & != 0 g_bck_sfo_any != id r == BCK_BORROWED_SHARED v {
+        ? != 0 ( nurl_sym_len g_bck ( bck_bkey `sfo_` ids ) ) { ^ ( __word_union ids deps ) } {}
+    } {}
     ? == v BCK_BORROWED_SHARED {
         // (…bound to a callee's walk answer `2`, `rva_`: so is a copy of it.)
         ? != 0 g_bck_rva_any {
@@ -61635,7 +61660,10 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
         // (`pendsva`: a binding handed to a `sink` parameter, viewing its
         // own fields — __bck_sva_sink, agora #606.)
         ? == kc 46 { ( __bck_sva_sink rec ) } {}
-        ? | | | | == kc 1 == kc 40 == kc 43 == kc 44 == kc 46 { = p + p 1 } {
+        // (`pendslit`: a literal argument that may view its own storage —
+        // __bck_slit_check, agora #563.)
+        ? == kc 47 { ( __bck_slit_check rec ) } {}
+        ? | | | | | == kc 1 == kc 40 == kc 43 == kc 44 == kc 46 == kc 47 { = p + p 1 } {
             ? | == kc 21 == kc 22 {
                 // Into the innermost loop's exit / back-edge accumulator —
                 // leaving every block up to its body, whose bindings go here.
@@ -62362,6 +62390,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // Op @ Wrap { src … } )`: the old value lives on inside it,
                         // and the binding is still its owner, agora #157.)
                         : b s_self & == ( nurl_str_get s_own 0 ) 61 ( seq ( nurl_str_slice s_own 1 - ( nurl_str_len s_own ) 1 ) svn )
+                        // (A value that views its own fields takes those views
+                        // with it — whatever the walk's state calls it, a holder
+                        // of views too — __bck_sv_carry; not into its own new
+                        // value, nor a closure's capture; agora #563.)
+                        ? & ! s_self != 0 ( nurl_sym_len g_bck ( bck_bkey `vsv_` ( nurl_str_int ( bck_path_root svid ) ) ) ) {
+                            ? == 0 ( nurl_sym_len g_bck ( nurl_str_cat4 `sk_` ( nurl_sym_get2 g_bck `rv_` svn ) `_` ( bck_field rec 3 ) ) ) { ( __bck_sv_carry svid s_own ? == 0 ( nurl_str_len s_pko ) ( bck_field rec 6 ) `` ) } {}
+                        } {}
                         : i cur ? s_self BCK_UNINIT ( bck_st_get st svid )
                         ? & ! s_self == cur BCK_STORED { ( bck_diag_stored svid ( bck_field_int rec 3 ) T ) } {}
                         ? & ! s_self | == cur BCK_OWNED == cur BCK_UNINIT {
@@ -62381,7 +62416,14 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             // where known — cleared where an earlier store left one.)
                             : s s_f6 ( bck_field rec 6 )
                             : s s_fpk ( bck_bkey `sfp_` svn )
-                            ? & & ! s_cap == 0 ( nurl_str_len s_pko ) == ( nurl_str_get s_f6 0 ) 112 { ( bck_put s_fpk ( nurl_str_slice s_f6 1 - ( nurl_str_len s_f6 ) 1 ) ) } {
+                            ? & & ! s_cap == 0 ( nurl_str_len s_pko ) == ( nurl_str_get s_f6 0 ) 112 {
+                                ( bck_put s_fpk ( nurl_str_slice s_f6 1 - ( nurl_str_len s_f6 ) 1 ) )
+                                // (…and the field path holds an owner of its own
+                                // from here: its storage is its own, not what the
+                                // value holding it borrows — bck_sx_name; agora #563.)
+                                ( bck_put ( bck_bkey `sfo_` ( nurl_str_slice s_f6 1 - ( nurl_str_len s_f6 ) 1 ) ) `1` )
+                                = g_bck_sfo_any 1
+                            } {
                                 ? != 0 ( nurl_sym_len g_bck s_fpk ) { ( bck_put s_fpk `` ) } {}
                             }
                             // Stored into a binding's value (`: H t @ H { a }`), or
@@ -70430,6 +70472,115 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     }
 }
 
+// Binding `svid`, which views its own fields (`vsv_`: `= . o v (
+// slice_from_vec . o buf )`), is stored at `line` into `own` (`=id` a
+// binding's value, else the keeping callee), at field path `f6` (`p<id>`)
+// when known. Its views of its own fields go with it: they view the same
+// fields at their new place, so the owner they went to depends on those —
+// `: P p @ P { o 0 }` ties `p` to `p.s.buf`, and growing that field ends
+// `p` as growing `o.buf` ended `o` (agora #563).
+@ __bck_sv_carry i svid s own s f6 → v {
+    : s svs ( nurl_str_int svid )
+    : s vd ( nurl_sym_get g_bck ( bck_bkey `vds_` svs ) )
+    : s vi ( nurl_sym_get g_bck ( bck_bkey `vdi_` svs ) )
+    : ~ s mine ``
+    : ~ s rest ( nurl_str_cat vd `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s x ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i xi ( nurl_str_to_int x )
+        ? & != xi svid == ( bck_path_root xi ) svid { = mine ( __word_union mine x ) } {}
+    }
+    ? == 0 ( nurl_str_len mine ) { ^ v } {}
+    ? & == ( nurl_str_get f6 0 ) 112 == ( nurl_str_get own 0 ) 61 {
+        : i fp ( nurl_str_to_int ( nurl_str_slice f6 1 - ( nurl_str_len f6 ) 1 ) )
+        : s base ( __bck_id_spelling fp )
+        : ~ s srcs ``
+        : ~ s mr ( nurl_str_cat mine `` )
+        ~ != 0 ( nurl_str_len mr ) {
+            : s x ( str_first_word mr ) = mr ( str_skip_word mr )
+            : s rel ( __bck_rel_path ( nurl_str_to_int x ) )
+            ? != 0 ( nurl_str_len rel ) {
+                : s nid ( nurl_str_int ( bck_intern ( nurl_str_cat3 base `.` rel ) ) )
+                = srcs ( __word_union srcs ? ( str_contains_word vi x ) ( nurl_str_cat `^` nid ) nid )
+            } {}
+        }
+        ? != 0 ( nurl_str_len srcs ) { ( bck_dep_add ( bck_path_root fp ) srcs ) } {}
+        ^ v
+    } {}
+    // (Stored anywhere else — an element of a container, an option's
+    // payload, a callee's — the views stay good while the value is not
+    // changed there, and nothing here can follow it; a value taken back out
+    // and grown is AGORA-563's rest, tools/fuzz/holes/open/t563.md.)
+}
+
+// A `pendslit` row (bck_stash_slit): a literal written as argument `aix`
+// (field 6) of `cal` (field 5), its source expression `@sx` (field 1). It
+// views its own storage where what it views reaches a binding it takes
+// over (`@ S { sv b }`, `sv` a view of `b`), or where a binding it takes
+// over views its own fields (`vsv_`: `= . o v ( slice_from_vec . o buf )`,
+// then `@ P { o 0 }`). No binding holds it here, so nothing ties the view
+// to the field it points into: a callee whose final summaries say it may
+// drop, replace or move a buffer of it is refused, as a binding of it
+// handed there is (__bck_sva_hit); one that only reads it is not (agora
+// #563).
+@ __bck_slit_check s rec → v {
+    : s w ( bck_field rec 1 )
+    ? | == 0 ( nurl_str_len w ) != 64 ( nurl_str_get w 0 ) { ^ v } {}
+    : s cal ( bck_field rec 5 )
+    : s aix ( bck_field rec 6 )
+    : b dr ( bck_callee_drops_elems cal aix )
+    : b rea ( nurl_sym_has_word g_fn_reallocs cal aix )
+    : b irea & != 0 g_irealloc_any | ( nurl_sym_has_word g_fn_ireallocs cal aix ) & != 0 g_fn_ifreallocs ( nurl_sym_has_word g_fn_ifreallocs cal aix )
+    ? ! | | dr rea irea { ^ v } {}
+    : s sx ( nurl_str_slice w 1 - ( nurl_str_len w ) 1 )
+    : s own ( __sx_top_names sx )
+    ? == 0 ( nurl_str_len own ) { ^ v } {}
+    : s how ? dr `may drop or replace what it holds` ? rea `may move or free its buffer` `may move the buffer of one of its fields or elements`
+    // (A binding it takes over that views its own fields.)
+    : ~ s rest ( nurl_str_cat own `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s o ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( __is_int_lit o ) {
+            : s ors ( nurl_str_int ( bck_path_root ( nurl_str_to_int o ) ) )
+            ? != 0 ( nurl_sym_len g_bck ( bck_bkey `vsv_` ors ) ) {
+                : s on ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ors ) )
+                ( __bck_slit_err ( bck_field_int rec 3 ) ( nurl_str_cat4 `'` on `', which holds views of its own fields, is moved into the literal handed to '` ( bck_fn_show cal ) ) ( nurl_str_cat4 `', which ` how `` `` ) )
+                ^ v
+            } {}
+        } {}
+    }
+    // (What it views reaching a binding it takes over: what each binding
+    // it takes borrows from or holds views of — `bs_`, `vds_`, by the
+    // binding, not by the state the call's own rows have left it in.)
+    : ~ s r2 ( nurl_str_cat own `` )
+    ~ != 0 ( nurl_str_len r2 ) {
+        : s y ( str_first_word r2 ) = r2 ( str_skip_word r2 )
+        ? ( __is_int_lit y ) {
+            : ~ s sr ( nurl_str_cat3 ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `bs_` y ) ) ) ` ` ( nurl_sym_get g_bck ( bck_bkey `vds_` y ) ) )
+            ~ != 0 ( nurl_str_len sr ) {
+                : s x ( str_first_word sr ) = sr ( str_skip_word sr )
+                ? ( __is_int_lit x ) {
+                    : s xr ( nurl_str_int ( bck_path_root ( nurl_str_to_int x ) ) )
+                    ? & ! ( seq xr y ) ( str_contains_word own xr ) {
+                        : s on ( bck_name_show ( nurl_sym_get2 g_bck `rv_` xr ) )
+                        ( __bck_slit_err ( bck_field_int rec 3 ) ( nurl_str_cat4 `the literal handed to '` ( bck_fn_show cal ) `' takes '` ( nurl_str_cat3 on `' and holds a view of '` on ) ) ( nurl_str_cat4 `' at once, and '` ( bck_fn_show cal ) `' ` how ) )
+                        ^ v
+                    } {}
+                } {}
+            }
+        } {}
+    }
+}
+
+@ __bck_slit_err i line s m1 s m2 → v {
+    : s tag ( nurl_str_cat `slit:` ( nurl_str_int line ) )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) { ^ v } {}
+    ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+    : s m3 `: inside the callee the view is a field of its parameter that nothing ties to the field it points into, so a read of it after the change reads freed memory. Bind the value first and hand over its parts apart, or make the view inside the callee.`
+    ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 m3 ) )
+}
+
 // A `~` loop's element `xs` is a part of what it iterates no longer: its
 // loop is left (`feo_`, agora #482).
 @ __bck_fe_unfile s xs → v {
@@ -73199,6 +73350,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_has_deps 0
     = g_bck_has_cursor 0
     = g_bck_hc_any 0
+    = g_bck_sfo_any 0
     = g_bck_bxf_any 0
     = g_bck_fv_any 0
     = g_bck_bvr_any 0

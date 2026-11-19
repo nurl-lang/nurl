@@ -596,6 +596,15 @@ two fields of the parameter are unrelated, so a read of `. p idx` after
 Strings stay where they are), is not. Make the change outside the call
 and take the views again after it, or store views that own their data.
 
+Such a value takes those views with it when it moves into a struct's
+field (`@ P { o 0 }`): the struct is tied to the field at its new place,
+so growing `. . p s buf` ends the view, as growing `. o buf` did. A
+literal written as an argument that holds an owner and a view of it
+(`( use @ S { sv b } )`), or such a value, is refused where the callee
+may grow, clear or replace what the view points into (AGORA-563). A value
+pushed into a container and taken back out is not followed yet (AGORA-563
+stays open for it).
+
 ### 2.5 Iterator invalidation
 
 A foreach loop `~ x xs { … }` borrows `xs` for its body. Mutating `xs`
