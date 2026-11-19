@@ -1718,41 +1718,6 @@ theorem app_lift {a b a0 b0 X : List Dep} (ha : a ⊆ rds S.ρ a0 ++ X)
     · exact Or.inr h1
 
 
-theorem pushArg_ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {y : Var} {Ey : Entry} {t : Ty}
-    {D : List Dep} {Γa1 : Ctx} (hy : Γa y = some Ey) (hp : PushArg Γa Fa y Ey t D Γa1) :
-    ∃ D', PushArg (S.canon Γa) S.Fc (S.ρ y) (S.liftE y Ey) t D' (S.canon Γa1) ∧
-      D' ⊆ rds S.ρ D ++ S.A ∧ (Ey.ty = t → D' ⊆ rds S.ρ D ++ ownHeld true t S.A) := by
-  cases hp with
-  | move ho hm hyF _ hds =>
-    have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
-    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false, dtor := false }) =
-        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false, dtor := false } := by
-      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_moved _ hrb]
-    rw [hctx]
-    refine ⟨_, PushArg.move ho (by rw [liftE_mode y hrb, hm]; rfl) (h.Fcout y)
-      (NoPin.lift h hab (bnd_own hab hy hm)) (DtorSafe.canon h (allowed_own hab hy hm _ _) hds),
-      held_lift h hab hy, fun hty => ?_⟩
-    rw [liftE_held hrb, S.heldA_own (by rw [hm]; rfl), hm, hty]; exact List.Subset.refl _
-  | int => exact ⟨[], PushArg.int, by simp, fun _ => by simp⟩
-  | @slice s hm =>
-    have hsl : ownHeld true (Ty.slice s) S.A = S.A := by simp [ownHeld, Ty.holdsView]
-    have hs : derive (S.ρ y) (S.liftE y Ey) .self ++ (S.liftE y Ey).held ⊆
-        rds S.ρ (derive y Ey .self ++ Ey.held) ++ S.A := by
-      intro d hd
-      rcases List.mem_append.mp hd with hd | hd
-      · rcases List.mem_append.mp (derive_lift h hab hy .self rfl hd) with h1 | h1
-        · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
-          exact List.mem_append_left _ (mem_rds.mpr ⟨d0, List.mem_append_left _ hd0, rfl⟩)
-        · exact List.mem_append_right _ h1
-      · rcases List.mem_append.mp (held_lift h hab hy hd) with h1 | h1
-        · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
-          exact List.mem_append_left _ (mem_rds.mpr ⟨d0, List.mem_append_right _ hd0, rfl⟩)
-        · exact List.mem_append_right _ h1
-    refine ⟨_, PushArg.slice ?_, hs, fun _ => by rw [hsl]; exact hs⟩
-    rcases hm with hm | hm
-    · left; rw [liftE_mode y (by rw [hm]; simp), hm]; rfl
-    · right; rw [liftE_rootb h]; exact hm
-
 /-- Agora #909's own example: a borrowed parameter's path, where the call
     places it, is the caller's argument, renamed: `derive` of a root names
     the root itself. -/
@@ -1805,6 +1770,34 @@ theorem pushArg_ren_sub (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {y : Var}
         rw [derive_lift_rootb h hab hy hrb]
         exact hcat (fun d hd => List.mem_append_left _ hd) (held_lift h hab hy)
       · exact hcat (derive_lift h hab hy .self rfl) (held_lift h hab hy)
+
+theorem pushArg_ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {y : Var} {Ey : Entry} {t : Ty}
+    {D : List Dep} {Γa1 : Ctx} (hy : Γa y = some Ey) (hp : PushArg Γa Fa y Ey t D Γa1) :
+    ∃ D', PushArg (S.canon Γa) S.Fc (S.ρ y) (S.liftE y Ey) t D' (S.canon Γa1) ∧
+      D' ⊆ rds S.ρ D ++ S.A ∧ (Ey.ty = t → D' ⊆ rds S.ρ D ++ ownHeld true t S.A) := by
+  cases hp with
+  | move ho hm hyF _ hds =>
+    have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
+    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false, dtor := false }) =
+        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false, dtor := false } := by
+      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_moved _ hrb]
+    rw [hctx]
+    refine ⟨_, PushArg.move ho (by rw [liftE_mode y hrb, hm]; rfl) (h.Fcout y)
+      (NoPin.lift h hab (bnd_own hab hy hm)) (DtorSafe.canon h (allowed_own hab hy hm _ _) hds),
+      held_lift h hab hy, fun hty => ?_⟩
+    rw [liftE_held hrb, S.heldA_own (by rw [hm]; rfl), hm, hty]; exact List.Subset.refl _
+  | int => exact ⟨[], PushArg.int, by simp, fun _ => by simp⟩
+  | @slice s hm =>
+    have hsl : ownHeld true (Ty.slice s) S.A = S.A := by simp [ownHeld, Ty.holdsView]
+    have hpa' : PushArg (S.canon Γa) S.Fc (S.ρ y) (S.liftE y Ey) (.slice s)
+        (derive (S.ρ y) (S.liftE y Ey) .self ++ (S.liftE y Ey).held) (S.canon Γa) := by
+      refine PushArg.slice ?_
+      rcases hm with hm | hm
+      · left; rw [liftE_mode y (by rw [hm]; simp), hm]; rfl
+      · right; rw [liftE_rootb h]; exact hm
+    -- (what it depends on: `pushArg_ren_sub`, a borrowed parameter's view among them)
+    have hs := pushArg_ren_sub h hab hy (PushArg.slice (F := Fa) hm) hpa'
+    exact ⟨_, hpa', hs, fun _ => by rw [hsl]; exact hs⟩
 
 /-- Agora #916: ... and what it stores holds, in memory, only what it did in
     the callee, renamed, when the stored value is the frame's own in path and
@@ -4198,16 +4191,14 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
       (b = true ∨ Ex1.heldFresh = true → memDeps D' ⊆ rds S.ρ (memDeps D)) ∧ D' ⊆ rds S.ρ D ++ S.A := by
     cases harg with
     | push hy hly htyy hpa =>
-      obtain ⟨D', hpa', _, _⟩ := pushArg_ren h hab hy hpa
-      have hs := pushArg_ren_sub h hab hy hpa hpa'
+      obtain ⟨D', hpa', hs, _⟩ := pushArg_ren h hab hy hpa
       exact ⟨D', EditArg.push (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_live]; exact hly)
         (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmw hs,
         fun hc => hmemsub' (hpre hc) rfl hy htyy hpa hpa' hs, hs⟩
     | trunc hie => exact ⟨[], EditArg.trunc (exprT_ren h hab hie), (fun _ h => by cases h), (fun _ _ h => by cases h),
         (fun _ h => by cases h)⟩
     | set hie hy hly htyy hpa =>
-      obtain ⟨D', hpa', _, _⟩ := pushArg_ren h hab hy hpa
-      have hs := pushArg_ren_sub h hab hy hpa hpa'
+      obtain ⟨D', hpa', hs, _⟩ := pushArg_ren h hab hy hpa
       exact ⟨D', EditArg.set (exprT_ren h hab hie) (by rw [canon_ρ h, hy]; rfl)
         (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmw hs,
         fun hc => hmemsub' (hpre hc) rfl hy htyy hpa hpa' hs, hs⟩
