@@ -292,6 +292,7 @@ class FnCheck:
         self.cursor_slots = set()  # the `: ~ s` bindings born from a view
         self.own_slots = set()     # the `: ~ s` bindings born owning: a literal, a fresh value
         self.payload_bound = set()  # the bindings a `??` arm binds to a payload
+        self.enum_lent = set()  # …those that are a program enum's payload a binding lends the arm
         self.chain_scopes = None    # while the `;` chain runs: its blocks' scopes (their bindings outlive them)
         self.chain_kept = []
 
@@ -3403,8 +3404,13 @@ class FnCheck:
     def borrowed_copy(self, vid):
         """Is `vid` a copy of a value this frame only borrows: a by-value
         (`in`) parameter (not a destructor's receiver), a `~` loop's
-        element, a closure body's by-value capture or parameter?"""
+        element, a closure body's by-value capture or parameter, a program
+        enum's `??` payload a binding lends the arm?"""
         if vid in self.fe_vars:
+            return True
+        if vid in self.enum_lent:
+            # (…a `??` arm's payload a program enum binding lends it: the
+            # store lands in the arm's copy, agora #883)
             return True
         if vid not in self.pidx:
             return False
@@ -3877,6 +3883,14 @@ class FnCheck:
             v = self.fn.vars[vid]
             if rv is not None and rv[0] == "payload":
                 self.payload_bound.add(vid)
+                # (a program enum's payload, out of a binding: lent to the
+                # arm, read in place, the arm's a copy - MEMORY.md h231)
+                sop = rv[1]
+                if (isinstance(sop, tuple) and sop[0] == "v" and not sop[2]
+                        and self.fn.vars[sop[1]].kind != "temp"):
+                    sty = self.fn.vars[sop[1]].ty
+                    if sty is not None and sty[0] == "named" and sty[1] in self.prog.enums:
+                        self.enum_lent.add(vid)
             self.carry_call_lent(vid, rv)
             if (rv is not None and rv[0] == "use" and rv[1][0] == "v" and rv[1][2] and v.kind == "local"
                     and not v.mut):
