@@ -60,29 +60,6 @@ $ `store.nu`
 
 @ ag_expiry_defaults → AgExpiry { ^ @ AgExpiry { 30 90 90 30 30 90 0 } }
 
-@ __ag_setting_on Database db s key i dflt → i {
-    : ~ i v dflt
-    ?? ( sqlite_prepare db `SELECT value FROM settings WHERE key = ?1` ) {
-        F _ → {}
-        T q → {
-            ( _ag_bind_s q 1 key )
-            ? ( _ag_row q ) { = v ( sqlite_column_int q 0 ) } {}
-        }
-    }
-    ^ v
-}
-
-@ __ag_setting_put_on Database db s key i value → b {
-    ?? ( sqlite_prepare db `INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value` ) {
-        F _ → { ^ F }
-        T q → {
-            ( _ag_bind_s q 1 key )
-            ( _ag_bind_i q 2 value )
-            ^ ( _ag_run q )
-        }
-    }
-}
-
 // The expiry times kept in `st` (an organisation's file, or the one
 // local file); the defaults for what was never set.
 @ ag_expiry_get AgStore st → AgExpiry {
@@ -91,13 +68,13 @@ $ `store.nu`
         F _ → { ^ d }
         T db → {
             ^ @ AgExpiry {
-                ( __ag_setting_on db `ttl_notes` . d notes )
-                ( __ag_setting_on db `ttl_posts` . d posts )
-                ( __ag_setting_on db `ttl_mail` . d mail )
-                ( __ag_setting_on db `ttl_tasks` . d tasks )
-                ( __ag_setting_on db `ttl_agents` . d agents )
-                ( __ag_setting_on db `ttl_channels` . d channels )
-                ( __ag_setting_on db `trash_empty_days` . d empty_days )
+                ( _ag_setting_on db `ttl_notes` . d notes )
+                ( _ag_setting_on db `ttl_posts` . d posts )
+                ( _ag_setting_on db `ttl_mail` . d mail )
+                ( _ag_setting_on db `ttl_tasks` . d tasks )
+                ( _ag_setting_on db `ttl_agents` . d agents )
+                ( _ag_setting_on db `ttl_channels` . d channels )
+                ( _ag_setting_on db `trash_empty_days` . d empty_days )
             }
         }
     }
@@ -107,7 +84,7 @@ $ `store.nu`
 // write back what another changed meanwhile).
 @ __ag_ttl_put_on Database db s key i v → b {
     ? < v 0 { ^ T } {}
-    ^ ( __ag_setting_put_on db key v )
+    ^ ( _ag_setting_put_on db key v )
 }
 
 @ ag_expiry_set AgStore st AgExpiry e → b {
@@ -542,9 +519,9 @@ $ `store.nu`
         T db → {
             ? ( _ag_begin db ) {} { ^ failed }
             // Another process sharing the file may have just swept it.
-            : i last ( __ag_setting_on db `last_sweep` 0 )
+            : i last ( _ag_setting_on db `last_sweep` 0 )
             ? & ! force > + last AG_SWEEP_EVERY now { ( _ag_rollback db ) ^ r } {}
-            ( __ag_setting_put_on db `last_sweep` now )
+            ( _ag_setting_put_on db `last_sweep` now )
             : ~ b ok T
             ? > . e tasks 0 {
                 = . r tasks ( _ag_trash_on db `task` `x.status IN ('done', 'cancelled') AND x.updated < ?2` `` ( __ag_cutoff . e tasks now ) `` T `expired` `agora` now )
