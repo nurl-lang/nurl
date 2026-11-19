@@ -53,4 +53,42 @@ theorem replace_covers (op : Edit) (a kb kc : Kind) (s hv hv' : Bool)
     (_h : (op.effAt (comp a kb) s).kills hv (comp a kc) = true) : Eff.replace.kills hv' kc = true := by
   cases kc <;> rfl
 
+/-! ### Ending the frame's views of a changed root before the call
+
+A call through which the callee changes a caller root `r` ends, before the
+body runs, every frame binding that views `r` (`kill .replace false r`). The
+callee cannot reach the frame, so nothing typed in its body changes; and a
+later kill of any effect on `r` changes nothing more there. -/
+
+/-- Whether a kill hits a binding does not read whether it is live. -/
+@[simp] theorem hits_with_live (e : Eff) (hv : Bool) (r : Var) (E : Entry) (l : Bool) :
+    hits e hv r { E with live := l } = hits e hv r E := rfl
+
+/-- `.replace` ends every binding any effect ends. -/
+theorem hits_replace_of_hits {e : Eff} {hv hv' : Bool} {r : Var} {E : Entry}
+    (h : hits e hv r E = true) : hits .replace hv' r E = true := by
+  unfold hits at h ⊢
+  simp only [Bool.and_eq_true, List.any_eq_true, beq_iff_eq] at h ⊢
+  obtain ⟨hn, d, hd, hr, _⟩ := h
+  exact ⟨hn, d, hd, hr, by cases d.kind <;> rfl⟩
+
+/-- A kill ends nothing that a `.replace` on the same root has not ended. -/
+theorem killE_after_replace (e : Eff) (hv hv' : Bool) (r : Var) (E : Entry) :
+    killE e hv r (killE .replace hv' r E) = killE .replace hv' r E := by
+  unfold killE
+  by_cases hR : hits .replace hv' r E = true
+  · simp only [hR, ↓reduceIte, hits_with_live]
+    split <;> rfl
+  · have he : hits e hv r E = false := by
+      cases h : hits e hv r E
+      · rfl
+      · exact absurd (hits_replace_of_hits h) hR
+    simp [hR, he]
+
+theorem kill_after_replace (e : Eff) (hv hv' : Bool) (r : Var) (Γ : Ctx) :
+    kill e hv r (kill .replace hv' r Γ) = kill .replace hv' r Γ := by
+  funext v
+  unfold kill
+  cases Γ v <;> simp [killE_after_replace]
+
 end A2

@@ -65,5 +65,6 @@ import A2.FreshProjWitness
 import A2.FreshNestWitness
 import A2.FreshSatWitness
 import A2.HeldViewThruWitness
+import A2.ThruLiftKinds
 import A2.FreshClosureWitness
 import A2.SelfViewCall
