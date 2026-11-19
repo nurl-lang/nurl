@@ -4321,11 +4321,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- the arguments held as well: `letd` records that of memory there too
     have hEq : S.liftE x (Entry.arm { E with ty := τ, held := H }) =
         ⟨τ, .own, E.live, rds S.ρ E.path, rds S.ρ H ++ ownHeld true E.ty S.A, τ.dtorViews,
-          τ.dtorViews, E.fresh, false⟩ := by
+          τ.dtorViews, E.fresh, E.heldFresh⟩ := by
       have hoh : ownHeld true τ S.A = ownHeld true E.ty S.A := by simp only [ownHeld, hov]
-      simp [liftE, hown, Entry.arm, liftMode, Mode.ownSlot, hoh]
+      simp [liftE, hown, Entry.arm, liftMode, Mode.ownSlot, hoh, heldA]
     have hlh0 : (S.liftE x E).held = rds S.ρ E.held ++ ownHeld true E.ty S.A := by
-      simp [liftE, hown, Mode.ownSlot]
+      simp [liftE, hown, Mode.ownSlot, heldA]
     have hsub0 : (S.liftE x E).held ⊆ rds S.ρ H ++ ownHeld true E.ty S.A := by
       rw [hlh0]; exact append_sub (rds_subset hH.1) (List.Subset.refl _)
     obtain ⟨hE'l, -, hE'h⟩ := (hE' x).live (by rw [liftE_live]; exact hlive)
@@ -4365,7 +4365,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         fun hdb _ _ d hnm => ⟨fun hd => List.mem_append_right _
           (hX3 (by rw [← hov, ← hdv]; simpa [Entry.arm] using hdb) d hd hnm), fun hd => hsub hd⟩,
       fun _ _ hb _ => (by cases hb),
-      fun _ _ hhf => by heldfresh_ew⟩
+      fun _ hb _ => (by cases hb)⟩
       · simp [Entry.fixed, Entry.arm, hm'] at hf
       · simp [Entry.arm, hm', Mode.ownSlot] at ho
     exact StmtT.letd (H := E'.held ++ X) (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl)
@@ -4594,20 +4594,24 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (TakeOK.canon h hab htk)
     refine StmtT.weakenOut (canon_wf h hab hw) (canon_names h hab hn) hT'.ofNone
       (Or.inr ⟨PW.setE (PW.refl _) ?_, hwc, hnc⟩)
+    -- (Agora #916: the binding is read as a borrow exactly when its value is)
+    have hhA : S.heldA { E with mode := Ex.mode } = S.heldA E := by
+      rcases hmodes with ⟨h1, h2⟩ | ⟨h1, h2⟩ | ⟨h1, h2⟩ <;> simp [heldA, h1, h2]
     have hf : S.liftE x { E with mode := Ex.mode } =
         ⟨E.ty, liftMode Ex.mode, E.live,
          rds S.ρ E.path ++ (if Ex.mode.ownSlot || (E.fresh && E.ty != .int) then [] else S.A),
-         rds S.ρ E.held ++ ownHeld Ex.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh, false⟩ := by
-      simp only [liftE, hrbx, ↓reduceIte]
+         rds S.ρ E.held ++ ownHeld Ex.mode.ownSlot E.ty (S.heldA E), E.dtor, E.dbind, E.fresh, E.heldFresh⟩ := by
+      simp only [liftE, hrbx, ↓reduceIte]; rw [hhA]
     have hf' : S.liftE x E =
         ⟨E.ty, liftMode E.mode, E.live,
          rds S.ρ E.path ++ (if E.mode.ownSlot || (E.fresh && E.ty != .int) then [] else S.A),
-         rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh, false⟩ := by
+         rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty (S.heldA E), E.dtor, E.dbind, E.fresh, E.heldFresh⟩ := by
       simp only [liftE, hrbE, ↓reduceIte]
     rw [hf, hmx']
     rw [hf'] at hw'
     have hdbw : E'.dbind = E.dbind := by have := hw'.dbind; simpa using this.symm
     have hwf' := hw'.fresh
+    have hhw := hw'.heldFresh
     obtain ⟨_, _, _, hlv, hdv⟩ := hw'
     refine EntryWeaker.mk' hty'.symm rfl (not_fixed_liftMode rfl hrbx) ?_ (fun ho => ?_) ?_
       (fun hd => (hdv hd).1) (hdh := fun hh => by
@@ -4624,6 +4628,16 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
           · exact h2
         obtain ⟨h1, h2⟩ := hwf' (by simpa using hl') (by simpa using hn') (by simp [hEb, liftMode]) hfr
         exact ⟨h1, by simpa [hEb, hEx, Mode.ownSlot] using h2⟩)
+      (hg := fun hn' hb' hhf => by
+        -- Agora #916: ... and so a held-fresh one
+        have hEx : Ex.mode = .bor := by
+          revert hb'; cases hme : Ex.mode <;> simp [liftMode]
+        have hEb : E.mode = .bor := by
+          rcases hmodes with ⟨h1, _⟩ | ⟨h1, _⟩ | ⟨_, h2⟩
+          · rw [h1] at hEx; cases hEx
+          · rw [h1] at hEx; cases hEx
+          · exact h2
+        exact hhw (by simpa using hn') (by simp [hEb, liftMode]) hhf)
     · show E.live = E'.live
       rw [hlive]; exact ((hlv hlive).1).symm
     · have ho' : E.mode.ownSlot = false := by
