@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,035 lines of Lean 4**, **928 theorems**, **1106 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **72 modules**, **70,556 lines of Lean 4**, **3133 theorems**, **4065 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **73 modules**, **70,651 lines of Lean 4**, **3141 theorems**, **4073 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -135,7 +135,7 @@ flowchart BT
 ---
 
 <!-- BEGIN generated: A2 module DAG (webdocs/scripts/gen-formal-data.mjs) -->
-## 4. Phase A2 Module Dependency DAG (72 Modules)
+## 4. Phase A2 Module Dependency DAG (73 Modules)
 
 ```mermaid
 flowchart BT
@@ -205,6 +205,7 @@ flowchart BT
   ThruClosureWitness["ThruClosureWitness<br/>(421L, 34 thms)"]
   ThruDtorWitness["ThruDtorWitness<br/>(164L, 12 thms)"]
   ThruGlueWitness["ThruGlueWitness<br/>(446L, 26 thms)"]
+  ThruLiftKinds["ThruLiftKinds<br/>(95L, 8 thms)"]
   Typing["Typing<br/>(2223L, 108 thms)"]
   TypingFacts["TypingFacts<br/>(1139L, 65 thms)"]
   Unfresh["Unfresh<br/>(169L, 15 thms)"]
@@ -294,6 +295,7 @@ flowchart BT
   ThruClosureWitness --> ThruDtorWitness
   DtorWitness --> ThruGlueWitness
   ThruClosureWitness --> ThruGlueWitness
+  Typing --> ThruLiftKinds
   Semantics --> Typing
   StepFrame --> TypingFacts
   TypingFacts --> Unfresh
@@ -358,6 +360,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/ThruClosureWitness.lean`](A2/ThruClosureWitness.lean) | 421 | 34 | 13 |  |
 | 3. Proof Infrastructure | [`A2/ThruDtorWitness.lean`](A2/ThruDtorWitness.lean) | 164 | 12 | 6 |  |
 | 3. Proof Infrastructure | [`A2/ThruGlueWitness.lean`](A2/ThruGlueWitness.lean) | 446 | 26 | 14 |  |
+| 3. Proof Infrastructure | [`A2/ThruLiftKinds.lean`](A2/ThruLiftKinds.lean) | 95 | 8 | 0 |  |
 | 3. Proof Infrastructure | [`A2/Unfresh.lean`](A2/Unfresh.lean) | 169 | 15 | 2 |  |
 | 3. Proof Infrastructure | [`A2/UnheldFresh.lean`](A2/UnheldFresh.lean) | 198 | 16 | 2 |  |
 | 3. Step & Unwinding Lemmas | [`A2/Frame.lean`](A2/Frame.lean) | 1225 | 68 | 3 | How runtime frames (scope, rbind, frozen) interact with the memory invariant. |
