@@ -3146,11 +3146,14 @@ class FnCheck:
         """Is a slice of type `ty` that a closure hands back, declared an owned
         `[T` (FnIR.ret_owned_slice; a `( Slice T )` is a view, kept), its
         caller's own copy on every run: elements that hold no view and can be
-        copied (nurlc's mem_clo_ret_copies_slc, agora #894)?"""
+        copied (nurlc's mem_clo_ret_copies_slc, agora #894)?  (Asked of the
+        element all the way down, as nurlc's __ty_holds_view_p asks it: a
+        struct with a `String` field and a raw view field copies, but its
+        copy still holds the view.)"""
         if ty is None or ty[0] != "slice" or len(ty) < 2 or ty[1] is None:
             return False
         et = ty[1]
-        return not self.holds_views(et) and self.T.copyable(et)
+        return not self.T.view_capable(et) and self.T.copyable(et)
 
     def view_result(self, ty):
         """Is a value of type `ty` a view, or a container of views (`?s`, a
