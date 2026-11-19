@@ -4584,6 +4584,8 @@ unsafe @ note_unsafe_item s pos s what → v {
 // 1 once this walk recorded the owner of a `??` payload cursor (`cuo_`):
 // bck_sx_name asks a name past its arm only then.
 : ~ i g_bck_cuo_any 0
+// 1 while a sweep goes on through a part's owner (bck_borrow_sweep).
+: ~ i g_bck_cuo_sweep 0
 // 1 once a walk saw a field of a borrowed copy taken by its reader
 // (`pbo_`, bck_fview_take): its write-back is owed (agora #870).
 : ~ i g_bck_pbo_any 0
@@ -68251,7 +68253,45 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     ^ ( nurl_str_cat out `` )
 }
 
+// …and, for a payload read in place as a part of the binding it was
+// matched out of (`cuo_`, part_of: a program enum's payload), the same
+// change through that binding, as a part of it (g_bck_sx_part): its
+// storage is the owner's, so a borrow taken of the owner - by a callee's
+// lend, `: v ( name_of g )`, or through another `??` - ends when a change
+// through this payload, or through a borrow of it (`: j . p a`), reaches
+// it (agora #428, #557).
 @ bck_borrow_sweep s ist s st s rec i kc → s {
+    : ~ s out ( bck_borrow_sweep0 ist st rec kc )
+    ? | == 0 g_bck_cuo_any != 0 g_bck_cuo_sweep { ^ out } {}
+    // (Only what a call does through the payload - a pending call, keep,
+    // field or lend row: the payload binding bound or given a value of its
+    // own is no change to the owner.)
+    ? ! | | | | == kc 9 == kc 10 == kc 12 == kc 13 == kc 32 { ^ out } {}
+    : s wn ? >= g_bck_sx_wid 0 ( nurl_str_int g_bck_sx_wid ) ( bck_field rec 1 )
+    ? == 0 ( nurl_str_len wn ) { ^ out } {}
+    : s wr ( nurl_str_int ( bck_path_root ( nurl_str_to_int wn ) ) )
+    : ~ s ow ( nurl_sym_get g_bck ( bck_bkey `cuo_` wr ) )
+    ? == 0 ( nurl_str_len ow ) {
+        : ~ s bl ( nurl_sym_get g_bck ( bck_bkey `bs_` wr ) )
+        ~ & != 0 ( nurl_str_len bl ) == 0 ( nurl_str_len ow ) {
+            : s b0 ( str_first_word bl ) = bl ( str_skip_word bl )
+            = ow ( nurl_sym_get g_bck ( bck_bkey `cuo_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int b0 ) ) ) ) )
+        }
+    } {}
+    ? | == 0 ( nurl_str_len ow ) != 0 ( nurl_sym_len g_bck ( bck_bkey `cu_` ow ) ) { ^ out } {}
+    : i sw0 g_bck_sx_wid
+    : b sp0 g_bck_sx_part
+    = g_bck_cuo_sweep 1
+    = g_bck_sx_wid ( nurl_str_to_int ow )
+    = g_bck_sx_part T
+    = out ( bck_borrow_sweep0 ist out rec kc )
+    = g_bck_sx_wid sw0
+    = g_bck_sx_part sp0
+    = g_bck_cuo_sweep 0
+    ^ out
+}
+
+@ bck_borrow_sweep0 s ist s st s rec i kc → s {
     : ~ s out st
     // (…or, for a row named by a source expression, the storage it is swept
     // for now: g_bck_sx_wid.)
