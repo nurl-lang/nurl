@@ -603,3 +603,11 @@ import A3
 #print axioms A2.ClosureParamViewWitness.main_typed
 #print axioms A2.ClosureParamViewWitness.main_safe
 #print axioms A2.ClosureParamViewWitness.main_no_leak
+-- AGORA-909 (github#2041), direct call: a callee that changes the elements of its `inout`
+-- parameter through `vec_at`, called with an argument that holds a view, read after the call
+-- (A2/InoutViewArgWitness.lean): the borrow is fresh, so the call asks nothing of the view
+#print axioms A2.InoutViewArgWitness.g_not_thru
+#print axioms A2.InoutViewArgWitness.call_ok
+#print axioms A2.InoutViewArgWitness.main_typed
+#print axioms A2.InoutViewArgWitness.main_safe
+#print axioms A2.InoutViewArgWitness.main_no_leak
