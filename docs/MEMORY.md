@@ -2859,6 +2859,12 @@ are dropped, moved and copied by the same rules:
   leaves the temporary instead (h266, h323).
   Where a copy would be needed (stored into an owner, handed to a keeping
   callee), compilation stops with an error naming the type.
+- **A slice a call made, read for a field** (`. ( mk ) 1`, `. ( mk )
+  length`, `. ( mk ) k`), is released after the read where the call's own
+  answer says the slice is the caller's. A read of a String or Vec
+  element out of it takes a copy on those runs, which the read then owns.
+  A read of `ptr` keeps the slice, since what it reads points into it
+  (agora #925).
 - **Joins.** A `?` / `??` yielding an owning value hands its binding what
   the chosen arm owned; an arm that yields an outer binding lends it, and
   an arm that ends in a lending call lends what that call does — returned
