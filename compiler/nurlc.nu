@@ -27170,7 +27170,12 @@ unsafe @ extract_fn_ptr_return_type s fn_ptr_type → s {
 
 @ __is_closure_ty s ty → b {
     ? == 0 ( nurl_str_len ty ) { ^ F } {}
-    : s ll ( nurl_llty ty )
+    ^ ( __is_closure_ll ( nurl_llty ty ) )
+}
+
+// …the same, of a type already lowered (`nurl_llty`): a closure is
+// `{ R (…)*, i8* }`, its code and its environment.
+@ __is_closure_ll s ll → b {
     ^ & != 0 ( nurl_str_starts ll `{ ` ) != 0 ( nurl_str_ends ll `)*, i8* }` )
 }
 
@@ -34798,7 +34803,12 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // (`retcloeff`), whose storage each argument is: its name, its field
     // path, or the bindings a call written there lends out of, `~a,b` —
     // `-` for none; agora #802.)
-    : b __rce_pend & ! __callee_shadowed ( __rce_pending syms call_name )
+    // (A call of a function is one of a closure builder only if what it
+    // returns is a closure: `__cal_ll`, its return type lowered, says so
+    // with no lookup — the two __rce_pending would make, asked of every
+    // call. A generic instance's own return type is its substituted one,
+    // which __rce_pending reads; agora #813.)
+    : b __rce_pend & ! __callee_shadowed & | != 0 ( nurl_str_len call_targs ) ( __is_closure_ll __cal_ll ) ( __rce_pending syms call_name )
     : b __want_effr | & != 0 g_retcloeff_n != 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` call_name ) __rce_pend
     : ~ s arg_effr ``
     : ~ s __clo_args ``

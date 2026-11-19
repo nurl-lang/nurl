@@ -1,0 +1,3 @@
+### Performance
+
+- **Self-compile is 12M instructions faster** (−0.05%, callgrind), and peak memory is slightly lower. AGORA-813's check, run at every call, of whether the callee is a closure builder not yet compiled made two lookups each time. A call of a plain function now asks its return type first, which the call already holds lowered: only a callee that returns a closure is looked up. A generic instance, whose own return type is its substituted one, is asked as before. This recovers what the check cost: the compiler is now faster than with that per-call work left out altogether. Generated code is byte-identical.
