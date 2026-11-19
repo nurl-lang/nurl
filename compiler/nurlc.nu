@@ -75279,6 +75279,13 @@ unsafe @ gen_assign i lex i syms i cg → s {
         } {}
         = g_bck_rhs_sx ? __asn_fresh ( nurl_str_cat `-` `` ) ( nurl_str_cat __rhs_sx `` )
         ? & != 0 g_bck_closure_depth >= ( bck_walk_class vt ) 2 { ( __clo_view_note syms name g_bck_rhs_sx F ) } {}
+        // (Given a new value, a copy of a capture is a copy no longer -
+        // unless the new value is one, or a capture: `__capcopy` follows the
+        // value, agora #479.)
+        ? != 0 g_bck_closure_depth {
+            ? != 0 ( nurl_sym_len2 syms name `__capcopy` ) { ( nurl_sym_def syms ( nurl_str_cat name `__capcopy` ) `` ) } {}
+            ? ( is_ident_tok bck_rhs_tt ) { ( __clo_capcopy_note syms name bck_rhs_val ) } {}
+        } {}
         // Inside a closure body: a capture, or the closure's own `inout`
         // parameter, given a value that may view something (`= w @ V { (
         // string_data b ) }`) — refused at the walk, as a field store into
@@ -102728,8 +102735,8 @@ unsafe @ __die_at_fn s fname s what s msg → v {
 
 // The capture of the closure being compiled that `name` is derived from -
 // a payload, a part, a copy of its handle (__clo_nc_derived), or a `:` copy
-// of a binding that is (its slot's `__alias`, `: String y x`), to the end
-// of the chain; `` for none (agora #479).
+// of it or of such a copy (`__capcopy`, `: String y x`), to the end of the
+// chain; `` for none (agora #479).
 @ __clo_cap_source i syms s name → s {
     : ~ s cur ( nurl_str_cat name `` )
     : ~ s seen ( nurl_str_cat name `` )
@@ -102751,20 +102758,7 @@ unsafe @ __die_at_fn s fname s what s msg → v {
                 = cur ( nurl_str_cat pr `` )
                 continue
             } {}
-            // (A `:` copy's slot names the slot it copied, `__alias`: the
-            // capture whose own slot that is.)
-            : s up ( mem_udrop_ptr_of syms cur )
-            : s al ? == 0 ( nurl_str_len up ) `` ( nurl_sym_get2 syms up `__alias` )
-            ? | == 0 ( nurl_str_len al ) ( str_contains_word seen al ) { ^ ( nurl_str_cat `` `` ) } {}
-            = seen ( nurl_str_cat3 seen ` ` al )
-            : ~ s crest ( nurl_str_cat g_clo_caps_now `` )
-            : ~ s hit ``
-            ~ & != 0 ( nurl_str_len crest ) == 0 ( nurl_str_len hit ) {
-                : s c ( str_first_word crest ) = crest ( str_skip_word crest )
-                ? | ( seq ( mem_udrop_ptr_of syms c ) al ) ( seq ( nurl_sym_get2 syms c `__ptr` ) al ) { = hit ( nurl_str_cat c `` ) } {}
-            }
-            ? == 0 ( nurl_str_len hit ) { ^ ( nurl_str_cat `` `` ) } {}
-            = cur ( nurl_str_cat hit `` )
+            ^ ( nurl_str_cat `` `` )
         }
     }
     ^ ( nurl_str_cat `` `` )
