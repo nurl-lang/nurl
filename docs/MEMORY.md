@@ -2643,7 +2643,10 @@ fixed:
   call right after it;
 - what the body stores or returns is a copy, and every closure result is
   owned by its caller — whether the body returns it with `^` or falls off
-  its end with it (h217); a raw string it lent comes back a copy (h220);
+  its end with it (h217); a raw string it lent comes back a copy (h220),
+  and so does an owned slice whose elements hold no view (`[i`,
+  `[String`), so a slice the caller made for the call is released after
+  it (agora #894);
 - a result that cannot be copied has to be the body's own: its parameter,
   its capture, a field of either or what a call lent is rejected (h219);
 - a view it hands back (a Slice, a struct of views) may point into its
