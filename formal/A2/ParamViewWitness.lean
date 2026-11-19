@@ -23,9 +23,12 @@ renamed, and what the arguments hold (`pushArg_ren_sub`): every holder's lift
 records them already.  So the store is an `edit false` (`editBV` with `hbf`,
 and `hbs` by its left disjunct), and the destructor is not `ThruFn`.
 
-What stays out (`edit_false_unfresh_unheld`): no `edit false` typing of a
-store of a value that is not the frame's own (a borrowed parameter, a field
-of one, a view of one) leaves its borrow held-fresh.  A held-fresh borrow
+What stays out (`edit_false_unown_unheld`): no `edit false` typing of a
+store of a value that is not the frame's own in path and in what it holds
+(`¬ (FreshSrc ∧ HeldSrc)`, what `hbs` asks of a held-fresh borrow) leaves its
+borrow held-fresh. `edit_false_unfresh_unheld` is its `¬ FreshSrc` half,
+which needs nothing of the value's type (a borrowed parameter, a field of
+one, a view of one: `param_store_unheld`, `stale_store_unheld`).  A held-fresh borrow
 may store such a value only once it is weakened to one that is not
 (`EntryWeaker.heldFresh` allows clearing the bit, never setting it), so
 the precise lift of a held-fresh borrow (`pushArg_ren_held`) never meets
@@ -105,6 +108,84 @@ theorem edit_false_unfresh_unheld {Q : Prog} {ξ : Exits} {Γ Δ : Ctx} {F : Lis
     (hnf : ¬ FreshSrc Γ y) (hx : Γ x = some Ex) (hty : Ex.ty = .vec t) (hv : t.holdsView = true)
     (hE : Δ x = some E) (hn : E.ty ≠ .int) (hm : E.mode = .bor) : E.heldFresh = false :=
   edit_false_unfresh_unheld' ht rfl hy hnf hx hty hv hE hn hm
+
+/-- ... and so does a held-freshness source, of a value that holds memory. -/
+theorem heldSrc_of_weaker {Γ Γ0 : Ctx} (hw : Weaker Γ Γ0) {y : Var}
+    (hyt : ∀ E, Γ y = some E → E.ty ≠ .int) (h : HeldSrc Γ0 y) : HeldSrc Γ y := by
+  obtain ⟨E', h0, hc⟩ := h
+  obtain ⟨hn, hwE⟩ := hw.1 y
+  obtain ⟨E, hE⟩ := Option.ne_none_iff_exists'.mp (fun h => by rw [hn.mp h] at h0; cases h0)
+  have W := hwE E E' hE h0
+  refine ⟨E, hE, ?_⟩
+  rcases hc with ⟨hos, hhv⟩ | ⟨hb, hhf, hl⟩
+  · left; rw [W.mode] at hos; rw [W.ty] at hhv; exact ⟨hos, hhv⟩
+  · right
+    exact ⟨W.mode ▸ hb, W.heldFresh (by rw [W.ty]; exact hyt E hE) hb hhf, (W.live hl).1⟩
+
+/-- **The whole negative: no `edit false` storing a value that is not the
+    frame's own in path and in what it holds (`¬ (FreshSrc ∧ HeldSrc)`, the
+    premise `hbs` asks of a held-fresh borrow) leaves its borrow
+    held-fresh**, of an element type that holds views: every typing. A value
+    may fail only `HeldSrc`, an owner `Vec` of views moved in, say: the move
+    then kills, which keeps the bit (`killE_heldFresh`). -/
+theorem edit_false_unown_unheld' {Q : Prog} {ξ : Exits} {Γ Δ : Ctx} {F : List Var} {s : Stmt}
+    (ht : StmtT Q ξ Γ F s Δ) : ∀ {x op y}, s = .edit false x op → op.stored = some y →
+      ¬ (FreshSrc Γ y ∧ HeldSrc Γ y) → (∀ Ey, Γ y = some Ey → Ey.ty ≠ .int) →
+      ∀ {Ex t}, Γ x = some Ex → Ex.ty = .vec t → t.holdsView = true →
+      ∀ {E}, Δ x = some E → E.ty ≠ .int → E.mode = .bor → E.heldFresh = false := by
+  induction ht with
+  | @sub _ _ G0 _ _ _ _ hw _ hΔ ih =>
+    intro x op y hs hy hns hyt Ex t hx hty hv E hE hn hm
+    obtain ⟨hnx, hwE⟩ := hw.1 x
+    obtain ⟨Ex0, hx0⟩ := Option.ne_none_iff_exists'.mp (fun h => by rw [hnx.mpr h] at hx; cases hx)
+    have W := hwE Ex Ex0 hx hx0
+    -- (`y` keeps its type through the weakening)
+    have hyt0 : ∀ Ey : Entry, G0 y = some Ey → Ey.ty ≠ .int := fun Ey h0 => by
+      obtain ⟨hny, hwy⟩ := hw.1 y
+      obtain ⟨Ey1, h1⟩ := Option.ne_none_iff_exists'.mp (fun h => by rw [hny.mp h] at h0; cases h0)
+      rw [(hwy Ey1 Ey h1 h0).ty]; exact hyt Ey1 h1
+    have ih' := @ih x op y hs hy
+      (fun h => hns ⟨freshSrc_of_weaker hw h.1, heldSrc_of_weaker hw hyt h.2⟩) hyt0 Ex0 t hx0
+      (by rw [W.ty]; exact hty) hv
+    rcases hΔ with rfl | hΔ
+    · exact ih' hE hn hm
+    · obtain ⟨hnd, hwD⟩ := hΔ.1 x
+      obtain ⟨E0, hE0⟩ := Option.ne_none_iff_exists'.mp (fun h => by rw [hnd.mp h] at hE; cases hE)
+      have WD := hwD E0 E hE0 hE
+      cases hb : E.heldFresh with
+      | false => rfl
+      | true =>
+        have := WD.heldFresh hn hm hb
+        rw [ih' hE0 (WD.ty ▸ hn) (WD.mode ▸ hm)] at this; cases this
+  | editB hx' _ _ hty' hv' =>
+    intro x op y hs _ _ _ Ex t hx hty hv
+    cases hs; rw [hx] at hx'; cases hx'; rw [hty] at hty'; cases hty'; rw [hv] at hv'; cases hv'
+  | editBV hx' _ _ _ _ _ _ harg hne hx1 _ _ _ _ _ _ hbs =>
+    intro x op y hs hy hns _ Ex t hx _ _ E hE _ _
+    cases hs; rw [hx] at hx'; cases hx'
+    rw [A2.setE, upd_same] at hE; cases hE
+    -- what is stored is not the frame's own, so the borrow was not held-fresh ...
+    have hf := (hbs rfl).resolve_right (fun h => hns (h y hy))
+    -- ... and storing it keeps the borrow's bit: a copy changes nothing, a move kills
+    have hyx := hne y hy
+    cases harg with
+    | push hy0 _ _ hp | set _ hy0 _ _ hp =>
+      simp [Edit.stored] at hy; subst hy
+      cases hp with
+      | move =>
+        simp only [A2.setE, upd, Ne.symm hyx, ite_false, A2.kill, hx, Option.map_some] at hx1
+        cases hx1; rw [killE_heldFresh]; exact hf
+      | int => rw [hx] at hx1; cases hx1; exact hf
+      | slice _ => rw [hx] at hx1; cases hx1; exact hf
+    | trunc _ => simp [Edit.stored] at hy
+  | _ => intro x op y hs; cases hs
+
+theorem edit_false_unown_unheld {Q : Prog} {ξ : Exits} {Γ Δ : Ctx} {F : List Var} {x y : Var} {op : Edit}
+    {Ex E : Entry} {t : Ty} (ht : StmtT Q ξ Γ F (.edit false x op) Δ) (hy : op.stored = some y)
+    (hns : ¬ (FreshSrc Γ y ∧ HeldSrc Γ y)) (hyt : ∀ Ey, Γ y = some Ey → Ey.ty ≠ .int)
+    (hx : Γ x = some Ex) (hty : Ex.ty = .vec t) (hv : t.holdsView = true)
+    (hE : Δ x = some E) (hn : E.ty ≠ .int) (hm : E.mode = .bor) : E.heldFresh = false :=
+  edit_false_unown_unheld' ht rfl hy hns hyt hx hty hv hE hn hm
 
 /-- **A store of a borrowed parameter itself** (a slice the caller lent)
     never leaves its borrow held-fresh. -/

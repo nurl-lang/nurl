@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,034 lines of Lean 4**, **928 theorems**, **1106 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **65 modules**, **67,223 lines of Lean 4**, **2937 theorems**, **3747 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **65 modules**, **67,304 lines of Lean 4**, **2940 theorems**, **3750 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -171,7 +171,7 @@ flowchart BT
   Leak["Leak<br/>(665L, 26 thms)"]
   NameWf["NameWf<br/>(1027L, 48 thms)"]
   Panic["Panic<br/>(387L, 23 thms)"]
-  ParamViewWitness["ParamViewWitness<br/>(367L, 18 thms)"]
+  ParamViewWitness["ParamViewWitness<br/>(448L, 21 thms)"]
   PopWitness["PopWitness<br/>(262L, 13 thms)"]
   Preservation["Preservation<br/>(4421L, 97 thms)"]
   Progress["Progress<br/>(926L, 14 thms)"]
@@ -324,7 +324,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/FreshBase.lean`](A2/FreshBase.lean) | 351 | 32 | 2 |  |
 | 3. Proof Infrastructure | [`A2/FreshClosureWitness.lean`](A2/FreshClosureWitness.lean) | 242 | 18 | 7 |  |
 | 3. Proof Infrastructure | [`A2/FreshWitness.lean`](A2/FreshWitness.lean) | 302 | 19 | 7 |  |
-| 3. Proof Infrastructure | [`A2/ParamViewWitness.lean`](A2/ParamViewWitness.lean) | 367 | 18 | 6 |  |
+| 3. Proof Infrastructure | [`A2/ParamViewWitness.lean`](A2/ParamViewWitness.lean) | 448 | 21 | 6 |  |
 | 3. Proof Infrastructure | [`A2/Repl.lean`](A2/Repl.lean) | 387 | 21 | 0 | One-hole replacement (Repl): a change through a borrowed handle rewrites one node of its owner's tree and leaves the rest. |
 | 3. Proof Infrastructure | [`A2/Settle.lean`](A2/Settle.lean) | 213 | 12 | 3 |  |
 | 3. Proof Infrastructure | [`A2/StoreViewWitness.lean`](A2/StoreViewWitness.lean) | 338 | 17 | 13 |  |

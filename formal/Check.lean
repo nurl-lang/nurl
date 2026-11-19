@@ -583,6 +583,8 @@ import A3
 #print axioms A2.RSetup.derive_lift_rootb
 #print axioms A2.RSetup.pushArg_ren_sub
 #print axioms A2.ParamViewWitness.edit_false_unfresh_unheld
+#print axioms A2.ParamViewWitness.edit_false_unown_unheld
+#print axioms A2.ParamViewWitness.heldSrc_of_weaker
 #print axioms A2.ParamViewWitness.param_store_unheld
 #print axioms A2.ParamViewWitness.stale_store_unheld
 #print axioms A2.ParamViewWitness.edit_typed

@@ -256,8 +256,10 @@ the LLVM / C11 memory model rather than redefining it.
   argument's, inside `S.A`). So `StmtT.editBV`'s `hbs` asks for the frame's
   own value only of a held-fresh borrow (`Ex.heldFresh = false ∨ …`), and
   the rename needs the precise bound (`pushArg_ren_held`) only there. No
-  `edit false` storing a value that is not the frame's own leaves its
-  borrow held-fresh (`edit_false_unfresh_unheld`, `param_store_unheld`,
+  `edit false` storing a value that is not the frame's own in path and in
+  what it holds (`¬ (FreshSrc ∧ HeldSrc)`) leaves its borrow held-fresh
+  (`edit_false_unown_unheld`; its `¬ FreshSrc` half
+  `edit_false_unfresh_unheld`, with `param_store_unheld` and
   `stale_store_unheld`): a weakening may clear the bit first, never set
   it. `A2/ParamViewWitness.lean` types #909's own destructor, which pushes
   `. d s` of its parameter into `( vec_at loc 0 )` of its own
