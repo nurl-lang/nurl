@@ -68270,21 +68270,42 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     : s wn ? >= g_bck_sx_wid 0 ( nurl_str_int g_bck_sx_wid ) ( bck_field rec 1 )
     ? == 0 ( nurl_str_len wn ) { ^ out } {}
     : s wr ( nurl_str_int ( bck_path_root ( nurl_str_to_int wn ) ) )
-    : ~ s ow ( nurl_sym_get g_bck ( bck_bkey `cuo_` wr ) )
-    ? == 0 ( nurl_str_len ow ) {
+    // (The owners: the binding's own, or - a borrow of payloads, `: j . p
+    // a`, a join of several - each of its sources' (`bs_`); and up each
+    // owner's own chain, a payload of a payload, to its end - a name met
+    // already ends it, no hop count. CodeRabbit on github#2056.)
+    : ~ s todo ( nurl_sym_get g_bck ( bck_bkey `cuo_` wr ) )
+    ? == 0 ( nurl_str_len todo ) {
         : ~ s bl ( nurl_sym_get g_bck ( bck_bkey `bs_` wr ) )
-        ~ & != 0 ( nurl_str_len bl ) == 0 ( nurl_str_len ow ) {
+        ~ != 0 ( nurl_str_len bl ) {
             : s b0 ( str_first_word bl ) = bl ( str_skip_word bl )
-            = ow ( nurl_sym_get g_bck ( bck_bkey `cuo_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int b0 ) ) ) ) )
+            : s bo ( nurl_sym_get g_bck ( bck_bkey `cuo_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int b0 ) ) ) ) )
+            ? != 0 ( nurl_str_len bo ) { = todo ( __word_union todo bo ) } {}
         }
     } {}
-    ? | == 0 ( nurl_str_len ow ) != 0 ( nurl_sym_len g_bck ( bck_bkey `cu_` ow ) ) { ^ out } {}
+    ? == 0 ( nurl_str_len todo ) { ^ out } {}
+    : ~ s owners ``
+    ~ != 0 ( nurl_str_len todo ) {
+        : s o0 ( str_first_word todo ) = todo ( str_skip_word todo )
+        ? ! ( str_contains_word owners o0 ) {
+            = owners ( __word_union owners o0 )
+            : s up ( nurl_sym_get g_bck ( bck_bkey `cuo_` o0 ) )
+            ? != 0 ( nurl_str_len up ) { = todo ( __word_union todo up ) } {}
+        } {}
+    }
     : i sw0 g_bck_sx_wid
     : b sp0 g_bck_sx_part
     = g_bck_cuo_sweep 1
-    = g_bck_sx_wid ( nurl_str_to_int ow )
     = g_bck_sx_part T
-    = out ( bck_borrow_sweep0 ist out rec kc )
+    : ~ s orest ( nurl_str_cat owners `` )
+    ~ != 0 ( nurl_str_len orest ) {
+        : s ow ( str_first_word orest ) = orest ( str_skip_word orest )
+        // (…a cursor's owner is the cursor rules' own: bck_cursor_follow.)
+        ? == 0 ( nurl_sym_len g_bck ( bck_bkey `cu_` ow ) ) {
+            = g_bck_sx_wid ( nurl_str_to_int ow )
+            = out ( bck_borrow_sweep0 ist out rec kc )
+        } {}
+    }
     = g_bck_sx_wid sw0
     = g_bck_sx_part sp0
     = g_bck_cuo_sweep 0
