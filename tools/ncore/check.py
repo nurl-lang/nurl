@@ -3848,9 +3848,25 @@ class FnCheck:
         of it live (agora #766, #918, #919; nurlc's `+d=` / `+dk=` notes,
         __bck_udrop_*)."""
         udrop = getattr(self.prog, "udrop", ())
-        if ty is None or depth > 4 or not udrop or not self.T.has_udrop(ty):
+        if ty is None or depth > 4 or not udrop or (ty[0] != "closure" and not self.T.has_udrop(ty)):
             return
         k = ty[0]
+        if k == "closure":
+            # (a closure value released releases its environment: each value
+            # the environment took over runs its `% Drop` - a capture's place
+            # is the environment's own, so only what the destructor changes
+            # inside shared payloads reaches anything else; agora #919)
+            av = st.vals.get(place[0]) if not place[1] else None
+            if av is not None:
+                for _base, fname in self.closures_in(av):
+                    body = self.prog.fns.get(fname)
+                    if body is None:
+                        continue
+                    for c in body.params[:getattr(body, "ncap", 0)]:
+                        cv = body.vars.get(c)
+                        if cv is not None and getattr(cv, "taken", False):
+                            self.dtor_regions(st, cv.ty, depth + 1)
+            return
         if k == "named":
             sm = self.summary(f"drop__{ty[1]}") if f"drop__{ty[1]}" in self.prog.fns else None
             if sm is not None:
@@ -3869,6 +3885,27 @@ class FnCheck:
             return
         if k == "opt":
             self.run_dtor(st, place, ty[1], line, depth + 1)
+
+    def dtor_regions(self, st, ty, depth=0):
+        """What the `% Drop`s a value of type `ty` holds change inside shared
+        payloads, done: a value released where nothing else reaches it (a
+        closure's environment)."""
+        if ty is None or depth > 4 or not self.T.has_udrop(ty):
+            return
+        k = ty[0]
+        if k == "named":
+            if f"drop__{ty[1]}" in self.prog.fns:
+                sm = self.summary(f"drop__{ty[1]}")
+                if sm is not None:
+                    for (rty, tail, eff) in sm.get("regions", ()):
+                        self.region_effect(st, rty, tuple(tail), eff)
+            if ty[1] in self.prog.structs:
+                from lower import norm
+                for fty0, _ in self.prog.structs[ty[1]]:
+                    self.dtor_regions(st, norm(fty0), depth + 1)
+            return
+        if k in ("vec", "slice", "box", "opt"):
+            self.dtor_regions(st, ty[1], depth + 1)
 
     def scope_end(self, st, stmts, line):
         if st.bottom:
