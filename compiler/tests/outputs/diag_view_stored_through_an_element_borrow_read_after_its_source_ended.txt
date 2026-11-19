@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_view_stored_through_an_element_borrow_read_after_its_source_ended.nu:19:9: error: 'loc' holds a view of 'w' (one stored into it, or captured by it), and 'w' ended at line 18 — it went out of scope at the end of its block. Using 'loc' now would read freed memory. End 'w' only after 'loc' is done, or have 'loc' hold a copy that owns its data (string_from, slice_to_vec).
+        ( nurl_println_int ( slice_at [i] ( vec_at [( Slice i )] ( vec_at [( Vec ( Slice i ) )] loc 0 ) 0 ) 0 ) )
+        ^
+error: compilation aborted — 1 borrow-checker violation (each message names the rule and a way to satisfy it; the rules are conservative — a correct program they reject is worth reporting at https://github.com/nurl-lang/nurl/issues)
