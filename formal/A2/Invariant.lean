@@ -2162,7 +2162,11 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       -- (`FreshSrc`, `HeldSrc`): what it stores holds no memory an argument
       -- views, so the call need not treat it as a change of the caller's.
       (hbf : b = false → Ex.fresh = true := by intro h; cases h) →
-      (hbs : b = false → ∀ y, op.stored = some y → FreshSrc Γ y ∧ HeldSrc Γ y := by intro h; cases h) →
+      -- (Agora #909's own example: a borrow that is not held-fresh may store
+      -- anything, a view of a borrowed parameter too: the call lifts every
+      -- holder that is not held-fresh with all its arguments hold)
+      (hbs : b = false → Ex.heldFresh = false ∨ ∀ y, op.stored = some y → FreshSrc Γ y ∧ HeldSrc Γ y := by
+        intro h; cases h) →
       StmtT P ξ Γ F (.edit b x op)
         (setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γ1)) x
           { Ex1 with held := Ex1.held ++ memDeps D })

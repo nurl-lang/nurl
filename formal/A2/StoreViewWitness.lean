@@ -118,7 +118,9 @@ theorem edit_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) (h3 : Γ 3 = some Eloc) 
     exact ⟨hc.dtor _ _ _, by simp [argE, h3, Eloc], by simp [roots, memDeps, derive, Ev, Mode.isRoot, comp,
       Kind.isName]⟩
   · -- Agora #916: the stored view is the frame's own, in path and in what it holds
-    intro _ y hy
+    -- (its right disjunct; the left one holds too, `e` is not held-fresh)
+    intro _
+    refine Or.inr fun y hy => ?_
     simp [Edit.stored] at hy; subst hy
     exact ⟨⟨Ev, h6, Or.inr ⟨rfl, rfl, rfl, by simp [Ev, sl]⟩⟩, ⟨Ev, h6, Or.inr ⟨rfl, rfl, rfl⟩⟩⟩
 

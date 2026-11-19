@@ -176,10 +176,7 @@ the LLVM / C11 memory model rather than redefining it.
     hands it an element, a field viewer or a call's result rather than an
     owner;
   - a destructor that changes elements through a borrow that is not
-    fresh (one that may reach memory an argument views), or whose
-    changed elements hold views when what it stores is not the frame's
-    own in path and in what it holds (a view of a borrowed parameter,
-    Agora #909's own example: `StmtT.editBV` then stays `edit true`),
+    fresh (one that may reach memory an argument views),
     directly or through a callee, or drop glue that does so, of a type that holds
     views, and a call into a function that does so which passes an
     argument holding views (`ThruFn`);
@@ -244,16 +241,39 @@ the LLVM / C11 memory model rather than redefining it.
   local into `( vec_at loc 0 )` of its own `Vec (Vec [i)`: not
   through-changing, run by an armed `letd` that hands it a value holding
   views, safe and leak-free (`main_safe`, `main_no_leak`). nurlc accepts
-  it, and it runs clean. A store of a view of a borrowed parameter stays
-  `edit true` (Agora #909's own example): what such a view holds is its
-  caller's memory, which the callee cannot see, and no rule makes it
-  held-fresh. The modelling claim of phase C does not change: the walk
+  it, and it runs clean.
+
+  Agora #3932 takes in Agora #909's own example: a
+  store of a view of a borrowed parameter through a fresh borrow that is
+  not held-fresh. What such a view holds is its caller's memory, so it is
+  never held-fresh, but the borrow it is stored through is not either: a
+  call lifts that borrow, and every owner of a type that holds views (the
+  only holders a store through it reaches, `heldA_own`), with all the
+  arguments hold (`RSetup.heldA`). Where the call places it, the store's
+  dependencies are what they were, renamed, and what the arguments hold
+  (`pushArg_ren_sub`; a borrowed parameter's path is the caller's
+  argument, renamed, `derive_lift_rootb`, and what it holds is the
+  argument's, inside `S.A`). So `StmtT.editBV`'s `hbs` asks for the frame's
+  own value only of a held-fresh borrow (`Ex.heldFresh = false ∨ …`), and
+  the rename needs the precise bound (`pushArg_ren_held`) only there. No
+  `edit false` storing a value that is not the frame's own in path and in
+  what it holds (`¬ (FreshSrc ∧ HeldSrc)`) leaves its borrow held-fresh
+  (`edit_false_unown_unheld`; its `¬ FreshSrc` half
+  `edit_false_unfresh_unheld`, with `param_store_unheld` and
+  `stale_store_unheld`): a weakening may clear the bit first, never set
+  it. `A2/ParamViewWitness.lean` types #909's own destructor, which pushes
+  `. d s` of its parameter into `( vec_at loc 0 )` of its own
+  `Vec (Vec [i)`: `edit false`, not through-changing, run by an armed
+  `letd` that hands it a value holding views, safe and leak-free
+  (`main_safe`, `main_no_leak`). nurlc accepts it, and it runs clean.
+
+  The modelling claim of phase C does not change: the walk
   emits `edit true` for every edit of elements that hold views, which
   the calculus takes conservatively. Each new premise holds with the bit
   off (`A2/UnheldFresh.lean`: `RhsT.view_unheld`,
   `EntryWeaker.heldFresh_of_not`, `weaker_unheldC`; `StmtT.unheld` on
   the result side).
-  Six compiler tests pin nurlc's side in both directions. It accepts a
+  Nine compiler tests pin nurlc's side in both directions. It accepts a
   push through an element of a local the destructor or closure made
   (`drop_of_a_view_type_pushes_through_its_own_element`,
   `closure_over_a_slice_pushes_through_its_own_element`), and a store of
@@ -261,6 +281,13 @@ the LLVM / C11 memory model rather than redefining it.
   (`drop_of_a_view_type_stores_a_view_of_its_own_local_through_its_own_element`);
   it refuses a read of that store after the view's source ended
   (`diag_view_stored_through_an_element_borrow_read_after_its_source_ended`).
+  It accepts #909's own destructor, storing a view of its parameter
+  (`drop_of_a_view_type_stores_a_view_of_its_parameter_through_its_own_element`),
+  and a function that stores its borrowed parameter through an element of
+  its own local and returns that local, read while the caller's source
+  lives (`parameter_view_stored_through_an_element_borrow_read_while_the_callers_source_lives`);
+  it refuses the same read after that source ended
+  (`diag_parameter_view_stored_through_an_element_borrow_read_after_the_callers_source_ended`).
   It ends a view
   of an element pushed through a parameter or a by-name capture
   (`borrow_push_through_a_parameters_element_ends_the_callers_view`,
