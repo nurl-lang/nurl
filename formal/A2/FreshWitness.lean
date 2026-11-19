@@ -253,6 +253,10 @@ theorem edit_false_fresh' {Q : Prog} {ξ : Exits} {Γ Δ : Ctx} {F : List Var} {
   | editB hx' hm hl hty _ _ _ _ _ _ _ _ _ hbf =>
     intro x op hs Ex hx; cases hs; rw [hx] at hx'; cases hx'
     exact ⟨hbf rfl, hm, hl, by rw [hty]; simp⟩
+  -- (Agora #916: ... or through one storing a value the frame's own)
+  | editBV hx' hm hl hty _ _ _ _ _ _ _ _ _ _ _ hbf =>
+    intro x op hs Ex hx; cases hs; rw [hx] at hx'; cases hx'
+    exact ⟨hbf rfl, hm, hl, by rw [hty]; simp⟩
   | _ => intro x op hs; cases hs
 
 /-- **An `edit false` is through a fresh borrow**: every typing of it. -/

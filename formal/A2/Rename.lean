@@ -1753,6 +1753,52 @@ theorem pushArg_ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {y : Var} {Ey
     · left; rw [liftE_mode y (by rw [hm]; simp), hm]; rfl
     · right; rw [liftE_rootb h]; exact hm
 
+/-- Agora #916: ... and what it stores holds, in memory, only what it did in
+    the callee, renamed, when the stored value is the frame's own in path and
+    in what it holds (`FreshSrc`, `HeldSrc`): the lift adds it no memory of the
+    arguments. -/
+theorem pushArg_ren_held (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {y : Var} {Ey : Entry} {t : Ty}
+    {D : List Dep} {Γa1 : Ctx} (hy : Γa y = some Ey) (hn : Ey.ty ≠ .int) (hp : PushArg Γa Fa y Ey t D Γa1)
+    {D' : List Dep} {Γc1 : Ctx} (hpa : PushArg (S.canon Γa) S.Fc (S.ρ y) (S.liftE y Ey) t D' Γc1)
+    (hfs : FreshSrc Γa y) (hhs : HeldSrc Γa y) : memDeps D' ⊆ rds S.ρ (memDeps D) := by
+  -- (what the lift keeps of a list, in memory: its memory, renamed)
+  have hmr : ∀ L : List Dep, memDeps (rds S.ρ L) = rds S.ρ (memDeps L) := by
+    intro L; unfold memDeps; simp only [rds, List.filter_map]; rfl
+  have hsub : ∀ {X L : List Dep}, X ⊆ rds S.ρ L ++ S.N → memDeps X ⊆ rds S.ρ (memDeps L) := by
+    intro X L hX d hd
+    obtain ⟨hdX, hdn⟩ := List.mem_filter.mp hd
+    rcases List.mem_append.mp (hX hdX) with h1 | h1
+    · rw [← hmr]; exact List.mem_filter.mpr ⟨h1, hdn⟩
+    · simp [h.N_name d h1] at hdn
+  have hlift : (S.liftE y Ey).held ⊆ rds S.ρ Ey.held ++ S.N := heldSrc_held_lift h hy hn hhs
+  have hrb : Ey.mode ≠ .rootb := by
+    obtain ⟨E0, h0, hc⟩ := hfs; rw [hy] at h0; cases h0
+    rcases hc with hfr | ⟨hb, _⟩
+    · rcases hfr with h1 | ⟨b, h1⟩ <;> rw [h1] <;> simp
+    · rw [hb]; simp
+  cases hp with
+  | move _ hm _ _ _ =>
+    cases hpa with
+    | move => exact hsub hlift
+    | int => intro d hd; cases hd
+    | slice hm' =>
+      rw [liftE_mode y hrb, hm] at hm'; rcases hm' with h1 | h1 <;> cases h1
+  | int => cases hpa with
+    | int => intro d hd; cases hd
+    | move ho => simp [Ty.owning] at ho
+  | slice hm =>
+    cases hpa with
+    | move _ hm' => rw [liftE_mode y hrb] at hm'; rcases hm with h1 | h1 <;> rw [h1] at hm' <;> cases hm'
+    | slice _ =>
+      rw [derive_lift_eq h hab hy hfs]
+      refine hsub ((append_sub (List.Subset.refl (rds S.ρ (derive y Ey .self))) hlift).trans ?_)
+      · intro d hd
+        rcases List.mem_append.mp hd with h1 | h1
+        · exact List.mem_append_left _ (by rw [rds, List.map_append]; exact List.mem_append_left _ h1)
+        · rcases List.mem_append.mp h1 with h2 | h2
+          · exact List.mem_append_left _ (by rw [rds, List.map_append]; exact List.mem_append_right _ h2)
+          · exact List.mem_append_right _ h2
+
 /-- A right-hand side of the callee, where the call places it. -/
 theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : Entry} {Γa1 : Ctx}
     (hr : RhsT Γa Fa r E Γa1) :
@@ -3989,7 +4035,7 @@ theorem editBV_ren_facts (h : S.OK)
     memory, where the call places it, is what it did in the callee, renamed
     (the call passes no views, `S.R = []`), so what the rule makes each root
     and the borrow hold is at most what the lifted context says (`PW`). -/
-theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP : ProgOK P)
+theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true → S.R = []) {P : Prog} (hP : ProgOK P)
     {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty} {D : List Dep}
     (hw : CtxWF Γa) (hn : NameWF Γa)
     (hx : Γa x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
@@ -3999,49 +4045,72 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
         d ∈ (argE Γa1 r).held) (hxF : x ∉ Fa)
     (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γa1 x = some Ex1)
     (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path)
-    (hV : ThruV Γa1 op Ex.ty Ex1.path (memDeps D)) (hdf : op.drops = true → t.dtorFree = true) :
-    StmtT P ξ (S.canon Γa) S.Fc ((Stmt.edit true x op).rename S.ρ)
+    (hV : ThruV Γa1 op Ex.ty Ex1.path (memDeps D)) (hdf : op.drops = true → t.dtorFree = true)
+    (hbf : b = false → Ex.fresh = true)
+    (hbs : b = false → ∀ y, op.stored = some y → FreshSrc Γa y ∧ HeldSrc Γa y) :
+    StmtT P ξ (S.canon Γa) S.Fc ((Stmt.edit b x op).rename S.ρ)
       (S.canon (A2.setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γa1)) x
         { Ex1 with held := Ex1.held ++ memDeps D })) ∧
     S.AbsOK (A2.setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γa1)) x
         { Ex1 with held := Ex1.held ++ memDeps D }) := by
   -- the callee's own typing, for what its context guarantees
-  have hT0 := StmtT.editBV (P := P) (ξ := ξ) hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV hdf
+  have hT0 := StmtT.editBV (P := P) (ξ := ξ) hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV hdf hbf hbs
   have hwo := hT0.wf hP hw
   have hno := hT0.names hP rfl hn
   have hab1 : S.AbsOK Γa1 := EditArg.absOK harg hab
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   subst hE1
   have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
-  obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hab1 hmx hthru hV (Or.inl hR)
-  have hmemA : memDeps S.A = [] := by
-    unfold RSetup.A; rw [hR]
+  -- (Agora #916: a call that passes views places an `edit false`, whose borrow
+  -- is fresh)
+  have hloc' : S.R = [] ∨ (Ex1.fresh = true ∧ Ex1.ty ≠ .int) := by
+    cases b with
+    | true => exact Or.inl (hloc rfl)
+    | false => exact Or.inr ⟨hbf rfl, by rw [hty]; simp⟩
+  obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hab1 hmx hthru hV hloc'
+  have hmemA : b = true → memDeps S.A = [] := by
+    intro hbt
+    unfold RSetup.A; rw [hloc hbt]
     simp only [allKinds, List.flatMap_nil, List.nil_append]
     exact List.filter_eq_nil_iff.mpr fun d hd => by simp [h.N_name d hd]
   have hty1 : (S.liftE x Ex1).ty = Ex1.ty := liftE_ty x hrb
   have hroots : roots (memDeps (S.liftE x Ex1).path) = (roots (memDeps Ex1.path)).map S.ρ := by
     rw [hmem]; simp [roots, rds, List.map_map, Function.comp_def, Dep.ren]
   -- what the change is handed, where the call places it: what it was, renamed, in memory
-  have hmemsub : ∀ {D' : List Dep}, D' ⊆ rds S.ρ D ++ S.A → memDeps D' ⊆ rds S.ρ (memDeps D) := by
-    intro D' hs d hd
+  have hmemsub : ∀ {D' : List Dep}, b = true → D' ⊆ rds S.ρ D ++ S.A → memDeps D' ⊆ rds S.ρ (memDeps D) := by
+    intro D' hbt hs d hd
     have hd' := List.mem_filter.mp hd
     rcases List.mem_append.mp (hs hd'.1) with h1 | h1
     · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
       exact mem_rds.mpr ⟨d0, List.mem_filter.mpr ⟨hd0, hd'.2⟩, rfl⟩
     · have : d ∈ memDeps S.A := List.mem_filter.mpr ⟨h1, hd'.2⟩
-      rw [hmemA] at this; cases this
+      rw [hmemA hbt] at this; cases this
+  -- (Agora #916: or, of an `edit false`, the stored value is the frame's own,
+  -- in path and in what it holds, and the lift adds it no memory of the
+  -- arguments: `pushArg_ren_held`)
+  have hmemsub' : ∀ {y : Var} {Ey : Entry} {Γb : Ctx} {D' : List Dep} {Γc : Ctx},
+      op.stored = some y → Γa y = some Ey → Ey.ty = t → PushArg Γa Fa y Ey t D Γb →
+      PushArg (S.canon Γa) S.Fc (S.ρ y) (S.liftE y Ey) t D' Γc → D' ⊆ rds S.ρ D ++ S.A →
+      memDeps D' ⊆ rds S.ρ (memDeps D) := by
+    intro y Ey Γb D' Γc hst hy htyy hpa hpa' hs
+    cases b with
+    | true => exact hmemsub rfl hs
+    | false =>
+      obtain ⟨hfs, hhs⟩ := hbs rfl y hst
+      exact pushArg_ren_held h hab hy (by rw [htyy]; intro e; rw [e] at hhv; simp [Ty.holdsView] at hhv)
+        hpa hpa' hfs hhs
   obtain ⟨D', harg', hD', hsD'⟩ : ∃ D', EditArg (S.canon Γa) S.Fc (op.rename S.ρ) t D' (S.canon Γa1) ∧
       memDeps D' ⊆ rds S.ρ (memDeps D) ∧ D' ⊆ rds S.ρ D ++ S.A := by
     cases harg with
     | push hy hly htyy hpa =>
       obtain ⟨D', hpa', hs, _⟩ := pushArg_ren h hab hy hpa
       exact ⟨D', EditArg.push (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_live]; exact hly)
-        (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmemsub hs, hs⟩
+        (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmemsub' rfl hy htyy hpa hpa' hs, hs⟩
     | trunc hie => exact ⟨[], EditArg.trunc (exprT_ren h hab hie), (fun _ h => by cases h), (fun _ h => by cases h)⟩
     | set hie hy hly htyy hpa =>
       obtain ⟨D', hpa', hs, _⟩ := pushArg_ren h hab hy hpa
       exact ⟨D', EditArg.set (exprT_ren h hab hie) (by rw [canon_ρ h, hy]; rfl)
-        (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmemsub hs, hs⟩
+        (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmemsub' rfl hy htyy hpa hpa' hs, hs⟩
   -- AGORA-901: what the stored value captures by name, where the call places
   -- it: its own names, renamed, which the borrow and its view-holding owners
   -- held, renamed; or what the call's arguments hold by name, which the lift
@@ -4090,6 +4159,14 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
     (by rw [hty1]; exact hty) hhv hfn' (h.Fcout x) harg' hyx' (by rw [canon_ρ h, hx1]; rfl)
     (by rw [liftE_live]; exact hl1) (by rw [hmem]; simpa [rds] using hne) hthru' hV'
     (by rw [Edit.drops_rename]; exact hdf)
+    (fun hb => by rw [S.liftE_fresh_of hrb]; exact hbf hb)
+    (fun hb y' hy' => by
+      -- Agora #916: what is stored stays the frame's own where the call places it
+      rw [Edit.stored_rename] at hy'
+      obtain ⟨y0, hy0, rfl⟩ := Option.map_eq_some_iff.mp hy'
+      obtain ⟨hfs, hhs⟩ := hbs hb y0 hy0
+      obtain ⟨Ey0, hEy0, _⟩ := id hfs
+      exact ⟨freshSrc_lift h hEy0 hfs, heldSrc_lift h hEy0 hhs⟩)
   -- the roots are owners or `inout` parameters made by no `letd`
   have hrs : ∀ v ∈ roots (memDeps Ex1.path), ∀ E, killThruV op Ex1.ty Ex1.path Γa1 v = some E →
       E.mode ≠ .rootb ∧ E.dbind = false := by
@@ -4889,9 +4966,12 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     refine ⟨editB_ren h hab hx hmx hl hty hhv harg hyx hx1 hl1 hne hthru hdf hbf hloc, ?_⟩
     exact (hab1.killNames (thruDeps op Γ1 Ex.ty Ex1.path)).setE' hab1 hx1 rfl rfl (by rw [hm1]; simp)
       (fun hf => absurd hf (by simp [Entry.fixed, hm1]))
-  | @editBV _ Γ Γ1 F x op Ex Ex1 t D hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV hdf =>
+  | @editBV _ Γ Γ1 F x op Ex Ex1 t D b hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV hdf hbf hbs =>
     intro _ hab hw hn hT
-    exact editBV_ren h hab (hT (.inl rfl)) hP hw hn hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV hdf
+    -- Agora #916: an `edit true` is placed by a call that passes no views;
+    -- an `edit false` by any
+    exact editBV_ren h hab (fun hbt => hT (.inl (by simpa [Stmt.hasThru] using hbt))) hP hw hn hx hmx hl hty hhv
+      hfn hxF harg hyx hx1 hl1 hne hthru hV hdf hbf hbs
   | @takeB _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hxF hie hne hthru hnd hk hpe ih =>
     -- AGORA-889: `editB`'s truncation where the call places it
     -- (`editB_ren_facts`), then `y` bound to the element, as `letv` binds

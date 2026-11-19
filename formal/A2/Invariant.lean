@@ -2146,7 +2146,7 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       will read by it, not be made by `letd` (a destructor binding gains no
       view), and not be a root of what is stored (`ThruV`). -/
   | editBV {Γ Γ1 : Ctx} {F : List Var} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
-      {D : List Dep} :
+      {D : List Dep} {b : Bool} :
       Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = true →
       -- AGORA-901: what the stored value captures by name, the borrow and
       -- every owner it may land in (one whose type holds views) hold already
@@ -2157,7 +2157,13 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
       ThruOK Γ1 F op Ex.ty Ex1.path → ThruV Γ1 op Ex.ty Ex1.path (memDeps D) →
       (op.drops = true → t.dtorFree = true) →
-      StmtT P ξ Γ F (.edit true x op)
+      -- Agora #916: an `edit false` is one through a fresh borrow, as for
+      -- `editB`, of a value the frame's own in path and in what it holds
+      -- (`FreshSrc`, `HeldSrc`): what it stores holds no memory an argument
+      -- views, so the call need not treat it as a change of the caller's.
+      (hbf : b = false → Ex.fresh = true := by intro h; cases h) →
+      (hbs : b = false → ∀ y, op.stored = some y → FreshSrc Γ y ∧ HeldSrc Γ y := by intro h; cases h) →
+      StmtT P ξ Γ F (.edit b x op)
         (setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γ1)) x
           { Ex1 with held := Ex1.held ++ memDeps D })
   /-- AGORA-889: an element moved out through a borrow `x` (`: y ( vec_remove

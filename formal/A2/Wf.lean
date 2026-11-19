@@ -1219,7 +1219,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hE2⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex1.path) h1
     exact ⟨E2, by simp only [A2.setE, upd_ne _ _ hrx]; exact h2,
       by rcases hE2 with rfl | rfl <;> exact hm1⟩
-  | @editBV _ Γ Γ1 F x op Ex Ex1 t D _ _ _ _ _ _ hxF harg _ _ _ _ _ _ =>
+  | @editBV _ Γ Γ1 F x op Ex Ex1 t D _ _ _ _ _ _ _ hxF harg _ _ _ _ _ _ =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E1, h1, hm1⟩ := harg.domMode.get h
@@ -1549,7 +1549,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
   | @takeBV _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ _ _ _ _ _ _ hpx ih =>
     -- AGORA-897: `editBV`'s truncation, then `y` bound as `letv` binds
     exact fun h => (ih (takeBV_ctxWF h hy hx hmx hl hty)).exitScope y hpx.2.2
-  | @editBV _ Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru _ =>
+  | @editBV _ Γ Γ1 F x op Ex Ex1 t D _ hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru _ =>
     intro h
     have hw1 := harg.wf h
     have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
