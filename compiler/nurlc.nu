@@ -27629,7 +27629,9 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
     // that copy by the copy's bit, whatever its borrow channels say -
     // __call_copied_own. `( pick T ( mk ) a )` as a statement leaked the
     // copy, AGORA-903.)
-    : s __dcp ? == tt TT_LPAREN ( __call_copied_own val ) ``
+    // (…asked only of a call whose value is an owned slice: every other
+    // statement pays int tests.)
+    : s __dcp ? && && == tt TT_LPAREN != 0 ( nurl_str_len dty ) == 123 ( nurl_str_get dty 0 ) ( __call_copied_own val ) ``
     // (Asked as far as needed: most statements are no call, join or
     // literal of a slice, and pay int tests only.)
     ? && && && && || || || __dcall __dsj __dsl != 0 ( nurl_str_len __dcp ) != 0 g_auto_drop_strings != 0 ( nurl_str_len val ) && != 0 ( nurl_str_len dty ) == 123 ( nurl_str_get dty 0 ) ( __owned_slice_ty dty ) {
@@ -27729,8 +27731,10 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
 @ mem_arm_tail_own i syms i cg s val i tt → v {
     ? | | | != 0 g_did_ret != tt TT_LPAREN == 0 ( nurl_str_len val ) == 0 g_auto_drop_strings { ^ v } {}
     // (A call that copied a lent-back part of its temporary owns the copy
-    // by its bit, whatever its borrow channels say: __call_copied_own.)
-    : s __acp ( __call_copied_own val )
+    // by its bit, whatever its borrow channels say: __call_copied_own -
+    // asked only of a slice, `{`: every other arm tail pays int tests.)
+    : s __aty ( nurl_get_last_type )
+    : s __acp ? && != 0 ( nurl_str_len __aty ) == 123 ( nurl_str_get __aty 0 ) ( __call_copied_own val ) ``
     ? & == 0 ( nurl_str_len __acp ) != 0 ( nurl_sym_len syms `__last_value_borrow__` ) { ^ v } {}
     ? & == 0 ( nurl_str_len __acp ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) { ? ! ( __call_answers syms tt ) { ^ v } {} } {}
     : s dty ( nurl_get_last_type )
