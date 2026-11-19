@@ -46,13 +46,21 @@ noncomputable def inv (y : Var) : Option Var :=
     hold, or, for a held-fresh borrow holding memory, only what they hold
     by name. -/
 def heldA (E : Entry) : List Dep :=
-  if E.heldFresh && E.mode == .bor && E.ty != .int then S.N else S.A
+  if E.heldFresh && E.mode == .bor && E.ty != .int then (if E.ty.hasFn then S.N else []) else S.A
 
 /-- Whether a lift is precise on `held`. -/
 def HeldP (E : Entry) : Prop := E.heldFresh = true ∧ E.mode = .bor ∧ E.ty ≠ .int
 
-theorem heldA_P {E : Entry} (h : HeldP E) : S.heldA E = S.N := by
+theorem heldA_P {E : Entry} (h : HeldP E) : S.heldA E = if E.ty.hasFn then S.N else [] := by
   obtain ⟨h1, h2, h3⟩ := h; simp [heldA, h1, h2, h3]
+
+/-- AGORA-909: ... at most what the arguments hold by name, and nothing for
+    a type that holds no closure: a value of such a type holds no name
+    (`WFv.names_nil_fn`). -/
+theorem heldA_P_sub {E : Entry} (h : HeldP E) : S.heldA E ⊆ S.N := by
+  rw [S.heldA_P h]; split
+  · exact List.Subset.refl _
+  · exact List.nil_subset _
 
 theorem heldA_notP {E : Entry} (h : ¬ HeldP E) : S.heldA E = S.A := by
   unfold heldA; split
@@ -73,7 +81,9 @@ theorem heldA_own {E : Entry} (h : E.mode.ownSlot = true) : S.heldA E = S.A := b
 
 theorem heldA_sub (E : Entry) : S.heldA E ⊆ S.A := by
   unfold heldA; split
-  · exact fun d hd => List.mem_append_right _ hd
+  · split
+    · exact fun d hd => List.mem_append_right _ hd
+    · exact List.nil_subset _
   · exact List.Subset.refl _
 
 
@@ -195,19 +205,20 @@ structure RSetup.OK (S : RSetup) : Prop where
 
 /-- Agora #916: a lift adds nothing in memory to a held-fresh borrow. -/
 theorem RSetup.memDeps_heldA {S : RSetup} {E : Entry} (h : S.OK) (hp : RSetup.HeldP E) : memDeps (S.heldA E) = [] := by
-  rw [S.heldA_P hp]
-  exact List.filter_eq_nil_iff.mpr fun d hd => by simp [h.N_name d hd]
+  exact List.filter_eq_nil_iff.mpr fun d hd => by simp [h.N_name d (S.heldA_P_sub hp hd)]
 
 /-- ... and keeps every name the arguments hold (`allKinds` names none). -/
-theorem RSetup.name_mem_heldA {S : RSetup} {E : Entry} {d : Dep} (hd : d ∈ S.A) (hn : d.kind.isName = true) :
-    d ∈ S.heldA E := by
-  unfold RSetup.heldA; split
-  · rcases List.mem_append.mp hd with h | h
+theorem RSetup.name_mem_heldA {S : RSetup} {E : Entry} {d : Dep} (hd : d ∈ S.A) (hn : d.kind.isName = true)
+    (hfn : E.ty.hasFn = true) : d ∈ S.heldA E := by
+  unfold RSetup.heldA
+  by_cases hc : (E.heldFresh && E.mode == .bor && E.ty != .int) = true
+  · rw [if_pos hc, if_pos hfn]
+    rcases List.mem_append.mp hd with h | h
     · obtain ⟨r, _, hr⟩ := List.mem_flatMap.mp h
       simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr
       rcases hr with rfl | rfl | rfl | rfl <;> simp [Kind.isName] at hn
     · exact h
-  · exact hd
+  · rw [if_neg hc]; exact hd
 
 /-- The callee's own contexts, as the call sets them up: a borrowed
     parameter depends on nothing it can see but, when it may hold a closure,
@@ -629,7 +640,7 @@ theorem heldA_mono {E E' : Entry} (hw : EntryWeaker E E') : S.heldA E ⊆ S.held
   by_cases hp : HeldP E'
   · have hE : HeldP E := ⟨hw.heldFresh hp.2.2 hp.2.1 hp.1, by rw [← hw.mode]; exact hp.2.1,
       by rw [← hw.ty]; exact hp.2.2⟩
-    rw [S.heldA_P hp, S.heldA_P hE]; exact List.Subset.refl _
+    rw [S.heldA_P hp, S.heldA_P hE, hw.ty]; exact List.Subset.refl _
   · rw [S.heldA_notP hp]; exact S.heldA_sub E
 
 theorem liftE_weaker {v : Var} {E E' : Entry} (hw : EntryWeaker E E') :
@@ -987,6 +998,14 @@ theorem EntryWeaker.mk' {E E' : Entry} (ht : E'.ty = E.ty) (hm : E'.mode = E.mod
   ⟨ht, hm, fun h' => absurd h' hrb, fun h' => ⟨by rw [← hl]; exact h', hp, hh⟩, fun h => ⟨hd h, hh⟩,
     hdb, hra, hdh, hf, hg⟩
 
+/-- A borrow weakened to hold MORE: `H` contains what it held. It never
+    drops anything held; it is no way to shrink `held`. -/
+theorem EntryWeaker.held_sup {E : Entry} {H : List Dep} (hH : E.held ⊆ H) (hb : E.mode = .bor) :
+    EntryWeaker E { E with held := H } :=
+  ⟨rfl, rfl, fun hf => (by rcases hf with h | ⟨_, h, _⟩ <;> rw [hb] at h <;> cases h),
+    fun hl => ⟨hl, fun _ => List.Subset.refl _, hH⟩, fun hd => ⟨hd, hH⟩, rfl, fun hd => Or.inl hd,
+    fun _ ho => (by rw [hb] at ho; cases ho), fun _ _ _ hf => ⟨hf, List.Subset.refl _⟩, fun _ _ hg => hg⟩
+
 theorem allKinds_comp {R : List Var} {k : Kind} (hk : k.isName = false) :
     (allKinds R).map (fun d => (⟨d.root, comp d.kind k⟩ : Dep)) ⊆ allKinds R := by
   intro d hd
@@ -1118,7 +1137,7 @@ theorem liftE_held_sub {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) :
     of a type that holds no views holds no memory of the arguments, a
     held-fresh borrow is lifted precisely. -/
 theorem heldSrc_held_lift (h : S.OK) {y : Var} {Ey : Entry} (hy : Γa y = some Ey) (hn : Ey.ty ≠ .int)
-    (hs : HeldSrc Γa y) : (S.liftE y Ey).held ⊆ rds S.ρ Ey.held ++ S.N := by
+    (hs : HeldSrc Γa y) : (S.liftE y Ey).held ⊆ rds S.ρ Ey.held ++ (if Ey.ty.hasFn then S.N else []) := by
   obtain ⟨E, hE, hc⟩ := hs
   rw [hy] at hE; cases hE
   rcases hc with ⟨hos, hv⟩ | ⟨hb, hf, _⟩
@@ -1127,7 +1146,7 @@ theorem heldSrc_held_lift (h : S.OK) {y : Var} {Ey : Entry} (hy : Γa y = some E
     simp [ownHeld, hv]
   · have hrb : Ey.mode ≠ .rootb := by rw [hb]; simp
     rw [liftE_held hrb, S.heldA_P ⟨hf, hb, hn⟩, hb]
-    simp [Mode.ownSlot, ownHeld]
+    simp only [Mode.ownSlot, ownHeld_false]; exact List.Subset.refl _
 
 theorem held_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey) :
     (S.liftE y Ey).held ⊆ rds S.ρ Ey.held ++ S.A := by
@@ -1335,6 +1354,66 @@ theorem popE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γ
       (by simp [popE]) (by simp [popE, liftE]) (fun h' => by simp [popE, Mode.ownSlot] at h') ?_
     show (S.liftE y Ey).held ⊆ _
     rw [hl, liftE_held (by simp [popE])]; simp [popE, Mode.ownSlot]
+
+/-- AGORA-909: the source of a fresh field or payload read, lifted: a frame
+    binding or a fresh, held-fresh borrow of a type that holds no views,
+    holding nothing, stays one, and its lift holds nothing (an owner's held
+    lifts by `ownHeld`; a held-fresh borrow's by `heldA`, which adds no name
+    to a type that holds no closure, `hasFn_holdsView`). -/
+theorem projSrc_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
+    (hsrc : Ey.mode.frame ∨ (Ey.mode = .bor ∧ Ey.fresh = true ∧ Ey.heldFresh = true))
+    (hhv : Ey.ty.holdsView = false) (hh : Ey.held = []) (hn : Ey.ty ≠ .int) :
+    ((S.liftE y Ey).mode.frame ∨ ((S.liftE y Ey).mode = .bor ∧ (S.liftE y Ey).fresh = true ∧
+      (S.liftE y Ey).heldFresh = true)) ∧ (S.liftE y Ey).ty.holdsView = false ∧ (S.liftE y Ey).held = [] ∧
+    projDeps (S.ρ y) (S.liftE y Ey) = rds S.ρ (projDeps y Ey) := by
+  have hrb : Ey.mode ≠ .rootb := by
+    rcases hsrc with (h1 | ⟨_, h1⟩) | ⟨h1, _⟩ <;> rw [h1] <;> simp
+  have hfn : Ey.ty.hasFn = false := by
+    cases h' : Ey.ty.hasFn
+    · rfl
+    · exact absurd (hasFn_holdsView h') (by simp [hhv])
+  rcases hsrc with hfr | ⟨hb, hf, hhf⟩
+  · have hos : Ey.mode.ownSlot = true := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
+    have hlos : (S.liftE y Ey).mode.ownSlot = true := by
+      rw [liftE_mode y hrb]; rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
+    refine ⟨Or.inl ?_, by rw [liftE_ty' h hab hy]; exact hhv, ?_, ?_⟩
+    · rw [liftE_mode y hrb]; rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> exact Or.inl rfl
+    · rw [liftE_held hrb, hh, hos]; simp [ownHeld, hhv, rds]
+    · simp only [projDeps, hos, hlos, ↓reduceIte, rds, List.map_cons, List.map_nil, Dep.ren]
+  · have hP : HeldP Ey := ⟨hhf, hb, hn⟩
+    have hlb : (S.liftE y Ey).mode = .bor := by rw [liftE_mode y hrb, hb]; rfl
+    refine ⟨Or.inr ⟨hlb, by simp [liftE_fresh, hrb, hf], by simp [liftE_heldFresh, hrb, hhf]⟩,
+      by rw [liftE_ty' h hab hy]; exact hhv, ?_, ?_⟩
+    · rw [liftE_held hrb, hh, S.heldA_P hP, hb]; simp [Mode.ownSlot, hfn, rds]
+    · have hlp : (S.liftE y Ey).path = rds S.ρ Ey.path := by
+        simp [liftE, hrb, hb, Mode.ownSlot, hf, hn]
+      simp only [projDeps, hlb, hb, Mode.ownSlot, Bool.false_eq_true, ↓reduceIte, reduceCtorEq, hlp]
+
+/-- ... and the read itself lifts exactly: fresh and held-fresh, it holds
+    nothing, and its path is the source's, renamed. -/
+theorem projE_fresh_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
+    (hsrc : Ey.mode.frame ∨ (Ey.mode = .bor ∧ Ey.fresh = true ∧ Ey.heldFresh = true))
+    (hhv : Ey.ty.holdsView = false) (hh : Ey.held = []) (hn : Ey.ty ≠ .int) {a : Ty}
+    (hav : a.holdsView = false) (x : Var) :
+    EntryWeaker { projE (S.ρ y) (S.liftE y Ey) a with fresh := true, heldFresh := true }
+      (S.liftE x { projE y Ey a with fresh := true, heldFresh := true }) := by
+  obtain ⟨_, _, hlh, hpd⟩ := projSrc_lift h hab hy hsrc hhv hh hn
+  have hafn : a.hasFn = false := by
+    cases h' : a.hasFn
+    · rfl
+    · exact absurd (hasFn_holdsView h') (by simp [hav])
+  by_cases hai : a = .int
+  · subst hai
+    exact EntryWeaker.mk' (by simp [projE, liftE, intE]) (by simp [projE, liftE, intE, liftMode])
+      (by simp [projE, intE]) (by simp [projE, liftE, intE]) (fun _ d hd => by simp [projE, intE] at hd)
+      (fun d hd => by simp [projE, intE] at hd) (hf := fun _ hn _ _ => absurd (by simp [liftE, projE, intE]) hn)
+  · have heq : S.liftE x { projE y Ey a with fresh := true, heldFresh := true } =
+        { projE (S.ρ y) (S.liftE y Ey) a with fresh := true, heldFresh := true } := by
+      cases a <;> first
+        | exact absurd rfl hai
+        | (simp only [projE, hlh, hh, List.append_nil, hpd]
+           simp [liftE, Mode.ownSlot, heldA, hafn, rds, liftMode])
+    rw [heq]; exact EntryWeaker.refl _
 
 /-- A field read, where the call places it. -/
 theorem projE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
@@ -1816,7 +1895,11 @@ theorem pushArg_ren_held (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {y : Var
     rcases List.mem_append.mp (hX hdX) with h1 | h1
     · rw [← hmr]; exact List.mem_filter.mpr ⟨h1, hdn⟩
     · simp [h.N_name d h1] at hdn
-  have hlift : (S.liftE y Ey).held ⊆ rds S.ρ Ey.held ++ S.N := heldSrc_held_lift h hy hn hhs
+  have hlift : (S.liftE y Ey).held ⊆ rds S.ρ Ey.held ++ S.N :=
+    (heldSrc_held_lift h hy hn hhs).trans (append_sub (List.Subset.refl _) (by
+      split
+      · exact List.Subset.refl _
+      · exact List.nil_subset _))
   have hrb : Ey.mode ≠ .rootb := by
     obtain ⟨E0, h0, hc⟩ := hfs; rw [hy] at h0; cases h0
     rcases hc with hfr | ⟨hb, _⟩
@@ -1946,10 +2029,23 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
     refine ⟨_, RhsT.copyUp hc (by rw [liftE_live]; exact hl) (by rw [liftE_mode y hrb, hm]; rfl)
       (by rw [liftE_ty y hrb]; exact hty) hle, fun x => ?_⟩
+    -- (AGORA-909: a held-fresh borrow's lift holds the arguments' names only
+    -- where its type holds a closure; `q.Le q'` keeps that, `Cross.Le.views`)
     have he : S.liftE x { Ey with ty := .fn ms q', dtor := false, dbind := false } =
-        { S.liftE y Ey with ty := .fn ms q', dtor := false, dbind := false } := by
-      simp [liftE, heldA, hm, Mode.ownSlot, hty]
-    rw [he]; exact EntryWeaker.refl _
+        { { S.liftE y Ey with ty := .fn ms q', dtor := false, dbind := false } with
+          held := rds S.ρ Ey.held ++ S.heldA { Ey with ty := .fn ms q' } } := by
+      simp [liftE, hm, Mode.ownSlot, ownHeld, hty, heldA]
+    rw [he]
+    refine EntryWeaker.held_sup ?_ (by simp [liftE, hm, liftMode])
+    simp only [liftE, hm, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]
+    refine append_sub (List.Subset.refl _) ?_
+    have hqv : q.views = true → q'.views = true := fun hv => by
+      cases hq : q'.views
+      · rw [hle.views hq] at hv; cases hv
+      · rfl
+    unfold heldA
+    rw [hty, hm]
+    cases hc : Ey.heldFresh <;> cases hv : q.views <;> cases hv' : q'.views <;> simp_all [Ty.hasFn]
   | @borrow y Ey t f hy hl ht hf =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     refine ⟨_, RhsT.borrow (f := f) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
@@ -2046,7 +2142,10 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
       | false => rw [S.heldA_of rfl]; exact held_lift h hab hy
       | true =>
         rw [S.heldA_P ⟨rfl, rfl, by simp⟩]
-        exact heldSrc_held_lift h hy (by rw [ht]; simp) (hhs rfl)
+        refine (heldSrc_held_lift h hy (by rw [ht]; simp) (hhs rfl)).trans
+          (append_sub (List.Subset.refl _) ?_)
+        simp only [ht, Ty.hasFn]
+        by_cases ht' : t.hasFn = true <;> simp [ht']
   | @sat y i Ey t hy hl ht hi =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     exact ⟨_, RhsT.sat hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
@@ -2105,82 +2204,46 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
       (fun d hd => append_sub (List.Subset.refl _) hm2 (hD2o rfl hd))
   | @fst y Ey a b f hy hl ht hf =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
-    -- (AGORA-909: a fresh field read's source is a frame binding of a type that
-    -- holds no views and holds nothing: lifted, an owner holding nothing)
-    have hfl : f = true → (S.liftE y Ey).mode.frame ∧ (S.liftE y Ey).ty.holdsView = false ∧
-        (S.liftE y Ey).held = [] ∧ ∀ s, a ≠ .slice s := fun hft => by
-      obtain ⟨hfr, hhv, hh, hns⟩ := hf hft
-      have hrb : Ey.mode ≠ .rootb := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> simp
-      have hos : Ey.mode.ownSlot = true := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
-      refine ⟨?_, by rw [liftE_ty' h hab hy]; exact hhv, ?_, hns⟩
-      · rw [liftE_mode y hrb]; rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> exact Or.inl rfl
-      · rw [liftE_held hrb, hh, hos]; simp [ownHeld, hhv, rds]
+    -- (AGORA-909: a fresh read's source lifts to one holding nothing, `projSrc_lift`)
+    have hfl : f = true → ((S.liftE y Ey).mode.frame ∨ ((S.liftE y Ey).mode = .bor ∧
+        (S.liftE y Ey).fresh = true ∧ (S.liftE y Ey).heldFresh = true)) ∧
+        (S.liftE y Ey).ty.holdsView = false ∧ (S.liftE y Ey).held = [] ∧ ∀ s, a ≠ .slice s := fun hft => by
+      obtain ⟨hsrc, hhv, hh, hns⟩ := hf hft
+      obtain ⟨h1, h2, h3, _⟩ := projSrc_lift h hab hy hsrc hhv hh (Ty.undtor_ne_int_of ht)
+      exact ⟨h1, h2, h3, hns⟩
     refine ⟨_, RhsT.fst (f := f) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht) hfl,
       fun x => ?_⟩
     cases f with
     | false =>
-      rw [Entry.with_fresh_eq (by cases a <;> rfl), Entry.with_fresh_eq (by cases a <;> rfl)]
+      rw [Entry.with_fresh_held_eq (by cases a <;> rfl) (by cases a <;> rfl),
+        Entry.with_fresh_held_eq (by cases a <;> rfl) (by cases a <;> rfl)]
       exact projE_lift h hab hy a x
     | true =>
-      obtain ⟨hfr, hhv, hh, hns⟩ := hf rfl
-      obtain ⟨_hlf, _hlv, hlh, _hln⟩ := hfl rfl
-      have hrb : Ey.mode ≠ .rootb := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> simp
-      have hos : Ey.mode.ownSlot = true := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
-      have hlos : (S.liftE y Ey).mode.ownSlot = true := by
-        rw [liftE_mode y hrb]; rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
-      cases a
-      case int =>
-        exact EntryWeaker.mk' (by simp [projE, liftE, intE]) (by simp [projE, liftE, intE, liftMode])
-          (by simp [projE, intE]) (by simp [projE, liftE, intE]) (fun _ d hd => by simp [projE, intE] at hd)
-          (fun d hd => by simp [projE, intE] at hd) (hf := fun _ hn _ _ => absurd (by simp [liftE, projE, intE]) hn)
-      case slice s => exact absurd rfl (hns s)
-      all_goals
-        refine EntryWeaker.mk' (by simp [projE, liftE]) (by simp [projE, liftE, liftMode]) (by simp [projE])
-          (by simp [projE, liftE]) (fun _ => ?_) ?_ (hf := fun _ _ _ _ => ⟨rfl, ?_⟩)
-        · simp only [projE, projDeps, hlos, hos, hh, hlh, ↓reduceIte, List.append_nil]
-          simp [liftE, Mode.ownSlot, rds, Dep.ren]
-        · simp [projE, hlh]
-        · simp only [projE, projDeps, hlos, hos, hh, hlh, ↓reduceIte, List.append_nil]
-          simp [liftE, Mode.ownSlot, rds, Dep.ren]
+      obtain ⟨hsrc, hhv, hh, _⟩ := hf rfl
+      have hav : a.holdsView = false := by
+        have := Ty.holdsView_undtor Ey.ty; rw [ht] at this; simp [Ty.holdsView] at this; simp_all
+      exact projE_fresh_lift h hab hy hsrc hhv hh (Ty.undtor_ne_int_of ht) hav x
   | @snd y Ey a b f hy hl ht hf =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
-    -- (AGORA-909: a fresh field read's source is a frame binding of a type that
-    -- holds no views and holds nothing: lifted, an owner holding nothing)
-    have hfl : f = true → (S.liftE y Ey).mode.frame ∧ (S.liftE y Ey).ty.holdsView = false ∧
-        (S.liftE y Ey).held = [] ∧ ∀ s, b ≠ .slice s := fun hft => by
-      obtain ⟨hfr, hhv, hh, hns⟩ := hf hft
-      have hrb : Ey.mode ≠ .rootb := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> simp
-      have hos : Ey.mode.ownSlot = true := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
-      refine ⟨?_, by rw [liftE_ty' h hab hy]; exact hhv, ?_, hns⟩
-      · rw [liftE_mode y hrb]; rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> exact Or.inl rfl
-      · rw [liftE_held hrb, hh, hos]; simp [ownHeld, hhv, rds]
+    -- (AGORA-909: a fresh read's source lifts to one holding nothing, `projSrc_lift`)
+    have hfl : f = true → ((S.liftE y Ey).mode.frame ∨ ((S.liftE y Ey).mode = .bor ∧
+        (S.liftE y Ey).fresh = true ∧ (S.liftE y Ey).heldFresh = true)) ∧
+        (S.liftE y Ey).ty.holdsView = false ∧ (S.liftE y Ey).held = [] ∧ ∀ s, b ≠ .slice s := fun hft => by
+      obtain ⟨hsrc, hhv, hh, hns⟩ := hf hft
+      obtain ⟨h1, h2, h3, _⟩ := projSrc_lift h hab hy hsrc hhv hh (Ty.undtor_ne_int_of ht)
+      exact ⟨h1, h2, h3, hns⟩
     refine ⟨_, RhsT.snd (f := f) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht) hfl,
       fun x => ?_⟩
     cases f with
     | false =>
-      rw [Entry.with_fresh_eq (by cases b <;> rfl), Entry.with_fresh_eq (by cases b <;> rfl)]
+      rw [Entry.with_fresh_held_eq (by cases b <;> rfl) (by cases b <;> rfl),
+        Entry.with_fresh_held_eq (by cases b <;> rfl) (by cases b <;> rfl)]
       exact projE_lift h hab hy b x
     | true =>
-      obtain ⟨hfr, hhv, hh, hns⟩ := hf rfl
-      obtain ⟨_hlf, _hlv, hlh, _hln⟩ := hfl rfl
-      have hrb : Ey.mode ≠ .rootb := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> simp
-      have hos : Ey.mode.ownSlot = true := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
-      have hlos : (S.liftE y Ey).mode.ownSlot = true := by
-        rw [liftE_mode y hrb]; rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
-      cases b
-      case int =>
-        exact EntryWeaker.mk' (by simp [projE, liftE, intE]) (by simp [projE, liftE, intE, liftMode])
-          (by simp [projE, intE]) (by simp [projE, liftE, intE]) (fun _ d hd => by simp [projE, intE] at hd)
-          (fun d hd => by simp [projE, intE] at hd) (hf := fun _ hn _ _ => absurd (by simp [liftE, projE, intE]) hn)
-      case slice s => exact absurd rfl (hns s)
-      all_goals
-        refine EntryWeaker.mk' (by simp [projE, liftE]) (by simp [projE, liftE, liftMode]) (by simp [projE])
-          (by simp [projE, liftE]) (fun _ => ?_) ?_ (hf := fun _ _ _ _ => ⟨rfl, ?_⟩)
-        · simp only [projE, projDeps, hlos, hos, hh, hlh, ↓reduceIte, List.append_nil]
-          simp [liftE, Mode.ownSlot, rds, Dep.ren]
-        · simp [projE, hlh]
-        · simp only [projE, projDeps, hlos, hos, hh, hlh, ↓reduceIte, List.append_nil]
-          simp [liftE, Mode.ownSlot, rds, Dep.ren]
+      obtain ⟨hsrc, hhv, hh, _⟩ := hf rfl
+      have hav : b.holdsView = false := by
+        have := Ty.holdsView_undtor Ey.ty; rw [ht] at this; simp [Ty.holdsView] at this; simp_all
+      exact projE_fresh_lift h hab hy hsrc hhv hh (Ty.undtor_ne_int_of ht) hav x
   | @inl y b Ey Γa1 D hy hly hpa hb =>
     have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     obtain ⟨D1, hp1, hD1, hD1o⟩ := pushArg_ren h hab hy hpa
@@ -2224,82 +2287,46 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
         List.mem_append_right _ (List.mem_map_of_mem hc), rfl⟩)
   | @getl y Ey a b f hy hl ht hf =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
-    -- (AGORA-909: a fresh payload read's source is a frame binding of a type that
-    -- holds no views and holds nothing: lifted, an owner holding nothing)
-    have hfl : f = true → (S.liftE y Ey).mode.frame ∧ (S.liftE y Ey).ty.holdsView = false ∧
-        (S.liftE y Ey).held = [] ∧ ∀ s, a ≠ .slice s := fun hft => by
-      obtain ⟨hfr, hhv, hh, hns⟩ := hf hft
-      have hrb : Ey.mode ≠ .rootb := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> simp
-      have hos : Ey.mode.ownSlot = true := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
-      refine ⟨?_, by rw [liftE_ty' h hab hy]; exact hhv, ?_, hns⟩
-      · rw [liftE_mode y hrb]; rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> exact Or.inl rfl
-      · rw [liftE_held hrb, hh, hos]; simp [ownHeld, hhv, rds]
+    -- (AGORA-909: a fresh read's source lifts to one holding nothing, `projSrc_lift`)
+    have hfl : f = true → ((S.liftE y Ey).mode.frame ∨ ((S.liftE y Ey).mode = .bor ∧
+        (S.liftE y Ey).fresh = true ∧ (S.liftE y Ey).heldFresh = true)) ∧
+        (S.liftE y Ey).ty.holdsView = false ∧ (S.liftE y Ey).held = [] ∧ ∀ s, a ≠ .slice s := fun hft => by
+      obtain ⟨hsrc, hhv, hh, hns⟩ := hf hft
+      obtain ⟨h1, h2, h3, _⟩ := projSrc_lift h hab hy hsrc hhv hh (Ty.undtor_ne_int_of_sum ht)
+      exact ⟨h1, h2, h3, hns⟩
     refine ⟨_, RhsT.getl (f := f) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht) hfl,
       fun x => ?_⟩
     cases f with
     | false =>
-      rw [Entry.with_fresh_eq (by cases a <;> rfl), Entry.with_fresh_eq (by cases a <;> rfl)]
+      rw [Entry.with_fresh_held_eq (by cases a <;> rfl) (by cases a <;> rfl),
+        Entry.with_fresh_held_eq (by cases a <;> rfl) (by cases a <;> rfl)]
       exact projE_lift h hab hy a x
     | true =>
-      obtain ⟨hfr, hhv, hh, hns⟩ := hf rfl
-      obtain ⟨_hlf, _hlv, hlh, _hln⟩ := hfl rfl
-      have hrb : Ey.mode ≠ .rootb := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> simp
-      have hos : Ey.mode.ownSlot = true := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
-      have hlos : (S.liftE y Ey).mode.ownSlot = true := by
-        rw [liftE_mode y hrb]; rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
-      cases a
-      case int =>
-        exact EntryWeaker.mk' (by simp [projE, liftE, intE]) (by simp [projE, liftE, intE, liftMode])
-          (by simp [projE, intE]) (by simp [projE, liftE, intE]) (fun _ d hd => by simp [projE, intE] at hd)
-          (fun d hd => by simp [projE, intE] at hd) (hf := fun _ hn _ _ => absurd (by simp [liftE, projE, intE]) hn)
-      case slice s => exact absurd rfl (hns s)
-      all_goals
-        refine EntryWeaker.mk' (by simp [projE, liftE]) (by simp [projE, liftE, liftMode]) (by simp [projE])
-          (by simp [projE, liftE]) (fun _ => ?_) ?_ (hf := fun _ _ _ _ => ⟨rfl, ?_⟩)
-        · simp only [projE, projDeps, hlos, hos, hh, hlh, ↓reduceIte, List.append_nil]
-          simp [liftE, Mode.ownSlot, rds, Dep.ren]
-        · simp [projE, hlh]
-        · simp only [projE, projDeps, hlos, hos, hh, hlh, ↓reduceIte, List.append_nil]
-          simp [liftE, Mode.ownSlot, rds, Dep.ren]
+      obtain ⟨hsrc, hhv, hh, _⟩ := hf rfl
+      have hav : a.holdsView = false := by
+        have := Ty.holdsView_undtor Ey.ty; rw [ht] at this; simp [Ty.holdsView] at this; simp_all
+      exact projE_fresh_lift h hab hy hsrc hhv hh (Ty.undtor_ne_int_of_sum ht) hav x
   | @getr y Ey a b f hy hl ht hf =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
-    -- (AGORA-909: a fresh payload read's source is a frame binding of a type that
-    -- holds no views and holds nothing: lifted, an owner holding nothing)
-    have hfl : f = true → (S.liftE y Ey).mode.frame ∧ (S.liftE y Ey).ty.holdsView = false ∧
-        (S.liftE y Ey).held = [] ∧ ∀ s, b ≠ .slice s := fun hft => by
-      obtain ⟨hfr, hhv, hh, hns⟩ := hf hft
-      have hrb : Ey.mode ≠ .rootb := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> simp
-      have hos : Ey.mode.ownSlot = true := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
-      refine ⟨?_, by rw [liftE_ty' h hab hy]; exact hhv, ?_, hns⟩
-      · rw [liftE_mode y hrb]; rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> exact Or.inl rfl
-      · rw [liftE_held hrb, hh, hos]; simp [ownHeld, hhv, rds]
+    -- (AGORA-909: a fresh read's source lifts to one holding nothing, `projSrc_lift`)
+    have hfl : f = true → ((S.liftE y Ey).mode.frame ∨ ((S.liftE y Ey).mode = .bor ∧
+        (S.liftE y Ey).fresh = true ∧ (S.liftE y Ey).heldFresh = true)) ∧
+        (S.liftE y Ey).ty.holdsView = false ∧ (S.liftE y Ey).held = [] ∧ ∀ s, b ≠ .slice s := fun hft => by
+      obtain ⟨hsrc, hhv, hh, hns⟩ := hf hft
+      obtain ⟨h1, h2, h3, _⟩ := projSrc_lift h hab hy hsrc hhv hh (Ty.undtor_ne_int_of_sum ht)
+      exact ⟨h1, h2, h3, hns⟩
     refine ⟨_, RhsT.getr (f := f) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht) hfl,
       fun x => ?_⟩
     cases f with
     | false =>
-      rw [Entry.with_fresh_eq (by cases b <;> rfl), Entry.with_fresh_eq (by cases b <;> rfl)]
+      rw [Entry.with_fresh_held_eq (by cases b <;> rfl) (by cases b <;> rfl),
+        Entry.with_fresh_held_eq (by cases b <;> rfl) (by cases b <;> rfl)]
       exact projE_lift h hab hy b x
     | true =>
-      obtain ⟨hfr, hhv, hh, hns⟩ := hf rfl
-      obtain ⟨_hlf, _hlv, hlh, _hln⟩ := hfl rfl
-      have hrb : Ey.mode ≠ .rootb := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> simp
-      have hos : Ey.mode.ownSlot = true := by rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
-      have hlos : (S.liftE y Ey).mode.ownSlot = true := by
-        rw [liftE_mode y hrb]; rcases hfr with h1 | ⟨_, h1⟩ <;> rw [h1] <;> rfl
-      cases b
-      case int =>
-        exact EntryWeaker.mk' (by simp [projE, liftE, intE]) (by simp [projE, liftE, intE, liftMode])
-          (by simp [projE, intE]) (by simp [projE, liftE, intE]) (fun _ d hd => by simp [projE, intE] at hd)
-          (fun d hd => by simp [projE, intE] at hd) (hf := fun _ hn _ _ => absurd (by simp [liftE, projE, intE]) hn)
-      case slice s => exact absurd rfl (hns s)
-      all_goals
-        refine EntryWeaker.mk' (by simp [projE, liftE]) (by simp [projE, liftE, liftMode]) (by simp [projE])
-          (by simp [projE, liftE]) (fun _ => ?_) ?_ (hf := fun _ _ _ _ => ⟨rfl, ?_⟩)
-        · simp only [projE, projDeps, hlos, hos, hh, hlh, ↓reduceIte, List.append_nil]
-          simp [liftE, Mode.ownSlot, rds, Dep.ren]
-        · simp [projE, hlh]
-        · simp only [projE, projDeps, hlos, hos, hh, hlh, ↓reduceIte, List.append_nil]
-          simp [liftE, Mode.ownSlot, rds, Dep.ren]
+      obtain ⟨hsrc, hhv, hh, _⟩ := hf rfl
+      have hav : b.holdsView = false := by
+        have := Ty.holdsView_undtor Ey.ty; rw [ht] at this; simp [Ty.holdsView] at this; simp_all
+      exact projE_fresh_lift h hab hy hsrc hhv hh (Ty.undtor_ne_int_of_sum ht) hav x
   | @takel y Ey a b hy hl hm hty hyF _ hds =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
@@ -4351,6 +4378,11 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
         (argE (S.canon Γa1) r).ty.holdsView = true → d ∈ (argE (S.canon Γa1) r).held := by
     rcases hfn with hf | hf
     · exact Or.inl hf
+    cases htf : t.hasFn
+    · exact Or.inl rfl
+    -- (AGORA-909: the borrow's type holds a closure, so the lift keeps the names)
+    have hxfn : Ex1.ty.hasFn = true := by
+      rw [EditArg.at_ne harg hyx hx hx1 hl1, hty]; simpa [Ty.hasFn] using htf
     refine Or.inr fun d hd hnm => ?_
     have hlx : (S.liftE x Ex1).held = rds S.ρ Ex1.held ++ S.heldA Ex1 := by
       rw [liftE_held hrb]; simp [hmx, Mode.ownSlot, ownHeld]
@@ -4373,7 +4405,7 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
       rw [hae, hty'] at hv'
       rw [hae, hheld hv']
       exact List.mem_append_left _ (mem_rds.mpr ⟨d0, by rw [← hae0]; exact hr0 r hr (by rw [hae0]; exact hv'), rfl⟩)
-    · refine ⟨by rw [hlx]; exact List.mem_append_right _ (RSetup.name_mem_heldA h1 hnm), fun r' hr' hv' => ?_⟩
+    · refine ⟨by rw [hlx]; exact List.mem_append_right _ (RSetup.name_mem_heldA h1 hnm hxfn), fun r' hr' hv' => ?_⟩
       obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hr'
       obtain ⟨Er, hEr, hae, hheld, hty'⟩ := hlo r hr
       rw [hae, hty'] at hv'

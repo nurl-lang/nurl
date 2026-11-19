@@ -629,8 +629,23 @@ import A3
 #print axioms A2.FreshProjWitness.main_typed
 #print axioms A2.FreshProjWitness.main_safe
 #print axioms A2.FreshProjWitness.main_no_leak
-#print axioms A2.FreshProjWitness.proj_fresh_frame
-#print axioms A2.FreshProjWitness.proj_not_frame_not_fresh
+#print axioms A2.FreshProjWitness.proj_fresh_src
+#print axioms A2.FreshProjWitness.proj_not_src_not_fresh
 #print axioms A2.FreshProjWitness.fst_rootb_not_fresh
-#print axioms A2.FreshProjWitness.proj_of_proj_not_fresh
+#print axioms A2.FreshProjWitness.proj_stale_not_fresh
+#print axioms A2.FreshProjWitness.proj_of_proj_fresh
+#print axioms A2.FreshProjWitness.proj_view_not_fresh
+#print axioms A2.FreshProjWitness.nested_view_not_fresh
 #print axioms A2.FreshProjWitness.payload_fresh_killed
+-- ... and a nested read through a fresh, held-fresh borrow: the lift adds no name to a
+-- type that holds no closure (RSetup.heldA), so the renamed read is exact
+#print axioms A2.WFv.names_nil_fn
+#print axioms A2.RSetup.heldA_P_sub
+#print axioms A2.RSetup.projSrc_lift
+#print axioms A2.RSetup.projE_fresh_lift
+#print axioms A2.FreshNestWitness.fst3_typed
+#print axioms A2.FreshNestWitness.g_not_thru
+#print axioms A2.FreshNestWitness.call_ok
+#print axioms A2.FreshNestWitness.main_typed
+#print axioms A2.FreshNestWitness.main_safe
+#print axioms A2.FreshNestWitness.main_no_leak

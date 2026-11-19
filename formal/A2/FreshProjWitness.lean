@@ -18,11 +18,15 @@ as an element borrow of one is (`RhsT.at`, Agora #909 design e): its path,
 through-changing (`g_not_thru`), and `CallT`'s `callR` premise asks nothing.
 The call passes `s`, and `s` is read after it.
 
-What stays refused (`fst_rootb_not_fresh`, `fst_bor_not_fresh` and the payload
-forms): a field read of a borrowed parameter, or of a borrow, is never fresh.
-So a nested projection `. . b x items` is fresh at its first step at most.
-A fresh payload borrow ends when its enum is given a new value, and that
-kill does not read the bit (`payload_fresh_killed`).
+What stays refused (`proj_fresh_src`): a field or payload read is fresh only
+of a binding of the frame's own or of a fresh, held-fresh borrow, of a type
+that holds no views, holding nothing. So a read of a borrowed parameter
+(`fst_rootb_not_fresh`), of a borrow that is not fresh (`proj_stale_not_fresh`)
+or of a type that holds views (`nested_view_not_fresh`) is not, and a nested
+projection is fresh exactly where every step is (`proj_of_proj_fresh`;
+`A2/FreshNestWitness.lean` types `. . o bag items`). A fresh payload borrow
+ends when its enum is given a new value, and that kill does not read the bit
+(`payload_fresh_killed`).
 -/
 
 namespace A2.FreshProjWitness
@@ -57,7 +61,7 @@ def Ep : Entry := ⟨bag, .inout .replace, true, [], [], false, false, false, fa
 def Es : Entry := ⟨sl, .rootb, true, [], [], false, false, false, false⟩
 def R0 : Entry := ⟨.int, .bor, false, [], [], false, false, false, false⟩
 /-- The field borrow, fresh: its path is `b`'s fields. -/
-def Ee : Entry := ⟨vi, .bor, true, [⟨0, .inner⟩], [], false, false, true, false⟩
+def Ee : Entry := ⟨vi, .bor, true, [⟨0, .inner⟩], [], false, false, true, true⟩
 
 /-- The callee's context, with result slot `r2`. -/
 def ctx (r2 : Entry) : Ctx := fun v =>
@@ -79,7 +83,7 @@ theorem calm_ctx {r : Entry} (hr : r.mode = .bor) (hd : r.dtor = false) (hb : r.
 theorem fst_typed : RhsT (ctx R0) [] (.fst 0) Ee (ctx R0) := by
   have h0 : ctx R0 0 = some Ep := by simp [ctx]
   have := RhsT.fst (Γ := ctx R0) (F := []) (E := Ep) (a := vi) (b := .int) (f := true) h0 rfl rfl
-    (fun _ => ⟨Or.inr ⟨.replace, rfl⟩, rfl, rfl, fun s h => by cases h⟩)
+    (fun _ => ⟨Or.inl (Or.inr ⟨.replace, rfl⟩), rfl, rfl, fun s h => by cases h⟩)
   simpa [projE, projDeps, Ep, Ee, vi, Mode.ownSlot] using this
 
 theorem Ep_nodeps : Ep.vdeps = [] := by simp [Ep, Entry.vdeps, Mode.ownSlot]
@@ -320,59 +324,91 @@ theorem main_no_leak {m' : Mem} (hr : Steps P (emptyMem 7) main (.ok m' .skip)) 
 
 /-! ### What stays refused, and how the bit composes -/
 
-/-- **A fresh field or payload read is of a binding of the frame's own that
-    holds nothing**: whatever the derivation, the bit is set only there. -/
-theorem proj_fresh_frame {Γ Γ1 : Ctx} {F : List Var} {y : Var} {r : Rhs} {E : Entry}
+/-- What a fresh field or payload read may be taken from: a binding of the
+    frame's own, or a fresh, held-fresh borrow. -/
+def ProjSrc (E : Entry) : Prop := E.mode.frame ∨ (E.mode = .bor ∧ E.fresh = true ∧ E.heldFresh = true)
+
+/-- **A fresh field or payload read is of a `ProjSrc` that holds nothing, of
+    a type that holds no views**: whatever the derivation, the bit is set
+    only there. -/
+theorem proj_fresh_src {Γ Γ1 : Ctx} {F : List Var} {y : Var} {r : Rhs} {E : Entry}
     (hr : r = .fst y ∨ r = .snd y ∨ r = .getl y ∨ r = .getr y) (ht : RhsT Γ F r E Γ1)
-    (hf : E.fresh = true) : ∃ Ey, Γ y = some Ey ∧ Ey.mode.frame ∧ Ey.held = [] := by
+    (hf : E.fresh = true) : ∃ Ey, Γ y = some Ey ∧ ProjSrc Ey ∧ Ey.ty.holdsView = false ∧ Ey.held = [] := by
   rcases hr with rfl | rfl | rfl | rfl
   · cases ht with
     | @fst _ Ey _ _ f hy _ _ hff =>
       cases f
       · simp at hf
-      · exact ⟨Ey, hy, (hff rfl).1, (hff rfl).2.2.1⟩
+      · exact ⟨Ey, hy, (hff rfl).1, (hff rfl).2.1, (hff rfl).2.2.1⟩
   · cases ht with
     | @snd _ Ey _ _ f hy _ _ hff =>
       cases f
       · simp at hf
-      · exact ⟨Ey, hy, (hff rfl).1, (hff rfl).2.2.1⟩
+      · exact ⟨Ey, hy, (hff rfl).1, (hff rfl).2.1, (hff rfl).2.2.1⟩
   · cases ht with
     | @getl _ Ey _ _ f hy _ _ hff =>
       cases f
       · simp at hf
-      · exact ⟨Ey, hy, (hff rfl).1, (hff rfl).2.2.1⟩
+      · exact ⟨Ey, hy, (hff rfl).1, (hff rfl).2.1, (hff rfl).2.2.1⟩
   · cases ht with
     | @getr _ Ey _ _ f hy _ _ hff =>
       cases f
       · simp at hf
-      · exact ⟨Ey, hy, (hff rfl).1, (hff rfl).2.2.1⟩
+      · exact ⟨Ey, hy, (hff rfl).1, (hff rfl).2.1, (hff rfl).2.2.1⟩
 
-/-- **A field or payload read of a binding that is not the frame's own is
-    never fresh**: not of a borrowed parameter, not of a borrow. -/
-theorem proj_not_frame_not_fresh {Γ Γ1 : Ctx} {F : List Var} {y : Var} {r : Rhs} {E Ey : Entry}
+/-- **A read of anything else is never fresh.** -/
+theorem proj_not_src_not_fresh {Γ Γ1 : Ctx} {F : List Var} {y : Var} {r : Rhs} {E Ey : Entry}
     (hr : r = .fst y ∨ r = .snd y ∨ r = .getl y ∨ r = .getr y) (ht : RhsT Γ F r E Γ1)
-    (hy : Γ y = some Ey) (hn : ¬ Ey.mode.frame) : E.fresh = false := by
+    (hy : Γ y = some Ey) (hn : ¬ (ProjSrc Ey ∧ Ey.ty.holdsView = false)) : E.fresh = false := by
   cases hE : E.fresh
   · rfl
-  · obtain ⟨Ey', hy', hfr, _⟩ := proj_fresh_frame hr ht hE
-    rw [hy] at hy'; cases hy'; exact absurd hfr hn
+  · obtain ⟨Ey', hy', hs, hv, _⟩ := proj_fresh_src hr ht hE
+    rw [hy] at hy'; cases hy'; exact absurd ⟨hs, hv⟩ hn
 
 /-- **A field read of a borrowed parameter is never fresh** (the
     `at_rootb_not_fresh` analogue; so is `snd`, `getl` and `getr`'s). -/
 theorem fst_rootb_not_fresh {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E Ey : Entry}
     (ht : RhsT Γ F (.fst y) E Γ1) (hy : Γ y = some Ey) (hm : Ey.mode = .rootb) : E.fresh = false :=
-  proj_not_frame_not_fresh (Or.inl rfl) ht hy (by
-    rw [hm]; rintro (h | ⟨_, h⟩) <;> cases h)
+  proj_not_src_not_fresh (Or.inl rfl) ht hy (by
+    rintro ⟨(h | ⟨_, h⟩) | ⟨h, _⟩, _⟩ <;> rw [hm] at h <;> cases h)
 
-/-- **A nested projection is fresh at its first step at most**: a field
-    read binds a borrow (`projE`'s mode is `.bor`, or it is an integer), so a
-    read through that binding is never fresh. `. . b x items` composes:
-    fresh only where every step is, and here only the first may be. -/
-theorem proj_of_proj_not_fresh {Γ Γ1 : Ctx} {F : List Var} {y z : Var} {r : Rhs} {E Ez : Entry}
+/-- **Nor is a read of a borrow that is not fresh or not held-fresh**: a
+    projection of a projection that was not fresh is not either. -/
+theorem proj_stale_not_fresh {Γ Γ1 : Ctx} {F : List Var} {y : Var} {r : Rhs} {E Ey : Entry}
+    (hr : r = .fst y ∨ r = .snd y ∨ r = .getl y ∨ r = .getr y) (ht : RhsT Γ F r E Γ1)
+    (hy : Γ y = some Ey) (hm : Ey.mode = .bor) (hf : Ey.fresh = false ∨ Ey.heldFresh = false) :
+    E.fresh = false :=
+  proj_not_src_not_fresh hr ht hy (by
+    rintro ⟨(h | ⟨_, h⟩) | ⟨_, h1, h2⟩, _⟩
+    · rw [hm] at h; cases h
+    · rw [hm] at h; cases h
+    · rcases hf with h | h <;> simp_all)
+
+/-- **A nested projection composes**: a read through a binding that a field
+    or payload read made is fresh only when that read was. `. . b x items` is
+    fresh exactly where every step is. -/
+theorem proj_of_proj_fresh {Γ Γ1 : Ctx} {F : List Var} {y z : Var} {r : Rhs} {E Ez : Entry}
     {t : Ty} {f : Bool} (hr : r = .fst y ∨ r = .snd y ∨ r = .getl y ∨ r = .getr y) (ht : RhsT Γ F r E Γ1)
-    (hy : Γ y = some { projE z Ez t with fresh := f }) : E.fresh = false :=
-  proj_not_frame_not_fresh hr ht hy (by
-    cases t <;> simp [projE, intE] <;> rintro (h | ⟨_, h⟩) <;> cases h)
+    (hy : Γ y = some { projE z Ez t with fresh := f, heldFresh := f }) (hE : E.fresh = true) : f = true := by
+  obtain ⟨Ey, hy', hs, _, _⟩ := proj_fresh_src hr ht hE
+  rw [hy] at hy'; cases hy'
+  rcases hs with (h | ⟨_, h⟩) | ⟨_, h, _⟩ <;> cases t <;> simp_all [projE, intE]
+
+/-- **A read of a binding of a type that holds views is never fresh**: such
+    a borrow lifts with what the arguments hold. Concretely, a `Bag` that
+    holds a slice beside its items. -/
+theorem proj_view_not_fresh {Γ Γ1 : Ctx} {F : List Var} {y : Var} {r : Rhs} {E Ey : Entry}
+    (hr : r = .fst y ∨ r = .snd y ∨ r = .getl y ∨ r = .getr y) (ht : RhsT Γ F r E Γ1)
+    (hy : Γ y = some Ey) (hv : Ey.ty.holdsView = true) : E.fresh = false :=
+  proj_not_src_not_fresh hr ht hy (by rintro ⟨_, h⟩; simp_all)
+
+/-- `Bag { ( Vec i ) items ( Slice i ) s }`, inside a `Box`. -/
+def bagV : Ty := .prod vi sl
+def boxV : Ty := .prod bagV .int
+
+theorem nested_view_not_fresh {Γ1 Γ2 : Ctx} {F : List Var} {y : Var} {Ey E : Entry}
+    (hy : Γ1 y = some Ey) (hty : Ey.ty = bagV) (ht : RhsT Γ1 F (.fst y) E Γ2) : E.fresh = false :=
+  proj_view_not_fresh (Or.inl rfl) ht hy (by rw [hty]; rfl)
 
 /-- **A fresh payload borrow ends when its enum is given a new value**, and
     the kill does not read the bit: whatever `f` is, a `.replace` of the

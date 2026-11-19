@@ -212,20 +212,31 @@ the LLVM / C11 memory model rather than redefining it.
     `add inout Bag b` pushes through `. b items`, called with a view of
     another value that is read after the call. A field or payload read
     (`RhsT.fst`, `snd`, `getl`, `getr`) may be fresh, as an element borrow
-    may, when its source is a binding of the frame's own (an owner or an
-    `inout` parameter) of a type that holds no views and that holds
-    nothing, and the field is not a slice: its path is then
-    `[⟨b, .inner⟩]`, and a call lifts such a source to an owner that still
-    holds nothing. So the push is an `edit false`, `add` is not
-    through-changing (`g_not_thru`), and the call is typed, safe and
-    leak-free (`main_safe`, `main_no_leak`). nurlc accepts it
-    (`inout_push_through_its_field_called_with_a_view_read_after`) and it
-    runs clean. A read of a borrowed parameter or of a borrow is never
-    fresh (`proj_fresh_frame`, `fst_rootb_not_fresh`). So a nested
-    projection `. . b x items` is fresh at its first step at most
-    (`proj_of_proj_not_fresh`), and a change through its second step stays
-    `edit true`. A fresh payload borrow ends when its enum is given a new
-    value, by a kill that does not read the bit (`payload_fresh_killed`,
+    may, and held-fresh, as a view may, when its source is a binding of the
+    frame's own (an owner or an `inout` parameter) or a fresh, held-fresh
+    borrow, of a type that holds no views, holding nothing, and the field
+    is not a slice: its path is then the source's own (`[⟨b, .inner⟩]` for
+    a frame binding), and a call lifts such a source to one that still
+    holds nothing. For a held-fresh borrow that rests on the lift adding no
+    name to a type that holds no closure: `heldA` of a held-fresh borrow of
+    a closure-free type is `[]`, for every such borrow, not only a
+    projection (`RSetup.heldA`; a value of such a type holds no name,
+    `WFv.names_nil_fn`, and a type that holds no views holds no closure,
+    `hasFn_holdsView`). So the renamed read is exact
+    (`RSetup.projE_fresh_lift`). So the push is an `edit false`, `add` is
+    not through-changing (`g_not_thru`), and the call is typed, safe and
+    leak-free (`main_safe`, `main_no_leak`). A nested projection is fresh
+    exactly where every step is (`proj_of_proj_fresh`):
+    `A2/FreshNestWitness.lean` types `( vec_push . . o bag items x )` in
+    the same call shape, safe and leak-free. nurlc accepts both
+    (`inout_push_through_its_field_called_with_a_view_read_after`,
+    `inout_push_through_a_field_of_its_field_called_with_a_view_read_after`)
+    and they run clean. A read of a borrowed parameter, of a borrow that is
+    not fresh and held-fresh, or of a type that holds views is never fresh
+    (`proj_fresh_src`, `fst_rootb_not_fresh`, `proj_stale_not_fresh`,
+    `nested_view_not_fresh`), and a change through it stays `edit true`. A
+    fresh payload borrow ends when its enum is given a new value, by a kill
+    that does not read the bit (`payload_fresh_killed`,
     `hits_fresh_irrel`). With the bit off each read is `projE` as before
     (`RhsT.fst_unfresh` and the others).
 

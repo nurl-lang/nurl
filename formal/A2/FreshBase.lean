@@ -253,32 +253,44 @@ theorem RhsT.freshOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : R
     | _ => exact derive_freshE h hy ht (Or.inr (Or.inl rfl)) hs
   | @fst y E a b f hy hl ht hf =>
     refine ⟨h, fun _ hn _ hfr => ?_, KeepsFrame.refl _⟩
-    obtain ⟨hfr0, _, hh, hns⟩ := hf hfr
-    have hs : FreshSrc Γ y := ⟨E, hy, Or.inl hfr0⟩
+    obtain ⟨hsrc, _, hh, hns⟩ := hf hfr
+    have hs : FreshSrc Γ y := by
+      rcases hsrc with h0 | ⟨hb, hf0, _⟩
+      · exact ⟨E, hy, Or.inl h0⟩
+      · exact ⟨E, hy, Or.inr ⟨hb, hf0, hl, Ty.undtor_ne_int_of ht⟩⟩
     cases a with
     | int => simp [projE, intE] at hn
     | slice s => exact absurd rfl (hns s)
     | _ => simpa [projE, hh] using projDeps_freshE h hy hs
   | @snd y E a b f hy hl ht hf =>
     refine ⟨h, fun _ hn _ hfr => ?_, KeepsFrame.refl _⟩
-    obtain ⟨hfr0, _, hh, hns⟩ := hf hfr
-    have hs : FreshSrc Γ y := ⟨E, hy, Or.inl hfr0⟩
+    obtain ⟨hsrc, _, hh, hns⟩ := hf hfr
+    have hs : FreshSrc Γ y := by
+      rcases hsrc with h0 | ⟨hb, hf0, _⟩
+      · exact ⟨E, hy, Or.inl h0⟩
+      · exact ⟨E, hy, Or.inr ⟨hb, hf0, hl, Ty.undtor_ne_int_of ht⟩⟩
     cases b with
     | int => simp [projE, intE] at hn
     | slice s => exact absurd rfl (hns s)
     | _ => simpa [projE, hh] using projDeps_freshE h hy hs
   | @getl y E a b f hy hl ht hf =>
     refine ⟨h, fun _ hn _ hfr => ?_, KeepsFrame.refl _⟩
-    obtain ⟨hfr0, _, hh, hns⟩ := hf hfr
-    have hs : FreshSrc Γ y := ⟨E, hy, Or.inl hfr0⟩
+    obtain ⟨hsrc, _, hh, hns⟩ := hf hfr
+    have hs : FreshSrc Γ y := by
+      rcases hsrc with h0 | ⟨hb, hf0, _⟩
+      · exact ⟨E, hy, Or.inl h0⟩
+      · exact ⟨E, hy, Or.inr ⟨hb, hf0, hl, Ty.undtor_ne_int_of_sum ht⟩⟩
     cases a with
     | int => simp [projE, intE] at hn
     | slice s => exact absurd rfl (hns s)
     | _ => simpa [projE, hh] using projDeps_freshE h hy hs
   | @getr y E a b f hy hl ht hf =>
     refine ⟨h, fun _ hn _ hfr => ?_, KeepsFrame.refl _⟩
-    obtain ⟨hfr0, _, hh, hns⟩ := hf hfr
-    have hs : FreshSrc Γ y := ⟨E, hy, Or.inl hfr0⟩
+    obtain ⟨hsrc, _, hh, hns⟩ := hf hfr
+    have hs : FreshSrc Γ y := by
+      rcases hsrc with h0 | ⟨hb, hf0, _⟩
+      · exact ⟨E, hy, Or.inl h0⟩
+      · exact ⟨E, hy, Or.inr ⟨hb, hf0, hl, Ty.undtor_ne_int_of_sum ht⟩⟩
     cases b with
     | int => simp [projE, intE] at hn
     | slice s => exact absurd rfl (hns s)
