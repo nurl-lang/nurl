@@ -215,7 +215,7 @@ theorem cell_cell_ok {t : Ty} (h : (Ty.cell t).ok = true) : (Ty.cell (.cell t)).
 theorem lockNew_cell {Γ Γ1 : Ctx} {F : List Var} {t : Ty} {y : Var} {Ey : Entry} {D : List Dep}
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .cell t) (hvf : t.holdsView = false)
     (hfn : t.hasFn = false) (hng : t.hasGuard = false) (hpa : PushArg Γ F y Ey (.cell t) D Γ1) :
-    RhsT Γ F (.lockNew (.cell t) y) ⟨.lk (.cell t), .own, true, [], [], false, false, false⟩ Γ1 :=
+    RhsT Γ F (.lockNew (.cell t) y) ⟨.lk (.cell t), .own, true, [], [], false, false, false, false⟩ Γ1 :=
   RhsT.lockNew hy hl hty rfl ⟨hvf, hfn⟩ hng hpa
 
 /-- ... but an `RwLocked`'s read guard asks the Sync question of its value
@@ -292,11 +292,11 @@ whose body hands the payload to `mem_dup` (`DupFn`) and moves the copy out. -/
 /-- A3.3: a read guard's entry, `rw_read`'s: an owned read guard (Agora #837:
     of type `rguard t`; before, `arc (prod (lk t) t)`), a share of the view
     of a lock block of `t`, holding nothing. -/
-def guardE (t : Ty) : Entry := ⟨.rguard t, .own, true, [], [], false, false, false⟩
+def guardE (t : Ty) : Entry := ⟨.rguard t, .own, true, [], [], false, false, false, false⟩
 
 /-- A3.3: `rw_try_read`'s answer: an owned option of a read guard, holding
     nothing. -/
-def tryReadE (t : Ty) : Entry := ⟨.sum .int (.rguard t), .own, true, [], [], false, false, false⟩
+def tryReadE (t : Ty) : Entry := ⟨.sum .int (.rguard t), .own, true, [], [], false, false, false, false⟩
 
 /-- `rw_try_read`'s `some`, matched by value, is `rw_read`'s guard: what
     `withRead` binds, so its read scope (`rguard_get_path`'s frozen lend,
@@ -333,7 +333,7 @@ theorem _root_.A2.StmtT.withTryRead {P : Prog} {Γ Δs : Ctx} {F : List Var} {a 
     (tryRead_some (upd_same _ _ _) hoF hpin hds) hsome hendg
 
 /-- A3.3: `rw_try_write`'s answer: an owned option of an integer. -/
-def tryWriteE : Entry := ⟨.sum .int .int, .own, true, [], [], false, false, false⟩
+def tryWriteE : Entry := ⟨.sum .int .int, .own, true, [], [], false, false, false, false⟩
 
 /-- **`rw_try_write`, matched, is typed**: on `none` the other branch, on
     `some` A3.2's `withLock`, with its faithfulness premises (the lock `a`, a
@@ -358,8 +358,8 @@ theorem _root_.A2.StmtT.withTryWrite {P : Prog} {Γ Δ : Ctx} {F : List Var} {a 
     (`: ~ y ( borrow x )`), whose one dependency is `x` itself, an owner —
     not a share, as `rguard_get`'s is (`rguard_get_path`). -/
 theorem wguard_get_path {Γ : Ctx} {F : List Var} {x : Var} {u : Ty} (hx : Γ x = some (lockE (.vec u))) :
-    RhsT Γ F (.borrow x) ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false, false⟩ Γ := by
-  have hl : lockE (.vec u) = ⟨.vec u, .own, true, [], [], false, false, false⟩ := by simp [lockE]
+    RhsT Γ F (.borrow x) ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false, false, false⟩ Γ := by
+  have hl : lockE (.vec u) = ⟨.vec u, .own, true, [], [], false, false, false, false⟩ := by simp [lockE]
   rw [hl] at hx
   have h := RhsT.borrow (F := F) hx rfl rfl
   simpa [derive, Mode.isRoot, rootKind] using h
@@ -370,12 +370,12 @@ theorem wguard_get_path {Γ : Ctx} {F : List Var} {x : Var} {u : Ty} (hx : Γ x 
     read guard's lend is refused, its dependency being a share
     (`ThruOK.noShare`). -/
 theorem _root_.A2.StmtT.wguardGet {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {u : Ty} {i : Expr}
-    (hx : Γ x = some (lockE (.vec u))) (hy : Γ y = some ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false, false⟩)
+    (hx : Γ x = some (lockE (.vec u))) (hy : Γ y = some ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false, false, false⟩)
     (huv : u.holdsView = false) (hyF : y ∉ F) (hxF : x ∉ F) (hi : ExprT Γ i)
     (hds : DtorSafe Γ .drop false x) (hdf : u.dtorFree = true) :
     StmtT P ξ Γ F (.edit true y (.trunc i))
-      (setE (killThru (.trunc i) (.vec u) [⟨x, .self⟩] Γ) y ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false, false⟩) := by
-  have hl : lockE (.vec u) = ⟨.vec u, .own, true, [], [], false, false, false⟩ := by simp [lockE]
+      (setE (killThru (.trunc i) (.vec u) [⟨x, .self⟩] Γ) y ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false, false, false⟩) := by
+  have hl : lockE (.vec u) = ⟨.vec u, .own, true, [], [], false, false, false, false⟩ := by simp [lockE]
   rw [hl] at hx
   refine StmtT.editB (t := u) hy rfl rfl rfl huv hyF (EditArg.trunc hi) (fun _ h => by cases h) hy rfl
     (by simp [memDeps, Kind.isName]) ?_ (fun _ => hdf)
@@ -407,7 +407,7 @@ def DupFn (P : Prog) (f : Nat) (t : Ty) : Prop :=
 theorem dup_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t : Ty} {x : Var} {Ex : Entry}
     (hd : DupFn P f t) (hx : Γ x = some Ex) (hl : Ex.live = true) (ht : Ex.ty = t) (hh : Ex.held = [])
     (hn : ∀ d ∈ Ex.vdeps, d.kind.isName = false) :
-    ∃ fn, P[f]? = some fn ∧ CallT P Γ F f [x] ⟨t, resMode fn, true, [], [], false, false, false⟩ Γ := by
+    ∃ fn, P[f]? = some fn ∧ CallT P Γ F f [x] ⟨t, resMode fn, true, [], [], false, false, false, false⟩ Γ := by
   obtain ⟨fn, hf, hps, hrt, hle, hrh⟩ := hd
   have hargE : argE Γ x = Ex := by simp [argE, hx]
   have hnm : argNames Γ [x] = [] := by
@@ -496,7 +496,7 @@ theorem _root_.A2.NoPin.setE_nil {Γ : Ctx} {x : Var} (h : NoPin Γ x) {v : Var}
 
 /-- A binding that depends on nothing, in mode `mo`: a result handed back once
     the lock is let go. -/
-def outE (R : Ty) (mo : Mode) : Entry := ⟨R, mo, true, [], [], false, false, false⟩
+def outE (R : Ty) (mo : Mode) : Entry := ⟨R, mo, true, [], [], false, false, false, false⟩
 
 @[simp] theorem outE_vdeps (R : Ty) (mo : Mode) : (outE R mo).vdeps = [] := by
   cases mo <;> rfl
@@ -580,7 +580,7 @@ theorem _root_.A2.StmtT.callOut {P : Prog} {Γ : Ctx} {F : List Var} {x c z : Va
 
 /-- A3.3: what `arcGet` lends through a read guard: the pair of the lock's
     share and the payload, depending on the guard through a share. -/
-def guardGetE (g : Var) (t : Ty) : Entry := ⟨.prod (.lk t) t, .bor, true, [⟨g, .share⟩], [], false, false, false⟩
+def guardGetE (g : Var) (t : Ty) : Entry := ⟨.prod (.lk t) t, .bor, true, [⟨g, .share⟩], [], false, false, false, false⟩
 
 theorem guardGet_eq (g : Var) (t : Ty) : getE g (guardE t) (.prod (.lk t) t) = guardGetE g t := by
   simp [getE, guardE, guardGetE, derive, Mode.isRoot, rootKind]
@@ -749,7 +749,7 @@ theorem apply_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t R : Ty} {x 
     ∃ fn, P[f]? = some fn ∧ CallT P Γ F f [x] (outE R (resMode fn)) Γ := by
   obtain ⟨fn, b, hf, hps, hrt, hle, hrh⟩ := hd
   have hti : t ≠ .int := fun h => by subst h; cases hto
-  have hlk : lockE t = ⟨t, .own, true, [], [], false, false, false⟩ := by simp [lockE, hti]
+  have hlk : lockE t = ⟨t, .own, true, [], [], false, false, false, false⟩ := by simp [lockE, hti]
   have hargE : argE Γ x = lockE t := by simp [argE, hx]
   have hnm : argNames Γ [x] = [] := by
     simp only [argNames, List.flatMap_cons, List.flatMap_nil, List.append_nil, hargE, lockE_vdeps]
@@ -908,7 +908,7 @@ theorem _root_.A2.StmtT.lockedSet {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {a b 
   have h1x : Γ1 x = none := hpush.none hy hx
   have hu1b : Unnamed Γ1 b := hpush.unnamed hy hub
   have hu1x : Unnamed Γ1 x := hpush.unnamed hy hux
-  let Eb : Entry := ⟨.lk t, .own, true, [], [], false, false, false⟩
+  let Eb : Entry := ⟨.lk t, .own, true, [], [], false, false, false, false⟩
   have hEb : Eb.vdeps = [] := rfl
   let Γb := A2.setE Γ1 b Eb
   have hbx' : Γb x = none := by simp [Γb, A2.setE, upd_ne _ _ (Ne.symm hbx), h1x]
@@ -1016,7 +1016,7 @@ theorem mutex_owns_nothing {o : Option Val} (ho : o = none ∨ ∃ n, o = some (
     nothing. -/
 theorem _root_.A2.RhsT.mutexNew {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry}
     (hy : Γ y = some Ey) (hly : Ey.live = true) (hty : Ey.ty = .int) :
-    RhsT Γ F (Rhs.mutexNew y) ⟨.lk .int, .own, true, [], [], false, false, false⟩ Γ :=
+    RhsT Γ F (Rhs.mutexNew y) ⟨.lk .int, .own, true, [], [], false, false, false, false⟩ Γ :=
   RhsT.lockNew hy hly hty rfl ⟨rfl, rfl⟩ rfl PushArg.int
 
 /-- **`mutex_lock` is typed**: the integer taken out of the lock (`lockTake`),
@@ -1066,7 +1066,7 @@ inside, a borrowed parameter, the caller's share frozen for the call. -/
 
 /-- The element handed over: an owned lock share, holding what the `Vec` held
     (`popE`). -/
-def elemLockE (t : Ty) (Ev : Entry) : Entry := ⟨.lk t, .own, true, [], Ev.held, false, false, false⟩
+def elemLockE (t : Ty) (Ev : Entry) : Entry := ⟨.lk t, .own, true, [], Ev.held, false, false, false, false⟩
 
 /-- **A lock that is an element is typed** (`Stmt.withLockElem`): the element
     `e` handed over is an owner (`popE`), so a root; the body names neither it
@@ -1219,7 +1219,7 @@ theorem glob_not_arc_cell {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {t : Ty} {E : 
 theorem _root_.A2.StmtT.lockGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x : Var} {g : Nat} {t : Ty}
     {s : Stmt} (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F)
     (hxh : x ≠ h) (htok : (Ty.lk t).ok = true) (hhs : h ∉ s.vars)
-    (hb : StmtT P .none (setE (setE Γ h ⟨.lk t, .own, true, [], [], false, false, false⟩) x (lockE t)) F s Δ)
+    (hb : StmtT P .none (setE (setE Γ h ⟨.lk t, .own, true, [], [], false, false, false, false⟩) x (lockE t)) F s Δ)
     (hend : EndOK Δ x) (hlive : ∃ E, Δ x = some E ∧ E.live = true) (hendh : EndOK (exitScope x Δ) h)
     (hna : t.holdsDtor = true → x ∉ s.assigns := by lock_na) :
     StmtT P ξ Γ F (Stmt.lockGlobal h x g t s) (exitScope h (exitScope x Δ)) :=
@@ -1231,7 +1231,7 @@ theorem _root_.A2.StmtT.lockGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x 
     owner `h` of a clone of its share. -/
 theorem _root_.A2.StmtT.loadGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x : Var} {g : Nat} {s : Stmt}
     (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F) (hxh : x ≠ h)
-    (hb : StmtT P ((ξ.under h).under x) (setE (setE Γ h ⟨.lk .int, .own, true, [], [], false, false, false⟩) x intE) F s Δ)
+    (hb : StmtT P ((ξ.under h).under x) (setE (setE Γ h ⟨.lk .int, .own, true, [], [], false, false, false, false⟩) x intE) F s Δ)
     (hend : EndOK Δ x) (hendh : EndOK (exitScope x Δ) h) :
     StmtT P ξ Γ F (Stmt.loadGlobal h x g s) (exitScope h (exitScope x Δ)) :=
   StmtT.letv hs hh hhF (RhsT.glob rfl rfl)
@@ -1242,8 +1242,8 @@ theorem _root_.A2.StmtT.loadGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x 
     owner: safe code hands a scalar global nothing to own (h273, h202). -/
 theorem _root_.A2.StmtT.storeGlobal {P : Prog} {Γ Δ : Ctx} {F : List Var} {h x : Var} {g : Nat} {e : Expr}
     {s : Stmt} (hs : s.src = true) (hh : Γ h = none) (hhF : h ∉ F) (hx : Γ x = none) (hxF : x ∉ F)
-    (hxh : x ≠ h) (he : ExprT (setE Γ h ⟨.lk .int, .own, true, [], [], false, false, false⟩) e)
-    (hb : StmtT P ((ξ.under h).under x) (setE (setE Γ h ⟨.lk .int, .own, true, [], [], false, false, false⟩) x intE) F s Δ)
+    (hxh : x ≠ h) (he : ExprT (setE Γ h ⟨.lk .int, .own, true, [], [], false, false, false, false⟩) e)
+    (hb : StmtT P ((ξ.under h).under x) (setE (setE Γ h ⟨.lk .int, .own, true, [], [], false, false, false, false⟩) x intE) F s Δ)
     (hend : EndOK Δ x) (hendh : EndOK (exitScope x Δ) h) :
     StmtT P ξ Γ F (Stmt.storeGlobal h x g e s) (exitScope h (exitScope x Δ)) :=
   StmtT.letv hs hh hhF (RhsT.glob rfl rfl)
@@ -1316,7 +1316,7 @@ theorem _root_.A2.StmtT.withCellIn {P : Prog} {Γ Δ : Ctx} {F : List Var} {a x 
     counts with the caller's. -/
 theorem cellClone_in {Γ : Ctx} {F : List Var} {a : Var} {ps : List (PMode × Ty)} {t : Ty}
     (ha : Γ a = some (paramE ps (.inp, .cell t))) :
-    RhsT Γ F (.cellClone a) ⟨.cell t, .own, true, [], [], false, false, false⟩ Γ :=
+    RhsT Γ F (.cellClone a) ⟨.cell t, .own, true, [], [], false, false, false, false⟩ Γ :=
   .cellClone ha rfl rfl
 
 /-- The crossing check counts owners, as the runtime's does: a slot left behind
@@ -1371,7 +1371,7 @@ theorem slice_share_ok {t : Ty} (h : t.ok = true) (hv : t.holdsView = false) (hv
     typed (`slice_from_vec`) ... -/
 theorem view_share {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {t : Ty} (hy : Γ y = some E)
     (hl : E.live = true) (hty : E.ty = .vec t) (hv : t.holdsView = false) :
-    RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false, false⟩ Γ :=
+    RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false, false, false⟩ Γ :=
   RhsT.view hy hl hty hv
 
 /-- ... and no crossing takes it: a slice holds a view, so it is no spawn's
@@ -1485,7 +1485,7 @@ theorem lockNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y 
 theorem lockNew_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var} {Ey : Entry} {D : List Dep}
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .fn ms .send)
     (hpa : PushArg Γ F y Ey (.fn ms .send) D Γ1) :
-    RhsT Γ F (.lockNew (.fn ms .send) y) ⟨.lk (.fn ms .send), .own, true, [], [], false, false, false⟩ Γ1 :=
+    RhsT Γ F (.lockNew (.fn ms .send) y) ⟨.lk (.fn ms .send), .own, true, [], [], false, false, false, false⟩ Γ1 :=
   RhsT.lockNew hy hl hty rfl ⟨rfl, rfl⟩ rfl hpa
 
 /-- ... and a channel's element: `chan_send` sends it. -/
@@ -1509,7 +1509,7 @@ theorem sendCheck_env {B : Nat → Option Blk} {vs : List Val} {st' : Var → Op
 theorem arcNew_sync {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var} {Ey : Entry} {D : List Dep}
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .fn ms .sync)
     (hpa : PushArg Γ F y Ey (.fn ms .sync) D Γ1) :
-    RhsT Γ F (.arcNew (.fn ms .sync) y) ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false⟩ Γ1 :=
+    RhsT Γ F (.arcNew (.fn ms .sync) y) ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false, false⟩ Γ1 :=
   RhsT.arcNew hy hl hty (Or.inl rfl) ⟨rfl, rfl⟩ rfl rfl hpa
 
 /-- ... `arc_get` lends it, through a share of the `Arc` (`getE`): a borrow
@@ -1574,7 +1574,7 @@ theorem _root_.A2.StmtT.callc_recv {P : Prog} {Γ Δ : Ctx} {F : List Var} {x c 
 /-- What `arc_get` lends of an owned share names nothing by name: a call
     through it is `callc_recv`'s. -/
 theorem getE_own_noName {a : Var} {t u : Ty} :
-    ∀ d ∈ (getE a ⟨.arc u, .own, true, [], [], false, false, false⟩ t).vdeps, d.kind.isName = false := by
+    ∀ d ∈ (getE a ⟨.arc u, .own, true, [], [], false, false, false, false⟩ t).vdeps, d.kind.isName = false := by
   intro d hd
   cases t <;> simp_all [getE, Entry.vdeps, derive, Mode.isRoot, Mode.ownSlot, rootKind, intE, Kind.isName]
 
@@ -1583,13 +1583,13 @@ theorem getE_own_noName {a : Var} {t u : Ty} :
     share: A2's `letv` and `callc`, unchanged. -/
 theorem _root_.A2.StmtT.arcCall {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g x : Var} {j : Nat} {k : Stmt}
     {ms : List Nat} {σ : Nat} {sig : Fn}
-    (ha : Γ a = some ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false⟩) (hks : k.src = true)
+    (ha : Γ a = some ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false, false⟩) (hks : k.src = true)
     (hg : Γ g = none) (hgF : g ∉ F) (hx : Γ x = none) (hxF : x ∉ F) (hxg : x ≠ g)
     (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) (hps : sig.params = [(.inp, .fn ms .sync)])
     (hout : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0) (hnt : ¬ ThruFn P σ)
-    (hk : StmtT P ((ξ.under g).under x) (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false⟩ (.fn ms .sync))) x
-      (recvRes g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false⟩ (.fn ms .sync))
-        (callRes (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false⟩ (.fn ms .sync)))
+    (hk : StmtT P ((ξ.under g).under x) (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false, false⟩ (.fn ms .sync))) x
+      (recvRes g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false, false⟩ (.fn ms .sync))
+        (callRes (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false, false⟩ (.fn ms .sync)))
           sig [g]))) F k Δ)
     (hend : EndOK Δ x) (hendg : EndOK (exitScope x Δ) g)
     (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
@@ -1656,7 +1656,7 @@ theorem _root_.A2.RhsT.var_any {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E Ey : E
 theorem moveUp_send {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry} {ms : List Nat} {q : Cross}
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hm : Ey.mode = .own) (hyF : y ∉ F) (hp : NoPin Γ y)
     (hds : DtorSafe Γ .replace false y) (hty : Ey.ty = .fn ms q) (hq : q = .sync ∨ q = .bare) :
-    RhsT Γ F (.var y) ⟨.fn ms .send, .own, true, [], Ey.held, false, false, false⟩
+    RhsT Γ F (.var y) ⟨.fn ms .send, .own, true, [], Ey.held, false, false, false, false⟩
       (setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) ∧
     (Ty.fn ms .send).holdsView = false :=
   ⟨RhsT.moveUp hy hl hm hyF hp hds hty (by rcases hq with rfl | rfl <;> decide), rfl⟩
@@ -1667,7 +1667,7 @@ theorem moveUp_send {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry} {ms : List 
 theorem moveUp_any {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry} {ms : List Nat} {q : Cross}
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hm : Ey.mode = .own) (hyF : y ∉ F) (hp : NoPin Γ y)
     (hds : DtorSafe Γ .replace false y) (hty : Ey.ty = .fn ms q) (hqd : q.drops = false) :
-    RhsT Γ F (.var y) ⟨.fn ms .any, .own, true, [], Ey.held, false, false, false⟩
+    RhsT Γ F (.var y) ⟨.fn ms .any, .own, true, [], Ey.held, false, false, false, false⟩
       (setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) :=
   RhsT.moveUp hy hl hm hyF hp hds hty (Cross.le_any q hqd)
 
@@ -1690,19 +1690,19 @@ theorem _root_.A2.StmtT.callcUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {c c' x 
     handler is Sync in the `Arc`, and the interface need not say so. -/
 theorem _root_.A2.StmtT.arcCallUp {P : Prog} {Γ Δ : Ctx} {F : List Var} {a g g' x : Var} {j : Nat}
     {k : Stmt} {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn}
-    (ha : Γ a = some ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false⟩) (hks : k.src = true)
+    (ha : Γ a = some ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false, false⟩) (hks : k.src = true)
     (hg : Γ g = none) (hgF : g ∉ F) (hg' : Γ g' = none) (hg'F : g' ∉ F) (hgg : g' ≠ g)
     (hx : Γ x = none) (hxF : x ∉ F) (hxg : x ≠ g) (hxg' : x ≠ g') (hle : Cross.sync.Le q)
     (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig) (hps : sig.params = [(.inp, .fn ms q)])
     (hout : ∀ o ∈ sig.outHolds, o.2.1 ≠ 0) (hnt : ¬ ThruFn P σ)
     (hk : StmtT P (((ξ.under g).under g').under x)
-      (setE (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false⟩ (.fn ms .sync))) g'
-          { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false⟩ (.fn ms .sync) with
+      (setE (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false, false⟩ (.fn ms .sync))) g'
+          { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false, false⟩ (.fn ms .sync) with
             ty := .fn ms q, dtor := false, dbind := false }) x
-        (recvRes g' { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false⟩ (.fn ms .sync) with
+        (recvRes g' { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false, false⟩ (.fn ms .sync) with
             ty := .fn ms q, dtor := false, dbind := false }
-          (callRes (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false⟩ (.fn ms .sync)))
-            g' { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false⟩ (.fn ms .sync) with
+          (callRes (setE (setE Γ g (getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false, false⟩ (.fn ms .sync)))
+            g' { getE a ⟨.arc (.fn ms .sync), .own, true, [], [], false, false, false, false⟩ (.fn ms .sync) with
               ty := .fn ms q, dtor := false, dbind := false }) sig [g']))) F k Δ)
     (hend : EndOK Δ x) (hendg' : EndOK (exitScope x Δ) g') (hendg : EndOK (exitScope g' (exitScope x Δ)) g)
     (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) :
@@ -2105,7 +2105,7 @@ theorem glob_not_dyn {Γ Γ1 : Ctx} {F : List Var} {g : Nat} {ms : List Nat} {q 
 theorem dyn_up_bound {Γ : Ctx} {F : List Var} {y : Var} {Ey : Entry} {ms : List Nat} {q : Cross}
     {b : TraitBound} (hy : Γ y = some Ey) (hl : Ey.live = true) (hm : Ey.mode = .own) (hyF : y ∉ F)
     (hp : NoPin Γ y) (hds : DtorSafe Γ .replace false y) (hty : Ey.ty = .fn ms q) (hq : q.Le b.cross) :
-    RhsT Γ F (.var y) ⟨.fn ms b.cross, .own, true, [], Ey.held, false, false, false⟩
+    RhsT Γ F (.var y) ⟨.fn ms b.cross, .own, true, [], Ey.held, false, false, false, false⟩
       (setE (kill .replace false y Γ) y { Ey with live := false, dtor := false }) :=
   RhsT.moveUp hy hl hm hyF hp hds hty hq
 
@@ -2481,7 +2481,7 @@ theorem accum_fits (q : Cross) : q.Fits accEnv [] :=
     calls it, the environment handed over to the code, which adds one to the
     count it moved in. -/
 theorem accum_hand {Γ Δ : Ctx} {F : List Var} {x acc : Var} {k : Stmt} (hks : k.src = true)
-    (hx : Γ x = none) (hxF : x ∉ F) (hacc : Γ acc = some ⟨accTy, .own, true, [], [], false, false, false⟩)
+    (hx : Γ x = none) (hxF : x ∉ F) (hacc : Γ acc = some ⟨accTy, .own, true, [], [], false, false, false, false⟩)
     (haccF : acc ∉ F) (hny : NoPin Γ acc) (hdc : DtorSafe Γ .replace false acc)
     (hk : StmtT accP (ξ.under x) (kill .replace false acc (setE (callPost (kill .replace false acc Γ) accSig [acc]) x
       (callRes (kill .replace false acc Γ) accSig [acc]))) F k Δ) (hend : EndOK Δ x) :
@@ -2559,7 +2559,7 @@ theorem sigCtx_plain {fn : Fn} (hio : ∀ pt ∈ fn.params, ∃ b, pt.1 = .inout
 
 /-- The accumulator's environment as its code changes it: the pair it
     replaces. -/
-def accEp : Entry := ⟨accEnv, .inout .replace, true, [], [], false, false, false⟩
+def accEp : Entry := ⟨accEnv, .inout .replace, true, [], [], false, false, false, false⟩
 
 /-- The accumulator code's context after its three `let`s ... -/
 def accCtx3 : Ctx := setE (setE (setE (sigCtx accCode) 2 intE) 3 intE) 4 intE
@@ -2575,7 +2575,7 @@ theorem accCode_ok : FnOK accP accCode := by
   have h0 : PlainCtx (sigCtx accCode) := sigCtx_plain (fun pt hpt => by
     simp only [accCode, List.mem_singleton] at hpt; subst hpt; exact ⟨_, rfl⟩) rfl
   have hs0 : sigCtx accCode 0 = some accEp := by simp [sigCtx, accCode, paramE, accEnv, Ty.hasFn, accEp]
-  have hs1 : sigCtx accCode 1 = some ⟨.int, .bor, false, [], [], false, false, false⟩ := by
+  have hs1 : sigCtx accCode 1 = some ⟨.int, .bor, false, [], [], false, false, false, false⟩ := by
     simp [sigCtx, accCode, resMode]
   have hEp : accEp.vdeps = [] ∧ accEp.mode ≠ .rootb ∧ accEp.dtor = false ∧ accEp.dbind = false :=
     ⟨by simp [accEp, Entry.vdeps, Mode.ownSlot], by simp [accEp], rfl, rfl⟩
@@ -2583,18 +2583,18 @@ theorem accCode_ok : FnOK accP accCode := by
     ((h0.setE (x := 2) intE_plain).setE (x := 3) intE_plain).setE (x := 4) intE_plain
   have hp3a : PlainCtx (setE accCtx3 0 accEp) := hp3.setE hEp
   have hp4 : PlainCtx accCtx4 := hp3a.setE (x := 1) intE_plain
-  have hpair : RhsT accCtx3 [] (.pair 4 3) ⟨.prod .int .int, .own, true, [], [], false, false, false⟩ accCtx3 :=
+  have hpair : RhsT accCtx3 [] (.pair 4 3) ⟨.prod .int .int, .own, true, [], [], false, false, false, false⟩ accCtx3 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [accCtx3, setE]) rfl PushArg.int (by simp [accCtx3, setE]) rfl
       PushArg.int (fun h => by simp [intE, Mode.ownSlot] at h)
   have hA0 : StmtT accP .none accCtx3 [] (.assign 0 (.pair 4 3)) (setE accCtx3 0 accEp) := by
     have h := StmtT.assign (ξ := .none) (P := accP) (F := []) (x := 0) (Ex := accEp)
-      (E := ⟨.prod .int .int, .own, true, [], [], false, false, false⟩) (by simp [accCtx3, setE, hs0]) (by simp)
+      (E := ⟨.prod .int .int, .own, true, [], [], false, false, false, false⟩) (by simp [accCtx3, setE, hs0]) (by simp)
       (Or.inr (Or.inl ⟨rfl, rfl⟩)) hpair rfl (by simp [Entry.vdeps, Mode.ownSlot, roots])
       (by simp [accCtx3, setE, hs0]) (hp3.endOK 0).1 (hp3.endOK 0).2.1 rfl
     rw [hp3.kill] at h; exact h
   have hA1 : StmtT accP .none (setE accCtx3 0 accEp) [] (.assign 1 (.var 4)) accCtx4 := by
     have h := StmtT.assign (ξ := .none) (P := accP) (F := []) (x := 1) (Γ := setE accCtx3 0 accEp)
-      (Ex := ⟨.int, .bor, false, [], [], false, false, false⟩) (E := { intE with dtor := false, dbind := false })
+      (Ex := ⟨.int, .bor, false, [], [], false, false, false, false⟩) (E := { intE with dtor := false, dbind := false })
       (by simp [accCtx3, setE, hs1]) (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.copyBor (y := 4) (E := intE) (by simp [accCtx3, setE]) rfl rfl) rfl
       (by simp [intE, Entry.vdeps, Mode.ownSlot, roots]) (by simp [accCtx3, setE, hs1])
@@ -2644,14 +2644,14 @@ theorem accSig_ok : FnOK accP accSig := by
   have hsym : symNames accSig.params = [] := by decide
   have h0 : PlainCtx (sigCtx accSig) := sigCtx_plain (fun pt hpt => by
     simp only [accSig, List.mem_singleton] at hpt; subst hpt; exact ⟨_, rfl⟩) hsym
-  have hs0 : sigCtx accSig 0 = some ⟨accTy, .inout .replace, true, [], [], false, false, false⟩ := by
+  have hs0 : sigCtx accSig 0 = some ⟨accTy, .inout .replace, true, [], [], false, false, false, false⟩ := by
     simp only [sigCtx, accSig, List.length_singleton, Nat.zero_lt_one]
     simp [paramE, accTy, Ty.hasFn, ← hsym, accSig]
-  have hs1 : sigCtx accSig 1 = some ⟨.int, .bor, false, [], [], false, false, false⟩ := by
+  have hs1 : sigCtx accSig 1 = some ⟨.int, .bor, false, [], [], false, false, false, false⟩ := by
     simp [sigCtx, accSig, resMode]
   have hA : StmtT accP .none (sigCtx accSig) [] accSig.body (setE (sigCtx accSig) 1 intE) := by
     have h := StmtT.assign (ξ := .none) (P := accP) (F := []) (x := 1) (r := .expr (.lit 0)) (Γ := sigCtx accSig)
-      (Ex := ⟨.int, .bor, false, [], [], false, false, false⟩) hs1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
+      (Ex := ⟨.int, .bor, false, [], [], false, false, false, false⟩) hs1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.expr ExprT.lit) rfl (by simp [intE, Entry.vdeps, Mode.ownSlot, roots]) (by simp [hs1])
       (h0.endOK 1).1 (h0.endOK 1).2.1 rfl
     rw [h0.kill] at h; exact h
@@ -2668,7 +2668,7 @@ theorem accSig_ok : FnOK accP accSig := by
   · intro i hi b _
     have hi0 : i = 0 := by simpa [accSig] using hi
     subst hi0
-    exact ⟨⟨accTy, .inout .replace, true, [], [], false, false, false⟩, by simp [setE, hs0], rfl, by simp, fun _ => rfl⟩
+    exact ⟨⟨accTy, .inout .replace, true, [], [], false, false, false, false⟩, by simp [setE, hs0], rfl, by simp, fun _ => rfl⟩
 
 /-- **The accumulator's program is typed**: its interface and code meet their
     summaries, and they make no package. -/
@@ -2698,10 +2698,10 @@ def accMain : Stmt :=
     (.letv 3 (.pack [1] accEnv [0] 2 []) (.callcE 4 3 0 [] .skip))))
 
 /-- The environment before it moves into the closure, ... -/
-def accPairE : Entry := ⟨accEnv, .own, true, [], [], false, false, false⟩
+def accPairE : Entry := ⟨accEnv, .own, true, [], [], false, false, false, false⟩
 
 /-- ... the closure that owns it, ... -/
-def accCloE : Entry := ⟨accTy, .own, true, [], [], false, false, false⟩
+def accCloE : Entry := ⟨accTy, .own, true, [], [], false, false, false, false⟩
 
 /-- ... and the caller's context once the closure is made. -/
 def accMainCtx : Ctx :=
@@ -2912,7 +2912,7 @@ theorem lockNew_dyn_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var}
     (hy : Γ y = some Ey) (hl : Ey.live = true) (hty : Ey.ty = .fn ms TraitBound.send.cross)
     (hpa : PushArg Γ F y Ey (.fn ms TraitBound.send.cross) D Γ1) :
     RhsT Γ F (.lockNew (.fn ms TraitBound.send.cross) y)
-      ⟨.lk (.fn ms TraitBound.send.cross), .own, true, [], [], false, false, false⟩ Γ1 :=
+      ⟨.lk (.fn ms TraitBound.send.cross), .own, true, [], [], false, false, false, false⟩ Γ1 :=
   lockNew_send hy hl hty hpa
 
 /-- ... and in a channel: a channel's element may be an object of any trait

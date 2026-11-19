@@ -56,6 +56,10 @@ theorem killE_dbind (e : Eff) (hv : Bool) (x : Var) (E : Entry) : (killE e hv x 
 theorem killE_fresh (e : Eff) (hv : Bool) (x : Var) (E : Entry) : (killE e hv x E).fresh = E.fresh := by
   unfold killE; split <;> rfl
 
+theorem killE_heldFresh (e : Eff) (hv : Bool) (x : Var) (E : Entry) :
+    (killE e hv x E).heldFresh = E.heldFresh := by
+  unfold killE; split <;> rfl
+
 theorem killE_vdeps (e : Eff) (hv : Bool) (x : Var) (E : Entry) :
     (killE e hv x E).vdeps = E.vdeps := by
   simp [Entry.vdeps, killE_mode, killE_path, killE_held]

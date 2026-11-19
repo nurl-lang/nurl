@@ -115,12 +115,12 @@ theorem mem_shareOf {D : List Dep} {d : Dep} :
 
 def envE (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Entry :=
   ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held ++ shareOf (derive c Ec .self ++ Ec.held)),
-    envDeps cs (Ec.held ++ shareOf Ec.held), false, false, false⟩
+    envDeps cs (Ec.held ++ shareOf Ec.held), false, false, false, false⟩
 
 /-- The environment's entry without the shares: what its value is valid
     through. -/
 def envE0 (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Entry :=
-  ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held), envDeps cs Ec.held, false, false, false⟩
+  ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held), envDeps cs Ec.held, false, false, false, false⟩
 
 theorem envE0_path_sub (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) :
     (envE0 c Ec te cs).path ⊆ (envE c Ec te cs).path :=
@@ -434,7 +434,8 @@ theorem clean_weaker (E : Entry) : EntryWeaker E.clean E := by
       rw [Entry.clean_dbind] at hd; rw [clean_mode] at hos; rw [clean_ty, clean_mode] at hn
       exact (Entry.clean_vdeps_mem hd hos hn hnm).symm,
       fun hl hn _ hfr => by
-        rw [Entry.clean_eq hl hn]; exact ⟨hfr, List.Subset.refl _⟩⟩
+        rw [Entry.clean_eq hl hn]; exact ⟨hfr, List.Subset.refl _⟩,
+      fun _ _ hhf => by rw [clean_heldFresh]; exact hhf⟩
 
 theorem clean_rootb {E : Entry} (h : E.mode = .rootb) : E.clean = E :=
   clean_fixed (Or.inl h)
@@ -876,11 +877,15 @@ theorem post_rel {Γe Γ : Ctx} {fn sig : Fn} {A C : List Var} {e : Var}
         refine ih as (i + 1) _ _ (by omega) has' hrb' hio' ((h.kill _ _ a).set hae ?_ ?_)
         · rw [hcl]
           refine RSetup.EntryWeaker.mk' (by simp [clean_ty]) (by simp [clean_mode])
-            (by rw [fixed_setHeld, clean_fixed_iff]; exact hrba (by simp)) (by simp [clean_live])
+            (by rw [fixed_setHeldFresh, clean_fixed_iff]; exact hrba (by simp)) (by simp [clean_live])
             (fun _ => clean_path_sub _) ?_ (hdh := fun hd => absurd hd (by simp [hdba]))
             (hf := fun hl hn _ hfr => by
               simp [clean_live, clean_ty] at hl hn hfr ⊢
               rw [Entry.clean_eq hl hn]; exact ⟨hfr, List.Subset.refl _⟩)
+            (hg := fun _ _ hhf => by
+              by_cases hvv : t.holdsView = true
+              · simp [hvv] at hhf
+              · simp [hvv] at hhf ⊢; exact hhf)
           intro d hd
           by_cases hvv : t.holdsView = true
           · rw [ite_eq_left hvv] at hd ⊢
@@ -890,7 +895,7 @@ theorem post_rel {Γe Γ : Ctx} {fn sig : Fn} {A C : List Var} {e : Var}
             · exact Or.inl (Or.inr ((hout i hi).1 hd))
             · exact Or.inr (hheld.1 hd)
           · rw [ite_eq_right hvv] at hd ⊢
-            exact clean_held_sub _ hd
+            exact clean_held_sub (argE Γ a) hd
         · intro d hd
           have hv : ∀ d' ∈ (argE Γe a).vdeps, d'.root ≠ e := hne
           simp only [Entry.vdeps] at hd hv
@@ -1197,7 +1202,8 @@ theorem rerootE_noE {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker E 
         have hEb : E.mode = .bor := by rw [← hw.mode]; exact hb
         refine ⟨h1, ?_⟩
         show E'.path ⊆ reroot p D E.path
-        rw [hp (by rw [hEb]; rfl)]; exact h2⟩
+        rw [hp (by rw [hEb]; rfl)]; exact h2,
+      fun hn hb hhf => hw.heldFresh hn hb hhf⟩
   · have hf : E.fixed := by simp only [Entry.fixed_def] at h ⊢; rw [rerootE] at h; exact h
     have := hw.fixed hf
     rw [this]; unfold rerootE
@@ -1419,7 +1425,12 @@ theorem weaker_killAll_more {Mc M : List Dep} {Ed Es : Entry} (hw : EntryWeaker 
           intro ds E0; unfold RSetup.killAll; split <;> simp
         rw [(hkf _ _).1] at hfr ⊢; rw [(hkf _ _).2.1, (hkf _ _).2.1]
         rw [(hkt _ _).1] at hn; rw [(hkt _ _).2] at hb
-        exact hw.fresh ((hkf _ _).2.2 hl) hn hb hfr⟩
+        exact hw.fresh ((hkf _ _).2.2 hl) hn hb hfr,
+      fun hn hb hhf => by
+        have hkh : ∀ (ds : List Dep) (E0 : Entry), (RSetup.killAll ds E0).heldFresh = E0.heldFresh := by
+          intro ds E0; unfold RSetup.killAll; split <;> rfl
+        rw [hkh] at hhf ⊢; rw [(hkt _ _).1] at hn; rw [(hkt _ _).2] at hb
+        exact hw.heldFresh hn hb hhf⟩
   · have hf' := killAll_fixed.mp hf
     have hM := hfix hf'
     rw [hw.fixed hf', hMc hM, killAll_id hM]

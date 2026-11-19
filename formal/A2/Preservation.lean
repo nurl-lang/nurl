@@ -844,7 +844,7 @@ theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT
     hi.toMInv.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self, hi.heap.blk, hi.heap.views⟩
       (Nat.le_succ _)
   obtain ⟨post, out⟩ := reap_pres (F := F) (m := { m with nv := m.nv + 1 }) hm0 hk
-  generalize hE : (⟨Ty.nest n (.dtor f u), .own, true, [], [], false, false, false⟩ : Entry) = E at out
+  generalize hE : (⟨Ty.nest n (.dtor f u), .own, true, [], [], false, false, false, false⟩ : Entry) = E at out
   have hEty : E.ty = Ty.nest n (.dtor f u) := by rw [← hE]
   have hEmo : E.mode = .own := by rw [← hE]
   have hEdb : E.dbind = false := by rw [← hE]
@@ -3916,11 +3916,11 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         rw [← hΓ1] at h; simp only [A2.kill] at h
         obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
         exact ⟨E, hE, rfl⟩
-      have hEndN : EndOK (setE Γ1 m.nv (Entry.arm { (⟨Ty.nest n (.dtor f tx), .own, true, [], (Ex.reviveD x).held, false, false, false⟩ : Entry) with
-          ty := Ty.nest n (.dtor f tx), held := (⟨Ty.nest n (.dtor f tx), .own, true, [], (Ex.reviveD x).held, false, false, false⟩ : Entry).held })) m.nv := by
+      have hEndN : EndOK (setE Γ1 m.nv (Entry.arm { (⟨Ty.nest n (.dtor f tx), .own, true, [], (Ex.reviveD x).held, false, false, false, false⟩ : Entry) with
+          ty := Ty.nest n (.dtor f tx), held := (⟨Ty.nest n (.dtor f tx), .own, true, [], (Ex.reviveD x).held, false, false, false, false⟩ : Entry).held })) m.nv := by
         -- (Agora #782: armed with what `x` views, of roots bound before it)
-        have hEl : ∀ d ∈ (Entry.arm { (⟨Ty.nest n (.dtor f tx), .own, true, [], (Ex.reviveD x).held, false, false, false⟩ : Entry) with
-            ty := Ty.nest n (.dtor f tx), held := (⟨Ty.nest n (.dtor f tx), .own, true, [], (Ex.reviveD x).held, false, false, false⟩ : Entry).held }).vdeps,
+        have hEl : ∀ d ∈ (Entry.arm { (⟨Ty.nest n (.dtor f tx), .own, true, [], (Ex.reviveD x).held, false, false, false, false⟩ : Entry) with
+            ty := Ty.nest n (.dtor f tx), held := (⟨Ty.nest n (.dtor f tx), .own, true, [], (Ex.reviveD x).held, false, false, false, false⟩ : Entry).held }).vdeps,
             d.kind.isName = false → d.root ≠ m.nv := by
           intro d hd hnm hdr
           have hd' : d ∈ (Ex.revive x).vdeps := by
@@ -3945,7 +3945,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             have := hm1.dom p; rw [h0] at this; exact this.symm)
           intro h; rw [h] at hlt; exact absurd hpn (Nat.lt_asymm hlt)
       have hlet := StmtT.letd (P := P) (ξ := ξ.underD x) (F := F) (x := m.nv) (f := f) (r := .remove x (.lit 0)) (s := .skip)
-        (t := tx) (H := (⟨Ty.nest n (.dtor f tx), .own, true, [], (Ex.reviveD x).held, false, false, false⟩ : Entry).held) (τ := Ty.nest n (.dtor f tx))
+        (t := tx) (H := (⟨Ty.nest n (.dtor f tx), .own, true, [], (Ex.reviveD x).held, false, false, false, false⟩ : Entry).held) (τ := Ty.nest n (.dtor f tx))
         rfl hrΓ' hrF hpop rfl LetdTy.elem hstr hfnt
         ⟨LetdFn.of hdtor (fun g hg => Ty.nest_eq_dtor hg),
           TakeOK.triv (fun y => ⟨(by intro h; cases h), (by intro h; cases h)⟩)⟩ (HeldUp.refl _ _) StmtT.skip hEndN

@@ -56,4 +56,5 @@ import A2.ArcDtorWitness
 import A2.ArcPanicWitness
 import A2.FreshWitness
 import A2.Unfresh
+import A2.UnheldFresh
 import A2.FreshClosureWitness

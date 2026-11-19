@@ -46,9 +46,9 @@ def P : Prog := [g]
 
 /-! ### The callee -/
 
-def Ep : Entry := ⟨str, .inout .replace, true, [], [], false, false, false⟩
-def Eq : Entry := ⟨str, .own, true, [], [], false, false, false⟩
-def R0 : Entry := ⟨.int, .bor, false, [], [], false, false, false⟩
+def Ep : Entry := ⟨str, .inout .replace, true, [], [], false, false, false, false⟩
+def Eq : Entry := ⟨str, .own, true, [], [], false, false, false, false⟩
+def R0 : Entry := ⟨.int, .bor, false, [], [], false, false, false, false⟩
 
 /-- The callee's context with the result slot `r1`. -/
 def ctx (r1 : Entry) : Ctx := fun v =>
@@ -76,7 +76,7 @@ theorem take_typed : RhsT (ctx R0) [] (.take 0) Eq (ctx R0) := by
   have h := RhsT.take (Γ := ctx R0) (F := []) (y := 0) (E := Ep) (t := .int) (by simp [ctx]) rfl rfl rfl
     (Or.inr ⟨.replace, rfl, by simp [Eff.le]⟩) rfl (by simp) (ctx_noPin (by simp [R0]) _)
     (DtorSafe.of_none (ctx_dtor rfl) _ _ _)
-  have he : setE (kill .replace false 0 (ctx R0)) 0 ⟨Ep.ty, Ep.mode, true, [], [], false, false, false⟩ = ctx R0 := by
+  have he : setE (kill .replace false 0 (ctx R0)) 0 ⟨Ep.ty, Ep.mode, true, [], [], false, false, false, false⟩ = ctx R0 := by
     funext v
     rcases v with _ | _ | v <;> simp [ctx, setE, upd, kill, killE, hits, Ep, R0, Entry.vdeps, Mode.ownSlot]
   rw [he] at h
@@ -154,7 +154,7 @@ theorem prog_codes : ProgCodes P := by
 def main : Stmt :=
   .letv 0 (.new .int) (.letcall 1 0 [0] (.letv 2 (.expr (.len 0)) .skip))
 
-def Ew : Entry := ⟨str, .own, true, [], [], false, false, false⟩
+def Ew : Entry := ⟨str, .own, true, [], [], false, false, false, false⟩
 
 /-- The caller's context at the call. -/
 def K1 : Ctx := setE (fun _ => none) 0 Ew

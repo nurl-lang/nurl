@@ -216,6 +216,11 @@ the LLVM / C11 memory model rather than redefining it.
   own local, when the changed elements hold no views. A change of
   elements that hold views (`StmtT.editBV`) stays `edit true` even
   through a fresh borrow: its stored views need `S.R = []` when renamed.
+  (Agora #916 records which borrows hold only the frame's own memory,
+  `Entry.heldFresh`, and a call lifts their `held` without the arguments'
+  memory; a view of a local `Vec` of a type that holds no views may carry
+  the bit. That makes a stored view's `held` precise, but not yet its
+  path, so `editBV` is unchanged.)
   `A2/FreshWitness.lean` types one, a struct holding a slice and a number,
   run by its armed `letd`'s frame end, safe and leak-free (`main_safe`,
   `main_no_leak`). nurlc accepts it, and it runs clean. The modelling

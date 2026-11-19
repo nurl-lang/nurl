@@ -892,7 +892,7 @@ def main : Stmt :=
     (.letv 3 (.lockNew DT 2) (.letv 4 (.expr (.lit 0)) (Stmt.lockedApply 3 5 6 4 1)))))
 
 /-- The lock share's entry: owned, holding nothing. -/
-def EL : Entry := ⟨.lk DT, .own, true, [], [], false, false, false⟩
+def EL : Entry := ⟨.lk DT, .own, true, [], [], false, false, false, false⟩
 
 /-- **A `Locked` of a destructor value is typed** (Agora #755: `Ty.ok` admits
     `lk (dtor f u)` when `u` holds no cell share, since Agora #803, and no
@@ -1047,9 +1047,9 @@ def mainV : Stmt :=
     (.letv 3 (.lockNew (.vec DT) 2) (.withLock 3 4 (.letd 5 0 (.pair 0 1) (.push 4 5))))))
 
 /-- The lock share's entry: owned, holding nothing. -/
-def ELV : Entry := ⟨.lk (.vec DT), .own, true, [], [], false, false, false⟩
+def ELV : Entry := ⟨.lk (.vec DT), .own, true, [], [], false, false, false, false⟩
 
-theorem lockE_vecDT : lockE (.vec DT) = ⟨.vec DT, .own, true, [], [], false, false, false⟩ := by
+theorem lockE_vecDT : lockE (.vec DT) = ⟨.vec DT, .own, true, [], [], false, false, false, false⟩ := by
   unfold lockE; simp
 
 /-- **A `Locked` of a `Vec` of destructor values is typed** (Agora #755:
@@ -1063,10 +1063,10 @@ theorem mainV_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainV Δ := by
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
   have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
   -- the `Vec`
-  let EN : Entry := ⟨.vec DT, .own, true, [], [], false, false, false⟩
+  let EN : Entry := ⟨.vec DT, .own, true, [], [], false, false, false, false⟩
   have hnew : RhsT K2 [] (.new DT) EN K2 := RhsT.new (by decide)
   let EV : Entry := Entry.arm { EN with ty := .vec DT, held := [] }
-  have hEVe : EV = ⟨.vec DT, .own, true, [], [], false, false, false⟩ := by
+  have hEVe : EV = ⟨.vec DT, .own, true, [], [], false, false, false, false⟩ := by
     simp [EV, EN, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K3 : Ctx := A2.setE K2 2 EV
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEVe]; simp)
@@ -1094,7 +1094,7 @@ theorem mainV_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainV Δ := by
       (by simp [K5, K4, K3', K3, K2, K1, A2.setE, upd, A2.kill, killE, hits, intE, Entry.vdeps, Mode.ownSlot])
       rfl PushArg.int (by simp [intE, Mode.ownSlot])
   let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
-  have hEDe : ED = ⟨DT, .own, true, [], [], false, false, false⟩ := by
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false, false, false⟩ := by
     simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K6 : Ctx := A2.setE K5 5 ED
   have hK6 : NoRootb K6 := hK5.setE (by rw [hEDe]; simp)
@@ -1113,7 +1113,7 @@ theorem mainV_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] mainV Δ := by
     (by rw [hEDe]) (by rw [hEDe]) (by decide) hmove2 (by rw [hEDe]; simp [roots]) hK74 (by simp [EW])
     (DtorSafe.of_none (fun v E h => (hK7 v E h).2.1) _ _ _) (by simp [EW])
   let E4 : Entry := { EW with held := EW.held ++ ownHeld true DT ED.held }
-  have hE4e : E4 = ⟨.vec DT, .own, true, [], [], false, false, false⟩ := by
+  have hE4e : E4 = ⟨.vec DT, .own, true, [], [], false, false, false, false⟩ := by
     simp [E4, EW, lockE_vecDT, hEDe, ownHeld]
   let K8 : Ctx := A2.setE (kill .realloc DT.holdsView 4 K7) 4 E4
   have hK8 : NoRootb K8 := (hK7.kill _ _ _).setE (by rw [hE4e]; simp)

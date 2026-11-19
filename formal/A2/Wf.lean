@@ -270,7 +270,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     -- Agora #826: `y` replaced, live again, holding nothing
     have hos := hcan.ownSlot
     have hky : A2.kill .replace false y Γ y = some (killE .replace false y Ey) := by simp [A2.kill, hy]
-    have hwf : CtxWF (A2.setE (kill .replace false y Γ) y ⟨Ey.ty, Ey.mode, true, [], [], false, false, false⟩) :=
+    have hwf : CtxWF (A2.setE (kill .replace false y Γ) y ⟨Ey.ty, Ey.mode, true, [], [], false, false, false, false⟩) :=
       (h.kill .replace false y).setE ⟨killE .replace false y Ey, hky, fun _ => Mode.isRoot_of_ownSlot hos⟩
         (fun _ _ r hr => by simp [roots, Entry.vdeps, hos] at hr)
     refine ⟨hwf, fun x => ?_, fun x E1 h1 => ?_, fun _ hn r hr => ?_⟩
@@ -284,7 +284,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     · have hr' : r ∈ roots Ey.held := by simpa [roots, Entry.vdeps, Mode.ownSlot] using hr
       obtain ⟨Er, hEr, hro⟩ := hheld y Ey hy hl (Or.inl (by rw [hty]; simp)) r hr'
       by_cases hry : r = y
-      · subst hry; exact ⟨⟨Ey.ty, Ey.mode, true, [], [], false, false, false⟩, by simp [A2.setE], Mode.isRoot_of_ownSlot hos⟩
+      · subst hry; exact ⟨⟨Ey.ty, Ey.mode, true, [], [], false, false, false, false⟩, by simp [A2.setE], Mode.isRoot_of_ownSlot hos⟩
       · obtain ⟨E', h', hro'⟩ := kill_root (e := .replace) (hv := false) (y := y) hEr hro
         exact ⟨E', by simp only [A2.setE, upd_ne _ _ hry]; exact h', hro'⟩
   | @copyRoot y Ey hy hl hm =>
@@ -335,7 +335,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     | lk ms => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
     | cell ms => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
     | dtor f a => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
-  | @view y Ey t hy hl ht _ =>
+  | @view y Ey t _ hy hl ht _ _ =>
     refine ⟨h, fun _ => rfl, same, fun _ _ => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
     rw [bor_vdeps _ rfl]
@@ -416,7 +416,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | @fst y Ey a b hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of ht)
-    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false⟩ := by
+    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false, false⟩ := by
       cases a with
       | int => simp [projE, intE] at hn
       | _ => rfl
@@ -433,7 +433,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | @snd y Ey a b hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of ht)
-    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false⟩ := by
+    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false, false⟩ := by
       cases b with
       | int => simp [projE, intE] at hn
       | _ => rfl
@@ -468,7 +468,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | @getl y Ey a b hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of_sum ht)
-    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false⟩ := by
+    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false, false⟩ := by
       cases a with
       | int => simp [projE, intE] at hn
       | _ => rfl
@@ -485,7 +485,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | @getr y Ey a b hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of_sum ht)
-    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false⟩ := by
+    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false, false⟩ := by
       cases b with
       | int => simp [projE, intE] at hn
       | _ => rfl
@@ -601,7 +601,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
   | @arcGet y Ey a hy hl ht _ _ =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl ht.ne_int
-    have hpe : getE y Ey a = ⟨a, .bor, true, derive y Ey .share, Ey.held, false, false, false⟩ := by
+    have hpe : getE y Ey a = ⟨a, .bor, true, derive y Ey .share, Ey.held, false, false, false, false⟩ := by
       cases a with
       | int => simp [getE, intE] at hn
       | _ => rfl

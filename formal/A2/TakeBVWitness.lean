@@ -59,14 +59,14 @@ def main : Stmt :=
 /-- What the views depend on: `s`'s buffer. -/
 def D0 : List Dep := [⟨0, .view⟩]
 
-def Es : Entry := ⟨str, .own, true, [], [], false, false, false⟩
-def Ev : Entry := ⟨sl, .bor, true, D0, [], false, false, false⟩
-def Ew0 : Entry := ⟨vs, .own, true, [], [], false, false, false⟩
-def Ew1 : Entry := ⟨vs, .own, true, [], D0, false, false, false⟩
-def Ew2 : Entry := ⟨vs, .own, true, [], D0 ++ D0, false, false, false⟩
-def Evv0 : Entry := ⟨vvs, .own, true, [], [], false, false, false⟩
-def Evv1 : Entry := ⟨vvs, .own, true, [], D0 ++ D0, false, false, false⟩
-def Eb : Entry := ⟨vs, .bor, true, [⟨3, .inner⟩], D0 ++ D0, false, false, false⟩
+def Es : Entry := ⟨str, .own, true, [], [], false, false, false, false⟩
+def Ev : Entry := ⟨sl, .bor, true, D0, [], false, false, false, false⟩
+def Ew0 : Entry := ⟨vs, .own, true, [], [], false, false, false, false⟩
+def Ew1 : Entry := ⟨vs, .own, true, [], D0, false, false, false, false⟩
+def Ew2 : Entry := ⟨vs, .own, true, [], D0 ++ D0, false, false, false, false⟩
+def Evv0 : Entry := ⟨vvs, .own, true, [], [], false, false, false, false⟩
+def Evv1 : Entry := ⟨vvs, .own, true, [], D0 ++ D0, false, false, false, false⟩
+def Eb : Entry := ⟨vs, .bor, true, [⟨3, .inner⟩], D0 ++ D0, false, false, false, false⟩
 
 theorem NoRootb.killHv {Γ : Ctx} (h : NoRootb Γ) : ∀ ks, NoRootb (A2.killHv ks Γ)
   | [] => h
@@ -266,12 +266,12 @@ def main2 : Stmt :=
   .letv 0 (.new .int) (.letv 1 (.view 0) (.letv 2 (.pack [] sl [] 1 []) (.letv 3 (.new FT)
     (.letv 4 (.new vF) (.seq (.push 3 2) (.seq (.push 4 3) body2))))))
 
-def Ef : Entry := ⟨FT, .own, true, [], D0, false, false, false⟩
-def EwF0 : Entry := ⟨vF, .own, true, [], [], false, false, false⟩
-def EwF1 : Entry := ⟨vF, .own, true, [], D0, false, false, false⟩
-def EvvF0 : Entry := ⟨vvF, .own, true, [], [], false, false, false⟩
-def EvvF1 : Entry := ⟨vvF, .own, true, [], D0, false, false, false⟩
-def EbF : Entry := ⟨vF, .bor, true, [⟨4, .inner⟩], D0, false, false, false⟩
+def Ef : Entry := ⟨FT, .own, true, [], D0, false, false, false, false⟩
+def EwF0 : Entry := ⟨vF, .own, true, [], [], false, false, false, false⟩
+def EwF1 : Entry := ⟨vF, .own, true, [], D0, false, false, false, false⟩
+def EvvF0 : Entry := ⟨vvF, .own, true, [], [], false, false, false, false⟩
+def EvvF1 : Entry := ⟨vvF, .own, true, [], D0, false, false, false, false⟩
+def EbF : Entry := ⟨vF, .bor, true, [⟨4, .inner⟩], D0, false, false, false, false⟩
 
 syntax "lookF" : tactic
 macro_rules

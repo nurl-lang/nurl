@@ -66,10 +66,10 @@ def main : Stmt :=
 
 /-! ### Entries -/
 
-def Evv : Entry := ⟨vstr, .own, true, [], [], false, false, false⟩
-def Ew : Entry := ⟨str, .own, true, [], [], false, false, false⟩
-def Eb : Entry := ⟨str, .bor, true, [⟨0, .inner⟩], [], false, false, false⟩
-def Ec : Entry := ⟨vstr, .bor, true, [⟨0, .self⟩], [], false, false, false⟩
+def Evv : Entry := ⟨vstr, .own, true, [], [], false, false, false, false⟩
+def Ew : Entry := ⟨str, .own, true, [], [], false, false, false, false⟩
+def Eb : Entry := ⟨str, .bor, true, [⟨0, .inner⟩], [], false, false, false, false⟩
+def Ec : Entry := ⟨vstr, .bor, true, [⟨0, .self⟩], [], false, false, false, false⟩
 
 /-! ### Contexts with no borrowed parameter and no destructor binding -/
 
@@ -109,7 +109,7 @@ macro_rules
 /-- A change through a borrow `x` whose path is one owner `0`'s, which may
     drop elements, typed by `StmtT.editB`. -/
 theorem thru_ok {Γ : Ctx} (hn : NoRootb Γ) {op : Edit} {k : Kind} {tx : Ty}
-    (h0 : Γ 0 = some ⟨vstr, .own, true, [], [], false, false, false⟩) (hst : ∀ y, op.stored = some y → y ≠ 0)
+    (h0 : Γ 0 = some ⟨vstr, .own, true, [], [], false, false, false, false⟩) (hst : ∀ y, op.stored = some y → y ≠ 0)
     (hkn : k.isName = false) (hk : k ≠ .share) (hdrop : op.effAt k (decide (vstr = tx)) = .drop) :
     ThruOK Γ [] op tx [⟨0, k⟩] := by
   intro d hd
@@ -134,8 +134,8 @@ macro_rules
 
 /-- `vec_pop x` (the truncation to the last index) through the borrow `x`. -/
 theorem pop_typed {ξ : Exits} {Γ : Ctx} (hn : NoRootb Γ) {x : Var} {E : Entry} {u : Ty} {k : Kind}
-    (hx : Γ x = some E) (hE : E = ⟨.vec u, .bor, true, [⟨0, k⟩], [], false, false, false⟩)
-    (h0 : Γ 0 = some ⟨vstr, .own, true, [], [], false, false, false⟩) (hu : u.holdsView = false)
+    (hx : Γ x = some E) (hE : E = ⟨.vec u, .bor, true, [⟨0, k⟩], [], false, false, false, false⟩)
+    (h0 : Γ 0 = some ⟨vstr, .own, true, [], [], false, false, false, false⟩) (hu : u.holdsView = false)
     (hud : u.dtorFree = true) (hkn : k.isName = false) (hk : k ≠ .share) :
     StmtT P ξ Γ [] (popB x) (A2.setE (A2.killThru (.trunc (.dec (.len x))) (.vec u) [⟨0, k⟩] Γ) x E) := by
   subst hE
@@ -148,7 +148,7 @@ theorem pop_typed {ξ : Exits} {Γ : Ctx} (hn : NoRootb Γ) {x : Var} {E : Entry
 /-- `x[0] := f` through the borrow `x`, `f` a number. -/
 theorem set_typed {ξ : Exits} {Γ : Ctx} (hn : NoRootb Γ) {x f : Var} {E : Entry}
     (hx : Γ x = some E) (hE : E = Eb) (hf : Γ f = some intE)
-    (h0 : Γ 0 = some ⟨vstr, .own, true, [], [], false, false, false⟩) (hfx : f ≠ x) (hf0 : f ≠ 0) :
+    (h0 : Γ 0 = some ⟨vstr, .own, true, [], [], false, false, false, false⟩) (hfx : f ≠ x) (hf0 : f ≠ 0) :
     StmtT P ξ Γ [] (.edit true x (.set (.lit 0) f))
       (A2.setE (A2.killThru (.set (.lit 0) f) str [⟨0, .inner⟩] Γ) x Eb) := by
   subst hE
