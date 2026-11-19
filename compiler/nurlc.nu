@@ -33958,7 +33958,10 @@ unsafe @ __sx_publish i me s sx → v {
     } {}
     // A literal is static or fresh; a cast outside raw code makes no
     // address (only the null pointer).
-    ? | | | | | | == tt TT_INT == tt TT_STR == tt TT_BOOL == tt TT_FLOAT == tt TT_SIZEOF == tt TT_LBRACK == tt TT_HASH { ^ ( nurl_str_cat `-` `` ) } {}
+    // (A slice literal's buffer is fresh; what its elements view, it
+    // holds: what it published, agora #930.)
+    ? == tt TT_LBRACK { ^ ? == g_sx_at + n0 1 ( nurl_str_cat g_sx `` ) ( nurl_str_cat `-` `` ) } {}
+    ? | | | | | == tt TT_INT == tt TT_STR == tt TT_BOOL == tt TT_FLOAT == tt TT_SIZEOF == tt TT_HASH { ^ ( nurl_str_cat `-` `` ) } {}
     ^ ( nurl_str_cat `*` `` )
 }
 
@@ -83236,6 +83239,13 @@ inline @ gen_slice_literal i lex i syms i cg → s {
     ( nurl_lex_advance lex )  // consume '['
     : s elem_ty ( parse_type lex )  // e.g. "i64"
     ( expect lex TT_PIPE )  // consume '|'
+    // This literal's number as a source-expression producer: what its
+    // elements view is what it holds, as a struct literal's fields' is
+    // (agora #930). The buffer is fresh, but an `s` element, or a struct
+    // element with a view field, is a copy of a view: `: [s sl [s | w ]`
+    // read after w's source was given a new value read freed memory.
+    : i __sx_me ( __sx_enter )
+    : ~ s lit_sx ``
     // Collect value registers (space-separated) and count
     : ~ s vals ``
     : ~ i count 0
@@ -83248,8 +83258,16 @@ inline @ gen_slice_literal i lex i syms i cg → s {
         : i __sec ( nurl_lex_col lex )
         ( __clo_tmp_set `` )
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+        : i __esxn0 g_sx_n
         : ~ s v ( gen_expr lex syms cg )
         : ~ s vt ( nurl_get_last_type )
+        // (What the element views: only an element that can hold a view
+        // — one that owns all it holds, a `String`, is copied in or moved
+        // in whole, and the copy depends on nothing.)
+        ? & != 0 __sx_me ( __ty_holds_view_p ( nurl_llty vt ) ) {
+            : s __esx ( __sx_operand syms __setok __sev0 vt ( __sx_froot syms __setok vt ) __esxn0 )
+            = lit_sx ( __sx_join lit_sx ? & ( __is_closure_ty vt ) ! | ( seq __esx `-` ) ( seq __esx `*` ) ( nurl_str_cat3 `\\a(` __esx `)` ) __esx )
+        } {}
         // A raw string element is a view (docs/MEMORY.md §2.13): the slice
         // owns its buffer, not what the strings in it point at, so a fresh
         // one there is owned by nothing (h140) — and one a call may hand
@@ -83423,6 +83441,7 @@ inline @ gen_slice_literal i lex i syms i cg → s {
     // leaks at function exit. gen_cond forwards the flag when both live arms
     // carry it; every other reader resets it before its own gen_expr.
     ( nurl_sym_def syms `__last_slice_owned__` `1` )
+    ? != 0 __sx_me { ( __sx_publish __sx_me ? == 0 ( nurl_str_len lit_sx ) `-` lit_sx ) } {}
     r1
 }
 
