@@ -40354,7 +40354,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     // (…or a call's slice, by its answer: AGORA-893.)
     // (Asked only of a literal's, a call's or a join's arm: every other
     // arm pays two int tests.)
-    : s t_slice_bit ? t_slice_lit `true` ? || == t_tt0 TT_LPAREN == t_tt0 TT_QUEST ( __arm_slice_bit syms cg t_tt0 tt2 ) ``
+    : s t_slice_bit ? t_slice_lit `true` ? || || == t_tt0 TT_LPAREN == t_tt0 TT_QUEST == t_tt0 TT_LBRACE ( __arm_slice_bit syms cg t_tt0 tt2 ) ``
     : s t_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b t_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s t_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
@@ -40641,7 +40641,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : s e_cm ? & != 0 g_borrowck ( __is_closure_ty et2 ) ( __clo_val_members syms e_tt0 e_v0 ) ``
     ? ( __is_closure_ty et2 ) { ? c_valu { = ev ( mem_clo_into_owner syms cg et2 ev e_tt0 ) } { ( mem_clo_arm_discard syms cg et2 ev e_tt0 ) } } {}
     : b e_slice_lit != 0 ( nurl_sym_len syms `__last_slice_owned__` )
-    : s e_slice_bit ? e_slice_lit `true` ? || == e_tt0 TT_LPAREN == e_tt0 TT_QUEST ( __arm_slice_bit syms cg e_tt0 et2 ) ``
+    : s e_slice_bit ? e_slice_lit `true` ? || || == e_tt0 TT_LPAREN == e_tt0 TT_QUEST == e_tt0 TT_LBRACE ( __arm_slice_bit syms cg e_tt0 et2 ) ``
     : s e_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b e_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
@@ -46135,11 +46135,14 @@ unsafe @ __slice_len_comma s t → b {
 // branch to the join (AGORA-893: a call arm counted as a borrow, its
 // fresh slice leaked).
 @ __arm_slice_bit i syms i cg i tt0 s ty → s {
+    // (…a block arm, `? c { ( mk ) } a`, `{ : i q 1 ( mk ) }`: its tail's -
+    // the call or the join it ends in, the last thing it ran; agora #903.)
+    : i t ? == tt0 TT_LBRACE g_blk_tail_eff tt0
     // (Asked as far as needed: most arms are no call and no join.)
-    ? || || != 0 g_did_ret && != tt0 TT_LPAREN != tt0 TT_QUEST ! ( mem_is_slice_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? || || != 0 g_did_ret && != t TT_LPAREN != t TT_QUEST ! ( mem_is_slice_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
     // (…an arm that is itself a slice join, `? c ? d ( mk ) a b`: its own
     // bit, published as it ended, in this arm's block.)
-    ? == tt0 TT_QUEST { ^ ( nurl_str_cat g_slice_join_own `` ) } {}
+    ? == t TT_QUEST { ^ ( nurl_str_cat g_slice_join_own `` ) } {}
     ^ ( __slice_call_own_bit syms cg )
 }
 
