@@ -43,12 +43,16 @@ noncomputable def inv (y : Var) : Option Var :=
   if h : ∃ v, S.ρ v = y then some (Classical.choose h) else none
 
 def liftE (v : Var) (E : Entry) : Entry :=
-  if E.mode = .rootb then { S.pe v with live := E.live, fresh := false } else
+  if E.mode = .rootb then { S.pe v with live := E.live, fresh := false, heldFresh := false } else
     ⟨E.ty, liftMode E.mode, E.live,
      -- Agora #909: a fresh borrow, holding memory, reaches only the frame's own
      -- blocks (`FreshOK`), so nothing the arguments hold
      rds S.ρ E.path ++ (if E.mode.ownSlot || (E.fresh && E.ty != .int) then [] else S.A),
-     rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh⟩
+     rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh, false⟩
+
+/-- Agora #916: no lift sets the held-freshness bit (yet). -/
+@[simp] theorem liftE_heldFresh (v : Var) (E : Entry) : (S.liftE v E).heldFresh = false := by
+  unfold liftE; split <;> rfl
 
 /-- Agora #909: a lift keeps the bit, but a borrowed parameter's is never
     set: what it is lifted to is the caller's. -/
@@ -350,7 +354,8 @@ theorem hits_lift (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa
     simp only [liftE, hrb, ↓reduceIte, Bool.and_eq_false_iff, List.any_eq_false, Bool.and_eq_true,
       beq_iff_eq, not_and, Bool.not_eq_true]
     refine Or.inr fun d hd hr => ?_
-    have hvd : ({ S.pe v with live := E.live, fresh := false } : Entry).vdeps = (S.pe v).vdeps := rfl
+    have hvd : ({ S.pe v with live := E.live, fresh := false, heldFresh := false } : Entry).vdeps =
+        (S.pe v).vdeps := rfl
     rw [hvd] at hd
     obtain ⟨b, t, rfl, hb, _, _, hbr, _⟩ := pe_ρ h hd hr
     exact hsym b t hb hbr
@@ -575,7 +580,8 @@ theorem liftE_weaker {v : Var} {E E' : Entry} (hw : EntryWeaker E E') :
         have hEn : E.ty ≠ .int := by rw [← ht]; exact hn'
         refine ⟨hfE, ?_⟩
         simp [hEb, hb0, Mode.ownSlot, hfE, hf', hEn, hn']
-        exact rds_subset hsub⟩
+        exact rds_subset hsub,
+      fun _ hhf => by heldfresh_ew⟩
     rw [liftE_live] at hl'
     obtain ⟨hl0, hp, hh⟩ := hl hl'
     refine ⟨by rw [liftE_live]; exact hl0, fun ho => ?_, ?_⟩
@@ -881,10 +887,12 @@ theorem EntryWeaker.mk' {E E' : Entry} (ht : E'.ty = E.ty) (hm : E'.mode = E.mod
     (hdh : E.dbind = true → E.mode.ownSlot = true → (E.ty ≠ .int ∨ E.mode = .rootb) →
       ∀ d, d.kind.isName = false → (d ∈ E'.held ↔ d ∈ E.held) := by intro hh; simp_all [RSetup.liftE])
     (hf : E'.live = true → E'.ty ≠ .int → E'.mode = .bor → E'.fresh = true →
-      E.fresh = true ∧ E'.path ⊆ E.path := by intro _ _ _ hfr; fresh_ew) :
+      E.fresh = true ∧ E'.path ⊆ E.path := by intro _ _ _ hfr; fresh_ew)
+    (hg : E'.live = true → E'.heldFresh = true →
+      E.heldFresh = true ∧ memDeps E'.held ⊆ memDeps E.held := by intro _ hhf; heldfresh_ew) :
     EntryWeaker E E' :=
   ⟨ht, hm, fun h' => absurd h' hrb, fun h' => ⟨by rw [← hl]; exact h', hp, hh⟩, fun h => ⟨hd h, hh⟩,
-    hdb, hra, hdh, hf⟩
+    hdb, hra, hdh, hf, hg⟩
 
 theorem allKinds_comp {R : List Var} {k : Kind} (hk : k.isName = false) :
     (allKinds R).map (fun d => (⟨d.root, comp d.kind k⟩ : Dep)) ⊆ allKinds R := by
@@ -1054,7 +1062,7 @@ theorem canDo_lift {m : Mode} {e : Eff} (h : canDo m e) : canDo (liftMode m) e :
   rcases h with rfl | ⟨b, rfl, _⟩ <;> exact Or.inl rfl
 
 theorem intE_lift (x : Var) : EntryWeaker intE (S.liftE x intE) := by
-  have he : S.liftE x intE = ⟨.int, .bor, true, S.A, S.A, false, false, false⟩ := by
+  have he : S.liftE x intE = ⟨.int, .bor, true, S.A, S.A, false, false, false, false⟩ := by
     simp [liftE, intE, liftMode, rds, Mode.ownSlot, ownHeld_false]
   rw [he]
   exact EntryWeaker.mk' rfl rfl (by simp [intE]) rfl (fun _ => by simp [intE]) (by simp [intE])
@@ -1066,7 +1074,7 @@ theorem lockE_lift (x : Var) (t : Ty) : EntryWeaker (lockE t) (S.liftE x (lockE 
   · subst ht
     have he : lockE .int = intE := by simp [lockE]
     rw [he]; exact intE_lift x
-  · have he : lockE t = ⟨t, .own, true, [], [], false, false, false⟩ := by simp [lockE, ht]
+  · have he : lockE t = ⟨t, .own, true, [], [], false, false, false, false⟩ := by simp [lockE, ht]
     rw [he]
     exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
       (fun h' => by simp [Mode.ownSlot] at h') (by simp) (fun h => by simp at h) (by simp [liftE])
@@ -1632,8 +1640,8 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     refine ⟨_, RhsT.moveOwn hc (by rw [liftE_live]; exact hl) (by rw [liftE_mode y hrb, hm]; rfl)
       (h.Fcout y) (NoPin.lift h hab (bnd_own hab hy hm))
       (DtorSafe.canon h (allowed_own hab hy hm _ _) hds), fun x => ?_⟩
-    have he : S.liftE x ⟨Ey.ty, .own, true, [], Ey.held, false, false, false⟩ =
-        ⟨(S.liftE y Ey).ty, .own, true, [], (S.liftE y Ey).held, false, false, false⟩ := by
+    have he : S.liftE x ⟨Ey.ty, .own, true, [], Ey.held, false, false, false, false⟩ =
+        ⟨(S.liftE y Ey).ty, .own, true, [], (S.liftE y Ey).held, false, false, false, false⟩ := by
       simp [liftE, hm, liftMode, rds, Mode.ownSlot]
     rw [he]; exact EntryWeaker.refl _
   | @take y Ey t hy hl hty hhv hcan hdb hyF _ hds =>
@@ -1654,9 +1662,9 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
       have := allowed_canDo' hab hy hcan
       rwa [hty, show (Ty.vec t).elem = t from rfl, hhv] at this
     have hvt : (Ty.vec t).holdsView = false := by simpa [Ty.holdsView] using hhv
-    have hctx : S.canon (setE (kill .replace false y Γa) y ⟨Ey.ty, Ey.mode, true, [], [], false, false, false⟩) =
+    have hctx : S.canon (setE (kill .replace false y Γa) y ⟨Ey.ty, Ey.mode, true, [], [], false, false, false, false⟩) =
         setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y)
-          ⟨(S.liftE y Ey).ty, (S.liftE y Ey).mode, true, [], [], false, false, false⟩ := by
+          ⟨(S.liftE y Ey).ty, (S.liftE y Ey).mode, true, [], [], false, false, false, false⟩ := by
       rw [canon_setE h, canon_kill h hab hal, liftE_ty y hrb, liftE_mode y hrb]
       congr 1
       simp [liftE, hrb, rds, hos, ownHeld, hty, hvt]
@@ -1664,8 +1672,8 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     refine ⟨_, RhsT.take hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty y hrb]; exact hty) hhv
       (by rw [liftE_mode y hrb]; exact canDo_lift hcan) (by simp [liftE, hrb, hdb]) (h.Fcout y)
       (NoPin.lift h hab (bnd_replace hab hy hm3')) (DtorSafe.canon h hal hds), fun x => ?_⟩
-    have he : S.liftE x ⟨Ey.ty, .own, true, [], Ey.held, false, false, false⟩ =
-        ⟨(S.liftE y Ey).ty, .own, true, [], (S.liftE y Ey).held, false, false, false⟩ := by
+    have he : S.liftE x ⟨Ey.ty, .own, true, [], Ey.held, false, false, false, false⟩ =
+        ⟨(S.liftE y Ey).ty, .own, true, [], (S.liftE y Ey).held, false, false, false, false⟩ := by
       simp [liftE, hrb, liftMode, rds, hos, show Mode.ownSlot .own = true from rfl]
     rw [he]; exact EntryWeaker.refl _
   | @copyRoot y Ey hy hl hm =>
@@ -1732,11 +1740,11 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
       -- Agora #909: a fresh borrow is renamed exactly (`derive_lift_eq`)
       have heq := derive_lift_eq h hab hy (hf rfl) .self
       have hnt : (Ty.vec t != .int) = true := by simp
-      have hlp : (S.liftE x ⟨Ey.ty, .bor, true, derive y Ey .self, Ey.held, false, false, true⟩).path =
+      have hlp : (S.liftE x ⟨Ey.ty, .bor, true, derive y Ey .self, Ey.held, false, false, true, false⟩).path =
           rds S.ρ (derive y Ey .self) := by
         simp [liftE, Mode.ownSlot, ht]
       have hrp : (⟨(S.liftE y Ey).ty, .bor, true, derive (S.ρ y) (S.liftE y Ey) .self, (S.liftE y Ey).held,
-          false, false, true⟩ : Entry).path = rds S.ρ (derive y Ey .self) := heq
+          false, false, true, false⟩ : Entry).path = rds S.ρ (derive y Ey .self) := heq
       refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]; exact (liftE_ty' h hab hy).symm)
         (by simp [liftE, liftMode]) (by simp) (by simp [liftE]) (fun _ => ?_) ?_
         (hf := fun _ _ _ _ => ⟨rfl, ?_⟩)
@@ -2361,7 +2369,14 @@ theorem killAll_weaker {M ds : List Dep} {E E' : Entry} (hw : EntryWeaker E E')
         have hkm : ∀ {Ms : List Dep} {E0 : Entry}, (killAll Ms E0).mode = E0.mode := by
           intro Ms E0; unfold killAll; split <;> rfl
         rw [hkf] at hfr ⊢; rw [hkp, hkp]; rw [hkt] at hnt; rw [hkm] at hbm
-        exact hw.fresh (by unfold killAll at hlv; split at hlv <;> simp_all) hnt hbm hfr⟩
+        exact hw.fresh (by unfold killAll at hlv; split at hlv <;> simp_all) hnt hbm hfr,
+      fun hlv hhf => by
+        have hkh : ∀ {Ms : List Dep} {E0 : Entry}, (killAll Ms E0).heldFresh = E0.heldFresh := by
+          intro Ms E0; unfold killAll; split <;> rfl
+        have hkh' : ∀ {Ms : List Dep} {E0 : Entry}, (killAll Ms E0).held = E0.held := by
+          intro Ms E0; unfold killAll; split <;> rfl
+        rw [hkh] at hhf ⊢; simp only [hkh']
+        exact hw.heldFresh (by unfold killAll at hlv; split at hlv <;> simp_all) hhf⟩
     have hl0 : E'.live = true ∧ ds.any (fun d => hits d.kind.bound false d.root E') = false := by
       unfold killAll at hl'; split at hl'
       · simp at hl'
@@ -2665,7 +2680,8 @@ theorem recvRes_lift (h : S.OK) (hab : S.AbsOK Γa) {c : Var} {Ec E E' : Entry} 
   have hlxt : (S.liftE x E).dtor = E.dtor := by simp [liftE, hrb]
   have hE'0 : E'.dbind = false := by rw [← hdbw, hlx, hE0]
   refine ⟨?_, ?_, fun h' => ?_, fun hl' => ?_, fun hd' => ?_, ?_, fun hd' => ?_, fun hd' => ?_,
-      fun _ _ _ hfr => by simp [liftE, recvRes, hrb, hEf] at hfr⟩
+      fun _ _ _ hfr => by simp [liftE, recvRes, hrb, hEf] at hfr,
+      fun _ hhf => by simp at hhf⟩
   · show (S.liftE x (recvRes c Ec E)).ty = E'.ty
     rw [← ht, hty]; simp [liftE, recvRes, hrb]
   · show (S.liftE x (recvRes c Ec E)).mode = E'.mode
@@ -2752,7 +2768,7 @@ theorem liftE_callRes (Γ : Ctx) (fn : Fn) (args : List Var) (x : Var) :
        rds S.ρ (fn.lends.flatMap (argDeps Γ args) ++ heldOfArgs Γ args) ++
          (if (resMode fn).ownSlot then [] else S.A),
        rds S.ρ (ownHeld fn.resOwn fn.resTy (fn.rholds.flatMap (argDeps Γ args) ++ heldOfArgs Γ args)) ++
-         ownHeld fn.resOwn fn.resTy S.A, false, false, false⟩ := by
+         ownHeld fn.resOwn fn.resTy S.A, false, false, false, false⟩ := by
   simp only [liftE, callRes, resMode_ne fn, ↓reduceIte, liftMode_resMode, resMode_ownSlot, Bool.false_and,
     Bool.or_false]
 
@@ -3631,13 +3647,14 @@ theorem liftE_hold_weaker {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) (hdb :
     {D D' : List Dep} (hD : D' ⊆ rds S.ρ D) : EntryWeaker ((S.liftE v E).hold D') (S.liftE v (E.hold D)) := by
   have hl : ∀ E0 : Entry, E0.mode ≠ .rootb → S.liftE v E0 = ⟨E0.ty, liftMode E0.mode, E0.live,
       rds S.ρ E0.path ++ (if E0.mode.ownSlot || (E0.fresh && E0.ty != .int) then [] else S.A),
-      rds S.ρ E0.held ++ ownHeld E0.mode.ownSlot E0.ty S.A, E0.dtor, E0.dbind, E0.fresh⟩ := fun E0 h0 => by
+      rds S.ρ E0.held ++ ownHeld E0.mode.ownSlot E0.ty S.A, E0.dtor, E0.dbind, E0.fresh, false⟩ := fun E0 h0 => by
     simp only [RSetup.liftE, h0, ↓reduceIte]
   have hrb' : (E.hold D).mode ≠ .rootb := hrb
   rw [hl E hrb, hl (E.hold D) hrb']
   refine ⟨rfl, rfl, fun hf => absurd hf ?_, fun hl' => ⟨hl', fun _ => List.Subset.refl _, ?_⟩,
     fun h => ⟨h, ?_⟩, rfl, fun h => Or.inl h, fun h => by simp [Entry.hold, hdb] at h,
-      fun _ _ _ hfr => ⟨hfr, List.Subset.refl _⟩⟩
+      fun _ _ _ hfr => ⟨hfr, List.Subset.refl _⟩,
+      fun _ hhf => by heldfresh_ew⟩
   · intro hf
     rcases hf with h' | ⟨b, h', _⟩
     · exact hrb (liftMode_rootb.mp h')
@@ -3930,16 +3947,17 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} (hP
   · -- the borrow holds what was stored, renamed or less
     have hl' : S.liftE x Ex1 = ⟨Ex1.ty, liftMode Ex1.mode, Ex1.live,
         rds S.ρ Ex1.path ++ (if Ex1.fresh && Ex1.ty != .int then [] else S.A),
-        rds S.ρ Ex1.held ++ S.A, Ex1.dtor, Ex1.dbind, Ex1.fresh⟩ := by
+        rds S.ρ Ex1.held ++ S.A, Ex1.dtor, Ex1.dbind, Ex1.fresh, false⟩ := by
       simp [RSetup.liftE, hmx, Mode.ownSlot]
     have hl'' : S.liftE x { Ex1 with held := Ex1.held ++ memDeps D } = ⟨Ex1.ty, liftMode Ex1.mode,
         Ex1.live, rds S.ρ Ex1.path ++ (if Ex1.fresh && Ex1.ty != .int then [] else S.A),
-        rds S.ρ (Ex1.held ++ memDeps D) ++ S.A, Ex1.dtor, Ex1.dbind, Ex1.fresh⟩ := by
+        rds S.ρ (Ex1.held ++ memDeps D) ++ S.A, Ex1.dtor, Ex1.dbind, Ex1.fresh, false⟩ := by
       simp [RSetup.liftE, hmx, Mode.ownSlot]
     rw [hl', hl'']
     refine ⟨rfl, rfl, fun hf => absurd hf ?_, fun hl' => ⟨hl', fun _ => List.Subset.refl _, ?_⟩,
       fun h' => ⟨h', ?_⟩, rfl, fun h' => Or.inl h', fun _ hos => ?_,
-      fun _ _ _ hfr => ⟨hfr, List.Subset.refl _⟩⟩
+      fun _ _ _ hfr => ⟨hfr, List.Subset.refl _⟩,
+      fun _ hhf => by heldfresh_ew⟩
     · intro hf
       rcases hf with h' | ⟨b, h', _⟩ <;> rw [hmx] at h' <;> simp [liftMode] at h'
     rotate_right
@@ -4029,7 +4047,8 @@ theorem compE_liftE_weaker {x y : Var} {Ex : Entry} {t : Ty} (hhv : t.holdsView 
       fun d hd => by simp [compE, intE] at hd⟩,
       fun h => by simp [compE, intE] at h, rfl, fun h => by simp [liftE, compE, intE] at h,
       fun h => by simp [compE, intE] at h,
-      fun _ _ _ hfr => by fresh_ew⟩
+      fun _ _ _ hfr => (by fresh_ew),
+      fun _ hhf => by heldfresh_ew⟩
     simp [Entry.fixed, compE, intE] at hf
   · have heq : S.liftE y (compE Ex t) = compE (S.liftE x Ex) t := by
       cases t <;> simp_all [liftE, compE, liftMode, ownHeld, rds, Mode.ownSlot, Ty.holdsView]
@@ -4168,7 +4187,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- the arguments held as well: `letd` records that of memory there too
     have hEq : S.liftE x (Entry.arm { E with ty := τ, held := H }) =
         ⟨τ, .own, E.live, rds S.ρ E.path, rds S.ρ H ++ ownHeld true E.ty S.A, τ.dtorViews,
-          τ.dtorViews, E.fresh⟩ := by
+          τ.dtorViews, E.fresh, false⟩ := by
       have hoh : ownHeld true τ S.A = ownHeld true E.ty S.A := by simp only [ownHeld, hov]
       simp [liftE, hown, Entry.arm, liftMode, Mode.ownSlot, hoh]
     have hlh0 : (S.liftE x E).held = rds S.ρ E.held ++ ownHeld true E.ty S.A := by
@@ -4211,7 +4230,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         fun hd => Or.inl (by simpa [Entry.arm] using hd),
         fun hdb _ _ d hnm => ⟨fun hd => List.mem_append_right _
           (hX3 (by rw [← hov, ← hdv]; simpa [Entry.arm] using hdb) d hd hnm), fun hd => hsub hd⟩,
-      fun _ _ hb _ => by cases hb⟩
+      fun _ _ hb _ => (by cases hb),
+      fun _ hhf => by heldfresh_ew⟩
       · simp [Entry.fixed, Entry.arm, hm'] at hf
       · simp [Entry.arm, hm', Mode.ownSlot] at ho
     exact StmtT.letd (H := E'.held ++ X) (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl)
@@ -4443,12 +4463,12 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hf : S.liftE x { E with mode := Ex.mode } =
         ⟨E.ty, liftMode Ex.mode, E.live,
          rds S.ρ E.path ++ (if Ex.mode.ownSlot || (E.fresh && E.ty != .int) then [] else S.A),
-         rds S.ρ E.held ++ ownHeld Ex.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh⟩ := by
+         rds S.ρ E.held ++ ownHeld Ex.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh, false⟩ := by
       simp only [liftE, hrbx, ↓reduceIte]
     have hf' : S.liftE x E =
         ⟨E.ty, liftMode E.mode, E.live,
          rds S.ρ E.path ++ (if E.mode.ownSlot || (E.fresh && E.ty != .int) then [] else S.A),
-         rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh⟩ := by
+         rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh, false⟩ := by
       simp only [liftE, hrbE, ↓reduceIte]
     rw [hf, hmx']
     rw [hf'] at hw'

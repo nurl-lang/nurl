@@ -325,14 +325,14 @@ theorem mem_typedDeps_of {t : Ty} {ds : List Dep} {d : Dep} (hd : d ∈ ds)
 def callPe (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) (v : Var) : Entry :=
   match ps[v]? with
   | some (.inp, _) =>
-    if (argE Γ (args.getD v 0)).ty = .int then ⟨.int, .rootb, true, [], [], false, false, false⟩
+    if (argE Γ (args.getD v 0)).ty = .int then ⟨.int, .rootb, true, [], [], false, false, false, false⟩
     else ⟨(argE Γ (args.getD v 0)).ty, .rootb, true,
           typedDeps (argE Γ (args.getD v 0)).ty (derive (args.getD v 0) (argE Γ (args.getD v 0)) .self),
-          typedDeps (argE Γ (args.getD v 0)).ty (argE Γ (args.getD v 0)).held, false, false, false⟩
-  | _ => ⟨.int, .rootb, true, [], [], false, false, false⟩
+          typedDeps (argE Γ (args.getD v 0)).ty (argE Γ (args.getD v 0)).held, false, false, false, false⟩
+  | _ => ⟨.int, .rootb, true, [], [], false, false, false, false⟩
 
 /-- The caller's binding of the result, before the result is moved in. -/
-def callX (fn : Fn) : Entry := ⟨fn.resTy, resMode fn, false, [], [], false, false, false⟩
+def callX (fn : Fn) : Entry := ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩
 
 theorem callX_vdeps (fn : Fn) : (callX fn).vdeps = [] := by
   unfold Entry.vdeps callX; cases (resMode fn).ownSlot <;> rfl
@@ -2267,7 +2267,8 @@ theorem entryWeaker_killE {e : Eff} {hv : Bool} {x : Var} {E : Entry}
   · unfold killE; split
     · exact ⟨rfl, rfl, fun h => absurd h hf, fun h => by simp at h,
         fun h => ⟨h, List.Subset.refl _⟩, rfl, fun h => Or.inl h, fun _ _ _ _ _ => Iff.rfl,
-      fun _ _ _ hfr => by fresh_ew⟩
+      fun _ _ _ hfr => by fresh_ew,
+      fun _ hhf => by heldfresh_ew⟩
     · exact EntryWeaker.refl E
 
 /-! ### What the parameters' frames keep (`KeepOut`)
@@ -2387,7 +2388,7 @@ theorem sigCtx_of {fn : Fn} {v : Nat} {p : PMode × Ty} (hp : fn.params[v]? = so
   have hv : v < fn.params.length := (List.getElem?_eq_some_iff.mp hp).1
   simp [sigCtx, hv, (List.getElem?_eq_some_iff.mp hp).2]
 
-theorem sigCtx_res (fn : Fn) : sigCtx fn fn.params.length = some ⟨fn.resTy, resMode fn, false, [], [], false, false, false⟩ := by
+theorem sigCtx_res (fn : Fn) : sigCtx fn fn.params.length = some ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩ := by
   simp [sigCtx]
 
 theorem sigCtx_none {fn : Fn} {v : Nat} (hv : fn.params.length < v) : sigCtx fn v = none := by
@@ -2396,7 +2397,7 @@ theorem sigCtx_none {fn : Fn} {v : Nat} (hv : fn.params.length < v) : sigCtx fn 
 /-- A symbolic name's target in the callee's own context: an `inout`
     parameter that holds no views, so holds nothing. -/
 theorem sigCtx_sym {fn : Fn} {w : Var} {b : Eff} {t : Ty} (hp : fn.params[w]? = some (.inout b, t))
-    (hhv : t.holdsView = false) : sigCtx fn w = some ⟨t, .inout b, true, [], [], false, false, false⟩ := by
+    (hhv : t.holdsView = false) : sigCtx fn w = some ⟨t, .inout b, true, [], [], false, false, false, false⟩ := by
   rw [sigCtx_of hp]
   have hf : t.hasFn = false := by
     cases h : t.hasFn
@@ -2424,7 +2425,7 @@ theorem sigCtx_names (fn : Fn) : NameWF (sigCtx fn) := by
       simp only [Kind.name.injEq] at hk
       obtain ⟨hb1, ht1⟩ := hk
       subst hb1 ht1
-      exact ⟨⟨t'', .inout b', true, [], [], false, false, false⟩, sigCtx_sym hp hhv, rfl, rfl, rfl, rfl,
+      exact ⟨⟨t'', .inout b', true, [], [], false, false, false, false⟩, sigCtx_sym hp hhv, rfl, rfl, rfl, rfl,
         Or.inr ⟨hbr, Or.inr ⟨b', rfl, Nat.le_refl _⟩⟩, hhv⟩
     · cases hd
   · split at hv
@@ -2821,7 +2822,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
               (exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa)))
             (base + fn.params.length) { Er' with live := false, dtor := false }
            else exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa)))
-          x (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false⟩ : Entry) with mode := resMode fn }
+          x (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false, false⟩ : Entry) with mode := resMode fn }
              else { Er' with mode := resMode fn, dtor := false, dbind := false })) →
       Weaker (exitScope (base + fn.params.length) Γ3) (setE (callPost Γ fn args) x (callRes Γ fn args))) :
     StmtT P ξ ((callS Γ F fn args base x).canon (sigCtx fn)) F (callIn fn args base x)
@@ -2876,7 +2877,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
       (setE (A2.kill .replace false x
           (if fn.resOwn then setE (A2.kill .replace false (base + fn.params.length) Γb)
             (base + fn.params.length) { Er' with live := false, dtor := false } else Γb))
-        x (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false⟩ : Entry) with mode := resMode fn }
+        x (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false, false⟩ : Entry) with mode := resMode fn }
            else { Er' with mode := resMode fn, dtor := false, dbind := false })) := by
     cases ho : fn.resOwn with
     | true =>
@@ -2889,7 +2890,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
         (by simp [callX, hrt]) ?_ (by simp [setE, upd_ne _ _ hxr', A2.kill, hbx])
         (hQb.noPin fun hq => by simp [h.fresh] at hq) (((hDb.kill _ _ _).setE_off rfl).dtorSafe hxq _ _)
         (by simp [callX]))
-      have hv : (⟨Er'.ty, .own, true, [], Er'.held, false, false, false⟩ : Entry).vdeps = Er'.vdeps := by
+      have hv : (⟨Er'.ty, .own, true, [], Er'.held, false, false, false, false⟩ : Entry).vdeps = Er'.vdeps := by
         simp [Entry.vdeps, hm, Mode.ownSlot]
       rw [hv]; exact hxr
     | false =>
@@ -2902,13 +2903,13 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
         (hDb.dtorSafe hxq _ _) (by simp [callX]))
   have hEinr : (callS Γ F fn args base x).canon (sigCtx fn) (base + fn.params.length) =
       some ((callS Γ F fn args base x).liftE fn.params.length
-        ⟨fn.resTy, resMode fn, false, [], [], false, false, false⟩) := by
+        ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩) := by
     rw [show base + fn.params.length = callRen fn.params args base fn.params.length from
       (ren_res fn args base).symm]
     show (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ _) = _
     rw [RSetup.canon_ρ h.sOK, sigCtx_res]; rfl
   have hEinm : ((callS Γ F fn args base x).liftE fn.params.length
-      ⟨fn.resTy, resMode fn, false, [], [], false, false, false⟩).mode = resMode fn := by
+      ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩).mode = resMode fn := by
     rw [RSetup.liftE_mode _ (resMode_ne' fn), RSetup.liftMode_resMode]
   obtain ⟨Γ3, hΓ3, hseq3⟩ : ∃ Γ3, Γ3 = _ ∧ StmtT P .none ((callS Γ F fn args base x).canon (sigCtx fn)) F
       (.seq (.frozen (zOf fn args base) (wrapParams fn.params base 0 (fn.body.rename (callRen fn.params args base))))
@@ -3046,7 +3047,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
       hxq (he ▸ ((hQb.kill _ _ _).setE (show ({ Er' with live := false, dtor := false } : Entry).mode ≠ .rootb by
         show Er'.mode ≠ .rootb; rw [hrm]; exact resMode_ne' fn)) q E hE hm d hd))
     have h4 := h3.setE (x := x)
-      (E := { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false⟩ : Entry) with mode := resMode fn })
+      (E := { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false, false⟩ : Entry) with mode := resMode fn })
       (Ex := killE .replace false x (killE .replace false (base + fn.params.length) (callX fn)))
       (by simp [A2.kill, setE, upd_ne _ _ hxr', hbx])
       (by rw [killE_mode, killE_mode]; simp [callX]) (by rw [killE_ty, killE_ty]; simp [callX, hrt])
@@ -3291,7 +3292,7 @@ theorem lift_nosink (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hrb
 theorem liftE_eq (S : RSetup) {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) :
     S.liftE v E = ⟨E.ty, liftMode E.mode, E.live,
       rds S.ρ E.path ++ (if E.mode.ownSlot || (E.fresh && E.ty != .int) then [] else S.A),
-      rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh⟩ := by
+      rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh, false⟩ := by
   simp only [RSetup.liftE, hrb, ↓reduceIte]
 
 /-- The callee's result, where the exits leave it. -/
@@ -3425,7 +3426,8 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
           fun hl => ⟨hl, fun _ => List.nil_subset _, fun d h => (List.mem_filter.mp h).1⟩,
           fun hd => ⟨hd, fun d h => (List.mem_filter.mp h).1⟩, rfl, fun hd => Or.inl hd,
           fun _ _ _ d hnm => by simp [memDeps, List.mem_filter, hnm],
-      fun _ _ _ hfr => by fresh_ew⟩
+      fun _ _ _ hfr => by fresh_ew,
+      fun _ hhf => by heldfresh_ew⟩
     · have hce : E1.clean = { E1 with path := [], held := [] } := by
         unfold Entry.clean; rw [ite_eq_left hcl, ite_eq_right hdk]
       have hrr : rrE fn.params base 0 (callPe Γ fn.params args) E1.clean = { E1 with path := [], held := [] } := by
@@ -3438,7 +3440,8 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
       · rw [hrr]
         refine ⟨rfl, rfl, fun hf => absurd hf hcl.1, fun hl => ⟨hl, fun _ => by simp, by simp⟩,
           by intro h; simp_all, rfl, fun hd => Or.inl hd, fun hdb hos hn => absurd ⟨hdb, hos, ?_⟩ hdk,
-      fun _ _ _ hfr => by fresh_ew⟩
+      fun _ _ _ hfr => by fresh_ew,
+      fun _ hhf => by heldfresh_ew⟩
         rcases hn with hn | hn
         · exact hn
         · simp only at hos hn; rw [hn] at hos; cases hos
@@ -3490,7 +3493,8 @@ theorem frame_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {y : Var}
         rw [hheld],
       fun _ _ hb hfr => ⟨hfr, by
         show E1.path ⊆ rrL fn.params base 0 (callPe Γ fn.params args) E1.path
-        rw [hpath (by rw [hb]; rfl)]; exact List.Subset.refl _⟩⟩
+        rw [hpath (by rw [hb]; rfl)]; exact List.Subset.refl _⟩,
+      fun _ hhf => by heldfresh_ew⟩
       · have hrb' : E1.mode = .rootb := by
           rcases hrb with hrb | ⟨b, hb, _⟩
           · exact hrb
@@ -3549,7 +3553,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
           x (if fn.resOwn then { (⟨(rrE fn.params base 0 (callPe Γ fn.params args)
                 ((callS Γ F fn args base x).liftE fn.params.length Er)).ty, .own, true, [],
                 (rrE fn.params base 0 (callPe Γ fn.params args)
-                ((callS Γ F fn args base x).liftE fn.params.length Er)).held, false, false, false⟩ : Entry) with mode := resMode fn }
+                ((callS Γ F fn args base x).liftE fn.params.length Er)).held, false, false, false, false⟩ : Entry) with mode := resMode fn }
              else { rrE fn.params base 0 (callPe Γ fn.params args)
                 ((callS Γ F fn args base x).liftE fn.params.length Er)
                 with mode := resMode fn, dtor := false, dbind := false })) :
@@ -3570,7 +3574,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
       exitScope (base + fn.params.length) (setE (A2.kill .replace false x
         (if fn.resOwn then setE (A2.kill .replace false (base + fn.params.length) Γb)
           (base + fn.params.length) { Er' with live := false, dtor := false } else Γb)) x
-        (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false⟩ : Entry) with mode := resMode fn }
+        (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false, false⟩ : Entry) with mode := resMode fn }
          else { Er' with mode := resMode fn, dtor := false, dbind := false })) y =
       (Γb y).map (fun E => killE .replace false (base + fn.params.length) (killE .replace false x
         (if fn.resOwn then killE .replace false (base + fn.params.length) E else E))) := by
@@ -3580,13 +3584,13 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
   have key : ∀ y, (exitScope (base + fn.params.length) (setE (A2.kill .replace false x
         (if fn.resOwn then setE (A2.kill .replace false (base + fn.params.length) Γb)
           (base + fn.params.length) { Er' with live := false, dtor := false } else Γb)) x
-        (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false⟩ : Entry) with mode := resMode fn }
+        (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false, false⟩ : Entry) with mode := resMode fn }
          else { Er' with mode := resMode fn, dtor := false, dbind := false })) y = none ∧
         setE (callPost Γ fn args) x (callRes Γ fn args) y = none) ∨
       ∃ Eo Et, exitScope (base + fn.params.length) (setE (A2.kill .replace false x
         (if fn.resOwn then setE (A2.kill .replace false (base + fn.params.length) Γb)
           (base + fn.params.length) { Er' with live := false, dtor := false } else Γb)) x
-        (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false⟩ : Entry) with mode := resMode fn }
+        (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false, false⟩ : Entry) with mode := resMode fn }
          else { Er' with mode := resMode fn, dtor := false, dbind := false })) y = some Eo ∧
         setE (callPost Γ fn args) x (callRes Γ fn args) y = some Et ∧ EntryWeaker Eo Et := by
     intro y
@@ -3601,7 +3605,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
     · subst hyx
       right
       -- the result, moved into `x`
-      have hv : ∀ d ∈ (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false⟩ : Entry) with mode := resMode fn }
+      have hv : ∀ d ∈ (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false, false⟩ : Entry) with mode := resMode fn }
           else { Er' with mode := resMode fn, dtor := false, dbind := false }).vdeps, (Γ d.root).isSome := by
         intro d hd
         cases ho : fn.resOwn
@@ -3616,7 +3620,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
           simp only [↓reduceIte, Entry.vdeps, hos, List.nil_append] at hd
           exact (hh' d hd).1
       refine ⟨killE .replace false (base + fn.params.length)
-          (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false⟩ : Entry) with mode := resMode fn }
+          (if fn.resOwn then { (⟨Er'.ty, .own, true, [], Er'.held, false, false, false, false⟩ : Entry) with mode := resMode fn }
             else { Er' with mode := resMode fn, dtor := false, dbind := false }), callRes Γ fn args,
         by simp [A2.exitScope, upd_ne _ _ hxr, setE, A2.kill], by simp [setE], ?_⟩
       rw [killE_nohit (fun d hd => (h.dom_ne (hv d hd)).2)]
@@ -3694,7 +3698,9 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
           by rw [hEtb]; simp [rrE, liftE_eq _ hrb, (hΔf v Ei hEi).2],
           fun hd => absurd (h.postwf.arm _ Et hEt hd) (by rw [hEtb]; simp),
           fun hd => absurd hd (by simp [rrE, liftE_eq _ hrb, (hΔf v Ei hEi).2]),
-          fun _ _ hb _ => by rw [hpm, hown] at hb; cases hb⟩
+          fun _ _ hb _ => by rw [hpm, hown] at hb; cases hb,
+      fun _ hhf => by heldfresh_ew,
+      fun _ hhf => by heldfresh_ew⟩
         · rw [hpt, hty]; simp [rrE, liftE_eq _ hrb, ht0]
         · rw [hpm, hown]; simp [rrE, liftE_eq _ hrb, hm0, liftMode]
         · simp [rrE, liftE_eq _ hrb, hm0, liftMode, Mode.ownSlot] at ho

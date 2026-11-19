@@ -100,7 +100,7 @@ theorem hits_mono {e : Eff} {hv : Bool} {x : Var} {E E' : Entry} (hw : EntryWeak
 theorem killE_weaker {e : Eff} {hv : Bool} {x : Var} {E E' : Entry} (hw : EntryWeaker E E') :
     EntryWeaker (killE e hv x E) (killE e hv x E') := by
   have hw' := hw
-  obtain ⟨ht, hm, hr, hlv, hd, hb, ha, hk, hf⟩ := hw
+  obtain ⟨ht, hm, hr, hlv, hd, hb, ha, hk, hf, hg⟩ := hw
   refine ⟨by rw [killE_ty, killE_ty, ht], by rw [killE_mode, killE_mode, hm], fun h => ?_, fun h => ?_,
       fun h => by rw [killE_dtor] at h ⊢; rw [killE_held, killE_held]; exact hd h,
       by rw [killE_dbind, killE_dbind, hb], fun h => by rw [killE_dtor] at h; rw [killE_dtor, killE_dbind]; exact ha h,
@@ -111,7 +111,10 @@ theorem killE_weaker {e : Eff} {hv : Bool} {x : Var} {E E' : Entry} (hw : EntryW
         rw [killE_fresh] at h ⊢; rw [killE_path, killE_path]; rw [killE_ty] at hn; rw [killE_mode] at hb
         rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
         exact hf hl.1 hn hb h,
-      fun _ hhf => by heldfresh_ew⟩
+      fun hl hhf => by
+        rw [killE_heldFresh] at hhf ⊢; rw [killE_held, killE_held]
+        rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl
+        exact hg hl.1 hhf⟩
   · unfold Entry.fixed at h; rw [killE_mode, killE_ty] at h; rw [hr h]
   · rw [killE_live] at h
     simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
@@ -268,14 +271,32 @@ theorem reroot_mem_congr {p : Var} {D L L' : List Dep}
       | false => exact mem_reroot_of_eq (hs ⟨p, k⟩ hkn hk) hd'
   exact ⟨key fun d hn hd => (h d hn).mp hd, key fun d hn hd => (h d hn).mpr hd⟩
 
+/-- ... and a memory view of a rerooted list comes from one of the list
+    (Agora #916). -/
+theorem reroot_memDeps_subset {p : Var} {D L L' : List Dep} (h : memDeps L' ⊆ memDeps L) :
+    memDeps (reroot p D L') ⊆ memDeps (reroot p D L) := by
+  have hcn : ∀ a b : Kind, b.isName = true → (comp a b).isName = true := by
+    intro a b; cases a <;> cases b <;> simp [comp, Kind.isName]
+  intro d hd
+  obtain ⟨hd, hnm⟩ := List.mem_filter.mp hd
+  have hnm : d.kind.isName = false := by simpa using hnm
+  have hs : ∀ d : Dep, d.kind.isName = false → d ∈ L' → d ∈ L := fun d hn hd =>
+    (List.mem_filter.mp (h (List.mem_filter.mpr ⟨hd, by simp [hn]⟩))).1
+  refine List.mem_filter.mpr ⟨?_, by simp [hnm]⟩
+  rcases mem_reroot hd with ⟨hin, hne⟩ | ⟨k, d', hk, hd', rfl⟩
+  · exact mem_reroot_of_ne (hs d hnm hin) hne
+  · cases hkn : k.isName with
+    | true => rw [hcn _ _ hkn] at hnm; cases hnm
+    | false => exact mem_reroot_of_eq (hs ⟨p, k⟩ hkn hk) hd'
+
 theorem rerootE_weaker {p : Var} {D : List Dep} {E E' : Entry} (hw : EntryWeaker E E') :
     EntryWeaker (rerootE p D E) (rerootE p D E') := by
-  obtain ⟨ht, hm, hr, hlv, hd, hb, ha, hk, hf⟩ := hw
+  obtain ⟨ht, hm, hr, hlv, hd, hb, ha, hk, hf, hg⟩ := hw
   refine ⟨ht, hm, fun h => by rw [hr h], fun hl => ?_,
       fun h => ⟨(hd h).1, reroot_subset (hd h).2⟩, hb, ha,
       fun h hos hn d hnm => reroot_mem_congr (hk h hos hn) hnm,
       fun hl' hn' hbo h => ⟨(hf hl' hn' hbo h).1, reroot_subset (hf hl' hn' hbo h).2⟩,
-      fun _ hhf => by heldfresh_ew⟩
+      fun hl' hhf => ⟨(hg hl' hhf).1, reroot_memDeps_subset (hg hl' hhf).2⟩⟩
   obtain ⟨hl', hp, hh⟩ := hlv hl
   exact ⟨hl', fun ho => reroot_subset (hp ho), reroot_subset hh⟩
 

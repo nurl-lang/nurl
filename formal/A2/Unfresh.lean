@@ -63,7 +63,8 @@ theorem EntryWeaker.unfresh (E : Entry) : EntryWeaker E E.unfresh := by
   · rename_i hm
     refine ⟨rfl, rfl, fun hf => ?_, fun h => ⟨h, fun _ => List.Subset.refl _, List.Subset.refl _⟩,
       fun h => ⟨h, List.Subset.refl _⟩, (by simp_all), (fun _ => by simp_all), fun _ _ _ _ _ => Iff.rfl,
-      fun _ _ _ h => by cases h⟩
+      fun _ _ _ h => (by cases h),
+      fun _ hhf => by heldfresh_ew⟩
     rcases hf with h | ⟨b, h, _⟩ <;> rw [hm] at h <;> cases h
   · exact EntryWeaker.refl E
 
@@ -131,7 +132,7 @@ theorem EntryWeaker.fresh_of_not {E E' : Entry} (h : E'.fresh = false) :
 /-- **A borrow with the bit off asks nothing of its source.** -/
 theorem RhsT.borrow_unfresh {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {t : Ty}
     (hy : Γ y = some E) (hl : E.live = true) (ht : E.ty = .vec t) :
-    RhsT Γ F (.borrow y) ⟨E.ty, .bor, true, derive y E .self, E.held, false, false, false⟩ Γ :=
+    RhsT Γ F (.borrow y) ⟨E.ty, .bor, true, derive y E .self, E.held, false, false, false, false⟩ Γ :=
   RhsT.borrow hy hl ht (fun h => by cases h)
 
 /-- **Nor does an element borrow.** -/
