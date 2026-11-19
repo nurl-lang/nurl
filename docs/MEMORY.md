@@ -1125,9 +1125,9 @@ container, a `Box`, an option or an enum holding such a value runs its
 destructor when released. A destructor that only reads the payload ends
 nothing. Read the view before the release, or take it again after.
 A function's exit counts too: a return that hands back a view read through
-the payload such a destructor changes is refused. One release is not checked
-yet (AGORA-919): a destructor that runs when a returned closure's
-environment is released.
+the payload such a destructor changes is refused. So does a closure: one a
+call hands back holds what its maker took over (a `sink` argument it
+captured), and releasing it runs those values' destructors.
 
 ## 3. Outside the rules
 
