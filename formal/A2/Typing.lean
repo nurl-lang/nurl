@@ -1269,7 +1269,7 @@ def callPostAux (Γ0 : Ctx) (fn : Fn) (args : List Var) :
   | (.inout b, t) :: ps, a :: as, i, Γ =>
       callPostAux Γ0 fn args ps as (i + 1)
         (setE (kill b t.elem.holdsView a Γ) a
-          { argE Γ0 a with held := if t.holdsView then
+          { argE Γ0 a with heldFresh := (if t.holdsView then false else (argE Γ0 a).heldFresh), held := if t.holdsView then
               (argE Γ0 a).held ++ outHeld Γ0 fn args i ++ heldOfArgs Γ0 args else (argE Γ0 a).held })
   | (.inp, _) :: ps, _ :: as, i, Γ => callPostAux Γ0 fn args ps as (i + 1) Γ
   | _, _, _, Γ => Γ

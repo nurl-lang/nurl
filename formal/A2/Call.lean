@@ -728,7 +728,7 @@ theorem callPostAux_dbind {Γ0 : Ctx} {fn : Fn} {args : List Var} :
 /-- What the context after the call says of a moved or changed argument. -/
 def postEnt (Γ0 : Ctx) (fn : Fn) (args : List Var) (i : Nat) (a : Var) (t : Ty) : PMode → Entry
   | .sink => { argE Γ0 a with live := false, dtor := false }
-  | .inout _ => { argE Γ0 a with held := if t.holdsView then
+  | .inout _ => { argE Γ0 a with heldFresh := (if t.holdsView then false else (argE Γ0 a).heldFresh), held := if t.holdsView then
       (argE Γ0 a).held ++ outHeld Γ0 fn args i ++ heldOfArgs Γ0 args else (argE Γ0 a).held }
   | .inp => argE Γ0 a
 
@@ -819,6 +819,9 @@ theorem clean_fixed_iff (E : Entry) : E.clean.fixed ↔ E.fixed := by
 theorem fixed_setLive (E : Entry) (b : Bool) : ({E with live := b} : Entry).fixed ↔ E.fixed := by
   simp [Entry.fixed_def]
 theorem fixed_setHeld (E : Entry) (H : List Dep) : ({E with held := H} : Entry).fixed ↔ E.fixed := by
+  simp [Entry.fixed_def]
+theorem fixed_setHeldFresh (E : Entry) (f : Bool) (H : List Dep) :
+    ({E with heldFresh := f, held := H} : Entry).fixed ↔ E.fixed := by
   simp [Entry.fixed_def]
 theorem clean_mode (E : Entry) : E.clean.mode = E.mode := by unfold Entry.clean; split <;> rfl
 theorem clean_ty (E : Entry) : E.clean.ty = E.ty := by unfold Entry.clean; split <;> rfl
