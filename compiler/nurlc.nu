@@ -89027,6 +89027,11 @@ unsafe @ str_has_index s list i k → b {
 // regardless of --no-borrowck. Cheap symbol-table append; no IR.
 @ bck_mark_param_valueread i syms s name → v {
     ? == 0 ( nurl_str_len name ) { ^ v } {}
+    // (Only a parameter's name is ever asked of the set - the invoke-only
+    // summary and the argument save above - so a local's read is not
+    // recorded: every identifier a body read went into one list, searched
+    // word by word on each read, quadratic in a long function.)
+    ? < ( nurl_sym_word_index syms `__fn_param_names__` name ) 0 { ^ v } {}
     : s cur ( nurl_sym_get syms `__fn_param_valueread__` )
     ? ( str_contains_word cur name ) {} {
         ( nurl_sym_set_deep syms `__fn_param_valueread__`
