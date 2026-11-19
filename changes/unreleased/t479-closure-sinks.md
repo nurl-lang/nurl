@@ -1,0 +1,3 @@
+### Fixed
+
+- **A closure body may not hand a `sink` a copy or a part of its capture** (AGORA-479, closed). `\ → i { : String y x ^ ( eat y ) }`, and the same through a payload of the capture, of a copy of it, of a captured field, or of a captured `vec_get`, released the value the closure's environment still held, and a payload of a captured borrowed or `inout` parameter released the caller's value. That was a double free, even on a single call. These are refused now, with the way out: hand the sink a copy (`( eat ( string_clone x ) )`), or the capture itself, which the closure then gives up when it runs.

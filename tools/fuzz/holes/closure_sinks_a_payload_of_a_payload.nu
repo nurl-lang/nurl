@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #479: a closure body hands a sink the payload of its capture's payload, called twice
+// map: §2.10 | A2 | rejected | - | AGORA-479: a closure body hands a sink the payload of its capture's payload, called twice
+// AGORA-479 (this shape, closed): refused - a closure body may not hand a sink a copy or a part of its capture, which the environment still releases (main b215deb5: accepted, heap-use-after-free)
 $ `stdlib/core/string.nu`
 
 @ eat sink String s → i { ^ ( string_len s ) }

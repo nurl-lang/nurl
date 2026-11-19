@@ -1,5 +1,5 @@
-// map: §2.10 | A2 | runs-clean | - | agora #479: `?? o { T s → { ^ \ → … s … } }` with a struct field as the argument: the caller's field is freed twice
-// AGORA-869: runs clean under ASan/LSan with the default compile (main 3358873a: faulted); the ticket's other shapes stay open.
+// map: §2.10 | A2 | runs-clean | - | AGORA-479: `?? o { T s → { ^ \ → … s … } }` with a struct field as the argument: the caller's field is freed twice
+// AGORA-869: runs clean under ASan/LSan with the default compile (main 3358873a: faulted); AGORA-479 closed in full (this shape: accepted, runs clean under ASan on this branch).
 $ `stdlib/core/string.nu`
 
 : H { ? String o i n }
