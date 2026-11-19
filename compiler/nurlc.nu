@@ -4194,6 +4194,9 @@ unsafe @ note_unsafe_item s pos s what → v {
 // Some store has put an owner into a field path whose id it knows (`sfo_`,
 // bck_sx_name; agora #563).
 : ~ i g_bck_sfo_any 0
+// …and one put a value that views its own fields into a container's
+// element (`svr_`, __bck_sv_carry / __bck_sv_inherit; agora #563).
+: ~ i g_bck_svr_any 0
 : ~ i g_bck_sva_wid -1
 // …and whether a call's `sK` rows wait, unflushed, on the statement's
 // lists (__vself_place): a `?`'s condition, a loop's, a return's are
@@ -42947,6 +42950,11 @@ unsafe @ gen_match i lex i syms i cg → s {
                     // bck_handle_match.)
                     : b __abna & != 0 ( nurl_str_len __m_heldtys ) & ( bck_sound ) & ! __abv & ! __abcl & | __abhv == ( bck_walk_class __abt ) 0 ( __pay_outside syms __m_heldtys __abt __abhv )
                     : s __abn ( nurl_str_cat3 ? __abna `=` `` ? __abv ? ( __view_may_own __abt ) `~` `!` ? __abhv `%` `` __abn1 )
+                    // (A struct payload's type, as a `let`'s: a value taken
+                    // out of a container whose elements view their own fields
+                    // views its own when it is of a type with them —
+                    // __bck_sv_inherit, agora #563.)
+                    ? & & __abhv == 0 g_bck_rec_off == 37 ( nurl_str_get __abt 0 ) { ( bck_put ( nurl_str_cat4 `blt_` __ab `@` ( nurl_str_int bck_mline ) ) __abt ) } {}
                     = __arm_binds ? == 0 ( nurl_str_len __arm_binds ) ( nurl_str_cat __abn `` ) ( nurl_str_cat3 __arm_binds `,` __abn )
                 } {}
             }
@@ -66001,6 +66009,9 @@ unsafe @ __bck_rv_self_tie i wid s cals → v {
             } {}
         } {}
         ( bck_dep_set wid dsrcs )
+        // (…a value taken out of a container whose elements view their own
+        // fields views its own: agora #563.)
+        ? != 0 g_bck_svr_any { ( __bck_sv_inherit wid dsrcs ( nurl_sym_get g_bck ( nurl_str_cat4 `blt_` ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wid ) ) `@` ( bck_field rec 3 ) ) ) ) } {}
         // (A value holding a view of an Arc's payload — a helper's that
         // builds one over its Arc parameter, a copy of an owner holding one:
         // the owner holds it, agora #682.)
@@ -70507,10 +70518,73 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         ? != 0 ( nurl_str_len srcs ) { ( bck_dep_add ( bck_path_root fp ) srcs ) } {}
         ^ v
     } {}
-    // (Stored anywhere else — an element of a container, an option's
-    // payload, a callee's — the views stay good while the value is not
-    // changed there, and nothing here can follow it; a value taken back out
-    // and grown is AGORA-563's rest, tools/fuzz/holes/open/t563.md.)
+    // (Stored into anything else that is a binding's — an element of a
+    // container, an option's payload — the views stay good while it is not
+    // changed there: the container notes which fields of its elements its
+    // elements view (`svr_`, `^rel` through a field's elements), and a value
+    // taken back out of it views those fields of its own (__bck_sv_inherit).)
+    ? == ( nurl_str_get own 0 ) 61 {
+        : s cr ( nurl_str_int ( bck_path_root ( nurl_str_to_int ( nurl_str_slice own 1 - ( nurl_str_len own ) 1 ) ) ) )
+        : s ck ( bck_bkey `svr_` cr )
+        : ~ s rels ( nurl_sym_get g_bck ck )
+        : ~ s mr ( nurl_str_cat mine `` )
+        ~ != 0 ( nurl_str_len mr ) {
+            : s x ( str_first_word mr ) = mr ( str_skip_word mr )
+            : s rel ( __bck_rel_path ( nurl_str_to_int x ) )
+            ? != 0 ( nurl_str_len rel ) { = rels ( __word_union rels ? ( str_contains_word vi x ) ( nurl_str_cat `^` rel ) rel ) } {}
+        }
+        ? != 0 ( nurl_str_len rels ) {
+            ( bck_put ck rels )
+            = g_bck_svr_any 1
+        } {}
+    } {}
+}
+
+// Does struct type `lty` (`%Name`) have a field named `f`?
+@ __ty_has_field s lty s f → b {
+    ? != 37 ( nurl_str_get lty 0 ) { ^ F } {}
+    : s sname ( nurl_str_slice lty 1 - ( nurl_str_len lty ) 1 )
+    : s fcs ( nurl_sym_get2 g_root_syms sname `__field_count` )
+    ? == 0 ( nurl_str_len fcs ) { ^ F } {}
+    : i fc ( nurl_str_to_int fcs )
+    : ~ i i 0
+    ~ < i fc {
+        ? ( seq ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__name` ) ) ) f ) { ^ T } {}
+        = i + i 1
+    }
+    ^ F
+}
+
+// Binding `wid` takes a value that holds what `srcs` names (bck_dep_set):
+// where among them is a container whose elements view fields of their own
+// (`svr_`, __bck_sv_carry) — a value popped, removed or matched out of it —
+// the value views those fields of its own: `wid` depends on them, so
+// growing `. y buf` ends it as growing `. o buf` ended `o` (agora #563).
+@ __bck_sv_inherit i wid s srcs s lty → v {
+    ? != 37 ( nurl_str_get lty 0 ) { ^ v } {}
+    : s base ( __bck_id_spelling wid )
+    : ~ s add ``
+    : ~ s rest ( __src_plain srcs )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s c ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( __is_int_lit c ) {
+            : s rels ( nurl_sym_get g_bck ( bck_bkey `svr_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int c ) ) ) ) )
+            : ~ s rr ( nurl_str_cat rels `` )
+            ~ != 0 ( nurl_str_len rr ) {
+                : s r0 ( str_first_word rr ) = rr ( str_skip_word rr )
+                : b ind == 94 ( nurl_str_get r0 0 )
+                : s r ? ind ( nurl_str_slice r0 1 - ( nurl_str_len r0 ) 1 ) ( nurl_str_cat r0 `` )
+                // (Only a value of a type with that field: a part of an
+                // element copied out — a `( Vec s )` field cloned — has none.)
+                : i dd ( nurl_str_find r `.` )
+                ? ( __ty_has_field lty ? < dd 0 r ( nurl_str_slice r 0 dd ) ) {
+                    : s nid ( nurl_str_int ( bck_intern ( nurl_str_cat3 base `.` r ) ) )
+                    = add ( __word_union add ? ind ( nurl_str_cat `^` nid ) nid )
+                } {}
+            }
+        } {}
+    }
+    ? != 0 ( nurl_str_len add ) { ( bck_dep_add wid add ) } {}
 }
 
 // A `pendslit` row (bck_stash_slit): a literal written as argument `aix`
@@ -71614,6 +71688,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
                 ? != 0 g_bck_ah_any { ( bck_put ( bck_bkey `ah_` ( nurl_str_int id ) ) `` ) } {}
                 ? ishv {
                     ( bck_dep_set id hv_deps )
+                    ? != 0 g_bck_svr_any { ( __bck_sv_inherit id hv_deps ( nurl_sym_get g_bck ( nurl_str_cat4 `blt_` nm `@` ( bck_field rec 3 ) ) ) ) } {}
                     // (…views of an Arc's payload among them, agora #682.)
                     ? & != g_sxe_arc -1 ! lent { ( __ah_mark id g_sxe_arc ) } {}
                 } {}
@@ -73351,6 +73426,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_has_cursor 0
     = g_bck_hc_any 0
     = g_bck_sfo_any 0
+    = g_bck_svr_any 0
     = g_bck_bxf_any 0
     = g_bck_fv_any 0
     = g_bck_bvr_any 0
