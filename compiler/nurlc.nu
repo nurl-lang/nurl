@@ -75283,7 +75283,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // unless the new value is one, or a capture: `__capcopy` follows the
         // value, agora #479.)
         ? != 0 g_bck_closure_depth {
-            ? != 0 ( nurl_sym_len2 syms name `__capcopy` ) { ( nurl_sym_def syms ( nurl_str_cat name `__capcopy` ) `` ) } {}
+            // (…not its own value again, `= y y`: the mark stays.)
+            ? & != 0 ( nurl_sym_len2 syms name `__capcopy` ) ! & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name ) { ( nurl_sym_def syms ( nurl_str_cat name `__capcopy` ) `` ) } {}
             ? ( is_ident_tok bck_rhs_tt ) { ( __clo_capcopy_note syms name bck_rhs_val ) } {}
         } {}
         // Inside a closure body: a capture, or the closure's own `inout`
