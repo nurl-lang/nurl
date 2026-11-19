@@ -51,22 +51,22 @@ def P : Prog := [pick]
 
 /-! ### The callee's contexts -/
 
-def Ecell : Entry := ⟨opt, .inout .replace, true, [], [], false, false, false⟩
-def Ep : Entry := ⟨str, .rootb, true, [], [], false, false, false⟩
-def Ec : Entry := ⟨.int, .rootb, true, [], [], false, false, false⟩
-def Enew : Entry := ⟨str, .own, true, [], [], false, false, false⟩
+def Ecell : Entry := ⟨opt, .inout .replace, true, [], [], false, false, false, false⟩
+def Ep : Entry := ⟨str, .rootb, true, [], [], false, false, false, false⟩
+def Ec : Entry := ⟨.int, .rootb, true, [], [], false, false, false, false⟩
+def Enew : Entry := ⟨str, .own, true, [], [], false, false, false, false⟩
 
 /-- What the result slot ends as on each path, and at the join. -/
-def ErT : Entry := ⟨str, .bor, true, [⟨1, .self⟩], [], false, false, false⟩
-def ErF : Entry := ⟨str, .bor, true, [⟨0, .inner⟩], [], false, false, false⟩
-def ErJ : Entry := ⟨str, .bor, true, [⟨1, .self⟩, ⟨0, .inner⟩], [], false, false, false⟩
+def ErT : Entry := ⟨str, .bor, true, [⟨1, .self⟩], [], false, false, false, false⟩
+def ErF : Entry := ⟨str, .bor, true, [⟨0, .inner⟩], [], false, false, false, false⟩
+def ErJ : Entry := ⟨str, .bor, true, [⟨1, .self⟩, ⟨0, .inner⟩], [], false, false, false, false⟩
 
 /-- The callee's context with the result slot `r3`. -/
 def ctx (r3 : Entry) : Ctx := fun v =>
   if v = 0 then some Ecell else if v = 1 then some Ep else if v = 2 then some Ec
   else if v = 3 then some r3 else none
 
-theorem sig_eq : sigCtx pick = ctx ⟨str, .bor, false, [], [], false, false, false⟩ := by
+theorem sig_eq : sigCtx pick = ctx ⟨str, .bor, false, [], [], false, false, false, false⟩ := by
   funext v
   simp only [sigCtx, ctx, pick, paramE, resMode]
   rcases v with _ | _ | _ | _ | v <;> simp [Ecell, Ep, Ec, opt, str, Ty.hasFn]
@@ -129,10 +129,11 @@ theorem ctx_weaker {R R' : Entry} (hR' : RootsOK R') (ht : R'.ty = R.ty) (hm : R
     · refine ⟨ht, hm, fun hf0 => ?_, fun hl' => ⟨hl hl', fun _ => hp, hh⟩,
         fun h => absurd h (by rw [hf.1]; simp), by rw [hf.2, hf'.2], fun h => absurd h (by rw [hf'.1]; simp),
         fun h => absurd h (by rw [hf.2]; simp),
-        fun _ _ _ hfr => absurd hfr (by rw [hfz]; simp)⟩
+        fun _ _ _ hfr => absurd hfr (by rw [hfz]; simp),
+      fun _ _ _ hhf => by heldfresh_ew⟩
       simp [Entry.fixed, hb] at hf0
 
-theorem roots_R0 : RootsOK ⟨str, .bor, false, [], [], false, false, false⟩ := by
+theorem roots_R0 : RootsOK ⟨str, .bor, false, [], [], false, false, false, false⟩ := by
   constructor <;> simp [roots, Entry.vdeps, Mode.ownSlot]
 theorem roots_ErT : RootsOK ErT := by
   constructor <;> simp [ErT, roots, Entry.vdeps, Mode.ownSlot, Kind.isName]
@@ -153,17 +154,17 @@ theorem ctx_noPin {R : Entry} (hR : R.mode ≠ .rootb) (x : Var) : NoPin (ctx R)
 /-! ### The callee: both paths, and the join -/
 
 /-- The path that lends `p`. -/
-theorem then_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false, false⟩) [] (.assign 3 (.var 1)) (ctx ErT) := by
-  have h := StmtT.assign (ξ := .none) (P := P) (Γ := ctx ⟨str, .bor, false, [], [], false, false, false⟩) (F := []) (x := 3)
-    (r := .var 1) (Ex := ⟨str, .bor, false, [], [], false, false, false⟩)
-    (E := ⟨str, .bor, true, derive 1 Ep .self, Ep.held, false, false, false⟩) (Γ1 := ctx ⟨str, .bor, false, [], [], false, false, false⟩)
+theorem then_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false, false, false⟩) [] (.assign 3 (.var 1)) (ctx ErT) := by
+  have h := StmtT.assign (ξ := .none) (P := P) (Γ := ctx ⟨str, .bor, false, [], [], false, false, false, false⟩) (F := []) (x := 3)
+    (r := .var 1) (Ex := ⟨str, .bor, false, [], [], false, false, false, false⟩)
+    (E := ⟨str, .bor, true, derive 1 Ep .self, Ep.held, false, false, false, false⟩) (Γ1 := ctx ⟨str, .bor, false, [], [], false, false, false, false⟩)
     (by simp [ctx]) (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.copyRoot (E := Ep) (by simp [ctx]) rfl rfl) rfl
     (by simp [derive, Ep, roots, Entry.vdeps, Mode.isRoot, Mode.ownSlot, rootKind, str])
     (by simp [ctx]) (ctx_noPin (by simp) _)
     (DtorSafe.of_none (fun v E h => (ctx_flags ⟨rfl, rfl⟩ v E h).1) _ _ _) rfl
-  have he : setE (kill .replace false 3 (ctx ⟨str, .bor, false, [], [], false, false, false⟩)) 3
-      { (⟨str, .bor, true, derive 1 Ep .self, Ep.held, false, false, false⟩ : Entry) with mode := Mode.bor } = ctx ErT := by
+  have he : setE (kill .replace false 3 (ctx ⟨str, .bor, false, [], [], false, false, false, false⟩)) 3
+      { (⟨str, .bor, true, derive 1 Ep .self, Ep.held, false, false, false, false⟩ : Entry) with mode := Mode.bor } = ctx ErT := by
     funext v
     rcases v with _ | _ | _ | _ | v <;>
       simp [ctx, setE, upd, kill, killE, hits, Ecell, Ep, Ec, ErT, derive, Mode.isRoot, rootKind, str,
@@ -173,7 +174,7 @@ theorem then_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false, fa
 /-- The fresh-value path's contexts: the callee's, with the local 4. -/
 def ctxL (R L : Entry) : Ctx := setE (ctx R) 4 L
 
-def EnewD : Entry := ⟨str, .own, false, [], [], false, false, false⟩
+def EnewD : Entry := ⟨str, .own, false, [], [], false, false, false, false⟩
 
 theorem ctxL_noPin {R L : Entry} (hR : R.mode ≠ .rootb) (hL : L.mode ≠ .rootb) (x : Var) :
     NoPin (ctxL R L) x := by
@@ -199,9 +200,9 @@ theorem ctxL_dtor {R L : Entry} (hR : R.dtor = false) (hL : L.dtor = false) :
 
 /-- The path that makes a fresh String: it goes into the cell, and the
     result borrows the cell's payload. -/
-theorem else_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false, false⟩) []
+theorem else_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false, false, false⟩) []
     (.letv 4 (.new .int) (.seq (.assign 0 (.inr .int 4)) (.assign 3 (.getr 0)))) (ctx ErF) := by
-  let R0 : Entry := ⟨str, .bor, false, [], [], false, false, false⟩
+  let R0 : Entry := ⟨str, .bor, false, [], [], false, false, false, false⟩
   -- `= cell ( some y )`: the fresh String moves into the cell
   have hpush : PushArg (ctxL R0 Enew) [] 4 Enew Enew.ty Enew.held
       (setE (kill .replace false 4 (ctxL R0 Enew)) 4 { Enew with live := false, dtor := false }) :=
@@ -212,17 +213,17 @@ theorem else_arm : StmtT P ξ (ctx ⟨str, .bor, false, [], [], false, false, fa
     rcases v with _ | _ | _ | _ | _ | v <;>
       simp [ctxL, ctx, setE, upd, kill, killE, hits, Ecell, Ep, Ec, Enew, EnewD, R0, Entry.vdeps, Mode.ownSlot]
   rw [h1] at hpush
-  have hinr : RhsT (ctxL R0 Enew) [] (.inr .int 4) ⟨.sum .int Enew.ty, .own, true, [], Enew.held, false, false, false⟩
+  have hinr : RhsT (ctxL R0 Enew) [] (.inr .int 4) ⟨.sum .int Enew.ty, .own, true, [], Enew.held, false, false, false, false⟩
       (ctxL R0 EnewD) :=
     RhsT.inr (by simp [ctxL, setE, upd]) rfl hpush rfl
   have ha := StmtT.assign (ξ := .none) (P := P) (Γ := ctxL R0 Enew) (F := []) (x := 0) (r := .inr .int 4)
-    (Ex := Ecell) (E := ⟨.sum .int Enew.ty, .own, true, [], Enew.held, false, false, false⟩) (Γ1 := ctxL R0 EnewD)
+    (Ex := Ecell) (E := ⟨.sum .int Enew.ty, .own, true, [], Enew.held, false, false, false, false⟩) (Γ1 := ctxL R0 EnewD)
     (by simp [ctxL, ctx, setE, upd]) (by simp) (Or.inr (Or.inl ⟨rfl, rfl⟩)) hinr
     (by simp [Enew, Ecell, opt, str]) (by simp [Enew, roots, Entry.vdeps, Mode.ownSlot])
     (by simp [ctxL, ctx, setE, upd]) (ctxL_noPin (by simp [R0]) (by simp [Enew]) _)
     (DtorSafe.of_none (ctxL_dtor rfl rfl) _ _ _) rfl
   have h2 : setE (kill .replace false 0 (ctxL R0 EnewD)) 0
-      { (⟨.sum .int Enew.ty, .own, true, [], Enew.held, false, false, false⟩ : Entry) with mode := Ecell.mode } = ctxL R0 EnewD := by
+      { (⟨.sum .int Enew.ty, .own, true, [], Enew.held, false, false, false, false⟩ : Entry) with mode := Ecell.mode } = ctxL R0 EnewD := by
     funext v
     rcases v with _ | _ | _ | _ | _ | v <;>
       simp [ctxL, ctx, setE, upd, kill, killE, hits, Ecell, Ep, Ec, Enew, EnewD, R0, opt, str, Entry.vdeps,
@@ -361,8 +362,8 @@ theorem NoRootb.exitScope {Γ : Ctx} (h : NoRootb Γ) (x : Var) : NoRootb (A2.ex
   · cases h'
   · exact h.kill .replace false x v E' h'
 
-def Ecl : Entry := ⟨opt, .own, true, [], [], false, false, false⟩
-def Ex : Entry := ⟨str, .bor, true, [⟨2, .self⟩, ⟨1, .inner⟩], [], false, false, false⟩
+def Ecl : Entry := ⟨opt, .own, true, [], [], false, false, false, false⟩
+def Ex : Entry := ⟨str, .bor, true, [⟨2, .self⟩, ⟨1, .inner⟩], [], false, false, false, false⟩
 
 /-- The caller's context at the call. -/
 def K4 : Ctx := A2.setE (A2.setE (A2.setE (A2.setE (fun _ => none) 0 intE) 1 Ecl) 2 Enew) 3 intE
