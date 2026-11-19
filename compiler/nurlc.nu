@@ -66971,7 +66971,8 @@ unsafe @ __pderiv_put_at s ptr s ps0 → v {
 // and conditioned — and a `??` payload by what its match read, `T h` of an
 // option parameter `oh` part of oh (agora #793).
 @ __pd_name_params i syms s w → s {
-    ? | != 0 ( nurl_sym_len2 syms w `__plroot` ) != 0 ( nurl_sym_len2 syms w `__plend` ) { ^ ( __word_union ( __pderiv_params syms w ) ( __pderiv_reach syms w ) ) } {}
+    // (g_pl_seen: a payload was bound in this function at all.)
+    ? & != 0 g_pl_seen | != 0 ( nurl_sym_len2 syms w `__plroot` ) != 0 ( nurl_sym_len2 syms w `__plend` ) { ^ ( __word_union ( __pderiv_params syms w ) ( __pderiv_reach syms w ) ) } {}
     ^ ( __word_union ( __pderiv_params syms w ) ( __pderiv_cparams syms w ) )
 }
 
