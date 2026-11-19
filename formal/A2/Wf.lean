@@ -335,7 +335,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     | lk ms => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
     | cell ms => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
     | dtor f a => exact app _ _ (hderive y Ey .inner hy hl hn') (hheld y Ey hy hl hn')
-  | @view y Ey t _ hy hl ht _ _ =>
+  | @view y Ey t _ _ hy hl ht _ _ _ =>
     refine ⟨h, fun _ => rfl, same, fun _ _ => ?_⟩
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (by rw [ht]; simp)
     rw [bor_vdeps _ rfl]

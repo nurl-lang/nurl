@@ -379,7 +379,7 @@ def Mode.frame (m : Mode) : Prop := m = .own ∨ ∃ b, m = .inout b
     hold is reached through it (`RSetup.liftE`). -/
 def FreshE (Γ : Ctx) (E : Entry) : Prop :=
   E.live = true → E.ty ≠ .int → E.mode = .bor → E.fresh = true →
-    E.path ≠ [] ∧ ∀ d ∈ E.path, (d.kind = .self ∨ d.kind = .inner) ∧
+    E.path ≠ [] ∧ ∀ d ∈ E.path, (d.kind = .self ∨ d.kind = .inner ∨ d.kind = .view) ∧
       ∃ Er, Γ d.root = some Er ∧ Er.mode.frame
 
 def FreshOK (Γ : Ctx) : Prop := ∀ v E, Γ v = some E → FreshE Γ E
@@ -818,13 +818,15 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- holds) borrowed from the frame's own memory may be fresh
       (hf : f = true → FreshSrc Γ y ∧ ∀ s, t ≠ .slice s := by fresh_src) →
       RhsT Γ F (.at y i) { elemE y E t with fresh := f } Γ
-  | view {y : Var} {E : Entry} {t : Ty} {h : Bool} :
+  | view {y : Var} {E : Entry} {t : Ty} {f h : Bool} :
       Γ y = some E → E.live = true → E.ty = .vec t → t.holdsView = false →
       -- (A3.1's slices of shares: its elements may be shares, lent as
       -- `vec_at` lends them)
-      -- Agora #916: the view may be held-fresh if what `y` holds is the frame's own
+      -- Agora #916: the view may be fresh if `y` is the frame's own, as a borrow may,
+      (hf : f = true → FreshSrc Γ y := by fresh_src) →
+      -- ... and held-fresh if what `y` holds is
       (hh : h = true → HeldSrc Γ y := by fresh_src) →
-      RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false, false, h⟩ Γ
+      RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false, f, h⟩ Γ
   | sat {y : Var} {i : Expr} {E : Entry} {t : Ty} :
       Γ y = some E → E.live = true → E.ty = .slice t → ExprT Γ i →
       RhsT Γ F (.sat y i) (elemE y E t) Γ

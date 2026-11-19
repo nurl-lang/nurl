@@ -104,7 +104,7 @@ theorem weaker_unheldC {Γ : Ctx} (hw : CtxWF Γ) (hn : NameWF Γ) : Weaker Γ (
 theorem RhsT.view_unheld {Γ : Ctx} {F : List Var} {y : Var} {E : Entry} {t : Ty}
     (hy : Γ y = some E) (hl : E.live = true) (ht : E.ty = .vec t) (hv : t.holdsView = false) :
     RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false, false, false⟩ Γ :=
-  RhsT.view hy hl ht hv (fun h => by cases h)
+  RhsT.view hy hl ht hv (fun h => by cases h) (fun h => by cases h)
 
 /-- **The result side** (Agora #916): any typing of a source statement from a
     well-formed context still holds when its result has every held-freshness
@@ -125,8 +125,8 @@ theorem heldFresh_view_witness {F : List Var} :
       (.view 0) ⟨.slice .int, .bor, true, [⟨0, .view⟩], [], false, false, false, true⟩
       (upd (fun _ => none) 0 (some ⟨.vec .int, .own, true, [], [], false, false, false, false⟩)) := by
   have h := RhsT.view (Γ := upd (fun _ => none) 0 (some ⟨.vec .int, .own, true, [], [], false, false, false, false⟩))
-    (F := F) (y := 0) (E := ⟨.vec .int, .own, true, [], [], false, false, false, false⟩) (t := .int) (h := true)
-    (by simp [upd]) rfl rfl rfl
+    (F := F) (y := 0) (E := ⟨.vec .int, .own, true, [], [], false, false, false, false⟩) (t := .int) (f := false)
+    (h := true) (by simp [upd]) rfl rfl rfl (fun h => by cases h)
     (fun _ => ⟨⟨.vec .int, .own, true, [], [], false, false, false, false⟩, by simp [upd],
       Or.inl ⟨rfl, by simp [Ty.holdsView]⟩⟩)
   simpa [derive, Mode.isRoot, rootKind] using h
@@ -147,7 +147,7 @@ theorem heldSrc_not_rootb {Γ : Ctx} {y : Var} {E : Entry} (hy : Γ y = some E) 
 theorem view_rootb_not_heldFresh {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E Ev : Entry}
     (hy : Γ y = some E) (hm : E.mode = .rootb) (hr : RhsT Γ F (.view y) Ev Γ1) : Ev.heldFresh = false := by
   cases hr with
-  | @view _ _ _ h hy' _ _ _ hh =>
+  | @view _ _ _ _ h hy' _ _ _ _ hh =>
     cases h with
     | false => rfl
     | true => exact absurd (hh rfl) (heldSrc_not_rootb hy hm)
@@ -157,7 +157,7 @@ theorem view_bor_not_heldFresh {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E Ev : E
     (hy : Γ y = some E) (hm : E.mode = .bor) (hf : E.heldFresh = false) (hr : RhsT Γ F (.view y) Ev Γ1) :
     Ev.heldFresh = false := by
   cases hr with
-  | @view _ _ _ h hy' _ _ _ hh =>
+  | @view _ _ _ _ h hy' _ _ _ _ hh =>
     cases h with
     | false => rfl
     | true =>

@@ -172,15 +172,15 @@ theorem PushArg.freshOK {Γ Γ1 : Ctx} {F : List Var} {y : Var} {E : Entry} {t :
 /-- Agora #909: a structural borrow of a `Vec` taken from a fresh source
     reaches only the frame's own blocks. -/
 theorem derive_freshE {Γ : Ctx} (h : FreshOK Γ) {y : Var} {E : Entry} {t : Ty} {k : Kind}
-    (hy : Γ y = some E) (ht : E.ty = .vec t) (hk : k = .self ∨ k = .inner) (hs : FreshSrc Γ y) :
-    derive y E k ≠ [] ∧ ∀ d ∈ derive y E k, (d.kind = .self ∨ d.kind = .inner) ∧
+    (hy : Γ y = some E) (ht : E.ty = .vec t) (hk : k = .self ∨ k = .inner ∨ k = .view) (hs : FreshSrc Γ y) :
+    derive y E k ≠ [] ∧ ∀ d ∈ derive y E k, (d.kind = .self ∨ d.kind = .inner ∨ d.kind = .view) ∧
       ∃ Er, Γ d.root = some Er ∧ Er.mode.frame := by
   obtain ⟨E', hE', hc⟩ := hs
   rw [hy] at hE'; cases hE'
   rcases hc with hfr | ⟨hb, hf, hl, hn⟩
   · have hroot : E.mode.isRoot = true := by rcases hfr with h' | ⟨b, h'⟩ <;> rw [h'] <;> rfl
     have hd : derive y E k = [⟨y, k⟩] := by
-      unfold derive; rw [if_pos hroot, ht]; rcases hk with rfl | rfl <;> rfl
+      unfold derive; rw [if_pos hroot, ht]; rcases hk with rfl | rfl | rfl <;> rfl
     rw [hd]
     refine ⟨by simp, fun d hd' => ?_⟩
     simp only [List.mem_singleton] at hd'; subst hd'
@@ -194,7 +194,7 @@ theorem derive_freshE {Γ : Ctx} (h : FreshOK Γ) {y : Var} {E : Entry} {t : Ty}
     obtain ⟨d0, hd0, rfl⟩ := List.mem_map.mp hd'
     obtain ⟨hk0, Er, hEr, hm⟩ := hpd d0 hd0
     refine ⟨?_, Er, hEr, hm⟩
-    rcases hk0 with h0 | h0 <;> rcases hk with rfl | rfl <;> simp [h0, comp]
+    rcases hk0 with h0 | h0 | h0 <;> rcases hk with rfl | rfl | rfl <;> simp [h0, comp]
 
 theorem RhsT.freshOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT Γ F r E Γ1)
     (h : FreshOK Γ) : FreshOK Γ1 ∧ FreshE Γ1 E ∧ KeepsFrame Γ Γ1 := by
@@ -231,13 +231,15 @@ theorem RhsT.freshOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : R
     cases t with
     | int => exact absurd rfl hn
     | slice s => exact absurd rfl (hns s)
-    | _ => exact derive_freshE h hy ht (Or.inr rfl) hs
+    | _ => exact derive_freshE h hy ht (Or.inr (Or.inl rfl)) hs
   | @take y E t hy =>
     have hk : ∀ Ex, A2.kill .replace false y Γ y = some Ex → Ex.mode = E.mode := by
       intro Ex hEx; simp [A2.kill, hy] at hEx; rw [← hEx]; unfold killE; split <;> rfl
     refine ⟨(h.kill _ _ _).setE_same (Or.inl rfl) (fun Ex hEx => hk Ex hEx), FreshE.of_fresh rfl, ?_⟩
     exact (KeepsFrame.kill Γ _ _ _).trans (KeepsFrame.setE (fun Ex hEx hm => by
       rw [hk Ex hEx] at hm; exact hm))
+  | @view y E t f hb hy hl ht _ hf _ =>
+    exact ⟨h, fun _ _ _ hfr => derive_freshE h hy ht (Or.inr (Or.inr rfl)) (hf hfr), KeepsFrame.refl _⟩
   | _ => first
     | exact ⟨h, FreshE.of_fresh rfl, KeepsFrame.refl _⟩
     | (refine ⟨h, FreshE.of_fresh ?_, KeepsFrame.refl _⟩; simp; done)

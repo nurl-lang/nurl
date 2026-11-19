@@ -1909,19 +1909,35 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
         · simp only [elemE]; rw [heq]; simp [liftE, Mode.ownSlot]
         · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact held_lift h hab hy
         · simp only [elemE]; rw [heq]; simp [liftE, Mode.ownSlot]
-  | @view y Ey t hv hy hl ht hhv hhs =>
+  | @view y Ey t fv hv hy hl ht hhv hfs hhs =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
-    refine ⟨_, RhsT.view (h := hv) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht) hhv
-      (fun hh => heldSrc_lift h hy (hhs hh)), fun x => ?_⟩
+    refine ⟨_, RhsT.view (f := fv) (h := hv) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht) hhv
+      (fun hf => freshSrc_lift h hy (hfs hf)) (fun hh => heldSrc_lift h hy (hhs hh)), fun x => ?_⟩
     refine EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode])
       (by simp) (by simp [liftE]) (fun _ => ?_) ?_ (hg := fun _ _ hhf => by simpa [liftE] using hhf)
-    · simp only [liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true]
-      exact derive_lift h hab hy .view rfl
+      (hf := fun _ _ _ hfr => by
+        -- Agora #916: a fresh view is renamed exactly, as a fresh borrow is
+        simp only [liftE, reduceCtorEq, ↓reduceIte] at hfr
+        subst hfr
+        refine ⟨rfl, ?_⟩
+        show (S.liftE x ⟨.slice t, .bor, true, derive y Ey .view, Ey.held, false, false, true, hv⟩).path ⊆
+          derive (S.ρ y) (S.liftE y Ey) .view
+        rw [derive_lift_eq h hab hy (hfs rfl)]
+        simp [liftE, Mode.ownSlot])
+    · cases fv with
+      | false =>
+        simp only [liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_or]
+        exact derive_lift h hab hy .view rfl
+      | true =>
+        show derive (S.ρ y) (S.liftE y Ey) .view ⊆
+          (S.liftE x ⟨.slice t, .bor, true, derive y Ey .view, Ey.held, false, false, true, hv⟩).path
+        rw [derive_lift_eq h hab hy (hfs rfl)]
+        simp [liftE, Mode.ownSlot]
     · -- Agora #916: a held-fresh view holds what its source does, renamed: no
       -- memory of the arguments
       show (S.liftE y Ey).held ⊆
-        (S.liftE x ⟨.slice t, .bor, true, derive y Ey .view, Ey.held, false, false, false, hv⟩).held
-      rw [S.liftE_held (v := x) (E := ⟨.slice t, .bor, true, derive y Ey .view, Ey.held, false, false, false, hv⟩)
+        (S.liftE x ⟨.slice t, .bor, true, derive y Ey .view, Ey.held, false, false, fv, hv⟩).held
+      rw [S.liftE_held (v := x) (E := ⟨.slice t, .bor, true, derive y Ey .view, Ey.held, false, false, fv, hv⟩)
         (by simp)]
       simp only [Mode.ownSlot, ownHeld_false]
       cases hv with
