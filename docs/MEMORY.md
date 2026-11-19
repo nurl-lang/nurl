@@ -2786,7 +2786,11 @@ are dropped, moved and copied by the same rules:
   its elements as a `Vec` does, and as a slice of closures owns their
   environments (§7.5): freeing its buffer drops them. A slice literal
   takes a fresh element as it is and copies any other in — a binding
-  too, which stays its own owner. An element store (`= . sl k v`) drops
+  too, which stays its own owner. What its elements view, it holds: a
+  raw string element, or a struct element with a view field, is a copy
+  of that view, so the slice borrows from what the view points into,
+  as a struct literal of it does (`: [s sl [s | w ]` is a view of w's
+  source; agora #930). An element store (`= . sl k v`) drops
   the element it replaces, takes a fresh value as it is and copies a
   borrowed one; a binding stored there is refused (store a copy). An
   element that cannot be copied must be a fresh value.
