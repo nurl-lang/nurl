@@ -2309,7 +2309,8 @@ class FnCheck:
         place itself, or a part of it - hands that old value over to the
         binding (MEMORY.md §7.6, agora #265): it owns it from here on.  A
         binding that owned its value on other paths already (a join) owns
-        it on every path then."""
+        it on every path then.  Answers whether it handed the old value to
+        someone: then the store releases nothing, and runs no `% Drop`."""
         # (an `inout` parameter given a new value hands its old one to no
         # binding that reads it: codegen has no drop flag of its own to hand
         # over from and frees it outright, agora #886.)
@@ -2363,7 +2364,8 @@ class FnCheck:
                         and l not in self.cap_loans and not any(e.startswith("^") for e in hp)}
                 if mine and av.own in ("O", "P"):
                     st.vals[vid] = AV(av.own, av.loans, av.alias, av.held - mine, av.call)
-                    break
+                    return True
+        return first is not None
 
     def take_payload(self, st, av, line, direct=True):
         """A value read in place out of what owns it - a binding a cursor or
@@ -3325,6 +3327,8 @@ class FnCheck:
                 if (vid in seen or av.own != "O" or v.kind != "local" or vid == self.ret_watch
                         or vid in self.defer_reads_of(d) or vid in self.chain_kept):
                     continue
+                # (released here: its `% Drop` runs, as at a scope end)
+                self.run_dtor(st, (vid, ()), v.ty, v.line)
                 self.effect(st, (vid, ()), "replace", v.line)
                 self.effect(st, (vid, ()), "end", v.line)
                 st.vals[vid] = AV("D")
@@ -3348,6 +3352,7 @@ class FnCheck:
                     if av is None:
                         continue
                     if av.own == "O":
+                        self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, self.fn.vars[vid].line)
                         self.effect(st, (vid, ()), "replace", self.fn.vars[vid].line)
                     self.effect(st, (vid, ()), "end", self.fn.vars[vid].line)
                     if av.own != "M":
@@ -3838,17 +3843,50 @@ class FnCheck:
                         work.append(w)
         return out
 
-    def run_dtor(self, st, place, ty, line, depth=0):
+    def dtor_parts(self, ty):
+        """The parts of a value of type `ty` that are released with it, each
+        with its path below the value: a struct's fields, an enum's and a
+        result's payloads, an option's, a container's or a handle's element
+        (an Rc released by what may be its last share)."""
+        k = ty[0]
+        if k == "named":
+            if ty[1] in self.prog.structs:
+                from lower import norm
+                return [((fname or str(i),), norm(fty0)) for i, (fty0, fname) in enumerate(self.prog.structs[ty[1]])]
+            if ty[1] in getattr(self.prog, "enums", ()):
+                return [((f"#{vname}{i}",), fty) for vname, ftys in (self.T.variants(ty) or ()) for i, fty in enumerate(ftys)]
+            if ty[1] in getattr(self.prog, "handle_elem", {}):
+                return [(("*",), self.prog.handle_elem[ty[1]])]
+            return []
+        if k in ("vec", "slice", "box"):
+            return [(("*",), ty[1])]
+        if k == "opt":
+            return [((), ty[1])]
+        if k == "res":
+            return [(("#T0",), ty[1]), (("#F0",), ty[2])]
+        return []
+
+    def dtor_runs(self, ty):
+        """Does releasing a value of type `ty` run a `% Drop` of the
+        program's own - its own, or one a part of it holds (a slice's
+        elements included, which `has_udrop` does not ask)?"""
+        if ty is None:
+            return False
+        if self.T.has_udrop(ty):
+            return True
+        return ty[0] == "slice" and self.dtor_runs(ty[1])
+
+    def run_dtor(self, st, place, ty, line, seen=frozenset()):
         """A value of type `ty` at `place` is released: each `% Drop` of the
         program's own it holds runs, the value's own first (`drop__T`, a
         function of the program's whose summary says what it changes of its
-        parameter, and inside which shared payloads), then its fields', its
-        elements' and its payload's. Released with no effect of its own, a
-        `% Drop` that cleared a shared Rc payload left another handle's view
-        of it live (agora #766, #918, #919; nurlc's `+d=` / `+dk=` notes,
-        __bck_udrop_*)."""
-        udrop = getattr(self.prog, "udrop", ())
-        if ty is None or depth > 4 or not udrop or (ty[0] != "closure" and not self.T.has_udrop(ty)):
+        parameter, and inside which shared payloads), then its parts'. A
+        type already being walked (a recursive one) is not walked again:
+        its parts' destructors were reached on the way in. Released with no
+        effect of its own, a `% Drop` that cleared a shared Rc payload left
+        another handle's view of it live (agora #766, #918, #919; nurlc's
+        `+d=` / `+dk=` notes, __bck_udrop_*)."""
+        if ty is None or ty in seen or not getattr(self.prog, "udrop", ()):
             return
         k = ty[0]
         if k == "closure":
@@ -3865,56 +3903,36 @@ class FnCheck:
                     for c in body.params[:getattr(body, "ncap", 0)]:
                         cv = body.vars.get(c)
                         if cv is not None and getattr(cv, "taken", False):
-                            self.dtor_regions(st, cv.ty, depth + 1)
+                            self.dtor_regions(st, cv.ty)
             return
-        if k == "named":
-            sm = self.summary(f"drop__{ty[1]}") if f"drop__{ty[1]}" in self.prog.fns else None
+        if not self.dtor_runs(ty):
+            return
+        seen = seen | {ty}
+        if k == "named" and f"drop__{ty[1]}" in self.prog.fns:
+            sm = self.summary(f"drop__{ty[1]}")
             if sm is not None:
                 for (pk, path, eff) in sm["effects"]:
                     if pk == 0 and eff in ("replace", "realloc", "drop", "take"):
                         self.effect(st, (place[0], (place[1] + tuple(path))[:PATH_MAX]), eff, line)
                 for (rty, tail, eff) in sm.get("regions", ()):
                     self.region_effect(st, rty, tuple(tail), eff)
-            if ty[1] in self.prog.structs:
-                for i, (fty0, fname) in enumerate(self.prog.structs[ty[1]]):
-                    from lower import norm
-                    self.run_dtor(st, (place[0], place[1] + (fname or str(i),)), norm(fty0), line, depth + 1)
-            elif ty[1] in getattr(self.prog, "enums", ()):
-                # (an enum: whichever variant it holds, that payload goes)
-                for vname, ftys in (self.T.variants(ty) or ()):
-                    for i, fty in enumerate(ftys):
-                        self.run_dtor(st, (place[0], place[1] + (f"#{vname}{i}",)), fty, line, depth + 1)
-            elif ty[1] in getattr(self.prog, "handle_elem", {}):
-                # (a handle over one payload - a Box, an Rc released by what
-                # may be its last share: the payload goes with it)
-                self.run_dtor(st, (place[0], place[1] + ("*",)), self.prog.handle_elem[ty[1]], line, depth + 1)
-            return
-        if k in ("vec", "slice", "box"):
-            self.run_dtor(st, (place[0], place[1] + ("*",)), ty[1], line, depth + 1)
-            return
-        if k == "opt":
-            self.run_dtor(st, place, ty[1], line, depth + 1)
+        for sub, pty in self.dtor_parts(ty):
+            self.run_dtor(st, (place[0], (place[1] + sub)[:PATH_MAX]), pty, line, seen)
 
-    def dtor_regions(self, st, ty, depth=0):
+    def dtor_regions(self, st, ty, seen=frozenset()):
         """What the `% Drop`s a value of type `ty` holds change inside shared
         payloads, done: a value released where nothing else reaches it (a
-        closure's environment)."""
-        if ty is None or depth > 4 or not self.T.has_udrop(ty):
+        closure's environment). The same walk as run_dtor's."""
+        if ty is None or ty in seen or not self.dtor_runs(ty):
             return
-        k = ty[0]
-        if k == "named":
-            if f"drop__{ty[1]}" in self.prog.fns:
-                sm = self.summary(f"drop__{ty[1]}")
-                if sm is not None:
-                    for (rty, tail, eff) in sm.get("regions", ()):
-                        self.region_effect(st, rty, tuple(tail), eff)
-            if ty[1] in self.prog.structs:
-                from lower import norm
-                for fty0, _ in self.prog.structs[ty[1]]:
-                    self.dtor_regions(st, norm(fty0), depth + 1)
-            return
-        if k in ("vec", "slice", "box", "opt"):
-            self.dtor_regions(st, ty[1], depth + 1)
+        seen = seen | {ty}
+        if ty[0] == "named" and f"drop__{ty[1]}" in self.prog.fns:
+            sm = self.summary(f"drop__{ty[1]}")
+            if sm is not None:
+                for (rty, tail, eff) in sm.get("regions", ()):
+                    self.region_effect(st, rty, tuple(tail), eff)
+        for _sub, pty in self.dtor_parts(ty):
+            self.dtor_regions(st, pty, seen)
 
     def scope_end(self, st, stmts, line):
         if st.bottom:
@@ -4281,9 +4299,10 @@ class FnCheck:
                     st.vals[vid] = AV(cur.own, new.loans, frozenset(), cur.held | (new.held - inside))
                     return st
                 if cur is not None and cur.own in ("O", "P"):
-                    self.handover(st, (vid, ()))
-                    # (the old value is released: its `% Drop` runs - agora #766)
-                    self.run_dtor(st, (vid, ()), v.ty, ln)
+                    # (the old value is released - unless a binding that reads
+                    # it was handed it - and its `% Drop` runs: agora #766)
+                    if not self.handover(st, (vid, ())):
+                        self.run_dtor(st, (vid, ()), v.ty, ln)
                     self.effect(st, (vid, ()), "replace", ln)
                 new = self.reroot(st, new, vid)
                 if cur is not None and cur.own == "P" and v.ty is not None and v.ty[0] == "closure":
@@ -4431,9 +4450,9 @@ class FnCheck:
                     st.pb = st.pb | {(vid, ln, tuple(path))}
                 st.vals[vid] = AV("L", cur.loans, cur.alias, cur.held | hroot(add, path))
                 return st
-            self.handover(st, (vid, path))
             # (…and a field's old value, `= . h x v`: its `% Drop` runs)
-            self.run_dtor(st, (vid, tuple(path)), self.ty_of_place((vid, tuple(path))), ln)
+            if not self.handover(st, (vid, path)):
+                self.run_dtor(st, (vid, tuple(path)), self.ty_of_place((vid, tuple(path))), ln)
             self.effect(st, (vid, path), "replace", ln)
             self.store_into(st, (vid, path), add)
             if st.gone:
@@ -4588,7 +4607,10 @@ class FnCheck:
                 # (…and what the frame's destructors change as it is left: a
                 # `% Drop` of a local that clears a shared payload the
                 # returned value views - agora #918)
-                dk = self.exit_drops(st, ln)
+                # (…a `sink` parameter handed back whole goes to the caller
+                # with the result: not released here)
+                rk = op[1] if op[0] == "v" and not op[2] else None
+                dk = self.exit_drops(st, ln, keep=rk)
                 if dk and (av.loans | hloans(av.held)) & dk:
                     self.err(ln, "the returned value views what a destructor run at the function's exit changes")
             else:
