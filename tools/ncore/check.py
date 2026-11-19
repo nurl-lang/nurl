@@ -4217,6 +4217,8 @@ class FnCheck:
                     return st
                 if cur is not None and cur.own in ("O", "P"):
                     self.handover(st, (vid, ()))
+                    # (the old value is released: its `% Drop` runs - agora #766)
+                    self.run_dtor(st, (vid, ()), v.ty, ln)
                     self.effect(st, (vid, ()), "replace", ln)
                 new = self.reroot(st, new, vid)
                 if cur is not None and cur.own == "P" and v.ty is not None and v.ty[0] == "closure":
@@ -4365,6 +4367,8 @@ class FnCheck:
                 st.vals[vid] = AV("L", cur.loans, cur.alias, cur.held | hroot(add, path))
                 return st
             self.handover(st, (vid, path))
+            # (…and a field's old value, `= . h x v`: its `% Drop` runs)
+            self.run_dtor(st, (vid, tuple(path)), self.ty_of_place((vid, tuple(path))), ln)
             self.effect(st, (vid, path), "replace", ln)
             self.store_into(st, (vid, path), add)
             if st.gone:
