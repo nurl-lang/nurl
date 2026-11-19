@@ -60133,6 +60133,29 @@ unsafe @ bck_emit_error s file i line s msg → v {
 
 // A field path read after a callee took it — definitely, or on some paths
 // (agora #280): a use of a moved value, as for a binding.
+// A field path `id` a row hands to a call or reads, beside the paths a
+// callee took (`fmv`): one inside it taken is a use of a partly moved
+// value; one it lies inside taken is a use of that moved value (agora #929).
+@ __bck_fmv_rel_check i id i line s st → v {
+    ? | < id 0 == id ( bck_path_root id ) { ^ v } {}
+    : ~ s rest ( nurl_sym_get g_bck `fmv` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : i pid ( nurl_str_to_int ( str_first_word rest ) ) = rest ( str_skip_word rest )
+        ? != pid id {
+            : i fs ( bck_st_get st pid )
+            : b mv | == BCK_MOVED fs & != 0 g_maybe_moved == BCK_MAYBE_MOVED fs
+            ? & mv ( bck_id_holds id pid ) {
+                ( bck_diag_partly_moved id pid line == BCK_MAYBE_MOVED fs )
+                ^ v
+            } {}
+            ? & mv ( bck_id_holds pid id ) {
+                ? == BCK_MOVED fs { ( bck_diag pid line ) } { ( bck_diag_maybe_read pid line ) }
+                ^ v
+            } {}
+        } {}
+    }
+}
+
 @ __bck_fmv_check i id i line s st → v {
     ? | < id 0 == id ( bck_path_root id ) { ^ v } {}
     : i fs ( bck_st_get st id )
@@ -60176,7 +60199,9 @@ unsafe @ bck_emit_error s file i line s msg → v {
     : s ws ( nurl_sym_get g_bck `warnset` )
     ? ( str_contains_word ws tag ) { ^ v } {}
     ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
-    : s rname ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int rid ) )
+    : s rname0 ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int rid ) )
+    // (A field path shown as the source spells it: `. o a`.)
+    : s rname ? >= ( nurl_str_find rname0 `.` ) 0 ( __bck_path_src rname0 ) rname0
     : s fname ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int pid ) )
     : s fsrc ( __bck_path_src fname )
     : s ml ( nurl_sym_get2 g_bck `ml_` ( nurl_str_int pid ) )
@@ -61833,11 +61858,75 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
         // a borrow of one; and a binding given a new value, whose fields
         // all have one again. A `let` gives them one too, below.)
         ? != 0 g_bck_fmv_any {
-            ? | | | | | | == kc 4 == kc 5 == kc 9 == kc 11 == kc 12 == kc 14 == kc 16 { ( __bck_partly_moved_check ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) st ) } {}
-            ? & == kc 7 ( seq ( bck_field rec 0 ) `fborrow` ) { ( __bck_fmv_check ( bck_field_int rec 2 ) ( bck_field_int rec 3 ) st ) } {}
+            // (…and `= h2 h`, a `maybealias` row: h's value goes to h2 whole;
+            // agora #929.)
+            ? | | | | | | | == kc 4 == kc 5 == kc 6 == kc 9 == kc 11 == kc 12 == kc 14 == kc 16 { ( __bck_partly_moved_check ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) st ) } {}
+            // (…and a closure that runs here with an effect on a taken path -
+            // `( g )`, g pushing to `. h buf` after `( take . h buf )`: a
+            // `pendeff` row; agora #929.)
+            ? & == kc 32 ( seq ( bck_field rec 0 ) `pendeff` ) {
+                : s pes ( bck_field rec 1 )
+                ? & != 0 ( nurl_str_len pes ) & >= ( nurl_str_get pes 0 ) 48 <= ( nurl_str_get pes 0 ) 57 {
+                    ( __bck_fmv_check ( nurl_str_to_int pes ) ( bck_field_int rec 3 ) st )
+                    ( __bck_fmv_rel_check ( nurl_str_to_int pes ) ( bck_field_int rec 3 ) st )
+                } {}
+            } {}
+            // (…and one made with such an effect and handed back on its own
+            // line, `^ \ → v { ( string_push_str . h buf … ) }`: nothing gives
+            // the field a value before it runs; agora #929.)
+            ? == kc 34 {
+                : s cxs ( bck_field rec 1 )
+                // (One `clox` row per capture effect: past the closure's other
+                // ones to the row after them; github#2097's review.)
+                : ~ i cq + p 1
+                ~ ( seq ( bck_field ( bck_rec cq ) 0 ) `clox` ) { = cq + cq 1 }
+                ? & & != 0 ( nurl_str_len cxs ) & >= ( nurl_str_get cxs 0 ) 48 <= ( nurl_str_get cxs 0 ) 57 ( seq ( bck_field ( bck_rec cq ) 0 ) `ret` ) {
+                    ? ( seq ( bck_field ( bck_rec cq ) 3 ) ( bck_field rec 3 ) ) {
+                        ( __bck_fmv_check ( nurl_str_to_int cxs ) ( bck_field_int rec 3 ) st )
+                        ( __bck_fmv_rel_check ( nurl_str_to_int cxs ) ( bck_field_int rec 3 ) st )
+                    } {}
+                } {}
+            } {}
+            // (…and a value block handed to a call, `( grow { h } )`, a
+            // `pendlend` row of `@h`: h whole; agora #929.)
+            ? & == kc 32 ( seq ( bck_field rec 0 ) `pendlend` ) {
+                : s pls ( bck_field rec 1 )
+                : s pln ? != 0 ( nurl_str_starts pls `@` ) ( nurl_str_slice pls 1 - ( nurl_str_len pls ) 1 ) ``
+                ? & != 0 ( nurl_str_len pln ) & >= ( nurl_str_get pln 0 ) 48 <= ( nurl_str_get pln 0 ) 57 { ( __bck_partly_moved_check ( nurl_str_to_int pln ) ( bck_field_int rec 3 ) st ) } {}
+            } {}
+            // (…and a `^` whose value stores bindings whole - `^ @ Outer { h
+            // }`: the `store` rows of its line come after the `ret` row, which
+            // ends the path, so they are asked here; agora #929.)
+            ? == kc 20 {
+                // (The `store` rows the `^`'s value flushed follow it at once,
+                // on whatever line each operand stands - `^ @ Outer {` and
+                // `h }` on the next; github#2097's review.)
+                : ~ i rq + p 1
+                : ~ b rmore T
+                ~ rmore {
+                    : s rr ( bck_rec rq )
+                    ? | == 0 ( nurl_str_len rr ) ! ( seq ( bck_field rr 0 ) `store` ) { = rmore F } {
+                        ( __bck_partly_moved_check ( bck_field_int rr 1 ) ( bck_field_int rr 3 ) st )
+                        = rq + rq 1
+                    }
+                }
+            } {}
+            // (…and a value block's tail bound, `: ~ Holder g { h }`, a
+            // `cborrow` row of `|h`: h whole; agora #929.)
+            ? & == kc 7 ( seq ( bck_field rec 0 ) `cborrow` ) {
+                : s cbs ( bck_field rec 2 )
+                : s cbn ? != 0 ( nurl_str_starts cbs `|` ) ( nurl_str_slice cbs 1 - ( nurl_str_len cbs ) 1 ) ( nurl_str_cat cbs `` )
+                ? & != 0 ( nurl_str_len cbn ) & >= ( nurl_str_get cbn 0 ) 48 <= ( nurl_str_get cbn 0 ) 57 { ( __bck_partly_moved_check ( nurl_str_to_int cbn ) ( bck_field_int rec 3 ) st ) } {}
+            } {}
+            ? & == kc 7 ( seq ( bck_field rec 0 ) `fborrow` ) { ( __bck_fmv_check ( bck_field_int rec 2 ) ( bck_field_int rec 3 ) st ) ( __bck_fmv_rel_check ( bck_field_int rec 2 ) ( bck_field_int rec 3 ) st ) } {}
             // (…and a field path whose value the statement reads whole: a
             // literal's field, `@ Holder { . h buf }` — a `pendread` row.)
             ? == kc 40 { ( __bck_fmv_check ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) st ) } {}
+            // (…and a path over or under a taken one handed to a call or read
+            // through one - `( grow . o a )` with `. . o a buf` taken, or
+            // `( string_push_str . . o a buf … )` with `. o a` taken: a
+            // `pendfield`, `pendread` or `pendvf` row; agora #929.)
+            ? | | == kc 13 == kc 40 == kc 41 { ( __bck_fmv_rel_check ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) st ) } {}
             ? == kc 3 { = st ( __bck_fmv_revive st ( bck_field_int rec 1 ) ) } {}
         } {}
         // Most rows are plain statements: past their reads, nothing to do —
@@ -77937,8 +78026,17 @@ unsafe @ gen_assign i lex i syms i cg → s {
     : s __fs_obj0 ( nurl_str_cat ( nurl_sym_get syms `__last_field_obj__` ) `` )
     : i __fs_sxn0 g_sx_n
     : i __fs_at ( nurl_lex_cur_start lex )
+    // (`= . g buf . h buf` reads what `. h buf` holds whole: a read of the
+    // path, refused while a callee has taken it, as `^ . h buf` is - a
+    // `pendread` row; agora #929.)
+    : i __fs_mp0 g_member_path_on
+    = g_member_path_on ? & != 0 g_srcx_on == __fs_tt TT_DOT 1 g_member_path_on
     : ~ s __fs_v ( gen_expr lex syms cg )
+    = g_member_path_on __fs_mp0
     : s __fs_ty ( nurl_get_last_type )
+    ? & & != 0 g_srcx_on == __fs_tt TT_DOT | ( __is_handle_ty __fs_ty ) ( __type_needs_drop __fs_ty syms ) {
+        ? != 0 ( nurl_str_len g_member_path ) { ( bck_stash_store g_member_path __fs_line `-` `0` `pendread` ) } {}
+    } {}
     // (An element copied out of a parameter's buffer: agora #347.)
     ? indirect { ( __note_vcopy syms __fs_obj0 __fs_ty ( nurl_lex_src_slice lex __fs_at - ( nurl_lex_cur_start lex ) __fs_at ) ) } {}
     : i __fs_eff_tt ( __val_eff_tt __fs_tt )

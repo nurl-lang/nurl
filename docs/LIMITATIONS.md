@@ -30,18 +30,16 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   check does not see.** A field a `sink` took (`( take . h buf )`) is refused
   while it is empty when it is read, bound, handed on whole with `h`, or
   left empty at an `inout` exit. So are a take inside a loop, read on the next
-  round or after it, and the taken field handed back itself (`^ . h buf`,
-  `^ @ Holder { . h buf }`, `= h @ Holder { . h buf }`; agora #351). These
-  are still accepted, and run into the null handle or freed memory: a path
-  under or over the taken one (`. o a`
-  taken, then `. . o a b` read, or the reverse); `h` handed on whole by
-  `^ @ Outer { h }`, `^ ? c h h2`, `= h2 h`, a value block `{ h }` or
-  `= . g buf . h buf`; a closure made after the take, `h` captured and
-  returned, or a closure's own `inout` parameter; a `% Drop` destructor that
-  reads the taken field; and an `inout` callee that panics between the take
-  and its refill, caught by a `recover` closure that captured the struct.
-  Until the fix ships, give the field a value right after the take
-  (`= . h buf ( vec_new [u] )`), or hand the callee a copy
+  round or after it, the taken field handed back itself (`^ . h buf`,
+  `^ @ Holder { . h buf }`, `= h @ Holder { . h buf }`; agora #351), a path
+  under or over the taken one, and `h` handed on whole by `= h2 h`, `^ @
+  Outer { h }`, a value block `{ h }` or `= . g buf . h buf`, and a closure made after the take that runs while it is empty or is handed back on the line it is made on (AGORA-929).
+  These are still accepted, and run into the null handle or freed memory:
+  `h` handed on whole by `^ ? c h h2`; a closure's own `inout` parameter; a `% Drop`
+  destructor that reads the taken field; and an `inout` callee that panics
+  between the take and its refill, caught by a `recover` closure that
+  captured the struct. Until the fix ships, give the field a value right
+  after the take (`= . h buf ( vec_new [u] )`), or hand the callee a copy
   (`( mem_dup . h buf )`) and keep the field.
 - **agora #895: a slice a call made, kept by its callee in a struct or option it returns, and a literal temporary read only for a field.** `( wrapb ( mk ) )` with `wrapb` storing its slice parameter in a returned struct, or `@ ?[i { T a }` handing it back in an option, leaks the slice (and so does `( wrap ? c ( mk ) a )`, a join handed to it): a slice parameter stored that way is taken for a view, where a `Vec` parameter would be an inferred `sink`. And `( ln . @ Bag { ( mk ) 3 } s )`, a struct literal temporary read only for one field, is never released, for a `String` or `Vec` field as for a slice (a leak). Until the fix ships, bind the slice to a name first (`: [i t ( mk )  ( wrapb t )`), and bind a literal before reading its field. (`^ ( id ( mk ) )` is closed: `fresh_slice_handed_back_through_a_lending_call_in_a_return_runs_clean`.)
 <!-- END open holes -->
