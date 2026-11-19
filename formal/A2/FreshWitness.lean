@@ -42,7 +42,7 @@ def thruL (n : Var) : Stmt :=
     (.letv 4 (.at 2 (.lit 0)) (.edit false 4 (.push n)))))
 
 /-- The element borrow, fresh: its path is `loc`'s elements. -/
-def EbF : Entry := ⟨vi, .bor, true, [⟨2, .inner⟩], [], false, false, true⟩
+def EbF : Entry := ⟨vi, .bor, true, [⟨2, .inner⟩], [], false, false, true, false⟩
 
 theorem thruL_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (hn : Γ n = some En)
     (hnl : En.live = true) (hnt : En.ty = .int) (hn2 : n ≠ 2) (hn3 : n ≠ 3) (hn4 : n ≠ 4)
@@ -191,13 +191,13 @@ theorem main_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main Δ := by
     RhsT.view (E := EN0) (t := .int) (by simp [K1, A2.setE]) rfl rfl rfl
   have hK31 : K3 1 = some EVw := by simp [K3, K2, A2.setE, upd]
   let EG0 : Entry := ⟨.prod EVw.ty intE.ty, .own, true, [], (derive 1 EVw .self ++ EVw.held) ++ intE.held,
-    false, false, false⟩
+    false, false, false, false⟩
   have hgp : RhsT K3 [] (.pair 1 2) EG0 K3 :=
     RhsT.pair (Ey := EVw) (Ez := intE) hK31 rfl (PushArg.slice (s := .int) (Or.inl rfl))
       (by simp [K3, A2.setE]) rfl PushArg.int (by simp [EVw, EN0, intE, derive, Mode.isRoot, rootKind, roots, Mode.ownSlot])
   let EGa : Entry := Entry.arm { EG0 with ty := DTV, held := EG0.held }
   -- armed: it views `v` (binding 0)
-  have hEGa : EGa = ⟨DTV, .own, true, [], [⟨0, .view⟩], true, true, false⟩ := by
+  have hEGa : EGa = ⟨DTV, .own, true, [], [⟨0, .view⟩], true, true, false, false⟩ := by
     simp [EGa, EG0, Entry.arm, EVw, EN0, intE, derive, Mode.isRoot, rootKind, comp, DTV, TV,
       Ty.dtorViews, Ty.holdsView]
   have hEnd : EndOK (A2.setE K3 3 EGa) 3 :=

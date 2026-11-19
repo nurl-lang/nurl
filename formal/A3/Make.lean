@@ -201,7 +201,7 @@ theorem Plain.endOK {Γ : Ctx} (h : Plain Γ) (x : Var) : EndOK Γ x :=
     DbindSafe.of_none (fun v E hE => (h v E hE).2.2) _⟩
 
 /-- A make's result: owned, holding nothing. -/
-def resE (t : Ty) : Entry := ⟨t, .own, true, [], [], false, false, false⟩
+def resE (t : Ty) : Entry := ⟨t, .own, true, [], [], false, false, false, false⟩
 
 theorem makeStmt_typed {P : Prog} (hP : ProgOK P) {D : List Decl} (hD : DeclsOK P D) {g : Nat} {d : Decl}
     (hd : D[g]? = some d) : ∃ Δ, StmtT P ξ (fun _ => none) [] (makeStmt g d) Δ := by
@@ -224,7 +224,7 @@ theorem makeStmt_typed {P : Prog} (hP : ProgOK P) {D : List Decl} (hD : DeclsOK 
     (by simp [roots, Entry.vdeps, Mode.ownSlot]) (by rw [hΓ0]; rfl) (hplain.endOK 0).1
     (hplain.endOK 0).2.1 rfl
   have hplain' : Plain (setE (kill .replace false 0 (setE (fun _ => none) 0 (resE d.ty))) 0
-      { (⟨d.ty, .own, true, [], [], false, false, false⟩ : Entry) with mode := (resE d.ty).mode }) := fun v E hE => by
+      { (⟨d.ty, .own, true, [], [], false, false, false, false⟩ : Entry) with mode := (resE d.ty).mode }) := fun v E hE => by
     simp only [setE, upd] at hE
     split at hE
     · cases hE; exact ⟨by simp [resE], rfl, rfl⟩

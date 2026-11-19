@@ -190,7 +190,7 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   have hview : RhsT K1 [] (.view 0) EVw K1 :=
     RhsT.view (E := EN0) (t := .int) (by simp [K1, A2.setE]) rfl rfl rfl
   have h21 : K2 1 = some EVw := by simp [K2, A2.setE]
-  let EC : Entry := ⟨CT, .own, true, [], (derive 1 EVw .self ++ EVw.held) ++ capDeps [], false, false, false⟩
+  let EC : Entry := ⟨CT, .own, true, [], (derive 1 EVw .self ++ EVw.held) ++ capDeps [], false, false, false, false⟩
   have hpack : RhsT K2 [] (.pack [1] sl [0] 1 []) EC K2 :=
     RhsT.pack (q := .any) (Ey := EVw) h21 rfl rfl (PushArg.slice (s := .int) (Or.inl rfl))
       ⟨List.nodup_nil, fun _ h => by cases h⟩ (Cross.fits_any _ _ rfl)

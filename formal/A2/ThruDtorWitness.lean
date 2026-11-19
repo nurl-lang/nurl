@@ -118,7 +118,7 @@ theorem prog_codes : ProgCodes P := by
 /-- `: a 1  : b 2  :drop x ( pair a b )` -/
 def main : Stmt := .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2)) (.letd 2 0 (.pair 0 1) .skip))
 
-def EP : Entry := ⟨T, .own, true, [], [] ++ [], false, false, false⟩
+def EP : Entry := ⟨T, .own, true, [], [] ++ [], false, false, false, false⟩
 
 /-- **The caller of a through-changing destructor is typed**: the `letd` of a
     struct that holds no views, its destructor `dtor`. -/
