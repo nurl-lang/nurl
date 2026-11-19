@@ -6,7 +6,9 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/rc.nu`
 $ `stdlib/core/box.nu`
+
 : H { ( Rc ( Vec u ) ) a }
+
 % Drop H { @ drop H h → v { ( vec_clear [u] ( rc_get [( Vec u )] . h a ) ) ( vec_shrink_to_fit [u] ( rc_get [( Vec u )] . h a ) ) } }
 
 @ main → i {
