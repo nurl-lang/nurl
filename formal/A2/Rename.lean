@@ -42,17 +42,56 @@ open Classical in
 noncomputable def inv (y : Var) : Option Var :=
   if h : ∃ v, S.ρ v = y then some (Classical.choose h) else none
 
+/-- Agora #916: what a lift adds to an entry's `held`: what the arguments
+    hold, or, for a held-fresh borrow (holding memory, running no
+    destructor), only what they hold by name. -/
+def heldA (E : Entry) : List Dep :=
+  if E.heldFresh && E.mode == .bor && !E.dtor && E.ty != .int then S.N else S.A
+
+/-- Whether a lift is precise on `held`. -/
+def HeldP (E : Entry) : Prop := E.heldFresh = true ∧ E.mode = .bor ∧ E.dtor = false ∧ E.ty ≠ .int
+
+theorem heldA_P {E : Entry} (h : HeldP E) : S.heldA E = S.N := by
+  obtain ⟨h1, h2, h3, h4⟩ := h; simp [heldA, h1, h2, h3, h4]
+
+theorem heldA_notP {E : Entry} (h : ¬ HeldP E) : S.heldA E = S.A := by
+  unfold heldA; split
+  · rename_i hc; simp only [Bool.and_eq_true, beq_iff_eq, Bool.not_eq_eq_eq_not, Bool.not_true,
+      bne_iff_ne, ne_eq] at hc
+    exact absurd ⟨hc.1.1.1, hc.1.1.2, hc.1.2, hc.2⟩ h
+  · rfl
+
+@[simp] theorem heldA_of {E : Entry} (h : E.heldFresh = false) : S.heldA E = S.A := by
+  simp [heldA, h]
+
+theorem heldA_own {E : Entry} (h : E.mode.ownSlot = true) : S.heldA E = S.A := by
+  unfold heldA; cases hm : E.mode <;> simp_all [Mode.ownSlot]
+
+theorem heldA_sub (E : Entry) : S.heldA E ⊆ S.A := by
+  unfold heldA; split
+  · exact fun d hd => List.mem_append_right _ hd
+  · exact List.Subset.refl _
+
+
 def liftE (v : Var) (E : Entry) : Entry :=
   if E.mode = .rootb then { S.pe v with live := E.live, fresh := false, heldFresh := false } else
     ⟨E.ty, liftMode E.mode, E.live,
      -- Agora #909: a fresh borrow, holding memory, reaches only the frame's own
      -- blocks (`FreshOK`), so nothing the arguments hold
      rds S.ρ E.path ++ (if E.mode.ownSlot || (E.fresh && E.ty != .int) then [] else S.A),
-     rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A, E.dtor, E.dbind, E.fresh, false⟩
+     -- Agora #916: ... and a held-fresh borrow holds, in memory, only the frame's
+     -- own blocks, so nothing the arguments hold in memory (their names it may)
+     rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty (S.heldA E), E.dtor, E.dbind, E.fresh, E.heldFresh⟩
 
-/-- Agora #916: no lift sets the held-freshness bit (yet). -/
-@[simp] theorem liftE_heldFresh (v : Var) (E : Entry) : (S.liftE v E).heldFresh = false := by
+/-- Agora #916: a lift keeps the bit, but a borrowed parameter's is never
+    set: what it is lifted to is the caller's. -/
+theorem liftE_heldFresh (v : Var) (E : Entry) :
+    (S.liftE v E).heldFresh = if E.mode = .rootb then false else E.heldFresh := by
   unfold liftE; split <;> rfl
+
+@[simp] theorem liftE_heldFresh_false {v : Var} {E : Entry} (h : E.heldFresh = false) :
+    (S.liftE v E).heldFresh = false := by
+  rw [liftE_heldFresh]; split <;> simp [h]
 
 /-- Agora #909: a lift keeps the bit, but a borrowed parameter's is never
     set: what it is lifted to is the caller's. -/
@@ -149,6 +188,11 @@ structure RSetup.OK (S : RSetup) : Prop where
                ((∀ v, S.ρ v ≠ d.root) ∧ ∃ Er, S.Φ d.root = some Er ∧ Er.live = true ∧ Er.held = [] ∧
                   Er.ty = t ∧
                   Er.mode.ownSlot = true ∧ (b = .none ∨ b ≠ .replace ∧ canDo Er.mode b) ∧ t.holdsView = false)
+
+/-- Agora #916: a lift adds nothing in memory to a held-fresh borrow. -/
+theorem RSetup.memDeps_heldA {S : RSetup} {E : Entry} (h : S.OK) (hp : RSetup.HeldP E) : memDeps (S.heldA E) = [] := by
+  rw [S.heldA_P hp]
+  exact List.filter_eq_nil_iff.mpr fun d hd => by simp [h.N_name d hd]
 
 /-- The callee's own contexts, as the call sets them up: a borrowed
     parameter depends on nothing it can see but, when it may hold a closure,
