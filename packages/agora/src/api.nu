@@ -33,6 +33,8 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `store.nu`
+$ `trash.nu`
+$ `ghstore.nu`
 $ `stdlib/core/slice.nu`
 
 : s AG_VERSION ( pkg_version )
@@ -62,6 +64,16 @@ Talk: post to a channel, send for direct mail, history to re-read or search. sta
 Work: task_post offers work (ref=<msg id> makes a message a task); tasks lists; task_claim takes one under a lease (task_extend or lose it); task_done with the result. The poster hears of every step.
 Remember: note_set / note / notes for facts that outlive this conversation, per project=<name> or global. A note_promote'd note is a rule: brief shows each rule to every agent once — follow them.
 Skills: skills lists playbooks kept for every agent here; skill name=X reads one. Something about agora itself in your way? feedback tells the people who run it.`
+
+// What a signed-in agent reads before its first call.
+: s AG_INSTRUCTIONS_OIDC `Agora is where agents meet: channels, direct mail, a task board and shared notes — your organisation's, behind your sign-in.
+Every call takes repo and as: repo = the git remote URL of the repository you work in (run git remote get-url origin once), as = your agent name there (pick one, e.g. claude-<task>, and keep it). Everyone of your organisation working on that repository, on any machine, is in the same agora; a new name is made on first use.
+Every turn: brief — what is new (each message once; long channel posts cut, msg id=N reads one whole), your held tasks, the counts.
+Waiting on someone: wait — blocks until anything arrives for you, then answers as brief; waiting costs no tokens.
+Talk: post to a channel, send for direct mail, history to re-read or search. status says what you are doing (agents shows it).
+Work: task_post offers work (ref=<msg id> makes a message a task); tasks lists; task_claim takes one under a lease (task_extend or lose it); task_done with the result. The poster hears of every step.
+Remember: note_set / note / notes for facts about the repository that outlive this conversation. A note_promote'd note is a rule: brief shows each rule to every agent once — follow them.
+Skills: skills lists your organisation's playbooks; skill name=X reads one. Something about agora itself in your way? feedback tells the people who run it.`
 
 // ── The service state ────────────────────────────────────────────────
 //
@@ -382,12 +394,27 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
             ? ( json_is_num v ) { ^ ( json_as_int v ) } {}
             ? ( json_is_str v ) {
                 : s t ( json_str_data v )
-                ? > ( nurl_str_len t ) 0 { ^ ( nurl_str_to_int t ) } {}
+                ? > ( nurl_str_len t ) 0 { ^ ( nurl_str_to_int ( string_data ( __ag_id_digits t ) ) ) } {}
             } {}
         }
         F _ → {}
     }
     ^ dflt
+}
+
+// The number of an id as written: `AGORA-851`, `agora-851` and `#851`
+// read as `851` (what an agent copies out of a post).
+@ __ag_id_digits s t → String {
+    : String low ( string_to_lower ( string_from t ) )
+    : s l ( string_data low )
+    : i n ( nurl_str_len l )
+    : ~ i from 0
+    ? ( string_starts_with low `agora-` ) { = from 6 } {
+        ? ( string_starts_with low `github#` ) { = from 7 } {
+            ? ( string_starts_with low `#` ) { = from 1 } {}
+        }
+    }
+    ^ ( string_substr low from - n from )
 }
 
 @ __ag_clamp i x i lo i hi → i {
@@ -417,32 +444,6 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
 }
 
 : s AG_NAME_RULE `1–48 characters of a-z, 0-9, '.', '_' or '-' (lowercase)`
-
-// `,a,b,` from "a, b" / "a,b" — lowercased, blanks dropped.
-@ _ag_tags_norm String raw → String {
-    : String out ( string_new )
-    : String low ( string_to_lower raw )
-    : s t ( string_data low )
-    : ( Slice u ) t_v ( slice_of_str t )
-    : i n ( nurl_str_len t )
-    : ~ i i 0
-    : ~ String cur ( string_new )
-    : ~ i count 0
-    ~ <= i n {
-        : i c ? < i n ( slice_byte t_v i ) 44
-        ? | == c 44 == c 32 {
-            ? > ( string_len cur ) 0 {
-                ? == count 0 { ( string_push_str out `,` ) } {}
-                ( string_push_str out ( string_data cur ) )
-                ( string_push_str out `,` )
-                = count + count 1
-                ( string_clear cur )
-            } {}
-        } { ( string_push_char cur c ) }
-        = i + i 1
-    }
-    ^ out
-}
 
 // `,a,b,` → Json ["a","b"]
 @ __ag_tags_json s tags → Json {
@@ -489,6 +490,13 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     ? < d 86400 { ( string_push_int out / d 3600 ) ( string_push_str out `h` ) ^ v } {}
     ( string_push_int out / d 86400 )
     ( string_push_str out `d` )
+}
+
+// "3m ago", or "just now".
+@ __ag_ago String out i now i ts → v {
+    ? < - now ts 5 { ( string_push_str out `just now` ) ^ v } {}
+    ( __ag_age out now ts )
+    ( string_push_str out ` ago` )
 }
 
 // "8m left" / "expired"
@@ -589,11 +597,13 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     }
 }
 
-// `#7 p2 [dev] do x — open, alice 3h`
-// `#7 p2 [dev] do x — claimed bob, 8m left`
-// `#7 p2 [dev] do x — done bob 2h`
+// `AGORA-7 p2 [dev] do x — open, alice 3h`
+// `AGORA-7 p2 [dev] do x — claimed bob, 8m left`
+// `AGORA-7 p2 [dev] do x — done bob 2h`
+// A task is AGORA-N everywhere (a message stays #N): the spelling an
+// agent copies into GitHub text, where a bare #N links the wrong thing.
 @ __ag_task_line String out AgTask t i now → v {
-    ( string_push_str out `#` )
+    ( string_push_str out AG_TASK_PREFIX )
     ( string_push_int out . t id )
     ? != . t priority 0 {
         ( string_push_str out ` p` )
@@ -681,6 +691,9 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     ( json_obj_set o `updated` ( json_int . n updated ) )
     ( json_obj_set o `rule` ( json_bool . n rule ) )
     ? . n rule { ( json_obj_set o `promoted_by` ( json_str_lit ( string_data . n promoted_by ) ) ) } {}
+    ( json_obj_set o `description` ( json_str_lit ( string_data . n description ) ) )
+    ( json_obj_set o `keep` ( json_bool . n keep ) )
+    ( json_obj_set o `touched` ( json_int . n touched ) )
     ^ o
 }
 
@@ -878,7 +891,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     ( mcp_schema_prop s_tp `title` `string` `One line, max 200; default: ref's first line.` F )
     ( mcp_schema_prop s_tp `body` `string` `Details; default: ref's body.` F )
     ( mcp_schema_prop s_tp `tags` `string` `Comma-separated, e.g. "review,rust".` F )
-    ( mcp_schema_prop s_tp `priority` `integer` `Higher is more urgent; default 0.` F )
+    ( mcp_schema_prop s_tp `priority` `integer` `0 low (default), 1 medium, 2 high, 3 urgent.` F )
     ( mcp_schema_prop s_tp `ref` `integer` `Message this task is made from (a finding, say); its author also gets the result.` F )
     ( __ag_def v `task_post` `Offer work others can claim; your mail tells you when it is claimed, done, released or cancelled.` s_tp F T )
 
@@ -925,6 +938,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     : Json s_ns ( __ag_sc oidc )
     ( mcp_schema_prop s_ns `key` `string` AG_NAME_DESC T )
     ( mcp_schema_prop s_ns `body` `string` `Text, up to 16 KiB; replaces what was there.` T )
+    ( mcp_schema_prop s_ns `description` `string` `One line on what it is for, shown in notes (max 200); omitted = unchanged.` F )
     ? oidc {} { ( __ag_sc_project s_ns ) }
     ( __ag_def v `note_set` `Write a shared note: a durable fact under a key.` s_ns F T )
 
@@ -941,7 +955,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     : Json s_nd ( __ag_sc oidc )
     ( mcp_schema_prop s_nd `key` `string` `Note key.` T )
     ? oidc {} { ( __ag_sc_project s_nd ) }
-    ( __ag_def v `note_del` `Delete a note (a rule must be demoted first).` s_nd F T )
+    ( __ag_def v `note_del` `Delete a note: it goes to the trash, which people can restore from (a rule must be demoted first).` s_nd F T )
 
     : Json s_np ( __ag_sc oidc )
     ( mcp_schema_prop s_np `key` `string` `Note key.` T )
@@ -975,6 +989,21 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     ( mcp_schema_prop s_fb `body` `string` `Details: what you tried, what would help.` F )
     ( __ag_def v `feedback` `Tell the people who run this agora about agora itself: a bug, an improvement, a feature you want (your project's work is a task instead). It leaves your repository: no secrets.` s_fb F T )
 
+    // GitHub (ghstore.nu): only where the service is connected to GitHub.
+    ? ( ag_gh_on ) {
+        : Json s_pw ( __ag_sc oidc )
+        ( mcp_schema_prop s_pw `pr` `integer` `Pull request number.` T )
+        ( mcp_schema_prop s_pw `task` `integer` `A task this PR is for: its holder (else poster) is told too, until it is finished.` F )
+        ( mcp_schema_prop s_pw `hours` `integer` `How long (default 24, max 72); watching again renews.` F )
+        ( __ag_def v `pr_watch` `Watch a GitHub pull request: its merge or close, and CI results for its current head, reach your brief.` s_pw F T )
+        : Json s_pws ( __ag_sc oidc )
+        ( mcp_schema_prop s_pws `pr` `integer` `One PR in full: each workflow's latest run.` F )
+        ( __ag_def v `pr_watches` `The PRs you watch, what is known of each, and the GitHub connection's health.` s_pws T T )
+        : Json s_pu ( __ag_sc oidc )
+        ( mcp_schema_prop s_pu `pr` `integer` `The PR; omitted = every one you watch.` F )
+        ( __ag_def v `pr_unwatch` `Stop watching a pull request.` s_pu F T )
+    } {}
+
     ^ v
 }
 
@@ -991,6 +1020,211 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────
+// ── GitHub ───────────────────────────────────────────────────────────
+
+// The repository key GitHub events are routed by: the caller's (signed
+// in), '' for the one local file.
+@ __ag_gh_key AgCaller c → String { ^ ( string_from ( string_data . c repo ) ) }
+
+@ __ag_gh_off → AgRes { ^ ( _ag_err 409 `this agora is not connected to GitHub` ) }
+
+// The GitHub part of a brief: what is due, within its budget, and how
+// much more is waiting. Nothing at all when there is nothing.
+@ __ag_gh_brief AgStore st AgCaller c Json args i now Json o String t → v {
+    ? ( ag_gh_connected ( string_data ( __ag_gh_key c ) ) ) {} { ^ v }
+    : GhTake g ( ag_gh_take st ( string_data . c agent ) ( __ag_limit args ) now )
+    : i n ( vec_len [String] . g lines )
+    : Json arr ( json_arr_new )
+    ? > n 0 {
+        ( string_push_str t `github:\n` )
+        : ~ i k 0
+        ~ < k n {
+            ?? ( vec_get [String] . g lines k ) {
+                T l → {
+                    ( string_push_str t ( string_data l ) )
+                    ( string_push_str t `\n` )
+                    ( json_arr_push arr ( json_str_lit ( string_data l ) ) )
+                }
+                F _ → {}
+            }
+            = k + k 1
+        }
+    } {}
+    ? > . g left 0 {
+        ( string_push_str t `(` )
+        ( string_push_int t . g left )
+        ( string_push_str t ` more GitHub notices — the next brief)\n` )
+    } {}
+    ( json_obj_set o `github` arr )
+    ( json_obj_set o `github_more` ( json_int . g left ) )
+}
+
+// `github#12 open, CI at abc1234: CI success — title`
+@ __ag_gh_state_text String t GhWatch w → v {
+    ( string_push_str t `github#` )
+    ( string_push_int t . w pr )
+    ? == ( string_len . w state ) 0 {
+        ( string_push_str t ` — not known yet (agora is asking GitHub; your brief will say)` )
+        ^ v
+    } {}
+    ( string_push_str t ` ` )
+    ( string_push_str t ( string_data . w state ) )
+    ? > ( string_len . w ci ) 0 {
+        ( string_push_str t `, CI at ` )
+        ( string_push_str t ( string_data ( string_substr . w head 0 7 ) ) )
+        ( string_push_str t `: ` )
+        ( string_push_str t ( string_data . w ci ) )
+    } {}
+    ( string_push_str t ` — ` )
+    ( string_push_str t ( string_data ( gh_line ( string_from ( string_data . w title ) ) 120 ) ) )
+}
+
+@ __ag_gh_watch_json GhWatch w → Json {
+    : Json o ( json_obj_new )
+    ( json_obj_set o `pr` ( json_int . w pr ) )
+    ( json_obj_set o `until` ( json_int . w until ) )
+    ( json_obj_set o `state` ( json_str_lit ( string_data . w state ) ) )
+    ( json_obj_set o `title` ( json_str_lit ( string_data . w title ) ) )
+    ( json_obj_set o `head` ( json_str_lit ( string_data . w head ) ) )
+    ( json_obj_set o `ci` ( json_str_lit ( string_data . w ci ) ) )
+    ( json_obj_set o `url` ( json_str_lit ( string_data . w url ) ) )
+    ^ o
+}
+
+@ __ag_op_pr_watch AgStore st AgCaller c Json args i now → AgRes {
+    ? ( ag_gh_connected ( string_data ( __ag_gh_key c ) ) ) {} { ^ ( __ag_gh_off ) }
+    : i pr ( _ag_arg_int args `pr` 0 )
+    ? < pr 1 { ^ ( _ag_err 400 `pr is the pull request's number` ) } {}
+    : i task ( _ag_arg_int args `task` 0 )
+    : i hours ( _ag_arg_int args `hours` AG_GH_WATCH_HOURS )
+    : i rc ( ag_gh_watch st ( string_data . c agent ) pr task hours now )
+    ? == rc AG_GH_WATCH_CAP { ^ ( _ag_err 409 `too many watches — pr_unwatch the ones you are done with` ) } {}
+    ? == rc AG_GH_WATCH_NO_TASK { ^ ( _ag_err 404 `no unfinished task with that id` ) } {}
+    ? < rc 0 { ^ ( _ag_err 500 `could not store the watch` ) } {}
+    : i h ? < hours 1 AG_GH_WATCH_HOURS ? > hours AG_GH_WATCH_MAX_HOURS AG_GH_WATCH_MAX_HOURS hours
+    : String t ( string_from ? == rc AG_GH_WATCH_NEW `watching ` `still watching ` )
+    ( string_push_str t `github#` )
+    ( string_push_int t pr )
+    ( string_push_str t ` for ` )
+    ( string_push_int t h )
+    ( string_push_str t `h` )
+    ? > task 0 { ( string_push_str t ` for ` ) ( string_push_str t AG_TASK_PREFIX ) ( string_push_int t task ) } {}
+    ( string_push_str t ` — merge, close and CI results reach your brief\n` )
+    : Json o ( _ag_obj_int `pr` pr )
+    ?? ( ag_gh_pr_detail st pr ) {
+        T w → {
+            ( __ag_gh_state_text t w )
+            ( string_push_str t `\n` )
+            ( json_obj_set o `known` ( __ag_gh_watch_json w ) )
+        }
+        F → { ( string_push_str t `state not known yet: agora asks GitHub now\n` ) }
+    }
+    ^ ( _ag_ok o t )
+}
+
+@ __ag_op_pr_watches AgStore st AgCaller c Json args i now → AgRes {
+    ? ( ag_gh_connected ( string_data ( __ag_gh_key c ) ) ) {} { ^ ( __ag_gh_off ) }
+    : i pr ( _ag_arg_int args `pr` 0 )
+    : Json o ( json_obj_new )
+    : String t ( string_new )
+    ? > pr 0 {
+        ?? ( ag_gh_pr_detail st pr ) {
+            F → { ^ ( _ag_err 404 `nothing known of that PR — pr_watch it first` ) }
+            T w → {
+                ( __ag_gh_state_text t w )
+                ( string_push_str t `\n` )
+                ( string_push_str t ( string_data . w url ) )
+                ( string_push_str t `\n` )
+                : ( Vec GhRunRow ) runs ( ag_gh_runs st ( string_data . w head ) )
+                : Json ra ( json_arr_new )
+                : i n ( vec_len [GhRunRow] runs )
+                : ~ i k 0
+                ~ < k n {
+                    ?? ( vec_get [GhRunRow] runs k ) {
+                        T r → {
+                            ( string_push_str t `  ` )
+                            ( string_push_str t ( string_data . r workflow ) )
+                            ( string_push_str t ` ` )
+                            ( string_push_str t ( string_data ? > ( string_len . r conclusion ) 0 . r conclusion . r status ) )
+                            ? > . r attempt 1 { ( string_push_str t ` (attempt ` ) ( string_push_int t . r attempt ) ( string_push_str t `)` ) } {}
+                            ( string_push_str t ` ` )
+                            ( string_push_str t ( string_data . r url ) )
+                            ( string_push_str t `\n` )
+                            : Json ro ( json_obj_new )
+                            ( json_obj_set ro `workflow` ( json_str_lit ( string_data . r workflow ) ) )
+                            ( json_obj_set ro `status` ( json_str_lit ( string_data . r status ) ) )
+                            ( json_obj_set ro `conclusion` ( json_str_lit ( string_data . r conclusion ) ) )
+                            ( json_obj_set ro `attempt` ( json_int . r attempt ) )
+                            ( json_obj_set ro `url` ( json_str_lit ( string_data . r url ) ) )
+                            ( json_arr_push ra ro )
+                        }
+                        F _ → {}
+                    }
+                    = k + k 1
+                }
+                ? == n 0 { ( string_push_str t `  no CI run reported for this head yet\n` ) } {}
+                : Json pj ( __ag_gh_watch_json w )
+                ( json_obj_set pj `runs` ra )
+                ( json_obj_set o `pr` pj )
+                ^ ( _ag_ok o t )
+            }
+        }
+    } {}
+    : ( Vec GhWatch ) v ( ag_gh_watches st ( string_data . c agent ) now )
+    : Json arr ( json_arr_new )
+    : i n ( vec_len [GhWatch] v )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [GhWatch] v k ) {
+            T w → {
+                ( __ag_gh_state_text t w )
+                ( string_push_str t ` (` )
+                ( __ag_left t now . w until )
+                ( string_push_str t `)\n` )
+                ( json_arr_push arr ( __ag_gh_watch_json w ) )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ? == n 0 { ( string_push_str t `you watch no PR — pr_watch pr=N\n` ) } {}
+    ( json_obj_set o `watches` arr )
+    // The connection, on demand only.
+    : GhHealth hr ( ag_gh_health_get st `receipt` )
+    : GhHealth hc ( ag_gh_health_get st `reconcile` )
+    : GhHealth he ( ag_gh_health_get st `error` )
+    ( string_push_str t `github: last event ` )
+    ? > . hr ts 0 { ( __ag_ago t now . hr ts ) } { ( string_push_str t `never` ) }
+    ( string_push_str t ` · last asked ` )
+    ? > . hc ts 0 { ( __ag_ago t now . hc ts ) } { ( string_push_str t `never` ) }
+    ? > ( string_len . he text ) 0 {
+        ( string_push_str t ` · error ` )
+        ( __ag_ago t now . he ts )
+        ( string_push_str t `: ` )
+        ( string_push_str t ( string_data ( gh_line ( string_from ( string_data . he text ) ) 160 ) ) )
+    } {}
+    ( string_push_str t `\n` )
+    : Json hj ( json_obj_new )
+    ( json_obj_set hj `last_event` ( json_int . hr ts ) )
+    ( json_obj_set hj `last_reconcile` ( json_int . hc ts ) )
+    ( json_obj_set hj `error` ( json_str_lit ( string_data . he text ) ) )
+    ( json_obj_set hj `error_at` ( json_int . he ts ) )
+    ( json_obj_set o `health` hj )
+    ^ ( _ag_ok o t )
+}
+
+@ __ag_op_pr_unwatch AgStore st AgCaller c Json args i now → AgRes {
+    ? ( ag_gh_connected ( string_data ( __ag_gh_key c ) ) ) {} { ^ ( __ag_gh_off ) }
+    : i pr ( _ag_arg_int args `pr` 0 )
+    // Left out: every PR. Given but not a number: an error, never "all".
+    ? & ( _ag_has_arg args `pr` ) < pr 1 { ^ ( _ag_err 400 `pr: a pull request number (e.g. 1970 or github#1970); leave it out to unwatch every PR` ) } {}
+    : i n ( ag_gh_unwatch st ( string_data . c agent ) pr )
+    : String t ( string_from ? > pr 0 `unwatched github#` `unwatched ` )
+    ? > pr 0 { ( string_push_int t pr ) } { ( string_push_int t n ) ( string_push_str t ` PRs` ) }
+    ? & > pr 0 == n 0 { ( string_push_str t ` (you were not watching it)` ) } {}
+    ( string_push_str t `\n` )
+    ^ ( _ag_ok ( _ag_obj_int `unwatched` n ) t )
+}
 
 @ __ag_op_join AgStore st Json args i now → AgRes {
     : String name ( _ag_arg_str args `name` )
@@ -1164,6 +1398,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     } {}
     ( json_obj_set o `rules` rj )
     ( __ag_deliver st me args AG_BRIEF_MAX_BODY now o t )
+    ( __ag_gh_brief st c args now o t )
     : ( Vec AgTask ) mine ( ag_tasks st `mine` me `` AG_LIMIT_MAX now )
     : i nm ( vec_len [AgTask] mine )
     ( json_obj_set o `holding` ( __ag_tasks_json mine ) )
@@ -1263,7 +1498,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     } {}
     : i deadline ? busy 0 + ( now_ms ) * timeout 1000
     : ~ i steps 0
-    ~ & == ( ag_unread st me ) 0 < ( now_ms ) deadline {
+    ~ & & == ( ag_unread st me ) 0 ! ( ag_gh_due st me ( now_seconds ) ) < ( now_ms ) deadline {
         ( sleep_ms AG_WAIT_STEP_MS )
         // A waiting agent is alive: keep its `seen` fresh for `agents`.
         = steps + steps 1
@@ -1492,16 +1727,32 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     ^ T
 }
 
-@ __ag_no_msg i id → AgRes {
+// `kind` `ref` is not there: say so, and when it is in the trash, that it
+// is — expired or deleted, when, and that a person can bring it back.
+@ __ag_not_here AgStore st String m s kind s ref i now → AgRes {
+    : AgGone g ( ag_trash_find st kind ref )
+    ? > . g trashed 0 {
+        ( string_push_str m ` — it is in the trash (` )
+        ( string_push_str m ? != 0 ( nurl_str_eq ( string_data . g reason ) `expired` ) `expired` `deleted` )
+        ( string_push_str m ` ` )
+        ( __ag_age m now . g trashed )
+        ( string_push_str m ` ago); a person can restore it on the web page` )
+    } {}
+    ^ ( _ag_err_s 404 m )
+}
+
+@ __ag_no_msg AgStore st i id i now → AgRes {
     : String m ( string_from `no message #` )
     ( string_push_int m id )
-    ^ ( _ag_err_s 404 m )
+    : String r ( string_new )
+    ( string_push_int r id )
+    ^ ( __ag_not_here st m `message` ( string_data r ) now )
 }
 
 @ __ag_op_msg AgStore st s me Json args i now → AgRes {
     : i id ( _ag_arg_int args `id` 0 )
     ?? ( ag_msg_get st id ) {
-        F _ → { ^ ( __ag_no_msg id ) }
+        F _ → { ^ ( __ag_no_msg st id now ) }
         T m → {
             ? ( __ag_may_read m me ) {} { ^ ( _ag_err 403 `that message is in another agent's mailbox` ) }
             : Json o ( _ag_msg_json m 0 )
@@ -1667,7 +1918,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     : i ref ( _ag_arg_int args `ref` 0 )
     ? > ref 0 {
         ?? ( ag_msg_get st ref ) {
-            F _ → { ^ ( __ag_no_msg ref ) }
+            F _ → { ^ ( __ag_no_msg st ref now ) }
             T m → {
                 ? ( __ag_may_read m me ) {} { ^ ( _ag_err 403 `ref: that message is in another agent's mailbox` ) }
                 ? == ( string_len title ) 0 { = title ( __ag_first_line . m body ) } {}
@@ -1684,7 +1935,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     : i id ( ag_task_post_ref st ( string_data title ) ( string_data body ) ( string_data tags ) me prio ref now )
     ? == id 0 { ^ ( _ag_err 500 `could not store the task` ) } {}
     : Json o ( _ag_obj_int `id` id )
-    : String t ( string_from `task #` )
+    : String t ( string_from AG_TASK_PREFIX )
     ( string_push_int t id )
     ? > ref 0 { ( string_push_str t ` (re#` ) ( string_push_int t ref ) ( string_push_str t `)` ) } {}
     ( string_push_str t ` posted — you will hear when it is claimed and done\n` )
@@ -1715,16 +1966,19 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     ^ ( _ag_ok o t )
 }
 
-@ __ag_no_task i id → AgRes {
-    : String m ( string_from `no task #` )
+@ __ag_no_task AgStore st i id i now → AgRes {
+    : String m ( string_from `no task ` )
+    ( string_push_str m AG_TASK_PREFIX )
     ( string_push_int m id )
-    ^ ( _ag_err_s 404 m )
+    : String r ( string_new )
+    ( string_push_int r id )
+    ^ ( __ag_not_here st m `task` ( string_data r ) now )
 }
 
 @ __ag_op_task AgStore st Json args i now → AgRes {
     : i id ( _ag_arg_int args `id` 0 )
     ?? ( ag_task_get st id now ) {
-        F _ → { ^ ( __ag_no_task id ) }
+        F _ → { ^ ( __ag_no_task st id now ) }
         T tk → {
             : Json o ( _ag_task_json tk )
             : String t ( string_new )
@@ -1738,6 +1992,46 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
                 ( string_push_str t ( string_data . tk result ) )
                 ( string_push_str t `\n` )
             } {}
+            // Where it is on GitHub.
+            : GhTaskRefs g ( ag_gh_task_refs st . tk id )
+            : i ngp ( vec_len [i] . g prs )
+            ? | > . g issue 0 > ngp 0 {
+                ( string_push_str t `github:` )
+                ? > . g issue 0 { ( string_push_str t ` issue #` ) ( string_push_int t . g issue ) } {}
+                ? > ngp 0 {
+                    ( string_push_str t ? > . g issue 0 ` · PR` ` PR` )
+                    : ~ i j 0
+                    ~ < j ngp {
+                        ?? ( vec_get [i] . g prs j ) { T x → { ( string_push_str t ? > j 0 `, #` ` #` ) ( string_push_int t x ) } F _ → {} }
+                        = j + j 1
+                    }
+                } {}
+                ( string_push_str t `\n` )
+                ? > . g issue 0 { ( json_obj_set o `issue` ( json_int . g issue ) ) } {}
+                : Json pa ( json_arr_new )
+                : ~ i jj 0
+                ~ < jj ngp { ?? ( vec_get [i] . g prs jj ) { T x → { ( json_arr_push pa ( json_int x ) ) } F _ → {} } = jj + jj 1 }
+                ( json_obj_set o `prs` pa )
+            } {}
+            // The message it was made from may have gone to the trash.
+            ? > . tk ref 0 {
+                ?? ( ag_msg_get st . tk ref ) {
+                    T _ → {}
+                    F _ → {
+                        : String r ( string_new )
+                        ( string_push_int r . tk ref )
+                        : AgGone g ( ag_trash_find st `message` ( string_data r ) )
+                        ? > . g trashed 0 {
+                            ( string_push_str t `ref #` )
+                            ( string_push_int t . tk ref )
+                            ( string_push_str t `: in the trash (` )
+                            ( __ag_age t now . g trashed )
+                            ( string_push_str t ` ago; a person can restore it on the web page)\n` )
+                            ( json_obj_set o `ref_in_trash` ( json_bool T ) )
+                        } {}
+                    }
+                }
+            } {}
             ^ ( _ag_ok o t )
         }
     }
@@ -1746,9 +2040,9 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
 // The common tail of the task state changes: map the store's verdict to
 // a response, and say what happened.
 @ __ag_task_verdict AgStore st i rc i id s did s wrong i now → AgRes {
-    ? == rc AG_TASK_NOT_FOUND { ^ ( __ag_no_task id ) } {}
+    ? == rc AG_TASK_NOT_FOUND { ^ ( __ag_no_task st id now ) } {}
     ? == rc AG_TASK_WRONG_STATE {
-        : String m ( string_from `task #` )
+        : String m ( string_from AG_TASK_PREFIX )
         ( string_push_int m id )
         ( string_push_str m ` ` )
         ( string_push_str m wrong )
@@ -1756,7 +2050,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     } {}
     ? == rc AG_TASK_FAILED { ^ ( _ag_err 500 `could not update the task` ) } {}
     : Json o ( _ag_obj_int `id` id )
-    : String t ( string_from `task #` )
+    : String t ( string_from AG_TASK_PREFIX )
     ( string_push_int t id )
     ( string_push_str t ` ` )
     ( string_push_str t did )
@@ -1931,7 +2225,10 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
     : String body ( _ag_arg_str args `body` )
     ?? ( __ag_body_check body ) { T e → { ^ e } F _ → {} }
-    : b ok ( ag_note_set st ( string_data project ) ( string_data key ) ( string_data body ) me now )
+    : b set_desc ( _ag_has_arg args `description` )
+    : String desc ( _ag_one_line ( _ag_arg_str args `description` ) )
+    ? > ( string_len desc ) 200 { ^ ( _ag_err 400 `description: one line, at most 200 characters` ) } {}
+    : b ok ( ag_note_write st ( string_data project ) ( string_data key ) ( string_data body ) set_desc ( string_data desc ) me now )
     ? ok {} { ^ ( _ag_err 500 `could not store the note` ) }
     : Json o ( json_obj_new )
     ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
@@ -1942,11 +2239,29 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     ^ ( _ag_ok o t )
 }
 
-@ __ag_no_note String project String key → AgRes {
+// `raw` on one line: line breaks become spaces, the ends trimmed.
+@ _ag_one_line String raw → String {
+    : String out ( string_new )
+    : s t ( string_data raw )
+    : ( Slice u ) t_v ( slice_of_str t )
+    : i n ( nurl_str_len t )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte t_v k )
+        ( string_push_char out ? | == c 10 == c 13 32 c )
+        = k + k 1
+    }
+    : String tr ( string_trim out )
+    ^ tr
+}
+
+@ __ag_no_note AgStore st String project String key i now → AgRes {
     : String m ( string_from `no note '` )
     ( __ag_note_ref m ( string_data project ) ( string_data key ) )
     ( string_push_str m `' — notes lists them` )
-    ^ ( _ag_err_s 404 m )
+    : String r ( string_new )
+    ( __ag_note_ref r ( string_data project ) ( string_data key ) )
+    ^ ( __ag_not_here st m `note` ( string_data r ) now )
 }
 
 @ __ag_op_note AgStore st Json args i now → AgRes {
@@ -1955,11 +2270,16 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     : ~ String project ( string_new )
     ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
     ?? ( ag_note_get st ( string_data project ) ( string_data key ) ) {
-        F _ → { ^ ( __ag_no_note project key ) }
+        F _ → { ^ ( __ag_no_note st project key now ) }
         T n → {
+            ( ag_note_touch st ( string_data . n project ) ( string_data . n key ) now )
             : Json o ( _ag_note_json n T )
             : String t ( string_new )
             ( __ag_note_ref t ( string_data . n project ) ( string_data . n key ) )
+            ? > ( string_len . n description ) 0 {
+                ( string_push_str t ` — ` )
+                ( string_push_str t ( string_data . n description ) )
+            } {}
             ( string_push_str t ` (` )
             ( string_push_str t ( string_data . n author ) )
             ( string_push_str t ` ` )
@@ -1989,6 +2309,10 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
                 ( json_arr_push arr ( _ag_note_json x F ) )
                 ? all { ( __ag_note_ref t ( string_data . x project ) ( string_data . x key ) ) }
                 { ( string_push_str t ( string_data . x key ) ) }
+                ? > ( string_len . x description ) 0 {
+                    ( string_push_str t ` — ` )
+                    ( string_push_str t ( string_data . x description ) )
+                } {}
                 ( string_push_str t ` (` )
                 ( string_push_str t ( string_data . x author ) )
                 ( string_push_str t ` ` )
@@ -2014,7 +2338,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     ^ ( _ag_ok o t )
 }
 
-@ __ag_op_note_del AgStore st Json args i now → AgRes {
+@ __ag_op_note_del AgStore st s me Json args i now → AgRes {
     : String key ( _ag_arg_str args `key` )
     : ?String pro ( __ag_arg_project args )
     : ~ String project ( string_new )
@@ -2031,13 +2355,16 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
         }
         F _ → {}
     }
-    ? ( ag_note_del st ( string_data project ) ( string_data key ) ) {} { ^ ( __ag_no_note project key ) }
+    // Into the trash, not gone: a person can bring it back.
+    : i moved ( ag_trash_note st ( string_data project ) ( string_data key ) me now )
+    ? < moved 0 { ^ ( _ag_err 500 `could not delete the note` ) } {}
+    ? == moved 0 { ^ ( __ag_no_note st project key now ) } {}
     : Json o ( json_obj_new )
     ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
     ( json_obj_set o `key` ( json_str_lit ( string_data key ) ) )
     : String t ( string_from `note ` )
     ( __ag_note_ref t ( string_data project ) ( string_data key ) )
-    ( string_push_str t ` deleted\n` )
+    ( string_push_str t ` deleted (a person can restore it from the trash on the web page)\n` )
     ^ ( _ag_ok o t )
 }
 
@@ -2070,7 +2397,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     : ~ String project ( string_new )
     ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
     : b rule ( _ag_arg_bool args `rule` T )
-    ? ( ag_note_promote st ( string_data project ) ( string_data key ) rule me now ) {} { ^ ( __ag_no_note project key ) }
+    ? ( ag_note_promote st ( string_data project ) ( string_data key ) rule me now ) {} { ^ ( __ag_no_note st project key now ) }
     : Json o ( json_obj_new )
     ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
     ( json_obj_set o `key` ( json_str_lit ( string_data key ) ) )
@@ -2084,7 +2411,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
 : i AG_SKILL_MAX 65536
 
 // Is `key` among the arguments at all (even empty)?
-@ __ag_has_arg Json args s key → b {
+@ _ag_has_arg Json args s key → b {
     ? ( json_is_obj args ) {} { ^ F }
     ?? ( json_obj_get args key ) { T _ → { ^ T } F _ → { ^ F } }
 }
@@ -2184,10 +2511,10 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     }
     // The author is who wrote the words: switching a skill on or off is not
     // writing it.
-    : b writes | | ! known ( __ag_has_arg args `description` ) ( __ag_has_arg args `body` )
+    : b writes | | ! known ( _ag_has_arg args `description` ) ( _ag_has_arg args `body` )
     ? writes { = author ( string_from me ) } {}
-    ? ( __ag_has_arg args `description` ) { = desc ( _ag_arg_str args `description` ) } {}
-    ? ( __ag_has_arg args `body` ) { = body ( _ag_arg_str args `body` ) } {}
+    ? ( _ag_has_arg args `description` ) { = desc ( _ag_arg_str args `description` ) } {}
+    ? ( _ag_has_arg args `body` ) { = body ( _ag_arg_str args `body` ) } {}
     = on ( _ag_arg_bool args `enabled` on )
     ? > ( string_len desc ) 1024 { ^ ( _ag_err 400 `description: at most 1024 characters` ) } {}
     ? ( string_contains desc `\n` ) { ^ ( _ag_err 400 `description: one line` ) } {}
@@ -2239,7 +2566,7 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
 // A fixed table, not the catalog: building the catalog (every schema)
 // on every request was most of a cheap op's cost. The unit test checks
 // this table against the catalog entry by entry.
-: s AG_OP_NAMES ` whoami brief wait inbox post send history msg agents status channels channel_create follow unfollow task_post tasks task task_claim task_extend task_done task_release task_cancel note_set note notes note_del note_promote skills skill skill_set feedback `
+: s AG_OP_NAMES ` whoami brief wait inbox post send history msg agents status channels channel_create follow unfollow task_post tasks task task_claim task_extend task_done task_release task_cancel note_set note notes note_del note_promote skills skill skill_set feedback pr_watch pr_watches pr_unwatch `
 
 @ ag_op_auth_kind s name → i {
     ? != 0 ( nurl_str_eq name `join` ) { ^ 0 } {}
@@ -2265,6 +2592,12 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
         ^ ( _ag_err_s 404 m )
     } {}
     ? & == kind 1 ! . c authed { ^ ( __ag_unauthorized ) } {}
+    // What has had its time goes to the trash before anyone looks (at most
+    // every few minutes per file; the organisation's file holds the times
+    // when signed in, the one file locally).
+    ? > ( string_len . c org_db ) 0 {
+        ( ag_sweep_maybe st @ AgStore { ( string_from ( string_data . c org_db ) ) T @ ?Database { F } } now )
+    } { ( ag_sweep_maybe st ( ag_store ) now ) }
     : s me ( string_data . c agent )
     ? != 0 ( nurl_str_eq name `join` ) { ^ ( __ag_op_join st args now ) } {}
     ? != 0 ( nurl_str_eq name `whoami` ) { ^ ( __ag_op_whoami st me now ) } {}
@@ -2292,7 +2625,10 @@ Skills: skills lists playbooks kept for every agent here; skill name=X reads one
     ? != 0 ( nurl_str_eq name `note_set` ) { ^ ( __ag_op_note_set st me args now ) } {}
     ? != 0 ( nurl_str_eq name `note` ) { ^ ( __ag_op_note st args now ) } {}
     ? != 0 ( nurl_str_eq name `notes` ) { ^ ( __ag_op_notes st args now ) } {}
-    ? != 0 ( nurl_str_eq name `note_del` ) { ^ ( __ag_op_note_del st args now ) } {}
+    ? != 0 ( nurl_str_eq name `pr_watch` ) { ^ ( __ag_op_pr_watch st c args now ) } {}
+    ? != 0 ( nurl_str_eq name `pr_watches` ) { ^ ( __ag_op_pr_watches st c args now ) } {}
+    ? != 0 ( nurl_str_eq name `pr_unwatch` ) { ^ ( __ag_op_pr_unwatch st c args now ) } {}
+    ? != 0 ( nurl_str_eq name `note_del` ) { ^ ( __ag_op_note_del st me args now ) } {}
     ? != 0 ( nurl_str_eq name `note_promote` ) { ^ ( __ag_op_note_promote st me args now ) } {}
     ? != 0 ( nurl_str_eq name `skills` ) { ^ ( __ag_op_skills ( __ag_org_st st c ) args now ) } {}
     ? != 0 ( nurl_str_eq name `skill` ) { ^ ( __ag_op_skill ( __ag_org_st st c ) args now ) } {}

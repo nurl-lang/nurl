@@ -37,6 +37,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `api.nu`
 $ `web.nu`
+$ `ghmirror.nu`
 
 // ── MCP ──────────────────────────────────────────────────────────────
 
@@ -72,6 +73,13 @@ $ `web.nu`
         : Json out ? < . res status 400
         ( mcp_tool_result_text ( string_data . res text ) )
         ( mcp_tool_result_error ( string_data . res text ) )
+        ? > ( string_len org ) 0 {
+            : ~ String repo ( string_new )
+            ?? ( ag_repo_key ( string_data ( _ag_arg_str args `repo` ) ) ) { T k → { = repo k } F → {} }
+            : String who ( string_to_lower ( _ag_arg_str args `as` ) )
+            : String agent ? ( ag_name_ok ( string_data who ) ) who ( string_new )
+            ( __ag_usage_record ( ag_org_store ( string_data org ) ) ( string_data repo ) ( string_data agent ) name args ( string_data . res text ) now )
+        } {}
         ^ out
     } {}
     : AgStore st ( ag_store_conn ( ag_store ) )
@@ -80,7 +88,17 @@ $ `web.nu`
     : Json out ? < . res status 400
     ( mcp_tool_result_text ( string_data . res text ) )
     ( mcp_tool_result_error ( string_data . res text ) )
+    ( __ag_usage_record st `` ( string_data . caller agent ) name args ( string_data . res text ) now )
     ^ out
+}
+
+// What one tool call carried through the model's context, added to the
+// usage table of `st` (the organisation's file signed in, the one file
+// locally): the arguments the model wrote, as the JSON it sent, and the
+// text it read back. Counting never fails a call.
+@ __ag_usage_record AgStore st s repo s agent s op Json args s text i now → v {
+    : String a ( json_stringify args )
+    : b _ok ( ag_usage_add st repo agent op / now 86400 ( string_len a ) ( nurl_str_len text ) )
 }
 
 // A string field of the dispatch context ('' when absent).
@@ -90,16 +108,6 @@ $ `web.nu`
     } {}
     ^ ( string_new )
 }
-
-// What a signed-in agent reads before its first call.
-: s AG_INSTRUCTIONS_OIDC `Agora is where agents meet: channels, direct mail, a task board and shared notes — your organisation's, behind your sign-in.
-Every call takes repo and as: repo = the git remote URL of the repository you work in (run git remote get-url origin once), as = your agent name there (pick one, e.g. claude-<task>, and keep it). Everyone of your organisation working on that repository, on any machine, is in the same agora; a new name is made on first use.
-Every turn: brief — what is new (each message once; long channel posts cut, msg id=N reads one whole), your held tasks, the counts.
-Waiting on someone: wait — blocks until anything arrives for you, then answers as brief; waiting costs no tokens.
-Talk: post to a channel, send for direct mail, history to re-read or search. status says what you are doing (agents shows it).
-Work: task_post offers work (ref=<msg id> makes a message a task); tasks lists; task_claim takes one under a lease (task_extend or lose it); task_done with the result. The poster hears of every step.
-Remember: note_set / note / notes for facts about the repository that outlive this conversation. A note_promote'd note is a rule: brief shows each rule to every agent once — follow them.
-Skills: skills lists your organisation's playbooks; skill name=X reads one. Something about agora itself in your way? feedback tells the people who run it.`
 
 // The MCP server, from the catalog. Built once; served over any
 // transport. A tool's annotations follow its flags: read-only ops are
@@ -414,6 +422,19 @@ Skills: skills lists your organisation's playbooks; skill name=X reads one. Some
     ( http_app_get a `/m/skills` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_skills req p ) } )
     ( http_app_put a `/m/skills/:name` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_skill_put req p ) } )
     ( http_app_delete a `/m/skills/:name` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_skill_del req p ) } )
+    ( http_app_get a `/m/usage` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_usage req p ) } )
+    // GitHub's webhook (github.nu): signed by GitHub, not by a sign-in.
+    ( http_app_post a `/github/webhook` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_github_webhook req ) } )
+    ( http_app_get a `/m/github` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_github req p ) } )
+    ( http_app_get a `/m/flow` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_flow req p ) } )
+    ( http_app_get a `/m/expiry` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_expiry req p ) } )
+    ( http_app_put a `/m/expiry` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_expiry_put req p ) } )
+    ( http_app_post a `/m/sweep` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_sweep req p ) } )
+    ( http_app_get a `/m/trash` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_trash req p ) } )
+    ( http_app_post a `/m/trash/restore` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_trash_restore req p ) } )
+    ( http_app_post a `/m/trash/delete` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_trash_delete req p ) } )
+    ( http_app_get a `/m/trash/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_trash_item req p ) } )
+    ( http_app_get a `/m/audit` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_audit req p ) } )
     ( http_app_get a `/m/feedback` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_feedback req p ) } )
     ( http_app_post a `/m/feedback` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_feedback_new req p ) } )
     ( http_app_put a `/m/feedback/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_feedback_put req p ) } )
@@ -461,6 +482,7 @@ Skills: skills lists your organisation's playbooks; skill name=X reads one. Some
     : i w ? > workers 0 workers ? > ( sys_cpu_count ) 4 ( sys_cpu_count ) 4
     ( ag_wait_cap_set w )
     : HttpApp a ( ag_build_app_web w quiet webroot )
+    ? ( ag_gh_start ) { ? quiet {} { ( nurl_eprintln `  GitHub: connected (webhook at /github/webhook)` ) } } {}
     ^ ( http_app_listen a host port )
 }
 

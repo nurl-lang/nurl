@@ -39,6 +39,10 @@ has()   { case "$2" in *"$3"*) ok "$1";; *) bad "$1 (missing '$3')";; esac; }
 
 echo "[1/5] unit suite"
 rm -rf agora_test_scratch
+# A throwaway RSA key for the GitHub App JWT test (skipped without openssl).
+if command -v openssl >/dev/null 2>&1 && openssl genrsa -traditional -out "$WORK/gh_test.pem" 2048 2>/dev/null; then
+    export AGORA_TEST_GH_KEY="$WORK/gh_test.pem"
+fi
 if ! $NURL tests/agora_test.nu "$WORK/unit" >/dev/null 2>"$WORK/build.err"; then
     echo "FAIL: could not build tests/agora_test.nu:"; tail -5 "$WORK/build.err"; exit 1
 fi
@@ -61,7 +65,7 @@ check "--version is the manifest's" "$("$BIN" --version 2>/dev/null | grep -o '[
 has "a fresh brief" "$("$BIN" brief --as alice 2>/dev/null)" "inbox: nothing new"
 check "post" "$("$BIN" post body="hello all" --as bob 2>/dev/null)" "#1 posted to public"
 check "send" "$("$BIN" send to=alice body="psst" --as bob 2>/dev/null)" "#2 sent to alice"
-has "task_post" "$("$BIN" task_post title="review PR" tags="review" priority=2 --as bob 2>/dev/null)" "task #1 posted"
+has "task_post" "$("$BIN" task_post title="review PR" tags="review" priority=2 --as bob 2>/dev/null)" "AGORA-1 posted"
 OUT=$("$BIN" brief --as alice 2>/dev/null)
 has "brief delivers the post" "$OUT" "#1 public bob now: hello all"
 has "brief delivers the dm" "$OUT" "#2 dm bob now: psst"
@@ -70,7 +74,7 @@ has "brief delivers once" "$("$BIN" brief --as alice 2>/dev/null)" "inbox: nothi
 has "task_claim" "$("$BIN" task_claim id=1 --as alice 2>/dev/null)" "claimed by you"
 has "task_done" "$("$BIN" task_done id=1 result="LGTM" --as alice 2>/dev/null)" "done"
 OUT=$("$BIN" brief --as bob 2>/dev/null)
-has "the poster hears of the claim" "$OUT" "task #1 claimed by alice"
+has "the poster hears of the claim" "$OUT" "AGORA-1 claimed by alice"
 has "and gets the result" "$OUT" "result: LGTM"
 has "note_set under a project" "$("$BIN" note_set project=nurl key=build body="./build.sh" --as bob 2>/dev/null)" "note nurl/build saved"
 has "notes project= lists it" "$("$BIN" notes project=nurl --as alice 2>/dev/null)" "build (bob now)"
@@ -133,7 +137,7 @@ MCP='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"whoami","ar
 has "MCP tools/call without a token is a tool error" "$(curl -s -m 5 $J -X POST -d "$MCP" "$U/mcp")" '"isError":true'
 has "MCP tools/call with the token acts as the agent" "$(curl -s -m 5 -H "$A" $J -X POST -d "$MCP" "$U/mcp")" 'you: carol'
 MCP='{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"task_post","arguments":{"title":"race me","tags":"race"}}}'
-has "MCP task_post" "$(curl -s -m 5 -H "$A" $J -X POST -d "$MCP" "$U/mcp")" 'task #1 posted'
+has "MCP task_post" "$(curl -s -m 5 -H "$A" $J -X POST -d "$MCP" "$U/mcp")" 'AGORA-1 posted'
 
 echo "[4/5] concurrency"
 # 24 agents race for task #1 through the worker pool: exactly one wins.

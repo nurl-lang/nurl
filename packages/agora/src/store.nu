@@ -18,6 +18,18 @@
 //             signed-in service keeps them in the organisation's file)
 //   feedback  what agents and people tell the service's operators about
 //             agora itself (signed in: one file for the whole service)
+//   task_events  every step of every task (posted, claimed, done, released,
+//             expired, cancelled, set on the web page): the history the
+//             web page's flow charts are drawn from
+//   trash     what expired or was deleted, kept whole until a person
+//             restores it or deletes it for good (trash.nu); `hold` keeps
+//             a restored item from expiring again at once, `audit` says
+//             who or what moved anything in or out of the trash
+//   settings  key → integer: an organisation's expiry times (signed in:
+//             in the organisation's file), and a file's last sweep
+//   usage     what the MCP tool calls carried, per day, repository, agent
+//             and operation: calls, argument bytes in, answer bytes out
+//             (a signed-in service keeps it in the organisation's file)
 //
 // A signed-in service keeps one such file per repository of each
 // organisation, and the organisation's people in a file of their own
@@ -105,6 +117,9 @@ $ `stdlib/core/slice.nu`
     b rule  // promoted: a practice that binds everyone (see Rules below)
     String promoted_by  // who made it a rule ('' = never was one)
     i rev  // the table's write counter at its last write or promotion
+    String description  // one line saying what it is for ('' = none), shown in `notes`
+    b keep  // a person marked it never to expire
+    i touched  // last read with `note` (0 = never): with `updated`, its expiry clock
 }
 
 : AgSkill {
@@ -171,6 +186,8 @@ $ `stdlib/core/slice.nu`
 // its one file; a signed-in service keeps skills in each organisation's
 // file (manage.nu) and feedback in one file of its own.
 : s AG_SKILLS_TABLE `CREATE TABLE IF NOT EXISTS skills (name TEXT PRIMARY KEY, description TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, author TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL, updated INTEGER NOT NULL)`
+: s AG_SETTINGS_TABLE `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value INTEGER NOT NULL)`
+: s AG_USAGE_TABLE `CREATE TABLE IF NOT EXISTS usage (day INTEGER NOT NULL, repo TEXT NOT NULL DEFAULT '', agent TEXT NOT NULL DEFAULT '', op TEXT NOT NULL, calls INTEGER NOT NULL DEFAULT 0, bytes_in INTEGER NOT NULL DEFAULT 0, bytes_out INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, repo, agent, op))`
 : s AG_FEEDBACK_TABLE `CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', org TEXT NOT NULL DEFAULT '', repo TEXT NOT NULL DEFAULT '', agent TEXT NOT NULL DEFAULT '', person TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'new', reply TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL, updated INTEGER NOT NULL)`
 
 @ __ag_schema → ( Vec String ) {
@@ -183,9 +200,40 @@ $ `stdlib/core/slice.nu`
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS cursors (agent TEXT NOT NULL, channel TEXT NOT NULL, last_id INTEGER NOT NULL, PRIMARY KEY (agent, channel))` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', poster TEXT NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0, result TEXT NOT NULL DEFAULT '', priority INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL, ref INTEGER NOT NULL DEFAULT 0)` ) )
     ( vec_push [String] v ( string_from `CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status, priority, id)` ) )
-    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS notes (project TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, body TEXT NOT NULL, author TEXT NOT NULL, updated INTEGER NOT NULL, rule INTEGER NOT NULL DEFAULT 0, promoted_by TEXT NOT NULL DEFAULT '', rev INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (project, key))` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS notes (project TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, body TEXT NOT NULL, author TEXT NOT NULL, updated INTEGER NOT NULL, rule INTEGER NOT NULL DEFAULT 0, promoted_by TEXT NOT NULL DEFAULT '', rev INTEGER NOT NULL DEFAULT 0, description TEXT NOT NULL DEFAULT '', keep INTEGER NOT NULL DEFAULT 0, touched INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (project, key))` ) )
     ( vec_push [String] v ( string_from AG_SKILLS_TABLE ) )
     ( vec_push [String] v ( string_from AG_FEEDBACK_TABLE ) )
+    ( vec_push [String] v ( string_from AG_USAGE_TABLE ) )
+    ( vec_push [String] v ( string_from AG_SETTINGS_TABLE ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS trash (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, ref TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', author TEXT NOT NULL DEFAULT '', touched INTEGER NOT NULL DEFAULT 0, trashed INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT '', by TEXT NOT NULL DEFAULT '', data TEXT NOT NULL)` ) )
+    ( vec_push [String] v ( string_from `CREATE INDEX IF NOT EXISTS trash_ref ON trash (kind, ref)` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS hold (kind TEXT NOT NULL, ref TEXT NOT NULL, until INTEGER NOT NULL, PRIMARY KEY (kind, ref))` ) )
+    // GitHub (ghstore.nu): accepted webhook deliveries, the PR and CI
+    // state of watched pull requests, who watches what, and the notices
+    // waiting for each agent's brief.
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_deliveries (id TEXT PRIMARY KEY, received INTEGER NOT NULL, event TEXT NOT NULL, data TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_prs (number INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'open', head_sha TEXT NOT NULL DEFAULT '', merge_sha TEXT NOT NULL DEFAULT '', updated INTEGER NOT NULL DEFAULT 0, seen INTEGER NOT NULL DEFAULT 0, ci_noted TEXT NOT NULL DEFAULT '', announced INTEGER NOT NULL DEFAULT 0)` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_runs (run_id INTEGER PRIMARY KEY, attempt INTEGER NOT NULL, workflow TEXT NOT NULL, head_sha TEXT NOT NULL, pr INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, conclusion TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', updated INTEGER NOT NULL DEFAULT 0)` ) )
+    ( vec_push [String] v ( string_from `CREATE INDEX IF NOT EXISTS gh_runs_head ON gh_runs (head_sha, workflow)` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_watches (agent TEXT NOT NULL, pr INTEGER NOT NULL, until INTEGER NOT NULL, created INTEGER NOT NULL, PRIMARY KEY (agent, pr))` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_links (task INTEGER NOT NULL, pr INTEGER NOT NULL, PRIMARY KEY (task, pr))` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_notices (id INTEGER PRIMARY KEY AUTOINCREMENT, agent TEXT NOT NULL, pr INTEGER NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, text TEXT NOT NULL, created INTEGER NOT NULL, due INTEGER NOT NULL, delivered INTEGER NOT NULL DEFAULT 0, UNIQUE (agent, key))` ) )
+    ( vec_push [String] v ( string_from `CREATE INDEX IF NOT EXISTS gh_notices_due ON gh_notices (agent, delivered, due)` ) )
+    // The task board's mirror to GitHub issues (ghmirror.nu).
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, task INTEGER NOT NULL, kind TEXT NOT NULL, msg INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '')` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_issues (task INTEGER PRIMARY KEY, number INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'open', labels TEXT NOT NULL DEFAULT '', head TEXT NOT NULL DEFAULT '')` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_comments (msg INTEGER PRIMARY KEY, task INTEGER NOT NULL, id INTEGER NOT NULL)` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_labels (name TEXT PRIMARY KEY)` ) )
+    // Every pull request a task was tied to, for good: by pr_watch task=,
+    // or because the PR's title or body names AGORA-N (`noted`: its issue
+    // has been told).
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_task_prs (task INTEGER NOT NULL, pr INTEGER NOT NULL, ts INTEGER NOT NULL, noted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (task, pr))` ) )
+    ( vec_push [String] v ( string_from `CREATE INDEX IF NOT EXISTS gh_task_prs_pr ON gh_task_prs (pr)` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_dry (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, task INTEGER NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL, body TEXT NOT NULL)` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS gh_health (key TEXT PRIMARY KEY, ts INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL DEFAULT '')` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, action TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', by TEXT NOT NULL DEFAULT '')` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS task_events (id INTEGER PRIMARY KEY AUTOINCREMENT, task INTEGER NOT NULL, ts INTEGER NOT NULL, kind TEXT NOT NULL, agent TEXT NOT NULL DEFAULT '')` ) )
+    ( vec_push [String] v ( string_from `CREATE INDEX IF NOT EXISTS task_events_task ON task_events (task, ts)` ) )
     ( vec_push [String] v ( string_from `INSERT OR IGNORE INTO channels (name, about, created_by, created) VALUES ('public', 'Everyone follows this channel.', '', 0)` ) )
     ^ v
 }
@@ -247,10 +295,203 @@ $ `stdlib/core/slice.nu`
             ? ( __ag_table_lacks db `agents` `rules_rev` ) {
                 ?? ( sqlite_exec db `ALTER TABLE agents ADD COLUMN rules_rev INTEGER NOT NULL DEFAULT 0` ) { T _ → {} F _ → {} }
             } {}
+            // 0.9.0: notes.description / keep / touched.
+            ? ( __ag_table_lacks db `notes` `description` ) {
+                ?? ( sqlite_exec db `ALTER TABLE notes ADD COLUMN description TEXT NOT NULL DEFAULT ''` ) { T _ → {} F _ → {} }
+                ?? ( sqlite_exec db `ALTER TABLE notes ADD COLUMN keep INTEGER NOT NULL DEFAULT 0` ) { T _ → {} F _ → {} }
+                ?? ( sqlite_exec db `ALTER TABLE notes ADD COLUMN touched INTEGER NOT NULL DEFAULT 0` ) { T _ → {} F _ → {} }
+                // Nobody knows when an existing note was last read: its
+                // expiry clock starts with the upgrade.
+                ?? ( sqlite_exec db `UPDATE notes SET touched = CAST(strftime('%s', 'now') AS INTEGER)` ) { T _ → {} F _ → {} }
+            } {}
+            ( __ag_retag_on db )
+            ? failed {} { ( __ag_task_events_backfill db ) }
             = ok ! failed
         }
     }
     ^ @ AgStore { ( string_from path ) ok @ ?Database { F } }
+}
+
+// `,a,b,` from "a, b" / "a,b" — lowercased, blanks dropped. A JSON list
+// spelled as a string (`["a","b"]`, which some clients send for a list
+// argument) reads as its items: brackets and quotes separate like commas
+// and blanks, so no tag ever carries them.
+@ _ag_tags_norm String raw → String {
+    : String out ( string_new )
+    : String low ( string_to_lower raw )
+    : s t ( string_data low )
+    : ( Slice u ) t_v ( slice_of_str t )
+    : i n ( nurl_str_len t )
+    : ~ i i 0
+    : ~ String cur ( string_new )
+    : ~ i count 0
+    ~ <= i n {
+        : i c ? < i n ( slice_byte t_v i ) 44
+        ? | | | | | | | | == c 44 == c 32 == c 9 == c 10 == c 13 == c 91 == c 93 == c 34 == c 39 {
+            ? > ( string_len cur ) 0 {
+                ? == count 0 { ( string_push_str out `,` ) } {}
+                ( string_push_str out ( string_data cur ) )
+                ( string_push_str out `,` )
+                = count + count 1
+                ( string_clear cur )
+            } {}
+        } { ( string_push_char cur c ) }
+        = i + i 1
+    }
+    ^ out
+}
+
+// 0.9.0: tags stored before _ag_tags_norm split JSON-list strings
+// (`,["a","b"],`) are normalised again, once, when the file is opened.
+@ __ag_retag_on Database db → v {
+    : ( Vec i ) ids ( vec_new [i] )
+    : ( Vec String ) tags ( vec_new [String] )
+    ?? ( sqlite_prepare db `SELECT id, tags FROM tasks WHERE tags LIKE '%[%' OR tags LIKE '%]%' OR tags LIKE '%"%'` ) {
+        F _ → {}
+        T q → {
+            ~ ( _ag_row q ) {
+                ( vec_push [i] ids ( sqlite_column_int q 0 ) )
+                ( vec_push [String] tags ( sqlite_column_text q 1 ) )
+            }
+        }
+    }
+    : i n ( vec_len [i] ids )
+    : ~ i k 0
+    ~ < k n {
+        : i id ?? ( vec_get [i] ids k ) { T x → x F _ → 0 }
+        ?? ( vec_get [String] tags k ) {
+            T raw → {
+                : String fixed ( _ag_tags_norm ( string_from ( string_data raw ) ) )
+                ?? ( sqlite_prepare db `UPDATE tasks SET tags = ?2 WHERE id = ?1` ) {
+                    F _ → {}
+                    T q → {
+                        ( _ag_bind_i q 1 id )
+                        ( _ag_bind_s q 2 ( string_data fixed ) )
+                        ( _ag_run q )
+                    }
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+}
+
+@ __ag_table_exists Database db s table → b {
+    : ~ b has F
+    ?? ( sqlite_prepare db `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1` ) {
+        F _ → {}
+        T q → {
+            ( _ag_bind_s q 1 table )
+            ? ( _ag_row q ) { = has > ( sqlite_column_int q 0 ) 0 } {}
+        }
+    }
+    ^ has
+}
+
+// 0.9.0: a file from before task_events gets the history it can still
+// tell. Every task was posted when it was made; a step that mailed
+// someone (claimed by, done by, released by, cancelled by, lease
+// expired — in either spelling, `task #N` or `AGORA-N`) happened when
+// that mail was sent; a task finished or held with no such mail (its
+// poster did it) is dated by its last change.
+// 0.9.0: task_events filled from what is known (task rows, task mail),
+// once per file: the `task_events_filled` setting says it is done. The
+// check, the filling and the mark are one transaction, and any statement
+// failing rolls it all back (the next open tries again). A file with
+// events already (filled before the mark existed) is only marked.
+@ __ag_task_events_backfill Database db → v {
+    ? > ( __ag_setting_on db `task_events_filled` 0 ) 0 { ^ v } {}
+    ? ( _ag_begin db ) {} { ^ v }
+    ? > ( __ag_setting_on db `task_events_filled` 0 ) 0 { ( _ag_rollback db ) ^ v } {}
+    : ~ i have -1
+    ?? ( sqlite_prepare db `SELECT COUNT(*) FROM task_events` ) {
+        F _ → {}
+        T q → { ? ( _ag_row q ) { = have ( sqlite_column_int q 0 ) } {} }
+    }
+    ? < have 0 { ( _ag_rollback db ) ^ v } {}
+    : ~ b ok T
+    ? == have 0 {
+        : ( Vec String ) sql ( vec_new [String] )
+        ( vec_push [String] sql ( string_from `INSERT INTO task_events (task, ts, kind, agent) SELECT id, created, 'post', poster FROM tasks ORDER BY id` ) )
+        ( vec_push [String] sql ( string_from `WITH m AS (SELECT id, ts, sender, channel, body, CAST(substr(body, 7) AS INTEGER) AS n FROM messages WHERE channel LIKE '@%' AND (body LIKE 'task #%' OR body LIKE 'AGORA-%')), r AS (SELECT id, ts, sender, channel, n, substr(body, 7 + length(CAST(n AS TEXT))) AS rest FROM m WHERE n > 0) INSERT INTO task_events (task, ts, kind, agent) SELECT n, ts, CASE WHEN rest LIKE ' claimed by %' THEN 'claim' WHEN rest LIKE ' lease expired%' THEN 'expire' WHEN rest LIKE ' done by %' THEN 'done' WHEN rest LIKE ' released by %' THEN 'release' ELSE 'cancel' END, CASE WHEN rest LIKE ' lease expired%' THEN substr(channel, 2) ELSE sender END FROM r WHERE rest LIKE ' claimed by %' OR rest LIKE ' lease expired%' OR rest LIKE ' done by %' OR rest LIKE ' released by %' OR rest LIKE ' cancelled by %' ORDER BY ts, id` ) )
+        ( vec_push [String] sql ( string_from `INSERT INTO task_events (task, ts, kind, agent) SELECT id, updated, 'done', owner FROM tasks t WHERE status = 'done' AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'done')` ) )
+        ( vec_push [String] sql ( string_from `INSERT INTO task_events (task, ts, kind, agent) SELECT id, updated, 'cancel', poster FROM tasks t WHERE status = 'cancelled' AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'cancel')` ) )
+        ( vec_push [String] sql ( string_from `INSERT INTO task_events (task, ts, kind, agent) SELECT id, updated, 'claim', owner FROM tasks t WHERE status = 'claimed' AND (SELECT e.kind FROM task_events e WHERE e.task = t.id ORDER BY e.ts DESC, e.id DESC LIMIT 1) IS NOT 'claim'` ) )
+        : i n ( vec_len [String] sql )
+        : ~ i k 0
+        ~ & ok < k n {
+            ?? ( vec_get [String] sql k ) {
+                T x → { ?? ( sqlite_exec db ( string_data x ) ) { T _ → {} F _ → { = ok F } } }
+                F _ → {}
+            }
+            = k + k 1
+        }
+    } {}
+    ? ok { = ok ( __ag_setting_put_on db `task_events_filled` 1 ) } {}
+    ? ok { ? ( _ag_commit db ) {} { ( _ag_rollback db ) } } { ( _ag_rollback db ) }
+}
+
+// One step of task `task`: post | claim | done | release | expire |
+// cancel, or a state a person set on the web page (open | claimed |
+// done | cancelled). Mirrored to GitHub too, when this agora is.
+@ _ag_task_event_on Database db i task s kind s agent i now → v {
+    : b _ok ( _ag_task_event_ok_on db task kind agent now )
+}
+
+// The same, saying whether both rows were written (a caller that must not
+// commit a task change without its mirror step rolls back on F).
+@ _ag_task_event_ok_on Database db i task s kind s agent i now → b {
+    : ~ b ok ( _ag_mirror_ok_on db task kind 0 now )
+    ?? ( sqlite_prepare db `INSERT INTO task_events (task, ts, kind, agent) VALUES (?1, ?2, ?3, ?4)` ) {
+        F _ → { = ok F }
+        T q → {
+            ( _ag_bind_i q 1 task )
+            ( _ag_bind_i q 2 now )
+            ( _ag_bind_s q 3 kind )
+            ( _ag_bind_s q 4 agent )
+            = ok & ok ( _ag_run q )
+        }
+    }
+    ^ ok
+}
+
+// Queue a step of task `task` for its GitHub issue (ghmirror.nu) — in the
+// caller's transaction, so the step and its mirroring stand or fall
+// together. Nothing at all unless this file is mirrored (settings
+// gh_mirror = 1, set by github.nu from the configuration).
+@ _ag_mirror_on Database db i task s kind i msg i now → v {
+    : b _ok ( _ag_mirror_ok_on db task kind msg now )
+}
+
+@ _ag_mirror_ok_on Database db i task s kind i msg i now → b {
+    : ~ b ok F
+    ?? ( sqlite_prepare db `INSERT INTO gh_outbox (task, kind, msg, created) SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM settings WHERE key = 'gh_mirror' AND value = 1)` ) {
+        F _ → {}
+        T q → {
+            ( _ag_bind_i q 1 task )
+            ( _ag_bind_s q 2 kind )
+            ( _ag_bind_i q 3 msg )
+            ( _ag_bind_i q 4 now )
+            = ok ( _ag_run q )
+        }
+    }
+    ^ ok
+}
+
+// `t<N>: …` — the task a dev post is about (0: none).
+@ _ag_tpost_task s body → i {
+    : ( Slice u ) v ( slice_of_str body )
+    : i n ( nurl_str_len body )
+    ? | < n 3 != ( slice_byte v 0 ) 116 { ^ 0 } {}
+    : ~ i k 1
+    : ~ i num 0
+    ~ & < k n & >= ( slice_byte v k ) 48 <= ( slice_byte v k ) 57 {
+        = num + * num 10 - ( slice_byte v k ) 48
+        = k + k 1
+    }
+    ? & & > k 1 < k n == ( slice_byte v k ) 58 { ^ num } {}
+    ^ 0
 }
 
 // A 0.1.0 store has notes keyed by `key` alone; 0.2.0 keys them by
@@ -678,7 +919,7 @@ $ `stdlib/core/slice.nu`
 
 // ── Messages ──────────────────────────────────────────────────────────
 
-@ __ag_post_on Database db s channel s sender s body i reply_to i now → i {
+@ _ag_post_on Database db s channel s sender s body i reply_to i now → i {
     : ~ i id 0
     ?? ( sqlite_prepare db `INSERT INTO messages (channel, sender, body, reply_to, ts) VALUES (?1, ?2, ?3, ?4, ?5)` ) {
         F _ → {}
@@ -691,6 +932,11 @@ $ `stdlib/core/slice.nu`
             ? ( _ag_run q ) { = id ( sqlite_last_insert_rowid db ) } {}
         }
     }
+    // A task's comment thread is its `t<N>:` posts in dev.
+    ? & > id 0 != 0 ( nurl_str_eq channel `dev` ) {
+        : i t ( _ag_tpost_task body )
+        ? > t 0 { ? ( _ag_mirror_ok_on db t `comment` id now ) {} { = id 0 } } {}
+    } {}
     ^ id
 }
 
@@ -705,8 +951,17 @@ $ `stdlib/core/slice.nu`
             // the write lock from the start made concurrent posters queue in
             // SQLite's busy handler (p99 55 ms vs 29 ms at 16 writers). The
             // cursor step is safe on its own: it never passes a message
-            // anyone else wrote.
-            = id ( __ag_post_on db channel sender body reply_to now )
+            // anyone else wrote. A task comment (`t<N>:` in dev) is the
+            // exception: it and its mirror step commit together.
+            : b tpost & != 0 ( nurl_str_eq channel `dev` ) > ( _ag_tpost_task body ) 0
+            ? tpost {
+                ? ( _ag_begin db ) {
+                    = id ( _ag_post_on db channel sender body reply_to now )
+                    ? > id 0 {
+                        ? ( _ag_commit db ) {} { ( _ag_rollback db ) = id 0 }
+                    } { ( _ag_rollback db ) }
+                } {}
+            } { = id ( _ag_post_on db channel sender body reply_to now ) }
             ? > id 0 { ( __ag_cursor_past_own_on db sender channel id ) } {}
         }
     }
@@ -1041,6 +1296,9 @@ $ `stdlib/core/slice.nu`
     }
 }
 
+// How a task is written in every text: AGORA-<id>.
+: s AG_TASK_PREFIX `AGORA-`
+
 : s AG_TASK_COLS `id, title, body, tags, poster, status, owner, lease_until, result, priority, created, updated, ref`
 
 // Leases that ran out: the task goes back to open and the holder that
@@ -1075,12 +1333,13 @@ $ `stdlib/core/slice.nu`
         }
         ?? ( vec_get [String] owners i ) {
             T owner → {
+                ( _ag_task_event_on db id `expire` ( string_data owner ) now )
                 : String mbox ( ag_mailbox ( string_data owner ) )
-                : String body ( string_from `task #` )
+                : String body ( string_from AG_TASK_PREFIX )
                 ( string_push_int body id )
                 ( string_push_str body ` lease expired, back to open: ` )
                 ?? ( vec_get [String] titles i ) { T t → ( string_push_str body ( string_data t ) ) F _ → {} }
-                ( __ag_post_on db ( string_data mbox ) `agora` ( string_data body ) 0 now )
+                ( _ag_post_on db ( string_data mbox ) `agora` ( string_data body ) 0 now )
             }
             F _ → {}
         }
@@ -1099,6 +1358,8 @@ $ `stdlib/core/slice.nu`
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
+            // The task and its first step (history, mirror) in one transaction.
+            ? ( _ag_begin db ) {} { ^ 0 }
             ?? ( sqlite_prepare db `INSERT INTO tasks (title, body, tags, poster, status, priority, created, updated, ref) VALUES (?1, ?2, ?3, ?4, 'open', ?5, ?6, ?6, ?7)` ) {
                 F _ → {}
                 T q → {
@@ -1110,8 +1371,12 @@ $ `stdlib/core/slice.nu`
                     ( _ag_bind_i q 6 now )
                     ( _ag_bind_i q 7 ref )
                     ? ( _ag_run q ) { = id ( sqlite_last_insert_rowid db ) } {}
+                    ? > id 0 { ? ( _ag_task_event_ok_on db id `post` poster now ) {} { = id 0 } } {}
                 }
             }
+            ? > id 0 {
+                ? ( _ag_commit db ) {} { ( _ag_rollback db ) = id 0 }
+            } { ( _ag_rollback db ) }
         }
     }
     ^ id
@@ -1284,15 +1549,16 @@ $ `stdlib/core/slice.nu`
                     }
                 } { = rc AG_TASK_WRONG_STATE }
             }
+            ? == rc AG_TASK_OK { ( _ag_task_event_on db id `claim` agent now ) } {}
             ? & == rc AG_TASK_OK == 0 ( nurl_str_eq ( string_data poster ) agent ) {
-                : String body ( string_from `task #` )
+                : String body ( string_from AG_TASK_PREFIX )
                 ( string_push_int body id )
                 ( string_push_str body ` claimed by ` )
                 ( string_push_str body agent )
                 ( string_push_str body `: ` )
                 ( string_push_str body ( string_data title ) )
                 : String mbox ( ag_mailbox ( string_data poster ) )
-                ( __ag_post_on db ( string_data mbox ) agent ( string_data body ) 0 now )
+                ( _ag_post_on db ( string_data mbox ) agent ( string_data body ) 0 now )
             } {}
             ? == rc AG_TASK_OK { ? ( _ag_commit db ) {} { = rc AG_TASK_FAILED ( _ag_rollback db ) } } { ( _ag_rollback db ) }
         }
@@ -1367,8 +1633,9 @@ $ `stdlib/core/slice.nu`
                     }
                 }
             }
+            ? == rc AG_TASK_OK { ( _ag_task_event_on db id ? is_done `done` `release` agent now ) } {}
             ? & == rc AG_TASK_OK == 0 ( nurl_str_eq ( string_data poster ) agent ) {
-                : String body ( string_from `task #` )
+                : String body ( string_from AG_TASK_PREFIX )
                 ( string_push_int body id )
                 ( string_push_str body ? is_done ` done by ` ` released by ` )
                 ( string_push_str body agent )
@@ -1379,7 +1646,7 @@ $ `stdlib/core/slice.nu`
                     ( string_push_str body text )
                 } {}
                 : String mbox ( ag_mailbox ( string_data poster ) )
-                ( __ag_post_on db ( string_data mbox ) agent ( string_data body ) 0 now )
+                ( _ag_post_on db ( string_data mbox ) agent ( string_data body ) 0 now )
             } {}
             // A task made from a message: its author hears the result too
             // (unless that is the poster, told above, or the holder).
@@ -1387,7 +1654,7 @@ $ `stdlib/core/slice.nu`
                 : String author ( __ag_msg_sender_on db ref )
                 : s au ( string_data author )
                 ? & & > ( nurl_str_len au ) 0 == 0 ( nurl_str_eq au agent ) == 0 ( nurl_str_eq au ( string_data poster ) ) {
-                    : String body ( string_from `task #` )
+                    : String body ( string_from AG_TASK_PREFIX )
                     ( string_push_int body id )
                     ( string_push_str body ` (from your #` )
                     ( string_push_int body ref )
@@ -1400,7 +1667,7 @@ $ `stdlib/core/slice.nu`
                         ( string_push_str body text )
                     } {}
                     : String mbox ( ag_mailbox au )
-                    ( __ag_post_on db ( string_data mbox ) agent ( string_data body ) ref now )
+                    ( _ag_post_on db ( string_data mbox ) agent ( string_data body ) ref now )
                 } {}
             } {}
             ? == rc AG_TASK_OK { ? ( _ag_commit db ) {} { = rc AG_TASK_FAILED ( _ag_rollback db ) } } { ( _ag_rollback db ) }
@@ -1470,15 +1737,16 @@ $ `stdlib/core/slice.nu`
                     }
                 }
             }
+            ? == rc AG_TASK_OK { ( _ag_task_event_on db id `cancel` agent now ) } {}
             ? & == rc AG_TASK_OK & > ( string_len owner ) 0 == 0 ( nurl_str_eq ( string_data owner ) agent ) {
-                : String body ( string_from `task #` )
+                : String body ( string_from AG_TASK_PREFIX )
                 ( string_push_int body id )
                 ( string_push_str body ` cancelled by ` )
                 ( string_push_str body agent )
                 ( string_push_str body `: ` )
                 ( string_push_str body ( string_data title ) )
                 : String mbox ( ag_mailbox ( string_data owner ) )
-                ( __ag_post_on db ( string_data mbox ) agent ( string_data body ) 0 now )
+                ( _ag_post_on db ( string_data mbox ) agent ( string_data body ) 0 now )
             } {}
             ? == rc AG_TASK_OK { ? ( _ag_commit db ) {} { = rc AG_TASK_FAILED ( _ag_rollback db ) } } { ( _ag_rollback db ) }
         }
@@ -1497,13 +1765,20 @@ $ `stdlib/core/slice.nu`
 // agent last looked" is one comparison (see Rules).
 : s AG_NOTE_REV `(SELECT COALESCE(MAX(rev), 0) + 1 FROM notes)`
 
-: s AG_NOTE_COLS `project, key, body, author, updated, rule, promoted_by, rev`
+: s AG_NOTE_COLS `project, key, body, author, updated, rule, promoted_by, rev, description, keep, touched`
 
 @ ag_note_set AgStore st s project s key s body s author i now → b {
+    ^ ( ag_note_write st project key body F `` author now )
+}
+
+// Write a note; its description too when `set_desc` (else a new note has
+// none and an old one keeps its own).
+@ ag_note_write AgStore st s project s key s body b set_desc s description s author i now → b {
     : ~ b ok F
-    : String sql ( string_from `INSERT INTO notes (project, key, body, author, updated, rev) VALUES (?1, ?2, ?3, ?4, ?5, ` )
+    : String sql ( string_from `INSERT INTO notes (project, key, body, author, updated, description, rev) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ` )
     ( string_push_str sql AG_NOTE_REV )
     ( string_push_str sql `) ON CONFLICT (project, key) DO UPDATE SET body = excluded.body, author = excluded.author, updated = excluded.updated, rev = excluded.rev` )
+    ? set_desc { ( string_push_str sql `, description = excluded.description` ) } {}
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
@@ -1515,6 +1790,7 @@ $ `stdlib/core/slice.nu`
                     ( _ag_bind_s q 3 body )
                     ( _ag_bind_s q 4 author )
                     ( _ag_bind_i q 5 now )
+                    ( _ag_bind_s q 6 description )
                     = ok ( _ag_run q )
                 }
             }
@@ -1534,12 +1810,53 @@ $ `stdlib/core/slice.nu`
         rule
         ( sqlite_column_text q 6 )
         ( sqlite_column_int q 7 )
+        ( sqlite_column_text q 8 )
+        != ( sqlite_column_int q 9 ) 0
+        ( sqlite_column_int q 10 )
     }
+}
+
+// A note was read: its expiry clock starts again (its rev does not move).
+@ ag_note_touch AgStore st s project s key i now → v {
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `UPDATE notes SET touched = ?3 WHERE project = ?1 AND key = ?2` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 project )
+                    ( _ag_bind_s q 2 key )
+                    ( _ag_bind_i q 3 now )
+                    ( _ag_run q )
+                }
+            }
+        }
+    }
+}
+
+// A person marks a note to be kept (never expires) or not. F: no such note.
+@ ag_note_set_keep AgStore st s project s key b keep → b {
+    : ~ b ok F
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `UPDATE notes SET keep = ?3 WHERE project = ?1 AND key = ?2` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_s q 1 project )
+                    ( _ag_bind_s q 2 key )
+                    ( _ag_bind_i q 3 ? keep 1 0 )
+                    = ok & ( _ag_run q ) > ( sqlite_changes db ) 0
+                }
+            }
+        }
+    }
+    ^ ok
 }
 
 @ ag_note_get AgStore st s project s key → ?AgNote {
     : ~ b found F
-    : ~ AgNote out @ AgNote { ( string_new ) ( string_new ) ( string_new ) ( string_new ) 0 F ( string_new ) 0 }
+    : ~ AgNote out @ AgNote { ( string_new ) ( string_new ) ( string_new ) ( string_new ) 0 F ( string_new ) 0 ( string_new ) F 0 }
     : String sql ( string_from `SELECT ` )
     ( string_push_str sql AG_NOTE_COLS )
     ( string_push_str sql ` FROM notes WHERE project = ?1 AND key = ?2` )
@@ -1571,7 +1888,7 @@ $ `stdlib/core/slice.nu`
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            : String sql ( string_from ? full `SELECT project, key, body, author, updated, rule, promoted_by, rev FROM notes` `SELECT project, key, '', author, updated, rule, promoted_by, rev FROM notes` )
+            : String sql ( string_from ? full `SELECT project, key, body, author, updated, rule, promoted_by, rev, description, keep, touched FROM notes` `SELECT project, key, '', author, updated, rule, promoted_by, rev, description, keep, touched FROM notes` )
             ? all {} { ( string_push_str sql ` WHERE project = ?1` ) }
             ( string_push_str sql ` ORDER BY project, key` )
             ?? ( sqlite_prepare db ( string_data sql ) ) {
@@ -1822,6 +2139,166 @@ $ `stdlib/core/slice.nu`
         }
     }
     ^ n
+}
+
+// ── Task history and traffic, for the flow charts ─────────────────────
+
+// Every task step, oldest first, as [task, ts, kind, agent] rows: a
+// page draws the cumulative flow, lead times and abandoned claims from
+// these.
+@ ag_task_events_json AgStore st → Json {
+    : Json arr ( json_arr_new )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT task, ts, kind, agent FROM task_events ORDER BY ts, id` ) {
+                F _ → {}
+                T q → {
+                    ~ ( _ag_row q ) {
+                        : Json e ( json_arr_new )
+                        ( json_arr_push e ( json_int ( sqlite_column_int q 0 ) ) )
+                        ( json_arr_push e ( json_int ( sqlite_column_int q 1 ) ) )
+                        : String k ( sqlite_column_text q 2 )
+                        : String a ( sqlite_column_text q 3 )
+                        ( json_arr_push e ( json_str_lit ( string_data k ) ) )
+                        ( json_arr_push e ( json_str_lit ( string_data a ) ) )
+                        ( json_arr_push arr e )
+                    }
+                }
+            }
+        }
+    }
+    ^ arr
+}
+
+// Posts per channel per day since day `since`, as [channel, day, n]
+// rows; every mailbox counts as one channel, `@mail`.
+@ ag_msg_daily_json AgStore st i since → Json {
+    : Json arr ( json_arr_new )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT CASE WHEN channel LIKE '@%' THEN '@mail' ELSE channel END AS ch, ts / 86400 AS day, COUNT(*) FROM messages WHERE ts >= ?1 * 86400 GROUP BY ch, day ORDER BY day, ch` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_i q 1 since )
+                    ~ ( _ag_row q ) {
+                        : Json e ( json_arr_new )
+                        : String c ( sqlite_column_text q 0 )
+                        ( json_arr_push e ( json_str_lit ( string_data c ) ) )
+                        ( json_arr_push e ( json_int ( sqlite_column_int q 1 ) ) )
+                        ( json_arr_push e ( json_int ( sqlite_column_int q 2 ) ) )
+                        ( json_arr_push arr e )
+                    }
+                }
+            }
+        }
+    }
+    ^ arr
+}
+
+// ── Usage ─────────────────────────────────────────────────────────────
+//
+// What went through the MCP face, for the people who pay for the
+// tokens: one row per (day, repository, agent, operation) with how many
+// calls, how many bytes of arguments the model wrote (in) and how many
+// bytes of answer it read back into its context (out). A day is the UTC
+// day number (unix seconds / 86400). Tokens are estimated from bytes at
+// the edge (AG_BYTES_PER_TOKEN): agora never sees a tokenizer.
+
+: i AG_BYTES_PER_TOKEN 4
+
+: AgUsage {
+    String repo
+    String agent
+    String op
+    i day
+    i calls
+    i bytes_in
+    i bytes_out
+}
+
+// Add one call's bytes to its row (made on first use).
+@ ag_usage_add AgStore st s repo s agent s op i day i bytes_in i bytes_out → b {
+    : ~ b ok F
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `INSERT INTO usage (day, repo, agent, op, calls, bytes_in, bytes_out) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6) ON CONFLICT (day, repo, agent, op) DO UPDATE SET calls = calls + 1, bytes_in = bytes_in + excluded.bytes_in, bytes_out = bytes_out + excluded.bytes_out` ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_i q 1 day )
+                    ( _ag_bind_s q 2 repo )
+                    ( _ag_bind_s q 3 agent )
+                    ( _ag_bind_s q 4 op )
+                    ( _ag_bind_i q 5 bytes_in )
+                    ( _ag_bind_i q 6 bytes_out )
+                    = ok ( _ag_run q )
+                }
+            }
+        }
+    }
+    ^ ok
+}
+
+// The columns a grouping keeps; the others read '' / 0.
+@ __ag_usage_cols s by → s {
+    ? != 0 ( nurl_str_eq by `repo` ) { ^ `repo, '', '', 0` } {}
+    ? != 0 ( nurl_str_eq by `agent` ) { ^ `repo, agent, '', 0` } {}
+    ? != 0 ( nurl_str_eq by `op` ) { ^ `'', '', op, 0` } {}
+    ? != 0 ( nurl_str_eq by `day` ) { ^ `'', '', '', day` } {}
+    ^ `'', '', '', 0`
+}
+
+@ __ag_usage_group s by → s {
+    ? != 0 ( nurl_str_eq by `repo` ) { ^ ` GROUP BY repo` } {}
+    ? != 0 ( nurl_str_eq by `agent` ) { ^ ` GROUP BY repo, agent` } {}
+    ? != 0 ( nurl_str_eq by `op` ) { ^ ` GROUP BY op` } {}
+    ? != 0 ( nurl_str_eq by `day` ) { ^ ` GROUP BY day` } {}
+    ^ ``
+}
+
+// The usage since day `since` (0 = all), within repository `repo` and
+// agent `agent` ('' = any), summed `by` repo | agent | op | day | total —
+// largest first (by day: oldest first). At most 500 rows.
+@ ag_usage_rows AgStore st s by i since s repo s agent → ( Vec AgUsage ) {
+    : ( Vec AgUsage ) out ( vec_new [AgUsage] )
+    : String sql ( string_from `SELECT ` )
+    ( string_push_str sql ( __ag_usage_cols by ) )
+    ( string_push_str sql `, COALESCE(SUM(calls), 0), COALESCE(SUM(bytes_in), 0), COALESCE(SUM(bytes_out), 0) FROM usage WHERE day >= ?1 AND (?2 = '' OR repo = ?2) AND (?3 = '' OR agent = ?3)` )
+    ( string_push_str sql ( __ag_usage_group by ) )
+    ( string_push_str sql ? != 0 ( nurl_str_eq by `day` ) ` ORDER BY day` ` ORDER BY SUM(bytes_in) + SUM(bytes_out) DESC, SUM(calls) DESC` )
+    ( string_push_str sql ` LIMIT 500` )
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
+                F _ → {}
+                T q → {
+                    ( _ag_bind_i q 1 since )
+                    ( _ag_bind_s q 2 repo )
+                    ( _ag_bind_s q 3 agent )
+                    ~ ( _ag_row q ) {
+                        : i calls ( sqlite_column_int q 4 )
+                        // A total over no rows is one row of zeros: keep it,
+                        // so `total` always answers.
+                        ? | > calls 0 == ( nurl_str_len ( __ag_usage_group by ) ) 0 {
+                            ( vec_push [AgUsage] out @ AgUsage {
+                                ( sqlite_column_text q 0 )
+                                ( sqlite_column_text q 1 )
+                                ( sqlite_column_text q 2 )
+                                ( sqlite_column_int q 3 )
+                                calls
+                                ( sqlite_column_int q 5 )
+                                ( sqlite_column_int q 6 )
+                            } )
+                        } {}
+                    }
+                }
+            }
+        }
+    }
+    ^ out
 }
 
 // ── Feedback ──────────────────────────────────────────────────────────

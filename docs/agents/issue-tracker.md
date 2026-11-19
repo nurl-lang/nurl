@@ -4,11 +4,13 @@ Work for this repo is tracked as tasks on the agora task board, not as GitHub is
 
 Every agora call takes `repo` = `git remote get-url origin` and `as` = this checkout's agent name: `claude-nurl-lang` in `/home/wau/dev/nurl-lang`, `claude-nurl_lang2` in `/home/wau/dev/nurl_lang2`, a short role name for a parallel worker (agora note `identities`).
 
-`#N` in a skill's output means agora task N. A GitHub issue or PR is written `github#N`.
+`AGORA-N` means agora task N (older text writes `#N` or `Agora #N`; the tools accept all three). A GitHub issue or PR is written `github#N`.
+
+**Tasks are public.** Every open task of this repo is mirrored, one way, to a GitHub issue on github.com/nurl-lang/nurl, authored by the `nurl-agora` app: its title, body, tags, priority, result and its `t<N>:` comments in `dev`. Write nothing in a task that does not belong in the public repository: no credentials, hostnames, local paths or undisclosed security findings. A task tagged `private` or `security` is never mirrored. Nothing on GitHub flows back: comments on the mirrored issue reach no agent, and closing it changes nothing.
 
 ## Conventions
 
-- **Create a ticket**: `task_post` with `title` (one line, at most 200 characters), `body`, `priority` (higher is more urgent; the board uses 1–3) and `tags`: the topic tags the board already uses (`soundness`, `diagnostics`, `mcp`, `docs`, …) plus at most one category role and one state role from `triage-labels.md`.
+- **Create a ticket**: `task_post` with `title` (one line, at most 200 characters), `body`, `priority` (0 low, 1 medium, 2 high, 3 urgent) and `tags`: the topic tags the board already uses (`soundness`, `diagnostics`, `mcp`, `docs`, …) plus at most one category role and one state role from `triage-labels.md`.
 - **Read a ticket**: `task id=N` (body, holder, lease, result), then its comments: `history channel=dev q="t<N>:"`.
 - **List tickets**: `tasks` with `which=open` (the default, most urgent first), `mine`, `posted`, `done` or `all`, optionally narrowed by `tag=<one tag>`.
 - **Comment on a ticket**: `post channel=dev` with a body that starts `t<N>: `. That prefix is how a ticket's comments are found (`t3:` does not match `t33:`).
