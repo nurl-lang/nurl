@@ -982,9 +982,12 @@ $ `auth.nu`
     String text
 }
 
+// `before` (a listing's own resolved cutoff, sent back by a bulk action)
+// wins over `days`, so the selection does not move while a person decides.
 @ __ag_trash_q Json b i now → AgTrashQ {
     : i days ( _ag_arg_int b `days` 0 )
-    ^ @ AgTrashQ { ( _ag_arg_str b `kind` ) ( _ag_arg_str b `author` ) ? > days 0 - now * days 86400 0 ( _ag_arg_str b `q` ) }
+    : i cut ? ( _ag_has_arg b `before` ) ( _ag_arg_int b `before` 0 ) ? > days 0 - now * days 86400 0
+    ^ @ AgTrashQ { ( _ag_arg_str b `kind` ) ( _ag_arg_str b `author` ) cut ( _ag_arg_str b `q` ) }
 }
 
 @ __ag_query_obj HttpRequest req → Json {
@@ -1022,6 +1025,7 @@ $ `auth.nu`
     : Json out ( json_obj_new )
     ( json_obj_set out `items` arr )
     ( json_obj_set out `max_id` ( json_int ( ag_trash_max_id . w rs ) ) )
+    ( json_obj_set out `before` ( json_int . f before ) )
     ( json_obj_set out `total` ( json_int ( ag_trash_count . w rs ( string_data . f kind ) ( string_data . f author ) . f before ( string_data . f text ) ) ) )
     : Json kinds ( json_obj_new )
     : ( Vec String ) ks ( vec_new [String] )

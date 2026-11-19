@@ -1379,10 +1379,11 @@ async function loadTrash(offset, limit) {
   if (trRendered !== repo) { $("#tr-list").innerHTML = ""; trSel.clear(); trSelChanged(); }
   trStale();
   const d = await api("GET", R("/m/trash", Object.assign({}, filter, { limit: trPage.limit, offset: trPage.offset })));
-  if (seq !== trSeq || repo !== REPO) return;
+  if (seq !== trSeq || repo !== REPO || JSON.stringify(trFilter()) !== JSON.stringify(filter)) return;
   // max_id: the newest item there was when this list was read; a bulk
   // delete never reaches past it (anything trashed since was not shown).
-  trShown = { repo, filter, max_id: d.max_id || 0, total: d.total }; trRendered = repo; $("#tr-del-all").disabled = false;
+  // before: the age cutoff the server resolved for `days`, kept as it was.
+  trShown = { repo, filter, max_id: d.max_id || 0, before: d.before || 0, total: d.total }; trRendered = repo; $("#tr-del-all").disabled = false;
   const sel = $("#tr-kind"), cur = sel.value, all = Object.values(d.kinds).reduce((a, b) => a + b, 0);
   sel.innerHTML = `<option value="">every kind (${all})</option>` +
     Object.entries(d.kinds).map(([k, n]) => `<option value="${k}">${k}s (${n})</option>`).join("");
@@ -1442,7 +1443,8 @@ async function restoreTrash(ids, one) {
 $("#tr-go").onclick = () => run(() => loadTrash(0, trPage.limit));
 $("#tr-q").onkeydown = $("#tr-author").onkeydown = (e) => { if (e.key === "Enter") run(() => loadTrash(0, trPage.limit)); };
 // A changed filter no longer matches the list shown: no bulk delete until it is searched.
-$("#tr-q").oninput = $("#tr-author").oninput = trStale;
+// …and a list still on its way for the old filter must not re-enable it.
+$("#tr-q").oninput = $("#tr-author").oninput = () => { trSeq++; trStale(); };
 $("#tr-kind").onchange = $("#tr-days").onchange = () => run(() => loadTrash(0, trPage.limit));
 $("#tr-all").onchange = () => {
   document.querySelectorAll("#tr-list input[type=checkbox]").forEach(cb => { cb.checked = $("#tr-all").checked; cb.onchange(); });
@@ -1457,7 +1459,7 @@ $("#tr-del-all").onclick = () => run(async () => {
   const shown = trShown;
   if (!shown || shown.repo !== REPO) return;
   if (!confirmDel(`everything the filter shows (every page, ${shown.total ?? "all"} items)`)) return;
-  const d = await api("POST", R("/m/trash/delete"), Object.assign({ all: true, max_id: shown.max_id }, shown.filter)); toast(d.deleted + " deleted for good");
+  const d = await api("POST", R("/m/trash/delete"), Object.assign({}, shown.filter, { all: true, max_id: shown.max_id, before: shown.before })); toast(d.deleted + " deleted for good");
   await loadTrash(0, trPage.limit);
 });
 

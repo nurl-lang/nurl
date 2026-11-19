@@ -1747,6 +1747,7 @@ $ `src/service.nu`
     ( vec_push [String] pats ( string_from `secret\.example` ) )
     ( vec_push [String] pats ( string_from `internal #[0-9]+` ) )
     ( ag_gh_mirror_configure repos F pats `ops` )
+    ( ag_gh_set_slug `agora-test` )
     ( ag_gh_fake T 0 0 )
     ( _gh_bo_note F 0 0 )
     : i now ( now_seconds )
@@ -1936,6 +1937,22 @@ $ `src/service.nu`
     ( check & ( has ( gh_sent_text dr ) `POST /repos/o/r/issues` ) < ( gh_issue_of dr tj ) 0 `mirror: a dry run logs what it would send` )
     ( ag_gh_mirror_mode dr 2 now )
     ( check & == ( gh_issue_of dr tj ) 0 == ( gh_queue dr ) 1 `mirror: going live drops the stand-ins and back-fills again` )
+    // Live → dry run → finished → live: the real issue is still closed.
+    ( ag_gh_fake T 0 0 )
+    ( gh_drain dr now )
+    : i real ( gh_issue_of dr tj )
+    ( ag_gh_mirror_mode dr 1 now )
+    ( ag_task_claim dr tj `bob` 600 now )
+    ( ag_task_done dr tj `bob` `done while dry` now )
+    ( gh_drain dr now )
+    // What the dry run logged is not what live writes.
+    ?? ( _ag_conn dr ) { F _ → {} T db → { ?? ( sqlite_exec db `DELETE FROM gh_dry` ) { T _ → {} F _ → {} } } }
+    ( ag_gh_mirror_mode dr 2 now )
+    ( gh_drain dr now )
+    : String closep ( string_from `PATCH /repos/o/r/issues/` )
+    ( string_push_int closep real )
+    ( string_push_str closep ` {"state":"closed","state_reason":"completed"}` )
+    ( check & > real 0 ( has ( gh_sent_text dr ) ( string_data closep ) ) `mirror: a task finished during a dry run is closed once live again` )
     ( ag_gh_off )
 }
 

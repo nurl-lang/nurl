@@ -253,7 +253,6 @@ $ `stdlib/core/slice.nu`
         T db → {
             ?? ( sqlite_exec db `PRAGMA journal_mode=WAL` ) { T _ → {} F _ → {} }
             : b old_notes ( __ag_notes_need_project db )
-            : b no_events ! ( __ag_table_exists db `task_events` )
             // 0.3.0: agents.origin. Adding a column needs no copy.
             ? ( __ag_table_lacks db `agents` `origin` ) {
                 ?? ( sqlite_exec db `ALTER TABLE agents ADD COLUMN origin TEXT NOT NULL DEFAULT ''` ) { T _ → {} F _ → {} }
@@ -306,7 +305,7 @@ $ `stdlib/core/slice.nu`
                 ?? ( sqlite_exec db `UPDATE notes SET touched = CAST(strftime('%s', 'now') AS INTEGER)` ) { T _ → {} F _ → {} }
             } {}
             ( __ag_retag_on db )
-            ? & no_events ! failed { ( __ag_task_events_backfill db ) } {}
+            ? failed {} { ( __ag_task_events_backfill db ) }
             = ok ! failed
         }
     }
@@ -396,22 +395,41 @@ $ `stdlib/core/slice.nu`
 // expired — in either spelling, `task #N` or `AGORA-N`) happened when
 // that mail was sent; a task finished or held with no such mail (its
 // poster did it) is dated by its last change.
+// 0.9.0: task_events filled from what is known (task rows, task mail),
+// once per file: the `task_events_filled` setting says it is done. The
+// check, the filling and the mark are one transaction, and any statement
+// failing rolls it all back (the next open tries again). A file with
+// events already (filled before the mark existed) is only marked.
 @ __ag_task_events_backfill Database db → v {
-    // Several processes may open a pre-0.9 file at once: one fills it,
-    // in one transaction, and only while it is empty.
+    ? > ( __ag_setting_on db `task_events_filled` 0 ) 0 { ^ v } {}
     ? ( _ag_begin db ) {} { ^ v }
-    : ~ i have 1
+    ? > ( __ag_setting_on db `task_events_filled` 0 ) 0 { ( _ag_rollback db ) ^ v } {}
+    : ~ i have -1
     ?? ( sqlite_prepare db `SELECT COUNT(*) FROM task_events` ) {
         F _ → {}
         T q → { ? ( _ag_row q ) { = have ( sqlite_column_int q 0 ) } {} }
     }
-    ? > have 0 { ( _ag_rollback db ) ^ v } {}
-    ?? ( sqlite_exec db `INSERT INTO task_events (task, ts, kind, agent) SELECT id, created, 'post', poster FROM tasks ORDER BY id` ) { T _ → {} F _ → {} }
-    ?? ( sqlite_exec db `WITH m AS (SELECT id, ts, sender, channel, body, CAST(substr(body, 7) AS INTEGER) AS n FROM messages WHERE channel LIKE '@%' AND (body LIKE 'task #%' OR body LIKE 'AGORA-%')), r AS (SELECT id, ts, sender, channel, n, substr(body, 7 + length(CAST(n AS TEXT))) AS rest FROM m WHERE n > 0) INSERT INTO task_events (task, ts, kind, agent) SELECT n, ts, CASE WHEN rest LIKE ' claimed by %' THEN 'claim' WHEN rest LIKE ' lease expired%' THEN 'expire' WHEN rest LIKE ' done by %' THEN 'done' WHEN rest LIKE ' released by %' THEN 'release' ELSE 'cancel' END, CASE WHEN rest LIKE ' lease expired%' THEN substr(channel, 2) ELSE sender END FROM r WHERE rest LIKE ' claimed by %' OR rest LIKE ' lease expired%' OR rest LIKE ' done by %' OR rest LIKE ' released by %' OR rest LIKE ' cancelled by %' ORDER BY ts, id` ) { T _ → {} F _ → {} }
-    ?? ( sqlite_exec db `INSERT INTO task_events (task, ts, kind, agent) SELECT id, updated, 'done', owner FROM tasks t WHERE status = 'done' AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'done')` ) { T _ → {} F _ → {} }
-    ?? ( sqlite_exec db `INSERT INTO task_events (task, ts, kind, agent) SELECT id, updated, 'cancel', poster FROM tasks t WHERE status = 'cancelled' AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'cancel')` ) { T _ → {} F _ → {} }
-    ?? ( sqlite_exec db `INSERT INTO task_events (task, ts, kind, agent) SELECT id, updated, 'claim', owner FROM tasks t WHERE status = 'claimed' AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'claim')` ) { T _ → {} F _ → {} }
-    ? ( _ag_commit db ) {} { ( _ag_rollback db ) }
+    ? < have 0 { ( _ag_rollback db ) ^ v } {}
+    : ~ b ok T
+    ? == have 0 {
+        : ( Vec String ) sql ( vec_new [String] )
+        ( vec_push [String] sql ( string_from `INSERT INTO task_events (task, ts, kind, agent) SELECT id, created, 'post', poster FROM tasks ORDER BY id` ) )
+        ( vec_push [String] sql ( string_from `WITH m AS (SELECT id, ts, sender, channel, body, CAST(substr(body, 7) AS INTEGER) AS n FROM messages WHERE channel LIKE '@%' AND (body LIKE 'task #%' OR body LIKE 'AGORA-%')), r AS (SELECT id, ts, sender, channel, n, substr(body, 7 + length(CAST(n AS TEXT))) AS rest FROM m WHERE n > 0) INSERT INTO task_events (task, ts, kind, agent) SELECT n, ts, CASE WHEN rest LIKE ' claimed by %' THEN 'claim' WHEN rest LIKE ' lease expired%' THEN 'expire' WHEN rest LIKE ' done by %' THEN 'done' WHEN rest LIKE ' released by %' THEN 'release' ELSE 'cancel' END, CASE WHEN rest LIKE ' lease expired%' THEN substr(channel, 2) ELSE sender END FROM r WHERE rest LIKE ' claimed by %' OR rest LIKE ' lease expired%' OR rest LIKE ' done by %' OR rest LIKE ' released by %' OR rest LIKE ' cancelled by %' ORDER BY ts, id` ) )
+        ( vec_push [String] sql ( string_from `INSERT INTO task_events (task, ts, kind, agent) SELECT id, updated, 'done', owner FROM tasks t WHERE status = 'done' AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'done')` ) )
+        ( vec_push [String] sql ( string_from `INSERT INTO task_events (task, ts, kind, agent) SELECT id, updated, 'cancel', poster FROM tasks t WHERE status = 'cancelled' AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'cancel')` ) )
+        ( vec_push [String] sql ( string_from `INSERT INTO task_events (task, ts, kind, agent) SELECT id, updated, 'claim', owner FROM tasks t WHERE status = 'claimed' AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task = t.id AND e.kind = 'claim')` ) )
+        : i n ( vec_len [String] sql )
+        : ~ i k 0
+        ~ & ok < k n {
+            ?? ( vec_get [String] sql k ) {
+                T x → { ?? ( sqlite_exec db ( string_data x ) ) { T _ → {} F _ → { = ok F } } }
+                F _ → {}
+            }
+            = k + k 1
+        }
+    } {}
+    ? ok { = ok ( __ag_setting_put_on db `task_events_filled` 1 ) } {}
+    ? ok { ? ( _ag_commit db ) {} { ( _ag_rollback db ) } } { ( _ag_rollback db ) }
 }
 
 // One step of task `task`: post | claim | done | release | expire |

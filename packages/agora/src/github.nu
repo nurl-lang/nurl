@@ -283,6 +283,7 @@ $ `ghstore.nu`
         }
         = j + j 1
     }
+    ? & > nm 0 == ( string_len ( _gh_slug ) ) 0 { ( string_push_str why `[github] mirror: the app file needs the App's slug (from the manifest answer)` ) ^ F } {}
     : String alert ( ag_config_str cfg `github.mirror_alert` `` )
     ( ag_gh_mirror_configure mirror ( ag_config_bool cfg `github.dry_run` T ) redact ( string_data alert ) )
     ^ T
@@ -696,7 +697,7 @@ $ `ghstore.nu`
     : ~ i k 0
     ~ < k n {
         : i p ?? ( vec_get [i] prs k ) { T x → x F _ → 0 }
-        ? | ! only_new ! ( ag_gh_pr_known st p ) { ( vec_push [i] todo p ) } {}
+        ? | ! only_new ! ( ag_gh_pr_asked st p ) { ( vec_push [i] todo p ) } {}
         = k + k 1
     }
     ? == ( vec_len [i] todo ) 0 {

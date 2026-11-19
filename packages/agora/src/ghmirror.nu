@@ -160,7 +160,7 @@ $ `web.nu`
                 ?? ( sqlite_prepare db `UPDATE gh_task_prs SET noted = 0` ) { F _ → {} T q → { ( _ag_run q ) } }
                 ? == mode 2 { ?? ( sqlite_prepare db `DELETE FROM gh_labels` ) { F _ → {} T q → { ( _ag_run q ) } } } {}
                 ?? ( sqlite_prepare db `UPDATE gh_outbox SET done = 1, error = 'superseded by a back-fill' WHERE done = 0` ) { F _ → {} T q → { ( _ag_run q ) } }
-                ?? ( sqlite_prepare db `INSERT INTO gh_outbox (task, kind, msg, created) SELECT task, kind, msg, ?1 FROM (SELECT t.id AS task, 'post' AS kind, 0 AS msg, t.id AS o1, 0 AS o2 FROM tasks t WHERE t.status IN ('open', 'claimed') UNION ALL SELECT t.id, 'comment', m.id, t.id, m.id FROM tasks t JOIN messages m ON m.channel = 'dev' AND (m.body LIKE 't' || t.id || ':%') WHERE t.status IN ('open', 'claimed') UNION ALL SELECT t.id, 'pr', p.pr, t.id, 1000000000 + p.pr FROM tasks t JOIN gh_task_prs p ON p.task = t.id WHERE t.status IN ('open', 'claimed')) ORDER BY o1, o2` ) {
+                ?? ( sqlite_prepare db `INSERT INTO gh_outbox (task, kind, msg, created) SELECT task, kind, msg, ?1 FROM (SELECT t.id AS task, 'post' AS kind, 0 AS msg, t.id AS o1, 0 AS o2 FROM tasks t WHERE t.status IN ('open', 'claimed') UNION ALL SELECT t.id, 'comment', m.id, t.id, m.id FROM tasks t JOIN messages m ON m.channel = 'dev' AND (m.body LIKE 't' || t.id || ':%') WHERE t.status IN ('open', 'claimed') UNION ALL SELECT t.id, 'pr', p.pr, t.id, 1000000000 + p.pr FROM tasks t JOIN gh_task_prs p ON p.task = t.id WHERE t.status IN ('open', 'claimed') UNION ALL SELECT t.id, CASE WHEN t.status = 'done' THEN 'done' ELSE 'cancel' END, 0, t.id, 2000000000 FROM tasks t JOIN gh_issues g ON g.task = t.id AND g.number > 0 AND g.state != 'closed' WHERE t.status IN ('done', 'cancelled')) ORDER BY o1, o2` ) {
                     F _ → {}
                     T q → { ( _ag_bind_i q 1 now ) ( _ag_run q ) }
                 }
@@ -580,16 +580,17 @@ $ `web.nu`
 // issue (not a PR) by the App's own bot counts: anyone can write a marker.
 @ __ghm_find AgStore st AgGhConf c HttpClient h s auth i task s full i now → GhmOut {
     : String slug ( _gh_slug )
+    // Without the App's slug its own issues cannot be told from another
+    // bot's: never adopt one then — and never make a second either.
+    ? == ( string_len slug ) 0 { ^ @ GhmOut { 0 ( json_null ) 0 ( string_from `github-app.json has no slug: cannot tell the App's issues` ) } } {}
     : String bot ( string_clone slug )
     ( string_push_str bot `[bot]` )
     : String path ( string_from `/repos/` )
     ( string_push_str path full )
     ( string_push_str path `/issues?state=all&sort=created&direction=desc&per_page=100` )
-    ? > ( string_len slug ) 0 {
-        ( string_push_str path `&creator=` )
-        ( string_push_str path ( string_data slug ) )
-        ( string_push_str path `%5Bbot%5D` )
-    } {}
+    ( string_push_str path `&creator=` )
+    ( string_push_str path ( string_data slug ) )
+    ( string_push_str path `%5Bbot%5D` )
     : GhmOut o ( __ghm_send st c h auth F task `GET` ( string_data path ) ( json_null ) now )
     ? != . o status 200 { ^ o } {}
     : String marker ( string_from `<!-- agora-task: ` )
@@ -602,7 +603,7 @@ $ `web.nu`
             T it → {
                 : String b ( _gh_s it `body` )
                 : Json u ( _gh_obj it `user` )
-                : b by_app & != 0 ( nurl_str_eq ( string_data ( _gh_s u `type` ) ) `Bot` ) | == ( string_len slug ) 0 ( string_eq ( _gh_s u `login` ) bot )
+                : b by_app & != 0 ( nurl_str_eq ( string_data ( _gh_s u `type` ) ) `Bot` ) ( string_eq ( _gh_s u `login` ) bot )
                 : b is_pr ! ( json_is_null ( _gh_obj it `pull_request` ) )
                 ? & & by_app ! is_pr ( string_contains b ( string_data marker ) ) {
                     : Json r ( json_obj_new )

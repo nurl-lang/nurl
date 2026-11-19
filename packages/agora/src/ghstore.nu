@@ -504,7 +504,8 @@ $ `store.nu`
         F _ → {}
         T q → {
             ( _ag_bind_i q 1 number )
-            ? ( _ag_row q ) {
+            // updated = -1: a placeholder (asked, never seen): no state.
+            ? & ( _ag_row q ) >= ( sqlite_column_int q 2 ) 0 {
                 = r @ GhPrRow { T ( sqlite_column_text q 0 ) ( sqlite_column_text q 1 ) ( sqlite_column_int q 2 )
                     ( sqlite_column_text q 3 ) != ( sqlite_column_int q 4 ) 0 ( sqlite_column_text q 5 ) }
             } {}
@@ -547,8 +548,8 @@ $ `store.nu`
     // A new head: a CI result still waiting is for the old one.
     ? & . old found == 0 ( nurl_str_eq ( string_data . old head ) ( string_data . e head ) ) {
         ?? ( sqlite_prepare db `DELETE FROM gh_notices WHERE pr = ?1 AND kind = 'ci' AND delivered = 0` ) {
-            F _ → {}
-            T q → { ( _ag_bind_i q 1 . e number ) ( _ag_run q ) }
+            F _ → { ^ F }
+            T q → { ( _ag_bind_i q 1 . e number ) ? ( _ag_run q ) {} { ^ F } }
         }
     } {}
     : b merged != 0 ( nurl_str_eq ( string_data . e state ) `merged` )
@@ -720,7 +721,7 @@ $ `store.nu`
         }
     }
     ? stale { ^ T } {}
-    ?? ( sqlite_prepare db `INSERT INTO gh_runs (run_id, attempt, workflow, head_sha, pr, status, conclusion, url, updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT (run_id) DO UPDATE SET attempt = excluded.attempt, status = excluded.status, conclusion = excluded.conclusion, url = excluded.url, updated = excluded.updated` ) {
+    ?? ( sqlite_prepare db `INSERT INTO gh_runs (run_id, attempt, workflow, head_sha, pr, status, conclusion, url, updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT (run_id) DO UPDATE SET attempt = excluded.attempt, workflow = excluded.workflow, status = excluded.status, conclusion = excluded.conclusion, url = excluded.url, updated = excluded.updated` ) {
         F _ → { = ok F }
         T q → {
             ( _ag_bind_i q 1 . r id )
@@ -854,13 +855,15 @@ $ `store.nu`
     }
 }
 
-// PR `number` asked about and not seen (404): kept as an open PR with no
-// head and no time, so any real event or read replaces it.
+// PR `number` asked about and not seen (404): a placeholder row
+// (updated = -1) that is no state at all — the first real read is still a
+// silent baseline — but marks the PR as asked, so it is asked again with
+// the 10-minute round, not every second.
 @ ag_gh_pr_placeholder AgStore st i number i now → v {
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `INSERT INTO gh_prs (number, title, url, state, head_sha, merge_sha, updated, seen) VALUES (?1, '', '', 'open', '', '', 0, ?2) ON CONFLICT (number) DO NOTHING` ) {
+            ?? ( sqlite_prepare db `INSERT INTO gh_prs (number, title, url, state, head_sha, merge_sha, updated, seen) VALUES (?1, '', '', '', '', '', -1, ?2) ON CONFLICT (number) DO NOTHING` ) {
                 F _ → {}
                 T q → { ( _ag_bind_i q 1 number ) ( _ag_bind_i q 2 now ) ( _ag_run q ) }
             }
@@ -868,7 +871,22 @@ $ `store.nu`
     }
 }
 
-// Is PR `number` known (has GitHub been asked about it, or told us)?
+// Has GitHub been asked about PR `number` (a placeholder counts)?
+@ ag_gh_pr_asked AgStore st i number → b {
+    : ~ b asked F
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT 1 FROM gh_prs WHERE number = ?1` ) {
+                F _ → {}
+                T q → { ( _ag_bind_i q 1 number ) = asked ( _ag_row q ) }
+            }
+        }
+    }
+    ^ asked
+}
+
+// Is PR `number` known (its state read, or told us)?
 @ ag_gh_pr_known AgStore st i number → b {
     : ~ b known F
     ?? ( _ag_conn st ) {

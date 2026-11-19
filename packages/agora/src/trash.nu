@@ -536,10 +536,11 @@ $ `store.nu`
 // sweeps even when another process just did. Returns what moved.
 @ ag_sweep AgStore st AgExpiry e b force i now → AgSwept {
     : ~ AgSwept r @ AgSwept { 0 0 0 0 0 0 0 }
+    : AgSwept failed @ AgSwept { -1 0 0 0 0 0 0 }
     ?? ( _ag_conn st ) {
-        F _ → {}
+        F _ → { ^ failed }
         T db → {
-            ? ( _ag_begin db ) {} { ^ r }
+            ? ( _ag_begin db ) {} { ^ failed }
             // Another process sharing the file may have just swept it.
             : i last ( __ag_setting_on db `last_sweep` 0 )
             ? & ! force > + last AG_SWEEP_EVERY now { ( _ag_rollback db ) ^ r } {}
