@@ -104274,6 +104274,11 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
     ? & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__fe_copy` ) { ^ 2 } {}
     ? & & & & != 0 ( nurl_str_len op ) != 0 ( nurl_sym_len2 syms op `__pslot` ) ! ( seq ( nurl_sym_get2 syms obj `__inout` ) `1` ) == 0 ( nurl_sym_len2 syms obj `__sinkp` ) == 0 ( nurl_str_len g_drop_glue_ty ) { ^ ? ( seq ( nurl_sym_get2 syms obj `__cloparam` ) `1` ) 5 1 } {}
     ? != 0 g_lendcopy_any { ? != 0 ( nurl_sym_len2 syms obj `__lendcopy` ) { ^ 4 } {} } {}
+    // (A `??` arm's payload of a program enum: the enum lends it to the
+    // arm, read in place - MEMORY.md, h231 - and the arm works on a copy of
+    // it; a matched temporary's too, which drops the old value and leaves
+    // the new one to no one. Agora #883.)
+    ? & != 0 g_epl_n != 0 ( nurl_sym_len2 syms obj `__enum_pl` ) { ^ 6 } {}
     ^ 0
 }
 
@@ -104413,6 +104418,9 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
         ^ ( nurl_str_cat4 head obj ( nurl_str_cat3 `' is a copy of the value a call lent it out of '` ty `' — binding a lent struct copies it, so the store lands in that copy and '` )
         ( nurl_str_cat3 ty `' keeps its old value. Replace the value where it lives (vec_put / vec_set for a Vec element, a field store through its owner), or bind an owned copy with ( mem_dup … ) if '` ( nurl_str_cat obj `' is meant to be a value of its own.` ) ) )
     } {}
+    ? == kind 6 {
+        ^ ( nurl_str_cat4 head obj `' is a payload an enum lends this '??' arm — the arm binds a copy of it, so the store lands in that copy and the enum keeps its old value. ` `Give the enum a new value with the field changed instead (= e @ … { … }), or bind an owned copy with ( mem_dup … ) if it is meant to be a value of its own.` )
+    } {}
     ? == kind 2 {
         ^ ( nurl_str_cat4 head obj `' is a loop element — a '~' loop binds a copy of each element, so the store lands in that copy and the container keeps its old value. `
         `Replace the element in the container instead (an index loop and vec_put / vec_set), or build the new values into another Vec.` )
@@ -104431,6 +104439,11 @@ unsafe @ __clo_take_capture i syms i cg s name → v {
     ? == kind 5 {
         : s why ( nurl_str_cat3 `' is a parameter of this closure, by value: the store lands in the body's own copy of the caller's ` ty `, the caller never sees it, and nothing would release the new value. ` )
         : s fix ( nurl_str_cat3 `Take it 'inout' (\ inout ` ty ( nurl_str_cat3 ` ` obj ` → …) if the caller should see the new value, or have the closure return the new value.` ) )
+        ^ ( nurl_str_cat3 head why fix )
+    } {}
+    ? == kind 6 {
+        : s why `' is a payload an enum lends this '??' arm: the arm binds a copy of it, so the store lands in that copy — the enum keeps its old value — and nothing would release the new one. `
+        : s fix `Give the enum a new value with the field changed instead (= e @ … { … }), or bind an owned copy with ( mem_dup … ) and change that.`
         ^ ( nurl_str_cat3 head why fix )
     } {}
     ? == kind 2 {
