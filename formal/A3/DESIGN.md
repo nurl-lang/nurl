@@ -4616,19 +4616,21 @@ environment, in the closure's heap block (`NurlCenvVt`'s env,
 ### The statement and its step
 
 - `Stmt.callcE x c j zs k`: `: x ( m c zs… )`, through the package `c`, of
-  method `j`. (The syntax and the step take `zs`; the first cut types
-  `zs = []`.)
+  method `j`. (AGORA-927: an `inout` interface may take parameters beside the
+  receiver, `zs`, each of whose dependencies is a binding's; the owned one,
+  a drop method, takes none, `zs = []`.)
 - `Step.callcE` (`c` owns `pkg fs te ms env []`, `fs[j] = f`): the store
   becomes `handMem` — `c`'s slot owns nothing, the environment is owned by the
   first fresh variable `y`, the result binding `x` is bound unset — and the
   statement `handStmt`:
 
-      scope x ( seq ( scope y ( seq ( letcall r f [y] ( = x r ) )
+      scope x ( seq ( scope y ( seq ( letcall r f ( y :: zs ) ( = x r ) )
                                     ( = c ( pack fs te ms y [] ) ) ) )
                     k )
 
   with `r = y + 1`: an ordinary call of the code with `y` its `inout`
-  receiver, its result moved to `x`, then the environment back into `c` as a
+  receiver and `zs` beside it as they are, its result moved to `x`, then the
+  environment back into `c` as a
   package of the same code and interfaces. Every form it leaves is one A2
   already types and runs; only the hand-over step itself is new.
 - *The design said "a new run-time form"; refined:* none is needed. Moving
@@ -4651,12 +4653,16 @@ model need not put it back.
 ### The rule (`StmtT.callcE`)
 
     k.src   Γ x = none   x ∉ F   Γ c = Ec   Ec.ty = fn ms q
-    canDo Ec.mode replace   send ≤ q   ms[j] = σ   σ.params = [(inout b, fn ms q)]
+    canDo Ec.mode replace   send ≤ q   ms[j] = σ   σ.params = (inout b, fn ms q) :: ps
+    ∀ z ∈ zs, ∀ d ∈ (argE Γ z).vdeps, Γ d.root ≠ none
     σ.lends = σ.rholds = σ.outHolds = []   NoPin Γ c   DtorSafe Γ replace c
-    CallT P (kill replace c Γ) F σ [c] E Γ1
+    CallT P (kill replace c Γ) F σ (c :: zs) E Γ1
     StmtT P (kill replace c (setE Γ1 x E)) F k Δ   EndOK Δ x   ¬ ThruFn P σ
     ───────────────────────────────────────────────────────────────────────
-    StmtT P Γ F (callcE x c j [] k) (exitScope x Δ)
+    StmtT P Γ F (callcE x c j zs k) (exitScope x Δ)
+
+  (Agora #609, the owned case: `σ.params = [(sink, Ec.ty)]` and `zs = []`, a
+  package that holds nothing, of the dropping class.)
 
 - The call is the interface's, with `c` its `inout` argument, after what
   depends on `c` has ended and with it ended again after: the environment
@@ -4667,6 +4673,13 @@ model need not put it back.
   bound `replace` (h366's helper) — never a borrow; not lent out; changed by
   name by no borrowed parameter; viewed by no destructor.
 - The receiver's class is at least `send`: the package is Send, not Sync.
+- AGORA-927, the parameters beside the receiver: `CallT` types them as any
+  call's arguments, so none is the package, views it, or is moved or changed
+  while the package views it (`callcE_arg_is_pkg`, `callcE_arg_views_pkg`,
+  `callcE_pkg_views_arg`). Each depends only on bindings: a well-formed
+  context gives that for every argument but a plain integer. An integer
+  argument with stale dependencies is not typed through `callcE`; no nurlc
+  program produces one.
 
 **`Implements` with an `inout` receiver.** `Fn.recvMode σ` is the mode the
 interface takes its receiver in. The code's first parameter is the
@@ -4757,9 +4770,9 @@ The program is typed whole, as `A2/DynCell.lean` types `pick`'s:
 
 ### Still not typed
 
-- An interface with parameters beside the receiver, or whose result borrows
-  from or holds views of the receiver (the second cut: the tail of the
-  call's post-context, as `post_rel` does for `callc`).
+- An interface whose result borrows from or holds views of the receiver (the
+  second cut: the tail of the call's post-context, as `post_rel` does for
+  `callc`). Parameters beside the receiver are typed (AGORA-927).
 - A package that captures by name and has a method that changes its
   environment (`Implements` asks `cs = []`).
 - A hand-over through a borrowed parameter (an `in` closure parameter): it is

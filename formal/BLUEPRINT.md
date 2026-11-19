@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,035 lines of Lean 4**, **928 theorems**, **1106 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **71 modules**, **70,469 lines of Lean 4**, **3126 theorems**, **4047 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **71 modules**, **70,468 lines of Lean 4**, **3127 theorems**, **4048 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -158,7 +158,7 @@ flowchart BT
   EditBV["EditBV<br/>(1328L, 40 thms)"]
   EditBVFnWitness["EditBVFnWitness<br/>(263L, 12 thms)"]
   Elem["Elem<br/>(67L, 1 thms)"]
-  EnvHand["EnvHand<br/>(2795L, 69 thms)"]
+  EnvHand["EnvHand<br/>(2794L, 70 thms)"]
   ExitWitness["ExitWitness<br/>(380L, 47 thms)"]
   Frame["Frame<br/>(1225L, 68 thms)"]
   Fresh["Fresh<br/>(153L, 3 thms)"]
@@ -335,7 +335,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/EditBV.lean`](A2/EditBV.lean) | 1328 | 40 | 1 | A view stored through a borrow (StmtT.editBV): every view-holding root of the borrow's path holds what the stored value depends on. |
 | 3. Proof Infrastructure | [`A2/EditBVFnWitness.lean`](A2/EditBVFnWitness.lean) | 263 | 12 | 17 |  |
 | 3. Proof Infrastructure | [`A2/Elem.lean`](A2/Elem.lean) | 67 | 1 | 0 | An element handed over (withElem, insert): the invariant does not see the order of an owned Vec's elements (MInv.perm). |
-| 3. Proof Infrastructure | [`A2/EnvHand.lean`](A2/EnvHand.lean) | 2795 | 69 | 5 | Closure and trait-object environment hand-over (StmtT.callcE) for inout receivers. |
+| 3. Proof Infrastructure | [`A2/EnvHand.lean`](A2/EnvHand.lean) | 2794 | 70 | 5 | Closure and trait-object environment hand-over (StmtT.callcE) for inout receivers. |
 | 3. Proof Infrastructure | [`A2/Fresh.lean`](A2/Fresh.lean) | 153 | 3 | 0 |  |
 | 3. Proof Infrastructure | [`A2/FreshBase.lean`](A2/FreshBase.lean) | 447 | 34 | 2 |  |
 | 3. Proof Infrastructure | [`A2/FreshClosureWitness.lean`](A2/FreshClosureWitness.lean) | 242 | 18 | 7 |  |

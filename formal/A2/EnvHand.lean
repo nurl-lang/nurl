@@ -883,6 +883,28 @@ theorem roots_sub_of {A B : List Dep} (h : A ⊆ B) {r : Var} (hr : r ∈ roots 
 theorem memDeps_sub_of {A B : List Dep} (h : A ⊆ B) : memDeps A ⊆ memDeps B := fun d hd =>
   List.mem_filter.mpr ⟨h (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩
 
+/-- **What the code's call's closures may change, the interface's may**: the
+    environment's binding depends on no more than the package, and each
+    argument beside it has the same entry in both contexts (`callT_hand`,
+    `hand_typed`). -/
+theorem mutNames_hand {Γh Γk : Ctx} {y c : Var} {zs : List Var}
+    (hy : (argE Γh y).ty ≠ .int) (hc : (argE Γk c).ty ≠ .int)
+    (hyv : (argE Γh y).vdeps ⊆ (argE Γk c).vdeps)
+    (hz : ∀ z ∈ zs, argE Γh z = argE Γk z) :
+    ∀ d ∈ mutNames Γh (y :: zs), d ∈ mutNames Γk (c :: zs) := by
+  intro d hd
+  simp only [mutNames, argNames, List.flatMap_cons, List.mem_filter, List.mem_append] at hd ⊢
+  obtain ⟨hd1, hd2⟩ := hd
+  refine ⟨?_, hd2⟩
+  rcases hd1 with h | h
+  · left
+    simp only [hy, ↓reduceIte] at h; simp only [hc, ↓reduceIte]
+    exact List.mem_filter.mpr ⟨hyv (List.mem_filter.mp h).1, (List.mem_filter.mp h).2⟩
+  · right
+    simp only [List.mem_flatMap] at h ⊢
+    obtain ⟨z, hz', hdz⟩ := h
+    exact ⟨z, hz', by rw [← hz z hz']; exact hdz⟩
+
 /-! ### What a hand-over with parameters beside the receiver refuses (AGORA-927) -/
 
 /-- AGORA-927, refused: **the package passed again beside itself**. The
@@ -1069,20 +1091,9 @@ theorem callT_hand {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
     refine ⟨h1, h2, h3, ?_⟩
     simp only [argE]; rw [hother _ h2 h3 h1]
   have hmutZ : ∀ d ∈ mutNames (handCtx Γ c x Ec te m.nv E0) (m.nv :: zs),
-      d ∈ mutNames (kill .replace false c Γ) (c :: zs) := by
-    intro d hd
-    simp only [mutNames, argNames, List.flatMap_cons, List.mem_filter, List.mem_append] at hd ⊢
-    obtain ⟨hd1, hd2⟩ := hd
-    refine ⟨?_, hd2⟩
-    rcases hd1 with h | h
-    · left
-      rw [hyE] at h; rw [hck, killE_ty, killE_vdeps]
-      simp only [hEyt, ↓reduceIte] at h; simp only [hτ, ↓reduceIte]
-      exact List.mem_filter.mpr ⟨hEyv (List.mem_filter.mp h).1, (List.mem_filter.mp h).2⟩
-    · right
-      simp only [List.mem_flatMap] at h ⊢
-      obtain ⟨z, hz, hdz⟩ := h
-      exact ⟨z, hz, by rw [← (hzM z hz).2.2.2]; exact hdz⟩
+      d ∈ mutNames (kill .replace false c Γ) (c :: zs) :=
+    mutNames_hand (by rw [hyE]; exact hEyt) (by rw [hck, killE_ty]; exact hτ)
+      (by rw [hyE, hck, killE_vdeps]; exact hEyv) fun z hz => (hzM z hz).2.2.2
   refine ⟨fn, hf, by simp [hps, hlenz], fun i hi' => ?_, fun d hd => ?_, ?_, rfl, rfl, fun h => absurd h hnt⟩
   · rcases i with _ | j
     · -- the receiver: the environment's binding, handed over
@@ -1425,20 +1436,8 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
     intro d hd
     obtain ⟨hb, a, ha, hty, hda⟩ := hmutD d hd
     exact ⟨(hnf d hd).2.2.1, hbrA a ha hty d hda hb⟩
-  have hmutA : ∀ d ∈ mutNames Γh (m.nv :: zs), d ∈ mutNames (kill .replace false c Γ) (c :: zs) := by
-    intro d hd
-    simp only [mutNames, argNames, List.flatMap_cons, List.mem_filter, List.mem_append] at hd ⊢
-    obtain ⟨hd1, hd2⟩ := hd
-    refine ⟨?_, hd2⟩
-    rcases hd1 with h | h
-    · left
-      rw [hyE] at h; rw [hck]
-      simp only [hEyt, ↓reduceIte] at h; simp only [hτ, ↓reduceIte]
-      exact List.mem_filter.mpr ⟨hEyv (List.mem_filter.mp h).1, (List.mem_filter.mp h).2⟩
-    · right
-      simp only [List.mem_flatMap] at h ⊢
-      obtain ⟨z, hz, hdz⟩ := h
-      exact ⟨z, hz, by rw [← hzE z hz]; exact hdz⟩
+  have hmutA : ∀ d ∈ mutNames Γh (m.nv :: zs), d ∈ mutNames (kill .replace false c Γ) (c :: zs) :=
+    mutNames_hand (by rw [hyE]; exact hEyt) (by rw [hck]; exact hτ) (by rw [hyE, hck]; exact hEyv) hzE
   have hAF : ∀ d ∈ mutNames Γh (m.nv :: zs), d.root ∉ F ∧ d.kind.bound ≠ .replace := fun d hd => hB d (hmutA d hd)
   -- what the arguments hand: in terms of the interface's call's entries
   have hyh : (compE Ec te).held ⊆ Ec.vdeps := fun d hd => hEyv (by rw [hEyh]; exact hd)
