@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #569: `( reset_read o s )` - the enum and its own payload handed to one call that resets the enum then reads the payload
+// map: §2.10 | A2 | rejected | - | AGORA-569: `( reset_read o s )` - the enum and its own payload handed to one call that resets the enum then reads the payload
+// AGORA-569 (this shape, closed): refused (main 029b01dd: accepted, heap-use-after-free)
 $ `stdlib/core/string.nu`
 
 : | Msg { MNone MSome String }
