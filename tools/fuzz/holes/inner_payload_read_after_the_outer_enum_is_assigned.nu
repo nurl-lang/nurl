@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #569: a nested enum's payload read after `= o @ Outer { ONone }` in its arm
+// map: §2.10 | A2 | rejected | - | AGORA-569: a nested enum's payload read after `= o @ Outer { ONone }` in its arm
+// AGORA-569 (this shape, closed): refused (main 029b01dd: accepted, heap-use-after-free)
 $ `stdlib/core/string.nu`
 
 : | Msg { MNone MSome String }

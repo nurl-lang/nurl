@@ -4592,6 +4592,12 @@ unsafe @ note_unsafe_item s pos s what → v {
 : ~ i g_bck_cuo_any 0
 // 1 while a sweep goes on through a part's owner (bck_borrow_sweep).
 : ~ i g_bck_cuo_sweep 0
+// 1 while __bck_sxr_begin evaluates a source expression: the released
+// bindings (BCK_INVALID) it meets are noted, g_bck `sxinv` (agora #569).
+: ~ b g_sxe_inv_on F
+// …and T once one was noted since __bck_sxr_begin began (nothing is written
+// to g_bck on the rows that meet none).
+: ~ b g_sxe_inv_hit F
 // 1 once a walk saw a field of a borrowed copy taken by its reader
 // (`pbo_`, bck_fview_take): its write-back is owed (agora #870).
 : ~ i g_bck_pbo_any 0
@@ -60544,6 +60550,12 @@ unsafe @ __sx_view_at s st s e → b {
     // still holds what it held: the callee may hand those views back, or
     // keep them where the caller reaches them. Its `vds_` outlives the
     // move; any other read of a dead binding is refused on its own.)
+    // (A released one - BCK_INVALID - is noted, g_sxe_inv: __bck_sxr_begin
+    // refuses the read; agora #569.)
+    ? & == v BCK_INVALID g_sxe_inv_on {
+        ( bck_put `sxinv` ? g_sxe_inv_hit ( __word_union ( nurl_sym_get g_bck `sxinv` ) ids ) ( nurl_str_cat ids `` ) )
+        = g_sxe_inv_hit T
+    } {}
     ? ( bck_dead_state v ) { ^ ? | | == v BCK_MOVED == v BCK_STORED == v BCK_MAYBE_MOVED ( nurl_str_cat deps `` ) ( nurl_str_cat `` `` ) } {}
     // A view parameter points into what its caller passed: where, only the
     // caller knows, so as a source it stands for itself (`pv_`) — a holder
@@ -61190,16 +61202,31 @@ unsafe @ __sx_leaf_roots s sx → s {
 // holds it now drops it, the payload with it, when it likes: agora #641.)
 @ __bck_epy_release s st i o i line s how → s {
     : s os ( nurl_str_int o )
-    : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `epy_` os ) )
-    ? == 0 ( nurl_str_len rest ) { ^ ( nurl_str_cat st `` ) } {}
+    ? == 0 ( nurl_sym_len g_bck ( bck_bkey `epy_` os ) ) { ^ ( nurl_str_cat st `` ) } {}
     : ~ s out ( nurl_str_cat st `` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s xs ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i x ( nurl_str_to_int xs )
-        ? & == BCK_OWNED ( bck_st_get out x ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `hr_` xs ) ) os ) {
-            = out ( bck_st_set out x BCK_INVALID )
-            ( bck_put ( bck_bkey `bv_` xs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` os how ) )
-        } {}
+    // (…and the payloads read in place out of each of those, to the end of
+    // the chain: `?? o { OIn inner → ?? inner { MSome s → … } }` - o's old
+    // value goes, inner's with it, and s with that. Every owner once, a
+    // seen-set, no hop count; agora #569.)
+    : ~ s owners ( nurl_str_cat os `` )
+    : ~ s seen ( nurl_str_cat os `` )
+    ~ != 0 ( nurl_str_len owners ) {
+        : s ps ( str_first_word owners ) = owners ( str_skip_word owners )
+        : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `epy_` ps ) )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s xs ( str_first_word rest ) = rest ( str_skip_word rest )
+            : i x ( nurl_str_to_int xs )
+            ? & == BCK_OWNED ( bck_st_get out x ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `hr_` xs ) ) ps ) {
+                = out ( bck_st_set out x BCK_INVALID )
+                // (Below o, the payload it was read out of follows `how`:
+                // the message names it.)
+                ( bck_put ( bck_bkey `bv_` xs ) ( nurl_str_cat4 ( nurl_str_int line ) ` ` os ? ( seq ps os ) how ( nurl_str_cat3 how ` ` ps ) ) )
+                ? ! ( str_contains_word seen xs ) {
+                    = seen ( nurl_str_cat3 seen ` ` xs )
+                    = owners ( nurl_str_cat3 owners ` ` xs )
+                } {}
+            } {}
+        }
     }
     ^ out
 }
@@ -61210,6 +61237,13 @@ unsafe @ __sx_leaf_roots s sx → s {
 // element of its Vec, `: String s0 ( vec_at [String] inner 0 )` — points
 // into what the call may drop (agora #424, #569 item 6).
 @ __bck_epy_elems_end s st i o i line s cal → s {
+    ^ ( __bck_epy_elems_end_how st o line cal `, which may drop or replace what it holds` )
+}
+
+// …with `tail`, what the call may do to the storage, as the message says
+// it: `, which may move its buffer` for a callee that may grow a payload
+// of o in place (agora #569).
+@ __bck_epy_elems_end_how s st i o i line s cal s tail → s {
     : s os ( nurl_str_int o )
     : ~ s rest ( nurl_sym_get g_bck ( bck_bkey `epy_` os ) )
     ? == 0 ( nurl_str_len rest ) { ^ ( nurl_str_cat st `` ) } {}
@@ -61218,7 +61252,7 @@ unsafe @ __sx_leaf_roots s sx → s {
         : s xs ( str_first_word rest ) = rest ( str_skip_word rest )
         : i x ( nurl_str_to_int xs )
         ? & ! ( bck_dead_state ( bck_st_get out x ) ) ( str_contains_word ( nurl_sym_get g_bck ( bck_bkey `hr_` xs ) ) os ) {
-            : s why ( nurl_str_cat4 ( nurl_str_cat3 `it is a payload of '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` os ) ) `' this '??' arm matched, and '` ) ( bck_name_show ( nurl_sym_get2 g_bck `rv_` os ) ) ( nurl_str_cat3 `' was passed to '` ( bck_fn_show cal ) `'` ) `, which may drop or replace what it holds` )
+            : s why ( nurl_str_cat4 ( nurl_str_cat3 `it is a payload of '` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` os ) ) `' this '??' arm matched, and '` ) ( bck_name_show ( nurl_sym_get2 g_bck `rv_` os ) ) ( nurl_str_cat3 `' was passed to '` ( bck_fn_show cal ) `'` ) tail )
             : ~ s brest ( nurl_sym_get g_bck ( bck_bkey `bb_` xs ) )
             ~ != 0 ( nurl_str_len brest ) {
                 : s bs ( str_first_word brest ) = brest ( str_skip_word brest )
@@ -64441,6 +64475,33 @@ unsafe @ __sx_mut_roots s st s e b named → s {
     ^ out
 }
 
+// Each source in `ss` that is a `??` arm's payload read in place out of a
+// program enum's binding (`hr_`, __bck_epy_release) adds that binding,
+// under the same mark, and so on up a payload of a payload, every owner
+// once (agora #569).
+@ __srcs_payload_up s ss → s {
+    : ~ s out ( nurl_str_cat ss `` )
+    : ~ s work ( nurl_str_cat ss `` )
+    : ~ s seen ``
+    ~ != 0 ( nurl_str_len work ) {
+        : s w ( str_first_word work ) = work ( str_skip_word work )
+        : s pl ( __src_plain w )
+        : i pi ( nurl_str_find w pl )
+        : s mark ? > pi 0 ( nurl_str_slice w 0 pi ) ``
+        : ~ s hr ( nurl_sym_get g_bck ( bck_bkey `hr_` pl ) )
+        ~ != 0 ( nurl_str_len hr ) {
+            : s ow ( str_first_word hr ) = hr ( str_skip_word hr )
+            ? ! ( str_contains_word seen ow ) {
+                = seen ( nurl_str_cat3 seen ` ` ow )
+                : s mw ( nurl_str_cat mark ow )
+                = out ( __word_union out mw )
+                = work ( nurl_str_cat3 work ` ` mw )
+            } {}
+        }
+    }
+    ^ out
+}
+
 @ bck_alias_conflict s ms s ss b drops → s {
     : ~ s mr ( nurl_str_cat ms `` )
     ~ != 0 ( nurl_str_len mr ) {
@@ -64480,7 +64541,9 @@ unsafe @ __sx_mut_roots s st s e b named → s {
     : i lk ( bck_lib_kind ( bck_generic_base cal ) )
     // (…nor one that takes over none: a `sink` parameter's value is the
     // callee's to release, agora #494.)
-    : b anymut | | | | == lk 1 != 0 ( nurl_sym_len g_fn_reallocs cal ) & != 0 ( nurl_sym_len g_fn_safe cal ) != 0 ( nurl_sym_len g_fn_drops cal ) & & == lk 0 == 0 ( nurl_sym_len g_fn_safe cal ) != 0 ( nurl_sym_len g_fn_mutates cal ) != 0 ( nurl_sym_len g_fn_sink cal )
+    // (…nor one that gives none a new value: agora #569.)
+    : b anyrepl & != 0 g_bck_epy_any != 0 ( nurl_sym_len g_fn_replaces cal )
+    : b anymut | | | | | anyrepl == lk 1 != 0 ( nurl_sym_len g_fn_reallocs cal ) & != 0 ( nurl_sym_len g_fn_safe cal ) != 0 ( nurl_sym_len g_fn_drops cal ) & & == lk 0 == 0 ( nurl_sym_len g_fn_safe cal ) != 0 ( nurl_sym_len g_fn_mutates cal ) != 0 ( nurl_sym_len g_fn_sink cal )
     ? ! anymut { ^ } {}
     : s args ( bck_sx_split ( nurl_str_slice sx + lp 1 - - ( nurl_str_len sx ) lp 2 ) )
     : ~ s rest ( nurl_str_cat args `` )
@@ -64495,7 +64558,12 @@ unsafe @ __sx_mut_roots s st s e b named → s {
         // of it handed beside it is read, inside the call, after it may be
         // gone; agora #494.)
         : b sj ( nurl_sym_has_word g_fn_sink cal js )
-        : b dj | sj ( bck_callee_drops_elems cal js )
+        // (One the callee gives a new value, `= m …`: its old value is
+        // released, every payload of it with it - one read in place out of
+        // it and handed beside it is freed memory inside the call; agora
+        // #569.)
+        : b pj & anyrepl != 0 ( nurl_str_len ( __repl_of cal js ) )
+        : b dj | | sj pj ( bck_callee_drops_elems cal js )
         : b rj | dj ( nurl_sym_has_word g_fn_reallocs cal js )
         ? & rj ! ( seq aj `-` ) {
             : s mj ( bck_sx_mut_storage st aj )
@@ -64514,12 +64582,15 @@ unsafe @ __sx_mut_roots s st s e b named → s {
                         // (…a `??` payload cursor among them points into its
                         // option's payload: `( wr o sl )`, sl a slice of o's
                         // payload q - agora #842.)
-                        : s sk ? & != 0 g_bck_has_cursor ! ( seq sk0 `*` ) ( __srcs_cursor_up sk0 ) sk0
+                        : s sk1 ? & != 0 g_bck_has_cursor ! ( seq sk0 `*` ) ( __srcs_cursor_up sk0 ) sk0
+                        // (…and a program enum's payload read in place out of
+                        // it, `hr_`, is its storage: agora #569.)
+                        : s sk ? & pj ! ( seq sk1 `*` ) ( __srcs_payload_up sk1 ) sk1
                         : s hit ? ( seq sk `*` ) `` ( bck_alias_conflict mj sk dj )
                         ? != 0 ( nurl_str_len hit ) {
                             : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int ( bck_path_root ( nurl_str_to_int hit ) ) ) ) )
                             : s c1 ( nurl_str_cat4 `'` nm `' reaches '` ( bck_fn_show cal ) )
-                            : s c2 ( nurl_str_cat3 `' through argument ` ( nurl_str_int + j 1 ) ? sj `, which it takes over and may release,` ? dj `, whose elements it may drop or replace,` `, whose buffer it may move or free,` )
+                            : s c2 ( nurl_str_cat3 `' through argument ` ( nurl_str_int + j 1 ) ? sj `, which it takes over and may release,` ? pj `, which it may give a new value, releasing the old one,` ? dj `, whose elements it may drop or replace,` `, whose buffer it may move or free,` )
                             : s c3 ( nurl_str_cat4 ` and through argument ` ( nurl_str_int + k 1 ) `, which points into it or borrows from it: inside the call the two are unrelated names, and the change through one leaves the other dangling. Pass a copy that owns its data as one of them (mem_dup, string_from, slice_to_vec), or take what the second one reaches inside the callee.` `` )
                             ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 c1 c2 c3 ) )
                             ^
@@ -65562,7 +65633,24 @@ unsafe @ __bck_rv_self_tie i wid s cals → v {
 @ __bck_sxr_begin s st s rec → s {
     : i wid ( bck_intern ( bck_field rec 5 ) )
     : s asx ( bck_field rec 1 )
+    = g_sxe_inv_hit F
+    = g_sxe_inv_on T
     : s srcs ( bck_sx_sources st ( nurl_str_slice asx 1 - ( nurl_str_len asx ) 1 ) wid )
+    = g_sxe_inv_on F
+    // (A source an earlier call of the same statement already released -
+    // `( show ( reset_ret o ) ( string_data s ) )`, s a payload of o read in
+    // place: the argument is evaluated after that call ran, a read of freed
+    // memory; agora #569.)
+    ? & g_sxe_inv_hit ( bck_sound ) {
+        : s sxinv ( nurl_sym_get g_bck `sxinv` )
+        : ~ s pr ( nurl_str_cat sxinv `` )
+        ~ != 0 ( nurl_str_len pr ) {
+            : s pw ( str_first_word pr ) = pr ( str_skip_word pr )
+            // (Released on an earlier line, the statement's own read of it
+            // is refused already: only this line's, by an earlier call.)
+            ? ( seq ( str_first_word ( nurl_sym_get g_bck ( bck_bkey `bv_` pw ) ) ) ( bck_field rec 3 ) ) { ( bck_diag_invalid ( nurl_str_to_int pw ) ( bck_field_int rec 3 ) ) } {}
+        }
+    } {}
     ? | ( seq srcs `*` ) == 0 ( nurl_str_len srcs ) { ^ st } {}
     : s plain ( __src_plain srcs )
     ? == 0 ( nurl_str_len plain ) { ^ st } {}
@@ -69466,7 +69554,9 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         : s eaix ( bck_field rec 6 )
         // (Only one that replaces it: a callee that empties the payload in
         // place — vec_clear, string_clear — leaves it where it is…)
-        ? != 0 ( nurl_str_len ( __repl_of ecal eaix ) ) { = out ( __bck_epy_release out rid line ` !epy` ) } {
+        // (…a closure that runs here giving it a new value, `@assign`, as
+        // well: agora #569.)
+        ? | & == kc 32 ( seq ecal `@assign` ) != 0 ( nurl_str_len ( __repl_of ecal eaix ) ) { = out ( __bck_epy_release out rid line ` !epy` ) } {
             // (…but drops what it holds: a borrow taken from the payload, an
             // element of its Vec, ends with what it borrowed — agora #424,
             // #569.)
@@ -69476,6 +69566,11 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             // arm of `?? e { ES a → … }`: the same storage moves, and the
             // borrows taken from those other payloads end; agora #874.)
             ? & ! ( bck_callee_drops_elems ecal eaix ) | ( nurl_sym_has_word g_fn_reallocs ecal eaix ) & != 0 g_irealloc_any ( nurl_sym_has_word g_fn_ireallocs ecal eaix ) {
+                // (…and borrows taken from o's own payloads read in place,
+                // `: s d ( string_data s )` inside `?? o { MSome s → … }`,
+                // when o itself is handed: the payload's buffer may move,
+                // agora #569.)
+                ? == rid0 rid { = out ( __bck_epy_elems_end_how out rid line ecal `, which may move its buffer` ) } {}
                 : ~ s hrm ( nurl_sym_get g_bck ( bck_bkey `hr_` ( nurl_str_int rid ) ) )
                 ~ != 0 ( nurl_str_len hrm ) {
                     : s ow ( str_first_word hrm ) = hrm ( str_skip_word hrm )
@@ -70152,16 +70247,18 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // (A `??` arm's payload read in place out of a program enum's binding
     // that was given a new value: __bck_epy_release.)
     ? ( seq ( str_first_word info ) `!epy` ) {
-        : s e1 ( nurl_str_cat4 `'` name `' is the payload of '` sname )
-        : s e2 ( nurl_str_cat4 `' this '??' arm matched, and '` sname `' was given a new value at line ` ( nurl_str_cat ln `, which released the old one — the payload with it` ) )
+        : s evia ( str_first_word ( str_skip_word info ) )
+        : s e1 ? == 0 ( nurl_str_len evia ) ( nurl_str_cat4 `'` name `' is the payload of '` sname ) ( nurl_str_cat4 ( nurl_str_cat3 `'` name `' is read in place out of '` ) ( bck_name_show ( nurl_sym_get2 g_bck `rv_` evia ) ) `', a payload of '` sname )
+        : s e2 ( nurl_str_cat4 ? == 0 ( nurl_str_len evia ) `' this '??' arm matched, and '` `' an enclosing '??' arm matched, and '` sname `' was given a new value at line ` ( nurl_str_cat ln `, which released the old one — the payload with it` ) )
         : s e3 ( nurl_str_cat4 `: using '` name `' now would read freed memory. Use it before that line, or take a copy that owns its data first (string_from, mem_dup) and give '` sname )
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat4 e1 e2 e3 `' its new value after.` ) )
         ^ v
     } {}
     // (…or that was handed over whole: bck_cursor_follow.)
     ? ( seq ( str_first_word info ) `!epym` ) {
-        : s m1 ( nurl_str_cat4 `'` name `' is the payload of '` sname )
-        : s m2 ( nurl_str_cat4 `' this '??' arm matched, and '` sname `' was handed over at line ` ( nurl_str_cat ln `: whoever holds it now releases it, the payload with it` ) )
+        : s mvia ( str_first_word ( str_skip_word info ) )
+        : s m1 ? == 0 ( nurl_str_len mvia ) ( nurl_str_cat4 `'` name `' is the payload of '` sname ) ( nurl_str_cat4 ( nurl_str_cat3 `'` name `' is read in place out of '` ) ( bck_name_show ( nurl_sym_get2 g_bck `rv_` mvia ) ) `', a payload of '` sname )
+        : s m2 ( nurl_str_cat4 ? == 0 ( nurl_str_len mvia ) `' this '??' arm matched, and '` `' an enclosing '??' arm matched, and '` sname `' was handed over at line ` ( nurl_str_cat ln `: whoever holds it now releases it, the payload with it` ) )
         : s m3 ( nurl_str_cat4 `, so using '` name `' now may read freed memory. Use it before that line, or take a copy that owns its data first (string_from, mem_dup) and hand '` sname )
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline ( nurl_str_cat4 m1 m2 m3 `' over after.` ) )
         ^ v

@@ -1,4 +1,5 @@
-// map: §2.10 | A2 | rejected | - | agora #569: a nested enum's payload read after the outer enum is reset by an inout callee
+// map: §2.10 | A2 | rejected | - | AGORA-569: a nested enum's payload read after the outer enum is reset by an inout callee
+// AGORA-569 (this shape, closed): refused (main 029b01dd: accepted, heap-use-after-free)
 $ `stdlib/core/string.nu`
 
 : | Msg { MNone MSome String }
