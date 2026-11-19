@@ -3291,6 +3291,11 @@ class FnCheck:
                 # formal's DtorSafe join rule, agora #252)
                 self.check_live(st, AV("N", held=av.held), line, f"the drop of {v.name}", held=True)
             if av.own != "O":
+                # (…and its `% Drop` runs on those paths: what it changes of
+                # a shared payload is changed when this frame is left)
+                d0 = st.dead
+                self.run_dtor(st, (vid, ()), v.ty, line)
+                killed |= st.dead - d0
                 continue
             d0 = st.dead
             self.run_dtor(st, (vid, ()), v.ty, line)
@@ -3298,6 +3303,19 @@ class FnCheck:
             self.effect(st, (vid, ()), "replace", line)
             st.vals[vid] = AV("D")
         return killed
+
+    def params_hold_dead(self, st, line, dk):
+        """Storage the caller holds - a parameter, or what one points into -
+        may not be left holding a view that a destructor run at this exit
+        changed (`dk`, exit_drops' kills): the caller would read it after
+        the call (agora #918)."""
+        if st.bottom or not dk:
+            return
+        for vid in self.pidx:
+            av = st.vals.get(vid)
+            if av is not None and hloans(av.held) & dk:
+                self.err(line, f"{self.vname(vid)} is left holding a view of what a destructor run "
+                               f"at the function's exit changes")
 
     def params_hold_locals(self, st, line):
         """Storage the caller holds - a parameter, or what one points into -
@@ -3924,14 +3942,20 @@ class FnCheck:
         if ty is None or ty in seen or not getattr(self.prog, "udrop", ()):
             return
         k = ty[0]
-        if k == "closure":
-            # (a closure value released releases its environment: each value
-            # the environment took over runs its `% Drop` - a capture's place
-            # is the environment's own, so only what the destructor changes
-            # inside shared payloads reaches anything else; agora #919)
-            av = st.vals.get(place[0]) if not place[1] else None
+        if not seen:
+            # (a closure released with the value releases its environment:
+            # each value the environment took over runs its `% Drop` - a
+            # capture's place is the environment's own, so only what the
+            # destructor changes inside shared payloads reaches anything
+            # else; agora #919. Asked once, at the top of the walk, of every
+            # closure held at or under `place`: one in a struct's field is
+            # released with the struct, whatever the struct's own type runs)
+            av = st.vals.get(place[0])
             if av is not None:
-                for _base, fname in self.closures_in(av):
+                n = len(place[1])
+                for base, fname in self.closures_in(av):
+                    if tuple(base[:n]) != tuple(place[1]):
+                        continue
                     body = self.prog.fns.get(fname)
                     if body is None:
                         continue
@@ -3939,6 +3963,7 @@ class FnCheck:
                         cv = body.vars.get(c)
                         if cv is not None and getattr(cv, "taken", False):
                             self.dtor_regions(st, cv.ty)
+        if k == "closure":
             return
         if not self.dtor_runs(ty):
             return
@@ -3998,6 +4023,10 @@ class FnCheck:
             if av.own == "O":
                 self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, line)
                 self.effect(st, (vid, ()), "replace", line)
+            elif av.own == "X":
+                # (moved on some paths only, it is released on the others:
+                # what its `% Drop` changes of a shared payload is changed)
+                self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, line)
             # (the binding itself is gone: what points at it ends)
             self.effect(st, (vid, ()), "end", line)
             if av.own != "M":
@@ -4200,7 +4229,7 @@ class FnCheck:
                 # ) } {}`: released, it runs the arm value's `% Drop` - the
                 # type the arm gave it; agora #917, #766)
                 sty = self.fn.vars[rv[1][1]].ty
-                if sty is not None and self.T.has_udrop(sty):
+                if sty is not None and self.dtor_runs(sty):
                     self.join_ty[vid] = sty
             if not path and st.pb and any(p[0] == vid for p in st.pb):
                 # (a copy that still owes its write-back given another value:
@@ -4648,12 +4677,13 @@ class FnCheck:
                 dk = self.exit_drops(st, ln, keep=rk)
                 if dk and (av.loans | hloans(av.held)) & dk:
                     self.err(ln, "the returned value views what a destructor run at the function's exit changes")
+                self.params_hold_dead(st, ln, dk)
             else:
                 st = self.run_defers(st)
                 self.params_hold_locals(st, ln)
                 self.pb_check(st)
                 self.exits.append(st.copy())
-                self.exit_drops(st, ln)
+                self.params_hold_dead(st, ln, self.exit_drops(st, ln))
             return State(bottom=True)
         if k == "break":
             if self.loop_stack:
@@ -4779,7 +4809,7 @@ class FnCheck:
             self.exits.append(end)
             # (falling off the end leaves the frame too: a `sink` parameter
             # still held is released here, as at a `^`)
-            self.exit_drops(end, self.fn.line)
+            self.params_hold_dead(end, self.fn.line, self.exit_drops(end, self.fn.line))
         return self.make_summary()
 
     def only_elem_replace(self, sm, k):
