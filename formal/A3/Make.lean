@@ -201,7 +201,7 @@ theorem Plain.endOK {Γ : Ctx} (h : Plain Γ) (x : Var) : EndOK Γ x :=
     DbindSafe.of_none (fun v E hE => (h v E hE).2.2) _⟩
 
 /-- A make's result: owned, holding nothing. -/
-def resE (t : Ty) : Entry := ⟨t, .own, true, [], [], false, false⟩
+def resE (t : Ty) : Entry := ⟨t, .own, true, [], [], false, false, false⟩
 
 theorem makeStmt_typed {P : Prog} (hP : ProgOK P) {D : List Decl} (hD : DeclsOK P D) {g : Nat} {d : Decl}
     (hd : D[g]? = some d) : ∃ Δ, StmtT P ξ (fun _ => none) [] (makeStmt g d) Δ := by
@@ -224,7 +224,7 @@ theorem makeStmt_typed {P : Prog} (hP : ProgOK P) {D : List Decl} (hD : DeclsOK 
     (by simp [roots, Entry.vdeps, Mode.ownSlot]) (by rw [hΓ0]; rfl) (hplain.endOK 0).1
     (hplain.endOK 0).2.1 rfl
   have hplain' : Plain (setE (kill .replace false 0 (setE (fun _ => none) 0 (resE d.ty))) 0
-      { (⟨d.ty, .own, true, [], [], false, false⟩ : Entry) with mode := (resE d.ty).mode }) := fun v E hE => by
+      { (⟨d.ty, .own, true, [], [], false, false, false⟩ : Entry) with mode := (resE d.ty).mode }) := fun v E hE => by
     simp only [setE, upd] at hE
     split at hE
     · cases hE; exact ⟨by simp [resE], rfl, rfl⟩
@@ -329,11 +329,13 @@ theorem MInv.unbind {m : Mem} {Γ : Ctx} (hi : MInv m Γ) (a : Nat → Bool) (ha
   rootbLive _ _ h := by cases h
   rootbLt _ _ h := by cases h
   names _ _ h := by cases h
+  fresh _ _ h := by cases h
   held _ _ _ _ h := by cases h
   pkgs _ _ _ h := by cases h
   armed _ _ _ h := by cases h
   shares _ _ _ _ h := by cases h
   blocks := hi.blocks
+  pkgFree _ _ _ _ h := by cases h
 
 /-- **One `make`, handed over**: from a start `GlobsOK` holds of, global `i`'s
     `make` run to the hand-over point leaves, once its result is global `i`,

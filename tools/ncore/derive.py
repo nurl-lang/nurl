@@ -180,7 +180,7 @@ def derive(prog, fn, ws):
     return {"modes": list(fn.modes), "res": res, "lends": sorted(lends), "rholds": sorted(rholds),
             "effects": sorted(effects), "stores": sorted(stores), "consumes": sorted(consumes),
             "elems": [], "detaches": [], "invokes": sorted(invokes), "cloargs": [], "shares": [],
-            "regions": sorted(regions), "derived": True}
+            "regions": sorted(regions), "putback": sorted(_idx(ws, "putback", n)), "derived": True}
 
 
 def extern(ws):

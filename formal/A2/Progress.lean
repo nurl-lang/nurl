@@ -458,17 +458,6 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
     obtain ⟨bl, hbl, _⟩ := (hi.lends_val ha hl hty hv).1
     exact ⟨_, EvalR.arcGet hv hbl⟩
 
-/-- A part of a tree whose addresses are distinct has distinct addresses. -/
-theorem Sub.nodup {a b : Val} (h : Sub a b) (hn : b.ids.Nodup) : a.ids.Nodup := by
-  induction h with
-  | refl => exact hn
-  | child he _ ih => exact ih (Child.nodup (Child.elem he) hn)
-  | fst _ ih => exact ih (Child.nodup Child.fst hn)
-  | snd _ ih => exact ih (Child.nodup Child.snd hn)
-  | inl _ ih => exact ih (Child.nodup Child.inl hn)
-  | inr _ ih => exact ih (Child.nodup Child.inr hn)
-  | pkg _ ih => exact ih (Child.nodup Child.pkg hn)
-
 /-- Well-formed elements whose addresses are distinct and live can be freed. -/
 theorem freesL_exists {τ : Ty} : ∀ {l : List Val}, (∀ e ∈ l, WFv τ e) → ∀ a : Nat → Bool,
     (idsL l).Nodup → (∀ i ∈ idsL l, a i = true) → ∃ a', FreesL a l a'
@@ -488,8 +477,8 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
     (hanch : RootbAnch Γ F) {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty} {D : List Dep}
     (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
     (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γ1 x = some Ex1)
-    (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) :
-    ∃ r, Step P m (.edit true x op) r := by
+    (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) {b : Bool} :
+    ∃ r, Step P m (.edit b x op) r := by
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   rw [hE1] at hx1 hthru
   have hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ1 d.root = some Er ∧ Er.mode.ownSlot = true :=
@@ -543,7 +532,7 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
 /-- Agora #871: no exit is about to leave a statement typed under no exit. -/
 theorem exitAt_none {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} {m : Mem}
     (ht : StmtT P .none Γ F s Δ) {n : Nat} {e : Stmt} (he : ExitAt s n e) (hi : Inv m Γ F s) : False := by
-  obtain ⟨_, _, h2, -⟩ := ExitAt.typed ht he hi.wf hi.names hi.anch .none
+  obtain ⟨_, _, h2, -⟩ := ExitAt.typed ht he hi.wf hi.names hi.toMInv.fresh hi.anch .none
   exact Exits.none_up h2
 
 /-- AGORA-889: `takeB` steps: the node `x` names is found as for `editB`; in
@@ -579,7 +568,7 @@ theorem progress {P : Prog}
       Γ x = none → x ∉ F → Γ c = some Ec → Ec.ty.undtor = .fn ms q → ms[j]? = some σ → P[σ]? = some sig →
       sig.params.head? = some (.inp, Ec.ty) → CallT P Γ F σ (c :: zs) E Γ1 →
       (∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z) →
-      MemCodes P m → Inv m Γ F (.callc x c j zs k) → ∃ r, Step P m (.callc x c j zs k) r)
+      MemCodes P m → Inv m Γ F (.callc x c j σ zs k) → ∃ r, Step P m (.callc x c j σ zs k) r)
     (hhand : ∀ {Γ Γ1 : Ctx} {F : List Var} {x c : Var} {j : Nat} {k : Stmt} {Ec E : Entry}
       {ms : List Nat} {q : Cross} {σ : Nat} {sig : Fn} {b : Eff} {m : Mem},
       Γ x = none → Γ c = some Ec → Ec.ty.undtor = .fn ms q → canDo Ec.mode .replace → ms[j]? = some σ →
@@ -670,7 +659,7 @@ theorem progress {P : Prog}
     cases ob with
     | none => exact Or.inr (Or.inl ⟨kk, t, hv, Or.inl hk⟩)
     | some w => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.withLock hv hk hmx hnv⟩
-  | @scopeL _ Γ Δ1 F kk t x k hxE _ hsB _ _ _ _ ih =>
+  | @scopeL _ Γ Δ1 F kk t x k hxE _ hsB _ _ _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, hx, hnrb, _⟩ := hxE
     have hi0 : Inv m Γ F k := hi.scopeLIn hx hnrb
@@ -722,7 +711,7 @@ theorem progress {P : Prog}
     cases res with
     | ok v o m1 => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letd hmx hres⟩
     | panic => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letdP hres⟩
-  | @scopeD _ Γ Δ1 F x f k hxE _ _ _ _ _ _ _ _ ih =>
+  | @scopeD _ Γ Δ1 F x f k hxE _ _ _ _ _ _ _ _ _ ih =>
     intro m hcd hi
     obtain ⟨Ex, _, hx, hmo, _, _, _⟩ := hxE
     have hnrb : Ex.mode ≠ .rootb := by rw [hmo]; simp

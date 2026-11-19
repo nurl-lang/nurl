@@ -1,0 +1,3 @@
+### Fixed
+
+- **A `?` join of slices with a call's fresh slice on one arm releases it** (AGORA-893). Examples: `: [i x ? c ( mk ) a`, and the join handed straight to a call, `( ln ? c ( mk ) a )` or `( ln ? c [i | 4 5 6] a )`. The join counted a call arm as a borrow, so the fresh slice leaked on the runs its arm was taken. A call arm now counts by the call's answer: always fresh, or per run, as a binding of the call does. An arm that is itself a slice join, as in `? c ? d ( mk ) a b`, counts by that join's own answer. A binding of the join owns the buffer on the fresh arm's runs only. A join handed to a call is released after the call, unless the callee keeps it. A call arm that lends its argument back owns nothing, so the argument is released once.

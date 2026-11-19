@@ -1035,6 +1035,329 @@ theorem Blk.DtorOK.of_eq {bl bl' : Blk} (h : bl.DtorOK) (ht : bl'.ty = bl.ty) (h
   · rw [ht]; exact h2 (hk ▸ a)
   · rw [ht, hk] at *; exact h3 a
 
+/-- AGORA-901: no package of `T` holds, in its environment, a node whose
+    handle or buffer address is `i`. -/
+def PkgFreeIn (T : Val) (i : Nat) : Prop :=
+  ∀ fs te ms ev cs, Sub (.pkg fs te ms ev cs) T → ∀ t c d es, Sub (.node t c d es) ev → i ≠ c ∧ i ≠ d
+
+/-- AGORA-901: ... nor does any package of an owned tree. -/
+def PkgFreeId (m : Mem) (i : Nat) : Prop :=
+  ∀ r T, m.st r = some ⟨true, some T⟩ → PkgFreeIn T i
+
+/-- AGORA-901: `n` is `v` or one of its parts through struct fields and enum
+    payloads, never through a package's environment: a handle a borrowed
+    value holds directly, which a field of it lends. -/
+inductive Bare : Val → Val → Prop
+  | refl (v : Val) : Bare v v
+  | fst {n a b : Val} : Bare n a → Bare n (.pair a b)
+  | snd {n a b : Val} : Bare n b → Bare n (.pair a b)
+  | inl {n a : Val} : Bare n a → Bare n (.inl a)
+  | inr {n a : Val} : Bare n a → Bare n (.inr a)
+
+theorem Bare.of_leaf {n v : Val} (h : Bare n v) (hp : ∀ a b, v ≠ .pair a b) (hl : ∀ a, v ≠ .inl a)
+    (hr : ∀ a, v ≠ .inr a) : n = v := by
+  cases h with
+  | refl => rfl
+  | fst => exact absurd rfl (hp _ _)
+  | snd => exact absurd rfl (hp _ _)
+  | inl => exact absurd rfl (hl _)
+  | inr => exact absurd rfl (hr _)
+
+theorem Bare.trans {a b c : Val} (h1 : Bare a b) (h2 : Bare b c) : Bare a c := by
+  induction h2 with
+  | refl => exact h1
+  | fst _ ih => exact .fst ih
+  | snd _ ih => exact .snd ih
+  | inl _ ih => exact .inl ih
+  | inr _ ih => exact .inr ih
+
+theorem Bare.sub {a b : Val} (h : Bare a b) : Sub a b := by
+  induction h with
+  | refl => exact Sub.refl _
+  | fst _ ih => exact Sub.fst ih
+  | snd _ ih => exact Sub.snd ih
+  | inl _ ih => exact Sub.inl ih
+  | inr _ ih => exact Sub.inr ih
+
+theorem Bare.href_eq {c c' : Nat} (h : Bare (.href c) (.href c')) : c = c' := by
+  have := h.of_leaf (fun _ _ h => by cases h) (fun _ h => by cases h) (fun _ h => by cases h)
+  cases this; rfl
+
+theorem PkgFreeId.of_st {m m' : Mem} (h : m'.st = m.st) {i : Nat} (hc : PkgFreeId m i) :
+    PkgFreeId m' i := fun r T hT => hc r T (by rw [← h]; exact hT)
+
+/-- AGORA-901: a borrowed parameter that reaches no memory: each root it
+    depends on in memory is one too (so none at the bottom: a borrowed value
+    is valid through what it depends on and holds, and every handle, view or
+    share it holds lands through a dependency on memory). -/
+inductive Hollow (Γ : Ctx) : Var → Prop
+  | rootb {p : Var} {Ep : Entry} : Γ p = some Ep → Ep.mode = .rootb →
+      (∀ d ∈ memDeps (Ep.path ++ Ep.held), Hollow Γ d.root) → Hollow Γ p
+
+/-- AGORA-901: a dependency that marks nothing as inside a package: no
+    share, or a share of a root that reaches no memory. -/
+def ShareOK (Γ : Ctx) (d : Dep) : Prop := d.kind ≠ .share ∨ Hollow Γ d.root
+
+theorem ShareOK.of_kind {Γ : Ctx} {d : Dep} (h : d.kind ≠ .share) : ShareOK Γ d := Or.inl h
+
+/-- **Hollow roots are stable** (AGORA-901): a context whose borrowed
+    parameters depend on and hold in memory at most what the other's do
+    keeps the other's hollow roots. A borrowed parameter's entry is fixed
+    for its scope (`Entry.fixed`: kills, weakenings, cleaning and the end of
+    another parameter's scope leave it as it is), so every step keeps them. -/
+theorem Hollow.mono {Γ Γ' : Ctx}
+    (h : ∀ v E', Γ' v = some E' → E'.mode = .rootb →
+      ∃ E, Γ v = some E ∧ E.mode = .rootb ∧ ∀ d ∈ memDeps (E.path ++ E.held), d ∈ memDeps (E'.path ++ E'.held))
+    {r : Var} (hc : Hollow Γ' r) : Hollow Γ r := by
+  induction hc with
+  | rootb hp hm _ ih =>
+    obtain ⟨E, hE, hm', hsub⟩ := h _ _ hp hm
+    exact .rootb hE hm' (fun d hd => ih d (hsub d hd))
+
+/-- AGORA-901: a root through which a borrow reaches only memory outside
+    every closure's environment: an owner, or a borrowed parameter each of
+    whose memory dependencies marks nothing as inside a package (`ShareOK`)
+    and is on such a root.  A call's environment (`envE`) carries a share
+    of each root the package reaches memory by, so it is none: what is lent
+    from it lies inside a package. -/
+inductive Clean (Γ : Ctx) : Var → Prop
+  | own {r : Var} {Er : Entry} : Γ r = some Er → Er.mode.ownSlot = true → Clean Γ r
+  | rootb {p : Var} {Ep : Entry} : Γ p = some Ep → Ep.mode = .rootb →
+      (∀ d ∈ memDeps Ep.path, ShareOK Γ d) → (∀ d ∈ memDeps Ep.path, Clean Γ d.root) → Clean Γ p
+
+/-- AGORA-901: what is clean, or hollow, in one context is in another. -/
+structure CleanLe (Γ' Γ : Ctx) : Prop where
+  clean  : ∀ r, Clean Γ' r → Clean Γ r
+  hollow : ∀ r, Hollow Γ' r → Hollow Γ r
+
+theorem ShareOK.mono {Γ Γ' : Ctx} (h : CleanLe Γ' Γ) {d : Dep} (hs : ShareOK Γ' d) : ShareOK Γ d :=
+  hs.imp id (h.hollow _)
+
+/-- A context whose entries keep their modes, and whose borrowed parameters
+    their paths and what they hold, keeps the clean and hollow roots of the
+    other. -/
+theorem CleanLe.of_entries' {Γ Γ' : Ctx}
+    (h : ∀ v E', Γ' v = some E' → ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧
+      (E.mode = .rootb → E'.path = E.path ∧ ∀ d ∈ memDeps E.held, d ∈ E'.held)) :
+    CleanLe Γ' Γ := by
+  have hh : ∀ r, Hollow Γ' r → Hollow Γ r := fun r hc => hc.mono fun v E' hv hm => by
+    obtain ⟨E, hE, hm', hfix⟩ := h _ _ hv
+    have hm0 : E.mode = .rootb := by rw [← hm']; exact hm
+    obtain ⟨hpe, hhe⟩ := hfix hm0
+    refine ⟨E, hE, hm0, fun d hd => ?_⟩
+    obtain ⟨hd1, hd2⟩ := List.mem_filter.mp hd
+    rcases List.mem_append.mp hd1 with hd1 | hd1
+    · exact List.mem_filter.mpr ⟨List.mem_append_left _ (hpe ▸ hd1), hd2⟩
+    · exact List.mem_filter.mpr ⟨List.mem_append_right _ (hhe d (List.mem_filter.mpr ⟨hd1, hd2⟩)), hd2⟩
+  refine ⟨fun r hc => ?_, hh⟩
+  induction hc with
+  | own hr ho =>
+    obtain ⟨E, hE, hm, _⟩ := h _ _ hr
+    exact .own hE (by rw [← hm]; exact ho)
+  | rootb hp hm hns _ ih =>
+    obtain ⟨E, hE, hm', hfix⟩ := h _ _ hp
+    have hm0 : E.mode = .rootb := by rw [← hm']; exact hm
+    have hpe := (hfix hm0).1
+    exact .rootb hE hm0 (fun d hd => (hns d (hpe ▸ hd)).imp id (hh _)) (fun d hd => ih d (hpe ▸ hd))
+
+theorem CleanLe.of_entries {Γ Γ' : Ctx}
+    (h : ∀ v E', Γ' v = some E' → ∃ E, Γ v = some E ∧ E'.mode = E.mode ∧
+      (E.mode = .rootb → E'.path = E.path ∧ E'.held = E.held)) :
+    CleanLe Γ' Γ :=
+  CleanLe.of_entries' fun v E' hv => by
+    obtain ⟨E, hE, hm, hf⟩ := h v E' hv
+    exact ⟨E, hE, hm, fun hr => ⟨(hf hr).1, fun d hd => by rw [(hf hr).2]; exact (List.mem_filter.mp hd).1⟩⟩
+
+theorem CleanLe.refl (Γ : Ctx) : CleanLe Γ Γ := ⟨fun _ h => h, fun _ h => h⟩
+
+/-- A clean borrowed parameter's memory dependencies are clean, and none
+    marks anything as inside a package. -/
+theorem Clean.rootb_inv {Γ : Ctx} {p : Var} {Ep : Entry} (h : Clean Γ p) (hp : Γ p = some Ep)
+    (hm : Ep.mode = .rootb) : ∀ d ∈ memDeps Ep.path, ShareOK Γ d ∧ Clean Γ d.root := by
+  cases h with
+  | own hr ho => rw [hp] at hr; cases hr; rw [hm] at ho; cases ho
+  | rootb hr _ hns hcl => rw [hp] at hr; cases hr; exact fun d hd => ⟨hns d hd, hcl d hd⟩
+
+/-- AGORA-901: dependencies that reach memory through clean roots only, and
+    mark nothing as inside a package. -/
+def CleanDeps (Γ : Ctx) (D : List Dep) : Prop := ∀ d ∈ memDeps D, ShareOK Γ d ∧ Clean Γ d.root
+
+theorem CleanDeps.mono {Γ Γ' : Ctx} (h : CleanLe Γ' Γ) {D : List Dep}
+    (hc : CleanDeps Γ' D) : CleanDeps Γ D := fun d hd => ⟨(hc d hd).1.mono h, h.clean _ (hc d hd).2⟩
+
+theorem CleanDeps.sub {Γ : Ctx} {D D' : List Dep} (hs : D ⊆ D') (hc : CleanDeps Γ D') : CleanDeps Γ D :=
+  fun d hd => hc d (List.mem_filter.mpr ⟨hs (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩)
+
+theorem CleanDeps.append {Γ : Ctx} {a b : List Dep} (ha : CleanDeps Γ a) (hb : CleanDeps Γ b) :
+    CleanDeps Γ (a ++ b) := fun d hd => by
+  obtain ⟨hd, hn⟩ := List.mem_filter.mp hd
+  rcases List.mem_append.mp hd with hd | hd
+  · exact ha d (List.mem_filter.mpr ⟨hd, hn⟩)
+  · exact hb d (List.mem_filter.mpr ⟨hd, hn⟩)
+
+theorem CleanDeps.left {Γ : Ctx} {a b : List Dep} (h : CleanDeps Γ (a ++ b)) : CleanDeps Γ a :=
+  h.sub (List.subset_append_left _ _)
+
+theorem CleanDeps.right {Γ : Ctx} {a b : List Dep} (h : CleanDeps Γ (a ++ b)) : CleanDeps Γ b :=
+  h.sub (List.subset_append_right _ _)
+
+/-- AGORA-901: an address a live binding of entry `E` and value `v` names,
+    and that no package of an owned tree may hold.  Each view and handle is
+    taken through the dependencies it is valid through (`ValOK`, `HrefAt`,
+    `ViewsOK`), when all of those reach memory through clean roots only and
+    no share:
+    * a borrow's handles held directly (`Bare`) and the view it is, through
+      its path;
+    * the views a borrow holds directly, through its path and what it holds;
+    * the views stored in the nodes a borrow's handles name, through what it
+      holds (in an owned tree: no payload holds a view);
+    * the views an owner's tree stores, through what it holds. -/
+def PkgNames (m : Mem) (Γ : Ctx) (E : Entry) (v : Val) (i : Nat) : Prop :=
+  ((E.mode = .bor ∨ E.mode = .rootb) ∧ CleanDeps Γ E.path ∧
+    ((∃ c, Bare (.href c) v ∧ i = c) ∨ ∃ o l, v = .view i o l)) ∨
+  ((E.mode = .bor ∨ E.mode = .rootb) ∧ CleanDeps Γ (E.path ++ E.held) ∧ ∃ o l, Bare (.view i o l) v) ∨
+  ((E.mode = .bor ∨ E.mode = .rootb) ∧ CleanDeps Γ E.held ∧
+    ∃ c r T t d es, Bare (.href c) v ∧ m.st r = some ⟨true, some T⟩ ∧ Sub (.node t c d es) T ∧
+      ∃ o l, Sub (.view i o l) (.node t c d es)) ∨
+  (E.mode.ownSlot = true ∧ CleanDeps Γ E.held ∧ ∃ o l, Sub (.view i o l) v)
+
+theorem PkgNames.mono {m : Mem} {Γ Γ' : Ctx} (h : CleanLe Γ' Γ) {E : Entry} {v : Val}
+    {i : Nat} (hn : PkgNames m Γ' E v i) : PkgNames m Γ E v i := by
+  rcases hn with ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩
+  · exact Or.inl ⟨hm, hc.mono h, hv⟩
+  · exact Or.inr (Or.inl ⟨hm, hc.mono h, hv⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨hm, hc.mono h, hv⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨hm, hc.mono h, hv⟩))
+
+theorem PkgNames.href {m : Mem} {Γ : Ctx} {E : Entry} (hm : E.mode = .bor ∨ E.mode = .rootb)
+    (hc : CleanDeps Γ E.path) (c : Nat) : PkgNames m Γ E (.href c) c :=
+  Or.inl ⟨hm, hc, Or.inl ⟨c, .refl _, rfl⟩⟩
+
+theorem PkgNames.view {m : Mem} {Γ : Ctx} {E : Entry} (hm : E.mode = .bor ∨ E.mode = .rootb)
+    (hc : CleanDeps Γ E.path) (d o l : Nat) : PkgNames m Γ E (.view d o l) d :=
+  Or.inl ⟨hm, hc, Or.inr ⟨o, l, rfl⟩⟩
+
+/-- What an entry names it names under a weaker entry of the same mode that
+    depends on at least what it does. -/
+theorem CleanDeps.subMem {Γ : Ctx} {D D' : List Dep} (hs : ∀ d ∈ memDeps D, d ∈ D') (hc : CleanDeps Γ D') :
+    CleanDeps Γ D := fun d hd => hc d (List.mem_filter.mpr ⟨hs d hd, (List.mem_filter.mp hd).2⟩)
+
+theorem PkgNames.weaken {m : Mem} {Γ : Ctx} {E E' : Entry} {v : Val} {i : Nat} (hm : E'.mode = E.mode)
+    (hp : E.mode.ownSlot = false → E.path ⊆ E'.path) (hh : ∀ d ∈ memDeps E.held, d ∈ E'.held)
+    (h : PkgNames m Γ E' v i) : PkgNames m Γ E v i := by
+  have hos : E.mode = .bor ∨ E.mode = .rootb → E.mode.ownSlot = false := by
+    rintro (h | h) <;> rw [h] <;> rfl
+  have hph : E.mode.ownSlot = false → ∀ d ∈ memDeps (E.path ++ E.held), d ∈ E'.path ++ E'.held := fun ho d hd => by
+    obtain ⟨hd', hn⟩ := List.mem_filter.mp hd
+    rcases List.mem_append.mp hd' with h | h
+    · exact List.mem_append_left _ (hp ho h)
+    · exact List.mem_append_right _ (hh d (List.mem_filter.mpr ⟨h, hn⟩))
+  rcases h with ⟨hm', hc, hv⟩ | ⟨hm', hc, hv⟩ | ⟨hm', hc, hv⟩ | ⟨hm', hc, hv⟩ <;> rw [hm] at hm'
+  · exact Or.inl ⟨hm', hc.sub (hp (hos hm')), hv⟩
+  · exact Or.inr (Or.inl ⟨hm', hc.subMem (hph (hos hm')), hv⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨hm', hc.subMem hh, hv⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨hm', hc.subMem hh, hv⟩))
+
+/-- What an entry names it names in a store of the same slots. -/
+theorem PkgNames.ofSt {m m' : Mem} (h : m'.st = m.st) {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
+    (hn : PkgNames m' Γ E v i) : PkgNames m Γ E v i := by
+  rcases hn with h1 | h2 | ⟨hm, hc, c, r, T, t, d, es, hb, hT, hs, hv⟩ | h4
+  · exact Or.inl h1
+  · exact Or.inr (Or.inl h2)
+  · exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T, t, d, es, hb, by rw [← h]; exact hT, hs, hv⟩))
+  · exact Or.inr (Or.inr (Or.inr h4))
+
+/-- What an owner names: the views its tree stores, through what it holds. -/
+theorem PkgNames.own {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat} (hos : E.mode.ownSlot = true)
+    (hn : PkgNames m Γ E v i) : CleanDeps Γ E.held ∧ ∃ o l, Sub (.view i o l) v := by
+  have hnb : ¬ (E.mode = .bor ∨ E.mode = .rootb) := by rintro (h | h) <;> rw [h] at hos <;> cases hos
+  rcases hn with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ | ⟨_, hc, hv⟩
+  · exact absurd h hnb
+  · exact absurd h hnb
+  · exact absurd h hnb
+  · exact ⟨hc, hv⟩
+
+/-- What an owner, or a borrow depending on what it holds only, names of a
+    value holding no handle: the views it holds, through what it holds. -/
+theorem PkgNames.views_of {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
+    (hp : E.mode.ownSlot = true ∨ E.path = E.held) (hnh : ∀ c, ¬ Sub (.href c) v)
+    (hn : PkgNames m Γ E v i) : CleanDeps Γ E.held ∧ ∃ o l, Sub (.view i o l) v := by
+  have hos : E.mode = .bor ∨ E.mode = .rootb → E.mode.ownSlot = false := by
+    rintro (h | h) <;> rw [h] <;> rfl
+  rcases hn with ⟨hm, hc, ⟨c, hb, _⟩ | ⟨o, l, hv⟩⟩ | ⟨_, hc, o, l, hb⟩ | ⟨_, _, c, _, _, _, _, _, hb, _⟩ |
+      ⟨_, hc, hv⟩
+  · exact absurd hb.sub (hnh c)
+  · rcases hp with hp | hp
+    · rw [hos hm] at hp; cases hp
+    · rw [hp] at hc; exact ⟨hc, o, l, hv ▸ Sub.refl _⟩
+  · exact ⟨hc.right, o, l, hb.sub⟩
+  · exact absurd hb.sub (hnh c)
+  · exact ⟨hc, hv⟩
+
+/-- What an entry names depends on its mode only through whether it is a
+    borrow and whether it owns its slot. -/
+theorem PkgNames.remode {m : Mem} {Γ : Ctx} {E E' : Entry} {v : Val} {i : Nat}
+    (hp : E'.path = E.path) (hh : E'.held = E.held) (hos : E'.mode.ownSlot = E.mode.ownSlot)
+    (hb : (E'.mode = .bor ∨ E'.mode = .rootb) → (E.mode = .bor ∨ E.mode = .rootb))
+    (hn : PkgNames m Γ E' v i) : PkgNames m Γ E v i := by
+  rcases hn with ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩
+  · exact Or.inl ⟨hb hm, hp ▸ hc, hv⟩
+  · exact Or.inr (Or.inl ⟨hb hm, hp ▸ hh ▸ hc, hv⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨hb hm, hh ▸ hc, hv⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨hos ▸ hm, hh ▸ hc, hv⟩))
+
+/-- What an entry names under one context it names under another entry and
+    context whose clean dependencies its own clean dependencies give. -/
+theorem PkgNames.mapClean {m : Mem} {Γ Γ' : Ctx} {E E' : Entry} {v : Val} {i : Nat}
+    (hb : (E'.mode = .bor ∨ E'.mode = .rootb) → (E.mode = .bor ∨ E.mode = .rootb))
+    (hos : E'.mode.ownSlot = true → E.mode.ownSlot = true)
+    (hp : CleanDeps Γ' E'.path → CleanDeps Γ E.path)
+    (hph : CleanDeps Γ' (E'.path ++ E'.held) → CleanDeps Γ (E.path ++ E.held))
+    (hh : CleanDeps Γ' E'.held → CleanDeps Γ E.held)
+    (hn : PkgNames m Γ' E' v i) : PkgNames m Γ E v i := by
+  rcases hn with ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩ | ⟨hm, hc, hv⟩
+  · exact Or.inl ⟨hb hm, hp hc, hv⟩
+  · exact Or.inr (Or.inl ⟨hb hm, hph hc, hv⟩)
+  · exact Or.inr (Or.inr (Or.inl ⟨hb hm, hh hc, hv⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨hos hm, hh hc, hv⟩))
+
+/-- A value holding no handle and no view names nothing. -/
+theorem PkgNames.none {m : Mem} {Γ : Ctx} {E : Entry} {v : Val} {i : Nat}
+    (hb : ∀ n, Bare n v → n = v) (hs : ∀ n, Sub n v → n = v)
+    (hh : ∀ c, v ≠ .href c) (hw : ∀ d o l, v ≠ .view d o l) : ¬ PkgNames m Γ E v i := by
+  rintro (⟨_, _, ⟨c, hb', _⟩ | ⟨o, l, h⟩⟩ | ⟨_, _, o, l, hb'⟩ | ⟨_, _, c, _, _, _, _, _, hb', _⟩ |
+    ⟨_, _, o, l, hs'⟩)
+  · exact hh c (hb _ hb').symm
+  · exact hw i o l h
+  · exact hw i o l (hb _ hb').symm
+  · exact hh c (hb _ hb').symm
+  · exact hw i o l (hs _ hs').symm
+
+theorem PkgNames.none_int {m : Mem} {Γ : Ctx} {E : Entry} {n i : Nat} : ¬ PkgNames m Γ E (.int n) i :=
+  PkgNames.none (fun _ h => by cases h; rfl) (fun _ h => by cases h; rfl) (fun _ h => by cases h)
+    (fun _ _ _ h => by cases h)
+theorem PkgNames.none_arc {m : Mem} {Γ : Ctx} {E : Entry} {k : Nat} {p : Val} {i : Nat} :
+    ¬ PkgNames m Γ E (.arc k p) i :=
+  PkgNames.none (fun _ h => by cases h; rfl) (fun _ h => by cases h; rfl) (fun _ h => by cases h)
+    (fun _ _ _ h => by cases h)
+theorem PkgNames.none_lk {m : Mem} {Γ : Ctx} {E : Entry} {k i : Nat} : ¬ PkgNames m Γ E (.lk k) i :=
+  PkgNames.none (fun _ h => by cases h; rfl) (fun _ h => by cases h; rfl) (fun _ h => by cases h)
+    (fun _ _ _ h => by cases h)
+theorem PkgNames.none_cell {m : Mem} {Γ : Ctx} {E : Entry} {k i : Nat} : ¬ PkgNames m Γ E (.cell k) i :=
+  PkgNames.none (fun _ h => by cases h; rfl) (fun _ h => by cases h; rfl) (fun _ h => by cases h)
+    (fun _ _ _ h => by cases h)
+
+/-- AGORA-901: a binding whose value the invariant speaks of: a live one, or
+    an owner made by `letd`, whose views stay valid dead or alive
+    (`MInv.armed`), for its destructor to read. -/
+def Alive (E : Entry) : Prop := E.live = true ∨ (E.dbind = true ∧ E.mode.ownSlot = true)
+
+theorem Alive.live_of_bor {E : Entry} (h : Alive E) (hm : E.mode = .bor ∨ E.mode = .rootb) :
+    E.live = true := by
+  rcases h with h | ⟨_, ho⟩
+  · exact h
+  · rcases hm with hm | hm <;> rw [hm] at ho <;> cases ho
+
 /-- What memory and context guarantee, whatever is running. -/
 structure MInv (m : Mem) (Γ : Ctx) : Prop where
   dom       : ∀ v, (Γ v).isSome = (m.st v).isSome
@@ -1046,6 +1369,8 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   rootbLive : ∀ p E, Γ p = some E → E.mode = .rootb → E.live = true
   rootbLt   : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r < p
   names     : NameWF Γ
+  /-- Agora #909: a fresh borrow reaches only the frame's own blocks. -/
+  fresh     : FreshOK Γ
   held      : ∀ v E sl T, Γ v = some E → E.live = true → m.st v = some sl → sl.val = some T →
                 NamesIn T E.held
   pkgs      : ∀ v sl T, m.st v = some sl → sl.val = some T → PkgsOK T
@@ -1078,6 +1403,12 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
                 -- and a view's type is `prod (lk u) u` of a lock's `u`): a
                 -- guard is `% NotSend`
                 bl.ty.hasGuard = false
+  /-- AGORA-901: no package of an owned tree holds what a live binding
+      names (`PkgNames`) through clean roots only and through no share
+      (`Clean`).  A closure is opaque: the one lend into
+      a package, a call's environment (`envE`), carries a share. -/
+  pkgFree   : ∀ x Ex o v, Γ x = some Ex → Alive Ex → m.st x = some ⟨o, some v⟩ →
+                ∀ i, PkgNames m Γ Ex v i → PkgFreeId m i
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
@@ -1266,8 +1597,10 @@ theorem ScopeDTy.nest (n f : Nat) (t : Ty) : ScopeDTy f t (Ty.nest n (.dtor f t)
 def DtorOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
   ∃ fn, P[f]? = some fn ∧ fn.params = [(.inp, t)] ∧ fn.resTy = .int ∧ fn.resOwn = false ∧
     fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧
-    -- a destructor changes no elements through a borrow (Agora #295)
-    ¬ ThruFn P f
+    -- a destructor that changes elements through a borrow (Agora #295) is
+    -- handed a value that holds no views, as any call into such code must
+    -- be (`CallT`'s `ThruFn` premise): the value it runs on passes none
+    (ThruFn P f → t.holdsView = false)
 
 /-- Agora #616: `f` is the drop glue of the struct `t`: a function that
     takes one value of the destructor type `Ty.dtor f t` *owned* (`sink`)
@@ -1280,7 +1613,7 @@ def DtorOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
     moves it into the glue as any `sink` argument, `glueCall_typed`.) -/
 def GlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
   ∃ fn a b, P[f]? = some fn ∧ t = .prod a b ∧ fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
-    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ (ThruFn P f → t.holdsView = false) ∧
     ∃ x z s, fn.body = .unpair 0 x z s ∧ s.pureGlue = true
 
 /-- Agora #632: `f` is the drop glue of the enum `t`: a function that takes
@@ -1294,7 +1627,7 @@ def GlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
 def EnumGlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
   ∃ fn a b sa sb, P[f]? = some fn ∧ t = .sum a b ∧
     fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
-    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ (ThruFn P f → t.holdsView = false) ∧
     fn.body = .ite (.isl 0) sa sb ∧ sa.pureGlue = true ∧ sb.pureGlue = true ∧
     (a.holdsDtor = true → ∃ y g k, sa = .letd y g (.takel 0) k) ∧
     (b.holdsDtor = true → ∃ z g k, sb = .letd z g (.taker 0) k)
@@ -1310,7 +1643,7 @@ def EnumGlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
 def ImplGlueOK (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Prop :=
   ∃ fn w r e, P[f]? = some fn ∧ t.isStruct = true ∧
     fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
-    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ (ThruFn P f → t.holdsView = false) ∧
     (GlueOK P h t ∨ EnumGlueOK P h t) ∧ DtorOK P i (.dtor h t) ∧
     fn.body = .letd w h (.var 0) (.letcall r i [w] (.assign 1 (.expr e)))
 
@@ -1325,7 +1658,7 @@ def ImplGlueOK (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Prop :=
 def ClosureGlueOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
   ∃ fn ms j σ sig r e, P[f]? = some fn ∧ t = .fn ms .dropd ∧
     fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧
-    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ ¬ ThruFn P f ∧
+    fn.resOwn = false ∧ fn.lends = [] ∧ fn.rholds = [] ∧ fn.outHolds = [] ∧ (ThruFn P f → t.holdsView = false) ∧
     ms[j]? = some σ ∧ P[σ]? = some sig ∧ sig.params = [(.sink, .dtor f t)] ∧
     fn.body = .callcE r 0 j [] (.assign 1 (.expr e))
 
@@ -1352,7 +1685,7 @@ def DropFnOK (P : Prog) (f : Nat) (t : Ty) : Prop :=
 theorem sinkOf {P : Prog} {f : Nat} {t : Ty}
     (hg : GlueOK P f t ∨ (∃ h i, ImplGlueOK P f t h i) ∨ EnumGlueOK P f t ∨ ClosureGlueOK P f t) :
     ∃ fn, P[f]? = some fn ∧ fn.params = [(.sink, .dtor f t)] ∧
-      fn.resOwn = false ∧ ¬ ThruFn P f := by
+      fn.resOwn = false ∧ (ThruFn P f → t.holdsView = false) := by
   rcases hg with ⟨fn, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩ |
     ⟨_, _, fn, _, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩ |
     ⟨fn, _, _, _, _, hfn, _, hps, _, hro, _, _, _, hnt, _⟩ |
@@ -1552,6 +1885,9 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       -- A2-drop.2: ... and no binding `letd` made viewing more than it did,
       -- nor any no longer `letd`'s
       DKeep Γ Δ [] → DStay Γ Δ [] →
+      -- Agora #909: ... and its fresh borrows reach only the frame's own
+      -- blocks, if `Γ`'s do (a caller's frame, seen from a call, may not)
+      (FreshOK Γ → FreshOK Δ) →
       StmtT P ξ Γ F .panic Δ
   | letrec {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {f : Nat} {s : Stmt} {E : Entry} {fn : Fn} :
       s.src = true → Γ x = none → x ∉ F → P[f]? = some fn → fn.params = [] → fn.resTy = .int →
@@ -1591,13 +1927,13 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (h11 : ∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z)
       (h12 : StmtT P (ξ.under x) (setE Γ1 x (recvRes c Ec E)) F k Δ)
       (h13 : EndOK Δ x)
-      -- the interface is not code that changes elements through a borrow
-      -- (Agora #295; nor is the code that runs: `Implements`)
-      (h14 : ¬ ThruFn P σ)
+      -- (an interface that is code changing elements through a borrow is
+      -- called with no argument that holds views, `CallT`; the code that
+      -- runs is so only where its interface is, `Implements`; AGORA-395)
       -- (A2-drop.3a: as `letcall`'s)
       (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns :=
         by dtor_head) :
-      StmtT P ξ Γ F (.callc x c j zs k) (exitScope x Δ)
+      StmtT P ξ Γ F (.callc x c j σ zs k) (exitScope x Δ)
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P .none Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
@@ -1671,7 +2007,7 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb ∧ E.ty = t ∧ (t ≠ .int → E.mode = .own) ∧
         ∃ E', Δ x = some E' ∧ E'.live = true) →
       x ∉ F → StmtT P .none Γ F s Δ → EndOK Δ x →
-      KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ →
+      KeepOut Γ Δ s.spine → CtxWF Δ → NameWF Δ → FreshOK Δ →
       StmtT P ξ Γ F (.scopeL k t x s) (exitScope x Δ)
   /-- A2-elem (Agora #391): `y`'s value moves into `x` at index `i`: a push
       whose element then moves to index `i`.  The invariant does not see the
@@ -1770,7 +2106,7 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (∀ E, Δ x = some E → E.ty.holdsView = true → E.dbind = true) →
       -- Agora #633: ... and views nothing of its own (a panic's unwind moves
       -- it into its glue, a `sink` argument)
-      DSelf Γ x →
+      DSelf Γ x → FreshOK Δ →
       StmtT P ξ Γ F (.scopeD x f s) (exitScope x Δ)
   /-- Agora #295: a change of a `Vec`'s elements through a borrow `x` (a
       push, a truncation or an element set), of an element type that holds
@@ -1782,14 +2118,20 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       read (`killThru`). `x` itself stays live: its node is changed in
       place. -/
   | editB {Γ Γ1 : Ctx} {F : List Var} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
-      {D : List Dep} :
+      {D : List Dep} {b : Bool} :
       Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = false →
       x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
       Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
       ThruOK Γ1 F op Ex.ty Ex1.path →
       -- (A2-drop.3b: a change that drops elements drops no destructor value)
       (op.drops = true → t.dtorFree = true) →
-      StmtT P ξ Γ F (.edit true x op) (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
+      -- Agora #909: an `edit false` is one through a fresh borrow, and does
+      -- not count as through-changing (`Stmt.hasThru`). It reaches only
+      -- blocks of the frame's own bindings: an owner's, or an `inout`
+      -- parameter's, which the call already treats as changed. It never
+      -- reaches memory an argument views.
+      (hbf : b = false → Ex.fresh = true := by intro h; cases h) →
+      StmtT P ξ Γ F (.edit b x op) (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
   /-- Agora #295: the same change through a borrow `x`, of an element type
       that holds views (and no closure): a push or an element set may store
       a view, valid through what the stored value depends on in memory
@@ -1806,7 +2148,12 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
   | editBV {Γ Γ1 : Ctx} {F : List Var} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty}
       {D : List Dep} :
       Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = true →
-      t.hasFn = false → x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
+      -- AGORA-901: what the stored value captures by name, the borrow and
+      -- every owner it may land in (one whose type holds views) hold already
+      (t.hasFn = false ∨ ∀ d ∈ D, d.kind.isName = true →
+        d ∈ Ex1.held ∧ ∀ r ∈ roots (memDeps Ex1.path), (argE Γ1 r).ty.holdsView = true →
+          d ∈ (argE Γ1 r).held) →
+      x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
       Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
       ThruOK Γ1 F op Ex.ty Ex1.path → ThruV Γ1 op Ex.ty Ex1.path (memDeps D) →
       (op.drops = true → t.dtorFree = true) →
@@ -1868,6 +2215,9 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
         (E0.fixed → E = E0)) →
       DKeep Γ Δ [] → DStay Γ Δ [] →
+      -- Agora #909: ... and its fresh borrows reach only the frame's own
+      -- blocks, if `Γ`'s do (a caller's frame, seen from a call, may not)
+      (FreshOK Γ → FreshOK Δ) →
       StmtT P ξ Γ F (.exit n) Δ
   /-- Agora #871: a block ends where its body does, or where an `exit 0` of
       it is taken (`Exits.blk`: from a context weaker than its end's). -/
@@ -1883,6 +2233,9 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
         (E0.fixed → E = E0)) →
       DKeep Γ Δ [] → DStay Γ Δ [] →
+      -- Agora #909: ... and its fresh borrows reach only the frame's own
+      -- blocks, if `Γ`'s do (a caller's frame, seen from a call, may not)
+      (FreshOK Γ → FreshOK Δ) →
       StmtT P ξ Γ F (.loop s) Δ
 
 /-- A2-drop.3a: a function's parameters and result of a type that holds a
@@ -1986,8 +2339,14 @@ def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (
     (sig.recvMode ≠ .inp → cs = []) ∧
     fn.resTy = sig.resTy ∧ fn.resOwn = sig.resOwn ∧ fn.lends ⊆ sig.lends ∧ fn.rholds ⊆ sig.rholds ∧
     fn.outHolds ⊆ sig.outHolds ∧
-    -- a closure's code changes no elements through a borrow (Agora #295)
-    ¬ ThruFn P f
+    -- a closure's code changes elements through a borrow (Agora #295) only
+    -- where the interface is code that does so too — a call through it then
+    -- passes no argument that holds views, `CallT` — its environment holds no
+    -- views, and it takes it lent (AGORA-395; an environment handed over,
+    -- `StmtT.callcE`, goes to no such code); what it captures by name holds nothing
+    -- (`CapsOK`), so every borrow its body changes through is rooted in its
+    -- own frame or in what the call passed
+    (ThruFn P f → ThruFn P σ ∧ te.holdsView = false ∧ sig.recvMode = .inp)
 
 /-- A package's code implements its interfaces, method by method. -/
 def CodeOK (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var × PMode × Ty)) : Prop :=
@@ -2146,7 +2505,7 @@ def Stmt.codesOK (P : Prog) : Stmt → Prop
   | .letrec _ _ s => s.codesOK P
   | .catchR _ _ s => s.codesOK P
   | .unpair _ _ _ s => s.codesOK P
-  | .callc _ _ _ _ s => s.codesOK P
+  | .callc _ _ _ _ _ s => s.codesOK P
   | .letd _ _ r s => r.codeOK P ∧ s.codesOK P
   | .scopeD _ _ s => s.codesOK P
   | .withLock _ _ s => s.codesOK P

@@ -55,7 +55,7 @@ def _root_.A2.Stmt.nm : Stmt → List Var
   | .letrec x _ s => x :: s.nm
   | .catchR x _ s => x :: s.nm
   | .unpair y x z s => y :: x :: z :: s.nm
-  | .callc x c _ zs s => x :: c :: zs ++ s.nm
+  | .callc x c _ _ zs s => x :: c :: zs ++ s.nm
   | .letd x _ r s => x :: r.vars ++ s.nm
   | .scopeD x _ s => x :: s.nm
   | .edit _ x op => x :: op.vars
@@ -256,7 +256,7 @@ def CapShr (P : Prog) (st : Var → Option Slot) (nv : Nat) : Stmt → Prop
   | .catchR _ _ s => CapShr P st nv s
   | .scopeL _ _ _ s => CapShr P st nv s
   | .block s => CapShr P st nv s
-  | .callc _ c j zs _ => ∀ o fs te ms env cs f fn, st c = some ⟨o, some (.pkg fs te ms env cs)⟩ →
+  | .callc _ c j σ zs _ => ∀ o fs te ms env cs f fn, st c = some ⟨o, some (.pkg fs te ms env cs)⟩ →
       fs[j]? = some f → P[f]? = some fn → ∀ p ∈ fn.params.zip (nv :: zs ++ cs.map (·.1)),
       p.1.1 ≠ .inp → p.2 ∈ nv :: zs ∨ ∀ o' w, st p.2 = some ⟨o', some w⟩ → ¬ Shr w
   | _ => True
@@ -477,7 +477,7 @@ theorem Step.keepSlot {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s 
     refine ⟨?_, fun _ _ he => by cases he; nm_close⟩
     show (((m.set y0 _).set x _).set z _).st y = _
     simp only [Mem.set_st]; rw [upd_ne _ _ hyn.2.2.1, upd_ne _ _ hyn.2.1, upd_ne _ _ hyn.1]
-  | @callc m1 x c j zs k o0 fs te ms env cs f fn hc hfs hf hx hb =>
+  | @callc m1 x c j σc zs k o0 fs te ms env cs f fn hc hfs hf hx hb =>
     intro hck y o w hy hw hyn hlt
     simp only [Stmt.nm, List.cons_append, List.mem_cons, List.mem_append, not_or] at hyn
     obtain ⟨hyx, hyc, hyz, hyk⟩ := hyn
@@ -620,7 +620,7 @@ theorem capShr_callc {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MI
     {σ : Nat} {sig : Fn} (hc : Γ c = some Ec) (htc : Ec.ty.undtor = .fn ms q) (hj : ms[j]? = some σ)
     (hσ : P[σ]? = some sig) (hhd : sig.params.head? = some (.inp, Ec.ty))
     (hcT : CallT P Γ F σ (c :: zs) E Γ1) (x : Var) (k : Stmt) :
-    CapShr P m.st m.nv (.callc x c j zs k) := by
+    CapShr P m.st m.nv (.callc x c j σ zs k) := by
   intro o fs te ms' env cs f fn hslot hfs hf p hp hne
   have hlc := callT_recv_live hcT hc
   obtain ⟨o0, fs0, te0, env0, cs0, hslot0⟩ := pkg_slot hi hc hlc htc
@@ -662,10 +662,10 @@ theorem TypedAt.capShr {P : Prog} {m : Mem} (hcd : MemCodes P m) :
   | catchR _ _ _ ih => exact fun h => ih h.catchR
   | scopeL _ _ _ _ ih => exact fun h => ih h.scopeL
   | block _ ih => exact fun h => ih h.block
-  | callc x c j zs k _ =>
+  | callc x c j σ zs k _ =>
     intro h
     obtain ⟨_, Γ, F, Δ, ht, hi⟩ := h
-    generalize hs : Stmt.callc x c j zs k = s0 at ht
+    generalize hs : Stmt.callc x c j σ zs k = s0 at ht
     induction ht with
     | callc _ _ _ h4 h5 h6 h7 h8 _ h10 => cases hs; exact capShr_callc hi hcd h4 h5 h6 h7 h8 h10 _ _
     | sub hw _ _ ih => exact ih (hi.weaker hw) hs

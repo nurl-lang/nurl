@@ -1031,7 +1031,7 @@ def Stmt.rename (ρ : Var → Var) : Stmt → Stmt
   | .letrec x f s => .letrec (ρ x) f (s.rename ρ)
   | .catchR x m0 s => .catchR (ρ x) m0 (s.rename ρ)
   | .unpair y x z s => .unpair (ρ y) (ρ x) (ρ z) (s.rename ρ)
-  | .callc x c j zs s => .callc (ρ x) (ρ c) j (zs.map ρ) (s.rename ρ)
+  | .callc x c j σ zs s => .callc (ρ x) (ρ c) j σ (zs.map ρ) (s.rename ρ)
   | .letd x f r s => .letd (ρ x) f (r.rename ρ) (s.rename ρ)
   | .scopeD x f s => .scopeD (ρ x) f (s.rename ρ)
   | .edit b x op => .edit b (ρ x) (op.rename ρ)
@@ -1248,7 +1248,7 @@ def Stmt.src : Stmt → Bool
   | .letrec _ _ s => s.src
   | .catchR _ _ _ => false
   | .unpair _ _ _ s => s.src
-  | .callc _ _ _ _ s => s.src
+  | .callc _ _ _ _ _ s => s.src
   | .letd _ _ _ s => s.src
   | .scopeD _ _ _ => false
   | .edit _ _ _ => true
@@ -1436,12 +1436,12 @@ inductive Step (P : Prog) : Mem → Stmt → Res → Prop
       Step P m (.unpair y x z s)
         (.ok (((m.set y ⟨true, none⟩).set x ⟨v.owns, some v⟩).set z ⟨w.owns, some w⟩)
           (.scope x (.scope z s)))
-  | callc {m m1 : Mem} {x c : Var} {j : Nat} {zs : List Var} {k : Stmt} {o : Bool} {fs : List Nat}
+  | callc {m m1 : Mem} {x c : Var} {j σ : Nat} {zs : List Var} {k : Stmt} {o : Bool} {fs : List Nat}
       {te : Ty} {ms : List Nat} {env : Val} {cs : List (Var × PMode × Ty)} {f : Nat} {fn : Fn} :
       m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩ → fs[j]? = some f → P[f]? = some fn →
       m.st x = none →
       BindParams (envMem m env) fn.params (m.nv :: zs ++ cs.map (·.1)) (m.nv + 1) 0 m1 →
-      Step P m (.callc x c j zs k)
+      Step P m (.callc x c j σ zs k)
         (.ok ({ (m1.set x ⟨fn.resOwn, none⟩).set (m.nv + 1 + fn.params.length) ⟨fn.resOwn, none⟩
                 with nv := m.nv + 1 + fn.nvars })
              (.scope x (.seq (.frozen (heldFor fn.params (m.nv :: zs ++ cs.map (·.1)) m.nv x)

@@ -63,11 +63,11 @@ def main : Stmt :=
 /-! ### Entries -/
 
 /-- `ob` reading the cell's payload. -/
-def Eob : Entry := ⟨str, .bor, true, [⟨3, .inner⟩], [], false, false⟩
+def Eob : Entry := ⟨str, .bor, true, [⟨3, .inner⟩], [], false, false, false⟩
 /-- `ob` reading `other`. -/
-def Eoth : Entry := ⟨str, .bor, true, [⟨1, .self⟩], [], false, false⟩
+def Eoth : Entry := ⟨str, .bor, true, [⟨1, .self⟩], [], false, false, false⟩
 /-- The cell holding `none`. -/
-def Enone : Entry := ⟨opt, .own, true, [], [], false, false⟩
+def Enone : Entry := ⟨opt, .own, true, [], [], false, false, false⟩
 
 /-! ### Contexts with no borrowed parameter and no destructor binding -/
 
@@ -210,7 +210,7 @@ def mainJ (c : Nat) : Stmt :=
         (.letv 6 (.expr (.len 4)) .skip))))))))))
 
 /-- `ob` reading `other` or the cell's payload. -/
-def EobJ : Entry := ⟨str, .bor, true, [⟨1, .self⟩, ⟨3, .inner⟩], [], false, false⟩
+def EobJ : Entry := ⟨str, .bor, true, [⟨1, .self⟩, ⟨3, .inner⟩], [], false, false, false⟩
 
 /-- The contexts around the decisions, with `ob`'s entry `E4`. -/
 def ctxJ (E4 : Entry) : Ctx := fun v =>
@@ -262,7 +262,8 @@ theorem names_EobJ : NameWF (ctxJ EobJ) :=
 theorem ew_J {E : Entry} (hE : E = Eoth ∨ E = Eob) : EntryWeaker E EobJ := by
   rcases hE with rfl | rfl <;>
   exact ⟨rfl, rfl, fun h => by simp [Eoth, Eob] at h, fun _ => ⟨rfl, fun _ => by simp [Eoth, Eob, EobJ], by simp [Eoth, Eob]⟩,
-    fun h => by simp [Eoth, Eob] at h, rfl, fun h => by simp [EobJ] at h, fun h => by simp [Eoth, Eob] at h⟩
+    fun h => by simp [Eoth, Eob] at h, rfl, fun h => by simp [EobJ] at h, fun h => by simp [Eoth, Eob] at h,
+      fun _ _ _ hfr => by fresh_ew⟩
 
 /-- A context that agrees with `ctxJ E4` but at `ob`, whose entry is weaker. -/
 theorem weakerJ {Γ : Ctx} {E4 E4' : Entry} (h : ∀ v, v ≠ 4 → Γ v = ctxJ E4 v) (h4 : Γ 4 = some E4')

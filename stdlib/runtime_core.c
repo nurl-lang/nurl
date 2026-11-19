@@ -794,6 +794,8 @@ void nurl_print_buf_start(void) {
     g_outbuf_mode = 1;
 }
 
+static char *nurl__outbuf_adopt(char *p);  /* below the allocation counters */
+
 /* Hand back this frame's bytes as an owned copy; truncate to its start. */
 const char* nurl_print_buf_stop(void) {
     outbuf_init();
@@ -803,6 +805,24 @@ const char* nurl_print_buf_stop(void) {
         struct OutbufFrame *f = &g_outbuf_stack[--g_outbuf_sp];
         start = f->start;
         mode  = f->mode;
+    }
+    /* A frame that holds the whole buffer, and a large one — nurlc's module
+     * IR, tens of megabytes — hands the buffer itself back, shrunk to fit,
+     * instead of a copy: the copy and the buffer it was made from were
+     * both live at the compile's peak. The next write starts a fresh
+     * buffer (outbuf_init). A small frame is copied as before, so a
+     * capture at the start of the buffer does not cost a new buffer each
+     * time. The block is counted as the copy was (nurl__outbuf_adopt): its
+     * owner releases it with nurl_free. (realloc here is nurl__xrealloc:
+     * it aborts rather than return NULL, so a shrink cannot lose the
+     * buffer.) */
+    if (start == 0 && g_outbuf_len >= OUTBUF_INIT_CAP) {
+        char *whole = nurl__outbuf_adopt((char *)realloc(g_outbuf, g_outbuf_len + 1));
+        g_outbuf      = NULL;
+        g_outbuf_cap  = 0;
+        g_outbuf_len  = 0;
+        g_outbuf_mode = mode;
+        return whole;
     }
     char *ret = strdup(g_outbuf + start);
     g_outbuf_len  = start;
@@ -3310,6 +3330,13 @@ static inline struct nurl__actr *nurl__actr_slot(void) {
 }
 static inline void nurl__actr_bump(unsigned long long *slot) {
     __atomic_store_n(slot, __atomic_load_n(slot, __ATOMIC_RELAXED) + 1, __ATOMIC_RELAXED);
+}
+/* A libc block the runtime hands to NURL code as its own (the print
+ * buffer, nurl_print_buf_stop): counted as an allocation, as a copy from
+ * nurl_alloc would be, since its owner's nurl_free counts the release. */
+static char *nurl__outbuf_adopt(char *p) {
+    nurl__actr_bump(&nurl__actr_slot()->alloc);
+    return p;
 }
 /* Sum over every thread that has ever allocated, live or exited. */
 static unsigned long long nurl__actr_total(int freed) {

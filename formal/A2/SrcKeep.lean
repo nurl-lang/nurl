@@ -1,4 +1,5 @@
 import A2.Call
+import A2.Fresh
 
 /-! A2 — what source typing keeps, for the frame a destructor's binding opens.
 
@@ -242,7 +243,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnrb : E.mode ≠ .rootb := by
       obtain ⟨fn', _, _, hE', _⟩ := hc.toA hn hanch; rw [hE']; exact resMode_ne' fn'
     exact CtxRel.bind hanch hx hxF (hc.ctxRel hn hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
-  | @callc _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF _ _ _ _ _ _ hcT _ _ hpin _ _ ih =>
+  | @callc _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF _ _ _ _ _ _ hcT _ _ hpin _ ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hcT.names hP hn
     have hx1 : Γ1 x = none := by
@@ -380,7 +381,8 @@ theorem CtxRel.keepOut {Γ Δ : Ctx} (h : CtxRel Γ Δ) : KeepOut Γ Δ [] := by
 /-- **What a destructor's frame needs of its body**, from the body's typing
     alone: `letd` takes no premise for it. -/
 theorem srcCase {P : Prog} (hP : ProgOK P) : SrcCase P :=
-  fun ht hs hanch hw hn =>
-    ⟨(StmtT.ctxRel hP ht hs hanch hn).keepOut, StmtT.wf hP ht hw, StmtT.names hP ht hs hn⟩
+  fun ht hs hanch hw hn hf =>
+    ⟨(StmtT.ctxRel hP ht hs hanch hn).keepOut, StmtT.wf hP ht hw, StmtT.names hP ht hs hn,
+      StmtT.freshOK hP ht hs hf⟩
 
 end A2

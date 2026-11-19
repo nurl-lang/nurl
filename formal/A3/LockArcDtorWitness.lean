@@ -236,7 +236,7 @@ theorem dfnA_not_thru : ¬ ThruFn P 0 := by
   | call hf hg _ => simp [P] at hf; subst hf; simp [dfnA, Stmt.calls] at hg
 
 theorem drop0_ok : DropFnOK P 0 TA :=
-  Or.inl ⟨⟨dfnA, rfl, rfl, rfl, rfl, rfl, rfl, rfl, dfnA_not_thru⟩, by decide⟩
+  Or.inl ⟨⟨dfnA, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h dfnA_not_thru⟩, by decide⟩
 
 /-- `= r 0`, the result slot `r` of a function of an integer result. -/
 theorem assign_res {fn : Fn} {r : Var} (hc : sigCtx fn r = some R0)
@@ -321,11 +321,11 @@ def main : Stmt :=
     (.letv 4 (.lockNew DA 3) (.letv 5 (.expr (.lit 0)) (Stmt.lockedApply 4 6 7 5 1))))))
 
 /-- The `Arc` share's entry: owned, holding nothing. -/
-def EA : Entry := ⟨.arc .int, .own, true, [], [], false, false⟩
+def EA : Entry := ⟨.arc .int, .own, true, [], [], false, false, false⟩
 /-- The struct's entry, as `pair` makes it. -/
-def EP : Entry := ⟨TA, .own, true, [], [] ++ [], false, false⟩
+def EP : Entry := ⟨TA, .own, true, [], [] ++ [], false, false, false⟩
 /-- The lock share's entry: owned, holding nothing. -/
-def EL : Entry := ⟨.lk DA, .own, true, [], [], false, false⟩
+def EL : Entry := ⟨.lk DA, .own, true, [], [], false, false, false⟩
 
 /-- **A `Locked` of a destructor value that holds an `Arc` share is typed**
     (Agora #803: `Ty.ok` admits `lk (dtor f u)` when `u` holds no cell share,

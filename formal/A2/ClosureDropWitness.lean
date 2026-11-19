@@ -104,7 +104,7 @@ theorem glue_not_thru : ¬ ThruFn Pc 2 := by
   | call hf hg _ => simp [Pc] at hf; subst hf; simp [glue, Stmt.calls] at hg
 
 theorem dtor_ok : DtorOK Pc 0 DT :=
-  ⟨dfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, dfn_not_thru⟩
+  ⟨dfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h dfn_not_thru⟩
 
 theorem drop_ok : DropFnOK Pc 0 T := Or.inl ⟨dtor_ok, by decide⟩
 
@@ -113,14 +113,15 @@ theorem drop_ok : DropFnOK Pc 0 T := Or.inl ⟨dtor_ok, by decide⟩
     `CDT`, and its body is the call of method 0, whose interface (function 2
     again) takes the receiver owned; then it sets its integer result. -/
 theorem glue_calls_drop : ClosureGlueOK Pc 2 CT :=
-  ⟨glue, [2], 0, 2, glue, 2, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glue_not_thru, rfl, rfl, rfl, rfl⟩
+  ⟨glue, [2], 0, 2, glue, 2, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h glue_not_thru, rfl, rfl, rfl, rfl⟩
 
 theorem cdrop_ok : DropFnOK Pc 2 CT := Or.inr (Or.inr (Or.inr (Or.inr glue_calls_drop)))
 
 /-- The code implements the drop method's interface: it takes the
     environment owned where the interface takes the receiver owned. -/
 theorem code_impl : Implements Pc 1 DT [] 2 :=
-  ⟨code, glue, rfl, rfl, rfl, fun _ => rfl, rfl, rfl, fun _ h => h, fun _ h => h, fun _ h => h, code_not_thru⟩
+  ⟨code, glue, rfl, rfl, rfl, fun _ => rfl, rfl, rfl, fun _ h => h, fun _ h => h, fun _ h => h,
+    fun ht => absurd ht code_not_thru⟩
 
 theorem pack_codes : CodeOK Pc [1] DT [2] [] := by
   refine ⟨rfl, fun j f σ hf hσ => ?_⟩
@@ -141,9 +142,9 @@ theorem env_fits_only (q : Cross) (h : q.Fits DT []) : q = .dropd := by
 
 /-! ### The destructor's own FnOK -/
 
-def R0 : Entry := ⟨.int, .bor, false, [], [], false, false⟩
-def EDT : Entry := ⟨DT, .own, true, [], [], false, false⟩
-def ECD : Entry := ⟨CDT, .own, true, [], [], false, false⟩
+def R0 : Entry := ⟨.int, .bor, false, [], [], false, false, false⟩
+def EDT : Entry := ⟨DT, .own, true, [], [], false, false, false⟩
+def ECD : Entry := ⟨CDT, .own, true, [], [], false, false, false⟩
 
 theorem dfn_body : StmtT Pc ξ (sigCtx dfn) [] dfn.body
     (setE (kill .replace false 1 (sigCtx dfn)) 1 { intE with mode := R0.mode }) := by
@@ -188,11 +189,11 @@ theorem code_body : ∃ Δ, StmtT Pc ξ (sigCtx code) [] code.body Δ ∧
     · simp [sigCtx, code] at h
   let Kb : Ctx := A2.setE (kill .replace false 0 (sigCtx code)) 0 { EDT with live := false, dtor := false }
   have hKb : NoRootb Kb := (hS.kill _ _ _).setE (by simp [EDT])
-  have hmv : RhsT (sigCtx code) [] (.var 0) ⟨EDT.ty, .own, true, [], EDT.held, false, false⟩ Kb :=
+  have hmv : RhsT (sigCtx code) [] (.var 0) ⟨EDT.ty, .own, true, [], EDT.held, false, false, false⟩ Kb :=
     RhsT.moveOwn h0 rfl rfl (by simp) (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _)
-  let ED : Entry := Entry.arm { (⟨EDT.ty, .own, true, [], EDT.held, false, false⟩ : Entry)
+  let ED : Entry := Entry.arm { (⟨EDT.ty, .own, true, [], EDT.held, false, false, false⟩ : Entry)
     with ty := DT, held := EDT.held }
-  have hED : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+  have hED : ED = ⟨DT, .own, true, [], [], false, false, false⟩ := by
     simp [ED, EDT, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let Kc : Ctx := A2.setE Kb 2 ED
   have hKc : NoRootb Kc := hKb.setE (by rw [hED]; simp)
@@ -328,7 +329,7 @@ def main : Stmt :=
   .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2))
     (.letd 2 0 (.pair 0 1) (.letd 3 2 (.pack [1] DT [2] 2 []) .skip)))
 
-def EP : Entry := ⟨T, .own, true, [], [] ++ [], false, false⟩
+def EP : Entry := ⟨T, .own, true, [], [] ++ [], false, false, false⟩
 
 theorem main_typed : ∃ Δ, StmtT Pc ξ (fun _ => none) [] main Δ := by
   let K1 : Ctx := A2.setE (fun _ => none) 0 intE
@@ -336,7 +337,7 @@ theorem main_typed : ∃ Δ, StmtT Pc ξ (fun _ => none) [] main Δ := by
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
   have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
   let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
-  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false, false⟩ := by
     simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K3 : Ctx := A2.setE K2 2 ED
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
@@ -349,7 +350,7 @@ theorem main_typed : ∃ Δ, StmtT Pc ξ (fun _ => none) [] main Δ := by
   have hmove : PushArg K3 [] 2 ED DT ED.held K5 :=
     PushArg.move (Γ := K3) (F := []) (y := 2) (E := ED) (t := DT) rfl (by rw [hEDe]) (by simp)
       (hK3.noPin _) (DtorSafe.of_none (fun v E h => (hK3 v E h).2.1) _ _ _)
-  let EC0 : Entry := ⟨.fn [2] .dropd, .own, true, [], ED.held ++ capDeps [], false, false⟩
+  let EC0 : Entry := ⟨.fn [2] .dropd, .own, true, [], ED.held ++ capDeps [], false, false, false⟩
   have hpack : RhsT K3 [] (.pack [1] DT [2] 2 []) EC0 K5 :=
     RhsT.pack (Γ := K3) (F := []) (fs := [1]) (te := DT) (ms := [2]) (q := .dropd) (y := 2) (cs := [])
       (Ey := ED) (by simp [K3, A2.setE, upd]) (by rw [hEDe]) (by rw [hEDe]) hmove
@@ -488,7 +489,7 @@ theorem callSig_not_thru2 : ¬ ThruFn Pd 4 := by
   | call hf hg _ => simp [Pd] at hf; subst hf; simp [callSig, Stmt.calls] at hg
 
 theorem dtor_ok2 : DtorOK Pd 0 DT :=
-  ⟨dfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, dfn_not_thru2⟩
+  ⟨dfn, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h dfn_not_thru2⟩
 
 theorem drop_ok2 : DropFnOK Pd 0 T := Or.inl ⟨dtor_ok2, by decide⟩
 
@@ -497,20 +498,21 @@ theorem drop_ok2 : DropFnOK Pd 0 T := Or.inl ⟨dtor_ok2, by decide⟩
     `CDT2`, and its body is the call of method 0, whose interface (function 2
     again) takes the receiver owned; then it sets its integer result. -/
 theorem glue_calls_drop2 : ClosureGlueOK Pd 2 CT2 :=
-  ⟨glueD, [2, 4], 0, 2, glueD, 2, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, glue_not_thru2, rfl, rfl, rfl, rfl⟩
+  ⟨glueD, [2, 4], 0, 2, glueD, 2, .lit 0, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h => absurd h glue_not_thru2, rfl, rfl, rfl, rfl⟩
 
 theorem cdrop_ok2 : DropFnOK Pd 2 CT2 := Or.inr (Or.inr (Or.inr (Or.inr glue_calls_drop2)))
 
 /-- The code implements the drop method's interface: it takes the
     environment owned where the interface takes the receiver owned. -/
 theorem code_impl2 : Implements Pd 1 DT [] 2 :=
-  ⟨code, glueD, rfl, rfl, rfl, fun _ => rfl, rfl, rfl, fun _ h => h, fun _ h => h, fun _ h => h, code_not_thru2⟩
+  ⟨code, glueD, rfl, rfl, rfl, fun _ => rfl, rfl, rfl, fun _ h => h, fun _ h => h, fun _ h => h,
+    fun ht => absurd ht code_not_thru2⟩
 
 /-- The method's code implements its interface: it takes the environment
     lent where the interface takes the receiver lent, at the binding's type. -/
 theorem call_impl2 : Implements Pd 3 DT [] 4 :=
   ⟨callCode, callSig, rfl, rfl, rfl, fun h => absurd rfl h, rfl, rfl, fun _ h => h, fun _ h => h, fun _ h => h,
-    callCode_not_thru2⟩
+    fun ht => absurd ht callCode_not_thru2⟩
 
 theorem pack_codes2 : CodeOK Pd [1, 3] DT [2, 4] [] := by
   refine ⟨rfl, fun j f σ hf hσ => ?_⟩
@@ -521,7 +523,7 @@ theorem pack_codes2 : CodeOK Pd [1, 3] DT [2, 4] [] := by
 
 /-! ### The destructor's own FnOK -/
 
-def ECD2 : Entry := ⟨CDT2, .own, true, [], [], false, false⟩
+def ECD2 : Entry := ⟨CDT2, .own, true, [], [], false, false, false⟩
 
 theorem dfn_body2 : StmtT Pd ξ (sigCtx dfn) [] dfn.body
     (setE (kill .replace false 1 (sigCtx dfn)) 1 { intE with mode := R0.mode }) := by
@@ -566,11 +568,11 @@ theorem code_body2 : ∃ Δ, StmtT Pd ξ (sigCtx code) [] code.body Δ ∧
     · simp [sigCtx, code] at h
   let Kb : Ctx := A2.setE (kill .replace false 0 (sigCtx code)) 0 { EDT with live := false, dtor := false }
   have hKb : NoRootb Kb := (hS.kill _ _ _).setE (by simp [EDT])
-  have hmv : RhsT (sigCtx code) [] (.var 0) ⟨EDT.ty, .own, true, [], EDT.held, false, false⟩ Kb :=
+  have hmv : RhsT (sigCtx code) [] (.var 0) ⟨EDT.ty, .own, true, [], EDT.held, false, false, false⟩ Kb :=
     RhsT.moveOwn h0 rfl rfl (by simp) (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _)
-  let ED : Entry := Entry.arm { (⟨EDT.ty, .own, true, [], EDT.held, false, false⟩ : Entry)
+  let ED : Entry := Entry.arm { (⟨EDT.ty, .own, true, [], EDT.held, false, false, false⟩ : Entry)
     with ty := DT, held := EDT.held }
-  have hED : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+  have hED : ED = ⟨DT, .own, true, [], [], false, false, false⟩ := by
     simp [ED, EDT, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let Kc : Ctx := A2.setE Kb 2 ED
   have hKc : NoRootb Kc := hKb.setE (by rw [hED]; simp)
@@ -761,7 +763,7 @@ theorem prog_codes2 : ProgCodes Pd := by
 
 def main2 : Stmt :=
   .letv 0 (.expr (.lit 1)) (.letv 1 (.expr (.lit 2))
-    (.letd 2 0 (.pair 0 1) (.letd 3 2 (.pack [1, 3] DT [2, 4] 2 []) (.callc 4 3 1 [] .skip))))
+    (.letd 2 0 (.pair 0 1) (.letd 3 2 (.pack [1, 3] DT [2, 4] 2 []) (.callc 4 3 1 4 [] .skip))))
 
 /-- A call that takes only the receiver, lent, of a receiver that names
     nothing (`A3`'s `callT_recv`, which this file cannot import). -/
@@ -793,7 +795,7 @@ theorem main2_typed : ∃ Δ, StmtT Pd ξ (fun _ => none) [] main2 Δ := by
   have hK1 : NoRootb K1 := noRootb_empty.setE (by simp [intE])
   have hK2 : NoRootb K2 := hK1.setE (by simp [intE])
   let ED : Entry := Entry.arm { EP with ty := DT, held := [] }
-  have hEDe : ED = ⟨DT, .own, true, [], [], false, false⟩ := by
+  have hEDe : ED = ⟨DT, .own, true, [], [], false, false, false⟩ := by
     simp [ED, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let K3 : Ctx := A2.setE K2 2 ED
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
@@ -806,14 +808,14 @@ theorem main2_typed : ∃ Δ, StmtT Pd ξ (fun _ => none) [] main2 Δ := by
   have hmove : PushArg K3 [] 2 ED DT ED.held K5 :=
     PushArg.move (Γ := K3) (F := []) (y := 2) (E := ED) (t := DT) rfl (by rw [hEDe]) (by simp)
       (hK3.noPin _) (DtorSafe.of_none (fun v E h => (hK3 v E h).2.1) _ _ _)
-  let EC0 : Entry := ⟨.fn [2, 4] .dropd, .own, true, [], ED.held ++ capDeps [], false, false⟩
+  let EC0 : Entry := ⟨.fn [2, 4] .dropd, .own, true, [], ED.held ++ capDeps [], false, false, false⟩
   have hpack : RhsT K3 [] (.pack [1, 3] DT [2, 4] 2 []) EC0 K5 :=
     RhsT.pack (Γ := K3) (F := []) (fs := [1, 3]) (te := DT) (ms := [2, 4]) (q := .dropd) (y := 2) (cs := [])
       (Ey := ED) (by simp [K3, A2.setE, upd]) (by rw [hEDe]) (by rw [hEDe]) hmove
       ⟨List.nodup_nil, fun _ h => by cases h⟩ env_fits
   let ECa : Entry := Entry.arm { EC0 with ty := CDT2, held := EC0.held }
   -- the closure's binding: of the destructor type, owned, holding nothing
-  have hECe : ECa = ⟨CDT2, .own, true, [], [], false, false⟩ := by
+  have hECe : ECa = ⟨CDT2, .own, true, [], [], false, false, false⟩ := by
     simp [ECa, EC0, hEDe, capDeps, Entry.arm, CDT2, CT2, Ty.dtorViews, Ty.holdsView]
   have hECa : ECa.mode ≠ .rootb ∧ ECa.dtor = false ∧ ECa.dbind = false := by rw [hECe]; simp
   let K6 : Ctx := A2.setE K5 3 ECa
@@ -832,10 +834,10 @@ theorem main2_typed : ∃ Δ, StmtT Pd ξ (fun _ => none) [] main2 Δ := by
     (k := .skip) (Ec := ECa) (E := callRes K6 callSig [3]) (ms := [2, 4]) (q := .dropd) (σ := 4)
     (sig := callSig) rfl (by simp [K6, K5, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) h63
     (by rw [hECe]; rfl) rfl rfl (by rw [hps]; rfl) (fun o ho => by simp [callSig] at ho) hcT
-    (fun _ h => by cases h) StmtT.skip (hK7.endOK _) callSig_not_thru2
+    (fun _ h => by cases h) StmtT.skip (hK7.endOK _)
     (fun ho => by simp [callSig] at ho)
   have hg := StmtT.letd (ξ := .none) (P := Pd) (Γ := K3) (Γ1 := K5) (F := []) (x := 3) (f := 2)
-    (r := .pack [1, 3] DT [2, 4] 2 []) (s := .callc 4 3 1 [] .skip) (E := EC0) (t := CT2) (H := EC0.held)
+    (r := .pack [1, 3] DT [2, 4] 2 []) (s := .callc 4 3 1 4 [] .skip) (E := EC0) (t := CT2) (H := EC0.held)
     (τ := CDT2) rfl
     (by simp [K3, K2, K1, A2.setE, upd]) (by simp) hpack rfl
     (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn cdrop_ok2) (HeldUp.refl _ _) hcall.ofNone

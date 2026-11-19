@@ -351,6 +351,11 @@ import A3
 #print axioms A2.TakeBVWitness.main2_safe
 #print axioms A2.TakeBVWitness.main2_no_leak
 #print axioms A2.node_names_sub
+-- AGORA-901: a store through a borrow of an element that holds views and a closure
+-- (`StmtT.editBV`'s right disjunct: nothing captured by name; A2/EditBVFnWitness.lean)
+#print axioms A2.EditBVFnWitness.main_typed
+#print axioms A2.EditBVFnWitness.main_safe
+#print axioms A2.EditBVFnWitness.main_no_leak
 -- AGORA-900: ... and one that holds a destructor value, handed to its `letd`
 -- first thing (A2/TakeBDWitness.lean; the typing's guarantee `A2.Dtor.takeB_typed`)
 #print axioms A2.Dtor.takeB_typed
@@ -400,6 +405,30 @@ import A3
 -- Agora #651: ... and such a closure is called through its `letd` binding, lent, then dropped by its glue
 #print axioms A2.ClosureDropWitness.main2_typed
 #print axioms A2.ClosureDropWitness.main2_safe
+-- AGORA-395: a closure whose code changes elements through a borrow of its own local, called
+-- through its package: the code implements a through-changing interface (A2/ThruClosureWitness.lean)
+#print axioms A2.ThruClosureWitness.code_impl
+#print axioms A2.ThruClosureWitness.prog_ok
+#print axioms A2.ThruClosureWitness.main_typed
+#print axioms A2.ThruClosureWitness.main_safe
+#print axioms A2.ThruClosureWitness.main_no_leak
+-- A destructor that changes elements through a borrow of its own local, on a type that holds no
+-- views, run by its `letd` frame's end (A2/ThruDtorWitness.lean)
+#print axioms A2.ThruDtorWitness.dtor_thru
+#print axioms A2.ThruDtorWitness.dtor_ok
+#print axioms A2.ThruDtorWitness.prog_ok
+#print axioms A2.ThruDtorWitness.main_typed
+#print axioms A2.ThruDtorWitness.main_safe
+#print axioms A2.ThruDtorWitness.main_no_leak
+-- drop glue whose struct's own `% Drop` changes elements through a borrow, on
+-- a value that holds no views (A2/ThruGlueWitness.lean)
+#print axioms A2.ThruGlueWitness.implT_thru
+#print axioms A2.ThruGlueWitness.glue2_thru
+#print axioms A2.ThruGlueWitness.glue2_implOK
+#print axioms A2.ThruGlueWitness.prog_ok
+#print axioms A2.ThruGlueWitness.main_typed
+#print axioms A2.ThruGlueWitness.main_safe
+#print axioms A2.ThruGlueWitness.main_no_leak
 -- Agora #632: an enum's drop glue takes the enum owned and the payload out
 #print axioms A2.Dtor.enum_dtor_is_glue
 #print axioms A2.Dtor.enum_glue_body
@@ -487,3 +516,30 @@ import A3
 #print axioms A3.claim_full
 #print axioms A3.made_safe_full
 #print axioms A3.claim_made_full
+-- Agora #909 (design e): a destructor of a type that holds views changes elements through a
+-- fresh borrow of its own local, an `edit false`, and is not through-changing
+-- (A2/FreshWitness.lean); no new premise removes a typing (A2/Unfresh.lean)
+#print axioms A2.FreshWitness.dtor_not_thru
+#print axioms A2.FreshWitness.dtor_ok
+#print axioms A2.FreshWitness.prog_ok
+#print axioms A2.FreshWitness.main_typed
+#print axioms A2.FreshWitness.main_safe
+#print axioms A2.FreshWitness.main_no_leak
+#print axioms A2.FreshWitness.edit_false_fresh
+#print axioms A2.FreshWitness.at_rootb_not_fresh
+#print axioms A2.FreshWitness.at_bor_not_fresh
+#print axioms A2.StmtT.unfresh
+#print axioms A2.weaker_unfreshC
+#print axioms A2.freshOK_unfreshC
+#print axioms A2.unfreshC_panic
+-- ... and a closure over a slice whose code does so, called through its package
+-- (A2/FreshClosureWitness.lean)
+#print axioms A2.FreshClosureWitness.code_impl
+#print axioms A2.FreshClosureWitness.prog_ok
+#print axioms A2.FreshClosureWitness.main_typed
+#print axioms A2.FreshClosureWitness.main_safe
+#print axioms A2.FreshClosureWitness.main_no_leak
+#print axioms A2.freshOK_of_noFresh
+#print axioms A2.EntryWeaker.fresh_of_not
+#print axioms A2.RhsT.borrow_unfresh
+#print axioms A2.RhsT.at_unfresh

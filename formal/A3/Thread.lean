@@ -27,11 +27,13 @@ theorem inv_emptyGl {s : Stmt} {nv : Nat} (g : Nat → Option Val) (T : Nat → 
   rootbLive _ _ h := by cases h
   rootbLt _ _ h := by cases h
   names _ _ h := by cases h
+  fresh _ _ h := by cases h
   held _ _ _ _ h := by cases h
   pkgs _ _ _ h := by cases h
   armed _ _ _ h := by cases h
   shares _ _ _ _ h := by cases h
   blocks _ _ h := by cases h
+  pkgFree _ _ _ _ h := by cases h
   nvS := hv
   nvF _ h := by cases h
   anch _ _ h := by cases h

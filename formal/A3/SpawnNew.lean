@@ -41,7 +41,7 @@ theorem spawn_param {fn : Fn} (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.
 
 /-- Its entry: an owner that depends on nothing. -/
 theorem sigCtx_sink {fn : Fn} {v : Nat} {t : Ty} (hp : fn.params[v]? = some (.sink, t))
-    (ht : t.holdsView = false) : sigCtx fn v = some ⟨t, .own, true, [], [], false, false⟩ := by
+    (ht : t.holdsView = false) : sigCtx fn v = some ⟨t, .own, true, [], [], false, false, false⟩ := by
   rw [sigCtx_of hp]
   simp [paramE, hasFn_of_holdsView ht]
 
@@ -49,8 +49,8 @@ theorem sigCtx_sink {fn : Fn} {v : Nat} {t : Ty} (hp : fn.params[v]? = some (.si
     its result's. -/
 theorem sigCtx_spawn {fn : Fn} (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false)
     {v : Nat} {E : Entry} (hv : sigCtx fn v = some E) :
-    (∃ t, fn.params[v]? = some (.sink, t) ∧ t.holdsView = false ∧ E = ⟨t, .own, true, [], [], false, false⟩) ∨
-    (v = fn.params.length ∧ E = ⟨fn.resTy, resMode fn, false, [], [], false, false⟩) := by
+    (∃ t, fn.params[v]? = some (.sink, t) ∧ t.holdsView = false ∧ E = ⟨t, .own, true, [], [], false, false, false⟩) ∨
+    (v = fn.params.length ∧ E = ⟨fn.resTy, resMode fn, false, [], [], false, false, false⟩) := by
   rcases Nat.lt_trichotomy v fn.params.length with h | h | h
   · obtain ⟨t, hp, ht⟩ := spawn_param hpar h
     rw [sigCtx_sink hp ht] at hv
@@ -243,6 +243,7 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
     rootbLive := fun p E hp hm => absurd hm (hrb p E hp)
     rootbLt := fun p E hp hm => absurd hm (hrb p E hp)
     names := sigCtx_names fn
+    fresh := sigCtx_freshOK fn
     held := fun v E sl T hv hl hsl hT => by
       rcases sigCtx_spawn hpar hv with ⟨t, hp, ht, rfl⟩ | ⟨rfl, rfl⟩
       · intro c hc
@@ -257,6 +258,18 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
       · have h0 : spawnSt fn vs fn.params.length = some sl := hsl
         rw [spawnSt_res] at h0; cases h0; cases hT
     blocks := fun k bl hk => (hB k bl hk).ok
+    pkgFree := fun y E o v hy _ hst i hn => by
+      -- AGORA-901: a new thread's parameters hold no view
+      exfalso
+      rcases sigCtx_spawn hpar hy with ⟨t, hp, ht, rfl⟩ | ⟨rfl, rfl⟩
+      · have hvl : y < vs.length := by rw [hlen]; exact (List.getElem?_eq_some_iff.mp hp).1
+        obtain ⟨w, hw⟩ : ∃ w, vs[y]? = some w := ⟨_, List.getElem?_eq_getElem hvl⟩
+        change spawnSt fn vs y = _ at hst
+        rw [spawnSt_of hlen hw] at hst; cases hst
+        obtain ⟨_, _, _, hv⟩ := hn.own rfl
+        exact (hwf y v _ hw hp).noView ht hv
+      · change spawnSt fn vs _ = _ at hst
+        rw [spawnSt_res] at hst; cases hst
     nvS := fun v hv => by
       show v < fn.nvars
       rw [vars_wrap] at hv

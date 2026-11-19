@@ -135,19 +135,21 @@ $ `stdlib/core/slice.nu`
     ^ wrapped
 }
 
-// Authenticated AND carrying `scope`.
-@ with_oidc_scope OidcProvider p OidcPolicy pol s scope ( @ HttpResponse HttpRequest OidcIdentity ) inner → ( @ HttpResponse HttpRequest ) {
-    : ( @ HttpResponse HttpRequest ) wrapped \ HttpRequest req → HttpResponse {
+// Authenticated AND carrying `scope`. (The route owns its copy of `scope`:
+// the server runs it on its worker threads, where a view of the caller's
+// string could outlive it - agora #812.)
+@ with_oidc_scope OidcProvider p OidcPolicy pol sink String scope ( @ HttpResponse HttpRequest OidcIdentity ) inner → ( @ HttpResponse HttpRequest ) {
+    ^ \ HttpRequest req → HttpResponse {
         ?? ( parse_bearer_auth req ) {
             T t → {
                 : !OidcIdentity OauthErr vr ( oidc_verify_token p pol ( string_data t ) )
                 ^ ?? vr {
                     T id → {
-                        ? ( oidc_identity_has_scope id scope ) {
+                        ? ( oidc_identity_has_scope id ( string_data scope ) ) {
                             : HttpResponse resp ( inner req id )
                             ^ resp
                         } {
-                            ^ ( _oidc_forbidden scope )
+                            ^ ( _oidc_forbidden ( string_data scope ) )
                         }
                     }
                     F e → ( _oidc_unauthorized ( oauth_err_bearer_code # OauthErr e ) ( oidc_provider_last_error p ) )
@@ -156,5 +158,4 @@ $ `stdlib/core/slice.nu`
             F _ → { ^ ( _oidc_unauthorized `` `` ) }
         }
     }
-    ^ wrapped
 }

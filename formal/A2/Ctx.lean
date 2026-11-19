@@ -1,4 +1,5 @@
 import A2.Basic
+import A2.FreshBase
 
 /-! A2 — facts about contexts and about validity. -/
 
@@ -6,15 +7,23 @@ namespace A2
 
 theorem EntryWeaker.refl (E : Entry) : EntryWeaker E E := by
   refine ⟨rfl, rfl, fun _ => rfl, fun h => ⟨h, fun _ => List.Subset.refl _, List.Subset.refl _⟩,
-    fun h => ⟨h, List.Subset.refl _⟩, (by simp_all), (fun _ => by simp_all), fun _ _ _ _ _ => Iff.rfl⟩
+    fun h => ⟨h, List.Subset.refl _⟩, (by simp_all), (fun _ => by simp_all), fun _ _ _ _ _ => Iff.rfl,
+    fun _ _ _ h => ⟨h, List.Subset.refl _⟩⟩
 
 theorem EntryWeaker.trans {E1 E2 E3 : Entry} (h1 : EntryWeaker E1 E2) (h2 : EntryWeaker E2 E3) :
     EntryWeaker E1 E3 := by
-  obtain ⟨t1, m1, r1, l1, d1, b1, a1, k1⟩ := h1
-  obtain ⟨t2, m2, r2, l2, d2, b2, a2, k2⟩ := h2
+  obtain ⟨t1, m1, r1, l1, d1, b1, a1, k1, f1⟩ := h1
+  obtain ⟨t2, m2, r2, l2, d2, b2, a2, k2, f2⟩ := h2
   refine ⟨t2.trans t1, m2.trans m1, fun h => ?_, fun h => ?_, fun h => ?_, b2.trans b1, fun h => ?_,
     fun h hos hn d hnm => (k2 (by rw [b1]; exact h) (by rw [m1]; exact hos) (by rw [t1, m1]; exact hn) d hnm).trans
-      (k1 h hos hn d hnm)⟩
+      (k1 h hos hn d hnm),
+    fun hl hn hb h => by
+      have hl2 := (l2 hl).1
+      have hn2 : E2.ty ≠ .int := by rw [← t2]; exact hn
+      have hb2 : E2.mode = .bor := by rw [← m2]; exact hb
+      obtain ⟨h2, p2⟩ := f2 hl hn hb h
+      obtain ⟨h1, p1⟩ := f1 hl2 hn2 hb2 h2
+      exact ⟨h1, p2.trans p1⟩⟩
   rotate_right
   · rcases a2 h with h2 | h2
     · exact a1 h2
@@ -220,6 +229,13 @@ theorem ArmOK.weaker {m : Mem} {E E' : Entry} {sl : Slot} (hw : EntryWeaker E E'
   obtain ⟨hdt', hsub⟩ := hw.dtor hdt
   exact ⟨hdt', by rw [hw.ty]; exact hv.mono hsub⟩
 
+/-- A clean root stays one in a weaker context's place: modes are kept and
+    a borrowed parameter's entry is fixed. -/
+theorem CleanLe.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') : CleanLe Γ' Γ :=
+  CleanLe.of_entries fun _ _ hv => by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    exact ⟨E, hE, hwe.mode, fun hm => by rw [hwe.fixed (Or.inl hm)]; exact ⟨rfl, rfl⟩⟩
+
 theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ') : MInv m Γ' where
   dom v := by rw [← hw.isSome v]; exact hi.dom v
   slot v E' hv := by
@@ -232,6 +248,7 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     rw [hwe.mode]; exact hi.noInout v E b hE
   wf := hw.wf
+  fresh := hi.fresh.weaker hw
   rootbLive p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
@@ -253,6 +270,24 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     rw [hwe.ty]; exact hi.shares v E sl T hE hsl hown hT
   blocks := hi.blocks
+  pkgFree x E' o v hx hl hs i hn := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hx
+    have hn' := hn.mono (CleanLe.weaker hw)
+    rcases hl with hl | ⟨hdb, hos⟩
+    · obtain ⟨hl0, hp, hh⟩ := hwe.live hl
+      refine hi.pkgFree x E o v hE (Or.inl hl0) hs i ?_
+      refine hn'.weaken hwe.mode (fun hos => ?_) (fun d hd => hh (List.mem_filter.mp hd).1)
+      by_cases hrb : E.mode = .rootb
+      · rw [hwe.fixed (Or.inl hrb)]; exact fun _ h => h
+      · exact hp hos
+    · -- an owner made by `letd`, live or not: it views what it viewed
+      have hdb0 : E.dbind = true := by rw [← hwe.dbind]; exact hdb
+      have hos0 : E.mode.ownSlot = true := by rw [← hwe.mode]; exact hos
+      have hnint : E.ty ≠ .int := fun ht => by have := hi.wf.view x E hE hdb0; rw [ht] at this; cases this
+      refine hi.pkgFree x E o v hE (Or.inr ⟨hdb0, hos0⟩) hs i ?_
+      refine hn'.weaken hwe.mode (fun h => by rw [hos0] at h; cases h) (fun d hd => ?_)
+      exact (hwe.dheld hdb0 hos0 (Or.inl hnint) d (by simpa using (List.mem_filter.mp hd).2)).mpr
+        (List.mem_filter.mp hd).1
 
 theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hw : Weaker Γ Γ') : Inv m Γ' F s where

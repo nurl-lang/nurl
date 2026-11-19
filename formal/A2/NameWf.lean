@@ -260,7 +260,7 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
     -- Agora #826: `y` replaced by a fresh empty `Vec`: it holds nothing, so it
     -- may be held by name as before
     have hos := hcan.ownSlot
-    have hk : Keeps Γ (A2.setE (A2.kill .replace false y Γ) y ⟨Ey.ty, Ey.mode, true, [], [], false, false⟩) [] :=
+    have hk : Keeps Γ (A2.setE (A2.kill .replace false y Γ) y ⟨Ey.ty, Ey.mode, true, [], [], false, false, false⟩) [] :=
       ((Keeps.refl Γ []).kill _ _ _).setE fun E0 h0 => by
         rw [hy] at h0; cases h0
         exact ⟨rfl, rfl, fun _ _ => ⟨rfl, rfl, hos, by rw [hty]; simpa [Ty.holdsView] using hhv⟩⟩
@@ -886,7 +886,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
     have hx1 : Γ1 x = none := by
       have := (hc.domMode).1 x; rw [hx] at this; cases h : Γ1 x <;> simp_all
     exact (ih hks (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hE)).exitScope x
-  | @callc _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx _ hc htc _ _ _ _ hcT _ _ _ _ _ ih =>
+  | @callc _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx _ hc htc _ _ _ _ hcT _ _ _ _ ih =>
     intro _ hn
     obtain ⟨hn1, hE, hk⟩ := hcT.names hP hn
     have hx1 : Γ1 x = none := by
@@ -953,7 +953,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       · exact hN d (List.mem_append_left _ hd)
       · exact hN d (List.mem_append_right _ hd)
       · exact hD d (ownHeld_sub _ _ _ hd)
-  | @editB _ Γ Γ1 F x op Ex Ex1 t D hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
+  | @editB _ Γ Γ1 F x op Ex Ex1 t D _ hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
     intro _ hn
     have hn1 : NameWF Γ1 := harg.names hn
     have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1

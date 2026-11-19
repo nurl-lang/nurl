@@ -101,6 +101,7 @@ theorem step_release {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch
       (hi.heap.remove_keep x) rfl
       (fun k hk => by cases k <;> simp [Eff.kills] at hk) (show _ = none by simp) hpin.2.1 (fun _ => hpin.2.2)
       (fun _ => rfl) (fun _ _ h => by cases h)
+      (PkgKeep.noval hi (fun o ho => by simp [Mem.remove, upd_ne _ _ ho]) (by simp [Mem.remove]))
   obtain ⟨sl, hsl', _, hslot⟩ := hi.slot x E hx
   rw [hsl] at hsl'; cases hsl'
   have hwv : WFv t v ∧ SharesOK m t v := by

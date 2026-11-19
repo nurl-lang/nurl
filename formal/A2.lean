@@ -41,6 +41,7 @@ import A2.PopWitness
 import A2.RemoveLoopWitness
 import A2.TakeBWitness
 import A2.TakeBVWitness
+import A2.EditBVFnWitness
 import A2.TakeBDWitness
 import A2.HandOver
 import A2.ExitWitness
@@ -48,5 +49,11 @@ import A2.Layout
 import A2.DtorWitness
 import A2.DropCode
 import A2.ClosureDropWitness
+import A2.ThruClosureWitness
+import A2.ThruDtorWitness
+import A2.ThruGlueWitness
 import A2.ArcDtorWitness
 import A2.ArcPanicWitness
+import A2.FreshWitness
+import A2.Unfresh
+import A2.FreshClosureWitness
