@@ -218,6 +218,22 @@ the LLVM / C11 memory model rather than redefining it.
     call of it passes an argument holding views
     (`A2/HeldViewThruWitness.lean`: `call_refused`, `call_alone_refused`;
     AGORA-933, which nurlc accepted and fixes in github#2100).
+    A copy of a slice of views (a literal's owned `[s` field given a slice
+    parameter, a `mem_dup` of one) is typed as A2 types a copy: a call whose
+    summary hands back an owner and lends nothing (`CallT`, `callRes`). Its
+    entry holds every kind of dependency on what its argument held, and
+    nothing rooted at the argument itself (`copy_typed`, `copy_holds_a`,
+    `copy_free_of_temp`). So releasing the temporary it was copied from
+    leaves it live, while a value depending on the temporary itself is ended
+    by that release, and replacing what the views point into ends the copy,
+    after which no read of it types (`A2/SliceCopyViewWitness.lean`:
+    `copy_survives_temp_release`, `dep_on_temp_dies`,
+    `copy_dead_after_replace`, `read_copy_refused`; AGORA-935, where nurlc
+    answered the copy as a view of the argument and kept the temporary, a
+    leak). The literal the copy is the field of, `@ SBag { t 2 }`, is A2's
+    `pair`: it holds what the copy holds and nothing of the temporary
+    (`lit_held`, `lit_free_of_temp`). A2's typing and nurlc's answer since
+    AGORA-935 agree.
     `A2/FreshProjWitness.lean` types the same call through a field:
     `add inout Bag b` pushes through `. b items`, called with a view of
     another value that is read after the call. A field or payload read
