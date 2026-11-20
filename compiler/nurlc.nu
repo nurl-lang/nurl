@@ -32849,6 +32849,48 @@ unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
         ( nurl_set_last_type ty )
         ^ r
     } {}
+    // (An owned slice: its buffer copied, the copy the caller's own - as a
+    // literal's owned slice field copies one (AGORA-841, AGORA-895,
+    // AGORA-935). It is a value of its own where its elements hold no view,
+    // and holds what they view where they do: `__nurl_slice_copy` /
+    // `__nurl_slice_copy_v` to the walk and the engine. Handed back as is,
+    // `( mem_dup t )` was no copy but `t` itself, a view, where the
+    // diagnostics offer it as "a copy that owns its data"; agora #938.)
+    ? & != 0 g_auto_drop_strings ( __owned_slice_ty ( nurl_llty ty ) ) {
+        // (An operand that is a fresh slice on some runs - a call's, a
+        // join's, by its bit - is the copy on those runs: taken, not copied,
+        // and released by no one else. Copied whole, `( mem_dup ( mks ) )`
+        // leaked the call's slice.)
+        : s __obit ? == __dtt TT_LPAREN ( __slice_call_own_bit syms cg ) ? & == __dtt TT_QUEST != 0 ( nurl_str_len g_slice_join_own ) ( nurl_str_cat g_slice_join_own `` ) ( nurl_str_cat `` `` )
+        : ~ s r ``
+        ? == 0 ( nurl_str_len __obit ) { = r ( mem_emit_clone_on cg ( nurl_llty ty ) v `1` ) } {
+            ? ( seq __obit `true` ) { = r ( nurl_str_cat v `` ) } {
+                : s __onb ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __onb ) ( nurl_print ` = xor i1 ` ) ( nurl_print __obit ) ( nurl_print `, 1\n` )
+                = r ( mem_emit_cloneif cg ( nurl_llty ty ) v __onb )
+            }
+        }
+        : b __shv ( __ty_holds_view_p ( __owned_slice_elem ( nurl_llty ty ) ) )
+        ( nurl_sym_def syms `__last_call_name__` `` ) = g_call_own_slc -1
+        ( nurl_sym_def syms `__last_call_forward__` `` )
+        ( nurl_sym_def syms `__last_value_borrow__` `` )
+        ( nurl_sym_def syms `__last_call_ret_view__` `` )
+        ( nurl_sym_def syms `__last_call_lend_idents__` `` )
+        ( nurl_sym_def syms `__last_phi_idents__` `` )
+        ( nurl_sym_def syms `__last_call_part_idents__` `` )
+        ( nurl_sym_def syms `__last_call_args__` `` )
+        = g_call_roots ``
+        = g_call_lend_roots ``
+        // (Fresh, as a slice call that always hands one back is: a binding,
+        // an argument's temporary and a return take it over.)
+        ( nurl_sym_def syms `__last_call_ret_owned__` `1` )
+        ( nurl_sym_def syms `__last_fresh_reg__` r )
+        = g_dup_nest g_call_nest
+        ? != 0 g_core_live { = g_core_callee ( __core_in ? __shv `__nurl_slice_copy_v` `__nurl_slice_copy` ) } {}
+        ( __sx_publish __me ? | | | ! __shv == 0 ( nurl_str_len __osx ) ( seq __osx `-` ) ( seq __osx `*` ) ( nurl_str_cat `-` `` ) ( nurl_str_cat3 `__nurl_slice_copy(` __osx `)` ) )
+        ( nurl_set_last_type ty )
+        ^ r
+    } {}
     // (Nothing to copy: the value itself, with what it reads.)
     ( __sx_publish __me __osx )
     ( nurl_set_last_type ty )
