@@ -183,6 +183,9 @@
 // for (`%R`), or `` — while set, every exit of that function ends with the
 // drop glue of its parameter (mem_emit_drop_glue).
 : ~ s g_drop_glue_ty ``
+// 1 while g_drop_glue_ty names a type: an int the hot paths can test first
+// (a member read, a call argument; agora #929).
+: ~ i g_drop_glue_on 0
 : ~ i g_call_nest 0  // how many calls deep the expression being compiled is (__gen_call_nested)
 : ~ i g_dup_nest -1  // the call depth of the last `( mem_dup x )` copy made in this expression, -1: none (agora #688)
 : ~ i g_use_sinkstr 0  // a call went through __nurl_sinkstr (mem_sink_str_arg)
@@ -34717,7 +34720,7 @@ unsafe @ gen_call i lex i syms i cg → s {
     // (The line the call starts on: once it is parsed the lexer is at the
     // next token, which may be on the next line - and the refill of a field
     // the call's own statement makes is recognised by its line, agora #929.)
-    : i __unw_ln ( nurl_lex_line lex )
+    : i __unw_ln ? != 0 g_fn_unw ( nurl_lex_line lex ) 0
     : s __gcr ( gen_call_body lex syms cg )
     ? != 0 g_fn_unw { ? ( __call_may_unwind __unw_fn ) { ( bck_note_unwind __unw_ln ) } {} } {}
     // (…or a call in a defer body, which runs at a scope's exit, not here;
@@ -37881,14 +37884,14 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // that destructor runs at the struct's end and reads the emptied
         // field. Whether it reads it is known when the module is done -
         // parked here, resolve_drop_field_takes; agora #929.)
-        // (Each struct along the path, `T:f` from __last_field_chain__: the
+        // (Each struct along the path, `T:f` from __field_path_chain: the
         // field below it is what its `% Drop` would find emptied. A number
         // handed over is a copy, which takes nothing.)
         // (Not in an `unsafe` function, which dismantles a value by hand -
         // its author vouches for what it frees, and no destructor of what it
         // takes apart runs after it.)
-        ? & & & & & != 0 ( nurl_str_len arg_froot ) ( str_has_index callee_sink arg_idx ) != 0 g_user_drop_seen ( bck_sound ) ! ( __plain_scalar_lty ( nurl_llty at ) ) == 0 g_in_unsafe {
-            : ~ s __dch ( nurl_sym_get syms `__last_field_chain__` )
+        ? & & & & & != 0 g_user_drop_seen == 0 g_in_unsafe != 0 ( nurl_str_len arg_froot ) ( str_has_index callee_sink arg_idx ) ( bck_sound ) ! ( __plain_scalar_lty ( nurl_llty at ) ) {
+            : ~ s __dch ( __field_path_chain syms arg_froot )
             ~ != 0 ( nurl_str_len __dch ) {
                 : s __dl ( str_first_word __dch ) = __dch ( str_skip_word __dch )
                 : i __dk ( nurl_str_find __dl `:` )
@@ -37904,7 +37907,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // (Inside a `% Drop` impl, its receiver handed whole to a call: what
         // that call reads of it is not known here, so every field counts as
         // read, `*`.)
-        ? & & != 0 ( nurl_str_len g_drop_glue_ty ) ( is_ident_tok bck_arg_tt ) ( seq bck_arg_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) { ( __drop_reads_add g_drop_glue_ty `*` ) } {}
+        ? & & != 0 g_drop_glue_on ( is_ident_tok bck_arg_tt ) ( seq bck_arg_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) { ( __drop_reads_add g_drop_glue_ty `*` ) } {}
         ? & & != 0 ( nurl_str_len arg_froot ) __row_callee ( bck_sound ) {
             ( bck_stash_store arg_froot ( nurl_lex_line lex ) __rc ( nurl_str_int arg_idx ) `pendfield` )
             ( __clo_effect_note arg_froot __rc arg_idx )
@@ -63159,16 +63162,18 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     // line. That call too runs before the store, so a panic
                     // in it hands the field back empty: open, AGORA-939,
                     // until the walk knows which calls cannot panic.)
-                    : ~ s ufs ``
-                    : ~ i uq + p 1
-                    ~ & ( seq ( bck_field ( bck_rec uq ) 0 ) `fieldset` ) == ( bck_field_int ( bck_rec uq ) 3 ) ( bck_field_int rec 3 ) {
-                        = ufs ( nurl_str_cat3 ufs ` ` ( bck_field ( bck_rec uq ) 1 ) )
-                        = uq + uq 1 }
-                    ( bck_put `unwskip` ufs )
-                    = g_bck_unw_exit T
-                    ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F )
-                    = g_bck_unw_exit F
-                    ( bck_put `unwskip` `` )
+                    ? != 0 g_bck_fmv_any {
+                        : ~ s ufs ``
+                        : ~ i uq + p 1
+                        ~ & ( seq ( bck_field ( bck_rec uq ) 0 ) `fieldset` ) == ( bck_field_int ( bck_rec uq ) 3 ) ( bck_field_int rec 3 ) {
+                            = ufs ( nurl_str_cat3 ufs ` ` ( bck_field ( bck_rec uq ) 1 ) )
+                            = uq + uq 1 }
+                        ( bck_put `unwskip` ufs )
+                        = g_bck_unw_exit T
+                        ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F )
+                        = g_bck_unw_exit F
+                        ( bck_put `unwskip` `` )
+                    } {}
                 } {}
                 = p + p 1
                 = done T
@@ -81043,18 +81048,10 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
     // the field can hold is what that binding can (__clo_cs_expr).
     ? ( is_ident_tok __mb_tt ) { ( nurl_sym_def syms `__last_member_root__` __mb_val ) } {
         ? != __mb_tt TT_DOT { ( nurl_sym_def syms `__last_member_root__` `` ) } {} }
-    // (…and the struct the field is read off itself, for a nested read
-    // too: `. . o m s` reads `s` off a `Named` - gen_call's `% Drop` check.)
-    ( nurl_sym_def syms `__last_field_objty__` ot )
-    // (…and every struct the path passes through with the field below it,
-    // `T:f` words outermost first: a `% Drop` of any of them may read the
-    // field a sink takes, `. . o inner buf` read by Outer's.)
-    : s __mb_link ( nurl_str_cat3 ot `:` ( nurl_lex_val lex ) )
-    ( nurl_sym_def syms `__last_field_chain__` ? == __mb_tt TT_DOT ( nurl_str_cat3 ( nurl_sym_get syms `__last_field_chain__` ) ` ` __mb_link ) __mb_link )
     // (Inside a `% Drop` impl, a field of its receiver it reads: what a sink
     // may not take out of a value of that type - resolve_drop_field_takes,
     // agora #929.)
-    ? & & != 0 ( nurl_str_len g_drop_glue_ty ) ( is_ident_tok __mb_tt ) ( seq __mb_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) {
+    ? & & != 0 g_drop_glue_on ( is_ident_tok __mb_tt ) ( seq __mb_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) {
         ( __drop_reads_add g_drop_glue_ty ( nurl_lex_val lex ) )
     } {}
     // (…and whether the object is a call's result, `. ( f ) x`, through a
@@ -86514,6 +86511,7 @@ unsafe @ gen_closure_expr i lex i syms i cg → s {
     // read, `*` - resolve_drop_field_takes, agora #929.)
     ? != 0 ( nurl_str_len __glue_saved ) { ( __drop_reads_add __glue_saved `*` ) } {}
     = g_drop_glue_ty ``
+    = g_drop_glue_on 0
     = g_last_alloc_reg ``
     = g_last_alloc_size ``
     : s r ( __gen_closure_expr lex syms cg )
@@ -86523,6 +86521,7 @@ unsafe @ gen_closure_expr i lex i syms i cg → s {
     = g_last_alloc_reg ``
     = g_last_alloc_size ``
     = g_drop_glue_ty __glue_saved
+    = g_drop_glue_on ? == 0 ( nurl_str_len g_drop_glue_ty ) 0 1
     ^ r
 }
 
@@ -95857,7 +95856,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     // the value up whole. So a hook that only observes the value needs no
     // `mem_forget` (which only `unsafe` code may call).
     : b __hook_glue & == 0 ( nurl_str_len g_drop_glue_ty ) ( __is_hook_fn syms fname )
-    ? __hook_glue { = g_drop_glue_ty ( nurl_str_cat ( nurl_sym_get syms ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) `` ) } {}
+    ? __hook_glue { = g_drop_glue_ty ( nurl_str_cat ( nurl_sym_get syms ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) `` ) = g_drop_glue_on 1 } {}
     ( __alloca_struct_params syms cg )
     ( mem_journal_push_glue syms cg )
     // The parameters that can hold storage, named once (__rprov_param); the
@@ -96646,7 +96645,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ? != 0 ( nurl_str_len fn_ret_struct_fields )
     { ( nurl_sym_def syms ( nurl_str_cat fname `__ret_owned_fields` ) fn_ret_struct_fields ) }
     {}
-    ? __hook_glue { = g_drop_glue_ty `` } {}
+    ? __hook_glue { = g_drop_glue_ty `` = g_drop_glue_on 0 } {}
     ? ( seq fname `main` ) ( emit_main_wrapper ret_ty ) {}
     = g_etake_n __etk_saved
     = g_epl_n __epl_saved
@@ -99782,6 +99781,33 @@ unsafe @ __holds_user_drop s ty i depth → b {
 // A program's own `% Drop` for `ty` (registered in the signature
 // pre-scan), as opposed to a drop the compiler supplies for a struct, a
 // handle type or an enum (`structdrop##` / `handledrop##` / `autodrop##`).
+// Every struct field path `p` (`o.inner.buf`, its root a binding) passes
+// through, with the field below it: `T:f` words outermost first
+// (`%Outer:inner %Inner:buf`) - a `% Drop` of any of them may read what a
+// sink takes there. Asked only of a sink's field argument, so a member read
+// pays nothing for it.
+@ __field_path_chain i syms s p → s {
+    : ~ s rest ( nurl_str_cat p `` )
+    : i k0 ( nurl_str_find rest `.` )
+    ? < k0 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s ty ( nurl_sym_get syms ( nurl_str_slice rest 0 k0 ) )
+    = rest ( nurl_str_slice rest + k0 1 - - ( nurl_str_len rest ) k0 1 )
+    : ~ s out ``
+    ~ & != 0 ( nurl_str_len rest ) != 0 ( nurl_str_len ty ) {
+        : i k ( nurl_str_find rest `.` )
+        : s f ? < k 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 k )
+        = rest ? < k 0 `` ( nurl_str_slice rest + k 1 - - ( nurl_str_len rest ) k 1 )
+        : ~ s lt ? == ( nurl_str_get ty 0 ) 37 ( nurl_str_cat ty `` ) ( nurl_llty ty )
+        : i ln ( nurl_str_len lt )
+        ? & > ln 0 == ( nurl_str_get lt - ln 1 ) 42 { = lt ( nurl_str_slice lt 0 - ln 1 ) } {}
+        ? | < ( nurl_str_len lt ) 2 != ( nurl_str_get lt 0 ) 37 { ^ out } {}
+        : s link ( nurl_str_cat3 lt `:` f )
+        = out ? == 0 ( nurl_str_len out ) link ( nurl_str_cat3 out ` ` link )
+        = ty ( nurl_sym_get2 syms ( nurl_str_slice lt 1 - ( nurl_str_len lt ) 1 ) ( nurl_str_cat3 `__` f `__type` ) )
+    }
+    ^ out
+}
+
 // Record that the `% Drop` for `ty` reads field `f` of its receiver (`*`:
 // every field).
 @ __drop_reads_add s ty s f → v {
@@ -114260,10 +114286,11 @@ unsafe @ gen_trait_or_impl i lex i syms i cg → v {
                         } {}
                         // A struct's `% Drop` gets its fields' drop glue.
                         : b __glue & & ( seq tname `Drop` ) ( seq mname `drop` ) == ( nurl_str_get impl_llvm 0 ) 37
-                        ? __glue { = g_drop_glue_ty ( nurl_str_cat impl_llvm `` ) } {}
+                        ? __glue { = g_drop_glue_ty ( nurl_str_cat impl_llvm `` ) = g_drop_glue_on 1 } {}
                         // gen_fn_decl_concrete reads params, →, ret, body from lex
                         ( gen_fn_decl_concrete mangled lex syms cg )
                         = g_drop_glue_ty ``
+                        = g_drop_glue_on 0
                         // Panic-unwind journal: for the `Drop` trait, emit a
                         // `void(i8*)` thunk that loads the value from its alloca
                         // and runs the just-emitted destructor, so a panic can
