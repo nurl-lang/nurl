@@ -2246,9 +2246,10 @@ theorem DKeep.canon (h : S.OK) {Δa : Ctx} (hdk : DKeep Γa Δa [])
       (E0.fixed → E = E0)) :
     DKeep (S.canon Γa) (S.canon Δa) [] := by
   intro y E' hy hd hos hn _
-  rcases canon_cases h Δa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
+  rcases canon_cases_sub h Δa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hyf, hc⟩
   · rw [hc] at hy
     obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hy
+    simp only [Function.comp, subE_dbind, subE_mode, subE_ty] at hd hos hn
     by_cases hrb : E1.mode = .rootb
     · rw [liftE_dbind h, ite_eq_left hrb] at hd; cases hd
     · rw [liftE_dbind h, ite_eq_right hrb] at hd
@@ -2261,33 +2262,43 @@ theorem DKeep.canon (h : S.OK) {Δa : Ctx} (hdk : DKeep Γa Δa [])
       obtain ⟨E0', h0', hm0, ht0, _⟩ := hm v E1 h1
       rw [h0] at h0'; cases h0'
       have hrb0 : E0.mode ≠ .rootb := by rw [← hm0]; exact hrb
-      refine ⟨S.liftE v E0, by rw [canon_ρ h, h0]; rfl, by rw [liftE_dbind h, ite_eq_right hrb0]; exact hd0,
-        by rw [liftE_mode v hrb0, liftMode_ownSlot]; exact hos0,
-        by rw [liftE_ty v hrb0, liftE_mode v hrb0]; rw [liftE_ty v hrb, liftE_mode v hrb] at hn
+      refine ⟨S.subE (S.liftE v E0), canon_some h h0 hp,
+        by rw [subE_dbind, liftE_dbind h, ite_eq_right hrb0]; exact hd0,
+        by rw [subE_mode, liftE_mode v hrb0, liftMode_ownSlot]; exact hos0,
+        by rw [subE_ty, subE_mode, liftE_ty v hrb0, liftE_mode v hrb0]; rw [liftE_ty v hrb, liftE_mode v hrb] at hn
            rw [← ht0, ← hm0]; exact hn,
         fun d hdd hnm => ?_⟩
-      rcases (mem_liftE_vdeps hrb).mp hdd with ⟨d0, hd0', rfl⟩ | ha
+      -- (a dependency that is no name comes from one that is no name)
+      simp only [Function.comp] at hdd
+      rw [subE_vdeps] at hdd ⊢
+      obtain ⟨d1, hd1, hdd1⟩ := S.mem_flatMap_subD_nonname hdd hnm
+      refine List.mem_flatMap.mpr ⟨d1, ?_, hdd1.2⟩
+      rcases (mem_liftE_vdeps hrb).mp hd1 with ⟨d0, hd0', rfl⟩ | ha
       · exact (mem_liftE_vdeps hrb0).mpr
-          (Or.inl ⟨d0, hs0 d0 hd0' (by simpa [Dep.ren] using hnm), rfl⟩)
+          (Or.inl ⟨d0, hs0 d0 hd0' (by simpa [Dep.ren] using hdd1.1), rfl⟩)
       · refine (mem_liftE_vdeps hrb0).mpr (Or.inr ?_)
         rw [S.liftDeps_own hos1] at ha; rw [S.liftDeps_own hos0, ← ht0]; exact ha
+  · rw [hc] at hy; cases hy
   · rw [hc] at hy
     exact ⟨E', by rw [canon_frame Γa hyf]; exact hy, hd, hos, hn, fun d hdd _ => hdd⟩
 
 /-- ... and keeps every binding `letd` made one. -/
 theorem DStay.canon (h : S.OK) {Δa : Ctx} (hst : DStay Γa Δa []) : DStay (S.canon Γa) (S.canon Δa) [] := by
   intro y E hy hd hos _
-  rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
+  rcases canon_cases_sub h Γa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hyf, hc⟩
   · rw [hc] at hy
     obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hy
+    simp only [Function.comp, subE_dbind, subE_mode] at hd hos
     by_cases hrb : E1.mode = .rootb
     · rw [liftE_dbind h, ite_eq_left hrb] at hd; cases hd
     · rw [liftE_dbind h, ite_eq_right hrb] at hd
       have hos1 : E1.mode.ownSlot = true := by rwa [liftE_mode v hrb, liftMode_ownSlot] at hos
       obtain ⟨E2, h2, hd2, hos2⟩ := hst v E1 h1 hd hos1 (by simp)
       have hrb2 : E2.mode ≠ .rootb := fun h' => by rw [h'] at hos2; cases hos2
-      exact ⟨S.liftE v E2, by rw [canon_ρ h, h2]; rfl, by rw [liftE_dbind h, ite_eq_right hrb2]; exact hd2,
-        by rw [liftE_mode v hrb2, liftMode_ownSlot]; exact hos2⟩
+      exact ⟨S.subE (S.liftE v E2), canon_some h h2 hp,
+        by rw [subE_dbind, liftE_dbind h, ite_eq_right hrb2]; exact hd2,
+        by rw [subE_mode, liftE_mode v hrb2, liftMode_ownSlot]; exact hos2⟩
+  · rw [hc] at hy; cases hy
   · rw [hc] at hy
     exact ⟨E, by rw [canon_frame Δa hyf]; exact hy, hd, hos⟩
 
@@ -5292,9 +5303,10 @@ theorem AbsOK.of_same {Γa Δa : Ctx} (hab : S.AbsOK Γa) (hdom : ∀ v, (Γa v)
 /-- Agora #909: a fresh borrow of the callee stays one where the call places
     it: its lift adds nothing the arguments hold, and its roots, the
     callee's own bindings, are lifted to owners. -/
-theorem freshE_lift (h : S.OK) {Γa : Ctx} {v : Var} {E : Entry} (hE : FreshE Γa E) :
-    FreshE (S.canon Γa) (S.liftE v E) := by
+theorem freshE_lift (h : S.OK) {Γa : Ctx} (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : FreshE Γa E) :
+    FreshE (S.canon Γa) (S.subE (S.liftE v E)) := by
   intro hl hn hb hf
+  rw [subE_live] at hl; rw [subE_ty] at hn; rw [subE_mode] at hb; rw [subE_fresh] at hf
   by_cases hrb : E.mode = .rootb
   · simp [liftE, hrb] at hf
   rw [liftE_live] at hl; rw [liftE_ty v hrb] at hn; rw [liftE_mode v hrb] at hb
@@ -5302,42 +5314,33 @@ theorem freshE_lift (h : S.OK) {Γa : Ctx} {v : Var} {E : Entry} (hE : FreshE Γ
   have hEb : E.mode = .bor := by revert hb hrb; cases E.mode <;> simp [liftMode]
   obtain ⟨hne, hd⟩ := hE hl hn hEb hf
   have hp : (S.liftE v E).path = rds S.ρ E.path := by simp [liftE, hrb, hEb, Mode.ownSlot, hf, hn]
-  rw [hp]
+  -- AGORA-937: a fresh borrow's path is on frame bindings, so on no region:
+  -- the substitution keeps it
+  have hps : (S.subE (S.liftE v E)).path = rds S.ρ E.path := by
+    rw [subE_path, hp]
+    refine S.flatMap_subD_fix fun d hdd => ?_
+    obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hdd
+    obtain ⟨_, Er, hEr, hm⟩ := hd d0 hd0
+    have hnp : S.isPi d0.root = false := hab.notPi hEr (by
+      rcases hm with h1 | ⟨b, h1⟩ <;> rw [h1] <;> simp)
+    exact S.subD_of_not fun w hw => by
+      simp only [Dep.ren, inv_ρ h, Option.some.injEq] at hw; subst hw; exact hnp
+  rw [hps]
   refine ⟨by simpa [rds] using hne, fun d hdd => ?_⟩
   obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hdd
   obtain ⟨hk, Er, hEr, hm⟩ := hd d0 hd0
   have hrbr : Er.mode ≠ .rootb := by rcases hm with h1 | ⟨b, h1⟩ <;> rw [h1] <;> simp
-  refine ⟨hk, S.liftE d0.root Er, by simp [Dep.ren, canon_ρ h, hEr], ?_⟩
-  rw [liftE_mode _ hrbr]
+  have hnp : S.isPi d0.root = false := hab.notPi hEr (by
+    rcases hm with h1 | ⟨b, h1⟩ <;> rw [h1] <;> simp)
+  refine ⟨hk, S.subE (S.liftE d0.root Er), canon_some h hEr hnp, ?_⟩
+  rw [subE_mode, liftE_mode _ hrbr]
   rcases hm with h1 | ⟨b, h1⟩ <;> rw [h1] <;> exact Or.inl rfl
-
-/-- ... and the callee's view of the context keeps its own fresh borrows
-    fresh only if the callee's context does. -/
-theorem freshOK_unlift (h : S.OK) {Γa : Ctx} (hf : FreshOK (S.canon Γa)) : FreshOK Γa := by
-  intro v E hv hl hn hb hfr
-  have hrb : E.mode ≠ .rootb := by rw [hb]; simp
-  have hc : S.canon Γa (S.ρ v) = some (S.liftE v E) := by rw [canon_ρ h, hv]; rfl
-  have hp : (S.liftE v E).path = rds S.ρ E.path := by simp [liftE, hrb, hb, Mode.ownSlot, hfr, hn]
-  have := hf _ _ hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty v hrb]; exact hn)
-    (by rw [liftE_mode v hrb, hb]; rfl) (by rw [S.liftE_fresh_of hrb]; exact hfr)
-  rw [hp] at this
-  obtain ⟨hne, hd⟩ := this
-  refine ⟨fun he => hne (by rw [he]; rfl), fun d hdd => ?_⟩
-  obtain ⟨hk, Er', hEr', hm⟩ := hd (d.ren S.ρ) (mem_rds.mpr ⟨d, hdd, rfl⟩)
-  simp only [Dep.ren, canon_ρ h] at hEr' hk
-  obtain ⟨Er, hEr, rfl⟩ := Option.map_eq_some_iff.mp hEr'
-  refine ⟨hk, Er, hEr, ?_⟩
-  by_cases hrbr : Er.mode = .rootb
-  · simp only [liftE, hrbr, ↓reduceIte, h.pe_rb, Mode.frame] at hm
-    rcases hm with h1 | ⟨b, h1⟩ <;> cases h1
-  · rw [liftE_mode _ hrbr] at hm
-    revert hm hrbr; cases Er.mode <;> simp [liftMode, Mode.frame]
 
 /-- Agora #909: a context the callee may assume after a panic or an exit keeps
     fresh borrows fresh, seen from the call: the caller's are the frame's own
     entries (`S.Φ`), whose roots keep their modes; the callee's are lifted,
     fresh where the callee may assume them (`hsrc`). -/
-theorem canon_freshT (h : S.OK) {Γa Δa : Ctx}
+theorem canon_freshT (h : S.OK) {Γa Δa : Ctx} (habΔ : S.AbsOK Δa) (hfa : FreshOK Γa)
     (hdom' : ∀ y, (S.canon Γa y).isSome = (S.canon Δa y).isSome)
     (hm' : ∀ y E, S.canon Δa y = some E → ∃ E0, S.canon Γa y = some E0 ∧ E.mode = E0.mode ∧
       E.ty = E0.ty ∧ (E0.fixed → E = E0))
@@ -5347,10 +5350,10 @@ theorem canon_freshT (h : S.OK) {Γa Δa : Ctx}
   unfold canon at hy
   split at hy
   · rename_i v _
-    simp only [h.noPi, Bool.false_eq_true, ↓reduceIte] at hy
-    obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hy
-    simp only [Function.comp, subE_nopi h]
-    exact freshE_lift h (hsrc (freshOK_unlift h hf) _ E1 h1)
+    split at hy
+    · cases hy
+    · obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hy
+      exact freshE_lift h habΔ (hsrc hfa _ E1 h1)
   · rename_i hinv
     have hyΓ : S.canon Γa y = some E := by unfold canon; rw [hinv]; exact hy
     refine (hf y E hyΓ).mono (fun r Er hr hmr => ?_)
@@ -5370,22 +5373,26 @@ theorem canon_same (h : S.OK) {Γa Δa : Ctx} (hab : S.AbsOK Γa)
       (E0.fixed → E = E0)) := by
   have habΔ := hab.of_same hdom hm
   refine ⟨fun y => ?_, fun y E hy => ?_⟩
-  · rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
-    · rw [hc, canon_ρ h]; have := hdom v; cases h1 : Γa v <;> cases h2 : Δa v <;> simp_all
+  · rcases canon_cases_sub h Γa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, hp, hc⟩ | ⟨hyf, hc⟩
+    · rw [hc, canon_ρs h Δa hp]; have := hdom v; cases h1 : Γa v <;> cases h2 : Δa v <;> simp_all
+    · rw [hc, canon_ρ_sub h, hp]; rfl
     · rw [hc, canon_frame Δa hyf]
-  · rcases canon_cases h Δa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
+  · rcases canon_cases_sub h Δa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hyf, hc⟩
     · rw [hc] at hy
       obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hy
       obtain ⟨E0, h0, hm0, ht0, hrb⟩ := hm v E1 h1
-      refine ⟨S.liftE v E0, by rw [canon_ρ h, h0]; rfl, ?_, ?_, fun hr => ?_⟩
-      · by_cases hrb0 : E0.mode = .rootb
+      refine ⟨S.subE (S.liftE v E0), canon_some h h0 hp, ?_, ?_, fun hr => ?_⟩
+      · simp only [Function.comp, subE_mode]
+        by_cases hrb0 : E0.mode = .rootb
         · rw [hrb (Or.inl hrb0)]
         · have hrb1 : E1.mode ≠ .rootb := by rw [hm0]; exact hrb0
           rw [liftE_mode v hrb1, liftE_mode v hrb0, hm0]
-      · rw [liftE_ty' h habΔ h1, liftE_ty' h hab h0, ht0]
+      · simp only [Function.comp, subE_ty]
+        rw [liftE_ty' h habΔ h1, liftE_ty' h hab h0, ht0]
       · by_cases hrb0 : E0.mode = .rootb
-        · rw [hrb (Or.inl hrb0)]
-        · exact absurd hr (liftE_not_fixed hrb0)
+        · simp only [Function.comp]; rw [hrb (Or.inl hrb0)]
+        · exact absurd (by simpa only [Entry.fixed_def, subE_mode, subE_ty] using hr) (liftE_not_fixed hrb0)
+    · rw [hc] at hy; cases hy
     · rw [hc] at hy
       exact ⟨E, by rw [canon_frame Γa hyf]; exact hy, rfl, rfl, fun _ => rfl⟩
 
@@ -5996,13 +6003,15 @@ theorem TakeOK.canon (h : S.OK) {P : Prog} {Γ : Ctx} (hab : S.AbsOK Γ) {r : Rh
   intro y Ey g u hry hy hgy
   have key : ∀ y0, S.ρ y0 = y → (r = .takel y0 ∨ r = .taker y0) → EnumGlueOK P g u := by
     intro y0 hy0 hr0
-    rw [← hy0, canon_ρ h] at hy
+    rw [← hy0, canon_ρ_sub h] at hy
+    split at hy
+    · cases hy
     cases h0 : Γ y0 with
     | none => rw [h0] at hy; cases hy
     | some E0 =>
-      rw [h0] at hy; simp only [Option.map_some, Option.some.injEq] at hy
+      rw [h0] at hy; simp only [Option.map_some, Option.some.injEq, Function.comp] at hy
       refine ht y0 E0 g u hr0 h0 ?_
-      rw [← liftE_ty' h hab h0, hy]; exact hgy
+      rw [← liftE_ty' h hab h0, ← subE_ty, hy]; exact hgy
   cases r <;> simp [Rhs.rename] at hry
   · exact key _ hry (Or.inl rfl)
   · exact key _ hry (Or.inr rfl)
@@ -6442,11 +6451,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
   | panic hwf hnΔ hdom hm hdk hst hfΔ =>
-    intro _ hab _ _ _ _
+    intro _ hab _ _ hfo _
     have habΔ := hab.of_same hdom hm
     obtain ⟨hdom', hm'⟩ := canon_same h hab hdom hm
     exact ⟨StmtT.panic (canon_wf h habΔ hwf) (canon_names h habΔ hnΔ) hdom' hm' (DKeep.canon h hdk hm)
-      (DStay.canon h hst) (canon_freshT h hdom' hm' hfΔ), habΔ⟩
+      (DStay.canon h hst) (canon_freshT h habΔ hfo hdom' hm' hfΔ), habΔ⟩
   | @letrec _ Γ Γ1 Δ F x f k E fn hks hx hxF hf hp hty ho hc hk hpe ih =>
     intro _ hab hw hn hfo hT
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (.inr ⟨f, by simp [Stmt.calls], ht⟩)) (fun v _ => h.noPi v)
@@ -6897,18 +6906,18 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       exact ⟨StmtT.sub hwc t (Or.inr (canon_weaker h abΔ hwo.2.1 hwo)), abΔ⟩
 
   | exit hup hwf hnΔ hdom hm hdk hst hfΔ =>
-    intro _ hab hw hn _ _
+    intro _ hab hw hn hfo _
     have habΔ := hab.of_same hdom hm
     obtain ⟨hdom', hm'⟩ := canon_same h hab hdom hm
     exact ⟨StmtT.exit (S.liftX_up h hab hw hn hup) (canon_wf h habΔ hwf) (canon_names h habΔ hnΔ) hdom' hm'
-      (DKeep.canon h hdk hm) (DStay.canon h hst) (canon_freshT h hdom' hm' hfΔ), habΔ⟩
+      (DKeep.canon h hdk hm) (DStay.canon h hst) (canon_freshT h habΔ hfo hdom' hm' hfΔ), habΔ⟩
   | loop hsrc _ hwf hnΔ hdom hm hdk hst hfΔ ih =>
     intro hs hab hw hn hfo hT
     obtain ⟨tb, _⟩ := ih hsrc hab hw hn hfo (fun ht => hT (ht.mono (fun h => h) (fun _ hg => hg)))
     have habΔ := hab.of_same hdom hm
     obtain ⟨hdom', hm'⟩ := canon_same h hab hdom hm
     exact ⟨StmtT.loop (by rw [src_rename]; exact hsrc) tb (canon_wf h habΔ hwf) (canon_names h habΔ hnΔ)
-      hdom' hm' (DKeep.canon h hdk hm) (DStay.canon h hst) (canon_freshT h hdom' hm' hfΔ), habΔ⟩
+      hdom' hm' (DKeep.canon h hdk hm) (DStay.canon h hst) (canon_freshT h habΔ hfo hdom' hm' hfΔ), habΔ⟩
   | block hb ih =>
     intro hs hab hw hn hfo hT
     obtain ⟨tb, abΔ⟩ := ih hs hab hw hn hfo hT
