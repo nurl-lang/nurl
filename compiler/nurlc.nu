@@ -16112,45 +16112,45 @@ unsafe @ eng_byte s w i k → i {
                                 // handed to a new holder, it moves there
                                 = av ( move_out st vid line )
                             } { ? ptr_copy { = av ( av_make OW_O 0 0 ( av_held src ) F ) } {
-                                // (an owned slice moves its buffer to whatever
-                                // is given it, as any owner does; a join's
-                                // temporary given an arm's own raw string
-                                // takes it: the arm's binding ends before the
-                                // join does)
-                                : b raw_view & & & raw ! is_ret != ( et_kind vty ) EK_SLICE ! & & & have_dv == ( fv_kind dest_vid ) VK_TEMP ! lend_owner > ( fv_depth vid ) ( fv_depth dest_vid )
-                                ? | == sown OW_P & != vkind VK_TEMP | raw_view lend_owner {
-                                    // a parameter is lent to its new name (the
-                                    // caller owns it); an owned raw string is
-                                    // viewed, not moved (and one that is a view
-                                    // on some paths is that view there)
-                                    : i more ? & raw == sown OW_O ( av_loans src ) 0
-                                    ( el_key2 ktag ka )
-                                    = av ( av_make OW_L ( sq_add more ( eng_loan st op ? raw LK_VIEW LK_HANDLE ) ) ( sq_add 0 op ) ( av_held src ) F )
-                                } {
-                                    = av ( move_out st vid line )
-                                    ? & is_ret >= g_fc_moved_vid 0 {
-                                        // (its views of its own parts leave
-                                        // with it: they are no views of this
-                                        // frame's values - and the caller's
-                                        // result holds them: selfholds)
-                                        : i own g_fc_moved_own
-                                        : i held ( av_held av )
-                                        : i tmp ( wv_new )
-                                        : ~ i k 0
-                                        ~ < k ( sq_len held ) {
-                                            : i he ( sq_at held k )
-                                            : i l ( he_loan he )
-                                            ? ( sq_has own l ) {
-                                                = g_s_selfholds ( sq_add g_s_selfholds ( tp3 ( ep_take ( he_path he ) 3 ) ( ep_take ( pl_path ( el_place l ) ) 3 ) ( el_kind l ) ) )
-                                            } { ( wv_push tmp he ) }
-                                            = k + k 1
-                                        }
-                                        = av ( av_make ( av_own av ) ( av_loans av ) ( av_alias av ) ( sq_set_of_wv tmp ) ( av_call av ) )
-                                        ( wv_drop tmp )
-                                        = g_fc_moved_vid -1
-                                    } {}
-                                }
-                            } }
+                                    // (an owned slice moves its buffer to whatever
+                                    // is given it, as any owner does; a join's
+                                    // temporary given an arm's own raw string
+                                    // takes it: the arm's binding ends before the
+                                    // join does)
+                                    : b raw_view & & & raw ! is_ret != ( et_kind vty ) EK_SLICE ! & & & have_dv == ( fv_kind dest_vid ) VK_TEMP ! lend_owner > ( fv_depth vid ) ( fv_depth dest_vid )
+                                    ? | == sown OW_P & != vkind VK_TEMP | raw_view lend_owner {
+                                        // a parameter is lent to its new name (the
+                                        // caller owns it); an owned raw string is
+                                        // viewed, not moved (and one that is a view
+                                        // on some paths is that view there)
+                                        : i more ? & raw == sown OW_O ( av_loans src ) 0
+                                        ( el_key2 ktag ka )
+                                        = av ( av_make OW_L ( sq_add more ( eng_loan st op ? raw LK_VIEW LK_HANDLE ) ) ( sq_add 0 op ) ( av_held src ) F )
+                                    } {
+                                        = av ( move_out st vid line )
+                                        ? & is_ret >= g_fc_moved_vid 0 {
+                                            // (its views of its own parts leave
+                                            // with it: they are no views of this
+                                            // frame's values - and the caller's
+                                            // result holds them: selfholds)
+                                            : i own g_fc_moved_own
+                                            : i held ( av_held av )
+                                            : i tmp ( wv_new )
+                                            : ~ i k 0
+                                            ~ < k ( sq_len held ) {
+                                                : i he ( sq_at held k )
+                                                : i l ( he_loan he )
+                                                ? ( sq_has own l ) {
+                                                    = g_s_selfholds ( sq_add g_s_selfholds ( tp3 ( ep_take ( he_path he ) 3 ) ( ep_take ( pl_path ( el_place l ) ) 3 ) ( el_kind l ) ) )
+                                                } { ( wv_push tmp he ) }
+                                                = k + k 1
+                                            }
+                                            = av ( av_make ( av_own av ) ( av_loans av ) ( av_alias av ) ( sq_set_of_wv tmp ) ( av_call av ) )
+                                            ( wv_drop tmp )
+                                            = g_fc_moved_vid -1
+                                        } {}
+                                    }
+                                } }
                         }
                     }
                 }
