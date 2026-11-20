@@ -516,6 +516,7 @@
 : i FX_CALL_TEMP 262144  // a call's temporary, of a callee nurlc's summary says may lend its result (eng_walk_lends)
 : i FX_CALL_BIND 524288  // a binding (`: T e`, not `: ~`) given a call's temporary whole, or such a binding whole: nurlc keeps the call's per-call answer for it
 : i FX_SLOT_TAKE 1048576  // an FX_SLOT payload of a temporary nurlc takes it out of (CORE_VF_SLOT): a consumer that takes it empties the slot
+: i FX_ENUM_LENT 2097152  // a `??` arm's payload of a program enum: lent to the arm, which works on a copy (agora #883, h231)
 : ~ i g_fc_cap_loans 0  // the loans closures captured (a set)
 : ~ i g_fc_wb_pairs 0  // (the loan a place holds of a reader's value, the struct cursor whose field store handed it over: eng_cursor_handover), a set
 : ~ i g_fc_wbs 0  // while a call's effects are applied: the cursors it writes back into the slots they were read from (a set)
@@ -14989,9 +14990,10 @@ unsafe @ eng_byte s w i k → i {
 
 // Is `vid` a copy of a value this frame only borrows: a by-value (`in`)
 // parameter (not a destructor's receiver), a `~` loop's element, a closure
-// body's by-value capture or parameter?
+// body's by-value capture or parameter, a program enum's `??` payload?
 @ eng_borrowed_copy i vid → b {
     ? ( fx_has vid FX_FE ) { ^ T } {}
+    ? ( fx_has vid FX_ENUM_LENT ) { ^ T } {}
     : i k ( fv_pidx vid )
     ? < k 0 { ^ F } {}
     ? < k g_f_ncap { ^ ! ( fv_byref vid ) } {}
@@ -20561,7 +20563,17 @@ unsafe @ eng_byte s w i k → i {
     : i kind ( fv_kind vid )
     : i vty ( fv_ty vid )
     : i rk ( ec rv )
-    ? == rk RV_PAYLOAD { ( fx_set vid FX_PAYLOAD ) } {}
+    ? == rk RV_PAYLOAD {
+        ( fx_set vid FX_PAYLOAD )
+        // (…of a program enum - a binding's, a field path's, a matched
+        // temporary's: nurlc's arm works on a copy of it, so a store into a
+        // part of it lands in that copy; tools/ncore's enum_lent, AGORA-869)
+        : i pop ( eng_op ( ec + rv 1 ) )
+        ? ( op_is_place pop ) {
+            : i pty ( eng_ty_of pop )
+            ? & & != pty ET_NONE == ( et_kind pty ) EK_NAMED ( et_flag pty ETF_ENUM ) { ( fx_set vid FX_ENUM_LENT ) } {}
+        } {}
+    } {}
     ( carry_call_lent vid rv )
     ? & & == rk RV_USE == kind VK_LOCAL ! ( fv_mut vid ) {
         // (a binding read out of a field of another: which one)
