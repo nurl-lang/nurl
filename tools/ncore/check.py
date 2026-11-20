@@ -3142,9 +3142,24 @@ class FnCheck:
         else (MEMORY.md §3.3d; agora #382). That is an `inout` parameter,
         or in a closure body a capture taken by pointer: the binding
         outside."""
+        # (a field of an `inout` parameter the call itself takes, a consumed
+        # argument: handed over as the call starts, so a panic in the call
+        # hands it back empty - where the call may panic, as nurlc's module
+        # pass finds; a number handed over is a copy, agora #939)
+        own_takes = set()
+        if sm is not None and call_may_panic(self.prog, None if name == "the closure" else name):
+            for k in sm.get("consumes", ()):
+                if k < len(ops) and ops[k][0] == "v" and ops[k][2]:
+                    fty = self.ty_of_place((ops[k][1], tuple(ops[k][2])))
+                    if not (fty is not None and self.T.is_scalar(fty)):
+                        own_takes.add(ops[k][1])
         for vid, k in self.pidx.items():
             if self.fn.modes[k] != "inout" and not (
                     self.fn.modes[k] == "cap" and getattr(self.fn.vars[vid], "byref", False)):
+                continue
+            if self.fn.modes[k] == "inout" and vid in own_takes:
+                self.err(line, f"{self.vname(vid)} is the caller's and {name} takes a field of it, "
+                               f"which it may unwind without")
                 continue
             # (…nor be handed back with a field a callee took still empty: a
             # panic here is a way out to a `recover`ing caller, agora #929.
