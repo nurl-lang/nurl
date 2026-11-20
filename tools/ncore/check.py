@@ -676,6 +676,10 @@ class FnCheck:
             if j != k or eff not in ("realloc", "drop", "replace", "take"):
                 continue
             p = tuple(p)
+            if eff == "replace" and "*" in p and self.scalar_place((vid, (tuple(path) + p)[:PATH_MAX])):
+                # (a number written into a buffer's element ends nothing
+                # another argument views: the `changed` row's exemption)
+                continue
             for hp, l in av.held:
                 if (hp and len(hp) < len(p) and p[:len(hp)] == hp and l in self.loans
                         and self.loans[l][1] == "view"):
@@ -1627,7 +1631,13 @@ class FnCheck:
                 # `Vec` of slices holds - is what argument m reaches: the
                 # change is to what that view points into, agora #933)
                 thru = self.changed_in_views(sm, k, vid, path, avs[k])
-                hit = next((q for q in thru for r in mine
+                # (…what argument m reaches is also what the views and handles
+                # its value holds point into: a slice in a field of a struct
+                # passed beside the changed argument)
+                reach = mine | {tuple(self.loans[l][0][:2]) for hp, l in avs[m].held
+                                if l in self.loans and self.loans[l][1] in ("view", "handle")
+                                and self.loans[l][0][0] >= 0}
+                hit = next((q for q in thru for r in reach
                             if r[0] == q[0] and (prefix(q[1], r[1]) or prefix(r[1], q[1]))), None)
                 if hit is not None:
                     self.err(line, f"{name}: argument {k + 1} holds a view of {self.pname(hit)}, which the call "

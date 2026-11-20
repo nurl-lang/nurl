@@ -14297,7 +14297,13 @@ unsafe @ eng_byte s w i k → i {
         : i t ( sm_at sm SM_EFFECTS e )
         : i eff ( tp_at t 3 2 )
         : i p ( tp_at t 3 1 )
-        ? & == ( tp_at t 3 0 ) k | | | == eff EF_REALLOC == eff EF_DROP == eff EF_REPLACE == eff EF_TAKE {
+        : ~ b scalar F
+        ? & == eff EF_REPLACE ! ( eng_path_no_star p ) {
+            // (a number written into a buffer's element ends nothing another
+            // argument views: the `changed` row's exemption)
+            = scalar ( eng_place_scalar ( pl_make ( pl_var ok ) ( ep_take ( ep_cat ( pl_path ok ) p ) PATH_MAX ) ) )
+        } {}
+        ? & & ! scalar == ( tp_at t 3 0 ) k | | | == eff EF_REALLOC == eff EF_DROP == eff EF_REPLACE == eff EF_TAKE {
             : ~ i j 0
             ~ < j ( sq_len hd ) {
                 : i he ( sq_at hd j )
@@ -17571,13 +17577,27 @@ unsafe @ eng_byte s w i k → i {
                     // change is to what that view points into, agora #933)
                     ? ! stop {
                         : i thru ( eng_changed_in_views sm k ok ( wv_at avs k ) )
+                        // (…what argument m reaches is also what the views and
+                        // handles its value holds point into: a slice in a field
+                        // of a struct passed beside the changed argument)
+                        : ~ i reach mine
+                        : i mhd ( av_held ( wv_at avs m ) )
+                        : ~ i r2 0
+                        ~ < r2 ( sq_len mhd ) {
+                            : i ml ( he_loan ( sq_at mhd r2 ) )
+                            ? & ( el_is_loan ml ) | == ( el_kind ml ) LK_VIEW == ( el_kind ml ) LK_HANDLE {
+                                : i mq ( el_place ml )
+                                ? >= ( pl_var mq ) 0 { = reach ( sq_add reach mq ) } {}
+                            } {}
+                            = r2 + r2 1
+                        }
                         : ~ i hit -1
                         : ~ i a2 0
                         ~ & < hit 0 < a2 ( sq_len thru ) {
                             : i ta ( sq_at thru a2 )
                             : ~ i b2 0
-                            ~ & < hit 0 < b2 ( sq_len mine ) {
-                                : i qa ( sq_at mine b2 )
+                            ~ & < hit 0 < b2 ( sq_len reach ) {
+                                : i qa ( sq_at reach b2 )
                                 ? & == ( pl_var qa ) ( pl_var ta ) | ( ep_prefix ( pl_path qa ) ( pl_path ta ) ) ( ep_prefix ( pl_path ta ) ( pl_path qa ) ) { = hit ta } {}
                                 = b2 + b2 1
                             }
