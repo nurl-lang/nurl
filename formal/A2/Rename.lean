@@ -1029,6 +1029,53 @@ theorem canon_root_of_subD (h : S.OK) {d e : Dep} (he : e ∈ S.subD d)
   · obtain ⟨hout, hex⟩ := S.σ_frame h hv
     exact canon_frameRoot h hout hex
 
+/-- AGORA-937: `canon_wf`'s first clause with regions: a live lifted binding's
+    roots are bound where the call places the body, as roots. A dependency is
+    kept (a callee root, lifted, or a frame root) or is what a region stands
+    for (a frame root). -/
+theorem canon_live_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) {y : Var} {E' : Entry}
+    (hy : S.canon Γa y = some E') (hl : E'.live = true) (hn : E'.ty ≠ .int ∨ E'.mode = .rootb)
+    {r : Var} (hr : r ∈ roots E'.vdeps) : ∃ Er, S.canon Γa r = some Er ∧ Er.mode.isRoot = true := by
+  rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hyf, hc⟩
+  · rw [hc] at hy
+    cases hE : Γa v with
+    | none => rw [hE] at hy; cases hy
+    | some E =>
+      rw [hE] at hy; simp only [Option.map_some, Option.some.injEq, Function.comp] at hy; subst hy
+      rw [subE_vdeps] at hr
+      obtain ⟨e, he, rfl⟩ := List.mem_map.mp hr
+      obtain ⟨d, hd, hed⟩ := List.mem_flatMap.mp he
+      refine canon_root_of_subD h hed ?_
+      by_cases hrb : E.mode = .rootb
+      · have hvd : (S.liftE v E).vdeps = (S.pe v).vdeps := by simp [liftE, hrb, Entry.vdeps]
+        rw [hvd] at hd
+        rcases pe_dep h hd with ⟨hout, hex⟩ | ⟨hs, _⟩
+        · exact Or.inr ⟨hout, hex⟩
+        · obtain ⟨w, b, t, rfl, hb, _, _, _⟩ := sym_ren h hs
+          obtain ⟨Ew, hEw, hm, _⟩ := hab.2.2.1 w (b, false) hb
+          exact Or.inl ⟨w, Ew, rfl, hEw, by rw [hm]; rfl⟩
+      · rw [subE_live, liftE_live] at hl
+        have hn' : E.ty ≠ .int ∨ E.mode = .rootb := by
+          rcases hn with h' | h'
+          · rw [subE_ty, liftE_ty v hrb] at h'; exact Or.inl h'
+          · rw [subE_mode, liftE_rootb h] at h'; exact absurd h' hrb
+        rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
+        · obtain ⟨Er, hEr, hro⟩ := hw v E hE hl hn' d0.root (List.mem_map_of_mem hd0)
+          exact Or.inl ⟨d0.root, Er, rfl, hEr, hro⟩
+        · exact Or.inr ⟨A_out h ha, A_root h ha⟩
+  · rw [hc] at hy; cases hy
+  · rw [hc] at hy
+    by_cases hrr : ∃ v, S.ρ v = r
+    · obtain ⟨v, rfl⟩ := hrr
+      obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
+      obtain ⟨b, hv, hb, _⟩ := h.Φsat y E' hy hl hn d hd v hdr.symm
+      obtain ⟨Ev, hEv, hm, _⟩ := hab.2.2.1 v (b, hv) hb
+      -- (an `inout` argument's binding: no region, by noPi until AbsOK's
+      -- exact region clause lands)
+      exact canon_root_sub h hEv (by rw [hm]; rfl) (h.noPi v)
+    · have hout : ∀ v, S.ρ v ≠ r := fun v hv => hrr ⟨v, hv⟩
+      exact canon_frameRoot h hout (h.Φwf y E' hy hl hn r hr hout)
+
 theorem allKinds_notName {rs : List Var} {d : Dep} (h : d ∈ allKinds rs) : d.kind.isName = false := by
   simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at h
   obtain ⟨r, _, hd⟩ := h
