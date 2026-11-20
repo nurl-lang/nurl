@@ -382,6 +382,11 @@ theorem callS_isPi_lt {Γ : Ctx} {F : List Var} {fn : Fn} {args : List Var} {bas
     {v : Var} (hv : v < fn.nvars) : (callS Γ F fn args base x).isPi v = false := by
   simp [callS, Nat.not_le.mpr hv]
 
+/-- AGORA-937 (turn-on 3): the call's regions are the signature's region
+    indices. -/
+theorem callS_isPi {Γ : Ctx} {F : List Var} {fn : Fn} {args : List Var} {base : Nat} {x : Var}
+    (v : Var) : (callS Γ F fn args base x).isPi v = isRegionIdx fn v := rfl
+
 /-- What a call's typing says of its arguments, with the caller's names and
     its borrowed parameters' anchors: the part of `CallH` that no run-time
     frame enters into, so source typing has it at every call (`CallT.toA`). -/
@@ -3507,12 +3512,22 @@ theorem lift_sub (h : CallH P Γ F x fn args base) {L0 T X : List Dep}
 
 /-- No lifted dependency on a lendable parameter names a `sink` parameter's slot. -/
 theorem lift_nosink (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb)
-    (hE : ∀ d0 ∈ E.vdeps, lendable fn d0.root) :
+    (hE : ∀ d0 ∈ E.vdeps, lendable fn d0.root ∨ fn.params.length ≤ d0.root) :
     ∀ d ∈ ((callS Γ F fn args base x).liftE v E).vdeps, ∀ k t, fn.params[k]? = some (.sink, t) →
       d.root ≠ base + 0 + k := by
   intro d hd k t hk he
   rcases RSetup.liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
-  · obtain ⟨hjl, hjm⟩ := hE d0 hd0
+  · rcases hE d0 hd0 with hE0 | hge
+    case inr =>
+      -- (AGORA-937: a region's index, past every parameter's)
+      simp only [Dep.ren, callS] at he
+      rcases callRen_cases fn.params args base d0.root with ⟨b, t', hjp, _⟩ | ⟨_, hr⟩
+      · exact absurd (lt_of_get hjp) (Nat.not_lt.mpr hge)
+      · rw [hr] at he
+        simp only [Nat.add_zero, Nat.add_left_cancel_iff] at he
+        rw [he] at hge
+        exact absurd (lt_of_get hk) (Nat.not_lt.mpr hge)
+    obtain ⟨hjl, hjm⟩ := hE0
     simp only [Dep.ren, callS] at he
     rcases callRen_cases fn.params args base d0.root with ⟨b, t', hjp, hr⟩ | ⟨_, hr⟩
     · rw [hr] at he
@@ -3534,6 +3549,73 @@ theorem lift_nosink (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hrb
     rw [he] at hlt
     exact absurd hlt (Nat.not_lt.mpr (Nat.le_trans (Nat.le_add_right _ 0) (Nat.le_add_right _ k)))
 
+/-- AGORA-937 (turn-on 3): ... nor, substituted: what a region stands for
+    is the caller's. -/
+theorem lift_nosink_sub (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb)
+    (hE : ∀ d0 ∈ E.vdeps, lendable fn d0.root ∨ fn.params.length ≤ d0.root) :
+    ∀ d ∈ ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE v E)).vdeps, ∀ k t,
+      fn.params[k]? = some (.sink, t) → d.root ≠ base + 0 + k := by
+  intro d hd k t hk he
+  rw [RSetup.subE_vdeps] at hd
+  obtain ⟨e, he', hde⟩ := List.mem_flatMap.mp hd
+  rcases (callS Γ F fn args base x).mem_subD hde with rfl | ⟨w, _, _, hσ⟩
+  · exact h.lift_nosink hrb hE d he' k t hk he
+  · have hr : d.root ∈ callR Γ args := RSetup.mem_allKinds (h.sOK.σ_sub w hσ)
+    obtain ⟨_, Er, hEr, _⟩ := h.R_facts hr
+    have hlt := vlt (h.domlt _ _ hEr)
+    rw [he] at hlt
+    exact absurd hlt (Nat.not_lt.mpr (Nat.le_trans (Nat.le_add_right _ 0) (Nat.le_add_right _ k)))
+
+/-- AGORA-937 (turn-on 3): what a region stands for, the views its argument
+    holds, is among what the arguments hold (`heldOfArgs`), which the
+    caller's result and `inout` arguments hold after the call. -/
+theorem σ_held (h : CallH P Γ F x fn args base) (v : Var) :
+    (callS Γ F fn args base x).σ v ⊆ heldOfArgs Γ args := by
+  intro d hd
+  by_cases hv : fn.nvars ≤ v ∧ v < fn.nvars + fn.params.length
+  · simp only [callS, hv, and_self, ↓reduceIte] at hd
+    obtain ⟨hk1, hk2⟩ := RSetup.mem_allKinds_iff.mp hd
+    have hl : v - fn.nvars < args.length := by rw [h.len]; exact Nat.sub_lt_left_of_lt_add hv.1 hv.2
+    refine List.mem_append_left _ (RSetup.mem_allKinds_iff.mpr
+      ⟨List.mem_flatMap.mpr ⟨args.getD (v - fn.nvars) 0, ?_, hk1⟩, hk2⟩)
+    simp [List.getD, hl]
+  · simp only [callS, hv, ↓reduceIte] at hd
+    cases hd
+
+/-- AGORA-937 (turn-on 3): `lift_sub`, substituted, for a list of the
+    callee's dependencies on lendable parameters or on regions: a region's
+    stands for what its argument holds views of (`σ_held`). -/
+theorem lift_sub_sub (h : CallH P Γ F x fn args base) {L0 T X : List Dep}
+    (hL0 : ∀ d0 ∈ L0, isRegionIdx fn d0.root = true ∨
+      (lendable fn d0.root ∧ argDeps Γ args (d0.root, d0.kind) ⊆ T ∧ d0.kind.isName = false ∧
+        kindFits fn d0.root d0.kind))
+    (hR : heldOfArgs Γ args ⊆ T) (hX : X ⊆ (callS Γ F fn args base x).A) :
+    ∀ d' ∈ rrL fn.params base 0 (callPe Γ fn.params args)
+        ((rds (callRen fn.params args base) L0 ++ X).flatMap (callS Γ F fn args base x).subD),
+      (Γ d'.root).isSome ∧ d' ∈ T := by
+  refine h.rr_sub (fun d hd => ?_) hR
+  obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp hd
+  rcases List.mem_append.mp he with he | he
+  · obtain ⟨d0, hd0, rfl⟩ := RSetup.mem_rds.mp he
+    rcases hL0 d0 hd0 with hreg | ⟨hlen, hsub, hkn, hfit⟩
+    · -- a region's: what it stands for, the views its argument holds
+      have hσ := RSetup.mem_subD_pi h.sOK (S := callS Γ F fn args base x) (w := d0.root)
+        (by rw [callS_isPi]; exact hreg) hde
+      obtain ⟨_, Er, hEr, _⟩ := h.R_facts (RSetup.mem_allKinds (h.sOK.σ_sub _ hσ))
+      exact Or.inl ⟨by rw [hEr]; rfl, hR (h.σ_held _ hσ)⟩
+    · have hkeep : (callS Γ F fn args base x).subD (d0.ren (callRen fn.params args base)) =
+          [d0.ren (callRen fn.params args base)] :=
+        RSetup.subD_keep h.sOK (Or.inr ⟨d0.root, rfl, h.isPi_sig (Nat.le_of_lt hlen.1)⟩)
+      rw [hkeep, List.mem_singleton] at hde; subst hde
+      exact Or.inr ⟨d0.root, d0.kind, rfl, hlen, hsub, hkn, hfit⟩
+  · rw [RSetup.subD_keep h.sOK (Or.inl (RSetup.A_out h.sOK (hX he))), List.mem_singleton] at hde
+    subst hde
+    rcases RSetup.mem_A.mp (hX he) with hd | hd
+    · obtain ⟨_, Er, hEr, _⟩ := h.R_facts (RSetup.mem_allKinds hd)
+      exact Or.inl ⟨by rw [hEr]; rfl, hR (List.mem_append_left _ hd)⟩
+    · obtain ⟨Er, hEr, _⟩ := h.argNames_rootE ((h.mem_N).mp hd).1
+      exact Or.inl ⟨by rw [hEr]; rfl, hR (List.mem_append_right _ ((h.mem_N).mp hd).1)⟩
+
 theorem liftE_eq (S : RSetup) {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) :
     S.liftE v E = ⟨E.ty, liftMode E.mode, E.live,
       rds S.ρ E.path ++ (if E.mode.ownSlot || (E.fresh && E.ty != .int) then [] else S.A),
@@ -3543,28 +3625,27 @@ theorem liftE_eq (S : RSetup) {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) :
 /-- The callee's result, where the exits leave it. -/
 theorem res_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {Er : Entry}
     (hEr : Δa fn.params.length = some Er) (hErm : Er.mode = resMode fn)
-    (hErv : ∀ d0 ∈ Er.vdeps, lendable fn d0.root) (hErp : ∀ d0 ∈ Er.path, lendable fn d0.root) :
+    (hErv : ∀ d0 ∈ Er.vdeps, lendable fn d0.root ∨ fn.params.length ≤ d0.root) :
     exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa)
         (base + fn.params.length) =
-      some (rrE fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).liftE fn.params.length Er)) := by
+      some (rrE fn.params base 0 (callPe Γ fn.params args)
+        ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE fn.params.length Er))) := by
   have hrb : Er.mode ≠ .rootb := by rw [hErm]; exact resMode_ne' fn
-  refine exits_at h.pe_lt fn.params 0 _ ?_ (fun k p hkp _ he => ?_) (h.lift_nosink hrb hErv)
+  refine exits_at h.pe_lt fn.params 0 _ ?_ (fun k p hkp _ he => ?_) (h.lift_nosink_sub hrb hErv)
   · rw [show base + fn.params.length = (callS Γ F fn args base x).ρ fn.params.length from
       (ren_res fn args base).symm]
-    refine h.canon_lend hEr (Nat.le_refl _) fun _ d hd => ?_
-    rcases List.mem_append.mp hd with hd | hd
-    · exact hErp d hd
-    · exact hErv d (by unfold Entry.vdeps; exact List.mem_append_right _ hd)
+    exact RSetup.canon_some h.sOK hEr (h.isPi_sig (Nat.le_refl _))
   · have hlt := lt_of_get hkp
     simp only [Nat.add_zero, Nat.add_left_cancel_iff] at he
     rw [← he] at hlt; exact Nat.lt_irrefl _ hlt
 
 theorem res_props (h : CallH P Γ F x fn args base) {Er : Entry} (hErl : Er.live = true)
     (hErt : Er.ty = fn.resTy) (hErm : Er.mode = resMode fn)
-    (hErp : ∀ d ∈ Er.path, (d.root, d.kind) ∈ fn.lends) (hErh : ∀ d ∈ Er.held, (d.root, d.kind) ∈ fn.rholds)
+    (hErp : ∀ d ∈ Er.path, (d.root, d.kind) ∈ fn.lends)
+    (hErh : ∀ d ∈ Er.held, isRegionIdx fn d.root ∨ (d.root, d.kind) ∈ fn.rholds)
     (hEr0 : fn.resOwn = true → fn.resTy.holdsView = false → Er.held = []) :
     let Er' := rrE fn.params base 0 (callPe Γ fn.params args)
-      ((callS Γ F fn args base x).liftE fn.params.length Er)
+      ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE fn.params.length Er))
     Er'.live = true ∧ Er'.mode = resMode fn ∧ Er'.ty = fn.resTy ∧
     ((resMode fn).ownSlot = false → ∀ d ∈ Er'.path, (Γ d.root).isSome ∧ d ∈ (callRes Γ fn args).path) ∧
     (∀ d ∈ Er'.held, (Γ d.root).isSome ∧ d ∈ (callRes Γ fn args).held) := by
@@ -3572,9 +3653,26 @@ theorem res_props (h : CallH P Γ F x fn args base) {Er : Entry} (hErl : Er.live
   have hrb : Er.mode ≠ .rootb := by rw [hErm]; exact resMode_ne' fn
   have hl : ∀ jk ∈ fn.lends, argDeps Γ args jk ⊆ (callRes Γ fn args).path := fun jk hjk d hd =>
     List.mem_append_left _ (List.mem_flatMap.mpr ⟨jk, hjk, hd⟩)
-  simp only [rrE, liftE_eq _ hrb, hErm, RSetup.liftMode_resMode]
+  -- AGORA-937 (turn-on 3): what the result borrows is on lendable
+  -- parameters and the frame, which the substitution keeps
+  have hpfix : (rds (callS Γ F fn args base x).ρ Er.path ++
+      (if Er.mode.ownSlot || (Er.fresh && Er.ty != .int) then [] else (callS Γ F fn args base x).A)).flatMap
+        (callS Γ F fn args base x).subD =
+      rds (callS Γ F fn args base x).ρ Er.path ++
+        (if Er.mode.ownSlot || (Er.fresh && Er.ty != .int) then [] else (callS Γ F fn args base x).A) := by
+    refine RSetup.flatMap_subD_fix fun d hd => RSetup.subD_keep h.sOK ?_
+    rcases List.mem_append.mp hd with hd | hd
+    · obtain ⟨d0, hd0, rfl⟩ := RSetup.mem_rds.mp hd
+      exact Or.inr ⟨d0.root, rfl, h.isPi_sig (Nat.le_of_lt (hlends _ (hErp d0 hd0)).1.1)⟩
+    · split at hd
+      · cases hd
+      · exact Or.inl (RSetup.A_out h.sOK hd)
+  simp only [rrE, RSetup.subE_path, RSetup.subE_held, RSetup.subE_live, RSetup.subE_mode, RSetup.subE_ty,
+    liftE_eq _ hrb]
+  rw [hpfix]
+  simp only [hErm, RSetup.liftMode_resMode]
   refine ⟨hErl, by first | rfl | trivial, hErt, fun ho => ?_, ?_⟩
-  · simp only [ho, Bool.false_eq_true, ↓reduceIte]
+  · simp only [ho]
     exact h.lift_sub (fun d0 hd0 => ⟨(hlends _ (hErp d0 hd0)).1, hl _ (hErp d0 hd0),
       (hlends _ (hErp d0 hd0)).2, hfits _ (List.mem_append_left _ (hErp d0 hd0))⟩)
       (fun d hd => List.mem_append_right _ hd) (by split <;> simp)
@@ -3586,35 +3684,20 @@ theorem res_props (h : CallH P Γ F x fn args base) {Er : Entry} (hErl : Er.live
       simp [ownHeld, hc0.1, hc0.2, rds, rrL_nil]
     · have hT : (callRes Γ fn args).held = fn.rholds.flatMap (argDeps Γ args) ++ heldOfArgs Γ args := by
         simp only [callRes, ownHeld, hc0, Bool.false_eq_true, ↓reduceIte]
-      have hX : ownHeld fn.resOwn fn.resTy (callS Γ F fn args base x).A = (callS Γ F fn args base x).A := by
-        simp only [ownHeld, hc0, Bool.false_eq_true, ↓reduceIte]
       rw [hT]
-      exact h.lift_sub (fun d0 hd0 => ⟨(hrholds _ (hErh d0 hd0)).1,
-        fun d hd => List.mem_append_left _ (List.mem_flatMap.mpr ⟨_, hErh d0 hd0, hd⟩),
-        (hrholds _ (hErh d0 hd0)).2, hfits _ (List.mem_append_right _ (hErh d0 hd0))⟩)
+      -- AGORA-937 (turn-on 3): a view of a region stands for what its
+      -- argument holds views of, which the result holds (`heldOfArgs`)
+      exact h.lift_sub_sub (fun d0 hd0 => (hErh d0 hd0).imp id fun hr => ⟨(hrholds _ hr).1,
+        fun d hd => List.mem_append_left _ (List.mem_flatMap.mpr ⟨_, hr, hd⟩),
+        (hrholds _ hr).2, hfits _ (List.mem_append_right _ hr)⟩)
         (fun d hd => List.mem_append_right _ hd) ((ownHeld_sub _ _ _).trans ((callS Γ F fn args base x).heldA_sub _))
 
-/-- AGORA-937: the substitution keeps what a lifted `inout` parameter holds:
-    the callee's part is on lendable parameters (`outHolds`), so at no
-    region's index, and what the lift adds is the frame's. -/
-theorem inout_held_fix (h : CallH P Γ F x fn args base) {i : Nat} {Ei : Entry} (hrb : Ei.mode ≠ .rootb)
-    (hEih : ∀ d ∈ Ei.held, (i, d.root, d.kind) ∈ fn.outHolds) :
-    ((callS Γ F fn args base x).liftE i Ei).held.flatMap (callS Γ F fn args base x).subD =
-      ((callS Γ F fn args base x).liftE i Ei).held := by
-  obtain ⟨_, _, _, _, _, _, _, _, houts, _⟩ := h.fnok
-  refine RSetup.flatMap_subD_fix fun d hd => RSetup.subD_keep h.sOK ?_
-  rw [liftE_eq _ hrb] at hd
-  rcases List.mem_append.mp hd with hd | hd
-  · obtain ⟨d0, hd0, rfl⟩ := RSetup.mem_rds.mp hd
-    exact Or.inr ⟨d0.root, rfl, h.isPi_sig (Nat.le_of_lt (houts _ (hEih d0 hd0)).1.1)⟩
-  · exact Or.inl (RSetup.A_out h.sOK
-      ((ownHeld_sub _ _ _).trans ((callS Γ F fn args base x).heldA_sub _) hd))
-
 /-- An `inout` argument, where the exits leave it (AGORA-937: lifted, then
-    substituted; the substitution keeps what it holds, `inout_held_fix`). -/
+    substituted; turn-on 3: a view of a region stands for what its argument
+    holds views of, which the argument holds after the call, `heldOfArgs`). -/
 theorem inout_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {i : Nat} {b : Eff} {t : Ty}
     (hip : fn.params[i]? = some (.inout b, t)) {Ei : Entry} (hEi : Δa i = some Ei) (hEim : Ei.mode = .inout b)
-    (hEih : ∀ d ∈ Ei.held, (i, d.root, d.kind) ∈ fn.outHolds) :
+    (hEih : ∀ d ∈ Ei.held, isRegionIdx fn d.root ∨ (i, d.root, d.kind) ∈ fn.outHolds) :
     exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa) (args.getD i 0) =
       some (rrE fn.params base 0 (callPe Γ fn.params args)
         ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE i Ei))) ∧
@@ -3622,35 +3705,30 @@ theorem inout_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {i : Nat} {b : Ef
         ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE i Ei))).held,
       (Γ d.root).isSome ∧
       d ∈ (argE Γ (args.getD i 0)).held ++ outHeld Γ fn args i ++ heldOfArgs Γ args := by
-  obtain ⟨_, _, _, _, _, _, _, _, houts, _, hofits, _⟩ := h.fnok
+  obtain ⟨_, hnv, _, _, _, _, _, _, houts, _, hofits, _⟩ := h.fnok
   have hrb : Ei.mode ≠ .rootb := by rw [hEim]; simp
   have hρ : callRen fn.params args base i = args.getD i 0 := by unfold callRen; rw [hip]
   have hil := lt_of_get hip
-  have hvd : ∀ d0 ∈ Ei.vdeps, lendable fn d0.root := by
+  have hvd : ∀ d0 ∈ Ei.vdeps, lendable fn d0.root ∨ fn.params.length ≤ d0.root := by
     intro d0 hd0
     have hh : d0 ∈ Ei.held := by
       unfold Entry.vdeps at hd0; rw [hEim] at hd0; simpa [Mode.ownSlot] using hd0
-    exact (houts _ (hEih d0 hh)).1
-  have hfix := h.inout_held_fix hrb hEih
-  have hos : ((callS Γ F fn args base x).liftE i Ei).mode.ownSlot = true := by
-    simp [liftE_eq _ hrb, hEim, liftMode, Mode.ownSlot]
-  have hsv : ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE i Ei)).vdeps =
-      ((callS Γ F fn args base x).liftE i Ei).vdeps := by
-    simp only [Entry.vdeps, RSetup.subE_mode, hos, ↓reduceIte, RSetup.subE_held, hfix]
-  refine ⟨exits_at h.pe_lt fn.params 0 _ ?_ (fun k p hkp _ he => ?_)
-    (by rw [hsv]; exact h.lift_nosink hrb hvd), ?_⟩
+    rcases hEih d0 hh with hr | ho
+    · exact Or.inr (Nat.le_trans (Nat.le_of_lt hnv) (isRegionIdx_ge hr))
+    · exact Or.inl (houts _ ho).1
+  refine ⟨exits_at h.pe_lt fn.params 0 _ ?_ (fun k p hkp _ he => ?_) (h.lift_nosink_sub hrb hvd), ?_⟩
   · rw [← hρ]; exact RSetup.canon_some h.sOK hEi (h.isPi_sig (Nat.le_of_lt hil))
   · have hlt := h.argLt hil
     rw [he] at hlt
     exact absurd hlt (Nat.not_lt.mpr (Nat.le_trans (Nat.le_add_right _ 0) (Nat.le_add_right _ k)))
-  · simp only [rrE, RSetup.subE_held, hfix]
+  · simp only [rrE, RSetup.subE_held]
     simp only [liftE_eq _ hrb]
-    refine h.lift_sub (fun d0 hd0 => ⟨(houts _ (hEih d0 hd0)).1, fun d hd => ?_,
-      (houts _ (hEih d0 hd0)).2, hofits _ (hEih d0 hd0)⟩)
+    refine h.lift_sub_sub (fun d0 hd0 => (hEih d0 hd0).imp id fun ho => ⟨(houts _ ho).1, fun d hd => ?_,
+      (houts _ ho).2, hofits _ ho⟩)
       (fun d hd => List.mem_append_right _ hd) ((ownHeld_sub _ _ _).trans ((callS Γ F fn args base x).heldA_sub _))
     refine List.mem_append_left _ (List.mem_append_right _ ?_)
     unfold outHeld
-    exact List.mem_flatMap.mpr ⟨(i, d0.root, d0.kind), List.mem_filter.mpr ⟨hEih d0 hd0, by simp⟩, hd⟩
+    exact List.mem_flatMap.mpr ⟨(i, d0.root, d0.kind), List.mem_filter.mpr ⟨ho, by simp⟩, hd⟩
 
 end CallH
 
@@ -3812,10 +3890,12 @@ theorem post_none_ge (h : CallH P Γ F x fn args base) {y : Var} (hy : base ≤ 
     leave is at least as strong as the context the summary promises. -/
 theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (sigCtx fn) Δa) {Er : Entry}
     (hErl : Er.live = true) (hErt : Er.ty = fn.resTy) (hErm : Er.mode = resMode fn)
-    (hErp : ∀ d ∈ Er.path, (d.root, d.kind) ∈ fn.lends) (hErh : ∀ d ∈ Er.held, (d.root, d.kind) ∈ fn.rholds)
+    (hErp : ∀ d ∈ Er.path, (d.root, d.kind) ∈ fn.lends)
+    (hErh : ∀ d ∈ Er.held, isRegionIdx fn d.root ∨ (d.root, d.kind) ∈ fn.rholds)
     (hEr0 : fn.resOwn = true → fn.resTy.holdsView = false → Er.held = [])
     (hio : ∀ i (hi : i < fn.params.length) b, fn.params[i].1 = .inout b →
-      ∃ Ei, Δa i = some Ei ∧ Ei.live = true ∧ (∀ d ∈ Ei.held, (i, d.root, d.kind) ∈ fn.outHolds) ∧
+      ∃ Ei, Δa i = some Ei ∧ Ei.live = true ∧
+        (∀ d ∈ Ei.held, isRegionIdx fn d.root ∨ (i, d.root, d.kind) ∈ fn.outHolds) ∧
         (fn.params[i].2.holdsView = false → Ei.held = []))
     (hErd : Er.dtor = false) (hΔf : ∀ v E, Δa v = some E → E.dtor = false ∧ E.dbind = false)
     (Γ3 : Ctx)
@@ -3824,19 +3904,20 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
               (exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa)))
             (base + fn.params.length)
               { rrE fn.params base 0 (callPe Γ fn.params args)
-                  ((callS Γ F fn args base x).liftE fn.params.length Er) with live := false, dtor := false }
+                  ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE fn.params.length Er)) with live := false, dtor := false }
            else exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa)))
           x (if fn.resOwn then { (⟨(rrE fn.params base 0 (callPe Γ fn.params args)
-                ((callS Γ F fn args base x).liftE fn.params.length Er)).ty, .own, true, [],
+                ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE fn.params.length Er))).ty, .own, true, [],
                 (rrE fn.params base 0 (callPe Γ fn.params args)
-                ((callS Γ F fn args base x).liftE fn.params.length Er)).held, false, false, false, false⟩ : Entry) with mode := resMode fn }
+                ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE fn.params.length Er))).held, false, false, false, false⟩ : Entry) with mode := resMode fn }
              else { rrE fn.params base 0 (callPe Γ fn.params args)
-                ((callS Γ F fn args base x).liftE fn.params.length Er)
+                ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE fn.params.length Er))
                 with mode := resMode fn, dtor := false, dbind := false })) :
     Weaker (exitScope (base + fn.params.length) Γ3) (setE (callPost Γ fn args) x (callRes Γ fn args)) := by
   obtain ⟨hl', hm', ht', hp', hh'⟩ := h.res_props hErl hErt hErm hErp hErh hEr0
   generalize hE' : rrE fn.params base 0 (callPe Γ fn.params args)
-    ((callS Γ F fn args base x).liftE fn.params.length Er) = Er' at hl' hm' ht' hp' hh' hΓ3
+    ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE fn.params.length Er)) = Er'
+    at hl' hm' ht' hp' hh' hΓ3
   have hrd : Er'.dtor = false := by rw [← hE']; simp [rrE, RSetup.liftE, hErm, resMode_ne', hErd]
   generalize hΓb : exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa) = Γb
     at hΓ3
@@ -4057,14 +4138,17 @@ theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
   obtain ⟨hren, habΔ⟩ := RSetup.StmtT.ren h.sOK h.prog hbody hsrc h.sig_abs (sigCtx_wf fn h.fnok.2.1) (sigCtx_names fn) (sigCtx_freshOK fn)
     h.thru (fun v hv => callS_isPi_lt (h.fnok.2.2.1 v hv))
   have hdt := StmtT.domTy hbody hsrc
-  have hErv : ∀ d0 ∈ Er.vdeps, lendable fn d0.root := by
+  have hErv : ∀ d0 ∈ Er.vdeps, lendable fn d0.root ∨ fn.params.length ≤ d0.root := by
     intro d0 hd0
     unfold Entry.vdeps at hd0
     rcases List.mem_append.mp hd0 with hd | hd
     · split at hd
       · cases hd
-      · exact (hlends _ (hErp d0 hd)).1
-    · exact (hrholds _ (hErh d0 hd)).1
+      · exact Or.inl (hlends _ (hErp d0 hd)).1
+    · rcases hErh d0 hd with hr | hr
+      · -- AGORA-937 (turn-on 3): a view of a region
+        exact Or.inr (Nat.le_trans (Nat.le_of_lt h.fnok.2.1) (isRegionIdx_ge hr))
+      · exact Or.inl (hrholds _ hr).1
   obtain ⟨hl', hm', ht', hp', hh'⟩ := h.res_props hErl hErt hErm hErp hErh hEr0
   -- A2-drop.2: the body's own `letd` bindings have ended (`StmtT.dkeep`)
   have hΔb : ∀ v E, Δa v = some E → E.dbind = true → E.mode.ownSlot = true →
@@ -4107,7 +4191,7 @@ theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
       · rw [hc] at hv; cases hv
       · rw [hc] at hv
         exact ⟨E', by rw [RSetup.canon_frame _ hfr]; exact hv⟩
-  refine h.typedIn_of habΔ (hren.mono (ξ' := .none) (fun _ _ h' => RSetup.liftX_none h')) hΔd hΔb hko (h.res_at hEr hErm hErv fun d0 hd => (hlends _ (hErp d0 hd)).1) hl' hm' ht' ?_
+  refine h.typedIn_of habΔ (hren.mono (ξ' := .none) (fun _ _ h' => RSetup.liftX_none h')) hΔd hΔb hko (h.res_at hEr hErm hErv) hl' hm' ht' ?_
     (fun Γ3 hΓ3 => h.fin_weaker hdt hErl hErt hErm hErp hErh hEr0 hio (hΔd _ Er hEr) hΔf Γ3 hΓ3)
   intro hx
   obtain ⟨d, hd, hdx⟩ := List.mem_map.mp hx

@@ -179,7 +179,9 @@ the LLVM / C11 memory model rather than redefining it.
     fresh (one that may reach memory an argument views),
     directly or through a callee, or drop glue that does so, of a type that holds
     views, and a call into a function that does so which passes an
-    argument holding views (`ThruFn`);
+    argument holding views (`ThruFn`) of anything but a region of the
+    caller's own signature (AGORA-937: a view-holding `sink` or `inout`
+    parameter may be handed to such a function, `A2/RegionThruWitness.lean`);
   - a closure whose code does so, through a borrow that is not fresh,
     when the call through its package passes an argument holding views, or
     its environment holds views, or it takes the environment handed over

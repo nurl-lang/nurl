@@ -2138,6 +2138,25 @@ def paramE (ps : List (PMode × Ty)) : PMode × Ty → Entry
 def regioned (pt : PMode × Ty) : Bool :=
   (match pt.1 with | .inp => false | _ => true) && pt.2.holdsView
 
+/-- AGORA-937 (turn-on 3): `r` is a region's index: `π p = fn.nvars + p` of
+    a regioned parameter `p` (the call's `isPi`, `callS_isPi`). -/
+def isRegionIdx (fn : Fn) (r : Nat) : Bool :=
+  decide (fn.nvars ≤ r) &&
+    (if h : r - fn.nvars < fn.params.length then regioned fn.params[r - fn.nvars] else false)
+
+theorem isRegionIdx_iff {fn : Fn} {r : Nat} :
+    isRegionIdx fn r = true ↔
+      fn.nvars ≤ r ∧ ∃ h : r - fn.nvars < fn.params.length, regioned fn.params[r - fn.nvars] = true := by
+  unfold isRegionIdx
+  by_cases h : r - fn.nvars < fn.params.length
+  · simp [h]
+  · simp [h]
+
+/-- ... so a region's index is past every parameter's (`fn.params.length <
+    fn.nvars`, `FnOK`). -/
+theorem isRegionIdx_ge {fn : Fn} {r : Nat} (h : isRegionIdx fn r = true) : fn.nvars ≤ r :=
+  (isRegionIdx_iff.mp h).1
+
 /-- ... its entry: a root of the callee's typing only, holding nothing, never
     live and never named by the body. -/
 def regionE : Entry := ⟨.int, .region, false, [], [], false, false, false, false⟩

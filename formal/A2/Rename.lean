@@ -3457,6 +3457,15 @@ theorem mem_subE_held_of_R (h : S.OK) (hR : S.R = []) {X : Entry} {d : Dep} (hd 
   · exact he
   · have := h.σ_sub v hσ; rw [hR] at this; simp [allKinds] at this
 
+/-- AGORA-937 (turn-on 3): a lifted dependency on a region stands for what
+    the region stands for, or is dropped (a name). -/
+theorem mem_subD_pi {S : RSetup} (h : S.OK) {w : Var} {k : Kind} {e : Dep} (hp : S.isPi w = true)
+    (he : e ∈ S.subD ⟨S.ρ w, k⟩) : e ∈ S.σ w := by
+  unfold subD at he
+  simp only [inv_ρ h, hp, ↓reduceIte] at he
+  cases hk : k.isName <;> simp only [hk, Bool.false_eq_true, ↓reduceIte, List.not_mem_nil] at he
+  exact he
+
 /-- AGORA-937 (agora #4147): no name is on a region. A live binding that may
     hold memory names only roots that own their slot (`NameWF`), and a region
     does not. -/

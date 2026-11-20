@@ -2288,8 +2288,39 @@ def DtorParamsOK (P : Prog) (fn : Fn) : Prop :=
     parameters, and ends as its summary says: the result is set and borrows
     and holds only what `lends` and `rholds` name, every `inout` parameter
     is set again and holds only what `outHolds` names (an owned result or
-    an `inout` parameter whose type holds no views holds nothing). -/
+    an `inout` parameter whose type holds no views holds nothing).
+    AGORA-937 (turn-on 3): what the result or an `inout` parameter holds may
+    also be views of a parameter's region (`isRegionIdx`): the call
+    substitutes what the argument holds views of, which the caller's result
+    and `inout` argument hold already (`heldOfArgs`). -/
 def FnOK (P : Prog) (fn : Fn) : Prop :=
+  fn.body.src = true ∧ fn.params.length < fn.nvars ∧ (∀ v ∈ fn.body.vars, v < fn.nvars) ∧
+  fn.resTy.ok = true ∧ (fn.resOwn = true → fn.resTy.owning = true) ∧
+  (∀ pt ∈ fn.params, pt.2.ok = true ∧
+    (pt.1 = .sink → pt.2.owning = true) ∧ (∀ b, pt.1 = .inout b → pt.2.owning = true)) ∧
+  (∀ jk ∈ fn.lends, lendable fn jk.1 ∧ jk.2.isName = false) ∧
+  (∀ jk ∈ fn.rholds, lendable fn jk.1 ∧ jk.2.isName = false) ∧
+  (∀ o ∈ fn.outHolds, lendable fn o.2.1 ∧ o.2.2.isName = false) ∧
+  (∀ jk ∈ fn.lends ++ fn.rholds, kindFits fn jk.1 jk.2) ∧ (∀ o ∈ fn.outHolds, kindFits fn o.2.1 o.2.2) ∧
+  -- A2-drop.3a: parameters and a result of a type holding a destructor
+  DtorParamsOK P fn ∧
+  ∃ Δ, StmtT P .none (sigCtx fn) [] fn.body Δ ∧
+    -- A2-drop.2: the body's own destructor bindings have ended, and no
+    -- parameter or result runs a destructor
+    (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
+    (∃ Er, Δ fn.params.length = some Er ∧ Er.live = true ∧ Er.ty = fn.resTy ∧
+      Er.mode = resMode fn ∧
+      (∀ d ∈ Er.path, (d.root, d.kind) ∈ fn.lends) ∧
+      (∀ d ∈ Er.held, isRegionIdx fn d.root ∨ (d.root, d.kind) ∈ fn.rholds) ∧
+      (fn.resOwn = true → fn.resTy.holdsView = false → Er.held = [])) ∧
+    (∀ i (h : i < fn.params.length) b, fn.params[i].1 = .inout b →
+      ∃ Ei, Δ i = some Ei ∧ Ei.live = true ∧ (∀ d ∈ Ei.held, isRegionIdx fn d.root ∨ (i, d.root, d.kind) ∈ fn.outHolds) ∧
+        (fn.params[i].2.holdsView = false → Ei.held = []))
+
+/-- AGORA-937 (turn-on 3): `FnOK` as it was before regions were on, its end
+    checks holding no region: only `fnOK_mono`'s premise, which lets a proof
+    of `FnOK` be given in the old form. -/
+def FnOK0 (P : Prog) (fn : Fn) : Prop :=
   fn.body.src = true ∧ fn.params.length < fn.nvars ∧ (∀ v ∈ fn.body.vars, v < fn.nvars) ∧
   fn.resTy.ok = true ∧ (fn.resOwn = true → fn.resTy.owning = true) ∧
   (∀ pt ∈ fn.params, pt.2.ok = true ∧
@@ -2312,6 +2343,17 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
     (∀ i (h : i < fn.params.length) b, fn.params[i].1 = .inout b →
       ∃ Ei, Δ i = some Ei ∧ Ei.live = true ∧ (∀ d ∈ Ei.held, (i, d.root, d.kind) ∈ fn.outHolds) ∧
         (fn.params[i].2.holdsView = false → Ei.held = []))
+
+
+/-- AGORA-937 (turn-on 3): `FnOK`'s end checks only relax: a function that was
+    well-typed is. -/
+theorem fnOK_mono {P : Prog} {fn : Fn} (h : FnOK0 P fn) : FnOK P fn := by
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, Δ, hb, hΔ,
+    ⟨Er, hEr, hl, ht, hm, hp, hh, h0⟩, hio⟩ := h
+  refine ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, Δ, hb, hΔ,
+    ⟨Er, hEr, hl, ht, hm, hp, fun d hd => Or.inr (hh d hd), h0⟩, fun i hi b hb => ?_⟩
+  obtain ⟨Ei, hEi, hEl, hEh, hE0⟩ := hio i hi b hb
+  exact ⟨Ei, hEi, hEl, fun d hd => Or.inr (hEh d hd), hE0⟩
 
 def ProgOK (P : Prog) : Prop := ∀ fn ∈ P, FnOK P fn
 
