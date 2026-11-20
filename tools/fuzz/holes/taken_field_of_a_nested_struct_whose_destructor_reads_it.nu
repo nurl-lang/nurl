@@ -1,4 +1,5 @@
-// map: §2.14 | A2 | rejected | - | agora #280: adversarial neighbour of the destructor-as-effect rule (a280_unsafe_nested_holder)
+// map: §2.14 | A2 | rejected | - | AGORA-929: adversarial neighbour of the destructor-as-effect rule (a280_unsafe_nested_holder)
+// AGORA-929 (this shape, closed): refused - a sink may not take a field the struct's own % Drop reads (main 08e56f54: accepted, the destructor read the emptied field)
 $ `stdlib/core/string.nu`
 
 : Named { String s i n }

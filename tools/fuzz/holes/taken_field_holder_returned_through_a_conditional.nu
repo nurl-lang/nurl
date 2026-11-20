@@ -1,4 +1,5 @@
-// map: §2.1 | A2 | rejected | - | agora #280: `^ ? c h h2` after a sink took `. h buf`
+// map: §2.1 | A2 | rejected | - | AGORA-929: `^ ? c h h2` after a sink took `. h buf`
+// AGORA-929 (this shape, closed): refused - a join's arm that is a binding whole hands it on (main 08e56f54: accepted, a null handle)
 $ `stdlib/core/vec.nu`
 
 : Holder { ( Vec u ) buf }

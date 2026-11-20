@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.1.6] — 2026-11-20
+
+### Fixed
+
+- A trap's message is no longer freed by hand before the new one is made
+  (`__trap`, `__trap_oob`, `__trap_named`): the `=` releases the old message
+  once the new one exists, so a panic while the message is built leaves no
+  emptied field behind. The compiler now refuses that shape (AGORA-929).
+
 ## [3.1.5] — 2026-11-16
 
 ### Fixed
