@@ -5309,6 +5309,96 @@ theorem allowed_replace (hab : S.AbsOK Γa) {x : Var} {Ex : Entry} (hx : Γa x =
     rcases hm with hm | hm | hm <;> rw [hm] at hmE <;> cases hmE
     cases k <;> rfl
 
+/-- AGORA-937: the roots a list reaches in memory, in every memory way,
+    substituted: a kept root is kept in every such way, and what a region
+    stands for is reached in every memory way (`σ_kinds`). -/
+theorem allKinds_roots_memDeps_subD (h : S.OK) (Y : List Dep) :
+    allKinds (roots (memDeps (Y.flatMap S.subD))) ⊆ (allKinds (roots (memDeps Y))).flatMap S.subD := by
+  rintro ⟨dr, dk⟩ hd
+  obtain ⟨hr, hk⟩ := mem_allKinds_iff.mp hd
+  obtain ⟨e, he, her⟩ := List.mem_map.mp hr
+  obtain ⟨he1, hek⟩ := List.mem_filter.mp he
+  obtain ⟨e0, he0, hee⟩ := List.mem_flatMap.mp he1
+  have hek' : e.kind.isName = false := by simpa using hek
+  simp only at her hk; subst her
+  rcases S.mem_subD hee with rfl | ⟨v, hv, hp, hσ⟩
+  · refine List.mem_flatMap.mpr ⟨⟨e.root, dk⟩,
+      mem_allKinds_iff.mpr ⟨List.mem_map.mpr ⟨e, List.mem_filter.mpr ⟨he0, hek⟩, rfl⟩, hk⟩, ?_⟩
+    rw [S.subD_fix_reKind h (S.subD_idem h hee) (fun hn => by rw [hn] at hek'; cases hek')]
+    exact List.mem_singleton_self _
+  · have hne : e ≠ e0 := fun he' => (S.σ_frame h hσ).1 v (by rw [he', ρ_of_inv hv])
+    have he0k := S.mem_subD_sub hee hne
+    refine List.mem_flatMap.mpr ⟨⟨e0.root, dk⟩, mem_allKinds_iff.mpr ⟨List.mem_map.mpr
+      ⟨e0, List.mem_filter.mpr ⟨he0, by simp [he0k]⟩, rfl⟩, hk⟩, ?_⟩
+    simp only [subD, hv, hp, hk, Bool.not_false, Bool.and_self, ↓reduceIte]
+    exact h.σ_kinds v e hσ dk hk
+
+/-- ... so a receiver's roots, substituted (for a receiver at no region's
+    index). -/
+theorem allKinds_recvRoots_subE (h : S.OK) {c : Var} (hnp : S.isPi c = false) (L : Entry) :
+    allKinds (recvRoots (S.ρ c) (S.subE L)) ⊆ (allKinds (recvRoots (S.ρ c) L)).flatMap S.subD := by
+  have hmono : ∀ {a b : List Dep}, a ⊆ b → allKinds (roots (memDeps a)) ⊆ allKinds (roots (memDeps b)) := by
+    intro a b hab d hd
+    obtain ⟨hr, hk⟩ := mem_allKinds_iff.mp hd
+    exact mem_allKinds_iff.mpr ⟨roots_sub (fun e he => List.mem_filter.mpr
+      ⟨hab (List.mem_filter.mp he).1, (List.mem_filter.mp he).2⟩) hr, hk⟩
+  have hsplit : ∀ {A B : List Var}, allKinds (A ++ B) = allKinds A ++ allKinds B := by
+    intro A B; simp [allKinds, List.flatMap_append]
+  intro d hd
+  unfold recvRoots at hd ⊢
+  rw [hsplit] at hd; rw [hsplit, List.flatMap_append]
+  rcases List.mem_append.mp hd with hd | hd
+  · exact List.mem_append_left _ (S.allKinds_roots_memDeps_subD h _ (hmono (derive_subE h hnp L rfl) hd))
+  · exact List.mem_append_right _ (S.allKinds_roots_memDeps_subD h _ hd)
+
+/-- What a call through a package adds to what it returns (`recvRes`). -/
+def recvAdd (E : Entry) (X : List Dep) : Entry :=
+  { E with path := E.path ++ X, held := ownHeld E.mode.ownSlot E.ty (E.held ++ X), heldFresh := false }
+
+/-- ... keeps a weakening, with what the receiver reaches widened. -/
+theorem recvRes_weaker {E' B : Entry} {X Y : List Dep} (hw : EntryWeaker E' B) (hXY : X ⊆ Y)
+    (hmo : B.mode = .own ∨ B.mode = .bor) (hdb : B.dbind = false) (hf : B.fresh = false) :
+    EntryWeaker (recvAdd E' X) (recvAdd B Y) := by
+  unfold recvAdd
+  obtain ⟨ht, hm, _, hl, hd, hdbw, hra, _, _, _⟩ := hw
+  have hheld : E'.held ⊆ B.held →
+      ownHeld E'.mode.ownSlot E'.ty (E'.held ++ X) ⊆ ownHeld B.mode.ownSlot B.ty (B.held ++ Y) := by
+    intro h1; rw [hm, ht]; unfold ownHeld; split
+    · exact List.Subset.refl _
+    · exact append_sub h1 hXY
+  refine ⟨ht, hm, fun hfx => ?_, fun hl' => ?_, fun hd' => ?_, hdbw, hra, fun hd' => ?_,
+    fun _ _ _ hfr => ?_, fun _ _ hhf => ?_⟩
+  · exfalso
+    change E'.mode = .rootb ∨ ∃ b, E'.mode = .inout b ∧ b ≠ .replace ∧ E'.ty.holdsView = false at hfx
+    rw [← hm] at hfx
+    rcases hmo with h1 | h1 <;> rw [h1] at hfx <;> simp at hfx
+  · obtain ⟨h1, h2, h3⟩ := hl hl'
+    exact ⟨h1, fun ho => append_sub (h2 ho) hXY, hheld h3⟩
+  · obtain ⟨h1, h2⟩ := hd hd'; exact ⟨h1, hheld h2⟩
+  · exact absurd (show E'.dbind = true from hd') (by rw [← hdbw, hdb]; simp)
+  · exact absurd (show B.fresh = true from hfr) (by rw [hf]; simp)
+  · exact absurd (show false = true from hhf) (by simp)
+
+theorem subE_recvRes (c : Var) (L B : Entry) :
+    S.subE (recvRes c L B) = recvAdd (S.subE B) ((allKinds (recvRoots c L)).flatMap S.subD) := by
+  simp only [subE, recvRes, recvAdd, List.flatMap_append]
+  unfold ownHeld; split <;> simp [List.flatMap_append]
+
+/-- AGORA-937: `recvRes_lift` with regions, for a receiver at no region's
+    index: the lift, substituted, of what the call returns. -/
+theorem recvRes_lifts (h : S.OK) (hab : S.AbsOK Γa) {c : Var} {Ec E E' : Entry} (hc : Γa c = some Ec)
+    (hnp : S.isPi c = false) (hmo : E.mode = .own ∨ E.mode = .bor) (hE0 : E.dbind = false) (x : Var)
+    (hEf : E.fresh = false) (hw : EntryWeaker E' (S.subE (S.liftE x E))) :
+    EntryWeaker (recvRes (S.ρ c) (S.subE (S.liftE c Ec)) E') (S.subE (S.liftE x (recvRes c Ec E))) := by
+  have hrb : E.mode ≠ .rootb := by rcases hmo with h' | h' <;> rw [h'] <;> simp
+  have h1 := S.subE_weaker (recvRes_lift h hab hc hmo hE0 x hEf (EntryWeaker.refl (S.liftE x E)))
+  refine EntryWeaker.trans ?_ h1
+  rw [subE_recvRes]
+  exact recvRes_weaker hw (allKinds_recvRoots_subE h hnp _)
+    (by rw [subE_mode, liftE_mode x hrb]; rcases hmo with h' | h' <;> rw [h'] <;> simp [liftMode])
+    (by rw [subE_dbind, liftE_dbind h, ite_eq_right hrb]; exact hE0)
+    (by rw [subE_fresh, S.liftE_fresh_of hrb]; exact hEf)
+
 theorem src_rename (ρ : Var → Var) (s : Stmt) : (s.rename ρ).src = s.src := by
   induction s <;> simp_all [Stmt.rename, Stmt.src]
 
@@ -6523,7 +6613,6 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- AGORA-395)
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT (fun ht => hT (.inr ⟨σ, by simp [Stmt.calls], ht⟩))
       (fun v hv => hvs v (by rcases List.mem_cons.mp hv with rfl | hv <;> simp [Stmt.vars, hv]))
-    simp only [subE_nopi h] at hE'
     obtain ⟨hn1, hEn, _⟩ := hcT.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hcT hab
     obtain ⟨hw1, hdm, hE⟩ := hcT.wf hP hw
@@ -6543,24 +6632,28 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         obtain ⟨_, _, _, _, _, _, hE, _, _⟩ := hcT; rw [hE]; rfl
       exact h1.bind hx1 (FreshE.of_fresh (by rw [recvRes_fresh]; exact hEf))) (fun ht => hT ht.callc)
       (fun v hv => hvs v (by simp [Stmt.vars, hv]))
-    have tk := tk.mono (S.liftX_under h (hab.fresh hx) (hab.notPiFresh hx))
+    have hnpx := hab.notPiFresh hx
+    have tk := tk.mono (S.liftX_under h (hab.fresh hx) hnpx)
     have hbx := hab.fresh hx
-    refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hx)⟩
-    rw [canon_exitScope h abk (Or.inl hbx)]
-    have hwc := canon_wf h habx hwx
-    have hnc := canon_names h habx hnx
-    rw [canon_setE h] at hwc hnc tk
-    refine StmtT.callc (Ec := S.liftE c Ec) (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x)
-      (by rw [canon_ρ h, hc]; rfl) (by rw [liftE_ty' h hab hc]; exact htc) hj hσ
-      (by rw [liftE_ty' h hab hc]; exact hhd) hout hc'
+    refine ⟨?_, abk.exitScope hbx hnpx⟩
+    rw [canon_exitScopes h abk (Or.inl hbx) hnpx]
+    have hwc := canon_wf_sub h habx hwx hnx
+    have hnc := canon_names_sub h habx hnx
+    rw [canon_setEs h _ hnpx] at hwc hnc tk
+    have hnpc : S.isPi c = false := hvs c (by simp [Stmt.vars])
+    refine StmtT.callc (Ec := S.subE (S.liftE c Ec)) (by rw [src_rename]; exact hks)
+      (by rw [canon_ρs h _ hnpx, hx]; rfl) (h.Fcout x)
+      (canon_some h hc hnpc) (by rw [subE_ty, liftE_ty' h hab hc]; exact htc) hj hσ
+      (by rw [subE_ty, liftE_ty' h hab hc]; exact hhd) hout hc'
       (fun z hz d hd hb hdr => ?_)
-      (StmtT.weakenIn ⟨PW.setE hpw (recvRes_lift h hab hc hmo hdb0 x (by
+      (StmtT.weakenIn ⟨PW.setE hpw (recvRes_lifts h hab hc hnpc hmo hdb0 x (by
         obtain ⟨_, _, _, _, _, _, hEeq, _, _⟩ := hcT; rw [hEeq]; rfl) (hE' x)), hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe) (fun ho hd => dtorHead_rename h.inj (hdk ho hd))
     -- no argument is a binding the receiver may change: in the callee, nor
     -- where the call places it (what the arguments held names the frame; a
     -- symbolic name's image names an `inout` argument the receiver names)
     obtain ⟨z0, hz0, rfl⟩ := List.mem_map.mp hz
+    replace hd := S.mem_subE_ρ h hd hdr
     by_cases hrb : Ec.mode = .rootb
     · have hvd : (S.liftE c Ec).vdeps = (S.pe c).vdeps := by simp [liftE, hrb, Entry.vdeps]
       rw [hvd] at hd
