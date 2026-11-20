@@ -40853,6 +40853,15 @@ unsafe @ gen_cond i lex i syms i cg → s {
         ? t_via_exit { ( nurl_print tlbl ) } { ( nurl_print lend ) }
         ( emit_dbg_eol )
     } {}
+    // (An arm written as a block whose tail is a binding of the scope
+    // around the join, `? c { h } h2`, hands it on whole, as `? c h h2`
+    // does: its `pendwhole` row, recorded here before the arm's scope goes;
+    // AGORA-929.)
+    ? & & c_valu == t_tt0 TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) {
+        : s __pwv ( nurl_sym_get syms `__tail_first_val__` )
+        : s __pwt ( nurl_sym_get syms __pwv )
+        ? & != 0 ( nurl_str_len __pwt ) ! ( __plain_scalar_lty ( nurl_llty __pwt ) ) { ( bck_record2 `pendwhole` __pwv bck_cline `` `` ) } {}
+    } {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
     ( emit ( nurl_str_cat le `:` ) )
     : ~ s old_strs_e ``
@@ -41075,6 +41084,15 @@ unsafe @ gen_cond i lex i syms i cg → s {
         ( nurl_print `  br label %` )
         ? e_via_exit { ( nurl_print elbl ) } { ( nurl_print lend ) }
         ( emit_dbg_eol )
+    } {}
+    // (An arm written as a block whose tail is a binding of the scope
+    // around the join, `? c { h } h2`, hands it on whole, as `? c h h2`
+    // does: its `pendwhole` row, recorded here before the arm's scope goes;
+    // AGORA-929.)
+    ? & & c_valu == e_tt0 TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) {
+        : s __pwv ( nurl_sym_get syms `__tail_first_val__` )
+        : s __pwt ( nurl_sym_get syms __pwv )
+        ? & != 0 ( nurl_str_len __pwt ) ! ( __plain_scalar_lty ( nurl_llty __pwt ) ) { ( bck_record2 `pendwhole` __pwv bck_cline `` `` ) } {}
     } {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
     // Borrow checker: disarm — a block-less else-arm would otherwise
@@ -62732,6 +62750,24 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 { = st ( bck_kill_stored_in st mvid ( bck_field_int rec 3 ) F ) } {}
                 : i mv_was ( bck_st_get st mvid )
                 = st ( bck_st_set st mvid BCK_MOVED )
+                // (…a binding that still views a field of an `inout`
+                // parameter, handed to a call that takes it - a move a call
+                // made, `mc_`: the field goes back to the caller empty, as
+                // for `( take . h buf )`; AGORA-929.)
+                ? & == mv_was BCK_BORROWED_SHARED != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` mvn ) ) {
+                    ? != 0 ( nurl_sym_len g_bck ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` mvn ) ( bck_field rec 3 ) ) ) {
+                        : s fpw ( str_first_word ( nurl_sym_get g_bck ( bck_bkey `fp_` mvn ) ) )
+                        ? != 0 ( nurl_str_len fpw ) {
+                            : i fpi ( nurl_str_to_int fpw )
+                            ? & & != fpi ( bck_path_root fpi ) != 0 g_bck_inp_any ( str_contains_word ( nurl_sym_get g_bck `inp` ) ( nurl_str_int ( bck_path_root fpi ) ) ) {
+                                = st ( bck_st_set st fpi BCK_MOVED )
+                                ( bck_add_word_once `fmv` fpw )
+                                = g_bck_fmv_any 1
+                                ( bck_put ( nurl_str_cat `ml_` fpw ) ( bck_field rec 3 ) )
+                            } {}
+                        } {}
+                    } {}
+                } {}
                 = st ( bck_partners_freed st mvid mv_was ( bck_field_int rec 3 ) )
                 ( bck_put ( nurl_str_cat `ml_` mvn )
                 ( bck_field rec 3 ) )
@@ -63141,6 +63177,26 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     ? == BCK_STORED ( bck_st_get st pvid ) { ( bck_diag_stored pvid ( bck_field_int rec 3 ) F ) } {}
                     : i pv_was ( bck_st_get st pvid )
                     = st ( bck_st_set st pvid BCK_MOVED )
+                    // (…a binding that still views a field of an `inout`
+                    // parameter, `: b . h buf` - not rebound, not handed the
+                    // old value by a store that replaced the field: moving it
+                    // takes the field out of `h`, which goes back to its
+                    // caller empty, as `( take . h buf )` does; AGORA-929. A
+                    // local's field taken so is left empty where it lives,
+                    // compiler/tests/field_viewer_rebound_handed_to_sink.)
+                    ? & == pv_was BCK_BORROWED_SHARED != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` pvn ) ) {
+                        : s fpw ( str_first_word ( nurl_sym_get g_bck ( bck_bkey `fp_` pvn ) ) )
+                        ? != 0 ( nurl_str_len fpw ) {
+                            : i fpi ( nurl_str_to_int fpw )
+                            ? & & != fpi ( bck_path_root fpi ) != 0 g_bck_inp_any ( str_contains_word ( nurl_sym_get g_bck `inp` ) ( nurl_str_int ( bck_path_root fpi ) ) ) {
+                                = st ( bck_st_set st fpi BCK_MOVED )
+                                ( bck_add_word_once `fmv` fpw )
+                                = g_bck_fmv_any 1
+                                ( bck_put ( nurl_str_cat `ml_` fpw ) ( bck_field rec 3 ) )
+                                ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` fpw ) ( bck_field rec 3 ) ) ( bck_generic_base pcal ) )
+                            } {}
+                        } {}
+                    } {}
                     = st ( bck_partners_freed st pvid pv_was ( bck_field_int rec 3 ) )
                     ? == kc 10 {
                         // A later borrowing argument on this same source line
