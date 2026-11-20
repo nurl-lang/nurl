@@ -70,7 +70,7 @@ PRIMS = {
     "__nurl_slice_copy": S(["in"], res="own"),
     # …of elements that hold views: what the argument's elements hold, not
     # the slice it was given (agora #935)
-    "__nurl_slice_copy_v": S(["in"], res="own", rholds=[((), 0, E, "held")]),
+    "__nurl_slice_copy_v": S(["in"], res="own", rholds=[(E, 0, E, "held")]),
     # ---- String ---------------------------------------------------------
     "string_from": S(["in"], res="own"),
     "string_new": S([], res="own"),
