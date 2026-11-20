@@ -56,7 +56,7 @@ def ctx (r1 : Entry) : Ctx := fun v =>
 
 theorem sig_eq : sigCtx g = ctx R0 := by
   funext v
-  simp only [sigCtx, ctx, g, paramE, resMode]
+  simp only [↓sigCtx_noRegion (fn := g) (by decide), ctx, g, paramE, resMode]
   rcases v with _ | _ | v <;> simp [Ep, R0, str, Ty.hasFn]
 
 /-- No borrowed parameter, and no binding that runs a destructor. -/

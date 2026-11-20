@@ -148,15 +148,15 @@ def ECD : Entry := ⟨CDT, .own, true, [], [], false, false, false, false⟩
 
 theorem dfn_body : StmtT Pc ξ (sigCtx dfn) [] dfn.body
     (setE (kill .replace false 1 (sigCtx dfn)) 1 { intE with mode := R0.mode }) := by
-  have hc : sigCtx dfn 1 = some R0 := by simp [sigCtx, dfn, R0, resMode]
+  have hc : sigCtx dfn 1 = some R0 := by simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, R0, resMode]
   have hflags : ∀ v E, sigCtx dfn v = some E → E.dtor = false ∧ E.dbind = false := by
     intro v E h
-    rcases v with _ | _ | v <;> simp [sigCtx, dfn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+    rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
   exact StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
     (by
       intro p E hp hm d hd _
-      rcases p with _ | _ | p <;> simp [sigCtx, dfn, paramE, resMode, DT, T, Ty.hasFn] at hp <;> subst hp <;>
+      rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode, DT, T, Ty.hasFn] at hp <;> subst hp <;>
         simp [Entry.vdeps, Mode.ownSlot] at hd <;> simp at hm)
     (DtorSafe.of_none (fun v E h => (hflags v E h).1) _ _ _) rfl
 
@@ -168,7 +168,7 @@ theorem dfn_ok : FnOK Pc dfn := by
     · simp [dfn] at hi; subst hi; simp [dfn] at hs
     · simp [dfn] at hi; subst hi; simp [dfn] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, dfn, paramE, resMode, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, dfn], rfl, rfl, by simp [R0, resMode, dfn], by simp [intE], by simp [intE],
       by simp [dfn]⟩
@@ -179,14 +179,14 @@ theorem dfn_ok : FnOK Pc dfn := by
 theorem code_body : ∃ Δ, StmtT Pc ξ (sigCtx code) [] code.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
-  have h0 : sigCtx code 0 = some EDT := by simp [sigCtx, code, paramE, EDT, DT, T, Ty.hasFn]
-  have h1 : sigCtx code 1 = some R0 := by simp [sigCtx, code, R0, resMode]
+  have h0 : sigCtx code 0 = some EDT := by simp [↓sigCtx_noRegion (fn := code) (by decide), code, paramE, EDT, DT, T, Ty.hasFn]
+  have h1 : sigCtx code 1 = some R0 := by simp [↓sigCtx_noRegion (fn := code) (by decide), code, R0, resMode]
   have hS : NoRootb (sigCtx code) := by
     intro v E h
     rcases v with _ | _ | v
     · rw [h0] at h; cases h; simp [EDT]
     · rw [h1] at h; cases h; simp [R0]
-    · simp [sigCtx, code] at h
+    · simp [↓sigCtx_noRegion (fn := code) (by decide), code] at h
   let Kb : Ctx := A2.setE (kill .replace false 0 (sigCtx code)) 0 { EDT with live := false, dtor := false }
   have hKb : NoRootb Kb := (hS.kill _ _ _).setE (by simp [EDT])
   have hmv : RhsT (sigCtx code) [] (.var 0) ⟨EDT.ty, .own, true, [], EDT.held, false, false, false, false⟩ Kb :=
@@ -207,7 +207,7 @@ theorem code_body : ∃ Δ, StmtT Pc ξ (sigCtx code) [] code.body Δ ∧
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
   have hlet := StmtT.letd (ξ := .none) (P := Pc) (Γ := sigCtx code) (Γ1 := Kb) (F := []) (x := 2) (f := 0) (r := .var 0)
     (s := .assign 1 (.expr (.lit 0))) (t := T) (H := EDT.held) (τ := DT) rfl
-    (by simp [sigCtx, code]) (by simp) hmv rfl
+    (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp) hmv rfl
     (Or.inl ⟨rfl, Or.inr ⟨0, rfl⟩⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hasg.ofNone (hKd.endOK _)
     (by simp [Stmt.assigns])
   refine ⟨_, hlet.ofNone, hKd.exitScope 2, ?_⟩
@@ -230,21 +230,21 @@ theorem code_ok : FnOK Pc code := by
 theorem glue_body : ∃ Δ, StmtT Pc ξ (sigCtx glue) [] glue.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
-  have h0 : sigCtx glue 0 = some ECD := by simp [sigCtx, glue, paramE, ECD, CDT, CT, Ty.hasFn]
-  have h1 : sigCtx glue 1 = some R0 := by simp [sigCtx, glue, R0, resMode]
-  have h2 : sigCtx glue 2 = none := by simp [sigCtx, glue]
+  have h0 : sigCtx glue 0 = some ECD := by simp [↓sigCtx_noRegion (fn := glue) (by decide), glue, paramE, ECD, CDT, CT, Ty.hasFn]
+  have h1 : sigCtx glue 1 = some R0 := by simp [↓sigCtx_noRegion (fn := glue) (by decide), glue, R0, resMode]
+  have h2 : sigCtx glue 2 = none := by simp [↓sigCtx_noRegion (fn := glue) (by decide), glue]
   have hS : NoRootb (sigCtx glue) := by
     intro v E h
     rcases v with _ | _ | v
     · rw [h0] at h; cases h; simp [ECD]
     · rw [h1] at h; cases h; simp [R0]
-    · simp [sigCtx, glue] at h
+    · simp [↓sigCtx_noRegion (fn := glue) (by decide), glue] at h
   have hSd : NoDeps (sigCtx glue) := by
     intro v E h
     rcases v with _ | _ | v
     · rw [h0] at h; cases h; simp [ECD, Entry.vdeps, Mode.ownSlot]
     · rw [h1] at h; cases h; simp [R0, Entry.vdeps, Mode.ownSlot]
-    · simp [sigCtx, glue] at h
+    · simp [↓sigCtx_noRegion (fn := glue) (by decide), glue] at h
   have hps : glue.params = [(.sink, CDT)] := rfl
   have hae : argE (sigCtx glue) 0 = ECD := by simp [argE, h0]
   have han : argNames (sigCtx glue) [0] = [] := by
@@ -527,15 +527,15 @@ def ECD2 : Entry := ⟨CDT2, .own, true, [], [], false, false, false, false⟩
 
 theorem dfn_body2 : StmtT Pd ξ (sigCtx dfn) [] dfn.body
     (setE (kill .replace false 1 (sigCtx dfn)) 1 { intE with mode := R0.mode }) := by
-  have hc : sigCtx dfn 1 = some R0 := by simp [sigCtx, dfn, R0, resMode]
+  have hc : sigCtx dfn 1 = some R0 := by simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, R0, resMode]
   have hflags : ∀ v E, sigCtx dfn v = some E → E.dtor = false ∧ E.dbind = false := by
     intro v E h
-    rcases v with _ | _ | v <;> simp [sigCtx, dfn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+    rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
   exact StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
     (by
       intro p E hp hm d hd _
-      rcases p with _ | _ | p <;> simp [sigCtx, dfn, paramE, resMode, DT, T, Ty.hasFn] at hp <;> subst hp <;>
+      rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode, DT, T, Ty.hasFn] at hp <;> subst hp <;>
         simp [Entry.vdeps, Mode.ownSlot] at hd <;> simp at hm)
     (DtorSafe.of_none (fun v E h => (hflags v E h).1) _ _ _) rfl
 
@@ -547,7 +547,7 @@ theorem dfn_ok2 : FnOK Pd dfn := by
     · simp [dfn] at hi; subst hi; simp [dfn] at hs
     · simp [dfn] at hi; subst hi; simp [dfn] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, dfn, paramE, resMode, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, dfn], rfl, rfl, by simp [R0, resMode, dfn], by simp [intE], by simp [intE],
       by simp [dfn]⟩
@@ -558,14 +558,14 @@ theorem dfn_ok2 : FnOK Pd dfn := by
 theorem code_body2 : ∃ Δ, StmtT Pd ξ (sigCtx code) [] code.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
-  have h0 : sigCtx code 0 = some EDT := by simp [sigCtx, code, paramE, EDT, DT, T, Ty.hasFn]
-  have h1 : sigCtx code 1 = some R0 := by simp [sigCtx, code, R0, resMode]
+  have h0 : sigCtx code 0 = some EDT := by simp [↓sigCtx_noRegion (fn := code) (by decide), code, paramE, EDT, DT, T, Ty.hasFn]
+  have h1 : sigCtx code 1 = some R0 := by simp [↓sigCtx_noRegion (fn := code) (by decide), code, R0, resMode]
   have hS : NoRootb (sigCtx code) := by
     intro v E h
     rcases v with _ | _ | v
     · rw [h0] at h; cases h; simp [EDT]
     · rw [h1] at h; cases h; simp [R0]
-    · simp [sigCtx, code] at h
+    · simp [↓sigCtx_noRegion (fn := code) (by decide), code] at h
   let Kb : Ctx := A2.setE (kill .replace false 0 (sigCtx code)) 0 { EDT with live := false, dtor := false }
   have hKb : NoRootb Kb := (hS.kill _ _ _).setE (by simp [EDT])
   have hmv : RhsT (sigCtx code) [] (.var 0) ⟨EDT.ty, .own, true, [], EDT.held, false, false, false, false⟩ Kb :=
@@ -586,7 +586,7 @@ theorem code_body2 : ∃ Δ, StmtT Pd ξ (sigCtx code) [] code.body Δ ∧
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
   have hlet := StmtT.letd (ξ := .none) (P := Pd) (Γ := sigCtx code) (Γ1 := Kb) (F := []) (x := 2) (f := 0) (r := .var 0)
     (s := .assign 1 (.expr (.lit 0))) (t := T) (H := EDT.held) (τ := DT) rfl
-    (by simp [sigCtx, code]) (by simp) hmv rfl
+    (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp) hmv rfl
     (Or.inl ⟨rfl, Or.inr ⟨0, rfl⟩⟩) rfl rfl (letd_fn drop_ok2) (HeldUp.refl _ _) hasg.ofNone (hKd.endOK _)
     (by simp [Stmt.assigns])
   refine ⟨_, hlet.ofNone, hKd.exitScope 2, ?_⟩
@@ -609,21 +609,21 @@ theorem code_ok2 : FnOK Pd code := by
 theorem glue_body2 : ∃ Δ, StmtT Pd ξ (sigCtx glueD) [] glueD.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
-  have h0 : sigCtx glueD 0 = some ECD2 := by simp [sigCtx, glueD, paramE, ECD2, CDT2, CT2, Ty.hasFn]
-  have h1 : sigCtx glueD 1 = some R0 := by simp [sigCtx, glueD, R0, resMode]
-  have h2 : sigCtx glueD 2 = none := by simp [sigCtx, glueD]
+  have h0 : sigCtx glueD 0 = some ECD2 := by simp [↓sigCtx_noRegion (fn := glueD) (by decide), glueD, paramE, ECD2, CDT2, CT2, Ty.hasFn]
+  have h1 : sigCtx glueD 1 = some R0 := by simp [↓sigCtx_noRegion (fn := glueD) (by decide), glueD, R0, resMode]
+  have h2 : sigCtx glueD 2 = none := by simp [↓sigCtx_noRegion (fn := glueD) (by decide), glueD]
   have hS : NoRootb (sigCtx glueD) := by
     intro v E h
     rcases v with _ | _ | v
     · rw [h0] at h; cases h; simp [ECD2]
     · rw [h1] at h; cases h; simp [R0]
-    · simp [sigCtx, glueD] at h
+    · simp [↓sigCtx_noRegion (fn := glueD) (by decide), glueD] at h
   have hSd : NoDeps (sigCtx glueD) := by
     intro v E h
     rcases v with _ | _ | v
     · rw [h0] at h; cases h; simp [ECD2, Entry.vdeps, Mode.ownSlot]
     · rw [h1] at h; cases h; simp [R0, Entry.vdeps, Mode.ownSlot]
-    · simp [sigCtx, glueD] at h
+    · simp [↓sigCtx_noRegion (fn := glueD) (by decide), glueD] at h
   have hps : glueD.params = [(.sink, CDT2)] := rfl
   have hae : argE (sigCtx glueD) 0 = ECD2 := by simp [argE, h0]
   have han : argNames (sigCtx glueD) [0] = [] := by
@@ -689,15 +689,15 @@ theorem glue_ok2 : FnOK Pd glueD := by
 
 theorem callCode_body2 : StmtT Pd ξ (sigCtx callCode) [] callCode.body
     (setE (kill .replace false 1 (sigCtx callCode)) 1 { intE with mode := R0.mode }) := by
-  have hc : sigCtx callCode 1 = some R0 := by simp [sigCtx, callCode, R0, resMode]
+  have hc : sigCtx callCode 1 = some R0 := by simp [↓sigCtx_noRegion (fn := callCode) (by decide), callCode, R0, resMode]
   have hflags : ∀ v E, sigCtx callCode v = some E → E.dtor = false ∧ E.dbind = false := by
     intro v E h
-    rcases v with _ | _ | v <;> simp [sigCtx, callCode, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+    rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := callCode) (by decide), callCode, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
   exact StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
     (by
       intro p E hp hm d hd _
-      rcases p with _ | _ | p <;> simp [sigCtx, callCode, paramE, resMode, DT, T, Ty.hasFn] at hp <;> subst hp <;>
+      rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := callCode) (by decide), callCode, paramE, resMode, DT, T, Ty.hasFn] at hp <;> subst hp <;>
         simp [Entry.vdeps, Mode.ownSlot] at hd <;> simp at hm)
     (DtorSafe.of_none (fun v E h => (hflags v E h).1) _ _ _) rfl
 
@@ -709,7 +709,7 @@ theorem callCode_ok2 : FnOK Pd callCode := by
     · simp [callCode] at hi; subst hi; simp [callCode] at hs
     · simp [callCode] at hi; subst hi; simp [callCode] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, callCode, paramE, resMode, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := callCode) (by decide), callCode, paramE, resMode, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, callCode], rfl, rfl, by simp [R0, resMode, callCode], by simp [intE], by simp [intE],
       by simp [callCode]⟩
@@ -717,15 +717,15 @@ theorem callCode_ok2 : FnOK Pd callCode := by
 
 theorem callSig_body2 : StmtT Pd ξ (sigCtx callSig) [] callSig.body
     (setE (kill .replace false 1 (sigCtx callSig)) 1 { intE with mode := R0.mode }) := by
-  have hc : sigCtx callSig 1 = some R0 := by simp [sigCtx, callSig, R0, resMode]
+  have hc : sigCtx callSig 1 = some R0 := by simp [↓sigCtx_noRegion (fn := callSig) (by decide), callSig, R0, resMode]
   have hflags : ∀ v E, sigCtx callSig v = some E → E.dtor = false ∧ E.dbind = false := by
     intro v E h
-    rcases v with _ | _ | v <;> simp [sigCtx, callSig, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+    rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := callSig) (by decide), callSig, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
   exact StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
     (by
       intro p E hp hm d hd _
-      rcases p with _ | _ | p <;> simp [sigCtx, callSig, paramE, resMode, CDT2, CT2, Ty.hasFn, symNames] at hp <;> subst hp <;>
+      rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := callSig) (by decide), callSig, paramE, resMode, CDT2, CT2, Ty.hasFn, symNames] at hp <;> subst hp <;>
         simp [Entry.vdeps, Mode.ownSlot] at hd <;> simp at hm)
     (DtorSafe.of_none (fun v E h => (hflags v E h).1) _ _ _) rfl
 
@@ -737,7 +737,7 @@ theorem callSig_ok2 : FnOK Pd callSig := by
     · simp [callSig] at hi; subst hi; simp [callSig] at hs
     · simp [callSig] at hi; subst hi; simp [callSig] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, callSig, paramE, resMode, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := callSig) (by decide), callSig, paramE, resMode, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, callSig], rfl, rfl, by simp [R0, resMode, callSig], by simp [intE], by simp [intE],
       by simp [callSig]⟩

@@ -134,7 +134,7 @@ theorem drop_ok : DropFnOK P 0 TV := Or.inl ⟨dtor_ok, by decide⟩
 
 theorem calm_dtor : Calm (sigCtx dtor) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [sigCtx, dtor, paramE, DTV, TV, Ty.hasFn, resMode] at h <;>
+  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor, paramE, DTV, TV, Ty.hasFn, resMode] at h <;>
     subst h <;> simp [Entry.vdeps, Mode.ownSlot]
 
 theorem dtor_body : ∃ Δ, StmtT P .none (sigCtx dtor) [] dtor.body Δ ∧
@@ -144,11 +144,11 @@ theorem dtor_body : ∃ Δ, StmtT P .none (sigCtx dtor) [] dtor.body Δ ∧
   let G := A2.setE (sigCtx dtor) 5 intE
   have hG : Calm G := calm_dtor.setE (by simp [intE])
   obtain ⟨Δ, ht, hcΔ, h1⟩ := thruL_typed (Q := P) hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl
-    (by decide) (by decide) (by decide) (by simp [G, A2.setE, sigCtx, dtor])
-    (by simp [G, A2.setE, sigCtx, dtor]) (by simp [G, A2.setE, sigCtx, dtor])
-    (by simp [G, A2.setE, sigCtx, dtor, R0, resMode])
+    (by decide) (by decide) (by decide) (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := dtor) (by decide), dtor])
+    (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := dtor) (by decide), dtor]) (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := dtor) (by decide), dtor])
+    (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := dtor) (by decide), dtor, R0, resMode])
   refine ⟨_, StmtT.letv (P := P) (ξ := .none) (x := 5) (Γ := sigCtx dtor) (Γ1 := sigCtx dtor) (F := [])
-    (E := intE) rfl (by simp [sigCtx, dtor]) (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
+    (E := intE) rfl (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor]) (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
     (fun h => by simp [intE] at h), hcΔ.exitScope 5, ?_⟩
   simp [A2.exitScope, upd, A2.kill, h1, killE, hits, R0]
 

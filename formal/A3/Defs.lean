@@ -1174,7 +1174,7 @@ theorem lock_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t : Ty} {x : V
     `frozen`), which A3.2's `withLock` takes. -/
 theorem lockFn_param_root {fn : Fn} {t : Ty} (hps : fn.params = [(.inp, .lk t)]) :
     ∃ E, sigCtx fn 0 = some E ∧ E.ty = .lk t ∧ E.live = true ∧ E.mode.isRoot = true :=
-  ⟨paramE fn.params (.inp, .lk t), by simp [sigCtx, hps], rfl, rfl, rfl⟩
+  ⟨paramE fn.params (.inp, .lk t), sigCtx_of_plain (by rw [hps]; rfl) (by simp [regioned]), rfl, rfl, rfl⟩
 
 /-! ### A3.6: module globals, as A2 types them
 
@@ -2540,23 +2540,22 @@ end PlainCtx
 theorem intE_plain : intE.vdeps = [] ∧ intE.mode ≠ .rootb ∧ intE.dtor = false ∧ intE.dbind = false :=
   ⟨by simp [intE, Entry.vdeps, Mode.ownSlot], by simp [intE], rfl, rfl⟩
 
-/-- A function of `inout` parameters that hold nothing by name starts in a
-    plain context. -/
+/-- A function of `inout` parameters that hold nothing by name, and no
+    views (so have no region, AGORA-937), starts in a plain context. -/
 theorem sigCtx_plain {fn : Fn} (hio : ∀ pt ∈ fn.params, ∃ b, pt.1 = .inout b)
+    (hhv : ∀ pt ∈ fn.params, pt.2.holdsView = false)
     (hs : symNames fn.params = []) : PlainCtx (sigCtx fn) := by
   intro v E hv
-  unfold sigCtx at hv
-  split at hv
-  · rename_i hvl
-    cases hv
+  rcases sigCtx_cases hv with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, hlt, hrg, _⟩
+  · rw [regionP_plain (List.getElem?_eq_getElem hvl)
+      (by simp [regioned, hhv _ (List.getElem_mem hvl)])]
     obtain ⟨b, hb⟩ := hio _ (List.getElem_mem hvl)
     generalize fn.params[v] = pt at hb
     obtain ⟨pm, t⟩ := pt
     simp only at hb; subst hb
     simp [paramE, hs, Entry.vdeps, Mode.ownSlot]
-  · split at hv
-    · cases hv; simp [Entry.vdeps, resMode]; split <;> simp [Mode.ownSlot]
-    · cases hv
+  · simp [Entry.vdeps, resMode]; split <;> simp [Mode.ownSlot]
+  · exact absurd hrg (by simp [regioned, hhv _ (List.getElem_mem hlt)])
 
 /-- The accumulator's environment as its code changes it: the pair it
     replaces. -/
@@ -2574,10 +2573,10 @@ def accCtx4 : Ctx := setE (setE accCtx3 0 accEp) 1 intE
     and holding nothing. -/
 theorem accCode_ok : FnOK accP accCode := by
   have h0 : PlainCtx (sigCtx accCode) := sigCtx_plain (fun pt hpt => by
-    simp only [accCode, List.mem_singleton] at hpt; subst hpt; exact ⟨_, rfl⟩) rfl
-  have hs0 : sigCtx accCode 0 = some accEp := by simp [sigCtx, accCode, paramE, accEnv, Ty.hasFn, accEp]
+    simp only [accCode, List.mem_singleton] at hpt; subst hpt; exact ⟨_, rfl⟩) (by decide) rfl
+  have hs0 : sigCtx accCode 0 = some accEp := by simp [↓sigCtx_noRegion (fn := accCode) (by decide), accCode, paramE, accEnv, Ty.hasFn, accEp]
   have hs1 : sigCtx accCode 1 = some ⟨.int, .bor, false, [], [], false, false, false, false⟩ := by
-    simp [sigCtx, accCode, resMode]
+    simp [↓sigCtx_noRegion (fn := accCode) (by decide), accCode, resMode]
   have hEp : accEp.vdeps = [] ∧ accEp.mode ≠ .rootb ∧ accEp.dtor = false ∧ accEp.dbind = false :=
     ⟨by simp [accEp, Entry.vdeps, Mode.ownSlot], by simp [accEp], rfl, rfl⟩
   have hp3 : PlainCtx accCtx3 :=
@@ -2604,7 +2603,7 @@ theorem accCode_ok : FnOK accP accCode := by
   have h4 : StmtT accP .none (setE (setE (sigCtx accCode) 2 intE) 3 intE) []
       (.letv 4 (.expr (.add (.var 2) (.lit 1))) (.seq (.assign 0 (.pair 4 3)) (.assign 1 (.var 4))))
       (A2.exitScope 4 accCtx4) :=
-    StmtT.letv (E := intE) rfl (by simp [setE, sigCtx, accCode]) (by simp)
+    StmtT.letv (E := intE) rfl (by simp [setE, ↓sigCtx_noRegion (fn := accCode) (by decide), accCode]) (by simp)
       (RhsT.expr (ExprT.add (ExprT.var (E := intE) (by simp [setE]) rfl rfl) ExprT.lit))
       (StmtT.seq rfl hA0.ofNone hA1.ofNone) (hp4.endOK 4)
   have hp5 := hp4.upd_none 4
@@ -2612,12 +2611,12 @@ theorem accCode_ok : FnOK accP accCode := by
       (.letv 3 (.snd 0) (.letv 4 (.expr (.add (.var 2) (.lit 1)))
         (.seq (.assign 0 (.pair 4 3)) (.assign 1 (.var 4)))))
       (A2.exitScope 3 (A2.exitScope 4 accCtx4)) :=
-    StmtT.letv (E := projE 0 accEp .int) rfl (by simp [setE, sigCtx, accCode]) (by simp)
+    StmtT.letv (E := projE 0 accEp .int) rfl (by simp [setE, ↓sigCtx_noRegion (fn := accCode) (by decide), accCode]) (by simp)
       (RhsT.snd_unfresh (b := .int) (by simp [setE, hs0]) rfl rfl) h4.ofNone (by rw [hp4.exitScope]; exact hp5.endOK 3)
   have hp6 := hp5.upd_none 3
   have h2 : StmtT accP .none (sigCtx accCode) [] accCode.body
       (A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 accCtx4))) :=
-    StmtT.letv (E := projE 0 accEp .int) rfl (by simp [sigCtx, accCode]) (by simp)
+    StmtT.letv (E := projE 0 accEp .int) rfl (by simp [↓sigCtx_noRegion (fn := accCode) (by decide), accCode]) (by simp)
       (RhsT.fst_unfresh (b := .int) hs0 rfl rfl) h3.ofNone (by rw [hp4.exitScope, hp5.exitScope]; exact hp6.endOK 2)
   have hΔ : A2.exitScope 2 (A2.exitScope 3 (A2.exitScope 4 accCtx4)) =
       upd (upd (upd accCtx4 4 none) 3 none) 2 none := by
@@ -2644,12 +2643,12 @@ theorem accCode_ok : FnOK accP accCode := by
 theorem accSig_ok : FnOK accP accSig := by
   have hsym : symNames accSig.params = [] := by decide
   have h0 : PlainCtx (sigCtx accSig) := sigCtx_plain (fun pt hpt => by
-    simp only [accSig, List.mem_singleton] at hpt; subst hpt; exact ⟨_, rfl⟩) hsym
+    simp only [accSig, List.mem_singleton] at hpt; subst hpt; exact ⟨_, rfl⟩) (by decide) hsym
   have hs0 : sigCtx accSig 0 = some ⟨accTy, .inout .replace, true, [], [], false, false, false, false⟩ := by
-    simp only [sigCtx, accSig, List.length_singleton, Nat.zero_lt_one]
+    simp only [↓sigCtx_noRegion (fn := accSig) (by decide), accSig, List.length_singleton, Nat.zero_lt_one]
     simp [paramE, accTy, Ty.hasFn, ← hsym, accSig]
   have hs1 : sigCtx accSig 1 = some ⟨.int, .bor, false, [], [], false, false, false, false⟩ := by
-    simp [sigCtx, accSig, resMode]
+    simp [↓sigCtx_noRegion (fn := accSig) (by decide), accSig, resMode]
   have hA : StmtT accP .none (sigCtx accSig) [] accSig.body (setE (sigCtx accSig) 1 intE) := by
     have h := StmtT.assign (ξ := .none) (P := accP) (F := []) (x := 1) (r := .expr (.lit 0)) (Γ := sigCtx accSig)
       (Ex := ⟨.int, .bor, false, [], [], false, false, false, false⟩) hs1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))

@@ -372,12 +372,15 @@ noncomputable def callS (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) (b
       allKinds (if (argE Γ (args.getD (v - fn.nvars) 0)).ty = .int then []
         else roots (memDeps (argE Γ (args.getD (v - fn.nvars) 0)).held))
     else []
+  isPi := fun v => decide (fn.nvars ≤ v) &&
+    (if h : v - fn.nvars < fn.params.length then regioned fn.params[v - fn.nvars] else false)
 
 /-- AGORA-937: a callee variable below `fn.nvars` (a parameter, the result
     slot, a body variable) is at no region's index: a parameter's region is
     numbered from `fn.nvars` on. -/
 theorem callS_isPi_lt {Γ : Ctx} {F : List Var} {fn : Fn} {args : List Var} {base : Nat} {x : Var}
-    {v : Var} (_hv : v < fn.nvars) : (callS Γ F fn args base x).isPi v = false := rfl
+    {v : Var} (hv : v < fn.nvars) : (callS Γ F fn args base x).isPi v = false := by
+  simp [callS, Nat.not_le.mpr hv]
 
 /-- What a call's typing says of its arguments, with the caller's names and
     its borrowed parameters' anchors: the part of `CallH` that no run-time
@@ -2436,22 +2439,101 @@ theorem exitsP_keepOut {base : Nat} {pe : Var → Entry} {Γ : Ctx}
 
 /-! ### The callee's starting context, as the caller sees it -/
 
+/-- AGORA-937: a parameter's entry, with its region: a regioned parameter
+    also holds views of its region `π v`. -/
+theorem regionP_of {fn : Fn} {v : Nat} {p : PMode × Ty} (hp : fn.params[v]? = some p) (E : Entry) :
+    regionP fn v E = if regioned p then { E with held := ⟨fn.nvars + v, .view⟩ :: E.held } else E := by
+  have hv : v < fn.params.length := (List.getElem?_eq_some_iff.mp hp).1
+  simp [regionP, hv, (List.getElem?_eq_some_iff.mp hp).2]
+
+/-- ... and a parameter with no region is its plain entry. -/
+theorem regionP_plain {fn : Fn} {v : Nat} {p : PMode × Ty} (hp : fn.params[v]? = some p)
+    (hr : regioned p = false) (E : Entry) : regionP fn v E = E := by
+  rw [regionP_of hp, hr]; rfl
+
+/-- ... what it holds: what the plain entry holds, and, for a regioned
+    parameter, a view of its region. -/
+theorem mem_regionP_held {fn : Fn} {v : Nat} {E : Entry} {d : Dep} (hd : d ∈ (regionP fn v E).held) :
+    d ∈ E.held ∨ (d = ⟨fn.nvars + v, .view⟩ ∧ ∃ h : v < fn.params.length, regioned fn.params[v] = true) := by
+  unfold regionP at hd
+  split at hd
+  · rename_i hv
+    split at hd
+    · rename_i hr
+      rcases List.mem_cons.mp hd with rfl | hd
+      · exact Or.inr ⟨rfl, hv, hr⟩
+      · exact Or.inl hd
+    · exact Or.inl hd
+  · exact Or.inl hd
+
+theorem mem_regionP_vdeps {fn : Fn} {v : Nat} {E : Entry} {d : Dep} (hd : d ∈ (regionP fn v E).vdeps) :
+    d ∈ E.vdeps ∨ (d = ⟨fn.nvars + v, .view⟩ ∧ ∃ h : v < fn.params.length, regioned fn.params[v] = true) := by
+  unfold Entry.vdeps at hd ⊢
+  rw [regionP_mode, regionP_path] at hd
+  rcases List.mem_append.mp hd with hd | hd
+  · exact Or.inl (List.mem_append_left _ hd)
+  · rcases mem_regionP_held hd with hd | hd
+    · exact Or.inl (List.mem_append_right _ hd)
+    · exact Or.inr hd
+
 theorem sigCtx_of {fn : Fn} {v : Nat} {p : PMode × Ty} (hp : fn.params[v]? = some p) :
-    sigCtx fn v = some (paramE fn.params p) := by
+    sigCtx fn v = some (regionP fn v (paramE fn.params p)) := by
   have hv : v < fn.params.length := (List.getElem?_eq_some_iff.mp hp).1
   simp [sigCtx, hv, (List.getElem?_eq_some_iff.mp hp).2]
+
+/-- A parameter with no region is bound to its plain entry. -/
+theorem sigCtx_of_plain {fn : Fn} {v : Nat} {p : PMode × Ty} (hp : fn.params[v]? = some p)
+    (hr : regioned p = false) : sigCtx fn v = some (paramE fn.params p) := by
+  rw [sigCtx_of hp, regionP_plain hp hr]
 
 theorem sigCtx_res (fn : Fn) : sigCtx fn fn.params.length = some ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩ := by
   simp [sigCtx]
 
-theorem sigCtx_none {fn : Fn} {v : Nat} (hv : fn.params.length < v) : sigCtx fn v = none := by
-  simp [sigCtx, show ¬ v < fn.params.length by omega, show v ≠ fn.params.length by omega]
+/-- AGORA-937: past the result slot, the signature binds exactly the
+    regions, at `fn.nvars + p` for each regioned parameter `p`. -/
+theorem sigCtx_gt {fn : Fn} {v : Nat} (hv : fn.params.length < v) :
+    sigCtx fn v = if (decide (fn.nvars ≤ v) &&
+      (if h : v - fn.nvars < fn.params.length then regioned fn.params[v - fn.nvars] else false)) = true
+      then some regionE else none := by
+  have h1 : ¬ v < fn.params.length := Nat.not_lt.mpr (Nat.le_of_lt hv)
+  have h2 : v ≠ fn.params.length := Nat.ne_of_gt hv
+  unfold sigCtx
+  simp only [h1, h2, ↓reduceDIte, ↓reduceIte]
+  by_cases h3 : fn.nvars ≤ v <;> by_cases h4 : v - fn.nvars < fn.params.length <;> simp [h3, h4]
+
+theorem sigCtx_none {fn : Fn} {v : Nat} (hv : fn.params.length < v) (hlt : v < fn.nvars) :
+    sigCtx fn v = none := by
+  rw [sigCtx_gt hv]; simp [Nat.not_le.mpr hlt]
+
+/-- AGORA-937: the signature's three kinds of binding: a parameter (with its
+    region, if any), the result slot, and a region. -/
+theorem sigCtx_cases {fn : Fn} {v : Nat} {E : Entry} (hv : sigCtx fn v = some E) :
+    (∃ h : v < fn.params.length, E = regionP fn v (paramE fn.params fn.params[v])) ∨
+    (v = fn.params.length ∧ E = ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩) ∨
+    (fn.params.length < v ∧ fn.nvars ≤ v ∧
+      ∃ h : v - fn.nvars < fn.params.length, regioned fn.params[v - fn.nvars] = true ∧ E = regionE) := by
+  by_cases h1 : v < fn.params.length
+  · rw [sigCtx_of (List.getElem?_eq_getElem h1)] at hv
+    exact Or.inl ⟨h1, (Option.some.inj hv).symm⟩
+  by_cases h2 : v = fn.params.length
+  · subst h2; rw [sigCtx_res] at hv
+    exact Or.inr (Or.inl ⟨rfl, (Option.some.inj hv).symm⟩)
+  have hgt : fn.params.length < v := by omega
+  rw [sigCtx_gt hgt] at hv
+  by_cases h3 : fn.nvars ≤ v <;> by_cases h4 : v - fn.nvars < fn.params.length <;>
+    simp only [h3, h4, decide_true, decide_false, Bool.true_and, Bool.false_and, dite_true, dite_false,
+      Bool.false_eq_true, ↓reduceIte] at hv
+  · split at hv
+    · rename_i h5
+      exact Or.inr (Or.inr ⟨hgt, h3, h4, h5, (Option.some.inj hv).symm⟩)
+    · cases hv
+  all_goals cases hv
 
 /-- A symbolic name's target in the callee's own context: an `inout`
     parameter that holds no views, so holds nothing. -/
 theorem sigCtx_sym {fn : Fn} {w : Var} {b : Eff} {t : Ty} (hp : fn.params[w]? = some (.inout b, t))
     (hhv : t.holdsView = false) : sigCtx fn w = some ⟨t, .inout b, true, [], [], false, false, false, false⟩ := by
-  rw [sigCtx_of hp]
+  rw [sigCtx_of_plain hp (by simp [regioned, hhv])]
   have hf : t.hasFn = false := by
     cases h : t.hasFn
     · rfl
@@ -2466,49 +2548,45 @@ theorem paramE_vdeps (ps : List (PMode × Ty)) (p : PMode × Ty) :
 
 /-- The callee's symbolic names are valid in its own context: an `inout`
     parameter that holds no views and is not replaced owns its slot, holds
-    nothing and allows its own bound. -/
+    nothing and allows its own bound. A view of a region is no name. -/
 theorem sigCtx_names (fn : Fn) : NameWF (sigCtx fn) := by
   intro v E hv _ _ d hd b t hk
-  unfold sigCtx at hv
-  split at hv
-  · simp only [Option.some.injEq] at hv; subst hv
-    rw [paramE_vdeps] at hd
-    split at hd
-    · obtain ⟨w, b', t'', rfl, hp, hhv, _, hbr⟩ := mem_symNames' hd
-      simp only [Kind.name.injEq] at hk
-      obtain ⟨hb1, ht1⟩ := hk
-      subst hb1 ht1
-      exact ⟨⟨t'', .inout b', true, [], [], false, false, false, false⟩, sigCtx_sym hp hhv, rfl, rfl, rfl, rfl,
-        Or.inr ⟨hbr, Or.inr ⟨b', rfl, Nat.le_refl _⟩⟩, hhv⟩
-    · cases hd
-  · split at hv
-    · simp only [Option.some.injEq] at hv; subst hv; simp [Entry.vdeps] at hd
-    · cases hv
+  rcases sigCtx_cases hv with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+  · rcases mem_regionP_vdeps hd with hd | ⟨rfl, _⟩
+    · rw [paramE_vdeps] at hd
+      split at hd
+      · obtain ⟨w, b', t'', rfl, hp, hhv, _, hbr⟩ := mem_symNames' hd
+        simp only [Kind.name.injEq] at hk
+        obtain ⟨hb1, ht1⟩ := hk
+        subst hb1 ht1
+        exact ⟨⟨t'', .inout b', true, [], [], false, false, false, false⟩, sigCtx_sym hp hhv, rfl, rfl, rfl, rfl,
+          Or.inr ⟨hbr, Or.inr ⟨b', rfl, Nat.le_refl _⟩⟩, hhv⟩
+      · cases hd
+    · cases hk
+  · simp [Entry.vdeps] at hd
+  · simp [regionE, Entry.vdeps, Mode.ownSlot] at hd
 
-/-- No parameter, and no result slot, runs a destructor. -/
+/-- No parameter, no result slot and no region runs a destructor. -/
 theorem sigCtx_flags {fn : Fn} {v : Var} {E : Entry} (hv : sigCtx fn v = some E) :
     E.dtor = false ∧ E.dbind = false := by
-  unfold sigCtx at hv
-  split at hv
-  · simp only [Option.some.injEq] at hv; subst hv
-    rename_i h; obtain ⟨pm, t⟩ := fn.params[v]
+  rcases sigCtx_cases hv with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+  · rw [regionP_dtor, regionP_dbind]
+    obtain ⟨pm, t⟩ := fn.params[v]
     cases pm <;> simp [paramE]
-  · split at hv
-    · simp only [Option.some.injEq] at hv; subst hv; simp
-    · cases hv
+  · simp
+  · simp [regionE]
 
 /-- A callee's borrowed parameters depend on nothing but, by name, its
     `inout` parameters: they are anchored in nothing. -/
 theorem sigCtx_anch (fn : Fn) : RootbAnch (sigCtx fn) [] := by
   intro p E hp hm d hd hb
-  unfold sigCtx at hp
-  split at hp
-  · simp only [Option.some.injEq] at hp; subst hp
-    rename_i h
-    generalize fn.params[p] = pt at hm hd
+  rcases sigCtx_cases hp with ⟨h, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+  · rw [regionP_mode] at hm
+    generalize hpt : fn.params[p] = pt at hm hd
     obtain ⟨pm, t⟩ := pt
     cases pm with
     | inp =>
+      rw [regionP_plain (by rw [List.getElem?_eq_getElem h, hpt]) (by simp [regioned])] at hd
       simp only [paramE, Entry.vdeps, Mode.ownSlot, Bool.false_eq_true, ↓reduceIte, List.nil_append] at hd
       split at hd
       · obtain ⟨w, b, t', rfl, _, _, hbn, _⟩ := mem_symNames' hd
@@ -2516,56 +2594,108 @@ theorem sigCtx_anch (fn : Fn) : RootbAnch (sigCtx fn) [] := by
       · cases hd
     | inout b => simp [paramE] at hm
     | sink => simp [paramE] at hm
-  · split at hp
-    · simp only [Option.some.injEq] at hp; subst hp
-      unfold resMode at hm; split at hm <;> cases hm
-    · cases hp
+  · unfold resMode at hm; split at hm <;> cases hm
+  · simp [regionE] at hm
 
-theorem sigCtx_wf (fn : Fn) : CtxWF (sigCtx fn) := by
+/-- AGORA-937: with the regions past the result slot (`FnOK`), every root
+    the signature depends on is bound. -/
+theorem sigCtx_wf (fn : Fn) (hn : fn.params.length < fn.nvars) : CtxWF (sigCtx fn) := by
   refine ⟨?_, fun v E hv hd => absurd hd (by simp [(sigCtx_flags hv).2]),
     fun v E hv hd => absurd hd (by simp [(sigCtx_flags hv).1]),
     fun v E hv hd => absurd hd (by simp [(sigCtx_flags hv).2])⟩
   intro v E hv _ _ r hr
-  unfold sigCtx at hv
-  split at hv
-  · rename_i h
-    simp only [Option.some.injEq] at hv; subst hv
-    rw [paramE_vdeps] at hr
-    obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
-    split at hd
-    · obtain ⟨w, b, t', rfl, hp, _⟩ := mem_symNames' hd
-      exact ⟨_, sigCtx_of hp, rfl⟩
-    · cases hd
-  · split at hv
-    · simp only [Option.some.injEq] at hv; subst hv; simp [roots, Entry.vdeps] at hr
-    · cases hv
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+  rcases sigCtx_cases hv with ⟨h, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+  · rcases mem_regionP_vdeps hd with hd | ⟨rfl, hvl, hrg⟩
+    · rw [paramE_vdeps] at hd
+      split at hd
+      · obtain ⟨w, b, t', rfl, hp, _⟩ := mem_symNames' hd
+        exact ⟨_, sigCtx_of hp, by simp [paramE, Mode.isRoot]⟩
+      · cases hd
+    · -- the parameter's region, bound past the result slot
+      refine ⟨regionE, ?_, rfl⟩
+      rw [sigCtx_gt (show fn.params.length < fn.nvars + v by omega)]
+      simp [hvl, hrg]
+  · simp [Entry.vdeps] at hd
+  · simp [regionE, Entry.vdeps, Mode.ownSlot] at hd
 
 namespace CallH
 variable {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {args : List Var} {base : Nat}
 
-/-- AGORA-937: a binding of the callee's starting context is lifted where
-    the call places it, and the substitution keeps it: it is at no region's
-    index (`isPi_sig`), and depends on nothing but names (`symNames`). -/
-theorem canon_sig (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hE : sigCtx fn v = some E) :
+/-- AGORA-937: past the result slot, the signature binds exactly the call's
+    regions. -/
+theorem sigCtx_pi (_h : CallH P Γ F x fn args base) {v : Var} (hgt : fn.params.length < v) :
+    sigCtx fn v = if (callS Γ F fn args base x).isPi v then some regionE else none := by
+  rw [sigCtx_gt hgt]; rfl
+
+/-- AGORA-937: a binding of the callee's starting context at a parameter's
+    index or the result slot is lifted where the call places it, and
+    substituted: a regioned parameter's view of its region becomes what the
+    region stands for at the caller. -/
+theorem canon_sigR (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hE : sigCtx fn v = some E)
+    (hv : v ≤ fn.params.length) :
+    (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ v) =
+      some ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE v E)) :=
+  RSetup.canon_some h.sOK hE (h.isPi_sig hv)
+
+/-- AGORA-937: a binding of the callee's starting context with no region is
+    lifted where the call places it, and the substitution keeps it: it is at
+    no region's index (`isPi_sig`), and depends on nothing but names
+    (`symNames`). -/
+theorem canon_sig (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hE : sigCtx fn v = some E)
+    (hv : v ≤ fn.params.length) (hpl : ∀ hvl : v < fn.params.length, regioned fn.params[v] = false) :
     (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ v) =
       some ((callS Γ F fn args base x).liftE v E) := by
-  have hv : v ≤ fn.params.length := by
-    refine Nat.le_of_not_lt fun hc => ?_
-    rw [sigCtx_none hc] at hE; cases hE
-  rw [RSetup.canon_some h.sOK hE (h.isPi_sig hv), RSetup.subE_liftE_fix h.sOK _ h.isPi_sym]
+  rw [h.canon_sigR hE hv, RSetup.subE_liftE_fix h.sOK _ h.isPi_sym]
   intro _ d hd
   have hsym : d ∈ symNames fn.params := by
-    unfold sigCtx at hE
-    split at hE
-    · simp only [Option.some.injEq] at hE; subst hE
+    rcases sigCtx_cases hE with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨hgt, _⟩
+    · rw [regionP_plain (List.getElem?_eq_getElem hvl) (hpl hvl)] at hd
       generalize fn.params[v] = p at hd
       obtain ⟨pm, t⟩ := p
       cases pm <;> simp only [paramE, List.nil_append] at hd <;> split at hd <;>
         first | exact hd | cases hd
-    · split at hE
-      · simp only [Option.some.injEq] at hE; subst hE; cases hd
-      · cases hE
+    · cases hd
+    · exact absurd hv (Nat.not_le.mpr hgt)
   exact h.isPi_sym d hsym
+
+/-- AGORA-937: a callee entry that also holds a view of a region is lifted
+    and substituted to the plain entry's, also holding what the region
+    stands for at the caller. -/
+theorem _root_.A2.RSetup.subE_liftE_cons {S : RSetup} (hS : S.OK) {v w : Var} {E : Entry}
+    (hm : E.mode ≠ .rootb) (hw : S.isPi w = true) :
+    S.subE (S.liftE v { E with held := ⟨w, .view⟩ :: E.held }) =
+      { S.subE (S.liftE v E) with held := S.σ w ++ (S.subE (S.liftE v E)).held } := by
+  have hd : S.subD ⟨S.ρ w, .view⟩ = S.σ w := by
+    simp [RSetup.subD, RSetup.inv_ρ hS, hw, Kind.isName]
+  simp [RSetup.liftE, hm, RSetup.subE, rds, Dep.ren, List.flatMap_cons, hd, RSetup.heldA]
+
+/-- AGORA-937: a parameter where the call places it: its plain entry,
+    lifted, and, for a regioned parameter, also holding what its region
+    stands for at the caller. -/
+theorem canon_param (h : CallH P Γ F x fn args base) {k : Nat} {p : PMode × Ty}
+    (hk : fn.params[k]? = some p) :
+    (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ k) =
+      some { (callS Γ F fn args base x).liftE k (paramE fn.params p) with
+        held := (if regioned p then (callS Γ F fn args base x).σ (fn.nvars + k) else []) ++
+          ((callS Γ F fn args base x).liftE k (paramE fn.params p)).held } := by
+  have hkl : k < fn.params.length := lt_of_get hk
+  rw [h.canon_sigR (sigCtx_of hk) (Nat.le_of_lt hkl), regionP_of hk]
+  have hfix : (callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE k (paramE fn.params p)) =
+      (callS Γ F fn args base x).liftE k (paramE fn.params p) := by
+    refine RSetup.subE_liftE_fix h.sOK (fun _ d hd => h.isPi_sym d ?_) h.isPi_sym
+    obtain ⟨pm, t⟩ := p
+    cases pm <;> simp only [paramE, List.nil_append] at hd <;> split at hd <;>
+      first | exact hd | cases hd
+  cases hr : regioned p
+  · simp only [Bool.false_eq_true, ↓reduceIte, List.nil_append, hfix]
+  · simp only [↓reduceIte]
+    have hm : (paramE fn.params p).mode ≠ .rootb := by
+      obtain ⟨pm, t⟩ := p
+      cases pm <;> simp [paramE, regioned] at hr ⊢
+    have hw : (callS Γ F fn args base x).isPi (fn.nvars + k) = true := by
+      simp [callS, hkl, get_of hk, hr]
+    rw [RSetup.subE_liftE_cons h.sOK hm hw, hfix]
 
 /-- AGORA-937: a callee binding at a parameter's index or the result slot
     is lifted where the call places it, and the substitution keeps it when
@@ -2579,26 +2709,28 @@ theorem canon_lend (h : CallH P Γ F x fn args base) {Δa : Ctx} {v : Var} {E : 
     (fun hrb d hd' => h.isPi_sig (Nat.le_of_lt (hd hrb d hd').1)) h.isPi_sym]
 
 theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).AbsOK (sigCtx fn) := by
-  obtain ⟨_, _, _, _, _, hpar, _⟩ := h.fnok
+  obtain ⟨_, hnv, _, _, _, hpar, _⟩ := h.fnok
+  -- AGORA-937: a region's index lies past the result slot, where the
+  -- signature binds exactly the regions
+  have hreg : ∀ v, (callS Γ F fn args base x).isPi v = true → sigCtx fn v = some regionE := by
+    intro v hp
+    have hle : fn.nvars ≤ v := by
+      cases hnl : decide (fn.nvars ≤ v)
+      · simp only [callS, hnl, Bool.false_and] at hp; cases hp
+      · exact of_decide_eq_true hnl
+    rw [h.sigCtx_pi (by omega), hp]; rfl
   refine ⟨fun v E hv hm => ?_, fun v E b hv hm => ?_, fun v bh hb => ?_, fun v E hv =>
-    ⟨fun hr => absurd hr (by
-      unfold sigCtx at hv
-      split at hv
-      · simp only [Option.some.injEq] at hv; subst hv
-        generalize fn.params[v] = pt; obtain ⟨pm, t⟩ := pt; cases pm <;> simp [paramE]
-      · split at hv
-        · simp only [Option.some.injEq] at hv; subst hv; exact resMode_region fn
-        · cases hv), fun hp => by simp [callS] at hp⟩, fun v hp => by simp [callS] at hp⟩
-  · unfold sigCtx at hv
-    split at hv
-    · rename_i hvl
-      simp only [Option.some.injEq] at hv; subst hv
-      have hget : fn.params[v]? = some fn.params[v] := List.getElem?_eq_getElem hvl
+    ⟨fun hr => ?_, fun hp => by rw [hreg v hp] at hv; cases hv; rfl⟩,
+    fun v hp => ⟨regionE, hreg v hp, rfl⟩⟩
+  · rcases sigCtx_cases hv with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+    · have hget : fn.params[v]? = some fn.params[v] := List.getElem?_eq_getElem hvl
       obtain ⟨Ea, hEa, hl, hok, _⟩ := h.arg v hvl
+      rw [regionP_mode] at hm
       generalize hp : fn.params[v] = p at hget hok hm
       obtain ⟨pm, t⟩ := p
       cases pm with
       | inp =>
+        rw [regionP_plain hget (by simp [regioned])]
         have hae : argE Γ (args.getD v 0) = Ea := by unfold argE; rw [hEa]; rfl
         simp only [paramOK] at hok
         refine ⟨?_, rfl, rfl⟩
@@ -2609,16 +2741,13 @@ theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).
         · exact hok.symm
       | sink => simp [paramE] at hm
       | inout b => simp [paramE] at hm
-    · split at hv
-      · simp only [Option.some.injEq] at hv; subst hv
-        exact absurd hm (resMode_ne' fn)
-      · cases hv
-  · unfold sigCtx at hv
-    split at hv
-    · rename_i hvl
-      simp only [Option.some.injEq] at hv; subst hv
-      have hget : fn.params[v]? = some fn.params[v] := List.getElem?_eq_getElem hvl
+    · exact absurd hm (resMode_ne' fn)
+    · simp [regionE] at hm
+  · rcases sigCtx_cases hv with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+    · have hget : fn.params[v]? = some fn.params[v] := List.getElem?_eq_getElem hvl
       have hmem : fn.params[v] ∈ fn.params := List.getElem_mem hvl
+      rw [regionP_mode] at hm
+      rw [regionP_ty]
       generalize hp : fn.params[v] = p at hget hm hmem
       obtain ⟨pm, t⟩ := p
       cases pm with
@@ -2628,25 +2757,29 @@ theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).
         exact ⟨hvec b' rfl, by simp [callS, bndOf, hget, paramE]⟩
       | inp => simp [paramE] at hm
       | sink => simp [paramE] at hm
-    · split at hv
-      · simp only [Option.some.injEq] at hv; subst hv
-        exact absurd hm (resMode_inout fn b)
-      · cases hv
+    · exact absurd hm (resMode_inout fn b)
+    · simp [regionE] at hm
   · simp only [callS, bndOf] at hb
     split at hb
     · rename_i b t hget
       simp only [Option.some.injEq] at hb; subst hb
-      refine ⟨_, sigCtx_of hget, rfl, by simp [callS, paramE, hget], fun hfx => ⟨rfl, ?_⟩⟩
-      -- fixed: it holds no views, so no closure, so no symbolic names
+      refine ⟨_, sigCtx_of hget, by simp [paramE], by simp [callS, paramE, hget], fun hfx => ⟨by simp [paramE], ?_⟩⟩
+      -- fixed: it holds no views, so no region, no closure, so no symbolic names
       rcases hfx with hfx | ⟨_, _, _, hhv⟩
       · simp [paramE] at hfx
-      · simp only [paramE] at hhv
+      · simp only [regionP_ty, paramE] at hhv
         have hf : t.hasFn = false := by
           cases h' : t.hasFn
           · rfl
           · rw [hasFn_holdsView h'] at hhv; cases hhv
+        rw [regionP_plain hget (by simp [regioned, hhv])]
         simp [paramE, hf]
     · cases hb
+  · rcases sigCtx_cases hv with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨hgt, hle, hvl, hrg, rfl⟩
+    · rw [regionP_mode] at hr
+      generalize fn.params[v] = pt at hr; obtain ⟨pm, t⟩ := pt; cases pm <;> simp [paramE] at hr
+    · exact absurd hr (resMode_region fn)
+    · simp [callS, hle, hvl, hrg]
 
 theorem x_notRen (h : CallH P Γ F x fn args base) (v : Nat) : callRen fn.params args base v ≠ x := by
   intro hv
@@ -2756,13 +2889,22 @@ theorem wrapCond (h : CallH P Γ F x fn args base) :
     cases pm with
     | inout b => exact absurd rfl (hne b t)
     | _ => rfl
-  have hc : (∀ b' t', (pm, t) ≠ (.inout b', t')) →
+  have hkl : k ≤ fn.params.length := Nat.le_of_lt (lt_of_get hk)
+  have hcR : (∀ b' t', (pm, t) ≠ (.inout b', t')) →
       (callS Γ F fn args base x).canon (sigCtx fn) (base + k) =
-        some ((callS Γ F fn args base x).liftE k (paramE fn.params (pm, t))) := by
+        some ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE k
+          (regionP fn k (paramE fn.params (pm, t))))) := by
     intro hne
     rw [← hρ hne]
     show (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ k) = _
-    exact h.canon_sig (sigCtx_of hk)
+    exact h.canon_sigR (sigCtx_of hk) hkl
+  have hc : (∀ b' t', (pm, t) ≠ (.inout b', t')) → regioned (pm, t) = false →
+      (callS Γ F fn args base x).canon (sigCtx fn) (base + k) =
+        some ((callS Γ F fn args base x).liftE k (paramE fn.params (pm, t))) := by
+    intro hne hpl
+    rw [← hρ hne]
+    show (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ k) = _
+    exact h.canon_sig (sigCtx_of_plain hk hpl) hkl (fun hvl => by rw [get_of hk]; exact hpl)
   have hF : (∀ b' t', (pm, t) ≠ (.inout b', t')) → base + k ∉ F ++ zN Γ fn args base := by
     intro hne
     have := h.sOK.Fcout k
@@ -2771,7 +2913,7 @@ theorem wrapCond (h : CallH P Γ F x fn args base) :
   cases pm with
   | inp =>
     have hne : ∀ b' t', (PMode.inp, t) ≠ (.inout b', t') := fun _ _ h => by cases h
-    refine ⟨_, hc hne, ?_, ?_, ?_, hF hne, ?_⟩
+    refine ⟨_, hc hne (by simp [regioned]), ?_, ?_, ?_, hF hne, ?_⟩
     · simp [RSetup.liftE, paramE, callS]; exact h.sOK.pe_rb k
     · simp [RSetup.liftE, paramE]
     · intro d hd hb
@@ -2782,7 +2924,7 @@ theorem wrapCond (h : CallH P Γ F x fn args base) :
     · simp [RSetup.liftE, paramE, callS]
   | sink =>
     have hne : ∀ b' t', (PMode.sink, t) ≠ (.inout b', t') := fun _ _ h => by cases h
-    exact ⟨⟨_, hc hne, by simp [RSetup.liftE, paramE, liftMode]⟩, hF hne⟩
+    exact ⟨⟨_, hcR hne, by simp [RSetup.liftE, paramE, liftMode]⟩, hF hne⟩
   | inout b => trivial
 
 /-- The inside of the call is well-typed, given what its parameters' exits
@@ -3010,7 +3152,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
         ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩) := by
     rw [show base + fn.params.length = callRen fn.params args base fn.params.length from
       (ren_res fn args base).symm]
-    exact h.canon_sig (sigCtx_res fn)
+    exact h.canon_sig (sigCtx_res fn) (Nat.le_refl _) (fun hvl => absurd hvl (Nat.lt_irrefl _))
   have hEinm : ((callS Γ F fn args base x).liftE fn.params.length
       ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩).mode = resMode fn := by
     rw [RSetup.liftE_mode _ (resMode_ne' fn), RSetup.liftMode_resMode]
@@ -3042,7 +3184,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
   have hend : EndOK Γ3 (base + fn.params.length) :=
     ⟨hRb3.noPin hge, hDt3.dtorSafe hge _ _, hDb3.dbindSafe hge⟩
   have hW := hfin Γ3 hΓ3
-  have hwfin := RSetup.canon_wf_sub h.sOK h.sig_abs (sigCtx_wf fn) (sigCtx_names fn)
+  have hwfin := RSetup.canon_wf_sub h.sOK h.sig_abs (sigCtx_wf fn h.fnok.2.1) (sigCtx_names fn)
   have hnmin := RSetup.canon_names_sub h.sOK h.sig_abs (sigCtx_names fn)
   have hci : callIn fn args base x = resFrame fn (base + fn.params.length)
       (.seq (.frozen (zOf fn args base) (wrapParams fn.params base 0 (fn.body.rename (callRen fn.params args base))))
@@ -3791,7 +3933,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
         obtain ⟨Ei, hEi, hEil, hEih, hEi0⟩ := hio v hvl b (by rw [hpv])
         obtain ⟨E0, h0, hm0, ht0⟩ := hdt.2 v Ei hEi
         rw [sigCtx_of hvp] at h0; cases h0
-        simp only [paramE] at hm0 ht0
+        simp only [paramE, regionP_mode, regionP_ty] at hm0 ht0
         obtain ⟨hat, hheld⟩ := h.inout_at hvp hEi hm0 hEih
         rw [hΓb] at hat
         obtain ⟨Ea, hEa, hae⟩ := h.argE_eq hvl
@@ -3866,10 +4008,15 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
           simpa using this
         · exact absurd (by rw [heq]) hyr
         · apply exits_none
-          have hnone' : Δa v = none := by
-            have := hdt.1 v; rw [sigCtx_none hgt] at this
-            cases h' : Δa v <;> simp_all
-          exact hc hnone'
+          cases hpv : (callS Γ F fn args base x).isPi v
+          · have hnone' : Δa v = none := by
+              have := hdt.1 v; rw [h.sigCtx_pi hgt, hpv] at this
+              cases h' : Δa v <;> simp_all
+            exact hc hnone'
+          · -- AGORA-937: a region's index: the call binds nothing there
+            rw [← hr]
+            show (callS Γ F fn args base x).canon Δa ((callS Γ F fn args base x).ρ v) = none
+            rw [RSetup.canon_ρ_sub h.sOK, hpv]; rfl
     · -- the frame
       cases h1 : callPost Γ fn args y with
       | none =>
@@ -3896,8 +4043,8 @@ theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
   obtain ⟨hsrc, _, _, _, _, _, hlends, hrholds, _, _, _, _, Δa, hbody, hΔf,
     ⟨Er, hEr, hErl, hErt, hErm, hErp, hErh, hEr0⟩, hio⟩ := h.fnok
   have hΔd : ∀ v E, Δa v = some E → E.dtor = false := fun v E h => (hΔf v E h).1
-  obtain ⟨hren, habΔ⟩ := RSetup.StmtT.ren h.sOK h.prog hbody hsrc h.sig_abs (sigCtx_wf fn) (sigCtx_names fn) (sigCtx_freshOK fn)
-    h.thru (fun _ _ => rfl)
+  obtain ⟨hren, habΔ⟩ := RSetup.StmtT.ren h.sOK h.prog hbody hsrc h.sig_abs (sigCtx_wf fn h.fnok.2.1) (sigCtx_names fn) (sigCtx_freshOK fn)
+    h.thru (fun v hv => callS_isPi_lt (h.fnok.2.2.1 v hv))
   have hdt := StmtT.domTy hbody hsrc
   have hErv : ∀ d0 ∈ Er.vdeps, lendable fn d0.root := by
     intro d0 hd0

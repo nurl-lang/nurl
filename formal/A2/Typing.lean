@@ -2105,13 +2105,69 @@ def paramE (ps : List (PMode × Ty)) : PMode × Ty → Entry
   | (.inout b, t) => ⟨t, .inout b, true, [], if t.hasFn then symNames ps else [], false, false, false, false⟩
   | (.sink, t) => ⟨t, .own, true, [], if t.hasFn then symNames ps else [], false, false, false, false⟩
 
+/-- AGORA-937: a parameter with a region: one that owns its slot (`sink`,
+    `inout`) of a type that holds views. What those views point into is its
+    caller's memory, which the callee sees as the region `π p`
+    (`fn.nvars + p`, past every body variable). -/
+def regioned (pt : PMode × Ty) : Bool :=
+  (match pt.1 with | .inp => false | _ => true) && pt.2.holdsView
+
+/-- ... its entry: a root of the callee's typing only, holding nothing, never
+    live and never named by the body. -/
+def regionE : Entry := ⟨.int, .region, false, [], [], false, false, false, false⟩
+
+/-- ... and its parameter holds views of it. -/
+def regionP (fn : Fn) (v : Nat) (E : Entry) : Entry :=
+  if h : v < fn.params.length then
+    (if regioned fn.params[v] then { E with held := ⟨fn.nvars + v, .view⟩ :: E.held } else E)
+  else E
+
+@[simp] theorem regionP_ty (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).ty = E.ty := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_mode (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).mode = E.mode := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_live (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).live = E.live := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_path (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).path = E.path := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_dtor (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).dtor = E.dtor := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_dbind (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).dbind = E.dbind := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_fresh (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).fresh = E.fresh := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_heldFresh (fn : Fn) (v : Nat) (E : Entry) :
+    (regionP fn v E).heldFresh = E.heldFresh := by
+  unfold regionP; split <;> (try split) <;> rfl
+
 /-- The callee's own view of its parameters: they depend on nothing it can
     see, but a closure it is handed, which may change its `inout`
     parameters.  The result slot starts empty. -/
 def sigCtx (fn : Fn) : Ctx := fun v =>
-  if h : v < fn.params.length then some (paramE fn.params fn.params[v])
+  if h : v < fn.params.length then some (regionP fn v (paramE fn.params fn.params[v]))
   else if v = fn.params.length then some ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩
+  else if h' : fn.nvars ≤ v ∧ v - fn.nvars < fn.params.length then
+    (if regioned (fn.params[v - fn.nvars]'h'.2) then some regionE else none)
   else none
+
+/-- AGORA-937: a signature with no regioned parameter binds what it bound
+    before regions: its parameters, plainly, and its result slot. -/
+theorem sigCtx_noRegion {fn : Fn} (hpl : fn.params.all (fun pt => !regioned pt) = true) :
+    sigCtx fn = fun v => if h : v < fn.params.length then some (paramE fn.params fn.params[v])
+      else if v = fn.params.length then some ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩
+      else none := by
+  funext v
+  have hr : ∀ (i : Nat) (h : i < fn.params.length), regioned fn.params[i] = false := fun i h => by
+    have := List.all_eq_true.mp hpl _ (List.getElem_mem h)
+    simpa using this
+  unfold sigCtx
+  by_cases h1 : v < fn.params.length
+  · simp [h1, regionP, hr]
+  · by_cases h2 : v = fn.params.length
+    · simp [h2]
+    · by_cases h3 : fn.nvars ≤ v ∧ v - fn.nvars < fn.params.length
+      · simp [h1, h2, h3, hr]
+      · simp [h1, h2, h3]
 
 /-- Agora #909: a function's signature binds nothing fresh. -/
 theorem sigCtx_freshOK (fn : Fn) : FreshOK (sigCtx fn) := by
@@ -2119,10 +2175,14 @@ theorem sigCtx_freshOK (fn : Fn) : FreshOK (sigCtx fn) := by
   unfold sigCtx at hv
   split at hv
   · simp only [Option.some.injEq] at hv; subst hv
-    unfold paramE; split <;> (try split) <;> rfl
+    rw [regionP_fresh]; unfold paramE; split <;> (try split) <;> rfl
   · split at hv
     · simp only [Option.some.injEq] at hv; subst hv; rfl
-    · cases hv
+    · split at hv
+      · split at hv
+        · simp only [Option.some.injEq] at hv; subst hv; rfl
+        · cases hv
+      · cases hv
 
 /-- A summary pair names a parameter the caller still has after the call. -/
 def lendable (fn : Fn) (j : Nat) : Prop :=

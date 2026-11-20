@@ -245,15 +245,15 @@ theorem drop_ok : DropFnOK P 0 TV := Or.inl ⟨dtor_ok, by decide⟩
 
 theorem calm_dtor : Calm (sigCtx dtor) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [sigCtx, dtor, paramE, DTV, TV, Ty.hasFn, resMode] at h <;>
+  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor, paramE, DTV, TV, Ty.hasFn, resMode] at h <;>
     subst h <;> simp [Entry.vdeps, Mode.ownSlot]
 
 theorem dtor_body : ∃ Δ, StmtT P .none (sigCtx dtor) [] dtor.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
   apply body_typed
-  exact storeV_typed (Q := P) calm_dtor (by simp [sigCtx, dtor]) (by simp [sigCtx, dtor]) (by simp [sigCtx, dtor])
-    (by simp [sigCtx, dtor]) (by simp [sigCtx, dtor]) (by simp [sigCtx, dtor, R0, resMode, paramE])
+  exact storeV_typed (Q := P) calm_dtor (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor]) (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor]) (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor])
+    (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor]) (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor]) (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor, R0, resMode, paramE])
 
 theorem dtor_fnok : FnOK P dtor := by
   obtain ⟨Δ, hb, hfl, hr⟩ := dtor_body

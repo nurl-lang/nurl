@@ -263,8 +263,8 @@ theorem glue_takes_apart {P : Prog} (hP : ProgOK P) {f : Nat} {a b : Ty} (h : Gl
   rw [hbody] at hb
   obtain ⟨E, a1, b1, hy, hty, hdx, hdz⟩ := unpair_typed hb
   have hE : E.ty = .dtor f (.prod a b) := by
-    simp [sigCtx, hps, paramE] at hy
-    rw [← hy]
+    rw [sigCtx_of (show fn.params[0]? = some (.sink, .dtor f (.prod a b)) by rw [hps]; rfl)] at hy
+    cases hy; simp [paramE]
   rw [hE] at hty
   simp [Ty.undtor] at hty
   obtain ⟨rfl, rfl⟩ := hty
@@ -1091,6 +1091,61 @@ theorem NoDeps.wf {Γ : Ctx} (h : NoDeps Γ) (hf : NoRootb Γ) : CtxWF Γ :=
 theorem NoDeps.names {Γ : Ctx} (h : NoDeps Γ) : NameWF Γ :=
   fun v E hE _ _ => by simp [NameOK, DepsNamed, h v E hE]
 
+/-- AGORA-937: a context whose bindings depend on nothing but the region `r`
+    (a regioned parameter's caller memory), never by name. -/
+def RegDeps (r : Var) (Γ : Ctx) : Prop :=
+  ∀ v E, Γ v = some E → ∀ d ∈ E.vdeps, d.root = r ∧ d.kind.isName = false
+
+theorem NoDeps.regDeps {Γ : Ctx} (h : NoDeps Γ) (r : Var) : RegDeps r Γ :=
+  fun v E hE d hd => by rw [h v E hE] at hd; cases hd
+
+theorem RegDeps.setE {r : Var} {Γ : Ctx} (h : RegDeps r Γ) {x : Var} {E : Entry}
+    (hE : ∀ d ∈ E.vdeps, d.root = r ∧ d.kind.isName = false) : RegDeps r (A2.setE Γ x E) := fun v E' hv => by
+  by_cases hvx : v = x
+  · subst hvx; simp [A2.setE] at hv; subst hv; exact hE
+  · rw [A2.setE, upd_ne _ _ hvx] at hv; exact h v E' hv
+
+theorem RegDeps.kill {r : Var} {Γ : Ctx} (h : RegDeps r Γ) (e : Eff) (hv : Bool) (x : Var) :
+    RegDeps r (A2.kill e hv x Γ) := fun v E' hv' => by
+  simp only [A2.kill] at hv'
+  cases h0 : Γ v with
+  | none => rw [h0] at hv'; cases hv'
+  | some E0 =>
+    rw [h0] at hv'; simp only [Option.map_some, Option.some.injEq] at hv'; subst hv'
+    have := h v E0 h0
+    unfold killE; split
+    · simpa [Entry.vdeps] using this
+    · exact this
+
+theorem RegDeps.kill_eq {r : Var} {Γ : Ctx} (h : RegDeps r Γ) (e : Eff) (hv : Bool) {x : Var}
+    (hx : x ≠ r) : A2.kill e hv x Γ = Γ := by
+  funext v
+  cases h0 : Γ v with
+  | none => simp [A2.kill, h0]
+  | some E =>
+    simp only [A2.kill, h0, Option.map_some, Option.some.injEq]
+    unfold killE
+    have : hits e hv x E = false := by
+      simp only [hits, Bool.and_eq_false_iff]
+      right
+      simp only [List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and]
+      intro d hd hdx
+      rw [(h v E h0 d hd).1] at hdx
+      exact absurd hdx.symm hx
+    rw [this]; rfl
+
+theorem RegDeps.wf {r : Var} {Γ : Ctx} (h : RegDeps r Γ) (hf : NoRootb Γ)
+    (hr : ∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) : CtxWF Γ :=
+  ⟨fun v E hE _ _ q hq => by
+      obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hq
+      rw [(h v E hE d hd).1]; exact hr,
+    fun v E hE hd => (by rw [(hf v E hE).2.2] at hd; cases hd),
+    fun v E hE hd => (by rw [(hf v E hE).2.1] at hd; cases hd),
+    fun v E hE hd => (by rw [(hf v E hE).2.2] at hd; cases hd)⟩
+
+theorem RegDeps.names {r : Var} {Γ : Ctx} (h : RegDeps r Γ) : NameWF Γ :=
+  fun v E hE _ _ d hd b t hk => by have := (h v E hE d hd).2; rw [hk] at this; cases this
+
 
 def T : Ty := .prod .int .int
 def DT : Ty := .dtor 0 T
@@ -1344,15 +1399,15 @@ def Epar : Entry := ⟨DT, .rootb, true, [], [], false, false, false, false⟩
 
 theorem dfn_body : StmtT P ξ (sigCtx dfn) [] dfn.body
     (setE (kill .replace false 1 (sigCtx dfn)) 1 { intE with mode := R0.mode }) := by
-  have hc : sigCtx dfn 1 = some R0 := by simp [sigCtx, dfn, R0, resMode]
+  have hc : sigCtx dfn 1 = some R0 := by simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, R0, resMode]
   have hflags : ∀ v E, sigCtx dfn v = some E → E.dtor = false ∧ E.dbind = false := by
     intro v E h
-    rcases v with _ | _ | v <;> simp [sigCtx, dfn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+    rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
   exact StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
     (by
       intro p E hp hm d hd _
-      rcases p with _ | _ | p <;> simp [sigCtx, dfn, paramE, resMode, DT, T, Ty.hasFn] at hp <;> subst hp <;>
+      rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode, DT, T, Ty.hasFn] at hp <;> subst hp <;>
         simp [Entry.vdeps, Mode.ownSlot] at hd <;> simp at hm)
     (DtorSafe.of_none (fun v E h => (hflags v E h).1) _ _ _) rfl
 
@@ -1364,7 +1419,7 @@ theorem dfn_ok : FnOK P dfn := by
     · simp [dfn] at hi; subst hi; simp [dfn] at hs
     · simp [dfn] at hi; subst hi; simp [dfn] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, dfn, paramE, resMode, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, dfn], rfl, rfl, by simp [R0, resMode, dfn], by simp [intE], by simp [intE],
       by simp [dfn]⟩
@@ -1380,7 +1435,7 @@ theorem EDd_eq : EDd = ⟨DT, .own, true, [], [], false, false, false, false⟩ 
   simp [EDd, EP, Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
 
 theorem sig_mk : sigCtx mk = A2.setE (fun _ => none) 0 Rr := by
-  funext v; rcases v with _ | v <;> simp [sigCtx, mk, resMode, Rr, A2.setE, upd]
+  funext v; rcases v with _ | v <;> simp [↓sigCtx_noRegion (fn := mk) (by decide), mk, resMode, Rr, A2.setE, upd]
 
 theorem mk_typed : ∃ Δ, StmtT P ξ (sigCtx mk) [] mk.body Δ ∧ NoRootb Δ ∧
     Δ 0 = some ⟨DT, .own, true, [], [], false, false, false, false⟩ := by
@@ -1446,14 +1501,14 @@ def EG : Entry := ⟨GDT, .own, true, [], [], false, false, false, false⟩
 theorem glue_body : ∃ Δ, StmtT P ξ (sigCtx glue) [] glue.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
-  have h0 : sigCtx glue 0 = some EG := by simp [sigCtx, glue, paramE, EG, GDT, GT, DT, T, Ty.hasFn]
-  have h1 : sigCtx glue 1 = some R0 := by simp [sigCtx, glue, R0, resMode]
+  have h0 : sigCtx glue 0 = some EG := by simp [↓sigCtx_noRegion (fn := glue) (by decide), glue, paramE, EG, GDT, GT, DT, T, Ty.hasFn]
+  have h1 : sigCtx glue 1 = some R0 := by simp [↓sigCtx_noRegion (fn := glue) (by decide), glue, R0, resMode]
   have hS : NoRootb (sigCtx glue) := by
     intro v E h
     rcases v with _ | _ | v
     · rw [h0] at h; cases h; simp [EG]
     · rw [h1] at h; cases h; simp [R0]
-    · simp [sigCtx, glue] at h
+    · simp [↓sigCtx_noRegion (fn := glue) (by decide), glue] at h
   let Ka : Ctx := A2.setE (A2.setE (A2.setE (kill .replace false 0 (sigCtx glue)) 0
     { EG with live := false, dtor := false }) 2 (compE EG DT)) 3 (compE EG .int)
   have hKa : NoRootb Ka :=
@@ -1481,13 +1536,13 @@ theorem glue_body : ∃ Δ, StmtT P ξ (sigCtx glue) [] glue.body Δ ∧
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
   have hlet := StmtT.letd (ξ := .none) (P := P) (Γ := Ka) (Γ1 := Kb) (F := []) (x := 4) (f := 0) (r := .var 2)
     (s := .assign 1 (.expr (.lit 0))) (t := T) (H := (compE EG DT).held) (τ := DT) rfl
-    (by simp [Ka, A2.setE, upd, A2.kill, sigCtx, glue]) (by simp) hmv rfl
+    (by simp [Ka, A2.setE, upd, A2.kill, ↓sigCtx_noRegion (fn := glue) (by decide), glue]) (by simp) hmv rfl
     (Or.inl ⟨rfl, Or.inr ⟨0, by rw [hEx]; rfl⟩⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hasg.ofNone (hKd.endOK _)
     (by simp [Stmt.assigns])
   have hun := StmtT.unpair (ξ := .none) (P := P) (Γ := sigCtx glue) (F := []) (y := 0) (x := 2) (z := 3)
     (s := .letd 4 0 (.var 2) (.assign 1 (.expr (.lit 0)))) (E := EG) (a := DT) (b := .int)
     rfl h0 rfl (Or.inl rfl) (Or.inr ⟨4, rfl, glue_glueOK⟩) (by simp)
-    (by simp [sigCtx, glue]) (by simp [sigCtx, glue]) (by decide) (by simp) (by simp) hlet.ofNone
+    (by simp [↓sigCtx_noRegion (fn := glue) (by decide), glue]) (by simp [↓sigCtx_noRegion (fn := glue) (by decide), glue]) (by decide) (by simp) (by simp) hlet.ofNone
     (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _)
     ((hKd.exitScope 4).endOK _) (((hKd.exitScope 4).exitScope 3).endOK _)
     (fun _ => by simp [Stmt.movedFirst, Stmt.assigns]) (fun h => by simp [Ty.holdsDtor] at h)
@@ -1528,14 +1583,14 @@ def EGV : Entry := ⟨GVD, .own, true, [], [], false, false, false, false⟩
 theorem glueV_body : ∃ Δ, StmtT P ξ (sigCtx glueV) [] glueV.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
-  have h0 : sigCtx glueV 0 = some EGV := by simp [sigCtx, glueV, paramE, EGV, GVD, GV, DT, T, Ty.hasFn]
-  have h1 : sigCtx glueV 1 = some R0 := by simp [sigCtx, glueV, R0, resMode]
+  have h0 : sigCtx glueV 0 = some EGV := by simp [↓sigCtx_noRegion (fn := glueV) (by decide), glueV, paramE, EGV, GVD, GV, DT, T, Ty.hasFn]
+  have h1 : sigCtx glueV 1 = some R0 := by simp [↓sigCtx_noRegion (fn := glueV) (by decide), glueV, R0, resMode]
   have hS : NoRootb (sigCtx glueV) := by
     intro v E h
     rcases v with _ | _ | v
     · rw [h0] at h; cases h; simp [EGV]
     · rw [h1] at h; cases h; simp [R0]
-    · simp [sigCtx, glueV] at h
+    · simp [↓sigCtx_noRegion (fn := glueV) (by decide), glueV] at h
   let Ka : Ctx := A2.setE (A2.setE (A2.setE (kill .replace false 0 (sigCtx glueV)) 0
     { EGV with live := false, dtor := false }) 2 (compE EGV (.vec DT))) 3 (compE EGV .int)
   have hKa : NoRootb Ka :=
@@ -1563,13 +1618,13 @@ theorem glueV_body : ∃ Δ, StmtT P ξ (sigCtx glueV) [] glueV.body Δ ∧
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
   have hlet := StmtT.letd (ξ := .none) (P := P) (Γ := Ka) (Γ1 := Kb) (F := []) (x := 4) (f := 0) (r := .var 2)
     (s := .assign 1 (.expr (.lit 0))) (t := T) (H := (compE EGV (.vec DT)).held) (τ := .vec DT) rfl
-    (by simp [Ka, A2.setE, upd, A2.kill, sigCtx, glueV]) (by simp) hmv rfl
+    (by simp [Ka, A2.setE, upd, A2.kill, ↓sigCtx_noRegion (fn := glueV) (by decide), glueV]) (by simp) hmv rfl
     (Or.inr ⟨0, rfl, by rw [hEx]⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hasg.ofNone (hKd.endOK _)
     (by simp [Stmt.assigns])
   have hun := StmtT.unpair (ξ := .none) (P := P) (Γ := sigCtx glueV) (F := []) (y := 0) (x := 2) (z := 3)
     (s := .letd 4 0 (.var 2) (.assign 1 (.expr (.lit 0)))) (E := EGV) (a := .vec DT) (b := .int)
     rfl h0 rfl (Or.inl rfl) (Or.inr ⟨7, rfl, glueV_glueOK⟩) (by simp)
-    (by simp [sigCtx, glueV]) (by simp [sigCtx, glueV]) (by decide) (by simp) (by simp) hlet.ofNone
+    (by simp [↓sigCtx_noRegion (fn := glueV) (by decide), glueV]) (by simp [↓sigCtx_noRegion (fn := glueV) (by decide), glueV]) (by decide) (by simp) (by simp) hlet.ofNone
     (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _)
     ((hKd.exitScope 4).endOK _) (((hKd.exitScope 4).exitScope 3).endOK _)
     (fun _ => by simp [Stmt.movedFirst, Stmt.assigns]) (fun h => by simp [Ty.holdsDtor] at h)
@@ -1606,25 +1661,31 @@ theorem glueS_glueOK : GlueOK P 8 GS :=
 
 theorem gsdrop_ok : DropFnOK P 8 GS := Or.inr (Or.inl glueS_glueOK)
 
-def EGS : Entry := ⟨GSD, .own, true, [], [], false, false, false, false⟩
+/-- AGORA-937: the parameter holds views (its slice), so it views its
+    region `π 0`, at `glueS.nvars + 0 = 5`. -/
+def EGS : Entry := ⟨GSD, .own, true, [], [⟨5, .view⟩], false, false, false, false⟩
 
 theorem glueS_body : ∃ Δ, StmtT P ξ (sigCtx glueS) [] glueS.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
-  have h0 : sigCtx glueS 0 = some EGS := by simp [sigCtx, glueS, paramE, EGS, GSD, GS, DT, T, Ty.hasFn]
+  have h0 : sigCtx glueS 0 = some EGS := by
+    simp [sigCtx, glueS, paramE, EGS, GSD, GS, DT, T, Ty.hasFn, regionP, regioned, Ty.holdsView]
   have h1 : sigCtx glueS 1 = some R0 := by simp [sigCtx, glueS, R0, resMode]
   have hS : NoRootb (sigCtx glueS) := by
     intro v E h
     rcases v with _ | _ | v
     · rw [h0] at h; cases h; simp [EGS]
     · rw [h1] at h; cases h; simp [R0]
-    · simp [sigCtx, glueS] at h
+    · rcases sigCtx_cases h with ⟨hv, _⟩ | ⟨hv, _⟩ | ⟨_, _, _, _, rfl⟩
+      · simp [glueS] at hv
+      · simp [glueS] at hv
+      · simp [regionE]
   let Ka : Ctx := A2.setE (A2.setE (A2.setE (kill .replace false 0 (sigCtx glueS)) 0
     { EGS with live := false, dtor := false }) 2 (compE EGS DT)) 3 (compE EGS (.slice .int))
   have hKa : NoRootb Ka :=
     (((hS.kill _ _ _).setE (by simp [EGS])).setE (by simp [compE, DT])).setE (by simp [compE])
   have hEx : compE EGS DT = ⟨DT, .own, true, [], [], false, false, false, false⟩ := by
-    simp [compE, DT, EGS, ownHeld]
+    simp [compE, DT, ownHeld, T, Ty.holdsView]
   let Kb : Ctx := A2.setE (kill .replace false 2 Ka) 2 { compE EGS DT with live := false, dtor := false }
   have hKb : NoRootb Kb := (hKa.kill _ _ _).setE (by rw [hEx]; simp)
   have hmv : RhsT Ka [] (.var 2) ⟨(compE EGS DT).ty, .own, true, [], (compE EGS DT).held, false, false, false, false⟩ Kb :=
@@ -1685,15 +1746,15 @@ theorem impl_dtorOK : DtorOK P 5 GDT :=
 
 theorem impl_body : StmtT P ξ (sigCtx impl) [] impl.body
     (setE (kill .replace false 1 (sigCtx impl)) 1 { intE with mode := R0.mode }) := by
-  have hc : sigCtx impl 1 = some R0 := by simp [sigCtx, impl, R0, resMode]
+  have hc : sigCtx impl 1 = some R0 := by simp [↓sigCtx_noRegion (fn := impl) (by decide), impl, R0, resMode]
   have hflags : ∀ v E, sigCtx impl v = some E → E.dtor = false ∧ E.dbind = false := by
     intro v E h
-    rcases v with _ | _ | v <;> simp [sigCtx, impl, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+    rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := impl) (by decide), impl, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
   exact StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
     (by
       intro p E hp hm d hd _
-      rcases p with _ | _ | p <;> simp [sigCtx, impl, paramE, resMode, GDT, GT, DT, T, Ty.hasFn] at hp <;>
+      rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := impl) (by decide), impl, paramE, resMode, GDT, GT, DT, T, Ty.hasFn] at hp <;>
         subst hp <;> simp [Entry.vdeps, Mode.ownSlot] at hd <;> simp at hm)
     (DtorSafe.of_none (fun v E h => (hflags v E h).1) _ _ _) rfl
 
@@ -1705,7 +1766,7 @@ theorem impl_ok : FnOK P impl := by
     · simp [impl] at hi; subst hi; simp [impl] at hs
     · simp [impl] at hi; subst hi; simp [impl] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, impl, paramE, resMode, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := impl) (by decide), impl, paramE, resMode, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, impl], rfl, rfl, by simp [R0, resMode, impl],
       by simp [intE], by simp [intE], by simp [impl]⟩
@@ -1732,14 +1793,14 @@ def ES2 : Entry := ⟨SDT2, .own, true, [], [], false, false, false, false⟩
 theorem glue2_body : ∃ Δ, StmtT P ξ (sigCtx glue2) [] glue2.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
-  have h0 : sigCtx glue2 0 = some ES2 := by simp [sigCtx, glue2, paramE, ES2, SDT2, GT, DT, T, Ty.hasFn]
-  have h1 : sigCtx glue2 1 = some R0 := by simp [sigCtx, glue2, R0, resMode]
+  have h0 : sigCtx glue2 0 = some ES2 := by simp [↓sigCtx_noRegion (fn := glue2) (by decide), glue2, paramE, ES2, SDT2, GT, DT, T, Ty.hasFn]
+  have h1 : sigCtx glue2 1 = some R0 := by simp [↓sigCtx_noRegion (fn := glue2) (by decide), glue2, R0, resMode]
   have hS : NoRootb (sigCtx glue2) := by
     intro v E h
     rcases v with _ | _ | v
     · rw [h0] at h; cases h; simp [ES2]
     · rw [h1] at h; cases h; simp [R0]
-    · simp [sigCtx, glue2] at h
+    · simp [↓sigCtx_noRegion (fn := glue2) (by decide), glue2] at h
   let Ka : Ctx := A2.setE (kill .replace false 0 (sigCtx glue2)) 0 { ES2 with live := false, dtor := false }
   have hKa : NoRootb Ka := (hS.kill _ _ _).setE (by simp [ES2])
   have hmv : RhsT (sigCtx glue2) [] (.var 0) ⟨ES2.ty, .own, true, [], ES2.held, false, false, false, false⟩ Ka :=
@@ -1776,12 +1837,12 @@ theorem glue2_body : ∃ Δ, StmtT P ξ (sigCtx glue2) [] glue2.body Δ ∧
       (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
   have hlc := StmtT.letcall (ξ := .none) (P := P) (Γ := Kb) (F := []) (x := 3) (f := 5) (args := [2])
-    (s := .assign 1 (.expr (.lit 0))) rfl (by simp [Kb, Ka, A2.setE, upd, A2.kill, sigCtx, glue2]) (by simp)
+    (s := .assign 1 (.expr (.lit 0))) rfl (by simp [Kb, Ka, A2.setE, upd, A2.kill, ↓sigCtx_noRegion (fn := glue2) (by decide), glue2]) (by simp)
     hcall hasg.ofNone (hKd.endOK _)
     (fun fn' hf' ho _ => by simp [P] at hf'; subst hf'; simp [impl] at ho)
   have hlet := StmtT.letd (ξ := .none) (P := P) (Γ := sigCtx glue2) (Γ1 := Ka) (F := []) (x := 2) (f := 4) (r := .var 0)
     (s := .letcall 3 5 [2] (.assign 1 (.expr (.lit 0)))) (t := GT) (H := ES2.held) (τ := GDT) rfl
-    (by simp [sigCtx, glue2]) (by simp) hmv rfl
+    (by simp [↓sigCtx_noRegion (fn := glue2) (by decide), glue2]) (by simp) hmv rfl
     (Or.inl ⟨rfl, Or.inr ⟨6, rfl⟩⟩) rfl rfl
     ⟨⟨gluedrop_ok, fun g hg _ => by
       have hg6 : g = 6 := (Ty.dtor.inj hg).1.symm
@@ -1827,12 +1888,12 @@ theorem ofn_body : ∃ Δ, StmtT P ξ (sigCtx ofn) [] ofn.body Δ ∧
     Δ 1 = some { intE with mode := R0.mode } := by
   let E0 : Entry := ⟨ODT, .own, true, [], [], false, false, false, false⟩
   let I : Entry := { intE with mode := R0.mode }
-  have h0 : sigCtx ofn 0 = some E0 := by simp [sigCtx, ofn, paramE, E0, ODT, OT, DT, T, Ty.hasFn]
-  have h1 : sigCtx ofn 1 = some R0 := by simp [sigCtx, ofn, R0, resMode]
+  have h0 : sigCtx ofn 0 = some E0 := by simp [↓sigCtx_noRegion (fn := ofn) (by decide), ofn, paramE, E0, ODT, OT, DT, T, Ty.hasFn]
+  have h1 : sigCtx ofn 1 = some R0 := by simp [↓sigCtx_noRegion (fn := ofn) (by decide), ofn, R0, resMode]
   have h2 : ∀ v : Nat, v ≠ 0 → v ≠ 1 → sigCtx ofn v = none := by
     intro v hv0 hv1
     have hlt : ¬ v < 1 := fun h => hv0 (Nat.lt_one_iff.mp h)
-    simp [sigCtx, ofn, hlt, hv1]
+    simp [↓sigCtx_noRegion (fn := ofn) (by decide), ofn, hlt, hv1]
   have hS : NoRootb (sigCtx ofn) := by
     intro v E h
     rcases v with _ | _ | v
@@ -1976,12 +2037,12 @@ theorem gfn_body : ∃ Δ, StmtT P ξ (sigCtx gfn) [] gfn.body Δ ∧
     Δ 1 = some { intE with mode := R0.mode } := by
   let E0 : Entry := ⟨SDT, .own, true, [], [], false, false, false, false⟩
   let I : Entry := { intE with mode := R0.mode }
-  have h0 : sigCtx gfn 0 = some E0 := by simp [sigCtx, gfn, paramE, E0, SDT, ST, AT, GDT, GT, DT, T, Ty.hasFn]
-  have h1 : sigCtx gfn 1 = some R0 := by simp [sigCtx, gfn, R0, resMode]
+  have h0 : sigCtx gfn 0 = some E0 := by simp [↓sigCtx_noRegion (fn := gfn) (by decide), gfn, paramE, E0, SDT, ST, AT, GDT, GT, DT, T, Ty.hasFn]
+  have h1 : sigCtx gfn 1 = some R0 := by simp [↓sigCtx_noRegion (fn := gfn) (by decide), gfn, R0, resMode]
   have h2 : ∀ v : Nat, v ≠ 0 → v ≠ 1 → sigCtx gfn v = none := by
     intro v hv0 hv1
     have hlt : ¬ v < 1 := fun h => hv0 (Nat.lt_one_iff.mp h)
-    simp [sigCtx, gfn, hlt, hv1]
+    simp [↓sigCtx_noRegion (fn := gfn) (by decide), gfn, hlt, hv1]
   have hS : NoRootb (sigCtx gfn) := by
     intro v E h
     rcases v with _ | _ | v
@@ -2125,32 +2186,50 @@ theorem ovdrop_ok : DropFnOK P 9 OV := Or.inr (Or.inr (Or.inr (Or.inl ofnV_enumO
 theorem ofnV_body : ∃ Δ, StmtT P ξ (sigCtx ofnV) [] ofnV.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
-  let E0 : Entry := ⟨OVD, .own, true, [], [], false, false, false, false⟩
+  -- AGORA-937: the parameter holds views (the slice payload), so it views
+  -- its region `π 0`, at `ofnV.nvars + 0 = 3`
+  let E0 : Entry := ⟨OVD, .own, true, [], [⟨3, .view⟩], false, false, false, false⟩
   let I : Entry := { intE with mode := R0.mode }
-  have h0 : sigCtx ofnV 0 = some E0 := by simp [sigCtx, ofnV, paramE, E0, OVD, OV, DT, T, Ty.hasFn]
+  have h0 : sigCtx ofnV 0 = some E0 := by
+    simp [sigCtx, ofnV, paramE, E0, OVD, OV, DT, T, Ty.hasFn, regionP, regioned, Ty.holdsView]
   have h1 : sigCtx ofnV 1 = some R0 := by simp [sigCtx, ofnV, R0, resMode]
-  have h2 : ∀ v : Nat, v ≠ 0 → v ≠ 1 → sigCtx ofnV v = none := by
-    intro v hv0 hv1
-    have hlt : ¬ v < 1 := fun h => hv0 (Nat.lt_one_iff.mp h)
-    simp [sigCtx, ofnV, hlt, hv1]
+  have h3 : sigCtx ofnV 3 = some regionE := by
+    simp [sigCtx, ofnV, regioned, OVD, OV, Ty.holdsView]
+  have h2 : ∀ v : Nat, v ≠ 0 → v ≠ 1 → v ≠ 3 → sigCtx ofnV v = none := by
+    intro v hv0 hv1 hv3
+    cases h : sigCtx ofnV v with
+    | none => rfl
+    | some E =>
+      exfalso
+      rcases sigCtx_cases h with ⟨hv, _⟩ | ⟨hv, _⟩ | ⟨_, hle, hlt, _⟩
+      · simp [ofnV] at hv; omega
+      · simp [ofnV] at hv; omega
+      · simp [ofnV] at hle hlt; omega
   have hS : NoRootb (sigCtx ofnV) := by
     intro v E h
-    rcases v with _ | _ | v
-    · rw [h0] at h; cases h; simp [E0]
-    · rw [h1] at h; cases h; simp [R0]
-    · rw [h2 _ (by simp) (by simp)] at h; cases h
-  have hSd : NoDeps (sigCtx ofnV) := by
-    intro v E h
-    rcases v with _ | _ | v
-    · rw [h0] at h; cases h; rfl
-    · rw [h1] at h; cases h; rfl
-    · rw [h2 _ (by simp) (by simp)] at h; cases h
+    by_cases hv0 : v = 0
+    · subst hv0; rw [h0] at h; cases h; simp [E0]
+    by_cases hv1 : v = 1
+    · subst hv1; rw [h1] at h; cases h; simp [R0]
+    by_cases hv3 : v = 3
+    · subst hv3; rw [h3] at h; cases h; simp [regionE]
+    rw [h2 v hv0 hv1 hv3] at h; cases h
+  have hSd : RegDeps 3 (sigCtx ofnV) := by
+    intro v E h d hd
+    by_cases hv0 : v = 0
+    · subst hv0; rw [h0] at h; cases h; simp [E0, Entry.vdeps, Mode.ownSlot] at hd; subst hd; exact ⟨rfl, rfl⟩
+    by_cases hv1 : v = 1
+    · subst hv1; rw [h1] at h; cases h; simp [R0, Entry.vdeps, Mode.ownSlot] at hd
+    by_cases hv3 : v = 3
+    · subst hv3; rw [h3] at h; cases h; simp [regionE, Entry.vdeps, Mode.ownSlot] at hd
+    rw [h2 v hv0 hv1 hv3] at h; cases h
+  have hSwf : CtxWF (sigCtx ofnV) := hSd.wf hS ⟨regionE, h3, rfl⟩
   -- the arm that takes the destructor payload out
   let Ka : Ctx := A2.setE (kill .replace false 0 (sigCtx ofnV)) 0 { E0 with live := false, dtor := false }
   have hKa : NoRootb Ka := (hS.kill _ _ _).setE (by simp [E0])
-  have hKad : NoDeps Ka := (hSd.kill _ _ _).setE rfl
+  have hKad : RegDeps 3 Ka := (hSd.kill _ _ _).setE (by simp [E0, Entry.vdeps, Mode.ownSlot, Kind.isName])
   have hEx : compE E0 DT = ⟨DT, .own, true, [], [], false, false, false, false⟩ := by
-    simp [compE, E0, ownHeld, DT, T]
+    simp [compE, ownHeld, DT, T, Ty.holdsView]
   have htk : RhsT (sigCtx ofnV) [] (.takel 0) (compE E0 DT) Ka :=
     RhsT.takel (b := .slice .int) h0 rfl rfl (Or.inr ⟨9, rfl, by decide⟩) (by simp) (hS.noPin _)
       (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _)
@@ -2159,19 +2238,19 @@ theorem ofnV_body : ∃ Δ, StmtT P ξ (sigCtx ofnV) [] ofnV.body Δ ∧
     simp only [ED]; rw [hEx]; simp [Entry.arm, DT, T, Ty.dtorViews, Ty.holdsView]
   let Kb : Ctx := A2.setE Ka 2 ED
   have hKb : NoRootb Kb := hKa.setE (by rw [hED]; simp)
-  have hKbd : NoDeps Kb := hKad.setE (by rw [hED]; rfl)
+  have hKbd : RegDeps 3 Kb := hKad.setE (by rw [hED]; simp [Entry.vdeps])
   have hc1 : Kb 1 = some R0 := by
-    simp [Kb, Ka, A2.setE, upd, hSd.kill_eq, h1]
+    simp [Kb, Ka, A2.setE, upd, hSd.kill_eq .replace false (show (0 : Nat) ≠ 3 by decide), h1]
   let Kc : Ctx := A2.setE (kill .replace false 1 Kb) 1 I
   have hKc : NoRootb Kc := (hKb.kill _ _ _).setE (by simp [I, intE, R0])
-  have hKcd : NoDeps Kc := (hKbd.kill _ _ _).setE rfl
+  have hKcd : RegDeps 3 Kc := (hKbd.kill _ _ _).setE (by simp [I, intE, Entry.vdeps])
   have hasg1 : StmtT P .none Kb [] (.assign 1 (.expr (.lit 0))) Kc :=
     StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
       (hKb.noPin _) (DtorSafe.of_none (fun v E h => (hKb v E h).2.1) _ _ _) rfl
   have harm1 := StmtT.letd (ξ := .none) (P := P) (Γ := sigCtx ofnV) (Γ1 := Ka) (F := []) (x := 2) (f := 0) (r := .takel 0)
     (s := .assign 1 (.expr (.lit 0))) (t := T) (H := (compE E0 DT).held) (τ := DT) rfl
-    (h2 2 (by decide) (by decide)) (by simp) htk (by rw [hEx])
+    (h2 2 (by decide) (by decide) (by decide)) (by simp) htk (by rw [hEx])
     (Or.inl ⟨rfl, Or.inr ⟨0, by rw [hEx]; rfl⟩⟩) rfl rfl
     ⟨LetdFn.of drop_ok (fun g hg => by rw [hEx] at hg; exact (Ty.dtor.inj hg).1.symm),
       fun y Ey g u hr hy hgy => by
@@ -2189,55 +2268,57 @@ theorem ofnV_body : ∃ Δ, StmtT P ξ (sigCtx ofnV) [] ofnV.body Δ ∧
       (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _) rfl
   let Δ1 : Ctx := exitScope 2 Kc
   have hΔ1r : NoRootb Δ1 := hKc.exitScope 2
-  have hΔ1d : NoDeps Δ1 := by
+  have hΔ1d : RegDeps 3 Δ1 := by
     intro v E h
     simp only [Δ1, exitScope] at h
     by_cases hv : v = 2
     · subst hv; simp at h
     · rw [upd_ne _ _ hv] at h; exact (hKcd.kill _ _ _) v E h
-  have hw : Weaker Δ2 Δ1 := by
-    refine ⟨fun v => ?_, hΔ1d.wf hΔ1r, hΔ1d.names⟩
-    have e1 : Δ1 v = if v = 2 then none else if v = 1 then some I else if v = 0 then
-        some { E0 with live := false, dtor := false } else none := by
-      simp only [Δ1, exitScope, hKcd.kill_eq]
-      by_cases hv2 : v = 2
-      · subst hv2; simp
-      · rw [upd_ne _ _ hv2]; simp only [hv2, ↓reduceIte, Kc, A2.setE]
-        by_cases hv1 : v = 1
-        · subst hv1; simp
-        · rw [upd_ne _ _ hv1, hKbd.kill_eq]; simp only [hv1, ↓reduceIte, Kb, A2.setE, upd_ne _ _ hv2, Ka]
-          by_cases hv0 : v = 0
-          · subst hv0; simp
-          · rw [upd_ne _ _ hv0, hSd.kill_eq, h2 v hv0 hv1]; simp [hv0]
-    have e2 : Δ2 v = if v = 1 then some I else if v = 0 then some E0 else none := by
-      simp only [Δ2, A2.setE, hSd.kill_eq]
-      by_cases hv1 : v = 1
-      · subst hv1; simp
-      · rw [upd_ne _ _ hv1]; simp only [hv1, ↓reduceIte]
-        by_cases hv0 : v = 0
-        · subst hv0; simp [h0]
-        · simp only [hv0, ↓reduceIte]; exact h2 v hv0 hv1
-    rw [e1, e2]
+  have e1 : ∀ v, Δ1 v = if v = 2 then none else if v = 1 then some I else if v = 0 then
+      some { E0 with live := false, dtor := false } else sigCtx ofnV v := by
+    intro v
+    simp only [Δ1, exitScope, hKcd.kill_eq .replace false (show (2 : Nat) ≠ 3 by decide)]
     by_cases hv2 : v = 2
     · subst hv2; simp
+    · rw [upd_ne _ _ hv2]; simp only [hv2, ↓reduceIte, Kc, A2.setE]
+      by_cases hv1 : v = 1
+      · subst hv1; simp
+      · rw [upd_ne _ _ hv1, hKbd.kill_eq .replace false (show (1 : Nat) ≠ 3 by decide)]
+        simp only [hv1, ↓reduceIte, Kb, A2.setE, upd_ne _ _ hv2, Ka]
+        by_cases hv0 : v = 0
+        · subst hv0; simp
+        · rw [upd_ne _ _ hv0, hSd.kill_eq .replace false (show (0 : Nat) ≠ 3 by decide)]; simp [hv0]
+  have e2 : ∀ v, Δ2 v = if v = 1 then some I else sigCtx ofnV v := by
+    intro v
+    simp only [Δ2, A2.setE, hSd.kill_eq .replace false (show (1 : Nat) ≠ 3 by decide)]
+    by_cases hv1 : v = 1
+    · subst hv1; simp
+    · rw [upd_ne _ _ hv1]; simp [hv1]
+  have hΔ13 : Δ1 3 = some regionE := by rw [e1 3]; simpa using h3
+  have hw : Weaker Δ2 Δ1 := by
+    refine ⟨fun v => ?_, hΔ1d.wf hΔ1r ⟨regionE, hΔ13, rfl⟩, hΔ1d.names⟩
+    rw [e1, e2]
+    by_cases hv2 : v = 2
+    · subst hv2; simp [h2 2 (by decide) (by decide) (by decide)]
     by_cases hv1 : v = 1
     · subst hv1; simp; exact EntryWeaker.refl _
     by_cases hv0 : v = 0
     · subst hv0
-      simp only [hv2, hv1, ↓reduceIte, reduceCtorEq, false_iff, Option.some.injEq, true_and]
+      simp only [hv2, hv1, ↓reduceIte, reduceCtorEq, Option.some.injEq, true_and, h0]
       intro E E' hE hE'
       subst hE; subst hE'
       exact ⟨rfl, rfl, fun hf => by simp [Entry.fixed, E0] at hf, fun hl => by simp at hl,
         fun hd => by simp [E0] at hd, rfl, fun hd => by simp at hd, fun hd => by simp [E0] at hd,
       fun _ _ _ hfr => by fresh_ew,
       fun _ _ hhf => by heldfresh_ew⟩
-    · simp [hv2, hv1, hv0]
+    · simp only [hv2, hv1, hv0, ↓reduceIte]
+      exact ⟨by simp, fun E E' hE hE' => by rw [hE] at hE'; cases hE'; exact EntryWeaker.refl _⟩
   have harm2 : StmtT P .none (sigCtx ofnV) [] (.assign 1 (.expr (.lit 0))) Δ1 :=
-    StmtT.sub (Weaker.refl (hSd.wf hS) hSd.names) hasg2 (Or.inr hw)
+    StmtT.sub (Weaker.refl hSwf hSd.names) hasg2 (Or.inr hw)
   refine ⟨Δ1, StmtT.ite rfl rfl (ExprT.isl h0 rfl rfl) harm1.ofNone harm2.ofNone, hΔ1r, ?_⟩
   show exitScope 2 Kc 1 = some I
   simp only [exitScope]
-  rw [upd_ne _ _ (by decide), hKcd.kill_eq]
+  rw [upd_ne _ _ (by decide), hKcd.kill_eq .replace false (show (2 : Nat) ≠ 3 by decide)]
   simp [Kc, A2.setE]
 
 theorem ofnV_ok : FnOK P ofnV := by
@@ -2262,43 +2343,58 @@ shape).  In the glue the rebound binding is armed (its type holds a view),
 but it views nothing the glue can see: the glue's parameter holds nothing
 (`paramE`). -/
 
-/-- A context with no borrowed parameter and no entry that views anything:
-    an armed binding in it reads no view a scope's end could end. -/
-def NoRootbD (Γ : Ctx) : Prop := ∀ v E, Γ v = some E → E.mode ≠ .rootb ∧ E.vdeps = []
+/-- A context with no borrowed parameter and no entry that views anything
+    but the glue's parameter region `r` (AGORA-937): an armed binding in it
+    reads no view a scope's end in the glue could end. -/
+def NoRootbD (r : Var) (Γ : Ctx) : Prop :=
+  ∀ v E, Γ v = some E → E.mode ≠ .rootb ∧ ∀ d ∈ E.vdeps, d.root = r ∧ d.kind.isName = false
 
-theorem NoRootbD.setE {Γ : Ctx} (h : NoRootbD Γ) {x : Var} {E : Entry} (hm : E.mode ≠ .rootb)
-    (hE : E.vdeps = []) : NoRootbD (A2.setE Γ x E) := fun v E' hv => by
+theorem NoRootbD.setE {r : Var} {Γ : Ctx} (h : NoRootbD r Γ) {x : Var} {E : Entry} (hm : E.mode ≠ .rootb)
+    (hE : ∀ d ∈ E.vdeps, d.root = r ∧ d.kind.isName = false) : NoRootbD r (A2.setE Γ x E) := fun v E' hv => by
   by_cases hvx : v = x
   · subst hvx; simp [A2.setE] at hv; subst hv; exact ⟨hm, hE⟩
   · rw [A2.setE, upd_ne _ _ hvx] at hv; exact h v E' hv
 
-theorem NoRootbD.kill {Γ : Ctx} (h : NoRootbD Γ) (e : Eff) (hv : Bool) (x : Var) :
-    NoRootbD (A2.kill e hv x Γ) := fun v E' hv' => by
+theorem NoRootbD.regDeps {r : Var} {Γ : Ctx} (h : NoRootbD r Γ) : RegDeps r Γ :=
+  fun v E hE => (h v E hE).2
+
+theorem NoRootbD.kill {r : Var} {Γ : Ctx} (h : NoRootbD r Γ) (e : Eff) (hv : Bool) (x : Var) :
+    NoRootbD r (A2.kill e hv x Γ) := fun v E' hv' => by
+  refine ⟨?_, h.regDeps.kill e hv x v E' hv'⟩
   simp only [A2.kill] at hv'
   cases h0 : Γ v with
   | none => rw [h0] at hv'; cases hv'
   | some E0 =>
     rw [h0] at hv'; simp only [Option.map_some, Option.some.injEq] at hv'; subst hv'
-    have := h v E0 h0
+    have := (h v E0 h0).1
     unfold killE; split
-    · simpa [Entry.vdeps] using this
+    · simpa using this
     · exact this
 
-theorem NoRootbD.exitScope {Γ : Ctx} (h : NoRootbD Γ) (x : Var) : NoRootbD (A2.exitScope x Γ) := by
+theorem NoRootbD.exitScope {r : Var} {Γ : Ctx} (h : NoRootbD r Γ) (x : Var) :
+    NoRootbD r (A2.exitScope x Γ) := by
   intro v E' h'
   simp only [A2.exitScope, upd] at h'
   split at h'
   · cases h'
   · exact h.kill .replace false x v E' h'
 
-theorem NoRootbD.noPin {Γ : Ctx} (h : NoRootbD Γ) (x : Var) : NoPin Γ x :=
+theorem NoRootbD.noPin {r : Var} {Γ : Ctx} (h : NoRootbD r Γ) (x : Var) : NoPin Γ x :=
   fun p E hp hm => absurd hm (h p E hp).1
 
-theorem NoRootbD.dtorSafe {Γ : Ctx} (h : NoRootbD Γ) (e : Eff) (hv : Bool) (x : Var) : DtorSafe Γ e hv x :=
-  fun v E hE _ _ => by simp [hitsMem, (h v E hE).2]
+theorem NoRootbD.dtorSafe {r : Var} {Γ : Ctx} (h : NoRootbD r Γ) (e : Eff) (hv : Bool) {x : Var}
+    (hx : x ≠ r) : DtorSafe Γ e hv x :=
+  fun v E hE _ _ => by
+    simp only [hitsMem, Bool.and_eq_false_iff]
+    right
+    simp only [List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and]
+    intro d hd hdx
+    rw [((h v E hE).2 d hd).1] at hdx
+    exact absurd hdx.1.symm hx
 
-theorem NoRootbD.endOK {Γ : Ctx} (h : NoRootbD Γ) (x : Var) : EndOK Γ x :=
-  ⟨h.noPin x, h.dtorSafe _ _ _, fun v E hE _ _ _ d hd => by rw [(h v E hE).2] at hd; cases hd⟩
+theorem NoRootbD.endOK {r : Var} {Γ : Ctx} (h : NoRootbD r Γ) {x : Var} (hx : x ≠ r) : EndOK Γ x :=
+  ⟨h.noPin x, h.dtorSafe _ _ hx, fun v E hE _ _ _ d hd _ hdx => by
+    rw [((h v E hE).2 d hd).1] at hdx; exact hx hdx.symm⟩
 
 theorem implS_not_thru : ¬ ThruFn P 10 := by
   intro h
@@ -2311,15 +2407,15 @@ theorem implS_dtorOK : DtorOK P 10 GSD :=
 
 theorem implS_body : StmtT P ξ (sigCtx implS) [] implS.body
     (setE (kill .replace false 1 (sigCtx implS)) 1 { intE with mode := R0.mode }) := by
-  have hc : sigCtx implS 1 = some R0 := by simp [sigCtx, implS, R0, resMode]
+  have hc : sigCtx implS 1 = some R0 := by simp [↓sigCtx_noRegion (fn := implS) (by decide), implS, R0, resMode]
   have hflags : ∀ v E, sigCtx implS v = some E → E.dtor = false ∧ E.dbind = false := by
     intro v E h
-    rcases v with _ | _ | v <;> simp [sigCtx, implS, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+    rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := implS) (by decide), implS, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
   exact StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
     (by
       intro p E hp hm d hd _
-      rcases p with _ | _ | p <;> simp [sigCtx, implS, paramE, resMode, GSD, GS, DT, T, Ty.hasFn] at hp <;>
+      rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := implS) (by decide), implS, paramE, resMode, GSD, GS, DT, T, Ty.hasFn] at hp <;>
         subst hp <;> simp [Entry.vdeps, Mode.ownSlot] at hd <;> simp at hm)
     (DtorSafe.of_none (fun v E h => (hflags v E h).1) _ _ _) rfl
 
@@ -2332,7 +2428,7 @@ theorem implS_ok : FnOK P implS := by
     · simp [implS] at hi; subst hi; simp [implS] at hs
     · simp [implS] at hi; subst hi; simp [implS] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, implS, paramE, resMode, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := implS) (by decide), implS, paramE, resMode, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, implS], rfl, rfl, by simp [R0, resMode, implS],
       by simp [intE], by simp [intE], by simp [implS]⟩
@@ -2354,39 +2450,49 @@ theorem glueS2_implOK : ImplGlueOK P 11 GS 8 10 :=
 
 theorem gs2drop_ok : DropFnOK P 11 GS := Or.inr (Or.inr (Or.inl ⟨8, 10, glueS2_implOK⟩))
 
-def ES3 : Entry := ⟨GSD2, .own, true, [], [], false, false, false, false⟩
+/-- AGORA-937: the parameter holds views (its slice), so it views its
+    region `π 0`, at `glueS2.nvars + 0 = 4`. -/
+def ES3 : Entry := ⟨GSD2, .own, true, [], [⟨4, .view⟩], false, false, false, false⟩
 
 theorem glueS2_body : ∃ Δ, StmtT P ξ (sigCtx glueS2) [] glueS2.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
-  have h0 : sigCtx glueS2 0 = some ES3 := by simp [sigCtx, glueS2, paramE, ES3, GSD2, GS, DT, T, Ty.hasFn]
+  have h0 : sigCtx glueS2 0 = some ES3 := by
+    simp [sigCtx, glueS2, paramE, ES3, GSD2, GS, DT, T, Ty.hasFn, regionP, regioned, Ty.holdsView]
   have h1 : sigCtx glueS2 1 = some R0 := by simp [sigCtx, glueS2, R0, resMode]
   have hS : NoRootb (sigCtx glueS2) := by
     intro v E h
     rcases v with _ | _ | v
     · rw [h0] at h; cases h; simp [ES3]
     · rw [h1] at h; cases h; simp [R0]
-    · simp [sigCtx, glueS2] at h
-  have hSD : NoRootbD (sigCtx glueS2) := by
+    · rcases sigCtx_cases h with ⟨hv, _⟩ | ⟨hv, _⟩ | ⟨_, _, _, _, rfl⟩
+      · simp [glueS2] at hv
+      · simp [glueS2] at hv
+      · simp [regionE]
+  have hSD : NoRootbD 4 (sigCtx glueS2) := by
     intro v E h
     rcases v with _ | _ | v
-    · rw [h0] at h; cases h; exact ⟨by simp [ES3], rfl⟩
-    · rw [h1] at h; cases h; exact ⟨by simp [R0], rfl⟩
-    · simp [sigCtx, glueS2] at h
+    · rw [h0] at h; cases h; exact ⟨by simp [ES3], by simp [ES3, Entry.vdeps, Mode.ownSlot, Kind.isName]⟩
+    · rw [h1] at h; cases h; exact ⟨by simp [R0], by simp [R0, Entry.vdeps, Mode.ownSlot]⟩
+    · rcases sigCtx_cases h with ⟨hv, _⟩ | ⟨hv, _⟩ | ⟨_, _, _, _, rfl⟩
+      · simp [glueS2] at hv
+      · simp [glueS2] at hv
+      · exact ⟨by simp [regionE], by simp [regionE, Entry.vdeps, Mode.ownSlot]⟩
   let Ka : Ctx := A2.setE (kill .replace false 0 (sigCtx glueS2)) 0 { ES3 with live := false, dtor := false }
   have hKa : NoRootb Ka := (hS.kill _ _ _).setE (by simp [ES3])
-  have hKaD : NoRootbD Ka := (hSD.kill _ _ _).setE (by simp [ES3]) rfl
+  have hKaD : NoRootbD 4 Ka := (hSD.kill _ _ _).setE (by simp [ES3]) (by simp [ES3, Entry.vdeps, Mode.ownSlot, Kind.isName])
   have hmv : RhsT (sigCtx glueS2) [] (.var 0) ⟨ES3.ty, .own, true, [], ES3.held, false, false, false, false⟩ Ka :=
     RhsT.moveOwn h0 rfl rfl (by simp) (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _)
   let EW : Entry := Entry.arm { (⟨ES3.ty, .own, true, [], ES3.held, false, false, false, false⟩ : Entry) with ty := GSD, held := ES3.held }
-  -- armed: its type holds a view; but it views nothing the glue can see
-  have hEW : EW = ⟨GSD, .own, true, [], [], true, true, false, false⟩ := by
+  -- armed: its type holds a view; but it views nothing the glue can end:
+  -- only its parameter's region
+  have hEW : EW = ⟨GSD, .own, true, [], [⟨4, .view⟩], true, true, false, false⟩ := by
     simp [EW, ES3, Entry.arm, GSD, GS, DT, T, Ty.dtorViews, Ty.holdsView]
   let Kb : Ctx := A2.setE Ka 2 EW
-  have hKbD : NoRootbD Kb := hKaD.setE (by rw [hEW]; simp) (by rw [hEW]; rfl)
+  have hKbD : NoRootbD 4 Kb := hKaD.setE (by rw [hEW]; simp) (by rw [hEW]; simp [Entry.vdeps, Mode.ownSlot, Kind.isName])
   have hb2 : Kb 2 = some EW := by simp [Kb, A2.setE]
   have hnm : mutNames Kb [2] = [] := by
-    simp [mutNames, argNames, argE, hb2, hEW, Entry.vdeps, nameDeps, Mode.ownSlot]
+    simp [mutNames, argNames, argE, hb2, hEW, Entry.vdeps, nameDeps, Mode.ownSlot, Kind.isName]
   have hcall : CallT P Kb [] 10 [2] (callRes Kb implS [2]) Kb := by
     refine ⟨implS, rfl, by simp [implS], fun i hi => ?_, fun d hd => ?_,
       CallDtorSafe.of_inp (by simp [implS]) hnm, rfl, (callPost_dtor (t := GSD) rfl hnm).symm,
@@ -2398,22 +2504,25 @@ theorem glueS2_body : ∃ Δ, StmtT P ξ (sigCtx glueS2) [] glueS2.body Δ ∧
       · simp [implS, PMode.moves] at h
       · simp [implS] at h
     · rw [hnm] at hd; cases hd
-  have hER : (callRes Kb implS [2]).mode ≠ .rootb ∧ (callRes Kb implS [2]).vdeps = [] := by
+  have hER : (callRes Kb implS [2]).mode ≠ .rootb ∧
+      ∀ d ∈ (callRes Kb implS [2]).vdeps, d.root = 4 ∧ d.kind.isName = false := by
     simp [callRes, resMode, implS, heldOfArgs, argNames, argE, hb2, hEW, Entry.vdeps, ownHeld, Mode.ownSlot,
-      memDeps, nameDeps, roots, allKinds]
+      memDeps, nameDeps, roots, allKinds, Kind.isName]
+    intro d _ hd
+    rcases hd with rfl | rfl | rfl | rfl <;> exact ⟨rfl, rfl⟩
   let Kc : Ctx := A2.setE Kb 3 (callRes Kb implS [2])
-  have hKcD : NoRootbD Kc := hKbD.setE hER.1 hER.2
+  have hKcD : NoRootbD 4 Kc := hKbD.setE hER.1 hER.2
   have hc1 : Kc 1 = some R0 := by
     simp [Kc, Kb, Ka, A2.setE, upd, A2.kill, h1, killE, hits, R0, Entry.vdeps]
   let Kd : Ctx := A2.setE (kill .replace false 1 Kc) 1 { intE with mode := R0.mode }
-  have hKdD : NoRootbD Kd := (hKcD.kill _ _ _).setE (by simp [intE, R0]) rfl
+  have hKdD : NoRootbD 4 Kd := (hKcD.kill _ _ _).setE (by simp [intE, R0]) (by simp [intE, Entry.vdeps])
   have hasg : StmtT P .none Kc [] (.assign 1 (.expr (.lit 0))) Kd :=
     StmtT.assign (Ex := R0) (E := intE) hc1 (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
       (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
-      (hKcD.noPin _) (hKcD.dtorSafe _ _ _) rfl
+      (hKcD.noPin _) (hKcD.dtorSafe _ _ (by decide)) rfl
   have hlc := StmtT.letcall (ξ := .none) (P := P) (Γ := Kb) (F := []) (x := 3) (f := 10) (args := [2])
     (s := .assign 1 (.expr (.lit 0))) rfl (by simp [Kb, Ka, A2.setE, upd, A2.kill, sigCtx, glueS2]) (by simp)
-    hcall hasg.ofNone (hKdD.endOK _)
+    hcall hasg.ofNone (hKdD.endOK (by decide))
     (fun fn' hf' ho _ => by simp [P] at hf'; subst hf'; simp [implS] at ho)
   have hlet := StmtT.letd (ξ := .none) (P := P) (Γ := sigCtx glueS2) (Γ1 := Ka) (F := []) (x := 2) (f := 8) (r := .var 0)
     (s := .letcall 3 10 [2] (.assign 1 (.expr (.lit 0)))) (t := GS) (H := ES3.held) (τ := GSD) rfl
@@ -2424,12 +2533,11 @@ theorem glueS2_body : ∃ Δ, StmtT P ξ (sigCtx glueS2) [] glueS2.body Δ ∧
       subst hg11
       exact ⟨10, 3, _, glueS2_implOK, rfl⟩⟩,
       TakeOK.triv (fun y => ⟨(by intro h; cases h), (by intro h; cases h)⟩)⟩
-    (HeldUp.refl _ _) hlc.ofNone ((hKdD.exitScope 3).endOK _) (by simp [Stmt.assigns])
+    (HeldUp.refl _ _) hlc.ofNone ((hKdD.exitScope 3).endOK (by decide)) (by simp [Stmt.assigns])
   -- what is left: the moved parameter and the result; the armed binding has ended
-  have hex : ∀ (Γ : Ctx) (x : Var), NoRootbD Γ → exitScope x Γ = upd Γ x none := fun Γ x h => by
-    simp only [exitScope, NoDeps.kill_eq (fun v E hE => (h v E hE).2)]
-  have hKcd : NoRootbD (kill .replace false 1 Kc) := hKcD.kill _ _ _
-  rw [hex _ _ ((hKdD.exitScope 3)), hex _ _ hKdD] at hlet
+  have hex : ∀ (Γ : Ctx) (x : Var), x ≠ 4 → NoRootbD 4 Γ → exitScope x Γ = upd Γ x none :=
+    fun Γ x hx h => by simp only [exitScope, h.regDeps.kill_eq .replace false hx]
+  rw [hex _ _ (by decide) ((hKdD.exitScope 3)), hex _ _ (by decide) hKdD] at hlet
   refine ⟨_, hlet.ofNone, ?_, ?_⟩
   · intro v E h
     by_cases hv2 : v = 2
@@ -2442,7 +2550,7 @@ theorem glueS2_body : ∃ Δ, StmtT P ξ (sigCtx glueS2) [] glueS2.body Δ ∧
     · subst hv1; simp [Kd, A2.setE] at h; subst h; exact ⟨rfl, rfl⟩
     have e1 : Kd v = Kc v := by
       show A2.setE (kill .replace false 1 Kc) 1 _ v = Kc v
-      rw [A2.setE, upd_ne _ _ hv1, NoDeps.kill_eq (fun v E hE => (hKcD v E hE).2)]
+      rw [A2.setE, upd_ne _ _ hv1, hKcD.regDeps.kill_eq .replace false (show (1 : Nat) ≠ 4 by decide)]
     have e2 : Kc v = Ka v := by
       show upd (upd Ka 2 (some EW)) 3 _ v = Ka v
       rw [upd_ne _ _ hv3, upd_ne _ _ hv2]
@@ -2482,12 +2590,12 @@ theorem ofnR_body : ∃ Δ, StmtT P ξ (sigCtx ofnR) [] ofnR.body Δ ∧
     Δ 1 = some { intE with mode := R0.mode } := by
   let E0 : Entry := ⟨RDT, .own, true, [], [], false, false, false, false⟩
   let I : Entry := { intE with mode := R0.mode }
-  have h0 : sigCtx ofnR 0 = some E0 := by simp [sigCtx, ofnR, paramE, E0, RDT, RT, DT, T, Ty.hasFn]
-  have h1 : sigCtx ofnR 1 = some R0 := by simp [sigCtx, ofnR, R0, resMode]
+  have h0 : sigCtx ofnR 0 = some E0 := by simp [↓sigCtx_noRegion (fn := ofnR) (by decide), ofnR, paramE, E0, RDT, RT, DT, T, Ty.hasFn]
+  have h1 : sigCtx ofnR 1 = some R0 := by simp [↓sigCtx_noRegion (fn := ofnR) (by decide), ofnR, R0, resMode]
   have h2 : ∀ v : Nat, v ≠ 0 → v ≠ 1 → sigCtx ofnR v = none := by
     intro v hv0 hv1
     have hlt : ¬ v < 1 := fun h => hv0 (Nat.lt_one_iff.mp h)
-    simp [sigCtx, ofnR, hlt, hv1]
+    simp [↓sigCtx_noRegion (fn := ofnR) (by decide), ofnR, hlt, hv1]
   have hS : NoRootb (sigCtx ofnR) := by
     intro v E h
     rcases v with _ | _ | v

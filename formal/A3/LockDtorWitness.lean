@@ -827,16 +827,16 @@ theorem assign_res {fn : Fn} {r : Var} (hc : sigCtx fn r = some R0)
 theorem dfn_ok : FnOK P dfn := by
   refine ⟨rfl, by decide, by decide, rfl, by simp [dfn], ?_, by simp [dfn], by simp [dfn], by simp [dfn],
     by simp [dfn], by simp [dfn], ?_, _,
-    assign_res (by simp [sigCtx, dfn, R0, resMode]) ?_ A2.ArcPanicWitness.sig_dfn_flags, ?_, ?_, ?_⟩
+    assign_res (by simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, R0, resMode]) ?_ A2.ArcPanicWitness.sig_dfn_flags, ?_, ?_, ?_⟩
   · intro pt hpt; simp [dfn] at hpt; subst hpt; simp [DT, T, Ty.ok, Ty.isStruct]
   · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [dfn] at h⟩
     · simp [dfn] at hi; subst hi; simp [dfn] at hs
     · simp [dfn] at hi; subst hi; simp [dfn] at hb
   · intro p E hp _
-    rcases p with _ | _ | p <;> simp [sigCtx, dfn, paramE, resMode, DT, T, Ty.hasFn] at hp <;> subst hp <;>
+    rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode, DT, T, Ty.hasFn] at hp <;> subst hp <;>
       simp [Entry.vdeps]
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, dfn, paramE, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, dfn], rfl, rfl, by simp [R0, resMode, dfn],
       by simp [intE], by simp [intE], by simp [dfn]⟩
@@ -844,30 +844,30 @@ theorem dfn_ok : FnOK P dfn := by
 
 theorem sig_ufn_flags : ∀ v E, sigCtx ufn v = some E → E.dtor = false ∧ E.dbind = false := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [sigCtx, ufn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := ufn) (by decide), ufn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
 
 /-- The closure's `FnOK`: its `inout` parameter, of a destructor type, is
     given no other value (`DtorParamsOK`) and is live at its end. -/
 theorem ufn_ok : FnOK P ufn := by
   refine ⟨rfl, by decide, by decide, rfl, by simp [ufn], ?_, by simp [ufn], by simp [ufn], by simp [ufn],
     by simp [ufn], by simp [ufn], ?_, _,
-    assign_res (by simp [sigCtx, ufn, R0, resMode]) ?_ sig_ufn_flags, ?_, ?_, ?_⟩
+    assign_res (by simp [↓sigCtx_noRegion (fn := ufn) (by decide), ufn, R0, resMode]) ?_ sig_ufn_flags, ?_, ?_, ?_⟩
   · intro pt hpt; simp [ufn] at hpt; subst hpt
     simp [DT, T, Ty.ok, Ty.isStruct, Ty.owning]
   · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [ufn] at h⟩
     · simp [ufn] at hi; subst hi; simp [ufn] at hs
     · simp [ufn] at hi; subst hi; simp [ufn, Stmt.assigns]
   · intro p E hp hm
-    rcases p with _ | _ | p <;> simp [sigCtx, ufn, paramE, resMode] at hp <;> subst hp <;> simp at hm
+    rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := ufn) (by decide), ufn, paramE, resMode] at hp <;> subst hp <;> simp at hm
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, ufn, paramE, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := ufn) (by decide), ufn, paramE, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, ufn], rfl, rfl, by simp [R0, resMode, ufn],
       by simp [intE], by simp [intE], by simp [ufn]⟩
   · intro i hi b hb
     simp [ufn] at hi; subst hi
     refine ⟨paramE ufn.params (.inout .replace, DT), ?_, rfl, ?_, ?_⟩
-    · simp [setE, upd, kill, killE, sigCtx, ufn, paramE, Entry.vdeps, hits, Mode.ownSlot, DT, T, Ty.hasFn]
+    · simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := ufn) (by decide), ufn, paramE, Entry.vdeps, hits, Mode.ownSlot, DT, T, Ty.hasFn]
     · simp [paramE, DT, T, Ty.hasFn]
     · intro _; simp [paramE, DT, T, Ty.hasFn]
 

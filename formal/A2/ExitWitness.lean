@@ -264,7 +264,7 @@ def ctxR (r0 : Entry) : Ctx := fun v => if v = 0 then some r0 else none
 
 theorem sigR_eq : sigCtx gR = ctxR R0 := by
   funext v
-  simp only [sigCtx, ctxR, gR, resMode]
+  simp only [↓sigCtx_noRegion (fn := gR) (by decide), ctxR, gR, resMode]
   rcases v with _ | v <;> simp [R0]
 
 theorem r0_plain : R0.mode ≠ .rootb ∧ R0.dtor = false ∧ R0.dbind = false ∧ R0.vdeps = [] := by

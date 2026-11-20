@@ -705,8 +705,8 @@ theorem chanGlue_drains {P : Prog} (hP : ProgOK P) {g : Nat} {s : Ty} (h : GlueO
   rw [hbody] at hb
   obtain ⟨E0, a, b, h0, hty, hxz, _, Γ', F', Δ', Ex, hb', hx', hxt⟩ := unpair_body hb
   have hE0 : E0.ty = .dtor g (.prod (.vec s) .int) := by
-    simp [sigCtx, hps, paramE] at h0
-    rw [← h0]
+    rw [sigCtx_of (show fn.params[0]? = some _ by rw [hps]; rfl)] at h0
+    cases h0; simp [paramE]
   rw [hE0] at hty
   simp [Ty.undtor] at hty
   obtain ⟨rfl, rfl⟩ := hty
