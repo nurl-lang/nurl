@@ -81244,8 +81244,12 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                     // leaked, and its destructors never ran (h329, h330). Journaled
                     // once its value is in place, as h233's owner is
                     // (mem_journal_push_tmpown).
+                    // (…an owned slice too, which __type_needs_drop does not
+                    // count: under a `% Drop` of the struct's own it is not taken
+                    // out, and the temporary with its slice was released by
+                    // no one - its drop never ran; agora #895's review.)
                     ? & & & & ! __tf_taken __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
-                    | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) {
+                    | | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) ( __owned_slice_ty ( nurl_llty ftype ) ) {
                         : s tro4 ( __mb_tmp_flag syms cg __mb_tt __mb_inner_tfo )
                         ? != 0 ( nurl_str_len tro4 ) {
                             : s tp ( nurl_cg_reg cg )
