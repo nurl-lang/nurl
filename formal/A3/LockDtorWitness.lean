@@ -478,6 +478,7 @@ theorem frame_slot {m : Mem} {Γ : Ctx} {x : Var} {E : Entry} {t : Ty} (hi : MIn
       cases hE : E.mode with
       | own => exact absurd hE hm
       | inout b => exact absurd hE (hi.noInout x E b hx)
+      | region => exact absurd hE (hi.noRegion x E hx)
       | rootb => exact absurd hE hrb
       | bor => rfl
     rw [hb] at hown hbor

@@ -180,6 +180,7 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
     fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h)⟩
   nvSt _ h := by cases h
   noInout _ _ _ h := by cases h
+  noRegion _ _ h := by cases h
   wf := ⟨fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h),
     fun _ _ h => (by cases h)⟩
   rootbLive _ _ h := by cases h

@@ -239,6 +239,10 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
         rw [spawnSt_none hlen h] at h2; cases h2
       exact Nat.lt_of_le_of_lt h1 hnv
     noInout := fun v E b hv => (sigCtx_spawn_mode hpar hv).2 b
+    noRegion := fun v E hv => by
+      rcases sigCtx_spawn hpar hv with ⟨t, _, _, rfl⟩ | ⟨_, rfl⟩
+      · exact fun h => (by cases h)
+      · exact resMode_region fn
     wf := sigCtx_wf fn
     rootbLive := fun p E hp hm => absurd hm (hrb p E hp)
     rootbLt := fun p E hp hm => absurd hm (hrb p E hp)

@@ -30,6 +30,10 @@ inductive Mode where
   | inout (b : Eff)
   | rootb
   | bor
+  /-- AGORA-937: a parameter's region, what the views a view-holding
+      parameter holds point into: the caller's memory. A root, which the
+      frame does not own; no rule makes one yet. -/
+  | region
 deriving DecidableEq, Repr
 
 /-- Owners, `inout` parameters and borrowed parameters are roots: what is

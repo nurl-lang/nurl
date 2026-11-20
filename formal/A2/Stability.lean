@@ -623,6 +623,7 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       cases hme : Er.mode with
       | own => rw [hme] at hsor; simp [Mode.ownSlot] at hsor
       | inout b => exact absurd hme (hi.noInout _ Er b hEr)
+      | region => exact absurd hme (hi.noRegion _ Er hEr)
       | rootb => rfl
       | bor => rw [hme] at hroot; simp [Mode.isRoot] at hroot
   · rcases ih dep.root hlt Er n0 hEr hrb (Or.inr (Or.inl ⟨w, c, hc, ht, hn⟩)) hnn0 with
@@ -661,6 +662,7 @@ theorem rootKeep_frame {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       cases hme : Er.mode with
       | own => rw [hme] at hso; simp [Mode.ownSlot] at hso
       | inout b => exact absurd hme (hi.noInout _ Er b hr)
+      | region => exact absurd hme (hi.noRegion _ Er hr)
       | rootb => rfl
       | bor => rw [hme] at hroot; simp [Mode.isRoot] at hroot
   · obtain ⟨ty, d, es, hneq⟩ := hnode.eq
@@ -723,6 +725,7 @@ theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
       cases hme : Er.mode with
       | own => rw [hme] at hsor; simp [Mode.ownSlot] at hsor
       | inout b => exact absurd hme (hi.noInout _ Er b hEr)
+      | region => exact absurd hme (hi.noRegion _ Er hEr)
       | rootb => rfl
       | bor => rw [hme] at hroot; simp [Mode.isRoot] at hroot
   · rcases ih dep.root hlt Er n0 hEr hrb (hpin p E hp hm hps dep.root hdv) (Or.inr (Or.inl ⟨w, c, hc, ht, hn⟩))
@@ -765,6 +768,7 @@ theorem rootKeep_frame_sp {m m' : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m
       cases hme : Er.mode with
       | own => rw [hme] at hso; simp [Mode.ownSlot] at hso
       | inout b => exact absurd hme (hi.noInout _ Er b hr)
+      | region => exact absurd hme (hi.noRegion _ Er hr)
       | rootb => rfl
       | bor => rw [hme] at hroot; simp [Mode.isRoot] at hroot
   · obtain ⟨ty, d, es, hneq⟩ := hnode.eq

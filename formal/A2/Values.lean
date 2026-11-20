@@ -55,6 +55,7 @@ theorem MInv.mode_cases {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
   cases h : E.mode with
   | own => exact Or.inl rfl
   | inout b => exact absurd h (hi.noInout y E b hy)
+  | region => exact absurd h (hi.noRegion y E hy)
   | rootb => exact Or.inr (Or.inl rfl)
   | bor => exact Or.inr (Or.inr rfl)
 
@@ -460,6 +461,7 @@ theorem MInv.vecOf_free {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Ent
       | rootb =>
         exact hi.pkgFree y E _ _ hy (Or.inl hl) hv c
           (PkgNames.href (Or.inr hm) ((hroot (by rw [hm]; rfl)).rootb_inv hy hm) c)
+      | region => exact absurd hm (hi.noRegion y E hy)
       | _ => rw [hm] at hos; cases hos
     refine ⟨hfree.at (by simp [Val.head]), ?_⟩
     rcases hna with ⟨x, T, hT, hs, _⟩ | ⟨k', bl, hk, hs, _⟩
@@ -728,6 +730,7 @@ theorem MInv.vecOf_views {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : En
   · rw [hst] at hsl; cases hsl
     have hm : E.mode = .bor ∨ E.mode = .rootb := by
       have h := hso.symm
+      have hnr := hi.noRegion y E hy
       cases hm : E.mode <;> simp_all [Mode.ownSlot]
     rcases hna with ⟨r, T, hT, hs, _⟩ | ⟨k, bl, hk, hs, _⟩
     · exact hi.pkgFree y E false _ hy (Or.inl hl) hst i
@@ -759,6 +762,7 @@ theorem MInv.bor_mode {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry
   obtain ⟨sl, hsl, _, hso, _⟩ := hi.slot y E hy
   rw [hv] at hsl; cases hsl
   have h := hso.symm
+  have hnr := hi.noRegion y E hy
   cases hm : E.mode <;> simp_all [Mode.ownSlot]
 
 /-- An owned value is no view: only a slice's is, and a slice owns nothing. -/
@@ -1072,6 +1076,7 @@ theorem MInv.root_namer {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (ha
       cases hme : Er.mode with
       | own => rw [hme] at hso; simp [Mode.ownSlot] at hso
       | inout b => exact absurd hme (hi.noInout _ Er b hEr)
+      | region => exact absurd hme (hi.noRegion _ Er hEr)
       | rootb => rfl
       | bor => rw [hme] at hro; simp [Mode.isRoot] at hro
     rcases hr with ⟨T1, hT1, htop⟩ | ⟨w', c', hc', ht', hna⟩ | ⟨w', d', o', l', hc', ht', hda⟩ |
@@ -1143,6 +1148,7 @@ theorem MInv.namer {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch :
       cases hme : Er.mode with
       | own => rw [hme] at hso; simp [Mode.ownSlot] at hso
       | inout b => exact absurd hme (hi.noInout _ Er b hEr)
+      | region => exact absurd hme (hi.noRegion _ Er hEr)
       | rootb => rfl
       | bor => rw [hme] at hro; simp [Mode.isRoot] at hro
     have hk : dep.kind = .self ∨ dep.kind = .view ∨ dep.kind = .inner := by

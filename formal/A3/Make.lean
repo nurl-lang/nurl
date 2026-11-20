@@ -324,6 +324,7 @@ theorem MInv.unbind {m : Mem} {Γ : Ctx} (hi : MInv m Γ) (a : Nat → Bool) (ha
     exact ⟨show a i = true by rw [ha]; exact hal, hlt, fun _ _ h => (by cases h), hoth⟩
   nvSt _ h := by cases h
   noInout _ _ _ h := by cases h
+  noRegion _ _ h := by cases h
   wf := ⟨fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h),
     fun _ _ h => (by cases h)⟩
   rootbLive _ _ h := by cases h

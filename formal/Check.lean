@@ -643,6 +643,11 @@ import A3
 #print axioms A2.comp_inner_push_overkills
 #print axioms A2.replace_covers
 #print axioms A2.kill_after_replace
+-- (A2/Region.lean, AGORA-937): after a .replace on a root, nothing depending on it is live
+#print axioms A2.kill_replace_pi_dead
+#print axioms A2.RSetup.canon_noPi
+#print axioms A2.rdsπ_nopi
+#print axioms A2.mem_rdsπ
 -- AGORA-909: a field or payload read of a frame binding of a view-free type that holds
 -- nothing may be fresh (RhsT.fst/snd/getl/getr), so a push through `. b items` of an
 -- `inout` parameter is an `edit false` (A2/FreshProjWitness.lean)

@@ -368,6 +368,10 @@ noncomputable def callS (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) (b
   pty := fun v => ((fn.params[v]?).map (·.2)).getD .int
   N := (argNames Γ args).filter (fun d => !(inoutArgs fn.params args).contains d.root)
   sym := symNames fn.params
+  σ := fun v => if fn.nvars ≤ v ∧ v < fn.nvars + fn.params.length then
+      allKinds (if (argE Γ (args.getD (v - fn.nvars) 0)).ty = .int then []
+        else roots (memDeps (argE Γ (args.getD (v - fn.nvars) 0)).held))
+    else []
 
 /-- What a call's typing says of its arguments, with the caller's names and
     its borrowed parameters' anchors: the part of `CallH` that no run-time
@@ -813,6 +817,7 @@ theorem inoutArgs_mem {ps : List (PMode × Ty)} {args : List Var} {a : Var} (h :
 
 theorem resMode_ne' (fn : Fn) : resMode fn ≠ .rootb := by unfold resMode; split <;> simp
 theorem resMode_inout (fn : Fn) (b : Eff) : resMode fn ≠ .inout b := by unfold resMode; split <;> simp
+theorem resMode_region (fn : Fn) : resMode fn ≠ .region := by unfold resMode; split <;> simp
 
 theorem clean_fixed_iff (E : Entry) : E.clean.fixed ↔ E.fixed := by
   unfold Entry.clean; split <;> simp [Entry.fixed_def]
@@ -1468,6 +1473,20 @@ theorem frame_sat (h : CallH P Γ F x fn args base) :
 
 theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK where
   inj := h.ren_inj
+  noPi _ := rfl
+  σ_sub v d hd := by
+    simp only [callS] at hd
+    split at hd
+    · rename_i hv
+      obtain ⟨hv1, hv2⟩ := hv
+      simp only [allKinds, List.mem_flatMap] at hd ⊢
+      obtain ⟨r, hr, hdr⟩ := hd
+      refine ⟨r, ?_, hdr⟩
+      have hlt : v - fn.nvars < args.length := by
+        rw [h.len]; exact Nat.sub_lt_left_of_lt_add hv1 hv2
+      exact List.mem_flatMap.mpr ⟨args.getD (v - fn.nvars) 0, by simp [List.getD, List.getElem?_eq_getElem hlt],
+        by simpa using hr⟩
+    · cases hd
   Rout r hr := (h.R_facts hr).1
   Rroot r hr := by
     obtain ⟨hout, Er, hEr, hro⟩ := h.R_facts hr
@@ -2496,7 +2515,15 @@ variable {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {args : List V
 
 theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).AbsOK (sigCtx fn) := by
   obtain ⟨_, _, _, _, _, hpar, _⟩ := h.fnok
-  refine ⟨fun v E hv hm => ?_, fun v E b hv hm => ?_, fun v bh hb => ?_⟩
+  refine ⟨fun v E hv hm => ?_, fun v E b hv hm => ?_, fun v bh hb => ?_, fun v E hv =>
+    ⟨fun hr => absurd hr (by
+      unfold sigCtx at hv
+      split at hv
+      · simp only [Option.some.injEq] at hv; subst hv
+        generalize fn.params[v] = pt; obtain ⟨pm, t⟩ := pt; cases pm <;> simp [paramE]
+      · split at hv
+        · simp only [Option.some.injEq] at hv; subst hv; exact resMode_region fn
+        · cases hv), fun hp => by simp [callS] at hp⟩⟩
   · unfold sigCtx at hv
     split at hv
     · rename_i hvl
@@ -2843,7 +2870,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
       rcases hcan with hm | ⟨_, hm, _⟩ <;> rw [hm] <;> rfl
     · -- an `inout` argument: the parameter's binding at the end, lifted
       obtain ⟨w, b, t, rfl, hbw, _, _, _⟩ := RSetup.sym_ren h.sOK hs
-      obtain ⟨Ew, hEw, hm, _⟩ := habΔ.2.2 w (b, false) hbw
+      obtain ⟨Ew, hEw, hm, _⟩ := habΔ.2.2.1 w (b, false) hbw
       refine ⟨_, by rw [RSetup.canon_ρ h.sOK, hEw]; rfl, ?_⟩
       rw [RSetup.liftE_mode _ (by rw [hm]; simp), hm]; rfl
   have hwrap := wrap_typed (pe := callPe Γ fn.params args) (base := base) hbody h.pe_lt hpw

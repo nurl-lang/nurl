@@ -119,6 +119,13 @@ theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = no
       subst hw
       rcases hout.mode with h | h <;> rw [h] <;> simp
     · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noInout w Ew b hw
+  · intro w Ew hw
+    by_cases hwx : w = x
+    · subst hwx
+      simp only [setE, upd_same, Option.some.injEq] at hw
+      subst hw
+      rcases hout.mode with h | h <;> rw [h] <;> simp
+    · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noRegion w Ew hw
   · refine ⟨?live, ?dtorc, ?armc, ?viewc⟩
     case armc =>
       intro w Ew hw hd
@@ -2638,6 +2645,7 @@ theorem viewAt_not_in {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       cases hme : Er.mode with
       | own => rw [hme] at hso; simp [Mode.ownSlot] at hso
       | inout b => exact absurd hme (hi.noInout _ Er b hEr)
+      | region => exact absurd hme (hi.noRegion _ Er hEr)
       | rootb => rfl
       | bor => rw [hme] at hroot; simp [Mode.isRoot] at hroot
   · rcases rootb_anchor hi hanch dep.root Er n0 hEr hrb
@@ -3355,6 +3363,10 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     have hvp : v ≠ p := fun h => by subst h; simp [exitRoot] at hv'
     obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvp
     exact hi.noInout v E b hE
+  · intro v E' hv'
+    have hvp : v ≠ p := fun h => by subst h; simp [exitRoot] at hv'
+    obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvp
+    exact hi.noRegion v E hE
   · have hroot' : ∀ r, (∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) → r ≠ p →
         ∃ Er, exitRoot p (Ep.path ++ Ep.held) Γ r = some Er ∧ Er.mode.isRoot = true := by
       intro r ⟨Er, hEr, hro⟩ hrp
