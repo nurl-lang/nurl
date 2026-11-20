@@ -15484,7 +15484,7 @@ unsafe @ eng_byte s w i k → i {
 // a literal, or handed back - holds: it copies in every capture it held
 // a handle of that has a copy, so only what it cannot copy, the views
 // its captures hold and its pointers into the frame still borrow.
-@ closure_owned i held → i { ^ ( __closure_owned_at held -1 ) }
+@ closure_owned i held → i { ^ ( __closure_owned_at held -1 F ) }
 
 // …what `held` holds once it is put at `dpath` of a call's result (-1: no
 // such place): a closure that is the result itself there, or a capture of
@@ -15492,7 +15492,11 @@ unsafe @ eng_byte s w i k → i {
 // env (nurl_closure_clone), which copies in nothing: it holds the handles
 // its env held (agora #838). An owner that stores it (a field, an
 // element, a payload) adopts it, and that copy copies them in.
-@ __closure_owned_at i held i dpath → i {
+// `ret`: the closure literal is handed back as it is (no owner adopts
+// it): only what it captured of this frame's own bindings is taken over;
+// a parameter's handle it stores as it is, a view of the caller's value
+// (lent through the result, retclo - AGORA-877).
+@ __closure_owned_at i held i dpath b ret → i {
     ? | == held 0 ! ( held_has_clo held ) { ^ held } {}
     : i n ( sq_len held )
     // the closures in it: where (the path above `^f`), and the body
@@ -15533,7 +15537,7 @@ unsafe @ eng_byte s w i k → i {
                 : i hp ( he_path he )
                 : i l ( he_loan he )
                 ? & & & == ( ep_len hp ) + bl 1 == ( ep_parent hp ) base ( ee_is_cap ( ep_last hp ) ) == 0 & ( ee_bits ( ep_last hp ) ) EE_FN {
-                    ? == ( el_kind l ) LK_HANDLE {
+                    ? & == ( el_kind l ) LK_HANDLE ! & ret == ( fv_kind ( pl_var ( el_place l ) ) ) VK_PARAM {
                         : i cty ( efp_ty f ( ee_cap_no ( ep_last hp ) ) )
                         ? & != cty ET_NONE | ( et_copyable cty ) == ( et_kind cty ) EK_CLOSURE {
                             // (a captured closure is copied as any closure kept is)
@@ -15798,7 +15802,7 @@ unsafe @ eng_byte s w i k → i {
         // captured; a binding of one - handed back by name, or assigned to
         // a binding that outlives its captures - holds only copies of their
         // handles
-        = av ( av_make ( av_own av ) ( av_loans av ) ( av_alias av ) ( closure_owned ( av_held av ) ) ( av_call av ) )
+        = av ( av_make ( av_own av ) ( av_loans av ) ( av_alias av ) ( __closure_owned_at ( av_held av ) -1 T ) ( av_call av ) )
     } {}
     ? & & & & & & & >= dest_vid 0 ( fx_has dest_vid FX_OWN_SLOT ) != ( av_loans av ) 0 | == ( av_own av ) OW_L == ( av_own av ) OW_O ! is_ret ! stored & != dest_ty ET_NONE == ( et_kind dest_ty ) EK_S isv {
         // a string binding that owns its value from birth takes its own
@@ -18640,7 +18644,7 @@ unsafe @ eng_byte s w i k → i {
             } {
                 ? == kind LK_HELD {
                     // (a closure the result keeps copies in what it can)
-                    = held ( sq_union held ( held_root ( __closure_owned_at ( held_sub ( av_held av ) rpath ) dpath ) dpath ) )
+                    = held ( sq_union held ( held_root ( __closure_owned_at ( held_sub ( av_held av ) rpath ) dpath F ) dpath ) )
                     ? & & & == rpath 0 == dpath 0 == ( av_own av ) OW_L have_dest {
                         ? ( et_is_view ( fv_ty dest ) ) {
                             // a copy of a view is that view
