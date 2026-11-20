@@ -314,6 +314,16 @@ theorem canon_ρ (h : S.OK) (Γa : Ctx) (v : Var) : S.canon Γa (S.ρ v) = (Γa 
   simp only [canon, inv_ρ h, h.noPi, Bool.false_eq_true, ↓reduceIte]
   cases Γa v <;> simp [subE_nopi h]
 
+/-- AGORA-937: the lifted context binds no region's index: every binding of
+    `canon` is a frame binding or the lift of a callee binding that is no
+    region (`canon_noPi`). So the contexts the memory invariant is stated of
+    hold no region (`MInv.noRegion`). -/
+theorem canon_noPi (h : S.OK) {Γa : Ctx} {v : Var} {E : Entry} (hE : S.canon Γa (S.ρ v) = some E) :
+    S.isPi v = false := by
+  cases hp : S.isPi v
+  · rfl
+  · simp [canon, inv_ρ h, hp] at hE
+
 theorem canon_frame (Γa : Ctx) {y : Var} (hy : ∀ v, S.ρ v ≠ y) : S.canon Γa y = S.Φ y := by
   simp [canon, inv_none hy]
 
