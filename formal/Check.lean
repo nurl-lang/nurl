@@ -640,6 +640,11 @@ import A3
 #print axioms A2.pi_not_fresh
 #print axioms A2.pi_not_heldSrc
 #print axioms A2.RSetup.AbsOK.notPiFresh
+-- AGORA-937: the substitution keeps names (agora #4147) and a weakening, so the
+-- lifted context of a weaker callee context is weaker
+#print axioms A2.RSetup.subD_name
+#print axioms A2.RSetup.subE_weaker
+#print axioms A2.RSetup.canon_weaker_sub
 -- AGORA-909: a field or payload read of a frame binding of a view-free type that holds
 -- nothing may be fresh (RhsT.fst/snd/getl/getr), so a push through `. b items` of an
 -- `inout` parameter is an `edit false` (A2/FreshProjWitness.lean)

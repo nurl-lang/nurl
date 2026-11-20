@@ -155,10 +155,12 @@ theorem liftE_fresh_of {v : Var} {E : Entry} (h : E.mode ≠ .rootb) : (S.liftE 
   rw [liftE_fresh]; split <;> simp [h]
 
 /-- AGORA-937: a lifted dependency on a parameter's region is what the region
-    stands for at the caller (`σ`); any other is kept. -/
+    stands for at the caller (`σ`); any other is kept, and so is a name
+    (agora #4147): no region is named (`NameWF`: a named root owns its slot),
+    and keeping names keeps `EntryWeaker.dheld`'s name/non-name split. -/
 noncomputable def subD (d : Dep) : List Dep :=
   match S.inv d.root with
-  | some v => if S.isPi v then S.σ v else [d]
+  | some v => if S.isPi v && !d.kind.isName then S.σ v else [d]
   | none => [d]
 
 /-- ... applied to what a lifted entry depends on and holds. -/
@@ -193,13 +195,28 @@ theorem mem_subD {d e : Dep} (h : e ∈ S.subD d) :
   · rename_i v hv
     cases hp : S.isPi v
     · rw [hp] at h; simp at h; exact Or.inl h
-    · rw [hp] at h; exact Or.inr ⟨v, hv, hp, h⟩
+    · cases hk : d.kind.isName
+      · rw [hp, hk] at h; exact Or.inr ⟨v, hv, hp, h⟩
+      · rw [hp, hk] at h; simp at h; exact Or.inl h
   · simp at h; exact Or.inl h
+
+/-- AGORA-937: a name is kept. -/
+theorem subD_name {d : Dep} (hk : d.kind.isName = true) : S.subD d = [d] := by
+  unfold subD; split
+  · rw [hk]; simp
+  · rfl
+
+/-- ... so what a region stands for replaces only a dependency that is no
+    name. -/
+theorem mem_subD_sub {d e : Dep} (h : e ∈ S.subD d) (hne : e ≠ d) : d.kind.isName = false := by
+  cases hk : d.kind.isName
+  · rfl
+  · rw [S.subD_name hk] at h; exact absurd (List.mem_singleton.mp h) hne
 
 /-- A dependency on no region is kept. -/
 theorem subD_of_not {d : Dep} (h : ∀ v, S.inv d.root = some v → S.isPi v = false) : S.subD d = [d] := by
   unfold subD; split
-  · rename_i v hv; rw [h v hv]; rfl
+  · rename_i v hv; rw [h v hv]; simp
   · rfl
 
 /-- What a substitution of a list holds: each dependency kept, or one a
@@ -213,6 +230,63 @@ theorem mem_flatMap_subD {ds : List Dep} {e : Dep} (h : e ∈ ds.flatMap S.subD)
 theorem mem_flatMap_subD_of {ds : List Dep} {d : Dep} (hd : d ∈ ds)
     (h : ∀ v, S.inv d.root = some v → S.isPi v = false) : d ∈ ds.flatMap S.subD :=
   List.mem_flatMap.mpr ⟨d, hd, by rw [S.subD_of_not h]; exact List.mem_singleton_self _⟩
+
+/-- AGORA-937: the substitution is monotone in what it substitutes. -/
+theorem flatMap_subD_mono {ds ds' : List Dep} (h : ds ⊆ ds') : ds.flatMap S.subD ⊆ ds'.flatMap S.subD :=
+  fun _ he => by
+    obtain ⟨d, hd, he⟩ := List.mem_flatMap.mp he
+    exact List.mem_flatMap.mpr ⟨d, h hd, he⟩
+
+/-- ... and a dependency that is no name comes only from one that is no
+    name: a name is kept as itself (`subD_name`). -/
+theorem mem_flatMap_subD_nonname {ds : List Dep} {e : Dep} (he : e ∈ ds.flatMap S.subD)
+    (hk : e.kind.isName = false) : ∃ d ∈ ds, d.kind.isName = false ∧ e ∈ S.subD d := by
+  obtain ⟨d, hd, hed⟩ := List.mem_flatMap.mp he
+  refine ⟨d, hd, ?_, hed⟩
+  cases hdk : d.kind.isName
+  · rfl
+  · rw [S.subD_name hdk, List.mem_singleton] at hed; subst hed; rw [hk] at hdk; cases hdk
+
+/-- ... so two lists that agree on what is no name substitute to two that
+    agree on it. -/
+theorem flatMap_subD_nonname_congr {ds ds' : List Dep}
+    (h : ∀ d, d.kind.isName = false → (d ∈ ds' ↔ d ∈ ds)) {e : Dep} (hk : e.kind.isName = false) :
+    e ∈ ds'.flatMap S.subD ↔ e ∈ ds.flatMap S.subD := by
+  constructor
+  · intro he
+    obtain ⟨d, hd, hdk, hed⟩ := S.mem_flatMap_subD_nonname he hk
+    exact List.mem_flatMap.mpr ⟨d, (h d hdk).mp hd, hed⟩
+  · intro he
+    obtain ⟨d, hd, hdk, hed⟩ := S.mem_flatMap_subD_nonname he hk
+    exact List.mem_flatMap.mpr ⟨d, (h d hdk).mpr hd, hed⟩
+
+/-- AGORA-937: the substitution keeps a weakening: it changes only what an
+    entry depends on and holds, monotonically, and keeps names as names. -/
+theorem subE_weaker {E E' : Entry} (hw : EntryWeaker E E') : EntryWeaker (S.subE E) (S.subE E') where
+  ty := by simp [hw.ty]
+  mode := by simp [hw.mode]
+  fixed := fun hf => by
+    have hf0 : E.fixed := by simpa only [Entry.fixed_def, subE_mode, subE_ty] using hf
+    rw [hw.fixed hf0]
+  live := fun hl => by
+    obtain ⟨hl0, hp, hh⟩ := hw.live (by simpa using hl)
+    exact ⟨by simpa using hl0, fun hos => S.flatMap_subD_mono (hp (by simpa using hos)),
+      S.flatMap_subD_mono hh⟩
+  dtor := fun hd => by
+    obtain ⟨hd', hh⟩ := hw.dtor (by simpa using hd)
+    exact ⟨by simpa using hd', S.flatMap_subD_mono hh⟩
+  dbind := by simp [hw.dbind]
+  raise := fun hd => by simpa using hw.raise (by simpa using hd)
+  dheld := fun hdb hos hn d hk => by
+    simp only [subE_held]
+    exact S.flatMap_subD_nonname_congr (hw.dheld (by simpa using hdb) (by simpa using hos)
+      (by simpa using hn)) hk
+  fresh := fun hl hn hb hf => by
+    obtain ⟨hf0, hsub⟩ := hw.fresh (by simpa using hl) (by simpa using hn) (by simpa using hb)
+      (by simpa using hf)
+    exact ⟨by simpa using hf0, S.flatMap_subD_mono hsub⟩
+  heldFresh := fun hn hb hhf => by
+    simpa using hw.heldFresh (by simpa using hn) (by simpa using hb) (by simpa using hhf)
 
 noncomputable def canon (Γa : Ctx) : Ctx := fun y =>
   match S.inv y with
@@ -375,7 +449,7 @@ theorem inv_none {y : Var} (hy : ∀ v, S.ρ v ≠ y) : S.inv y = none := by
     dependency, and every entry. -/
 theorem subD_nopi (h : S.OK) (d : Dep) : S.subD d = [d] := by
   unfold subD; split
-  · rw [h.noPi]; rfl
+  · rw [h.noPi]; simp
   · rfl
 
 theorem subE_nopi (h : S.OK) (E : Entry) : S.subE E = E := by
@@ -928,11 +1002,11 @@ theorem canon_root (h : S.OK) {r : Var} {Er : Entry} (hEr : Γa r = some Er) (hr
     no region: a region's would have been replaced by what it stands for,
     whose roots are the frame's. -/
 theorem subD_kept (h : S.OK) {r : Var} {k : Kind} {e : Dep} (he : e ∈ S.subD ⟨S.ρ r, k⟩)
-    (her : e.root = S.ρ r) : S.isPi r = false := by
+    (her : e.root = S.ρ r) (hk : k.isName = false) : S.isPi r = false := by
   cases hp : S.isPi r
   · rfl
   · exfalso
-    simp only [subD, inv_ρ h, hp, ↓reduceIte] at he
+    simp only [subD, inv_ρ h, hp, hk, Bool.not_false, Bool.and_self, ↓reduceIte] at he
     exact (S.σ_frame h he).1 r her.symm
 
 /-- ... so its root is bound where the call places the body, as the callee
@@ -1037,16 +1111,19 @@ theorem canon_wf (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.cano
     rooted where the call places the body: a callee root (on no region,
     `subD_kept`) lifted, a frame root, or what a region stands for, which is
     the frame's (`σ_frame`). -/
-theorem canon_root_of_subD (h : S.OK) {d e : Dep} (he : e ∈ S.subD d)
-    (hd : (∃ r Er, d.root = S.ρ r ∧ Γa r = some Er ∧ Er.mode.isRoot = true) ∨
+theorem canon_root_of_subD (h : S.OK) (hab : S.AbsOK Γa) {d e : Dep} (he : e ∈ S.subD d)
+    (hd : (∃ r Er, d.root = S.ρ r ∧ Γa r = some Er ∧ Er.mode.isRoot = true ∧
+        (d.kind.isName = true → Er.mode ≠ .region)) ∨
       ((∀ w, S.ρ w ≠ d.root) ∧ ∃ E, S.Φ d.root = some E ∧ E.mode.isRoot = true)) :
     ∃ E', S.canon Γa e.root = some E' ∧ E'.mode.isRoot = true := by
   rcases S.mem_subD he with rfl | ⟨v, _, _, hv⟩
-  · rcases hd with ⟨r, Er, hr, hEr, hro⟩ | ⟨hout, hex⟩
+  · rcases hd with ⟨r, Er, hr, hEr, hro, hnr⟩ | ⟨hout, hex⟩
     · have hnp : S.isPi r = false := by
-        obtain ⟨dr, dk⟩ := e
-        simp only at hr; subst hr
-        exact subD_kept h he rfl
+        cases hk : e.kind.isName
+        · obtain ⟨dr, dk⟩ := e
+          simp only at hr hk; subst hr
+          exact subD_kept h he rfl hk
+        · exact hab.notPi hEr (hnr hk)
       rw [hr]; exact canon_root_sub h hEr hro hnp
     · exact canon_frameRoot h hout hex
   · obtain ⟨hout, hex⟩ := S.σ_frame h hv
@@ -1056,7 +1133,7 @@ theorem canon_root_of_subD (h : S.OK) {d e : Dep} (he : e ∈ S.subD d)
     roots are bound where the call places the body, as roots. A dependency is
     kept (a callee root, lifted, or a frame root) or is what a region stands
     for (a frame root). -/
-theorem canon_live_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) {y : Var} {E' : Entry}
+theorem canon_live_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) (hnW : NameWF Γa) {y : Var} {E' : Entry}
     (hy : S.canon Γa y = some E') (hl : E'.live = true) (hn : E'.ty ≠ .int ∨ E'.mode = .rootb)
     {r : Var} (hr : r ∈ roots E'.vdeps) : ∃ Er, S.canon Γa r = some Er ∧ Er.mode.isRoot = true := by
   rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hyf, hc⟩
@@ -1068,7 +1145,7 @@ theorem canon_live_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) {y : Var}
       rw [subE_vdeps] at hr
       obtain ⟨e, he, rfl⟩ := List.mem_map.mp hr
       obtain ⟨d, hd, hed⟩ := List.mem_flatMap.mp he
-      refine canon_root_of_subD h hed ?_
+      refine canon_root_of_subD h hab hed ?_
       by_cases hrb : E.mode = .rootb
       · have hvd : (S.liftE v E).vdeps = (S.pe v).vdeps := by simp [liftE, hrb, Entry.vdeps]
         rw [hvd] at hd
@@ -1076,7 +1153,7 @@ theorem canon_live_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) {y : Var}
         · exact Or.inr ⟨hout, hex⟩
         · obtain ⟨w, b, t, rfl, hb, _, _, _⟩ := sym_ren h hs
           obtain ⟨Ew, hEw, hm, _⟩ := hab.2.2.1 w (b, false) hb
-          exact Or.inl ⟨w, Ew, rfl, hEw, by rw [hm]; rfl⟩
+          exact Or.inl ⟨w, Ew, rfl, hEw, by rw [hm]; rfl, fun _ => by rw [hm]; simp⟩
       · rw [subE_live, liftE_live] at hl
         have hn' : E.ty ≠ .int ∨ E.mode = .rootb := by
           rcases hn with h' | h'
@@ -1084,7 +1161,14 @@ theorem canon_live_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) {y : Var}
           · rw [subE_mode, liftE_rootb h] at h'; exact absurd h' hrb
         rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
         · obtain ⟨Er, hEr, hro⟩ := hw v E hE hl hn' d0.root (List.mem_map_of_mem hd0)
-          exact Or.inl ⟨d0.root, Er, rfl, hEr, hro⟩
+          -- a name's root owns its slot (`NameWF`), and a region does not
+          refine Or.inl ⟨d0.root, Er, rfl, hEr, hro, fun hk => ?_⟩
+          cases hkd : d0.kind with
+          | name b t =>
+            obtain ⟨Er', hEr', _, _, _, ho, _⟩ := hnW v E hE hl hn' d0 hd0 b t hkd
+            rw [hEr] at hEr'; cases hEr'
+            intro hr; rw [hr] at ho; cases ho
+          | _ => simp [Dep.ren, hkd, Kind.isName] at hk
         · exact Or.inr ⟨A_out h ha, A_root h ha⟩
   · rw [hc] at hy; cases hy
   · rw [hc] at hy
@@ -1100,8 +1184,9 @@ theorem canon_live_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) {y : Var}
 
 /-- AGORA-937: `canon_wf` with regions: the lifted context is well formed
     under the lift's substitution. -/
-theorem canon_wf_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.canon Γa) := by
-  refine ⟨fun y E' hy hl hn r hr => canon_live_sub h hab hw hy hl hn hr,
+theorem canon_wf_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) (hnW : NameWF Γa) :
+    CtxWF (S.canon Γa) := by
+  refine ⟨fun y E' hy hl hn r hr => canon_live_sub h hab hw hnW hy hl hn hr,
     fun y E' hy hd hos hn d hdd hnm => ?_, fun y E' hy ha => ?_, fun y E' hy hd => ?_⟩
   · rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hyf, hc⟩
     · rw [hc] at hy
@@ -1121,10 +1206,10 @@ theorem canon_wf_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.
             · rw [subE_ty, liftE_ty v hrb] at h'; exact Or.inl h'
             · rw [subE_mode, liftE_rootb h] at h'; exact absurd h' hrb
           rcases S.mem_subD hdd1 with rfl | ⟨_, _, _, hv⟩
-          · refine canon_root_of_subD h hdd1 ?_
+          · refine canon_root_of_subD h hab hdd1 ?_
             rcases liftE_vdeps_cases hrb hd1 with ⟨d0, hd0, rfl⟩ | ha
             · obtain ⟨Er, hEr, hro⟩ := hw.dtor v E hE hd hos0 hn' d0 hd0 (by simpa [Dep.ren] using hnm)
-              exact Or.inl ⟨d0.root, Er, rfl, hEr, hro⟩
+              exact Or.inl ⟨d0.root, Er, rfl, hEr, hro, fun hk => absurd hk (by simpa [Dep.ren] using hnm)⟩
             · exact Or.inr ⟨A_out h ha, A_root h ha⟩
           · obtain ⟨hout, hex⟩ := S.σ_frame h hv
             exact canon_frameRoot h hout hex
@@ -1266,7 +1351,7 @@ theorem canon_names_sub (h : S.OK) (hab : S.AbsOK Γa) (hn : NameWF Γa) : NameW
           rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
           · obtain ⟨Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩ := hn v E hE hl hn' d0 hd0 b t hk
             have hrb' : Er.mode ≠ .rootb := fun e => by rw [e] at ho; cases ho
-            have hnp : S.isPi d0.root = false := subD_kept h hed rfl
+            have hnp : S.isPi d0.root = false := hab.notPi hEr (fun e => by rw [e] at ho; cases ho)
             refine ⟨S.subE (S.liftE d0.root Er), by
                 show S.canon Γa (S.ρ d0.root) = _; rw [canon_ρ_sub h, hnp, hEr]; rfl,
               by rw [subE_live, liftE_live]; exact hlr,
@@ -1318,6 +1403,37 @@ theorem canon_weaker (h : S.OK) {Γa Γa' : Ctx} (hab' : S.AbsOK Γa') (hw' : Ct
           subst h1 h2
           exact liftE_weaker ((hw.1 v).2 E0 E0' hE hE')
             (by rw [← ((hw.1 v).2 E0 E0' hE hE').mode]; exact hab'.ne_region hE' (h.noPi v))
+    · rw [hc] at h1; rw [canon_frame _ hy] at h2
+      rw [h1] at h2; cases h2; exact EntryWeaker.refl _
+
+/-- AGORA-937: `canon_weaker` with regions: a weakening of the callee context
+    is one of the lifted context. A region's index is dropped on both sides,
+    and the substitution keeps a weakening (`subE_weaker`). -/
+theorem canon_weaker_sub (h : S.OK) {Γa Γa' : Ctx} (hab' : S.AbsOK Γa') (hw : Weaker Γa Γa') :
+    Weaker (S.canon Γa) (S.canon Γa') := by
+  refine ⟨fun y => ⟨?_, fun E E' h1 h2 => ?_⟩, canon_wf_sub h hab' hw.wf hw.names,
+    canon_names_sub h hab' hw.names⟩
+  · rcases canon_cases_sub h Γa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, hp, hc⟩ | ⟨hy, hc⟩
+    · rw [hc, canon_ρ_sub h, hp]; simp only [Option.map_eq_none_iff, ↓reduceIte, Bool.false_eq_true]
+      exact (hw.1 v).1
+    · rw [hc, canon_ρ_sub h, hp]; simp
+    · rw [hc, canon_frame _ hy]
+  · rcases canon_cases_sub h Γa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, hp, hc⟩ | ⟨hy, hc⟩
+    · rw [hc] at h1; rw [canon_ρ_sub h, hp] at h2
+      simp only [↓reduceIte, Bool.false_eq_true] at h2
+      cases hE : Γa v with
+      | none => rw [hE] at h1; cases h1
+      | some E0 =>
+        cases hE' : Γa' v with
+        | none => rw [hE'] at h2; cases h2
+        | some E0' =>
+          rw [hE] at h1; rw [hE'] at h2
+          simp only [Option.map_some, Option.some.injEq, Function.comp] at h1 h2
+          subst h1 h2
+          have hwe := (hw.1 v).2 E0 E0' hE hE'
+          exact S.subE_weaker (liftE_weaker hwe
+            (by rw [← hwe.mode]; exact hab'.ne_region hE' hp))
+    · rw [hc] at h1; cases h1
     · rw [hc] at h1; rw [canon_frame _ hy] at h2
       rw [h1] at h2; cases h2; exact EntryWeaker.refl _
 
