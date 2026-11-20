@@ -631,6 +631,7 @@ import A3
 #print axioms A2.kill_after_replace
 -- (A2/Region.lean, AGORA-937): a parameter's region snapshot owns nothing
 #print axioms A2.viewsOf_noown
+#print axioms A2.kill_replace_pi_dead
 -- AGORA-909: a field or payload read of a frame binding of a view-free type that holds
 -- nothing may be fresh (RhsT.fst/snd/getl/getr), so a push through `. b items` of an
 -- `inout` parameter is an `edit false` (A2/FreshProjWitness.lean)
