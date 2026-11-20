@@ -368,6 +368,10 @@ noncomputable def callS (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) (b
   pty := fun v => ((fn.params[v]?).map (·.2)).getD .int
   N := (argNames Γ args).filter (fun d => !(inoutArgs fn.params args).contains d.root)
   sym := symNames fn.params
+  σ := fun v => if fn.nvars ≤ v ∧ v < fn.nvars + fn.params.length then
+      allKinds (if (argE Γ (args.getD (v - fn.nvars) 0)).ty = .int then []
+        else roots (memDeps (argE Γ (args.getD (v - fn.nvars) 0)).held))
+    else []
 
 /-- What a call's typing says of its arguments, with the caller's names and
     its borrowed parameters' anchors: the part of `CallH` that no run-time
@@ -1470,6 +1474,19 @@ theorem frame_sat (h : CallH P Γ F x fn args base) :
 theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK where
   inj := h.ren_inj
   noPi _ := rfl
+  σ_sub v d hd := by
+    simp only [callS] at hd
+    split at hd
+    · rename_i hv
+      obtain ⟨hv1, hv2⟩ := hv
+      simp only [allKinds, List.mem_flatMap] at hd ⊢
+      obtain ⟨r, hr, hdr⟩ := hd
+      refine ⟨r, ?_, hdr⟩
+      have hlt : v - fn.nvars < args.length := by
+        rw [h.len]; exact Nat.sub_lt_left_of_lt_add hv1 hv2
+      exact List.mem_flatMap.mpr ⟨args.getD (v - fn.nvars) 0, by simp [List.getD, List.getElem?_eq_getElem hlt],
+        by simpa using hr⟩
+    · cases hd
   Rout r hr := (h.R_facts hr).1
   Rroot r hr := by
     obtain ⟨hout, Er, hEr, hro⟩ := h.R_facts hr

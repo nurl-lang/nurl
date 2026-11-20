@@ -177,6 +177,9 @@ structure RSetup.OK (S : RSetup) : Prop where
   inj    : ∀ v w, S.ρ v = S.ρ w → v = w
   /-- AGORA-937 (stage 2a): no callee binding is a region yet. -/
   noPi   : ∀ v, S.isPi v = false
+  /-- AGORA-937: what a region stands for is what the arguments hold, in every
+      way: the frame's roots the call freezes (`σ_sub`). -/
+  σ_sub  : ∀ v, S.σ v ⊆ allKinds S.R
   Rout   : ∀ r ∈ S.R, ∀ v, S.ρ v ≠ r
   Rroot  : ∀ r ∈ S.R, ∃ E, S.Φ r = some E ∧ E.mode.isRoot = true
   Fcout  : ∀ v, S.ρ v ∉ S.Fc
