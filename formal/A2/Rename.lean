@@ -165,6 +165,47 @@ noncomputable def subD (d : Dep) : List Dep :=
 noncomputable def subE (E : Entry) : Entry :=
   { E with path := E.path.flatMap S.subD, held := E.held.flatMap S.subD }
 
+/-- AGORA-937: the substitution changes only what an entry depends on and
+    holds. -/
+@[simp] theorem subE_ty (E : Entry) : (S.subE E).ty = E.ty := rfl
+@[simp] theorem subE_mode (E : Entry) : (S.subE E).mode = E.mode := rfl
+@[simp] theorem subE_live (E : Entry) : (S.subE E).live = E.live := rfl
+@[simp] theorem subE_dtor (E : Entry) : (S.subE E).dtor = E.dtor := rfl
+@[simp] theorem subE_dbind (E : Entry) : (S.subE E).dbind = E.dbind := rfl
+@[simp] theorem subE_fresh (E : Entry) : (S.subE E).fresh = E.fresh := rfl
+@[simp] theorem subE_heldFresh (E : Entry) : (S.subE E).heldFresh = E.heldFresh := rfl
+@[simp] theorem subE_path (E : Entry) : (S.subE E).path = E.path.flatMap S.subD := rfl
+@[simp] theorem subE_held (E : Entry) : (S.subE E).held = E.held.flatMap S.subD := rfl
+
+/-- A substituted dependency is either kept, or one a region stands for. -/
+theorem mem_subD {d e : Dep} (h : e ∈ S.subD d) :
+    e = d ∨ ∃ v, S.inv d.root = some v ∧ S.isPi v = true ∧ e ∈ S.σ v := by
+  unfold subD at h
+  split at h
+  · rename_i v hv
+    cases hp : S.isPi v
+    · rw [hp] at h; simp at h; exact Or.inl h
+    · rw [hp] at h; exact Or.inr ⟨v, hv, hp, h⟩
+  · simp at h; exact Or.inl h
+
+/-- A dependency on no region is kept. -/
+theorem subD_of_not {d : Dep} (h : ∀ v, S.inv d.root = some v → S.isPi v = false) : S.subD d = [d] := by
+  unfold subD; split
+  · rename_i v hv; rw [h v hv]; rfl
+  · rfl
+
+/-- What a substitution of a list holds: each dependency kept, or one a
+    region it named stands for. -/
+theorem mem_flatMap_subD {ds : List Dep} {e : Dep} (h : e ∈ ds.flatMap S.subD) :
+    ∃ d ∈ ds, e = d ∨ ∃ v, S.inv d.root = some v ∧ S.isPi v = true ∧ e ∈ S.σ v := by
+  obtain ⟨d, hd, he⟩ := List.mem_flatMap.mp h
+  exact ⟨d, hd, S.mem_subD he⟩
+
+/-- ... and keeps every dependency on no region. -/
+theorem mem_flatMap_subD_of {ds : List Dep} {d : Dep} (hd : d ∈ ds)
+    (h : ∀ v, S.inv d.root = some v → S.isPi v = false) : d ∈ ds.flatMap S.subD :=
+  List.mem_flatMap.mpr ⟨d, hd, by rw [S.subD_of_not h]; exact List.mem_singleton_self _⟩
+
 noncomputable def canon (Γa : Ctx) : Ctx := fun y =>
   match S.inv y with
   | some v => if S.isPi v then none else (Γa v).map (S.subE ∘ S.liftE v)
