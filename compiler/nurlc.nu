@@ -14854,15 +14854,16 @@ unsafe @ eng_byte s w i k → i {
 
 // An effect at `path` inside a part of `vid`'s value that is a view (`hd`:
 // what the value holds, as held entries): it is done to what the view points
-// into. (check.py's effect_in_views.)
-@ eng_effect_in_views i st i vid i hd i path i eff i line i depth → v {
+// into. `base`: the field path of `vid` the value is, when it is a field's
+// (agora #949). (check.py's effect_in_views.)
+@ eng_effect_in_views i st i vid i hd i path i eff i line i depth i base → v {
     : ~ i k 0
     ~ < k ( sq_len hd ) {
         : i he ( sq_at hd k )
         : i hp ( he_path he )
         : i l ( he_loan he )
         ? & & & & != hp 0 < ( ep_len hp ) ( ep_len path ) ( ep_prefix hp path ) ( el_is_loan l ) == ( el_kind l ) LK_VIEW {
-            : i hty ( eng_ty_of ( pl_make vid hp ) )
+            : i hty ( eng_ty_of ( pl_make vid ? == base 0 hp ( ep_cat base hp ) ) )
             ? & != hty ET_NONE ( et_is_view hty ) {
                 : i q ( el_place l )
                 : i qv ( pl_var q )
@@ -14995,7 +14996,7 @@ unsafe @ eng_byte s w i k → i {
         // another binding's buffer (`= . x w ( slice_from_vec … )`, then
         // `( slice_put . x w 0 … )`): what is done there is done to what the
         // view points into, as for a binding that is a view
-        ( eng_effect_in_views st vid ( av_held av ) path eff line depth )
+        ( eng_effect_in_views st vid ( av_held av ) path eff line depth 0 )
     } {}
     ? & & | | == eff EF_REALLOC == eff EF_DROP == eff EF_PERMUTE != ( av_held av ) 0 ! & == ( av_own av ) OW_L == path 0 {
         // a part of the value that is a copy of another place's String or
@@ -18771,12 +18772,15 @@ unsafe @ eng_byte s w i k → i {
             ( eng_effect st ( pl_make ( pl_var ok ) ( ep_cat ( pl_path ok ) epath ) ) eff line 0 )
             = g_fc_weak 0
             : i cav ( st_av st ( pl_var ok ) )
-            ? & & & != epath 0 == ( pl_path ok ) 0 != cav 0 & == ( av_own cav ) OW_M != ( av_held ( wv_at avs ek ) ) 0 {
+            // (…a field of a binding the callee took, `( f . h vs )` with f
+            // `sink`, as much as a binding: agora #949)
+            : b took ? == ( pl_path ok ) 0 & != cav 0 == ( av_own cav ) OW_M ( sm_has sm SM_CONSUMES ek )
+            ? & & != epath 0 took != ( av_held ( wv_at avs ek ) ) 0 {
                 // (an argument the callee took: what it does inside a part of
                 // it that is a view - a grow through an element of one of the
                 // slices a `Vec` of slices holds - is done to what that view
                 // points into, which the caller still has; agora #933)
-                ( eng_effect_in_views st ( pl_var ok ) ( av_held ( wv_at avs ek ) ) epath eff line 0 )
+                ( eng_effect_in_views st ( pl_var ok ) ( av_held ( wv_at avs ek ) ) epath eff line 0 ( pl_path ok ) )
             } {}
             // (a library function that drops or replaces elements - `vec_clear`
             // over a Vec of a type with a `% Drop` of the program's own - runs
@@ -39279,6 +39283,18 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // #349.)
         : s __lsx ? __row_callee arg_xsx ``
         ? & & != 0 ( nurl_str_len arg_rsx ) == 0 ( nurl_str_len __lsx ) ( bck_sound ) { = __sxr_uses ( __bck_sxr_note arg_rsx ( nurl_lex_line lex ) call_name arg_idx at __sxr_uses ) } {}
+        // (…and a call's result holding views in its own storage - a `Vec` of
+        // slices, `( f ( identity vv ) )`, `( f ( wrap ( slice_from_vec w ) )
+        // )`: a `pendhv` row by its source expression, so the walk ends what
+        // points into the buffers of the elements of what it views where the
+        // callee may move one (__bck_hv_sweep, agora #949). A lending call's
+        // `pendlend` row above asks where its stores land, not what it
+        // views.)
+        // (…a join of such values too, `? c ( identity vv ) vv2`: its sx's
+        // held sources are each arm's.)
+        // (A number, a raw pointer, an `s` - most arguments - holds no
+        // container of views: asked first, by the type's first byte.)
+        ? & __row_callee | | == arg_eff_tt TT_LPAREN == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST { ( __gc_hv_note at arg_sx ( nurl_lex_line lex ) __rc arg_idx ) } {}
         ? != 0 ( nurl_str_len __lsx ) {
             ( bck_stash_pending_sx __lsx ( nurl_lex_line lex ) __rc arg_idx ? | == arg_eff_tt TT_QUEST == arg_eff_tt TT_QUESTQUEST `pendjoin` `pendlend` )
             ( __clo_effect_note_sx __lsx __rc arg_idx )
@@ -39432,7 +39448,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             ? ( str_has_index callee_sink arg_idx ) {
                 : s __sk_ll ( nurl_llty at )
                 ? ( __sva_ty syms __sk_ll ) { ( bck_stash_sva_sink bck_arg_val ( nurl_lex_line lex ) __rc arg_idx ) } {}
-                ? & | ! ( bck_sound ) == 0 ( nurl_str_len ( __rc_reach __sk_ll ) ) ( __ty_holds_view_p __sk_ll ) { ( bck_stash_view_sink bck_arg_val ( nurl_lex_line lex ) __rc arg_idx ) } {}
+                ( __gc_view_sink_note __sk_ll bck_arg_val ( nurl_lex_line lex ) __rc arg_idx )
             } {}
         } {}
         // (A value that holds nothing — a number, a struct of numbers — is
@@ -60868,7 +60884,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
     ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 ? ( seq k `fborrow` ) 7 ? ( seq k `fborrowh` ) 7 0 } {}
     ? == c 116 { ^ ? ( seq k `take` ) 37 ? ( seq k `tborrow` ) 7 ? ( seq k `tryret` ) 39 0 } {}
-    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 ? ( seq k `pendsva` ) 46 ? ( seq k `pendslit` ) 47 ? ( seq k `pendwhole` ) 48 0 } {}
+    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 ? ( seq k `pendsva` ) 46 ? ( seq k `pendslit` ) 47 ? ( seq k `pendwhole` ) 48 ? ( seq k `pendhv` ) 49 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
     ? == c 99 { ^ ? ( seq k `cdep` ) 17 ? ( seq k `cmove` ) 18 ? ( seq k `cnt` ) 22 ? ( seq k `cond` ) 25 ? ( seq k `callx` ) 31 ? ( seq k `clox` ) 34 ? ( seq k `cborrow` ) 7 0 } {}
@@ -63763,7 +63779,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
         // (`pendslit`: a literal argument that may view its own storage —
         // __bck_slit_check, agora #563.)
         ? == kc 47 { ( __bck_slit_check rec ) } {}
-        ? | | | | | | == kc 1 == kc 40 == kc 43 == kc 44 == kc 46 == kc 47 == kc 48 { = p + p 1 } {
+        // (`pendhv`: a call's result holding views handed to a callee that
+        // may move the buffer of an element of what it views - __bck_hv_sweep,
+        // agora #949.)
+        ? == kc 49 { = st ( __bck_hv_sweep st rec ) } {}
+        ? | | | | | | | == kc 1 == kc 40 == kc 43 == kc 44 == kc 46 == kc 47 == kc 48 == kc 49 { = p + p 1 } {
             ? | == kc 21 == kc 22 {
                 // Into the innermost loop's exit / back-edge accumulator —
                 // leaving every block up to its body, whose bindings go here.
@@ -71845,7 +71865,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             // elements are those of what the view points into. What points
             // into the buffers of the elements of each source the argument
             // holds a view of (`vds_`) ends too; agora #933.)
-            : ~ s vdrest ( __src_plain ( nurl_sym_get g_bck ( bck_bkey `vds_` ( nurl_str_int wid ) ) ) )
+            : ~ s vdrest ( __src_plain ( __bck_vds_or_root wid wroot ) )
             ~ != 0 ( nurl_str_len vdrest ) {
                 : s vdw ( str_first_word vdrest ) = vdrest ( str_skip_word vdrest )
                 : i vdid ( nurl_str_to_int vdw )
@@ -72522,6 +72542,85 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 } {}
             }
         } {}
+    }
+    ^ out
+}
+
+// Does a value of LLVM type `lty` hold views in its own storage that are no
+// view of it itself - a `Vec` of slices, a struct with a view field - so an
+// element read out of it may be a view whose elements a callee grows? A bare
+// slice is the view: its elements are its source's, which its lending
+// call's `pendlend` row already reaches (agora #933). Asked once per type
+// (g_hv_memo: 2 yes, 1 no; -1 not asked yet), as gen_call asks it of most call arguments.
+: ~ i g_hv_memo 0
+
+@ __hv_ty s lty → b {
+    ? == 0 g_hv_memo { = g_hv_memo ( nurl_sym_new ) } {}
+    : i m ( nurl_sym_int g_hv_memo lty )
+    ? > m 0 { ^ == m 2 } {}
+    // (…asked of its LLVM spelling, once: a struct's or a container's
+    // begins `%`.)
+    : s ll ( nurl_llty lty )
+    : b r & & == 37 ( nurl_str_get ll 0 ) == 0 ( nurl_str_starts ll `%Slice__` ) ( __ty_own_view_p ll )
+    ( nurl_sym_def g_hv_memo lty ? r `2` `1` )
+    ^ r
+}
+
+// The sources binding path `wid` holds views of (`vds_`) - a field of a
+// binding, `. h vs` handed over, with none recorded of its own: those its
+// binding `wroot` holds (agora #949).
+@ __bck_vds_or_root i wid i wroot → s {
+    : s vd ( nurl_sym_get g_bck ( bck_bkey `vds_` ( nurl_str_int wid ) ) )
+    ? | == wid wroot != 0 ( nurl_str_len vd ) { ^ vd } {}
+    ^ ( nurl_sym_get g_bck ( bck_bkey `vds_` ( nurl_str_int wroot ) ) )
+}
+
+// gen_call's notes for an argument handed to a grower (agora #949), kept out
+// of gen_call_body: a binding handed to a `sink` parameter, of type `ll`,
+// that may hold views - a `pendsink` row (not again where the Rc rule made
+// one) ...
+@ __gc_view_sink_note s ll s name i line s callee i argidx → v {
+    ? & | ! ( bck_sound ) == 0 ( nurl_str_len ( __rc_reach ll ) ) ( __ty_holds_view_p ll ) { ( bck_stash_view_sink name line callee argidx ) } {}
+}
+
+// ... and a call's result or a join of such, of type `at`, holding views in
+// its own storage: a `pendhv` row by its source expression `sx`. (A number
+// or an `s` - most arguments - is told by one byte, and a nested call's sx,
+// long, is there by one byte too.)
+@ __gc_hv_note s at s sx i line s callee i argidx → v {
+    : i c0 ( nurl_str_get at 0 )
+    ? ! & & & != c0 105 != c0 100 != 0 ( nurl_str_get sx 0 ) ( bck_sound ) { ^ v } {}
+    ? ( __hv_ty at ) { ( bck_stash_pending_sx sx line callee argidx `pendhv` ) } {}
+}
+
+// A `pendhv` row: a call's result holding views in its own storage (a `Vec` of slices, `( f ( identity vv ) )`), handed to a
+// callee, named by its source expression `@sx`. Where the callee may move
+// the buffer of an element of what it is handed (g_fn_ireallocs), what
+// points into the buffers of the elements of each source the value holds a
+// view of (bck_sx_held_sources) ends, as for a binding's `vds_` in
+// bck_borrow_sweep0 (agora #933, #949). An sx not modelled (`*`) has no
+// sources to name; it is the same answer bck_sx_row_sweep gives one.
+@ __bck_hv_sweep s st s rec → s {
+    ? | == 0 g_irealloc_any == 0 g_bck_has_borrow { ^ st } {}
+    : s cal ( bck_field rec 5 )
+    ? ! ( nurl_sym_has_word g_fn_ireallocs cal ( bck_field rec 6 ) ) { ^ st } {}
+    : s w1 ( bck_field rec 1 )
+    : s sx ( nurl_str_slice w1 1 - ( nurl_str_len w1 ) 1 )
+    : s held ( bck_sx_held_sources st sx )
+    ? | == 0 ( nurl_str_len held ) ( seq held `*` ) { ^ st } {}
+    // (A call is named by its callee; a join or a block of them, `{…}`, as
+    // the value handed.)
+    : i lp ( nurl_str_find sx `(` )
+    : i c0 ( nurl_str_get sx 0 )
+    : b named & > lp 0 | | == c0 95 & >= c0 97 <= c0 122 & >= c0 65 <= c0 90
+    : s what ? named ( nurl_str_cat3 `the result of '` ( bck_fn_show ( nurl_str_slice sx 0 lp ) ) `'` ) ( nurl_str_cat `the value handed` `` )
+    : s why ( nurl_str_cat4 what `, which holds a view of it, was passed to '` ( bck_fn_show cal ) `', which may move the buffer of one of the elements it views` )
+    : ~ s out st
+    : ~ s rest ( __src_plain held )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i id ( nurl_str_to_int w )
+        ? >= id 0 { = out ( bck_view_end_ind out id ( bck_field_int rec 3 ) why ) } {}
     }
     ^ out
 }

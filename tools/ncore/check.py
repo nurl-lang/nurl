@@ -878,14 +878,15 @@ class FnCheck:
                             out.add((q[0], (tuple(q[1]) + p[len(hp):])[:PATH_MAX]))
         return out
 
-    def effect_in_views(self, st, vid, held, path, eff, line, depth=0, weak=False):
+    def effect_in_views(self, st, vid, held, path, eff, line, depth=0, weak=False, base=()):
         """An effect at `path` inside a part of `vid`'s value that is a view
         (`held`: what the value holds, `(part, loan)`): it is done to what the
-        view points into."""
+        view points into. `base`: the field path of `vid` the value is, when
+        it is a field's (agora #949)."""
         for hp, l in held:
             if (hp and len(hp) < len(path) and path[:len(hp)] == hp and l in self.loans
                     and self.loans[l][1] == "view"):
-                hty = self.ty_of_place((vid, hp))
+                hty = self.ty_of_place((vid, tuple(base) + tuple(hp)))
                 if hty is not None and hty[0] in VIEW_TYPES:
                     q = self.loans[l][0]
                     if q[0] >= 0 and q[0] in st.vals:
@@ -2178,13 +2179,17 @@ class FnCheck:
                 self.effect(st, (ops[k][1], ops[k][2] + tuple(path)), eff, line,
                             weak=eff == "replace" and not path and k in sm.get("keeps", ()))
                 cur = st.vals.get(ops[k][1])
-                if path and not ops[k][2] and cur is not None and cur.own == "M" and avs[k].held:
+                # (…a field of a binding the callee took, `( f . h vs )` with f
+                # `sink`, as much as a binding: agora #949)
+                took = (cur is not None and cur.own == "M") if not ops[k][2] else k in sm.get("consumes", ())
+                if path and took and avs[k].held:
                     # (an argument the callee took: what it does inside a part
                     # of it that is a view - a grow through an element of one
                     # of the slices a `Vec` of slices holds - is done to what
                     # that view points into, which the caller still has;
                     # agora #933)
-                    self.effect_in_views(st, ops[k][1], avs[k].held, tuple(path), eff, line)
+                    self.effect_in_views(st, ops[k][1], avs[k].held, tuple(path), eff, line,
+                                         base=tuple(ops[k][2]))
                 if (eff == "replace" and not path and not ops[k][2] and k < len(sm["modes"])
                         and sm["modes"][k] == "inout"):
                     # (a binding an `inout` callee may give a value of its
