@@ -14312,6 +14312,9 @@ unsafe @ eng_byte s w i k → i {
         : i t ( sm_at sm SM_EFFECTS e )
         : i eff ( tp_at t 3 2 )
         : i p ( tp_at t 3 1 )
+        // (`permute` is not mapped: a sort moves the elements' handles in their
+        // slots, but a view of an element's own buffer stays valid, and a view
+        // into the sorted buffer sees the same storage)
         : ~ b scalar F
         ? & == eff EF_REPLACE ! ( eng_path_no_star p ) {
             // (a number written into a buffer's element ends nothing another
