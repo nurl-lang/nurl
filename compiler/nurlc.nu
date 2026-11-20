@@ -13534,6 +13534,16 @@ unsafe @ eng_byte s w i k → i {
     ^ ( et_field up ( ee_name e ) )
 }
 
+// Is a closure call's result of type `t` one codegen hands back as the
+// caller's own slice (mem_clo_ret_copies_slc: an owned slice of elements
+// that hold no view and copy)?
+@ __eng_clo_slc_own i t → b {
+    : s ll ( eng_str ( et_at t ET_NAME ) )
+    ? | == 0 g_auto_drop_strings ! ( __owned_slice_ty ll ) { ^ F } {}
+    ? ( __ty_holds_view_p ( nurl_llty ( __owned_slice_elem ll ) ) ) { ^ F } {}
+    ^ ( __slice_result_copies ll g_root_syms )
+}
+
 @ eng_ty_of i pl → i { ^ ( eng_ty_at ( fv_ty ( pl_var pl ) ) ( pl_path pl ) ) }
 
 // ── Ownership engine: per-variable notes of the function ─────────────
@@ -19086,7 +19096,9 @@ unsafe @ eng_byte s w i k → i {
                                 // released under it. One the body takes over
                                 // (`sink`), or a number, is the body's own.)
                                 : i aop ( wv_at ops + a 1 )
-                                : i aty ( eng_ty_of aop )
+                                // (A constant argument, `( f F )`, is no place:
+                                // its type is not asked - AGORA-869.)
+                                : i aty ? ( op_is_place aop ) ( eng_ty_of aop ) ET_NONE
                                 ? & & & & ! hit ( op_is_place aop ) == ( pl_var aop ) ( pl_var ch ) != ( sm_mode f + ncap a ) PM_SINK & != aty ET_NONE ! ( et_scalar aty ) {
                                     : b psc & | | == eff EF_REPLACE == eff EF_DROP == eff EF_TAKE ( eng_owns_nothing ch )
                                     ? ( kills_paths eff ( pl_path ch ) aop ( pl_path aop ) LK_HANDLE psc ) {
@@ -20308,6 +20320,11 @@ unsafe @ eng_byte s w i k → i {
         : i av ( call_closure st ops at line dest_ty )
         ( wv_drop ops )
         ? & != dest_ty ET_NONE ( et_scalar dest_ty ) { ^ g_av_none } {}
+        // (…an owned slice whose elements hold no view and copy: codegen
+        // hands the caller a slice of its own on every run, the closure's or
+        // a copy (mem_clo_ret_copies_slc, agora #894), so it borrows nothing
+        // of what the call was handed - AGORA-869.)
+        ? & != dest_ty ET_NONE ( __eng_clo_slc_own dest_ty ) { ^ ( av_make OW_O 0 0 0 F ) } {}
         ^ av
     } {}
     ? == k RV_SCALAR {
