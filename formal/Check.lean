@@ -645,8 +645,6 @@ import A3
 #print axioms A2.kill_after_replace
 -- (A2/Region.lean, AGORA-937): after a .replace on a root, nothing depending on it is live
 #print axioms A2.kill_replace_pi_dead
-#print axioms A2.RSetup.canon_noPi
-#print axioms A2.rdsπ_nopi
 #print axioms A2.mem_rdsπ
 -- AGORA-937: a region is no frame binding, has no slot, and is never a (held-)fresh
 -- source; a region's index is always bound, so a fresh binding is never a region
@@ -654,9 +652,11 @@ import A3
 #print axioms A2.pi_not_fresh
 #print axioms A2.pi_not_heldSrc
 #print axioms A2.RSetup.AbsOK.notPiFresh
--- AGORA-937: the substitution keeps names (agora #4147) and a weakening, so the
+-- AGORA-937: the substitution keeps a name on no region and drops one on a region
+-- (agora #4191: no region is ever changed by name), and keeps a weakening, so the
 -- lifted context of a weaker callee context is weaker
 #print axioms A2.RSetup.subD_name
+#print axioms A2.RSetup.name_kill_not_region
 #print axioms A2.RSetup.subE_weaker
 #print axioms A2.RSetup.canon_weaker_sub
 -- AGORA-937: no name is on a region (NameWF), and the substitution is idempotent, so what
