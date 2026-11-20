@@ -18113,7 +18113,10 @@ unsafe @ eng_byte s w i k → i {
         : i tj ( tp_at t 5 0 )
         : i tk ( tp_at t 5 2 )
         : i tkind ( tp_at t 5 4 )
-        ? & & & | == tkind SK_VALUE == tkind LK_HANDLE < tj n < tk n ( op_is_place ( wv_at ops tj ) ) {
+        // (…or what the argument holds, LK_HELD: a wrapper that sends its
+        // parameter, `( chan_send ch xs )`, stores the views its argument
+        // holds where the other thread receives them - AGORA-812, AGORA-869)
+        ? & & & | | == tkind SK_VALUE == tkind LK_HANDLE == tkind LK_HELD < tj n < tk n ( op_is_place ( wv_at ops tj ) ) {
             : i sav ( wv_at avs tk )
             : b sclo ( held_has_clo ( av_held sav ) )
             // (…and any other value stored there may be read by the other
