@@ -8923,6 +8923,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // `% Drop` of its own that could read it, else its own copy (a field of
     // a parameter or behind a pointer stays a lend).
     : ~ b ret_field_copy F
+    : ~ b ret_tf_slice F
     // A field taken out of a call's result (`^ . ( mk ) name`, h266): the
     // caller's own where the call handed the result over, lent where it
     // lent it (`^ . ( vec_at [Bx] bxs 0 ) items`) — answered per call, as
@@ -8937,6 +8938,15 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             = val ( mem_emit_cloneif cg ( nurl_get_last_type ) val ( mem_hown_static syms cg __tfc ) )
         } {}
         = hbit __tfo
+        // (An owned slice taken out so, `^ . ( mkb ) s`, answers by that
+        // flag as a String does: it is no lend of a parameter, and the
+        // fresh-slice veto below is not asked of it; agora #936.)
+        // (…and its callers ask its module-end constant for the slice, as
+        // for a callee that answers per call: `rettf##`, __slice_call_run_bit.)
+        ? ( mem_is_slice_ty ( nurl_get_last_type ) ) {
+            = ret_tf_slice T
+            ( nurl_sym_def g_pending_impl ( nurl_str_cat `rettf##` ( nurl_sym_get syms `__fn_self_name__` ) ) `1` )
+        } {}
         : s __tfx ( __retown_ix ( nurl_sym_get syms `__last_tmp_field_rk__` ) )
         ? != 0 ( nurl_str_len __tfx ) { = __rost_reg ( nurl_str_cat hbit `` ) = __rost ( nurl_str_cat __tfx `` ) } {}
         = ret_field_copy T
@@ -10071,11 +10081,16 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // An all-paths fact, as for a string (__fn_ret_str_mixed__): a slice
     // returned on another path that is not this function's own (a
     // parameter, a borrow) vetoes it.
-    { ? ( mem_is_slice_ty lt ) { ( nurl_sym_set_deep syms `__fn_ret_slice_mixed__` `1` ) } {} }
+    // (…not a slice taken out of a temporary by its read, which answers by
+    // the read's flag: vetoed, `^ . ( mkb ) s` was a lend to every caller
+    // and leaked; agora #936.)
+    { ? & ( mem_is_slice_ty lt ) ! ret_tf_slice { ( nurl_sym_set_deep syms `__fn_ret_slice_mixed__` `1` ) } {} }
     // Borrow provenance: if the returned value is a borrow (derived from a
     // parameter), this function returns a borrow — callers must NOT
     // auto-drop a `:`-binding off it. (Unless it was copied on the way out.)
-    ? & & & != 0 ( nurl_sym_len syms `__last_value_borrow__` ) ! ret_owned_param ! ret_call_copied ! ret_pl_copied
+    // (…not a slice taken out of a temporary by its read, ret_tf_slice: the
+    // read's flag answers for it, as for a String taken so; agora #936.)
+    ? & & & & != 0 ( nurl_sym_len syms `__last_value_borrow__` ) ! ret_owned_param ! ret_call_copied ! ret_pl_copied ! ret_tf_slice
     { ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` )
         ? ! ( mem_ret_borrow_of_params syms ret_first_tt ) { ( nurl_sym_set_deep syms `__fn_ret_borrow_x__` `1` ) } {}
         // (`^ ( g x )` hands back what g did: owned exactly when g's own
@@ -28784,7 +28799,9 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
         ( nurl_print `@.__nurl_retdyn.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` ) ( nurl_print ? dyn `true` `false` ) ( nurl_print `\n` )
         ? != 0 ( nurl_sym_len2 g_pending_impl `retslc##` number ) {
-            : b __rso | ( seq ( __ret_owned_of syms callee ) `1` ) ( seq ( __ret_owned_of syms generic ) `1` )
+            // (…or a slice taken out of a temporary by the callee's read, where
+            // the callee lends nothing: `rettf##`, gen_ret - agora #936.)
+            : b __rso | | ( seq ( __ret_owned_of syms callee ) `1` ) ( seq ( __ret_owned_of syms generic ) `1` ) & ! lent | != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `rettf##` callee ) ) != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `rettf##` generic ) )
             ( nurl_print `@.__nurl_retslc.` ) ( nurl_print number )
             ( nurl_print ` = private constant i1 ` ) ( nurl_print ? __rso `true` `false` ) ( nurl_print `\n` )
         } {}
@@ -46175,7 +46192,11 @@ unsafe @ __slice_len_comma s t → b {
 // have been released by it; agora #841.)
 @ __slice_call_run_bit i syms i cg → s {
     ? >= g_call_own_slc 0 { ^ ( nurl_str_cat `%r` ( nurl_str_int g_call_own_slc ) ) } {}
-    ? ! ( __hown_dyn syms ( nurl_sym_get syms `__last_call_name__` ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    // (…or one that hands back a slice taken out of a temporary, answered by
+    // the read's flag - a module-end constant (`rettf##`, gen_ret; agora
+    // #936).)
+    : s __scn ( nurl_sym_get syms `__last_call_name__` )
+    ? & ! ( __hown_dyn syms __scn ) == 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `rettf##` __scn ) ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( mem_call_retown syms cg )
 }
 
