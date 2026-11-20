@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,043 lines of Lean 4**, **928 theorems**, **1106 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **75 modules**, **71,037 lines of Lean 4**, **3155 theorems**, **4100 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **74 modules**, **70,877 lines of Lean 4**, **3147 theorems**, **4082 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -135,7 +135,7 @@ flowchart BT
 ---
 
 <!-- BEGIN generated: A2 module DAG (webdocs/scripts/gen-formal-data.mjs) -->
-## 4. Phase A2 Module Dependency DAG (75 Modules)
+## 4. Phase A2 Module Dependency DAG (74 Modules)
 
 ```mermaid
 flowchart BT
@@ -168,7 +168,6 @@ flowchart BT
   FreshProjWitness["FreshProjWitness<br/>(450L, 37 thms)"]
   FreshSatWitness["FreshSatWitness<br/>(404L, 35 thms)"]
   FreshWitness["FreshWitness<br/>(302L, 19 thms)"]
-  Ghost["Ghost<br/>(89L, 5 thms)"]
   HandOver["HandOver<br/>(497L, 30 thms)"]
   Heap["Heap<br/>(211L, 14 thms)"]
   HeldViewThruWitness["HeldViewThruWitness<br/>(88L, 6 thms)"]
@@ -182,7 +181,7 @@ flowchart BT
   PopWitness["PopWitness<br/>(262L, 13 thms)"]
   Preservation["Preservation<br/>(4437L, 97 thms)"]
   Progress["Progress<br/>(933L, 14 thms)"]
-  Region["Region<br/>(106L, 4 thms)"]
+  Region["Region<br/>(35L, 1 thms)"]
   RemoveLoopWitness["RemoveLoopWitness<br/>(252L, 10 thms)"]
   Rename["Rename<br/>(5521L, 224 thms)"]
   Repl["Repl<br/>(387L, 21 thms)"]
@@ -252,7 +251,6 @@ flowchart BT
   FreshNestWitness --> FreshSatWitness
   UnheldFresh --> FreshSatWitness
   ThruDtorWitness --> FreshWitness
-  Region --> Ghost
   DynCell --> HandOver
   Stability --> Heap
   Closure --> HeldViewThruWitness
@@ -267,7 +265,6 @@ flowchart BT
   DynCell --> PopWitness
   TakeB --> Preservation
   Preservation --> Progress
-  Semantics --> Region
   Typing --> Region
   PopWitness --> RemoveLoopWitness
   NameWf --> Rename
@@ -352,11 +349,10 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/FreshProjWitness.lean`](A2/FreshProjWitness.lean) | 450 | 37 | 26 |  |
 | 3. Proof Infrastructure | [`A2/FreshSatWitness.lean`](A2/FreshSatWitness.lean) | 404 | 35 | 24 |  |
 | 3. Proof Infrastructure | [`A2/FreshWitness.lean`](A2/FreshWitness.lean) | 302 | 19 | 7 |  |
-| 3. Proof Infrastructure | [`A2/Ghost.lean`](A2/Ghost.lean) | 89 | 5 | 6 |  |
 | 3. Proof Infrastructure | [`A2/HeldViewThruWitness.lean`](A2/HeldViewThruWitness.lean) | 88 | 6 | 11 |  |
 | 3. Proof Infrastructure | [`A2/InoutViewArgWitness.lean`](A2/InoutViewArgWitness.lean) | 395 | 35 | 25 |  |
 | 3. Proof Infrastructure | [`A2/ParamViewWitness.lean`](A2/ParamViewWitness.lean) | 448 | 21 | 6 |  |
-| 3. Proof Infrastructure | [`A2/Region.lean`](A2/Region.lean) | 106 | 4 | 4 |  |
+| 3. Proof Infrastructure | [`A2/Region.lean`](A2/Region.lean) | 35 | 1 | 0 |  |
 | 3. Proof Infrastructure | [`A2/Repl.lean`](A2/Repl.lean) | 387 | 21 | 0 | One-hole replacement (Repl): a change through a borrowed handle rewrites one node of its owner's tree and leaves the rest. |
 | 3. Proof Infrastructure | [`A2/SelfViewCall.lean`](A2/SelfViewCall.lean) | 60 | 2 | 0 |  |
 | 3. Proof Infrastructure | [`A2/Settle.lean`](A2/Settle.lean) | 213 | 12 | 3 |  |
