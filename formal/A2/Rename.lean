@@ -177,6 +177,14 @@ noncomputable def subE (E : Entry) : Entry :=
 @[simp] theorem subE_path (E : Entry) : (S.subE E).path = E.path.flatMap S.subD := rfl
 @[simp] theorem subE_held (E : Entry) : (S.subE E).held = E.held.flatMap S.subD := rfl
 
+/-- What a substituted entry depends on: what it depended on, substituted. -/
+theorem subE_vdeps (E : Entry) : (S.subE E).vdeps = E.vdeps.flatMap S.subD := by
+  unfold Entry.vdeps
+  simp only [subE_mode, subE_path, subE_held, List.flatMap_append]
+  by_cases ho : E.mode.ownSlot = true
+  · simp [ho]
+  · simp [ho]
+
 /-- A substituted dependency is either kept, or one a region stands for. -/
 theorem mem_subD {d e : Dep} (h : e ∈ S.subD d) :
     e = d ∨ ∃ v, S.inv d.root = some v ∧ S.isPi v = true ∧ e ∈ S.σ v := by
