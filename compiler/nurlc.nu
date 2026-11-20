@@ -707,6 +707,14 @@
 // Loans an effect leaves alive (a sequence; 0 none): what a value taken whole
 // out of its place holds of itself, which goes with it (take_payload).
 : ~ i g_eff_keep 0
+// While a closure's by-value captures are released (eng_dtor_release): the
+// closure body whose captures `^k` are typed from its own (efp_ty), as the
+// closure's type does not say what it captured; -1 otherwise.
+: ~ i g_capty_f -1
+// …and, for nested environments, every closure being released: pairs of the
+// path its captures sit under and its body, so each `^k` step is typed by the
+// body that owns it (eng_ty_at). 0 while none.
+: ~ i g_capty_stk 0
 : ~ i g_fc_loopmemo -1  // (a loop, the state it was entered in, the loops walked around it) → the state it left + 1, for this run of the function
 : ~ i g_fc_loophead -1  // …→ what holds at its head once its rounds settled + 1: the run that reports starts there (loop_head_memo)
 : ~ i g_s_catches 0
@@ -13568,6 +13576,20 @@ unsafe @ eng_byte s w i k → i {
     : i e ( ep_last path )
     ? == e EE_STAR { ^ ( et_elem up ) } {}
     ? ( ee_is_pay e ) { ^ ( et_variant_ty up ( ee_variant e ) ( ee_idx e ) ) } {}
+    // (a closure's capture, while its body is known: g_capty_f)
+    ? & >= g_capty_f 0 ( ee_is_cap e ) {
+        // (the body whose captures sit right under this step's parent)
+        : i par ( ep_parent path )
+        : ~ i of g_capty_f
+        ? != g_capty_stk 0 {
+            : ~ i q 0
+            ~ < q ( wv_len g_capty_stk ) {
+                ? == ( wv_at g_capty_stk q ) par { = of ( wv_at g_capty_stk + q 1 ) } {}
+                = q + q 2
+            }
+        } {}
+        ^ ( efp_ty of ( ee_cap_no e ) )
+    } {}
     ^ ( et_field up ( ee_name e ) )
 }
 
@@ -13719,7 +13741,9 @@ unsafe @ eng_byte s w i k → i {
 // The shared handles `place` reaches through: a sequence of (handle
 // type, the path below its payload).
 @ shared_tails i place → i {
-    : i have ( im_get g_fc_tails place -1 )
+    // (not kept while a closure's captures are typed from its body: the
+    // same place is typed otherwise outside that window)
+    : i have ? < g_capty_f 0 ( im_get g_fc_tails place -1 ) -1
     ? >= have 0 { ^ have } {}
     : i vid ( pl_var place )
     : i path ( pl_path place )
@@ -13738,7 +13762,7 @@ unsafe @ eng_byte s w i k → i {
     }
     : i out ( sq_of_wv tmp 0 ( wv_len tmp ) )
     ( wv_drop tmp )
-    ( im_put g_fc_tails place out )
+    ? < g_capty_f 0 { ( im_put g_fc_tails place out ) } {}
     ^ out
 }
 
@@ -18135,7 +18159,10 @@ unsafe @ eng_byte s w i k → i {
         : i tj ( tp_at t 5 0 )
         : i tk ( tp_at t 5 2 )
         : i tkind ( tp_at t 5 4 )
-        ? & & & | == tkind SK_VALUE == tkind LK_HANDLE < tj n < tk n ( op_is_place ( wv_at ops tj ) ) {
+        // (…or what the argument holds, LK_HELD: a wrapper that sends its
+        // parameter, `( chan_send ch xs )`, stores the views its argument
+        // holds where the other thread receives them - AGORA-812, AGORA-869)
+        ? & & & | | == tkind SK_VALUE == tkind LK_HANDLE == tkind LK_HELD < tj n < tk n ( op_is_place ( wv_at ops tj ) ) {
             : i sav ( wv_at avs tk )
             : b sclo ( held_has_clo ( av_held sav ) )
             // (…and any other value stored there may be read by the other
@@ -19735,6 +19762,65 @@ unsafe @ eng_byte s w i k → i {
 // (the drop glue), an element's, a payload's.
 @ eng_dtor_release i st i place i t i line i depth → v {
     ? | | < t 0 > depth 6 == ( et_kind t ) EK_SCALAR { ^ } {}
+    // (A closure value released: its environment releases what it holds by
+    // value - a `sink` parameter the body captured, `mkf`'s `\ → { … h … }`
+    // - and each of those runs its `% Drop` (nurlc's retcap sweep, agora
+    // #919). The closure's type says nothing of its captures: they are
+    // typed from the body's own, g_capty_f. A capture by pointer is a
+    // pointer, which reaches no destructor. AGORA-869.)
+    ? == ( et_kind t ) EK_CLOSURE {
+        : i cav ( st_av st ( pl_var place ) )
+        ? == cav 0 { ^ } {}
+        : i cl ( wv_new )
+        ( closures_in ( av_held cav ) cl )
+        : ~ i c 0
+        ~ < c ( wv_len cl ) {
+            : i base ( wv_at cl c )
+            : i f ( wv_at cl + c 1 )
+            ? & >= f 0 == base ( pl_path place ) {
+                : i ncap ( ef_ncap f )
+                : ~ i i 0
+                ~ < i ncap {
+                    : i cty ( efp_ty f i )
+                    // (…a closure it captured, `wrap`'s `\ → { ( c ) }`, releases
+                    // its own environment in turn)
+                    // (…only a capture the environment owns: one that is a lend
+                    // of what the closure was made from - a borrowed
+                    // parameter captured, `\ → { ( vec_push log p ) }` - is a
+                    // loan at its path, and the environment releases nothing
+                    // of it)
+                    : i cpath ( ep_child base ( ee_cap i ) )
+                    : i chd ( av_held cav )
+                    : ~ b lent F
+                    : ~ i j 0
+                    ~ & ! lent < j ( sq_len chd ) {
+                        : i he ( sq_at chd j )
+                        // (not the entry that says which closure a captured
+                        // closure is: that is no lend of anything)
+                        // (…and a lend only while its lender still holds the value:
+                        // one moved into the call that made the closure, a
+                        // `sink`, is the environment's own)
+                        ? & & & == ( he_path he ) cpath ( el_is_loan ( he_loan he ) ) ! ( he_is_clo he ) ! ( __eng_gone_own ( st_own st ( pl_var ( el_place ( he_loan he ) ) ) ) ) { = lent T } {}
+                        = j + j 1
+                    }
+                    ? & & ! lent != cty ET_NONE | ( et_reaches_dtor cty 0 ) == ( et_kind cty ) EK_CLOSURE {
+                        : i f0 g_capty_f
+                        = g_capty_f f
+                        ? == g_capty_stk 0 { = g_capty_stk ( wv_new ) } {}
+                        : i sn ( wv_len g_capty_stk )
+                        ( wv_push g_capty_stk base ) ( wv_push g_capty_stk f )
+                        ( eng_dtor_release st ( pl_make ( pl_var place ) ( ep_child base ( ee_cap i ) ) ) cty line + depth 1 )
+                        ( wv_trunc g_capty_stk sn )
+                        = g_capty_f f0
+                    } {}
+                    = i + i 1
+                }
+            } {}
+            = c + c 2
+        }
+        ( wv_drop cl )
+        ^
+    } {}
     ? == depth 0 { ? ! ( et_reaches_dtor t 0 ) { ^ } {} } {}
     : i vid ( pl_var place )
     : i path ( pl_path place )
@@ -19829,6 +19915,9 @@ unsafe @ eng_byte s w i k → i {
 // A function's exit releases what its frame still owns, newest first:
 // the drop of a value whose destructor may read its views is a use of
 // them.
+// Is `own` a value no longer there: moved, moved on some paths, dropped?
+@ __eng_gone_own i own → b { ^ | | == own OW_M == own OW_X == own OW_D }
+
 // The loans of `ls` (a sequence) on places rooted at a parameter.
 @ __eng_param_loans i ls → i {
     : ~ i out 0
@@ -20897,6 +20986,30 @@ unsafe @ eng_byte s w i k → i {
     : i vty ( fv_ty vid )
     : b first & & == at g_fc_first_stmt == path 0 >= ( fv_pidx vid ) 0
     : i ddepth ? != kind VK_PARAM ( fv_depth vid ) 0
+    // (A temporary with no value, `void` - a then-only arm's join, whose
+    // conditional is a statement - given an arm's tail whole: the tail is
+    // discarded, released right there, as nurlc releases it; its `% Drop`
+    // runs - agora #766, AGORA-869.)
+    // (The engine reads `void` as a number, ET_NUM: a value whose type
+    // reaches a destructor lands in such a temporary only as a discarded
+    // tail.)
+    ? & & == path 0 == kind VK_TEMP < vty 0 {
+        ? == ( ec rv ) RV_USE {
+            : i sop ( eng_op ( ec + rv 1 ) )
+            ? & ( op_is_place sop ) == ( pl_path sop ) 0 {
+                : i sv ( pl_var sop )
+                : i sty ( fv_ty sv )
+                // (a temporary - a call's result - only: a binding named as
+                // the tail, `? c { hs } {}`, is lent to the arm, not released)
+                ? & & & == ( fv_kind sv ) VK_TEMP == ( st_own st sv ) OW_O != sty ET_NONE ( et_reaches_dtor sty 0 ) {
+                    ( eng_dtor_release st ( pl_make sv 0 ) sty ln 0 )
+                    ( eng_effect st ( pl_make sv 0 ) EF_REPLACE ln 0 )
+                    ( st_put st sv ( av_make OW_D 0 0 0 F ) )
+                    ^
+                } {}
+            } {}
+        } {}
+    } {}
     ? == path 0 {
         // (…and a `: ~` String or Vec given a field read of a binding it
         // does not own, `= c . x v`, whatever it held: nurlc releases its old
