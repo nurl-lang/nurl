@@ -928,26 +928,6 @@ theorem canon_kill (h : S.OK) (hab : S.AbsOK Γa) {e : Eff} {hv : Bool} {x : Var
     | none => rfl
     | some E => simp only [Option.map_some]; rw [killE_frame h ha hE]
 
-theorem canon_upd (h : S.OK) (Γa : Ctx) (x : Var) (oE : Option Entry) :
-    S.canon (upd Γa x oE) = upd (S.canon Γa) (S.ρ x) (oE.map (S.liftE x)) := by
-  funext y
-  rcases canon_cases h (upd Γa x oE) y with ⟨v, rfl, hc⟩ | ⟨hy, hc⟩
-  · rw [hc]
-    by_cases hvx : v = x
-    · subst hvx; simp
-    · rw [upd_ne _ _ hvx, upd_ne _ _ (fun e => hvx (h.inj _ _ e)), canon_ρ h]
-  · rw [hc, upd_ne _ _ (fun e => hy x e.symm), canon_frame _ hy]
-
-theorem canon_setE (h : S.OK) (Γa : Ctx) (x : Var) (E : Entry) :
-    S.canon (setE Γa x E) = setE (S.canon Γa) (S.ρ x) (S.liftE x E) := by
-  unfold setE; rw [canon_upd h]; rfl
-
-theorem canon_exitScope (h : S.OK) (hab : S.AbsOK Γa) {x : Var} (ha : Allowed S .replace false x) :
-    S.canon (exitScope x Γa) = exitScope (S.ρ x) (S.canon Γa) := by
-  unfold exitScope
-  rw [canon_upd h, canon_kill h hab ha]
-  rfl
-
 /-- AGORA-937: `canon_exitScope` with regions, for a binding at no region's
     index. -/
 theorem canon_exitScopes (h : S.OK) (hab : S.AbsOK Γa) {x : Var} (ha : Allowed S .replace false x)
@@ -1082,10 +1062,6 @@ theorem _root_.A2.Entry.lockOf.lift {v : Var} {E : Entry} {t : Ty} (hty : (S.lif
   · exact Or.inl (hty.trans h)
   · exact Or.inr (hty.trans h)
 
-theorem canon_root (h : S.OK) {r : Var} {Er : Entry} (hEr : Γa r = some Er) (hro : Er.mode.isRoot = true) :
-    ∃ E', S.canon Γa (S.ρ r) = some E' ∧ E'.mode.isRoot = true :=
-  ⟨S.liftE r Er, by rw [canon_ρ h, hEr]; rfl, by rw [liftE_root h]; exact hro⟩
-
 /-- AGORA-937: a dependency the substitution keeps, on a callee binding, is on
     no region: a region's would have been replaced by what it stands for,
     whose roots are the frame's. -/
@@ -1109,91 +1085,6 @@ theorem canon_frameRoot (_h : S.OK) {r : Var} (hr : ∀ v, S.ρ v ≠ r)
     (hex : ∃ Er, S.Φ r = some Er ∧ Er.mode.isRoot = true) :
     ∃ E', S.canon Γa r = some E' ∧ E'.mode.isRoot = true := by
   rw [canon_frame _ hr]; exact hex
-
-/-- The caller's view of a well-formed callee context is well-formed. -/
-theorem canon_wf (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.canon Γa) := by
-  refine ⟨?_, fun y E' hy hd hos hn d hdd hnm => ?_, fun y E' hy ha => ?_, fun y E' hy hd => ?_⟩
-  · intro y E' hy hl hn r hr
-    rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
-    · rw [hc] at hy
-      cases hE : Γa v with
-      | none => rw [hE] at hy; cases hy
-      | some E =>
-        rw [hE] at hy; simp only [Option.map_some, Option.some.injEq] at hy; subst hy
-        by_cases hrb : E.mode = .rootb
-        · have hvd : (S.liftE v E).vdeps = (S.pe v).vdeps := by simp [liftE, hrb, Entry.vdeps]
-          rw [hvd] at hr
-          obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
-          rcases pe_dep h hd with ⟨hout, hex⟩ | ⟨hs, _⟩
-          · exact canon_frameRoot h hout hex
-          · obtain ⟨w, b, t, rfl, hb, _, _, _⟩ := sym_ren h hs
-            obtain ⟨Ew, hEw, hm, _⟩ := hab.2.2.1 w (b, false) hb
-            exact canon_root h hEw (by rw [hm]; rfl)
-        · rw [liftE_live] at hl
-          have hn' : E.ty ≠ .int ∨ E.mode = .rootb := by
-            rcases hn with h' | h'
-            · rw [liftE_ty v hrb] at h'; exact Or.inl h'
-            · rw [liftE_rootb h] at h'; exact absurd h' hrb
-          obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
-          rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
-          · obtain ⟨Er, hEr, hro⟩ := hw v E hE hl hn' d0.root (List.mem_map_of_mem hd0)
-            exact canon_root h hEr hro
-          · exact canon_frameRoot h (A_out h ha) (A_root h ha)
-    · rw [hc] at hy
-      by_cases hrr : ∃ v, S.ρ v = r
-      · obtain ⟨v, rfl⟩ := hrr
-        obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
-        obtain ⟨b, hv, hb, _⟩ := h.Φsat y E' hy hl hn d hd v hdr.symm
-        obtain ⟨Ev, hEv, hm, _⟩ := hab.2.2.1 v (b, hv) hb
-        exact canon_root h hEv (by rw [hm]; rfl)
-      · have hout : ∀ v, S.ρ v ≠ r := fun v hv => hrr ⟨v, hv⟩
-        exact canon_frameRoot h hout (h.Φwf y E' hy hl hn r hr hout)
-  · -- A2-drop.2: what a binding `letd` made views in memory, live or not
-    rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
-    · rw [hc] at hy
-      cases hE : Γa v with
-      | none => rw [hE] at hy; cases hy
-      | some E =>
-        rw [hE] at hy; simp only [Option.map_some, Option.some.injEq] at hy; subst hy
-        by_cases hrb : E.mode = .rootb
-        · rw [liftE_dbind h, ite_eq_left hrb] at hd; cases hd
-        · rw [liftE_dbind h, ite_eq_right hrb] at hd
-          have hos0 : E.mode.ownSlot = true := by rwa [liftE_mode v hrb, liftMode_ownSlot] at hos
-          have hn' : E.ty ≠ .int ∨ E.mode = .rootb := by
-            rcases hn with h' | h'
-            · rw [liftE_ty v hrb] at h'; exact Or.inl h'
-            · rw [liftE_rootb h] at h'; exact absurd h' hrb
-          rcases liftE_vdeps_cases hrb hdd with ⟨d0, hd0, rfl⟩ | ha
-          · obtain ⟨Er, hEr, hro⟩ := hw.dtor v E hE hd hos0 hn' d0 hd0 (by simpa [Dep.ren] using hnm)
-            exact canon_root h hEr hro
-          · exact canon_frameRoot h (A_out h ha) (A_root h ha)
-    · rw [hc] at hy
-      rcases h.Φdb y E' hy hd hos hn d hdd hnm with ⟨v, bh, hv, hb⟩ | ⟨hout, hex⟩
-      · obtain ⟨Ev, hEv, hm, _⟩ := hab.2.2.1 v bh hb
-        rw [← hv]; exact canon_root h hEv (by rw [hm]; rfl)
-      · exact canon_frameRoot h hout hex
-  · rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
-    · rw [hc] at hy
-      cases hE : Γa v with
-      | none => rw [hE] at hy; cases hy
-      | some E =>
-        rw [hE] at hy; simp only [Option.map_some, Option.some.injEq] at hy; subst hy
-        by_cases hrb : E.mode = .rootb
-        · rw [liftE_dtor' h, ite_eq_left hrb] at ha; cases ha
-        · rw [liftE_dtor' h, ite_eq_right hrb] at ha
-          rw [liftE_dbind h, ite_eq_right hrb]; exact hw.arm v E hE ha
-    · rw [hc] at hy; exact h.Φarm y E' hy ha
-  · rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
-    · rw [hc] at hy
-      cases hE : Γa v with
-      | none => rw [hE] at hy; cases hy
-      | some E =>
-        rw [hE] at hy; simp only [Option.map_some, Option.some.injEq] at hy; subst hy
-        by_cases hrb : E.mode = .rootb
-        · rw [liftE_dbind h, ite_eq_left hrb] at hd; cases hd
-        · rw [liftE_dbind h, ite_eq_right hrb] at hd
-          rw [liftE_ty v hrb]; exact hw.view v E hE hd
-    · rw [hc] at hy; exact h.Φview y E' hy hd
 
 /-- AGORA-937: a kept or substituted dependency of a lifted binding is
     rooted where the call places the body: a callee root (on no region,
@@ -1365,54 +1256,6 @@ theorem sym_named (h : S.OK) (hab : S.AbsOK Γa) {d : Dep} (hs : d ∈ rds S.ρ 
     by rw [subE_mode, liftE_mode _ hrb', hm]; rfl, Or.inr ⟨hbr, ?_⟩, by rw [← hpt, ← hty]; exact hvv⟩
   rw [subE_mode, liftE_mode _ hrb', hm]; exact Or.inl rfl
 
-/-- The caller's view of a callee context keeps what is held by name valid. -/
-theorem canon_names (h : S.OK) (hab : S.AbsOK Γa) (hn : NameWF Γa) : NameWF (S.canon Γa) := by
-  intro y E' hy hl hnn d hd b t hk
-  rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
-  · rw [hc] at hy
-    cases hE : Γa v with
-    | none => rw [hE] at hy; cases hy
-    | some E =>
-      rw [hE] at hy; simp only [Option.map_some, Option.some.injEq] at hy; subst hy
-      by_cases hrb : E.mode = .rootb
-      · have hvd : (S.liftE v E).vdeps = (S.pe v).vdeps := by simp [liftE, hrb, Entry.vdeps]
-        rw [hvd] at hd
-        rcases h.pe_names v d hd (by rw [hk]; rfl) with hN | ⟨hs, _⟩
-        · obtain ⟨Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩ := h.N_named d hN b t hk
-          exact ⟨Er, by rw [canon_frame _ (h.N_out d hN).1]; exact hEr, hlr, hhr, ht, ho, hc', hhv⟩
-        · exact sym_named h hab hs hk
-      · rw [liftE_live] at hl
-        have hn' : E.ty ≠ .int ∨ E.mode = .rootb := by
-          rcases hnn with h' | h'
-          · rw [liftE_ty v hrb] at h'; exact Or.inl h'
-          · rw [liftE_rootb h] at h'; exact absurd h' hrb
-        rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
-        · obtain ⟨Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩ := hn v E hE hl hn' d0 hd0 b t hk
-          have hrb' : Er.mode ≠ .rootb := fun e => by rw [e] at ho; cases ho
-          refine ⟨S.liftE d0.root Er, by
-              show S.canon Γa (S.ρ d0.root) = _; rw [canon_ρ h, hEr]; rfl,
-            by rw [liftE_live]; exact hlr, liftE_held_named hrb' ho hhr (by rw [ht]; exact hhv),
-            by rw [liftE_ty _ hrb', ht], by rw [liftE_mode _ hrb', liftMode_ownSlot]; exact ho, ?_, hhv⟩
-          rcases hc' with hb | ⟨hbr, _⟩
-          · exact Or.inl hb
-          · exact Or.inr ⟨hbr, Or.inl (by rw [liftE_mode _ hrb']; cases hm : Er.mode <;> simp_all [liftMode, Mode.ownSlot])⟩
-        · rcases mem_A.mp ha with ha | ha
-          · have := allKinds_notName ha; rw [hk] at this; cases this
-          · obtain ⟨Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩ := h.N_named d ha b t hk
-            exact ⟨Er, by rw [canon_frame _ (h.N_out d ha).1]; exact hEr, hlr, hhr, ht, ho, hc', hhv⟩
-  · rw [hc] at hy
-    rcases h.Φnamed y E' hy hl hnn d hd b t hk with ⟨v, bh, hρ, hb, hpt, hbr, hbh, hhv⟩ |
-        ⟨hout, Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩
-    · obtain ⟨Ev, hEv, hmv, htv, hfx⟩ := hab.2.2.1 v bh hb
-      have hrb' : Ev.mode ≠ .rootb := by rw [hmv]; simp
-      have hvv : Ev.ty.holdsView = false := by rw [htv, hpt]; exact hhv
-      obtain ⟨hlv, hhv'⟩ := hfx (Or.inr ⟨bh.1, hmv, hbh, hvv⟩)
-      refine ⟨S.liftE v Ev, by rw [← hρ, canon_ρ h, hEv]; rfl, by rw [liftE_live]; exact hlv,
-        liftE_held_named hrb' (by rw [hmv]; rfl) hhv' hvv, by rw [liftE_ty _ hrb', htv, hpt],
-        by rw [liftE_mode _ hrb', hmv]; rfl, Or.inr ⟨hbr, ?_⟩, hhv⟩
-      rw [liftE_mode _ hrb', hmv]; exact Or.inl rfl
-    · exact ⟨Er, by rw [canon_frame _ hout]; exact hEr, hlr, hhr, ht, ho, hc', hhv⟩
-
 /-- AGORA-937: `canon_names` with regions. What a region stands for names
     nothing (it is every memory way of reaching the arguments' roots), and a
     kept name dependency on a callee binding is on no region. -/
@@ -1474,28 +1317,6 @@ theorem canon_names_sub (h : S.OK) (hab : S.AbsOK Γa) (hn : NameWF Γa) : NameW
         by rw [subE_mode, liftE_mode _ hrb', hmv]; rfl, Or.inr ⟨hbr, ?_⟩, hhv⟩
       rw [subE_mode, liftE_mode _ hrb', hmv]; exact Or.inl rfl
     · exact ⟨Er, by rw [canon_frame _ hout]; exact hEr, hlr, hhr, ht, ho, hc', hhv⟩
-
-theorem canon_weaker (h : S.OK) {Γa Γa' : Ctx} (hab' : S.AbsOK Γa') (hw' : CtxWF Γa')
-    (hw : Weaker Γa Γa') : Weaker (S.canon Γa) (S.canon Γa') := by
-  refine ⟨fun y => ⟨?_, fun E E' h1 h2 => ?_⟩, canon_wf h hab' hw', canon_names h hab' hw.names⟩
-  · rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hy, hc⟩
-    · rw [hc, canon_ρ h]; simp only [Option.map_eq_none_iff]; exact (hw.1 v).1
-    · rw [hc, canon_frame _ hy]
-  · rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hy, hc⟩
-    · rw [hc] at h1; rw [canon_ρ h] at h2
-      cases hE : Γa v with
-      | none => rw [hE] at h1; cases h1
-      | some E0 =>
-        cases hE' : Γa' v with
-        | none => rw [hE'] at h2; cases h2
-        | some E0' =>
-          rw [hE] at h1; rw [hE'] at h2
-          simp only [Option.map_some, Option.some.injEq] at h1 h2
-          subst h1 h2
-          exact liftE_weaker ((hw.1 v).2 E0 E0' hE hE')
-            (by rw [← ((hw.1 v).2 E0 E0' hE hE').mode]; exact hab'.ne_region hE' (h.noPi v))
-    · rw [hc] at h1; rw [canon_frame _ hy] at h2
-      rw [h1] at h2; cases h2; exact EntryWeaker.refl _
 
 /-- AGORA-937: `canon_weaker` with regions: a weakening of the callee context
     is one of the lifted context. A region's index is dropped on both sides,
@@ -2807,34 +2628,6 @@ theorem pushArg_rens (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {y : Var} {E
       · exact List.mem_append_left _ (derive_subE h hnp _ rfl hd)
       · exact List.mem_append_right _ hd
     exact ⟨_, hpa, hD, fun _ => by rw [hsl]; exact hD⟩
-
-theorem pushArg_ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {y : Var} {Ey : Entry} {t : Ty}
-    {D : List Dep} {Γa1 : Ctx} (hy : Γa y = some Ey) (hp : PushArg Γa Fa y Ey t D Γa1) :
-    ∃ D', PushArg (S.canon Γa) S.Fc (S.ρ y) (S.liftE y Ey) t D' (S.canon Γa1) ∧
-      D' ⊆ rds S.ρ D ++ S.A ∧ (Ey.ty = t → D' ⊆ rds S.ρ D ++ ownHeld true t S.A) := by
-  cases hp with
-  | move ho hm hyF _ hds =>
-    have hrb : Ey.mode ≠ .rootb := by rw [hm]; simp
-    have hctx : S.canon (setE (kill .replace false y Γa) y { Ey with live := false, dtor := false }) =
-        setE (kill .replace false (S.ρ y) (S.canon Γa)) (S.ρ y) { S.liftE y Ey with live := false, dtor := false } := by
-      rw [canon_setE h, canon_kill h hab (allowed_own hab hy hm _ _), liftE_moved _ hrb]
-    rw [hctx]
-    refine ⟨_, PushArg.move ho (by rw [liftE_mode y hrb, hm]; rfl) (h.Fcout y)
-      (NoPin.lift h hab (bnd_own hab hy hm)) (DtorSafe.canon h (allowed_own hab hy hm _ _) hds),
-      held_lift h hab hy, fun hty => ?_⟩
-    rw [liftE_held hrb, S.heldA_own (by rw [hm]; rfl), hm, hty]; exact List.Subset.refl _
-  | int => exact ⟨[], PushArg.int, by simp, fun _ => by simp⟩
-  | @slice s hm =>
-    have hsl : ownHeld true (Ty.slice s) S.A = S.A := by simp [ownHeld, Ty.holdsView]
-    have hpa' : PushArg (S.canon Γa) S.Fc (S.ρ y) (S.liftE y Ey) (.slice s)
-        (derive (S.ρ y) (S.liftE y Ey) .self ++ (S.liftE y Ey).held) (S.canon Γa) := by
-      refine PushArg.slice ?_
-      rcases hm with hm | hm
-      · left; rw [liftE_mode y (by rw [hm]; simp), hm]; rfl
-      · right; rw [liftE_rootb h]; exact hm
-    -- (what it depends on: `pushArg_ren_sub`, a borrowed parameter's view among them)
-    have hs := pushArg_ren_sub h hab hy (PushArg.slice (F := Fa) hm) hpa'
-    exact ⟨_, hpa', hs, fun _ => by rw [hsl]; exact hs⟩
 
 /-- Agora #916: ... and what it stores holds, in memory, only what it did in
     the callee, renamed, when the stored value is the frame's own in path and
@@ -6232,10 +6025,10 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
     ((hab1.killHv _).holdOn fun v hv E hE => (hrs v hv E hE).1).setE' hab1 hx1 rfl rfl hrb
       (fun hf => absurd hf (by simp [Entry.fixed, hmx]))
   refine ⟨?_, habo⟩
-  have hwc := canon_wf h habo hwo
-  have hnc := canon_names h habo hno
+  have hwc := canon_wf_sub h habo hwo hno
+  have hnc := canon_names_sub h habo hno
   rw [canon_setEs h _ hnpx] at hwc hnc ⊢
-  refine StmtT.weakenOut (canon_wf h hab hw) (canon_names h hab hn) hT
+  refine StmtT.weakenOut (canon_wf_sub h hab hw hn) (canon_names_sub h hab hn) hT
     (Or.inr ⟨PW.setE ?_ ?_, hwc, hnc⟩)
   · show PW (A2.holdOn (roots (memDeps (S.subE (S.liftE x Ex1)).path)) (memDeps D')
       (killThruV (op.rename S.ρ) (S.subE (S.liftE x Ex1)).ty (S.subE (S.liftE x Ex1)).path (S.canon Γa1)))
@@ -6304,14 +6097,14 @@ theorem liftX_up (h : S.OK) {ξ : Exits} {n : Nat} {Γa : Ctx} (hab : S.AbsOK Γ
   rcases hx with hx | ⟨Γ0, hw0, hx⟩
   · exact Or.inl ⟨Γa, rfl, hab, hw, hn, hx⟩
   · have hab0 := hab.weaker hw0
-    exact Or.inr ⟨S.canon Γ0, canon_weaker h hab0 hw0.wf hw0, Γ0, rfl, hab0, hw0.wf, hw0.names, hx⟩
+    exact Or.inr ⟨S.canon Γ0, canon_weaker_sub h hab0 hw0, Γ0, rfl, hab0, hw0.wf, hw0.names, hx⟩
 
 theorem liftX_under (h : S.OK) {ξ : Exits} {x : Var} (hbx : S.bnd x = none)
     (hnp : S.isPi x = false) :
     ∀ n Γc, S.liftX (ξ.under x) n Γc → (S.liftX ξ).under (S.ρ x) n Γc := by
   rintro n _ ⟨Γa, rfl, hab, hw, hn, he, hx⟩
   refine ⟨EndOK.lift h hab hbx he, ?_⟩
-  rw [← canon_exitScope h hab (Or.inl hbx)]
+  rw [← canon_exitScopes h hab (Or.inl hbx) hnp]
   have hwk := (Weaker.refl hw hn).exitScope x he.2.2
   exact ⟨A2.exitScope x Γa, rfl, hab.exitScope hbx hnp, hwk.2.1, hwk.2.2, hx⟩
 
@@ -6327,7 +6120,7 @@ theorem liftX_underD (h : S.OK) {ξ : Exits} {x : Var} {Γ0 : Ctx} (_ : S.AbsOK 
     refine ⟨by rw [liftE_mode x hrb]; cases hm : E0.mode <;> simp_all [liftMode], fun hv => ?_⟩
     rw [liftE_dbind h]; simp only [hrb, ↓reduceIte]
     exact hdv (by rwa [liftE_ty' h hab h0] at hv)
-  · rw [← canon_exitScope h hab (Or.inl hbx)]
+  · rw [← canon_exitScopes h hab (Or.inl hbx) hnp]
     have hwk := (Weaker.refl hw hn).exitScope x he.2.2
     exact ⟨A2.exitScope x Γa, rfl, hab.exitScope hbx hnp, hwk.2.1, hwk.2.2, hx⟩
 
@@ -6336,7 +6129,7 @@ theorem liftX_blk (h : S.OK) {ξ : Exits} {Δa : Ctx} (habΔ : S.AbsOK Δa) (hw�
   rintro (_ | n) _ ⟨Γa, rfl, hab, hw, hn, hx⟩
   · rcases hx with rfl | hx
     · exact Or.inl rfl
-    · exact Or.inr (canon_weaker h habΔ hwΔ hx)
+    · exact Or.inr (canon_weaker_sub h habΔ hx)
   · exact ⟨Γa, rfl, hab, hw, hn, hx⟩
 
 /-- AGORA-889: what moves out through a borrow, where a call places it: the

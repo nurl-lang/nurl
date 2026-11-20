@@ -1066,8 +1066,8 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hy
       obtain ⟨E0, h0, hm⟩ := h.postdm.2 y E1' h1'
       rw [clean_mode, hm]; exact hi.noRegion y E0 h0
-  wf := RSetup.canon_wf h.sOK h.sig_abs (sigCtx_wf fn)
-  names := RSetup.canon_names h.sOK h.sig_abs (sigCtx_names fn)
+  wf := RSetup.canon_wf_sub h.sOK h.sig_abs (sigCtx_wf fn) (sigCtx_names fn)
+  names := RSetup.canon_names_sub h.sOK h.sig_abs (sigCtx_names fn)
   fresh := h.fresh_canon
   held y E sl T hy hl hst hT := by
     rcases h.ctx_cases y with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ | ⟨k, t, hk, rfl, hc⟩ |

@@ -2981,8 +2981,8 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
   have hend : EndOK Γ3 (base + fn.params.length) :=
     ⟨hRb3.noPin hge, hDt3.dtorSafe hge _ _, hDb3.dbindSafe hge⟩
   have hW := hfin Γ3 hΓ3
-  have hwfin := RSetup.canon_wf h.sOK h.sig_abs (sigCtx_wf fn)
-  have hnmin := RSetup.canon_names h.sOK h.sig_abs (sigCtx_names fn)
+  have hwfin := RSetup.canon_wf_sub h.sOK h.sig_abs (sigCtx_wf fn) (sigCtx_names fn)
+  have hnmin := RSetup.canon_names_sub h.sOK h.sig_abs (sigCtx_names fn)
   have hci : callIn fn args base x = resFrame fn (base + fn.params.length)
       (.seq (.frozen (zOf fn args base) (wrapParams fn.params base 0 (fn.body.rename (callRen fn.params args base))))
         (.assign x (.var (base + fn.params.length)))) := rfl
