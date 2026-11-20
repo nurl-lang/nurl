@@ -1340,10 +1340,13 @@ theorem sym_named (h : S.OK) (hab : S.AbsOK Γa) {d : Dep} (hs : d ∈ rds S.ρ 
   have hvv : Ew.ty.holdsView = false := by rw [← elem_holdsView]; exact hbs.2.symm
   obtain ⟨hlv, hhv'⟩ := hfx (Or.inr ⟨b', hm, hbr, hvv⟩)
   have hrb' : Ew.mode ≠ .rootb := by rw [hm]; simp
-  refine ⟨S.liftE w Ew, by rw [canon_ρ h, hEw]; rfl, by rw [liftE_live]; exact hlv,
-    liftE_held_named hrb' (by rw [hm]; rfl) hhv' hvv, by rw [liftE_ty _ hrb', hty, hpt],
-    by rw [liftE_mode _ hrb', hm]; rfl, Or.inr ⟨hbr, ?_⟩, by rw [← hpt, ← hty]; exact hvv⟩
-  rw [liftE_mode _ hrb', hm]; exact Or.inl rfl
+  -- (an `inout` parameter: no region)
+  have hnp : S.isPi w = false := hab.notPi hEw (by rw [hm]; simp)
+  refine ⟨S.subE (S.liftE w Ew), canon_some h hEw hnp, by rw [subE_live, liftE_live]; exact hlv,
+    by rw [subE_held, liftE_held_named hrb' (by rw [hm]; rfl) hhv' hvv]; rfl,
+    by rw [subE_ty, liftE_ty _ hrb', hty, hpt],
+    by rw [subE_mode, liftE_mode _ hrb', hm]; rfl, Or.inr ⟨hbr, ?_⟩, by rw [← hpt, ← hty]; exact hvv⟩
+  rw [subE_mode, liftE_mode _ hrb', hm]; exact Or.inl rfl
 
 /-- The caller's view of a callee context keeps what is held by name valid. -/
 theorem canon_names (h : S.OK) (hab : S.AbsOK Γa) (hn : NameWF Γa) : NameWF (S.canon Γa) := by
@@ -3589,6 +3592,22 @@ theorem argE_canon (h : S.OK) {a : Var} {Ea : Entry} (ha : Γa a = some Ea) :
     argE (S.canon Γa) (S.ρ a) = S.liftE a Ea := by
   unfold argE; rw [canon_ρ h, ha]; rfl
 
+/-- AGORA-937: ... with regions: an argument at no region's index is its
+    binding lifted, then substituted. -/
+theorem argE_canons (h : S.OK) {a : Var} {Ea : Entry} (ha : Γa a = some Ea) (hnp : S.isPi a = false) :
+    argE (S.canon Γa) (S.ρ a) = S.subE (S.liftE a Ea) := by
+  unfold argE; rw [canon_some h ha hnp]; rfl
+
+/-- AGORA-937: with no memory frozen (`S.R = []`), what a region stands for
+    is nothing, so the substitution only drops what depends on a region. -/
+theorem mem_subE_held_of_R (h : S.OK) (hR : S.R = []) {X : Entry} {d : Dep} (hd : d ∈ (S.subE X).held) :
+    d ∈ X.held := by
+  rw [subE_held] at hd
+  obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp hd
+  rcases S.mem_subD hde with rfl | ⟨v, _, _, hσ⟩
+  · exact he
+  · have := h.σ_sub v hσ; rw [hR] at this; simp [allKinds] at this
+
 /-- AGORA-927: an argument whose dependencies are all bindings' keeps them so
     under the renaming: a renamed one is the renamed binding's, and what a
     lift adds is the caller's frame's. -/
@@ -4065,7 +4084,8 @@ theorem CallDtorSafe.canon (h : S.OK) (hab : S.AbsOK Γa) {ps : List (PMode × T
     (hargs : ∀ a ∈ args, ∃ Ea, Γa a = some Ea) (hlen : args.length = ps.length)
     (hok : ∀ i (hi : i < ps.length), ∃ Ea, Γa (args.getD i 0) = some Ea ∧ paramOK ps[i].1 ps[i].2 Ea)
     (hal : ∀ d ∈ mutNames Γa args, Allowed S d.kind.bound false d.root)
-    (hds : CallDtorSafe Γa ps args) : CallDtorSafe (S.canon Γa) ps (args.map S.ρ) := by
+    (hds : CallDtorSafe Γa ps args) (hvs : ∀ a ∈ args, S.isPi a = false) :
+    CallDtorSafe (S.canon Γa) ps (args.map S.ρ) := by
   refine ⟨fun i hi => ⟨fun hs => ?_, fun b hb => ?_⟩, fun d hd => ?_, fun i hi b hb Ea hEa => ?_⟩
   · obtain ⟨Ea, hEa, hpo⟩ := hok i hi
     rw [hs] at hpo
@@ -4084,10 +4104,10 @@ theorem CallDtorSafe.canon (h : S.OK) (hab : S.AbsOK Γa) {ps : List (PMode × T
     · exact DtorSafe.canon_N h hN hb
   · -- an `inout` argument `letd` made, lifted, is one before
     obtain ⟨Ea0, hEa0, _⟩ := hok i hi
-    rw [getD_map (hlen ▸ hi), canon_ρ h, hEa0] at hEa
-    simp only [Option.map_some, Option.some.injEq] at hEa
+    have hia : i < args.length := hlen ▸ hi
+    rw [getD_map hia, canon_some h hEa0 (hvs _ (by simp only [List.getD, List.getElem?_eq_getElem hia, Option.getD_some]; exact List.getElem_mem hia)), Option.some.injEq] at hEa
     subst hEa
-    rw [liftE_dbind h]
+    rw [subE_dbind, liftE_dbind h]
     split
     · rfl
     · exact hds.2.2 i hi b hb Ea0 hEa0
@@ -4642,7 +4662,8 @@ theorem AbsOK.callPostAux {Γa : Ctx} (hab0 : S.AbsOK Γa) {fn : Fn} {args : Lis
     an argument is what the outer arguments held — names, when they held no
     views (`S.R = []`). -/
 theorem callR_canon (h : S.OK) {Γa : Ctx} {args : List Var} (hR : S.R = [])
-    (hc : callR Γa args = []) : callR (S.canon Γa) (args.map S.ρ) = [] := by
+    (hc : callR Γa args = []) (hvs : ∀ a ∈ args, S.isPi a = false) :
+    callR (S.canon Γa) (args.map S.ρ) = [] := by
   -- with no views passed, what the arguments held is names only
   have hA : ∀ d ∈ S.A, d.kind.isName = true := by
     intro d hd
@@ -4657,9 +4678,11 @@ theorem callR_canon (h : S.OK) {Γa : Ctx} {args : List Var} (hR : S.R = [])
   have hdh := (List.mem_filter.mp hd).1
   cases hE : Γa a with
   | none =>
-    exfalso; apply hty; unfold argE; rw [canon_ρ h, hE]; rfl
+    exfalso; apply hty; unfold argE; rw [canon_ρs h _ (hvs a ha), hE]; rfl
   | some E =>
-    rw [argE_canon h hE] at hty hdh
+    rw [argE_canons h hE (hvs a ha)] at hty hdh
+    rw [subE_ty] at hty
+    have hdh := S.mem_subE_held_of_R h hR hdh
     by_cases hrb : E.mode = .rootb
     · -- a borrowed parameter: what it holds is what the outer arguments held
       simp only [RSetup.liftE, hrb, ↓reduceIte] at hdh
@@ -4723,8 +4746,8 @@ theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa 
       rwa [hsv] at this
   refine ⟨_, _, ⟨fn, hf, by simp [hlen], fun i hi => ?_, namesFree_lift h hab hexA hnf,
     CallDtorSafe.canon h hab hexA hlen (fun i hi => by
-      obtain ⟨Ea, hEa, _, hok, _⟩ := hargs i hi; exact ⟨Ea, hEa, hok⟩) hal hds, rfl, rfl,
-      fun ht => callR_canon h (hR ht) (hg ht)⟩, ?_,
+      obtain ⟨Ea, hEa, _, hok, _⟩ := hargs i hi; exact ⟨Ea, hEa, hok⟩) hal hds (fun v _ => h.noPi v), rfl, rfl,
+      fun ht => callR_canon h (hR ht) (hg ht) (fun v _ => h.noPi v)⟩, ?_,
     callRes_lift h hab hlr hex⟩
   · obtain ⟨Ea, hEa, hl, hok, hmv, _⟩ := hargs i hi
     have hia : i < args.length := hlen ▸ hi
