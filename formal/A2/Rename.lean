@@ -1617,11 +1617,15 @@ theorem derive_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : 
 /-- Agora #909: a fresh source stays one where the call places it: an
     owner or an `inout` parameter is lifted to an owner, a fresh borrow to a
     fresh borrow. -/
-theorem freshSrc_lift (h : S.OK) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
+theorem freshSrc_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
     (hs : FreshSrc Γa y) : FreshSrc (S.canon Γa) (S.ρ y) := by
   obtain ⟨E, hE, hc⟩ := hs
   rw [hy] at hE; cases hE
-  refine ⟨S.liftE y Ey, by rw [canon_ρ h, hy]; rfl, ?_⟩
+  -- (a fresh source is a frame binding or a borrow: no region)
+  have hnp : S.isPi y = false := hab.notPi hy (by
+    rcases hc with (h1 | ⟨b, h1⟩) | ⟨h1, _⟩ <;> rw [h1] <;> simp)
+  refine ⟨S.subE (S.liftE y Ey), canon_some h hy hnp, ?_⟩
+  rw [subE_mode, subE_fresh, subE_live, subE_ty]
   rcases hc with hfr | ⟨hb, hf, hl, hn⟩
   · have hrb : Ey.mode ≠ .rootb := by rcases hfr with h1 | ⟨b, h1⟩ <;> rw [h1] <;> simp
     left; rw [liftE_mode y hrb]
@@ -1634,11 +1638,17 @@ theorem freshSrc_lift (h : S.OK) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
 /-- Agora #916: a held-fresh source stays one where the call places it: an
     owner or an `inout` parameter of a type that holds no views is lifted to
     one, a held-fresh borrow to a held-fresh borrow. -/
-theorem heldSrc_lift (h : S.OK) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
+theorem heldSrc_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
     (hs : HeldSrc Γa y) : HeldSrc (S.canon Γa) (S.ρ y) := by
   obtain ⟨E, hE, hc⟩ := hs
   rw [hy] at hE; cases hE
-  refine ⟨S.liftE y Ey, by rw [canon_ρ h, hy]; rfl, ?_⟩
+  -- (a held-fresh source owns its slot or is a borrow: no region)
+  have hnp : S.isPi y = false := hab.notPi hy (by
+    rcases hc with ⟨hos, _⟩ | ⟨h1, _⟩
+    · intro e; rw [e] at hos; cases hos
+    · rw [h1]; simp)
+  refine ⟨S.subE (S.liftE y Ey), canon_some h hy hnp, ?_⟩
+  rw [subE_mode, subE_ty, subE_heldFresh, subE_live]
   rcases hc with ⟨hos, hv⟩ | ⟨hb, hf, hl⟩
   · have hrb : Ey.mode ≠ .rootb := fun e => by rw [e] at hos; cases hos
     exact Or.inl ⟨by rw [liftE_mode y hrb, liftMode_ownSlot]; exact hos, by rw [liftE_ty y hrb]; exact hv⟩
@@ -2601,7 +2611,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
   | @borrow y Ey t f hy hl ht hf =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     refine ⟨_, RhsT.borrow (f := f) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
-      (fun hft => freshSrc_lift h hy (hf hft)), fun x => ?_⟩
+      (fun hft => freshSrc_lift h hab hy (hf hft)), fun x => ?_⟩
     cases f with
     | false =>
       refine EntryWeaker.mk' (by rw [liftE_ty x (by simp)]; exact (liftE_ty' h hab hy).symm)
@@ -2628,7 +2638,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
   | @«at» y i Ey t f hy hl ht hi hf =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     refine ⟨_, RhsT.at (f := f) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
-      (exprT_ren h hab hi (fun v _ => h.noPi v)) (fun hft => ⟨freshSrc_lift h hy (hf hft).1, (hf hft).2⟩), fun x => ?_⟩
+      (exprT_ren h hab hi (fun v _ => h.noPi v)) (fun hft => ⟨freshSrc_lift h hab hy (hf hft).1, (hf hft).2⟩), fun x => ?_⟩
     cases f with
     | false =>
       rw [Entry.with_fresh_eq (by cases t <;> rfl), Entry.with_fresh_eq (by cases t <;> rfl)]
@@ -2662,7 +2672,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
       refine ⟨S.liftE y Ey, hc, ?_⟩
       rw [liftE_mode y hrb]; rcases hm with h1 | ⟨b, h1⟩ <;> rw [h1] <;> exact Or.inl rfl
     refine ⟨_, RhsT.view (f := fv) (h := hv) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht) hhv
-      hfl (fun hh => heldSrc_lift h hy (hhs hh)), fun x => ?_⟩
+      hfl (fun hh => heldSrc_lift h hab hy (hhs hh)), fun x => ?_⟩
     refine EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode])
       (by simp) (by simp [liftE]) (fun _ => ?_) ?_ (hg := fun _ _ hhf => by simpa [liftE] using hhf)
       (hf := fun _ _ _ hfr => by
@@ -2701,7 +2711,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
   | @sat y i Ey t f hy hl ht hi hf =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     refine ⟨_, RhsT.sat (f := f) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
-      (exprT_ren h hab hi (fun v _ => h.noPi v)) (fun hft => ⟨freshSrc_lift h hy (hf hft).1, (hf hft).2⟩), fun x => ?_⟩
+      (exprT_ren h hab hi (fun v _ => h.noPi v)) (fun hft => ⟨freshSrc_lift h hab hy (hf hft).1, (hf hft).2⟩), fun x => ?_⟩
     cases f with
     | false =>
       rw [Entry.with_fresh_eq (by cases t <;> rfl), Entry.with_fresh_eq (by cases t <;> rfl)]
@@ -5055,7 +5065,7 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
         obtain ⟨y0, hy0, rfl⟩ := Option.map_eq_some_iff.mp hy'
         obtain ⟨hfs, hhs⟩ := hp y0 hy0
         obtain ⟨Ey0, hEy0, _⟩ := id hfs
-        exact ⟨freshSrc_lift h hEy0 hfs, heldSrc_lift h hEy0 hhs⟩)
+        exact ⟨freshSrc_lift h hab hEy0 hfs, heldSrc_lift h hab hEy0 hhs⟩)
   -- the roots are owners or `inout` parameters made by no `letd`
   have hrs : ∀ v ∈ roots (memDeps Ex1.path), ∀ E, killThruV op Ex1.ty Ex1.path Γa1 v = some E →
       E.mode ≠ .rootb ∧ E.dbind = false ∧ E.mode.ownSlot = true := by
