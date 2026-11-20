@@ -704,6 +704,9 @@
 : ~ i g_ws_syms 0
 : ~ i g_fc_order -1  // the functions the engine walks, in the order they were reached
 : ~ i g_fc_weak 0  // 1 while an effect that may not have happened is applied (eng_effect keeps what the place holds)
+// Loans an effect leaves alive (a sequence; 0 none): what a value taken whole
+// out of its place holds of itself, which goes with it (take_payload).
+: ~ i g_eff_keep 0
 : ~ i g_fc_loopmemo -1  // (a loop, the state it was entered in, the loops walked around it) → the state it left + 1, for this run of the function
 : ~ i g_fc_loophead -1  // …→ what holds at its head once its rounds settled + 1: the run that reports starts there (loop_head_memo)
 : ~ i g_s_catches 0
@@ -14517,7 +14520,7 @@ unsafe @ eng_byte s w i k → i {
         : ~ i x ( wv_at g_el_first + + vid g_f_nv 1 )
         ~ != x 0 {
             : i l - x 1
-            ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
+            ? & & ! ( sq_has dead l ) | == g_eff_keep 0 ! ( sq_has g_eff_keep l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
             = x ( wv_at g_el_next l )
         }
         ? != 0 ( sq_len ( shared_tails place ) ) {
@@ -14525,7 +14528,7 @@ unsafe @ eng_byte s w i k → i {
             : ~ i y 0
             ~ < y n {
                 : i l ( wv_at g_el_shared y )
-                ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
+                ? & & ! ( sq_has dead l ) | == g_eff_keep 0 ! ( sq_has g_eff_keep l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
                 = y + y 1
             }
         } {}
@@ -16043,7 +16046,26 @@ unsafe @ eng_byte s w i k → i {
         // payload taken out leaves the rest of its value as it was: only
         // what was lent out of the part itself ends.)
         : b part & != path 0 != ( ep_last path ) EE_STAR
+        // (…but not what the value taken holds of itself, a view of its own
+        // String's buffer: the buffer goes with the value, and so does the
+        // view - `?? o { T x → ( vec_push d x ) }` with x viewing its own
+        // field; AGORA-869.)
+        : ~ i keep 0
+        ? part {
+            : i hd ( av_held av )
+            : ~ i j 0
+            ~ < j ( sq_len hd ) {
+                : i l ( he_loan ( sq_at hd j ) )
+                ? ( el_is_loan l ) {
+                    : i q ( el_place l )
+                    ? & == ( pl_var q ) vid ( ep_prefix path ( pl_path q ) ) { = keep ( sq_add keep l ) } {}
+                } {}
+                = j + j 1
+            }
+        } {}
+        = g_eff_keep keep
         ( eng_effect st a ? part EF_TAKE EF_REPLACE line 0 )
+        = g_eff_keep 0
         ? & & == rown OW_P ! & != path 0 == ( fp_mode ( fv_pidx vid ) ) PM_INOUT ! ( ep_has_star path ) {
             // (a part taken out of an `inout` parameter is a change to the
             // caller's binding, which stays the caller's; an element taken
@@ -19665,7 +19687,9 @@ unsafe @ eng_byte s w i k → i {
     ? != have 0 { ^ == have 2 } {}
     : ~ b r >= ( et_dtor_fn t ) 0
     : i kind ( et_kind t )
-    ? & ! r | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT == kind EK_RES { = r ( et_reaches_dtor ( et_at t ET_E1 ) + depth 1 ) } {}
+    // (…an owned slice's elements too, `[H`, not a `( Slice T )` view:
+    // releasing one releases them - agora #931, AGORA-869)
+    ? & ! r | | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT == kind EK_RES & == kind EK_SLICE ( __owned_slice_ty ( eng_str ( et_at t ET_NAME ) ) ) { = r ( et_reaches_dtor ( et_at t ET_E1 ) + depth 1 ) } {}
     ? & & ! r == kind EK_RES != ( et_at t ET_E2 ) ET_NONE { = r ( et_reaches_dtor ( et_at t ET_E2 ) + depth 1 ) } {}
     ? & & & ! r == kind EK_NAMED ( et_flag t ETF_STRUCT ) ! ( __is_libh ( eng_str ( et_at t ET_NAME ) ) ) {
         : ~ i k 0
@@ -19711,7 +19735,7 @@ unsafe @ eng_byte s w i k → i {
             ( eng_dtor_apply st place t f line )
         } {} } {}
     : i kind ( et_kind t )
-    ? | | == kind EK_VEC == kind EK_BOX == kind EK_OPT {
+    ? | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT & == kind EK_SLICE ( __owned_slice_ty ( eng_str ( et_at t ET_NAME ) ) ) {
         : i e ? == kind EK_OPT ( ee_pay g_etn_T 0 ) EE_STAR
         ( eng_dtor_release st ( pl_make vid ( ep_child path e ) ) ( et_at t ET_E1 ) line + depth 1 )
         ^
@@ -19783,6 +19807,31 @@ unsafe @ eng_byte s w i k → i {
 // A function's exit releases what its frame still owns, newest first:
 // the drop of a value whose destructor may read its views is a use of
 // them.
+// The loans of `ls` (a sequence) on places rooted at a parameter.
+@ __eng_param_loans i ls → i {
+    : ~ i out 0
+    : ~ i k 0
+    ~ < k ( sq_len ls ) {
+        : i l ( sq_at ls k )
+        ? & ( el_is_loan l ) >= ( fv_pidx ( pl_var ( el_place l ) ) ) 0 { = out ( sq_add out l ) } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+// …the held entries of `hd` whose loan is on such a place.
+@ __eng_param_held i hd → i {
+    : ~ i out 0
+    : ~ i k 0
+    ~ < k ( sq_len hd ) {
+        : i he ( sq_at hd k )
+        : i l ( he_loan he )
+        ? & ( el_is_loan l ) >= ( fv_pidx ( pl_var ( el_place l ) ) ) 0 { = out ( sq_add out he ) } {}
+        = k + k 1
+    }
+    ^ out
+}
+
 @ exit_drops i st i line i keep → v {
     ? ( st_bottom st ) { ^ } {}
     ( sink_param_drops st line )
@@ -21411,6 +21460,19 @@ unsafe @ eng_byte s w i k → i {
             = g_fc_ret_fresh 1
         } {}
         ( exit_drops st ln -1 )
+        // (…and what the frame's own releases do at the exit - a `% Drop`
+        // that clears a shared payload the value handed back views - is done
+        // before the caller gets it: the value must still be live after
+        // them; agora #918, AGORA-869.)
+        // (Only views of the caller's storage, places rooted at a parameter:
+        // what the value took over from the frame's own locals - a join's
+        // arms, a value block's tail - is its own, which the exit's releases
+        // of those locals do not reach.)
+        ? ! ( st_bottom st ) {
+            : i pl ( __eng_param_loans ( av_loans av ) )
+            : i ph ( __eng_param_held ( av_held av ) )
+            ? | != pl 0 != ph 0 { ( check_live st pl ph WK_RET 0 ln ) } {}
+        } {}
     } {}
     ( st_set_bottom st )
 }
