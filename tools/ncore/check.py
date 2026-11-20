@@ -239,6 +239,7 @@ class FnCheck:
         self.errors = []
         self.loans = {}          # loan id -> (place, kind)
         self.ended = {}          # loan id -> (line, effect): where and why it ended last (nurlc's g_el_end)
+        self.ek_line = None      # the line what an effect ends is recorded at, when not its own (nurlc's g_ek_line)
         self.pidx = {vid: i for i, vid in enumerate(fn.params)}
         # What a parameter's value holds is the caller's to say. One loan
         # stands for it (kind `held`), on a place of its own that nothing in
@@ -696,7 +697,7 @@ class FnCheck:
                 print(f"trace: {self.fn.name}:{line}: {eff} on {self.pname(place)} ends {len(killed)} loan(s)", file=sys.stderr)
             st.dead = st.dead | killed
             for l in killed:
-                self.ended[l] = (line, eff)
+                self.ended[l] = (self.ek_line or line, eff)
         # what the place held is gone with what the effect released
         if eff in ("drop", "replace", "take") and av.held and not weak:
             keep = set()
@@ -3539,9 +3540,18 @@ class FnCheck:
                                        f"after the view was made")
                         return
 
-    def run_defers(self, st):
-        """A function's exit runs the `;` blocks armed on the way, newest
-        first."""
+    def effect_at(self, st, place, eff, line, eline):
+        """`effect`, with what it ends recorded as ended at `eline` (nurlc's
+        eng_effect_as)."""
+        was, self.ek_line = self.ek_line, eline
+        try:
+            self.effect(st, place, eff, line)
+        finally:
+            self.ek_line = was
+
+    def run_defers(self, st, xl):
+        """A function's exit (at line `xl`) runs the `;` blocks armed on
+        the way, newest first."""
         if st.bottom or not st.defers:
             return st
         # (what a block binds lives on after the block, until the whole
@@ -3554,11 +3564,11 @@ class FnCheck:
         st.defers = ()
         was_in_defer, self.in_defer = self.in_defer, True
         try:
-            return self.run_defers_(st, pending, outer)
+            return self.run_defers_(st, pending, outer, xl)
         finally:
             self.in_defer = was_in_defer
 
-    def run_defers_(self, st, pending, outer):
+    def run_defers_(self, st, pending, outer, xl):
         for d in reversed(pending):
             for x in self.defer_bodies[d]:
                 if x[0] == "scope" and isinstance(x[1], list):
@@ -3581,8 +3591,9 @@ class FnCheck:
                     continue
                 # (released here: its `% Drop` runs, as at a scope end)
                 self.run_dtor(st, (vid, ()), v.ty, v.line)
-                self.effect(st, (vid, ()), "replace", v.line)
-                self.effect(st, (vid, ()), "end", v.line)
+                # (what it ends ended at the exit)
+                self.effect_at(st, (vid, ()), "replace", v.line, xl)
+                self.effect_at(st, (vid, ()), "end", v.line, xl)
                 st.vals[vid] = AV("D")
             # (a loop's element read there is read outside every round:
             # the block runs at the function's exit, its slot in the
@@ -3595,7 +3606,7 @@ class FnCheck:
                 break
         if not st.bottom and st.defers:
             # (blocks the chain's own blocks armed run after them)
-            st = self.run_defers(st)
+            st = self.run_defers(st, xl)
         if outer:
             kept, self.chain_scopes, self.chain_kept = self.chain_kept, None, []
             if not st.bottom:
@@ -3613,11 +3624,11 @@ class FnCheck:
                                         f"the drop of {self.vname(vid)}", held=True)
                     if av.own == "O":
                         self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, self.fn.vars[vid].line)
-                        self.effect(st, (vid, ()), "replace", self.fn.vars[vid].line)
+                        self.effect_at(st, (vid, ()), "replace", self.fn.vars[vid].line, xl)
                     elif av.own == "X":
                         # (moved on some paths only: released on the others)
                         self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, self.fn.vars[vid].line)
-                    self.effect(st, (vid, ()), "end", self.fn.vars[vid].line)
+                    self.effect_at(st, (vid, ()), "end", self.fn.vars[vid].line, xl)
                     if av.own != "M":
                         st.vals[vid] = AV("D")
         return st
@@ -4883,7 +4894,7 @@ class FnCheck:
                     # was made from (MEMORY.md §1)
                     st.vals[op[1]] = before
                     self.ret_watch, self.ret_changed = op[1], False
-                    st = self.run_defers(st)
+                    st = self.run_defers(st, ln)
                     self.ret_watch = None
                     if not st.bottom:
                         after = st.vals.get(op[1])
@@ -4895,7 +4906,7 @@ class FnCheck:
                                          f"which was handed back")
                         st.vals[op[1]] = gone
                 else:
-                    st = self.run_defers(st)
+                    st = self.run_defers(st, ln)
                 self.check_live(st, av, ln, "the returned value", held=True)
                 self.params_hold_locals(st, ln)
                 self.pb_check(st)
@@ -4917,7 +4928,7 @@ class FnCheck:
                     self.err(ln, "the returned value views what a destructor run at the function's exit changes")
                 self.params_hold_dead(st, ln, dk)
             else:
-                st = self.run_defers(st)
+                st = self.run_defers(st, ln)
                 self.params_hold_locals(st, ln)
                 self.pb_check(st)
                 self.exits.append(st.copy())
@@ -5041,7 +5052,7 @@ class FnCheck:
                 st.vals[vid] = AV("P", (), (), held)
         end = self.run(st, self.fn.body)
         if not end.bottom:
-            end = self.run_defers(end)
+            end = self.run_defers(end, self.fn.line)
             self.params_hold_locals(end, self.fn.line)
             self.pb_check(end)
             self.exits.append(end)

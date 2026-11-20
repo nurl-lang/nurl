@@ -13704,7 +13704,7 @@ unsafe @ eng_byte s w i k → i {
 // argument); `deep`: inside the argument, not on it - `elems`, on its
 // elements.
 @ eng_eff_callee_says i eff b deep b elems → s {
-    ? == eff EF_REALLOC { ^ ? deep `may move the buffer of one of its elements` `may move or free its buffer` } {}
+    ? == eff EF_REALLOC { ^ ? elems `may move the buffer of one of its elements` ? deep `may move the buffer of one of its fields` `may move or free its buffer` } {}
     ? == eff EF_DROP { ^ `may drop or replace what it holds` } {}
     ? == eff EF_REPLACE { ^ ? elems `may drop or replace what it holds` `may give it a new value (an 'inout' parameter it replaces, or a field of one)` } {}
     ? == eff EF_TAKE { ^ ? deep `may move a part out of it` `takes it over` } {}
@@ -20139,9 +20139,10 @@ unsafe @ eng_byte s w i k → i {
     ^ out
 }
 
-// A function's exit runs the `;` blocks armed on the way, newest first.
-// (`st` is changed in place; it may come back with no path open.)
-@ run_defers i st → v {
+// A function's exit (at line `xl`) runs the `;` blocks armed on the way,
+// newest first. (`st` is changed in place; it may come back with no path
+// open.)
+@ run_defers i st i xl → v {
     ? | ( st_bottom st ) == ( st_defers st ) 0 { ^ } {}
     // (what a block binds lives on after the block, until the whole chain
     // has run - a block armed inside a block, which runs after it, reads
@@ -20165,8 +20166,8 @@ unsafe @ eng_byte s w i k → i {
         ~ >= vid 0 {
             : i av ( st_av st vid )
             ? & & & & & & != av 0 ! ( sq_has seen vid ) == ( av_own av ) OW_O == ( fv_kind vid ) VK_LOCAL != vid g_fc_ret_watch ! ( sq_has reads vid ) & ! ( __wv_has g_chain_kept vid ) ! ( sq_has g_fc_ret_ws vid ) {
-                ( eng_effect_as st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) EC_RET g_fc_line )
-                ( eng_effect_as st ( pl_make vid 0 ) EF_END ( fv_line vid ) EC_RET g_fc_line )
+                ( eng_effect_as st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) EC_RET xl )
+                ( eng_effect_as st ( pl_make vid 0 ) EF_END ( fv_line vid ) EC_RET xl )
                 ( st_put st vid ( av_make OW_D 0 0 0 F ) )
             } {}
             = vid - vid 1
@@ -20182,7 +20183,7 @@ unsafe @ eng_byte s w i k → i {
         = k - k 1
     }
     // (blocks the chain's own blocks armed run after them)
-    ? & ! ( st_bottom st ) != ( st_defers st ) 0 { ( run_defers st ) } {}
+    ? & ! ( st_bottom st ) != ( st_defers st ) 0 { ( run_defers st xl ) } {}
     ? outer {
         : i kept g_chain_kept
         = g_chain_on 0
@@ -20193,8 +20194,8 @@ unsafe @ eng_byte s w i k → i {
                 : i vid ( wv_at kept j )
                 : i av ( st_av st vid )
                 ? != av 0 {
-                    ? == ( av_own av ) OW_O { ( eng_effect_as st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) EC_RET g_fc_line ) } {}
-                    ( eng_effect_as st ( pl_make vid 0 ) EF_END ( fv_line vid ) EC_RET g_fc_line )
+                    ? == ( av_own av ) OW_O { ( eng_effect_as st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) EC_RET xl ) } {}
+                    ( eng_effect_as st ( pl_make vid 0 ) EF_END ( fv_line vid ) EC_RET xl )
                     ? != ( av_own av ) OW_M { ( st_put st vid ( av_make OW_D 0 0 0 F ) ) } {}
                 } {}
                 = j - j 1
@@ -21429,7 +21430,7 @@ unsafe @ eng_byte s w i k → i {
         = k + k 2
     }
     = g_fc_ret_changed 0
-    ( run_defers st )
+    ( run_defers st ln )
     = g_fc_ret_ws 0
     ? ! ( st_bottom st ) {
         : i gn ( st_gone st )
@@ -21452,7 +21453,7 @@ unsafe @ eng_byte s w i k → i {
 @ stmt_ret i st i at i ln → v {
     : i op ( eng_op ( ec + at 1 ) )
     ? == op OP_NONE {
-        ( run_defers st )
+        ( run_defers st ln )
         ? ! ( st_bottom st ) {
             ( params_hold_locals st ln )
             ( wv_push g_fc_exits ( st_copy st ) )
@@ -21572,7 +21573,7 @@ unsafe @ eng_byte s w i k → i {
         ( st_put st ov before )
         = g_fc_ret_watch ov
         = g_fc_ret_changed 0
-        ( run_defers st )
+        ( run_defers st ln )
         = g_fc_ret_watch -1
         ? ! ( st_bottom st ) {
             : i after ( st_av st ov )
@@ -21588,7 +21589,7 @@ unsafe @ eng_byte s w i k → i {
             ( st_put st ov gone )
         } {}
     } {
-        ? & != ( st_defers st ) 0 > ( wv_len g_fc_ret_sel ) 0 { ( ret_watch_selected st ln ) } { ( run_defers st ) }
+        ? & != ( st_defers st ) 0 > ( wv_len g_fc_ret_sel ) 0 { ( ret_watch_selected st ln ) } { ( run_defers st ln ) }
     }
     ? ! ( st_bottom st ) {
         ( check_live st ( av_loans av ) ( av_held av ) WK_RET 0 ln )
@@ -22885,7 +22886,7 @@ unsafe @ eng_byte s w i k → i {
     }
     ( eng_run st 0 g_ec_n )
     ? & ! ( st_bottom st ) == g_fc_unsup 0 {
-        ( run_defers st )
+        ( run_defers st ( ef_at f EF_LINE ) )
         ? ! ( st_bottom st ) {
             ( params_hold_locals st ( ef_at f EF_LINE ) )
             ( sink_param_drops st ( ef_at f EF_LINE ) )

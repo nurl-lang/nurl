@@ -32,7 +32,8 @@ and each test is put in one class:
                   keeps, a stale pointer): the engine is not reached
   ENGINE-CRASH    the engine stops with an internal error (on any test)
   OTHER-STOP      the walk-silent compile stops on another line with an error
-                  that is not the engine's, before the engine runs (or times out)
+                  that is not the engine's, before the engine runs (or times out),
+                  or the `--engine` run gives no clean verdict
   ENGINE-ONLY     the golden accepts, the engine refuses (every accepted
                   golden is compiled once, walk-silent)
 
@@ -53,7 +54,8 @@ per test (name, class, the golden's place and message, the engine's place
 and message, a finding on the golden's line, the binding, both sets of
 lines, where the golden's place came from: `golden` or `run`). `--top N` the rule groups shown per class (default 5).
 (NURLC=<binary>.) Nothing is written but OUT. Exit status 1 if any test
-is not SAME-LINE / WALK-KEEPS.
+is not SAME-LINE / WALK-KEEPS, or a test named has no golden (the others
+are still compared).
 
 The baseline (2026-11-20, main 72499862, before AGORA-877 (c)): of 814
 refusal goldens, 212 same line, 27 other line, 27 engine accepts, 0 engine
@@ -104,8 +106,8 @@ def diags(text):
     is the engine's (eng_report follows it with a `note:` naming docs/MEMORY.md)."""
     lines = text.split("\n")
     out = []
-    for i, l in enumerate(lines):
-        m = DIAG.match(l)
+    for i, ln in enumerate(lines):
+        m = DIAG.match(ln)
         if m:
             eng = any(x.startswith("  note: ") and "(docs/MEMORY.md §" in x for x in lines[i + 1:i + 5]
                       if not DIAG.match(x))
@@ -168,7 +170,7 @@ def classify(name):
         row["class"], row["eng"] = "OTHER-STOP", ("timeout", 0, "", False)
         return row
     if CRASH in err:
-        row["class"], row["eng"] = "ENGINE-CRASH", ("nurlc", 0, next(l for l in err.split("\n") if CRASH in l), False)
+        row["class"], row["eng"] = "ENGINE-CRASH", ("nurlc", 0, next(ln for ln in err.split("\n") if CRASH in ln), False)
         return row
     if kind == "accept":
         if not engf:
@@ -189,15 +191,26 @@ def classify(name):
             row["class"], row["eng"] = "WALK-KEEPS", first
         else:
             row["class"] = "OTHER-STOP"
-            last = [l for l in err.split("\n") if "error" in l]
+            last = [ln for ln in err.split("\n") if "error" in ln]
             row["eng"] = first or ("nurlc", 0, (last[0] if last else f"rc={rc}")[:160], False)
         return row
     rc, out, err = nurlc(["--engine"], name)
-    verdict = next((l.split("\t")[2:] for l in out.split("\n") if l.startswith("eng\tverdict\t")), ["none"])
+    if rc is None:
+        row["class"], row["eng"] = "OTHER-STOP", ("timeout", 0, "--engine", False)
+        return row
+    if CRASH in err:
+        row["class"], row["eng"] = "ENGINE-CRASH", ("nurlc", 0, next(ln for ln in err.split("\n") if CRASH in ln), False)
+        return row
+    verdict = next((ln.split("\t")[2:] for ln in out.split("\n") if ln.startswith("eng\tverdict\t")), ["none"])
     if verdict[0] == "skip":
         row["class"], row["eng"] = "ENGINE-SKIP", ("skip", 0, " ".join(verdict[1:]), False)
-    else:
+    elif verdict[0] == "runs-clean" and rc == 0:
         row["class"] = "ENGINE-ACCEPTS"
+    else:
+        # (no clean verdict: the shadow run stopped, or says otherwise)
+        last = [ln for ln in err.split("\n") if "error" in ln]
+        row["class"] = "OTHER-STOP"
+        row["eng"] = ("nurlc", 0, (last[0] if last else f"--engine: rc={rc}, verdict {' '.join(verdict)}")[:160], False)
     return row
 
 
@@ -225,17 +238,18 @@ def main(argv):
         elif a == "--top":
             top = int(argv[i + 1]); i += 2
         elif a == "--list":
-            picked += [l.strip() for l in open(argv[i + 1], encoding="utf-8") if l.strip()]; i += 2
+            picked += [ln.strip() for ln in open(argv[i + 1], encoding="utf-8") if ln.strip()]; i += 2
         elif a in ("-h", "--help"):
             print(__doc__)
             return 2
         else:
             picked.append(a); i += 1
+    missing = []
     if picked:
         names = names_of(picked)
-        for n in names:
-            if not os.path.exists(os.path.join(ROOT, TESTS, "outputs", n + ".txt")):
-                print(f"diagcmp: {n}: no golden in {TESTS}/outputs", file=sys.stderr)
+        missing = [n for n in names if not os.path.exists(os.path.join(ROOT, TESTS, "outputs", n + ".txt"))]
+        for n in missing:
+            print(f"diagcmp: {n}: no golden in {TESTS}/outputs", file=sys.stderr)
     else:
         names = sorted(f[:-3] for f in os.listdir(os.path.join(ROOT, TESTS)) if f.endswith(".nu"))
     rows = []
@@ -279,7 +293,7 @@ def main(argv):
           f"{count['OTHER-STOP']} other stops; {count['ENGINE-ONLY']} engine-only; of the {len(found)} the engine "
           f"refuses: {on_line} with a finding on the golden's line, {same_set} on the same lines, "
           f"the binding named {same_b} of {len(named)} (another name of it {other_b})")
-    return 1 if sum(count[c] for c in CLASSES if c not in ("SAME-LINE", "WALK-KEEPS")) else 0
+    return 1 if missing or sum(count[c] for c in CLASSES if c not in ("SAME-LINE", "WALK-KEEPS")) else 0
 
 
 if __name__ == "__main__":
