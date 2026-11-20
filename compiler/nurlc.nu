@@ -37892,11 +37892,18 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // takes apart runs after it.)
         ? & & & & & != 0 g_user_drop_seen == 0 g_in_unsafe != 0 ( nurl_str_len arg_froot ) ( str_has_index callee_sink arg_idx ) ( bck_sound ) ! ( __plain_scalar_lty ( nurl_llty at ) ) {
             : ~ s __dch ( __field_path_chain syms arg_froot )
+            // (Inside a `% Drop` impl only its own receiver may be taken
+            // apart - the outermost link of a path rooted at it - not
+            // another value of its type.)
+            : i __drd ( nurl_str_find arg_froot `.` )
+            : ~ b __drcv & & != 0 g_drop_glue_on >= __drd 0 ( seq ( nurl_str_slice arg_froot 0 __drd ) ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) )
             ~ != 0 ( nurl_str_len __dch ) {
                 : s __dl ( str_first_word __dch ) = __dch ( str_skip_word __dch )
                 : i __dk ( nurl_str_find __dl `:` )
                 : s __dsty ? < __dk 0 `` ( nurl_str_slice __dl 0 __dk )
-                ? & & >= __dk 0 ( __has_user_drop __dsty ) ! ( seq g_drop_glue_ty __dsty ) {
+                : b __dself & __drcv ( seq g_drop_glue_ty __dsty )
+                = __drcv F
+                ? & & >= __dk 0 ( __has_user_drop __dsty ) ! __dself {
                     : s __dfn ( nurl_str_slice __dl + __dk 1 - - ( nurl_str_len __dl ) __dk 1 )
                     : i __dfc ( nurl_str_to_int ( nurl_sym_get g_impl_name_syms `dropfld#n` ) )
                     ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `dropfld#` ( nurl_str_int __dfc ) ) ( nurl_str_cat4 ( nurl_str_cat3 __dsty `\t` __dfn ) ( nurl_str_cat3 `\t` ( nurl_str_int ( nurl_lex_line lex ) ) `\t` ) ( nurl_str_cat3 ( nurl_lex_filename lex ) `\t` fname ) ( nurl_str_cat `\t` arg_froot ) ) )
@@ -86506,6 +86513,10 @@ unsafe @ __clo_detach_moves i lex i syms s caps b lit s bind → s {
 // impl's receiver, not to whatever the closure's first slot holds.
 unsafe @ gen_closure_expr i lex i syms i cg → s {
     : s __glue_saved ( nurl_str_cat g_drop_glue_ty `` )
+    // (The body's own `unw` flag: its `inout` parameters set it below; the
+    // enclosing function's comes back at the end.)
+    : i __unw_saved g_fn_unw
+    = g_fn_unw 0
     // (A closure made inside a `% Drop` impl may read its receiver's fields
     // in a body compiled as a function of its own: every field counts as
     // read, `*` - resolve_drop_field_takes, agora #929.)
@@ -86521,6 +86532,7 @@ unsafe @ gen_closure_expr i lex i syms i cg → s {
     = g_last_alloc_reg ``
     = g_last_alloc_size ``
     = g_drop_glue_ty __glue_saved
+    = g_fn_unw __unw_saved
     = g_drop_glue_on ? == 0 ( nurl_str_len g_drop_glue_ty ) 0 1
     ^ r
 }
@@ -87006,6 +87018,11 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
             // `inout` parameter is: a field of it a `sink` took must have a
             // value again by then - `&name`, agora #280, #929.)
             ( nurl_sym_def body_syms `__clo_inout_amp__` ( nurl_str_cat4 ( nurl_sym_get body_syms `__clo_inout_amp__` ) ` ` `&` bpname ) )
+            // (…and its body's calls are points a panic may unwind from,
+            // `unw`, where it owns memory or can hold a view, as a
+            // function's - agora #929.)
+            : s __civt ( nurl_llty ( __clo_inout_base bptype ) )
+            ? | ( __ty_holds_view_p __civt ) ( __type_needs_drop __civt body_syms ) { = g_fn_unw 1 } {}
         } {
             // Alloca for each param so it can be loaded
             : s bpptr ( nurl_cg_reg cg )
@@ -87624,6 +87641,10 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         // (Its g_fn_vkeeps answer is its literal's: a call through a value
         // holding it asks it, __vk_of.)
         = g_bck_fn ( nurl_str_cat closure_fn_name `` )
+        // (The closure body's `unw` rows are its own: one with an `inout`
+        // parameter that owns memory or can hold a view records them, as a
+        // function's does, whatever the enclosing function's flag - agora
+        // #929.)
         // (The parameters the body owns: none - a closure parameter is
         // borrowed - but its `inout` ones go back to the caller at each exit,
         // `&name`; not the enclosing function's list, which is that one's.

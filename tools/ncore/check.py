@@ -382,7 +382,7 @@ class FnCheck:
 
         def refills(stmts):
             for i, s in enumerate(stmts):
-                if (s[0] == "let" and s[2] is not None and s[2][0] == "call" and i + 1 < len(stmts)):
+                if (s[0] == "let" and s[2] is not None and s[2][0] in ("call", "callind") and i + 1 < len(stmts)):
                     n = stmts[i + 1]
                     if (n[0] == "assign" and n[1][1] and n[2] is not None and n[2][0] == "use"
                             and n[2][1][0] == "v" and n[2][1][1] == s[1] and not n[2][1][2]):
@@ -1697,23 +1697,6 @@ class FnCheck:
             if k >= len(ops):
                 continue
             op = ops[k]
-            # a field a `sink` takes out of a struct whose `% Drop` reads it:
-            # the destructor runs at the struct's end and reads the emptied
-            # field (agora #929)
-            # - any struct along the path, `o.inner.buf` read by Outer's; a
-            # number handed over is a copy, which takes nothing)
-            fty = self.ty_of_place((op[1], tuple(op[2]))) if op[0] == "v" and op[2] else None
-            if (op[0] == "v" and op[2] and k < len(sm["modes"]) and sm["modes"][k] == "sink"
-                    and not (fty is not None and self.T.is_scalar(fty))):
-                for i in range(len(op[2])):
-                    oty = self.ty_of_place((op[1], tuple(op[2])[:i]))
-                    if oty is None or oty[0] != "named" or self.fn.name == "drop__" + oty[1]:
-                        continue
-                    rd = self.drop_reads(oty[1])
-                    if op[2][i] in rd or "*" in rd:
-                        self.err(line, f"{name} takes field {'.'.join(map(str, op[2][i:]))} of a {oty[1]}, "
-                                       f"whose destructor reads it")
-                        break
             # a binding taken into a literal argument, beside another
             # argument that views it: `( use2 @ S { b 0 } sv )`, as `( use3
             # b sv )` is - inside the call the two are unrelated names
@@ -1977,6 +1960,32 @@ class FnCheck:
                     # the callee does to its own copy is not done to the
                     # caller's (MEMORY.md §7.5)
                     copied.add(k)
+        # a field a `sink` takes out of a struct whose `% Drop` reads it: the
+        # destructor runs at the struct's end and reads the emptied field
+        # (agora #929) - any struct along the path, `o.inner.buf` read by
+        # Outer's; not a number, which is copied, nor a field copied for a
+        # callee that keeps it (`copied`); and inside `drop__T` only its own
+        # receiver may be taken apart, not another value of T
+        for k in sm["consumes"]:
+            if k >= len(ops) or k in copied:
+                continue
+            op = ops[k]
+            if not (op[0] == "v" and op[2] and k < len(sm["modes"]) and sm["modes"][k] == "sink"):
+                continue
+            fty = self.ty_of_place((op[1], tuple(op[2])))
+            if fty is not None and self.T.is_scalar(fty):
+                continue
+            for i in range(len(op[2])):
+                oty = self.ty_of_place((op[1], tuple(op[2])[:i]))
+                if oty is None or oty[0] != "named":
+                    continue
+                if self.fn.name == "drop__" + oty[1] and op[1] == 0 and i == 0:
+                    continue
+                rd = self.drop_reads(oty[1])
+                if op[2][i] in rd or "*" in rd:
+                    self.err(line, f"{name} takes field {'.'.join(map(str, op[2][i:]))} of a {oty[1]}, "
+                                   f"whose destructor reads it")
+                    break
         # effects
         for (k, path, eff) in sm["effects"]:
             if k < len(ops) and ops[k][0] == "v" and not (k in copied and not path):
