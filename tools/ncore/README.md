@@ -17,6 +17,7 @@ decides the hole probes without any code per surface spelling.
 | `RULES.md` | the rules `check.py` checks, each with where docs/MEMORY.md states it |
 | `disagree.tsv` | the probes whose `// map:` verdict the rules do not give yet, and how (the work left) |
 | `show.py` | one program: its verdict, errors and summaries; `--trace FN` the state after each statement |
+| `diagcmp.py` | the engine's diagnostics against the walk's goldens (compiler/tests): the same line, another, none |
 | `run.py` | runs probes and compares the verdict with each probe's `// map:` line |
 | `openprobes/` | probes written from open hole tickets |
 
@@ -38,6 +39,7 @@ The same rules are in the compiler (`nurlc --engine`, docs/dev/CORE_IR.md
 ```
 PYTHONUTF8=1 python engcmp.py --verdicts --jobs 8   # every probe of results_nurlc.tsv: the engine's verdict against the one recorded there
 PYTHONUTF8=1 python engcmp.py --list files.txt      # the engine's reading of every type against this checker's
+PYTHONUTF8=1 python diagcmp.py --jobs 8 --tsv out.tsv  # every refusal golden: is the engine's first finding on the walk's line?
 ```
 
 A rule changed here is changed there, and the other way round: the

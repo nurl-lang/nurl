@@ -780,8 +780,11 @@ if (( RUN_TESTS == 1 )); then
     # core_ir: `--emit-core` lowers every construct to the core IR
     # (docs/dev/CORE_IR.md) and leaves nothing `opaque`, in its shapes and
     # in the compiler's own source.
-    step "split equivalence + simd dispatch IR + simd baseline agree + crypto tier IR + global atomics IR + aggregate joins IR + core IR + unsafe report + import roots + nesting limit" \
-        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree crypto_tier_ir global_atomic_ir journal_null_ir journal_slot_cfg_ir agg_no_phi_ir core_ir unsafe_report import_roots nesting_limit
+    # engine_end_line: the line a use of an ended loan names as where it
+    # ended is on a path that reaches the use, in the engine and in
+    # tools/ncore/check.py (that half needs python3).
+    step "split equivalence + simd dispatch IR + simd baseline agree + crypto tier IR + global atomics IR + aggregate joins IR + core IR + engine end lines + unsafe report + import roots + nesting limit" \
+        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree crypto_tier_ir global_atomic_ir journal_null_ir journal_slot_cfg_ir agg_no_phi_ir core_ir engine_end_line unsafe_report import_roots nesting_limit
 fi
 
 # Both tools are required outputs of a complete toolchain build. Their
