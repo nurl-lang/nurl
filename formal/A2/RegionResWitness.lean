@@ -24,7 +24,15 @@ returning `( vec_at vv 0 )`, is well-typed (`vat_ok`). Its path is what `vv`
 holds, the region, and `FnOK`'s path check now admits a region as its held
 check does (`isRegionIdx`). The path-side negative is `vw_not_ok`: a borrow
 of the `sink` parameter's own buffer is still refused, the parameter being
-no region and not lendable. -/
+no region and not lendable.
+
+A field of an owned struct that can hold no view or closure depends on the
+struct alone, not on what its sibling fields' views point into (`projHeld`):
+a truncation through a borrow of the first field of a `sink (prod (Vec i)
+(Vec [s))` parameter passes `ThruOK` (`fst_trunc_ok`), where it was refused
+with the struct's held view of the region in its path
+(`fst_trunc_old_refused`); the second field still carries the region
+(`snd_trunc_refused`). -/
 
 namespace A2.RegionResWitness
 
@@ -363,5 +371,68 @@ theorem sink_dep_refused {fn : Fn} (hnv : fn.params.length < fn.nvars) {p : Nat}
     have he : fn.params[p] = (.sink, t) := (List.getElem?_eq_some_iff.mp hp).2
     simp only [he] at hm
     rcases hm with hm | ⟨_, hm⟩ <;> cases hm
+
+/-! ### A field of an owned struct, read past a sibling field's region -/
+
+/-- `ftr sink (prod (Vec i) (Vec [s)) p`: its first field holds no view, its
+    second views the caller's memory, the region `π p` (`2`). -/
+def pvt : Ty := .prod (.vec .int) vsi
+
+def ftr : Fn where
+  params   := [(.sink, pvt)]
+  resTy    := .int
+  resOwn   := false
+  lends    := []
+  rholds   := []
+  outHolds := []
+  body     := .assign 1 (.expr (.lit 0))
+  nvars    := 2
+
+def Ep : Entry := ⟨pvt, .own, true, [], [⟨2, .view⟩], false, false, false, false⟩
+
+theorem ftr_sig0 : sigCtx ftr 0 = some Ep := by
+  simp [sigCtx, regionP, regioned, paramE, ftr, pvt, vsi, Ty.holdsView, Ty.hasFn, Ep]
+
+theorem ftr_sig2 : sigCtx ftr 2 = some regionE := by
+  simp [sigCtx, regioned, ftr, pvt, vsi, Ty.holdsView]
+
+/-- **A borrow of the first field depends on the struct alone**: what the
+    second field's views point into is no part of it (`projHeld`). -/
+theorem fst_path : (projE 0 Ep (.vec .int)).path = [⟨0, .inner⟩] := by
+  simp [projE, projDeps, projHeld, Ep, Mode.ownSlot, Ty.holdsView, Ty.hasFn]
+
+/-- **So a truncation through it passes `ThruOK`**: the struct is an owned
+    `sink` parameter, which may drop its elements. -/
+theorem fst_trunc_ok : ThruOK (sigCtx ftr) [] (.trunc (.lit 0)) (.vec .int) (projE 0 Ep (.vec .int)).path := by
+  rw [fst_path]
+  intro d hd
+  simp only [memDeps, List.filter_cons, Kind.isName, Bool.not_false, ↓reduceIte, List.filter_nil,
+    List.mem_singleton] at hd
+  subst hd
+  refine ⟨List.not_mem_nil, fun y hy => (by simp [Edit.stored] at hy), Ep, ftr_sig0, rfl, Or.inl rfl,
+    DtorSafe.of_none (fun v E h => ?_) _ _ _, (by decide)⟩
+  rcases v with _ | _ | _ | v <;>
+    simp [sigCtx, regionP, regioned, paramE, ftr, pvt, vsi, Ty.holdsView, Ty.hasFn, resMode] at h <;>
+    subst h <;> rfl
+
+/-- **Before, it did not**: the field's path carried the struct's held view of
+    the region, which no change may go through. -/
+theorem fst_trunc_old_refused :
+    ¬ ThruOK (sigCtx ftr) [] (.trunc (.lit 0)) (.vec .int) (projDeps 0 Ep ++ Ep.held) := by
+  intro h
+  obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := h ⟨2, .view⟩ (by simp [memDeps, Kind.isName, Ep, projDeps, Mode.ownSlot])
+  rw [ftr_sig2] at hEr; cases hEr
+  rcases hcan with h | ⟨_, h, _⟩ <;> cases h
+
+/-- **The second field still carries the region**: a slice of the caller's
+    memory is lent with what it depends on, and a truncation through it is
+    refused. -/
+theorem snd_trunc_refused :
+    ¬ ThruOK (sigCtx ftr) [] (.trunc (.lit 0)) vsi (projE 0 Ep vsi).path := by
+  intro h
+  obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := h ⟨2, .view⟩
+    (by simp [memDeps, Kind.isName, Ep, projE, projDeps, projHeld, Mode.ownSlot, vsi, Ty.holdsView])
+  rw [ftr_sig2] at hEr; cases hEr
+  rcases hcan with h | ⟨_, h, _⟩ <;> cases h
 
 end A2.RegionResWitness

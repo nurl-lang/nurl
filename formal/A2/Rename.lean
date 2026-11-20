@@ -1850,7 +1850,7 @@ theorem projE_fresh_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (
         { projE (S.ρ y) (S.liftE y Ey) a with fresh := true, heldFresh := true } := by
       cases a <;> first
         | exact absurd rfl hai
-        | (simp only [projE, hlh, hh, List.append_nil, hpd]
+        | (simp only [projE, hlh, hh, projHeld_nil, hpd]
            simp [liftE, Mode.ownSlot, heldA, hafn, rds, liftMode])
     rw [heq]; exact EntryWeaker.refl _
 
@@ -1880,19 +1880,34 @@ theorem projE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : �
       rcases this with h1 | h1
       · exact List.mem_append.mpr (Or.inl h1)
       · exact List.mem_append.mpr (Or.inr h1.2)
+  -- (AGORA-937: the lift keeps whether the struct's slot owns its value,
+  -- so the field depends on what the lifted struct holds where it did)
+  have hosl : (S.liftE y Ey).mode.ownSlot = Ey.mode.ownSlot := by
+    by_cases hrb : Ey.mode = .rootb
+    · rw [(liftE_rootb h).mpr hrb, hrb]
+    · rw [liftE_mode y hrb]; cases hm : Ey.mode <;> simp_all [liftMode, Mode.ownSlot]
+  have hph : ∀ t' : Ty, projHeld (S.liftE y Ey).mode.ownSlot t' (S.liftE y Ey).held ⊆
+      rds S.ρ (projHeld Ey.mode.ownSlot t' Ey.held) ++ S.A := by
+    intro t' d hd
+    rw [hosl] at hd
+    unfold projHeld at hd ⊢
+    split at hd
+    · cases hd
+    · rename_i hc; simp only [hc]; exact hl hd
   cases t with
   | int => exact intE_lift x
   | _ =>
     refine EntryWeaker.mk' (by simp [projE, liftE]) (by simp [projE, liftE, liftMode])
       (by simp [projE]) (by simp [projE, liftE]) (fun _ => ?_) ?_
-    · simp only [projE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true,
+    · intro d hd
+      have hd' := List.mem_append.mp (by simpa only [projE] using hd)
+      simp only [projE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true,
         rds, List.map_append]
-      intro d hd
-      rcases List.mem_append.mp hd with hd | hd
+      rcases hd' with hd | hd
       · rcases List.mem_append.mp (hpd hd) with h1 | h1
         · exact List.mem_append_left _ (List.mem_append_left _ h1)
         · exact List.mem_append_right _ h1
-      · rcases List.mem_append.mp (hl hd) with h1 | h1
+      · rcases List.mem_append.mp (hph _ hd) with h1 | h1
         · exact List.mem_append_left _ (List.mem_append_right _ h1)
         · exact List.mem_append_right _ h1
     · simp only [projE, liftE, reduceCtorEq, ↓reduceIte]; exact hl
@@ -2469,17 +2484,27 @@ theorem projE_subE (h : S.OK) {y : Var} (hnp : S.isPi y = false) (E : Entry) (t 
   by_cases h1 : t = .int
   · subst h1; exact EntryWeaker.refl _
   have hpe : ∀ E' : Entry, projE (S.ρ y) E' t =
-      ⟨t, .bor, true, projDeps (S.ρ y) E' ++ E'.held, E'.held, false, false, false, false⟩ := fun E' => by
+      ⟨t, .bor, true, projDeps (S.ρ y) E' ++ projHeld E'.mode.ownSlot t E'.held, E'.held, false, false, false,
+        false⟩ := fun E' => by
     cases t <;> simp_all [projE]
+  -- (AGORA-937: the substitution keeps the struct's mode, so the field
+  -- depends on what the substituted struct holds where it did)
+  have hphs : projHeld (S.subE E).mode.ownSlot t (S.subE E).held =
+      (projHeld E.mode.ownSlot t E.held).flatMap S.subD := by
+    rw [subE_mode, subE_held]; unfold projHeld; split <;> rfl
   rw [hpe, hpe]
-  refine S.ew_sub_path (X := ⟨t, .bor, true, projDeps (S.ρ y) E ++ E.held, E.held, false, false, f, f⟩)
-    (P := projDeps (S.ρ y) (S.subE E) ++ (S.subE E).held) ?_ ?_ (by simp)
-  · show projDeps (S.ρ y) (S.subE E) ++ E.held.flatMap S.subD ⊆ (projDeps (S.ρ y) E ++ E.held).flatMap S.subD
-    rw [List.flatMap_append]
+  refine S.ew_sub_path (X := ⟨t, .bor, true, projDeps (S.ρ y) E ++ projHeld E.mode.ownSlot t E.held, E.held,
+      false, false, f, f⟩)
+    (P := projDeps (S.ρ y) (S.subE E) ++ projHeld (S.subE E).mode.ownSlot t (S.subE E).held) ?_ ?_ (by simp)
+  · show projDeps (S.ρ y) (S.subE E) ++ projHeld (S.subE E).mode.ownSlot t (S.subE E).held ⊆
+      (projDeps (S.ρ y) E ++ projHeld E.mode.ownSlot t E.held).flatMap S.subD
+    rw [List.flatMap_append, hphs]
     exact append_sub (S.projDeps_subE h hnp E) (List.Subset.refl _)
   · intro hft
     obtain ⟨hh, hk⟩ := hkeep hft
-    show (projDeps (S.ρ y) E ++ E.held).flatMap S.subD ⊆ projDeps (S.ρ y) (S.subE E) ++ E.held.flatMap S.subD
+    show (projDeps (S.ρ y) E ++ projHeld E.mode.ownSlot t E.held).flatMap S.subD ⊆
+      projDeps (S.ρ y) (S.subE E) ++ projHeld (S.subE E).mode.ownSlot t (S.subE E).held
+    rw [hphs]
     have hkp : ∀ d ∈ projDeps (S.ρ y) E, ∀ v, S.inv d.root = some v → S.isPi v = false := by
       intro d hd v hv
       unfold projDeps at hd
@@ -2496,7 +2521,7 @@ theorem projE_subE (h : S.OK) {y : Var} (hnp : S.isPi y = false) (E : Entry) (t 
       · split
         · rfl
         · rename_i ho hrb; exact hkept (hk (by simpa using ho) hrb)
-    rw [hh, List.append_nil, List.flatMap_nil, List.append_nil, hpd, hkept hkp]
+    rw [hh, projHeld_nil, List.append_nil, List.flatMap_nil, List.append_nil, hpd, hkept hkp]
     exact List.Subset.refl _
 
 /-- AGORA-937: a fresh read's source (`projSrc_lift`) is lifted to one that

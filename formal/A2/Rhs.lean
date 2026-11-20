@@ -1857,10 +1857,15 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
       WFv t x ∧ ViewsOK m t x E.held ∧ SharesOK m t x)
     (hbor : ValOK m E.ty T E.path E.held → ValOK m t x (E.path ++ E.held) E.held) :
     RhsOut m Γ (projE y E t) (lendOf x) false := by
-  have hint : t = .int ∨ projE y E t = ⟨t, .bor, true, projDeps y E ++ E.held, E.held, false, false, false, false⟩ := by
+  have hint : t = .int ∨ projE y E t =
+      ⟨t, .bor, true, projDeps y E ++ projHeld E.mode.ownSlot t E.held, E.held, false, false, false, false⟩ := by
     cases t <;> simp [projE]
+  -- (AGORA-937: a field of an owned struct that can hold no view depends on
+  -- no view the struct holds; one of a borrowed struct does, `ValOK.pair`)
+  have hphb : E.mode.ownSlot = false → projHeld E.mode.ownSlot t E.held = E.held := fun h => by
+    rw [h]; exact projHeld_bor
   -- what the field holds, valid as a borrow through `P`
-  have key : ValOK m t (lendOf x) (projDeps y E ++ E.held) E.held := by
+  have key : ValOK m t (lendOf x) (projDeps y E ++ projHeld E.mode.ownSlot t E.held) E.held := by
     rcases hi.mode_cases hy with hm | hm | hm
     · have hos : E.mode.ownSlot = true := by rw [hm]; rfl
       obtain ⟨T', hT', hwT, hvsT⟩ := hi.own_val hy hl hos
@@ -1870,20 +1875,21 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
       refine lend_valOK hwx ((hi.pkgs y _ T hT' rfl).sub (hc.sub (Sub.refl _)))
         (fun n' hs => ⟨⟨y, .inner⟩, by simp [hpd], Or.inl ⟨T, Or.inl ⟨T, hT', Top.refl _⟩,
         Or.inr (Or.inr ⟨rfl, x, hc, hs⟩)⟩⟩) hi.noCellPay hvx ((hi.held y E _ T hy hl hT' rfl).sub (names_child hc))
-        hshx (fun s _ => ?_)
+        hshx (fun s hs => ?_)
+      rw [projHeld_view (by rw [hs]; rfl)]
       exact ViewsOK.mono (List.subset_append_right _ _) hvx
     · have hos : E.mode.ownSlot = false := by rw [hm]; rfl
       obtain ⟨T', hT', hok⟩ := hi.bor_val hy hl hos
       rw [hT'] at hv; cases hv
       have hpd : projDeps y E = [⟨y, .view⟩] := by simp [projDeps, hm, Mode.ownSlot]
       have hx := hbor hok
-      rw [hpd, hx.lend]; exact valOK_via hT' hx htop (by simp)
+      rw [hphb hos, hpd, hx.lend]; exact valOK_via hT' hx htop (by simp)
     · have hos : E.mode.ownSlot = false := by rw [hm]; rfl
       obtain ⟨T', hT', hok⟩ := hi.bor_val hy hl hos
       rw [hT'] at hv; cases hv
       have hpd : projDeps y E = E.path := by simp [projDeps, hm, Mode.ownSlot]
       have hx := hbor hok
-      rw [hpd, hx.lend]; exact hx
+      rw [hphb hos, hpd, hx.lend]; exact hx
   rcases hint with rfl | heq
   · obtain ⟨n, hn⟩ := valOK_int.mp key
     simp only [projE]; rw [hn]; exact intE_out n
@@ -1891,8 +1897,8 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
     refine ⟨rfl, Or.inr rfl, rfl, htok, fun _ r hr => ?_, fun h => (by cases h), fun _ => key,
       fun _ => by
         have h := hi.names y E hy hl (Or.inl hnint)
-        show DepsNamed Γ ((projDeps y E ++ E.held) ++ E.held)
-        exact ((projDeps_named h).append h.held).append h.held,
+        show DepsNamed Γ ((projDeps y E ++ projHeld E.mode.ownSlot t E.held) ++ E.held)
+        exact ((projDeps_named h).append (h.held.sub (projHeld_sub _ _ _))).append h.held,
       ((hi.held y E _ T hy hl hv rfl).sub (names_child hc)).lendOf,
       ((hi.pkgs y _ T hv rfl).sub (hc.sub (Sub.refl _))).lendOf, (fun h => nomatch h), fun i hn => ?_⟩
     rotate_left
@@ -1913,9 +1919,18 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
         obtain ⟨hwx, _, _⟩ := hown hwT hvsT (hi.shares y E _ T hy hT' rfl rfl)
         have hvw : CleanDeps Γ E.held → ∀ i o l, Sub (.view i o l) x → PkgFreeId m i := fun hcl i o l hv =>
           hi.pkgFree y E true T hy (Or.inl hl) hT' i (Or.inr (Or.inr (Or.inr ⟨hos, hcl, o, l, hv.trans (hc.sub (Sub.refl _))⟩)))
-        refine lend_pkgNames (E' := ⟨t, .bor, true, projDeps y E ++ E.held, E.held, false, false, false, false⟩) hi.heap
+        refine lend_pkgNames (E' := ⟨t, .bor, true, projDeps y E ++ projHeld E.mode.ownSlot t E.held, E.held,
+            false, false, false, false⟩) hi.heap
           (Or.inl ⟨y, T, hT', hc.sub (Sub.refl _)⟩) (fun _ => hwx.noHref) rfl
-          (fun _ ⟨c', hb⟩ => ?_) hvw (fun hcl i o l he => hvw hcl.right i o l (he ▸ Sub.refl _)) hn
+          (fun _ ⟨c', hb⟩ => ?_) hvw (fun hcl i o l he => hvw (by
+            -- (the field is a view: a slice, which the path carries with
+            -- what the struct holds)
+            subst he
+            have hsv : t.holdsView = true := by
+              cases hwx with
+              | dtor hst hw' => cases hw' <;> simp [Ty.isStruct] at hst
+              | _ => rfl
+            rw [← projHeld_view (o := E.mode.ownSlot) (H := E.held) hsv]; exact hcl.right) i o l (he ▸ Sub.refl _)) hn
         have hiT := hc.ids c' (bare_lend_ids x (fun _ => hwx.noHref) hb)
         exact (PkgFreeAt.top hi.heap hT' hiT).child' hi.heap (Or.inl ⟨y, T, hT', Sub.refl _⟩) hnp hc
           (bare_lend_ids x (fun _ => hwx.noHref) hb)
@@ -1930,12 +1945,14 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
             ⟨_, hcl, c', r, T1, t1, d1, es1, hb, hT1, hs1, hv1⟩ | ⟨h, _⟩
         · exact Or.inl ⟨hmb, hpd hcl.left hos, Or.inl ⟨c', hb.trans hbx, hic⟩⟩
         · subst hxv
-          exact Or.inr (Or.inl ⟨hmb, (hpd hcl.left hos).append hcl.right, o, l, hbx⟩)
+          exact Or.inr (Or.inl ⟨hmb, (hpd hcl.left hos).append (by rw [← hphb hos]; exact hcl.right), o, l, hbx⟩)
         · exact Or.inr (Or.inl ⟨hmb, (hpd hcl.left.left hos).append hcl.right, o, l, hb.trans hbx⟩)
         · exact Or.inr (Or.inr (Or.inl ⟨hmb, hcl, c', r, T1, t1, d1, es1, hb.trans hbx, hT1, hs1, hv1⟩))
         · cases h
     rw [bor_vdeps _ rfl] at hr
-    refine wf_append (wf_append ?_ (wf_held hi hy hl hnint)) (wf_held hi hy hl hnint) r hr
+    refine wf_append (wf_append ?_ (fun r hr => wf_held hi hy hl hnint r (by
+      simp only [roots, List.mem_map] at hr ⊢
+      obtain ⟨d, hd, rfl⟩ := hr; exact ⟨d, projHeld_sub _ _ _ hd, rfl⟩))) (wf_held hi hy hl hnint) r hr
     unfold projDeps
     split
     · intro r hr; simp [roots] at hr; subst hr

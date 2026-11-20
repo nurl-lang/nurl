@@ -230,8 +230,8 @@ theorem projE_named {Γ : Ctx} {y : Var} {E : Entry} (hN : NameOK Γ E) (t : Ty)
     NameOK Γ (projE y E t) := by
   cases t <;> first
     | (show DepsNamed Γ ([] ++ []); exact DepsNamed.nil _)
-    | (show DepsNamed Γ ((projDeps y E ++ E.held) ++ E.held)
-       exact ((projDeps_named hN).append hN.held).append hN.held)
+    | (show DepsNamed Γ ((projDeps y E ++ projHeld E.mode.ownSlot _ E.held) ++ E.held)
+       exact ((projDeps_named hN).append (fun d hd => hN.held d (projHeld_sub _ _ _ hd))).append hN.held)
 
 theorem getE_named {Γ : Ctx} {y : Var} {E : Entry} (hN : NameOK Γ E) (t : Ty) :
     NameOK Γ (getE y E t) := by

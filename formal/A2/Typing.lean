@@ -673,11 +673,36 @@ def popE (y : Var) (E : Entry) : Ty → Entry
 def projDeps (y : Var) (E : Entry) : List Dep :=
   if E.mode.ownSlot then [⟨y, .inner⟩] else if E.mode = .rootb then [⟨y, .view⟩] else E.path
 
+/-- What a field of type `t` read out of a struct (whose slot owns its value
+    when `o`) holding `H` depends on, past the struct itself. A field read
+    out of a borrowed struct depends on what the struct holds: its parts are
+    valid only through the struct's path and what it holds (`ValOK.pair`).
+    So does one that may hold a view or a closure, a stored view being copied
+    with what it depends on. A field of an owned struct that can hold
+    neither depends on nothing more: what a sibling field's views point into
+    is no part of it, and no root a change through it edits (AGORA-937). -/
+def projHeld (o : Bool) (t : Ty) (H : List Dep) : List Dep :=
+  if o && !(t.holdsView || t.hasFn) then [] else H
+
+@[simp] theorem projHeld_nil (o : Bool) (t : Ty) : projHeld o t [] = [] := by
+  unfold projHeld; split <;> rfl
+
+theorem projHeld_sub (o : Bool) (t : Ty) (H : List Dep) : projHeld o t H ⊆ H := by
+  unfold projHeld; split
+  · exact List.nil_subset _
+  · exact List.Subset.refl _
+
+theorem projHeld_bor {t : Ty} {H : List Dep} : projHeld false t H = H := by
+  simp [projHeld]
+
+theorem projHeld_view {o : Bool} {t : Ty} {H : List Dep} (h : t.holdsView = true) : projHeld o t H = H := by
+  simp [projHeld, h]
+
 /-- A field read: an integer is copied, anything else is lent (a stored view
     is copied with what it depends on). -/
 def projE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
-  | t => ⟨t, .bor, true, projDeps y E ++ E.held, E.held, false, false, false, false⟩
+  | t => ⟨t, .bor, true, projDeps y E ++ projHeld E.mode.ownSlot t E.held, E.held, false, false, false, false⟩
 
 /-- A field read is lent (A2-drop.3a: so `letv` binds it, whatever its type). -/
 @[simp] theorem projE_mode (y : Var) (E : Entry) (t : Ty) : (projE y E t).mode = .bor := by
