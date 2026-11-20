@@ -37935,7 +37935,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // (…or wrapped: a block, `{ c }`, or a join, `? k c o`, may hand
         // it on whole too - counted so, conservatively.)
         ? != 0 g_drop_glue_on {
-            ? | & ( is_ident_tok bck_arg_tt ) ( seq bck_arg_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) | | == bck_arg_tt TT_LBRACE == bck_arg_tt TT_QUEST == bck_arg_tt TT_QUESTQUEST { ( __drop_reads_add g_drop_glue_ty `*` ) } {}
+            // (…a cursor over it, or any value of its type, `: ~ Holder a c`
+            // then `( observe a )`, the same - conservatively.)
+            ? | & ( is_ident_tok bck_arg_tt ) | ( seq bck_arg_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) ( seq ( nurl_llty at ) g_drop_glue_ty ) | | == bck_arg_tt TT_LBRACE == bck_arg_tt TT_QUEST == bck_arg_tt TT_QUESTQUEST { ( __drop_reads_add g_drop_glue_ty `*` ) } {}
         } {}
         ? & & != 0 ( nurl_str_len arg_froot ) __row_callee ( bck_sound ) {
             ( bck_stash_store arg_froot ( nurl_lex_line lex ) __rc ( nurl_str_int arg_idx ) `pendfield` )
