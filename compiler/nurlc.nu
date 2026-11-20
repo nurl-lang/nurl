@@ -721,6 +721,9 @@
 : ~ i g_ws_syms 0
 : ~ i g_fc_order -1  // the functions the engine walks, in the order they were reached
 : ~ i g_fc_weak 0  // 1 while an effect that may not have happened is applied (eng_effect keeps what the place holds)
+// Loans an effect leaves alive (a sequence; 0 none): what a value taken whole
+// out of its place holds of itself, which goes with it (take_payload).
+: ~ i g_eff_keep 0
 : ~ i g_fc_loopmemo -1  // (a loop, the state it was entered in, the loops walked around it) → the state it left + 1, for this run of the function
 : ~ i g_fc_loophead -1  // …→ what holds at its head once its rounds settled + 1: the run that reports starts there (loop_head_memo)
 : ~ i g_s_catches 0
@@ -14691,7 +14694,7 @@ unsafe @ eng_byte s w i k → i {
         : ~ i x ( wv_at g_el_first + + vid g_f_nv 1 )
         ~ != x 0 {
             : i l - x 1
-            ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) ( el_end_note l line eff place 0 ) } {}
+            ? & & ! ( sq_has dead l ) | == g_eff_keep 0 ! ( sq_has g_eff_keep l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) ( el_end_note l line eff place 0 ) } {}
             = x ( wv_at g_el_next l )
         }
         ? != 0 ( sq_len ( shared_tails place ) ) {
@@ -14699,7 +14702,7 @@ unsafe @ eng_byte s w i k → i {
             : ~ i y 0
             ~ < y n {
                 : i l ( wv_at g_el_shared y )
-                ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) ( el_end_note l line eff place 0 ) } {}
+                ? & & ! ( sq_has dead l ) | == g_eff_keep 0 ! ( sq_has g_eff_keep l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) ( el_end_note l line eff place 0 ) } {}
                 = y + y 1
             }
         } {}
@@ -16249,7 +16252,26 @@ unsafe @ eng_byte s w i k → i {
         // payload taken out leaves the rest of its value as it was: only
         // what was lent out of the part itself ends.)
         : b part & != path 0 != ( ep_last path ) EE_STAR
+        // (…but not what the value taken holds of itself, a view of its own
+        // String's buffer: the buffer goes with the value, and so does the
+        // view - `?? o { T x → ( vec_push d x ) }` with x viewing its own
+        // field; AGORA-869.)
+        : ~ i keep 0
+        ? part {
+            : i hd ( av_held av )
+            : ~ i j 0
+            ~ < j ( sq_len hd ) {
+                : i l ( he_loan ( sq_at hd j ) )
+                ? ( el_is_loan l ) {
+                    : i q ( el_place l )
+                    ? & == ( pl_var q ) vid ( ep_prefix path ( pl_path q ) ) { = keep ( sq_add keep l ) } {}
+                } {}
+                = j + j 1
+            }
+        } {}
+        = g_eff_keep keep
         ( eng_effect st a ? part EF_TAKE EF_REPLACE line 0 )
+        = g_eff_keep 0
         ? & & == rown OW_P ! & != path 0 == ( fp_mode ( fv_pidx vid ) ) PM_INOUT ! ( ep_has_star path ) {
             // (a part taken out of an `inout` parameter is a change to the
             // caller's binding, which stays the caller's; an element taken
@@ -19892,7 +19914,9 @@ unsafe @ eng_byte s w i k → i {
     ? != have 0 { ^ == have 2 } {}
     : ~ b r >= ( et_dtor_fn t ) 0
     : i kind ( et_kind t )
-    ? & ! r | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT == kind EK_RES { = r ( et_reaches_dtor ( et_at t ET_E1 ) + depth 1 ) } {}
+    // (…an owned slice's elements too, `[H`, not a `( Slice T )` view:
+    // releasing one releases them - agora #931, AGORA-869)
+    ? & ! r | | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT == kind EK_RES & == kind EK_SLICE ( __owned_slice_ty ( eng_str ( et_at t ET_NAME ) ) ) { = r ( et_reaches_dtor ( et_at t ET_E1 ) + depth 1 ) } {}
     ? & & ! r == kind EK_RES != ( et_at t ET_E2 ) ET_NONE { = r ( et_reaches_dtor ( et_at t ET_E2 ) + depth 1 ) } {}
     ? & & & ! r == kind EK_NAMED ( et_flag t ETF_STRUCT ) ! ( __is_libh ( eng_str ( et_at t ET_NAME ) ) ) {
         : ~ i k 0
@@ -19938,7 +19962,7 @@ unsafe @ eng_byte s w i k → i {
             ( eng_dtor_apply st place t f line )
         } {} } {}
     : i kind ( et_kind t )
-    ? | | == kind EK_VEC == kind EK_BOX == kind EK_OPT {
+    ? | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT & == kind EK_SLICE ( __owned_slice_ty ( eng_str ( et_at t ET_NAME ) ) ) {
         : i e ? == kind EK_OPT ( ee_pay g_etn_T 0 ) EE_STAR
         ( eng_dtor_release st ( pl_make vid ( ep_child path e ) ) ( et_at t ET_E1 ) line + depth 1 )
         ^
@@ -20010,6 +20034,31 @@ unsafe @ eng_byte s w i k → i {
 // A function's exit releases what its frame still owns, newest first:
 // the drop of a value whose destructor may read its views is a use of
 // them.
+// The loans of `ls` (a sequence) on places rooted at a parameter.
+@ __eng_param_loans i ls → i {
+    : ~ i out 0
+    : ~ i k 0
+    ~ < k ( sq_len ls ) {
+        : i l ( sq_at ls k )
+        ? & ( el_is_loan l ) >= ( fv_pidx ( pl_var ( el_place l ) ) ) 0 { = out ( sq_add out l ) } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+// …the held entries of `hd` whose loan is on such a place.
+@ __eng_param_held i hd → i {
+    : ~ i out 0
+    : ~ i k 0
+    ~ < k ( sq_len hd ) {
+        : i he ( sq_at hd k )
+        : i l ( he_loan he )
+        ? & ( el_is_loan l ) >= ( fv_pidx ( pl_var ( el_place l ) ) ) 0 { = out ( sq_add out he ) } {}
+        = k + k 1
+    }
+    ^ out
+}
+
 @ exit_drops i st i line i keep → v {
     ? ( st_bottom st ) { ^ } {}
     ( sink_param_drops st line )
@@ -21056,6 +21105,30 @@ unsafe @ eng_byte s w i k → i {
     : i vty ( fv_ty vid )
     : b first & & == at g_fc_first_stmt == path 0 >= ( fv_pidx vid ) 0
     : i ddepth ? != kind VK_PARAM ( fv_depth vid ) 0
+    // (A temporary with no value, `void` - a then-only arm's join, whose
+    // conditional is a statement - given an arm's tail whole: the tail is
+    // discarded, released right there, as nurlc releases it; its `% Drop`
+    // runs - agora #766, AGORA-869.)
+    // (The engine reads `void` as a number, ET_NUM: a value whose type
+    // reaches a destructor lands in such a temporary only as a discarded
+    // tail.)
+    ? & & == path 0 == kind VK_TEMP < vty 0 {
+        ? == ( ec rv ) RV_USE {
+            : i sop ( eng_op ( ec + rv 1 ) )
+            ? & ( op_is_place sop ) == ( pl_path sop ) 0 {
+                : i sv ( pl_var sop )
+                : i sty ( fv_ty sv )
+                // (a temporary - a call's result - only: a binding named as
+                // the tail, `? c { hs } {}`, is lent to the arm, not released)
+                ? & & & == ( fv_kind sv ) VK_TEMP == ( st_own st sv ) OW_O != sty ET_NONE ( et_reaches_dtor sty 0 ) {
+                    ( eng_dtor_release st ( pl_make sv 0 ) sty ln 0 )
+                    ( eng_effect st ( pl_make sv 0 ) EF_REPLACE ln 0 )
+                    ( st_put st sv ( av_make OW_D 0 0 0 F ) )
+                    ^
+                } {}
+            } {}
+        } {}
+    } {}
     ? == path 0 {
         // (…and a `: ~` String or Vec given a field read of a binding it
         // does not own, `= c . x v`, whatever it held: nurlc releases its old
@@ -21641,6 +21714,19 @@ unsafe @ eng_byte s w i k → i {
             = g_fc_ret_fresh 1
         } {}
         ( exit_drops st ln -1 )
+        // (…and what the frame's own releases do at the exit - a `% Drop`
+        // that clears a shared payload the value handed back views - is done
+        // before the caller gets it: the value must still be live after
+        // them; agora #918, AGORA-869.)
+        // (Only views of the caller's storage, places rooted at a parameter:
+        // what the value took over from the frame's own locals - a join's
+        // arms, a value block's tail - is its own, which the exit's releases
+        // of those locals do not reach.)
+        ? ! ( st_bottom st ) {
+            : i pl ( __eng_param_loans ( av_loans av ) )
+            : i ph ( __eng_param_held ( av_held av ) )
+            ? | != pl 0 != ph 0 { ( check_live st pl ph WK_RET 0 ln ) } {}
+        } {}
     } {}
     ( st_set_bottom st )
 }
@@ -41100,6 +41186,15 @@ unsafe @ gen_cond i lex i syms i cg → s {
         ? t_via_exit { ( nurl_print tlbl ) } { ( nurl_print lend ) }
         ( emit_dbg_eol )
     } {}
+    // (An arm written as a block whose tail is a binding of the scope
+    // around the join, `? c { h } h2`, hands it on whole, as `? c h h2`
+    // does: its `pendwhole` row, recorded here before the arm's scope goes;
+    // AGORA-929.)
+    ? & & c_valu == t_tt0 TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) {
+        : s __pwv ( nurl_sym_get syms `__tail_first_val__` )
+        : s __pwt ( nurl_sym_get syms __pwv )
+        ? & != 0 ( nurl_str_len __pwt ) ! ( __plain_scalar_lty ( nurl_llty __pwt ) ) { ( bck_record2 `pendwhole` __pwv bck_cline `` `` ) } {}
+    } {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
     ( emit ( nurl_str_cat le `:` ) )
     : ~ s old_strs_e ``
@@ -41322,6 +41417,15 @@ unsafe @ gen_cond i lex i syms i cg → s {
         ( nurl_print `  br label %` )
         ? e_via_exit { ( nurl_print elbl ) } { ( nurl_print lend ) }
         ( emit_dbg_eol )
+    } {}
+    // (An arm written as a block whose tail is a binding of the scope
+    // around the join, `? c { h } h2`, hands it on whole, as `? c h h2`
+    // does: its `pendwhole` row, recorded here before the arm's scope goes;
+    // AGORA-929.)
+    ? & & c_valu == e_tt0 TT_LBRACE ( is_ident_tok ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) ) {
+        : s __pwv ( nurl_sym_get syms `__tail_first_val__` )
+        : s __pwt ( nurl_sym_get syms __pwv )
+        ? & != 0 ( nurl_str_len __pwt ) ! ( __plain_scalar_lty ( nurl_llty __pwt ) ) { ( bck_record2 `pendwhole` __pwv bck_cline `` `` ) } {}
     } {}
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
     // Borrow checker: disarm — a block-less else-arm would otherwise
@@ -62979,6 +63083,24 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 { = st ( bck_kill_stored_in st mvid ( bck_field_int rec 3 ) F ) } {}
                 : i mv_was ( bck_st_get st mvid )
                 = st ( bck_st_set st mvid BCK_MOVED )
+                // (…a binding that still views a field of an `inout`
+                // parameter, handed to a call that takes it - a move a call
+                // made, `mc_`: the field goes back to the caller empty, as
+                // for `( take . h buf )`; AGORA-929.)
+                ? & == mv_was BCK_BORROWED_SHARED != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` mvn ) ) {
+                    ? != 0 ( nurl_sym_len g_bck ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` mvn ) ( bck_field rec 3 ) ) ) {
+                        : s fpw ( str_first_word ( nurl_sym_get g_bck ( bck_bkey `fp_` mvn ) ) )
+                        ? != 0 ( nurl_str_len fpw ) {
+                            : i fpi ( nurl_str_to_int fpw )
+                            ? & & != fpi ( bck_path_root fpi ) != 0 g_bck_inp_any ( str_contains_word ( nurl_sym_get g_bck `inp` ) ( nurl_str_int ( bck_path_root fpi ) ) ) {
+                                = st ( bck_st_set st fpi BCK_MOVED )
+                                ( bck_add_word_once `fmv` fpw )
+                                = g_bck_fmv_any 1
+                                ( bck_put ( nurl_str_cat `ml_` fpw ) ( bck_field rec 3 ) )
+                            } {}
+                        } {}
+                    } {}
+                } {}
                 = st ( bck_partners_freed st mvid mv_was ( bck_field_int rec 3 ) )
                 ( bck_put ( nurl_str_cat `ml_` mvn )
                 ( bck_field rec 3 ) )
@@ -63388,6 +63510,26 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     ? == BCK_STORED ( bck_st_get st pvid ) { ( bck_diag_stored pvid ( bck_field_int rec 3 ) F ) } {}
                     : i pv_was ( bck_st_get st pvid )
                     = st ( bck_st_set st pvid BCK_MOVED )
+                    // (…a binding that still views a field of an `inout`
+                    // parameter, `: b . h buf` - not rebound, not handed the
+                    // old value by a store that replaced the field: moving it
+                    // takes the field out of `h`, which goes back to its
+                    // caller empty, as `( take . h buf )` does; AGORA-929. A
+                    // local's field taken so is left empty where it lives,
+                    // compiler/tests/field_viewer_rebound_handed_to_sink.)
+                    ? & == pv_was BCK_BORROWED_SHARED != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` pvn ) ) {
+                        : s fpw ( str_first_word ( nurl_sym_get g_bck ( bck_bkey `fp_` pvn ) ) )
+                        ? != 0 ( nurl_str_len fpw ) {
+                            : i fpi ( nurl_str_to_int fpw )
+                            ? & & != fpi ( bck_path_root fpi ) != 0 g_bck_inp_any ( str_contains_word ( nurl_sym_get g_bck `inp` ) ( nurl_str_int ( bck_path_root fpi ) ) ) {
+                                = st ( bck_st_set st fpi BCK_MOVED )
+                                ( bck_add_word_once `fmv` fpw )
+                                = g_bck_fmv_any 1
+                                ( bck_put ( nurl_str_cat `ml_` fpw ) ( bck_field rec 3 ) )
+                                ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` fpw ) ( bck_field rec 3 ) ) ( bck_generic_base pcal ) )
+                            } {}
+                        } {}
+                    } {}
                     = st ( bck_partners_freed st pvid pv_was ( bck_field_int rec 3 ) )
                     ? == kc 10 {
                         // A later borrowing argument on this same source line

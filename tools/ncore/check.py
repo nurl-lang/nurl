@@ -2627,7 +2627,12 @@ class FnCheck:
             if not path:
                 st.vals[vid] = AV("M" if sure else "X")
             elif "*" not in path and (direct or (path[-1].startswith("#") and (
-                    self.ty_of_place((vid, path[:-1])) or ("?",))[0] in ("opt", "res"))):
+                    self.ty_of_place((vid, path[:-1])) or ("?",))[0] in ("opt", "res"))
+                    # (…or taken through a binding of it out of an `inout`
+                    # parameter: the caller gets it back with the field
+                    # emptied - nurlc's emptied Vec is a null handle, which
+                    # the caller's next push faults on; AGORA-929)
+                    or (root.own == "P" and vid in self.pidx and self.fn.modes[self.pidx[vid]] == "inout")):
                 # the field is moved where it lives: it, what is under it
                 # and the value as a whole are not read until it is given a
                 # value again (§2.1). Taken through a binding of it, the
