@@ -10820,7 +10820,29 @@ unsafe @ core_expr_exit i h0 i tt i acks0 → v {
         // (…where the engine reads raw bodies, an address moved by a
         // number - `+ # i p off` - is an address still, into what `p`
         // points into: a temporary of a pointer type - AGORA-877)
-        ? & & != 0 g_eng_rawwalk | == tt TT_PLUS == tt TT_MINUS ( __core_ops_addr h0 ) {
+        // (Is one of the operands above `h0` a variable of a pointer type
+        // (`…*`, a raw string's `i8*` too), named whole?)
+        : ~ b __addr F
+        ? & != 0 g_eng_rawwalk | == tt TT_PLUS == tt TT_MINUS {
+            : *i aos # *i # s g_core_os
+            : *i aps # *i # s g_core_pl
+            : *i avs # *i # s g_core_vars
+            : ~ i ak h0
+            ~ & ! __addr < ak g_core_os_n {
+                : i aop . aos ak
+                ? >= aop 2 {
+                    : i ab * - aop 2 3
+                    : i avid . aps ab
+                    ? & & == . aps + ab 1 -1 >= avid 0 < avid g_core_var_n {
+                        : s aty # s . avs + * avid CORE_VW 1
+                        : i an ( nurl_str_len aty )
+                        ? & > an 0 == ( nurl_str_get aty - an 1 ) 42 { = __addr T } {}
+                    } {}
+                } {}
+                = ak + ak 1
+            }
+        } {}
+        ? __addr {
             : i at ( core_temp `u8*` )
             ( core_w CO_LET ) ( core_w at ) ( core_w RV_SCALAR ) ( __core_w_ops h0 )
             ( core_push ( core_op_var at ) )
@@ -10834,29 +10856,6 @@ unsafe @ core_expr_exit i h0 i tt i acks0 → v {
     ( core_w CO_LET ) ( core_w t ) ( core_w RV_OPAQUE ) ( core_w tt ) ( __core_w_ops h0 )
     ( core_push ( core_op_var t ) )
     ( __core_gap ( nurl_str_cat `expr ` ( nurl_str_int tt ) ) )
-}
-
-// Is one of the operands above `h0` a variable of a pointer type (`…*`,
-// a raw string's `i8*` too), named whole (g_eng_rawwalk, AGORA-877)?
-unsafe @ __core_ops_addr i h0 → b {
-    : *i os # *i # s g_core_os
-    : *i ps # *i # s g_core_pl
-    : *i vs # *i # s g_core_vars
-    : ~ i k h0
-    ~ < k g_core_os_n {
-        : i op . os k
-        ? >= op 2 {
-            : i b * - op 2 3
-            : i vid . ps b
-            ? & & == . ps + b 1 -1 >= vid 0 < vid g_core_var_n {
-                : s ty # s . vs + * vid CORE_VW 1
-                : i n ( nurl_str_len ty )
-                ? & > n 0 == ( nurl_str_get ty - n 1 ) 42 { ^ T } {}
-            } {}
-        } {}
-        = k + k 1
-    }
-    ^ F
 }
 
 // A statement begins on `line`.
