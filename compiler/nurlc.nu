@@ -19805,6 +19805,31 @@ unsafe @ eng_byte s w i k → i {
 // A function's exit releases what its frame still owns, newest first:
 // the drop of a value whose destructor may read its views is a use of
 // them.
+// The loans of `ls` (a sequence) on places rooted at a parameter.
+@ __eng_param_loans i ls → i {
+    : ~ i out 0
+    : ~ i k 0
+    ~ < k ( sq_len ls ) {
+        : i l ( sq_at ls k )
+        ? & ( el_is_loan l ) >= ( fv_pidx ( pl_var ( el_place l ) ) ) 0 { = out ( sq_add out l ) } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+// …the held entries of `hd` whose loan is on such a place.
+@ __eng_param_held i hd → i {
+    : ~ i out 0
+    : ~ i k 0
+    ~ < k ( sq_len hd ) {
+        : i he ( sq_at hd k )
+        : i l ( he_loan he )
+        ? & ( el_is_loan l ) >= ( fv_pidx ( pl_var ( el_place l ) ) ) 0 { = out ( sq_add out he ) } {}
+        = k + k 1
+    }
+    ^ out
+}
+
 @ exit_drops i st i line i keep → v {
     ? ( st_bottom st ) { ^ } {}
     ( sink_param_drops st line )
@@ -21433,6 +21458,19 @@ unsafe @ eng_byte s w i k → i {
             = g_fc_ret_fresh 1
         } {}
         ( exit_drops st ln -1 )
+        // (…and what the frame's own releases do at the exit - a `% Drop`
+        // that clears a shared payload the value handed back views - is done
+        // before the caller gets it: the value must still be live after
+        // them; agora #918, AGORA-869.)
+        // (Only views of the caller's storage, places rooted at a parameter:
+        // what the value took over from the frame's own locals - a join's
+        // arms, a value block's tail - is its own, which the exit's releases
+        // of those locals do not reach.)
+        ? ! ( st_bottom st ) {
+            : i pl ( __eng_param_loans ( av_loans av ) )
+            : i ph ( __eng_param_held ( av_held av ) )
+            ? | != pl 0 != ph 0 { ( check_live st pl ph WK_RET 0 ln ) } {}
+        } {}
     } {}
     ( st_set_bottom st )
 }
