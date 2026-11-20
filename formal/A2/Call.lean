@@ -1487,6 +1487,17 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
       exact List.mem_flatMap.mpr ⟨args.getD (v - fn.nvars) 0, by simp [List.getD, List.getElem?_eq_getElem hlt],
         by simpa using hr⟩
     · cases hd
+  σ_kinds v d hd k hk := by
+    simp only [callS] at hd ⊢
+    split at hd
+    · rename_i hv
+      rw [ite_eq_left hv]
+      simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at hd ⊢
+      obtain ⟨r, hr, hdr⟩ := hd
+      refine ⟨r, hr, ?_⟩
+      have hdr' : d.root = r := by rcases hdr with rfl | rfl | rfl | rfl <;> rfl
+      rw [hdr']; cases k <;> simp_all [Kind.isName]
+    · cases hd
   Rout r hr := (h.R_facts hr).1
   Rroot r hr := by
     obtain ⟨hout, Er, hEr, hro⟩ := h.R_facts hr

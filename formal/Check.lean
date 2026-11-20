@@ -645,6 +645,12 @@ import A3
 #print axioms A2.RSetup.subD_name
 #print axioms A2.RSetup.subE_weaker
 #print axioms A2.RSetup.canon_weaker_sub
+-- AGORA-937: a right-hand side lifted with regions: what it reads is on no region, a
+-- fresh borrow is on no region (FreshOK), what is derived is the lift substituted
+#print axioms A2.RSetup.canon_setEs
+#print axioms A2.RSetup.derive_subE
+#print axioms A2.RSetup.fresh_keep
+#print axioms A2.RSetup.RhsT.ren
 -- AGORA-909: a field or payload read of a frame binding of a view-free type that holds
 -- nothing may be fresh (RhsT.fst/snd/getl/getr), so a push through `. b items` of an
 -- `inout` parameter is an `edit false` (A2/FreshProjWitness.lean)
