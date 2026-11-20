@@ -29,21 +29,7 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   block's own local, a closure an arm or a block hands over. Until #222
   closes them, hand such a value on directly (`^ ? c a b`) instead of
   through a binding.
-- **agora #280: a field a `sink` took, used again by a route the
-  check does not see.** A field a `sink` took (`( take . h buf )`) is refused
-  while it is empty when it is read, bound, handed on whole with `h`, or
-  left empty at an `inout` exit. So are a take inside a loop, read on the next
-  round or after it, the taken field handed back itself (`^ . h buf`,
-  `^ @ Holder { . h buf }`, `= h @ Holder { . h buf }`; agora #351), a path
-  under or over the taken one, and `h` handed on whole by `= h2 h`, `^ @
-  Outer { h }`, a value block `{ h }` or `= . g buf . h buf`, and a closure made after the take that runs while it is empty or is handed back on the line it is made on (AGORA-929).
-  These are still accepted, and run into the null handle or freed memory:
-  `h` handed on whole by `^ ? c h h2`; a closure's own `inout` parameter; a `% Drop`
-  destructor that reads the taken field; and an `inout` callee that panics
-  between the take and its refill, caught by a `recover` closure that
-  captured the struct. Until the fix ships, give the field a value right
-  after the take (`= . h buf ( vec_new [u] )`), or hand the callee a copy
-  (`( mem_dup . h buf )`) and keep the field.
+- **agora #939: an `inout` parameter's field taken by a `sink`, then a panic in the call that takes it or in the call that refills it.** In `( take . h buf )` followed by `= . h buf ( make k )`, the call `make` runs before the store. If it panics, a `recover`ing caller gets `h` back with `buf` empty, and its next use of the field reads a null handle. The same holds when the sink `take` itself panics: its argument is already handed over. The walk exempts the refill's own call, because refusing it would also refuse the common `= . h buf ( vec_new [u] )`, which cannot panic, and it does not yet know which calls can. Until the fix ships, make the new value before the take and store it with `= . h buf fresh`, which avoids a panic in the refill's call only, and use a sink that cannot panic for the take itself.
 <!-- END open holes -->
 
 Every other safe program found accepted and faulting is closed, and held

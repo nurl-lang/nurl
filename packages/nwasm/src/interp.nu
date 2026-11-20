@@ -1016,7 +1016,6 @@ unsafe @ __thread_unregister inout InterpImpl it → v {
 // Set the trap flag with a message (the uniform way every trap is raised).
 @ __trap inout InterpImpl it s msg → v {
     = . it halt | . it halt 1
-    ( vec_free [u] . it trapmsg )
     = . it trapmsg ( bytes_from_str msg )
 }
 
@@ -7461,7 +7460,6 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // from "this thread's view of the memory size is behind the others".
 @ __trap_oob inout InterpImpl it s what i ea i n → v {
     = . it halt | . it halt 1
-    ( vec_free [u] . it trapmsg )
     : String m ( string_from what )
     ( string_push_str m ` (addr ` )
     ( string_push_int m ea )
@@ -7478,7 +7476,6 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // Trap with a message that carries a dynamic name (import module/field).
 @ __trap_named inout InterpImpl it s prefix ( Vec u ) name → v {
     = . it halt | . it halt 1
-    ( vec_free [u] . it trapmsg )
     : ( Vec u ) msg ( bytes_from_str prefix )
     : i n ( vec_len [u] name )
     : ~ i k 0

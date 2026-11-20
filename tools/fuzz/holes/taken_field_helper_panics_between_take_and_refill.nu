@@ -1,4 +1,5 @@
-// map: §2.1 | A2 | rejected | - | adversarial: a helper that may panic between the take and the refill
+// map: §2.1 | A2 | rejected | - | AGORA-929: a helper that may panic between the take and the refill
+// AGORA-929 (this shape, closed): refused - a call that may panic while an inout parameter's field is taken (main 08e56f54: accepted, a null handle after recover)
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/panic.nu`
 

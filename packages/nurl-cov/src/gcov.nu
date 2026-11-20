@@ -758,14 +758,8 @@ $ `stdlib/std/arc.nu`
     : i nblk ( __gcov_total_blocks o )
     : i narc ( __gcov_total_arcs o )
     // These start empty from `__gcov_blank` so that an error path can still
-    // free the object; replacing a Vec field drops the old handle on the
-    // floor unless it is released first.
-    ( vec_free [i] . o pred_head )
-    ( vec_free [i] . o pred_tail )
-    ( vec_free [i] . o pred_next )
-    ( vec_free [i] . o succ_head )
-    ( vec_free [i] . o succ_tail )
-    ( vec_free [i] . o succ_next )
+    // free the object; each `=` below releases the old one once the new one
+    // is made.
     = . o pred_head ( __g_zeros nblk )
     = . o pred_tail ( __g_zeros nblk )
     = . o pred_next ( __g_zeros narc )

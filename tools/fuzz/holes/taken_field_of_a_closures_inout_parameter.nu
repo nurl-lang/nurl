@@ -1,4 +1,5 @@
-// map: §2.1 | A2 | rejected | - | agora #280: a closure's own `inout` parameter has its field taken by a sink and is left empty
+// map: §2.1 | A2 | rejected | - | AGORA-929: a closure's own `inout` parameter has its field taken by a sink and is left empty
+// AGORA-929 (this shape, closed): refused - a closure's inout parameter goes back to its caller at each exit, like a function's (main 08e56f54: accepted, a null handle)
 $ `stdlib/core/string.nu`
 
 : Holder { String buf }

@@ -266,7 +266,6 @@ $ `metadata.nu`
     : ( Vec Header ) metadata ?? ( grpc_metadata_decode final . call max_metadata ) {
         T m → m F e → { ^ @ !v GrpcError { F e } }
     }
-    ( grpc_status_free . call status ) ( grpc_metadata_free . call trailers )
     = . call status status = . call trailers metadata = . call status_checked T
     ^ @ !v GrpcError { T 0 }
 }
