@@ -313,8 +313,12 @@ theorem subE_nopi (h : S.OK) (E : Entry) : S.subE E = E := by
     | cons d ds ih => simp [List.flatMap_cons, subD_nopi h, ih]
   cases E; simp [subE, hf]
 
-theorem canon_ρ (h : S.OK) (Γa : Ctx) (v : Var) : S.canon Γa (S.ρ v) = (Γa v).map (S.liftE v) := by
-  simp only [canon, inv_ρ h, h.noPi, Bool.false_eq_true, ↓reduceIte]
+/-- A callee binding that is no region is lifted where the call places it.
+    (AGORA-937: the premise is the variable's not being a region's index;
+    until regions are on it is `noPi`'s, by default.) -/
+theorem canon_ρ (h : S.OK) (Γa : Ctx) (v : Var) (hnp : S.isPi v = false := h.noPi v) :
+    S.canon Γa (S.ρ v) = (Γa v).map (S.liftE v) := by
+  simp only [canon, inv_ρ h, hnp, Bool.false_eq_true, ↓reduceIte]
   cases Γa v <;> simp [subE_nopi h]
 
 /-- AGORA-937: the lifted context binds no region's index: every binding of
