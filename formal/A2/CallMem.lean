@@ -312,7 +312,22 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
     ((callS Γ F fn args m.nv x).canon (sigCtx fn) y = none ∧ ∃ v, fn.params.length < v ∧ y = m.nv + v) := by
   by_cases hyx : y = x
   · exact Or.inl ⟨hyx, by rw [hyx]; exact h.canon_x _⟩
-  rcases RSetup.canon_cases h.sOK (sigCtx fn) y with ⟨v, hv, hc⟩ | ⟨hy, hc⟩
+  -- AGORA-937: a callee binding of the signature is kept by the substitution
+  -- (`canon_sig`); a region's index lies past the signature's, unbound
+  have hcases : (∃ v, (callS Γ F fn args m.nv x).ρ v = y ∧
+      (callS Γ F fn args m.nv x).canon (sigCtx fn) y = (sigCtx fn v).map ((callS Γ F fn args m.nv x).liftE v)) ∨
+      ((∀ v, (callS Γ F fn args m.nv x).ρ v ≠ y) ∧
+        (callS Γ F fn args m.nv x).canon (sigCtx fn) y = (callS Γ F fn args m.nv x).Φ y) := by
+    rcases RSetup.canon_cases_sub h.sOK (sigCtx fn) y with ⟨v, hv, _, hc⟩ | ⟨v, hv, hp, hc⟩ | hfr
+    · refine Or.inl ⟨v, hv, ?_⟩
+      cases hs : sigCtx fn v with
+      | none => rw [hc, hs]; rfl
+      | some E => rw [← hv]; exact h.canon_sig hs
+    · have hgt : fn.params.length < v :=
+        Nat.lt_of_not_le fun hle => by rw [h.isPi_sig hle] at hp; cases hp
+      exact Or.inl ⟨v, hv, by rw [hc, sigCtx_none hgt]; rfl⟩
+    · exact Or.inr hfr
+  rcases hcases with ⟨v, hv, hc⟩ | ⟨hy, hc⟩
   · change callRen fn.params args m.nv v = y at hv
     rw [hc]
     rcases callRen_cases fn.params args m.nv v with ⟨b, t, hvp, hr⟩ | ⟨hnv, hr⟩
