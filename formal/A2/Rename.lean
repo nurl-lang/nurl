@@ -1227,6 +1227,68 @@ theorem canon_names (h : S.OK) (hab : S.AbsOK Γa) (hn : NameWF Γa) : NameWF (S
       rw [liftE_mode _ hrb', hmv]; exact Or.inl rfl
     · exact ⟨Er, by rw [canon_frame _ hout]; exact hEr, hlr, hhr, ht, ho, hc', hhv⟩
 
+/-- AGORA-937: `canon_names` with regions. What a region stands for names
+    nothing (it is every memory way of reaching the arguments' roots), and a
+    kept name dependency on a callee binding is on no region. -/
+theorem canon_names_sub (h : S.OK) (hab : S.AbsOK Γa) (hn : NameWF Γa) : NameWF (S.canon Γa) := by
+  intro y E' hy hl hnn e he b t hk
+  rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hyf, hc⟩
+  · rw [hc] at hy
+    cases hE : Γa v with
+    | none => rw [hE] at hy; cases hy
+    | some E =>
+      rw [hE] at hy; simp only [Option.map_some, Option.some.injEq, Function.comp] at hy; subst hy
+      rw [subE_vdeps] at he
+      obtain ⟨d, hd, hed⟩ := List.mem_flatMap.mp he
+      rcases S.mem_subD hed with rfl | ⟨_, _, _, hv⟩
+      · by_cases hrb : E.mode = .rootb
+        · have hvd : (S.liftE v E).vdeps = (S.pe v).vdeps := by simp [liftE, hrb, Entry.vdeps]
+          rw [hvd] at hd
+          rcases h.pe_names v e hd (by rw [hk]; rfl) with hN | ⟨hs, _⟩
+          · obtain ⟨Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩ := h.N_named e hN b t hk
+            exact ⟨Er, by rw [canon_frame _ (h.N_out e hN).1]; exact hEr, hlr, hhr, ht, ho, hc', hhv⟩
+          · exact sym_named h hab hs hk
+        · rw [subE_live, liftE_live] at hl
+          have hn' : E.ty ≠ .int ∨ E.mode = .rootb := by
+            rcases hnn with h' | h'
+            · rw [subE_ty, liftE_ty v hrb] at h'; exact Or.inl h'
+            · rw [subE_mode, liftE_rootb h] at h'; exact absurd h' hrb
+          rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
+          · obtain ⟨Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩ := hn v E hE hl hn' d0 hd0 b t hk
+            have hrb' : Er.mode ≠ .rootb := fun e => by rw [e] at ho; cases ho
+            have hnp : S.isPi d0.root = false := subD_kept h hed rfl
+            refine ⟨S.subE (S.liftE d0.root Er), by
+                show S.canon Γa (S.ρ d0.root) = _; rw [canon_ρ_sub h, hnp, hEr]; rfl,
+              by rw [subE_live, liftE_live]; exact hlr,
+              by rw [subE_held, liftE_held_named hrb' ho hhr (by rw [ht]; exact hhv)]; rfl,
+              by rw [subE_ty, liftE_ty _ hrb', ht], by rw [subE_mode, liftE_mode _ hrb', liftMode_ownSlot]; exact ho,
+              ?_, hhv⟩
+            rcases hc' with hb | ⟨hbr, _⟩
+            · exact Or.inl hb
+            · exact Or.inr ⟨hbr, Or.inl (by
+                rw [subE_mode, liftE_mode _ hrb']; cases hm : Er.mode <;> simp_all [liftMode, Mode.ownSlot])⟩
+          · rcases mem_A.mp ha with ha | ha
+            · have := allKinds_notName ha; rw [hk] at this; cases this
+            · obtain ⟨Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩ := h.N_named e ha b t hk
+              exact ⟨Er, by rw [canon_frame _ (h.N_out e ha).1]; exact hEr, hlr, hhr, ht, ho, hc', hhv⟩
+      · have := allKinds_notName (h.σ_sub _ hv); rw [hk] at this; cases this
+  · rw [hc] at hy; cases hy
+  · rw [hc] at hy
+    rcases h.Φnamed y E' hy hl hnn e he b t hk with ⟨v, bh, hρ, hb, hpt, hbr, hbh, hhv⟩ |
+        ⟨hout, Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩
+    · obtain ⟨Ev, hEv, hmv, htv, hfx⟩ := hab.2.2.1 v bh hb
+      have hrb' : Ev.mode ≠ .rootb := by rw [hmv]; simp
+      have hvv : Ev.ty.holdsView = false := by rw [htv, hpt]; exact hhv
+      obtain ⟨hlv, hhv'⟩ := hfx (Or.inr ⟨bh.1, hmv, hbh, hvv⟩)
+      have hnp : S.isPi v = false := hab.notPi hEv (by rw [hmv]; simp)
+      refine ⟨S.subE (S.liftE v Ev), by rw [← hρ, canon_ρ_sub h, hnp, hEv]; rfl,
+        by rw [subE_live, liftE_live]; exact hlv,
+        by rw [subE_held, liftE_held_named hrb' (by rw [hmv]; rfl) hhv' hvv]; rfl,
+        by rw [subE_ty, liftE_ty _ hrb', htv, hpt],
+        by rw [subE_mode, liftE_mode _ hrb', hmv]; rfl, Or.inr ⟨hbr, ?_⟩, hhv⟩
+      rw [subE_mode, liftE_mode _ hrb', hmv]; exact Or.inl rfl
+    · exact ⟨Er, by rw [canon_frame _ hout]; exact hEr, hlr, hhr, ht, ho, hc', hhv⟩
+
 theorem canon_weaker (h : S.OK) {Γa Γa' : Ctx} (hab' : S.AbsOK Γa') (hw' : CtxWF Γa')
     (hw : Weaker Γa Γa') : Weaker (S.canon Γa) (S.canon Γa') := by
   refine ⟨fun y => ⟨?_, fun E E' h1 h2 => ?_⟩, canon_wf h hab' hw', canon_names h hab' hw.names⟩
