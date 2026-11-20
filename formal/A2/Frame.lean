@@ -634,6 +634,14 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [hm]; exact hi.noInout v Ex b hx
     · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
       rw [killE_mode]; exact hi.noInout v E b hE
+  · intro v E' hv'
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨_, _, _, _, hm, _⟩ := hox
+      rw [hm]; exact hi.noRegion v Ex hx
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [killE_mode]; exact hi.noRegion v E hE
   · refine ⟨?live, ?dtorc, ?armc, ?viewc⟩
     case armc =>
       intro v E' hv' hd
@@ -985,6 +993,7 @@ theorem MInv.pkgFree_add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : En
       · exfalso
         cases hos : Ey.mode.ownSlot
         · have hm : Ey.mode = .bor ∨ Ey.mode = .rootb := by
+            have := hi.noRegion y Ey hy
             cases hme : Ey.mode <;> simp_all [Mode.ownSlot]
           obtain ⟨w, hw, hok⟩ := hbor hos (hl.live_of_bor hm)
           cases hw
@@ -1200,6 +1209,7 @@ theorem MInv.pkgFree_addNone {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E 
       · exfalso
         cases hos : Ey.mode.ownSlot
         · have hm : Ey.mode = .bor ∨ Ey.mode = .rootb := by
+            have := hi.noRegion y Ey hy
             cases hme : Ey.mode <;> simp_all [Mode.ownSlot]
           obtain ⟨w, hw, hok⟩ := hbor hos (hl.live_of_bor hm)
           cases hw

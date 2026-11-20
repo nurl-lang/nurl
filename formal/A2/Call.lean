@@ -813,6 +813,7 @@ theorem inoutArgs_mem {ps : List (PMode × Ty)} {args : List Var} {a : Var} (h :
 
 theorem resMode_ne' (fn : Fn) : resMode fn ≠ .rootb := by unfold resMode; split <;> simp
 theorem resMode_inout (fn : Fn) (b : Eff) : resMode fn ≠ .inout b := by unfold resMode; split <;> simp
+theorem resMode_region (fn : Fn) : resMode fn ≠ .region := by unfold resMode; split <;> simp
 
 theorem clean_fixed_iff (E : Entry) : E.clean.fixed ↔ E.fixed := by
   unfold Entry.clean; split <;> simp [Entry.fixed_def]
@@ -2496,7 +2497,14 @@ variable {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {args : List V
 
 theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).AbsOK (sigCtx fn) := by
   obtain ⟨_, _, _, _, _, hpar, _⟩ := h.fnok
-  refine ⟨fun v E hv hm => ?_, fun v E b hv hm => ?_, fun v bh hb => ?_⟩
+  refine ⟨fun v E hv hm => ?_, fun v E b hv hm => ?_, fun v bh hb => ?_, fun v E hv => by
+    unfold sigCtx at hv
+    split at hv
+    · simp only [Option.some.injEq] at hv; subst hv
+      generalize fn.params[v] = pt; obtain ⟨pm, t⟩ := pt; cases pm <;> simp [paramE]
+    · split at hv
+      · simp only [Option.some.injEq] at hv; subst hv; exact resMode_region fn
+      · cases hv⟩
   · unfold sigCtx at hv
     split at hv
     · rename_i hvl
@@ -2843,7 +2851,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
       rcases hcan with hm | ⟨_, hm, _⟩ <;> rw [hm] <;> rfl
     · -- an `inout` argument: the parameter's binding at the end, lifted
       obtain ⟨w, b, t, rfl, hbw, _, _, _⟩ := RSetup.sym_ren h.sOK hs
-      obtain ⟨Ew, hEw, hm, _⟩ := habΔ.2.2 w (b, false) hbw
+      obtain ⟨Ew, hEw, hm, _⟩ := habΔ.2.2.1 w (b, false) hbw
       refine ⟨_, by rw [RSetup.canon_ρ h.sOK, hEw]; rfl, ?_⟩
       rw [RSetup.liftE_mode _ (by rw [hm]; simp), hm]; rfl
   have hwrap := wrap_typed (pe := callPe Γ fn.params args) (base := base) hbody h.pe_lt hpw

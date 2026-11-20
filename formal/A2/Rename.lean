@@ -230,7 +230,9 @@ def RSetup.AbsOK (S : RSetup) (Γa : Ctx) : Prop :=
   (∀ v E b, Γa v = some E → E.mode = .inout b →
      E.ty.owning = true ∧ S.bnd v = some (b, E.ty.elem.holdsView)) ∧
   (∀ v bh, S.bnd v = some bh → ∃ E, Γa v = some E ∧ E.mode = .inout bh.1 ∧ E.ty = S.pty v ∧
-     (E.fixed → E.live = true ∧ E.held = []))
+     (E.fixed → E.live = true ∧ E.held = [])) ∧
+  -- AGORA-937 (stage 1a): no callee binding is a parameter's region yet
+  (∀ v E, Γa v = some E → E.mode ≠ .region)
 
 namespace RSetup
 variable {S : RSetup} {Γa : Ctx}
@@ -643,7 +645,7 @@ theorem heldA_mono {E E' : Entry} (hw : EntryWeaker E E') : S.heldA E ⊆ S.held
     rw [S.heldA_P hp, S.heldA_P hE, hw.ty]; exact List.Subset.refl _
   · rw [S.heldA_notP hp]; exact S.heldA_sub E
 
-theorem liftE_weaker {v : Var} {E E' : Entry} (hw : EntryWeaker E E') :
+theorem liftE_weaker {v : Var} {E E' : Entry} (hw : EntryWeaker E E') (hnr : E.mode ≠ .region) :
     EntryWeaker (S.liftE v E) (S.liftE v E') := by
   have hw0 := hw
   have hdb := hw.dbind
@@ -692,7 +694,7 @@ theorem liftE_weaker {v : Var} {E E' : Entry} (hw : EntryWeaker E E') :
     · rw [liftE_mode v hrb, liftMode_ownSlot] at ho
       simp only [liftE, hrb, ↓reduceIte, hm, ho, Bool.false_eq_true, Bool.false_or, ht]
       have hb0 : E'.mode = .bor := by
-        rw [hm]; revert ho hrb; cases E.mode <;> simp [Mode.ownSlot]
+        rw [hm]; revert ho hrb hnr; cases E.mode <;> simp [Mode.ownSlot]
       by_cases hfl : (E'.fresh && E.ty != .int) = true
       · simp only [Bool.and_eq_true, bne_iff_ne, ne_eq] at hfl
         obtain ⟨hfE, _⟩ := hwf hl' (by rw [ht]; exact hfl.2) hb0 hfl.1
@@ -759,7 +761,7 @@ theorem canon_wf (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.cano
           rcases pe_dep h hd with ⟨hout, hex⟩ | ⟨hs, _⟩
           · exact canon_frameRoot h hout hex
           · obtain ⟨w, b, t, rfl, hb, _, _, _⟩ := sym_ren h hs
-            obtain ⟨Ew, hEw, hm, _⟩ := hab.2.2 w (b, false) hb
+            obtain ⟨Ew, hEw, hm, _⟩ := hab.2.2.1 w (b, false) hb
             exact canon_root h hEw (by rw [hm]; rfl)
         · rw [liftE_live] at hl
           have hn' : E.ty ≠ .int ∨ E.mode = .rootb := by
@@ -776,7 +778,7 @@ theorem canon_wf (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.cano
       · obtain ⟨v, rfl⟩ := hrr
         obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
         obtain ⟨b, hv, hb, _⟩ := h.Φsat y E' hy hl hn d hd v hdr.symm
-        obtain ⟨Ev, hEv, hm, _⟩ := hab.2.2 v (b, hv) hb
+        obtain ⟨Ev, hEv, hm, _⟩ := hab.2.2.1 v (b, hv) hb
         exact canon_root h hEv (by rw [hm]; rfl)
       · have hout : ∀ v, S.ρ v ≠ r := fun v hv => hrr ⟨v, hv⟩
         exact canon_frameRoot h hout (h.Φwf y E' hy hl hn r hr hout)
@@ -801,7 +803,7 @@ theorem canon_wf (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.cano
           · exact canon_frameRoot h (A_out h ha) (A_root h ha)
     · rw [hc] at hy
       rcases h.Φdb y E' hy hd hos hn d hdd hnm with ⟨v, bh, hv, hb⟩ | ⟨hout, hex⟩
-      · obtain ⟨Ev, hEv, hm, _⟩ := hab.2.2 v bh hb
+      · obtain ⟨Ev, hEv, hm, _⟩ := hab.2.2.1 v bh hb
         rw [← hv]; exact canon_root h hEv (by rw [hm]; rfl)
       · exact canon_frameRoot h hout hex
   · rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hyf, hc⟩
@@ -844,7 +846,7 @@ theorem sym_named (h : S.OK) (hab : S.AbsOK Γa) {d : Dep} (hs : d ∈ rds S.ρ 
   simp only [Kind.name.injEq] at hk
   obtain ⟨hb1, ht1⟩ := hk
   subst hb1 ht1
-  obtain ⟨Ew, hEw, hm, hty, hfx⟩ := hab.2.2 w (b', false) hb
+  obtain ⟨Ew, hEw, hm, hty, hfx⟩ := hab.2.2.1 w (b', false) hb
   obtain ⟨_, hbs⟩ := hab.2.1 w Ew b' hEw hm
   rw [hb] at hbs; simp only [Option.some.injEq, Prod.mk.injEq] at hbs
   have hvv : Ew.ty.holdsView = false := by rw [← elem_holdsView]; exact hbs.2.symm
@@ -893,7 +895,7 @@ theorem canon_names (h : S.OK) (hab : S.AbsOK Γa) (hn : NameWF Γa) : NameWF (S
   · rw [hc] at hy
     rcases h.Φnamed y E' hy hl hnn d hd b t hk with ⟨v, bh, hρ, hb, hpt, hbr, hbh, hhv⟩ |
         ⟨hout, Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩
-    · obtain ⟨Ev, hEv, hmv, htv, hfx⟩ := hab.2.2 v bh hb
+    · obtain ⟨Ev, hEv, hmv, htv, hfx⟩ := hab.2.2.1 v bh hb
       have hrb' : Ev.mode ≠ .rootb := by rw [hmv]; simp
       have hvv : Ev.ty.holdsView = false := by rw [htv, hpt]; exact hhv
       obtain ⟨hlv, hhv'⟩ := hfx (Or.inr ⟨bh.1, hmv, hbh, hvv⟩)
@@ -921,17 +923,19 @@ theorem canon_weaker (h : S.OK) {Γa Γa' : Ctx} (hab' : S.AbsOK Γa') (hw' : Ct
           simp only [Option.map_some, Option.some.injEq] at h1 h2
           subst h1 h2
           exact liftE_weaker ((hw.1 v).2 E0 E0' hE hE')
+            (by rw [← ((hw.1 v).2 E0 E0' hE hE').mode]; exact hab'.2.2.2 v E0' hE')
     · rw [hc] at h1; rw [canon_frame _ hy] at h2
       rw [h1] at h2; cases h2; exact EntryWeaker.refl _
 
 theorem AbsOK.weaker {Γa Γa' : Ctx} (hab : S.AbsOK Γa) (hw : Weaker Γa Γa') : S.AbsOK Γa' := by
-  refine ⟨fun v E' hv hm => ?_, fun v E' b hv hm => ?_, fun v bh hb => ?_⟩
+  refine ⟨fun v E' hv hm => ?_, fun v E' b hv hm => ?_, fun v bh hb => ?_, fun v E' hv => by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv; rw [hwe.mode]; exact hab.2.2.2 v E hE⟩
   · obtain ⟨E, hE, hwe⟩ := hw.get' hv
     have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
     rw [hwe.fixed (Or.inl hm')]; exact hab.1 v E hE hm'
   · obtain ⟨E, hE, hwe⟩ := hw.get' hv
     rw [hwe.1]; exact hab.2.1 v E b hE (by rw [← hwe.mode]; exact hm)
-  · obtain ⟨E, hE, hm, ht, hfx⟩ := hab.2.2 v bh hb
+  · obtain ⟨E, hE, hm, ht, hfx⟩ := hab.2.2.1 v bh hb
     obtain ⟨E', hE', hwe⟩ := hw.get hE
     refine ⟨E', hE', by rw [hwe.mode]; exact hm, by rw [hwe.1]; exact ht, fun hf => ?_⟩
     have hf0 : E.fixed := by simp only [Entry.fixed_def] at hf ⊢; rw [hwe.mode, hwe.1] at hf; exact hf
@@ -939,7 +943,10 @@ theorem AbsOK.weaker {Γa Γa' : Ctx} (hab : S.AbsOK Γa) (hw : Weaker Γa Γa')
 
 theorem AbsOK.kill {Γa : Ctx} (hab : S.AbsOK Γa) (e : Eff) (hv : Bool) (x : Var) :
     S.AbsOK (A2.kill e hv x Γa) := by
-  refine ⟨fun v E' hv' hm => ?_, fun v E' b hv' hm => ?_, fun v bh hb => ?_⟩
+  refine ⟨fun v E' hv' hm => ?_, fun v E' b hv' hm => ?_, fun v bh hb => ?_, fun v E' hv' => by
+    obtain ⟨E, hE, _, _⟩ := kill_cmode hv'
+    simp only [A2.kill, hE, Option.map_some, Option.some.injEq] at hv'; subst hv'
+    rw [killE_mode]; exact hab.2.2.2 v E hE⟩
   · obtain ⟨E, hE, _, _⟩ := kill_cmode hv'
     simp only [A2.kill, hE, Option.map_some, Option.some.injEq] at hv'; subst hv'
     rw [killE_mode] at hm
@@ -947,7 +954,7 @@ theorem AbsOK.kill {Γa : Ctx} (hab : S.AbsOK Γa) (e : Eff) (hv : Bool) (x : Va
   · obtain ⟨E, hE, _, _⟩ := kill_cmode hv'
     simp only [A2.kill, hE, Option.map_some, Option.some.injEq] at hv'; subst hv'
     rw [killE_mode] at hm; rw [killE_ty]; exact hab.2.1 v E b hE hm
-  · obtain ⟨E, hE, hm, hty, hfx⟩ := hab.2.2 v bh hb
+  · obtain ⟨E, hE, hm, hty, hfx⟩ := hab.2.2.1 v bh hb
     refine ⟨killE e hv x E, by simp [A2.kill, hE], by rw [killE_mode, hm], by rw [killE_ty, hty], fun hf => ?_⟩
     have hf0 : E.fixed := by unfold Entry.fixed at hf ⊢; rw [killE_mode, killE_ty] at hf; exact hf
     have hk : killE e hv x E = E := killE_nil (root_vdeps (by rw [hm]; rfl) (hfx hf0).2) e hv x
@@ -957,8 +964,12 @@ theorem AbsOK.setE {Γa : Ctx} (hab : S.AbsOK Γa) {x : Var} {E : Entry} (hrb : 
     (hio : ∀ b, E.mode = .inout b → E.ty.owning = true ∧ S.bnd x = some (b, E.ty.elem.holdsView))
     (hbx : ∀ bh, S.bnd x = some bh → E.mode = .inout bh.1)
     (hbt : ∀ bh, S.bnd x = some bh → E.ty = S.pty x)
-    (hfx : ∀ bh, S.bnd x = some bh → E.fixed → E.live = true ∧ E.held = []) : S.AbsOK (A2.setE Γa x E) := by
-  refine ⟨fun v E' hv' hm => ?_, fun v E' b hv' hm => ?_, fun v bh hb => ?_⟩
+    (hfx : ∀ bh, S.bnd x = some bh → E.fixed → E.live = true ∧ E.held = [])
+    (hnr : E.mode ≠ .region := by first | simp_all | simp_all [liftMode, liftE, compE]) : S.AbsOK (A2.setE Γa x E) := by
+  refine ⟨fun v E' hv' hm => ?_, fun v E' b hv' hm => ?_, fun v bh hb => ?_, fun v E' hv' => by
+    by_cases hvx : v = x
+    · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at hv'; subst hv'; exact hnr
+    · simp only [A2.setE, upd_ne _ _ hvx] at hv'; exact hab.2.2.2 v E' hv'⟩
   · by_cases hvx : v = x
     · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at hv'; subst hv'; exact absurd hm hrb
     · simp only [A2.setE, upd_ne _ _ hvx] at hv'; exact hab.1 v E' hv' hm
@@ -967,19 +978,21 @@ theorem AbsOK.setE {Γa : Ctx} (hab : S.AbsOK Γa) {x : Var} {E : Entry} (hrb : 
     · simp only [A2.setE, upd_ne _ _ hvx] at hv'; exact hab.2.1 v E' b hv' hm
   · by_cases hvx : v = x
     · subst hvx; exact ⟨E, by simp [A2.setE], hbx bh hb, hbt bh hb, hfx bh hb⟩
-    · obtain ⟨E0, h0, hm0, ht0, hf0⟩ := hab.2.2 v bh hb
+    · obtain ⟨E0, h0, hm0, ht0, hf0⟩ := hab.2.2.1 v bh hb
       exact ⟨E0, by simp [A2.setE, upd_ne _ _ hvx, h0], hm0, ht0, hf0⟩
 
 theorem AbsOK.exitScope {Γa : Ctx} (hab : S.AbsOK Γa) {x : Var} (hbx : S.bnd x = none) :
     S.AbsOK (A2.exitScope x Γa) := by
   have hk := hab.kill .replace false x
-  refine ⟨fun v E' hv' hm => ?_, fun v E' b hv' hm => ?_, fun v bh hb => ?_⟩
+  refine ⟨fun v E' hv' hm => ?_, fun v E' b hv' hm => ?_, fun v bh hb => ?_, fun v E' hv' => by
+    have hvx : v ≠ x := fun e => by subst e; simp [A2.exitScope] at hv'
+    simp only [A2.exitScope, upd_ne _ _ hvx] at hv'; exact hk.2.2.2 v E' hv'⟩
   · have hvx : v ≠ x := fun e => by subst e; simp [A2.exitScope] at hv'
     simp only [A2.exitScope, upd_ne _ _ hvx] at hv'; exact hk.1 v E' hv' hm
   · have hvx : v ≠ x := fun e => by subst e; simp [A2.exitScope] at hv'
     simp only [A2.exitScope, upd_ne _ _ hvx] at hv'; exact hk.2.1 v E' b hv' hm
   · have hvx : v ≠ x := fun e => by subst e; rw [hbx] at hb; cases hb
-    obtain ⟨E0, h0, hm0, ht0, hf0⟩ := hk.2.2 v bh hb
+    obtain ⟨E0, h0, hm0, ht0, hf0⟩ := hk.2.2.1 v bh hb
     exact ⟨E0, by simp [A2.exitScope, upd_ne _ _ hvx, h0], hm0, ht0, hf0⟩
 
 theorem EntryWeaker.mk' {E E' : Entry} (ht : E'.ty = E.ty) (hm : E'.mode = E.mode)
@@ -1195,7 +1208,7 @@ theorem allowed_own (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = som
   cases hb : S.bnd y with
   | none => rfl
   | some bh =>
-    obtain ⟨E, hE, hmE, _⟩ := hab.2.2 y bh hb
+    obtain ⟨E, hE, hmE, _⟩ := hab.2.2.1 y bh hb
     rw [hy] at hE; cases hE; rw [hm] at hmE; cases hmE
 
 theorem allowed_canDo' (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
@@ -1533,16 +1546,17 @@ theorem AbsOK.setE' {Γ0 Γ1 : Ctx} (hab : S.AbsOK Γ1) (hab0 : S.AbsOK Γ0) {x 
     (hfx : E.fixed → E.live = true ∧ E.held = []) :
     S.AbsOK (A2.setE Γ1 x E) := by
   refine hab.setE hrb (fun b hb => ?_) (fun bh hb => ?_) (fun bh hb => ?_) (fun _ _ => hfx)
+    (by rw [hm]; exact hab0.2.2.2 x E0 hx)
   · rw [ht]; exact hab0.2.1 x E0 b hx (hm ▸ hb)
-  · obtain ⟨E', hE', hm', _⟩ := hab0.2.2 x bh hb
+  · obtain ⟨E', hE', hm', _⟩ := hab0.2.2.1 x bh hb
     rw [hx] at hE'; cases hE'; rw [hm]; exact hm'
-  · obtain ⟨E', hE', _, ht', _⟩ := hab0.2.2 x bh hb
+  · obtain ⟨E', hE', _, ht', _⟩ := hab0.2.2.1 x bh hb
     rw [hx] at hE'; cases hE'; rw [ht]; exact ht'
 
 theorem AbsOK.fresh {Γ : Ctx} (hab : S.AbsOK Γ) {x : Var} (hx : Γ x = none) : S.bnd x = none := by
   cases hb : S.bnd x with
   | none => rfl
-  | some bh => obtain ⟨E, hE, _⟩ := hab.2.2 x bh hb; rw [hx] at hE; cases hE
+  | some bh => obtain ⟨E, hE, _⟩ := hab.2.2.1 x bh hb; rw [hx] at hE; cases hE
 
 /-- A fixed `inout` binding of the callee is live and holds nothing. -/
 theorem AbsOK.fixed {Γ : Ctx} (hab : S.AbsOK Γ) {v : Var} {E : Entry} (hv : Γ v = some E)
@@ -1550,7 +1564,7 @@ theorem AbsOK.fixed {Γ : Ctx} (hab : S.AbsOK Γ) {v : Var} {E : Entry} (hv : Γ
   rcases hf with h | ⟨b, hb, _⟩
   · exact absurd h hrb
   · obtain ⟨_, hbv⟩ := hab.2.1 v E b hv hb
-    obtain ⟨E', hE', _, _, hfx⟩ := hab.2.2 v _ hbv
+    obtain ⟨E', hE', _, _, hfx⟩ := hab.2.2.1 v _ hbv
     rw [hv] at hE'; cases hE'
     exact hfx (Or.inr ⟨b, hb, by assumption⟩)
 
@@ -1558,7 +1572,7 @@ theorem AbsOK.add {Γ Γ1 : Ctx} (hab0 : S.AbsOK Γ) (hab : S.AbsOK Γ1) {x : Va
     {E : Entry} (hm : E.mode = .own ∨ E.mode = .bor) : S.AbsOK (A2.setE Γ1 x E) := by
   have hbx := hab0.fresh hx
   refine hab.setE (by rcases hm with hm | hm <;> rw [hm] <;> simp) (fun b hb => ?_) (fun bh hb => ?_)
-    (fun bh hb => ?_) (fun bh hb => ?_)
+    (fun bh hb => ?_) (fun bh hb => ?_) (by rcases hm with hm | hm <;> rw [hm] <;> simp)
   · rcases hm with hm | hm <;> rw [hm] at hb <;> cases hb
   · rw [hbx] at hb; cases hb
   · rw [hbx] at hb; cases hb
@@ -1674,13 +1688,13 @@ theorem EndOK.lift (h : S.OK) (hab : S.AbsOK Γa) {x : Var} (hbx : S.bnd x = non
 
 theorem bnd_own (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey) (hm : Ey.mode = .own) :
     ∀ bh, S.bnd y = some bh → bh.1 = .replace := fun bh hb => by
-  obtain ⟨E, hE, hmE, _⟩ := hab.2.2 y bh hb
+  obtain ⟨E, hE, hmE, _⟩ := hab.2.2.1 y bh hb
   rw [hy] at hE; cases hE; rw [hm] at hmE; cases hmE
 
 theorem bnd_replace (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
     (hm : Ey.mode = .own ∨ Ey.mode = .inout .replace ∨ Ey.mode = .bor) :
     ∀ bh, S.bnd y = some bh → bh.1 = .replace := fun bh hb => by
-  obtain ⟨E, hE, hmE, _⟩ := hab.2.2 y bh hb
+  obtain ⟨E, hE, hmE, _⟩ := hab.2.2.1 y bh hb
   rw [hy] at hE; cases hE
   rcases hm with hm | hm | hm <;> rw [hm] at hmE
   · cases hmE
@@ -2539,7 +2553,7 @@ theorem argE_canon_rooted (h : S.OK) (hab : S.AbsOK Γa) {a : Var}
       · obtain ⟨E', hE', _⟩ := canon_frameRoot (Γa := Γa) h hout hex
         rw [hE']; rfl
       · obtain ⟨w, b, t, rfl, hb, _, _, _⟩ := sym_ren h hs
-        obtain ⟨Ew, hEw, _, _⟩ := hab.2.2 w (b, false) hb
+        obtain ⟨Ew, hEw, _, _⟩ := hab.2.2.1 w (b, false) hb
         show (S.canon Γa (S.ρ w)).isSome = true
         rw [canon_ρ h, hEw]; rfl
     · rcases liftE_vdeps_cases hrb hd with ⟨d0, hd0, rfl⟩ | ha
@@ -3311,9 +3325,9 @@ theorem callPostAux_lift (h : S.OK) (hab0 : S.AbsOK Γa) {fn : Fn} {args : List 
       · refine (hab.kill _ _ _).setE (by simp [hae0, hrb]) (fun b hb => ?_) (fun bh hb => ?_)
           (fun bh hb => ?_) (fun _ _ hf => absurd hf (by simp [hae0, hm]))
         · simp [hae0, hm] at hb
-        · obtain ⟨E, hE, hmE, _⟩ := hab0.2.2 a bh hb
+        · obtain ⟨E, hE, hmE, _⟩ := hab0.2.2.1 a bh hb
           rw [hEa] at hE; cases hE; rw [hm] at hmE; cases hmE
-        · obtain ⟨E, hE, hmE, _⟩ := hab0.2.2 a bh hb
+        · obtain ⟨E, hE, hmE, _⟩ := hab0.2.2.1 a bh hb
           rw [hEa] at hE; cases hE; rw [hm] at hmE; cases hmE
       · rw [canon_setE h, canon_kill h hab (allowed_own hab0 hEa hm _ _), hae, hae0, liftE_moved _ hrb]
         exact PW.setE (hpw.kill _ _ _) (EntryWeaker.refl _)
@@ -3324,12 +3338,12 @@ theorem callPostAux_lift (h : S.OK) (hab0 : S.AbsOK Γa) {fn : Fn} {args : List 
       simp only [callPostAux, List.map_cons]
       apply callPostAux_lift h hab0 houts hargs ps as (i + 1) _ _ hz' hdv'
       · refine (hab.kill _ _ _).setE (by simp [hae0, hrb]) (fun b' hb => ?_) (fun bh hb => ?_)
-          (fun bh hb => ?_) (fun _ _ hf => ?_)
+          (fun bh hb => ?_) (fun _ _ hf => ?_) (by simp only [hae0]; exact hab0.2.2.2 a Ea hEa)
         · simp only [hae0] at hb ⊢
           exact hab0.2.1 a Ea b' hEa hb
-        · obtain ⟨E, hE, hmE, _⟩ := hab0.2.2 a bh hb
+        · obtain ⟨E, hE, hmE, _⟩ := hab0.2.2.1 a bh hb
           rw [hEa] at hE; cases hE; simp only [hae0]; exact hmE
-        · obtain ⟨E, hE, _, htE, _⟩ := hab0.2.2 a bh hb
+        · obtain ⟨E, hE, _, htE, _⟩ := hab0.2.2.1 a bh hb
           rw [hEa] at hE; cases hE; simp only [hae0]; exact htE
         · -- a fixed `inout` argument holds nothing, and still holds nothing
           simp only [hae0] at hf
@@ -3689,7 +3703,7 @@ theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa 
         · exact hnb b hb d0 hd0 (h.inj _ _ hdr)
         · exact absurd hdr.symm (A_out h ha _)
     · refine NoPin.lift h hab fun bh hb => ?_
-      obtain ⟨E, hE, hmE, _⟩ := hab.2.2 _ bh hb
+      obtain ⟨E, hE, hmE, _⟩ := hab.2.2.1 _ bh hb
       rw [hEa] at hE; cases hE
       rcases hpm with hs | hs
       · rw [hs] at hok; obtain ⟨_, hmo, _⟩ := hok; rw [hmo] at hmE; cases hmE
@@ -3798,7 +3812,7 @@ theorem allowed_replace (hab : S.AbsOK Γa) {x : Var} {Ex : Entry} (hx : Γa x =
   cases hb : S.bnd x with
   | none => exact Or.inl hb
   | some bh =>
-    obtain ⟨E, hE, hmE, _⟩ := hab.2.2 x bh hb
+    obtain ⟨E, hE, hmE, _⟩ := hab.2.2.1 x bh hb
     rw [hx] at hE; cases hE
     obtain ⟨b, hb'⟩ := bh
     refine Or.inr ⟨b, hb', hb, fun k _ => ?_⟩
@@ -3838,13 +3852,14 @@ theorem dtorHead_rename {ρ : Var → Var} (hinj : ∀ v w, ρ v = ρ w → v = 
 theorem AbsOK.of_same {Γa Δa : Ctx} (hab : S.AbsOK Γa) (hdom : ∀ v, (Γa v).isSome = (Δa v).isSome)
     (hm : ∀ v E, Δa v = some E → ∃ E0, Γa v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧
       (E0.fixed → E = E0)) : S.AbsOK Δa := by
-  refine ⟨fun v E hv hrb => ?_, fun v E b hv hio => ?_, fun v bh hb => ?_⟩
+  refine ⟨fun v E hv hrb => ?_, fun v E b hv hio => ?_, fun v bh hb => ?_, fun v E hv => by
+    obtain ⟨E0, h0, hm0, _, _⟩ := hm v E hv; rw [hm0]; exact hab.2.2.2 v E0 h0⟩
   · obtain ⟨E0, h0, hm0, _, he⟩ := hm v E hv
     rw [he (Or.inl (hm0 ▸ hrb))] at hrb ⊢
     exact hab.1 v E0 h0 hrb
   · obtain ⟨E0, h0, hm0, ht0, _⟩ := hm v E hv
     rw [ht0]; exact hab.2.1 v E0 b h0 (hm0 ▸ hio)
-  · obtain ⟨E0, h0, hm0, ht0, hf0⟩ := hab.2.2 v bh hb
+  · obtain ⟨E0, h0, hm0, ht0, hf0⟩ := hab.2.2.1 v bh hb
     have hs := hdom v; rw [h0] at hs
     obtain ⟨E, hE⟩ := Option.isSome_iff_exists.mp hs.symm
     obtain ⟨E1, h1, hm1, ht1, he⟩ := hm v E hE
@@ -4110,7 +4125,9 @@ theorem canon_killHv (h : S.OK) {Γ : Ctx} (hab : S.AbsOK Γ) :
     `inout` parameter's type holds no views, so it holds nothing more. -/
 theorem AbsOK.holdOn {Γ : Ctx} (hab : S.AbsOK Γ) {rs : List Var} {D : List Dep}
     (hrs : ∀ v ∈ rs, ∀ E, Γ v = some E → E.mode ≠ .rootb) : S.AbsOK (A2.holdOn rs D Γ) := by
-  refine ⟨fun v E' hv hm => ?_, fun v E' b hv hm => ?_, fun v bh hb => ?_⟩
+  refine ⟨fun v E' hv hm => ?_, fun v E' b hv hm => ?_, fun v bh hb => ?_, fun v E' hv => by
+    obtain ⟨E, hE, rfl⟩ := holdOn_get hv
+    split <;> simp [Entry.hold_mode] <;> exact hab.2.2.2 v E hE⟩
   · obtain ⟨E, hE, rfl⟩ := holdOn_get hv
     by_cases hvr : v ∈ rs
     · rw [ite_eq_left hvr] at hm; exact absurd hm (hrs v hvr E hE)
@@ -4119,7 +4136,7 @@ theorem AbsOK.holdOn {Γ : Ctx} (hab : S.AbsOK Γ) {rs : List Var} {D : List Dep
     have hmt : (if v ∈ rs then E.hold D else E).mode = E.mode ∧
         (if v ∈ rs then E.hold D else E).ty = E.ty := by split <;> exact ⟨rfl, rfl⟩
     rw [hmt.1] at hm; rw [hmt.2]; exact hab.2.1 v E b hE hm
-  · obtain ⟨E, hE, hm, hty, hfx⟩ := hab.2.2 v bh hb
+  · obtain ⟨E, hE, hm, hty, hfx⟩ := hab.2.2.1 v bh hb
     refine ⟨_, holdOn_some hE, by split <;> exact hm, by split <;> exact hty, fun hf => ?_⟩
     have hf0 : E.fixed := by simp only [Entry.fixed_def] at hf ⊢; split at hf <;> exact hf
     have hv : E.ty.holdsView = false := by
@@ -5231,7 +5248,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       cases hb : S.bnd x with
       | none => rfl
       | some bh =>
-        obtain ⟨E', hE', hmE, _⟩ := hab.2.2 x bh hb
+        obtain ⟨E', hE', hmE, _⟩ := hab.2.2.1 x bh hb
         rw [hx] at hE'; cases hE'; rw [hm] at hmE; cases hmE
     refine ⟨?_, (hab.kill _ _ _).setE' hab hx rfl rfl hrb (fun hf => absurd hf (by simp [hm]))⟩
     rw [canon_setE h, canon_kill h hab (allowed_own hab hx hm _ _), liftE_moved _ hrb]

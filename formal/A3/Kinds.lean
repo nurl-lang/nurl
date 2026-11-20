@@ -791,6 +791,7 @@ theorem mix_globsTyped (P : Prog) : GlobsTyped P mixG where
       · rcases mixB_some hk with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> cases hv
     nvSt := fun _ h => by cases h
     noInout := fun _ _ _ h => by cases h
+    noRegion := fun _ _ h => by cases h
     wf := ⟨fun _ _ h => (by cases h), fun _ _ h => (by cases h), fun _ _ h => (by cases h),
       fun _ _ h => (by cases h)⟩
     rootbLive := fun _ _ h => by cases h

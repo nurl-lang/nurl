@@ -131,6 +131,7 @@ theorem MInv.of_st {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (
   heap := hh
   nvSt v hv := by rw [h] at hv; exact Nat.lt_of_lt_of_le (hi.nvSt v hv) hnv
   noInout := hi.noInout
+  noRegion := hi.noRegion
   wf := hi.wf
   rootbLive := hi.rootbLive
   rootbLt := hi.rootbLt
@@ -260,6 +261,7 @@ theorem MInv.grow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) (h
   heap := hh
   nvSt v hv := by rw [h] at hv; exact Nat.lt_of_lt_of_le (hi.nvSt v hv) hnv
   noInout := hi.noInout
+  noRegion := hi.noRegion
   wf := hi.wf
   rootbLive := hi.rootbLive
   rootbLt := hi.rootbLt
@@ -315,6 +317,7 @@ theorem MInv.regrow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) 
     heap := hh
     nvSt := fun v hv => by rw [h] at hv; exact Nat.lt_of_lt_of_le (hi.nvSt v hv) hnv
     noInout := hi.noInout
+    noRegion := hi.noRegion
     wf := hi.wf
     rootbLive := hi.rootbLive
     rootbLt := hi.rootbLt
@@ -1012,6 +1015,7 @@ theorem MInv.cell_step {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {v : Var} {E : Entr
       cases hme : Er.mode with
       | own => rw [hme] at hsor; simp [Mode.ownSlot] at hsor
       | inout b => exact absurd hme (hi.noInout _ Er b hEr)
+      | region => exact absurd hme (hi.noRegion _ Er hEr)
       | rootb => rfl
       | bor => rw [hme] at hroot; simp [Mode.isRoot] at hroot
     exact .inr ⟨dep.root, Er, u, hdv, hEr, hrb, hu, ht.sub⟩

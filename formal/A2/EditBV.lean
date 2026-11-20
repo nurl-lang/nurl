@@ -771,6 +771,9 @@ theorem MInv.holdOn {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {rs : List Var} {D : L
   noInout v E' b h := by
     obtain ⟨E, hE, rfl⟩ := holdOn_get h
     split <;> exact hi.noInout v E b hE
+  noRegion v E' h := by
+    obtain ⟨E, hE, rfl⟩ := holdOn_get h
+    split <;> exact hi.noRegion v E hE
   wf := hi.wf.holdOn hroot
   rootbLive p E' h hm := by
     obtain ⟨E, hE, rfl⟩ := holdOn_get h

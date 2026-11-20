@@ -192,6 +192,12 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
       simp only [setE, upd_same, Option.some.injEq] at hw
       subst hw; rw [hm]; simp
     · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noInout w Ew b hw
+  · intro w Ew hw
+    by_cases hwx : w = x
+    · subst hwx
+      simp only [setE, upd_same, Option.some.injEq] at hw
+      subst hw; rw [hm]; simp
+    · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noRegion w Ew hw
   · exact hi.wf.add hx (fun _ _ r hr => hwf r hr) (fun _ hos => by rw [hm] at hos; cases hos)
       (fun h => by rw [hdt] at h; cases h) (fun h => by rw [hdb] at h; cases h)
   · intro p Ep hp hm'
@@ -599,6 +605,9 @@ theorem MInv.clean {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : MInv m (cleanC Γ) wh
   noInout v E b hv := by
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
     rw [clean_mode]; exact hi.noInout v E0 b h0
+  noRegion v E hv := by
+    obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
+    rw [clean_mode]; exact hi.noRegion v E0 h0
   wf := hi.wf.clean
   rootbLive p E hp hm := by
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hp

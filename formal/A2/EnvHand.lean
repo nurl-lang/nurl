@@ -93,6 +93,13 @@ theorem MInv.addUnset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
       subst hw
       rcases hm with h | h <;> rw [h] <;> simp
     · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noInout w Ew b hw
+  · intro w Ew hw
+    by_cases hwx : w = x
+    · subst hwx
+      simp only [setE, upd_same, Option.some.injEq] at hw
+      subst hw
+      rcases hm with h | h <;> rw [h] <;> simp
+    · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noRegion w Ew hw
   · refine ⟨?live, ?dtorc, ?armc, ?viewc⟩
     case armc =>
       intro w Ew hw hd

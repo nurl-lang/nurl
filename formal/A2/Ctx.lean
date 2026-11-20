@@ -249,6 +249,9 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
   noInout v E' b hv := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     rw [hwe.mode]; exact hi.noInout v E b hE
+  noRegion v E' hv := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    rw [hwe.mode]; exact hi.noRegion v E hE
   wf := hw.wf
   fresh := hi.fresh.weaker hw
   rootbLive p E' hp hm := by

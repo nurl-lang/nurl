@@ -1256,6 +1256,10 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
       blocks := hi.blocks
       nvSt := hi.nvSt
       noInout := fun w E b hw => ?_
+      noRegion := fun w E hw => by
+        by_cases hwx : w = x
+        · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw; simp [Entry.revive, hmo]
+        · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noRegion w E hw
       wf := ⟨fun w E hw hl hni r hr => ?_, fun w E hw hd hos' hni dep hdd hnm => ?_, fun w E hw ha => ?_,
         fun w E hw hd => ?_⟩
       rootbLive := fun p E hp hm => ?_
@@ -1385,6 +1389,10 @@ theorem MInv.rearm {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} (
       blocks := hi.blocks
       nvSt := hi.nvSt
       noInout := fun w Ew b hw => ?_
+      noRegion := fun w Ew hw => by
+        rcases hcase w Ew hw with ⟨rfl, rfl⟩ | ⟨_, hw'⟩
+        · exact hi.noRegion w E hx
+        · exact hi.noRegion w Ew hw'
       wf := ⟨fun w Ew hw hlw hni r hr => ?_, fun w Ew hw hd hos' hni dep hdd hnm => ?_, fun w Ew hw ha => ?_,
         fun w Ew hw hd => ?_⟩
       rootbLive := fun p Ep hp hm => ?_
@@ -1805,6 +1813,13 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
       fresh := hi.fresh.unwind k.spine (fun E h => by rw [hx] at h; cases h; rw [hmo]; rfl)
       nvSt := fun w hw => ?_
       noInout := fun w E b hw => ?_
+      noRegion := fun w E hw => by
+        by_cases hwk : w ∈ k.spine
+        · rw [unwindCtx_sp hwk] at hw; cases hw
+        by_cases hwx : w = x
+        · rw [hwx, hux] at hw; cases hw; simp [Entry.revive, hmo]
+        · obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases hw hwx
+          rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩ <;> exact hi.noRegion w E0 h0
       wf := ?_
       rootbLive := fun p E hp hm => ?_
       rootbLt := fun p E hp hm => ?_

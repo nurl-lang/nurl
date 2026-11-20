@@ -450,6 +450,7 @@ theorem MInv.sweepR {Γ : Ctx} (hi : MInv m Γ) : MInv (m.sweepR R) Γ where
   heap := hi.heap.sweepR
   nvSt := hi.nvSt
   noInout := hi.noInout
+  noRegion := hi.noRegion
   wf := hi.wf
   rootbLive := hi.rootbLive
   rootbLt := hi.rootbLt

@@ -265,6 +265,10 @@ theorem MInv.kill_pin {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanc
     simp only [A2.kill] at h
     obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
     rw [killE_mode]; exact hi.noInout v E b hE
+  noRegion v E' h := by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    rw [killE_mode]; exact hi.noRegion v E hE
   wf := hi.wf.kill e hv r
   rootbLive p E' h hm := by
     simp only [A2.kill] at h
@@ -401,6 +405,10 @@ theorem MInv.reset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex E0 : Entr
     by_cases hvx : v = x
     · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at h; subst h; rw [hmx]; simp
     · simp only [A2.setE, upd_ne _ _ hvx] at h; exact hi.noInout v E' b h
+  noRegion v E' h := by
+    by_cases hvx : v = x
+    · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at h; subst h; rw [hmx]; simp
+    · simp only [A2.setE, upd_ne _ _ hvx] at h; exact hi.noRegion v E' h
   wf := hi.wf.reset hx hm0 ht0 hd0 hb0 (by rw [hmx]; rfl) hroots
   rootbLive p E' h hm := by
     by_cases hpx : p = x

@@ -1365,6 +1365,8 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   heap      : HeapOK m
   nvSt      : ∀ v, (m.st v).isSome → v < m.nv
   noInout   : ∀ v E b, Γ v = some E → E.mode ≠ .inout b
+  /-- AGORA-937 (stage 1a): no binding is a parameter's region yet. -/
+  noRegion  : ∀ v E, Γ v = some E → E.mode ≠ .region
   wf        : CtxWF Γ
   rootbLive : ∀ p E, Γ p = some E → E.mode = .rootb → E.live = true
   rootbLt   : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ r ∈ roots E.vdeps, r < p
