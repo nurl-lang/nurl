@@ -99840,12 +99840,20 @@ unsafe @ __holds_user_drop s ty i depth → b {
 // that reads a field itself (`: part . h inner`, then `part.buf`) is that
 // field's path extended (`h.inner.buf`), so every enclosing `% Drop` is asked.
 @ __dfp_rooted i syms s p → s {
-    ? == 0 g_fn_bfpath { ^ ( nurl_str_cat p `` ) } {}
-    : i k ( nurl_str_find p `.` )
-    ? < k 0 { ^ ( nurl_str_cat p `` ) } {}
-    : s bf ( __bfpath_of syms ( nurl_str_slice p 0 k ) )
-    ? == 0 ( nurl_str_len bf ) { ^ ( nurl_str_cat p `` ) } {}
-    ^ ( nurl_str_cat bf ( nurl_str_slice p k - ( nurl_str_len p ) k ) )
+    : ~ s cur ( nurl_str_cat p `` )
+    ? == 0 g_fn_bfpath { ^ cur } {}
+    // (…again while the new root reads a field itself, `: leaf . mid inner`
+    // with `: mid . o middle`: bounded, a path is no longer than its source.)
+    : ~ i n 0
+    ~ < n 16 {
+        : i k ( nurl_str_find cur `.` )
+        ? < k 0 { ^ cur } {}
+        : s bf ( __bfpath_of syms ( nurl_str_slice cur 0 k ) )
+        ? == 0 ( nurl_str_len bf ) { ^ cur } {}
+        = cur ( nurl_str_cat bf ( nurl_str_slice cur k - ( nurl_str_len cur ) k ) )
+        = n + n 1
+    }
+    ^ cur
 }
 
 // Every struct field path `p` (`o.inner.buf`, its root a binding) passes
