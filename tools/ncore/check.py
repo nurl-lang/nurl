@@ -1970,7 +1970,9 @@ class FnCheck:
             if k >= len(ops) or k in copied:
                 continue
             op = ops[k]
-            if not (op[0] == "v" and k < len(sm["modes"]) and sm["modes"][k] == "sink"):
+            # (a consumed argument, whatever its declared mode: an `in`
+            # parameter the callee hands on to a sink is consumed too)
+            if op[0] != "v":
                 continue
             # (the field path itself, or - a binding handed over whole - the
             # field paths it aliases, `: b . h buf` then `( take b )`)

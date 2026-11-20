@@ -37899,7 +37899,11 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // (Tested only for a `sink` argument: this runs for every argument
         // of every call.)
         : b __dfc0 | != 0 ( nurl_str_len arg_froot ) & != 0 g_fn_bfpath ( is_ident_tok bck_arg_tt )
-        ? & & & & __dfc0 != 0 g_user_drop_seen == 0 g_in_unsafe ( str_has_index callee_sink arg_idx ) ( bck_sound ) {
+        // (…or may: a callee not compiled yet answers whether it takes the
+        // argument only when the module is done - the record says so, and
+        // resolve_drop_field_takes asks its final summary.)
+        ? & & & & __dfc0 != 0 g_user_drop_seen == 0 g_in_unsafe | ( str_has_index callee_sink arg_idx ) & summary_callee == 0 ( nurl_sym_len g_fn_compiled call_name ) ( bck_sound ) {
+            : b __dfwd ! ( str_has_index callee_sink arg_idx )
             : s __dfp ? != 0 ( nurl_str_len arg_froot ) ( nurl_str_cat arg_froot `` ) ( __bfpath_of syms bck_arg_val )
             ? & != 0 ( nurl_str_len __dfp ) ! ( __plain_scalar_lty ( nurl_llty at ) ) {
                 : ~ s __dch ( __field_path_chain syms __dfp )
@@ -37917,7 +37921,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     ? & & >= __dk 0 ( __has_user_drop __dsty ) ! __dself {
                         : s __dfn ( nurl_str_slice __dl + __dk 1 - - ( nurl_str_len __dl ) __dk 1 )
                         : i __dfc ( nurl_str_to_int ( nurl_sym_get g_impl_name_syms `dropfld#n` ) )
-                        ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `dropfld#` ( nurl_str_int __dfc ) ) ( nurl_str_cat4 ( nurl_str_cat3 __dsty `\t` __dfn ) ( nurl_str_cat3 `\t` ( nurl_str_int ( nurl_lex_line lex ) ) `\t` ) ( nurl_str_cat3 ( nurl_lex_filename lex ) `\t` fname ) ( nurl_str_cat `\t` __dfp ) ) )
+                        ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `dropfld#` ( nurl_str_int __dfc ) ) ( nurl_str_cat4 ( nurl_str_cat3 __dsty `\t` __dfn ) ( nurl_str_cat3 `\t` ( nurl_str_int ( nurl_lex_line lex ) ) `\t` ) ( nurl_str_cat3 ( nurl_lex_filename lex ) `\t` fname ) ( nurl_str_cat4 `\t` __dfp ( nurl_str_cat `\t` ? __dfwd `1` `0` ) ( nurl_str_cat `\t` ( nurl_str_int arg_idx ) ) ) ) )
                         ( nurl_sym_def g_impl_name_syms `dropfld#n` ( nurl_str_int + __dfc 1 ) )
                     } {}
                 }
@@ -81070,7 +81074,10 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
     // (Inside a `% Drop` impl, a field of its receiver it reads: what a sink
     // may not take out of a value of that type - resolve_drop_field_takes,
     // agora #929.)
-    ? & & != 0 g_drop_glue_on ( is_ident_tok __mb_tt ) ( seq __mb_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) {
+    // (…through the receiver itself, or any value of its type - a cursor
+    // over it, `: ~ Holder a c`, reads what `c` holds; counting another
+    // value's reads too is conservative.)
+    ? & & != 0 g_drop_glue_on ( is_ident_tok __mb_tt ) | ( seq __mb_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) ( seq ot g_drop_glue_ty ) {
         ( __drop_reads_add g_drop_glue_ty ( nurl_lex_val lex ) )
     } {}
     // (…and whether the object is a call's result, `. ( f ) x`, through a
@@ -99871,7 +99878,10 @@ unsafe @ __holds_user_drop s ty i depth → b {
         : s sty ( bck_field e 0 )
         : s fld ( bck_field e 1 )
         : s rd ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `dropreads##` sty ) )
-        ? & != 0 ( nurl_str_len fld ) | ( str_contains_word rd fld ) ( str_contains_word rd `*` ) {
+        // (A callee compiled after the call: only where its final summary
+        // takes the argument.)
+        : b taken | ! ( seq ( bck_field e 6 ) `1` ) ( str_has_index ( nurl_sym_get g_fn_sink ( bck_field e 4 ) ) ( bck_field_int e 7 ) )
+        ? & & taken != 0 ( nurl_str_len fld ) | ( str_contains_word rd fld ) ( str_contains_word rd `*` ) {
             : s ts ( llvm_to_nurl sty )
             ( bck_emit_error ( bck_field e 3 ) ( bck_field_int e 2 ) ( nurl_str_cat4 ( nurl_str_cat3 `'` ( __bck_path_src ( bck_field e 5 ) ) `' is handed to a 'sink' parameter of '` ) ( bck_field e 4 ) ( nurl_str_cat4 `', but it is a field of a '` ts `', whose '% Drop' reads '` fld ) ( nurl_str_cat3 `': that destructor runs when the value ends and would read the field the sink emptied. Hand the sink a copy that owns its data (string_clone, mem_dup).` `` `` ) ) )
         } {}
