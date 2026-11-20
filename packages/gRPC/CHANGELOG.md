@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.2] — 2026-11-20
+
+### Fixed
+
+- A call's status and trailers are no longer freed by hand before they
+  are given their new values (`__grpc_call_status`): the `=` releases the
+  old ones, so a panic in between leaves no emptied field behind. The
+  compiler now refuses that shape (AGORA-929).
+
 ## [0.3.1] — 2026-11-11
 
 ### Fixed

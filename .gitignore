@@ -183,3 +183,6 @@ formal/corpus/map.tsv
 # (formal-data is one 1.3 MB line of JSON). Agora #303.
 webdocs/lib/formal-data.generated.ts
 webdocs/lib/release-facts.generated.ts
+
+# compiler/tests/net_sendfile writes these to its working directory when run by hand
+nurl_net_sendfile.*
