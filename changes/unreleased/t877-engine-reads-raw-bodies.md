@@ -1,6 +1,6 @@
 ### Fixed
 
-- **The ownership engine (`--engine`) no longer accepts a returned closure run after the Vec it captured was freed** (AGORA-877). A closure literal handed back as it is, over a parameter's Vec beside a local of its own, dropped the parameter's handle as "copied in". Codegen stores that handle as it is, so `vec_free v` followed by a call of the closure read freed memory (a SEGV under `--no-borrowck`). The engine now keeps a parameter's handle in such a literal as a view of the caller's value. The borrow walk refused this already; an ordinary compile is unchanged.
+- **The ownership engine (`--engine`) no longer accepts a returned closure run after the Vec it captured was freed** (AGORA-877). A closure literal handed back as it is, over a parameter's Vec beside a local of its own, dropped the parameter's handle as "copied in". Codegen stores that handle as it is, so `vec_free v` followed by a call of the closure read freed memory (a SEGV under `--no-borrowck`). The engine now keeps a parameter's handle in such a literal as a view of the caller's value. The borrow walk refused this already, and an ordinary compile is unchanged. The reference checker tools/ncore had the same gap (`closure_owned`), and is fixed the same way.
 
 ### Added
 
