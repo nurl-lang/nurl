@@ -478,15 +478,20 @@ the LLVM / C11 memory model rather than redefining it.
     elements of what the argument views (`bck_borrow_sweep0`'s `vds_`
     sweep, agora #933). Where it is `sink`, as in `g`, nurlc ends nothing
     there: a view of `w`'s element read after the call reads freed memory
-    (valgrind). That is a hole inside A2, which refuses `main`'s call.
+    (valgrind). That is a compiler hole inside A2: the program is one A2
+    expresses, and A2 refuses `main`'s call, which nurlc accepts. A2 is
+    not unsound here; nurlc accepts more than A2 types.
+
+  A borrowed result that views a region is typed too (turn-on 4, agora
+  #4219): `( vec_at vv 0 )` of a `sink` `vv : Vec [s`, returned as `[s`
+  (`A2/RegionResWitness.lean`, `vat_ok`). Its path is what `vv` holds, the
+  region, and `FnOK`'s path check admits a region as its held check does.
+  A borrow of the `sink` parameter's own buffer is still refused
+  (`vw_not_ok`). nurlc refuses `vat`: to `bck_ret_view_check` it is a view
+  of `vv`'s storage, released on the way out. So A2 types a function here
+  that nurlc does not accept, which is no hole; nurlc accepts less.
 
   Not typed yet:
-  - A borrowed result that views a region: `( vec_at vv 0 )` of a `sink`
-    `vv : Vec [s`, returned as `[s`. Its path is `vv`'s, and `FnOK`'s
-    path check against `lends` (of lendable parameters) is unchanged. Its
-    relaxation is proposed in agora #4219. nurlc refuses this one too:
-    to `bck_ret_view_check` it is a view of `vv`'s storage, released on
-    the way out.
   - AGORA-937's stage 3: a change through the region's memory itself, a
     function changing what its parameter's views point into (AGORA-933's
     grower `f`, called with an argument that holds views:

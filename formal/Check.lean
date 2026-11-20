@@ -706,6 +706,7 @@ import A3
 #print axioms A2.RegionResWitness.call_ok
 #print axioms A2.RegionResWitness.callRes_holds
 #print axioms A2.RegionResWitness.vw_not_ok
+#print axioms A2.RegionResWitness.vat_ok
 #print axioms A2.RegionResWitness.sink_dep_refused
 -- AGORA-937: a right-hand side lifted with regions: what it reads is on no region, a
 -- fresh borrow is on no region (FreshOK), what is derived is the lift substituted

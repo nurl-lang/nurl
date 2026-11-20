@@ -2292,7 +2292,10 @@ def DtorParamsOK (P : Prog) (fn : Fn) : Prop :=
     AGORA-937 (turn-on 3): what the result or an `inout` parameter holds may
     also be views of a parameter's region (`isRegionIdx`): the call
     substitutes what the argument holds views of, which the caller's result
-    and `inout` argument hold already (`heldOfArgs`). -/
+    and `inout` argument hold already (`heldOfArgs`). Turn-on 4: so may
+    what the result borrows - a borrow of a value the region's views point
+    into, or an integer result of a call whose argument held them - which
+    the caller's result borrows already (`callRes`'s path, `heldOfArgs`). -/
 def FnOK (P : Prog) (fn : Fn) : Prop :=
   fn.body.src = true ∧ fn.params.length < fn.nvars ∧ (∀ v ∈ fn.body.vars, v < fn.nvars) ∧
   fn.resTy.ok = true ∧ (fn.resOwn = true → fn.resTy.owning = true) ∧
@@ -2310,7 +2313,7 @@ def FnOK (P : Prog) (fn : Fn) : Prop :=
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
     (∃ Er, Δ fn.params.length = some Er ∧ Er.live = true ∧ Er.ty = fn.resTy ∧
       Er.mode = resMode fn ∧
-      (∀ d ∈ Er.path, (d.root, d.kind) ∈ fn.lends) ∧
+      (∀ d ∈ Er.path, isRegionIdx fn d.root ∨ (d.root, d.kind) ∈ fn.lends) ∧
       (∀ d ∈ Er.held, isRegionIdx fn d.root ∨ (d.root, d.kind) ∈ fn.rholds) ∧
       (fn.resOwn = true → fn.resTy.holdsView = false → Er.held = [])) ∧
     (∀ i (h : i < fn.params.length) b, fn.params[i].1 = .inout b →
@@ -2351,7 +2354,8 @@ theorem fnOK_mono {P : Prog} {fn : Fn} (h : FnOK0 P fn) : FnOK P fn := by
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, Δ, hb, hΔ,
     ⟨Er, hEr, hl, ht, hm, hp, hh, h0⟩, hio⟩ := h
   refine ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, Δ, hb, hΔ,
-    ⟨Er, hEr, hl, ht, hm, hp, fun d hd => Or.inr (hh d hd), h0⟩, fun i hi b hb => ?_⟩
+    ⟨Er, hEr, hl, ht, hm, fun d hd => Or.inr (hp d hd), fun d hd => Or.inr (hh d hd), h0⟩,
+    fun i hi b hb => ?_⟩
   obtain ⟨Ei, hEi, hEl, hEh, hE0⟩ := hio i hi b hb
   exact ⟨Ei, hEi, hEl, fun d hd => Or.inr (hEh d hd), hE0⟩
 

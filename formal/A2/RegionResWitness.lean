@@ -19,10 +19,12 @@ A view of the `sink` parameter's own buffer is still refused: `vw sink
 admits a dependency on a `sink` parameter itself (`sink_dep_refused`:
 `lendable` is unchanged, and a parameter is no region).
 
-Not typed yet: a borrowed result that views a region, such as `( vec_at vv 0
-)` of `vv : Vec [s` returned as `[s`. Its path is what `vv` holds, the
-region, and `FnOK`'s path check (against `lends`, of lendable parameters) is
-not relaxed. -/
+Turn-on 4: a borrowed result that views a region, `vat sink (Vec [s) vv → [s`
+returning `( vec_at vv 0 )`, is well-typed (`vat_ok`). Its path is what `vv`
+holds, the region, and `FnOK`'s path check now admits a region as its held
+check does (`isRegionIdx`). The path-side negative is `vw_not_ok`: a borrow
+of the `sink` parameter's own buffer is still refused, the parameter being
+no region and not lendable. -/
 
 namespace A2.RegionResWitness
 
@@ -215,6 +217,71 @@ theorem idv_not_ok0 (rs : List (Nat × Kind)) : ¬ FnOK0 P { idv with rholds := 
   obtain ⟨⟨hlt, _⟩, _⟩ := hrs _ (hh _ hd)
   simp [idv] at hlt
 
+/-! ### A borrowed result viewing the region (turn-on 4) -/
+
+/-- `vat vv`: returns `( vec_at vv 0 )`, a `[s` element of its `sink`
+    parameter `vv : Vec [s`, borrowed. `vv` is 0, the result slot 1, `π vv`
+    is `2`. -/
+def vat : Fn where
+  params   := [(.sink, vsi)]
+  resTy    := .slice .int
+  resOwn   := false
+  lends    := []
+  rholds   := []
+  outHolds := []
+  body     := .assign 1 (.at 0 (.lit 0))
+  nvars    := 2
+
+def R2 : Entry := ⟨.slice .int, .bor, false, [], [], false, false, false, false⟩
+
+theorem vat_sig_eq : sigCtx vat = fun v =>
+    if v = 0 then some E0 else if v = 1 then some R2 else if v = 2 then some regionE else none := by
+  funext v
+  rcases v with _ | _ | _ | v <;>
+    simp [sigCtx, regionP, regioned, paramE, vat, vsi, Ty.holdsView, Ty.hasFn, resMode, E0, R2]
+
+theorem vat_sig_flags : ∀ v E, sigCtx vat v = some E → E.dtor = false ∧ E.dbind = false ∧ E.mode ≠ .rootb := by
+  intro v E h
+  rcases v with _ | _ | _ | v <;> simp [vat_sig_eq] at h <;> subst h <;> simp [E0, R2, regionE]
+
+/-- The element: what `vv` holds, the view of its region, is what it borrows
+    and what it holds. -/
+def Ea : Entry := ⟨.slice .int, .bor, true, E0.held, E0.held, false, false, false, false⟩
+def D2 : Ctx := setE (kill .replace false 1 (sigCtx vat)) 1 Ea
+
+theorem vat_body_typed : StmtT P .none (sigCtx vat) [] vat.body D2 := by
+  have h := StmtT.assign (P := P) (ξ := .none) (F := []) (x := 1) (r := .at 0 (.lit 0)) (Ex := R2)
+    (E := { elemE 0 E0 (.slice .int) with fresh := false }) (by rw [vat_sig_eq]; rfl) (by simp)
+    (Or.inr (Or.inr ⟨rfl, rfl⟩))
+    (RhsT.at (by rw [vat_sig_eq]; rfl) rfl rfl ExprT.lit (fun h => by cases h))
+    rfl (by simp [elemE, E0, roots, Entry.vdeps, Mode.ownSlot]) (by rw [vat_sig_eq]; rfl)
+    (fun p E hp hm => absurd hm (vat_sig_flags p E hp).2.2)
+    (DtorSafe.of_none (fun v E h => (vat_sig_flags v E h).1) _ _ _) rfl
+  exact h
+
+/-- **`vat` is well-typed**: its result borrows what its `sink` parameter's
+    region stands for. Before turn-on 4 the result's path could name only a
+    lendable parameter (`lends`), and the view is of none. -/
+theorem vat_ok : FnOK P vat := by
+  have hro : vat.resOwn = false := rfl
+  refine ⟨rfl, by decide, by decide, rfl, fun h => absurd h (by rw [hro]; simp), ?_, by simp [vat],
+    by simp [vat], by simp [vat], by simp [vat], by simp [vat],
+    dtorParamsOK_of (by simp [vat, vsi, Ty.holdsDtor]) (fun h => absurd h (by rw [hro]; simp)), _,
+    vat_body_typed, ?_, ⟨Ea, rfl, rfl, rfl, rfl, ?_, ?_, fun h => absurd h (by rw [hro]; simp)⟩,
+    fun i hi b hb => ?_⟩
+  · intro pt hpt; simp [vat] at hpt; subst hpt; exact ⟨rfl, fun _ => rfl, fun _ h => by cases h⟩
+  · intro v E h
+    simp only [D2, setE, upd] at h
+    split at h
+    · cases h; exact ⟨rfl, rfl⟩
+    · simp only [kill] at h
+      obtain ⟨E', h', rfl⟩ := Option.map_eq_some_iff.mp h
+      have := vat_sig_flags v E' h'
+      simp [killE_dtor, killE_dbind, this.1, this.2.1]
+  · intro d hd; simp only [Ea, E0, List.mem_singleton] at hd; subst hd; exact Or.inl rfl
+  · intro d hd; simp only [Ea, E0, List.mem_singleton] at hd; subst hd; exact Or.inl rfl
+  · simp [vat] at hi; subst hi; simp [vat] at hb
+
 /-! ### The call -/
 
 /-- The caller: `w` (0) owns a `Vec`, `v` (1) a `Vec` of slices viewing it. -/
@@ -277,8 +344,11 @@ theorem vw_not_ok (ls rs : List (Nat × Kind)) : ¬ FnOK P (vw ls rs) := by
   rintro ⟨_, _, _, _, _, _, hls, _, _, _, _, _, Δ, hb, _, ⟨E, hE, hl, _, _, hp, _, _⟩, _⟩
   obtain ⟨_, k, hk⟩ := view_res hb (fun E' hE' _ => by
     simp [sigCtx, regionP, regioned, paramE, vw, Ty.holdsView] at hE'; subst hE'; rfl) E hE hl
-  obtain ⟨⟨hlt, hm⟩, _⟩ := hls _ (hp _ hk)
-  simp [vw] at hm
+  rcases hp _ hk with hr | hr
+  · -- (turn-on 4: a borrow may be of a region, and `v` is none)
+    simp [isRegionIdx, vw] at hr
+  · obtain ⟨⟨hlt, hm⟩, _⟩ := hls _ hr
+    simp [vw] at hm
 
 /-- **Neither end check admits a dependency on a `sink` parameter**: it is
     no region's index, and not lendable. -/
