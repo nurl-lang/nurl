@@ -230,6 +230,7 @@ def loc(d):
 def main(argv):
     jobs, tsv, top = 1, None, 5
     picked = []
+    explicit = False
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -241,13 +242,16 @@ def main(argv):
             top = int(argv[i + 1]); i += 2
         elif a == "--list":
             picked += [ln.strip() for ln in open(argv[i + 1], encoding="utf-8") if ln.strip()]; i += 2
+            explicit = True
         elif a in ("-h", "--help"):
             print(__doc__)
             return 2
         else:
             picked.append(a); i += 1
+            explicit = True
     missing = []
-    if picked:
+    # (an explicit selection, even an empty --list, is never the whole suite)
+    if explicit:
         names = names_of(picked)
         missing = [n for n in names if not os.path.exists(os.path.join(ROOT, TESTS, "outputs", n + ".txt"))]
         for n in missing:

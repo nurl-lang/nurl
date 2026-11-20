@@ -456,6 +456,7 @@
 : ~ i g_el_key -1  // a key being put together
 : ~ i g_el_end -1  // where and why each loan ended, 4 words a loan: the line (0: none recorded), how (EC_* + the effect * 16 + EN_* * 256), the place the effect was on (for a call, the argument handed over), the callee
 : ~ i g_el_undo -1  // each write to g_el_end, 5 words: the record's first word, its 4 words before - an arm no path leaves undoes its own (el_arm_end)
+: ~ i g_el_loops -1  // per loop being run, 3 words: g_el_undo's length when its round began, the records its `break`s and its `continue`s carry (5 words each: the first word, the 4 words - el_end_exit)
 : i EC_NONE 0  // what the effects being applied come from (g_ek_ctx): nothing more known than the effect
 : i EC_CALL 1  // a call's, on an argument
 : i EC_CLO 2  // a closure's that runs here, on what it captured
@@ -12829,8 +12830,8 @@ unsafe @ eng_keep_fn → v {
     ( wv_trunc g_el 0 )
     ( wv_drop g_el_ix )
     = g_el_ix ( im_new )
-    ? < g_el_end 0 { = g_el_end ( wv_new ) = g_el_undo ( wv_new ) } {}
-    ( wv_trunc g_el_end 0 ) ( wv_trunc g_el_undo 0 )
+    ? < g_el_end 0 { = g_el_end ( wv_new ) = g_el_undo ( wv_new ) = g_el_loops ( wv_new ) } {}
+    ( wv_trunc g_el_end 0 ) ( wv_trunc g_el_undo 0 ) ( wv_trunc g_el_loops 0 )
     = g_ek_ctx EC_NONE = g_ek_fn 0 = g_ek_arg 0 = g_ek_top 0
     ? < g_el_first 0 { = g_el_first ( wv_new ) = g_el_next ( wv_new ) = g_el_shared ( wv_new ) } {}
     ( wv_fill g_el_first + * g_f_nv 2 2 0 )
@@ -13691,8 +13692,16 @@ unsafe @ eng_byte s w i k → i {
 // Loan `to` ended where and why `from` did.
 @ el_end_copy i from i to → v {
     : i a * from 4
-    ? >= a ( wv_len g_el_end ) { ^ } {}
     : i b * to 4
+    // (a source with no record clears the target's: a stale stand-in must
+    // not keep an earlier incarnation's end)
+    ? >= a ( wv_len g_el_end ) {
+        ? >= b ( wv_len g_el_end ) { ^ } {}
+        ( el_end_log b )
+        : ~ i j 0
+        ~ < j 4 { ( wv_put g_el_end + b j 0 ) = j + j 1 }
+        ^
+    } {}
     ( wv_pad g_el_end + b 4 0 )
     ( el_end_log b )
     : ~ i k 0
@@ -13707,22 +13716,57 @@ unsafe @ eng_byte s w i k → i {
     ~ < k 4 { ( wv_push g_el_undo ( wv_at g_el_end + b k ) ) = k + k 1 }
 }
 
-// How many paths left the innermost loop around so far (a `break`, a
-// `continue`).
-@ el_loop_exits → i {
-    : i nl ( wv_len g_fc_loops )
-    ? == nl 0 { ^ 0 } {}
-    ^ + ( wv_len ( wv_at g_fc_loops - nl 2 ) ) ( wv_len ( wv_at g_fc_loops - nl 1 ) )
+// A round of a loop begins, its `break`s to carry their records in `eb`,
+// its `continue`s in `ecs`: what the last round's `continue`s carried round
+// (`ecs` as it is) is what holds at the head again.
+@ el_round_begin i eb i ecs → v {
+    ( wv_push g_el_loops ( wv_len g_el_undo ) ) ( wv_push g_el_loops eb ) ( wv_push g_el_loops ecs )
+    ( el_end_apply ecs )
+    ( wv_trunc eb 0 ) ( wv_trunc ecs 0 )
+}
+
+@ el_round_end → v {
+    ( wv_pop g_el_loops ) ( wv_pop g_el_loops ) ( wv_pop g_el_loops )
+}
+
+// The records `w` carries (el_end_exit) are written, in order.
+@ el_end_apply i w → v {
+    : ~ i n 0
+    ~ < n ( wv_len w ) {
+        : i b ( wv_at w n )
+        ( el_end_log b )
+        : ~ i k 0
+        ~ < k 4 { ( wv_put g_el_end + b k ( wv_at w + + n 1 k ) ) = k + k 1 }
+        = n + n 5
+    }
+}
+
+// A `break` (`which` 1) or a `continue` (2) leaves the path: where each
+// loan written since the round began ended, as the path has it, goes where
+// the path goes - after the loop, or the next round's head - and not to
+// what follows the join this path is an arm of (el_arm_end).
+@ el_end_exit i which → v {
+    : i nl ( wv_len g_el_loops )
+    ? == nl 0 { ^ } {}
+    : i w ( wv_at g_el_loops + - nl 3 which )
+    : ~ i n ( wv_at g_el_loops - nl 3 )
+    ~ < n ( wv_len g_el_undo ) {
+        : i b ( wv_at g_el_undo n )
+        ( wv_push w b )
+        : ~ i k 0
+        ~ < k 4 { ( wv_push w ( wv_at g_el_end + b k ) ) = k + k 1 }
+        = n + n 5
+    }
 }
 
 // An arm of a join (a branch, a loop's body) has run to `st`, from the
-// log at `mark` and `exits` paths out of the loop around. One that left
-// no path open - each returns or stops, none breaks out or goes round
-// again - reaches nothing after the join: where it ended a loan is no
-// fact about a later read, and its records are undone, newest first
-// (the join drops its state; the side table is not in the state).
-@ el_arm_end i st i mark i exits → v {
-    ? | ! ( st_bottom st ) != exits ( el_loop_exits ) { ^ } {}
+// log at `mark`. One that left no path open - each returns, stops, breaks
+// out or goes round again - reaches nothing after the join: where it ended
+// a loan is no fact about a later read, and its records are undone, newest
+// first (the join drops its state; the side table is not in the state). A
+// `break` and a `continue` carry theirs on (el_end_exit).
+@ el_arm_end i st i mark → v {
+    ? ! ( st_bottom st ) { ^ } {}
     : ~ i n ( wv_len g_el_undo )
     ~ > n mark {
         = n - n 5
@@ -21793,18 +21837,21 @@ unsafe @ eng_byte s w i k → i {
     = g_fc_final 0
     : i breaks ( wv_new )
     : i conts ( wv_new )
+    : i eb ( wv_new )
+    : i ecs ( wv_new )
     : ~ i round 0
     : b known ( loop_head_memo head memo )
     : ~ b settled known
     ~ & ! settled < round 12 {
         ( wv_push g_fc_loops breaks ) ( wv_push g_fc_loops conts )
+        ( el_round_begin eb ecs )
         : i c ( st_copy head )
         ( eng_run c + at 1 lc )
         ? ! ( st_bottom c ) { ( eng_read c cop ln TG_WC at ) } {}
         : i um ( wv_len g_el_undo )
-        : i ux ( el_loop_exits )
         ( eng_run c + lc 2 end )
-        ( el_arm_end c um ux )
+        ( el_arm_end c um )
+        ( el_round_end )
         ( wv_pop g_fc_loops ) ( wv_pop g_fc_loops )
         : i nxt ( st_copy head )
         ( st_join_into nxt c )
@@ -21820,15 +21867,19 @@ unsafe @ eng_byte s w i k → i {
     ? ! known { ( loop_head_put head memo ) } {}
     = g_fc_final final
     ( wv_push g_fc_loops breaks ) ( wv_push g_fc_loops conts )
+    ( el_round_begin eb ecs )
     : i c ( st_copy head )
     ( eng_run c + at 1 lc )
     ? ! ( st_bottom c ) { ( eng_read c cop ln TG_WC at ) } {}
     : i b ( st_copy c )
     : i um ( wv_len g_el_undo )
-    : i ux ( el_loop_exits )
     ( eng_run b + lc 2 end )
-    ( el_arm_end b um ux )
+    ( el_arm_end b um )
     ( st_free b )
+    ( el_round_end )
+    // (after the loop: what the head held, then what each `break` carried)
+    ( el_end_apply ecs ) ( el_end_apply eb )
+    ( wv_drop eb ) ( wv_drop ecs )
     ( wv_pop g_fc_loops ) ( wv_pop g_fc_loops )
     // (a condition that is a true literal never lets the loop end: what
     // holds after it is what held at a `break`)
@@ -21845,11 +21896,12 @@ unsafe @ eng_byte s w i k → i {
 // One round of a `~ x xs { }` loop from the state `head`: `nxt` becomes
 // what holds at the head of the next round, `out` what holds after the
 // loop.
-@ fe_round i head i at i vid i walk i elem_alias i src i ln i nxt i out → v {
+@ fe_round i head i at i vid i walk i elem_alias i src i ln i nxt i out i eb i ecs → v {
     : i end ( wv_at g_ec_link at )
     : i breaks ( wv_new )
     : i conts ( wv_new )
     ( wv_push g_fc_loops breaks ) ( wv_push g_fc_loops conts )
+    ( el_round_begin eb ecs )
     : i cur ( st_copy head )
     ? ( sq_meets walk ( st_dead cur ) ) { ( eng_err ln EG_LOOP `the loop's container was changed while the loop walks it` ) } {}
     : ~ i loans ( av_loans src )
@@ -21872,9 +21924,9 @@ unsafe @ eng_byte s w i k → i {
     }
     ( wv_push g_fe_walking vid )
     : i um ( wv_len g_el_undo )
-    : i ux ( el_loop_exits )
     ( eng_run cur + at 3 end )
-    ( el_arm_end cur um ux )
+    ( el_arm_end cur um )
+    ( el_round_end )
     ( wv_pop g_fe_walking )
     ( wv_pop g_fc_loops ) ( wv_pop g_fc_loops )
     ( wv_copy nxt head )
@@ -21912,6 +21964,8 @@ unsafe @ eng_byte s w i k → i {
     : i head ( st_copy st )
     : i nxt ( st_new )
     : i out ( st_new )
+    : i eb ( wv_new )
+    : i ecs ( wv_new )
     : i final g_fc_final
     = g_fc_final 0
     : i outer g_fc_walking
@@ -21920,14 +21974,16 @@ unsafe @ eng_byte s w i k → i {
     : b known ( loop_head_memo head memo )
     : ~ b settled known
     ~ & ! settled < round 12 {
-        ( fe_round head at vid walk elem_alias src ln nxt out )
+        ( fe_round head at vid walk elem_alias src ln nxt out eb ecs )
         ? ( st_eq nxt head ) { = settled T } {}
         ( wv_copy head nxt )
         = round + round 1
     }
     ? ! known { ( loop_head_put head memo ) } {}
     = g_fc_final final
-    ( fe_round head at vid walk elem_alias src ln nxt out )
+    ( fe_round head at vid walk elem_alias src ln nxt out eb ecs )
+    ( el_end_apply ecs ) ( el_end_apply eb )
+    ( wv_drop eb ) ( wv_drop ecs )
     = g_fc_walking outer
     ( wv_copy st out )
     ( st_free head ) ( st_free nxt ) ( st_free out )
@@ -22015,15 +22071,14 @@ unsafe @ eng_byte s w i k → i {
         : i mid ( wv_at g_ec_link at )
         : i a ( st_copy st )
         : ~ i um ( wv_len g_el_undo )
-        : ~ i ux ( el_loop_exits )
         ( eng_run a + at 2 mid )
-        ( el_arm_end a um ux )
+        ( el_arm_end a um )
         : ~ i end mid
         ? == ( ec mid ) CO_ELSE {
             = end ( wv_at g_ec_link mid )
-            = um ( wv_len g_el_undo ) = ux ( el_loop_exits )
+            = um ( wv_len g_el_undo )
             ( eng_run st + mid 1 end )
-            ( el_arm_end st um ux )
+            ( el_arm_end st um )
         } {}
         ? ( st_bottom st ) { ( wv_copy st a ) } { ( st_join_into st a ) }
         ( st_free a )
@@ -22051,9 +22106,8 @@ unsafe @ eng_byte s w i k → i {
             : i nx ( wv_at g_ec_link arm )
             : i c ( st_copy st )
             : i um ( wv_len g_el_undo )
-            : i ux ( el_loop_exits )
             ( eng_run c + arm 2 nx )
-            ( el_arm_end c um ux )
+            ( el_arm_end c um )
             ? < out 0 {
                 ? ( st_bottom c ) { ( st_free c ) } { = out c }
             } {
@@ -22098,12 +22152,14 @@ unsafe @ eng_byte s w i k → i {
     ? == op CO_BREAK {
         : i nl ( wv_len g_fc_loops )
         ? > nl 0 { ( wv_push ( wv_at g_fc_loops - nl 2 ) ( st_copy st ) ) } {}
+        ( el_end_exit 1 )
         ( st_set_bottom st )
         ^ ( eng_next at )
     } {}
     ? == op CO_CONTINUE {
         : i nl ( wv_len g_fc_loops )
         ? > nl 0 { ( wv_push ( wv_at g_fc_loops - nl 1 ) ( st_copy st ) ) } {}
+        ( el_end_exit 2 )
         ( st_set_bottom st )
         ^ ( eng_next at )
     } {}
