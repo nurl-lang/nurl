@@ -14437,7 +14437,13 @@ unsafe @ eng_byte s w i k → i {
     : i av ( st_av st vid )
     ? | == av 0 > depth 8 { ^ } {}
     ? & | == vid g_fc_ret_watch ( sq_has g_fc_ret_ws vid ) != eff EF_END { = g_fc_ret_changed 1 } {}
-    ? & == ( av_own av ) OW_L != eff EF_END {
+    // (…but, where the engine reads raw bodies, a binding of a type that
+    // owns nothing - a struct of numbers and views, a raw pointer - given
+    // a new value whole is given it in its own storage: a copy of what it
+    // names, never that place itself - proto_read_tag's `= r next` over a
+    // reader lent out of its bytes - AGORA-877)
+    : b ownsnone & & & != 0 g_eng_rawwalk == eff EF_REPLACE == path 0 ( eng_owns_nothing place )
+    ? & & == ( av_own av ) OW_L != eff EF_END ! ownsnone {
         : i al ( av_alias av )
         : b all ! ( eng_alias_typed vid al )
         : ~ i k 0
@@ -17274,7 +17280,12 @@ unsafe @ eng_byte s w i k → i {
         : i t ( sm_at sm SM_EFFECTS e )
         ? & & == ( tp_at t 3 0 ) k == ( tp_at t 3 2 ) EF_REPLACE ( eng_path_no_star ( tp_at t 3 1 ) ) {
             : i ty ( eng_ty_at oty ( tp_at t 3 1 ) )
-            ? | == ty ET_NONE != ( et_kind ty ) EK_SCALAR { ^ T } {}
+            // (…where the engine reads raw bodies, a value of a type with
+            // nothing to release - a struct of numbers and views, a raw
+            // pointer - releases nothing when it is given a new one:
+            // proto_read_tag's `= r next` - AGORA-877)
+            : b none & & != 0 g_eng_rawwalk != ty ET_NONE | & == ( et_kind ty ) EK_NAMED ! ( et_flag ty ETF_DROPS ) == ( et_kind ty ) EK_PTR
+            ? & ! none | == ty ET_NONE != ( et_kind ty ) EK_SCALAR { ^ T } {}
         } {}
         = e + e 1
     }
@@ -18587,6 +18598,26 @@ unsafe @ eng_byte s w i k → i {
         } {}
         = e + e 1
     }
+    // (…and, where the engine reads raw bodies, in a program's own raw
+    // function: a fresh raw string a temporary holds, handed to a callee
+    // nurlc's consume flag says takes it over - one that keeps it - is not
+    // released with its statement: it goes to what keeps it, owned by
+    // nothing (in a function that is no raw one the walk refuses that:
+    // its `oskept` check) - AGORA-877)
+    ? & != 0 g_eng_rawwalk != 0 g_fe_rawonly {
+        = e 0
+        ~ < e n {
+            : i fo ( wv_at ops e )
+            ? & ( op_is_place fo ) == ( pl_path fo ) 0 {
+                : i fv ( pl_var fo )
+                : i fty ( fv_ty fv )
+                ? & & & & == ( fv_kind fv ) VK_TEMP != fty ET_NONE == ( et_kind fty ) EK_S == ( st_own st fv ) OW_O ( fx_has fv FX_TEMP_FRESH ) {
+                    ? ( __eng_walk_consumes name e ) { ( st_put st fv ( av_make OW_N 0 0 0 F ) ) } {}
+                } {}
+            } {}
+            = e + e 1
+        }
+    } {}
     // the result
     : ~ i held 0
     : i res ( sm_word sm SM_RES )
@@ -20256,6 +20287,21 @@ unsafe @ eng_byte s w i k → i {
         ~ < j n { ( wv_push ops ( eng_op ( ec + + at 3 j ) ) ) = j + j 1 }
         : i callee ( ef_find name )
         ? & >= callee 0 != ( ef_nparams callee ) n { ( eng_unsup `arity` ) } {}
+        ? & & != 0 g_eng_rawwalk == n 1 < callee 0 {
+            ? == name ( __core_in `mem_take` ) {
+                // (`( mem_take x )`, where the engine reads raw bodies: x
+                // owns the value it holds from here on - what it was read
+                // out of is left a zero value, which holds nothing of it -
+                // AGORA-877)
+                : i xo ( wv_at ops 0 )
+                ? & ( op_is_place xo ) == ( pl_path xo ) 0 {
+                    : i cur ( st_av st ( pl_var xo ) )
+                    ? & != cur 0 == ( av_own cur ) OW_L { ( st_put st ( pl_var xo ) ( av_make OW_O 0 0 ( av_held cur ) F ) ) } {}
+                } {}
+                ( wv_drop ops )
+                ^ g_av_none
+            } {}
+        } {}
         : i sm ( eng_summary_of name )
         ? | < sm 0 != g_fc_unsup 0 {
             ? < sm 0 { ( eng_unsup ( nurl_str_cat `no summary for ` ( eng_str name ) ) ) } {}
@@ -20499,6 +20545,20 @@ unsafe @ eng_byte s w i k → i {
             ( eng_err line EG_NOCOPY `a literal holds a value of its own beside a part of a parameter it only borrows, which cannot be copied` )
         } {}
         ? != nc_loans 0 { ^ ( av_make OW_L nc_loans nc_alias held F ) } {}
+        // (…a slice made from a pointer and a length, where the engine
+        // reads raw bodies - `@ ( Slice u ) { # *u text n }`, not a literal
+        // of its elements: it is the view its pointer is, a lend of what
+        // that points into - as a copy of a view is that view - AGORA-877)
+        ? & & & & != 0 g_eng_rawwalk != ty ET_NONE == ( et_kind ty ) EK_SLICE == n 2 != held 0 {
+            : i dop ( eng_op ( ec + at 4 ) )
+            : i lop ( eng_op ( ec + at 5 ) )
+            : i dty ? ( op_is_place dop ) ( eng_ty_of dop ) ET_NONE
+            : b lnum | ! ( op_is_place lop ) ( eng_place_scalar lop )
+            ? & & lnum != dty ET_NONE ( et_is_view dty ) {
+                : i vv ( view_value held )
+                ? == ( av_own vv ) OW_L { ^ vv } {}
+            } {}
+        } {}
         ^ ( av_make OW_O 0 0 held F )
     } {}
     ? == k RV_CLOSURE {
@@ -23191,6 +23251,46 @@ unsafe @ eng_byte s w i k → i {
     }
 }
 
+// Is (parameter k, path, kind), what a value of type `rty` that the raw
+// library function `f` hands back is a handle of, the raw word of a
+// sharing handle: a part of a parameter of a sharing handle type that is
+// no part the engine's types have (not its payload), kept in a value of
+// a sharing type (eng_make_summary's `libraw`, AGORA-877)?
+@ __eng_share_word i f i rty i k i path i kind → b {
+    ? | | != kind LK_HANDLE == path 0 ( ep_has_star path ) { ^ F } {}
+    ? ! & == ( et_kind rty ) EK_NAMED ( et_flag rty ETF_SHARE ) { ^ F } {}
+    : i pty ( efp_ty f k )
+    ^ & & == ( et_kind pty ) EK_NAMED ( et_flag pty ETF_SHARE ) ( et_flag pty ETF_HANDLE )
+}
+
+// The parameters of the raw function `f` that nurlc's own answers say it
+// keeps as they are (`keeps`, `escapes`: the caller hands the value over,
+// consume_flag), onto `kept`, and those it writes back into the slots
+// they were read from (`putback`, mem_put_back), onto `back`. (The IR does
+// not carry `( mem_put_back s )`'s argument, and how a call hands an
+// argument over is nurlc's calling convention, not the body's: a raw
+// body's bitwise store of a parameter is that value itself - AGORA-877.)
+@ __eng_raw_kept i f i kept i back → v {
+    : s nm ( nurl_str_cat ( eng_str ( ef_at f EF_NAME ) ) `` )
+    : s tm ( nurl_str_cat ( eng_str ( ef_at f EF_TMPL ) ) `` )
+    : i n ( ef_nparams f )
+    ( __ws_idx ( ws_get nm tm `keeps` n ) n kept )
+    ( __ws_idx ( ws_get nm tm `escapes` n ) n kept )
+    ( __ws_idx ( ws_get nm tm `putback` n ) n back )
+}
+
+// Does nurlc's consume flag say callee `name` takes over its argument `k`
+// (__param_consumed: a `sink`, or one it keeps where an owner drops it)?
+@ __eng_walk_consumes i name i k → b {
+    : s ks ( nurl_str_int k )
+    ? ( __param_consumed ( nurl_str_cat ( eng_str name ) `` ) ks ) { ^ T } {}
+    : i fi ( ef_find name )
+    ? < fi 0 { ^ F } {}
+    : s tm ( nurl_str_cat ( eng_str ( ef_at fi EF_TMPL ) ) `` )
+    ? == 0 ( nurl_str_len tm ) { ^ F } {}
+    ^ ( __param_consumed tm ks )
+}
+
 // The summary of the run just made, merged into the one kept for `f`.
 // T if that changed it.
 @ eng_make_summary i f → b {
@@ -23244,6 +23344,49 @@ unsafe @ eng_byte s w i k → i {
         }
         = r + r 1
     }
+    // (Where the engine reads raw bodies, a library function whose body
+    // crosses the raw boundary and hands back a value of a sharing handle
+    // type - an Arc, a Weak - made from the raw word of a parameter of one
+    // (`: s c . r ctl`, a part the engine's types do not have: not the
+    // payload) is handing back a share of its own: the count it raised is
+    // the library's invariant, as arc_clone's declared summary says. The
+    // result holds what that parameter holds, not a handle of it -
+    // AGORA-877.)
+    : b libraw & & & != 0 g_eng_rawwalk != 0 ( wv_at g_fc_trusted f ) != 0 & ( ef_at f EF_FLAGS ) 6 ( bck_trusted_file ( eng_str ( ef_at f EF_FILE ) ) )
+    ? & & libraw != g_f_ret ET_NONE ! ( et_scalar g_f_ret ) {
+        : ~ i nlends 0
+        : ~ i k 0
+        ~ < k ( sq_len lends ) {
+            : i t ( sq_at lends k )
+            : i lk ( tp_at t 3 0 )
+            : i lp ( tp_at t 3 1 )
+            : i pty ( efp_ty f lk )
+            ? ( __eng_share_word f g_f_ret lk lp ( tp_at t 3 2 ) ) {
+                = rholds ( sq_add rholds ( tp4 0 lk 0 LK_HELD ) )
+            } {
+                // (…and a handle of the part of a handle's raw words that
+                // is a value of its payload's type - rguard_get's
+                // `. ( shared_ptr . g ctl ) val`, a Page out of an
+                // RGuard Page - is a handle of its payload, the one part of
+                // it the engine's types have)
+                : b pay & & & & & == ( tp_at t 3 2 ) LK_HANDLE != lp 0 == ( et_kind pty ) EK_NAMED ( et_flag pty ETF_HANDLE ) == ( eng_ty_at pty lp ) ET_NONE == ( et_elem pty ) g_f_ret
+                = nlends ( sq_add nlends ? pay ( tp3 lk ( ep_child 0 EE_STAR ) LK_HANDLE ) t )
+            }
+            = k + k 1
+        }
+        = lends nlends
+        : ~ i nrh 0
+        = k 0
+        ~ < k ( sq_len rholds ) {
+            : i t ( sq_at rholds k )
+            : i dp ( tp_at t 4 0 )
+            ? ( __eng_share_word f ( eng_ty_at g_f_ret dp ) ( tp_at t 4 1 ) ( tp_at t 4 2 ) ( tp_at t 4 3 ) ) {
+                = nrh ( sq_add nrh ( tp4 dp ( tp_at t 4 1 ) 0 LK_HELD ) )
+            } { = nrh ( sq_add nrh t ) }
+            = k + k 1
+        }
+        = rholds nrh
+    } {}
     : ~ i mixed 0
     // its own on some paths, a lend of an argument on others: the caller's
     // result borrows that argument (answered per call)
@@ -23316,9 +23459,72 @@ unsafe @ eng_byte s w i k → i {
         }
         = s + s 1
     }
+    // (Where the engine reads raw bodies, a raw function's parameter that
+    // nurlc's calling convention hands over as it is (kept: the caller
+    // gives it up or hands a copy) or that the body writes back into the
+    // slot it was read from: a handle of it the body's bitwise store left
+    // is that value itself - the result holds what it holds, a parameter
+    // it is stored into holds it by value (SK_VALUE), as the walk's
+    // answers said - AGORA-877)
+    : ~ i putback 0
+    ? & != 0 g_eng_rawwalk != 0 & ( ef_at f EF_FLAGS ) 1 {
+        : i kw ( wv_new )
+        : i bw ( wv_new )
+        ( __eng_raw_kept f kw bw )
+        : ~ i k 0
+        ~ < k ( wv_len bw ) { = putback ( sq_add putback ( wv_at bw k ) ) = k + k 1 }
+        ? | != 0 ( wv_len kw ) != 0 ( wv_len bw ) {
+            : ~ i nrh 0
+            = k 0
+            ~ < k ( sq_len rholds ) {
+                : i t ( sq_at rholds k )
+                : b kt & & == ( tp_at t 4 3 ) LK_HANDLE == ( tp_at t 4 2 ) 0 ( __wv_has kw ( tp_at t 4 1 ) )
+                = nrh ( sq_add nrh ? kt ( tp4 ( tp_at t 4 0 ) ( tp_at t 4 1 ) 0 LK_HELD ) t )
+                = k + k 1
+            }
+            = rholds nrh
+            : ~ i nst 0
+            = k 0
+            ~ < k ( sq_len stores ) {
+                : i t ( sq_at stores k )
+                : i sk ( tp_at t 5 2 )
+                : b kt & & == ( tp_at t 5 4 ) LK_HANDLE == ( tp_at t 5 3 ) 0 | ( __wv_has kw sk ) ( __wv_has bw sk )
+                = nst ( sq_add nst ? kt ( tp5 ( tp_at t 5 0 ) ( tp_at t 5 1 ) sk 0 SK_VALUE ) t )
+                // (…one written back that the body handed on to a callee's
+                // own write-back, which took it: what it held is there, and
+                // so is the value itself)
+                ? & & == ( tp_at t 5 4 ) LK_HELD == ( tp_at t 5 3 ) 0 ( __wv_has bw sk ) { = nst ( sq_add nst ( tp5 ( tp_at t 5 0 ) ( tp_at t 5 1 ) sk 0 SK_VALUE ) ) } {}
+                = k + k 1
+            }
+            = stores nst
+        } {}
+        ( wv_drop kw ) ( wv_drop bw )
+    } {}
     : ~ i consumes g_s_consumes
     : ~ i j 0
     ~ < j ( fp_n ) { ? == ( fp_mode j ) PM_SINK { = consumes ( sq_add consumes j ) } {} = j + j 1 }
+    : ~ i effs g_s_effects
+    ? != putback 0 {
+        // (…and is the slot's value again: what the body did to hand it
+        // there - a callee's write-back took it - is no change the caller
+        // sees, and the caller gives nothing up)
+        : ~ i nc 0
+        = j 0
+        ~ < j ( sq_len consumes ) {
+            : i c ( sq_at consumes j )
+            ? | ! ( sq_has putback c ) == ( fp_mode c ) PM_SINK { = nc ( sq_add nc c ) } {}
+            = j + j 1
+        }
+        = consumes nc
+        : ~ i ne2 0
+        = j 0
+        ~ < j ( sq_len effs ) {
+            : i t ( sq_at effs j )
+            ? ! & ( sq_has putback ( tp_at t 3 0 ) ) == ( tp_at t 3 1 ) 0 { = ne2 ( sq_add ne2 t ) } {}
+            = j + j 1
+        }
+        = effs ne2
+    } {}
     // the states kept for this are done with
     = r 0
     ~ < r nr { ( st_free ( wv_at g_fc_rets + * r 2 1 ) ) = r + r 1 }
@@ -23333,7 +23539,7 @@ unsafe @ eng_byte s w i k → i {
     ? & != mixed 0 == 0 ( sm_word f SM_MIXED ) { ( sm_put f SM_MIXED 1 ) = changed T } {}
     ? ( sm_merge f SM_LENDS lends ) { = changed T } {}
     ? ( sm_merge f SM_RHOLDS rholds ) { = changed T } {}
-    ? ( sm_merge f SM_EFFECTS g_s_effects ) { = changed T } {}
+    ? ( sm_merge f SM_EFFECTS effs ) { = changed T } {}
     ? ( sm_merge f SM_STORES stores ) { = changed T } {}
     ? ( sm_merge f SM_CONSUMES consumes ) { = changed T } {}
     ? ( sm_merge f SM_ELEMS g_s_elems ) { = changed T } {}
@@ -23351,6 +23557,7 @@ unsafe @ eng_byte s w i k → i {
     ? ( sm_merge f SM_CREDITS g_s_credits ) { = changed T } {}
     ? ( sm_merge f SM_KEEPS keeps ) { = changed T } {}
     ? ( sm_merge f SM_CATCHES g_s_catches ) { = changed T } {}
+    ? ( sm_merge f SM_PUTBACK putback ) { = changed T } {}
     ? changed { = g_sm_version + g_sm_version 1 } {}
     ^ changed
 }
@@ -23396,6 +23603,7 @@ unsafe @ eng_byte s w i k → i {
     ( sm_put f SM_MIXED 0 )
     ( sm_put f SM_KEEPS 0 )
     ( sm_put f SM_CATCHES 0 )
+    ( sm_put f SM_PUTBACK 0 )
     ( sm_put f SM_CONSUMES ( sm_keep ( sq_set_of_wv sinks ) ) )
     ( wv_drop sinks )
 }
@@ -32929,6 +33137,9 @@ unsafe @ nurl_lex_peek4_type i h → i {
     : i __tk_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     ( expect lex TT_RPAREN )
+    // (…where the engine reads raw bodies, the IR names the binding: the
+    // engine's to see it take its value over - AGORA-877)
+    ? & != 0 g_core_live != 0 g_eng_rawwalk { ( core_push_name syms name ( nurl_sym_get syms name ) ) } {}
     // Taken over: no longer lent by the storage it was read out of — nor,
     // for the borrow checker, a borrow of it (a `take` row).
     ? != 0 ( nurl_sym_len2 syms name `__rlent` ) { ( nurl_sym_set_deep syms ( nurl_str_cat name `__rlent` ) `` ) } {}
