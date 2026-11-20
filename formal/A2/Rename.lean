@@ -1,4 +1,5 @@
 import A2.NameWf
+import A2.Fresh
 
 /-! A2 — a callee's body, checked once against its own view of its
 parameters, is well-typed where a call places it.
@@ -5277,18 +5278,18 @@ theorem compE_liftE_weakerV {x y : Var} {Ex : Entry} {t : Ty} (hmx : Ex.mode = .
     `CallT`'s guard, Agora #295). -/
 theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List Var} {s : Stmt}
     {Δa : Ctx} (hd : StmtT P ξ Γa Fa s Δa) : s.src = true → S.AbsOK Γa → CtxWF Γa → NameWF Γa →
-    (s.Thru P → S.R = []) →
+    FreshOK Γa → (s.Thru P → S.R = []) →
     StmtT P (S.liftX ξ) (S.canon Γa) S.Fc (s.rename S.ρ) (S.canon Δa) ∧ S.AbsOK Δa := by
   induction hd with
-  | skip => exact fun _ hab _ _ _ => ⟨StmtT.skip, hab⟩
+  | skip => exact fun _ hab _ _ _ _ => ⟨StmtT.skip, hab⟩
   | @seq _ Γ Γ1 Δ F a b hb ta tb iha ihb =>
-    intro hs hab hw hn hT
+    intro hs hab hw hn hfo hT
     simp only [Stmt.src, Bool.and_eq_true] at hs
-    obtain ⟨t1, ab1⟩ := iha hs.1 hab hw hn (fun ht => hT ht.seq_l)
-    obtain ⟨t2, ab2⟩ := ihb hs.2 ab1 (ta.wf hP hw) (ta.names hP hs.1 hn) (fun ht => hT ht.seq_r)
+    obtain ⟨t1, ab1⟩ := iha hs.1 hab hw hn hfo (fun ht => hT ht.seq_l)
+    obtain ⟨t2, ab2⟩ := ihb hs.2 ab1 (ta.wf hP hw) (ta.names hP hs.1 hn) (ta.freshOK hP hs.1 hfo) (fun ht => hT ht.seq_r)
     exact ⟨StmtT.seq (by rw [src_rename]; exact hb) t1 t2, ab2⟩
   | @letv _ Γ Γ1 Δ F x r k E hks hx hxF hr hk hpe hnd ih =>
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr
     obtain ⟨hn1, hEn, _⟩ := hr.names hn
     have hab1 := RhsT.absOK (S := S) hr hab
@@ -5299,7 +5300,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun ha => absurd ha (by simp [hr.dtor_false.1])) (fun hd => absurd hd (by simp [hr.dtor_false.2]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
     have habx := hab.add hab1 hx hmo
-    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letv)
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (by obtain ⟨h1, hE, _⟩ := hr.freshOK hfo; exact h1.bind hx1 hE)
+      (fun ht => hT ht.letv)
     have tk := tk.mono (S.liftX_under h (hab.fresh hx) (hab.notPiFresh hx))
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hx)⟩
@@ -5316,7 +5318,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         · first | (rw [← hl]; exact hnd hmo) | (rw [hl]; exact hnd hmo)
         · first | (rw [← hm] at hmo'; cases hmo') | (rw [hm] at hmo'; cases hmo'))
   | @withLock _ Γ Δ F a x k Ea t hks hx hxF ha hla hta hk hpe hroot hav hxl hna ih =>
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     have hca : S.canon Γ (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     have hmo : (lockE t).mode = .own ∨ (lockE t).mode = .bor := by
       unfold lockE; split <;> simp [intE]
@@ -5325,7 +5327,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hnx := NameWF.setE hn (E := lockE t) (fun Ex h => by rw [hx] at h; cases h)
       (fun Ex h => by rw [hx] at h; cases h) (fun _ _ => by unfold NameOK; rw [lockE_vdeps]; exact DepsNamed.nil _)
     have habx := hab.add hab hx hmo
-    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.withLock)
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (hfo.bind hx (FreshE.of_fresh (lockE_fresh t)))
+      (fun ht => hT ht.withLock)
     have tk := tk.mono (ξ' := .none) (fun _ _ h' => (S.liftX_none h').elim)
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hx)⟩
@@ -5350,7 +5353,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         exact ⟨S.liftE x E, by rw [canon_ρ h, hE]; rfl, by rw [liftE_live]; exact hl⟩)
       (fun hd => not_mem_assigns_rename h.inj (hna hd))
   | @letd _ Γ Γ1 Δ F x f r k E t H τ hks hx hxF hr hown hty hstr hview hdtor hH hk hpe hna ih =>
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr
     obtain ⟨hn1, hEn, _⟩ := hr.names hn
     have hab1 := RhsT.absOK (S := S) hr hab
@@ -5377,7 +5380,9 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hnx := NameWF.setE hn1 (E := Entry.arm { E with ty := τ, held := H }) (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) (fun hl _ => (hEn hl (Or.inl hne)).widen hown hH)
     have habx := hab.add hab1 hx (E := Entry.arm { E with ty := τ, held := H }) hmo
-    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letd)
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (by
+      obtain ⟨h1, _, _⟩ := hr.freshOK hfo
+      exact h1.bind hx1 (fun _ _ hb _ => by simp [Entry.arm, hown] at hb)) (fun ht => hT ht.letd)
     have tk := tk.mono (S.liftX_underD h hab1 (hab.fresh hx) (hab.notPiFresh hx))
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hx)⟩
@@ -5461,7 +5466,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) hEW, hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe) (not_mem_assigns_rename h.inj hna)
   | @callc _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF hc htc hj hσ hhd hout hcT hnz hk hpe hdk ih =>
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     -- (the interface is a function the statement calls: a call through one
     -- that changes elements through a borrow is a call of such a function,
     -- AGORA-395)
@@ -5479,7 +5484,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun hd => absurd hd (by simp [hdb0])) (fun ha => absurd ha (by simp [hcT.dtor_false.1]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) (recvRes_named (c := c) (Ec := Ec) hEn)
     have habx := hab.add hab1 hx (E := recvRes c Ec E) hmo
-    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.callc)
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (by
+      obtain ⟨h1, _, _⟩ := hcT.freshOK hfo
+      have hEf : E.fresh = false := by
+        obtain ⟨_, _, _, _, _, _, hE, _, _⟩ := hcT; rw [hE]; rfl
+      exact h1.bind hx1 (FreshE.of_fresh (by rw [recvRes_fresh]; exact hEf))) (fun ht => hT ht.callc)
     have tk := tk.mono (S.liftX_under h (hab.fresh hx) (hab.notPiFresh hx))
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hx)⟩
@@ -5508,7 +5517,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       · exact A_out h ha z0 hdr.symm
   | @callcE _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig b hks hx hxF hc htc hcan hq hj hσ hsp hsl hsr hso hny hdc hcT hk
       hpe hnσ hdk ih =>
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     -- the package may be replaced: what depends on it ends where it is placed
     have hal : Allowed S .replace false c := by
       rcases allowed_canDo' hab hc hcan with h0 | ⟨b', hb', hbb, hk'⟩
@@ -5527,7 +5536,9 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hnx := (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h)
       hEn).kill .replace false c
     have habx := (habk.add hab1 hxk hmo).kill .replace false c
-    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.callcE)
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (by
+      obtain ⟨h1, hE, _⟩ := hcT.freshOK (hfo.kill _ _ _)
+      exact (h1.bind hx1 hE).kill _ _ _) (fun ht => hT ht.callcE)
     have tk := tk.mono (S.liftX_under h (hab.fresh hx) (hab.notPiFresh hx))
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hx)⟩
@@ -5564,7 +5575,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (StmtT.weakenIn ⟨(hpw.setE (hE' x)).kill _ _ _, hwc, hnc⟩ tk) (EndOK.lift h abk hbx hpe) hnσ
       (fun ho hd => dtorHead_rename h.inj (hdk ho hd))
   | @letcall _ Γ Γ1 Δ F x f args k E hks hx hxF hc hk hpe hdk ih =>
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (.inr ⟨f, by simp [Stmt.calls], ht⟩))
     obtain ⟨hn1, hEn, _⟩ := hc.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hc hab
@@ -5574,7 +5585,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun ha => absurd ha (by simp [hc.dtor_false.1])) (fun hd => absurd hd (by simp [hc.dtor_false.2]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
     have habx := hab.add hab1 hx hmo
-    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letcall)
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (by obtain ⟨h1, hE, _⟩ := hc.freshOK hfo; exact h1.bind hx1 hE)
+      (fun ht => hT ht.letcall)
     have tk := tk.mono (S.liftX_under h (hab.fresh hx) (hab.notPiFresh hx))
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hx)⟩
@@ -5591,13 +5603,13 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | rbind => intro hs; simp [Stmt.src] at hs
   | frozen => intro hs; simp [Stmt.src] at hs
   | panic hwf hnΔ hdom hm hdk hst hfΔ =>
-    intro _ hab _ _ _
+    intro _ hab _ _ _ _
     have habΔ := hab.of_same hdom hm
     obtain ⟨hdom', hm'⟩ := canon_same h hab hdom hm
     exact ⟨StmtT.panic (canon_wf h habΔ hwf) (canon_names h habΔ hnΔ) hdom' hm' (DKeep.canon h hdk hm)
       (DStay.canon h hst) (canon_freshT h hdom' hm' hfΔ), habΔ⟩
   | @letrec _ Γ Γ1 Δ F x f k E fn hks hx hxF hf hp hty ho hc hk hpe ih =>
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (.inr ⟨f, by simp [Stmt.calls], ht⟩))
     obtain ⟨hn1, hEn, _⟩ := hc.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hc hab
@@ -5607,7 +5619,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun ha => absurd ha (by simp [hc.dtor_false.1])) (fun hd => absurd hd (by simp [hc.dtor_false.2]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
     have habx := hab.add hab1 hx hmo
-    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letrec)
+    obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (by obtain ⟨h1, hE, _⟩ := hc.freshOK hfo; exact h1.bind hx1 hE)
+      (fun ht => hT ht.letrec)
     have tk := tk.mono (S.liftX_under h (hab.fresh hx) (hab.notPiFresh hx))
     have hbx := hab.fresh hx
     refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hx)⟩
@@ -5620,7 +5633,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (EndOK.lift h abk hbx hpe)
   | catchR => intro hs; simp [Stmt.src] at hs
   | @assign _ Γ Γ1 F x r Ex E hx hxF hmodes hr hty hxd hsome hpin hds hxdb htk =>
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     obtain ⟨E', hr', hE'⟩ := RhsT.ren h hab hr
     have hab1 := RhsT.absOK (S := S) hr hab
     obtain ⟨hmo, hlive⟩ := RhsT.out hr
@@ -5721,17 +5734,17 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       exact (hlv hlive).2.1 (by rw [hm', liftMode_ownSlot]; exact ho')
     · rw [hos]; exact (hlv hlive).2.2
   | @ite _ Γ Δ F c a b ha hb hc ta tb iha ihb =>
-    intro _ hab hw hn hT
-    obtain ⟨t1, ab1⟩ := iha ha hab hw hn (fun ht => hT ht.ite_l)
-    obtain ⟨t2, _⟩ := ihb hb hab hw hn (fun ht => hT ht.ite_r)
+    intro _ hab hw hn hfo hT
+    obtain ⟨t1, ab1⟩ := iha ha hab hw hn hfo (fun ht => hT ht.ite_l)
+    obtain ⟨t2, _⟩ := ihb hb hab hw hn hfo (fun ht => hT ht.ite_r)
     exact ⟨StmtT.ite (by rw [src_rename]; exact ha) (by rw [src_rename]; exact hb)
       (exprT_ren h hab hc (fun v _ => h.noPi v)) t1 t2, ab1⟩
   | @«while» _ Γ F c k hk hc tk ih =>
-    intro _ hab hw hn hT
-    obtain ⟨t, _⟩ := ih hk hab hw hn (fun ht => hT ht.wh)
+    intro _ hab hw hn hfo hT
+    obtain ⟨t, _⟩ := ih hk hab hw hn hfo (fun ht => hT ht.wh)
     exact ⟨StmtT.while (by rw [src_rename]; exact hk) (exprT_ren h hab hc (fun v _ => h.noPi v)) t, hab⟩
   | @push _ Γ Γ1 F x y Ex Ey Ex1 t D hx hl hty hcan hxF hy hly htyy hyx hpa hxD hx1 hl1 hds hdb =>
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     obtain ⟨D', hpa', hD', hD'o⟩ := pushArg_ren h hab hy hpa
     have hab1 := PushArg.absOK (S := S) hy hpa hab
     have hrbx : Ex.mode ≠ .rootb := by rcases hcan with hm | ⟨b, hm, _⟩ <;> rw [hm] <;> simp
@@ -5836,7 +5849,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       simp only [ownHeld, hv', Bool.not_false, Bool.and_self, ↓reduceIte, List.append_nil]
       exact append_sub (List.Subset.refl _) (List.Subset.refl _)
   | @free _ Γ F x E t hx hl hm hty hxF hpe hdf =>
-    intro _ hab _ _ _
+    intro _ hab _ _ _ _
     have hrb : E.mode ≠ .rootb := by rw [hm]; simp
     have hbx : S.bnd x = none := by
       cases hb : S.bnd x with
@@ -5850,7 +5863,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (by rw [liftE_mode x hrb, hm]; rfl) (by rw [liftE_ty' h hab hx]; exact hty) (h.Fcout x)
       (EndOK.lift h hab hbx hpe) hdf
   | @unpair ξ Γ Δ F y x z k E a b hks hy hl hm hty hyF hx hz hxz hxF hzF hk _ hdy hpze hpxe hdx hdz ih =>
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     have hrep := canDo_replace_cases hm
     have hrb : E.mode ≠ .rootb := by rcases hrep with h1 | h1 <;> rw [h1] <;> simp
     have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
@@ -5864,7 +5877,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have habz := AbsOK.add hab habx hz (hcm b)
     have hw3 := hw.unpair (a := a) (b := b) hy hl hm.ownSlot (unpair_ne_int hty) hx hz hxz
     have hn3 := hn.unpair (a := a) (b := b) hy hl (unpair_ne_int hty) hx hz hxz
-    obtain ⟨tk, abk⟩ := ih hks habz hw3 hn3 (fun ht => hT ht.unpair)
+    obtain ⟨tk, abk⟩ := ih hks habz hw3 hn3 (by
+      obtain ⟨h1, _⟩ := hfo.moved hy
+      have h2 := h1.bind (setE_none (kill_at_none hx _ _ _) hxy) (FreshE.of_fresh (compE_fresh E a))
+      exact h2.bind (setE_none (setE_none (kill_at_none hz _ _ _) hzy) (fun e => hxz e.symm))
+        (FreshE.of_fresh (compE_fresh E b))) (fun ht => hT ht.unpair)
     have tk := tk.mono (ξ' := ((S.liftX ξ).under (S.ρ x)).under (S.ρ z))
       (fun n Γc hh => ⟨(S.liftX_under h (hab.fresh hz) (hab.notPiFresh hz) n Γc hh).1,
         S.liftX_under h (hab.fresh hx) (hab.notPiFresh hx) _ _ (S.liftX_under h (hab.fresh hz) (hab.notPiFresh hz) n Γc hh).2⟩)
@@ -5896,7 +5913,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
           · exact Or.inr (Or.inl h1)))) (DtorSafe.canon h hal hdy) hpz hpx
       (fun ha => dtorHead_rename h.inj (hdx ha)) (fun hb => dtorHead_rename h.inj (hdz hb))
   | @editB _ Γ Γ1 F x op Ex Ex1 t D b hx hmx hl hty hhv _ harg hyx hx1 hl1 hne hthru hdf hbf =>
-    intro _ hab _ _ hT
+    intro _ hab _ _ _ hT
     have hab1 : S.AbsOK Γ1 := EditArg.absOK harg hab
     have hm1 : Ex1.mode = .bor := by rw [harg.at_ne hyx hx hx1 hl1, hmx]
     -- Agora #909: an edit through a fresh borrow (`edit false`) needs no S.R = []
@@ -5908,7 +5925,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     exact (hab1.killNames (thruDeps op Γ1 Ex.ty Ex1.path)).setE' hab1 hx1 rfl rfl (by rw [hm1]; simp)
       (fun hf => absurd hf (by simp [Entry.fixed, hm1]))
   | @editBV _ Γ Γ1 F x op Ex Ex1 t D b hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV hdf hbf hbs =>
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     -- Agora #916: an `edit true` is placed by a call that passes no views;
     -- an `edit false` by any
     exact editBV_ren h hab (fun hbt => hT (.inl (by simpa [Stmt.hasThru] using hbt))) hP hw hn hx hmx hl hty hhv
@@ -5916,7 +5933,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | @takeB _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hxF hie hne hthru hnd hk hpe ih =>
     -- AGORA-889: `editB`'s truncation where the call places it
     -- (`editB_ren_facts`), then `y` bound to the element, as `letv` binds
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     have hR : S.R = [] := hT (.inl rfl)
     obtain ⟨-, -, hthru', hne', heq⟩ := editB_ren_facts h hab hx hmx hl hty
       (EditArg.trunc (t := t) hie) (fun _ h' => by cases h') hx hl hne hthru (Or.inl hR)
@@ -5928,7 +5945,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have habb := hab.add hab2 hy hmo
     have hwb := takeB_ctxWF (i := i) hw hy hx hmx hl hty
     have hnb := takeB_nameWF (i := i) hn hy hx hmx hl hty
-    obtain ⟨tk, abk⟩ := ih hks habb hwb hnb (fun _ => hR)
+    obtain ⟨tk, abk⟩ := ih hks habb hwb hnb (by
+      have hyx : y ≠ x := fun e => by rw [e, hx] at hy; cases hy
+      have h1 : FreshOK (A2.setE (killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
+        hfo.reset ((FreshLe.refl Γ).killNames _) ((KeepsFrame.refl Γ).killNames _) hx rfl rfl rfl rfl rfl
+      exact h1.bind (setE_none (killNames_none hy _) hyx) (FreshE.of_fresh (compE_fresh Ex t))) (fun _ => hR)
     have hbx := hab.fresh hy
     have tk := tk.mono (S.liftX_under h hbx (hab.notPiFresh hy))
     refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hy)⟩
@@ -5945,7 +5966,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | @takeBV _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hxF hie hne hthru hV hnd hk hpe ih =>
     -- AGORA-897: `editBV`'s truncation where the call places it
     -- (`editBV_ren_facts`), then `y` bound to the element, as `letv` binds
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     have hR : S.R = [] := hT (.inl rfl)
     obtain ⟨hmem, hthru', heqK, hVg⟩ := editBV_ren_facts h hab hmx hthru hV (Or.inl hR)
     have hne' : memDeps (S.liftE x Ex).path ≠ [] := by rw [hmem]; simpa [rds] using hne
@@ -5957,7 +5978,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have habb := hab.add hab2 hy hmo
     have hwb := takeBV_ctxWF (i := i) hw hy hx hmx hl hty
     have hnb := takeBV_nameWF (i := i) hn hy hx hmx hl hty
-    obtain ⟨tk, abk⟩ := ih hks habb hwb hnb (fun _ => hR)
+    obtain ⟨tk, abk⟩ := ih hks habb hwb hnb (by
+      have hyx : y ≠ x := fun e => by rw [e, hx] at hy; cases hy
+      have h1 : FreshOK (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
+        hfo.reset ((FreshLe.refl Γ).killHv _) ((KeepsFrame.refl Γ).killHv _) hx rfl rfl rfl rfl rfl
+      exact h1.bind (setE_none (killHv_none hy _) hyx) (FreshE.of_fresh (compE_fresh Ex t))) (fun _ => hR)
     have hbx := hab.fresh hy
     have tk := tk.mono (S.liftX_under h hbx (hab.notPiFresh hy))
     refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hy)⟩
@@ -5974,7 +5999,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
   | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF hy hmy he hpin hds hr hk hpush hpe hyv hdf ihs ihp =>
-    intro _ hab hw hn hT
+    intro _ hab hw hn hfo hT
     -- an owner of the callee is bound to no argument: what depends on it ends where it is placed
     have hal : Allowed S .replace false y := allowed_own hab hy hmy .replace false
     have habk : S.AbsOK (A2.kill .replace false y Γ) := hab.kill _ _ _
@@ -5989,9 +6014,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun ha => absurd ha (by simp [hr.dtor_false.1])) (fun hd => absurd hd (by simp [hr.dtor_false.2]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
     have habx := hab.add hab1 hx hmo
-    obtain ⟨tk, abk⟩ := ihs hks habx hwx hnx (fun ht => hT ht.withElem)
+    have hfx : FreshOK (setE Γ1 x E) := by
+      obtain ⟨h1, hE, _⟩ := hr.freshOK (hfo.kill .replace false y); exact h1.bind hx1 hE
+    obtain ⟨tk, abk⟩ := ihs hks habx hwx hnx hfx (fun ht => hT ht.withElem)
     have tk := tk.mono (ξ' := .none) (fun _ _ h' => (S.liftX_none h').elim)
-    obtain ⟨tp, abp⟩ := ihp rfl abk (hk.wf hP hwx) (hk.names hP hks hnx) (fun ht => by
+    obtain ⟨tp, abp⟩ := ihp rfl abk (hk.wf hP hwx) (hk.names hP hks hnx) (hk.freshOK hP hks hfx) (fun ht => by
       rcases ht with h' | ⟨g, hg, _⟩ <;> simp [Stmt.hasThru, Stmt.calls] at *)
     have hbx := hab.fresh hx
     refine ⟨?_, abp.exitScope hbx (hab.notPiFresh hx)⟩
@@ -6014,13 +6041,13 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         have hrb : E.mode ≠ .rootb := by rcases (RhsT.out hr).1 with h' | h' <;> rw [h'] <;> simp
         rw [← hl, liftE_ty x hrb]; exact hdf)
   | @insert _ Γ Δ F x y i he _ _ ih =>
-    intro _ hab hw hn hT
-    obtain ⟨tp, abp⟩ := ih rfl hab hw hn hT
+    intro _ hab hw hn hfo hT
+    obtain ⟨tp, abp⟩ := ih rfl hab hw hn hfo hT
     exact ⟨StmtT.insert (exprT_ren h hab he (fun v _ => h.noPi v)) (h.Fcout x) (tp.mono (ξ' := .none) (fun _ _ h' => (S.liftX_none h').elim)), abp⟩
   | @sub _ Γ Γ0 Δ0 Δ F k hw0 tk ho ih =>
-    intro hs hab hw hn hT
+    intro hs hab hw hn hfo hT
     have hab0 := hab.weaker hw0
-    obtain ⟨t, abΔ0⟩ := ih hs hab0 hw0.2.1 hw0.2.2 hT
+    obtain ⟨t, abΔ0⟩ := ih hs hab0 hw0.2.1 hw0.2.2 (hfo.weaker hw0) hT
     have hwc := canon_weaker h hab0 hw0.2.1 hw0
     rcases ho with rfl | hwo
     · exact ⟨StmtT.weakenIn hwc t, abΔ0⟩
@@ -6028,21 +6055,21 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       exact ⟨StmtT.sub hwc t (Or.inr (canon_weaker h abΔ hwo.2.1 hwo)), abΔ⟩
 
   | exit hup hwf hnΔ hdom hm hdk hst hfΔ =>
-    intro _ hab hw hn _
+    intro _ hab hw hn _ _
     have habΔ := hab.of_same hdom hm
     obtain ⟨hdom', hm'⟩ := canon_same h hab hdom hm
     exact ⟨StmtT.exit (S.liftX_up h hab hw hn hup) (canon_wf h habΔ hwf) (canon_names h habΔ hnΔ) hdom' hm'
       (DKeep.canon h hdk hm) (DStay.canon h hst) (canon_freshT h hdom' hm' hfΔ), habΔ⟩
   | loop hsrc _ hwf hnΔ hdom hm hdk hst hfΔ ih =>
-    intro hs hab hw hn hT
-    obtain ⟨tb, _⟩ := ih hsrc hab hw hn (fun ht => hT (ht.mono (fun h => h) (fun _ hg => hg)))
+    intro hs hab hw hn hfo hT
+    obtain ⟨tb, _⟩ := ih hsrc hab hw hn hfo (fun ht => hT (ht.mono (fun h => h) (fun _ hg => hg)))
     have habΔ := hab.of_same hdom hm
     obtain ⟨hdom', hm'⟩ := canon_same h hab hdom hm
     exact ⟨StmtT.loop (by rw [src_rename]; exact hsrc) tb (canon_wf h habΔ hwf) (canon_names h habΔ hnΔ)
       hdom' hm' (DKeep.canon h hdk hm) (DStay.canon h hst) (canon_freshT h hdom' hm' hfΔ), habΔ⟩
   | block hb ih =>
-    intro hs hab hw hn hT
-    obtain ⟨tb, abΔ⟩ := ih hs hab hw hn hT
+    intro hs hab hw hn hfo hT
+    obtain ⟨tb, abΔ⟩ := ih hs hab hw hn hfo hT
     exact ⟨StmtT.block (tb.mono (S.liftX_blk h abΔ (hb.wf hP hw))), abΔ⟩
 end RSetup
 
