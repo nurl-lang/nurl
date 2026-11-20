@@ -3142,6 +3142,25 @@ class FnCheck:
                                 self.s_consumes.add(self.pidx[place[0]])
                             st.vals[place[0]] = AV("X")
 
+    def _alias_takes(self, st, vid, sub, k, sm, own_takes):
+        """The `inout` parameters a consumed operand `vid`+`sub` takes a
+        field out of through `vid`'s aliases (a binding that reads a field,
+        or a whole parameter's alias with a part of it): onto `own_takes`.
+        A number, and a part a keeping callee is handed a copy of, are
+        copied (agora #939)."""
+        av = st.vals.get(vid)
+        for a in (av.alias if av is not None else ()):
+            path = tuple(a[1]) + tuple(sub)
+            if not (path and "*" not in path and a[0] in self.pidx
+                    and self.fn.modes[self.pidx[a[0]]] == "inout"):
+                continue
+            fty = self.ty_of_place((a[0], path))
+            kept = fty is not None and self.T.copyable(fty) and (
+                any(r[1] == k for r in sm.get("rholds", ()))
+                or any(x[2] == k for x in sm.get("stores", ())))
+            if not (fty is not None and self.T.is_scalar(fty)) and not kept:
+                own_takes.add(a[0])
+
     def unwind_check(self, st, ops, line, name, sm):
         """A call that may unwind - a function of the program's, the
         library's (an index past the end, `panic` itself), a runtime entry
@@ -3171,23 +3190,26 @@ class FnCheck:
                         or any(x[2] == k for x in sm.get("stores", ())))
                     if not (fty is not None and self.T.is_scalar(fty)) and not kept:
                         own_takes.add(ops[k][1])
+                    # (…and a part of a binding that is a whole `inout`
+                    # parameter's alias, `b.buf`: the parameter's own part;
+                    # CodeRabbit on github#2129)
+                    if ops[k][1] not in self.pidx:
+                        self._alias_takes(st, ops[k][1], tuple(ops[k][2]), k, sm, own_takes)
                 elif k < len(ops) and ops[k][0] == "v" and not ops[k][2]:
                     # (…or a binding that reads such a field, `: b . h buf`,
                     # handed over whole: taking it takes the field out of `h`
                     # (take_payload, AGORA-929), at the same moment - so a
                     # panic in the call hands `h` back without it; CodeRabbit
                     # on github#2129)
+                    # (A call's temporary is handed over as a copy of the
+                    # value, as the consumed-argument rule copies it:
+                    # nothing is taken out of what it was read from.)
                     av = st.vals.get(ops[k][1])
-                    for a in (av.alias if av is not None else ()):
-                        if not (a[1] and "*" not in a[1] and a[0] in self.pidx
-                                and self.fn.modes[self.pidx[a[0]]] == "inout"):
+                    if av is not None and av.call and self.fn.vars[ops[k][1]].kind == "temp":
+                        oty = self.ty_of_place((ops[k][1], ()))
+                        if oty is not None and self.T.copyable(oty):
                             continue
-                        fty = self.ty_of_place((a[0], tuple(a[1])))
-                        kept = fty is not None and self.T.copyable(fty) and (
-                            any(r[1] == k for r in sm.get("rholds", ()))
-                            or any(x[2] == k for x in sm.get("stores", ())))
-                        if not (fty is not None and self.T.is_scalar(fty)) and not kept:
-                            own_takes.add(a[0])
+                    self._alias_takes(st, ops[k][1], (), k, sm, own_takes)
         for vid, k in self.pidx.items():
             if self.fn.modes[k] != "inout" and not (
                     self.fn.modes[k] == "cap" and getattr(self.fn.vars[vid], "byref", False)):

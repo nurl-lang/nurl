@@ -54879,6 +54879,25 @@ unsafe @ bck_add_cap_name s name → v {
 // `callee|path|k …` (`` for none): those of the innermost running call -
 // the one this `unw` row is for - and of calls already done. A call still
 // running around it has not been handed its arguments yet.
+// The notes on g_bck `unwpf` of calls still running (on the open-call stack
+// at their depth): a statement flushed inside one's arguments keeps them for
+// its `unw` row. `` when no call is running.
+@ __unw_pf_keep_open → s {
+    : i n ? < g_gc_open 0 0 ( wv_len g_gc_open )
+    ? == n 0 { ^ `` } {}
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck `unwpf` ) `` )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i h ( nurl_str_find w `#` )
+        : i b ( nurl_str_find w `|` )
+        : i sq ( nurl_str_to_int ( nurl_str_slice w 0 h ) )
+        : i d ( nurl_str_to_int ( nurl_str_slice w + h 1 - - b h 1 ) )
+        ? & & < d n >= d 0 == ( wv_at g_gc_open d ) sq { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) } {}
+    }
+    ^ out
+}
+
 @ __unw_field_args → s {
     ? == 0 ( nurl_sym_len g_bck `unwpf` ) { ^ `` } {}
     : i top - ( wv_len g_gc_open ) 1
@@ -58010,8 +58029,11 @@ unsafe @ bck_swap_char s str i from i to → s {
     : ~ s prest ( nurl_sym_get g_bck `ppends` )
     : ~ s keep ``
     ( bck_put `ppends` `` )
-    // (…and the fields handed to calls, as `unw` rows read them: in rows now.)
-    ? != 0 ( nurl_sym_len g_bck `unwpf` ) { ( bck_put `unwpf` `` ) } {}
+    // (…and the fields handed to calls, as `unw` rows read them: in rows now -
+    // except those handed to a call still running around this statement (a
+    // value block in its arguments), whose own `unw` row comes after it:
+    // __unw_pf_keep_open; CodeRabbit on github#2129.)
+    ? != 0 ( nurl_sym_len g_bck `unwpf` ) { ( bck_put `unwpf` ( __unw_pf_keep_open ) ) } {}
     ? ! calls { = g_bck_ownerless 0 } {}
     ~ != 0 ( nurl_str_len prest ) {
         : s pnm ( str_first_word prest )
