@@ -648,6 +648,33 @@ import A3
 #print axioms A2.RSetup.canon_noPi
 #print axioms A2.rdsπ_nopi
 #print axioms A2.mem_rdsπ
+-- AGORA-937: a region is no frame binding, has no slot, and is never a (held-)fresh
+-- source; a region's index is always bound, so a fresh binding is never a region
+#print axioms A2.Mode.region_not_frame
+#print axioms A2.pi_not_fresh
+#print axioms A2.pi_not_heldSrc
+#print axioms A2.RSetup.AbsOK.notPiFresh
+-- AGORA-937: the substitution keeps names (agora #4147) and a weakening, so the
+-- lifted context of a weaker callee context is weaker
+#print axioms A2.RSetup.subD_name
+#print axioms A2.RSetup.subE_weaker
+#print axioms A2.RSetup.canon_weaker_sub
+-- AGORA-937: no name is on a region (NameWF), and the substitution is idempotent, so what
+-- the lifted context's arguments depend on is kept by it
+#print axioms A2.RSetup.no_name_on_region
+#print axioms A2.RSetup.subD_idem
+#print axioms A2.RSetup.callRes_lift
+-- AGORA-937: the call's lift with regions: what a substituted entry depends on
+-- it depended on or the arguments hold, and what the caller's context adds is kept
+#print axioms A2.RSetup.mem_subE_vdeps_A
+#print axioms A2.RSetup.outHeld_canon_fix
+#print axioms A2.RSetup.callT_ren
+-- AGORA-937: a right-hand side lifted with regions: what it reads is on no region, a
+-- fresh borrow is on no region (FreshOK), what is derived is the lift substituted
+#print axioms A2.RSetup.canon_setEs
+#print axioms A2.RSetup.derive_subE
+#print axioms A2.RSetup.fresh_keep
+#print axioms A2.RSetup.RhsT.ren
 -- AGORA-909: a field or payload read of a frame binding of a view-free type that holds
 -- nothing may be fresh (RhsT.fst/snd/getl/getr), so a push through `. b items` of an
 -- `inout` parameter is an `edit false` (A2/FreshProjWitness.lean)
