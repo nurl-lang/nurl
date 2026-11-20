@@ -650,6 +650,11 @@ import A3
 #print axioms A2.RSetup.no_name_on_region
 #print axioms A2.RSetup.subD_idem
 #print axioms A2.RSetup.callRes_lift
+-- AGORA-937: the call's lift with regions: what a substituted entry depends on
+-- it depended on or the arguments hold, and what the caller's context adds is kept
+#print axioms A2.RSetup.mem_subE_vdeps_A
+#print axioms A2.RSetup.outHeld_canon_fix
+#print axioms A2.RSetup.callT_ren
 -- AGORA-937: a right-hand side lifted with regions: what it reads is on no region, a
 -- fresh borrow is on no region (FreshOK), what is derived is the lift substituted
 #print axioms A2.RSetup.canon_setEs
