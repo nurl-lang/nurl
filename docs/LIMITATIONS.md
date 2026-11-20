@@ -29,7 +29,7 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   block's own local, a closure an arm or a block hands over. Until #222
   closes them, hand such a value on directly (`^ ? c a b`) instead of
   through a binding.
-- **agora #939: an `inout` parameter's field taken by a `sink`, refilled through a call that panics.** In `( take . h buf )` followed by `= . h buf ( make k )`, the call `make` runs before the store. If it panics, a `recover`ing caller gets `h` back with `buf` empty, and its next use of the field reads a null handle. The walk exempts the refill's own call, because refusing it would also refuse the common `= . h buf ( vec_new [u] )`, which cannot panic, and it does not yet know which calls can. Until the fix ships, make the new value before the take and store it with `= . h buf fresh`, or keep the call that refills the field from panicking.
+- **agora #939: an `inout` parameter's field taken by a `sink`, then a panic in the call that takes it or in the call that refills it.** In `( take . h buf )` followed by `= . h buf ( make k )`, the call `make` runs before the store. If it panics, a `recover`ing caller gets `h` back with `buf` empty, and its next use of the field reads a null handle. The same holds when the sink `take` itself panics: its argument is already handed over. The walk exempts the refill's own call, because refusing it would also refuse the common `= . h buf ( vec_new [u] )`, which cannot panic, and it does not yet know which calls can. Until the fix ships, make the new value before the take and store it with `= . h buf fresh`, or keep the calls that take and refill the field from panicking.
 <!-- END open holes -->
 
 Every other safe program found accepted and faulting is closed, and held

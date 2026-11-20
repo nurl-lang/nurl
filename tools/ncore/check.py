@@ -1970,21 +1970,30 @@ class FnCheck:
             if k >= len(ops) or k in copied:
                 continue
             op = ops[k]
-            if not (op[0] == "v" and op[2] and k < len(sm["modes"]) and sm["modes"][k] == "sink"):
+            if not (op[0] == "v" and k < len(sm["modes"]) and sm["modes"][k] == "sink"):
                 continue
-            fty = self.ty_of_place((op[1], tuple(op[2])))
-            if fty is not None and self.T.is_scalar(fty):
-                continue
-            for i in range(len(op[2])):
-                oty = self.ty_of_place((op[1], tuple(op[2])[:i]))
-                if oty is None or oty[0] != "named":
+            # (the field path itself, or - a binding handed over whole - the
+            # field paths it aliases, `: b . h buf` then `( take b )`)
+            places = [(op[1], tuple(op[2]))] if op[2] else [
+                (a[0], tuple(a[1])) for a in avs[k].alias if a[1] and a[0] >= 0 and "*" not in a[1]]
+            hit = False
+            for (pv, pp) in places:
+                fty = self.ty_of_place((pv, pp))
+                if fty is not None and self.T.is_scalar(fty):
                     continue
-                if self.fn.name == "drop__" + oty[1] and op[1] == 0 and i == 0:
-                    continue
-                rd = self.drop_reads(oty[1])
-                if op[2][i] in rd or "*" in rd:
-                    self.err(line, f"{name} takes field {'.'.join(map(str, op[2][i:]))} of a {oty[1]}, "
-                                   f"whose destructor reads it")
+                for i in range(len(pp)):
+                    oty = self.ty_of_place((pv, pp[:i]))
+                    if oty is None or oty[0] != "named":
+                        continue
+                    if self.fn.name == "drop__" + oty[1] and pv == 0 and i == 0:
+                        continue
+                    rd = self.drop_reads(oty[1])
+                    if pp[i] in rd or "*" in rd:
+                        self.err(line, f"{name} takes field {'.'.join(map(str, pp[i:]))} of a {oty[1]}, "
+                                       f"whose destructor reads it")
+                        hit = True
+                        break
+                if hit:
                     break
         # effects
         for (k, path, eff) in sm["effects"]:

@@ -4615,6 +4615,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // hold a view: its calls are recorded as points a panic may unwind from
 // (`unw` rows, agora #382).
 : ~ i g_fn_unw 0
+// 1 once this function has a binding that reads a field it may take over
+// (`: b . h buf`, `__bfpath`): what a sink argument then asks of a name,
+// __bfpath_of (agora #929).
+: ~ i g_fn_bfpath 0
 // 1 once a binding was bound to what a borrow lent (`lpa_`, agora #580).
 : ~ i g_bck_lpa_any 0
 // The binding a growth sweep went through, `wroot` (agora #580).
@@ -37890,26 +37894,34 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // (Not in an `unsafe` function, which dismantles a value by hand -
         // its author vouches for what it frees, and no destructor of what it
         // takes apart runs after it.)
-        ? & & & & & != 0 g_user_drop_seen == 0 g_in_unsafe != 0 ( nurl_str_len arg_froot ) ( str_has_index callee_sink arg_idx ) ( bck_sound ) ! ( __plain_scalar_lty ( nurl_llty at ) ) {
-            : ~ s __dch ( __field_path_chain syms arg_froot )
-            // (Inside a `% Drop` impl only its own receiver may be taken
-            // apart - the outermost link of a path rooted at it - not
-            // another value of its type.)
-            : i __drd ( nurl_str_find arg_froot `.` )
-            : ~ b __drcv & & != 0 g_drop_glue_on >= __drd 0 ( seq ( nurl_str_slice arg_froot 0 __drd ) ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) )
-            ~ != 0 ( nurl_str_len __dch ) {
-                : s __dl ( str_first_word __dch ) = __dch ( str_skip_word __dch )
-                : i __dk ( nurl_str_find __dl `:` )
-                : s __dsty ? < __dk 0 `` ( nurl_str_slice __dl 0 __dk )
-                : b __dself & __drcv ( seq g_drop_glue_ty __dsty )
-                = __drcv F
-                ? & & >= __dk 0 ( __has_user_drop __dsty ) ! __dself {
-                    : s __dfn ( nurl_str_slice __dl + __dk 1 - - ( nurl_str_len __dl ) __dk 1 )
-                    : i __dfc ( nurl_str_to_int ( nurl_sym_get g_impl_name_syms `dropfld#n` ) )
-                    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `dropfld#` ( nurl_str_int __dfc ) ) ( nurl_str_cat4 ( nurl_str_cat3 __dsty `\t` __dfn ) ( nurl_str_cat3 `\t` ( nurl_str_int ( nurl_lex_line lex ) ) `\t` ) ( nurl_str_cat3 ( nurl_lex_filename lex ) `\t` fname ) ( nurl_str_cat `\t` arg_froot ) ) )
-                    ( nurl_sym_def g_impl_name_syms `dropfld#n` ( nurl_str_int + __dfc 1 ) )
-                } {}
-            }
+        // (…and a binding that reads such a field, `: b . h buf`, handed
+        // over whole: moving it takes the field out of `h`, `__bfpath`.)
+        // (Tested only for a `sink` argument: this runs for every argument
+        // of every call.)
+        : b __dfc0 | != 0 ( nurl_str_len arg_froot ) & != 0 g_fn_bfpath ( is_ident_tok bck_arg_tt )
+        ? & & & & __dfc0 != 0 g_user_drop_seen == 0 g_in_unsafe ( str_has_index callee_sink arg_idx ) ( bck_sound ) {
+            : s __dfp ? != 0 ( nurl_str_len arg_froot ) ( nurl_str_cat arg_froot `` ) ( __bfpath_of syms bck_arg_val )
+            ? & != 0 ( nurl_str_len __dfp ) ! ( __plain_scalar_lty ( nurl_llty at ) ) {
+                : ~ s __dch ( __field_path_chain syms __dfp )
+                // (Inside a `% Drop` impl only its own receiver may be taken
+                // apart - the outermost link of a path rooted at it - not
+                // another value of its type.)
+                : i __drd ( nurl_str_find __dfp `.` )
+                : ~ b __drcv & & != 0 g_drop_glue_on >= __drd 0 ( seq ( nurl_str_slice __dfp 0 __drd ) ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) )
+                ~ != 0 ( nurl_str_len __dch ) {
+                    : s __dl ( str_first_word __dch ) = __dch ( str_skip_word __dch )
+                    : i __dk ( nurl_str_find __dl `:` )
+                    : s __dsty ? < __dk 0 `` ( nurl_str_slice __dl 0 __dk )
+                    : b __dself & __drcv ( seq g_drop_glue_ty __dsty )
+                    = __drcv F
+                    ? & & >= __dk 0 ( __has_user_drop __dsty ) ! __dself {
+                        : s __dfn ( nurl_str_slice __dl + __dk 1 - - ( nurl_str_len __dl ) __dk 1 )
+                        : i __dfc ( nurl_str_to_int ( nurl_sym_get g_impl_name_syms `dropfld#n` ) )
+                        ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `dropfld#` ( nurl_str_int __dfc ) ) ( nurl_str_cat4 ( nurl_str_cat3 __dsty `\t` __dfn ) ( nurl_str_cat3 `\t` ( nurl_str_int ( nurl_lex_line lex ) ) `\t` ) ( nurl_str_cat3 ( nurl_lex_filename lex ) `\t` fname ) ( nurl_str_cat `\t` __dfp ) ) )
+                        ( nurl_sym_def g_impl_name_syms `dropfld#n` ( nurl_str_int + __dfc 1 ) )
+                    } {}
+                }
+            } {}
         } {}
         // (Inside a `% Drop` impl, its receiver handed whole to a call: what
         // that call reads of it is not known here, so every field counts as
@@ -55755,7 +55767,7 @@ unsafe @ __rpg_rget i r i k → i { ^ ( nurl_peek # s g_rpg_rec + * r 6 k ) }
         = g_bck_brw_on 1
     } {}
     ( bck_record ? taker ? hfield `fborrowh` `fborrow` ? hc ? vb `vcborrow` `cborrow` ? vb `vborrow` `borrow` name ( nurl_str_to_int ( nurl_sym_get g_bck `lastline` ) ) )
-    ? taker { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__bfpath` ) rpath ) } {}
+    ? taker { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__bfpath` ) rpath ) = g_fn_bfpath 1 } {}
     = g_bck_brw_on 0
     ( bck_put `reads` saved )
 }
@@ -97121,6 +97133,7 @@ unsafe @ __alloca_struct_params i syms i cg → v {
 // their consuming parameters are still inferred.)
 @ __own_sink_str_params i syms i cg s fname s sinks → v {
     = g_fn_unw 0
+    = g_fn_bfpath 0
     ? | == 0 g_auto_drop_strings ! ( __auto_str_ctx ) { ^ v } {}
     : ~ s names ( nurl_sym_get syms `__fn_param_names__` )
     : ~ i index 0
@@ -99802,6 +99815,14 @@ unsafe @ __holds_user_drop s ty i depth → b {
 // A program's own `% Drop` for `ty` (registered in the signature
 // pre-scan), as opposed to a drop the compiler supplies for a struct, a
 // handle type or an enum (`structdrop##` / `handledrop##` / `autodrop##`).
+// The field path a binding reads (`: b . h buf` → `h.buf`), recorded by
+// bck_note_borrow under the binding's slot; `` for any other binding.
+@ __bfpath_of i syms s name → s {
+    : s up ( nurl_sym_get2 syms name `__ptr` )
+    ? == 0 ( nurl_str_len up ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_sym_get2 syms up `__bfpath` )
+}
+
 // Every struct field path `p` (`o.inner.buf`, its root a binding) passes
 // through, with the field below it: `T:f` words outermost first
 // (`%Outer:inner %Inner:buf`) - a `% Drop` of any of them may read what a
