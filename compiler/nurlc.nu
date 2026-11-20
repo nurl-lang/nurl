@@ -19687,7 +19687,9 @@ unsafe @ eng_byte s w i k → i {
     ? != have 0 { ^ == have 2 } {}
     : ~ b r >= ( et_dtor_fn t ) 0
     : i kind ( et_kind t )
-    ? & ! r | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT == kind EK_RES { = r ( et_reaches_dtor ( et_at t ET_E1 ) + depth 1 ) } {}
+    // (…an owned slice's elements too, `[H`, not a `( Slice T )` view:
+    // releasing one releases them - agora #931, AGORA-869)
+    ? & ! r | | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT == kind EK_RES & == kind EK_SLICE ( __owned_slice_ty ( eng_str ( et_at t ET_NAME ) ) ) { = r ( et_reaches_dtor ( et_at t ET_E1 ) + depth 1 ) } {}
     ? & & ! r == kind EK_RES != ( et_at t ET_E2 ) ET_NONE { = r ( et_reaches_dtor ( et_at t ET_E2 ) + depth 1 ) } {}
     ? & & & ! r == kind EK_NAMED ( et_flag t ETF_STRUCT ) ! ( __is_libh ( eng_str ( et_at t ET_NAME ) ) ) {
         : ~ i k 0
@@ -19733,7 +19735,7 @@ unsafe @ eng_byte s w i k → i {
             ( eng_dtor_apply st place t f line )
         } {} } {}
     : i kind ( et_kind t )
-    ? | | == kind EK_VEC == kind EK_BOX == kind EK_OPT {
+    ? | | | == kind EK_VEC == kind EK_BOX == kind EK_OPT & == kind EK_SLICE ( __owned_slice_ty ( eng_str ( et_at t ET_NAME ) ) ) {
         : i e ? == kind EK_OPT ( ee_pay g_etn_T 0 ) EE_STAR
         ( eng_dtor_release st ( pl_make vid ( ep_child path e ) ) ( et_at t ET_E1 ) line + depth 1 )
         ^
