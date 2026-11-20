@@ -10,8 +10,9 @@ import A2.Closure
 The temporary owns a buffer of views of `a`. A2 has no clone rule of its own:
 a copy is a call whose summary says what its result holds (`CallT`, `callRes`),
 here the summary nurlc gives the copy, `__nurl_slice_copy_v`: an owned result,
-no lends. So the copy's entry is not chosen but typed: `copy_typed` derives it
-from any `CallT` of the copy, and `copy_holds_a` / `copy_free_of_temp` read off
+no lends. So the copy's entry is not chosen but typed: the call types
+(`copy_call`, the copy being no `ThruFn`), `copy_typed` derives the entry from
+any `CallT` of the copy, and `copy_holds_a` / `copy_free_of_temp` read off
 what A2 gives it — every kind of dependency on the roots of what its argument
 holds (`heldOfArgs`), that is on `a`, and nothing rooted at the temporary
 itself. A2 and nurlc's answer since AGORA-935 (`^0`: what the elements view)
@@ -39,7 +40,9 @@ def vsv : Ty := .vec sv
 
 /-- The copy, `__nurl_slice_copy_v`'s summary: it takes the slice in, hands back
     an owner of its own, and lends nothing of its argument. Only the summary
-    matters to the call. -/
+    matters to the call. Its body fills a buffer of its own (`.edit false`): it
+    changes nothing through a borrow, so it is no `ThruFn`, and a call of it may
+    pass an argument that holds views (`CallT`'s last clause). -/
 def dupFn : Fn where
   params   := [(.inp, vsv)]
   resTy    := vsv
@@ -47,7 +50,7 @@ def dupFn : Fn where
   lends    := []
   rholds   := []
   outHolds := []
-  body     := .edit true 2 (.push 3)
+  body     := .edit false 2 (.push 3)
   nvars    := 3
 
 def P : Prog := [dupFn]
@@ -62,6 +65,37 @@ def Kt : Ctx := fun v => if v = 0 then some Ea else if v = 1 then some Et else n
 
 /-- The copy's entry, as A2 types the call: `callRes`, not a chosen entry. -/
 def Eb : Entry := callRes Kt dupFn [1]
+
+/-- The copy changes nothing through a borrow, nor calls what does. -/
+theorem dupFn_not_thru : ¬ ThruFn P 0 := by
+  intro h
+  cases h with
+  | here hf hb =>
+    simp only [P, List.getElem?_cons_zero, Option.some.injEq] at hf
+    subst hf
+    simp [dupFn, Stmt.hasThru] at hb
+  | call hf hg _ =>
+    simp only [P, List.getElem?_cons_zero, Option.some.injEq] at hf
+    subst hf
+    simp [dupFn, Stmt.calls] at hg
+
+/-- **The copy is a call A2 types**: of the temporary `t`, which holds views
+    of `a`, with nothing frozen. -/
+theorem copy_call : CallT P Kt [] 0 [1] Eb (callPost Kt dupFn [1]) := by
+  refine ⟨dupFn, rfl, rfl, ?_, ?_, ?_, rfl, rfl, fun h => absurd h dupFn_not_thru⟩
+  · intro i hi
+    obtain rfl : i = 0 := by simp [dupFn] at hi; omega
+    refine ⟨Et, rfl, rfl, rfl, fun h => by simp [dupFn, PMode.moves] at h, fun h => ?_⟩
+    rcases h with h | h <;> simp [dupFn] at h
+  · intro d hd
+    simp [mutNames, argNames, argE, Kt, Et, nameDeps, Kind.isName, Entry.vdeps, Mode.ownSlot, vsv, sv] at hd
+  · refine CallDtorSafe.of_none (fun v E hE => ?_) _ _
+    simp only [Kt] at hE
+    split at hE
+    · simp only [Option.some.injEq] at hE; subst hE; simp [Ea]
+    · split at hE
+      · simp only [Option.some.injEq] at hE; subst hE; simp [Et]
+      · cases hE
 
 /-- **The copy is typed so**: any `CallT` of it gives `Eb`. -/
 theorem copy_typed {F : List Var} {E : Entry} {Γ' : Ctx} (h : CallT P Kt F 0 [1] E Γ') : E = Eb := by

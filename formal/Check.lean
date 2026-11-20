@@ -623,6 +623,8 @@ import A3
 -- (A2/SliceCopyViewWitness.lean, AGORA-935): a copy of a slice of views, typed as A2 types a
 -- copy (a call, `callRes`), holds copies of its loans and nothing of the slice: releasing the
 -- temporary leaves it live, replacing what the views point into ends it, and then no read types
+#print axioms A2.SliceCopyViewWitness.dupFn_not_thru
+#print axioms A2.SliceCopyViewWitness.copy_call
 #print axioms A2.SliceCopyViewWitness.copy_typed
 #print axioms A2.SliceCopyViewWitness.copy_holds_a
 #print axioms A2.SliceCopyViewWitness.copy_free_of_temp
