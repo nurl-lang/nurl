@@ -23232,6 +23232,14 @@ unsafe @ eng_byte s w i k → i {
     // they held when the function was entered: one it gives a new value on
     // every path holds none of it
     : ~ i keeps 0
+    // (Where the engine reads raw bodies, a library function whose body
+    // crosses the raw boundary keeps its own pointers into its parameter
+    // - `lru`'s index keys, views of the slots' own key strings: such a
+    // part of a parameter viewing another part of it is the library's
+    // invariant to keep, as it was where the walk's answers stood for the
+    // function, not a view the caller holds. A program's own raw
+    // function vouches for nothing: its self-views stay - AGORA-877)
+    : b selfown & & & != 0 g_eng_rawwalk != 0 ( wv_at g_fc_trusted f ) != 0 & ( ef_at f EF_FLAGS ) 6 ( bck_trusted_file ( eng_str ( ef_at f EF_FILE ) ) )
     : i ne ( wv_len g_fc_exits )
     : ~ i s 0
     ~ < s + nr ne {
@@ -23262,7 +23270,7 @@ unsafe @ eng_byte s w i k → i {
                         : i pl ( param_loan ( he_loan he ) )
                         ? >= pl 0 {
                             : i pk ( tp_at pl 3 2 )
-                            ? ! & | == pk LK_HELD == pk LK_HELDIN == ( tp_at pl 3 0 ) j {
+                            ? ! & | | == pk LK_HELD == pk LK_HELDIN & selfown | == pk LK_VIEW == pk LK_HANDLE == ( tp_at pl 3 0 ) j {
                                 = stores ( sq_add stores ( tp5 j ( ep_take ( he_path he ) 3 ) ( tp_at pl 3 0 ) ( tp_at pl 3 1 ) pk ) )
                             } {}
                         } {}
