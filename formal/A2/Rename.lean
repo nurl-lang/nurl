@@ -383,6 +383,25 @@ theorem canon_cases (h : S.OK) (Γa : Ctx) (y : Var) :
   · have hy' : ∀ v, S.ρ v ≠ y := fun v hv => hy ⟨v, hv⟩
     exact Or.inr ⟨hy', canon_frame Γa hy'⟩
 
+/-- AGORA-937: a lifted context's binding, with regions: a callee binding
+    that is no region, lifted and substituted; nothing at a region's index;
+    or the frame's. (With no region, `canon_cases`.) -/
+theorem canon_ρ_sub (h : S.OK) (Γa : Ctx) (v : Var) :
+    S.canon Γa (S.ρ v) = if S.isPi v then none else (Γa v).map (S.subE ∘ S.liftE v) := by
+  simp only [canon, inv_ρ h]
+
+theorem canon_cases_sub (h : S.OK) (Γa : Ctx) (y : Var) :
+    (∃ v, S.ρ v = y ∧ S.isPi v = false ∧ S.canon Γa y = (Γa v).map (S.subE ∘ S.liftE v)) ∨
+    (∃ v, S.ρ v = y ∧ S.isPi v = true ∧ S.canon Γa y = none) ∨
+    ((∀ v, S.ρ v ≠ y) ∧ S.canon Γa y = S.Φ y) := by
+  by_cases hy : ∃ v, S.ρ v = y
+  · obtain ⟨v, rfl⟩ := hy
+    cases hp : S.isPi v
+    · exact Or.inl ⟨v, rfl, hp, by rw [canon_ρ_sub h, hp]; rfl⟩
+    · exact Or.inr (Or.inl ⟨v, rfl, hp, by rw [canon_ρ_sub h, hp]; rfl⟩)
+  · have hy' : ∀ v, S.ρ v ≠ y := fun v hv => hy ⟨v, hv⟩
+    exact Or.inr (Or.inr ⟨hy', canon_frame Γa hy'⟩)
+
 theorem mem_rds {ρ : Var → Var} {ds : List Dep} {d : Dep} : d ∈ rds ρ ds ↔ ∃ d0 ∈ ds, d = d0.ren ρ := by
   simp [rds, eq_comm]
 
