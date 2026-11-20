@@ -1,5 +1,5 @@
-// t929_taken_field_holder_returned_through_a_block_arm: AGORA-929 (open; CodeRabbit on github#2110) — `^ ? c { h } h2` after a sink took `. h buf`: the block-form arm hands `h` on with the field empty, where `^ ? c h h2` is refused
-// AGORA-929 (open): accepted by nurlc; ASan reports a fault in the caller's push (tools/fuzz/holes/open/t929.md)
+// taken_field_holder_returned_through_a_block_arm: AGORA-929 (CodeRabbit on github#2110) — `^ ? c { h } h2` after a sink took `. h buf`: the block-form arm hands `h` on with the field empty, where `^ ? c h h2` is refused
+// AGORA-929 (closed): refused by nurlc and ncore (main 0af1688b: accepted, a fault under ASan in the caller's push)
 // map: §2.1 | A2 | rejected | - | AGORA-929: a holder with a taken field handed on by a block-form join arm
 $ `stdlib/core/vec.nu`
 
