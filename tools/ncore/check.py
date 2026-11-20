@@ -98,8 +98,11 @@ def may_panic_fns(prog):
     whole = getattr(prog, "calls_of", None) is not None
     out = set()
     for name, cs in calls.items():
+        # (a `dyn` method's virtual callee runs an impl through the vtable:
+        # it may, as call_may_panic says)
+        virt = getattr(prog, "virt", {})
         if (getattr(prog, "fn_flags", {}).get(name, 0) & 8 or None in cs
-                or any(c not in calls and (extern_may_panic(c) if whole else call_may_unwind(c))
+                or any(c in virt or (c not in calls and (extern_may_panic(c) if whole else call_may_unwind(c)))
                        for c in cs if c is not None)):
             out.add(name)
     changed = True
@@ -115,8 +118,10 @@ def may_panic_fns(prog):
 
 def call_may_panic(prog, name):
     """May the call of `name` start a panic (a closure value's, `None`: it
-    may)?"""
-    if name is None:
+    may)?  A `dyn` method's virtual callee (`prog.virt`) runs one of its
+    impls through the vtable, as nurlc's module pass reads an indirect
+    call: it may (CodeRabbit on github#2129)."""
+    if name is None or name in getattr(prog, "virt", {}):
         return True
     whole = getattr(prog, "calls_of", None)
     if name not in (whole or prog.fns):
@@ -3151,7 +3156,15 @@ class FnCheck:
             for k in sm.get("consumes", ()):
                 if k < len(ops) and ops[k][0] == "v" and ops[k][2]:
                     fty = self.ty_of_place((ops[k][1], tuple(ops[k][2])))
-                    if not (fty is not None and self.T.is_scalar(fty)):
+                    # (…nor one a callee that keeps it is handed a copy of:
+                    # a part of an `inout` parameter given to a keeper, in
+                    # its result or another argument, is copied, as the
+                    # consumed-argument rule below copies it - the caller's
+                    # field stays; CodeRabbit on github#2129)
+                    kept = fty is not None and self.T.copyable(fty) and (
+                        any(r[1] == k for r in sm.get("rholds", ()))
+                        or any(x[2] == k for x in sm.get("stores", ())))
+                    if not (fty is not None and self.T.is_scalar(fty)) and not kept:
                         own_takes.add(ops[k][1])
         for vid, k in self.pidx.items():
             if self.fn.modes[k] != "inout" and not (

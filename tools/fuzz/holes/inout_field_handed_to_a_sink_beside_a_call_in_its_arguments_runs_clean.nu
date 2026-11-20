@@ -7,7 +7,9 @@ $ `stdlib/std/panic.nu`
 
 @ take sink ( Vec u ) v i k → i { ^ ( vec_len [u] v ) }
 
-@ g i k → i { ^ + k 1 }
+// (`g` may panic - not on this run - and still is no panic point for the
+// take: it runs before `take` is handed the field.)
+@ g i k → i { ? > k 100 { ( panic `in g` ) } {} ^ + k 1 }
 
 @ cycle inout Holder h i k → v {
     : i n ( take . h buf ( g k ) )

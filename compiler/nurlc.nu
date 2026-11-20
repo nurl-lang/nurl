@@ -60385,7 +60385,9 @@ unsafe @ bck_emit_error s file i line s msg → v {
         : s rec ( nurl_str_cat4 ( nurl_str_cat3 __upk `\t` file ) ( nurl_str_cat3 `\t` ( nurl_str_int line ) `\t` ) msg g_bck_err_note )
         = g_bck_err_note ``
         : s pend ( nurl_sym_get g_pending_impl `unwrefill` )
-        ? < ( nurl_str_find pend rec ) 0 { ( nurl_sym_def g_pending_impl `unwrefill` ? == 0 ( nurl_str_len pend ) rec ( nurl_str_cat3 pend `\n` rec ) ) } {}
+        // (A whole record: one for `make` is no duplicate of one for
+        // `keep_make` on the same line.)
+        ? < ( nurl_str_find ( nurl_str_cat3 `\n` pend `\n` ) ( nurl_str_cat3 `\n` rec `\n` ) ) 0 { ( nurl_sym_def g_pending_impl `unwrefill` ? == 0 ( nurl_str_len pend ) rec ( nurl_str_cat3 pend `\n` rec ) ) } {}
         ^ v
     } {}
     // Owned strings (`src`, `lt`) are reclaimed by auto-drop at scope
@@ -60668,6 +60670,11 @@ unsafe @ bck_emit_error s file i line s msg → v {
     }
     ? == 0 ( nurl_str_len took ) { ^ v } {}
     ( bck_put `unwskip` took )
+    // (A take by this row's own callee waits for the module's answer on
+    // it. One by an earlier call of the statement that has finished is
+    // reported at once, as a field taken by an earlier statement is at any
+    // call that may unwind (agora #929): both ask the panic graph only once
+    // AGORA-948 makes that rule precise for every taken field.)
     ( bck_put `unwpark` ? own cn `` )
     = g_bck_unw_exit T
     = g_bck_unw_only T
