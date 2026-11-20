@@ -2515,14 +2515,15 @@ variable {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {args : List V
 
 theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).AbsOK (sigCtx fn) := by
   obtain ⟨_, _, _, _, _, hpar, _⟩ := h.fnok
-  refine ⟨fun v E hv hm => ?_, fun v E b hv hm => ?_, fun v bh hb => ?_, fun v E hv => by
-    unfold sigCtx at hv
-    split at hv
-    · simp only [Option.some.injEq] at hv; subst hv
-      generalize fn.params[v] = pt; obtain ⟨pm, t⟩ := pt; cases pm <;> simp [paramE]
-    · split at hv
-      · simp only [Option.some.injEq] at hv; subst hv; exact resMode_region fn
-      · cases hv⟩
+  refine ⟨fun v E hv hm => ?_, fun v E b hv hm => ?_, fun v bh hb => ?_, fun v E hv =>
+    ⟨fun hr => absurd hr (by
+      unfold sigCtx at hv
+      split at hv
+      · simp only [Option.some.injEq] at hv; subst hv
+        generalize fn.params[v] = pt; obtain ⟨pm, t⟩ := pt; cases pm <;> simp [paramE]
+      · split at hv
+        · simp only [Option.some.injEq] at hv; subst hv; exact resMode_region fn
+        · cases hv), fun hp => by simp [callS] at hp⟩⟩
   · unfold sigCtx at hv
     split at hv
     · rename_i hvl

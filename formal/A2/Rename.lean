@@ -330,11 +330,24 @@ def RSetup.AbsOK (S : RSetup) (Γa : Ctx) : Prop :=
      E.ty.owning = true ∧ S.bnd v = some (b, E.ty.elem.holdsView)) ∧
   (∀ v bh, S.bnd v = some bh → ∃ E, Γa v = some E ∧ E.mode = .inout bh.1 ∧ E.ty = S.pty v ∧
      (E.fixed → E.live = true ∧ E.held = [])) ∧
-  -- AGORA-937 (stage 1a): no callee binding is a parameter's region yet
-  (∀ v E, Γa v = some E → E.mode ≠ .region)
+  -- AGORA-937: a callee binding is a region exactly at a region's index
+  (∀ v E, Γa v = some E → (E.mode = .region ↔ S.isPi v = true))
 
 namespace RSetup
 variable {S : RSetup} {Γa : Ctx}
+
+/-- AGORA-937: a callee binding that is no region is at no region's index. -/
+theorem AbsOK.notPi {Γa : Ctx} (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
+    (hnr : E.mode ≠ .region) : S.isPi v = false := by
+  cases hp : S.isPi v
+  · rfl
+  · exact absurd ((hab.2.2.2 v E hE).mpr hp) hnr
+
+/-- AGORA-937: a callee binding at no region's index is no region. -/
+theorem AbsOK.ne_region {Γa : Ctx} (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
+    (hnp : S.isPi v = false) : E.mode ≠ .region := fun hr => by
+  have := (hab.2.2.2 v E hE).mp hr; rw [hnp] at this; cases this
+
 
 theorem inv_ρ (h : S.OK) (v : Var) : S.inv (S.ρ v) = some v := by
   unfold inv
@@ -1070,16 +1083,13 @@ theorem canon_live_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) {y : Var}
       obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
       obtain ⟨b, hv, hb, _⟩ := h.Φsat y E' hy hl hn d hd v hdr.symm
       obtain ⟨Ev, hEv, hm, _⟩ := hab.2.2.1 v (b, hv) hb
-      -- (an `inout` argument's binding: no region, by noPi until AbsOK's
-      -- exact region clause lands)
-      exact canon_root_sub h hEv (by rw [hm]; rfl) (h.noPi v)
+      -- (an `inout` argument's binding: no region, so at no region's index)
+      exact canon_root_sub h hEv (by rw [hm]; rfl) (hab.notPi hEv (by rw [hm]; simp))
     · have hout : ∀ v, S.ρ v ≠ r := fun v hv => hrr ⟨v, hv⟩
       exact canon_frameRoot h hout (h.Φwf y E' hy hl hn r hr hout)
 
 /-- AGORA-937: `canon_wf` with regions: the lifted context is well formed
-    under the lift's substitution. (Two branches, a frame binding's
-    dependency on an `inout` argument, still take `noPi`, until AbsOK's exact
-    region clause lands.) -/
+    under the lift's substitution. -/
 theorem canon_wf_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.canon Γa) := by
   refine ⟨fun y E' hy hl hn r hr => canon_live_sub h hab hw hy hl hn hr,
     fun y E' hy hd hos hn d hdd hnm => ?_, fun y E' hy ha => ?_, fun y E' hy hd => ?_⟩
@@ -1112,7 +1122,7 @@ theorem canon_wf_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.
     · rw [hc] at hy
       rcases h.Φdb y E' hy hd hos hn d hdd hnm with ⟨v, bh, hv, hb⟩ | ⟨hout, hex⟩
       · obtain ⟨Ev, hEv, hm, _⟩ := hab.2.2.1 v bh hb
-        rw [← hv]; exact canon_root_sub h hEv (by rw [hm]; rfl) (h.noPi v)
+        rw [← hv]; exact canon_root_sub h hEv (by rw [hm]; rfl) (hab.notPi hEv (by rw [hm]; simp))
       · exact canon_frameRoot h hout hex
   · rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hyf, hc⟩
     · rw [hc] at hy
@@ -1235,7 +1245,7 @@ theorem canon_weaker (h : S.OK) {Γa Γa' : Ctx} (hab' : S.AbsOK Γa') (hw' : Ct
           simp only [Option.map_some, Option.some.injEq] at h1 h2
           subst h1 h2
           exact liftE_weaker ((hw.1 v).2 E0 E0' hE hE')
-            (by rw [← ((hw.1 v).2 E0 E0' hE hE').mode]; exact hab'.2.2.2 v E0' hE')
+            (by rw [← ((hw.1 v).2 E0 E0' hE hE').mode]; exact hab'.ne_region hE' (h.noPi v))
     · rw [hc] at h1; rw [canon_frame _ hy] at h2
       rw [h1] at h2; cases h2; exact EntryWeaker.refl _
 
@@ -1277,7 +1287,7 @@ theorem AbsOK.setE {Γa : Ctx} (hab : S.AbsOK Γa) {x : Var} {E : Entry} (hrb : 
     (hbx : ∀ bh, S.bnd x = some bh → E.mode = .inout bh.1)
     (hbt : ∀ bh, S.bnd x = some bh → E.ty = S.pty x)
     (hfx : ∀ bh, S.bnd x = some bh → E.fixed → E.live = true ∧ E.held = [])
-    (hnr : E.mode ≠ .region := by first | simp_all | simp_all [liftMode, liftE, compE]) : S.AbsOK (A2.setE Γa x E) := by
+    (hnr : E.mode = .region ↔ S.isPi x = true) : S.AbsOK (A2.setE Γa x E) := by
   refine ⟨fun v E' hv' hm => ?_, fun v E' b hv' hm => ?_, fun v bh hb => ?_, fun v E' hv' => by
     by_cases hvx : v = x
     · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at hv'; subst hv'; exact hnr
@@ -1881,10 +1891,10 @@ theorem AbsOK.fixed {Γ : Ctx} (hab : S.AbsOK Γ) {v : Var} {E : Entry} (hv : Γ
     exact hfx (Or.inr ⟨b, hb, by assumption⟩)
 
 theorem AbsOK.add {Γ Γ1 : Ctx} (hab0 : S.AbsOK Γ) (hab : S.AbsOK Γ1) {x : Var} (hx : Γ x = none)
-    {E : Entry} (hm : E.mode = .own ∨ E.mode = .bor) : S.AbsOK (A2.setE Γ1 x E) := by
+    {E : Entry} (hm : E.mode = .own ∨ E.mode = .bor) (hnp : S.isPi x = false) : S.AbsOK (A2.setE Γ1 x E) := by
   have hbx := hab0.fresh hx
   refine hab.setE (by rcases hm with hm | hm <;> rw [hm] <;> simp) (fun b hb => ?_) (fun bh hb => ?_)
-    (fun bh hb => ?_) (fun bh hb => ?_) (by rcases hm with hm | hm <;> rw [hm] <;> simp)
+    (fun bh hb => ?_) (fun bh hb => ?_) (by rcases hm with hm | hm <;> rw [hm] <;> simp [hnp])
   · rcases hm with hm | hm <;> rw [hm] at hb <;> cases hb
   · rw [hbx] at hb; cases hb
   · rw [hbx] at hb; cases hb
@@ -3636,6 +3646,7 @@ theorem callPostAux_lift (h : S.OK) (hab0 : S.AbsOK Γa) {fn : Fn} {args : List 
       apply callPostAux_lift h hab0 houts hargs ps as (i + 1) _ _ hz' hdv'
       · refine (hab.kill _ _ _).setE (by simp [hae0, hrb]) (fun b hb => ?_) (fun bh hb => ?_)
           (fun bh hb => ?_) (fun _ _ hf => absurd hf (by simp [hae0, hm]))
+          (by simp only [hae0]; exact hab0.2.2.2 a Ea hEa)
         · simp [hae0, hm] at hb
         · obtain ⟨E, hE, hmE, _⟩ := hab0.2.2.1 a bh hb
           rw [hEa] at hE; cases hE; rw [hm] at hmE; cases hmE
@@ -4442,7 +4453,7 @@ theorem AbsOK.holdOn {Γ : Ctx} (hab : S.AbsOK Γ) {rs : List Var} {D : List Dep
     (hrs : ∀ v ∈ rs, ∀ E, Γ v = some E → E.mode ≠ .rootb) : S.AbsOK (A2.holdOn rs D Γ) := by
   refine ⟨fun v E' hv hm => ?_, fun v E' b hv hm => ?_, fun v bh hb => ?_, fun v E' hv => by
     obtain ⟨E, hE, rfl⟩ := holdOn_get hv
-    split <;> simp [Entry.hold_mode] <;> exact hab.2.2.2 v E hE⟩
+    split <;> (try simp only [Entry.hold_mode]) <;> exact hab.2.2.2 v E hE⟩
   · obtain ⟨E, hE, rfl⟩ := holdOn_get hv
     by_cases hvr : v ∈ rs
     · rw [ite_eq_left hvr] at hm; exact absurd hm (hrs v hvr E hE)
@@ -5019,7 +5030,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hwx := hw1.add hx1 hEr (fun hd => absurd hd (by simp [hr.dtor_false.2]))
       (fun ha => absurd ha (by simp [hr.dtor_false.1])) (fun hd => absurd hd (by simp [hr.dtor_false.2]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
-    have habx := hab.add hab1 hx hmo
+    have habx := hab.add hab1 hx hmo (h.noPi _)
     obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letv)
     have tk := tk.mono (S.liftX_under h (hab.fresh hx))
     have hbx := hab.fresh hx
@@ -5045,7 +5056,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun hd => absurd hd (by simp)) (fun ha => absurd ha (by simp)) (fun hd => absurd hd (by simp))
     have hnx := NameWF.setE hn (E := lockE t) (fun Ex h => by rw [hx] at h; cases h)
       (fun Ex h => by rw [hx] at h; cases h) (fun _ _ => by unfold NameOK; rw [lockE_vdeps]; exact DepsNamed.nil _)
-    have habx := hab.add hab hx hmo
+    have habx := hab.add hab hx hmo (h.noPi _)
     obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.withLock)
     have tk := tk.mono (ξ' := .none) (fun _ _ h' => (S.liftX_none h').elim)
     have hbx := hab.fresh hx
@@ -5097,7 +5108,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun h => by simp only [Entry.arm, Ty.dtorViews, Bool.and_eq_true] at h; exact h.2)
     have hnx := NameWF.setE hn1 (E := Entry.arm { E with ty := τ, held := H }) (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) (fun hl _ => (hEn hl (Or.inl hne)).widen hown hH)
-    have habx := hab.add hab1 hx (E := Entry.arm { E with ty := τ, held := H }) hmo
+    have habx := hab.add hab1 hx (E := Entry.arm { E with ty := τ, held := H }) hmo (h.noPi _)
     obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letd)
     have tk := tk.mono (S.liftX_underD h hab1 (hab.fresh hx))
     have hbx := hab.fresh hx
@@ -5199,7 +5210,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hwx := hw1.add hx1 (fun _ _ => recvRes_roots hw hdm hc hlc (fun h => by rw [h] at htc; cases htc) hE)
       (fun hd => absurd hd (by simp [hdb0])) (fun ha => absurd ha (by simp [hcT.dtor_false.1]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) (recvRes_named (c := c) (Ec := Ec) hEn)
-    have habx := hab.add hab1 hx (E := recvRes c Ec E) hmo
+    have habx := hab.add hab1 hx (E := recvRes c Ec E) hmo (h.noPi _)
     obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.callc)
     have tk := tk.mono (S.liftX_under h (hab.fresh hx))
     have hbx := hab.fresh hx
@@ -5247,7 +5258,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun ha => absurd ha (by simp [hcT.dtor_false.1])) (fun hd => absurd hd (by simp [hdb0]))).kill .replace false c
     have hnx := (NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h)
       hEn).kill .replace false c
-    have habx := (habk.add hab1 hxk hmo).kill .replace false c
+    have habx := (habk.add hab1 hxk hmo (h.noPi _)).kill .replace false c
     obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.callcE)
     have tk := tk.mono (S.liftX_under h (hab.fresh hx))
     have hbx := hab.fresh hx
@@ -5255,7 +5266,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     rw [canon_exitScope h abk (Or.inl hbx)]
     have hwc := canon_wf h habx hwx
     have hnc := canon_names h habx hnx
-    rw [canon_kill h (habk.add hab1 hxk hmo) hal, canon_setE h] at hwc hnc tk
+    rw [canon_kill h (habk.add hab1 hxk hmo (h.noPi _)) hal, canon_setE h] at hwc hnc tk
     rw [canon_kill h hab hal] at hc'
     have hrb : Ec.mode ≠ .rootb := by rcases hcan with h0 | ⟨b', h0, _⟩ <;> rw [h0] <;> simp
     have hbr : ∀ bh, S.bnd c = some bh → bh.1 = .replace := by
@@ -5294,7 +5305,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hwx := hw1.add hx1 (fun _ _ => hE) (fun hd => absurd hd (by simp [hc.dtor_false.2]))
       (fun ha => absurd ha (by simp [hc.dtor_false.1])) (fun hd => absurd hd (by simp [hc.dtor_false.2]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
-    have habx := hab.add hab1 hx hmo
+    have habx := hab.add hab1 hx hmo (h.noPi _)
     obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letcall)
     have tk := tk.mono (S.liftX_under h (hab.fresh hx))
     have hbx := hab.fresh hx
@@ -5327,7 +5338,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hwx := hw1.add hx1 (fun _ _ => hE) (fun hd => absurd hd (by simp [hc.dtor_false.2]))
       (fun ha => absurd ha (by simp [hc.dtor_false.1])) (fun hd => absurd hd (by simp [hc.dtor_false.2]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
-    have habx := hab.add hab1 hx hmo
+    have habx := hab.add hab1 hx hmo (h.noPi _)
     obtain ⟨tk, abk⟩ := ih hks habx hwx hnx (fun ht => hT ht.letrec)
     have tk := tk.mono (S.liftX_under h (hab.fresh hx))
     have hbx := hab.fresh hx
@@ -5581,8 +5592,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         rcases hrep with h1 | h1 <;> simp [h1]))
     have hcm : ∀ t, (compE E t).mode = .own ∨ (compE E t).mode = .bor := by
       intro t; cases t <;> simp [compE, intE]
-    have habx := AbsOK.add hab hab1 hx (hcm a)
-    have habz := AbsOK.add hab habx hz (hcm b)
+    have habx := AbsOK.add hab hab1 hx (hcm a) (h.noPi _)
+    have habz := AbsOK.add hab habx hz (hcm b) (h.noPi _)
     have hw3 := hw.unpair (a := a) (b := b) hy hl hm.ownSlot (unpair_ne_int hty) hx hz hxz
     have hn3 := hn.unpair (a := a) (b := b) hy hl (unpair_ne_int hty) hx hz hxz
     obtain ⟨tk, abk⟩ := ih hks habz hw3 hn3 (fun ht => hT ht.unpair)
@@ -5646,7 +5657,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (hab.killNames _).setE' hab hx rfl rfl hrb (fun hf => absurd hf (by simp [Entry.fixed, hmx]))
     have hmo : (compE Ex t).mode = .own ∨ (compE Ex t).mode = .bor := by
       cases t <;> simp [compE, intE]
-    have habb := hab.add hab2 hy hmo
+    have habb := hab.add hab2 hy hmo (h.noPi _)
     have hwb := takeB_ctxWF (i := i) hw hy hx hmx hl hty
     have hnb := takeB_nameWF (i := i) hn hy hx hmx hl hty
     obtain ⟨tk, abk⟩ := ih hks habb hwb hnb (fun _ => hR)
@@ -5675,7 +5686,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (hab.killHv _).setE' hab hx rfl rfl hrb (fun hf => absurd hf (by simp [Entry.fixed, hmx]))
     have hmo : (compE Ex t).mode = .own ∨ (compE Ex t).mode = .bor := by
       cases t <;> simp [compE, intE]
-    have habb := hab.add hab2 hy hmo
+    have habb := hab.add hab2 hy hmo (h.noPi _)
     have hwb := takeBV_ctxWF (i := i) hw hy hx hmx hl hty
     have hnb := takeBV_nameWF (i := i) hn hy hx hmx hl hty
     obtain ⟨tk, abk⟩ := ih hks habb hwb hnb (fun _ => hR)
@@ -5709,7 +5720,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hwx := hw1.add hx1 hEr (fun hd => absurd hd (by simp [hr.dtor_false.2]))
       (fun ha => absurd ha (by simp [hr.dtor_false.1])) (fun hd => absurd hd (by simp [hr.dtor_false.2]))
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn
-    have habx := hab.add hab1 hx hmo
+    have habx := hab.add hab1 hx hmo (h.noPi _)
     obtain ⟨tk, abk⟩ := ihs hks habx hwx hnx (fun ht => hT ht.withElem)
     have tk := tk.mono (ξ' := .none) (fun _ _ h' => (S.liftX_none h').elim)
     obtain ⟨tp, abp⟩ := ihp rfl abk (hk.wf hP hwx) (hk.names hP hks hnx) (fun ht => by
