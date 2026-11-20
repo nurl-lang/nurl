@@ -673,6 +673,9 @@ class FnCheck:
         path inside a part that is a view is at what that view points into."""
         out = set()
         for (j, p, eff) in sm["effects"]:
+            # (`permute` is not mapped: a sort moves the elements' handles in
+            # their slots, but a view of an element's own buffer stays valid,
+            # and a view into the sorted buffer sees the same storage)
             if j != k or eff not in ("realloc", "drop", "replace", "take"):
                 continue
             p = tuple(p)
