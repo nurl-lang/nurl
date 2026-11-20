@@ -483,7 +483,7 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
   rw [hf] at hf'; cases hf'
   exact {
     dsafe := hds
-    thru := fun ht => hg (ThruFn.of_body hf ht)
+    thru := fun ht => callR_nil_of_regions hi.noRegion (hg (ThruFn.of_body hf ht))
     prog := hP
     fnok := hP fn (List.mem_of_getElem? hf)
     len := hlen

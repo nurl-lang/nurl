@@ -70,3 +70,4 @@ import A2.ThruLiftKinds
 import A2.Region
 import A2.FreshClosureWitness
 import A2.SelfViewCall
+import A2.RegionThruWitness

@@ -1,0 +1,3 @@
+### Changed
+
+- **The formal proof's parameter regions are on** (AGORA-937). `CallT`'s `ThruFn` premise is relaxed: a call into code that changes elements through a borrow may pass arguments that hold views, as long as everything they view is a region of the caller's own signature. This lets the calculus type a through-changing call that passes a view-holding parameter's own region (`A2/RegionThruWitness.lean`). A view of real memory is still refused. Where no binding is a region, which is every context the memory invariant is stated of, the premise is the old one. So the outer call passed no views, every region stands for nothing in its frame, and the lifted inner call passes none. The crown statement is unchanged. NURL source is unchanged.

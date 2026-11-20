@@ -669,6 +669,22 @@ import A3
 #print axioms A2.RSetup.mem_subE_vdeps_A
 #print axioms A2.RSetup.outHeld_canon_fix
 #print axioms A2.RSetup.callT_ren
+-- AGORA-937 (turn-on 2): CallT's ThruFn premise asks only that the arguments' roots are
+-- regions; where no binding is a region (MInv.noRegion) it is the old one, so a call of a
+-- through-changing function passes no views and its regions stand for nothing; the lift
+-- of a call in the body that passes views of regions passes none (A2/RegionThruWitness.lean)
+#print axioms A2.thru_call
+#print axioms A2.callR_regions_of_nil
+#print axioms A2.callR_nil_of_regions
+#print axioms A2.CallT.thru
+#print axioms A2.RSetup.σ_nil_of_R
+#print axioms A2.RSetup.mem_subE_held_notPi_of_R
+#print axioms A2.CallH.σ_nil_of_thru
+#print axioms A2.RSetup.callR_canon
+#print axioms A2.callR_clean_regions
+#print axioms A2.RegionThruWitness.callR_region
+#print axioms A2.RegionThruWitness.call_region_ok
+#print axioms A2.RegionThruWitness.call_root_refused
 -- AGORA-937: a right-hand side lifted with regions: what it reads is on no region, a
 -- fresh borrow is on no region (FreshOK), what is derived is the lift substituted
 #print axioms A2.RSetup.canon_setEs

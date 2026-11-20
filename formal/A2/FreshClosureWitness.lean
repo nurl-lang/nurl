@@ -172,7 +172,7 @@ theorem callT_recv {P : Prog} {Γ : Ctx} {F : List Var} {σ : Nat} {sig : Fn} {c
     CallT P Γ F σ [c] (callRes Γ sig [c]) Γ := by
   have hpost : callPost Γ sig [c] = Γ := by
     simp [callPost, hps, callPostAux, hmut, killNames]
-  refine ⟨sig, hσ, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm, hR⟩
+  refine ⟨sig, hσ, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm, fun ht => callR_regions_of_nil (hR ht)⟩
   · have hi' : i = 0 := by rw [hps] at hi; simpa using hi
     subst hi'
     refine ⟨Ec, by simpa using hc, hl, ?_, fun h => ?_, fun h => ?_⟩

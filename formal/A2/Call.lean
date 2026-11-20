@@ -4036,6 +4036,17 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
     refine ⟨by simp, fun E E' hE hE' => ?_⟩
     cases hE; cases hE'; exact hw
 
+/-- AGORA-937 (turn-on 2): in the frame of a call of a through-changing
+    function every region stands for nothing: the call (made where no
+    binding is a region, `MInv.noRegion`) passed no argument holding views
+    (`CallT`'s `ThruFn` premise, `CallH.thru`), and a region stands for what
+    its argument holds views of. So the body's own calls, which may pass
+    views of the regions to through-changing code, pass none where the call
+    places them (`RSetup.callR_canon`). -/
+theorem σ_nil_of_thru (h : CallH P Γ F x fn args base) (ht : fn.body.Thru P) (v : Var) :
+    (callS Γ F fn args base x).σ v = [] :=
+  RSetup.σ_nil_of_R h.sOK (h.thru ht) v
+
 /-- The inside of the call is well-typed where the call was. -/
 theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
     StmtT P ξ ((callS Γ F fn args base x).canon (sigCtx fn)) F (callIn fn args base x)

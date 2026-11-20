@@ -1833,6 +1833,14 @@ theorem ThruFn.of_body {P : Prog} {f : Nat} {fn : Fn} (hf : P[f]? = some fn) :
   | .inl h => .here hf h
   | .inr ⟨_, hg, ht⟩ => .call hf hg ht
 
+/-- AGORA-937 (turn-on 2): a statement that calls a through-changing
+    function is through-changing (`ThruFn.call`, for a function's body), so
+    a call that runs it was handed no argument holding views
+    (`CallH.thru`), and the call's regions stand for nothing
+    (`CallH.σ_nil_of_thru`). -/
+theorem thru_call {P : Prog} {s : Stmt} {g : Nat} (hg : g ∈ s.calls) (ht : ThruFn P g) : s.Thru P :=
+  .inr ⟨g, hg, ht⟩
+
 namespace Stmt.Thru
 variable {P : Prog}
 
@@ -1905,8 +1913,26 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
     NamesFree Γ F fn.params args ∧ CallDtorSafe Γ fn.params args ∧
     E = callRes Γ fn args ∧ Γ' = callPost Γ fn args ∧
     -- a call into a function that changes elements through a borrow passes
-    -- no argument that holds views (Agora #295: `ThruFn`)
-    (ThruFn P f → callR Γ args = [])
+    -- no argument that holds views of memory (Agora #295: `ThruFn`): what
+    -- the arguments hold views of is at most a region of the caller's own
+    -- signature (AGORA-937), which stands for what the caller's caller
+    -- passed, and that is nothing, as this very premise says of that call
+    (ThruFn P f → ∀ r ∈ callR Γ args, ∃ E, Γ r = some E ∧ E.mode = .region)
+
+/-- AGORA-937: a call whose arguments hold no views meets `CallT`'s `ThruFn`
+    premise, as before regions. -/
+theorem callR_regions_of_nil {Γ : Ctx} {args : List Var} (h : callR Γ args = []) :
+    ∀ r ∈ callR Γ args, ∃ E, Γ r = some E ∧ E.mode = .region := by
+  rw [h]; intro r hr; cases hr
+
+/-- AGORA-937: ... and where no binding is a region (a runtime context,
+    `MInv.noRegion`), the premise is the old one: the arguments hold no
+    views. -/
+theorem callR_nil_of_regions {Γ : Ctx} {args : List Var} (hnr : ∀ v E, Γ v = some E → E.mode ≠ .region)
+    (h : ∀ r ∈ callR Γ args, ∃ E, Γ r = some E ∧ E.mode = .region) : callR Γ args = [] :=
+  List.eq_nil_of_subset_nil fun r hr => by
+    obtain ⟨E, hE, hm⟩ := h r hr
+    exact absurd hm (hnr r E hE)
 
 /-! ### Statements -/
 

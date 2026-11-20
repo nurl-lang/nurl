@@ -2141,7 +2141,7 @@ theorem glueCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
   have hpost : callPost Γ0 fn [x] = Γp := by
     simp [callPost, hnm, killNames, hps, callPostAux, argE, hx, Γp]
   have hcall : CallT P Γ0 F f [x] (callRes Γ0 fn [x]) Γp := by
-    refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm, hthr⟩
+    refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm, fun ht => callR_regions_of_nil (hthr ht)⟩
     · have hi0 : i = 0 := by simp [hps] at hi; omega
       subst hi0
       refine ⟨E, by simp [hx], hlive, ?_, fun _ => ⟨by simpa using hxF, by simpa using hmem,
@@ -3723,7 +3723,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               -- = false`: an armed entry's type holds views, `CtxWF.view`),
               -- so revived it holds nothing, whatever its `letd` recorded,
               -- and the call passes no views — `CallT`'s `ThruFn` premise)
-              exact callR_revive_noView hiS.toMInv.wf hx (hthr h)
+              exact callR_regions_of_nil (callR_revive_noView hiS.toMInv.wf hx (hthr h))
           have hNoPinΓ : EndOK Γ x := by
             rcases skip_inv hs with rfl | hw
             · exact hpx
