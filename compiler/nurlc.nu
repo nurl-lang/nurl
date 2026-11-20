@@ -16851,6 +16851,15 @@ unsafe @ eng_byte s w i k → i {
             : ~ b holds F
             = k 0
             ~ & ! holds < k ( sq_len ( av_alias rav ) ) { ? ( sq_has at ( sq_at ( av_alias rav ) k ) ) { = holds T } {} = k + k 1 }
+            // (…one whose loan on the part an earlier store ended read the
+            // value that store took out, not this one)
+            : i dead ( st_dead st )
+            = k 0
+            ~ & holds < k ( sq_len ( av_loans rav ) ) {
+                : i l ( sq_at ( av_loans rav ) k )
+                ? & & ( el_is_loan l ) ( sq_has at ( el_place l ) ) ( sq_has dead l ) { = holds F } {}
+                = k + k 1
+            }
             ? holds {
                 : i loans ( av_loans rav )
                 : ~ i keep 0
@@ -24050,8 +24059,10 @@ unsafe @ eng_byte s w i k → i {
     : ~ i effs g_s_effects
     ? != putback 0 {
         // (…and is the slot's value again: what the body did to hand it
-        // there - a callee's write-back took it - is no change the caller
-        // sees, and the caller gives nothing up)
+        // there - a callee's write-back took it, the slot was given it - is
+        // no change the caller sees, and the caller gives nothing up. What
+        // the body did to the value itself - `vec_clear`, then the
+        // write-back - is)
         : ~ i nc 0
         = j 0
         ~ < j ( sq_len consumes ) {
@@ -24064,7 +24075,8 @@ unsafe @ eng_byte s w i k → i {
         = j 0
         ~ < j ( sq_len effs ) {
             : i t ( sq_at effs j )
-            ? ! & ( sq_has putback ( tp_at t 3 0 ) ) == ( tp_at t 3 1 ) 0 { = ne2 ( sq_add ne2 t ) } {}
+            : i ek ( tp_at t 3 2 )
+            ? ! & & ( sq_has putback ( tp_at t 3 0 ) ) == ( tp_at t 3 1 ) 0 | == ek EF_REPLACE == ek EF_TAKE { = ne2 ( sq_add ne2 t ) } {}
             = j + j 1
         }
         = effs ne2
