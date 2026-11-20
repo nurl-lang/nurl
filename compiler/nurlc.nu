@@ -20875,6 +20875,30 @@ unsafe @ eng_byte s w i k → i {
     : i vty ( fv_ty vid )
     : b first & & == at g_fc_first_stmt == path 0 >= ( fv_pidx vid ) 0
     : i ddepth ? != kind VK_PARAM ( fv_depth vid ) 0
+    // (A temporary with no value, `void` - a then-only arm's join, whose
+    // conditional is a statement - given an arm's tail whole: the tail is
+    // discarded, released right there, as nurlc releases it; its `% Drop`
+    // runs - agora #766, AGORA-869.)
+    // (The engine reads `void` as a number, ET_NUM: a value whose type
+    // reaches a destructor lands in such a temporary only as a discarded
+    // tail.)
+    ? & & == path 0 == kind VK_TEMP < vty 0 {
+        ? == ( ec rv ) RV_USE {
+            : i sop ( eng_op ( ec + rv 1 ) )
+            ? & ( op_is_place sop ) == ( pl_path sop ) 0 {
+                : i sv ( pl_var sop )
+                : i sty ( fv_ty sv )
+                // (a temporary - a call's result - only: a binding named as
+                // the tail, `? c { hs } {}`, is lent to the arm, not released)
+                ? & & & == ( fv_kind sv ) VK_TEMP == ( st_own st sv ) OW_O != sty ET_NONE ( et_reaches_dtor sty 0 ) {
+                    ( eng_dtor_release st ( pl_make sv 0 ) sty ln 0 )
+                    ( eng_effect st ( pl_make sv 0 ) EF_REPLACE ln 0 )
+                    ( st_put st sv ( av_make OW_D 0 0 0 F ) )
+                    ^
+                } {}
+            } {}
+        } {}
+    } {}
     ? == path 0 {
         // (…and a `: ~` String or Vec given a field read of a binding it
         // does not own, `= c . x v`, whatever it held: nurlc releases its old
