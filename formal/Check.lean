@@ -620,6 +620,15 @@ import A3
 -- parameter holds is through-changing, and no call of it passes an argument holding views
 #print axioms A2.HeldViewThruWitness.call_refused
 #print axioms A2.HeldViewThruWitness.call_alone_refused
+-- (A2/ThruLiftKinds.lean, AGORA-932): what a change through a callee borrow kills, seen from
+-- the caller: exact through a root's own handle, coarser through a view or an element; and a
+-- kill after a `.replace` on the same root ends nothing more (A2/THRU_LIFT_DESIGN.md)
+#print axioms A2.kills_comp_self
+#print axioms A2.comp_view_overkills
+#print axioms A2.comp_inner_overkills
+#print axioms A2.comp_inner_push_overkills
+#print axioms A2.replace_covers
+#print axioms A2.kill_after_replace
 -- AGORA-909: a field or payload read of a frame binding of a view-free type that holds
 -- nothing may be fresh (RhsT.fst/snd/getl/getr), so a push through `. b items` of an
 -- `inout` parameter is an `edit false` (A2/FreshProjWitness.lean)
