@@ -645,6 +645,11 @@ import A3
 #print axioms A2.RSetup.subD_name
 #print axioms A2.RSetup.subE_weaker
 #print axioms A2.RSetup.canon_weaker_sub
+-- AGORA-937: no name is on a region (NameWF), and the substitution is idempotent, so what
+-- the lifted context's arguments depend on is kept by it
+#print axioms A2.RSetup.no_name_on_region
+#print axioms A2.RSetup.subD_idem
+#print axioms A2.RSetup.callRes_lift
 -- AGORA-937: a right-hand side lifted with regions: what it reads is on no region, a
 -- fresh borrow is on no region (FreshOK), what is derived is the lift substituted
 #print axioms A2.RSetup.canon_setEs
