@@ -4657,9 +4657,14 @@ unsafe @ note_unsafe_item s pos s what → v {
 // The callee gen_call_body resolved (`` for a closure value), and which
 // call it was: the lexer and where the call starts (gen_call asks).
 : ~ s g_unw_cn ``
-// …and the callee its arguments' pending rows name (a closure value's node):
-// the fields the call itself takes (bck_note_unwind).
-: ~ s g_unw_rc ``
+// …asked only of the call that starts at g_unw_want (one that may unwind;
+// -1 none): gen_call sets it around its own body.
+: ~ i g_unw_want -1
+// The calls still running, innermost last (gen_call's number for each, a
+// vector, g_gc_seq the last number): a field a `sink` argument of a call that
+// is still running has not been handed over yet (g_bck `unwpf`, agora #939).
+: ~ i g_gc_open -1  // a wv handle (0 is one): -1 until the first call needs it
+: ~ i g_gc_seq 0
 : ~ i g_unw_who -1
 : ~ i g_unw_wlex 0
 : ~ i g_sx_n 0
@@ -34773,13 +34778,17 @@ unsafe @ gen_call i lex i syms i cg → s {
     : i __unw_ln ? != 0 g_fn_unw ( nurl_lex_line lex ) 0
     // (…and its callee as gen_call_body resolved it: an instance, an impl.
     // Answered only for this call, not one of its arguments': agora #939.)
-    : i __unw_at ? != 0 g_fn_unw ( nurl_lex_cur_start lex ) -1
+    : b __unw_q & != 0 g_fn_unw ( __call_may_unwind __unw_fn )
+    : i __unw_w0 g_unw_want
+    = g_unw_want ? __unw_q ( nurl_lex_cur_start lex ) -1
     = g_unw_who -1
+    // (This call is running until its body is done: gen_call_body's
+    // `pendfield` notes name it, __unw_field_args.)
+    : i __gc_d ? != 0 g_fn_unw ( __gc_open_push ) -1
     : s __gcr ( gen_call_body lex syms cg )
-    ? != 0 g_fn_unw {
-        : b __unw_mine & == g_unw_who __unw_at == g_unw_wlex lex
-        ? ( __call_may_unwind __unw_fn ) { ( bck_note_unwind __unw_ln ? __unw_mine g_unw_cn `` ? __unw_mine g_unw_rc `` ) } {}
-    } {}
+    ? __unw_q { ( bck_note_unwind __unw_ln ? & == g_unw_who g_unw_want == g_unw_wlex lex g_unw_cn `` ) } {}
+    ? >= __gc_d 0 { ( wv_trunc g_gc_open __gc_d ) } {}
+    = g_unw_want __unw_w0
     // (…or a call in a defer body, which runs at a scope's exit, not here;
     // or one after the Vec it was read out of moved, __clolend_moved.)
     ? & != 0 ( nurl_str_len g_clolend_cur ) | | | != 0 g_win_done != g_calls_total __gct0 != 0 g_defer_body_depth != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `clolendmv##` g_clolend_cur ) ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `clolendbad##` g_clolend_cur ) `1` ) } {}
@@ -37994,6 +38003,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         } {}
         ? & & != 0 ( nurl_str_len arg_froot ) __row_callee ( bck_sound ) {
             ( bck_stash_store arg_froot ( nurl_lex_line lex ) __rc ( nurl_str_int arg_idx ) `pendfield` )
+            ? & != 0 g_fn_unw >= g_gc_open 0 { ( __unw_pf_note arg_froot __rc arg_idx ) } {}
             ( __clo_effect_note arg_froot __rc arg_idx )
             ( __drop_note_via syms arg_froot __rc arg_idx at )
             ( __loop_arg_note syms arg_froot __rc arg_idx )
@@ -38932,9 +38942,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // other's: __vself_place, agora #584.)
     ? & != 0 g_borrowck > ( nurl_sym_len g_bck `pvself` ) __vs_vs0 { ( __vself_place __vs_vs0 __vs_pp0 ) } {}
     // (Which function this call runs, for a `unw` row: gen_call.)
-    ? != 0 g_fn_unw {
+    ? & >= g_unw_want 0 == g_unw_want __gc_at {
         = g_unw_cn ? __callee_shadowed `` ( nurl_str_cat call_name `` )
-        = g_unw_rc ? != 0 ( nurl_str_len __clo_node ) ( nurl_str_cat __clo_node `` ) ( nurl_str_cat call_name `` )
         = g_unw_who __gc_at = g_unw_wlex lex
     } {}
     ? != 0 __sx_me {
@@ -54633,33 +54642,58 @@ unsafe @ bck_add_cap_name s name → v {
 // with no reads - what the statement read so far stays for its own row.
 // Its x5 is the function called, `cn` (`` when not known by name: a
 // closure value), agora #939; its x6 the fields of bindings the statement
-// hands it so far (`rc|path:k …`, rc the callee its pending rows name):
-// one a `sink` parameter takes is gone from the moment the call starts, so
-// a panic in the call hands it back empty (__bck_unw_takes).
-@ bck_note_unwind i line s cn s rc → v {
+// has handed to calls so far (`callee|path|k …`): one a `sink` parameter
+// takes is gone from the moment that call starts, so a panic in this call -
+// or in one after it in the statement - hands it back empty
+// (__bck_unw_takes).
+@ bck_note_unwind i line s cn → v {
     ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ v } {}
     : s r0 ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` )
     ? != 0 ( nurl_str_len r0 ) { ( bck_put `reads` `` ) } {}
-    ( bck_record2 `unw` `` line cn ( __unw_field_args rc ) )
+    ( bck_record2 `unw` `` line cn ( __unw_field_args ) )
     ? != 0 ( nurl_str_len r0 ) { ( bck_put `reads` r0 ) } {}
 }
 
-// The `pendfield` entries of the statement's pending rows that name callee
-// `rc`, as `rc|path:k path:k …` (`` for none): the fields handed to it.
-@ __unw_field_args s rc → s {
-    ? == 0 ( nurl_str_len rc ) { ^ `` } {}
-    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck `ppends` ) `` )
-    ? == 0 ( nurl_str_len rest ) { ^ `` } {}
+// A call starts: its number on the running calls (g_gc_open), and the
+// depth it was pushed at (to truncate back to).
+@ __gc_open_push → i {
+    ? < g_gc_open 0 { = g_gc_open ( wv_new ) } {}
+    : i d ( wv_len g_gc_open )
+    = g_gc_seq + g_gc_seq 1
+    ( wv_push g_gc_open g_gc_seq )
+    ^ d
+}
+
+// A field of a binding handed to the running call (the innermost), as a
+// `sink` argument may take it: `call#depth|callee|path|k` on g_bck `unwpf`.
+@ __unw_pf_note s path s cal i k → v {
+    : i d - ( wv_len g_gc_open ) 1
+    ? < d 0 { ^ v } {}
+    : s w ( nurl_str_cat4 ( nurl_str_cat3 ( nurl_str_int ( wv_at g_gc_open d ) ) `#` ( nurl_str_int d ) ) `|` cal ( nurl_str_cat4 `|` path `|` ( nurl_str_int k ) ) )
+    : s cur ( nurl_sym_get g_bck `unwpf` )
+    ( bck_put `unwpf` ? == 0 ( nurl_str_len cur ) w ( nurl_str_cat3 cur ` ` w ) )
+}
+
+// The fields of bindings the statement has handed to calls so far, as
+// `callee|path|k …` (`` for none): those of the innermost running call -
+// the one this `unw` row is for - and of calls already done. A call still
+// running around it has not been handed its arguments yet.
+@ __unw_field_args → s {
+    ? == 0 ( nurl_sym_len g_bck `unwpf` ) { ^ `` } {}
+    : i top - ( wv_len g_gc_open ) 1
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck `unwpf` ) `` )
     : ~ s out ``
     ~ != 0 ( nurl_str_len rest ) {
-        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
-        = rest ( str_skip_word rest )
-        : s cal ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s k ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? & ( seq kind `pendfield` ) ( seq cal rc ) { = out ( nurl_str_cat4 out ? == 0 ( nurl_str_len out ) `` ` ` nm ( nurl_str_cat `:` k ) ) } {}
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i h ( nurl_str_find w `#` )
+        : i b ( nurl_str_find w `|` )
+        : i sq ( nurl_str_to_int ( nurl_str_slice w 0 h ) )
+        : i d ( nurl_str_to_int ( nurl_str_slice w + h 1 - - b h 1 ) )
+        // (Running: on the stack at its depth, and not this call.)
+        : b open & & < d top >= d 0 == ( wv_at g_gc_open d ) sq
+        ? ! open { = out ( nurl_str_cat3 out ? == 0 ( nurl_str_len out ) `` ` ` ( nurl_str_slice w + b 1 - - ( nurl_str_len w ) b 1 ) ) } {}
     }
-    ^ ? == 0 ( nurl_str_len out ) `` ( nurl_str_cat3 rc `|` out )
+    ^ out
 }
 
 @ bck_record2 s kind s wname i line s x5 s x6 → v {
@@ -57775,6 +57809,8 @@ unsafe @ bck_swap_char s str i from i to → s {
     : ~ s prest ( nurl_sym_get g_bck `ppends` )
     : ~ s keep ``
     ( bck_put `ppends` `` )
+    // (…and the fields handed to calls, as `unw` rows read them: in rows now.)
+    ? != 0 ( nurl_sym_len g_bck `unwpf` ) { ( bck_put `unwpf` `` ) } {}
     ? ! calls { = g_bck_ownerless 0 } {}
     ~ != 0 ( nurl_str_len prest ) {
         : s pnm ( str_first_word prest )
@@ -60059,19 +60095,20 @@ unsafe @ bck_sx_ids s sx → s {
     ? ? == __k0 117 ( seq kind `unw` ) F {
         : s u6 ( bck_field rec 6 )
         ? == 0 ( nurl_str_len u6 ) { ^ ( nurl_str_cat3 five `\t` ( bck_field rec 5 ) ) } {}
-        // (`rc|path:k …`: each path as its interned id.)
-        : i bar ( nurl_str_find u6 `|` )
-        : ~ s rest ( nurl_str_slice u6 + bar 1 - - ( nurl_str_len u6 ) bar 1 )
+        // (`callee|path|k …`: each path as its interned id.)
+        : ~ s rest ( nurl_str_cat u6 `` )
         : ~ s ids ``
         ~ != 0 ( nurl_str_len rest ) {
             : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-            : i c ( nurl_str_find w `:` )
-            ? > c 0 {
-                : s id ( nurl_str_int ( bck_intern ( bck_xl_resolve ( nurl_str_slice w 0 c ) ) ) )
-                = ids ( nurl_str_cat4 ids ? == 0 ( nurl_str_len ids ) `` ` ` id ( nurl_str_slice w c - ( nurl_str_len w ) c ) )
+            : i b1 ( nurl_str_find w `|` )
+            : s r1 ( nurl_str_slice w + b1 1 - - ( nurl_str_len w ) b1 1 )
+            : i b2 ( nurl_str_find r1 `|` )
+            ? & > b1 0 > b2 0 {
+                : s id ( nurl_str_int ( bck_intern ( bck_xl_resolve ( nurl_str_slice r1 0 b2 ) ) ) )
+                = ids ( nurl_str_cat3 ids ? == 0 ( nurl_str_len ids ) `` ` ` ( nurl_str_cat4 ( nurl_str_slice w 0 + b1 1 ) id ( nurl_str_slice r1 b2 - ( nurl_str_len r1 ) b2 ) `` ) )
             } {}
         }
-        ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) ( nurl_str_cat4 `\t` ( nurl_str_slice u6 0 bar ) `|` ids ) )
+        ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) ( nurl_str_cat `\t` ids ) )
     } {}
     // A match's source expression (the call it matches).
     ? ? == __k0 109 & != 0 ( nurl_str_len lf8 ) ( seq kind `match` ) F { ^ ( nurl_str_cat3 five `\t\t\t\t` lf8 ) } {}
@@ -60592,34 +60629,46 @@ unsafe @ bck_emit_error s file i line s msg → v {
     ^ F
 }
 
-// At a `unw` row: the fields of `inout` parameters the call takes (its x6,
-// `rc|id:k …`, each a `sink` argument by the callee's summary) are gone
-// while it runs. Asked of the exit check on their own, as gone, with the
-// report parked behind the call's callee (resolve_unw_refills).
+// At a `unw` row: the fields of `inout` parameters the statement's calls
+// have taken so far (its x6, `callee|id|k …`, each a `sink` argument by
+// that callee's summary) are gone while this call runs. Asked of the exit
+// check on their own, as gone. The call's own take waits for the module's
+// answer to whether the call may panic (parked behind its callee,
+// resolve_unw_refills); one an earlier call of the statement made is
+// reported as a field taken before any call that may unwind is, agora #939.
 @ __bck_unw_takes s st s rec s u6 → v {
-    : i bar ( nurl_str_find u6 `|` )
-    : s rc ( nurl_str_slice u6 0 bar )
-    : ~ s rest ( nurl_str_slice u6 + bar 1 - - ( nurl_str_len u6 ) bar 1 )
+    : s cn ( bck_field rec 5 )
+    ( __bck_unw_takes_by st rec u6 cn T )
+    ( __bck_unw_takes_by st rec u6 cn F )
+}
+
+// …the ones `own` (taken by callee `cn`) or the others.
+@ __bck_unw_takes_by s st s rec s u6 s cn b own → v {
+    : ~ s rest ( nurl_str_cat u6 `` )
     : i line ( bck_field_int rec 3 )
     : ~ s st2 ( nurl_str_cat st `` )
     : ~ s took ``
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        : i c ( nurl_str_find w `:` )
-        : s ids ( nurl_str_slice w 0 c )
+        : i b1 ( nurl_str_find w `|` )
+        : s cal ( nurl_str_slice w 0 b1 )
+        : s r1 ( nurl_str_slice w + b1 1 - - ( nurl_str_len w ) b1 1 )
+        : i b2 ( nurl_str_find r1 `|` )
+        : s ids ( nurl_str_slice r1 0 b2 )
         : i id ( nurl_str_to_int ids )
-        ? & & >= id 0 != id ( bck_path_root id ) ( nurl_sym_has_word g_fn_sink rc ( nurl_str_slice w + c 1 - - ( nurl_str_len w ) c 1 ) ) {
+        : b mine & != 0 ( nurl_str_len cn ) ( seq cal cn )
+        ? & & & == mine own >= id 0 != id ( bck_path_root id ) ( nurl_sym_has_word g_fn_sink cal ( nurl_str_slice r1 + b2 1 - - ( nurl_str_len r1 ) b2 1 ) ) {
             = st2 ( bck_st_set st2 id BCK_MOVED )
             ( bck_add_word_once `fmv` ids )
             = g_bck_fmv_any 1
             ( bck_put ( nurl_str_cat `ml_` ids ) ( nurl_str_int line ) )
-            ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` ids ) ( nurl_str_int line ) ) ( bck_generic_base rc ) )
+            ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` ids ) ( nurl_str_int line ) ) ( bck_generic_base cal ) )
             = took ( nurl_str_cat3 took ` ` ids )
         } {}
     }
     ? == 0 ( nurl_str_len took ) { ^ v } {}
     ( bck_put `unwskip` took )
-    ( bck_put `unwpark` ( bck_field rec 5 ) )
+    ( bck_put `unwpark` ? own cn `` )
     = g_bck_unw_exit T
     = g_bck_unw_only T
     = g_bck_unw_take T
@@ -60658,10 +60707,11 @@ unsafe @ bck_emit_error s file i line s msg → v {
 @ bck_diag_inout_exit i rid i pid i line b maybe b at_end → v {
     : s ml ( nurl_sym_get2 g_bck `ml_` ( nurl_str_int pid ) )
     : i at ? & at_end != 0 ( nurl_str_len ml ) ( nurl_str_to_int ml ) line
-    // (A report parked for the module's answer has a tag of its own: it may
-    // not stand, and the report at the function's end must not be taken for
-    // it, agora #939.)
-    : s tag ( nurl_str_cat4 ? g_bck_unw_only `iu:` `ix:` ( nurl_str_int at ) `:` ( nurl_str_int pid ) )
+    // (A report parked for the module's answer has a tag of its own, by the
+    // callee it waits on: it may not stand, and neither the report at the
+    // function's end nor one parked behind another call on the line must be
+    // taken for it, agora #939.)
+    : s tag ( nurl_str_cat4 ? g_bck_unw_only ( nurl_str_cat3 `iu:` ( nurl_sym_get g_bck `unwpark` ) `:` ) `ix:` ( nurl_str_int at ) `:` ( nurl_str_int pid ) )
     : s ws ( nurl_sym_get g_bck `warnset` )
     ? ( str_contains_word ws tag ) { ^ v } {}
     ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
@@ -60677,8 +60727,8 @@ unsafe @ bck_emit_error s file i line s msg → v {
     // (At a call that may panic, the way out is the unwind: agora #929.)
     // (…and at the call that makes the field's new value, which runs before
     // the store: agora #939.)
-    : s back ? g_bck_unw_take ( nurl_str_cat `' is an inout parameter: this call takes the field, and if it panics, a 'recover'ing caller gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) ? g_bck_unw_only ( nurl_str_cat `' is an inout parameter: this call, which makes the field's new value, may panic before the store, and a 'recover'ing caller then gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) ? g_bck_unw_exit ( nurl_str_cat `' is an inout parameter: if this call panics, a 'recover'ing caller gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) back0
-    : s fix ? g_bck_unw_take ( nurl_str_cat3 `Hand the callee a copy, ( mem_dup ` fsrc ` ), and keep the field, or make sure the call cannot panic.` ) ? g_bck_unw_only ( nurl_str_cat4 `Give the field a value no panic can stop first (= ` fsrc ` …, by a call that cannot panic), then make the new one; or hand the sink a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) )
+    : s back ? g_bck_unw_take ( nurl_str_cat `' is an inout parameter: the field is gone from the moment that call starts, so if this call panics, a 'recover'ing caller gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) ? g_bck_unw_only ( nurl_str_cat `' is an inout parameter: this call, which makes the field's new value, may panic before the store, and a 'recover'ing caller then gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) ? g_bck_unw_exit ( nurl_str_cat `' is an inout parameter: if this call panics, a 'recover'ing caller gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) back0
+    : s fix ? g_bck_unw_take ( nurl_str_cat3 `Hand the taking call a copy, ( mem_dup ` fsrc ` ), and keep the field, or make sure this call cannot panic.` ) ? g_bck_unw_only ( nurl_str_cat4 `Give the field a value no panic can stop first (= ` fsrc ` …, by a call that cannot panic), then make the new one; or hand the sink a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) )
     ( nurl_str_cat4 ? g_bck_unw_exit `Give the field a value before this call (= ` `Give the field a value before returning (= ` fsrc ` …), or hand the callee a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) )
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) at ( nurl_str_cat4
     ( nurl_str_cat4 `use of partly moved value '` rname `' — its field '` fsrc )
@@ -87703,6 +87753,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     // them into the CLOSURE's list, so the enclosing function never saw
     // that `m` had gone into an owner.
     : ~ s __cl_bck_ppends ( nurl_str_cat `` `` )
+    : ~ s __cl_bck_unwpf ( nurl_str_cat `` `` )
     // (Every list of the statement's own pending rows: the keeps of views
     // `vpass`, closure dependencies, handovers, alias copies, field sets.)
     : ~ s __cl_bck_side ( nurl_str_cat `` `` )
@@ -87727,6 +87778,8 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         = __cl_bck_pmaybes ( nurl_sym_get g_bck `pmaybes` )
         = __cl_bck_ppends ( nurl_sym_get g_bck `ppends` )
         ( bck_put `ppends` `` )
+        = __cl_bck_unwpf ( nurl_sym_get g_bck `unwpf` )
+        ( bck_put `unwpf` `` )
         = __cl_vs_pend g_bck_vs_pend
         = g_bck_vs_pend 0
         = __cl_bck_side ( bck_side_lists_take )
@@ -87867,6 +87920,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
         ( bck_put `pmoves` __cl_bck_pmoves )
         ( bck_put `pmaybes` __cl_bck_pmaybes )
         ( bck_put `ppends` __cl_bck_ppends )
+        ( bck_put `unwpf` __cl_bck_unwpf )
         ( bck_side_lists_put __cl_bck_side )
         = g_bck_vs_pend __cl_vs_pend
         ( bck_put `warnset` __cl_bck_warnset )
