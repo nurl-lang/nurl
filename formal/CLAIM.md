@@ -218,6 +218,15 @@ the LLVM / C11 memory model rather than redefining it.
     call of it passes an argument holding views
     (`A2/HeldViewThruWitness.lean`: `call_refused`, `call_alone_refused`;
     AGORA-933, which nurlc accepted and fixes in github#2100).
+    A copy of a slice of views (a literal's owned `[s` field given a slice
+    parameter) holds copies of the slice's loans, not a loan on the slice:
+    releasing the temporary it was copied from leaves it live, while a value
+    depending on the temporary itself is ended by that release, and
+    replacing what the views point into ends the copy, after which no read
+    of it types (`A2/SliceCopyViewWitness.lean`: `copy_survives_temp_release`,
+    `dep_on_temp_dies`, `copy_dead_after_replace`, `read_copy_refused`;
+    AGORA-935, where nurlc answered the copy as a view of the argument and
+    kept the temporary, a leak).
     `A2/FreshProjWitness.lean` types the same call through a field:
     `add inout Bag b` pushes through `. b items`, called with a view of
     another value that is read after the call. A field or payload read
