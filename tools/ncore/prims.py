@@ -68,6 +68,9 @@ PRIMS = {
     # elements that hold no view: its own buffer, nothing of the argument
     # (nurlc's gen_agg_lit, AGORA-895)
     "__nurl_slice_copy": S(["in"], res="own"),
+    # …of elements that hold views: what the argument's elements hold, not
+    # the slice it was given (agora #935)
+    "__nurl_slice_copy_v": S(["in"], res="own", rholds=[(E, 0, E, "held")]),
     # ---- String ---------------------------------------------------------
     "string_from": S(["in"], res="own"),
     "string_new": S([], res="own"),

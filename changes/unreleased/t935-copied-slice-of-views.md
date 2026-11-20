@@ -1,0 +1,3 @@
+### Fixed
+
+- **A slice of views copied into a struct no longer keeps its argument's temporary alive** (AGORA-935). With `@ wraps [s t → SBag { ^ @ SBag { t 2 } }`, the literal copies the `[s` into the `SBag` it owns. The compiler took the result for a view of the argument slice, so `( wraps ( mks ) )` leaked the temporary from `( mks )`. The copy is now known to hold what the slice's elements view, not the slice itself, and the temporary is released after the call. Where the elements view a String, the result still depends on that String, and reading it after the String changes is refused as before. No source change is needed.
