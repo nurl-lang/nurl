@@ -38063,6 +38063,14 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // then `( observe a )`, the same - conservatively.)
             ? | & ( is_ident_tok bck_arg_tt ) | ( seq bck_arg_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) ( seq ( nurl_llty at ) g_drop_glue_ty ) | | == bck_arg_tt TT_LBRACE == bck_arg_tt TT_QUEST == bck_arg_tt TT_QUESTQUEST { ( __drop_reads_add g_drop_glue_ty `*` ) } {}
         } {}
+        // (…and a binding that views a field, `: b . h buf`, handed over
+        // whole: taking it takes the field out of `h` (AGORA-929), so the
+        // call that may panic after it was handed over sees that field gone
+        // too, as for `. h buf` itself - AGORA-939, CodeRabbit on github#2129.)
+        ? & & & & != 0 g_fn_unw >= g_gc_open 0 != 0 g_fn_bfpath == 0 ( nurl_str_len arg_froot ) ( is_ident_tok bck_arg_tt ) {
+            : s __ubf ( __bfpath_of syms bck_arg_val )
+            ? & != 0 ( nurl_str_len __ubf ) __row_callee { ( __unw_pf_note __ubf __rc arg_idx ) } {}
+        } {}
         ? & & != 0 ( nurl_str_len arg_froot ) __row_callee ( bck_sound ) {
             ( bck_stash_store arg_froot ( nurl_lex_line lex ) __rc ( nurl_str_int arg_idx ) `pendfield` )
             ? & != 0 g_fn_unw >= g_gc_open 0 { ( __unw_pf_note arg_froot __rc arg_idx ) } {}

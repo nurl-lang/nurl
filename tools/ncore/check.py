@@ -3171,6 +3171,23 @@ class FnCheck:
                         or any(x[2] == k for x in sm.get("stores", ())))
                     if not (fty is not None and self.T.is_scalar(fty)) and not kept:
                         own_takes.add(ops[k][1])
+                elif k < len(ops) and ops[k][0] == "v" and not ops[k][2]:
+                    # (…or a binding that reads such a field, `: b . h buf`,
+                    # handed over whole: taking it takes the field out of `h`
+                    # (take_payload, AGORA-929), at the same moment - so a
+                    # panic in the call hands `h` back without it; CodeRabbit
+                    # on github#2129)
+                    av = st.vals.get(ops[k][1])
+                    for a in (av.alias if av is not None else ()):
+                        if not (a[1] and "*" not in a[1] and a[0] in self.pidx
+                                and self.fn.modes[self.pidx[a[0]]] == "inout"):
+                            continue
+                        fty = self.ty_of_place((a[0], tuple(a[1])))
+                        kept = fty is not None and self.T.copyable(fty) and (
+                            any(r[1] == k for r in sm.get("rholds", ()))
+                            or any(x[2] == k for x in sm.get("stores", ())))
+                        if not (fty is not None and self.T.is_scalar(fty)) and not kept:
+                            own_takes.add(a[0])
         for vid, k in self.pidx.items():
             if self.fn.modes[k] != "inout" and not (
                     self.fn.modes[k] == "cap" and getattr(self.fn.vars[vid], "byref", False)):
