@@ -39424,9 +39424,15 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         } {}
         // (…and a binding handed to a `sink` parameter whose type may view
         // its own storage: a `pendsva` row, agora #606.)
+        // (…and one whose type may hold views: a `pendsink` row, so a callee
+        // that may move the buffer of an element of what it views ends the
+        // caller's views into those buffers - unless the Rc rule above has
+        // made that row already. Agora #949.)
         ? & __row_callee ( is_ident_tok bck_arg_tt ) {
             ? ( str_has_index callee_sink arg_idx ) {
-                ? ( __sva_ty syms ( nurl_llty at ) ) { ( bck_stash_sva_sink bck_arg_val ( nurl_lex_line lex ) __rc arg_idx ) } {}
+                : s __sk_ll ( nurl_llty at )
+                ? ( __sva_ty syms __sk_ll ) { ( bck_stash_sva_sink bck_arg_val ( nurl_lex_line lex ) __rc arg_idx ) } {}
+                ? & | ! ( bck_sound ) == 0 ( nurl_str_len ( __rc_reach __sk_ll ) ) ( __ty_holds_view_p __sk_ll ) { ( bck_stash_view_sink bck_arg_val ( nurl_lex_line lex ) __rc arg_idx ) } {}
             } {}
         } {}
         // (A value that holds nothing — a number, a struct of numbers — is
@@ -59658,6 +59664,18 @@ unsafe @ bck_stash_rc_sink s name i line s callee i argidx s at → v {
     ( bck_put `deferred` `1` )
 }
 
+// A binding handed to a `sink` parameter, of a type that may hold views
+// (__ty_holds_view_p) and reaches no Rc: a `pendsink` row as well, which the
+// walk sweeps as a call handed it - a callee that may move the buffer of an
+// element of what the value views (g_fn_ireallocs) ends what the caller
+// points into those buffers, as for an argument it lends. (Its `move` row
+// ends only what borrows from the binding itself; agora #949.)
+@ bck_stash_view_sink s name i line s callee i argidx → v {
+    ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ } {}
+    ( bck_add_word `ppends` ( nurl_str_cat3 ( nurl_str_cat3 name ` ` ( __bck_pend_line line ) ) ( nurl_str_cat3 ` ` callee ` ` ) ( nurl_str_cat ( nurl_str_int argidx ) ` pendsink` ) ) )
+    ( bck_put `deferred` `1` )
+}
+
 // A binding handed to a `sink` parameter, of a type with a field that holds
 // storage and one that may hold views (__sva_ty): a `pendsva` row — the walk
 // asks whether it views its own fields, and the callee's final summaries
@@ -71784,7 +71802,9 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // (g_fn_ireallocs): what points into the buffers of its elements ends —
     // not its own buffer, nor element handles — as for a grower handed a
     // borrowed element below (agora #315).
-    ? & & != 0 g_irealloc_any >= wid 0 | | | == kc 9 == kc 12 == kc 13 == kc 32 {
+    // (…and a binding handed to a `sink` parameter, its `pendsink` row: the
+    // callee's views of what it holds are the caller's; agora #949.)
+    ? & & != 0 g_irealloc_any >= wid 0 | | | | == kc 9 == kc 12 == kc 13 == kc 32 == kc 42 {
         ? ( nurl_sym_has_word g_fn_ireallocs ( bck_field rec 5 ) ( bck_field rec 6 ) ) {
             : s irw ( nurl_str_cat3 `it was passed to '` ( bck_fn_show ( bck_field rec 5 ) ) `', which may move the buffer of one of its elements` )
             // (…its own views too, where a view through an element a call

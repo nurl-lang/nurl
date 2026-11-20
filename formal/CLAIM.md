@@ -476,11 +476,12 @@ the LLVM / C11 memory model rather than redefining it.
     its own `w` is not typed. nurlc accepts it. Where the parameter is a
     plain one, so the argument is lent, nurlc ends what points into the
     elements of what the argument views (`bck_borrow_sweep0`'s `vds_`
-    sweep, agora #933). Where it is `sink`, as in `g`, nurlc ends nothing
-    there: a view of `w`'s element read after the call reads freed memory
-    (valgrind). That is a compiler hole inside A2: the program is one A2
-    expresses, and A2 refuses `main`'s call, which nurlc accepts. A2 is
-    not unsound here; nurlc accepts more than A2 types.
+    sweep, agora #933). Where it is `sink`, as in `g`, nurlc ends the same
+    views (AGORA-949: the `sink` argument's `pendsink` row reaches that
+    sweep), so a view of `w`'s element read after the call is refused.
+    Either way nurlc accepts `main` only where it reads no such view
+    after the call, and A2 still refuses `main`'s call; A2 types fewer
+    of these callers than nurlc accepts, which is no hole.
 
   A borrowed result that views a region is typed too (turn-on 4, agora
   #4219): `( vec_at vv 0 )` of a `sink` `vv : Vec [s`, returned as `[s`
