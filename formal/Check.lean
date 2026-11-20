@@ -630,6 +630,8 @@ import A3
 #print axioms A2.SliceCopyViewWitness.dep_on_temp_dies
 #print axioms A2.SliceCopyViewWitness.copy_dead_after_replace
 #print axioms A2.SliceCopyViewWitness.read_copy_refused
+#print axioms A2.SliceCopyViewWitness.lit_held
+#print axioms A2.SliceCopyViewWitness.lit_free_of_temp
 -- (A2/ThruLiftKinds.lean, AGORA-932): what a change through a callee borrow kills, seen from
 -- the caller: exact through a root's own handle, coarser through a view or an element; and a
 -- kill after a `.replace` on the same root ends nothing more (A2/THRU_LIFT_DESIGN.md)

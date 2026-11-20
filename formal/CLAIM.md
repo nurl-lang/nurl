@@ -230,7 +230,10 @@ the LLVM / C11 memory model rather than redefining it.
     `copy_survives_temp_release`, `dep_on_temp_dies`,
     `copy_dead_after_replace`, `read_copy_refused`; AGORA-935, where nurlc
     answered the copy as a view of the argument and kept the temporary, a
-    leak). A2's typing and nurlc's answer since AGORA-935 agree.
+    leak). The literal the copy is the field of, `@ SBag { t 2 }`, is A2's
+    `pair`: it holds what the copy holds and nothing of the temporary
+    (`lit_held`, `lit_free_of_temp`). A2's typing and nurlc's answer since
+    AGORA-935 agree.
     `A2/FreshProjWitness.lean` types the same call through a field:
     `add inout Bag b` pushes through `. b items`, called with a view of
     another value that is read after the call. A field or payload read

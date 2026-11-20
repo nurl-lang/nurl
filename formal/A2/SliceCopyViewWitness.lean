@@ -116,4 +116,42 @@ theorem read_copy_refused (F : List Var) (E : Entry) (Γ' : Ctx) :
   have hk := copy_dead_after_replace
   cases h <;> simp_all
 
+/-! ### The literal's field: `@ SBag { t 2 }` as A2's `pair`
+
+The copy is the literal's first field: `pair` of the copy's binding (2) and the
+number (3). A2's `pair` holds what its fields' pushes hand it (`PushArg`):
+the copy, an owner, is moved in and hands its `held` over (`PushArg.move`), a
+number hands nothing (`PushArg.int`). So the literal holds what the typed copy
+holds, and nothing of the temporary. -/
+
+/-- The caller with the copy bound (2) and the number (3). -/
+def KL : Ctx := fun v => if v = 3 then some intE else K v
+
+/-- **The literal holds what the copy holds**: any typing of `pair 2 3`. -/
+theorem lit_held {F : List Var} {E : Entry} {Γ' : Ctx} (h : RhsT KL F (.pair 2 3) E Γ') :
+    E.held = Eb.held := by
+  cases h with
+  | pair hy _ hpy hz _ hpz _ =>
+    simp only [KL, K, show (2 : Nat) ≠ 3 from by decide, ↓reduceIte, Option.some.injEq] at hy
+    subst hy
+    cases hpy with
+    | move _ _ _ _ _ =>
+      have hz' := hz
+      simp only [setE, upd, kill, KL, show (3 : Nat) ≠ 2 from by decide, ↓reduceIte,
+        Option.map_some, killE, hits, intE] at hz'
+      simp only [Option.some.injEq] at hz'
+      subst hz'
+      cases hpz with
+      | int => simp
+      | move ho _ _ _ _ => simp [Ty.owning] at ho
+
+/-- ... so it is free of the temporary too. -/
+theorem lit_free_of_temp {F : List Var} {E : Entry} {Γ' : Ctx} (h : RhsT KL F (.pair 2 3) E Γ') :
+    ∀ d ∈ E.held, d.root ≠ 1 := by
+  rw [lit_held h]
+  intro d hd
+  exact copy_free_of_temp d (by
+    simp only [Entry.vdeps, List.mem_append]
+    exact Or.inr hd)
+
 end A2.SliceCopyViewWitness
