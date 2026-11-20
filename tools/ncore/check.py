@@ -262,6 +262,7 @@ class FnCheck:
         self.rets = []
         self.exits = []
         self.loop_stack = []
+        self.end_loops = []      # per loop being run: the log's length when its round began, the records its `break`s and its `continue`s carry
         self.defer_bodies = []
         self.tails_memo = {}
         self.agg_lends = {}      # a literal temporary -> the bindings it shows and has not taken
@@ -509,8 +510,8 @@ class FnCheck:
                                       {(p, sw(l)) for p, l in av.held})
             st.dead = (st.dead - {lid}) | {stale}
             self.loans[stale] = (place, kind)
-            if lid in self.ended:
-                self.end_set(stale, self.ended[lid])
+            # (with no record, the stand-in's earlier one is cleared)
+            self.end_set(stale, self.ended.get(lid))
         self.loans[lid] = (place, kind)
         return lid
 
@@ -533,23 +534,38 @@ class FnCheck:
             else:
                 self.ended[l] = was
 
-    def loop_exits(self):
-        """How many paths left the innermost loop around so far (a `break`,
-        a `continue`)."""
-        if not self.loop_stack:
-            return 0
-        b, c = self.loop_stack[-1]
-        return len(b) + len(c)
+    def end_round(self, carry):
+        """A round of a loop begins: the records its `continue`s carried
+        round from the last round are what holds at the head again
+        (end_exit, end_apply)."""
+        self.end_loops.append((len(self.end_log), [], []))
+        self.end_apply(carry)
+
+    def end_exit(self, i):
+        """A `break` (i 1) or a `continue` (i 2) leaves the path: where each
+        loan written since the round began ended, as the path has it, goes
+        where the path goes - after the loop, or the next round's head - and
+        not to what follows the join this path is an arm of (run_arm)."""
+        if not self.end_loops:
+            return
+        e = self.end_loops[-1]
+        e[i].append({l: self.ended.get(l) for l, _ in self.end_log[e[0]:]})
+
+    def end_apply(self, ds):
+        for d in ds:
+            for l, rec in d.items():
+                self.end_set(l, rec)
 
     def run_arm(self, st, body):
         """An arm of a join (a branch, a loop's body) run from `st`. One
-        that leaves no path open - each returns or stops, none breaks out
-        or goes round again - reaches nothing after the join: where it
-        ended a loan is no fact about a later read, and its records are
-        undone (the join drops its state, not what the side table says)."""
-        mark, exits = len(self.end_log), self.loop_exits()
+        that leaves no path open - each returns, stops, breaks out or goes
+        round again - reaches nothing after the join: where it ended a loan
+        is no fact about a later read, and its records are undone (the join
+        drops its state, not what the side table says). A `break` and a
+        `continue` carry theirs on (end_exit)."""
+        mark = len(self.end_log)
         out = self.run(st, body)
-        if out.bottom and self.loop_exits() == exits:
+        if out.bottom:
             self.end_undo(mark)
         return out
 
@@ -4994,10 +5010,12 @@ class FnCheck:
         if k == "break":
             if self.loop_stack:
                 self.loop_stack[-1][0].append(st.copy())
+            self.end_exit(1)
             return State(bottom=True)
         if k == "continue":
             if self.loop_stack:
                 self.loop_stack[-1][1].append(st.copy())
+            self.end_exit(2)
             return State(bottom=True)
         raise CheckError(f"stmt {k}")
 
@@ -5005,13 +5023,16 @@ class FnCheck:
         head = st.copy()
         final = self.final
         self.final = False
+        carry = []
         for _ in range(12):
             self.loop_stack.append(([], []))
+            self.end_round(carry)
             c = self.run(head.copy(), cond)
             if not c.bottom:
                 self.read(c, cop, ln, ("wc", id(s)))
             b = self.run_arm(c.copy(), body)
             _, conts = self.loop_stack.pop()
+            carry = self.end_loops.pop()[2]
             nxt = join(head, b)
             for x in conts:
                 nxt = join(nxt, x)
@@ -5020,11 +5041,16 @@ class FnCheck:
             head = nxt
         self.final = final
         self.loop_stack.append(([], []))
+        self.end_round(carry)
         c = self.run(head.copy(), cond)
         if not c.bottom:
             self.read(c, cop, ln, ("wc", id(s)))
         self.run_arm(c.copy(), body)
         breaks, _ = self.loop_stack.pop()
+        _, eb, ec = self.end_loops.pop()
+        # (after the loop: what the head held, then what each `break` carried)
+        self.end_apply(ec)
+        self.end_apply(eb)
         # (a condition that is a true literal never lets the loop end: what
         # holds after it is what held at a `break`)
         out = State(bottom=True) if len(cop) > 2 and cop[2] == "always" else c
@@ -5047,18 +5073,24 @@ class FnCheck:
         self.final = False
         outer = set(self.walking)
         self.walking |= walk
+        carry = []
         for _ in range(12):
-            nxt, _ = self._fe_round(head, s, vid, walk, elem_alias, src, body, ln)
+            nxt, _ = self._fe_round(head, s, vid, walk, elem_alias, src, body, ln, carry)
+            carry = self.end_loops.pop()[2]
             if nxt.key() == head.key():
                 break
             head = nxt
         self.final = final
-        _, out = self._fe_round(head, s, vid, walk, elem_alias, src, body, ln)
+        _, out = self._fe_round(head, s, vid, walk, elem_alias, src, body, ln, carry)
+        _, eb, ec = self.end_loops.pop()
+        self.end_apply(ec)
+        self.end_apply(eb)
         self.walking = outer
         return out
 
-    def _fe_round(self, head, s, vid, walk, elem_alias, src, body, ln):
+    def _fe_round(self, head, s, vid, walk, elem_alias, src, body, ln, carry):
         self.loop_stack.append(([], []))
+        self.end_round(carry)
         cur = head.copy()
         if walk & cur.dead:
             self.err(ln, "the loop's container was changed while the loop walks it")
