@@ -1,6 +1,5 @@
-// taken_field_refilled_by_a_call_that_may_panic: AGORA-929 (CodeRabbit on github#2110) — the refill's own call may panic before its store: a `recover`ing caller gets `h` back with `buf` empty
-// AGORA-939 (open): accepted by nurlc and ncore - the refill's own call is exempted until the walk knows which calls cannot panic (tools/fuzz/holes/open/t939.md)
-// map: §2.1 | A2 | rejected | - | AGORA-929: an inout parameter's taken field refilled by a call that may panic
+// map: §2.1 | A2 | rejected | - | AGORA-939: an inout parameter's taken field refilled by a call that may panic
+// AGORA-939 (closed): refused - the refill's own call runs before its store and may panic, so a `recover`ing caller would get `h` back with `buf` empty (github#2110 head 9e025429: accepted, a SEGV after recover)
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/panic.nu`
 

@@ -44,6 +44,85 @@ def call_may_unwind(name):
     return any(w in name for w in ("fiber", "park", "yield", "sched", "async"))
 from lower import SCALARS, Types, Var
 
+
+def extern_may_panic(name):
+    """May a call of `name`, a function with no body nurlc lowered (the
+    runtime's, or a foreign one: `strlen`), start a panic?  By its name, as
+    nurlc's module pass answers it (rt_starts_panic, __mp_runtime_panics): a
+    drop / clone walk or a closure entry runs code it is handed, a fiber
+    switch other code."""
+    if name.startswith(("nurl_vec_drop", "nurl_vec_clone", "nurl_closure_", "nurl_call_code", "nurl_cpu_launch")):
+        return True
+    if name in RT_PANICS or (name.startswith("nurl_cpu_") and name.endswith("_missing")):
+        return True
+    return any(w in name for w in ("fiber", "park", "yield", "sched", "async"))
+
+
+def _calls_in(x, out):
+    """The calls a statement list makes: `("call", name, …)` names, and
+    None for a call through a closure value (`callind`)."""
+    if isinstance(x, tuple):
+        if x and x[0] == "call" and len(x) > 1 and isinstance(x[1], str):
+            out.add(x[1])
+        elif x and x[0] == "callind":
+            out.add(None)
+        for y in x:
+            if isinstance(y, (tuple, list)):
+                _calls_in(y, out)
+    elif isinstance(x, list):
+        for y in x:
+            _calls_in(y, out)
+
+
+def may_panic_fns(prog):
+    """The functions of the program a call of which may start a panic, as
+    nurlc's module pass finds them over its IR (__mp_compute): one that
+    panics itself (a check written inline, `fn` flag bit 3), runs a closure
+    value, calls what is no function of the program and may unwind
+    (call_may_unwind), or calls one of these - to a fixpoint (agora #939)."""
+    got = getattr(prog, "_may_panic", None)
+    if got is not None:
+        return got
+    # (`calls_of`: every function nurlc lowered, the library's included, by
+    # what its statements call - run.py's; else the program's own bodies)
+    calls = getattr(prog, "calls_of", None)
+    if calls is None:
+        calls = {}
+        for name, fn in prog.fns.items():
+            cs = set()
+            _calls_in(fn.body, cs)
+            calls[name] = cs
+    # (a callee with no body anywhere is the runtime's or a foreign one:
+    # extern_may_panic, as nurlc's __mp_runtime_panics answers it - unless
+    # `calls_of` is the program's own bodies only, where it may be the library's)
+    whole = getattr(prog, "calls_of", None) is not None
+    out = set()
+    for name, cs in calls.items():
+        if (getattr(prog, "fn_flags", {}).get(name, 0) & 8 or None in cs
+                or any(c not in calls and (extern_may_panic(c) if whole else call_may_unwind(c))
+                       for c in cs if c is not None)):
+            out.add(name)
+    changed = True
+    while changed:
+        changed = False
+        for name, cs in calls.items():
+            if name not in out and any(c in out for c in cs if c is not None):
+                out.add(name)
+                changed = True
+    prog._may_panic = out
+    return out
+
+
+def call_may_panic(prog, name):
+    """May the call of `name` start a panic (a closure value's, `None`: it
+    may)?"""
+    if name is None:
+        return True
+    whole = getattr(prog, "calls_of", None)
+    if name not in (whole or prog.fns):
+        return extern_may_panic(name) if whole is not None else call_may_unwind(name)
+    return name in may_panic_fns(prog)
+
 # NCORE_DERIVE=1: a library function's derived summary (derive.py) answers
 # before its declared one - how far the walk's own answers carry.
 DERIVE_FIRST = os.environ.get("NCORE_DERIVE") == "1"
@@ -3068,12 +3147,14 @@ class FnCheck:
                     self.fn.modes[k] == "cap" and getattr(self.fn.vars[vid], "byref", False)):
                 continue
             # (…nor be handed back with a field a callee took still empty: a
-            # panic here is a way out to a `recover`ing caller, agora #929 -
-            # not, yet, the field this statement gives a value again, `= . h
-            # buf ( make … )`: that call runs before the store too, so a
-            # panic in it hands the field back empty - open, AGORA-939's
-            # rest, as in nurlc)
+            # panic here is a way out to a `recover`ing caller, agora #929.
+            # The field this statement gives a value again, `= . h buf ( make
+            # … )`, is empty while that call runs too - the store comes
+            # after it - so it is the caller's only where the call cannot
+            # panic, as nurlc's module pass finds: agora #939)
             rp = self.refill_place
+            if rp is not None and call_may_panic(self.prog, None if name == "the closure" else name):
+                rp = None
             if self.fn.modes[k] == "inout" and any(
                     g[0] == vid and g[1] and not (rp is not None and rp[0] == vid
                                                   and tuple(g[1])[:len(rp[1])] == rp[1])

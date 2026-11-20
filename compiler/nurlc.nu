@@ -4645,6 +4645,17 @@ unsafe @ note_unsafe_item s pos s what → v {
 // its report names the unwind (agora #929). (The paths a `fieldset` on that
 // row's line gives a value again: g_bck `unwskip`.)
 : ~ b g_bck_unw_exit F
+// T while __dce_emit_module only answers resolve_unw_refills.
+: ~ b g_dce_unw_pass F
+// …and T while it asks of those paths alone: their report waits for the
+// module's answer to whether the call may panic at all (g_bck `unwpark`,
+// its callee; resolve_unw_refills, agora #939).
+: ~ b g_bck_unw_only F
+// The callee gen_call_body resolved (`` for a closure value), and which
+// call it was: the lexer and where the call starts (gen_call asks).
+: ~ s g_unw_cn ``
+: ~ i g_unw_who -1
+: ~ i g_unw_wlex 0
 : ~ i g_sx_n 0
 : ~ i g_sx_at 0
 : ~ s g_sx ``
@@ -34754,8 +34765,14 @@ unsafe @ gen_call i lex i syms i cg → s {
     // next token, which may be on the next line - and the refill of a field
     // the call's own statement makes is recognised by its line, agora #929.)
     : i __unw_ln ? != 0 g_fn_unw ( nurl_lex_line lex ) 0
+    // (…and its callee as gen_call_body resolved it: an instance, an impl.
+    // Answered only for this call, not one of its arguments': agora #939.)
+    : i __unw_at ? != 0 g_fn_unw ( nurl_lex_cur_start lex ) -1
+    = g_unw_who -1
     : s __gcr ( gen_call_body lex syms cg )
-    ? != 0 g_fn_unw { ? ( __call_may_unwind __unw_fn ) { ( bck_note_unwind __unw_ln ) } {} } {}
+    ? != 0 g_fn_unw {
+        ? ( __call_may_unwind __unw_fn ) { ( bck_note_unwind __unw_ln ? & == g_unw_who __unw_at == g_unw_wlex lex g_unw_cn `` ) } {}
+    } {}
     // (…or a call in a defer body, which runs at a scope's exit, not here;
     // or one after the Vec it was read out of moved, __clolend_moved.)
     ? & != 0 ( nurl_str_len g_clolend_cur ) | | | != 0 g_win_done != g_calls_total __gct0 != 0 g_defer_body_depth != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `clolendmv##` g_clolend_cur ) ) { ( nurl_sym_def g_pending_impl ( nurl_str_cat `clolendbad##` g_clolend_cur ) `1` ) } {}
@@ -38907,6 +38924,8 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // (…and its `sK` rows go where the call's own effects have run and no
     // other's: __vself_place, agora #584.)
     ? & != 0 g_borrowck > ( nurl_sym_len g_bck `pvself` ) __vs_vs0 { ( __vself_place __vs_vs0 __vs_pp0 ) } {}
+    // (Which function this call runs, for a `unw` row: gen_call.)
+    ? != 0 g_fn_unw { = g_unw_cn ? __callee_shadowed `` ( nurl_str_cat call_name `` ) = g_unw_who __gc_at = g_unw_wlex lex } {}
     ? != 0 __sx_me {
         : b __sx_sum ( __summarised_callee syms fname call_name )
         ( __sx_publish __sx_me ? __callee_shadowed ( __clo_call_sx syms fname call_sx ) ? & __sx_sum __sx_need ( nurl_str_cat4 call_name `(` call_sx `)` ) `-` )
@@ -54601,11 +54620,13 @@ unsafe @ bck_add_cap_name s name → v {
 
 // A call that may panic, on `line` (agora #382): a row of its own, `unw`,
 // with no reads - what the statement read so far stays for its own row.
-@ bck_note_unwind i line → v {
+// Its x5 is the function called, `cn` (`` when not known by name: a
+// closure value), agora #939.
+@ bck_note_unwind i line s cn → v {
     ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ v } {}
     : s r0 ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` )
     ? != 0 ( nurl_str_len r0 ) { ( bck_put `reads` `` ) } {}
-    ( bck_record2 `unw` `` line `` `` )
+    ( bck_record2 `unw` `` line cn `` )
     ? != 0 ( nurl_str_len r0 ) { ( bck_put `reads` r0 ) } {}
 }
 
@@ -60002,6 +60023,8 @@ unsafe @ bck_sx_ids s sx → s {
     ? ? == __k0 102 ( seq kind `fieldset` ) F {
         ? ( seq ( bck_field rec 6 ) `e` ) { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) `\te` ) } {}
     } {}
+    // A call that may panic: the function called (gen_call, agora #939).
+    ? ? == __k0 117 ( seq kind `unw` ) F { ^ ( nurl_str_cat3 five `\t` ( bck_field rec 5 ) ) } {}
     // A match's source expression (the call it matches).
     ? ? == __k0 109 & != 0 ( nurl_str_len lf8 ) ( seq kind `match` ) F { ^ ( nurl_str_cat3 five `\t\t\t\t` lf8 ) } {}
     // A return's source expression (a view handed back).
@@ -60271,6 +60294,15 @@ unsafe @ bck_emit_error s file i line s msg → v {
     ? != 0 g_bck_quiet { ^ v } {}
     // (…and nothing where the core IR's reader decides ownership: own_die.)
     ? == 0 g_walk_owns { ^ v } {}
+    // (A report that waits for the module's answer: resolve_unw_refills.)
+    : s __upk ? & g_bck_unw_only != 0 g_bck ( nurl_sym_get g_bck `unwpark` ) ``
+    ? != 0 ( nurl_str_len __upk ) {
+        : s rec ( nurl_str_cat4 ( nurl_str_cat3 __upk `\t` file ) ( nurl_str_cat3 `\t` ( nurl_str_int line ) `\t` ) msg g_bck_err_note )
+        = g_bck_err_note ``
+        : s pend ( nurl_sym_get g_pending_impl `unwrefill` )
+        ? < ( nurl_str_find pend rec ) 0 { ( nurl_sym_def g_pending_impl `unwrefill` ? == 0 ( nurl_str_len pend ) rec ( nurl_str_cat3 pend `\n` rec ) ) } {}
+        ^ v
+    } {}
     // Owned strings (`src`, `lt`) are reclaimed by auto-drop at scope
     // exit — no manual frees here (they would double-free).
     : s src ( compiler_read_source file )
@@ -60520,10 +60552,15 @@ unsafe @ bck_emit_error s file i line s msg → v {
         : ~ s rest ( nurl_sym_get g_bck `fmv` )
         ~ != 0 ( nurl_str_len rest ) {
             : i pid ( nurl_str_to_int ( str_first_word rest ) ) = rest ( str_skip_word rest )
-            ? & & != rid pid ( bck_id_holds rid pid ) ! & g_bck_unw_exit ( __words_hold_id ( nurl_sym_get g_bck `unwskip` ) pid ) {
-                : i fs ( bck_st_get st pid )
-                ? | == BCK_MOVED fs & != 0 g_maybe_moved == BCK_MAYBE_MOVED fs {
-                    ( bck_diag_inout_exit rid pid line == BCK_MAYBE_MOVED fs at_end )
+            // (At a `unw` row, the paths a `fieldset` on its line gives a
+            // value again are asked on their own, g_bck_unw_only.)
+            ? & != rid pid ( bck_id_holds rid pid ) {
+                : b sk & g_bck_unw_exit ( __words_hold_id ( nurl_sym_get g_bck `unwskip` ) pid )
+                ? == sk g_bck_unw_only {
+                    : i fs ( bck_st_get st pid )
+                    ? | == BCK_MOVED fs & != 0 g_maybe_moved == BCK_MAYBE_MOVED fs {
+                        ( bck_diag_inout_exit rid pid line == BCK_MAYBE_MOVED fs at_end )
+                    } {}
                 } {}
             } {}
         }
@@ -60548,12 +60585,16 @@ unsafe @ bck_emit_error s file i line s msg → v {
     : s taken ? here_take ( nurl_str_cat `' is taken here` `` ) ( nurl_str_cat `' was taken at line ` ml )
     : s back0 ? at_end ( nurl_str_cat `' is an inout parameter: its caller gets it back with that field empty when the function ends, and its next use of the field reads a null handle. ` `` ) ( nurl_str_cat `' is an inout parameter: its caller gets it back here with that field empty, and its next use of the field reads a null handle. ` `` )
     // (At a call that may panic, the way out is the unwind: agora #929.)
-    : s back ? g_bck_unw_exit ( nurl_str_cat `' is an inout parameter: if this call panics, a 'recover'ing caller gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) back0
+    // (…and at the call that makes the field's new value, which runs before
+    // the store: agora #939.)
+    : s back ? g_bck_unw_only ( nurl_str_cat `' is an inout parameter: this call, which makes the field's new value, may panic before the store, and a 'recover'ing caller then gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) ? g_bck_unw_exit ( nurl_str_cat `' is an inout parameter: if this call panics, a 'recover'ing caller gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) back0
+    : s fix ? g_bck_unw_only ( nurl_str_cat4 `Give the field a value no panic can stop first (= ` fsrc ` …, by a call that cannot panic), then make the new one; or hand the sink a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) )
+    ( nurl_str_cat4 ? g_bck_unw_exit `Give the field a value before this call (= ` `Give the field a value before returning (= ` fsrc ` …), or hand the callee a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) )
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) at ( nurl_str_cat4
     ( nurl_str_cat4 `use of partly moved value '` rname `' — its field '` fsrc )
     ( nurl_str_cat4 taken by some `, and '` )
     ( nurl_str_cat rname back )
-    ( nurl_str_cat4 ? g_bck_unw_exit `Give the field a value before this call (= ` `Give the field a value before returning (= ` fsrc ` …), or hand the callee a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) ) ) )
+    fix ) )
 }
 
 // Reading a binding whose state is MAYBE-moved: on the path where the
@@ -63216,12 +63257,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     ( __bck_unwind_check st ( bck_field_int rec 3 ) )
                     // (A panic here is a way out too: an `inout` parameter
                     // goes back to a `recover`ing caller with a field a sink
-                    // took still empty - agora #929. …but not, yet, a field
-                    // the statement gives a value again, `= . h buf ( make
-                    // )`: the `fieldset` rows right after this one, on its
-                    // line. That call too runs before the store, so a panic
-                    // in it hands the field back empty: open, AGORA-939,
-                    // until the walk knows which calls cannot panic.)
+                    // took still empty - agora #929. A field the statement
+                    // gives a value again, `= . h buf ( make )` (the
+                    // `fieldset` rows right after this one, on its line), is
+                    // empty here too: the call runs before the store. Whether
+                    // it may panic is the module's answer, not this walk's:
+                    // that report waits for it, resolve_unw_refills, agora
+                    // #939.)
                     ? != 0 g_bck_fmv_any {
                         : ~ s ufs ``
                         : ~ i uq + p 1
@@ -63231,6 +63273,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         ( bck_put `unwskip` ufs )
                         = g_bck_unw_exit T
                         ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F )
+                        ? != 0 ( nurl_str_len ufs ) {
+                            ( bck_put `unwpark` ( bck_field rec 5 ) )
+                            = g_bck_unw_only T
+                            ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F )
+                            = g_bck_unw_only F
+                            ( bck_put `unwpark` `` )
+                        } {}
                         = g_bck_unw_exit F
                         ( bck_put `unwskip` `` )
                     } {}
@@ -118928,8 +118977,9 @@ unsafe @ __dce_emit_module s mod i mlen → v {
     = g_dce_mod_len mlen
     = g_split_n 0
     // Neither pass wants the index — hand the module straight to stdout.
-    ? & & == 0 g_dce == 0 g_split_max == 0 g_sanitize_address { ( __dce_print_range 0 mlen ) ^ v } {}
+    ? & & & == 0 g_dce == 0 g_split_max == 0 g_sanitize_address ! g_dce_unw_pass { ( __dce_print_range 0 mlen ) ^ v } {}
     : i n ( __dce_index mlen )
+    ? & == 0 n g_dce_unw_pass { ( resolve_unw_refills ) ^ v } {}
     ? == 0 n { ( __sp_whole mlen ) ^ v } {}
     = g_dce_live # i # s ( nurl_zalloc * n 8 )
     = g_dce_at # i # s ( nurl_zalloc * n 8 )
@@ -118948,22 +118998,27 @@ unsafe @ __dce_emit_module s mod i mlen → v {
     ~ < ib 256 { ? ( __dce_ident_byte ib ) { = . idb ib # u 1 } {} = ib + ib 1 }
     // The ownership flags are final by now; the writer folds them (see
     // __ir_fold_range). They live at module scope, between the bodies.
-    = g_fold_flags ( nurl_sym_new )
-    : ~ i fgap 0
-    : ~ i fgi 0
-    ~ < fgi n {
-        ( __fold_scan_flags fgap ( nurl_peek # s g_dce_start fgi ) )
-        = fgap ( nurl_peek # s g_dce_end fgi )
-        = fgi + fgi 1
-    }
-    ( __fold_scan_flags fgap mlen )
+    // (Only a pass that writes the module wants them.)
+    ? ! g_dce_unw_pass {
+        = g_fold_flags ( nurl_sym_new )
+        : ~ i fgap 0
+        : ~ i fgi 0
+        ~ < fgi n {
+            ( __fold_scan_flags fgap ( nurl_peek # s g_dce_start fgi ) )
+            = fgap ( nurl_peek # s g_dce_end fgi )
+            = fgi + fgi 1
+        }
+        ( __fold_scan_flags fgap mlen )
+    } {}
     // No `main` — this is a module compiled to be linked into something
     // else, and every function in it is potentially an entry point.
     : s mainent ( nurl_sym_get g_dce_map `main` )
     // `--no-dce` and a `main`-less module both mean "keep everything".
     // The split still needs the index, so mark every function live
     // rather than skipping the pass.
-    : i sweep ? & != 0 g_dce != 0 ( nurl_str_len mainent ) 1 0
+    // (So does the pass that asks only which calls may panic: every
+    // function may still be written, resolve_unw_refills.)
+    : i sweep ? & & != 0 g_dce != 0 ( nurl_str_len mainent ) ! g_dce_unw_pass 1 0
     ? == 0 sweep {
         : ~ i li 0
         ~ < li n { ( nurl_poke # s g_dce_live li 1 ) = li + li 1 }
@@ -119005,6 +119060,15 @@ unsafe @ __dce_emit_module s mod i mlen → v {
             = qh + qh 1
         }
     }
+    // (That pass: the panic graph, its answers, and nothing written.)
+    ? g_dce_unw_pass {
+        ( __mp_compute n )
+        ( resolve_unw_refills )
+        ( nurl_free # s g_mp ) = g_mp 0
+        ( nurl_sym_free g_mp_rt ) = g_mp_rt 0
+        ( dce_free )
+        ^ v
+    } {}
     ( __jrnl_elide n == 0 ( nurl_str_len mainent ) )
     // (The journal pushes that survived the elision: their thunks.)
     ? != 0 g_dce_defer_jrnl { ( __dce_journal_edges ) = g_dce_defer_jrnl 0 } {}
@@ -119026,6 +119090,46 @@ unsafe @ __dce_emit_module s mod i mlen → v {
     // are unchanged, and one nurlc run produces both.
     ? != 0 g_split_max { ( split_emit_module n mlen ) } {}
     ( dce_free )
+}
+
+// The reports a `unw` row's walk parked (bck_emit_error, `unwrefill`): a
+// field a sink took, given a value again by the statement's own call
+// (`= . h buf ( make )`), is empty while that call runs. Reported where the
+// call may panic after all: its callee does, by the module's panic graph
+// (__mp_compute), or is not a function of the module. A call of `nurl_*`
+// the runtime says cannot panic made no `unw` row (agora #939).
+// `--check` asks it too: dce_unw_resolve.
+@ resolve_unw_refills → v {
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_pending_impl `unwrefill` ) `` )
+    : i q0 g_bck_quiet
+    : i w0 g_walk_owns
+    = g_bck_quiet 0
+    = g_walk_owns 1
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s e ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : i fi ( __dce_index_of ( llvm_call_fn ( bck_field e 0 ) ) )
+        ? | < fi 0 ( __mp_call_panics fi ) {
+            // (The message is the rest of the entry: it may hold a tab.)
+            : i t1 ( nurl_str_find e `\t` )
+            : s r1 ( nurl_str_slice e + t1 1 - - ( nurl_str_len e ) t1 1 )
+            : i t2 ( nurl_str_find r1 `\t` )
+            : s r2 ( nurl_str_slice r1 + t2 1 - - ( nurl_str_len r1 ) t2 1 )
+            : i t3 ( nurl_str_find r2 `\t` )
+            ( bck_emit_error ( nurl_str_slice r1 0 t2 ) ( nurl_str_to_int ( nurl_str_slice r2 0 t3 ) ) ( nurl_str_slice r2 + t3 1 - - ( nurl_str_len r2 ) t3 1 ) )
+        } {}
+    }
+    = g_bck_quiet q0
+    = g_walk_owns w0
+}
+
+// The module before it is written, asked only which of the parked reports
+// stand (resolve_unw_refills): every function live, nothing printed.
+@ dce_unw_resolve s mod → v {
+    = g_dce_unw_pass T
+    ( __dce_emit_module mod ( nurl_str_len mod ) )
+    = g_dce_unw_pass F
 }
 
 // The four index arrays live in `: ~ i` globals as integer casts, which
@@ -120428,16 +120532,27 @@ unsafe @ main → i {
             = compile_error 1
         } {}
     } {}
+    // A field a sink took and the statement's own call gives a value again
+    // is refused where that call may panic: the module's panic graph says,
+    // over the IR in the buffer (resolve_unw_refills, agora #939). Nothing
+    // to ask, nothing done.
+    : ~ s __mod ``
+    : b __unw_ask & != 0 ( nurl_sym_len g_pending_impl `unwrefill` ) <= compile_error 1
+    ? __unw_ask {
+        ( flush_simd_deferred )
+        = __mod ( nurl_print_buf_stop )
+        ( dce_unw_resolve __mod )
+        ? > g_bck_errors 0 { = compile_error 1 } {}
+    } {}
     // Every function this compile will ever emit is now in the buffer:
     // close it and write out the part `main` can reach.
     ? | check_only != compile_error 0 {
         // The fused walk has completed every semantic check. Discard its
         // buffered IR without copying, indexing, printing or splitting it.
-        ( nurl_print_buf_unwind )
+        ? ! __unw_ask { ( nurl_print_buf_unwind ) } {}
         ? != 0 g_core_on { ? != 0 g_eng_decide { = g_eng_on 0 } {} ( core_flush syms ) } {}
     } {
-        ( flush_simd_deferred )
-        : s __mod ( nurl_print_buf_stop )
+        ? ! __unw_ask { ( flush_simd_deferred ) = __mod ( nurl_print_buf_stop ) } {}
         ? != g_dbg_enabled 0 { ( nurl_print_buf_start ) } {}
         ? != 0 ( nurl_str_len g_coverage_prefix ) {
             ? ! ( emit_coverage_modules __mod ) { = compile_error 2 } {}
