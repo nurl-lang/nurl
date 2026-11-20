@@ -2033,17 +2033,24 @@ theorem AbsOK.add {Γ Γ1 : Ctx} (hab0 : S.AbsOK Γ) (hab : S.AbsOK Γ1) {x : Va
 theorem NoPin.lift (h : S.OK) (_hab : S.AbsOK Γa) {y : Var}
     (hb : ∀ bh, S.bnd y = some bh → bh.1 = .replace) : NoPin (S.canon Γa) (S.ρ y) := by
   intro q E hq hm d hd hbd hdr
-  rcases canon_cases h Γa q with ⟨v, rfl, hc⟩ | ⟨hqf, hc⟩
+  rcases canon_cases_sub h Γa q with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hqf, hc⟩
   · rw [hc] at hq
     cases hE : Γa v with
     | none => rw [hE] at hq; cases hq
     | some E0 =>
-      rw [hE] at hq; simp only [Option.map_some, Option.some.injEq] at hq; subst hq
+      rw [hE] at hq; simp only [Option.map_some, Option.some.injEq, Function.comp] at hq; subst hq
+      replace hd : d ∈ (S.liftE v E0).vdeps := by
+        rw [subE_vdeps] at hd
+        obtain ⟨d1, hd1, hdd⟩ := List.mem_flatMap.mp hd
+        rcases S.subD_frame h hdd with rfl | ⟨hout, _⟩
+        · exact hd1
+        · exact absurd hdr.symm (hout _)
       have hrb : E0.mode = .rootb := (liftE_rootb h).mp hm
       have hvd : (S.liftE v E0).vdeps = (S.pe v).vdeps := by simp [liftE, hrb, Entry.vdeps]
       rw [hvd] at hd
       obtain ⟨b, t, rfl, hbb, _, _, hbr, _⟩ := pe_ρ h hd hdr
       exact hbr (hb _ hbb)
+  · rw [hc] at hq; cases hq
   · rw [hc] at hq
     obtain ⟨b, hv, hbb, hk⟩ := h.Φsat q E hq (h.Φrb q E hq hm) (Or.inr hm) d hd y hdr.symm
     have := hb _ hbb; simp only at this; subst this
@@ -2057,9 +2064,16 @@ theorem NoPin.lift (h : S.OK) (_hab : S.AbsOK Γa) {y : Var}
 theorem DbindSafe.canon (h : S.OK) {x : Var} (hbx : S.bnd x = none) (hd : DbindSafe Γa x) :
     DbindSafe (S.canon Γa) (S.ρ x) := by
   intro y E hy hdb hos hn d hdd hnm hdx
-  rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨_, hc⟩
+  rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨_, hc⟩
   · rw [hc] at hy
     obtain ⟨Ea, hEa, rfl⟩ := Option.map_eq_some_iff.mp hy
+    simp only [Function.comp_apply, subE_dbind, subE_mode, subE_ty] at hdb hos hn hdd
+    replace hdd : d ∈ (S.liftE v Ea).vdeps := by
+      rw [subE_vdeps] at hdd
+      obtain ⟨d1, hd1, hdd'⟩ := List.mem_flatMap.mp hdd
+      rcases S.subD_frame h hdd' with rfl | ⟨hout, _⟩
+      · exact hd1
+      · exact absurd hdx.symm (hout _)
     by_cases hrb : Ea.mode = .rootb
     · rw [liftE_dbind h, ite_eq_left hrb] at hdb; cases hdb
     · rw [liftE_dbind h, ite_eq_right hrb] at hdb
@@ -2071,6 +2085,7 @@ theorem DbindSafe.canon (h : S.OK) {x : Var} (hbx : S.bnd x = none) (hd : DbindS
       rcases liftE_vdeps_cases hrb hdd with ⟨d0, hd0, rfl⟩ | ha
       · exact hd v Ea hEa hdb hos0 hn' d0 hd0 (by simpa [Dep.ren] using hnm) (h.inj _ _ hdx)
       · exact A_out h ha x hdx.symm
+  · rw [hc] at hy; cases hy
   · rw [hc] at hy
     rcases h.Φdb y E hy hdb hos hn d hdd hnm with ⟨v, bh, hv, hb⟩ | ⟨hout, _⟩
     · have := h.inj _ _ (hv.trans hdx); subst this; rw [hbx] at hb; cases hb
@@ -4739,15 +4754,17 @@ theorem callPostAux_entry {Γ0 : Ctx} {fn : Fn} {args : List Var} :
     parameters are the caller's own bindings. -/
 theorem canon_noio (h : S.OK) {y : Var} {E : Entry} (hy : S.canon Γa y = some E) (b : Eff) :
     E.mode ≠ .inout b := by
-  rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨_, hc⟩
+  rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨_, hc⟩
   · rw [hc] at hy
     cases hE : Γa v with
     | none => rw [hE] at hy; cases hy
     | some E0 =>
-      rw [hE] at hy; simp only [Option.map_some, Option.some.injEq] at hy; subst hy
+      rw [hE] at hy; simp only [Option.map_some, Option.some.injEq, Function.comp] at hy; subst hy
+      rw [subE_mode]
       by_cases hrb : E0.mode = .rootb
       · simp only [liftE, hrb, ↓reduceIte]; rw [h.pe_rb]; simp
       · rw [liftE_mode v hrb]; cases E0.mode <;> simp [liftMode]
+  · rw [hc] at hy; cases hy
   · rw [hc] at hy; exact h.Φio y E b hy
 
 /-- A symbolic name's change, where the call places it, ends nothing fixed
