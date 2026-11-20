@@ -1416,7 +1416,7 @@ class FnCheck:
             # captured (§7.5); a binding of one - handed back by name, or
             # assigned to a binding that outlives its captures - holds only
             # copies of their handles (MEMORY.md §2.11, h310)
-            av = AV(av.own, av.loans, av.alias, self.closure_owned(av.held), av.call)
+            av = AV(av.own, av.loans, av.alias, self.closure_owned(av.held, ret=True), av.call)
         if (dest_vid in self.own_slots and av.loans and av.own in ("L", "O") and not is_ret and not stored
                 and dest_ty == ("s",) and op[0] == "v"):
             # a string binding that owns its value from birth takes its own
@@ -3078,12 +3078,15 @@ class FnCheck:
                     self.err(line, f"a closure reads, through {self.pname(place)}, a view of a value that has ended")
                     return
 
-    def closure_owned(self, held):
+    def closure_owned(self, held, ret=False):
         """What a closure kept by an owner - stored into a container, a
         field or a literal, or handed back - holds: it copies in every
         capture it held a handle of that has a copy (§7.5), so only what it
         cannot copy, the views its captures hold and its pointers into the
-        frame still borrow."""
+        frame still borrow. `ret`: the literal is handed back as it is (no
+        owner adopts it): a parameter's handle stays in its env as it is, a
+        view of the caller's value lent through the result - as nurlc's
+        engine reads it (__closure_owned_at, AGORA-877)."""
         bases = [(hp[:-1], l[1]) for hp, l in held
                  if isinstance(l, tuple) and len(l) == 2 and l[0] == "clo" and hp and hp[-1] == "^f"]
         if not bases:
@@ -3104,6 +3107,8 @@ class FnCheck:
                 if hp[:n] != base or len(hp) != n + 1 or not hp[n].startswith("^") or hp[n] == "^f":
                     continue
                 if l not in self.loans or self.loans[l][1] != "handle":
+                    continue
+                if ret and self.loans[l][0][0] in self.pidx:
                     continue
                 i = int(hp[n][1:])
                 cty = body.vars[body.params[i]].ty if i < len(body.params) else None
