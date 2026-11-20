@@ -1076,6 +1076,71 @@ theorem canon_live_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) {y : Var}
     · have hout : ∀ v, S.ρ v ≠ r := fun v hv => hrr ⟨v, hv⟩
       exact canon_frameRoot h hout (h.Φwf y E' hy hl hn r hr hout)
 
+/-- AGORA-937: `canon_wf` with regions: the lifted context is well formed
+    under the lift's substitution. (Two branches, a frame binding's
+    dependency on an `inout` argument, still take `noPi`, until AbsOK's exact
+    region clause lands.) -/
+theorem canon_wf_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.canon Γa) := by
+  refine ⟨fun y E' hy hl hn r hr => canon_live_sub h hab hw hy hl hn hr,
+    fun y E' hy hd hos hn d hdd hnm => ?_, fun y E' hy ha => ?_, fun y E' hy hd => ?_⟩
+  · rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hyf, hc⟩
+    · rw [hc] at hy
+      cases hE : Γa v with
+      | none => rw [hE] at hy; cases hy
+      | some E =>
+        rw [hE] at hy; simp only [Option.map_some, Option.some.injEq, Function.comp] at hy; subst hy
+        rw [subE_dbind] at hd
+        rw [subE_vdeps] at hdd
+        obtain ⟨d1, hd1, hdd1⟩ := List.mem_flatMap.mp hdd
+        by_cases hrb : E.mode = .rootb
+        · rw [liftE_dbind h, ite_eq_left hrb] at hd; cases hd
+        · rw [liftE_dbind h, ite_eq_right hrb] at hd
+          have hos0 : E.mode.ownSlot = true := by rwa [subE_mode, liftE_mode v hrb, liftMode_ownSlot] at hos
+          have hn' : E.ty ≠ .int ∨ E.mode = .rootb := by
+            rcases hn with h' | h'
+            · rw [subE_ty, liftE_ty v hrb] at h'; exact Or.inl h'
+            · rw [subE_mode, liftE_rootb h] at h'; exact absurd h' hrb
+          rcases S.mem_subD hdd1 with rfl | ⟨_, _, _, hv⟩
+          · refine canon_root_of_subD h hdd1 ?_
+            rcases liftE_vdeps_cases hrb hd1 with ⟨d0, hd0, rfl⟩ | ha
+            · obtain ⟨Er, hEr, hro⟩ := hw.dtor v E hE hd hos0 hn' d0 hd0 (by simpa [Dep.ren] using hnm)
+              exact Or.inl ⟨d0.root, Er, rfl, hEr, hro⟩
+            · exact Or.inr ⟨A_out h ha, A_root h ha⟩
+          · obtain ⟨hout, hex⟩ := S.σ_frame h hv
+            exact canon_frameRoot h hout hex
+    · rw [hc] at hy; cases hy
+    · rw [hc] at hy
+      rcases h.Φdb y E' hy hd hos hn d hdd hnm with ⟨v, bh, hv, hb⟩ | ⟨hout, hex⟩
+      · obtain ⟨Ev, hEv, hm, _⟩ := hab.2.2.1 v bh hb
+        rw [← hv]; exact canon_root_sub h hEv (by rw [hm]; rfl) (h.noPi v)
+      · exact canon_frameRoot h hout hex
+  · rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hyf, hc⟩
+    · rw [hc] at hy
+      cases hE : Γa v with
+      | none => rw [hE] at hy; cases hy
+      | some E =>
+        rw [hE] at hy; simp only [Option.map_some, Option.some.injEq, Function.comp] at hy; subst hy
+        rw [subE_dtor] at ha; rw [subE_dbind]
+        by_cases hrb : E.mode = .rootb
+        · rw [liftE_dtor' h, ite_eq_left hrb] at ha; cases ha
+        · rw [liftE_dtor' h, ite_eq_right hrb] at ha
+          rw [liftE_dbind h, ite_eq_right hrb]; exact hw.arm v E hE ha
+    · rw [hc] at hy; cases hy
+    · rw [hc] at hy; exact h.Φarm y E' hy ha
+  · rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hyf, hc⟩
+    · rw [hc] at hy
+      cases hE : Γa v with
+      | none => rw [hE] at hy; cases hy
+      | some E =>
+        rw [hE] at hy; simp only [Option.map_some, Option.some.injEq, Function.comp] at hy; subst hy
+        rw [subE_dbind] at hd; rw [subE_ty]
+        by_cases hrb : E.mode = .rootb
+        · rw [liftE_dbind h, ite_eq_left hrb] at hd; cases hd
+        · rw [liftE_dbind h, ite_eq_right hrb] at hd
+          rw [liftE_ty v hrb]; exact hw.view v E hE hd
+    · rw [hc] at hy; cases hy
+    · rw [hc] at hy; exact h.Φview y E' hy hd
+
 theorem allKinds_notName {rs : List Var} {d : Dep} (h : d ∈ allKinds rs) : d.kind.isName = false := by
   simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at h
   obtain ⟨r, _, hd⟩ := h
