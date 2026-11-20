@@ -303,6 +303,8 @@
 : i ENG_SQ_MEMO 4096
 
 : ~ i g_eng_on 0  // 1: the ownership engine reads the module's IR and prints its answers (`--emit-core --engine`)
+: ~ i g_fe_rawonly 0  // 1 while a program's own raw function is walked (g_eng_rawwalk): only a use of a view that ended or of a value released counts, the walk's raw-pointer refusals (AGORA-877)
+: ~ i g_eng_rawwalk 0  // 1: a raw function's body is the engine's to read too: a pointer is a view of what it was made from (`--engine-rawwalk`, AGORA-877)
 : ~ i g_eng_decide 0  // 1: what the engine finds refuses the program, printed as diagnostics; no IR text is made (`--engine-decides`)
 : ~ i g_eng_nref 0  // …how many findings it reported
 : ~ i g_core_flushed 0  // 1 once core_flush has run
@@ -11778,7 +11780,8 @@ unsafe @ eng_keep_fn → v {
     // (a trusted function whose body crosses the raw boundary is never
     // read: the walk's answers stand for it, eng_select. Only what its
     // summary is read with is kept - its parameters - not its statements)
-    : b body ! & != 0 & g_core_fflags 1 != 0 & g_core_fflags 6
+    // (…unless the engine reads raw bodies itself, g_eng_rawwalk)
+    : b body | != 0 g_eng_rawwalk ! & != 0 & g_core_fflags 1 != 0 & g_core_fflags 6
     : i code_n ? body g_core_code_n 0
     : i pl_n ? body g_core_pl_n 0
     // (its parameters and captures, counted once)
@@ -12184,6 +12187,9 @@ unsafe @ eng_keep_fn → v {
     ? | | == kind EK_VEC == kind EK_SLICE == kind EK_BOX { ^ ( et_at t ET_E1 ) } {}
     ? & == kind EK_NAMED ( et_flag t ETF_HANDLE ) { ^ ( et_at t ET_E1 ) } {}
     ? == kind EK_STRING { ^ ET_NUM } {}
+    // (a pointer's element is its pointee, where the engine reads raw
+    // bodies - AGORA-877)
+    ? & == kind EK_PTR != 0 g_eng_rawwalk { ^ ( et_at t ET_E1 ) } {}
     // an enum of the program's whose container payloads all hold one element
     // type (`Json`: `JArr ( Vec Json )`, `JObj ( Vec Json )`): `*` is an
     // element of one of them - what a walk down it reaches
@@ -12222,7 +12228,7 @@ unsafe @ eng_keep_fn → v {
 @ et_is_view i t → b {
     ? < t 0 { ^ F } {}
     : i kind ( et_kind t )
-    ^ | == kind EK_S == kind EK_SLICE
+    ^ | | == kind EK_S == kind EK_SLICE & == kind EK_PTR != 0 g_eng_rawwalk
 }
 
 // The named types the question being answered is inside of: a type that
@@ -12285,7 +12291,9 @@ unsafe @ eng_keep_fn → v {
 @ __et_scalar i t → b {
     ? < t 0 { ^ T } {}
     : i kind ( et_kind t )
-    ? | == kind EK_SCALAR == kind EK_PTR { ^ T } {}
+    // (…except where the engine reads raw bodies: a pointer is then a view
+    // of what it was made from, g_eng_rawwalk, AGORA-877)
+    ? | == kind EK_SCALAR & == kind EK_PTR == 0 g_eng_rawwalk { ^ T } {}
     ? == kind EK_OPT { ^ ( __et_scalar ( et_at t ET_E1 ) ) } {}
     ? != kind EK_NAMED { ^ F } {}
     ? ( __et_in_seen t ) { ^ F } {}
@@ -13441,6 +13449,10 @@ unsafe @ eng_byte s w i k → i {
 // findings are (line, message, group) triples.
 @ eng_err i line i grp s msg → v {
     ? | == 0 g_fc_final < g_fe_cur 0 { ^ } {}
+    // (In a program's own raw function, only what the author cannot vouch
+    // for: a pointer used after what it points into changed, moved or was
+    // released - AGORA-877.)
+    ? & != 0 g_fe_rawonly & != grp EG_ENDED != grp EG_RELEASED { ^ } {}
     ( wv_push g_fe_cur line )
     ( wv_push g_fe_cur ( __core_in msg ) )
     ( wv_push g_fe_cur grp )
@@ -22756,6 +22768,13 @@ unsafe @ eng_byte s w i k → i {
     ( eng_prim `thread_spawn` `in` `own` `` `` `` `` `` `` `0` `` `` `` `` )
     ( eng_prim `thread_spawn_owned` `in` `own` `` `` `` `` `` `` `0` `` `` `` `` )
     ( eng_prim `vec_at` `in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
+    // (Where the engine reads raw bodies, a pointer is a view: what
+    // vec_data and nurl_vctl_data hand back points into the Vec's buffer,
+    // as slice_from_vec's view does - AGORA-877.)
+    ? != 0 g_eng_rawwalk {
+        ( eng_prim `vec_data` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
+        ( eng_prim `nurl_vctl_data` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
+    } {}
     ( eng_prim `vec_clear` `in` `none` `` `` `0 - drop` `` `` `` `` `` `` `` `` )
     ( eng_prim `vec_clone` `in` `own` `` `- 0 - held` `` `` `` `0` `` `` `` `` `` )
     ( eng_prim `vec_each` `in in` `none` `` `` `` `` `` `0` `` `1` `1 0 0 *` `` `` )
@@ -23446,7 +23465,10 @@ unsafe @ eng_byte s w i k → i {
     : i leave ( wv_new )
     : ~ i f - n 1
     ~ >= f 0 {
-        ? == 0 & ( ef_at f EF_FLAGS ) 1 { ( wv_push todo f ) ( wv_push by -1 ) ( wv_push leave 0 ) } {}
+        // (…and, where the engine reads raw bodies, a program's own raw
+        // function: what its pointers point into is checked - AGORA-877)
+        : b __rroot & != 0 g_eng_rawwalk ! ( bck_trusted_file ( eng_str ( ef_at f EF_FILE ) ) )
+        ? | == 0 & ( ef_at f EF_FLAGS ) 1 __rroot { ( wv_push todo f ) ( wv_push by -1 ) ( wv_push leave 0 ) } {}
         = f - f 1
     }
     : i callees ( wv_new )
@@ -23465,7 +23487,11 @@ unsafe @ eng_byte s w i k → i {
                 : ~ b keep T
                 ? != 0 & flags 1 {
                     ? | >= ( sx_declared name ) 0 >= ( sx_declared_tmpl ( ef_at fn EF_TMPL ) ) 0 { = keep F } {
-                        ? != 0 & flags 6 {
+                        // (…unless the engine reads raw bodies itself: a
+                        // pointer is then a view of what it was made from,
+                        // and the body's own effects are its summary -
+                        // g_eng_rawwalk, AGORA-877)
+                        ? & != 0 & flags 6 == 0 g_eng_rawwalk {
                             // its body crosses the raw boundary (raw memory, a
                             // raw callee, a foreign function): the walk's
                             // answers stand for it until a summary is declared
@@ -23684,7 +23710,12 @@ unsafe @ eng_byte s w i k → i {
             ? != 0 ( wv_at g_fc_dirty f ) {
                 ( wv_put g_fc_dirty f 0 )
                 = any T
-                : b reported == 0 ( wv_at g_fc_trusted f )
+                // (…and, where the engine reads raw bodies, a program's own
+                // raw function: its raw-pointer findings, g_fe_rawonly -
+                // AGORA-877)
+                : b rawrep & & != 0 g_eng_rawwalk != 0 ( wv_at g_fc_trusted f ) ! ( bck_trusted_file ( eng_str ( ef_at f EF_FILE ) ) )
+                : b reported | == 0 ( wv_at g_fc_trusted f ) rawrep
+                = g_fe_rawonly ? rawrep 1 0
                 ? reported {
                     ? < ( wv_at g_fe f ) 0 { ( wv_put g_fe f ( wv_new ) ) } {}
                     ( wv_trunc ( wv_at g_fe f ) 0 )
@@ -23693,6 +23724,7 @@ unsafe @ eng_byte s w i k → i {
                 = g_fc_reading f
                 : b changed ( eng_check_fn f reported )
                 = g_fc_reading -1
+                = g_fe_rawonly 0
                 ? != g_fc_unsup 0 { ( eng_skip_why_s g_fc_unsup ) } {}
                 // (the function itself is one of the readers once its summary
                 // is merged; it is walked again for its own change only if
@@ -120647,6 +120679,7 @@ unsafe @ main → i {
         // (the engine decides beside the walk: the walk's own refusals
         // still stop the compile where they are met, and what the engine
         // finds at the end of the module refuses it too)
+        ? ( seq a `--engine-rawwalk` ) { = g_eng_rawwalk 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-decides` ) { = g_core_on 1 = g_eng_on 1 = g_eng_decide 1 = ai + ai 1 continue } {}
         ? ( seq a `--engine-trace2` ) { = check_only T = g_core_on 1 = g_walk_owns 0 = g_eng_on 1 = g_eng_dbg 2 = ai + ai 1 continue } {}
         ? != 0 ( nurl_str_starts a `--coverage-link-ir=` ) {
