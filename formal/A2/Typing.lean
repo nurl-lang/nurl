@@ -406,6 +406,29 @@ def HeldSrc (Γ : Ctx) (y : Var) : Prop :=
   ∃ E, Γ y = some E ∧ ((E.mode.ownSlot = true ∧ E.ty.holdsView = false) ∨
     (E.mode = .bor ∧ E.heldFresh = true ∧ E.live = true))
 
+/-- AGORA-937: a parameter's region is no frame binding. Every fresh-bit
+    rule relies on this once regions are real (agora #4147). -/
+theorem Mode.region_not_frame : ¬ Mode.frame .region := by
+  rintro (h | ⟨_, h⟩) <;> cases h
+
+/-- AGORA-937: a parameter's region has no slot of its own. -/
+theorem Mode.region_not_ownSlot : Mode.ownSlot .region = false := rfl
+
+/-- AGORA-937: a region is never a fresh source: what it stands for is the
+    caller's memory. -/
+theorem pi_not_fresh {Γ : Ctx} {y : Var} {E : Entry} (hE : Γ y = some E) (hr : E.mode = .region) :
+    ¬ FreshSrc Γ y := by
+  rintro ⟨E', h', hf⟩; rw [hE] at h'; cases h'; rw [hr] at hf
+  rcases hf with hf | ⟨hf, _⟩
+  · exact Mode.region_not_frame hf
+  · cases hf
+
+/-- AGORA-937: a region is never a held-fresh source either. -/
+theorem pi_not_heldSrc {Γ : Ctx} {y : Var} {E : Entry} (hE : Γ y = some E) (hr : E.mode = .region) :
+    ¬ HeldSrc Γ y := by
+  rintro ⟨E', h', hf⟩; rw [hE] at h'; cases h'; rw [hr] at hf
+  rcases hf with ⟨hf, _⟩ | ⟨hf, _⟩ <;> cases hf
+
 @[simp] theorem Entry.fresh_vdeps (E : Entry) (f : Bool) : ({ E with fresh := f } : Entry).vdeps = E.vdeps := rfl
 
 theorem Entry.with_fresh_eq {E : Entry} (h : E.fresh = false) : ({ E with fresh := false } : Entry) = E := by

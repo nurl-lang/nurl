@@ -634,6 +634,12 @@ import A3
 #print axioms A2.RSetup.canon_noPi
 #print axioms A2.rdsπ_nopi
 #print axioms A2.mem_rdsπ
+-- AGORA-937: a region is no frame binding, has no slot, and is never a (held-)fresh
+-- source; a region's index is always bound, so a fresh binding is never a region
+#print axioms A2.Mode.region_not_frame
+#print axioms A2.pi_not_fresh
+#print axioms A2.pi_not_heldSrc
+#print axioms A2.RSetup.AbsOK.notPiFresh
 -- AGORA-909: a field or payload read of a frame binding of a view-free type that holds
 -- nothing may be fresh (RhsT.fst/snd/getl/getr), so a push through `. b items` of an
 -- `inout` parameter is an `edit false` (A2/FreshProjWitness.lean)

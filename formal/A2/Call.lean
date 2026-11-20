@@ -2523,7 +2523,7 @@ theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).
         generalize fn.params[v] = pt; obtain ⟨pm, t⟩ := pt; cases pm <;> simp [paramE]
       · split at hv
         · simp only [Option.some.injEq] at hv; subst hv; exact resMode_region fn
-        · cases hv), fun hp => by simp [callS] at hp⟩⟩
+        · cases hv), fun hp => by simp [callS] at hp⟩, fun v hp => by simp [callS] at hp⟩
   · unfold sigCtx at hv
     split at hv
     · rename_i hvl
