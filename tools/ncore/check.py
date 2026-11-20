@@ -3278,12 +3278,14 @@ class FnCheck:
         for vid in sorted(st.vals, reverse=True):
             av = st.vals[vid]
             v = self.fn.vars[vid]
-            if (v.kind == "param" and av.own == "P" and vid in self.pidx and vid != keep
+            if (v.kind == "param" and av.own in ("P", "X") and vid in self.pidx and vid != keep
                     and self.fn.modes[self.pidx[vid]] == "sink"):
                 # (a `sink` parameter still held at the exit is released by
                 # this function: its `% Drop` runs here, and what it changes
                 # of a shared payload is in this summary's regions - so a
-                # caller's view through another handle ends at the call)
+                # caller's view through another handle ends at the call;
+                # one consumed on some paths only, `X`, is released on the
+                # others)
                 d0 = st.dead
                 self.run_dtor(st, (vid, ()), v.ty, line)
                 killed |= st.dead - d0
@@ -3413,6 +3415,14 @@ class FnCheck:
                     av = st.vals.get(vid)
                     if av is None:
                         continue
+                    vty = self.fn.vars[vid].ty
+                    if (av.own in ("O", "X") and av.held and vty is not None and vty[0] == "named"
+                            and vty[1] in getattr(self.prog, "udrop", ())):
+                        # (its destructor may read the views it holds: its
+                        # drop after the chain is a use of what they point
+                        # into, as at a scope end - MEMORY.md §2.14)
+                        self.check_live(st, AV("N", held=av.held), self.fn.vars[vid].line,
+                                        f"the drop of {self.vname(vid)}", held=True)
                     if av.own == "O":
                         self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, self.fn.vars[vid].line)
                         self.effect(st, (vid, ()), "replace", self.fn.vars[vid].line)
@@ -4397,6 +4407,10 @@ class FnCheck:
                     if not self.handover(st, (vid, ())):
                         self.run_dtor(st, (vid, ()), v.ty, ln)
                     self.effect(st, (vid, ()), "replace", ln)
+                elif cur is not None and cur.own == "X":
+                    # (moved on some paths only: on the others the old value
+                    # is released here, and its `% Drop` runs)
+                    self.run_dtor(st, (vid, ()), v.ty, ln)
                 new = self.reroot(st, new, vid)
                 if cur is not None and cur.own == "P" and v.ty is not None and v.ty[0] == "closure":
                     # a closure binding reached through a pointer (an

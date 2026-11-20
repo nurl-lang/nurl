@@ -64,6 +64,10 @@ PRIMS = {
     # holds, which it copies (MEMORY.md §2.13): the copy holds the source's
     # loans.
     "mem_dup": S(["in"], res="own", rholds=[((), 0, (), "held")], elems=[0]),
+    # a slice parameter's copy in a literal that owns the field by type, of
+    # elements that hold no view: its own buffer, nothing of the argument
+    # (nurlc's gen_agg_lit, AGORA-895)
+    "__nurl_slice_copy": S(["in"], res="own"),
     # ---- String ---------------------------------------------------------
     "string_from": S(["in"], res="own"),
     "string_new": S([], res="own"),
