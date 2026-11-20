@@ -1469,6 +1469,7 @@ theorem frame_sat (h : CallH P Γ F x fn args base) :
 
 theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK where
   inj := h.ren_inj
+  noPi _ := rfl
   Rout r hr := (h.R_facts hr).1
   Rroot r hr := by
     obtain ⟨hout, Er, hEr, hro⟩ := h.R_facts hr

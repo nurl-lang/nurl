@@ -16,6 +16,38 @@ def Dep.ren (ρ : Var → Var) (d : Dep) : Dep := ⟨ρ d.root, d.kind⟩
 
 def rds (ρ : Var → Var) (ds : List Dep) : List Dep := ds.map (Dep.ren ρ)
 
+/-- The lift of dependencies: a region's are what it stands for (`σ`),
+    every other one is renamed. -/
+def rdsπ (ρ : Var → Var) (isPi : Var → Bool) (σ : Var → List Dep) (ds : List Dep) : List Dep :=
+  ds.flatMap fun d => if isPi d.root then σ d.root else [Dep.ren ρ d]
+
+/-- With no region among them, the lift renames (AGORA-937, condition 4). -/
+theorem rdsπ_nopi {ρ : Var → Var} {isPi : Var → Bool} {σ : Var → List Dep} {ds : List Dep}
+    (h : ∀ d ∈ ds, isPi d.root = false) : rdsπ ρ isPi σ ds = rds ρ ds := by
+  unfold rdsπ rds
+  induction ds with
+  | nil => rfl
+  | cons d ds ih =>
+    simp only [List.flatMap_cons, List.map_cons, h d List.mem_cons_self, Bool.false_eq_true, ↓reduceIte,
+      List.singleton_append]
+    rw [ih (fun e he => h e (List.mem_cons_of_mem _ he))]
+
+theorem mem_rdsπ {ρ : Var → Var} {isPi : Var → Bool} {σ : Var → List Dep} {ds : List Dep} {e : Dep} :
+    e ∈ rdsπ ρ isPi σ ds ↔
+      ∃ d ∈ ds, (isPi d.root = true ∧ e ∈ σ d.root) ∨ (isPi d.root = false ∧ e = Dep.ren ρ d) := by
+  unfold rdsπ
+  simp only [List.mem_flatMap]
+  constructor
+  · rintro ⟨d, hd, he⟩
+    refine ⟨d, hd, ?_⟩
+    cases hp : isPi d.root
+    · rw [hp] at he; simp at he; exact Or.inr ⟨rfl, he⟩
+    · rw [hp] at he; simp at he; exact Or.inl ⟨rfl, he⟩
+  · rintro ⟨d, hd, ⟨hp, he⟩ | ⟨hp, rfl⟩⟩
+    · exact ⟨d, hd, by rw [hp]; simpa using he⟩
+    · exact ⟨d, hd, by rw [hp]; simp⟩
+
+
 def liftMode : Mode → Mode
   | .inout _ => .own
   | m => m
@@ -31,6 +63,8 @@ structure RSetup where
   pty : Var → Ty                     -- an `inout` parameter's type
   N   : List Dep                     -- what the arguments hold by name, of the frame
   sym : List Dep                     -- the callee's symbolic names on its `inout` parameters
+  isPi : Var → Bool := fun _ => false   -- AGORA-937: the callee's parameter regions
+  σ : Var → List Dep := fun _ => []      -- AGORA-937: what each region stands for, at the caller
 
 namespace RSetup
 variable (S : RSetup)
@@ -120,9 +154,20 @@ theorem liftE_fresh_of {v : Var} {E : Entry} (h : E.mode ≠ .rootb) : (S.liftE 
 @[simp] theorem liftE_fresh_false {v : Var} {E : Entry} (h : E.fresh = false) : (S.liftE v E).fresh = false := by
   rw [liftE_fresh]; split <;> simp [h]
 
+/-- AGORA-937: a lifted dependency on a parameter's region is what the region
+    stands for at the caller (`σ`); any other is kept. -/
+noncomputable def subD (d : Dep) : List Dep :=
+  match S.inv d.root with
+  | some v => if S.isPi v then S.σ v else [d]
+  | none => [d]
+
+/-- ... applied to what a lifted entry depends on and holds. -/
+noncomputable def subE (E : Entry) : Entry :=
+  { E with path := E.path.flatMap S.subD, held := E.held.flatMap S.subD }
+
 noncomputable def canon (Γa : Ctx) : Ctx := fun y =>
   match S.inv y with
-  | some v => (Γa v).map (S.liftE v)
+  | some v => if S.isPi v then none else (Γa v).map (S.subE ∘ S.liftE v)
   | none => S.Φ y
 
 end RSetup
@@ -130,6 +175,8 @@ end RSetup
 /-- What a call setting must satisfy. -/
 structure RSetup.OK (S : RSetup) : Prop where
   inj    : ∀ v w, S.ρ v = S.ρ w → v = w
+  /-- AGORA-937 (stage 2a): no callee binding is a region yet. -/
+  noPi   : ∀ v, S.isPi v = false
   Rout   : ∀ r ∈ S.R, ∀ v, S.ρ v ≠ r
   Rroot  : ∀ r ∈ S.R, ∃ E, S.Φ r = some E ∧ E.mode.isRoot = true
   Fcout  : ∀ v, S.ρ v ∉ S.Fc
@@ -249,8 +296,23 @@ theorem inv_none {y : Var} (hy : ∀ v, S.ρ v ≠ y) : S.inv y = none := by
   rw [dite_eq_right]
   exact fun ⟨v, hv⟩ => hy v hv
 
+/-- AGORA-937 (stage 2a): with no region, the substitution keeps every
+    dependency, and every entry. -/
+theorem subD_nopi (h : S.OK) (d : Dep) : S.subD d = [d] := by
+  unfold subD; split
+  · rw [h.noPi]; rfl
+  · rfl
+
+theorem subE_nopi (h : S.OK) (E : Entry) : S.subE E = E := by
+  have hf : ∀ ds : List Dep, ds.flatMap S.subD = ds := fun ds => by
+    induction ds with
+    | nil => rfl
+    | cons d ds ih => simp [List.flatMap_cons, subD_nopi h, ih]
+  cases E; simp [subE, hf]
+
 theorem canon_ρ (h : S.OK) (Γa : Ctx) (v : Var) : S.canon Γa (S.ρ v) = (Γa v).map (S.liftE v) := by
-  simp [canon, inv_ρ h]
+  simp only [canon, inv_ρ h, h.noPi, Bool.false_eq_true, ↓reduceIte]
+  cases Γa v <;> simp [subE_nopi h]
 
 theorem canon_frame (Γa : Ctx) {y : Var} (hy : ∀ v, S.ρ v ≠ y) : S.canon Γa y = S.Φ y := by
   simp [canon, inv_none hy]
@@ -3925,7 +3987,10 @@ theorem canon_freshT (h : S.OK) {Γa Δa : Ctx}
   intro hf y E hy
   unfold canon at hy
   split at hy
-  · obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hy
+  · rename_i v _
+    simp only [h.noPi, Bool.false_eq_true, ↓reduceIte] at hy
+    obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp hy
+    simp only [Function.comp, subE_nopi h]
     exact freshE_lift h (hsrc (freshOK_unlift h hf) _ E1 h1)
   · rename_i hinv
     have hyΓ : S.canon Γa y = some E := by unfold canon; rw [hinv]; exact hy
