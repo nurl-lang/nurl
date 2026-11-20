@@ -6947,26 +6947,32 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
         S.liftX_under h (hab.fresh hx) (hab.notPiFresh hx) _ _ (S.liftX_under h (hab.fresh hz) (hab.notPiFresh hz) n Γc hh).2⟩)
     have hbx := hab.fresh hx
     have hbz := hab.fresh hz
+    have hnpx := hab.notPiFresh hx
+    have hnpz := hab.notPiFresh hz
+    have hnpy : S.isPi y = false := hvs y (by simp [Stmt.vars])
     have hpz := EndOK.lift h abk hbz hpze
-    have hpx := EndOK.lift h (abk.exitScope hbz (hab.notPiFresh hz)) hbx hpxe
-    rw [canon_exitScope h abk (Or.inl hbz)] at hpx
-    refine ⟨?_, (abk.exitScope hbz (hab.notPiFresh hz)).exitScope hbx (hab.notPiFresh hx)⟩
-    rw [canon_exitScope h (abk.exitScope hbz (hab.notPiFresh hz)) (Or.inl hbx), canon_exitScope h abk (Or.inl hbz)]
-    have hwc := canon_wf h habz hw3
-    have hnc := canon_names h habz hn3
+    have hpx := EndOK.lift h (abk.exitScope hbz hnpz) hbx hpxe
+    rw [canon_exitScopes h abk (Or.inl hbz) hnpz] at hpx
+    refine ⟨?_, (abk.exitScope hbz hnpz).exitScope hbx hnpx⟩
+    rw [canon_exitScopes h (abk.exitScope hbz hnpz) (Or.inl hbx) hnpx, canon_exitScopes h abk (Or.inl hbz) hnpz]
+    have hwc := canon_wf_sub h habz hw3 hn3
+    have hnc := canon_names_sub h habz hn3
     have hal : Allowed S .replace false y := allowed_replace hab hy (by
       rcases hrep with h1 | h1
       · exact Or.inl h1
       · exact Or.inr (Or.inr h1)) false
-    rw [canon_setE h, canon_setE h, canon_setE h, canon_kill h hab hal,
+    rw [canon_setEs h _ hnpz, canon_setEs h _ hnpx, canon_setEs h _ hnpy, canon_kill h hab hal hnpy,
       liftE_moved _ hrb] at hwc hnc tk
     have hxz' : S.ρ x ≠ S.ρ z := fun e => hxz (h.inj _ _ e)
-    refine StmtT.unpair (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hy]; rfl)
-      (by rw [liftE_live]; exact hl) (by
-        rw [liftE_mode y hrb]; rcases hrep with h1 | h1 <;> rw [h1] <;> exact Or.inl rfl)
-      (by rw [liftE_ty' h hab hy]; exact hty)
-      (h.Fcout y) (by rw [canon_ρ h, hx]; rfl) (by rw [canon_ρ h, hz]; rfl) hxz' (h.Fcout x) (h.Fcout z)
-      (StmtT.weakenIn ⟨PW.setE (PW.setE (PW.refl _) (compE_lift h hab hy a x)) (compE_lift h hab hy b z),
+    have hcl : ∀ t w, EntryWeaker (compE (S.subE (S.liftE y E)) t) (S.subE (S.liftE w (compE E t))) :=
+      fun t w => by rw [compE_subE]; exact S.subE_weaker (compE_lift h hab hy t w)
+    refine StmtT.unpair (by rw [src_rename]; exact hks) (canon_some h hy hnpy)
+      (by rw [subE_live, liftE_live]; exact hl) (by
+        rw [subE_mode, liftE_mode y hrb]; rcases hrep with h1 | h1 <;> rw [h1] <;> exact Or.inl rfl)
+      (by rw [subE_ty, liftE_ty' h hab hy]; exact hty)
+      (h.Fcout y) (by rw [canon_ρs h _ hnpx, hx]; rfl) (by rw [canon_ρs h _ hnpz, hz]; rfl) hxz' (h.Fcout x)
+      (h.Fcout z)
+      (StmtT.weakenIn ⟨PW.setE (PW.setE (PW.refl _) (hcl a x)) (hcl b z),
         hwc, hnc⟩ tk) (NoPin.lift h hab (bnd_replace hab hy (by
           rcases hrep with h1 | h1
           · exact Or.inl h1
@@ -6996,10 +7002,9 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- (`editB_ren_facts`), then `y` bound to the element, as `letv` binds
     intro _ hab hw hn hfo hT hvs
     have hR : S.R = [] := hT (.inl rfl)
-    obtain ⟨-, -, hthru', hne', heq, -⟩ := editB_ren_facts h hab hx hmx hl hty
+    obtain ⟨-, -, hthru', hne', heq, hpfix⟩ := editB_ren_facts h hab hx hmx hl hty
       (EditArg.trunc (t := t) hie) (fun _ h' => by cases h') hx hl hne hthru (Or.inl hR)
       (fun v hv => hvs v (by simp [Stmt.vars, Edit.vars] at hv ⊢; simp [hv]))
-    simp only [subE_nopi h] at heq
     have hrb : Ex.mode ≠ .rootb := by rw [hmx]; simp
     have hab2 : S.AbsOK (A2.setE (A2.killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
       (hab.killNames _).setE' hab hx rfl rfl hrb (fun hf => absurd hf (by simp [Entry.fixed, hmx]))
@@ -7015,24 +7020,30 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       exact h1.bind (setE_none (killNames_none hy _) hyx) (FreshE.of_fresh (compE_fresh Ex t))) (fun _ => hR)
       (fun v hv => hvs v (by simp [Stmt.vars, hv]))
     have hbx := hab.fresh hy
-    have tk := tk.mono (S.liftX_under h hbx (hab.notPiFresh hy))
-    refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hy)⟩
-    rw [canon_exitScope h abk (Or.inl hbx)]
-    have hwc := canon_wf h habb hwb
-    have hnc := canon_names h habb hnb
-    rw [canon_setE h, heq] at hwc hnc tk
-    have hty1 : (S.liftE x Ex).ty = .vec t := by rw [liftE_ty x hrb, hty]
-    exact StmtT.takeB (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hy]; rfl) (h.Fcout y)
-      (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
-      hty1 hhv (h.Fcout x) (exprT_ren h hab hie (fun v hv => hvs v (by simp [Stmt.vars, hv]))) hne' hthru' (fun hd => dtorHead_rename h.inj (hnd hd))
-      (StmtT.weakenIn ⟨PW.setE (PW.refl _) (compE_liftE_weaker hhv), hwc, hnc⟩ tk)
+    have hnpy := hab.notPiFresh hy
+    have hnpx : S.isPi x = false := hvs x (by simp [Stmt.vars])
+    have tk := tk.mono (S.liftX_under h hbx hnpy)
+    refine ⟨?_, abk.exitScope hbx hnpy⟩
+    rw [canon_exitScopes h abk (Or.inl hbx) hnpy]
+    have hwc := canon_wf_sub h habb hwb hnb
+    have hnc := canon_names_sub h habb hnb
+    rw [canon_setEs h _ hnpy, heq, ← hpfix] at hwc hnc tk
+    have hty1 : (S.subE (S.liftE x Ex)).ty = .vec t := by rw [subE_ty, liftE_ty x hrb, hty]
+    exact StmtT.takeB (by rw [src_rename]; exact hks) (by rw [canon_ρs h _ hnpy, hy]; rfl) (h.Fcout y)
+      (canon_some h hx hnpx) (by rw [subE_mode, liftE_mode x hrb, hmx]; rfl)
+      (by rw [subE_live, liftE_live]; exact hl)
+      hty1 hhv (h.Fcout x) (exprT_ren h hab hie (fun v hv => hvs v (by simp [Stmt.vars, hv])))
+      (by rw [hpfix]; exact hne') (by rw [subE_ty, hpfix]; exact hthru')
+      (fun hd => dtorHead_rename h.inj (hnd hd))
+      (StmtT.weakenIn ⟨PW.setE (PW.refl _) (by rw [compE_subE]; exact S.subE_weaker (compE_liftE_weaker hhv)),
+        hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
   | @takeBV _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hxF hie hne hthru hV hnd hk hpe ih =>
     -- AGORA-897: `editBV`'s truncation where the call places it
     -- (`editBV_ren_facts`), then `y` bound to the element, as `letv` binds
     intro _ hab hw hn hfo hT hvs
     have hR : S.R = [] := hT (.inl rfl)
-    obtain ⟨hmem, hthru', heqK, hVg, -⟩ := editBV_ren_facts h hab hmx hthru hV (Or.inl hR)
+    obtain ⟨hmem, hthru', heqK, hVg, hpfix⟩ := editBV_ren_facts (x := x) h hab hmx hthru hV (Or.inl hR)
     have hne' : memDeps (S.liftE x Ex).path ≠ [] := by rw [hmem]; simpa [rds] using hne
     have hrb : Ex.mode ≠ .rootb := by rw [hmx]; simp
     have hab2 : S.AbsOK (A2.setE (A2.killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
@@ -7049,18 +7060,23 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       exact h1.bind (setE_none (killHv_none hy _) hyx) (FreshE.of_fresh (compE_fresh Ex t))) (fun _ => hR)
       (fun v hv => hvs v (by simp [Stmt.vars, hv]))
     have hbx := hab.fresh hy
-    have tk := tk.mono (S.liftX_under h hbx (hab.notPiFresh hy))
-    refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hy)⟩
-    rw [canon_exitScope h abk (Or.inl hbx)]
-    have hwc := canon_wf h habb hwb
-    have hnc := canon_names h habb hnb
-    rw [canon_setE h, canon_setE h, heqK] at hwc hnc tk
-    have hty1 : (S.liftE x Ex).ty = .vec t := by rw [liftE_ty x hrb, hty]
-    exact StmtT.takeBV (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hy]; rfl) (h.Fcout y)
-      (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
-      hty1 hhv (h.Fcout x) (exprT_ren h hab hie (fun v hv => hvs v (by simp [Stmt.vars, hv]))) hne' hthru' (hVg [] (fun _ h' => by cases h'))
+    have hnpy := hab.notPiFresh hy
+    have hnpx : S.isPi x = false := hvs x (by simp [Stmt.vars])
+    have tk := tk.mono (S.liftX_under h hbx hnpy)
+    refine ⟨?_, abk.exitScope hbx hnpy⟩
+    rw [canon_exitScopes h abk (Or.inl hbx) hnpy]
+    have hwc := canon_wf_sub h habb hwb hnb
+    have hnc := canon_names_sub h habb hnb
+    rw [canon_setEs h _ hnpy, canon_setEs h _ hnpx, heqK, ← hpfix] at hwc hnc tk
+    have hty1 : (S.subE (S.liftE x Ex)).ty = .vec t := by rw [subE_ty, liftE_ty x hrb, hty]
+    exact StmtT.takeBV (by rw [src_rename]; exact hks) (by rw [canon_ρs h _ hnpy, hy]; rfl) (h.Fcout y)
+      (canon_some h hx hnpx) (by rw [subE_mode, liftE_mode x hrb, hmx]; rfl)
+      (by rw [subE_live, liftE_live]; exact hl)
+      hty1 hhv (h.Fcout x) (exprT_ren h hab hie (fun v hv => hvs v (by simp [Stmt.vars, hv])))
+      (by rw [hpfix]; exact hne') (by rw [subE_ty, hpfix]; exact hthru')
+      (by rw [subE_ty, hpfix]; exact hVg [] (fun _ h' => by cases h'))
       (fun hd => dtorHead_rename h.inj (hnd hd))
-      (StmtT.weakenIn ⟨PW.setE (PW.refl _) (compE_liftE_weakerV hmx hhv),
+      (StmtT.weakenIn ⟨PW.setE (PW.refl _) (by rw [compE_subE]; exact S.subE_weaker (compE_liftE_weakerV hmx hhv)),
         hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
   | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF hy hmy he hpin hds hr hk hpush hpe hyv hdf ihs ihp =>
