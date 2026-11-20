@@ -154,6 +154,21 @@ def verdict_nurlc(path):
             trusted.discard(n)
     prog.fns = keep
     prog.trusted = trusted
+    # (what each function nurlc lowered calls, `None` a closure value: which
+    # calls may panic, check.call_may_panic - agora #939)
+    # (a closure made is no call: only `call` and `callind`)
+    calls_of = {}
+    for n, fn in every.items():
+        cs = set()
+        for line in fn.raw["stmts"]:
+            t = line.split(" ")
+            for i, w in enumerate(t[:3]):
+                if w == "call" and i + 1 < len(t):
+                    cs.add(t[i + 1])
+                elif w == "callind":
+                    cs.add(None)
+        calls_of[n] = cs
+    prog.calls_of = calls_of
     errors, summ = check_program(prog)
     return ("rejected" if errors else "runs-clean"), errors, summ
 
