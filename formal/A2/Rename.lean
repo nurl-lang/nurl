@@ -400,6 +400,21 @@ theorem mem_allKinds {rs : List Var} {d : Dep} (h : d ∈ allKinds rs) : d.root 
   obtain ⟨r, hr, hd⟩ := h
   rcases hd with rfl | rfl | rfl | rfl <;> exact hr
 
+/-- AGORA-937: what a region stands for is rooted in the caller's frame: no
+    callee binding is its root, and the frame binds it as a root. -/
+theorem σ_frame (h : S.OK) {v : Var} {d : Dep} (hd : d ∈ S.σ v) :
+    (∀ w, S.ρ w ≠ d.root) ∧ ∃ E, S.Φ d.root = some E ∧ E.mode.isRoot = true := by
+  have hr : d.root ∈ S.R := mem_allKinds (h.σ_sub v hd)
+  exact ⟨h.Rout _ hr, h.Rroot _ hr⟩
+
+/-- ... so the lift's substitution names no callee binding where it put
+    what a region stands for. -/
+theorem subD_frame (h : S.OK) {d e : Dep} (he : e ∈ S.subD d) :
+    e = d ∨ ((∀ w, S.ρ w ≠ e.root) ∧ ∃ E, S.Φ e.root = some E ∧ E.mode.isRoot = true) := by
+  rcases S.mem_subD he with rfl | ⟨v, _, _, hv⟩
+  · exact Or.inl rfl
+  · exact Or.inr (S.σ_frame h hv)
+
 theorem mem_A {d : Dep} : d ∈ S.A ↔ d ∈ allKinds S.R ∨ d ∈ S.N := List.mem_append
 
 /-- What the arguments held lies outside the callee, at roots of the frame. -/
