@@ -516,6 +516,7 @@
 : i FX_CALL_TEMP 262144  // a call's temporary, of a callee nurlc's summary says may lend its result (eng_walk_lends)
 : i FX_CALL_BIND 524288  // a binding (`: T e`, not `: ~`) given a call's temporary whole, or such a binding whole: nurlc keeps the call's per-call answer for it
 : i FX_SLOT_TAKE 1048576  // an FX_SLOT payload of a temporary nurlc takes it out of (CORE_VF_SLOT): a consumer that takes it empties the slot
+: i FX_ENUM_LENT 2097152  // a `??` arm's payload of a program enum: lent to the arm, which works on a copy (agora #883, h231)
 : ~ i g_fc_cap_loans 0  // the loans closures captured (a set)
 : ~ i g_fc_wb_pairs 0  // (the loan a place holds of a reader's value, the struct cursor whose field store handed it over: eng_cursor_handover), a set
 : ~ i g_fc_wbs 0  // while a call's effects are applied: the cursors it writes back into the slots they were read from (a set)
@@ -13534,6 +13535,16 @@ unsafe @ eng_byte s w i k → i {
     ^ ( et_field up ( ee_name e ) )
 }
 
+// Is a closure call's result of type `t` one codegen hands back as the
+// caller's own slice (mem_clo_ret_copies_slc: an owned slice of elements
+// that hold no view and copy)?
+@ __eng_clo_slc_own i t → b {
+    : s ll ( eng_str ( et_at t ET_NAME ) )
+    ? | == 0 g_auto_drop_strings ! ( __owned_slice_ty ll ) { ^ F } {}
+    ? ( __ty_holds_view_p ( nurl_llty ( __owned_slice_elem ll ) ) ) { ^ F } {}
+    ^ ( __slice_result_copies ll g_root_syms )
+}
+
 @ eng_ty_of i pl → i { ^ ( eng_ty_at ( fv_ty ( pl_var pl ) ) ( pl_path pl ) ) }
 
 // ── Ownership engine: per-variable notes of the function ─────────────
@@ -14979,9 +14990,10 @@ unsafe @ eng_byte s w i k → i {
 
 // Is `vid` a copy of a value this frame only borrows: a by-value (`in`)
 // parameter (not a destructor's receiver), a `~` loop's element, a closure
-// body's by-value capture or parameter?
+// body's by-value capture or parameter, a program enum's `??` payload?
 @ eng_borrowed_copy i vid → b {
     ? ( fx_has vid FX_FE ) { ^ T } {}
+    ? ( fx_has vid FX_ENUM_LENT ) { ^ T } {}
     : i k ( fv_pidx vid )
     ? < k 0 { ^ F } {}
     ? < k g_f_ncap { ^ ! ( fv_byref vid ) } {}
@@ -19086,7 +19098,9 @@ unsafe @ eng_byte s w i k → i {
                                 // released under it. One the body takes over
                                 // (`sink`), or a number, is the body's own.)
                                 : i aop ( wv_at ops + a 1 )
-                                : i aty ( eng_ty_of aop )
+                                // (A constant argument, `( f F )`, is no place:
+                                // its type is not asked - AGORA-869.)
+                                : i aty ? ( op_is_place aop ) ( eng_ty_of aop ) ET_NONE
                                 ? & & & & ! hit ( op_is_place aop ) == ( pl_var aop ) ( pl_var ch ) != ( sm_mode f + ncap a ) PM_SINK & != aty ET_NONE ! ( et_scalar aty ) {
                                     : b psc & | | == eff EF_REPLACE == eff EF_DROP == eff EF_TAKE ( eng_owns_nothing ch )
                                     ? ( kills_paths eff ( pl_path ch ) aop ( pl_path aop ) LK_HANDLE psc ) {
@@ -20308,6 +20322,11 @@ unsafe @ eng_byte s w i k → i {
         : i av ( call_closure st ops at line dest_ty )
         ( wv_drop ops )
         ? & != dest_ty ET_NONE ( et_scalar dest_ty ) { ^ g_av_none } {}
+        // (…an owned slice whose elements hold no view and copy: codegen
+        // hands the caller a slice of its own on every run, the closure's or
+        // a copy (mem_clo_ret_copies_slc, agora #894), so it borrows nothing
+        // of what the call was handed - AGORA-869.)
+        ? & != dest_ty ET_NONE ( __eng_clo_slc_own dest_ty ) { ^ ( av_make OW_O 0 0 0 F ) } {}
         ^ av
     } {}
     ? == k RV_SCALAR {
@@ -20544,7 +20563,17 @@ unsafe @ eng_byte s w i k → i {
     : i kind ( fv_kind vid )
     : i vty ( fv_ty vid )
     : i rk ( ec rv )
-    ? == rk RV_PAYLOAD { ( fx_set vid FX_PAYLOAD ) } {}
+    ? == rk RV_PAYLOAD {
+        ( fx_set vid FX_PAYLOAD )
+        // (…of a program enum - a binding's, a field path's, a matched
+        // temporary's: nurlc's arm works on a copy of it, so a store into a
+        // part of it lands in that copy; tools/ncore's enum_lent, AGORA-869)
+        : i pop ( eng_op ( ec + rv 1 ) )
+        ? ( op_is_place pop ) {
+            : i pty ( eng_ty_of pop )
+            ? & & != pty ET_NONE == ( et_kind pty ) EK_NAMED ( et_flag pty ETF_ENUM ) { ( fx_set vid FX_ENUM_LENT ) } {}
+        } {}
+    } {}
     ( carry_call_lent vid rv )
     ? & & == rk RV_USE == kind VK_LOCAL ! ( fv_mut vid ) {
         // (a binding read out of a field of another: which one)
