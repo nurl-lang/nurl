@@ -1831,6 +1831,10 @@ class FnCheck:
                             self.err(line, f"{name} takes {self.pname((op[1], op[2]))}, which is a borrow")
                         elif not self.T.copyable(ty):
                             self.err(line, f"{name} takes a borrowed value that cannot be copied")
+                        else:
+                            # (a copy of the temporary: nothing is taken out
+                            # of what it was read from - the destructor check)
+                            copied.add(k)
                     elif (not op[2] and self.fn.vars[op[1]].kind == "local" and avs[k].alias
                           and k < len(sm["modes"]) and sm["modes"][k] == "sink"
                           # (a `sink` that keeps the value - in its result,

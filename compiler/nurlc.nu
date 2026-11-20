@@ -37904,7 +37904,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // resolve_drop_field_takes asks its final summary.)
         ? & & & & __dfc0 != 0 g_user_drop_seen == 0 g_in_unsafe | ( str_has_index callee_sink arg_idx ) & summary_callee == 0 ( nurl_sym_len g_fn_compiled call_name ) ( bck_sound ) {
             : b __dfwd ! ( str_has_index callee_sink arg_idx )
-            : s __dfp ? != 0 ( nurl_str_len arg_froot ) ( nurl_str_cat arg_froot `` ) ( __bfpath_of syms bck_arg_val )
+            : s __dfp ? != 0 ( nurl_str_len arg_froot ) ( __dfp_rooted syms arg_froot ) ( __bfpath_of syms bck_arg_val )
             ? & != 0 ( nurl_str_len __dfp ) ! ( __plain_scalar_lty ( nurl_llty at ) ) {
                 : ~ s __dch ( __field_path_chain syms __dfp )
                 // (Inside a `% Drop` impl only its own receiver may be taken
@@ -99828,6 +99828,18 @@ unsafe @ __holds_user_drop s ty i depth → b {
     : s up ( nurl_sym_get2 syms name `__ptr` )
     ? == 0 ( nurl_str_len up ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( nurl_sym_get2 syms up `__bfpath` )
+}
+
+// Field path `p` from the struct it is a part of: a path rooted at a binding
+// that reads a field itself (`: part . h inner`, then `part.buf`) is that
+// field's path extended (`h.inner.buf`), so every enclosing `% Drop` is asked.
+@ __dfp_rooted i syms s p → s {
+    ? == 0 g_fn_bfpath { ^ ( nurl_str_cat p `` ) } {}
+    : i k ( nurl_str_find p `.` )
+    ? < k 0 { ^ ( nurl_str_cat p `` ) } {}
+    : s bf ( __bfpath_of syms ( nurl_str_slice p 0 k ) )
+    ? == 0 ( nurl_str_len bf ) { ^ ( nurl_str_cat p `` ) } {}
+    ^ ( nurl_str_cat bf ( nurl_str_slice p k - ( nurl_str_len p ) k ) )
 }
 
 // Every struct field path `p` (`o.inner.buf`, its root a binding) passes
