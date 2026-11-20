@@ -12,7 +12,8 @@ engine, which then reports what it finds:
   nurlc --emit-core --engine-decides <file>   `--emit-core` silences the
         walk's ownership refusals (g_walk_owns 0), `--engine-decides` has
         the engine print its findings as full source diagnostics on stderr
-        (`file:line:col: error:` and the rule group's `note:` / `help:`)
+        (`file:line:col: error:`, its message ending with the advice, and
+        the rule group's `note:`)
         and no IR text (alone, `--engine-decides` leaves the walk speaking,
         and its refusals stop the compile first)
   nurlc --engine <file>                       the same walk; the engine's
@@ -43,6 +44,14 @@ sets of lines (in the test's own file) are the same, and whether its
 message (the one on the golden's line, else its first) names, quoted,
 the binding the golden's first message names: `y` its first quoted name
 (`'h.cb'` is `h`'s), `a` another quoted name of it, `n` none of them.
+And the advice - the part of a message after its first sentence (the
+first `. ` before a capital), else after its last ` — ` or `; ` (the walk
+writes its advice into the message, and so does the engine,
+eng_help_named): whether the engine's names, quoted, the binding the
+golden's message names first (`y`; `a` another quoted name of it, `n`
+none of them, `x` the engine's message has no advice part), and how
+much the two say alike - the overlap (Jaccard, of their lower-case
+words) of the whole messages, and of the advice parts.
 
   PYTHONUTF8=1 python diagcmp.py --jobs 8                  every test
   PYTHONUTF8=1 python diagcmp.py --list names.txt --tsv out.tsv
@@ -51,7 +60,8 @@ the binding the golden's first message names: `y` its first quoted name
 A test is named by its name or its .nu path. `--tsv OUT` writes one line
 per test (name, class, the golden's place and message, the engine's place
 and message, a finding on the golden's line, the binding, both sets of
-lines, where the golden's place came from: `golden` or `run`). `--top N` the rule groups shown per class (default 5).
+lines, where the golden's place came from: `golden` or `run`; the advice
+names the binding, the two overlaps). `--top N` the rule groups shown per class (default 5).
 (NURLC=<binary>.) Nothing is written but OUT. Exit status 1 if any test
 is not SAME-LINE / WALK-KEEPS.
 
@@ -60,7 +70,12 @@ refusal goldens, 212 same line, 27 other line, 27 engine accepts, 0 engine
 skips, 546 the walk's own, 2 engine crashes; 2 more crashes and 1
 engine-only among the accepted goldens. Of the 239 the engine refuses,
 220 have a finding on the golden's line and 201 the same set of lines;
-the binding named 158 of 224 (another name of it 23).
+the binding named 158 of 224 (another name of it 23). After (c) step 3
+(the engine's advice names the binding, eng_help_named): the binding
+named 178 of 224 (another name of it 26); the advice names it 174 of 224
+(another name 28; before, 60 and 1, and 157 had no advice in the
+message); words in common with the golden's message 47% (before 33%),
+with its advice 54% (before 23%).
 """
 
 import os
@@ -141,6 +156,35 @@ def same_binding(gold_msg, eng_msg):
     return "y" if names[0] in theirs else ("a" if theirs.intersection(names) else "n")
 
 
+ADVICE = re.compile(r"\. (?=[A-Z(])")
+WORD = re.compile(r"[a-z_][a-z0-9_]*")
+
+
+def advice(msg):
+    """The advice part of a message (see the module's note); '' if none."""
+    m = ADVICE.search(msg)
+    if m:
+        return msg[m.end():]
+    cut = max(msg.rfind(" — "), msg.rfind("; "))
+    return msg[cut + 2:].lstrip("— ").strip() if cut >= 0 else ""
+
+
+def advice_named(gold_msg, eng_msg):
+    names = roots(gold_msg)
+    if not names:
+        return "-"
+    adv = advice(eng_msg)
+    if not adv:
+        return "x"
+    theirs = set(roots(adv))
+    return "y" if names[0] in theirs else ("a" if theirs.intersection(names) else "n")
+
+
+def overlap(a, b):
+    wa, wb = set(WORD.findall(a.lower())), set(WORD.findall(b.lower()))
+    return len(wa & wb) / len(wa | wb) if wa | wb else 0.0
+
+
 def rule_key(msg):
     """A message as its rule: names, numbers and what follows the first dash left out."""
     msg = msg.split(" — ")[0].split(" -- ")[0]
@@ -163,6 +207,7 @@ def classify(name):
     found = diags(err)
     engf = [d for d in found if d[3]]
     row = {"name": name, "kind": kind, "src": src, "gold": gold, "eng": None, "same_binding": "-", "on_line": "-",
+           "advice_named": "-", "overlap": None, "advice_overlap": None,
            "glines": lines_in(gfound, name), "elines": lines_in(engf, name)}
     if rc is None:
         row["class"], row["eng"] = "OTHER-STOP", ("timeout", 0, "", False)
@@ -182,6 +227,9 @@ def classify(name):
         row["eng"] = (on_line or engf)[0]
         if gold:
             row["same_binding"] = same_binding(gold[2], row["eng"][2])
+            row["advice_named"] = advice_named(gold[2], row["eng"][2])
+            row["overlap"] = overlap(gold[2], row["eng"][2])
+            row["advice_overlap"] = overlap(advice(gold[2]), advice(row["eng"][2]))
         return row
     if rc != 0:
         first = found[0] if found else None
@@ -206,6 +254,10 @@ def names_of(args):
     for a in args:
         out.append(os.path.splitext(os.path.basename(a))[0])
     return out
+
+
+def pct(x):
+    return "-" if x is None else f"{100 * x:.0f}"
 
 
 def loc(d):
@@ -247,13 +299,13 @@ def main(argv):
     if tsv:
         with open(tsv, "w", encoding="utf-8") as o:
             o.write("test\tclass\tgolden\tgolden_msg\tengine\tengine_msg\ton_golden_line\tsame_binding"
-                    "\tgolden_lines\tengine_lines\tgolden_from\n")
+                    "\tgolden_lines\tengine_lines\tgolden_from\tadvice_named\toverlap\tadvice_overlap\n")
             for r in rows:
                 g, e = r["gold"], r["eng"]
                 o.write("\t".join([r["name"], r["class"], loc(g), g[2] if g else "-", loc(e) if e and e[1] else
                                    (e[0] if e else "-"), e[2] if e else "-", r["on_line"], r["same_binding"],
                                    ",".join(map(str, r["glines"])) or "-", ",".join(map(str, r["elines"])) or "-",
-                                   r["src"]]) + "\n")
+                                   r["src"], r["advice_named"], pct(r["overlap"]), pct(r["advice_overlap"])]) + "\n")
     for cls in ("OTHER-LINE", "ENGINE-ACCEPTS", "ENGINE-SKIP", "ENGINE-CRASH", "OTHER-STOP", "ENGINE-ONLY", "WALK-KEEPS"):
         sel = [r for r in rows if r["class"] == cls]
         if not sel:
@@ -279,6 +331,13 @@ def main(argv):
           f"{count['OTHER-STOP']} other stops; {count['ENGINE-ONLY']} engine-only; of the {len(found)} the engine "
           f"refuses: {on_line} with a finding on the golden's line, {same_set} on the same lines, "
           f"the binding named {same_b} of {len(named)} (another name of it {other_b})")
+    adv = [r for r in rows if r["advice_named"] != "-"]
+    ov = [r for r in rows if r["overlap"] is not None]
+    print(f"diagcmp: the advice names the binding {sum(1 for r in adv if r['advice_named'] == 'y')} of {len(adv)} "
+          f"(another name of it {sum(1 for r in adv if r['advice_named'] == 'a')}, "
+          f"no advice {sum(1 for r in adv if r['advice_named'] == 'x')}); words in common with the golden's message "
+          f"{pct(sum(r['overlap'] for r in ov) / len(ov) if ov else 0)}%, with its advice "
+          f"{pct(sum(r['advice_overlap'] for r in ov) / len(ov) if ov else 0)}% (mean of {len(ov)})")
     return 1 if sum(count[c] for c in CLASSES if c not in ("SAME-LINE", "WALK-KEEPS")) else 0
 
 
