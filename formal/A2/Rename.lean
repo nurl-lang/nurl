@@ -4845,6 +4845,15 @@ theorem roots_subE_ρ (h : S.OK) {E : Entry} {w : Var} (hr : S.ρ w ∈ roots (S
   obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
   exact List.mem_map.mpr ⟨d, S.mem_subE_ρ h hd hdr, hdr⟩
 
+/-- ... nor to a list of dependencies. -/
+theorem roots_flatMap_subD_ρ (h : S.OK) {X : List Dep} {w : Var} (hr : S.ρ w ∈ roots (X.flatMap S.subD)) :
+    S.ρ w ∈ roots X := by
+  obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
+  obtain ⟨d1, hd1, hdd⟩ := List.mem_flatMap.mp hd
+  rcases S.subD_frame h hdd with rfl | ⟨hout, _⟩
+  · exact List.mem_map.mpr ⟨d, hd1, hdr⟩
+  · exact absurd hdr (hout w ∘ Eq.symm)
+
 theorem roots_subE_ρ_mem (h : S.OK) {E : Entry} {w : Var} (hr : S.ρ w ∈ roots (memDeps (S.subE E).vdeps)) :
     S.ρ w ∈ roots (memDeps E.vdeps) := by
   obtain ⟨d, hd, hdr⟩ := List.mem_map.mp hr
@@ -6803,7 +6812,9 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     exact ⟨StmtT.while (by rw [src_rename]; exact hk) (exprT_ren h hab hc (fun v hv => hvs v (by simp [Stmt.vars, hv]))) t, hab⟩
   | @push _ Γ Γ1 F x y Ex Ey Ex1 t D hx hl hty hcan hxF hy hly htyy hyx hpa hxD hx1 hl1 hds hdb =>
     intro _ hab hw hn hfo hT hvs
-    obtain ⟨D', hpa', hD', hD'o⟩ := pushArg_ren h hab hy hpa
+    have hnpx : S.isPi x = false := hvs x (by simp [Stmt.vars])
+    have hnpy : S.isPi y = false := hvs y (by simp [Stmt.vars])
+    obtain ⟨D', hpa', hD', hD'o⟩ := pushArg_rens h hab hy hnpy hpa
     have hab1 := PushArg.absOK (S := S) hy hpa hab
     have hrbx : Ex.mode ≠ .rootb := by rcases hcan with hm | ⟨b, hm, _⟩ <;> rw [hm] <;> simp
     obtain ⟨E0, h0, hm1⟩ := (hpa.domMode hy).2 x Ex1 hx1
@@ -6824,50 +6835,64 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
           · rw [hty1] at h'; exact h'
         exact ⟨hl0, by simp [hh0, ownHeld, hv]⟩)
     refine ⟨?_, habo⟩
-    have hwc := canon_wf h habo hwo
-    have hnc := canon_names h habo hno
-    rw [canon_setE h, canon_kill h hab1 (allowed_canDo hab hx hty hcan)] at hwc hnc ⊢
+    have hwc := canon_wf_sub h habo hwo hno
+    have hnc := canon_names_sub h habo hno
+    rw [canon_setEs h _ hnpx, canon_kill h hab1 (allowed_canDo hab hx hty hcan) hnpx] at hwc hnc ⊢
     have hty1 : Ex1.ty = .vec t := by rw [PushArg.ty_at hpa hy hx hx1, hty]
     -- (Agora #916: an owner, or an `inout` parameter, is lifted with all the
     -- arguments hold)
     have hhA1 : S.heldA Ex1 = S.A :=
       S.heldA_own (by rw [PushArg.mode_at hpa hy hx hx1]; exact hcan.ownSlot)
     have hhA1' : S.heldA { Ex1 with held := Ex1.held ++ ownHeld true t D } = S.A := hhA1
-    have hD'' : D' ⊆ rds S.ρ D ++ ownHeld Ex1.mode.ownSlot Ex1.ty S.A := by
-      intro d hd
-      rcases List.mem_append.mp (hD'o htyy hd) with h1 | h1
-      · exact List.mem_append_left _ h1
-      · refine List.mem_append_right _ ?_
-        rw [hty1]
-        cases Ex1.mode.ownSlot
-        · simp only [ownHeld_false]; exact ownHeld_sub _ _ _ h1
-        · have : ownHeld true (Ty.vec t) S.A = ownHeld true t S.A := by simp [ownHeld, Ty.holdsView]
-          rw [this]; exact h1
+    have hown' : ownHeld true t S.A ⊆ ownHeld Ex1.mode.ownSlot Ex1.ty S.A := by
+      intro d h1
+      rw [hty1]
+      cases Ex1.mode.ownSlot
+      · simp only [ownHeld_false]; exact ownHeld_sub _ _ _ h1
+      · have : ownHeld true (Ty.vec t) S.A = ownHeld true t S.A := by simp [ownHeld, Ty.holdsView]
+        rw [this]; exact h1
+    have hD'' : D' ⊆ (rds S.ρ D ++ ownHeld Ex1.mode.ownSlot Ex1.ty S.A).flatMap S.subD :=
+      fun d hd => S.flatMap_subD_mono (append_sub (List.Subset.refl _) hown') (hD'o htyy hd)
+    have hLh : (S.liftE x Ex1).held = rds S.ρ Ex1.held ++ ownHeld Ex1.mode.ownSlot Ex1.ty S.A := by
+      rw [liftE_held hrb1, hhA1]
+    have hLh' : (S.liftE x { Ex1 with held := Ex1.held ++ ownHeld true t D }).held =
+        rds S.ρ (Ex1.held ++ ownHeld true t D) ++ ownHeld Ex1.mode.ownSlot Ex1.ty S.A := by
+      rw [liftE_held (E := { Ex1 with held := Ex1.held ++ ownHeld true t D }) hrb1, hhA1']
     -- (Agora #782: what is pushed into a `letd` binding, it views already)
-    have hsubL : (S.liftE x Ex1).dbind = true → ownHeld true t D' ⊆ (S.liftE x Ex1).held := by
+    have hsubL : (S.subE (S.liftE x Ex1)).dbind = true → ownHeld true t D' ⊆ (S.subE (S.liftE x Ex1)).held := by
       intro hd
       have hd0 : Ex1.dbind = true := by simpa [liftE, hrb1] using hd
       have hsub := hdb hd0
       by_cases hv : t.holdsView = true
-      · rw [ownHeld_views true hv D']
+      · rw [ownHeld_views true hv D', subE_held, hLh]
         have hD0 : rds S.ρ D ⊆ rds S.ρ Ex1.held := by
           rw [← ownHeld_views true hv D]; exact rds_subset hsub
-        simp only [liftE, hrb1, ↓reduceIte, hhA1]
-        exact fun d hd' => (append_sub hD0 (List.Subset.refl _)) (hD'' hd')
+        exact fun d hd' => S.flatMap_subD_mono (append_sub hD0 (List.Subset.refl _)) (hD'' hd')
       · have hv' : t.holdsView = false := by simpa using hv
         simp [ownHeld, hv']
-    have hT' := StmtT.push (P := P) (ξ := .none) (F := S.Fc) (x := S.ρ x) (y := S.ρ y) (Ex := S.liftE x Ex)
-      (Ey := S.liftE y Ey) (Ex1 := S.liftE x Ex1) (t := t) (D := D')
-      (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hx]; exact hty)
-      (by rw [liftE_mode x hrbx]; exact canDo_lift hcan) (h.Fcout x)
-      (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy)
-      (fun e => hyx (h.inj _ _ e)) hpa' (roots_lift_ρ h hD' hxD)
-      (by rw [canon_ρ h, hx1]; rfl) (by rw [liftE_live]; exact hl1)
+    have hxD' : S.ρ x ∉ roots D' := fun hm =>
+      roots_lift_ρ h (List.Subset.refl _) hxD (S.roots_flatMap_subD_ρ h (roots_sub hD' hm))
+    have hT' := StmtT.push (P := P) (ξ := .none) (F := S.Fc) (x := S.ρ x) (y := S.ρ y)
+      (Ex := S.subE (S.liftE x Ex)) (Ey := S.subE (S.liftE y Ey)) (Ex1 := S.subE (S.liftE x Ex1)) (t := t)
+      (D := D') (canon_some h hx hnpx) (by rw [subE_live, liftE_live]; exact hl)
+      (by rw [subE_ty, liftE_ty' h hab hx]; exact hty)
+      (by rw [subE_mode, liftE_mode x hrbx]; exact canDo_lift hcan) (h.Fcout x)
+      (canon_some h hy hnpy) (by rw [subE_live, liftE_live]; exact hly)
+      (by rw [subE_ty, liftE_ty' h hab hy]; exact htyy)
+      (fun e => hyx (h.inj _ _ e)) hpa' hxD'
+      (canon_some h hx1 hnpx) (by rw [subE_live, liftE_live]; exact hl1)
       (DtorSafe.canon h (allowed_canDo hab hx hty hcan) hds)
       hsubL
-    refine StmtT.weakenOut (canon_wf h hab hw) (canon_names h hab hn) hT'.ofNone
+    refine StmtT.weakenOut (canon_wf_sub h hab hw hn) (canon_names_sub h hab hn) hT'.ofNone
       (Or.inr ⟨PW.setE (PW.refl _) ?_, hwc, hnc⟩)
-    have hdb1 : Ex1.dbind = Ex.dbind := PushArg.dbind_at hpa hy hx hx1
+    -- what the binding holds: all the arguments hold, and the value's
+    -- dependencies, renamed and substituted
+    have hmono : ∀ {L : List Dep}, L ⊆ Ex1.held ++ ownHeld true t D →
+        (rds S.ρ L ++ ownHeld Ex1.mode.ownSlot Ex1.ty S.A).flatMap S.subD ⊆
+          (S.subE (S.liftE x { Ex1 with held := Ex1.held ++ ownHeld true t D })).held := by
+      intro L hL
+      rw [subE_held, hLh']
+      exact S.flatMap_subD_mono (append_sub (rds_subset hL) (List.Subset.refl _))
     refine EntryWeaker.mk' (by simp [liftE, hrb1]) (by simp [liftE, hrb1])
       (not_fixed_liftMode (by simp [liftE, hrb1]) hrb1) (by simp [liftE, hrb1]) (fun _ => by simp [liftE, hrb1]) ?_
       (hf := fun _ _ hb _ => absurd hb (by
@@ -6879,33 +6904,29 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (hdh := fun hh _ _ d _ => by
         have hd0 : Ex1.dbind = true := by simpa [liftE, hrb1] using hh
         have hsub := hdb hd0
-        simp only [liftE, hrb1, ↓reduceIte, hhA1, hhA1', rds, List.map_append, List.mem_append]
+        have hsl := hsubL (by simpa [liftE, hrb1] using hd0)
+        rw [subE_held, hLh] at hsl
         constructor
-        · rintro ((h1 | h1) | h1)
-          · exact Or.inl (Or.inl h1)
-          · exact Or.inl (Or.inl (List.mem_map.mpr (by
-              obtain ⟨d0, hd0', rfl⟩ := List.mem_map.mp h1; exact ⟨d0, hsub hd0', rfl⟩)))
-          · exact Or.inl (Or.inr h1)
-        · rintro ((h1 | h1) | h1)
-          · exact Or.inl (Or.inl h1)
-          · exact Or.inr h1
-          · by_cases hv : t.holdsView = true
-            · rw [ownHeld_views true hv D'] at h1
-              rcases List.mem_append.mp (hD'' h1) with h2 | h2
-              · refine Or.inl (Or.inr ?_)
-                rw [ownHeld_views true hv D]; exact h2
-              · exact Or.inr h2
-            · have hv' : t.holdsView = false := by simpa using hv
-              simp [ownHeld, hv'] at h1)
-    simp only [liftE, hrb1, ↓reduceIte, hhA1, hhA1']
-    by_cases hv : t.holdsView = true
-    · have h1 : ownHeld true t D' = D' := ownHeld_views true hv D'
-      have h2 : ownHeld true t D = D := ownHeld_views true hv D
-      rw [h1, h2]
-      exact app_lift (S := S) (List.Subset.refl _) hD''
-    · have hv' : t.holdsView = false := by simpa using hv
-      simp only [ownHeld, hv', Bool.not_false, Bool.and_self, ↓reduceIte, List.append_nil]
-      exact append_sub (List.Subset.refl _) (List.Subset.refl _)
+        · intro h1
+          refine List.mem_append_left _ ?_
+          rw [subE_held, hLh]
+          rw [subE_held, hLh'] at h1
+          exact S.flatMap_subD_mono (append_sub (rds_subset (List.append_subset.mpr
+            ⟨List.Subset.refl _, hsub⟩)) (List.Subset.refl _)) h1
+        · intro h1
+          rcases List.mem_append.mp h1 with h1 | h1
+          · rw [subE_held, hLh] at h1
+            exact hmono (List.subset_append_left _ _) h1
+          · exact hmono (List.subset_append_left _ _) (hsl h1))
+    refine List.append_subset.mpr ⟨?_, ?_⟩
+    · rw [subE_held, hLh]; exact hmono (List.subset_append_left _ _)
+    · intro d hd
+      by_cases hv : t.holdsView = true
+      · rw [ownHeld_views true hv D'] at hd
+        refine hmono (L := ownHeld true t D) (List.subset_append_right _ _) ?_
+        rw [ownHeld_views true hv D]; exact hD'' hd
+      · have hv' : t.holdsView = false := by simpa using hv
+        simp [ownHeld, hv'] at hd
   | @free _ Γ F x E t hx hl hm hty hxF hpe hdf =>
     intro _ hab _ _ _ _ hvs
     have hrb : E.mode ≠ .rootb := by rw [hm]; simp
