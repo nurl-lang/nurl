@@ -44,6 +44,90 @@ def call_may_unwind(name):
     return any(w in name for w in ("fiber", "park", "yield", "sched", "async"))
 from lower import SCALARS, Types, Var
 
+
+def extern_may_panic(name):
+    """May a call of `name`, a function with no body nurlc lowered (the
+    runtime's, or a foreign one: `strlen`), start a panic?  By its name, as
+    nurlc's module pass answers it (rt_starts_panic, __mp_runtime_panics): a
+    drop / clone walk or a closure entry runs code it is handed, a fiber
+    switch other code."""
+    if name.startswith(("nurl_vec_drop", "nurl_vec_clone", "nurl_closure_", "nurl_call_code", "nurl_cpu_launch")):
+        return True
+    if name in RT_PANICS or (name.startswith("nurl_cpu_") and name.endswith("_missing")):
+        return True
+    return any(w in name for w in ("fiber", "park", "yield", "sched", "async"))
+
+
+def _calls_in(x, out):
+    """The calls a statement list makes: `("call", name, …)` names, and
+    None for a call through a closure value (`callind`)."""
+    if isinstance(x, tuple):
+        if x and x[0] == "call" and len(x) > 1 and isinstance(x[1], str):
+            out.add(x[1])
+        elif x and x[0] == "callind":
+            out.add(None)
+        for y in x:
+            if isinstance(y, (tuple, list)):
+                _calls_in(y, out)
+    elif isinstance(x, list):
+        for y in x:
+            _calls_in(y, out)
+
+
+def may_panic_fns(prog):
+    """The functions of the program a call of which may start a panic, as
+    nurlc's module pass finds them over its IR (__mp_compute): one that
+    panics itself (a check written inline, `fn` flag bit 3), runs a closure
+    value, calls what is no function of the program and may unwind
+    (call_may_unwind), or calls one of these - to a fixpoint (agora #939)."""
+    got = getattr(prog, "_may_panic", None)
+    if got is not None:
+        return got
+    # (`calls_of`: every function nurlc lowered, the library's included, by
+    # what its statements call - run.py's; else the program's own bodies)
+    calls = getattr(prog, "calls_of", None)
+    if calls is None:
+        calls = {}
+        for name, fn in prog.fns.items():
+            cs = set()
+            _calls_in(fn.body, cs)
+            calls[name] = cs
+    # (a callee with no body anywhere is the runtime's or a foreign one:
+    # extern_may_panic, as nurlc's __mp_runtime_panics answers it - unless
+    # `calls_of` is the program's own bodies only, where it may be the library's)
+    whole = getattr(prog, "calls_of", None) is not None
+    out = set()
+    for name, cs in calls.items():
+        # (a `dyn` method's virtual callee runs an impl through the vtable:
+        # it may, as call_may_panic says)
+        virt = getattr(prog, "virt", {})
+        if (getattr(prog, "fn_flags", {}).get(name, 0) & 8 or None in cs
+                or any(c in virt or (c not in calls and (extern_may_panic(c) if whole else call_may_unwind(c)))
+                       for c in cs if c is not None)):
+            out.add(name)
+    changed = True
+    while changed:
+        changed = False
+        for name, cs in calls.items():
+            if name not in out and any(c in out for c in cs if c is not None):
+                out.add(name)
+                changed = True
+    prog._may_panic = out
+    return out
+
+
+def call_may_panic(prog, name):
+    """May the call of `name` start a panic (a closure value's, `None`: it
+    may)?  A `dyn` method's virtual callee (`prog.virt`) runs one of its
+    impls through the vtable, as nurlc's module pass reads an indirect
+    call: it may (CodeRabbit on github#2129)."""
+    if name is None or name in getattr(prog, "virt", {}):
+        return True
+    whole = getattr(prog, "calls_of", None)
+    if name not in (whole or prog.fns):
+        return extern_may_panic(name) if whole is not None else call_may_unwind(name)
+    return name in may_panic_fns(prog)
+
 # NCORE_DERIVE=1: a library function's derived summary (derive.py) answers
 # before its declared one - how far the walk's own answers carry.
 DERIVE_FIRST = os.environ.get("NCORE_DERIVE") == "1"
@@ -3142,6 +3226,34 @@ class FnCheck:
                                 self.s_consumes.add(self.pidx[place[0]])
                             st.vals[place[0]] = AV("X")
 
+    def _alias_takes(self, st, vid, sub, k, sm, own_takes):
+        """The `inout` parameters a consumed operand `vid`+`sub` takes a
+        field out of through `vid`'s aliases (a binding that reads a field,
+        or a whole parameter's alias with a part of it): onto `own_takes`.
+        A number, and a part a keeping callee is handed a copy of, are
+        copied (agora #939)."""
+        av = st.vals.get(vid)
+        alias = av.alias if av is not None else ()
+        # (…copied only as the transfer copies it: every alias a part of an
+        # `inout` parameter, or of an element of a parameter's container - a
+        # mixed set, one a local's part too, is taken (take_payload), the
+        # `inout` parameter's part with it; CodeRabbit on github#2129)
+        all_param = bool(alias) and all(
+            (tuple(b[1]) + tuple(sub)) and b[0] in self.pidx
+            and (self.fn.modes[self.pidx[b[0]]] == "inout" or "*" in b[1])
+            for b in alias)
+        for a in alias:
+            path = tuple(a[1]) + tuple(sub)
+            if not (path and "*" not in path and a[0] in self.pidx
+                    and self.fn.modes[self.pidx[a[0]]] == "inout"):
+                continue
+            fty = self.ty_of_place((a[0], path))
+            kept = all_param and fty is not None and self.T.copyable(fty) and (
+                any(r[1] == k for r in sm.get("rholds", ()))
+                or any(x[2] == k for x in sm.get("stores", ())))
+            if not (fty is not None and self.T.is_scalar(fty)) and not kept:
+                own_takes.add(a[0])
+
     def unwind_check(self, st, ops, line, name, sm):
         """A call that may unwind - a function of the program's, the
         library's (an index past the end, `panic` itself), a runtime entry
@@ -3152,17 +3264,69 @@ class FnCheck:
         else (MEMORY.md §3.3d; agora #382). That is an `inout` parameter,
         or in a closure body a capture taken by pointer: the binding
         outside."""
+        # (a field of an `inout` parameter the call itself takes, a consumed
+        # argument: handed over as the call starts, so a panic in the call
+        # hands it back empty - where the call may panic, as nurlc's module
+        # pass finds; a number handed over is a copy, agora #939)
+        own_takes = set()
+        if sm is not None and call_may_panic(self.prog, None if name == "the closure" else name):
+            for k in sm.get("consumes", ()):
+                if k < len(ops) and ops[k][0] == "v" and ops[k][2]:
+                    fty = self.ty_of_place((ops[k][1], tuple(ops[k][2])))
+                    # (…nor one a callee that keeps it is handed a copy of:
+                    # a part of an `inout` parameter given to a keeper, in
+                    # its result or another argument, is copied, as the
+                    # consumed-argument rule below copies it - the caller's
+                    # field stays; CodeRabbit on github#2129)
+                    kept = fty is not None and self.T.copyable(fty) and (
+                        any(r[1] == k for r in sm.get("rholds", ()))
+                        or any(x[2] == k for x in sm.get("stores", ())))
+                    if not (fty is not None and self.T.is_scalar(fty)) and not kept:
+                        own_takes.add(ops[k][1])
+                    # (…and a part of a binding that is a whole `inout`
+                    # parameter's alias, `b.buf`: the parameter's own part;
+                    # CodeRabbit on github#2129)
+                    if ops[k][1] not in self.pidx:
+                        self._alias_takes(st, ops[k][1], tuple(ops[k][2]), k, sm, own_takes)
+                elif k < len(ops) and ops[k][0] == "v" and not ops[k][2]:
+                    # (…or a binding that reads such a field, `: b . h buf`,
+                    # handed over whole: taking it takes the field out of `h`
+                    # (take_payload, AGORA-929), at the same moment - so a
+                    # panic in the call hands `h` back without it; CodeRabbit
+                    # on github#2129)
+                    # (A call's temporary is handed over as a copy of the
+                    # value, as the consumed-argument rule copies it:
+                    # nothing is taken out of what it was read from.)
+                    av = st.vals.get(ops[k][1])
+                    if av is not None and av.call and self.fn.vars[ops[k][1]].kind == "temp":
+                        oty = self.ty_of_place((ops[k][1], ()))
+                        if oty is not None and self.T.copyable(oty):
+                            continue
+                    # (…and a value block's temporary that names an outer
+                    # binding's part only lends it: the consumed-argument
+                    # rule gives the consumer a copy (agora #555), the
+                    # field stays; CodeRabbit on github#2129)
+                    if (av is not None and av.own == "L" and not av.call and av.alias
+                            and ops[k][1] in self.block_temps):
+                        continue
+                    self._alias_takes(st, ops[k][1], (), k, sm, own_takes)
         for vid, k in self.pidx.items():
             if self.fn.modes[k] != "inout" and not (
                     self.fn.modes[k] == "cap" and getattr(self.fn.vars[vid], "byref", False)):
                 continue
+            if self.fn.modes[k] == "inout" and vid in own_takes:
+                self.err(line, f"{self.vname(vid)} is the caller's and {name} takes a field of it, "
+                               f"which it may unwind without")
+                continue
             # (…nor be handed back with a field a callee took still empty: a
-            # panic here is a way out to a `recover`ing caller, agora #929 -
-            # not, yet, the field this statement gives a value again, `= . h
-            # buf ( make … )`: that call runs before the store too, so a
-            # panic in it hands the field back empty - open, AGORA-939's
-            # rest, as in nurlc)
+            # panic here is a way out to a `recover`ing caller, agora #929.
+            # The field this statement gives a value again, `= . h buf ( make
+            # … )`, is empty while that call runs too - the store comes
+            # after it - so it is the caller's only where the call cannot
+            # panic, as nurlc's module pass finds: agora #939)
             rp = self.refill_place
+            if rp is not None and call_may_panic(self.prog, None if name == "the closure" else name):
+                rp = None
             if self.fn.modes[k] == "inout" and any(
                     g[0] == vid and g[1] and not (rp is not None and rp[0] == vid
                                                   and tuple(g[1])[:len(rp[1])] == rp[1])
