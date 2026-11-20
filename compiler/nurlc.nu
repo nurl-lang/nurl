@@ -451,6 +451,22 @@
 : ~ i g_el -1  // the function's loans, 3 words each: place, kind, the key it was made under (a sequence)
 : ~ i g_el_ix -1  // a key → the loan's number + 1
 : ~ i g_el_key -1  // a key being put together
+: ~ i g_el_end -1  // where and why each loan ended, 4 words a loan: the line (0: none recorded), how (EC_* + the effect * 16 + EN_* * 256), the place the effect was on (for a call, the argument handed over), the callee
+: i EC_NONE 0  // what the effects being applied come from (g_ek_ctx): nothing more known than the effect
+: i EC_CALL 1  // a call's, on an argument
+: i EC_CLO 2  // a closure's that runs here, on what it captured
+: i EC_ASSIGN 3  // an assignment's, on its target
+: i EC_SCOPE 4  // a block's end, on its bindings
+: i EC_RET 5  // the function's exit, on its bindings
+: i EC_REL 6  // a release of a binding here
+: i EN_DEEP 1  // the effect is inside the argument, not on it
+: i EN_SHARED 2  // the effect is inside a payload some other handle on the same shared value reaches
+: i EN_ELEMS 4  // …and on its elements (EN_DEEP), not a field of it
+: ~ i g_ek_ctx 0  // EC_*: where the effects being applied come from
+: ~ i g_ek_fn 0  // …the callee (interned), for EC_CALL
+: ~ i g_ek_arg 0  // …the argument (a place), for EC_CALL; 0 none
+: ~ i g_ek_top 0  // the place the effect being applied is on, before it is followed through what names it
+: ~ i g_ek_line 0  // the line what it ends is recorded to end at, if not the effect's (0)
 : i LK_HANDLE 1  // the value is that place's own handle (a copy of it)
 : i LK_VIEW 2  // a view into the place's buffer
 : i LK_REF 3  // a pointer to the binding itself
@@ -12797,6 +12813,9 @@ unsafe @ eng_keep_fn → v {
     ( wv_trunc g_el 0 )
     ( wv_drop g_el_ix )
     = g_el_ix ( im_new )
+    ? < g_el_end 0 { = g_el_end ( wv_new ) } {}
+    ( wv_trunc g_el_end 0 )
+    = g_ek_ctx EC_NONE = g_ek_fn 0 = g_ek_arg 0 = g_ek_top 0
     ? < g_el_first 0 { = g_el_first ( wv_new ) = g_el_next ( wv_new ) = g_el_shared ( wv_new ) } {}
     ( wv_fill g_el_first + * g_f_nv 2 2 0 )
     ( wv_trunc g_el_next 0 )
@@ -13625,6 +13644,110 @@ unsafe @ eng_byte s w i k → i {
 
 @ op_is_place i op → b { ^ >= op 0 }
 
+// ── Ownership engine: where and why a loan ended ─────────────────────
+// Loan `l` ended at `line`, by effect `eff` on `place` (0: on a payload
+// of a shared handle type, EN_SHARED in `flags`), applied where g_ek_ctx
+// says: what a finding about a later use of it tells (eng_ended_msg).
+@ el_end_note i l i line i eff i place i flags → v {
+    : i b * l 4
+    ( wv_pad g_el_end + b 4 0 )
+    : i on ? != g_ek_top 0 g_ek_top place
+    : b via_arg & | == g_ek_ctx EC_CALL == g_ek_ctx EC_CLO != g_ek_arg 0
+    : i deep0 ? & & & & == 0 flags == g_ek_ctx EC_CALL != g_ek_arg 0 != on 0 > ( ep_len ( pl_path on ) ) ( ep_len ( pl_path g_ek_arg ) ) EN_DEEP 0
+    : i deep ? == 0 deep0 0 ? == ( ep_last ( pl_path on ) ) EE_STAR + deep0 EN_ELEMS deep0
+    ( wv_put g_el_end b ? != 0 g_ek_line g_ek_line line )
+    ( wv_put g_el_end + b 1 + + g_ek_ctx * eff 16 * + flags deep 256 )
+    ( wv_put g_el_end + b 2 ? via_arg g_ek_arg ? == 0 flags on 0 )
+    ( wv_put g_el_end + b 3 ? == g_ek_ctx EC_CALL g_ek_fn 0 )
+}
+
+// Loan `to` ended where and why `from` did.
+@ el_end_copy i from i to → v {
+    : i a * from 4
+    ? >= a ( wv_len g_el_end ) { ^ } {}
+    : i b * to 4
+    ( wv_pad g_el_end + b 4 0 )
+    : ~ i k 0
+    ~ < k 4 { ( wv_put g_el_end + b k ( wv_at g_el_end + a k ) ) = k + k 1 }
+}
+
+// The line loan `l` ended at: 0 if none was recorded.
+@ el_end_line i l → i {
+    : i b * l 4
+    ? >= b ( wv_len g_el_end ) { ^ 0 } {}
+    ^ ( wv_at g_el_end b )
+}
+
+// What effect `eff` does, said of the callee it was handed to (`it`: the
+// argument); `deep`: inside the argument, not on it - `elems`, on its
+// elements.
+@ eng_eff_callee_says i eff b deep b elems → s {
+    ? == eff EF_REALLOC { ^ ? deep `may move the buffer of one of its elements` `may move or free its buffer` } {}
+    ? == eff EF_DROP { ^ `may drop or replace what it holds` } {}
+    ? == eff EF_REPLACE { ^ ? elems `may drop or replace what it holds` `may give it a new value (an 'inout' parameter it replaces, or a field of one)` } {}
+    ? == eff EF_TAKE { ^ ? deep `may move a part out of it` `takes it over` } {}
+    ? == eff EF_PERMUTE { ^ `may move its elements between slots` } {}
+    ^ `ends it`
+}
+
+// What a reason loan `l` ended calls the place `on` the effect was on:
+// `it`, the loan's own place, or the place as a diagnostic writes it.
+@ eng_end_who i l i on → s {
+    ? | == on 0 == on ( el_place l ) { ^ ( nurl_str_cat `it` `` ) } {}
+    ^ ( eng_pname on )
+}
+
+// What effect `eff` on `on` did (said of it as eng_end_who calls it),
+// with no more known than the effect.
+@ eng_eff_did i eff i l i on → s {
+    : b it | == on 0 == on ( el_place l )
+    : s who ( eng_end_who l on )
+    ? == eff EF_REALLOC { ^ ? it ( nurl_str_cat `its buffer may have moved or been freed` `` ) ( nurl_str_cat3 `the buffer of ` who ` may have moved or been freed` ) } {}
+    ? == eff EF_DROP { ^ ( nurl_str_cat3 `what ` who ` holds may have been dropped or replaced` ) } {}
+    ? == eff EF_REPLACE { ^ ( nurl_str_cat who ` was released or moved away` ) } {}
+    ? == eff EF_TAKE { ^ ( nurl_str_cat who ` was moved out of where it lived` ) } {}
+    ? == eff EF_PERMUTE { ^ ? it ( nurl_str_cat `its elements were moved between slots` `` ) ( nurl_str_cat3 `the elements of ` who ` were moved between slots` ) } {}
+    ^ ( nurl_str_cat who ` went out of scope` )
+}
+
+// …and said of a closure that runs here and does it.
+@ eng_eff_clo_does i eff i l i on → s {
+    ? | == on 0 == on ( el_place l ) { ^ ( nurl_str_cat ? == eff EF_REPLACE `may release it, or give it a new value` ( eng_eff_callee_says eff F F ) `` ) } {}
+    : s who ( eng_end_who l on )
+    ? == eff EF_REALLOC { ^ ( nurl_str_cat `may move or free the buffer of ` who ) } {}
+    ? == eff EF_DROP { ^ ( nurl_str_cat3 `may drop or replace what ` who ` holds` ) } {}
+    ? == eff EF_REPLACE { ^ ( nurl_str_cat3 `may give ` who ` a new value, or release it` ) } {}
+    ? == eff EF_TAKE { ^ ( nurl_str_cat `takes over ` who ) } {}
+    ? == eff EF_PERMUTE { ^ ( nurl_str_cat3 `may move the elements of ` who ` between slots` ) } {}
+    ^ ( nurl_str_cat `ends ` who )
+}
+
+// Why loan `l` ended, in the walk's words where the engine knows as much
+// (bck_borrow_end's `why`): what was done, to what, by what.
+@ eng_end_why i l → s {
+    : i b * l 4
+    : i how ( wv_at g_el_end + b 1 )
+    : i ctx % how 16
+    : i eff % / how 16 16
+    : i fl / how 256
+    : i on ( wv_at g_el_end + b 2 )
+    : i fname ( wv_at g_el_end + b 3 )
+    : s who ( eng_end_who l on )
+    : b shared != 0 & fl EN_SHARED
+    ? & == ctx EC_CALL != fname 0 {
+        : s arg ? == on 0 ( nurl_str_cat `an argument` `` ) ( nurl_str_cat who `` )
+        : s via ? shared ( nurl_str_cat arg `, which may reach the same shared value as another handle,` ) ( nurl_str_cat arg `` )
+        ^ ( nurl_str_cat4 via ` was passed to ` ( eng_fname fname ) ( nurl_str_cat `, which ` ( eng_eff_callee_says eff != 0 & fl EN_DEEP != 0 & fl EN_ELEMS ) ) )
+    } {}
+    ? shared { ^ ( nurl_str_cat `a change was made inside a shared value (an Rc, Arc or Shared payload) it is lent out of, through another handle on it` `` ) } {}
+    ? == ctx EC_CLO { ^ ( nurl_str_cat `a closure that runs here ` ( eng_eff_clo_does eff l on ) ) } {}
+    ? & == ctx EC_ASSIGN == eff EF_REPLACE { ^ ( nurl_str_cat who ` was given a new value` ) } {}
+    ? & == ctx EC_SCOPE | == eff EF_REPLACE == eff EF_END { ^ ( nurl_str_cat who ` went out of scope at the end of its block` ) } {}
+    ? & == ctx EC_RET | == eff EF_REPLACE == eff EF_END { ^ ( nurl_str_cat who ` was released as the function returned` ) } {}
+    ? & == ctx EC_REL | == eff EF_REPLACE == eff EF_END { ^ ( nurl_str_cat who ` was released` ) } {}
+    ^ ( eng_eff_did eff l on )
+}
+
 // ── Ownership engine: loans made by the rules ────────────────────────
 // A loan on `place` of `kind`, made under the key readied in g_el_key
 // (el_key1 … el_key4). A place is followed PATH_MAX elements deep. A
@@ -13637,6 +13760,8 @@ unsafe @ eng_byte s w i k → i {
     ? ! ( sq_has ( st_dead st ) l ) { ^ l } {}
     ( el_key2 TG_STALE l )
     : i stale ( __el_keyed pl kind )
+    // (the stand-in ended where the old one did)
+    ( el_end_copy l stale )
     : ~ i v 0
     ~ < v g_f_nv {
         : i av ( st_av st v )
@@ -14131,7 +14256,7 @@ unsafe @ eng_byte s w i k → i {
                 ? & == ( sq_at qs a ) ty ( kills_paths eff tail q ( sq_at qs + a 1 ) ( el_kind l ) F ) { = hit T } {}
                 = a + a 2
             }
-            ? hit { = dead ( sq_add dead l ) } {}
+            ? hit { = dead ( sq_add dead l ) ( el_end_note l g_fc_line eff 0 EN_SHARED ) } {}
         } {}
         = x + x 1
     }
@@ -14344,7 +14469,19 @@ unsafe @ eng_byte s w i k → i {
     ^ out
 }
 
+// eng_effect at depth 0, applied where `ctx` (EC_*) says: what it ends
+// ended there (eng_end_why), at line `eline` (0: `line`).
+@ eng_effect_as i st i place i eff i line i ctx i eline → v {
+    : i ek_was g_ek_ctx
+    : i eka_was g_ek_arg
+    : i ekl_was g_ek_line
+    = g_ek_ctx ctx = g_ek_arg 0 = g_ek_line eline
+    ( eng_effect st place eff line 0 )
+    = g_ek_ctx ek_was = g_ek_arg eka_was = g_ek_line ekl_was
+}
+
 @ eng_effect i st i place i eff i line i depth → v {
+    ? == depth 0 { = g_ek_top place } {}
     : i vid ( pl_var place )
     : i path ( pl_path place )
     : i av ( st_av st vid )
@@ -14486,7 +14623,7 @@ unsafe @ eng_byte s w i k → i {
         : ~ i k 0
         ~ < k ( sq_len g_fc_walking ) {
             : i l ( sq_at g_fc_walking k )
-            ? & & ! ( sq_has dead l ) == ( pl_var ( el_place l ) ) vid ( ep_prefix ( pl_path ( el_place l ) ) path ) { = dead ( sq_add dead l ) } {}
+            ? & & ! ( sq_has dead l ) == ( pl_var ( el_place l ) ) vid ( ep_prefix ( pl_path ( el_place l ) ) path ) { = dead ( sq_add dead l ) ( el_end_note l line eff place 0 ) } {}
             = k + k 1
         }
     } {
@@ -14495,7 +14632,7 @@ unsafe @ eng_byte s w i k → i {
         : ~ i x ( wv_at g_el_first + + vid g_f_nv 1 )
         ~ != x 0 {
             : i l - x 1
-            ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
+            ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) ( el_end_note l line eff place 0 ) } {}
             = x ( wv_at g_el_next l )
         }
         ? != 0 ( sq_len ( shared_tails place ) ) {
@@ -14503,7 +14640,7 @@ unsafe @ eng_byte s w i k → i {
             : ~ i y 0
             ~ < y n {
                 : i l ( wv_at g_el_shared y )
-                ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
+                ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) ( el_end_note l line eff place 0 ) } {}
                 = y + y 1
             }
         } {}
@@ -14588,6 +14725,34 @@ unsafe @ eng_byte s w i k → i {
     ^ ( nurl_str_cat `the value read here` `` )
 }
 
+// A finding about a use of the value (`wk`, `wa`: eng_what) after loan
+// `l` it is - or, `held`, one it holds - ended: where and why it ended,
+// in the walk's words (bck_diag_invalid: its `!vdep` form for a value
+// that holds the view, its plain one for a borrow).
+@ eng_ended_msg i l i wk i wa b held → s {
+    : s what ( eng_what wk wa )
+    : s src ( eng_pname ( el_place l ) )
+    : s ended ( nurl_str_cat4 ` ended at line ` ( nurl_str_int ( el_end_line l ) ) ` — ` ( eng_end_why l ) )
+    ? held {
+        : s h1 ( nurl_str_cat4 what ` holds ` ( eng_held_word ( el_kind l ) ) ( nurl_str_cat3 src ` (one stored into it, or captured by it), and ` src ) )
+        : s h2 ( nurl_str_cat4 ended `. Using ` what ` now would read freed memory. Keep ` )
+        : s h3 ( nurl_str_cat4 src ` unchanged until ` what ( nurl_str_cat3 ` is done, or have ` what ` hold a copy that owns its data (string_from, slice_to_vec).` ) )
+        ^ ( nurl_str_cat4 h1 h2 h3 `` )
+    } {}
+    : s n ? & == wk WK_VAR >= wa 0 ( nurl_str_cat ( eng_str ( ev wa 0 ) ) `` ) ( nurl_str_cat `` `` )
+    : s copy ? != 0 ( nurl_str_len n ) ( nurl_str_cat3 `: ( mem_dup ` n ` ).` ) ( nurl_str_cat ` (string_from, vec_clone, slice_to_vec, mem_dup).` `` )
+    : s m1 ( nurl_str_cat4 what ` ` ( eng_kind_word ( el_kind l ) ) ( nurl_str_cat3 ` ` src `,` ) )
+    : s m2 ( nurl_str_cat4 ` which` ended `. A borrow (a vec_get result, a field read, a view) lives only as long as its source is unchanged, so ` what )
+    ^ ( nurl_str_cat4 m1 m2 ` is gone too. Read it before that line, or take a copy that lives on its own where it is bound` copy )
+}
+
+// What a value holds, by the kind of its loan: `'v' holds <it> 'x'`.
+@ eng_held_word i k → s {
+    ? == k LK_REF { ^ `a pointer to ` } {}
+    ? == k LK_SHARE { ^ `a share of ` } {}
+    ^ `a view of `
+}
+
 // A value is used: a loan it is, or (`held`) one it holds, that ended
 // is the finding.
 @ check_live i st i loans i held i wk i wa i line → b {
@@ -14598,8 +14763,12 @@ unsafe @ eng_byte s w i k → i {
     ~ < k ( sq_len all ) {
         : i l ( sq_at all k )
         ? & ( sq_has dead l ) ( el_is_loan l ) {
-            ( eng_err line EG_ENDED ( nurl_str_cat ( nurl_str_cat3 ( eng_what wk wa ) ` ` ( eng_kind_word ( el_kind l ) ) )
-            ( nurl_str_cat3 ` ` ( eng_pname ( el_place l ) ) `, which was changed or released` ) ) )
+            ? != 0 ( el_end_line l ) {
+                ( eng_err line EG_ENDED ( eng_ended_msg l wk wa ! ( sq_has loans l ) ) )
+            } {
+                ( eng_err line EG_ENDED ( nurl_str_cat ( nurl_str_cat3 ( eng_what wk wa ) ` ` ( eng_kind_word ( el_kind l ) ) )
+                ( nurl_str_cat3 ` ` ( eng_pname ( el_place l ) ) `, which was changed or released` ) ) )
+            }
             ^ F
         } {}
         = k + k 1
@@ -16545,6 +16714,10 @@ unsafe @ eng_byte s w i k → i {
 @ run_closures i st i held i wk i wa i line → v {
     ( check_live st 0 held wk wa line )
     ? ! ( held_has_clo held ) { ^ } {}
+    // (what they end ended by a closure that runs here: eng_end_why)
+    : i ek_was g_ek_ctx
+    : i eka_was g_ek_arg
+    = g_ek_ctx EC_CLO = g_ek_arg 0
     : i cl ( wv_new )
     ( closures_in held cl )
     : ~ i c 0
@@ -16735,6 +16908,7 @@ unsafe @ eng_byte s w i k → i {
         = c + c 2
     }
     ( wv_drop cl )
+    = g_ek_ctx ek_was = g_ek_arg eka_was
 }
 
 // (place, effect) pairs, into `out`: what the closures a value may run
@@ -16909,7 +17083,11 @@ unsafe @ eng_byte s w i k → i {
         : i i - ( tp_at t 3 0 ) ncap
         ? & & >= i 0 < i np >= ( wv_at places i ) 0 {
             : i p ( wv_at places i )
+            : i ek_was g_ek_ctx
+            : i eka_was g_ek_arg
+            = g_ek_ctx EC_CLO = g_ek_arg 0
             ( eng_effect st ( pl_make ( pl_var p ) ( ep_cat ( pl_path p ) ( tp_at t 3 1 ) ) ) ( tp_at t 3 2 ) line 0 )
+            = g_ek_ctx ek_was = g_ek_arg eka_was
         } {}
         = e + e 1
     }
@@ -17991,6 +18169,11 @@ unsafe @ eng_byte s w i k → i {
         = e + e 1
     }
     = g_fc_wbs wbs
+    // (what they end ended by this call: eng_end_why)
+    : i ek_was g_ek_ctx
+    : i ekf_was g_ek_fn
+    : i eka_was g_ek_arg
+    = g_ek_ctx EC_CALL = g_ek_fn name
     = e 0
     ~ < e ne {
         : i t ( sm_at sm SM_EFFECTS e )
@@ -18002,6 +18185,7 @@ unsafe @ eng_byte s w i k → i {
             // (a parameter the callee gives a new value on some paths only
             // may go back holding what it held)
             = g_fc_weak ? & & == eff EF_REPLACE == epath 0 ( sm_has sm SM_KEEPS ek ) 1 0
+            = g_ek_arg ok
             ( eng_effect st ( pl_make ( pl_var ok ) ( ep_cat ( pl_path ok ) epath ) ) eff line 0 )
             = g_fc_weak 0
             : i cav ( st_av st ( pl_var ok ) )
@@ -18052,9 +18236,11 @@ unsafe @ eng_byte s w i k → i {
         : i t ( sm_at sm SM_REGIONS e )
         : i pk - ( tp_at t 4 3 ) 1
         : i via ? & >= pk 0 < pk n ( region_arg_via st ( wv_at ops pk ) ) 0
+        = g_ek_arg ? & & >= pk 0 < pk n ( op_is_place ( wv_at ops pk ) ) ( wv_at ops pk ) 0
         ? >= via 0 { ( region_effect st ( tp_at t 4 0 ) ( tp_at t 4 1 ) ( tp_at t 4 2 ) via ) } {}
         = e + e 1
     }
+    = g_ek_ctx ek_was = g_ek_fn ekf_was = g_ek_arg eka_was
     // a closure another thread runs takes what it captured with it (…and
     // a closure stored into what two threads may share - a channel, a
     // thread-shared handle's payload - may be run by the other one: it
@@ -19398,11 +19584,15 @@ unsafe @ eng_byte s w i k → i {
             // what this one captured the caller's may have captured too,
             // and running it may grow or clear it
             : ~ i p 0
+            : i ek_was g_ek_ctx
+            : i eka_was g_ek_arg
+            = g_ek_ctx EC_CLO = g_ek_arg 0
             ~ < p g_f_ncap {
                 ( eng_effect st ( pl_make ( fp_vid p ) 0 ) EF_REALLOC line 0 )
                 ( eng_effect st ( pl_make ( fp_vid p ) 0 ) EF_DROP line 0 )
                 = p + p 1
             }
+            = g_ek_ctx ek_was = g_ek_arg eka_was
         } {}
         : ~ i roots 0
         : i cal ( av_alias cav )
@@ -19772,7 +19962,7 @@ unsafe @ eng_byte s w i k → i {
             } {}
             ( eng_dtor_release st ( pl_make vid 0 ) ty line 0 )
             ? == ( av_own av ) OW_O {
-                ( eng_effect st ( pl_make vid 0 ) EF_REPLACE line 0 )
+                ( eng_effect_as st ( pl_make vid 0 ) EF_REPLACE line EC_RET 0 )
                 ( st_put st vid ( av_make OW_D 0 0 0 F ) )
             } {}
         } {}
@@ -19950,8 +20140,8 @@ unsafe @ eng_byte s w i k → i {
         ~ >= vid 0 {
             : i av ( st_av st vid )
             ? & & & & & & != av 0 ! ( sq_has seen vid ) == ( av_own av ) OW_O == ( fv_kind vid ) VK_LOCAL != vid g_fc_ret_watch ! ( sq_has reads vid ) & ! ( __wv_has g_chain_kept vid ) ! ( sq_has g_fc_ret_ws vid ) {
-                ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) 0 )
-                ( eng_effect st ( pl_make vid 0 ) EF_END ( fv_line vid ) 0 )
+                ( eng_effect_as st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) EC_RET g_fc_line )
+                ( eng_effect_as st ( pl_make vid 0 ) EF_END ( fv_line vid ) EC_RET g_fc_line )
                 ( st_put st vid ( av_make OW_D 0 0 0 F ) )
             } {}
             = vid - vid 1
@@ -19978,8 +20168,8 @@ unsafe @ eng_byte s w i k → i {
                 : i vid ( wv_at kept j )
                 : i av ( st_av st vid )
                 ? != av 0 {
-                    ? == ( av_own av ) OW_O { ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) 0 ) } {}
-                    ( eng_effect st ( pl_make vid 0 ) EF_END ( fv_line vid ) 0 )
+                    ? == ( av_own av ) OW_O { ( eng_effect_as st ( pl_make vid 0 ) EF_REPLACE ( fv_line vid ) EC_RET g_fc_line ) } {}
+                    ( eng_effect_as st ( pl_make vid 0 ) EF_END ( fv_line vid ) EC_RET g_fc_line )
                     ? != ( av_own av ) OW_M { ( st_put st vid ( av_make OW_D 0 0 0 F ) ) } {}
                 } {}
                 = j - j 1
@@ -20479,9 +20669,11 @@ unsafe @ eng_byte s w i k → i {
                 } {}
                 ( eng_dtor_release st ( pl_make vid 0 ) vty line 0 )
             } {}
-            ? == own OW_O { ( eng_effect st ( pl_make vid 0 ) EF_REPLACE line 0 ) } {}
+            // (what it ends ended at the block's end: its last line - the
+            // IR has none for the closing brace)
+            ? == own OW_O { ( eng_effect_as st ( pl_make vid 0 ) EF_REPLACE line EC_SCOPE ( eng_line to ) ) } {}
             // (the binding itself is gone: what points at it ends)
-            ( eng_effect st ( pl_make vid 0 ) EF_END line 0 )
+            ( eng_effect_as st ( pl_make vid 0 ) EF_END line EC_SCOPE ( eng_line to ) )
             ? != own OW_M { ( st_put st vid ( av_make OW_D 0 0 0 F ) ) } {}
         } {}
         = k - k 1
@@ -20971,7 +21163,7 @@ unsafe @ eng_byte s w i k → i {
                 // of it ends; what it held it may still hold)
                 : i was_weak g_fc_weak
                 = g_fc_weak 1
-                ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ln 0 )
+                ( eng_effect_as st ( pl_make vid 0 ) EF_REPLACE ln EC_ASSIGN 0 )
                 = g_fc_weak was_weak
             } {}
             ? == cown OW_P {
@@ -21001,7 +21193,7 @@ unsafe @ eng_byte s w i k → i {
             // (the old value is released: its destructor runs on it)
             ( eng_dtor_release st target vty ln 0 )
             ( eng_handover st target at )
-            ( eng_effect st target EF_REPLACE ln 0 )
+            ( eng_effect_as st target EF_REPLACE ln EC_ASSIGN 0 )
         } {}
         = new ( eng_reroot st new vid 0 )
         ? & & == cown OW_P != vty ET_NONE == ( et_kind vty ) EK_CLOSURE {
@@ -21163,7 +21355,7 @@ unsafe @ eng_byte s w i k → i {
         ? ! refill { ( eng_dtor_release st target fty ln 0 ) } {}
     } {}
     ( eng_handover st target at )
-    ( eng_effect st target EF_REPLACE ln 0 )
+    ( eng_effect_as st target EF_REPLACE ln EC_ASSIGN 0 )
     ? rehome { ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) ) } {}
     ( store_into st target add 0 F 0 )
     : i gone ( st_gone st )
@@ -21630,7 +21822,7 @@ unsafe @ eng_byte s w i k → i {
         : i vid ( ec + at 1 )
         ? == ( st_own st vid ) OW_O {
             ( eng_dtor_release st ( pl_make vid 0 ) ( fv_ty vid ) ln 0 )
-            ( eng_effect st ( pl_make vid 0 ) EF_REPLACE ln 0 )
+            ( eng_effect_as st ( pl_make vid 0 ) EF_REPLACE ln EC_REL 0 )
             ( st_put st vid ( av_make OW_D 0 0 0 F ) )
         } {
             // (a join arm's temporary the statement releases: no scope ends

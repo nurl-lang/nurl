@@ -217,6 +217,16 @@ def join(a, b):
 VIEW_TYPES = ("s", "slice")
 
 
+# Why a loan ended, by the effect that ended it (check_live's findings).
+ENDED_WHY = {
+    "realloc": "its buffer may have moved or been freed",
+    "drop": "what it holds may have been dropped or replaced",
+    "replace": "it was released, moved away or given a new value",
+    "take": "it was moved out of where it lived",
+    "permute": "its elements were moved between slots",
+}
+
+
 class FnCheck:
     """One function's abstract run, under the current summaries."""
 
@@ -228,6 +238,7 @@ class FnCheck:
         self.final = final
         self.errors = []
         self.loans = {}          # loan id -> (place, kind)
+        self.ended = {}          # loan id -> (line, effect): where and why it ended last (nurlc's g_el_end)
         self.pidx = {vid: i for i, vid in enumerate(fn.params)}
         # What a parameter's value holds is the caller's to say. One loan
         # stands for it (kind `held`), on a place of its own that nothing in
@@ -469,6 +480,8 @@ class FnCheck:
                                       {(p, sw(l)) for p, l in av.held})
             st.dead = (st.dead - {lid}) | {stale}
             self.loans[stale] = (place, kind)
+            if lid in self.ended:
+                self.ended[stale] = self.ended[lid]
         self.loans[lid] = (place, kind)
         return lid
 
@@ -510,6 +523,8 @@ class FnCheck:
                     break
         if killed:
             st.dead = st.dead | killed
+            for l in killed:
+                self.ended.pop(l, None)
 
     def shared_tails(self, place):
         """(handle type, path below its payload) for every shared handle the
@@ -656,6 +671,8 @@ class FnCheck:
             if TRACE and self.final and self.vname(vid) == TRACE:
                 print(f"trace: {self.fn.name}:{line}: {eff} on {self.pname(place)} ends {len(killed)} loan(s)", file=sys.stderr)
             st.dead = st.dead | killed
+            for l in killed:
+                self.ended[l] = (line, eff)
         # what the place held is gone with what the effect released
         if eff in ("drop", "replace", "take") and av.held and not weak:
             keep = set()
@@ -879,7 +896,14 @@ class FnCheck:
         if dead:
             lid = sorted(dead, key=repr)[0]
             place, kind = self.loans[lid]
-            self.err(line, f"{what} uses a {kind} of {self.pname(place)}, which was changed or released")
+            end = self.ended.get(lid)
+            if end is None:
+                self.err(line, f"{what} uses a {kind} of {self.pname(place)}, which was changed or released")
+            else:
+                # (where and why it ended, as nurlc's eng_ended_msg says it -
+                # by the effect alone: the reference keeps no more)
+                self.err(line, f"{what} uses a {kind} of {self.pname(place)}, which ended at line {end[0]} — "
+                               f"{ENDED_WHY.get(end[1], 'it went out of scope')}")
             return False
         return True
 

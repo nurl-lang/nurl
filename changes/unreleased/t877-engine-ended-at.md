@@ -1,0 +1,3 @@
+### Changed
+
+- **The ownership engine says where and why a borrow ended, as the borrow walk does** (AGORA-877). A finding of the engine's (`nurlc --engine-decides`) about a value used after what it borrows from ended read only "which was changed or released". It now names the line that ended it and why, in the walk's words: `'s' uses a view of 'v', which ended at line 12 — 'v' was passed to 'vec_push', which may move or free its buffer. …`, and for a value that holds the view, `'cb' holds a view of 'b' (one stored into it, or captured by it), and 'b' ended at line 56 — …`. The default compile, where the walk reports, is unchanged.
