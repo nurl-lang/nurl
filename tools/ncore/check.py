@@ -622,14 +622,7 @@ class FnCheck:
             # another binding's buffer (`= . x w ( slice_from_vec … )`, then
             # `( slice_put . x w 0 … )`): what is done there is done to what
             # the view points into, as for a binding that is a view
-            for hp, l in av.held:
-                if (hp and len(hp) < len(path) and path[:len(hp)] == hp and l in self.loans
-                        and self.loans[l][1] == "view"):
-                    hty = self.ty_of_place((vid, hp))
-                    if hty is not None and hty[0] in VIEW_TYPES:
-                        q = self.loans[l][0]
-                        if q[0] >= 0 and q[0] in st.vals:
-                            self.effect(st, (q[0], (q[1] + path[len(hp):])[:PATH_MAX]), eff, line, depth + 1, weak)
+            self.effect_in_views(st, vid, av.held, path, eff, line, depth, weak)
         if eff in ("realloc", "drop", "permute") and av.held and not (av.own == "L" and not path):
             # a part of the value that is a copy of another place's String or
             # Vec handle (what a callee stored there): the copy shares that
@@ -673,6 +666,42 @@ class FnCheck:
                     continue
                 keep.add((hp, l))
             st.vals[vid] = AV(av.own, av.loans, av.alias, keep)
+
+    def changed_in_views(self, sm, k, vid, path, av):
+        """The places a call changes through the view parts of its argument
+        `k` (`vid` at `path`, its value `av`): an effect of the callee's at a
+        path inside a part that is a view is at what that view points into."""
+        out = set()
+        for (j, p, eff) in sm["effects"]:
+            if j != k or eff not in ("realloc", "drop", "replace", "take"):
+                continue
+            p = tuple(p)
+            if eff == "replace" and "*" in p and self.scalar_place((vid, (tuple(path) + p)[:PATH_MAX])):
+                # (a number written into a buffer's element ends nothing
+                # another argument views: the `changed` row's exemption)
+                continue
+            for hp, l in av.held:
+                if (hp and len(hp) < len(p) and p[:len(hp)] == hp and l in self.loans
+                        and self.loans[l][1] == "view"):
+                    hty = self.ty_of_place((vid, (tuple(path) + hp)[:PATH_MAX]))
+                    if hty is not None and hty[0] in VIEW_TYPES:
+                        q = self.loans[l][0]
+                        if q[0] >= 0:
+                            out.add((q[0], (tuple(q[1]) + p[len(hp):])[:PATH_MAX]))
+        return out
+
+    def effect_in_views(self, st, vid, held, path, eff, line, depth=0, weak=False):
+        """An effect at `path` inside a part of `vid`'s value that is a view
+        (`held`: what the value holds, `(part, loan)`): it is done to what the
+        view points into."""
+        for hp, l in held:
+            if (hp and len(hp) < len(path) and path[:len(hp)] == hp and l in self.loans
+                    and self.loans[l][1] == "view"):
+                hty = self.ty_of_place((vid, hp))
+                if hty is not None and hty[0] in VIEW_TYPES:
+                    q = self.loans[l][0]
+                    if q[0] >= 0 and q[0] in st.vals:
+                        self.effect(st, (q[0], (q[1] + path[len(hp):])[:PATH_MAX]), eff, line, depth + 1, weak)
 
     def value_aliases(self, vid, alias):
         """The places of `alias` that are the borrowed value itself: a call
@@ -1597,6 +1626,23 @@ class FnCheck:
                     self.err(line, f"{name}: argument {k + 1} is handed over to be changed (`inout`), "
                                    f"and argument {m + 1} reaches it too")
                     break
+                # (…or what the call changes inside a part of it that is a
+                # view - a grow through an element of one of the slices a
+                # `Vec` of slices holds - is what argument m reaches: the
+                # change is to what that view points into, agora #933)
+                thru = self.changed_in_views(sm, k, vid, path, avs[k])
+                # (…what argument m reaches is also what the views and handles
+                # its value holds point into: a slice in a field of a struct
+                # passed beside the changed argument)
+                reach = mine | {tuple(self.loans[l][0][:2]) for hp, l in avs[m].held
+                                if l in self.loans and self.loans[l][1] in ("view", "handle")
+                                and self.loans[l][0][0] >= 0}
+                hit = next((q for q in thru for r in reach
+                            if r[0] == q[0] and (prefix(q[1], r[1]) or prefix(r[1], q[1]))), None)
+                if hit is not None:
+                    self.err(line, f"{name}: argument {k + 1} holds a view of {self.pname(hit)}, which the call "
+                                   f"may change, and argument {m + 1} reaches it too")
+                    break
         # an `inout` argument beside a closure argument that captured it: the
         # callee can reach one value under two names (MEMORY.md §2.4)
         for k, mode in enumerate(sm["modes"][:len(ops)]):
@@ -1894,6 +1940,14 @@ class FnCheck:
                 # only may go back holding what it held: `keeps`)
                 self.effect(st, (ops[k][1], ops[k][2] + tuple(path)), eff, line,
                             weak=eff == "replace" and not path and k in sm.get("keeps", ()))
+                cur = st.vals.get(ops[k][1])
+                if path and not ops[k][2] and cur is not None and cur.own == "M" and avs[k].held:
+                    # (an argument the callee took: what it does inside a part
+                    # of it that is a view - a grow through an element of one
+                    # of the slices a `Vec` of slices holds - is done to what
+                    # that view points into, which the caller still has;
+                    # agora #933)
+                    self.effect_in_views(st, ops[k][1], avs[k].held, tuple(path), eff, line)
                 if (eff == "replace" and not path and not ops[k][2] and k < len(sm["modes"])
                         and sm["modes"][k] == "inout"):
                     # (a binding an `inout` callee may give a value of its
@@ -3278,12 +3332,14 @@ class FnCheck:
         for vid in sorted(st.vals, reverse=True):
             av = st.vals[vid]
             v = self.fn.vars[vid]
-            if (v.kind == "param" and av.own == "P" and vid in self.pidx and vid != keep
+            if (v.kind == "param" and av.own in ("P", "X") and vid in self.pidx and vid != keep
                     and self.fn.modes[self.pidx[vid]] == "sink"):
                 # (a `sink` parameter still held at the exit is released by
                 # this function: its `% Drop` runs here, and what it changes
                 # of a shared payload is in this summary's regions - so a
-                # caller's view through another handle ends at the call)
+                # caller's view through another handle ends at the call;
+                # one consumed on some paths only, `X`, is released on the
+                # others)
                 d0 = st.dead
                 self.run_dtor(st, (vid, ()), v.ty, line)
                 killed |= st.dead - d0
@@ -3413,6 +3469,14 @@ class FnCheck:
                     av = st.vals.get(vid)
                     if av is None:
                         continue
+                    vty = self.fn.vars[vid].ty
+                    if (av.own in ("O", "X") and av.held and vty is not None and vty[0] == "named"
+                            and vty[1] in getattr(self.prog, "udrop", ())):
+                        # (its destructor may read the views it holds: its
+                        # drop after the chain is a use of what they point
+                        # into, as at a scope end - MEMORY.md §2.14)
+                        self.check_live(st, AV("N", held=av.held), self.fn.vars[vid].line,
+                                        f"the drop of {self.vname(vid)}", held=True)
                     if av.own == "O":
                         self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, self.fn.vars[vid].line)
                         self.effect(st, (vid, ()), "replace", self.fn.vars[vid].line)
@@ -4397,6 +4461,10 @@ class FnCheck:
                     if not self.handover(st, (vid, ())):
                         self.run_dtor(st, (vid, ()), v.ty, ln)
                     self.effect(st, (vid, ()), "replace", ln)
+                elif cur is not None and cur.own == "X":
+                    # (moved on some paths only: on the others the old value
+                    # is released here, and its `% Drop` runs)
+                    self.run_dtor(st, (vid, ()), v.ty, ln)
                 new = self.reroot(st, new, vid)
                 if cur is not None and cur.own == "P" and v.ty is not None and v.ty[0] == "closure":
                     # a closure binding reached through a pointer (an

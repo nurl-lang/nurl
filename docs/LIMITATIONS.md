@@ -41,7 +41,7 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   captured the struct. Until the fix ships, give the field a value right
   after the take (`= . h buf ( vec_new [u] )`), or hand the callee a copy
   (`( mem_dup . h buf )`) and keep the field.
-- **agora #895: a slice a call made, kept by its callee in a struct or option it returns, and a literal temporary read only for a field.** `( wrapb ( mk ) )` with `wrapb` storing its slice parameter in a returned struct, or `@ ?[i { T a }` handing it back in an option, leaks the slice (and so does `( wrap ? c ( mk ) a )`, a join handed to it): a slice parameter stored that way is taken for a view, where a `Vec` parameter would be an inferred `sink`. And `( ln . @ Bag { ( mk ) 3 } s )`, a struct literal temporary read only for one field, is never released, for a `String` or `Vec` field as for a slice (a leak). Until the fix ships, bind the slice to a name first (`: [i t ( mk )  ( wrapb t )`), and bind a literal before reading its field. (`^ ( id ( mk ) )` is closed: `fresh_slice_handed_back_through_a_lending_call_in_a_return_runs_clean`.)
+- **agora #935: a slice of view-holding elements copied from a parameter into a struct.** `@ wraps [s t → SBag { ^ @ SBag { t 2 } }` with `( wraps ( mks ) )` leaks the temporary's buffer: the copy is published to the borrow walk as the parameter itself, so the caller keeps the temporary for the result's sake and releases it nowhere. (A slice of elements that hold no view is closed: agora #895.) Until the fix ships, bind the slice to a name first (`: [s t ( mks )  ( wraps t )`).
 <!-- END open holes -->
 
 Every other safe program found accepted and faulting is closed, and held

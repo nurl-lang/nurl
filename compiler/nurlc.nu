@@ -8923,6 +8923,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // `% Drop` of its own that could read it, else its own copy (a field of
     // a parameter or behind a pointer stays a lend).
     : ~ b ret_field_copy F
+    : ~ b ret_tf_slice F
     // A field taken out of a call's result (`^ . ( mk ) name`, h266): the
     // caller's own where the call handed the result over, lent where it
     // lent it (`^ . ( vec_at [Bx] bxs 0 ) items`) — answered per call, as
@@ -8937,6 +8938,15 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             = val ( mem_emit_cloneif cg ( nurl_get_last_type ) val ( mem_hown_static syms cg __tfc ) )
         } {}
         = hbit __tfo
+        // (An owned slice taken out so, `^ . ( mkb ) s`, answers by that
+        // flag as a String does: it is no lend of a parameter, and the
+        // fresh-slice veto below is not asked of it; agora #936.)
+        // (…and its callers ask its module-end constant for the slice, as
+        // for a callee that answers per call: `rettf##`, __slice_call_run_bit.)
+        ? ( mem_is_slice_ty ( nurl_get_last_type ) ) {
+            = ret_tf_slice T
+            ( nurl_sym_def g_pending_impl ( nurl_str_cat `rettf##` ( nurl_sym_get syms `__fn_self_name__` ) ) `1` )
+        } {}
         : s __tfx ( __retown_ix ( nurl_sym_get syms `__last_tmp_field_rk__` ) )
         ? != 0 ( nurl_str_len __tfx ) { = __rost_reg ( nurl_str_cat hbit `` ) = __rost ( nurl_str_cat __tfx `` ) } {}
         = ret_field_copy T
@@ -10071,11 +10081,16 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // An all-paths fact, as for a string (__fn_ret_str_mixed__): a slice
     // returned on another path that is not this function's own (a
     // parameter, a borrow) vetoes it.
-    { ? ( mem_is_slice_ty lt ) { ( nurl_sym_set_deep syms `__fn_ret_slice_mixed__` `1` ) } {} }
+    // (…not a slice taken out of a temporary by its read, which answers by
+    // the read's flag: vetoed, `^ . ( mkb ) s` was a lend to every caller
+    // and leaked; agora #936.)
+    { ? & ( mem_is_slice_ty lt ) ! ret_tf_slice { ( nurl_sym_set_deep syms `__fn_ret_slice_mixed__` `1` ) } {} }
     // Borrow provenance: if the returned value is a borrow (derived from a
     // parameter), this function returns a borrow — callers must NOT
     // auto-drop a `:`-binding off it. (Unless it was copied on the way out.)
-    ? & & & != 0 ( nurl_sym_len syms `__last_value_borrow__` ) ! ret_owned_param ! ret_call_copied ! ret_pl_copied
+    // (…not a slice taken out of a temporary by its read, ret_tf_slice: the
+    // read's flag answers for it, as for a String taken so; agora #936.)
+    ? & & & & != 0 ( nurl_sym_len syms `__last_value_borrow__` ) ! ret_owned_param ! ret_call_copied ! ret_pl_copied ! ret_tf_slice
     { ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` )
         ? ! ( mem_ret_borrow_of_params syms ret_first_tt ) { ( nurl_sym_set_deep syms `__fn_ret_borrow_x__` `1` ) } {}
         // (`^ ( g x )` hands back what g did: owned exactly when g's own
@@ -14261,6 +14276,71 @@ unsafe @ eng_byte s w i k → i {
     ^ T
 }
 
+// An effect at `path` inside a part of `vid`'s value that is a view (`hd`:
+// what the value holds, as held entries): it is done to what the view points
+// into. (check.py's effect_in_views.)
+@ eng_effect_in_views i st i vid i hd i path i eff i line i depth → v {
+    : ~ i k 0
+    ~ < k ( sq_len hd ) {
+        : i he ( sq_at hd k )
+        : i hp ( he_path he )
+        : i l ( he_loan he )
+        ? & & & & != hp 0 < ( ep_len hp ) ( ep_len path ) ( ep_prefix hp path ) ( el_is_loan l ) == ( el_kind l ) LK_VIEW {
+            : i hty ( eng_ty_of ( pl_make vid hp ) )
+            ? & != hty ET_NONE ( et_is_view hty ) {
+                : i q ( el_place l )
+                : i qv ( pl_var q )
+                ? & >= qv 0 != 0 ( st_av st qv ) {
+                    ( eng_effect st ( pl_make qv ( ep_take ( ep_cat ( pl_path q ) ( ep_drop path ( ep_len hp ) ) ) PATH_MAX ) ) eff line + depth 1 )
+                } {}
+            } {}
+        } {}
+        = k + k 1
+    }
+}
+
+// The places a call changes through the view parts of its argument `k`
+// (`ok`, its value `av`): an effect of the callee's at a path inside a part
+// that is a view is at what that view points into. (check.py's
+// changed_in_views, agora #933.)
+@ eng_changed_in_views i sm i k i ok i av → i {
+    : ~ i out 0
+    : i hd ( av_held av )
+    ? == hd 0 { ^ 0 } {}
+    : ~ i e 0
+    ~ < e ( sm_n sm SM_EFFECTS ) {
+        : i t ( sm_at sm SM_EFFECTS e )
+        : i eff ( tp_at t 3 2 )
+        : i p ( tp_at t 3 1 )
+        : ~ b scalar F
+        ? & == eff EF_REPLACE ! ( eng_path_no_star p ) {
+            // (a number written into a buffer's element ends nothing another
+            // argument views: the `changed` row's exemption)
+            = scalar ( eng_place_scalar ( pl_make ( pl_var ok ) ( ep_take ( ep_cat ( pl_path ok ) p ) PATH_MAX ) ) )
+        } {}
+        ? & & ! scalar == ( tp_at t 3 0 ) k | | | == eff EF_REALLOC == eff EF_DROP == eff EF_REPLACE == eff EF_TAKE {
+            : ~ i j 0
+            ~ < j ( sq_len hd ) {
+                : i he ( sq_at hd j )
+                : i hp ( he_path he )
+                : i l ( he_loan he )
+                ? & & & & != hp 0 < ( ep_len hp ) ( ep_len p ) ( ep_prefix hp p ) ( el_is_loan l ) == ( el_kind l ) LK_VIEW {
+                    : i hty ( eng_ty_of ( pl_make ( pl_var ok ) ( ep_take ( ep_cat ( pl_path ok ) hp ) PATH_MAX ) ) )
+                    ? & != hty ET_NONE ( et_is_view hty ) {
+                        : i q ( el_place l )
+                        ? >= ( pl_var q ) 0 {
+                            = out ( sq_add out ( pl_make ( pl_var q ) ( ep_take ( ep_cat ( pl_path q ) ( ep_drop p ( ep_len hp ) ) ) PATH_MAX ) ) )
+                        } {}
+                    } {}
+                } {}
+                = j + j 1
+            }
+        } {}
+        = e + e 1
+    }
+    ^ out
+}
+
 @ eng_effect i st i place i eff i line i depth → v {
     : i vid ( pl_var place )
     : i path ( pl_path place )
@@ -14318,24 +14398,7 @@ unsafe @ eng_byte s w i k → i {
         // another binding's buffer (`= . x w ( slice_from_vec … )`, then
         // `( slice_put . x w 0 … )`): what is done there is done to what the
         // view points into, as for a binding that is a view
-        : i hd ( av_held av )
-        : ~ i k 0
-        ~ < k ( sq_len hd ) {
-            : i he ( sq_at hd k )
-            : i hp ( he_path he )
-            : i l ( he_loan he )
-            ? & & & & != hp 0 < ( ep_len hp ) ( ep_len path ) ( ep_prefix hp path ) ( el_is_loan l ) == ( el_kind l ) LK_VIEW {
-                : i hty ( eng_ty_of ( pl_make vid hp ) )
-                ? & != hty ET_NONE ( et_is_view hty ) {
-                    : i q ( el_place l )
-                    : i qv ( pl_var q )
-                    ? & >= qv 0 != 0 ( st_av st qv ) {
-                        ( eng_effect st ( pl_make qv ( ep_take ( ep_cat ( pl_path q ) ( ep_drop path ( ep_len hp ) ) ) PATH_MAX ) ) eff line + depth 1 )
-                    } {}
-                } {}
-            } {}
-            = k + k 1
-        }
+        ( eng_effect_in_views st vid ( av_held av ) path eff line depth )
     } {}
     ? & & | | == eff EF_REALLOC == eff EF_DROP == eff EF_PERMUTE != ( av_held av ) 0 ! & == ( av_own av ) OW_L == path 0 {
         // a part of the value that is a copy of another place's String or
@@ -17523,6 +17586,43 @@ unsafe @ eng_byte s w i k → i {
                         ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ` is handed over to be changed ('inout'), and argument ` ( nurl_str_int + m 1 ) ` reaches it too` ) ) )
                         = stop T
                     } {}
+                    // (…or what the call changes inside a part of it that is a
+                    // view - a grow through an element of one of the slices a
+                    // `Vec` of slices holds - is what argument m reaches: the
+                    // change is to what that view points into, agora #933)
+                    ? ! stop {
+                        : i thru ( eng_changed_in_views sm k ok ( wv_at avs k ) )
+                        // (…what argument m reaches is also what the views and
+                        // handles its value holds point into: a slice in a field
+                        // of a struct passed beside the changed argument)
+                        : ~ i reach mine
+                        : i mhd ( av_held ( wv_at avs m ) )
+                        : ~ i r2 0
+                        ~ < r2 ( sq_len mhd ) {
+                            : i ml ( he_loan ( sq_at mhd r2 ) )
+                            ? & ( el_is_loan ml ) | == ( el_kind ml ) LK_VIEW == ( el_kind ml ) LK_HANDLE {
+                                : i mq ( el_place ml )
+                                ? >= ( pl_var mq ) 0 { = reach ( sq_add reach mq ) } {}
+                            } {}
+                            = r2 + r2 1
+                        }
+                        : ~ i hit -1
+                        : ~ i a2 0
+                        ~ & < hit 0 < a2 ( sq_len thru ) {
+                            : i ta ( sq_at thru a2 )
+                            : ~ i b2 0
+                            ~ & < hit 0 < b2 ( sq_len reach ) {
+                                : i qa ( sq_at reach b2 )
+                                ? & == ( pl_var qa ) ( pl_var ta ) | ( ep_prefix ( pl_path qa ) ( pl_path ta ) ) ( ep_prefix ( pl_path ta ) ( pl_path qa ) ) { = hit ta } {}
+                                = b2 + b2 1
+                            }
+                            = a2 + a2 1
+                        }
+                        ? >= hit 0 {
+                            ( eng_err line EG_EXCL ( nurl_str_cat ( nurl_str_cat3 ( eng_in_call name ) `argument ` ( nurl_str_int + k 1 ) ) ( nurl_str_cat3 ( nurl_str_cat3 ` holds a view of ` ( eng_pname hit ) `, which the call may change, and argument ` ) ( nurl_str_int + m 1 ) ` reaches it too` ) ) )
+                            = stop T
+                        } {}
+                    } {}
                 } {}
                 = m + m 1
             }
@@ -17901,6 +18001,14 @@ unsafe @ eng_byte s w i k → i {
             = g_fc_weak ? & & == eff EF_REPLACE == epath 0 ( sm_has sm SM_KEEPS ek ) 1 0
             ( eng_effect st ( pl_make ( pl_var ok ) ( ep_cat ( pl_path ok ) epath ) ) eff line 0 )
             = g_fc_weak 0
+            : i cav ( st_av st ( pl_var ok ) )
+            ? & & & != epath 0 == ( pl_path ok ) 0 != cav 0 & == ( av_own cav ) OW_M != ( av_held ( wv_at avs ek ) ) 0 {
+                // (an argument the callee took: what it does inside a part of
+                // it that is a view - a grow through an element of one of the
+                // slices a `Vec` of slices holds - is done to what that view
+                // points into, which the caller still has; agora #933)
+                ( eng_effect_in_views st ( pl_var ok ) ( av_held ( wv_at avs ek ) ) epath eff line 0 )
+            } {}
             // (a library function that drops or replaces elements - `vec_clear`
             // over a Vec of a type with a `% Drop` of the program's own - runs
             // that destructor on each: what it does is done here, agora #712)
@@ -22310,6 +22418,10 @@ unsafe @ eng_byte s w i k → i {
 //   cloargs   closure-parameter its-parameter parameter path
 // A path is its elements joined by `/`, `-` the empty one.
 @ eng_prims → v {
+    // (A slice parameter's copy in a literal that owns its slice field by
+    // type, of elements that hold no view: its own buffer, nothing of its
+    // argument - gen_agg_lit, AGORA-895.)
+    ( eng_prim `__nurl_slice_copy` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `arc_clone` `in` `own` `` `- 0 - held` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `arc_get` `in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
     ( eng_prim `arc_new` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `0` `` )
@@ -28780,7 +28892,9 @@ unsafe @ __hown_dyn_walk i syms s fname → b {
         ( nurl_print `@.__nurl_retdyn.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` ) ( nurl_print ? dyn `true` `false` ) ( nurl_print `\n` )
         ? != 0 ( nurl_sym_len2 g_pending_impl `retslc##` number ) {
-            : b __rso | ( seq ( __ret_owned_of syms callee ) `1` ) ( seq ( __ret_owned_of syms generic ) `1` )
+            // (…or a slice taken out of a temporary by the callee's read, where
+            // the callee lends nothing: `rettf##`, gen_ret - agora #936.)
+            : b __rso | | ( seq ( __ret_owned_of syms callee ) `1` ) ( seq ( __ret_owned_of syms generic ) `1` ) & ! lent | != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `rettf##` callee ) ) != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `rettf##` generic ) )
             ( nurl_print `@.__nurl_retslc.` ) ( nurl_print number )
             ( nurl_print ` = private constant i1 ` ) ( nurl_print ? __rso `true` `false` ) ( nurl_print `\n` )
         } {}
@@ -46141,6 +46255,15 @@ unsafe @ __slice_len_comma s t → b {
             ( mem_udrop_flag_set syms cg ptr ( nurl_sym_get syms `__last_slice_own_bit__` ) )
         } {}
     } {}
+    // (A slice field taken out of a temporary, `: [i x . ( mkb ) s`: the
+    // binding owns it by the read's flag (`__last_tmp_field_own__`, h266),
+    // as a join's slice by its bit. Released by nobody, it leaked; agora
+    // #895.)
+    ? & == rhs_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) {
+        ( mem_own_add syms name )
+        ( mem_slice_decl_add syms name )
+        ( mem_udrop_flag_set syms cg ptr ( nurl_sym_get syms `__last_tmp_field_own__` ) )
+    } {}
     ? ( __slice_let_moves syms rhs_tt rhs_val name vt is_mut ) {
         ( __slice_slot_empty syms rhs_val vt )
         ( mem_own_add syms name )
@@ -46162,7 +46285,11 @@ unsafe @ __slice_len_comma s t → b {
 // have been released by it; agora #841.)
 @ __slice_call_run_bit i syms i cg → s {
     ? >= g_call_own_slc 0 { ^ ( nurl_str_cat `%r` ( nurl_str_int g_call_own_slc ) ) } {}
-    ? ! ( __hown_dyn syms ( nurl_sym_get syms `__last_call_name__` ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    // (…or one that hands back a slice taken out of a temporary, answered by
+    // the read's flag - a module-end constant (`rettf##`, gen_ret; agora
+    // #936).)
+    : s __scn ( nurl_sym_get syms `__last_call_name__` )
+    ? & ! ( __hown_dyn syms __scn ) == 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat `rettf##` __scn ) ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( mem_call_retown syms cg )
 }
 
@@ -49553,7 +49680,8 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     // rule of its own, above.)
     // (…or a field taken out of a call's result, `( len . ( mk ) name )`:
     // a value of its own, h266.)
-    : b __tfo && && == arg_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) ( __is_handle_ty at )
+    // (…an owned slice's too: agora #895.)
+    : b __tfo && && == arg_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) || ( __is_handle_ty at ) ( __owned_slice_ty ( nurl_llty at ) )
     // (…or a `?` / `??` join of owning values, by the phi of its arms'
     // ownership bits — a literal's, a call's (mem_arm_hown,
     // mem_arm_struct_hown): a value of its own, which nothing dropped when
@@ -80635,6 +80763,10 @@ unsafe @ gen_cast i lex i syms i cg → s {
     // read, as __arm_is_mem_dup asks it of an arm.)
     ? & == mb_tt TT_LPAREN == g_dup_nest + g_call_nest 1 { ^ ( nurl_str_cat `true` `` ) } {}
     ? == mb_tt TT_LPAREN { ^ ( mem_call_retown syms cg ) } {}
+    // (A struct literal read for a field, `. @ SB { ( mk ) 3 } s`: the
+    // literal took in what it holds, so it is the read's own temporary.
+    // Seen as no temporary, it leaked - agora #895.)
+    ? == mb_tt TT_AT { ^ ( nurl_str_cat `true` `` ) } {}
     ^ ( nurl_str_cat inner_tfo `` )
 }
 
@@ -80751,7 +80883,7 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
     // field of something, nothing released it (agora #474).
     : s __mb_inner_tfo ? == __mb_tt TT_DOT ( nurl_sym_get syms `__last_tmp_field_own__` ) ``
     : s __mb_inner_rk ? == __mb_tt TT_DOT ( nurl_sym_get syms `__last_tmp_field_rk__` ) ``
-    : b __mb_tobj | == __mb_tt TT_LPAREN & == __mb_tt TT_DOT != 0 ( nurl_str_len __mb_inner_tfo )
+    : b __mb_tobj | | == __mb_tt TT_LPAREN & == __mb_tt TT_DOT != 0 ( nurl_str_len __mb_inner_tfo ) & == __mb_tt TT_AT ( __type_needs_drop ot syms )
     ( nurl_sym_def syms `__last_field_read__` `` )
     ( nurl_sym_def syms `__last_tmp_field_own__` `` )
     // Where the object itself was loaded from, when it was read through a
@@ -81105,10 +81237,21 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                     // A field that owns nothing read out of a call's result
                     // (`. ( mk ) n`): the rest of that temporary is dropped
                     // here, when the call handed it over (h232) — it leaked.
-                    ? & & & & __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
-                    ! ( __type_needs_drop ftype syms ) ! ( __is_closure_ty ftype ) {
+                    // (An owned slice owns its buffer, which __type_needs_drop
+                    // does not count: it leaves with the read, below. Taken
+                    // for a field that owns nothing, `( ln . ( mkb ) s )`
+                    // released the struct under the slice it handed on: a
+                    // use-after-free, agora #895.)
+                    ? & & & & & __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
+                    ! ( __type_needs_drop ftype syms ) ! ( __is_closure_ty ftype ) ! ( __owned_slice_ty ( nurl_llty ftype ) ) {
                         : s tro ( __mb_tmp_flag syms cg __mb_tt __mb_inner_tfo )
                         ? != 0 ( nurl_str_len tro ) {
+                            // (…a release the borrow walk sees: a `% Drop` it
+                            // runs is a call of that drop, as a discarded
+                            // value's is (__udrop_release_tmp, #766). Unseen,
+                            // `. ( mk r ) n` cleared a payload a view of it
+                            // through another handle read on: a use-after-free.)
+                            ( __udrop_release_tmp syms ot )
                             ( __handle_drop_ensure ot )
                             ( __dropifv_request ot )
                             ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ot ) ) ( nurl_print `(i1 ` ) ( nurl_print tro )
@@ -81126,8 +81269,9 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                     // literal takes over.
                     : ~ s __tf_res ( nurl_str_cat res `` )
                     : ~ b __tf_taken F
-                    ? & & & & & __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
-                    ( __is_handle_ty ftype ) ! ( __has_user_drop ot ) ( __clone_supported ftype syms ) {
+                    // (…and an owned slice the same: agora #895.)
+                    ? & & & & __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
+                    ! ( __has_user_drop ot ) | & ( __is_handle_ty ftype ) ( __clone_supported ftype syms ) ( __owned_slice_ty ( nurl_llty ftype ) ) {
                         // (Exactly when the call handed its result over — its
                         // flag: a lent one, `. ( arc_get a ) file`, stays a
                         // view of its owner.)
@@ -81140,6 +81284,7 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                             ( nurl_print `  ` ) ( nurl_print rest ) ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty ot ) )
                             ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ftype ) )
                             ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
+                            ( __udrop_release_tmp syms ot )
                             ( __handle_drop_ensure ot )
                             ( __dropifv_request ot )
                             ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ot ) ) ( nurl_print `(i1 ` ) ( nurl_print tro2 )
@@ -81192,8 +81337,12 @@ unsafe @ __gen_member_body i lex i syms i cg → s {
                     // leaked, and its destructors never ran (h329, h330). Journaled
                     // once its value is in place, as h233's owner is
                     // (mem_journal_push_tmpown).
+                    // (…an owned slice too, which __type_needs_drop does not
+                    // count: under a `% Drop` of the struct's own it is not taken
+                    // out, and the temporary with its slice was released by
+                    // no one - its drop never ran; agora #895's review.)
                     ? & & & & ! __tf_taken __mb_tobj != 0 g_auto_drop_strings ( __type_needs_drop ot syms )
-                    | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) {
+                    | | ( __type_needs_drop ftype syms ) ( __is_closure_ty ftype ) ( __owned_slice_ty ( nurl_llty ftype ) ) {
                         : s tro4 ( __mb_tmp_flag syms cg __mb_tt __mb_inner_tfo )
                         ? != 0 ( nurl_str_len tro4 ) {
                             : s tp ( nurl_cg_reg cg )
@@ -81560,6 +81709,15 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // moves in as a local does — `rcbox_new [T] @ T { a b }` in a
         // constructor copied every Vec it was handed, then dropped it.)
         : i __fpc_i ( nurl_sym_word_index syms `__fn_param_names__` fld_first_val )
+        // (…and a slice parameter in any literal that owns its slice field
+        // by type - a struct whose drop releases it, an enum's boxed
+        // payload, an option's payload: the field is a copy of it (below,
+        // as for any slice not the literal's own), so the function keeps
+        // the copy, not its argument. Recorded as kept, the caller handed
+        // its temporary over and nobody released it: `( wrapb ( mk ) )`
+        // with `@ wrapb [i t → Bag { ^ @ Bag { t 3 } }`, AGORA-895.)
+        : s __fpc_ty ? >= __fpc_i 0 ( nurl_llty ( nurl_sym_get syms fld_first_val ) ) ``
+        : b __fpc_slice && && && && && && >= __fpc_i 0 ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fpc_i ) ) != 0 ( nurl_str_len __fpc_ty ) == 123 ( nurl_str_get __fpc_ty 0 ) ( __owned_slice_ty __fpc_ty ) != 0 g_auto_drop_strings ? agg_is_wrap != 0 ( nurl_str_len ( __opt_slice_payload ( nurl_llty agg_ty ) ) ) | != enum_paycount -1 ( __agg_drop_takes_fields agg_ty )
         : b fld_param_copy & & & & & ( is_ident_tok fld_first_tt ) ! agg_returned ! agg_nested_wrap
         >= __fpc_i 0
         ( __clone_supported ( nurl_sym_get syms fld_first_val ) syms )
@@ -81639,7 +81797,14 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // the unwind drops it once (Agora #741). A last field is the `}`.
         : b __fj_defer & ( is_ident_tok fld_first_tt ) != ( nurl_lex_peek_type lex ) TT_RBRACE
         ? __fj_defer { ( nurl_print_buf_start ) } {}
-        ? & & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ! fld_param_lend | agg_returned == 0 ( nurl_str_len __argk ) ! __fk_rawparam
+        // (A slice parameter copied into a field the literal owns by type,
+        // __fpc_slice: the copy is the literal's outright - `__agg_copied__`
+        // - and the parameter is not kept.)
+        ? & __fpc_slice ( is_ident_tok fld_first_tt ) {
+            : s __acs ( nurl_sym_get syms `__agg_copied__` )
+            ( nurl_sym_set_deep syms `__agg_copied__` ? == 0 ( nurl_str_len __acs ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __acs ` ` fld_first_val ) )
+        } {}
+        ? & & & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ! __fpc_slice ! fld_param_lend | agg_returned == 0 ( nurl_str_len __argk ) ! __fk_rawparam
         // (Where it is copied — fld_lent, read before the move — its
         // sources keep their own, agora #476. Not a returned option's or
         // result's payload: one lent on some runs only is not copied there,
@@ -81786,9 +81951,16 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // (A block whose tail is a call, or a join, hands on that one's
         // value: __val_eff_tt.)
         : i fld_eff_tt ( __val_eff_tt fld_first_tt )
+        // (A slice parameter the literal copies, __fpc_slice — the slice-field
+        // copy below, its buffer neither moved nor fresh — of elements that
+        // hold no view: the copy is a value of its own, holding nothing of
+        // the parameter: `-` to the walk, `__nurl_slice_copy` to the engine.
+        // Read as the parameter, `( wrapb ( mk ) )`'s result was taken for
+        // a view of its temporary and refused, AGORA-895.)
+        : b __fpc_cp && && && __fpc_slice ! fld_moved_slice ! ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` ) ! ( __ty_holds_view_p ( __owned_slice_elem ( nurl_llty fty ) ) )
         // (A closure field is adopted — mem_clo_into_store: `\\a(…)`.)
         ? != 0 __sx_me {
-            : s __fsx ( __sx_operand syms fld_first_tt fld_first_val fty ( __sx_froot syms fld_first_tt fty ) __fsxn0 )
+            : s __fsx ? __fpc_cp ( nurl_str_cat `-` `` ) ( __sx_operand syms fld_first_tt fld_first_val fty ( __sx_froot syms fld_first_tt fty ) __fsxn0 )
             = agg_sx ( __sx_join agg_sx ? & ( __is_closure_ty fty ) ! | ( seq __fsx `-` ) ( seq __fsx `*` ) ( nurl_str_cat3 `\\a(` __fsx `)` ) __fsx )
         } {}
         // A pointer field of a returned literal points where what it was
@@ -81882,8 +82054,10 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         ? ! ( is_ident_tok fld_first_tt ) { = fld_lent ( mem_lent_cond syms cg fty fld_eff_tt fld_first_val ) } {}
         // (…but a field taken out of a call's result is a value of its own,
         // h266: it moves in.)
+        : ~ s __fld_tfo ``
         ? & == fld_first_tt TT_DOT != 0 ( nurl_sym_len syms `__last_tmp_field_own__` ) {
             : s __tfo ( nurl_sym_get syms `__last_tmp_field_own__` )
+            = __fld_tfo ( nurl_str_cat __tfo `` )
             ? ( seq __tfo `true` ) { = fld_lent `` } {
                 = fld_lent ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print fld_lent ) ( nurl_print ` = xor i1 ` ) ( nurl_print __tfo ) ( nurl_print `, 1\n` )
@@ -82360,8 +82534,15 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // still points where the parameter's did, so it carries them.)
         // (Asked precisely, as mem_dup asks whether a copy owns its data.)
         = g_thv_precise 1
-        : b __fpc_own & fld_param_copy ! ( __ty_holds_view ( nurl_llty fty ) 0 )
+        : b __fpc_own0 & fld_param_copy ! ( __ty_holds_view ( nurl_llty fty ) 0 )
         = g_thv_precise 0
+        // (…and a slice parameter copied into a field the literal owns by
+        // type, __fpc_slice: the copy's buffer is its own, and it holds a
+        // view of the parameter's sources only where its elements do - a
+        // `[i`'s copy lends nothing back. Taken for a lend, the caller
+        // treated `( wrapb ( mk ) )`'s result as its temporary and released
+        // it nowhere, AGORA-895.)
+        : b __fpc_own || __fpc_own0 && __fpc_slice ! ( __ty_holds_view_p ( __owned_slice_elem ( nurl_llty fty ) ) )
         ? & & ( is_ident_tok fld_first_tt ) ! __fpc_own
         ( seq ( nurl_sym_get syms `__last_ident_name__` ) fld_first_val )
         { : s __fc0 ( bck_param_carriers syms fld_first_val )
@@ -82430,7 +82611,12 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         ? & & & & != 0 g_auto_drop_strings ! is_str_fresh ( seq ( nurl_llty fty ) `i8*` ) == fld_first_tt TT_LPAREN ! ( bck_unsafe_ctx ) {
             ? != 0 ( nurl_sym_len syms `__last_call_guard__` ) { ( mem_note_owned_string_field lex syms __fld_line ) } {}
         } {}
-        : b is_slice_fresh & ( mem_is_slice_ty fty ) | | fld_is_slice_lit ( seq ret_owned `1` ) fld_moved_slice
+        // (…or a slice taken out of a temporary by its read, `@ Bag { . (
+        // mkb ) s 4 }` (h266): the literal's own on every run - taken where
+        // the read owned it, copied above where it was lent (`fld_lent`).
+        // Copied again here, the taken-out slice or the first copy leaked;
+        // agora #936.)
+        : b is_slice_fresh & ( mem_is_slice_ty fty ) | | | fld_is_slice_lit ( seq ret_owned `1` ) fld_moved_slice != 0 ( nurl_str_len __fld_tfo )
         // A slice field of a literal that owns it by type — a struct whose
         // drop releases it (__owned_slice_ty), an enum's boxed payload —
         // takes a slice that is not its own (a parameter's, a borrow, a
@@ -82448,6 +82634,12 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
             // arms lent: the fresh arm's slice is the literal's - agora #903.)
             : s __fsl ? == fld_first_tt TT_LPAREN ( __slice_field_call_lent syms cg ) ? & == fld_first_tt TT_QUEST != 0 ( nurl_str_len g_slice_join_own ) ( __slice_join_lent cg ) ( nurl_str_cat `` `` )
             = fval ( mem_emit_clone_on cg ( nurl_llty fty ) fval ? == 0 ( nurl_str_len __fsl ) ( nurl_str_cat `1` `` ) __fsl )
+            // (…and a parameter's slice copied so, __fpc_cp, is the copy it
+            // is to the engine: `__nurl_slice_copy`, AGORA-895.)
+            ? && && != 0 g_core_live __fpc_cp > g_core_os_n 0 {
+                = g_core_callee ( __core_in `__nurl_slice_copy` )
+                ( core_call - g_core_os_n 1 fty F )
+            } {}
             // (…copied wherever the call lent, the field hands back none of
             // the call's arguments: what the call could hand back
             // (`__last_phi_idents__`, read by gen_ret as the returned
