@@ -5655,6 +5655,82 @@ theorem liftE_hold_weaker {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) (hdb :
       · have hv' : E.ty.holdsView = false := by simpa using hv
         simp [ownHeld, hv'] at hd
 
+/-- AGORA-937: the substitution commutes with holding more. -/
+theorem subE_hold (E : Entry) (D : List Dep) : S.subE (E.hold D) = (S.subE E).hold (D.flatMap S.subD) := by
+  unfold subE Entry.hold ownHeld
+  simp only [List.flatMap_append]
+  split <;> simp_all
+
+/-- ... and holding less is stronger. -/
+theorem ew_hold_mono {E : Entry} (hrb : E.mode ≠ .rootb) (hdb : E.dbind = false) {A B : List Dep}
+    (hAB : A ⊆ B) : EntryWeaker (E.hold A) (E.hold B) := by
+  have hsub : (E.hold A).held ⊆ (E.hold B).held := by
+    unfold Entry.hold ownHeld
+    split
+    · exact List.Subset.refl _
+    · exact fun d hd => by
+        rcases List.mem_append.mp hd with h1 | h1
+        · exact List.mem_append_left _ h1
+        · exact List.mem_append_right _ (hAB h1)
+  refine ⟨rfl, rfl, fun hf => ?_, fun hl => ⟨hl, fun _ => List.Subset.refl _, hsub⟩,
+    fun hd => ⟨hd, hsub⟩, rfl, fun h => Or.inl h, fun h => by simp [Entry.hold, hdb] at h,
+    fun _ _ _ hfr => ⟨hfr, List.Subset.refl _⟩, fun _ _ hhf => hhf⟩
+  rcases hf with h' | ⟨b, _, _, hv⟩
+  · exact absurd h' hrb
+  · have hv' : E.ty.holdsView = false := by simpa [Entry.hold] using hv
+    simp [Entry.hold, ownHeld, hv']
+
+/-- AGORA-937: `liftE_hold_weaker` with regions: what the rule's change
+    through a borrow makes its roots hold is at least as strong as the
+    substituted lift of what they hold in the callee. -/
+theorem liftE_hold_weakers {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) (hdb : E.dbind = false)
+    (hos : E.mode.ownSlot = true) {D D' : List Dep} (hD : D' ⊆ (rds S.ρ D ++ S.A).flatMap S.subD) :
+    EntryWeaker ((S.subE (S.liftE v E)).hold D') (S.subE (S.liftE v (E.hold D))) := by
+  have hrb' : (S.subE (S.liftE v E)).mode ≠ .rootb := by
+    rw [subE_mode, liftE_mode v hrb]; exact fun e => hrb (liftMode_rootb.mp e)
+  have hdb' : (S.subE (S.liftE v E)).dbind = false := by
+    simp only [subE_dbind, RSetup.liftE, hrb, ↓reduceIte]; exact hdb
+  refine (ew_hold_mono hrb' hdb' hD).trans ?_
+  rw [← subE_hold]
+  exact S.subE_weaker (liftE_hold_weaker hrb hdb hos (List.Subset.refl _))
+
+/-- AGORA-937: `PW.holdOn_canon` with regions. -/
+theorem PW.holdOn_canons (h : S.OK) {Γ : Ctx} {rs : List Var} {D D' : List Dep}
+    (hD : D' ⊆ (rds S.ρ D ++ S.A).flatMap S.subD)
+    (hrs : ∀ v ∈ rs, ∀ E, Γ v = some E → E.mode ≠ .rootb ∧ E.dbind = false ∧ E.mode.ownSlot = true) :
+    PW (A2.holdOn (rs.map S.ρ) D' (S.canon Γ)) (S.canon (A2.holdOn rs D Γ)) := by
+  intro y
+  have hmem : ∀ v, S.ρ v ∈ rs.map S.ρ ↔ v ∈ rs := fun v => by
+    constructor
+    · intro hm; obtain ⟨w, hw, he⟩ := List.mem_map.mp hm; rw [← h.inj _ _ he]; exact hw
+    · exact List.mem_map_of_mem
+  rcases canon_cases_sub h Γ y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, hp, hc⟩ | ⟨hy, hc⟩
+  · rw [canon_ρs h _ hp]
+    cases hE : Γ v with
+    | none =>
+      rw [A2.holdOn, hc, hE]; simp [A2.holdOn, hE]
+    | some E =>
+      rw [A2.holdOn, hc, hE, holdOn_some hE]
+      refine ⟨by simp, fun E1 E2 h1 h2 => ?_⟩
+      simp only [Option.map_some, Option.some.injEq, Function.comp] at h1 h2
+      subst h1 h2
+      by_cases hvr : v ∈ rs
+      · rw [ite_eq_left ((hmem v).mpr hvr), ite_eq_left hvr]
+        exact liftE_hold_weakers (hrs v hvr E hE).1 (hrs v hvr E hE).2.1 (hrs v hvr E hE).2.2 hD
+      · rw [ite_eq_right (fun h' => hvr ((hmem v).mp h')), ite_eq_right hvr]
+        exact EntryWeaker.refl _
+  · rw [canon_ρ_sub h, hp]
+    simp [A2.holdOn, hc]
+  · have hyr : y ∉ rs.map S.ρ := fun hm => by
+      obtain ⟨w, _, he⟩ := List.mem_map.mp hm; exact hy w he
+    rw [canon_frame _ hy]
+    cases hE : S.Φ y with
+    | none => simp [A2.holdOn, hc, hE]
+    | some E =>
+      refine ⟨by simp [A2.holdOn, hc, hE], fun E1 E2 h1 h2 => ?_⟩
+      simp only [A2.holdOn, hc, hE, Option.map_some, Option.some.injEq, ite_eq_right hyr] at h1
+      subst h1; cases Option.some.inj h2; exact EntryWeaker.refl _
+
 /-- The roots holding more, where the call places them: what the rule says
     is at least as strong as the lifted context. -/
 theorem PW.holdOn_canon (h : S.OK) {Γ : Ctx} {rs : List Var} {D D' : List Dep} (hD : D' ⊆ rds S.ρ D ++ S.A)
