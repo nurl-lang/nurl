@@ -1,0 +1,7 @@
+### Fixed
+
+- **The ownership engine (`--engine`) no longer accepts a returned closure run after the Vec it captured was freed** (AGORA-877). A closure literal handed back as it is, over a parameter's Vec beside a local of its own, dropped the parameter's handle as "copied in". Codegen stores that handle as it is, so `vec_free v` followed by a call of the closure read freed memory (a SEGV under `--no-borrowck`). The engine now keeps a parameter's handle in such a literal as a view of the caller's value. The borrow walk refused this already; an ordinary compile is unchanged.
+
+### Added
+
+- **`--engine-rawwalk`: the ownership engine reads raw function bodies itself** (AGORA-877, stage 1 of making the engine the authority without the borrow walk's tables). Off by default; an ordinary compile is unchanged. With it, a raw pointer is a view of what it was made from (`vec_data`, `nurl_vctl_data`, `box_ptr`, `raw_block_ptr`, `nurl_peek`, address arithmetic), a raw function's summary comes from its own body, and a program's own `unsafe` functions report a pointer used after what it points into changed or was released, as the walk's §2.10 refusals do. Over the hole corpus, compiler/tests, packages and examples (6457 files), the engine's verdict with the flag differs from its verdict without it in 13 files: 4 are stale-pointer refusals the walk makes too (`diag_stale_borrow*`), 1 is a false reject without the flag that the flag fixes (the gRPC client fixture), and the rest are Shared/Arc payload pointers, which `shared_ptr` makes from an integer (follow-up).

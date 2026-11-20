@@ -14245,9 +14245,35 @@ unsafe @ eng_byte s w i k → i {
 // value or takes it: a field of an element changed is a change to that
 // element, not to its container's own handle - a slot behind a Box or a
 // Shared is two below its handle already (AGORA-877).
-@ eff_path i p i eff → i {
-    ? & & & != 0 g_eng_rawwalk | == eff EF_REPLACE == eff EF_TAKE > ( ep_len p ) 3 == ( ep_at p 3 ) EE_STAR { ^ ( ep_take p 4 ) } {}
-    ^ ( ep_take p 3 )
+@ eff_path i p i eff → i { ^ ( eff_path_t ET_NONE p eff ) }
+
+// …of a path into a value of type `rt` (ET_NONE: not known). Where the
+// engine reads raw bodies, a path that goes inside a value that orders
+// every change made through a borrow of it (ETF_ORDERS: a Locked, an Arc's
+// payload, a type asserted `% Sync`), or that goes on into the payload of
+// a shared handle below where it would be cut, is kept whole (it is no
+// longer than PATH_MAX): the change is made inside that value or payload.
+// Cut short at the value, or at the handle, it would be a change to the
+// handle itself - a QuicConn kept in a client's state given a new value
+// where its own payload changed, or a Locked where what it guards did -,
+// which ends every copy of the handle and is no change an ordering value
+// makes (eng_change_ordered) - AGORA-877.
+@ eff_path_t i rt i p i eff → i {
+    : ~ i keep 3
+    ? & & & != 0 g_eng_rawwalk | == eff EF_REPLACE == eff EF_TAKE > ( ep_len p ) 3 == ( ep_at p 3 ) EE_STAR { = keep 4 } {}
+    ? & & != 0 g_eng_rawwalk != rt ET_NONE > ( ep_len p ) keep {
+        : ~ i j 1
+        ~ < j ( ep_len p ) {
+            : i jt ( eng_ty_at rt ( ep_take p j ) )
+            : b ord & != jt ET_NONE ( et_flag jt ETF_ORDERS )
+            : b pay & & & >= j keep != jt ET_NONE == ( ep_at p j ) EE_STAR & == ( et_kind jt ) EK_NAMED ( et_flag jt ETF_SHARED )
+            ? | ord pay {
+                = keep ( ep_len p )
+                = j keep
+            } { = j + j 1 }
+        }
+    } {}
+    ^ ( ep_take p keep )
 }
 
 @ region_effect i st i ty i tail i eff i via → v {
@@ -14570,7 +14596,7 @@ unsafe @ eng_byte s w i k → i {
         }
     } {}
     ? & >= ( fv_pidx vid ) 0 != eff EF_END {
-        = g_s_effects ( sq_add g_s_effects ( tp3 ( fv_pidx vid ) ( eff_path path eff ) eff ) )
+        = g_s_effects ( sq_add g_s_effects ( tp3 ( fv_pidx vid ) ( eff_path_t ( fv_ty vid ) path eff ) eff ) )
     } {}
     ? != eff EF_END {
         // an effect inside a shared payload is one on that handle type's
@@ -16546,6 +16572,53 @@ unsafe @ eng_byte s w i k → i {
 // given a value again: the copy written back into its slot. A parameter
 // that goes back to the caller still holding it is refused, as is a read
 // of it once the binding's value has gone (agora #870).
+// A store through the raw pointer `vid` into its part `path` (where the
+// engine reads raw bodies): nurlc hands the value it replaces to a binding
+// read out of that part that still holds it (`: String old . p name`, then
+// `= . p name x` - raw_field_store_replaces' swap_name), which owns it from
+// here: what it borrowed of the part is no loan any more, and the store
+// does not end it. The first such reader takes it - one value has one
+// owner (AGORA-877).
+@ __eng_ptr_handover i st i vid i path → v {
+    ? | != ( fv_kind vid ) VK_LOCAL == path 0 { ^ } {}
+    : i fty ( eng_ty_of ( pl_make vid path ) )
+    ? | | | == fty ET_NONE ( et_is_view fty ) == ( et_kind fty ) EK_CLOSURE ! ( et_owning fty ) { ^ } {}
+    : i cur ( st_av st vid )
+    ? == cur 0 { ^ } {}
+    // (where the part stands in the places the pointer points into)
+    : ~ i at ( sq_add 0 ( pl_make vid path ) )
+    : i al ( av_alias cur )
+    : ~ i k 0
+    ~ < k ( sq_len al ) {
+        : i a ( sq_at al k )
+        = at ( sq_add at ( pl_make ( pl_var a ) ( ep_take ( ep_cat ( pl_path a ) ( ep_drop path 1 ) ) PATH_MAX ) ) )
+        = at ( sq_add at ( pl_make ( pl_var a ) ( ep_take ( ep_cat ( pl_path a ) path ) PATH_MAX ) ) )
+        = k + k 1
+    }
+    : ~ i r 0
+    ~ < r g_f_nv {
+        : i rav ( st_av st r )
+        ? & & & != rav 0 == ( wv_at g_fx_vsrc r ) + vid 1 == ( wv_at g_fx_vpath r ) path == ( av_own rav ) OW_L {
+            : ~ b holds F
+            = k 0
+            ~ & ! holds < k ( sq_len ( av_alias rav ) ) { ? ( sq_has at ( sq_at ( av_alias rav ) k ) ) { = holds T } {} = k + k 1 }
+            ? holds {
+                : i loans ( av_loans rav )
+                : ~ i keep 0
+                = k 0
+                ~ < k ( sq_len loans ) {
+                    : i l ( sq_at loans k )
+                    ? ! & ( el_is_loan l ) ( sq_has at ( el_place l ) ) { = keep ( sq_add keep l ) } {}
+                    = k + k 1
+                }
+                ( st_put st r ( av_make OW_O keep 0 ( av_held rav ) F ) )
+                ^
+            } {}
+        } {}
+        = r + r 1
+    }
+}
+
 @ eng_cursor_handover i st i vid i path i cur → v {
     ? | | != ( fv_kind vid ) VK_LOCAL ( fx_has vid FX_PAYLOAD ) ( fx_has vid FX_FE ) { ^ } {}
     : i fty ( eng_ty_of ( pl_make vid path ) )
@@ -21613,6 +21686,10 @@ unsafe @ eng_byte s w i k → i {
         }
         ? ! refill { ( eng_dtor_release st target fty ln 0 ) } {}
     } {}
+    // (…a store through a raw pointer, where the engine reads raw bodies:
+    // the value it replaces goes to a binding read out of that part, as a
+    // struct cursor's field store hands it over - AGORA-877)
+    ? ( __eng_ptr_root target ) { ( __eng_ptr_handover st vid path ) } {}
     ( eng_handover st target at )
     ( eng_effect st target EF_REPLACE ln 0 )
     ? rehome { ( rehome_views st src ( pl_make vid ( ep_take path PATH_MAX ) ) ) } {}
@@ -22757,8 +22834,16 @@ unsafe @ eng_byte s w i k → i {
     // (a foreign function writes through a pointer parameter it does not
     // declare `in`)
     ( __ws_idx ( __ws_one f `ffi_writes` 0 ) n tmp )
+    // (…where the engine reads raw bodies, that pointer is a view of what
+    // it was made from: the function writes what it points to - gives the
+    // elements there new values, as the walk's `mutates` says of a raw
+    // callee - and moves or releases nothing of the container it points
+    // into - AGORA-877)
     = k 0
-    ~ < k ( wv_len tmp ) { ( wv_push eff ( tp3 ( wv_at tmp k ) 0 EF_DROP ) ) = k + k 1 }
+    ~ < k ( wv_len tmp ) {
+        ( wv_push eff ? != 0 g_eng_rawwalk ( tp3 ( wv_at tmp k ) ( ep_child 0 EE_STAR ) EF_REPLACE ) ( tp3 ( wv_at tmp k ) 0 EF_DROP ) )
+        = k + k 1
+    }
     ( sm_put r SM_EFFECTS ( sm_keep ( sq_set_of_wv eff ) ) )
     ( wv_trunc tmp 0 )
     ( __ws_idx ( __ws_one f `sink` 0 ) n tmp )
@@ -23010,6 +23095,15 @@ unsafe @ eng_byte s w i k → i {
         // by-value parameter's caller lent it: good while the block is,
         // whatever is stored in its slots - AGORA-877.)
         ( eng_prim `raw_block_ptr` `in` `lent` `0 - handle` `` `` `` `` `` `` `` `` `` `` )
+        // (…and shared_ptr's and arc_ptr's into the block of the handle
+        // they are handed - its payload, the one place every share of it
+        // reaches -, not a number made of its raw word: what is read or
+        // changed through it is read or changed in that payload. It is
+        // the handle's own, as raw_block_ptr's is: good while the handle
+        // is, whatever is changed inside the payload - the block does not
+        // move - AGORA-877)
+        ( eng_prim `shared_ptr` `in` `lent` `0 - handle` `` `` `` `` `` `` `` `` `` `` )
+        ( eng_prim `arc_ptr` `in` `lent` `0 - handle` `` `` `` `` `` `` `` `` `` `` )
         // (…and the word nurl_peek reads, an address into what it was read
         // out of, as core_call types it)
         ( eng_prim `nurl_peek` `in in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
