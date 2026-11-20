@@ -130,7 +130,7 @@ fi
 (cd "$ROOT" && "$NURLC" --engine compiler/tests/core_ir_shapes.nu) > "$WORK/e.core" 2> "$WORK/e.err"
 if grep -qE '^eng	verdict	runs-clean$' "$WORK/e.core"; then note "the engine: the shapes run clean" "ok"; else bad "the engine: the shapes run clean" "$(grep -E '^eng	' "$WORK/e.core" | head -1)"; fi
 (cd "$ROOT" && "$NURLC" --engine tools/fuzz/holes/slice_read_after_its_buffer_moved_by_assignment.nu) > "$WORK/r.core" 2> "$WORK/r.err"
-if grep -qE "^eng	err	main	10	'a' is used after it was moved\$" "$WORK/r.core" && grep -qE '^eng	verdict	rejected$' "$WORK/r.core"; then
+if grep -qE "^eng	err	main	10	'a' is used after it was moved\. After that 'a' is dead: " "$WORK/r.core" && grep -qE '^eng	verdict	rejected$' "$WORK/r.core"; then
     note "the engine: a use after a move is found" "ok"
 else
     bad "the engine: a use after a move is found" "$(grep -E '^eng	' "$WORK/r.core" | head -1)"
