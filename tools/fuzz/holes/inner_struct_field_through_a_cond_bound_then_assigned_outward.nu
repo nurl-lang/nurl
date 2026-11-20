@@ -1,5 +1,5 @@
-// map: §7.6 | A2 | rejected | - | agora #242: elaborated twin: a field of an inner block's struct through a `?`, bound by `:` then assigned outward
-// AGORA-869: heap-use-after-free under ASan with the walk alone; the ownership engine refuses it (codegen makes no copy here, unlike the unbound spelling).
+// map: §7.6 | A2 | rejected | - | AGORA-941 (AGORA-242's twin): a field of an inner block's struct through a `?`, bound by `:` then assigned outward
+// AGORA-941 (closed): refused - a `:` join's field borrow ends with the struct it reads (main 3ad3d7c8: accepted, heap-use-after-free under ASan)
 // twin of tools/fuzz/holes/inner_struct_field_through_a_cond_assigned_outward.nu (tools/fuzz/holes/elab.py)
 $ `stdlib/core/string.nu`
 

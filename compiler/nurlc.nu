@@ -22422,6 +22422,9 @@ unsafe @ eng_byte s w i k → i {
     // type, of elements that hold no view: its own buffer, nothing of its
     // argument - gen_agg_lit, AGORA-895.)
     ( eng_prim `__nurl_slice_copy` `in` `own` `` `` `` `` `` `` `` `` `` `` `` )
+    // (…and of elements that hold views: what its argument's elements hold,
+    // not the slice it was given - agora #935.)
+    ( eng_prim `__nurl_slice_copy_v` `in` `own` `` `- 0 * held` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `arc_clone` `in` `own` `` `- 0 - held` `` `` `` `` `` `` `` `` `` )
     ( eng_prim `arc_get` `in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
     ( eng_prim `arc_new` `in` `own` `` `* 0 - held` `` `` `0` `` `` `` `` `0` `` )
@@ -32936,6 +32939,48 @@ unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
             = g_call_lend_roots ``
             ( __sx_publish __me `-` )
         }
+        ( nurl_set_last_type ty )
+        ^ r
+    } {}
+    // (An owned slice: its buffer copied, the copy the caller's own - as a
+    // literal's owned slice field copies one (AGORA-841, AGORA-895,
+    // AGORA-935). It is a value of its own where its elements hold no view,
+    // and holds what they view where they do: `__nurl_slice_copy` /
+    // `__nurl_slice_copy_v` to the walk and the engine. Handed back as is,
+    // `( mem_dup t )` was no copy but `t` itself, a view, where the
+    // diagnostics offer it as "a copy that owns its data"; agora #938.)
+    ? & != 0 g_auto_drop_strings ( __owned_slice_ty ( nurl_llty ty ) ) {
+        // (An operand that is a fresh slice on some runs - a call's, a
+        // join's, by its bit - is the copy on those runs: taken, not copied,
+        // and released by no one else. Copied whole, `( mem_dup ( mks ) )`
+        // leaked the call's slice.)
+        : s __obit ? == __dtt TT_LPAREN ( __slice_call_own_bit syms cg ) ? & == __dtt TT_QUEST != 0 ( nurl_str_len g_slice_join_own ) ( nurl_str_cat g_slice_join_own `` ) ( nurl_str_cat `` `` )
+        : ~ s r ``
+        ? == 0 ( nurl_str_len __obit ) { = r ( mem_emit_clone_on cg ( nurl_llty ty ) v `1` ) } {
+            ? ( seq __obit `true` ) { = r ( nurl_str_cat v `` ) } {
+                : s __onb ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __onb ) ( nurl_print ` = xor i1 ` ) ( nurl_print __obit ) ( nurl_print `, 1\n` )
+                = r ( mem_emit_cloneif cg ( nurl_llty ty ) v __onb )
+            }
+        }
+        : b __shv ( __ty_holds_view_p ( __owned_slice_elem ( nurl_llty ty ) ) )
+        ( nurl_sym_def syms `__last_call_name__` `` ) = g_call_own_slc -1
+        ( nurl_sym_def syms `__last_call_forward__` `` )
+        ( nurl_sym_def syms `__last_value_borrow__` `` )
+        ( nurl_sym_def syms `__last_call_ret_view__` `` )
+        ( nurl_sym_def syms `__last_call_lend_idents__` `` )
+        ( nurl_sym_def syms `__last_phi_idents__` `` )
+        ( nurl_sym_def syms `__last_call_part_idents__` `` )
+        ( nurl_sym_def syms `__last_call_args__` `` )
+        = g_call_roots ``
+        = g_call_lend_roots ``
+        // (Fresh, as a slice call that always hands one back is: a binding,
+        // an argument's temporary and a return take it over.)
+        ( nurl_sym_def syms `__last_call_ret_owned__` `1` )
+        ( nurl_sym_def syms `__last_fresh_reg__` r )
+        = g_dup_nest g_call_nest
+        ? != 0 g_core_live { = g_core_callee ( __core_in ? __shv `__nurl_slice_copy_v` `__nurl_slice_copy` ) } {}
+        ( __sx_publish __me ? | | | ! __shv == 0 ( nurl_str_len __osx ) ( seq __osx `-` ) ( seq __osx `*` ) ( nurl_str_cat `-` `` ) ( nurl_str_cat3 `__nurl_slice_copy(` __osx `)` ) )
         ( nurl_set_last_type ty )
         ^ r
     } {}
@@ -61557,6 +61602,34 @@ unsafe @ bck_sx_ev s st s e b arg → s {
     ^ != 0 ( nurl_str_len w0 )
 }
 
+// Is a borrow of mode `mode` (bck_note_borrow's field 7) a `:` join's - `p`,
+// or a `??` one's, `m` - begun from a field path among `srcs`? (A value
+// block's tail, `b`, and an `=`'s or a cursor's join, `n`, are not: codegen
+// takes or copies the field there.)
+@ __bck_jfield_leaf s mode s srcs → b {
+    ? == 0 ( nurl_str_len mode ) { ^ F } {}
+    : i m ( nurl_str_get mode 0 )
+    ? & != m 112 != m 109 { ^ F } {}
+    : ~ s rest ( nurl_str_cat srcs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i id ( nurl_str_to_int w )
+        ? != id ( bck_path_root id ) { ^ T } {}
+    }
+    ^ F
+}
+
+// Does one of the bindings `srcs` names hold a `bxf_` borrow?
+@ __bck_any_bxf s srcs → b {
+    ? == 0 g_bck_bxf_any { ^ F } {}
+    : ~ s rest ( nurl_str_cat srcs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` w ) ) `1` ) { ^ T } {}
+    }
+    ^ F
+}
+
 @ bck_brw_leaves s st s mode s sx i wid → s {
     : s all ( bck_sx_hpaths sx )
     : i m ? == 0 ( nurl_str_len mode ) 112 ( nurl_str_get mode 0 )
@@ -62297,6 +62370,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 = g_bck_br_next ? | | bfv != 0 ( nurl_str_starts rec `vborrow\t` ) != 0 ( nurl_str_starts rec `vcborrow\t` ) ? | == 0 ( nurl_str_len bprior ) ( __words_within bprior ( bck_borrow_owners st bsrcs ) ) ( bck_byte_root st bsrcs ) -1 -1
                 = st ( bck_borrow_begin st bwid ? == 0 ( nurl_str_len bprior ) bsrcs ( nurl_str_cat3 bprior ` ` bsrcs ) )
                 = g_bck_br_next -1
+                // (A `:` join's borrow of a field path - an arm `. p s`, a
+                // `??` arm's payload field: codegen neither takes nor copies
+                // that field where the binding outlives its struct, as it
+                // does for `: x . p s` or a value block's tail, so the
+                // struct's end ends it, `bxf_`. So does a borrow that takes
+                // its handle from such a one. Agora #242.)
+                ? | & != 0 ( nurl_str_len bsx ) ( __bck_jfield_leaf bmode bsrcs ) ( __bck_any_bxf ( bck_field rec 2 ) ) { ( bck_put ( bck_bkey `bxf_` bws ) `1` ) = g_bck_bxf_any 1 } {}
                 // (A join that owns its value on its other paths, `d`: it may
                 // own it, as at a join of paths — BCK_MAYBE_OWNED, not a
                 // plain borrow its hand-over is refused as.)
@@ -62585,6 +62665,9 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             = g_bck_br_next ? & & == 0 ( nurl_str_len prior ) ! ( seq ( bck_field rec 6 ) `c` ) == BCK_BORROWED_SHARED ( bck_st_get st avid ) ( bck_br_get avn ) -1
                             = st ( bck_borrow_begin st apid ? == 0 ( nurl_str_len prior ) asrc ( nurl_str_cat3 prior ` ` asrc ) )
                             = g_bck_br_next -1
+                            // (…a handle that a `:` join's field borrow holds, `bxf_`,
+                            // taken by another name: that one too - agora #242.)
+                            ? & != 0 g_bck_bxf_any ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` avn ) ) `1` ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) } {}
                             // (An arm of a `:` join, `g`, that is a copy of an
                             // owner's handle — `: c ? k cur other`: the
                             // binding is one too, `hc_`, while every borrow
@@ -64738,7 +64821,30 @@ unsafe @ __vk_assumptions_check → v {
 // the result lives (agora #464: `pool_new`'s Wal, a temporary `mem_dup`).
 @ __rv_views_arg s cal s aix → b {
     : i r ( __rv_ask cal aix )
+    // (`^k` of an owned slice argument whose elements own nothing - a
+    // `[s`, a slice of numbers: what the elements point into is not the
+    // argument's, which owns only its buffer of them. Its release ends no
+    // view the result holds; the walk ties the result to the argument's
+    // sources through the elements, `__src_as_ind`. Taken for a view of the
+    // argument, a `[s` temporary's copy kept it, agora #935.)
+    // (…and `^k %k`, 4: a copy of what it holds is no view of it either, 3.)
+    ? & | == r 2 == r 4 ( __rv_elem_owns_nothing cal aix ) { ^ F } {}
     ^ & != r 0 != r 3
+}
+
+// Is `cal`'s parameter `aix` an owned slice whose elements own no storage
+// (a scalar or a view, bck_bind_class 1 or 2)?
+@ __rv_elem_owns_nothing s cal s aix → b {
+    : ~ s pts ( nurl_sym_get2 g_root_syms cal `__ptypes_src` )
+    ? == 0 ( nurl_str_len pts ) { = pts ( nurl_sym_get2 g_root_syms ( bck_generic_base cal ) `__ptypes_src` ) } {}
+    ? == 0 ( nurl_str_len pts ) { ^ F } {}
+    // (A source spelling, as __callee_param_scalar reads it.)
+    : s pt ( str_first_word ( bck_swap_char ( __ptypes_nth pts ( nurl_str_to_int aix ) ) 9 32 ) )
+    // (An owned slice is spelled `[X`: X its element, as llvm_type reads one;
+    // a spelling it does not know is an aggregate there, class 0 - no.)
+    ? | < ( nurl_str_len pt ) 2 != ( nurl_str_get pt 0 ) 91 { ^ F } {}
+    : i c ( bck_bind_class ( nurl_llty ( llvm_type ( nurl_str_slice pt 1 - ( nurl_str_len pt ) 1 ) ) ) )
+    ^ | == c 1 == c 2
 }
 
 // Does `cal` hand back an owner that may hold views (class 3: a Vec of
@@ -71052,7 +71158,13 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         // as they were — a field viewer holding the field's handle, a copy
         // of what the owner holds itself — reads them as they are now,
         // bck_br_survives. A replaced field ends it.)
-        ? & & == BCK_BORROWED_SHARED ( bck_st_get out b ) inb | == 0 g_bck_end_eonly ! ( bck_br_survives bs sids ) {
+        // (…and one that may own its value on some path only, where it is
+        // a `:` join's field borrow, `bxf_`: on the paths that lent it, it
+        // holds the struct's handle, which codegen neither took nor copied;
+        // agora #941.)
+        : i bst ( bck_st_get out b )
+        : b bl | == BCK_BORROWED_SHARED bst & & != 0 g_bck_bxf_any == BCK_MAYBE_OWNED bst ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` bs ) ) `1` )
+        ? & & bl inb | == 0 g_bck_end_eonly ! ( bck_br_survives bs sids ) {
             // (A borrower is not dropped — unless it owns a value with a
             // destructor the borrow rules see as a view, `vdu_`.)
             ( bck_drop_view_diag b sid line why F )
@@ -81958,9 +82070,18 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // Read as the parameter, `( wrapb ( mk ) )`'s result was taken for
         // a view of its temporary and refused, AGORA-895.)
         : b __fpc_cp && && && __fpc_slice ! fld_moved_slice ! ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` ) ! ( __ty_holds_view_p ( __owned_slice_elem ( nurl_llty fty ) ) )
+        // (…and one of elements that do hold views, `[s`: its own buffer,
+        // holding copies of the parameter's elements - `__nurl_slice_copy(…)`
+        // to the walk (`^0`: what the elements view, not the slice the
+        // parameter views) and `__nurl_slice_copy_v` to the engine (what
+        // the argument's elements hold). Read as the parameter, the caller kept
+        // `( wraps ( mks ) )`'s temporary for the result and released it
+        // nowhere; agora #935.)
+        : b __fpc_cpv && && && __fpc_slice ! fld_moved_slice ! ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` ) ( __ty_holds_view_p ( __owned_slice_elem ( nurl_llty fty ) ) )
         // (A closure field is adopted — mem_clo_into_store: `\\a(…)`.)
         ? != 0 __sx_me {
-            : s __fsx ? __fpc_cp ( nurl_str_cat `-` `` ) ( __sx_operand syms fld_first_tt fld_first_val fty ( __sx_froot syms fld_first_tt fty ) __fsxn0 )
+            : ~ s __fsx ? __fpc_cp ( nurl_str_cat `-` `` ) ( __sx_operand syms fld_first_tt fld_first_val fty ( __sx_froot syms fld_first_tt fty ) __fsxn0 )
+            ? & __fpc_cpv ! | | == 0 ( nurl_str_len __fsx ) ( seq __fsx `-` ) ( seq __fsx `*` ) { = __fsx ( nurl_str_cat3 `__nurl_slice_copy(` __fsx `)` ) } {}
             = agg_sx ( __sx_join agg_sx ? & ( __is_closure_ty fty ) ! | ( seq __fsx `-` ) ( seq __fsx `*` ) ( nurl_str_cat3 `\\a(` __fsx `)` ) __fsx )
         } {}
         // A pointer field of a returned literal points where what it was
@@ -82542,7 +82663,10 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // `[i`'s copy lends nothing back. Taken for a lend, the caller
         // treated `( wrapb ( mk ) )`'s result as its temporary and released
         // it nowhere, AGORA-895.)
-        : b __fpc_own || __fpc_own0 && __fpc_slice ! ( __ty_holds_view_p ( __owned_slice_elem ( nurl_llty fty ) ) )
+        // (…and of elements that hold views too, agora #935: the copy's
+        // buffer is the literal's, and what its elements view is the walk's
+        // to keep alive - `%k`, as for mem_dup.)
+        : b __fpc_own || __fpc_own0 __fpc_slice
         ? & & ( is_ident_tok fld_first_tt ) ! __fpc_own
         ( seq ( nurl_sym_get syms `__last_ident_name__` ) fld_first_val )
         { : s __fc0 ( bck_param_carriers syms fld_first_val )
@@ -82636,8 +82760,8 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
             = fval ( mem_emit_clone_on cg ( nurl_llty fty ) fval ? == 0 ( nurl_str_len __fsl ) ( nurl_str_cat `1` `` ) __fsl )
             // (…and a parameter's slice copied so, __fpc_cp, is the copy it
             // is to the engine: `__nurl_slice_copy`, AGORA-895.)
-            ? && && != 0 g_core_live __fpc_cp > g_core_os_n 0 {
-                = g_core_callee ( __core_in `__nurl_slice_copy` )
+            ? && && != 0 g_core_live | __fpc_cp __fpc_cpv > g_core_os_n 0 {
+                = g_core_callee ( __core_in ? __fpc_cp `__nurl_slice_copy` `__nurl_slice_copy_v` )
                 ( core_call - g_core_os_n 1 fty F )
             } {}
             // (…copied wherever the call lent, the field hands back none of
@@ -119957,6 +120081,11 @@ unsafe @ main → i {
     = g_fn_stores ( nurl_sym_new )
     = g_fn_handkeeps ( nurl_sym_new )
     = g_fn_vcopies ( nurl_sym_new )
+    // (A slice parameter's copy in a literal that owns its slice field,
+    // gen_agg_lit's `__nurl_slice_copy(…)`: a buffer of its own, holding
+    // copies of the argument's elements - it views what they view, `^0`,
+    // not the slice it was given; agora #935.)
+    ( nurl_sym_def g_fn_rviews `__nurl_slice_copy` `:^0` )
     = g_fn_eparams ( nurl_sym_new )
     = g_fn_cloparams ( nurl_sym_new )
     = g_fn_unverified ( nurl_sym_new )
