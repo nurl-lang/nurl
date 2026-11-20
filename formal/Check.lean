@@ -620,9 +620,12 @@ import A3
 -- parameter holds is through-changing, and no call of it passes an argument holding views
 #print axioms A2.HeldViewThruWitness.call_refused
 #print axioms A2.HeldViewThruWitness.call_alone_refused
--- (A2/SliceCopyViewWitness.lean, AGORA-935): a copy of a slice of views holds copies of its
--- loans, not a loan on the slice: releasing the temporary leaves it live, replacing what the
--- views point into ends it, and then no read of it types
+-- (A2/SliceCopyViewWitness.lean, AGORA-935): a copy of a slice of views, typed as A2 types a
+-- copy (a call, `callRes`), holds copies of its loans and nothing of the slice: releasing the
+-- temporary leaves it live, replacing what the views point into ends it, and then no read types
+#print axioms A2.SliceCopyViewWitness.copy_typed
+#print axioms A2.SliceCopyViewWitness.copy_holds_a
+#print axioms A2.SliceCopyViewWitness.copy_free_of_temp
 #print axioms A2.SliceCopyViewWitness.copy_survives_temp_release
 #print axioms A2.SliceCopyViewWitness.dep_on_temp_dies
 #print axioms A2.SliceCopyViewWitness.copy_dead_after_replace
