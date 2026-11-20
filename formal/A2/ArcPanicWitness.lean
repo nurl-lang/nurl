@@ -314,21 +314,21 @@ theorem assign_res {fn : Fn} {r : Var} (hc : sigCtx fn r = some R0)
 
 theorem sig_dfn_flags : ∀ v E, sigCtx dfn v = some E → E.dtor = false ∧ E.dbind = false := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [sigCtx, dfn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
 
 theorem dfn_ok : FnOK P dfn := by
   refine ⟨rfl, by decide, by decide, rfl, by simp [dfn], ?_, by simp [dfn], by simp [dfn], by simp [dfn],
     by simp [dfn], by simp [dfn], ?_, _,
-    assign_res (by simp [sigCtx, dfn, R0, resMode]) ?_ sig_dfn_flags, ?_, ?_, ?_⟩
+    assign_res (by simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, R0, resMode]) ?_ sig_dfn_flags, ?_, ?_, ?_⟩
   · intro pt hpt; simp [dfn] at hpt; subst hpt; simp [DT, T, Ty.ok, Ty.isStruct]
   · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [dfn] at h⟩
     · simp [dfn] at hi; subst hi; simp [dfn] at hs
     · simp [dfn] at hi; subst hi; simp [dfn] at hb
   · intro p E hp _
-    rcases p with _ | _ | p <;> simp [sigCtx, dfn, paramE, resMode, DT, T, Ty.hasFn] at hp <;> subst hp <;>
+    rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode, DT, T, Ty.hasFn] at hp <;> subst hp <;>
       simp [Entry.vdeps]
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, dfn, paramE, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, dfn], rfl, rfl, by simp [R0, resMode, dfn],
       by simp [intE], by simp [intE], by simp [dfn]⟩
@@ -339,18 +339,18 @@ def Gp : Ctx := setE (kill .replace false 1 (sigCtx pfn)) 1 { intE with mode := 
 
 theorem Gp_flags : ∀ v E, Gp v = some E → E.dtor = false ∧ E.dbind = false ∧ E.vdeps = [] := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [Gp, setE, upd, kill, killE, sigCtx, pfn, paramE, intE, DP, T,
+  rcases v with _ | _ | v <;> simp [Gp, setE, upd, kill, killE, ↓sigCtx_noRegion (fn := pfn) (by decide), pfn, paramE, intE, DP, T,
     Ty.hasFn] at h <;> subst h <;> (try split) <;> simp [Entry.vdeps]
 
 theorem pfn_ok : FnOK P pfn := by
-  have ha := assign_res (ξ := .none) (fn := pfn) (r := 1) (by simp [sigCtx, pfn, R0, resMode])
+  have ha := assign_res (ξ := .none) (fn := pfn) (r := 1) (by simp [↓sigCtx_noRegion (fn := pfn) (by decide), pfn, R0, resMode])
     (by
       intro p E hp _
-      rcases p with _ | _ | p <;> simp [sigCtx, pfn, paramE, resMode, DP, T, Ty.hasFn] at hp <;> subst hp <;>
+      rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := pfn) (by decide), pfn, paramE, resMode, DP, T, Ty.hasFn] at hp <;> subst hp <;>
         simp [Entry.vdeps])
     (by
       intro v E h
-      rcases v with _ | _ | v <;> simp [sigCtx, pfn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩)
+      rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := pfn) (by decide), pfn, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩)
   have hp := panic_typed (ξ := .none) (Γ := Gp) (F := []) (fun v E h => (Gp_flags v E h).2.2)
     (fun v E h => ⟨(Gp_flags v E h).1, (Gp_flags v E h).2.1⟩)
   refine ⟨rfl, by decide, by decide, rfl, by simp [pfn], ?_, by simp [pfn], by simp [pfn], by simp [pfn],
@@ -369,12 +369,12 @@ def Gr : Ctx := setE (kill .replace false 0 (sigCtx rfn)) 0 { intE with mode := 
 
 theorem Gr_eq : Gr = setE (fun _ => none) 0 intE := by
   funext v
-  rcases v with _ | v <;> simp [Gr, setE, upd, kill, sigCtx, rfn, intE, R0]
+  rcases v with _ | v <;> simp [Gr, setE, upd, kill, ↓sigCtx_noRegion (fn := rfn) (by decide), rfn, intE, R0]
 
 theorem rfn_ok : FnOK P rfn := by
-  have ha := assign_res (ξ := .none) (fn := rfn) (r := 0) (by simp [sigCtx, rfn, R0, resMode])
-    (by intro p E hp hm; rcases p with _ | p <;> simp [sigCtx, rfn, resMode] at hp <;> subst hp <;> simp at hm)
-    (by intro v E h; rcases v with _ | v <;> simp [sigCtx, rfn, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩)
+  have ha := assign_res (ξ := .none) (fn := rfn) (r := 0) (by simp [↓sigCtx_noRegion (fn := rfn) (by decide), rfn, R0, resMode])
+    (by intro p E hp hm; rcases p with _ | p <;> simp [↓sigCtx_noRegion (fn := rfn) (by decide), rfn, resMode] at hp <;> subst hp <;> simp at hm)
+    (by intro v E h; rcases v with _ | v <;> simp [↓sigCtx_noRegion (fn := rfn) (by decide), rfn, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩)
   have hR : NoRootb Gr := by rw [Gr_eq]; exact noRootb_empty.setE (by simp [intE])
   have hD : NoDeps Gr := by rw [Gr_eq]; exact NoDeps.setE (fun _ _ h => by cases h) rfl
   obtain ⟨Δ, ht, hΔR, _, hΔ⟩ := tail_typed (Γ := Gr) hR hD (a := 1) (b := 2) (y := 3) (s := 4)
@@ -433,10 +433,11 @@ theorem rfn3_rest_typed : ∃ Δ, StmtT P ξ Gr []
   simp [K3, K2, K1, A2.setE, Gr_eq]
 
 theorem rfn3_ok : FnOK P rfn3 := by
-  have ha := assign_res (ξ := .none) (fn := rfn3) (r := 0) (by simp [sigCtx, rfn3, R0, resMode])
-    (by intro p E hp hm; rcases p with _ | p <;> simp [sigCtx, rfn3, resMode] at hp <;> subst hp <;> simp at hm)
-    (by intro v E h; rcases v with _ | v <;> simp [sigCtx, rfn3, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩)
-  have hG : setE (kill .replace false 0 (sigCtx rfn3)) 0 { intE with mode := R0.mode } = Gr := rfl
+  have ha := assign_res (ξ := .none) (fn := rfn3) (r := 0) (by simp [↓sigCtx_noRegion (fn := rfn3) (by decide), rfn3, R0, resMode])
+    (by intro p E hp hm; rcases p with _ | p <;> simp [↓sigCtx_noRegion (fn := rfn3) (by decide), rfn3, resMode] at hp <;> subst hp <;> simp at hm)
+    (by intro v E h; rcases v with _ | v <;> simp [↓sigCtx_noRegion (fn := rfn3) (by decide), rfn3, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩)
+  have hG : setE (kill .replace false 0 (sigCtx rfn3)) 0 { intE with mode := R0.mode } = Gr := by
+    unfold Gr; rw [sigCtx_noRegion (fn := rfn3) (by decide), sigCtx_noRegion (fn := rfn) (by decide)]; try rfl
   rw [hG] at ha
   obtain ⟨Δ, ht, hΔR, hΔ0⟩ := rfn3_rest_typed
   refine ⟨rfl, by decide, by decide, rfl, by simp [rfn3], by simp [rfn3], by simp [rfn3], by simp [rfn3],

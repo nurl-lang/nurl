@@ -301,49 +301,40 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some (callPe Γ fn.params args k)) ∨
     (∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ y = m.nv + 0 + k ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
-        some ⟨t, .own, true, [], rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
-          ownHeld true t (callS Γ F fn args m.nv x).A, false, false, false, false⟩) ∨
+        some ⟨t, .own, true, [], (if regioned (PMode.sink, t) then (callS Γ F fn args m.nv x).σ (fn.nvars + k)
+          else []) ++ (rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
+          ownHeld true t (callS Γ F fn args m.nv x).A), false, false, false, false⟩) ∨
     (∃ (k : Nat) (b : Eff) (t : Ty), fn.params[k]? = some (PMode.inout b, t) ∧ y = args.getD k 0 ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
-        some ⟨t, .own, true, [], rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
-          ownHeld true t (callS Γ F fn args m.nv x).A, false, false, false, false⟩) ∨
+        some ⟨t, .own, true, [], (if regioned (PMode.inout b, t) then (callS Γ F fn args m.nv x).σ (fn.nvars + k)
+          else []) ++ (rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
+          ownHeld true t (callS Γ F fn args m.nv x).A), false, false, false, false⟩) ∨
     ((∀ v, callRen fn.params args m.nv v ≠ y) ∧ y ≠ x ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = (callPost Γ fn args y).map Entry.clean) ∨
     ((callS Γ F fn args m.nv x).canon (sigCtx fn) y = none ∧ ∃ v, fn.params.length < v ∧ y = m.nv + v) := by
   by_cases hyx : y = x
   · exact Or.inl ⟨hyx, by rw [hyx]; exact h.canon_x _⟩
-  -- AGORA-937: a callee binding of the signature is kept by the substitution
-  -- (`canon_sig`); a region's index lies past the signature's, unbound
-  have hcases : (∃ v, (callS Γ F fn args m.nv x).ρ v = y ∧
-      (callS Γ F fn args m.nv x).canon (sigCtx fn) y = (sigCtx fn v).map ((callS Γ F fn args m.nv x).liftE v)) ∨
-      ((∀ v, (callS Γ F fn args m.nv x).ρ v ≠ y) ∧
-        (callS Γ F fn args m.nv x).canon (sigCtx fn) y = (callS Γ F fn args m.nv x).Φ y) := by
-    rcases RSetup.canon_cases_sub h.sOK (sigCtx fn) y with ⟨v, hv, _, hc⟩ | ⟨v, hv, hp, hc⟩ | hfr
-    · refine Or.inl ⟨v, hv, ?_⟩
-      cases hs : sigCtx fn v with
-      | none => rw [hc, hs]; rfl
-      | some E => rw [← hv]; exact h.canon_sig hs
-    · have hgt : fn.params.length < v :=
-        Nat.lt_of_not_le fun hle => by rw [h.isPi_sig hle] at hp; cases hp
-      exact Or.inl ⟨v, hv, by rw [hc, sigCtx_none hgt]; rfl⟩
-    · exact Or.inr hfr
-  rcases hcases with ⟨v, hv, hc⟩ | ⟨hy, hc⟩
+  -- AGORA-937: a parameter holds, too, what its region stands for
+  -- (`canon_param`); a region's index lies past the signature's, where the
+  -- call binds nothing
+  rcases RSetup.canon_cases_sub h.sOK (sigCtx fn) y with ⟨v, hv, hpv, hc⟩ | ⟨v, hv, hp, hc⟩ | ⟨hy, hc⟩
   · change callRen fn.params args m.nv v = y at hv
-    rw [hc]
     rcases callRen_cases fn.params args m.nv v with ⟨b, t, hvp, hr⟩ | ⟨hnv, hr⟩
-    · rw [hr] at hv; subst hv
-      refine Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ⟨v, b, t, hvp, rfl, ?_⟩))))
-      rw [sigCtx_of hvp]; simp [RSetup.liftE, paramE, liftMode, Mode.ownSlot, callS, rds]
+    · refine Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ⟨v, b, t, hvp, by rw [← hv, hr], ?_⟩))))
+      rw [← hv]; change (callS Γ F fn args m.nv x).canon (sigCtx fn) ((callS Γ F fn args m.nv x).ρ v) = _
+      rw [h.canon_param hvp]; simp [RSetup.liftE, paramE, liftMode, Mode.ownSlot, callS, rds]
     · rw [hr] at hv; subst hv
       rcases Nat.lt_trichotomy v fn.params.length with hlt | heq | hgt
       · have hget : fn.params[v]? = some fn.params[v] := List.getElem?_eq_getElem hlt
-        rw [sigCtx_of hget]
+        have hcp := h.canon_param hget
+        change (callS Γ F fn args m.nv x).canon (sigCtx fn) (callRen fn.params args m.nv v) = _ at hcp
+        rw [hr] at hcp; rw [hcp]
         generalize hp : fn.params[v] = p at hget
         obtain ⟨pm, t⟩ := p
         cases pm with
         | inp =>
           refine Or.inr (Or.inr (Or.inl ⟨v, t, hget, by simp, ?_⟩))
-          simp only [RSetup.liftE, paramE, ↓reduceIte, Option.map_some]
+          simp only [RSetup.liftE, paramE, ↓reduceIte, regioned, Bool.false_and]
           congr 1
           show { callPe Γ fn.params args v with live := true, fresh := false, heldFresh := false } = _
           rw [with_live_fresh _ (callPe_live _ _ _ _) (callPe_fresh _ _ _ _) (callPe_heldFresh _ _ _ _)]
@@ -353,10 +344,19 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
         | inout b => exact absurd hget (hnv b t)
       · subst heq
         refine Or.inr (Or.inl ⟨rfl, ?_⟩)
-        rw [sigCtx_res]
+        have hcr := h.canon_sig (sigCtx_res fn) (Nat.le_refl _) (fun hvl => absurd hvl (Nat.lt_irrefl _))
+        change (callS Γ F fn args m.nv x).canon (sigCtx fn) (callRen fn.params args m.nv fn.params.length) = _
+          at hcr
+        rw [hr] at hcr; rw [hcr]
         simp [RSetup.liftE, resMode_ne' fn, RSetup.liftMode_resMode, rds]
       · refine Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨?_, v, hgt, rfl⟩)))))
-        rw [sigCtx_none hgt]; rfl
+        rw [hc, h.sigCtx_pi hgt, hpv]; rfl
+  · have hgt : fn.params.length < v :=
+      Nat.lt_of_not_le fun hle => by rw [h.isPi_sig hle] at hp; cases hp
+    change callRen fn.params args m.nv v = y at hv
+    rcases callRen_cases fn.params args m.nv v with ⟨b, t, hvp, _⟩ | ⟨_, hr⟩
+    · exact absurd (lt_of_get hvp) (by omega)
+    · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨hc, v, hgt, by rw [← hv, hr]⟩)))))
   · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ⟨hy, hyx, by rw [hc, h.frame_of hy hyx]⟩)))))
 
 theorem frame_untouched (h : CallH P Γ F x fn args m.nv) {y : Var} (hy : ∀ v, callRen fn.params args m.nv v ≠ y)
@@ -1014,7 +1014,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
         ⟨rfl, fun _ => ⟨?_, ?_, ?_⟩, ?_⟩⟩
       · obtain ⟨_, hs⟩ := h.param_ok hk; exact hs (by simp)
       · intro T' hT'; rw [hT] at hT'; cases hT'; show WFv t _; rw [← hty]; exact hw
-      · intro _; exact ⟨T, by rw [hT]; rfl, by show ViewsOK _ t T _; rw [← hty]; exact hv.mono (List.subset_append_right _ _)⟩
+      · intro _; exact ⟨T, by rw [hT]; rfl, by show ViewsOK _ t T _; rw [← hty]; exact hv.mono (fun _ hd => List.mem_append_right _ (List.mem_append_right _ hd))⟩
       · intro hos; cases hos
     · have hkl := lt_of_get hk
       obtain ⟨Ea, hEa, hl, hok, _⟩ := h.arg k hkl
@@ -1033,7 +1033,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
         ⟨rfl, fun _ => ⟨?_, ?_, ?_⟩, ?_⟩⟩
       · obtain ⟨_, hs⟩ := h.param_ok hk; exact hs (by simp)
       · intro T' hT'; cases hT'; show WFv t _; rw [← hty]; exact hw
-      · intro _; exact ⟨T, rfl, by show ViewsOK _ t T _; rw [← hty]; exact hv.mono (List.subset_append_right _ _)⟩
+      · intro _; exact ⟨T, rfl, by show ViewsOK _ t T _; rw [← hty]; exact hv.mono (fun _ hd => List.mem_append_right _ (List.mem_append_right _ hd))⟩
       · intro hos; cases hos
     · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hy
       exact h.slot_frame hi hb hy' hyx h1'
@@ -1081,7 +1081,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hy
       obtain ⟨E0, h0, hm⟩ := h.postdm.2 y E1' h1'
       rw [clean_mode, hm]; exact hi.noRegion y E0 h0
-  wf := RSetup.canon_wf_sub h.sOK h.sig_abs (sigCtx_wf fn) (sigCtx_names fn)
+  wf := RSetup.canon_wf_sub h.sOK h.sig_abs (sigCtx_wf fn h.fnok.2.1) (sigCtx_names fn)
   names := RSetup.canon_names_sub h.sOK h.sig_abs (sigCtx_names fn)
   fresh := h.fresh_canon
   held y E sl T hy hl hst hT := by
@@ -1149,7 +1149,9 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       obtain ⟨T', hT', _, _, hn⟩ := h.slot_ownArg hi hb hkl hEa hla hm
       have hTT : T' = T := by rw [hT'] at hT; simpa using hT
       subst hTT
-      show NamesIn T' (rds _ (if t.hasFn then _ else []) ++ ownHeld true t _); rw [← hty]; exact hn
+      refine NamesIn.mono (H := rds _ (if t.hasFn then _ else []) ++ ownHeld true t _) ?_
+        (fun _ hd => List.mem_append_right _ hd)
+      rw [← hty]; exact hn
     · -- an `inout` parameter: the argument itself
       have hkl := lt_of_get hk
       obtain ⟨Ea, hEa, hla, hok, _⟩ := h.arg k hkl
@@ -1166,7 +1168,9 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
         subst this; rw [hk] at hk'; cases hk')
       rw [h.st_other hb hu, hT'] at hst; cases hst
       simp only [Option.some.injEq] at hT; subst hT
-      show NamesIn T' (rds _ (if t.hasFn then _ else []) ++ ownHeld true t _); rw [← hty]; exact hn
+      refine NamesIn.mono (H := rds _ (if t.hasFn then _ else []) ++ ownHeld true t _) ?_
+        (fun _ hd => List.mem_append_right _ hd)
+      rw [← hty]; exact hn
     · -- the frame: a live binding of the caller's, as it was
       obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hy
       obtain ⟨E0, h0, hl0, ht0, _, hvd0⟩ :=
@@ -1404,6 +1408,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       change some T' = some v at hsv; cases hsv
       obtain ⟨hc, o', l', hv⟩ := hnm.own rfl
       subst hty
+      rw [show ∀ A B C : List Dep, A ++ (B ++ C) = (A ++ B) ++ C from fun _ _ _ => (List.append_assoc _ _ _).symm] at hc
       exact hfr (h.own_param_free hi hkl hEa hla hm hT' hc hv)
     · -- an `inout` parameter: the argument itself
       have hkl := lt_of_get hk
@@ -1422,6 +1427,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       rw [h.st_other hb hu, hT'] at hst; cases hst
       obtain ⟨hc, o', l', hv⟩ := hnm.own rfl
       subst hty
+      rw [show ∀ A B C : List Dep, A ++ (B ++ C) = (A ++ B) ++ C from fun _ _ _ => (List.append_assoc _ _ _).symm] at hc
       exact hfr (h.own_param_free hi hkl hEa hla hm hT' hc hv)
     · -- the frame: as the caller has it
       obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hy

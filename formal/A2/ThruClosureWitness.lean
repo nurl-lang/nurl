@@ -144,12 +144,12 @@ theorem killE_int {E : Entry} (ht : E.ty = .int) (hr : E.mode = .rootb → E.vde
 
 theorem calm_sig : Calm (sigCtx sig) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [sigCtx, sig, paramE, symNames, CT, Ty.hasFn, resMode] at h <;>
+  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := sig) (by decide), sig, paramE, symNames, CT, Ty.hasFn, resMode] at h <;>
     subst h <;> simp [Entry.vdeps, Mode.ownSlot]
 
 theorem calm_code : Calm (sigCtx code) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [sigCtx, code, paramE, Ty.hasFn, resMode] at h <;>
+  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := code) (by decide), code, paramE, Ty.hasFn, resMode] at h <;>
     subst h <;> simp [Entry.vdeps, Mode.ownSlot]
 
 /-! ### The result slot stays as it was -/
@@ -271,9 +271,9 @@ theorem code_body : ∃ Δ, StmtT P .none (sigCtx code) [] code.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } :=
   body_typed (thru_typed calm_code (En := ⟨.int, .rootb, true, [], [], false, false, false, false⟩)
-    (by simp [sigCtx, code, paramE, Ty.hasFn]) rfl rfl (by decide) (by decide) (by decide)
-    (by simp [sigCtx, code]) (by simp [sigCtx, code]) (by simp [sigCtx, code])
-    (by simp [sigCtx, code, R0, resMode]))
+    (by simp [↓sigCtx_noRegion (fn := code) (by decide), code, paramE, Ty.hasFn]) rfl rfl (by decide) (by decide) (by decide)
+    (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp [↓sigCtx_noRegion (fn := code) (by decide), code])
+    (by simp [↓sigCtx_noRegion (fn := code) (by decide), code, R0, resMode]))
 
 theorem sig_body : ∃ Δ, StmtT P .none (sigCtx sig) [] sig.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
@@ -282,11 +282,11 @@ theorem sig_body : ∃ Δ, StmtT P .none (sigCtx sig) [] sig.body Δ ∧
   let G := A2.setE (sigCtx sig) 5 intE
   have hG : Calm G := calm_sig.setE (by simp [intE])
   obtain ⟨Δ, ht, hcΔ, h1⟩ := thru_typed hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl
-    (by decide) (by decide) (by decide) (by simp [G, A2.setE, sigCtx, sig])
-    (by simp [G, A2.setE, sigCtx, sig]) (by simp [G, A2.setE, sigCtx, sig])
-    (by simp [G, A2.setE, sigCtx, sig, R0, resMode])
+    (by decide) (by decide) (by decide) (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := sig) (by decide), sig])
+    (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := sig) (by decide), sig]) (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := sig) (by decide), sig])
+    (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := sig) (by decide), sig, R0, resMode])
   refine ⟨_, StmtT.letv (P := P) (ξ := .none) (x := 5) (Γ := sigCtx sig) (Γ1 := sigCtx sig) (F := [])
-    (E := intE) rfl (by simp [sigCtx, sig]) (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
+    (E := intE) rfl (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig]) (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
     (fun h => by simp [intE] at h), hcΔ.exitScope 5, ?_⟩
   simp [A2.exitScope, upd, A2.kill, h1, killE, hits, R0]
 
@@ -356,7 +356,7 @@ theorem callT_recv {P : Prog} {Γ : Ctx} {F : List Var} {σ : Nat} {sig : Fn} {c
     simp [mutNames, argNames, nameDeps, argE, hc, hn]
   have hpost : callPost Γ sig [c] = Γ := by
     simp [callPost, hps, callPostAux, hmut, killNames]
-  refine ⟨sig, hσ, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm, fun _ => hR⟩
+  refine ⟨sig, hσ, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm, fun _ => callR_regions_of_nil hR⟩
   · have hi' : i = 0 := by rw [hps] at hi; simpa using hi
     subst hi'
     refine ⟨Ec, by simpa using hc, hl, ?_, fun h => ?_, fun h => ?_⟩

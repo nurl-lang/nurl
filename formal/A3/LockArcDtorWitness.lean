@@ -251,22 +251,22 @@ theorem assign_res {fn : Fn} {r : Var} (hc : sigCtx fn r = some R0)
 
 theorem sig_dfnA_flags : ∀ v E, sigCtx dfnA v = some E → E.dtor = false ∧ E.dbind = false := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [sigCtx, dfnA, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := dfnA) (by decide), dfnA, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
 
 theorem dfnA_ok : FnOK P dfnA := by
   refine ⟨rfl, by decide, by decide, rfl, by simp [dfnA], ?_, by simp [dfnA], by simp [dfnA], by simp [dfnA],
     by simp [dfnA], by simp [dfnA], ?_, _,
-    assign_res (by simp [sigCtx, dfnA, R0, resMode]) ?_ sig_dfnA_flags, ?_, ?_, ?_⟩
+    assign_res (by simp [↓sigCtx_noRegion (fn := dfnA) (by decide), dfnA, R0, resMode]) ?_ sig_dfnA_flags, ?_, ?_, ?_⟩
   · intro pt hpt; simp [dfnA] at hpt; subst hpt
     simp [DA, TA, Ty.ok, Ty.isStruct, Ty.holdsView, Ty.dtorFree, Ty.hasGuard]
   · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [dfnA] at h⟩
     · simp [dfnA] at hi; subst hi; simp [dfnA] at hs
     · simp [dfnA] at hi; subst hi; simp [dfnA] at hb
   · intro p E hp _
-    rcases p with _ | _ | p <;> simp [sigCtx, dfnA, paramE, resMode, DA, TA, Ty.hasFn] at hp <;> subst hp <;>
+    rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := dfnA) (by decide), dfnA, paramE, resMode, DA, TA, Ty.hasFn] at hp <;> subst hp <;>
       simp [Entry.vdeps]
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, dfnA, paramE, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := dfnA) (by decide), dfnA, paramE, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, dfnA], rfl, rfl, by simp [R0, resMode, dfnA],
       by simp [intE], by simp [intE], by simp [dfnA]⟩
@@ -274,28 +274,28 @@ theorem dfnA_ok : FnOK P dfnA := by
 
 theorem sig_ufnA_flags : ∀ v E, sigCtx ufnA v = some E → E.dtor = false ∧ E.dbind = false := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [sigCtx, ufnA, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := ufnA) (by decide), ufnA, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
 
 theorem ufnA_ok : FnOK P ufnA := by
   refine ⟨rfl, by decide, by decide, rfl, by simp [ufnA], ?_, by simp [ufnA], by simp [ufnA], by simp [ufnA],
     by simp [ufnA], by simp [ufnA], ?_, _,
-    assign_res (by simp [sigCtx, ufnA, R0, resMode]) ?_ sig_ufnA_flags, ?_, ?_, ?_⟩
+    assign_res (by simp [↓sigCtx_noRegion (fn := ufnA) (by decide), ufnA, R0, resMode]) ?_ sig_ufnA_flags, ?_, ?_, ?_⟩
   · intro pt hpt; simp [ufnA] at hpt; subst hpt
     simp [DA, TA, Ty.ok, Ty.isStruct, Ty.owning, Ty.holdsView, Ty.dtorFree, Ty.hasGuard]
   · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [ufnA] at h⟩
     · simp [ufnA] at hi; subst hi; simp [ufnA] at hs
     · simp [ufnA] at hi; subst hi; simp [ufnA, Stmt.assigns]
   · intro p E hp hm
-    rcases p with _ | _ | p <;> simp [sigCtx, ufnA, paramE, resMode] at hp <;> subst hp <;> simp at hm
+    rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := ufnA) (by decide), ufnA, paramE, resMode] at hp <;> subst hp <;> simp at hm
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, sigCtx, ufnA, paramE, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := ufnA) (by decide), ufnA, paramE, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, ufnA], rfl, rfl, by simp [R0, resMode, ufnA],
       by simp [intE], by simp [intE], by simp [ufnA]⟩
   · intro i hi b hb
     simp [ufnA] at hi; subst hi
     refine ⟨paramE ufnA.params (.inout .replace, DA), ?_, rfl, ?_, ?_⟩
-    · simp [setE, upd, kill, killE, sigCtx, ufnA, paramE, Entry.vdeps, hits, Mode.ownSlot, DA, TA, Ty.hasFn]
+    · simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := ufnA) (by decide), ufnA, paramE, Entry.vdeps, hits, Mode.ownSlot, DA, TA, Ty.hasFn]
     · simp [paramE, DA, TA, Ty.hasFn]
     · intro _; simp [paramE, DA, TA, Ty.hasFn]
 

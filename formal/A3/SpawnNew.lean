@@ -42,8 +42,19 @@ theorem spawn_param {fn : Fn} (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.
 /-- Its entry: an owner that depends on nothing. -/
 theorem sigCtx_sink {fn : Fn} {v : Nat} {t : Ty} (hp : fn.params[v]? = some (.sink, t))
     (ht : t.holdsView = false) : sigCtx fn v = some ⟨t, .own, true, [], [], false, false, false, false⟩ := by
-  rw [sigCtx_of hp]
+  rw [sigCtx_of_plain hp (by simp [regioned, ht])]
   simp [paramE, hasFn_of_holdsView ht]
+
+/-- AGORA-937: a spawned function has no region (no parameter holds views),
+    so binds nothing past its result slot. -/
+theorem sigCtx_spawn_none {fn : Fn} (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false)
+    {v : Nat} (h : fn.params.length < v) : sigCtx fn v = none := by
+  have hall : fn.params.all (fun pt => !regioned pt) = true :=
+    List.all_eq_true.mpr fun pt hpt => by simp [regioned, (hpar pt hpt).2]
+  have h1 : ¬ v < fn.params.length := by omega
+  have h2 : v ≠ fn.params.length := by omega
+  rw [sigCtx_noRegion hall]
+  simp [h1, h2]
 
 /-- The entries of a spawned function's own context: its parameters', and
     its result's. -/
@@ -58,7 +69,7 @@ theorem sigCtx_spawn {fn : Fn} (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt
   · subst h
     rw [sigCtx_res] at hv
     exact .inr ⟨rfl, (Option.some.inj hv).symm⟩
-  · rw [sigCtx_none h] at hv; cases hv
+  · rw [sigCtx_spawn_none hpar h] at hv; cases hv
 
 /-- None of them is a borrowed parameter or an `inout` one. -/
 theorem sigCtx_spawn_mode {fn : Fn} (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false)
@@ -212,7 +223,7 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
         obtain ⟨w, hw⟩ : ∃ w, vs[v]? = some w := ⟨_, List.getElem?_eq_getElem (by omega)⟩
         rw [sigCtx_sink hp ht, spawnSt_of hlen hw]; rfl
       · subst h; rw [sigCtx_res, spawnSt_res]; rfl
-      · rw [sigCtx_none h, spawnSt_none hlen h]; rfl
+      · rw [sigCtx_spawn_none hpar h, spawnSt_none hlen h]; rfl
     slot := fun v E hv => by
       rcases sigCtx_spawn hpar hv with ⟨t, hp, ht, rfl⟩ | ⟨rfl, rfl⟩
       · have hvl : v < vs.length := by rw [hlen]; exact (List.getElem?_eq_some_iff.mp hp).1
@@ -243,7 +254,7 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
       rcases sigCtx_spawn hpar hv with ⟨t, _, _, rfl⟩ | ⟨_, rfl⟩
       · exact fun h => (by cases h)
       · exact resMode_region fn
-    wf := sigCtx_wf fn
+    wf := sigCtx_wf fn hnv
     rootbLive := fun p E hp hm => absurd hm (hrb p E hp)
     rootbLt := fun p E hp hm => absurd hm (hrb p E hp)
     names := sigCtx_names fn

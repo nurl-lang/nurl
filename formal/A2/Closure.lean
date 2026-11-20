@@ -502,6 +502,17 @@ theorem callR_clean_nil {Γ : Ctx} {args : List Var} (h : callR Γ args = []) :
     mem_callR.mpr ⟨a, ha, hty, roots_subset (memDeps_mono (clean_held_sub _)) hr⟩
   rw [h] at this; exact this
 
+/-- AGORA-937: ... and what they hold views of stays a region. -/
+theorem callR_clean_regions {Γ : Ctx} {args : List Var}
+    (h : ∀ r ∈ callR Γ args, ∃ E, Γ r = some E ∧ E.mode = .region) :
+    ∀ r ∈ callR (cleanC Γ) args, ∃ E, cleanC Γ r = some E ∧ E.mode = .region := by
+  intro r hr
+  obtain ⟨a, ha, hty, hr⟩ := mem_callR.mp hr
+  rw [argE_clean, clean_ty] at hty
+  rw [argE_clean] at hr
+  obtain ⟨E, hE, hm⟩ := h r (mem_callR.mpr ⟨a, ha, hty, roots_subset (memDeps_mono (clean_held_sub _)) hr⟩)
+  exact ⟨E.clean, by simp [cleanC, hE], by rw [clean_mode, hm]⟩
+
 theorem clean_clean (E : Entry) : E.clean.clean = E.clean := by
   have key : ∀ E : Entry, (¬ E.fixed ∧ (E.ty = .int ∨ E.live = false)) →
       E.clean =
@@ -736,7 +747,7 @@ theorem CallT.clean {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : L
   obtain ⟨fn', hf', hlen, hargs, hnf, hds, _, _, hg⟩ := hc
   rw [hf] at hf'; cases hf'
   refine ⟨fn, hf, hlen, fun i hi => ?_, fun d hd => ?_, hds.clean, rfl, rfl,
-    fun ht => callR_clean_nil (hg ht)⟩
+    fun ht => callR_clean_regions (hg ht)⟩
   rotate_left
   · simp only [argE_clean, clean_mode, clean_ty]
     obtain ⟨hcan, hvec, hnF, hnA, huniq⟩ := hnf d (mutNames_clean Γ args hd)
@@ -2042,9 +2053,10 @@ theorem mutNames_open {Γ : Ctx} {e c : Var} {Ec : Entry} {te : Ty} {zs : List V
 /-- The `ThruFn` guard of a call (Agora #295): into code that changes
     elements through a borrow, no argument holds views. -/
 theorem CallT.thru {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
-    {Γ' : Ctx} (h : CallT P Γ F f args E Γ') : ThruFn P f → callR Γ args = [] := by
+    {Γ' : Ctx} (h : CallT P Γ F f args E Γ') (hnr : ∀ v E, Γ v = some E → E.mode ≠ .region) :
+    ThruFn P f → callR Γ args = [] := by
   obtain ⟨_, _, _, _, _, _, _, _, h⟩ := h
-  exact h
+  exact fun ht => callR_nil_of_regions hnr (h ht)
 
 /-- AGORA-395: the call of a package's code holds no views where the call
     through the package did not: the environment holds what the receiver
@@ -2383,8 +2395,8 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
   -- opened call — the environment holds what the receiver does, and what
   -- it captures by name holds nothing (AGORA-395)
   have hthru : ThruFn P f → callR (setE Γ m.nv (envE c Ec te cs)) (m.nv :: zs ++ cs.map (·.1)) = [] :=
-    fun ht => open_pkg_callR hc hnint hEe hargE hze hkne hcapv (CallT.thru hcT0 (hthr ht).1)
-  refine ⟨hie, hZ, fn, hf, ?_, fun i hil => ?_, ?_, ?_, rfl, rfl, hthru⟩
+    fun ht => open_pkg_callR hc hnint hEe hargE hze hkne hcapv (CallT.thru hcT0 hi.noRegion (hthr ht).1)
+  refine ⟨hie, hZ, fn, hf, ?_, fun i hil => ?_, ?_, ?_, rfl, rfl, fun ht => callR_regions_of_nil (hthru ht)⟩
   · simp [hplen]; omega
   rotate_left
   · -- what the opened call's closures may change is changed by it

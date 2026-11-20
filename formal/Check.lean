@@ -669,6 +669,48 @@ import A3
 #print axioms A2.RSetup.mem_subE_vdeps_A
 #print axioms A2.RSetup.outHeld_canon_fix
 #print axioms A2.RSetup.callT_ren
+-- AGORA-937 (turn-on 2): CallT's ThruFn premise asks only that the arguments' roots are
+-- regions; where no binding is a region (MInv.noRegion) it is the old one, so a call of a
+-- through-changing function passes no views and its regions stand for nothing; the lift
+-- of a call in the body that passes views of regions passes none (A2/RegionThruWitness.lean)
+#print axioms A2.thru_call
+#print axioms A2.callR_regions_of_nil
+#print axioms A2.callR_nil_of_regions
+#print axioms A2.CallT.thru
+#print axioms A2.RSetup.σ_nil_of_R
+#print axioms A2.RSetup.mem_subE_held_notPi_of_R
+#print axioms A2.CallH.σ_nil_of_thru
+#print axioms A2.RSetup.callR_canon
+#print axioms A2.callR_clean_regions
+#print axioms A2.RegionThruWitness.callR_region
+#print axioms A2.RegionThruWitness.call_region_ok
+#print axioms A2.RegionThruWitness.call_root_refused
+-- AGORA-937 (turn-on 3): FnOK's end checks let a result or an inout parameter hold views of a
+-- parameter's region (isRegionIdx); the call substitutes what the argument holds views of,
+-- which the caller's result and inout argument hold (heldOfArgs: CallH.σ_held), so the
+-- exits' result and inout argument stay within callRes/callPost (A2/RegionResWitness.lean)
+#print axioms A2.isRegionIdx_iff
+#print axioms A2.fnOK_mono
+#print axioms A2.callS_isPi
+#print axioms A2.RSetup.mem_subD_pi
+#print axioms A2.CallH.σ_held
+#print axioms A2.CallH.lift_nosink_sub
+#print axioms A2.CallH.lift_sub_sub
+#print axioms A2.CallH.res_at
+#print axioms A2.CallH.res_props
+#print axioms A2.CallH.inout_at
+#print axioms A2.CallH.fin_weaker
+#print axioms A2.CallH.typedIn
+#print axioms A2.RegionResWitness.idv_ok
+#print axioms A2.RegionResWitness.idv_not_ok0
+#print axioms A2.RegionResWitness.call_ok
+#print axioms A2.RegionResWitness.callRes_holds
+#print axioms A2.RegionResWitness.vw_not_ok
+#print axioms A2.RegionResWitness.vat_ok
+#print axioms A2.RegionResWitness.fst_trunc_ok
+#print axioms A2.RegionResWitness.fst_trunc_old_refused
+#print axioms A2.RegionResWitness.snd_trunc_refused
+#print axioms A2.RegionResWitness.sink_dep_refused
 -- AGORA-937: a right-hand side lifted with regions: what it reads is on no region, a
 -- fresh borrow is on no region (FreshOK), what is derived is the lift substituted
 #print axioms A2.RSetup.canon_setEs

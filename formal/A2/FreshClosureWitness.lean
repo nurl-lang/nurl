@@ -94,23 +94,23 @@ theorem fbody_typed {fn : Fn} (hb : fn.body = fbody) (hc : Calm (sigCtx fn)) (h1
 
 theorem calm_sig : Calm (sigCtx sig) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [sigCtx, sig, paramE, symNames, CT, Ty.hasFn, resMode] at h <;>
+  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := sig) (by decide), sig, paramE, symNames, CT, Ty.hasFn, resMode] at h <;>
     subst h <;> simp [Entry.vdeps, Mode.ownSlot]
 
 theorem calm_code : Calm (sigCtx code) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [sigCtx, code, paramE, sl, Ty.hasFn, resMode] at h <;>
+  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := code) (by decide), code, paramE, sl, Ty.hasFn, resMode] at h <;>
     subst h <;> simp [Entry.vdeps, Mode.ownSlot]
 
 theorem sig_body : ∃ Δ, StmtT P .none (sigCtx sig) [] sig.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
-    Δ 1 = some { intE with mode := R0.mode } := fbody_typed (fn := sig) rfl calm_sig (by simp [sigCtx, sig, R0, resMode])
-  (by simp [sigCtx, sig]) (by simp [sigCtx, sig]) (by simp [sigCtx, sig]) (by simp [sigCtx, sig])
+    Δ 1 = some { intE with mode := R0.mode } := fbody_typed (fn := sig) rfl calm_sig (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig, R0, resMode])
+  (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig]) (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig]) (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig]) (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig])
 
 theorem code_body : ∃ Δ, StmtT P .none (sigCtx code) [] code.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
-    Δ 1 = some { intE with mode := R0.mode } := fbody_typed (fn := code) rfl calm_code (by simp [sigCtx, code, R0, resMode])
-  (by simp [sigCtx, code]) (by simp [sigCtx, code]) (by simp [sigCtx, code]) (by simp [sigCtx, code])
+    Δ 1 = some { intE with mode := R0.mode } := fbody_typed (fn := code) rfl calm_code (by simp [↓sigCtx_noRegion (fn := code) (by decide), code, R0, resMode])
+  (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp [↓sigCtx_noRegion (fn := code) (by decide), code])
 
 theorem code_ok : FnOK P code := by
   obtain ⟨Δ, hb, hfl, hr⟩ := code_body
@@ -172,7 +172,7 @@ theorem callT_recv {P : Prog} {Γ : Ctx} {F : List Var} {σ : Nat} {sig : Fn} {c
     CallT P Γ F σ [c] (callRes Γ sig [c]) Γ := by
   have hpost : callPost Γ sig [c] = Γ := by
     simp [callPost, hps, callPostAux, hmut, killNames]
-  refine ⟨sig, hσ, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm, hR⟩
+  refine ⟨sig, hσ, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm, fun ht => callR_regions_of_nil (hR ht)⟩
   · have hi' : i = 0 := by rw [hps] at hi; simpa using hi
     subst hi'
     refine ⟨Ec, by simpa using hc, hl, ?_, fun h => ?_, fun h => ?_⟩

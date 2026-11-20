@@ -1850,7 +1850,7 @@ theorem projE_fresh_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (
         { projE (S.ρ y) (S.liftE y Ey) a with fresh := true, heldFresh := true } := by
       cases a <;> first
         | exact absurd rfl hai
-        | (simp only [projE, hlh, hh, List.append_nil, hpd]
+        | (simp only [projE, hlh, hh, projHeld_nil, hpd]
            simp [liftE, Mode.ownSlot, heldA, hafn, rds, liftMode])
     rw [heq]; exact EntryWeaker.refl _
 
@@ -1880,19 +1880,34 @@ theorem projE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : �
       rcases this with h1 | h1
       · exact List.mem_append.mpr (Or.inl h1)
       · exact List.mem_append.mpr (Or.inr h1.2)
+  -- (AGORA-937: the lift keeps whether the struct's slot owns its value,
+  -- so the field depends on what the lifted struct holds where it did)
+  have hosl : (S.liftE y Ey).mode.ownSlot = Ey.mode.ownSlot := by
+    by_cases hrb : Ey.mode = .rootb
+    · rw [(liftE_rootb h).mpr hrb, hrb]
+    · rw [liftE_mode y hrb]; cases hm : Ey.mode <;> simp_all [liftMode, Mode.ownSlot]
+  have hph : ∀ t' : Ty, projHeld (S.liftE y Ey).mode.ownSlot t' (S.liftE y Ey).held ⊆
+      rds S.ρ (projHeld Ey.mode.ownSlot t' Ey.held) ++ S.A := by
+    intro t' d hd
+    rw [hosl] at hd
+    unfold projHeld at hd ⊢
+    split at hd
+    · cases hd
+    · rename_i hc; simp only [hc]; exact hl hd
   cases t with
   | int => exact intE_lift x
   | _ =>
     refine EntryWeaker.mk' (by simp [projE, liftE]) (by simp [projE, liftE, liftMode])
       (by simp [projE]) (by simp [projE, liftE]) (fun _ => ?_) ?_
-    · simp only [projE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true,
+    · intro d hd
+      have hd' := List.mem_append.mp (by simpa only [projE] using hd)
+      simp only [projE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot, Bool.false_eq_true,
         rds, List.map_append]
-      intro d hd
-      rcases List.mem_append.mp hd with hd | hd
+      rcases hd' with hd | hd
       · rcases List.mem_append.mp (hpd hd) with h1 | h1
         · exact List.mem_append_left _ (List.mem_append_left _ h1)
         · exact List.mem_append_right _ h1
-      · rcases List.mem_append.mp (hl hd) with h1 | h1
+      · rcases List.mem_append.mp (hph _ hd) with h1 | h1
         · exact List.mem_append_left _ (List.mem_append_right _ h1)
         · exact List.mem_append_right _ h1
     · simp only [projE, liftE, reduceCtorEq, ↓reduceIte]; exact hl
@@ -2469,17 +2484,27 @@ theorem projE_subE (h : S.OK) {y : Var} (hnp : S.isPi y = false) (E : Entry) (t 
   by_cases h1 : t = .int
   · subst h1; exact EntryWeaker.refl _
   have hpe : ∀ E' : Entry, projE (S.ρ y) E' t =
-      ⟨t, .bor, true, projDeps (S.ρ y) E' ++ E'.held, E'.held, false, false, false, false⟩ := fun E' => by
+      ⟨t, .bor, true, projDeps (S.ρ y) E' ++ projHeld E'.mode.ownSlot t E'.held, E'.held, false, false, false,
+        false⟩ := fun E' => by
     cases t <;> simp_all [projE]
+  -- (AGORA-937: the substitution keeps the struct's mode, so the field
+  -- depends on what the substituted struct holds where it did)
+  have hphs : projHeld (S.subE E).mode.ownSlot t (S.subE E).held =
+      (projHeld E.mode.ownSlot t E.held).flatMap S.subD := by
+    rw [subE_mode, subE_held]; unfold projHeld; split <;> rfl
   rw [hpe, hpe]
-  refine S.ew_sub_path (X := ⟨t, .bor, true, projDeps (S.ρ y) E ++ E.held, E.held, false, false, f, f⟩)
-    (P := projDeps (S.ρ y) (S.subE E) ++ (S.subE E).held) ?_ ?_ (by simp)
-  · show projDeps (S.ρ y) (S.subE E) ++ E.held.flatMap S.subD ⊆ (projDeps (S.ρ y) E ++ E.held).flatMap S.subD
-    rw [List.flatMap_append]
+  refine S.ew_sub_path (X := ⟨t, .bor, true, projDeps (S.ρ y) E ++ projHeld E.mode.ownSlot t E.held, E.held,
+      false, false, f, f⟩)
+    (P := projDeps (S.ρ y) (S.subE E) ++ projHeld (S.subE E).mode.ownSlot t (S.subE E).held) ?_ ?_ (by simp)
+  · show projDeps (S.ρ y) (S.subE E) ++ projHeld (S.subE E).mode.ownSlot t (S.subE E).held ⊆
+      (projDeps (S.ρ y) E ++ projHeld E.mode.ownSlot t E.held).flatMap S.subD
+    rw [List.flatMap_append, hphs]
     exact append_sub (S.projDeps_subE h hnp E) (List.Subset.refl _)
   · intro hft
     obtain ⟨hh, hk⟩ := hkeep hft
-    show (projDeps (S.ρ y) E ++ E.held).flatMap S.subD ⊆ projDeps (S.ρ y) (S.subE E) ++ E.held.flatMap S.subD
+    show (projDeps (S.ρ y) E ++ projHeld E.mode.ownSlot t E.held).flatMap S.subD ⊆
+      projDeps (S.ρ y) (S.subE E) ++ projHeld (S.subE E).mode.ownSlot t (S.subE E).held
+    rw [hphs]
     have hkp : ∀ d ∈ projDeps (S.ρ y) E, ∀ v, S.inv d.root = some v → S.isPi v = false := by
       intro d hd v hv
       unfold projDeps at hd
@@ -2496,7 +2521,7 @@ theorem projE_subE (h : S.OK) {y : Var} (hnp : S.isPi y = false) (E : Entry) (t 
       · split
         · rfl
         · rename_i ho hrb; exact hkept (hk (by simpa using ho) hrb)
-    rw [hh, List.append_nil, List.flatMap_nil, List.append_nil, hpd, hkept hkp]
+    rw [hh, projHeld_nil, List.append_nil, List.flatMap_nil, List.append_nil, hpd, hkept hkp]
     exact List.Subset.refl _
 
 /-- AGORA-937: a fresh read's source (`projSrc_lift`) is lifted to one that
@@ -3456,6 +3481,15 @@ theorem mem_subE_held_of_R (h : S.OK) (hR : S.R = []) {X : Entry} {d : Dep} (hd 
   rcases S.mem_subD hde with rfl | ⟨v, _, _, hσ⟩
   · exact he
   · have := h.σ_sub v hσ; rw [hR] at this; simp [allKinds] at this
+
+/-- AGORA-937 (turn-on 3): a lifted dependency on a region stands for what
+    the region stands for, or is dropped (a name). -/
+theorem mem_subD_pi {S : RSetup} (h : S.OK) {w : Var} {k : Kind} {e : Dep} (hp : S.isPi w = true)
+    (he : e ∈ S.subD ⟨S.ρ w, k⟩) : e ∈ S.σ w := by
+  unfold subD at he
+  simp only [inv_ρ h, hp, ↓reduceIte] at he
+  cases hk : k.isName <;> simp only [hk, Bool.false_eq_true, ↓reduceIte, List.not_mem_nil] at he
+  exact he
 
 /-- AGORA-937 (agora #4147): no name is on a region. A live binding that may
     hold memory names only roots that own their slot (`NameWF`), and a region
@@ -4908,12 +4942,42 @@ theorem AbsOK.callPostAux {Γa : Ctx} (hab0 : S.AbsOK Γa) {fn : Fn} {args : Lis
               · rw [ht] at h'; exact h'
             simp [hv0, hl0, hh0]))
 
-/-- Agora #295: a call that passes no views passes none where the call
-    places it, when the outer call passed none either: what the lift adds to
-    an argument is what the outer arguments held — names, when they held no
-    views (`S.R = []`). -/
-theorem callR_canon (h : S.OK) {Γa : Ctx} {args : List Var} (hR : S.R = [])
-    (hc : callR Γa args = []) (hvs : ∀ a ∈ args, S.isPi a = false) :
+/-- AGORA-937 (turn-on 2): with no memory frozen (`S.R = []`), what each
+    region stands for is nothing (`σ_sub`). -/
+theorem σ_nil_of_R (h : S.OK) (hR : S.R = []) (v : Var) : S.σ v = [] :=
+  List.eq_nil_of_subset_nil fun d hd => by
+    have := h.σ_sub v hd; rw [hR] at this; simp [allKinds] at this
+
+/-- AGORA-937 (turn-on 2): ... so a dependency a substituted entry holds was
+    held, and is on no region: one on a region is dropped (a name) or
+    replaced by what the region stands for, nothing. -/
+theorem mem_subE_held_notPi_of_R (h : S.OK) (hR : S.R = []) {X : Entry} {d : Dep}
+    (hd : d ∈ (S.subE X).held) : d ∈ X.held ∧ ∀ v, S.inv d.root = some v → S.isPi v = false := by
+  rw [subE_held] at hd
+  obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp hd
+  unfold subD at hde
+  split at hde
+  · rename_i v hv
+    cases hp : S.isPi v
+    · rw [hp] at hde; simp only [Bool.false_eq_true, ↓reduceIte, List.mem_singleton] at hde
+      subst hde
+      exact ⟨he, fun w hw => by rw [hv] at hw; cases hw; exact hp⟩
+    · rw [hp, S.σ_nil_of_R h hR] at hde
+      simp at hde
+  · rename_i hv
+    simp only [List.mem_singleton] at hde
+    subst hde
+    exact ⟨he, fun w hw => by rw [hv] at hw; cases hw⟩
+
+/-- Agora #295, AGORA-937 (turn-on 2): the lift of a call's `ThruFn`
+    premise. In the callee's body the arguments may hold views of the
+    callee's own regions only; where the call places the body, a region
+    stands for what the outer call's arguments held, and that is nothing
+    when the outer call passed no views (`S.R = []`): so the lifted call
+    passes no views, which is the premise there (`callR_regions_of_nil`). -/
+theorem callR_canon (h : S.OK) (hab : S.AbsOK Γa) {args : List Var} (hR : S.R = [])
+    (hc : ∀ r ∈ callR Γa args, ∃ E, Γa r = some E ∧ E.mode = .region)
+    (hvs : ∀ a ∈ args, S.isPi a = false) :
     callR (S.canon Γa) (args.map S.ρ) = [] := by
   -- with no views passed, what the arguments held is names only
   have hA : ∀ d ∈ S.A, d.kind.isName = true := by
@@ -4933,7 +4997,7 @@ theorem callR_canon (h : S.OK) {Γa : Ctx} {args : List Var} (hR : S.R = [])
   | some E =>
     rw [argE_canons h hE (hvs a ha)] at hty hdh
     rw [subE_ty] at hty
-    have hdh := S.mem_subE_held_of_R h hR hdh
+    obtain ⟨hdh, hdnp⟩ := S.mem_subE_held_notPi_of_R h hR hdh
     by_cases hrb : E.mode = .rootb
     · -- a borrowed parameter: what it holds is what the outer arguments held
       simp only [RSetup.liftE, hrb, ↓reduceIte] at hdh
@@ -4944,14 +5008,18 @@ theorem callR_canon (h : S.OK) {Γa : Ctx} {args : List Var} (hR : S.R = [])
         simp [Dep.ren, Kind.isName] at hdn
     · simp only [RSetup.liftE, hrb, ↓reduceIte] at hty hdh
       rcases List.mem_append.mp hdh with hdr | hdo
-      · -- what the argument held itself, renamed: no memory, by the guard
+      · -- what the argument held itself, renamed: a region's, by the
+        -- premise, and so dropped by the substitution
         obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hdr
         have hm : d0 ∈ memDeps (argE Γa a).held := by
           unfold argE; rw [hE]
           exact List.mem_filter.mpr ⟨hd0, by simpa [Dep.ren] using hdn⟩
         have : d0.root ∈ callR Γa args :=
           mem_callR.mpr ⟨a, ha, by unfold argE; rw [hE]; exact hty, List.mem_map_of_mem hm⟩
-        rw [hc] at this; cases this
+        obtain ⟨Er, hEr, hreg⟩ := hc _ this
+        have hpi := (hab.2.2.2.1 _ Er hEr).mp hreg
+        rw [hdnp d0.root (by simp only [Dep.ren]; exact S.inv_ρ h _)] at hpi
+        cases hpi
       · -- what the lift adds: names only
         unfold ownHeld at hdo
         split at hdo
@@ -5000,7 +5068,7 @@ theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa 
   refine ⟨_, _, ⟨fn, hf, by simp [hlen], fun i hi => ?_, namesFree_lift h hab hexA hvs hnf,
     CallDtorSafe.canon h hab hexA hlen (fun i hi => by
       obtain ⟨Ea, hEa, _, hok, _⟩ := hargs i hi; exact ⟨Ea, hEa, hok⟩) hal hds hvs, rfl, rfl,
-      fun ht => callR_canon h (hR ht) (hg ht) hvs⟩, ?_,
+      fun ht => callR_regions_of_nil (callR_canon h hab (hR ht) (hg ht) hvs)⟩, ?_,
     fun x => callRes_lift h hab hlr hex hvs x⟩
   · obtain ⟨Ea, hEa, hl, hok, hmv, _⟩ := hargs i hi
     have hia : i < args.length := hlen ▸ hi
@@ -6464,7 +6532,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- (the interface is a function the statement calls: a call through one
     -- that changes elements through a borrow is a call of such a function,
     -- AGORA-395)
-    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT (fun ht => hT (.inr ⟨σ, by simp [Stmt.calls], ht⟩))
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT (fun ht => hT (thru_call (by simp [Stmt.calls]) ht))
       (fun v hv => hvs v (by rcases List.mem_cons.mp hv with rfl | hv <;> simp [Stmt.vars, hv]))
     obtain ⟨hn1, hEn, _⟩ := hcT.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hcT hab
@@ -6581,7 +6649,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun ho hd => dtorHead_rename h.inj (hdk ho hd))
   | @letcall _ Γ Γ1 Δ F x f args k E hks hx hxF hc hk hpe hdk ih =>
     intro _ hab hw hn hfo hT hvs
-    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (.inr ⟨f, by simp [Stmt.calls], ht⟩))
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (thru_call (by simp [Stmt.calls]) ht))
       (fun v hv => hvs v (by simp [Stmt.vars, hv]))
     obtain ⟨hn1, hEn, _⟩ := hc.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hc hab
@@ -6618,7 +6686,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (DStay.canon h hst) (canon_freshT h habΔ hfo hdom' hm' hfΔ), habΔ⟩
   | @letrec _ Γ Γ1 Δ F x f k E fn hks hx hxF hf hp hty ho hc hk hpe ih =>
     intro _ hab hw hn hfo hT hvs
-    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (.inr ⟨f, by simp [Stmt.calls], ht⟩))
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (thru_call (by simp [Stmt.calls]) ht))
       (fun v hv => by simp at hv)
     obtain ⟨hn1, hEn, _⟩ := hc.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hc hab

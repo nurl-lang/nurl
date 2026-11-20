@@ -197,12 +197,12 @@ theorem code_not_thru : ¬ ThruFn P 1 := by
 
 theorem calm_sig : Calm (sigCtx sig) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [sigCtx, sig, paramE, symNames, CT, Ty.hasFn, resMode] at h <;>
+  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := sig) (by decide), sig, paramE, symNames, CT, Ty.hasFn, resMode] at h <;>
     subst h <;> simp [Entry.vdeps, Mode.ownSlot]
 
 theorem calm_code : Calm (sigCtx code) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [sigCtx, code, paramE, sl, Ty.hasFn, resMode] at h <;>
+  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := code) (by decide), code, paramE, sl, Ty.hasFn, resMode] at h <;>
     subst h <;> simp [Entry.vdeps, Mode.ownSlot]
 
 theorem sig_body : ∃ Δ, StmtT P .none (sigCtx sig) [] sig.body Δ ∧
@@ -213,11 +213,11 @@ theorem sig_body : ∃ Δ, StmtT P .none (sigCtx sig) [] sig.body Δ ∧
   let G := A2.setE (sigCtx sig) 5 intE
   have hG : Calm G := calm_sig.setE (by simp [intE])
   obtain ⟨Δ, ht, hcΔ, h1'⟩ := thruL_typed (Q := P) hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl
-    (by decide) (by decide) (by decide) (by simp [G, A2.setE, upd, sigCtx, sig])
-    (by simp [G, A2.setE, upd, sigCtx, sig]) (by simp [G, A2.setE, upd, sigCtx, sig])
-    (by simp [G, A2.setE, upd, sigCtx, sig, R0, resMode])
+    (by decide) (by decide) (by decide) (by simp [G, A2.setE, upd, ↓sigCtx_noRegion (fn := sig) (by decide), sig])
+    (by simp [G, A2.setE, upd, ↓sigCtx_noRegion (fn := sig) (by decide), sig]) (by simp [G, A2.setE, upd, ↓sigCtx_noRegion (fn := sig) (by decide), sig])
+    (by simp [G, A2.setE, upd, ↓sigCtx_noRegion (fn := sig) (by decide), sig, R0, resMode])
   refine ⟨_, StmtT.letv (P := P) (ξ := .none) (x := 5) (Γ := sigCtx sig) (Γ1 := sigCtx sig) (F := [])
-    (E := intE) rfl (by simp [sigCtx, sig]) (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
+    (E := intE) rfl (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig]) (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
     (fun h => by simp [intE] at h), hcΔ.exitScope 5, ?_⟩
   simp [A2.exitScope, upd, A2.kill, h1', killE, hits, R0]
 
@@ -225,9 +225,9 @@ theorem code_body : ∃ Δ, StmtT P .none (sigCtx code) [] code.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } := by
   apply body_typed
-  exact storeE_typed (Q := P) calm_code (by simp [sigCtx, code]) (by simp [sigCtx, code])
-    (by simp [sigCtx, code]) (by simp [sigCtx, code, paramE, Es, sl, Ty.hasFn])
-    (by simp [sigCtx, code, R0, resMode, paramE])
+  exact storeE_typed (Q := P) calm_code (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp [↓sigCtx_noRegion (fn := code) (by decide), code])
+    (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp [↓sigCtx_noRegion (fn := code) (by decide), code, paramE, Es, sl, Ty.hasFn])
+    (by simp [↓sigCtx_noRegion (fn := code) (by decide), code, R0, resMode, paramE])
 
 theorem code_ok : FnOK P code := by
   obtain ⟨Δ, hb, hfl, hr⟩ := code_body

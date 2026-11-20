@@ -278,7 +278,7 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
       · exact ⟨_, hc⟩
       · rw [show m.nv + fn.params.length = (callS Γ F fn args m.nv x).ρ fn.params.length from
           (ren_res fn args m.nv).symm]
-        exact ⟨_, h.canon_sig (sigCtx_res fn)⟩
+        exact ⟨_, h.canon_sigR (sigCtx_res fn) (Nat.le_refl _)⟩
     · obtain ⟨k', p, hk', hp, rfl⟩ := mem_wrapSpine hv
       have hρ : callRen fn.params args m.nv k' = m.nv + 0 + k' := by
         unfold callRen; rw [hk']
@@ -288,7 +288,7 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
         | _ => simp
       rw [← hρ]
       show ∃ E, (callS Γ F fn args m.nv x).canon (sigCtx fn) ((callS Γ F fn args m.nv x).ρ k') = some E
-      exact ⟨_, h.canon_sig (sigCtx_of hk')⟩
+      exact ⟨_, h.canon_sigR (sigCtx_of hk') (Nat.le_of_lt (lt_of_get hk'))⟩
 
 theorem keep (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} :
     Keep Γ ((callS Γ F fn args m.nv x).canon (sigCtx fn)) (.letcall x f args k) (callStmt fn args m.nv x k) := by
@@ -483,7 +483,7 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
   rw [hf] at hf'; cases hf'
   exact {
     dsafe := hds
-    thru := fun ht => hg (ThruFn.of_body hf ht)
+    thru := fun ht => callR_nil_of_regions hi.noRegion (hg (ThruFn.of_body hf ht))
     prog := hP
     fnok := hP fn (List.mem_of_getElem? hf)
     len := hlen

@@ -417,13 +417,15 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     simp only [Entry.fresh_vdeps] at hn ⊢
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of ht)
-    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false, false⟩ := by
+    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ projHeld Ey.mode.ownSlot a Ey.held, Ey.held, false, false, false, false⟩ := by
       cases a with
       | int => simp [projE, intE] at hn
       | _ => rfl
     rw [hpe]
-    show ∀ r ∈ roots ((projDeps y Ey ++ Ey.held) ++ Ey.held), _
-    refine app _ _ (app _ _ ?_ (hheld y Ey hy hl hn')) (hheld y Ey hy hl hn')
+    show ∀ r ∈ roots ((projDeps y Ey ++ projHeld Ey.mode.ownSlot a Ey.held) ++ Ey.held), _
+    refine app _ _ (app _ _ ?_ (fun r hr => hheld y Ey hy hl hn' r (by
+      simp only [roots, List.mem_map] at hr ⊢
+      obtain ⟨d, hd, rfl⟩ := hr; exact ⟨d, projHeld_sub _ _ _ hd, rfl⟩))) (hheld y Ey hy hl hn')
     unfold projDeps; split
     · rename_i hos; intro r hr; simp [roots] at hr; subst hr
       exact ⟨Ey, hy, by cases hm : Ey.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
@@ -435,13 +437,15 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     simp only [Entry.fresh_vdeps] at hn ⊢
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of ht)
-    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false, false⟩ := by
+    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ projHeld Ey.mode.ownSlot b Ey.held, Ey.held, false, false, false, false⟩ := by
       cases b with
       | int => simp [projE, intE] at hn
       | _ => rfl
     rw [hpe]
-    show ∀ r ∈ roots ((projDeps y Ey ++ Ey.held) ++ Ey.held), _
-    refine app _ _ (app _ _ ?_ (hheld y Ey hy hl hn')) (hheld y Ey hy hl hn')
+    show ∀ r ∈ roots ((projDeps y Ey ++ projHeld Ey.mode.ownSlot b Ey.held) ++ Ey.held), _
+    refine app _ _ (app _ _ ?_ (fun r hr => hheld y Ey hy hl hn' r (by
+      simp only [roots, List.mem_map] at hr ⊢
+      obtain ⟨d, hd, rfl⟩ := hr; exact ⟨d, projHeld_sub _ _ _ hd, rfl⟩))) (hheld y Ey hy hl hn')
     unfold projDeps; split
     · rename_i hos; intro r hr; simp [roots] at hr; subst hr
       exact ⟨Ey, hy, by cases hm : Ey.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
@@ -471,13 +475,15 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     simp only [Entry.fresh_vdeps] at hn ⊢
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of_sum ht)
-    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false, false⟩ := by
+    have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ projHeld Ey.mode.ownSlot a Ey.held, Ey.held, false, false, false, false⟩ := by
       cases a with
       | int => simp [projE, intE] at hn
       | _ => rfl
     rw [hpe]
-    show ∀ r ∈ roots ((projDeps y Ey ++ Ey.held) ++ Ey.held), _
-    refine app _ _ (app _ _ ?_ (hheld y Ey hy hl hn')) (hheld y Ey hy hl hn')
+    show ∀ r ∈ roots ((projDeps y Ey ++ projHeld Ey.mode.ownSlot a Ey.held) ++ Ey.held), _
+    refine app _ _ (app _ _ ?_ (fun r hr => hheld y Ey hy hl hn' r (by
+      simp only [roots, List.mem_map] at hr ⊢
+      obtain ⟨d, hd, rfl⟩ := hr; exact ⟨d, projHeld_sub _ _ _ hd, rfl⟩))) (hheld y Ey hy hl hn')
     unfold projDeps; split
     · rename_i hos; intro r hr; simp [roots] at hr; subst hr
       exact ⟨Ey, hy, by cases hm : Ey.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
@@ -489,13 +495,15 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
     simp only [Entry.fresh_vdeps] at hn ⊢
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of_sum ht)
-    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ Ey.held, Ey.held, false, false, false, false⟩ := by
+    have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ projHeld Ey.mode.ownSlot b Ey.held, Ey.held, false, false, false, false⟩ := by
       cases b with
       | int => simp [projE, intE] at hn
       | _ => rfl
     rw [hpe]
-    show ∀ r ∈ roots ((projDeps y Ey ++ Ey.held) ++ Ey.held), _
-    refine app _ _ (app _ _ ?_ (hheld y Ey hy hl hn')) (hheld y Ey hy hl hn')
+    show ∀ r ∈ roots ((projDeps y Ey ++ projHeld Ey.mode.ownSlot b Ey.held) ++ Ey.held), _
+    refine app _ _ (app _ _ ?_ (fun r hr => hheld y Ey hy hl hn' r (by
+      simp only [roots, List.mem_map] at hr ⊢
+      obtain ⟨d, hd, rfl⟩ := hr; exact ⟨d, projHeld_sub _ _ _ hd, rfl⟩))) (hheld y Ey hy hl hn')
     unfold projDeps; split
     · rename_i hos; intro r hr; simp [roots] at hr; subst hr
       exact ⟨Ey, hy, by cases hm : Ey.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩

@@ -179,7 +179,9 @@ the LLVM / C11 memory model rather than redefining it.
     fresh (one that may reach memory an argument views),
     directly or through a callee, or drop glue that does so, of a type that holds
     views, and a call into a function that does so which passes an
-    argument holding views (`ThruFn`);
+    argument holding views (`ThruFn`) of anything but a region of the
+    caller's own signature (AGORA-937: a view-holding `sink` or `inout`
+    parameter may be handed to such a function, `A2/RegionThruWitness.lean`);
   - a closure whose code does so, through a borrow that is not fresh,
     when the call through its package passes an argument holding views, or
     its environment holds views, or it takes the environment handed over
@@ -411,6 +413,89 @@ the LLVM / C11 memory model rather than redefining it.
   typed before design (e) is typed now rests on these lemmas: an old
   derivation is a new one with every bit off. It is not a proven
   translation, because the old relation is no longer in the tree.
+
+  AGORA-937 gives a parameter a region. In a function's own typing
+  (`sigCtx`), a `sink` or `inout` parameter `p` of a type that holds views
+  holds views of `π p` (`regioned`, `regionP`, `regionE`): what its
+  caller's views point into, which the callee sees as a binding with no
+  memory. The function's result, and an `inout` parameter at its end, may
+  hold views of a parameter's region (`FnOK`'s end checks,
+  `isRegionIdx`). The call substitutes for `π p` what argument `p` holds
+  views of, which the caller's result and `inout` argument hold already
+  (`heldOfArgs`, `CallH.σ_held`). A call into through-changing code
+  (`ThruFn`) may pass arguments that hold views of regions and of nothing
+  else (`CallT`). None of this is a new nurlc rule. It is A2's reading of
+  answers nurlc already makes (phase C):
+  - The region is nurlc's pseudo source of a view-holding parameter.
+    `__own_sink_str_params` marks the parameter `%name`, and the walk
+    seeds it (`bck_analyze`, `__bck_seed_held`): the parameter's `vds_`
+    starts with `%name`, whose `ph_` is the parameter's index `k`, and it
+    stands for what argument `k`'s views point into. nurlc seeds a
+    borrowed parameter too. A2 gives a region only to a `sink` or `inout`
+    parameter, and types a borrowed one through `rholds` (`lendable`).
+  - A result that holds views of a `sink` parameter's region is nurlc's
+    `%k` answer in `g_fn_rviews`, with `k` that parameter. `__rv_note`
+    answers `%k` for a returned value whose source is the pseudo `%p`.
+    It is not a `^k` answer: for a parameter the function owns (`po_`),
+    `__rv_note` records neither `k` nor `^k`. A view of that parameter's
+    own storage handed back is refused (`bck_ret_view_check`, by
+    `bck_local_source`), as A2 refuses it (`vw_not_ok`,
+    `sink_dep_refused`). At the call, `bck_sx_ev` reads a `%k` answer
+    (`__rv_ask` 3) as what the argument holds, not its storage, which is
+    A2's substitution for `π p`. nurlc answers
+    `A2/RegionResWitness.lean`'s `idv sink (Vec [s) vv → Vec [s`
+    (`( Vec ( Slice i ) )` in NURL) with `:%0` (`NURL_SUMMARY=idv`).
+    It refuses a read of the caller's result after what the argument
+    viewed is given a new value, since in A2 that result holds the
+    argument's views (`call_ok`, `callRes_holds`).
+  - github#2113's `^k` (AGORA-935) is the same reading for a borrowed
+    `[s` parameter. `__nurl_slice_copy` answers `:^0`, and `wraps [s t
+    → SBag` answers `:^0 %0`. `__rv_views_arg` (`__rv_elem_owns_nothing`)
+    reads `^k` of an owned slice whose elements own no storage as
+    viewing nothing of the argument: the caller's result depends on
+    what the elements view (`__src_as_ind`). A2 types that copy without
+    a region, as a call that hands back an owner
+    (`A2/SliceCopyViewWitness.lean`). With the parameter `sink`
+    (`wraps sink [s t`), nurlc answers `:%0`, as for `idv`.
+  - An `inout` parameter left holding views of a parameter's region
+    corresponds to nurlc's `h>%k` answer in `g_fn_vkeeps`
+    (`__vk_note_held`), from the same pseudo source. No A2 witness
+    program has that clause, and the two sides are not compared on one.
+  - `CallT`'s premise: nurlc accepts a function that hands its own
+    view-holding parameter to code that changes elements through a
+    borrow, and records the change on that parameter in its summary
+    (`g_fn_ireallocs`, `resolve_irealloc_summaries`). `g sink ( Vec (
+    Slice ( Vec i ) ) ) vv` calling AGORA-933's grower `f vv` is answered
+    `ireallocs=0`. A2 types that call (`A2/RegionThruWitness.lean`:
+    `call_region_ok`, `callR_region`). It still refuses handing such
+    code a view of a local (`call_root_refused`). A2 types fewer of
+    `g`'s callers than nurlc accepts. A caller where no binding is a
+    region (every context the memory invariant is stated of,
+    `MInv.noRegion`) still passes such code no views
+    (`callR_nil_of_regions`). So a `main` that hands `g` a `Vec` viewing
+    its own `w` is not typed. nurlc accepts it. Where the parameter is a
+    plain one, so the argument is lent, nurlc ends what points into the
+    elements of what the argument views (`bck_borrow_sweep0`'s `vds_`
+    sweep, agora #933). Where it is `sink`, as in `g`, nurlc ends nothing
+    there: a view of `w`'s element read after the call reads freed memory
+    (valgrind). That is a compiler hole inside A2: the program is one A2
+    expresses, and A2 refuses `main`'s call, which nurlc accepts. A2 is
+    not unsound here; nurlc accepts more than A2 types.
+
+  A borrowed result that views a region is typed too (turn-on 4, agora
+  #4219): `( vec_at vv 0 )` of a `sink` `vv : Vec [s`, returned as `[s`
+  (`A2/RegionResWitness.lean`, `vat_ok`). Its path is what `vv` holds, the
+  region, and `FnOK`'s path check admits a region as its held check does.
+  A borrow of the `sink` parameter's own buffer is still refused
+  (`vw_not_ok`). nurlc refuses `vat`: to `bck_ret_view_check` it is a view
+  of `vv`'s storage, released on the way out. So A2 types a function here
+  that nurlc does not accept, which is no hole; nurlc accepts less.
+
+  Not typed yet:
+  - AGORA-937's stage 3: a change through the region's memory itself, a
+    function changing what its parameter's views point into (AGORA-933's
+    grower `f`, called with an argument that holds views:
+    `A2/HeldViewThruWitness.lean`, `call_refused`).
 
   One more form nurlc accepts that A2 does not type directly: an owner
   given a new value while something still reads its old one, where nurlc

@@ -673,11 +673,36 @@ def popE (y : Var) (E : Entry) : Ty → Entry
 def projDeps (y : Var) (E : Entry) : List Dep :=
   if E.mode.ownSlot then [⟨y, .inner⟩] else if E.mode = .rootb then [⟨y, .view⟩] else E.path
 
+/-- What a field of type `t` read out of a struct (whose slot owns its value
+    when `o`) holding `H` depends on, past the struct itself. A field read
+    out of a borrowed struct depends on what the struct holds: its parts are
+    valid only through the struct's path and what it holds (`ValOK.pair`).
+    So does one that may hold a view or a closure, a stored view being copied
+    with what it depends on. A field of an owned struct that can hold
+    neither depends on nothing more: what a sibling field's views point into
+    is no part of it, and no root a change through it edits (AGORA-937). -/
+def projHeld (o : Bool) (t : Ty) (H : List Dep) : List Dep :=
+  if o && !(t.holdsView || t.hasFn) then [] else H
+
+@[simp] theorem projHeld_nil (o : Bool) (t : Ty) : projHeld o t [] = [] := by
+  unfold projHeld; split <;> rfl
+
+theorem projHeld_sub (o : Bool) (t : Ty) (H : List Dep) : projHeld o t H ⊆ H := by
+  unfold projHeld; split
+  · exact List.nil_subset _
+  · exact List.Subset.refl _
+
+theorem projHeld_bor {t : Ty} {H : List Dep} : projHeld false t H = H := by
+  simp [projHeld]
+
+theorem projHeld_view {o : Bool} {t : Ty} {H : List Dep} (h : t.holdsView = true) : projHeld o t H = H := by
+  simp [projHeld, h]
+
 /-- A field read: an integer is copied, anything else is lent (a stored view
     is copied with what it depends on). -/
 def projE (y : Var) (E : Entry) : Ty → Entry
   | .int => intE
-  | t => ⟨t, .bor, true, projDeps y E ++ E.held, E.held, false, false, false, false⟩
+  | t => ⟨t, .bor, true, projDeps y E ++ projHeld E.mode.ownSlot t E.held, E.held, false, false, false, false⟩
 
 /-- A field read is lent (A2-drop.3a: so `letv` binds it, whatever its type). -/
 @[simp] theorem projE_mode (y : Var) (E : Entry) (t : Ty) : (projE y E t).mode = .bor := by
@@ -1833,6 +1858,14 @@ theorem ThruFn.of_body {P : Prog} {f : Nat} {fn : Fn} (hf : P[f]? = some fn) :
   | .inl h => .here hf h
   | .inr ⟨_, hg, ht⟩ => .call hf hg ht
 
+/-- AGORA-937 (turn-on 2): a statement that calls a through-changing
+    function is through-changing (`ThruFn.call`, for a function's body), so
+    a call that runs it was handed no argument holding views
+    (`CallH.thru`), and the call's regions stand for nothing
+    (`CallH.σ_nil_of_thru`). -/
+theorem thru_call {P : Prog} {s : Stmt} {g : Nat} (hg : g ∈ s.calls) (ht : ThruFn P g) : s.Thru P :=
+  .inr ⟨g, hg, ht⟩
+
 namespace Stmt.Thru
 variable {P : Prog}
 
@@ -1905,8 +1938,26 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
     NamesFree Γ F fn.params args ∧ CallDtorSafe Γ fn.params args ∧
     E = callRes Γ fn args ∧ Γ' = callPost Γ fn args ∧
     -- a call into a function that changes elements through a borrow passes
-    -- no argument that holds views (Agora #295: `ThruFn`)
-    (ThruFn P f → callR Γ args = [])
+    -- no argument that holds views of memory (Agora #295: `ThruFn`): what
+    -- the arguments hold views of is at most a region of the caller's own
+    -- signature (AGORA-937), which stands for what the caller's caller
+    -- passed, and that is nothing, as this very premise says of that call
+    (ThruFn P f → ∀ r ∈ callR Γ args, ∃ E, Γ r = some E ∧ E.mode = .region)
+
+/-- AGORA-937: a call whose arguments hold no views meets `CallT`'s `ThruFn`
+    premise, as before regions. -/
+theorem callR_regions_of_nil {Γ : Ctx} {args : List Var} (h : callR Γ args = []) :
+    ∀ r ∈ callR Γ args, ∃ E, Γ r = some E ∧ E.mode = .region := by
+  rw [h]; intro r hr; cases hr
+
+/-- AGORA-937: ... and where no binding is a region (a runtime context,
+    `MInv.noRegion`), the premise is the old one: the arguments hold no
+    views. -/
+theorem callR_nil_of_regions {Γ : Ctx} {args : List Var} (hnr : ∀ v E, Γ v = some E → E.mode ≠ .region)
+    (h : ∀ r ∈ callR Γ args, ∃ E, Γ r = some E ∧ E.mode = .region) : callR Γ args = [] :=
+  List.eq_nil_of_subset_nil fun r hr => by
+    obtain ⟨E, hE, hm⟩ := h r hr
+    exact absurd hm (hnr r E hE)
 
 /-! ### Statements -/
 
@@ -2105,13 +2156,90 @@ def paramE (ps : List (PMode × Ty)) : PMode × Ty → Entry
   | (.inout b, t) => ⟨t, .inout b, true, [], if t.hasFn then symNames ps else [], false, false, false, false⟩
   | (.sink, t) => ⟨t, .own, true, [], if t.hasFn then symNames ps else [], false, false, false, false⟩
 
+/-- AGORA-937: a parameter with a region: one that owns its slot (`sink`,
+    `inout`) of a type that holds views. What those views point into is its
+    caller's memory, which the callee sees as the region `π p`
+    (`fn.nvars + p`, past every body variable). -/
+def regioned (pt : PMode × Ty) : Bool :=
+  (match pt.1 with | .inp => false | _ => true) && pt.2.holdsView
+
+/-- AGORA-937 (turn-on 3): `r` is a region's index: `π p = fn.nvars + p` of
+    a regioned parameter `p` (the call's `isPi`, `callS_isPi`). -/
+def isRegionIdx (fn : Fn) (r : Nat) : Bool :=
+  decide (fn.nvars ≤ r) &&
+    (if h : r - fn.nvars < fn.params.length then regioned fn.params[r - fn.nvars] else false)
+
+theorem isRegionIdx_iff {fn : Fn} {r : Nat} :
+    isRegionIdx fn r = true ↔
+      fn.nvars ≤ r ∧ ∃ h : r - fn.nvars < fn.params.length, regioned fn.params[r - fn.nvars] = true := by
+  unfold isRegionIdx
+  by_cases h : r - fn.nvars < fn.params.length
+  · simp [h]
+  · simp [h]
+
+/-- ... so a region's index is past every parameter's (`fn.params.length <
+    fn.nvars`, `FnOK`). -/
+theorem isRegionIdx_ge {fn : Fn} {r : Nat} (h : isRegionIdx fn r = true) : fn.nvars ≤ r :=
+  (isRegionIdx_iff.mp h).1
+
+/-- ... its entry: a root of the callee's typing only, holding nothing, never
+    live and never named by the body. -/
+def regionE : Entry := ⟨.int, .region, false, [], [], false, false, false, false⟩
+
+/-- ... and its parameter holds views of it. -/
+def regionP (fn : Fn) (v : Nat) (E : Entry) : Entry :=
+  if h : v < fn.params.length then
+    (if regioned fn.params[v] then { E with held := ⟨fn.nvars + v, .view⟩ :: E.held } else E)
+  else E
+
+@[simp] theorem regionP_ty (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).ty = E.ty := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_mode (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).mode = E.mode := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_live (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).live = E.live := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_path (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).path = E.path := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_dtor (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).dtor = E.dtor := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_dbind (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).dbind = E.dbind := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_fresh (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).fresh = E.fresh := by
+  unfold regionP; split <;> (try split) <;> rfl
+@[simp] theorem regionP_heldFresh (fn : Fn) (v : Nat) (E : Entry) :
+    (regionP fn v E).heldFresh = E.heldFresh := by
+  unfold regionP; split <;> (try split) <;> rfl
+
 /-- The callee's own view of its parameters: they depend on nothing it can
     see, but a closure it is handed, which may change its `inout`
     parameters.  The result slot starts empty. -/
 def sigCtx (fn : Fn) : Ctx := fun v =>
-  if h : v < fn.params.length then some (paramE fn.params fn.params[v])
+  if h : v < fn.params.length then some (regionP fn v (paramE fn.params fn.params[v]))
   else if v = fn.params.length then some ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩
+  else if isRegionIdx fn v then some regionE
   else none
+
+/-- AGORA-937: a signature with no regioned parameter binds what it bound
+    before regions: its parameters, plainly, and its result slot. -/
+theorem sigCtx_noRegion {fn : Fn} (hpl : fn.params.all (fun pt => !regioned pt) = true) :
+    sigCtx fn = fun v => if h : v < fn.params.length then some (paramE fn.params fn.params[v])
+      else if v = fn.params.length then some ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩
+      else none := by
+  funext v
+  have hr : ∀ (i : Nat) (h : i < fn.params.length), regioned fn.params[i] = false := fun i h => by
+    have := List.all_eq_true.mp hpl _ (List.getElem_mem h)
+    simpa using this
+  unfold sigCtx
+  by_cases h1 : v < fn.params.length
+  · simp [h1, regionP, hr]
+  · by_cases h2 : v = fn.params.length
+    · simp [h2]
+    · have h3 : isRegionIdx fn v = false := by
+        unfold isRegionIdx
+        by_cases h4 : v - fn.nvars < fn.params.length
+        · simp [h4, hr]
+        · simp [h4]
+      simp [h1, h2, h3]
 
 /-- Agora #909: a function's signature binds nothing fresh. -/
 theorem sigCtx_freshOK (fn : Fn) : FreshOK (sigCtx fn) := by
@@ -2119,10 +2247,12 @@ theorem sigCtx_freshOK (fn : Fn) : FreshOK (sigCtx fn) := by
   unfold sigCtx at hv
   split at hv
   · simp only [Option.some.injEq] at hv; subst hv
-    unfold paramE; split <;> (try split) <;> rfl
+    rw [regionP_fresh]; unfold paramE; split <;> (try split) <;> rfl
   · split at hv
     · simp only [Option.some.injEq] at hv; subst hv; rfl
-    · cases hv
+    · split at hv
+      · simp only [Option.some.injEq] at hv; subst hv; rfl
+      · cases hv
 
 /-- A summary pair names a parameter the caller still has after the call. -/
 def lendable (fn : Fn) (j : Nat) : Prop :=

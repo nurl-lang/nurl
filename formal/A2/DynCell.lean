@@ -68,7 +68,7 @@ def ctx (r3 : Entry) : Ctx := fun v =>
 
 theorem sig_eq : sigCtx pick = ctx ⟨str, .bor, false, [], [], false, false, false, false⟩ := by
   funext v
-  simp only [sigCtx, ctx, pick, paramE, resMode]
+  simp only [↓sigCtx_noRegion (fn := pick) (by decide), ctx, pick, paramE, resMode]
   rcases v with _ | _ | _ | _ | v <;> simp [Ecell, Ep, Ec, opt, str, Ty.hasFn]
 
 /-- Every root a result slot's entry names is the cell or `p`, and it names
