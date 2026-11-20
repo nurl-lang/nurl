@@ -277,8 +277,8 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
       · have := vlt h.xlt; have := veq he; omega
       · exact ⟨_, hc⟩
       · rw [show m.nv + fn.params.length = (callS Γ F fn args m.nv x).ρ fn.params.length from
-          (ren_res fn args m.nv).symm, RSetup.canon_ρ h.sOK, sigCtx_res]
-        exact ⟨_, rfl⟩
+          (ren_res fn args m.nv).symm]
+        exact ⟨_, h.canon_sig (sigCtx_res fn)⟩
     · obtain ⟨k', p, hk', hp, rfl⟩ := mem_wrapSpine hv
       have hρ : callRen fn.params args m.nv k' = m.nv + 0 + k' := by
         unfold callRen; rw [hk']
@@ -288,8 +288,7 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
         | _ => simp
       rw [← hρ]
       show ∃ E, (callS Γ F fn args m.nv x).canon (sigCtx fn) ((callS Γ F fn args m.nv x).ρ k') = some E
-      rw [RSetup.canon_ρ h.sOK, sigCtx_of hk']
-      exact ⟨_, rfl⟩
+      exact ⟨_, h.canon_sig (sigCtx_of hk')⟩
 
 theorem keep (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} :
     Keep Γ ((callS Γ F fn args m.nv x).canon (sigCtx fn)) (.letcall x f args k) (callStmt fn args m.nv x k) := by

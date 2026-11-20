@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.2] — 2026-11-20
+
+### Fixed
+
+- `__g_index_build` no longer frees the six chain vectors by hand before
+  they are made again: each `=` releases the old vector once the new one
+  exists, so a panic in between leaves no emptied field behind. The
+  compiler now refuses that shape (AGORA-929).
+
 ## [0.3.1] — 2026-11-09
 
 ### Fixed
