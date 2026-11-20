@@ -239,6 +239,7 @@ class FnCheck:
         self.errors = []
         self.loans = {}          # loan id -> (place, kind)
         self.ended = {}          # loan id -> (line, effect): where and why it ended last (nurlc's g_el_end)
+        self.ek_line = None      # the line what an effect ends is recorded at, when not its own (nurlc's g_ek_line)
         self.pidx = {vid: i for i, vid in enumerate(fn.params)}
         # What a parameter's value holds is the caller's to say. One loan
         # stands for it (kind `held`), on a place of its own that nothing in
@@ -384,6 +385,30 @@ class FnCheck:
                         else:
                             call_binds(part)
         call_binds(fn.body)
+
+        # a call's temporary the next statement stores into a field path,
+        # `let t call …` then `assign v/path use t`: the call is that field's
+        # refill (unwind_check; agora #929)
+        self.temp_refill = {}
+        self.refill_place = None
+
+        def refills(stmts):
+            for i, s in enumerate(stmts):
+                if (s[0] == "let" and s[2] is not None and s[2][0] in ("call", "callind") and i + 1 < len(stmts)):
+                    n = stmts[i + 1]
+                    if (n[0] == "assign" and n[1][1] and n[2] is not None and n[2][0] == "use"
+                            and n[2][1][0] == "v" and n[2][1][1] == s[1] and not n[2][1][2]):
+                        self.temp_refill[s[1]] = (n[1][0], tuple(n[1][1]))
+                for part in s[1:]:
+                    if isinstance(part, list):
+                        if part and isinstance(part[0], tuple) and part[0] and isinstance(part[0][0], str) and len(part[0]) == 2 and isinstance(part[0][1], list):
+                            for _, arm in part:
+                                refills(arm)
+                        else:
+                            refills(part)
+        refills(fn.body)
+
+
 
         def order(stmts):
             for s in stmts:
@@ -672,7 +697,7 @@ class FnCheck:
                 print(f"trace: {self.fn.name}:{line}: {eff} on {self.pname(place)} ends {len(killed)} loan(s)", file=sys.stderr)
             st.dead = st.dead | killed
             for l in killed:
-                self.ended[l] = (line, eff)
+                self.ended[l] = (self.ek_line or line, eff)
         # what the place held is gone with what the effect released
         if eff in ("drop", "replace", "take") and av.held and not weak:
             keep = set()
@@ -1831,6 +1856,10 @@ class FnCheck:
                             self.err(line, f"{name} takes {self.pname((op[1], op[2]))}, which is a borrow")
                         elif not self.T.copyable(ty):
                             self.err(line, f"{name} takes a borrowed value that cannot be copied")
+                        else:
+                            # (a copy of the temporary: nothing is taken out
+                            # of what it was read from - the destructor check)
+                            copied.add(k)
                     elif (not op[2] and self.fn.vars[op[1]].kind == "local" and avs[k].alias
                           and k < len(sm["modes"]) and sm["modes"][k] == "sink"
                           # (a `sink` that keeps the value - in its result,
@@ -1960,6 +1989,44 @@ class FnCheck:
                     # the callee does to its own copy is not done to the
                     # caller's (MEMORY.md §7.5)
                     copied.add(k)
+        # a field a `sink` takes out of a struct whose `% Drop` reads it: the
+        # destructor runs at the struct's end and reads the emptied field
+        # (agora #929) - any struct along the path, `o.inner.buf` read by
+        # Outer's; not a number, which is copied, nor a field copied for a
+        # callee that keeps it (`copied`); and inside `drop__T` only its own
+        # receiver may be taken apart, not another value of T
+        for k in sm["consumes"]:
+            if k >= len(ops) or k in copied:
+                continue
+            op = ops[k]
+            # (a consumed argument, whatever its declared mode: an `in`
+            # parameter the callee hands on to a sink is consumed too)
+            if op[0] != "v":
+                continue
+            # (the field path itself, or - a binding handed over whole - the
+            # field paths it aliases, `: b . h buf` then `( take b )`)
+            places = [(op[1], tuple(op[2]))] if op[2] else [
+                (a[0], tuple(a[1])) for a in avs[k].alias if a[1] and a[0] >= 0 and "*" not in a[1]]
+            hit = False
+            for (pv, pp) in places:
+                fty = self.ty_of_place((pv, pp))
+                # (a number, a raw string or a slice view is copied, not taken)
+                if fty is not None and (self.T.is_scalar(fty) or fty[0] in VIEW_TYPES):
+                    continue
+                for i in range(len(pp)):
+                    oty = self.ty_of_place((pv, pp[:i]))
+                    if oty is None or oty[0] != "named":
+                        continue
+                    if self.fn.name == "drop__" + oty[1] and pv == 0 and i == 0:
+                        continue
+                    rd = self.drop_reads(oty[1])
+                    if pp[i] in rd or "*" in rd:
+                        self.err(line, f"{name} takes field {'.'.join(map(str, pp[i:]))} of a {oty[1]}, "
+                                       f"whose destructor reads it")
+                        hit = True
+                        break
+                if hit:
+                    break
         # effects
         for (k, path, eff) in sm["effects"]:
             if k < len(ops) and ops[k][0] == "v" and not (k in copied and not path):
@@ -2713,6 +2780,27 @@ class FnCheck:
                               {(hp, sub.get(l, l)) for hp, l in av.held}, av.call)
         st.dead = frozenset(st.dead) - set(sub.values())
 
+    def drop_reads(self, tname):
+        """The fields of its receiver a program's `% Drop` for `tname` reads
+        (`drop__T`, parameter 0): a sink may not take those out (agora #929)."""
+        memo = self.prog.__dict__.setdefault("_drop_reads", {})
+        if tname in memo:
+            return memo[tname]
+        out = set()
+        body = self.prog.fns.get("drop__" + tname)
+        if body is not None:
+            def walk(x):
+                if isinstance(x, tuple) and len(x) == 3 and x[0] == "v" and x[1] == 0:
+                    # (the receiver used whole - handed to a call, captured:
+                    # what reads it is not known here, so every field)
+                    out.add(x[2][0] if x[2] else "*")
+                elif isinstance(x, (tuple, list)):
+                    for y in x:
+                        walk(y)
+            walk(body.body)
+        memo[tname] = out
+        return out
+
     def handle_places(self, av):
         """The places a value holds the handle of (a binding taken into a
         literal)."""
@@ -3003,6 +3091,20 @@ class FnCheck:
         for vid, k in self.pidx.items():
             if self.fn.modes[k] != "inout" and not (
                     self.fn.modes[k] == "cap" and getattr(self.fn.vars[vid], "byref", False)):
+                continue
+            # (…nor be handed back with a field a callee took still empty: a
+            # panic here is a way out to a `recover`ing caller, agora #929 -
+            # not, yet, the field this statement gives a value again, `= . h
+            # buf ( make … )`: that call runs before the store too, so a
+            # panic in it hands the field back empty - open, AGORA-939's
+            # rest, as in nurlc)
+            rp = self.refill_place
+            if self.fn.modes[k] == "inout" and any(
+                    g[0] == vid and g[1] and not (rp is not None and rp[0] == vid
+                                                  and tuple(g[1])[:len(rp[1])] == rp[1])
+                    for g in st.gone):
+                self.err(line, f"{self.vname(vid)} is the caller's and has a field taken "
+                               f"while {name} runs, which may unwind")
                 continue
             av = st.vals.get(vid)
             if av is None or not any(
@@ -3409,6 +3511,12 @@ class FnCheck:
         may not be left holding a view of this frame's own values."""
         if st.bottom:
             return
+        # (…nor an `inout` parameter go back with a field a callee took
+        # still empty: a closure's too, whose caller sees no summary of it -
+        # agora #280, #929)
+        for vid, k in self.pidx.items():
+            if k < len(self.fn.modes) and self.fn.modes[k] == "inout" and any(g[0] == vid and g[1] for g in st.gone):
+                self.err(line, f"{self.vname(vid)} is the caller's, and goes back with a field taken")
         for vid in self.pidx:
             av = st.vals.get(vid)
             if av is None:
@@ -3432,9 +3540,18 @@ class FnCheck:
                                        f"after the view was made")
                         return
 
-    def run_defers(self, st):
-        """A function's exit runs the `;` blocks armed on the way, newest
-        first."""
+    def effect_at(self, st, place, eff, line, eline):
+        """`effect`, with what it ends recorded as ended at `eline` (nurlc's
+        eng_effect_as)."""
+        was, self.ek_line = self.ek_line, eline
+        try:
+            self.effect(st, place, eff, line)
+        finally:
+            self.ek_line = was
+
+    def run_defers(self, st, xl):
+        """A function's exit (at line `xl`) runs the `;` blocks armed on
+        the way, newest first."""
         if st.bottom or not st.defers:
             return st
         # (what a block binds lives on after the block, until the whole
@@ -3447,11 +3564,11 @@ class FnCheck:
         st.defers = ()
         was_in_defer, self.in_defer = self.in_defer, True
         try:
-            return self.run_defers_(st, pending, outer)
+            return self.run_defers_(st, pending, outer, xl)
         finally:
             self.in_defer = was_in_defer
 
-    def run_defers_(self, st, pending, outer):
+    def run_defers_(self, st, pending, outer, xl):
         for d in reversed(pending):
             for x in self.defer_bodies[d]:
                 if x[0] == "scope" and isinstance(x[1], list):
@@ -3474,8 +3591,9 @@ class FnCheck:
                     continue
                 # (released here: its `% Drop` runs, as at a scope end)
                 self.run_dtor(st, (vid, ()), v.ty, v.line)
-                self.effect(st, (vid, ()), "replace", v.line)
-                self.effect(st, (vid, ()), "end", v.line)
+                # (what it ends ended at the exit)
+                self.effect_at(st, (vid, ()), "replace", v.line, xl)
+                self.effect_at(st, (vid, ()), "end", v.line, xl)
                 st.vals[vid] = AV("D")
             # (a loop's element read there is read outside every round:
             # the block runs at the function's exit, its slot in the
@@ -3488,7 +3606,7 @@ class FnCheck:
                 break
         if not st.bottom and st.defers:
             # (blocks the chain's own blocks armed run after them)
-            st = self.run_defers(st)
+            st = self.run_defers(st, xl)
         if outer:
             kept, self.chain_scopes, self.chain_kept = self.chain_kept, None, []
             if not st.bottom:
@@ -3506,11 +3624,11 @@ class FnCheck:
                                         f"the drop of {self.vname(vid)}", held=True)
                     if av.own == "O":
                         self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, self.fn.vars[vid].line)
-                        self.effect(st, (vid, ()), "replace", self.fn.vars[vid].line)
+                        self.effect_at(st, (vid, ()), "replace", self.fn.vars[vid].line, xl)
                     elif av.own == "X":
                         # (moved on some paths only: released on the others)
                         self.run_dtor(st, (vid, ()), self.fn.vars[vid].ty, self.fn.vars[vid].line)
-                    self.effect(st, (vid, ()), "end", self.fn.vars[vid].line)
+                    self.effect_at(st, (vid, ()), "end", self.fn.vars[vid].line, xl)
                     if av.own != "M":
                         st.vals[vid] = AV("D")
         return st
@@ -4210,10 +4328,15 @@ class FnCheck:
 
     def _stmt(self, st, s):
         k = s[0]
+        # (the place an `assign` gives a value, while its right-hand side
+        # is evaluated: unwind_check, agora #929)
+        self.refill_place = None
         if isinstance(s[-1], int):
             self.cur_line = s[-1]
         if k == "let":
             _, vid, rv, ln = s
+            if vid in self.temp_refill:
+                self.refill_place = self.temp_refill[vid]
             v = self.fn.vars[vid]
             if rv is not None and rv[0] == "payload":
                 self.payload_bound.add(vid)
@@ -4341,6 +4464,8 @@ class FnCheck:
             return st
         if k == "assign":
             _, (vid, path), rv, ln = s
+            if path:
+                self.refill_place = (vid, tuple(path))
             v = self.fn.vars[vid]
             cur = st.vals.get(vid)
             if (not path and v.kind == "temp" and v.ty in (None, ("v",)) and rv[0] == "use"
@@ -4769,7 +4894,7 @@ class FnCheck:
                     # was made from (MEMORY.md §1)
                     st.vals[op[1]] = before
                     self.ret_watch, self.ret_changed = op[1], False
-                    st = self.run_defers(st)
+                    st = self.run_defers(st, ln)
                     self.ret_watch = None
                     if not st.bottom:
                         after = st.vals.get(op[1])
@@ -4781,7 +4906,7 @@ class FnCheck:
                                          f"which was handed back")
                         st.vals[op[1]] = gone
                 else:
-                    st = self.run_defers(st)
+                    st = self.run_defers(st, ln)
                 self.check_live(st, av, ln, "the returned value", held=True)
                 self.params_hold_locals(st, ln)
                 self.pb_check(st)
@@ -4803,7 +4928,7 @@ class FnCheck:
                     self.err(ln, "the returned value views what a destructor run at the function's exit changes")
                 self.params_hold_dead(st, ln, dk)
             else:
-                st = self.run_defers(st)
+                st = self.run_defers(st, ln)
                 self.params_hold_locals(st, ln)
                 self.pb_check(st)
                 self.exits.append(st.copy())
@@ -4927,7 +5052,7 @@ class FnCheck:
                 st.vals[vid] = AV("P", (), (), held)
         end = self.run(st, self.fn.body)
         if not end.bottom:
-            end = self.run_defers(end)
+            end = self.run_defers(end, self.fn.line)
             self.params_hold_locals(end, self.fn.line)
             self.pb_check(end)
             self.exits.append(end)

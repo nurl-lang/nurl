@@ -1,4 +1,5 @@
-// map: §2.1 | A2 | rejected | - | agora #280: a `% Drop` destructor uses a String field a sink took
+// map: §2.1 | A2 | rejected | - | AGORA-929: a `% Drop` destructor uses a String field a sink took
+// AGORA-929 (this shape, closed): refused - a sink may not take a field the struct's own % Drop reads (main 08e56f54: accepted, the destructor read the emptied field)
 $ `stdlib/core/string.nu`
 
 : Named { String s i n }
