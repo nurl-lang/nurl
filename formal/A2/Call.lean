@@ -3446,13 +3446,32 @@ theorem res_props (h : CallH P Γ F x fn args base) {Er : Entry} (hErl : Er.live
         (hrholds _ (hErh d0 hd0)).2, hfits _ (List.mem_append_right _ (hErh d0 hd0))⟩)
         (fun d hd => List.mem_append_right _ hd) ((ownHeld_sub _ _ _).trans ((callS Γ F fn args base x).heldA_sub _))
 
-/-- An `inout` argument, where the exits leave it. -/
+/-- AGORA-937: the substitution keeps what a lifted `inout` parameter holds:
+    the callee's part is on lendable parameters (`outHolds`), so at no
+    region's index, and what the lift adds is the frame's. -/
+theorem inout_held_fix (h : CallH P Γ F x fn args base) {i : Nat} {Ei : Entry} (hrb : Ei.mode ≠ .rootb)
+    (hEih : ∀ d ∈ Ei.held, (i, d.root, d.kind) ∈ fn.outHolds) :
+    ((callS Γ F fn args base x).liftE i Ei).held.flatMap (callS Γ F fn args base x).subD =
+      ((callS Γ F fn args base x).liftE i Ei).held := by
+  obtain ⟨_, _, _, _, _, _, _, _, houts, _⟩ := h.fnok
+  refine RSetup.flatMap_subD_fix fun d hd => RSetup.subD_keep h.sOK ?_
+  rw [liftE_eq _ hrb] at hd
+  rcases List.mem_append.mp hd with hd | hd
+  · obtain ⟨d0, hd0, rfl⟩ := RSetup.mem_rds.mp hd
+    exact Or.inr (Or.inr ⟨d0.root, rfl, h.isPi_sig (Nat.le_of_lt (houts _ (hEih d0 hd0)).1.1)⟩)
+  · exact Or.inr (Or.inl (RSetup.A_out h.sOK
+      ((ownHeld_sub _ _ _).trans ((callS Γ F fn args base x).heldA_sub _) hd)))
+
+/-- An `inout` argument, where the exits leave it (AGORA-937: lifted, then
+    substituted; the substitution keeps what it holds, `inout_held_fix`). -/
 theorem inout_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {i : Nat} {b : Eff} {t : Ty}
     (hip : fn.params[i]? = some (.inout b, t)) {Ei : Entry} (hEi : Δa i = some Ei) (hEim : Ei.mode = .inout b)
     (hEih : ∀ d ∈ Ei.held, (i, d.root, d.kind) ∈ fn.outHolds) :
     exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa) (args.getD i 0) =
-      some (rrE fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).liftE i Ei)) ∧
-    ∀ d ∈ (rrE fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).liftE i Ei)).held,
+      some (rrE fn.params base 0 (callPe Γ fn.params args)
+        ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE i Ei))) ∧
+    ∀ d ∈ (rrE fn.params base 0 (callPe Γ fn.params args)
+        ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE i Ei))).held,
       (Γ d.root).isSome ∧
       d ∈ (argE Γ (args.getD i 0)).held ++ outHeld Γ fn args i ++ heldOfArgs Γ args := by
   obtain ⟨_, _, _, _, _, _, _, _, houts, _, hofits, _⟩ := h.fnok
@@ -3464,12 +3483,20 @@ theorem inout_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {i : Nat} {b : Ef
     have hh : d0 ∈ Ei.held := by
       unfold Entry.vdeps at hd0; rw [hEim] at hd0; simpa [Mode.ownSlot] using hd0
     exact (houts _ (hEih d0 hh)).1
-  refine ⟨exits_at h.pe_lt fn.params 0 _ ?_ (fun k p hkp _ he => ?_) (h.lift_nosink hrb hvd), ?_⟩
-  · rw [← hρ]; exact (RSetup.canon_ρ h.sOK _ i).trans (by rw [hEi]; rfl)
+  have hfix := h.inout_held_fix hrb hEih
+  have hos : ((callS Γ F fn args base x).liftE i Ei).mode.ownSlot = true := by
+    simp [liftE_eq _ hrb, hEim, liftMode, Mode.ownSlot]
+  have hsv : ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE i Ei)).vdeps =
+      ((callS Γ F fn args base x).liftE i Ei).vdeps := by
+    simp only [Entry.vdeps, RSetup.subE_mode, hos, ↓reduceIte, RSetup.subE_held, hfix]
+  refine ⟨exits_at h.pe_lt fn.params 0 _ ?_ (fun k p hkp _ he => ?_)
+    (by rw [hsv]; exact h.lift_nosink hrb hvd), ?_⟩
+  · rw [← hρ]; exact RSetup.canon_some h.sOK hEi (h.isPi_sig (Nat.le_of_lt hil))
   · have hlt := h.argLt hil
     rw [he] at hlt
     exact absurd hlt (Nat.not_lt.mpr (Nat.le_trans (Nat.le_add_right _ 0) (Nat.le_add_right _ k)))
-  · simp only [rrE, liftE_eq _ hrb]
+  · simp only [rrE, RSetup.subE_held, hfix]
+    simp only [liftE_eq _ hrb]
     refine h.lift_sub (fun d0 hd0 => ⟨(houts _ (hEih d0 hd0)).1, fun d hd => ?_,
       (houts _ (hEih d0 hd0)).2, hofits _ (hEih d0 hd0)⟩)
       (fun d hd => List.mem_append_right _ hd) ((ownHeld_sub _ _ _).trans ((callS Γ F fn args base x).heldA_sub _))
@@ -3785,10 +3812,10 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
         rw [← ht2] at hpt; rw [← hm2] at hpm; rw [← hh2] at hph
         have hrb : Ei.mode ≠ .rootb := by rw [hm0]; simp
         have hvd : ∀ d ∈ (rrE fn.params base 0 (callPe Γ fn.params args)
-            ((callS Γ F fn args base x).liftE v Ei)).vdeps, (Γ d.root).isSome := by
+            ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE v Ei))).vdeps, (Γ d.root).isSome := by
           intro d hd
           have hos : (rrE fn.params base 0 (callPe Γ fn.params args)
-              ((callS Γ F fn args base x).liftE v Ei)).mode.ownSlot = true := by
+              ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE v Ei))).mode.ownSlot = true := by
             simp [rrE, liftE_eq _ hrb, hm0, liftMode, Mode.ownSlot]
           simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append] at hd
           exact (hheld d hd).1
@@ -3800,7 +3827,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
             obtain ⟨E0, h0, hd0⟩ := h.post_dbind hEt hb
             rw [hEa] at h0; cases h0
             rw [h.dsafe.2.2 v hvl b (by rw [hpv]) Ea hEa] at hd0; cases hd0
-        refine Or.inr ⟨rrE fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).liftE v Ei),
+        refine Or.inr ⟨rrE fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE v Ei)),
           Et, by rw [hat, Option.map_some, h.chain_id hvd], hEt, ?_⟩
         refine ⟨?_, ?_, fun hr => by simp [rrE, liftE_eq _ hrb, hm0, liftMode] at hr,
           fun _ => ⟨by simp [rrE, liftE_eq _ hrb, hEil], fun ho => ?_, fun d hd => ?_⟩,
@@ -3819,7 +3846,7 @@ theorem fin_weaker (h : CallH P Γ F x fn args base) {Δa : Ctx} (hdt : DomTy (s
           · -- an `inout` parameter whose type holds no views holds nothing
             have hv' : t.holdsView = false := by simpa using hv
             have he0 := hEi0 (by rw [hpv]; exact hv')
-            simp only [rrE, liftE_eq _ hrb, he0, ht0, hm0, Mode.ownSlot, hv', ownHeld] at hd
+            simp only [rrE, RSetup.subE_held, liftE_eq _ hrb, he0, ht0, hm0, Mode.ownSlot, hv', ownHeld] at hd
             simp [rds, rrL_nil] at hd
       · -- a parameter slot, the result slot, or a callee local
         rw [hr] at hv; subst hv

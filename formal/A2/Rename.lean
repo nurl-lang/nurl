@@ -924,7 +924,7 @@ theorem DtorSafe.canon (h : S.OK) {e : Eff} {hv : Bool} {x : Var}
           rw [hkill d.kind hk] at hkb; cases hkb
 
 theorem canon_kill (h : S.OK) (hab : S.AbsOK Γa) {e : Eff} {hv : Bool} {x : Var}
-    (ha : Allowed S e hv x) (hnp : S.isPi x = false := h.noPi x) :
+    (ha : Allowed S e hv x) (hnp : S.isPi x = false) :
     S.canon (kill e hv x Γa) = kill e hv (S.ρ x) (S.canon Γa) := by
   funext y
   rcases canon_cases_sub h Γa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, hp, hc⟩ | ⟨hy, hc⟩
