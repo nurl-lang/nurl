@@ -669,6 +669,7 @@
 : ~ i g_fc_unw -1  // per function: whether a call of it may unwind the caller's frame (__eng_unw)
 : ~ i g_eng_dtor_unw -1  // 1: a destructor of the program may start a panic; -1 not asked yet (__eng_dtor_unw_init)
 : ~ i g_sm_dyn 0  // the name `dyn` (interned): boxing a value as a trait object
+: ~ i g_sm_memtake 0  // the name `mem_take` (interned): a binding takes over what it read (g_eng_rawwalk, AGORA-877)
 : i TG_SC 32
 : i TG_RB 33  // a payload taken out of a temporary: what it holds of itself, of its new holder
 : i TG_CV 34  // a view a closure's body hands back: what it lends of an argument, a capture
@@ -10816,6 +10817,15 @@ unsafe @ core_expr_exit i h0 i tt i acks0 → v {
         ? sc { ( core_push 0 ) ^ } {}
     } {}
     ? sc {
+        // (…where the engine reads raw bodies, an address moved by a
+        // number - `+ # i p off` - is an address still, into what `p`
+        // points into: a temporary of a pointer type - AGORA-877)
+        ? & & != 0 g_eng_rawwalk | == tt TT_PLUS == tt TT_MINUS ( __core_ops_addr h0 ) {
+            : i at ( core_temp `u8*` )
+            ( core_w CO_LET ) ( core_w at ) ( core_w RV_SCALAR ) ( __core_w_ops h0 )
+            ( core_push ( core_op_var at ) )
+            ^
+        } {}
         ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops h0 )
         ( core_push 0 )
         ^
@@ -10824,6 +10834,29 @@ unsafe @ core_expr_exit i h0 i tt i acks0 → v {
     ( core_w CO_LET ) ( core_w t ) ( core_w RV_OPAQUE ) ( core_w tt ) ( __core_w_ops h0 )
     ( core_push ( core_op_var t ) )
     ( __core_gap ( nurl_str_cat `expr ` ( nurl_str_int tt ) ) )
+}
+
+// Is one of the operands above `h0` a variable of a pointer type (`…*`,
+// a raw string's `i8*` too), named whole (g_eng_rawwalk, AGORA-877)?
+unsafe @ __core_ops_addr i h0 → b {
+    : *i os # *i # s g_core_os
+    : *i ps # *i # s g_core_pl
+    : *i vs # *i # s g_core_vars
+    : ~ i k h0
+    ~ < k g_core_os_n {
+        : i op . os k
+        ? >= op 2 {
+            : i b * - op 2 3
+            : i vid . ps b
+            ? & & == . ps + b 1 -1 >= vid 0 < vid g_core_var_n {
+                : s ty # s . vs + * vid CORE_VW 1
+                : i n ( nurl_str_len ty )
+                ? & > n 0 == ( nurl_str_get ty - n 1 ) 42 { ^ T } {}
+            } {}
+        } {}
+        = k + k 1
+    }
+    ^ F
 }
 
 // A statement begins on `line`.
@@ -11003,14 +11036,18 @@ unsafe @ core_call i h0 s ret_ty b ind → v {
         // nothing this IR shows — bit 2 of the function's flags)
         ? & != 0 g_root_syms != 0 ( nurl_sym_len2 g_root_syms # s g_core_callee `__ffi` ) { = g_core_fflags | g_core_fflags 4 } {}
     } {}
-    ? ( core_ty_scalar ret_ty ) {
+    // (…where the engine reads raw bodies, the word `nurl_peek` reads out of
+    // raw memory may be an address into what it was read from: a temporary
+    // of a pointer type - AGORA-877)
+    : b peek & & & != 0 g_eng_rawwalk ! ind != 0 g_core_callee ( seq # s g_core_callee `nurl_peek` )
+    ? & ! peek ( core_ty_scalar ret_ty ) {
         ( core_w CO_EVAL )
         ? ind { ( core_w RV_CALLIND ) } { ( core_w RV_CALL ) ( core_w g_core_callee ) }
         ( __core_w_ops h0 )
         ( core_push 0 )
         ^
     } {}
-    : i t ( core_temp ret_ty )
+    : i t ( core_temp ? peek `u8*` ret_ty )
     ? slot {
         : *i vs # *i # s g_core_vars
         : i fb + * t CORE_VW 4
@@ -14202,8 +14239,19 @@ unsafe @ eng_byte s w i k → i {
 // `ty`: ends what was lent out of any payload of that type. (`via`: the
 // parameter of this function, a handle itself, it is made through + 1,
 // 0 none - kept with it in the summary.)
+// The path a summary keeps of an effect `eff` at `p`: its first three
+// elements - and, where the engine reads raw bodies, the element after
+// them when that is an element (`*`) and the effect gives a part a new
+// value or takes it: a field of an element changed is a change to that
+// element, not to its container's own handle - a slot behind a Box or a
+// Shared is two below its handle already (AGORA-877).
+@ eff_path i p i eff → i {
+    ? & & & != 0 g_eng_rawwalk | == eff EF_REPLACE == eff EF_TAKE > ( ep_len p ) 3 == ( ep_at p 3 ) EE_STAR { ^ ( ep_take p 4 ) } {}
+    ^ ( ep_take p 3 )
+}
+
 @ region_effect i st i ty i tail i eff i via → v {
-    = g_s_regions ( sq_add g_s_regions ( tp4 ty ( ep_take tail 3 ) eff via ) )
+    = g_s_regions ( sq_add g_s_regions ( tp4 ty ( eff_path tail eff ) eff via ) )
     : ~ i dead ( st_dead st )
     : i n ( wv_len g_el_shared )
     : ~ i x 0
@@ -14522,7 +14570,7 @@ unsafe @ eng_byte s w i k → i {
         }
     } {}
     ? & >= ( fv_pidx vid ) 0 != eff EF_END {
-        = g_s_effects ( sq_add g_s_effects ( tp3 ( fv_pidx vid ) ( ep_take path 3 ) eff ) )
+        = g_s_effects ( sq_add g_s_effects ( tp3 ( fv_pidx vid ) ( eff_path path eff ) eff ) )
     } {}
     ? != eff EF_END {
         // an effect inside a shared payload is one on that handle type's
@@ -14541,7 +14589,7 @@ unsafe @ eng_byte s w i k → i {
         ~ < a ( sq_len ts ) {
             : i ty ( sq_at ts a )
             ? ! & own == a 0 {
-                = g_s_regions ( sq_add g_s_regions ( tp4 ty ( ep_take ( sq_at ts + a 1 ) 3 ) eff ? == a 0 via 0 ) )
+                = g_s_regions ( sq_add g_s_regions ( tp4 ty ( eff_path ( sq_at ts + a 1 ) eff ) eff ? == a 0 via 0 ) )
             } {}
             ? & ( et_flag ty ETF_ARC ) ! ( eng_change_ordered vid path ( ep_len ( sq_at ts + a 1 ) ) ) {
                 // every thread holding a copy of the Arc reads its payload:
@@ -14802,8 +14850,11 @@ unsafe @ eng_byte s w i k → i {
         // is a copy of the pointee, a handle of the place read below; the
         // pointer's own view of the container is not part of it (its use
         // here was checked above) - AGORA-877)
+        // (…and one that can: a copy of the pointee too, holding what the
+        // place read holds - a raw string a slot keeps views what it was
+        // given, not the pointer's container)
         : i vty0 ( fv_ty vid )
-        : b thru & & & != 0 g_eng_rawwalk != vty0 ET_NONE == ( et_kind vty0 ) EK_PTR & != ty ET_NONE ! ( et_view_capable ty )
+        : b thru & & & != 0 g_eng_rawwalk != vty0 ET_NONE == ( et_kind vty0 ) EK_PTR != ty ET_NONE
         : ~ i loans ? thru 0 ( av_loans av )
         : ~ i rheld sub
         : ~ i k 0
@@ -14827,6 +14878,13 @@ unsafe @ eng_byte s w i k → i {
             } {}
             = k + k 1
         }
+        ? & & thru ( et_is_view ty ) != rheld 0 {
+            // (a view read out of the slot is the view the slot holds: no
+            // handle of the slot)
+            : i v ( view_value rheld )
+            ? != v g_av_none { ^ v } {}
+        } {}
+        ? & & thru ( et_is_view ty ) == rheld 0 { = loans ( sq_union loans ( av_loans av ) ) } {}
         ^ ( av_make OW_L loans alias rheld F )
     } {}
     ^ av
@@ -15639,7 +15697,19 @@ unsafe @ eng_byte s w i k → i {
 @ eng_inout_root i pl → b {
     : i v ( pl_var pl )
     : i k ( fv_pidx v )
+    // (…or, where the engine reads raw bodies, the pointee of a raw
+    // pointer: storage of what it was made from - a container's slot -,
+    // which a value stored there goes into as it is - AGORA-877)
+    ? ( __eng_ptr_root pl ) { ^ T } {}
     ^ & & & != ( pl_path pl ) 0 >= k g_f_ncap == ( fv_kind v ) VK_PARAM == ( fp_mode k ) PM_INOUT
+}
+
+// Is `pl` a place behind a raw pointer, where the engine reads raw bodies?
+@ __eng_ptr_root i pl → b {
+    ? | == 0 g_eng_rawwalk == ( pl_path pl ) 0 { ^ F } {}
+    ? != ( ep_first ( pl_path pl ) ) EE_STAR { ^ F } {}
+    : i vt ( fv_ty ( pl_var pl ) )
+    ^ & != vt ET_NONE == ( et_kind vt ) EK_PTR
 }
 
 // A value handed to a new holder (a let, `=`, a return, a field): an
@@ -15754,12 +15824,19 @@ unsafe @ eng_byte s w i k → i {
                             // field of an `inout` one - storage the caller
                             // holds - is kept: it goes there as it is, and
                             // the caller's argument moves into the call)
-                            : b io_kept & & & & & & & & & == sown OW_P == wk WK_PLACE >= ( fv_pidx vid ) g_f_ncap == ( fp_mode ( fv_pidx vid ) ) PM_IN ! is_ret ! raw ! lend_owner != vty ET_NONE & != ( et_kind vty ) EK_CLOSURE ( et_owning vty ) ( eng_inout_root wa )
+                            // (…as is one stored through a raw pointer,
+                            // where the engine reads raw bodies, when it has
+                            // no copy: one that has is copied there - the
+                            // copy is the slot's own, holding what the
+                            // parameter holds, and the caller keeps its value
+                            // - AGORA-877)
+                            : b io_kept & & & & & & & & & & == sown OW_P == wk WK_PLACE >= ( fv_pidx vid ) g_f_ncap == ( fp_mode ( fv_pidx vid ) ) PM_IN ! is_ret ! raw ! lend_owner != vty ET_NONE & != ( et_kind vty ) EK_CLOSURE ( et_owning vty ) ( eng_inout_root wa ) | ! ( __eng_ptr_root wa ) ! ( et_copyable vty )
+                            : b ptr_copy & & & & & & & & == sown OW_P == wk WK_PLACE >= ( fv_pidx vid ) g_f_ncap == ( fp_mode ( fv_pidx vid ) ) PM_IN ! is_ret ! raw ! lend_owner != vty ET_NONE & != ( et_kind vty ) EK_CLOSURE & ( et_copyable vty ) ( __eng_ptr_root wa )
                             ? | | | & & & & & == sown OW_P >= ( fv_pidx vid ) 0 == ( fp_mode ( fv_pidx vid ) ) PM_SINK ! is_ret ! raw ! lend_owner cap_out & & ref_out ! is_ret ! lend_owner io_kept {
                                 // a `sink` parameter is the function's own:
                                 // handed to a new holder, it moves there
                                 = av ( move_out st vid line )
-                            } {
+                            } { ? ptr_copy { = av ( av_make OW_O 0 0 ( av_held src ) F ) } {
                                 // (an owned slice moves its buffer to whatever
                                 // is given it, as any owner does; a join's
                                 // temporary given an arm's own raw string
@@ -15798,7 +15875,7 @@ unsafe @ eng_byte s w i k → i {
                                         = g_fc_moved_vid -1
                                     } {}
                                 }
-                            }
+                            } }
                         }
                     }
                 }
@@ -18797,8 +18874,14 @@ unsafe @ eng_byte s w i k → i {
                             ( wv_put st ST_GONE ( sq_add ( st_gone st ) ( pl_make ( pl_var ok ) lpath ) ) )
                             = part T
                         } {
-                            = loans ( sq_union loans ( av_loans av ) )
                             : i al ( av_alias av )
+                            // (…where the engine reads raw bodies, a handle
+                            // of the argument's own place - a field read,
+                            // `( vec_get . c vals k )` - is no loan of the
+                            // result beside the lend of a part of that place
+                            // made below: the part's is the one the result
+                            // holds, as a getter's summary says - AGORA-877)
+                            : ~ i covered 0
                             // (a place the path cannot reach - a variant's
                             // payload asked of a Vec - is none the lend is
                             // of, where one the path reaches is there)
@@ -18823,8 +18906,22 @@ unsafe @ eng_byte s w i k → i {
                                     = alias ( sq_add alias pl )
                                     ( el_key3 TG_L site lk )
                                     = loans ( sq_add loans ( eng_loan st pl lkind ) )
+                                    ? & != 0 g_eng_rawwalk != pl pa { = covered ( sq_add covered pa ) } {}
                                 } {}
                                 = a + a 1
+                            }
+                            ? == covered 0 { = loans ( sq_union loans ( av_loans av ) ) } {
+                                : i als ( av_loans av )
+                                = a 0
+                                ~ < a ( sq_len als ) {
+                                    : i l ( sq_at als a )
+                                    // (…nor a raw pointer's own view, the
+                                    // part's being inside what it points to)
+                                    : i lpt ? ( sq_has covered ( el_place l ) ) ( eng_ty_of ( el_place l ) ) ET_NONE
+                                    : b lptr & != lpt ET_NONE == ( et_kind lpt ) EK_PTR
+                                    ? ! & & ( el_is_loan l ) | == ( el_kind l ) LK_HANDLE & lptr == ( el_kind l ) LK_VIEW ( sq_has covered ( el_place l ) ) { = loans ( sq_add loans l ) } {}
+                                    = a + a 1
+                                }
                             }
                             = held ( sq_union held ( held_sub ( av_held av ) lpath ) )
                         }
@@ -20277,7 +20374,16 @@ unsafe @ eng_byte s w i k → i {
     : i k ( ec at )
     : b copy_ok != 0 & flags TF_COPY_OK
     ? == k RV_USE {
-        ^ ( eng_transfer st ( eng_op ( ec + at 1 ) ) line TG_USE at dest_depth dest_ty wk wa flags dest )
+        : i uop ( eng_op ( ec + at 1 ) )
+        // (…a number made of an address, where the engine reads raw bodies -
+        // `= . cell 0 # i p`: the number holds nothing of what `p` points
+        // into, and a pointer named whole is read for its address only, no
+        // access to that - AGORA-877)
+        : b unum & & != 0 g_eng_rawwalk != dest_ty ET_NONE == ( et_kind dest_ty ) EK_SCALAR
+        ? & & & unum ( op_is_place uop ) == ( pl_path uop ) 0 == ( et_kind ( fv_ty ( pl_var uop ) ) ) EK_PTR { ^ g_av_none } {}
+        : i uav ( eng_transfer st uop line TG_USE at dest_depth dest_ty wk wa flags dest )
+        ? unum { ^ g_av_none } {}
+        ^ uav
     } {}
     ? == k RV_CALL {
         : i name ( ec + at 1 )
@@ -20285,23 +20391,34 @@ unsafe @ eng_byte s w i k → i {
         : i ops ( wv_new )
         : ~ i j 0
         ~ < j n { ( wv_push ops ( eng_op ( ec + + at 3 j ) ) ) = j + j 1 }
+        ? & & != 0 g_eng_rawwalk == n 1 == name g_sm_memtake {
+            // `( mem_take x )`, where the engine reads raw bodies: x, read
+            // out of a container by hand, is its own from here - what it
+            // was read out of gave it up, which ends what was lent out of
+            // that slot (an element: as after a vec_remove; a part: only
+            // what was lent of it) - and holds what the value held
+            // (AGORA-877)
+            : i top ( wv_at ops 0 )
+            ( wv_drop ops )
+            ? & ( op_is_place top ) == ( pl_path top ) 0 {
+                : i tv ( pl_var top )
+                : i tav ( st_av st tv )
+                ? & != tav 0 == ( av_own tav ) OW_L {
+                    : i tal ( av_alias tav )
+                    : ~ i j2 0
+                    ~ < j2 ( sq_len tal ) {
+                        : i a ( sq_at tal j2 )
+                        : i ap ( pl_path a )
+                        ( eng_effect st a ? & != ap 0 != ( ep_last ap ) EE_STAR EF_TAKE EF_REPLACE line 0 )
+                        = j2 + j2 1
+                    }
+                    ( st_put st tv ( av_make OW_O 0 0 ( av_held tav ) F ) )
+                } {}
+            } {}
+            ^ g_av_none
+        } {}
         : i callee ( ef_find name )
         ? & >= callee 0 != ( ef_nparams callee ) n { ( eng_unsup `arity` ) } {}
-        ? & & != 0 g_eng_rawwalk == n 1 < callee 0 {
-            ? == name ( __core_in `mem_take` ) {
-                // (`( mem_take x )`, where the engine reads raw bodies: x
-                // owns the value it holds from here on - what it was read
-                // out of is left a zero value, which holds nothing of it -
-                // AGORA-877)
-                : i xo ( wv_at ops 0 )
-                ? & ( op_is_place xo ) == ( pl_path xo ) 0 {
-                    : i cur ( st_av st ( pl_var xo ) )
-                    ? & != cur 0 == ( av_own cur ) OW_L { ( st_put st ( pl_var xo ) ( av_make OW_O 0 0 ( av_held cur ) F ) ) } {}
-                } {}
-                ( wv_drop ops )
-                ^ g_av_none
-            } {}
-        } {}
         : i sm ( eng_summary_of name )
         ? | < sm 0 != g_fc_unsup 0 {
             ? < sm 0 { ( eng_unsup ( nurl_str_cat `no summary for ` ( eng_str name ) ) ) } {}
@@ -20589,8 +20706,31 @@ unsafe @ eng_byte s w i k → i {
     } {}
     ? == k RV_SCALAR {
         : i n ( ec + at 1 )
+        // (…a pointer's, where the engine reads raw bodies: an address
+        // moved by a number views what the address it was made from
+        // views, core_expr_exit - AGORA-877)
+        : b addr & & != 0 g_eng_rawwalk != dest_ty ET_NONE ! ( et_scalar dest_ty )
+        : ~ i ls 0
+        : ~ i als 0
+        : ~ i hs 0
+        : ~ b any F
         : ~ i j 0
-        ~ < j n { ( eng_read st ( eng_op ( ec + + at 2 j ) ) line TG_SC + * at 256 j ) = j + j 1 }
+        ~ < j n {
+            // (…and a raw pointer named whole is no access to what it points
+            // into: an address compared or moved reads no memory - only
+            // reading through it does)
+            : i sop ( eng_op ( ec + + at 2 j ) )
+            : b bare & & & != 0 g_eng_rawwalk ( op_is_place sop ) == ( pl_path sop ) 0 == ( et_kind ( fv_ty ( pl_var sop ) ) ) EK_PTR
+            : i rav ? bare ( st_av st ( pl_var sop ) ) ( eng_read st sop line TG_SC + * at 256 j )
+            ? & & addr != rav 0 == ( av_own rav ) OW_L {
+                = ls ( sq_union ls ( av_loans rav ) )
+                = als ( sq_union als ( av_alias rav ) )
+                = hs ( sq_union hs ( av_held rav ) )
+                = any T
+            } {}
+            = j + j 1
+        }
+        ? any { ^ ( av_make OW_L ls als hs F ) } {}
         ^ g_av_none
     } {}
     ? == k RV_PAYLOAD {
@@ -22865,6 +23005,14 @@ unsafe @ eng_byte s w i k → i {
         ( eng_prim `vec_data` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
         ( eng_prim `nurl_vctl_data` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
         ( eng_prim `box_ptr` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
+        // (…and raw_block_ptr's is the RawBlock's own handle - a copy of
+        // the address of the allocation it releases, not of a `ptr` a
+        // by-value parameter's caller lent it: good while the block is,
+        // whatever is stored in its slots - AGORA-877.)
+        ( eng_prim `raw_block_ptr` `in` `lent` `0 - handle` `` `` `` `` `` `` `` `` `` `` )
+        // (…and the word nurl_peek reads, an address into what it was read
+        // out of, as core_call types it)
+        ( eng_prim `nurl_peek` `in in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
     } {}
     ( eng_prim `vec_clear` `in` `none` `` `` `0 - drop` `` `` `` `` `` `` `` `` )
     ( eng_prim `vec_clone` `in` `own` `` `- 0 - held` `` `` `` `0` `` `` `` `` `` )
@@ -24115,6 +24263,7 @@ unsafe @ eng_print_types → v {
     ? >= g_ewl_memo 0 { ( wv_drop g_ewl_memo ) = g_ewl_memo -1 } {}
     = g_ws_syms syms
     = g_sm_dyn ( __core_in `dyn` )
+    = g_sm_memtake ( __core_in `mem_take` )
     ( eng_sq_reset )
     ( __ep_init )
     ( __et_names )
@@ -24365,7 +24514,12 @@ unsafe @ core_member_elem i syms s ot i lex → i {
     : s name ( nurl_lex_val lex )
     ? == c0 37 {
         : s sname ? ptr ( nurl_str_slice ot 1 - n 2 ) ( nurl_str_slice ot 1 - n 1 )
-        ? & != 0 ( nurl_sym_len syms ( nurl_str_cat4 sname `__` name `__idx` ) ) ! ( str_contains_word g_mono_tparam_tys sname ) {
+        // (A type that reached the template as a type argument has no fields
+        // the generic can name - through a pointer, where `. p idx` indexes
+        // its array (gen_member). A value of it read by field, `. v ctl` of a
+        // `Vec A` that is also `B`, is a field read as codegen makes it,
+        // where the engine reads raw bodies - AGORA-877.)
+        ? & != 0 ( nurl_sym_len syms ( nurl_str_cat4 sname `__` name `__idx` ) ) | & != 0 g_eng_rawwalk ! ptr ! ( str_contains_word g_mono_tparam_tys sname ) {
             ^ ( __core_in ? ptr ( nurl_str_cat `>` name ) name )
         } {}
         ^ ( __core_in `*` )
