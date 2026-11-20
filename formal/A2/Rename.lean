@@ -248,6 +248,14 @@ theorem mem_flatMap_subD_nonname {ds : List Dep} {e : Dep} (he : e ∈ ds.flatMa
   · rfl
   · rw [S.subD_name hdk, List.mem_singleton] at hed; subst hed; rw [hk] at hdk; cases hdk
 
+/-- AGORA-937: ... so what a substituted list depends on in memory comes from
+    what it did. -/
+theorem memDeps_flatMap_subD (X : List Dep) : memDeps (X.flatMap S.subD) ⊆ (memDeps X).flatMap S.subD :=
+  fun e he => by
+    obtain ⟨he1, hk⟩ := List.mem_filter.mp he
+    obtain ⟨d, hd, hdk, hed⟩ := S.mem_flatMap_subD_nonname he1 (by simpa using hk)
+    exact List.mem_flatMap.mpr ⟨d, List.mem_filter.mpr ⟨hd, by simp [hdk]⟩, hed⟩
+
 /-- ... so two lists that agree on what is no name substitute to two that
     agree on it. -/
 theorem flatMap_subD_nonname_congr {ds ds' : List Dep}
@@ -2554,6 +2562,14 @@ theorem ew_sub_path {X : Entry} {P : List Dep} (hP : P ⊆ X.path.flatMap S.subD
     fun hl => ⟨hl, fun _ => hP, List.Subset.refl _⟩, fun hd => ⟨hd, List.Subset.refl _⟩, rfl,
     fun hd => Or.inl hd, fun _ _ _ _ _ => Iff.rfl, fun _ _ _ hfr => ⟨hfr, hf hfr⟩, fun _ _ hg => hg⟩
 
+/-- AGORA-937: ... and so is a borrow that holds less. -/
+theorem ew_sub_held {X : Entry} {H : List Dep} (hH : H ⊆ X.held) (hos : X.mode.ownSlot = false)
+    (hfx : ¬ X.fixed) : EntryWeaker { X with held := H } X :=
+  ⟨rfl, rfl, fun h' => absurd (by simpa only [Entry.fixed_def] using h') hfx,
+    fun hl => ⟨hl, fun _ => List.Subset.refl _, hH⟩, fun hd => ⟨hd, hH⟩, rfl,
+    fun hd => Or.inl hd, fun _ h' => absurd h' (by simp [hos]), fun _ _ _ hfr => ⟨hfr, List.Subset.refl _⟩,
+    fun _ _ hg => hg⟩
+
 /-- ... so, after a lift that is weaker, it is weaker than the lift substituted. -/
 theorem ew_sub_lift {X E3 : Entry} (hw : EntryWeaker X E3) {P : List Dep} (hP : P ⊆ X.path.flatMap S.subD)
     (hf : X.fresh = true → X.path.flatMap S.subD ⊆ P) (hfx : ¬ X.fixed) :
@@ -2860,6 +2876,30 @@ theorem pushArg_ren_held (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {y : Var
         · rcases List.mem_append.mp h1 with h2 | h2
           · exact List.mem_append_left _ (by rw [rds, List.map_append]; exact List.mem_append_right _ h2)
           · exact List.mem_append_right _ h2
+
+/-- AGORA-937: `pushArg_ren_held` with regions: what the stored value's
+    substituted lift holds in memory is that of its lift, substituted. -/
+theorem pushArg_ren_helds (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {y : Var} {Ey : Entry} {t : Ty}
+    {D : List Dep} {Γa1 : Ctx} (hy : Γa y = some Ey) (hnp : S.isPi y = false) (hn : Ey.ty ≠ .int)
+    (hp : PushArg Γa Fa y Ey t D Γa1)
+    {D' : List Dep} {Γc1 : Ctx} (hpa : PushArg (S.canon Γa) S.Fc (S.ρ y) (S.subE (S.liftE y Ey)) t D' Γc1)
+    (hfs : FreshSrc Γa y) (hhs : HeldSrc Γa y) : memDeps D' ⊆ (rds S.ρ (memDeps D)).flatMap S.subD := by
+  -- (the same push of the lift, before the substitution)
+  obtain ⟨D0, Γc0, hpa0, hD0⟩ : ∃ D0 Γc0, PushArg (S.canon Γa) S.Fc (S.ρ y) (S.liftE y Ey) t D0 Γc0 ∧
+      D' ⊆ D0.flatMap S.subD := by
+    cases hpa with
+    | move ho hm hF hpin hds => exact ⟨_, _, PushArg.move ho hm hF hpin hds, List.Subset.refl _⟩
+    | int => exact ⟨[], _, PushArg.int, List.Subset.refl _⟩
+    | slice hm =>
+      refine ⟨_, _, PushArg.slice hm, fun d hd => ?_⟩
+      rw [List.flatMap_append]
+      rcases List.mem_append.mp hd with hd | hd
+      · exact List.mem_append_left _ (derive_subE h hnp _ rfl hd)
+      · exact List.mem_append_right _ hd
+  have hm0 : memDeps D' ⊆ memDeps (D0.flatMap S.subD) := fun e he =>
+    List.mem_filter.mpr ⟨hD0 (List.mem_filter.mp he).1, (List.mem_filter.mp he).2⟩
+  exact hm0.trans ((S.memDeps_flatMap_subD D0).trans
+    (S.flatMap_subD_mono (pushArg_ren_held h hab hy hn hp hpa0 hfs hhs)))
 
 /-- A right-hand side of the callee, where the call places it. AGORA-937: it
     reads no region (`hvs`), and its result is the lift substituted; a fresh
@@ -3734,6 +3774,14 @@ theorem mem_subE_vdeps_A (h : S.OK) {L : Entry} {d : Dep} (hd : d ∈ (S.subE L)
 theorem mem_subE_name (h : S.OK) {L : Entry} {d : Dep} (hd : d ∈ (S.subE L).vdeps)
     (hn : d.kind.isName = true) : d ∈ L.vdeps := by
   rw [subE_vdeps] at hd
+  obtain ⟨d1, hd1, hdd⟩ := List.mem_flatMap.mp hd
+  rcases S.mem_subD hdd with rfl | ⟨v, _, _, hσ⟩
+  · exact hd1
+  · have := allKinds_notName (h.σ_sub v hσ); rw [hn] at this; cases this
+
+/-- AGORA-937: a name a substituted list holds, the list held. -/
+theorem mem_flatMap_subD_name (h : S.OK) {X : List Dep} {d : Dep} (hd : d ∈ X.flatMap S.subD)
+    (hn : d.kind.isName = true) : d ∈ X := by
   obtain ⟨d1, hd1, hdd⟩ := List.mem_flatMap.mp hd
   rcases S.mem_subD hdd with rfl | ⟨v, _, _, hσ⟩
   · exact hd1
@@ -5694,7 +5742,8 @@ theorem liftE_hold_weakers {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) (hdb 
   rw [← subE_hold]
   exact S.subE_weaker (liftE_hold_weaker hrb hdb hos (List.Subset.refl _))
 
-/-- AGORA-937: `PW.holdOn_canon` with regions. -/
+/-- The roots holding more, where the call places them: what the rule says
+    is at least as strong as the lifted context (AGORA-937: substituted). -/
 theorem PW.holdOn_canons (h : S.OK) {Γ : Ctx} {rs : List Var} {D D' : List Dep}
     (hD : D' ⊆ (rds S.ρ D ++ S.A).flatMap S.subD)
     (hrs : ∀ v ∈ rs, ∀ E, Γ v = some E → E.mode ≠ .rootb ∧ E.dbind = false ∧ E.mode.ownSlot = true) :
@@ -5721,41 +5770,6 @@ theorem PW.holdOn_canons (h : S.OK) {Γ : Ctx} {rs : List Var} {D D' : List Dep}
         exact EntryWeaker.refl _
   · rw [canon_ρ_sub h, hp]
     simp [A2.holdOn, hc]
-  · have hyr : y ∉ rs.map S.ρ := fun hm => by
-      obtain ⟨w, _, he⟩ := List.mem_map.mp hm; exact hy w he
-    rw [canon_frame _ hy]
-    cases hE : S.Φ y with
-    | none => simp [A2.holdOn, hc, hE]
-    | some E =>
-      refine ⟨by simp [A2.holdOn, hc, hE], fun E1 E2 h1 h2 => ?_⟩
-      simp only [A2.holdOn, hc, hE, Option.map_some, Option.some.injEq, ite_eq_right hyr] at h1
-      subst h1; cases Option.some.inj h2; exact EntryWeaker.refl _
-
-/-- The roots holding more, where the call places them: what the rule says
-    is at least as strong as the lifted context. -/
-theorem PW.holdOn_canon (h : S.OK) {Γ : Ctx} {rs : List Var} {D D' : List Dep} (hD : D' ⊆ rds S.ρ D ++ S.A)
-    (hrs : ∀ v ∈ rs, ∀ E, Γ v = some E → E.mode ≠ .rootb ∧ E.dbind = false ∧ E.mode.ownSlot = true) :
-    PW (A2.holdOn (rs.map S.ρ) D' (S.canon Γ)) (S.canon (A2.holdOn rs D Γ)) := by
-  intro y
-  rcases canon_cases h Γ y with ⟨v, rfl, hc⟩ | ⟨hy, hc⟩
-  · rw [canon_ρ h]
-    have hmem : S.ρ v ∈ rs.map S.ρ ↔ v ∈ rs := by
-      constructor
-      · intro hm; obtain ⟨w, hw, he⟩ := List.mem_map.mp hm; rw [← h.inj _ _ he]; exact hw
-      · exact List.mem_map_of_mem
-    cases hE : Γ v with
-    | none =>
-      rw [A2.holdOn, hc, hE]; simp [A2.holdOn, hE]
-    | some E =>
-      rw [A2.holdOn, hc, hE, holdOn_some hE]
-      refine ⟨by simp, fun E1 E2 h1 h2 => ?_⟩
-      simp only [Option.map_some, Option.some.injEq] at h1 h2
-      subst h1 h2
-      by_cases hvr : v ∈ rs
-      · rw [ite_eq_left (hmem.mpr hvr), ite_eq_left hvr]
-        exact liftE_hold_weaker (hrs v hvr E hE).1 (hrs v hvr E hE).2.1 (hrs v hvr E hE).2.2 hD
-      · rw [ite_eq_right (fun h' => hvr (hmem.mp h')), ite_eq_right hvr]
-        exact EntryWeaker.refl _
   · have hyr : y ∉ rs.map S.ρ := fun hm => by
       obtain ⟨w, _, he⟩ := List.mem_map.mp hm; exact hy w he
     rw [canon_frame _ hy]
@@ -5907,7 +5921,9 @@ theorem editBV_ren_facts (h : S.OK)
     call places it: as `editB_ren`; what the stored value depends on in
     memory, where the call places it, is what it did in the callee, renamed
     (the call passes no views, `S.R = []`), so what the rule makes each root
-    and the borrow hold is at most what the lifted context says (`PW`). -/
+    and the borrow hold is at most what the lifted context says (`PW`).
+    AGORA-937: the change reads no region (`hvs`), and the lift is
+    substituted. -/
 theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true → S.R = []) {P : Prog} (hP : ProgOK P)
     {Fa : List Var} {Γa1 : Ctx} {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty} {D : List Dep}
     (hw : CtxWF Γa) (hn : NameWF Γa)
@@ -5920,7 +5936,8 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
     (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path)
     (hV : ThruV Γa1 op Ex.ty Ex1.path (memDeps D)) (hdf : op.drops = true → t.dtorFree = true)
     (hbf : b = false → Ex.fresh = true)
-    (hbs : b = false → Ex.heldFresh = false ∨ ∀ y, op.stored = some y → FreshSrc Γa y ∧ HeldSrc Γa y) :
+    (hbs : b = false → Ex.heldFresh = false ∨ ∀ y, op.stored = some y → FreshSrc Γa y ∧ HeldSrc Γa y)
+    (hvs : ∀ v ∈ op.vars, S.isPi v = false) :
     StmtT P ξ (S.canon Γa) S.Fc ((Stmt.edit b x op).rename S.ρ)
       (S.canon (A2.setE (holdThru (memDeps D) Ex1.path (killThruV op Ex.ty Ex1.path Γa1)) x
         { Ex1 with held := Ex1.held ++ memDeps D })) ∧
@@ -5934,16 +5951,15 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   subst hE1
   have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
+  -- AGORA-937: the borrow is no region
+  have hnpx : S.isPi x = false := hab.notPi hx (by rw [hmx]; simp)
   -- (Agora #916: a call that passes views places an `edit false`, whose borrow
   -- is fresh)
   have hloc' : S.R = [] ∨ (Ex1.fresh = true ∧ Ex1.ty ≠ .int) := by
     cases b with
     | true => exact Or.inl (hloc rfl)
     | false => exact Or.inr ⟨hbf rfl, by rw [hty]; simp⟩
-  obtain ⟨hmem, hthru', heqK, hVg0, -⟩ := editBV_ren_facts h hab1 hmx hthru hV hloc'
-  have hVg : ∀ D2, D2 ⊆ rds S.ρ (memDeps D) ++ S.A →
-      ThruV (S.canon Γa1) (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path D2 :=
-    fun D2 hD2 => hVg0 D2 (fun d hd => S.mem_flatMap_subD_of (hD2 hd) (fun v _ => h.noPi v))
+  obtain ⟨hmem, hthru', heqK, hVg0, hpfix⟩ := editBV_ren_facts h hab1 hmx hthru hV hloc'
   have hmemA : b = true → memDeps S.A = [] := by
     intro hbt
     unfold RSetup.A; rw [hloc hbt]
@@ -5952,41 +5968,46 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
   have hty1 : (S.liftE x Ex1).ty = Ex1.ty := liftE_ty x hrb
   have hroots : roots (memDeps (S.liftE x Ex1).path) = (roots (memDeps Ex1.path)).map S.ρ := by
     rw [hmem]; simp [roots, rds, List.map_map, Function.comp_def, Dep.ren]
-  -- what the change is handed, where the call places it: what it was, renamed, in memory
-  have hmemsub : ∀ {D' : List Dep}, b = true → D' ⊆ rds S.ρ D ++ S.A → memDeps D' ⊆ rds S.ρ (memDeps D) := by
-    intro D' hbt hs d hd
-    have hd' := List.mem_filter.mp hd
-    rcases List.mem_append.mp (hs hd'.1) with h1 | h1
-    · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
-      exact mem_rds.mpr ⟨d0, List.mem_filter.mpr ⟨hd0, hd'.2⟩, rfl⟩
-    · have : d ∈ memDeps S.A := List.mem_filter.mpr ⟨h1, hd'.2⟩
-      rw [hmemA hbt] at this; cases this
+  have hlx : (S.liftE x Ex1).held = rds S.ρ Ex1.held ++ S.heldA Ex1 := by
+    rw [liftE_held hrb]; simp [hmx, Mode.ownSlot, ownHeld]
+  -- what the change is handed, where the call places it, in memory: what it
+  -- was, renamed, and what the arguments hold, substituted
+  have hmapp : ∀ L M : List Dep, memDeps (L ++ M) = memDeps L ++ memDeps M := fun L M => by
+    unfold memDeps; exact List.filter_append ..
+  have hmrds : memDeps (rds S.ρ D) = rds S.ρ (memDeps D) := by
+    unfold memDeps; simp only [rds, List.filter_map]; rfl
+  have hmr : ∀ {D' : List Dep}, D' ⊆ (rds S.ρ D ++ S.A).flatMap S.subD →
+      memDeps D' ⊆ (rds S.ρ (memDeps D) ++ memDeps S.A).flatMap S.subD := by
+    intro D' hs
+    rw [← hmrds, ← hmapp]
+    have hs' : memDeps D' ⊆ memDeps ((rds S.ρ D ++ S.A).flatMap S.subD) := fun e he =>
+      List.mem_filter.mpr ⟨hs (List.mem_filter.mp he).1, (List.mem_filter.mp he).2⟩
+    exact hs'.trans (S.memDeps_flatMap_subD _)
+  have hmw : ∀ {D' : List Dep}, D' ⊆ (rds S.ρ D ++ S.A).flatMap S.subD →
+      memDeps D' ⊆ (rds S.ρ (memDeps D) ++ S.A).flatMap S.subD := fun hs =>
+    (hmr hs).trans (S.flatMap_subD_mono
+      (append_sub (List.Subset.refl _) (fun d hd => (List.mem_filter.mp hd).1)))
+  -- (precisely what it was, of an `edit true`, placed by a call that passes
+  -- no views)
+  have hmemsub : ∀ {D' : List Dep}, b = true → D' ⊆ (rds S.ρ D ++ S.A).flatMap S.subD →
+      memDeps D' ⊆ (rds S.ρ (memDeps D)).flatMap S.subD := by
+    intro D' hbt hs
+    have := hmr hs
+    rwa [hmemA hbt, List.append_nil] at this
   -- (Agora #916: or, of an `edit false`, the stored value is the frame's own,
   -- in path and in what it holds, and the lift adds it no memory of the
-  -- arguments: `pushArg_ren_held`)
+  -- arguments: `pushArg_ren_helds`)
   have hmemsub' : ∀ {y : Var} {Ey : Entry} {Γb : Ctx} {D' : List Dep} {Γc : Ctx},
       (b = true ∨ ∀ y, op.stored = some y → FreshSrc Γa y ∧ HeldSrc Γa y) →
-      op.stored = some y → Γa y = some Ey → Ey.ty = t → PushArg Γa Fa y Ey t D Γb →
-      PushArg (S.canon Γa) S.Fc (S.ρ y) (S.liftE y Ey) t D' Γc → D' ⊆ rds S.ρ D ++ S.A →
-      memDeps D' ⊆ rds S.ρ (memDeps D) := by
-    intro y Ey Γb D' Γc hpre hst hy htyy hpa hpa' hs
+      op.stored = some y → Γa y = some Ey → S.isPi y = false → Ey.ty = t → PushArg Γa Fa y Ey t D Γb →
+      PushArg (S.canon Γa) S.Fc (S.ρ y) (S.subE (S.liftE y Ey)) t D' Γc →
+      D' ⊆ (rds S.ρ D ++ S.A).flatMap S.subD → memDeps D' ⊆ (rds S.ρ (memDeps D)).flatMap S.subD := by
+    intro y Ey Γb D' Γc hpre hst hy hnpy htyy hpa hpa' hs
     rcases hpre with hbt | hp
     · exact hmemsub hbt hs
     · obtain ⟨hfs, hhs⟩ := hp y hst
-      exact pushArg_ren_held h hab hy (by rw [htyy]; intro e; rw [e] at hhv; simp [Ty.holdsView] at hhv)
-        hpa hpa' hfs hhs
-  -- (the store's dependencies in memory, where the call places it: what they
-  -- were, renamed, and what the arguments hold, which every holder that is
-  -- not held-fresh is lifted with already)
-  have hmw : ∀ {D' : List Dep}, D' ⊆ rds S.ρ D ++ S.A → memDeps D' ⊆ rds S.ρ (memDeps D) ++ S.A := by
-    intro D' hs d hd
-    obtain ⟨hd1, hdn⟩ := List.mem_filter.mp hd
-    rcases List.mem_append.mp (hs hd1) with h1 | h1
-    · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
-      exact List.mem_append_left _ (mem_rds.mpr ⟨d0, List.mem_filter.mpr ⟨hd0, hdn⟩, rfl⟩)
-    · exact List.mem_append_right _ h1
-  -- (precisely what they were, of an `edit true` placed by a call that passes
-  -- no views, or of an `edit false` through a held-fresh borrow)
+      exact pushArg_ren_helds h hab hy hnpy
+        (by rw [htyy]; intro e; rw [e] at hhv; simp [Ty.holdsView] at hhv) hpa hpa' hfs hhs
   have hpre : b = true ∨ Ex1.heldFresh = true → b = true ∨ ∀ y, op.stored = some y → FreshSrc Γa y ∧ HeldSrc Γa y := by
     intro hc
     cases b with
@@ -5996,27 +6017,33 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
       · cases hc
       · exact Or.inr ((hbs rfl).resolve_left (by rw [hc]; simp))
   obtain ⟨D', harg', hDw, hDp, hsD'⟩ : ∃ D', EditArg (S.canon Γa) S.Fc (op.rename S.ρ) t D' (S.canon Γa1) ∧
-      memDeps D' ⊆ rds S.ρ (memDeps D) ++ S.A ∧
-      (b = true ∨ Ex1.heldFresh = true → memDeps D' ⊆ rds S.ρ (memDeps D)) ∧ D' ⊆ rds S.ρ D ++ S.A := by
+      memDeps D' ⊆ (rds S.ρ (memDeps D) ++ S.A).flatMap S.subD ∧
+      (b = true ∨ Ex1.heldFresh = true → memDeps D' ⊆ (rds S.ρ (memDeps D)).flatMap S.subD) ∧
+      D' ⊆ (rds S.ρ D ++ S.A).flatMap S.subD := by
     cases harg with
-    | push hy hly htyy hpa =>
-      obtain ⟨D', hpa', hs, _⟩ := pushArg_ren h hab hy hpa
-      exact ⟨D', EditArg.push (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_live]; exact hly)
-        (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmw hs,
-        fun hc => hmemsub' (hpre hc) rfl hy htyy hpa hpa' hs, hs⟩
-    | trunc hie => exact ⟨[], EditArg.trunc (exprT_ren h hab hie (fun v _ => h.noPi v)), (fun _ h => by cases h), (fun _ _ h => by cases h),
-        (fun _ h => by cases h)⟩
-    | set hie hy hly htyy hpa =>
-      obtain ⟨D', hpa', hs, _⟩ := pushArg_ren h hab hy hpa
-      exact ⟨D', EditArg.set (exprT_ren h hab hie (fun v _ => h.noPi v)) (by rw [canon_ρ h, hy]; rfl)
-        (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmw hs,
-        fun hc => hmemsub' (hpre hc) rfl hy htyy hpa hpa' hs, hs⟩
+    | @push y _ _ _ _ hy hly htyy hpa =>
+      have hnpy : S.isPi y = false := hvs y (by simp [Edit.vars])
+      obtain ⟨D', hpa', hs, _⟩ := pushArg_rens h hab hy hnpy hpa
+      exact ⟨D', EditArg.push (canon_some h hy hnpy) (by rw [subE_live, liftE_live]; exact hly)
+        (by rw [subE_ty, liftE_ty' h hab hy]; exact htyy) hpa', hmw hs,
+        fun hc => hmemsub' (hpre hc) rfl hy hnpy htyy hpa hpa' hs, hs⟩
+    | trunc hie =>
+      exact ⟨[], EditArg.trunc (exprT_ren h hab hie (fun v hv => hvs v (by simpa [Edit.vars] using hv))),
+        (fun _ h => by cases h), (fun _ _ h => by cases h), (fun _ h => by cases h)⟩
+    | @set _ y _ _ _ _ hie hy hly htyy hpa =>
+      have hnpy : S.isPi y = false := hvs y (by simp [Edit.vars])
+      obtain ⟨D', hpa', hs, _⟩ := pushArg_rens h hab hy hnpy hpa
+      exact ⟨D', EditArg.set (exprT_ren h hab hie (fun v hv => hvs v (by simp [Edit.vars, hv])))
+        (canon_some h hy hnpy) (by rw [subE_live, liftE_live]; exact hly)
+        (by rw [subE_ty, liftE_ty' h hab hy]; exact htyy) hpa', hmw hs,
+        fun hc => hmemsub' (hpre hc) rfl hy hnpy htyy hpa hpa' hs, hs⟩
   -- AGORA-901: what the stored value captures by name, where the call places
   -- it: its own names, renamed, which the borrow and its view-holding owners
   -- held, renamed; or what the call's arguments hold by name, which the lift
-  -- adds to the borrow and to every owner whose type holds views
+  -- adds to the borrow and to every owner whose type holds views (AGORA-937:
+  -- the substitution keeps names, `subD_name`)
   have hfn' : t.hasFn = false ∨ ∀ d ∈ D', d.kind.isName = true →
-      d ∈ (S.liftE x Ex1).held ∧ ∀ r ∈ roots (memDeps (S.liftE x Ex1).path),
+      d ∈ (S.subE (S.liftE x Ex1)).held ∧ ∀ r ∈ roots (memDeps (S.subE (S.liftE x Ex1)).path),
         (argE (S.canon Γa1) r).ty.holdsView = true → d ∈ (argE (S.canon Γa1) r).held := by
     rcases hfn with hf | hf
     · exact Or.inl hf
@@ -6024,52 +6051,59 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
     · exact Or.inl rfl
     -- (AGORA-909: the borrow's type holds a closure, so the lift keeps the names)
     have hxfn : Ex1.ty.hasFn = true := by
-      rw [EditArg.at_ne harg hyx hx hx1 hl1, hty]; simpa [Ty.hasFn] using htf
+      rw [hty]; simpa [Ty.hasFn] using htf
     refine Or.inr fun d hd hnm => ?_
-    have hlx : (S.liftE x Ex1).held = rds S.ρ Ex1.held ++ S.heldA Ex1 := by
-      rw [liftE_held hrb]; simp [hmx, Mode.ownSlot, ownHeld]
+    have hkeep : ∀ {X : List Dep}, d ∈ X → d ∈ X.flatMap S.subD := fun hX =>
+      List.mem_flatMap.mpr ⟨d, hX, by rw [S.subD_name hnm]; exact List.mem_singleton_self d⟩
     have hlo : ∀ r, r ∈ roots (memDeps Ex1.path) → ∃ Er, Γa1 r = some Er ∧ argE (S.canon Γa1) (S.ρ r) =
-        S.liftE r Er ∧ (Er.ty.holdsView = true → (S.liftE r Er).held = rds S.ρ Er.held ++ S.A) ∧
+        S.subE (S.liftE r Er) ∧ (Er.ty.holdsView = true → (S.liftE r Er).held = rds S.ρ Er.held ++ S.A) ∧
         (S.liftE r Er).ty = Er.ty := by
       intro r hr
       obtain ⟨Er, hEr, hos, _⟩ := hthru.root hr
       have hrbr : Er.mode ≠ .rootb := fun h' => by rw [h'] at hos; cases hos
-      exact ⟨Er, hEr, argE_canon h hEr, fun hv => by rw [liftE_held hrbr, S.heldA_own hos]; simp [hos, ownHeld, hv],
-        liftE_ty _ hrbr⟩
-    rw [hroots]
-    rcases List.mem_append.mp (hsD' hd) with h1 | h1
+      have hnpr : S.isPi r = false := hab1.notPi hEr (fun h' => by rw [h'] at hos; cases hos)
+      exact ⟨Er, hEr, argE_canons h hEr hnpr,
+        fun hv => by rw [liftE_held hrbr, S.heldA_own hos]; simp [hos, ownHeld, hv], liftE_ty _ hrbr⟩
+    rw [hpfix, hroots, subE_held]
+    rcases List.mem_append.mp (S.mem_flatMap_subD_name h (hsD' hd) hnm) with h1 | h1
     · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
       obtain ⟨hx0, hr0⟩ := hf d0 hd0 hnm
-      refine ⟨by rw [hlx]; exact List.mem_append_left _ (mem_rds.mpr ⟨d0, hx0, rfl⟩), fun r' hr' hv' => ?_⟩
+      refine ⟨hkeep (by rw [hlx]; exact List.mem_append_left _ (mem_rds.mpr ⟨d0, hx0, rfl⟩)),
+        fun r' hr' hv' => ?_⟩
       obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hr'
       obtain ⟨Er, hEr, hae, hheld, hty'⟩ := hlo r hr
       have hae0 : argE Γa1 r = Er := by unfold argE; rw [hEr]; rfl
-      rw [hae, hty'] at hv'
-      rw [hae, hheld hv']
-      exact List.mem_append_left _ (mem_rds.mpr ⟨d0, by rw [← hae0]; exact hr0 r hr (by rw [hae0]; exact hv'), rfl⟩)
-    · refine ⟨by rw [hlx]; exact List.mem_append_right _ (RSetup.name_mem_heldA h1 hnm hxfn), fun r' hr' hv' => ?_⟩
+      rw [hae, subE_ty, hty'] at hv'
+      rw [hae, subE_held, hheld hv']
+      exact hkeep (List.mem_append_left _
+        (mem_rds.mpr ⟨d0, by rw [← hae0]; exact hr0 r hr (by rw [hae0]; exact hv'), rfl⟩))
+    · refine ⟨hkeep (by rw [hlx]; exact List.mem_append_right _ (RSetup.name_mem_heldA h1 hnm hxfn)),
+        fun r' hr' hv' => ?_⟩
       obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hr'
       obtain ⟨Er, hEr, hae, hheld, hty'⟩ := hlo r hr
-      rw [hae, hty'] at hv'
-      rw [hae, hheld hv']
-      exact List.mem_append_right _ h1
+      rw [hae, subE_ty, hty'] at hv'
+      rw [hae, subE_held, hheld hv']
+      exact hkeep (List.mem_append_right _ h1)
   have hyx' : ∀ y, (op.rename S.ρ).stored = some y → y ≠ S.ρ x := by
     intro y hy
     rw [Edit.stored_rename] at hy
     obtain ⟨y0, hy0, rfl⟩ := Option.map_eq_some_iff.mp hy
     exact fun e => hyx y0 hy0 (h.inj _ _ e)
-  have hV' := hVg (memDeps D') hDw
-  have hT := StmtT.editBV (P := P) (ξ := ξ) (x := S.ρ x) (Ex := S.liftE x Ex1) (Ex1 := S.liftE x Ex1)
-    (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
-    (by rw [hty1]; exact hty) hhv hfn' (h.Fcout x) harg' hyx' (by rw [canon_ρ h, hx1]; rfl)
-    (by rw [liftE_live]; exact hl1) (by rw [hmem]; simpa [rds] using hne) hthru' hV'
+  have hV' := hVg0 (memDeps D') hDw
+  have hT := StmtT.editBV (P := P) (ξ := ξ) (x := S.ρ x) (Ex := S.subE (S.liftE x Ex1))
+    (Ex1 := S.subE (S.liftE x Ex1))
+    (canon_some h hx hnpx) (by rw [subE_mode, liftE_mode x hrb, hmx]; rfl)
+    (by rw [subE_live, liftE_live]; exact hl)
+    (by rw [subE_ty, hty1]; exact hty) hhv hfn' (h.Fcout x) harg' hyx' (canon_some h hx1 hnpx)
+    (by rw [subE_live, liftE_live]; exact hl1) (by rw [hpfix, hmem]; simpa [rds] using hne)
+    (by rw [subE_ty, hpfix]; exact hthru') (by rw [subE_ty, hpfix]; exact hV')
     (by rw [Edit.drops_rename]; exact hdf)
-    (fun hb => by rw [S.liftE_fresh_of hrb]; exact hbf hb)
+    (fun hb => by rw [subE_fresh, S.liftE_fresh_of hrb]; exact hbf hb)
     (fun hb => by
       -- Agora #916: a borrow that is not held-fresh stays one, and what is
       -- stored stays the frame's own where the call places it
       rcases hbs hb with hf | hp
-      · exact Or.inl (by rw [liftE_heldFresh, if_neg hrb]; exact hf)
+      · exact Or.inl (by rw [subE_heldFresh, liftE_heldFresh]; simp [hrb, hf])
       · refine Or.inr fun y' hy' => ?_
         rw [Edit.stored_rename] at hy'
         obtain ⟨y0, hy0, rfl⟩ := Option.map_eq_some_iff.mp hy'
@@ -6092,15 +6126,15 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
   refine ⟨?_, habo⟩
   have hwc := canon_wf h habo hwo
   have hnc := canon_names h habo hno
-  rw [canon_setE h] at hwc hnc ⊢
+  rw [canon_setEs h _ hnpx] at hwc hnc ⊢
   refine StmtT.weakenOut (canon_wf h hab hw) (canon_names h hab hn) hT
     (Or.inr ⟨PW.setE ?_ ?_, hwc, hnc⟩)
-  · show PW (A2.holdOn (roots (memDeps (S.liftE x Ex1).path)) (memDeps D')
-      (killThruV (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path (S.canon Γa1)))
+  · show PW (A2.holdOn (roots (memDeps (S.subE (S.liftE x Ex1)).path)) (memDeps D')
+      (killThruV (op.rename S.ρ) (S.subE (S.liftE x Ex1)).ty (S.subE (S.liftE x Ex1)).path (S.canon Γa1)))
       (S.canon (A2.holdOn (roots (memDeps Ex1.path)) (memDeps D) (killThruV op Ex1.ty Ex1.path Γa1)))
-    rw [hroots, ← heqK]
-    exact PW.holdOn_canon h hDw hrs
-  · -- the borrow holds what was stored, renamed or less
+    rw [subE_ty, hpfix, hroots, ← heqK]
+    exact PW.holdOn_canons h hDw hrs
+  · -- the borrow holds what was stored, renamed and substituted, or less
     have hl' : S.liftE x Ex1 = ⟨Ex1.ty, liftMode Ex1.mode, Ex1.live,
         rds S.ρ Ex1.path ++ (if Ex1.fresh && Ex1.ty != .int then [] else S.A),
         rds S.ρ Ex1.held ++ S.heldA Ex1, Ex1.dtor, Ex1.dbind, Ex1.fresh, Ex1.heldFresh⟩ := by
@@ -6109,31 +6143,24 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
         Ex1.live, rds S.ρ Ex1.path ++ (if Ex1.fresh && Ex1.ty != .int then [] else S.A),
         rds S.ρ (Ex1.held ++ memDeps D) ++ S.heldA Ex1, Ex1.dtor, Ex1.dbind, Ex1.fresh, Ex1.heldFresh⟩ := by
       simp [RSetup.liftE, hmx, Mode.ownSlot, ownHeld, RSetup.heldA]
+    -- (Agora #909's own example: a borrow that is not held-fresh is lifted
+    -- with all the arguments hold)
+    have hDh : memDeps D' ⊆ (rds S.ρ (memDeps D) ++ S.heldA Ex1).flatMap S.subD := by
+      by_cases hhf : Ex1.heldFresh = true
+      · exact (hDp (Or.inr hhf)).trans (S.flatMap_subD_mono (fun e he => List.mem_append_left _ he))
+      · rw [S.heldA_of (by simpa using hhf)]; exact hDw
+    have hsub1 : rds S.ρ Ex1.held ++ S.heldA Ex1 ⊆ rds S.ρ (Ex1.held ++ memDeps D) ++ S.heldA Ex1 :=
+      append_sub (by simp only [rds, List.map_append]; exact List.subset_append_left _ _) (List.Subset.refl _)
+    have hsub2 : rds S.ρ (memDeps D) ++ S.heldA Ex1 ⊆ rds S.ρ (Ex1.held ++ memDeps D) ++ S.heldA Ex1 :=
+      append_sub (by simp only [rds, List.map_append]; exact List.subset_append_right _ _) (List.Subset.refl _)
     rw [hl', hl'']
-    refine ⟨rfl, rfl, fun hf => absurd hf ?_, fun hl' => ⟨hl', fun _ => List.Subset.refl _, ?_⟩,
-      fun h' => ⟨h', ?_⟩, rfl, fun h' => Or.inl h', fun _ hos => ?_,
-      fun _ _ _ hfr => ⟨hfr, List.Subset.refl _⟩,
-      fun _ _ hhf => hhf⟩
-    · intro hf
-      rcases hf with h' | ⟨b, h', _⟩ <;> rw [hmx] at h' <;> simp [liftMode] at h'
-    rotate_right
-    · simp [hmx, liftMode, Mode.ownSlot] at hos
-    all_goals
-      intro d hd
-      simp only [rds, List.map_append, List.mem_append] at hd ⊢
-      rcases hd with (hd | hd) | hd
-      · exact Or.inl (Or.inl hd)
-      · exact Or.inr hd
-      · -- (Agora #909's own example: a borrow that is not held-fresh is
-        -- lifted with all the arguments hold)
-        by_cases hhf : Ex1.heldFresh = true
-        · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp (hDp (Or.inr hhf) hd)
-          exact Or.inl (Or.inr (List.mem_map_of_mem hd0))
-        · rcases List.mem_append.mp (hDw hd) with h1 | h1
-          · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
-            exact Or.inl (Or.inr (List.mem_map_of_mem hd0))
-          · refine Or.inr ?_
-            rw [S.heldA_of (by simpa using hhf)]; exact h1
+    refine ew_sub_held (X := S.subE ⟨Ex1.ty, liftMode Ex1.mode,
+        Ex1.live, rds S.ρ Ex1.path ++ (if Ex1.fresh && Ex1.ty != .int then [] else S.A),
+        rds S.ρ (Ex1.held ++ memDeps D) ++ S.heldA Ex1, Ex1.dtor, Ex1.dbind, Ex1.fresh, Ex1.heldFresh⟩) ?_
+      (by simp [hmx, liftMode, Mode.ownSlot]) (by simp [hmx, liftMode])
+    show (rds S.ρ Ex1.held ++ S.heldA Ex1).flatMap S.subD ++ memDeps D' ⊆
+      (rds S.ρ (Ex1.held ++ memDeps D) ++ S.heldA Ex1).flatMap S.subD
+    exact List.append_subset.mpr ⟨S.flatMap_subD_mono hsub1, hDh.trans (S.flatMap_subD_mono hsub2)⟩
 
 /-- Agora #632: the gate on a payload taken out of an enum of a destructor
     type reads the enum's type, which a call's renaming keeps. -/
@@ -6920,7 +6947,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- Agora #916: an `edit true` is placed by a call that passes no views;
     -- an `edit false` by any
     exact editBV_ren h hab (fun hbt => hT (.inl (by simpa [Stmt.hasThru] using hbt))) hP hw hn hx hmx hl hty hhv
-      hfn hxF harg hyx hx1 hl1 hne hthru hV hdf hbf hbs
+      hfn hxF harg hyx hx1 hl1 hne hthru hV hdf hbf hbs (fun v _ => h.noPi v)
   | @takeB _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hxF hie hne hthru hnd hk hpe ih =>
     -- AGORA-889: `editB`'s truncation where the call places it
     -- (`editB_ren_facts`), then `y` bound to the element, as `letv` binds
