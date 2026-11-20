@@ -1010,6 +1010,25 @@ theorem canon_wf (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) : CtxWF (S.cano
           rw [liftE_ty v hrb]; exact hw.view v E hE hd
     · rw [hc] at hy; exact h.Φview y E' hy hd
 
+/-- AGORA-937: a kept or substituted dependency of a lifted binding is
+    rooted where the call places the body: a callee root (on no region,
+    `subD_kept`) lifted, a frame root, or what a region stands for, which is
+    the frame's (`σ_frame`). -/
+theorem canon_root_of_subD (h : S.OK) {d e : Dep} (he : e ∈ S.subD d)
+    (hd : (∃ r Er, d.root = S.ρ r ∧ Γa r = some Er ∧ Er.mode.isRoot = true) ∨
+      ((∀ w, S.ρ w ≠ d.root) ∧ ∃ E, S.Φ d.root = some E ∧ E.mode.isRoot = true)) :
+    ∃ E', S.canon Γa e.root = some E' ∧ E'.mode.isRoot = true := by
+  rcases S.mem_subD he with rfl | ⟨v, _, _, hv⟩
+  · rcases hd with ⟨r, Er, hr, hEr, hro⟩ | ⟨hout, hex⟩
+    · have hnp : S.isPi r = false := by
+        obtain ⟨dr, dk⟩ := e
+        simp only at hr; subst hr
+        exact subD_kept h he rfl
+      rw [hr]; exact canon_root_sub h hEr hro hnp
+    · exact canon_frameRoot h hout hex
+  · obtain ⟨hout, hex⟩ := S.σ_frame h hv
+    exact canon_frameRoot h hout hex
+
 theorem allKinds_notName {rs : List Var} {d : Dep} (h : d ∈ allKinds rs) : d.kind.isName = false := by
   simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at h
   obtain ⟨r, _, hd⟩ := h
