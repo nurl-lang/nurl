@@ -15,14 +15,17 @@ limitations — they live with each module (the `stdlib/**` file headers and
 Each is a use of freed or moved-out memory in safe code, with a fix in progress:
 
 - **agora #242: a join or a value block bound by `:` and then handed on
-  by name, in seven remaining shapes.** The common ones are closed: a `:`
+  by name, in six remaining shapes.** The common ones are closed: a `:`
   binding of a join takes the owner its arm selects, an `inout` parameter
   takes a binding owned per path, a block ending in a fresh call owns its
-  result, a value a `;` defer reads or releases is refused. Seven shapes
+  result, a value a `;` defer reads or releases is refused, and so is a
+  `:` join's arm reading a field of an inner block's struct, assigned
+  outward (AGORA-941). Six shapes
   still fault, each the elaborated twin of a closed probe
   ([`twins.txt`](twins.txt)): the binding does not inherit what its
-  producer lends — a `vec_get` element of a local, a field or a view of an
-  inner block's local reached through a `?` / `??`, a raw view of a
+  producer lends — a `vec_get` element of a local, a field of an inner
+  block's payload reached through a `??`, a view of an inner block's local
+  reached through a `?`, a raw view of a
   block's own local, a closure an arm or a block hands over. Until #222
   closes them, hand such a value on directly (`^ ? c a b`) instead of
   through a binding.

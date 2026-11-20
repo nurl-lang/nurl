@@ -61602,6 +61602,34 @@ unsafe @ bck_sx_ev s st s e b arg → s {
     ^ != 0 ( nurl_str_len w0 )
 }
 
+// Is a borrow of mode `mode` (bck_note_borrow's field 7) a `:` join's - `p`,
+// or a `??` one's, `m` - begun from a field path among `srcs`? (A value
+// block's tail, `b`, and an `=`'s or a cursor's join, `n`, are not: codegen
+// takes or copies the field there.)
+@ __bck_jfield_leaf s mode s srcs → b {
+    ? == 0 ( nurl_str_len mode ) { ^ F } {}
+    : i m ( nurl_str_get mode 0 )
+    ? & != m 112 != m 109 { ^ F } {}
+    : ~ s rest ( nurl_str_cat srcs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i id ( nurl_str_to_int w )
+        ? != id ( bck_path_root id ) { ^ T } {}
+    }
+    ^ F
+}
+
+// Does one of the bindings `srcs` names hold a `bxf_` borrow?
+@ __bck_any_bxf s srcs → b {
+    ? == 0 g_bck_bxf_any { ^ F } {}
+    : ~ s rest ( nurl_str_cat srcs `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` w ) ) `1` ) { ^ T } {}
+    }
+    ^ F
+}
+
 @ bck_brw_leaves s st s mode s sx i wid → s {
     : s all ( bck_sx_hpaths sx )
     : i m ? == 0 ( nurl_str_len mode ) 112 ( nurl_str_get mode 0 )
@@ -62342,6 +62370,13 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 = g_bck_br_next ? | | bfv != 0 ( nurl_str_starts rec `vborrow\t` ) != 0 ( nurl_str_starts rec `vcborrow\t` ) ? | == 0 ( nurl_str_len bprior ) ( __words_within bprior ( bck_borrow_owners st bsrcs ) ) ( bck_byte_root st bsrcs ) -1 -1
                 = st ( bck_borrow_begin st bwid ? == 0 ( nurl_str_len bprior ) bsrcs ( nurl_str_cat3 bprior ` ` bsrcs ) )
                 = g_bck_br_next -1
+                // (A `:` join's borrow of a field path - an arm `. p s`, a
+                // `??` arm's payload field: codegen neither takes nor copies
+                // that field where the binding outlives its struct, as it
+                // does for `: x . p s` or a value block's tail, so the
+                // struct's end ends it, `bxf_`. So does a borrow that takes
+                // its handle from such a one. Agora #242.)
+                ? | & != 0 ( nurl_str_len bsx ) ( __bck_jfield_leaf bmode bsrcs ) ( __bck_any_bxf ( bck_field rec 2 ) ) { ( bck_put ( bck_bkey `bxf_` bws ) `1` ) = g_bck_bxf_any 1 } {}
                 // (A join that owns its value on its other paths, `d`: it may
                 // own it, as at a join of paths — BCK_MAYBE_OWNED, not a
                 // plain borrow its hand-over is refused as.)
@@ -62630,6 +62665,9 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             = g_bck_br_next ? & & == 0 ( nurl_str_len prior ) ! ( seq ( bck_field rec 6 ) `c` ) == BCK_BORROWED_SHARED ( bck_st_get st avid ) ( bck_br_get avn ) -1
                             = st ( bck_borrow_begin st apid ? == 0 ( nurl_str_len prior ) asrc ( nurl_str_cat3 prior ` ` asrc ) )
                             = g_bck_br_next -1
+                            // (…a handle that a `:` join's field borrow holds, `bxf_`,
+                            // taken by another name: that one too - agora #242.)
+                            ? & != 0 g_bck_bxf_any ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` avn ) ) `1` ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) } {}
                             // (An arm of a `:` join, `g`, that is a copy of an
                             // owner's handle — `: c ? k cur other`: the
                             // binding is one too, `hc_`, while every borrow
@@ -71120,7 +71158,13 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         // as they were — a field viewer holding the field's handle, a copy
         // of what the owner holds itself — reads them as they are now,
         // bck_br_survives. A replaced field ends it.)
-        ? & & == BCK_BORROWED_SHARED ( bck_st_get out b ) inb | == 0 g_bck_end_eonly ! ( bck_br_survives bs sids ) {
+        // (…and one that may own its value on some path only, where it is
+        // a `:` join's field borrow, `bxf_`: on the paths that lent it, it
+        // holds the struct's handle, which codegen neither took nor copied;
+        // agora #941.)
+        : i bst ( bck_st_get out b )
+        : b bl | == BCK_BORROWED_SHARED bst & & != 0 g_bck_bxf_any == BCK_MAYBE_OWNED bst ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` bs ) ) `1` )
+        ? & & bl inb | == 0 g_bck_end_eonly ! ( bck_br_survives bs sids ) {
             // (A borrower is not dropped — unless it owns a value with a
             // destructor the borrow rules see as a view, `vdu_`.)
             ( bck_drop_view_diag b sid line why F )
