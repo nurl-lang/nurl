@@ -901,6 +901,25 @@ theorem canon_root (h : S.OK) {r : Var} {Er : Entry} (hEr : Γa r = some Er) (hr
     ∃ E', S.canon Γa (S.ρ r) = some E' ∧ E'.mode.isRoot = true :=
   ⟨S.liftE r Er, by rw [canon_ρ h, hEr]; rfl, by rw [liftE_root h]; exact hro⟩
 
+/-- AGORA-937: a dependency the substitution keeps, on a callee binding, is on
+    no region: a region's would have been replaced by what it stands for,
+    whose roots are the frame's. -/
+theorem subD_kept (h : S.OK) {r : Var} {k : Kind} {e : Dep} (he : e ∈ S.subD ⟨S.ρ r, k⟩)
+    (her : e.root = S.ρ r) : S.isPi r = false := by
+  cases hp : S.isPi r
+  · rfl
+  · exfalso
+    simp only [subD, inv_ρ h, hp, ↓reduceIte] at he
+    exact (S.σ_frame h he).1 r her.symm
+
+/-- ... so its root is bound where the call places the body, as the callee
+    bound it. -/
+theorem canon_root_sub (h : S.OK) {r : Var} {Er : Entry} (hEr : Γa r = some Er) (hro : Er.mode.isRoot = true)
+    (hnp : S.isPi r = false) :
+    ∃ E', S.canon Γa (S.ρ r) = some E' ∧ E'.mode.isRoot = true :=
+  ⟨S.subE (S.liftE r Er), by rw [canon_ρ_sub h, hnp, hEr]; rfl, by
+    rw [subE_mode, liftE_root h]; exact hro⟩
+
 theorem canon_frameRoot (_h : S.OK) {r : Var} (hr : ∀ v, S.ρ v ≠ r)
     (hex : ∃ Er, S.Φ r = some Er ∧ Er.mode.isRoot = true) :
     ∃ E', S.canon Γa r = some E' ∧ E'.mode.isRoot = true := by
