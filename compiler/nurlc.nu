@@ -22450,9 +22450,20 @@ unsafe @ eng_byte s w i k → i {
     ? & & ! ret_scalar ! ret_view ! ( et_view_capable ret ) {
         // a result whose type has nowhere to keep a view or a borrowed
         // handle holds none, whatever the raw code's provenance reached
+        // (…but a result that is itself a pointer into an argument, retptr,
+        // and is no view is a handle of that argument's storage: `__sbuf`'s
+        // `Vec u` over a String's own buffer - what changes through it
+        // changes the argument, and a view of it views the argument -
+        // AGORA-877)
         : i hl ( wv_new )
         = k 0
-        ~ < k ( wv_len lends ) { ? == ( tp_at ( wv_at lends k ) 3 2 ) LK_HANDLE { ( wv_push hl ( wv_at lends k ) ) } {} = k + k 1 }
+        ~ < k ( wv_len lends ) {
+            : i lt ( wv_at lends k )
+            ? == ( tp_at lt 3 2 ) LK_HANDLE { ( wv_push hl lt ) } {
+                ? & == ( tp_at lt 3 2 ) LK_VIEW == ( tp_at lt 3 1 ) 0 { ( wv_push hl ( tp3 ( tp_at lt 3 0 ) 0 LK_HANDLE ) ) } {}
+            }
+            = k + k 1
+        }
         ( wv_copy lends hl )
         ( wv_drop hl )
         ( wv_trunc rholds 0 )
