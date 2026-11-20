@@ -552,6 +552,31 @@ theorem subD_frame (h : S.OK) {d e : Dep} (he : e ∈ S.subD d) :
 
 theorem mem_A {d : Dep} : d ∈ S.A ↔ d ∈ allKinds S.R ∨ d ∈ S.N := List.mem_append
 
+/-- AGORA-937: a change to a callee binding at no region's index hits a
+    substituted entry exactly where it hits the entry: the substitution keeps
+    every dependency on it, and what a region stands for is the frame's. -/
+theorem hits_subE (h : S.OK) {x : Var} (hnp : S.isPi x = false) (e : Eff) (hv : Bool) (E : Entry) :
+    hits e hv (S.ρ x) (S.subE E) = hits e hv (S.ρ x) E := by
+  unfold hits
+  rw [subE_vdeps, subE_ty, subE_mode]
+  congr 1
+  apply Bool.eq_iff_iff.mpr
+  simp only [List.any_eq_true, Bool.and_eq_true, beq_iff_eq]
+  constructor
+  · rintro ⟨d', hd', hr, hk⟩
+    obtain ⟨d, hd, hed⟩ := List.mem_flatMap.mp hd'
+    rcases S.subD_frame h hed with rfl | ⟨hout, _⟩
+    · exact ⟨d', hd, hr, hk⟩
+    · exact absurd hr.symm (hout x)
+  · rintro ⟨d, hd, hr, hk⟩
+    refine ⟨d, S.mem_flatMap_subD_of hd (fun w hw => ?_), hr, hk⟩
+    rw [hr, inv_ρ h] at hw; cases hw; exact hnp
+
+/-- ... so the change commutes with the substitution. -/
+theorem killE_subE (h : S.OK) {x : Var} (hnp : S.isPi x = false) (e : Eff) (hv : Bool) (E : Entry) :
+    killE e hv (S.ρ x) (S.subE E) = S.subE (killE e hv (S.ρ x) E) := by
+  unfold killE; rw [hits_subE h hnp]; split <;> rfl
+
 /-- What the arguments held lies outside the callee, at roots of the frame. -/
 theorem A_out (h : S.OK) {d : Dep} (hd : d ∈ S.A) : ∀ w, S.ρ w ≠ d.root := by
   rcases mem_A.mp hd with hd | hd
@@ -848,13 +873,17 @@ theorem DtorSafe.canon (h : S.OK) {e : Eff} {hv : Bool} {x : Var}
           rw [hkill d.kind hk] at hkb; cases hkb
 
 theorem canon_kill (h : S.OK) (hab : S.AbsOK Γa) {e : Eff} {hv : Bool} {x : Var}
-    (ha : Allowed S e hv x) : S.canon (kill e hv x Γa) = kill e hv (S.ρ x) (S.canon Γa) := by
+    (ha : Allowed S e hv x) (hnp : S.isPi x = false := h.noPi x) :
+    S.canon (kill e hv x Γa) = kill e hv (S.ρ x) (S.canon Γa) := by
   funext y
-  rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨hy, hc⟩
-  · rw [canon_ρ h, A2.kill, A2.kill, hc]
+  rcases canon_cases_sub h Γa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, hp, hc⟩ | ⟨hy, hc⟩
+  · rw [canon_ρs h _ hp, A2.kill, A2.kill, hc]
     cases hE : Γa v with
     | none => rfl
-    | some E => simp only [Option.map_some]; rw [killE_lift h hab hE ha]
+    | some E =>
+      simp only [Option.map_some, Function.comp]
+      rw [killE_subE h hnp, killE_lift h hab hE ha]
+  · rw [A2.kill, hc, canon_ρ_sub h, hp]; rfl
   · rw [canon_frame _ hy, A2.kill, hc]
     cases hE : S.Φ y with
     | none => rfl
