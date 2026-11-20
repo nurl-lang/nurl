@@ -1707,13 +1707,13 @@ theorem glueS_body : ∃ Δ, StmtT P ξ (sigCtx glueS) [] glueS.body Δ ∧
       (hKc.noPin _) (DtorSafe.of_none (fun v E h => (hKc v E h).2.1) _ _ _) rfl
   have hlet := StmtT.letd (ξ := .none) (P := P) (Γ := Ka) (Γ1 := Kb) (F := []) (x := 4) (f := 0) (r := .var 2)
     (s := .assign 1 (.expr (.lit 0))) (t := T) (H := (compE EGS DT).held) (τ := DT) rfl
-    (by simp [Ka, A2.setE, upd, A2.kill, sigCtx, glueS]) (by simp) hmv rfl
+    (by simp [Ka, A2.setE, upd, A2.kill, sigCtx, isRegionIdx, glueS]) (by simp) hmv rfl
     (Or.inl ⟨rfl, Or.inr ⟨0, by rw [hEx]; rfl⟩⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hasg.ofNone (hKd.endOK _)
     (by simp [Stmt.assigns])
   have hun := StmtT.unpair (ξ := .none) (P := P) (Γ := sigCtx glueS) (F := []) (y := 0) (x := 2) (z := 3)
     (s := .letd 4 0 (.var 2) (.assign 1 (.expr (.lit 0)))) (E := EGS) (a := DT) (b := .slice .int)
     rfl h0 rfl (Or.inl rfl) (Or.inr ⟨8, rfl, glueS_glueOK⟩) (by simp)
-    (by simp [sigCtx, glueS]) (by simp [sigCtx, glueS]) (by decide) (by simp) (by simp) hlet.ofNone
+    (by simp [sigCtx, isRegionIdx, glueS]) (by simp [sigCtx, isRegionIdx, glueS]) (by decide) (by simp) (by simp) hlet.ofNone
     (hS.noPin _) (DtorSafe.of_none (fun v E h => (hS v E h).2.1) _ _ _)
     ((hKd.exitScope 4).endOK _) (((hKd.exitScope 4).exitScope 3).endOK _)
     (fun _ => by simp [Stmt.movedFirst, Stmt.assigns]) (fun h => by simp [Ty.holdsDtor] at h)
@@ -2194,7 +2194,7 @@ theorem ofnV_body : ∃ Δ, StmtT P ξ (sigCtx ofnV) [] ofnV.body Δ ∧
     simp [sigCtx, ofnV, paramE, E0, OVD, OV, DT, T, Ty.hasFn, regionP, regioned, Ty.holdsView]
   have h1 : sigCtx ofnV 1 = some R0 := by simp [sigCtx, ofnV, R0, resMode]
   have h3 : sigCtx ofnV 3 = some regionE := by
-    simp [sigCtx, ofnV, regioned, OVD, OV, Ty.holdsView]
+    simp [sigCtx, isRegionIdx, ofnV, regioned, OVD, OV, Ty.holdsView]
   have h2 : ∀ v : Nat, v ≠ 0 → v ≠ 1 → v ≠ 3 → sigCtx ofnV v = none := by
     intro v hv0 hv1 hv3
     cases h : sigCtx ofnV v with
@@ -2521,12 +2521,12 @@ theorem glueS2_body : ∃ Δ, StmtT P ξ (sigCtx glueS2) [] glueS2.body Δ ∧
       (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc1])
       (hKcD.noPin _) (hKcD.dtorSafe _ _ (by decide)) rfl
   have hlc := StmtT.letcall (ξ := .none) (P := P) (Γ := Kb) (F := []) (x := 3) (f := 10) (args := [2])
-    (s := .assign 1 (.expr (.lit 0))) rfl (by simp [Kb, Ka, A2.setE, upd, A2.kill, sigCtx, glueS2]) (by simp)
+    (s := .assign 1 (.expr (.lit 0))) rfl (by simp [Kb, Ka, A2.setE, upd, A2.kill, sigCtx, isRegionIdx, glueS2]) (by simp)
     hcall hasg.ofNone (hKdD.endOK (by decide))
     (fun fn' hf' ho _ => by simp [P] at hf'; subst hf'; simp [implS] at ho)
   have hlet := StmtT.letd (ξ := .none) (P := P) (Γ := sigCtx glueS2) (Γ1 := Ka) (F := []) (x := 2) (f := 8) (r := .var 0)
     (s := .letcall 3 10 [2] (.assign 1 (.expr (.lit 0)))) (t := GS) (H := ES3.held) (τ := GSD) rfl
-    (by simp [sigCtx, glueS2]) (by simp) hmv rfl
+    (by simp [sigCtx, isRegionIdx, glueS2]) (by simp) hmv rfl
     (Or.inl ⟨rfl, Or.inr ⟨11, rfl⟩⟩) rfl rfl
     ⟨⟨gsdrop_ok, fun g hg _ => by
       have hg11 : g = 11 := (Ty.dtor.inj hg).1.symm

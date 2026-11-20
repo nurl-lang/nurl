@@ -55,7 +55,7 @@ theorem sig_vv : sigCtx g 0 = some ⟨vsi, .own, true, [], [⟨4, .view⟩], fal
   simp [sigCtx, regionP, regioned, paramE, g, vsi, Ty.holdsView, Ty.hasFn]
 
 theorem sig_region : sigCtx g 4 = some regionE := by
-  simp [sigCtx, regioned, g, vsi, Ty.holdsView]
+  simp [sigCtx, isRegionIdx, regioned, g, vsi, Ty.holdsView]
 
 /-- `vv` holds views of the region: the old premise (`callR = []`) refused
     the call. -/

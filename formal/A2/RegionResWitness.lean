@@ -59,7 +59,7 @@ theorem sig_eq : sigCtx idv = fun v =>
     if v = 0 then some E0 else if v = 1 then some R1 else if v = 2 then some regionE else none := by
   funext v
   rcases v with _ | _ | _ | v <;>
-    simp [sigCtx, regionP, regioned, paramE, idv, vsi, Ty.holdsView, Ty.hasFn, resMode, E0, R1]
+    simp [sigCtx, isRegionIdx, regionP, regioned, paramE, idv, vsi, Ty.holdsView, Ty.hasFn, resMode, E0, R1]
 
 theorem sig_flags : ∀ v E, sigCtx idv v = some E → E.dtor = false ∧ E.dbind = false ∧ E.mode ≠ .rootb := by
   intro v E h
@@ -246,7 +246,7 @@ theorem vat_sig_eq : sigCtx vat = fun v =>
     if v = 0 then some E0 else if v = 1 then some R2 else if v = 2 then some regionE else none := by
   funext v
   rcases v with _ | _ | _ | v <;>
-    simp [sigCtx, regionP, regioned, paramE, vat, vsi, Ty.holdsView, Ty.hasFn, resMode, E0, R2]
+    simp [sigCtx, isRegionIdx, regionP, regioned, paramE, vat, vsi, Ty.holdsView, Ty.hasFn, resMode, E0, R2]
 
 theorem vat_sig_flags : ∀ v E, sigCtx vat v = some E → E.dtor = false ∧ E.dbind = false ∧ E.mode ≠ .rootb := by
   intro v E h
@@ -394,7 +394,7 @@ theorem ftr_sig0 : sigCtx ftr 0 = some Ep := by
   simp [sigCtx, regionP, regioned, paramE, ftr, pvt, vsi, Ty.holdsView, Ty.hasFn, Ep]
 
 theorem ftr_sig2 : sigCtx ftr 2 = some regionE := by
-  simp [sigCtx, regioned, ftr, pvt, vsi, Ty.holdsView]
+  simp [sigCtx, isRegionIdx, regioned, ftr, pvt, vsi, Ty.holdsView]
 
 /-- **A borrow of the first field depends on the struct alone**: what the
     second field's views point into is no part of it (`projHeld`). -/
@@ -412,7 +412,7 @@ theorem fst_trunc_ok : ThruOK (sigCtx ftr) [] (.trunc (.lit 0)) (.vec .int) (pro
   refine ⟨List.not_mem_nil, fun y hy => (by simp [Edit.stored] at hy), Ep, ftr_sig0, rfl, Or.inl rfl,
     DtorSafe.of_none (fun v E h => ?_) _ _ _, (by decide)⟩
   rcases v with _ | _ | _ | v <;>
-    simp [sigCtx, regionP, regioned, paramE, ftr, pvt, vsi, Ty.holdsView, Ty.hasFn, resMode] at h <;>
+    simp [sigCtx, isRegionIdx, regionP, regioned, paramE, ftr, pvt, vsi, Ty.holdsView, Ty.hasFn, resMode] at h <;>
     subst h <;> rfl
 
 /-- **Before, it did not**: the field's path carried the struct's held view of

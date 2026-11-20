@@ -2216,8 +2216,7 @@ def regionP (fn : Fn) (v : Nat) (E : Entry) : Entry :=
 def sigCtx (fn : Fn) : Ctx := fun v =>
   if h : v < fn.params.length then some (regionP fn v (paramE fn.params fn.params[v]))
   else if v = fn.params.length then some ⟨fn.resTy, resMode fn, false, [], [], false, false, false, false⟩
-  else if h' : fn.nvars ≤ v ∧ v - fn.nvars < fn.params.length then
-    (if regioned (fn.params[v - fn.nvars]'h'.2) then some regionE else none)
+  else if isRegionIdx fn v then some regionE
   else none
 
 /-- AGORA-937: a signature with no regioned parameter binds what it bound
@@ -2235,9 +2234,12 @@ theorem sigCtx_noRegion {fn : Fn} (hpl : fn.params.all (fun pt => !regioned pt) 
   · simp [h1, regionP, hr]
   · by_cases h2 : v = fn.params.length
     · simp [h2]
-    · by_cases h3 : fn.nvars ≤ v ∧ v - fn.nvars < fn.params.length
-      · simp [h1, h2, h3, hr]
-      · simp [h1, h2, h3]
+    · have h3 : isRegionIdx fn v = false := by
+        unfold isRegionIdx
+        by_cases h4 : v - fn.nvars < fn.params.length
+        · simp [h4, hr]
+        · simp [h4]
+      simp [h1, h2, h3]
 
 /-- Agora #909: a function's signature binds nothing fresh. -/
 theorem sigCtx_freshOK (fn : Fn) : FreshOK (sigCtx fn) := by
@@ -2249,9 +2251,7 @@ theorem sigCtx_freshOK (fn : Fn) : FreshOK (sigCtx fn) := by
   · split at hv
     · simp only [Option.some.injEq] at hv; subst hv; rfl
     · split at hv
-      · split at hv
-        · simp only [Option.some.injEq] at hv; subst hv; rfl
-        · cases hv
+      · simp only [Option.some.injEq] at hv; subst hv; rfl
       · cases hv
 
 /-- A summary pair names a parameter the caller still has after the call. -/

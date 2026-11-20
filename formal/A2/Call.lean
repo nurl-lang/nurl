@@ -2499,9 +2499,8 @@ theorem sigCtx_gt {fn : Fn} {v : Nat} (hv : fn.params.length < v) :
     sigCtx fn v = if isRegionIdx fn v = true then some regionE else none := by
   have h1 : ¬ v < fn.params.length := Nat.not_lt.mpr (Nat.le_of_lt hv)
   have h2 : v ≠ fn.params.length := Nat.ne_of_gt hv
-  unfold sigCtx isRegionIdx
+  unfold sigCtx
   simp only [h1, h2, ↓reduceDIte, ↓reduceIte]
-  by_cases h3 : fn.nvars ≤ v <;> by_cases h4 : v - fn.nvars < fn.params.length <;> simp [h3, h4]
 
 theorem sigCtx_none {fn : Fn} {v : Nat} (hv : fn.params.length < v) (hlt : v < fn.nvars) :
     sigCtx fn v = none := by
