@@ -1,4 +1,4 @@
-// inout_field_taken_and_refilled_before_a_call_that_may_panic_runs_clean: AGORA-929 guard — an `inout` callee takes `. h buf` by a sink and gives it a value again before a call that may panic, under `recover`: accepted
+// inout_field_taken_and_refilled_before_a_call_that_may_panic_runs_clean: AGORA-929 guard — an `inout` callee takes `. h buf` by a sink and gives it a value made before the take (no call between the take and the store) before a call that may panic, under `recover`: accepted
 // map: §2.1 | A2 | runs-clean | - | AGORA-929 guard: an inout parameter's taken field refilled before a call that may panic
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/panic.nu`
@@ -10,8 +10,9 @@ $ `stdlib/std/panic.nu`
 @ check i k → v { ? > k 2 { ( panic `unwind` ) } {} }
 
 @ cycle inout Holder h i k → v {
+    : ( Vec u ) fresh ( vec_new [u] )
     : i n ( take . h buf )
-    = . h buf ( vec_new [u] )
+    = . h buf fresh
     ( check k )
 }
 

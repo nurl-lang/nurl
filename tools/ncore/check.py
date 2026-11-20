@@ -397,6 +397,7 @@ class FnCheck:
         refills(fn.body)
 
 
+
         def order(stmts):
             for s in stmts:
                 self.order[id(s)] = len(self.order)
@@ -1699,11 +1700,20 @@ class FnCheck:
             # a field a `sink` takes out of a struct whose `% Drop` reads it:
             # the destructor runs at the struct's end and reads the emptied
             # field (agora #929)
-            if op[0] == "v" and op[2] and k < len(sm["modes"]) and sm["modes"][k] == "sink":
-                oty = self.ty_of_place((op[1], tuple(op[2])[:-1]))
-                if (oty is not None and oty[0] == "named"
-                        and op[2][-1] in self.drop_reads(oty[1]) and self.fn.name != "drop__" + oty[1]):
-                    self.err(line, f"{name} takes field {op[2][-1]} of a {oty[1]}, whose destructor reads it")
+            # - any struct along the path, `o.inner.buf` read by Outer's; a
+            # number handed over is a copy, which takes nothing)
+            fty = self.ty_of_place((op[1], tuple(op[2]))) if op[0] == "v" and op[2] else None
+            if (op[0] == "v" and op[2] and k < len(sm["modes"]) and sm["modes"][k] == "sink"
+                    and not (fty is not None and self.T.is_scalar(fty))):
+                for i in range(len(op[2])):
+                    oty = self.ty_of_place((op[1], tuple(op[2])[:i]))
+                    if oty is None or oty[0] != "named" or self.fn.name == "drop__" + oty[1]:
+                        continue
+                    rd = self.drop_reads(oty[1])
+                    if op[2][i] in rd or "*" in rd:
+                        self.err(line, f"{name} takes field {'.'.join(map(str, op[2][i:]))} of a {oty[1]}, "
+                                       f"whose destructor reads it")
+                        break
             # a binding taken into a literal argument, beside another
             # argument that views it: `( use2 @ S { b 0 } sv )`, as `( use3
             # b sv )` is - inside the call the two are unrelated names
@@ -2730,8 +2740,10 @@ class FnCheck:
         body = self.prog.fns.get("drop__" + tname)
         if body is not None:
             def walk(x):
-                if isinstance(x, tuple) and len(x) == 3 and x[0] == "v" and x[1] == 0 and x[2]:
-                    out.add(x[2][0])
+                if isinstance(x, tuple) and len(x) == 3 and x[0] == "v" and x[1] == 0:
+                    # (the receiver used whole - handed to a call, captured:
+                    # what reads it is not known here, so every field)
+                    out.add(x[2][0] if x[2] else "*")
                 elif isinstance(x, (tuple, list)):
                     for y in x:
                         walk(y)
@@ -3032,8 +3044,10 @@ class FnCheck:
                 continue
             # (…nor be handed back with a field a callee took still empty: a
             # panic here is a way out to a `recover`ing caller, agora #929 -
-            # not the field this statement gives a value again, `= . h buf (
-            # vec_new … )`: its own call is the refill)
+            # not, yet, the field this statement gives a value again, `= . h
+            # buf ( make … )`: that call runs before the store too, so a
+            # panic in it hands the field back empty - open, AGORA-939's
+            # rest, as in nurlc)
             rp = self.refill_place
             if self.fn.modes[k] == "inout" and any(
                     g[0] == vid and g[1] and not (rp is not None and rp[0] == vid
