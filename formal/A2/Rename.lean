@@ -4057,20 +4057,26 @@ theorem DtorSafe.canon_N (h : S.OK) {d : Dep} (hN : d ∈ S.N) (hb : d.kind.boun
   obtain ⟨_, hR, _, _, _, hlive⟩ := h.N_mut d hN hb
   have hout := (h.N_out d hN).1
   intro y E hy hdt hos
-  rcases canon_cases h Γa y with ⟨v, rfl, hc⟩ | ⟨_, hc⟩
+  rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨_, hc⟩
   · rw [hc] at hy
     obtain ⟨Ea, _, rfl⟩ := Option.map_eq_some_iff.mp hy
+    simp only [Function.comp_apply, subE_dtor, subE_mode] at hdt hos ⊢
     by_cases hrb : Ea.mode = .rootb
     · simp only [liftE, hrb, ↓reduceIte, h.pe_dtor] at hdt; cases hdt
     · unfold hitsMem
       simp only [Bool.and_eq_false_iff, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and,
         Bool.not_eq_true']
       refine Or.inr fun d' hd' hr _ => ?_
-      rcases liftE_vdeps_cases hrb hd' with ⟨d0, _, rfl⟩ | ha
-      · exact hout d0.root hr.1
-      · rcases mem_A.mp ha with ha | ha
-        · exact hR (hr.1 ▸ mem_allKinds ha)
-        · have := h.N_name d' ha; rw [hr.2] at this; cases this
+      rw [subE_vdeps] at hd'
+      obtain ⟨d1, hd1, hdd⟩ := List.mem_flatMap.mp hd'
+      rcases S.mem_subD hdd with rfl | ⟨w, _, _, hσ⟩
+      · rcases liftE_vdeps_cases hrb hd1 with ⟨d0, _, rfl⟩ | ha
+        · exact hout d0.root hr.1
+        · rcases mem_A.mp ha with ha | ha
+          · exact hR (hr.1 ▸ mem_allKinds ha)
+          · have := h.N_name d' ha; rw [hr.2] at this; cases this
+      · exact hR (hr.1 ▸ mem_allKinds (h.σ_sub w hσ))
+  · rw [hc] at hy; cases hy
   · rw [hc] at hy
     by_cases hl : E.live = true
     · exact hitsMem_of_hits (hlive y E hy hl)
