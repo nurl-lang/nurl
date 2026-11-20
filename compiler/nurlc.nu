@@ -704,6 +704,9 @@
 : ~ i g_ws_syms 0
 : ~ i g_fc_order -1  // the functions the engine walks, in the order they were reached
 : ~ i g_fc_weak 0  // 1 while an effect that may not have happened is applied (eng_effect keeps what the place holds)
+// Loans an effect leaves alive (a sequence; 0 none): what a value taken whole
+// out of its place holds of itself, which goes with it (take_payload).
+: ~ i g_eff_keep 0
 : ~ i g_fc_loopmemo -1  // (a loop, the state it was entered in, the loops walked around it) → the state it left + 1, for this run of the function
 : ~ i g_fc_loophead -1  // …→ what holds at its head once its rounds settled + 1: the run that reports starts there (loop_head_memo)
 : ~ i g_s_catches 0
@@ -14517,7 +14520,7 @@ unsafe @ eng_byte s w i k → i {
         : ~ i x ( wv_at g_el_first + + vid g_f_nv 1 )
         ~ != x 0 {
             : i l - x 1
-            ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
+            ? & & ! ( sq_has dead l ) | == g_eff_keep 0 ! ( sq_has g_eff_keep l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
             = x ( wv_at g_el_next l )
         }
         ? != 0 ( sq_len ( shared_tails place ) ) {
@@ -14525,7 +14528,7 @@ unsafe @ eng_byte s w i k → i {
             : ~ i y 0
             ~ < y n {
                 : i l ( wv_at g_el_shared y )
-                ? & ! ( sq_has dead l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
+                ? & & ! ( sq_has dead l ) | == g_eff_keep 0 ! ( sq_has g_eff_keep l ) ( eng_kills eff place l ) { = dead ( sq_add dead l ) } {}
                 = y + y 1
             }
         } {}
@@ -16043,7 +16046,26 @@ unsafe @ eng_byte s w i k → i {
         // payload taken out leaves the rest of its value as it was: only
         // what was lent out of the part itself ends.)
         : b part & != path 0 != ( ep_last path ) EE_STAR
+        // (…but not what the value taken holds of itself, a view of its own
+        // String's buffer: the buffer goes with the value, and so does the
+        // view - `?? o { T x → ( vec_push d x ) }` with x viewing its own
+        // field; AGORA-869.)
+        : ~ i keep 0
+        ? part {
+            : i hd ( av_held av )
+            : ~ i j 0
+            ~ < j ( sq_len hd ) {
+                : i l ( he_loan ( sq_at hd j ) )
+                ? ( el_is_loan l ) {
+                    : i q ( el_place l )
+                    ? & == ( pl_var q ) vid ( ep_prefix path ( pl_path q ) ) { = keep ( sq_add keep l ) } {}
+                } {}
+                = j + j 1
+            }
+        } {}
+        = g_eff_keep keep
         ( eng_effect st a ? part EF_TAKE EF_REPLACE line 0 )
+        = g_eff_keep 0
         ? & & == rown OW_P ! & != path 0 == ( fp_mode ( fv_pidx vid ) ) PM_INOUT ! ( ep_has_star path ) {
             // (a part taken out of an `inout` parameter is a change to the
             // caller's binding, which stays the caller's; an element taken
