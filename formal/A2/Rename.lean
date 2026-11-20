@@ -6673,7 +6673,6 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have habk : S.AbsOK (A2.kill .replace false c Γ) := hab.kill _ _ _
     obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h habk hP hcT (fun ht => absurd ht hnσ)
       (fun v hv => hvs v (by rcases List.mem_cons.mp hv with rfl | hv <;> simp [Stmt.vars, hv]))
-    simp only [subE_nopi h] at hE'
     obtain ⟨hn1, hEn, _⟩ := hcT.names hP (hn.kill .replace false c)
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hcT habk
     obtain ⟨hw1, hdm, hE⟩ := hcT.wf hP (hw.kill .replace false c)
@@ -6689,38 +6688,41 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       obtain ⟨h1, hE, _⟩ := hcT.freshOK (hfo.kill _ _ _)
       exact (h1.bind hx1 hE).kill _ _ _) (fun ht => hT ht.callcE)
       (fun v hv => hvs v (by simp [Stmt.vars, hv]))
-    have tk := tk.mono (S.liftX_under h (hab.fresh hx) (hab.notPiFresh hx))
+    have hnpx := hab.notPiFresh hx
+    have tk := tk.mono (S.liftX_under h (hab.fresh hx) hnpx)
     have hbx := hab.fresh hx
-    refine ⟨?_, abk.exitScope hbx (hab.notPiFresh hx)⟩
-    rw [canon_exitScope h abk (Or.inl hbx)]
-    have hwc := canon_wf h habx hwx
-    have hnc := canon_names h habx hnx
-    rw [canon_kill h (habk.add hab1 hxk hmo) hal, canon_setE h] at hwc hnc tk
-    rw [canon_kill h hab hal] at hc'
+    refine ⟨?_, abk.exitScope hbx hnpx⟩
+    rw [canon_exitScopes h abk (Or.inl hbx) hnpx]
+    have hwc := canon_wf_sub h habx hwx hnx
+    have hnc := canon_names_sub h habx hnx
+    have hnpc : S.isPi c = false := hvs c (by simp [Stmt.vars])
+    rw [canon_kill h (habk.add hab1 hxk hmo) hal hnpc, canon_setEs h _ hnpx] at hwc hnc tk
+    rw [canon_kill h hab hal hnpc] at hc'
     have hrb : Ec.mode ≠ .rootb := by rcases hcan with h0 | ⟨b', h0, _⟩ <;> rw [h0] <;> simp
     have hbr : ∀ bh, S.bnd c = some bh → bh.1 = .replace := by
       refine bnd_replace hab hc ?_
       rcases canDo_replace_cases hcan with h0 | h0
       · exact Or.inl h0
       · exact Or.inr (Or.inl h0)
-    have hsp' : (∃ ps, sig.params = (.inout b, .fn ms q) :: ps ∧ (S.liftE c Ec).ty = .fn ms q ∧ Cross.send.Le q ∧
+    have hsp' : (∃ ps, sig.params = (.inout b, .fn ms q) :: ps ∧ (S.subE (S.liftE c Ec)).ty = .fn ms q ∧ Cross.send.Le q ∧
           ∀ z ∈ zs.map S.ρ, ∀ d ∈ (argE (S.canon Γ) z).vdeps, (S.canon Γ d.root).isSome) ∨
-        (sig.params = [(.sink, (S.liftE c Ec).ty)] ∧ zs.map S.ρ = [] ∧ (S.liftE c Ec).vdeps = [] ∧
-          (S.liftE c Ec).mode = .own ∧ (S.liftE c Ec).live = true ∧ q.drops = true ∧ sig.resOwn = false) := by
+        (sig.params = [(.sink, (S.subE (S.liftE c Ec)).ty)] ∧ zs.map S.ρ = [] ∧ (S.subE (S.liftE c Ec)).vdeps = [] ∧
+          (S.subE (S.liftE c Ec)).mode = .own ∧ (S.subE (S.liftE c Ec)).live = true ∧ q.drops = true ∧ sig.resOwn = false) := by
       rcases hsp with ⟨ps, h1, h2, h3, h4⟩ | ⟨h1, hz, hv, hm, hl, hd, hr⟩
-      · refine Or.inl ⟨ps, h1, by rw [liftE_ty' h hab hc]; exact h2, h3, fun z' hz' => ?_⟩
+      · refine Or.inl ⟨ps, h1, by rw [subE_ty, liftE_ty' h hab hc]; exact h2, h3, fun z' hz' => ?_⟩
         obtain ⟨z, hz, rfl⟩ := List.mem_map.mp hz'
         exact argE_canon_rooted h hab (h4 z hz)
-      · refine Or.inr ⟨by rw [liftE_ty' h hab hc]; exact h1, by rw [hz]; rfl, ?_, by rw [liftE_mode c hrb, hm]; rfl,
-          by rw [liftE_live]; exact hl, hd, hr⟩
+      · refine Or.inr ⟨by rw [subE_ty, liftE_ty' h hab hc]; exact h1, by rw [hz]; rfl, ?_,
+          by rw [subE_mode, liftE_mode c hrb, hm]; rfl, by rw [subE_live, liftE_live]; exact hl, hd, hr⟩
         have ho : Ec.mode.ownSlot = true := by rw [hm]; rfl
         have hh : Ec.held = [] := by simpa [Entry.vdeps, ho] using hv
         have hvw : Ec.ty.holdsView = false := by
           rw [← Ty.holdsView_undtor, htc]; cases q <;> simp_all [Ty.holdsView]
+        rw [subE_vdeps]
         simp [Entry.vdeps, liftE_mode c hrb, hm, liftMode, liftE_held_named hrb ho hh hvw, Mode.ownSlot]
-    exact StmtT.callcE (Ec := S.liftE c Ec) (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x)
-      (by rw [canon_ρ h, hc]; rfl) (by rw [liftE_ty' h hab hc]; exact htc)
-      (by rw [liftE_mode c hrb]; exact canDo_lift hcan) hq hj hσ hsp' hsl hsr hso
+    exact StmtT.callcE (Ec := S.subE (S.liftE c Ec)) (by rw [src_rename]; exact hks) (by rw [canon_ρs h _ hnpx, hx]; rfl) (h.Fcout x)
+      (canon_some h hc hnpc) (by rw [subE_ty, liftE_ty' h hab hc]; exact htc)
+      (by rw [subE_mode, liftE_mode c hrb]; exact canDo_lift hcan) hq hj hσ hsp' hsl hsr hso
       (NoPin.lift h hab hbr) (DtorSafe.canon h hal hdc) (by simpa using hc')
       (StmtT.weakenIn ⟨(hpw.setE (hE' x)).kill _ _ _, hwc, hnc⟩ tk) (EndOK.lift h abk hbx hpe) hnσ
       (fun ho hd => dtorHead_rename h.inj (hdk ho hd))
