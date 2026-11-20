@@ -1479,7 +1479,6 @@ theorem frame_sat (h : CallH P Γ F x fn args base) :
 
 theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK where
   inj := h.ren_inj
-  noPi _ := rfl
   σ_sub v d hd := by
     simp only [callS] at hd
     split at hd
@@ -1816,6 +1815,14 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
 theorem isPi_sig (h : CallH P Γ F x fn args base) {v : Var} (hv : v ≤ fn.params.length) :
     (callS Γ F fn args base x).isPi v = false :=
   callS_isPi_lt (Nat.lt_of_le_of_lt hv h.fnok.2.1)
+
+/-- AGORA-937: ... so is an `inout` parameter a symbolic name names. -/
+theorem isPi_sym (h : CallH P Γ F x fn args base) :
+    ∀ d ∈ (callS Γ F fn args base x).sym, (callS Γ F fn args base x).isPi d.root = false := by
+  intro d hd
+  obtain ⟨w, b, t, rfl, _⟩ := h.sOK.sym_ok d hd
+  have hw : (⟨w, .name b t⟩ : Dep) ∈ symNames fn.params := hd
+  exact h.isPi_sig (Nat.le_of_lt (lt_of_get (mem_symNames.mp hw).1))
 
 end CallH
 
@@ -2545,8 +2552,8 @@ theorem canon_sig (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hE : 
   have hv : v ≤ fn.params.length := by
     refine Nat.le_of_not_lt fun hc => ?_
     rw [sigCtx_none hc] at hE; cases hE
-  rw [RSetup.canon_some h.sOK hE (h.isPi_sig hv), RSetup.subE_liftE_fix h.sOK]
-  intro _ d hd hk
+  rw [RSetup.canon_some h.sOK hE (h.isPi_sig hv), RSetup.subE_liftE_fix h.sOK _ h.isPi_sym]
+  intro _ d hd
   have hsym : d ∈ symNames fn.params := by
     unfold sigCtx at hE
     split at hE
@@ -2558,19 +2565,18 @@ theorem canon_sig (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hE : 
     · split at hE
       · simp only [Option.some.injEq] at hE; subst hE; cases hd
       · cases hE
-  obtain ⟨w, b, t, rfl, _⟩ := h.sOK.sym_ok d hsym
-  cases hk
+  exact h.isPi_sym d hsym
 
 /-- AGORA-937: a callee binding at a parameter's index or the result slot
     is lifted where the call places it, and the substitution keeps it when
-    what it depends on in memory is a parameter's. -/
+    what it depends on is a parameter's. -/
 theorem canon_lend (h : CallH P Γ F x fn args base) {Δa : Ctx} {v : Var} {E : Entry}
     (hE : Δa v = some E) (hv : v ≤ fn.params.length)
-    (hd : E.mode ≠ .rootb → ∀ d ∈ E.path ++ E.held, d.kind.isName = false → lendable fn d.root) :
+    (hd : E.mode ≠ .rootb → ∀ d ∈ E.path ++ E.held, lendable fn d.root) :
     (callS Γ F fn args base x).canon Δa ((callS Γ F fn args base x).ρ v) =
       some ((callS Γ F fn args base x).liftE v E) := by
   rw [RSetup.canon_some h.sOK hE (h.isPi_sig hv), RSetup.subE_liftE_fix h.sOK
-    fun hrb d hd' hk => h.isPi_sig (Nat.le_of_lt (hd hrb d hd' hk).1)]
+    (fun hrb d hd' => h.isPi_sig (Nat.le_of_lt (hd hrb d hd').1)) h.isPi_sym]
 
 theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).AbsOK (sigCtx fn) := by
   obtain ⟨_, _, _, _, _, hpar, _⟩ := h.fnok
@@ -2814,7 +2820,7 @@ theorem canon_rbq (h : CallH P Γ F x fn args base) (Δa : Ctx) :
       rw [hE] at hp; simp only [Option.map_some, Option.some.injEq, Function.comp] at hp; subst hp
       rw [RSetup.subE_mode] at hm
       have hrb : E0.mode = .rootb := (RSetup.liftE_rootb h.sOK).mp hm
-      rw [RSetup.subE_liftE_fix h.sOK (fun hn => absurd hrb hn)] at hd
+      rw [RSetup.subE_liftE_fix h.sOK (fun hn => absurd hrb hn) h.isPi_sym] at hd
       have hvd : ((callS Γ F fn args base x).liftE v E0).vdeps = (callPe Γ fn.params args v).vdeps := by
         simp [RSetup.liftE, hrb, Entry.vdeps, callS]
       rw [hvd, pe_vd] at hd
@@ -3403,7 +3409,7 @@ theorem res_at (h : CallH P Γ F x fn args base) {Δa : Ctx} {Er : Entry}
   refine exits_at h.pe_lt fn.params 0 _ ?_ (fun k p hkp _ he => ?_) (h.lift_nosink hrb hErv)
   · rw [show base + fn.params.length = (callS Γ F fn args base x).ρ fn.params.length from
       (ren_res fn args base).symm]
-    refine h.canon_lend hEr (Nat.le_refl _) fun _ d hd _ => ?_
+    refine h.canon_lend hEr (Nat.le_refl _) fun _ d hd => ?_
     rcases List.mem_append.mp hd with hd | hd
     · exact hErp d hd
     · exact hErv d (by unfold Entry.vdeps; exact List.mem_append_right _ hd)
@@ -3458,9 +3464,9 @@ theorem inout_held_fix (h : CallH P Γ F x fn args base) {i : Nat} {Ei : Entry} 
   rw [liftE_eq _ hrb] at hd
   rcases List.mem_append.mp hd with hd | hd
   · obtain ⟨d0, hd0, rfl⟩ := RSetup.mem_rds.mp hd
-    exact Or.inr (Or.inr ⟨d0.root, rfl, h.isPi_sig (Nat.le_of_lt (houts _ (hEih d0 hd0)).1.1)⟩)
-  · exact Or.inr (Or.inl (RSetup.A_out h.sOK
-      ((ownHeld_sub _ _ _).trans ((callS Γ F fn args base x).heldA_sub _) hd)))
+    exact Or.inr ⟨d0.root, rfl, h.isPi_sig (Nat.le_of_lt (houts _ (hEih d0 hd0)).1.1)⟩
+  · exact Or.inl (RSetup.A_out h.sOK
+      ((ownHeld_sub _ _ _).trans ((callS Γ F fn args base x).heldA_sub _) hd))
 
 /-- An `inout` argument, where the exits leave it (AGORA-937: lifted, then
     substituted; the substitution keeps what it holds, `inout_held_fix`). -/
