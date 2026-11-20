@@ -467,6 +467,17 @@ theorem canon_ρ (h : S.OK) (Γa : Ctx) (v : Var) (hnp : S.isPi v = false := h.n
   simp only [canon, inv_ρ h, hnp, Bool.false_eq_true, ↓reduceIte]
   cases Γa v <;> simp [subE_nopi h]
 
+/-- AGORA-937: `canon_ρ` with regions: a callee binding at no region's index
+    is lifted, then substituted. -/
+theorem canon_ρs (h : S.OK) (Γa : Ctx) {v : Var} (hnp : S.isPi v = false) :
+    S.canon Γa (S.ρ v) = (Γa v).map (S.subE ∘ S.liftE v) := by
+  simp only [canon, inv_ρ h, hnp, Bool.false_eq_true, ↓reduceIte]
+
+/-- ... so a callee binding is bound where the call places it. -/
+theorem canon_some (h : S.OK) {Γa : Ctx} {v : Var} {E : Entry} (hv : Γa v = some E)
+    (hnp : S.isPi v = false) : S.canon Γa (S.ρ v) = some (S.subE (S.liftE v E)) := by
+  rw [canon_ρs h Γa hnp, hv]; rfl
+
 /-- AGORA-937: the lifted context binds no region's index: every binding of
     `canon` is a frame binding or the lift of a callee binding that is no
     region (`canon_noPi`). So the contexts the memory invariant is stated of
@@ -1700,25 +1711,30 @@ theorem held_lift_bor (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy 
     (S.liftE y Ey).held ⊆ rds S.ρ Ey.held ++ ownHeld false t S.A := by
   rw [ownHeld_false]; exact held_lift h hab hy
 
-theorem exprT_ren (h : S.OK) (hab : S.AbsOK Γa) {e : Expr} (he : ExprT Γa e) :
+theorem exprT_ren (h : S.OK) (hab : S.AbsOK Γa) {e : Expr} (he : ExprT Γa e)
+    (hvs : ∀ v ∈ e.vars, S.isPi v = false) :
     ExprT (S.canon Γa) (e.rename S.ρ) := by
   induction he with
   | lit => exact ExprT.lit
   | var hx hl ht =>
-    exact ExprT.var (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl)
-      (by rw [liftE_ty' h hab hx]; exact ht)
-  | add _ _ iha ihb => exact ExprT.add iha ihb
-  | lt _ _ iha ihb => exact ExprT.lt iha ihb
-  | dec _ iha => exact ExprT.dec iha
+    exact ExprT.var (canon_some h hx (hvs _ (by simp [Expr.vars]))) (by rw [subE_live, liftE_live]; exact hl)
+      (by rw [subE_ty, liftE_ty' h hab hx]; exact ht)
+  | add _ _ iha ihb =>
+    exact ExprT.add (iha fun v hv => hvs v (by simp [Expr.vars, hv]))
+      (ihb fun v hv => hvs v (by simp [Expr.vars, hv]))
+  | lt _ _ iha ihb =>
+    exact ExprT.lt (iha fun v hv => hvs v (by simp [Expr.vars, hv]))
+      (ihb fun v hv => hvs v (by simp [Expr.vars, hv]))
+  | dec _ iha => exact ExprT.dec (iha fun v hv => hvs v (by simp [Expr.vars, hv]))
   | len hx hl ht =>
-    exact ExprT.len (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl)
-      (by rw [liftE_ty' h hab hx]; exact ht)
+    exact ExprT.len (canon_some h hx (hvs _ (by simp [Expr.vars]))) (by rw [subE_live, liftE_live]; exact hl)
+      (by rw [subE_ty, liftE_ty' h hab hx]; exact ht)
   | slen hx hl ht =>
-    exact ExprT.slen (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl)
-      (by rw [liftE_ty' h hab hx]; exact ht)
+    exact ExprT.slen (canon_some h hx (hvs _ (by simp [Expr.vars]))) (by rw [subE_live, liftE_live]; exact hl)
+      (by rw [subE_ty, liftE_ty' h hab hx]; exact ht)
   | isl hx hl ht =>
-    exact ExprT.isl (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_live]; exact hl)
-      (by rw [liftE_ty' h hab hx]; exact ht)
+    exact ExprT.isl (canon_some h hx (hvs _ (by simp [Expr.vars]))) (by rw [subE_live, liftE_live]; exact hl)
+      (by rw [subE_ty, liftE_ty' h hab hx]; exact ht)
 
 theorem liftE_indep {E : Entry} (hrb : E.mode ≠ .rootb) (x v : Var) : S.liftE x E = S.liftE v E := by
   simp [liftE, hrb]
@@ -2470,7 +2486,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     ∃ E', RhsT (S.canon Γa) S.Fc (r.rename S.ρ) E' (S.canon Γa1) ∧ ∀ x, EntryWeaker E' (S.liftE x E) := by
   cases hr with
   | expr he =>
-    exact ⟨intE, RhsT.expr (exprT_ren h hab he), fun x => intE_lift x⟩
+    exact ⟨intE, RhsT.expr (exprT_ren h hab he (fun v _ => h.noPi v)), fun x => intE_lift x⟩
   | new ht =>
     refine ⟨_, RhsT.new ht, fun x => ?_⟩
     exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
@@ -2612,7 +2628,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
   | @«at» y i Ey t f hy hl ht hi hf =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     refine ⟨_, RhsT.at (f := f) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
-      (exprT_ren h hab hi) (fun hft => ⟨freshSrc_lift h hy (hf hft).1, (hf hft).2⟩), fun x => ?_⟩
+      (exprT_ren h hab hi (fun v _ => h.noPi v)) (fun hft => ⟨freshSrc_lift h hy (hf hft).1, (hf hft).2⟩), fun x => ?_⟩
     cases f with
     | false =>
       rw [Entry.with_fresh_eq (by cases t <;> rfl), Entry.with_fresh_eq (by cases t <;> rfl)]
@@ -2685,7 +2701,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
   | @sat y i Ey t f hy hl ht hi hf =>
     have hc : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
     refine ⟨_, RhsT.sat (f := f) hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
-      (exprT_ren h hab hi) (fun hft => ⟨freshSrc_lift h hy (hf hft).1, (hf hft).2⟩), fun x => ?_⟩
+      (exprT_ren h hab hi (fun v _ => h.noPi v)) (fun hft => ⟨freshSrc_lift h hy (hf hft).1, (hf hft).2⟩), fun x => ?_⟩
     cases f with
     | false =>
       rw [Entry.with_fresh_eq (by cases t <;> rfl), Entry.with_fresh_eq (by cases t <;> rfl)]
@@ -2723,7 +2739,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
     rw [canon_kill h hab (allowed_canDo hab hy ht hcan)]
     exact ⟨_, RhsT.remove hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab hy]; exact ht)
       (by rw [liftE_mode y hrb]; exact canDo_lift hcan) (h.Fcout y)
-      (DtorSafe.canon h (allowed_canDo hab hy ht hcan) hds) (exprT_ren h hab hix),
+      (DtorSafe.canon h (allowed_canDo hab hy ht hcan) hds) (exprT_ren h hab hix (fun v _ => h.noPi v)),
       fun x => popE_lift h hab hy ht hrb hos x⟩
   | @pair y z Ey Ez Γa1 Γa2 Dy Dz hy hly hpa1 hz hlz hpa2 hzd =>
     have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
@@ -2928,7 +2944,7 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {r : Rhs} {E : E
   | @atomic op a e1 e2 Ea ha hl ht he1 he2 =>
     have hc : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     exact ⟨intE, RhsT.atomic hc (by rw [liftE_live]; exact hl) (by rw [liftE_ty' h hab ha]; exact ht)
-      (exprT_ren h hab he1) (exprT_ren h hab he2), fun x => intE_lift x⟩
+      (exprT_ren h hab he1 (fun v _ => h.noPi v)) (exprT_ren h hab he2 (fun v _ => h.noPi v)), fun x => intE_lift x⟩
   | @chanSend a y Ea Ey s Γa1 D ha hl ht hy hly htyy hpa =>
     have hca : S.canon Γa (S.ρ a) = some (S.liftE a Ea) := by rw [canon_ρ h, ha]; rfl
     have hc1 : S.canon Γa (S.ρ y) = some (S.liftE y Ey) := by rw [canon_ρ h, hy]; rfl
@@ -4574,10 +4590,10 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
       obtain ⟨D', hpa', _⟩ := pushArg_ren h hab hy hpa
       exact ⟨D', EditArg.push (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_live]; exact hly)
         (by rw [liftE_ty' h hab hy]; exact htyy) hpa'⟩
-    | trunc hie => exact ⟨[], EditArg.trunc (exprT_ren h hab hie)⟩
+    | trunc hie => exact ⟨[], EditArg.trunc (exprT_ren h hab hie (fun v _ => h.noPi v))⟩
     | set hie hy hly htyy hpa =>
       obtain ⟨D', hpa', _⟩ := pushArg_ren h hab hy hpa
-      exact ⟨D', EditArg.set (exprT_ren h hab hie) (by rw [canon_ρ h, hy]; rfl)
+      exact ⟨D', EditArg.set (exprT_ren h hab hie (fun v _ => h.noPi v)) (by rw [canon_ρ h, hy]; rfl)
         (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hpa'⟩
   have hyx' : ∀ y, (op.rename S.ρ).stored = some y → y ≠ S.ρ x := by
     intro y hy
@@ -4968,11 +4984,11 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
       exact ⟨D', EditArg.push (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_live]; exact hly)
         (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmw hs,
         fun hc => hmemsub' (hpre hc) rfl hy htyy hpa hpa' hs, hs⟩
-    | trunc hie => exact ⟨[], EditArg.trunc (exprT_ren h hab hie), (fun _ h => by cases h), (fun _ _ h => by cases h),
+    | trunc hie => exact ⟨[], EditArg.trunc (exprT_ren h hab hie (fun v _ => h.noPi v)), (fun _ h => by cases h), (fun _ _ h => by cases h),
         (fun _ h => by cases h)⟩
     | set hie hy hly htyy hpa =>
       obtain ⟨D', hpa', hs, _⟩ := pushArg_ren h hab hy hpa
-      exact ⟨D', EditArg.set (exprT_ren h hab hie) (by rw [canon_ρ h, hy]; rfl)
+      exact ⟨D', EditArg.set (exprT_ren h hab hie (fun v _ => h.noPi v)) (by rw [canon_ρ h, hy]; rfl)
         (by rw [liftE_live]; exact hly) (by rw [liftE_ty' h hab hy]; exact htyy) hpa', hmw hs,
         fun hc => hmemsub' (hpre hc) rfl hy htyy hpa hpa' hs, hs⟩
   -- AGORA-901: what the stored value captures by name, where the call places
@@ -5670,11 +5686,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     obtain ⟨t1, ab1⟩ := iha ha hab hw hn (fun ht => hT ht.ite_l)
     obtain ⟨t2, _⟩ := ihb hb hab hw hn (fun ht => hT ht.ite_r)
     exact ⟨StmtT.ite (by rw [src_rename]; exact ha) (by rw [src_rename]; exact hb)
-      (exprT_ren h hab hc) t1 t2, ab1⟩
+      (exprT_ren h hab hc (fun v _ => h.noPi v)) t1 t2, ab1⟩
   | @«while» _ Γ F c k hk hc tk ih =>
     intro _ hab hw hn hT
     obtain ⟨t, _⟩ := ih hk hab hw hn (fun ht => hT ht.wh)
-    exact ⟨StmtT.while (by rw [src_rename]; exact hk) (exprT_ren h hab hc) t, hab⟩
+    exact ⟨StmtT.while (by rw [src_rename]; exact hk) (exprT_ren h hab hc (fun v _ => h.noPi v)) t, hab⟩
   | @push _ Γ Γ1 F x y Ex Ey Ex1 t D hx hl hty hcan hxF hy hly htyy hyx hpa hxD hx1 hl1 hds hdb =>
     intro _ hab hw hn hT
     obtain ⟨D', hpa', hD', hD'o⟩ := pushArg_ren h hab hy hpa
@@ -5884,7 +5900,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hty1 : (S.liftE x Ex).ty = .vec t := by rw [liftE_ty x hrb, hty]
     exact StmtT.takeB (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hy]; rfl) (h.Fcout y)
       (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
-      hty1 hhv (h.Fcout x) (exprT_ren h hab hie) hne' hthru' (fun hd => dtorHead_rename h.inj (hnd hd))
+      hty1 hhv (h.Fcout x) (exprT_ren h hab hie (fun v _ => h.noPi v)) hne' hthru' (fun hd => dtorHead_rename h.inj (hnd hd))
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (compE_liftE_weaker hhv), hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
   | @takeBV _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hxF hie hne hthru hV hnd hk hpe ih =>
@@ -5913,7 +5929,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     have hty1 : (S.liftE x Ex).ty = .vec t := by rw [liftE_ty x hrb, hty]
     exact StmtT.takeBV (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hy]; rfl) (h.Fcout y)
       (by rw [canon_ρ h, hx]; rfl) (by rw [liftE_mode x hrb, hmx]; rfl) (by rw [liftE_live]; exact hl)
-      hty1 hhv (h.Fcout x) (exprT_ren h hab hie) hne' hthru' (hVg [] (fun _ h' => by cases h'))
+      hty1 hhv (h.Fcout x) (exprT_ren h hab hie (fun v _ => h.noPi v)) hne' hthru' (hVg [] (fun _ h' => by cases h'))
       (fun hd => dtorHead_rename h.inj (hnd hd))
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (compE_liftE_weakerV hmx hhv),
         hwc, hnc⟩ tk)
@@ -5946,7 +5962,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     rw [canon_setE h] at hwc hnc tk
     rw [canon_kill h hab hal] at hr'
     exact StmtT.withElem (by rw [src_rename]; exact hks) (by rw [canon_ρ h, hx]; rfl) (h.Fcout x)
-      (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_mode y (by rw [hmy]; simp), hmy]; rfl) (exprT_ren h hab he)
+      (by rw [canon_ρ h, hy]; rfl) (by rw [liftE_mode y (by rw [hmy]; simp), hmy]; rfl) (exprT_ren h hab he (fun v _ => h.noPi v))
       (NoPin.lift h hab (bnd_own hab hy hmy)) (DtorSafe.canon h hal hds) hr'
       (StmtT.weakenIn ⟨PW.setE (PW.refl _) (hE' x), hwc, hnc⟩ tk)
       (tp.mono (ξ' := .none) (fun _ _ h' => (S.liftX_none h').elim)) (EndOK.lift h abp hbx hpe)
@@ -5961,7 +5977,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | @insert _ Γ Δ F x y i he _ _ ih =>
     intro _ hab hw hn hT
     obtain ⟨tp, abp⟩ := ih rfl hab hw hn hT
-    exact ⟨StmtT.insert (exprT_ren h hab he) (h.Fcout x) (tp.mono (ξ' := .none) (fun _ _ h' => (S.liftX_none h').elim)), abp⟩
+    exact ⟨StmtT.insert (exprT_ren h hab he (fun v _ => h.noPi v)) (h.Fcout x) (tp.mono (ξ' := .none) (fun _ _ h' => (S.liftX_none h').elim)), abp⟩
   | @sub _ Γ Γ0 Δ0 Δ F k hw0 tk ho ih =>
     intro hs hab hw hn hT
     have hab0 := hab.weaker hw0
