@@ -1985,7 +1985,8 @@ class FnCheck:
             hit = False
             for (pv, pp) in places:
                 fty = self.ty_of_place((pv, pp))
-                if fty is not None and self.T.is_scalar(fty):
+                # (a number, a raw string or a slice view is copied, not taken)
+                if fty is not None and (self.T.is_scalar(fty) or fty[0] in VIEW_TYPES):
                     continue
                 for i in range(len(pp)):
                     oty = self.ty_of_place((pv, pp[:i]))

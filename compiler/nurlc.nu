@@ -37905,7 +37905,9 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         ? & & & & __dfc0 != 0 g_user_drop_seen == 0 g_in_unsafe | ( str_has_index callee_sink arg_idx ) & summary_callee == 0 ( nurl_sym_len g_fn_compiled call_name ) ( bck_sound ) {
             : b __dfwd ! ( str_has_index callee_sink arg_idx )
             : s __dfp ? != 0 ( nurl_str_len arg_froot ) ( __dfp_rooted syms arg_froot ) ( __bfpath_of syms bck_arg_val )
-            ? & != 0 ( nurl_str_len __dfp ) ! ( __plain_scalar_lty ( nurl_llty at ) ) {
+            // (A number, a raw string or a slice view is copied, not taken.)
+            : s __dlt ( nurl_llty at )
+            ? & & & != 0 ( nurl_str_len __dfp ) ! ( __plain_scalar_lty __dlt ) ! ( seq __dlt `i8*` ) == 0 ( nurl_str_starts __dlt `%Slice__` ) {
                 : ~ s __dch ( __field_path_chain syms __dfp )
                 // (Inside a `% Drop` impl only its own receiver may be taken
                 // apart - the outermost link of a path rooted at it - not
@@ -37930,7 +37932,11 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // (Inside a `% Drop` impl, its receiver handed whole to a call: what
         // that call reads of it is not known here, so every field counts as
         // read, `*`.)
-        ? & & != 0 g_drop_glue_on ( is_ident_tok bck_arg_tt ) ( seq bck_arg_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) { ( __drop_reads_add g_drop_glue_ty `*` ) } {}
+        // (…or wrapped: a block, `{ c }`, or a join, `? k c o`, may hand
+        // it on whole too - counted so, conservatively.)
+        ? != 0 g_drop_glue_on {
+            ? | & ( is_ident_tok bck_arg_tt ) ( seq bck_arg_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) ) | | == bck_arg_tt TT_LBRACE == bck_arg_tt TT_QUEST == bck_arg_tt TT_QUESTQUEST { ( __drop_reads_add g_drop_glue_ty `*` ) } {}
+        } {}
         ? & & != 0 ( nurl_str_len arg_froot ) __row_callee ( bck_sound ) {
             ( bck_stash_store arg_froot ( nurl_lex_line lex ) __rc ( nurl_str_int arg_idx ) `pendfield` )
             ( __clo_effect_note arg_froot __rc arg_idx )
