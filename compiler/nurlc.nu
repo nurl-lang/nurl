@@ -14068,6 +14068,10 @@ unsafe @ eng_byte s w i k → i {
     : i ty ( eng_ty_of pl )
     ? == ty ET_NONE { ^ F } {}
     ? == ( et_kind ty ) EK_SCALAR { ^ T } {}
+    // (…or a raw pointer, where the engine reads raw bodies: a view of what
+    // it was made from, and nothing is released when it goes or is given
+    // a new value - what was lent through it is where it was, AGORA-877)
+    ? & == ( et_kind ty ) EK_PTR != 0 g_eng_rawwalk { ^ T } {}
     ^ & == ( et_kind ty ) EK_NAMED ! ( et_flag ty ETF_DROPS )
 }
 
@@ -14787,7 +14791,14 @@ unsafe @ eng_byte s w i k → i {
         } {}
         : i al ( av_alias av )
         : ~ i alias 0
-        : ~ i loans ( av_loans av )
+        // (…read through a raw pointer, where the engine reads raw bodies:
+        // a value that can hold no view - a struct of numbers and owners -
+        // is a copy of the pointee, a handle of the place read below; the
+        // pointer's own view of the container is not part of it (its use
+        // here was checked above) - AGORA-877)
+        : i vty0 ( fv_ty vid )
+        : b thru & & & != 0 g_eng_rawwalk != vty0 ET_NONE == ( et_kind vty0 ) EK_PTR & != ty ET_NONE ! ( et_view_capable ty )
+        : ~ i loans ? thru 0 ( av_loans av )
         : ~ i rheld sub
         : ~ i k 0
         ~ < k ( sq_len al ) {
@@ -22450,20 +22461,9 @@ unsafe @ eng_byte s w i k → i {
     ? & & ! ret_scalar ! ret_view ! ( et_view_capable ret ) {
         // a result whose type has nowhere to keep a view or a borrowed
         // handle holds none, whatever the raw code's provenance reached
-        // (…but a result that is itself a pointer into an argument, retptr,
-        // and is no view is a handle of that argument's storage: `__sbuf`'s
-        // `Vec u` over a String's own buffer - what changes through it
-        // changes the argument, and a view of it views the argument -
-        // AGORA-877)
         : i hl ( wv_new )
         = k 0
-        ~ < k ( wv_len lends ) {
-            : i lt ( wv_at lends k )
-            ? == ( tp_at lt 3 2 ) LK_HANDLE { ( wv_push hl lt ) } {
-                ? & == ( tp_at lt 3 2 ) LK_VIEW == ( tp_at lt 3 1 ) 0 { ( wv_push hl ( tp3 ( tp_at lt 3 0 ) 0 LK_HANDLE ) ) } {}
-            }
-            = k + k 1
-        }
+        ~ < k ( wv_len lends ) { ? == ( tp_at ( wv_at lends k ) 3 2 ) LK_HANDLE { ( wv_push hl ( wv_at lends k ) ) } {} = k + k 1 }
         ( wv_copy lends hl )
         ( wv_drop hl )
         ( wv_trunc rholds 0 )
@@ -22785,10 +22785,15 @@ unsafe @ eng_byte s w i k → i {
     ( eng_prim `vec_at` `in in` `lent` `0 * handle` `` `` `` `` `0` `` `` `` `` `` )
     // (Where the engine reads raw bodies, a pointer is a view: what
     // vec_data and nurl_vctl_data hand back points into the Vec's buffer,
-    // as slice_from_vec's view does - AGORA-877.)
+    // as slice_from_vec's view does - AGORA-877. …and box_ptr's into the
+    // Box's block, its own heap allocation, as box_get's handle is: good
+    // while the Box is, wherever it moves, until it is released - not a
+    // copy of the `ptr` field its body reads, which the engine's types put
+    // inside the boxed value.)
     ? != 0 g_eng_rawwalk {
         ( eng_prim `vec_data` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
         ( eng_prim `nurl_vctl_data` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
+        ( eng_prim `box_ptr` `in` `lent` `0 - view` `` `` `` `` `` `` `` `` `` `` )
     } {}
     ( eng_prim `vec_clear` `in` `none` `` `` `0 - drop` `` `` `` `` `` `` `` `` )
     ( eng_prim `vec_clone` `in` `own` `` `- 0 - held` `` `` `` `0` `` `` `` `` `` )
@@ -23281,7 +23286,14 @@ unsafe @ eng_byte s w i k → i {
                         : i pl ( param_loan ( he_loan he ) )
                         ? >= pl 0 {
                             : i pk ( tp_at pl 3 2 )
-                            ? ! & | | == pk LK_HELD == pk LK_HELDIN & selfown | == pk LK_VIEW == pk LK_HANDLE == ( tp_at pl 3 0 ) j {
+                            // (…nor, where the engine reads raw bodies, a
+                            // handle of the very part that holds it, of a
+                            // type that can hold no view: the value put back
+                            // where it was read from is that part's own
+                            // value, nothing the caller follows - AGORA-877.
+                            // One that may hold views carries them: kept.)
+                            : b selfh & & & & != 0 g_eng_rawwalk == pk LK_HANDLE == ( tp_at pl 3 0 ) j == ( ep_take ( he_path he ) 3 ) ( ep_take ( tp_at pl 3 1 ) 3 ) ! ( et_view_capable ( eng_ty_of ( pl_make ( fp_vid j ) ( he_path he ) ) ) )
+                            ? ! | selfh & | | == pk LK_HELD == pk LK_HELDIN & selfown | == pk LK_VIEW == pk LK_HANDLE == ( tp_at pl 3 0 ) j {
                                 = stores ( sq_add stores ( tp5 j ( ep_take ( he_path he ) 3 ) ( tp_at pl 3 0 ) ( tp_at pl 3 1 ) pk ) )
                             } {}
                         } {}
