@@ -455,6 +455,7 @@
 : ~ i g_el_ix -1  // a key → the loan's number + 1
 : ~ i g_el_key -1  // a key being put together
 : ~ i g_el_end -1  // where and why each loan ended, 4 words a loan: the line (0: none recorded), how (EC_* + the effect * 16 + EN_* * 256), the place the effect was on (for a call, the argument handed over), the callee
+: ~ i g_el_undo -1  // each write to g_el_end, 5 words: the record's first word, its 4 words before - an arm no path leaves undoes its own (el_arm_end)
 : i EC_NONE 0  // what the effects being applied come from (g_ek_ctx): nothing more known than the effect
 : i EC_CALL 1  // a call's, on an argument
 : i EC_CLO 2  // a closure's that runs here, on what it captured
@@ -12825,8 +12826,8 @@ unsafe @ eng_keep_fn → v {
     ( wv_trunc g_el 0 )
     ( wv_drop g_el_ix )
     = g_el_ix ( im_new )
-    ? < g_el_end 0 { = g_el_end ( wv_new ) } {}
-    ( wv_trunc g_el_end 0 )
+    ? < g_el_end 0 { = g_el_end ( wv_new ) = g_el_undo ( wv_new ) } {}
+    ( wv_trunc g_el_end 0 ) ( wv_trunc g_el_undo 0 )
     = g_ek_ctx EC_NONE = g_ek_fn 0 = g_ek_arg 0 = g_ek_top 0
     ? < g_el_first 0 { = g_el_first ( wv_new ) = g_el_next ( wv_new ) = g_el_shared ( wv_new ) } {}
     ( wv_fill g_el_first + * g_f_nv 2 2 0 )
@@ -13677,6 +13678,7 @@ unsafe @ eng_byte s w i k → i {
     : b via_arg & | == g_ek_ctx EC_CALL == g_ek_ctx EC_CLO != g_ek_arg 0
     : i deep0 ? & & & & == 0 flags == g_ek_ctx EC_CALL != g_ek_arg 0 != on 0 > ( ep_len ( pl_path on ) ) ( ep_len ( pl_path g_ek_arg ) ) EN_DEEP 0
     : i deep ? == 0 deep0 0 ? == ( ep_last ( pl_path on ) ) EE_STAR + deep0 EN_ELEMS deep0
+    ( el_end_log b )
     ( wv_put g_el_end b ? != 0 g_ek_line g_ek_line line )
     ( wv_put g_el_end + b 1 + + g_ek_ctx * eff 16 * + flags deep 256 )
     ( wv_put g_el_end + b 2 ? via_arg g_ek_arg ? == 0 flags on 0 )
@@ -13689,8 +13691,43 @@ unsafe @ eng_byte s w i k → i {
     ? >= a ( wv_len g_el_end ) { ^ } {}
     : i b * to 4
     ( wv_pad g_el_end + b 4 0 )
+    ( el_end_log b )
     : ~ i k 0
     ~ < k 4 { ( wv_put g_el_end + b k ( wv_at g_el_end + a k ) ) = k + k 1 }
+}
+
+// The record at word `b` of g_el_end is about to be written: what it
+// holds is logged (g_el_undo).
+@ el_end_log i b → v {
+    ( wv_push g_el_undo b )
+    : ~ i k 0
+    ~ < k 4 { ( wv_push g_el_undo ( wv_at g_el_end + b k ) ) = k + k 1 }
+}
+
+// How many paths left the innermost loop around so far (a `break`, a
+// `continue`).
+@ el_loop_exits → i {
+    : i nl ( wv_len g_fc_loops )
+    ? == nl 0 { ^ 0 } {}
+    ^ + ( wv_len ( wv_at g_fc_loops - nl 2 ) ) ( wv_len ( wv_at g_fc_loops - nl 1 ) )
+}
+
+// An arm of a join (a branch, a loop's body) has run to `st`, from the
+// log at `mark` and `exits` paths out of the loop around. One that left
+// no path open - each returns or stops, none breaks out or goes round
+// again - reaches nothing after the join: where it ended a loan is no
+// fact about a later read, and its records are undone, newest first
+// (the join drops its state; the side table is not in the state).
+@ el_arm_end i st i mark i exits → v {
+    ? | ! ( st_bottom st ) != exits ( el_loop_exits ) { ^ } {}
+    : ~ i n ( wv_len g_el_undo )
+    ~ > n mark {
+        = n - n 5
+        : i b ( wv_at g_el_undo n )
+        : ~ i k 0
+        ~ < k 4 { ( wv_put g_el_end + b k ( wv_at g_el_undo + + n 1 k ) ) = k + k 1 }
+    }
+    ( wv_trunc g_el_undo mark )
 }
 
 // The line loan `l` ended at: 0 if none was recorded.
@@ -21678,7 +21715,10 @@ unsafe @ eng_byte s w i k → i {
         : i c ( st_copy head )
         ( eng_run c + at 1 lc )
         ? ! ( st_bottom c ) { ( eng_read c cop ln TG_WC at ) } {}
+        : i um ( wv_len g_el_undo )
+        : i ux ( el_loop_exits )
         ( eng_run c + lc 2 end )
+        ( el_arm_end c um ux )
         ( wv_pop g_fc_loops ) ( wv_pop g_fc_loops )
         : i nxt ( st_copy head )
         ( st_join_into nxt c )
@@ -21698,7 +21738,10 @@ unsafe @ eng_byte s w i k → i {
     ( eng_run c + at 1 lc )
     ? ! ( st_bottom c ) { ( eng_read c cop ln TG_WC at ) } {}
     : i b ( st_copy c )
+    : i um ( wv_len g_el_undo )
+    : i ux ( el_loop_exits )
     ( eng_run b + lc 2 end )
+    ( el_arm_end b um ux )
     ( st_free b )
     ( wv_pop g_fc_loops ) ( wv_pop g_fc_loops )
     // (a condition that is a true literal never lets the loop end: what
@@ -21742,7 +21785,10 @@ unsafe @ eng_byte s w i k → i {
         } { ( st_put cur vid ( av_make OW_L loans elem_alias sub F ) ) }
     }
     ( wv_push g_fe_walking vid )
+    : i um ( wv_len g_el_undo )
+    : i ux ( el_loop_exits )
     ( eng_run cur + at 3 end )
+    ( el_arm_end cur um ux )
     ( wv_pop g_fe_walking )
     ( wv_pop g_fc_loops ) ( wv_pop g_fc_loops )
     ( wv_copy nxt head )
@@ -21882,11 +21928,16 @@ unsafe @ eng_byte s w i k → i {
         ( eng_read st ( eng_op ( ec + at 1 ) ) ln TG_IF at )
         : i mid ( wv_at g_ec_link at )
         : i a ( st_copy st )
+        : ~ i um ( wv_len g_el_undo )
+        : ~ i ux ( el_loop_exits )
         ( eng_run a + at 2 mid )
+        ( el_arm_end a um ux )
         : ~ i end mid
         ? == ( ec mid ) CO_ELSE {
             = end ( wv_at g_ec_link mid )
+            = um ( wv_len g_el_undo ) = ux ( el_loop_exits )
             ( eng_run st + mid 1 end )
+            ( el_arm_end st um ux )
         } {}
         ? ( st_bottom st ) { ( wv_copy st a ) } { ( st_join_into st a ) }
         ( st_free a )
@@ -21913,7 +21964,10 @@ unsafe @ eng_byte s w i k → i {
         ~ == ( ec arm ) CO_ARM {
             : i nx ( wv_at g_ec_link arm )
             : i c ( st_copy st )
+            : i um ( wv_len g_el_undo )
+            : i ux ( el_loop_exits )
             ( eng_run c + arm 2 nx )
+            ( el_arm_end c um ux )
             ? < out 0 {
                 ? ( st_bottom c ) { ( st_free c ) } { = out c }
             } {

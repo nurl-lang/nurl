@@ -202,9 +202,11 @@ def classify(name):
         row["class"], row["eng"] = "ENGINE-CRASH", ("nurlc", 0, next(ln for ln in err.split("\n") if CRASH in ln), False)
         return row
     verdict = next((ln.split("\t")[2:] for ln in out.split("\n") if ln.startswith("eng\tverdict\t")), ["none"])
-    if verdict[0] == "skip":
+    # (the exit status before the verdict: a run that stopped says nothing
+    # it printed on the way, `skip` included)
+    if rc == 0 and verdict[0] == "skip":
         row["class"], row["eng"] = "ENGINE-SKIP", ("skip", 0, " ".join(verdict[1:]), False)
-    elif verdict[0] == "runs-clean" and rc == 0:
+    elif rc == 0 and verdict[0] == "runs-clean":
         row["class"] = "ENGINE-ACCEPTS"
     else:
         # (no clean verdict: the shadow run stopped, or says otherwise)
