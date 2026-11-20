@@ -3149,13 +3149,22 @@ class FnCheck:
         A number, and a part a keeping callee is handed a copy of, are
         copied (agora #939)."""
         av = st.vals.get(vid)
-        for a in (av.alias if av is not None else ()):
+        alias = av.alias if av is not None else ()
+        # (…copied only as the transfer copies it: every alias a part of an
+        # `inout` parameter, or of an element of a parameter's container - a
+        # mixed set, one a local's part too, is taken (take_payload), the
+        # `inout` parameter's part with it; CodeRabbit on github#2129)
+        all_param = bool(alias) and all(
+            (tuple(b[1]) + tuple(sub)) and b[0] in self.pidx
+            and (self.fn.modes[self.pidx[b[0]]] == "inout" or "*" in b[1])
+            for b in alias)
+        for a in alias:
             path = tuple(a[1]) + tuple(sub)
             if not (path and "*" not in path and a[0] in self.pidx
                     and self.fn.modes[self.pidx[a[0]]] == "inout"):
                 continue
             fty = self.ty_of_place((a[0], path))
-            kept = fty is not None and self.T.copyable(fty) and (
+            kept = all_param and fty is not None and self.T.copyable(fty) and (
                 any(r[1] == k for r in sm.get("rholds", ()))
                 or any(x[2] == k for x in sm.get("stores", ())))
             if not (fty is not None and self.T.is_scalar(fty)) and not kept:
@@ -3209,6 +3218,13 @@ class FnCheck:
                         oty = self.ty_of_place((ops[k][1], ()))
                         if oty is not None and self.T.copyable(oty):
                             continue
+                    # (…and a value block's temporary that names an outer
+                    # binding's part only lends it: the consumed-argument
+                    # rule gives the consumer a copy (agora #555), the
+                    # field stays; CodeRabbit on github#2129)
+                    if (av is not None and av.own == "L" and not av.call and av.alias
+                            and ops[k][1] in self.block_temps):
+                        continue
                     self._alias_takes(st, ops[k][1], (), k, sm, own_takes)
         for vid, k in self.pidx.items():
             if self.fn.modes[k] != "inout" and not (
