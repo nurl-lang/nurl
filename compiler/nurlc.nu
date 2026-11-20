@@ -711,6 +711,10 @@
 // closure body whose captures `^k` are typed from its own (efp_ty), as the
 // closure's type does not say what it captured; -1 otherwise.
 : ~ i g_capty_f -1
+// …and, for nested environments, every closure being released: pairs of the
+// path its captures sit under and its body, so each `^k` step is typed by the
+// body that owns it (eng_ty_at). 0 while none.
+: ~ i g_capty_stk 0
 : ~ i g_fc_loopmemo -1  // (a loop, the state it was entered in, the loops walked around it) → the state it left + 1, for this run of the function
 : ~ i g_fc_loophead -1  // …→ what holds at its head once its rounds settled + 1: the run that reports starts there (loop_head_memo)
 : ~ i g_s_catches 0
@@ -13551,7 +13555,19 @@ unsafe @ eng_byte s w i k → i {
     ? == e EE_STAR { ^ ( et_elem up ) } {}
     ? ( ee_is_pay e ) { ^ ( et_variant_ty up ( ee_variant e ) ( ee_idx e ) ) } {}
     // (a closure's capture, while its body is known: g_capty_f)
-    ? & >= g_capty_f 0 ( ee_is_cap e ) { ^ ( efp_ty g_capty_f ( ee_cap_no e ) ) } {}
+    ? & >= g_capty_f 0 ( ee_is_cap e ) {
+        // (the body whose captures sit right under this step's parent)
+        : i par ( ep_parent path )
+        : ~ i of g_capty_f
+        ? != g_capty_stk 0 {
+            : ~ i q 0
+            ~ < q ( wv_len g_capty_stk ) {
+                ? == ( wv_at g_capty_stk q ) par { = of ( wv_at g_capty_stk + q 1 ) } {}
+                = q + q 2
+            }
+        } {}
+        ^ ( efp_ty of ( ee_cap_no e ) )
+    } {}
     ^ ( et_field up ( ee_name e ) )
 }
 
@@ -19765,7 +19781,11 @@ unsafe @ eng_byte s w i k → i {
                     ? & & ! lent != cty ET_NONE | ( et_reaches_dtor cty 0 ) == ( et_kind cty ) EK_CLOSURE {
                         : i f0 g_capty_f
                         = g_capty_f f
+                        ? == g_capty_stk 0 { = g_capty_stk ( wv_new ) } {}
+                        : i sn ( wv_len g_capty_stk )
+                        ( wv_push g_capty_stk base ) ( wv_push g_capty_stk f )
                         ( eng_dtor_release st ( pl_make ( pl_var place ) ( ep_child base ( ee_cap i ) ) ) cty line + depth 1 )
+                        ( wv_trunc g_capty_stk sn )
                         = g_capty_f f0
                     } {}
                     = i + i 1
