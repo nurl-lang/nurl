@@ -2475,9 +2475,11 @@ theorem exitsP_keepOut {base : Nat} {pe : Var → Entry} {Γ : Ctx}
 /-! ### The callee's starting context, as the caller sees it -/
 
 /-- AGORA-937: a parameter's entry, with its region: a regioned parameter
-    also holds views of its region `π v`. -/
+    also holds its region `π v`, by its handle (`.self`: composed with
+    what the region stands for, the lift gives each dependency of the
+    argument's in its own way, `comp a .self = a`). -/
 theorem regionP_of {fn : Fn} {v : Nat} {p : PMode × Ty} (hp : fn.params[v]? = some p) (E : Entry) :
-    regionP fn v E = if regioned p then { E with held := ⟨fn.nvars + v, .view⟩ :: E.held } else E := by
+    regionP fn v E = if regioned p then { E with held := ⟨fn.nvars + v, .self⟩ :: E.held } else E := by
   have hv : v < fn.params.length := (List.getElem?_eq_some_iff.mp hp).1
   simp [regionP, hv, (List.getElem?_eq_some_iff.mp hp).2]
 
@@ -2487,9 +2489,9 @@ theorem regionP_plain {fn : Fn} {v : Nat} {p : PMode × Ty} (hp : fn.params[v]? 
   rw [regionP_of hp, hr]; rfl
 
 /-- ... what it holds: what the plain entry holds, and, for a regioned
-    parameter, a view of its region. -/
+    parameter, its region by its handle. -/
 theorem mem_regionP_held {fn : Fn} {v : Nat} {E : Entry} {d : Dep} (hd : d ∈ (regionP fn v E).held) :
-    d ∈ E.held ∨ (d = ⟨fn.nvars + v, .view⟩ ∧ ∃ h : v < fn.params.length, regioned fn.params[v] = true) := by
+    d ∈ E.held ∨ (d = ⟨fn.nvars + v, .self⟩ ∧ ∃ h : v < fn.params.length, regioned fn.params[v] = true) := by
   unfold regionP at hd
   split at hd
   · rename_i hv
@@ -2502,7 +2504,7 @@ theorem mem_regionP_held {fn : Fn} {v : Nat} {E : Entry} {d : Dep} (hd : d ∈ (
   · exact Or.inl hd
 
 theorem mem_regionP_vdeps {fn : Fn} {v : Nat} {E : Entry} {d : Dep} (hd : d ∈ (regionP fn v E).vdeps) :
-    d ∈ E.vdeps ∨ (d = ⟨fn.nvars + v, .view⟩ ∧ ∃ h : v < fn.params.length, regioned fn.params[v] = true) := by
+    d ∈ E.vdeps ∨ (d = ⟨fn.nvars + v, .self⟩ ∧ ∃ h : v < fn.params.length, regioned fn.params[v] = true) := by
   unfold Entry.vdeps at hd ⊢
   rw [regionP_mode, regionP_path] at hd
   rcases List.mem_append.mp hd with hd | hd
@@ -2703,10 +2705,10 @@ theorem canon_sig (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hE : 
     stands for at the caller. -/
 theorem _root_.A2.RSetup.subE_liftE_cons {S : RSetup} (hS : S.OK) {v w : Var} {E : Entry}
     (hm : E.mode ≠ .rootb) (hw : S.isPi w = true) :
-    S.subE (S.liftE v { E with held := ⟨w, .view⟩ :: E.held }) =
-      { S.subE (S.liftE v E) with held := (S.σ w).map (fun e => ⟨e.root, A2.comp e.kind .view⟩) ++
+    S.subE (S.liftE v { E with held := ⟨w, .self⟩ :: E.held }) =
+      { S.subE (S.liftE v E) with held := (S.σ w).map (fun e => ⟨e.root, A2.comp e.kind .self⟩) ++
         (S.subE (S.liftE v E)).held } := by
-  have hd : S.subD ⟨S.ρ w, .view⟩ = (S.σ w).map (fun e => ⟨e.root, A2.comp e.kind .view⟩) := by
+  have hd : S.subD ⟨S.ρ w, .self⟩ = (S.σ w).map (fun e => ⟨e.root, A2.comp e.kind .self⟩) := by
     simp [RSetup.subD, RSetup.inv_ρ hS, hw, Kind.isName]
   simp [RSetup.liftE, hm, RSetup.subE, rds, Dep.ren, List.flatMap_cons, hd, RSetup.heldA]
 
@@ -2718,7 +2720,7 @@ theorem canon_param (h : CallH P Γ F x fn args base) {k : Nat} {p : PMode × Ty
     (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ k) =
       some { (callS Γ F fn args base x).liftE k (paramE fn.params p) with
         held := (if regioned p && !p.1.isInp then ((callS Γ F fn args base x).σ (fn.nvars + k)).map
-            (fun e => ⟨e.root, A2.comp e.kind .view⟩) else []) ++
+            (fun e => ⟨e.root, A2.comp e.kind .self⟩) else []) ++
           ((callS Γ F fn args base x).liftE k (paramE fn.params p)).held } := by
   have hkl : k < fn.params.length := lt_of_get hk
   rw [h.canon_sigR (sigCtx_of hk) (Nat.le_of_lt hkl), regionP_of hk]
@@ -2738,7 +2740,7 @@ theorem canon_param (h : CallH P Γ F x fn args base) {k : Nat} {p : PMode × Ty
       simp only [↓reduceIte, PMode.isInp, Bool.not_true, Bool.and_false, Bool.false_eq_true,
         List.nil_append]
       have hlift : (callS Γ F fn args base x).liftE k
-          { paramE fn.params (PMode.inp, t) with held := ⟨fn.nvars + k, .view⟩ :: (paramE fn.params (PMode.inp, t)).held } =
+          { paramE fn.params (PMode.inp, t) with held := ⟨fn.nvars + k, .self⟩ :: (paramE fn.params (PMode.inp, t)).held } =
           (callS Γ F fn args base x).liftE k (paramE fn.params (PMode.inp, t)) := by
         simp [RSetup.liftE, paramE]
       rw [hlift, hfix]
@@ -2789,7 +2791,7 @@ theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).
         simp only [paramOK] at hok
         -- AGORA-937 (item 2): a lent parameter holding views holds its region's view
         have hheld : (regionP fn v (paramE fn.params (.inp, t))).held =
-            (if regioned (PMode.inp, t) then [⟨fn.nvars + v, .view⟩] else []) ++
+            (if regioned (PMode.inp, t) then [⟨fn.nvars + v, .self⟩] else []) ++
               (paramE fn.params (.inp, t)).held := by
           unfold regionP; simp only [hvl, ↓reduceDIte]; rw [hp]; split <;> rfl
         refine ⟨?_, by rw [regionP_path]; rfl, _, ?_, by rw [hheld, regionP_ty]; rfl⟩

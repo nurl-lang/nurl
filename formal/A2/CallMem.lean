@@ -302,12 +302,12 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
     (∃ (k : Nat) (t : Ty), fn.params[k]? = some (PMode.sink, t) ∧ y = m.nv + 0 + k ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
         some ⟨t, .own, true, [], (if regioned (PMode.sink, t) then ((callS Γ F fn args m.nv x).σ (fn.nvars + k)).map
-            (fun e => ⟨e.root, A2.comp e.kind .view⟩) else []) ++ (rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
+            (fun e => ⟨e.root, A2.comp e.kind .self⟩) else []) ++ (rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
           ownHeld true t (callS Γ F fn args m.nv x).A), false, false, false, false⟩) ∨
     (∃ (k : Nat) (b : Eff) (t : Ty), fn.params[k]? = some (PMode.inout b, t) ∧ y = args.getD k 0 ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y =
         some ⟨t, .own, true, [], (if regioned (PMode.inout b, t) then ((callS Γ F fn args m.nv x).σ (fn.nvars + k)).map
-            (fun e => ⟨e.root, A2.comp e.kind .view⟩) else []) ++ (rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
+            (fun e => ⟨e.root, A2.comp e.kind .self⟩) else []) ++ (rds (callRen fn.params args m.nv) (if t.hasFn then symNames fn.params else []) ++
           ownHeld true t (callS Γ F fn args m.nv x).A), false, false, false, false⟩) ∨
     ((∀ v, callRen fn.params args m.nv v ≠ y) ∧ y ≠ x ∧
       (callS Γ F fn args m.nv x).canon (sigCtx fn) y = (callPost Γ fn args y).map Entry.clean) ∨

@@ -1663,7 +1663,7 @@ theorem gsdrop_ok : DropFnOK P 8 GS := Or.inr (Or.inl glueS_glueOK)
 
 /-- AGORA-937: the parameter holds views (its slice), so it views its
     region `π 0`, at `glueS.nvars + 0 = 5`. -/
-def EGS : Entry := ⟨GSD, .own, true, [], [⟨5, .view⟩], false, false, false, false⟩
+def EGS : Entry := ⟨GSD, .own, true, [], [⟨5, .self⟩], false, false, false, false⟩
 
 theorem glueS_body : ∃ Δ, StmtT P ξ (sigCtx glueS) [] glueS.body Δ ∧
     (∀ v E, Δ v = some E → E.mode ≠ .rootb ∧ E.dtor = false ∧ E.dbind = false) ∧
@@ -2188,7 +2188,7 @@ theorem ofnV_body : ∃ Δ, StmtT P ξ (sigCtx ofnV) [] ofnV.body Δ ∧
     Δ 1 = some { intE with mode := R0.mode } := by
   -- AGORA-937: the parameter holds views (the slice payload), so it views
   -- its region `π 0`, at `ofnV.nvars + 0 = 3`
-  let E0 : Entry := ⟨OVD, .own, true, [], [⟨3, .view⟩], false, false, false, false⟩
+  let E0 : Entry := ⟨OVD, .own, true, [], [⟨3, .self⟩], false, false, false, false⟩
   let I : Entry := { intE with mode := R0.mode }
   have h0 : sigCtx ofnV 0 = some E0 := by
     simp [sigCtx, ofnV, paramE, E0, OVD, OV, DT, T, Ty.hasFn, regionP, regioned, Ty.holdsView]
@@ -2460,7 +2460,7 @@ theorem gs2drop_ok : DropFnOK P 11 GS := Or.inr (Or.inr (Or.inl ⟨8, 10, glueS2
 
 /-- AGORA-937: the parameter holds views (its slice), so it views its
     region `π 0`, at `glueS2.nvars + 0 = 4`. -/
-def ES3 : Entry := ⟨GSD2, .own, true, [], [⟨4, .view⟩], false, false, false, false⟩
+def ES3 : Entry := ⟨GSD2, .own, true, [], [⟨4, .self⟩], false, false, false, false⟩
 
 theorem glueS2_body : ∃ Δ, StmtT P ξ (sigCtx glueS2) [] glueS2.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
@@ -2494,7 +2494,7 @@ theorem glueS2_body : ∃ Δ, StmtT P ξ (sigCtx glueS2) [] glueS2.body Δ ∧
   let EW : Entry := Entry.arm { (⟨ES3.ty, .own, true, [], ES3.held, false, false, false, false⟩ : Entry) with ty := GSD, held := ES3.held }
   -- armed: its type holds a view; but it views nothing the glue can end:
   -- only its parameter's region
-  have hEW : EW = ⟨GSD, .own, true, [], [⟨4, .view⟩], true, true, false, false⟩ := by
+  have hEW : EW = ⟨GSD, .own, true, [], [⟨4, .self⟩], true, true, false, false⟩ := by
     simp [EW, ES3, Entry.arm, GSD, GS, DT, T, Ty.dtorViews, Ty.holdsView]
   let Kb : Ctx := A2.setE Ka 2 EW
   have hKbD : NoRootbD 4 Kb := hKaD.setE (by rw [hEW]; simp) (by rw [hEW]; simp [Entry.vdeps, Mode.ownSlot, Kind.isName])

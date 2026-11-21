@@ -352,6 +352,12 @@ theorem killE_rootb {Γ : Ctx} {F : List Var}
 def RegionSpared (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) : Prop :=
   (∃ Ex, Γ x = some Ex ∧ Ex.mode = .region) → e.kills hv .view = false
 
+/-- An effect that spares a view spares the handle too (AGORA-937: a lent
+    parameter holds its region by its handle, `regionP`). -/
+theorem Eff.kills_self_of_view {e : Eff} {hv : Bool} (h : e.kills hv .view = false) :
+    e.kills hv .self = false := by
+  cases e <;> cases hv <;> simp_all [Eff.kills]
+
 theorem RegionSpared.of_ne {Γ : Ctx} {x : Var} {Ex : Entry} (hx : Γ x = some Ex) (hm : Ex.mode ≠ .region)
     (e : Eff) (hv : Bool) : RegionSpared Γ e hv x := fun ⟨E, h, hr⟩ => by
   rw [hx] at h; cases h; exact absurd hr hm
@@ -388,7 +394,7 @@ theorem killE_rootbR {Γ : Ctx} {F : List Var}
     by_cases hb : dep.kind.bound = .none
     · rcases hanch v E hE hrb dep hd hb with h | ⟨hk, Er, hEr, hreg⟩
       · exact absurd (hr ▸ h) hxF
-      · rw [hk]; exact hxr ⟨Er, hr ▸ hEr, hreg⟩
+      · rw [hk]; exact Eff.kills_self_of_view (hxr ⟨Er, hr ▸ hEr, hreg⟩)
     · cases hk : e.kills hv dep.kind
       · rfl
       · exact absurd hr (hmn v E hE hrb dep hd hb hk)
