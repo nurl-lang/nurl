@@ -1174,7 +1174,9 @@ theorem lock_call {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {t : Ty} {x : V
     `frozen`), which A3.2's `withLock` takes. -/
 theorem lockFn_param_root {fn : Fn} {t : Ty} (hps : fn.params = [(.inp, .lk t)]) :
     ∃ E, sigCtx fn 0 = some E ∧ E.ty = .lk t ∧ E.live = true ∧ E.mode.isRoot = true :=
-  ⟨paramE fn.params (.inp, .lk t), sigCtx_of_plain (by rw [hps]; rfl) (by simp [regioned]), rfl, rfl, rfl⟩
+  -- AGORA-937 (item 2): it may also hold its region's view; its type, liveness and mode are the plain entry's
+  ⟨regionP fn 0 (paramE fn.params (.inp, .lk t)), sigCtx_of (by rw [hps]; rfl), by simp [paramE],
+    by simp [paramE], by simp [paramE, Mode.isRoot]⟩
 
 /-! ### A3.6: module globals, as A2 types them
 
