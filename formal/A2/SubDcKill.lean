@@ -48,6 +48,16 @@ theorem dropIn_comp_exact {k : Kind} (hk : k = .view ∨ k = .inner ∨ k = .sha
     Eff.dropIn.kills false (comp .view k) = Eff.dropIn.kills false k := by
   rcases hk with rfl | rfl | rfl <;> rfl
 
+/-- ... and so when it reaches `w` by its handle (`.self`, what a call's
+    setting adds for each root: `RSetup.OK.σ_self`), which composes to the
+    callee's kind itself. -/
+theorem dropIn_comp_exact' {a k : Kind} (ha : a = .view ∨ a = .self)
+    (hk : k = .view ∨ k = .inner ∨ k = .share) :
+    Eff.dropIn.kills false (comp a k) = Eff.dropIn.kills false k := by
+  rcases ha with rfl | rfl
+  · exact dropIn_comp_exact hk
+  · rfl
+
 /-- **... but not when it views something inside `w`** (`.inner`): A2's kinds
     have one level of depth, so a callee binding that views the region
     (what the argument's slices view, inside `w`'s elements) reaches `w` at
@@ -70,7 +80,7 @@ theorem verbatim_overkills :
     callee's kill on the region hits. -/
 theorem subDc_hits_exact {isPi : Var → Bool} {σ : Var → List Dep} {r w : Var}
     (hr : isPi r = true) (hσ : σ r ≠ [])
-    (hσw : ∀ e ∈ σ r, e.root = w ∧ e.kind = .view) :
+    (hσw : ∀ e ∈ σ r, e.root = w ∧ (e.kind = .view ∨ e.kind = .self)) :
     ∀ D : List Dep, (∀ d ∈ D, d.root = r ∧ (d.kind = .view ∨ d.kind = .inner ∨ d.kind = .share)) →
       (D.flatMap (subDc isPi σ)).any (fun d => d.root == w && Eff.dropIn.kills false d.kind) =
         D.any (fun d => d.root == r && Eff.dropIn.kills false d.kind)
@@ -91,11 +101,11 @@ theorem subDc_hits_exact {isPi : Var → Bool} {σ : Var → List Dep} {r w : Va
     | true =>
       apply List.any_eq_true.mpr
       obtain ⟨hw0, ha0⟩ := hσw e0 he0
-      exact ⟨e0, he0, by simp [Function.comp, hw0, ha0, dropIn_comp_exact hdk, hk]⟩
+      exact ⟨e0, he0, by simp [Function.comp, hw0, dropIn_comp_exact' ha0 hdk, hk]⟩
     | false =>
       apply List.any_eq_false.mpr
       intro e he
       obtain ⟨_, ha⟩ := hσw e he
-      simp [Function.comp, ha, dropIn_comp_exact hdk, hk]
+      simp [Function.comp, dropIn_comp_exact' ha hdk, hk]
 
 end A2

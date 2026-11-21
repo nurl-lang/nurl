@@ -664,6 +664,7 @@ import A3
 -- (A2/SubDcKill.lean, AGORA-937 3d groundwork): the kinds-composed lift of a change through a
 -- region ends at the caller exactly what the callee ends, for arguments that view `w` at `.view`
 #print axioms A2.dropIn_comp_exact
+#print axioms A2.dropIn_comp_exact'
 #print axioms A2.dropIn_comp_inner_overkills
 #print axioms A2.subDc_hits_exact
 -- (AGORA-937 3d groundwork): the call's lift is precise (σ: the argument's own memory deps and
