@@ -167,6 +167,65 @@ Names never had this problem: a name dependency is lifted as itself
   ghost binding, `RSetup.A` without the roots reached only through regions,
   `StmtT.ren`'s edit cases through a region-reaching borrow, and the call
   case of preservation over the `subDc`-substituted context.
+- **What is left, in order (as of 3c part 4).**
+  1. *The ghost lift is today's lift with a wider renaming.* Map each region
+     `π p` to a fresh caller index `G p` (`ρ`), set `isPi` to nothing, and
+     drop from `R` the roots reached only through regions. Then a region is
+     an ordinary renamed root, `subD` is the identity, and `S.R = []` holds
+     for a call whose arguments hold views only through regions. The ghost
+     setup's `σ` must be empty too. `RSetup.OK.σ_sub` asks
+     `S.σ v ⊆ allKinds S.R`, and today's `callS.σ` maps a parameter to the
+     roots its argument holds, which are no longer in `R`. The real
+     region-to-caller mapping is kept apart, for `subDc` (item 4) and the
+     exit substitution (`callRes`). This setup does **not** meet
+     `RSetup.AbsOK` as it stands. Its fourth clause reads
+     `E.mode = .region ↔ S.isPi v = true` (`A2/Rename.lean`, `AbsOK`), and
+     `StmtT.ren` asks `AbsOK Γa`. The other choice, keeping `isPi` true at
+     region indices, breaks `StmtT.ren`'s `∀ v ∈ s.vars, S.isPi v = false`
+     for no statement, since the body names no region. But it keeps `subD`
+     substituting, which is what the ghost lift must not do. **Chosen
+     resolution:** an `RSetup.ghost` flag (default `false`, so every
+     existing setup and proof is unchanged).
+     - Under `ghost`, `AbsOK`'s fourth clause reads "a region's index is
+       renamed to a caller binding of mode `.region`": `isPi v = false`,
+       and `S.Φ (S.ρ v)` is a region entry.
+     - The lemmas that use the clause take the `ghost = false` case as
+       today: `AbsOK.notPi`, `notPiFresh`, `ne_region`, and their users in
+       `Rename.lean` and `Call.lean`.
+     - In the `ghost` case, a region is an ordinary renamed root, so the
+       lift lemmas need no region case there.
+
+     With that, `StmtT.ren` types the body where the call places it, with
+     the region a binding of mode `.region` in the caller's context.
+  2. *The callee's own rule.* `ThruOK` asks each root of a change's path to
+     be live and to allow the effect (`canDo`: `own` or `inout`). A region
+     (`regionE`: never live) fails it. So AGORA-933's grower `f` is not
+     typed even in its own frame. The relaxation, a region root allowed
+     where no share is on the way, is a typing-rule change that is sound
+     only with the call-site premise. It lands with 3d, with a
+     `fnOK_mono`-style lemma showing that what typed before still types.
+  3. *Regions for lent parameters.* `f1` takes `vv` lent (`.inp`), and only
+     `sink`/`inout` parameters get a region (`regioned`). Extending
+     `regioned` changes `sigCtx` (as turn-on 1 did). The lift of a lent
+     parameter changes as well: `liftE`'s `.rootb` branch returns the
+     caller's entry `S.pe` and drops the parameter's own `held`. A regioned
+     lent parameter's `held` holds `⟨π p, .view⟩` (`regionP`), so the
+     `.rootb` lift has to carry that dependency, as `⟨G p, .view⟩`, or the
+     witness loses its ghost dependency (see the first open question
+     below). `AbsOK`'s first clause changes with it. It asks a `.rootb`
+     binding for `held = (if E.ty.hasFn then S.sym else [])`, which becomes
+     that list followed by the region's `⟨π p, .view⟩` for a regioned lent
+     parameter. The lift lemmas of `.rootb` bindings (`liftE`'s first
+     branch, `canon` of a parameter) are then re-proved with that
+     dependency. This also lands with 3d.
+  4. *The invariant over the `subDc` context.* Preservation of the call
+     with `MInv m (subDc Γg)`. Steps that commute with the substitution
+     (`subDc_derive`; kills on callee bindings, which no `σ` names)
+     transfer as they are. A change through a region-reaching borrow uses
+     `RegionViewAt.keep_inner` for the arguments, `thruPre_live_nohit` for
+     the frame, and `DSH_repl_wf` for the owners.
+  5. *3d.* `CallT`'s premise, `callPost`'s exit kill, `call_alone_refused`
+     becoming a typing witness, and the CLAIM row.
 - **3b, part 3 (fallback).** The ghost store: `RegionSnap`, building on `Region.lean`'s
   `Val.viewsOf`/`regionSnap`; `StepI`; the erasure lemma; and `MInvI`
   extending `MInv` with the region clause. Existing `MInv` lemmas stay
