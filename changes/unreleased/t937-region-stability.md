@@ -1,0 +1,3 @@
+### Changed
+
+- **The formal proof shows that a change inside a region's memory keeps an argument's views of it in bounds** (AGORA-937, stage 3c, third part). A change through a borrow rewrites one node of its owner's tree. When that node lies strictly inside a node a region reaches, as AGORA-933's grow of an element does, the enclosing node keeps its address and its number of elements (`Repl.keeps_enclosing`). So a view of its buffer still fits after the change (`RegionViewAt.keeps_len`). No typing rule uses it yet, and every theorem statement is as it was. Compiler, runtime and NURL source are unchanged, so compile time and run time are byte-for-byte as before.

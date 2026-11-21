@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,053 lines of Lean 4**, **929 theorems**, **1107 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **79 modules**, **74,535 lines of Lean 4**, **3356 theorems**, **4346 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **79 modules**, **74,603 lines of Lean 4**, **3359 theorems**, **4349 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -182,7 +182,7 @@ flowchart BT
   Preservation["Preservation<br/>(4437L, 97 thms)"]
   Progress["Progress<br/>(933L, 14 thms)"]
   Region["Region<br/>(35L, 1 thms)"]
-  RegionMem["RegionMem<br/>(270L, 18 thms)"]
+  RegionMem["RegionMem<br/>(338L, 21 thms)"]
   RegionResWitness["RegionResWitness<br/>(439L, 30 thms)"]
   RegionThruWitness["RegionThruWitness<br/>(107L, 8 thms)"]
   RemoveLoopWitness["RemoveLoopWitness<br/>(252L, 10 thms)"]
@@ -366,7 +366,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/InoutViewArgWitness.lean`](A2/InoutViewArgWitness.lean) | 395 | 35 | 25 |  |
 | 3. Proof Infrastructure | [`A2/ParamViewWitness.lean`](A2/ParamViewWitness.lean) | 448 | 21 | 6 |  |
 | 3. Proof Infrastructure | [`A2/Region.lean`](A2/Region.lean) | 35 | 1 | 0 |  |
-| 3. Proof Infrastructure | [`A2/RegionMem.lean`](A2/RegionMem.lean) | 270 | 18 | 6 |  |
+| 3. Proof Infrastructure | [`A2/RegionMem.lean`](A2/RegionMem.lean) | 338 | 21 | 6 |  |
 | 3. Proof Infrastructure | [`A2/RegionResWitness.lean`](A2/RegionResWitness.lean) | 439 | 30 | 19 |  |
 | 3. Proof Infrastructure | [`A2/RegionThruWitness.lean`](A2/RegionThruWitness.lean) | 107 | 8 | 7 |  |
 | 3. Proof Infrastructure | [`A2/Repl.lean`](A2/Repl.lean) | 387 | 21 | 0 | One-hole replacement (Repl): a change through a borrowed handle rewrites one node of its owner's tree and leaves the rest. |

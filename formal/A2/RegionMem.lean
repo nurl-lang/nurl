@@ -30,7 +30,10 @@ This file proves the facts the call's entry needs:
   each region read as its addresses, what lands through a dependency lands
   through its substitution;
 * deriving a borrow commutes with the substitution (`subDc_derive`, from
-  `comp_assoc`).
+  `comp_assoc`);
+* a change strictly inside a region's node keeps the node's address and
+  length, so a view of its buffer stays in bounds (`Repl.keeps_enclosing`,
+  `DataAt.keeps_enclosing`, `RegionViewAt.keeps_len`).
 
 Nothing here is used by a typing rule yet, and no theorem statement
 changes. -/
@@ -265,5 +268,70 @@ theorem subDc_derive {isPi : Var → Bool} {σ : Var → List Dep} {y : Var} {E 
   · simp only [Bool.not_eq_true] at hr
     simp only [hr, Bool.false_eq_true, ↓reduceIte]
     exact subDc_comp_list hk E.path
+
+/-! ### A change inside a region's node keeps the node
+
+A change through a borrow rewrites one node of its owner's tree (`Repl`).
+Where that node lies strictly inside a node of a region (an element's
+inside, AGORA-933's grow of `w[0]`), the region's node keeps its address and
+its number of elements. So a view of its buffer, `view d o l` with
+`o + l ≤ es.length`, still fits: the caller's argument stays valid while the
+body changes the memory its views point into. -/
+
+/-- **A rewrite strictly inside a node keeps the node's address and length.**
+    The node `t c d es` lies in the old tree and the hole strictly inside
+    it; then the new tree holds `t c d es'`, `es'` as long as `es`. -/
+theorem Repl.keeps_enclosing {n n' T T' : Val} (hr : Repl n n' T T') {t : Ty} {c d : Nat} {es : List Val}
+    (hs : Sub (.node t c d es) T) (hb : Below n (.node t c d es)) :
+    ∃ es', Sub (.node t c d es') T' ∧ es'.length = es.length := by
+  induction hr with
+  | here =>
+    exact (Below.not_self (Below.of_sub_below hs hb)).elim
+  | @elem t1 c1 d1 pre post e e' hr' ih =>
+    cases hs with
+    | refl =>
+      exact ⟨pre ++ e' :: post, Sub.refl _, by simp⟩
+    | child hx hsx =>
+      rcases List.mem_append.mp hx with hx | hx
+      · exact ⟨es, Sub.child (List.mem_append_left _ hx) hsx, rfl⟩
+      · rcases List.mem_cons.mp hx with rfl | hx
+        · obtain ⟨es', hs', hl⟩ := ih hsx
+          exact ⟨es', Sub.child (List.mem_append_right _ (List.mem_cons_self ..)) hs', hl⟩
+        · exact ⟨es, Sub.child (List.mem_append_right _ (List.mem_cons_of_mem _ hx)) hsx, rfl⟩
+  | fst hr' ih =>
+    cases hs with
+    | fst hs' => obtain ⟨es', h, hl⟩ := ih hs'; exact ⟨es', Sub.fst h, hl⟩
+    | snd hs' => exact ⟨es, Sub.snd hs', rfl⟩
+  | snd hr' ih =>
+    cases hs with
+    | fst hs' => exact ⟨es, Sub.fst hs', rfl⟩
+    | snd hs' => obtain ⟨es', h, hl⟩ := ih hs'; exact ⟨es', Sub.snd h, hl⟩
+  | inl hr' ih =>
+    cases hs with
+    | inl hs' => obtain ⟨es', h, hl⟩ := ih hs'; exact ⟨es', Sub.inl h, hl⟩
+  | inr hr' ih =>
+    cases hs with
+    | inr hs' => obtain ⟨es', h, hl⟩ := ih hs'; exact ⟨es', Sub.inr h, hl⟩
+  | pkg hr' ih =>
+    cases hs with
+    | pkg hs' => obtain ⟨es', h, hl⟩ := ih hs'; exact ⟨es', Sub.pkg h, hl⟩
+
+/-- ... so in memory: the owner's slot given the rewritten tree, the node at
+    the region's address `d` is still there, as long as before (in the
+    owner's new tree, whatever the old slot held). -/
+theorem DataAt.keeps_enclosing {m : Mem} {o : Var} {T T' n n' : Val} (hr : Repl n n' T T') {t : Ty} {c d : Nat} {es : List Val}
+    (hs : Sub (.node t c d es) T) (hb : Below n (.node t c d es)) :
+    ∃ es', DataAt (m.set o ⟨true, some T'⟩) d (.node t c d es') ∧ es'.length = es.length := by
+  obtain ⟨es', hs', hl⟩ := hr.keeps_enclosing hs hb
+  refine ⟨es', Or.inl ⟨o, T', ?_, hs', t, c, es', rfl⟩, hl⟩
+  simp [Mem.set, upd]
+
+/-- **A view of a region's buffer stays in bounds** through a change strictly
+    inside the node: the length it was checked against is the new node's. -/
+theorem RegionViewAt.keeps_len {m : Mem} {o : Var} {T T' n n' : Val} (hr : Repl n n' T T') {t : Ty} {c d o' l : Nat} {es : List Val}
+    (hs : Sub (.node t c d es) T) (hb : Below n (.node t c d es)) (hle : o' + l ≤ es.length) :
+    ∃ es', DataAt (m.set o ⟨true, some T'⟩) d (.node t c d es') ∧ o' + l ≤ es'.length := by
+  obtain ⟨es', hd, hl⟩ := DataAt.keeps_enclosing (m := m) (o := o) hr hs hb
+  exact ⟨es', hd, hl ▸ hle⟩
 
 end A2
