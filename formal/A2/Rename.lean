@@ -7273,6 +7273,84 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     intro hs hab hw hn hfo hT hvs
     obtain ⟨tb, abΔ⟩ := ih hs hab hw hn hfo hT hvs
     exact ⟨StmtT.block (tb.mono (S.liftX_blk h abΔ (hb.wf hP hw))), abΔ⟩
+/-! ### AGORA-937 stage 3: a ghost setting
+
+A call setting `S` made ghost: its regions are lifted as bindings of their
+own (renamed, `ghost`), so nothing is substituted (`isPi`, `σ` empty), and
+the roots the arguments reach only through regions are not frozen: `R'`,
+a part of `S.R`. Every other part of the setting is `S`'s. -/
+
+/-- `S`, with regions lifted as ghost bindings and only `R'` frozen. -/
+def ghostify (S : RSetup) (R' : List Var) : RSetup :=
+  { S with R := R', σ := fun _ => [], isPi := fun _ => false, ghost := true }
+
+@[simp] theorem ghostify_ρ (S : RSetup) (R' : List Var) : (S.ghostify R').ρ = S.ρ := rfl
+@[simp] theorem ghostify_R (S : RSetup) (R' : List Var) : (S.ghostify R').R = R' := rfl
+@[simp] theorem ghostify_isPi (S : RSetup) (R' : List Var) (v : Var) : (S.ghostify R').isPi v = false := rfl
+@[simp] theorem ghostify_ghost (S : RSetup) (R' : List Var) : (S.ghostify R').ghost = true := rfl
+
+/-- **A ghost setting is a setting**: from any setting, freezing only a
+    part `R'` of its roots, where what its borrowed parameters hold is still
+    what the arguments hold of `R'` or by name (`pe_held`). -/
+theorem OK.ghostify {S : RSetup} (h : S.OK) {R' : List Var} (hR : ∀ r ∈ R', r ∈ S.R)
+    (hpe : ∀ v, ∀ d ∈ (S.pe v).held,
+      d ∈ allKinds R' ++ S.N ∨ (d ∈ rds S.ρ S.sym ∧ (S.pe v).ty.hasFn = true)) :
+    (S.ghostify R').OK where
+  inj := h.inj
+  σ_sub := fun _ _ hd => by cases hd
+  σ_kinds := fun _ _ hd => by cases hd
+  Rout := fun r hr => h.Rout r (hR r hr)
+  Rroot := fun r hr => h.Rroot r (hR r hr)
+  Fcout := h.Fcout
+  pe_rb := h.pe_rb
+  pe_out := h.pe_out
+  Φsat := h.Φsat
+  Φwf := h.Φwf
+  Φρ := h.Φρ
+  Φio := h.Φio
+  pe_dtor := h.pe_dtor
+  pe_dbind := h.pe_dbind
+  Φarm := h.Φarm
+  Φview := h.Φview
+  Φdead := h.Φdead
+  Φdb := h.Φdb
+  Φdt := h.Φdt
+  ΦN := h.ΦN
+  pe_held := hpe
+  pe_names := h.pe_names
+  sym_ok := h.sym_ok
+  sym_of := h.sym_of
+  N_name := h.N_name
+  N_out := h.N_out
+  N_named := h.N_named
+  N_mut := fun d hd hb => by
+    obtain ⟨h1, h2, h3⟩ := h.N_mut d hd hb
+    exact ⟨h1, fun h' => h2 (hR _ h'), h3⟩
+  Φrb := h.Φrb
+  Φnamed := h.Φnamed
+
+/-- ... and a context fit for `S`'s lift is fit for the ghost one's: no index
+    is then a region's to substitute (`isPi` empty, `ghost`). -/
+theorem AbsOK.ghostify {S : RSetup} {Γa : Ctx} (hab : S.AbsOK Γa) (R' : List Var) :
+    (S.ghostify R').AbsOK Γa :=
+  ⟨hab.1, hab.2.1, hab.2.2.1, hab.2.2.2.1, hab.2.2.2.2.1, fun v => by simp⟩
+
+/-- **The renaming lemma applies to a ghost setting**: a callee statement
+    typed in its own contexts is typed where a ghost setting places it, with
+    each region a renamed binding of its own (AGORA-937 stage 3; the body
+    may change elements through a borrow as long as the frozen part `R'` is
+    empty). -/
+theorem StmtT.ren_ghost {S : RSetup} (h : S.OK) {R' : List Var} (hR : ∀ r ∈ R', r ∈ S.R)
+    (hpe : ∀ v, ∀ d ∈ (S.pe v).held,
+      d ∈ allKinds R' ++ S.N ∨ (d ∈ rds S.ρ S.sym ∧ (S.pe v).ty.hasFn = true))
+    {P : Prog} (hP : ProgOK P) {ξ : Exits} {Γa : Ctx} {Fa : List Var} {s : Stmt} {Δa : Ctx}
+    (hd : StmtT P ξ Γa Fa s Δa) (hs : s.src = true) (hab : S.AbsOK Γa) (hw : CtxWF Γa)
+    (hn : NameWF Γa) (hfo : FreshOK Γa) (hT : s.Thru P → R' = [])
+    (hvs : ∀ v ∈ s.vars, S.isReg v = false) :
+    StmtT P ((S.ghostify R').liftX ξ) ((S.ghostify R').canon Γa) S.Fc (s.rename S.ρ)
+      ((S.ghostify R').canon Δa) ∧ (S.ghostify R').AbsOK Δa :=
+  StmtT.ren (h.ghostify hR hpe) hP hd hs (hab.ghostify R') hw hn hfo hT hvs
+
 end RSetup
 
 end A2

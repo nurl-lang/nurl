@@ -227,7 +227,19 @@ Names never had this problem: a name dependency is lifted as itself
        binding, it is `G p`, a `.region` entry of the caller's context.
 
      So the body of a call whose setting lifts regions as ghost bindings
-     types where the call places it. What is left is the call site: a
+     types where the call places it.
+
+     *Done (`RSetup.ghostify`, `OK.ghostify`, `AbsOK.ghostify`,
+     `StmtT.ren_ghost`):* any call setting can be made ghost: regions
+     renamed, nothing substituted, and only a part `R'` of its roots frozen.
+     The result is a setting (`RSetup.OK`) and keeps its contexts' fitness
+     (`AbsOK`). So the renaming lemma places a callee body under it. The
+     only new obligation is `pe_held`: what a borrowed parameter's caller
+     entry holds must be of `R'` or by name. A lent argument holding views
+     of a root left out of `R'`, as AGORA-933's `f1`'s `vv` does, fails it.
+     That is item 3's lent-parameter region, needed for `f1`. A call whose
+     view-holding arguments all go to regioned (`sink`/`inout`) parameters
+     needs nothing more. What is left is the call site: a
      ghost setting for a call that passes real views (`R` without the
      region-reached roots), and the invariant over the `subDc` context
      (item 4).
