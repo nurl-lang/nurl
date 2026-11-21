@@ -27,6 +27,9 @@
 //   ( gm_nonambig logits n mask )               → v    mask: *u8 0/1
 //   ( gm_conf_percentile conf n pct mask )      → v    AND into mask
 //   ( gm_edge_mask pts depthz h w mask )        → v    AND into mask
+//   ( gm_fit_pinhole dirs h w k4 )              → v    k4: fx fy cx cy
+//   ( gm_mv_check pts dz mask poses ks scale count h w need tol ) → i
+//                                                     dropped pixels
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -549,4 +552,300 @@ $ `stdlib/std/sort.nu`
         ( slice_put [f] pts + * j 3 2 + * s + + * ( slice_at [f] xf 7 ) x * ( slice_at [f] xf 8 ) y * ( slice_at [f] xf 9 ) z ( slice_at [f] xf 12 ) )
         = j + j 1
     }
+}
+
+// ── multi-view consistency (beyond the reference) ───────────────────
+//
+// A feed-forward model's views agree closely but not exactly, and where
+// they disagree the cloud gets a second, ghost copy of a surface ("double
+// walls") plus the floaters one view alone believes in. The check below
+// keeps a pixel of view i only when at least `need` OTHER views of the
+// same window see a surface at the same depth there: its world point,
+// projected into view j, lands on a valid pixel of j whose z-depth agrees
+// within the relative tolerance `tol`. Within a window every view shares
+// one frame and one metric scale, so no alignment is needed first.
+//
+// Projection needs intrinsics, which the model does not output — it
+// predicts a ray per pixel. A pinhole is fitted to those rays per view
+// (x = fx·dx/dz + cx, y = fy·dy/dz + cy, least squares over a pixel grid);
+// the residual of that fit on the reference checkpoint is a small
+// fraction of a pixel, so nothing is lost by projecting through it.
+
+// Pinhole intrinsics from a view's rays. `dirs` is [3, h·w] planar.
+@ gm_fit_pinhole ( Slice f ) dirs i h i w ( Slice f ) k4 → v {
+    : i n * h w
+    : ~ f sa 0.0
+    : ~ f sx 0.0
+    : ~ f saa 0.0
+    : ~ f sax 0.0
+    : ~ f sb 0.0
+    : ~ f sy 0.0
+    : ~ f sbb 0.0
+    : ~ f sby 0.0
+    : ~ f cnt 0.0
+    : ~ i y 0
+    ~ < y h {
+        : ~ i x 0
+        ~ < x w {
+            : i j + * y w x
+            : f dz ( slice_at [f] dirs + * 2 n j )
+            ? > dz 0.000001 {
+                : f a / ( slice_at [f] dirs j ) dz
+                : f b / ( slice_at [f] dirs + n j ) dz
+                = sa + sa a
+                = sx + sx # f x
+                = saa + saa * a a
+                = sax + sax * a # f x
+                = sb + sb b
+                = sy + sy # f y
+                = sbb + sbb * b b
+                = sby + sby * b # f y
+                = cnt + cnt 1.0
+            } {}
+            = x + x 2
+        }
+        = y + y 2
+    }
+    : f dxd - * cnt saa * sa sa
+    : f dyd - * cnt sbb * sb sb
+    : f fx ? > dxd 0.0 / - * cnt sax * sa sx dxd 1.0
+    : f fy ? > dyd 0.0 / - * cnt sby * sb sy dyd 1.0
+    ( slice_put [f] k4 0 fx )
+    ( slice_put [f] k4 1 fy )
+    ( slice_put [f] k4 2 / - sx * fx sa ? > cnt 0.0 cnt 1.0 )
+    ( slice_put [f] k4 3 / - sy * fy sb ? > cnt 0.0 cnt 1.0 )
+}
+
+// A view's camera as a similarity: world = s·R·c + t, `sims` [count, 13]
+// laid out like gm_sim3_fit's output [s | R row-major 9 | t 3], where c is
+// the camera-frame point (dir · depth · scale). Straight from the heads,
+// s = 1 (the metric scale is already in c), R = R(q), t = scale · t_head;
+// gm_align_views then refines them.
+@ gm_sims_from_poses ( Slice f ) poses f scale i count ( Slice f ) sims → v {
+    : ( Vec f ) r__v ( vec_zeroed [f] 9 )
+    : ( Slice f ) r ( slice_from_vec [f] r__v )
+    : ~ i v 0
+    ~ < v count {
+        : i pb * v 7
+        : i sb * v 13
+        ( gm_quat_to_mat ( slice_at [f] poses + pb 3 ) ( slice_at [f] poses + pb 4 ) ( slice_at [f] poses + pb 5 ) ( slice_at [f] poses + pb 6 ) r )
+        ( slice_put [f] sims sb 1.0 )
+        : ~ i e 0
+        ~ < e 9 { ( slice_put [f] sims + + sb 1 e ( slice_at [f] r e ) ) = e + e 1 }
+        ( slice_put [f] sims + sb 10 * scale ( slice_at [f] poses pb ) )
+        ( slice_put [f] sims + sb 11 * scale ( slice_at [f] poses + pb 1 ) )
+        ( slice_put [f] sims + sb 12 * scale ( slice_at [f] poses + pb 2 ) )
+        = v + v 1
+    }
+}
+
+// World point p into view j: the pixel it lands on (-1 when behind the
+// camera or off the image) and, through `cz`, its camera-frame depth.
+@ __gm_proj ( Slice f ) sims ( Slice f ) ks i j f px f py f pz i h i w inout f cz → i {
+    : i sb * j 13
+    : f sc ( slice_at [f] sims sb )
+    : f ddx - px ( slice_at [f] sims + sb 10 )
+    : f ddy - py ( slice_at [f] sims + sb 11 )
+    : f ddz - pz ( slice_at [f] sims + sb 12 )
+    // c = Rᵀ (p − t) / s
+    = cz / + + * ( slice_at [f] sims + sb 3 ) ddx * ( slice_at [f] sims + sb 6 ) ddy * ( slice_at [f] sims + sb 9 ) ddz sc
+    ? > cz 0.000001 {} { ^ -1 }
+    : f cx / + + * ( slice_at [f] sims + sb 1 ) ddx * ( slice_at [f] sims + sb 4 ) ddy * ( slice_at [f] sims + sb 7 ) ddz sc
+    : f cy / + + * ( slice_at [f] sims + sb 2 ) ddx * ( slice_at [f] sims + sb 5 ) ddy * ( slice_at [f] sims + sb 8 ) ddz sc
+    : i kb * j 4
+    : i ui # i ( float_floor + + * ( slice_at [f] ks kb ) / cx cz ( slice_at [f] ks + kb 2 ) 0.5 )
+    : i vy # i ( float_floor + + * ( slice_at [f] ks + kb 1 ) / cy cz ( slice_at [f] ks + kb 3 ) 0.5 )
+    ? & & & >= ui 0 < ui w >= vy 0 < vy h { ^ + * vy w ui } {}
+    ^ -1
+}
+
+// The check, over one window. `pts` [count·h·w, 3] world points, `dz`
+// [count·h·w] camera-frame z-depths (times the metric scale), `mask`
+// [count·h·w] updated in place, `sims` [count, 13] the cameras, `ks`
+// [count, 4] from gm_fit_pinhole. Every view is tested against the masks
+// as they were on entry, so the order of the views does not matter.
+// Returns how many pixels it dropped.
+@ gm_mv_check ( Slice f ) pts ( Slice f ) dz ( Slice u ) mask ( Slice f ) sims ( Slice f ) ks i count i h i w i need f tol → i {
+    : i hw * h w
+    ? | < count 2 <= need 0 { ^ 0 } {}
+    : ( Vec u ) keep__v ( vec_zeroed [u] * count hw )
+    : ( Slice u ) keep ( slice_from_vec [u] keep__v )
+    : ~ i dropped 0
+    : ~ f cz 0.0
+    : ~ i vi 0
+    ~ < vi count {
+        : ~ i p 0
+        ~ < p hw {
+            : i idx + * vi hw p
+            ? != # i ( slice_at [u] mask idx ) 0 {
+                : f px ( slice_at [f] pts * idx 3 )
+                : f py ( slice_at [f] pts + * idx 3 1 )
+                : f pz ( slice_at [f] pts + * idx 3 2 )
+                : ~ i agree 0
+                : ~ i vj 0
+                ~ & < vj count < agree need {
+                    ? != vj vi {
+                        : i q ( __gm_proj sims ks vj px py pz h w cz )
+                        ? >= q 0 {
+                            : i qi + * vj hw q
+                            ? != # i ( slice_at [u] mask qi ) 0 {
+                                : f zj ( slice_at [f] dz qi )
+                                : f dd - cz zj
+                                ? < ? < dd 0.0 - 0.0 dd dd * tol zj { = agree + agree 1 } {}
+                            } {}
+                        } {}
+                    } {}
+                    = vj + vj 1
+                }
+                ? >= agree need { ( slice_put [u] keep idx # u 1 ) } { = dropped + dropped 1 }
+            } {}
+            = p + p 1
+        }
+        = vi + vi 1
+    }
+    : ~ i j 0
+    ~ < j * count hw { ( slice_put [u] mask j ( slice_at [u] keep j ) ) = j + j 1 }
+    ^ dropped
+}
+
+// ── view alignment (beyond the reference) ───────────────────────────
+//
+// The views of one window agree to a few percent, not exactly: each is
+// sharp on its own, but a wall seen by ten views comes out as two or three
+// thin parallel copies a few centimetres apart — inside any tolerance a
+// consistency check could use without eating real surfaces. This is the
+// residual a bundle adjustment removes, and most of it is a small rigid-
+// plus-scale error per view, so that is what is solved for: each view gets
+// a correcting Sim(3), fitted in closed form (gm_sim3_fit) to pairs found
+// by projection — a pixel of view i, projected into view j, pairs its
+// point with the point j itself has at the pixel it lands on, when their
+// depths are within `gate` of each other. That is ICP with the
+// correspondences given by the cameras instead of a nearest-neighbour
+// search. Views are updated one after another against the current state of
+// the others (Gauss–Seidel), view 0 stays put as the frame of reference,
+// and a few sweeps converge. A correction that would rescale a view by
+// more than 10 % is refused: that is a bad fit, not a drift.
+//
+// `cam` [count·h·w, 3] camera-frame points (fixed), `pts` the world points,
+// rewritten from `sims` for every view that moves. Returns the number of
+// view updates applied.
+@ gm_align_views ( Slice f ) cam ( Slice f ) pts ( Slice f ) dz ( Slice u ) mask ( Slice f ) sims ( Slice f ) ks i count i h i w i sweeps f gate → i {
+    : i hw * h w
+    ? < count 2 { ^ 0 } {}
+    // every second pixel in x and y, against every other view
+    : i cap * * + / h 2 1 + / w 2 1 - count 1
+    : ( Vec f ) xs__v ( vec_zeroed [f] * 3 cap )
+    : ( Slice f ) xs ( slice_from_vec [f] xs__v )
+    : ( Vec f ) ys__v ( vec_zeroed [f] * 3 cap )
+    : ( Slice f ) ys ( slice_from_vec [f] ys__v )
+    : ( Vec f ) t__v ( vec_zeroed [f] 13 )
+    : ( Slice f ) t ( slice_from_vec [f] t__v )
+    : ( Vec f ) o__v ( vec_zeroed [f] 13 )
+    : ( Slice f ) o ( slice_from_vec [f] o__v )
+    : ~ f cz 0.0
+    : ~ i applied 0
+    : ~ i sw 0
+    ~ < sw sweeps {
+        : ~ i vi 1
+        ~ < vi count {
+            : ~ i n 0
+            : ~ i y 0
+            ~ < y h {
+                : ~ i x 0
+                ~ < x w {
+                    : i idx + * vi hw + * y w x
+                    ? != # i ( slice_at [u] mask idx ) 0 {
+                        : f px ( slice_at [f] pts * idx 3 )
+                        : f py ( slice_at [f] pts + * idx 3 1 )
+                        : f pz ( slice_at [f] pts + * idx 3 2 )
+                        : ~ i vj 0
+                        ~ < vj count {
+                            ? != vj vi {
+                                : i q ( __gm_proj sims ks vj px py pz h w cz )
+                                ? >= q 0 {
+                                    : i qi + * vj hw q
+                                    ? != # i ( slice_at [u] mask qi ) 0 {
+                                        : f zj ( slice_at [f] dz qi )
+                                        : f dd - cz zj
+                                        ? & < ? < dd 0.0 - 0.0 dd dd * gate zj < n cap {
+                                            ( slice_put [f] xs * n 3 px )
+                                            ( slice_put [f] xs + * n 3 1 py )
+                                            ( slice_put [f] xs + * n 3 2 pz )
+                                            ( slice_put [f] ys * n 3 ( slice_at [f] pts * qi 3 ) )
+                                            ( slice_put [f] ys + * n 3 1 ( slice_at [f] pts + * qi 3 1 ) )
+                                            ( slice_put [f] ys + * n 3 2 ( slice_at [f] pts + * qi 3 2 ) )
+                                            = n + n 1
+                                        } {}
+                                    } {}
+                                } {}
+                            } {}
+                            = vj + vj 1
+                        }
+                    } {}
+                    = x + x 2
+                }
+                = y + y 2
+            }
+            ? & >= n 200 ( gm_sim3_fit xs ys n t ) {
+                : f ts ( slice_at [f] t 0 )
+                ? & > ts 0.9 < ts 1.1 {
+                    // sims_i ← T ∘ sims_i: s' = sT·s, R' = RT·R, t' = sT·RT·t + tT
+                    : i sb * vi 13
+                    ( slice_put [f] o 0 * ts ( slice_at [f] sims sb ) )
+                    : ~ i r 0
+                    ~ < r 3 {
+                        : ~ i c 0
+                        ~ < c 3 {
+                            ( slice_put [f] o + + 1 * r 3 c + + * ( slice_at [f] t + + 1 * r 3 0 ) ( slice_at [f] sims + + sb 1 c )
+                            * ( slice_at [f] t + + 1 * r 3 1 ) ( slice_at [f] sims + + sb 4 c )
+                            * ( slice_at [f] t + + 1 * r 3 2 ) ( slice_at [f] sims + + sb 7 c ) )
+                            = c + c 1
+                        }
+                        ( slice_put [f] o + 10 r + * ts + + * ( slice_at [f] t + + 1 * r 3 0 ) ( slice_at [f] sims + sb 10 )
+                        * ( slice_at [f] t + + 1 * r 3 1 ) ( slice_at [f] sims + sb 11 )
+                        * ( slice_at [f] t + + 1 * r 3 2 ) ( slice_at [f] sims + sb 12 ) ( slice_at [f] t + 10 r ) )
+                        = r + r 1
+                    }
+                    : ~ i e 0
+                    ~ < e 13 { ( slice_put [f] sims + sb e ( slice_at [f] o e ) ) = e + e 1 }
+                    // the view's world points from its new camera
+                    : f s2 ( slice_at [f] sims sb )
+                    : ~ i p 0
+                    ~ < p hw {
+                        : i ci * + * vi hw p 3
+                        : f cx ( slice_at [f] cam ci )
+                        : f cy ( slice_at [f] cam + ci 1 )
+                        : f cc ( slice_at [f] cam + ci 2 )
+                        ( slice_put [f] pts ci + * s2 + + * ( slice_at [f] sims + sb 1 ) cx * ( slice_at [f] sims + sb 2 ) cy * ( slice_at [f] sims + sb 3 ) cc ( slice_at [f] sims + sb 10 ) )
+                        ( slice_put [f] pts + ci 1 + * s2 + + * ( slice_at [f] sims + sb 4 ) cx * ( slice_at [f] sims + sb 5 ) cy * ( slice_at [f] sims + sb 6 ) cc ( slice_at [f] sims + sb 11 ) )
+                        ( slice_put [f] pts + ci 2 + * s2 + + * ( slice_at [f] sims + sb 7 ) cx * ( slice_at [f] sims + sb 8 ) cy * ( slice_at [f] sims + sb 9 ) cc ( slice_at [f] sims + sb 12 ) )
+                        = p + p 1
+                    }
+                    = applied + applied 1
+                } {}
+            } {}
+            = vi + vi 1
+        }
+        // The fits lean slightly towards s > 1 and only view 0 holds the
+        // scale, so left alone the window inflates by ~0.6 % a sweep. The
+        // metric scale is the scale head's to set: divide the geometric
+        // mean of the views' scales back out, about the world origin.
+        : ~ f lsum 0.0
+        : ~ i v 0
+        ~ < v count { = lsum + lsum ( float_log ( slice_at [f] sims * v 13 ) ) = v + v 1 }
+        : f g ( float_exp / lsum # f count )
+        = v 0
+        ~ < v count {
+            : i sb * v 13
+            ( slice_put [f] sims sb / ( slice_at [f] sims sb ) g )
+            ( slice_put [f] sims + sb 10 / ( slice_at [f] sims + sb 10 ) g )
+            ( slice_put [f] sims + sb 11 / ( slice_at [f] sims + sb 11 ) g )
+            ( slice_put [f] sims + sb 12 / ( slice_at [f] sims + sb 12 ) g )
+            = v + v 1
+        }
+        : ~ i k 0
+        ~ < k * * count hw 3 { ( slice_put [f] pts k / ( slice_at [f] pts k ) g ) = k + k 1 }
+        = sw + sw 1
+    }
+    ^ applied
 }

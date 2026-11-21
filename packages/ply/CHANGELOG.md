@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.7] — 2026-11-21
+
+### Added
+
+- The viewer works on phones and tablets: input is Pointer Events, so one
+  finger orbits, a pinch zooms, two fingers pan and a double tap resets the view
+  (the mouse keeps drag / shift-drag / wheel, and a trackpad pinch zooms
+  proportionally). The page never scrolls or zooms under a finger, the panel
+  folds (☰) and starts folded on a narrow screen, and on a touch device a cloud
+  over 1.5 M points starts at a density that keeps the orbit smooth (the slider
+  lifts it; `?density=` pins it).
+
 ## [0.3.6] — 2026-11-11
 
 ### Changed
