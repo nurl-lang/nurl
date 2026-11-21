@@ -462,7 +462,10 @@ vs `MInv` over the substituted one):
    premise asks for one root per argument, or the lemma is generalised to
    each root `wᵢ` with σ filtered to `wᵢ`. Entries with `.view`/`.self`
    deps on a `wⱼ`, `j ≠ i`, are not hit by the kill on `wᵢ` either way.
-   The generalisation is preferred: it adds no ceremony for the author.
+   The generalisation is preferred: it adds no ceremony for the author. *Done:*
+   `subDc_hits_exact_root` (for each root an argument views) and
+   `subDc_hits_none_root` (another region, whose argument does not reach
+   `w`, is not hit by the kill on `w`).
    The premise must also ask that no *other* argument reaches a root `w`
    that the changed region's argument views. Otherwise the callee's change
    through `π p₁` lifts to a kill on `w` that also hits entries resting on

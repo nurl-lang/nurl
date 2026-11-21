@@ -108,4 +108,76 @@ theorem subDc_hits_exact {isPi : Var → Bool} {σ : Var → List Dep} {r w : Va
       obtain ⟨_, ha⟩ := hσw e he
       simp [Function.comp, dropIn_comp_exact' ha hdk, hk]
 
+
+/-- **For each of several roots** (AGORA-937 3d): when a region stands for
+    views of several roots, each at a view or by its handle, the caller's
+    kill on any one of them, `w`, hits among a callee entry's dependencies
+    on the region, composed, exactly what the callee's kill on the region
+    hits. σ's dependencies on the other roots are never `w`'s. -/
+theorem subDc_hits_exact_root {isPi : Var → Bool} {σ : Var → List Dep} {r w : Var}
+    (hr : isPi r = true) (hw : ∃ e ∈ σ r, e.root = w)
+    (hσk : ∀ e ∈ σ r, e.kind = .view ∨ e.kind = .self) :
+    ∀ D : List Dep, (∀ d ∈ D, d.root = r ∧ (d.kind = .view ∨ d.kind = .inner ∨ d.kind = .share)) →
+      (D.flatMap (subDc isPi σ)).any (fun d => d.root == w && Eff.dropIn.kills false d.kind) =
+        D.any (fun d => d.root == r && Eff.dropIn.kills false d.kind)
+  | [], _ => rfl
+  | d :: D, hD => by
+    obtain ⟨hdr, hdk⟩ := hD d (by simp)
+    have ih := subDc_hits_exact_root hr hw hσk D (fun d' hd' => hD d' (List.mem_cons_of_mem _ hd'))
+    have hnm : d.kind.isName = false := by rcases hdk with h | h | h <;> rw [h] <;> rfl
+    have hsub : subDc isPi σ d = (σ r).map fun e => (⟨e.root, comp e.kind d.kind⟩ : Dep) := by
+      simp [subDc, hdr, hr, hnm]
+    simp only [List.flatMap_cons, List.any_append, List.any_cons, hsub, ih, hdr, beq_self_eq_true,
+      Bool.true_and]
+    congr 1
+    rw [List.any_map]
+    obtain ⟨e0, he0, hw0⟩ := hw
+    cases hk : Eff.dropIn.kills false d.kind with
+    | true =>
+      apply List.any_eq_true.mpr
+      exact ⟨e0, he0, by simp [Function.comp, hw0, dropIn_comp_exact' (hσk e0 he0) hdk, hk]⟩
+    | false =>
+      apply List.any_eq_false.mpr
+      intro e he
+      simp [Function.comp, dropIn_comp_exact' (hσk e he) hdk, hk]
+
+/-- ... and so the single-root form is its instance. -/
+example {isPi : Var → Bool} {σ : Var → List Dep} {r w : Var}
+    (hr : isPi r = true) (hσ : σ r ≠ [])
+    (hσw : ∀ e ∈ σ r, e.root = w ∧ (e.kind = .view ∨ e.kind = .self)) (D : List Dep)
+    (hD : ∀ d ∈ D, d.root = r ∧ (d.kind = .view ∨ d.kind = .inner ∨ d.kind = .share)) :
+    (D.flatMap (subDc isPi σ)).any (fun d => d.root == w && Eff.dropIn.kills false d.kind) =
+      D.any (fun d => d.root == r && Eff.dropIn.kills false d.kind) := by
+  obtain ⟨e0, he0⟩ := List.exists_mem_of_ne_nil _ hσ
+  exact subDc_hits_exact_root hr ⟨e0, he0, (hσw e0 he0).1⟩ (fun e he => (hσw e he).2) D hD
+
+
+/-- **Another region is untouched** (AGORA-937 3d, the call-site premise):
+    when no argument but the changed region's reaches `w`, so no other
+    region `q` stands for anything of `w`'s, the caller's kill on `w` hits
+    nothing a callee entry holds on `q`, composed. This is what makes the
+    premise "no other argument reaches `w`" enough: the kill on `w` is the
+    callee's kill on the changed region and nothing more. -/
+theorem subDc_hits_none_root {isPi : Var → Bool} {σ : Var → List Dep} {q w : Var} {e : Eff} {hv : Bool}
+    (hq : ∀ d ∈ σ q, d.root ≠ w) :
+    ∀ D : List Dep, (∀ d ∈ D, d.root = q) → w ≠ q →
+      (D.flatMap (subDc isPi σ)).any (fun d => d.root == w && e.kills hv d.kind) = false
+  | [], _, _ => rfl
+  | d :: D, hD, hwq => by
+    have hdr := hD d (by simp)
+    have ih := subDc_hits_none_root (isPi := isPi) (e := e) (hv := hv) hq D
+      (fun d' hd' => hD d' (List.mem_cons_of_mem _ hd')) hwq
+    simp only [List.flatMap_cons, List.any_append, ih, Bool.or_false]
+    apply List.any_eq_false.mpr
+    intro d' hd'
+    unfold subDc at hd'
+    split at hd'
+    · split at hd'
+      · cases hd'
+      · obtain ⟨e0, he0, rfl⟩ := List.mem_map.mp hd'
+        have := hq e0 (by rw [← hdr]; exact he0)
+        simp [this]
+    · rw [List.mem_singleton] at hd'; subst hd'
+      simp [hdr, Ne.symm hwq]
+
 end A2
