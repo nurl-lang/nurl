@@ -1,0 +1,3 @@
+### Changed
+
+- **The formal proof's renaming lemma asks that a callee statement name no region index** (AGORA-937, stage 3). It asked that the statement name no index whose region the lift substitutes, and that condition says nothing once regions are lifted as bindings of their own. Every call's body meets the new condition as it met the old one, since a body's variables lie below the region indices. The proof's uses of the old condition follow from the new one. No rule, semantics or theorem statement changes. Compiler, runtime and NURL source are unchanged, so compile time and run time are byte-for-byte as before.
