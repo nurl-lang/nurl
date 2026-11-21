@@ -634,6 +634,14 @@ import A3
 #print axioms A2.HeldViewThruWitness.pre_s2_dead
 #print axioms A2.HeldViewThruWitness.pre_vv_kept
 #print axioms A2.HeldViewThruWitness.pre_w_kept
+-- (A2/RegionMem.lean, AGORA-937 stage 3b): a region of buffer addresses reaches the node at one of
+-- them (RootNode's view case generalised); an argument's valid views are valid through its region,
+-- each address reaches one node, and derived borrows compose kinds through a region as through a root
+#print axioms A2.ViewsOK.region_viewAt
+#print axioms A2.ViewsOK.region_node
+#print axioms A2.RegionNode.unique
+#print axioms A2.RegionLanded.comp
+#print axioms A2.RegionLanded.mono
 -- (A2/SliceCopyViewWitness.lean, AGORA-935): a copy of a slice of views, typed as A2 types a
 -- copy (a call, `callRes`), holds copies of its loans and nothing of the slice: releasing the
 -- temporary leaves it live, replacing what the views point into ends it, and then no read types

@@ -118,7 +118,12 @@ Names never had this problem: a name dependency is lifted as itself
   - the AGORA-933 witness: after the entry kill `s2` is dead and `vv` is live.
 
   No rule changes.
-- **3b.** The ghost store: `RegionSnap`, building on `Region.lean`'s
+- **3b, part 1 (done: `A2/RegionMem.lean`).** What a region reaches:
+  - `ViewAddr` (the buffer addresses of the views a value stores);
+  - `RegionNode`, `RegionLanded` and `RegionViewAt` (as `RootNode`, `Landed` and `ViewAt`, with "the node at an address of `D`" for the root's node);
+  - the entry fact `ViewsOK.region_viewAt`: an argument's valid views are valid through its region;
+  - `ViewsOK.region_node`, `RegionNode.unique` and `RegionLanded.comp`/`mono`.
+- **3b, part 2.** The ghost store: `RegionSnap`, building on `Region.lean`'s
   `Val.viewsOf`/`regionSnap`; `StepI`; the erasure lemma; and `MInvI`
   extending `MInv` with the region clause. Existing `MInv` lemmas stay
   untouched; only region-aware ones take `g`.
