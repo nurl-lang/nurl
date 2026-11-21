@@ -5621,6 +5621,96 @@ theorem subE_liftE_path_bor (h : S.OK) {x : Var} {E : Entry} (hmx : E.mode = .bo
     · cases hd
     · exact S.subD_frameRoot (A_out h hd)
 
+/-- Ending what an entry depends on makes it say less, when a fixed entry
+    is left as it is. -/
+theorem _root_.A2.entryWeaker_killE {e : Eff} {hv : Bool} {x : Var} {E : Entry}
+    (hfix : E.fixed → killE e hv x E = E) : EntryWeaker E (killE e hv x E) := by
+  by_cases hf : E.fixed
+  · rw [hfix hf]; exact EntryWeaker.refl E
+  · unfold killE; split
+    · exact ⟨rfl, rfl, fun h => absurd h hf, fun h => by simp at h,
+        fun h => ⟨h, List.Subset.refl _⟩, rfl, fun h => Or.inl h, fun _ _ _ _ _ => Iff.rfl,
+      fun _ _ _ hfr => (by fresh_ew),
+      fun _ _ hhf => by heldfresh_ew⟩
+    · exact EntryWeaker.refl E
+
+/-! #### AGORA-937 (item 3): what a change through a region does where the call places it -/
+
+theorem kill_killNames_comm (e : Eff) (hv : Bool) (x : Var) : ∀ (ds : List Dep) (Γ : Ctx),
+    A2.kill e hv x (A2.killNames ds Γ) = A2.killNames ds (A2.kill e hv x Γ)
+  | [], _ => rfl
+  | d :: ds, Γ => by
+    show A2.kill e hv x (A2.kill _ _ _ (A2.killNames ds Γ)) = A2.kill _ _ _ (A2.killNames ds (A2.kill e hv x Γ))
+    rw [kill_comm, kill_killNames_comm e hv x ds Γ]
+
+/-- Kills commute, so a list of them may run in two groups. -/
+theorem killNames_split (p : Dep → Bool) : ∀ (ds : List Dep) (Γ : Ctx),
+    A2.killNames ds Γ = A2.killNames (ds.filter p) (A2.killNames (ds.filter (fun d => !p d)) Γ)
+  | [], _ => rfl
+  | d :: ds, Γ => by
+    cases hpd : p d with
+    | true =>
+      simp only [List.filter_cons, hpd, ↓reduceIte, Bool.not_true, Bool.false_eq_true]
+      show A2.kill _ _ _ (A2.killNames ds Γ) = A2.kill _ _ _ (A2.killNames _ _)
+      rw [killNames_split p ds Γ]
+    | false =>
+      simp only [List.filter_cons, hpd, Bool.false_eq_true, ↓reduceIte, Bool.not_false]
+      show A2.kill _ _ _ (A2.killNames ds Γ) = A2.killNames _ (A2.kill _ _ _ (A2.killNames _ Γ))
+      rw [killNames_split p ds Γ, kill_killNames_comm]
+
+/-- A change through a region that ends no view of it ends no fixed entry:
+    a borrowed parameter depends on the region only by a view (`RegViews`)
+    and on the rest by name; a fixed `inout` one holds nothing. So it only
+    weakens the context. -/
+theorem weaker_kill_region (h : S.OK) {Γ : Ctx} (hab : S.AbsOK Γ) (hw : CtxWF Γ) (hn : NameWF Γ)
+    {e : Eff} {r : Var} (hk : e.kills false .view = false) (he : e ≠ .replace) :
+    Weaker Γ (A2.kill e false r Γ) := by
+  refine ⟨fun v => ⟨?_, fun E E' h1 h2 => ?_⟩, hw.kill e false r, hn.kill e false r⟩
+  · simp [A2.kill]
+  · simp only [A2.kill, h1, Option.map_some, Option.some.injEq] at h2; subst h2
+    refine entryWeaker_killE fun hf => ?_
+    have hno : ∀ d ∈ E.vdeps, d.root = r → e.kills false d.kind = false := by
+      intro d hd _
+      rcases hf with hrb | ⟨b, hm, _, _⟩
+      · obtain ⟨R, hR, hv⟩ := vdeps_rootb hab h1 hrb
+        rw [hv] at hd
+        rcases List.mem_append.mp hd with hd | hd
+        · rw [(hR d hd).1]; exact hk
+        · split at hd
+          · obtain ⟨w, b, t, rfl, _, _, _, _⟩ := h.sym_ok d hd
+            exact kills_isName he false rfl
+          · cases hd
+      · obtain ⟨_, hb⟩ := hab.2.1 v E b h1 hm
+        obtain ⟨E0, h0, _, _, hfx⟩ := hab.2.2.1 v _ hb
+        rw [h1] at h0; cases h0
+        have hheld : E.held = [] := (hfx (Or.inr ⟨b, hm, by assumption, by assumption⟩)).2
+        have hos : E.mode.ownSlot = true := by rw [hm]; rfl
+        simp [Entry.vdeps, hos, hheld] at hd
+    unfold killE
+    rw [ite_eq_right_iff.mpr fun hh => absurd hh (by rw [hits_false_of hno]; simp)]
+
+theorem weaker_killNames_region (h : S.OK) {Γ : Ctx} (hab : S.AbsOK Γ) (hw : CtxWF Γ) (hn : NameWF Γ) :
+    ∀ ds : List Dep, (∀ d ∈ ds, d.kind.bound.kills false .view = false ∧ d.kind.bound ≠ .replace) →
+      Weaker Γ (A2.killNames ds Γ)
+  | [], _ => Weaker.refl hw hn
+  | d :: ds, hd => by
+    have ih := weaker_killNames_region h hab hw hn ds (fun d' hd' => hd d' (List.mem_cons_of_mem _ hd'))
+    exact ih.trans (weaker_kill_region h (hab.killNames ds) ih.wf ih.names (hd d (by simp)).1 (hd d (by simp)).2)
+
+/-- `canon_killNames` where a kill may be of a region, when it ends no view. -/
+theorem canon_killNames' (h : S.OK) {Γ : Ctx} (hab : S.AbsOK Γ) :
+    ∀ (ds : List Dep), (∀ d ∈ ds, Allowed S d.kind.bound false d.root) →
+      (∀ d ∈ ds, S.isPi d.root = false) →
+      (∀ d ∈ ds, S.isReg d.root = false ∨ d.kind.bound.kills false .view = false) →
+      S.canon (A2.killNames ds Γ) = A2.killNames (rds S.ρ ds) (S.canon Γ)
+  | [], _, _, _ => rfl
+  | d :: ds, hal, hnp, hnr => by
+    show S.canon (A2.kill _ _ _ (A2.killNames ds Γ)) = A2.kill _ _ _ (A2.killNames (rds S.ρ ds) (S.canon Γ))
+    rw [canon_kill' h (hab.killNames ds) (hal d (by simp)) (hnp d (by simp)) (hnr d (by simp)),
+      canon_killNames' h hab ds (fun d' hd' => hal d' (by simp [hd'])) (fun d' hd' => hnp d' (by simp [hd']))
+        (fun d' hd' => hnr d' (by simp [hd']))]
+    rfl
+
 /-- Agora #295: a change through a borrow in a callee's body is typed where
     the call places it. The call passes no views (`S.R = []`), so the lift
     adds only names to the borrow's path (`S.A = S.N`): its memory roots are

@@ -2343,19 +2343,6 @@ theorem killE_nohit {e : Eff} {hv : Bool} {x : Var} {E : Entry} (h : ∀ d ∈ E
   obtain ⟨_, d, hd, hr, _⟩ := hh
   exact h d hd hr
 
-/-- Ending what an entry depends on makes it say less, when a fixed entry
-    is left as it is. -/
-theorem entryWeaker_killE {e : Eff} {hv : Bool} {x : Var} {E : Entry}
-    (hfix : E.fixed → killE e hv x E = E) : EntryWeaker E (killE e hv x E) := by
-  by_cases hf : E.fixed
-  · rw [hfix hf]; exact EntryWeaker.refl E
-  · unfold killE; split
-    · exact ⟨rfl, rfl, fun h => absurd h hf, fun h => by simp at h,
-        fun h => ⟨h, List.Subset.refl _⟩, rfl, fun h => Or.inl h, fun _ _ _ _ _ => Iff.rfl,
-      fun _ _ _ hfr => (by fresh_ew),
-      fun _ _ hhf => by heldfresh_ew⟩
-    · exact EntryWeaker.refl E
-
 /-! ### What the parameters' frames keep (`KeepOut`)
 
 A call's result frame may be a destructor frame (`resFrame`), whose typing
