@@ -1,4 +1,5 @@
 import A2.Closure
+import A2.ThruPre
 
 /-! AGORA-933 in A2: a callee that changes a `Vec` it reaches through a slice
 its parameter holds, `( vec_reserve ( slice_at ( vec_at vv 0 ) 0 ) 4096 )`
@@ -90,5 +91,19 @@ theorem call_alone_refused (E : Entry) (Γ' : Ctx) : ¬ CallT P K [] 1 [1] E Γ'
   have hm := callR_vv
   rw [CallT.thru h K_noRegion f1_thru] at hm
   cases hm
+
+/-! ### AGORA-937 stage 3a: the call's entry kill
+
+Typing `( f1 vv )` (stage 3d) ends, before the body runs, the frame's
+bindings that reach `w` (`thruPre`, `A2/THRU_STAGE3_DESIGN.md`). Here: `s2`, a
+view of `w`'s element, is ended, while `vv`, the argument, and `w`, the owner,
+are kept. -/
+
+theorem pre_s2_dead : ∃ E', thruPre K [1] 2 = some E' ∧ E'.live = false :=
+  thruPre_dead (r := 0) rfl (by decide) callR_vv rfl
+
+theorem pre_vv_kept : thruPre K [1] 1 = some Evv := thruPre_arg (by simp)
+
+theorem pre_w_kept : thruPre K [1] 0 = some Ew := thruPre_named rfl rfl rfl
 
 end A2.HeldViewThruWitness
