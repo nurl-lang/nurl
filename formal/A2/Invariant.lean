@@ -2171,7 +2171,9 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       {D : List Dep} {b : Bool} :
       Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = false →
       x ∉ F → EditArg Γ F op t D Γ1 → (∀ y, op.stored = some y → y ≠ x) →
-      Γ1 x = some Ex1 → Ex1.live = true → memDeps Ex1.path ≠ [] →
+      Γ1 x = some Ex1 → Ex1.live = true →
+      -- (AGORA-937, item 3: its path may reach no root in memory, when the
+      -- call places a change through a region that stands for nothing)
       ThruOKR Γ1 F op Ex.ty Ex1.path →
       -- (A2-drop.3b: a change that drops elements drops no destructor value)
       (op.drops = true → t.dtorFree = true) →
@@ -2236,7 +2238,7 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
   | takeB {Γ Δ : Ctx} {F : List Var} {x y : Var} {i : Expr} {s : Stmt} {Ex : Entry} {t : Ty} :
       s.src = true → Γ y = none → y ∉ F →
       Γ x = some Ex → Ex.mode = .bor → Ex.live = true → Ex.ty = .vec t → t.holdsView = false →
-      x ∉ F → ExprT Γ i → memDeps Ex.path ≠ [] → ThruOKR Γ F (.trunc i) Ex.ty Ex.path →
+      x ∉ F → ExprT Γ i → ThruOKR Γ F (.trunc i) Ex.ty Ex.path →
       -- (AGORA-900: what moves out may own a destructor value: then `y`
       -- hands it to its `letd` first thing, and is assigned nothing, as a
       -- call's owned result does, A2-drop.3a)

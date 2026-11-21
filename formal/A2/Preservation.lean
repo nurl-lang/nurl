@@ -3003,7 +3003,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (fun h => by simp [ownHeld, h])
         (Or.inr ⟨rfl, rfl, rfl⟩) hds) rfl (covers_pushRealloc (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
-  | @editB ξ Γ Γ1 F x op Ex Ex1 t D _ hx hmx hl hty hhv hxF harg hyx hx1 hl1 _ hthru =>
+  | @editB ξ Γ Γ1 F x op Ex Ex1 t D _ hx hmx hl hty hhv hxF harg hyx hx1 hl1 hthru =>
     intro m m' s' hcd hi hst
     have hanch := hi.leafAnch rfl
     have hrel := CtxRel.editB hanch.toR hx hmx harg hyx hx1 hl1 hthru
@@ -3227,7 +3227,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨by simp [Stmt.spine], E0, h0⟩
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
-  | @takeB ξ Γ Δ F x y i k Ex t hsrc hy hyF hx hmx hl hty hhv _ hie _ hthru _ hs hend _ =>
+  | @takeB ξ Γ Δ F x y i k Ex t hsrc hy hyF hx hmx hl hty hhv _ hie hthru _ hs hend _ =>
     -- element `n` moves out to `y` through the borrow `x` (`takeB_pres`), and
     -- the body runs in `y`'s scope, as a `letv`'s does
     intro m m' s' hcd hi hst

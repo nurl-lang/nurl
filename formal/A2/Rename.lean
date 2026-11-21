@@ -777,8 +777,8 @@ theorem pe_ρ (h : S.OK) {v x : Var} {d : Dep} (hd : d ∈ (S.pe v).vdeps) (hr :
 /-- Hitting a lifted entry is hitting the entry it lifts, for an effect the
     callee may have: a symbolic name is never ended (the parameter is not
     replaced), whether the closure handed over holds the argument or not. -/
-theorem hits_lift (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
-    {e : Eff} {hv : Bool} {x : Var} (ha : Allowed S e hv x) (hxr : S.isReg x = false) :
+theorem hits_lift' (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
+    {e : Eff} {hv : Bool} {x : Var} (ha : Allowed S e hv x) (hxr : S.isReg x = false ∨ e.kills hv .view = false) :
     hits e hv (S.ρ x) (S.liftE v E) = hits e hv x E := by
   by_cases hrb : E.mode = .rootb
   · -- on neither side is anything hit: the abstract entry holds only
@@ -802,8 +802,11 @@ theorem hits_lift (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa
       rw [hrb] at hd
       simp only [Mode.ownSlot, Bool.false_eq_true, ↓reduceIte, List.nil_append, List.mem_append] at hd
       rcases hd with hd | hd
-      · -- AGORA-937 (item 2): a view of a region, which `x` is not
-        exact absurd (hr ▸ (hR d hd).2) (by rw [hxr]; simp)
+      · -- AGORA-937 (item 2): a view of a region, which `x` is not, or which
+        -- (item 3) the change through the region ends no view of
+        rcases hxr with hxr | hk
+        · exact absurd (hr ▸ (hR d hd).2) (by rw [hxr]; simp)
+        · rw [(hR d hd).1]; simpa using hk
       have hd' : d ∈ S.sym := by
         split at hd
         · exact hd
@@ -847,11 +850,11 @@ theorem liftE_moved (v : Var) {E : Entry} (hrb : E.mode ≠ .rootb) :
     S.liftE v { E with live := false, dtor := false } = { S.liftE v E with live := false, dtor := false } := by
   unfold liftE; split <;> simp_all
 
-theorem killE_lift (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
-    {e : Eff} {hv : Bool} {x : Var} (ha : Allowed S e hv x) (hxr : S.isReg x = false) :
+theorem killE_lift' (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
+    {e : Eff} {hv : Bool} {x : Var} (ha : Allowed S e hv x) (hxr : S.isReg x = false ∨ e.kills hv .view = false) :
     killE e hv (S.ρ x) (S.liftE v E) = S.liftE v (killE e hv x E) := by
   unfold killE
-  rw [hits_lift h hab hE ha hxr]
+  rw [hits_lift' h hab hE ha hxr]
   split
   · exact (liftE_dead v E).symm
   · rfl
@@ -955,8 +958,8 @@ theorem DtorSafe.canon (h : S.OK) {e : Eff} {hv : Bool} {x : Var}
         · rw [hbx'] at hbx; cases hbx
           rw [hkill d.kind hk] at hkb; cases hkb
 
-theorem canon_kill (h : S.OK) (hab : S.AbsOK Γa) {e : Eff} {hv : Bool} {x : Var}
-    (ha : Allowed S e hv x) (hnp : S.isPi x = false) (hxr : S.isReg x = false) :
+theorem canon_kill' (h : S.OK) (hab : S.AbsOK Γa) {e : Eff} {hv : Bool} {x : Var}
+    (ha : Allowed S e hv x) (hnp : S.isPi x = false) (hxr : S.isReg x = false ∨ e.kills hv .view = false) :
     S.canon (kill e hv x Γa) = kill e hv (S.ρ x) (S.canon Γa) := by
   funext y
   rcases canon_cases_sub h Γa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, hp, hc⟩ | ⟨hy, hc⟩
@@ -965,12 +968,24 @@ theorem canon_kill (h : S.OK) (hab : S.AbsOK Γa) {e : Eff} {hv : Bool} {x : Var
     | none => rfl
     | some E =>
       simp only [Option.map_some, Function.comp]
-      rw [killE_subE h hnp, killE_lift h hab hE ha hxr]
+      rw [killE_subE h hnp, killE_lift' h hab hE ha hxr]
   · rw [A2.kill, hc, canon_ρ_sub h, hp]; rfl
   · rw [canon_frame _ hy, A2.kill, hc]
     cases hE : S.Φ y with
     | none => rfl
     | some E => simp only [Option.map_some]; rw [killE_frame h ha hE]
+
+theorem hits_lift (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
+    {e : Eff} {hv : Bool} {x : Var} (ha : Allowed S e hv x) (hxr : S.isReg x = false) :
+    hits e hv (S.ρ x) (S.liftE v E) = hits e hv x E := hits_lift' h hab hE ha (Or.inl hxr)
+
+theorem killE_lift (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
+    {e : Eff} {hv : Bool} {x : Var} (ha : Allowed S e hv x) (hxr : S.isReg x = false) :
+    killE e hv (S.ρ x) (S.liftE v E) = S.liftE v (killE e hv x E) := killE_lift' h hab hE ha (Or.inl hxr)
+
+theorem canon_kill (h : S.OK) (hab : S.AbsOK Γa) {e : Eff} {hv : Bool} {x : Var}
+    (ha : Allowed S e hv x) (hnp : S.isPi x = false) (hxr : S.isReg x = false) :
+    S.canon (kill e hv x Γa) = kill e hv (S.ρ x) (S.canon Γa) := canon_kill' h hab ha hnp (Or.inl hxr)
 
 /-- AGORA-937: `canon_exitScope` with regions, for a binding at no region's
     index. -/
@@ -7158,7 +7173,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
           · exact Or.inl h1
           · exact Or.inr (Or.inl h1)))) (DtorSafe.canon h hal hdy) hpz hpx
       (fun ha => dtorHead_rename h.inj (hdx ha)) (fun hb => dtorHead_rename h.inj (hdz hb))
-  | @editB _ Γ Γ1 F x op Ex Ex1 t D b hx hmx hl hty hhv _ harg hyx hx1 hl1 hne hthru hdf hbf =>
+  | @editB _ Γ Γ1 F x op Ex Ex1 t D b hx hmx hl hty hhv _ harg hyx hx1 hl1 hthru hdf hbf =>
     intro _ hab _ hn _ hT hvs
     have hab1 : S.AbsOK Γ1 := EditArg.absOK harg hab
     have hm1 : Ex1.mode = .bor := by rw [harg.at_ne hyx hx hx1 hl1, hmx]
@@ -7177,7 +7192,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- an `edit false` by any
     exact editBV_ren h hab (fun hbt => hT (.inl (by simpa [Stmt.hasThru] using hbt))) hP hw hn hx hmx hl hty hhv
       hfn hxF harg hyx hx1 hl1 hne hthru hV hdf hbf hbs (fun v hv => (hab.notPi_of_notReg (hvs v (by simp [Stmt.vars, hv]))))
-  | @takeB _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hxF hie hne hthru hnd hk hpe ih =>
+  | @takeB _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hxF hie hthru hnd hk hpe ih =>
     -- AGORA-889: `editB`'s truncation where the call places it
     -- (`editB_ren_facts`), then `y` bound to the element, as `letv` binds
     intro _ hab hw hn hfo hT hvs
