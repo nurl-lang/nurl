@@ -213,10 +213,11 @@ def storeP : Stmt :=
   .letv 3 (.new vsl) (.letv 4 (.new sl) (.seq (.push 3 4)
     (.letv 5 (.at 3 (.lit 0)) (.letv 6 (.fst 0) (.edit false 5 (.push 6))))))
 
-/-- The destructor's parameter: a borrowed struct that holds a view. -/
-def Ed : Entry := ⟨DTV, .rootb, true, [], [], false, false, false, false⟩
+/-- The destructor's parameter: a borrowed struct that holds a view, so
+    (AGORA-937, item 2) it holds its region's view, `π 0 = nvars = 7`. -/
+def Ed : Entry := ⟨DTV, .rootb, true, [], [⟨7, .view⟩], false, false, false, false⟩
 /-- `. d s`, a view the caller lent: neither fresh nor held-fresh. -/
-def Ef : Entry := ⟨sl, .bor, true, [⟨0, .view⟩], [], false, false, false, false⟩
+def Ef : Entry := ⟨sl, .bor, true, [⟨0, .view⟩, ⟨7, .view⟩], [⟨7, .view⟩], false, false, false, false⟩
 
 /-- `( vec_push [[i] e . d s )` through the fresh element borrow `e`, which is
     not held-fresh: an `edit false`, storing a view of the parameter. -/
@@ -285,7 +286,7 @@ theorem storeP_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ)
   -- `. d s`: a field read of the borrowed parameter, lent: it views what the caller lent
   have hfst : RhsT G6 [] (.fst 0) Ef G6 := by
     have := RhsT.fst (Γ := G6) (F := []) (E := Ed) (a := sl) (b := .int) hG60 rfl rfl
-    simpa [projE, projDeps, Ed, Ef, sl, Mode.ownSlot] using this
+    simpa [projE, projDeps, projHeld_bor, Ed, Ef, sl, Mode.ownSlot] using this
   let G7 := A2.setE G6 6 Ef
   have hG7 : Calm G7 := hG6.setE (by simp [Ef])
   have hG73 : G7 3 = some Eloc := by simp [G7, G6, A2.setE, upd, hG53]
@@ -369,7 +370,7 @@ theorem dtor_body : ∃ Δ, StmtT P .none (sigCtx dtor) [] dtor.body Δ ∧
   apply body_typed
   exact storeP_typed (Q := P) calm_dtor (by simp [sigCtx, isRegionIdx, dtor]) (by simp [sigCtx, isRegionIdx, dtor])
     (by simp [sigCtx, isRegionIdx, dtor]) (by simp [sigCtx, isRegionIdx, dtor])
-    (by simp [sigCtx, isRegionIdx, dtor, paramE, Ed, DTV, TV, Ty.hasFn]) (by simp [sigCtx, isRegionIdx, dtor, R0, resMode])
+    (by simp [sigCtx, isRegionIdx, dtor, paramE, Ed, DTV, TV, Ty.hasFn, regionP, regioned, Ty.holdsView]) (by simp [sigCtx, isRegionIdx, dtor, R0, resMode])
 
 theorem dtor_fnok : FnOK P dtor := by
   obtain ⟨Δ, hb, hfl, hr⟩ := dtor_body
