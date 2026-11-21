@@ -25,7 +25,7 @@ theorem CtxRel.domTy {Γ Γ' : Ctx} (h : CtxRel Γ Γ') : DomTy Γ Γ' := ⟨h.d
     keeps the borrowed parameters. -/
 theorem CtxRel.exitScope_fresh {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {E : Entry}
     (hx : Γ x = none) (hxF : x ∉ F) (h1 : CtxRel Γ Γ1) (h2 : CtxRel (A2.setE Γ1 x E) Δ)
-    (hanch : RootbAnch Δ F) (hpin : NoPin Δ x) (hxr : RegionSpared Δ .replace false x) :
+    (hanch : RootbAnchR Δ F) (hpin : NoPin Δ x) (hxr : RegionSpared Δ .replace false x) :
     CtxRel Γ (A2.exitScope x Δ) := by
   refine CtxRel.ofDomTy (DomTy.exitScope_fresh hx h1.domTy h2.domTy) (fun p Ep hp hrb => ?_)
     (DKeep.bind h1.dkeep h2.dkeep)
@@ -33,22 +33,22 @@ theorem CtxRel.exitScope_fresh {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {E : E
   have h1p := h1.rootb p Ep hp hrb
   have h2p := h2.rootb p Ep (by simp [A2.setE, upd_ne _ _ hpx, h1p]) hrb
   simp only [A2.exitScope, upd_ne _ _ hpx, A2.kill, h2p, Option.map_some]
-  rw [killE_rootb hanch hxF .replace false (hpin.kills .replace false) hxr h2p hrb]
+  rw [killE_rootbR hanch hxF .replace false (hpin.kills .replace false) hxr h2p hrb]
 
 theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
-    (hr : RhsT Γ F r E Γ1) (hanch : RootbAnch Γ F) : CtxRel Γ Γ1 := by
+    (hr : RhsT Γ F r E Γ1) (hanch : RootbAnchR Γ F) : CtxRel Γ Γ1 := by
   cases hr with
-  | moveOwn hy _ hm hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
-  | moveUp hy _ hm hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
-  | pop _ _ _ _ hyF => exact CtxRel.kill hanch hyF .drop _ (hmn_of_ne_replace _ (by simp) _)
-  | remove _ _ _ _ hyF => exact CtxRel.kill hanch hyF .drop _ (hmn_of_ne_replace _ (by simp) _)
+  | moveOwn hy _ hm hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin (by rw [hm]; simp)
+  | moveUp hy _ hm hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin (by rw [hm]; simp)
+  | pop hy _ _ hcan hyF => exact CtxRel.kill hanch hyF .drop _ (hmn_of_ne_replace _ (by simp) _) (RegionSpared.of_ne hy (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) _ _)
+  | remove hy _ _ hcan hyF => exact CtxRel.kill hanch hyF .drop _ (hmn_of_ne_replace _ (by simp) _) (RegionSpared.of_ne hy (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) _ _)
   | pair hy _ hp1 hz _ hp2 _ =>
     have h1 := hp1.ctxRel hy hanch
-    exact h1.trans (hp2.ctxRel hz (h1.anch hanch))
+    exact h1.trans (hp2.ctxRel hz (h1.anchR hanch))
   | inl hy _ hp _ => exact hp.ctxRel hy hanch
   | inr hy _ hp _ => exact hp.ctxRel hy hanch
-  | takel hy _ hm _ hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
-  | taker hy _ hm _ hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
+  | takel hy _ hm _ hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin (by rw [hm]; simp)
+  | taker hy _ hm _ hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin (by rw [hm]; simp)
   | pack hy _ _ hp _ => exact hp.ctxRel hy hanch
   | arcNew hy _ _ _ _ _ _ hp => exact hp.ctxRel hy hanch
   | lockNew hy _ _ _ _ _ hp => exact hp.ctxRel hy hanch
@@ -57,7 +57,7 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
   | lockRestore _ _ _ hy _ _ hp => exact hp.ctxRel hy hanch
   | @take y Ey _ hy _ _ _ hcan _ hyF hpin =>
     have hrb : Ey.mode ≠ .rootb := fun e => by have := hcan.ownSlot; rw [e] at this; cases this
-    exact (CtxRel.kill hanch hyF .replace false (hpin.kills .replace false)).trans
+    exact (CtxRel.kill hanch hyF .replace false (hpin.kills .replace false) (RegionSpared.of_ne hy (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) _ _)).trans
       (CtxRel.setE (Ex := killE .replace false y Ey) (by simp [A2.kill, hy]) (by simp [killE_mode])
         (by simp [killE_ty]) (by simp [killE_mode, hrb]) (fun h => by cases h))
   | lockTake _ _ _ => exact CtxRel.refl _
@@ -86,13 +86,13 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
 
 /-- A call's typing gives what `CallH` needs of the arguments. -/
 theorem CallT.toA {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
-    {Γ' : Ctx} (hc : CallT P Γ F f args E Γ') (hn : NameWF Γ) (hanch : RootbAnch Γ F) :
+    {Γ' : Ctx} (hc : CallT P Γ F f args E Γ') (hn : NameWF Γ) (hanch : RootbAnchR Γ F) :
     ∃ fn, P[f]? = some fn ∧ CallA Γ F fn args ∧ E = callRes Γ fn args ∧ Γ' = callPost Γ fn args := by
   obtain ⟨fn, hf, hlen, harg, hnf, _, hE, hΓ, _⟩ := hc
   exact ⟨fn, hf, ⟨hlen, harg, hnf, hn, hanch⟩, hE, hΓ⟩
 
 theorem CallT.ctxRel {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
-    {Γ' : Ctx} (hc : CallT P Γ F f args E Γ') (hn : NameWF Γ) (hanch : RootbAnch Γ F) :
+    {Γ' : Ctx} (hc : CallT P Γ F f args E Γ') (hn : NameWF Γ) (hanch : RootbAnchR Γ F) :
     CtxRel Γ Γ' := by
   have hdt := CallT.domTy hc
   have hdk := hc.dkeep
@@ -110,21 +110,65 @@ theorem CtxRel.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') : CtxRel Γ Γ' := by
 
 /-- A binding with an entry other than a borrowed parameter's keeps every
     borrowed parameter anchored. -/
-theorem RootbAnch.setE {Γ : Ctx} {F : List Var} (h : RootbAnch Γ F) {x : Var} {E : Entry}
-    (hE : E.mode ≠ .rootb) : RootbAnch (A2.setE Γ x E) F := fun p Ep hp hm => by
+theorem RootbAnchR.setE {Γ : Ctx} {F : List Var} (h : RootbAnchR Γ F) {x : Var} {E : Entry}
+    (hE : E.mode ≠ .rootb) (hEr : E.mode ≠ .region) (hx : ∀ Ex, Γ x = some Ex → Ex.mode ≠ .region) :
+    RootbAnchR (A2.setE Γ x E) F := fun p Ep hp hm => by
   by_cases hpx : p = x
   · subst hpx; simp only [A2.setE, upd_same, Option.some.injEq] at hp; subst hp; exact absurd hm hE
-  · simp only [A2.setE, upd_ne _ _ hpx] at hp; exact h p Ep hp hm
+  · simp only [A2.setE, upd_ne _ _ hpx] at hp
+    refine (h p Ep hp hm).of_regions fun v Er hEr hr => ?_
+    have hvx : v ≠ x := fun e => by subst e; exact hx Er hEr hr
+    exact ⟨Er, by simp only [A2.setE, upd_ne _ _ hvx]; exact hEr, hr⟩
+
+theorem RootbAnchR.kill {Γ : Ctx} {F : List Var} (h : RootbAnchR Γ F) (e : Eff) (hv : Bool) (x : Var) :
+    RootbAnchR (A2.kill e hv x Γ) F := fun p E hp hm => by
+  simp only [A2.kill] at hp
+  obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hp
+  rw [killE_mode] at hm
+  intro d hd hb
+  rw [killE_vdeps] at hd
+  exact (h p E0 h0 hm d hd hb).imp id fun ⟨hk, Er, hEr, hr⟩ =>
+    ⟨hk, killE e hv x Er, by simp [A2.kill, hEr], by rw [killE_mode]; exact hr⟩
+
+/-- AGORA-937: what is no region in `Γ` is none after a step that keeps
+    every binding's mode. -/
+theorem RegionSpared.of_rel {Γ Γ' : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : CtxRel Γ Γ')
+    (hs : RegionSpared Γ e hv x) : RegionSpared Γ' e hv x := fun ⟨Ex, hx, hr⟩ => by
+  obtain ⟨E0, h0, hm, _⟩ := h.mode x Ex hx
+  exact hs ⟨E0, h0, hm ▸ hr⟩
+
+theorem RegionSpared.of_setE {Γ : Ctx} {e : Eff} {hv : Bool} {x y : Var} {E : Entry}
+    (hs : RegionSpared Γ e hv x) (hE : E.mode ≠ .region) : RegionSpared (A2.setE Γ y E) e hv x :=
+  fun ⟨Ex, hx, hr⟩ => by
+    by_cases hxy : x = y
+    · subst hxy; simp only [A2.setE, upd_same, Option.some.injEq] at hx; subst hx; exact absurd hr hE
+    · simp only [A2.setE, upd_ne _ _ hxy] at hx; exact hs ⟨Ex, hx, hr⟩
+
+/-- A call's typing, without the anchoring `CallA` asks: its callee, result
+    and post-context. -/
+theorem CallT.toRes {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
+    {Γ' : Ctx} (hc : CallT P Γ F f args E Γ') :
+    ∃ fn, P[f]? = some fn ∧ E = callRes Γ fn args ∧ Γ' = callPost Γ fn args := by
+  obtain ⟨fn, hf, _, _, _, _, hE, hΓ, _⟩ := hc
+  exact ⟨fn, hf, hE, hΓ⟩
 
 /-- A binding the statement opens, around a body that keeps the borrowed
     parameters. -/
 theorem CtxRel.bind {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {E : Entry}
-    (hanch : RootbAnch Γ F) (hx : Γ x = none) (hxF : x ∉ F) (h1 : CtxRel Γ Γ1)
-    (hE : E.mode ≠ .rootb) (hk : RootbAnch (A2.setE Γ1 x E) F → CtxRel (A2.setE Γ1 x E) Δ)
+    (hanch : RootbAnchR Γ F) (hx : Γ x = none) (hxF : x ∉ F) (h1 : CtxRel Γ Γ1)
+    (hE : E.mode ≠ .rootb) (hEr : E.mode ≠ .region)
+    (hk : RootbAnchR (A2.setE Γ1 x E) F → CtxRel (A2.setE Γ1 x E) Δ)
     (hpin : NoPin Δ x) : CtxRel Γ (A2.exitScope x Δ) := by
-  have hanch1 : RootbAnch (A2.setE Γ1 x E) F := (h1.anch hanch).setE hE
+  have hx1 : ∀ Ex, Γ1 x = some Ex → Ex.mode ≠ .region := fun Ex h => by
+    have := h1.dom x; rw [hx, h] at this; cases this
+  have hanch1 : RootbAnchR (A2.setE Γ1 x E) F := (h1.anchR hanch).setE hE hEr hx1
   have h2 := hk hanch1
-  exact CtxRel.exitScope_fresh hx hxF h1 h2 (h2.anch hanch1) hpin
+  -- AGORA-937: the binding the statement opens is no region, before and after its body
+  have hxr : RegionSpared Δ .replace false x := fun ⟨Ex, hEx, hr⟩ => by
+    obtain ⟨E0, h0, hm0, _⟩ := h2.mode x Ex hEx
+    simp only [A2.setE, upd_same, Option.some.injEq] at h0; subst h0
+    exact absurd (hm0.symm.trans hr) hEr
+  exact CtxRel.exitScope_fresh hx hxF h1 h2 (h2.anchR hanch1) hpin hxr
 
 /-- An `inout` argument of a call is not lent out. -/
 theorem CallT.inout0_notF {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {sig : Fn} {c : Var} {E : Entry}
@@ -157,14 +201,14 @@ theorem CallT.sink0_notF' {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {σ : Nat} {s
     its mode and type, nothing new is bound, and a borrowed parameter whose
     sources are lent out keeps its entry. -/
 theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
-    (ht : StmtT P ξ Γ F s Δ) : s.src = true → RootbAnch Γ F → NameWF Γ → CtxRel Γ Δ := by
+    (ht : StmtT P ξ Γ F s Δ) : s.src = true → RootbAnchR Γ F → NameWF Γ → CtxRel Γ Δ := by
   induction ht with
   | skip => exact fun _ _ _ => CtxRel.refl _
   | seq _ ha _ iha ihb =>
     intro hs hanch hn
     simp only [Stmt.src, Bool.and_eq_true] at hs
     have h1 := iha hs.1 hanch hn
-    exact h1.trans (ihb hs.2 (h1.anch hanch) (StmtT.names hP ha hs.1 hn))
+    exact h1.trans (ihb hs.2 (h1.anchR hanch) (StmtT.names hP ha hs.1 hn))
   | @letv _ Γ Γ1 Δ F x r k E hks hx hxF hr _ hpin _ ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hr.names hn
@@ -173,12 +217,15 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) hE
     have hnrb : E.mode ≠ .rootb := by rcases (RhsT.out hr).1 with h | h <;> rw [h] <;> simp
-    exact CtxRel.bind hanch hx hxF (hr.ctxRel hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
-  | @callcE _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig b hks hx hxF _ _ _ _ _ hσ hsp _ _ _ hny _ hcT _ hpin _ _ ih =>
+    exact CtxRel.bind hanch hx hxF (hr.ctxRel hanch) hnrb (by rcases (RhsT.out hr).1 with h | h <;> rw [h] <;> simp) (fun ha => ih hks ha hnx) hpin.1
+  | @callcE _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig b hks hx hxF hc4 _ hc6 _ _ hσ hsp _ _ _ hny _ hcT _ hpin _ _ ih =>
     intro _ hanch hn
     have hcF : c ∉ F := hsp.elim (fun ⟨_, h, _⟩ => hcT.inout0_notF hσ h) (fun h => hcT.sink0_notF' hσ h.1)
-    have hk0 := CtxRel.kill hanch hcF .replace false (hny.kills .replace false)
-    have hanchk : RootbAnch (A2.kill .replace false c Γ) F := hanch.kill _ _ _
+    -- AGORA-937: the receiver may be replaced, so owns its slot: no region
+    have hcr : RegionSpared Γ .replace false c :=
+      RegionSpared.of_ne hc4 (fun h => by have := hc6.ownSlot; rw [h] at this; cases this) _ _
+    have hk0 := CtxRel.kill hanch hcF .replace false (hny.kills .replace false) hcr
+    have hanchk : RootbAnchR (A2.kill .replace false c Γ) F := RootbAnchR.kill hanch _ _ _
     obtain ⟨hn1, hE, _⟩ := hcT.names hP (hn.kill .replace false c)
     have hx1 : Γ1 x = none := by
       have := (hcT.domMode).1 x; simp only [A2.kill, hx, Option.map_none, Option.isSome_none] at this
@@ -186,9 +233,11 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) hE
     have hnrb : E.mode ≠ .rootb := by
-      obtain ⟨fn', _, _, hE', _⟩ := hcT.toA (hn.kill .replace false c) hanchk; rw [hE']; exact resMode_ne' fn'
+      obtain ⟨fn', _, hE', _⟩ := hcT.toRes; rw [hE']; exact resMode_ne' fn'
     have h1 : CtxRel Γ Γ1 := hk0.trans (hcT.ctxRel (hn.kill .replace false c) hanchk)
-    refine CtxRel.bind hanch hx hxF h1 hnrb (fun ha => ?_) hpin.1
+    refine CtxRel.bind hanch hx hxF h1 hnrb (by
+      obtain ⟨fn', _, hE', _⟩ := hcT.toRes; rw [hE']; exact resMode_region fn')
+      (fun ha => ?_) hpin.1
     -- no borrowed parameter changes the package by name: they are the store's
     have hny1 : NoPin (A2.setE Γ1 x E) c := by
       intro p Ep hp hm d hd hb
@@ -199,13 +248,16 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       have := h1.rootb p E0 h0 (hm0 ▸ hm)
       rw [hp] at this; cases this
       exact hny p Ep h0 hm d hd hb
-    have h2 := CtxRel.kill ha hcF .replace false (hny1.kills .replace false)
-    exact h2.trans (ih hks (ha.kill _ _ _) (hnx.kill _ _ _))
-  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF _ _ _ hpy _ hr hk _ hpin _ _ ihs ihp =>
+    have hcr1 : RegionSpared (A2.setE Γ1 x E) .replace false c :=
+      (hcr.of_rel h1).of_setE (by obtain ⟨fn', _, hE', _⟩ := hcT.toRes; rw [hE']; exact resMode_region fn')
+    have h2 := CtxRel.kill ha hcF .replace false (hny1.kills .replace false) hcr1
+    exact h2.trans (ih hks (RootbAnchR.kill ha _ _ _) (hnx.kill _ _ _))
+  | @withElem _ Γ Γ1 Δ1 Δ F y x i k Ey E hks hx hxF hyv hym _ hpy _ hr hk _ hpin _ _ ihs ihp =>
     intro _ hanch hn
     have hyF : y ∉ F := by cases hr; assumption
     have hk0 := CtxRel.kill hanch hyF .replace false (hpy.kills .replace false)
-    have hanchk : RootbAnch (A2.kill .replace false y Γ) F := hanch.kill _ _ _
+      (RegionSpared.of_ne hyv (by rw [hym]; simp) _ _)
+    have hanchk : RootbAnchR (A2.kill .replace false y Γ) F := RootbAnchR.kill hanch _ _ _
     obtain ⟨hn1, hE, _⟩ := hr.names (hn.kill .replace false y)
     have hx1 : Γ1 x = none := by
       have := (hr.domMode).1 x; simp only [A2.kill, hx, Option.map_none] at this
@@ -213,15 +265,15 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) hE
     have hnrb : E.mode ≠ .rootb := by rcases (RhsT.out hr).1 with h | h <;> rw [h] <;> simp
-    exact CtxRel.bind hanch hx hxF (hk0.trans (hr.ctxRel hanchk)) hnrb (fun ha => by
+    exact CtxRel.bind hanch hx hxF (hk0.trans (hr.ctxRel hanchk)) hnrb (by rcases (RhsT.out hr).1 with h | h <;> rw [h] <;> simp) (fun ha => by
       have h2 := ihs hks ha hnx
-      exact h2.trans (ihp rfl (h2.anch ha) (StmtT.names hP hk hks hnx))) hpin.1
+      exact h2.trans (ihp rfl (h2.anchR ha) (StmtT.names hP hk hks hnx))) hpin.1
   | @withLock _ Γ Δ F a x k Ea t hks hx hxF _ _ _ _ hpin _ _ _ _ ih =>
     intro _ hanch hn
     have hnx := NameWF.setE hn (E := lockE t) (fun Ex h => by rw [hx] at h; cases h)
       (fun Ex h => by rw [hx] at h; cases h) (fun _ _ => by unfold NameOK; rw [lockE_vdeps]; exact DepsNamed.nil _)
     have hnrb : (lockE t).mode ≠ .rootb := by unfold lockE; split <;> simp [intE]
-    exact CtxRel.bind hanch hx hxF (CtxRel.refl _) hnrb (fun ha => ih hks ha hnx) hpin.1
+    exact CtxRel.bind hanch hx hxF (CtxRel.refl _) hnrb (by unfold lockE; split <;> simp [intE]) (fun ha => ih hks ha hnx) hpin.1
   | @letd _ Γ Γ1 Δ F x f r k E t H τ hks hx hxF hr hmo hty hstr _ _ hH _ hpin _ ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hr.names hn
@@ -232,7 +284,7 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) (fun hl _ => (hE hl (Or.inl hne)).widen hmo hH)
     exact CtxRel.bind (E := Entry.arm { E with ty := τ, held := H }) hanch hx hxF (hr.ctxRel hanch)
-      (show E.mode ≠ .rootb by rw [hmo]; simp) (fun ha => ih hks ha hnx) hpin.1
+      (show E.mode ≠ .rootb by rw [hmo]; simp) (show E.mode ≠ .region by rw [hmo]; simp) (fun ha => ih hks ha hnx) hpin.1
   | @letcall _ Γ Γ1 Δ F x f args k E hks hx hxF hc _ hpin _ ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hc.names hP hn
@@ -241,8 +293,9 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) hE
     have hnrb : E.mode ≠ .rootb := by
-      obtain ⟨fn, _, _, hE', _⟩ := hc.toA hn hanch; rw [hE']; exact resMode_ne' fn
-    exact CtxRel.bind hanch hx hxF (hc.ctxRel hn hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
+      obtain ⟨fn, _, hE', _⟩ := hc.toRes; rw [hE']; exact resMode_ne' fn
+    exact CtxRel.bind hanch hx hxF (hc.ctxRel hn hanch) hnrb (by
+      obtain ⟨fn', _, hE', _⟩ := hc.toRes; rw [hE']; exact resMode_region fn') (fun ha => ih hks ha hnx) hpin.1
   | @letrec _ Γ Γ1 Δ F x f k E fn hks hx hxF _ _ _ _ hc _ hpin ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hc.names hP hn
@@ -251,8 +304,9 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnx := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h)
       (fun Ex h => by rw [hx1] at h; cases h) hE
     have hnrb : E.mode ≠ .rootb := by
-      obtain ⟨fn', _, _, hE', _⟩ := hc.toA hn hanch; rw [hE']; exact resMode_ne' fn'
-    exact CtxRel.bind hanch hx hxF (hc.ctxRel hn hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
+      obtain ⟨fn', _, hE', _⟩ := hc.toRes; rw [hE']; exact resMode_ne' fn'
+    exact CtxRel.bind hanch hx hxF (hc.ctxRel hn hanch) hnrb (by
+      obtain ⟨fn', _, hE', _⟩ := hc.toRes; rw [hE']; exact resMode_region fn') (fun ha => ih hks ha hnx) hpin.1
   | @callc _ Γ Γ1 Δ F x c j zs k Ec E ms q σ sig hks hx hxF _ _ _ _ _ _ hcT _ _ hpin _ ih =>
     intro _ hanch hn
     obtain ⟨hn1, hE, _⟩ := hcT.names hP hn
@@ -261,14 +315,16 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnx : NameWF (A2.setE Γ1 x (recvRes c Ec E)) := NameWF.setE hn1
       (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) (recvRes_named hE)
     have hnrb : (recvRes c Ec E).mode ≠ .rootb := by
-      obtain ⟨fn, _, _, hE', _⟩ := hcT.toA hn hanch
+      obtain ⟨fn, _, hE', _⟩ := hcT.toRes
       show E.mode ≠ .rootb; rw [hE']; exact resMode_ne' fn
-    exact CtxRel.bind hanch hx hxF (hcT.ctxRel hn hanch) hnrb (fun ha => ih hks ha hnx) hpin.1
+    exact CtxRel.bind hanch hx hxF (hcT.ctxRel hn hanch) hnrb (by
+      obtain ⟨fn', _, hE', _⟩ := hcT.toRes; show E.mode ≠ .region; rw [hE']; exact resMode_region fn')
+      (fun ha => ih hks ha hnx) hpin.1
   | @unpair _ Γ Δ F y x z k E a b hks hy hl hcan hty hyF hx hz hxz hxF hzF _ hpy _ hpz hpx _ _ ih =>
     intro _ hanch hn
     have hnrbE : E.mode ≠ .rootb := by rcases hcan with h | ⟨b, h, _⟩ <;> rw [h] <;> simp
     have h0 : CtxRel Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) :=
-      CtxRel.moved hanch hy hnrbE hyF hpy
+      CtxRel.moved hanch hy hnrbE hyF hpy (by rcases hcan with h | ⟨b, h, _⟩ <;> rw [h] <;> simp)
     have hxy : x ≠ y := fun e => by rw [e, hy] at hx; cases hx
     have hzy : z ≠ y := fun e => by rw [e, hy] at hz; cases hz
     have hx0 : (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x = none := by
@@ -276,9 +332,9 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hz1 : (A2.setE (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) x (compE E a)) z = none := by
       simp [A2.setE, upd_ne _ _ (Ne.symm hxz), upd_ne _ _ hzy, A2.kill, hz]
     have hn2 := hn.unpair (a := a) (b := b) hy hl (unpair_ne_int hty) hx hz hxz
-    exact h0.trans (CtxRel.bind (h0.anch hanch) hx0 hxF (CtxRel.refl _) (compE_mode_ne E a)
-      (fun ha1 => CtxRel.bind ha1 hz1 hzF (CtxRel.refl _) (compE_mode_ne E b)
-        (fun ha2 => ih hks ha2 hn2) hpz.1) hpx.1)
+    exact h0.trans (CtxRel.bind (h0.anchR hanch) hx0 hxF (CtxRel.refl _) (compE_mode_ne E a)
+      (compE_mode_ne_region E a) (fun ha1 => CtxRel.bind ha1 hz1 hzF (CtxRel.refl _) (compE_mode_ne E b)
+        (compE_mode_ne_region E b) (fun ha2 => ih hks ha2 hn2) hpz.1) hpx.1)
   | @assign _ Γ Γ1 F x r Ex E hx hxF hmodes hr hty _ hx1s hpin _ =>
     intro _ hanch _
     have h1 := hr.ctxRel hanch
@@ -288,7 +344,8 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnrbx : Ex.mode ≠ .rootb := by
       rcases hmodes with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> rw [h] <;> simp
     have hpin1 : NoPin Γ1 x := fun p Ep hp hm => hpin p Ep (h1.rootb_back hp hm) hm
-    refine h1.trans ((CtxRel.kill (h1.anch hanch) hxF .replace false (hpin1.kills .replace false)).trans
+    refine h1.trans ((CtxRel.kill (h1.anchR hanch) hxF .replace false (hpin1.kills .replace false)
+      (RegionSpared.of_ne hEx1 (by rw [hm0]; rcases hmodes with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩ <;> rw [h] <;> simp) _ _)).trans
       (CtxRel.setE (Ex := killE .replace false x Ex1) (by simp [A2.kill, hEx1]) ?_ ?_ ?_
         fun hd => absurd hd (by simp [hr.dtor_false.2])))
     · simp [killE_mode, hm0]
@@ -305,7 +362,8 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
       rw [hm0]; rcases hcan with h | ⟨b, h, _⟩ <;> rw [h] <;> simp
     -- what a `letd` binding gains it views already (Agora #782)
     have hos1 : Ex1.mode.ownSlot = true := by rw [hm0]; exact hcan.ownSlot
-    exact h1.trans ((CtxRel.kill (h1.anch hanch) hxF .realloc _ (hmn_of_ne_replace _ (by simp) _)).trans
+    exact h1.trans ((CtxRel.kill (h1.anchR hanch) hxF .realloc _ (hmn_of_ne_replace _ (by simp) _)
+      (RegionSpared.of_ne hx1 (by rw [hm0]; rcases hcan with h | ⟨b, h, _⟩ <;> rw [h] <;> simp) _ _)).trans
       (CtxRel.setE (Ex := killE .realloc t.holdsView x Ex1) (by simp [A2.kill, hx1]) (by simp [killE_mode]) (by simp [killE_ty])
         (by simp [killE_mode, hnrb])
         fun hd => ⟨by rw [killE_dbind]; exact hd, fun d hdd _ => by
@@ -323,19 +381,19 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
     have hnrb : (compE Ex t).mode ≠ .rootb := by cases t <;> simp [compE, intE]
     exact CtxRel.bind hanch hy hyF
       (CtxRel.editB hanch hx hmx (EditArg.trunc (t := t) hie) (fun _ h => by cases h) hx hl hthru)
-      hnrb (fun ha => ih hks ha (takeB_nameWF hn hy hx hmx hl hty)) hend.1
+      hnrb (compE_mode_ne_region Ex t) (fun ha => ih hks ha (takeB_nameWF hn hy hx hmx hl hty)) hend.1
   | @takeBV _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty _ _ hie _ hthru hV _ _ hend ih =>
     intro _ hanch hn
     have hnrb : (compE Ex t).mode ≠ .rootb := by cases t <;> simp [compE, intE]
     exact CtxRel.bind hanch hy hyF (CtxRel.editBV_trunc (t := t) hanch hx hmx hl hie hthru hV)
-      hnrb (fun ha => ih hks ha (takeBV_nameWF hn hy hx hmx hl hty)) hend.1
+      hnrb (compE_mode_ne_region Ex t) (fun ha => ih hks ha (takeBV_nameWF hn hy hx hmx hl hty)) hend.1
   | @free _ Γ F x E t hx _ hmo _ hxF hpin =>
-    exact fun _ hanch _ => CtxRel.moved hanch hx (by rw [hmo]; simp) hxF hpin.1
+    exact fun _ hanch _ => CtxRel.moved hanch hx (by rw [hmo]; simp) hxF hpin.1 (by rw [hmo]; simp)
   | insert _ _ _ ih => exact fun _ hanch hn => ih rfl hanch hn
   | sub hw _ ho ih =>
     intro hs hanch _
     have h0 := CtxRel.weaker hw
-    have h1 := ih hs (h0.anch hanch) hw.2.2
+    have h1 := ih hs (h0.anchR hanch) hw.2.2
     rcases ho with rfl | hwo
     · exact h0.trans h1
     · exact (h0.trans h1).trans (CtxRel.weaker hwo)

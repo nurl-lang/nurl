@@ -413,7 +413,8 @@ structure CallA (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) : Prop whe
               (fn.params[i].1 = .sink ∨ fn.params[i].1 = .inout .replace → NoPin Γ (args.getD i 0))
   nfree   : NamesFree Γ F fn.params args
   names   : NameWF Γ
-  anch    : RootbAnch Γ F
+  /-- AGORA-937: regions allowed, as in a callee's body (`RootbAnchR`). -/
+  anch    : RootbAnchR Γ F
 
 /-- What a well-typed call, in a well-formed configuration, gives. -/
 structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args : List Var) (base : Nat) :
@@ -1309,7 +1310,19 @@ theorem _root_.A2.CallA.post_rootb (h : CallA Γ F fn args) {p : Var} {Ep : Entr
         rcases hcan with hm' | ⟨b', hm', _⟩ <;> rw [hrb] at hm' <;> cases hm'
     refine ⟨hne, fun d hd hr => ?_⟩
     by_cases hb : d.kind.bound = .none
-    · exact absurd (hr ▸ hanch d hd hb) haF
+    · rcases hanch d hd hb with h' | ⟨_, Er, hEr, hreg⟩
+      · exact absurd (hr ▸ h') haF
+      · -- AGORA-937: what the call moves or changes owns its slot, so is no region
+        exfalso
+        rw [hr, hEa] at hEr; cases hEr
+        generalize fn.params[k] = q at hok hm
+        obtain ⟨pm, t⟩ := q
+        cases pm with
+        | inp => cases hm
+        | sink => obtain ⟨_, hm', _⟩ := hok; rw [hreg] at hm'; cases hm'
+        | inout b =>
+          obtain ⟨_, hcan, _⟩ := hok
+          rcases hcan with hm' | ⟨b', hm', _⟩ <;> rw [hreg] at hm' <;> cases hm'
     · refine ⟨bound_isName hb, ?_⟩
       generalize fn.params[k] = q at hm hpin
       obtain ⟨pm, t⟩ := q
@@ -1328,12 +1341,18 @@ theorem _root_.A2.CallA.post_rootb (h : CallA Γ F fn args) {p : Var} {Ep : Entr
   intro hany
   obtain ⟨d, hdm, hh⟩ := List.any_eq_true.mp hany
   obtain ⟨hdn, hb⟩ := List.mem_filter.mp hdm
-  obtain ⟨_, _, hF, _, _⟩ := h.nfree d hdm
+  obtain ⟨hcanN, _, hF, _, _⟩ := h.nfree d hdm
   have hb' : d.kind.bound ≠ .none := by simpa using hb
   have hbr := h.argNames_bound hdn hb'
   have hno : hits d.kind.bound false d.root Ep = false := RSetup.hits_false_of (fun d' hd' hr => by
     by_cases hb0 : d'.kind.bound = .none
-    · exact absurd (hr ▸ hanch d' hd' hb0) hF
+    · rcases hanch d' hd' hb0 with h' | ⟨_, Er, hEr, hreg⟩
+      · exact absurd (hr ▸ h') hF
+      · -- AGORA-937: a root a call changes by name owns its slot, so is no region
+        exfalso
+        rw [hr] at hEr
+        have hae : argE Γ d.root = Er := by unfold argE; rw [hEr]; rfl
+        have := hcanN.ownSlot; rw [hae, hreg] at this; cases this
     · exact RSetup.kills_isName hbr _ (bound_isName hb0))
   rw [hno] at hh; cases hh
 
@@ -4152,7 +4171,7 @@ theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
     obtain ⟨E0, h0, hd0, _⟩ := DKeep.of_src hsrc (StmtT.dkeep hbody) v E hv hd hos hn (by simp)
     rw [(sigCtx_flags h0).2] at hd0; cases hd0
   -- what the body keeps of the bindings outside it (for the result's frame)
-  have hrel := hsr hbody hsrc (sigCtx_anch fn) (sigCtx_names fn)
+  have hrel := hsr hbody hsrc (sigCtx_anch fn).toR (sigCtx_names fn)
   have hko : KeepOut ((callS Γ F fn args base x).canon (sigCtx fn)) ((callS Γ F fn args base x).canon Δa) [] := by
     refine ⟨fun v E hv _ => ?_, fun v E' hv => ⟨by simp, ?_⟩⟩
     · rcases RSetup.canon_cases_sub h.sOK (sigCtx fn) v with ⟨w, rfl, hp, hc⟩ | ⟨w, rfl, _, hc⟩ |

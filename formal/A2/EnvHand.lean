@@ -1305,7 +1305,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
   have hrootb_c : ∀ v E0, Γ v = some E0 → E0.fixed → ∀ e hb, killE e hb c E0 = E0 := by
     intro v E0 hv hf e hb
     rcases hf with hm | ⟨b', hm, _⟩
-    · exact killE_rootb hanch hcF e hb (hny.kills e hb) (RegionSpared.of_noRegion hi.noRegion _ _ _) hv hm
+    · exact killE_rootb hanch hcF e hb (hny.kills e hb) hv hm
     · exact absurd hm (hi.noInout v E0 b' hv)
   -- the environment's binding
   let Γh := handCtx Γ c x Ec te m.nv (callX fn)
@@ -1606,7 +1606,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
     intro k hk hm b' hb' hb v E0 hv hf
     obtain ⟨hzF, hpin, _⟩ := hzmv k hk hm
     rcases hf with hrb | ⟨b'', hm', _⟩
-    · refine killE_rootb hanch hzF b' hb (fun p Ep hp hpm d hd hbn hk' => ?_) (RegionSpared.of_noRegion hi.noRegion _ _ _) hv hrb
+    · refine killE_rootb hanch hzF b' hb (fun p Ep hp hpm d hd hbn hk' => ?_) hv hrb
       by_cases hbr : b' = .replace
       · have hor : ps[k].1 = .sink ∨ ps[k].1 = .inout .replace := by
           rcases hb' with ⟨hs, _⟩ | hio
@@ -2076,7 +2076,7 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
   have hrootb_c : ∀ v E0, Γ v = some E0 → E0.fixed → ∀ e hb, killE e hb c E0 = E0 := by
     intro v E0 hv hf e hb
     rcases hf with hm | ⟨b', hm, _⟩
-    · exact killE_rootb hanch hcF e hb (hny.kills e hb) (RegionSpared.of_noRegion hi.noRegion _ _ _) hv hm
+    · exact killE_rootb hanch hcF e hb (hny.kills e hb) hv hm
     · exact absurd hm (hi.noInout v E0 b' hv)
   -- the environment's binding
   let Γh := handCtx Γ c x Ec te m.nv (callX fn)
@@ -2481,7 +2481,7 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
     exact Or.inr (Or.inr (Or.inr ⟨hvx, hvy, hvc, E1, h1, rfl⟩))
   have hEyE : compE Ec te0 = ⟨te0, .own, true, [], ownHeld true te0 Ec.held, false, false, false, false⟩ := compE_owning Ec hto
   have hkrb : ∀ v E1, Γ v = some E1 → E1.mode = .rootb → killE .replace false c E1 = E1 :=
-    fun v E1 hv hm => killE_rootb hanch hcF .replace false (hny.kills .replace false) (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hv hm
+    fun v E1 hv hm => killE_rootb hanch hcF .replace false (hny.kills .replace false) hv hm
   -- its borrowed parameters and `letd` bindings are the store's
   have hrbΓ : ∀ p E', handCtx Γ c x Ec te0 m.nv (callX fn0) p = some E' → E'.mode = .rootb → Γ p = some E' := by
     intro p E' hp hm
@@ -2691,7 +2691,7 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
       exact Or.inr (Or.inr (Or.inr ⟨hvx, hvy, hvc, E1, h1, rfl⟩))
     have hEyE : compE Ec te0 = ⟨te0, .own, true, [], ownHeld true te0 Ec.held, false, false, false, false⟩ := compE_owning Ec hto
     have hkrb : ∀ v E1, Γ v = some E1 → E1.mode = .rootb → killE .replace false c E1 = E1 :=
-      fun v E1 hv hm => killE_rootb hanch hcF .replace false (hny.kills .replace false) (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hv hm
+      fun v E1 hv hm => killE_rootb hanch hcF .replace false (hny.kills .replace false) hv hm
     -- its borrowed parameters and `letd` bindings are the store's
     have hrbΓ : ∀ p E', handCtx Γ c x Ec te0 m.nv (callX fn0) p = some E' → E'.mode = .rootb → Γ p = some E' := by
       intro p E' hp hm

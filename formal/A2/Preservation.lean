@@ -37,13 +37,13 @@ theorem CtxRel.trans {Γ1 Γ2 Γ3 : Ctx} (h1 : CtxRel Γ1 Γ2) (h2 : CtxRel Γ2 
   dkeep := h1.dkeep.trans h2.dkeep (fun _ h => h)
 
 theorem CtxRel.kill {Γ : Ctx} {F : List Var}
-    (hanch : RootbAnch Γ F)
+    (hanch : RootbAnchR Γ F)
     {x : Var} (hxF : x ∉ F) (e : Eff) (hv : Bool)
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
       e.kills hv d.kind = true → d.root ≠ x) (hxr : RegionSpared Γ e hv x) : CtxRel Γ (kill e hv x Γ) where
   dom x := kill_dom ..
   mode _ _ h := kill_cmode h
-  rootb p E h hm := by simp only [A2.kill, h, Option.map_some]; rw [killE_rootb hanch hxF e hv hmn hxr h hm]
+  rootb p E h hm := by simp only [A2.kill, h, Option.map_some]; rw [killE_rootbR hanch hxF e hv hmn hxr h hm]
   dkeep := (DKeep.refl Γ []).kill e hv x
 
 theorem CtxRel.setE {Γ : Ctx} {x : Var} {Ex E : Entry} (hx : Γ x = some Ex) (hm : E.mode = Ex.mode)
@@ -81,28 +81,45 @@ theorem CtxRel.keep {Γ Γ' : Ctx} (h : CtxRel Γ Γ') {s s' : Stmt} (hs : s.spi
 
 theorem CtxRel.anch {Γ Γ' : Ctx} (h : CtxRel Γ Γ') {F : List Var}
     (hanch : RootbAnch Γ F) : RootbAnch Γ' F :=
-  hanch_of hanch h.mode h.rootb h.dom
+  hanch_of hanch h.mode h.rootb
+
+theorem CtxRel.anchR {Γ Γ' : Ctx} (h : CtxRel Γ Γ') {F : List Var}
+    (hanch : RootbAnchR Γ F) : RootbAnchR Γ' F := by
+  intro p E hp hm
+  obtain ⟨E0, h0, hm0, _⟩ := h.mode p E hp
+  have h1 := h.rootb p E0 h0 (hm0 ▸ hm)
+  rw [hp] at h1
+  cases h1
+  refine (hanch p _ h0 hm).of_regions fun v Er hEr hr => ?_
+  -- AGORA-937: a region stays a region
+  have hs := h.dom v
+  rw [hEr] at hs
+  obtain ⟨E1, h1⟩ := Option.isSome_iff_exists.mp hs
+  obtain ⟨E0', h0', hm1, _⟩ := h.mode v E1 h1
+  rw [hEr] at h0'; cases h0'
+  exact ⟨E1, h1, hm1.trans hr⟩
 
 /-- A binding moved out: `A2.kill` ends what borrows it, and it is dead. -/
-theorem CtxRel.moved {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {y : Var} {E : Entry}
-    (hy : Γ y = some E) (hm : E.mode ≠ .rootb) (hyF : y ∉ F) (hpin : NoPin Γ y) :
+theorem CtxRel.moved {Γ : Ctx} {F : List Var} (hanch : RootbAnchR Γ F) {y : Var} {E : Entry}
+    (hy : Γ y = some E) (hm : E.mode ≠ .rootb) (hyF : y ∉ F) (hpin : NoPin Γ y)
+    (hr : E.mode ≠ .region) :
     CtxRel Γ (A2.setE (A2.kill .replace false y Γ) y { E with live := false, dtor := false }) :=
-  (CtxRel.kill hanch hyF .replace false (hpin.kills .replace false)).trans
+  (CtxRel.kill hanch hyF .replace false (hpin.kills .replace false) (RegionSpared.of_ne hy hr _ _)).trans
     (CtxRel.setE (Ex := killE .replace false y E) (by simp [A2.kill, hy]) (by simp [killE_mode])
       (by simp [killE_ty]) (by simp [killE_mode, hm])
       fun hd => ⟨by rw [killE_dbind]; exact hd, fun d hdd _ => by rw [killE_vdeps]; exact hdd⟩)
 
 theorem PushArg.ctxRel {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : Ty} {D : List Dep}
-    (h : PushArg Γ F y Ey t D Γ1) (hy : Γ y = some Ey) (hanch : RootbAnch Γ F) : CtxRel Γ Γ1 := by
+    (h : PushArg Γ F y Ey t D Γ1) (hy : Γ y = some Ey) (hanch : RootbAnchR Γ F) : CtxRel Γ Γ1 := by
   cases h with
-  | move _ hm hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin
+  | move _ hm hyF hpin => exact CtxRel.moved hanch hy (by rw [hm]; simp) hyF hpin (by rw [hm]; simp)
   | int => exact CtxRel.refl _
   | slice _ => exact CtxRel.refl _
 
 /-! ### Agora #295: what a change through a borrow does to its context -/
 
 theorem EditArg.ctxRel {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : List Dep}
-    (h : EditArg Γ F op t D Γ1) (hanch : RootbAnch Γ F) : CtxRel Γ Γ1 := by
+    (h : EditArg Γ F op t D Γ1) (hanch : RootbAnchR Γ F) : CtxRel Γ Γ1 := by
   cases h with
   | push hy _ _ hpa => exact hpa.ctxRel hy hanch
   | trunc _ => exact CtxRel.refl _
@@ -110,17 +127,19 @@ theorem EditArg.ctxRel {Γ Γ1 : Ctx} {F : List Var} {op : Edit} {t : Ty} {D : L
 
 /-- Effects below `replace` on roots that are not lent out keep every borrowed
     parameter's entry. -/
-theorem CtxRel.killNames {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) :
-    ∀ ds : List Dep, (∀ d ∈ ds, d.root ∉ F ∧ d.kind.bound ≠ .replace) → CtxRel Γ (A2.killNames ds Γ)
-  | [], _ => CtxRel.refl _
-  | d :: ds, h => by
+theorem CtxRel.killNames {Γ : Ctx} {F : List Var} (hanch : RootbAnchR Γ F) :
+    ∀ ds : List Dep, (∀ d ∈ ds, d.root ∉ F ∧ d.kind.bound ≠ .replace) →
+      (∀ d ∈ ds, RegionSpared Γ d.kind.bound false d.root) → CtxRel Γ (A2.killNames ds Γ)
+  | [], _, _ => CtxRel.refl _
+  | d :: ds, h, hr => by
     have h1 := CtxRel.killNames hanch ds (fun d' hd' => h d' (List.mem_cons_of_mem _ hd'))
-    exact h1.trans (CtxRel.kill (h1.anch hanch) (h d (by simp)).1 _ _
-      (hmn_of_ne_replace _ (h d (by simp)).2 _))
+      (fun d' hd' => hr d' (List.mem_cons_of_mem _ hd'))
+    exact h1.trans (CtxRel.kill (h1.anchR hanch) (h d (by simp)).1 _ _
+      (hmn_of_ne_replace _ (h d (by simp)).2 _) ((hr d (by simp)).of_killNames ds))
 
 /-- `StmtT.editB`'s context: every binding keeps its mode and type, and every
     borrowed parameter its entry. -/
-theorem CtxRel.editB {Γ Γ1 : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : Var} {op : Edit}
+theorem CtxRel.editB {Γ Γ1 : Ctx} {F : List Var} (hanch : RootbAnchR Γ F) {x : Var} {op : Edit}
     {Ex Ex1 : Entry} {t : Ty} {D : List Dep} (hx : Γ x = some Ex) (hmx : Ex.mode = .bor)
     (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γ1 x = some Ex1)
     (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) :
@@ -129,9 +148,13 @@ theorem CtxRel.editB {Γ Γ1 : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x :
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   rw [hE1] at hx1 hthru ⊢
   have h2 : CtxRel Γ1 (killThru op Ex.ty Ex.path Γ1) := by
-    refine CtxRel.killNames (h1.anch hanch) _ fun d hd => ⟨?_, (thruDeps_bound hd).1⟩
-    obtain ⟨d0, hd0, rfl⟩ := mem_thruDeps.mp hd
-    exact (hthru d0 hd0).1
+    refine CtxRel.killNames (h1.anchR hanch) _ (fun d hd => ⟨?_, (thruDeps_bound hd).1⟩) fun d hd => ?_
+    · obtain ⟨d0, hd0, rfl⟩ := mem_thruDeps.mp hd
+      exact (hthru d0 hd0).1
+    · -- AGORA-937: a memory root a change goes through owns its slot, so is no region
+      obtain ⟨d0, hd0, rfl⟩ := mem_thruDeps.mp hd
+      obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
+      exact RegionSpared.of_ne hEr (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) _ _
   obtain ⟨E', hE', hE'c⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex.path) hx1
   have hm' : E'.mode = Ex.mode := by rcases hE'c with rfl | rfl <;> rfl
   have ht' : E'.ty = Ex.ty := by rcases hE'c with rfl | rfl <;> rfl
@@ -165,7 +188,7 @@ theorem takeB_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch :
   obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
   subst t'
   have hoF := (hthru dep hdm).1
-  have hrel := CtxRel.editB hanch hx hmx (EditArg.trunc (t := t) hie) (fun y h => by cases h) hx hl hthru
+  have hrel := CtxRel.editB hanch.toR hx hmx (EditArg.trunc (t := t) hie) (fun y h => by cases h) hx hl hthru
   have hinv := MInv.editB_take hi hanch hx hmx hl hty hhv hthru hn hno hr
   have hst : ∀ w, w ≠ dep.root → (m.set dep.root ⟨true, some T'⟩).st w = m.st w :=
     fun w hw => by simp [upd_ne _ _ hw]
@@ -227,13 +250,21 @@ theorem CtxRel.setE_bor {Γ : Ctx} {x : Var} {Ex E : Entry} (hx : Γ x = some Ex
 
 /-- Effects below `replace`, with views or not, on roots not lent out keep
     every borrowed parameter's entry. -/
-theorem CtxRel.killHv {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) :
-    ∀ ks : List (Eff × Bool × Var), (∀ k ∈ ks, k.2.2 ∉ F ∧ k.1 ≠ .replace) → CtxRel Γ (A2.killHv ks Γ)
-  | [], _ => CtxRel.refl _
-  | (e, b, r) :: ks, h => by
+theorem RegionSpared.of_killHv {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : RegionSpared Γ e hv x) :
+    ∀ ks, RegionSpared (A2.killHv ks Γ) e hv x
+  | [] => h
+  | (_, _, _) :: ks => show RegionSpared (A2.kill _ _ _ (A2.killHv ks Γ)) e hv x from
+      (RegionSpared.of_killHv h ks).of_kill _ _ _
+
+theorem CtxRel.killHv {Γ : Ctx} {F : List Var} (hanch : RootbAnchR Γ F) :
+    ∀ ks : List (Eff × Bool × Var), (∀ k ∈ ks, k.2.2 ∉ F ∧ k.1 ≠ .replace) →
+      (∀ k ∈ ks, RegionSpared Γ k.1 k.2.1 k.2.2) → CtxRel Γ (A2.killHv ks Γ)
+  | [], _, _ => CtxRel.refl _
+  | (e, b, r) :: ks, h, hr => by
     have h1 := CtxRel.killHv hanch ks (fun k hk => h k (List.mem_cons_of_mem _ hk))
-    exact h1.trans (CtxRel.kill (h1.anch hanch) (h _ List.mem_cons_self).1 _ _
-      (hmn_of_ne_replace _ (h _ List.mem_cons_self).2 _))
+      (fun k hk => hr k (List.mem_cons_of_mem _ hk))
+    exact h1.trans (CtxRel.kill (h1.anchR hanch) (h _ List.mem_cons_self).1 _ _
+      (hmn_of_ne_replace _ (h _ List.mem_cons_self).2 _) ((hr _ List.mem_cons_self).of_killHv ks))
 
 /-- Holding more, at bindings that are no borrowed parameter and were not
     made by `letd`. -/
@@ -251,7 +282,7 @@ theorem CtxRel.holdOn {Γ : Ctx} {rs : List Var} {D : List Dep}
 
 /-- `StmtT.editBV`'s context: every binding keeps its mode and type, and
     every borrowed parameter its entry. -/
-theorem CtxRel.editBV {Γ Γ1 : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : Var} {op : Edit}
+theorem CtxRel.editBV {Γ Γ1 : Ctx} {F : List Var} (hanch : RootbAnchR Γ F) {x : Var} {op : Edit}
     {Ex Ex1 : Entry} {t : Ty} {D : List Dep} (hx : Γ x = some Ex) (hmx : Ex.mode = .bor)
     (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γ1 x = some Ex1)
     (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path)
@@ -262,7 +293,11 @@ theorem CtxRel.editBV {Γ Γ1 : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x 
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   rw [hE1] at hx1 hthru hV ⊢
   have h2 : CtxRel Γ1 (killThruV op Ex.ty Ex.path Γ1) :=
-    CtxRel.killHv (h1.anch hanch) _ (thruKills_ok hthru)
+    CtxRel.killHv (h1.anchR hanch) _ (thruKills_ok hthru) fun k hk => by
+      -- AGORA-937: a memory root a change goes through owns its slot, so is no region
+      obtain ⟨d0, hd0, rfl⟩ := mem_thruKills.mp hk
+      obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
+      exact RegionSpared.of_ne hEr (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) _ _
   have h3 : CtxRel (killThruV op Ex.ty Ex.path Γ1)
       (holdThru (memDeps D) Ex.path (killThruV op Ex.ty Ex.path Γ1)) :=
     CtxRel.holdOn fun v hv E hE => by
@@ -282,7 +317,7 @@ theorem CtxRel.editBV {Γ Γ1 : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x 
 
 /-- `editBV`'s truncation, which stores nothing, leaves the context
     `CtxRel.editBV` does with nothing held more (AGORA-897, `takeBV`). -/
-theorem CtxRel.editBV_trunc {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : Var} {i : Expr}
+theorem CtxRel.editBV_trunc {Γ : Ctx} {F : List Var} (hanch : RootbAnchR Γ F) {x : Var} {i : Expr}
     {Ex : Entry} {t : Ty} (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
     (hie : ExprT Γ i) (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path)
     (hV : ThruV Γ (.trunc i) Ex.ty Ex.path []) :
@@ -319,7 +354,7 @@ theorem takeBV_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch 
   obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
   subst t'
   have hoF := (hthru dep hdm).1
-  have hrel := CtxRel.editBV_trunc (t := t) hanch hx hmx hl hie hthru hV
+  have hrel := CtxRel.editBV_trunc (t := t) hanch.toR hx hmx hl hie hthru hV
   have hinv := MInv.editBV_take hi hanch hx hmx hl hty hhv hthru hV hn hno hr
   have hst : ∀ w, w ≠ dep.root → (m.set dep.root ⟨true, some T'⟩).st w = m.st w :=
     fun w hw => by simp [upd_ne _ _ hw]
@@ -605,7 +640,7 @@ def HandCase (P : Prog) : Prop :=
     as a hypothesis of the call's typing, which is stated before it. -/
 def SrcRel (P : Prog) : Prop :=
   ∀ {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}, StmtT P ξ Γ F s Δ → s.src = true →
-    RootbAnch Γ F → NameWF Γ → CtxRel Γ Δ
+    RootbAnchR Γ F → NameWF Γ → CtxRel Γ Δ
 
 /-- What a destructor's frame needs of its body's typing, proven separately
     (`SrcKeep.lean`): source typing keeps every binding with its mode and
@@ -613,7 +648,7 @@ def SrcRel (P : Prog) : Prop :=
     and keeps the context well-formed and what it holds by name valid. -/
 def SrcCase (P : Prog) : Prop :=
   ∀ {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}, StmtT P ξ Γ F s Δ → s.src = true →
-    RootbAnch Γ F → CtxWF Γ → NameWF Γ → FreshOK Γ → KeepOut Γ Δ [] ∧ CtxWF Δ ∧ NameWF Δ ∧ FreshOK Δ
+    RootbAnchR Γ F → CtxWF Γ → NameWF Γ → FreshOK Γ → KeepOut Γ Δ [] ∧ CtxWF Δ ∧ NameWF Δ ∧ FreshOK Δ
 
 /-- A borrowed parameter outside the step's scopes was there before,
     unchanged: it keeps its anchors. -/
@@ -764,6 +799,9 @@ theorem RhsOut.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {E2 : Entry} {w : Val} 
   · exact (hout.valBor hm).keep (fun dep _ => hk dep) (fun dep _ => hk dep)
 
 theorem compE_mode_ne (E : Entry) (t : Ty) : (compE E t).mode ≠ .rootb := by
+  cases t <;> simp [compE, intE]
+
+theorem compE_mode_ne_region (E : Entry) (t : Ty) : (compE E t).mode ≠ .region := by
   cases t <;> simp [compE, intE]
 
 /-- Binding a fresh variable and ending its scope at once leaves a context
@@ -2484,7 +2522,7 @@ theorem exit_post {k e0 : Stmt} {n : Nat} (hs : ExitAt k n e0) {Γ Γp : Ctx} {F
     (hanchk : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → Anchored E F) :
     CtxWF (exitScope x Γp) ∧ NameWF (exitScope x Γp) ∧ KeepOut Γ (exitScope x Γp) (x :: e0.spine) := by
   have hwk := (Weaker.refl h3 h4).exitScope x hend.2.2
-  have hanchP : ∀ p E, Γp p = some E → E.mode = .rootb → Anchored E F := fun p E hp hm => by
+  have hanchP : RootbAnch Γp F := fun p E hp hm => by
     obtain ⟨hps, E0, h0⟩ := h5.2 p E hp
     obtain ⟨E', h', hm', _, hrb⟩ := h5.1 p E0 h0 hps
     rw [hp] at h'; cases h'
@@ -2498,7 +2536,7 @@ theorem exit_post {k e0 : Stmt} {n : Nat} (hs : ExitAt k n e0) {Γ Γp : Ctx} {F
     refine ⟨killE .replace false x E', by simp [exitScope, upd_ne _ _ hvx, A2.kill, h'],
       by rw [killE_mode, hm], by rw [killE_ty, ht], fun hr => ?_⟩
     have hr' : E'.mode = .rootb := by rw [hm]; exact hr
-    rw [killE_rootb' hanchP hxF _ _ (hend.1.kills _ _) h' hr']
+    rw [killE_rootb hanchP hxF _ _ (hend.1.kills _ _) h' hr']
     exact hrb hr
   · have hvx : v ≠ x := fun h => by subst h; simp [exitScope] at hv
     simp only [exitScope, upd_ne _ _ hvx, A2.kill] at hv
@@ -2700,7 +2738,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         · subst hpx; simp only [setE, upd_same, Option.some.injEq] at hp; subst hp
           exact absurd hmp hnrb
         · simp only [setE, upd_ne _ _ hpx] at hp; exact hanch1 p Ep hp hmp
-      obtain ⟨hKOd, hWd, hNd, hFd⟩ := hsk hs hsrc hanchx hm.wf hm.names hm.fresh
+      obtain ⟨hKOd, hWd, hNd, hFd⟩ := hsk hs hsrc hanchx.toR hm.wf hm.names hm.fresh
       refine ⟨setE Γ x (lockE t), StmtT.scopeL ⟨lockE t, by simp [setE], hnrb, lockE_ty t, hdl⟩ hxF hs hpx
         (by rw [hsp]; exact hKOd) hWd hNd hFd, ?_,
         by simp, ?_,
@@ -2781,7 +2819,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         · subst hpx; simp only [setE, upd_same, Option.some.injEq] at hp; subst hp
           exact absurd hmp hnrb
         · simp only [setE, upd_ne _ _ hpx] at hp; exact hanch1 p Ep hp hmp
-      obtain ⟨hKOd, hWd, hNd, hFd⟩ := hsk hs hsrc hanchx hm.wf hm.names hm.fresh
+      obtain ⟨hKOd, hWd, hNd, hFd⟩ := hsk hs hsrc hanchx.toR hm.wf hm.names hm.fresh
       have hsp : k.spine = [] := src_spine hsrc
       -- ... and stays `letd`'s through the body's typing
       have hΔd : ∀ E', Δ x = some E' → E'.ty.holdsView = true → E'.dbind = true := by
@@ -2909,8 +2947,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       obtain ⟨E0, h0, hm0, ht0⟩ := post.rel.mode x Ex1 hx1
       rw [hx] at h0; cases h0
       have hrel : CtxRel Γ (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) :=
-        post.rel.trans ((CtxRel.kill hanch1 hxF .realloc t.holdsView
-          (hmn_of_ne_replace _ (by decide) x)).trans
+        post.rel.trans ((CtxRel.kill hanch1.toR hxF .realloc t.holdsView
+          (hmn_of_ne_replace _ (by decide) x)
+          (RegionSpared.of_ne hx1 (by rw [hm0]; rcases hcan with h | ⟨b, h, _⟩ <;> rw [h] <;> simp) _ _)).trans
           (CtxRel.setE (x := x) (Ex := killE .realloc t.holdsView x Ex1) (by simp [A2.kill, hx1])
             (by rw [killE_mode]) (by rw [killE_ty]) (by
               rw [killE_mode, hm0]; rcases hcan with h | ⟨b, h, _⟩ <;> rw [h] <;> simp)
@@ -2954,7 +2993,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
   | @editB ξ Γ Γ1 F x op Ex Ex1 t D _ hx hmx hl hty hhv hxF harg hyx hx1 hl1 _ hthru =>
     intro m m' s' hcd hi hst
     have hanch := hi.leafAnch rfl
-    have hrel := CtxRel.editB hanch hx hmx harg hyx hx1 hl1 hthru
+    have hrel := CtxRel.editB hanch.toR hx hmx harg hyx hx1 hl1 hthru
     have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
     rw [hE1] at hx1 hl1 hthru hrel ht0 ⊢
     -- the roots own their slots, so the change lands in one of their trees
@@ -3023,7 +3062,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
   | @editBV ξ Γ Γ1 F x op Ex Ex1 t D bb hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 _ hthru hV =>
     intro m m' s' hcd hi hst
     have hanch := hi.leafAnch rfl
-    have hrel := CtxRel.editBV hanch hx hmx harg hyx hx1 hl1 hthru hV
+    have hrel := CtxRel.editBV hanch.toR hx hmx harg hyx hx1 hl1 hthru hV
     have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
     rw [hE1] at hx1 hl1 hthru hV hrel ht0 hfn ⊢
     -- AGORA-901: what the stored value captures by name, `x` and its owners hold
@@ -3345,8 +3384,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hanch := hi.leafAnch rfl
       have hinv := step_free hi.toMInv hanch hx hm hxF ht hf hpin
       have hrel : CtxRel Γ (setE (kill .replace false x Γ) x { E with live := false, dtor := false }) :=
-        (CtxRel.kill hanch hxF .replace false
-          (hpin.1.kills _ _)).trans
+        (CtxRel.kill hanch.toR hxF .replace false
+          (hpin.1.kills _ _) (RegionSpared.of_ne hx (by rw [hm]; simp) _ _)).trans
         (CtxRel.setE (x := x) (Ex := killE .replace false x E) (by simp [A2.kill, hx])
           (by rw [killE_mode]) (by rw [killE_ty]) (by rw [killE_mode, hm]; simp)
           (fun hdb => ⟨by rw [killE_dbind]; exact hdb, fun d hdd _ => by rw [killE_vdeps]; exact hdd⟩))
@@ -3389,13 +3428,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · intro p E' hp hm
         obtain ⟨hpx, E, hE, rfl⟩ := hrel p E' hp
         rw [killE_mode] at hm
-        rw [killE_rootb hanch hxF _ _ hmn (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hE hm]
+        rw [killE_rootb hanch hxF _ _ hmn hE hm]
         exact hanch p E hE hm
       · intro v E hv hvs
         have hvx : v ≠ x := fun e => hvs (by simp [Stmt.spine, e])
         refine ⟨by simp [Stmt.spine], killE .replace false x E, ?_, killE_mode .., killE_ty .., fun hrb => ?_⟩
         · simp [exitScope, upd_ne _ _ hvx, A2.kill, hv]
-        · exact killE_rootb hanch hxF _ _ hmn (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hv hrb
+        · exact killE_rootb hanch hxF _ _ hmn hv hrb
       · intro v E' hv _
         obtain ⟨hvx, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvx], E, hE⟩
@@ -3478,13 +3517,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · intro p E' hp hm
         obtain ⟨hpx, E, hE, rfl⟩ := hrel p E' hp
         rw [killE_mode] at hm
-        rw [killE_rootb hanch hxF _ _ hmn (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hE hm]
+        rw [killE_rootb hanch hxF _ _ hmn hE hm]
         exact hanch p E hE hm
       · intro v E hv hvs
         have hvx : v ≠ x := fun e => hvs (by simp [Stmt.spine, e])
         refine ⟨by simp [Stmt.spine], killE .replace false x E, ?_, killE_mode .., killE_ty .., fun hrb => ?_⟩
         · simp [exitScope, upd_ne _ _ hvx, A2.kill, hv]
-        · exact killE_rootb hanch hxF _ _ hmn (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hv hrb
+        · exact killE_rootb hanch hxF _ _ hmn hv hrb
       · intro v E' hv _
         obtain ⟨hvx, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvx], E, hE⟩
@@ -3669,13 +3708,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · intro p E' hp hm
         obtain ⟨hpx, E, hE, rfl⟩ := hrel p E' hp
         rw [killE_mode] at hm
-        rw [killE_rootb hanch hxF _ _ hmn (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hE hm]
+        rw [killE_rootb hanch hxF _ _ hmn hE hm]
         exact hanch p E hE hm
       · intro v E hv hvs
         have hvx : v ≠ x := fun e => hvs (by simp [Stmt.spine, e])
         refine ⟨by simp [Stmt.spine], killE .replace false x E, ?_, killE_mode .., killE_ty .., fun hrb => ?_⟩
         · simp [exitScope, upd_ne _ _ hvx, A2.kill, hv]
-        · exact killE_rootb hanch hxF _ _ hmn (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hv hrb
+        · exact killE_rootb hanch hxF _ _ hmn hv hrb
       · intro v E' hv _
         obtain ⟨hvx, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvx], E, hE⟩
@@ -3984,7 +4023,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           have hvx : v ≠ x := fun h => by
             subst h; simp [setE] at hv; subst hv; simp [Entry.reviveD, Entry.revive, hmo] at hrb
           simp only [setE, upd_ne _ _ hvx] at hv
-          exact killE_rootb hanch hxF _ _ (hNoPinΓ.1.kills _ _) (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hv hrb
+          exact killE_rootb hanch hxF _ _ (hNoPinΓ.1.kills _ _) hv hrb
         · obtain ⟨E, hE, _⟩ := hΓ1get v E' hv
           exact ⟨by simp [Stmt.spine], E, hE⟩
       have hsc := StmtT.scopeD (P := P) (F := F) (x := x) (f := f)
@@ -4129,13 +4168,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · intro q E' hq hmq
         obtain ⟨_, E, hE, rfl⟩ := hrel q E' hq
         have hmq' : E.mode = .rootb := hmq
-        rw [rerootE_rootb hanch hpF _ hE hmq' (hpn q E hE hmq') (fun Ep h => hi.toMInv.noRegion p Ep h)]
+        rw [rerootE_rootb hanch hpF _ hE hmq' (hpn q E hE hmq')]
         exact hanch q E hE hmq'
       · intro v E hv hvs
         have hvp : v ≠ p := fun e => hvs (by simp [Stmt.spine, e])
         refine ⟨by simp [Stmt.spine], rerootE p (Ep.path ++ Ep.held) E, ?_, rfl, rfl, fun hrb => ?_⟩
         · simp [exitRoot, upd_ne _ _ hvp, hv]
-        · exact rerootE_rootb hanch hpF _ hv hrb (hpn v E hv hrb) (fun Ep h => hi.toMInv.noRegion p Ep h)
+        · exact rerootE_rootb hanch hpF _ hv hrb (hpn v E hv hrb)
       · intro v E' hv _
         obtain ⟨hvp, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvp], E, hE⟩

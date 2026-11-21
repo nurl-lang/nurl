@@ -327,6 +327,26 @@ theorem names_nil_of_int {m : Mem} {E : Entry} {sl : Slot} {T : Val} (h : SlotOK
     rw [hT] at hv; cases hv; rfl
   · have := (h.2.1 ho).1; rw [hint] at this; simp [Ty.owning] at this
 
+theorem killE_rootb {Γ : Ctx} {F : List Var}
+    (hanch : RootbAnch Γ F)
+    {x : Var} (hxF : x ∉ F) (e : Eff) (hv : Bool)
+    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      e.kills hv d.kind = true → d.root ≠ x)
+    {v : Var} {E : Entry} (hE : Γ v = some E)
+    (hrb : E.mode = .rootb) : killE e hv x E = E := by
+  unfold killE
+  have : hits e hv x E = false := by
+    unfold hits
+    simp only [Bool.and_eq_false_iff, List.any_eq_false, Bool.and_eq_true,
+      beq_iff_eq, not_and, Bool.not_eq_true]
+    refine Or.inr fun dep hd hr => ?_
+    by_cases hb : dep.kind.bound = .none
+    · exact absurd (hr ▸ hanch v E hE hrb dep hd hb) hxF
+    · cases hk : e.kills hv dep.kind
+      · rfl
+      · exact absurd hr (hmn v E hE hrb dep hd hb hk)
+  rw [this]; rfl
+
 /-- AGORA-937: what a kill of `x` asks to spare a borrowed parameter's
     views of a region: `x` is no region, or the effect ends no view. -/
 def RegionSpared (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) : Prop :=
@@ -336,11 +356,23 @@ theorem RegionSpared.of_ne {Γ : Ctx} {x : Var} {Ex : Entry} (hx : Γ x = some E
     (e : Eff) (hv : Bool) : RegionSpared Γ e hv x := fun ⟨E, h, hr⟩ => by
   rw [hx] at h; cases h; exact absurd hr hm
 
-theorem RegionSpared.of_noRegion {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.mode ≠ .region)
-    (e : Eff) (hv : Bool) (x : Var) : RegionSpared Γ e hv x := fun ⟨_, hx, hr⟩ => absurd hr (h _ _ hx)
+/-- A kill keeps every binding's mode, so what is a region stays one. -/
+theorem RegionSpared.of_kill {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : RegionSpared Γ e hv x)
+    (e' : Eff) (hv' : Bool) (y : Var) : RegionSpared (A2.kill e' hv' y Γ) e hv x := fun ⟨Ex, hx, hr⟩ => by
+  simp only [A2.kill] at hx
+  obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hx
+  exact h ⟨E0, h0, by rwa [killE_mode] at hr⟩
 
-theorem killE_rootb {Γ : Ctx} {F : List Var}
-    (hanch : RootbAnch Γ F)
+theorem RegionSpared.of_killNames {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : RegionSpared Γ e hv x) :
+    ∀ ds, RegionSpared (A2.killNames ds Γ) e hv x
+  | [] => h
+  | _ :: ds => show RegionSpared (A2.kill _ _ _ (A2.killNames ds Γ)) e hv x from
+      (RegionSpared.of_killNames h ds).of_kill _ _ _
+
+/-- `killE_rootb` where a borrowed parameter may view a region
+    (`RootbAnchR`): a kill of a region ends no view (`RegionSpared`). -/
+theorem killE_rootbR {Γ : Ctx} {F : List Var}
+    (hanch : RootbAnchR Γ F)
     {x : Var} (hxF : x ∉ F) (e : Eff) (hv : Bool)
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
       e.kills hv d.kind = true → d.root ≠ x)
@@ -357,28 +389,6 @@ theorem killE_rootb {Γ : Ctx} {F : List Var}
     · rcases hanch v E hE hrb dep hd hb with h | ⟨hk, Er, hEr, hreg⟩
       · exact absurd (hr ▸ h) hxF
       · rw [hk]; exact hxr ⟨Er, hr ▸ hEr, hreg⟩
-    · cases hk : e.kills hv dep.kind
-      · rfl
-      · exact absurd hr (hmn v E hE hrb dep hd hb hk)
-  rw [this]; rfl
-
-/-- `killE_rootb` where every borrowed parameter is anchored in `F` itself
-    (no view of a region). -/
-theorem killE_rootb' {Γ : Ctx} {F : List Var}
-    (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → Anchored E F)
-    {x : Var} (hxF : x ∉ F) (e : Eff) (hv : Bool)
-    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
-      e.kills hv d.kind = true → d.root ≠ x)
-    {v : Var} {E : Entry} (hE : Γ v = some E)
-    (hrb : E.mode = .rootb) : killE e hv x E = E := by
-  unfold killE
-  have : hits e hv x E = false := by
-    unfold hits
-    simp only [Bool.and_eq_false_iff, List.any_eq_false, Bool.and_eq_true,
-      beq_iff_eq, not_and, Bool.not_eq_true]
-    refine Or.inr fun dep hd hr => ?_
-    by_cases hb : dep.kind.bound = .none
-    · exact absurd (hr ▸ hanch v E hE hrb dep hd hb) hxF
     · cases hk : e.kills hv dep.kind
       · rfl
       · exact absurd hr (hmn v E hE hrb dep hd hb hk)
@@ -654,7 +664,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         · refine hslot.keep (fun dep hd => depKeep v E hE (by rw [hEq]; exact hl) hint dep hd) hblk
       · have hdead : (killE e hv x E).live = false := by simpa using hl
         by_cases hrb : E.mode = .rootb
-        · rw [killE_rootb hanch hxF e hv hmn (RegionSpared.of_noRegion hi.noRegion _ _ _) hE hrb] at hdead
+        · rw [killE_rootb hanch hxF e hv hmn hE hrb] at hdead
           rw [hi.rootbLive v E hE hrb] at hdead; cases hdead
         · exact (hslot.weaker' (killE_ty ..) (killE_mode ..) (fun h => by rw [hdead] at h; cases h)).dead hdead
   · exact hheap
@@ -755,7 +765,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
             rw [hrem rfl] at this
             cases hk : dep.kind <;> rw [hk] at this <;> simp [Eff.kills] at this
           · by_cases hb : dep.kind.bound = .none
-            · exact hxF ((hanch v E hE hrb).anchored hi.noRegion dep hd hb)
+            · exact hxF (hanch v E hE hrb dep hd hb)
             · exact hmn v E hE hrb dep hd hb (by rw [hrem rfl]; cases dep.kind <;> rfl) rfl
         | some Ex' =>
           obtain ⟨_, _, _, _, hm, _⟩ := hox
@@ -771,7 +781,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       exact absurd (hm' ▸ hm) hxr
     · obtain ⟨E, hE, rfl⟩ := getE p E' hp' hpx
       rw [killE_mode] at hm
-      rw [killE_rootb hanch hxF e hv hmn (RegionSpared.of_noRegion hi.noRegion _ _ _) hE hm]
+      rw [killE_rootb hanch hxF e hv hmn hE hm]
       exact hi.rootbLive p E hE hm
   · intro p E' hp' hm
     by_cases hpx : p = x
@@ -781,7 +791,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       exact absurd (hm' ▸ hm) hxr
     · obtain ⟨E, hE, rfl⟩ := getE p E' hp' hpx
       rw [killE_mode] at hm
-      rw [killE_rootb hanch hxF e hv hmn (RegionSpared.of_noRegion hi.noRegion _ _ _) hE hm]
+      rw [killE_rootb hanch hxF e hv hmn hE hm]
       exact hi.rootbLt p E hE hm
   · intro v E' hv' hl hn
     by_cases hvx : v = x

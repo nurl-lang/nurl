@@ -2548,7 +2548,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   · intro p Ep hp hpm
     have hpy : p ≠ y := fun h => by subst h; rw [hy] at hp; cases hp; exact hrb hpm
     simp only [setE, upd_ne _ _ hpy, kill, hp, Option.map_some]
-    rw [killE_rootb hanch hyF _ _ (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb) (RegionSpared.of_noRegion hi.noRegion _ _ _) hp hpm]
+    rw [killE_rootb hanch hyF _ _ (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb) hp hpm]
   · intro x
     by_cases hxy : x = y
     · subst hxy; simp [setE, hy]
@@ -3179,7 +3179,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     · rw [hst x hxy]
   · intro p Ep hp hpm
     simp only [kill, hp, Option.map_some]
-    rw [killE_rootb hanch hyF _ _ popMn (RegionSpared.of_noRegion hi.noRegion _ _ _) hp hpm]
+    rw [killE_rootb hanch hyF _ _ popMn hp hpm]
   · have hwe : WFv t' e := hwes e hemem
     have hpf : ∀ E' : Entry, (E'.mode.ownSlot = true ∨ E'.path = E'.held) → E'.held = E.held →
         ∀ i, PkgNames (m.set y ⟨true, some (.node t' c d es)⟩) (kill .drop t'.holdsView y Γ) E' e i →

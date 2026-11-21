@@ -181,10 +181,7 @@ theorem RootbAnch.holdOn {Γ : Ctx} {F : List Var} (h : RootbAnch Γ F) {rs : Li
   obtain ⟨E, hE, rfl⟩ := holdOn_get hp
   by_cases hpr : p ∈ rs
   · rw [ite_eq_left hpr] at hm; exact absurd hm (hrs p hpr E hE)
-  · rw [ite_eq_right hpr] at hm ⊢
-    refine (h p E hE hm).of_regions fun v Er hEr hr => ?_
-    refine ⟨if v ∈ rs then Er.hold D else Er, by simp [A2.holdOn, hEr], ?_⟩
-    split <;> simpa [Entry.hold] using hr
+  · rw [ite_eq_right hpr] at hm ⊢; exact h p E hE hm
 
 /-! ### Holding more keeps a context well-formed -/
 
@@ -769,12 +766,7 @@ theorem MInv.edit_growV {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       by_cases hpo : p = o
       · subst hpo; simp only [A2.setE, upd_same, Option.some.injEq] at hp; subst hp
         rw [hmo] at hm; cases hm
-      · simp only [A2.setE, upd_ne _ _ hpo] at hp
-        refine (hanch.kill _ _ _ p Ep hp hm).of_regions fun v Er hEr hr => ?_
-        have hvo : v ≠ o := fun e => by
-          subst e; simp only [A2.kill, ho, Option.map_some, Option.some.injEq] at hEr
-          rw [← hEr, killE_mode, hmo] at hr; cases hr
-        exact ⟨Er, by simp only [A2.setE, upd_ne _ _ hvo]; exact hEr, hr⟩
+      · simp only [A2.setE, upd_ne _ _ hpo] at hp; exact hanch.kill _ _ _ p Ep hp hm
   have h2 := h.kill_more hanch2 hoF (by decide : Eff.realloc ≠ .replace) true
   have hEv : Eo.ty.holdsView = true := by rw [hty]; exact hhv
   have hhold : ({ Eo with held := Eo.held ++ D } : Entry) = Eo.hold D := by

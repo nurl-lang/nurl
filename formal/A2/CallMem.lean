@@ -503,11 +503,11 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       rw [hs] at hown'; cases hown'
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
       have hr := RhsT.copyRoot (F := F) hEa hl hm
-      obtain ⟨_, hout⟩ := rhs_pres hi h.anch hr (EvalR.copy hv)
+      obtain ⟨_, hout⟩ := rhs_pres hi (h.anch.toAnch hi.noRegion) hr (EvalR.copy hv)
       exact ⟨v, by rw [hv]; rfl, hout.valBor rfl⟩
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
       have hr := RhsT.copyBor (F := F) hEa hl hm
-      obtain ⟨_, hout⟩ := rhs_pres hi h.anch hr (EvalR.copy hv)
+      obtain ⟨_, hout⟩ := rhs_pres hi (h.anch.toAnch hi.noRegion) hr (EvalR.copy hv)
       have hd : derive (args.getD k 0) Ea .self = Ea.path := by
         simp [derive, hm, Mode.isRoot, comp_self_r]
       exact ⟨v, by rw [hv]; rfl, by rw [hd]; exact hout.valBor hm⟩
