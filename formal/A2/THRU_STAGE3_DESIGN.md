@@ -197,6 +197,12 @@ Names never had this problem: a name dependency is lifted as itself
 
      With that, `StmtT.ren` types the body where the call places it, with
      the region a binding of mode `.region` in the caller's context.
+     *Done, structurally:* `RSetup.ghost` exists, and `AbsOK`'s fourth clause
+     reads `E.mode = .region ∧ S.ghost = false ↔ S.isPi v = true`.
+     `AbsOK.ghost_notPi` holds. `StmtT.ren`, `callT_ren`, `liftX_up`,
+     `liftX_blk`, `callR_canon` and `canon_weaker_sub` take `S.ghost = false`
+     for now, and every existing setup meets it (`rfl`). The next step proves
+     their ghost cases and drops that premise.
   2. *The callee's own rule.* `ThruOK` asks each root of a change's path to
      be live and to allow the effect (`canDo`: `own` or `inout`). A region
      (`regionE`: never live) fails it. So AGORA-933's grower `f` is not

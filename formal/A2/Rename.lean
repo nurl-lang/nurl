@@ -55,6 +55,10 @@ structure RSetup where
   sym : List Dep                     -- the callee's symbolic names on its `inout` parameters
   isPi : Var → Bool := fun _ => false   -- AGORA-937: the callee's parameter regions
   σ : Var → List Dep := fun _ => []      -- AGORA-937: what each region stands for, at the caller
+  /-- AGORA-937 stage 3: a region is lifted as a ghost binding, renamed (`ρ`)
+      to a caller binding of mode `.region`, not substituted (`isPi` is
+      then nothing). Every setup made today leaves it `false`. -/
+  ghost : Bool := false
 
 namespace RSetup
 variable (S : RSetup)
@@ -412,8 +416,10 @@ def RSetup.AbsOK (S : RSetup) (Γa : Ctx) : Prop :=
      E.ty.owning = true ∧ S.bnd v = some (b, E.ty.elem.holdsView)) ∧
   (∀ v bh, S.bnd v = some bh → ∃ E, Γa v = some E ∧ E.mode = .inout bh.1 ∧ E.ty = S.pty v ∧
      (E.fixed → E.live = true ∧ E.held = [])) ∧
-  -- AGORA-937: a callee binding is a region exactly at a region's index ...
-  (∀ v E, Γa v = some E → (E.mode = .region ↔ S.isPi v = true)) ∧
+  -- AGORA-937: a callee binding is a region exactly at a region's index,
+  -- unless regions are lifted as ghost bindings (`ghost`: no index is a
+  -- region's to substitute) ...
+  (∀ v E, Γa v = some E → (E.mode = .region ∧ S.ghost = false ↔ S.isPi v = true)) ∧
   -- ... and a region's index is always bound
   (∀ v, S.isPi v = true → ∃ E, Γa v = some E ∧ E.mode = .region)
 
@@ -425,7 +431,7 @@ theorem AbsOK.notPi {Γa : Ctx} (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : 
     (hnr : E.mode ≠ .region) : S.isPi v = false := by
   cases hp : S.isPi v
   · rfl
-  · exact absurd ((hab.2.2.2.1 v E hE).mpr hp) hnr
+  · exact absurd ((hab.2.2.2.1 v E hE).mpr hp).1 hnr
 
 /-- AGORA-937: an unbound callee variable is at no region's index: every
     region's is bound. -/
@@ -435,10 +441,22 @@ theorem AbsOK.notPiFresh {Γa : Ctx} (hab : S.AbsOK Γa) {v : Var} (hv : Γa v =
   · rfl
   · obtain ⟨E, hE, _⟩ := hab.2.2.2.2 v hp; rw [hv] at hE; cases hE
 
-/-- AGORA-937: a callee binding at no region's index is no region. -/
-theorem AbsOK.ne_region {Γa : Ctx} (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γa v = some E)
-    (hnp : S.isPi v = false) : E.mode ≠ .region := fun hr => by
-  have := (hab.2.2.2.1 v E hE).mp hr; rw [hnp] at this; cases this
+/-- AGORA-937 stage 3: where regions are lifted as ghost bindings, no index
+    is a region's to substitute: a region is an ordinary renamed root. -/
+theorem AbsOK.ghost_notPi {Γa : Ctx} (hab : S.AbsOK Γa) (hgh : S.ghost = true) (v : Var) :
+    S.isPi v = false := by
+  cases hv : Γa v with
+  | none => exact hab.notPiFresh hv
+  | some E =>
+    cases hp : S.isPi v
+    · rfl
+    · have := ((hab.2.2.2.1 v E hv).mpr hp).2; rw [hgh] at this; cases this
+
+/-- AGORA-937: a callee binding at no region's index is no region (where
+    regions are substituted, not lifted as ghost bindings). -/
+theorem AbsOK.ne_region {Γa : Ctx} (hab : S.AbsOK Γa) (hg : S.ghost = false) {v : Var} {E : Entry}
+    (hE : Γa v = some E) (hnp : S.isPi v = false) : E.mode ≠ .region := fun hr => by
+  have := (hab.2.2.2.1 v E hE).mp ⟨hr, hg⟩; rw [hnp] at this; cases this
 
 
 theorem inv_ρ (h : S.OK) (v : Var) : S.inv (S.ρ v) = some v := by
@@ -1299,7 +1317,7 @@ theorem canon_names_sub (h : S.OK) (hab : S.AbsOK Γa) (hn : NameWF Γa) : NameW
 /-- AGORA-937: `canon_weaker` with regions: a weakening of the callee context
     is one of the lifted context. A region's index is dropped on both sides,
     and the substitution keeps a weakening (`subE_weaker`). -/
-theorem canon_weaker_sub (h : S.OK) {Γa Γa' : Ctx} (hab' : S.AbsOK Γa') (hw : Weaker Γa Γa') :
+theorem canon_weaker_sub (h : S.OK) (hgh : S.ghost = false) {Γa Γa' : Ctx} (hab' : S.AbsOK Γa') (hw : Weaker Γa Γa') :
     Weaker (S.canon Γa) (S.canon Γa') := by
   refine ⟨fun y => ⟨?_, fun E E' h1 h2 => ?_⟩, canon_wf_sub h hab' hw.wf hw.names,
     canon_names_sub h hab' hw.names⟩
@@ -1322,7 +1340,7 @@ theorem canon_weaker_sub (h : S.OK) {Γa Γa' : Ctx} (hab' : S.AbsOK Γa') (hw :
           subst h1 h2
           have hwe := (hw.1 v).2 E0 E0' hE hE'
           exact S.subE_weaker (liftE_weaker hwe
-            (by rw [← hwe.mode]; exact hab'.ne_region hE' hp))
+            (by rw [← hwe.mode]; exact hab'.ne_region hgh hE' hp))
     · rw [hc] at h1; cases h1
     · rw [hc] at h1; rw [canon_frame _ hy] at h2
       rw [h1] at h2; cases h2; exact EntryWeaker.refl _
@@ -1369,13 +1387,13 @@ theorem AbsOK.setE {Γa : Ctx} (hab : S.AbsOK Γa) {x : Var} {E : Entry} (hrb : 
     (hbx : ∀ bh, S.bnd x = some bh → E.mode = .inout bh.1)
     (hbt : ∀ bh, S.bnd x = some bh → E.ty = S.pty x)
     (hfx : ∀ bh, S.bnd x = some bh → E.fixed → E.live = true ∧ E.held = [])
-    (hnr : E.mode = .region ↔ S.isPi x = true) : S.AbsOK (A2.setE Γa x E) := by
+    (hnr : E.mode = .region ∧ S.ghost = false ↔ S.isPi x = true) : S.AbsOK (A2.setE Γa x E) := by
   refine ⟨fun v E' hv' hm => ?_, fun v E' b hv' hm => ?_, fun v bh hb => ?_, fun v E' hv' => by
     by_cases hvx : v = x
     · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at hv'; subst hv'; exact hnr
     · simp only [A2.setE, upd_ne _ _ hvx] at hv'; exact hab.2.2.2.1 v E' hv', fun v hp => by
     by_cases hvx : v = x
-    · subst hvx; exact ⟨E, by simp [A2.setE], hnr.mpr hp⟩
+    · subst hvx; exact ⟨E, by simp [A2.setE], (hnr.mpr hp).1⟩
     · obtain ⟨E0, h0, hm⟩ := hab.2.2.2.2 v hp
       exact ⟨E0, by simp [A2.setE, upd_ne _ _ hvx, h0], hm⟩⟩
   · by_cases hvx : v = x
@@ -4975,7 +4993,7 @@ theorem mem_subE_held_notPi_of_R (h : S.OK) (hR : S.R = []) {X : Entry} {d : Dep
     stands for what the outer call's arguments held, and that is nothing
     when the outer call passed no views (`S.R = []`): so the lifted call
     passes no views, which is the premise there (`callR_regions_of_nil`). -/
-theorem callR_canon (h : S.OK) (hab : S.AbsOK Γa) {args : List Var} (hR : S.R = [])
+theorem callR_canon (h : S.OK) (hgh : S.ghost = false) (hab : S.AbsOK Γa) {args : List Var} (hR : S.R = [])
     (hc : ∀ r ∈ callR Γa args, ∃ E, Γa r = some E ∧ E.mode = .region)
     (hvs : ∀ a ∈ args, S.isPi a = false) :
     callR (S.canon Γa) (args.map S.ρ) = [] := by
@@ -5017,7 +5035,7 @@ theorem callR_canon (h : S.OK) (hab : S.AbsOK Γa) {args : List Var} (hR : S.R =
         have : d0.root ∈ callR Γa args :=
           mem_callR.mpr ⟨a, ha, by unfold argE; rw [hE]; exact hty, List.mem_map_of_mem hm⟩
         obtain ⟨Er, hEr, hreg⟩ := hc _ this
-        have hpi := (hab.2.2.2.1 _ Er hEr).mp hreg
+        have hpi := (hab.2.2.2.1 _ Er hEr).mp ⟨hreg, hgh⟩
         rw [hdnp d0.root (by simp only [Dep.ren]; exact S.inv_ρ h _)] at hpi
         cases hpi
       · -- what the lift adds: names only
@@ -5027,7 +5045,7 @@ theorem callR_canon (h : S.OK) (hab : S.AbsOK Γa) {args : List Var} (hR : S.R =
         · rw [hA d (S.heldA_sub _ hdo)] at hdn; cases hdn
 
 /-- A call in the callee's body, where the call places it. -/
-theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa : List Var} {f : Nat}
+theorem callT_ren (h : S.OK) (hgh : S.ghost = false) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa : List Var} {f : Nat}
     {args : List Var} {E : Entry} {Γa1 : Ctx} (hc : CallT P Γa Fa f args E Γa1)
     (hR : ThruFn P f → S.R = []) (hvs : ∀ a ∈ args, S.isPi a = false) :
     ∃ E' Γ', CallT P (S.canon Γa) S.Fc f (args.map S.ρ) E' Γ' ∧ PW Γ' (S.canon Γa1) ∧
@@ -5068,7 +5086,7 @@ theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa 
   refine ⟨_, _, ⟨fn, hf, by simp [hlen], fun i hi => ?_, namesFree_lift h hab hexA hvs hnf,
     CallDtorSafe.canon h hab hexA hlen (fun i hi => by
       obtain ⟨Ea, hEa, _, hok, _⟩ := hargs i hi; exact ⟨Ea, hEa, hok⟩) hal hds hvs, rfl, rfl,
-      fun ht => callR_regions_of_nil (callR_canon h hab (hR ht) (hg ht) hvs)⟩, ?_,
+      fun ht => callR_regions_of_nil (callR_canon h hgh hab (hR ht) (hg ht) hvs)⟩, ?_,
     fun x => callRes_lift h hab hlr hex hvs x⟩
   · obtain ⟨Ea, hEa, hl, hok, hmv, _⟩ := hargs i hi
     have hia : i < args.length := hlen ▸ hi
@@ -6220,12 +6238,12 @@ def liftX (ξ : Exits) : Exits := fun n Γc =>
 theorem liftX_none {n : Nat} {Γc : Ctx} (hx : S.liftX .none n Γc) : False := by
   obtain ⟨_, _, _, _, _, h⟩ := hx; exact h
 
-theorem liftX_up (h : S.OK) {ξ : Exits} {n : Nat} {Γa : Ctx} (hab : S.AbsOK Γa) (hw : CtxWF Γa)
+theorem liftX_up (h : S.OK) (hgh : S.ghost = false) {ξ : Exits} {n : Nat} {Γa : Ctx} (hab : S.AbsOK Γa) (hw : CtxWF Γa)
     (hn : NameWF Γa) (hx : ξ.up n Γa) : (S.liftX ξ).up n (S.canon Γa) := by
   rcases hx with hx | ⟨Γ0, hw0, hx⟩
   · exact Or.inl ⟨Γa, rfl, hab, hw, hn, hx⟩
   · have hab0 := hab.weaker hw0
-    exact Or.inr ⟨S.canon Γ0, canon_weaker_sub h hab0 hw0, Γ0, rfl, hab0, hw0.wf, hw0.names, hx⟩
+    exact Or.inr ⟨S.canon Γ0, canon_weaker_sub h hgh hab0 hw0, Γ0, rfl, hab0, hw0.wf, hw0.names, hx⟩
 
 theorem liftX_under (h : S.OK) {ξ : Exits} {x : Var} (hbx : S.bnd x = none)
     (hnp : S.isPi x = false) :
@@ -6252,12 +6270,12 @@ theorem liftX_underD (h : S.OK) {ξ : Exits} {x : Var} {Γ0 : Ctx} (_ : S.AbsOK 
     have hwk := (Weaker.refl hw hn).exitScope x he.2.2
     exact ⟨A2.exitScope x Γa, rfl, hab.exitScope hbx hnp, hwk.2.1, hwk.2.2, hx⟩
 
-theorem liftX_blk (h : S.OK) {ξ : Exits} {Δa : Ctx} (habΔ : S.AbsOK Δa) (hwΔ : CtxWF Δa) :
+theorem liftX_blk (h : S.OK) (hgh : S.ghost = false) {ξ : Exits} {Δa : Ctx} (habΔ : S.AbsOK Δa) (hwΔ : CtxWF Δa) :
     ∀ n Γc, S.liftX (ξ.blk Δa) n Γc → (S.liftX ξ).blk (S.canon Δa) n Γc := by
   rintro (_ | n) _ ⟨Γa, rfl, hab, hw, hn, hx⟩
   · rcases hx with rfl | hx
     · exact Or.inl rfl
-    · exact Or.inr (canon_weaker_sub h habΔ hx)
+    · exact Or.inr (canon_weaker_sub h hgh habΔ hx)
   · exact ⟨Γa, rfl, hab, hw, hn, hx⟩
 
 /-- AGORA-889: what moves out through a borrow, where a call places it: the
@@ -6315,7 +6333,7 @@ theorem compE_liftE_weakerV {x y : Var} {Ex : Entry} {t : Ty} (hmx : Ex.mode = .
     those contexts. A statement that may change elements through a borrow
     is placed by a call that passed no views (`s.Thru P → S.R = []`, from
     `CallT`'s guard, Agora #295). -/
-theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List Var} {s : Stmt}
+theorem StmtT.ren (h : S.OK) (hgh : S.ghost = false) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List Var} {s : Stmt}
     {Δa : Ctx} (hd : StmtT P ξ Γa Fa s Δa) : s.src = true → S.AbsOK Γa → CtxWF Γa → NameWF Γa →
     FreshOK Γa → (s.Thru P → S.R = []) → (∀ v ∈ s.vars, S.isPi v = false) →
     StmtT P (S.liftX ξ) (S.canon Γa) S.Fc (s.rename S.ρ) (S.canon Δa) ∧ S.AbsOK Δa := by
@@ -6532,7 +6550,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- (the interface is a function the statement calls: a call through one
     -- that changes elements through a borrow is a call of such a function,
     -- AGORA-395)
-    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hcT (fun ht => hT (thru_call (by simp [Stmt.calls]) ht))
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hgh hab hP hcT (fun ht => hT (thru_call (by simp [Stmt.calls]) ht))
       (fun v hv => hvs v (by rcases List.mem_cons.mp hv with rfl | hv <;> simp [Stmt.vars, hv]))
     obtain ⟨hn1, hEn, _⟩ := hcT.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hcT hab
@@ -6592,7 +6610,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       · exact Or.inl h0
       · exact Or.inr ⟨b', hb', hbb, fun k' _ => hk' k' (by cases k' <;> rfl)⟩
     have habk : S.AbsOK (A2.kill .replace false c Γ) := hab.kill _ _ _
-    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h habk hP hcT (fun ht => absurd ht hnσ)
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hgh habk hP hcT (fun ht => absurd ht hnσ)
       (fun v hv => hvs v (by rcases List.mem_cons.mp hv with rfl | hv <;> simp [Stmt.vars, hv]))
     obtain ⟨hn1, hEn, _⟩ := hcT.names hP (hn.kill .replace false c)
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hcT habk
@@ -6649,7 +6667,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (fun ho hd => dtorHead_rename h.inj (hdk ho hd))
   | @letcall _ Γ Γ1 Δ F x f args k E hks hx hxF hc hk hpe hdk ih =>
     intro _ hab hw hn hfo hT hvs
-    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (thru_call (by simp [Stmt.calls]) ht))
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hgh hab hP hc (fun ht => hT (thru_call (by simp [Stmt.calls]) ht))
       (fun v hv => hvs v (by simp [Stmt.vars, hv]))
     obtain ⟨hn1, hEn, _⟩ := hc.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hc hab
@@ -6686,7 +6704,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       (DStay.canon h hst) (canon_freshT h habΔ hfo hdom' hm' hfΔ), habΔ⟩
   | @letrec _ Γ Γ1 Δ F x f k E fn hks hx hxF hf hp hty ho hc hk hpe ih =>
     intro _ hab hw hn hfo hT hvs
-    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hab hP hc (fun ht => hT (thru_call (by simp [Stmt.calls]) ht))
+    obtain ⟨E', Γ', hc', hpw, hE'⟩ := callT_ren h hgh hab hP hc (fun ht => hT (thru_call (by simp [Stmt.calls]) ht))
       (fun v hv => by simp at hv)
     obtain ⟨hn1, hEn, _⟩ := hc.names hP hn
     obtain ⟨hab1, hmo, _⟩ := CallT.absOK (S := S) hc hab
@@ -7174,17 +7192,17 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     intro hs hab hw hn hfo hT hvs
     have hab0 := hab.weaker hw0
     obtain ⟨t, abΔ0⟩ := ih hs hab0 hw0.2.1 hw0.2.2 (hfo.weaker hw0) hT hvs
-    have hwc := canon_weaker_sub h hab0 hw0
+    have hwc := canon_weaker_sub h hgh hab0 hw0
     rcases ho with rfl | hwo
     · exact ⟨StmtT.weakenIn hwc t, abΔ0⟩
     · have abΔ := abΔ0.weaker hwo
-      exact ⟨StmtT.sub hwc t (Or.inr (canon_weaker_sub h abΔ hwo)), abΔ⟩
+      exact ⟨StmtT.sub hwc t (Or.inr (canon_weaker_sub h hgh abΔ hwo)), abΔ⟩
 
   | exit hup hwf hnΔ hdom hm hdk hst hfΔ =>
     intro _ hab hw hn hfo _ _
     have habΔ := hab.of_same hdom hm
     obtain ⟨hdom', hm'⟩ := canon_same h hab hdom hm
-    exact ⟨StmtT.exit (S.liftX_up h hab hw hn hup) (canon_wf_sub h habΔ hwf hnΔ) (canon_names_sub h habΔ hnΔ) hdom' hm'
+    exact ⟨StmtT.exit (S.liftX_up h hgh hab hw hn hup) (canon_wf_sub h habΔ hwf hnΔ) (canon_names_sub h habΔ hnΔ) hdom' hm'
       (DKeep.canon h hdk hm) (DStay.canon h hst) (canon_freshT h habΔ hfo hdom' hm' hfΔ), habΔ⟩
   | loop hsrc _ hwf hnΔ hdom hm hdk hst hfΔ ih =>
     intro hs hab hw hn hfo hT hvs
@@ -7196,7 +7214,7 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
   | block hb ih =>
     intro hs hab hw hn hfo hT hvs
     obtain ⟨tb, abΔ⟩ := ih hs hab hw hn hfo hT hvs
-    exact ⟨StmtT.block (tb.mono (S.liftX_blk h abΔ (hb.wf hP hw))), abΔ⟩
+    exact ⟨StmtT.block (tb.mono (S.liftX_blk h hgh abΔ (hb.wf hP hw))), abΔ⟩
 end RSetup
 
 end A2
