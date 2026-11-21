@@ -177,11 +177,26 @@ Names never had this problem: a name dependency is lifted as itself
      `S.σ v ⊆ allKinds S.R`, and today's `callS.σ` maps a parameter to the
      roots its argument holds, which are no longer in `R`. The real
      region-to-caller mapping is kept apart, for `subDc` (item 4) and the
-     exit substitution (`callRes`). So
-     `RSetup.StmtT.ren`, as it stands, types the body where the call places
-     it, with the region a binding of mode `.region` in the caller's
-     context. What remains to show is that this setup meets `RSetup.OK` and
-     `AbsOK`.
+     exit substitution (`callRes`). This setup does **not** meet
+     `RSetup.AbsOK` as it stands. Its fourth clause reads
+     `E.mode = .region ↔ S.isPi v = true` (`A2/Rename.lean`, `AbsOK`), and
+     `StmtT.ren` asks `AbsOK Γa`. The other choice, keeping `isPi` true at
+     region indices, breaks `StmtT.ren`'s `∀ v ∈ s.vars, S.isPi v = false`
+     for no statement, since the body names no region. But it keeps `subD`
+     substituting, which is what the ghost lift must not do. **Chosen
+     resolution:** an `RSetup.ghost` flag (default `false`, so every
+     existing setup and proof is unchanged).
+     - Under `ghost`, `AbsOK`'s fourth clause reads "a region's index is
+       renamed to a caller binding of mode `.region`": `isPi v = false`,
+       and `S.Φ (S.ρ v)` is a region entry.
+     - The lemmas that use the clause take the `ghost = false` case as
+       today: `AbsOK.notPi`, `notPiFresh`, `ne_region`, and their users in
+       `Rename.lean` and `Call.lean`.
+     - In the `ghost` case, a region is an ordinary renamed root, so the
+       lift lemmas need no region case there.
+
+     With that, `StmtT.ren` types the body where the call places it, with
+     the region a binding of mode `.region` in the caller's context.
   2. *The callee's own rule.* `ThruOK` asks each root of a change's path to
      be live and to allow the effect (`canDo`: `own` or `inout`). A region
      (`regionE`: never live) fails it. So AGORA-933's grower `f` is not
@@ -197,7 +212,12 @@ Names never had this problem: a name dependency is lifted as itself
      lent parameter's `held` holds `⟨π p, .view⟩` (`regionP`), so the
      `.rootb` lift has to carry that dependency, as `⟨G p, .view⟩`, or the
      witness loses its ghost dependency (see the first open question
-     below). This also lands with 3d.
+     below). `AbsOK`'s first clause changes with it. It asks a `.rootb`
+     binding for `held = (if E.ty.hasFn then S.sym else [])`, which becomes
+     that list followed by the region's `⟨π p, .view⟩` for a regioned lent
+     parameter. The lift lemmas of `.rootb` bindings (`liftE`'s first
+     branch, `canon` of a parameter) are then re-proved with that
+     dependency. This also lands with 3d.
   4. *The invariant over the `subDc` context.* Preservation of the call
      with `MInv m (subDc Γg)`. Steps that commute with the substitution
      (`subDc_derive`; kills on callee bindings, which no `σ` names)
