@@ -2777,15 +2777,28 @@ theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).
       obtain ⟨pm, t⟩ := p
       cases pm with
       | inp =>
-        rw [regionP_plain hget (by simp [regioned])]
         have hae : argE Γ (args.getD v 0) = Ea := by unfold argE; rw [hEa]; rfl
         simp only [paramOK] at hok
-        refine ⟨?_, rfl, rfl⟩
-        show t = (callPe Γ fn.params args v).ty
-        unfold callPe; rw [hget]; simp only [hae]
-        split
-        · rename_i hi; rw [← hok, hi]
-        · exact hok.symm
+        -- AGORA-937 (item 2): a lent parameter holding views holds its region's view
+        have hheld : (regionP fn v (paramE fn.params (.inp, t))).held =
+            (if regioned (PMode.inp, t) then [⟨fn.nvars + v, .view⟩] else []) ++
+              (paramE fn.params (.inp, t)).held := by
+          unfold regionP; rw [dif_pos hvl, hp]; split <;> rfl
+        refine ⟨?_, by rw [regionP_path]; rfl, _, ?_, by rw [hheld, regionP_ty]; rfl⟩
+        · rw [regionP_ty]
+          show t = (callPe Γ fn.params args v).ty
+          unfold callPe; rw [hget]; simp only [hae]
+          split
+          · rename_i hi; rw [← hok, hi]
+          · exact hok.symm
+        · intro d hd
+          split at hd
+          · rename_i hr
+            simp only [List.mem_singleton] at hd; subst hd
+            refine ⟨rfl, ?_⟩
+            show isRegionIdx fn (fn.nvars + v) = true
+            exact isRegionIdx_iff.mpr ⟨Nat.le_add_right _ _, by simpa using hvl, by simpa [hp] using hr⟩
+          · cases hd
       | sink => simp [paramE] at hm
       | inout b => simp [paramE] at hm
     · exact absurd hm (resMode_ne' fn)
@@ -2966,7 +2979,14 @@ theorem wrapCond (h : CallH P Γ F x fn args base) :
   cases pm with
   | inp =>
     have hne : ∀ b' t', (PMode.inp, t) ≠ (.inout b', t') := fun _ _ h => by cases h
-    refine ⟨_, hc hne (by simp [regioned]), ?_, ?_, ?_, hF hne, ?_⟩
+    -- AGORA-937 (item 2): regioned or not, a lent parameter lifts to its argument's entry
+    have hci : (callS Γ F fn args base x).canon (sigCtx fn) (base + k) =
+        some ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))) := by
+      rw [← hρ hne]
+      show (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ k) = _
+      rw [h.canon_param hk]
+      simp [PMode.isInp]
+    refine ⟨_, hci, ?_, ?_, ?_, hF hne, ?_⟩
     · simp [RSetup.liftE, paramE, callS]; exact h.sOK.pe_rb k
     · simp [RSetup.liftE, paramE]
     · intro d hd hb
