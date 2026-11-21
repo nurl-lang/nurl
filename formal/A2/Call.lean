@@ -2725,7 +2725,7 @@ theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).
     have hle : fn.nvars ≤ v := isRegionIdx_ge (by rw [callS_isPi] at hp; exact hp)
     rw [h.sigCtx_pi (by omega), hp]; rfl
   refine ⟨fun v E hv hm => ?_, fun v E b hv hm => ?_, fun v bh hb => ?_, fun v E hv =>
-    ⟨fun hr => ?_, fun hp => by rw [hreg v hp] at hv; cases hv; rfl⟩,
+    ⟨⟨fun hr => ?_, fun hp => by rw [hreg v hp] at hv; cases hv; rfl⟩, fun hr => ?_⟩,
     fun v hp => ⟨regionE, hreg v hp, rfl⟩, fun v => by simp [callS]⟩
   · rcases sigCtx_cases hv with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
     · have hget : fn.params[v]? = some fn.params[v] := List.getElem?_eq_getElem hvl
@@ -2785,6 +2785,12 @@ theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).
       generalize fn.params[v] = pt at hr; obtain ⟨pm, t⟩ := pt; cases pm <;> simp [paramE] at hr
     · exact absurd hr (resMode_region fn)
     · simp [callS, isRegionIdx, hle, hvl, hrg]
+  · -- AGORA-937 stage 3: a region binding is `regionE`, an integer's place
+    rcases sigCtx_cases hv with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+    · rw [regionP_mode] at hr
+      generalize fn.params[v] = pt at hr; obtain ⟨pm, t⟩ := pt; cases pm <;> simp [paramE] at hr
+    · exact absurd hr (resMode_region fn)
+    · rfl
 
 theorem x_notRen (h : CallH P Γ F x fn args base) (v : Nat) : callRen fn.params args base v ≠ x := by
   intro hv
@@ -4122,7 +4128,7 @@ theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
   obtain ⟨hsrc, _, _, _, _, _, hlends, hrholds, _, _, _, _, Δa, hbody, hΔf,
     ⟨Er, hEr, hErl, hErt, hErm, hErp, hErh, hEr0⟩, hio⟩ := h.fnok
   have hΔd : ∀ v E, Δa v = some E → E.dtor = false := fun v E h => (hΔf v E h).1
-  obtain ⟨hren, habΔ⟩ := RSetup.StmtT.ren h.sOK rfl h.prog hbody hsrc h.sig_abs (sigCtx_wf fn h.fnok.2.1) (sigCtx_names fn) (sigCtx_freshOK fn)
+  obtain ⟨hren, habΔ⟩ := RSetup.StmtT.ren h.sOK h.prog hbody hsrc h.sig_abs (sigCtx_wf fn h.fnok.2.1) (sigCtx_names fn) (sigCtx_freshOK fn)
     h.thru (fun v hv => callS_isReg_lt (h.fnok.2.2.1 v hv))
   have hdt := StmtT.domTy hbody hsrc
   have hErv : ∀ d0 ∈ Er.vdeps, lendable fn d0.root ∨ fn.params.length ≤ d0.root := by
