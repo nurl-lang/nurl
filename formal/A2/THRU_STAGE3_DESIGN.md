@@ -197,7 +197,17 @@ Names never had this problem: a name dependency is lifted as itself
 
      With that, `StmtT.ren` types the body where the call places it, with
      the region a binding of mode `.region` in the caller's context.
-     *Done, structurally:* `RSetup.ghost` exists, and `AbsOK`'s fourth clause
+     *Done, refined (`RSetup.isReg`):* `AbsOK`'s fourth clause now reads
+     `E.mode = .region ↔ S.isReg v = true`, with region indices recorded
+     whether or not they are substituted. A sixth clause reads
+     `S.isPi v = (S.isReg v && !S.ghost)`. So "the statement names no region"
+     can be stated as `isReg v = false`, which keeps its meaning under
+     `ghost`. The next step moves `StmtT.ren`'s `∀ v ∈ s.vars, S.isPi v =
+     false` to `isReg` and drops `S.ghost = false`. `AbsOK.exitScope` and
+     `liftX_under(D)` already take `isReg`, through `AbsOK.notReg_of_notPi`
+     for now.
+
+     *Earlier, structurally:* `RSetup.ghost` exists, and `AbsOK`'s fourth clause
      reads `E.mode = .region ∧ S.ghost = false ↔ S.isPi v = true`.
      `AbsOK.ghost_notPi` holds. `StmtT.ren`, `callT_ren`, `liftX_up`,
      `liftX_blk`, `callR_canon` and `canon_weaker_sub` take `S.ghost = false`

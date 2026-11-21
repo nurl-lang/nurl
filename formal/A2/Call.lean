@@ -373,6 +373,7 @@ noncomputable def callS (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) (b
         else roots (memDeps (argE Γ (args.getD (v - fn.nvars) 0)).held))
     else []
   isPi := isRegionIdx fn
+  isReg := isRegionIdx fn
 
 /-- AGORA-937: a callee variable below `fn.nvars` (a parameter, the result
     slot, a body variable) is at no region's index: a parameter's region is
@@ -2719,8 +2720,8 @@ theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).
     have hle : fn.nvars ≤ v := isRegionIdx_ge (by rw [callS_isPi] at hp; exact hp)
     rw [h.sigCtx_pi (by omega), hp]; rfl
   refine ⟨fun v E hv hm => ?_, fun v E b hv hm => ?_, fun v bh hb => ?_, fun v E hv =>
-    ⟨fun ⟨hr, _⟩ => ?_, fun hp => by rw [hreg v hp] at hv; cases hv; exact ⟨rfl, rfl⟩⟩,
-    fun v hp => ⟨regionE, hreg v hp, rfl⟩⟩
+    ⟨fun hr => ?_, fun hp => by rw [hreg v hp] at hv; cases hv; rfl⟩,
+    fun v hp => ⟨regionE, hreg v hp, rfl⟩, fun v => by simp [callS]⟩
   · rcases sigCtx_cases hv with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
     · have hget : fn.params[v]? = some fn.params[v] := List.getElem?_eq_getElem hvl
       obtain ⟨Ea, hEa, hl, hok, _⟩ := h.arg v hvl
