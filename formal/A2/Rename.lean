@@ -4152,17 +4152,25 @@ theorem AbsOK.killNames {Γ : Ctx} (hab : S.AbsOK Γ) : ∀ ds, S.AbsOK (A2.kill
   | [] => hab
   | _ :: ds => show S.AbsOK (A2.kill _ _ _ (A2.killNames ds Γ)) from (AbsOK.killNames hab ds).kill _ _ _
 
-theorem canon_killNames (h : S.OK) {Γ : Ctx} (hab : S.AbsOK Γ) :
+/-- `canon_killNames` where a kill may be of a region, when it ends no view. -/
+theorem canon_killNames' (h : S.OK) {Γ : Ctx} (hab : S.AbsOK Γ) :
     ∀ (ds : List Dep), (∀ d ∈ ds, Allowed S d.kind.bound false d.root) →
-      (∀ d ∈ ds, S.isPi d.root = false) → (∀ d ∈ ds, S.isReg d.root = false) →
+      (∀ d ∈ ds, S.isPi d.root = false) →
+      (∀ d ∈ ds, S.isReg d.root = false ∨ d.kind.bound.kills false .view = false) →
       S.canon (A2.killNames ds Γ) = A2.killNames (rds S.ρ ds) (S.canon Γ)
   | [], _, _, _ => rfl
   | d :: ds, hal, hnp, hnr => by
     show S.canon (A2.kill _ _ _ (A2.killNames ds Γ)) = A2.kill _ _ _ (A2.killNames (rds S.ρ ds) (S.canon Γ))
-    rw [canon_kill h (hab.killNames ds) (hal d (by simp)) (hnp d (by simp)) (hnr d (by simp)),
-      canon_killNames h hab ds (fun d' hd' => hal d' (by simp [hd'])) (fun d' hd' => hnp d' (by simp [hd']))
+    rw [canon_kill' h (hab.killNames ds) (hal d (by simp)) (hnp d (by simp)) (hnr d (by simp)),
+      canon_killNames' h hab ds (fun d' hd' => hal d' (by simp [hd'])) (fun d' hd' => hnp d' (by simp [hd']))
         (fun d' hd' => hnr d' (by simp [hd']))]
     rfl
+
+theorem canon_killNames (h : S.OK) {Γ : Ctx} (hab : S.AbsOK Γ) (ds : List Dep)
+    (hal : ∀ d ∈ ds, Allowed S d.kind.bound false d.root) (hnp : ∀ d ∈ ds, S.isPi d.root = false)
+    (hnr : ∀ d ∈ ds, S.isReg d.root = false) :
+    S.canon (A2.killNames ds Γ) = A2.killNames (rds S.ρ ds) (S.canon Γ) :=
+  canon_killNames' h hab ds hal hnp fun d hd => Or.inl (hnr d hd)
 
 theorem PW.killNames {Γ Γ' : Ctx} (hp : PW Γ Γ') : ∀ ds, PW (A2.killNames ds Γ) (A2.killNames ds Γ')
   | [] => hp
@@ -5749,20 +5757,6 @@ theorem weaker_killNames_region (h : S.OK) {Γ : Ctx} (hab : S.AbsOK Γ) (hw : C
   | d :: ds, hd => by
     have ih := weaker_killNames_region h hab hw hn ds (fun d' hd' => hd d' (List.mem_cons_of_mem _ hd'))
     exact ih.trans (weaker_kill_region h (hab.killNames ds) ih.wf ih.names (hd d (by simp)).1 (hd d (by simp)).2)
-
-/-- `canon_killNames` where a kill may be of a region, when it ends no view. -/
-theorem canon_killNames' (h : S.OK) {Γ : Ctx} (hab : S.AbsOK Γ) :
-    ∀ (ds : List Dep), (∀ d ∈ ds, Allowed S d.kind.bound false d.root) →
-      (∀ d ∈ ds, S.isPi d.root = false) →
-      (∀ d ∈ ds, S.isReg d.root = false ∨ d.kind.bound.kills false .view = false) →
-      S.canon (A2.killNames ds Γ) = A2.killNames (rds S.ρ ds) (S.canon Γ)
-  | [], _, _, _ => rfl
-  | d :: ds, hal, hnp, hnr => by
-    show S.canon (A2.kill _ _ _ (A2.killNames ds Γ)) = A2.kill _ _ _ (A2.killNames (rds S.ρ ds) (S.canon Γ))
-    rw [canon_kill' h (hab.killNames ds) (hal d (by simp)) (hnp d (by simp)) (hnr d (by simp)),
-      canon_killNames' h hab ds (fun d' hd' => hal d' (by simp [hd'])) (fun d' hd' => hnp d' (by simp [hd']))
-        (fun d' hd' => hnr d' (by simp [hd']))]
-    rfl
 
 /-- AGORA-937 (item 3): a region binding, lifted and substituted, is a
     region, of the same type and as a root of a change the same. -/
