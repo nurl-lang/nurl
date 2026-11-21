@@ -463,6 +463,13 @@ vs `MInv` over the substituted one):
    each root `wᵢ` with σ filtered to `wᵢ`. Entries with `.view`/`.self`
    deps on a `wⱼ`, `j ≠ i`, are not hit by the kill on `wᵢ` either way.
    The generalisation is preferred: it adds no ceremony for the author.
+   The premise must also ask that no *other* argument reaches a root `w`
+   that the changed region's argument views. Otherwise the callee's change
+   through `π p₁` lifts to a kill on `w` that also hits entries resting on
+   a second region `π p₂` whose argument views `w`. That is a real alias
+   the callee cannot see, so the kill is not an overkill to argue away but
+   the reason to refuse. AGORA-933's `f1(vv)` passes one argument, so the
+   premise is met there.
 
 Why `A` must shrink, not only `heldA`: a callee's own view-holding local
 `z` (say a `Vec` of slices of the region's buffer) is lifted with `held ⊇
