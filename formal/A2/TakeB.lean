@@ -116,13 +116,13 @@ theorem MInv.editB_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (fun _ _ _ h => hw'.noView (by simpa [Ty.holdsView] using hhv) h)
     (fun _ _ _ h => hw0.noView (by simpa [Ty.holdsView] using hhv) h)
   have hown : MInv (m.set dep.root ⟨true, some T'⟩)
-      (A2.kill ((Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec) false dep.root Γ) := by
+      (A2.kill ((Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec) false dep.root Γ) := by
     have hwT : WFv Eo.ty T := by
       obtain ⟨T1, h1, h2, _⟩ := hi.own_val hEo hlo hcan.ownSlot
       rw [hT0] at h1; cases h1; exact h2
     have hed := effAt_dropE (Edit.effAt_ne_realloc (op := .trunc i) (fun _ h => Edit.noConfusion h)
-      dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec) hwT htop hla
-    generalize (Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec = e at hcan hds hed ⊢
+      dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec) (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) hwT htop hla
+    generalize (Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec = e at hcan hds hed ⊢
     exact MInv.edit_dropE hi hanch hEo hoF hcan hds hT0 hT' hst (HeapOK.editTake hi.heap hT0 hn hr)
       (by simp) hhv hr hw' rfl hsh' hfree hes hed
   exact MInv.editB_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)

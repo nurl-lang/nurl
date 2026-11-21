@@ -89,6 +89,15 @@ def Mode.ownSlot : Mode → Bool
     so only what it holds counts. -/
 def Entry.vdeps (E : Entry) : List Dep := (if E.mode.ownSlot then [] else E.path) ++ E.held
 
+/-- AGORA-937: a root whose memory is one node, so what is reached `.inner`
+    lies strictly inside its elements (`Edit.inEff`): a `Vec`, or a region,
+    whose memory is the nodes its argument views (`RegionNode`, a `DataAt`
+    node). -/
+def Entry.rvec (E : Entry) : Bool := E.ty.isVec || E.mode == .region
+
+theorem Entry.rvec_of_ne {E : Entry} (h : E.mode ≠ .region) : E.rvec = E.ty.isVec := by
+  unfold Entry.rvec; cases hm : E.mode <;> simp_all
+
 /-- A2-drop.2: the binding `letd` makes. It is armed, and remembered as
     `letd`'s, when its type holds views: its destructor reads them. (A
     destructor of a type that holds no views reads only what its binding
@@ -1585,7 +1594,7 @@ theorem Edit.effAt_not_realloc {op : Edit} {k : Kind} {s rv : Bool} (h : op.effA
     on `r`, whose changed node's elements hold no views. So the kills of a
     change through a borrow are `killNames`, and its lemmas apply. -/
 def thruDeps (op : Edit) (Γ : Ctx) (tx : Ty) (P : List Dep) : List Dep :=
-  (memDeps P).map fun d => ⟨d.root, .name (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)) (argE Γ d.root).ty.isVec) .int⟩
+  (memDeps P).map fun d => ⟨d.root, .name (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)) (argE Γ d.root).rvec) .int⟩
 
 /-- What a change through a borrow (of type `tx`, path `P`) ends: on each
     memory root, what its effect there ends. -/
@@ -1594,7 +1603,7 @@ def killThru (op : Edit) (tx : Ty) (P : List Dep) (Γ : Ctx) : Ctx :=
 
 theorem mem_thruDeps {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {d : Dep} :
     d ∈ thruDeps op Γ tx P ↔ ∃ d0 ∈ memDeps P, d = ⟨d0.root,
-      .name (op.effAt d0.kind (decide ((argE Γ d0.root).ty = tx)) (argE Γ d0.root).ty.isVec) .int⟩ := by
+      .name (op.effAt d0.kind (decide ((argE Γ d0.root).ty = tx)) (argE Γ d0.root).rvec) .int⟩ := by
   unfold thruDeps
   simp only [List.mem_map]
   constructor
@@ -1619,8 +1628,8 @@ theorem thruDeps_bound {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {d : Dep}
 def ThruOK (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (P : List Dep) : Prop :=
   ∀ d ∈ memDeps P, d.root ∉ F ∧ (∀ y, op.stored = some y → d.root ≠ y) ∧
     ∃ Er, Γ1 d.root = some Er ∧ Er.live = true ∧
-      canDo Er.mode (op.effAt d.kind (decide (Er.ty = tx)) Er.ty.isVec) ∧
-      DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.ty.isVec) false d.root ∧
+      canDo Er.mode (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) ∧
+      DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) false d.root ∧
       d.kind ≠ .share
 
 theorem ThruOK.noShare {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
@@ -1640,7 +1649,7 @@ def killHv : List (Eff × Bool × Var) → Ctx → Ctx
     `thruDeps`), each with whether the root's type holds views. -/
 def thruKills (op : Edit) (Γ : Ctx) (tx : Ty) (P : List Dep) : List (Eff × Bool × Var) :=
   (memDeps P).map fun d =>
-    (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)) (argE Γ d.root).ty.isVec, (argE Γ d.root).ty.holdsView, d.root)
+    (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)) (argE Γ d.root).rvec, (argE Γ d.root).ty.holdsView, d.root)
 
 /-- What a change through a borrow that may store a view ends: on each
     memory root, what its effect there ends, the root's elements holding
@@ -1652,7 +1661,7 @@ def killThruV (op : Edit) (tx : Ty) (P : List Dep) (Γ : Ctx) : Ctx :=
 
 theorem mem_thruKills {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {k : Eff × Bool × Var} :
     k ∈ thruKills op Γ tx P ↔ ∃ d ∈ memDeps P,
-      k = (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)) (argE Γ d.root).ty.isVec, (argE Γ d.root).ty.holdsView, d.root) := by
+      k = (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)) (argE Γ d.root).rvec, (argE Γ d.root).ty.holdsView, d.root) := by
   unfold thruKills
   simp only [List.mem_map]
   constructor
@@ -1757,7 +1766,7 @@ theorem holdOn_isSome (rs : List Var) (D : List Dep) (Γ : Ctx) (v : Var) :
     the path (no tree views itself). -/
 def ThruV (Γ1 : Ctx) (op : Edit) (tx : Ty) (P D : List Dep) : Prop :=
   ∀ d ∈ memDeps P,
-    DtorSafe Γ1 (op.effAt d.kind (decide ((argE Γ1 d.root).ty = tx)) (argE Γ1 d.root).ty.isVec) (argE Γ1 d.root).ty.holdsView d.root ∧
+    DtorSafe Γ1 (op.effAt d.kind (decide ((argE Γ1 d.root).ty = tx)) (argE Γ1 d.root).rvec) (argE Γ1 d.root).ty.holdsView d.root ∧
     (argE Γ1 d.root).dbind = false ∧ d.root ∉ roots D
 
 /-- A memory root of a change through a borrow owns its slot and is not lent

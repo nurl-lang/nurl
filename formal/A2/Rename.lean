@@ -706,6 +706,15 @@ theorem liftE_ty (v : Var) {E : Entry} (hrb : E.mode ≠ .rootb) : (S.liftE v E)
 theorem liftE_mode (v : Var) {E : Entry} (hrb : E.mode ≠ .rootb) : (S.liftE v E).mode = liftMode E.mode := by
   simp [liftE, hrb]
 
+/-- AGORA-937: a lifted and substituted binding that is no borrowed
+    parameter and no region is, as a root of a change, a `Vec` exactly when
+    it was (`Entry.rvec`). -/
+theorem subE_liftE_rvec {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) (hnr : E.mode ≠ .region) :
+    (S.subE (S.liftE v E)).rvec = E.rvec := by
+  unfold Entry.rvec
+  rw [subE_ty, subE_mode, liftE_ty v hrb, liftE_mode v hrb]
+  cases hm : E.mode <;> simp_all [liftMode] <;> rfl
+
 /-- The caller's view of a callee binding other than a borrowed parameter
     is never fixed: an `inout` parameter is the caller's own binding. -/
 theorem liftE_not_fixed {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) : ¬ (S.liftE v E).fixed := by
@@ -5657,12 +5666,18 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
     cases hr : Γa1 r with
     | none => unfold argE; rw [canon_ρs h _ hnp, hr]; rfl
     | some Er => rw [argE_canons h hr hnp, subE_ty, liftE_ty' h hab1 hr]; unfold argE; rw [hr]; rfl
+  have hrv : ∀ d0 ∈ memDeps Ex1.path, (argE (S.canon Γa1) (S.ρ d0.root)).rvec = (argE Γa1 d0.root).rvec :=
+    fun d0 hd0 => by
+      obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
+      have hrbr : Er.mode ≠ .rootb := by rcases hcan with h' | ⟨b, h', _⟩ <;> rw [h'] <;> simp
+      rw [argE_canons h hEr (hroot d0 hd0), subE_liftE_rvec hrbr (fun h' => by have := hcan.ownSlot; rw [h'] at this; cases this)]
+      unfold argE; rw [hEr]; rfl
   have hal : ∀ d ∈ thruDeps op Γa1 Ex1.ty Ex1.path, Allowed S d.kind.bound false d.root := by
     intro d hd
     obtain ⟨d0, hd0, rfl⟩ := mem_thruDeps.mp hd
     obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
     have hae : argE Γa1 d0.root = Er := by unfold argE; rw [hEr]; rfl
-    show Allowed S (op.effAt d0.kind (decide ((argE Γa1 d0.root).ty = Ex1.ty)) (argE Γa1 d0.root).ty.isVec) false d0.root
+    show Allowed S (op.effAt d0.kind (decide ((argE Γa1 d0.root).ty = Ex1.ty)) (argE Γa1 d0.root).rvec) false d0.root
     rw [hae]; exact allowed_canDo_false hab1 hEr hcan
   -- what the change is handed, where the call places it
   obtain ⟨D', harg'⟩ : ∃ D', EditArg (S.canon Γa) S.Fc (op.rename S.ρ) t D' (S.canon Γa1) := by
@@ -5698,9 +5713,10 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
     · rw [Edit.stored_rename] at hy
       obtain ⟨y0, hy0', rfl⟩ := Option.map_eq_some_iff.mp hy
       exact fun e => hy0 y0 hy0' (h.inj _ _ e)
-    · rw [subE_mode, subE_ty, liftE_mode _ hrbr, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
+    · rw [subE_liftE_rvec hrbr (fun h' => by have := hcan.ownSlot; rw [h'] at this; cases this), subE_mode, subE_ty, liftE_mode _ hrbr, liftE_ty _ hrbr, hty1,
+        Edit.effAt_rename]
       exact canDo_lift hcan
-    · rw [subE_ty, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
+    · rw [subE_liftE_rvec hrbr (fun h' => by have := hcan.ownSlot; rw [h'] at this; cases this), subE_ty, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
       exact DtorSafe.canon h (allowed_canDo_false hab1 hEr hcan) hds
   -- the kills commute with the lift
   have heq : S.canon (A2.setE (A2.killThru op Ex1.ty Ex1.path Γa1) x Ex1) =
@@ -5719,7 +5735,7 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
     simp only [rds, List.map_map]
     apply List.map_congr_left
     intro d hd
-    simp only [Function.comp, Dep.ren, Edit.effAt_rename, hargty d.root (hroot d hd)]
+    simp only [Function.comp, Dep.ren, Edit.effAt_rename, hargty d.root (hroot d hd), hrv d hd]
   exact ⟨⟨D', harg'⟩, hyx', hthru', by rw [hmem]; simpa [rds] using hne, heq, hpfix⟩
 
 theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa)
@@ -5968,13 +5984,19 @@ theorem editBV_ren_facts (h : S.OK)
     cases hr : Γa1 r with
     | none => unfold argE; rw [canon_ρs h _ hnp, hr]; rfl
     | some Er => rw [argE_canons h hr hnp, subE_ty, liftE_ty' h hab1 hr]; unfold argE; rw [hr]; rfl
+  have hrv : ∀ d0 ∈ memDeps Ex1.path, (argE (S.canon Γa1) (S.ρ d0.root)).rvec = (argE Γa1 d0.root).rvec :=
+    fun d0 hd0 => by
+      obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
+      have hrbr : Er.mode ≠ .rootb := by rcases hcan with h' | ⟨b, h', _⟩ <;> rw [h'] <;> simp
+      rw [argE_canons h hEr (hroot d0 hd0), subE_liftE_rvec hrbr (fun h' => by have := hcan.ownSlot; rw [h'] at this; cases this)]
+      unfold argE; rw [hEr]; rfl
   -- each root allows its effect, with views among its elements if its type holds them
   have hal : ∀ k ∈ thruKills op Γa1 Ex1.ty Ex1.path, Allowed S k.1 k.2.1 k.2.2 := by
     intro k hk
     obtain ⟨d0, hd0, rfl⟩ := mem_thruKills.mp hk
     obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
     have hae : argE Γa1 d0.root = Er := by unfold argE; rw [hEr]; rfl
-    show Allowed S (op.effAt d0.kind (decide ((argE Γa1 d0.root).ty = Ex1.ty)) (argE Γa1 d0.root).ty.isVec)
+    show Allowed S (op.effAt d0.kind (decide ((argE Γa1 d0.root).ty = Ex1.ty)) (argE Γa1 d0.root).rvec)
       (argE Γa1 d0.root).ty.holdsView d0.root
     rw [hae]
     have := allowed_canDo' hab1 hEr hcan
@@ -5987,7 +6009,7 @@ theorem editBV_ren_facts (h : S.OK)
     simp only [rds, List.map_map]
     apply List.map_congr_left
     intro d hd
-    simp only [Function.comp, Dep.ren, Edit.effAt_rename, hargty d.root (hroot d hd)]
+    simp only [Function.comp, Dep.ren, Edit.effAt_rename, hargty d.root (hroot d hd), hrv d hd]
   have heqK : S.canon (killThruV op Ex1.ty Ex1.path Γa1) =
       killThruV (op.rename S.ρ) (S.liftE x Ex1).ty (S.liftE x Ex1).path (S.canon Γa1) := by
     unfold killThruV
@@ -6009,9 +6031,10 @@ theorem editBV_ren_facts (h : S.OK)
     · rw [Edit.stored_rename] at hy
       obtain ⟨y0, hy0', rfl⟩ := Option.map_eq_some_iff.mp hy
       exact fun e => hy0 y0 hy0' (h.inj _ _ e)
-    · rw [subE_mode, subE_ty, liftE_mode _ hrbr, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
+    · rw [subE_liftE_rvec hrbr (fun h' => by have := hcan.ownSlot; rw [h'] at this; cases this), subE_mode, subE_ty, liftE_mode _ hrbr, liftE_ty _ hrbr, hty1,
+        Edit.effAt_rename]
       exact canDo_lift hcan
-    · rw [subE_ty, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
+    · rw [subE_liftE_rvec hrbr (fun h' => by have := hcan.ownSlot; rw [h'] at this; cases this), subE_ty, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
       exact DtorSafe.canon h (allowed_canDo_false hab1 hEr hcan) hds
   refine ⟨hmem, hthru', heqK, fun D2 hD2 d hd => ?_, hpfix⟩
   rw [hmem] at hd
@@ -6026,9 +6049,9 @@ theorem editBV_ren_facts (h : S.OK)
   refine ⟨?_, ?_, fun hr => ?_⟩
   · show DtorSafe (S.canon Γa1) ((op.rename S.ρ).effAt d0.kind
       (decide ((argE (S.canon Γa1) (S.ρ d0.root)).ty = (S.liftE x Ex1).ty))
-      (argE (S.canon Γa1) (S.ρ d0.root)).ty.isVec)
+      (argE (S.canon Γa1) (S.ρ d0.root)).rvec)
       (argE (S.canon Γa1) (S.ρ d0.root)).ty.holdsView (S.ρ d0.root)
-    rw [hae', subE_ty, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
+    rw [hae', subE_liftE_rvec hrbr (fun h' => by have := hcan.ownSlot; rw [h'] at this; cases this), subE_ty, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
     have := allowed_canDo' hab1 hEr hcan
     rw [elem_holdsView] at this
     exact DtorSafe.canon h this hds

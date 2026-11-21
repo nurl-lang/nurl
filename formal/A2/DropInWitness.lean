@@ -45,7 +45,7 @@ theorem G_noRootb : NoRootb G := by
   all_goals (cases h <;> simp [E0, Esw, Eb, intE])
 
 /-- The change's effect on `vv`: inside its elements. -/
-theorem eff_dropIn : (Edit.set (.lit 0) 3).effAt .inner (decide (vstr = str)) vstr.isVec = .dropIn := by
+theorem eff_dropIn : (Edit.set (.lit 0) 3).effAt .inner (decide (vstr = str)) E0.rvec = .dropIn := by
   decide
 
 /-- **`( vec_set b 0 f )` is typed, and `sw` stays live after it.** -/
@@ -53,7 +53,8 @@ theorem set_keeps_view {ξ : Exits} :
     ∃ Γ', StmtT P ξ G [] (.edit true 2 (.set (.lit 0) 3)) Γ' ∧ Γ' 1 = some Esw ∧ Γ' 0 = some E0 := by
   refine ⟨_, set_typed G_noRootb (x := 2) (f := 3) (E := Eb) rfl rfl rfl rfl (by decide) (by decide), ?_, ?_⟩ <;>
   simp [A2.setE, upd, A2.killThru, A2.killNames, thruDeps, memDeps, argE, G, E0, Esw, Eb, Kind.isName,
-    Kind.bound, eff_dropIn, A2.kill, killE, hits, Entry.vdeps, Mode.ownSlot, Eff.kills]
+    Kind.bound, A2.kill, killE, hits, Entry.vdeps, Mode.ownSlot, Eff.kills, Entry.rvec, Ty.isVec,
+    vstr, Edit.effAt, Edit.inEff]
 
 /-- Under `.drop`, A2's effect before, `sw` would have ended. -/
 theorem drop_would_end : hits .drop false 0 Esw = true := by decide

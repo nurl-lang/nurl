@@ -462,12 +462,12 @@ theorem MInv.editB_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) (
     (hanch : RootbAnch Γ1 F) {x : Var} {op : Edit} {Ex : Entry} {t : Ty}
     (hx : Γ1 x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
     (hthru : ThruOK Γ1 F op Ex.ty Ex.path) {dep : Dep} (hdep : dep ∈ memDeps Ex.path)
-    (hown : MInv m' (A2.kill (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty)) (argE Γ1 dep.root).ty.isVec) false
+    (hown : MInv m' (A2.kill (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty)) (argE Γ1 dep.root).rvec) false
       dep.root Γ1))
     {c : Nat} (hxs : m'.st x = some ⟨false, some (.href c)⟩) (hhref : HrefAt m' dep c t Ex.held)
     (hpf : ∀ i, PkgNames m' Γ1 Ex (.href c) i → PkgFreeId m' i) :
     MInv m' (A2.setE (killThru op Ex.ty Ex.path Γ1) x Ex) := by
-  have hd0 : (⟨dep.root, .name (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty)) (argE Γ1 dep.root).ty.isVec) .int⟩ : Dep) ∈
+  have hd0 : (⟨dep.root, .name (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty)) (argE Γ1 dep.root).rvec) .int⟩ : Dep) ∈
       thruDeps op Γ1 Ex.ty Ex.path := mem_thruDeps.mpr ⟨dep, hdep, rfl⟩
   have hall : ∀ d ∈ thruDeps op Γ1 Ex.ty Ex.path, d.root ∉ F ∧ d.kind.bound ≠ .replace := by
     intro d hd
@@ -1921,14 +1921,14 @@ theorem vkeep_view_below {m m' : Mem} {o : Var} {T T' n n' : Val}
     node strictly inside its elements (`Lands .inner`, the root's node its
     only top part). -/
 theorem effAt_dropE {op : Edit} {k : Kind} {s : Bool} {Eo : Entry} {T n0 n : Val}
-    (hre : op.effAt k s Eo.ty.isVec ≠ .realloc) (hwT : WFv Eo.ty T) (htop : Top n0 T)
+    (hre : op.effAt k s Eo.rvec ≠ .realloc) (hnr : Eo.mode ≠ .region) (hwT : WFv Eo.ty T) (htop : Top n0 T)
     (hla : Lands k n n0) :
-    op.effAt k s Eo.ty.isVec = .drop ∨
-      (op.effAt k s Eo.ty.isVec = .dropIn ∧ (∃ u c d es, T = .node u c d es) ∧ Below n T) := by
+    op.effAt k s Eo.rvec = .drop ∨
+      (op.effAt k s Eo.rvec = .dropIn ∧ (∃ u c d es, T = .node u c d es) ∧ Below n T) := by
   rcases Edit.effAt_not_realloc hre with h | ⟨h, hk, hv⟩
   · exact Or.inl h
   · refine Or.inr ⟨h, ?_⟩
-    obtain ⟨u, hu⟩ := Ty.isVec_eq hv
+    obtain ⟨u, hu⟩ := Ty.isVec_eq (by rwa [Entry.rvec_of_ne hnr] at hv)
     rw [hu] at hwT
     subst hk
     cases hwT with
@@ -2108,8 +2108,8 @@ theorem MInv.editB_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (fun _ _ _ h => hw'.noView (by simpa [Ty.holdsView] using hhv) h)
     (fun _ _ _ h => hw0.noView (by simpa [Ty.holdsView] using hhv) h)
   have hown : MInv (m1.set dep.root ⟨true, some T'⟩)
-      (A2.kill ((Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec) false dep.root Γ1) := by
-    by_cases hre : (Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec = .realloc
+      (A2.kill ((Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec) false dep.root Γ1) := by
+    by_cases hre : (Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec = .realloc
     · -- through a copy of the owner's handle, of its type: the owner's whole tree
       obtain ⟨_, hk, hs⟩ := Edit.effAt_realloc hre
       have htyo : Eo.ty = .vec t := by rw [of_decide_eq_true hs, hty]
@@ -2131,8 +2131,8 @@ theorem MInv.editB_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     · have hwT : WFv Eo.ty T := by
         obtain ⟨T1, h1, h2, _⟩ := hi.own_val hEo hlo hcan.ownSlot
         rw [hT0] at h1; cases h1; exact h2
-      have hed := effAt_dropE hre hwT htop hla
-      generalize (Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec = e at hcan hds hed ⊢
+      have hed := effAt_dropE hre (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) hwT htop hla
+      generalize (Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec = e at hcan hds hed ⊢
       have hvv : ∀ d0 o0 l0, ¬ Sub (.view d0 o0 l0) v := fun d0 o0 l0 hs => by
         obtain ⟨s, hin⟩ := hp.wf.sub_view hs
         have := hin.holdsView; rw [hhv] at this; cases this
@@ -2202,8 +2202,8 @@ theorem MInv.editB_pushRealloc {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv 
     (fun _ _ _ h => hw0.noView (by simpa [Ty.holdsView] using hhv) h)
   have hown :
       MInv ({ m1 with alloc := upd (upd m1.alloc d false) m1.nid true, nid := m1.nid + 1 }.set dep.root ⟨true, some T'⟩)
-        (A2.kill ((Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec) false dep.root Γ1) := by
-    by_cases hre : (Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec = .realloc
+        (A2.kill ((Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec) false dep.root Γ1) := by
+    by_cases hre : (Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec = .realloc
     · obtain ⟨_, hk, hs⟩ := Edit.effAt_realloc hre
       have htyo : Eo.ty = .vec t := by rw [of_decide_eq_true hs, hty]
       have hwT : WFv (.vec t) T := by
@@ -2224,8 +2224,8 @@ theorem MInv.editB_pushRealloc {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv 
     · have hwT : WFv Eo.ty T := by
         obtain ⟨T1, h1, h2, _⟩ := hi.own_val hEo hlo hcan.ownSlot
         rw [hT0] at h1; cases h1; exact h2
-      have hed := effAt_dropE hre hwT htop hla
-      generalize (Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec = e at hcan hds hed ⊢
+      have hed := effAt_dropE hre (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) hwT htop hla
+      generalize (Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec = e at hcan hds hed ⊢
       have hvv : ∀ d0 o0 l0, ¬ Sub (.view d0 o0 l0) v := fun d0 o0 l0 hs => by
         obtain ⟨s, hin⟩ := hp.wf.sub_view hs
         have := hin.holdsView; rw [hhv] at this; cases this
@@ -2281,12 +2281,12 @@ theorem MInv.editB_trunc {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (fun _ _ _ h => hw'.noView (by simpa [Ty.holdsView] using hhv) h)
     (fun _ _ _ h => hw0.noView (by simpa [Ty.holdsView] using hhv) h)
   have hown : MInv ({ m with alloc := a' }.set dep.root ⟨true, some T'⟩)
-      (A2.kill ((Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec) false dep.root Γ) := by
+      (A2.kill ((Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec) false dep.root Γ) := by
     have hwT : WFv Eo.ty T := by
       obtain ⟨T1, h1, h2, _⟩ := hi.own_val hEo hlo hcan.ownSlot
       rw [hT0] at h1; cases h1; exact h2
-    have hed := effAt_dropE (Edit.effAt_ne_realloc (op := .trunc i) (fun _ h => Edit.noConfusion h) dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec) hwT htop hla
-    generalize (Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec = e at hcan hds hed ⊢
+    have hed := effAt_dropE (Edit.effAt_ne_realloc (op := .trunc i) (fun _ h => Edit.noConfusion h) dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec) (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) hwT htop hla
+    generalize (Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec = e at hcan hds hed ⊢
     exact MInv.edit_dropE hi hanch hEo hoF hcan hds hT0 hT' hst (HeapOK.editTrunc hi.heap hT0 hf hr)
       (by simp) hhv hr hw' rfl hsh' hfree hes hed
   exact MInv.editB_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
@@ -2505,12 +2505,12 @@ theorem MInv.editB_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
     (fun _ _ _ h => hw'.noView (by simpa [Ty.holdsView] using hhv) h)
     (fun _ _ _ h => hw0.noView (by simpa [Ty.holdsView] using hhv) h)
   have hown : MInv ({ m1 with alloc := a' }.set dep.root ⟨true, some T'⟩)
-      (A2.kill (op.effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec) false dep.root Γ1) := by
+      (A2.kill (op.effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec) false dep.root Γ1) := by
     have hwT : WFv Eo.ty T := by
       obtain ⟨T1, h1, h2, _⟩ := hi.own_val hEo hlo hcan.ownSlot
       rw [hT0] at h1; cases h1; exact h2
-    have hed := effAt_dropE (Edit.effAt_ne_realloc hdrop dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec) hwT htop hla
-    generalize op.effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec = e at hcan hds hed ⊢
+    have hed := effAt_dropE (Edit.effAt_ne_realloc hdrop dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec) (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) hwT htop hla
+    generalize op.effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec = e at hcan hds hed ⊢
     exact MInv.edit_dropE hi hanch hEo hoF hcan hds hT0 hT' hst hheap (by simp) hhv hr hw' rfl hsh' hfree hfe hed
   exact MInv.editB_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref hpfx
