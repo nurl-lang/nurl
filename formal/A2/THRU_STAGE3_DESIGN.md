@@ -149,6 +149,13 @@ Names never had this problem: a name dependency is lifted as itself
   the stability facts: the owners' trees stay well-formed, the arguments'
   views of the region's own buffers stay valid, and nothing else live
   reaches inside.
+- **3c, part 3 (done: `Repl.keeps_enclosing`, `DataAt.keeps_enclosing`,
+  `RegionViewAt.keeps_len`).** The first stability fact. A change through a
+  borrow rewrites one node of its owner's tree. Strictly inside a region's
+  node, that node keeps its address and its length. So an argument's view
+  of the region's buffer stays in bounds while the body changes an element's
+  inside. Still open: the element itself stays well-formed (the step's own
+  `WFv`), and no other live binding reaches inside.
 - **3b, part 3 (fallback).** The ghost store: `RegionSnap`, building on `Region.lean`'s
   `Val.viewsOf`/`regionSnap`; `StepI`; the erasure lemma; and `MInvI`
   extending `MInv` with the region clause. Existing `MInv` lemmas stay

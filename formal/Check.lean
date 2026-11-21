@@ -655,6 +655,11 @@ import A3
 #print axioms A2.comp_assoc
 #print axioms A2.subDc_comp
 #print axioms A2.subDc_derive
+-- ... and a change strictly inside a region's node keeps the node's address and length, so a view
+-- of its buffer stays in bounds while the body changes the memory it points into
+#print axioms A2.Repl.keeps_enclosing
+#print axioms A2.DataAt.keeps_enclosing
+#print axioms A2.RegionViewAt.keeps_len
 -- (A2/SliceCopyViewWitness.lean, AGORA-935): a copy of a slice of views, typed as A2 types a
 -- copy (a call, `callRes`), holds copies of its loans and nothing of the slice: releasing the
 -- temporary leaves it live, replacing what the views point into ends it, and then no read types
