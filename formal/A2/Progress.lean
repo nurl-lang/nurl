@@ -874,13 +874,18 @@ theorem progress {P : Prog}
     exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.free hT ha⟩
   | editB hx hmx hl hty _ _ harg hyx hx1 hl1 _ hthru =>
     intro m hcd hi
+    -- AGORA-937 (item 3): a frame binds no region
+    have hthru := hthru.toOK fun v E h hr => by
+      obtain ⟨E0, h0, hm, _⟩ := (harg.ctxRel (hi.leafAnch rfl).toR).mode v E h
+      exact hi.toMInv.noRegion v E0 h0 (hm ▸ hr)
     exact Or.inr <| Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnch rfl) hx hmx hl hty harg hyx hx1 hl1 hthru)
   | editBV hx hmx hl hty _ _ _ harg hyx hx1 hl1 _ hthru _ =>
     intro m hcd hi
     exact Or.inr <| Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnch rfl) hx hmx hl hty harg hyx hx1 hl1 hthru)
 
   | @takeB _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ hie _ hthru _ _ _ _ =>
-    exact fun _ hi => Or.inr <| Or.inr <| Or.inr (progress_takeB hi.toMInv hy hx hmx hl hty hie hthru)
+    exact fun _ hi => Or.inr <| Or.inr <| Or.inr
+      (progress_takeB hi.toMInv hy hx hmx hl hty hie (hthru.toOK hi.toMInv.noRegion))
   | @takeBV _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ hie _ hthru _ _ _ _ _ =>
     exact fun _ hi => Or.inr <| Or.inr <| Or.inr (progress_takeB hi.toMInv hy hx hmx hl hty hie hthru)
 
