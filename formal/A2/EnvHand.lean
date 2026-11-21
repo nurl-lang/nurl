@@ -887,7 +887,7 @@ theorem FrameOK.callPostAux_tail {Γ Γ0 : Ctx} {fn : Fn} {args : List Var} :
 theorem roots_sub_of {A B : List Dep} (h : A ⊆ B) {r : Var} (hr : r ∈ roots A) : r ∈ roots B := by
   simp only [roots, List.mem_map] at hr ⊢; obtain ⟨d, hd, rfl⟩ := hr; exact ⟨d, h hd, rfl⟩
 
-theorem memDeps_sub_of {A B : List Dep} (h : A ⊆ B) : memDeps A ⊆ memDeps B := fun d hd =>
+theorem memDeps_sub_of {A B : List Dep} (h : A ⊆ B) : memDeps A ⊆ memDeps B := fun _d hd =>
   List.mem_filter.mpr ⟨h (List.mem_filter.mp hd).1, (List.mem_filter.mp hd).2⟩
 
 /-- **What the code's call's closures may change, the interface's may**: the
@@ -1157,7 +1157,7 @@ theorem callT_hand {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
       obtain ⟨hne, hr, hs, hb⟩ := hoth j' hj'' hjj
       rcases j' with _ | j'
       · -- the receiver: `y` in place of the package, depending on no more
-        simp only [List.getD_cons_zero, List.getD_cons_succ] at hne hr hs hb ⊢
+        simp only [List.getD_cons_zero] at hne hr hs hb ⊢
         rw [hyE]
         rw [hck, killE_vdeps] at hr hs hb
         rw [hpar]
@@ -1492,7 +1492,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
           have hmut : d' ∈ mutNames (kill .replace false c Γ) (c :: zs) := by
             simp only [mutNames, argNames, List.mem_filter, List.mem_flatMap]
             refine ⟨⟨a, ha, ?_⟩, by rw [hbd]; simpa using hbn⟩
-            rw [if_neg hty]; exact List.mem_filter.mpr ⟨hdv, hn⟩
+            rw [ite_eq_right hty]; exact List.mem_filter.mpr ⟨hdv, hn⟩
           obtain ⟨s', hs', _⟩ := (hnf d' hmut).2.1
           rw [he, hck, htc] at hs'; cases hs'
     · intro dm hdm hr
@@ -1533,7 +1533,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
         exact roots_sub_of (memDeps_sub_of (fun d hd => by rw [← hEch]; exact hyh hd)) hr
       · right; exact ⟨z, hz, by rw [← hzE z hz]; exact hrz⟩
     · right
-      simp only [List.mem_append, List.mem_flatMap] at h ⊢
+      simp only [List.mem_flatMap] at h ⊢
       rcases h with h | ⟨z, hz, hdz⟩
       · left
         rw [hyE] at h; simp only [hEyt, ↓reduceIte] at h; rw [hck]; simp only [hτ, ↓reduceIte]
@@ -2136,7 +2136,7 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
   have h1x : callPost Γh fn [m.nv] x = some (callX fn) := by
     rw [hΓ1']; simp [setE, upd_ne _ _ hxy, hhx]
   have h1r : callPost Γh fn [m.nv] (m.nv + 1) = none := by
-    rw [hΓ1']; simp [setE, upd_ne _ _ hry, hhr]
+    rw [hΓ1']; simp [setE, hhr]
   have h1c : callPost Γh fn [m.nv] c = some { Ec with live := false, dtor := false } := by
     rw [hΓ1']; simp [setE, upd_ne _ _ hyc.symm, hhc]
   have hroot1 : AllRooted Γ (callPost Γh fn [m.nv]) := by
@@ -2222,7 +2222,7 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
       setE (kill .replace false c (kill .replace false c Γ)) c { Ec with live := false, dtor := false } := by
     simp [callPost, hnmS, killNames, hsp, callPostAux, hck]
   have hEs : callRes (kill .replace false c Γ) sig [c] = ⟨sig.resTy, resMode sig, true, [], [], false, false, false, false⟩ := by
-    simp [callRes, hsl, hsr, heldOfArgs, argNames, hck, hvd, hEh, Entry.vdeps, nameDeps, memDeps, roots, allKinds,
+    simp [callRes, hsl, hsr, heldOfArgs, argNames, hck, hEh, Entry.vdeps, nameDeps, memDeps, roots, allKinds,
       ownHeld, hos]
   have hwx : EntryWeaker Ex1 (callRes (kill .replace false c Γ) sig [c]) := by
     have hEx1m : Ex1.mode = resMode fn := by simp [Ex1, callX]
@@ -2402,7 +2402,7 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
     (hj : ms[j]? = some σ) (hσ : P[σ]? = some sig)
     (hD : sig.params = [(.sink, Ec.ty)] ∧ Ec.vdeps = [] ∧ Ec.mode = .own ∧ Ec.live = true ∧
       q.drops = true ∧ sig.resOwn = false)
-    (hsl : sig.lends = []) (hsr : sig.rholds = []) (hso : sig.outHolds = [])
+    (hsl : sig.lends = []) (hsr : sig.rholds = []) (_hso : sig.outHolds = [])
     (hny : NoPin Γ c) (hdc : DtorSafe Γ .replace false c)
     (hcT : CallT P (kill .replace false c Γ) F σ [c] E Γ1)
     (hkT : StmtT P (ξ.under x) (kill .replace false c (setE Γ1 x E)) F k Δ) (hpx : EndOK Δ x)

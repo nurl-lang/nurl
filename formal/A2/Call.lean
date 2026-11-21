@@ -857,7 +857,7 @@ theorem clean_live (E : Entry) : E.clean.live = E.live := by unfold Entry.clean;
 
 /-- A live binding that holds memory is not cleaned. -/
 theorem Entry.clean_eq {E : Entry} (hl : E.live = true) (hn : E.ty ≠ .int) : E.clean = E := by
-  unfold Entry.clean; rw [if_neg]; rintro ⟨_, h | h⟩
+  unfold Entry.clean; rw [ite_eq_right]; rintro ⟨_, h | h⟩
   · exact hn h
   · rw [hl] at h; cases h
 theorem clean_fixed {E : Entry} (h : E.fixed) : E.clean = E := by
@@ -2351,7 +2351,7 @@ theorem reroot_of_ne {p : Var} {D ds : List Dep} (h : ∀ d ∈ ds, d.root ≠ p
   | nil => rfl
   | cons d ds ih =>
     simp only [List.flatMap_cons]
-    rw [if_neg (h d (by simp)), ih (fun d' hd' => h d' (by simp [hd']))]; rfl
+    rw [ite_eq_right (h d (by simp)), ih (fun d' hd' => h d' (by simp [hd']))]; rfl
 
 theorem rerootE_nodep {p : Var} {D : List Dep} {E : Entry} (hm : E.mode = .rootb)
     (h : ∀ d ∈ E.vdeps, d.root ≠ p) : rerootE p D E = E := by

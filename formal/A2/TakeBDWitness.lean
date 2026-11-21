@@ -44,7 +44,7 @@ theorem main12_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main12 Δ := by
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
-      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
+      (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
   -- the inner `Vec`, as in `main5`
   let EN : Entry := ⟨.vec DT, .own, true, [], [], false, false, false, false⟩
   have hnew : RhsT K3 [] (.new DT) EN K3 := RhsT.new (by decide)
@@ -61,7 +61,7 @@ theorem main12_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main12 Δ := by
   have hK53 : K5 3 = some EV := by
     simp [K5, K4, A2.setE, upd, A2.kill, killE, hits, hEVe, Entry.vdeps, Mode.ownSlot]
   have hpush := StmtT.push (ξ := .none) (P := P) (Γ := K4) (Γ1 := K5) (F := []) (x := 3) (y := 2) (Ex := EV) (Ey := ED)
-    (Ex1 := EV) (t := DT) (D := ED.held) (by simp [K4, A2.setE, upd]) (by rw [hEVe]) (by rw [hEVe])
+    (Ex1 := EV) (t := DT) (D := ED.held) (by simp [K4, A2.setE]) (by rw [hEVe]) (by rw [hEVe])
     (Or.inl (by rw [hEVe])) (by simp) (by simp [K4, K3, A2.setE, upd]) (by rw [hEDe]) (by rw [hEDe])
     (by decide) hmove (by rw [hEDe]; simp [roots]) hK53 (by rw [hEVe])
     (DtorSafe.of_none (fun v E h => (hK5 v E h).2.1) _ _ _) (by rw [hEVe]; simp)
@@ -87,7 +87,7 @@ theorem main12_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main12 Δ := by
   have hK84 : K8 4 = some EW := by
     simp [K8, K7, A2.setE, upd, A2.kill, killE, hits, hEWe, Entry.vdeps, Mode.ownSlot]
   have hpush2 := StmtT.push (ξ := .none) (P := P) (Γ := K7) (Γ1 := K8) (F := []) (x := 4) (y := 3) (Ex := EW) (Ey := E3)
-    (Ex1 := EW) (t := .vec DT) (D := E3.held) (by simp [K7, A2.setE, upd]) (by rw [hEWe]) (by rw [hEWe])
+    (Ex1 := EW) (t := .vec DT) (D := E3.held) (by simp [K7, A2.setE]) (by rw [hEWe]) (by rw [hEWe])
     (Or.inl (by rw [hEWe])) (by simp) (by simp [K7, K6, A2.setE, upd]) (by rw [hE3e]) (by rw [hE3e])
     (by decide) hmove2 (by rw [hE3e]; simp [roots]) hK84 (by rw [hEWe])
     (DtorSafe.of_none (fun v E h => (hK8 v E h).2.1) _ _ _) (by rw [hEWe]; simp)
@@ -106,7 +106,7 @@ theorem main12_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main12 Δ := by
   let K10 : Ctx := A2.setE K9 5 Eb
   have hK10 : NoRootb K10 := hK9.setE (by rw [hEbe]; simp)
   have hK105 : K10 5 = some Eb := by simp [K10, A2.setE]
-  have hK104 : K10 4 = some E4 := by simp [K10, A2.setE, upd, hK94]
+  have hK104 : K10 4 = some E4 := by simp [K10, A2.setE, hK94]
   -- the move-out through `b`: a truncation's effect on `vv`
   have hthru : ThruOK K10 [] (.trunc (.dec (.len 5))) Eb.ty Eb.path := by
     rw [hEbe]
@@ -127,7 +127,7 @@ theorem main12_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main12 Δ := by
   let Ku : Ctx := A2.setE (kill .replace false 6 Kt) 6 { compE Eb DT with live := false, dtor := false }
   have hKu : NoRootb Ku := (hKt.kill _ _ _).setE (by rw [hcE]; simp)
   have hmv : RhsT Kt [] (.var 6) ⟨(compE Eb DT).ty, .own, true, [], (compE Eb DT).held, false, false, false, false⟩ Ku :=
-    RhsT.moveOwn (by simp [Kt, A2.setE, upd]) (by rw [hcE]) (by rw [hcE]) (by simp) (hKt.noPin _)
+    RhsT.moveOwn (by simp [Kt, A2.setE]) (by rw [hcE]) (by rw [hcE]) (by simp) (hKt.noPin _)
       (DtorSafe.of_none (fun v E h => (hKt v E h).2.1) _ _ _)
   let EZ : Entry := Entry.arm { (⟨(compE Eb DT).ty, .own, true, [], (compE Eb DT).held, false, false, false, false⟩ : Entry)
     with ty := DT, held := (compE Eb DT).held }
@@ -175,7 +175,7 @@ theorem main12_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main12 Δ := by
     (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hdv.ofNone
     (((hK12.exitScope 4).exitScope 3).endOK _) (by simp [Stmt.assigns, body12])
   have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
     ((((hK12.exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
     (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone

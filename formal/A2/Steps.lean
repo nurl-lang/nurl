@@ -889,7 +889,7 @@ theorem Refers.not_dead {B : Nat → Option Blk} {τ : Ty} {v : Val} (hw : WFv �
   · rw [hk] at hk'; cases hk'
     obtain ⟨t, kd, p⟩ := bl
     simp only at hd; subst hd
-    rcases hh with ⟨c, _, hc⟩ | ⟨d, o, l, _, hc⟩ <;> simp [Val.ids] at hc
+    rcases hh with ⟨c, _, hc⟩ | ⟨d, o, l, _, hc⟩ <;> simp at hc
 
 /-- Agora #610: ... so **no block the roots reach is `dead`**, when the roots
     and the payloads are well-formed trees whose shares name blocks: an
@@ -2811,7 +2811,7 @@ theorem push_growN {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
                 rcases List.mem_append.mp he with h | h
                 · exact Sub.child h hsv
                 · simp at h; subst h; exact absurd hsv (hp.wf.noView hhv)
-          · exact Or.inr (Or.inr (Or.inl ⟨t', d, es, rfl, by simp [Eff.kills, hhv], by simp [Eff.kills]⟩))
+          · exact Or.inr (Or.inr (Or.inl ⟨t', d, es, rfl, by simp [Eff.kills], by simp [Eff.kills]⟩))
         · cases hc with
           | elem he =>
             rcases List.mem_append.mp he with h | h

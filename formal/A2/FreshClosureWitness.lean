@@ -84,9 +84,9 @@ theorem fbody_typed {fn : Fn} (hb : fn.body = fbody) (hc : Calm (sigCtx fn)) (h1
   let G := A2.setE (sigCtx fn) 5 intE
   have hG : Calm G := hc.setE (by simp [intE])
   obtain ⟨Δ, ht, hcΔ, h1'⟩ := thruL_typed (Q := P) hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl
-    (by decide) (by decide) (by decide) (by simp [G, A2.setE, upd, h2])
-    (by simp [G, A2.setE, upd, h3]) (by simp [G, A2.setE, upd, h4])
-    (by simp [G, A2.setE, upd, h1])
+    (by decide) (by decide) (by decide) (by simp [G, A2.setE, h2])
+    (by simp [G, A2.setE, h3]) (by simp [G, A2.setE, h4])
+    (by simp [G, A2.setE, h1])
   refine ⟨_, StmtT.letv (P := P) (ξ := .none) (x := 5) (Γ := sigCtx fn) (Γ1 := sigCtx fn) (F := [])
     (E := intE) rfl h5 (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
     (fun h => by simp [intE] at h), hcΔ.exitScope 5, ?_⟩
@@ -116,7 +116,7 @@ theorem code_ok : FnOK P code := by
   obtain ⟨Δ, hb, hfl, hr⟩ := code_body
   refine ⟨rfl, by decide, by decide, rfl, by simp [code], ?_, by simp [code], by simp [code], by simp [code],
     by simp [code], by simp [code], ?_, Δ, hb, hfl, ?_, ?_⟩
-  · intro pt hpt; simp [code] at hpt; subst hpt; simp [sl, Ty.ok, Ty.isStruct, Ty.holdsView]
+  · intro pt hpt; simp [code] at hpt; subst hpt; simp [sl, Ty.ok, Ty.holdsView]
   · exact dtorParamsOK_of (by simp [code, sl, Ty.holdsDtor]) (by simp [code])
   · exact ⟨{ intE with mode := R0.mode }, by simpa [code] using hr, rfl, rfl, by simp [R0, resMode, code],
       by simp [intE], by simp [intE], by simp [code]⟩

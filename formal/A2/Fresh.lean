@@ -16,7 +16,7 @@ theorem DomMode.at {Γ0 Γ : Ctx} (h : DomMode Γ0 Γ) {x : Var} {E0 : Entry} (h
   | none => have := h.1 x; rw [hE, hx] at this; cases this
   | some E => obtain ⟨E1, h1, hme⟩ := h.2 x E hE; rw [hx] at h1; cases h1; exact ⟨E, rfl, hme⟩
 
-theorem StmtT.freshOK {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
+theorem StmtT.freshOK {P : Prog} (_hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     (ht : StmtT P ξ Γ F s Δ) : s.src = true → FreshOK Γ → FreshOK Δ := by
   induction ht with
   | skip => exact fun _ h => h

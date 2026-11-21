@@ -131,7 +131,7 @@ def RResDown (a2 : Nat → Bool) : RRes → RRes → Prop
 /-- **Evaluating a right-hand side** on the own part: every address it
     checks is owned, and `new` allocates past the part. -/
 theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 : Nat → Bool}
-    (hav : Avoids m a2) (hb : BorFree m) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
+    (hav : Avoids m a2) (_hb : BorFree m) (hp : PayOff m a2) (hf : FreshFrom a2 m.nid) :
     ∃ res1, EvalR { m with alloc := minus m.alloc a2 } r res1 ∧ RResDown a2 res res1 := by
   cases h with
   | expr he => exact ⟨_, .expr (Eval.restrict he hav hp), rfl, rfl, rfl⟩

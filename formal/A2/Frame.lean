@@ -403,7 +403,7 @@ theorem PkgFreeId.frame {m m' : Mem} {x : Var} (hst : ∀ o, o ≠ x → m'.st o
 
 /-- AGORA-901: a change of `x`, not a borrowed parameter, keeps the clean
     roots: modes are kept, and a borrowed parameter no kill ends. -/
-theorem Clean.of_change {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : Var} {Ex : Entry}
+theorem Clean.of_change {Γ : Ctx} {F : List Var} (_hanch : RootbAnch Γ F) {x : Var} {Ex : Entry}
     (hx : Γ x = some Ex) (hxF : x ∉ F) {e : Eff} {hv : Bool}
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
       e.kills hv d.kind = true → d.root ≠ x)
@@ -424,9 +424,9 @@ theorem Clean.of_change {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : 
 
 /-- AGORA-901: a kill keeps the clean roots: modes are kept, and a borrowed
     parameter it ends none of. -/
-theorem Clean.of_kill {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {x : Var} (hxF : x ∉ F)
+theorem Clean.of_kill {Γ : Ctx} {F : List Var} (_hanch : RootbAnch Γ F) {x : Var} (_hxF : x ∉ F)
     {e : Eff} {hv : Bool}
-    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+    (_hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
       e.kills hv d.kind = true → d.root ≠ x)
     : CleanLe (kill e hv x Γ) Γ :=
   CleanLe.of_entries fun v E' hv' => by

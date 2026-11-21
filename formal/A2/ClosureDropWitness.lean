@@ -168,7 +168,7 @@ theorem dfn_ok : FnOK Pc dfn := by
     · simp [dfn] at hi; subst hi; simp [dfn] at hs
     · simp [dfn] at hi; subst hi; simp [dfn] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, dfn], rfl, rfl, by simp [R0, resMode, dfn], by simp [intE], by simp [intE],
       by simp [dfn]⟩
@@ -343,7 +343,7 @@ theorem main_typed : ∃ Δ, StmtT Pc ξ (fun _ => none) [] main Δ := by
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
-      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
+      (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
   -- the destructor value moves into the closure literal
   let K5 : Ctx := A2.setE (kill .replace false 2 K3) 2 { ED with live := false, dtor := false }
   have hK5 : NoRootb K5 := (hK3.kill _ _ _).setE (by rw [hEDe]; simp)
@@ -353,7 +353,7 @@ theorem main_typed : ∃ Δ, StmtT Pc ξ (fun _ => none) [] main Δ := by
   let EC0 : Entry := ⟨.fn [2] .dropd, .own, true, [], ED.held ++ capDeps [], false, false, false, false⟩
   have hpack : RhsT K3 [] (.pack [1] DT [2] 2 []) EC0 K5 :=
     RhsT.pack (Γ := K3) (F := []) (fs := [1]) (te := DT) (ms := [2]) (q := .dropd) (y := 2) (cs := [])
-      (Ey := ED) (by simp [K3, A2.setE, upd]) (by rw [hEDe]) (by rw [hEDe]) hmove
+      (Ey := ED) (by simp [K3, A2.setE]) (by rw [hEDe]) (by rw [hEDe]) hmove
       ⟨List.nodup_nil, fun _ h => by cases h⟩ env_fits
   let ECa : Entry := Entry.arm { EC0 with ty := CDT, held := EC0.held }
   have hECa : ECa.mode ≠ .rootb ∧ ECa.dtor = false ∧ ECa.dbind = false := by
@@ -369,7 +369,7 @@ theorem main_typed : ∃ Δ, StmtT Pc ξ (fun _ => none) [] main Δ := by
     (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hg.ofNone
     ((hK6.exitScope 3).endOK _)
   have h1 := StmtT.letv (ξ := .none) (P := Pc) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
     (((hK6.exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := Pc) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
     (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone
@@ -547,7 +547,7 @@ theorem dfn_ok2 : FnOK Pd dfn := by
     · simp [dfn] at hi; subst hi; simp [dfn] at hs
     · simp [dfn] at hi; subst hi; simp [dfn] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, dfn], rfl, rfl, by simp [R0, resMode, dfn], by simp [intE], by simp [intE],
       by simp [dfn]⟩
@@ -709,7 +709,7 @@ theorem callCode_ok2 : FnOK Pd callCode := by
     · simp [callCode] at hi; subst hi; simp [callCode] at hs
     · simp [callCode] at hi; subst hi; simp [callCode] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := callCode) (by decide), callCode, paramE, resMode, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := callCode) (by decide), callCode, paramE, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, callCode], rfl, rfl, by simp [R0, resMode, callCode], by simp [intE], by simp [intE],
       by simp [callCode]⟩
@@ -725,7 +725,7 @@ theorem callSig_body2 : StmtT Pd ξ (sigCtx callSig) [] callSig.body
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
     (by
       intro p E hp hm d hd _
-      rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := callSig) (by decide), callSig, paramE, resMode, CDT2, CT2, Ty.hasFn, symNames] at hp <;> subst hp <;>
+      rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := callSig) (by decide), callSig, paramE, resMode, CDT2, CT2, Ty.hasFn] at hp <;> subst hp <;>
         simp [Entry.vdeps, Mode.ownSlot] at hd <;> simp at hm)
     (DtorSafe.of_none (fun v E h => (hflags v E h).1) _ _ _) rfl
 
@@ -737,7 +737,7 @@ theorem callSig_ok2 : FnOK Pd callSig := by
     · simp [callSig] at hi; subst hi; simp [callSig] at hs
     · simp [callSig] at hi; subst hi; simp [callSig] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := callSig) (by decide), callSig, paramE, resMode, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := callSig) (by decide), callSig, paramE, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, callSig], rfl, rfl, by simp [R0, resMode, callSig], by simp [intE], by simp [intE],
       by simp [callSig]⟩
@@ -801,7 +801,7 @@ theorem main2_typed : ∃ Δ, StmtT Pd ξ (fun _ => none) [] main2 Δ := by
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
-      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
+      (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
   -- the destructor value moves into the closure literal
   let K5 : Ctx := A2.setE (kill .replace false 2 K3) 2 { ED with live := false, dtor := false }
   have hK5 : NoRootb K5 := (hK3.kill _ _ _).setE (by rw [hEDe]; simp)
@@ -811,7 +811,7 @@ theorem main2_typed : ∃ Δ, StmtT Pd ξ (fun _ => none) [] main2 Δ := by
   let EC0 : Entry := ⟨.fn [2, 4] .dropd, .own, true, [], ED.held ++ capDeps [], false, false, false, false⟩
   have hpack : RhsT K3 [] (.pack [1, 3] DT [2, 4] 2 []) EC0 K5 :=
     RhsT.pack (Γ := K3) (F := []) (fs := [1, 3]) (te := DT) (ms := [2, 4]) (q := .dropd) (y := 2) (cs := [])
-      (Ey := ED) (by simp [K3, A2.setE, upd]) (by rw [hEDe]) (by rw [hEDe]) hmove
+      (Ey := ED) (by simp [K3, A2.setE]) (by rw [hEDe]) (by rw [hEDe]) hmove
       ⟨List.nodup_nil, fun _ h => by cases h⟩ env_fits
   let ECa : Entry := Entry.arm { EC0 with ty := CDT2, held := EC0.held }
   -- the closure's binding: of the destructor type, owned, holding nothing
@@ -820,7 +820,7 @@ theorem main2_typed : ∃ Δ, StmtT Pd ξ (fun _ => none) [] main2 Δ := by
   have hECa : ECa.mode ≠ .rootb ∧ ECa.dtor = false ∧ ECa.dbind = false := by rw [hECe]; simp
   let K6 : Ctx := A2.setE K5 3 ECa
   have hK6 : NoRootb K6 := hK5.setE hECa
-  have h63 : K6 3 = some ECa := by simp [K6, A2.setE, upd]
+  have h63 : K6 3 = some ECa := by simp [K6, A2.setE]
   have hps : callSig.params = [(.inp, ECa.ty)] := by rw [hECe]; rfl
   -- Agora #651: the call through the binding, the receiver lent at `CDT2`
   have hcT : CallT Pd K6 [] 4 [3] (callRes K6 callSig [3]) K6 :=
@@ -847,7 +847,7 @@ theorem main2_typed : ∃ Δ, StmtT Pd ξ (fun _ => none) [] main2 Δ := by
     (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok2) (HeldUp.refl _ _) hg.ofNone
     (((hK7.exitScope 4).exitScope 3).endOK _)
   have h1 := StmtT.letv (ξ := .none) (P := Pd) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
     ((((hK7.exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := Pd) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
     (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone

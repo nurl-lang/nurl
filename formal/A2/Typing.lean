@@ -531,7 +531,7 @@ theorem FreshOK.remove {Γ : Ctx} (h : FreshOK Γ) (hv : Bool) (x : Var) :
       simp only [Bool.and_eq_true, Bool.or_eq_true, bne_iff_ne, ne_eq, List.any_eq_true, beq_iff_eq]
       refine ⟨Or.inl hn, d, ?_, hdx, by cases d.kind <;> rfl⟩
       simp [Entry.vdeps, hb, Mode.ownSlot, hdd]
-    unfold killE at hl; rw [if_pos hhit] at hl; cases hl
+    unfold killE at hl; rw [ite_eq_left hhit] at hl; cases hl
   simpa [upd, hdx] using hEr
 
 /-- Ending `x`'s scope: a fresh borrow rooted at `x` is ended with it

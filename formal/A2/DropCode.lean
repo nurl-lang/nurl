@@ -672,11 +672,11 @@ theorem main9_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main9 Δ := by
   have hdv := StmtT.letd (ξ := .none) (P := P) (Γ := K3) (Γ1 := K3) (F := []) (x := 3) (f := 0) (r := .new DT)
     (E := EN) (t := T) (H := []) (τ := .vec DT) rfl (by simp [K3, K2, K1, A2.setE, upd])
     (by simp) hnew rfl (Or.inr ⟨0, rfl, rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hbody.ofNone (hK7.endOK _)
-    (by simp [Stmt.assigns, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD])
+    (by simp [Stmt.assigns])
   have hd := StmtT.letd (ξ := .none) (P := P) (Γ := K2) (Γ1 := K2) (F := []) (x := 2) (f := 0) (r := .pair 0 1)
     (E := EP) (t := T) (H := []) rfl (by simp [K2, K1, A2.setE, upd])
     (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) hdv.ofNone
-    ((hK7.exitScope 3).endOK _) (by simp [Stmt.assigns, Stmt.vecTruncD, Stmt.vecClearD, Stmt.vecFreeD])
+    ((hK7.exitScope 3).endOK _) (by simp [Stmt.assigns])
   have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
     rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
     (((hK7.exitScope 3).exitScope 2).endOK _)

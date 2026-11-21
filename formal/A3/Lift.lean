@@ -116,7 +116,7 @@ theorem FreesL.lift {a a' : Nat → Bool} {es : List Val} (h : FreesL a es a') {
 end
 
 theorem EvalR.lift {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
-    (a2 : Nat → Bool) (hd : ∀ i, m.alloc i = true → a2 i = false) :
+    (a2 : Nat → Bool) (_hd : ∀ i, m.alloc i = true → a2 i = false) :
     EvalR (liftMem a2 m) r (.ok v o (liftMem a2 m1)) := by
   cases h with
   | expr he => exact EvalR.expr (Eval.lift he a2)

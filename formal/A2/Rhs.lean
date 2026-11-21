@@ -1906,7 +1906,7 @@ theorem out_comp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (hy
       have hpd : CleanDeps Γ (projDeps y E) → (E.mode.ownSlot = false → CleanDeps Γ E.path) := by
         intro hcl hos
         unfold projDeps at hcl
-        rw [if_neg (by simp [hos])] at hcl
+        rw [ite_eq_right (by simp [hos])] at hcl
         split at hcl
         · rename_i hrb
           exact ((hcl ⟨y, .view⟩ (by simp [memDeps, Kind.isName])).2).rootb_inv hy hrb

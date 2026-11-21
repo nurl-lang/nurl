@@ -232,7 +232,7 @@ theorem K2'_noRootb : NoRootb K2' := by
   intro v E h
   simp only [K2', K2, K1, A2.setE, upd, A2.kill] at h
   rcases v with _ | _ | v <;> simp [killE, hits, Entry.vdeps, Ev, Ev0, intE] at h <;> subst h <;>
-    simp [Ev, intE]
+    simp
 
 theorem K4_noRootb : NoRootb K4 := (K2'_noRootb.setE (by simp [Eb])).setE (by simp [intE])
 
@@ -241,7 +241,7 @@ theorem K4'_noRootb : NoRootb K4' := by
   simp only [K4', K4, K3, K2', K2, K1, A2.setE, upd, A2.kill] at h
   rcases v with _ | _ | _ | _ | v <;>
     simp [killE, hits, Entry.vdeps, Ev, Ev0, Eb, Eb0, intE, Mode.ownSlot] at h <;> subst h <;>
-    simp [Ev, Eb, intE]
+    simp
 
 theorem K7_noRootb : NoRootb K7 :=
   (((K4'_noRootb.setE (by simp [Eo])).setE (by simp [Ev])).setE (by simp [intE])).setE (by simp [Esv])
@@ -349,7 +349,7 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
       (by simp [K2, K1, A2.setE, upd]) rfl
       (PushArg.move (by simp [Ev, vi, Ty.owning]) rfl (by simp) (A2.DynCell.NoRootb.noPin
         (fun v E h => K2_noRootb v E h) _) (DtorSafe.of_none (fun v E h => (K2_noRootb v E h).2.1) _ _ _))
-      (by simp [A2.setE, upd, A2.kill, killE, hits, K2, K1, intE, Entry.vdeps, Mode.ownSlot]) rfl PushArg.int
+      (by simp [A2.setE, upd, A2.kill, killE, hits, K2, intE, Entry.vdeps, Mode.ownSlot]) rfl PushArg.int
       (fun h => by simp [intE, Mode.ownSlot] at h)
     simpa [Eb, Ev, Ev0, K2', intE, bag] using this
   have h2 := StmtT.letv (ξ := .none) (P := P) (x := 2) (r := .pair 0 1) (E := Eb) (F := []) (Γ := K2) (Γ1 := K2')

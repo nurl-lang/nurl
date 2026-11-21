@@ -304,7 +304,7 @@ theorem Reached.of_reaped {R : Val → Prop} {B : Nat → Option Blk} {kr : Nat}
     · by_cases he : k = kr
       · rw [he, upd_at] at hk
         cases hk
-        rcases h with ⟨c, _, hc⟩ | ⟨d, o, l, _, hc⟩ <;> simp [Blk.rd, Val.ids] at hc
+        rcases h with ⟨c, _, hc⟩ | ⟨d, o, l, _, hc⟩ <;> simp [Blk.rd] at hc
       · exact .inr ⟨bl, by rw [upd_ne _ _ he] at hk; exact hk, h⟩
   induction h with
   | root hv hr => exact .root hv (href hr)

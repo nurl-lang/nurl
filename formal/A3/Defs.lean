@@ -723,7 +723,7 @@ theorem _root_.A2.StmtT.lockedGet {P : Prog} {Γ : Ctx} {F : List Var} {a x c z 
     (NoPin.setE_nil hpin (lockE_vdeps t)) (hds.setE_off (lockE_dtor t))
   rw [← exitScope_out hx hux hzx.symm (by simp) .replace false]
   refine StmtT.withLock rfl hx hxF ha hla (Or.inl hta) h4 ?_ hroot ?_ ?_
-    (fun _ => by simp [Stmt.callOut, Stmt.assigns, hxc, Ne.symm hzx])
+    (fun _ => by simp [Stmt.callOut, Stmt.assigns, Ne.symm hzx])
   · exact Unnamed.endOK (((hux.setE_nil (lockE_vdeps t)).kill' _ _ _).setE_nil (by simp))
   · simp [Stmt.callOut, Stmt.vars, Rhs.vars, hax, hac, haz]
   · refine ⟨lockE t, ?_, lockE_live t⟩
@@ -823,7 +823,7 @@ theorem _root_.A2.StmtT.lockedApply {P : Prog} {Γ : Ctx} {F : List Var} {a x c 
     (NoPin.setE_nil hpin (lockE_vdeps t)) (hds.setE_off (lockE_dtor t))
   rw [← exitScope_out hx hux hzx.symm (by simp) .replace false]
   refine StmtT.withLock rfl hx hxF ha hla hta h4 ?_ hroot ?_ ?_
-    (fun _ => by simp [Stmt.callOut, Stmt.assigns, hxc, Ne.symm hzx])
+    (fun _ => by simp [Stmt.callOut, Stmt.assigns, Ne.symm hzx])
   · exact Unnamed.endOK (((hux.setE_nil (lockE_vdeps t)).kill' _ _ _).setE_nil (by simp))
   · simp [Stmt.callOut, Stmt.vars, Rhs.vars, hax, hac, haz]
   · refine ⟨lockE t, ?_, lockE_live t⟩
@@ -1363,9 +1363,9 @@ it views is in that thread's owned tree, or a frozen payload's, which holds
 no cell share (`MInv.noCellPay`). -/
 
 /-- A slice of shares is an A2 type ... -/
-theorem slice_share_ok {t : Ty} (h : t.ok = true) (hv : t.holdsView = false) (hvd : t.vecD = false) :
+theorem slice_share_ok {t : Ty} (h : t.ok = true) (hv : t.holdsView = false) (_hvd : t.vecD = false) :
     (Ty.slice t).ok = true := by
-  simp [Ty.ok, h, hv, hvd]
+  simp [Ty.ok, h, hv]
 
 /-- ... so a view of a `Vec` of `Arc`s (or of locks, or of library handles) is
     typed (`slice_from_vec`) ... -/
@@ -1472,13 +1472,13 @@ theorem arcNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y :
     panics if an owner of it is left behind (`chanSend_kept`) ... -/
 theorem chan_fn {ms : List Nat} {q : Cross} :
     (Ty.lk (.prod (.vec (.fn ms q)) .int)).ok = true ↔ q = .send ∨ q = .sync ∨ q = .bare := by
-  cases q <;> simp [Ty.ok, Ty.holdsView, Ty.dtorFree, Ty.hasDtor, Ty.lkPay, Ty.hasArc, Ty.dnest, Ty.hasGuard]
+  cases q <;> simp [Ty.ok, Ty.holdsView, Ty.dtorFree, Ty.lkPay, Ty.dnest, Ty.hasGuard]
 
 /-- ... and so is one a lock keeps (A3.2), which one thread at a time runs. -/
 theorem lockNew_fn {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {q : Cross} {y : Var} {E : Entry}
     (h : RhsT Γ F (.lockNew (.fn ms q) y) E Γ1) : q = .send ∨ q = .sync ∨ q = .bare := by
   cases h with
-  | lockNew _ _ _ hp _ => cases q <;> simp_all [Ty.holdsView, Ty.hasFn, Ty.dtorFree, Ty.lkPay, Ty.hasDtor, Ty.dnest]
+  | lockNew _ _ _ hp _ => cases q <;> simp_all [Ty.holdsView, Ty.hasFn, Ty.dtorFree, Ty.lkPay, Ty.dnest]
 
 /-- A Send closure, which may capture a library handle, is a lock's value:
     `locked_new` takes it (A3.5's second cut; A3.5b's gap) ... -/
@@ -2919,7 +2919,7 @@ theorem lockNew_dyn_send {Γ Γ1 : Ctx} {F : List Var} {ms : List Nat} {y : Var}
     with a bound (`: Send` or `: Send Sync`), none of one with no bound. -/
 theorem chan_dyn {ms : List Nat} {b : TraitBound} :
     (Ty.lk (.prod (.vec (.fn ms b.cross)) .int)).ok = true ↔ b ≠ .none := by
-  cases b <;> simp [TraitBound.cross, Ty.ok, Ty.holdsView, Ty.lkPay, Ty.dtorFree, Ty.hasDtor, Ty.dnest,
+  cases b <;> simp [TraitBound.cross, Ty.ok, Ty.holdsView, Ty.lkPay, Ty.dtorFree, Ty.dnest,
     Ty.hasGuard]
 
 /-- ... the same for a lock's: `locked_new` takes no object of a trait with no
