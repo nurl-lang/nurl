@@ -660,6 +660,12 @@ import A3
 #print axioms A2.Repl.keeps_enclosing
 #print axioms A2.DataAt.keeps_enclosing
 #print axioms A2.RegionViewAt.keeps_len
+-- ... and the view itself survives, well-formed; and after the entry kill no live frame binding
+-- but the arguments reaches the changed roots by a kind a drop ends
+#print axioms A2.Repl.keeps_enclosing'
+#print axioms A2.RegionViewAt.keep_inner
+#print axioms A2.killHv_live_nohit
+#print axioms A2.thruPre_live_nohit
 -- (A2/SliceCopyViewWitness.lean, AGORA-935): a copy of a slice of views, typed as A2 types a
 -- copy (a call, `callRes`), holds copies of its loans and nothing of the slice: releasing the
 -- temporary leaves it live, replacing what the views point into ends it, and then no read types

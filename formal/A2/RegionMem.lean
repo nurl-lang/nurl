@@ -33,7 +33,8 @@ This file proves the facts the call's entry needs:
   `comp_assoc`);
 * a change strictly inside a region's node keeps the node's address and
   length, so a view of its buffer stays in bounds (`Repl.keeps_enclosing`,
-  `DataAt.keeps_enclosing`, `RegionViewAt.keeps_len`).
+  `DataAt.keeps_enclosing`, `RegionViewAt.keeps_len`), and the view itself
+  survives such a change, well-formed (`RegionViewAt.keep_inner`).
 
 Nothing here is used by a typing rule yet, and no theorem statement
 changes. -/
@@ -333,5 +334,80 @@ theorem RegionViewAt.keeps_len {m : Mem} {o : Var} {T T' n n' : Val} (hr : Repl 
     ∃ es', DataAt (m.set o ⟨true, some T'⟩) d (.node t c d es') ∧ o' + l ≤ es'.length := by
   obtain ⟨es', hd, hl⟩ := DataAt.keeps_enclosing (m := m) (o := o) hr hs hb
   exact ⟨es', hd, hl ▸ hle⟩
+
+/-- ... and the enclosing node is either unchanged or the hole rewritten in
+    it, so it keeps whatever the rewrite keeps (`DSH_repl_wf`). -/
+theorem Repl.keeps_enclosing' {n n' T T' : Val} (hr : Repl n n' T T') {t : Ty} {c d : Nat} {es : List Val}
+    (hs : Sub (.node t c d es) T) (hb : Below n (.node t c d es)) :
+    ∃ es', Sub (.node t c d es') T' ∧ es'.length = es.length ∧
+      (es' = es ∨ Repl n n' (.node t c d es) (.node t c d es')) := by
+  induction hr with
+  | here =>
+    exact (Below.not_self (Below.of_sub_below hs hb)).elim
+  | @elem t1 c1 d1 pre post e e' hr' ih =>
+    cases hs with
+    | refl =>
+      exact ⟨pre ++ e' :: post, Sub.refl _, by simp, Or.inr (Repl.elem hr')⟩
+    | child hx hsx =>
+      rcases List.mem_append.mp hx with hx | hx
+      · exact ⟨es, Sub.child (List.mem_append_left _ hx) hsx, rfl, Or.inl rfl⟩
+      · rcases List.mem_cons.mp hx with rfl | hx
+        · obtain ⟨es', hs', hl, he⟩ := ih hsx
+          exact ⟨es', Sub.child (List.mem_append_right _ (List.mem_cons_self ..)) hs', hl, he⟩
+        · exact ⟨es, Sub.child (List.mem_append_right _ (List.mem_cons_of_mem _ hx)) hsx, rfl, Or.inl rfl⟩
+  | fst hr' ih =>
+    cases hs with
+    | fst hs' => obtain ⟨es', h, hl, he⟩ := ih hs'; exact ⟨es', Sub.fst h, hl, he⟩
+    | snd hs' => exact ⟨es, Sub.snd hs', rfl, Or.inl rfl⟩
+  | snd hr' ih =>
+    cases hs with
+    | fst hs' => exact ⟨es, Sub.fst hs', rfl, Or.inl rfl⟩
+    | snd hs' => obtain ⟨es', h, hl, he⟩ := ih hs'; exact ⟨es', Sub.snd h, hl, he⟩
+  | inl hr' ih =>
+    cases hs with
+    | inl hs' => obtain ⟨es', h, hl, he⟩ := ih hs'; exact ⟨es', Sub.inl h, hl, he⟩
+  | inr hr' ih =>
+    cases hs with
+    | inr hs' => obtain ⟨es', h, hl, he⟩ := ih hs'; exact ⟨es', Sub.inr h, hl, he⟩
+  | pkg hr' ih =>
+    cases hs with
+    | pkg hs' => obtain ⟨es', h, hl, he⟩ := ih hs'; exact ⟨es', Sub.pkg h, hl, he⟩
+
+/-- **An argument's view of a region's buffer survives a change strictly
+    inside the region's node.** The change rewrites owner `o`'s tree, and the
+    replacement is well-formed wherever the hole was. If the region's node
+    lies in `o`'s tree, the hole must be strictly inside it. Otherwise the
+    node lies in another slot or a payload, which the change leaves alone.
+    Either way, the view is still valid through its region in the new memory,
+    with the same bounds and a well-formed node. -/
+theorem RegionViewAt.keep_inner {m : Mem} {o : Var} {T T' n n' : Val} (hT : m.st o = some ⟨true, some T⟩)
+    (hr : Repl n n' T T') (hn : ∀ σ, WFv σ n → WFv σ n')
+    {D : Nat → Prop} {d o' l : Nat} {t : Ty} (hv : RegionViewAt m D .view d o' l t)
+    (hb : ∀ c es, Sub (.node t c d es) T → Below n (.node t c d es)) :
+    RegionViewAt (m.set o ⟨true, some T'⟩) D .view d o' l t := by
+  obtain ⟨c, es, hk, ⟨n0, ⟨d0, hD, hn0⟩, hl⟩, hle, hw⟩ := hv
+  rcases hl with ⟨h1, -⟩ | ⟨-, rfl⟩ | ⟨h1, -⟩
+  · cases h1
+  · -- the region's node is the view's node, at the address `d0`
+    have hd0 : d0 = d := by
+      obtain ⟨_, _, _, h⟩ := hn0.eq; cases h; rfl
+    subst hd0
+    rcases hn0 with ⟨x, Tx, hx, hsx, -⟩ | ⟨k, bl, hk', hsk, -⟩
+    · by_cases hxo : x = o
+      · subst hxo
+        rw [hT] at hx; cases hx
+        obtain ⟨es', hs', hl', he⟩ := hr.keeps_enclosing' hsx (hb c es hsx)
+        have hw' : WFv (.vec t) (.node t c d0 es') := by
+          rcases he with rfl | hr0
+          · exact hw
+          · exact DSH_repl_wf hn hr0 hw
+        refine ⟨c, es', hk, ⟨_, ⟨d0, hD, Or.inl ⟨x, T', by simp [Mem.set, upd], hs', t, c, es', rfl⟩⟩,
+          Or.inr (Or.inl ⟨rfl, rfl⟩)⟩, hl' ▸ hle, hw'⟩
+      · refine ⟨c, es, hk, ⟨_, ⟨d0, hD, Or.inl ⟨x, Tx, ?_, hsx, t, c, es, rfl⟩⟩,
+          Or.inr (Or.inl ⟨rfl, rfl⟩)⟩, hle, hw⟩
+        simp [Mem.set, upd, hxo, hx]
+    · exact ⟨c, es, hk, ⟨_, ⟨d0, hD, Or.inr ⟨k, bl, hk', hsk, t, c, es, rfl⟩⟩,
+        Or.inr (Or.inl ⟨rfl, rfl⟩)⟩, hle, hw⟩
+  · cases h1
 
 end A2
