@@ -976,6 +976,47 @@ theorem Anchored.mono {E : Entry} {F F' : List Var} (h : Anchored E F) (hF : ∀
     Anchored E F' :=
   fun d hd hb => hF _ (h d hd hb)
 
+/-! #### AGORA-937: anchoring with regions
+
+A callee's lent parameter that holds views holds them of its region
+(`regionP`), past its frame. Where the callee's body is typed
+(`StmtT.ctxRel`), such a dependency is anchored by the region: no rule
+kills a region at `.view` (`RegionSpared`). A frame binds no region
+(`MInv.noRegion`), so there `RootbAnch` is all that is asked. -/
+
+/-- A dependency that is a view of a region. -/
+def RegionView (Γ : Ctx) (d : Dep) : Prop :=
+  d.kind = .view ∧ ∃ Er, Γ d.root = some Er ∧ Er.mode = .region
+
+/-- Anchored in `F`, or through a view of a region. -/
+def AnchoredIn (Γ : Ctx) (E : Entry) (F : List Var) : Prop :=
+  ∀ d ∈ E.vdeps, d.kind.bound = .none → d.root ∈ F ∨ RegionView Γ d
+
+/-- The borrowed parameters' anchors, regions allowed. -/
+def RootbAnchR (Γ : Ctx) (F : List Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → AnchoredIn Γ E F
+
+theorem RootbAnch.toR {Γ : Ctx} {F : List Var} (h : RootbAnch Γ F) : RootbAnchR Γ F :=
+  fun p E hp hm d hd hb => Or.inl (h p E hp hm d hd hb)
+
+theorem AnchoredIn.mono {Γ : Ctx} {E : Entry} {F F' : List Var} (h : AnchoredIn Γ E F)
+    (hF : ∀ v ∈ F, v ∈ F') : AnchoredIn Γ E F' :=
+  fun d hd hb => (h d hd hb).imp (hF _) id
+
+/-- With no region bound, the two agree. -/
+theorem RootbAnchR.toAnch {Γ : Ctx} {F : List Var} (h : RootbAnchR Γ F)
+    (hnr : ∀ v E, Γ v = some E → E.mode ≠ .region) : RootbAnch Γ F := fun p E hp hm d hd hb => by
+  rcases h p E hp hm d hd hb with h | ⟨_, Er, hEr, hr⟩
+  · exact h
+  · exact absurd hr (hnr _ _ hEr)
+
+/-- An anchoring through `Γ` holds through `Γ'` where every region of `Γ`
+    is still one. -/
+theorem AnchoredIn.of_regions {Γ Γ' : Ctx} {E : Entry} {F : List Var} (h : AnchoredIn Γ E F)
+    (hreg : ∀ v Er, Γ v = some Er → Er.mode = .region → ∃ Er', Γ' v = some Er' ∧ Er'.mode = .region) :
+    AnchoredIn Γ' E F := fun d hd hb =>
+  (h d hd hb).imp id fun ⟨hk, _, hEr, hr⟩ => ⟨hk, hreg _ _ hEr hr⟩
+
 
 /-- A2-drop.3d, Agora #610: what the invariant asks of a block's destructor
     values.  A view owns nothing (its tree is empty, `Blk.tree_view`; Agora

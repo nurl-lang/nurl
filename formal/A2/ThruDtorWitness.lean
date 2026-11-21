@@ -82,7 +82,7 @@ theorem dtor_body : ∃ Δ, StmtT P .none (sigCtx dtor) [] dtor.body Δ ∧
   apply body_typed
   let G := A2.setE (sigCtx dtor) 5 intE
   have hG : Calm G := calm_dtor.setE (by simp [intE])
-  obtain ⟨Δ, ht, hcΔ, h1⟩ := thru_typed (Q := P) hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl
+  obtain ⟨Δ, ht, hcΔ, h1⟩ := thru_typed (Q := P) hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl (fun h => by simp [intE] at h)
     (by decide) (by decide) (by decide) (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := dtor) (by decide), dtor])
     (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := dtor) (by decide), dtor]) (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := dtor) (by decide), dtor])
     (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := dtor) (by decide), dtor, R0, resMode])

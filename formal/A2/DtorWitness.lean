@@ -2407,17 +2407,21 @@ theorem implS_dtorOK : DtorOK P 10 GSD :=
 
 theorem implS_body : StmtT P ξ (sigCtx implS) [] implS.body
     (setE (kill .replace false 1 (sigCtx implS)) 1 { intE with mode := R0.mode }) := by
-  have hc : sigCtx implS 1 = some R0 := by simp [↓sigCtx_noRegion (fn := implS) (by decide), implS, R0, resMode]
-  have hflags : ∀ v E, sigCtx implS v = some E → E.dtor = false ∧ E.dbind = false := by
-    intro v E h
-    rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := implS) (by decide), implS, paramE, resMode] at h <;> subst h <;> exact ⟨rfl, rfl⟩
+  -- AGORA-937 (item 2): the lent parameter holds views (a slice), so it has a region
+  have hc : sigCtx implS 1 = some R0 := by simp [sigCtx, implS, R0, resMode]
   exact StmtT.assign (Ex := R0) (E := intE) hc (by simp) (Or.inr (Or.inr ⟨rfl, rfl⟩))
     (RhsT.expr ExprT.lit) rfl (by simp [intE, roots, Entry.vdeps, Mode.ownSlot]) (by simp [hc])
     (by
-      intro p E hp hm d hd _
-      rcases p with _ | _ | p <;> simp [↓sigCtx_noRegion (fn := implS) (by decide), implS, paramE, resMode, GSD, GS, DT, T, Ty.hasFn] at hp <;>
-        subst hp <;> simp [Entry.vdeps, Mode.ownSlot] at hd <;> simp at hm)
-    (DtorSafe.of_none (fun v E h => (hflags v E h).1) _ _ _) rfl
+      intro p E hp hm d hd hb
+      rcases sigCtx_cases hp with ⟨hpl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+      · rcases mem_regionP_vdeps hd with hd | ⟨rfl, _⟩
+        · have hp0 : p = 0 := by simp [implS] at hpl; omega
+          subst hp0
+          simp [implS, paramE, Entry.vdeps, Mode.ownSlot, GSD, GS, DT, T, Ty.hasFn] at hd
+        · simp [Kind.bound] at hb
+      · simp [resMode, implS] at hm
+      · simp [regionE] at hm)
+    (DtorSafe.of_none (fun v E h => (sigCtx_flags h).1) _ _ _) rfl
 
 theorem implS_ok : FnOK P implS := by
   refine ⟨rfl, by decide, by decide, rfl, by simp [implS], ?_, by simp [implS], by simp [implS], by simp [implS],
@@ -2428,8 +2432,12 @@ theorem implS_ok : FnOK P implS := by
     · simp [implS] at hi; subst hi; simp [implS] at hs
     · simp [implS] at hi; subst hi; simp [implS] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := implS) (by decide), implS, paramE, intE] at h <;>
-      subst h <;> exact ⟨rfl, rfl⟩
+    simp only [setE, upd] at h
+    split at h
+    · cases h; exact ⟨rfl, rfl⟩
+    · simp only [A2.kill] at h
+      obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp h
+      rw [killE_dtor, killE_dbind]; exact sigCtx_flags h0
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, implS], rfl, rfl, by simp [R0, resMode, implS],
       by simp [intE], by simp [intE], by simp [implS]⟩
   · intro i hi b hb; simp [implS] at hi; subst hi; simp [implS] at hb

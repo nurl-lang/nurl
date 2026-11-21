@@ -45,25 +45,38 @@ def P : Prog := [g]
 /-! ### The callee -/
 
 def Ep : Entry := ⟨vvi, .inout .replace, true, [], [], false, false, false, false⟩
-def Es : Entry := ⟨sl, .rootb, true, [], [], false, false, false, false⟩
+/-- `s`, lent: a slice holds views, so (AGORA-937, item 2) it holds its
+    region's view, `π 1 = nvars + 1 = 7`. -/
+def Es : Entry := ⟨sl, .rootb, true, [], [⟨7, .view⟩], false, false, false, false⟩
 def R0 : Entry := ⟨.int, .bor, false, [], [], false, false, false, false⟩
 /-- The element borrow, fresh: its path is `vv`'s elements. -/
 def Ee : Entry := ⟨vi, .bor, true, [⟨0, .inner⟩], [], false, false, true, false⟩
 
 /-- The callee's context, with result slot `r2`. -/
 def ctx (r2 : Entry) : Ctx := fun v =>
-  if v = 0 then some Ep else if v = 1 then some Es else if v = 2 then some r2 else none
+  if v = 0 then some Ep else if v = 1 then some Es else if v = 2 then some r2
+  else if v = 7 then some regionE else none
 
 theorem sig_eq : sigCtx g = ctx R0 := by
   funext v
-  simp only [↓sigCtx_noRegion (fn := g) (by decide), ctx, g, paramE, resMode]
-  rcases v with _ | _ | _ | v <;> simp [Ep, Es, R0, vvi, vi, sl, Ty.hasFn]
+  rcases v with _ | _ | _ | _ | _ | _ | _ | _ | v
+  iterate 8
+    simp [sigCtx, isRegionIdx, ctx, g, paramE, resMode, Ep, Es, R0, vvi, vi, sl, Ty.hasFn, regionP, regioned, Ty.holdsView, regionE]
+  · have hgt : g.params.length < v + 8 := by simp [g]
+    have hr : isRegionIdx g (v + 8) = false := by
+      cases h : isRegionIdx g (v + 8) with
+      | false => rfl
+      | true =>
+        obtain ⟨_, hl, _⟩ := isRegionIdx_iff.mp h
+        simp [g] at hl; omega
+    rw [sigCtx_gt hgt, hr]
+    simp [ctx]
 
 theorem calm_ctx {r : Entry} (hr : r.mode = .bor) (hd : r.dtor = false) (hb : r.dbind = false) :
     Calm (ctx r) := by
   intro v E h
-  rcases v with _ | _ | _ | v <;> simp [ctx] at h <;> subst h <;>
-    simp [Ep, Es, Entry.vdeps, Mode.ownSlot, hr, hd, hb]
+  rcases v with _ | _ | _ | _ | _ | _ | _ | _ | v <;> simp [ctx] at h <;> subst h <;>
+    simp [Ep, Es, Entry.vdeps, Mode.ownSlot, hr, hd, hb, regionE, Kind.bound]
 
 /-- `sl ( slice_from_vec vv )`: a fresh view, `vv` is an `inout` parameter. -/
 def Ev : Entry := ⟨.slice vi, .bor, true, [⟨0, .view⟩], [], false, false, true, false⟩
@@ -86,7 +99,6 @@ theorem sat_typed : RhsT G3 [] (.sat 3 (.lit 0)) Ee G3 := by
   simpa [elemE, Ev, Ee, vi, derive, Mode.isRoot, comp] using this
 
 theorem Ep_nodeps : Ep.vdeps = [] := by simp [Ep, Entry.vdeps, Mode.ownSlot]
-theorem Es_nodeps : Es.vdeps = [] := by simp [Es, Entry.vdeps, Mode.ownSlot]
 theorem R0_nodeps : R0.vdeps = [] := by simp [R0, Entry.vdeps, Mode.ownSlot]
 
 /-! ### The push through `( vec_at vv 0 )`: an `edit false` -/

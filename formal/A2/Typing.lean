@@ -2187,12 +2187,17 @@ def paramE (ps : List (PMode × Ty)) : PMode × Ty → Entry
   | (.inout b, t) => ⟨t, .inout b, true, [], if t.hasFn then symNames ps else [], false, false, false, false⟩
   | (.sink, t) => ⟨t, .own, true, [], if t.hasFn then symNames ps else [], false, false, false, false⟩
 
-/-- AGORA-937: a parameter with a region: one that owns its slot (`sink`,
-    `inout`) of a type that holds views. What those views point into is its
+/-- A lent (`.inp`) parameter. -/
+def PMode.isInp : PMode → Bool
+  | .inp => true
+  | _ => false
+
+/-- AGORA-937: a parameter with a region: one of a type that holds views, lent
+    (item 2) or owning its slot (`sink`, `inout`). What those views point into is its
     caller's memory, which the callee sees as the region `π p`
     (`fn.nvars + p`, past every body variable). -/
 def regioned (pt : PMode × Ty) : Bool :=
-  (match pt.1 with | .inp => false | _ => true) && pt.2.holdsView
+  pt.2.holdsView
 
 /-- AGORA-937 (turn-on 3): `r` is a region's index: `π p = fn.nvars + p` of
     a regioned parameter `p` (the call's `isPi`, `callS_isPi`). -/

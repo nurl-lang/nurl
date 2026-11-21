@@ -45,7 +45,8 @@ def thruL (n : Var) : Stmt :=
 def EbF : Entry := ⟨vi, .bor, true, [⟨2, .inner⟩], [], false, false, true, false⟩
 
 theorem thruL_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (hn : Γ n = some En)
-    (hnl : En.live = true) (hnt : En.ty = .int) (hn2 : n ≠ 2) (hn3 : n ≠ 3) (hn4 : n ≠ 4)
+    (hnl : En.live = true) (hnt : En.ty = .int) (hnv : En.mode = .rootb → En.vdeps = [])
+    (hn2 : n ≠ 2) (hn3 : n ≠ 3) (hn4 : n ≠ 4)
     (h2 : Γ 2 = none) (h3 : Γ 3 = none) (h4 : Γ 4 = none) (h1 : Γ 1 = some R0) :
     ∃ Δ, StmtT Q .none Γ [] (thruL n) Δ ∧ Calm Δ ∧ Δ 1 = some R0 := by
   let G2 := A2.setE Γ 2 Eloc
@@ -65,7 +66,7 @@ theorem thruL_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} 
   let G4 := A2.setE (A2.kill .realloc vi.holdsView 2 G3') 2 { Eloc with held := Eloc.held ++ ownHeld true vi Ein.held }
   have hG4 : Calm G4 := (hG3'.kill _ _ _).setE (by simp [Eloc])
   have hG42 : G4 2 = some Eloc := by simp [G4, A2.setE, Eloc, ownHeld, vi, Ty.holdsView]
-  have hke := killE_int hnt (hc n En hn).1
+  have hke := killE_int hnt hnv
   have hG4n : G4 n = some En := by
     simp [G4, G3', A2.setE, upd, A2.kill, hn2, hn3, h3n, hke]
   -- `( vec_at loc 0 )`, fresh: `loc` is an owner
@@ -134,8 +135,15 @@ theorem drop_ok : DropFnOK P 0 TV := Or.inl ⟨dtor_ok, by decide⟩
 
 theorem calm_dtor : Calm (sigCtx dtor) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor, paramE, DTV, TV, Ty.hasFn, resMode] at h <;>
-    subst h <;> simp [Entry.vdeps, Mode.ownSlot]
+  refine ⟨fun hm d hd => ?_, (sigCtx_flags h).1, (sigCtx_flags h).2⟩
+  rcases sigCtx_cases h with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+  · rcases mem_regionP_vdeps hd with hd | ⟨rfl, _⟩
+    · have hv0 : v = 0 := by simp [dtor] at hvl; omega
+      subst hv0
+      simp [dtor, paramE, DTV, TV, Ty.hasFn, Entry.vdeps, Mode.ownSlot] at hd
+    · rfl
+  · unfold resMode at hm; split at hm <;> cases hm
+  · simp [regionE] at hm
 
 theorem dtor_body : ∃ Δ, StmtT P .none (sigCtx dtor) [] dtor.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
@@ -143,12 +151,12 @@ theorem dtor_body : ∃ Δ, StmtT P .none (sigCtx dtor) [] dtor.body Δ ∧
   apply body_typed
   let G := A2.setE (sigCtx dtor) 5 intE
   have hG : Calm G := calm_dtor.setE (by simp [intE])
-  obtain ⟨Δ, ht, hcΔ, h1⟩ := thruL_typed (Q := P) hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl
-    (by decide) (by decide) (by decide) (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := dtor) (by decide), dtor])
-    (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := dtor) (by decide), dtor]) (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := dtor) (by decide), dtor])
-    (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := dtor) (by decide), dtor, R0, resMode])
+  obtain ⟨Δ, ht, hcΔ, h1⟩ := thruL_typed (Q := P) hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl (fun h => by simp [intE] at h)
+    (by decide) (by decide) (by decide) (by simp [G, A2.setE, sigCtx, isRegionIdx, dtor])
+    (by simp [G, A2.setE, sigCtx, isRegionIdx, dtor]) (by simp [G, A2.setE, sigCtx, isRegionIdx, dtor])
+    (by simp [G, A2.setE, sigCtx, dtor, R0, resMode])
   refine ⟨_, StmtT.letv (P := P) (ξ := .none) (x := 5) (Γ := sigCtx dtor) (Γ1 := sigCtx dtor) (F := [])
-    (E := intE) rfl (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor]) (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
+    (E := intE) rfl (by simp [sigCtx, isRegionIdx, dtor]) (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
     (fun h => by simp [intE] at h), hcΔ.exitScope 5, ?_⟩
   simp [A2.exitScope, upd, A2.kill, h1, killE, hits, R0]
 

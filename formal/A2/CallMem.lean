@@ -322,7 +322,7 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
     rcases callRen_cases fn.params args m.nv v with ⟨b, t, hvp, hr⟩ | ⟨hnv, hr⟩
     · refine Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ⟨v, b, t, hvp, by rw [← hv, hr], ?_⟩))))
       rw [← hv]; change (callS Γ F fn args m.nv x).canon (sigCtx fn) ((callS Γ F fn args m.nv x).ρ v) = _
-      rw [h.canon_param hvp]; simp [RSetup.liftE, paramE, liftMode, Mode.ownSlot, callS, rds]
+      rw [h.canon_param hvp]; simp [RSetup.liftE, paramE, liftMode, Mode.ownSlot, callS, rds, PMode.isInp]
     · rw [hr] at hv; subst hv
       rcases Nat.lt_trichotomy v fn.params.length with hlt | heq | hgt
       · have hget : fn.params[v]? = some fn.params[v] := List.getElem?_eq_getElem hlt
@@ -334,13 +334,14 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
         cases pm with
         | inp =>
           refine Or.inr (Or.inr (Or.inl ⟨v, t, hget, by simp, ?_⟩))
-          simp only [RSetup.liftE, paramE, ↓reduceIte, regioned, Bool.false_and]
+          simp only [RSetup.liftE, paramE, ↓reduceIte, PMode.isInp, Bool.not_true, Bool.and_false,
+            Bool.false_eq_true, List.nil_append]
           congr 1
           show { callPe Γ fn.params args v with live := true, fresh := false, heldFresh := false } = _
           rw [with_live_fresh _ (callPe_live _ _ _ _) (callPe_fresh _ _ _ _) (callPe_heldFresh _ _ _ _)]
         | sink =>
           refine Or.inr (Or.inr (Or.inr (Or.inl ⟨v, t, hget, by simp, ?_⟩)))
-          simp [RSetup.liftE, paramE, liftMode, Mode.ownSlot, callS, rds]
+          simp [RSetup.liftE, paramE, liftMode, Mode.ownSlot, callS, rds, PMode.isInp]
         | inout b => exact absurd hget (hnv b t)
       · subst heq
         refine Or.inr (Or.inl ⟨rfl, ?_⟩)
@@ -503,11 +504,11 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       rw [hs] at hown'; cases hown'
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
       have hr := RhsT.copyRoot (F := F) hEa hl hm
-      obtain ⟨_, hout⟩ := rhs_pres hi h.anch hr (EvalR.copy hv)
+      obtain ⟨_, hout⟩ := rhs_pres hi (h.anch.toAnch hi.noRegion) hr (EvalR.copy hv)
       exact ⟨v, by rw [hv]; rfl, hout.valBor rfl⟩
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
       have hr := RhsT.copyBor (F := F) hEa hl hm
-      obtain ⟨_, hout⟩ := rhs_pres hi h.anch hr (EvalR.copy hv)
+      obtain ⟨_, hout⟩ := rhs_pres hi (h.anch.toAnch hi.noRegion) hr (EvalR.copy hv)
       have hd : derive (args.getD k 0) Ea .self = Ea.path := by
         simp [derive, hm, Mode.isRoot, comp_self_r]
       exact ⟨v, by rw [hv]; rfl, by rw [hd]; exact hout.valBor hm⟩

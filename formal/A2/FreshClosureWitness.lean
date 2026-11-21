@@ -83,7 +83,7 @@ theorem fbody_typed {fn : Fn} (hb : fn.body = fbody) (hc : Calm (sigCtx fn)) (h1
   apply body_typed
   let G := A2.setE (sigCtx fn) 5 intE
   have hG : Calm G := hc.setE (by simp [intE])
-  obtain ⟨Δ, ht, hcΔ, h1'⟩ := thruL_typed (Q := P) hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl
+  obtain ⟨Δ, ht, hcΔ, h1'⟩ := thruL_typed (Q := P) hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl (fun h => by simp [intE] at h)
     (by decide) (by decide) (by decide) (by simp [G, A2.setE, h2])
     (by simp [G, A2.setE, h3]) (by simp [G, A2.setE, h4])
     (by simp [G, A2.setE, h1])
@@ -94,23 +94,37 @@ theorem fbody_typed {fn : Fn} (hb : fn.body = fbody) (hc : Calm (sigCtx fn)) (h1
 
 theorem calm_sig : Calm (sigCtx sig) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := sig) (by decide), sig, paramE, symNames, CT, Ty.hasFn, resMode] at h <;>
-    subst h <;> simp [Entry.vdeps, Mode.ownSlot]
+  refine ⟨fun hm d hd => ?_, (sigCtx_flags h).1, (sigCtx_flags h).2⟩
+  rcases sigCtx_cases h with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+  · rcases mem_regionP_vdeps hd with hd | ⟨rfl, _⟩
+    · have hv0 : v = 0 := by simp [sig] at hvl; omega
+      subst hv0
+      simp [sig, paramE, symNames, CT, Ty.hasFn, Entry.vdeps, Mode.ownSlot] at hd
+    · rfl
+  · unfold resMode at hm; split at hm <;> cases hm
+  · simp [regionE] at hm
 
 theorem calm_code : Calm (sigCtx code) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := code) (by decide), code, paramE, sl, Ty.hasFn, resMode] at h <;>
-    subst h <;> simp [Entry.vdeps, Mode.ownSlot]
+  refine ⟨fun hm d hd => ?_, (sigCtx_flags h).1, (sigCtx_flags h).2⟩
+  rcases sigCtx_cases h with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+  · rcases mem_regionP_vdeps hd with hd | ⟨rfl, _⟩
+    · have hv0 : v = 0 := by simp [code] at hvl; omega
+      subst hv0
+      simp [code, paramE, sl, Ty.hasFn, Entry.vdeps, Mode.ownSlot] at hd
+    · rfl
+  · unfold resMode at hm; split at hm <;> cases hm
+  · simp [regionE] at hm
 
 theorem sig_body : ∃ Δ, StmtT P .none (sigCtx sig) [] sig.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
-    Δ 1 = some { intE with mode := R0.mode } := fbody_typed (fn := sig) rfl calm_sig (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig, R0, resMode])
-  (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig]) (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig]) (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig]) (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig])
+    Δ 1 = some { intE with mode := R0.mode } := fbody_typed (fn := sig) rfl calm_sig (by simp [sigCtx, sig, R0, resMode])
+  (by simp [sigCtx, isRegionIdx, sig]) (by simp [sigCtx, isRegionIdx, sig]) (by simp [sigCtx, isRegionIdx, sig]) (by simp [sigCtx, isRegionIdx, sig])
 
 theorem code_body : ∃ Δ, StmtT P .none (sigCtx code) [] code.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
-    Δ 1 = some { intE with mode := R0.mode } := fbody_typed (fn := code) rfl calm_code (by simp [↓sigCtx_noRegion (fn := code) (by decide), code, R0, resMode])
-  (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp [↓sigCtx_noRegion (fn := code) (by decide), code])
+    Δ 1 = some { intE with mode := R0.mode } := fbody_typed (fn := code) rfl calm_code (by simp [sigCtx, code, R0, resMode])
+  (by simp [sigCtx, isRegionIdx, code]) (by simp [sigCtx, isRegionIdx, code]) (by simp [sigCtx, isRegionIdx, code]) (by simp [sigCtx, isRegionIdx, code])
 
 theorem code_ok : FnOK P code := by
   obtain ⟨Δ, hb, hfl, hr⟩ := code_body

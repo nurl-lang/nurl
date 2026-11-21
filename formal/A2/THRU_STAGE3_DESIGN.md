@@ -371,10 +371,36 @@ Building it turned up a point the analysis above missed:
 - **`Eff.le`** is `Eff.leb`, inclusion of kills. `Eff.kills_mono` still
   holds, and the order on the old four effects is unchanged.
 
-**What item 2 still needs from it.** A region root's binding has type
+### Done: item 2 (lent-parameter regions)
+
+`regioned` now covers lent parameters (`formal/rules/t937-lent-regions.md`).
+The four Call.lean proofs the probe broke were symptoms of three things:
+
+- **Anchoring.** A lent parameter's non-name dependency had to have its root
+  in `F`, the frozen roots. A region is not frozen: item 3 must allow a
+  change through it. So typing asks `RootbAnchR` instead (`AnchoredIn`:
+  in `F`, or a `.view` of a `.region` binding), and a kill spares such a view
+  when its target is no region (`RegionSpared`, `killE_rootbR`). Every kill
+  typing makes is of a binding that owns its slot, so each site proves it
+  from the rule's own mode premise. Frames bind no region, so they keep
+  `RootbAnch`; the conversion `RootbAnchR.toAnch` runs one way only.
+- **The lift of a lent parameter.** `liftE` replaces a `.rootb` entry with
+  the argument's own (`S.pe`), which already holds what the parameter views.
+  So `canon_param` adds `σ` for `sink`/`inout` regioned parameters only
+  (`PMode.isInp`).
+- **`AbsOK` clause 1.** A lent entry's held may start with views of regions
+  (`RegViews`). The lemmas that lift a kill (`hits_lift` … `canon_killHv`)
+  ask `S.isReg x = false`. That is not the same as `isPi x = false` in a
+  ghost setting, which substitutes no region.
+
+Witnesses: every one whose lent parameter holds views now sees its region.
+AGORA-909's own example (`ParamViewWitness`) still types its store as an
+`edit false`.
+
+**What item 3 still needs from item 1.** A region root's binding has type
 `.int` (`regionE`, `AbsOK` clause 4), so `Ty.isVec` is false there, and
 `f1`'s change through `vv`'s slice still gives `π p` the effect `.drop`.
-Item 2 must give a region root `.dropIn` when what it stands for is a
+Item 3 must give a region root `.dropIn` when what it stands for is a
 `Vec`'s buffer. That is sound for regions by `RegionViewAt.keep_inner`,
 whose region nodes are `DataAt` nodes, so always nodes. The likely form is
 an `rvec` read off the parameter's type, or `E.mode = .region` with the

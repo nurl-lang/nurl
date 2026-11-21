@@ -84,13 +84,15 @@ def Eloc : Entry := ⟨vvi, .own, true, [], [], false, false, false, false⟩
 def Ein : Entry := ⟨vi, .own, true, [], [], false, false, false, false⟩
 def Eb : Entry := ⟨vi, .bor, true, [⟨2, .inner⟩], [], false, false, false, false⟩
 
-/-- No borrowed parameter depends on anything (so none pins a binding), and
-    no binding runs a destructor. -/
+/-- No borrowed parameter depends on anything by name (so none pins a
+    binding; AGORA-937, item 2: one holding views holds its region's view,
+    which no name bounds), and no binding runs a destructor. -/
 def Calm (Γ : Ctx) : Prop :=
-  ∀ v E, Γ v = some E → (E.mode = .rootb → E.vdeps = []) ∧ E.dtor = false ∧ E.dbind = false
+  ∀ v E, Γ v = some E → (E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound = .none) ∧ E.dtor = false ∧
+    E.dbind = false
 
 theorem Calm.noPin {Γ : Ctx} (h : Calm Γ) (x : Var) : NoPin Γ x :=
-  fun p E hp hm d hd => by rw [(h p E hp).1 hm] at hd; cases hd
+  fun p E hp hm d hd hb => absurd ((h p E hp).1 hm d hd) hb
 
 theorem Calm.dtor {Γ : Ctx} (h : Calm Γ) (e : Eff) (hv : Bool) (x : Var) : DtorSafe Γ e hv x :=
   DtorSafe.of_none (fun v E hv => (h v E hv).2.1) _ _ _
@@ -99,7 +101,7 @@ theorem Calm.endOK {Γ : Ctx} (h : Calm Γ) (x : Var) : EndOK Γ x :=
   ⟨h.noPin x, h.dtor _ _ _, DbindSafe.of_none (fun v E hv => (h v E hv).2.2) x⟩
 
 theorem Calm.setE {Γ : Ctx} (h : Calm Γ) {x : Var} {E : Entry}
-    (hE : (E.mode = .rootb → E.vdeps = []) ∧ E.dtor = false ∧ E.dbind = false) :
+    (hE : (E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound = .none) ∧ E.dtor = false ∧ E.dbind = false) :
     Calm (A2.setE Γ x E) := by
   intro v E' hv
   simp only [A2.setE, upd] at hv
@@ -144,13 +146,27 @@ theorem killE_int {E : Entry} (ht : E.ty = .int) (hr : E.mode = .rootb → E.vde
 
 theorem calm_sig : Calm (sigCtx sig) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := sig) (by decide), sig, paramE, symNames, CT, Ty.hasFn, resMode] at h <;>
-    subst h <;> simp [Entry.vdeps, Mode.ownSlot]
+  refine ⟨fun hm d hd => ?_, (sigCtx_flags h).1, (sigCtx_flags h).2⟩
+  rcases sigCtx_cases h with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+  · rcases mem_regionP_vdeps hd with hd | ⟨rfl, _⟩
+    · have hv0 : v = 0 := by simp [sig] at hvl; omega
+      subst hv0
+      simp [sig, paramE, symNames, CT, Ty.hasFn, Entry.vdeps, Mode.ownSlot] at hd
+    · rfl
+  · unfold resMode at hm; split at hm <;> cases hm
+  · simp [regionE] at hm
 
 theorem calm_code : Calm (sigCtx code) := by
   intro v E h
-  rcases v with _ | _ | v <;> simp [↓sigCtx_noRegion (fn := code) (by decide), code, paramE, Ty.hasFn, resMode] at h <;>
-    subst h <;> simp [Entry.vdeps, Mode.ownSlot]
+  refine ⟨fun hm d hd => ?_, (sigCtx_flags h).1, (sigCtx_flags h).2⟩
+  rcases sigCtx_cases h with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, _, _, rfl⟩
+  · rcases mem_regionP_vdeps hd with hd | ⟨rfl, _⟩
+    · have hv0 : v = 0 := by simp [code] at hvl; omega
+      subst hv0
+      simp [code, paramE, Ty.hasFn, Entry.vdeps, Mode.ownSlot] at hd
+    · rfl
+  · unfold resMode at hm; split at hm <;> cases hm
+  · simp [regionE] at hm
 
 /-! ### The result slot stays as it was -/
 
@@ -192,7 +208,8 @@ theorem thru_ok {Γ : Ctx} (hc : Calm Γ) {n : Var} {E : Entry} (h2 : Γ 2 = som
     slot `1` untouched — in any program: it calls nothing (the destructor
     witness `A2.ThruDtorWitness` types the same body). -/
 theorem thru_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (hn : Γ n = some En)
-    (hnl : En.live = true) (hnt : En.ty = .int) (hn2 : n ≠ 2) (hn3 : n ≠ 3) (hn4 : n ≠ 4)
+    (hnl : En.live = true) (hnt : En.ty = .int) (hnv : En.mode = .rootb → En.vdeps = [])
+    (hn2 : n ≠ 2) (hn3 : n ≠ 3) (hn4 : n ≠ 4)
     (h2 : Γ 2 = none) (h3 : Γ 3 = none) (h4 : Γ 4 = none) (h1 : Γ 1 = some R0) :
     ∃ Δ, StmtT Q .none Γ [] (thru n) Δ ∧ Calm Δ ∧ Δ 1 = some R0 := by
   -- `: ( Vec ( Vec i ) ) loc`
@@ -215,7 +232,7 @@ theorem thru_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (
   let G4 := A2.setE (A2.kill .realloc vi.holdsView 2 G3') 2 { Eloc with held := Eloc.held ++ ownHeld true vi Ein.held }
   have hG4 : Calm G4 := (hG3'.kill _ _ _).setE (by simp [Eloc])
   have hG42 : G4 2 = some Eloc := by simp [G4, A2.setE, Eloc, ownHeld, vi, Ty.holdsView]
-  have hke := killE_int hnt (hc n En hn).1
+  have hke := killE_int hnt hnv
   have hG4n : G4 n = some En := by
     simp [G4, G3', A2.setE, upd, A2.kill, hn2, hn3, h3n, hke]
   -- `( vec_at loc 0 )`
@@ -271,7 +288,8 @@ theorem code_body : ∃ Δ, StmtT P .none (sigCtx code) [] code.body Δ ∧
     (∀ v E, Δ v = some E → E.dtor = false ∧ E.dbind = false) ∧
     Δ 1 = some { intE with mode := R0.mode } :=
   body_typed (thru_typed calm_code (En := ⟨.int, .rootb, true, [], [], false, false, false, false⟩)
-    (by simp [↓sigCtx_noRegion (fn := code) (by decide), code, paramE, Ty.hasFn]) rfl rfl (by decide) (by decide) (by decide)
+    (by simp [↓sigCtx_noRegion (fn := code) (by decide), code, paramE, Ty.hasFn]) rfl rfl (fun _ => rfl)
+    (by decide) (by decide) (by decide)
     (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp [↓sigCtx_noRegion (fn := code) (by decide), code]) (by simp [↓sigCtx_noRegion (fn := code) (by decide), code])
     (by simp [↓sigCtx_noRegion (fn := code) (by decide), code, R0, resMode]))
 
@@ -281,12 +299,12 @@ theorem sig_body : ∃ Δ, StmtT P .none (sigCtx sig) [] sig.body Δ ∧
   apply body_typed
   let G := A2.setE (sigCtx sig) 5 intE
   have hG : Calm G := calm_sig.setE (by simp [intE])
-  obtain ⟨Δ, ht, hcΔ, h1⟩ := thru_typed hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl
-    (by decide) (by decide) (by decide) (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := sig) (by decide), sig])
-    (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := sig) (by decide), sig]) (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := sig) (by decide), sig])
-    (by simp [G, A2.setE, ↓sigCtx_noRegion (fn := sig) (by decide), sig, R0, resMode])
+  obtain ⟨Δ, ht, hcΔ, h1⟩ := thru_typed hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl (fun h => by simp [intE] at h)
+    (by decide) (by decide) (by decide) (by simp [G, A2.setE, sigCtx, sig, isRegionIdx])
+    (by simp [G, A2.setE, sigCtx, sig, isRegionIdx]) (by simp [G, A2.setE, sigCtx, sig, isRegionIdx])
+    (by simp [G, A2.setE, sigCtx, sig, R0, resMode])
   refine ⟨_, StmtT.letv (P := P) (ξ := .none) (x := 5) (Γ := sigCtx sig) (Γ1 := sigCtx sig) (F := [])
-    (E := intE) rfl (by simp [↓sigCtx_noRegion (fn := sig) (by decide), sig]) (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
+    (E := intE) rfl (by simp [sigCtx, sig, isRegionIdx]) (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
     (fun h => by simp [intE] at h), hcΔ.exitScope 5, ?_⟩
   simp [A2.exitScope, upd, A2.kill, h1, killE, hits, R0]
 

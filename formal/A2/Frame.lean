@@ -347,6 +347,53 @@ theorem killE_rootb {Γ : Ctx} {F : List Var}
       · exact absurd hr (hmn v E hE hrb dep hd hb hk)
   rw [this]; rfl
 
+/-- AGORA-937: what a kill of `x` asks to spare a borrowed parameter's
+    views of a region: `x` is no region, or the effect ends no view. -/
+def RegionSpared (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) : Prop :=
+  (∃ Ex, Γ x = some Ex ∧ Ex.mode = .region) → e.kills hv .view = false
+
+theorem RegionSpared.of_ne {Γ : Ctx} {x : Var} {Ex : Entry} (hx : Γ x = some Ex) (hm : Ex.mode ≠ .region)
+    (e : Eff) (hv : Bool) : RegionSpared Γ e hv x := fun ⟨E, h, hr⟩ => by
+  rw [hx] at h; cases h; exact absurd hr hm
+
+/-- A kill keeps every binding's mode, so what is a region stays one. -/
+theorem RegionSpared.of_kill {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : RegionSpared Γ e hv x)
+    (e' : Eff) (hv' : Bool) (y : Var) : RegionSpared (A2.kill e' hv' y Γ) e hv x := fun ⟨Ex, hx, hr⟩ => by
+  simp only [A2.kill] at hx
+  obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hx
+  exact h ⟨E0, h0, by rwa [killE_mode] at hr⟩
+
+theorem RegionSpared.of_killNames {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : RegionSpared Γ e hv x) :
+    ∀ ds, RegionSpared (A2.killNames ds Γ) e hv x
+  | [] => h
+  | _ :: ds => show RegionSpared (A2.kill _ _ _ (A2.killNames ds Γ)) e hv x from
+      (RegionSpared.of_killNames h ds).of_kill _ _ _
+
+/-- `killE_rootb` where a borrowed parameter may view a region
+    (`RootbAnchR`): a kill of a region ends no view (`RegionSpared`). -/
+theorem killE_rootbR {Γ : Ctx} {F : List Var}
+    (hanch : RootbAnchR Γ F)
+    {x : Var} (hxF : x ∉ F) (e : Eff) (hv : Bool)
+    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      e.kills hv d.kind = true → d.root ≠ x)
+    (hxr : RegionSpared Γ e hv x)
+    {v : Var} {E : Entry} (hE : Γ v = some E)
+    (hrb : E.mode = .rootb) : killE e hv x E = E := by
+  unfold killE
+  have : hits e hv x E = false := by
+    unfold hits
+    simp only [Bool.and_eq_false_iff, List.any_eq_false, Bool.and_eq_true,
+      beq_iff_eq, not_and, Bool.not_eq_true]
+    refine Or.inr fun dep hd hr => ?_
+    by_cases hb : dep.kind.bound = .none
+    · rcases hanch v E hE hrb dep hd hb with h | ⟨hk, Er, hEr, hreg⟩
+      · exact absurd (hr ▸ h) hxF
+      · rw [hk]; exact hxr ⟨Er, hr ▸ hEr, hreg⟩
+    · cases hk : e.kills hv dep.kind
+      · rfl
+      · exact absurd hr (hmn v E hE hrb dep hd hb hk)
+  rw [this]; rfl
+
 theorem NoPin.kills {Γ : Ctx} {x : Var} (h : NoPin Γ x) (e : Eff) (hv : Bool) :
     ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
       e.kills hv d.kind = true → d.root ≠ x :=
