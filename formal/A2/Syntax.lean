@@ -104,6 +104,16 @@ inductive Ty where
                      -- (`Ty.hasGuard`)
 deriving DecidableEq, Repr
 
+/-- A `Vec` type: a value of it is one node, so a root of it has no part at
+    its top but that node, and what is reached `.inner` lies strictly inside
+    the node's elements (`Edit.inEff`). -/
+def Ty.isVec : Ty → Bool
+  | .vec _ => true
+  | _ => false
+
+theorem Ty.isVec_eq {t : Ty} (h : t.isVec = true) : ∃ u, t = .vec u := by
+  cases t <;> simp [Ty.isVec] at h ⊢
+
 /-- Does a value of this type hold views (so that storing one into a
     container makes the container depend on what is viewed)? -/
 def Ty.holdsView : Ty → Bool
@@ -761,6 +771,11 @@ theorem Ty.owning_of_isStruct {t : Ty} (h : t.isStruct = true) : t.owning = true
 
   * `none`    — reads it;
   * `realloc` — may move its buffer (`vec_push`): ends views;
+  * `dropIn`  — may change memory strictly inside its elements, its own
+                buffer keeping its address and length (a change through
+                `vec_at` of a `Vec` of `Vec`s): ends borrows of elements,
+                and, when its elements hold views, what `drop` ends
+                (AGORA-937);
   * `drop`    — may drop elements (`vec_pop`): ends views and borrows of
                 elements;
   * `replace` — releases or replaces it (a move, `vec_free`, `=`, the end
@@ -768,19 +783,36 @@ theorem Ty.owning_of_isStruct {t : Ty} (h : t.isStruct = true) : t.owning = true
 inductive Eff where
   | none
   | realloc
+  | dropIn
   | drop
   | replace
 deriving DecidableEq, Repr
 
-def Eff.rank : Eff → Nat
-  | .none => 0
-  | .realloc => 1
-  | .drop => 2
-  | .replace => 3
+/-- The order on effects: `a` ends no borrow `b` does not (`Eff.kills_mono`).
+    `realloc` and `dropIn` are apart: one moves the buffer, the other
+    changes what is inside its elements. -/
+@[simp] def Eff.leb : Eff → Eff → Bool
+  | .none, _ => true
+  | _, .replace => true
+  | .realloc, .realloc => true
+  | .realloc, .drop => true
+  | .dropIn, .dropIn => true
+  | .dropIn, .drop => true
+  | .drop, .drop => true
+  | _, _ => false
 
-def Eff.le (a b : Eff) : Prop := a.rank ≤ b.rank
+def Eff.le (a b : Eff) : Prop := a.leb b = true
 
-instance (a b : Eff) : Decidable (Eff.le a b) := inferInstanceAs (Decidable (_ ≤ _))
+instance (a b : Eff) : Decidable (Eff.le a b) := inferInstanceAs (Decidable (_ = true))
+
+theorem Eff.le_refl (a : Eff) : a.le a := by cases a <;> rfl
+
+theorem Eff.le_trans {a b c : Eff} (h1 : a.le b) (h2 : b.le c) : a.le c := by
+  cases a <;> cases b <;> cases c <;> simp_all [Eff.le, Eff.leb]
+
+theorem Eff.none_le (a : Eff) : Eff.none.le a := rfl
+
+theorem Eff.le_replace (a : Eff) : a.le .replace := by cases a <;> rfl
 
 /-- How a borrow reaches the memory of the binding it depends on.
 
@@ -832,9 +864,12 @@ def Eff.kills (e : Eff) (hv : Bool) (k : Kind) : Bool :=
   | .realloc, .inner => false
   | .realloc, .share => false
   | .realloc, .self => hv
+  | .dropIn, .self => hv
+  | .dropIn, .view => hv
   | .drop, .self => hv
   | .replace, _ => true
   | _, .name _ _ => false
+  | .dropIn, _ => true
   | .drop, _ => true
 
 /-- Integer expressions.  They read but never move. -/

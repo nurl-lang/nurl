@@ -110,15 +110,14 @@ macro_rules
     drop elements, typed by `StmtT.editB`. -/
 theorem thru_ok {Γ : Ctx} (hn : NoRootb Γ) {op : Edit} {k : Kind} {tx : Ty}
     (h0 : Γ 0 = some ⟨vstr, .own, true, [], [], false, false, false, false⟩) (hst : ∀ y, op.stored = some y → y ≠ 0)
-    (hkn : k.isName = false) (hk : k ≠ .share) (hdrop : op.effAt k (decide (vstr = tx)) = .drop) :
+    (hkn : k.isName = false) (hk : k ≠ .share) :
     ThruOK Γ [] op tx [⟨0, k⟩] := by
   intro d hd
   simp only [memDeps, hkn, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
   subst hd
   refine ⟨by simp, fun y hy => (hst y hy).symm, _, h0, rfl, Or.inl rfl, ?_, hk⟩
-  simp only at hdrop ⊢
-  rw [hdrop]; exact nrDtor hn _ _ _
+  exact nrDtor hn _ _ _
 
 syntax "fin" : tactic
 macro_rules
@@ -142,7 +141,7 @@ theorem pop_typed {ξ : Exits} {Γ : Ctx} (hn : NoRootb Γ) {x : Var} {E : Entry
   have h := StmtT.editB (b := true) (P := P) (ξ := ξ) (F := []) (op := .trunc (.dec (.len x))) (t := u) (D := [])
     hx rfl rfl rfl hu (by simp)
     (EditArg.trunc (ExprT.dec (ExprT.len hx rfl rfl))) (fun _ h => by cases h) hx rfl
-    (by simp [memDeps, hkn]) (thru_ok hn h0 (fun _ h => by cases h) hkn hk rfl) (fun _ => hud)
+    (by simp [memDeps, hkn]) (thru_ok hn h0 (fun _ h => by cases h) hkn hk) (fun _ => hud)
   exact h
 
 /-- `x[0] := f` through the borrow `x`, `f` a number. -/
@@ -156,7 +155,7 @@ theorem set_typed {ξ : Exits} {Γ : Ctx} (hn : NoRootb Γ) {x f : Var} {E : Ent
     hx rfl rfl rfl rfl (by simp)
     (EditArg.set ExprT.lit hf rfl rfl PushArg.int) (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hfx)
     hx rfl (by simp [Eb, memDeps, Kind.isName])
-    (thru_ok hn h0 (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hf0) rfl (by simp) rfl)
+    (thru_ok hn h0 (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hf0) rfl (by simp))
     (fun _ => rfl)
   exact h
 

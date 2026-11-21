@@ -78,13 +78,53 @@ theorem MInv.killHv_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (h
     have ih := MInv.killHv_more hi hanch ks (fun k hk => h k (List.mem_cons_of_mem _ hk))
     exact ih.kill_more (hanch.killHv ks) (h _ List.mem_cons_self).1 (h _ List.mem_cons_self).2 b
 
+/-! ### AGORA-937: `.dropIn` where the elements hold views
+
+A change strictly inside the elements of a root whose elements hold views
+ends what `.drop` ends (`Eff.kills`): what a borrow of the root's handle or
+of its buffer may read out of it has changed. So here a `.dropIn` is a
+`.drop`. -/
+
+theorem Eff.kills_dropIn_true (k : Kind) : Eff.kills .dropIn true k = Eff.kills .drop true k := by
+  cases k <;> rfl
+
+theorem killE_dropIn_true (x : Var) (E : Entry) : killE .dropIn true x E = killE .drop true x E := by
+  unfold killE hits; simp only [Eff.kills_dropIn_true]
+
+theorem kill_dropIn_true (x : Var) (Γ : Ctx) : A2.kill .dropIn true x Γ = A2.kill .drop true x Γ := by
+  have h : killE .dropIn true x = killE .drop true x := funext (killE_dropIn_true x)
+  funext v; simp only [A2.kill, h]
+
+theorem DtorSafe.of_dropIn_true {Γ : Ctx} {x : Var} (h : DtorSafe Γ .dropIn true x) : DtorSafe Γ .drop true x := by
+  intro v E hE hd hos
+  have := h v E hE hd hos
+  simpa [hitsMem, Eff.kills_dropIn_true] using this
+
+/-- A frame owner allows `.drop` if it allows any change: it is no
+    `inout` parameter (`MInv.noInout`). -/
+theorem MInv.canDo_drop {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {o : Var} {Eo : Entry} (ho : Γ o = some Eo)
+    {e : Eff} (h : canDo Eo.mode e) : canDo Eo.mode .drop := by
+  rcases h with h | ⟨b, h, _⟩
+  · exact Or.inl h
+  · exact absurd h (hi.noInout o Eo b ho)
+
+/-- What a change that does not reallocate does where the elements hold
+    views, as a `.drop`. -/
+theorem effAt_dropV {op : Edit} {k : Kind} {s rv : Bool} {Γ : Ctx} {x : Var}
+    (hre : op.effAt k s rv ≠ .realloc) :
+    A2.kill (op.effAt k s rv) true x Γ = A2.kill .drop true x Γ ∧
+      (DtorSafe Γ (op.effAt k s rv) true x → DtorSafe Γ .drop true x) := by
+  rcases Edit.effAt_not_realloc hre with h | ⟨h, _⟩ <;> rw [h]
+  · exact ⟨rfl, id⟩
+  · exact ⟨kill_dropIn_true x Γ, DtorSafe.of_dropIn_true⟩
+
 /-- The kills of a change through a borrow are below `.replace`, on roots
     the change allows (`ThruOK`), so none is lent out. -/
 theorem thruKills_ok {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
     (hthru : ThruOK Γ1 F op tx P) : ∀ k ∈ thruKills op Γ1 tx P, k.2.2 ∉ F ∧ k.1 ≠ .replace := by
   intro k hk
   obtain ⟨d, hd, rfl⟩ := mem_thruKills.mp hk
-  exact ⟨(hthru d hd).1, Edit.effAt_ne_replace _ _ _⟩
+  exact ⟨(hthru d hd).1, Edit.effAt_ne_replace _ _ _ _⟩
 
 /-! ### Holding more, and kills -/
 
@@ -837,13 +877,13 @@ theorem MInv.editBV_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) 
     (hDn : ∀ d ∈ D, d.kind.isName = false)
     (hDr : ∀ r ∈ roots D, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
     {dep : Dep} (hdep : dep ∈ memDeps Ex.path)
-    (hown : MInv m' (A2.holdOn [dep.root] D (A2.kill (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty)))
+    (hown : MInv m' (A2.holdOn [dep.root] D (A2.kill (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty)) (argE Γ1 dep.root).ty.isVec)
       (argE Γ1 dep.root).ty.holdsView dep.root Γ1)))
     {c : Nat} (hxs : m'.st x = some ⟨false, some (.href c)⟩) (hhref : HrefAt m' dep c t (Ex.held ++ D))
     (hpf : ∀ i, PkgNames m' Γ1 { Ex with held := Ex.held ++ D } (.href c) i → PkgFreeId m' i) :
     MInv m' (A2.setE (holdThru D Ex.path (killThruV op Ex.ty Ex.path Γ1)) x
       { Ex with held := Ex.held ++ D }) := by
-  have hk0 : (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty)), (argE Γ1 dep.root).ty.holdsView,
+  have hk0 : (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty)) (argE Γ1 dep.root).ty.isVec, (argE Γ1 dep.root).ty.holdsView,
       dep.root) ∈ thruKills op Γ1 Ex.ty Ex.path := mem_thruKills.mpr ⟨dep, hdep, rfl⟩
   have hdr : dep.root ∈ roots (memDeps Ex.path) := List.mem_map_of_mem hdep
   -- the roots own their slots, were made by no `letd`, and are none of `D`'s
@@ -873,7 +913,7 @@ theorem MInv.editBV_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) 
     rintro rs Γ' r ⟨Er, hEr, hro⟩
     exact ⟨_, holdOn_some hEr, by split <;> exact hro⟩
   have hanch1 : RootbAnch (A2.holdOn [dep.root] D (A2.kill (op.effAt dep.kind
-      (decide ((argE Γ1 dep.root).ty = Ex.ty))) (argE Γ1 dep.root).ty.holdsView dep.root Γ1)) F :=
+      (decide ((argE Γ1 dep.root).ty = Ex.ty)) (argE Γ1 dep.root).ty.isVec) (argE Γ1 dep.root).ty.holdsView dep.root Γ1)) F :=
     (hanch.kill _ _ _).holdOn (fun v hv E hE => by
       simp only [List.mem_singleton] at hv; subst hv
       obtain ⟨E0, h0, hm0, _⟩ := kill_cmode hE
@@ -977,7 +1017,7 @@ theorem MInv.editBV_fin {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 �
     (hsh' : SharesOK m' (.vec t) (.node t c d' es'))
     (hnew : ∀ s w, ViewIn (.vec t) (.node t c d' es') s w → ViewIn (.vec t) (.node t c d es) s w ∨
       ∃ d0 o0 l0, w = .view d0 o0 l0 ∧ ∃ dep ∈ D, ViewAt m1 dep d0 o0 l0 s)
-    (hown : MInv m' (A2.holdOn [dep.root] D (A2.kill (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty)))
+    (hown : MInv m' (A2.holdOn [dep.root] D (A2.kill (op.effAt dep.kind (decide ((argE Γ1 dep.root).ty = Ex.ty)) (argE Γ1 dep.root).ty.isVec)
       (argE Γ1 dep.root).ty.holdsView dep.root Γ1)))
     (hes : ∀ e ∈ es', e ∈ es ∨ ∀ i ∈ e.ids, FreshAddr m1 i)
     (hvf : ∀ i o l, Sub (.view i o l) (.node t c d' es') → Sub (.view i o l) (.node t c d es) ∨
@@ -1132,9 +1172,9 @@ theorem MInv.editBV_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
         · exact (hi.pkgs dep.root _ T hT0 rfl) fs te ms e cs ((Sub.child he hs').trans hno.sub)
         · simp only [List.mem_singleton] at he; subst he; exact hp.pk fs te ms e cs hs'
   have hown : MInv m' (A2.holdOn [dep.root] D (A2.kill ((Edit.push y).effAt dep.kind
-      (decide ((argE Γ1 dep.root).ty = Ex.ty))) (argE Γ1 dep.root).ty.holdsView dep.root Γ1)) := by
+      (decide ((argE Γ1 dep.root).ty = Ex.ty)) (argE Γ1 dep.root).ty.isVec) (argE Γ1 dep.root).ty.holdsView dep.root Γ1)) := by
     rw [hargE, hEv]
-    by_cases hre' : (Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) = .realloc
+    by_cases hre' : (Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec = .realloc
     · -- through a copy of the owner's handle, of its type: the owner's whole tree
       obtain ⟨_, hk, hs⟩ := Edit.effAt_realloc hre'
       have htyo : Eo.ty = .vec t := by rw [of_decide_eq_true hs, hty]
@@ -1153,10 +1193,10 @@ theorem MInv.editBV_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
       rw [hre'] at hcan' hdsV ⊢
       exact MInv.edit_growV hi hanch hEo hlo hoF hcan' htyo hhv hdsV hdbV hT0 hp hoD hre
         fun cc hcc => List.mem_append_left _ (hvo cc hcc)
-    · have hdrop : (Edit.push y).effAt dep.kind (decide (Eo.ty = Ex.ty)) = .drop := by
-        revert hre'; simp only [Edit.effAt]; split <;> simp
-      have hcan' := hcan
-      rw [hdrop] at hdsV hcan' ⊢
+    · obtain ⟨hk', hds'⟩ := effAt_dropV (Γ := Γ1) (x := dep.root) hre'
+      have hcan' := hi.canDo_drop hEo hcan
+      have hdsV := hds' hdsV
+      rw [hk']
       exact MInv.edit_dropV hi hanch hEo hoF hcan' hdsV hdbV hEv hT0 hT' hst
         (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hp.np (hp.views_out hi hanch hoF hoD hT0) hp.sf
           (hi.views_owned hEo hlo hcan.ownSlot hT0) hre hr)
@@ -1175,7 +1215,7 @@ theorem MInv.editBV_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
 theorem MInv.editBV_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hanch : RootbAnch Γ1 F) {x : Var} {op : Edit} {Ex : Entry} {t : Ty} (hx : Γ1 x = some Ex)
     (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
-    (hdrop : ∀ k s, op.effAt k s = .drop) (hthru : ThruOK Γ1 F op Ex.ty Ex.path)
+    (hdrop : ∀ y, op ≠ .push y) (hthru : ThruOK Γ1 F op Ex.ty Ex.path)
     {D : List Dep} (hV : ThruV Γ1 op Ex.ty Ex.path D) (hDn : ∀ d ∈ D, d.kind.isName = false)
     (hDr : ∀ r ∈ roots D, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
     {o : Var} {T T' : Val} {t' : Ty} {c d : Nat} {es es' : List Val} {a' : Nat → Bool}
@@ -1252,10 +1292,12 @@ theorem MInv.editBV_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
         · exact (hi.pkgs dep.root _ T hT0 rfl) fs te ms e cs ((Sub.child h hs').trans hno.sub)
         · exact h.1.pk fs te ms e cs hs'
   have hown : MInv m' (A2.holdOn [dep.root] D (A2.kill (op.effAt dep.kind
-      (decide ((argE Γ1 dep.root).ty = Ex.ty))) (argE Γ1 dep.root).ty.holdsView dep.root Γ1)) := by
-    rw [hargE, hEv, hdrop]
-    rw [hdrop] at hcan hdsV
-    exact MInv.edit_dropV hi hanch hEo hoF hcan hdsV hdbV hEv hT0 hT' hst
+      (decide ((argE Γ1 dep.root).ty = Ex.ty)) (argE Γ1 dep.root).ty.isVec) (argE Γ1 dep.root).ty.holdsView dep.root Γ1)) := by
+    rw [hargE, hEv]
+    obtain ⟨hk', hds'⟩ := effAt_dropV (Γ := Γ1) (x := dep.root)
+      (Edit.effAt_ne_realloc hdrop dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec)
+    rw [hk']
+    exact MInv.edit_dropV hi hanch hEo hoF (hi.canDo_drop hEo hcan) (hds' hdsV) hdbV hEv hT0 hT' hst
       (hheap Eo hEo hlo hos hoF hoD) (by simp [m']) (fun cc hcc => (hsplit cc hcc).imp id And.right) hpkN
       hoD hDn hDr hr hw' hnew rfl hsh' hfree hes' hvf
   exact MInv.editBV_fin hi hanch hx hmx hl hty hthru hV hDn hDr hdm hxs hT0 htop hla hhref0
@@ -1273,7 +1315,7 @@ theorem MInv.editBV_trunc {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hr : Repl (.node t' c d es) (.node t' c d (es.take n)) T T') :
     MInv ({ m with alloc := a' }.set o ⟨true, some T'⟩)
       (A2.setE (holdThru [] Ex.path (killThruV (.trunc i) Ex.ty Ex.path Γ)) x { Ex with held := Ex.held ++ [] }) :=
-  MInv.editBV_drops hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hV (fun _ h => by cases h)
+  MInv.editBV_drops hi hanch hx hmx hl hty hhv (fun _ h => Edit.noConfusion h) hthru hV (fun _ h => by cases h)
     (fun _ h => by cases h) hno (fun _ _ _ _ _ _ => HeapOK.editTrunc hi.heap hno.2.2.1 hf hr)
     (N := []) (fun e he => Or.inl (List.mem_of_mem_take he)) hr
 
@@ -1300,7 +1342,7 @@ theorem MInv.editBV_set {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       hi.thru_owner hx hmx hl hty hro hthru.noShare
     exact (huniq _ _ _ _ _ _ hno).2.2.1
   subst ht'
-  exact MInv.editBV_drops hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hV hDn hp.root hno
+  exact MInv.editBV_drops hi hanch hx hmx hl hty hhv (fun _ h => Edit.noConfusion h) hthru hV hDn hp.root hno
     (fun Eo hEo hlo hos hoF hoD => HeapOK.editSet hi.heap hno.2.2.1 hp.nd hp.al hp.dis hp.np
       (fun a b c h => (hp.views_out hi hanch hoF hoD hno.2.2.1 a b c h).1) hp.sf
       (hi.views_owned hEo hlo hos hno.2.2.1) hn hf hr)
@@ -1324,7 +1366,7 @@ theorem MInv.editBV_setOOB {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 �
   have hh : HeapOK (({ m1 with alloc := a' } : Mem).set o ⟨true, some T⟩) := by
     rw [heq]; exact HeapOK.freeV hi.heap hp.dis hp.np hf
   rw [← heq]
-  exact MInv.editBV_drops hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hV hDn hp.root hno
+  exact MInv.editBV_drops hi hanch hx hmx hl hty hhv (fun _ h => Edit.noConfusion h) hthru hV hDn hp.root hno
     (fun _ _ _ _ _ _ => hh) (N := N) (fun e he => Or.inl he) (Repl.self hno.sub)
 
 end A2

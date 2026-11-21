@@ -383,7 +383,7 @@ theorem _root_.A2.StmtT.wguardGet {P : Prog} {Γ : Ctx} {F : List Var} {x y : Va
   simp only [memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
   subst hd
-  exact ⟨hxF, fun _ h => (by cases h), _, hx, rfl, Or.inl rfl, by simpa [Edit.effAt] using hds, by simp⟩
+  exact ⟨hxF, fun _ h => (by cases h), _, hx, rfl, Or.inl rfl, by simpa [Edit.effAt, Edit.inEff] using hds, by simp⟩
 
 /-- ... where a read guard's lend refuses every change through it. -/
 theorem rguard_no_change {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {g : Var} :
@@ -2325,7 +2325,7 @@ theorem hand_ends {Γ : Ctx} {c n : Var} {En : Entry} (hn : Γ n = some En) (hd 
     hands the object on to the method by `StmtT.callcE`, and its caller's
     argument is an ordinary `inout` one, which `callPost` ends what depends on
     (h365's view). -/
-theorem canDo_inout_replace : canDo (.inout .replace) .replace := Or.inr ⟨.replace, rfl, Nat.le_refl _⟩
+theorem canDo_inout_replace : canDo (.inout .replace) .replace := Or.inr ⟨.replace, rfl, Eff.le_refl _⟩
 
 /-- What no destructor views at all, none views for any effect. -/
 theorem _root_.A2.DtorSafe.of_replace {Γ : Ctx} {x : Var} (h : DtorSafe Γ .replace false x) (e : Eff)
