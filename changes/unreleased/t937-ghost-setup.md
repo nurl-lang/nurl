@@ -1,3 +1,0 @@
-### Changed
-
-- **The formal proof's call lift can now say that it lifts parameter regions as bindings of their own** (AGORA-937, stage 3). A call setting gets a `ghost` flag. Under it, a region is renamed to a caller-level binding of mode `.region` instead of being replaced by what its argument holds. The lift's well-formedness condition (`AbsOK`) now reads accordingly, and `AbsOK.ghost_notPi` says that no index is then a region to replace. Every setting made today leaves the flag off, and the renaming lemma asks for that for now, so no proof, rule or theorem statement changes in what it says. Compiler, runtime and NURL source are unchanged, so compile time and run time are byte-for-byte as before.

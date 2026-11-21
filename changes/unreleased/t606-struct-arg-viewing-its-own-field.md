@@ -1,3 +1,0 @@
-### Fixed
-
-- **A call cannot change what a struct argument's own views point into** (AGORA-606). Take a struct whose field views another of its fields, such as `. a idx` holding views of the Strings in `. a arena`. It could be handed to a callee that clears, pops or grows `. p arena` and then reads `. p idx`. Inside the callee the two fields were unrelated, so the read was of freed memory. Such a call is now refused, also through a function that hands the value on, for a field of a struct, and for a `sink` parameter. A callee that only reads, or pushes into the arena (its Strings stay where they are), is not affected. Make the change outside the call and take the views again after it, or store views that own their data (`string_from`).
