@@ -456,7 +456,13 @@ vs `MInv` over the substituted one):
      `N_mut`'s last clause is for names.
 3. `CallT`'s premise: an argument to a through-changing call holds real
    roots only at `.view`, each a live owned `Vec` root not in `F`; plus the
-   exit kill.
+   exit kill. `subDc_hits_exact` takes a region whose σ has one root `w`.
+   An argument holding views of several roots changes each of them
+   (`⟨π p, .inner⟩` lifts to `⟨wᵢ, .inner⟩` for every `i`). So either the
+   premise asks for one root per argument, or the lemma is generalised to
+   each root `wᵢ` with σ filtered to `wᵢ`. Entries with `.view`/`.self`
+   deps on a `wⱼ`, `j ≠ i`, are not hit by the kill on `wᵢ` either way.
+   The generalisation is preferred: it adds no ceremony for the author.
 
 Why `A` must shrink, not only `heldA`: a callee's own view-holding local
 `z` (say a `Vec` of slices of the region's buffer) is lifted with `held ⊇
