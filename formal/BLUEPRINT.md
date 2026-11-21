@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,053 lines of Lean 4**, **929 theorems**, **1107 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **77 modules**, **74,031 lines of Lean 4**, **3312 theorems**, **4293 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **78 modules**, **74,265 lines of Lean 4**, **3338 theorems**, **4322 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -135,7 +135,7 @@ flowchart BT
 ---
 
 <!-- BEGIN generated: A2 module DAG (webdocs/scripts/gen-formal-data.mjs) -->
-## 4. Phase A2 Module Dependency DAG (77 Modules)
+## 4. Phase A2 Module Dependency DAG (78 Modules)
 
 ```mermaid
 flowchart BT
@@ -170,7 +170,7 @@ flowchart BT
   FreshWitness["FreshWitness<br/>(302L, 19 thms)"]
   HandOver["HandOver<br/>(497L, 30 thms)"]
   Heap["Heap<br/>(211L, 14 thms)"]
-  HeldViewThruWitness["HeldViewThruWitness<br/>(95L, 7 thms)"]
+  HeldViewThruWitness["HeldViewThruWitness<br/>(110L, 10 thms)"]
   InoutViewArgWitness["InoutViewArgWitness<br/>(395L, 35 thms)"]
   Invariant["Invariant<br/>(2588L, 153 thms)"]
   Layout["Layout<br/>(182L, 12 thms)"]
@@ -210,6 +210,7 @@ flowchart BT
   ThruDtorWitness["ThruDtorWitness<br/>(164L, 12 thms)"]
   ThruGlueWitness["ThruGlueWitness<br/>(446L, 26 thms)"]
   ThruLiftKinds["ThruLiftKinds<br/>(95L, 8 thms)"]
+  ThruPre["ThruPre<br/>(219L, 23 thms)"]
   Typing["Typing<br/>(2380L, 121 thms)"]
   TypingFacts["TypingFacts<br/>(1139L, 65 thms)"]
   Unfresh["Unfresh<br/>(169L, 15 thms)"]
@@ -257,6 +258,7 @@ flowchart BT
   DynCell --> HandOver
   Stability --> Heap
   Closure --> HeldViewThruWitness
+  ThruPre --> HeldViewThruWitness
   FreshWitness --> InoutViewArgWitness
   TakeWitness --> InoutViewArgWitness
   Typing --> Invariant
@@ -305,6 +307,8 @@ flowchart BT
   DtorWitness --> ThruGlueWitness
   ThruClosureWitness --> ThruGlueWitness
   Typing --> ThruLiftKinds
+  Closure --> ThruPre
+  ThruLiftKinds --> ThruPre
   Semantics --> Typing
   StepFrame --> TypingFacts
   TypingFacts --> Unfresh
@@ -356,7 +360,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/FreshProjWitness.lean`](A2/FreshProjWitness.lean) | 450 | 37 | 26 |  |
 | 3. Proof Infrastructure | [`A2/FreshSatWitness.lean`](A2/FreshSatWitness.lean) | 404 | 35 | 24 |  |
 | 3. Proof Infrastructure | [`A2/FreshWitness.lean`](A2/FreshWitness.lean) | 302 | 19 | 7 |  |
-| 3. Proof Infrastructure | [`A2/HeldViewThruWitness.lean`](A2/HeldViewThruWitness.lean) | 95 | 7 | 11 |  |
+| 3. Proof Infrastructure | [`A2/HeldViewThruWitness.lean`](A2/HeldViewThruWitness.lean) | 110 | 10 | 11 |  |
 | 3. Proof Infrastructure | [`A2/InoutViewArgWitness.lean`](A2/InoutViewArgWitness.lean) | 395 | 35 | 25 |  |
 | 3. Proof Infrastructure | [`A2/ParamViewWitness.lean`](A2/ParamViewWitness.lean) | 448 | 21 | 6 |  |
 | 3. Proof Infrastructure | [`A2/Region.lean`](A2/Region.lean) | 35 | 1 | 0 |  |
@@ -374,6 +378,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/ThruDtorWitness.lean`](A2/ThruDtorWitness.lean) | 164 | 12 | 6 |  |
 | 3. Proof Infrastructure | [`A2/ThruGlueWitness.lean`](A2/ThruGlueWitness.lean) | 446 | 26 | 14 |  |
 | 3. Proof Infrastructure | [`A2/ThruLiftKinds.lean`](A2/ThruLiftKinds.lean) | 95 | 8 | 0 |  |
+| 3. Proof Infrastructure | [`A2/ThruPre.lean`](A2/ThruPre.lean) | 219 | 23 | 3 |  |
 | 3. Proof Infrastructure | [`A2/Unfresh.lean`](A2/Unfresh.lean) | 169 | 15 | 2 |  |
 | 3. Proof Infrastructure | [`A2/UnheldFresh.lean`](A2/UnheldFresh.lean) | 198 | 16 | 2 |  |
 | 3. Step & Unwinding Lemmas | [`A2/Frame.lean`](A2/Frame.lean) | 1235 | 68 | 3 | How runtime frames (scope, rbind, frozen) interact with the memory invariant. |

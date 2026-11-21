@@ -620,6 +620,20 @@ import A3
 -- parameter holds is through-changing, and no call of it passes an argument holding views
 #print axioms A2.HeldViewThruWitness.call_refused
 #print axioms A2.HeldViewThruWitness.call_alone_refused
+-- (A2/ThruPre.lean, AGORA-937 stage 3a): what a through-changing call that passes views of real
+-- memory ends before its body runs (`thruPre`): only bindings, every binding but the arguments,
+-- by a drop on each root they hold views of; it keeps the context well-formed, its domain, modes and
+-- types, fresh borrows' sources and every binding a closure names
+#print axioms A2.LiveLe.thruPre
+#print axioms A2.CtxWF.thruPre
+#print axioms A2.FreshOK.thruPre
+#print axioms A2.NameWF.thruPre
+#print axioms A2.DomTy.thruPre
+#print axioms A2.thruPre_dead
+-- ... and for AGORA-933's `( f1 vv )`: `s2`, a view of `w`'s element, is ended; `vv` and `w` are kept
+#print axioms A2.HeldViewThruWitness.pre_s2_dead
+#print axioms A2.HeldViewThruWitness.pre_vv_kept
+#print axioms A2.HeldViewThruWitness.pre_w_kept
 -- (A2/SliceCopyViewWitness.lean, AGORA-935): a copy of a slice of views, typed as A2 types a
 -- copy (a call, `callRes`), holds copies of its loans and nothing of the slice: releasing the
 -- temporary leaves it live, replacing what the views point into ends it, and then no read types
