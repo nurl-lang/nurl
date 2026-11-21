@@ -215,4 +215,32 @@ theorem thruPre_dead {Γ : Ctx} {args : List Var} {v r : Var} {E : Entry} (hE : 
   rw [thruPre_frame hv]
   exact killHv_dead_of_mem hE hh (List.mem_map.mpr ⟨r, hr, rfl⟩)
 
+/-- A binding live after a run of kills was hit by none of them. -/
+theorem killHv_live_nohit {Γ : Ctx} {v : Var} {E : Entry} (hE : Γ v = some E) :
+    ∀ {ks : List (Eff × Bool × Var)} {E' : Entry}, A2.killHv ks Γ v = some E' → E'.live = true →
+      ∀ k ∈ ks, hits k.1 k.2.1 k.2.2 E = false
+  | [], _, _, _, k, hk => by cases hk
+  | (e0, hv0, x0) :: ks, E', h, hl, k, hk => by
+    have h' : (A2.killHv ks Γ v).map (killE e0 hv0 x0) = some E' := h
+    obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp h'
+    have hl1 : E1.live = true := killE_live_le hl
+    obtain ⟨E0, l0, h0, heq1, -⟩ := (LiveLe.killHv Γ ks v).2 E1 h1
+    rw [hE] at h0; cases h0
+    rcases List.mem_cons.mp hk with rfl | hk'
+    · show hits e0 hv0 x0 E = false
+      cases hh : hits e0 hv0 x0 E
+      · rfl
+      · have : hits e0 hv0 x0 E1 = true := by rw [heq1, hits_with_live]; exact hh
+        simp [killE, this] at hl
+    · exact killHv_live_nohit hE h1 hl1 k hk'
+
+/-- **Nothing else live reaches inside**: a frame binding that is not an
+    argument and is live after the entry kill depends on no root the
+    arguments hold views of by a kind a drop there ends. -/
+theorem thruPre_live_nohit {Γ : Ctx} {args : List Var} {v r : Var} {E E' : Entry} (hE : Γ v = some E)
+    (hv : v ∉ args) (hE' : thruPre Γ args v = some E') (hl : E'.live = true) (hr : r ∈ callR Γ args) :
+    hits .drop (argE Γ r).ty.holdsView r E = false := by
+  rw [thruPre_frame hv] at hE'
+  exact killHv_live_nohit hE hE' hl _ (List.mem_map.mpr ⟨r, hr, rfl⟩)
+
 end A2

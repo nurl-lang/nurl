@@ -154,8 +154,19 @@ Names never had this problem: a name dependency is lifted as itself
   borrow rewrites one node of its owner's tree. Strictly inside a region's
   node, that node keeps its address and its length. So an argument's view
   of the region's buffer stays in bounds while the body changes an element's
-  inside. Still open: the element itself stays well-formed (the step's own
-  `WFv`), and no other live binding reaches inside.
+  inside.
+- **3c, part 4 (done: `Repl.keeps_enclosing'`, `RegionViewAt.keep_inner`,
+  `thruPre_live_nohit`).** The other two stability facts.
+  - An argument's view of a region's buffer survives a change strictly
+    inside the region's node, the node still well-formed (`DSH_repl_wf`).
+    A region node in another slot or a payload is untouched.
+  - After the entry kill, no live frame binding but the arguments depends,
+    by a kind a drop ends, on a root the arguments hold views of.
+
+  What remains of 3c is the wiring: the lift of a regioned parameter as a
+  ghost binding, `RSetup.A` without the roots reached only through regions,
+  `StmtT.ren`'s edit cases through a region-reaching borrow, and the call
+  case of preservation over the `subDc`-substituted context.
 - **3b, part 3 (fallback).** The ghost store: `RegionSnap`, building on `Region.lean`'s
   `Val.viewsOf`/`regionSnap`; `StepI`; the erasure lemma; and `MInvI`
   extending `MInv` with the region clause. Existing `MInv` lemmas stay
