@@ -1,0 +1,3 @@
+### Changed
+
+- **The formal proof types a change made through a region** (AGORA-937). This is the third step of typing a call that changes memory its argument's views reach. AGORA-933's callee grows a `Vec` it reaches through a slice its lent parameter `vv` holds. A2 now types that change: it reaches `vv`'s region strictly inside its nodes, which ends no view of it, so `vv` stays valid. Where a call places such a change, either the region stays a region, or the region stands for nothing and the call's context simply knows more. Proofs complete, no warnings, no theorem weakened. A call of such a function with views of real memory is still refused, and that is the next step. Nothing changes in nurlc.

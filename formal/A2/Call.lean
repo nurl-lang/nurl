@@ -213,7 +213,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro _
     obtain ⟨E0, h0, hm0, ht0⟩ := (hpa.domTy hy).2 x Ex1 hx1
     exact ((hpa.domTy hy).kill _ _ _).setE ⟨E0, h0, hm0, ht0⟩
-  | @editB _ Γ Γ1 F x op Ex Ex1 t D _ _ _ _ _ _ _ harg _ hx1 _ _ _ =>
+  | @editB _ Γ Γ1 F x op Ex Ex1 t D _ _ _ _ _ _ _ harg _ hx1 _ _ =>
     intro _
     obtain ⟨E0, h0, hm0, ht0⟩ := harg.domTy.2 x Ex1 hx1
     exact (harg.domTy.killNames (thruDeps op Γ1 Ex.ty Ex1.path)).setE ⟨E0, h0, hm0, ht0⟩
@@ -221,7 +221,7 @@ theorem StmtT.domTy {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     intro _
     obtain ⟨E0, h0, hm0, ht0⟩ := harg.domTy.2 x Ex1 hx1
     exact ((harg.domTy.killHv (thruKills op Γ1 Ex.ty Ex1.path)).holdOn _ _).setE ⟨E0, h0, hm0, ht0⟩
-  | @takeB _ Γ Δ F x y i k Ex t hks hy _ hx _ _ _ _ _ _ _ _ _ _ _ ih =>
+  | @takeB _ Γ Δ F x y i k Ex t hks hy _ hx _ _ _ _ _ _ _ _ _ _ ih =>
     exact fun _ => DomTy.exitScope_fresh hy (((DomTy.refl Γ).killNames
       (thruDeps (.trunc i) Γ Ex.ty Ex.path)).setE ⟨Ex, hx, rfl, rfl⟩) (ih hks)
   | @takeBV _ Γ Δ F x y i k Ex t hks hy _ hx _ _ _ _ _ _ _ _ _ _ _ _ ih =>
@@ -2342,19 +2342,6 @@ theorem killE_nohit {e : Eff} {hv : Bool} {x : Var} {E : Entry} (h : ∀ d ∈ E
   simp only [Bool.and_eq_true, List.any_eq_true, beq_iff_eq] at hh
   obtain ⟨_, d, hd, hr, _⟩ := hh
   exact h d hd hr
-
-/-- Ending what an entry depends on makes it say less, when a fixed entry
-    is left as it is. -/
-theorem entryWeaker_killE {e : Eff} {hv : Bool} {x : Var} {E : Entry}
-    (hfix : E.fixed → killE e hv x E = E) : EntryWeaker E (killE e hv x E) := by
-  by_cases hf : E.fixed
-  · rw [hfix hf]; exact EntryWeaker.refl E
-  · unfold killE; split
-    · exact ⟨rfl, rfl, fun h => absurd h hf, fun h => by simp at h,
-        fun h => ⟨h, List.Subset.refl _⟩, rfl, fun h => Or.inl h, fun _ _ _ _ _ => Iff.rfl,
-      fun _ _ _ hfr => (by fresh_ew),
-      fun _ _ hhf => by heldfresh_ew⟩
-    · exact EntryWeaker.refl E
 
 /-! ### What the parameters' frames keep (`KeepOut`)
 

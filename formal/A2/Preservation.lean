@@ -137,12 +137,21 @@ theorem CtxRel.killNames {Γ : Ctx} {F : List Var} (hanch : RootbAnchR Γ F) :
     exact h1.trans (CtxRel.kill (h1.anchR hanch) (h d (by simp)).1 _ _
       (hmn_of_ne_replace _ (h d (by simp)).2 _) ((hr d (by simp)).of_killNames ds))
 
+/-- AGORA-937 (item 3): a root a change may reach spares a borrowed
+    parameter's view of a region: it owns its slot, or it is a region whose
+    effect ends no view. -/
+theorem ThruCanDo.spared {Γ : Ctx} {r : Var} {Er : Entry} {e : Eff} (hEr : Γ r = some Er)
+    (h : ThruCanDo Er e) : RegionSpared Γ e false r := by
+  rcases h with h | ⟨_, hk⟩
+  · exact RegionSpared.of_ne hEr (fun hr => by have := h.ownSlot; rw [hr] at this; cases this) _ _
+  · exact fun _ => hk
+
 /-- `StmtT.editB`'s context: every binding keeps its mode and type, and every
     borrowed parameter its entry. -/
 theorem CtxRel.editB {Γ Γ1 : Ctx} {F : List Var} (hanch : RootbAnchR Γ F) {x : Var} {op : Edit}
     {Ex Ex1 : Entry} {t : Ty} {D : List Dep} (hx : Γ x = some Ex) (hmx : Ex.mode = .bor)
     (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γ1 x = some Ex1)
-    (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) :
+    (hl1 : Ex1.live = true) (hthru : ThruOKR Γ1 F op Ex.ty Ex1.path) :
     CtxRel Γ (A2.setE (killThru op Ex.ty Ex1.path Γ1) x Ex1) := by
   have h1 := harg.ctxRel hanch
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
@@ -151,10 +160,14 @@ theorem CtxRel.editB {Γ Γ1 : Ctx} {F : List Var} (hanch : RootbAnchR Γ F) {x 
     refine CtxRel.killNames (h1.anchR hanch) _ (fun d hd => ⟨?_, (thruDeps_bound hd).1⟩) fun d hd => ?_
     · obtain ⟨d0, hd0, rfl⟩ := mem_thruDeps.mp hd
       exact (hthru d0 hd0).1
-    · -- AGORA-937: a memory root a change goes through owns its slot, so is no region
+    · -- AGORA-937: a memory root a change goes through owns its slot, or is a
+      -- region the change ends no view of
       obtain ⟨d0, hd0, rfl⟩ := mem_thruDeps.mp hd
       obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
-      exact RegionSpared.of_ne hEr (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) _ _
+      have hae : argE Γ1 d0.root = Er := by unfold argE; rw [hEr]; rfl
+      show RegionSpared Γ1 (op.effAt d0.kind (decide ((argE Γ1 d0.root).ty = Ex.ty)) (argE Γ1 d0.root).rvec)
+        false d0.root
+      rw [hae]; exact hcan.spared hEr
   obtain ⟨E', hE', hE'c⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex.path) hx1
   have hm' : E'.mode = Ex.mode := by rcases hE'c with rfl | rfl <;> rfl
   have ht' : E'.ty = Ex.ty := by rcases hE'c with rfl | rfl <;> rfl
@@ -188,7 +201,7 @@ theorem takeB_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch :
   obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
   subst t'
   have hoF := (hthru dep hdm).1
-  have hrel := CtxRel.editB hanch.toR hx hmx (EditArg.trunc (t := t) hie) (fun y h => by cases h) hx hl hthru
+  have hrel := CtxRel.editB hanch.toR hx hmx (EditArg.trunc (t := t) hie) (fun y h => by cases h) hx hl hthru.toR
   have hinv := MInv.editB_take hi hanch hx hmx hl hty hhv hthru hn hno hr
   have hst : ∀ w, w ≠ dep.root → (m.set dep.root ⟨true, some T'⟩).st w = m.st w :=
     fun w hw => by simp [upd_ne _ _ hw]
@@ -2990,10 +3003,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (fun h => by simp [ownHeld, h])
         (Or.inr ⟨rfl, rfl, rfl⟩) hds) rfl (covers_pushRealloc (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
-  | @editB ξ Γ Γ1 F x op Ex Ex1 t D _ hx hmx hl hty hhv hxF harg hyx hx1 hl1 _ hthru =>
+  | @editB ξ Γ Γ1 F x op Ex Ex1 t D _ hx hmx hl hty hhv hxF harg hyx hx1 hl1 hthru =>
     intro m m' s' hcd hi hst
     have hanch := hi.leafAnch rfl
     have hrel := CtxRel.editB hanch.toR hx hmx harg hyx hx1 hl1 hthru
+    -- AGORA-937 (item 3): a frame binds no region, so every root the change reaches is an owner
+    have hthru : ThruOK Γ1 F op Ex.ty Ex1.path := hthru.toOK fun v E h hr => by
+      obtain ⟨E0, h0, hm, _⟩ := (harg.ctxRel hanch.toR).mode v E h
+      exact hi.toMInv.noRegion v E0 h0 (hm ▸ hr)
     have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
     rw [hE1] at hx1 hl1 hthru hrel ht0 ⊢
     -- the roots own their slots, so the change lands in one of their trees
@@ -3210,7 +3227,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           exact ⟨by simp [Stmt.spine], E0, h0⟩
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
-  | @takeB ξ Γ Δ F x y i k Ex t hsrc hy hyF hx hmx hl hty hhv _ hie _ hthru _ hs hend _ =>
+  | @takeB ξ Γ Δ F x y i k Ex t hsrc hy hyF hx hmx hl hty hhv _ hie hthru _ hs hend _ =>
     -- element `n` moves out to `y` through the borrow `x` (`takeB_pres`), and
     -- the body runs in `y`'s scope, as a `letv`'s does
     intro m m' s' hcd hi hst
@@ -3219,7 +3236,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     | @takeB _ _ o _ _ n T T' t' c d es hn _ hno hmx' hr =>
       have hanch := hi.leafAnch rfl
       obtain ⟨Γ1, hΓ1⟩ : ∃ Γ1, Γ1 = setE (killThru (.trunc i) Ex.ty Ex.path Γ) x Ex := ⟨_, rfl⟩
-      obtain ⟨post, out, hcov⟩ := takeB_pres hi.toMInv hanch hx hmx hl hty hhv hie hthru hn hno hr
+      obtain ⟨post, out, hcov⟩ := takeB_pres hi.toMInv hanch hx hmx hl hty hhv hie (hthru.toOK hi.toMInv.noRegion) hn hno hr
       rw [← hΓ1] at post out hs
       have hy1 : Γ1 y = none := by
         have := post.cdom y; rw [hy] at this; cases h : Γ1 y <;> simp_all

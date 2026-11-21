@@ -35,11 +35,11 @@ theorem StmtT.mono {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} 
   | withElem a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 ih0 ih1 => intro ξ' hξ; exact StmtT.withElem a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13
   | callcE a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 ih0 => intro ξ' hξ; exact StmtT.callcE a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a17 a18 a19
   | scopeD a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 ih0 => intro ξ' hξ; exact StmtT.scopeD a0 a1 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a3 a4 a5 a6 a7 a8 a9
-  | editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 => intro ξ' hξ; exact StmtT.editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13
+  | editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a11 a12 a13 => intro ξ' hξ; exact StmtT.editB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a11 a12 a13
   | editBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 => intro ξ' hξ; exact StmtT.editBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16
-  | takeB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 _ a14 ih0 =>
+  | takeB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a11 a12 _ a14 ih0 =>
     intro ξ' hξ
-    exact StmtT.takeB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a14
+    exact StmtT.takeB a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a11 a12 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a14
   | takeBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 _ a15 ih0 =>
     intro ξ' hξ
     exact StmtT.takeBV a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a15
@@ -921,7 +921,7 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
   | @scopeD _ Γ Δ F x f k _ _ _ _ _ _ _ _ _ _ ih =>
     intro ho hp
     exact ((ih (DtorOut.inner ho hp.1) hp.2).mono fun v hv h => hv (List.mem_cons_of_mem _ h)).exitScope x
-  | editB hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
+  | editB hx hmx _ _ _ _ harg hyx hx1 hl1 _ =>
     intro _ _
     refine (harg.dkeep.killNames _).setE fun _ hos _ _ => ?_
     rw [harg.at_ne hyx hx hx1 hl1, hmx] at hos; cases hos
@@ -930,7 +930,7 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
     refine (harg.dkeep.thruV hV).setE fun _ hos _ _ => ?_
     have hm : Ex1.mode = .bor := by rw [harg.at_ne hyx hx hx1 hl1, hmx]
     exact absurd hos (by show ¬ (Ex1.mode.ownSlot = true); rw [hm]; decide)
-  | takeB hs _ _ _ hmx _ _ _ _ _ _ _ _ _ _ ih =>
+  | takeB hs _ _ _ hmx _ _ _ _ _ _ _ _ _ ih =>
     exact fun _ _ => DKeep.bind ((((DKeep.refl _ []).killNames _).setE fun _ hos _ _ => by
       rw [hmx] at hos; cases hos)) (DKeep.of_src hs ih)
   | takeBV hs _ _ _ hmx _ _ _ _ _ _ _ _ _ _ _ ih =>
@@ -1111,13 +1111,13 @@ theorem StmtT.dstay {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
   | catchR _ _ _ _ _ hst _ => exact hst
   | letd hs hx _ hr _ _ _ _ _ _ _ _ _ ih => exact DStay.bind hx hr.dstay (src0 hs ih)
   | scopeD _ _ _ _ _ _ _ _ _ _ ih => exact ih.exitScope
-  | editB hx hmx _ _ _ _ harg _ _ _ _ _ =>
+  | editB hx hmx _ _ _ _ harg _ _ _ _ =>
     refine (harg.dstay.killNames _).setE fun E0 h0 _ hos _ => ?_
     rw [hx] at h0; cases h0; rw [hmx] at hos; cases hos
   | editBV hx hmx _ _ _ _ _ harg _ _ _ _ _ _ =>
     refine ((harg.dstay.killHv _).holdOn _ _).setE fun E0 h0 _ hos _ => ?_
     rw [hx] at h0; cases h0; rw [hmx] at hos; cases hos
-  | takeB hs hy _ hx hmx _ _ _ _ _ _ _ _ _ _ ih =>
+  | takeB hs hy _ hx hmx _ _ _ _ _ _ _ _ _ ih =>
     exact DStay.bind hy (((DStay.refl _ []).killNames _).setE fun E0 h0 _ hos _ => by
       rw [hx] at h0; cases h0; rw [hmx] at hos; cases hos) (src0 hs ih)
   | takeBV hs hy _ hx hmx _ _ _ _ _ _ _ _ _ _ _ ih =>

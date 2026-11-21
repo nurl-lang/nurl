@@ -372,11 +372,11 @@ theorem StmtT.ctxRel {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : S
           rcases hdd with hdd | hdd
           · exact hdd
           · exact hdb hd hdd⟩))
-  | editB hx hmx _ _ _ _ harg hyx hx1 hl1 _ hthru =>
+  | editB hx hmx _ _ _ _ harg hyx hx1 hl1 hthru =>
     exact fun _ hanch _ => CtxRel.editB hanch hx hmx harg hyx hx1 hl1 hthru
   | editBV hx hmx _ _ _ _ _ harg hyx hx1 hl1 _ hthru hV =>
     exact fun _ hanch _ => CtxRel.editBV hanch hx hmx harg hyx hx1 hl1 hthru hV
-  | @takeB _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty _ _ hie _ hthru _ _ hend ih =>
+  | @takeB _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty _ _ hie hthru _ _ hend ih =>
     intro _ hanch hn
     have hnrb : (compE Ex t).mode ≠ .rootb := by cases t <;> simp [compE, intE]
     exact CtxRel.bind hanch hy hyF

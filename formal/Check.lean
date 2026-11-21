@@ -653,6 +653,14 @@ import A3
 #print axioms A2.CallH.sig_abs
 #print axioms A2.RSetup.hits_lift
 #print axioms A2.StmtT.ctxRel
+-- (AGORA-937 item 3): a change through a borrow may reach a region (ThruOKR) when its effect ends no
+-- view; the call places it exactly (ghost) or, the region standing for nothing, weakens to it
+#print axioms A2.RSetup.editB_ren_facts
+#print axioms A2.RSetup.editB_ren
+#print axioms A2.RSetup.weaker_kill_region
+#print axioms A2.RSetup.memDeps_subE_liftE_bor
+#print axioms A2.RegionChangeWitness.push_typed
+#print axioms A2.RegionChangeWitness.push_keeps_vv
 -- (A2/RegionMem.lean, AGORA-937 stage 3b): a region of buffer addresses reaches the node at one of
 -- them (RootNode's view case generalised); an argument's valid views are valid through its region,
 -- each address reaches one node, and derived borrows compose kinds through a region as through a root

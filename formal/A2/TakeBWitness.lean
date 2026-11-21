@@ -111,8 +111,8 @@ theorem take_typed {ξ : Exits} {Γ Δ : Ctx} (hn : NoRootb Γ) {y : Var} {i : E
     (hs : StmtT P (ξ.under y) (A2.setE (A2.setE (A2.killThru (.trunc i) vstr [⟨0, .inner⟩] Γ) 4 Eb) y
       (compE Eb str)) [] s Δ) (hend : EndOK Δ y) :
     StmtT P ξ Γ [] (.takeB 4 i y s) (A2.exitScope y Δ) :=
-  StmtT.takeB hsrc hy (by simp) hb rfl rfl rfl rfl (by simp) hie (by simp [Eb, memDeps, Kind.isName])
-    (thru_ok hn h0) (fun h => by simp [str, Ty.holdsDtor] at h) hs hend
+  StmtT.takeB hsrc hy (by simp) hb rfl rfl rfl rfl (by simp) hie
+    (thru_ok hn h0).toR (fun h => by simp [str, Ty.holdsDtor] at h) hs hend
 
 theorem main_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main Δ := by
   apply Exists.intro
