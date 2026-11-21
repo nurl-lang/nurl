@@ -88,11 +88,21 @@ Names never had this problem: a name dependency is lifted as itself
     stored value would go stale. A view reached through `⟨G p, k⟩` is
     `Landed` where the node *currently* at some `d ∈ D` puts it, and that
     node is found in memory (`RootNode` for a region is "the node at an
-    address of `D`"), wherever its owner's slot is;
+    address of `D`"), wherever its owner's slot is. That is `RootNode`'s
+    existing view case generalised: a borrowed slot whose value has
+    `view d o l` at its top reaches `DataAt m d n`. So a region reaches
+    `∃ d ∈ D, DataAt m d n`, and `Lands`/`Landed`/`ViewAt` apply unchanged;
   - `dom` reads `m.st v` or `g v`;
-  - a region binding's clause says its snapshot's views are valid in `m`
-    and point into memory that no live frame binding reaches (the entry
-    kill above);
+  - a region binding's clause says its addresses are live nodes of `m`,
+    and that no live frame binding *other than the call's arguments and the
+    owners of that memory* reaches inside them, which is what the entry
+    kill establishes (`thruPre_dead`; `pre_s2_dead`). The arguments stay
+    live because the body reads them through its parameters. The owners stay
+    live because an owner's validity is its own tree's (`SlotOK`'s owned
+    case: `WFv` and the views it holds), not that of views into it. On
+    AGORA-933's witness that is `vv` and `w` (`pre_vv_kept`, `pre_w_kept`).
+    Step 3c proves their slots stay valid while the body changes nodes
+    inside `w`'s elements;
   - `Step` is unchanged. `StepI` is `Step` plus ghost writes at
     `letcall`/`callc*`, and the erasure is the first projection. So
     `Step`, `Mem` and the crown's statement stay byte-identical.
