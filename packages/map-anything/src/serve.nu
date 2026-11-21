@@ -41,6 +41,8 @@
 // ends the child and puts the job back in the queue, and a server that
 // died without that ends the orphan it finds at the next start before
 // running the job again — never two children on one job.
+// One server owns a data directory at a time (an flock on
+// <data>/serve.lock, released by the kernel when the process dies).
 //
 // Bodies are read in full before any handler runs (the stdlib server has
 // no hook between the head and the body), so the sign-in can only refuse a
@@ -62,6 +64,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/process.nu`
+$ `stdlib/std/pfile.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `deps/http/src/http.nu`
@@ -483,6 +486,17 @@ $ `ui.nu`
 // A running job's child pid. The shell writes the file before it becomes
 // the reconstruction, so a just-spawned child may need a moment: wait up
 // to 2 s for it. 0 when there is none.
+// The pid of a running job's child, or 0 when there is none — and then
+// none can appear: when no pid shows within the wait, the run's token is
+// voided before a last look, so a shell still on its way to `exec` either
+// sees the void and exits, or had already written its pid and is found.
+@ __mas_child_of s id → i {
+    : i p ( __mas_wait_pid id )
+    ? > p 0 { ^ p } {}
+    : b _v ( __mas_write_job id `run` `void` )
+    ^ ( __mas_read_int id `pid` )
+}
+
 @ __mas_wait_pid s id → i {
     : ~ i n 0
     ~ < n 20 {
@@ -494,67 +508,29 @@ $ `ui.nu`
     ^ 0
 }
 
-// Is `pid` a live `map-anything serve`? (its /proc command line holds
-// the word `serve`; a recycled pid running anything else is not one)
-@ __mas_is_server i pid → b {
-    ? <= pid 0 { ^ F } {}
-    : String cl ( string_from `/proc/` )
-    ( string_push_int cl pid )
-    ( string_push_str cl `/cmdline` )
-    ?? ( read_file_bytes ( string_data cl ) ) {
-        F _e → { ^ F }
-        T bytes → {
-            // argv words are NUL-separated: look for one that is `serve`
-            : ( Slice u ) bs ( slice_from_vec [u] bytes )
-            : i n ( slice_len [u] bs )
-            : ~ i st 0
-            : ~ i k 0
-            ~ <= k n {
-                ? | == k n == ( slice_byte bs ? < k n k 0 ) 0 {
-                    ? == - k st 5 {
-                        ? & & & & == ( slice_byte bs st ) 115 == ( slice_byte bs + st 1 ) 101 == ( slice_byte bs + st 2 ) 114 == ( slice_byte bs + st 3 ) 118 == ( slice_byte bs + st 4 ) 101 { ^ T } {}
-                    } {}
-                    = st + k 1
-                } {}
-                = k + k 1
+// Become the data directory's only server: an exclusive lock on
+// <data>/serve.lock (pfile_try_lock — flock, taken without waiting). The
+// kernel holds it for the open descriptor and lets go when the process
+// dies, killed or not, so there is no stale lock to judge and no takeover
+// to race; the file itself is never deleted. The descriptor is
+// close-on-exec, so a reconstruction child does not inherit the lock and
+// an orphan cannot keep the next server out. F when another process holds
+// it; the caller keeps the returned handle for the server's lifetime.
+@ __mas_own_data s data → ?PFile {
+    : String lp ( path_join data `serve.lock` )
+    ?? ( pfile_open ( string_data lp ) PFILE_CREATE ) {
+        F _e → { ^ @ ?PFile { F } }
+        T pf → {
+            : i fd ( _pfile_fd pf )
+            : i fl ( fcntl fd ( posix_const `F_GETFD` ) 0 )
+            ? != fl -1 { : i _c ( fcntl fd ( posix_const `F_SETFD` ) | fl ( posix_const `FD_CLOEXEC` ) ) } {}
+            ?? ( pfile_try_lock pf ) {
+                T held → { ? held { ^ @ ?PFile { T pf } } {} }
+                F _e → {}
             }
-            ^ F
+            ^ @ ?PFile { F }
         }
     }
-}
-
-// Become the data directory's only server. <data>/serve.lock is created
-// with O_EXCL, so of two servers starting at once exactly one gets it, and
-// holds this process's pid. A lock whose pid is not a live server is left
-// over from a crash and is taken over. A second server on the same
-// directory is refused here, before it can touch a job or a child; the
-// lock is removed when the server stops.
-@ __mas_own_data s data → b {
-    : String lp ( path_join data `serve.lock` )
-    : String me ( string_new )
-    ( string_push_int me # i ( getpid ) )
-    : ~ i tries 0
-    ~ < tries 2 {
-        : i32 fd ( open ( string_data lp ) # i32 | | ( posix_const `O_CREAT` ) ( posix_const `O_EXCL` ) ( posix_const `O_WRONLY` ) # i32 420 )
-        ? >= # i fd 0 {
-            : i32 _c ( close fd )
-            ?? ( write_file ( string_data lp ) ( string_data me ) ) { T _ → { ^ T } F _e → { ^ F } }
-        } {}
-        : String held ( __mas_read ( string_data lp ) )
-        // empty: another server has just created it and is writing its pid
-        ? == ( string_len held ) 0 { ^ F } {}
-        : i owner ( nurl_str_to_int ( string_data held ) )
-        ? ( __mas_is_server owner ) { ^ F } {}
-        // stale: its server is gone
-        ?? ( file_delete ( string_data lp ) ) { T _ → {} F _e → {} }
-        = tries + tries 1
-    }
-    ^ F
-}
-
-@ __mas_release_data s data → v {
-    : String lp ( path_join data `serve.lock` )
-    ?? ( file_delete ( string_data lp ) ) { T _ → {} F _e → {} }
 }
 
 // Is `pid` alive and one of our reconstructions (its command line runs
@@ -628,13 +604,18 @@ $ `ui.nu`
                 : String out ( path_join ( string_data jd ) `cloud.ply` )
                 // run in the job directory, so the log the page shows names
                 // the job's own files and not the server's data path
-                // The shell records its own pid in `pid` and then becomes
-                // the reconstruction (`exec` keeps the pid), so the process
-                // never runs without the file that names it — whatever
-                // happens to this server between the spawn and here.
+                // The shell records its own pid in `pid`, then checks that
+                // this run's token is still the job's, then becomes the
+                // reconstruction (`exec` keeps the pid). So the process never
+                // runs without the file that names it, and a shell delayed
+                // past a shutdown or a recovery — which void the token when
+                // they find no pid — exits instead of starting a second run.
+                : String token ( rand_hex_str 8 )
                 : String cmd ( string_from `cd ` )
                 ( __mas_q cmd ( string_data jd ) )
-                ( string_push_str cmd ` && echo $$ > pid && exec ` )
+                ( string_push_str cmd ` && echo $$ > pid && [ "$(cat run)" = ` )
+                ( string_push_str cmd ( string_data token ) )
+                ( string_push_str cmd ` ] && exec ` )
                 ( __mas_q cmd ( string_data . c bin ) )
                 ( string_push_char cmd 32 )
                 ( __mas_q cmd ( string_data inp ) )
@@ -657,6 +638,9 @@ $ `ui.nu`
                 : ~ ? ProcChild got @ ?ProcChild { F }
                 : ~ b spawn_failed F
                 ? ( __mas_stopping ) {} {
+                    ? ( __mas_write_job id `run` ( string_data token ) ) {} { = spawn_failed T }
+                }
+                ? | ( __mas_stopping ) spawn_failed {} {
                     ?? ( process_spawn `/bin/sh` args ) {
                         T ch → { = got @ ?ProcChild { T ch } }
                         F _e → { = spawn_failed T }
@@ -713,7 +697,7 @@ $ `ui.nu`
             T id → {
                 ? ( __mas_state_is ( string_data id ) `running` ) {
                     : String pidp ( __mas_jfile ( string_data id ) `pid` )
-                    : i pid ( __mas_wait_pid ( string_data id ) )
+                    : i pid ( __mas_child_of ( string_data id ) )
                     ? ( __mas_is_our_child pid ) {
                         ( nurl_eprint `map-anything serve: ending the orphaned reconstruction, pid ` )
                         ( nurl_eprintln ( nurl_str_int pid ) )
@@ -1104,19 +1088,24 @@ $ `ui.nu`
             ^ 1
         }
     }
-    : b open == ( string_len pass ) 0
-    : b tls & > ( string_len tcert ) 0 > ( string_len tkey ) 0
+    : b noauth == ( string_len pass ) 0
     : b hc > ( string_len tcert ) 0
     : b hk > ( string_len tkey ) 0
+    : b usetls & hc hk
     ? == hc hk {} {
         ( nurl_eprintln `map-anything serve: --tls-cert and --tls-key go together` )
         ^ 1
     }
     ( locked_set [MaCfg] g_mas_cfg @ MaCfg { ( string_from ( string_data data ) ) ( string_from ( string_data bin ) ) pass } )
-    ? ( __mas_own_data ( string_data data ) ) {} {
-        ( nurl_eprint `map-anything serve: another server already owns ` )
-        ( nurl_eprintln ( string_data data ) )
-        ^ 1
+    // held, through this binding, until mas_main returns
+    : ?PFile owner ( __mas_own_data ( string_data data ) )
+    ?? owner {
+        T _pf → {}
+        F → {
+            ( nurl_eprint `map-anything serve: another server already owns ` )
+            ( nurl_eprintln ( string_data data ) )
+            ^ 1
+        }
     }
     ( __mas_recover )
 
@@ -1147,7 +1136,7 @@ $ `ui.nu`
     ( http_app_put a `/api/jobs/:id/files/:name` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_upload rq ps ) } )
     ( http_app_post a `/api/jobs/:id/start` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_start rq ps ) } )
     ( http_app_get a `/jobs/:id/cloud.ply` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_cloud ps ) } )
-    ? open {} {
+    ? noauth {} {
         : ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) gate
         \ ( @ HttpResponse HttpRequest ) inner → ( @ HttpResponse HttpRequest ) {
             ^ \ HttpRequest req → HttpResponse {
@@ -1160,15 +1149,15 @@ $ `ui.nu`
         ( http_app_use a gate )
     }
 
-    ( nurl_eprint ? tls `map-anything serve: https://` `map-anything serve: http://` )
+    ( nurl_eprint ? usetls `map-anything serve: https://` `map-anything serve: http://` )
     ( nurl_eprint host ) ( nurl_eprint `:` ) ( nurl_eprint ( nurl_str_int port ) )
     ( nurl_eprint `  data ` ) ( nurl_eprint ( string_data data ) )
-    ( nurl_eprintln ? open `  (NO PASSWORD — keep it on a private network)` `  (password required)` )
+    ( nurl_eprintln ? noauth `  (NO PASSWORD — keep it on a private network)` `  (password required)` )
     : b loopback | ( __mas_eq host `127.0.0.1` ) ( __mas_eq host `localhost` )
-    ? & & ! open ! tls ! loopback {
+    ? & & ! noauth ! usetls ! loopback {
         ( nurl_eprintln `map-anything serve: the Basic sign-in crosses the network in plain text here — front this port with a TLS proxy (an ingress) or pass --tls-cert/--tls-key` )
     } {}
-    : i rc ? tls ( http_app_listen_tls a host port ( string_data tcert ) ( string_data tkey ) ) ( http_app_listen a host port )
+    : i rc ? usetls ( http_app_listen_tls a host port ( string_data tcert ) ( string_data tkey ) ) ( http_app_listen a host port )
 
     // SIGTERM ended the listener: end the reconstruction in flight and
     // queue its job again, so the next start resumes it
@@ -1186,7 +1175,7 @@ $ `ui.nu`
                 ? ( __mas_state_is sid `running` ) {
                     : String pidp ( __mas_jfile sid `pid` )
                     : s pp ( string_data pidp )
-                    : i pid ( __mas_wait_pid sid )
+                    : i pid ( __mas_child_of sid )
                     ? > pid 0 {
                         ( nurl_eprint `map-anything serve: stopping the reconstruction of job ` )
                         ( nurl_eprintln sid )
@@ -1201,6 +1190,5 @@ $ `ui.nu`
         }
         = j + j 1
     }
-    ( __mas_release_data ( string_data data ) )
     ^ ? == rc 0 0 1
 }

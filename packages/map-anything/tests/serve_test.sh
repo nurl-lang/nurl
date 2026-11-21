@@ -109,14 +109,30 @@ check "a second server on the same data is refused" 1 "$(grep -c 'another server
 check "delete" 204 "$(code $A -X DELETE "$B/api/jobs/$ID")"
 check "...and it is gone" 0 "$(ls "$WORK/data/jobs" | wc -l | tr -d ' ')"
 
-# a lock left by a server that is gone is taken over
-kill "$PID"; wait "$PID" 2>/dev/null; PID=""
-check "the lock is released on stop" 0 "$(ls "$WORK/data" | grep -c serve.lock)"
-echo 999999999 > "$WORK/data/serve.lock"
+# the lock goes with its process, however it ends: a server killed with
+# SIGKILL leaves nothing that keeps the next one out
+kill -KILL "$PID"; wait "$PID" 2>/dev/null; PID=""
 "$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/third.log" 2>&1 &
 PID=$!
 up=0
 for _ in $(seq 1 50); do curl -s -m 1 -o /dev/null "$B/healthz" && { up=1; break; }; sleep 0.1; done
-check "a stale lock is taken over" 1 "$up"
+check "a killed server's lock does not keep the next one out" 1 "$up"
+
+# a child delayed past recovery: the server comes up to find a job
+# `running` with no pid yet; it waits, voids the run's token and queues
+# the job again. When the late shell finally writes its pid it sees the
+# void and exits instead of starting a second reconstruction.
+ID3=$(curl -s $A -X POST "$B/api/jobs" -d '{"name":"late"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$ID3/files/p.jpg" >/dev/null
+kill "$PID"; wait "$PID" 2>/dev/null; PID=""
+J3="$WORK/data/jobs/$ID3"
+echo running > "$J3/state"; echo tok123 > "$J3/run"; rm -f "$J3/pid"
+MARK="late-child-$$"
+(cd "$J3" && sh -c "sleep 4; echo \$\$ > pid && [ \"\$(cat run)\" = tok123 ] && exec sleep 30 $MARK" 2>/dev/null &)
+"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/fourth.log" 2>&1 &
+PID=$!
+sleep 7
+check "a child delayed past recovery never starts" 0 "$(pgrep -fc "sleep 30 $MARK")"
+check "...and the job ran again, once, to its end" failed "$(cat "$J3/state")"
 
 [ $fails = 0 ] || exit 1
