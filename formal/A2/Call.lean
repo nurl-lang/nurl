@@ -382,6 +382,11 @@ theorem callS_isPi_lt {Γ : Ctx} {F : List Var} {fn : Fn} {args : List Var} {bas
     {v : Var} (hv : v < fn.nvars) : (callS Γ F fn args base x).isPi v = false := by
   simp [callS, isRegionIdx, Nat.not_le.mpr hv]
 
+/-- AGORA-937 stage 3: ... nor at a region index at all (`isReg`). -/
+theorem callS_isReg_lt {Γ : Ctx} {F : List Var} {fn : Fn} {args : List Var} {base : Nat} {x : Var}
+    {v : Var} (hv : v < fn.nvars) : (callS Γ F fn args base x).isReg v = false := by
+  simp [callS, isRegionIdx, Nat.not_le.mpr hv]
+
 /-- AGORA-937 (turn-on 3): the call's regions are the signature's region
     indices. -/
 theorem callS_isPi {Γ : Ctx} {F : List Var} {fn : Fn} {args : List Var} {base : Nat} {x : Var}
@@ -4118,7 +4123,7 @@ theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
     ⟨Er, hEr, hErl, hErt, hErm, hErp, hErh, hEr0⟩, hio⟩ := h.fnok
   have hΔd : ∀ v E, Δa v = some E → E.dtor = false := fun v E h => (hΔf v E h).1
   obtain ⟨hren, habΔ⟩ := RSetup.StmtT.ren h.sOK rfl h.prog hbody hsrc h.sig_abs (sigCtx_wf fn h.fnok.2.1) (sigCtx_names fn) (sigCtx_freshOK fn)
-    h.thru (fun v hv => callS_isPi_lt (h.fnok.2.2.1 v hv))
+    h.thru (fun v hv => callS_isReg_lt (h.fnok.2.2.1 v hv))
   have hdt := StmtT.domTy hbody hsrc
   have hErv : ∀ d0 ∈ Er.vdeps, lendable fn d0.root ∨ fn.params.length ≤ d0.root := by
     intro d0 hd0

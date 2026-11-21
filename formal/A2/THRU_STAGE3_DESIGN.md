@@ -207,6 +207,19 @@ Names never had this problem: a name dependency is lifted as itself
      `liftX_under(D)` already take `isReg`, through `AbsOK.notReg_of_notPi`
      for now.
 
+     *Done:* `StmtT.ren`'s premise is `∀ v ∈ s.vars, S.isReg v = false`
+     (`CallH.typedIn` gives it by `callS_isReg_lt`). Its uses that need
+     `isPi` go through `AbsOK.notPi_of_notReg`, which holds with or without
+     `ghost`. So a statement setting a body variable `x` knows that `x`'s
+     entry is no region (`AbsOK`'s fourth clause). That is what the
+     region-is-dead clause needs at `setE'`. What is left before
+     `S.ghost = false` goes:
+     - that clause;
+     - the ghost cases of `canon_weaker_sub` (`liftE_weaker` on a dead
+       region entry);
+     - `callR_canon`: a lifted inner call's `callR` is then the `G p`
+       region entries, which `CallT`'s premise accepts.
+
      *Earlier, structurally:* `RSetup.ghost` exists, and `AbsOK`'s fourth clause
      reads `E.mode = .region ∧ S.ghost = false ↔ S.isPi v = true`.
      `AbsOK.ghost_notPi` holds. `StmtT.ren`, `callT_ren`, `liftX_up`,
