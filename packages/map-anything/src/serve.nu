@@ -37,7 +37,8 @@
 // Every state change a client and the worker can race on — the worker
 // claiming a queued job, DELETE, a start — runs under one lock
 // (g_mas_lk), so a job is claimed or deleted, never both. The worker's
-// child records its pid in the job directory; a server stopped by SIGTERM
+// child records its pid in the job directory, in a file named for its run's
+// one-time token (pid.<token>); a server stopped by SIGTERM
 // ends the child and puts the job back in the queue, and a server that
 // died without that ends the orphan it finds at the next start before
 // running the job again — never two children on one job.
@@ -483,29 +484,50 @@ $ `ui.nu`
 
 @ __mas_stopping → b { ^ != 0 ( locked_get [i] g_mas_stop ) }
 
-// A running job's child pid. The shell writes the file before it becomes
-// the reconstruction, so a just-spawned child may need a moment: wait up
-// to 2 s for it. 0 when there is none.
 // The pid of a running job's child, or 0 when there is none — and then
-// none can appear: when no pid shows within the wait, the run's token is
-// voided before a last look, so a shell still on its way to `exec` either
-// sees the void and exits, or had already written its pid and is found.
+// none can appear. Each run publishes its pid in pid.<token>, named for
+// the run's one-time token in `run`, so a shell from an older run can
+// never overwrite the current run's pid. The token is read first; when no
+// pid shows for it within 2 s, the token is voided and the same file is
+// read once more: a shell still on its way to `exec` either sees the void
+// and exits, or had already written its pid and is found.
 @ __mas_child_of s id → i {
-    : i p ( __mas_wait_pid id )
-    ? > p 0 { ^ p } {}
-    : b _v ( __mas_write_job id `run` `void` )
-    ^ ( __mas_read_int id `pid` )
-}
-
-@ __mas_wait_pid s id → i {
+    : String tok ( __mas_read_job id `run` )
+    ? | == ( string_len tok ) 0 ( __mas_eq ( string_data tok ) `void` ) { ^ 0 } {}
+    : String pname ( string_from `pid.` )
+    ( string_push_str pname ( string_data tok ) )
     : ~ i n 0
     ~ < n 20 {
-        : i pid ( __mas_read_int id `pid` )
+        : i pid ( __mas_read_int id ( string_data pname ) )
         ? > pid 0 { ^ pid } {}
         ( sleep_ms 100 )
         = n + n 1
     }
-    ^ 0
+    : b _v ( __mas_write_job id `run` `void` )
+    ^ ( __mas_read_int id ( string_data pname ) )
+}
+
+// Every pid.<token> left in a job directory (by runs that are over).
+@ __mas_clear_pids s id → v {
+    : String jd ( __mas_jdir id )
+    ?? ( dir_list ( string_data jd ) ) {
+        F _e → {}
+        T names → {
+            : ~ i k 0
+            ~ < k ( vec_len [String] names ) {
+                ?? ( vec_get [String] names k ) {
+                    T nm → {
+                        ? ( string_starts_with nm `pid.` ) {
+                            : String fp ( path_join ( string_data jd ) ( string_data nm ) )
+                            ?? ( file_delete ( string_data fp ) ) { T _ → {} F _e → {} }
+                        } {}
+                    }
+                    F → {}
+                }
+                = k + k 1
+            }
+        }
+    }
 }
 
 // Become the data directory's only server: an exclusive lock on
@@ -560,8 +582,9 @@ $ `ui.nu`
 }
 
 // SIGTERM, up to 10 s for it to go, then SIGKILL. `gone` decides when it
-// has gone (a child of ours lingers as a zombie until the worker reaps it,
-// so for one of those the pid file disappearing is the sign).
+// has gone (a dead child of ours is a zombie until the worker reaps it,
+// and a zombie's /proc command line is empty, so __mas_is_our_child says
+// it has gone).
 @ __mas_end_child i pid ( @ b ) gone → v {
     ? <= pid 0 { ^ v } {}
     : i32 _a ( kill # i32 pid # i32 ( posix_const `SIGTERM` ) )
@@ -604,7 +627,7 @@ $ `ui.nu`
                 : String out ( path_join ( string_data jd ) `cloud.ply` )
                 // run in the job directory, so the log the page shows names
                 // the job's own files and not the server's data path
-                // The shell records its own pid in `pid`, then checks that
+                // The shell records its own pid in pid.<token>, then checks that
                 // this run's token is still the job's, then becomes the
                 // reconstruction (`exec` keeps the pid). So the process never
                 // runs without the file that names it, and a shell delayed
@@ -613,7 +636,9 @@ $ `ui.nu`
                 : String token ( rand_hex_str 8 )
                 : String cmd ( string_from `cd ` )
                 ( __mas_q cmd ( string_data jd ) )
-                ( string_push_str cmd ` && echo $$ > pid && [ "$(cat run)" = ` )
+                ( string_push_str cmd ` && echo $$ > pid.` )
+                ( string_push_str cmd ( string_data token ) )
+                ( string_push_str cmd ` && [ "$(cat run)" = ` )
                 ( string_push_str cmd ( string_data token ) )
                 ( string_push_str cmd ` ] && exec ` )
                 ( __mas_q cmd ( string_data . c bin ) )
@@ -629,8 +654,10 @@ $ `ui.nu`
                 : ( Vec s ) args ( vec_new [s] )
                 ( vec_push [s] args `-c` )
                 ( vec_push [s] args ( string_data cmd ) )
-                : String pidp ( path_join ( string_data jd ) `pid` )
-                ?? ( file_delete ( string_data pidp ) ) { T _ → {} F _e → {} }
+                : String pidn ( string_from `pid.` )
+                ( string_push_str pidn ( string_data token ) )
+                : String pidp ( path_join ( string_data jd ) ( string_data pidn ) )
+                ( __mas_clear_pids id )
                 // spawned under the job lock, and not at all once a shutdown
                 // has begun: the shutdown takes the same lock, so it either
                 // runs first (nothing is spawned) or finds the child
@@ -696,14 +723,13 @@ $ `ui.nu`
         ?? ( vec_get [String] ids k ) {
             T id → {
                 ? ( __mas_state_is ( string_data id ) `running` ) {
-                    : String pidp ( __mas_jfile ( string_data id ) `pid` )
                     : i pid ( __mas_child_of ( string_data id ) )
                     ? ( __mas_is_our_child pid ) {
                         ( nurl_eprint `map-anything serve: ending the orphaned reconstruction, pid ` )
                         ( nurl_eprintln ( nurl_str_int pid ) )
                         ( __mas_end_child pid \ → b { ^ ! ( __mas_is_our_child pid ) } )
                     } {}
-                    ?? ( file_delete ( string_data pidp ) ) { T _ → {} F _e → {} }
+                    ( __mas_clear_pids ( string_data id ) )
                     : b _q ( __mas_set_state ( string_data id ) `queued` )
                     ( nurl_eprint `map-anything serve: re-queued the interrupted job ` )
                     ( nurl_eprintln ( string_data id ) )
@@ -1173,13 +1199,11 @@ $ `ui.nu`
             T id → {
                 : s sid ( string_data id )
                 ? ( __mas_state_is sid `running` ) {
-                    : String pidp ( __mas_jfile sid `pid` )
-                    : s pp ( string_data pidp )
                     : i pid ( __mas_child_of sid )
                     ? > pid 0 {
                         ( nurl_eprint `map-anything serve: stopping the reconstruction of job ` )
                         ( nurl_eprintln sid )
-                        ( __mas_end_child pid \ → b { ^ == 0 ( nurl_path_type pp ) } )
+                        ( __mas_end_child pid \ → b { ^ ! ( __mas_is_our_child pid ) } )
                     } {}
                     : i t ( __mas_lock )
                     : b _q ( __mas_set_state sid `queued` )

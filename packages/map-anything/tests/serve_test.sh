@@ -118,21 +118,70 @@ up=0
 for _ in $(seq 1 50); do curl -s -m 1 -o /dev/null "$B/healthz" && { up=1; break; }; sleep 0.1; done
 check "a killed server's lock does not keep the next one out" 1 "$up"
 
-# a child delayed past recovery: the server comes up to find a job
-# `running` with no pid yet; it waits, voids the run's token and queues
-# the job again. When the late shell finally writes its pid it sees the
-# void and exits instead of starting a second reconstruction.
-ID3=$(curl -s $A -X POST "$B/api/jobs" -d '{"name":"late"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$ID3/files/p.jpg" >/dev/null
-kill "$PID"; wait "$PID" 2>/dev/null; PID=""
+# helpers for the child-lifecycle cases: bounded waits, never bare sleeps
+up_or_fail() {
+    for _ in $(seq 1 100); do curl -s -m 1 -o /dev/null "$B/healthz" && return 0; sleep 0.1; done
+    echo "FAIL the server did not come back"; fails=$((fails + 1)); return 1
+}
+until_state() {  # job-dir state... — wait up to 30 s for one of them
+    d=$1; shift
+    for _ in $(seq 1 300); do
+        st=$(cat "$d/state" 2>/dev/null)
+        for w in "$@"; do [ "$st" = "$w" ] && return 0; done
+        sleep 0.1
+    done
+    return 1
+}
+newjob() {
+    j=$(curl -s $A -X POST "$B/api/jobs" -d '{"name":"lifecycle"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+    code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$j/files/p.jpg" >/dev/null
+    echo "$j"
+}
+
+# 1. A child delayed past recovery. With the server down, a job is left
+# `running` with no pid yet and a shell that publishes its pid only after
+# 4 s. The server comes up, waits 2 s, voids the run's token and queues the
+# job again; when the late shell resumes it fails the token check, so the
+# sentinel it would write past the check never appears.
+ID3=$(newjob)
 J3="$WORK/data/jobs/$ID3"
-echo running > "$J3/state"; echo tok123 > "$J3/run"; rm -f "$J3/pid"
-MARK="late-child-$$"
-(cd "$J3" && sh -c "sleep 4; echo \$\$ > pid && [ \"\$(cat run)\" = tok123 ] && exec sleep 30 $MARK" 2>/dev/null &)
+kill "$PID"; wait "$PID" 2>/dev/null; PID=""
+echo running > "$J3/state"; echo tok123 > "$J3/run"; rm -f "$J3"/pid.*
+( cd "$J3" && exec sh -c 'sleep 4; echo $$ > pid.tok123 && [ "$(cat run)" = tok123 ] && touch ran' ) &
+LATE=$!
 "$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/fourth.log" 2>&1 &
 PID=$!
-sleep 7
-check "a child delayed past recovery never starts" 0 "$(pgrep -fc "sleep 30 $MARK")"
-check "...and the job ran again, once, to its end" failed "$(cat "$J3/state")"
+up_or_fail
+wait "$LATE"
+check "a shell delayed past recovery stops at its token" 0 "$(ls "$J3" | grep -c '^ran$')"
+until_state "$J3" failed done
+check "...and the job runs again, once, to its end" failed "$(cat "$J3/state")"
+
+# 2. A stale shell cannot hide the current run. Run B is active (pid in
+# pid.tokB, its command line naming cloud.tmp.ply like a reconstruction's);
+# a shell of an older run A resumes, publishes into pid.tokA and stops at
+# its token; then the server dies by SIGKILL. The next server must find and
+# end B — not read A's dead pid and start a second run beside it.
+ID4=$(newjob)
+J4="$WORK/data/jobs/$ID4"
+until_state "$J4" failed done
+kill -KILL "$PID"; wait "$PID" 2>/dev/null; PID=""
+echo running > "$J4/state"; echo tokB > "$J4/run"; rm -f "$J4"/pid.*
+( cd "$J4" && exec sh -c 'echo $$ > pid.tokB; sleep 61' run-b cloud.tmp.ply ) &
+BPID=$!
+for _ in $(seq 1 50); do [ -s "$J4/pid.tokB" ] && break; sleep 0.1; done
+( cd "$J4" && exec sh -c 'echo $$ > pid.tokA && [ "$(cat run)" = tokA ] && touch ranA' ) &
+APID=$!
+wait "$APID"
+check "the stale shell left the current run's pid alone" "$BPID" "$(cat "$J4/pid.tokB")"
+"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/fifth.log" 2>&1 &
+PID=$!
+up_or_fail
+wait "$BPID"; brc=$?
+check "recovery ended the active run (SIGTERM, not its natural end)" 143 "$brc"
+check "...the stale shell never ran" 0 "$(ls "$J4" | grep -c '^ranA$')"
+until_state "$J4" failed done
+check "...and the job ran again, once" failed "$(cat "$J4/state")"
+pkill -f '^sleep 61$' 2>/dev/null
 
 [ $fails = 0 ] || exit 1
