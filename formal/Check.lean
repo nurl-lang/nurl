@@ -665,6 +665,8 @@ import A3
 -- region ends at the caller exactly what the callee ends, for arguments that view `w` at `.view`
 #print axioms A2.dropIn_comp_exact
 #print axioms A2.dropIn_comp_exact'
+#print axioms A2.subDc_hits_exact_root
+#print axioms A2.subDc_hits_none_root
 #print axioms A2.dropIn_comp_inner_overkills
 #print axioms A2.subDc_hits_exact
 -- (AGORA-937 3d groundwork): the call's lift is precise (σ: the argument's own memory deps and
