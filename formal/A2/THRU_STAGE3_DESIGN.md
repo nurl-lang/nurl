@@ -82,6 +82,13 @@ Names never had this problem: a name dependency is lifted as itself
   frame-free part. The combined context holds `G p` bindings, which have no
   store slot. So `MInv` gets a ghost store `g : Var → Option RegionSnap`
   (claude-accurate's option 3, agora #4123):
+  - a region's ghost value is the set of buffer addresses `D` its
+    argument's views point into (the `d` of each `view d o l` it holds), not
+    a copy of those values: the body changes those nodes in place, so a
+    stored value would go stale. A view reached through `⟨G p, k⟩` is
+    `Landed` where the node *currently* at some `d ∈ D` puts it, and that
+    node is found in memory (`RootNode` for a region is "the node at an
+    address of `D`"), wherever its owner's slot is;
   - `dom` reads `m.st v` or `g v`;
   - a region binding's clause says its snapshot's views are valid in `m`
     and point into memory that no live frame binding reaches (the entry
