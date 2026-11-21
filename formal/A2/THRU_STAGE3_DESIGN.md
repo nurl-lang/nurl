@@ -123,7 +123,18 @@ Names never had this problem: a name dependency is lifted as itself
   - `RegionNode`, `RegionLanded` and `RegionViewAt` (as `RootNode`, `Landed` and `ViewAt`, with "the node at an address of `D`" for the root's node);
   - the entry fact `ViewsOK.region_viewAt`: an argument's valid views are valid through its region;
   - `ViewsOK.region_node`, `RegionNode.unique` and `RegionLanded.comp`/`mono`.
-- **3b, part 2.** The ghost store: `RegionSnap`, building on `Region.lean`'s
+- **3b, part 2 (done: `RegionLanded.landed`, `ViewsOK.region_landed`).**
+  What lands through a region lands through the argument's own roots at the
+  composed kind (`⟨r, comp a k⟩` for a held `⟨r, a⟩`). This opens a cheaper
+  route for the invariant than the ghost store below. Only the *typing*
+  needs the ghost region; the overkill is a typing problem. So `MInv` can be
+  stated, unchanged, of the context in which each region dependency is
+  replaced with kinds composed (`subD` today copies the argument's kinds
+  verbatim, which is too coarse for `Lands`). `noRegion` stays, and `Mem`
+  and `Step` need no instrumentation. 3c then carries the invariant over
+  that substituted context while the typing keeps the ghost binding. That
+  route is tried first; the ghost store is the fallback.
+- **3b, part 3 (fallback).** The ghost store: `RegionSnap`, building on `Region.lean`'s
   `Val.viewsOf`/`regionSnap`; `StepI`; the erasure lemma; and `MInvI`
   extending `MInv` with the region clause. Existing `MInv` lemmas stay
   untouched; only region-aware ones take `g`.

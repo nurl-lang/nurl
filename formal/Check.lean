@@ -642,6 +642,10 @@ import A3
 #print axioms A2.RegionNode.unique
 #print axioms A2.RegionLanded.comp
 #print axioms A2.RegionLanded.mono
+-- ... and what lands through a region lands through the argument's own roots at the composed kind,
+-- whose hypothesis holds of an argument's valid views at the call's entry
+#print axioms A2.RegionLanded.landed
+#print axioms A2.ViewsOK.region_landed
 -- (A2/SliceCopyViewWitness.lean, AGORA-935): a copy of a slice of views, typed as A2 types a
 -- copy (a call, `callRes`), holds copies of its loans and nothing of the slice: releasing the
 -- temporary leaves it live, replacing what the views point into ends it, and then no read types
