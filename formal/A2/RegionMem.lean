@@ -19,7 +19,13 @@ This file proves the facts the call's entry needs:
   (`ViewsOK`), are valid through its region (`ViewsOK.region_viewAt`);
 * the node at each address is unique (`RegionNode.unique`);
 * derived borrows compose kinds through a region as through a root
-  (`RegionLanded.comp`).
+  (`RegionLanded.comp`);
+* what lands through a region lands through the argument's own roots at
+  the composed kind (`RegionLanded.landed`, with `ViewsOK.region_landed` for
+  its hypothesis at the call's entry). So the memory invariant can be stated
+  of the context with each region dependency `⟨π p, k⟩` replaced by
+  `⟨r, comp a k⟩` for what the argument holds, `⟨r, a⟩`: the caller's roots,
+  which it already speaks of.
 
 Nothing here is used by a typing rule yet, and no theorem statement
 changes. -/
@@ -92,5 +98,45 @@ theorem RegionLanded.mono {m : Mem} {D D' : Nat → Prop} (hD : ∀ d, D d → D
     (h : RegionLanded m D k n) : RegionLanded m D' k n := by
   obtain ⟨n0, ⟨d, hd, hn⟩, hl⟩ := h
   exact ⟨n0, ⟨d, hD d hd, hn⟩, hl⟩
+
+/-- Composing with a dependency that is not a name never gives a name. -/
+theorem comp_share_left {k : Kind} (hk : k.isName = false) : comp .share k = .share := by
+  cases k <;> simp_all [comp, Kind.isName]
+
+/-- **A view through a region lands through the argument's own roots**,
+    at the composed kind: if every node at one of the region's addresses
+    lands through some dependency in `S` (the views the argument holds are
+    valid through it), then what lands through a non-name dependency of
+    kind `k` on the region lands through `⟨r, comp a k⟩` for some `⟨r, a⟩ ∈ S`.
+    So a context in which each region dependency is replaced by what the
+    argument holds, kinds composed, states the same validity in terms of the
+    caller's roots, which the memory invariant already speaks of. -/
+theorem RegionLanded.landed {m : Mem} {D : Nat → Prop} {S : List Dep}
+    (hS : ∀ d n0, D d → DataAt m d n0 → ∃ dep ∈ S, Landed m dep n0)
+    {k : Kind} (hk : k.isName = false) {n : Val} (h : RegionLanded m D k n) :
+    ∃ dep ∈ S, Landed m ⟨dep.root, A2.comp dep.kind k⟩ n := by
+  obtain ⟨n0, ⟨d, hd, hn⟩, hl⟩ := h
+  obtain ⟨dep, hdep, hL⟩ := hS d n0 hd hn
+  refine ⟨dep, hdep, ?_⟩
+  rcases hL with ⟨n1, hr, hl1⟩ | ⟨hks, hrm, hip⟩
+  · exact Or.inl ⟨n1, hr, lands_comp' hl1 hl⟩
+  · refine Or.inr ⟨?_, hrm, hip.sub hl.sub⟩
+    show A2.comp dep.kind k = .share
+    rw [hks]; exact comp_share_left hk
+
+/-- ... and the hypothesis holds of an argument's region at the call's entry:
+    every node at an address of a view the argument stores, valid as the
+    invariant says, lands through what the argument holds (the heap makes
+    the node at an address unique). -/
+theorem ViewsOK.region_landed {m : Mem} (hh : HeapOK m) {τ : Ty} {T : Val} {H : List Dep}
+    (h : ViewsOK m τ T H) : ∀ d n0, ViewAddr τ T d → DataAt m d n0 → ∃ dep ∈ H, Landed m dep n0 := by
+  intro d n0 hd hn0
+  obtain ⟨s, o, l, hv⟩ := hd
+  obtain ⟨d', o', l', heq, dep, hdep, hva⟩ := h s _ hv
+  cases heq
+  obtain ⟨c, es, -, hL, -, -⟩ := hva
+  have := RegionNode.unique hh hn0 (hL.inMem.dataAt rfl)
+  subst this
+  exact ⟨dep, hdep, hL⟩
 
 end A2
