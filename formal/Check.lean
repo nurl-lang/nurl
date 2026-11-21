@@ -634,6 +634,16 @@ import A3
 #print axioms A2.HeldViewThruWitness.pre_s2_dead
 #print axioms A2.HeldViewThruWitness.pre_vv_kept
 #print axioms A2.HeldViewThruWitness.pre_w_kept
+-- (A2/EditB.lean, A2/DropInWitness.lean, AGORA-937): a change strictly inside the elements of a
+-- Vec root (`Eff.dropIn`) keeps the root's views: its buffer keeps its address and length
+#print axioms A2.vkeep_view_below
+#print axioms A2.HKeep.view_of_self
+#print axioms A2.MInv.edit_dropE
+#print axioms A2.effAt_dropE
+#print axioms A2.RSetup.Eff.kills_mono
+#print axioms A2.DropInWitness.set_keeps_view
+#print axioms A2.DropInWitness.drop_would_end
+#print axioms A2.DropInWitness.struct_root_drops
 -- (A2/RegionMem.lean, AGORA-937 stage 3b): a region of buffer addresses reaches the node at one of
 -- them (RootNode's view case generalised); an argument's valid views are valid through its region,
 -- each address reaches one node, and derived borrows compose kinds through a region as through a root

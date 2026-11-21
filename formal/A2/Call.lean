@@ -2568,7 +2568,7 @@ theorem sigCtx_names (fn : Fn) : NameWF (sigCtx fn) := by
         obtain ⟨hb1, ht1⟩ := hk
         subst hb1 ht1
         exact ⟨⟨t'', .inout b', true, [], [], false, false, false, false⟩, sigCtx_sym hp hhv, rfl, rfl, rfl, rfl,
-          Or.inr ⟨hbr, Or.inr ⟨b', rfl, Nat.le_refl _⟩⟩, hhv⟩
+          Or.inr ⟨hbr, Or.inr ⟨b', rfl, Eff.le_refl _⟩⟩, hhv⟩
       · cases hd
     · cases hk
   · simp [Entry.vdeps] at hd

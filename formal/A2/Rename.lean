@@ -833,7 +833,7 @@ theorem killE_lift (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γ
 
 theorem Eff.kills_mono {e b : Eff} (hle : e.le b) (hv : Bool) (k : Kind) (hk : e.kills hv k = true) :
     b.kills hv k = true := by
-  unfold Eff.le Eff.rank at hle
+  unfold Eff.le Eff.leb at hle
   cases e <;> cases b <;> cases k <;> simp_all [Eff.kills]
 
 theorem killE_frame (h : S.OK) {e : Eff} {hv : Bool} {x : Var} (ha : Allowed S e hv x)
@@ -5170,7 +5170,7 @@ theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa 
         rcases hcan with hmo | ⟨b, hmo, hle⟩
         · rw [hmo] at hmE; cases hmE
         · rw [hmo] at hmE; cases hmE
-          cases hb1 : bh.1 <;> rw [hb1] at hle <;> simp_all [Eff.le, Eff.rank]
+          cases hb1 : bh.1 <;> rw [hb1] at hle <;> simp_all [Eff.le, Eff.leb]
   · unfold callPost
     rw [canon_killNames h (AbsOK.callPostAux hab fn.params args 0 Γa hz hab) _ hal hnpN]
     have hdv : ∀ pa ∈ fn.params.zip args, ∀ b, pa.1.1 = .inout b → ∀ Ea, Γa pa.2 = some Ea →
@@ -5620,7 +5620,7 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
     obtain ⟨d0, hd0, rfl⟩ := mem_thruDeps.mp hd
     obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
     have hae : argE Γa1 d0.root = Er := by unfold argE; rw [hEr]; rfl
-    show Allowed S (op.effAt d0.kind (decide ((argE Γa1 d0.root).ty = Ex1.ty))) false d0.root
+    show Allowed S (op.effAt d0.kind (decide ((argE Γa1 d0.root).ty = Ex1.ty)) (argE Γa1 d0.root).ty.isVec) false d0.root
     rw [hae]; exact allowed_canDo_false hab1 hEr hcan
   -- what the change is handed, where the call places it
   obtain ⟨D', harg'⟩ : ∃ D', EditArg (S.canon Γa) S.Fc (op.rename S.ρ) t D' (S.canon Γa1) := by
@@ -5928,7 +5928,7 @@ theorem editBV_ren_facts (h : S.OK)
     obtain ⟨d0, hd0, rfl⟩ := mem_thruKills.mp hk
     obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d0 hd0
     have hae : argE Γa1 d0.root = Er := by unfold argE; rw [hEr]; rfl
-    show Allowed S (op.effAt d0.kind (decide ((argE Γa1 d0.root).ty = Ex1.ty)))
+    show Allowed S (op.effAt d0.kind (decide ((argE Γa1 d0.root).ty = Ex1.ty)) (argE Γa1 d0.root).ty.isVec)
       (argE Γa1 d0.root).ty.holdsView d0.root
     rw [hae]
     have := allowed_canDo' hab1 hEr hcan
@@ -5976,7 +5976,8 @@ theorem editBV_ren_facts (h : S.OK)
   rw [hae] at hds hdb
   refine ⟨?_, ?_, fun hr => ?_⟩
   · show DtorSafe (S.canon Γa1) ((op.rename S.ρ).effAt d0.kind
-      (decide ((argE (S.canon Γa1) (S.ρ d0.root)).ty = (S.liftE x Ex1).ty)))
+      (decide ((argE (S.canon Γa1) (S.ρ d0.root)).ty = (S.liftE x Ex1).ty))
+      (argE (S.canon Γa1) (S.ρ d0.root)).ty.isVec)
       (argE (S.canon Γa1) (S.ρ d0.root)).ty.holdsView (S.ρ d0.root)
     rw [hae', subE_ty, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
     have := allowed_canDo' hab1 hEr hcan

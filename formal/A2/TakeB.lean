@@ -116,11 +116,15 @@ theorem MInv.editB_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (fun _ _ _ h => hw'.noView (by simpa [Ty.holdsView] using hhv) h)
     (fun _ _ _ h => hw0.noView (by simpa [Ty.holdsView] using hhv) h)
   have hown : MInv (m.set dep.root ⟨true, some T'⟩)
-      (A2.kill ((Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty))) false dep.root Γ) := by
-    have hdrop : (Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) = .drop := rfl
-    rw [hdrop] at hcan hds ⊢
-    exact MInv.edit_drop hi hanch hEo hoF hcan hds hT0 hT' hst (HeapOK.editTake hi.heap hT0 hn hr)
-      (by simp) hhv hr hw' rfl hsh' hfree hes
+      (A2.kill ((Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec) false dep.root Γ) := by
+    have hwT : WFv Eo.ty T := by
+      obtain ⟨T1, h1, h2, _⟩ := hi.own_val hEo hlo hcan.ownSlot
+      rw [hT0] at h1; cases h1; exact h2
+    have hed := effAt_dropE (Edit.effAt_ne_realloc (op := .trunc i) (fun _ h => Edit.noConfusion h)
+      dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec) hwT htop hla
+    generalize (Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.ty.isVec = e at hcan hds hed ⊢
+    exact MInv.edit_dropE hi hanch hEo hoF hcan hds hT0 hT' hst (HeapOK.editTake hi.heap hT0 hn hr)
+      (by simp) hhv hr hw' rfl hsh' hfree hes hed
   exact MInv.editB_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref hpfx
 
@@ -150,7 +154,7 @@ theorem MInv.editBV_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hno : NodeOf m x o T t' c d es)
     (hr : Repl (.node t' c d es) (.node t' c d (es.eraseIdx n)) T T') :
     MInv (m.set o ⟨true, some T'⟩) (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) := by
-  have h := MInv.editBV_drops (a' := m.alloc) hi hanch hx hmx hl hty hhv (fun _ _ => rfl) hthru hV
+  have h := MInv.editBV_drops (a' := m.alloc) hi hanch hx hmx hl hty hhv (fun _ h => Edit.noConfusion h) hthru hV
     (fun _ h => by cases h) (fun _ h => by cases h) hno
     (fun _ _ _ _ _ _ => HeapOK.editTake hi.heap hno.2.2.1 hn hr)
     (N := []) (fun e he => Or.inl (List.mem_of_mem_eraseIdx he)) hr

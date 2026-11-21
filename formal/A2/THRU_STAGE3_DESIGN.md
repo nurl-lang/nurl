@@ -317,7 +317,8 @@ inside the elements". There are two ways.
    - `Eff.kills_mono` needs `e.le b → kills e ⊆ kills b`;
    - `dropIn` and `realloc` kill incomparable sets (`{inner, share}` vs.
      `{view, self/hv}`), so `Eff.le` can no longer be a rank (`Eff.rank`,
-     7 uses) and becomes a partial order (inclusion of kills);
+     7 uses) and becomes a partial order (inclusion of kills; done:
+     `Eff.leb`);
    - `canDo` (14 files), the `inout` bounds and every `Eff` case split
      (41 files) are touched, and each bound check is re-proved.
 2. **Two roots per region.** `π p` is the viewed buffer, and `π' p` is the
@@ -346,6 +347,39 @@ and exit kills (`thruPre`) then becomes `dropIn` on roots reached through
 `.view`. The work comes first, as its own change with full proofs: no rule
 uses `dropIn` yet, and `Eff.le` keeps every existing inequality.
 
+### Done: option 1 (`Eff.dropIn`)
+
+It landed as a change of its own, with full proofs (`formal/rules/t937-dropin.md`).
+Building it turned up a point the analysis above missed:
+
+- **`.inner` does not always mean strictly inside the elements.** A field of
+  an owned struct is lent `⟨y, .inner⟩` (`projDeps`), but it lies at the
+  struct's top. A push through it changes the field's length, and a borrow
+  of the whole struct holds `⟨y, .view⟩` (`rootKind`). So `dropIn` can be
+  sound only where the root's node is its only top part: a `Vec` root.
+  `Edit.effAt` therefore takes a fourth argument, whether the root's type
+  is a `Vec` (`Edit.inEff`, `Ty.isVec`), and any other root keeps `.drop`
+  (`DropInWitness.struct_root_drops`).
+- **The soundness proof** is `MInv.edit_dropE`. `.dropIn` there needs two
+  keeps:
+  - `VKeep ⟨o, .view⟩` (`vkeep_view_below`): the root's node keeps its
+    address and length when the rewrite is below it;
+  - `HKeep ⟨o, .view⟩`, which is `HKeep ⟨o, .self⟩` (`HKeep.view_of_self`),
+    since `Lands .view` and `Lands .self` are the same condition.
+- **Where the elements hold views** (`EditBV`, `TakeB`), `.dropIn` ends what
+  `.drop` ends (`kill_dropIn_true`), so those proofs are unchanged.
+- **`Eff.le`** is `Eff.leb`, inclusion of kills. `Eff.kills_mono` still
+  holds, and the order on the old four effects is unchanged.
+
+**What item 2 still needs from it.** A region root's binding has type
+`.int` (`regionE`, `AbsOK` clause 4), so `Ty.isVec` is false there, and
+`f1`'s change through `vv`'s slice still gives `π p` the effect `.drop`.
+Item 2 must give a region root `.dropIn` when what it stands for is a
+`Vec`'s buffer. That is sound for regions by `RegionViewAt.keep_inner`,
+whose region nodes are `DataAt` nodes, so always nodes. The likely form is
+an `rvec` read off the parameter's type, or `E.mode = .region` with the
+parameter's type a `Vec` of views.
+
 ## Open questions for review
 
 1. Does lifting a lent parameter's region keep `liftE`'s `.rootb` case's
@@ -353,5 +387,5 @@ uses `dropIn` yet, and `Eff.le` keeps every existing inequality.
    holding views become a `.bor` binding of its argument in the lift?
 2. Is the entry kill better stated on the combined context at `callMem` time
    (`CallH.minv`), or as a `CallPre` context the call steps through?
-3. Is a depth-aware `.drop` worth adding before 3d, so that `sw` and `vv`
-   stay live after the call as in nurlc? Or is that a precision follow-up?
+3. ~~Is a depth-aware `.drop` worth adding before 3d?~~ Yes; it is needed,
+   not just more precise (`MInv.rootbLive`), and it is done (`Eff.dropIn`, above).

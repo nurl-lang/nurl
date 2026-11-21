@@ -568,7 +568,7 @@ theorem canDo.ownSlot {m : Mode} {e : Eff} (h : canDo m e) : m.ownSlot = true :=
 theorem canDo_replace_cases {m : Mode} (h : canDo m .replace) : m = .own ∨ m = .inout .replace := by
   rcases h with h | ⟨b, h, hle⟩
   · exact Or.inl h
-  · right; rw [h]; cases b <;> simp_all [Eff.le, Eff.rank]
+  · right; rw [h]; cases b <;> simp_all [Eff.le, Eff.leb]
 
 theorem Mode.isRoot_of_ownSlot {m : Mode} (h : m.ownSlot = true) : m.isRoot = true := by
   cases m <;> simp_all [Mode.ownSlot, Mode.isRoot]
@@ -1491,11 +1491,19 @@ theorem mem_callR {Γ : Ctx} {args : List Var} {r : Var} :
     the root's own handle (`.self`), the root of the borrow's own type
     (`sameTy`), is the root's own push (the borrowed `Vec` is the root's
     whole tree): `.realloc`. Anything else (a truncation, an element set)
-    may change the elements of any node of the root's tree: `.drop`. -/
-def Edit.effAt : Edit → Kind → Bool → Eff
-  | .push _, k, sameTy => if k = .self ∧ sameTy = true then .realloc else .drop
-  | .trunc _, _, _ => .drop
-  | .set _ _, _, _ => .drop
+    may change the elements of any node of the root's tree, `.drop`, except
+    when the root is a `Vec` (`rvec`) and the borrow reaches it `.inner`:
+    the change is then strictly inside the root's elements, and the root's
+    own buffer keeps its address and length, `.dropIn` (`Edit.inEff`;
+    AGORA-937). A struct's field is lent `.inner` too (`projDeps`) but lies
+    at the struct's top, so a root of any other type gets `.drop`. -/
+def Edit.inEff (k : Kind) (rvec : Bool) : Eff :=
+  if k = .inner ∧ rvec = true then .dropIn else .drop
+
+def Edit.effAt : Edit → Kind → Bool → Bool → Eff
+  | .push _, k, sameTy, rvec => if k = .self ∧ sameTy = true then .realloc else Edit.inEff k rvec
+  | .trunc _, k, _, rvec => Edit.inEff k rvec
+  | .set _ _, k, _, rvec => Edit.inEff k rvec
 
 /-- The binding whose value a change of elements stores: what `push` and
     `set` are handed. -/
@@ -1504,40 +1512,63 @@ def Edit.stored : Edit → Option Var
   | .trunc _ => none
   | .set _ y => some y
 
-theorem Edit.effAt_ne_replace (op : Edit) (k : Kind) (s : Bool) : op.effAt k s ≠ .replace := by
-  cases op with
-  | push => simp only [Edit.effAt]; split <;> simp
-  | trunc => simp [Edit.effAt]
-  | set => simp [Edit.effAt]
+theorem Edit.inEff_cases (k : Kind) (rv : Bool) :
+    Edit.inEff k rv = .drop ∨ (Edit.inEff k rv = .dropIn ∧ k = .inner ∧ rv = true) := by
+  unfold Edit.inEff; split
+  · rename_i h; exact Or.inr ⟨rfl, h⟩
+  · exact Or.inl rfl
 
-theorem Edit.effAt_ne_none (op : Edit) (k : Kind) (s : Bool) : op.effAt k s ≠ .none := by
+theorem Edit.effAt_cases (op : Edit) (k : Kind) (s rv : Bool) :
+    op.effAt k s rv = .realloc ∨ op.effAt k s rv = .drop ∨
+      (op.effAt k s rv = .dropIn ∧ k = .inner ∧ rv = true) := by
   cases op with
-  | push => simp only [Edit.effAt]; split <;> simp
-  | trunc => simp [Edit.effAt]
-  | set => simp [Edit.effAt]
+  | push =>
+    simp only [Edit.effAt]; split
+    · exact Or.inl rfl
+    · exact Or.inr (Edit.inEff_cases k rv)
+  | trunc => exact Or.inr (Edit.inEff_cases k rv)
+  | set => exact Or.inr (Edit.inEff_cases k rv)
 
-theorem Edit.effAt_le_drop (op : Edit) (k : Kind) (s : Bool) : (op.effAt k s).le .drop := by
-  cases op with
-  | push => simp only [Edit.effAt]; split <;> decide
-  | trunc => simp only [Edit.effAt]; decide
-  | set => simp only [Edit.effAt]; decide
+theorem Edit.effAt_ne_replace (op : Edit) (k : Kind) (s rv : Bool) : op.effAt k s rv ≠ .replace := by
+  rcases Edit.effAt_cases op k s rv with h | h | ⟨h, _⟩ <;> rw [h] <;> simp
+
+theorem Edit.effAt_ne_none (op : Edit) (k : Kind) (s rv : Bool) : op.effAt k s rv ≠ .none := by
+  rcases Edit.effAt_cases op k s rv with h | h | ⟨h, _⟩ <;> rw [h] <;> simp
+
+theorem Edit.effAt_le_drop (op : Edit) (k : Kind) (s rv : Bool) : (op.effAt k s rv).le .drop := by
+  rcases Edit.effAt_cases op k s rv with h | h | ⟨h, _⟩ <;> rw [h] <;> decide
 
 /-- What a change does to a root does not depend on what it is handed. -/
-@[simp] theorem Edit.effAt_rename (ρ : Var → Var) (op : Edit) (k : Kind) (s : Bool) :
-    (op.rename ρ).effAt k s = op.effAt k s := by
+@[simp] theorem Edit.effAt_rename (ρ : Var → Var) (op : Edit) (k : Kind) (s rv : Bool) :
+    (op.rename ρ).effAt k s rv = op.effAt k s rv := by
   cases op <;> rfl
 
 /-- `.realloc` is a push through a copy of a same-typed root's handle. -/
-theorem Edit.effAt_realloc {op : Edit} {k : Kind} {s : Bool} (h : op.effAt k s = .realloc) :
+theorem Edit.effAt_realloc {op : Edit} {k : Kind} {s rv : Bool} (h : op.effAt k s rv = .realloc) :
     (∃ y, op = .push y) ∧ k = .self ∧ s = true := by
   cases op with
   | push y =>
     simp only [Edit.effAt] at h
     split at h
     · rename_i hk; exact ⟨⟨y, rfl⟩, hk.1, hk.2⟩
-    · cases h
-  | trunc _ => simp [Edit.effAt] at h
-  | set _ _ => simp [Edit.effAt] at h
+    · rcases Edit.inEff_cases k rv with h' | ⟨h', _⟩ <;> rw [h'] at h <;> cases h
+  | trunc _ => rcases Edit.inEff_cases k rv with h' | ⟨h', _⟩ <;> simp [Edit.effAt, h'] at h
+  | set _ _ => rcases Edit.inEff_cases k rv with h' | ⟨h', _⟩ <;> simp [Edit.effAt, h'] at h
+
+/-- Only a push reallocates. -/
+theorem Edit.effAt_ne_realloc {op : Edit} (h : ∀ y, op ≠ .push y) (k : Kind) (s rv : Bool) :
+    op.effAt k s rv ≠ .realloc := fun he => by
+  obtain ⟨⟨y, rfl⟩, _⟩ := Edit.effAt_realloc he
+  exact h y rfl
+
+/-- Not a `.realloc`: a `.drop`, or a `.dropIn` through an `.inner`
+    borrow of a `Vec` root. -/
+theorem Edit.effAt_not_realloc {op : Edit} {k : Kind} {s rv : Bool} (h : op.effAt k s rv ≠ .realloc) :
+    op.effAt k s rv = .drop ∨ (op.effAt k s rv = .dropIn ∧ k = .inner ∧ rv = true) := by
+  rcases Edit.effAt_cases op k s rv with h' | h' | h'
+  · exact absurd h' h
+  · exact Or.inl h'
+  · exact Or.inr h'
 
 /-- A renamed change stores what it stored, renamed. -/
 @[simp] theorem Edit.drops_rename (ρ : Var → Var) (op : Edit) : (op.rename ρ).drops = op.drops := by
@@ -1554,7 +1585,7 @@ theorem Edit.effAt_realloc {op : Edit} {k : Kind} {s : Bool} (h : op.effAt k s =
     on `r`, whose changed node's elements hold no views. So the kills of a
     change through a borrow are `killNames`, and its lemmas apply. -/
 def thruDeps (op : Edit) (Γ : Ctx) (tx : Ty) (P : List Dep) : List Dep :=
-  (memDeps P).map fun d => ⟨d.root, .name (op.effAt d.kind (decide ((argE Γ d.root).ty = tx))) .int⟩
+  (memDeps P).map fun d => ⟨d.root, .name (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)) (argE Γ d.root).ty.isVec) .int⟩
 
 /-- What a change through a borrow (of type `tx`, path `P`) ends: on each
     memory root, what its effect there ends. -/
@@ -1563,7 +1594,7 @@ def killThru (op : Edit) (tx : Ty) (P : List Dep) (Γ : Ctx) : Ctx :=
 
 theorem mem_thruDeps {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {d : Dep} :
     d ∈ thruDeps op Γ tx P ↔ ∃ d0 ∈ memDeps P, d = ⟨d0.root,
-      .name (op.effAt d0.kind (decide ((argE Γ d0.root).ty = tx))) .int⟩ := by
+      .name (op.effAt d0.kind (decide ((argE Γ d0.root).ty = tx)) (argE Γ d0.root).ty.isVec) .int⟩ := by
   unfold thruDeps
   simp only [List.mem_map]
   constructor
@@ -1576,7 +1607,7 @@ theorem thruDeps_bound {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {d : Dep}
     (hd : d ∈ thruDeps op Γ tx P) : d.kind.bound ≠ .replace ∧ d.kind.bound ≠ .none ∧
       d.kind.bound.le .drop ∧ d.kind.isName = true := by
   obtain ⟨d0, _, rfl⟩ := mem_thruDeps.mp hd
-  exact ⟨Edit.effAt_ne_replace _ _ _, Edit.effAt_ne_none _ _ _, Edit.effAt_le_drop _ _ _, rfl⟩
+  exact ⟨Edit.effAt_ne_replace _ _ _ _, Edit.effAt_ne_none _ _ _ _, Edit.effAt_le_drop _ _ _ _, rfl⟩
 
 /-- What a change through a borrow of type `tx`, whose path is `P`, asks of
     each root `d.root` it reaches in memory, in the context after its
@@ -1588,8 +1619,8 @@ theorem thruDeps_bound {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {d : Dep}
 def ThruOK (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (P : List Dep) : Prop :=
   ∀ d ∈ memDeps P, d.root ∉ F ∧ (∀ y, op.stored = some y → d.root ≠ y) ∧
     ∃ Er, Γ1 d.root = some Er ∧ Er.live = true ∧
-      canDo Er.mode (op.effAt d.kind (decide (Er.ty = tx))) ∧
-      DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx))) false d.root ∧
+      canDo Er.mode (op.effAt d.kind (decide (Er.ty = tx)) Er.ty.isVec) ∧
+      DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.ty.isVec) false d.root ∧
       d.kind ≠ .share
 
 theorem ThruOK.noShare {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
@@ -1609,7 +1640,7 @@ def killHv : List (Eff × Bool × Var) → Ctx → Ctx
     `thruDeps`), each with whether the root's type holds views. -/
 def thruKills (op : Edit) (Γ : Ctx) (tx : Ty) (P : List Dep) : List (Eff × Bool × Var) :=
   (memDeps P).map fun d =>
-    (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)), (argE Γ d.root).ty.holdsView, d.root)
+    (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)) (argE Γ d.root).ty.isVec, (argE Γ d.root).ty.holdsView, d.root)
 
 /-- What a change through a borrow that may store a view ends: on each
     memory root, what its effect there ends, the root's elements holding
@@ -1621,7 +1652,7 @@ def killThruV (op : Edit) (tx : Ty) (P : List Dep) (Γ : Ctx) : Ctx :=
 
 theorem mem_thruKills {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {k : Eff × Bool × Var} :
     k ∈ thruKills op Γ tx P ↔ ∃ d ∈ memDeps P,
-      k = (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)), (argE Γ d.root).ty.holdsView, d.root) := by
+      k = (op.effAt d.kind (decide ((argE Γ d.root).ty = tx)) (argE Γ d.root).ty.isVec, (argE Γ d.root).ty.holdsView, d.root) := by
   unfold thruKills
   simp only [List.mem_map]
   constructor
@@ -1726,7 +1757,7 @@ theorem holdOn_isSome (rs : List Var) (D : List Dep) (Γ : Ctx) (v : Var) :
     the path (no tree views itself). -/
 def ThruV (Γ1 : Ctx) (op : Edit) (tx : Ty) (P D : List Dep) : Prop :=
   ∀ d ∈ memDeps P,
-    DtorSafe Γ1 (op.effAt d.kind (decide ((argE Γ1 d.root).ty = tx))) (argE Γ1 d.root).ty.holdsView d.root ∧
+    DtorSafe Γ1 (op.effAt d.kind (decide ((argE Γ1 d.root).ty = tx)) (argE Γ1 d.root).ty.isVec) (argE Γ1 d.root).ty.holdsView d.root ∧
     (argE Γ1 d.root).dbind = false ∧ d.root ∉ roots D
 
 /-- A memory root of a change through a borrow owns its slot and is not lent
