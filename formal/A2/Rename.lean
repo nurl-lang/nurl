@@ -158,7 +158,8 @@ theorem liftE_fresh_of {v : Var} {E : Entry} (h : E.mode ≠ .rootb) : (S.liftE 
     which keeps `EntryWeaker.dheld`'s name/non-name split. -/
 noncomputable def subD (d : Dep) : List Dep :=
   match S.inv d.root with
-  | some v => if S.isPi v then (if d.kind.isName then [] else S.σ v) else [d]
+  | some v => if S.isPi v then
+      (if d.kind.isName then [] else (S.σ v).map fun e => ⟨e.root, A2.comp e.kind d.kind⟩) else [d]
   | none => [d]
 
 /-- ... applied to what a lifted entry depends on and holds. -/
@@ -185,16 +186,24 @@ theorem subE_vdeps (E : Entry) : (S.subE E).vdeps = E.vdeps.flatMap S.subD := by
   · simp [ho]
   · simp [ho]
 
+/-- AGORA-937 (3d): what a region `v` stands for, reached at `k`: one of its
+    dependencies, composed with `k`, a memory way. -/
+def σC (v : Var) (k : Kind) (e : Dep) : Prop :=
+  ∃ e0 ∈ S.σ v, e = ⟨e0.root, A2.comp e0.kind k⟩ ∧ k.isName = false
+
 /-- A substituted dependency is either kept, or one a region stands for. -/
 theorem mem_subD {d e : Dep} (h : e ∈ S.subD d) :
-    e = d ∨ ∃ v, S.inv d.root = some v ∧ S.isPi v = true ∧ e ∈ S.σ v := by
+    e = d ∨ ∃ v, S.inv d.root = some v ∧ S.isPi v = true ∧ S.σC v d.kind e := by
   unfold subD at h
   split at h
   · rename_i v hv
     cases hp : S.isPi v
     · rw [hp] at h; simp at h; exact Or.inl h
     · cases hk : d.kind.isName
-      · rw [hp, hk] at h; exact Or.inr ⟨v, hv, hp, h⟩
+      · rw [hp, hk] at h
+        simp only [↓reduceIte, Bool.false_eq_true, List.mem_map] at h
+        obtain ⟨e0, he0, rfl⟩ := h
+        exact Or.inr ⟨v, hv, hp, e0, he0, rfl, hk⟩
       · rw [hp, hk] at h; simp at h
   · simp at h; exact Or.inl h
 
@@ -228,7 +237,7 @@ theorem mem_subD_sub {d e : Dep} (h : e ∈ S.subD d) (hne : e ≠ d) : d.kind.i
 /-- What a substitution of a list holds: each dependency kept, or one a
     region it named stands for. -/
 theorem mem_flatMap_subD {ds : List Dep} {e : Dep} (h : e ∈ ds.flatMap S.subD) :
-    ∃ d ∈ ds, e = d ∨ ∃ v, S.inv d.root = some v ∧ S.isPi v = true ∧ e ∈ S.σ v := by
+    ∃ d ∈ ds, e = d ∨ ∃ v, S.inv d.root = some v ∧ S.isPi v = true ∧ S.σC v d.kind e := by
   obtain ⟨d, hd, he⟩ := List.mem_flatMap.mp h
   exact ⟨d, hd, S.mem_subD he⟩
 
@@ -315,9 +324,13 @@ structure RSetup.OK (S : RSetup) : Prop where
   /-- AGORA-937: what a region stands for is what the arguments hold, in every
       way: the frame's roots the call freezes (`σ_sub`). -/
   σ_sub  : ∀ v, S.σ v ⊆ allKinds S.R
-  /-- ... in every way: reached any other way it stays what the region
-      stands for. -/
-  σ_kinds : ∀ v d, d ∈ S.σ v → ∀ k : Kind, k.isName = false → (⟨d.root, k⟩ : Dep) ∈ S.σ v
+  /-- (AGORA-937, 3d: what a region stands for is the argument's own
+      memory dependencies, each reached as the argument reaches it; the lift
+      composes kinds, `subD`.) -/
+  σ_mem : ∀ v d, d ∈ S.σ v → d.kind.isName = false
+  /-- ... and each of its roots also by its handle, so that composed with any
+      kind it is reached in that kind (`comp .self k = k`). -/
+  σ_self : ∀ v d, d ∈ S.σ v → (⟨d.root, .self⟩ : Dep) ∈ S.σ v
   Rout   : ∀ r ∈ S.R, ∀ v, S.ρ v ≠ r
   Rroot  : ∀ r ∈ S.R, ∃ E, S.Φ r = some E ∧ E.mode.isRoot = true
   Fcout  : ∀ v, S.ρ v ∉ S.Fc
@@ -593,13 +606,32 @@ theorem σ_frame (h : S.OK) {v : Var} {d : Dep} (hd : d ∈ S.σ v) :
   have hr : d.root ∈ S.R := mem_allKinds (h.σ_sub v hd)
   exact ⟨h.Rout _ hr, h.Rroot _ hr⟩
 
+/-- ... and so is one composed with it (AGORA-937, 3d: `subD` composes
+    kinds). -/
+theorem σ_frameC (h : S.OK) {v : Var} {e : Dep} {k : Kind} (he : S.σC v k e) :
+    (∀ w, S.ρ w ≠ e.root) ∧ ∃ E, S.Φ e.root = some E ∧ E.mode.isRoot = true := by
+  obtain ⟨e0, he0, rfl, _⟩ := he
+  simpa using S.σ_frame h he0
+
+theorem σC.notName (h : S.OK) {v : Var} {e : Dep} {k : Kind} (he : S.σC v k e) : e.kind.isName = false := by
+  obtain ⟨e0, he0, rfl, hk⟩ := he
+  exact comp_isName (h.σ_mem v e0 he0) hk
+
+theorem σC.sub (h : S.OK) {v : Var} {e : Dep} {k : Kind} (he : S.σC v k e) : e ∈ allKinds S.R := by
+  obtain ⟨e0, he0, rfl, hk⟩ := he
+  have hr := mem_allKinds (h.σ_sub v he0)
+  have hnk := comp_isName (h.σ_mem v e0 he0) hk
+  unfold allKinds; refine List.mem_flatMap.mpr ⟨e0.root, hr, ?_⟩
+  generalize A2.comp e0.kind k = c at hnk ⊢
+  cases c <;> simp_all [Kind.isName]
+
 /-- ... so the lift's substitution names no callee binding where it put
     what a region stands for. -/
 theorem subD_frame (h : S.OK) {d e : Dep} (he : e ∈ S.subD d) :
     e = d ∨ ((∀ w, S.ρ w ≠ e.root) ∧ ∃ E, S.Φ e.root = some E ∧ E.mode.isRoot = true) := by
   rcases S.mem_subD he with rfl | ⟨v, _, _, hv⟩
   · exact Or.inl rfl
-  · exact Or.inr (S.σ_frame h hv)
+  · exact Or.inr (S.σ_frameC h hv)
 
 theorem mem_A {d : Dep} : d ∈ S.A ↔ d ∈ allKinds S.R ∨ d ∈ S.N := List.mem_append
 
@@ -1133,8 +1165,9 @@ theorem subD_kept (h : S.OK) {r : Var} {k : Kind} {e : Dep} (he : e ∈ S.subD �
   · rfl
   · exfalso
     cases hk : k.isName
-    · simp only [subD, inv_ρ h, hp, hk, Bool.false_eq_true, ↓reduceIte] at he
-      exact (S.σ_frame h he).1 r her.symm
+    · simp only [subD, inv_ρ h, hp, hk, Bool.false_eq_true, ↓reduceIte, List.mem_map] at he
+      obtain ⟨e0, he0, rfl⟩ := he
+      exact (S.σ_frame h he0).1 r her.symm
     · simp [subD, inv_ρ h, hp, hk] at he
 
 /-- ... so its root is bound where the call places the body, as the callee
@@ -1169,7 +1202,7 @@ theorem canon_root_of_subD (h : S.OK) (hab : S.AbsOK Γa) {d e : Dep} (he : e �
         · exact hab.notPi hEr (hnr hk)
       rw [hr]; exact canon_root_sub h hEr hro hnp
     · exact canon_frameRoot h hout hex
-  · obtain ⟨hout, hex⟩ := S.σ_frame h hv
+  · obtain ⟨hout, hex⟩ := S.σ_frameC h hv
     exact canon_frameRoot h hout hex
 
 /-- AGORA-937: `canon_wf`'s first clause with regions: a live lifted binding's
@@ -1254,7 +1287,7 @@ theorem canon_wf_sub (h : S.OK) (hab : S.AbsOK Γa) (hw : CtxWF Γa) (hnW : Name
             · obtain ⟨Er, hEr, hro⟩ := hw.dtor v E hE hd hos0 hn' d0 hd0 (by simpa [Dep.ren] using hnm)
               exact Or.inl ⟨d0.root, Er, rfl, hEr, hro, fun hk => absurd hk (by simpa [Dep.ren] using hnm)⟩
             · exact Or.inr ⟨A_out h ha, A_root h ha⟩
-          · obtain ⟨hout, hex⟩ := S.σ_frame h hv
+          · obtain ⟨hout, hex⟩ := S.σ_frameC h hv
             exact canon_frameRoot h hout hex
     · rw [hc] at hy; cases hy
     · rw [hc] at hy
@@ -1364,7 +1397,7 @@ theorem canon_names_sub (h : S.OK) (hab : S.AbsOK Γa) (hn : NameWF Γa) : NameW
             · have := allKinds_notName ha; rw [hk] at this; cases this
             · obtain ⟨Er, hEr, hlr, hhr, ht, ho, hc', hhv⟩ := h.N_named e ha b t hk
               exact ⟨Er, by rw [canon_frame _ (h.N_out e ha).1]; exact hEr, hlr, hhr, ht, ho, hc', hhv⟩
-      · have := allKinds_notName (h.σ_sub _ hv); rw [hk] at this; cases this
+      · have := allKinds_notName (hv.sub h); rw [hk] at this; cases this
   · rw [hc] at hy; cases hy
   · rw [hc] at hy
     rcases h.Φnamed y E' hy hl hnn e he b t hk with ⟨v, bh, hρ, hb, hpt, hbr, hbh, hhv⟩ |
@@ -2400,13 +2433,14 @@ theorem subD_keep_comp (h : S.OK) {d : Dep} (hd : d ∈ S.subD d) (k : Kind) :
     · simp [subD, hi, hp]
     · cases hk : kd.isName
       · exfalso
-        simp only [subD, hi, hp, hk, Bool.false_eq_true, ↓reduceIte] at hd
-        exact (S.σ_frame h hd).1 v (S.ρ_of_inv hi)
+        simp only [subD, hi, hp, hk, Bool.false_eq_true, ↓reduceIte, List.mem_map] at hd
+        obtain ⟨e0, he0, he⟩ := hd
+        exact (S.σ_frame h he0).1 v (by rw [S.ρ_of_inv hi]; exact (congrArg Dep.root he).symm)
       · exfalso; simp [subD, hi, hp, hk] at hd
 
 /-- AGORA-937: what is derived from a substituted entry is at most what is
-    derived from the entry, substituted: what a region stands for is closed
-    under every way of reaching it (`σ_kinds`). -/
+    derived from the entry, substituted: the lift composes kinds, and
+    composing is associative (`comp_assoc`). -/
 theorem derive_subE (h : S.OK) {y : Var} (hnp : S.isPi y = false) (E : Entry) {k : Kind}
     (hk : k.isName = false) : derive (S.ρ y) (S.subE E) k ⊆ (derive (S.ρ y) E k).flatMap S.subD := by
   unfold derive
@@ -2426,11 +2460,11 @@ theorem derive_subE (h : S.OK) {y : Var} (hnp : S.isPi y = false) (E : Entry) {k
     · have hkd := S.mem_subD_sub hd'd hdd
       rcases S.mem_subD hd'd with e0 | ⟨v, hv, hp, hσ⟩
       · exact absurd e0 hdd
-      · have hck : (comp d.kind k).isName = false := comp_isName hkd hk
-        have hk' : (comp d'.kind k).isName = false :=
-          comp_isName (allKinds_notName (h.σ_sub v hσ)) hk
-        have hmem := h.σ_kinds v d' hσ _ hk'
-        simpa [subD, hv, hp, hck] using hmem
+      · -- AGORA-937 (3d): the lift composes kinds, so deriving commutes with it (`comp_assoc`)
+        have hck : (comp d.kind k).isName = false := comp_isName hkd hk
+        obtain ⟨e0, he0, rfl, _⟩ := hσ
+        simp only [subD, hv, hp, hck, Bool.false_eq_true, ↓reduceIte, List.mem_map]
+        exact ⟨e0, he0, by rw [comp_assoc]⟩
 
 /-- ... and is it, exactly, where what is derived is on no region. -/
 theorem derive_subE_keep (h : S.OK) {y : Var} (hnp : S.isPi y = false) {E : Entry} (k : Kind)
@@ -3569,16 +3603,17 @@ theorem mem_subE_held_of_R (h : S.OK) (hR : S.R = []) {X : Entry} {d : Dep} (hd 
   obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp hd
   rcases S.mem_subD hde with rfl | ⟨v, _, _, hσ⟩
   · exact he
-  · have := h.σ_sub v hσ; rw [hR] at this; simp [allKinds] at this
+  · have := hσ.sub h; rw [hR] at this; simp [allKinds] at this
 
 /-- AGORA-937 (turn-on 3): a lifted dependency on a region stands for what
     the region stands for, or is dropped (a name). -/
 theorem mem_subD_pi {S : RSetup} (h : S.OK) {w : Var} {k : Kind} {e : Dep} (hp : S.isPi w = true)
-    (he : e ∈ S.subD ⟨S.ρ w, k⟩) : e ∈ S.σ w := by
+    (he : e ∈ S.subD ⟨S.ρ w, k⟩) : S.σC w k e := by
   unfold subD at he
   simp only [inv_ρ h, hp, ↓reduceIte] at he
-  cases hk : k.isName <;> simp only [hk, Bool.false_eq_true, ↓reduceIte, List.not_mem_nil] at he
-  exact he
+  cases hk : k.isName <;> simp only [hk, Bool.false_eq_true, ↓reduceIte, List.not_mem_nil, List.mem_map] at he
+  obtain ⟨e0, he0, rfl⟩ := he
+  exact ⟨e0, he0, rfl, hk⟩
 
 /-- AGORA-937 (agora #4147): no name is on a region. A live binding that may
     hold memory names only roots that own their slot (`NameWF`), and a region
@@ -3636,7 +3671,7 @@ theorem argE_canon_rooted (h : S.OK) (hab : S.AbsOK Γa) {a : Var} (hnp : S.isPi
           | some E0 => show (S.canon Γa (S.ρ d0.root)).isSome = true; rw [canon_some h h0 hp]; rfl
         · obtain ⟨E', hE', _⟩ := canon_frameRoot (Γa := Γa) h (A_out h hA) (A_root h hA)
           rw [hE']; rfl
-    · obtain ⟨hout, hex⟩ := S.σ_frame h hσ
+    · obtain ⟨hout, hex⟩ := S.σ_frameC h hσ
       obtain ⟨E', hE', _⟩ := canon_frameRoot (Γa := Γa) h hout hex
       rw [hE']; rfl
 
@@ -3655,7 +3690,7 @@ theorem sub_mono {a L L' : List Dep} (ha : a ⊆ rds S.ρ L ++ S.A) (hL : L ⊆ 
 theorem mem_subD_A (h : S.OK) {d e : Dep} (he : e ∈ S.subD d) : e = d ∨ e ∈ S.A := by
   rcases S.mem_subD he with rfl | ⟨v, _, _, hσ⟩
   · exact Or.inl rfl
-  · exact Or.inr (mem_A.mpr (Or.inl (h.σ_sub v hσ)))
+  · exact Or.inr (mem_A.mpr (Or.inl (hσ.sub h)))
 
 /-- AGORA-937: what a substituted entry depends on, it depended on, or the
     arguments hold it. -/
@@ -3675,7 +3710,7 @@ theorem mem_subE_name (h : S.OK) {L : Entry} {d : Dep} (hd : d ∈ (S.subE L).vd
   obtain ⟨d1, hd1, hdd⟩ := List.mem_flatMap.mp hd
   rcases S.mem_subD hdd with rfl | ⟨v, _, _, hσ⟩
   · exact hd1
-  · have := allKinds_notName (h.σ_sub v hσ); rw [hn] at this; cases this
+  · have := allKinds_notName (hσ.sub h); rw [hn] at this; cases this
 
 /-- AGORA-937: a name a substituted list holds, the list held. -/
 theorem mem_flatMap_subD_name (h : S.OK) {X : List Dep} {d : Dep} (hd : d ∈ X.flatMap S.subD)
@@ -3683,7 +3718,7 @@ theorem mem_flatMap_subD_name (h : S.OK) {X : List Dep} {d : Dep} (hd : d ∈ X.
   obtain ⟨d1, hd1, hdd⟩ := List.mem_flatMap.mp hd
   rcases S.mem_subD hdd with rfl | ⟨v, _, _, hσ⟩
   · exact hd1
-  · have := allKinds_notName (h.σ_sub v hσ); rw [hn] at this; cases this
+  · have := allKinds_notName (hσ.sub h); rw [hn] at this; cases this
 
 /-- ... and every name the entry held on no region, it holds (`subD_name`). -/
 theorem mem_subE_of_name {L : Entry} {d : Dep} (hd : d ∈ L.vdeps) (hn : d.kind.isName = true)
@@ -4138,7 +4173,7 @@ theorem heldOfArgs_lift (h : S.OK) (hab : S.AbsOK Γa) {args : List Var}
         obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp h0
         rcases S.mem_subD hde with rfl | ⟨v, _, _, hσ⟩
         · exact he
-        · have := allKinds_notName (h.σ_sub v hσ)
+        · have := allKinds_notName (hσ.sub h)
           have h2 : d.kind.isName = true := by simpa using hd'.2
           rw [h2] at this; cases this
       rcases names_liftE h hab hEa hdL (by simpa using hd'.2) with ⟨d0, hd0, rfl⟩ | hN
@@ -4205,7 +4240,7 @@ theorem DtorSafe.canon_N (h : S.OK) {d : Dep} (hN : d ∈ S.N) (hb : d.kind.boun
         · rcases mem_A.mp ha with ha | ha
           · exact hR (hr.1 ▸ mem_allKinds ha)
           · have := h.N_name d' ha; rw [hr.2] at this; cases this
-      · exact hR (hr.1 ▸ mem_allKinds (h.σ_sub w hσ))
+      · exact hR (hr.1 ▸ mem_allKinds (hσ.sub h))
   · rw [hc] at hy; cases hy
   · rw [hc] at hy
     by_cases hl : E.live = true
@@ -4563,11 +4598,13 @@ theorem subD_idem (h : S.OK) {d e : Dep} (he : e ∈ S.subD d) : S.subD e = [e] 
     · obtain ⟨w, hw, hp⟩ := hi
       exfalso
       cases hk : e.kind.isName
-      · have hσ : e ∈ S.σ w := by
-          have : S.subD e = S.σ w := by
+      · have hσ : S.σC w e.kind e := by
+          have : S.subD e = (S.σ w).map fun e' => (⟨e'.root, A2.comp e'.kind e.kind⟩ : Dep) := by
             simp only [subD, hw, hp, hk, Bool.false_eq_true, ↓reduceIte]
-          rw [this] at he; exact he
-        exact absurd (ρ_of_inv hw) ((S.σ_frame h hσ).1 w)
+          rw [this] at he
+          obtain ⟨e0, he0, he'⟩ := List.mem_map.mp he
+          exact ⟨e0, he0, he'.symm, hk⟩
+        exact absurd (ρ_of_inv hw) ((S.σ_frameC h hσ).1 w)
       · -- a name on a region is dropped, so not kept
         have : S.subD e = [] := by simp only [subD, hw, hp, hk, ↓reduceIte]
         rw [this] at he; cases he
@@ -4575,7 +4612,7 @@ theorem subD_idem (h : S.OK) {d e : Dep} (he : e ∈ S.subD d) : S.subD e = [e] 
         cases hp : S.isPi w
         · rfl
         · exact absurd ⟨w, hw, hp⟩ hi)
-  · exact S.subD_frameRoot (S.σ_frame h hσ).1
+  · exact S.subD_frameRoot (S.σ_frameC h hσ).1
 
 /-- ... so a kept dependency is on no region, and any dependency on its
     root is kept. -/
@@ -4586,10 +4623,13 @@ theorem subD_fix_reKind (h : S.OK) {e : Dep} (he : S.subD e = [e]) (k : Kind) :
   · rfl
   · exfalso
     cases hen : e.kind.isName
-    · have : S.subD e = S.σ w := by
+    · have : S.subD e = (S.σ w).map fun e' => (⟨e'.root, A2.comp e'.kind e.kind⟩ : Dep) := by
         simp only [subD, hw, hp, hen, Bool.false_eq_true, ↓reduceIte]
       rw [this] at he
-      exact (S.σ_frame h (d := e) (by rw [he]; exact List.mem_singleton_self e)).1 w (ρ_of_inv hw)
+      have hmem : e ∈ (S.σ w).map fun e' => (⟨e'.root, A2.comp e'.kind e.kind⟩ : Dep) := by
+        rw [he]; exact List.mem_singleton_self e
+      obtain ⟨e0, he0, he'⟩ := List.mem_map.mp hmem
+      exact (S.σ_frameC h ⟨e0, he0, he'.symm, hen⟩).1 w (ρ_of_inv hw)
     · have : S.subD e = [] := by simp only [subD, hw, hp, hen, ↓reduceIte]
       rw [this] at he; cases he
 
@@ -5370,12 +5410,13 @@ theorem allKinds_roots_memDeps_subD (h : S.OK) (Y : List Dep) :
       mem_allKinds_iff.mpr ⟨List.mem_map.mpr ⟨e, List.mem_filter.mpr ⟨he0, hek⟩, rfl⟩, hk⟩, ?_⟩
     rw [S.subD_fix_reKind h (S.subD_idem h hee)]
     exact List.mem_singleton_self _
-  · have hne : e ≠ e0 := fun he' => (S.σ_frame h hσ).1 v (by rw [he', ρ_of_inv hv])
+  · have hne : e ≠ e0 := fun he' => (S.σ_frameC h hσ).1 v (by rw [he', ρ_of_inv hv])
     have he0k := S.mem_subD_sub hee hne
     refine List.mem_flatMap.mpr ⟨⟨e0.root, dk⟩, mem_allKinds_iff.mpr ⟨List.mem_map.mpr
       ⟨e0, List.mem_filter.mpr ⟨he0, by simp [he0k]⟩, rfl⟩, hk⟩, ?_⟩
-    simp only [subD, hv, hp, hk, Bool.false_eq_true, ↓reduceIte]
-    exact h.σ_kinds v e hσ dk hk
+    obtain ⟨e1, hσ1, rfl, _⟩ := hσ
+    simp only [subD, hv, hp, hk, Bool.false_eq_true, ↓reduceIte, List.mem_map]
+    exact ⟨⟨e1.root, .self⟩, h.σ_self v e1 hσ1, rfl⟩
 
 /-- ... so a receiver's roots, substituted (for a receiver at no region's
     index). -/
@@ -6304,7 +6345,7 @@ theorem editBV_ren_facts (h : S.OK)
         -- callee binding, so at no root of the path)
         exact A_out h h2 d0.root (by simpa [Dep.ren] using he.symm)
     · -- (AGORA-937: what a region stands for is the frame's, at no root of the path)
-      exact (S.σ_frame h hv).1 d0.root (by simpa [Dep.ren] using he.symm)
+      exact (S.σ_frameC h hv).1 d0.root (by simpa [Dep.ren] using he.symm)
 
 /-- Agora #295, a view stored through a borrow in a callee's body, where the
     call places it: as `editB_ren`; what the stored value depends on in
@@ -7624,7 +7665,8 @@ theorem OK.ghostify {S : RSetup} (h : S.OK) {R' : List Var} (hR : ∀ r ∈ R', 
     (S.ghostify R').OK where
   inj := h.inj
   σ_sub := fun _ _ hd => by cases hd
-  σ_kinds := fun _ _ hd => by cases hd
+  σ_mem := fun _ _ hd => by cases hd
+  σ_self := fun _ _ hd => by cases hd
   Rout := fun r hr => h.Rout r (hR r hr)
   Rroot := fun r hr => h.Rroot r (hR r hr)
   Fcout := h.Fcout

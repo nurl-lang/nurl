@@ -141,6 +141,10 @@ def comp : Kind → Kind → Kind
   | _, .share => .share
   | _, _ => .inner
 
+/-- Composing kinds is associative. -/
+theorem comp_assoc (a b c : Kind) : comp (comp a b) c = comp a (comp b c) := by
+  cases a <;> cases b <;> cases c <;> rfl
+
 /-- The handle of a borrowed slice parameter is a view. -/
 def rootKind (t : Ty) (k : Kind) : Kind :=
   match t, k with

@@ -369,8 +369,9 @@ noncomputable def callS (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) (b
   N := (argNames Γ args).filter (fun d => !(inoutArgs fn.params args).contains d.root)
   sym := symNames fn.params
   σ := fun v => if fn.nvars ≤ v ∧ v < fn.nvars + fn.params.length then
-      allKinds (if (argE Γ (args.getD (v - fn.nvars) 0)).ty = .int then []
-        else roots (memDeps (argE Γ (args.getD (v - fn.nvars) 0)).held))
+      (if (argE Γ (args.getD (v - fn.nvars) 0)).ty = .int then []
+        else memDeps (argE Γ (args.getD (v - fn.nvars) 0)).held ++
+          (roots (memDeps (argE Γ (args.getD (v - fn.nvars) 0)).held)).map fun r => ⟨r, .self⟩)
     else []
   isPi := isRegionIdx fn
   isReg := isRegionIdx fn
@@ -1516,24 +1517,42 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
     split at hd
     · rename_i hv
       obtain ⟨hv1, hv2⟩ := hv
-      simp only [allKinds, List.mem_flatMap] at hd ⊢
-      obtain ⟨r, hr, hdr⟩ := hd
-      refine ⟨r, ?_, hdr⟩
       have hlt : v - fn.nvars < args.length := by
         rw [h.len]; exact Nat.sub_lt_left_of_lt_add hv1 hv2
-      exact List.mem_flatMap.mpr ⟨args.getD (v - fn.nvars) 0, by simp [List.getD, List.getElem?_eq_getElem hlt],
-        by simpa using hr⟩
+      have ha : args.getD (v - fn.nvars) 0 ∈ args := by simp [List.getD, List.getElem?_eq_getElem hlt]
+      split at hd
+      · cases hd
+      · rename_i hint
+        apply RSetup.mem_allKinds_iff.mpr
+        rcases List.mem_append.mp hd with hd | hd
+        · refine ⟨mem_callR.mpr ⟨_, ha, hint, List.mem_map_of_mem hd⟩, ?_⟩
+          simpa using (List.mem_filter.mp hd).2
+        · obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hd
+          exact ⟨mem_callR.mpr ⟨_, ha, hint, hr⟩, rfl⟩
     · cases hd
-  σ_kinds v d hd k hk := by
+  σ_mem v d hd := by
+    simp only [callS] at hd
+    split at hd
+    · split at hd
+      · cases hd
+      · rcases List.mem_append.mp hd with hd | hd
+        · simpa using (List.mem_filter.mp hd).2
+        · obtain ⟨r, _, rfl⟩ := List.mem_map.mp hd; rfl
+    · cases hd
+  σ_self v d hd := by
     simp only [callS] at hd ⊢
     split at hd
     · rename_i hv
-      rw [ite_eq_left hv]
-      simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at hd ⊢
-      obtain ⟨r, hr, hdr⟩ := hd
-      refine ⟨r, hr, ?_⟩
-      have hdr' : d.root = r := by rcases hdr with rfl | rfl | rfl | rfl <;> rfl
-      rw [hdr']; cases k <;> simp_all [Kind.isName]
+      simp only [hv, and_self, ↓reduceIte]
+      split at hd
+      · cases hd
+      · rename_i hint
+        simp only [hint, ↓reduceIte]
+        apply List.mem_append_right
+        rcases List.mem_append.mp hd with hd | hd
+        · exact List.mem_map.mpr ⟨d.root, List.mem_map_of_mem hd, rfl⟩
+        · obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hd
+          exact List.mem_map.mpr ⟨r, hr, rfl⟩
     · cases hd
   Rout r hr := (h.R_facts hr).1
   Rroot r hr := by
@@ -2685,8 +2704,9 @@ theorem canon_sig (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hE : 
 theorem _root_.A2.RSetup.subE_liftE_cons {S : RSetup} (hS : S.OK) {v w : Var} {E : Entry}
     (hm : E.mode ≠ .rootb) (hw : S.isPi w = true) :
     S.subE (S.liftE v { E with held := ⟨w, .view⟩ :: E.held }) =
-      { S.subE (S.liftE v E) with held := S.σ w ++ (S.subE (S.liftE v E)).held } := by
-  have hd : S.subD ⟨S.ρ w, .view⟩ = S.σ w := by
+      { S.subE (S.liftE v E) with held := (S.σ w).map (fun e => ⟨e.root, A2.comp e.kind .view⟩) ++
+        (S.subE (S.liftE v E)).held } := by
+  have hd : S.subD ⟨S.ρ w, .view⟩ = (S.σ w).map (fun e => ⟨e.root, A2.comp e.kind .view⟩) := by
     simp [RSetup.subD, RSetup.inv_ρ hS, hw, Kind.isName]
   simp [RSetup.liftE, hm, RSetup.subE, rds, Dep.ren, List.flatMap_cons, hd, RSetup.heldA]
 
@@ -2697,7 +2717,8 @@ theorem canon_param (h : CallH P Γ F x fn args base) {k : Nat} {p : PMode × Ty
     (hk : fn.params[k]? = some p) :
     (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ k) =
       some { (callS Γ F fn args base x).liftE k (paramE fn.params p) with
-        held := (if regioned p && !p.1.isInp then (callS Γ F fn args base x).σ (fn.nvars + k) else []) ++
+        held := (if regioned p && !p.1.isInp then ((callS Γ F fn args base x).σ (fn.nvars + k)).map
+            (fun e => ⟨e.root, A2.comp e.kind .view⟩) else []) ++
           ((callS Γ F fn args base x).liftE k (paramE fn.params p)).held } := by
   have hkl : k < fn.params.length := lt_of_get hk
   rw [h.canon_sigR (sigCtx_of hk) (Nat.le_of_lt hkl), regionP_of hk]
@@ -3615,7 +3636,7 @@ theorem lift_nosink_sub (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} 
   obtain ⟨e, he', hde⟩ := List.mem_flatMap.mp hd
   rcases (callS Γ F fn args base x).mem_subD hde with rfl | ⟨w, _, _, hσ⟩
   · exact h.lift_nosink hrb hE d he' k t hk he
-  · have hr : d.root ∈ callR Γ args := RSetup.mem_allKinds (h.sOK.σ_sub w hσ)
+  · have hr : d.root ∈ callR Γ args := RSetup.mem_allKinds (hσ.sub h.sOK)
     obtain ⟨_, Er, hEr, _⟩ := h.R_facts hr
     have hlt := vlt (h.domlt _ _ hEr)
     rw [he] at hlt
@@ -3627,15 +3648,15 @@ theorem lift_nosink_sub (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} 
 theorem σ_held (h : CallH P Γ F x fn args base) (v : Var) :
     (callS Γ F fn args base x).σ v ⊆ heldOfArgs Γ args := by
   intro d hd
-  by_cases hv : fn.nvars ≤ v ∧ v < fn.nvars + fn.params.length
-  · simp only [callS, hv, and_self, ↓reduceIte] at hd
-    obtain ⟨hk1, hk2⟩ := RSetup.mem_allKinds_iff.mp hd
-    have hl : v - fn.nvars < args.length := by rw [h.len]; exact Nat.sub_lt_left_of_lt_add hv.1 hv.2
-    refine List.mem_append_left _ (RSetup.mem_allKinds_iff.mpr
-      ⟨List.mem_flatMap.mpr ⟨args.getD (v - fn.nvars) 0, ?_, hk1⟩, hk2⟩)
-    simp [List.getD, hl]
-  · simp only [callS, hv, ↓reduceIte] at hd
-    cases hd
+  exact List.mem_append_left _ (by
+    have := h.sOK.σ_sub v hd
+    simpa [callS, callR, heldOfArgs] using this)
+
+/-- AGORA-937 (3d): ... and so is what a region stands for, reached at any
+    kind: the lift composes kinds. -/
+theorem σC_held (h : CallH P Γ F x fn args base) {v : Var} {k : Kind} {d : Dep}
+    (hd : (callS Γ F fn args base x).σC v k d) : d ∈ heldOfArgs Γ args :=
+  List.mem_append_left _ (by have := hd.sub h.sOK; simpa [callS, callR] using this)
 
 /-- AGORA-937 (turn-on 3): `lift_sub`, substituted, for a list of the
     callee's dependencies on lendable parameters or on regions: a region's
@@ -3656,8 +3677,8 @@ theorem lift_sub_sub (h : CallH P Γ F x fn args base) {L0 T X : List Dep}
     · -- a region's: what it stands for, the views its argument holds
       have hσ := RSetup.mem_subD_pi h.sOK (S := callS Γ F fn args base x) (w := d0.root)
         (by rw [callS_isPi]; exact hreg) hde
-      obtain ⟨_, Er, hEr, _⟩ := h.R_facts (RSetup.mem_allKinds (h.sOK.σ_sub _ hσ))
-      exact Or.inl ⟨by rw [hEr]; rfl, hR (h.σ_held _ hσ)⟩
+      obtain ⟨_, Er, hEr, _⟩ := h.R_facts (RSetup.mem_allKinds (hσ.sub h.sOK))
+      exact Or.inl ⟨by rw [hEr]; rfl, hR (h.σC_held hσ)⟩
     · have hkeep : (callS Γ F fn args base x).subD (d0.ren (callRen fn.params args base)) =
           [d0.ren (callRen fn.params args base)] :=
         RSetup.subD_keep h.sOK (Or.inr ⟨d0.root, rfl, h.isPi_sig (Nat.le_of_lt hlen.1)⟩)

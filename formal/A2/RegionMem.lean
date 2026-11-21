@@ -220,10 +220,6 @@ and then substituting is substituting and then deriving. The substituted
 context's derived borrows are then those of the substituted entries,
 however the body derives them. -/
 
-/-- Composing kinds is associative. -/
-theorem comp_assoc (a b c : Kind) : A2.comp (A2.comp a b) c = A2.comp a (A2.comp b c) := by
-  cases a <;> cases b <;> cases c <;> rfl
-
 /-- Composing a dependency's kind with one that is not a name gives a name
     only when the dependency's was one. -/
 theorem comp_isName_r {a k : Kind} (hk : k.isName = false) : (A2.comp a k).isName = a.isName := by

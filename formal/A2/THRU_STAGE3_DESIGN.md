@@ -415,6 +415,17 @@ where the call puts it has two cases:
 
 Witness: `A2/RegionChangeWitness.lean`.
 
+### 3d groundwork: the call's lift is precise and composes kinds
+
+A call's setting (`callS.σ`) used to stand a region for `allKinds` of the
+roots its argument holds, every root at every kind, and the lift (`subD`)
+copied those kinds verbatim. It now stands a region for the argument's own
+memory dependencies, plus each root by its handle (`⟨r, .self⟩`, so that a
+composed kind covers every way, `RSetup.OK.σ_self`). The lift composes kinds
+(`RSetup.subD` is `subDc`'s map, `mem_subD` gives `σC`). `derive_subE` then
+holds by `comp_assoc`, with no closure of σ under kinds (`σ_kinds` is gone).
+No rule changes. This is what `subDc_hits_exact` below needs of σ.
+
 ### 3d groundwork: what the kinds-composed lift kills (`A2/SubDcKill.lean`)
 
 For 3d, a call passes an argument that views real memory `w`, so σ ≠ [], and

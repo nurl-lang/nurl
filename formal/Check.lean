@@ -664,8 +664,14 @@ import A3
 -- (A2/SubDcKill.lean, AGORA-937 3d groundwork): the kinds-composed lift of a change through a
 -- region ends at the caller exactly what the callee ends, for arguments that view `w` at `.view`
 #print axioms A2.dropIn_comp_exact
+#print axioms A2.dropIn_comp_exact'
 #print axioms A2.dropIn_comp_inner_overkills
 #print axioms A2.subDc_hits_exact
+-- (AGORA-937 3d groundwork): the call's lift is precise (σ: the argument's own memory deps and
+-- each root by its handle) and composes kinds; deriving commutes with it
+#print axioms A2.RSetup.derive_subE
+#print axioms A2.RSetup.mem_subD
+#print axioms A2.CallH.σC_held
 -- (A2/RegionMem.lean, AGORA-937 stage 3b): a region of buffer addresses reaches the node at one of
 -- them (RootNode's view case generalised); an argument's valid views are valid through its region,
 -- each address reaches one node, and derived borrows compose kinds through a region as through a root
