@@ -54,8 +54,8 @@ def storeE : Stmt :=
     (.letv 5 (.at 3 (.lit 0)) (.edit false 5 (.push 0)))))
 
 /-- The environment, as the code sees it: a borrowed slice, which holds
-    views, so (AGORA-937, item 2) also its region's view, `π 0 = nvars = 6`. -/
-def Es : Entry := ⟨sl, .rootb, true, [], [⟨6, .view⟩], false, false, false, false⟩
+    views, so (AGORA-937, item 2) also its region by its handle, `π 0 = nvars = 6`. -/
+def Es : Entry := ⟨sl, .rootb, true, [], [⟨6, .self⟩], false, false, false, false⟩
 
 /-- The interface: it takes the receiver lent (its body is
     `FreshClosureWitness`'s, which changes nothing of the receiver's). -/

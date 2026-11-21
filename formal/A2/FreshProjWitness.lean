@@ -59,8 +59,8 @@ def P : Prog := [g]
 
 def Ep : Entry := ⟨bag, .inout .replace, true, [], [], false, false, false, false⟩
 /-- `s`, lent: a slice holds views, so (AGORA-937, item 2) it holds its
-    region's view, `π 1 = nvars + 1 = 6`. -/
-def Es : Entry := ⟨sl, .rootb, true, [], [⟨6, .view⟩], false, false, false, false⟩
+    region by its handle, `π 1 = nvars + 1 = 6`. -/
+def Es : Entry := ⟨sl, .rootb, true, [], [⟨6, .self⟩], false, false, false, false⟩
 def R0 : Entry := ⟨.int, .bor, false, [], [], false, false, false, false⟩
 /-- The field borrow, fresh: its path is `b`'s fields. -/
 def Ee : Entry := ⟨vi, .bor, true, [⟨0, .inner⟩], [], false, false, true, true⟩

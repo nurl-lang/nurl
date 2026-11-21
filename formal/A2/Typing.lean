@@ -2285,10 +2285,14 @@ theorem isRegionIdx_ge {fn : Fn} {r : Nat} (h : isRegionIdx fn r = true) : fn.nv
     live and never named by the body. -/
 def regionE : Entry := ⟨.int, .region, false, [], [], false, false, false, false⟩
 
-/-- ... and its parameter holds views of it. -/
+/-- ... and its parameter holds it, by its handle (AGORA-937 3d: `.self`,
+    so that the lift, composing kinds, gives back each dependency of the
+    argument's in its own way, `comp a .self = a`; a `.view` here turned
+    an argument's `.self` into a `.view`). A kill spares a handle where it
+    spares a view (`Eff.kills_self_of_view`). -/
 def regionP (fn : Fn) (v : Nat) (E : Entry) : Entry :=
   if h : v < fn.params.length then
-    (if regioned fn.params[v] then { E with held := ⟨fn.nvars + v, .view⟩ :: E.held } else E)
+    (if regioned fn.params[v] then { E with held := ⟨fn.nvars + v, .self⟩ :: E.held } else E)
   else E
 
 @[simp] theorem regionP_ty (fn : Fn) (v : Nat) (E : Entry) : (regionP fn v E).ty = E.ty := by

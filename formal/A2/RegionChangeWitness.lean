@@ -11,7 +11,7 @@ AGORA-933's callee `f1` takes `vv : Vec (Slice (Vec i))` lent and grows a
         ^ 0
     }
 
-`vv` holds its region's view `⟨π 0, .view⟩` (item 2). The element `e` reaches
+`vv` holds its region by its handle, `⟨π 0, .self⟩` (item 2). The element `e` reaches
 the region at `.inner`, the slice's element (`comp .view .inner`). The push is
 an `edit true` whose only root is the region. Before, `ThruOK` asked every root
 to be a live owner, so A2 refused it. Now `ThruOKR` allows a region whose
@@ -33,7 +33,7 @@ open A2.HeldViewThruWitness (vvi svv vsv)
 /-- The callee's frame at the push: `vv` (0, lent, holding `π 0`'s view),
     the element `e` (3, reaching `π 0 = 5` at `.inner`), the number 7 (4),
     and the region (5). -/
-def Evv : Entry := ⟨vsv, .rootb, true, [], [⟨5, .view⟩], false, false, false, false⟩
+def Evv : Entry := ⟨vsv, .rootb, true, [], [⟨5, .self⟩], false, false, false, false⟩
 def Ee : Entry := ⟨vvi, .bor, true, [⟨5, .inner⟩], [⟨5, .inner⟩], false, false, false, false⟩
 
 def K : Ctx := fun v =>

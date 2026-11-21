@@ -421,10 +421,11 @@ theorem RSetup.name_mem_heldA {S : RSetup} {E : Entry} {d : Dep} (hd : d ∈ S.A
     · exact h
   · rw [ite_eq_right hc]; exact hd
 
-/-- AGORA-937 (item 2): views of regions, what a lent parameter holding
-    views holds of its region (`regionP`). -/
+/-- AGORA-937 (item 2): its region by its handle, what a lent parameter
+    holding views holds of its region (`regionP`); so its lift reproduces
+    what the argument holds, each in its own way (`comp a .self = a`). -/
 def RSetup.RegViews (S : RSetup) (R : List Dep) : Prop :=
-  ∀ d ∈ R, d.kind = .view ∧ S.isReg d.root = true
+  ∀ d ∈ R, d.kind = .self ∧ S.isReg d.root = true
 
 /-- The callee's own contexts, as the call sets them up: a borrowed
     parameter depends on nothing it can see but its region's views (AGORA-937)
@@ -838,7 +839,7 @@ theorem hits_lift' (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry} (hE : Γ
         -- (item 3) the change through the region ends no view of
         rcases hxr with hxr | hk
         · exact absurd (hr ▸ (hR d hd).2) (by rw [hxr]; simp)
-        · rw [(hR d hd).1]; simpa using hk
+        · rw [(hR d hd).1]; simpa using Eff.kills_self_of_view (by simpa using hk)
       have hd' : d ∈ S.sym := by
         split at hd
         · exact hd
@@ -5777,7 +5778,7 @@ theorem weaker_kill_region (h : S.OK) {Γ : Ctx} (hab : S.AbsOK Γ) (hw : CtxWF 
       · obtain ⟨R, hR, hv⟩ := vdeps_rootb hab h1 hrb
         rw [hv] at hd
         rcases List.mem_append.mp hd with hd | hd
-        · rw [(hR d hd).1]; exact hk
+        · rw [(hR d hd).1]; exact Eff.kills_self_of_view hk
         · split at hd
           · obtain ⟨w, b, t, rfl, _, _, _, _⟩ := h.sym_ok d hd
             exact kills_isName he false rfl

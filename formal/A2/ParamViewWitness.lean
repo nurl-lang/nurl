@@ -214,10 +214,10 @@ def storeP : Stmt :=
     (.letv 5 (.at 3 (.lit 0)) (.letv 6 (.fst 0) (.edit false 5 (.push 6))))))
 
 /-- The destructor's parameter: a borrowed struct that holds a view, so
-    (AGORA-937, item 2) it holds its region's view, `π 0 = nvars = 7`. -/
-def Ed : Entry := ⟨DTV, .rootb, true, [], [⟨7, .view⟩], false, false, false, false⟩
+    (AGORA-937, item 2) it holds its region by its handle, `π 0 = nvars = 7`. -/
+def Ed : Entry := ⟨DTV, .rootb, true, [], [⟨7, .self⟩], false, false, false, false⟩
 /-- `. d s`, a view the caller lent: neither fresh nor held-fresh. -/
-def Ef : Entry := ⟨sl, .bor, true, [⟨0, .view⟩, ⟨7, .view⟩], [⟨7, .view⟩], false, false, false, false⟩
+def Ef : Entry := ⟨sl, .bor, true, [⟨0, .view⟩, ⟨7, .self⟩], [⟨7, .self⟩], false, false, false, false⟩
 
 /-- `( vec_push [[i] e . d s )` through the fresh element borrow `e`, which is
     not held-fresh: an `edit false`, storing a view of the parameter. -/

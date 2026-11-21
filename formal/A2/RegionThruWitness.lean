@@ -51,7 +51,7 @@ def P : Prog := [f, g]
 theorem f_thru : ThruFn P 0 := ThruFn.here rfl rfl
 
 /-- The callee `g`'s view of `vv`: it holds views of its region. -/
-theorem sig_vv : sigCtx g 0 = some ⟨vsi, .own, true, [], [⟨4, .view⟩], false, false, false, false⟩ := by
+theorem sig_vv : sigCtx g 0 = some ⟨vsi, .own, true, [], [⟨4, .self⟩], false, false, false, false⟩ := by
   simp [sigCtx, regionP, regioned, paramE, g, vsi, Ty.holdsView, Ty.hasFn]
 
 theorem sig_region : sigCtx g 4 = some regionE := by

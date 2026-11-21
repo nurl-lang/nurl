@@ -52,7 +52,7 @@ def idv : Fn where
 
 def P : Prog := [idv]
 
-def E0 : Entry := ⟨vsi, .own, true, [], [⟨2, .view⟩], false, false, false, false⟩
+def E0 : Entry := ⟨vsi, .own, true, [], [⟨2, .self⟩], false, false, false, false⟩
 def R1 : Entry := ⟨vsi, .own, false, [], [], false, false, false, false⟩
 
 theorem sig_eq : sigCtx idv = fun v =>
@@ -220,7 +220,7 @@ theorem idv_not_ok0 (rs : List (Nat × Kind)) : ¬ FnOK0 P { idv with rholds := 
   rintro ⟨_, _, _, _, _, _, _, hrs, _, _, _, _, Δ, hb, _, ⟨E, hE, hl, _, _, _, hh, _⟩, _⟩
   have hsig : sigCtx { idv with rholds := rs } = sigCtx idv := rfl
   rw [hsig] at hb
-  have hd := move_res hb (d := ⟨2, .view⟩) (fun E' hE' _ => by
+  have hd := move_res hb (d := ⟨2, .self⟩) (fun E' hE' _ => by
     rw [sig_eq] at hE'; cases hE'; simp [E0]) E hE hl
   obtain ⟨⟨hlt, _⟩, _⟩ := hrs _ (hh _ hd)
   simp [idv] at hlt
@@ -388,7 +388,7 @@ def ftr : Fn where
   body     := .assign 1 (.expr (.lit 0))
   nvars    := 2
 
-def Ep : Entry := ⟨pvt, .own, true, [], [⟨2, .view⟩], false, false, false, false⟩
+def Ep : Entry := ⟨pvt, .own, true, [], [⟨2, .self⟩], false, false, false, false⟩
 
 theorem ftr_sig0 : sigCtx ftr 0 = some Ep := by
   simp [sigCtx, regionP, regioned, paramE, ftr, pvt, vsi, Ty.holdsView, Ty.hasFn, Ep]
@@ -420,7 +420,7 @@ theorem fst_trunc_ok : ThruOK (sigCtx ftr) [] (.trunc (.lit 0)) (.vec .int) (pro
 theorem fst_trunc_old_refused :
     ¬ ThruOK (sigCtx ftr) [] (.trunc (.lit 0)) (.vec .int) (projDeps 0 Ep ++ Ep.held) := by
   intro h
-  obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := h ⟨2, .view⟩ (by simp [memDeps, Kind.isName, Ep, projDeps, Mode.ownSlot])
+  obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := h ⟨2, .self⟩ (by simp [memDeps, Kind.isName, Ep, projDeps, Mode.ownSlot])
   rw [ftr_sig2] at hEr; cases hEr
   rcases hcan with h | ⟨_, h, _⟩ <;> cases h
 
@@ -430,7 +430,7 @@ theorem fst_trunc_old_refused :
 theorem snd_trunc_refused :
     ¬ ThruOK (sigCtx ftr) [] (.trunc (.lit 0)) vsi (projE 0 Ep vsi).path := by
   intro h
-  obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := h ⟨2, .view⟩
+  obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := h ⟨2, .self⟩
     (by simp [memDeps, Kind.isName, Ep, projE, projDeps, projHeld, Mode.ownSlot, vsi, Ty.holdsView])
   rw [ftr_sig2] at hEr; cases hEr
   rcases hcan with h | ⟨_, h, _⟩ <;> cases h

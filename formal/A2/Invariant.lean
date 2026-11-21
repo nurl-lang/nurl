@@ -984,9 +984,10 @@ A callee's lent parameter that holds views holds them of its region
 kills a region at `.view` (`RegionSpared`). A frame binds no region
 (`MInv.noRegion`), so there `RootbAnch` is all that is asked. -/
 
-/-- A dependency that is a view of a region. -/
+/-- A dependency on a region by its handle (what a lent parameter holding
+    views holds of its region, `regionP`). -/
 def RegionView (Γ : Ctx) (d : Dep) : Prop :=
-  d.kind = .view ∧ ∃ Er, Γ d.root = some Er ∧ Er.mode = .region
+  d.kind = .self ∧ ∃ Er, Γ d.root = some Er ∧ Er.mode = .region
 
 /-- Anchored in `F`, or through a view of a region. -/
 def AnchoredIn (Γ : Ctx) (E : Entry) (F : List Var) : Prop :=

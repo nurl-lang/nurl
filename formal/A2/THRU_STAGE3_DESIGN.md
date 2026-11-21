@@ -486,6 +486,16 @@ kinds, is the overkill. Closing a precise list under composition gives
 "…, or what a region stands for, composed" (`σC`), a predicate rather than
 a list.
 
+*Done: a parameter holds its region by its handle.* `regionP` adds
+`⟨π p, .self⟩`, not `⟨π p, .view⟩`. The lift composes kinds, so the
+region's dependency reaches each of the argument's own dependencies in
+the argument's own way (`comp a .self = a`). With `.view`, an argument's
+`.self` came back as a `.view`, so a lent parameter's caller entry (`pe`)
+was not covered by its region, substituted. That was one of the two
+reasons the lift lemmas needed `S.A`'s `allKinds R`. A kill spares a handle
+wherever it spares a view (`Eff.kills_self_of_view`), so `RegionSpared` is
+unchanged. `RegViews` and `RegionView` now ask for `.self`.
+
 Measured on 3896bd20:
 - `RSetup.A := S.N` breaks 9 sites in `Rename.lean`, plus `pe_held`;
 - `heldA := N` instead breaks about 80 (`heldA_own` is used through
