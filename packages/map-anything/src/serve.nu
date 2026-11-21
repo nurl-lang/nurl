@@ -11,7 +11,8 @@
 //   GET    /healthz                   liveness, never behind the password
 //   GET    /api/jobs                  every job, newest first
 //   POST   /api/jobs                  {name} → a new job, state "uploading"
-//   PUT    /api/jobs/:id/files/:name  one input file, the raw request body
+//   PUT    /api/jobs/:id/files/:name  one input file, the raw request body,
+//                                     in pieces: ?offset=N appends at byte N
 //   POST   /api/jobs/:id/start        {max_views, fps, ...} → "queued"
 //   GET    /api/jobs/:id              one job, with its whole log
 //   DELETE /api/jobs/:id              the job and its files
@@ -32,6 +33,20 @@
 // and the CLI stays the single implementation of the pipeline. The model
 // load it costs is a few seconds from the page cache against a run of
 // tens of seconds.
+//
+// Every state change a client and the worker can race on — the worker
+// claiming a queued job, DELETE, a start — runs under one lock
+// (g_mas_lk), so a job is claimed or deleted, never both. The worker's
+// child records its pid in the job directory; a server stopped by SIGTERM
+// ends the child and puts the job back in the queue, and a server that
+// died without that ends the orphan it finds at the next start before
+// running the job again — never two children on one job.
+//
+// Bodies are read in full before any handler runs (the stdlib server has
+// no hook between the head and the body), so the sign-in can only refuse a
+// request after its body arrived. The body cap is what bounds that: 40 MiB,
+// which is why the page sends a file in 32 MiB pieces and the pieces go
+// straight to disk.
 //
 // Ids are `<unix ms>-<random hex>`: they sort by creation, and they are
 // the only part of a path a client chooses besides a file name — both are
@@ -70,6 +85,19 @@ $ `ui.nu`
 
 @ __mas_cfg → MaCfg { ^ ( locked_get [MaCfg] g_mas_cfg ) }
 
+@ __mas_lk_blank → ( Locked i ) { ^ ( locked_new [i] 0 ) }
+
+// The job-state lock: checked out for the length of a state transition.
+: ( Locked i ) g_mas_lk ( __mas_lk_blank )
+
+// 1 once the server is shutting down: the worker then leaves the job it
+// was running to the shutdown, which queues it again.
+: ( Locked i ) g_mas_stop ( __mas_lk_blank )
+
+@ __mas_lock → i { ^ ( locked_take [i] g_mas_lk ) }
+
+@ __mas_unlock i t → v { ( locked_restore [i] g_mas_lk t ) }
+
 // ── small helpers ───────────────────────────────────────────────────
 
 @ __mas_eq s a s b → b { ^ == 0 ( nurl_str_cmp a b ) }
@@ -103,19 +131,32 @@ $ `ui.nu`
 }
 
 // A client's file name, reduced to [A-Za-z0-9._-] (anything else becomes
-// '_'), never starting with '.', at most 120 bytes. The extension survives,
-// which is what decides image vs video.
+// '_'), never starting with '.', at most 120 bytes. A long name loses the
+// end of its stem, never its extension: the extension is what decides
+// image vs video.
 @ __mas_safe_name s raw → String {
     : String out ( string_new )
     : ( Slice u ) bs ( slice_of_str raw )
     : i n ( slice_len [u] bs )
+    // the extension: from the last '.', when it is short enough to be one
+    : ~ i dot n
     : ~ i k 0
-    ~ & < k n < k 120 {
-        : i c ( slice_byte bs k )
-        : b alnum | | & >= c 48 <= c 57 & >= c 65 <= c 90 & >= c 97 <= c 122
-        : b punct | | == c 46 == c 45 == c 95
-        : b lead_dot & == k 0 == c 46
-        ? & | alnum punct == lead_dot F { ( string_push_char out c ) } { ( string_push_char out 95 ) }
+    ~ < k n {
+        ? == ( slice_byte bs k ) 46 { = dot k } {}
+        = k + k 1
+    }
+    ? | == dot 0 > - n dot 12 { = dot n } {}
+    : i room - 120 - n dot
+    : i keep ? < dot room dot room
+    = k 0
+    ~ < k n {
+        ? | < k keep >= k dot {
+            : i c ( slice_byte bs k )
+            : b alnum | | & >= c 48 <= c 57 & >= c 65 <= c 90 & >= c 97 <= c 122
+            : b punct | | == c 46 == c 45 == c 95
+            : b lead_dot & == ( string_len out ) 0 == c 46
+            ? & | alnum punct == lead_dot F { ( string_push_char out c ) } { ( string_push_char out 95 ) }
+        } {}
         = k + k 1
     }
     ^ out
@@ -415,21 +456,75 @@ $ `ui.nu`
 
 // ── the worker ──────────────────────────────────────────────────────
 
-@ __mas_next_queued → String {
+// The oldest queued job, claimed — its state is `running` before the
+// lock is let go, so a DELETE that comes after sees it running.
+@ __mas_claim_next → String {
     : ( Vec String ) ids ( __mas_job_ids )
+    : ~ String got ( string_new )
+    : i t ( __mas_lock )
     : ~ i k 0
-    ~ < k ( vec_len [String] ids ) {
+    ~ & < k ( vec_len [String] ids ) == ( string_len got ) 0 {
         ?? ( vec_get [String] ids k ) {
             T id → {
                 ? ( __mas_state_is ( string_data id ) `queued` ) {
-                    ^ ( string_from ( string_data id ) )
+                    ? ( __mas_set_state ( string_data id ) `running` ) { = got ( string_from ( string_data id ) ) } {}
                 } {}
             }
             F → {}
         }
         = k + k 1
     }
-    ^ ( string_new )
+    ( __mas_unlock t )
+    ^ got
+}
+
+@ __mas_stopping → b { ^ != 0 ( locked_get [i] g_mas_stop ) }
+
+// Is `pid` alive and one of our reconstructions (its command line runs
+// into cloud.tmp.ply)? A recycled pid belonging to anything else is not.
+@ __mas_is_our_child i pid → b {
+    ? <= pid 0 { ^ F } {}
+    : String cl ( string_from `/proc/` )
+    ( string_push_int cl pid )
+    ( string_push_str cl `/cmdline` )
+    ?? ( read_file_bytes ( string_data cl ) ) {
+        F _e → { ^ F }
+        T bytes → {
+            : ( Slice u ) bs ( slice_from_vec [u] bytes )
+            : ( Slice u ) pat ( slice_of_str `cloud.tmp.ply` )
+            : i n ( slice_len [u] bs )
+            : i m ( slice_len [u] pat )
+            : ~ i k 0
+            ~ <= + k m n {
+                : ~ i j 0
+                ~ & < j m == ( slice_byte bs + k j ) ( slice_byte pat j ) { = j + j 1 }
+                ? == j m { ^ T } {}
+                = k + k 1
+            }
+            ^ F
+        }
+    }
+}
+
+// SIGTERM, up to 10 s for it to go, then SIGKILL. `gone` decides when it
+// has gone (a child of ours lingers as a zombie until the worker reaps it,
+// so for one of those the pid file disappearing is the sign).
+@ __mas_end_child i pid ( @ b ) gone → v {
+    ? <= pid 0 { ^ v } {}
+    : i32 _a ( kill # i32 pid # i32 ( posix_const `SIGTERM` ) )
+    : ~ i waited 0
+    ~ & < waited 100 ! ( gone ) {
+        ( sleep_ms 100 )
+        = waited + waited 1
+    }
+    ? ( gone ) {} {
+        : i32 _b ( kill # i32 pid # i32 ( posix_const `SIGKILL` ) )
+        : ~ i w2 0
+        ~ & < w2 50 ! ( gone ) {
+            ( sleep_ms 100 )
+            = w2 + w2 1
+        }
+    }
 }
 
 @ __mas_log_put s id s text → v {
@@ -437,10 +532,10 @@ $ `ui.nu`
     ?? ( write_file ( string_data logp ) text ) { T _ → {} F _e → {} }
 }
 
+// Run a job the worker has claimed (its state is already `running`).
 @ __mas_run s id → v {
     : MaCfg c ( __mas_cfg )
     : String jd ( __mas_jdir id )
-    : b _r ( __mas_set_state id `running` )
     : String t0 ( __mas_now )
     : b _t ( __mas_write_job id `started` ( string_data t0 ) )
     : b _f ( __mas_write_job id `finished` `0` )
@@ -469,9 +564,22 @@ $ `ui.nu`
                 ( nurl_eprint id )
                 ( nurl_eprint ` running: ` )
                 ( nurl_eprintln ( string_data opts ) )
-                ?? ( process_run_shell ( string_data cmd ) ) {
-                    T o → {
-                        ? == 0 ( output_exit_code o ) {
+                // `exec` makes the shell's pid the reconstruction's own, so
+                // the pid recorded here is the process to end
+                : ( Vec s ) args ( vec_new [s] )
+                ( vec_push [s] args `-c` )
+                ( vec_push [s] args ( string_data cmd ) )
+                ?? ( process_spawn `/bin/sh` args ) {
+                    T ch → {
+                        : String pidp ( path_join ( string_data jd ) `pid` )
+                        : String pidv ( string_new )
+                        ( string_push_int pidv ( proc_pid ch ) )
+                        ?? ( write_file ( string_data pidp ) ( string_data pidv ) ) { T _ → {} F _e → {} }
+                        : i code ( proc_wait ch )
+                        ?? ( file_delete ( string_data pidp ) ) { T _ → {} F _e → {} }
+                        // a shutdown ended it: the job is the shutdown's to queue again
+                        ? ( __mas_stopping ) { ^ v } {}
+                        ? == 0 code {
                             ?? ( fs_rename ( string_data tmp ) ( string_data out ) ) {
                                 T _ → { = ok T }
                                 F _e → {}
@@ -495,12 +603,15 @@ $ `ui.nu`
 
 @ __mas_worker → v {
     ~ T {
-        : String id ( __mas_next_queued )
-        ? > ( string_len id ) 0 { ( __mas_run ( string_data id ) ) } { ( sleep_ms 1000 ) }
+        ? ( __mas_stopping ) { ( sleep_ms 1000 ) } {
+            : String id ( __mas_claim_next )
+            ? > ( string_len id ) 0 { ( __mas_run ( string_data id ) ) } { ( sleep_ms 1000 ) }
+        }
     }
 }
 
-// A job the last process was running when it stopped runs again.
+// A job the last process was running when it stopped runs again — after
+// the child that process left behind, if it is still going, has ended.
 @ __mas_recover → v {
     : ( Vec String ) ids ( __mas_job_ids )
     : ~ i k 0
@@ -508,6 +619,14 @@ $ `ui.nu`
         ?? ( vec_get [String] ids k ) {
             T id → {
                 ? ( __mas_state_is ( string_data id ) `running` ) {
+                    : String pidp ( __mas_jfile ( string_data id ) `pid` )
+                    : i pid ( __mas_read_int ( string_data id ) `pid` )
+                    ? ( __mas_is_our_child pid ) {
+                        ( nurl_eprint `map-anything serve: ending the orphaned reconstruction, pid ` )
+                        ( nurl_eprintln ( nurl_str_int pid ) )
+                        ( __mas_end_child pid \ → b { ^ ! ( __mas_is_our_child pid ) } )
+                    } {}
+                    ?? ( file_delete ( string_data pidp ) ) { T _ → {} F _e → {} }
                     : b _q ( __mas_set_state ( string_data id ) `queued` )
                     ( nurl_eprint `map-anything serve: re-queued the interrupted job ` )
                     ( nurl_eprintln ( string_data id ) )
@@ -650,13 +769,27 @@ $ `ui.nu`
     ? == ( string_len fname ) 0 { ^ ( __mas_err 400 `the file needs a name` ) } {}
     : String ind ( __mas_jfile ( string_data id ) `input` )
     : String fp ( path_join ( string_data ind ) ( string_data fname ) )
-    ?? ( write_file_bytes ( string_data fp ) . req body ) {
-        T _ → {}
-        F _e → { ^ ( __mas_err 500 `cannot store the file` ) }
+    : i off ?? ( request_query_int req `offset` ) { T v → v F → 0 }
+    : ~ i have -1
+    ?? ( file_size ( string_data fp ) ) { T z → { = have z } F _e → {} }
+    ? == off 0 {
+        // two names that clean to the same one must not overwrite each other
+        ? >= have 0 { ^ ( __mas_err 409 `the job already has a file of that name` ) } {}
+        ?? ( write_file_bytes ( string_data fp ) . req body ) {
+            T _ → {}
+            F _e → { ^ ( __mas_err 500 `cannot store the file` ) }
+        }
+    } {
+        // a later piece continues exactly where the file ends
+        ? != have off { ^ ( __mas_err 409 `that piece does not continue the file` ) } {}
+        ?? ( append_file_bytes ( string_data fp ) . req body ) {
+            T _ → {}
+            F _e → { ^ ( __mas_err 500 `cannot store the file` ) }
+        }
     }
     : Json o ( json_obj_new )
     : b _n ( json_obj_set o `name` ( json_str_lit ( string_data fname ) ) )
-    : b _b ( json_obj_set o `bytes` ( json_int ( vec_len [u] . req body ) ) )
+    : b _b ( json_obj_set o `bytes` ( json_int + off ( vec_len [u] . req body ) ) )
     : HttpResponse r ( response_json 201 o )
     ^ r
 }
@@ -666,12 +799,6 @@ $ `ui.nu`
 @ __mas_start HttpRequest req Params ps → HttpResponse {
     : String id ( __mas_param ps `id` )
     ? ( __mas_id_ok ( string_data id ) ) {} { ^ ( __mas_err 400 `bad job id` ) }
-    : String st ( __mas_state ( string_data id ) )
-    : s sd ( string_data st )
-    ? | | ( __mas_eq sd `uploading` ) ( __mas_eq sd `done` ) ( __mas_eq sd `failed` ) {} {
-        ? == ( string_len st ) 0 { ^ ( __mas_err 404 `no such job` ) } {}
-        ^ ( __mas_err 409 `the job is already queued or running` )
-    }
     ?? ( __mas_input ( string_data id ) ) {
         F why → { ^ ( __mas_err 400 ( string_data why ) ) }
         T _p → {}
@@ -720,12 +847,24 @@ $ `ui.nu`
             ( string_push_int opts voxmm )
         } {}
     }
-    : b _o ( __mas_write_job ( string_data id ) `opts` ( string_data opts ) )
-    : b _f ( __mas_write_job ( string_data id ) `finished` `0` )
-    : b _t ( __mas_write_job ( string_data id ) `started` `0` )
-    ( __mas_log_put ( string_data id ) `` )
-    : b _q ( __mas_set_state ( string_data id ) `queued` )
-    : HttpResponse r ( response_json 200 ( __mas_job_json ( string_data id ) F ) )
+    // the state check and every write under the lock; queued only once
+    // all of the job's settings are on disk
+    : s sid ( string_data id )
+    : ~ i res 0  // 0 queued, 1 no such job, 2 busy, 3 a write failed
+    : i t ( __mas_lock )
+    : String st ( __mas_state sid )
+    : s sd ( string_data st )
+    ? | | ( __mas_eq sd `uploading` ) ( __mas_eq sd `done` ) ( __mas_eq sd `failed` ) {
+        ? & & ( __mas_write_job sid `opts` ( string_data opts ) ) ( __mas_write_job sid `finished` `0` ) ( __mas_write_job sid `started` `0` ) {
+            ( __mas_log_put sid `` )
+            ? ( __mas_set_state sid `queued` ) {} { = res 3 }
+        } { = res 3 }
+    } { = res ? == ( string_len st ) 0 1 2 }
+    ( __mas_unlock t )
+    ? == res 1 { ^ ( __mas_err 404 `no such job` ) } {}
+    ? == res 2 { ^ ( __mas_err 409 `the job is already queued or running` ) } {}
+    ? == res 3 { ^ ( __mas_err 500 `cannot store the job's settings` ) } {}
+    : HttpResponse r ( response_json 200 ( __mas_job_json sid F ) )
     ^ r
 }
 
@@ -741,11 +880,20 @@ $ `ui.nu`
 @ __mas_delete Params ps → HttpResponse {
     : String id ( __mas_param ps `id` )
     ? ( __mas_id_ok ( string_data id ) ) {} { ^ ( __mas_err 400 `bad job id` ) }
+    // check and mark under the lock: once `deleted` is on disk the worker
+    // passes the job by, and once the worker has claimed it this refuses
+    : ~ i res 0  // 0 marked, 1 no such job, 2 running, 3 cannot mark
+    : i t ( __mas_lock )
     : String st ( __mas_state ( string_data id ) )
-    ? == ( string_len st ) 0 { ^ ( __mas_err 404 `no such job` ) } {}
-    ? ( __mas_eq ( string_data st ) `running` ) { ^ ( __mas_err 409 `the job is running` ) } {}
-    // a queued job is taken off the queue first, so the worker passes it by
-    : b _c ( __mas_set_state ( string_data id ) `deleted` )
+    ? == ( string_len st ) 0 { = res 1 } {
+        ? ( __mas_eq ( string_data st ) `running` ) { = res 2 } {
+            ? ( __mas_set_state ( string_data id ) `deleted` ) {} { = res 3 }
+        }
+    }
+    ( __mas_unlock t )
+    ? == res 1 { ^ ( __mas_err 404 `no such job` ) } {}
+    ? == res 2 { ^ ( __mas_err 409 `the job is running` ) } {}
+    ? == res 3 { ^ ( __mas_err 500 `cannot remove the job` ) } {}
     : String jd ( __mas_jdir ( string_data id ) )
     ?? ( dir_remove_all ( string_data jd ) ) {
         T _ → {}
@@ -790,6 +938,9 @@ $ `ui.nu`
     ( nurl_print `  --data DIR      jobs, uploads and clouds (default ~/.map-anything)\n` )
     ( nurl_print `  --password P    require HTTP Basic sign-in with this password, any user name\n` )
     ( nurl_print `                  (or $MAP_ANYTHING_PASSWORD)\n` )
+    ( nurl_print `  --tls-cert F    serve HTTPS with this certificate chain (PEM)...\n` )
+    ( nurl_print `  --tls-key F     ...and its key; without them, put a TLS proxy in front\n` )
+    ( nurl_print `                  of any address but loopback (Basic sign-in is plain text)\n` )
 }
 
 // `map-anything serve ...` — argv[1] is "serve". Returns the exit code.
@@ -798,6 +949,8 @@ $ `ui.nu`
     : ~ i port 8807
     : ~ String data ( string_new )
     : ~ String pass ( string_new )
+    : ~ String tcert ( string_new )
+    : ~ String tkey ( string_new )
     ?? ( env_get `MAP_ANYTHING_PASSWORD` ) { T v → { = pass v } F → {} }
     : i argc ( nurl_argc )
     : ~ i k 2
@@ -808,11 +961,15 @@ $ `ui.nu`
             ? & ( __mas_eq a `--port` ) has { = port ( nurl_str_to_int ( nurl_argv + k 1 ) ) = k + k 1 } {
                 ? & ( __mas_eq a `--data` ) has { = data ( string_from ( nurl_argv + k 1 ) ) = k + k 1 } {
                     ? & ( __mas_eq a `--password` ) has { = pass ( string_from ( nurl_argv + k 1 ) ) = k + k 1 } {
-                        ? | ( __mas_eq a `--help` ) ( __mas_eq a `-h` ) { ( __mas_usage ) ^ 0 } {}
-                        ( nurl_print `map-anything serve: unknown option ` )
-                        ( nurl_print a ) ( nurl_print `\n\n` )
-                        ( __mas_usage )
-                        ^ 1
+                        ? & ( __mas_eq a `--tls-cert` ) has { = tcert ( string_from ( nurl_argv + k 1 ) ) = k + k 1 } {
+                            ? & ( __mas_eq a `--tls-key` ) has { = tkey ( string_from ( nurl_argv + k 1 ) ) = k + k 1 } {
+                                ? | ( __mas_eq a `--help` ) ( __mas_eq a `-h` ) { ( __mas_usage ) ^ 0 } {}
+                                ( nurl_print `map-anything serve: unknown option ` )
+                                ( nurl_print a ) ( nurl_print `\n\n` )
+                                ( __mas_usage )
+                                ^ 1
+                            }
+                        }
                     }
                 }
             }
@@ -849,6 +1006,13 @@ $ `ui.nu`
         }
     }
     : b open == ( string_len pass ) 0
+    : b tls & > ( string_len tcert ) 0 > ( string_len tkey ) 0
+    : b hc > ( string_len tcert ) 0
+    : b hk > ( string_len tkey ) 0
+    ? == hc hk {} {
+        ( nurl_eprintln `map-anything serve: --tls-cert and --tls-key go together` )
+        ^ 1
+    }
     ( locked_set [MaCfg] g_mas_cfg @ MaCfg { ( string_from ( string_data data ) ) ( string_from ( string_data bin ) ) pass } )
     ( __mas_recover )
 
@@ -863,9 +1027,10 @@ $ `ui.nu`
 
     : HttpApp a ( http_app_new )
     ( http_app_async a 0 )
-    // a phone video is easily a few hundred MB, and it arrives as one
-    // body held in memory: 2 GiB per file is the cap
-    ( http_app_body_max a 2147483648 )
+    // Bodies are buffered before the sign-in can look at them, so the cap
+    // bounds what an unauthenticated request can make the server hold.
+    // The page sends files in 32 MiB pieces; 40 MiB leaves room.
+    ( http_app_body_max a 41943040 )
     ( http_app_head_max a 65536 )
     ( http_app_idle_ms a 60000 )
     ( http_app_get a `/healthz` \ HttpRequest rq Params ps → HttpResponse { ^ ( response_text 200 `ok` ) } )
@@ -891,10 +1056,42 @@ $ `ui.nu`
         ( http_app_use a gate )
     }
 
-    ( nurl_eprint `map-anything serve: http://` )
+    ( nurl_eprint ? tls `map-anything serve: https://` `map-anything serve: http://` )
     ( nurl_eprint host ) ( nurl_eprint `:` ) ( nurl_eprint ( nurl_str_int port ) )
     ( nurl_eprint `  data ` ) ( nurl_eprint ( string_data data ) )
     ( nurl_eprintln ? open `  (NO PASSWORD — keep it on a private network)` `  (password required)` )
-    : i rc ( http_app_listen a host port )
+    : b loopback | ( __mas_eq host `127.0.0.1` ) ( __mas_eq host `localhost` )
+    ? & & ! open ! tls ! loopback {
+        ( nurl_eprintln `map-anything serve: the Basic sign-in crosses the network in plain text here — front this port with a TLS proxy (an ingress) or pass --tls-cert/--tls-key` )
+    } {}
+    : i rc ? tls ( http_app_listen_tls a host port ( string_data tcert ) ( string_data tkey ) ) ( http_app_listen a host port )
+
+    // SIGTERM ended the listener: end the reconstruction in flight and
+    // queue its job again, so the next start resumes it
+    ( locked_set [i] g_mas_stop 1 )
+    : ( Vec String ) ids ( __mas_job_ids )
+    : ~ i j 0
+    ~ < j ( vec_len [String] ids ) {
+        ?? ( vec_get [String] ids j ) {
+            T id → {
+                : s sid ( string_data id )
+                ? ( __mas_state_is sid `running` ) {
+                    : String pidp ( __mas_jfile sid `pid` )
+                    : s pp ( string_data pidp )
+                    : i pid ( __mas_read_int sid `pid` )
+                    ? > pid 0 {
+                        ( nurl_eprint `map-anything serve: stopping the reconstruction of job ` )
+                        ( nurl_eprintln sid )
+                        ( __mas_end_child pid \ → b { ^ == 0 ( nurl_path_type pp ) } )
+                    } {}
+                    : i t ( __mas_lock )
+                    : b _q ( __mas_set_state sid `queued` )
+                    ( __mas_unlock t )
+                } {}
+            }
+            F → {}
+        }
+        = j + j 1
+    }
     ^ ? == rc 0 0 1
 }

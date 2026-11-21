@@ -8,8 +8,11 @@
 // reachable with curl too.
 //
 // The flow: pick photos or one video → POST /api/jobs makes a job → each
-// file goes up as the raw body of its own PUT (no multipart: one file, one
-// request, a progress bar per byte) → POST /api/jobs/:id/start queues it →
+// file goes up as raw PUT bodies of 32 MiB pieces (no multipart; the server
+// appends each piece at ?offset=, and its body cap stays small), stored as
+// "<position>_<name>" so two names that clean to the same text cannot
+// collide and the name order is the selection order → POST
+// /api/jobs/:id/start queues it →
 // the list polls /api/jobs while anything is queued or running. A finished
 // job opens in the ply viewer (/view?cloud=...) or downloads as a PLY.
 //
@@ -86,7 +89,7 @@ footer a { color: var(--dim); }
 
 <section class="card">
   <h2>New reconstruction</h2>
-  <div id="drop" tabindex="0">
+  <div id="drop" tabindex="0" role="button" aria-controls="file">
     <b>Drop photos or one video here</b>, or click to choose.<br>
     <span class="hint">JPG / PNG photos of one scene, or one video (mp4, mov, mkv, webm, avi) &mdash; up to 2 GB a file</span>
   </div>
@@ -137,6 +140,8 @@ footer a { color: var(--dim); }
 "use strict";
 var $ = function (id) { return document.getElementById(id); };
 var picked = [];
+var uploading = false;  // one upload at a time; picking waits for it
+var CHUNK = 32 * 1048576;
 var openLogs = {};
 var CR = String.fromCharCode(13), LF = String.fromCharCode(10);
 
@@ -155,6 +160,7 @@ function when(ms) {
 }
 
 function pick(files) {
+  if (uploading) { $("picked").textContent = "wait for the current upload to finish"; return; }
   var vids = [], imgs = [], skipped = 0;
   for (var i = 0; i < files.length; i++) {
     var f = files[i];
@@ -212,7 +218,10 @@ function api(method, url, body) {
   });
 }
 
-function put(url, file, onprog) {
+function pad4(n) { return ("000" + n).slice(-4); }
+
+/* one piece of a file: bytes [off, off + piece.size) */
+function putPiece(url, piece, onprog) {
   return new Promise(function (ok, bad) {
     var x = new XMLHttpRequest();
     x.open("PUT", url);
@@ -228,8 +237,21 @@ function put(url, file, onprog) {
       }
     };
     x.onerror = function () { bad(new Error("network error during the upload")); };
-    x.send(file);
+    x.send(piece);
   });
+}
+
+/* the whole file, piece by piece; onprog gets the bytes sent so far */
+function put(url, file, onprog) {
+  var off = 0;
+  function next() {
+    if (off >= file.size && off > 0) return Promise.resolve();
+    var end = Math.min(file.size, off + CHUNK);
+    var here = off;
+    return putPiece(url + "?offset=" + here, file.slice(here, end), function (n) { onprog(here + n); })
+      .then(function () { off = end; if (off < file.size) return next(); });
+  }
+  return next();
 }
 
 function voxelMm() {
@@ -260,6 +282,7 @@ $("go").onclick = function () {
   files.forEach(function (f) { total += f.size; });
   var opts = options();
   var name = $("o-name").value.trim() || $("o-name").placeholder || files[0].name;
+  uploading = true;
   $("go").disabled = true;
   $("upbar").hidden = false;
   var bar = $("upbar").firstChild;
@@ -272,7 +295,7 @@ $("go").onclick = function () {
     files.forEach(function (f, k) {
       chain = chain.then(function () {
         msg.textContent = "uploading " + (k + 1) + "/" + files.length + " — " + f.name;
-        return put("/api/jobs/" + id + "/files/" + encodeURIComponent(safe(f.name)), f, function (n) {
+        return put("/api/jobs/" + id + "/files/" + encodeURIComponent(pad4(k + 1) + "_" + safe(f.name)), f, function (n) {
           bar.style.width = (100 * (done + n) / Math.max(1, total)).toFixed(1) + "%";
         }).then(function () { done += f.size; });
       });
@@ -284,6 +307,7 @@ $("go").onclick = function () {
   }).then(function () {
     msg.textContent = "queued — the job list below follows it";
     bar.style.width = "100%";
+    uploading = false;
     picked = [];
     $("file").value = "";
     $("thumbs").textContent = "";
@@ -293,7 +317,8 @@ $("go").onclick = function () {
     refresh();
   }).catch(function (e) {
     msg.textContent = "failed: " + e.message;
-    $("go").disabled = false;
+    uploading = false;
+    $("go").disabled = picked.length === 0;
     if (id) refresh();
   });
 };
@@ -337,6 +362,10 @@ function fillLog(id, pre) {
 
 function render(jobs) {
   var box = $("jobs");
+  /* the list is rebuilt on every poll: put the keyboard focus back on the
+     same job's same control, when it is still there */
+  var fa = document.activeElement;
+  var focusKey = fa && fa.getAttribute && box.contains(fa) ? fa.getAttribute("data-key") : null;
   box.textContent = "";
   if (!jobs.length) { box.appendChild(el("div", "empty", "No jobs yet.")); return; }
   var now = Date.now();
@@ -364,19 +393,23 @@ function render(jobs) {
     var act = el("div", "jact");
     if (j.cloud_bytes) {
       var v = el("a", "btn", "View in 3-D");
+      v.setAttribute("data-key", j.id + ":view");
       v.href = "/view?cloud=" + encodeURIComponent("/jobs/" + j.id + "/cloud.ply");
       v.target = "_blank";
       act.appendChild(v);
       var dl = el("a", "btn", "Download .ply");
+      dl.setAttribute("data-key", j.id + ":dl");
       dl.href = "/jobs/" + j.id + "/cloud.ply";
       dl.setAttribute("download", safe(j.name || j.id) + ".ply");
       act.appendChild(dl);
     }
     var lb = el("button", "", "Log");
+    lb.setAttribute("data-key", j.id + ":log");
     lb.onclick = function () { showLog(j.id, d); };
     act.appendChild(lb);
     if (j.state === "done" || j.state === "failed") {
       var rb = el("button", "", "Run again with the options above");
+      rb.setAttribute("data-key", j.id + ":rerun");
       rb.onclick = function () {
         rb.disabled = true;
         api("POST", "/api/jobs/" + j.id + "/start", options()).then(refresh).catch(function (e) { alert(e.message); rb.disabled = false; });
@@ -385,6 +418,7 @@ function render(jobs) {
     }
     if (j.state !== "running") {
       var del = el("button", "danger", "Delete");
+      del.setAttribute("data-key", j.id + ":del");
       del.onclick = function () {
         if (!confirm("Delete " + (j.name || j.id) + " and its files?")) return;
         api("DELETE", "/api/jobs/" + j.id).then(refresh).catch(function (e) { alert(e.message); });
@@ -400,6 +434,10 @@ function render(jobs) {
     }
     box.appendChild(d);
   });
+  if (focusKey) {
+    var back = box.querySelector('[data-key="' + focusKey + '"]');
+    if (back) back.focus();
+  }
 }
 
 var timer = null;

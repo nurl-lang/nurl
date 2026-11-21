@@ -28,7 +28,8 @@
 //   ( gm_conf_percentile conf n pct mask )      → v    AND into mask
 //   ( gm_edge_mask pts depthz h w mask )        → v    AND into mask
 //   ( gm_fit_pinhole dirs h w k4 )              → v    k4: fx fy cx cy
-//   ( gm_mv_check pts dz mask poses ks scale count h w need tol ) → i
+//   ( gm_sims_from_poses poses scale count sims ) → v  sims: [count, 13]
+//   ( gm_mv_check pts dz mask sims ks count h w need tol ) → i
 //                                                     dropped pixels
 
 $ `stdlib/core/string.nu`
@@ -664,10 +665,16 @@ $ `stdlib/std/sort.nu`
 // [count·h·w] updated in place, `sims` [count, 13] the cameras, `ks`
 // [count, 4] from gm_fit_pinhole. Every view is tested against the masks
 // as they were on entry, so the order of the views does not matter.
+// Agreement is |Δz| ≤ tol·z, inclusive, so tol = 0 asks for equal depths.
+// A window of fewer than need + 1 views cannot supply `need` votes, so
+// there the requirement is all of its other views (a short last window
+// keeps the points its views agree on rather than losing them all); a
+// window of one view has nothing to check against and is left alone.
 // Returns how many pixels it dropped.
 @ gm_mv_check ( Slice f ) pts ( Slice f ) dz ( Slice u ) mask ( Slice f ) sims ( Slice f ) ks i count i h i w i need f tol → i {
     : i hw * h w
     ? | < count 2 <= need 0 { ^ 0 } {}
+    : i want ? > need - count 1 - count 1 need
     : ( Vec u ) keep__v ( vec_zeroed [u] * count hw )
     : ( Slice u ) keep ( slice_from_vec [u] keep__v )
     : ~ i dropped 0
@@ -683,7 +690,7 @@ $ `stdlib/std/sort.nu`
                 : f pz ( slice_at [f] pts + * idx 3 2 )
                 : ~ i agree 0
                 : ~ i vj 0
-                ~ & < vj count < agree need {
+                ~ & < vj count < agree want {
                     ? != vj vi {
                         : i q ( __gm_proj sims ks vj px py pz h w cz )
                         ? >= q 0 {
@@ -691,13 +698,13 @@ $ `stdlib/std/sort.nu`
                             ? != # i ( slice_at [u] mask qi ) 0 {
                                 : f zj ( slice_at [f] dz qi )
                                 : f dd - cz zj
-                                ? < ? < dd 0.0 - 0.0 dd dd * tol zj { = agree + agree 1 } {}
+                                ? <= ? < dd 0.0 - 0.0 dd dd * tol zj { = agree + agree 1 } {}
                             } {}
                         } {}
                     } {}
                     = vj + vj 1
                 }
-                ? >= agree need { ( slice_put [u] keep idx # u 1 ) } { = dropped + dropped 1 }
+                ? >= agree want { ( slice_put [u] keep idx # u 1 ) } { = dropped + dropped 1 }
             } {}
             = p + p 1
         }

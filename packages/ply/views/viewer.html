@@ -521,7 +521,11 @@ function panBy(dx, dy) {
 }
 function zoomBy(f) { cam.dist = Math.max(diag * 1e-4, Math.min(diag * 50, cam.dist * f)); }
 
-var pts = {}, npts = 0, pinch = null, mousePan = false, lastTap = { t: -1e9, x: 0, y: 0 };
+var pts = {}, npts = 0, pinch = null, mousePan = false;
+/* A tap is a touch that lifts quickly, nearly where it went down, with no
+   second finger joining; two of them close in time and place reset the
+   view. Judged on release, so the start of a drag or a pinch is never one. */
+var tapCand = null, lastTap = { t: -1e9, x: 0, y: 0 };
 function two() {
   var ids = Object.keys(pts), a = pts[ids[0]], b = pts[ids[1]];
   return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
@@ -532,12 +536,11 @@ cv.addEventListener("pointerdown", function (e) {
   npts = Object.keys(pts).length;
   mousePan = e.pointerType === "mouse" && (e.shiftKey || e.button === 1);
   if (npts === 2) pinch = two();
-  if (e.pointerType !== "mouse" && npts === 1) {
+  if (e.pointerType !== "mouse") {
     /* the event's own time, not the handler's: a frame that takes long to
        draw delays the handler, not the tap */
-    var dt = e.timeStamp - lastTap.t, far = Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y);
-    if (dt < 350 && far < 40) { $("reset").onclick(); lastTap = { t: -1e9, x: 0, y: 0 }; }
-    else lastTap = { t: e.timeStamp, x: e.clientX, y: e.clientY };
+    if (npts === 1) tapCand = { id: e.pointerId, t: e.timeStamp, x: e.clientX, y: e.clientY, multi: false };
+    else if (tapCand) tapCand.multi = true;
   }
   cv.classList.add("dragging");
   e.preventDefault();
@@ -559,6 +562,16 @@ cv.addEventListener("pointermove", function (e) {
 });
 function lift(e) {
   if (!pts[e.pointerId]) return;
+  if (tapCand && tapCand.id === e.pointerId && e.type === "pointerup") {
+    var c = tapCand;
+    tapCand = null;
+    var quick = e.timeStamp - c.t < 250, still = Math.hypot(e.clientX - c.x, e.clientY - c.y) < 10;
+    if (quick && still && !c.multi) {
+      var dt = e.timeStamp - lastTap.t, far = Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y);
+      if (dt < 350 && far < 40) { $("reset").onclick(); lastTap = { t: -1e9, x: 0, y: 0 }; }
+      else lastTap = { t: e.timeStamp, x: e.clientX, y: e.clientY };
+    }
+  }
   delete pts[e.pointerId];
   npts = Object.keys(pts).length;
   /* a pinch that drops to one finger must not jump into an orbit from

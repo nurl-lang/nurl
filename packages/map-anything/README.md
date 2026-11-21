@@ -40,7 +40,7 @@ child of the server, so the card is free between jobs.
 | `GET /view?cloud=URL` | the ply viewer |
 | `GET /api/jobs` | every job, newest first |
 | `POST /api/jobs` | `{"name": ...}` → a new job |
-| `PUT /api/jobs/:id/files/:name` | one input file as the raw body |
+| `PUT /api/jobs/:id/files/:name?offset=N` | a piece of an input file as the raw body, appended at byte N |
 | `POST /api/jobs/:id/start` | `{"max_views", "fps", "stride", "pixel_stride", "conf_pct", "window", "mask_sky"}` |
 | `GET /api/jobs/:id` | one job with its log |
 | `DELETE /api/jobs/:id` | the job and its files |
@@ -48,7 +48,9 @@ child of the server, so the card is free between jobs.
 | `GET /healthz` | liveness (never behind the password) |
 
 Without `--password` (or `$MAP_ANYTHING_PASSWORD`) the service is open to anyone
-who can reach it: keep it on a private network then.
+who can reach it: keep it on a private network then. Basic sign-in sends the
+password with every request, so off loopback it needs TLS: a TLS-terminating
+proxy in front (an ingress), or `--tls-cert FILE --tls-key FILE`.
 
 ### Beyond the reference: cleaner clouds
 

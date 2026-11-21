@@ -55,12 +55,21 @@ check "an upload" 201 "$(code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$I
 check "a traversing name stays inside the job" 201 "$(code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$ID/files/..%2F..%2Fescape.jpg")"
 [ -e "$WORK/data/escape.jpg" ] || [ -e "$WORK/data/jobs/escape.jpg" ] && { echo "FAIL a file escaped the job directory"; fails=$((fails + 1)); }
 check "a hidden name is made visible" 1 "$(ls -A "$WORK/data/jobs/$ID/input" | grep -c '^_')"
+check "a second file that cleans to the same name is refused" 409 "$(code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$ID/files/a.jpg")"
+printf 'abc' > "$WORK/g"
+check "a file in pieces: the first" 201 "$(code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$ID/files/big.png?offset=0")"
+check "...a piece that does not continue it is refused" 409 "$(code $A -X PUT --data-binary @"$WORK/g" "$B/api/jobs/$ID/files/big.png?offset=5")"
+check "...the next piece" 201 "$(code $A -X PUT --data-binary @"$WORK/g" "$B/api/jobs/$ID/files/big.png?offset=1")"
+check "...and the file is whole" "xabc" "$(cat "$WORK/data/jobs/$ID/input/big.png")"
+LONG=$(printf 'a%.0s' $(seq 1 130))
+check "a long name keeps its extension" 201 "$(code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$ID/files/$LONG.jpg")"
+check "...cut to 120 bytes" 1 "$(ls "$WORK/data/jobs/$ID/input" | grep -c '^a\{116\}\.jpg$')"
 check "a video beside photos is refused" 201 "$(code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$ID/files/clip.mp4")"
 check "...at start" 400 "$(code $A -X POST "$B/api/jobs/$ID/start" -d '{}')"
 check "a bad job id" 400 "$(code $A "$B/api/jobs/..%2Fx")"
 check "an unknown job" 404 "$(code $A "$B/api/jobs/123-abc")"
 check "no cloud yet" 404 "$(code $A "$B/jobs/$ID/cloud.ply")"
-check "the job lists its files" 3 "$(curl -s $A "$B/api/jobs/$ID" | sed -n 's/.*"files":\([0-9]*\).*/\1/p')"
+check "the job lists its files" 5 "$(curl -s $A "$B/api/jobs/$ID" | sed -n 's/.*"files":\([0-9]*\).*/\1/p')"
 # a job that starts: options become the CLI's flags, and a "photo" that
 # does not decode fails in the CLI before any model is loaded
 ID2=$(curl -s $A -X POST "$B/api/jobs" -d '{"name":"opts"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
