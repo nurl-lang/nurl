@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.8.0] — 2026-11-21
+
+### Added
+
+- `map-anything serve`: the pipeline as a web service. A browser page uploads
+  photos or one video (each file in 32 MiB raw PUT pieces appended on disk, so
+  the body cap stays at 40 MiB; a name that cleans to one already in the job is
+  refused rather than overwritten),
+  queues the job with the CLI's options (max views, video fps, stride, pixel
+  stride, confidence filter, attention window, sky mask), follows its progress,
+  and opens the finished cloud in the ply viewer or downloads it as a PLY. Jobs
+  live on disk under `~/.map-anything/jobs/<id>/` (or `--data DIR`) and survive a
+  restart; one worker thread runs them one at a time, each as a child process of
+  the same executable, so the server holds no GPU memory between jobs. The
+  worker's claim, DELETE and start share one lock; SIGTERM ends the running
+  child and queues its job again, and a start after a crash ends the orphaned
+  child before rerunning the job. Optional HTTP Basic sign-in with `--password`
+  or `$MAP_ANYTHING_PASSWORD`, and HTTPS with `--tls-cert`/`--tls-key` (the
+  server warns when a password crosses a non-loopback address in plain text).
+  `tests/serve_test.sh` covers the routes, the sign-in and the path checks
+  without a GPU.
+- Quality steps beyond the reference, all off by default in the CLI and on in
+  the web service:
+  - `--align N`: N sweeps of per-view Sim(3) alignment inside each window. The
+    views agree to a few percent, so a wall comes out as two or three parallel
+    copies; each view gets a correcting similarity fitted in closed form to
+    pairs found by projecting its pixels into the other views (ICP with the
+    cameras giving the correspondences), view 0 fixed and the metric scale
+    renormalised every sweep. On the lego clip a cabinet wall's thickness
+    falls from 43 to 27 mm (one window) and from 39 to 27 mm (72 views).
+  - `--mv-check N`, `--mv-tol T`: keep a pixel only where N other views of the
+    window see a surface at the same depth (default tolerance 3 %, inclusive; a
+    window of fewer than N+1 views asks for all its others). Removes the
+    floaters a single view believes in — sky behind foliage, a far "wall".
+  - `--voxel M|auto`: fuse the cloud on a metric grid, one averaged point per
+    cell; `auto` is two pixels' footprint at the median depth. Typically 2–5×
+    fewer points, less noise, and a file a phone can open. Cells accumulate as
+    points are emitted, keyed by full integer coordinates.
+  - Pinhole intrinsics are fitted to each view's predicted rays
+    (`gm_fit_pinhole`) for the projections these need.
+- Requires ply 0.3.7: the viewer takes touch (orbit, pinch, two-finger pan).
+
 ## [0.7.5] — 2026-11-11
 
 ### Changed

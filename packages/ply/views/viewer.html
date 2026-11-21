@@ -14,7 +14,10 @@
   html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d10;
                font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
                color: #c8d0d8; }
-  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  /* touch-action none: the page never scrolls or zooms under a finger,
+     every gesture on the canvas is the viewer's */
+  canvas { display: block; width: 100%; height: 100%; cursor: grab;
+           touch-action: none; -webkit-user-select: none; user-select: none; }
   canvas.dragging { cursor: grabbing; }
   .panel { position: fixed; background: rgba(14,17,21,.86); border: 1px solid #232a33;
            border-radius: 8px; padding: 10px 12px; backdrop-filter: blur(6px); }
@@ -41,6 +44,23 @@
            cursor: pointer; }
   button:hover { background: #222a35; }
   .btns { display: flex; gap: 5px; margin-top: 9px; }
+  #fold { position: absolute; top: 6px; right: 8px; padding: 0 6px; font-size: 13px;
+          line-height: 20px; }
+  #hud.folded .fold-body { display: none; }
+  #hud.folded { min-width: 0; padding-right: 40px; }
+  #hud.folded h1 { margin: 0; }
+  .touch { display: none; }
+  /* phones: bigger targets, a narrower panel, the help folded to one line */
+  @media (pointer: coarse) {
+    .mouse { display: none; } .touch { display: inline; }
+    input[type=range] { height: 26px; }
+    button { padding: 6px 10px; font-size: 12px; }
+    #fold { padding: 2px 9px; }
+  }
+  @media (max-width: 600px) {
+    #hud { top: 8px; left: 8px; right: 8px; min-width: 0; }
+    #help { left: 8px; right: 8px; bottom: 8px; text-align: center; }
+  }
 </style>
 </head>
 <body>
@@ -48,6 +68,8 @@
 
 <div id="hud" class="panel" hidden>
   <h1>ply viewer</h1>
+  <button id="fold" title="fold the panel">&#9776;</button>
+  <div class="fold-body">
   <div class="sub" id="src">&nbsp;</div>
   <div class="row"><span>points</span><span id="n">-</span></div>
   <div class="row"><span>drawn</span><span id="nd">-</span></div>
@@ -68,11 +90,13 @@
     <button id="mode">colour: rgb</button>
     <button id="reset">reset view</button>
   </div>
+  </div>
 </div>
 
 <div id="help" class="panel" hidden>
-  <b>drag</b> orbit &nbsp; <b>wheel</b> zoom &nbsp; <b>shift-drag</b> pan<br>
-  <b>r</b> reset &nbsp; <b>c</b> colour &nbsp; <b>[ ]</b> point size
+  <span class="mouse"><b>drag</b> orbit &nbsp; <b>wheel</b> zoom &nbsp; <b>shift-drag</b> pan<br>
+  <b>r</b> reset &nbsp; <b>c</b> colour &nbsp; <b>[ ]</b> point size</span>
+  <span class="touch"><b>drag</b> orbit &nbsp; <b>pinch</b> zoom &nbsp; <b>two fingers</b> pan &nbsp; <b>double-tap</b> reset</span>
 </div>
 
 <div id="status">
@@ -238,6 +262,8 @@ function compile(gl, type, src) {
 
 /* ---------- viewer ------------------------------------------------------ */
 var Q = new URLSearchParams(location.search);
+/* a finger rather than a mouse: a phone or a tablet */
+var COARSE = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
 /* keep the farthest 2% out by default: on every example scene that is
    sky and nothing else, and it is what makes the first frame legible */
 var DEFAULT_TRIM = 0.98;
@@ -338,6 +364,15 @@ function boot(data, label) {
   if (Q.has("pitch")) cam.pitch = parseFloat(Q.get("pitch"));
   if (Q.has("dist")) cam.dist *= parseFloat(Q.get("dist"));
   home = JSON.parse(JSON.stringify(cam));
+
+  /* A phone's GPU draws a few million points at a crawl and the orbit
+     stutters with it; start it at a budget the slider can lift. ?density=
+     (0..1) pins it either way. */
+  var BUDGET = 1500000;
+  if (Q.has("density")) density = Math.max(0.01, Math.min(1, parseFloat(Q.get("density"))));
+  else if (COARSE && total > BUDGET) density = BUDGET / total;
+  $("dn").value = Math.max(1, Math.round(density * 100));
+  $("dnv").textContent = $("dn").value + "%";
 
   /* one interleaved, 16-byte-aligned, shuffled buffer */
   var order = shuffled(total);
@@ -463,34 +498,94 @@ function probeOut() {
   document.title = "probe lit=" + lit + "/" + (w * h);
 }
 
-/* ---------- input ------------------------------------------------------- */
-var drag = null;
-cv.addEventListener("mousedown", function (e) {
-  drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button === 1 };
-  cv.classList.add("dragging"); e.preventDefault();
-});
-window.addEventListener("mouseup", function () { drag = null; cv.classList.remove("dragging"); });
-window.addEventListener("mousemove", function (e) {
-  if (!drag) return;
-  var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-  drag.x = e.clientX; drag.y = e.clientY;
-  if (drag.pan) {
-    /* pan in the camera plane, scaled so it feels the same at any zoom.
-       World up is -Y (OpenCV axes), which MIRRORS the screen's horizontal
-       axis relative to a +Y-up orbit: the vertical drag signs come out
-       right on their own and the horizontal ones must be flipped, here
-       and in the orbit below, or left-drag walks the scene right. */
-    var s = cam.dist * 0.0016;
-    var rx = Math.cos(cam.yaw), rz = -Math.sin(cam.yaw);
-    cam.tgt[0] += dx * s * rx; cam.tgt[2] += dx * s * rz;
-    cam.tgt[1] -= dy * s;
-  } else {
-    cam.yaw += dx * 0.006;
-    cam.pitch = Math.max(-1.55, Math.min(1.55, cam.pitch + dy * 0.006));
+/* ---------- input -------------------------------------------------------
+   Pointer events, so one code path serves a mouse, a pen and fingers:
+     one pointer      orbit (mouse: shift / middle button pans)
+     two pointers     pinch zooms about the centre, the midpoint's travel pans
+     double tap       reset the view
+   The camera moves are the same functions whichever device made them. */
+function orbitBy(dx, dy) {
+  cam.yaw += dx * 0.006;
+  cam.pitch = Math.max(-1.55, Math.min(1.55, cam.pitch + dy * 0.006));
+}
+function panBy(dx, dy) {
+  /* pan in the camera plane, scaled so it feels the same at any zoom.
+     World up is -Y (OpenCV axes), which MIRRORS the screen's horizontal
+     axis relative to a +Y-up orbit: the vertical drag signs come out
+     right on their own and the horizontal ones must be flipped, here
+     and in the orbit, or left-drag walks the scene right. */
+  var s = cam.dist * 0.0016;
+  var rx = Math.cos(cam.yaw), rz = -Math.sin(cam.yaw);
+  cam.tgt[0] += dx * s * rx; cam.tgt[2] += dx * s * rz;
+  cam.tgt[1] -= dy * s;
+}
+function zoomBy(f) { cam.dist = Math.max(diag * 1e-4, Math.min(diag * 50, cam.dist * f)); }
+
+var pts = {}, npts = 0, pinch = null, mousePan = false;
+/* A tap is a touch that lifts quickly, nearly where it went down, with no
+   second finger joining; two of them close in time and place reset the
+   view. Judged on release, so the start of a drag or a pinch is never one. */
+var tapCand = null, lastTap = { t: -1e9, x: 0, y: 0 };
+function two() {
+  var ids = Object.keys(pts), a = pts[ids[0]], b = pts[ids[1]];
+  return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+}
+cv.addEventListener("pointerdown", function (e) {
+  cv.setPointerCapture(e.pointerId);
+  pts[e.pointerId] = { x: e.clientX, y: e.clientY };
+  npts = Object.keys(pts).length;
+  mousePan = e.pointerType === "mouse" && (e.shiftKey || e.button === 1);
+  if (npts === 2) pinch = two();
+  if (e.pointerType !== "mouse") {
+    /* the event's own time, not the handler's: a frame that takes long to
+       draw delays the handler, not the tap */
+    if (npts === 1) tapCand = { id: e.pointerId, t: e.timeStamp, x: e.clientX, y: e.clientY, multi: false };
+    else if (tapCand) tapCand.multi = true;
   }
+  cv.classList.add("dragging");
+  e.preventDefault();
 });
+cv.addEventListener("pointermove", function (e) {
+  var p = pts[e.pointerId];
+  if (!p) return;
+  var dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  if (npts === 1) {
+    if (mousePan) panBy(dx, dy); else orbitBy(dx, dy);
+  } else if (npts === 2 && pinch) {
+    var t = two();
+    zoomBy(pinch.d / t.d);
+    panBy(t.mx - pinch.mx, t.my - pinch.my);
+    pinch = t;
+  }
+  e.preventDefault();
+});
+function lift(e) {
+  if (!pts[e.pointerId]) return;
+  if (tapCand && tapCand.id === e.pointerId && e.type === "pointerup") {
+    var c = tapCand;
+    tapCand = null;
+    var quick = e.timeStamp - c.t < 250, still = Math.hypot(e.clientX - c.x, e.clientY - c.y) < 10;
+    if (quick && still && !c.multi) {
+      var dt = e.timeStamp - lastTap.t, far = Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y);
+      if (dt < 350 && far < 40) { $("reset").onclick(); lastTap = { t: -1e9, x: 0, y: 0 }; }
+      else lastTap = { t: e.timeStamp, x: e.clientX, y: e.clientY };
+    }
+  }
+  delete pts[e.pointerId];
+  npts = Object.keys(pts).length;
+  /* a pinch that drops to one finger must not jump into an orbit from
+     where that finger was when the pinch began */
+  pinch = npts === 2 ? two() : null;
+  if (npts === 0) cv.classList.remove("dragging");
+}
+cv.addEventListener("pointerup", lift);
+cv.addEventListener("pointercancel", lift);
 cv.addEventListener("wheel", function (e) {
-  cam.dist *= Math.exp((e.deltaY > 0 ? 1 : -1) * 0.12);
+  /* a trackpad pinch arrives as ctrl+wheel with small deltas: follow the
+     delta rather than a fixed step, so both feel proportionate */
+  var d = Math.max(-60, Math.min(60, e.deltaY * (e.deltaMode === 1 ? 20 : 1)));
+  zoomBy(Math.exp(d * (e.ctrlKey ? 0.01 : 0.0025)));
   e.preventDefault();
 }, { passive: false });
 cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
@@ -499,6 +594,9 @@ var MODES = ["rgb", "height", "depth"];
 function setMode(m) { mode = m; $("mode").textContent = "colour: " + MODES[m]; }
 $("mode").onclick = function () { setMode((mode + 1) % 3); };
 $("reset").onclick = function () { if (home) cam = JSON.parse(JSON.stringify(home)); };
+$("fold").onclick = function () { $("hud").classList.toggle("folded"); };
+/* the panel starts folded where it would cover most of the scene */
+if (window.innerWidth < 600) $("hud").classList.add("folded");
 $("ps").oninput = function () { psize = +this.value; $("psv").textContent = psize; };
 $("dn").oninput = function () {
   density = +this.value / 100; $("dnv").textContent = this.value + "%";
