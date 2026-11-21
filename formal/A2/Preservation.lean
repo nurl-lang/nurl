@@ -40,10 +40,10 @@ theorem CtxRel.kill {Γ : Ctx} {F : List Var}
     (hanch : RootbAnch Γ F)
     {x : Var} (hxF : x ∉ F) (e : Eff) (hv : Bool)
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
-      e.kills hv d.kind = true → d.root ≠ x) : CtxRel Γ (kill e hv x Γ) where
+      e.kills hv d.kind = true → d.root ≠ x) (hxr : RegionSpared Γ e hv x) : CtxRel Γ (kill e hv x Γ) where
   dom x := kill_dom ..
   mode _ _ h := kill_cmode h
-  rootb p E h hm := by simp only [A2.kill, h, Option.map_some]; rw [killE_rootb hanch hxF e hv hmn h hm]
+  rootb p E h hm := by simp only [A2.kill, h, Option.map_some]; rw [killE_rootb hanch hxF e hv hmn hxr h hm]
   dkeep := (DKeep.refl Γ []).kill e hv x
 
 theorem CtxRel.setE {Γ : Ctx} {x : Var} {Ex E : Entry} (hx : Γ x = some Ex) (hm : E.mode = Ex.mode)
@@ -81,7 +81,7 @@ theorem CtxRel.keep {Γ Γ' : Ctx} (h : CtxRel Γ Γ') {s s' : Stmt} (hs : s.spi
 
 theorem CtxRel.anch {Γ Γ' : Ctx} (h : CtxRel Γ Γ') {F : List Var}
     (hanch : RootbAnch Γ F) : RootbAnch Γ' F :=
-  hanch_of hanch h.mode h.rootb
+  hanch_of hanch h.mode h.rootb h.dom
 
 /-- A binding moved out: `A2.kill` ends what borrows it, and it is dead. -/
 theorem CtxRel.moved {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {y : Var} {E : Entry}
@@ -2484,7 +2484,7 @@ theorem exit_post {k e0 : Stmt} {n : Nat} (hs : ExitAt k n e0) {Γ Γp : Ctx} {F
     (hanchk : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → Anchored E F) :
     CtxWF (exitScope x Γp) ∧ NameWF (exitScope x Γp) ∧ KeepOut Γ (exitScope x Γp) (x :: e0.spine) := by
   have hwk := (Weaker.refl h3 h4).exitScope x hend.2.2
-  have hanchP : RootbAnch Γp F := fun p E hp hm => by
+  have hanchP : ∀ p E, Γp p = some E → E.mode = .rootb → Anchored E F := fun p E hp hm => by
     obtain ⟨hps, E0, h0⟩ := h5.2 p E hp
     obtain ⟨E', h', hm', _, hrb⟩ := h5.1 p E0 h0 hps
     rw [hp] at h'; cases h'
@@ -2498,7 +2498,7 @@ theorem exit_post {k e0 : Stmt} {n : Nat} (hs : ExitAt k n e0) {Γ Γp : Ctx} {F
     refine ⟨killE .replace false x E', by simp [exitScope, upd_ne _ _ hvx, A2.kill, h'],
       by rw [killE_mode, hm], by rw [killE_ty, ht], fun hr => ?_⟩
     have hr' : E'.mode = .rootb := by rw [hm]; exact hr
-    rw [killE_rootb hanchP hxF _ _ (hend.1.kills _ _) h' hr']
+    rw [killE_rootb' hanchP hxF _ _ (hend.1.kills _ _) h' hr']
     exact hrb hr
   · have hvx : v ≠ x := fun h => by subst h; simp [exitScope] at hv
     simp only [exitScope, upd_ne _ _ hvx, A2.kill] at hv
@@ -3389,13 +3389,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · intro p E' hp hm
         obtain ⟨hpx, E, hE, rfl⟩ := hrel p E' hp
         rw [killE_mode] at hm
-        rw [killE_rootb hanch hxF _ _ hmn hE hm]
+        rw [killE_rootb hanch hxF _ _ hmn (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hE hm]
         exact hanch p E hE hm
       · intro v E hv hvs
         have hvx : v ≠ x := fun e => hvs (by simp [Stmt.spine, e])
         refine ⟨by simp [Stmt.spine], killE .replace false x E, ?_, killE_mode .., killE_ty .., fun hrb => ?_⟩
         · simp [exitScope, upd_ne _ _ hvx, A2.kill, hv]
-        · exact killE_rootb hanch hxF _ _ hmn hv hrb
+        · exact killE_rootb hanch hxF _ _ hmn (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hv hrb
       · intro v E' hv _
         obtain ⟨hvx, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvx], E, hE⟩
@@ -3478,13 +3478,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · intro p E' hp hm
         obtain ⟨hpx, E, hE, rfl⟩ := hrel p E' hp
         rw [killE_mode] at hm
-        rw [killE_rootb hanch hxF _ _ hmn hE hm]
+        rw [killE_rootb hanch hxF _ _ hmn (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hE hm]
         exact hanch p E hE hm
       · intro v E hv hvs
         have hvx : v ≠ x := fun e => hvs (by simp [Stmt.spine, e])
         refine ⟨by simp [Stmt.spine], killE .replace false x E, ?_, killE_mode .., killE_ty .., fun hrb => ?_⟩
         · simp [exitScope, upd_ne _ _ hvx, A2.kill, hv]
-        · exact killE_rootb hanch hxF _ _ hmn hv hrb
+        · exact killE_rootb hanch hxF _ _ hmn (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hv hrb
       · intro v E' hv _
         obtain ⟨hvx, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvx], E, hE⟩
@@ -3669,13 +3669,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · intro p E' hp hm
         obtain ⟨hpx, E, hE, rfl⟩ := hrel p E' hp
         rw [killE_mode] at hm
-        rw [killE_rootb hanch hxF _ _ hmn hE hm]
+        rw [killE_rootb hanch hxF _ _ hmn (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hE hm]
         exact hanch p E hE hm
       · intro v E hv hvs
         have hvx : v ≠ x := fun e => hvs (by simp [Stmt.spine, e])
         refine ⟨by simp [Stmt.spine], killE .replace false x E, ?_, killE_mode .., killE_ty .., fun hrb => ?_⟩
         · simp [exitScope, upd_ne _ _ hvx, A2.kill, hv]
-        · exact killE_rootb hanch hxF _ _ hmn hv hrb
+        · exact killE_rootb hanch hxF _ _ hmn (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hv hrb
       · intro v E' hv _
         obtain ⟨hvx, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvx], E, hE⟩
@@ -3984,7 +3984,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           have hvx : v ≠ x := fun h => by
             subst h; simp [setE] at hv; subst hv; simp [Entry.reviveD, Entry.revive, hmo] at hrb
           simp only [setE, upd_ne _ _ hvx] at hv
-          exact killE_rootb hanch hxF _ _ (hNoPinΓ.1.kills _ _) hv hrb
+          exact killE_rootb hanch hxF _ _ (hNoPinΓ.1.kills _ _) (RegionSpared.of_noRegion hi.toMInv.noRegion _ _ _) hv hrb
         · obtain ⟨E, hE, _⟩ := hΓ1get v E' hv
           exact ⟨by simp [Stmt.spine], E, hE⟩
       have hsc := StmtT.scopeD (P := P) (F := F) (x := x) (f := f)
@@ -4129,13 +4129,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · intro q E' hq hmq
         obtain ⟨_, E, hE, rfl⟩ := hrel q E' hq
         have hmq' : E.mode = .rootb := hmq
-        rw [rerootE_rootb hanch hpF _ hE hmq' (hpn q E hE hmq')]
+        rw [rerootE_rootb hanch hpF _ hE hmq' (hpn q E hE hmq') (fun Ep h => hi.toMInv.noRegion p Ep h)]
         exact hanch q E hE hmq'
       · intro v E hv hvs
         have hvp : v ≠ p := fun e => hvs (by simp [Stmt.spine, e])
         refine ⟨by simp [Stmt.spine], rerootE p (Ep.path ++ Ep.held) E, ?_, rfl, rfl, fun hrb => ?_⟩
         · simp [exitRoot, upd_ne _ _ hvp, hv]
-        · exact rerootE_rootb hanch hpF _ hv hrb (hpn v E hv hrb)
+        · exact rerootE_rootb hanch hpF _ hv hrb (hpn v E hv hrb) (fun Ep h => hi.toMInv.noRegion p Ep h)
       · intro v E' hv _
         obtain ⟨hvp, E, hE, _⟩ := hrel v E' hv
         exact ⟨by simp [Stmt.spine, hvp], E, hE⟩

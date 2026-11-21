@@ -311,14 +311,25 @@ theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = no
 theorem hanch_of {Γ Γ1 : Ctx} {F : List Var}
     (hanch : RootbAnch Γ F)
     (hcm : ∀ x E1, Γ1 x = some E1 → ∃ E0, Γ x = some E0 ∧ E1.mode = E0.mode ∧ E1.ty = E0.ty)
-    (hrb : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → Γ1 p = some Ep) :
+    (hrb : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → Γ1 p = some Ep)
+    (hdom : ∀ x, (Γ1 x).isSome = (Γ x).isSome) :
     RootbAnch Γ1 F := by
   intro p E hp hm
   obtain ⟨E0, h0, hm0, _⟩ := hcm p E hp
   have h1 := hrb p E0 h0 (hm0 ▸ hm)
   rw [hp] at h1
   cases h1
-  exact hanch p _ h0 hm
+  intro d hd hb
+  rcases hanch p _ h0 hm d hd hb with h | ⟨hk, Er, hEr, hreg⟩
+  · exact Or.inl h
+  · -- AGORA-937: a region stays a region
+    refine Or.inr ⟨hk, ?_⟩
+    have hs := hdom d.root
+    rw [hEr] at hs
+    obtain ⟨E1, h1⟩ := Option.isSome_iff_exists.mp hs
+    obtain ⟨E0', h0', hm1, _⟩ := hcm d.root E1 h1
+    rw [hEr] at h0'; cases h0'
+    exact ⟨E1, h1, hm1.trans hreg⟩
 
 /-- Releasing the tree a slot held (a drop, `vec_free`) and putting `ov` in
     its place. -/
@@ -1892,7 +1903,7 @@ theorem assign_post {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var}
     (hds1 : DtorSafe Γ1 .replace false x) (hfe : FreshE Γ1 E := by fresh_e) :
     RhsPost m ({ m1 with alloc := a' }.set x ⟨o, some v⟩) Γ
       (setE (kill .replace false x Γ1) x { E with mode := Ex.mode }) F := by
-  have hanch1 := hanch_of hanch post.cmode post.rootb
+  have hanch1 := hanch_of hanch post.cmode post.rootb post.cdom
   have hpin1 := hpin.of post.cmode post.rootb
   obtain ⟨Ex1, hx1, hm1, ht1⟩ : ∃ Ex1, Γ1 x = some Ex1 ∧ Ex1.mode = Ex.mode ∧ Ex1.ty = Ex.ty := by
     have := post.cdom x; rw [hx] at this
@@ -2008,6 +2019,7 @@ theorem assign_post {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var}
       rcases hmodes with ⟨h1, _⟩ | ⟨h1, _⟩ | ⟨h1, _⟩ <;> rw [h1] at hpm <;> cases hpm
     simp only [setE, upd_ne _ _ hpx, kill, post.rootb p Ep hp hpm, Option.map_some]
     rw [killE_rootb hanch1 hxF _ _ (hpin1.kills _ _)
+      (RegionSpared.of_ne hx1 (by rcases hmodes with ⟨h1, _⟩ | ⟨h1, _⟩ | ⟨h1, _⟩ <;> rw [hm1, h1] <;> simp) _ _)
       (post.rootb p Ep hp hpm) hpm]
   · by_cases hyx : y = x
     · subst hyx; simp [setE, hx]
@@ -2071,7 +2083,7 @@ theorem rhs_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : R
   let m1 := m.set y ⟨true, none⟩
   let Γ1 := setE (kill .replace false y Γ) y { E with live := false, dtor := false }
   have hy1 : Γ1 y = some { E with live := false, dtor := false } := by simp [Γ1, setE]
-  have hanch1 : RootbAnch Γ1 F := hanch_of hanch post1.cmode post1.rootb
+  have hanch1 : RootbAnch Γ1 F := hanch_of hanch post1.cmode post1.rootb post1.cdom
   -- the fresh `Vec`
   obtain ⟨post2, out2⟩ := rhs_new (F := F) post1.inv hok
   have hds1 : DtorSafe Γ1 .replace false y := (hds.kill _ _ _).setE_off rfl
@@ -2214,7 +2226,7 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
     cases he with
     | pair htk1 htk2 =>
       obtain ⟨post1, pu1⟩ := push_take hi hanch hy hly rfl hpa1 htk1
-      have hanch1 := hanch_of hanch post1.cmode post1.rootb
+      have hanch1 := hanch_of hanch post1.cmode post1.rootb post1.cdom
       obtain ⟨post2, pu2⟩ := push_take post1.inv hanch1 hz hlz rfl hpa2 htk2
       exact ⟨post1.trans post2, out_pair post1.inv hanch1 pu1 post2 pu2 hz hlz rfl hpa2 htk2 hzd
         ⟨hi.tyok hy, post1.inv.tyok hz⟩⟩
@@ -3240,12 +3252,15 @@ theorem NameWF.exitRoot {Γ : Ctx} (h : NameWF Γ) (p : Var) (D : List Dep)
 theorem rerootE_rootb {Γ : Ctx} {F : List Var}
     (hanch : RootbAnch Γ F)
     {p : Var} (hpF : p ∉ F) (D : List Dep) {v : Var} {E : Entry} (hE : Γ v = some E)
-    (hmE : E.mode = .rootb) (hpn : ∀ d ∈ E.vdeps, d.kind.isName = true → d.root ≠ p) :
+    (hmE : E.mode = .rootb) (hpn : ∀ d ∈ E.vdeps, d.kind.isName = true → d.root ≠ p)
+    (hpr : ∀ Ep, Γ p = some Ep → Ep.mode ≠ .region) :
     rerootE p D E = E := by
   have : ∀ d ∈ E.vdeps, d.root ≠ p := by
     intro d hd h
     by_cases hb : d.kind.bound = .none
-    · exact hpF (h ▸ hanch v E hE hmE d hd hb)
+    · rcases hanch v E hE hmE d hd hb with h' | ⟨_, Er, hEr, hreg⟩
+      · exact hpF (h ▸ h')
+      · exact hpr Er (h ▸ hEr) hreg
     · exact hpn d hd (by cases hk : d.kind <;> simp_all [Kind.bound, Kind.isName]) h
   have hos' : E.mode.ownSlot = false := by rw [hmE]; rfl
   have h1 : ∀ d ∈ E.path, d.root ≠ p := fun d hd => this d (by simp [Entry.vdeps, hos', hd])
@@ -3323,7 +3338,7 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     fun v E hE hl hn => (hi.names v E hE hl hn).not_root hpo
   have hnorb : ∀ v E, Γ v = some E → E.mode = .rootb → rerootE p (Ep.path ++ Ep.held) E = E :=
     fun v E hE hmE => rerootE_rootb hanch hpF _ hE hmE
-      (hnpE v E hE (hi.rootbLive v E hE hmE) (Or.inr hmE))
+      (hnpE v E hE (hi.rootbLive v E hE hmE) (Or.inr hmE)) (fun Ep h => hi.noRegion p Ep h)
   constructor
   · intro v
     by_cases hvp : v = p

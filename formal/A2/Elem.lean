@@ -36,7 +36,7 @@ theorem elem_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
   -- the kill: no memory changes
   have hk : RhsPost m m Γ (kill .replace false v Γ) F :=
     ⟨hi.kill_pin hanch hvF hmn, rfl, Nat.le_refl _, fun _ => rfl, fun _ _ => rfl,
-      fun p Ep hp hm => by simp only [A2.kill, hp, Option.map_some]; rw [killE_rootb hanch hvF _ _ hmn hp hm],
+      fun p Ep hp hm => by simp only [A2.kill, hp, Option.map_some]; rw [killE_rootb hanch hvF _ _ hmn (RegionSpared.of_noRegion hi.noRegion _ _ _) hp hm],
       fun x => kill_dom .., fun x E1 h => kill_cmode h, (DKeep.refl Γ []).kill _ _ _, BlkLe.refl _⟩
   have hanch1 : RootbAnch (kill .replace false v Γ) F := hanch.kill _ _ _
   -- element `n` moved to the end

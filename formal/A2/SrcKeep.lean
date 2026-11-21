@@ -25,14 +25,15 @@ theorem CtxRel.domTy {Γ Γ' : Ctx} (h : CtxRel Γ Γ') : DomTy Γ Γ' := ⟨h.d
     keeps the borrowed parameters. -/
 theorem CtxRel.exitScope_fresh {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {E : Entry}
     (hx : Γ x = none) (hxF : x ∉ F) (h1 : CtxRel Γ Γ1) (h2 : CtxRel (A2.setE Γ1 x E) Δ)
-    (hanch : RootbAnch Δ F) (hpin : NoPin Δ x) : CtxRel Γ (A2.exitScope x Δ) := by
+    (hanch : RootbAnch Δ F) (hpin : NoPin Δ x) (hxr : RegionSpared Δ .replace false x) :
+    CtxRel Γ (A2.exitScope x Δ) := by
   refine CtxRel.ofDomTy (DomTy.exitScope_fresh hx h1.domTy h2.domTy) (fun p Ep hp hrb => ?_)
     (DKeep.bind h1.dkeep h2.dkeep)
   have hpx : p ≠ x := fun e => by subst e; rw [hx] at hp; cases hp
   have h1p := h1.rootb p Ep hp hrb
   have h2p := h2.rootb p Ep (by simp [A2.setE, upd_ne _ _ hpx, h1p]) hrb
   simp only [A2.exitScope, upd_ne _ _ hpx, A2.kill, h2p, Option.map_some]
-  rw [killE_rootb hanch hxF .replace false (hpin.kills .replace false) h2p hrb]
+  rw [killE_rootb hanch hxF .replace false (hpin.kills .replace false) hxr h2p hrb]
 
 theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
     (hr : RhsT Γ F r E Γ1) (hanch : RootbAnch Γ F) : CtxRel Γ Γ1 := by

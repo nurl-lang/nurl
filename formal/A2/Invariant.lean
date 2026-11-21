@@ -968,13 +968,45 @@ theorem ExitAt.dtorPinOK {Γ : Ctx} {s e : Stmt} {n : Nat} (h : ExitAt s n e) (h
 def Anchored (E : Entry) (F : List Var) : Prop :=
   ∀ d ∈ E.vdeps, d.kind.bound = .none → d.root ∈ F
 
+/-- AGORA-937: a dependency that is a view of a region, what a lent
+    parameter's views point into, past the callee's frame. -/
+def RegionView (Γ : Ctx) (d : Dep) : Prop :=
+  d.kind = .view ∧ ∃ Er, Γ d.root = some Er ∧ Er.mode = .region
+
+/-- An entry is anchored in `F`, or (AGORA-937) through a view of a region:
+    no rule kills a region (each kills a binding it reads or changes, never
+    a `.region` one), and a change through it ends no view of it. -/
+def AnchoredIn (Γ : Ctx) (E : Entry) (F : List Var) : Prop :=
+  ∀ d ∈ E.vdeps, d.kind.bound = .none → d.root ∈ F ∨ RegionView Γ d
+
+theorem Anchored.anchoredIn {Γ : Ctx} {E : Entry} {F : List Var} (h : Anchored E F) : AnchoredIn Γ E F :=
+  fun d hd hb => Or.inl (h d hd hb)
+
+/-- With no region bound, an entry anchored through `Γ` is anchored. -/
+theorem AnchoredIn.anchored {Γ : Ctx} {E : Entry} {F : List Var} (h : AnchoredIn Γ E F)
+    (hnr : ∀ v E, Γ v = some E → E.mode ≠ .region) : Anchored E F := fun d hd hb => by
+  rcases h d hd hb with h | ⟨_, Er, hEr, hm⟩
+  · exact h
+  · exact absurd hm (hnr _ _ hEr)
+
 /-- The borrowed parameters' anchors. -/
 def RootbAnch (Γ : Ctx) (F : List Var) : Prop :=
-  ∀ p E, Γ p = some E → E.mode = .rootb → Anchored E F
+  ∀ p E, Γ p = some E → E.mode = .rootb → AnchoredIn Γ E F
 
 theorem Anchored.mono {E : Entry} {F F' : List Var} (h : Anchored E F) (hF : ∀ v ∈ F, v ∈ F') :
     Anchored E F' :=
   fun d hd hb => hF _ (h d hd hb)
+
+/-- An anchoring through `Γ` holds through `Γ'` where every region of `Γ`
+    is still one. -/
+theorem AnchoredIn.of_regions {Γ Γ' : Ctx} {E : Entry} {F : List Var} (h : AnchoredIn Γ E F)
+    (hreg : ∀ v Er, Γ v = some Er → Er.mode = .region → ∃ Er', Γ' v = some Er' ∧ Er'.mode = .region) :
+    AnchoredIn Γ' E F := fun d hd hb =>
+  (h d hd hb).imp id fun ⟨hk, Er, hEr, hr⟩ => ⟨hk, hreg _ _ hEr hr⟩
+
+theorem AnchoredIn.mono {Γ : Ctx} {E : Entry} {F F' : List Var} (h : AnchoredIn Γ E F)
+    (hF : ∀ v ∈ F, v ∈ F') : AnchoredIn Γ E F' :=
+  fun d hd hb => (h d hd hb).imp (hF _) id
 
 
 /-- A2-drop.3d, Agora #610: what the invariant asks of a block's destructor

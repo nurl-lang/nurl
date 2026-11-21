@@ -603,7 +603,7 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     simp only [roots, Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.mem_map]
     exact ⟨dep, hd, rfl⟩
   have hF : dep.root ∈ F := by
-    refine hanch p E hp hm dep ?_ (lands_bound hl)
+    refine (hanch p E hp hm).anchored hi.noRegion dep ?_ (lands_bound hl)
     simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte]
     exact hd
   have hnint : E.ty ≠ .int := by

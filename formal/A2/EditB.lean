@@ -232,7 +232,8 @@ theorem RootbAnch.kill {Γ : Ctx} {F : List Var} (h : RootbAnch Γ F) (e : Eff) 
   rw [killE_mode] at hm
   intro d hd hb
   rw [killE_vdeps] at hd
-  exact h p E0 h0 hm d hd hb
+  exact (h p E0 h0 hm d hd hb).imp id fun ⟨hk, Er, hEr, hr⟩ =>
+    ⟨hk, killE e hv x Er, by simp [A2.kill, hEr], by rw [killE_mode]; exact hr⟩
 
 theorem RootbAnch.killNames {Γ : Ctx} {F : List Var} (h : RootbAnch Γ F) :
     ∀ ds, RootbAnch (A2.killNames ds Γ) F
@@ -274,7 +275,7 @@ theorem MInv.kill_pin {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanc
     simp only [A2.kill] at h
     obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
     rw [killE_mode] at hm
-    rw [killE_rootb hanch hrF e hv hmn hE hm]
+    rw [killE_rootb hanch hrF e hv hmn (RegionSpared.of_noRegion hi.noRegion _ _ _) hE hm]
     exact hi.rootbLive p E hE hm
   rootbLt p E' h hm := by
     simp only [A2.kill] at h
@@ -2052,7 +2053,12 @@ theorem MInv.edit_grow {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
       by_cases hpo : p = o
       · subst hpo; simp only [A2.setE, upd_same, Option.some.injEq] at hp; subst hp
         rw [hmo] at hm; cases hm
-      · simp only [A2.setE, upd_ne _ _ hpo] at hp; exact hanch.kill _ _ _ p Ep hp hm
+      · simp only [A2.setE, upd_ne _ _ hpo] at hp
+        refine (hanch.kill _ _ _ p Ep hp hm).of_regions fun v Er hEr hr => ?_
+        have hvo : v ≠ o := fun e => by
+          subst e; simp only [A2.kill, ho, Option.map_some, Option.some.injEq] at hEr
+          rw [← hEr, killE_mode, hmo] at hr; cases hr
+        exact ⟨Er, by simp only [A2.setE, upd_ne _ _ hvo]; exact hEr, hr⟩
   have h2 := h.kill_more hanch2 hoF (by decide : Eff.realloc ≠ .replace) false
   have heq : A2.kill .realloc false o (A2.setE (A2.kill .realloc false o Γ1) o { Eo with held := Eo.held ++ [] }) =
       A2.kill .realloc false o Γ1 := by
