@@ -490,7 +490,9 @@ $ `ui.nu`
 // never overwrite the current run's pid. The token is read first; when no
 // pid shows for it within 2 s, the token is voided and the same file is
 // read once more: a shell still on its way to `exec` either sees the void
-// and exits, or had already written its pid and is found.
+// and exits, or had already written its pid and is found. -1 when the
+// void could not be written: the old token is still good, so the job must
+// not run again yet (the caller leaves it `running` for a later recovery).
 @ __mas_child_of s id → i {
     : String tok ( __mas_read_job id `run` )
     ? | == ( string_len tok ) 0 ( __mas_eq ( string_data tok ) `void` ) { ^ 0 } {}
@@ -503,7 +505,7 @@ $ `ui.nu`
         ( sleep_ms 100 )
         = n + n 1
     }
-    : b _v ( __mas_write_job id `run` `void` )
+    ? ( __mas_write_job id `run` `void` ) {} { ^ -1 }
     ^ ( __mas_read_int id ( string_data pname ) )
 }
 
@@ -724,15 +726,23 @@ $ `ui.nu`
             T id → {
                 ? ( __mas_state_is ( string_data id ) `running` ) {
                     : i pid ( __mas_child_of ( string_data id ) )
-                    ? ( __mas_is_our_child pid ) {
-                        ( nurl_eprint `map-anything serve: ending the orphaned reconstruction, pid ` )
-                        ( nurl_eprintln ( nurl_str_int pid ) )
-                        ( __mas_end_child pid \ → b { ^ ! ( __mas_is_our_child pid ) } )
-                    } {}
-                    ( __mas_clear_pids ( string_data id ) )
-                    : b _q ( __mas_set_state ( string_data id ) `queued` )
-                    ( nurl_eprint `map-anything serve: re-queued the interrupted job ` )
-                    ( nurl_eprintln ( string_data id ) )
+                    ? < pid 0 {
+                        // its token could not be voided: running it again now
+                        // could meet a late child of the old run — leave it
+                        ( nurl_eprint `map-anything serve: cannot void the run token of job ` )
+                        ( nurl_eprint ( string_data id ) )
+                        ( nurl_eprintln `; left running until a later start can` )
+                    } {
+                        ? ( __mas_is_our_child pid ) {
+                            ( nurl_eprint `map-anything serve: ending the orphaned reconstruction, pid ` )
+                            ( nurl_eprintln ( nurl_str_int pid ) )
+                            ( __mas_end_child pid \ → b { ^ ! ( __mas_is_our_child pid ) } )
+                        } {}
+                        ( __mas_clear_pids ( string_data id ) )
+                        : b _q ( __mas_set_state ( string_data id ) `queued` )
+                        ( nurl_eprint `map-anything serve: re-queued the interrupted job ` )
+                        ( nurl_eprintln ( string_data id ) )
+                    }
                 } {}
             }
             F → {}
@@ -1205,9 +1215,13 @@ $ `ui.nu`
                         ( nurl_eprintln sid )
                         ( __mas_end_child pid \ → b { ^ ! ( __mas_is_our_child pid ) } )
                     } {}
-                    : i t ( __mas_lock )
-                    : b _q ( __mas_set_state sid `queued` )
-                    ( __mas_unlock t )
+                    // with the token not voided (pid < 0) it stays `running`:
+                    // the next start's recovery tries again
+                    ? >= pid 0 {
+                        : i t ( __mas_lock )
+                        : b _q ( __mas_set_state sid `queued` )
+                        ( __mas_unlock t )
+                    } {}
                 } {}
             }
             F → {}

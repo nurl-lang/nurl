@@ -12,7 +12,13 @@ else NURL="nurl"; fi
 
 WORK="$(mktemp -d -t map-anything-serve.XXXXXX)"
 PID=""
-cleanup() { [ -n "$PID" ] && kill "$PID" 2>/dev/null; rm -rf "$WORK"; }
+FIXTURES=""
+# only the processes this test started: the server and its fixtures
+cleanup() {
+    [ -n "$PID" ] && kill "$PID" 2>/dev/null
+    for f in $FIXTURES; do kill "$f" 2>/dev/null; done
+    rm -rf "$WORK"
+}
 trap cleanup EXIT
 
 if ! $NURL src/main.nu "$WORK/map-anything" >/dev/null 2>"$WORK/build.err"; then
@@ -139,49 +145,59 @@ newjob() {
 }
 
 # 1. A child delayed past recovery. With the server down, a job is left
-# `running` with no pid yet and a shell that publishes its pid only after
-# 4 s. The server comes up, waits 2 s, voids the run's token and queues the
-# job again; when the late shell resumes it fails the token check, so the
-# sentinel it would write past the check never appears.
+# `running` with no pid yet and a shell held back until the test lets it
+# go. The server comes up, waits 2 s for a pid, voids the run's token and
+# queues the job again; only after the void is seen is the shell released,
+# and it must stop at its token — the sentinel it would write past the
+# check never appears.
 ID3=$(newjob)
 J3="$WORK/data/jobs/$ID3"
 kill "$PID"; wait "$PID" 2>/dev/null; PID=""
 echo running > "$J3/state"; echo tok123 > "$J3/run"; rm -f "$J3"/pid.*
-( cd "$J3" && exec sh -c 'sleep 4; echo $$ > pid.tok123 && [ "$(cat run)" = tok123 ] && touch ran' ) &
+( cd "$J3" && exec sh -c 'while [ ! -e go ]; do sleep 0.1; done; echo $$ > pid.tok123 && [ "$(cat run)" = tok123 ] && touch ran' ) &
 LATE=$!
+FIXTURES="$FIXTURES $LATE"
 "$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/fourth.log" 2>&1 &
 PID=$!
 up_or_fail
-wait "$LATE"
+for _ in $(seq 1 100); do [ "$(cat "$J3/run")" != tok123 ] && break; sleep 0.1; done
+check "recovery voided the run's token" 1 "$([ "$(cat "$J3/run")" != tok123 ] && echo 1 || echo 0)"
+touch "$J3/go"
+for _ in $(seq 1 50); do [ -s "$J3/pid.tok123" ] && break; sleep 0.1; done
+wait "$LATE"  # bounded: past its pid the shell has only `cat run` left to do
 check "a shell delayed past recovery stops at its token" 0 "$(ls "$J3" | grep -c '^ran$')"
 until_state "$J3" failed done
 check "...and the job runs again, once, to its end" failed "$(cat "$J3/state")"
 
-# 2. A stale shell cannot hide the current run. Run B is active (pid in
-# pid.tokB, its command line naming cloud.tmp.ply like a reconstruction's);
-# a shell of an older run A resumes, publishes into pid.tokA and stops at
-# its token; then the server dies by SIGKILL. The next server must find and
-# end B — not read A's dead pid and start a second run beside it.
+# 2. A stale shell cannot hide the current run, even when the server dies
+# with it active. Run B is active (pid in pid.tokB, its command line naming
+# cloud.tmp.ply like a reconstruction's) while the server is up; a shell
+# of an older run A resumes, publishes into pid.tokA and stops at its
+# token; THEN the server dies by SIGKILL. The next server must end B before
+# the job's next run starts — B records when it died, and the rerun's
+# `started` must not come before that.
 ID4=$(newjob)
 J4="$WORK/data/jobs/$ID4"
-until_state "$J4" failed done
-kill -KILL "$PID"; wait "$PID" 2>/dev/null; PID=""
 echo running > "$J4/state"; echo tokB > "$J4/run"; rm -f "$J4"/pid.*
-( cd "$J4" && exec sh -c 'echo $$ > pid.tokB; sleep 61' run-b cloud.tmp.ply ) &
+( cd "$J4" && exec sh -c 'trap "date +%s%3N > b.died; exit 143" TERM; echo $$ > pid.tokB; sleep 61 & echo $! > b.sleep; wait' run-b cloud.tmp.ply ) &
 BPID=$!
-for _ in $(seq 1 50); do [ -s "$J4/pid.tokB" ] && break; sleep 0.1; done
+FIXTURES="$FIXTURES $BPID"
+for _ in $(seq 1 50); do [ -s "$J4/pid.tokB" ] && [ -s "$J4/b.sleep" ] && break; sleep 0.1; done
+FIXTURES="$FIXTURES $(cat "$J4/b.sleep")"
 ( cd "$J4" && exec sh -c 'echo $$ > pid.tokA && [ "$(cat run)" = tokA ] && touch ranA' ) &
 APID=$!
 wait "$APID"
 check "the stale shell left the current run's pid alone" "$BPID" "$(cat "$J4/pid.tokB")"
+kill -KILL "$PID"; wait "$PID" 2>/dev/null; PID=""
 "$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/fifth.log" 2>&1 &
 PID=$!
 up_or_fail
+for _ in $(seq 1 150); do [ -s "$J4/b.died" ] && break; sleep 0.1; done
 wait "$BPID"; brc=$?
 check "recovery ended the active run (SIGTERM, not its natural end)" 143 "$brc"
 check "...the stale shell never ran" 0 "$(ls "$J4" | grep -c '^ranA$')"
 until_state "$J4" failed done
 check "...and the job ran again, once" failed "$(cat "$J4/state")"
-pkill -f '^sleep 61$' 2>/dev/null
+check "...only after the active run had ended" 1 "$([ "$(cat "$J4/started")" -ge "$(cat "$J4/b.died")" ] && echo 1 || echo 0)"
 
 [ $fails = 0 ] || exit 1
