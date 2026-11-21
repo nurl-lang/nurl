@@ -462,11 +462,26 @@ $ `ui.nu`
 
 // The oldest queued job, claimed — its state is `running` before the
 // lock is let go, so a DELETE that comes after sees it running.
+//
+// One job runs at a time, and that is checked here rather than assumed:
+// the worker claims only when it is idle, so any job still `running` at
+// this point is one a recovery or shutdown could not settle (a token it
+// could not void, a child it could not end). Nothing starts beside it;
+// the next start's recovery gets another go at it.
 @ __mas_claim_next → String {
     : ( Vec String ) ids ( __mas_job_ids )
     : ~ String got ( string_new )
     : i t ( __mas_lock )
-    : ~ i k 0
+    : ~ b unsettled F
+    : ~ i u 0
+    ~ < u ( vec_len [String] ids ) {
+        ?? ( vec_get [String] ids u ) {
+            T id → { ? ( __mas_state_is ( string_data id ) `running` ) { = unsettled T } {} }
+            F → {}
+        }
+        = u + u 1
+    }
+    : ~ i k ? unsettled ( vec_len [String] ids ) 0
     ~ & < k ( vec_len [String] ids ) == ( string_len got ) 0 {
         ?? ( vec_get [String] ids k ) {
             T id → {
@@ -587,8 +602,10 @@ $ `ui.nu`
 // has gone (a dead child of ours is a zombie until the worker reaps it,
 // and a zombie's /proc command line is empty, so __mas_is_our_child says
 // it has gone).
-@ __mas_end_child i pid ( @ b ) gone → v {
-    ? <= pid 0 { ^ v } {}
+// T once `gone` holds; F if the process outlived even SIGKILL (stuck in
+// uninterruptible I/O, say), and then the caller must not run its job again.
+@ __mas_end_child i pid ( @ b ) gone → b {
+    ? <= pid 0 { ^ T } {}
     : i32 _a ( kill # i32 pid # i32 ( posix_const `SIGTERM` ) )
     : ~ i waited 0
     ~ & < waited 100 ! ( gone ) {
@@ -603,6 +620,7 @@ $ `ui.nu`
             = w2 + w2 1
         }
     }
+    ^ ( gone )
 }
 
 @ __mas_log_put s id s text → v {
@@ -733,15 +751,22 @@ $ `ui.nu`
                         ( nurl_eprint ( string_data id ) )
                         ( nurl_eprintln `; left running until a later start can` )
                     } {
+                        : ~ b ended T
                         ? ( __mas_is_our_child pid ) {
                             ( nurl_eprint `map-anything serve: ending the orphaned reconstruction, pid ` )
                             ( nurl_eprintln ( nurl_str_int pid ) )
-                            ( __mas_end_child pid \ → b { ^ ! ( __mas_is_our_child pid ) } )
+                            = ended ( __mas_end_child pid \ → b { ^ ! ( __mas_is_our_child pid ) } )
                         } {}
-                        ( __mas_clear_pids ( string_data id ) )
-                        : b _q ( __mas_set_state ( string_data id ) `queued` )
-                        ( nurl_eprint `map-anything serve: re-queued the interrupted job ` )
-                        ( nurl_eprintln ( string_data id ) )
+                        ? ended {
+                            ( __mas_clear_pids ( string_data id ) )
+                            : b _q ( __mas_set_state ( string_data id ) `queued` )
+                            ( nurl_eprint `map-anything serve: re-queued the interrupted job ` )
+                            ( nurl_eprintln ( string_data id ) )
+                        } {
+                            ( nurl_eprint `map-anything serve: the reconstruction of job ` )
+                            ( nurl_eprint ( string_data id ) )
+                            ( nurl_eprintln ` outlived SIGKILL; left running, nothing starts beside it` )
+                        }
                     }
                 } {}
             }
@@ -1210,14 +1235,16 @@ $ `ui.nu`
                 : s sid ( string_data id )
                 ? ( __mas_state_is sid `running` ) {
                     : i pid ( __mas_child_of sid )
+                    : ~ b ended T
                     ? > pid 0 {
                         ( nurl_eprint `map-anything serve: stopping the reconstruction of job ` )
                         ( nurl_eprintln sid )
-                        ( __mas_end_child pid \ → b { ^ ! ( __mas_is_our_child pid ) } )
+                        = ended ( __mas_end_child pid \ → b { ^ ! ( __mas_is_our_child pid ) } )
                     } {}
-                    // with the token not voided (pid < 0) it stays `running`:
-                    // the next start's recovery tries again
-                    ? >= pid 0 {
+                    // with the token not voided (pid < 0), or a child that
+                    // outlived SIGKILL, it stays `running`: the next start's
+                    // recovery tries again
+                    ? & >= pid 0 ended {
                         : i t ( __mas_lock )
                         : b _q ( __mas_set_state sid `queued` )
                         ( __mas_unlock t )

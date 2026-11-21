@@ -17,6 +17,8 @@ FIXTURES=""
 cleanup() {
     [ -n "$PID" ] && kill "$PID" 2>/dev/null
     for f in $FIXTURES; do kill "$f" 2>/dev/null; done
+    chmod -R u+w "$WORK" 2>/dev/null
+    [ -n "${KEEP:-}" ] && cp "$WORK/lifecycle.log" "$KEEP" 2>/dev/null
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -143,6 +145,25 @@ newjob() {
     code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$j/files/p.jpg" >/dev/null
     echo "$j"
 }
+# Wait at most $2 s for fixture $1 to exit (a zombie counts as exited),
+# then reap it and drop it from FIXTURES so cleanup never signals a pid
+# the system may have handed to someone else. Past the deadline: fail,
+# SIGKILL it, reap it. Returns its exit status.
+reap() {
+    n=$(( $2 * 10 ))
+    while [ "$n" -gt 0 ]; do
+        st=$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f1)
+        { [ -z "$st" ] || [ "$st" = Z ]; } && break
+        sleep 0.1; n=$((n - 1))
+    done
+    if [ "$n" -le 0 ]; then
+        echo "FAIL fixture $1 did not exit within $2 s"; fails=$((fails + 1))
+        kill -KILL "$1" 2>/dev/null
+    fi
+    wait "$1"; rrc=$?
+    FIXTURES=$(echo " $FIXTURES " | sed "s/ $1 / /")
+    return $rrc
+}
 
 # 1. A child delayed past recovery. With the server down, a job is left
 # `running` with no pid yet and a shell held back until the test lets it
@@ -152,52 +173,76 @@ newjob() {
 # check never appears.
 ID3=$(newjob)
 J3="$WORK/data/jobs/$ID3"
-kill "$PID"; wait "$PID" 2>/dev/null; PID=""
+kill "$PID"; wait "$PID" 2>/dev/null
 echo running > "$J3/state"; echo tok123 > "$J3/run"; rm -f "$J3"/pid.*
 ( cd "$J3" && exec sh -c 'while [ ! -e go ]; do sleep 0.1; done; echo $$ > pid.tok123 && [ "$(cat run)" = tok123 ] && touch ran' ) &
 LATE=$!
 FIXTURES="$FIXTURES $LATE"
-"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/fourth.log" 2>&1 &
+"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >>"$WORK/lifecycle.log" 2>&1 &
 PID=$!
 up_or_fail
 for _ in $(seq 1 100); do [ "$(cat "$J3/run")" != tok123 ] && break; sleep 0.1; done
 check "recovery voided the run's token" 1 "$([ "$(cat "$J3/run")" != tok123 ] && echo 1 || echo 0)"
 touch "$J3/go"
-for _ in $(seq 1 50); do [ -s "$J3/pid.tok123" ] && break; sleep 0.1; done
-wait "$LATE"  # bounded: past its pid the shell has only `cat run` left to do
+reap "$LATE" 10
 check "a shell delayed past recovery stops at its token" 0 "$(ls "$J3" | grep -c '^ran$')"
 until_state "$J3" failed done
 check "...and the job runs again, once, to its end" failed "$(cat "$J3/state")"
 
-# 2. A stale shell cannot hide the current run, even when the server dies
-# with it active. Run B is active (pid in pid.tokB, its command line naming
-# cloud.tmp.ply like a reconstruction's) while the server is up; a shell
-# of an older run A resumes, publishes into pid.tokA and stops at its
-# token; THEN the server dies by SIGKILL. The next server must end B before
-# the job's next run starts — B records when it died, and the rerun's
-# `started` must not come before that.
+# 2. A stale shell cannot hide the current run, and nothing replaces a
+# run while it is still alive. Run B is active (pid in pid.tokB, its
+# command line naming cloud.tmp.ply like a reconstruction's) with the
+# server up; a shell of an older run A resumes, publishes into pid.tokA
+# and stops at its token; then the server dies by SIGKILL. The next server
+# signals B, which lingers 3 s in its SIGTERM trap: for as long as B is
+# alive the job must stay `running` with no new run started.
 ID4=$(newjob)
 J4="$WORK/data/jobs/$ID4"
 echo running > "$J4/state"; echo tokB > "$J4/run"; rm -f "$J4"/pid.*
-( cd "$J4" && exec sh -c 'trap "date +%s%3N > b.died; exit 143" TERM; echo $$ > pid.tokB; sleep 61 & echo $! > b.sleep; wait' run-b cloud.tmp.ply ) &
+( cd "$J4" && exec sh -c 'trap "touch b.term; sleep 3; exit 143" TERM; echo $$ > pid.tokB; while :; do sleep 0.2; done' run-b cloud.tmp.ply ) &
 BPID=$!
 FIXTURES="$FIXTURES $BPID"
-for _ in $(seq 1 50); do [ -s "$J4/pid.tokB" ] && [ -s "$J4/b.sleep" ] && break; sleep 0.1; done
-FIXTURES="$FIXTURES $(cat "$J4/b.sleep")"
+for _ in $(seq 1 50); do [ -s "$J4/pid.tokB" ] && break; sleep 0.1; done
 ( cd "$J4" && exec sh -c 'echo $$ > pid.tokA && [ "$(cat run)" = tokA ] && touch ranA' ) &
 APID=$!
-wait "$APID"
+FIXTURES="$FIXTURES $APID"
+reap "$APID" 10
 check "the stale shell left the current run's pid alone" "$BPID" "$(cat "$J4/pid.tokB")"
-kill -KILL "$PID"; wait "$PID" 2>/dev/null; PID=""
-"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/fifth.log" 2>&1 &
+# recovery runs before the listener opens, so watch B's trap now and look
+# for the server's readiness only afterwards
+kill -KILL "$PID"; wait "$PID" 2>/dev/null
+"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >>"$WORK/lifecycle.log" 2>&1 &
 PID=$!
+for _ in $(seq 1 150); do [ -e "$J4/b.term" ] && break; sleep 0.1; done
+check "recovery signalled the active run" 1 "$([ -e "$J4/b.term" ] && echo 1 || echo 0)"
+s0=$(cat "$J4/started" 2>/dev/null)
+sleep 2  # B is still in its trap: a replacement now would overlap it
+check "no replacement while the active run is alive" "running $s0" "$(cat "$J4/state") $(cat "$J4/started" 2>/dev/null)"
+reap "$BPID" 15; brc=$?
 up_or_fail
-for _ in $(seq 1 150); do [ -s "$J4/b.died" ] && break; sleep 0.1; done
-wait "$BPID"; brc=$?
-check "recovery ended the active run (SIGTERM, not its natural end)" 143 "$brc"
+check "...which then ended (SIGTERM, not its natural end)" 143 "$brc"
 check "...the stale shell never ran" 0 "$(ls "$J4" | grep -c '^ranA$')"
 until_state "$J4" failed done
 check "...and the job ran again, once" failed "$(cat "$J4/state")"
-check "...only after the active run had ended" 1 "$([ "$(cat "$J4/started")" -ge "$(cat "$J4/b.died")" ] && echo 1 || echo 0)"
+
+# 3. An unsettled job holds the queue. A job is left `running` whose token
+# recovery cannot void (its directory is read-only); a second job waits in
+# the queue. The first stays `running` and the second must not start.
+ID5=$(newjob)
+J5="$WORK/data/jobs/$ID5"
+ID6=$(newjob)
+J6="$WORK/data/jobs/$ID6"
+kill "$PID"; wait "$PID" 2>/dev/null
+echo running > "$J5/state"; echo tokX > "$J5/run"; rm -f "$J5"/pid.*
+echo "--max-views 1" > "$J6/opts"; echo queued > "$J6/state"
+chmod 555 "$J5"
+"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >>"$WORK/lifecycle.log" 2>&1 &
+PID=$!
+up_or_fail
+for _ in $(seq 1 100); do grep -q "cannot void the run token of job $ID5" "$WORK/lifecycle.log" && break; sleep 0.1; done
+check "recovery that cannot void a token leaves the job running" running "$(cat "$J5/state")"
+sleep 3  # several worker polls
+check "...and no queued job starts beside it" queued "$(cat "$J6/state")"
+chmod 755 "$J5"
 
 [ $fails = 0 ] || exit 1
