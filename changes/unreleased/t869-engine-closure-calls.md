@@ -1,5 +1,0 @@
-### Fixed
-
-- **The ownership engine (`--engine`) no longer crashes on a closure called with a constant argument** (AGORA-869). `( f F )`, with `f` a closure that changes what it captured, made the engine ask the type of a constant as if it were a place, and it stopped with "internal error in the ownership engine: wv_at: index out of range". Seven hole probes were affected; all of them now get their verdicts.
-- **The engine follows codegen for a slice handed back by a closure call** (AGORA-869). A call through a closure value whose result is an owned slice of view-free elements (`[i`, `[String`) hands its caller a slice of its own, as codegen makes it (agora #894). The engine read it as a view of the call's arguments, and falsely refused three programs that run clean. An ordinary compile is unchanged.
-- **The engine refuses an owning value stored into a field of a program enum's `??` payload** (AGORA-869). The arm works on a copy of the payload (agora #883, which nurlc and tools/ncore already refuse), so the store landed in that copy and leaked. Four hole probes the engine accepted are refused now.

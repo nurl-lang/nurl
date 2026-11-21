@@ -1,3 +1,0 @@
-### Changed
-
-- **The formal proof covers a trait object's `inout` method with parameters beside the receiver** (AGORA-927). In A2, a call through an owned closure or trait object whose method changes its environment, such as `( add k s )` on a `dyn Fill`, may now pass arguments beside the receiver: the environment is handed to the method's code, the arguments are passed as they are, and the environment goes back into the object after. Such a call is typed, and every state it reaches is safe. An argument that is the object itself or views it, or that the method changes while the object views it, is refused, as nurlc refuses it. nurlc already accepted these programs, and NURL source is unchanged.

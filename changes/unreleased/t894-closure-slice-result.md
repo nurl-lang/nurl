@@ -1,3 +1,0 @@
-### Fixed
-
-- **A slice made for a call through a closure is released** (AGORA-894). Take `: [i x ( f ( mk ) )` where `f` is a closure that may hand its argument back, such as `\ [i a → [i { ^ a }`. Nothing released the slice that `mk` made, so it leaked. A call through a closure value that hands back an owned slice now gives its caller a slice of its own, as it already did for a raw string: the closure's own slice where it said so, else a copy. The slice the call was handed is then released after the call. This covers slices whose elements hold no view, such as `[i` and `[String`. A closure handing back a slice of views keeps the rule it had.

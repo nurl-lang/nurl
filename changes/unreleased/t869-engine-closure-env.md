@@ -1,3 +1,0 @@
-### Fixed
-
-- **The ownership engine (`--engine`) releases what a closure's environment owns** (AGORA-869, agora #919). Releasing a closure value runs the `% Drop` of each capture its environment holds by value: a `sink` parameter it took over (`mkf`'s `\ → { … h … }`), or a closure it captured in turn (`wrap`'s `\ → { ( c ) }`). A destructor that clears a shared payload under another handle's view is refused now, as in nurlc. A capture that is only a lend of what is still its lender's (a borrowed parameter) is not released. The closure's type says nothing of its captures, so they are typed from the body's own. An ordinary compile is unchanged.

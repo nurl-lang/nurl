@@ -1,3 +1,0 @@
-### Changed
-
-- **The formal proof's call lift records a callee's region indices on their own** (AGORA-937, stage 3). A call setting now has `isReg`, the region indices, whether or not the lift substitutes them. The lift's well-formedness condition says a binding is a region exactly at those indices, and that the lift substitutes a region exactly where it does not lift regions as bindings of their own. That replaces github#2151's combined form with an equivalent one, and lets "the statement names no region" keep its meaning when regions are lifted as bindings of their own, which is the next step. No rule, semantics or theorem statement changes. Compiler, runtime and NURL source are unchanged, so compile time and run time are byte-for-byte as before.

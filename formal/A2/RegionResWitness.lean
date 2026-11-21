@@ -14,7 +14,7 @@ argument held (`call_ok`, `callRes_holds`): the call substitutes those for
 the region (`CallH.res_props`).
 
 A view of the `sink` parameter's own buffer is still refused: `vw sink
-(Vec i) v → [i` returning `( view v )` is well-typed under no summary
+(Vec i) v → [i` returning `( view v )` is not well-typed under any summary
 (`vw_not_ok`), as no lendable parameter is lent, and neither end check
 admits a dependency on a `sink` parameter itself (`sink_dep_refused`:
 `lendable` is unchanged, and a parameter is no region).
@@ -346,8 +346,8 @@ def vw (ls rs : List (Nat × Kind)) : Fn where
   nvars    := 2
 
 /-- **A function returning a view of its `sink` parameter's own buffer is
-    well-typed under no summary**: the view is of no lendable parameter, and
-    the region is not what it views. -/
+    not well-typed under any summary**: the view is of no lendable
+    parameter, and the region is not what it views. -/
 theorem vw_not_ok (ls rs : List (Nat × Kind)) : ¬ FnOK P (vw ls rs) := by
   rintro ⟨_, _, _, _, _, _, hls, _, _, _, _, _, Δ, hb, _, ⟨E, hE, hl, _, _, hp, _, _⟩, _⟩
   obtain ⟨_, k, hk⟩ := view_res hb (fun E' hE' _ => by
