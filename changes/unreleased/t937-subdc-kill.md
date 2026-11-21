@@ -1,0 +1,3 @@
+### Changed
+
+- **The formal proof shows what the kinds-composed lift of a change through a region ends** (AGORA-937). This is groundwork for typing a call of a function that changes memory its argument's views reach. When the argument views the caller's `w` directly, composing kinds makes the caller end exactly what the callee ends. Copying the argument's kinds verbatim, as the lift does today, would also end the argument's own view. When the argument views something inside `w`, even composing does not make the two match, so that call must stay refused unless the kinds gain another level. The proof records this as a theorem. Nothing changes in nurlc.
