@@ -651,6 +651,10 @@ import A3
 #print axioms A2.LandedR.subDc
 #print axioms A2.LandedR.subDc_list
 #print axioms A2.LandedR.of_noPi
+-- ... and deriving a borrow commutes with it (composing kinds is associative)
+#print axioms A2.comp_assoc
+#print axioms A2.subDc_comp
+#print axioms A2.subDc_derive
 -- (A2/SliceCopyViewWitness.lean, AGORA-935): a copy of a slice of views, typed as A2 types a
 -- copy (a call, `callRes`), holds copies of its loans and nothing of the slice: releasing the
 -- temporary leaves it live, replacing what the views point into ends it, and then no read types
