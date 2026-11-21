@@ -5636,6 +5636,59 @@ theorem _root_.A2.entryWeaker_killE {e : Eff} {hv : Bool} {x : Var} {E : Entry}
 
 /-! #### AGORA-937 (item 3): what a change through a region does where the call places it -/
 
+/-- The substitution of a lifted dependency list, when every region it names
+    stands for nothing: the dependencies on no region, renamed. -/
+theorem flatMap_subD_rds (h : S.OK) {L : List Dep}
+    (hσ : ∀ d0 ∈ L, S.isPi d0.root = true → d0.kind.isName = false → S.σ d0.root = []) :
+    (rds S.ρ L).flatMap S.subD = rds S.ρ (L.filter (fun d => !S.isPi d.root)) := by
+  induction L with
+  | nil => rfl
+  | cons d0 L ih =>
+    have ih' := ih (fun d hd => hσ d (List.mem_cons_of_mem _ hd))
+    simp only [rds, List.map_cons, List.flatMap_cons, List.filter_cons] at ih' ⊢
+    have hsd : S.subD (d0.ren S.ρ) = if S.isPi d0.root then [] else [d0.ren S.ρ] := by
+      unfold subD
+      simp only [Dep.ren, inv_ρ h]
+      by_cases hp : S.isPi d0.root = true
+      · by_cases hk : d0.kind.isName = true
+        · simp [hp, hk]
+        · simp [hp, hk, hσ d0 (by simp) hp (by simpa using hk)]
+      · simp [hp]
+    rw [hsd, ih']
+    cases S.isPi d0.root <;> simp
+
+/-- What a lifted borrow's substituted path reaches in memory: its own
+    roots that are no region, renamed, when a region stands for nothing and
+    the lift adds no memory (`S.A` holds only names when `S.R = []`). -/
+theorem memDeps_subE_liftE_bor (h : S.OK) {x : Var} {E : Entry} (hmx : E.mode = .bor)
+    (hA : (E.fresh && E.ty != .int) = true ∨ S.R = [])
+    (hσ : ∀ d0 ∈ E.path, S.isPi d0.root = true → d0.kind.isName = false → S.σ d0.root = []) :
+    memDeps (S.subE (S.liftE x E)).path = rds S.ρ ((memDeps E.path).filter (fun d => !S.isPi d.root)) := by
+  have hpath : (S.liftE x E).path = rds S.ρ E.path ++ (if E.fresh && E.ty != .int then [] else S.A) := by
+    simp [liftE, hmx, Mode.ownSlot]
+  rw [subE_path, hpath, List.flatMap_append, flatMap_subD_rds h hσ]
+  have hAm : memDeps ((if E.fresh && E.ty != .int then [] else S.A).flatMap S.subD) = [] := by
+    split
+    · rfl
+    · rename_i hnf
+      have hR : S.R = [] := hA.resolve_left hnf
+      unfold memDeps
+      apply List.filter_eq_nil_iff.mpr
+      intro d hd
+      obtain ⟨a, ha, hda⟩ := List.mem_flatMap.mp hd
+      have hna : a.kind.isName = true := by
+        unfold RSetup.A at ha; rw [hR] at ha
+        simp only [allKinds, List.flatMap_nil, List.nil_append] at ha
+        exact h.N_name a ha
+      rw [S.mem_subD_name hna hda]; simp [hna]
+  unfold memDeps at hAm ⊢
+  rw [List.filter_append, hAm, List.append_nil]
+  simp only [rds, List.filter_map, List.filter_filter]
+  congr 1
+  apply List.filter_congr
+  intro d _
+  simp [Function.comp, Dep.ren, Bool.and_comm]
+
 theorem kill_killNames_comm (e : Eff) (hv : Bool) (x : Var) : ∀ (ds : List Dep) (Γ : Ctx),
     A2.kill e hv x (A2.killNames ds Γ) = A2.killNames ds (A2.kill e hv x Γ)
   | [], _ => rfl
