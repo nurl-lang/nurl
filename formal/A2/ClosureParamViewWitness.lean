@@ -215,7 +215,7 @@ theorem calm_code : Calm (sigCtx code) := by
   · rcases mem_regionP_vdeps hd with hd | ⟨rfl, _⟩
     · have hv0 : v = 0 := by simp [code] at hvl; omega
       subst hv0
-      simp [code, paramE, sl, Ty.hasFn, symNames, Entry.vdeps, Mode.ownSlot] at hd
+      simp [code, paramE, sl, Ty.hasFn, Entry.vdeps, Mode.ownSlot] at hd
     · rfl
   · unfold resMode at hm; split at hm <;> cases hm
   · simp [regionE] at hm
@@ -230,7 +230,7 @@ theorem sig_body : ∃ Δ, StmtT P .none (sigCtx sig) [] sig.body Δ ∧
   obtain ⟨Δ, ht, hcΔ, h1'⟩ := thruL_typed (Q := P) hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl (fun h => by simp [intE] at h)
     (by decide) (by decide) (by decide) (by simp [G, A2.setE, sigCtx, isRegionIdx, sig])
     (by simp [G, A2.setE, sigCtx, isRegionIdx, sig]) (by simp [G, A2.setE, sigCtx, isRegionIdx, sig])
-    (by simp [G, A2.setE, sigCtx, isRegionIdx, sig, R0, resMode])
+    (by simp [G, A2.setE, sigCtx, sig, R0, resMode])
   refine ⟨_, StmtT.letv (P := P) (ξ := .none) (x := 5) (Γ := sigCtx sig) (Γ1 := sigCtx sig) (F := [])
     (E := intE) rfl (by simp [sigCtx, isRegionIdx, sig]) (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
     (fun h => by simp [intE] at h), hcΔ.exitScope 5, ?_⟩
@@ -241,8 +241,8 @@ theorem code_body : ∃ Δ, StmtT P .none (sigCtx code) [] code.body Δ ∧
     Δ 1 = some { intE with mode := R0.mode } := by
   apply body_typed
   exact storeE_typed (Q := P) calm_code (by simp [sigCtx, isRegionIdx, code]) (by simp [sigCtx, isRegionIdx, code])
-    (by simp [sigCtx, isRegionIdx, code]) (by simp [sigCtx, isRegionIdx, code, paramE, Es, sl, Ty.hasFn, regionP, regioned, Ty.holdsView])
-    (by simp [sigCtx, isRegionIdx, code, R0, resMode])
+    (by simp [sigCtx, isRegionIdx, code]) (by simp [sigCtx, code, paramE, Es, sl, Ty.hasFn, regionP, regioned, Ty.holdsView])
+    (by simp [sigCtx, code, R0, resMode])
 
 theorem code_ok : FnOK P code := by
   obtain ⟨Δ, hb, hfl, hr⟩ := code_body

@@ -111,7 +111,7 @@ theorem CtxRel.weaker {Γ Γ' : Ctx} (hw : Weaker Γ Γ') : CtxRel Γ Γ' := by
 /-- A binding with an entry other than a borrowed parameter's keeps every
     borrowed parameter anchored. -/
 theorem RootbAnchR.setE {Γ : Ctx} {F : List Var} (h : RootbAnchR Γ F) {x : Var} {E : Entry}
-    (hE : E.mode ≠ .rootb) (hEr : E.mode ≠ .region) (hx : ∀ Ex, Γ x = some Ex → Ex.mode ≠ .region) :
+    (hE : E.mode ≠ .rootb) (hx : ∀ Ex, Γ x = some Ex → Ex.mode ≠ .region) :
     RootbAnchR (A2.setE Γ x E) F := fun p Ep hp hm => by
   by_cases hpx : p = x
   · subst hpx; simp only [A2.setE, upd_same, Option.some.injEq] at hp; subst hp; exact absurd hm hE
@@ -161,7 +161,7 @@ theorem CtxRel.bind {Γ Γ1 Δ : Ctx} {F : List Var} {x : Var} {E : Entry}
     (hpin : NoPin Δ x) : CtxRel Γ (A2.exitScope x Δ) := by
   have hx1 : ∀ Ex, Γ1 x = some Ex → Ex.mode ≠ .region := fun Ex h => by
     have := h1.dom x; rw [hx, h] at this; cases this
-  have hanch1 : RootbAnchR (A2.setE Γ1 x E) F := (h1.anchR hanch).setE hE hEr hx1
+  have hanch1 : RootbAnchR (A2.setE Γ1 x E) F := (h1.anchR hanch).setE hE hx1
   have h2 := hk hanch1
   -- AGORA-937: the binding the statement opens is no region, before and after its body
   have hxr : RegionSpared Δ .replace false x := fun ⟨Ex, hEx, hr⟩ => by

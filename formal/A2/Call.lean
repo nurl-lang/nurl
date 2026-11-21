@@ -2783,7 +2783,7 @@ theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).
         have hheld : (regionP fn v (paramE fn.params (.inp, t))).held =
             (if regioned (PMode.inp, t) then [⟨fn.nvars + v, .view⟩] else []) ++
               (paramE fn.params (.inp, t)).held := by
-          unfold regionP; rw [dif_pos hvl, hp]; split <;> rfl
+          unfold regionP; simp only [hvl, ↓reduceDIte]; rw [hp]; split <;> rfl
         refine ⟨?_, by rw [regionP_path]; rfl, _, ?_, by rw [hheld, regionP_ty]; rfl⟩
         · rw [regionP_ty]
           show t = (callPe Γ fn.params args v).ty

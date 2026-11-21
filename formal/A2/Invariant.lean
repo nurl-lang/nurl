@@ -1015,7 +1015,7 @@ theorem RootbAnchR.toAnch {Γ : Ctx} {F : List Var} (h : RootbAnchR Γ F)
 theorem AnchoredIn.of_regions {Γ Γ' : Ctx} {E : Entry} {F : List Var} (h : AnchoredIn Γ E F)
     (hreg : ∀ v Er, Γ v = some Er → Er.mode = .region → ∃ Er', Γ' v = some Er' ∧ Er'.mode = .region) :
     AnchoredIn Γ' E F := fun d hd hb =>
-  (h d hd hb).imp id fun ⟨hk, Er, hEr, hr⟩ => ⟨hk, hreg _ _ hEr hr⟩
+  (h d hd hb).imp id fun ⟨hk, _, hEr, hr⟩ => ⟨hk, hreg _ _ hEr hr⟩
 
 
 /-- A2-drop.3d, Agora #610: what the invariant asks of a block's destructor

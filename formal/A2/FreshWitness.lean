@@ -140,7 +140,7 @@ theorem calm_dtor : Calm (sigCtx dtor) := by
   · rcases mem_regionP_vdeps hd with hd | ⟨rfl, _⟩
     · have hv0 : v = 0 := by simp [dtor] at hvl; omega
       subst hv0
-      simp [dtor, paramE, DTV, TV, Ty.hasFn, symNames, Entry.vdeps, Mode.ownSlot] at hd
+      simp [dtor, paramE, DTV, TV, Ty.hasFn, Entry.vdeps, Mode.ownSlot] at hd
     · rfl
   · unfold resMode at hm; split at hm <;> cases hm
   · simp [regionE] at hm
@@ -154,7 +154,7 @@ theorem dtor_body : ∃ Δ, StmtT P .none (sigCtx dtor) [] dtor.body Δ ∧
   obtain ⟨Δ, ht, hcΔ, h1⟩ := thruL_typed (Q := P) hG (n := 5) (En := intE) (by simp [G, A2.setE]) rfl rfl (fun h => by simp [intE] at h)
     (by decide) (by decide) (by decide) (by simp [G, A2.setE, sigCtx, isRegionIdx, dtor])
     (by simp [G, A2.setE, sigCtx, isRegionIdx, dtor]) (by simp [G, A2.setE, sigCtx, isRegionIdx, dtor])
-    (by simp [G, A2.setE, sigCtx, isRegionIdx, dtor, R0, resMode])
+    (by simp [G, A2.setE, sigCtx, dtor, R0, resMode])
   refine ⟨_, StmtT.letv (P := P) (ξ := .none) (x := 5) (Γ := sigCtx dtor) (Γ1 := sigCtx dtor) (F := [])
     (E := intE) rfl (by simp [sigCtx, isRegionIdx, dtor]) (by simp) (RhsT.expr ExprT.lit) ht.ofNone (hcΔ.endOK _)
     (fun h => by simp [intE] at h), hcΔ.exitScope 5, ?_⟩

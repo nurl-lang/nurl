@@ -250,7 +250,7 @@ theorem calm_dtor : Calm (sigCtx dtor) := by
   · rcases mem_regionP_vdeps hd with hd | ⟨rfl, _⟩
     · have hv0 : v = 0 := by simp [dtor] at hvl; omega
       subst hv0
-      simp [dtor, paramE, DTV, TV, Ty.hasFn, symNames, Entry.vdeps, Mode.ownSlot] at hd
+      simp [dtor, paramE, DTV, TV, Ty.hasFn, Entry.vdeps, Mode.ownSlot] at hd
     · rfl
   · unfold resMode at hm; split at hm <;> cases hm
   · simp [regionE] at hm
@@ -260,7 +260,7 @@ theorem dtor_body : ∃ Δ, StmtT P .none (sigCtx dtor) [] dtor.body Δ ∧
     Δ 1 = some { intE with mode := R0.mode } := by
   apply body_typed
   exact storeV_typed (Q := P) calm_dtor (by simp [sigCtx, isRegionIdx, dtor]) (by simp [sigCtx, isRegionIdx, dtor]) (by simp [sigCtx, isRegionIdx, dtor])
-    (by simp [sigCtx, isRegionIdx, dtor]) (by simp [sigCtx, isRegionIdx, dtor]) (by simp [sigCtx, isRegionIdx, dtor, R0, resMode])
+    (by simp [sigCtx, isRegionIdx, dtor]) (by simp [sigCtx, isRegionIdx, dtor]) (by simp [sigCtx, dtor, R0, resMode])
 
 theorem dtor_fnok : FnOK P dtor := by
   obtain ⟨Δ, hb, hfl, hr⟩ := dtor_body

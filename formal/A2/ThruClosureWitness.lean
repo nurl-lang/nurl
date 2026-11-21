@@ -163,7 +163,7 @@ theorem calm_code : Calm (sigCtx code) := by
   · rcases mem_regionP_vdeps hd with hd | ⟨rfl, _⟩
     · have hv0 : v = 0 := by simp [code] at hvl; omega
       subst hv0
-      simp [code, paramE, symNames, CT, Ty.hasFn, Entry.vdeps, Mode.ownSlot] at hd
+      simp [code, paramE, Ty.hasFn, Entry.vdeps, Mode.ownSlot] at hd
     · rfl
   · unfold resMode at hm; split at hm <;> cases hm
   · simp [regionE] at hm

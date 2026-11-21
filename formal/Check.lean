@@ -644,6 +644,15 @@ import A3
 #print axioms A2.DropInWitness.set_keeps_view
 #print axioms A2.DropInWitness.drop_would_end
 #print axioms A2.DropInWitness.struct_root_drops
+-- (AGORA-937 item 2): a lent parameter holding views has a region; typing anchors it through
+-- the region's view (RootbAnchR), and frames, which bind no region, keep RootbAnch
+#print axioms A2.killE_rootbR
+#print axioms A2.RootbAnchR.toAnch
+#print axioms A2.sigCtx_anch
+#print axioms A2.CallH.canon_param
+#print axioms A2.CallH.sig_abs
+#print axioms A2.RSetup.hits_lift
+#print axioms A2.StmtT.ctxRel
 -- (A2/RegionMem.lean, AGORA-937 stage 3b): a region of buffer addresses reaches the node at one of
 -- them (RootNode's view case generalised); an argument's valid views are valid through its region,
 -- each address reaches one node, and derived borrows compose kinds through a region as through a root

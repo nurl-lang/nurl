@@ -3828,7 +3828,7 @@ theorem mutNames_canon_sub (h : S.OK) (hab : S.AbsOK Γa) {F : List Var} {ps : L
         rcases List.mem_append.mp hdv with hdv | hdv
         · -- AGORA-937 (item 2): a view of a region is no name
           have hk := (hR d0 hdv).1
-          rw [hk] at hdn; simp [Kind.isName, Kind.bound] at hdn
+          rw [hk] at hdn; simp [Kind.isName] at hdn
         · split at hdv
           · exact hdv
           · cases hdv
