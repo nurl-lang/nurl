@@ -646,6 +646,11 @@ import A3
 -- whose hypothesis holds of an argument's valid views at the call's entry
 #print axioms A2.RegionLanded.landed
 #print axioms A2.ViewsOK.region_landed
+-- ... and the kinds-composed substitution (`subDc`): with each region read as its addresses, what
+-- lands through a dependency, or through one of a list, lands through its substitution
+#print axioms A2.LandedR.subDc
+#print axioms A2.LandedR.subDc_list
+#print axioms A2.LandedR.of_noPi
 -- (A2/SliceCopyViewWitness.lean, AGORA-935): a copy of a slice of views, typed as A2 types a
 -- copy (a call, `callRes`), holds copies of its loans and nothing of the slice: releasing the
 -- temporary leaves it live, replacing what the views point into ends it, and then no read types

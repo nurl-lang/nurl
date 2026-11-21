@@ -25,7 +25,10 @@ This file proves the facts the call's entry needs:
   its hypothesis at the call's entry). So the memory invariant can be stated
   of the context with each region dependency `⟨π p, k⟩` replaced by
   `⟨r, comp a k⟩` for what the argument holds, `⟨r, a⟩`: the caller's roots,
-  which it already speaks of.
+  which it already speaks of;
+* the kinds-composed substitution `subDc` and `LandedR.subDc`/`_list`: with
+  each region read as its addresses, what lands through a dependency lands
+  through its substitution.
 
 Nothing here is used by a typing rule yet, and no theorem statement
 changes. -/
@@ -138,5 +141,69 @@ theorem ViewsOK.region_landed {m : Mem} (hh : HeapOK m) {τ : Ty} {T : Val} {H :
   have := RegionNode.unique hh hn0 (hL.inMem.dataAt rfl)
   subst this
   exact ⟨dep, hdep, hL⟩
+
+/-! ### The kinds-composed substitution
+
+Where a call places the body, the invariant is stated of the context in
+which each dependency on a region is replaced by what the region stands for
+(`σ`), each composed with the dependency's kind. Today's lift (`subD`) copies
+the argument's kinds verbatim and relies on `RSetup.A` covering every kind
+on the arguments' roots; stage 3 drops that for roots reached through a
+region, so the kinds must compose. -/
+
+/-- The kinds-composed substitution of a dependency. One on a region
+    (`isPi`) becomes what the region stands for, each dependency composed
+    with this one's kind. A name on a region is dropped, since no region is
+    changed by name. Any other dependency is kept. -/
+def subDc (isPi : Var → Bool) (σ : Var → List Dep) (d : Dep) : List Dep :=
+  if isPi d.root then
+    (if d.kind.isName then [] else (σ d.root).map fun e => ⟨e.root, A2.comp e.kind d.kind⟩)
+  else [d]
+
+/-- Where a dependency lands with each region read as its addresses
+    (`reg`): through the region (`RegionLanded`), or as any dependency does. -/
+def LandedR (m : Mem) (isPi : Var → Bool) (reg : Var → Nat → Prop) (dep : Dep) (n : Val) : Prop :=
+  if isPi dep.root then RegionLanded m (reg dep.root) dep.kind n else Landed m dep n
+
+/-- **What lands through a dependency, regions read as their addresses,
+    lands through its kinds-composed substitution**, where each region's
+    nodes land through what it stands for (`RegionLanded.landed`). -/
+theorem LandedR.subDc {m : Mem} {isPi : Var → Bool} {reg : Var → Nat → Prop} {σ : Var → List Dep}
+    (hreg : ∀ v, isPi v = true → ∀ d n0, reg v d → DataAt m d n0 → ∃ e ∈ σ v, Landed m e n0)
+    {dep : Dep} {n : Val} (h : LandedR m isPi reg dep n) :
+    ∃ e ∈ A2.subDc isPi σ dep, Landed m e n := by
+  unfold LandedR at h
+  unfold A2.subDc
+  by_cases hp : isPi dep.root = true
+  · simp only [hp, ↓reduceIte] at h ⊢
+    have hnm : dep.kind.isName = false := by
+      obtain ⟨n0, -, hl⟩ := h; exact lands_notName hl
+    rw [hnm]
+    obtain ⟨e, he, hL⟩ := RegionLanded.landed (hreg dep.root hp) hnm h
+    exact ⟨⟨e.root, A2.comp e.kind dep.kind⟩, List.mem_map.mpr ⟨e, he, rfl⟩, hL⟩
+  · simp only [Bool.not_eq_true] at hp
+    simp only [hp, Bool.false_eq_true, ↓reduceIte] at h ⊢
+    exact ⟨dep, List.mem_singleton_self _, h⟩
+
+/-- ... and so for a list of dependencies, as `ValOK` and `ViewsOK` ask:
+    some dependency of the list validates the value, and then some
+    dependency of its substitution does. -/
+theorem LandedR.subDc_list {m : Mem} {isPi : Var → Bool} {reg : Var → Nat → Prop} {σ : Var → List Dep}
+    (hreg : ∀ v, isPi v = true → ∀ d n0, reg v d → DataAt m d n0 → ∃ e ∈ σ v, Landed m e n0)
+    {P : List Dep} {n : Val} (h : ∃ dep ∈ P, LandedR m isPi reg dep n) :
+    ∃ e ∈ P.flatMap (A2.subDc isPi σ), Landed m e n := by
+  obtain ⟨dep, hd, hL⟩ := h
+  obtain ⟨e, he, hLe⟩ := hL.subDc hreg
+  exact ⟨e, List.mem_flatMap.mpr ⟨dep, hd, he⟩, hLe⟩
+
+/-- No region: the substitution changes nothing. -/
+theorem subDc_noPi {isPi : Var → Bool} {σ : Var → List Dep} {d : Dep} (h : isPi d.root = false) :
+    A2.subDc isPi σ d = [d] := by
+  simp [A2.subDc, h]
+
+/-- ... nor what is read as landing. -/
+theorem LandedR.of_noPi {m : Mem} {isPi : Var → Bool} {reg : Var → Nat → Prop} {dep : Dep} {n : Val}
+    (h : isPi dep.root = false) : LandedR m isPi reg dep n ↔ Landed m dep n := by
+  simp [LandedR, h]
 
 end A2

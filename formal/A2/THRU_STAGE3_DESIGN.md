@@ -134,6 +134,12 @@ Names never had this problem: a name dependency is lifted as itself
   and `Step` need no instrumentation. 3c then carries the invariant over
   that substituted context while the typing keeps the ghost binding. That
   route is tried first; the ghost store is the fallback.
+- **3c, part 1 (done: `subDc`, `LandedR.subDc`/`_list`).** The
+  kinds-composed substitution, and its transfer: with each region read as
+  its addresses (`LandedR`), what lands through a dependency, or through one
+  of a list as `ValOK`/`ViewsOK` ask, lands through its substitution.
+  This is the per-dependency step of carrying `MInv` over the substituted
+  context.
 - **3b, part 3 (fallback).** The ghost store: `RegionSnap`, building on `Region.lean`'s
   `Val.viewsOf`/`regionSnap`; `StepI`; the erasure lemma; and `MInvI`
   extending `MInv` with the region clause. Existing `MInv` lemmas stay
