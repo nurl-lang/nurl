@@ -131,7 +131,7 @@ theorem takeB_typed {P : Prog} {Γ Δ : Ctx} {F : List Var} {x y : Var} {i : Exp
       (t.holdsDtor = true → y ∈ s.movedFirst ∧ y ∉ s.assigns) := by
   generalize hst : Stmt.takeB x i y s = st at h
   induction h with
-  | takeB _ _ _ hx _ _ hty _ _ _ _ _ hdk _ _ _ => cases hst; exact ⟨_, _, hx, hty, hdk⟩
+  | takeB _ _ _ hx _ _ hty _ _ _ _ hdk _ _ _ => cases hst; exact ⟨_, _, hx, hty, hdk⟩
   | takeBV _ _ _ hx _ _ hty _ _ _ _ _ _ hdk _ _ _ => cases hst; exact ⟨_, _, hx, hty, hdk⟩
   | @sub _ Γa _ _ _ _ _ hw _ _ ih =>
     obtain ⟨E', t, hx', hty, hdk⟩ := ih hst
@@ -504,7 +504,7 @@ theorem edit_drops_dtor_free {P : Prog} {Γ Δ : Ctx} {F : List Var} {b : Bool} 
     ∃ (E : Entry) (t : Ty), Γ x = some E ∧ E.ty = .vec t ∧ t.dtorFree = true := by
   generalize hst : Stmt.edit b x op = st at h
   induction h with
-  | editB hx _ _ hty _ _ _ _ _ _ _ _ hdf => cases hst; exact ⟨_, _, hx, hty, hdf hd⟩
+  | editB hx _ _ hty _ _ _ _ _ _ _ hdf => cases hst; exact ⟨_, _, hx, hty, hdf hd⟩
   | editBV hx _ _ hty _ _ _ _ _ _ _ _ _ _ hdf => cases hst; exact ⟨_, _, hx, hty, hdf hd⟩
   | @sub _ Γa _ _ _ _ _ hw _ _ ih =>
     obtain ⟨E', t, hx', hty, hdf⟩ := ih hst

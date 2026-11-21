@@ -783,6 +783,20 @@ theorem NameWF.unpair {Γ : Ctx} (hn : NameWF Γ) {y x z : Var} {E : Entry} {a b
     exact hn3
 
 
+/-- `takeB`'s truncation alone, before `y` is bound (AGORA-937, item 3). -/
+theorem takeB_nameWF0 {Γ : Ctx} (hn : NameWF Γ) {x : Var} {i : Expr} {Ex : Entry}
+    (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) :
+    NameWF (A2.setE (killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) := by
+    obtain ⟨E', hE', hE'c⟩ := killNames_entry (thruDeps (.trunc i) Γ Ex.ty Ex.path) hx
+    refine NameWF.setE (hn.killNames _) (fun Ex' h => ?_) (fun Ex' h hnm => ?_) (fun hl' hni => ?_)
+    · obtain rfl : E' = Ex' := Option.some.inj (hE'.symm.trans h)
+      rcases hE'c with rfl | rfl <;> exact ⟨rfl, rfl⟩
+    · obtain rfl : E' = Ex' := Option.some.inj (hE'.symm.trans h)
+      have hos := hnm.2.2.1
+      rcases hE'c with rfl | rfl <;> (rw [hmx] at hos; cases hos)
+    · exact (hn x Ex hx hl hni).keeps ((Keeps.refl Γ []).killNames (thruDeps (.trunc i) Γ Ex.ty Ex.path))
+        (fun _ _ _ h => by cases h)
+
 /-- AGORA-889: the context a move-out through a borrow gives its body keeps
     what it holds by name valid. -/
 theorem takeB_nameWF {Γ : Ctx} (hn : NameWF Γ) {x y : Var} {i : Expr} {Ex : Entry} {t : Ty}
@@ -953,7 +967,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       · exact hN d (List.mem_append_left _ hd)
       · exact hN d (List.mem_append_right _ hd)
       · exact hD d (ownHeld_sub _ _ _ hd)
-  | @editB _ Γ Γ1 F x op Ex Ex1 t D _ hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
+  | @editB _ Γ Γ1 F x op Ex Ex1 t D _ hx hmx _ _ _ _ harg hyx hx1 hl1 _ =>
     intro _ hn
     have hn1 : NameWF Γ1 := harg.names hn
     have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
@@ -967,7 +981,7 @@ theorem StmtT.names {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : St
       rcases hE'c with rfl | rfl <;> (rw [hm1] at hos; cases hos)
     · exact (hn1 x Ex1 hx1 hl hni).keeps ((Keeps.refl Γ1 []).killNames (thruDeps op Γ1 Ex.ty Ex1.path))
         (fun _ _ _ h => by cases h)
-  | @takeB _ Γ Δ F x y i k Ex t hks hy _ hx hmx hl hty _ _ _ _ _ _ _ _ ih =>
+  | @takeB _ Γ Δ F x y i k Ex t hks hy _ hx hmx hl hty _ _ _ _ _ _ _ ih =>
     -- AGORA-889: `editB`'s truncation, then `y` bound as `letv` binds
     exact fun _ hn => (ih hks (takeB_nameWF hn hy hx hmx hl hty)).exitScope y
   | @takeBV _ Γ Δ F x y i k Ex t hks hy _ hx hmx hl hty _ _ _ _ _ _ _ _ _ ih =>

@@ -1224,7 +1224,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     · exact ⟨E1, h1, hm1.trans hw0.mode⟩
     · obtain ⟨E2, h2, hw2⟩ := ho.get h1
       exact ⟨E2, h2, hw2.mode.trans (hm1.trans hw0.mode)⟩
-  | @editB _ Γ Γ1 F x op Ex Ex1 t D _ _ _ _ _ _ hxF harg _ _ _ _ _ =>
+  | @editB _ Γ Γ1 F x op Ex Ex1 t D _ _ _ _ _ _ hxF harg _ _ _ _ =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     obtain ⟨E1, h1, hm1⟩ := harg.domMode.get h
@@ -1238,7 +1238,7 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     obtain ⟨E2, h2, hE2⟩ := killHv_entry (thruKills op Γ1 Ex.ty Ex1.path) h1
     exact ⟨_, by simp only [A2.setE, upd_ne _ _ hrx]; exact holdOn_some h2,
       by split <;> (rcases hE2 with rfl | rfl <;> exact hm1)⟩
-  | @takeB _ Γ Δ F x y i k Ex t _ _ hyF _ _ _ _ _ hxF _ _ _ _ _ _ ih =>
+  | @takeB _ Γ Δ F x y i k Ex t _ _ hyF _ _ _ _ _ hxF _ _ _ _ _ ih =>
     intro r hr E h
     have hrx : r ≠ x := fun e => hxF (e ▸ hr)
     have hry : r ≠ y := fun e => hyF (e ▸ hr)
@@ -1272,6 +1272,23 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     rw [h] at h0; cases h0
     exact ⟨E', hE', hm⟩
   | block _ ih => exact ih
+/-- `takeB`'s truncation alone, before `y` is bound (AGORA-937, item 3). -/
+theorem takeB_ctxWF0 {Γ : Ctx} (h : CtxWF Γ) {x : Var} {i : Expr} {Ex : Entry}
+    (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) :
+    CtxWF (A2.setE (killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) := by
+    have hk := h.killNames (thruDeps (.trunc i) Γ Ex.ty Ex.path)
+    obtain ⟨E', hE', hE'c⟩ := killNames_entry (thruDeps (.trunc i) Γ Ex.ty Ex.path) hx
+    have hroot : ∀ r, (∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) →
+        r ≠ x ∧ ∃ E2, killNames (thruDeps (.trunc i) Γ Ex.ty Ex.path) Γ r = some E2 ∧ E2.mode.isRoot = true := by
+      rintro r ⟨Er, hEr, hro⟩
+      have hrx : r ≠ x := fun e => by subst e; rw [hx] at hEr; cases hEr; rw [hmx] at hro; cases hro
+      obtain ⟨E2, h2, hE2⟩ := killNames_entry (thruDeps (.trunc i) Γ Ex.ty Ex.path) hEr
+      exact ⟨hrx, E2, h2, by rcases hE2 with rfl | rfl <;> exact hro⟩
+    exact hk.setE ⟨E', hE', fun hro => by rcases hE'c with rfl | rfl <;> exact hro⟩
+      (fun _ hn r hr => Or.inr (hroot r (h x Ex hx hl hn r hr)))
+      (fun _ hos => by rw [hmx] at hos; cases hos)
+      (fun ha => h.arm x Ex hx ha) (fun hd => h.view x Ex hx hd)
+
 /-- AGORA-889: the context a move-out through a borrow gives its body:
     `editB`'s truncation, then `y` bound to what moved out. -/
 theorem takeB_ctxWF {Γ : Ctx} (h : CtxWF Γ) {x y : Var} {i : Expr} {Ex : Entry} {t : Ty}
@@ -1541,7 +1558,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     rcases ho with rfl | ho
     · exact ‹CtxWF _ → CtxWF _› hw.wf
     · exact ho.wf
-  | @editB _ Γ Γ1 F x op Ex Ex1 t D _ hx hmx _ _ _ _ harg hyx hx1 hl1 _ _ =>
+  | @editB _ Γ Γ1 F x op Ex Ex1 t D _ hx hmx _ _ _ _ harg hyx hx1 hl1 _ =>
     intro h
     have hw1 := harg.wf h
     have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
@@ -1555,7 +1572,7 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
     have hrx : r ≠ x := fun e => by subst e; rw [hx1] at hEr; cases hEr; rw [hm1] at hro; cases hro
     obtain ⟨E2, h2, hE2⟩ := killNames_entry (thruDeps op Γ1 Ex.ty Ex1.path) hEr
     exact ⟨hrx, E2, h2, by rcases hE2 with rfl | rfl <;> exact hro⟩
-  | @takeB _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ _ _ _ _ _ hpx ih =>
+  | @takeB _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ _ _ _ _ hpx ih =>
     -- AGORA-889: `editB`'s truncation, then `y` bound as `letv` binds
     exact fun h => (ih (takeB_ctxWF h hy hx hmx hl hty)).exitScope y hpx.2.2
   | @takeBV _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ _ _ _ _ _ _ hpx ih =>

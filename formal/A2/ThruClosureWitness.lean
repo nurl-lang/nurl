@@ -246,8 +246,8 @@ theorem thru_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (
     (Ex := Eb) (Ex1 := Eb) (t := .int) (D := []) (by simp [G5, A2.setE]) rfl rfl rfl rfl (by simp)
     (EditArg.push (Ey := En) (by simp [G5, A2.setE, hn4, hG4n]) hnl hnt PushArg.int)
     (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hn4)
-    (by simp [G5, A2.setE]) rfl (by simp [Eb, memDeps, Kind.isName])
-    (thru_ok hG5 (E := Eloc) (by simp [G5, A2.setE, hG42]) rfl rfl hn2)
+    (by simp [G5, A2.setE]) rfl
+    (thru_ok hG5 (E := Eloc) (by simp [G5, A2.setE, hG42]) rfl rfl hn2).toR
     (fun h => by simp [Edit.drops] at h)
   have hD5 : Calm (A2.setE (A2.killThru (.push n) (Ty.vec .int) [⟨2, .inner⟩] G5) 4 Eb) :=
     (hG5.killThru _ _ _).setE (by simp [Eb])

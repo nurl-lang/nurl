@@ -1618,6 +1618,27 @@ theorem thruDeps_bound {op : Edit} {Γ : Ctx} {tx : Ty} {P : List Dep} {d : Dep}
   obtain ⟨d0, _, rfl⟩ := mem_thruDeps.mp hd
   exact ⟨Edit.effAt_ne_replace _ _ _ _, Edit.effAt_ne_none _ _ _ _, Edit.effAt_le_drop _ _ _ _, rfl⟩
 
+/-- AGORA-937 (item 3): a root a change may reach: a live binding, or a
+    region (`regionE`, never live: it has no slot of its own). -/
+def ThruLive (Er : Entry) : Prop := Er.live = true ∨ Er.mode = .region
+
+/-- ... that allows the change's effect there: an owner (`canDo`), or a
+    region, whose effect ends no view of it. A lent parameter's view of its
+    region (`regionP`) is always live (`MInv.rootbLive`), so only a change
+    strictly inside the region's nodes (`.dropIn`, `Entry.rvec`) reaches
+    one. -/
+def ThruCanDo (Er : Entry) (e : Eff) : Prop :=
+  canDo Er.mode e ∨ (Er.mode = .region ∧ e.kills false .view = false)
+
+theorem ThruLive.live {Er : Entry} (h : ThruLive Er) (hnr : Er.mode ≠ .region) : Er.live = true :=
+  h.resolve_right hnr
+
+theorem ThruCanDo.toCanDo {Er : Entry} {e : Eff} (h : ThruCanDo Er e) (hnr : Er.mode ≠ .region) :
+    canDo Er.mode e :=
+  h.resolve_right fun ⟨hr, _⟩ => hnr hr
+
+theorem ThruCanDo.of_canDo {Er : Entry} {e : Eff} (h : canDo Er.mode e) : ThruCanDo Er e := Or.inl h
+
 /-- What a change through a borrow of type `tx`, whose path is `P`, asks of
     each root `d.root` it reaches in memory, in the context after its
     argument is handed over: the root is not lent out, is not the value
@@ -1634,6 +1655,35 @@ def ThruOK (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (P : List Dep) : Pro
 
 theorem ThruOK.noShare {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
     (h : ThruOK Γ1 F op tx P) : ∀ d ∈ memDeps P, d.kind ≠ .share := fun d hd => by
+  obtain ⟨_, _, _, _, _, _, _, h⟩ := h d hd
+  exact h
+
+/-- AGORA-937 (item 3): `ThruOK` where a root may also be a region
+    (`ThruLive`, `ThruCanDo`): what a change through a borrow that stores no
+    view asks (`StmtT.editB`, `StmtT.takeB`). A change storing a view
+    (`editBV`) adds what it stores to each root's held (`holdThru`), which a
+    region has not, so it keeps `ThruOK`. -/
+def ThruOKR (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (P : List Dep) : Prop :=
+  ∀ d ∈ memDeps P, d.root ∉ F ∧ (∀ y, op.stored = some y → d.root ≠ y) ∧
+    ∃ Er, Γ1 d.root = some Er ∧ ThruLive Er ∧
+      ThruCanDo Er (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) ∧
+      DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) false d.root ∧
+      d.kind ≠ .share
+
+theorem ThruOK.toR {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
+    (h : ThruOK Γ1 F op tx P) : ThruOKR Γ1 F op tx P := fun d hd => by
+  obtain ⟨h1, h2, Er, hEr, hl, hc, hds, hsh⟩ := h d hd
+  exact ⟨h1, h2, Er, hEr, Or.inl hl, Or.inl hc, hds, hsh⟩
+
+/-- With no region bound, the two agree. -/
+theorem ThruOKR.toOK {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
+    (h : ThruOKR Γ1 F op tx P) (hnr : ∀ v E, Γ1 v = some E → E.mode ≠ .region) : ThruOK Γ1 F op tx P :=
+  fun d hd => by
+    obtain ⟨h1, h2, Er, hEr, hl, hc, hds, hsh⟩ := h d hd
+    exact ⟨h1, h2, Er, hEr, hl.live (hnr _ _ hEr), hc.toCanDo (hnr _ _ hEr), hds, hsh⟩
+
+theorem ThruOKR.noShare {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
+    (h : ThruOKR Γ1 F op tx P) : ∀ d ∈ memDeps P, d.kind ≠ .share := fun d hd => by
   obtain ⟨_, _, _, _, _, _, _, h⟩ := h d hd
   exact h
 

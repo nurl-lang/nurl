@@ -148,8 +148,8 @@ theorem main12_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main12 Δ := by
     (s := .letd 7 0 (.var 6) .skip) (Ex := Eb) (t := DT) rfl
     (by simp [K10, K9, K8, K7, K6, K5, K4, K3, K2, K1, A2.setE, upd, A2.kill]) (by simp) hK105 (by rw [hEbe])
     (by rw [hEbe]) (by rw [hEbe]) (by simp [DT, T, Ty.holdsView]) (by simp)
-    (ExprT.dec (ExprT.len hK105 (by rw [hEbe]) (by rw [hEbe]))) (by rw [hEbe]; simp [memDeps, Kind.isName])
-    hthru (fun _ => ⟨by simp [Stmt.movedFirst], by simp [Stmt.assigns]⟩) hlet
+    (ExprT.dec (ExprT.len hK105 (by rw [hEbe]) (by rw [hEbe])))
+    hthru.toR (fun _ => ⟨by simp [Stmt.movedFirst], by simp [Stmt.assigns]⟩) hlet
     (((hKv.exitScope 7)).endOK _)
   have hK11 : NoRootb (A2.exitScope 6 (A2.exitScope 7 (A2.setE Ku 7 EZ))) :=
     (hKv.exitScope 7).exitScope 6

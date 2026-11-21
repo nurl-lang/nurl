@@ -81,8 +81,8 @@ theorem thruL_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} 
     (op := .push n) (Ex := EbF) (Ex1 := EbF) (t := .int) (D := []) (by simp [G5, A2.setE]) rfl rfl rfl rfl
     (by simp) (EditArg.push (Ey := En) (by simp [G5, A2.setE, hn4, hG4n]) hnl hnt PushArg.int)
     (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hn4)
-    (by simp [G5, A2.setE]) rfl (by simp [EbF, memDeps, Kind.isName])
-    (thru_ok hG5 (E := Eloc) (by simp [G5, A2.setE, hG42]) rfl rfl hn2)
+    (by simp [G5, A2.setE]) rfl
+    (thru_ok hG5 (E := Eloc) (by simp [G5, A2.setE, hG42]) rfl rfl hn2).toR
     (fun h => by simp [Edit.drops] at h) (fun _ => rfl)
   have hD5 : Calm (A2.setE (A2.killThru (.push n) (Ty.vec .int) [⟨2, .inner⟩] G5) 4 EbF) :=
     (hG5.killThru _ _ _).setE (by simp [EbF])
@@ -258,7 +258,7 @@ theorem edit_false_fresh' {Q : Prog} {ξ : Exits} {Γ Δ : Ctx} {F : List Var} {
     obtain ⟨hf, hm, hl, hty⟩ := ih hs hx0
     have W := hwE Ex Ex0 hx hx0
     exact ⟨(W.fresh hl hty hm hf).1, W.mode ▸ hm, (W.live hl).1, W.ty ▸ hty⟩
-  | editB hx' hm hl hty _ _ _ _ _ _ _ _ _ hbf =>
+  | editB hx' hm hl hty _ _ _ _ _ _ _ _ hbf =>
     intro x op hs Ex hx; cases hs; rw [hx] at hx'; cases hx'
     exact ⟨hbf rfl, hm, hl, by rw [hty]; simp⟩
   -- (Agora #916: ... or through one storing a value the frame's own)

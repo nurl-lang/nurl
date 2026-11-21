@@ -141,7 +141,7 @@ theorem pop_typed {ξ : Exits} {Γ : Ctx} (hn : NoRootb Γ) {x : Var} {E : Entry
   have h := StmtT.editB (b := true) (P := P) (ξ := ξ) (F := []) (op := .trunc (.dec (.len x))) (t := u) (D := [])
     hx rfl rfl rfl hu (by simp)
     (EditArg.trunc (ExprT.dec (ExprT.len hx rfl rfl))) (fun _ h => by cases h) hx rfl
-    (by simp [memDeps, hkn]) (thru_ok hn h0 (fun _ h => by cases h) hkn hk) (fun _ => hud)
+     (thru_ok hn h0 (fun _ h => by cases h) hkn hk).toR (fun _ => hud)
   exact h
 
 /-- `x[0] := f` through the borrow `x`, `f` a number. -/
@@ -154,8 +154,8 @@ theorem set_typed {ξ : Exits} {Γ : Ctx} (hn : NoRootb Γ) {x f : Var} {E : Ent
   have h := StmtT.editB (b := true) (P := P) (ξ := ξ) (F := []) (op := .set (.lit 0) f) (t := .int) (D := [])
     hx rfl rfl rfl rfl (by simp)
     (EditArg.set ExprT.lit hf rfl rfl PushArg.int) (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hfx)
-    hx rfl (by simp [Eb, memDeps, Kind.isName])
-    (thru_ok hn h0 (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hf0) rfl (by simp))
+    hx rfl
+    (thru_ok hn h0 (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hf0) rfl (by simp)).toR
     (fun _ => rfl)
   exact h
 
