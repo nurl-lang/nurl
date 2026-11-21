@@ -415,6 +415,25 @@ where the call puts it has two cases:
 
 Witness: `A2/RegionChangeWitness.lean`.
 
+### 3d groundwork: what the kinds-composed lift kills (`A2/SubDcKill.lean`)
+
+For 3d, a call passes an argument that views real memory `w`, so σ ≠ [], and
+the call must place the callee's change through the region. The verbatim
+lift (`subD`) reaches `w` at the argument's own `.view`, so it is a `.drop`
+there. That ends the argument's view, which the callee keeps
+(`verbatim_overkills`), so neither equality nor weakening places it.
+
+The kinds-composed lift (`subDc`) reaches `w` at `comp a .inner = .inner`,
+which is a `.dropIn`.
+
+- For an argument at `a = .view` (its slices view `w`'s own buffer), the
+  caller's kill on `w` hits exactly the entries the callee's kill on the
+  region hits (`dropIn_comp_exact`, `subDc_hits_exact`).
+- For `a = .inner` (it views something inside `w`) it does not: A2's kinds
+  have one level of depth (`dropIn_comp_inner_overkills`). The 3d premise
+  must refuse such arguments to a through-changing call, or the kinds need
+  another level.
+
 **What item 3 needed from item 1.** A region root's binding has type
 `.int` (`regionE`, `AbsOK` clause 4), so `Ty.isVec` is false there, and
 `f1`'s change through `vv`'s slice still gives `π p` the effect `.drop`.

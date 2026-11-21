@@ -661,6 +661,11 @@ import A3
 #print axioms A2.RSetup.memDeps_subE_liftE_bor
 #print axioms A2.RegionChangeWitness.push_typed
 #print axioms A2.RegionChangeWitness.push_keeps_vv
+-- (A2/SubDcKill.lean, AGORA-937 3d groundwork): the kinds-composed lift of a change through a
+-- region ends at the caller exactly what the callee ends, for arguments that view `w` at `.view`
+#print axioms A2.dropIn_comp_exact
+#print axioms A2.dropIn_comp_inner_overkills
+#print axioms A2.subDc_hits_exact
 -- (A2/RegionMem.lean, AGORA-937 stage 3b): a region of buffer addresses reaches the node at one of
 -- them (RootNode's view case generalised); an argument's valid views are valid through its region,
 -- each address reaches one node, and derived borrows compose kinds through a region as through a root
