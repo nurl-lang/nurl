@@ -1272,6 +1272,23 @@ theorem StmtT.keepF {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     rw [h] at h0; cases h0
     exact ⟨E', hE', hm⟩
   | block _ ih => exact ih
+/-- `takeB`'s truncation alone, before `y` is bound (AGORA-937, item 3). -/
+theorem takeB_ctxWF0 {Γ : Ctx} (h : CtxWF Γ) {x : Var} {i : Expr} {Ex : Entry}
+    (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) :
+    CtxWF (A2.setE (killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) := by
+    have hk := h.killNames (thruDeps (.trunc i) Γ Ex.ty Ex.path)
+    obtain ⟨E', hE', hE'c⟩ := killNames_entry (thruDeps (.trunc i) Γ Ex.ty Ex.path) hx
+    have hroot : ∀ r, (∃ Er, Γ r = some Er ∧ Er.mode.isRoot = true) →
+        r ≠ x ∧ ∃ E2, killNames (thruDeps (.trunc i) Γ Ex.ty Ex.path) Γ r = some E2 ∧ E2.mode.isRoot = true := by
+      rintro r ⟨Er, hEr, hro⟩
+      have hrx : r ≠ x := fun e => by subst e; rw [hx] at hEr; cases hEr; rw [hmx] at hro; cases hro
+      obtain ⟨E2, h2, hE2⟩ := killNames_entry (thruDeps (.trunc i) Γ Ex.ty Ex.path) hEr
+      exact ⟨hrx, E2, h2, by rcases hE2 with rfl | rfl <;> exact hro⟩
+    exact hk.setE ⟨E', hE', fun hro => by rcases hE'c with rfl | rfl <;> exact hro⟩
+      (fun _ hn r hr => Or.inr (hroot r (h x Ex hx hl hn r hr)))
+      (fun _ hos => by rw [hmx] at hos; cases hos)
+      (fun ha => h.arm x Ex hx ha) (fun hd => h.view x Ex hx hd)
+
 /-- AGORA-889: the context a move-out through a borrow gives its body:
     `editB`'s truncation, then `y` bound to what moved out. -/
 theorem takeB_ctxWF {Γ : Ctx} (h : CtxWF Γ) {x y : Var} {i : Expr} {Ex : Entry} {t : Ty}

@@ -5979,14 +5979,19 @@ theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa)
     {D : List Dep} {b : Bool} (hx : Γa x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true)
     (hty : Ex.ty = .vec t) (hhv : t.holdsView = false)
     (harg : EditArg Γa Fa op t D Γa1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γa1 x = some Ex1)
-    (hl1 : Ex1.live = true) (hne : memDeps Ex1.path ≠ []) (hthru : ThruOK Γa1 Fa op Ex.ty Ex1.path)
+    (hl1 : Ex1.live = true) (hthru : ThruOKR Γa1 Fa op Ex.ty Ex1.path)
     (hdf : op.drops = true → t.dtorFree = true) (hbf : b = false → Ex.fresh = true)
     (hloc : S.R = [] ∨ Ex.fresh = true) (hvs : ∀ v ∈ op.vars, S.isPi v = false)
-    (hnm : ∀ d ∈ Ex.path, d.kind.isName = true → S.isPi d.root = false) :
+    (hnm : ∀ d ∈ Ex.path, d.kind.isName = true → S.isPi d.root = false)
+    (hRp : ∀ d0 ∈ memDeps Ex.path, S.isPi d0.root = true → S.R = [])
+    (hw : CtxWF Γa) (hn : NameWF Γa)
+    (hwT : CtxWF (A2.setE (A2.killThru op Ex.ty Ex1.path Γa1) x Ex1))
+    (hnT : NameWF (A2.setE (A2.killThru op Ex.ty Ex1.path Γa1) x Ex1)) :
     StmtT P ξ (S.canon Γa) S.Fc ((Stmt.edit b x op).rename S.ρ)
       (S.canon (A2.setE (A2.killThru op Ex.ty Ex1.path Γa1) x Ex1)) := by
-  obtain ⟨⟨D', harg'⟩, hyx', hthru', hne', heq, hpfix⟩ :=
-    editB_ren_facts h hab hx hmx hl hty harg hyx hx1 hl1 hne hthru hloc hvs hnm
+  obtain ⟨⟨D', harg'⟩, hyx', hthru', hW⟩ :=
+    editB_ren_facts h hab hx hmx hl hty harg hyx hx1 hl1 hthru hloc hvs hnm hRp (harg.wf hw) (harg.names hn)
+      hwT hnT
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   subst hE1
   have hrb : Ex1.mode ≠ .rootb := by rw [hmx]; simp
@@ -5997,10 +6002,12 @@ theorem editB_ren (h : S.OK) (hab : S.AbsOK Γa)
     (canon_some h hx hnpx) (by rw [subE_mode, liftE_mode x hrb, hmx]; rfl)
     (by rw [subE_live, liftE_live]; exact hl)
     (by rw [subE_ty, hty1]; exact hty) hhv (h.Fcout x) harg' hyx' (canon_some h hx1 hnpx)
-    (by rw [subE_live, liftE_live]; exact hl1) (by rw [hpfix]; exact hne') (by rw [subE_ty, hpfix]; exact hthru')
+    (by rw [subE_live, liftE_live]; exact hl1) (by rw [subE_ty]; exact hthru')
     (by rw [Edit.drops_rename]; exact hdf) (b := b)
     (fun hb0 => by rw [subE_fresh, S.liftE_fresh_of hrb]; exact hbf hb0)
-  rw [heq]; rw [subE_ty, hpfix] at hT; exact hT
+  rw [subE_ty] at hT
+  -- AGORA-937 (item 3): what the call knows after the change is at least what the callee does
+  exact StmtT.sub (Weaker.refl (canon_wf_sub h hab hw hn) (canon_names_sub h hab hn)) hT (Or.inr hW)
 
 /-! ### Agora #295: a view stored through a borrow, where the call places it -/
 
@@ -7394,8 +7401,8 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
           · exact Or.inl h1
           · exact Or.inr (Or.inl h1)))) (DtorSafe.canon h hal hdy) hpz hpx
       (fun ha => dtorHead_rename h.inj (hdx ha)) (fun hb => dtorHead_rename h.inj (hdz hb))
-  | @editB _ Γ Γ1 F x op Ex Ex1 t D b hx hmx hl hty hhv _ harg hyx hx1 hl1 hthru hdf hbf =>
-    intro _ hab _ hn _ hT hvs
+  | @editB _ Γ Γ1 F x op Ex Ex1 t D b hx hmx hl hty hhv hxF0 harg hyx hx1 hl1 hthru hdf hbf =>
+    intro hsrc0 hab hw hn hfo hT hvs
     have hab1 : S.AbsOK Γ1 := EditArg.absOK harg hab
     have hm1 : Ex1.mode = .bor := by rw [harg.at_ne hyx hx hx1 hl1, hmx]
     -- Agora #909: an edit through a fresh borrow (`edit false`) needs no S.R = []
@@ -7403,8 +7410,22 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
       cases b with
       | false => exact Or.inr (hbf rfl)
       | true => exact Or.inl (hT (.inl rfl))
-    refine ⟨editB_ren h hab hx hmx hl hty hhv harg hyx hx1 hl1 hne hthru hdf hbf hloc
-      (fun v hv => (hab.notPi_of_notReg (hvs v (by simp [Stmt.vars, hv])))) (path_names_not_region hab hn hx hl hmx (by rw [hty]; simp)), ?_⟩
+    -- AGORA-937 (item 3): a change through a region is an `edit true`, placed by a call
+    -- that passes no views; a fresh borrow reaches only frame bindings, none a region
+    have hRp : ∀ d0 ∈ memDeps Ex.path, S.isPi d0.root = true → S.R = [] := by
+      intro d0 hd0 hp
+      cases b with
+      | true => exact hT (.inl rfl)
+      | false =>
+        exfalso
+        have hty0 : Ex.ty ≠ .int := by rw [hty]; simp
+        obtain ⟨_, hfr⟩ := hfo x Ex hx hl hty0 hmx (hbf rfl)
+        obtain ⟨_, Er, hEr, hfm⟩ := hfr d0 (List.mem_filter.mp hd0).1
+        rw [hab.notPi hEr (fun hr => Mode.region_not_frame (hr ▸ hfm))] at hp; cases hp
+    have htyp := StmtT.editB (P := P) (ξ := ξ) (b := b) hx hmx hl hty hhv hxF0 harg hyx hx1 hl1 hthru hdf hbf
+    refine ⟨editB_ren h hab hx hmx hl hty hhv harg hyx hx1 hl1 hthru hdf hbf hloc
+      (fun v hv => (hab.notPi_of_notReg (hvs v (by simp [Stmt.vars, hv])))) (path_names_not_region hab hn hx hl hmx (by rw [hty]; simp))
+      hRp hw hn (StmtT.wf hP htyp hw) (StmtT.names hP htyp rfl hn), ?_⟩
     exact (hab1.killNames (thruDeps op Γ1 Ex.ty Ex1.path)).setE' hab1 hx1 rfl rfl (by rw [hm1]; simp)
       (fun hf => absurd hf (by simp [Entry.fixed, hm1]))
   | @editBV _ Γ Γ1 F x op Ex Ex1 t D b hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 hne hthru hV hdf hbf hbs =>
@@ -7418,10 +7439,11 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     -- (`editB_ren_facts`), then `y` bound to the element, as `letv` binds
     intro _ hab hw hn hfo hT hvs
     have hR : S.R = [] := hT (.inl rfl)
-    obtain ⟨-, -, hthru', hne', heq, hpfix⟩ := editB_ren_facts h hab hx hmx hl hty
-      (EditArg.trunc (t := t) hie) (fun _ h' => by cases h') hx hl hne hthru (Or.inl hR)
+    obtain ⟨-, -, hthru', hW⟩ := editB_ren_facts h hab hx hmx hl hty
+      (EditArg.trunc (t := t) hie) (fun _ h' => by cases h') hx hl hthru (Or.inl hR)
       (fun v hv => (hab.notPi_of_notReg (hvs v (by simp [Stmt.vars, Edit.vars] at hv ⊢; simp [hv]))))
-      (path_names_not_region hab hn hx hl hmx (by rw [hty]; simp))
+      (path_names_not_region hab hn hx hl hmx (by rw [hty]; simp)) (fun _ _ _ => hR) hw hn
+      (takeB_ctxWF0 hw hx hmx hl) (takeB_nameWF0 hn hx hmx hl)
     have hrb : Ex.mode ≠ .rootb := by rw [hmx]; simp
     have hab2 : S.AbsOK (A2.setE (A2.killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) :=
       (hab.killNames _).setE' hab hx rfl rfl hrb (fun hf => absurd hf (by simp [Entry.fixed, hmx]))
@@ -7446,15 +7468,16 @@ theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List V
     rw [canon_exitScopes h abk (Or.inl hbx) (hab.notRegFresh hy)]
     have hwc := canon_wf_sub h habb hwb hnb
     have hnc := canon_names_sub h habb hnb
-    rw [canon_setEs h _ hnpy, heq, ← hpfix] at hwc hnc tk
+    rw [canon_setEs h _ hnpy] at hwc hnc tk
     have hty1 : (S.subE (S.liftE x Ex)).ty = .vec t := by rw [subE_ty, liftE_ty x hrb, hty]
     exact StmtT.takeB (by rw [src_rename]; exact hks) (by rw [canon_ρs h _ hnpy, hy]; rfl) (h.Fcout y)
       (canon_some h hx hnpx) (by rw [subE_mode, liftE_mode x hrb, hmx]; rfl)
       (by rw [subE_live, liftE_live]; exact hl)
       hty1 hhv (h.Fcout x) (exprT_ren h hab hie (fun v hv => (hab.notPi_of_notReg (hvs v (by simp [Stmt.vars, hv])))))
-      (by rw [hpfix]; exact hne') (by rw [subE_ty, hpfix]; exact hthru')
+      (by rw [subE_ty]; exact hthru')
       (fun hd => dtorHead_rename h.inj (hnd hd))
-      (StmtT.weakenIn ⟨PW.setE (PW.refl _) (by rw [compE_subE]; exact S.subE_weaker (compE_liftE_weaker hhv)),
+      -- AGORA-937 (item 3): what the call knows after the truncation is at least what the callee does
+      (StmtT.weakenIn ⟨PW.setE hW.1 (by rw [compE_subE]; exact S.subE_weaker (compE_liftE_weaker hhv)),
         hwc, hnc⟩ tk)
       (EndOK.lift h abk hbx hpe)
   | @takeBV _ Γ Δ F x y i k Ex t hks hy hyF hx hmx hl hty hhv hxF hie hne hthru hV hnd hk hpe ih =>

@@ -783,6 +783,20 @@ theorem NameWF.unpair {Γ : Ctx} (hn : NameWF Γ) {y x z : Var} {E : Entry} {a b
     exact hn3
 
 
+/-- `takeB`'s truncation alone, before `y` is bound (AGORA-937, item 3). -/
+theorem takeB_nameWF0 {Γ : Ctx} (hn : NameWF Γ) {x : Var} {i : Expr} {Ex : Entry}
+    (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) :
+    NameWF (A2.setE (killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) := by
+    obtain ⟨E', hE', hE'c⟩ := killNames_entry (thruDeps (.trunc i) Γ Ex.ty Ex.path) hx
+    refine NameWF.setE (hn.killNames _) (fun Ex' h => ?_) (fun Ex' h hnm => ?_) (fun hl' hni => ?_)
+    · obtain rfl : E' = Ex' := Option.some.inj (hE'.symm.trans h)
+      rcases hE'c with rfl | rfl <;> exact ⟨rfl, rfl⟩
+    · obtain rfl : E' = Ex' := Option.some.inj (hE'.symm.trans h)
+      have hos := hnm.2.2.1
+      rcases hE'c with rfl | rfl <;> (rw [hmx] at hos; cases hos)
+    · exact (hn x Ex hx hl hni).keeps ((Keeps.refl Γ []).killNames (thruDeps (.trunc i) Γ Ex.ty Ex.path))
+        (fun _ _ _ h => by cases h)
+
 /-- AGORA-889: the context a move-out through a borrow gives its body keeps
     what it holds by name valid. -/
 theorem takeB_nameWF {Γ : Ctx} (hn : NameWF Γ) {x y : Var} {i : Expr} {Ex : Entry} {t : Ty}
