@@ -212,13 +212,25 @@ Names never had this problem: a name dependency is lifted as itself
      `isPi` go through `AbsOK.notPi_of_notReg`, which holds with or without
      `ghost`. So a statement setting a body variable `x` knows that `x`'s
      entry is no region (`AbsOK`'s fourth clause). That is what the
-     region-is-dead clause needs at `setE'`. What is left before
-     `S.ghost = false` goes:
-     - that clause;
-     - the ghost cases of `canon_weaker_sub` (`liftE_weaker` on a dead
-       region entry);
-     - `callR_canon`: a lifted inner call's `callR` is then the `G p`
-       region entries, which `CallT`'s premise accepts.
+     region-is-dead clause needs at `setE'`.
+
+     *Done: `S.ghost = false` is gone.* `StmtT.ren` holds for every
+     setting, ghost or not:
+     - AbsOK's fourth clause adds `E.mode = .region → E.ty = .int`, which
+       every step keeps, since it keeps a binding's type. With it,
+       `liftE_weaker` needs no "not a region": a region binding never takes
+       the fresh branch. A region-is-*dead* clause would not have worked,
+       because `StmtT.panic`'s post-context has arbitrary liveness.
+     - `callR_canon` now concludes that every root the lifted inner call's
+       arguments hold views of is a region binding, which is `CallT`'s
+       premise. Substituted, there is none (as before). Lifted as a ghost
+       binding, it is `G p`, a `.region` entry of the caller's context.
+
+     So the body of a call whose setting lifts regions as ghost bindings
+     types where the call places it. What is left is the call site: a
+     ghost setting for a call that passes real views (`R` without the
+     region-reached roots), and the invariant over the `subDc` context
+     (item 4).
 
      *Earlier, structurally:* `RSetup.ghost` exists, and `AbsOK`'s fourth clause
      reads `E.mode = .region ∧ S.ghost = false ↔ S.isPi v = true`.

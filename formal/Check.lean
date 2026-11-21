@@ -674,6 +674,10 @@ import A3
 #print axioms A2.RSetup.AbsOK.notReg_of_notPi
 #print axioms A2.RSetup.AbsOK.notPi_of_notReg
 #print axioms A2.callS_isReg_lt
+-- ... and the renaming lemma holds whether or not the setting lifts regions as ghost bindings:
+-- a lifted inner call's views are of region bindings only (substituted: none)
+#print axioms A2.RSetup.callR_canon
+#print axioms A2.RSetup.StmtT.ren
 -- (A2/SliceCopyViewWitness.lean, AGORA-935): a copy of a slice of views, typed as A2 types a
 -- copy (a call, `callRes`), holds copies of its loans and nothing of the slice: releasing the
 -- temporary leaves it live, replacing what the views point into ends it, and then no read types
