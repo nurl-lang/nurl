@@ -900,7 +900,7 @@ theorem post_rel {Γe Γ : Ctx} {fn sig : Fn} {A C : List Var} {e : Var}
             (by rw [fixed_setHeldFresh, clean_fixed_iff]; exact hrba (by simp)) (by simp [clean_live])
             (fun _ => clean_path_sub _) ?_ (hdh := fun hd => absurd hd (by simp [hdba]))
             (hf := fun hl hn _ hfr => by
-              simp [clean_live, clean_ty] at hl hn hfr ⊢
+              simp at hl hn hfr ⊢
               rw [Entry.clean_eq hl hn]; exact ⟨hfr, List.Subset.refl _⟩)
             (hg := fun _ _ hhf => by
               by_cases hvv : t.holdsView = true
@@ -2226,7 +2226,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       cases hw with
       | pkg hwe hq =>
         have hd : derive c Ec .self = [⟨c, .view⟩] := by
-          simp only [derive, hm, Mode.isRoot, if_true, rootKind_self_fn htc]
+          simp only [derive, hm, Mode.isRoot, ite_true, rootKind_self_fn htc]
         have hvr : ViewsOK m te env (envDeps cs Ec.held) :=
           ViewsOK.mono (readers_sub_envDeps _ _) (ViewsOK.readers (hvs.pkg hq))
         have hsub : envDeps cs Ec.held ⊆ (envE0 c Ec te cs).path :=
@@ -2244,7 +2244,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       cases hok with
       | pkg hokE _ =>
         have hd : derive c Ec .self = [⟨c, .view⟩] := by
-          simp only [derive, hm, Mode.isRoot, if_true, rootKind_self_fn htc]
+          simp only [derive, hm, Mode.isRoot, ite_true, rootKind_self_fn htc]
         rw [hokE.lend]
         exact valOK_via hslot hokE (Top.pkg (Top.refl _)) (by simp [envE0, hd, mem_envDeps, ownWriter, Kind.bound])
     · obtain ⟨v, hv, hok⟩ := hi.bor_val hc hlc (by rw [hm]; rfl)

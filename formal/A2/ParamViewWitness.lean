@@ -235,7 +235,7 @@ theorem edit_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) (h3 : Γ 3 = some Eloc) 
     simp only [Ee, memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
       List.mem_singleton] at hd
     subst hd
-    refine ⟨by simp, fun y hy => ?_, _, h3, rfl, Or.inl rfl, hc.dtor _ _ _, by simp [Eloc, vvsl, vsl]⟩
+    refine ⟨by simp, fun y hy => ?_, _, h3, rfl, Or.inl rfl, hc.dtor _ _ _, by simp⟩
     simp [Edit.stored] at hy; subst hy; decide
   · -- ... ends no view a destructor reads, `loc` is no `letd`'s, and what is stored depends on `d`
     intro d hd
@@ -281,7 +281,7 @@ theorem storeP_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ)
     simpa [elemE, Eloc, Ee, vsl, vvsl, derive, Mode.isRoot, rootKind] using this
   let G6 := A2.setE G5 5 Ee
   have hG6 : Calm G6 := hG5.setE (by simp [Ee])
-  have hG60 : G6 0 = some Ed := by simp [G6, A2.setE, upd, hG50]
+  have hG60 : G6 0 = some Ed := by simp [G6, A2.setE, hG50]
   -- `. d s`: a field read of the borrowed parameter, lent: it views what the caller lent
   have hfst : RhsT G6 [] (.fst 0) Ef G6 := by
     have := RhsT.fst (Γ := G6) (F := []) (E := Ed) (a := sl) (b := .int) hG60 rfl rfl
@@ -306,7 +306,7 @@ theorem storeP_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ)
       simp only [A2.killThruV, thruKills, memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos,
         List.filter_nil, List.map_cons, List.map_nil, A2.killHv, A2.kill, hG71, Option.map_some,
         killE_int hR0 hR0r]
-    simp [Δe, A2.setE, upd, A2.holdThru, A2.holdOn, hk, roots, memDeps, Kind.isName]
+    simp [Δe, A2.setE, A2.holdThru, A2.holdOn, hk, roots, memDeps, Kind.isName]
   have hl6 := StmtT.letv (P := Q) (ξ := .none) (x := 6) (Γ := G6) (Γ1 := G6) (F := []) (E := Ef)
     (s := .edit false 5 (.push 6)) rfl (by simp [G6, G5, G4', G4, G3, A2.setE, upd, A2.kill, h6]) (by simp)
     hfst hed.ofNone (hΔe.endOK _) (fun h => by simp [Ef] at h)
@@ -315,7 +315,7 @@ theorem storeP_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ)
     ((hΔe.exitScope 6).endOK _) (fun h => by simp [Ee] at h)
   have hs := StmtT.seq (P := Q) (ξ := .none) rfl hpush hl5
   have hl4 := StmtT.letv (P := Q) (ξ := .none) (x := 4) (Γ := G3) (Γ1 := G3) (F := []) (E := Ein)
-    rfl (by simp [G3, A2.setE, upd, h4]) (by simp) (RhsT.new (t := sl) rfl) hs.ofNone
+    rfl (by simp [G3, A2.setE, h4]) (by simp) (RhsT.new (t := sl) rfl) hs.ofNone
     (((hΔe.exitScope 6).exitScope 5).endOK _) (fun _ => rfl)
   have hl3 := StmtT.letv (P := Q) (ξ := .none) (x := 3) (Γ := Γ) (Γ1 := Γ) (F := []) (E := Eloc)
     rfl h3 (by simp) (RhsT.new (t := vsl) rfl) hl4.ofNone
@@ -362,7 +362,7 @@ theorem dtor_body : ∃ Δ, StmtT P .none (sigCtx dtor) [] dtor.body Δ ∧
   apply body_typed
   exact storeP_typed (Q := P) calm_dtor (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor]) (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor])
     (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor]) (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor])
-    (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor, paramE, Ed, DTV, TV, Ty.hasFn]) (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor, R0, resMode, paramE])
+    (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor, paramE, Ed, DTV, TV, Ty.hasFn]) (by simp [↓sigCtx_noRegion (fn := dtor) (by decide), dtor, R0, resMode])
 
 theorem dtor_fnok : FnOK P dtor := by
   obtain ⟨Δ, hb, hfl, hr⟩ := dtor_body

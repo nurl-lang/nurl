@@ -26,7 +26,7 @@ theorem BindParams.alloc_eq {m m' : Mem} {ps : List (PMode × Ty)} {as : List Va
   | inout _ ih => exact ih
 
 theorem EvalR.keep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m1))
-    (hb : BorFree m) {a2 : Nat → Bool} (hav : Avoids m a2) (hf : FreshFrom a2 m.nid) :
+    (_hb : BorFree m) {a2 : Nat → Bool} (_hav : Avoids m a2) (hf : FreshFrom a2 m.nid) :
     ∀ i, a2 i = true → m1.alloc i = m.alloc i := by
   intro i hi
   cases h with

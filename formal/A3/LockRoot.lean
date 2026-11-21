@@ -256,7 +256,7 @@ def CapShr (P : Prog) (st : Var → Option Slot) (nv : Nat) : Stmt → Prop
   | .catchR _ _ s => CapShr P st nv s
   | .scopeL _ _ _ s => CapShr P st nv s
   | .block s => CapShr P st nv s
-  | .callc _ c j σ zs _ => ∀ o fs te ms env cs f fn, st c = some ⟨o, some (.pkg fs te ms env cs)⟩ →
+  | .callc _ c j _σ zs _ => ∀ o fs te ms env cs f fn, st c = some ⟨o, some (.pkg fs te ms env cs)⟩ →
       fs[j]? = some f → P[f]? = some fn → ∀ p ∈ fn.params.zip (nv :: zs ++ cs.map (·.1)),
       p.1.1 ≠ .inp → p.2 ∈ nv :: zs ∨ ∀ o' w, st p.2 = some ⟨o', some w⟩ → ¬ Shr w
   | _ => True

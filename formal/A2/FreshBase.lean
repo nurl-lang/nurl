@@ -10,7 +10,7 @@ theorem reroot_self {p : Var} {D ds : List Dep} (h : ∀ d ∈ ds, d.root ≠ p)
   | nil => rfl
   | cons d ds ih =>
     simp only [reroot, List.flatMap_cons] at ih ⊢
-    rw [if_neg (h d (List.mem_cons_self ..)), ih (fun d' hd' => h d' (List.mem_cons_of_mem _ hd'))]
+    rw [ite_eq_right (h d (List.mem_cons_self ..)), ih (fun d' hd' => h d' (List.mem_cons_of_mem _ hd'))]
     rfl
 /-- What a right-hand side changes keeps the frame's own bindings. -/
 def KeepsFrame (Γ Γ1 : Ctx) : Prop :=
@@ -178,7 +178,7 @@ theorem derive_freshE_any {Γ : Ctx} (h : FreshOK Γ) {y : Var} {E : Entry} {k :
   rw [hy] at hE'; cases hE'
   rcases hc with hfr | ⟨hb, hf, hl, hn⟩
   · have hroot : E.mode.isRoot = true := by rcases hfr with h' | ⟨b, h'⟩ <;> rw [h'] <;> rfl
-    have hd : derive y E k = [⟨y, rootKind E.ty k⟩] := by unfold derive; rw [if_pos hroot]
+    have hd : derive y E k = [⟨y, rootKind E.ty k⟩] := by unfold derive; rw [ite_eq_left hroot]
     rw [hd]
     refine ⟨by simp, fun d hd' => ?_⟩
     simp only [List.mem_singleton] at hd'; subst hd'
@@ -186,7 +186,7 @@ theorem derive_freshE_any {Γ : Ctx} (h : FreshOK Γ) {y : Var} {E : Entry} {k :
     rcases rootKind_cases E.ty k with h1 | ⟨_, h1⟩ <;> rw [h1] <;> first | exact hk | simp
   · have hroot : E.mode.isRoot = false := by rw [hb]; rfl
     have hd : derive y E k = E.path.map (fun d => ⟨d.root, comp d.kind k⟩) := by
-      unfold derive; rw [if_neg (by rw [hroot]; simp)]
+      unfold derive; rw [ite_eq_right (by rw [hroot]; simp)]
     obtain ⟨hne, hpd⟩ := h y E hy hl hn hb hf
     rw [hd]
     refine ⟨by simpa using hne, fun d hd' => ?_⟩
@@ -206,14 +206,14 @@ theorem derive_freshE {Γ : Ctx} (h : FreshOK Γ) {y : Var} {E : Entry} {t : Ty}
   rcases hc with hfr | ⟨hb, hf, hl, hn⟩
   · have hroot : E.mode.isRoot = true := by rcases hfr with h' | ⟨b, h'⟩ <;> rw [h'] <;> rfl
     have hd : derive y E k = [⟨y, k⟩] := by
-      unfold derive; rw [if_pos hroot, ht]; rcases hk with rfl | rfl | rfl <;> rfl
+      unfold derive; rw [ite_eq_left hroot, ht]; rcases hk with rfl | rfl | rfl <;> rfl
     rw [hd]
     refine ⟨by simp, fun d hd' => ?_⟩
     simp only [List.mem_singleton] at hd'; subst hd'
     exact ⟨hk, E, hy, hfr⟩
   · have hroot : E.mode.isRoot = false := by rw [hb]; rfl
     have hd : derive y E k = E.path.map (fun d => ⟨d.root, comp d.kind k⟩) := by
-      unfold derive; rw [if_neg (by rw [hroot]; simp)]
+      unfold derive; rw [ite_eq_right (by rw [hroot]; simp)]
     obtain ⟨hne, hpd⟩ := h y E hy hl hn hb hf
     rw [hd]
     refine ⟨by simpa using hne, fun d hd' => ?_⟩
@@ -345,12 +345,12 @@ theorem RhsT.freshOK {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : R
 theorem KeepsFrame.killNames {Γ0 Γ : Ctx} (hk : KeepsFrame Γ0 Γ) :
     ∀ ds, KeepsFrame Γ0 (A2.killNames ds Γ)
   | [] => hk
-  | d :: ds => (hk.killNames ds).trans (KeepsFrame.kill _ _ _ _)
+  | _d :: ds => (hk.killNames ds).trans (KeepsFrame.kill _ _ _ _)
 
 theorem FreshLe.killNames {Γ0 Γ : Ctx} (hk : FreshLe Γ0 Γ) :
     ∀ ds, FreshLe Γ0 (A2.killNames ds Γ)
   | [] => hk
-  | d :: ds => (hk.killNames ds).trans (FreshLe.kill _ _ _ _)
+  | _d :: ds => (hk.killNames ds).trans (FreshLe.kill _ _ _ _)
 
 theorem callPostAux_fresh {Γ0 : Ctx} {fn : Fn} {args : List Var} :
     ∀ (ps : List (PMode × Ty)) (as : List Var) (i : Nat) (Γ : Ctx),

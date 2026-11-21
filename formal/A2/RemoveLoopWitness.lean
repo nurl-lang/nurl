@@ -64,7 +64,7 @@ theorem kill_noop {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var}
   | none => rfl
   | some E =>
     simp only [Option.map, A2.killE]
-    rw [if_neg]
+    rw [ite_eq_right]
     simp only [A2.hits, Bool.and_eq_true, List.any_eq_true, Bool.and_eq_true, beq_iff_eq, not_and,
       not_exists]
     intro _ d hd hr
@@ -85,14 +85,14 @@ theorem thru_keeps {Γ : Ctx} (hc : LoopCtx Γ) (op : Edit) :
   funext v
   by_cases hv : v = 3
   · subst hv; simp [A2.setE, upd, hc.h3]
-  · simp only [A2.setE, upd, if_neg hv, A2.killThru, A2.thruDeps, memDeps, Kind.isName,
+  · simp only [A2.setE, upd, ite_eq_right hv, A2.killThru, A2.thruDeps, memDeps, Kind.isName,
       Bool.not_false, List.filter_cons_of_pos, List.filter_nil, List.map_cons, List.map_nil,
       A2.killNames, List.foldr_cons, List.foldr_nil, A2.kill]
     cases hg : Γ v with
     | none => rfl
     | some E =>
       simp only [Option.map, A2.killE]
-      rw [if_neg]
+      rw [ite_eq_right]
       simp only [A2.hits, Bool.and_eq_true, List.any_eq_true, beq_iff_eq, not_and, not_exists]
       intro _ d hd hr
       exact fun _ => hv ((hc.dep v E hg d hd).1 hr)
@@ -102,7 +102,7 @@ theorem LoopCtx.set5 {Γ : Ctx} (hc : LoopCtx Γ) : ∀ v E, A2.setE Γ 5 intE v
   intro v E hv d hd
   by_cases h5 : v = 5
   · subst h5; simp [A2.setE, upd] at hv; subst hv; simp [intE, Entry.vdeps, Mode.ownSlot] at hd
-  · simp only [A2.setE, upd, if_neg h5] at hv; exact hc.dep v E hv d hd
+  · simp only [A2.setE, upd, ite_eq_right h5] at hv; exact hc.dep v E hv d hd
 
 /-- The loop's body ends in the context it starts in. -/
 theorem step_typed {ξ : Exits} {Γ : Ctx} (hc : LoopCtx Γ) (h5 : Γ 5 = none) : StmtT P ξ Γ [] step Γ := by
@@ -150,7 +150,7 @@ theorem step_typed {ξ : Exits} {Γ : Ctx} (hc : LoopCtx Γ) (h5 : Γ 5 = none) 
     simp only [A2.exitScope, hk5]
     funext v
     by_cases hv : v = 5
-    · subst hv; simp [A2.setE, upd, h5]
+    · subst hv; simp [upd, h5]
     · simp [A2.setE, upd, hv]
   rw [hx5] at hl
   exact hl
@@ -218,8 +218,8 @@ theorem main_typed (i : Nat) : ∃ Δ, StmtT P .none (fun _ => none) [] (main i)
                   Evv, Ew, Eb] at hv <;>
                 (try subst hv) <;>
                 (first
-                  | (simp [Entry.vdeps, Mode.ownSlot, ownHeld, Ty.holdsView, Ty.elem, str, vstr, intE, Evv, Ew, Eb] at hd; done)
-                  | (simp [Entry.vdeps, Mode.ownSlot, ownHeld, Ty.holdsView, Ty.elem, str, vstr, intE, Evv, Ew, Eb] at hd; subst hd; decide)
+                  | (simp [Entry.vdeps, Mode.ownSlot, ownHeld, Ty.holdsView] at hd; done)
+                  | (simp [Entry.vdeps, Mode.ownSlot] at hd; subst hd; decide)
                   | skip)
             · exact nrEnd (by noroot) _
           · exact nrEnd (by noroot) _

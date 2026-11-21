@@ -415,7 +415,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       · exact hr2 r hr
   | @fst y Ey a b _ hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
-    simp only [Entry.fresh_vdeps] at hn ⊢
+    simp only [] at hn ⊢
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of ht)
     have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ projHeld Ey.mode.ownSlot a Ey.held, Ey.held, false, false, false, false⟩ := by
       cases a with
@@ -435,7 +435,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       · rename_i hos _; exact hpath y Ey hy hl hn' (by simpa using hos)
   | @snd y Ey a b _ hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
-    simp only [Entry.fresh_vdeps] at hn ⊢
+    simp only [] at hn ⊢
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of ht)
     have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ projHeld Ey.mode.ownSlot b Ey.held, Ey.held, false, false, false, false⟩ := by
       cases b with
@@ -473,7 +473,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       exact ⟨Ev, hEv, by cases hm : Ev.mode <;> simp_all [Mode.ownSlot, Mode.isRoot]⟩
   | @getl y Ey a b _ hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
-    simp only [Entry.fresh_vdeps] at hn ⊢
+    simp only [] at hn ⊢
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of_sum ht)
     have hpe : projE y Ey a = ⟨a, .bor, true, projDeps y Ey ++ projHeld Ey.mode.ownSlot a Ey.held, Ey.held, false, false, false, false⟩ := by
       cases a with
@@ -493,7 +493,7 @@ theorem RhsT.wf {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT �
       · rename_i hos _; exact hpath y Ey hy hl hn' (by simpa using hos)
   | @getr y Ey a b _ hy hl ht =>
     refine ⟨h, fun _ => rfl, same, fun _ hn => ?_⟩
-    simp only [Entry.fresh_vdeps] at hn ⊢
+    simp only [] at hn ⊢
     have hn' : Ey.ty ≠ .int ∨ Ey.mode = .rootb := Or.inl (Ty.undtor_ne_int_of_sum ht)
     have hpe : projE y Ey b = ⟨b, .bor, true, projDeps y Ey ++ projHeld Ey.mode.ownSlot b Ey.held, Ey.held, false, false, false, false⟩ := by
       cases b with

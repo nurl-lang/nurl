@@ -134,7 +134,7 @@ theorem dfn_ok : FnOK P dfn := by
     · simp [dfn] at hi; subst hi; simp [dfn] at hs
     · simp [dfn] at hi; subst hi; simp [dfn] at hb
   · intro v E h
-    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, resMode, intE] at h <;>
+    rcases v with _ | _ | v <;> simp [setE, upd, kill, killE, ↓sigCtx_noRegion (fn := dfn) (by decide), dfn, paramE, intE] at h <;>
       subst h <;> exact ⟨rfl, rfl⟩
   · exact ⟨{ intE with mode := R0.mode }, by simp [setE, upd, dfn], rfl, rfl, by simp [R0, resMode, dfn], by simp [intE], by simp [intE],
       by simp [dfn]⟩
@@ -210,7 +210,7 @@ theorem glue_ok : FnOK P glue := by
   obtain ⟨Δ, hb, hfl, hr⟩ := glue_body
   refine ⟨rfl, by decide, by decide, rfl, by simp [glue], ?_, by simp [glue], by simp [glue], by simp [glue],
     by simp [glue], by simp [glue], ?_, Δ, hb, fun v E h => (hfl v E h).2, ?_, ?_⟩
-  · intro pt hpt; simp [glue] at hpt; subst hpt; simp [GDT, GT, DT, T, Ty.ok, Ty.isStruct, Ty.owning, Ty.vecD]
+  · intro pt hpt; simp [glue] at hpt; subst hpt; simp [GDT, GT, DT, T, Ty.ok, Ty.isStruct, Ty.owning]
   · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [glue] at h⟩
     · simp [glue] at hi; subst hi; simp [glue, Stmt.movedFirst, Stmt.assigns]
     · simp [glue] at hi; subst hi; simp [glue] at hb
@@ -251,7 +251,7 @@ theorem implT_ok : FnOK P implT := by
   obtain ⟨Δ, hb, hfl, hr⟩ := implT_body
   refine ⟨rfl, by decide, by decide, rfl, by simp [implT], ?_, by simp [implT], by simp [implT], by simp [implT],
     by simp [implT], by simp [implT], ?_, Δ, hb, hfl, ?_, ?_⟩
-  · intro pt hpt; simp [implT] at hpt; subst hpt; simp [GDT, GT, DT, T, Ty.ok, Ty.isStruct, Ty.vecD]
+  · intro pt hpt; simp [implT] at hpt; subst hpt; simp [GDT, GT, DT, T, Ty.ok, Ty.isStruct]
   · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [implT] at h⟩
     · simp [implT] at hi; subst hi; simp [implT] at hs
     · simp [implT] at hi; subst hi; simp [implT] at hb
@@ -343,7 +343,7 @@ theorem glue2_ok : FnOK P glue2 := by
   obtain ⟨Δ, hb, hfl, hr⟩ := glue2_body
   refine ⟨rfl, by decide, by decide, rfl, by simp [glue2], ?_, by simp [glue2], by simp [glue2], by simp [glue2],
     by simp [glue2], by simp [glue2], ?_, Δ, hb, fun v E h => (hfl v E h).2, ?_, ?_⟩
-  · intro pt hpt; simp [glue2] at hpt; subst hpt; simp [SDT2, GT, DT, T, Ty.ok, Ty.isStruct, Ty.owning, Ty.vecD]
+  · intro pt hpt; simp [glue2] at hpt; subst hpt; simp [SDT2, GT, DT, T, Ty.ok, Ty.isStruct, Ty.owning]
   · refine ⟨fun i hi hs _ => ?_, fun i hi b hb _ => ?_, fun h => by simp [glue2] at h⟩
     · simp [glue2] at hi; subst hi; simp [glue2, Stmt.movedFirst, Stmt.assigns]
     · simp [glue2] at hi; subst hi; simp [glue2] at hb
@@ -389,7 +389,7 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
   have hK3 : NoRootb K3 := hK2.setE (by rw [hEDe]; simp)
   have hpair : RhsT K2 [] (.pair 0 1) EP K2 :=
     RhsT.pair (Ey := intE) (Ez := intE) (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int
-      (by simp [K2, K1, A2.setE, upd]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
+      (by simp [K2, K1, A2.setE]) rfl PushArg.int (by simp [intE, Mode.ownSlot])
   let K4 : Ctx := A2.setE K3 3 intE
   have hK4 : NoRootb K4 := hK3.setE (by simp [intE])
   let K5 : Ctx := A2.setE (kill .replace false 2 K4) 2 { ED with live := false, dtor := false }
@@ -419,7 +419,7 @@ theorem main_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main Δ := by
     (by simp) hpair rfl (Or.inl ⟨rfl, Or.inl rfl⟩) rfl rfl (letd_fn drop_ok) (HeldUp.refl _ _) h3.ofNone
     (((hK6.exitScope 4).exitScope 3).endOK _)
   have h1 := StmtT.letv (ξ := .none) (P := P) (x := 1) (r := .expr (.lit 2)) (E := intE) (F := []) (Γ := K1) (Γ1 := K1)
-    rfl (by simp [K1, A2.setE, upd]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
+    rfl (by simp [K1, A2.setE]) (by simp) (RhsT.expr ExprT.lit) hd.ofNone
     ((((hK6.exitScope 4).exitScope 3).exitScope 2).endOK _)
   exact ⟨_, StmtT.letv (P := P) (x := 0) (r := .expr (.lit 1)) (E := intE) (F := []) (Γ := fun _ => none)
     (Γ1 := fun _ => none) rfl rfl (by simp) (RhsT.expr ExprT.lit) h1.ofNone

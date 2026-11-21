@@ -428,12 +428,12 @@ theorem derive_clean {Γ : Ctx} {y : Var} {E : Entry} {k : Kind} (hkn : k.isName
   · have hmem : (⟨y, rootKind E.ty k⟩ : Dep) ∈ memDeps (derive y E k) := by
       unfold derive memDeps; rw [ite_eq_left hr]
       rcases rootKind_cases E.ty k with h | ⟨_, h⟩ <;> rw [h]
-      · simp only [List.filter_cons, List.filter_nil, hkn, Bool.not_false, if_true, List.mem_singleton]
+      · simp only [List.filter_cons, List.filter_nil, hkn, Bool.not_false, ite_true, List.mem_singleton]
       · simp [Kind.isName]
     exact (h _ hmem).2
   · obtain ⟨hd, hdn⟩ := List.mem_filter.mp hd
     have hmem : (⟨d.root, comp d.kind k⟩ : Dep) ∈ memDeps (derive y E k) := by
-      unfold derive memDeps; rw [if_neg (by simp [hr])]
+      unfold derive memDeps; rw [ite_eq_right (by simp [hr])]
       refine List.mem_filter.mpr ⟨List.mem_map_of_mem hd, ?_⟩
       simp only [Bool.not_eq_true'] at hdn ⊢
       simpa using comp_isName (by simpa using hdn) hkn
