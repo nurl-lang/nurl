@@ -172,7 +172,12 @@ Names never had this problem: a name dependency is lifted as itself
      `π p` to a fresh caller index `G p` (`ρ`), set `isPi` to nothing, and
      drop from `R` the roots reached only through regions. Then a region is
      an ordinary renamed root, `subD` is the identity, and `S.R = []` holds
-     for a call whose arguments hold views only through regions. So
+     for a call whose arguments hold views only through regions. The ghost
+     setup's `σ` must be empty too. `RSetup.OK.σ_sub` asks
+     `S.σ v ⊆ allKinds S.R`, and today's `callS.σ` maps a parameter to the
+     roots its argument holds, which are no longer in `R`. The real
+     region-to-caller mapping is kept apart, for `subDc` (item 4) and the
+     exit substitution (`callRes`). So
      `RSetup.StmtT.ren`, as it stands, types the body where the call places
      it, with the region a binding of mode `.region` in the caller's
      context. What remains to show is that this setup meets `RSetup.OK` and
@@ -186,7 +191,13 @@ Names never had this problem: a name dependency is lifted as itself
      `fnOK_mono`-style lemma showing that what typed before still types.
   3. *Regions for lent parameters.* `f1` takes `vv` lent (`.inp`), and only
      `sink`/`inout` parameters get a region (`regioned`). Extending
-     `regioned` changes `sigCtx` (as turn-on 1 did) and also lands with 3d.
+     `regioned` changes `sigCtx` (as turn-on 1 did). The lift of a lent
+     parameter changes as well: `liftE`'s `.rootb` branch returns the
+     caller's entry `S.pe` and drops the parameter's own `held`. A regioned
+     lent parameter's `held` holds `⟨π p, .view⟩` (`regionP`), so the
+     `.rootb` lift has to carry that dependency, as `⟨G p, .view⟩`, or the
+     witness loses its ghost dependency (see the first open question
+     below). This also lands with 3d.
   4. *The invariant over the `subDc` context.* Preservation of the call
      with `MInv m (subDc Γg)`. Steps that commute with the substitution
      (`subDc_derive`; kills on callee bindings, which no `σ` names)
