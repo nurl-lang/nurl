@@ -1543,11 +1543,11 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
     simp only [callS] at hd ⊢
     split at hd
     · rename_i hv
-      rw [if_pos hv]
+      simp only [hv, and_self, ↓reduceIte]
       split at hd
       · cases hd
       · rename_i hint
-        rw [if_neg hint]
+        simp only [hint, ↓reduceIte]
         apply List.mem_append_right
         rcases List.mem_append.mp hd with hd | hd
         · exact List.mem_map.mpr ⟨d.root, List.mem_map_of_mem hd, rfl⟩

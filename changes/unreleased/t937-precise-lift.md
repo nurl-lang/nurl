@@ -1,0 +1,3 @@
+### Changed
+
+- **The formal proof's model of a call now tracks exactly what each argument views** (AGORA-937). The proof models a parameter's region as standing for the memory its argument holds. Before, the model took every root the argument held and assumed it was reached in every possible way. It now takes the argument's own dependencies, in the way the argument actually reaches each one. When a callee reaches through the region, the two ways now combine into one. This gives the proof the exactness the next step needs. No rule changes, nothing changes in nurlc, and the proof is complete with no theorem weakened.
