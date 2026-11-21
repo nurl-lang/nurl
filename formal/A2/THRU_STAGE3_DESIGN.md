@@ -426,6 +426,55 @@ composed kind covers every way, `RSetup.OK.σ_self`). The lift composes kinds
 holds by `comp_assoc`, with no closure of σ under kinds (`σ_kinds` is gone).
 No rule changes. This is what `subDc_hits_exact` below needs of σ.
 
+### 3d route (2026-11-22): no frozen roots; the substituted lift is exact
+
+Since item 2 (`regioned` is `holdsView` in every mode), a call reaches every
+root in `callR` through a region. The argument's type is the parameter's,
+and a value whose type holds no views stores none. So `callS.R`, and with
+it the `allKinds R` part of `RSetup.A`, over-approximates what the regions
+now track exactly. That over-approximation is what makes the substituted
+(non-ghost) lift overkill:
+- `heldA` adds `S.A` to every lifted entry that is not held-fresh;
+- `allKinds` holds `.inner` and `.share`;
+- so the caller's `.dropIn` on a region-reached root `w` would end every
+  such entry, which the callee keeps.
+
+The route that needs no split invariant (typing context with ghost regions
+vs `MInv` over the substituted one):
+1. `RSetup.OK.σ_sub` (`σ ⊆ allKinds R`) becomes a frame clause: σ's roots
+   are frame roots, which is what `σ_frame` derives today. `pe_held` admits
+   `d ∈ S.σ u` for a region `u` (a lent argument holding views holds what
+   its region stands for).
+2. `callS.R := []`. Every `S.R = []` premise is then met by every call, and
+   `σ_nil_of_R` goes. The edit cases of `StmtT.ren` that used it (a change
+   through a region placed by a call that passed no views) become the real
+   3d proof:
+   - the caller's change on `w` is a `.dropIn` at `⟨w, .inner⟩`, the only
+     kind a ThruOKR region path has;
+   - it hits the lifted callee entries exactly (`subDc_hits_exact`);
+   - it hits no frame entry, which is the entry kill (`thruPre`), as
+     `N_mut`'s last clause is for names.
+3. `CallT`'s premise: an argument to a through-changing call holds real
+   roots only at `.view`, each a live owned `Vec` root not in `F`; plus the
+   exit kill.
+
+Why `A` must shrink, not only `heldA`: a callee's own view-holding local
+`z` (say a `Vec` of slices of the region's buffer) is lifted with `held ⊇
+S.A` (`ownHeld`, `heldA_own`). `allKinds R` holds `⟨w, .inner⟩`, so the
+caller's `.dropIn` on `w` would end `z`. The callee keeps `z`, since its
+own `⟨π p, .view⟩` is no `.dropIn` hit, and so does memory
+(`RegionViewAt.keep_inner`). The over-approximation itself, not the lift's
+kinds, is the overkill. Closing a precise list under composition gives
+`allKinds` back (`comp .self k = k`), so the bound `held ⊆ rds ρ held ++ S.A`
+(`held_lift` and about 125 uses of `S.A` in `Rename.lean`) has to become
+"…, or what a region stands for, composed" (`σC`), a predicate rather than
+a list.
+
+Measured on 3896bd20:
+- `RSetup.A := S.N` breaks 9 sites in `Rename.lean`, plus `pe_held`;
+- `heldA := N` instead breaks about 80 (`heldA_own` is used through
+  `liftE`'s equations), so step 1 changes `A`/`R`, not `heldA`.
+
 ### 3d groundwork: what the kinds-composed lift kills (`A2/SubDcKill.lean`)
 
 For 3d, a call passes an argument that views real memory `w`, so σ ≠ [], and
