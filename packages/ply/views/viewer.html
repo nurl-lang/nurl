@@ -550,6 +550,9 @@ cv.addEventListener("pointermove", function (e) {
   if (!p) return;
   var dx = e.clientX - p.x, dy = e.clientY - p.y;
   p.x = e.clientX; p.y = e.clientY;
+  /* a finger that travels is dragging, even if it comes back */
+  if (tapCand && tapCand.id === e.pointerId &&
+      Math.hypot(e.clientX - tapCand.x, e.clientY - tapCand.y) >= 10) tapCand = null;
   if (npts === 1) {
     if (mousePan) panBy(dx, dy); else orbitBy(dx, dy);
   } else if (npts === 2 && pinch) {

@@ -480,6 +480,83 @@ $ `ui.nu`
 
 @ __mas_stopping → b { ^ != 0 ( locked_get [i] g_mas_stop ) }
 
+// A running job's child pid. The shell writes the file before it becomes
+// the reconstruction, so a just-spawned child may need a moment: wait up
+// to 2 s for it. 0 when there is none.
+@ __mas_wait_pid s id → i {
+    : ~ i n 0
+    ~ < n 20 {
+        : i pid ( __mas_read_int id `pid` )
+        ? > pid 0 { ^ pid } {}
+        ( sleep_ms 100 )
+        = n + n 1
+    }
+    ^ 0
+}
+
+// Is `pid` a live `map-anything serve`? (its /proc command line holds
+// the word `serve`; a recycled pid running anything else is not one)
+@ __mas_is_server i pid → b {
+    ? <= pid 0 { ^ F } {}
+    : String cl ( string_from `/proc/` )
+    ( string_push_int cl pid )
+    ( string_push_str cl `/cmdline` )
+    ?? ( read_file_bytes ( string_data cl ) ) {
+        F _e → { ^ F }
+        T bytes → {
+            // argv words are NUL-separated: look for one that is `serve`
+            : ( Slice u ) bs ( slice_from_vec [u] bytes )
+            : i n ( slice_len [u] bs )
+            : ~ i st 0
+            : ~ i k 0
+            ~ <= k n {
+                ? | == k n == ( slice_byte bs ? < k n k 0 ) 0 {
+                    ? == - k st 5 {
+                        ? & & & & == ( slice_byte bs st ) 115 == ( slice_byte bs + st 1 ) 101 == ( slice_byte bs + st 2 ) 114 == ( slice_byte bs + st 3 ) 118 == ( slice_byte bs + st 4 ) 101 { ^ T } {}
+                    } {}
+                    = st + k 1
+                } {}
+                = k + k 1
+            }
+            ^ F
+        }
+    }
+}
+
+// Become the data directory's only server. <data>/serve.lock is created
+// with O_EXCL, so of two servers starting at once exactly one gets it, and
+// holds this process's pid. A lock whose pid is not a live server is left
+// over from a crash and is taken over. A second server on the same
+// directory is refused here, before it can touch a job or a child; the
+// lock is removed when the server stops.
+@ __mas_own_data s data → b {
+    : String lp ( path_join data `serve.lock` )
+    : String me ( string_new )
+    ( string_push_int me # i ( getpid ) )
+    : ~ i tries 0
+    ~ < tries 2 {
+        : i32 fd ( open ( string_data lp ) # i32 | | ( posix_const `O_CREAT` ) ( posix_const `O_EXCL` ) ( posix_const `O_WRONLY` ) # i32 420 )
+        ? >= # i fd 0 {
+            : i32 _c ( close fd )
+            ?? ( write_file ( string_data lp ) ( string_data me ) ) { T _ → { ^ T } F _e → { ^ F } }
+        } {}
+        : String held ( __mas_read ( string_data lp ) )
+        // empty: another server has just created it and is writing its pid
+        ? == ( string_len held ) 0 { ^ F } {}
+        : i owner ( nurl_str_to_int ( string_data held ) )
+        ? ( __mas_is_server owner ) { ^ F } {}
+        // stale: its server is gone
+        ?? ( file_delete ( string_data lp ) ) { T _ → {} F _e → {} }
+        = tries + tries 1
+    }
+    ^ F
+}
+
+@ __mas_release_data s data → v {
+    : String lp ( path_join data `serve.lock` )
+    ?? ( file_delete ( string_data lp ) ) { T _ → {} F _e → {} }
+}
+
 // Is `pid` alive and one of our reconstructions (its command line runs
 // into cloud.tmp.ply)? A recycled pid belonging to anything else is not.
 @ __mas_is_our_child i pid → b {
@@ -551,9 +628,13 @@ $ `ui.nu`
                 : String out ( path_join ( string_data jd ) `cloud.ply` )
                 // run in the job directory, so the log the page shows names
                 // the job's own files and not the server's data path
+                // The shell records its own pid in `pid` and then becomes
+                // the reconstruction (`exec` keeps the pid), so the process
+                // never runs without the file that names it — whatever
+                // happens to this server between the spawn and here.
                 : String cmd ( string_from `cd ` )
                 ( __mas_q cmd ( string_data jd ) )
-                ( string_push_str cmd ` && exec ` )
+                ( string_push_str cmd ` && echo $$ > pid && exec ` )
                 ( __mas_q cmd ( string_data . c bin ) )
                 ( string_push_char cmd 32 )
                 ( __mas_q cmd ( string_data inp ) )
@@ -564,17 +645,28 @@ $ `ui.nu`
                 ( nurl_eprint id )
                 ( nurl_eprint ` running: ` )
                 ( nurl_eprintln ( string_data opts ) )
-                // `exec` makes the shell's pid the reconstruction's own, so
-                // the pid recorded here is the process to end
                 : ( Vec s ) args ( vec_new [s] )
                 ( vec_push [s] args `-c` )
                 ( vec_push [s] args ( string_data cmd ) )
-                ?? ( process_spawn `/bin/sh` args ) {
+                : String pidp ( path_join ( string_data jd ) `pid` )
+                ?? ( file_delete ( string_data pidp ) ) { T _ → {} F _e → {} }
+                // spawned under the job lock, and not at all once a shutdown
+                // has begun: the shutdown takes the same lock, so it either
+                // runs first (nothing is spawned) or finds the child
+                : i t ( __mas_lock )
+                : ~ ? ProcChild got @ ?ProcChild { F }
+                : ~ b spawn_failed F
+                ? ( __mas_stopping ) {} {
+                    ?? ( process_spawn `/bin/sh` args ) {
+                        T ch → { = got @ ?ProcChild { T ch } }
+                        F _e → { = spawn_failed T }
+                    }
+                }
+                ( __mas_unlock t )
+                ? spawn_failed { ( __mas_log_put id `map-anything serve: could not start the reconstruction` ) } {}
+                ?? got {
+                    F → {}
                     T ch → {
-                        : String pidp ( path_join ( string_data jd ) `pid` )
-                        : String pidv ( string_new )
-                        ( string_push_int pidv ( proc_pid ch ) )
-                        ?? ( write_file ( string_data pidp ) ( string_data pidv ) ) { T _ → {} F _e → {} }
                         : i code ( proc_wait ch )
                         ?? ( file_delete ( string_data pidp ) ) { T _ → {} F _e → {} }
                         // a shutdown ended it: the job is the shutdown's to queue again
@@ -586,8 +678,9 @@ $ `ui.nu`
                             }
                         } {}
                     }
-                    F _e → { ( __mas_log_put id `map-anything serve: could not start the reconstruction` ) }
                 }
+                // not spawned because a shutdown began: leave the job to it
+                ? & ! spawn_failed ( __mas_stopping ) { ^ v } {}
             } {
                 ( __mas_log_put id `map-anything serve: the job's options are malformed` )
             }
@@ -620,7 +713,7 @@ $ `ui.nu`
             T id → {
                 ? ( __mas_state_is ( string_data id ) `running` ) {
                     : String pidp ( __mas_jfile ( string_data id ) `pid` )
-                    : i pid ( __mas_read_int ( string_data id ) `pid` )
+                    : i pid ( __mas_wait_pid ( string_data id ) )
                     ? ( __mas_is_our_child pid ) {
                         ( nurl_eprint `map-anything serve: ending the orphaned reconstruction, pid ` )
                         ( nurl_eprintln ( nurl_str_int pid ) )
@@ -761,32 +854,38 @@ $ `ui.nu`
 @ __mas_upload HttpRequest req Params ps → HttpResponse {
     : String id ( __mas_param ps `id` )
     ? ( __mas_id_ok ( string_data id ) ) {} { ^ ( __mas_err 400 `bad job id` ) }
-    ? ( __mas_state_is ( string_data id ) `uploading` ) {} {
-        ^ ( __mas_err 409 `the job is not taking uploads` )
-    }
     : String raw ( __mas_param ps `name` )
     : String fname ( __mas_safe_name ( string_data raw ) )
     ? == ( string_len fname ) 0 { ^ ( __mas_err 400 `the file needs a name` ) } {}
     : String ind ( __mas_jfile ( string_data id ) `input` )
     : String fp ( path_join ( string_data ind ) ( string_data fname ) )
     : i off ?? ( request_query_int req `offset` ) { T v → v F → 0 }
-    : ~ i have -1
-    ?? ( file_size ( string_data fp ) ) { T z → { = have z } F _e → {} }
-    ? == off 0 {
-        // two names that clean to the same one must not overwrite each other
-        ? >= have 0 { ^ ( __mas_err 409 `the job already has a file of that name` ) } {}
-        ?? ( write_file_bytes ( string_data fp ) . req body ) {
-            T _ → {}
-            F _e → { ^ ( __mas_err 500 `cannot store the file` ) }
+    // The state check, the size check and the write under the job lock:
+    // two pieces racing for one offset, or two first pieces for one name,
+    // cannot both pass, and a job that has been queued or deleted takes
+    // no more bytes. (A piece is at most 32 MiB, so the lock is short.)
+    : ~ i res 0  // 0 stored, 1 not uploading, 2 name taken, 3 out of order, 4 write failed
+    : i t ( __mas_lock )
+    ? ( __mas_state_is ( string_data id ) `uploading` ) {
+        : ~ i have -1
+        ?? ( file_size ( string_data fp ) ) { T z → { = have z } F _e → {} }
+        ? == off 0 {
+            // two names that clean to the same one must not overwrite each other
+            ? >= have 0 { = res 2 } {
+                ?? ( write_file_bytes ( string_data fp ) . req body ) { T _ → {} F _e → { = res 4 } }
+            }
+        } {
+            // a later piece continues exactly where the file ends
+            ? != have off { = res 3 } {
+                ?? ( append_file_bytes ( string_data fp ) . req body ) { T _ → {} F _e → { = res 4 } }
+            }
         }
-    } {
-        // a later piece continues exactly where the file ends
-        ? != have off { ^ ( __mas_err 409 `that piece does not continue the file` ) } {}
-        ?? ( append_file_bytes ( string_data fp ) . req body ) {
-            T _ → {}
-            F _e → { ^ ( __mas_err 500 `cannot store the file` ) }
-        }
-    }
+    } { = res 1 }
+    ( __mas_unlock t )
+    ? == res 1 { ^ ( __mas_err 409 `the job is not taking uploads` ) } {}
+    ? == res 2 { ^ ( __mas_err 409 `the job already has a file of that name` ) } {}
+    ? == res 3 { ^ ( __mas_err 409 `that piece does not continue the file` ) } {}
+    ? == res 4 { ^ ( __mas_err 500 `cannot store the file` ) } {}
     : Json o ( json_obj_new )
     : b _n ( json_obj_set o `name` ( json_str_lit ( string_data fname ) ) )
     : b _b ( json_obj_set o `bytes` ( json_int + off ( vec_len [u] . req body ) ) )
@@ -1014,6 +1113,11 @@ $ `ui.nu`
         ^ 1
     }
     ( locked_set [MaCfg] g_mas_cfg @ MaCfg { ( string_from ( string_data data ) ) ( string_from ( string_data bin ) ) pass } )
+    ? ( __mas_own_data ( string_data data ) ) {} {
+        ( nurl_eprint `map-anything serve: another server already owns ` )
+        ( nurl_eprintln ( string_data data ) )
+        ^ 1
+    }
     ( __mas_recover )
 
     : ( @ v ) workfn \ → v { ( __mas_worker ) }
@@ -1068,7 +1172,11 @@ $ `ui.nu`
 
     // SIGTERM ended the listener: end the reconstruction in flight and
     // queue its job again, so the next start resumes it
+    // the stop flag under the job lock: a spawn either happened before
+    // (and its child is found below) or does not happen at all
+    : i t0 ( __mas_lock )
     ( locked_set [i] g_mas_stop 1 )
+    ( __mas_unlock t0 )
     : ( Vec String ) ids ( __mas_job_ids )
     : ~ i j 0
     ~ < j ( vec_len [String] ids ) {
@@ -1078,7 +1186,7 @@ $ `ui.nu`
                 ? ( __mas_state_is sid `running` ) {
                     : String pidp ( __mas_jfile sid `pid` )
                     : s pp ( string_data pidp )
-                    : i pid ( __mas_read_int sid `pid` )
+                    : i pid ( __mas_wait_pid sid )
                     ? > pid 0 {
                         ( nurl_eprint `map-anything serve: stopping the reconstruction of job ` )
                         ( nurl_eprintln sid )
@@ -1093,5 +1201,6 @@ $ `ui.nu`
         }
         = j + j 1
     }
+    ( __mas_release_data ( string_data data ) )
     ^ ? == rc 0 0 1
 }

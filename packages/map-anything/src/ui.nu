@@ -218,7 +218,13 @@ function api(method, url, body) {
   });
 }
 
-function pad4(n) { return ("000" + n).slice(-4); }
+/* the position, zero-padded to the width of the largest one (at least
+   four digits) and never cut, so every prefix in a selection differs */
+function padTo(n, total) {
+  var w = Math.max(4, String(total).length), t = String(n);
+  while (t.length < w) t = "0" + t;
+  return t;
+}
 
 /* one piece of a file: bytes [off, off + piece.size) */
 function putPiece(url, piece, onprog) {
@@ -295,7 +301,7 @@ $("go").onclick = function () {
     files.forEach(function (f, k) {
       chain = chain.then(function () {
         msg.textContent = "uploading " + (k + 1) + "/" + files.length + " — " + f.name;
-        return put("/api/jobs/" + id + "/files/" + encodeURIComponent(pad4(k + 1) + "_" + safe(f.name)), f, function (n) {
+        return put("/api/jobs/" + id + "/files/" + encodeURIComponent(padTo(k + 1, files.length) + "_" + safe(f.name)), f, function (n) {
           bar.style.width = (100 * (done + n) / Math.max(1, total)).toFixed(1) + "%";
         }).then(function () { done += f.size; });
       });

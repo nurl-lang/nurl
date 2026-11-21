@@ -91,7 +91,32 @@ for _ in $(seq 1 100); do
 done
 check "delete the run" 204 "$(code $A -X DELETE "$B/api/jobs/$ID2")"
 
+# two first pieces for one name at the same moment: exactly one is stored
+racers=""
+for n in 1 2 3 4 5 6; do
+    curl -s -o /dev/null -w '%{http_code}\n' $A -X PUT --data-binary @"$WORK/g" "$B/api/jobs/$ID/files/race.jpg?offset=0" >> "$WORK/race" &
+    racers="$racers $!"
+done
+# only the uploads: a bare `wait` would wait for the server too
+for r in $racers; do wait "$r"; done
+check "concurrent uploads of one name: one stored" 1 "$(grep -c 201 "$WORK/race")"
+check "...the rest refused" 5 "$(grep -c 409 "$WORK/race")"
+
+# the data directory has one owner
+"$WORK/map-anything" serve --port $((PORT + 1)) --data "$WORK/data" >"$WORK/second.log" 2>&1
+check "a second server on the same data is refused" 1 "$(grep -c 'another server already owns' "$WORK/second.log")"
+
 check "delete" 204 "$(code $A -X DELETE "$B/api/jobs/$ID")"
 check "...and it is gone" 0 "$(ls "$WORK/data/jobs" | wc -l | tr -d ' ')"
+
+# a lock left by a server that is gone is taken over
+kill "$PID"; wait "$PID" 2>/dev/null; PID=""
+check "the lock is released on stop" 0 "$(ls "$WORK/data" | grep -c serve.lock)"
+echo 999999999 > "$WORK/data/serve.lock"
+"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/third.log" 2>&1 &
+PID=$!
+up=0
+for _ in $(seq 1 50); do curl -s -m 1 -o /dev/null "$B/healthz" && { up=1; break; }; sleep 0.1; done
+check "a stale lock is taken over" 1 "$up"
 
 [ $fails = 0 ] || exit 1
