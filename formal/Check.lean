@@ -666,6 +666,9 @@ import A3
 #print axioms A2.RegionViewAt.keep_inner
 #print axioms A2.killHv_live_nohit
 #print axioms A2.thruPre_live_nohit
+-- (A2/Rename.lean, AGORA-937 stage 3): a call setting may lift regions as ghost bindings
+-- (`RSetup.ghost`), renamed rather than substituted; then no index is a region's to substitute
+#print axioms A2.RSetup.AbsOK.ghost_notPi
 -- (A2/SliceCopyViewWitness.lean, AGORA-935): a copy of a slice of views, typed as A2 types a
 -- copy (a call, `callRes`), holds copies of its loans and nothing of the slice: releasing the
 -- temporary leaves it live, replacing what the views point into ends it, and then no read types
