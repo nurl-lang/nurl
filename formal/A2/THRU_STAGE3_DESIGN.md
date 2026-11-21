@@ -140,6 +140,15 @@ Names never had this problem: a name dependency is lifted as itself
   of a list as `ValOK`/`ViewsOK` ask, lands through its substitution.
   This is the per-dependency step of carrying `MInv` over the substituted
   context.
+- **3c, part 2 (done: `comp_assoc`, `subDc_comp`, `subDc_derive`).**
+  Deriving a borrow commutes with the substitution, so the substituted
+  context's derived borrows are those of the substituted entries. The rest
+  of 3c is the steps whose post-context is not a pointwise image: a change
+  through a borrow that reaches a region kills on the ghost binding, which
+  in the substituted world is no kill on a root. There the invariant needs
+  the stability facts: the owners' trees stay well-formed, the arguments'
+  views of the region's own buffers stay valid, and nothing else live
+  reaches inside.
 - **3b, part 3 (fallback).** The ghost store: `RegionSnap`, building on `Region.lean`'s
   `Val.viewsOf`/`regionSnap`; `StepI`; the erasure lemma; and `MInvI`
   extending `MInv` with the region clause. Existing `MInv` lemmas stay

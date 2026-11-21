@@ -28,7 +28,9 @@ This file proves the facts the call's entry needs:
   which it already speaks of;
 * the kinds-composed substitution `subDc` and `LandedR.subDc`/`_list`: with
   each region read as its addresses, what lands through a dependency lands
-  through its substitution.
+  through its substitution;
+* deriving a borrow commutes with the substitution (`subDc_derive`, from
+  `comp_assoc`).
 
 Nothing here is used by a typing rule yet, and no theorem statement
 changes. -/
@@ -205,5 +207,63 @@ theorem subDc_noPi {isPi : Var → Bool} {σ : Var → List Dep} {d : Dep} (h : 
 theorem LandedR.of_noPi {m : Mem} {isPi : Var → Bool} {reg : Var → Nat → Prop} {dep : Dep} {n : Val}
     (h : isPi dep.root = false) : LandedR m isPi reg dep n ↔ Landed m dep n := by
   simp [LandedR, h]
+
+/-! ### The substitution commutes with deriving a borrow
+
+A borrow derived from a borrowed entry composes each of its dependencies'
+kinds with the borrow's (`derive`). Composing is associative, so deriving
+and then substituting is substituting and then deriving. The substituted
+context's derived borrows are then those of the substituted entries,
+however the body derives them. -/
+
+/-- Composing kinds is associative. -/
+theorem comp_assoc (a b c : Kind) : A2.comp (A2.comp a b) c = A2.comp a (A2.comp b c) := by
+  cases a <;> cases b <;> cases c <;> rfl
+
+/-- Composing a dependency's kind with one that is not a name gives a name
+    only when the dependency's was one. -/
+theorem comp_isName_r {a k : Kind} (hk : k.isName = false) : (A2.comp a k).isName = a.isName := by
+  cases a <;> cases k <;> simp_all [A2.comp, Kind.isName]
+
+/-- Composing every dependency with a kind `k` that is not a name commutes
+    with the substitution. -/
+theorem subDc_comp {isPi : Var → Bool} {σ : Var → List Dep} {k : Kind} (hk : k.isName = false) (d : Dep) :
+    A2.subDc isPi σ ⟨d.root, A2.comp d.kind k⟩ =
+      (A2.subDc isPi σ d).map fun e => ⟨e.root, A2.comp e.kind k⟩ := by
+  unfold A2.subDc
+  by_cases hp : isPi d.root = true
+  · simp only [hp, ↓reduceIte]
+    rw [comp_isName_r hk]
+    cases hn : d.kind.isName
+    · simp only [Bool.false_eq_true, ↓reduceIte, List.map_map]
+      apply List.map_congr_left
+      intro e _
+      simp [comp_assoc]
+    · simp
+  · simp only [Bool.not_eq_true] at hp
+    simp [hp]
+
+theorem subDc_comp_list {isPi : Var → Bool} {σ : Var → List Dep} {k : Kind} (hk : k.isName = false)
+    (ds : List Dep) :
+    (ds.map fun d => (⟨d.root, A2.comp d.kind k⟩ : Dep)).flatMap (A2.subDc isPi σ) =
+      (ds.flatMap (A2.subDc isPi σ)).map fun e => ⟨e.root, A2.comp e.kind k⟩ := by
+  induction ds with
+  | nil => rfl
+  | cons d ds ih => simp only [List.map_cons, List.flatMap_cons, List.map_append, subDc_comp hk, ih]
+
+/-- **Deriving a borrow commutes with the substitution**: from a borrowed
+    entry, by a kind that is not a name, the substituted dependencies of the
+    borrow are the borrow of the substituted entry. (From a root, the
+    borrow's one dependency is on the root, which is no region.) -/
+theorem subDc_derive {isPi : Var → Bool} {σ : Var → List Dep} {y : Var} {E : Entry} {k : Kind}
+    (hk : k.isName = false) (hroot : E.mode.isRoot = true → isPi y = false) :
+    (derive y E k).flatMap (A2.subDc isPi σ) = derive y { E with path := E.path.flatMap (A2.subDc isPi σ) } k := by
+  unfold derive
+  by_cases hr : E.mode.isRoot = true
+  · simp only [hr, ↓reduceIte, List.flatMap_cons, List.flatMap_nil, List.append_nil]
+    exact subDc_noPi (hroot hr)
+  · simp only [Bool.not_eq_true] at hr
+    simp only [hr, Bool.false_eq_true, ↓reduceIte]
+    exact subDc_comp_list hk E.path
 
 end A2
