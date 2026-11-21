@@ -293,6 +293,53 @@ Names never had this problem: a name dependency is lifted as itself
   - the CLAIM's "Not typed yet" entry goes;
   - `fnOK_mono`-style lemmas show every program typed before is typed after.
 
+## A depth-aware effect, needed before items 2, 3 and 5
+
+A probe on main 50f28c57 (agora #4290) showed that AGORA-933's `f1` cannot
+be typed with today's effects, even in its own frame.
+- A lent parameter is always live (`MInv.rootbLive`) and anchored
+  (`sigCtx_anch`).
+- With a region, `vv` holds `⟨π p, .view⟩`.
+- `f1`'s grow through an element of `vv`'s slice is an edit through a
+  borrow that reaches the region at kind `.inner`. Its effect on the region
+  is `.drop` (`Edit.effAt`), and `Eff.kills .drop _ .view = true`, so the
+  edit ends `vv`, against `rootbLive`.
+- At run time `vv`'s view of `w`'s buffer stays valid: only an element's
+  inside moves (`RegionViewAt.keep_inner`).
+
+A2's effects have no depth, so the calculus needs one that says "strictly
+inside the elements". There are two ways.
+
+1. **A new effect `Eff.dropIn`.** It ends `.inner` and `.share` borrows,
+   and leaves `.view`, `.self` and names alone. An edit through a borrow
+   whose dependency on a root is `.inner` has that effect there
+   (`Edit.effAt`). Its cost is the order on effects:
+   - `Eff.kills_mono` needs `e.le b → kills e ⊆ kills b`;
+   - `dropIn` and `realloc` kill incomparable sets (`{inner, share}` vs.
+     `{view, self/hv}`), so `Eff.le` can no longer be a rank (`Eff.rank`,
+     7 uses) and becomes a partial order (inclusion of kills);
+   - `canDo` (14 files), the `inout` bounds and every `Eff` case split
+     (41 files) are touched, and each bound check is re-proved.
+2. **Two roots per region.** `π p` is the viewed buffer, and `π' p` is the
+   inside of its elements. A borrow read strictly inside an element depends
+   on `π' p`, not on `π p` at `.inner`. A change there is any effect on
+   `π' p`, which does not touch `vv`'s `⟨π p, .view⟩`. Its cost:
+   - `Eff` is untouched;
+   - `derive` (or the element-read rules, `RhsT.at`/`sat`) must switch root
+     for the inner part, and their lifts and `subD` follow;
+   - two region indices per parameter (`isRegionIdx`, `sigCtx`, `σ`).
+
+   This is more local, but it changes how borrows are derived, which every
+   rule reads.
+
+Recommendation: (1). It is the cause, a missing depth in the effect
+semantics, rather than a second root that encodes it. It also lets the
+frame's `sw` (a view of `w`'s own buffer) and the argument `vv` stay live
+after the call in A2, as they do in nurlc. The coarse `.drop` in the entry
+and exit kills (`thruPre`) then becomes `dropIn` on roots reached through
+`.view`. The work comes first, as its own change with full proofs: no rule
+uses `dropIn` yet, and `Eff.le` keeps every existing inequality.
+
 ## Open questions for review
 
 1. Does lifting a lent parameter's region keep `liftE`'s `.rootb` case's
