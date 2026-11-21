@@ -397,7 +397,25 @@ Witnesses: every one whose lent parameter holds views now sees its region.
 AGORA-909's own example (`ParamViewWitness`) still types its store as an
 `edit false`.
 
-**What item 3 still needs from item 1.** A region root's binding has type
+### Done: item 3 (a change through a region)
+
+`formal/rules/t937-thru-region.md`. Item 3 turned out separable from 3d after
+all. `editB`/`takeB` ask `ThruOKR`: a root may be a region whose effect ends no
+view. With `Entry.rvec` that effect is `.dropIn` (#2161). Placing such a change
+where the call puts it has two cases:
+
+- **A ghost region** stays a region, so the lift is exact.
+  `canon_kill'` allows a region kill that ends no view.
+- **A substituted region** stands for nothing. The change is an `edit true`,
+  placed by a call that passes no views, so σ = []. The region drops out of the
+  lifted path. `editB`'s nonempty-path premise was unused and is gone.
+  The callee's kill on the region only weakens its context
+  (`weaker_kill_region`), and the call's context is stronger
+  (`canon_weaker_sub`, `StmtT.sub`).
+
+Witness: `A2/RegionChangeWitness.lean`.
+
+**What item 3 needed from item 1.** A region root's binding has type
 `.int` (`regionE`, `AbsOK` clause 4), so `Ty.isVec` is false there, and
 `f1`'s change through `vv`'s slice still gives `π p` the effect `.drop`.
 Item 3 must give a region root `.dropIn` when what it stands for is a

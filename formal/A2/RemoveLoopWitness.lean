@@ -117,8 +117,8 @@ theorem step_typed {ξ : Exits} {Γ : Ctx} (hc : LoopCtx Γ) (h5 : Γ 5 = none) 
     c5.h3 rfl rfl rfl rfl (by simp)
     (EditArg.set (Ey := intE) (ExprT.var c5.h4 rfl rfl) (by simp [A2.setE, upd]) rfl rfl PushArg.int)
     (fun y hy => by simp [Edit.stored] at hy; subst hy; decide)
-    c5.h3 rfl (by simp [Eb, memDeps, Kind.isName])
-    (thru_ok nr5 c5.h0 (fun y hy => by simp [Edit.stored] at hy; subst hy; decide) rfl (by simp))
+    c5.h3 rfl
+    (thru_ok nr5 c5.h0 (fun y hy => by simp [Edit.stored] at hy; subst hy; decide) rfl (by simp)).toR
     (fun _ => rfl)
   have k5 : A2.setE (A2.killThru (.set (.var 4) 5) Eb.ty Eb.path (A2.setE Γ 5 intE)) 3 Eb
       = A2.setE Γ 5 intE := thru_keeps c5 _

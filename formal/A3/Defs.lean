@@ -378,7 +378,7 @@ theorem _root_.A2.StmtT.wguardGet {P : Prog} {Γ : Ctx} {F : List Var} {x y : Va
   have hl : lockE (.vec u) = ⟨.vec u, .own, true, [], [], false, false, false, false⟩ := by simp [lockE]
   rw [hl] at hx
   refine StmtT.editB (t := u) hy rfl rfl rfl huv hyF (EditArg.trunc hi) (fun _ h => by cases h) hy rfl
-    (by simp [memDeps, Kind.isName]) ?_ (fun _ => hdf)
+    (ThruOK.toR ?_) (fun _ => hdf)
   intro d hd
   simp only [memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd

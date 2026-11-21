@@ -127,7 +127,7 @@ theorem edit_typed : StmtT P .none G4 [] (.edit false 3 (.push 4)) Δe := by
     (op := .push 4) (Ex := Ee) (Ex1 := Ee) (t := .int) (D := []) h3 rfl rfl rfl rfl
     (by simp) (EditArg.push (Ey := intE) h4 rfl rfl PushArg.int)
     (fun y hy => by simp [Edit.stored] at hy; subst hy; decide)
-    h3 rfl (by simp [Ee, memDeps, Kind.isName]) thru_ok
+    h3 rfl thru_ok.toR
     (fun h => by simp [Edit.drops] at h) (fun _ => rfl)
   simpa [Δe, Ee] using this
 
