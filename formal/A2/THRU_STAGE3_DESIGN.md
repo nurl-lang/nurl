@@ -327,7 +327,13 @@ inside the elements". There are two ways.
    - `Eff` is untouched;
    - `derive` (or the element-read rules, `RhsT.at`/`sat`) must switch root
      for the inner part, and their lifts and `subD` follow;
-   - two region indices per parameter (`isRegionIdx`, `sigCtx`, `σ`).
+   - two region indices per parameter (`isRegionIdx`, `sigCtx`, `σ`);
+   - replacing or dropping an element through `π p` (a `.drop` there) must
+     also end what depends on `π' p`, the inside of the element it
+     replaced. Either such an edit has an effect on both roots, or a
+     borrow inside an element keeps a dependency on `π p` too. Option 1
+     gets this for free: `dropIn` and `drop` both end `.inner` borrows of
+     the one root.
 
    This is more local, but it changes how borrows are derived, which every
    rule reads.
