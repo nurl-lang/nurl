@@ -790,6 +790,13 @@ This makes B2's last two cases depend on B3's invariant. The order is therefore:
 4. `SrcCase` relaxed (`withLock`, `withElem`);
 5. the call side (`CallA`, CallMem, CallInv), with the rest of B3.
 
+**Open design question for the closure-capture clause.** Folding it into `AnchoredS` (for the held disjunct: no `q ∈ V` holds a mutating name dependency on the root) needs no new `Inv` field. But every transport would then have to keep the name dependencies of the statement's bindings, not only their types. `Inv.weaker` breaks that: `EntryWeaker.live` lets a weaker entry hold more (`E.held ⊆ E'.held`), so the clause may fail in the typing while nothing changes at run time. The candidates:
+1. state it over what the run-time value of `q` may change: a package's `inout` captures, `cs` with a mutating mode. Then it is a fact of the store (`m`), kept by `MInv`-style lemmas, and weakening does not touch it;
+2. state it over the context before weakening: `Inv` would carry the strict context;
+3. forbid weakening to add mutating name dependencies, a restriction of `EntryWeaker`.
+
+(1) is the closest to what `callc` reads (`m.st c = some ⟨o, some (.pkg … cs)⟩`), and the call establishes it from `CallThruOK`'s `w ∉ roots (mutNames Γ args)` together with the package invariant that a package's captures are its entry's name dependencies.
+
 The premise of the call (`CallThruOK`) narrows too (finding above): other
 arguments reach `w` only by name. A `.self` path (a borrow `&w` passed
 beside `vv`) would let the callee view inside `w`'s elements through a
