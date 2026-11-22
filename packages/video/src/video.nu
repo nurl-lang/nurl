@@ -342,16 +342,18 @@ $ `stdlib/std/float.nu`
 @ __vd_ffmpeg s path s outdir i fps → !i String {
     : String vf ( string_from `fps=` )
     ( string_push_int vf fps )
-    ^ ( __vd_ffmpeg_vf path outdir ( string_data vf ) )
+    ^ ( __vd_ffmpeg_vf path outdir ( string_data vf ) `` )
 }
 
-// ffmpeg with a whole -vf filter chain of the caller's.
-@ __vd_ffmpeg_vf s path s outdir s vf → !i String {
+// ffmpeg with a whole -vf filter chain of the caller's. `map` names the
+// input stream to decode (e.g. `0:v:0`); `` keeps ffmpeg's own choice.
+@ __vd_ffmpeg_vf s path s outdir s vf s map → !i String {
     : String pat ( path_join outdir `%06d.jpg` )
     : ( Vec s ) args ( vec_new [s] )
     ( vec_push [s] args `-hide_banner` ) ( vec_push [s] args `-loglevel` )
     ( vec_push [s] args `error` ) ( vec_push [s] args `-y` )
     ( vec_push [s] args `-i` ) ( vec_push [s] args path )
+    ? > ( nurl_str_len map ) 0 { ( vec_push [s] args `-map` ) ( vec_push [s] args map ) } {}
     ( vec_push [s] args `-vf` ) ( vec_push [s] args vf )
     ( vec_push [s] args `-qscale:v` ) ( vec_push [s] args `2` )
     ( vec_push [s] args `-start_number` ) ( vec_push [s] args `0` )
@@ -504,8 +506,10 @@ $ `stdlib/std/float.nu`
     ^ -1.0
 }
 
-// The video stream's average frame rate per ffprobe (avg_frame_rate, a
-// fraction like 30000/1001); -1.0 when it cannot be told.
+// The first video stream's average frame rate per ffprobe (avg_frame_rate,
+// a fraction like 30000/1001); -1.0 when it cannot be told. That is the
+// stream vid_extract_count decodes (-map 0:v:0), so the rate and the frame
+// count always describe the same stream.
 @ vid_frame_rate s path → f {
     : ( Vec s ) args ( vec_new [s] )
     ( vec_push [s] args `-v` ) ( vec_push [s] args `error` )
@@ -594,5 +598,7 @@ $ `stdlib/std/float.nu`
     } {}
     // nothing to filter (every frame, full size): a no-op filter
     ? == ( string_len vf ) 0 { ( string_push_str vf `null` ) } {}
-    ^ ( __vd_ffmpeg_vf path outdir ( string_data vf ) )
+    // the stream vid_frame_rate measured, not ffmpeg's own pick (the
+    // largest), which in a file with several video streams can differ
+    ^ ( __vd_ffmpeg_vf path outdir ( string_data vf ) `0:v:0` )
 }
