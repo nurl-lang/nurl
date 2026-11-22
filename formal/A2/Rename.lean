@@ -6155,7 +6155,7 @@ theorem canon_kill_region (h : S.OK) (hab : S.AbsOK Γa) {u r : Var} (hu : S.isP
     (hoth : ∀ u', S.isPi u' = true → u' ≠ u → ∀ e ∈ S.σ u', e.root ≠ r)
     (hA : ∀ d ∈ S.A, d.root = r → d.kind.isName = true)
     (hpe : ∀ w, ∀ d ∈ (S.pe w).vdeps, d.root = r → d.kind = .view ∨ d.kind = .self ∨ d.kind.isName = true)
-    (hΦ : ∀ y E, S.Φ y = some E → hits .dropIn false r E = false) :
+    (hΦ : ∀ y E, S.Φ y = some E → E.live = true → hits .dropIn false r E = false) :
     S.canon (kill .dropIn false u Γa) = kill .dropIn false r (S.canon Γa) := by
   funext y
   rcases canon_cases_sub h Γa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, hp, hc⟩ | ⟨hy, hc⟩
@@ -6173,7 +6173,13 @@ theorem canon_kill_region (h : S.OK) (hab : S.AbsOK Γa) {u r : Var} (hu : S.isP
   · rw [canon_frame _ hy, A2.kill, hc]
     cases hE : S.Φ y with
     | none => rfl
-    | some E => simp only [Option.map_some, Option.some.injEq]; unfold killE; rw [hΦ y E hE]; rfl
+    | some E =>
+      simp only [Option.map_some, Option.some.injEq]; unfold killE
+      cases hl : E.live
+      · split
+        · cases E; simp_all
+        · rfl
+      · rw [hΦ y E hE hl]; rfl
 
 /-- A change strictly inside elements ends no name: in memory it ends what it
     ends. -/
@@ -6193,7 +6199,7 @@ theorem dtorSafe_region (h : S.OK) (hab : S.AbsOK Γa) {u r : Var} (hu : S.isPi 
     (hoth : ∀ u', S.isPi u' = true → u' ≠ u → ∀ e ∈ S.σ u', e.root ≠ r)
     (hA : ∀ d ∈ S.A, d.root = r → d.kind.isName = true)
     (hpe : ∀ w, ∀ d ∈ (S.pe w).vdeps, d.root = r → d.kind = .view ∨ d.kind = .self ∨ d.kind.isName = true)
-    (hΦ : ∀ y E, S.Φ y = some E → hits .dropIn false r E = false)
+    (hΦd : ∀ y E, S.Φ y = some E → E.dtor = true → E.mode.ownSlot = true → hitsMem .dropIn false r E = false)
     (hds : DtorSafe Γa .dropIn false u) : DtorSafe (S.canon Γa) .dropIn false r := by
   intro y E' hy hd hos
   rcases canon_cases_sub h Γa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, hp, hc⟩ | ⟨hy', hc⟩
@@ -6209,7 +6215,7 @@ theorem dtorSafe_region (h : S.OK) (hab : S.AbsOK Γa) {u r : Var} (hu : S.isPi 
       rw [subE_mode, liftE_mode v hrb, liftMode_ownSlot] at hos; exact hos
   · rw [hc] at hy; cases hy
   · rw [hc] at hy
-    rw [hitsMem_dropIn]; exact hΦ y E' hy
+    exact hΦd y E' hy hd hos
 
 /-- AGORA-937 (3d): what a call setting provides for a change through one
     of its regions to be placed exactly: what each region stands for is a view
@@ -6223,7 +6229,8 @@ def ThruReady (S : RSetup) : Prop :=
     (∀ e ∈ S.σ u, e.kind = .view ∨ e.kind = .self) ∧
     ∀ e ∈ S.σ u, (∀ u', S.isPi u' = true → u' ≠ u → ∀ e' ∈ S.σ u', e'.root ≠ e.root) ∧
       (∀ w, ∀ d ∈ (S.pe w).vdeps, d.root = e.root → d.kind = .view ∨ d.kind = .self ∨ d.kind.isName = true) ∧
-      (∀ y E, S.Φ y = some E → hits .dropIn false e.root E = false) ∧
+      (∀ y E, S.Φ y = some E → E.live = true → hits .dropIn false e.root E = false) ∧
+      (∀ y E, S.Φ y = some E → E.dtor = true → E.mode.ownSlot = true → hitsMem .dropIn false e.root E = false) ∧
       e.root ∉ S.Fc ∧ ∃ Er, S.Φ e.root = some Er ∧ Er.live = true ∧ Er.mode = .own ∧ Er.rvec = true
 
 /-- With nothing frozen, what the lift adds is names. -/
@@ -6638,7 +6645,7 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
     intro d0 hd0 hp0 e he
     obtain ⟨hki, _, _, _, _⟩ := hreg_in d0 hd0 hp0
     obtain ⟨hσk, hroots⟩ := ht.2 d0.root hp0
-    obtain ⟨_, _, _, _, Er, hEr, hErl, hErm, hErv⟩ := hroots e he
+    obtain ⟨_, _, _, _, _, Er, hEr, hErl, hErm, hErv⟩ := hroots e he
     have hck : comp e.kind d0.kind = .inner := by
       rw [hki]; rcases hσk e he with h' | h' <;> rw [h'] <;> rfl
     have hcan : S.canon Γa1 e.root = some Er := by rw [canon_frame _ (S.σ_frame h he).1]; exact hEr
@@ -6680,7 +6687,7 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
     · -- what a region stands for: a live owned `Vec` of the frame's, changed inside its elements
       obtain ⟨_, heff, Eu, hEu, _⟩ := hreg_in d0 hd0 hp0
       obtain ⟨hσk, hroots⟩ := ht.2 d0.root hp0
-      obtain ⟨hoth, hpe, hΦ, hFc, _⟩ := hroots e he
+      obtain ⟨hoth, hpe, _, hΦd, hFc, _⟩ := hroots e he
       have hout := (S.σ_frame h he).1
       obtain ⟨hck, Er, hcan, hae, hErl, hErm, heffE⟩ := himg d0 hd0 hp0 e he
       have heff' : (op.rename S.ρ).effAt (comp e.kind d0.kind)
@@ -6700,7 +6707,7 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
       · show DtorSafe (S.canon Γa1) ((op.rename S.ρ).effAt (comp e.kind d0.kind) (decide (Er.ty = (S.liftE x Ex1).ty))
           Er.rvec) false e.root
         rw [← hae, heff']
-        exact dtorSafe_region h hab1 hp0 hσk ⟨e, he, rfl⟩ hoth (fun d hd _ => ht.A_name h hd) hpe hΦ hds'
+        exact dtorSafe_region h hab1 hp0 hσk ⟨e, he, rfl⟩ hoth (fun d hd _ => ht.A_name h hd) hpe hΦd hds'
   refine ⟨⟨D', harg'⟩, hyx', hthru', ?_⟩
   -- the kills: the callee's on its own roots, renamed; on a region standing for nothing,
   -- which only weaken; on a region standing for roots, the caller's on those roots

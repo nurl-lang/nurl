@@ -306,6 +306,112 @@ theorem MInv.kill_pin {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanc
     obtain ⟨Ey, hEy, rfl⟩ := Option.map_eq_some_iff.mp hy
     exact hi.pkgFree y Ey o v hEy hl.of_killE hs i (hn.of_killE.mono (Clean.of_kill hanch hrF hmn))
 
+/-- AGORA-937 (3d): ending entries at any root, frozen or not, keeps the
+    invariant when no borrowed parameter is hit: the kill changes no memory,
+    and every borrowed parameter keeps its entry (what `kill_pin` gets from
+    the root's being unfrozen, `killE_rootb`, said outright). -/
+theorem MInv.kill_norootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {r : Var} {e : Eff} {hv : Bool}
+    (hnr : ∀ p E, Γ p = some E → E.mode = .rootb → hits e hv r E = false) : MInv m (A2.kill e hv r Γ) where
+  dom v := by rw [kill_dom]; exact hi.dom v
+  slot v E' h := by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    obtain ⟨sl, hsl, hok, hs⟩ := hi.slot v E hE
+    exact ⟨sl, hsl, by rw [killE_ty]; exact hok, hs.killE e hv r⟩
+  heap := hi.heap
+  nvSt := hi.nvSt
+  noInout v E' b h := by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    rw [killE_mode]; exact hi.noInout v E b hE
+  noRegion v E' h := by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    rw [killE_mode]; exact hi.noRegion v E hE
+  wf := hi.wf.kill e hv r
+  rootbLive p E' h hm := by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    rw [killE_mode] at hm
+    rw [show killE e hv r E = E by unfold killE; rw [hnr p E hE hm]; rfl]
+    exact hi.rootbLive p E hE hm
+  rootbLt p E' h hm := by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    rw [killE_mode] at hm; rw [killE_vdeps]
+    exact hi.rootbLt p E hE hm
+  names := hi.names.kill e hv r
+  fresh := hi.fresh.kill e hv r
+  held v E' sl T h hl hsl hT := by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    rw [killE_live] at hl; rw [killE_held]
+    exact hi.held v E sl T hE (by simp only [Bool.and_eq_true] at hl; exact hl.1) hsl hT
+  pkgs := hi.pkgs
+  armed v E' sl h hsl := by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    intro hd hos T hT
+    rw [killE_dbind] at hd; rw [killE_mode] at hos
+    obtain ⟨h1, h2⟩ := hi.armed v E sl hE hsl hd hos T hT
+    exact ⟨by rw [killE_dtor]; exact h1, by rw [killE_ty, killE_held]; exact h2⟩
+  shares v E' sl T h hsl hown hT := by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    rw [killE_ty]; exact hi.shares v E sl T hE hsl hown hT
+  blocks := hi.blocks
+  pkgFree y Ey' o v hy hl hs i hn := by
+    simp only [A2.kill] at hy
+    obtain ⟨Ey, hEy, rfl⟩ := Option.map_eq_some_iff.mp hy
+    refine hi.pkgFree y Ey o v hEy hl.of_killE hs i (hn.of_killE.mono ?_)
+    exact CleanLe.of_entries fun v E' hv' => by
+      unfold A2.kill at hv'
+      cases hE : Γ v with
+      | none => rw [hE] at hv'; cases hv'
+      | some E =>
+        rw [hE] at hv'; cases hv'
+        exact ⟨E, rfl, killE_mode .., fun _ => ⟨killE_path .., killE_held ..⟩⟩
+
+/-- A run of kills keeps a binding's mode, back to where it came from. -/
+theorem killNames_mode_back {Γ : Ctx} {p : Var} :
+    ∀ (ds : List Dep) {E' : Entry}, A2.killNames ds Γ p = some E' → ∃ E0, Γ p = some E0 ∧ E0.mode = E'.mode
+  | [], E', h => ⟨E', h, rfl⟩
+  | d :: ds, E', h => by
+    change (A2.kill _ _ _ (A2.killNames ds Γ)) p = some E' at h
+    simp only [A2.kill] at h
+    obtain ⟨E1, h1, rfl⟩ := Option.map_eq_some_iff.mp h
+    obtain ⟨E0, h0, hm⟩ := killNames_mode_back ds h1
+    exact ⟨E0, h0, by rw [hm, killE_mode]⟩
+
+/-- ... and a borrowed parameter none of the kills hits keeps its entry. -/
+theorem killNames_rootb_keep {Γ : Ctx} :
+    ∀ (ds : List Dep), (∀ d ∈ ds, ∀ p E, Γ p = some E → E.mode = .rootb →
+      hits d.kind.bound false d.root E = false) →
+      ∀ p E, Γ p = some E → E.mode = .rootb → A2.killNames ds Γ p = some E
+  | [], _, _, _, hp, _ => hp
+  | d :: ds, h, p, E, hp, hm => by
+    change (A2.kill _ _ _ (A2.killNames ds Γ)) p = some E
+    simp only [A2.kill]
+    rw [killNames_rootb_keep ds (fun d' hd' => h d' (List.mem_cons_of_mem _ hd')) p E hp hm,
+      Option.map_some]
+    unfold killE; rw [h d (by simp) p E hp hm]; rfl
+
+/-- ... and a run of such kills, each sparing every borrowed parameter
+    (a kill keeps the borrowed parameters' entries, so the next one sees
+    the same). -/
+theorem MInv.killNames_norootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) :
+    ∀ ds : List Dep, (∀ d ∈ ds, ∀ p E, Γ p = some E → E.mode = .rootb →
+      hits d.kind.bound false d.root E = false) → MInv m (A2.killNames ds Γ)
+  | [], _ => hi
+  | d :: ds, h => by
+    have ih := MInv.killNames_norootb hi ds (fun d' hd' => h d' (List.mem_cons_of_mem _ hd'))
+    refine ih.kill_norootb fun p E hp hm => ?_
+    obtain ⟨E0, hE0, hm0⟩ := killNames_mode_back ds hp
+    rw [← hm0] at hm
+    have hk := killNames_rootb_keep ds (fun d' hd' => h d' (List.mem_cons_of_mem _ hd')) p E0 hE0 hm
+    rw [hk] at hp; cases hp
+    exact h d (by simp) p _ hE0 hm
+
 /-- ... which an effect below `replace` never ends. -/
 theorem MInv.kill_more {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     {r : Var} (hrF : r ∉ F) {e : Eff} (he : e ≠ .replace) (hv : Bool) : MInv m (A2.kill e hv r Γ) :=

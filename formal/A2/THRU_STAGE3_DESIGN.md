@@ -562,6 +562,70 @@ The premises are what 3d's call rule will ask:
 What is left: `CallT`'s premise, so that a call gives `ThruReady`, then the
 exit kill and the witness.
 
+### 3d: what a call must give for `ThruReady`, and what stands in its way
+
+`callS.Φ` is the post-context (`callPost`). So the frame the body runs in
+already carries the call's kills, and one kill serves as both entry and
+exit kill: a `dropIn` (hv `false`) on each real root `w` that a regioned
+argument views, when the callee changes through a borrow
+(`fn.body.hasThru`; `ThruOrReady` already excludes through-changing calls
+inside). Such a kill spares `.view`, `.self` and names, so the arguments
+(views of `w`'s buffer) stay live. Every binding live after it is unhit
+(`killHv_live_nohit`), which is `ThruReady`'s frame clause. That clause is
+now stated on live bindings only. A destructor's memory is a separate
+clause (`DtorSafe … .dropIn false w`, a premise), because the kill ends
+bindings but leaves their `dtor`.
+
+`ThruReady` asks for `w ∉ Fc`, and today's model makes that impossible:
+
+1. `zN` freezes every frame binding but the `inout` arguments and the
+   roots closures name, so `w ∈ Fc`.
+2. A lent parameter's anchors are frozen (`Anchored`, `StmtT.rbind`,
+   `WrapCond`, `pe_Fc`), `held` included. A regioned parameter's lift holds
+   `⟨w, .view⟩`, so `w` must be frozen.
+3. Frozen means unchanged: `rootKeep_frame` keeps a lent parameter's node
+   because the frozen owners' slots do not change (`hF`). And
+   `killE_rootb` gets from the root being unfrozen that no kill ends a lent
+   parameter (`MInv.kill_pin`).
+
+Two routes:
+
+- **U, unfreeze `w`.** Leave `w` out of `zN`, and let the held views of a
+  `Vec`-typed lent parameter anchor at an unfrozen root. `ValOK.href`
+  lands a lent `Vec`'s node through its path, which names the frozen
+  argument. Every kill site of every rule then has to show that it ends no
+  lent parameter, since an unfrozen root can be killed by any rule.
+- **F, a frozen root may change strictly inside its elements.** `ThruOK`'s
+  `d.root ∉ F` becomes "`d.root ∉ F`, or the change at `d.root` is a
+  `dropIn` and hits no lent parameter". `Anchored`, `zN`, `WrapCond` and
+  `pe_Fc` stay as they are. Existing derivations take the first disjunct.
+  The new obligations fall only on the change through a borrow:
+  - `MInv.kill_norootb`, `MInv.killNames_norootb` (done): the kill keeps
+    the invariant when it ends no lent parameter, frozen root or not;
+  - a frozen owner's slot changes strictly inside its elements. A lent
+    parameter that lands in that tree depends on it only at kinds such a
+    change spares (`.view`, `.self`, names). Its node keeps its address and
+    length (`Repl.keeps_enclosing`). The views into it stay in bounds
+    (`RegionViewAt.keeps_len`, `keep_inner`). So `rootKeep_frame` holds with
+    `hF` weakened to "unchanged, or changed strictly inside, sparing every
+    loan".
+
+**F is taken**, because its obligations stay local. In the rename, `w ∈ Fc`
+(`zN`), and `ThruReady`'s `e.root ∉ Fc` becomes "the caller's `F` does not
+hold `w`, and no lent binding of the placed context is hit by a `dropIn` on
+`w`". The lifted lent parameters reach `w` only at `.view`/`.self`/names
+(the premise, and σ's `comp .view .self = .view`). The frame's own lent
+parameters are anchored in the caller's `F`, which `w` is not in.
+
+Then `CallThruOK` (the `CallT` premise) holds the following, each stated
+on the caller:
+- nothing frozen (`argMemF = []`);
+- each regioned argument's memory a `.view`/`.self` of a live owned `Vec`,
+  no argument and not in `F`;
+- no two regioned arguments on one root;
+- every argument reaches such a root only at a `.view`, a `.self` or by name;
+- `DtorSafe (callPost …) .dropIn false w`.
+
 ### 3d groundwork: frozen roots split from region-reached ones
 
 A call setting now tells apart what it freezes from what its regions stand
