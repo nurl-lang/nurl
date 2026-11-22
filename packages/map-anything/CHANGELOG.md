@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.9.0] — 2026-11-22
+
+### Changed
+
+- `--max-views N` keeps N views spread over the WHOLE capture instead of the
+  first N, which for a long video was its opening seconds. The frames are split
+  into N consecutive runs and each run gives its sharpest frame — the variance
+  of the Laplacian of the luminance at 320 px, the classic focus measure — so a
+  frame smeared by motion loses its slot to a neighbour (on a 115 s walk, 8 of
+  24 runs had a frame over 1.5× sharper than their worst). Photo sets are
+  chosen the same way.
+- A video with a view budget and no `--fps` is sampled across its whole length:
+  three candidates per view, spread evenly (video 0.3's `vid_extract_count`),
+  scaled to 1024 px, twice what the model reads. `--fps` (or `--max-views 0`)
+  keeps the fixed-rate extraction at full size.
+- `serve`: the page's views control is a slider with a number, labelled "frames
+  across the video" for a video, and says what it will do — "32 frames spread
+  over the whole video, each the sharpest of 3 candidates — one every 2.0 s of
+  1 min 5 s", using the length the browser reads from the file. The frames-per-
+  second field is gone; "every frame" (0) keeps 2 frames/s.
+
+### Added
+
+- `tests/sharpcheck.nu`: the focus measure ranks a frame well above a blurred
+  copy of itself, `sh_pick` keeps the sharp frame of a run, and it times
+  `sh_score` (about 70 ms a 1024 px frame).
+
 ## [0.8.1] — 2026-11-22
 
 ### Fixed

@@ -52,6 +52,7 @@ $ `geom.nu`
 $ `preproc.nu`
 $ `sky.nu`
 $ `voxel.nu`
+$ `sharp.nu`
 $ `serve.nu`
 $ `stdlib/core/slice.nu`
 
@@ -70,12 +71,14 @@ $ `stdlib/core/slice.nu`
     ( nurl_print `options:\n` )
     ( nurl_print `  -o, --out FILE      output PLY (default cloud.ply)\n` )
     ( nurl_print `  --model REF|PATH    checkpoint (default facebook/map-anything-apache)\n` )
-    ( nurl_print `  --max-views N       cap the number of views (default 24; 0 = all)\n` )
+    ( nurl_print `  --max-views N       use N views spread over the whole capture, the sharpest\n` )
+    ( nurl_print `                      of each run (default 24; 0 = every frame); a video gives\n` )
+    ( nurl_print `                      3 candidates per view across its whole length\n` )
     ( nurl_print `  --window N          views per attention window (default 24); longer\n` )
     ( nurl_print `                      runs are Sim3-stitched from overlapping windows\n` )
     ( nurl_print `  --overlap N         views shared between windows (default 6)\n` )
     ( nurl_print `  --stride N          take every Nth input (default 1)\n` )
-    ( nurl_print `  --fps N             frames per second when extracting a video (default 1)\n` )
+    ( nurl_print `  --fps N             extract a video at a fixed N frames/s instead (full size)\n` )
     ( nurl_print `  --pixel-stride N    emit every Nth pixel in x and y (default 1)\n` )
     ( nurl_print `  --conf-pct P        drop the P% least confident pixels (default off)\n` )
     ( nurl_print `  --mask-sky          drop sky pixels via skyseg.onnx (fetched on first use)\n` )
@@ -299,6 +302,7 @@ $ `stdlib/core/slice.nu`
     : ~ i maxviews 24
     : ~ i stride 1
     : ~ i fps 1
+    : ~ b fpsgiven F  // --fps chooses the old fixed-rate extraction
     : ~ i pstride 1
     : ~ f confpct -1.0
     : ~ i maskedges 1
@@ -346,7 +350,7 @@ $ `stdlib/core/slice.nu`
         ? & ( __ma_streq a `--window` ) < + i0 1 argc { = window ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--overlap` ) < + i0 1 argc { = overlap ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--stride` ) < + i0 1 argc { = stride ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
-        ? & ( __ma_streq a `--fps` ) < + i0 1 argc { = fps ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
+        ? & ( __ma_streq a `--fps` ) < + i0 1 argc { = fps ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = fpsgiven T = take 1 } {}
         ? & ( __ma_streq a `--pixel-stride` ) < + i0 1 argc { = pstride ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--conf-pct` ) < + i0 1 argc { = confpct ( nurl_str_to_float ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--mv-check` ) < + i0 1 argc { = mvneed ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
@@ -412,7 +416,14 @@ $ `stdlib/core/slice.nu`
         }
         ? == bad 0 {
             : String fdir ( vid_frames_dir video )
-            ?? ( vid_extract video fps ( string_data fdir ) verbose ) {
+            // With a view budget and no --fps, frames are taken across the
+            // WHOLE video: three candidates per view, spread evenly over
+            // its length (sh_pick then keeps the sharpest of each three),
+            // scaled to 1024 px — twice what the model reads. --fps, or
+            // --max-views 0, is the old fixed rate at full size.
+            : b spread & > maxviews 0 ! fpsgiven
+            : !i String got ? spread ( vid_extract_count video * 3 maxviews 1024 ( string_data fdir ) fps verbose ) ( vid_extract video fps ( string_data fdir ) verbose )
+            ?? got {
                 T n → {
                     ? > n 0 { ? ( __ma_dir fr ( string_data fdir ) ) {} { = bad 1 } } {
                         ( nurl_print `map-anything: the video yielded no frames\n` )
@@ -443,15 +454,10 @@ $ `stdlib/core/slice.nu`
         ( vec_clear [String] fr )
         ( vec_append [String] fr kept )
     } {}
+    // the cap: maxviews views spread over ALL the frames, the sharpest of
+    // each run (not the first maxviews, which for a video is its opening)
     ? & == bad 0 & > maxviews 0 > ( vec_len [String] fr ) maxviews {
-        ? != verbose 0 {
-            ( nurl_print `views   capped at ` )
-            ( nurl_print ( nurl_str_int maxviews ) )
-            ( nurl_print ` (of ` )
-            ( nurl_print ( nurl_str_int ( vec_len [String] fr ) ) )
-            ( nurl_print `; --max-views 0 lifts the cap)\n` )
-        } {}
-        : b _c ( vec_truncate [String] fr maxviews )
+        ( sh_pick fr maxviews verbose )
     } {}
     ? & == bad 0 == ( vec_len [String] fr ) 0 { = bad 2 } {}
     ^ @ Opts { ( string_from model ) ( string_from out ) ( string_from video ) view port ascii verbose maxviews stride fps

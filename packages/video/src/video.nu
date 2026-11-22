@@ -1,6 +1,9 @@
 // packages/video/src/video.nu — a video file, as frames on disk.
 //
 //   ( vid_extract path fps outdir verbose )   → !i String   frames kept
+//   ( vid_extract_count path count maxside outdir fallback_fps verbose )
+//                                             → !i String   frames kept
+//   ( vid_duration_s path )                   → f   seconds, -1.0 unknown
 //
 // A vision tool wants ordered frames; a video is the natural way to
 // shoot them. This extracts JPEG frames, numbered 000000.jpg on, into a
@@ -43,6 +46,7 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/core/slice.nu`
+$ `stdlib/std/float.nu`
 
 // ── what is a video ─────────────────────────────────────────────────
 
@@ -335,14 +339,23 @@ $ `stdlib/core/slice.nu`
 // ── ffmpeg (everything that is not MJPEG AVI) ───────────────────────
 
 @ __vd_ffmpeg s path s outdir i fps → !i String {
+    : String vf ( string_from `fps=` )
+    ( string_push_int vf fps )
+    ^ ( __vd_ffmpeg_vf path outdir ( string_data vf ) `` )
+}
+
+// ffmpeg with a whole -vf filter chain of the caller's. `map` names the
+// input stream to decode (e.g. `0:v:0`); `` keeps ffmpeg's own choice.
+@ __vd_ffmpeg_vf s path s outdir s vf s map → !i String {
     : String pat ( path_join outdir `%06d.jpg` )
     : ( Vec s ) args ( vec_new [s] )
     ( vec_push [s] args `-hide_banner` ) ( vec_push [s] args `-loglevel` )
     ( vec_push [s] args `error` ) ( vec_push [s] args `-y` )
     ( vec_push [s] args `-i` ) ( vec_push [s] args path )
-    : String vf ( string_from `fps=` )
-    ( string_push_int vf fps )
-    ( vec_push [s] args `-vf` ) ( vec_push [s] args ( string_data vf ) )
+    ? > ( nurl_str_len map ) 0 { ( vec_push [s] args `-map` ) ( vec_push [s] args map ) } {}
+    ( vec_push [s] args `-vf` ) ( vec_push [s] args vf )
+    // frames out as they come, never padded to a constant rate
+    ( vec_push [s] args `-vsync` ) ( vec_push [s] args `vfr` )
     ( vec_push [s] args `-qscale:v` ) ( vec_push [s] args `2` )
     ( vec_push [s] args `-start_number` ) ( vec_push [s] args `0` )
     ( vec_push [s] args ( string_data pat ) )
@@ -459,4 +472,115 @@ $ `stdlib/core/slice.nu`
         }
     } {}
     ^ ( __vd_ffmpeg path outdir want )
+}
+
+// ── a number of frames across the whole video ───────────────────────
+//
+// A frame rate is the wrong knob for a long video: two frames a second
+// of a ten-minute walk is 1200 frames, and a cap on that keeps the first
+// few seconds. What a reconstruction wants is N frames spread over ALL of
+// it, so this asks for exactly that: the duration (ffprobe) cut into N
+// equal bins, the first frame of each bin kept — one frame every 25 s
+// works as well as ten a second, and no frame is ever repeated.
+
+// One ffprobe number (a duration in seconds), or -1.0.
+@ __vd_probe_secs s path s stream s what → f {
+    : ( Vec s ) args ( vec_new [s] )
+    ( vec_push [s] args `-v` ) ( vec_push [s] args `error` )
+    ? > ( nurl_str_len stream ) 0 { ( vec_push [s] args `-select_streams` ) ( vec_push [s] args stream ) } {}
+    ( vec_push [s] args `-show_entries` ) ( vec_push [s] args what )
+    ( vec_push [s] args `-of` ) ( vec_push [s] args `default=nw=1:nk=1` )
+    ( vec_push [s] args path )
+    ?? ( process_run `ffprobe` args `` ) {
+        T o → {
+            ? == 0 ( output_exit_code o ) {
+                : String raw ( string_from ( output_stdout o ) )
+                : String t ( string_trim raw )
+                // "N/A" and an empty answer both read as no number
+                ? > ( string_len t ) 0 {
+                    : f d ( nurl_str_to_float ( string_data t ) )
+                    ? > d 0.0 { ^ d } {}
+                } {}
+            } {}
+        }
+        F _e → {}
+    }
+    ^ -1.0
+}
+
+// The duration of the video in seconds per ffprobe: the first MOVING video
+// stream's own (the one vid_extract_count decodes — a container's duration
+// can be a longer audio track's), else the container's when the stream
+// does not say (often so in MKV); -1.0 when neither can be told.
+@ vid_duration_s s path → f {
+    : f v ( __vd_probe_secs path `V:0` `stream=duration` )
+    ? > v 0.0 { ^ v } {}
+    ^ ( __vd_probe_secs path `` `format=duration` )
+}
+
+// About `count` frames spread evenly over the whole of `path`, written to
+// `outdir` as 000000.jpg on, the long side scaled down to at most
+// `maxside` pixels (0 keeps the size). An MJPEG AVI, or a video whose
+// duration ffprobe cannot tell, falls back to vid_extract at
+// `fallback_fps`. No frame is ever written twice: a short video with fewer
+// frames than `count` gives each of its frames once. Returns the number of
+// frames written.
+@ vid_extract_count s path i count i maxside s outdir i fallback_fps i verbose → !i String {
+    : f dur ? ( __vd_ext_is path `.avi` ) -1.0 ( vid_duration_s path )
+    ? | <= count 0 <= dur 0.0 { ^ ( vid_extract path fallback_fps outdir verbose ) } {}
+    ?? ( dir_create_all outdir ) {
+        T _o → {}
+        F _e → {
+            : String m ( string_from `cannot create ` )
+            ( string_push_str m outdir )
+            ^ @ !i String { F m }
+        }
+    }
+    ( __vd_clean outdir )
+    // The video split into `count` equal bins of dur/count seconds; the
+    // first frame to land in each bin is kept. A select filter rather than
+    // the fps filter: fps makes up its rate by repeating frames, so a clip
+    // with fewer frames than bins, a stream whose rate ffprobe cannot tell
+    // or one whose rate varies came back as copies — here a bin with no
+    // frame in it simply yields none, and nothing is ever repeated.
+    : f step / dur # f count
+    : String st ( string_from ( nurl_str_float step ) )
+    : String vf ( string_new )
+    ( string_push_str vf `select='isnan(prev_selected_t)+gt(floor(t/` )
+    ( string_push_str vf ( string_data st ) )
+    ( string_push_str vf `),floor(prev_selected_t/` )
+    ( string_push_str vf ( string_data st ) )
+    ( string_push_str vf `))'` )
+    ? > maxside 0 {
+        // the long side down to maxside, the other kept even (-2)
+        ( string_push_str vf `,scale='if(gte(iw,ih),min(iw,` )
+        ( string_push_int vf maxside )
+        ( string_push_str vf `),-2)':'if(gte(iw,ih),-2,min(ih,` )
+        ( string_push_int vf maxside )
+        ( string_push_str vf `))'` )
+    } {}
+    // 0:V:0 — the first MOVING video stream: never an attached picture
+    // (cover art), and the same stream whatever else the file carries
+    : !i String got ( __vd_ffmpeg_vf path outdir ( string_data vf ) `0:V:0` )
+    ? != verbose 0 {
+        ?? got {
+            T n → {
+                ( nurl_print `video   ` ) ( nurl_print path )
+                ( nurl_print `  ` ) ( nurl_print ( nurl_str_int # i dur ) )
+                ? < n count {
+                    ( nurl_print ` s -> every frame there is (` )
+                    ( nurl_print ( nurl_str_int n ) )
+                    ( nurl_print ` of the ` ) ( nurl_print ( nurl_str_int count ) )
+                    ( nurl_print ` asked for) (ffmpeg)\n` )
+                } {
+                    ( nurl_print ` s -> ` ) ( nurl_print ( nurl_str_int n ) )
+                    ( nurl_print ` frames, one every ` )
+                    ( nurl_print ( nurl_str_float / ( float_round * 10.0 step ) 10.0 ) )
+                    ( nurl_print ` s (ffmpeg)\n` )
+                }
+            }
+            F _e → {}
+        }
+    } {}
+    ^ got
 }

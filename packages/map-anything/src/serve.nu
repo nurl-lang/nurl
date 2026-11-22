@@ -13,7 +13,7 @@
 //   POST   /api/jobs                  {name} → a new job, state "uploading"
 //   PUT    /api/jobs/:id/files/:name  one input file, the raw request body,
 //                                     in pieces: ?offset=N appends at byte N
-//   POST   /api/jobs/:id/start        {max_views, fps, ...} → "queued"
+//   POST   /api/jobs/:id/start        {max_views, stride, ...} → "queued"
 //   GET    /api/jobs/:id              one job, with its whole log
 //   DELETE /api/jobs/:id              the job and its files
 //   GET    /jobs/:id/cloud.ply        the result
@@ -948,7 +948,6 @@ $ `ui.nu`
         T _p → {}
     }
     : ~ i maxv 24
-    : ~ i fps 2
     : ~ i stride 1
     : ~ i pstride 1
     : ~ i conf 0
@@ -960,7 +959,6 @@ $ `ui.nu`
     ?? ( json_parse_bytes . req body ) {
         T j → {
             = maxv ( __mas_jint j `max_views` 0 2000 24 )
-            = fps ( __mas_jint j `fps` 1 30 2 )
             = stride ( __mas_jint j `stride` 1 100 1 )
             = pstride ( __mas_jint j `pixel_stride` 1 16 1 )
             = conf ( __mas_jint j `conf_pct` 0 95 0 )
@@ -974,7 +972,9 @@ $ `ui.nu`
     }
     : String opts ( string_from `--max-views ` )
     ( string_push_int opts maxv )
-    ( string_push_str opts ` --fps ` ) ( string_push_int opts fps )
+    // a video is sampled across its whole length (the CLI's default with a
+    // view budget); "every frame" keeps the old fixed rate
+    ? == maxv 0 { ( string_push_str opts ` --fps 2` ) } {}
     ( string_push_str opts ` --stride ` ) ( string_push_int opts stride )
     ( string_push_str opts ` --pixel-stride ` ) ( string_push_int opts pstride )
     ( string_push_str opts ` --window ` ) ( string_push_int opts win )

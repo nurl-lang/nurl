@@ -83,7 +83,7 @@ check "the job lists its files" 5 "$(curl -s $A "$B/api/jobs/$ID" | sed -n 's/.*
 ID2=$(curl -s $A -X POST "$B/api/jobs" -d '{"name":"opts"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 check "an upload for the run" 201 "$(code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$ID2/files/p.jpg")"
 check "start" 200 "$(code $A -X POST "$B/api/jobs/$ID2/start" -d '{"max_views":5,"align":2,"mv_check":1,"voxel_mm":5,"window":99}')"
-check "the options line" "--max-views 5 --fps 2 --stride 1 --pixel-stride 1 --window 64 --align 2 --mv-check 1 --voxel 0.005" "$(cat "$WORK/data/jobs/$ID2/opts")"
+check "the options line" "--max-views 5 --stride 1 --pixel-stride 1 --window 64 --align 2 --mv-check 1 --voxel 0.005" "$(cat "$WORK/data/jobs/$ID2/opts")"
 for _ in $(seq 1 100); do
     st=$(cat "$WORK/data/jobs/$ID2/state")
     [ "$st" = failed ] || [ "$st" = done ] && break

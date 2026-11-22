@@ -51,6 +51,10 @@ h2 { font-size: 14px; margin: 0 0 12px; color: var(--dim); font-weight: 600; tex
 .opts label { display: block; color: var(--dim); font-size: 12px; margin-bottom: 3px; }
 .opts input[type=number], .opts input[type=text] { width: 100%; background: #0e1216; color: var(--ink);
         border: 1px solid #2c3540; border-radius: 6px; padding: 6px 8px; font: inherit; }
+.opts .wide { grid-column: 1 / -1; }
+.opts .pair { display: flex; gap: 10px; align-items: center; }
+.opts .pair input[type=range] { flex: 1; accent-color: var(--accent); }
+.opts .pair input[type=number] { width: 90px; flex: none; }
 .opts .chk { display: flex; align-items: center; gap: 8px; padding-top: 20px; color: var(--ink); font-size: 13px; }
 .hint { color: var(--faint); font-size: 11.5px; margin-top: 2px; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
@@ -100,10 +104,10 @@ footer a { color: var(--dim); }
 
   <div class="opts">
     <div><label for="o-name">name</label><input id="o-name" type="text" placeholder="from the first file"></div>
-    <div><label for="o-max">max views</label><input id="o-max" type="number" min="0" max="2000" value="24">
-      <div class="hint">0 = every frame (long runs are stitched)</div></div>
-    <div><label for="o-fps">video frames / s</label><input id="o-fps" type="number" min="1" max="30" value="2">
-      <div class="hint">video only</div></div>
+    <div class="wide"><label for="o-max" id="o-max-label">views to use</label>
+      <div class="pair"><input id="o-max-r" type="range" min="4" max="120" step="1" value="24" aria-label="views to use">
+      <input id="o-max" type="number" min="0" max="2000" value="24"></div>
+      <div class="hint" id="o-max-hint">spread over the whole capture, the sharpest of each run; 0 = every frame</div></div>
     <div><label for="o-stride">take every Nth input</label><input id="o-stride" type="number" min="1" max="100" value="1"></div>
     <div><label for="o-px">pixel stride</label><input id="o-px" type="number" min="1" max="16" value="1">
       <div class="hint">2 = &frac14; of the points, a lighter cloud</div></div>
@@ -141,6 +145,7 @@ footer a { color: var(--dim); }
 "use strict";
 var $ = function (id) { return document.getElementById(id); };
 var picked = [];
+var videoSecs = 0;  // the picked video's length, once the browser has read it
 var uploading = false;  // one upload at a time; picking waits for it
 var CHUNK = 32 * 1048576;
 var openLogs = {};
@@ -190,7 +195,44 @@ function pick(files) {
     th.appendChild(im);
   });
   if (!$("o-name").value && picked.length) $("o-name").placeholder = picked[0].name.replace(/[.][^.]*$/, "");
-  $("o-fps").parentNode.style.opacity = vids.length ? 1 : .55;
+  videoSecs = 0;
+  if (vids.length === 1) {
+    /* the length, read by the browser itself, so the hint can say how
+       densely the frames will sample it */
+    /* a later pick may finish reading first: only this pick's answer counts */
+    var mine = vids[0];
+    var v = document.createElement("video");
+    v.preload = "metadata";
+    v.onloadedmetadata = function () {
+      URL.revokeObjectURL(v.src);
+      if (picked.length !== 1 || picked[0] !== mine) return;
+      if (isFinite(v.duration)) videoSecs = v.duration;
+      viewsHint();
+    };
+    v.onerror = function () { URL.revokeObjectURL(v.src); };
+    v.src = URL.createObjectURL(vids[0]);
+  }
+  viewsHint();
+}
+
+function secs(t) {
+  if (t < 60) return (t < 10 ? t.toFixed(1) : Math.round(t)) + " s";
+  return Math.floor(t / 60) + " min " + Math.round(t % 60) + " s";
+}
+/* What the views control will do with what is picked, in words. */
+function viewsHint() {
+  var n = num("o-max", 0, 2000, 24), isVid = picked.length === 1 && isVideo(picked[0]);
+  $("o-max-label").textContent = isVid ? "frames across the video" : "views to use";
+  var h;
+  if (n === 0) h = isVid ? "every frame at 2 frames/s — long videos are stitched from windows" : "every photo";
+  else if (isVid) {
+    h = n + " frames spread over the whole video, each the sharpest of 3 candidates";
+    if (videoSecs > 0) h += " — one every " + secs(videoSecs / n) + " of " + secs(videoSecs);
+  } else if (picked.length > n) h = n + " of " + picked.length + " photos, spread evenly, the sharpest of each run";
+  else if (picked.length) h = "all " + picked.length + " photos";
+  else h = "spread over the whole capture, the sharpest of each run; 0 = every frame";
+  if (n > num("o-win", 4, 64, 24)) h += " · more than one window: stitched";
+  $("o-max-hint").textContent = h;
 }
 
 var drop = $("drop");
@@ -204,6 +246,13 @@ $("file").onchange = function () { pick(this.files); };
   drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove("over"); });
 });
 drop.addEventListener("drop", function (e) { pick(e.dataTransfer.files); });
+$("o-max-r").oninput = function () { $("o-max").value = this.value; viewsHint(); };
+$("o-max").oninput = function () {
+  var v = parseInt(this.value, 10);
+  if (!isNaN(v) && v >= 4 && v <= 120) $("o-max-r").value = v;
+  viewsHint();
+};
+$("o-win").addEventListener("input", viewsHint);
 
 function api(method, url, body) {
   return fetch(url, {
@@ -327,7 +376,7 @@ function voxelMm() {
 }
 function options() {
   return {
-    max_views: num("o-max", 0, 2000, 24), fps: num("o-fps", 1, 30, 2), stride: num("o-stride", 1, 100, 1),
+    max_views: num("o-max", 0, 2000, 24), stride: num("o-stride", 1, 100, 1),
     pixel_stride: num("o-px", 1, 16, 1), conf_pct: num("o-conf", 0, 95, 0), window: num("o-win", 4, 64, 24),
     mask_sky: $("o-sky").checked, align: num("o-align", 0, 10, 3), mv_check: num("o-mv", 0, 4, 1),
     voxel_mm: voxelMm()

@@ -20,6 +20,12 @@ map-anything hill.mp4 --mask-sky   # outdoor: drop sky via skyseg.onnx
 map-anything walk/ --max-views 400 # long capture: windowed + Sim3-stitched
 ```
 
+`--max-views N` (default 24) uses N views spread over the whole capture: the
+frames are split into N runs and each run gives its sharpest frame. A video is
+sampled across its whole length for that — three candidates per view, evenly
+spaced — so a ten-minute walk gives views from all ten minutes, not its first
+seconds. `--fps N` extracts at a fixed rate instead.
+
 ### As a web service
 
 ```
