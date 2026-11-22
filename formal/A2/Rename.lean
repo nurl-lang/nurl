@@ -328,9 +328,6 @@ structure RSetup.OK (S : RSetup) : Prop where
       memory dependencies, each reached as the argument reaches it; the lift
       composes kinds, `subD`.) -/
   σ_mem : ∀ v d, d ∈ S.σ v → d.kind.isName = false
-  /-- ... and each of its roots also by its handle, so that composed with any
-      kind it is reached in that kind (`comp .self k = k`). -/
-  σ_self : ∀ v d, d ∈ S.σ v → (⟨d.root, .self⟩ : Dep) ∈ S.σ v
   Rout   : ∀ r ∈ S.R, ∀ v, S.ρ v ≠ r
   Rroot  : ∀ r ∈ S.R, ∃ E, S.Φ r = some E ∧ E.mode.isRoot = true
   Fcout  : ∀ v, S.ρ v ∉ S.Fc
@@ -4368,34 +4365,28 @@ theorem recvRes_lift (h : S.OK) (hab : S.AbsOK Γa) {c : Var} {Ec E E' : Entry} 
   have hdbw := hw.dbind
   have hraw := hw.raise
   -- the receiver's roots, lifted
-  have hA : allKinds (recvRoots (S.ρ c) (S.liftE c Ec)) ⊆
-      rds S.ρ (allKinds (recvRoots c Ec)) ++ S.A := by
+  have hA : recvDeps (S.ρ c) (S.liftE c Ec) ⊆
+      rds S.ρ (recvDeps c Ec) ++ S.A := by
     intro d hd
-    have hr := allKinds_root hd
-    have hdk := (mem_allKinds_iff.mp hd).2
-    have key : ∀ r0 ∈ recvRoots c Ec, d.root = S.ρ r0 →
-        d ∈ rds S.ρ (allKinds (recvRoots c Ec)) ++ S.A := by
-      intro r0 hr0 he
-      refine List.mem_append_left _ (mem_rds.mpr ⟨⟨r0, d.kind⟩, mem_allKinds_iff.mpr ⟨hr0, hdk⟩, ?_⟩)
-      obtain ⟨r, k⟩ := d; simp only [Dep.ren] at he ⊢; rw [he]
-    unfold recvRoots at hr
-    rcases List.mem_append.mp hr with hr | hr
-    · obtain ⟨d1, hd1, he⟩ := List.mem_map.mp hr
-      have hd1' := List.mem_filter.mp hd1
-      rcases List.mem_append.mp (derive_lift h hab hc .self rfl hd1'.1) with h1 | h1
-      · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
-        exact key d0.root (List.mem_append_left _ (List.mem_map_of_mem
-          (List.mem_filter.mpr ⟨hd0, hd1'.2⟩))) he.symm
-      · exact List.mem_append_right _ (mem_A.mpr (Or.inl
-          (mem_allKinds_iff.mpr ⟨he ▸ mem_allKinds (A_mem h h1 hd1'.2), hdk⟩)))
-    · obtain ⟨d1, hd1, he⟩ := List.mem_map.mp hr
-      have hd1' := List.mem_filter.mp hd1
-      rcases List.mem_append.mp (held_lift h hab hc hd1'.1) with h1 | h1
-      · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
-        exact key d0.root (List.mem_append_right _ (List.mem_map_of_mem
-          (List.mem_filter.mpr ⟨hd0, hd1'.2⟩))) he.symm
-      · exact List.mem_append_right _ (mem_A.mpr (Or.inl
-          (mem_allKinds_iff.mpr ⟨he ▸ mem_allKinds (A_mem h h1 hd1'.2), hdk⟩)))
+    obtain ⟨d0, hd0, k, hk, rfl⟩ := mem_recvDeps.mp hd
+    have hkn : k.isName = false := by rcases hk with rfl | rfl | rfl | rfl <;> rfl
+    -- a dependency of the lifted receiver: one of the receiver's, renamed, or the arguments'
+    have hcase : ∀ {X Y : List Dep}, X ⊆ rds S.ρ Y ++ S.A → (∀ d1 ∈ memDeps Y,
+        (⟨d1.root, comp d1.kind k⟩ : Dep) ∈ recvDeps c Ec) → d0 ∈ memDeps X →
+        (⟨d0.root, comp d0.kind k⟩ : Dep) ∈ rds S.ρ (recvDeps c Ec) ++ S.A := by
+      intro X Y hXY hY hd0
+      obtain ⟨hd0X, hn0⟩ := List.mem_filter.mp hd0
+      rcases List.mem_append.mp (hXY hd0X) with h1 | h1
+      · obtain ⟨d1, hd1, rfl⟩ := mem_rds.mp h1
+        exact List.mem_append_left _ (mem_rds.mpr ⟨_, hY d1 (List.mem_filter.mpr ⟨hd1, by simpa [Dep.ren] using hn0⟩), rfl⟩)
+      · have hA0 := A_mem h h1 hn0
+        refine List.mem_append_right _ (mem_A.mpr (Or.inl (mem_allKinds_iff.mpr ⟨(mem_allKinds hA0 : d0.root ∈ S.R), ?_⟩)))
+        exact comp_isName (allKinds_notName hA0) hkn
+    rcases List.mem_append.mp hd0 with hd0 | hd0
+    · exact hcase (derive_lift h hab hc .self rfl)
+        (fun d1 hd1 => mem_recvDeps.mpr ⟨d1, List.mem_append_left _ hd1, k, hk, rfl⟩) hd0
+    · exact hcase (held_lift h hab hc)
+        (fun d1 hd1 => mem_recvDeps.mpr ⟨d1, List.mem_append_right _ hd1, k, hk, rfl⟩) hd0
   obtain ⟨ht, hm, _, hl, hdw⟩ := hw
   have hty : (S.liftE x E).ty = E.ty := liftE_ty x hrb
   have hmd : (S.liftE x E).mode = liftMode E.mode := liftE_mode x hrb
@@ -4405,10 +4396,10 @@ theorem recvRes_lift (h : S.OK) (hab : S.AbsOK Γa) {c : Var} {Ec E E' : Entry} 
   have hheld : (S.liftE x E).held ⊆ rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty S.A := S.liftE_held_sub hrb
   have hrrb : (recvRes c Ec E).mode ≠ .rootb := hrb
   have hpath2 : (S.liftE x (recvRes c Ec E)).path =
-      rds S.ρ (E.path ++ allKinds (recvRoots c Ec)) ++ (if E.mode.ownSlot then [] else S.A) := by
+      rds S.ρ (E.path ++ recvDeps c Ec) ++ (if E.mode.ownSlot then [] else S.A) := by
     simp [liftE, recvRes, hrb, hEf]
   have hheld2 : (S.liftE x (recvRes c Ec E)).held =
-      rds S.ρ (ownHeld E.mode.ownSlot E.ty (E.held ++ allKinds (recvRoots c Ec))) ++
+      rds S.ρ (ownHeld E.mode.ownSlot E.ty (E.held ++ recvDeps c Ec)) ++
         ownHeld E.mode.ownSlot E.ty S.A := by
     simp [liftE, recvRes, hrb]
   have hE'os : E'.mode.ownSlot = E.mode.ownSlot := by rw [← hm, hmd, hos]
@@ -5394,48 +5385,38 @@ theorem allowed_replace (hab : S.AbsOK Γa) {x : Var} {Ex : Entry} (hx : Γa x =
     rcases hm with hm | hm | hm <;> rw [hm] at hmE <;> cases hmE
     cases k <;> rfl
 
-/-- AGORA-937: the roots a list reaches in memory, in every memory way,
-    substituted: a kept root is kept in every such way, and what a region
-    stands for is reached in every memory way (`σ_kinds`). -/
-theorem allKinds_roots_memDeps_subD (h : S.OK) (Y : List Dep) :
-    allKinds (roots (memDeps (Y.flatMap S.subD))) ⊆ (allKinds (roots (memDeps Y))).flatMap S.subD := by
-  rintro ⟨dr, dk⟩ hd
-  obtain ⟨hr, hk⟩ := mem_allKinds_iff.mp hd
-  obtain ⟨e, he, her⟩ := List.mem_map.mp hr
-  obtain ⟨he1, hek⟩ := List.mem_filter.mp he
-  obtain ⟨e0, he0, hee⟩ := List.mem_flatMap.mp he1
-  have hek' : e.kind.isName = false := by simpa using hek
-  simp only at her hk; subst her
-  rcases S.mem_subD hee with rfl | ⟨v, hv, hp, hσ⟩
-  · refine List.mem_flatMap.mpr ⟨⟨e.root, dk⟩,
-      mem_allKinds_iff.mpr ⟨List.mem_map.mpr ⟨e, List.mem_filter.mpr ⟨he0, hek⟩, rfl⟩, hk⟩, ?_⟩
-    rw [S.subD_fix_reKind h (S.subD_idem h hee)]
-    exact List.mem_singleton_self _
-  · have hne : e ≠ e0 := fun he' => (S.σ_frameC h hσ).1 v (by rw [he', ρ_of_inv hv])
-    have he0k := S.mem_subD_sub hee hne
-    refine List.mem_flatMap.mpr ⟨⟨e0.root, dk⟩, mem_allKinds_iff.mpr ⟨List.mem_map.mpr
-      ⟨e0, List.mem_filter.mpr ⟨he0, by simp [he0k]⟩, rfl⟩, hk⟩, ?_⟩
-    obtain ⟨e1, hσ1, rfl, _⟩ := hσ
-    simp only [subD, hv, hp, hk, Bool.false_eq_true, ↓reduceIte, List.mem_map]
-    exact ⟨⟨e1.root, .self⟩, h.σ_self v e1 hσ1, rfl⟩
-
 /-- ... so a receiver's roots, substituted (for a receiver at no region's
     index). -/
 theorem allKinds_recvRoots_subE (h : S.OK) {c : Var} (hnp : S.isPi c = false) (L : Entry) :
-    allKinds (recvRoots (S.ρ c) (S.subE L)) ⊆ (allKinds (recvRoots (S.ρ c) L)).flatMap S.subD := by
-  have hmono : ∀ {a b : List Dep}, a ⊆ b → allKinds (roots (memDeps a)) ⊆ allKinds (roots (memDeps b)) := by
-    intro a b hab d hd
-    obtain ⟨hr, hk⟩ := mem_allKinds_iff.mp hd
-    exact mem_allKinds_iff.mpr ⟨roots_sub (fun e he => List.mem_filter.mpr
-      ⟨hab (List.mem_filter.mp he).1, (List.mem_filter.mp he).2⟩) hr, hk⟩
-  have hsplit : ∀ {A B : List Var}, allKinds (A ++ B) = allKinds A ++ allKinds B := by
-    intro A B; simp [allKinds, List.flatMap_append]
+    recvDeps (S.ρ c) (S.subE L) ⊆ (recvDeps (S.ρ c) L).flatMap S.subD := by
   intro d hd
-  unfold recvRoots at hd ⊢
-  rw [hsplit] at hd; rw [hsplit, List.flatMap_append]
-  rcases List.mem_append.mp hd with hd | hd
-  · exact List.mem_append_left _ (S.allKinds_roots_memDeps_subD h _ (hmono (derive_subE h hnp L rfl) hd))
-  · exact List.mem_append_right _ (S.allKinds_roots_memDeps_subD h _ hd)
+  obtain ⟨d0, hd0, k, hk, rfl⟩ := mem_recvDeps.mp hd
+  have hkn : k.isName = false := by rcases hk with rfl | rfl | rfl | rfl <;> rfl
+  -- AGORA-937 (3d): the substitution composes kinds, and composing is associative
+  have hsrc : ∃ e ∈ memDeps (derive (S.ρ c) L .self) ++ memDeps L.held, d0 ∈ S.subD e := by
+    rcases List.mem_append.mp hd0 with h1 | h1
+    · obtain ⟨h1, hn⟩ := List.mem_filter.mp h1
+      obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp (derive_subE h hnp L rfl h1)
+      have hen : e.kind.isName = false := by
+        rcases S.mem_subD hde with rfl | ⟨v, _, _, e0, _, _, hk'⟩
+        · simpa using hn
+        · exact hk'
+      exact ⟨e, List.mem_append_left _ (List.mem_filter.mpr ⟨he, by simp [hen]⟩), hde⟩
+    · obtain ⟨h1, hn⟩ := List.mem_filter.mp h1
+      rw [subE_held] at h1
+      obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp h1
+      have hen : e.kind.isName = false := by
+        rcases S.mem_subD hde with rfl | ⟨v, _, _, e0, _, _, hk'⟩
+        · simpa using hn
+        · exact hk'
+      exact ⟨e, List.mem_append_right _ (List.mem_filter.mpr ⟨he, by simp [hen]⟩), hde⟩
+  obtain ⟨e, he, hde⟩ := hsrc
+  refine List.mem_flatMap.mpr ⟨⟨e.root, comp e.kind k⟩, mem_recvDeps.mpr ⟨e, he, k, hk, rfl⟩, ?_⟩
+  rcases S.mem_subD hde with rfl | ⟨v, hv, hp, e0, he0, rfl, hk'⟩
+  · rw [S.subD_fix_reKind h (S.subD_idem h hde)]; exact List.mem_singleton_self _
+  · have hck : (comp e.kind k).isName = false := comp_isName hk' hkn
+    simp only [subD, hv, hp, hck, Bool.false_eq_true, ↓reduceIte, List.mem_map]
+    exact ⟨e0, he0, by rw [comp_assoc]⟩
 
 /-- What a call through a package adds to what it returns (`recvRes`). -/
 def recvAdd (E : Entry) (X : List Dep) : Entry :=
@@ -5466,7 +5447,7 @@ theorem recvRes_weaker {E' B : Entry} {X Y : List Dep} (hw : EntryWeaker E' B) (
   · exact absurd (show false = true from hhf) (by simp)
 
 theorem subE_recvRes (c : Var) (L B : Entry) :
-    S.subE (recvRes c L B) = recvAdd (S.subE B) ((allKinds (recvRoots c L)).flatMap S.subD) := by
+    S.subE (recvRes c L B) = recvAdd (S.subE B) ((recvDeps c L).flatMap S.subD) := by
   simp only [subE, recvRes, recvAdd, List.flatMap_append]
   unfold ownHeld; split <;> simp [List.flatMap_append]
 
@@ -7667,7 +7648,6 @@ theorem OK.ghostify {S : RSetup} (h : S.OK) {R' : List Var} (hR : ∀ r ∈ R', 
   inj := h.inj
   σ_sub := fun _ _ hd => by cases hd
   σ_mem := fun _ _ hd => by cases hd
-  σ_self := fun _ _ hd => by cases hd
   Rout := fun r hr => h.Rout r (hR r hr)
   Rroot := fun r hr => h.Rroot r (hR r hr)
   Fcout := h.Fcout

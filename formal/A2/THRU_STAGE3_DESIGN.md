@@ -420,8 +420,8 @@ Witness: `A2/RegionChangeWitness.lean`.
 A call's setting (`callS.σ`) used to stand a region for `allKinds` of the
 roots its argument holds, every root at every kind, and the lift (`subD`)
 copied those kinds verbatim. It now stands a region for the argument's own
-memory dependencies, plus each root by its handle (`⟨r, .self⟩`, so that a
-composed kind covers every way, `RSetup.OK.σ_self`). The lift composes kinds
+memory dependencies (at first plus each root by its handle, `σ_self`, which
+a precise `recvRes` made unnecessary: see below). The lift composes kinds
 (`RSetup.subD` is `subDc`'s map, `mem_subD` gives `σC`). `derive_subE` then
 holds by `comp_assoc`, with no closure of σ under kinds (`σ_kinds` is gone).
 No rule changes. This is what `subDc_hits_exact` below needs of σ.
@@ -500,6 +500,25 @@ Measured on 3896bd20:
 - `RSetup.A := S.N` breaks 9 sites in `Rename.lean`, plus `pe_held`;
 - `heldA := N` instead breaks about 80 (`heldA_own` is used through
   `liftE`'s equations), so step 1 changes `A`/`R`, not `heldA`.
+
+### 3d groundwork: a precise `recvRes`, and σ exactly the argument's
+
+A call through a package returned `allKinds (recvRoots c Ec)`: every kind
+of every root the package reaches. To lift that, σ had to reach each root
+by its handle too (`σ_self`), and those extra `⟨r, .self⟩` entries are not
+harmless at a lent parameter's exit. `kills .realloc true .self` holds but
+`.inner` does not, so a caller's result resting on `⟨r, .inner⟩` would die
+on a push to `r`. The exit (`exitsP`, `callPost`) reroots onto the
+argument's own entry (`pe`), so the lift must give that back exactly.
+
+`recvRes` now adds `recvDeps c Ec`: each memory dependency of the
+receiver, composed with every kind (`⟨r, comp a k⟩`). That is what the
+package's environment reaches anyway (`deps_open`'s `comp d'.kind k`, and
+a share of each root, `comp a .share = .share`). The rule is more precise,
+and its lift is exact by `comp_assoc` (`allKinds_recvRoots_subE`). So
+`σ_self` and the `.self` entries are gone: a region stands for exactly the
+argument's memory dependencies. nurlc is unchanged, and it is at most as
+permissive as the model.
 
 ### 3d groundwork: what the kinds-composed lift kills (`A2/SubDcKill.lean`)
 

@@ -370,8 +370,7 @@ noncomputable def callS (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) (b
   sym := symNames fn.params
   σ := fun v => if fn.nvars ≤ v ∧ v < fn.nvars + fn.params.length then
       (if (argE Γ (args.getD (v - fn.nvars) 0)).ty = .int then []
-        else memDeps (argE Γ (args.getD (v - fn.nvars) 0)).held ++
-          (roots (memDeps (argE Γ (args.getD (v - fn.nvars) 0)).held)).map fun r => ⟨r, .self⟩)
+        else memDeps (argE Γ (args.getD (v - fn.nvars) 0)).held)
     else []
   isPi := isRegionIdx fn
   isReg := isRegionIdx fn
@@ -1524,35 +1523,15 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
       · cases hd
       · rename_i hint
         apply RSetup.mem_allKinds_iff.mpr
-        rcases List.mem_append.mp hd with hd | hd
-        · refine ⟨mem_callR.mpr ⟨_, ha, hint, List.mem_map_of_mem hd⟩, ?_⟩
-          simpa using (List.mem_filter.mp hd).2
-        · obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hd
-          exact ⟨mem_callR.mpr ⟨_, ha, hint, hr⟩, rfl⟩
+        refine ⟨mem_callR.mpr ⟨_, ha, hint, List.mem_map_of_mem hd⟩, ?_⟩
+        simpa using (List.mem_filter.mp hd).2
     · cases hd
   σ_mem v d hd := by
     simp only [callS] at hd
     split at hd
     · split at hd
       · cases hd
-      · rcases List.mem_append.mp hd with hd | hd
-        · simpa using (List.mem_filter.mp hd).2
-        · obtain ⟨r, _, rfl⟩ := List.mem_map.mp hd; rfl
-    · cases hd
-  σ_self v d hd := by
-    simp only [callS] at hd ⊢
-    split at hd
-    · rename_i hv
-      simp only [hv, and_self, ↓reduceIte]
-      split at hd
-      · cases hd
-      · rename_i hint
-        simp only [hint, ↓reduceIte]
-        apply List.mem_append_right
-        rcases List.mem_append.mp hd with hd | hd
-        · exact List.mem_map.mpr ⟨d.root, List.mem_map_of_mem hd, rfl⟩
-        · obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hd
-          exact List.mem_map.mpr ⟨r, hr, rfl⟩
+      · simpa using (List.mem_filter.mp hd).2
     · cases hd
   Rout r hr := (h.R_facts hr).1
   Rroot r hr := by
