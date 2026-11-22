@@ -6629,6 +6629,22 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
         · rename_i hns; rw [ite_eq_right hns]; exact (hie _ hk).2
       | trunc e => exact (hie _ hk).2
       | set e y => exact (hie _ hk).2
+  -- what a region stands for, reached through the change's path: inside a live owned `Vec`'s
+  -- elements, where the caller's change is the callee's on the region
+  have himg : ∀ d0 ∈ memDeps Ex1.path, S.isPi d0.root = true → ∀ e ∈ S.σ d0.root,
+      comp e.kind d0.kind = .inner ∧ ∃ Er, S.canon Γa1 e.root = some Er ∧
+        argE (S.canon Γa1) e.root = Er ∧ Er.live = true ∧ Er.mode = .own ∧
+        ∀ b : Bool, (op.rename S.ρ).effAt (comp e.kind d0.kind) b Er.rvec = .dropIn := by
+    intro d0 hd0 hp0 e he
+    obtain ⟨hki, _, _, _, _⟩ := hreg_in d0 hd0 hp0
+    obtain ⟨hσk, hroots⟩ := ht.2 d0.root hp0
+    obtain ⟨_, _, _, _, Er, hEr, hErl, hErm, hErv⟩ := hroots e he
+    have hck : comp e.kind d0.kind = .inner := by
+      rw [hki]; rcases hσk e he with h' | h' <;> rw [h'] <;> rfl
+    have hcan : S.canon Γa1 e.root = some Er := by rw [canon_frame _ (S.σ_frame h he).1]; exact hEr
+    refine ⟨hck, Er, hcan, by unfold argE; rw [hcan]; rfl, hErl, hErm, fun b => ?_⟩
+    rw [hck, hErv, Edit.effAt_rename]
+    cases op <;> simp [Edit.effAt, Edit.inEff]
   have hthru' : ThruOKR (S.canon Γa1) S.Fc (op.rename S.ρ) (S.liftE x Ex1).ty (S.subE (S.liftE x Ex1)).path := by
     intro d hd
     rcases (S.mem_memDeps_subE_liftE_bor h ht hmx).mp hd with ⟨d0, hd0, hnp0, rfl⟩ | ⟨d0, hd0, hp0, e, he, rfl⟩
@@ -6662,18 +6678,14 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
         · exact DtorSafe.canon h (allowed_region hab1 hEr hr _) hds
         · exact DtorSafe.canon h (allowed_canDo_false hab1 hEr (hown hr).2) hds
     · -- what a region stands for: a live owned `Vec` of the frame's, changed inside its elements
-      obtain ⟨hki, heff, Eu, hEu, hEur⟩ := hreg_in d0 hd0 hp0
+      obtain ⟨_, heff, Eu, hEu, _⟩ := hreg_in d0 hd0 hp0
       obtain ⟨hσk, hroots⟩ := ht.2 d0.root hp0
-      obtain ⟨hoth, hpe, hΦ, hFc, Er, hEr, hErl, hErm, hErv⟩ := hroots e he
+      obtain ⟨hoth, hpe, hΦ, hFc, _⟩ := hroots e he
       have hout := (S.σ_frame h he).1
-      have hck : comp e.kind d0.kind = .inner := by
-        rw [hki]; rcases hσk e he with h' | h' <;> rw [h'] <;> rfl
-      have hcan : S.canon Γa1 e.root = some Er := by rw [canon_frame _ hout]; exact hEr
-      have hae : argE (S.canon Γa1) e.root = Er := by unfold argE; rw [hcan]; rfl
+      obtain ⟨hck, Er, hcan, hae, hErl, hErm, heffE⟩ := himg d0 hd0 hp0 e he
       have heff' : (op.rename S.ρ).effAt (comp e.kind d0.kind)
           (decide ((argE (S.canon Γa1) e.root).ty = (S.liftE x Ex1).ty)) (argE (S.canon Γa1) e.root).rvec = .dropIn := by
-        rw [hck, hae, hErv, Edit.effAt_rename]
-        cases op <;> simp [Edit.effAt, Edit.inEff]
+        rw [hae]; exact heffE _
       obtain ⟨_, _, Eu', hEu', _, _, hds, _⟩ := hthru d0 hd0
       rw [hEu] at hEu'; cases hEu'
       have hds' : DtorSafe Γa1 .dropIn false d0.root := by
@@ -6772,21 +6784,14 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
         refine mem_rds.mpr ⟨f d0, List.mem_map.mpr ⟨d0, List.mem_filter.mpr ⟨hd0, by simp [p, hnp0]⟩, rfl⟩, ?_⟩
         simp only [f, Dep.ren, Edit.effAt_rename, hte, hve, hty1]
       · right
-        obtain ⟨hki, _, _, _, _⟩ := hreg_in d0 hd0 hp0
-        obtain ⟨hσk, hroots⟩ := ht.2 d0.root hp0
-        obtain ⟨_, _, _, _, Er, hEr, _, _, hErv⟩ := hroots e he
-        have hout := (S.σ_frame h he).1
-        have hae : argE (S.canon Γa1) e.root = Er := by unfold argE; rw [canon_frame _ hout, hEr]; rfl
-        have hck : comp e.kind d0.kind = .inner := by
-          rw [hki]; rcases hσk e he with h' | h' <;> rw [h'] <;> rfl
+        obtain ⟨hck, Er, _, hae, _, _, heffE⟩ := himg d0 hd0 hp0 e he
         have hσne : (S.σ d0.root).isEmpty = false := by
           cases hσ : S.σ d0.root with
           | nil => rw [hσ] at he; cases he
           | cons _ _ => rfl
         refine ⟨f d0, List.mem_map.mpr ⟨d0, List.mem_filter.mpr ⟨hd0, by simp [qn, hp0, hσne]⟩, rfl⟩,
           e, he, ?_⟩
-        simp only [regionKill, hck, hae, hErv, Edit.effAt_rename]
-        cases op <;> simp [Edit.effAt, Edit.inEff]
+        simp only [regionKill, hae, heffE]
     · rintro (hd | ⟨d1, hd1, hd⟩)
       · obtain ⟨d2, hd2, rfl⟩ := mem_rds.mp hd
         obtain ⟨d0, hd0', rfl⟩ := List.mem_map.mp hd2
@@ -6799,17 +6804,10 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
         obtain ⟨hd0, hq⟩ := List.mem_filter.mp hd0'
         have hp0 : S.isPi d0.root = true := by simp only [qn, Bool.and_eq_true] at hq; exact hq.1
         obtain ⟨e, he, rfl⟩ := hd
-        obtain ⟨hki, _, _, _, _⟩ := hreg_in d0 hd0 hp0
-        obtain ⟨hσk, hroots⟩ := ht.2 d0.root hp0
-        obtain ⟨_, _, _, _, Er, hEr, _, _, hErv⟩ := hroots e he
-        have hout := (S.σ_frame h he).1
-        have hae : argE (S.canon Γa1) e.root = Er := by unfold argE; rw [canon_frame _ hout, hEr]; rfl
-        have hck : comp e.kind d0.kind = .inner := by
-          rw [hki]; rcases hσk e he with h' | h' <;> rw [h'] <;> rfl
+        obtain ⟨_, Er, _, hae, _, _, heffE⟩ := himg d0 hd0 hp0 e he
         refine ⟨⟨e.root, comp e.kind d0.kind⟩,
           (S.mem_memDeps_subE_liftE_bor h ht hmx).mpr (Or.inr ⟨d0, hd0, hp0, e, he, rfl⟩), ?_⟩
-        simp only [regionKill, hck, hae, hErv, Edit.effAt_rename]
-        cases op <;> simp [Edit.effAt, Edit.inEff]
+        simp only [regionKill, hae, heffE]
   have habT : S.AbsOK (A2.setE (A2.killThru op Ex1.ty Ex1.path Γa1) x Ex1) :=
     (hab1.killNames _).setE' hab1 hx1 rfl rfl hrb (fun hf => absurd hf (by simp [Entry.fixed, hmx]))
   have hcwT := canon_wf_sub h habT hwT hnT
@@ -7577,7 +7575,8 @@ theorem ThruOrReady.sub {P : Prog} {s s' : Stmt} (h : S.ThruOrReady P s) (hc : �
     S.ThruOrReady P s' :=
   h.imp id fun ⟨ht, hn⟩ => ⟨ht, fun g hg => hn g (hc g hg)⟩
 
-/-- ... so a call to a through-changing function in it passes no views. -/
+/-- ... so where it calls a through-changing function, the outer call (the
+    setting) passes no views: `S.R = []` of the setting, not of the inner call. -/
 theorem ThruOrReady.call {P : Prog} {s : Stmt} (h : S.ThruOrReady P s) {f : Nat} (hf : f ∈ s.calls)
     (ht : ThruFn P f) : S.R = [] :=
   h.resolve_right fun ⟨_, hn⟩ => hn f hf ht
@@ -7589,8 +7588,10 @@ theorem ThruOrReady.Rf (h0 : S.OK) {P : Prog} {s : Stmt} (h : S.ThruOrReady P s)
 /-- The renaming lemma: a callee's source statement, typed in its own
     contexts, is typed where the call places it, in the caller's view of
     those contexts. A statement that may change elements through a borrow
-    is placed by a call that passed no views (`s.Thru P → S.R = []`, from
-    `CallT`'s guard, Agora #295). -/
+    (`s.Thru P`) is placed by a call that either passed no views
+    (`S.R = []`, from `CallT`'s guard, Agora #295), or (AGORA-937 3d) is
+    ready for a change through its regions (`S.ThruReady`) while the
+    statement calls no through-changing function (`ThruOrReady`). -/
 theorem StmtT.ren (h : S.OK) {P : Prog} (hP : ProgOK P) {Γa : Ctx} {Fa : List Var} {s : Stmt}
     {Δa : Ctx} (hd : StmtT P ξ Γa Fa s Δa) : s.src = true → S.AbsOK Γa → CtxWF Γa → NameWF Γa →
     FreshOK Γa → (s.Thru P → S.ThruOrReady P s) → (∀ v ∈ s.vars, S.isReg v = false) →
