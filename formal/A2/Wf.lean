@@ -1069,9 +1069,9 @@ theorem recvRes_roots {Γ Γ1 : Ctx} (h : CtxWF Γ) (hdm : DomMode Γ Γ1) {c : 
     (hc : Γ c = some Ec) (hlc : Ec.live = true) (htc : Ec.ty ≠ .int)
     (hE : ∀ r ∈ roots E.vdeps, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true) :
     ∀ r ∈ roots (recvRes c Ec E).vdeps, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true := by
-  have hA : ∀ d ∈ allKinds (recvRoots c Ec), ∃ Er, Γ1 d.root = some Er ∧ Er.mode.isRoot = true := by
+  have hA : ∀ d ∈ recvDeps c Ec, ∃ Er, Γ1 d.root = some Er ∧ Er.mode.isRoot = true := by
     intro d hd
-    have hr := allKinds_root hd
+    have hr := (recvDeps_root hd).1
     rcases List.mem_append.mp hr with hr | hr
     · exact hdm.root (derive_roots h hc hlc (Or.inl htc) .self _ (roots_memDeps hr))
     · exact hdm.root (h c Ec hc hlc (Or.inl htc) _ (held_vdeps' (roots_memDeps hr)))

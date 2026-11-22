@@ -671,6 +671,10 @@ import A3
 #print axioms A2.subDc_hits_exact
 -- (AGORA-937 3d): a parameter holds its region by its handle; a kill spares it where it spares a view
 #print axioms A2.Eff.kills_self_of_view
+-- (AGORA-937 3d): a call through a package returns its receiver's own memory deps, composed;
+-- the lift of it is exact
+#print axioms A2.recvDeps_root
+#print axioms A2.RSetup.allKinds_recvRoots_subE
 -- (AGORA-937 3d groundwork): the call's lift is precise (σ: the argument's own memory deps and
 -- each root by its handle) and composes kinds; deriving commutes with it
 #print axioms A2.RSetup.derive_subE

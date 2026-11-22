@@ -390,6 +390,11 @@ theorem allKinds_named (Γ : Ctx) (rs : List Var) : DepsNamed Γ (allKinds rs) :
   obtain ⟨r, _, hd⟩ := hd
   rcases hd with rfl | rfl | rfl | rfl <;> cases hk
 
+/-- AGORA-937 (3d): what a package's environment reaches is in memory: no names. -/
+theorem recvDeps_named (Γ : Ctx) (c : Var) (Ec : Entry) : DepsNamed Γ (recvDeps c Ec) := by
+  intro d hd b t hk
+  have := (recvDeps_root hd).2; rw [hk] at this; cases this
+
 theorem DepsNamed.flatMap {Γ : Ctx} {α : Type} {l : List α} {f : α → List Dep}
     (h : ∀ a ∈ l, DepsNamed Γ (f a)) : DepsNamed Γ (l.flatMap f) := by
   intro d hd
@@ -744,11 +749,11 @@ theorem recvRes_named {Γ : Ctx} {c : Var} {Ec E : Entry}
       simp only [recvRes] at hd
       rcases List.mem_append.mp hd with hd | hd
       · exact hE' d (by simp only [Entry.vdeps, hos']; exact List.mem_append_left _ hd)
-      · exact allKinds_named _ _ d hd
+      · exact recvDeps_named _ _ _ d hd
   · simp only [recvRes] at hd
     rcases List.mem_append.mp (ownHeld_sub _ _ _ hd) with hd | hd
     · exact hE' d (by unfold Entry.vdeps; exact List.mem_append_right _ hd)
-    · exact allKinds_named _ _ d hd
+    · exact recvDeps_named _ _ _ d hd
 
 /-! ### Statements -/
 

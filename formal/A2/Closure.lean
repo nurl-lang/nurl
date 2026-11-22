@@ -100,7 +100,7 @@ theorem pkg_caps {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {c : Var} {Ec : Entry} (h
     arguments of their own, and the environment never names them.
     AGORA-901: it also depends on a share of each root the package reaches
     in memory, by what it derives or holds, as the call's result does
-    (`recvRes`, `allKinds (recvRoots c Ec)`): the environment lies inside
+    (`recvRes`, `recvDeps c Ec`): the environment lies inside
     the package, so nothing lent from it, nor anything it stores, is clean
     (`Clean`). -/
 def shareOf (D : List Dep) : List Dep := (memDeps D).map (fun d => ⟨d.root, .share⟩)
@@ -1085,7 +1085,7 @@ theorem deps_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode = .ro
     reroot e ((envE c Ec te cs).path ++ (envE c Ec te cs).held)
         (L.flatMap (argDeps (setE (cleanC Γ) e (envE c Ec te cs)) (e :: zs)) ++
           heldOfArgs (setE (cleanC Γ) e (envE c Ec te cs)) (e :: zs)) ⊆
-      (L'.flatMap (argDeps Γ (c :: zs)) ++ heldOfArgs Γ (c :: zs)) ++ allKinds (recvRoots c Ec) := by
+      (L'.flatMap (argDeps Γ (c :: zs)) ++ heldOfArgs Γ (c :: zs)) ++ recvDeps c Ec := by
   intro d hd
   rcases mem_reroot hd with ⟨hd, hne⟩ | ⟨k, d', hek, hd', rfl⟩
   · refine List.mem_append_left _ ?_
@@ -1132,25 +1132,25 @@ theorem deps_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode = .ro
       have hci : argE Γ c = Ec := by simp [argE, hc]
       simp only [hci, htc, ↓reduceIte, nameDeps, List.mem_filter]
       exact ⟨hdEc, hnm⟩
-    · refine List.mem_append_right _ (RSetup.mem_allKinds_iff.mpr
-        ⟨?_, by
-          have hd'n : d'.kind.isName = false := by simpa using hnm
-          cases hdk : d'.kind <;> cases hkk : k <;>
-            simp_all [comp, Kind.isName]⟩)
-      show d'.root ∈ recvRoots c Ec
-      unfold recvRoots
-      have hd'm : ∃ d0 ∈ memDeps (derive c Ec .self ++ Ec.held), d0.root = d'.root := by
-        rcases hd' with hd' | hd' | ⟨_, hd0⟩
-        · exact ⟨d', List.mem_filter.mpr ⟨List.mem_append_left _ hd',
-            by simp only [Bool.not_eq_true] at hnm; simp [hnm]⟩, rfl⟩
-        · exact ⟨d', List.mem_filter.mpr ⟨List.mem_append_right _ hd',
-            by simp only [Bool.not_eq_true] at hnm; simp [hnm]⟩, rfl⟩
-        · exact hd0
-      obtain ⟨d0, h, hr0⟩ := hd'm
-      rw [← hr0]
-      rcases memDeps_app h with h | h
-      · exact List.mem_append_left _ (List.mem_map_of_mem (f := Dep.root) h)
-      · exact List.mem_append_right _ (List.mem_map_of_mem (f := Dep.root) h)
+    · -- AGORA-937 (3d): what the package reaches, each in its own way, composed
+      have hd'n : d'.kind.isName = false := by simpa using hnm
+      have hk4 : k = .self ∨ k = .inner ∨ k = .view ∨ k = .share := by
+        cases k <;> simp_all [Kind.isName]
+      have hmem : ∀ d0 ∈ memDeps (derive c Ec .self ++ Ec.held),
+          d0 ∈ memDeps (derive c Ec .self) ++ memDeps Ec.held := fun d0 h => by
+        rcases memDeps_app h with h | h
+        · exact List.mem_append_left _ h
+        · exact List.mem_append_right _ h
+      refine List.mem_append_right _ (mem_recvDeps.mpr ?_)
+      rcases hd' with hd' | hd' | ⟨hks, d0, hd0, hr0⟩
+      · exact ⟨d', hmem d' (List.mem_filter.mpr ⟨List.mem_append_left _ hd', by simp [hd'n]⟩), k, hk4, rfl⟩
+      · exact ⟨d', hmem d' (List.mem_filter.mpr ⟨List.mem_append_right _ hd', by simp [hd'n]⟩), k, hk4, rfl⟩
+      · -- a share of a root it reaches: a share, however it is reached inside
+        have hd0n : d0.kind.isName = false := by simpa using (List.mem_filter.mp hd0).2
+        refine ⟨d0, hmem d0 hd0, .share, Or.inr (Or.inr (Or.inr rfl)), ?_⟩
+        obtain ⟨r, a⟩ := d'; obtain ⟨r0, a0⟩ := d0
+        simp only at hks hr0 hd0n ⊢; subst hks; subst hr0
+        cases a0 <;> cases k <;> simp_all [comp, Kind.isName]
 
 /-- Rerooting an `ownHeld` stays inside the `ownHeld` of a bound for it. -/
 theorem reroot_ownHeld {p : Var} {D : List Dep} {o : Bool} {t : Ty} {L X R : List Dep}

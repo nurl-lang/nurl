@@ -1381,11 +1381,43 @@ def resMode (fn : Fn) : Mode := if fn.resOwn then .own else .bor
 def recvRoots (c : Var) (Ec : Entry) : List Var :=
   roots (memDeps (derive c Ec .self)) ++ roots (memDeps Ec.held)
 
+/-- What a package's environment reaches: each dependency in memory of the
+    package (or what it borrows from) and of what it holds, composed with
+    every way of reaching inside it (AGORA-937 3d: precise, so a call's lift
+    gives it back exactly, `comp_assoc`; it was every kind of each root). -/
+def recvDeps (c : Var) (Ec : Entry) : List Dep :=
+  (memDeps (derive c Ec .self) ++ memDeps Ec.held).flatMap fun d =>
+    [Kind.self, .inner, .view, .share].map fun k => ⟨d.root, comp d.kind k⟩
+
 /-- What a call through a package returns: what its interface says, and, as
     the method may lend part of the receiver, anything the package reaches. -/
 def recvRes (c : Var) (Ec : Entry) (E : Entry) : Entry :=
-  { E with path := E.path ++ allKinds (recvRoots c Ec),
-           held := ownHeld E.mode.ownSlot E.ty (E.held ++ allKinds (recvRoots c Ec)), heldFresh := false }
+  { E with path := E.path ++ recvDeps c Ec,
+           held := ownHeld E.mode.ownSlot E.ty (E.held ++ recvDeps c Ec), heldFresh := false }
+
+theorem mem_recvDeps {c : Var} {Ec : Entry} {d : Dep} :
+    d ∈ recvDeps c Ec ↔ ∃ d0 ∈ memDeps (derive c Ec .self) ++ memDeps Ec.held,
+      ∃ k, (k = .self ∨ k = .inner ∨ k = .view ∨ k = .share) ∧ d = ⟨d0.root, comp d0.kind k⟩ := by
+  unfold recvDeps
+  simp only [List.mem_flatMap, List.mem_map, List.mem_cons, List.mem_nil_iff, or_false]
+  constructor
+  · rintro ⟨d0, hd0, k, hk, rfl⟩; exact ⟨d0, hd0, k, hk, rfl⟩
+  · rintro ⟨d0, hd0, k, hk, rfl⟩; exact ⟨d0, hd0, k, hk, rfl⟩
+
+/-- ... each on a root the package reaches, in memory. -/
+theorem recvDeps_root {c : Var} {Ec : Entry} {d : Dep} (hd : d ∈ recvDeps c Ec) :
+    d.root ∈ recvRoots c Ec ∧ d.kind.isName = false := by
+  obtain ⟨d0, hd0, k, hk, rfl⟩ := mem_recvDeps.mp hd
+  have hn : d0.kind.isName = false := by
+    rcases List.mem_append.mp hd0 with h | h <;> simpa using (List.mem_filter.mp h).2
+  refine ⟨?_, ?_⟩
+  · unfold recvRoots
+    rcases List.mem_append.mp hd0 with h | h
+    · exact List.mem_append_left _ (List.mem_map.mpr ⟨d0, h, rfl⟩)
+    · exact List.mem_append_right _ (List.mem_map.mpr ⟨d0, h, rfl⟩)
+  · obtain ⟨r, a⟩ := d0
+    simp only at hn ⊢
+    rcases hk with rfl | rfl | rfl | rfl <;> cases a <;> simp_all [comp, Kind.isName]
 
 /-- The call's result: it borrows what the summary says it borrows, and
     may hold whatever the arguments held. -/

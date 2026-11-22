@@ -48,9 +48,8 @@ theorem dropIn_comp_exact {k : Kind} (hk : k = .view ∨ k = .inner ∨ k = .sha
     Eff.dropIn.kills false (comp .view k) = Eff.dropIn.kills false k := by
   rcases hk with rfl | rfl | rfl <;> rfl
 
-/-- ... and so when it reaches `w` by its handle (`.self`, what a call's
-    setting adds for each root: `RSetup.OK.σ_self`), which composes to the
-    callee's kind itself. -/
+/-- ... and so when it reaches `w` by its handle (`.self`, as an argument
+    may hold it), which composes to the callee's kind itself. -/
 theorem dropIn_comp_exact' {a k : Kind} (ha : a = .view ∨ a = .self)
     (hk : k = .view ∨ k = .inner ∨ k = .share) :
     Eff.dropIn.kills false (comp a k) = Eff.dropIn.kills false k := by
