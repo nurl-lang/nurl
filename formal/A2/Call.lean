@@ -363,6 +363,33 @@ def bndOf (ps : List (PMode × Ty)) (v : Var) : Option (Eff × Bool) :=
   | some (.inout b, t) => some (b, t.elem.holdsView)
   | _ => none
 
+/-- AGORA-937 (3d): what the arguments to parameters with no region hold
+    in memory: the memory a call freezes (the callee does not track it;
+    a region's comes back through the substitution). -/
+def argMemF (Γ : Ctx) (ps : List (PMode × Ty)) (args : List Var) : List Dep :=
+  (List.range args.length).flatMap fun i =>
+    if (ps[i]?.map regioned).getD false then []
+    else if (argE Γ (args.getD i 0)).ty = .int then [] else memDeps (argE Γ (args.getD i 0)).held
+
+theorem mem_argMemF {Γ : Ctx} {ps : List (PMode × Ty)} {args : List Var} {d : Dep} :
+    d ∈ argMemF Γ ps args ↔ ∃ i < args.length, (ps[i]?.map regioned).getD false = false ∧
+      (argE Γ (args.getD i 0)).ty ≠ .int ∧ d ∈ memDeps (argE Γ (args.getD i 0)).held := by
+  unfold argMemF; simp only [List.mem_flatMap, List.mem_range]
+  constructor
+  · rintro ⟨i, hi, hd⟩
+    split at hd
+    · cases hd
+    · rename_i hr; split at hd
+      · cases hd
+      · rename_i hn; exact ⟨i, hi, by simpa using hr, hn, hd⟩
+  · rintro ⟨i, hi, hr, hn, hd⟩
+    exact ⟨i, hi, by rw [ite_eq_right (by simp [hr]), ite_eq_right hn]; exact hd⟩
+
+theorem argMemF_sub {Γ : Ctx} {ps : List (PMode × Ty)} {args : List Var} : argMemF Γ ps args ⊆ argMem Γ args := by
+  intro d hd
+  obtain ⟨i, hi, _, hn, hd⟩ := mem_argMemF.mp hd
+  exact mem_argMem.mpr ⟨_, by simp [List.getD, hi], hn, hd⟩
+
 open Classical in
 noncomputable def callS (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) (base : Nat) (x : Var) :
     RSetup where
@@ -383,6 +410,8 @@ noncomputable def callS (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) (b
   isPi := isRegionIdx fn
   isReg := isRegionIdx fn
   Rd := argMem Γ args
+  Rf := argMemF Γ fn.params args
+  peReg := fun v => (fn.params[v]?.map regioned).getD false
 
 /-- AGORA-937: a callee variable below `fn.nvars` (a parameter, the result
     slot, a body variable) is at no region's index: a parameter's region is
@@ -1557,6 +1586,7 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
       · cases hd
       · rename_i hint; exact mem_argMem.mpr ⟨_, ha, hint, hd⟩
     · cases hd
+  Rf_sub _ hd := argMemF_sub hd
   Rout r hr := (h.R_facts hr).1
   Rroot r hr := by
     obtain ⟨hout, Er, hEr, hro⟩ := h.R_facts hr
@@ -1615,7 +1645,6 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
     cases hk : d.kind.isName with
     | false =>
       -- in memory: what the argument holds, a root the arguments hold views of
-      left
       have hdv : d ∈ (callPe Γ fn.params args v).vdeps := by
         unfold Entry.vdeps; exact List.mem_append_right _ hd
       obtain ⟨Ea, hvp, hEa, _, hn, _, _, hvi⟩ := h.pe_vdeps v hdv
@@ -1625,15 +1654,20 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
         revert hd; show d ∈ (callPe Γ fn.params args v).held → _
         unfold callPe; rw [hvi]; simp only; rw [ite_eq_right (by rw [hae]; exact hn)]
         intro hd; rw [hae] at hd; exact (mem_typedDeps hd).1
-      refine List.mem_append_left _ (mem_compAll.mpr ⟨d, mem_argMem.mpr ⟨_, hmem, by rw [hae]; exact hn,
-        by rw [hae]; exact List.mem_filter.mpr ⟨hd', by simp [hk]⟩⟩, .self, Or.inl rfl, ?_⟩)
-      rw [comp_self_r]
+      -- AGORA-937 (3d): a regioned parameter's argument's memory is its region's;
+      -- with no region, the call freezes it
+      cases hreg : (fn.params[v]?.map regioned).getD false
+      · left
+        refine List.mem_append_left _ (mem_compAll.mpr ⟨d, mem_argMemF.mpr ⟨v, h.len ▸ hvp, hreg,
+          by rw [hae]; exact hn, by rw [hae]; exact List.mem_filter.mpr ⟨hd', by simp [hk]⟩⟩, .self, Or.inl rfl, ?_⟩)
+        rw [comp_self_r]
+      · exact Or.inr (Or.inr ⟨rfl, hreg⟩)
     | true =>
       have hdv : d ∈ (callPe Γ fn.params args v).vdeps := by
         unfold Entry.vdeps; exact List.mem_append_right _ hd
       rcases h.pe_names v hdv hk with hN | hs
       · exact Or.inl (List.mem_append_right _ hN)
-      · exact Or.inr hs
+      · exact Or.inr (Or.inl hs)
   pe_names v d hd hn := h.pe_names v hd hn
   sym_ok d hd := by
     obtain ⟨w, b, t, rfl, hp, hhv, hbn, hbr⟩ := mem_symNames' hd
@@ -2722,7 +2756,7 @@ theorem _root_.A2.RSetup.subE_liftE_cons {S : RSetup} (hS : S.OK) {v w : Var} {E
     its own, with its region: what the region stands for, and the
     argument's names. -/
 theorem _root_.A2.RSetup.subE_liftE_cons_rootb {S : RSetup} (hS : S.OK) {v w : Var} {E : Entry}
-    (hm : E.mode = .rootb) (hE : memDeps E.held = []) (hw : S.isPi w = true) :
+    (hm : E.mode = .rootb) (hE : memDeps E.held = []) (hp : S.peReg v = true) (hw : S.isPi w = true) :
     S.subE (S.liftE v { E with held := ⟨w, .self⟩ :: E.held }) =
       { S.subE (S.liftE v E) with held := (S.σ w).map (fun e => ⟨e.root, A2.comp e.kind .self⟩) ++
         (nameDeps (S.pe v).held).flatMap S.subD } := by
@@ -2732,7 +2766,7 @@ theorem _root_.A2.RSetup.subE_liftE_cons_rootb {S : RSetup} (hS : S.OK) {v w : V
     show List.filter _ (_ :: _) = _
     rw [List.filter_cons]; simp only [Kind.isName, Bool.not_false, ↓reduceIte]
     exact congrArg _ hE
-  simp only [RSetup.liftE, hm, ↓reduceIte, RSetup.subE, rds, hm1]
+  simp only [RSetup.liftE, hm, ↓reduceIte, RSetup.subE, rds, hm1, hp]
   simp [Dep.ren, hd]
 
 /-- AGORA-937 (3d): the substitution keeps what a lent parameter's
@@ -2777,6 +2811,9 @@ theorem canon_param (h : CallH P Γ F x fn args base) {k : Nat} {p : PMode × Ty
     -- stands for; a lent one, then, its argument's names
     have hw : (callS Γ F fn args base x).isPi (fn.nvars + k) = true := by
       simp [callS, isRegionIdx, hkl, get_of hk, hr]
+    have hp : (callS Γ F fn args base x).peReg k = true := by
+      show (fn.params[k]?.map regioned).getD false = true
+      rw [hk]; simpa using hr
     obtain ⟨pm, t⟩ := p
     cases pm with
     | inp =>
@@ -2787,7 +2824,7 @@ theorem canon_param (h : CallH P Γ F x fn args base) {k : Nat} {p : PMode × Ty
             obtain ⟨w, b, t', rfl, _⟩ := mem_symNames' hd; simp [Kind.isName]
         · rfl
       simp only [↓reduceIte, PMode.isInp, Bool.and_self]
-      rw [RSetup.subE_liftE_cons_rootb h.sOK hm hE hw, h.subD_names_pe, hfix]
+      rw [RSetup.subE_liftE_cons_rootb h.sOK hm hE hp hw, h.subD_names_pe, hfix]
     | sink =>
       have hm : (paramE fn.params (.sink, t)).mode ≠ .rootb := by simp [paramE]
       simp only [↓reduceIte, PMode.isInp, Bool.and_false, Bool.false_eq_true]
@@ -2819,8 +2856,10 @@ theorem canon_inp (h : CallH P Γ F x fn args base) {k : Nat} {t : Ty}
       induction L with
       | nil => rfl
       | cons e L ih => rw [List.map_cons, comp_self_r, ih]
-    have hlh : ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).held =
-        (callPe Γ fn.params args k).held := by
+    have hpr : (callS Γ F fn args base x).peReg k = regioned (PMode.inp, t) := by simp [callS, hk]
+    have hlh : regioned (PMode.inp, t) = false →
+        ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).held =
+        (callPe Γ fn.params args k).held := fun hr => by
       have hE : memDeps (paramE fn.params (.inp, t)).held = [] := by
         simp only [paramE]; split
         · exact List.filter_eq_nil_iff.mpr fun d hd => by
@@ -2828,17 +2867,17 @@ theorem canon_inp (h : CallH P Γ F x fn args base) {k : Nat} {t : Ty}
         · rfl
       have hE' : memDeps (if t.hasFn = true then symNames fn.params else []) = [] := by
         simpa [paramE] using hE
-      simp [RSetup.liftE, paramE, hE', rds, hpe]
+      simp [RSetup.liftE, paramE, hE', rds, hpe, hpr, hr]
     dsimp only
     rw [hσ, hcs]
     simp only [PMode.isInp, Bool.and_true]
     have hlp : ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).path =
         (callPe Γ fn.params args k).path := by simp [RSetup.liftE, paramE, hpe]
-    rw [hlp, hlh, hpe]
-    unfold callPe; rw [hk]
+    rw [hlp]
     cases hr : regioned (PMode.inp, t)
-    · simp
-    · simp only [↓reduceIte]
+    · simp only [Bool.false_eq_true, ↓reduceIte, List.nil_append]; rw [hlh hr]
+    · rw [hpe]; unfold callPe; rw [hk]
+      simp only [↓reduceIte]
       split
       · simp [nameDeps]
       · rename_i hint
@@ -3673,8 +3712,9 @@ theorem lift_sub (h : CallH P Γ F x fn args base) {L0 T X : List Dep}
     exact Or.inr ⟨d0.root, d0.kind, rfl, (hL0 d0 hd0).1, (hL0 d0 hd0).2.1, (hL0 d0 hd0).2.2.1,
       (hL0 d0 hd0).2.2.2⟩
   · rcases RSetup.mem_A.mp (hX hd) with hd | hd
-    · obtain ⟨_, Er, hEr, _⟩ := h.R_facts ((callS Γ F fn args base x).compAll_Rd h.sOK hd).1
-      exact Or.inl ⟨by rw [hEr]; rfl, hR (List.mem_append_left _ hd)⟩
+    · obtain ⟨_, Er, hEr, _⟩ := h.R_facts ((callS Γ F fn args base x).compAll_Rd h.sOK
+        ((callS Γ F fn args base x).compAll_Rf h.sOK hd)).1
+      exact Or.inl ⟨by rw [hEr]; rfl, hR (List.mem_append_left _ (compAll_mono argMemF_sub hd))⟩
     · obtain ⟨Er, hEr, _⟩ := h.argNames_rootE ((h.mem_N).mp hd).1
       exact Or.inl ⟨by rw [hEr]; rfl, hR (List.mem_append_right _ ((h.mem_N).mp hd).1)⟩
 
@@ -3710,7 +3750,8 @@ theorem lift_nosink (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hrb
       rcases hjm with hjm | ⟨b, hjm⟩ <;> rw [hk] at hjm <;> cases hjm
   · have hEr' : ∃ Er, Γ d.root = some Er := by
       rcases RSetup.mem_A.mp ha with ha | ha
-      · obtain ⟨_, Er, hEr, _⟩ := h.R_facts ((callS Γ F fn args base x).compAll_Rd h.sOK ha).1; exact ⟨Er, hEr⟩
+      · obtain ⟨_, Er, hEr, _⟩ := h.R_facts ((callS Γ F fn args base x).compAll_Rd h.sOK
+          ((callS Γ F fn args base x).compAll_Rf h.sOK ha)).1; exact ⟨Er, hEr⟩
       · obtain ⟨Er, hEr, _⟩ := h.argNames_rootE ((h.mem_N).mp ha).1; exact ⟨Er, hEr⟩
     obtain ⟨Er, hEr⟩ := hEr'
     have hlt := vlt (h.domlt _ _ hEr)
@@ -3780,8 +3821,9 @@ theorem lift_sub_sub (h : CallH P Γ F x fn args base) {L0 T X : List Dep}
   · rw [RSetup.subD_keep h.sOK (Or.inl (RSetup.A_out h.sOK (hX he))), List.mem_singleton] at hde
     subst hde
     rcases RSetup.mem_A.mp (hX he) with hd | hd
-    · obtain ⟨_, Er, hEr, _⟩ := h.R_facts ((callS Γ F fn args base x).compAll_Rd h.sOK hd).1
-      exact Or.inl ⟨by rw [hEr]; rfl, hR (List.mem_append_left _ hd)⟩
+    · obtain ⟨_, Er, hEr, _⟩ := h.R_facts ((callS Γ F fn args base x).compAll_Rd h.sOK
+        ((callS Γ F fn args base x).compAll_Rf h.sOK hd)).1
+      exact Or.inl ⟨by rw [hEr]; rfl, hR (List.mem_append_left _ (compAll_mono argMemF_sub hd))⟩
     · obtain ⟨Er, hEr, _⟩ := h.argNames_rootE ((h.mem_N).mp hd).1
       exact Or.inl ⟨by rw [hEr]; rfl, hR (List.mem_append_right _ ((h.mem_N).mp hd).1)⟩
 

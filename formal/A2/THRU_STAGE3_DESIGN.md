@@ -520,6 +520,34 @@ and its lift is exact by `comp_assoc` (`allKinds_recvRoots_subE`). So
 argument's memory dependencies. nurlc is unchanged, and it is at most as
 permissive as the model.
 
+### 3d groundwork: frozen roots split from region-reached ones
+
+A call setting now tells apart what it freezes from what its regions stand
+for:
+- `RSetup.A := compAll S.Rf ++ S.N` is what a lift adds;
+- `RSetup.B := compAll S.Rd ++ S.N` is everything the arguments hold, used
+  as the bound where a region's memory comes back through the substitution
+  (`mem_subD_A`, `mem_subE_vdeps_A`, `B_out`, `B_root`).
+
+For a call, `Rf := argMemF Γ fn.params args`: only what arguments to
+parameters with no region hold in memory. A regioned parameter's argument
+memory comes back through its region. So a change through a region no
+longer meets the over-approximation in what the lift adds.
+
+The bounds the lift lemmas need for the inner call's argument deps, result
+and `inout` arguments are now stated after the substitution
+(`argDeps_lift`, `heldOfArgs_lift`, `outHeld_lift`:
+`… ⊆ (rds ρ … ++ S.A).flatMap S.subD`, with `flatMap_liftS`, `app_liftS`,
+`mem_subD_comp`). `callRes_lift` and `callPostAux_lift` compare substituted
+entries directly.
+
+A lent parameter's lift keeps only its argument's names when the parameter
+has a region (`RSetup.peReg`). `pe_held` admits a memory dependency of such
+a parameter's argument. At call entry, a moved or changed parameter's tree
+holds what its region stands for (`σmap_mem`, `slot_ownArg`), and its
+package freedom is proved through its argument's (`own_param_free`, now via
+`cleanDeps_back` and `MInv.pkgFree`, no longer via a share the lift added).
+
 ### 3d groundwork: a precise call result and a precise `RSetup.A`
 
 A call's result held `allKinds (callR …)`: every kind of every root the
