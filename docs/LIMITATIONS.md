@@ -29,7 +29,7 @@ Each is a use of freed or moved-out memory in safe code, with a fix in progress:
   block's own local, a closure an arm or a block hands over. Until #222
   closes them, hand such a value on directly (`^ ? c a b`) instead of
   through a binding.
-- **agora #942: a field an `inout` parameter's `sink` took, then a destructor that panics before the refill.** After `( take . h buf )`, a value whose `% Drop` panics at its scope's end, as in `{ : D t @ D { k } }`, unwinds where no call does, so the check that refuses a call that may panic while the field is empty never sees it. A `recover`ing caller gets `h` back with `buf` empty, and its next push reads a null handle. Until the fix ships, give the field its new value before any value with a `% Drop` that may panic goes out of scope.
+- **agora #952: a field an `inout` parameter's `sink` took, then a closure released whose environment holds a value whose `% Drop` panics, before the refill.** After `( take . h buf )`, `= f g` releases `f`'s old closure. If its maker took a `D` over (`@ mkf sink D d → ( @ i ) { ^ \ → i { … d … } }`), releasing the closure runs `D`'s drop. That is an unwind point the walk does not see: a closure's type names nothing its environment holds. A `recover`ing caller gets `h` back with `buf` empty, and its next push reads a null handle. Until the fix ships, give the field its new value before releasing a closure that took over such a value.
 <!-- END open holes -->
 
 Every other safe program found accepted and faulting is closed, and held
