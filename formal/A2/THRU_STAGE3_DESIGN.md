@@ -669,21 +669,37 @@ view, so `w ∉ Fc`. This is consistent with `Frz` and `CatchOK`, because a
    (`bor_lands_vec`, `rootKeep_frame_ne`).
 2. **Kill sites.** A kill at a root that some lent parameter holds views of
    (`LentHeld Γ r`, a root unfrozen and held at `.view`/`.self`) must end
-   no loan. Three rules get premises, each a strengthening that today's
-   derivations meet vacuously (no lent parameter holds views of an
-   unfrozen root, since `RootbAnch` holds):
-   - `ThruOK`: `LentHeld Γ1 d.root → effAt = .dropIn`. The edit spares
-     `.view`/`.self` (hv `false`). Where the call places a callee, the
-     `LentHeld` roots are σ's, reached only through regions at `.inner`
-     with a `dropIn` effect (`hreg_in`).
-   - Kills of a named binding (`assign`, a move, scope exit, a call's
-     `sink`/`inout` argument): `¬ LentHeld Γ x`. Where the call places a
-     callee, those are renamed callee bindings, never `w`.
-   - `killNames`: a closure changing `r` by name is refused where
-     `LentHeld Γ r`. `NamesFree` already refuses such arguments when the
-     call is placed (`w ∉ roots mutNames`).
-   Each kill site then shows "no lent parameter hit" (`MInv.kill_norootb`)
-   in place of `killE_rootb`.
+   no loan. Each kill site then shows "no lent parameter hit"
+   (`MInv.kill_norootb`) in place of `killE_rootb`. How each kind of kill
+   site meets this is below: by `Inv` clauses, not by new rule premises.
+
+**How the kill sites are met.** A rule premise is needed
+only where the statement decides it. Elsewhere an `Inv` clause on the
+statement's variables does it:
+
+- *Named kills* (`assign`, a move, scope exit, a call's `sink`/`inout`
+  argument) kill a variable of the statement. Clause: a `LentHeld` root is
+  no variable of the statement. When the call is placed, the statement is
+  the renamed body, whose variables are the callee's (`≥ base`, or
+  `inout` arguments). `w` is neither.
+- *Edits through a borrow* go through a variable of the statement.
+  Clause: such a variable, a live `Vec`-typed borrow, depends on a
+  `LentHeld` root only at `.inner`. Then `Edit.effAt` there is `dropIn`
+  (`inEff .inner true`; a push is `realloc` only at `.self`). The derived
+  borrows keep `.inner` (`borrow`, `vec_at`, `slice_at`, `fst`/`snd`: what
+  derives from `.inner` stays `.inner`). A slice read from a regioned
+  parameter's element (`vec_at q i` is `.bor` with `q`'s held as its path,
+  `⟨w, .view⟩`) is no `Vec`, so nothing edits through it.
+- *`editBV`* kills with `hv` = the root's type holds views (`killThruV`),
+  and a `dropIn` with `hv` ends `.view`/`.self`. So the call asks that `w`'s
+  elements hold no views (`¬ (argE Γ w).ty.holdsView`), and `editBV` never
+  reaches a `LentHeld` root.
+- *`killNames`*: closures that change a `LentHeld` root by name. The call
+  asks `w ∉ roots (mutNames Γ args)`, which `zN` already reads, and
+  closures made inside the callee name its own bindings.
+
+So `ThruOK` needs no new premise. The `Inv` clauses carry it, and the
+call establishes them (`CallInv`).
 
 The premise of the call (`CallThruOK`) narrows too (finding above): other
 arguments reach `w` only by name. A `.self` path (a borrow `&w` passed
@@ -691,13 +707,25 @@ beside `vv`) would let the callee view inside `w`'s elements through a
 parameter whose dependencies are not on the region.
 
 Then `CallThruOK` (the `CallT` premise) holds the following, each stated
-on the caller:
+on the caller. Each root `w` below is a root that a regioned argument's
+memory reaches.
 - nothing frozen (`argMemF = []`);
 - each regioned argument's memory a `.view`/`.self` of a live owned `Vec`,
   no argument and not in `F`;
+- `w`'s elements hold no views (`(argE Γ w).ty = .vec t` with
+  `t.holdsView = false`), so no `editBV` kill (`hv`) ends a loan of `w`;
 - no two regioned arguments on one root;
-- every argument reaches such a root only at a `.view`, a `.self` or by name;
+- every other argument reaches `w` only by name, and the regioned argument
+  only through its `held` (σ);
+- `w ∉ roots (mutNames Γ args)`;
 - `DtorSafe (callPost …) .dropIn false w`.
+
+`CallInv` derives the two `Inv` clauses at the call from these:
+- `w` is no variable of the renamed body (`w < base`, and `w` is no
+  `inout` argument, since it is no argument);
+- the body's `Vec`-typed borrows are its own, so at entry they are the
+  lifted parameters. A regioned parameter reaches `w` only in its `held`,
+  and every other parameter only by name.
 
 ### 3d groundwork: frozen roots split from region-reached ones
 
