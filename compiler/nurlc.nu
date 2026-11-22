@@ -64519,13 +64519,17 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             // (Not to an `inout` parameter the generated code
                             // copies the value into where the source does not
                             // own it, `ioc_` - gen_assign; agora #954.)
-                            ? & & != 0 g_bck_bxf_any ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` avn ) ) `1` ) ! ( seq ( nurl_sym_get g_bck ( __bck_ioc_key g_bck_fn ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int apid ) ) ( bck_field rec 3 ) ) ) `1` ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) } {}
+                            ? & != 0 g_bck_bxf_any ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` avn ) ) `1` ) {
+                                ? ! ( seq ( nurl_sym_get g_bck ( __bck_ioc_key g_bck_fn ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int apid ) ) ( bck_field rec 3 ) ) ) `1` ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) } {}
+                            } {}
                             // (…and a `:` join's arm, `g`, that hands on a field
                             // viewer, `: x . p s` then `? c x …`: the same field's
                             // handle, which codegen takes neither at the arm nor
                             // where the join's binding is handed outward, as it
                             // does for `= t x`; agora #954.)
-                            ? & ( seq ( bck_field rec 6 ) `g` ) != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` avn ) ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) = g_bck_bxf_any 1 } {}
+                            ? & != 0 g_bck_fv_any ( seq ( bck_field rec 6 ) `g` ) {
+                                ? != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` avn ) ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) = g_bck_bxf_any 1 } {}
+                            } {}
                             // (An arm of a `:` join, `g`, that is a copy of an
                             // owner's handle — `: c ? k cur other`: the
                             // binding is one too, `hc_`, while every borrow
