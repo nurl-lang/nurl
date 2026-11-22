@@ -820,19 +820,19 @@ theorem CallT.wf {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f : N
     intro r hr
     simp only [heldOfArgs, roots, List.map_append, List.mem_append] at hr
     rcases hr with hr | hr
-    · have := roots_allKinds hr
-      simp only [List.mem_flatMap] at this
-      obtain ⟨a, ha, hra⟩ := this
+    · obtain ⟨d, hd, rfl⟩ := List.mem_map.mp (roots_compAll hr)
+      simp only [argMem, List.mem_flatMap] at hd
+      obtain ⟨a, ha, hda⟩ := hd
       obtain ⟨i, hi, rfl⟩ := mem_args ha
       obtain ⟨Ea, hEa, hl⟩ := hent i (hlen ▸ hi)
       have hae : argE Γ (args.getD i 0) = Ea := by unfold argE; rw [hEa]; rfl
-      rw [hae] at hra
-      split at hra
-      · simp at hra
+      rw [hae] at hda
+      split at hda
+      · simp at hda
       · rename_i hn
-        exact h _ Ea hEa hl (Or.inl hn) r (by
-          have hra := roots_memDeps hra
-          simp only [roots, Entry.vdeps, List.map_append, List.mem_append] at hra ⊢; exact Or.inr hra)
+        exact h _ Ea hEa hl (Or.inl hn) d.root (by
+          simp only [roots, Entry.vdeps, List.map_append, List.mem_append]
+          exact Or.inr (List.mem_map_of_mem (List.mem_filter.mp hda).1))
     · obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
       simp only [argNames, List.mem_flatMap] at hd
       obtain ⟨a, ha, hda⟩ := hd

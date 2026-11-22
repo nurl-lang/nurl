@@ -520,6 +520,29 @@ and its lift is exact by `comp_assoc` (`allKinds_recvRoots_subE`). So
 argument's memory dependencies. nurlc is unchanged, and it is at most as
 permissive as the model.
 
+### 3d groundwork: a precise call result and a precise `RSetup.A`
+
+A call's result held `allKinds (callR …)`: every kind of every root the
+arguments hold. The lift of an inner call needed `⟨r, .self⟩` for a root a
+region reaches, which σ (precise since `recvRes`) no longer gives, and the
+call's exit needed what the lift adds (`S.A`) to be among it. Both are now
+precise. `heldOfArgs` is `compAll (argMem Γ args) ++ argNames Γ args`:
+each memory dependency of an argument composed with every kind
+(`compAll`). `RSetup.A` is `compAll S.Rd ++ S.N`, where `Rd` is what the
+arguments hold in memory (`Rd_sub`: on `R`, no name; `σ_Rd`: σ is among
+it; callS sets `Rd := argMem Γ args`). `compAll` is closed under composing
+with a memory way (`compAll_comp`, `comp_assoc`), so every lift lemma keeps
+its shape. This is the precise `A` the 3d split of frozen and
+region-reached roots needs.
+
+**Correction to the route above.** A call does not reach every `callR` root
+through a region. An argument of a type that holds no views may still carry
+memory dependencies the callee does not track (`ValOK.pair` passes `P ++ H`
+down to the parts). So 3d splits the roots instead of dropping them: those
+of arguments to regioned parameters (σ) and the frozen rest (`Rd` of those
+arguments only). The CallT premise then refuses a change through a region
+that reaches a frozen root.
+
 ### 3d groundwork: a lent parameter's lift holds the callee's memory
 
 A lent parameter used to be lifted to its argument's entry (`S.pe`), and

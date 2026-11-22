@@ -2515,7 +2515,7 @@ theorem glueS2_body : ∃ Δ, StmtT P ξ (sigCtx glueS2) [] glueS2.body Δ ∧
   have hER : (callRes Kb implS [2]).mode ≠ .rootb ∧
       ∀ d ∈ (callRes Kb implS [2]).vdeps, d.root = 4 ∧ d.kind.isName = false := by
     simp [callRes, resMode, implS, heldOfArgs, argNames, argE, hb2, hEW, Entry.vdeps, ownHeld, Mode.ownSlot,
-      memDeps, nameDeps, roots, allKinds, Kind.isName]
+      memDeps, nameDeps, Kind.isName, argMem, compAll, comp]
     intro d _ hd
     rcases hd with rfl | rfl | rfl | rfl <;> exact ⟨rfl, rfl⟩
   let Kc : Ctx := A2.setE Kb 3 (callRes Kb implS [2])
@@ -2752,7 +2752,7 @@ theorem main2_typed : ∃ Δ, StmtT P ξ (fun _ => none) [] main2 Δ := by
   have hpost : callPost (fun _ => none) mk [] = fun _ => none := by
     funext v; simp [callPost, callPostAux, mk, killNames, mutNames, argNames]
   have hres : callRes (fun _ => none) mk [] = Ecr := by
-    simp [callRes, mk, resMode, Ecr, heldOfArgs, ownHeld, allKinds, argNames]
+    simp [callRes, mk, resMode, Ecr, heldOfArgs, ownHeld, argNames, argMem, compAll]
   have hc : CallT P (fun _ => none) [] 1 [] Ecr (fun _ => none) := by
     refine ⟨mk, rfl, rfl, fun i hi => by simp [mk] at hi, ?_, CallDtorSafe.of_none (fun _ _ h => by cases h) _ _,
       hres.symm, hpost.symm, fun _ => by simp [callR]⟩

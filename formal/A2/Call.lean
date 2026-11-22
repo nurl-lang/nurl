@@ -382,6 +382,7 @@ noncomputable def callS (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) (b
     else []
   isPi := isRegionIdx fn
   isReg := isRegionIdx fn
+  Rd := argMem Γ args
 
 /-- AGORA-937: a callee variable below `fn.nvars` (a parameter, the result
     slot, a body variable) is at no region's index: a parameter's region is
@@ -1541,6 +1542,21 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
       · cases hd
       · simpa using (List.mem_filter.mp hd).2
     · cases hd
+  Rd_sub d hd := by
+    obtain ⟨a, ha, hni, hm⟩ := mem_argMem.mp hd
+    exact ⟨mem_callR.mpr ⟨a, ha, hni, List.mem_map_of_mem hm⟩, by simpa using (List.mem_filter.mp hm).2⟩
+  σ_Rd v d hd := by
+    simp only [callS] at hd
+    split at hd
+    · rename_i hv
+      obtain ⟨hv1, hv2⟩ := hv
+      have hlt : v - fn.nvars < args.length := by
+        rw [h.len]; exact Nat.sub_lt_left_of_lt_add hv1 hv2
+      have ha : args.getD (v - fn.nvars) 0 ∈ args := by simp [List.getD, List.getElem?_eq_getElem hlt]
+      split at hd
+      · cases hd
+      · rename_i hint; exact mem_argMem.mpr ⟨_, ha, hint, hd⟩
+    · cases hd
   Rout r hr := (h.R_facts hr).1
   Rroot r hr := by
     obtain ⟨hout, Er, hEr, hro⟩ := h.R_facts hr
@@ -1609,8 +1625,9 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
         revert hd; show d ∈ (callPe Γ fn.params args v).held → _
         unfold callPe; rw [hvi]; simp only; rw [ite_eq_right (by rw [hae]; exact hn)]
         intro hd; rw [hae] at hd; exact (mem_typedDeps hd).1
-      exact List.mem_append_left _ (RSetup.mem_allKinds_iff.mpr ⟨mem_callR.mpr ⟨_, hmem, by rw [hae]; exact hn,
-        by rw [hae]; exact List.mem_map_of_mem (List.mem_filter.mpr ⟨hd', by simp [hk]⟩)⟩, hk⟩)
+      refine List.mem_append_left _ (mem_compAll.mpr ⟨d, mem_argMem.mpr ⟨_, hmem, by rw [hae]; exact hn,
+        by rw [hae]; exact List.mem_filter.mpr ⟨hd', by simp [hk]⟩⟩, .self, Or.inl rfl, ?_⟩)
+      rw [comp_self_r]
     | true =>
       have hdv : d ∈ (callPe Γ fn.params args v).vdeps := by
         unfold Entry.vdeps; exact List.mem_append_right _ hd
@@ -2780,8 +2797,6 @@ theorem canon_param (h : CallH P Γ F x fn args base) {k : Nat} {p : PMode × Ty
       simp only [↓reduceIte, PMode.isInp, Bool.and_false, Bool.false_eq_true]
       rw [RSetup.subE_liftE_cons h.sOK hm hw, hfix]
 
-theorem _root_.A2.comp_self_r (a : Kind) : comp a .self = a := by cases a <;> rfl
-
 /-- AGORA-937 (3d): a lent parameter where the call places it is its
     argument's entry, dependency for dependency: its region, substituted,
     gives back what the argument holds in memory (`comp a .self = a`), and
@@ -3630,10 +3645,9 @@ theorem rr_sub (h : CallH P Γ F x fn args base) {L T : List Dep}
             have hcn : (comp d''.kind kd).isName = false := by
               revert hk' hkn; generalize d''.kind = a; generalize kd = b
               cases a <;> cases b <;> simp [comp, Kind.isName]
-            refine List.mem_append_left _ (RSetup.mem_allKinds_iff.mpr
-              ⟨List.mem_flatMap.mpr ⟨args.getD j 0, hmem, ?_⟩, hcn⟩)
-            rw [ite_eq_right hn]
-            exact List.mem_map.mpr ⟨d'', List.mem_filter.mpr ⟨hd'', by simp [hk']⟩, rfl⟩
+            have _ := hcn
+            exact List.mem_append_left _ (mem_compAll.mpr ⟨d'', mem_argMem.mpr ⟨args.getD j 0, hmem, hn,
+              List.mem_filter.mpr ⟨hd'', by simp [hk']⟩⟩, kd, RSetup.kind4 hkn, rfl⟩)
           | true =>
             have hcn : comp d''.kind kd = d''.kind := by
               revert hk'; generalize d''.kind = a; generalize kd = b
@@ -3659,7 +3673,7 @@ theorem lift_sub (h : CallH P Γ F x fn args base) {L0 T X : List Dep}
     exact Or.inr ⟨d0.root, d0.kind, rfl, (hL0 d0 hd0).1, (hL0 d0 hd0).2.1, (hL0 d0 hd0).2.2.1,
       (hL0 d0 hd0).2.2.2⟩
   · rcases RSetup.mem_A.mp (hX hd) with hd | hd
-    · obtain ⟨_, Er, hEr, _⟩ := h.R_facts (RSetup.mem_allKinds hd)
+    · obtain ⟨_, Er, hEr, _⟩ := h.R_facts ((callS Γ F fn args base x).compAll_Rd h.sOK hd).1
       exact Or.inl ⟨by rw [hEr]; rfl, hR (List.mem_append_left _ hd)⟩
     · obtain ⟨Er, hEr, _⟩ := h.argNames_rootE ((h.mem_N).mp hd).1
       exact Or.inl ⟨by rw [hEr]; rfl, hR (List.mem_append_right _ ((h.mem_N).mp hd).1)⟩
@@ -3696,7 +3710,7 @@ theorem lift_nosink (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hrb
       rcases hjm with hjm | ⟨b, hjm⟩ <;> rw [hk] at hjm <;> cases hjm
   · have hEr' : ∃ Er, Γ d.root = some Er := by
       rcases RSetup.mem_A.mp ha with ha | ha
-      · obtain ⟨_, Er, hEr, _⟩ := h.R_facts (RSetup.mem_allKinds ha); exact ⟨Er, hEr⟩
+      · obtain ⟨_, Er, hEr, _⟩ := h.R_facts ((callS Γ F fn args base x).compAll_Rd h.sOK ha).1; exact ⟨Er, hEr⟩
       · obtain ⟨Er, hEr, _⟩ := h.argNames_rootE ((h.mem_N).mp ha).1; exact ⟨Er, hEr⟩
     obtain ⟨Er, hEr⟩ := hEr'
     have hlt := vlt (h.domlt _ _ hEr)
@@ -3726,15 +3740,16 @@ theorem lift_nosink_sub (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} 
 theorem σ_held (h : CallH P Γ F x fn args base) (v : Var) :
     (callS Γ F fn args base x).σ v ⊆ heldOfArgs Γ args := by
   intro d hd
-  exact List.mem_append_left _ (by
-    have := h.sOK.σ_sub v hd
-    simpa [callS, callR, heldOfArgs] using this)
+  refine List.mem_append_left _ (mem_compAll.mpr ⟨d, h.sOK.σ_Rd v hd, .self, Or.inl rfl, ?_⟩)
+  rw [comp_self_r]
 
 /-- AGORA-937 (3d): ... and so is what a region stands for, reached at any
     kind: the lift composes kinds. -/
 theorem σC_held (h : CallH P Γ F x fn args base) {v : Var} {k : Kind} {d : Dep}
     (hd : (callS Γ F fn args base x).σC v k d) : d ∈ heldOfArgs Γ args :=
-  List.mem_append_left _ (by have := hd.sub h.sOK; simpa [callS, callR] using this)
+  by
+    obtain ⟨e0, he0, rfl, hk⟩ := hd
+    exact List.mem_append_left _ (mem_compAll.mpr ⟨e0, h.sOK.σ_Rd v he0, k, RSetup.kind4 hk, rfl⟩)
 
 /-- AGORA-937 (turn-on 3): `lift_sub`, substituted, for a list of the
     callee's dependencies on lendable parameters or on regions: a region's
@@ -3765,7 +3780,7 @@ theorem lift_sub_sub (h : CallH P Γ F x fn args base) {L0 T X : List Dep}
   · rw [RSetup.subD_keep h.sOK (Or.inl (RSetup.A_out h.sOK (hX he))), List.mem_singleton] at hde
     subst hde
     rcases RSetup.mem_A.mp (hX he) with hd | hd
-    · obtain ⟨_, Er, hEr, _⟩ := h.R_facts (RSetup.mem_allKinds hd)
+    · obtain ⟨_, Er, hEr, _⟩ := h.R_facts ((callS Γ F fn args base x).compAll_Rd h.sOK hd).1
       exact Or.inl ⟨by rw [hEr]; rfl, hR (List.mem_append_left _ hd)⟩
     · obtain ⟨Er, hEr, _⟩ := h.argNames_rootE ((h.mem_N).mp hd).1
       exact Or.inl ⟨by rw [hEr]; rfl, hR (List.mem_append_right _ ((h.mem_N).mp hd).1)⟩

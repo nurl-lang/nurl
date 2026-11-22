@@ -431,7 +431,7 @@ theorem keep_A (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
     ∀ dep ∈ (callS Γ F fn args m.nv x).A, VKeep m (callMem m m1 fn x) dep ∧ HKeep m (callMem m m1 fn x) dep := by
   intro dep hd
   rcases RSetup.mem_A.mp hd with hd | hd
-  · exact h.keep_R hi hb dep hd
+  · exact h.keep_R hi hb dep ((callS Γ F fn args m.nv x).compAll_Rd_ak h.sOK hd)
   · have hn := h.sOK.N_name dep hd
     obtain ⟨r, k⟩ := dep
     cases k with
@@ -449,9 +449,9 @@ theorem held_cases (h : CallH P Γ F x fn args m.nv) {j : Nat} (hj : j < fn.para
   have hmem : args.getD j 0 ∈ args := by simp [List.getD, show j < args.length from h.len ▸ hj]
   cases hk : d.kind.isName with
   | false =>
-    exact Or.inl (List.mem_append_left _ (RSetup.mem_allKinds_iff.mpr ⟨mem_callR.mpr ⟨_, hmem,
-      by rw [hae]; exact hn, by rw [hae]; exact List.mem_map_of_mem (List.mem_filter.mpr ⟨hd, by simp [hk]⟩)⟩,
-      hk⟩))
+    refine Or.inl (List.mem_append_left _ (mem_compAll.mpr ⟨d, mem_argMem.mpr ⟨_, hmem,
+      by rw [hae]; exact hn, by rw [hae]; exact List.mem_filter.mpr ⟨hd, by simp [hk]⟩⟩, .self, Or.inl rfl, ?_⟩))
+    rw [comp_self_r]
   | true =>
     rcases h.argName_cases hj hEa hn (by unfold Entry.vdeps; exact List.mem_append_right _ hd) hk with hN | hs
     · exact Or.inl (List.mem_append_right _ hN)
@@ -907,8 +907,10 @@ theorem arg_held_share (h : CallH P Γ F x fn args m.nv) {j : Nat} (hj : j < fn.
     (hd : d ∈ memDeps Ea.held) : (⟨d.root, .share⟩ : Dep) ∈ (callS Γ F fn args m.nv x).A := by
   have hae : argE Γ (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl
   have hmem : args.getD j 0 ∈ args := by simp [List.getD, show j < args.length from h.len ▸ hj]
-  exact List.mem_append_left _ (RSetup.mem_allKinds_iff.mpr ⟨mem_callR.mpr ⟨_, hmem,
-    by rw [hae]; exact hn, by rw [hae]; exact List.mem_map.mpr ⟨d, hd, rfl⟩⟩, rfl⟩)
+  have hdn : d.kind.isName = false := by simpa using (List.mem_filter.mp hd).2
+  refine List.mem_append_left _ (mem_compAll.mpr ⟨d, mem_argMem.mpr ⟨_, hmem,
+    by rw [hae]; exact hn, by rw [hae]; exact hd⟩, .share, Or.inr (Or.inr (Or.inr rfl)), ?_⟩)
+  obtain ⟨r, a⟩ := d; simp only at hdn ⊢; cases a <;> simp_all [comp, Kind.isName]
 
 /-- An owned parameter's tree is an owned argument's: what it names, the
     argument names (or nothing, when what it holds is a share). -/

@@ -340,7 +340,7 @@ theorem gR_not_thru : ¬ ThruFn PR 0 := by
   | call hf hg _ => simp [PR] at hf; subst hf; simp [gR, gRBody, Stmt.calls] at hg
 
 theorem callResR_eq : callRes (fun _ => none) gR [] = intE := by
-  simp [callRes, gR, heldOfArgs, allKinds, roots, memDeps, argNames, nameDeps, Entry.vdeps, Mode.ownSlot,
+  simp [callRes, gR, heldOfArgs, argMem, compAll, comp, memDeps, argNames, nameDeps, Entry.vdeps, Mode.ownSlot,
     ownHeld, resMode, intE]
 
 theorem callPostR_eq : callPost (fun _ => none) gR [] = fun _ => none := by
