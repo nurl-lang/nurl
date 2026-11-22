@@ -830,13 +830,10 @@ theorem mem_heldOfArgs {Γ : Ctx} {args : List Var} {d : Dep} (h : d ∈ heldOfA
       (d.kind.isName = true ∧ d ∈ (argE Γ a).vdeps)) := by
   simp only [heldOfArgs, List.mem_append] at h
   rcases h with h | h
-  · obtain ⟨hr, hn⟩ := RSetup.mem_allKinds_iff.mp h
-    simp only [List.mem_flatMap] at hr
-    obtain ⟨a, ha, hra⟩ := hr
-    split at hra
-    · cases hra
-    · obtain ⟨d0, hd0, he⟩ := List.mem_map.mp hra
-      exact ⟨a, ha, by assumption, Or.inl ⟨hn, d0, hd0, he.symm⟩⟩
+  · have hn := compAll_argMem_notName h
+    obtain ⟨d0, hd0, k, _, rfl⟩ := mem_compAll.mp h
+    obtain ⟨a, ha, hni, hm⟩ := mem_argMem.mp hd0
+    exact ⟨a, ha, hni, Or.inl ⟨hn, d0, hm, rfl⟩⟩
   · simp only [argNames, List.mem_flatMap] at h
     obtain ⟨a, ha, hda⟩ := h
     split at hda
@@ -1524,13 +1521,12 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
     simp only [heldOfArgs, argNames, List.flatMap_cons, List.mem_append] at hd ⊢
     rcases hd with h | h
     · left
-      obtain ⟨hr, hn⟩ := RSetup.mem_allKinds_iff.mp h
-      refine RSetup.mem_allKinds_iff.mpr ⟨?_, hn⟩
-      simp only [List.mem_append, List.mem_flatMap] at hr ⊢
-      rcases hr with hr | ⟨z, hz, hrz⟩
+      refine compAll_mono (fun d0 hd0 => ?_) h
+      simp only [argMem, List.flatMap_cons, List.mem_append, List.mem_flatMap] at hd0 ⊢
+      rcases hd0 with hr | ⟨z, hz, hrz⟩
       · left
         rw [hyE] at hr; simp only [hEyt, ↓reduceIte] at hr; rw [hck]; simp only [hτ, ↓reduceIte]
-        exact roots_sub_of (memDeps_sub_of (fun d hd => by rw [← hEch]; exact hyh hd)) hr
+        exact memDeps_sub_of (fun d hd => by rw [← hEch]; exact hyh hd) hr
       · right; exact ⟨z, hz, by rw [← hzE z hz]; exact hrz⟩
     · right
       simp only [List.mem_flatMap] at h ⊢
@@ -2145,7 +2141,7 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
     rw [hΓ1']; exact hfrh.setE (by simp [Eyd, hEy]) rfl (by simp [Eyd, hEy])
   -- the inner call's result holds nothing
   have hres : callRes Γh fn [m.nv] = ⟨fn.resTy, resMode fn, true, [], [], false, false, false, false⟩ := by
-    simp [callRes, hfl0, hfr0, heldOfArgs, argNames, hyE, hEy, Entry.vdeps, nameDeps, memDeps, roots, allKinds,
+    simp [callRes, hfl0, hfr0, heldOfArgs, argNames, hyE, hEy, Entry.vdeps, nameDeps, memDeps, argMem, compAll,
       ownHeld, Mode.ownSlot]
   have hE'R : Rooted Γ (callRes Γh fn [m.nv]) := Rooted.of_roots fun d hd => by
     rw [hres] at hd; simp [Entry.vdeps] at hd
@@ -2222,7 +2218,7 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
       setE (kill .replace false c (kill .replace false c Γ)) c { Ec with live := false, dtor := false } := by
     simp [callPost, hnmS, killNames, hsp, callPostAux, hck]
   have hEs : callRes (kill .replace false c Γ) sig [c] = ⟨sig.resTy, resMode sig, true, [], [], false, false, false, false⟩ := by
-    simp [callRes, hsl, hsr, heldOfArgs, argNames, hck, hEh, Entry.vdeps, nameDeps, memDeps, roots, allKinds,
+    simp [callRes, hsl, hsr, heldOfArgs, argNames, hck, hEh, Entry.vdeps, nameDeps, memDeps, argMem, compAll,
       ownHeld, hos]
   have hwx : EntryWeaker Ex1 (callRes (kill .replace false c Γ) sig [c]) := by
     have hEx1m : Ex1.mode = resMode fn := by simp [Ex1, callX]

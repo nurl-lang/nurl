@@ -489,9 +489,7 @@ theorem heldOfArgs_name {Γ : Ctx} {args : List Var} {d : Dep} (hd : d ∈ heldO
     (hn : d.kind.isName = true) : ∃ a ∈ args, d.root ∈ roots (argE Γ a).vdeps := by
   unfold heldOfArgs at hd
   rcases List.mem_append.mp hd with hd | hd
-  · simp only [allKinds, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at hd
-    obtain ⟨r, _, hd⟩ := hd
-    rcases hd with rfl | rfl | rfl | rfl <;> cases hn
+  · rw [compAll_argMem_notName hd] at hn; cases hn
   · obtain ⟨a, ha, hd⟩ := List.mem_flatMap.mp hd
     split at hd
     · cases hd
@@ -628,7 +626,9 @@ theorem CallT.names {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {f 
     · rename_i hni; exact derive_named (hargN jk.1 hj hni) hk
   have hheld : DepsNamed Γ (heldOfArgs Γ args) := by
     unfold heldOfArgs
-    refine (allKinds_named _ _).append (DepsNamed.flatMap fun a ha => ?_)
+    have hc : DepsNamed Γ (compAll (argMem Γ args)) := fun d hd b t hk => by
+      have := compAll_argMem_notName hd; rw [hk] at this; cases this
+    refine hc.append (DepsNamed.flatMap fun a ha => ?_)
     obtain ⟨j, hj, rfl⟩ := mem_args ha
     split
     · exact DepsNamed.nil _

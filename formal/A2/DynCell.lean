@@ -377,7 +377,7 @@ theorem K4_noRootb : NoRootb K4 :=
 
 theorem callRes_eq : callRes K4 pick [1, 2, 3] = Ex := by
   simp [callRes, pick, argDeps, argE, K4, A2.setE, upd, derive, Mode.isRoot, Ecl, Enew, intE, rootKind,
-    heldOfArgs, allKinds, roots, memDeps, argNames, nameDeps, Entry.vdeps, Mode.ownSlot, opt, str,
+    heldOfArgs, argMem, compAll, comp, memDeps, argNames, nameDeps, Entry.vdeps, Mode.ownSlot, opt, str,
     ownHeld, resMode, Ex]
 
 theorem callPost_eq : callPost K4 pick [1, 2, 3] = K4 := by

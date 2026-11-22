@@ -130,6 +130,23 @@ theorem envE0_held_sub (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode
     (envE0 c Ec te cs).held ⊆ (envE c Ec te cs).held :=
   envDeps_mono (List.subset_append_left _ _)
 
+/-- AGORA-937 (3d): what the environment holds in memory, composed with a
+    memory way, is what the package holds in memory, composed: a share of a
+    root it holds is a share however it is reached. -/
+theorem envE_heldComp {c : Var} {Ec : Entry} {te : Ty} {cs : List (Var × PMode × Ty)} {d : Dep}
+    (hd : d ∈ memDeps (envE c Ec te cs).held) {k : Kind}
+    (hk : k = .self ∨ k = .inner ∨ k = .view ∨ k = .share) :
+    (⟨d.root, comp d.kind k⟩ : Dep) ∈ compAll (memDeps Ec.held) := by
+  obtain ⟨hd, hn⟩ := List.mem_filter.mp hd
+  rcases List.mem_append.mp (envDeps_sub _ _ hd) with hd | hd
+  · exact mem_compAll.mpr ⟨d, List.mem_filter.mpr ⟨hd, hn⟩, k, hk, rfl⟩
+  · obtain ⟨hks, d0, hd0, hr0⟩ := mem_shareOf.mp hd
+    have hn0 : d0.kind.isName = false := by simpa using (List.mem_filter.mp hd0).2
+    refine mem_compAll.mpr ⟨d0, hd0, .share, Or.inr (Or.inr (Or.inr rfl)), ?_⟩
+    obtain ⟨r, a⟩ := d; obtain ⟨r0, a0⟩ := d0
+    simp only at hks hr0 hn0 ⊢; subst hks; subst hr0
+    cases a0 <;> rcases hk with rfl | rfl | rfl | rfl <;> simp_all [comp, Kind.isName]
+
 /-- The roots the environment holds in memory, the package holds. -/
 theorem envE_heldRoots {c : Var} {Ec : Entry} {te : Ty} {cs : List (Var × PMode × Ty)} {r : Var}
     (hr : r ∈ roots (memDeps (envE c Ec te cs).held)) : r ∈ roots (memDeps Ec.held) := by
@@ -1067,14 +1084,32 @@ theorem heldOfArgs_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode
       · split at hda
         · simp at hda
         · exact argE_noE hw hrl hni he a d (List.mem_filter.mp hda).1
+  -- AGORA-937 (3d): what the arguments hold in memory, composed, argument by argument
+  have hM : ∀ d ∈ compAll (argMem (setE (cleanC Γ) e (envE c Ec te cs)) (e :: zs)),
+      d ∈ compAll (argMem Γ (c :: zs)) ∧ d.root ≠ e := by
+    intro d hd
+    obtain ⟨d0, hd0, k, hk, rfl⟩ := mem_compAll.mp hd
+    obtain ⟨a, ha, hni, hm⟩ := mem_argMem.mp hd0
+    have hroot : d0.root ∈ (e :: zs).flatMap (fun a => if (argE (setE (cleanC Γ) e (envE c Ec te cs)) a).ty = .int
+        then [] else roots (memDeps (argE (setE (cleanC Γ) e (envE c Ec te cs)) a).held)) :=
+      List.mem_flatMap.mpr ⟨a, ha, by rw [ite_eq_right hni]; exact List.mem_map_of_mem hm⟩
+    refine ⟨?_, by simpa using (hR _ hroot).2⟩
+    rcases List.mem_cons.mp ha with rfl | ha
+    · rw [hE] at hm
+      obtain ⟨d1, hd1, k1, hk1, he1⟩ := mem_compAll.mp (envE_heldComp hm hk)
+      exact mem_compAll.mpr ⟨d1, mem_argMem.mpr ⟨c, List.mem_cons_self .., by rw [hEc]; exact htc,
+        by rw [hEc]; exact hd1⟩, k1, hk1, he1⟩
+    · rw [argE_open (hzs' a ha)] at hm hni
+      rw [clean_ty] at hni
+      exact mem_compAll.mpr ⟨d0, mem_argMem.mpr ⟨a, List.mem_cons_of_mem _ ha, hni,
+        memDeps_mono (clean_held_sub _) hm⟩, k, hk, rfl⟩
   unfold heldOfArgs
   refine ⟨fun d hd => ?_, fun d hd => ?_⟩
   · rcases List.mem_append.mp hd with hd | hd
-    · rw [RSetup.mem_allKinds_iff] at hd
-      exact List.mem_append_left _ (RSetup.mem_allKinds_iff.mpr ⟨(hR _ hd.1).1, hd.2⟩)
+    · exact List.mem_append_left _ (hM d hd).1
     · exact List.mem_append_right _ (hN d hd).1
   · rcases List.mem_append.mp hd with hd | hd
-    · rw [RSetup.mem_allKinds_iff] at hd; exact (hR _ hd.1).2
+    · exact (hM d hd).2
     · exact (hN d hd).2
 
 theorem deps_open (hw : CtxWF Γ) (hrl : ∀ p E, Γ p = some E → E.mode = .rootb → E.live = true)
@@ -1279,11 +1314,11 @@ theorem heldOfArgs_append_nil {Γ : Ctx} {as caps : List Var} (h : ∀ a ∈ cap
     heldOfArgs Γ (as ++ caps) = heldOfArgs Γ as := by
   have hh : ∀ a ∈ caps, (argE Γ a).held = [] := fun a ha => by
     have := h a ha; unfold Entry.vdeps at this; exact (List.append_eq_nil_iff.mp this).2
-  unfold heldOfArgs argNames
+  unfold heldOfArgs argNames argMem
   rw [List.flatMap_append, List.flatMap_append, flatMap_nil_of (l := caps) (fun a ha => ?_),
     flatMap_nil_of (l := caps) (fun a ha => ?_), List.append_nil, List.append_nil]
   · simp [h a ha, nameDeps]
-  · simp [hh a ha, memDeps, roots]
+  · simp [hh a ha, memDeps]
 
 theorem callRes_append {Γ : Ctx} {fn : Fn} {as caps : List Var}
     (hl : ∀ jk ∈ fn.lends, jk.1 < as.length) (hr : ∀ jk ∈ fn.rholds, jk.1 < as.length)

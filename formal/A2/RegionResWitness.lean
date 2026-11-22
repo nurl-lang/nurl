@@ -328,7 +328,7 @@ theorem call_ok : CallT P K [] 0 [1] (callRes K idv [1]) (callPost K idv [1]) :=
 /-- **The caller's result holds the views the argument held**: what the
     callee's region stood for. -/
 theorem callRes_holds : (⟨0, .view⟩ : Dep) ∈ (callRes K idv [1]).held := by
-  simp [callRes, heldOfArgs, allKinds, argE, K, setE, upd, Ev, roots, memDeps, Kind.isName, ownHeld, idv, vsi,
+  simp [callRes, heldOfArgs, argMem, compAll, comp, argE, K, setE, upd, Ev, memDeps, Kind.isName, ownHeld, idv, vsi,
     Ty.holdsView]
 
 /-! ### A view of the `sink` parameter's own buffer is refused -/

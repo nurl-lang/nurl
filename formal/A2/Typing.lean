@@ -141,6 +141,8 @@ def comp : Kind → Kind → Kind
   | _, .share => .share
   | _, _ => .inner
 
+theorem comp_self_r (a : Kind) : comp a .self = a := by cases a <;> rfl
+
 /-- Composing kinds is associative. -/
 theorem comp_assoc (a b c : Kind) : comp (comp a b) c = comp a (comp b c) := by
   cases a <;> cases b <;> cases c <;> rfl
@@ -1368,11 +1370,61 @@ theorem NoWriters.names {Γ : Ctx} {args : List Var} (h : NoWriters Γ args) :
   · simp at hda
   · rename_i hn; exact h a ha (Or.inl hn) d (List.mem_filter.mp hda).1
 
-/-- What the arguments hold: views, in every way a callee may come to depend
-    on them, and closures, by name. -/
+/-- AGORA-937 (3d): each dependency of a list, composed with every way of
+    reaching inside it. -/
+def compAll (D : List Dep) : List Dep :=
+  D.flatMap fun d => [Kind.self, .inner, .view, .share].map fun k => ⟨d.root, comp d.kind k⟩
+
+theorem mem_compAll {D : List Dep} {d : Dep} :
+    d ∈ compAll D ↔ ∃ d0 ∈ D, ∃ k, (k = .self ∨ k = .inner ∨ k = .view ∨ k = .share) ∧
+      d = ⟨d0.root, comp d0.kind k⟩ := by
+  unfold compAll
+  simp only [List.mem_flatMap, List.mem_map, List.mem_cons, List.mem_nil_iff, or_false]
+  constructor
+  · rintro ⟨d0, hd0, k, hk, rfl⟩; exact ⟨d0, hd0, k, hk, rfl⟩
+  · rintro ⟨d0, hd0, k, hk, rfl⟩; exact ⟨d0, hd0, k, hk, rfl⟩
+
+theorem compAll_mono {A B : List Dep} (h : A ⊆ B) : compAll A ⊆ compAll B := fun _ hd => by
+  obtain ⟨d0, hd0, k, hk, rfl⟩ := mem_compAll.mp hd
+  exact mem_compAll.mpr ⟨d0, h hd0, k, hk, rfl⟩
+
+/-- ... each on a root of the list. -/
+theorem compAll_root {D : List Dep} {d : Dep} (hd : d ∈ compAll D) : ∃ d0 ∈ D, d0.root = d.root := by
+  obtain ⟨d0, hd0, k, _, rfl⟩ := mem_compAll.mp hd; exact ⟨d0, hd0, rfl⟩
+
+theorem roots_compAll {D : List Dep} {r : Var} (hr : r ∈ roots (compAll D)) : r ∈ roots D := by
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+  obtain ⟨d0, hd0, he⟩ := compAll_root hd
+  exact List.mem_map.mpr ⟨d0, hd0, he⟩
+
+/-- What the arguments hold in memory, each of their own dependencies. -/
+def argMem (Γ : Ctx) (args : List Var) : List Dep :=
+  args.flatMap (fun a => if (argE Γ a).ty = .int then [] else memDeps (argE Γ a).held)
+
+theorem mem_argMem {Γ : Ctx} {args : List Var} {d : Dep} :
+    d ∈ argMem Γ args ↔ ∃ a ∈ args, (argE Γ a).ty ≠ .int ∧ d ∈ memDeps (argE Γ a).held := by
+  unfold argMem; simp only [List.mem_flatMap]
+  constructor
+  · rintro ⟨a, ha, hd⟩; split at hd
+    · cases hd
+    · rename_i hn; exact ⟨a, ha, hn, hd⟩
+  · rintro ⟨a, ha, hn, hd⟩; exact ⟨a, ha, by rw [ite_eq_right hn]; exact hd⟩
+
+/-- ... in memory, composed: no name. -/
+theorem compAll_argMem_notName {Γ : Ctx} {args : List Var} {d : Dep} (hd : d ∈ compAll (argMem Γ args)) :
+    d.kind.isName = false := by
+  obtain ⟨d0, hd0, k, hk, rfl⟩ := mem_compAll.mp hd
+  obtain ⟨_, _, _, hm⟩ := mem_argMem.mp hd0
+  have hn : d0.kind.isName = false := by simpa using (List.mem_filter.mp hm).2
+  obtain ⟨r, a⟩ := d0
+  simp only at hn ⊢
+  rcases hk with rfl | rfl | rfl | rfl <;> cases a <;> simp_all [comp, Kind.isName]
+
+/-- What the arguments hold: views, each of the arguments' own composed with
+    every way a callee may come to depend on it (AGORA-937 3d: precise, as
+    `recvDeps`; it was every kind of each root), and closures, by name. -/
 def heldOfArgs (Γ : Ctx) (args : List Var) : List Dep :=
-  allKinds (args.flatMap (fun a => if (argE Γ a).ty = .int then [] else roots (memDeps (argE Γ a).held))) ++
-    argNames Γ args
+  compAll (argMem Γ args) ++ argNames Γ args
 
 def resMode (fn : Fn) : Mode := if fn.resOwn then .own else .bor
 
