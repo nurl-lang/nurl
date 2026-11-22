@@ -4388,6 +4388,23 @@ class FnCheck:
             return [(("#T0",), ty[1]), (("#F0",), ty[2])]
         return []
 
+    def dtor_unw(self, st, ty, line, seen=frozenset()):
+        """A destructor of the program's (`drop__T`) that the release of a
+        value of type `ty` runs, its own or a part's, and that may panic, is
+        a point the frame may unwind from, as a call that may is: what the
+        caller holds must be whole there and view nothing of this frame,
+        where the module's panic graph says it may (agora #942)."""
+        if ty is None or ty in seen or ty[0] == "closure":
+            return
+        seen = seen | {ty}
+        if ty[0] == "named":
+            dn = f"drop__{ty[1]}"
+            if dn in self.prog.fns and call_may_panic(self.prog, dn):
+                self.unwind_check(st, [], line, dn, None)
+                return
+        for _sub, pty in self.dtor_parts(ty):
+            self.dtor_unw(st, pty, line, seen)
+
     def dtor_runs(self, ty):
         """Does releasing a value of type `ty` run a `% Drop` of the
         program's own - its own, or one a part of it holds (a slice's
@@ -4408,6 +4425,8 @@ class FnCheck:
         effect of its own, a `% Drop` that cleared a shared Rc payload left
         another handle's view of it live (agora #766, #918, #919; nurlc's
         `+d=` / `+dk=` notes, __bck_udrop_*)."""
+        if not seen:
+            self.dtor_unw(st, ty, line)
         if not getattr(self.prog, "udrop", ()) or (ty is not None and ty in seen):
             return
         k = ty[0] if ty is not None else None
