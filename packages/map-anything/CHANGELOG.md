@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.1] — 2026-11-22
+
+### Fixed
+
+- `serve`: uploads from a phone failed with "network error during the upload"
+  on Wi-Fi and mobile data alike, while a desktop browser worked. The page cut
+  every file with `file.slice()`, and a phone browser can fail to read a slice
+  of a file picked from its gallery (on Android a `content://` document); XHR
+  reports that only as a network error. A file of up to 32 MiB now goes as
+  the File itself in one PUT, a larger one is read from start to end as a
+  stream and sent in 32 MiB pieces from memory, a file the device cannot read
+  says so, and a piece is retried twice after a network failure.
+
 ## [0.8.0] — 2026-11-21
 
 ### Added

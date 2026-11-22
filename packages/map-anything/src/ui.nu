@@ -8,8 +8,9 @@
 // reachable with curl too.
 //
 // The flow: pick photos or one video → POST /api/jobs makes a job → each
-// file goes up as raw PUT bodies of 32 MiB pieces (no multipart; the server
-// appends each piece at ?offset=, and its body cap stays small), stored as
+// file goes up as raw PUT bodies — whole up to 32 MiB, larger ones read as
+// a stream and sent in 32 MiB pieces the server appends at ?offset= (no
+// multipart, and the body cap stays small) — stored as
 // "<position>_<name>" so two names that clean to the same text cannot
 // collide and the name order is the selection order → POST
 // /api/jobs/:id/start queues it →
@@ -227,37 +228,66 @@ function padTo(n, total) {
 }
 
 /* one piece of a file: bytes [off, off + piece.size) */
-function putPiece(url, piece, onprog) {
-  return new Promise(function (ok, bad) {
-    var x = new XMLHttpRequest();
-    x.open("PUT", url);
-    x.setRequestHeader("Content-Type", "application/octet-stream");
-    x.upload.onprogress = function (e) { if (e.lengthComputable) onprog(e.loaded); };
-    x.onload = function () {
-      if (x.status >= 200 && x.status < 300) ok();
-      else {
-        var m = "HTTP " + x.status;
-        try { m = JSON.parse(x.responseText).error || m; } catch (e) {}
-        if (x.status === 413) m = "the file is too large for the server";
-        bad(new Error(m));
-      }
-    };
-    x.onerror = function () { bad(new Error("network error during the upload")); };
-    x.send(piece);
-  });
+/* One PUT. A network failure is retried twice after a pause: the body is
+   either the File itself or bytes already in memory, so it can be sent
+   again. Only a status 0 (no response at all) counts as a network failure. */
+function putPiece(url, body, onprog) {
+  var tries = 0;
+  function once() {
+    return new Promise(function (ok, bad) {
+      var x = new XMLHttpRequest();
+      x.open("PUT", url);
+      x.setRequestHeader("Content-Type", "application/octet-stream");
+      x.upload.onprogress = function (e) { if (e.lengthComputable) onprog(e.loaded); };
+      x.onload = function () {
+        if (x.status >= 200 && x.status < 300) ok();
+        else {
+          var m = "HTTP " + x.status;
+          try { m = JSON.parse(x.responseText).error || m; } catch (e) {}
+          if (x.status === 413) m = "the file is too large for the server";
+          var err = new Error(m); err.status = x.status;
+          bad(err);
+        }
+      };
+      x.onerror = function () { var err = new Error("network error during the upload"); err.status = 0; bad(err); };
+      x.send(body);
+    }).catch(function (e) {
+      if (e.status !== 0 || tries >= 2) throw e;
+      tries++;
+      return new Promise(function (r) { setTimeout(r, 1500 * tries); }).then(once);
+    });
+  }
+  return once();
 }
 
-/* the whole file, piece by piece; onprog gets the bytes sent so far */
+/* The whole file. Up to CHUNK it goes as the File itself, in one PUT — the
+   way a phone's browser reads a picked file most reliably. A larger file
+   is READ FROM START TO END as a stream and sent in CHUNK-sized pieces from
+   memory, never through file.slice(): on Android, a file picked from the
+   gallery is a content:// document, and reading a slice of one can fail,
+   which XHR reports as nothing more than a network error. A read that
+   fails says so. */
 function put(url, file, onprog) {
-  var off = 0;
-  function next() {
-    if (off >= file.size && off > 0) return Promise.resolve();
-    var end = Math.min(file.size, off + CHUNK);
-    var here = off;
-    return putPiece(url + "?offset=" + here, file.slice(here, end), function (n) { onprog(here + n); })
-      .then(function () { off = end; if (off < file.size) return next(); });
+  if (file.size <= CHUNK || !file.stream) {
+    return putPiece(url + "?offset=0", file, onprog);
   }
-  return next();
+  var reader = file.stream().getReader();
+  var off = 0, parts = [], have = 0;
+  function send() {
+    var blob = new Blob(parts), n = have, here = off;
+    parts = []; have = 0; off += n;
+    return putPiece(url + "?offset=" + here, blob, function (k) { onprog(here + k); });
+  }
+  function pump() {
+    return reader.read().then(function (r) {
+      if (r.done) return have > 0 ? send() : null;
+      parts.push(r.value); have += r.value.byteLength;
+      return have >= CHUNK ? send().then(pump) : pump();
+    }, function (e) {
+      throw new Error("this device could not read " + file.name + " (" + (e && e.name || e) + ")");
+    });
+  }
+  return pump();
 }
 
 function voxelMm() {
