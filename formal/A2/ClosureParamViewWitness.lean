@@ -102,7 +102,8 @@ theorem edit_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) (h3 : Γ 3 = some Eloc) 
     simp only [Ee, memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
       List.mem_singleton] at hd
     subst hd
-    refine ⟨by simp, fun y hy => ?_, _, h3, rfl, Or.inl rfl, hc.dtor _ _ _, by simp⟩
+    refine ⟨by simp, fun y hy => ?_, _, h3, rfl, Or.inl rfl, hc.dtor _ _ _, by simp,
+      by simp [Edit.effAt, Edit.inEff, Eloc, Entry.rvec, Ty.isVec]; exact HeldOK.of_kills _ rfl rfl⟩
     simp [Edit.stored] at hy; subst hy; decide
   · -- ... ends no view a destructor reads, `loc` is no `letd`'s, and what is stored depends on `s`
     intro d hd

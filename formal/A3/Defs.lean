@@ -372,7 +372,7 @@ theorem wguard_get_path {Γ : Ctx} {F : List Var} {x : Var} {u : Ty} (hx : Γ x 
 theorem _root_.A2.StmtT.wguardGet {P : Prog} {Γ : Ctx} {F : List Var} {x y : Var} {u : Ty} {i : Expr}
     (hx : Γ x = some (lockE (.vec u))) (hy : Γ y = some ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false, false, false⟩)
     (huv : u.holdsView = false) (hyF : y ∉ F) (hxF : x ∉ F) (hi : ExprT Γ i)
-    (hds : DtorSafe Γ .drop false x) (hdf : u.dtorFree = true) :
+    (hds : DtorSafe Γ .drop false x) (hho : HeldOK Γ .drop x) (hdf : u.dtorFree = true) :
     StmtT P ξ Γ F (.edit true y (.trunc i))
       (setE (killThru (.trunc i) (.vec u) [⟨x, .self⟩] Γ) y ⟨.vec u, .bor, true, [⟨x, .self⟩], [], false, false, false, false⟩) := by
   have hl : lockE (.vec u) = ⟨.vec u, .own, true, [], [], false, false, false, false⟩ := by simp [lockE]
@@ -383,7 +383,8 @@ theorem _root_.A2.StmtT.wguardGet {P : Prog} {Γ : Ctx} {F : List Var} {x y : Va
   simp only [memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
   subst hd
-  exact ⟨hxF, fun _ h => (by cases h), _, hx, rfl, Or.inl rfl, by simpa [Edit.effAt, Edit.inEff] using hds, by simp⟩
+  exact ⟨hxF, fun _ h => (by cases h), _, hx, rfl, Or.inl rfl, by simpa [Edit.effAt, Edit.inEff] using hds, by simp,
+    by simpa [Edit.effAt, Edit.inEff] using hho⟩
 
 /-- ... where a read guard's lend refuses every change through it. -/
 theorem rguard_no_change {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {g : Var} :

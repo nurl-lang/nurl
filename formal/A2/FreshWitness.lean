@@ -82,7 +82,7 @@ theorem thruL_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} 
     (by simp) (EditArg.push (Ey := En) (by simp [G5, A2.setE, hn4, hG4n]) hnl hnt PushArg.int)
     (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hn4)
     (by simp [G5, A2.setE]) rfl
-    (thru_ok hG5 (E := Eloc) (by simp [G5, A2.setE, hG42]) rfl rfl hn2).toR
+    (thru_ok hG5 (E := Eloc) (by simp [G5, A2.setE, hG42]) rfl rfl hn2 rfl).toR
     (fun h => by simp [Edit.drops] at h) (fun _ => rfl)
   have hD5 : Calm (A2.setE (A2.killThru (.push n) (Ty.vec .int) [⟨2, .inner⟩] G5) 4 EbF) :=
     (hG5.killThru _ _ _).setE (by simp [EbF])

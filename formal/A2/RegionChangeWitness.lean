@@ -51,13 +51,14 @@ theorem thru_region : ThruOKR K [] (.push 4) Ee.ty Ee.path := by
   simp only [Ee, memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
   subst hd
-  refine ⟨by simp, fun y hy => ?_, regionE, rfl, Or.inr rfl, Or.inr ⟨rfl, ?_⟩, ?_, by simp⟩
+  refine ⟨by simp, fun y hy => ?_, regionE, rfl, Or.inr rfl, Or.inr ⟨rfl, ?_⟩, ?_, by simp, ?_⟩
   · simp [Edit.stored] at hy; subst hy; decide
   · rw [eff_dropIn]; rfl
   · intro v E hE hd _
     unfold K at hE
     repeat' split at hE
     all_goals (cases hE <;> simp_all [Evv, Ee, intE, regionE])
+  · rw [eff_dropIn]; exact HeldOK.of_kills _ rfl rfl
 
 /-- **`( vec_push e 7 )` is typed**, through the region. -/
 theorem push_typed {P : Prog} {ξ : Exits} :

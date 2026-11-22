@@ -122,7 +122,11 @@ theorem thru_ok : ThruOK G5 [] (.push 5) vi [⟨0, .inner⟩] := by
   simp only [memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
   subst hd
-  refine ⟨by simp, fun y hy => ?_, _, G5_0, rfl, Or.inr ⟨.replace, rfl, by decide⟩, calm_G5.dtor _ _ _, by simp⟩
+  refine ⟨by simp, fun y hy => ?_, _, G5_0, rfl, Or.inr ⟨.replace, rfl, by decide⟩, calm_G5.dtor _ _ _, by simp,
+    fun p E hp hm d hd hr _ => by
+      exfalso
+      rcases p with _ | _ | _ | _ | _ | _ | _ | _ | p <;> simp [G5, G4, G3, A2.setE, upd, ctx] at hp <;> subst hp <;>
+        simp_all [Ep, Es, Ee, Et, intE, regionE, R0]⟩
   simp [Edit.stored] at hy; subst hy; decide
 
 theorem edit_typed : StmtT P .none G5 [] (.edit false 4 (.push 5)) Δe := by

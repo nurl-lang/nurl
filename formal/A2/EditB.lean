@@ -2108,7 +2108,7 @@ theorem MInv.thru_free {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {x :
     (hthru : ThruOK Γ F op Ex.ty Ex.path) {c : Nat} (hxs : m.st x = some ⟨false, some (.href c)⟩) :
     PkgFreeId m c := by
   refine hi.pkgFree x Ex false _ hx (Or.inl hl) hxs c (PkgNames.href (Or.inl hmx) (fun d hd => ?_) c)
-  obtain ⟨_, _, Er, hEr, _, hcan, _, hns⟩ := hthru d hd
+  obtain ⟨_, _, Er, hEr, _, hcan, _, hns, _⟩ := hthru d hd
   exact ⟨.of_kind hns, .own hEr hcan.ownSlot⟩
 
 /-- AGORA-901: an address of memory no package held stays so when one node of

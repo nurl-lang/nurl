@@ -410,10 +410,13 @@ theorem fst_trunc_ok : ThruOK (sigCtx ftr) [] (.trunc (.lit 0)) (.vec .int) (pro
     List.mem_singleton] at hd
   subst hd
   refine ⟨List.not_mem_nil, fun y hy => (by simp [Edit.stored] at hy), Ep, ftr_sig0, rfl, Or.inl rfl,
-    DtorSafe.of_none (fun v E h => ?_) _ _ _, (by decide)⟩
-  rcases v with _ | _ | _ | v <;>
-    simp [sigCtx, isRegionIdx, regionP, regioned, paramE, ftr, pvt, vsi, Ty.holdsView, Ty.hasFn, resMode] at h <;>
-    subst h <;> rfl
+    DtorSafe.of_none (fun v E h => ?_) _ _ _, (by decide), HeldOK.of_noRootb (fun v E h hm => ?_) _ _⟩
+  · rcases v with _ | _ | _ | v <;>
+      simp [sigCtx, isRegionIdx, regionP, regioned, paramE, ftr, pvt, vsi, Ty.holdsView, Ty.hasFn, resMode] at h <;>
+      subst h <;> rfl
+  · rcases v with _ | _ | _ | v <;>
+      simp [sigCtx, isRegionIdx, regionP, regioned, paramE, ftr, pvt, vsi, Ty.holdsView, Ty.hasFn, resMode] at h <;>
+      subst h <;> simp_all [regionE]
 
 /-- **Before, it did not**: the field's path carried the struct's held view of
     the region, which no change may go through. -/

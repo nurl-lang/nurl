@@ -116,7 +116,8 @@ theorem thru_ok {Γ : Ctx} (hn : NoRootb Γ) {i : Expr} (h3 : Γ 3 = some Evv1) 
   simp only [memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
   subst hd
-  refine ⟨by simp, fun y hy => ?_, _, h3, rfl, Or.inl rfl, nrDtor hn _ _ _, by simp⟩
+  refine ⟨by simp, fun y hy => ?_, _, h3, rfl, Or.inl rfl, nrDtor hn _ _ _, by simp,
+    HeldOK.of_noRootb (fun v E h => (hn v E h).1) _ _⟩
   simp [Edit.stored] at hy
 
 /-- ... ends no view a destructor reads, `vv` is no `letd`'s, and nothing is
@@ -310,7 +311,8 @@ theorem thru_okF {Γ : Ctx} (hn : NoRootb Γ) {i : Expr} (h4 : Γ 4 = some EvvF1
   simp only [memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
   subst hd
-  refine ⟨by simp, fun y hy => ?_, _, h4, rfl, Or.inl rfl, nrDtor hn _ _ _, by simp⟩
+  refine ⟨by simp, fun y hy => ?_, _, h4, rfl, Or.inl rfl, nrDtor hn _ _ _, by simp,
+    HeldOK.of_noRootb (fun v E h => (hn v E h).1) _ _⟩
   simp [Edit.stored] at hy
 
 theorem thru_vF {Γ : Ctx} (hn : NoRootb Γ) {i : Expr} (h4 : Γ 4 = some EvvF1) :
