@@ -6020,6 +6020,180 @@ theorem allowed_region (hab : S.AbsOK Γa) {r : Var} {Er : Entry} (hEr : Γa r =
     obtain ⟨E, hE, hm, _⟩ := hab.2.2.1 r bh hb
     rw [hEr] at hE; cases hE; rw [hr] at hm; cases hm
 
+/-- AGORA-937 (3d): **a change inside a region's elements, where the call
+    places it**. The caller's `.dropIn` on a root `r` its argument views hits
+    a lifted callee binding exactly where the callee's on the region `u`
+    hits it: the region stands for views of `r` (or its handle), no other
+    region does, nothing the lift adds is on `r` in memory, and a lent
+    parameter's argument reaches `r` only at a view or its handle. -/
+theorem hits_subE_region (h : S.OK) (hab : S.AbsOK Γa) {v u r : Var} {E : Entry} (hE : Γa v = some E)
+    (hu : S.isPi u = true)
+    (hσk : ∀ e ∈ S.σ u, e.kind = .view ∨ e.kind = .self)
+    (hr : ∃ e ∈ S.σ u, e.root = r)
+    (hoth : ∀ u', S.isPi u' = true → u' ≠ u → ∀ e ∈ S.σ u', e.root ≠ r)
+    (hA : ∀ d ∈ S.A, d.root = r → d.kind.isName = true)
+    (hpe : ∀ w, ∀ d ∈ (S.pe w).vdeps, d.root = r → d.kind = .view ∨ d.kind = .self ∨ d.kind.isName = true) :
+    hits .dropIn false r (S.subE (S.liftE v E)) = hits .dropIn false u E := by
+  have hce : ∀ {a k : Kind}, (a = .view ∨ a = .self) → (k = .view ∨ k = .inner ∨ k = .share) →
+      Eff.dropIn.kills false (comp a k) = Eff.dropIn.kills false k := by
+    intro a k ha hk; rcases ha with rfl | rfl <;> rcases hk with rfl | rfl | rfl <;> rfl
+  have hk0 : ∀ k : Kind, k = .view ∨ k = .self ∨ k.isName = true → Eff.dropIn.kills false k = false := by
+    intro k hk; rcases hk with rfl | rfl | hk
+    · rfl
+    · rfl
+    · cases k <;> simp_all [Kind.isName, Eff.kills]
+  have hpre : ((S.subE (S.liftE v E)).ty != .int || (S.subE (S.liftE v E)).mode == .rootb) =
+      (E.ty != .int || E.mode == .rootb) := by
+    rw [subE_ty, subE_mode, liftE_ty' h hab hE]
+    congr 1
+    cases hm : E.mode == .rootb
+    · have : (S.liftE v E).mode ≠ .rootb := fun e => by
+        have := (liftE_rootb h).mp e; simp [this] at hm
+      simpa using this
+    · have : E.mode = .rootb := by simpa using hm
+      simpa using (liftE_rootb h).mpr this
+  unfold hits
+  rw [hpre]
+  congr 1
+  rw [Bool.eq_iff_iff]
+  simp only [List.any_eq_true, Bool.and_eq_true, beq_iff_eq]
+  -- a lifted dependency on a region the call reaches is the callee's own, renamed
+  have hown : ∀ {u' : Var} {e : Dep}, e ∈ (S.liftE v E).vdeps → e.root = S.ρ u' → S.isPi u' = true →
+      e.kind.isName = false → ∃ d0 ∈ E.vdeps, e = d0.ren S.ρ := by
+    intro u' e he her hpu hen
+    by_cases hrb : E.mode = .rootb
+    · rcases liftE_rootb_dep h hab hE hrb he with he | ⟨w, rfl, _, hw⟩
+      · rcases pe_dep h he with ⟨hout, _⟩ | ⟨hs, _⟩
+        · exact absurd her.symm (hout u')
+        · obtain ⟨w, b, t, rfl, _⟩ := sym_ren h hs; simp [Kind.isName] at hen
+      · exact ⟨⟨w, .self⟩, by simp [Entry.vdeps, hrb, Mode.ownSlot, hw], rfl⟩
+    · rcases liftE_vdeps_cases hrb he with h1 | ha
+      · exact h1
+      · exact absurd her.symm (A_out h ha u')
+  constructor
+  · rintro ⟨d, hd, hdr, hk⟩
+    rw [subE_vdeps] at hd
+    obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp hd
+    rcases S.mem_subD hde with rfl | ⟨u'', hv'', hp'', e0, he0, rfl, hek⟩
+    · -- kept: on no region, so not `r`'s in a way the change ends
+      exfalso
+      by_cases hrb : E.mode = .rootb
+      · rcases liftE_rootb_dep h hab hE hrb he with he | ⟨w, rfl, _, _⟩
+        · rw [hk0 _ (hpe v d he hdr)] at hk; cases hk
+        · exact (S.σ_frame h (Classical.choose_spec hr).1).1 w
+            (by rw [(Classical.choose_spec hr).2]; exact hdr)
+      · rcases liftE_vdeps_cases hrb he with ⟨d0, _, rfl⟩ | ha
+        · exact (S.σ_frame h (Classical.choose_spec hr).1).1 d0.root
+            (by rw [(Classical.choose_spec hr).2]; exact hdr)
+        · rw [hk0 _ (Or.inr (Or.inr (hA d ha hdr)))] at hk; cases hk
+    · -- what a region stands for: only `u`'s reaches `r`
+      have hu'' : u'' = u := Classical.byContradiction fun hne => hoth u'' hp'' hne e0 he0 hdr
+      subst hu''
+      obtain ⟨d0, hd0, rfl⟩ := hown he (S.ρ_of_inv hv'').symm hp'' hek
+      have hd0u : d0.root = u'' := by
+        have := hv''; simp only [Dep.ren, inv_ρ h] at this; exact Option.some.inj this
+      refine ⟨d0, hd0, hd0u, ?_⟩
+      have hk4 : d0.kind = .self ∨ d0.kind = .inner ∨ d0.kind = .view ∨ d0.kind = .share :=
+        kind4 (by simpa [Dep.ren] using hek)
+      simp only [Dep.ren] at hk
+      rcases hk4 with hs | hk4
+      · exfalso
+        rw [hs, comp_self_r] at hk
+        rw [hk0 _ ((hσk e0 he0).elim (fun h => Or.inl h) (fun h => Or.inr (Or.inl h)))] at hk
+        cases hk
+      · have hk4' : d0.kind = .view ∨ d0.kind = .inner ∨ d0.kind = .share := by
+          rcases hk4 with h1 | h1 | h1 <;> simp [h1]
+        rwa [hce (hσk e0 he0) hk4'] at hk
+  · rintro ⟨d0, hd0, hd0r, hk⟩
+    have hn0 : d0.kind.isName = false := by
+      cases hk0' : d0.kind.isName
+      · rfl
+      · rw [hk0 _ (Or.inr (Or.inr hk0'))] at hk; cases hk
+    have hrem : d0.kind = .inner ∨ d0.kind = .share := by
+      rcases kind4 hn0 with h1 | h1 | h1 | h1 <;> rw [h1] at hk ⊢ <;> simp_all [Eff.kills]
+    have hlift : d0.ren S.ρ ∈ (S.liftE v E).vdeps := by
+      by_cases hrb : E.mode = .rootb
+      · obtain ⟨_, hp, R, _, hh⟩ := hab.1 v E hE hrb
+        have hd0h : d0 ∈ E.held := by
+          simp only [Entry.vdeps, hrb, Mode.ownSlot, Bool.false_eq_true, ↓reduceIte, hp, List.nil_append] at hd0
+          exact hd0
+        simp only [liftE, hrb, ↓reduceIte, Entry.vdeps, h.pe_rb v, Mode.ownSlot, Bool.false_eq_true]
+        exact List.mem_append_right _ (List.mem_append_left _
+          (List.mem_map_of_mem (List.mem_filter.mpr ⟨hd0h, by simp [hn0]⟩)))
+      · exact (mem_liftE_vdeps hrb).mpr (Or.inl ⟨d0, hd0, rfl⟩)
+    obtain ⟨e0, he0, he0r⟩ := hr
+    refine ⟨⟨e0.root, comp e0.kind d0.kind⟩, ?_, he0r, ?_⟩
+    · rw [subE_vdeps]
+      refine List.mem_flatMap.mpr ⟨d0.ren S.ρ, hlift, ?_⟩
+      simp only [subD, Dep.ren, hd0r, inv_ρ h, hu, hn0, ↓reduceIte, Bool.false_eq_true, List.mem_map]
+      exact ⟨e0, he0, rfl⟩
+    · rw [hce (hσk e0 he0) (by rcases hrem with h1 | h1 <;> simp [h1])]; exact hk
+
+/-- AGORA-937 (3d): ... so the callee's change inside the region's elements,
+    where the call places it, is the caller's on `r`: the frame holds nothing
+    such a change ends (the call's entry kill). -/
+theorem canon_kill_region (h : S.OK) (hab : S.AbsOK Γa) {u r : Var} (hu : S.isPi u = true)
+    (hσk : ∀ e ∈ S.σ u, e.kind = .view ∨ e.kind = .self)
+    (hr : ∃ e ∈ S.σ u, e.root = r)
+    (hoth : ∀ u', S.isPi u' = true → u' ≠ u → ∀ e ∈ S.σ u', e.root ≠ r)
+    (hA : ∀ d ∈ S.A, d.root = r → d.kind.isName = true)
+    (hpe : ∀ w, ∀ d ∈ (S.pe w).vdeps, d.root = r → d.kind = .view ∨ d.kind = .self ∨ d.kind.isName = true)
+    (hΦ : ∀ y E, S.Φ y = some E → hits .dropIn false r E = false) :
+    S.canon (kill .dropIn false u Γa) = kill .dropIn false r (S.canon Γa) := by
+  funext y
+  rcases canon_cases_sub h Γa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, hp, hc⟩ | ⟨hy, hc⟩
+  · rw [canon_ρs h _ hp, A2.kill, A2.kill, hc]
+    cases hE : Γa v with
+    | none => rfl
+    | some E =>
+      simp only [Option.map_some, Function.comp, Option.some.injEq]
+      unfold killE
+      rw [hits_subE_region h hab hE hu hσk hr hoth hA hpe]
+      split
+      · rw [liftE_dead]; rfl
+      · rfl
+  · rw [A2.kill, hc, canon_ρ_sub h, hp]; rfl
+  · rw [canon_frame _ hy, A2.kill, hc]
+    cases hE : S.Φ y with
+    | none => rfl
+    | some E => simp only [Option.map_some, Option.some.injEq]; unfold killE; rw [hΦ y E hE]; rfl
+
+/-- A change strictly inside elements ends no name: in memory it ends what it
+    ends. -/
+theorem hitsMem_dropIn (hv : Bool) (x : Var) (E : Entry) : hitsMem .dropIn hv x E = hits .dropIn hv x E := by
+  unfold hitsMem hits
+  congr 1
+  congr 1
+  funext d
+  cases hk : d.kind <;> simp [Kind.isName, Eff.kills]
+
+/-- AGORA-937 (3d): ... and no binding that may run a destructor views `r`
+    where the caller's change ends it, as none views the region where the
+    callee's does. -/
+theorem dtorSafe_region (h : S.OK) (hab : S.AbsOK Γa) {u r : Var} (hu : S.isPi u = true)
+    (hσk : ∀ e ∈ S.σ u, e.kind = .view ∨ e.kind = .self)
+    (hr : ∃ e ∈ S.σ u, e.root = r)
+    (hoth : ∀ u', S.isPi u' = true → u' ≠ u → ∀ e ∈ S.σ u', e.root ≠ r)
+    (hA : ∀ d ∈ S.A, d.root = r → d.kind.isName = true)
+    (hpe : ∀ w, ∀ d ∈ (S.pe w).vdeps, d.root = r → d.kind = .view ∨ d.kind = .self ∨ d.kind.isName = true)
+    (hΦ : ∀ y E, S.Φ y = some E → hits .dropIn false r E = false)
+    (hds : DtorSafe Γa .dropIn false u) : DtorSafe (S.canon Γa) .dropIn false r := by
+  intro y E' hy hd hos
+  rcases canon_cases_sub h Γa y with ⟨v, rfl, hp, hc⟩ | ⟨v, rfl, hp, hc⟩ | ⟨hy', hc⟩
+  · rw [hc] at hy
+    cases hE : Γa v with
+    | none => rw [hE] at hy; cases hy
+    | some E =>
+      rw [hE] at hy; simp only [Option.map_some, Option.some.injEq, Function.comp] at hy; subst hy
+      have hrb : E.mode ≠ .rootb := fun hm => by
+        rw [subE_dtor, liftE_dtor' h, ite_eq_left hm] at hd; cases hd
+      rw [hitsMem_dropIn, hits_subE_region h hab hE hu hσk hr hoth hA hpe, ← hitsMem_dropIn]
+      refine hds v E hE (by rw [subE_dtor, liftE_dtor' h, ite_eq_right hrb] at hd; exact hd) ?_
+      rw [subE_mode, liftE_mode v hrb, liftMode_ownSlot] at hos; exact hos
+  · rw [hc] at hy; cases hy
+  · rw [hc] at hy
+    rw [hitsMem_dropIn]; exact hΦ y E' hy
+
 /-- Agora #295: a change through a borrow in a callee's body is typed where
     the call places it. Its memory roots are the callee's own, renamed, none
     of them frozen (`Fcout`), each allowing its effect as a callee binding

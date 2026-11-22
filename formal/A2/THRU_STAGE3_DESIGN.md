@@ -520,6 +520,27 @@ and its lift is exact by `comp_assoc` (`allKinds_recvRoots_subE`). So
 argument's memory dependencies. nurlc is unchanged, and it is at most as
 permissive as the model.
 
+### 3d: a change inside a region's elements, where the call places it
+
+With the frozen split, the lift of a change through a region is exact:
+- `hits_subE_region`: the caller's `.dropIn` on a root `r` that the
+  region `u` stands for hits a lifted, substituted callee binding exactly
+  where the callee's `.dropIn` on `u` hits it.
+- `canon_kill_region`: so the callee's kill on `u`, placed, is the caller's
+  kill on `r`.
+- `dtorSafe_region`: and no binding that may run a destructor views `r`
+  where the change ends it (`hitsMem_dropIn`: a `.dropIn` ends no name).
+
+The premises are what 3d's call rule will ask:
+- σ of `u` is at `.view` or `.self`;
+- no other region stands for anything of `r`;
+- nothing the lift adds is on `r` in memory (`r` is not frozen);
+- a lent argument reaches `r` only at a view or its handle;
+- no frame binding is hit (the call's entry kill).
+
+What is left is wiring this into `editB_ren_facts` in place of
+`σ_nil_of_R`, then `CallT`'s premise, the exit kill and the witness.
+
 ### 3d groundwork: frozen roots split from region-reached ones
 
 A call setting now tells apart what it freezes from what its regions stand
