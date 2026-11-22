@@ -289,31 +289,39 @@ theorem Entry.clean_vdeps_mem {E : Entry} (hd : E.dbind = true) (hos : E.mode.ow
   · exact Iff.rfl
 
 /-- What an entry of a type holds, as far as the type can: one that holds no
-    closure holds nothing by name. -/
-def typedDeps (t : Ty) (ds : List Dep) : List Dep := if t.hasFn then ds else memDeps ds
+    closure holds nothing by name. In memory first, then by name (AGORA-937
+    3d: the order a lent parameter's lift gives back, its region's memory and
+    then its argument's names). -/
+def typedDeps (t : Ty) (ds : List Dep) : List Dep := if t.hasFn then memDeps ds ++ nameDeps ds else memDeps ds
 
-theorem typedDeps_hasFn {t : Ty} (h : t.hasFn = true) (ds : List Dep) : typedDeps t ds = ds := by
+theorem typedDeps_hasFn {t : Ty} (h : t.hasFn = true) (ds : List Dep) :
+    typedDeps t ds = memDeps ds ++ nameDeps ds := by
   simp [typedDeps, h]
+
+/-- ... the same dependencies, reordered. -/
+theorem mem_memDeps_nameDeps {ds : List Dep} {d : Dep} : d ∈ memDeps ds ++ nameDeps ds ↔ d ∈ ds := by
+  simp only [memDeps, nameDeps, List.mem_append, List.mem_filter]
+  cases d.kind.isName <;> simp
 
 theorem typedDeps_noFn {t : Ty} (h : t.hasFn = false) (ds : List Dep) : typedDeps t ds = memDeps ds := by
   simp [typedDeps, h]
 
 theorem typedDeps_sub (t : Ty) (ds : List Dep) : typedDeps t ds ⊆ ds := by
   unfold typedDeps; split
-  · exact List.Subset.refl _
+  · exact fun _ hd => mem_memDeps_nameDeps.mp hd
   · exact fun _ hd => (List.mem_filter.mp hd).1
 
 theorem mem_typedDeps {t : Ty} {ds : List Dep} {d : Dep} (hd : d ∈ typedDeps t ds) :
     d ∈ ds ∧ (d.kind.isName = true → t.hasFn = true) := by
   unfold typedDeps at hd; split at hd
-  · exact ⟨hd, fun _ => by assumption⟩
+  · exact ⟨mem_memDeps_nameDeps.mp hd, fun _ => by assumption⟩
   · obtain ⟨hd, hn⟩ := List.mem_filter.mp hd
     exact ⟨hd, fun hn' => by simp [hn'] at hn⟩
 
 theorem mem_typedDeps_of {t : Ty} {ds : List Dep} {d : Dep} (hd : d ∈ ds)
     (h : d.kind.isName = true → t.hasFn = true) : d ∈ typedDeps t ds := by
   unfold typedDeps; split
-  · exact hd
+  · exact mem_memDeps_nameDeps.mpr hd
   · rename_i hf
     refine List.mem_filter.mpr ⟨hd, ?_⟩
     cases hn : d.kind.isName
@@ -2666,18 +2674,20 @@ theorem canon_sig (h : CallH P Γ F x fn args base) {v : Var} {E : Entry} (hE : 
     (hv : v ≤ fn.params.length) (hpl : ∀ hvl : v < fn.params.length, regioned fn.params[v] = false) :
     (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ v) =
       some ((callS Γ F fn args base x).liftE v E) := by
-  rw [h.canon_sigR hE hv, RSetup.subE_liftE_fix h.sOK _ h.isPi_sym]
-  intro _ d hd
-  have hsym : d ∈ symNames fn.params := by
-    rcases sigCtx_cases hE with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨hgt, _⟩
-    · rw [regionP_plain (List.getElem?_eq_getElem hvl) (hpl hvl)] at hd
-      generalize fn.params[v] = p at hd
-      obtain ⟨pm, t⟩ := p
-      cases pm <;> simp only [paramE, List.nil_append] at hd <;> split at hd <;>
-        first | exact hd | cases hd
-    · cases hd
-    · exact absurd hv (Nat.not_le.mpr hgt)
-  exact h.isPi_sym d hsym
+  have key : ∀ d ∈ E.path ++ E.held, (callS Γ F fn args base x).isPi d.root = false := by
+    intro d hd
+    have hsym : d ∈ symNames fn.params := by
+      rcases sigCtx_cases hE with ⟨hvl, rfl⟩ | ⟨_, rfl⟩ | ⟨hgt, _⟩
+      · rw [regionP_plain (List.getElem?_eq_getElem hvl) (hpl hvl)] at hd
+        generalize fn.params[v] = p at hd
+        obtain ⟨pm, t⟩ := p
+        cases pm <;> simp only [paramE, List.nil_append] at hd <;> split at hd <;>
+          first | exact hd | cases hd
+      · cases hd
+      · exact absurd hv (Nat.not_le.mpr hgt)
+    exact h.isPi_sym d hsym
+  rw [h.canon_sigR hE hv, RSetup.subE_liftE_fix h.sOK (fun _ d hd => key d hd)
+    (fun _ d hd => key d (List.mem_append_right _ hd)) h.isPi_sym]
 
 /-- AGORA-937: a callee entry that also holds a view of a region is lifted
     and substituted to the plain entry's, also holding what the region
@@ -2691,6 +2701,38 @@ theorem _root_.A2.RSetup.subE_liftE_cons {S : RSetup} (hS : S.OK) {v w : Var} {E
     simp [RSetup.subD, RSetup.inv_ρ hS, hw, Kind.isName]
   simp [RSetup.liftE, hm, RSetup.subE, rds, Dep.ren, List.flatMap_cons, hd, RSetup.heldA]
 
+/-- AGORA-937 (3d): ... and a lent parameter holding nothing in memory of
+    its own, with its region: what the region stands for, and the
+    argument's names. -/
+theorem _root_.A2.RSetup.subE_liftE_cons_rootb {S : RSetup} (hS : S.OK) {v w : Var} {E : Entry}
+    (hm : E.mode = .rootb) (hE : memDeps E.held = []) (hw : S.isPi w = true) :
+    S.subE (S.liftE v { E with held := ⟨w, .self⟩ :: E.held }) =
+      { S.subE (S.liftE v E) with held := (S.σ w).map (fun e => ⟨e.root, A2.comp e.kind .self⟩) ++
+        (nameDeps (S.pe v).held).flatMap S.subD } := by
+  have hd : S.subD ⟨S.ρ w, .self⟩ = (S.σ w).map (fun e => ⟨e.root, A2.comp e.kind .self⟩) := by
+    simp [RSetup.subD, RSetup.inv_ρ hS, hw, Kind.isName]
+  have hm1 : memDeps (⟨w, .self⟩ :: E.held) = [⟨w, .self⟩] := by
+    show List.filter _ (_ :: _) = _
+    rw [List.filter_cons]; simp only [Kind.isName, Bool.not_false, ↓reduceIte]
+    exact congrArg _ hE
+  simp only [RSetup.liftE, hm, ↓reduceIte, RSetup.subE, rds, hm1]
+  simp [Dep.ren, hd]
+
+/-- AGORA-937 (3d): the substitution keeps what a lent parameter's
+    argument holds by name: the frame's, or an `inout` parameter's symbolic
+    name, on no region. -/
+theorem subD_names_pe (h : CallH P Γ F x fn args base) (v : Var) :
+    (nameDeps ((callS Γ F fn args base x).pe v).held).flatMap (callS Γ F fn args base x).subD =
+      nameDeps ((callS Γ F fn args base x).pe v).held := by
+  refine RSetup.flatMap_subD_fix (S := callS Γ F fn args base x) (fun d hd => ?_)
+  obtain ⟨hd, hn⟩ := List.mem_filter.mp hd
+  have hdv : d ∈ ((callS Γ F fn args base x).pe v).vdeps := by
+    unfold Entry.vdeps; exact List.mem_append_right _ hd
+  rcases RSetup.pe_dep h.sOK hdv with ⟨hout, _⟩ | ⟨hs, _⟩
+  · exact (callS Γ F fn args base x).subD_frameRoot hout
+  · obtain ⟨d0, hd0, rfl⟩ := RSetup.mem_rds.mp hs
+    exact (callS Γ F fn args base x).subD_keep h.sOK (Or.inr ⟨d0.root, rfl, h.isPi_sym d0 hd0⟩)
+
 /-- AGORA-937: a parameter where the call places it: its plain entry,
     lifted, and, for a regioned parameter, also holding what its region
     stands for at the caller. -/
@@ -2698,54 +2740,100 @@ theorem canon_param (h : CallH P Γ F x fn args base) {k : Nat} {p : PMode × Ty
     (hk : fn.params[k]? = some p) :
     (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ k) =
       some { (callS Γ F fn args base x).liftE k (paramE fn.params p) with
-        held := (if regioned p && !p.1.isInp then ((callS Γ F fn args base x).σ (fn.nvars + k)).map
+        held := (if regioned p then ((callS Γ F fn args base x).σ (fn.nvars + k)).map
             (fun e => ⟨e.root, A2.comp e.kind .self⟩) else []) ++
-          ((callS Γ F fn args base x).liftE k (paramE fn.params p)).held } := by
+          (if regioned p && p.1.isInp then nameDeps ((callS Γ F fn args base x).pe k).held
+            else ((callS Γ F fn args base x).liftE k (paramE fn.params p)).held) } := by
   have hkl : k < fn.params.length := lt_of_get hk
   rw [h.canon_sigR (sigCtx_of hk) (Nat.le_of_lt hkl), regionP_of hk]
   have hfix : (callS Γ F fn args base x).subE ((callS Γ F fn args base x).liftE k (paramE fn.params p)) =
       (callS Γ F fn args base x).liftE k (paramE fn.params p) := by
-    refine RSetup.subE_liftE_fix h.sOK (fun _ d hd => h.isPi_sym d ?_) h.isPi_sym
-    obtain ⟨pm, t⟩ := p
-    cases pm <;> simp only [paramE, List.nil_append] at hd <;> split at hd <;>
-      first | exact hd | cases hd
+    refine RSetup.subE_liftE_fix h.sOK (fun _ d hd => h.isPi_sym d ?_) (fun _ d hd => h.isPi_sym d ?_)
+      h.isPi_sym
+    all_goals
+      obtain ⟨pm, t⟩ := p
+      cases pm <;> simp only [paramE, List.nil_append] at hd <;> (try split at hd) <;>
+        first | exact hd | cases hd
   cases hr : regioned p
   · simp only [Bool.false_eq_true, Bool.false_and, ↓reduceIte, List.nil_append, hfix]
-  · obtain ⟨pm, t⟩ := p
+  · -- AGORA-937 (3d): in every mode, a regioned parameter also holds what its region
+    -- stands for; a lent one, then, its argument's names
+    have hw : (callS Γ F fn args base x).isPi (fn.nvars + k) = true := by
+      simp [callS, isRegionIdx, hkl, get_of hk, hr]
+    obtain ⟨pm, t⟩ := p
     cases pm with
     | inp =>
-      -- AGORA-937 (item 2): a lent parameter is lifted to its argument's entry, which
-      -- holds what it views already; the region's view is not added again
-      simp only [↓reduceIte, PMode.isInp, Bool.not_true, Bool.and_false, Bool.false_eq_true,
-        List.nil_append]
-      have hlift : (callS Γ F fn args base x).liftE k
-          { paramE fn.params (PMode.inp, t) with held := ⟨fn.nvars + k, .self⟩ :: (paramE fn.params (PMode.inp, t)).held } =
-          (callS Γ F fn args base x).liftE k (paramE fn.params (PMode.inp, t)) := by
-        simp [RSetup.liftE, paramE]
-      rw [hlift, hfix]
+      have hm : (paramE fn.params (.inp, t)).mode = .rootb := by simp [paramE]
+      have hE : memDeps (paramE fn.params (.inp, t)).held = [] := by
+        simp only [paramE]; split
+        · exact List.filter_eq_nil_iff.mpr fun d hd => by
+            obtain ⟨w, b, t', rfl, _⟩ := mem_symNames' hd; simp [Kind.isName]
+        · rfl
+      simp only [↓reduceIte, PMode.isInp, Bool.and_self]
+      rw [RSetup.subE_liftE_cons_rootb h.sOK hm hE hw, h.subD_names_pe, hfix]
     | sink =>
-      simp only [↓reduceIte, PMode.isInp, Bool.not_false, Bool.and_true]
       have hm : (paramE fn.params (.sink, t)).mode ≠ .rootb := by simp [paramE]
-      have hw : (callS Γ F fn args base x).isPi (fn.nvars + k) = true := by
-        simp [callS, isRegionIdx, hkl, get_of hk, hr]
+      simp only [↓reduceIte, PMode.isInp, Bool.and_false, Bool.false_eq_true]
       rw [RSetup.subE_liftE_cons h.sOK hm hw, hfix]
     | inout b =>
-      simp only [↓reduceIte, PMode.isInp, Bool.not_false, Bool.and_true]
       have hm : (paramE fn.params (.inout b, t)).mode ≠ .rootb := by simp [paramE]
-      have hw : (callS Γ F fn args base x).isPi (fn.nvars + k) = true := by
-        simp [callS, isRegionIdx, hkl, get_of hk, hr]
+      simp only [↓reduceIte, PMode.isInp, Bool.and_false, Bool.false_eq_true]
       rw [RSetup.subE_liftE_cons h.sOK hm hw, hfix]
 
-/-- AGORA-937: a callee binding at a parameter's index or the result slot
-    is lifted where the call places it, and the substitution keeps it when
-    what it depends on is a parameter's. -/
-theorem canon_lend (h : CallH P Γ F x fn args base) {Δa : Ctx} {v : Var} {E : Entry}
-    (hE : Δa v = some E) (hv : v ≤ fn.params.length)
-    (hd : E.mode ≠ .rootb → ∀ d ∈ E.path ++ E.held, lendable fn d.root) :
-    (callS Γ F fn args base x).canon Δa ((callS Γ F fn args base x).ρ v) =
-      some ((callS Γ F fn args base x).liftE v E) := by
-  rw [RSetup.canon_some h.sOK hE (h.isPi_sig hv), RSetup.subE_liftE_fix h.sOK
-    (fun hrb d hd' => h.isPi_sig (Nat.le_of_lt (hd hrb d hd').1)) h.isPi_sym]
+theorem _root_.A2.comp_self_r (a : Kind) : comp a .self = a := by cases a <;> rfl
+
+/-- AGORA-937 (3d): a lent parameter where the call places it is its
+    argument's entry, dependency for dependency: its region, substituted,
+    gives back what the argument holds in memory (`comp a .self = a`), and
+    the lift keeps the argument's names (`typedDeps`: memory, then names). -/
+theorem canon_inp (h : CallH P Γ F x fn args base) {k : Nat} {t : Ty}
+    (hk : fn.params[k]? = some (.inp, t)) :
+    ∃ E, (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ k) = some E ∧
+      E.mode = .rootb ∧ E.live = true ∧
+      E.path ++ E.held = (callPe Γ fn.params args k).path ++ (callPe Γ fn.params args k).held := by
+  have hkl : k < fn.params.length := lt_of_get hk
+  refine ⟨_, h.canon_param hk, ?_, ?_, ?_⟩
+  · simp [RSetup.liftE, paramE, callS]; exact h.sOK.pe_rb k
+  · simp [RSetup.liftE, paramE]
+  · have hpe : (callS Γ F fn args base x).pe k = callPe Γ fn.params args k := rfl
+    have hσ : (callS Γ F fn args base x).σ (fn.nvars + k) =
+        (if (argE Γ (args.getD k 0)).ty = .int then [] else memDeps (argE Γ (args.getD k 0)).held) := by
+      simp [callS, hkl]
+    have hcs : ∀ L : List Dep, L.map (fun e => (⟨e.root, A2.comp e.kind .self⟩ : Dep)) = L := by
+      intro L
+      induction L with
+      | nil => rfl
+      | cons e L ih => rw [List.map_cons, comp_self_r, ih]
+    have hlh : ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).held =
+        (callPe Γ fn.params args k).held := by
+      have hE : memDeps (paramE fn.params (.inp, t)).held = [] := by
+        simp only [paramE]; split
+        · exact List.filter_eq_nil_iff.mpr fun d hd => by
+            obtain ⟨w, b, t', rfl, _⟩ := mem_symNames' hd; simp [Kind.isName]
+        · rfl
+      have hE' : memDeps (if t.hasFn = true then symNames fn.params else []) = [] := by
+        simpa [paramE] using hE
+      simp [RSetup.liftE, paramE, hE', rds, hpe]
+    dsimp only
+    rw [hσ, hcs]
+    simp only [PMode.isInp, Bool.and_true]
+    have hlp : ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).path =
+        (callPe Γ fn.params args k).path := by simp [RSetup.liftE, paramE, hpe]
+    rw [hlp, hlh, hpe]
+    unfold callPe; rw [hk]
+    cases hr : regioned (PMode.inp, t)
+    · simp
+    · simp only [↓reduceIte]
+      split
+      · simp [nameDeps]
+      · rename_i hint
+        congr 1
+        dsimp only
+        generalize argE Γ (args.getD k 0) = A
+        cases hf : A.ty.hasFn
+        · rw [typedDeps_noFn hf]; simp [nameDeps, memDeps, List.filter_filter]
+        · rw [typedDeps_hasFn hf]
+          simp [nameDeps, memDeps, List.filter_append, List.filter_filter]
 
 theorem sig_abs (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).AbsOK (sigCtx fn) := by
   obtain ⟨_, hnv, _, _, _, hpar, _⟩ := h.fnok
@@ -2968,22 +3056,19 @@ theorem wrapCond (h : CallH P Γ F x fn args base) :
   cases pm with
   | inp =>
     have hne : ∀ b' t', (PMode.inp, t) ≠ (.inout b', t') := fun _ _ h => by cases h
-    -- AGORA-937 (item 2): regioned or not, a lent parameter lifts to its argument's entry
-    have hci : (callS Γ F fn args base x).canon (sigCtx fn) (base + k) =
-        some ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))) := by
-      rw [← hρ hne]
-      show (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ k) = _
-      rw [h.canon_param hk]
-      simp [PMode.isInp]
-    refine ⟨_, hci, ?_, ?_, ?_, hF hne, ?_⟩
-    · simp [RSetup.liftE, paramE, callS]; exact h.sOK.pe_rb k
-    · simp [RSetup.liftE, paramE]
-    · intro d hd hb
-      have : ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).vdeps =
-          (callPe Γ fn.params args k).vdeps := by simp [RSetup.liftE, paramE, Entry.vdeps, callS]
-      rw [this] at hd
-      exact h.pe_Fc k d hd hb
-    · simp [RSetup.liftE, paramE, callS]
+    -- AGORA-937 (3d): regioned or not, a lent parameter lifts to its argument's entry:
+    -- its region stands for the argument's memory, then come the argument's names
+    obtain ⟨E0, hci0, hm0, hl0, hvd0⟩ := h.canon_inp hk
+    have hci : (callS Γ F fn args base x).canon (sigCtx fn) (base + k) = some E0 := by
+      rw [← hρ hne]; exact hci0
+    refine ⟨_, hci, hm0, hl0, ?_, hF hne, hvd0⟩
+    intro d hd hb
+    have hd' : d ∈ (callPe Γ fn.params args k).vdeps := by
+      have hpv : (callPe Γ fn.params args k).vdeps =
+          (callPe Γ fn.params args k).path ++ (callPe Γ fn.params args k).held := by
+        unfold Entry.vdeps; rw [show (callPe Γ fn.params args k).mode = .rootb from h.sOK.pe_rb k]; rfl
+      rw [hpv, ← hvd0]; simpa [Entry.vdeps, hm0, Mode.ownSlot] using hd
+    exact h.pe_Fc k d hd' hb
   | sink =>
     have hne : ∀ b' t', (PMode.sink, t) ≠ (.inout b', t') := fun _ _ h => by cases h
     exact ⟨⟨_, hcR hne, by simp [RSetup.liftE, paramE, liftMode]⟩, hF hne⟩
@@ -3013,7 +3098,7 @@ theorem pe_q (h : CallH P Γ F x fn args base) (j : Nat) :
 
 /-- Every borrowed parameter where the call places the callee depends on
     the caller's context only. -/
-theorem canon_rbq (h : CallH P Γ F x fn args base) (Δa : Ctx) :
+theorem canon_rbq (h : CallH P Γ F x fn args base) {Δa : Ctx} (habΔ : (callS Γ F fn args base x).AbsOK Δa) :
     RbQ (fun r => r < base ∧ (Γ r).isSome) ((callS Γ F fn args base x).canon Δa) := by
   intro p E hp hm d hd
   rcases RSetup.canon_cases_sub h.sOK Δa p with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨_, hc⟩
@@ -3024,11 +3109,24 @@ theorem canon_rbq (h : CallH P Γ F x fn args base) (Δa : Ctx) :
       rw [hE] at hp; simp only [Option.map_some, Option.some.injEq, Function.comp] at hp; subst hp
       rw [RSetup.subE_mode] at hm
       have hrb : E0.mode = .rootb := (RSetup.liftE_rootb h.sOK).mp hm
-      rw [RSetup.subE_liftE_fix h.sOK (fun hn => absurd hrb hn) h.isPi_sym] at hd
-      have hvd : ((callS Γ F fn args base x).liftE v E0).vdeps = (callPe Γ fn.params args v).vdeps := by
-        simp [RSetup.liftE, hrb, Entry.vdeps, callS]
-      rw [hvd, pe_vd] at hd
-      exact h.pe_q v d hd
+      -- AGORA-937 (3d): the argument's (the caller's), or its region's: the argument's roots
+      rw [RSetup.subE_vdeps] at hd
+      obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp hd
+      rcases RSetup.liftE_rootb_dep h.sOK habΔ hE hrb he with he | ⟨u, rfl, hreg, _⟩
+      · -- the argument's own: the frame's, or a symbolic name, kept by the substitution
+        have hq := h.pe_q v e (by rw [← pe_vd]; exact he)
+        have hkeep : (callS Γ F fn args base x).subD e = [e] := by
+          rcases RSetup.pe_dep h.sOK he with ⟨hout, _⟩ | ⟨hs, _⟩
+          · exact (callS Γ F fn args base x).subD_frameRoot hout
+          · obtain ⟨d0, hd0, rfl⟩ := RSetup.mem_rds.mp hs
+            exact (callS Γ F fn args base x).subD_keep h.sOK (Or.inr ⟨d0.root, rfl, h.isPi_sym d0 hd0⟩)
+        rw [hkeep, List.mem_singleton] at hde; subst hde; exact hq
+      · -- its region: what the argument holds in memory, the caller's roots
+        rcases (callS Γ F fn args base x).mem_subD hde with rfl | ⟨w, _, _, hσ⟩
+        · have hp := (callS Γ F fn args base x).subD_kept h.sOK hde rfl
+          rw [habΔ.2.2.2.2.2, hreg] at hp; simp [callS] at hp
+        · obtain ⟨_, Er, hEr, _⟩ := h.R_facts (RSetup.mem_allKinds (hσ.sub h.sOK))
+          exact ⟨h.domlt _ _ hEr, by rw [hEr]; rfl⟩
   · rw [hc] at hp; cases hp
   · rw [hc] at hp
     have hl := h.sOK.Φrb p E hp hm
@@ -3151,18 +3249,18 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
       refine ⟨_, RSetup.canon_some h.sOK hEw (habΔ.notPi hEw (by rw [hm]; simp)), ?_⟩
       rw [RSetup.subE_mode, RSetup.liftE_mode _ (by rw [hm]; simp), hm]; rfl
   have hwrap := wrap_typed (pe := callPe Γ fn.params args) (base := base) hbody h.pe_lt hpw
-    (fun p E hp hm d hd => (h.canon_rbq Δa p E hp hm d hd).1)
+    (fun p E hp hm d hd => (h.canon_rbq habΔ p E hp hm d hd).1)
     ((h.canon_dtq hΔd).mono fun _ h => h.1) ((h.canon_dbq hΔb).mono fun _ h => h.1) fn.params 0 h.wrapCond
   have hfz := StmtT.frozen (ξ := .none) (z := zOf fn args base) hwrap zN_sub
   have hQb := exitsP_rblt (base := base) (Q := fun r => r < base ∧ (Γ r).isSome) h.pe_q fn.params 0 _
-    (h.canon_rbq Δa)
+    (h.canon_rbq habΔ)
   have hDb := exitsP_dtq (base := base) (Q := fun r => r < base ∧ (Γ r).isSome) h.pe_q fn.params 0 _
     (h.canon_dtq hΔd)
   have hBb := exitsP_dbq (base := base) (Q := fun r => r < base ∧ (Γ r).isSome) h.pe_q fn.params 0 _
     (h.canon_dbq hΔb)
   have hKOb := exitsP_keepOut (Γ := (callS Γ F fn args base x).canon (sigCtx fn))
     (pe := callPe Γ fn.params args) (base := base) h.pe_lt fn.params 0 _ []
-    (fun p E hp hm d hd => (h.canon_rbq Δa p E hp hm d hd).1) hko
+    (fun p E hp hm d hd => (h.canon_rbq habΔ p E hp hm d hd).1) hko
   rw [List.append_nil] at hKOb
   generalize hΓb : exitsP fn.params base 0 (callPe Γ fn.params args) ((callS Γ F fn args base x).canon Δa) = Γb
     at hfz hr hfin hQb hDb hBb hKOb
@@ -3414,7 +3512,6 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
 
 end CallH
 
-theorem comp_self_r (a : Kind) : comp a .self = a := by cases a <;> rfl
 theorem comp_rootKind (t : Ty) (k : Kind) : comp (rootKind t .self) k = rootKind t k := by
   cases t <;> cases k <;> rfl
 
