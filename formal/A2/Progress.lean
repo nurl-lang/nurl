@@ -534,7 +534,7 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
 /-- Agora #871: no exit is about to leave a statement typed under no exit. -/
 theorem exitAt_none {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} {m : Mem}
     (ht : StmtT P .none Γ F s Δ) {n : Nat} {e : Stmt} (he : ExitAt s n e) (hi : Inv m Γ F s) : False := by
-  obtain ⟨_, _, h2, -⟩ := ExitAt.typed ht he hi.wf hi.names hi.toMInv.fresh hi.anch .none
+  obtain ⟨_, _, h2, -⟩ := ExitAt.typed ht he hi.wf hi.names hi.toMInv.fresh hi.anch (fun v hv => hv) .none
   exact Exits.none_up h2
 
 /-- AGORA-889: `takeB` steps: the node `x` names is found as for `editB`; in

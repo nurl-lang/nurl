@@ -423,6 +423,16 @@ theorem NoHeld.of_anchS {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) {x :
     · exact hx (hr ▸ h1)
     · exact h2 (hr ▸ hxV)
 
+/-- ... read off any context's anchors (`Γ0`) of the borrowed parameters
+    `Γ` binds: only where they are anchored counts. -/
+theorem NoHeld.of_anchS0 {Γ Γ0 : Ctx} {F V : List Var}
+    (h : ∀ p E, Γ p = some E → E.mode = .rootb → AnchoredS Γ0 E F V) {x : Var} (hxV : x ∈ V)
+    (hx : x ∉ F) : NoHeld Γ x :=
+  fun p E hp hm d hd hr ha => by
+    rcases h p E hp hm d hd (by rcases ha.2.2.2 with h' | h' <;> rw [h'] <;> rfl) with h1 | ⟨_, h2, _⟩
+    · exact hx (hr ▸ h1)
+    · exact h2 (hr ▸ hxV)
+
 /-- ... nor a binding not lent out whose type holds views: a held anchor's
     root's elements hold none (`AnchoredS`). -/
 theorem NoHeld.of_anchS_hv {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) {x : Var} {Ex : Entry}

@@ -759,6 +759,20 @@ Both need the relaxed premise:
 
 For `CallA` this moves into B3's design: the frame setup must place the outer frame's held anchors (unfrozen `w`, not the callee's variable) in the new frame's rename.
 
+**Finding 2: `s.vars` is the wrong set for the clause.** A step can bring a variable into the statement that was none of its variables before, and is not fresh:
+- `callc` places a closure's body together with its captured names (`cs.map (·.1)`, in `heldFor` and the body's rename). A closure that captures `w` for reading, called inside a route-U body, makes `w` a variable of the statement. Nothing kills it there: the frame freezes the captured names (`frozen (heldFor …)`), so inside it `w ∈ F`.
+- `catchR` (`catchIn`): the inner invariant has `F ++ range m0.nv`. An outer held root below `m0.nv` is frozen inside, and nothing says the body names it not.
+
+So "a held root is no variable of the statement" does not survive a step, even where no kill of `w` is possible. The set must be the names the statement can kill: its variables outside the frames that put them in `F`. A `Stmt.killVars` would leave out a `frozen z k`'s `z`, a `catchR`'s frozen range, and what a placed frame freezes. Inside such a frame the anchor is in `F`, and outside it the root is no killable name. Then:
+- the per-step obligation is "a step's new killable names are old ones or fresh (`≥ m.nv`)" (`Step.killVars_sub`), proved over `Step`'s 67 rules;
+- a call's renamed body names the callee's variables (`≥ base`) or `inout` arguments, which are old killable names.
+
+The work on `t937-b2-wip` stands with `V` swapped from `s.vars` to `s.killVars`:
+- the transport lemmas, the H variants of the kill lemmas, `NoHeldV` and the type part;
+- the Preservation cases fixed so far.
+
+`Stmt.spine_sub_vars` becomes `spine_sub_killVars`: a running scope is killable.
+
 The premise of the call (`CallThruOK`) narrows too (finding above): other
 arguments reach `w` only by name. A `.self` path (a borrow `&w` passed
 beside `vv`) would let the callee view inside `w`'s elements through a

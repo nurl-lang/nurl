@@ -1034,6 +1034,18 @@ theorem AnchoredS.union {Γ Γ0 : Ctx} {E : Entry} {F V1 V2 : List Var} (h1 : An
   · exact Or.inl h
   exact Or.inr ⟨ha, fun h => (List.mem_append.mp h).elim hn1 hn2, hr⟩
 
+/-- ... the first anchored where `Z` is lent out too (a `frozen` scope's
+    inner invariant), `Z` among the second's variables. -/
+theorem AnchoredS.union' {Γ Γ0 : Ctx} {E : Entry} {F Z V1 V2 : List Var} (h1 : AnchoredS Γ E (F ++ Z) V1)
+    (h2 : AnchoredS Γ0 E F V2) (hZ : ∀ v ∈ Z, v ∈ V2) : AnchoredS Γ E F (V1 ++ V2) := fun d hd hb => by
+  rcases h2 d hd hb with h | ⟨_, hn2, _⟩
+  · exact Or.inl h
+  rcases h1 d hd hb with h | ⟨ha, hn1, hr⟩
+  · rcases List.mem_append.mp h with h | h
+    · exact Or.inl h
+    · exact absurd (hZ _ h) hn2
+  exact Or.inr ⟨ha, fun h => (List.mem_append.mp h).elim hn1 hn2, hr⟩
+
 /-- ... in a context that keeps the type of each binding outside `V` (a
     held anchor's root is none of `V`). -/
 theorem AnchoredS.of_tyV {Γ Γ' : Ctx} {E : Entry} {F V : List Var} (h : AnchoredS Γ E F V)
