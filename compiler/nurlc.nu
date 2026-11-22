@@ -28898,8 +28898,14 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
         : i c3 ( nurl_str_find r2 `:` )
         : s rc ? < c3 0 ( nurl_str_cat r2 `` ) ( nurl_str_slice r2 0 c3 )
         : s ch ? < c3 0 `` ( nurl_str_cat `/` ( nurl_str_slice r2 + c3 1 - - ( nurl_str_len r2 ) c3 1 ) )
-        ( __bck_rc_note ( nurl_str_cat4 name `+dk=` cal ( nurl_str_cat4 `/` k `/` ( nurl_str_cat ud ch ) ) ) )
-        ( __bck_rc_note ( nurl_str_cat3 name `=` rc ) )
+        // (A `% Drop` that reaches no Rc, `-`: only a point a panic may
+        // unwind from, `+du=` - none of the Rc sweeps', __bck_unw_fns_of.)
+        ? ( seq rc `-` ) {
+            ? != 0 g_fn_unw { ( __bck_rc_note ( nurl_str_cat4 name `+du=` cal ( nurl_str_cat4 `/` k `/` ( nurl_str_cat ud ch ) ) ) ) } {}
+        } {
+            ( __bck_rc_note ( nurl_str_cat4 name `+dk=` cal ( nurl_str_cat4 `/` k `/` ( nurl_str_cat ud ch ) ) ) )
+            ( __bck_rc_note ( nurl_str_cat3 name `=` rc ) )
+        }
         ( bck_put `deferred` `1` )
     }
 }
@@ -28925,6 +28931,28 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
 // it came through), so the release counts it only where every one of them
 // took it over (__bck_udrop_fns_of): a maker that drops its `sink` value
 // before it returns hands back a closure over nothing of it.
+// __udrop_clo_arg's entries for a binding's `+dk=` / `+du=` notes `dk`
+// (`cal/k'/#ud[/chain]` each), its Rc part `rcs` (`:#rc`, or `:-`): the
+// set, and the chain with this maker and position first, after `out`.
+@ __udrop_clo_ents s ks s dk0 s rcs s out0 → s {
+    : ~ s out ( nurl_str_cat out0 `` )
+    : ~ s dk ( nurl_str_cat dk0 `` )
+    ~ != 0 ( nurl_str_len dk ) {
+        : s e ( __bar_first dk ) = dk ( __bar_rest dk )
+        : i s1 ( nurl_str_find e `/` )
+        : s r1 ( nurl_str_slice e + s1 1 - - ( nurl_str_len e ) s1 1 )
+        : i s2 ( nurl_str_find r1 `/` )
+        : s r2 ( nurl_str_slice r1 + s2 1 - - ( nurl_str_len r1 ) s2 1 )
+        : i s3 ( nurl_str_find r2 `/` )
+        : s ud ? < s3 0 ( nurl_str_cat r2 `` ) ( nurl_str_slice r2 0 s3 )
+        : s tail ? < s3 0 `` ( nurl_str_slice r2 s3 - ( nurl_str_len r2 ) s3 )
+        : s ch ( nurl_str_cat ( nurl_str_slice e 0 + + s1 1 s2 ) tail )
+        : s ent ( nurl_str_cat4 ks ud rcs ( nurl_str_cat `:` ch ) )
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ent `` ) ( nurl_str_cat3 out ` ` ent )
+    }
+    ^ out
+}
+
 @ __udrop_clo_arg i syms i k i tt0 s nm0 → s {
     : ~ s out ``
     : s ks ( nurl_str_cat ( nurl_str_int k ) `:` )
@@ -28939,27 +28967,15 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
     ? ( is_ident_tok tt ) {
         ? == 0 ( nurl_str_len g_bck_rcty ) { ^ out } {}
         : s rc ( bck_rc_type_of nm )
-        ? == 0 ( nurl_str_len rc ) { ^ out } {}
-        : s rcs ( nurl_str_cat `:` ( __rc_set_id rc ) )
-        : s ud0 ( __bck_rc_noted nm `+d=` )
-        ? != 0 ( nurl_str_len ud0 ) { = out ( nurl_str_cat3 ks ( __rc_set_id ud0 ) rcs ) } {}
-        : ~ s dk ( __bck_rc_noted nm `+dk=` )
-        ~ != 0 ( nurl_str_len dk ) {
-            : s e ( __bar_first dk ) = dk ( __bar_rest dk )
-            // (`cal/k'/#ud[/chain]`: the set, and the chain with this maker
-            // and position first.)
-            : i s1 ( nurl_str_find e `/` )
-            : s r1 ( nurl_str_slice e + s1 1 - - ( nurl_str_len e ) s1 1 )
-            : i s2 ( nurl_str_find r1 `/` )
-            : s r2 ( nurl_str_slice r1 + s2 1 - - ( nurl_str_len r1 ) s2 1 )
-            : i s3 ( nurl_str_find r2 `/` )
-            : s ud ? < s3 0 ( nurl_str_cat r2 `` ) ( nurl_str_slice r2 0 s3 )
-            : s tail ? < s3 0 `` ( nurl_str_slice r2 s3 - ( nurl_str_len r2 ) s3 )
-            : s ch ( nurl_str_cat ( nurl_str_slice e 0 + + s1 1 s2 ) tail )
-            : s ent ( nurl_str_cat4 ks ud rcs ( nurl_str_cat `:` ch ) )
-            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ent `` ) ( nurl_str_cat3 out ` ` ent )
-        }
-        ^ out
+        ? != 0 ( nurl_str_len rc ) {
+            : s rcs ( nurl_str_cat `:` ( __rc_set_id rc ) )
+            : s ud0 ( __bck_rc_noted nm `+d=` )
+            ? != 0 ( nurl_str_len ud0 ) { = out ( nurl_str_cat3 ks ( __rc_set_id ud0 ) rcs ) } {}
+            = out ( __udrop_clo_ents ks ( __bck_rc_noted nm `+dk=` ) rcs out )
+        } {}
+        // (…and what it took over whose `% Drop` reaches no Rc, `+du=`:
+        // handed on with `-`, agora #952.)
+        ^ ( __udrop_clo_ents ks ( __bck_rc_noted nm `+du=` ) `:-` out )
     } {}
     ? | == 0 g_udargs_set ! ( __udclo_rhs syms tt ) { ^ out } {}
     : s ua ( nurl_sym_get syms `__last_call_udargs__` )
@@ -38338,12 +38354,14 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         ? __udclo {
             : s __uda ( __udrop_fns ( nurl_llty at ) )
             ? != 0 ( nurl_str_len __uda ) {
+                // (…and one whose `% Drop` reaches no Rc, `-`: releasing the
+                // closure still runs it, a point a panic may unwind from -
+                // `+du=`, __udrop_clo_note; agora #952.)
                 : s __udr ( __rc_reach ( nurl_llty at ) )
-                ? != 0 ( nurl_str_len __udr ) {
-                    : s __ude ( nurl_str_cat4 ( nurl_str_int arg_idx ) `:` ( __rc_set_id __uda ) ( nurl_str_cat `:` ( __rc_set_id __udr ) ) )
-                    ( nurl_sym_append_word syms ( nurl_str_cat `__uda#` ( nurl_str_int __udd ) ) __ude )
-                    = __udk + __udk 1
-                } {}
+                : s __udrs ? == 0 ( nurl_str_len __udr ) `-` ( __rc_set_id __udr )
+                : s __ude ( nurl_str_cat4 ( nurl_str_int arg_idx ) `:` ( __rc_set_id __uda ) ( nurl_str_cat `:` __udrs ) )
+                ( nurl_sym_append_word syms ( nurl_str_cat `__uda#` ( nurl_str_int __udd ) ) __ude )
+                = __udk + __udk 1
             } {
                 // (…and a closure argument, whose type names nothing it
                 // holds: what it took over, __udrop_clo_arg.)
@@ -62049,9 +62067,29 @@ unsafe @ bck_emit_error s file i line s msg → v {
 // that cannot panic refuses nothing.
 @ __bck_dtor_unw s st s rec → v {
     : i line ( bck_field_int rec 3 )
-    ( bck_put `unwpark` ( bck_field rec 5 ) )
+    ( __bck_dtor_unw_open ( bck_field rec 5 ) )
+    ( __bck_dtor_unw_state st line )
+    : s u6 ( bck_field rec 6 )
+    ? != 0 ( nurl_str_len u6 ) { ( __bck_unw_takes st rec u6 ) } {}
+    ( __bck_dtor_unw_close )
+}
+
+// …its reports parked behind destructor `f`, and settled.
+@ __bck_dtor_unw_open s f → v {
+    ( bck_put `unwpark` f )
     = g_bck_unw_only T
     = g_bck_unw_dtor T
+}
+
+@ __bck_dtor_unw_close → v {
+    = g_bck_unw_dtor F
+    = g_bck_unw_only F
+    ( bck_put `unwpark` `` )
+}
+
+// …what the state says at the release: an `inout` parameter viewing a value
+// of the frame, and one with a field taken by an earlier statement.
+@ __bck_dtor_unw_state s st i line → v {
     ( __bck_unwind_check st line )
     ? != 0 g_bck_fmv_any {
         ( bck_put `unwskip` ( nurl_sym_get g_bck `fmv` ) )
@@ -62060,11 +62098,32 @@ unsafe @ bck_emit_error s file i line s msg → v {
         = g_bck_unw_exit F
         ( bck_put `unwskip` `` )
     } {}
-    : s u6 ( bck_field rec 6 )
-    ? != 0 ( nurl_str_len u6 ) { ( __bck_unw_takes st rec u6 ) } {}
-    = g_bck_unw_dtor F
-    = g_bck_unw_only F
-    ( bck_put `unwpark` `` )
+}
+
+// Does a scope's end release, in a function with `inout` parameters, a
+// closure whose environment runs a `% Drop` that reaches no Rc (`+du=`,
+// __udrop_clo_note)? Its end is then asked even with no borrow to end
+// (bck_scope_drop, __bck_clo_unw; agora #952).
+@ __bck_du_any → b {
+    ? == 0 g_bck_inp_any { ^ F } {}
+    ^ >= ( nurl_str_find g_bck_rcty `+du=` ) 0
+}
+
+// A closure binding `id` released at `line` with no call (its block's end,
+// the old value of `=`): its environment releases what its maker took over
+// (`+dk=`, `+du=`, __udrop_clo_note, by the final `retcap` summaries), and
+// each `% Drop` that runs is a point a panic may unwind from, as a
+// temporary's is (__bck_dtor_unw) - a closure's type names nothing its
+// environment holds, so no row of codegen's marks it (agora #952).
+@ __bck_clo_unw s st i id i line → v {
+    ? | == 0 g_bck_inp_any < id 0 { ^ v } {}
+    : ~ s fns ( __bck_unw_fns_of ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) ) )
+    ~ != 0 ( nurl_str_len fns ) {
+        : s f ( __bar_first fns ) = fns ( __bar_rest fns )
+        ( __bck_dtor_unw_open f )
+        ( __bck_dtor_unw_state st line )
+        ( __bck_dtor_unw_close )
+    }
 }
 
 // At a `unw` row: the fields of `inout` parameters the statement's calls
@@ -64275,7 +64334,10 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // is handed to it — agora #766.)
                 ? & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) {
                     : i aold ( bck_st_get st asid )
-                    ? ! | | == aold BCK_UNINIT == aold BCK_MOVED == aold BCK_STORED { = st ( __bck_udrop_sweep st asid ( bck_field_int rec 3 ) `as the old value of '='` ) } {}
+                    ? ! | | == aold BCK_UNINIT == aold BCK_MOVED == aold BCK_STORED {
+                        ( __bck_clo_unw st asid ( bck_field_int rec 3 ) )
+                        = st ( __bck_udrop_sweep st asid ( bck_field_int rec 3 ) `as the old value of '='` )
+                    } {}
                 } {}
                 // (What it borrowed before, kept for its new value's borrow row
                 // — a value block or a join of it, `= j { j }`, hands on that
@@ -74675,8 +74737,25 @@ unsafe @ bck_scope_leave s st i line → s {
 // callee's returned closure took over (`+dk=` `callee/k/#ud`, by the final
 // `retcap` summaries; agora #919).
 @ __bck_udrop_fns_of s nm → s {
-    : ~ s out ( __bck_rc_noted nm `+d=` )
-    : ~ s dk ( __bck_rc_noted nm `+dk=` )
+    ^ ( __bck_udrop_took ( __bck_rc_noted nm `+d=` ) ( __bck_rc_noted nm `+dk=` ) )
+}
+
+// The `% Drop` impls a closure binding `nm` runs when it is released, each
+// a point a panic may unwind from: those of the arguments its maker took
+// over, whether or not they reach an Rc (`+dk=`, `+du=`; agora #952).
+@ __bck_unw_fns_of s nm → s {
+    : s du ( __bck_rc_noted nm `+du=` )
+    : s dk ( __bck_rc_noted nm `+dk=` )
+    ? & == 0 ( nurl_str_len du ) == 0 ( nurl_str_len dk ) { ^ `` } {}
+    ^ ( __bck_udrop_took ( __bck_udrop_took `` dk ) du )
+}
+
+// `out0` and the impls of the `+dk=`-form entries `dk0` (`callee/k/#ud`
+// [/maker/k'…]) whose callee, and every maker on the way, took the argument
+// over (`retcap`).
+@ __bck_udrop_took s out0 s dk0 → s {
+    : ~ s out ( nurl_str_cat out0 `` )
+    : ~ s dk ( nurl_str_cat dk0 `` )
     ~ != 0 ( nurl_str_len dk ) {
         : s e ( __bar_first dk ) = dk ( __bar_rest dk )
         : i s1 ( nurl_str_find e `/` )
@@ -74727,7 +74806,7 @@ unsafe @ bck_scope_leave s st i line → s {
 // line). Not one moved or stored away — its value lives on elsewhere.
 @ bck_scope_end i lo i hi s st i line → s {
     ? ( seq st `!` ) { ^ st } {}
-    ? == 0 g_bck_has_borrow { ^ ? == 0 g_bck_jgb_any ( nurl_str_cat st `` ) ( bck_join_giveback st ( __bck_scope_lets lo hi ) ) } {}
+    ? & == 0 g_bck_has_borrow ! ( __bck_du_any ) { ^ ? == 0 g_bck_jgb_any ( nurl_str_cat st `` ) ( bck_join_giveback st ( __bck_scope_lets lo hi ) ) } {}
     : s lets ( __bck_scope_lets lo hi )
     : ~ s out ? == 0 g_bck_jgb_any ( nurl_str_cat st `` ) ( bck_join_giveback st lets )
     = out ( bck_scope_drop out lets line )
@@ -74817,7 +74896,10 @@ unsafe @ bck_scope_drop s st s lets i line → s {
         // stored away, or never bound on this path. The walk's own state
         // may call such a holder a borrow; its owner is codegen's
         // registration, noted by bck_note_rc_arg — agora #766.)
-        ? & & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) ! | | == v BCK_UNINIT == v BCK_MOVED == v BCK_STORED { = out ( __bck_udrop_sweep out id line `at the end of its block` ) } {}
+        ? & & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) ! | | == v BCK_UNINIT == v BCK_MOVED == v BCK_STORED {
+            ( __bck_clo_unw out id line )
+            = out ( __bck_udrop_sweep out id line `at the end of its block` )
+        } {}
         ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_root_end out id line `it went out of scope at the end of its block` ) } {}
         = g_bck_ending ? == 0 ( nurl_str_len g_bck_ending ) ( nurl_str_int id ) ( nurl_str_cat3 g_bck_ending ` ` ( nurl_str_int id ) )
     }
@@ -74984,7 +75066,7 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
 @ bck_scope_close i lo i hi s pre s post i line → s {
     ? ( seq post `!` ) { ^ ( nurl_str_cat `!` `` ) } {}
     : ~ s out ( nurl_str_cat post `` )
-    : b ends != 0 g_bck_has_borrow
+    : b ends | != 0 g_bck_has_borrow ( __bck_du_any )
     // (Newest first, as its values are dropped: one declared after another
     // is gone — its state put back — before that one ends.)
     // (…all but one a defer armed in this block reads, that shadows
@@ -75284,7 +75366,7 @@ unsafe @ bck_loop_mask s pre s post → s {
 // The loop body's end (bck_scope_end of [lo, hi)) but for the bindings
 // its defer keeps (`kept`): they are not released there.
 @ __bck_loop_body_end i lo i hi s st i line s kept → s {
-    ? | ( seq st `!` ) == 0 g_bck_has_borrow { ^ ( bck_scope_end lo hi st line ) } {}
+    ? | ( seq st `!` ) & == 0 g_bck_has_borrow ! ( __bck_du_any ) { ^ ( bck_scope_end lo hi st line ) } {}
     : ~ s lets ``
     : ~ s rest ( __bck_scope_lets lo hi )
     ~ != 0 ( nurl_str_len rest ) {

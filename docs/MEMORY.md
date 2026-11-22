@@ -452,7 +452,8 @@ errors:
   A panic is an exit too, which a `recover`ing caller lives through: so,
   for an `inout` `h`, is a call that may panic before the refill, and so is
   the release of a value whose `% Drop` may panic (a temporary, a scope's
-  end, a `=` over the old value).
+  end, a `=` over the old value). That includes a closure whose
+  environment holds such a value, taken over by the call that made it.
 
 The struct's other fields stay usable, and its own drop at the end of its
 scope releases what is left. A field taken on only some paths is
