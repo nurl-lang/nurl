@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0] — 2026-11-22
+
+### Added
+
+- `vid_extract_count path count maxside outdir fallback_fps verbose`: about
+  `count` frames spread evenly over the whole video, for callers that want
+  coverage rather than a frame rate (two frames a second of a ten-minute walk
+  is 1200 frames, and a cap on that keeps the opening). ffmpeg's fps filter
+  gets the rate `count/duration`, so one frame every 25 s works as well as ten a
+  second; the long side is optionally scaled down to `maxside`. An MJPEG AVI,
+  or a video whose duration cannot be told, falls back to `vid_extract`.
+- `vid_duration_s path`: the length in seconds per ffprobe, -1.0 when unknown.
+
 ## [0.2.6] — 2026-11-11
 
 ### Changed
