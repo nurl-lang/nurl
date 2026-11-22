@@ -773,6 +773,23 @@ The work on `t937-b2-wip` stands with `V` swapped from `s.vars` to `s.killVars`:
 
 `Stmt.spine_sub_vars` becomes `spine_sub_killVars`: a running scope is killable.
 
+**Done (2b745946b).** `Stmt.killVars` is `Stmt.vars` without a `frozen` frame's list, and `Inv.anch` is now `AnchoredS Γ E F s.killVars`. The lemmas and the Preservation cases above are moved onto it, and `respine` takes the killable-name subset by a default tactic.
+
+**Finding 3: the step lemma needs an invariant on closures.** `frozenIn` and `catchIn` need a step's new killable names to be old ones or fresh (`≥ m.nv`). Every rule but the closure calls gives that:
+- a named call renames the callee's variables to `≥ base`, and its `inout` parameters to their arguments, which are killable names of the `letcall`;
+- `reap` and the frame setups bind fresh variables.
+
+`callc` renames the closure's `inout` captures (`cs.map (·.1)` with an `inout` mode) to the captured names themselves. These are killable now (the closure may assign them), and they were no names of the statement before. So the clause needs an invariant that no closure a binding of the statement names captures a held root `inout`: in `Γ`, no binding in `s.killVars` holds a mutating name dependency on a held root. This is B3's `w ∉ roots (mutNames Γ args)` at the call, carried as an invariant:
+- a new mutating name dependency on `w` is made only by a closure literal that captures `w`, which names `w`, which the clause forbids;
+- dependencies flow by copy and move, which keeps the roots.
+
+This makes B2's last two cases depend on B3's invariant. The order is therefore:
+1. the closure-capture clause (`Inv` field, preserved, and established at the call with `CallThruOK`);
+2. `Step.killVars_sub` with that clause for `callc` / `callcE`;
+3. `frozenIn` and `catchR`;
+4. `SrcCase` relaxed (`withLock`, `withElem`);
+5. the call side (`CallA`, CallMem, CallInv), with the rest of B3.
+
 The premise of the call (`CallThruOK`) narrows too (finding above): other
 arguments reach `w` only by name. A `.self` path (a borrow `&w` passed
 beside `vv`) would let the callee view inside `w`'s elements through a
