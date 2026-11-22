@@ -16,6 +16,8 @@ $ `src/sharp.nu`
     : f b ( sh_score ( nurl_argv 2 ) )
     ( nurl_print `sharp ` ) ( nurl_print ( nurl_str_float a ) )
     ( nurl_print `  blurred ` ) ( nurl_print ( nurl_str_float b ) ) ( nurl_print `\n` )
+    // both fixtures must decode, or the comparisons below prove nothing
+    ? | < a 0.0 < b 0.0 { ( nurl_print `FAIL a fixture did not decode\n` ) ^ 1 } {}
     : ~ i rc 0
     ? > a * 2.0 b { ( nurl_print `PASS the sharp frame scores well above its blurred copy\n` ) } {
         ( nurl_print `FAIL the focus measure does not separate them\n` ) = rc 1

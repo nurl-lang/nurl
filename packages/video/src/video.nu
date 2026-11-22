@@ -4,6 +4,7 @@
 //   ( vid_extract_count path count maxside outdir fallback_fps verbose )
 //                                             → !i String   frames kept
 //   ( vid_duration_s path )                   → f   seconds, -1.0 unknown
+//   ( vid_frame_rate path )                   → f   frames/s, -1.0 unknown
 //
 // A vision tool wants ordered frames; a video is the natural way to
 // shoot them. This extracts JPEG frames, numbered 000000.jpg on, into a
@@ -503,11 +504,48 @@ $ `stdlib/std/float.nu`
     ^ -1.0
 }
 
+// The video stream's average frame rate per ffprobe (avg_frame_rate, a
+// fraction like 30000/1001); -1.0 when it cannot be told.
+@ vid_frame_rate s path → f {
+    : ( Vec s ) args ( vec_new [s] )
+    ( vec_push [s] args `-v` ) ( vec_push [s] args `error` )
+    ( vec_push [s] args `-select_streams` ) ( vec_push [s] args `v:0` )
+    ( vec_push [s] args `-show_entries` ) ( vec_push [s] args `stream=avg_frame_rate` )
+    ( vec_push [s] args `-of` ) ( vec_push [s] args `default=nw=1:nk=1` )
+    ( vec_push [s] args path )
+    ?? ( process_run `ffprobe` args `` ) {
+        T o → {
+            ? == 0 ( output_exit_code o ) {
+                : String raw ( string_from ( output_stdout o ) )
+                : String t ( string_trim raw )
+                : ?i slash ( string_index_of t `/` )
+                ?? slash {
+                    T k → {
+                        : String a ( string_substr t 0 k )
+                        : String b ( string_substr t + k 1 - - ( string_len t ) k 1 )
+                        : f num ( nurl_str_to_float ( string_data a ) )
+                        : f den ( nurl_str_to_float ( string_data b ) )
+                        ? & > num 0.0 > den 0.0 { ^ / num den } {}
+                    }
+                    F _ → {
+                        : f r ( nurl_str_to_float ( string_data t ) )
+                        ? > r 0.0 { ^ r } {}
+                    }
+                }
+            } {}
+        }
+        F _e → {}
+    }
+    ^ -1.0
+}
+
 // About `count` frames spread evenly over the whole of `path`, written to
 // `outdir` as 000000.jpg on, the long side scaled down to at most
 // `maxside` pixels (0 keeps the size). An MJPEG AVI, or a video whose
 // duration ffprobe cannot tell, falls back to vid_extract at
-// `fallback_fps`. Returns the number of frames written.
+// `fallback_fps`. A short video with fewer frames than `count` gives every
+// frame it has, once: the fps filter would otherwise repeat frames to make
+// up the rate. Returns the number of frames written.
 @ vid_extract_count s path i count i maxside s outdir i fallback_fps i verbose → !i String {
     : f dur ? ( __vd_ext_is path `.avi` ) -1.0 ( vid_duration_s path )
     ? | <= count 0 <= dur 0.0 { ^ ( vid_extract path fallback_fps outdir verbose ) } {}
@@ -520,14 +558,21 @@ $ `stdlib/std/float.nu`
         }
     }
     ( __vd_clean outdir )
-    // the rate as a fraction ffmpeg evaluates: count frames in dur seconds
-    : String vf ( string_from `fps=` )
-    ( string_push_int vf count )
-    ( string_push_char vf 47 )
-    ( string_push_str vf ( nurl_str_float dur ) )
+    // the rate as a fraction ffmpeg evaluates: count frames in dur seconds,
+    // unless that is the source's own rate or more — then every frame
+    : f src ( vid_frame_rate path )
+    : b every & > src 0.0 >= # f count * src dur
+    : String vf ( string_new )
+    ? every {} {
+        ( string_push_str vf `fps=` )
+        ( string_push_int vf count )
+        ( string_push_char vf 47 )
+        ( string_push_str vf ( nurl_str_float dur ) )
+    }
     ? > maxside 0 {
         // the long side down to maxside, the other kept even (-2)
-        ( string_push_str vf `,scale='if(gte(iw,ih),min(iw,` )
+        ? > ( string_len vf ) 0 { ( string_push_char vf 44 ) } {}
+        ( string_push_str vf `scale='if(gte(iw,ih),min(iw,` )
         ( string_push_int vf maxside )
         ( string_push_str vf `),-2)':'if(gte(iw,ih),-2,min(ih,` )
         ( string_push_int vf maxside )
@@ -536,10 +581,18 @@ $ `stdlib/std/float.nu`
     ? != verbose 0 {
         ( nurl_print `video   ` ) ( nurl_print path )
         ( nurl_print `  ` ) ( nurl_print ( nurl_str_int # i dur ) )
-        ( nurl_print ` s -> ` ) ( nurl_print ( nurl_str_int count ) )
-        ( nurl_print ` frames, one every ` )
-        ( nurl_print ( nurl_str_float / ( float_round * 10.0 / dur # f count ) 10.0 ) )
-        ( nurl_print ` s (ffmpeg)\n` )
+        ? every {
+            ( nurl_print ` s -> every frame (fewer than ` )
+            ( nurl_print ( nurl_str_int count ) )
+            ( nurl_print ` in it) (ffmpeg)\n` )
+        } {
+            ( nurl_print ` s -> ` ) ( nurl_print ( nurl_str_int count ) )
+            ( nurl_print ` frames, one every ` )
+            ( nurl_print ( nurl_str_float / ( float_round * 10.0 / dur # f count ) 10.0 ) )
+            ( nurl_print ` s (ffmpeg)\n` )
+        }
     } {}
+    // nothing to filter (every frame, full size): a no-op filter
+    ? == ( string_len vf ) 0 { ( string_push_str vf `null` ) } {}
     ^ ( __vd_ffmpeg_vf path outdir ( string_data vf ) )
 }

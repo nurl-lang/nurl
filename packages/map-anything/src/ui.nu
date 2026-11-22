@@ -199,11 +199,14 @@ function pick(files) {
   if (vids.length === 1) {
     /* the length, read by the browser itself, so the hint can say how
        densely the frames will sample it */
+    /* a later pick may finish reading first: only this pick's answer counts */
+    var mine = vids[0];
     var v = document.createElement("video");
     v.preload = "metadata";
     v.onloadedmetadata = function () {
-      if (isFinite(v.duration)) videoSecs = v.duration;
       URL.revokeObjectURL(v.src);
+      if (picked.length !== 1 || picked[0] !== mine) return;
+      if (isFinite(v.duration)) videoSecs = v.duration;
       viewsHint();
     };
     v.onerror = function () { URL.revokeObjectURL(v.src); };

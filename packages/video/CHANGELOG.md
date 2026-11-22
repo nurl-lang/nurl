@@ -12,6 +12,10 @@
   second; the long side is optionally scaled down to `maxside`. An MJPEG AVI,
   or a video whose duration cannot be told, falls back to `vid_extract`.
 - `vid_duration_s path`: the length in seconds per ffprobe, -1.0 when unknown.
+- `vid_frame_rate path`: the video stream's average frame rate per ffprobe.
+  `vid_extract_count` uses it so a short video with fewer frames than asked
+  for gives each of its frames once, instead of the fps filter repeating
+  frames to make up the rate.
 
 ## [0.2.6] — 2026-11-11
 
