@@ -20,6 +20,58 @@ map-anything hill.mp4 --mask-sky   # outdoor: drop sky via skyseg.onnx
 map-anything walk/ --max-views 400 # long capture: windowed + Sim3-stitched
 ```
 
+### As a web service
+
+```
+map-anything serve --host 0.0.0.0 --port 8807 --password "$PW"
+```
+
+serves a page where photos or a video are dropped in the browser. Each upload
+becomes a job that waits its turn for the GPU; the page follows its progress
+and, once it is done, opens the cloud in the WebGL viewer or downloads it as a
+PLY. The jobs (inputs, options, log, `cloud.ply`) are kept under
+`~/.map-anything/jobs/` (`--data DIR`), so a restart loses nothing and an
+interrupted job runs again. Each job runs as `map-anything <input> -o ...`, a
+child of the server, so the card is free between jobs.
+
+| route | |
+|---|---|
+| `GET /` | the upload page |
+| `GET /view?cloud=URL` | the ply viewer |
+| `GET /api/jobs` | every job, newest first |
+| `POST /api/jobs` | `{"name": ...}` → a new job |
+| `PUT /api/jobs/:id/files/:name?offset=N` | a piece of an input file as the raw body, appended at byte N |
+| `POST /api/jobs/:id/start` | `{"max_views", "fps", "stride", "pixel_stride", "conf_pct", "window", "mask_sky"}` |
+| `GET /api/jobs/:id` | one job with its log |
+| `DELETE /api/jobs/:id` | the job and its files |
+| `GET /jobs/:id/cloud.ply` | the result |
+| `GET /healthz` | liveness (never behind the password) |
+
+Without `--password` (or `$MAP_ANYTHING_PASSWORD`) the service is open to anyone
+who can reach it: keep it on a private network then. Basic sign-in sends the
+password with every request, so off loopback it needs TLS: a TLS-terminating
+proxy in front (an ingress), or `--tls-cert FILE --tls-key FILE`.
+
+### Beyond the reference: cleaner clouds
+
+```
+map-anything walk.mp4 --align 3 --mv-check 1 --voxel auto
+```
+
+A feed-forward model's views agree closely but not exactly. Three optional
+steps (on by default in `serve`) work on what that leaves:
+
+- `--align N` — per-view Sim(3) alignment inside each window: the parallel
+  copies of a wall that the views disagree on are pulled onto each other
+  (pairs by projection, closed-form fits, N Gauss–Seidel sweeps).
+- `--mv-check N` — a pixel survives only where N other views see the same
+  surface at the same depth (`--mv-tol`, default 3 %): floaters go.
+- `--voxel M|auto` — one averaged point per M-metre cell; `auto` picks two
+  pixels' footprint at the median depth. Less noise, a fraction of the size.
+
+The reference's own masks (non-ambiguous, depth+normal edges, `--conf-pct`,
+`--mask-sky`) still run first.
+
 Up to `--window` views (default 24) the whole set runs through the
 model's global attention at once. Longer captures are reconstructed in
 overlapping windows and stitched with a closed-form Sim(3) fitted on the

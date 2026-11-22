@@ -5,6 +5,10 @@
 //                                        other codecs via ffmpeg)
 //   map-anything photos/ --view          open the browser viewer after
 //   map-anything view cloud.ply          just view an existing cloud
+//   map-anything serve --host 0.0.0.0 --password "$PW"
+//                                        the web service: upload in the
+//                                        browser, get the cloud back
+//                                        (serve.nu)
 //
 // The whole set of views runs through the model AT ONCE — MapAnything
 // is multi-view by construction (global attention over every view plus
@@ -47,6 +51,8 @@ $ `heads.nu`
 $ `geom.nu`
 $ `preproc.nu`
 $ `sky.nu`
+$ `voxel.nu`
+$ `serve.nu`
 $ `stdlib/core/slice.nu`
 
 : s MA_DEFAULT_REF `facebook/map-anything-apache`
@@ -58,7 +64,9 @@ $ `stdlib/core/slice.nu`
     ( nurl_print `map-anything - metric 3-D reconstruction from images, in pure NURL\n` )
     ( nurl_print `a port of Meta's MapAnything (github.com/facebookresearch/map-anything)\n\n` )
     ( nurl_print `usage: map-anything <images-dir | video | frames...> [options]\n` )
-    ( nurl_print `       map-anything view <cloud.ply> [--port N] [--host A] [--tls]\n\n` )
+    ( nurl_print `       map-anything view <cloud.ply> [--port N] [--host A] [--tls]\n` )
+    ( nurl_print `       map-anything serve [--host A] [--port N] [--data DIR] [--password P]\n` )
+    ( nurl_print `                          web service: upload photos/video, get the cloud\n\n` )
     ( nurl_print `options:\n` )
     ( nurl_print `  -o, --out FILE      output PLY (default cloud.ply)\n` )
     ( nurl_print `  --model REF|PATH    checkpoint (default facebook/map-anything-apache)\n` )
@@ -71,6 +79,17 @@ $ `stdlib/core/slice.nu`
     ( nurl_print `  --pixel-stride N    emit every Nth pixel in x and y (default 1)\n` )
     ( nurl_print `  --conf-pct P        drop the P% least confident pixels (default off)\n` )
     ( nurl_print `  --mask-sky          drop sky pixels via skyseg.onnx (fetched on first use)\n` )
+    ( nurl_print `  --mv-check N        keep a pixel only where N other views see the same\n` )
+    ( nurl_print `                      surface (multi-view consistency; default 0 = off)\n` )
+    ( nurl_print `  --mv-tol T          relative depth agreement for --mv-check (default 0.03;\n` )
+    ( nurl_print `                      0 = exactly equal); a window of fewer than N+1 views\n` )
+    ( nurl_print `                      asks for all its other views\n` )
+    ( nurl_print `  --align N           N sweeps of per-view Sim(3) alignment against the other\n` )
+    ( nurl_print `                      views of the window: merges the parallel copies of a\n` )
+    ( nurl_print `                      surface the views disagree on (default 0 = off)\n` )
+    ( nurl_print `  --voxel M|auto      fuse the cloud on an M-metre grid: one averaged point\n` )
+    ( nurl_print `                      per cell; auto = two pixels' footprint at the median\n` )
+    ( nurl_print `                      depth (default 0 = a point per pixel)\n` )
     ( nurl_print `  --no-mask-edges     keep depth-discontinuity edge pixels\n` )
     ( nurl_print `  --no-mask           keep even the sky/ambiguous pixels\n` )
     ( nurl_print `  --ascii             text PLY instead of binary\n` )
@@ -84,6 +103,26 @@ $ `stdlib/core/slice.nu`
 }
 
 @ __ma_streq s a s b → b { ^ == 0 ( nurl_str_cmp a b ) }
+
+// A plain non-negative decimal: digits with at most one '.', nothing else.
+// nurl_str_to_float reads anything else as 0.0, which would turn a missing
+// value (`--voxel --mask-sky`) into a silent default.
+@ __ma_is_num s a → b {
+    : ( Slice u ) bs ( slice_of_str a )
+    : i n ( slice_len [u] bs )
+    ? == n 0 { ^ F } {}
+    : ~ i dots 0
+    : ~ i digits 0
+    : ~ i k 0
+    ~ < k n {
+        : i c ( slice_byte bs k )
+        ? == c 46 { = dots + dots 1 } {
+            ? & >= c 48 <= c 57 { = digits + digits 1 } { ^ F }
+        }
+        = k + k 1
+    }
+    ^ & <= dots 1 > digits 0
+}
 
 @ __ma_is_flag s a → b {
     ? == ( nurl_str_len a ) 0 { ^ F } {}
@@ -238,6 +277,10 @@ $ `stdlib/core/slice.nu`
     i window
     i overlap
     i domask
+    i mvneed  // multi-view check: other views that must agree (0 = off)
+    f mvtol  // ...within this relative z-depth difference
+    f voxel  // fuse on a grid of this many metres (0 = every pixel)
+    i align  // view-alignment sweeps per window (0 = the heads' poses as they are)
     ( Vec String ) frames
     i bad  // 0 run, 1 error, 2 help, 3 view-subcommand
     String viewfile
@@ -263,6 +306,10 @@ $ `stdlib/core/slice.nu`
     : ~ i window 24
     : ~ i overlap 6
     : ~ i domask 1
+    : ~ i mvneed 0
+    : ~ f mvtol 0.03
+    : ~ f voxel 0.0
+    : ~ i align 0
     : ~ i bad 0
     : ~ s viewfile ``
     : ~ s vhost `127.0.0.1`
@@ -302,6 +349,28 @@ $ `stdlib/core/slice.nu`
         ? & ( __ma_streq a `--fps` ) < + i0 1 argc { = fps ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--pixel-stride` ) < + i0 1 argc { = pstride ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--conf-pct` ) < + i0 1 argc { = confpct ( nurl_str_to_float ( nurl_argv + i0 1 ) ) = take 1 } {}
+        ? & ( __ma_streq a `--mv-check` ) < + i0 1 argc { = mvneed ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
+        ? & ( __ma_streq a `--mv-tol` ) < + i0 1 argc {
+            ? ( __ma_is_num ( nurl_argv + i0 1 ) ) { = mvtol ( nurl_str_to_float ( nurl_argv + i0 1 ) ) } {
+                ( nurl_print `map-anything: --mv-tol wants a non-negative number, got ` )
+                ( nurl_print ( nurl_argv + i0 1 ) ) ( nurl_print `\n` )
+                = bad 1
+            }
+            = take 1
+        } {}
+        ? & ( __ma_streq a `--voxel` ) < + i0 1 argc {
+            // `auto`: the pixel footprint at the median depth (see below)
+            : s vv ( nurl_argv + i0 1 )
+            ? ( __ma_streq vv `auto` ) { = voxel -1.0 } {
+                ? ( __ma_is_num vv ) { = voxel ( nurl_str_to_float vv ) } {
+                    ( nurl_print `map-anything: --voxel wants metres or auto, got ` )
+                    ( nurl_print vv ) ( nurl_print `\n` )
+                    = bad 1
+                }
+            }
+            = take 1
+        } {}
+        ? & ( __ma_streq a `--align` ) < + i0 1 argc { = align ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--port` ) < + i0 1 argc { = port ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & | ( __ma_streq a `--host` ) ( __ma_streq a `--addr` ) < + i0 1 argc { = vhost ( nurl_argv + i0 1 ) = take 1 } {}
         ? == take 1 { = i0 + i0 1 } {
@@ -386,12 +455,13 @@ $ `stdlib/core/slice.nu`
     } {}
     ? & == bad 0 == ( vec_len [String] fr ) 0 { = bad 2 } {}
     ^ @ Opts { ( string_from model ) ( string_from out ) ( string_from video ) view port ascii verbose maxviews stride fps
-        pstride confpct maskedges masksky window overlap domask fr bad ( string_from viewfile ) ( string_from vhost ) vtls }
+        pstride confpct maskedges masksky window overlap domask mvneed mvtol voxel align fr bad ( string_from viewfile ) ( string_from vhost ) vtls }
 }
 
 // ── main ────────────────────────────────────────────────────────────
 
 @ main → i {
+    ? & > ( nurl_argc ) 1 ( __ma_streq ( nurl_argv 1 ) `serve` ) { ^ ( mas_main ) } {}
     : Opts o ( __ma_parse )
     ? == . o bad 2 {
         ( __ma_usage )
@@ -592,6 +662,33 @@ $ `stdlib/core/slice.nu`
     : ( Slice f ) pair_x ( slice_from_vec [f] pair_x__v )
     : ( Vec f ) pair_y__v ( vec_zeroed [f] * 3 * ov hw )
     : ( Slice f ) pair_y ( slice_from_vec [f] pair_y__v )
+    // the window's views, kept until every view of it is known, so the
+    // multi-view check can test each against all the others
+    : ( Vec f ) wpts__v ( vec_zeroed [f] * 3 * win hw )
+    : ( Slice f ) wpts ( slice_from_vec [f] wpts__v )
+    // Only what an enabled step reads is filled: the depths and the
+    // cameras for --align, --mv-check and --voxel auto, the camera-frame
+    // points for --align alone (the largest buffer).
+    : b geo | | > . o align 0 > . o mvneed 0 < . o voxel 0.0
+    : ( Vec f ) wdz__v ( vec_zeroed [f] ? geo * win hw 0 )
+    : ( Slice f ) wdz ( slice_from_vec [f] wdz__v )
+    : ( Vec u ) wmask__v ( vec_zeroed [u] * win hw )
+    : ( Slice u ) wmask ( slice_from_vec [u] wmask__v )
+    : ( Vec f ) wposes__v ( vec_zeroed [f] * 7 win )
+    : ( Slice f ) wposes ( slice_from_vec [f] wposes__v )
+    : ( Vec f ) wcam__v ( vec_zeroed [f] ? > . o align 0 * 3 * win hw 0 )
+    : ( Slice f ) wcam ( slice_from_vec [f] wcam__v )
+    : ( Vec f ) wsims__v ( vec_zeroed [f] * 13 win )
+    : ( Slice f ) wsims ( slice_from_vec [f] wsims__v )
+    : ~ i aligned 0
+    : ( Vec f ) wks__v ( vec_zeroed [f] * 4 win )
+    : ( Slice f ) wks ( slice_from_vec [f] wks__v )
+    : ( Vec f ) k4__v ( vec_zeroed [f] 4 )
+    : ( Slice f ) k4 ( slice_from_vec [f] k4__v )
+    : ~ i mvdropped 0
+    : ~ f vox . o voxel  // < 0: auto, resolved once window 0 is known
+    // --voxel: each point accumulates into its cell as it is emitted
+    : ~ VxGrid vg ( vx_new ? > vox 0.0 vox 1.0 )
     : ( Vec f ) xf__v ( vec_zeroed [f] 13 )
     : ( Slice f ) xf ( slice_from_vec [f] xf__v )
     ( slice_put [f] xf 0 1.0 )
@@ -692,7 +789,105 @@ $ `stdlib/core/slice.nu`
             ? & != . o maskedges 0 != . o domask 0 {
                 ( gm_edge_mask pts depthz h w mask )
             } {}
+            // into the window's slot v
+            : i wb * v hw
+            = j 0
+            ~ < j hw {
+                ( slice_put [f] wpts * + wb j 3 ( slice_at [f] pts * j 3 ) )
+                ( slice_put [f] wpts + * + wb j 3 1 ( slice_at [f] pts + * j 3 1 ) )
+                ( slice_put [f] wpts + * + wb j 3 2 ( slice_at [f] pts + * j 3 2 ) )
+                ? geo { ( slice_put [f] wdz + wb j ( slice_at [f] depthz j ) ) } {}
+                // the camera-frame point, which alignment moves rigidly
+                ? > . o align 0 {
+                    : f dsc * scale ( slice_at [f] depth_h j )
+                    ( slice_put [f] wcam * + wb j 3 * dsc ( slice_at [f] rays_h j ) )
+                    ( slice_put [f] wcam + * + wb j 3 1 * dsc ( slice_at [f] rays_h + hw j ) )
+                    ( slice_put [f] wcam + * + wb j 3 2 * dsc ( slice_at [f] rays_h + * 2 hw j ) )
+                } {}
+                ( slice_put [u] wmask + wb j ( slice_at [u] mask j ) )
+                = j + j 1
+            }
+            ? geo {
+                = j 0
+                ~ < j 7 { ( slice_put [f] wposes + * v 7 j ( slice_at [f] pose j ) ) = j + j 1 }
+                ( gm_fit_pinhole rays_h h w k4 )
+                = j 0
+                ~ < j 4 { ( slice_put [f] wks + * v 4 j ( slice_at [f] k4 j ) ) = j + j 1 }
+            } {}
+            = v + v 1
+        }
 
+        // --voxel auto: twice the spacing of neighbouring pixels at the
+        // median depth of the first window — coarse enough to merge the
+        // copies the other views add
+        ? & == windex 0 < vox 0.0 {
+            // a sample of the valid depths; the stride must not divide the
+            // width, or it would see the same few columns in every row
+            : ~ i zst 7
+            ~ == 0 % w zst { = zst + zst 2 }
+            : ( Vec f ) zs ( vec_new [f] )
+            : ~ i zk 0
+            ~ < zk * count hw {
+                ? != # i ( slice_at [u] wmask zk ) 0 { ( vec_push [f] zs ( slice_at [f] wdz zk ) ) } {}
+                = zk + zk zst
+            }
+            // too few valid pixels to land on the lattice: take them all
+            ? == ( vec_len [f] zs ) 0 {
+                = zk 0
+                ~ < zk * count hw {
+                    ? != # i ( slice_at [u] wmask zk ) 0 { ( vec_push [f] zs ( slice_at [f] wdz zk ) ) } {}
+                    = zk + zk 1
+                }
+            } {}
+            ? == ( vec_len [f] zs ) 0 {
+                // no depth anywhere in the window: nothing to size a grid by
+                = vox 0.0
+                ? != . o verbose 0 { ( nurl_print `voxel   auto: no valid depth in the first window, fusion off\n` ) } {}
+            } {
+                ( sort_by [f] zs \ f a f b → i { ^ ? < a b -1 ? > a b 1 0 } )
+                : f zmed ?? ( vec_get [f] zs / ( vec_len [f] zs ) 2 ) { T z → z F → 1.0 }
+                : f fx0 ( slice_at [f] wks 0 )
+                // two pixels: a phone still orbits the result, and what one
+                // view resolves on its own survives
+                = vox / * 2.0 zmed ? > fx0 1.0 fx0 1.0
+                = vg ( vx_new vox )
+                ? != . o verbose 0 {
+                    ( nurl_print `voxel   auto: ` )
+                    ( nurl_print ( nurl_str_float * vox 1000.0 ) )
+                    ( nurl_print ` mm (median depth ` )
+                    ( nurl_print ( nurl_str_float zmed ) )
+                    ( nurl_print ` m)\n` )
+                } {}
+            }
+        } {}
+        ? geo { ( gm_sims_from_poses wposes scale count wsims ) } {}
+        ? > . o align 0 {
+            = aligned + aligned ( gm_align_views wcam wpts wdz wmask wsims wks count h w . o align 0.08 )
+        } {}
+        ? > . o mvneed 0 {
+            = mvdropped + mvdropped ( gm_mv_check wpts wdz wmask wsims wks count h w . o mvneed . o mvtol )
+        } {}
+
+        = v 0
+        ~ < v count {
+            : i wb * v hw
+            : ~ i j 0
+            ~ < j hw {
+                ( slice_put [f] pts * j 3 ( slice_at [f] wpts * + wb j 3 ) )
+                ( slice_put [f] pts + * j 3 1 ( slice_at [f] wpts + * + wb j 3 1 ) )
+                ( slice_put [f] pts + * j 3 2 ( slice_at [f] wpts + * + wb j 3 2 ) )
+                ( slice_put [u] mask j ( slice_at [u] wmask + wb j ) )
+                = j + j 1
+            }
+
+            // From here on `mask` is the CONSISTENCY-FILTERED mask, and both
+            // the stitch pairs below and the tail saved for the next window
+            // use it, deliberately: a pixel the check rejected is one the
+            // views disagree on, the worst kind of evidence for a Sim(3)
+            // fit. With the default tolerance the overlap keeps ~85 % of its
+            // pixels; should too few survive, the fit fails, says so, and the
+            // previous transform carries on (the coordinates are the aligned
+            // ones either way).
             // overlap views: collect exact pixel pairs (this window's
             // LOCAL point, previous window's GLOBAL point)
             ? & > windex 0 < v ov {
@@ -729,8 +924,14 @@ $ `stdlib/core/slice.nu`
                     ~ < px w {
                         : i idx + * y w px
                         ? != # i ( slice_at [u] mask idx ) 0 {
-                            ( ply_vertex ply ( slice_at [f] pts * idx 3 ) ( slice_at [f] pts + * idx 3 1 ) ( slice_at [f] pts + * idx 3 2 )
-                            ( __ma_u8 ( slice_at [f] rgb idx ) ) ( __ma_u8 ( slice_at [f] rgb + hw idx ) ) ( __ma_u8 ( slice_at [f] rgb + * 2 hw idx ) ) )
+                            : i cr ( __ma_u8 ( slice_at [f] rgb idx ) )
+                            : i cg ( __ma_u8 ( slice_at [f] rgb + hw idx ) )
+                            : i cb ( __ma_u8 ( slice_at [f] rgb + * 2 hw idx ) )
+                            ? > vox 0.0 {
+                                ( vx_add vg ( slice_at [f] pts * idx 3 ) ( slice_at [f] pts + * idx 3 1 ) ( slice_at [f] pts + * idx 3 2 ) cr cg cb )
+                            } {
+                                ( ply_vertex ply ( slice_at [f] pts * idx 3 ) ( slice_at [f] pts + * idx 3 1 ) ( slice_at [f] pts + * idx 3 2 ) cr cg cb )
+                            }
                             = total + total 1
                         } {}
                         = px + px . o pstride
@@ -768,6 +969,24 @@ $ `stdlib/core/slice.nu`
             = windex + windex 1
         }
     }
+    ? > vox 0.0 {
+        : i fused ( vx_write vg ply )
+        ? > . vg skipped 0 {
+            ( nurl_print `voxel   skipped ` )
+            ( nurl_print ( nurl_str_int . vg skipped ) )
+            ( nurl_print ` points whose cell index is out of range\n` )
+        } {}
+        ? != . o verbose 0 {
+            ( nurl_print `voxel   ` )
+            ( nurl_print ( nurl_str_float vox ) )
+            ( nurl_print ` m grid: ` )
+            ( nurl_print ( nurl_str_int total ) )
+            ( nurl_print ` points fused into ` )
+            ( nurl_print ( nurl_str_int fused ) )
+            ( nurl_print `\n` )
+        } {}
+        = total fused
+    } {}
     ? ( ply_finish ply ) {} {
         ( nurl_print `map-anything: cannot finish the PLY\n` )
         ^ 1
@@ -778,6 +997,16 @@ $ `stdlib/core/slice.nu`
         ( nurl_print ` (` )
         ( nurl_print ( nurl_str_int total ) )
         ( nurl_print ` points)\n` )
+        ? > . o align 0 {
+            ( nurl_print `align   ` )
+            ( nurl_print ( nurl_str_int aligned ) )
+            ( nurl_print ` view corrections applied\n` )
+        } {}
+        ? > . o mvneed 0 {
+            ( nurl_print `mvcheck dropped ` )
+            ( nurl_print ( nurl_str_int mvdropped ) )
+            ( nurl_print ` pixels with too few agreeing views\n` )
+        } {}
     } {}
     ? != . o view 0 {
         ^ ( vw_serve ( string_data . o out ) ( string_data . o vhost ) . o port `` 0 . o vtls )
