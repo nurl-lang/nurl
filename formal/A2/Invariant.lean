@@ -764,9 +764,50 @@ def Stmt.spine : Stmt → List Var
   | .block s => s.spine
   | _ => []
 
+/-- AGORA-937 (3d, route U, PR B2): the names a statement may kill. A
+    `frozen` frame's list is no kill site: what it freezes is lent out inside,
+    and a call frame's list holds every older binding (`zOf`). -/
+def Stmt.killVars : Stmt → List Var
+  | .skip => []
+  | .seq a b => a.killVars ++ b.killVars
+  | .letv x r s => x :: r.vars ++ s.killVars
+  | .letcall x _ args s => x :: args ++ s.killVars
+  | .assign x r => x :: r.vars
+  | .ite c a b => c.vars ++ a.killVars ++ b.killVars
+  | .while c s => c.vars ++ s.killVars
+  | .push x y => [x, y]
+  | .free x => [x]
+  | .scope x s => x :: s.killVars
+  | .rbind p s => p :: s.killVars
+  | .frozen _ s => s.killVars
+  | .panic => []
+  | .letrec x _ s => x :: s.killVars
+  | .catchR x _ s => x :: s.killVars
+  | .unpair y x z s => y :: x :: z :: s.killVars
+  | .callc x c _ _ zs s => x :: c :: zs ++ s.killVars
+  | .letd x _ r s => x :: r.vars ++ s.killVars
+  | .scopeD x _ s => x :: s.killVars
+  | .edit _ x op => x :: op.vars
+  | .withLock a x s => x :: a :: s.killVars
+  | .scopeL _ _ x s => x :: s.killVars
+  | .insert x i y => x :: y :: i.vars
+  | .withElem v i x s => x :: v :: i.vars ++ s.killVars
+  | .callcE x c _ zs s => x :: c :: zs ++ s.killVars
+  | .block s => s.killVars
+  | .exit _ => []
+  | .loop s => s.killVars
+  | .takeB x i y s => y :: x :: i.vars ++ s.killVars
+
 /-- A running scope's binding is a variable of the statement. -/
 theorem Stmt.spine_sub_vars (s : Stmt) : ∀ v ∈ s.spine, v ∈ s.vars := by
   induction s <;> intro v h <;> simp only [Stmt.spine, Stmt.vars, List.mem_cons, List.mem_append] at h ⊢
+  all_goals first
+    | (rcases h with h | h <;> simp_all)
+    | simp_all
+
+/-- ... and a name the statement may kill. -/
+theorem Stmt.spine_sub_killVars (s : Stmt) : ∀ v ∈ s.spine, v ∈ s.killVars := by
+  induction s <;> intro v h <;> simp only [Stmt.spine, Stmt.killVars, List.mem_cons, List.mem_append] at h ⊢
   all_goals first
     | (rcases h with h | h <;> simp_all)
     | simp_all
@@ -934,6 +975,24 @@ theorem ExitAt.vars {s e : Stmt} {n : Nat} (h : ExitAt s n e) : ∀ v ∈ e.vars
   | scopeD _ ih =>
     intro v hv
     simp only [Stmt.vars, List.mem_cons] at hv ⊢
+    rcases hv with h | h
+    · exact Or.inl h
+    · exact Or.inr (ih v h)
+  | block _ ih => exact ih
+
+theorem ExitAt.killVars {s e : Stmt} {n : Nat} (h : ExitAt s n e) : ∀ v ∈ e.killVars, v ∈ s.killVars := by
+  induction h with
+  | exit => intro v hv; simp [Stmt.killVars] at hv
+  | seq _ ih => intro v hv; exact List.mem_append_left _ (ih v hv)
+  | scope _ ih =>
+    intro v hv
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+    rcases hv with h | h
+    · exact Or.inl h
+    · exact Or.inr (ih v h)
+  | scopeD _ ih =>
+    intro v hv
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
     rcases hv with h | h
     · exact Or.inl h
     · exact Or.inr (ih v h)
@@ -1633,7 +1692,7 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
   nvF       : ∀ v ∈ F, v < m.nv
   /-- AGORA-937 (3d, route U, PR B2): a held anchor's root is none of the
       statement's variables (`AnchoredS`). -/
-  anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → AnchoredS Γ E F s.vars
+  anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → AnchoredS Γ E F s.killVars
   spineNd   : s.spine.Nodup
   spineDom  : ∀ v ∈ s.spine, ∃ E, Γ v = some E
   catchOK   : CatchOK m s
