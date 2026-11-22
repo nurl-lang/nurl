@@ -701,6 +701,28 @@ statement's variables does it:
 So `ThruOK` needs no new premise. The `Inv` clauses carry it, and the
 call establishes them (`CallInv`).
 
+**PR A (done): the memory lemmas allow held anchors.** Where the statement
+runs, the anchors stay strict (`Anchored`, `RootbAnchF`: `Inv.anch`,
+`StmtT.rbind`, `WrapCond`, `StmtT.catchR`), so no rule changes. The lemmas
+that `MInv` rests on assume the relaxed `RootbAnch` (`AnchoredH`: in `F`, or
+a `HeldAnch`, a lent `Vec`'s held `.view`/`.self`, not on its path):
+- `rootb_anchor` reads a lent slot's node through a dependency that is no held
+  anchor (`bor_lands_anch`), so the frozen owner it finds is unchanged;
+- every kill a memory lemma makes spares the held anchors at its root
+  (`HeldSpared`): `killE_rootb`, `MInv.change`, `kill_pin`, `kill_more`,
+  `killNames_more`/`_mixed`, `killHv_more`, `edit_dropE`/`_grow`/`_dropV`/
+  `_growV`;
+- a named kill takes `NoHeld` (no held anchor at the binding) and a change
+  through a borrow `ThruSpared` (for `editBV`, `NoHeld` at its roots);
+- `Preservation`, `Progress`, `CallMem`, `CallInv` and `EnvHand` supply them
+  from the strict anchors at the leaf and `x ∉ F` (`NoHeld.of_anchF`,
+  `ThruSpared.of_anchF`, `RootbAnchF.of_rootb`).
+
+PR B relaxes `Inv.anch` to `HeldAnch` at a root that is no variable of the
+statement and is reached by its `Vec` borrows only at `.inner`. It supplies
+`NoHeld`/`ThruSpared` from those clauses, and makes the call that sets them
+up (`zN`, `CallThruOK`, the exit kill, `CallInv`).
+
 The premise of the call (`CallThruOK`) narrows too (finding above): other
 arguments reach `w` only by name. A `.self` path (a borrow `&w` passed
 beside `vv`) would let the callee view inside `w`'s elements through a

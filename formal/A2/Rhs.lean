@@ -2508,7 +2508,8 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
     {y : Var} {E : Entry} {v : Val} (hy : Γ y = some E) (hl : E.live = true) (hos : E.mode.ownSlot = true)
     (hyF : y ∉ F)
-    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ y) (hv : m.st y = some ⟨true, some v⟩)
+    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ y)
+    (hhs : HeldSpared Γ .replace false y) (hv : m.st y = some ⟨true, some v⟩)
     (hds : DtorSafe Γ .replace false y) :
     RhsPost m (m.set y ⟨true, none⟩) Γ (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) F ∧
     RhsOut (m.set y ⟨true, none⟩) (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
@@ -2525,7 +2526,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       · cases h
       · exact h) (fun _ _ => rfl) (Nat.le_refl _)
   have hinv : MInv (m.set y ⟨true, none⟩) (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) := by
-    refine hi.change hanch hy hyF (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb)
+    refine hi.change hanch hy hyF (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb) hhs
       hrb hst hheap rfl
       (fun k hk => by cases k <;> simp [Eff.kills] at hk) ?_ hds (fun h => by cases h) (by simp)
       (fun h => absurd rfl h) (PkgKeep.noval hi hst (by simp))
@@ -2548,7 +2549,7 @@ theorem rhs_move' {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   · intro p Ep hp hpm
     have hpy : p ≠ y := fun h => by subst h; rw [hy] at hp; cases hp; exact hrb hpm
     simp only [setE, upd_ne _ _ hpy, kill, hp, Option.map_some]
-    rw [killE_rootb hanch hyF _ _ (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb) hp hpm]
+    rw [killE_rootb hanch hyF _ _ (fun p E hp hpm d hd hb _ => hmn p E hp hpm d hd hb) hhs hp hpm]
   · intro x
     by_cases hxy : x = y
     · subst hxy; simp [setE, hy]
@@ -2595,12 +2596,13 @@ theorem rhs_move {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
     {y : Var} {E : Entry} {v : Val} (hy : Γ y = some E) (hl : E.live = true) (hm : E.mode = .own)
     (hyF : y ∉ F)
-    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ y) (hv : m.st y = some ⟨true, some v⟩)
+    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none → d.root ≠ y)
+    (hhs : HeldSpared Γ .replace false y) (hv : m.st y = some ⟨true, some v⟩)
     (hds : DtorSafe Γ .replace false y) :
     RhsPost m (m.set y ⟨true, none⟩) Γ (setE (kill .replace false y Γ) y { E with live := false, dtor := false }) F ∧
     RhsOut (m.set y ⟨true, none⟩) (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
       ⟨E.ty, .own, true, [], E.held, false, false, false, false⟩ v true :=
-  rhs_move' hi hanch hy hl (by rw [hm]; rfl) hyF hmn hv hds
+  rhs_move' hi hanch hy hl (by rw [hm]; rfl) hyF hmn hhs hv hds
 
 theorem kill_eq_upd {Γ : Ctx} {y : Var} {E : Entry} (hy : Γ y = some E) (e : Eff) (hv : Bool) :
     kill e hv y Γ = upd (kill e hv y Γ) y (some (killE e hv y E)) := by
@@ -2909,7 +2911,7 @@ theorem MInv.perm {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : 
   have hviews : ∀ H : List Dep, H = Ex.held → (∀ dep ∈ H, dep.root ≠ x → VKeep m m' dep) →
       ViewsOK m (.vec t) (.node t c d es) H → ViewsOK m' (.vec t) (.node t c d es') H :=
     fun H _ hk hv => hv.keep_except hT hsfT (fun s w h => h.perm hp) hk ⟨_, hm'x⟩
-  have h := hi.change (e := .none) (hv := false) (ox := some Ex) hanch hx hxF
+  have h := hi.change (e := .none) (hv := false) (ox := some Ex) hanch hx hxF (hhs := HeldSpared.of_kills _ rfl rfl)
     (fun _ _ _ _ _ _ _ hk => by simp [Eff.kills] at hk) hnrb hst (hi.heap.perm hT hp) rfl
     (fun k _ => ⟨hev.perm_vkeep hp k, hev.perm_hkeep hp k hshN⟩) ?_ (DtorSafe.none _ _ _)
     (fun h => by cases h) (fun h => by cases h)
@@ -2995,7 +2997,7 @@ theorem out_views_pkgFree {m m1 : Mem} {Γ Γ1 : Ctx} (hi : MInv m Γ) {y : Var}
 theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F)
     {y : Var} {E : Entry} {t : Ty} (hy : Γ y = some E) (hl : E.live = true) (hty : E.ty = .vec t)
-    (hcan : canDo E.mode .drop) (hyF : y ∉ F)
+    (hcan : canDo E.mode .drop) (hyF : y ∉ F) (hhs : ∀ hv, HeldSpared Γ .drop hv y)
     {t' : Ty} {c d : Nat} {es : List Val} {e : Val}
     (hT : m.st y = some ⟨true, some (.node t' c d (es ++ [e]))⟩) (hds : DtorSafe Γ .drop t.holdsView y) :
     RhsPost m (m.set y ⟨true, some (.node t' c d es)⟩) Γ (kill .drop t.holdsView y Γ) F ∧
@@ -3079,7 +3081,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       (hst _ hne)).vkeep
   have hinv : MInv m1 (kill .drop t'.holdsView y Γ) := by
     rw [kill_eq_upd hy]
-    refine hi.change hanch hy hyF popMn (by rw [hm]; simp) hst hheap rfl ?_ ?_ hds (fun h => by cases h) (by simp)
+    refine hi.change hanch hy hyF popMn (hhs _) (by rw [hm]; simp) hst hheap rfl ?_ ?_ hds (fun h => by cases h) (by simp)
       (fun _ Ex' hx' hl0 hh0 _ => by
         simp only [Option.some.injEq] at hx'; subst hx'
         rw [killE_nil (root_vdeps (by rw [hm]; rfl) hh0)]; exact ⟨hl0, hh0⟩)
@@ -3179,7 +3181,7 @@ theorem rhs_pop {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     · rw [hst x hxy]
   · intro p Ep hp hpm
     simp only [kill, hp, Option.map_some]
-    rw [killE_rootb hanch hyF _ _ popMn hp hpm]
+    rw [killE_rootb hanch hyF _ _ popMn (hhs _) hp hpm]
   · have hwe : WFv t' e := hwes e hemem
     have hpf : ∀ E' : Entry, (E'.mode.ownSlot = true ∨ E'.path = E'.held) → E'.held = E.held →
         ∀ i, PkgNames (m.set y ⟨true, some (.node t' c d es)⟩) (kill .drop t'.holdsView y Γ) E' e i →
