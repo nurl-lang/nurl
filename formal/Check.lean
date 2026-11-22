@@ -689,6 +689,10 @@ import A3
 #print axioms A2.RSetup.hits_subE_region
 #print axioms A2.RSetup.canon_kill_region
 #print axioms A2.RSetup.dtorSafe_region
+-- (AGORA-937 3d): the rename places a change through a region whose argument views real memory
+#print axioms A2.RSetup.canon_killNames_region
+#print axioms A2.RSetup.editB_ren_facts_thru
+#print axioms A2.RSetup.StmtT.ren
 #print axioms A2.RSetup.liftE_rootb_dep
 -- (AGORA-937 3d groundwork): the call's lift is precise (σ: the argument's own memory deps and
 -- each root by its handle) and composes kinds; deriving commutes with it

@@ -4334,7 +4334,7 @@ theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
     ⟨Er, hEr, hErl, hErt, hErm, hErp, hErh, hEr0⟩, hio⟩ := h.fnok
   have hΔd : ∀ v E, Δa v = some E → E.dtor = false := fun v E h => (hΔf v E h).1
   obtain ⟨hren, habΔ⟩ := RSetup.StmtT.ren h.sOK h.prog hbody hsrc h.sig_abs (sigCtx_wf fn h.fnok.2.1) (sigCtx_names fn) (sigCtx_freshOK fn)
-    h.thru (fun v hv => callS_isReg_lt (h.fnok.2.2.1 v hv))
+    (fun ht => Or.inl (h.thru ht)) (fun v hv => callS_isReg_lt (h.fnok.2.2.1 v hv))
   have hdt := StmtT.domTy hbody hsrc
   have hErv : ∀ d0 ∈ Er.vdeps, lendable fn d0.root ∨ fn.params.length ≤ d0.root := by
     intro d0 hd0
