@@ -15,7 +15,9 @@
   the first moving video stream (`-map 0:V:0`, never an attached cover
   picture). The long side is optionally scaled down to `maxside`. An MJPEG AVI,
   or a video whose duration cannot be told, falls back to `vid_extract`.
-- `vid_duration_s path`: the length in seconds per ffprobe, -1.0 when unknown.
+- `vid_duration_s path`: the length in seconds per ffprobe — the first moving
+  video stream's own duration (a container's can be a longer audio track's),
+  else the container's — -1.0 when unknown.
 
 ## [0.2.6] — 2026-11-11
 

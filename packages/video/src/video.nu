@@ -483,12 +483,12 @@ $ `stdlib/std/float.nu`
 // equal bins, the first frame of each bin kept — one frame every 25 s
 // works as well as ten a second, and no frame is ever repeated.
 
-// The duration of `path` in seconds per ffprobe; -1.0 when it cannot be
-// told (no ffprobe on PATH, or a container without one).
-@ vid_duration_s s path → f {
+// One ffprobe number (a duration in seconds), or -1.0.
+@ __vd_probe_secs s path s stream s what → f {
     : ( Vec s ) args ( vec_new [s] )
     ( vec_push [s] args `-v` ) ( vec_push [s] args `error` )
-    ( vec_push [s] args `-show_entries` ) ( vec_push [s] args `format=duration` )
+    ? > ( nurl_str_len stream ) 0 { ( vec_push [s] args `-select_streams` ) ( vec_push [s] args stream ) } {}
+    ( vec_push [s] args `-show_entries` ) ( vec_push [s] args what )
     ( vec_push [s] args `-of` ) ( vec_push [s] args `default=nw=1:nk=1` )
     ( vec_push [s] args path )
     ?? ( process_run `ffprobe` args `` ) {
@@ -496,6 +496,7 @@ $ `stdlib/std/float.nu`
             ? == 0 ( output_exit_code o ) {
                 : String raw ( string_from ( output_stdout o ) )
                 : String t ( string_trim raw )
+                // "N/A" and an empty answer both read as no number
                 ? > ( string_len t ) 0 {
                     : f d ( nurl_str_to_float ( string_data t ) )
                     ? > d 0.0 { ^ d } {}
@@ -505,6 +506,16 @@ $ `stdlib/std/float.nu`
         F _e → {}
     }
     ^ -1.0
+}
+
+// The duration of the video in seconds per ffprobe: the first MOVING video
+// stream's own (the one vid_extract_count decodes — a container's duration
+// can be a longer audio track's), else the container's when the stream
+// does not say (often so in MKV); -1.0 when neither can be told.
+@ vid_duration_s s path → f {
+    : f v ( __vd_probe_secs path `V:0` `stream=duration` )
+    ? > v 0.0 { ^ v } {}
+    ^ ( __vd_probe_secs path `` `format=duration` )
 }
 
 // About `count` frames spread evenly over the whole of `path`, written to
