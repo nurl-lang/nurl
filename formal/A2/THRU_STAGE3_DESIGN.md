@@ -538,8 +538,29 @@ The premises are what 3d's call rule will ask:
 - a lent argument reaches `r` only at a view or its handle;
 - no frame binding is hit (the call's entry kill).
 
-What is left is wiring this into `editB_ren_facts` in place of
-`σ_nil_of_R`, then `CallT`'s premise, the exit kill and the witness.
+*Done: the rename places it.*
+- `RSetup.ThruReady` collects the premises above, plus "the call freezes
+  nothing" (`Rf = []`, so a non-fresh borrow's lifted path, which adds
+  `S.A`, adds only names).
+- `canon_kill_region_all` / `canon_killNames_region`: the callee's changes
+  inside its regions' elements are the caller's on every root they stand
+  for. Several roots of one region kill the same bindings; kills commute
+  and are idempotent (`killNames_congr`).
+- `mem_memDeps_subE_liftE_bor`: what a lifted borrow's path reaches in
+  memory, a region's standing for its roots, composed.
+- `editB_ren_facts_thru` / `editB_ren_thru`: a change through a region
+  whose argument views real memory, where the call places it. `ThruOKR`
+  at each root holds by `dtorSafe_region`. The post-context is weaker than
+  the callee's placed one: exact on regions standing for roots, a
+  weakening on regions standing for nothing.
+- `StmtT.ren` now takes `s.Thru P → S.ThruOrReady P s`: the call passes no
+  views (`S.R = []`), or it is `ThruReady` and the statement calls no
+  through-changing function. `editB` and `takeB` place a change either
+  way. `editBV`/`takeBV` and the lift ask only that the call freeze
+  nothing.
+
+What is left: `CallT`'s premise, so that a call gives `ThruReady`, then the
+exit kill and the witness.
 
 ### 3d groundwork: frozen roots split from region-reached ones
 
