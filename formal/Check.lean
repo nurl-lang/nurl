@@ -693,6 +693,9 @@ import A3
 #print axioms A2.RSetup.canon_killNames_region
 #print axioms A2.RSetup.editB_ren_facts_thru
 #print axioms A2.RSetup.StmtT.ren
+-- (AGORA-937 3d, route F): a kill that ends no lent parameter keeps the invariant, frozen root or not
+#print axioms A2.MInv.kill_norootb
+#print axioms A2.MInv.killNames_norootb
 #print axioms A2.RSetup.liftE_rootb_dep
 -- (AGORA-937 3d groundwork): the call's lift is precise (σ: the argument's own memory deps and
 -- each root by its handle) and composes kinds; deriving commutes with it
