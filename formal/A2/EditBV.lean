@@ -897,7 +897,7 @@ theorem MInv.editBV_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) 
     (hfr : FreshOK Γ1)
     (hanch : RootbAnch Γ1 F) {x : Var} {op : Edit} {Ex : Entry} {t : Ty}
     (hx : Γ1 x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
-    (hthru : ThruOK Γ1 F op Ex.ty Ex.path) (hnoV : ∀ d ∈ memDeps Ex.path, NoHeld Γ1 d.root) {D : List Dep} (hV : ThruV Γ1 op Ex.ty Ex.path D)
+    (hthru : ThruOK Γ1 F op Ex.ty Ex.path) (hnoV : NoHeldV Γ1 Ex.path) {D : List Dep} (hV : ThruV Γ1 op Ex.ty Ex.path D)
     (hDn : ∀ d ∈ D, d.kind.isName = false)
     (hDr : ∀ r ∈ roots D, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
     {dep : Dep} (hdep : dep ∈ memDeps Ex.path)
@@ -952,7 +952,7 @@ theorem MInv.editBV_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) 
     rw [hEr] at h0; cases h0; rw [hm0]; intro h; rw [h] at hos; cases hos
   have h1 := hown.killHv_more hanch1 _ (fun k hk => ⟨(thruKills_ok hthru k hk).1, (thruKills_ok hthru k hk).2, by
       obtain ⟨d0, hd0, rfl⟩ := mem_thruKills.mp hk
-      exact ((HeldSpared.of_none (hnoV d0 hd0) _ _).of_kill _ _ _).of_holdOn hnrb⟩)
+      exact ((HeldSpared.of_thru hthru hnoV hd0).of_kill _ _ _).of_holdOn hnrb⟩)
   rw [killHv_holdOn _ _ _ hLD, killHv_absorb hk0] at h1
   -- the other roots hold `D` too
   have hrs : ∀ v ∈ (roots (memDeps Ex.path)).filter (· != dep.root), ∀ E,
@@ -1035,7 +1035,7 @@ theorem MInv.editBV_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) 
 theorem MInv.editBV_fin {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hanch : RootbAnch Γ1 F) {x : Var} {op : Edit} {Ex : Entry} {t : Ty} (hx : Γ1 x = some Ex)
     (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
-    (hthru : ThruOK Γ1 F op Ex.ty Ex.path) (hnoV : ∀ d ∈ memDeps Ex.path, NoHeld Γ1 d.root) {D : List Dep} (hV : ThruV Γ1 op Ex.ty Ex.path D)
+    (hthru : ThruOK Γ1 F op Ex.ty Ex.path) (hnoV : NoHeldV Γ1 Ex.path) {D : List Dep} (hV : ThruV Γ1 op Ex.ty Ex.path D)
     (hDn : ∀ d ∈ D, d.kind.isName = false)
     (hDr : ∀ r ∈ roots D, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
     {dep : Dep} (hdep : dep ∈ memDeps Ex.path) {T n0 : Val} {c d : Nat} {es : List Val}
@@ -1123,7 +1123,7 @@ theorem MInv.views_owned {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {o : Var} {Eo : E
 theorem MInv.editBV_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hanch : RootbAnch Γ1 F) {x y : Var} {Ex : Entry} {t : Ty} (hx : Γ1 x = some Ex)
     (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
-    (hthru : ThruOK Γ1 F (.push y) Ex.ty Ex.path) (hnoV : ∀ d ∈ memDeps Ex.path, NoHeld Γ1 d.root)
+    (hthru : ThruOK Γ1 F (.push y) Ex.ty Ex.path) (hnoV : NoHeldV Γ1 Ex.path)
     {D : List Dep} (hV : ThruV Γ1 (.push y) Ex.ty Ex.path D) (hDn : ∀ d ∈ D, d.kind.isName = false)
     {v : Val} {N : List Dep} (hp : PushedN m1 Γ1 t v D N) (hvn : NamesHeld Γ1 Ex v)
     {o : Var} {T T' : Val} {t' : Ty} {c d : Nat} {es : List Val} (hno : NodeOf m1 x o T t' c d es)
@@ -1224,14 +1224,14 @@ theorem MInv.editBV_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
       subst hT'n
       have hcan' := hcan
       rw [hre'] at hcan' hdsV ⊢
-      exact MInv.edit_growV hi hanch hEo hlo hoF hcan' htyo hhv hdsV (HeldSpared.of_none (hnoV dep hdm) _ _)
+      exact MInv.edit_growV hi hanch hEo hlo hoF hcan' htyo hhv hdsV (HeldSpared.of_none (hnoV dep hdm (by rw [hargE]; exact hEv)) _ _)
         hdbV hT0 hp hoD hre
         fun cc hcc => List.mem_append_left _ (hvo cc hcc)
     · obtain ⟨hk', hds'⟩ := effAt_dropV (Γ := Γ1) (x := dep.root) hre'
       have hcan' := hi.canDo_drop hEo hcan
       have hdsV := hds' hdsV
       rw [hk']
-      exact MInv.edit_dropV hi hanch hEo hoF hcan' hdsV (HeldSpared.of_none (hnoV dep hdm) _ _) hdbV hEv hT0 hT' hst
+      exact MInv.edit_dropV hi hanch hEo hoF hcan' hdsV (HeldSpared.of_none (hnoV dep hdm (by rw [hargE]; exact hEv)) _ _) hdbV hEv hT0 hT' hst
         (HeapOK.editPush hi.heap hT0 hp.nd hp.al hp.dis hp.np (hp.views_out hi hanch hoF hoD hT0) hp.sf
           (hi.views_owned hEo hlo hcan.ownSlot hT0) hre hr)
         (by simp [m']) (fun cc hcc => (hsplit cc hcc).imp id (hvo cc)) hpkN hoD hDn hp.root hr hw' hnew rfl
@@ -1249,7 +1249,7 @@ theorem MInv.editBV_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
 theorem MInv.editBV_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hanch : RootbAnch Γ1 F) {x : Var} {op : Edit} {Ex : Entry} {t : Ty} (hx : Γ1 x = some Ex)
     (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
-    (hdrop : ∀ y, op ≠ .push y) (hthru : ThruOK Γ1 F op Ex.ty Ex.path) (hnoV : ∀ d ∈ memDeps Ex.path, NoHeld Γ1 d.root)
+    (hdrop : ∀ y, op ≠ .push y) (hthru : ThruOK Γ1 F op Ex.ty Ex.path) (hnoV : NoHeldV Γ1 Ex.path)
     {D : List Dep} (hV : ThruV Γ1 op Ex.ty Ex.path D) (hDn : ∀ d ∈ D, d.kind.isName = false)
     (hDr : ∀ r ∈ roots D, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
     {o : Var} {T T' : Val} {t' : Ty} {c d : Nat} {es es' : List Val} {a' : Nat → Bool}
@@ -1331,7 +1331,7 @@ theorem MInv.editBV_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
     obtain ⟨hk', hds'⟩ := effAt_dropV (Γ := Γ1) (x := dep.root)
       (Edit.effAt_ne_realloc hdrop dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec)
     rw [hk']
-    exact MInv.edit_dropV hi hanch hEo hoF (hi.canDo_drop hEo hcan) (hds' hdsV) (HeldSpared.of_none (hnoV dep hdm) _ _)
+    exact MInv.edit_dropV hi hanch hEo hoF (hi.canDo_drop hEo hcan) (hds' hdsV) (HeldSpared.of_none (hnoV dep hdm (by rw [hargE]; exact hEv)) _ _)
       hdbV hEv hT0 hT' hst
       (hheap Eo hEo hlo hos hoF hoD) (by simp [m']) (fun cc hcc => (hsplit cc hcc).imp id And.right) hpkN
       hoD hDn hDr hr hw' hnew rfl hsh' hfree hes' hvf
@@ -1343,7 +1343,7 @@ theorem MInv.editBV_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
 theorem MInv.editBV_trunc {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F) {x : Var} {i : Expr} {Ex : Entry} {t : Ty} (hx : Γ x = some Ex)
     (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
-    (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path) (hnoV : ∀ d ∈ memDeps Ex.path, NoHeld Γ d.root)
+    (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path) (hnoV : NoHeldV Γ Ex.path)
     (hV : ThruV Γ (.trunc i) Ex.ty Ex.path [])
     {o : Var} {T T' : Val} {t' : Ty} {c d n : Nat} {es : List Val} {a' : Nat → Bool}
     (hno : NodeOf m x o T t' c d es) (hf : FreesL m.alloc (es.drop n) a')
@@ -1359,7 +1359,7 @@ theorem MInv.editBV_trunc {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
 theorem MInv.editBV_set {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hanch : RootbAnch Γ1 F) {x y : Var} {i : Expr} {Ex : Entry} {t : Ty} (hx : Γ1 x = some Ex)
     (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
-    (hthru : ThruOK Γ1 F (.set i y) Ex.ty Ex.path) (hnoV : ∀ d ∈ memDeps Ex.path, NoHeld Γ1 d.root)
+    (hthru : ThruOK Γ1 F (.set i y) Ex.ty Ex.path) (hnoV : NoHeldV Γ1 Ex.path)
     {D : List Dep} (hV : ThruV Γ1 (.set i y) Ex.ty Ex.path D) (hDn : ∀ d ∈ D, d.kind.isName = false)
     {v : Val} {N : List Dep} (hp : PushedN m1 Γ1 t v D N) (hvn : NamesHeld Γ1 Ex v)
     {o : Var} {T T' : Val} {t' : Ty} {c d n : Nat} {es : List Val} {a' : Nat → Bool}
@@ -1389,7 +1389,7 @@ theorem MInv.editBV_set {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
 theorem MInv.editBV_setOOB {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hanch : RootbAnch Γ1 F) {x y : Var} {i : Expr} {Ex : Entry} {t : Ty} (hx : Γ1 x = some Ex)
     (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
-    (hthru : ThruOK Γ1 F (.set i y) Ex.ty Ex.path) (hnoV : ∀ d ∈ memDeps Ex.path, NoHeld Γ1 d.root)
+    (hthru : ThruOK Γ1 F (.set i y) Ex.ty Ex.path) (hnoV : NoHeldV Γ1 Ex.path)
     {D : List Dep} (hV : ThruV Γ1 (.set i y) Ex.ty Ex.path D) (hDn : ∀ d ∈ D, d.kind.isName = false)
     {v : Val} {N : List Dep} (hp : PushedN m1 Γ1 t v D N)
     {o : Var} {T : Val} {t' : Ty} {c d : Nat} {es : List Val} {a' : Nat → Bool}

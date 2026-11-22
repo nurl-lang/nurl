@@ -434,17 +434,23 @@ theorem takeBV_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanchF
   · rw [hst w hw']
 
 /-- The leaf of a step: no run-time scope is open in the statement. -/
-theorem Inv.leafAnchF {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
-    (hs : s.spine = []) : RootbAnchF Γ F :=
+theorem Inv.leafAnchS {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
+    (hs : s.spine = []) : RootbAnchS Γ F s.vars :=
   fun p E hp hm => hi.anch p E hp hm (by rw [hs]; simp)
 
 theorem Inv.leafAnch {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
     (hs : s.spine = []) : RootbAnch Γ F :=
-  (hi.leafAnchF hs).toH
+  (hi.leafAnchS hs).toH
+
+/-- AGORA-937 (3d, route U, PR B2): a binding the leaf names, not lent out,
+    has no held anchor. -/
+theorem Inv.leafNoHeld {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s)
+    (hs : s.spine = []) {x : Var} (hxV : x ∈ s.vars) (hx : x ∉ F) : NoHeld Γ x :=
+  NoHeld.of_anchS (hi.leafAnchS hs) hxV hx
 
 theorem Inv.ofLeaf {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt} (hi : Inv m Γ F s)
     (hm : MInv m' Γ') (hnv : m.nv ≤ m'.nv) (hvars : ∀ v ∈ s'.vars, v < m'.nv)
-    (hanch : RootbAnchF Γ' F)
+    (hanch : RootbAnchS Γ' F s'.vars)
     (hs' : s'.spine = []) (hc : Covers m') (hck : CatchOK m' s') : Inv m' Γ' F s' :=
   { toMInv := hm
     nvS := hvars

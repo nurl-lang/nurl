@@ -990,6 +990,80 @@ def RootbAnchF (Γ : Ctx) (F : List Var) : Prop :=
 theorem RootbAnchF.toH {Γ : Ctx} {F : List Var} (h : RootbAnchF Γ F) : RootbAnch Γ F :=
   fun p E hp hm => (h p E hp hm).toH
 
+/-- AGORA-937 (3d, route U, PR B2): anchored in `F`, or by a lent `Vec`'s
+    held anchor (`HeldAnch`) at a root that is none of `V` - the variables
+    of the statement that runs (`Inv.anch`) - and whose elements hold no
+    views. A binding the statement names is so no held anchor's root, and
+    a kill of it spares them (`NoHeld.of_anchS`); so is a root a change
+    through a borrow kills at `.view` (`editBV`, whose root's type holds
+    views: `NoHeldV.of_anchS`). -/
+def AnchoredS (Γ : Ctx) (E : Entry) (F V : List Var) : Prop :=
+  ∀ d ∈ E.vdeps, d.kind.bound = .none → d.root ∈ F ∨
+    (HeldAnch E d ∧ d.root ∉ V ∧ ∃ Er, Γ d.root = some Er ∧ Er.ty.holdsView = false)
+
+theorem Anchored.toS {E : Entry} {F : List Var} (h : Anchored E F) (Γ : Ctx) (V : List Var) :
+    AnchoredS Γ E F V :=
+  fun d hd hb => Or.inl (h d hd hb)
+
+theorem AnchoredS.toH {Γ : Ctx} {E : Entry} {F V : List Var} (h : AnchoredS Γ E F V) : AnchoredH E F :=
+  fun d hd hb => (h d hd hb).imp id And.left
+
+theorem AnchoredS.mono {Γ : Ctx} {E : Entry} {F F' V : List Var} (h : AnchoredS Γ E F V)
+    (hF : ∀ v ∈ F, v ∈ F') : AnchoredS Γ E F' V :=
+  fun d hd hb => (h d hd hb).imp (hF _) id
+
+/-- ... for fewer variables. -/
+theorem AnchoredS.anti {Γ : Ctx} {E : Entry} {F V V' : List Var} (h : AnchoredS Γ E F V)
+    (hV : ∀ v ∈ V', v ∈ V) : AnchoredS Γ E F V' :=
+  fun d hd hb => (h d hd hb).imp id fun ⟨ha, hn, hr⟩ => ⟨ha, fun h' => hn (hV _ h'), hr⟩
+
+/-- ... in a context that keeps each binding's type. -/
+theorem AnchoredS.of_ty {Γ Γ' : Ctx} {E : Entry} {F V : List Var} (h : AnchoredS Γ E F V)
+    (hty : ∀ r Er, Γ r = some Er → ∃ Er', Γ' r = some Er' ∧ Er'.ty = Er.ty) : AnchoredS Γ' E F V :=
+  fun d hd hb => (h d hd hb).imp id fun ⟨ha, hn, Er, hEr, hv⟩ => by
+    obtain ⟨Er', h', ht⟩ := hty _ _ hEr
+    exact ⟨ha, hn, Er', h', ht ▸ hv⟩
+
+/-- The borrowed parameters' anchors where a statement of variables `V`
+    runs (`Inv.leafAnchS`). -/
+def RootbAnchS (Γ : Ctx) (F V : List Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → AnchoredS Γ E F V
+
+theorem RootbAnchS.toH {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) : RootbAnch Γ F :=
+  fun p E hp hm => (h p E hp hm).toH
+
+theorem RootbAnchF.toS {Γ : Ctx} {F : List Var} (h : RootbAnchF Γ F) (V : List Var) : RootbAnchS Γ F V :=
+  fun p E hp hm => (h p E hp hm).toS Γ V
+
+theorem RootbAnchS.anti {Γ : Ctx} {F V V' : List Var} (h : RootbAnchS Γ F V) (hV : ∀ v ∈ V', v ∈ V) :
+    RootbAnchS Γ F V' :=
+  fun p E hp hm => (h p E hp hm).anti hV
+
+theorem RootbAnchS.mono {Γ : Ctx} {F F' V : List Var} (h : RootbAnchS Γ F V) (hF : ∀ v ∈ F, v ∈ F') :
+    RootbAnchS Γ F' V :=
+  fun p E hp hm => (h p E hp hm).mono hF
+
+/-- ... kept where the borrowed parameters keep their entries, every binding
+    its mode and type, and the domain is the same. -/
+theorem RootbAnchS.of_rel {Γ Γ1 : Ctx} {F V : List Var} (h : RootbAnchS Γ F V)
+    (hdom : ∀ x, (Γ1 x).isSome = (Γ x).isSome)
+    (hcm : ∀ x E1, Γ1 x = some E1 → ∃ E0, Γ x = some E0 ∧ E1.mode = E0.mode ∧ E1.ty = E0.ty)
+    (hrb : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → Γ1 p = some Ep) : RootbAnchS Γ1 F V := by
+  have hty : ∀ r Er, Γ r = some Er → ∃ Er', Γ1 r = some Er' ∧ Er'.ty = Er.ty := by
+    intro r Er hr
+    cases h1 : Γ1 r with
+    | none => have := hdom r; rw [h1, hr] at this; cases this
+    | some Er' =>
+      obtain ⟨E0, h0, _, ht⟩ := hcm r Er' h1
+      rw [hr] at h0; cases h0; exact ⟨Er', rfl, ht⟩
+  intro p E hp hm
+  obtain ⟨E0, h0, hm0, _⟩ := hcm p E hp
+  rw [hm] at hm0
+  have := hrb p E0 h0 hm0.symm
+  rw [hp] at this; cases this
+  exact (h p _ h0 hm0.symm).of_ty hty
+
+
 theorem Anchored.mono {E : Entry} {F F' : List Var} (h : Anchored E F) (hF : ∀ v ∈ F, v ∈ F') :
     Anchored E F' :=
   fun d hd hb => hF _ (h d hd hb)
@@ -1489,7 +1563,9 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
 structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv m Γ where
   nvS       : ∀ v ∈ s.vars, v < m.nv
   nvF       : ∀ v ∈ F, v < m.nv
-  anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → Anchored E F
+  /-- AGORA-937 (3d, route U, PR B2): a held anchor's root is none of the
+      statement's variables (`AnchoredS`). -/
+  anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → AnchoredS Γ E F s.vars
   spineNd   : s.spine.Nodup
   spineDom  : ∀ v ∈ s.spine, ∃ E, Γ v = some E
   catchOK   : CatchOK m s

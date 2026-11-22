@@ -413,6 +413,31 @@ theorem RootbAnchF.of_rootb {Γ Γ1 : Ctx} {F : List Var} (h : RootbAnchF Γ F)
 theorem NoHeld.of_anchF {Γ : Ctx} {F : List Var} (h : RootbAnchF Γ F) {x : Var} (hx : x ∉ F) : NoHeld Γ x :=
   fun p E hp hm d hd hr ha => hx (hr ▸ h p E hp hm d hd (by rcases ha.2.2.2 with h' | h' <;> rw [h'] <;> rfl))
 
+/-- AGORA-937 (3d, route U, PR B2): a binding the running statement names
+    (`V`, its variables) and not lent out has no held anchor: one's root is
+    none of them (`AnchoredS`). -/
+theorem NoHeld.of_anchS {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) {x : Var} (hxV : x ∈ V)
+    (hx : x ∉ F) : NoHeld Γ x :=
+  fun p E hp hm d hd hr ha => by
+    rcases h p E hp hm d hd (by rcases ha.2.2.2 with h' | h' <;> rw [h'] <;> rfl) with h1 | ⟨_, h2, _⟩
+    · exact hx (hr ▸ h1)
+    · exact h2 (hr ▸ hxV)
+
+/-- ... nor a binding not lent out whose type holds views: a held anchor's
+    root's elements hold none (`AnchoredS`). -/
+theorem NoHeld.of_anchS_hv {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) {x : Var} {Ex : Entry}
+    (hxe : Γ x = some Ex) (hv : Ex.ty.holdsView = true) (hx : x ∉ F) : NoHeld Γ x :=
+  fun p E hp hm d hd hr ha => by
+    rcases h p E hp hm d hd (by rcases ha.2.2.2 with h' | h' <;> rw [h'] <;> rfl) with h1 | ⟨_, _, Er, hEr, hnv⟩
+    · exact hx (hr ▸ h1)
+    · rw [hr, hxe] at hEr; cases hEr; rw [hv] at hnv; cases hnv
+
+/-- AGORA-937 (3d, route U, PR B2): a change through a borrow that stores
+    a view (`editBV`) kills each root at `hv` = its type holds views
+    (`killThruV`): it needs no held anchor only at those roots. -/
+def NoHeldV (Γ1 : Ctx) (P : List Dep) : Prop :=
+  ∀ d ∈ memDeps P, (argE Γ1 d.root).ty.holdsView = true → NoHeld Γ1 d.root
+
 /-- ... so a change through a borrow, at roots not lent out (`ThruOK`),
     spares every held anchor. -/
 theorem ThruSpared.of_anchF {Γ1 : Ctx} {F : List Var} (h : RootbAnchF Γ1 F) {op : Edit} {tx : Ty}
@@ -429,9 +454,25 @@ theorem ThruOK.spared {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List
   rw [hae]
   exact hho p E hp hm d' ha.2.1 hr ha.2.2.2
 
-theorem NoHeld.thru_anchF {Γ1 : Ctx} {F : List Var} (h : RootbAnchF Γ1 F) {op : Edit} {tx : Ty}
-    {P : List Dep} (hthru : ThruOK Γ1 F op tx P) : ∀ d ∈ memDeps P, NoHeld Γ1 d.root :=
-  fun d hd => NoHeld.of_anchF h (hthru d hd).1
+/-- ... so the kill of each root spares every held anchor: at a root whose
+    type holds no views `hv` is `false` and the rule's `HeldOK` spares them
+    (`ThruOK.spared`); at one whose type holds views there is none. -/
+theorem HeldSpared.of_thru {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
+    (hthru : ThruOK Γ1 F op tx P) (hnoV : NoHeldV Γ1 P) {d : Dep} (hd : d ∈ memDeps P) :
+    HeldSpared Γ1 (op.effAt d.kind (decide ((argE Γ1 d.root).ty = tx)) (argE Γ1 d.root).rvec)
+      (argE Γ1 d.root).ty.holdsView d.root := by
+  cases h : (argE Γ1 d.root).ty.holdsView
+  · exact hthru.spared d hd
+  · exact HeldSpared.of_none (hnoV d hd h) _ _
+
+/-- The invariant's anchors give it: a root of a change through a borrow is
+    not lent out (`ThruOK`). -/
+theorem NoHeldV.of_anchS {Γ1 : Ctx} {F V : List Var} (h : RootbAnchS Γ1 F V) {op : Edit} {tx : Ty}
+    {P : List Dep} (hthru : ThruOK Γ1 F op tx P) : NoHeldV Γ1 P := fun d hd hv => by
+  obtain ⟨hF, _, Er, hEr, _⟩ := hthru d hd
+  have hae : argE Γ1 d.root = Er := by unfold argE; rw [hEr]; rfl
+  rw [hae] at hv
+  exact NoHeld.of_anchS_hv h hEr hv hF
 
 theorem killE_rootb {Γ : Ctx} {F : List Var}
     (hanch : RootbAnch Γ F)
