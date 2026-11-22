@@ -4682,6 +4682,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 : ~ b g_bck_unw_exit F
 // T while __dce_emit_module only answers resolve_unw_refills.
 : ~ b g_dce_unw_pass F
+// …T while that row is a release that runs a destructor of the program
+// (its callee `drop__T`): every report waits for the module's answer on it,
+// agora #942 (__bck_dtor_unw).
+: ~ b g_bck_unw_dtor F
 // …T when those paths are the fields the call itself takes (its report's
 // words, bck_diag_inout_exit)…
 : ~ b g_bck_unw_take F
@@ -28894,8 +28898,14 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
         : i c3 ( nurl_str_find r2 `:` )
         : s rc ? < c3 0 ( nurl_str_cat r2 `` ) ( nurl_str_slice r2 0 c3 )
         : s ch ? < c3 0 `` ( nurl_str_cat `/` ( nurl_str_slice r2 + c3 1 - - ( nurl_str_len r2 ) c3 1 ) )
-        ( __bck_rc_note ( nurl_str_cat4 name `+dk=` cal ( nurl_str_cat4 `/` k `/` ( nurl_str_cat ud ch ) ) ) )
-        ( __bck_rc_note ( nurl_str_cat3 name `=` rc ) )
+        // (A `% Drop` that reaches no Rc, `-`: only a point a panic may
+        // unwind from, `+du=` - none of the Rc sweeps', __bck_unw_fns_of.)
+        ? ( seq rc `-` ) {
+            ? != 0 g_fn_unw { ( __bck_rc_note ( nurl_str_cat4 name `+du=` cal ( nurl_str_cat4 `/` k `/` ( nurl_str_cat ud ch ) ) ) ) } {}
+        } {
+            ( __bck_rc_note ( nurl_str_cat4 name `+dk=` cal ( nurl_str_cat4 `/` k `/` ( nurl_str_cat ud ch ) ) ) )
+            ( __bck_rc_note ( nurl_str_cat3 name `=` rc ) )
+        }
         ( bck_put `deferred` `1` )
     }
 }
@@ -28921,6 +28931,28 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
 // it came through), so the release counts it only where every one of them
 // took it over (__bck_udrop_fns_of): a maker that drops its `sink` value
 // before it returns hands back a closure over nothing of it.
+// __udrop_clo_arg's entries for a binding's `+dk=` / `+du=` notes `dk`
+// (`cal/k'/#ud[/chain]` each), its Rc part `rcs` (`:#rc`, or `:-`): the
+// set, and the chain with this maker and position first, after `out`.
+@ __udrop_clo_ents s ks s dk0 s rcs s out0 → s {
+    : ~ s out ( nurl_str_cat out0 `` )
+    : ~ s dk ( nurl_str_cat dk0 `` )
+    ~ != 0 ( nurl_str_len dk ) {
+        : s e ( __bar_first dk ) = dk ( __bar_rest dk )
+        : i s1 ( nurl_str_find e `/` )
+        : s r1 ( nurl_str_slice e + s1 1 - - ( nurl_str_len e ) s1 1 )
+        : i s2 ( nurl_str_find r1 `/` )
+        : s r2 ( nurl_str_slice r1 + s2 1 - - ( nurl_str_len r1 ) s2 1 )
+        : i s3 ( nurl_str_find r2 `/` )
+        : s ud ? < s3 0 ( nurl_str_cat r2 `` ) ( nurl_str_slice r2 0 s3 )
+        : s tail ? < s3 0 `` ( nurl_str_slice r2 s3 - ( nurl_str_len r2 ) s3 )
+        : s ch ( nurl_str_cat ( nurl_str_slice e 0 + + s1 1 s2 ) tail )
+        : s ent ( nurl_str_cat4 ks ud rcs ( nurl_str_cat `:` ch ) )
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ent `` ) ( nurl_str_cat3 out ` ` ent )
+    }
+    ^ out
+}
+
 @ __udrop_clo_arg i syms i k i tt0 s nm0 → s {
     : ~ s out ``
     : s ks ( nurl_str_cat ( nurl_str_int k ) `:` )
@@ -28935,27 +28967,15 @@ unsafe @ __clo_copied_set s v → v { = g_clo_copied_val ( nurl_str_cat v `` ) }
     ? ( is_ident_tok tt ) {
         ? == 0 ( nurl_str_len g_bck_rcty ) { ^ out } {}
         : s rc ( bck_rc_type_of nm )
-        ? == 0 ( nurl_str_len rc ) { ^ out } {}
-        : s rcs ( nurl_str_cat `:` ( __rc_set_id rc ) )
-        : s ud0 ( __bck_rc_noted nm `+d=` )
-        ? != 0 ( nurl_str_len ud0 ) { = out ( nurl_str_cat3 ks ( __rc_set_id ud0 ) rcs ) } {}
-        : ~ s dk ( __bck_rc_noted nm `+dk=` )
-        ~ != 0 ( nurl_str_len dk ) {
-            : s e ( __bar_first dk ) = dk ( __bar_rest dk )
-            // (`cal/k'/#ud[/chain]`: the set, and the chain with this maker
-            // and position first.)
-            : i s1 ( nurl_str_find e `/` )
-            : s r1 ( nurl_str_slice e + s1 1 - - ( nurl_str_len e ) s1 1 )
-            : i s2 ( nurl_str_find r1 `/` )
-            : s r2 ( nurl_str_slice r1 + s2 1 - - ( nurl_str_len r1 ) s2 1 )
-            : i s3 ( nurl_str_find r2 `/` )
-            : s ud ? < s3 0 ( nurl_str_cat r2 `` ) ( nurl_str_slice r2 0 s3 )
-            : s tail ? < s3 0 `` ( nurl_str_slice r2 s3 - ( nurl_str_len r2 ) s3 )
-            : s ch ( nurl_str_cat ( nurl_str_slice e 0 + + s1 1 s2 ) tail )
-            : s ent ( nurl_str_cat4 ks ud rcs ( nurl_str_cat `:` ch ) )
-            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat ent `` ) ( nurl_str_cat3 out ` ` ent )
-        }
-        ^ out
+        ? != 0 ( nurl_str_len rc ) {
+            : s rcs ( nurl_str_cat `:` ( __rc_set_id rc ) )
+            : s ud0 ( __bck_rc_noted nm `+d=` )
+            ? != 0 ( nurl_str_len ud0 ) { = out ( nurl_str_cat3 ks ( __rc_set_id ud0 ) rcs ) } {}
+            = out ( __udrop_clo_ents ks ( __bck_rc_noted nm `+dk=` ) rcs out )
+        } {}
+        // (…and what it took over whose `% Drop` reaches no Rc, `+du=`:
+        // handed on with `-`, agora #952.)
+        ^ ( __udrop_clo_ents ks ( __bck_rc_noted nm `+du=` ) `:-` out )
     } {}
     ? | == 0 g_udargs_set ! ( __udclo_rhs syms tt ) { ^ out } {}
     : s ua ( nurl_sym_get syms `__last_call_udargs__` )
@@ -38334,12 +38354,14 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         ? __udclo {
             : s __uda ( __udrop_fns ( nurl_llty at ) )
             ? != 0 ( nurl_str_len __uda ) {
+                // (…and one whose `% Drop` reaches no Rc, `-`: releasing the
+                // closure still runs it, a point a panic may unwind from -
+                // `+du=`, __udrop_clo_note; agora #952.)
                 : s __udr ( __rc_reach ( nurl_llty at ) )
-                ? != 0 ( nurl_str_len __udr ) {
-                    : s __ude ( nurl_str_cat4 ( nurl_str_int arg_idx ) `:` ( __rc_set_id __uda ) ( nurl_str_cat `:` ( __rc_set_id __udr ) ) )
-                    ( nurl_sym_append_word syms ( nurl_str_cat `__uda#` ( nurl_str_int __udd ) ) __ude )
-                    = __udk + __udk 1
-                } {}
+                : s __udrs ? == 0 ( nurl_str_len __udr ) `-` ( __rc_set_id __udr )
+                : s __ude ( nurl_str_cat4 ( nurl_str_int arg_idx ) `:` ( __rc_set_id __uda ) ( nurl_str_cat `:` __udrs ) )
+                ( nurl_sym_append_word syms ( nurl_str_cat `__uda#` ( nurl_str_int __udd ) ) __ude )
+                = __udk + __udk 1
             } {
                 // (…and a closure argument, whose type names nothing it
                 // holds: what it took over, __udrop_clo_arg.)
@@ -54046,6 +54068,7 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 @ mem_emit_gated_drop_of i cg s ptr s vt s sflag s live → v {
     : s mangle ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `drop##` vt ) )
     ? == 0 ( nurl_str_len mangle ) { ^ v } {}
+    ( __dtor_unw_of vt )
     : s cond ( mem_drop_cond_of cg sflag live )
     ? & & != 0 g_ff_mark != 0 ( nurl_str_len cond ) == 0 ( nurl_sym_len g_fn_escapes ( nurl_str_cat3 ptr `__ff` ( nurl_str_int g_ff_gen ) ) ) {
         ( nurl_print `  ;ffx ` ) ( nurl_print ptr ) ( nurl_print ` ` ) ( nurl_print cond ) ( nurl_print `\n` )
@@ -54069,6 +54092,7 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ? ( seq extra `true` ) { ( mem_emit_gated_drop_of cg ptr vt sflag live ) ^ v } {}
     : s mangle ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `drop##` vt ) )
     ? == 0 ( nurl_str_len mangle ) { ^ v } {}
+    ( __dtor_unw_of vt )
     : ~ s cond ( mem_drop_cond_of cg sflag live )
     ( mem_emit_ff_drops cg ptr cond extra )
     ? == 0 ( nurl_str_len cond ) { = cond ( nurl_str_cat extra `` ) } {
@@ -54452,6 +54476,9 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ( nurl_print `  ` ) ( nurl_print t ) ( nurl_print ` = alloca ` ) ( nurl_print ll ) ( nurl_print `\n` )
     ( nurl_print `  store ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print ov ) ( nurl_print `, ptr ` ) ( nurl_print t ) ( nurl_print `\n` )
     ( __dropif_request vt mangle )
+    // (…released by this statement, mem_udrop_drop_old: a point a panic may
+    // unwind from, agora #942.)
+    ( __dtor_unw_of vt )
     ^ ( nurl_str_cat3 ? == 0 ( nurl_str_len cond ) `true` cond ` ` ( nurl_str_cat3 t ` ` mangle ) )
 }
 
@@ -59821,6 +59848,23 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
     ^ | ( bck_callee_keeps cal aix ) ( bck_callee_keeps ( bck_generic_base cal ) aix )
 }
 
+// …of a binding's value of type `vt` (a scope's end, a `=` over the old
+// value): the destructors of the program its release runs (agora #942).
+@ __dtor_unw_of s vt → v {
+    ? | | | == 0 g_fn_unw == 0 g_borrowck != 0 g_bck_rec_off == 0 g_user_drop_seen { ^ v } {}
+    : s fns ( __udrop_fns ( nurl_llty vt ) )
+    ? != 0 ( nurl_str_len fns ) { ( __udrop_unw_rows fns ) } {}
+}
+
+// The `unw` rows of a release that runs the destructors `fns` (agora #942).
+@ __udrop_unw_rows s fns0 → v {
+    : ~ s fns ( nurl_str_cat fns0 `` )
+    ~ != 0 ( nurl_str_len fns ) {
+        : s f ( __bar_first fns ) = fns ( __bar_rest fns )
+        ( bck_note_unwind ? != 0 g_bck_stmt_line g_bck_stmt_line g_stmt_line_done f )
+    }
+}
+
 // …recorded now (`now`: the statement's rows are in), or stashed with the
 // statement's calls (`ppends`), behind the call whose argument it was — a
 // temporary a call was handed, released after it (mem_drop_arg_temps): `ck`
@@ -59830,6 +59874,12 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
     : s lt ( nurl_llty ty )
     : s fns0 ( __udrop_fns lt )
     ? == 0 ( nurl_str_len fns0 ) { ^ v } {}
+    // (Each destructor the release runs is a point a panic may unwind from,
+    // as a call of it that may panic is: an `inout` parameter goes back to a
+    // `recover`ing caller with a field a `sink` took still empty if one
+    // panics before the refill. Whether it may is the module's answer,
+    // resolve_unw_refills: the `unw` row's callee - agora #942.)
+    ? & & != 0 g_fn_unw != 0 g_borrowck == 0 g_bck_rec_off { ( __udrop_unw_rows fns0 ) } {}
     ? == 0 ( nurl_str_len ( __rc_reach lt ) ) { ^ v } {}
     : ~ s fns ( nurl_str_cat fns0 `` )
     : b walk & != g_borrowck 0 == g_bck_rec_off 0
@@ -61957,6 +62007,125 @@ unsafe @ bck_emit_error s file i line s msg → v {
     ^ F
 }
 
+// A `unw` row (agora #382, #929, #939, #942): a call that may panic, or the
+// release of a value whose destructor of the program may.
+@ __bck_unw_row s st s rec i p → v {
+    // (A release that runs a destructor of the program: its reports all
+    // wait on that destructor, agora #942.)
+    ? & != 0 g_user_drop_seen ( __bck_unw_is_dtor rec ) { ( __bck_dtor_unw st rec ) ^ v } {}
+    // A call that may panic: an `inout` parameter may not view a value of
+    // this frame across it (__bck_unwind_check).
+    {
+        ( __bck_unwind_check st ( bck_field_int rec 3 ) )
+        // (A panic here is a way out too: an `inout` parameter
+        // goes back to a `recover`ing caller with a field a sink
+        // took still empty - agora #929. A field the statement
+        // gives a value again, `= . h buf ( make )` (the
+        // `fieldset` rows right after this one, on its line), is
+        // empty here too: the call runs before the store. Whether
+        // it may panic is the module's answer, not this walk's:
+        // that report waits for it, resolve_unw_refills, agora
+        // #939.)
+        ? != 0 g_bck_fmv_any {
+            : ~ s ufs ``
+            : ~ i uq + p 1
+            ~ & ( seq ( bck_field ( bck_rec uq ) 0 ) `fieldset` ) == ( bck_field_int ( bck_rec uq ) 3 ) ( bck_field_int rec 3 ) {
+                = ufs ( nurl_str_cat3 ufs ` ` ( bck_field ( bck_rec uq ) 1 ) )
+                = uq + uq 1 }
+            ( bck_put `unwskip` ufs )
+            = g_bck_unw_exit T
+            ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F )
+            ? != 0 ( nurl_str_len ufs ) {
+                ( bck_put `unwpark` ( bck_field rec 5 ) )
+                = g_bck_unw_only T
+                ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F )
+                = g_bck_unw_only F
+                ( bck_put `unwpark` `` )
+            } {}
+            = g_bck_unw_exit F
+            ( bck_put `unwskip` `` )
+        } {}
+        // (…and a field of an `inout` parameter the call itself
+        // takes, a `sink` argument: handed over when the call
+        // starts, so a panic in it hands the field back empty.
+        // Its report waits for the module's answer too, agora
+        // #939.)
+        : s u6 ( bck_field rec 6 )
+        ? != 0 ( nurl_str_len u6 ) { ( __bck_unw_takes st rec u6 ) } {}
+    }
+}
+
+// Is this `unw` row a release's, its callee a destructor of the program?
+@ __bck_unw_is_dtor s rec → b { ^ != 0 ( nurl_str_starts ( bck_field rec 5 ) `drop__` ) }
+
+// At a `unw` row for a release that runs a destructor of the program,
+// `drop__T` (agora #942): the release may panic as a call may, so an `inout`
+// parameter may not view a value of this frame across it, and none may go
+// back with a field a `sink` took still empty - taken by an earlier
+// statement or by a call of this one. Each report waits for the module's
+// answer to whether `drop__T` may panic (resolve_unw_refills): a destructor
+// that cannot panic refuses nothing.
+@ __bck_dtor_unw s st s rec → v {
+    : i line ( bck_field_int rec 3 )
+    ( __bck_dtor_unw_open ( bck_field rec 5 ) )
+    ( __bck_dtor_unw_state st line )
+    : s u6 ( bck_field rec 6 )
+    ? != 0 ( nurl_str_len u6 ) { ( __bck_unw_takes st rec u6 ) } {}
+    ( __bck_dtor_unw_close )
+}
+
+// …its reports parked behind destructor `f`, and settled.
+@ __bck_dtor_unw_open s f → v {
+    ( bck_put `unwpark` f )
+    = g_bck_unw_only T
+    = g_bck_unw_dtor T
+}
+
+@ __bck_dtor_unw_close → v {
+    = g_bck_unw_dtor F
+    = g_bck_unw_only F
+    ( bck_put `unwpark` `` )
+}
+
+// …what the state says at the release: an `inout` parameter viewing a value
+// of the frame, and one with a field taken by an earlier statement.
+@ __bck_dtor_unw_state s st i line → v {
+    ( __bck_unwind_check st line )
+    ? != 0 g_bck_fmv_any {
+        ( bck_put `unwskip` ( nurl_sym_get g_bck `fmv` ) )
+        = g_bck_unw_exit T
+        ( __bck_inout_exit_check st line F )
+        = g_bck_unw_exit F
+        ( bck_put `unwskip` `` )
+    } {}
+}
+
+// Does a scope's end release, in a function with `inout` parameters, a
+// closure whose environment runs a `% Drop` that reaches no Rc (`+du=`,
+// __udrop_clo_note)? Its end is then asked even with no borrow to end
+// (bck_scope_drop, __bck_clo_unw; agora #952).
+@ __bck_du_any → b {
+    ? == 0 g_bck_inp_any { ^ F } {}
+    ^ >= ( nurl_str_find g_bck_rcty `+du=` ) 0
+}
+
+// A closure binding `id` released at `line` with no call (its block's end,
+// the old value of `=`): its environment releases what its maker took over
+// (`+dk=`, `+du=`, __udrop_clo_note, by the final `retcap` summaries), and
+// each `% Drop` that runs is a point a panic may unwind from, as a
+// temporary's is (__bck_dtor_unw) - a closure's type names nothing its
+// environment holds, so no row of codegen's marks it (agora #952).
+@ __bck_clo_unw s st i id i line → v {
+    ? | == 0 g_bck_inp_any < id 0 { ^ v } {}
+    : ~ s fns ( __bck_unw_fns_of ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) ) )
+    ~ != 0 ( nurl_str_len fns ) {
+        : s f ( __bar_first fns ) = fns ( __bar_rest fns )
+        ( __bck_dtor_unw_open f )
+        ( __bck_dtor_unw_state st line )
+        ( __bck_dtor_unw_close )
+    }
+}
+
 // At a `unw` row: the fields of `inout` parameters the statement's calls
 // have taken so far (its x6, `callee|id|k …`, each a `sink` argument by
 // that callee's summary) are gone while this call runs. Asked of the exit
@@ -62001,15 +62170,15 @@ unsafe @ bck_emit_error s file i line s msg → v {
     // reported at once, as a field taken by an earlier statement is at any
     // call that may unwind (agora #929): both ask the panic graph only once
     // AGORA-948 makes that rule precise for every taken field.)
-    ( bck_put `unwpark` ? own cn `` )
+    ( bck_put `unwpark` ? | own g_bck_unw_dtor cn `` )
     = g_bck_unw_exit T
     = g_bck_unw_only T
     = g_bck_unw_take T
     ( __bck_inout_exit_check st2 line F )
     = g_bck_unw_take F
-    = g_bck_unw_only F
+    = g_bck_unw_only g_bck_unw_dtor
     = g_bck_unw_exit F
-    ( bck_put `unwpark` `` )
+    ( bck_put `unwpark` ? g_bck_unw_dtor cn `` )
     ( bck_put `unwskip` `` )
 }
 
@@ -62037,6 +62206,18 @@ unsafe @ bck_emit_error s file i line s msg → v {
 }
 
 // …its report.
+// The words of bck_diag_inout_exit's report: what the caller gets back,
+// and the fix (kept apart from the walk's own functions, agora #942).
+@ __bck_inout_back b at_end → s {
+    : s back0 ? at_end ( nurl_str_cat `' is an inout parameter: its caller gets it back with that field empty when the function ends, and its next use of the field reads a null handle. ` `` ) ( nurl_str_cat `' is an inout parameter: its caller gets it back here with that field empty, and its next use of the field reads a null handle. ` `` )
+    ^ ? g_bck_unw_dtor ( nurl_str_cat `' is an inout parameter: a value released here runs its type's 'drop', which may panic, and a 'recover'ing caller then gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) ? g_bck_unw_take ( nurl_str_cat `' is an inout parameter: the field is gone from the moment that call starts, so if this call panics, a 'recover'ing caller gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) ? g_bck_unw_only ( nurl_str_cat `' is an inout parameter: this call, which makes the field's new value, may panic before the store, and a 'recover'ing caller then gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) ? g_bck_unw_exit ( nurl_str_cat `' is an inout parameter: if this call panics, a 'recover'ing caller gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) back0
+}
+
+@ __bck_inout_fix s fsrc → s {
+    ^ ? g_bck_unw_dtor ( nurl_str_cat4 `Give the field a value before that value is released (= ` fsrc ` …), or hand the sink a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) ) ? g_bck_unw_take ( nurl_str_cat3 `Hand the taking call a copy, ( mem_dup ` fsrc ` ), and keep the field, or make sure this call cannot panic.` ) ? g_bck_unw_only ( nurl_str_cat4 `Give the field a value no panic can stop first (= ` fsrc ` …, by a call that cannot panic), then make the new one; or hand the sink a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) )
+    ( nurl_str_cat4 ? g_bck_unw_exit `Give the field a value before this call (= ` `Give the field a value before returning (= ` fsrc ` …), or hand the callee a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) )
+}
+
 @ bck_diag_inout_exit i rid i pid i line b maybe b at_end → v {
     : s ml ( nurl_sym_get2 g_bck `ml_` ( nurl_str_int pid ) )
     : i at ? & at_end != 0 ( nurl_str_len ml ) ( nurl_str_to_int ml ) line
@@ -62056,13 +62237,13 @@ unsafe @ bck_emit_error s file i line s msg → v {
     : s some ? maybe ` on some paths` ``
     : b here_take & at_end != 0 ( nurl_str_len ml )
     : s taken ? here_take ( nurl_str_cat `' is taken here` `` ) ( nurl_str_cat `' was taken at line ` ml )
-    : s back0 ? at_end ( nurl_str_cat `' is an inout parameter: its caller gets it back with that field empty when the function ends, and its next use of the field reads a null handle. ` `` ) ( nurl_str_cat `' is an inout parameter: its caller gets it back here with that field empty, and its next use of the field reads a null handle. ` `` )
     // (At a call that may panic, the way out is the unwind: agora #929.)
     // (…and at the call that makes the field's new value, which runs before
     // the store: agora #939.)
-    : s back ? g_bck_unw_take ( nurl_str_cat `' is an inout parameter: the field is gone from the moment that call starts, so if this call panics, a 'recover'ing caller gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) ? g_bck_unw_only ( nurl_str_cat `' is an inout parameter: this call, which makes the field's new value, may panic before the store, and a 'recover'ing caller then gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) ? g_bck_unw_exit ( nurl_str_cat `' is an inout parameter: if this call panics, a 'recover'ing caller gets it back with that field empty, and its next use of the field reads a null handle. ` `` ) back0
-    : s fix ? g_bck_unw_take ( nurl_str_cat3 `Hand the taking call a copy, ( mem_dup ` fsrc ` ), and keep the field, or make sure this call cannot panic.` ) ? g_bck_unw_only ( nurl_str_cat4 `Give the field a value no panic can stop first (= ` fsrc ` …, by a call that cannot panic), then make the new one; or hand the sink a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) )
-    ( nurl_str_cat4 ? g_bck_unw_exit `Give the field a value before this call (= ` `Give the field a value before returning (= ` fsrc ` …), or hand the callee a copy, ( mem_dup ` ( nurl_str_cat fsrc ` ), and keep the field.` ) )
+    // (…and at the release of a value whose type's 'drop' may panic: agora
+    // #942.)
+    : s back ( __bck_inout_back at_end )
+    : s fix ( __bck_inout_fix fsrc )
     ( bck_emit_error ( nurl_sym_get g_bck `file` ) at ( nurl_str_cat4
     ( nurl_str_cat4 `use of partly moved value '` rname `' — its field '` fsrc )
     ( nurl_str_cat4 taken by some `, and '` )
@@ -64160,7 +64341,10 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // is handed to it — agora #766.)
                 ? & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) {
                     : i aold ( bck_st_get st asid )
-                    ? ! | | == aold BCK_UNINIT == aold BCK_MOVED == aold BCK_STORED { = st ( __bck_udrop_sweep st asid ( bck_field_int rec 3 ) `as the old value of '='` ) } {}
+                    ? ! | | == aold BCK_UNINIT == aold BCK_MOVED == aold BCK_STORED {
+                        ( __bck_clo_unw st asid ( bck_field_int rec 3 ) )
+                        = st ( __bck_udrop_sweep st asid ( bck_field_int rec 3 ) `as the old value of '='` )
+                    } {}
                 } {}
                 // (What it borrowed before, kept for its new value's borrow row
                 // — a value block or a join of it, `= j { j }`, hands on that
@@ -64782,46 +64966,9 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 = done T
             } {}
             ? & ! done == kc 45 {
-                // A call that may panic: an `inout` parameter may not view
-                // a value of this frame across it (__bck_unwind_check).
-                ? != 0 g_bck_inp_any {
-                    ( __bck_unwind_check st ( bck_field_int rec 3 ) )
-                    // (A panic here is a way out too: an `inout` parameter
-                    // goes back to a `recover`ing caller with a field a sink
-                    // took still empty - agora #929. A field the statement
-                    // gives a value again, `= . h buf ( make )` (the
-                    // `fieldset` rows right after this one, on its line), is
-                    // empty here too: the call runs before the store. Whether
-                    // it may panic is the module's answer, not this walk's:
-                    // that report waits for it, resolve_unw_refills, agora
-                    // #939.)
-                    ? != 0 g_bck_fmv_any {
-                        : ~ s ufs ``
-                        : ~ i uq + p 1
-                        ~ & ( seq ( bck_field ( bck_rec uq ) 0 ) `fieldset` ) == ( bck_field_int ( bck_rec uq ) 3 ) ( bck_field_int rec 3 ) {
-                            = ufs ( nurl_str_cat3 ufs ` ` ( bck_field ( bck_rec uq ) 1 ) )
-                            = uq + uq 1 }
-                        ( bck_put `unwskip` ufs )
-                        = g_bck_unw_exit T
-                        ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F )
-                        ? != 0 ( nurl_str_len ufs ) {
-                            ( bck_put `unwpark` ( bck_field rec 5 ) )
-                            = g_bck_unw_only T
-                            ( __bck_inout_exit_check st ( bck_field_int rec 3 ) F )
-                            = g_bck_unw_only F
-                            ( bck_put `unwpark` `` )
-                        } {}
-                        = g_bck_unw_exit F
-                        ( bck_put `unwskip` `` )
-                    } {}
-                    // (…and a field of an `inout` parameter the call itself
-                    // takes, a `sink` argument: handed over when the call
-                    // starts, so a panic in it hands the field back empty.
-                    // Its report waits for the module's answer too, agora
-                    // #939.)
-                    : s u6 ( bck_field rec 6 )
-                    ? != 0 ( nurl_str_len u6 ) { ( __bck_unw_takes st rec u6 ) } {}
-                } {}
+                // A point a panic may unwind from: a call that may panic, or
+                // a release whose destructor may (__bck_unw_row).
+                ? != 0 g_bck_inp_any { ( __bck_unw_row st rec p ) } {}
                 = p + p 1
                 = done T
             } {}
@@ -66037,6 +66184,23 @@ unsafe @ bck_ret_drop_check s st i line → v {
 // would be read through after its storage is gone, by a `recover` caller.
 // Refused where the call is, as the caller cannot see it (agora #382; as
 // tools/ncore's rule for a call of the program's, MEMORY.md §3.3d).
+// …its key in `warnset`: by the parameter and the value it views, and, for
+// a report parked for the module's answer, the callee it waits on - one
+// parked behind a destructor that cannot panic, which does not stand, must
+// not hide one behind another that may (CodeRabbit on github#2183).
+@ __bck_uw_tag s ps i r → s {
+    : s park ? g_bck_unw_only ( nurl_str_cat3 `uwp:` ( nurl_sym_get g_bck `unwpark` ) `:` ) ``
+    ^ ( nurl_str_cat4 park `uw:` ps ( nurl_str_cat `:` ( nurl_str_int r ) ) )
+}
+
+// The words of __bck_unwind_check's report (kept apart from the walk's
+// own functions, agora #942).
+@ __bck_unwind_msg s pn s sn → s {
+    : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `'` pn `' is an 'inout' parameter, and it holds a view of '` ) sn ? g_bck_unw_dtor `', a value of this function, across the release of a value whose type's 'drop' may panic. ` `', a value of this function, across a call that may panic. ` `` )
+    : s m2 ( nurl_str_cat4 `The unwind frees '` sn ( nurl_str_cat3 `' and hands '` pn `' back to its caller, which a 'recover' lets go on reading it: freed memory. Point '` ) pn )
+    ^ ( nurl_str_cat3 m1 m2 ? g_bck_unw_dtor `' back at what the caller passed before that value is released, or have it hold a copy that owns its data (string_from, slice_to_vec).` `' back at what the caller passed before the call, or have it hold a copy that owns its data (string_from, slice_to_vec).` )
+}
+
 @ __bck_unwind_check s st i line → v {
     : ~ s ip ( nurl_sym_get g_bck `inp` )
     ~ != 0 ( nurl_str_len ip ) {
@@ -66052,15 +66216,13 @@ unsafe @ bck_ret_drop_check s st i line → v {
                 : s c ( str_first_word ds ) = ds ( str_skip_word ds )
                 : i r ( bck_local_source st ( nurl_str_to_int c ) )
                 ? & & >= r 0 != r pid != BCK_MOVED ( bck_st_get st r ) {
-                    : s tag ( nurl_str_cat4 `uw:` ps `:` ( nurl_str_int r ) )
+                    : s tag ( __bck_uw_tag ps r )
                     : s ws ( nurl_sym_get g_bck `warnset` )
                     ? ! ( str_contains_word ws tag ) {
                         ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
                         : s pn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ps ) )
                         : s sn ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int r ) ) )
-                        : s m1 ( nurl_str_cat4 ( nurl_str_cat3 `'` pn `' is an 'inout' parameter, and it holds a view of '` ) sn `', a value of this function, across a call that may panic. ` `` )
-                        : s m2 ( nurl_str_cat4 `The unwind frees '` sn ( nurl_str_cat3 `' and hands '` pn `' back to its caller, which a 'recover' lets go on reading it: freed memory. Point '` ) pn )
-                        ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( nurl_str_cat3 m1 m2 `' back at what the caller passed before the call, or have it hold a copy that owns its data (string_from, slice_to_vec).` ) )
+                        ( bck_emit_error ( nurl_sym_get g_bck `file` ) line ( __bck_unwind_msg pn sn ) )
                     } {}
                 } {}
             }
@@ -74591,8 +74753,25 @@ unsafe @ bck_scope_leave s st i line → s {
 // callee's returned closure took over (`+dk=` `callee/k/#ud`, by the final
 // `retcap` summaries; agora #919).
 @ __bck_udrop_fns_of s nm → s {
-    : ~ s out ( __bck_rc_noted nm `+d=` )
-    : ~ s dk ( __bck_rc_noted nm `+dk=` )
+    ^ ( __bck_udrop_took ( __bck_rc_noted nm `+d=` ) ( __bck_rc_noted nm `+dk=` ) )
+}
+
+// The `% Drop` impls a closure binding `nm` runs when it is released, each
+// a point a panic may unwind from: those of the arguments its maker took
+// over, whether or not they reach an Rc (`+dk=`, `+du=`; agora #952).
+@ __bck_unw_fns_of s nm → s {
+    : s du ( __bck_rc_noted nm `+du=` )
+    : s dk ( __bck_rc_noted nm `+dk=` )
+    ? & == 0 ( nurl_str_len du ) == 0 ( nurl_str_len dk ) { ^ `` } {}
+    ^ ( __bck_udrop_took ( __bck_udrop_took `` dk ) du )
+}
+
+// `out0` and the impls of the `+dk=`-form entries `dk0` (`callee/k/#ud`
+// [/maker/k'…]) whose callee, and every maker on the way, took the argument
+// over (`retcap`).
+@ __bck_udrop_took s out0 s dk0 → s {
+    : ~ s out ( nurl_str_cat out0 `` )
+    : ~ s dk ( nurl_str_cat dk0 `` )
     ~ != 0 ( nurl_str_len dk ) {
         : s e ( __bar_first dk ) = dk ( __bar_rest dk )
         : i s1 ( nurl_str_find e `/` )
@@ -74643,7 +74822,7 @@ unsafe @ bck_scope_leave s st i line → s {
 // line). Not one moved or stored away — its value lives on elsewhere.
 @ bck_scope_end i lo i hi s st i line → s {
     ? ( seq st `!` ) { ^ st } {}
-    ? == 0 g_bck_has_borrow { ^ ? == 0 g_bck_jgb_any ( nurl_str_cat st `` ) ( bck_join_giveback st ( __bck_scope_lets lo hi ) ) } {}
+    ? & == 0 g_bck_has_borrow ! ( __bck_du_any ) { ^ ? == 0 g_bck_jgb_any ( nurl_str_cat st `` ) ( bck_join_giveback st ( __bck_scope_lets lo hi ) ) } {}
     : s lets ( __bck_scope_lets lo hi )
     : ~ s out ? == 0 g_bck_jgb_any ( nurl_str_cat st `` ) ( bck_join_giveback st lets )
     = out ( bck_scope_drop out lets line )
@@ -74733,7 +74912,10 @@ unsafe @ bck_scope_drop s st s lets i line → s {
         // stored away, or never bound on this path. The walk's own state
         // may call such a holder a borrow; its owner is codegen's
         // registration, noted by bck_note_rc_arg — agora #766.)
-        ? & & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) ! | | == v BCK_UNINIT == v BCK_MOVED == v BCK_STORED { = out ( __bck_udrop_sweep out id line `at the end of its block` ) } {}
+        ? & & != 0 g_user_drop_seen != 0 ( nurl_str_len g_bck_rcty ) ! | | == v BCK_UNINIT == v BCK_MOVED == v BCK_STORED {
+            ( __bck_clo_unw out id line )
+            = out ( __bck_udrop_sweep out id line `at the end of its block` )
+        } {}
         ? | == v BCK_OWNED == v BCK_MAYBE_MOVED { = out ( bck_root_end out id line `it went out of scope at the end of its block` ) } {}
         = g_bck_ending ? == 0 ( nurl_str_len g_bck_ending ) ( nurl_str_int id ) ( nurl_str_cat3 g_bck_ending ` ` ( nurl_str_int id ) )
     }
@@ -74900,7 +75082,7 @@ unsafe @ bck_end_post_defer s st i p i keep i line → s {
 @ bck_scope_close i lo i hi s pre s post i line → s {
     ? ( seq post `!` ) { ^ ( nurl_str_cat `!` `` ) } {}
     : ~ s out ( nurl_str_cat post `` )
-    : b ends != 0 g_bck_has_borrow
+    : b ends | != 0 g_bck_has_borrow ( __bck_du_any )
     // (Newest first, as its values are dropped: one declared after another
     // is gone — its state put back — before that one ends.)
     // (…all but one a defer armed in this block reads, that shadows
@@ -75200,7 +75382,7 @@ unsafe @ bck_loop_mask s pre s post → s {
 // The loop body's end (bck_scope_end of [lo, hi)) but for the bindings
 // its defer keeps (`kept`): they are not released there.
 @ __bck_loop_body_end i lo i hi s st i line s kept → s {
-    ? | ( seq st `!` ) == 0 g_bck_has_borrow { ^ ( bck_scope_end lo hi st line ) } {}
+    ? | ( seq st `!` ) & == 0 g_bck_has_borrow ! ( __bck_du_any ) { ^ ( bck_scope_end lo hi st line ) } {}
     : ~ s lets ``
     : ~ s rest ( __bck_scope_lets lo hi )
     ~ != 0 ( nurl_str_len rest ) {
@@ -120736,6 +120918,9 @@ unsafe @ __dce_emit_module s mod i mlen → v {
     : i w0 g_walk_owns
     = g_bck_quiet 0
     = g_walk_owns 1
+    // (Two reports parked behind two callees that both may panic, two
+    // destructors one release runs, say the same: each is made once.)
+    : ~ s made `\n`
     ~ != 0 ( nurl_str_len rest ) {
         : i nl ( nurl_str_find rest `\n` )
         : s e ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
@@ -120748,7 +120933,11 @@ unsafe @ __dce_emit_module s mod i mlen → v {
             : i t2 ( nurl_str_find r1 `\t` )
             : s r2 ( nurl_str_slice r1 + t2 1 - - ( nurl_str_len r1 ) t2 1 )
             : i t3 ( nurl_str_find r2 `\t` )
-            ( bck_emit_error ( nurl_str_slice r1 0 t2 ) ( nurl_str_to_int ( nurl_str_slice r2 0 t3 ) ) ( nurl_str_slice r2 + t3 1 - - ( nurl_str_len r2 ) t3 1 ) )
+            : s key ( nurl_str_cat3 `\n` r1 `\n` )
+            ? < ( nurl_str_find made key ) 0 {
+                = made ( nurl_str_cat3 made r1 `\n` )
+                ( bck_emit_error ( nurl_str_slice r1 0 t2 ) ( nurl_str_to_int ( nurl_str_slice r2 0 t3 ) ) ( nurl_str_slice r2 + t3 1 - - ( nurl_str_len r2 ) t3 1 ) )
+            } {}
         } {}
     }
     = g_bck_quiet q0
