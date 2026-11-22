@@ -707,6 +707,9 @@ import A3
 #print axioms A2.HeldSpared.of_none
 #print axioms A2.NoHeld.of_anchF
 #print axioms A2.ThruSpared.of_anchF
+-- (AGORA-937 3d, route U, PR B1): a change through a borrow ends no lent Vec's view of its root
+#print axioms A2.RSetup.HeldOK.canon
+#print axioms A2.ThruOK.spared
 #print axioms A2.RSetup.liftE_rootb_dep
 -- (AGORA-937 3d groundwork): the call's lift is precise (σ: the argument's own memory deps and
 -- each root by its handle) and composes kinds; deriving commutes with it

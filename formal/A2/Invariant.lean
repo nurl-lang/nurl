@@ -961,19 +961,6 @@ theorem ExitAt.dtorPinOK {Γ : Ctx} {s e : Stmt} {n : Nat} (h : ExitAt s n e) (h
     exact ⟨fun E hE hd hos hn d hdd hnm => by rw [he.spine]; exact hc.1 E hE hd hos hn d hdd hnm, ih hc.2⟩
   | block _ ih => exact ih hc
 
-/-- AGORA-937 (3d, route U): a lent `Vec`'s view of memory it holds (not
-    of what it borrows from): its node lands through its path
-    (`bor_lands_vec`), so this one may be anchored by an unfrozen root that
-    is changed only strictly inside its elements. -/
-def HeldAnch (E : Entry) (d : Dep) : Prop :=
-  d ∉ E.path ∧ d ∈ E.held ∧ (∃ t, E.ty = .vec t) ∧ (d.kind = .view ∨ d.kind = .self)
-
-/-- ... read off the entry's path, held and type alone. -/
-theorem HeldAnch.of_eq {E E' : Entry} {d : Dep} (hp : E'.path = E.path) (hh : E'.held = E.held)
-    (ht : E'.ty = E.ty) (h : HeldAnch E d) : HeldAnch E' d := by
-  obtain ⟨h1, h2, h3, h4⟩ := h
-  exact ⟨hp ▸ h1, hh ▸ h2, ht ▸ h3, h4⟩
-
 /-- A borrowed parameter is anchored: what it borrows from, and what the
     closures it holds only read, are lent out (`F`) for as long as it is
     bound.  (What those closures may change is pinned: no rule replaces it,

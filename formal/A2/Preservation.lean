@@ -207,7 +207,7 @@ theorem takeB_pres {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanchF 
   subst t'
   have hoF := (hthru dep hdm).1
   have hrel := CtxRel.editB (RootbAnch.toR hanchF) hx hmx (EditArg.trunc (t := t) hie) (fun y h => by cases h) hx hl hthru.toR
-  have hinv := MInv.editB_take hi hanch hx hmx hl hty hhv hthru (ThruSpared.of_anchF hanchF hthru) hn hno hr
+  have hinv := MInv.editB_take hi hanch hx hmx hl hty hhv hthru hthru.spared hn hno hr
   have hst : ∀ w, w ≠ dep.root → (m.set dep.root ⟨true, some T'⟩).st w = m.st w :=
     fun w hw => by simp [upd_ne _ _ hw]
   have hx1 : (setE (killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) x = some Ex := by simp [setE]
@@ -3055,7 +3055,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           post.inv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
-        exact fin (MInv.editB_push post.inv (post.rel.anchF hanchF).toH hx1 hmx hl1 hty hhv hxF hyx' hthru (ThruSpared.of_anchF (post.rel.anchF hanchF) hthru) hp
+        exact fin (MInv.editB_push post.inv (post.rel.anchF hanchF).toH hx1 hmx hl1 hty hhv hxF hyx' hthru hthru.spared hp
             hno hr) (by simp [post.nv]) (covers_editPush (covers_takeVal hi.cover htk) hno.2.2.1 hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
       | editPushRealloc htk hno hr =>
@@ -3065,7 +3065,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
         exact fin (MInv.editB_pushRealloc post.inv (post.rel.anchF hanchF).toH hx1 hmx hl1 hty hhv hxF hyx'
-            hthru (ThruSpared.of_anchF (post.rel.anchF hanchF) hthru) hp hno hr) (by simp [post.nv])
+            hthru hthru.spared hp hno hr) (by simp [post.nv])
           (covers_editPushRealloc (covers_takeVal hi.cover htk) hno.2.2.1 hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
     | trunc _ =>
@@ -3076,7 +3076,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           hi.toMInv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
-        exact fin (MInv.editB_trunc hi.toMInv hanch hx1 hmx hl1 hty hhv hxF hthru (ThruSpared.of_anchF hanchF hthru) hno hfr hr) (by simp)
+        exact fin (MInv.editB_trunc hi.toMInv hanch hx1 hmx hl1 hty hhv hxF hthru hthru.spared hno hfr hr) (by simp)
           (covers_editTrunc hi.cover hno.2.2.1 hfr hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))])
     | @set i y Ey _ _ _ _ hy hly htyy hpa =>
@@ -3088,12 +3088,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           post.inv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
         obtain ⟨rfl, -⟩ := huniq _ _ _ _ _ _ hno
         have hoF := (hthru dep hdm).1
-        exact fin (MInv.editB_set post.inv (post.rel.anchF hanchF).toH hx1 hmx hl1 hty hhv hthru (ThruSpared.of_anchF (post.rel.anchF hanchF) hthru) hp hn hno hfr
+        exact fin (MInv.editB_set post.inv (post.rel.anchF hanchF).toH hx1 hmx hl1 hty hhv hthru hthru.spared hp hn hno hfr
             hr) (by simp [post.nv]) (covers_editSet (covers_takeVal hi.cover htk) hno.2.2.1 hn hfr hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
       | editSetOOB _ htk hno _ hfr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy (fun h => NoHeld.of_anchF hanchF h) hpa htk
-        exact fin (MInv.editB_setOOB post.inv (post.rel.anchF hanchF).toH hx1 hmx hl1 hty hhv hthru (ThruSpared.of_anchF (post.rel.anchF hanchF) hthru) hp hno hfr)
+        exact fin (MInv.editB_setOOB post.inv (post.rel.anchF hanchF).toH hx1 hmx hl1 hty hhv hthru hthru.spared hp hno hfr)
           (by simp [post.nv]) (covers_editSetOOB (covers_takeVal hi.cover htk) hfr) post.frz
   | @editBV ξ Γ Γ1 F x op Ex Ex1 t D bb hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 _ hthru hV =>
     intro m m' s' hcd hi hst

@@ -652,6 +652,16 @@ theorem subD_frame (h : S.OK) {d e : Dep} (he : e ∈ S.subD d) :
   · exact Or.inl rfl
   · exact Or.inr (S.σ_frameC h hv)
 
+
+/-- ... in what it holds too. -/
+theorem mem_subE_held_ρ (h : S.OK) {E : Entry} {d : Dep} {w : Var} (hd : d ∈ (S.subE E).held)
+    (hdr : d.root = S.ρ w) : d ∈ E.held := by
+  rw [subE_held] at hd
+  obtain ⟨d1, hd1, hdd⟩ := List.mem_flatMap.mp hd
+  rcases S.subD_frame h hdd with rfl | ⟨hout, _⟩
+  · exact hd1
+  · exact absurd hdr.symm (hout w)
+
 theorem mem_A {d : Dep} : d ∈ S.A ↔ d ∈ compAll S.Rf ∨ d ∈ S.N := List.mem_append
 
 theorem mem_B {d : Dep} : d ∈ S.B ↔ d ∈ compAll S.Rd ∨ d ∈ S.N := List.mem_append
@@ -1128,6 +1138,46 @@ theorem DtorSafe.canon (h : S.OK) {e : Eff} {hv : Bool} {x : Var}
         · rw [hbx'] at hbx; cases hbx
           rw [hkill d.kind hk] at hkb; cases hkb
 
+
+/-- AGORA-937 (3d, route U): a change that spares a borrowed parameter's
+    views of its root spares them where the call places it: a lifted
+    parameter's held is the callee's, renamed, and the argument's own (no
+    callee root, `pe_out`); the frame's are spared by the `inout`
+    parameter's bound (`Φsat`), which allows the change (`Allowed`). -/
+theorem HeldOK.canon (h : S.OK) {Γa : Ctx} {e : Eff} {x : Var} (ha : Allowed S e false x)
+    (hd : HeldOK Γa e x) : HeldOK (S.canon Γa) e (S.ρ x) := by
+  intro y E hy hm d hdh hdr hk
+  have hn : d.kind.isName = false := by rcases hk with h | h <;> rw [h] <;> rfl
+  rcases canon_cases_sub h Γa y with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨_, hc⟩
+  · rw [hc] at hy
+    obtain ⟨Ea, hEa, rfl⟩ := Option.map_eq_some_iff.mp hy
+    simp only [Function.comp, subE_mode] at hm
+    by_cases hrb : Ea.mode = .rootb
+    · have hdh' : d ∈ (S.liftE v Ea).held := S.mem_subE_held_ρ h hdh hdr
+      unfold liftE at hdh'; simp only [hrb, ↓reduceIte] at hdh'
+      rcases List.mem_append.mp hdh' with h1 | h1
+      · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp h1
+        have hx : d0.root = x := h.inj _ _ hdr
+        exact hd v Ea hEa hrb d0 (List.mem_filter.mp hd0).1 hx hk
+      · have hpe : d ∈ (S.pe v).held := by
+          split at h1
+          · exact (List.mem_filter.mp h1).1
+          · exact h1
+        have := (h.pe_out v d (by unfold Entry.vdeps; exact List.mem_append_right _ hpe) hn).1 x
+        exact absurd hdr.symm this
+    · rw [liftE_mode _ hrb] at hm
+      exact absurd (by cases hme : Ea.mode <;> simp_all [liftMode]) hrb
+  · rw [hc] at hy; cases hy
+  · rw [hc] at hy
+    have hl := h.Φrb y E hy hm
+    obtain ⟨b, hv, hb, hk'⟩ := h.Φsat y E hy hl (Or.inr hm) d
+      (by unfold Entry.vdeps; exact List.mem_append_right _ hdh) x hdr.symm
+    rcases ha with hnb | ⟨b', hb', hbb, hall⟩
+    · rw [hnb] at hb; cases hb
+    · rw [hb] at hbb; cases hbb
+      cases hkk : e.kills false d.kind
+      · rfl
+      · exact absurd (hall _ hkk) (by rw [hk']; simp)
 theorem canon_kill' (h : S.OK) (hab : S.AbsOK Γa) {e : Eff} {hv : Bool} {x : Var}
     (ha : Allowed S e hv x) (hnp : S.isPi x = false) (hxr : S.isReg x = false ∨ e.kills hv .view = false) :
     S.canon (kill e hv x Γa) = kill e hv (S.ρ x) (S.canon Γa) := by
@@ -6433,7 +6483,7 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
     obtain ⟨d0, hd0', rfl⟩ := mem_rds.mp hd
     obtain ⟨hd0, hnp0⟩ := List.mem_filter.mp hd0'
     have hnp0 : S.isPi d0.root = false := by simpa using hnp0
-    obtain ⟨_, hy0, Er, hEr, _, _, hds, hsh⟩ := hthru d0 hd0
+    obtain ⟨_, hy0, Er, hEr, _, _, hds, hsh, hho⟩ := hthru d0 hd0
     obtain ⟨Er', hEr', hrbr, hown, hreg⟩ := hroot d0 hd0
     rw [hEr] at hEr'; cases hEr'
     have hae : argE Γa1 d0.root = Er := by unfold argE; rw [hEr]; rfl
@@ -6441,7 +6491,7 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
     rw [hae] at hte hve
     rw [argE_canons h hEr hnp0] at hte hve
     refine ⟨h.Fcout _, fun y hy => ?_, S.subE (S.liftE d0.root Er), canon_some h hEr hnp0, ?_, ?_, ?_,
-      by simpa [Dep.ren] using hsh⟩
+      ⟨by simpa [Dep.ren] using hsh, ?_⟩⟩
     · rw [Edit.stored_rename] at hy
       obtain ⟨y0, hy0', rfl⟩ := Option.map_eq_some_iff.mp hy
       exact fun e => hy0 y0 hy0' (h.inj _ _ e)
@@ -6461,6 +6511,12 @@ theorem editB_ren_facts (h : S.OK) (hab : S.AbsOK Γa)
       by_cases hr : Er.mode = .region
       · exact DtorSafe.canon h (allowed_region hab1 hEr hr _) hds
       · exact DtorSafe.canon h (allowed_canDo_false hab1 hEr (hown hr).2) hds
+    · show HeldOK _ ((op.rename S.ρ).effAt d0.kind (decide ((S.subE (S.liftE d0.root Er)).ty = (S.liftE x Ex1).ty))
+        (S.subE (S.liftE d0.root Er)).rvec) _
+      rw [hte, hve, hty1, Edit.effAt_rename]
+      by_cases hr : Er.mode = .region
+      · exact HeldOK.canon h (allowed_region hab1 hEr hr _) hho
+      · exact HeldOK.canon h (allowed_canDo_false hab1 hEr (hown hr).2) hho
   refine ⟨⟨D', harg'⟩, hyx', hthru', ?_⟩
   -- the kills: the callee's on regions first, which only weaken; the rest commute with the lift
   let f : Dep → Dep := fun d => ⟨d.root, .name (op.effAt d.kind (decide ((argE Γa1 d.root).ty = Ex1.ty))
@@ -6656,7 +6712,7 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
     intro d hd
     rcases (S.mem_memDeps_subE_liftE_bor h ht hmx).mp hd with ⟨d0, hd0, hnp0, rfl⟩ | ⟨d0, hd0, hp0, e, he, rfl⟩
     · -- a root of the callee's, renamed: as before
-      obtain ⟨_, hy0, Er, hEr, _, _, hds, hsh⟩ := hthru d0 hd0
+      obtain ⟨_, hy0, Er, hEr, _, _, hds, hsh, hho⟩ := hthru d0 hd0
       obtain ⟨Er', hEr', hrbr, hown, hreg⟩ := hroot d0 hd0
       rw [hEr] at hEr'; cases hEr'
       have hae : argE Γa1 d0.root = Er := by unfold argE; rw [hEr]; rfl
@@ -6664,7 +6720,7 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
       rw [hae] at hte hve
       rw [argE_canons h hEr hnp0] at hte hve
       refine ⟨h.Fcout _, fun y hy => ?_, S.subE (S.liftE d0.root Er), canon_some h hEr hnp0, ?_, ?_, ?_,
-        by simpa [Dep.ren] using hsh⟩
+        ⟨by simpa [Dep.ren] using hsh, ?_⟩⟩
       · rw [Edit.stored_rename] at hy
         obtain ⟨y0, hy0', rfl⟩ := Option.map_eq_some_iff.mp hy
         exact fun e => hy0 y0 hy0' (h.inj _ _ e)
@@ -6684,6 +6740,12 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
         by_cases hr : Er.mode = .region
         · exact DtorSafe.canon h (allowed_region hab1 hEr hr _) hds
         · exact DtorSafe.canon h (allowed_canDo_false hab1 hEr (hown hr).2) hds
+      · show HeldOK _ ((op.rename S.ρ).effAt d0.kind (decide ((S.subE (S.liftE d0.root Er)).ty = (S.liftE x Ex1).ty))
+          (S.subE (S.liftE d0.root Er)).rvec) _
+        rw [hte, hve, hty1, Edit.effAt_rename]
+        by_cases hr : Er.mode = .region
+        · exact HeldOK.canon h (allowed_region hab1 hEr hr _) hho
+        · exact HeldOK.canon h (allowed_canDo_false hab1 hEr (hown hr).2) hho
     · -- what a region stands for: a live owned `Vec` of the frame's, changed inside its elements
       obtain ⟨_, heff, Eu, hEu, _⟩ := hreg_in d0 hd0 hp0
       obtain ⟨hσk, hroots⟩ := ht.2 d0.root hp0
@@ -6698,7 +6760,7 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
       have hds' : DtorSafe Γa1 .dropIn false d0.root := by
         have hae0 : argE Γa1 d0.root = Eu := by unfold argE; rw [hEu]; rfl
         have he' := heff; rw [hae0] at he'; rw [he'] at hds; exact hds
-      refine ⟨hFc, fun y hy => ?_, Er, hcan, Or.inl hErl, ?_, ?_, by simp [hck]⟩
+      refine ⟨hFc, fun y hy => ?_, Er, hcan, Or.inl hErl, ?_, ?_, by simp [hck], ?_⟩
       · rw [Edit.stored_rename] at hy
         obtain ⟨y0, _, rfl⟩ := Option.map_eq_some_iff.mp hy
         exact fun e' => hout y0 e'.symm
@@ -6708,6 +6770,9 @@ theorem editB_ren_facts_thru (h : S.OK) (hab : S.AbsOK Γa)
           Er.rvec) false e.root
         rw [← hae, heff']
         exact dtorSafe_region h hab1 hp0 hσk ⟨e, he, rfl⟩ hoth (fun d hd _ => ht.A_name h hd) hpe hΦd hds'
+      · show HeldOK (S.canon Γa1) ((op.rename S.ρ).effAt (comp e.kind d0.kind) (decide (Er.ty = (S.liftE x Ex1).ty))
+          Er.rvec) e.root
+        rw [← hae, heff']; exact HeldOK.of_kills _ rfl rfl
   refine ⟨⟨D', harg'⟩, hyx', hthru', ?_⟩
   -- the kills: the callee's on its own roots, renamed; on a region standing for nothing,
   -- which only weaken; on a region standing for roots, the caller's on those roots
@@ -7158,11 +7223,11 @@ theorem editBV_ren_facts (h : S.OK)
     rw [hmem] at hd
     obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd
     have hnp0 := hroot d0 hd0
-    obtain ⟨_, hy0, Er, hEr, hlr, hcan, hds, hsh⟩ := hthru d0 hd0
+    obtain ⟨_, hy0, Er, hEr, hlr, hcan, hds, hsh, hho⟩ := hthru d0 hd0
     have hrbr : Er.mode ≠ .rootb := by rcases hcan with h' | ⟨b, h', _⟩ <;> rw [h'] <;> simp
     refine ⟨h.Fcout _, fun y hy => ?_, S.subE (S.liftE d0.root Er), by
       show S.canon Γa1 (S.ρ d0.root) = _; exact canon_some h hEr hnp0,
-      by rw [subE_live, liftE_live]; exact hlr, ?_, ?_, by simpa [Dep.ren] using hsh⟩
+      by rw [subE_live, liftE_live]; exact hlr, ?_, ?_, ⟨by simpa [Dep.ren] using hsh, ?_⟩⟩
     · rw [Edit.stored_rename] at hy
       obtain ⟨y0, hy0', rfl⟩ := Option.map_eq_some_iff.mp hy
       exact fun e => hy0 y0 hy0' (h.inj _ _ e)
@@ -7171,6 +7236,8 @@ theorem editBV_ren_facts (h : S.OK)
       exact canDo_lift hcan
     · rw [subE_liftE_rvec hrbr (fun h' => by have := hcan.ownSlot; rw [h'] at this; cases this), subE_ty, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
       exact DtorSafe.canon h (allowed_canDo_false hab1 hEr hcan) hds
+    · rw [subE_liftE_rvec hrbr (fun h' => by have := hcan.ownSlot; rw [h'] at this; cases this), subE_ty, liftE_ty _ hrbr, hty1, Edit.effAt_rename]
+      exact HeldOK.canon h (allowed_canDo_false hab1 hEr hcan) hho
   refine ⟨hmem, hthru', heqK, fun D2 hD2 d hd => ?_, hpfix⟩
   rw [hmem] at hd
   obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd

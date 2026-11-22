@@ -1727,6 +1727,34 @@ theorem ThruCanDo.toCanDo {Er : Entry} {e : Eff} (h : ThruCanDo Er e) (hnr : Er.
 
 theorem ThruCanDo.of_canDo {Er : Entry} {e : Eff} (h : canDo Er.mode e) : ThruCanDo Er e := Or.inl h
 
+/-- AGORA-937 (3d, route U): a lent `Vec`'s view of memory it holds (not
+    of what it borrows from): its node lands through its path
+    (`bor_lands_vec`), so this one may be anchored by an unfrozen root that
+    is changed only strictly inside its elements. -/
+def HeldAnch (E : Entry) (d : Dep) : Prop :=
+  d ∉ E.path ∧ d ∈ E.held ∧ (∃ t, E.ty = .vec t) ∧ (d.kind = .view ∨ d.kind = .self)
+
+/-- ... read off the entry's path, held and type alone. -/
+theorem HeldAnch.of_eq {E E' : Entry} {d : Dep} (hp : E'.path = E.path) (hh : E'.held = E.held)
+    (ht : E'.ty = E.ty) (h : HeldAnch E d) : HeldAnch E' d := by
+  obtain ⟨h1, h2, h3, h4⟩ := h
+  exact ⟨hp ▸ h1, hh ▸ h2, ht ▸ h3, h4⟩
+
+/-- AGORA-937 (3d, route U): a change at `r` by effect `e` (`hv = false`)
+    ends no lent `Vec`'s held anchor there. -/
+def HeldOK (Γ : Ctx) (e : Eff) (r : Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.held, d.root = r → (d.kind = .view ∨ d.kind = .self) →
+    e.kills false d.kind = false
+
+/-- A change that ends no view and no handle is one. -/
+theorem HeldOK.of_kills {Γ : Ctx} {e : Eff} (r : Var) (hk : e.kills false .view = false)
+    (hks : e.kills false .self = false) : HeldOK Γ e r := by
+  intro _ _ _ _ d _ _ h; rcases h with h | h <;> rw [h] <;> assumption
+
+/-- With no borrowed parameter bound, every change is one. -/
+theorem HeldOK.of_noRootb {Γ : Ctx} (h : ∀ v E, Γ v = some E → E.mode ≠ .rootb) (e : Eff) (r : Var) :
+    HeldOK Γ e r := fun p E hp hm => absurd hm (h p E hp)
+
 /-- What a change through a borrow of type `tx`, whose path is `P`, asks of
     each root `d.root` it reaches in memory, in the context after its
     argument is handed over: the root is not lent out, is not the value
@@ -1739,12 +1767,12 @@ def ThruOK (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (P : List Dep) : Pro
     ∃ Er, Γ1 d.root = some Er ∧ Er.live = true ∧
       canDo Er.mode (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) ∧
       DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) false d.root ∧
-      d.kind ≠ .share
+      d.kind ≠ .share ∧ HeldOK Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) d.root
 
 theorem ThruOK.noShare {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
     (h : ThruOK Γ1 F op tx P) : ∀ d ∈ memDeps P, d.kind ≠ .share := fun d hd => by
   obtain ⟨_, _, _, _, _, _, _, h⟩ := h d hd
-  exact h
+  exact h.1
 
 /-- AGORA-937 (item 3): `ThruOK` where a root may also be a region
     (`ThruLive`, `ThruCanDo`): what a change through a borrow that stores no
@@ -1756,7 +1784,7 @@ def ThruOKR (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (P : List Dep) : Pr
     ∃ Er, Γ1 d.root = some Er ∧ ThruLive Er ∧
       ThruCanDo Er (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) ∧
       DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) false d.root ∧
-      d.kind ≠ .share
+      d.kind ≠ .share ∧ HeldOK Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) d.root
 
 theorem ThruOK.toR {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
     (h : ThruOK Γ1 F op tx P) : ThruOKR Γ1 F op tx P := fun d hd => by
@@ -1773,7 +1801,7 @@ theorem ThruOKR.toOK {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List 
 theorem ThruOKR.noShare {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
     (h : ThruOKR Γ1 F op tx P) : ∀ d ∈ memDeps P, d.kind ≠ .share := fun d hd => by
   obtain ⟨_, _, _, _, _, _, _, h⟩ := h d hd
-  exact h
+  exact h.1
 
 /-! #### A view stored through a borrow (Agora #295, `StmtT.editBV`) -/
 

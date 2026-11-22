@@ -115,7 +115,8 @@ theorem main12_typed : ∃ Δ, StmtT P .none (fun _ => none) [] main12 Δ := by
       List.mem_singleton] at hd
     subst hd
     refine ⟨by simp, fun y hy => ?_, _, hK104, by rw [hE4e], Or.inl (by rw [hE4e]),
-      DtorSafe.of_none (fun v E h => (hK10 v E h).2.1) _ _ _, by simp⟩
+      DtorSafe.of_none (fun v E h => (hK10 v E h).2.1) _ _ _, by simp,
+      HeldOK.of_noRootb (fun v E h => (hK10 v E h).1) _ _⟩
     simp [Edit.stored] at hy
   -- the body: `y` handed to its `letd` first thing
   let Kt : Ctx := A2.setE (A2.setE (A2.killThru (.trunc (.dec (.len 5))) Eb.ty Eb.path K10) 5 Eb) 6

@@ -116,7 +116,8 @@ theorem thru_ok {Γ : Ctx} (hn : NoRootb Γ) {op : Edit} {k : Kind} {tx : Ty}
   simp only [memDeps, hkn, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
   subst hd
-  refine ⟨by simp, fun y hy => (hst y hy).symm, _, h0, rfl, Or.inl rfl, ?_, hk⟩
+  refine ⟨by simp, fun y hy => (hst y hy).symm, _, h0, rfl, Or.inl rfl, ?_,
+    hk, HeldOK.of_noRootb (fun v E h => (hn v E h).1) _ _⟩
   exact nrDtor hn _ _ _
 
 syntax "fin" : tactic

@@ -419,6 +419,16 @@ theorem ThruSpared.of_anchF {Γ1 : Ctx} {F : List Var} (h : RootbAnchF Γ1 F) {o
     {P : List Dep} (hthru : ThruOK Γ1 F op tx P) : ThruSpared Γ1 op tx P :=
   fun d hd => HeldSpared.of_none (NoHeld.of_anchF h (hthru d hd).1) _ _
 
+/-- AGORA-937 (3d, route U): a change through a borrow the typing allows
+    spares every held anchor at its roots (`ThruOK`'s `HeldOK`). -/
+theorem ThruOK.spared {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
+    (h : ThruOK Γ1 F op tx P) : ThruSpared Γ1 op tx P := by
+  intro d hd p E hp hm d' hd' hr ha
+  obtain ⟨_, _, Er, hEr, _, _, _, _, hho⟩ := h d hd
+  have hae : argE Γ1 d.root = Er := by unfold argE; rw [hEr]; rfl
+  rw [hae]
+  exact hho p E hp hm d' ha.2.1 hr ha.2.2.2
+
 theorem NoHeld.thru_anchF {Γ1 : Ctx} {F : List Var} (h : RootbAnchF Γ1 F) {op : Edit} {tx : Ty}
     {P : List Dep} (hthru : ThruOK Γ1 F op tx P) : ∀ d ∈ memDeps P, NoHeld Γ1 d.root :=
   fun d hd => NoHeld.of_anchF h (hthru d hd).1

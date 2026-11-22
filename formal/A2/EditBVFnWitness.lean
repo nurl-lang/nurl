@@ -132,7 +132,8 @@ theorem thru_ok {Γ : Ctx} (hn : NoRootb Γ) (h5 : Γ 5 = some Evv0) :
   simp only [memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
   subst hd
-  refine ⟨by simp, fun y hy => ?_, _, h5, rfl, Or.inl rfl, nrDtor hn _ _ _, by simp⟩
+  refine ⟨by simp, fun y hy => ?_, _, h5, rfl, Or.inl rfl, nrDtor hn _ _ _, by simp,
+    HeldOK.of_noRootb (fun v E h => (hn v E h).1) _ _⟩
   simp [Edit.stored] at hy
   subst hy
   decide

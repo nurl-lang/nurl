@@ -718,10 +718,18 @@ a `HeldAnch`, a lent `Vec`'s held `.view`/`.self`, not on its path):
   from the strict anchors at the leaf and `x ∉ F` (`NoHeld.of_anchF`,
   `ThruSpared.of_anchF`, `RootbAnchF.of_rootb`).
 
-PR B relaxes `Inv.anch` to `HeldAnch` at a root that is no variable of the
-statement and is reached by its `Vec` borrows only at `.inner`. It supplies
-`NoHeld`/`ThruSpared` from those clauses, and makes the call that sets them
-up (`zN`, `CallThruOK`, the exit kill, `CallInv`).
+**PR B1 (done): the change through a borrow says it ends no lent view.**
+`ThruOK`/`ThruOKR` gain `HeldOK` (the effect at each root, `hv = false`,
+spares every `.view`/`.self` a lent parameter holds there). The rename
+carries it (`HeldOK.canon`: a lifted parameter's held is the callee's,
+renamed; the frame's are spared by the `inout` bound, `Φsat`), and a region
+image gets it free (`dropIn`). Preservation now takes `ThruSpared` from the
+typing (`ThruOK.spared`), not from the strict anchors, so PR B2 needs no
+`Vec`-paths clause: the edits are covered by the rule.
+
+PR B2 relaxes `Inv.anch` to `HeldAnch` at a root that is no variable of the
+statement, which gives the named kills `NoHeld`. PR B3 makes the call that
+sets them up (`zN`, `CallThruOK`, the exit kill, `CallInv`).
 
 The premise of the call (`CallThruOK`) narrows too (finding above): other
 arguments reach `w` only by name. A `.self` path (a borrow `&w` passed

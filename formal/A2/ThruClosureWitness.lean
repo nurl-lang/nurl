@@ -194,12 +194,13 @@ theorem r0_exit {Γ : Ctx} {x : Var} (hx : x ≠ 1) (h : Γ 1 = some R0) :
 /-- The push through `( vec_at loc 0 )`, whose path is `loc`'s elements,
     may drop them: `loc` is a live owner, not what is pushed. -/
 theorem thru_ok {Γ : Ctx} (hc : Calm Γ) {n : Var} {E : Entry} (h2 : Γ 2 = some E) (hl : E.live = true)
-    (hm : E.mode = .own) (hn : n ≠ 2) : ThruOK Γ [] (.push n) vi [⟨2, .inner⟩] := by
+    (hm : E.mode = .own) (hn : n ≠ 2) (hv : E.rvec = true) : ThruOK Γ [] (.push n) vi [⟨2, .inner⟩] := by
   intro d hd
   simp only [memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
   subst hd
-  refine ⟨by simp, fun y hy => ?_, _, h2, hl, Or.inl hm, hc.dtor _ _ _, by simp⟩
+  refine ⟨by simp, fun y hy => ?_, _, h2, hl, Or.inl hm, hc.dtor _ _ _, by simp,
+    by simp only [Edit.effAt, Edit.inEff, hv]; exact HeldOK.of_kills _ rfl rfl⟩
   simp [Edit.stored] at hy
   subst hy
   exact fun h => hn h.symm
@@ -247,7 +248,7 @@ theorem thru_typed {Q : Prog} {Γ : Ctx} (hc : Calm Γ) {n : Var} {En : Entry} (
     (EditArg.push (Ey := En) (by simp [G5, A2.setE, hn4, hG4n]) hnl hnt PushArg.int)
     (fun y hy => by simp [Edit.stored] at hy; subst hy; exact hn4)
     (by simp [G5, A2.setE]) rfl
-    (thru_ok hG5 (E := Eloc) (by simp [G5, A2.setE, hG42]) rfl rfl hn2).toR
+    (thru_ok hG5 (E := Eloc) (by simp [G5, A2.setE, hG42]) rfl rfl hn2 rfl).toR
     (fun h => by simp [Edit.drops] at h)
   have hD5 : Calm (A2.setE (A2.killThru (.push n) (Ty.vec .int) [⟨2, .inner⟩] G5) 4 Eb) :=
     (hG5.killThru _ _ _).setE (by simp [Eb])

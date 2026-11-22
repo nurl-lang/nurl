@@ -114,7 +114,8 @@ theorem thru_ok : ThruOK G5 [] (.push 5) vi [⟨0, .inner⟩] := by
   simp only [memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
   subst hd
-  refine ⟨by simp, fun y hy => ?_, _, G5_0, rfl, Or.inr ⟨.replace, rfl, by decide⟩, calm_G5.dtor _ _ _, by simp⟩
+  refine ⟨by simp, fun y hy => ?_, _, G5_0, rfl, Or.inr ⟨.replace, rfl, by decide⟩, calm_G5.dtor _ _ _, by simp,
+    by simp [Edit.effAt, Edit.inEff, Ep, Entry.rvec, Ty.isVec]; exact HeldOK.of_kills _ rfl rfl⟩
   simp [Edit.stored] at hy; subst hy; decide
 
 theorem edit_typed : StmtT P .none G5 [] (.edit false 4 (.push 5)) Δe := by

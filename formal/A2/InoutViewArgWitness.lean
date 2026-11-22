@@ -135,7 +135,8 @@ theorem thru_ok : ThruOK G4 [] (.push 4) vi [⟨0, .inner⟩] := by
   simp only [memDeps, Kind.isName, Bool.not_false, List.filter_cons_of_pos, List.filter_nil,
     List.mem_singleton] at hd
   subst hd
-  refine ⟨by simp, fun y hy => ?_, _, G4_0, rfl, Or.inr ⟨.replace, rfl, by decide⟩, calm_G4.dtor _ _ _, by simp⟩
+  refine ⟨by simp, fun y hy => ?_, _, G4_0, rfl, Or.inr ⟨.replace, rfl, by decide⟩, calm_G4.dtor _ _ _, by simp,
+    by simp [Edit.effAt, Edit.inEff, Ep, Entry.rvec, Ty.isVec]; exact HeldOK.of_kills _ rfl rfl⟩
   simp [Edit.stored] at hy; subst hy; decide
 
 theorem edit_typed : StmtT P .none G4 [] (.edit false 3 (.push 4)) Δe := by
