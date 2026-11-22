@@ -912,6 +912,334 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
 
 /-! ### AGORA-901: a fresh binding -/
 
+/-- AGORA-937 (3d, route F): `MInv.change` where `x` may be frozen: no
+    borrowed parameter's memory lies in `x`'s tree (`rootKeep_frame_ne`), and
+    the change ends none (`hnr`, what `killE_rootb` got from `x ∉ F`). -/
+theorem MInv.change_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
+    (hanch : RootbAnch Γ F)
+    {x : Var} {Ex : Entry} (hx : Γ x = some Ex) {e : Eff} {hv : Bool}
+    (hxa : ∀ p E, Γ p = some E → E.mode = .rootb →
+      (∀ d ∈ E.path, d.root = x → d.kind.bound ≠ .none) ∧
+      ((∀ t, E.ty ≠ .vec t) → ∀ d ∈ E.held, d.root = x → d.kind.bound ≠ .none))
+    (hnr : ∀ p E, Γ p = some E → E.mode = .rootb → hits e hv x E = false)
+    (hxr : Ex.mode ≠ .rootb)
+    (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hheap : HeapOK m') (hnv : m'.nv = m.nv)
+    (hkeep : ∀ k, e.kills hv k = false → VKeep m m' ⟨x, k⟩ ∧ HKeep m m' ⟨x, k⟩)
+    {ox : Option Entry} (hox : NewSlot m' (kill e hv x Γ) x Ex ox)
+    (hds : DtorSafe Γ e hv x)
+    (hdb : ox = none → DbindSafe Γ x)
+    (hrem : ox = none → e = .replace)
+    (hnew : e ≠ .replace → ∀ Ex', ox = some Ex' → Ex.live = true → Ex.held = [] →
+      Ex.ty.holdsView = false → Ex'.live = true ∧ Ex'.held = [])
+    (hpk : PkgKeep m m' Γ e hv x ox)
+    (hblk : m'.blk = m.blk := by rfl) :
+    MInv m' (upd (kill e hv x Γ) x ox) := by
+  have depKeep : ∀ v E, Γ v = some E → (killE e hv x E).live = true → E.ty ≠ .int →
+      ∀ dep ∈ E.vdeps, VKeep m m' dep ∧ HKeep m m' dep := by
+    intro v E hv' hl hnint dep hd
+    obtain ⟨hlE, hnot⟩ := killE_live_dep hl (Or.inl hnint)
+    by_cases hr : dep.root = x
+    · obtain ⟨r, k⟩ := dep
+      simp only at hr; subst hr
+      exact hkeep k (hnot _ hd rfl)
+    · obtain ⟨Er, hEr, hroot⟩ := hi.wf v E hv' hlE (Or.inl hnint) dep.root (List.mem_map_of_mem hd)
+      have hk := rootKeep_frame_ne hi hanch hxa (fun o _ hox => hst o hox) hEr hroot
+        (hst _ hr) (BlkLe.of_eq hblk)
+      exact ⟨hk.vkeep (BlkLe.of_eq hblk), hk.hkeep⟩
+  have getE : ∀ v E', upd (kill e hv x Γ) x ox v = some E' → v ≠ x →
+      ∃ E, Γ v = some E ∧ E' = killE e hv x E := by
+    intro v E' h hvx
+    rw [upd_ne _ _ hvx] at h
+    unfold kill at h
+    cases hE : Γ v with
+    | none => rw [hE] at h; cases h
+    | some E => rw [hE] at h; cases h; exact ⟨E, rfl, rfl⟩
+  have getX : ∀ E', upd (kill e hv x Γ) x ox x = some E' → ox = some E' := by
+    intro E' h; simpa using h
+  constructor
+  · intro v
+    by_cases hvx : v = x
+    · subst hvx
+      cases ox with
+      | none => simp only [upd_same, Option.isSome_none]; rw [show m'.st v = none from hox]; rfl
+      | some Ex' =>
+        obtain ⟨sl, hsl, _⟩ := hox
+        simp [hsl]
+    · rw [upd_ne _ _ hvx, hst v hvx, ← hi.dom v]
+      unfold kill; cases Γ v <;> rfl
+  · intro v E' hv'
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨sl, hsl, hok, hslot, _⟩ := hox
+      exact ⟨sl, hsl, hok, hslot⟩
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      obtain ⟨sl, hsl, hok, hslot⟩ := hi.slot v E hE
+      refine ⟨sl, by rw [hst v hvx]; exact hsl, by rw [killE_ty]; exact hok, ?_⟩
+      by_cases hl : (killE e hv x E).live = true
+      · have hEq : killE e hv x E = E := by
+          have := (killE_live_dep (e := e) (hv := hv) (x := x) (E := E))
+          unfold killE at hl ⊢; split at hl
+          · simp at hl
+          · rename_i hh; simp [hh]
+        rw [hEq] at hl ⊢
+        by_cases hint : E.ty = .int
+        · obtain ⟨ho, hown, hbor⟩ := hslot
+          refine ⟨ho, fun hos => ?_, fun hos hl' => ?_⟩
+          · obtain ⟨ht, _⟩ := hown hos
+            rw [hint] at ht; cases ht
+          · obtain ⟨w, hw, hok'⟩ := hbor hos hl'
+            exact ⟨w, hw, by rw [hint] at hok' ⊢; obtain ⟨n, rfl⟩ := valOK_int.mp hok'; exact .int⟩
+        · refine hslot.keep (fun dep hd => depKeep v E hE (by rw [hEq]; exact hl) hint dep hd) hblk
+      · have hdead : (killE e hv x E).live = false := by simpa using hl
+        by_cases hrb : E.mode = .rootb
+        · rw [show killE e hv x E = E by unfold killE; rw [hnr v E hE hrb]; rfl] at hdead
+          rw [hi.rootbLive v E hE hrb] at hdead; cases hdead
+        · exact (hslot.weaker' (killE_ty ..) (killE_mode ..) (fun h => by rw [hdead] at h; cases h)).dead hdead
+  · exact hheap
+  · intro v hv'
+    rw [hnv]
+    by_cases hvx : v = x
+    · subst hvx; exact hi.nvSt v (by rw [← hi.dom v, hx]; rfl)
+    · exact hi.nvSt v (by rw [← hst v hvx]; exact hv')
+  · intro v E' b hv'
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨_, _, _, _, hm, _⟩ := hox
+      rw [hm]; exact hi.noInout v Ex b hx
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [killE_mode]; exact hi.noInout v E b hE
+  · intro v E' hv'
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨_, _, _, _, hm, _⟩ := hox
+      rw [hm]; exact hi.noRegion v Ex hx
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [killE_mode]; exact hi.noRegion v E hE
+  · refine ⟨?live, ?dtorc, ?armc, ?viewc⟩
+    case armc =>
+      intro v E' hv' hd
+      by_cases hvx : v = x
+      · subst hvx
+        have := getX E' hv'; subst this
+        obtain ⟨_, _, _, _, _, _, _, _, _, _, _, harm, _, _⟩ := hox
+        exact harm hd
+      · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+        rw [killE_dtor] at hd; rw [killE_dbind]; exact hi.wf.arm v E hE hd
+    case viewc =>
+      intro v E' hv' hd
+      by_cases hvx : v = x
+      · subst hvx
+        have := getX E' hv'; subst this
+        obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, hview, _⟩ := hox
+        exact hview hd
+      · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+        rw [killE_dbind] at hd; rw [killE_ty]; exact hi.wf.view v E hE hd
+    case dtorc =>
+      -- A2-drop.2: a destructor owner's views: the change ended none (`DtorSafe`)
+      intro v E' hv' hd hos hnint d hdd hnm
+      by_cases hvx : v = x
+      · subst hvx
+        have := getX E' hv'; subst this
+        obtain ⟨_, _, _, _, hm', _, _, _, _, _, hdwf, _⟩ := hox
+        have hnint' : E'.ty ≠ .int := by
+          rcases hnint with h | h
+          · exact h
+          · exact absurd (hm' ▸ h) hxr
+        rcases hdwf hd hos hnint' d hdd hnm with ⟨hrx, hroot⟩ | ⟨hrx, Er, hEr, hroot⟩
+        · exact ⟨E', by rw [hrx]; simp, hroot⟩
+        · exact ⟨Er, by rw [upd_ne _ _ hrx]; exact hEr, hroot⟩
+      · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+        rw [killE_dbind] at hd; rw [killE_mode] at hos; rw [killE_ty, killE_mode] at hnint
+        rw [killE_vdeps] at hdd
+        obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor v E hE hd hos hnint d hdd hnm
+        by_cases hrx : d.root = x
+        · -- a view of `x`: `x` is still bound, or no destructor binding views it
+          cases ox with
+          | none => exact absurd hrx (hdb rfl v E hE hd hos hnint d hdd hnm)
+          | some Ex' =>
+            obtain ⟨_, _, _, _, hm, _⟩ := hox
+            rw [hrx, hx] at hEr; cases hEr
+            exact ⟨Ex', by rw [hrx]; simp, by rw [hm]; exact hroot⟩
+        · refine ⟨killE e hv x Er, ?_, by rw [killE_mode]; exact hroot⟩
+          rw [upd_ne _ _ hrx]; unfold kill; rw [hEr]; rfl
+    intro v E' hv' hl hnint r hr
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨_, _, _, _, hm', hwf, _⟩ := hox
+      have hnint' : E'.ty ≠ .int := by
+        rcases hnint with h | h
+        · exact h
+        · exact absurd (hm' ▸ h) hxr
+      rcases hwf hl hnint' r hr with ⟨rfl, hroot⟩ | ⟨hrx, Er, hEr, hroot⟩
+      · exact ⟨E', by simp, hroot⟩
+      · exact ⟨Er, by rw [upd_ne _ _ hrx]; exact hEr, hroot⟩
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [killE_ty, killE_mode] at hnint
+      rw [killE_vdeps] at hr
+      have hlE : E.live = true := by
+        rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl; exact hl.1
+      obtain ⟨Er, hEr, hroot⟩ := hi.wf v E hE hlE hnint r hr
+      by_cases hrx : r = x
+      · subst hrx
+        cases ox with
+        | none =>
+          exfalso
+          obtain ⟨dep, hd, rfl⟩ := List.mem_map.mp hr
+          rcases hnint with hnint | hrb
+          · have := (killE_live_dep hl (Or.inl hnint)).2 dep hd rfl
+            rw [hrem rfl] at this
+            cases hk : dep.kind <;> rw [hk] at this <;> simp [Eff.kills] at this
+          · have h0 := hnr v E hE hrb
+            rw [hrem rfl] at h0
+            unfold hits at h0
+            simp only [Bool.and_eq_false_iff, List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and,
+              Bool.not_eq_true] at h0
+            rcases h0 with h0 | h0
+            · rw [hrb] at h0; simp at h0
+            · have := h0 dep hd rfl; cases hk : dep.kind <;> rw [hk] at this <;> simp [Eff.kills] at this
+        | some Ex' =>
+          obtain ⟨_, _, _, _, hm, _⟩ := hox
+          rw [hx] at hEr; cases hEr
+          exact ⟨Ex', by simp, by rw [hm]; exact hroot⟩
+      · refine ⟨killE e hv x Er, ?_, by rw [killE_mode]; exact hroot⟩
+        rw [upd_ne _ _ hrx]; unfold kill; rw [hEr]; rfl
+  · intro p E' hp' hm
+    by_cases hpx : p = x
+    · subst hpx
+      have := getX E' hp'; subst this
+      obtain ⟨_, _, _, _, hm', _⟩ := hox
+      exact absurd (hm' ▸ hm) hxr
+    · obtain ⟨E, hE, rfl⟩ := getE p E' hp' hpx
+      rw [killE_mode] at hm
+      rw [show killE e hv x E = E by unfold killE; rw [hnr p E hE hm]; rfl]
+      exact hi.rootbLive p E hE hm
+  · intro p E' hp' hm
+    by_cases hpx : p = x
+    · subst hpx
+      have := getX E' hp'; subst this
+      obtain ⟨_, _, _, _, hm', _⟩ := hox
+      exact absurd (hm' ▸ hm) hxr
+    · obtain ⟨E, hE, rfl⟩ := getE p E' hp' hpx
+      rw [killE_mode] at hm
+      rw [show killE e hv x E = E by unfold killE; rw [hnr p E hE hm]; rfl]
+      exact hi.rootbLt p E hE hm
+  · intro v E' hv' hl hn
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨_, _, _, _, _, _, _, hnm, _⟩ := hox
+      exact hnm hl hn
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [killE_ty, killE_mode] at hn
+      have hl' := killE_live_dep hl hn
+      intro d hd b t hk
+      rw [killE_vdeps] at hd
+      obtain ⟨Er, hEr, hlr, hhr, ht, ho, hc⟩ := hi.names v E hE hl'.1 hn d hd b t hk
+      by_cases hdx : d.root = x
+      · have hkx := hl'.2 d hd hdx
+        rw [hdx, hx] at hEr; cases hEr
+        have hre : e ≠ .replace := fun h => by rw [h, hk] at hkx; cases hkx
+        cases ox with
+        | none => exact absurd (hrem rfl) hre
+        | some Ex' =>
+          obtain ⟨_, _, _, _, hm', _, hty', _⟩ := hox
+          obtain ⟨hl'', hh''⟩ := hnew hre Ex' rfl hlr hhr (by rw [← ht] at hc; exact hc.2)
+          exact ⟨Ex', by rw [hdx]; simp, hl'', hh'', by rw [hty']; exact ht, by rw [hm']; exact ho,
+            by rw [hm']; exact hc⟩
+      · exact ⟨killE e hv x Er, by rw [upd_ne _ _ hdx]; unfold kill; rw [hEr]; rfl,
+          by rw [killE_nil (root_vdeps ho hhr)]; exact hlr, by rw [killE_nil (root_vdeps ho hhr)]; exact hhr,
+          by rw [killE_ty]; exact ht, by rw [killE_mode]; exact ho, by rw [killE_mode]; exact hc⟩
+  · -- Agora #909: the new slot's entry is fresh in the new context; an emptied
+    -- slot ended the fresh borrows through it (a replace)
+    cases ox with
+    | none => rw [hrem rfl]; exact hi.fresh.remove hv x
+    | some Ex' =>
+      obtain ⟨_, _, _, _, hmx, _, _, _, _, _, _, _, _, _, _, hfx⟩ := hox
+      exact (hi.fresh.kill e hv x).setE hfx (fun Ek hEk hm => by
+        simp [A2.kill, hx] at hEk; rw [← hEk, killE_mode] at hm; rw [hmx]; exact hm)
+  · intro v E' sl T hv' hl hsl hT
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨sl', hsl', _, _, _, _, _, _, hin, _⟩ := hox
+      rw [hsl'] at hsl; cases hsl
+      exact hin hl T hT
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      have hlE : E.live = true := by
+        rw [killE_live] at hl; simp only [Bool.and_eq_true] at hl; exact hl.1
+      rw [hst v hvx] at hsl
+      rw [killE_held]; exact hi.held v E sl T hE hlE hsl hT
+  · intro v sl T hsl hT
+    by_cases hvx : v = x
+    · subst hvx
+      cases ox with
+      | none => rw [show m'.st v = none from hox] at hsl; cases hsl
+      | some Ex' =>
+        obtain ⟨sl', hsl', _, _, _, _, _, _, _, hpk, _, _⟩ := hox
+        rw [hsl'] at hsl; cases hsl
+        exact hpk T hT
+    · rw [hst v hvx] at hsl; exact hi.pkgs v sl T hsl hT
+  · -- A2-drop.2: no view of an armed binding is one the change ends (`DtorSafe`)
+    intro v E' sl hv' hsl
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, harm, _⟩ := hox
+      rw [hsl'] at hsl; cases hsl; exact harm
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [hst v hvx] at hsl
+      refine ArmOK.entry (killE_dbind ..) (killE_ty ..) (killE_mode ..) (fun h => by rw [killE_dtor]; exact h)
+        (by rw [killE_held]; exact fun d hd => (List.mem_filter.mp hd).1) ?_
+      refine (hi.armed v E sl hE hsl).keep fun hdt hd hos dep hdm => ?_
+      have hdm' := List.mem_filter.mp hdm
+      have hnm : dep.kind.isName = false := by simpa using hdm'.2
+      have hdv : dep ∈ E.vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hdm'.1
+      have hnint : E.ty ≠ .int := fun h => by have := hi.wf.view v E hE hd; rw [h] at this; cases this
+      by_cases hr : dep.root = x
+      · obtain ⟨r, k⟩ := dep
+        simp only at hr; subst hr
+        exact (hkeep k (hitsMem_kills (hds v E hE hdt hos) (Or.inl hnint) hdv rfl hnm)).1
+      · obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor v E hE hd hos (Or.inl hnint) dep hdv hnm
+        exact (rootKeep_frame_ne hi hanch hxa (fun o _ hox => hst o hox) hEr hroot (hst _ hr)
+          (BlkLe.of_eq hblk)).vkeep (BlkLe.of_eq hblk)
+  · -- A3.1: an owned tree's shares name live blocks; no change here touches a block
+    intro v E' sl T hv' hsl hown hT
+    by_cases hvx : v = x
+    · subst hvx
+      have := getX E' hv'; subst this
+      obtain ⟨sl', hsl', _, _, _, _, _, _, _, _, _, _, _, _, hsh, _⟩ := hox
+      rw [hsl'] at hsl; cases hsl; exact hsh hown T hT
+    · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+      rw [hst v hvx] at hsl
+      rw [killE_ty]; exact (hi.shares v E sl T hE hsl hown hT).of_blk hblk
+  · intro k bl hk
+    rw [hblk] at hk
+    obtain ⟨h1, h2, h3, h4⟩ := hi.blocks k bl hk
+    exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.of_blk hblk⟩, h4⟩
+  · -- AGORA-901: the borrows the change leaves name nodes no package holds
+    have hcl : CleanLe (upd (kill e hv x Γ) x ox) Γ := CleanLe.of_entries fun v E' hv' => by
+      by_cases hvx : v = x
+      · subst hvx
+        have := getX E' hv'; subst this
+        obtain ⟨_, _, _, _, hm, _⟩ := hox
+        exact ⟨Ex, hx, hm, fun h => absurd h hxr⟩
+      · obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvx
+        exact ⟨E, hE, killE_mode .., fun _ => ⟨killE_path .., killE_held ..⟩⟩
+    intro y Ey' o v hy hl hs i hn
+    have hn0 : PkgNames m' Γ Ey' v i := hn.mono hcl
+    by_cases hyx : y = x
+    · subst hyx
+      exact hpk.2 Ey' o v (getX Ey' hy) hl hs i hn0
+    · obtain ⟨Ey, hEy, rfl⟩ := getE y Ey' hy hyx
+      rw [hst y hyx] at hs
+      exact hpk.1 y Ey o v hyx hEy hl hs i hn0.of_killE
+
+/-! ### AGORA-901: a fresh binding -/
+
 /-- A clean root of a context with one binding more is that binding, or one
     the context had: what a borrowed parameter depends on is bound. -/
 theorem Hollow.of_setE {Γ : Ctx} {x : Var} {E : Entry} (hx : Γ x = none)
@@ -1166,6 +1494,102 @@ theorem PkgKeep.of_edit {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) 
               unfold hits
               have hnt : (Ey.ty != .int || Ey.mode == .rootb) = true := by
                 cases hty : Ey.ty <;> simp_all
+                obtain ⟨w, hw, hok⟩ := hi.bor_val hEy (hla.live_of_bor hm) hos
+                rw [hs] at hw; cases hw
+                rw [hty] at hok; obtain ⟨k, rfl⟩ := valOK_int.mp hok; cases hb
+              rw [hnt, Bool.true_and, List.any_eq_true]
+              exact ⟨dep, hdv, by rcases hdk with h | h | h <;> simp [hdr, h, hks, hkv, hki]⟩
+            exact hl.killed hhit hos
+        · rw [hst r hrx] at hT1
+          exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, T1, t, d, es, hb, hT1, hs1, o', l, hvn⟩))
+      · exact Or.inr (Or.inr (Or.inr h4))
+    have hs' : m.st y = some ⟨o, some v⟩ := hs
+    exact hfr i (hhome i (hi.named_home hEy hla hs' hn0)) (hi.pkgFree y Ey o v hEy hla hs' i hn0)
+  · obtain ⟨h1, h2⟩ := hself Ex' o v hx' hl hs i hn
+    exact hfr i h2 h1
+
+
+/-- AGORA-937 (3d, route F): `PkgKeep.of_edit` where `x` may be frozen. -/
+theorem PkgKeep.of_edit_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
+    {e : Eff} {hv : Bool} {x : Var} {Ex : Entry} {ox : Option Entry} (hx : Γ x = some Ex)
+    (hxa : ∀ p E, Γ p = some E → E.mode = .rootb →
+      (∀ d ∈ E.path, d.root = x → d.kind.bound ≠ .none) ∧
+      ((∀ t, E.ty ≠ .vec t) → ∀ d ∈ E.held, d.root = x → d.kind.bound ≠ .none))
+    {T0 : Val} (hT : m.st x = some ⟨true, some T0⟩)
+    (hst : ∀ o, o ≠ x → m'.st o = m.st o)
+    (hpk : ∀ T', m'.st x = some ⟨true, some T'⟩ → ∀ fs te ms ev cs, Sub (.pkg fs te ms ev cs) T' →
+      Sub (.pkg fs te ms ev cs) T0 ∨ ∀ i ∈ (Val.pkg fs te ms ev cs).ids, FreshAddr m i)
+    (hnode : ∀ T', m'.st x = some ⟨true, some T'⟩ → ∀ t c d es, Sub (.node t c d es) T' →
+      (∃ t1 d1 es1, Sub (.node t1 c d1 es1) T0 ∧ ∀ i o l, Sub (.view i o l) (.node t c d es) →
+        Sub (.view i o l) (.node t1 c d1 es1)) ∨ FreshAddr m c ∨
+      (∃ t0 d0 es0, T0 = .node t0 c d0 es0 ∧ e.kills hv .self = true ∧ e.kills hv .view = true) ∨
+      (c ∈ T0.ids ∧ e.kills hv .self = true ∧ e.kills hv .view = true ∧ e.kills hv .inner = true))
+    (hself : ∀ Ex' o v, ox = some Ex' → Alive Ex' → m'.st x = some ⟨o, some v⟩ →
+      ∀ i, PkgNames m' Γ Ex' v i → PkgFreeId m i ∧ ¬ FreshAddr m i) :
+    PkgKeep m m' Γ e hv x ox := by
+  -- what lies in memory, no fresh package holds
+  have hfr : ∀ i, ¬ FreshAddr m i → PkgFreeId m i → PkgFreeId m' i := by
+    intro i hnf h r T hT' fs te ms ev cs hP t c d es hN
+    by_cases hrx : r = x
+    · subst hrx
+      rcases hpk T hT' fs te ms ev cs hP with hP0 | hfp
+      · exact h r _ hT fs te ms ev cs hP0 t c d es hN
+      · have hsN : ∀ j ∈ (Val.node t c d es).ids, FreshAddr m j := fun j hj =>
+          hfp j (Child.ids Child.pkg j (hN.ids j hj))
+        exact ⟨fun h1 => hnf (h1 ▸ hsN c (by simp [Val.ids])), fun h2 => hnf (h2 ▸ hsN d (by simp [Val.ids]))⟩
+    · rw [hst r hrx] at hT'; exact h r T hT' fs te ms ev cs hP t c d es hN
+  have hhome : ∀ i, ((∃ r T, m.st r = some ⟨true, some T⟩ ∧ i ∈ T.ids) ∨ PayAddr m i) → ¬ FreshAddr m i := by
+    rintro i (⟨r, T, hT', hiT⟩ | hp) ⟨h1, h2⟩
+    · exact h1 r T hT' hiT
+    · exact h2 hp
+  refine ⟨fun y Ey o v hyx hEy hl hs i hn => ?_, fun Ex' o v hx' hl hs i hn => ?_⟩
+  · have hla := hl.of_killE
+    have hn0 : PkgNames m Γ Ey v i := by
+      rcases hn with h1 | h2 | ⟨hm, hc, c, r, T1, t, d, es, hb, hT1, hs1, o', l, hvn⟩ | h4
+      · exact Or.inl h1
+      · exact Or.inr (Or.inl h2)
+      · by_cases hrx : r = x
+        · subst hrx
+          rcases hnode T1 hT1 t c d es hs1 with ⟨t1, d1, es1, hs0, hvw⟩ | hfc | ⟨t0, d0, es0, rfl, hks, hkv⟩ |
+              ⟨hcT, hks, hkv, hki⟩
+          · exact Or.inr (Or.inr (Or.inl ⟨hm, hc, c, r, _, t1, d1, es1, hb, hT, hs0, o', l, hvw i o' l hvn⟩))
+          · exfalso
+            have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+            obtain ⟨w, hw, hok⟩ := hi.bor_val hEy (hla.live_of_bor hm) hos
+            rw [hs] at hw; cases hw
+            obtain ⟨dep, t', H', d', es', hlan, _⟩ := hok.bare_href c hb
+            refine hhome c ?_ hfc
+            rcases hlan.home with ⟨x', T', hT', hsT'⟩ | hp
+            · exact Or.inl ⟨x', T', hT', hsT'.ids c (by simp [Val.ids])⟩
+            · exact Or.inr (hp.payAddr hi.heap c (by simp [Val.ids]))
+          · exfalso
+            have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+            obtain ⟨sl, hsl, _, hso, _⟩ := hi.slot y Ey hEy
+            rw [hs] at hsl; cases hsl
+            have ho : o = false := by have := hso; simp only at this; rw [this, hos]
+            subst ho
+            obtain ⟨dep, hdv, hdr, hdk⟩ := hi.root_namer_ne hanch hxa hT hEy (hla.live_of_bor hm) hs hb
+            have hhit : hits e hv r Ey = true := by
+              unfold hits
+              have hnt : (Ey.ty != .int || Ey.mode == .rootb) = true := by
+                clear hxa; cases hty : Ey.ty <;> simp_all
+                obtain ⟨w, hw, hok⟩ := hi.bor_val hEy (hla.live_of_bor hm) hos
+                rw [hs] at hw; cases hw
+                rw [hty] at hok; obtain ⟨k, rfl⟩ := valOK_int.mp hok; cases hb
+              rw [hnt, Bool.true_and, List.any_eq_true]
+              exact ⟨dep, hdv, by rcases hdk with h | h <;> simp [hdr, h, hks, hkv]⟩
+            exact hl.killed hhit hos
+          · exfalso
+            have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+            obtain ⟨sl, hsl, _, hso, _⟩ := hi.slot y Ey hEy
+            rw [hs] at hsl; cases hsl
+            have ho : o = false := by have := hso; simp only at this; rw [this, hos]
+            subst ho
+            obtain ⟨dep, hdv, hdr, hdk⟩ := hi.namer_ne hanch hxa hT hcT hEy (hla.live_of_bor hm) hs hb
+            have hhit : hits e hv r Ey = true := by
+              unfold hits
+              have hnt : (Ey.ty != .int || Ey.mode == .rootb) = true := by
+                clear hxa; cases hty : Ey.ty <;> simp_all
                 obtain ⟨w, hw, hok⟩ := hi.bor_val hEy (hla.live_of_bor hm) hos
                 rw [hs] at hw; cases hw
                 rw [hty] at hok; obtain ⟨k, rfl⟩ := valOK_int.mp hok; cases hb
