@@ -315,7 +315,7 @@ theorem CtxRel.editBV {Γ Γ1 : Ctx} {F : List Var} (hanch : RootbAnchR Γ F) {x
       (holdThru (memDeps D) Ex.path (killThruV op Ex.ty Ex.path Γ1)) :=
     CtxRel.holdOn fun v hv E hE => by
       obtain ⟨E0, h0, hm0, _, _, _, _, hb0, _⟩ := killHv_same hE
-      obtain ⟨Er, hEr, hos, _⟩ := hthru.root hv
+      obtain ⟨Er, hEr, hos⟩ := hthru.root hv
       rw [hEr] at h0; cases h0
       refine ⟨fun h => ?_, by rw [hb0]; exact hV.dbind hv hEr⟩
       rw [hm0] at h; rw [h] at hos; cases hos

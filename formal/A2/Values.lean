@@ -1112,6 +1112,85 @@ theorem MInv.root_namer {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (ha
       · cases hc
   · exact (hi.heap.notPay hT hc0T (hp.payAddr hi.heap c0 (by simp [Val.ids]))).elim
 
+
+/-- AGORA-937 (3d, route F): `MInv.root_namer` where `x` may be frozen, no borrowed
+    parameter's memory lying in its tree (`rootb_anchor_ne`). -/
+theorem MInv.root_namer_ne {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
+    {x : Var}
+    (hxa : ∀ p E, Γ p = some E → E.mode = .rootb →
+      (∀ d ∈ E.path, d.root = x → d.kind.bound ≠ .none) ∧
+      ((∀ t, E.ty ≠ .vec t) → ∀ d ∈ E.held, d.root = x → d.kind.bound ≠ .none)) {t : Ty} {c0 d0 : Nat} {es0 : List Val}
+    (hT : m.st x = some ⟨true, some (.node t c0 d0 es0)⟩)
+    {y : Var} {Ey : Entry} (hy : Γ y = some Ey) (hl : Ey.live = true) {v : Val}
+    (hs : m.st y = some ⟨false, some v⟩) (hb : Bare (.href c0) v) :
+    ∃ dep ∈ Ey.vdeps, dep.root = x ∧ (dep.kind = .self ∨ dep.kind = .view) := by
+  have hm := hi.bor_mode hy hs
+  have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+  obtain ⟨w, hw, hok⟩ := hi.bor_val hy hl hos
+  rw [hs] at hw; cases hw
+  have hint : Ey.ty ≠ .int := fun ht => by
+    rw [ht] at hok; obtain ⟨k, rfl⟩ := valOK_int.mp hok; cases hb
+  obtain ⟨dep, hd, t1, H', d1, es1, hlan, _⟩ := hok.bare_href' c0 hb
+  have hdv : dep ∈ Ey.vdeps := by simp [Entry.vdeps, hos]; exact List.mem_append.mp hd
+  have hc0T : c0 ∈ (Val.node t c0 d0 es0).ids := by simp [Val.ids]
+  -- a node in a frozen tree or a payload is not the owner's
+  have hfz : ∀ n0, Sub (.node t1 c0 d1 es1) n0 →
+      ((∃ o T, o ∈ F ∧ o ≠ x ∧ OwnedAt m o T ∧ Sub n0 T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n0 bl.rd) → False := by
+    rintro n0 hsn (⟨o, T, -, hoxn, hoT, hsT⟩ | ⟨k, bl, hk, hsb⟩)
+    · have hox : o = x := Classical.byContradiction fun hne =>
+        hi.heap.disj o x T _ hne hoT hT c0 ((hsn.trans hsT).ids c0 (by simp [Val.ids])) hc0T
+      exact hoxn hox
+    · exact hi.heap.notPay hT hc0T
+        (InPay.payAddr hi.heap ⟨k, bl, hk, hsn.trans hsb⟩ c0 (by simp [Val.ids]))
+  refine ⟨dep, hdv, ?_⟩
+  rcases hlan with ⟨n0, hr, hla⟩ | ⟨_, _, hp⟩
+  · have hsn := hla.sub
+    -- a borrowed root's node is a borrowed parameter's
+    have hrb : (∃ w, m.st dep.root = some ⟨false, some w⟩) → ∃ Er, Γ dep.root = some Er ∧ Er.mode = .rootb := by
+      rintro ⟨w, hw⟩
+      obtain ⟨Er, hEr, hro⟩ := hi.wf y Ey hy hl (Or.inl hint) dep.root (List.mem_map_of_mem hdv)
+      obtain ⟨sl, hsl, _, hso, _, _⟩ := hi.slot dep.root Er hEr
+      rw [hw] at hsl; cases hsl
+      refine ⟨Er, hEr, ?_⟩
+      cases hme : Er.mode with
+      | own => rw [hme] at hso; simp [Mode.ownSlot] at hso
+      | inout b => exact absurd hme (hi.noInout _ Er b hEr)
+      | region => exact absurd hme (hi.noRegion _ Er hEr)
+      | rootb => rfl
+      | bor => rw [hme] at hro; simp [Mode.isRoot] at hro
+    rcases hr with ⟨T1, hT1, htop⟩ | ⟨w', c', hc', ht', hna⟩ | ⟨w', d', o', l', hc', ht', hda⟩ |
+      ⟨w', k, q, _, _, rfl⟩ | ⟨w', k, _, _, rfl⟩
+    · -- an owner's tree: the owner's, at its top
+      have hs1 : Sub (.node t1 c0 d1 es1) T1 := hsn.trans htop.sub
+      have hrx : dep.root = x := Classical.byContradiction fun hne =>
+        hi.heap.disj _ x T1 _ hne hT1 hT c0 (hs1.ids c0 (by simp [Val.ids])) hc0T
+      refine ⟨hrx, ?_⟩
+      rw [hrx, hT] at hT1; cases hT1
+      have heq := sub_unique (hi.heap.nodup x _ hT) hs1 (Sub.refl _) (i := c0) (by simp [Val.head])
+        (by simp [Val.head])
+      have hn0 : n0 = .node t c0 d0 es0 := by
+        rw [heq] at hsn
+        exact (sub_antisymm hsn htop.sub).symm
+      rcases hla with ⟨hk, _⟩ | ⟨hk, _⟩ | ⟨_, hbl⟩
+      · exact Or.inl hk
+      · exact Or.inr hk
+      · rw [hn0, heq] at hbl; exact (Below.irrefl hbl).elim
+    · obtain ⟨Er, hEr, hrbm⟩ := hrb ⟨w', hc'⟩
+      exact (hfz n0 hsn (rootb_anchor_ne hi hanch hxa dep.root Er n0 hEr hrbm
+        (Or.inr (Or.inl ⟨w', c', hc', ht', hna⟩)) (by
+          obtain ⟨ty, d, es, hneq⟩ := hna.eq; rw [hneq]; intro _ _ h; cases h))).elim
+    · obtain ⟨Er, hEr, hrbm⟩ := hrb ⟨w', hc'⟩
+      exact (hfz n0 hsn (rootb_anchor_ne hi hanch hxa dep.root Er n0 hEr hrbm
+        (Or.inr (Or.inr (Or.inl ⟨w', d', o', l', hc', ht', hda⟩))) (by
+          obtain ⟨ty, c, es, hneq⟩ := hda.eq; rw [hneq]; intro _ _ h; cases h))).elim
+    · rcases hsn.cases' with h | ⟨e, hc, _⟩
+      · cases h
+      · cases hc
+    · rcases hsn.cases' with h | ⟨e, hc, _⟩
+      · cases h
+      · cases hc
+  · exact (hi.heap.notPay hT hc0T (hp.payAddr hi.heap c0 (by simp [Val.ids]))).elim
+
 /-- **Who names a node of an owner's tree**: a live borrow whose handle names
     a node of an owner's tree, not frozen, depends on that owner in memory, as
     its handle, its view or a part of it: a borrowed parameter's node lies in
@@ -1168,6 +1247,74 @@ theorem MInv.namer {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch :
           obtain ⟨ty, d, es, hneq⟩ := hna.eq; rw [hneq]; intro _ _ h; cases h))).elim
     · obtain ⟨Er, hEr, hrbm⟩ := hrb ⟨w', hc'⟩
       exact (hfz n0 hsn (rootb_anchor hi hanch dep.root Er n0 hEr hrbm
+        (Or.inr (Or.inr (Or.inl ⟨w', d', o', l', hc', ht', hda⟩))) (by
+          obtain ⟨ty, c, es, hneq⟩ := hda.eq; rw [hneq]; intro _ _ h; cases h))).elim
+    · rcases hsn.cases' with h | ⟨e, hc, _⟩
+      · cases h
+      · cases hc
+    · rcases hsn.cases' with h | ⟨e, hc, _⟩
+      · cases h
+      · cases hc
+  · exact (hi.heap.notPay hT hcT (hp.payAddr hi.heap c (by simp [Val.ids]))).elim
+
+
+/-- AGORA-937 (3d, route F): `MInv.namer` where `x` may be frozen, no borrowed
+    parameter's memory lying in its tree (`rootb_anchor_ne`). -/
+theorem MInv.namer_ne {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
+    {x : Var}
+    (hxa : ∀ p E, Γ p = some E → E.mode = .rootb →
+      (∀ d ∈ E.path, d.root = x → d.kind.bound ≠ .none) ∧
+      ((∀ t, E.ty ≠ .vec t) → ∀ d ∈ E.held, d.root = x → d.kind.bound ≠ .none)) {T : Val} (hT : m.st x = some ⟨true, some T⟩) {c : Nat} (hcT : c ∈ T.ids)
+    {y : Var} {Ey : Entry} (hy : Γ y = some Ey) (hl : Ey.live = true) {v : Val}
+    (hs : m.st y = some ⟨false, some v⟩) (hb : Bare (.href c) v) :
+    ∃ dep ∈ Ey.vdeps, dep.root = x ∧ (dep.kind = .self ∨ dep.kind = .view ∨ dep.kind = .inner) := by
+  have hm := hi.bor_mode hy hs
+  have hos : Ey.mode.ownSlot = false := by rcases hm with h | h <;> rw [h] <;> rfl
+  obtain ⟨w, hw, hok⟩ := hi.bor_val hy hl hos
+  rw [hs] at hw; cases hw
+  have hint : Ey.ty ≠ .int := fun ht => by
+    rw [ht] at hok; obtain ⟨k, rfl⟩ := valOK_int.mp hok; cases hb
+  obtain ⟨dep, hd, t1, H', d1, es1, hlan, _⟩ := hok.bare_href' c hb
+  have hdv : dep ∈ Ey.vdeps := by simp [Entry.vdeps, hos]; exact List.mem_append.mp hd
+  have hfz : ∀ n0, Sub (.node t1 c d1 es1) n0 →
+      ((∃ o T, o ∈ F ∧ o ≠ x ∧ OwnedAt m o T ∧ Sub n0 T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n0 bl.rd) → False := by
+    rintro n0 hsn (⟨o, T', -, hoxn, hoT, hsT⟩ | ⟨k, bl, hk, hsb⟩)
+    · have hox : o = x := Classical.byContradiction fun hne =>
+        hi.heap.disj o x T' _ hne hoT hT c ((hsn.trans hsT).ids c (by simp [Val.ids])) hcT
+      exact hoxn hox
+    · exact hi.heap.notPay hT hcT (InPay.payAddr hi.heap ⟨k, bl, hk, hsn.trans hsb⟩ c (by simp [Val.ids]))
+  refine ⟨dep, hdv, ?_⟩
+  rcases hlan with ⟨n0, hr, hla⟩ | ⟨_, _, hp⟩
+  · have hsn := hla.sub
+    have hrb : (∃ w, m.st dep.root = some ⟨false, some w⟩) → ∃ Er, Γ dep.root = some Er ∧ Er.mode = .rootb := by
+      rintro ⟨w, hw⟩
+      obtain ⟨Er, hEr, hro⟩ := hi.wf y Ey hy hl (Or.inl hint) dep.root (List.mem_map_of_mem hdv)
+      obtain ⟨sl, hsl, _, hso, _, _⟩ := hi.slot dep.root Er hEr
+      rw [hw] at hsl; cases hsl
+      refine ⟨Er, hEr, ?_⟩
+      cases hme : Er.mode with
+      | own => rw [hme] at hso; simp [Mode.ownSlot] at hso
+      | inout b => exact absurd hme (hi.noInout _ Er b hEr)
+      | region => exact absurd hme (hi.noRegion _ Er hEr)
+      | rootb => rfl
+      | bor => rw [hme] at hro; simp [Mode.isRoot] at hro
+    have hk : dep.kind = .self ∨ dep.kind = .view ∨ dep.kind = .inner := by
+      rcases hla with ⟨h, _⟩ | ⟨h, _⟩ | ⟨h, _⟩
+      · exact Or.inl h
+      · exact Or.inr (Or.inl h)
+      · exact Or.inr (Or.inr h)
+    rcases hr with ⟨T1, hT1, htop⟩ | ⟨w', c', hc', ht', hna⟩ | ⟨w', d', o', l', hc', ht', hda⟩ |
+      ⟨w', k, q, _, _, rfl⟩ | ⟨w', k, _, _, rfl⟩
+    · have hs1 : Sub (.node t1 c d1 es1) T1 := hsn.trans htop.sub
+      have hrx : dep.root = x := Classical.byContradiction fun hne =>
+        hi.heap.disj _ x T1 _ hne hT1 hT c (hs1.ids c (by simp [Val.ids])) hcT
+      exact ⟨hrx, hk⟩
+    · obtain ⟨Er, hEr, hrbm⟩ := hrb ⟨w', hc'⟩
+      exact (hfz n0 hsn (rootb_anchor_ne hi hanch hxa dep.root Er n0 hEr hrbm
+        (Or.inr (Or.inl ⟨w', c', hc', ht', hna⟩)) (by
+          obtain ⟨ty, d, es, hneq⟩ := hna.eq; rw [hneq]; intro _ _ h; cases h))).elim
+    · obtain ⟨Er, hEr, hrbm⟩ := hrb ⟨w', hc'⟩
+      exact (hfz n0 hsn (rootb_anchor_ne hi hanch hxa dep.root Er n0 hEr hrbm
         (Or.inr (Or.inr (Or.inl ⟨w', d', o', l', hc', ht', hda⟩))) (by
           obtain ⟨ty, c, es, hneq⟩ := hda.eq; rw [hneq]; intro _ _ h; cases h))).elim
     · rcases hsn.cases' with h | ⟨e, hc, _⟩

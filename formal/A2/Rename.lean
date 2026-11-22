@@ -7350,7 +7350,7 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
         S.subE (S.liftE r Er) ∧ (Er.ty.holdsView = true → (S.liftE r Er).held = rds S.ρ Er.held ++ S.A) ∧
         (S.liftE r Er).ty = Er.ty := by
       intro r hr
-      obtain ⟨Er, hEr, hos, _⟩ := hthru.root hr
+      obtain ⟨Er, hEr, hos⟩ := hthru.root hr
       have hrbr : Er.mode ≠ .rootb := fun h' => by rw [h'] at hos; cases hos
       have hnpr : S.isPi r = false := hab1.notPi hEr (fun h' => by rw [h'] at hos; cases hos)
       exact ⟨Er, hEr, argE_canons h hEr hnpr,
@@ -7406,7 +7406,7 @@ theorem editBV_ren (h : S.OK) (hab : S.AbsOK Γa) {b : Bool} (hloc : b = true �
       E.mode ≠ .rootb ∧ E.dbind = false ∧ E.mode.ownSlot = true := by
     intro v hv E hE
     obtain ⟨E0, h0, hm0, _, _, _, _, hb0, _⟩ := killHv_same hE
-    obtain ⟨Er, hEr, hos, _⟩ := hthru.root hv
+    obtain ⟨Er, hEr, hos⟩ := hthru.root hv
     rw [hEr] at h0; cases h0
     refine ⟨fun h' => ?_, by rw [hb0]; exact hV.dbind hv hEr, by rw [hm0]; exact hos⟩
     rw [hm0] at h'; rw [h'] at hos; cases hos

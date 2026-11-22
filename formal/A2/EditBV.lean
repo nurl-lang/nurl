@@ -120,11 +120,12 @@ theorem effAt_dropV {op : Edit} {k : Kind} {s rv : Bool} {Γ : Ctx} {x : Var}
 
 /-- The kills of a change through a borrow are below `.replace`, on roots
     the change allows (`ThruOK`), so none is lent out. -/
-theorem thruKills_ok {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
-    (hthru : ThruOK Γ1 F op tx P) : ∀ k ∈ thruKills op Γ1 tx P, k.2.2 ∉ F ∧ k.1 ≠ .replace := by
+theorem thruKills_ok {Γ1 : Ctx} {F : List Var} {op : Edit} {tx t : Ty} {P : List Dep}
+    (hthru : ThruOK Γ1 F op tx P) (htx : tx = .vec t) (hhv : t.holdsView = true) :
+    ∀ k ∈ thruKills op Γ1 tx P, k.2.2 ∉ F ∧ k.1 ≠ .replace := by
   intro k hk
   obtain ⟨d, hd, rfl⟩ := mem_thruKills.mp hk
-  exact ⟨(hthru d hd).1, Edit.effAt_ne_replace _ _ _ _⟩
+  exact ⟨(hthru d hd).1.notMem_views htx hhv, Edit.effAt_ne_replace _ _ _ _⟩
 
 /-! ### Holding more, and kills -/
 
@@ -872,7 +873,7 @@ theorem MInv.holdOn {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {rs : List Var} {D : L
 theorem MInv.editBV_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) (hn : NameWF Γ1)
     (hfr : FreshOK Γ1)
     (hanch : RootbAnch Γ1 F) {x : Var} {op : Edit} {Ex : Entry} {t : Ty}
-    (hx : Γ1 x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
+    (hx : Γ1 x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
     (hthru : ThruOK Γ1 F op Ex.ty Ex.path) {D : List Dep} (hV : ThruV Γ1 op Ex.ty Ex.path D)
     (hDn : ∀ d ∈ D, d.kind.isName = false)
     (hDr : ∀ r ∈ roots D, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
@@ -919,7 +920,7 @@ theorem MInv.editBV_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) 
       obtain ⟨E0, h0, hm0, _⟩ := kill_cmode hE
       obtain ⟨Er, hEr, hos, _⟩ := hroot dep.root hdr
       rw [hEr] at h0; cases h0; rw [hm0]; intro h; rw [h] at hos; cases hos)
-  have h1 := hown.killHv_more hanch1 _ (thruKills_ok hthru)
+  have h1 := hown.killHv_more hanch1 _ (thruKills_ok hthru hty hhv)
   rw [killHv_holdOn _ _ _ hLD, killHv_absorb hk0] at h1
   -- the other roots hold `D` too
   have hrs : ∀ v ∈ (roots (memDeps Ex.path)).filter (· != dep.root), ∀ E,
@@ -1001,7 +1002,7 @@ theorem MInv.editBV_rest {m' : Mem} {Γ1 : Ctx} {F : List Var} (hw : CtxWF Γ1) 
     the stored values', valid through `D` (`keepV`). -/
 theorem MInv.editBV_fin {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
     (hanch : RootbAnch Γ1 F) {x : Var} {op : Edit} {Ex : Entry} {t : Ty} (hx : Γ1 x = some Ex)
-    (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
+    (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
     (hthru : ThruOK Γ1 F op Ex.ty Ex.path) {D : List Dep} (hV : ThruV Γ1 op Ex.ty Ex.path D)
     (hDn : ∀ d ∈ D, d.kind.isName = false)
     (hDr : ∀ r ∈ roots D, ∃ Er, Γ1 r = some Er ∧ Er.mode.isRoot = true)
@@ -1024,7 +1025,7 @@ theorem MInv.editBV_fin {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 �
       (CleanDeps Γ1 D → PkgFreeId m1 i ∧ ¬ FreshAddr m1 i)) :
     MInv m' (A2.setE (holdThru D Ex.path (killThruV op Ex.ty Ex.path Γ1)) x
       { Ex with held := Ex.held ++ D }) := by
-  have hoF := (hthru dep hdep).1
+  have hoF := (hthru dep hdep).1.notMem_views hty hhv
   have hoD := (hV dep hdep).2.2
   have hxo : x ≠ dep.root := fun e => by rw [e, hT0] at hxs; cases hxs
   have hnint : Ex.ty ≠ .int := by rw [hty]; simp
@@ -1050,7 +1051,7 @@ theorem MInv.editBV_fin {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 �
     · exact hns0 cc h
     · exact h)
   obtain ⟨_, hpfx⟩ := hi.editBV_names hx hmx hl hthru hxs hT0 hst hT' hr hes hvf
-  exact MInv.editBV_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hV hDn hDr hdep hown
+  exact MInv.editBV_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hhv hthru hV hDn hDr hdep hown
     (by rw [hst x hxo]; exact hxs)
     (editB_hrefAt' hT' (hi.heap.nodup _ _ hT0) htop hla hr hw' hV' hN' hsh') hpfx
 
@@ -1110,6 +1111,7 @@ theorem MInv.editBV_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
   obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
   subst t'
   obtain ⟨hoF, _, Eo, hEo, hlo, hcan, _, _⟩ := hthru dep hdm
+  replace hoF := hoF.notMem_views hty hhv
   obtain ⟨hdsV, hdbV, hoD⟩ := hV dep hdm
   have hargE : argE Γ1 dep.root = Eo := by unfold argE; rw [hEo]; rfl
   rw [hargE] at hdsV hdbV
@@ -1202,7 +1204,7 @@ theorem MInv.editBV_push {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1
           (hi.views_owned hEo hlo hcan.ownSlot hT0) hre hr)
         (by simp [m']) (fun cc hcc => (hsplit cc hcc).imp id (hvo cc)) hpkN hoD hDn hp.root hr hw' hnew rfl
         hsh' hfree hes' hvf
-  exact MInv.editBV_fin hi hanch hx hmx hl hty hthru hV hDn hp.root hdm hxs hT0 htop hla hhref0
+  exact MInv.editBV_fin hi hanch hx hmx hl hty hhv hthru hV hDn hp.root hdm hxs hT0 htop hla hhref0
     hno.sub hst hT' rfl hr hw' (fun cc hcc => (hsplit cc hcc).imp id fun h => (hvn cc h).1) hsh' hnew hown
     hes' hvf
 
@@ -1235,6 +1237,7 @@ theorem MInv.editBV_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
   obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
   subst t'
   obtain ⟨hoF, _, Eo, hEo, hlo, hcan, _, _⟩ := hthru dep hdm
+  replace hoF := hoF.notMem_views hty hhv
   obtain ⟨hdsV, hdbV, hoD⟩ := hV dep hdm
   have hargE : argE Γ1 dep.root = Eo := by unfold argE; rw [hEo]; rfl
   rw [hargE] at hdsV hdbV
@@ -1300,7 +1303,7 @@ theorem MInv.editBV_drops {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ
     exact MInv.edit_dropV hi hanch hEo hoF (hi.canDo_drop hEo hcan) (hds' hdsV) hdbV hEv hT0 hT' hst
       (hheap Eo hEo hlo hos hoF hoD) (by simp [m']) (fun cc hcc => (hsplit cc hcc).imp id And.right) hpkN
       hoD hDn hDr hr hw' hnew rfl hsh' hfree hes' hvf
-  exact MInv.editBV_fin hi hanch hx hmx hl hty hthru hV hDn hDr hdm hxs hT0 htop hla hhref0
+  exact MInv.editBV_fin hi hanch hx hmx hl hty hhv hthru hV hDn hDr hdm hxs hT0 htop hla hhref0
     hno.sub hst hT' rfl hr hw' (fun cc hcc => (hsplit cc hcc).imp id And.left) hsh' hnew hown hes' hvf
 
 /-- `editTrunc` through a borrow of elements that hold views: the node's

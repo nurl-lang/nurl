@@ -1727,6 +1727,32 @@ theorem ThruCanDo.toCanDo {Er : Entry} {e : Eff} (h : ThruCanDo Er e) (hnr : Er.
 
 theorem ThruCanDo.of_canDo {Er : Entry} {e : Eff} (h : canDo Er.mode e) : ThruCanDo Er e := Or.inl h
 
+/-- AGORA-937 (3d, route F): what a frozen root asks of a change strictly
+    inside its elements: no borrowed parameter is ended by it, none reaches
+    the root's memory by its path, and none but a `Vec` by what it holds (a
+    `Vec` lands through its path, `bor_lands_vec`; its elements' views of the
+    root's buffer stay valid where a change strictly inside keeps it). -/
+def LentAway (Γ : Ctx) (r : Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb →
+    hits .dropIn false r E = false ∧ (∀ d ∈ E.path, d.root = r → d.kind.bound ≠ .none) ∧
+    ((∀ t, E.ty ≠ .vec t) → ∀ d ∈ E.held, d.root = r → d.kind.bound ≠ .none)
+
+/-- AGORA-937 (3d, route F): a change through a borrow at a root: the root is
+    not lent out, or the change lies strictly inside its elements and ends,
+    and reaches, no loan of it (`LentAway`). -/
+def FrozenOK (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (d : Dep) : Prop :=
+  d.root ∉ F ∨ ((∀ Er, Γ1 d.root = some Er → op.effAt d.kind (decide (Er.ty = tx)) Er.rvec = .dropIn) ∧
+    (∀ t, tx = .vec t → t.holdsView = false) ∧ LentAway Γ1 d.root)
+
+theorem FrozenOK.of_notMem {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {d : Dep} (h : d.root ∉ F) :
+    FrozenOK Γ1 F op tx d := Or.inl h
+
+/-- A change storing views (`editBV`: the borrow's elements hold views) is
+    made at unfrozen roots only. -/
+theorem FrozenOK.notMem_views {Γ1 : Ctx} {F : List Var} {op : Edit} {tx t : Ty} {d : Dep}
+    (h : FrozenOK Γ1 F op tx d) (htx : tx = .vec t) (hv : t.holdsView = true) : d.root ∉ F :=
+  h.resolve_right fun ⟨_, ht, _⟩ => by rw [ht t htx] at hv; cases hv
+
 /-- What a change through a borrow of type `tx`, whose path is `P`, asks of
     each root `d.root` it reaches in memory, in the context after its
     argument is handed over: the root is not lent out, is not the value
@@ -1735,7 +1761,7 @@ theorem ThruCanDo.of_canDo {Er : Entry} {e : Eff} (h : canDo Er.mode e) : ThruCa
     A3.1: no dependency is through a share (`Kind.share`): what such a
     borrow reaches may lie in a block's payload, which nothing writes. -/
 def ThruOK (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (P : List Dep) : Prop :=
-  ∀ d ∈ memDeps P, d.root ∉ F ∧ (∀ y, op.stored = some y → d.root ≠ y) ∧
+  ∀ d ∈ memDeps P, FrozenOK Γ1 F op tx d ∧ (∀ y, op.stored = some y → d.root ≠ y) ∧
     ∃ Er, Γ1 d.root = some Er ∧ Er.live = true ∧
       canDo Er.mode (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) ∧
       DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) false d.root ∧
@@ -1752,7 +1778,7 @@ theorem ThruOK.noShare {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : Lis
     (`editBV`) adds what it stores to each root's held (`holdThru`), which a
     region has not, so it keeps `ThruOK`. -/
 def ThruOKR (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (P : List Dep) : Prop :=
-  ∀ d ∈ memDeps P, d.root ∉ F ∧ (∀ y, op.stored = some y → d.root ≠ y) ∧
+  ∀ d ∈ memDeps P, FrozenOK Γ1 F op tx d ∧ (∀ y, op.stored = some y → d.root ≠ y) ∧
     ∃ Er, Γ1 d.root = some Er ∧ ThruLive Er ∧
       ThruCanDo Er (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) ∧
       DtorSafe Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) false d.root ∧
@@ -1907,20 +1933,19 @@ def ThruV (Γ1 : Ctx) (op : Edit) (tx : Ty) (P D : List Dep) : Prop :=
     DtorSafe Γ1 (op.effAt d.kind (decide ((argE Γ1 d.root).ty = tx)) (argE Γ1 d.root).rvec) (argE Γ1 d.root).ty.holdsView d.root ∧
     (argE Γ1 d.root).dbind = false ∧ d.root ∉ roots D
 
-/-- A memory root of a change through a borrow owns its slot and is not lent
-    out. -/
+/-- A memory root of a change through a borrow owns its slot. -/
 theorem ThruOK.root {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
     (h : ThruOK Γ1 F op tx P) {r : Var} (hr : r ∈ roots (memDeps P)) :
-    ∃ Er, Γ1 r = some Er ∧ Er.mode.ownSlot = true ∧ r ∉ F := by
+    ∃ Er, Γ1 r = some Er ∧ Er.mode.ownSlot = true := by
   obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
-  obtain ⟨hF, _, Er, hEr, _, hcan, _⟩ := h d hd
-  exact ⟨Er, hEr, hcan.ownSlot, hF⟩
+  obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := h d hd
+  exact ⟨Er, hEr, hcan.ownSlot⟩
 
 /-- ... so no borrow is one. -/
 theorem ThruOK.not_root {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
     (h : ThruOK Γ1 F op tx P) {x : Var} {Ex : Entry} (hx : Γ1 x = some Ex) (hos : Ex.mode.ownSlot = false) :
     x ∉ roots (memDeps P) := fun hr => by
-  obtain ⟨Er, hEr, ho, _⟩ := h.root hr
+  obtain ⟨Er, hEr, ho⟩ := h.root hr
   rw [hx] at hEr; cases hEr; rw [hos] at ho; cases ho
 
 theorem ThruV.dbind {Γ1 : Ctx} {op : Edit} {tx : Ty} {P D : List Dep} (h : ThruV Γ1 op tx P D) {r : Var}

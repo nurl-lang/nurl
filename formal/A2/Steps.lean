@@ -382,6 +382,21 @@ theorem keep_notx {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   have hk := rootKeep_frame hi hanch (fun o ho => hst o (fun h => hxF (h ▸ ho))) hEr hroot (hst _ hne) hb
   exact ⟨hk.vkeep hb, hk.hkeep⟩
 
+/-- AGORA-937 (3d, route F): `keep_notx` where `x` may be frozen, no
+    borrowed parameter's memory lying in its tree. -/
+theorem keep_notx_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
+    (hanch : RootbAnch Γ F) {x : Var}
+    (hxa : ∀ p E, Γ p = some E → E.mode = .rootb →
+      (∀ d ∈ E.path, d.root = x → d.kind.bound ≠ .none) ∧
+      ((∀ t, E.ty ≠ .vec t) → ∀ d ∈ E.held, d.root = x → d.kind.bound ≠ .none))
+    (hst : ∀ o, o ≠ x → m'.st o = m.st o) {dep : Dep}
+    (hr : ∃ Er, Γ dep.root = some Er ∧ Er.mode.isRoot = true) (hne : dep.root ≠ x)
+    (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) :
+    VKeep m m' dep ∧ HKeep m m' dep := by
+  obtain ⟨Er, hEr, hroot⟩ := hr
+  have hk := rootKeep_frame_ne hi hanch hxa (fun o _ hox => hst o hox) hEr hroot (hst _ hne) hb
+  exact ⟨hk.vkeep hb, hk.hkeep⟩
+
 theorem vdeps_mode {E : Entry} {md : Mode} (h : md.ownSlot = E.mode.ownSlot) :
     ({ E with mode := md } : Entry).vdeps = E.vdeps := by
   simp [Entry.vdeps, h]

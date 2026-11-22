@@ -99,6 +99,7 @@ theorem MInv.editB_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   obtain ⟨rfl, rfl, ht', rfl, rfl, rfl⟩ := huniq _ _ _ _ _ _ hno
   subst t'
   obtain ⟨hoF, _, Eo, hEo, hlo, hcan, hds, _⟩ := hthru dep hdm
+  have hfz' := hoF.cases' hEo
   have hargE : argE Γ dep.root = Eo := by unfold argE; rw [hEo]; rfl
   have hxo : x ≠ dep.root := fun e => by rw [e, hT0] at hxs; cases hxs
   have hst : ∀ w, w ≠ dep.root → (m.set dep.root ⟨true, some T'⟩).st w = m.st w :=
@@ -122,8 +123,8 @@ theorem MInv.editB_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [hT0] at h1; cases h1; exact h2
     have hed := effAt_dropE (Edit.effAt_ne_realloc (op := .trunc i) (fun _ h => Edit.noConfusion h)
       dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec) (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) hwT htop hla
-    generalize (Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec = e at hcan hds hed ⊢
-    exact MInv.edit_dropE hi hanch hEo hoF hcan hds hT0 hT' hst (HeapOK.editTake hi.heap hT0 hn hr)
+    generalize (Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec = e at hcan hds hed hfz' ⊢
+    exact MInv.edit_dropE' hi hanch hEo hfz' hcan hds hT0 hT' hst (HeapOK.editTake hi.heap hT0 hn hr)
       (by simp) hhv hr hw' rfl hsh' hfree hes hed
   exact MInv.editB_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref hpfx
