@@ -731,6 +731,34 @@ PR B2 relaxes `Inv.anch` to `HeldAnch` at a root that is no variable of the
 statement, which gives the named kills `NoHeld`. PR B3 makes the call that
 sets them up (`zN`, `CallThruOK`, the exit kill, `CallInv`).
 
+**PR B2, in progress (branch `t937-b2-wip`): how far the relaxation reaches.**
+Done so far:
+- **The clause.** `Inv.anch` is `AnchoredS Γ E F s.vars`. An anchor is in `F`, or it is a `HeldAnch` whose root is none of the statement's variables and whose type holds no views (`∃ Er, Γ r = some Er ∧ Er.ty.holdsView = false`).
+- **Why the type part.** `editBV` kills each root at `hv` = its type holds views (`killThruV`), so it needs `NoHeld` only at those roots (`NoHeldV`). At the others the rule's `HeldOK` spares the held anchors (`HeldSpared.of_thru`). A held root's type holds no views, so `NoHeldV` follows from the clause (`NoHeldV.of_anchS`). The call establishes it in B3 from `CallThruOK`'s "`w`'s elements hold no views".
+- **Transport.**
+  - `AnchoredS.anti`: fewer variables.
+  - `AnchoredS.extend` / `setE_none`: a fresh binding. A held root is bound, so it is not the new one.
+  - `AnchoredS.of_ty` / `of_tyV`: the types kept, or kept outside `V` (the unwind, `Stmt.spine_sub_vars`).
+  - `AnchoredS.union`: `seqL`, through `Keep`.
+- **Kills in the context.** These take the relaxed R-form (`RootbAnchRH`: in `F`, a region view, or a `HeldAnch`) and a `HeldSpared` at the killed root:
+  - `killE_rootbRH`;
+  - `CtxRel.killH`, `movedH`, `killNamesH`, `killHvH`, `editBH`, `editBVH`, `editBV_truncH`;
+  - `PushArg` / `EditArg.ctxRelH`.
+
+  At a named root, `HeldSpared` comes from `NoHeld.of_anchS`. At a root changed through a borrow, it comes from the rule (`HeldSpared.of_heldOK`, `of_thru`). The strict forms are derived from them (`HeldSpared.of_anchR`).
+- **The unwind lemmas** (`rootb_anchor_sp`, `rootKeep_frame_sp`) take `AnchoredH`, as PR A's `rootb_anchor` does.
+
+**Finding: two more consumers of strict anchors run at a leaf.**
+- **`SrcCase`** (`StmtT.ctxRel`, SrcKeep): a source body's typing, walked with `RootbAnchR`. It is used by `withLock` and `withElem`.
+- **A call's `CallA.anch`.** `post_rootb`, and the frame setup in `CallMem` / `CallInv`, read it strictly. Inside a route-U callee's body, the lifted parameter holds a held anchor at `w`, and a nested call there needs a `CallA` all the same.
+
+Both need the relaxed premise:
+- the R-form, plus held roots none of the statement's variables, with their types (an `AnchoredS` with regions);
+- every kill site they walk kills a variable of the statement (`NoHeld`) or a root through a borrow (`HeldOK`);
+- a call's arguments are variables of the statement, so `post_rootb` holds.
+
+For `CallA` this moves into B3's design: the frame setup must place the outer frame's held anchors (unfrozen `w`, not the callee's variable) in the new frame's rename.
+
 The premise of the call (`CallThruOK`) narrows too (finding above): other
 arguments reach `w` only by name. A `.self` path (a borrow `&w` passed
 beside `vv`) would let the callee view inside `w`'s elements through a
