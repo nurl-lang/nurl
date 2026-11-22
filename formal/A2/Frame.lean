@@ -327,11 +327,108 @@ theorem names_nil_of_int {m : Mem} {E : Entry} {sl : Slot} {T : Val} (h : SlotOK
     rw [hT] at hv; cases hv; rfl
   · have := (h.2.1 ho).1; rw [hint] at this; simp [Ty.owning] at this
 
+/-- AGORA-937 (3d, route U): what a kill of `x` asks to spare a borrowed
+    `Vec`'s held anchors at `x` (`HeldAnch`: a view of memory it holds, at
+    an unfrozen root changed only strictly inside): the effect ends none. -/
+def HeldSpared (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.root = x → HeldAnch E d →
+    e.kills hv d.kind = false
+
+/-- An effect that ends no view and no handle spares every held anchor. -/
+theorem HeldSpared.of_kills {Γ : Ctx} {e : Eff} {hv : Bool} (x : Var) (hk : e.kills hv .view = false)
+    (hks : e.kills hv .self = false) : HeldSpared Γ e hv x := by
+  intro p E _ _ d _ _ ⟨_, _, _, hk'⟩
+  rcases hk' with h | h <;> rw [h] <;> assumption
+
+/-- A change strictly inside, ending no view (`hv = false`), spares them. -/
+theorem HeldSpared.dropIn (Γ : Ctx) (x : Var) : HeldSpared Γ .dropIn false x :=
+  HeldSpared.of_kills x rfl rfl
+
+/-- A kill keeps what each binding depends on and holds, so it keeps
+    `HeldSpared`. -/
+theorem HeldSpared.of_kill {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : HeldSpared Γ e hv x)
+    (e' : Eff) (hv' : Bool) (y : Var) : HeldSpared (A2.kill e' hv' y Γ) e hv x := by
+  intro p E hp hm d hd hr ha
+  simp only [A2.kill] at hp
+  obtain ⟨E0, h0, rfl⟩ := Option.map_eq_some_iff.mp hp
+  rw [killE_mode] at hm; rw [killE_vdeps] at hd
+  exact h p E0 h0 hm d hd hr (HeldAnch.of_eq (killE_path ..).symm (killE_held ..).symm (killE_ty ..).symm ha)
+
+/-- ... and a binding set to an entry that is no borrowed parameter. -/
+theorem HeldSpared.of_setE {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : HeldSpared Γ e hv x)
+    {y : Var} {E : Entry} (hE : E.mode ≠ .rootb) : HeldSpared (A2.setE Γ y E) e hv x := by
+  intro p E' hp hm d hd hr ha
+  by_cases hpy : p = y
+  · subst hpy; simp only [A2.setE, upd_same, Option.some.injEq] at hp; subst hp; exact absurd hm hE
+  · simp only [A2.setE, upd_ne _ _ hpy] at hp; exact h p E' hp hm d hd hr ha
+
+theorem HeldSpared.of_killNames {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h : HeldSpared Γ e hv x) :
+    ∀ ds, HeldSpared (A2.killNames ds Γ) e hv x
+  | [] => h
+  | _ :: ds => show HeldSpared (A2.kill _ _ _ (A2.killNames ds Γ)) e hv x from
+      (HeldSpared.of_killNames h ds).of_kill _ _ _
+
+/-- AGORA-937 (3d, route U): a change through a borrow spares, at each
+    memory root of its path, every held anchor there (its effect there, as
+    `ThruOK` reads it). -/
+def ThruSpared (Γ1 : Ctx) (op : Edit) (tx : Ty) (P : List Dep) : Prop :=
+  ∀ d ∈ memDeps P, HeldSpared Γ1 (op.effAt d.kind (decide ((argE Γ1 d.root).ty = tx)) (argE Γ1 d.root).rvec)
+    false d.root
+
+/-- AGORA-937 (3d, route U): no borrowed `Vec` has a held anchor at `x`
+    (what the invariant says of every binding the statement names). -/
+def NoHeld (Γ : Ctx) (x : Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.root = x → ¬ HeldAnch E d
+
+/-- ... kept where the borrowed parameters keep their entries and every
+    binding its mode. -/
+theorem NoHeld.of_rootb {Γ Γ1 : Ctx} {y : Var} (h : NoHeld Γ y)
+    (hcm : ∀ x E1, Γ1 x = some E1 → ∃ E0, Γ x = some E0 ∧ E1.mode = E0.mode ∧ E1.ty = E0.ty)
+    (hrb : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → Γ1 p = some Ep) : NoHeld Γ1 y := by
+  intro p E hp hm d hd hr ha
+  obtain ⟨E0, h0, hm0, _⟩ := hcm p E hp
+  rw [hm] at hm0
+  have := hrb p E0 h0 hm0.symm
+  rw [hp] at this; cases this
+  exact h p _ h0 hm0.symm d hd hr ha
+
+/-- No held anchor at `x`: every kill of it spares them. -/
+theorem HeldSpared.of_none {Γ : Ctx} {x : Var} (h : NoHeld Γ x) (e : Eff) (hv : Bool) : HeldSpared Γ e hv x :=
+  fun p E hp hm d hd hr ha => absurd ha (h p E hp hm d hd hr)
+
+
+/-- ... kept where the borrowed parameters keep their entries and every
+    binding its mode. -/
+theorem RootbAnchF.of_rootb {Γ Γ1 : Ctx} {F : List Var} (h : RootbAnchF Γ F)
+    (hcm : ∀ x E1, Γ1 x = some E1 → ∃ E0, Γ x = some E0 ∧ E1.mode = E0.mode ∧ E1.ty = E0.ty)
+    (hrb : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → Γ1 p = some Ep) : RootbAnchF Γ1 F := by
+  intro p E hp hm
+  obtain ⟨E0, h0, hm0, _⟩ := hcm p E hp
+  rw [hm] at hm0
+  have := hrb p E0 h0 hm0.symm
+  rw [hp] at this; cases this
+  exact h p _ h0 hm0.symm
+
+/-- With every anchor in `F`, a binding not lent out has no held anchor. -/
+theorem NoHeld.of_anchF {Γ : Ctx} {F : List Var} (h : RootbAnchF Γ F) {x : Var} (hx : x ∉ F) : NoHeld Γ x :=
+  fun p E hp hm d hd hr ha => hx (hr ▸ h p E hp hm d hd (by rcases ha.2.2.2 with h' | h' <;> rw [h'] <;> rfl))
+
+/-- ... so a change through a borrow, at roots not lent out (`ThruOK`),
+    spares every held anchor. -/
+theorem ThruSpared.of_anchF {Γ1 : Ctx} {F : List Var} (h : RootbAnchF Γ1 F) {op : Edit} {tx : Ty}
+    {P : List Dep} (hthru : ThruOK Γ1 F op tx P) : ThruSpared Γ1 op tx P :=
+  fun d hd => HeldSpared.of_none (NoHeld.of_anchF h (hthru d hd).1) _ _
+
+theorem NoHeld.thru_anchF {Γ1 : Ctx} {F : List Var} (h : RootbAnchF Γ1 F) {op : Edit} {tx : Ty}
+    {P : List Dep} (hthru : ThruOK Γ1 F op tx P) : ∀ d ∈ memDeps P, NoHeld Γ1 d.root :=
+  fun d hd => NoHeld.of_anchF h (hthru d hd).1
+
 theorem killE_rootb {Γ : Ctx} {F : List Var}
     (hanch : RootbAnch Γ F)
     {x : Var} (hxF : x ∉ F) (e : Eff) (hv : Bool)
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
       e.kills hv d.kind = true → d.root ≠ x)
+    (hhs : HeldSpared Γ e hv x)
     {v : Var} {E : Entry} (hE : Γ v = some E)
     (hrb : E.mode = .rootb) : killE e hv x E = E := by
   unfold killE
@@ -341,7 +438,9 @@ theorem killE_rootb {Γ : Ctx} {F : List Var}
       beq_iff_eq, not_and, Bool.not_eq_true]
     refine Or.inr fun dep hd hr => ?_
     by_cases hb : dep.kind.bound = .none
-    · exact absurd (hr ▸ hanch v E hE hrb dep hd hb) hxF
+    · rcases hanch v E hE hrb dep hd hb with h | ha
+      · exact absurd (hr ▸ h) hxF
+      · exact hhs v E hE hrb dep hd hr ha
     · cases hk : e.kills hv dep.kind
       · rfl
       · exact absurd hr (hmn v E hE hrb dep hd hb hk)
@@ -599,6 +698,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     {x : Var} {Ex : Entry} (hx : Γ x = some Ex) (hxF : x ∉ F) {e : Eff} {hv : Bool}
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
       e.kills hv d.kind = true → d.root ≠ x)
+    (hhs : HeldSpared Γ e hv x)
     (hxr : Ex.mode ≠ .rootb)
     (hst : ∀ o, o ≠ x → m'.st o = m.st o) (hheap : HeapOK m') (hnv : m'.nv = m.nv)
     (hkeep : ∀ k, e.kills hv k = false → VKeep m m' ⟨x, k⟩ ∧ HKeep m m' ⟨x, k⟩)
@@ -670,7 +770,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
         · refine hslot.keep (fun dep hd => depKeep v E hE (by rw [hEq]; exact hl) hint dep hd) hblk
       · have hdead : (killE e hv x E).live = false := by simpa using hl
         by_cases hrb : E.mode = .rootb
-        · rw [killE_rootb hanch hxF e hv hmn hE hrb] at hdead
+        · rw [killE_rootb hanch hxF e hv hmn hhs hE hrb] at hdead
           rw [hi.rootbLive v E hE hrb] at hdead; cases hdead
         · exact (hslot.weaker' (killE_ty ..) (killE_mode ..) (fun h => by rw [hdead] at h; cases h)).dead hdead
   · exact hheap
@@ -771,7 +871,10 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
             rw [hrem rfl] at this
             cases hk : dep.kind <;> rw [hk] at this <;> simp [Eff.kills] at this
           · by_cases hb : dep.kind.bound = .none
-            · exact hxF (hanch v E hE hrb dep hd hb)
+            · rcases hanch v E hE hrb dep hd hb with h | ha
+              · exact hxF h
+              · have := hhs v E hE hrb dep hd rfl ha
+                rw [hrem rfl] at this; cases hk : dep.kind <;> rw [hk] at this <;> simp [Eff.kills] at this
             · exact hmn v E hE hrb dep hd hb (by rw [hrem rfl]; cases dep.kind <;> rfl) rfl
         | some Ex' =>
           obtain ⟨_, _, _, _, hm, _⟩ := hox
@@ -787,7 +890,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       exact absurd (hm' ▸ hm) hxr
     · obtain ⟨E, hE, rfl⟩ := getE p E' hp' hpx
       rw [killE_mode] at hm
-      rw [killE_rootb hanch hxF e hv hmn hE hm]
+      rw [killE_rootb hanch hxF e hv hmn hhs hE hm]
       exact hi.rootbLive p E hE hm
   · intro p E' hp' hm
     by_cases hpx : p = x
@@ -797,7 +900,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       exact absurd (hm' ▸ hm) hxr
     · obtain ⟨E, hE, rfl⟩ := getE p E' hp' hpx
       rw [killE_mode] at hm
-      rw [killE_rootb hanch hxF e hv hmn hE hm]
+      rw [killE_rootb hanch hxF e hv hmn hhs hE hm]
       exact hi.rootbLt p E hE hm
   · intro v E' hv' hl hn
     by_cases hvx : v = x

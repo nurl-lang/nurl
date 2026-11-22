@@ -254,7 +254,7 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
       have := h.post_rootb h0 (hm ▸ hrb)
       rw [h1'] at this; cases this
       rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)] at hr
-      exact (h.anch.toAnch hi.toMInv.noRegion) p E1' h0 (hm ▸ hrb) r hr
+      exact (h.anch.toAnchF hi.toMInv.noRegion) p E1' h0 (hm ▸ hrb) r hr
   spineNd := by
     rw [callStmt_spine, h.body_spine, List.append_nil]
     have hx : x ∉ (m.nv + fn.params.length) :: wrapSpine fn.params m.nv 0 := by
@@ -592,7 +592,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
           have : (m0.set x ⟨false, some (.int 1)⟩) = ((m.set x ⟨false, none⟩).set x ⟨false, some (.int 1)⟩) := by
             simp [m0, ho]
           rw [this]; exact hh) (Nat.le_refl _)
-    have hanchΔ : RootbAnch (setE Γ x (callRes Γ fn [])) F := by
+    have hanchΔ : RootbAnchF (setE Γ x (callRes Γ fn [])) F := by
       intro p Ep hp' hm
       by_cases hpx : p = x
       · subst hpx; simp [setE] at hp'; subst hp'; rw [hEc] at hm; cases hm

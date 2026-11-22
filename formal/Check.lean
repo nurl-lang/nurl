@@ -701,6 +701,12 @@ import A3
 #print axioms A2.MInv.change_ne
 #print axioms A2.MInv.edit_dropE_ne
 #print axioms A2.MInv.killNames_mixed
+-- (AGORA-937 3d, route U, PR A): the memory lemmas allow a lent Vec's held anchors at roots changed only inside
+#print axioms A2.rootb_anchor
+#print axioms A2.MInv.change
+#print axioms A2.HeldSpared.of_none
+#print axioms A2.NoHeld.of_anchF
+#print axioms A2.ThruSpared.of_anchF
 #print axioms A2.RSetup.liftE_rootb_dep
 -- (AGORA-937 3d groundwork): the call's lift is precise (σ: the argument's own memory deps and
 -- each root by its handle) and composes kinds; deriving commutes with it

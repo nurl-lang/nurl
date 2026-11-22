@@ -93,11 +93,11 @@ theorem HeapOK.remove_keep {m : Mem} (hh : HeapOK m) (x : Var) : HeapOK (m.remov
     type, its shares naming blocks. -/
 theorem step_release {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     {x : Var} {E : Entry} (hx : Γ x = some E) (hnrb : E.mode ≠ .rootb) (hxF : x ∉ F) (hpin : EndOK Γ x)
-    {k : Nat} {t : Ty} (hty : E.ty = t) {o : Bool} {v : Val} (hsl : m.st x = some ⟨o, some v⟩)
+    (hno : NoHeld Γ x) {k : Nat} {t : Ty} (hty : E.ty = t) {o : Bool} {v : Val} (hsl : m.st x = some ⟨o, some v⟩)
     (hg : Giveable m.blk t ⟨o, some v⟩) (hk : m.blk k = some ⟨t, .lock, none⟩) :
     MInv ({ m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) }.remove x) (exitScope x Γ) := by
   have h0 : MInv (m.remove x) (exitScope x Γ) :=
-    hi.change hanch hx hxF (hpin.1.kills _ _) hnrb (fun o ho => by simp [upd_ne _ _ ho])
+    hi.change hanch hx hxF (hpin.1.kills _ _) (HeldSpared.of_none hno _ _) hnrb (fun o ho => by simp [upd_ne _ _ ho])
       (hi.heap.remove_keep x) rfl
       (fun k hk => by cases k <;> simp [Eff.kills] at hk) (show _ = none by simp) hpin.2.1 (fun _ => hpin.2.2)
       (fun _ => rfl) (fun _ _ h => by cases h)

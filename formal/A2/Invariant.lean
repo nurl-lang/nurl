@@ -961,6 +961,19 @@ theorem ExitAt.dtorPinOK {Γ : Ctx} {s e : Stmt} {n : Nat} (h : ExitAt s n e) (h
     exact ⟨fun E hE hd hos hn d hdd hnm => by rw [he.spine]; exact hc.1 E hE hd hos hn d hdd hnm, ih hc.2⟩
   | block _ ih => exact ih hc
 
+/-- AGORA-937 (3d, route U): a lent `Vec`'s view of memory it holds (not
+    of what it borrows from): its node lands through its path
+    (`bor_lands_vec`), so this one may be anchored by an unfrozen root that
+    is changed only strictly inside its elements. -/
+def HeldAnch (E : Entry) (d : Dep) : Prop :=
+  d ∉ E.path ∧ d ∈ E.held ∧ (∃ t, E.ty = .vec t) ∧ (d.kind = .view ∨ d.kind = .self)
+
+/-- ... read off the entry's path, held and type alone. -/
+theorem HeldAnch.of_eq {E E' : Entry} {d : Dep} (hp : E'.path = E.path) (hh : E'.held = E.held)
+    (ht : E'.ty = E.ty) (h : HeldAnch E d) : HeldAnch E' d := by
+  obtain ⟨h1, h2, h3, h4⟩ := h
+  exact ⟨hp ▸ h1, hh ▸ h2, ht ▸ h3, h4⟩
+
 /-- A borrowed parameter is anchored: what it borrows from, and what the
     closures it holds only read, are lent out (`F`) for as long as it is
     bound.  (What those closures may change is pinned: no rule replaces it,
@@ -968,13 +981,35 @@ theorem ExitAt.dtorPinOK {Γ : Ctx} {s e : Stmt} {n : Nat} (h : ExitAt s n e) (h
 def Anchored (E : Entry) (F : List Var) : Prop :=
   ∀ d ∈ E.vdeps, d.kind.bound = .none → d.root ∈ F
 
+/-- AGORA-937 (3d, route U): anchored in `F`, or (a lent `Vec`'s view of
+    memory it holds) by a root changed only strictly inside its elements
+    (`HeldAnch`). What the memory lemmas assume (`RootbAnch`); where the
+    statement runs, `Inv.anch` asks the stricter `Anchored`. -/
+def AnchoredH (E : Entry) (F : List Var) : Prop :=
+  ∀ d ∈ E.vdeps, d.kind.bound = .none → d.root ∈ F ∨ HeldAnch E d
+
+theorem Anchored.toH {E : Entry} {F : List Var} (h : Anchored E F) : AnchoredH E F :=
+  fun d hd hb => Or.inl (h d hd hb)
+
 /-- The borrowed parameters' anchors. -/
 def RootbAnch (Γ : Ctx) (F : List Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → AnchoredH E F
+
+/-- AGORA-937 (3d, route U): the borrowed parameters' anchors where the
+    statement runs (`Inv.anch` at a leaf, `StmtT.catchR`): every one in `F`. -/
+def RootbAnchF (Γ : Ctx) (F : List Var) : Prop :=
   ∀ p E, Γ p = some E → E.mode = .rootb → Anchored E F
+
+theorem RootbAnchF.toH {Γ : Ctx} {F : List Var} (h : RootbAnchF Γ F) : RootbAnch Γ F :=
+  fun p E hp hm => (h p E hp hm).toH
 
 theorem Anchored.mono {E : Entry} {F F' : List Var} (h : Anchored E F) (hF : ∀ v ∈ F, v ∈ F') :
     Anchored E F' :=
   fun d hd hb => hF _ (h d hd hb)
+
+theorem AnchoredH.mono {E : Entry} {F F' : List Var} (h : AnchoredH E F) (hF : ∀ v ∈ F, v ∈ F') :
+    AnchoredH E F' :=
+  fun d hd hb => (h d hd hb).imp (hF _) id
 
 /-! #### AGORA-937: anchoring with regions
 
@@ -997,7 +1032,8 @@ def AnchoredIn (Γ : Ctx) (E : Entry) (F : List Var) : Prop :=
 def RootbAnchR (Γ : Ctx) (F : List Var) : Prop :=
   ∀ p E, Γ p = some E → E.mode = .rootb → AnchoredIn Γ E F
 
-theorem RootbAnch.toR {Γ : Ctx} {F : List Var} (h : RootbAnch Γ F) : RootbAnchR Γ F :=
+theorem RootbAnch.toR {Γ : Ctx} {F : List Var} (h : ∀ p E, Γ p = some E → E.mode = .rootb → Anchored E F) :
+    RootbAnchR Γ F :=
   fun p E hp hm d hd hb => Or.inl (h p E hp hm d hd hb)
 
 theorem AnchoredIn.mono {Γ : Ctx} {E : Entry} {F F' : List Var} (h : AnchoredIn Γ E F)
@@ -1007,6 +1043,13 @@ theorem AnchoredIn.mono {Γ : Ctx} {E : Entry} {F F' : List Var} (h : AnchoredIn
 /-- With no region bound, the two agree. -/
 theorem RootbAnchR.toAnch {Γ : Ctx} {F : List Var} (h : RootbAnchR Γ F)
     (hnr : ∀ v E, Γ v = some E → E.mode ≠ .region) : RootbAnch Γ F := fun p E hp hm d hd hb => by
+  rcases h p E hp hm d hd hb with h | ⟨_, Er, hEr, hr⟩
+  · exact Or.inl h
+  · exact absurd hr (hnr _ _ hEr)
+
+/-- ... in `F` itself. -/
+theorem RootbAnchR.toAnchF {Γ : Ctx} {F : List Var} (h : RootbAnchR Γ F)
+    (hnr : ∀ v E, Γ v = some E → E.mode ≠ .region) : RootbAnchF Γ F := fun p E hp hm d hd hb => by
   rcases h p E hp hm d hd hb with h | ⟨_, Er, hEr, hr⟩
   · exact h
   · exact absurd hr (hnr _ _ hEr)
@@ -1981,7 +2024,7 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P .none Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
-      (RootbAnch Δ F) →
+      (RootbAnchF Δ F) →
       KeepOut Γ Δ s.spine → DStay Γ Δ s.spine →
       StmtT P ξ Γ F (.catchR x m0 s) Δ
   /-- A2-drop: a binding that runs a destructor at its end: of a destructor

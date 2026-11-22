@@ -85,7 +85,7 @@ theorem HeapOK.editTake {m : Mem} (hh : HeapOK m) {o : Var} {T T' : Val} {t : Ty
 theorem MInv.editB_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F) {x : Var} {i : Expr} {Ex : Entry} {t : Ty} (hx : Γ x = some Ex)
     (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = false)
-    (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path)
+    (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path) (hts : ThruSpared Γ (.trunc i) Ex.ty Ex.path)
     {o : Var} {T T' : Val} {t' : Ty} {c d n : Nat} {es : List Val} (hn : n < es.length)
     (hno : NodeOf m x o T t' c d es)
     (hr : Repl (.node t' c d es) (.node t' c d (es.eraseIdx n)) T T') :
@@ -100,6 +100,8 @@ theorem MInv.editB_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
   subst t'
   obtain ⟨hoF, _, Eo, hEo, hlo, hcan, hds, _⟩ := hthru dep hdm
   have hargE : argE Γ dep.root = Eo := by unfold argE; rw [hEo]; rfl
+  have hhs0 := hts dep hdm
+  rw [hargE] at hhs0
   have hxo : x ≠ dep.root := fun e => by rw [e, hT0] at hxs; cases hxs
   have hst : ∀ w, w ≠ dep.root → (m.set dep.root ⟨true, some T'⟩).st w = m.st w :=
     fun w hw => by simp [upd_ne _ _ hw]
@@ -122,10 +124,10 @@ theorem MInv.editB_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [hT0] at h1; cases h1; exact h2
     have hed := effAt_dropE (Edit.effAt_ne_realloc (op := .trunc i) (fun _ h => Edit.noConfusion h)
       dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec) (fun h => by have := hcan.ownSlot; rw [h] at this; cases this) hwT htop hla
-    generalize (Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec = e at hcan hds hed ⊢
-    exact MInv.edit_dropE hi hanch hEo hoF hcan hds hT0 hT' hst (HeapOK.editTake hi.heap hT0 hn hr)
+    generalize (Edit.trunc i).effAt dep.kind (decide (Eo.ty = Ex.ty)) Eo.rvec = e at hcan hds hed hhs0 ⊢
+    exact MInv.edit_dropE hi hanch hEo hoF hcan hds hhs0 hT0 hT' hst (HeapOK.editTake hi.heap hT0 hn hr)
       (by simp) hhv hr hw' rfl hsh' hfree hes hed
-  exact MInv.editB_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hdm (by rw [hargE]; exact hown)
+  exact MInv.editB_rest hi.wf hi.names hi.fresh hanch hx hmx hl hty hthru hts hdm (by rw [hargE]; exact hown)
     (by rw [hst x hxo]; exact hxs) hhref hpfx
 
 /-- A change that stores nothing leaves its roots holding what they held. -/
@@ -148,13 +150,13 @@ theorem holdThru_nil (P : List Dep) (Γ : Ctx) : holdThru [] P Γ = Γ := by
 theorem MInv.editBV_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F) {x : Var} {i : Expr} {Ex : Entry} {t : Ty} (hx : Γ x = some Ex)
     (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
-    (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path)
+    (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path) (hnoV : ∀ d ∈ memDeps Ex.path, NoHeld Γ d.root)
     (hV : ThruV Γ (.trunc i) Ex.ty Ex.path [])
     {o : Var} {T T' : Val} {t' : Ty} {c d n : Nat} {es : List Val} (hn : n < es.length)
     (hno : NodeOf m x o T t' c d es)
     (hr : Repl (.node t' c d es) (.node t' c d (es.eraseIdx n)) T T') :
     MInv (m.set o ⟨true, some T'⟩) (A2.setE (killThruV (.trunc i) Ex.ty Ex.path Γ) x Ex) := by
-  have h := MInv.editBV_drops (a' := m.alloc) hi hanch hx hmx hl hty hhv (fun _ h => Edit.noConfusion h) hthru hV
+  have h := MInv.editBV_drops (a' := m.alloc) hi hanch hx hmx hl hty hhv (fun _ h => Edit.noConfusion h) hthru hnoV hV
     (fun _ h => by cases h) (fun _ h => by cases h) hno
     (fun _ _ _ _ _ _ => HeapOK.editTake hi.heap hno.2.2.1 hn hr)
     (N := []) (fun e he => Or.inl (List.mem_of_mem_eraseIdx he)) hr

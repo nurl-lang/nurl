@@ -602,6 +602,21 @@ theorem lands_bound' {m : Mem} {dep : Dep} {n : Val} (h : Landed m dep n) : dep.
   · exact lands_bound hl
   · rw [hk]; rfl
 
+/-- AGORA-937 (3d, route U): what a borrowed slot's top lands through is no
+    held anchor (`HeldAnch`): a `Vec` lands through its path
+    (`bor_lands_vec`), and only a `Vec` has held anchors. -/
+theorem bor_lands_anch {m : Mem} (hh : HeapOK m) {p : Var} {E : Entry} {w : Val}
+    (hp : m.st p = some ⟨false, some w⟩) (hok : ValOK m E.ty w E.path E.held) {n0 : Val}
+    (hr : RootNode m p n0) (hn0 : ∀ k q, n0 ≠ .arc k q) :
+    ∃ d' ∈ E.path ++ E.held, Landed m d' n0 ∧ ¬ HeldAnch E d' := by
+  by_cases hvt : ∃ t, E.ty = .vec t
+  · obtain ⟨t, ht⟩ := hvt
+    rw [ht] at hok
+    obtain ⟨dep, hd, hla⟩ := bor_lands_vec hh hp hok hr
+    exact ⟨dep, List.mem_append_left _ hd, hla, fun ⟨hnp, _⟩ => hnp hd⟩
+  · obtain ⟨dep, hd, hla⟩ := bor_lands hh hp hok hr hn0
+    exact ⟨dep, hd, hla, fun ⟨_, _, hv, _⟩ => hvt hv⟩
+
 /-- Every borrowed parameter reaches memory inside a frozen owner's tree. -/
 
 theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
@@ -620,14 +635,14 @@ theorem rootb_anchor {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     obtain ⟨own, val⟩ := sl
     simp only at hv hso; subst hv; rw [hso, hos]
   rw [hsl'] at hsl
-  obtain ⟨dep, hd, hla⟩ := bor_lands hi.heap hsl hok hrn hnn
+  obtain ⟨dep, hd, hla, hna⟩ := bor_lands_anch hi.heap hsl hok hrn hnn
   rcases hla with ⟨n0, hr, hl⟩ | ⟨_, _, k, bl, hk, hs⟩
   case inr => exact Or.inr ⟨k, bl, hk, hs⟩
   have hdv : dep.root ∈ roots E.vdeps := by
     simp only [roots, Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.mem_map]
     exact ⟨dep, hd, rfl⟩
   have hF : dep.root ∈ F := by
-    refine hanch p E hp hm dep ?_ (lands_bound hl)
+    refine (hanch p E hp hm dep ?_ (lands_bound hl)).resolve_right hna
     simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte]
     exact hd
   have hnint : E.ty ≠ .int := by
@@ -727,14 +742,16 @@ theorem rootb_anchor_ne {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     obtain ⟨own, val⟩ := sl
     simp only at hv hso; subst hv; rw [hso, hos]
   rw [hsl'] at hsl
-  obtain ⟨dep, hd, hla, hdx⟩ : ∃ dep ∈ E.path ++ E.held, Landed m dep n ∧ dep.root ≠ x := by
+  obtain ⟨dep, hd, hla, hdx, hna⟩ : ∃ dep ∈ E.path ++ E.held, Landed m dep n ∧ dep.root ≠ x ∧
+      ¬ HeldAnch E dep := by
     by_cases hvt : ∃ t, E.ty = .vec t
     · obtain ⟨t, ht⟩ := hvt
       rw [ht] at hok
       obtain ⟨dep, hd, hla⟩ := bor_lands_vec hi.heap hsl hok hrn
-      exact ⟨dep, List.mem_append_left _ hd, hla, fun h => (hxr p E hp hm).1 dep hd h (lands_bound' hla)⟩
+      exact ⟨dep, List.mem_append_left _ hd, hla, fun h => (hxr p E hp hm).1 dep hd h (lands_bound' hla),
+        fun ⟨hnp, _⟩ => hnp hd⟩
     · obtain ⟨dep, hd, hla⟩ := bor_lands hi.heap hsl hok hrn hnn
-      refine ⟨dep, hd, hla, fun h => ?_⟩
+      refine ⟨dep, hd, hla, fun h => ?_, fun ⟨_, _, hv, _⟩ => hvt hv⟩
       rcases List.mem_append.mp hd with hd | hd
       · exact (hxr p E hp hm).1 dep hd h (lands_bound' hla)
       · exact (hxr p E hp hm).2 (fun t ht => hvt ⟨t, ht⟩) dep hd h (lands_bound' hla)
@@ -744,7 +761,7 @@ theorem rootb_anchor_ne {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     simp only [roots, Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.mem_map]
     exact ⟨dep, hd, rfl⟩
   have hF : dep.root ∈ F := by
-    refine hanch p E hp hm dep ?_ (lands_bound hl)
+    refine (hanch p E hp hm dep ?_ (lands_bound hl)).resolve_right hna
     simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte]
     exact hd
   have hnint : E.ty ≠ .int := by
@@ -842,7 +859,7 @@ theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
     obtain ⟨own, val⟩ := sl
     simp only at hv hso; subst hv; rw [hso, hos]
   rw [hsl'] at hsl
-  obtain ⟨dep, hd, hla⟩ := bor_lands hi.heap hsl hok hrn hnn
+  obtain ⟨dep, hd, hla, hna⟩ := bor_lands_anch hi.heap hsl hok hrn hnn
   rcases hla with ⟨n0, hr, hl⟩ | ⟨_, _, k, bl, hk, hs⟩
   case inr => exact Or.inr ⟨k, bl, hk, hs⟩
   have hdv : dep.root ∈ roots E.vdeps := by
