@@ -4622,6 +4622,12 @@ class FnCheck:
                 if jalias and new.own == "O" and not new.alias:
                     new = AV("O", new.loans, jalias, new.held, new.call)
                 jmixed = bool(jalias) and new.own == "O"
+                if not v.mut and v.kind == "local" and v.ty == ("s",) and getattr(v, "cpcopy", False):
+                    # a raw string binding nurlc gave a copy of its own: the
+                    # raw view a value block lent out of one of its own
+                    # locals (`: s e { : String x … ( string_data x ) }`,
+                    # gen_let_or_struct; AGORA-953) - it owns the copy
+                    new = AV("O")
                 if v.mut and v.kind == "local" and v.ty == ("s",) and new.own == "L":
                     self.cursor_slots.add(vid)
                 if v.mut and v.kind == "local" and v.ty == ("s",) and not new.loans and (

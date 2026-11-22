@@ -1,5 +1,4 @@
-// map: §7.6 | A2 | rejected | - | agora #242: elaborated twin: a value block whose tail is a raw view of its own local, bound by `:` then handed back
-// AGORA-869: heap-use-after-free under ASan with the walk alone; the ownership engine refuses it (codegen makes no copy here, unlike the unbound spelling).
+// map: §7.6 | A2 | runs-clean | - | AGORA-953 (agora #242 twin): `: s e { : String x … ( string_data x ) }  ^ e`: the binding gets a copy of its own
 // twin of tools/fuzz/holes/raw_view_block_tail.nu (tools/fuzz/holes/elab.py)
 $ `stdlib/core/string.nu`
 

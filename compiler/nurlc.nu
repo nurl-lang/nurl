@@ -773,8 +773,9 @@
 : i CORE_VF_SECOND 32  // a variable's flag: a closure binding given an owner's closure that the walk does not move: a second name of it (core_second_name)
 : i CORE_VF_HANDON 128  // a variable's flag: the literal a `\` try hands its failure on in, which codegen hands on whole (core_try)
 : i CORE_VF_AGGLEND 1024  // a variable's flag: a returned literal codegen made without copying a field it was given lent: the literal is a lend of what that field borrows, on the runs the function answers lent (__gen_agg_lit_body, agora #907)
-: i CORE_VF_CPCOPY 512  // a variable's flag: the value a `=` gave a by-pointer capture, which codegen copied in on the runs the call lent (gen_assign's capture copy-in, agora #872): the capture owns it (agora #884)
+: i CORE_VF_CPCOPY 512  // a variable's flag: the value a `=` gave a by-pointer capture, which codegen copied in on the runs the call lent (gen_assign's capture copy-in, agora #872): the capture owns it (agora #884); on a `:` raw string binding, codegen gave it a copy of its own (AGORA-953)
 : ~ i g_core_asn_op 0  // the operand the last core_assign stored (core_cpcopy_mark)
+: ~ i g_core_let_dup 0  // 1: the `:` binding core_let makes next was given a copy of its value by codegen (a raw view a value block lent out of its own local, AGORA-953): it gets CORE_VF_CPCOPY
 : i CORE_VF_SLOT 256  // a variable's flag: a call's temporary whose payload nurlc reads from a slot it can name, and takes out of it where a consumer takes the payload (mem_note_vec_get, mem_vget_consume)
 : ~ i g_core_slotget 0  // 1: the call just generated read a slot nurlc can name (mem_note_vec_get); its temporary gets CORE_VF_SLOT (core_call)
 : i CORE_VS 1048576
@@ -4457,6 +4458,14 @@ unsafe @ note_unsafe_item s pos s what → v {
 : ~ i g_join_deep 0
 // (…and the binding that arm read: what a refusal names.)
 : ~ s g_join_droot ``
+// …and, for a join bound by `:` (whose arms are no deeper than the binding,
+// so nothing is copied there), how deep the deepest value one of its lending
+// arms reads from was bound (__arm_src_depth), -1 when none lends a local,
+// and that value's name. The binding keeps both (`__ldepth`, `__ldroot`):
+// handed on by name to a binding of an outer block, its lent paths are
+// copied in, as the unbound join's are (AGORA-953).
+: ~ i g_join_ldepth -1
+: ~ s g_join_ldroot ``
 // …and the path a binding's field-read right-hand side named (`: T n .
 // h name` → `h.name`): what a borrow decided for that binding borrows
 // from (bck_note_borrow), so it ends with that field, not every borrow
@@ -8561,6 +8570,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     = g_join_flends 0
     = g_join_pkept 0
     = g_join_deep 0
+    = g_join_ldepth -1
     ( nurl_sym_def syms `__last_phi_cause__` `` )
     ( nurl_sym_def syms `__last_phi_definite__` `` )
     // Return-escape inference (docs/MEMORY.md §2.8): snapshot whether
@@ -9470,6 +9480,10 @@ unsafe @ __gen_ret i lex i syms i cg → s {
         // per-call answer alone says whose it is. Handed back as owned, the
         // caller released its own argument; agora #242.)
         : b __rcl ( __clone_supported rty syms )
+        // (…a `:` binding of a join whose value cannot be copied, handed back:
+        // the join's lends of this frame's values are refused as the join's
+        // own are when it is handed back directly, AGORA-953.)
+        ? & & ! __rcl ( seq rsb `dyn` ) != 0 ( nurl_str_len rup ) { ( __nc_bound_join_local_lend syms lex rup rty ) } {}
         : b __rdyn_nc & & ! __rcl ( seq rsb `dyn` ) == 0 ( nurl_sym_len2 syms rup `__llocal` )
         ? & & & & & != 0 ( nurl_str_len rup ) == 0 ( nurl_sym_len2 syms rup `__pname` ) == 0 ( nurl_sym_len2 syms rup `__optparam` )
         == 0 ( nurl_sym_len2 syms rup `__alias` ) | __rcl __rdyn_nc
@@ -10940,6 +10954,7 @@ unsafe @ core_let i syms s name s ty b mut i line → v {
     = g_core_vb_tail -1
     : i vid ( core_var_new name ty 1 ? mut 1 0 line )
     ( __core_bind syms name vid )
+    ? != 0 g_core_let_dup { = g_core_let_dup 0 ( core_var_or_flag vid CORE_VF_CPCOPY ) } {}
     ( core_w CO_LET ) ( core_w vid ) ( core_w RV_USE ) ( core_w op )
 }
 
@@ -21578,6 +21593,11 @@ unsafe @ eng_byte s w i k → i {
     : i jsrc ( rv_use_var rv )
     : i jalias ? & & & & >= jsrc 0 == kind VK_LOCAL ! mut == ( fv_kind jsrc ) VK_TEMP ( fx_has jsrc FX_JOIN_TEMP ) ? == ( st_own st jsrc ) OW_O ( av_alias ( st_av st jsrc ) ) 0 0
     : ~ i new ( eng_rvalue st rv ln ( fv_depth vid ) vty WK_VAR vid ? | mut ( fv_second vid ) TF_LEND_OWNER 0 vid )
+    // (A raw string binding codegen gave a copy of its own - the raw view a
+    // value block lent out of one of its own locals, CORE_VF_CPCOPY on the
+    // binding (gen_let_or_struct's `__blk_slend`, AGORA-953): it owns the
+    // copy, and views nothing.)
+    ? & & & == kind VK_LOCAL ( fv_cpcopy vid ) != vty ET_NONE == ( et_kind vty ) EK_S { = new ( av_make OW_O 0 0 0 F ) } {}
     ? != g_fc_unsup 0 { ^ } {}
     ? & & != jalias 0 == ( av_own new ) OW_O == ( av_alias new ) 0 { = new ( av_make OW_O ( av_loans new ) jalias ( av_held new ) ( av_call new ) ) } {}
     // (…what it selects there is a part of a value - a field, a payload: the
@@ -41913,6 +41933,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ( nurl_sym_def syms `__deferred_ids__` `` )
     = g_join_flends 0
     = g_join_deep 0
+    = g_join_ldepth -1
     = g_join_rdepth ? & < c_jdepth c_jdepth0 | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST c_jdepth -1
     ? c_retv { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
     ? & c_rval == t_tt0 TT_LBRACE { = g_rpg_want 1 } {}
@@ -41954,6 +41975,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : s t_froot ( __arm_froot syms t_tt0 )
     : ~ i t_fl ( __arm_flends syms t_tt0 t_froot g_join_flends )
     : ~ i t_dp ? | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST g_join_deep 0
+    : ~ i t_ld ? | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST g_join_ldepth -1
+    : ~ s t_ldr ? | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST ( nurl_str_cat g_join_ldroot `` ) ``
     : s t_sx ? != 0 __sx_me ( __sx_operand syms t_tt0 t_v0 ( nurl_get_last_type ) ( __sx_froot syms t_tt0 ( nurl_get_last_type ) ) t_sxn0 ) ``
     ( bck_save_expr_carriers syms `__last_join_params__` t_tt0 t_v0 )
     : s t_params ( nurl_sym_get syms `__last_join_params__` )
@@ -42067,6 +42090,12 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ? & t_lends < c_jdepth c_jdepth0 {
         ? > ( __arm_src_depth syms t_tt0 t_v0 t_froot ) c_jdepth { = t_dp 1 = g_join_droot ( nurl_str_cat ? != 0 ( nurl_str_len t_froot ) t_froot t_v0 `` ) } {}
     } {}
+    // (…and how deep what it lends lives, for whoever a `:` binding of the
+    // join is handed to — g_join_ldepth, AGORA-953.)
+    ? t_lends {
+        : i t_sd ( __arm_src_depth syms t_tt0 t_v0 t_froot )
+        ? > t_sd t_ld { = t_ld t_sd = t_ldr ( nurl_str_cat ? != 0 ( nurl_str_len t_froot ) t_froot t_v0 `` ) } {}
+    } { ? ! t_lends { = t_ld -1 } {} }
     // A field, or an enum's payload, of a parameter: that parameter is
     // lent back in part (agora #177, #178).
     ? t_lends {
@@ -42230,6 +42259,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ? e_skip { = g_skip_dead_block T } {}
     = g_join_flends 0
     = g_join_deep 0
+    = g_join_ldepth -1
     = g_join_rdepth ? & < c_jdepth c_jdepth0 | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST c_jdepth -1
     ? c_retv { = g_ret_vpos ( nurl_lex_cur_start lex ) } {}
     ? & c_rval == e_tt0 TT_LBRACE { = g_rpg_want 1 } {}
@@ -42263,6 +42293,8 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : s e_froot ( __arm_froot syms e_tt0 )
     : ~ i e_fl ( __arm_flends syms e_tt0 e_froot g_join_flends )
     : ~ i e_dp ? | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST g_join_deep 0
+    : ~ i e_ld ? | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST g_join_ldepth -1
+    : ~ s e_ldr ? | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST ( nurl_str_cat g_join_ldroot `` ) ``
     : s e_sx ? != 0 __sx_me ( __sx_operand syms e_tt0 e_v0 ( nurl_get_last_type ) ( __sx_froot syms e_tt0 ( nurl_get_last_type ) ) e_sxn0 ) ``
     ( bck_save_expr_carriers syms `__last_join_params__` e_tt0 e_v0 )
     : s e_params ( nurl_sym_get syms `__last_join_params__` )
@@ -42333,6 +42365,10 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ? & e_lends < c_jdepth c_jdepth0 {
         ? > ( __arm_src_depth syms e_tt0 e_v0 e_froot ) c_jdepth { = e_dp 1 = g_join_droot ( nurl_str_cat ? != 0 ( nurl_str_len e_froot ) e_froot e_v0 `` ) } {}
     } {}
+    ? e_lends {
+        : i e_sd ( __arm_src_depth syms e_tt0 e_v0 e_froot )
+        ? > e_sd e_ld { = e_ld e_sd = e_ldr ( nurl_str_cat ? != 0 ( nurl_str_len e_froot ) e_froot e_v0 `` ) } {}
+    } { ? ! e_lends { = e_ld -1 } {} }
     ? e_lends {
         ( mem_note_field_part syms e_froot et2 )
         ? ( is_ident_tok e_tt0 ) { ( mem_note_payload_part syms e_v0 ) } {}
@@ -42516,6 +42552,10 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ( nurl_sym_def syms `__last_join_tails__` __jt )
     = g_join_flends | ? == 0 tdr t_fl 0 ? == 0 edr e_fl 0
     = g_join_deep | ? == 0 tdr t_dp 0 ? == 0 edr e_dp 0
+    : i __jl_t ? == 0 tdr t_ld -1
+    : i __jl_e ? == 0 edr e_ld -1
+    = g_join_ldepth ? > __jl_e __jl_t __jl_e __jl_t
+    = g_join_ldroot ( nurl_str_cat ? > __jl_e __jl_t e_ldr t_ldr `` )
     // Snapshot before each arm scope was popped; retain only live values.
     ( nurl_sym_def syms `__last_join_params__`
     ( nurl_str_cat3 ? == tdr 0 t_params `` ` ` ? == edr 0 e_params `` ) )
@@ -43540,6 +43580,8 @@ unsafe @ gen_match i lex i syms i cg → s {
     // value: g_join_flends.)
     : ~ i m_fl 0
     : ~ i m_dp 0
+    : ~ i m_ld -1
+    : ~ s m_ldr ``
     : ~ s m_params ``
     : ~ i m_origin 0
     // Exit labels of the arms whose drops wait for the join's verdict
@@ -44744,6 +44786,7 @@ unsafe @ gen_match i lex i syms i cg → s {
             : i arm_sxn0 g_sx_n
             = g_join_flends 0
             = g_join_deep 0
+            = g_join_ldepth -1
             = g_join_rdepth ? & < m_jdepth m_jdepth0 | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST m_jdepth -1
             // An arm's body is conditional, braced or not: a brace-less one
             // runs no bck_block_enter, so it is counted here, or its `=`
@@ -44789,6 +44832,8 @@ unsafe @ gen_match i lex i syms i cg → s {
             : s arm_froot ( __arm_froot syms arm_tt0 )
             : i arm_fl ( __arm_flends syms arm_tt0 arm_froot g_join_flends )
             : i arm_dp0 ? | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST g_join_deep 0
+            : ~ i arm_ld ? | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST g_join_ldepth -1
+            : ~ s arm_ldr ? | == arm_tt0 TT_QUEST == arm_tt0 TT_QUESTQUEST ( nurl_str_cat g_join_ldroot `` ) ``
             ? & m_sxv != 0 __sx_mme {
                 // (Any arm by its operand, as a `?` arm is: a bare binding by
                 // its name — what it holds, the views of it included — and a
@@ -44884,6 +44929,13 @@ unsafe @ gen_match i lex i syms i cg → s {
             ? & arm_lends < m_jdepth m_jdepth0 {
                 ? > ( __arm_src_depth syms arm_tt0 arm_v0 arm_froot ) m_jdepth { = m_dp 1 = g_join_droot ( nurl_str_cat ? != 0 ( nurl_str_len arm_froot ) arm_froot arm_v0 `` ) } {}
             } {}
+            // (…and how deep what it lends lives, for whoever a `:`
+            // binding of the match is handed to — g_join_ldepth, AGORA-953.)
+            ? arm_lends {
+                : i arm_sd ( __arm_src_depth syms arm_tt0 arm_v0 arm_froot )
+                ? > arm_sd arm_ld { = arm_ld arm_sd = arm_ldr ( nurl_str_cat ? != 0 ( nurl_str_len arm_froot ) arm_froot arm_v0 `` ) } {}
+            } { ? ! arm_lends { = arm_ld -1 } {} }
+            ? & == 0 g_did_ret > arm_ld m_ld { = m_ld arm_ld = m_ldr ( nurl_str_cat arm_ldr `` ) } {}
             ? & == 0 g_did_ret ( is_ident_tok arm_tt0 ) { ( mem_note_payload_part syms arm_v0 ) } {}
             ? arm_lends {
                 ( mem_note_field_part syms arm_froot arm_type )
@@ -45317,6 +45369,8 @@ unsafe @ gen_match i lex i syms i cg → s {
         ( nurl_sym_def syms `__last_join_tails__` `` )
         = g_join_flends m_fl
         = g_join_deep m_dp
+        = g_join_ldepth m_ld
+        = g_join_ldroot ( nurl_str_cat m_ldr `` )
         ( nurl_sym_def syms `__last_match_params__` m_params )
         ( origin_set syms `__last_match_params__` m_origin )
         ( nurl_sym_def syms `__last_phi_cause__`
@@ -45390,6 +45444,7 @@ unsafe @ gen_match i lex i syms i cg → s {
         ( nurl_sym_def syms `__last_phi_idents__` `` )
         = g_join_flends 0
         = g_join_deep 0
+        = g_join_ldepth -1
         ( nurl_sym_def syms `__last_phi_cause__` `` )
         ( nurl_sym_def syms `__last_phi_definite__` `` )
         // …nor a stack reference.
@@ -45402,6 +45457,7 @@ unsafe @ gen_match i lex i syms i cg → s {
     ( nurl_sym_def syms `__last_phi_idents__` `` )
     = g_join_flends 0
     = g_join_deep 0
+    = g_join_ldepth -1
     ( nurl_sym_def syms `__last_phi_cause__` `` )
     ( nurl_sym_def syms `__last_phi_definite__` `` )
     // A valueless `??` hands nothing out — clear the per-arm residue.
@@ -51943,6 +51999,21 @@ unsafe @ __src_has_raw_ptr s text → b {
             ? ( seq __ssb `dyn` ) {
                 ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jpkept` ) ( nurl_sym_get2 syms src `__jpkept` ) )
                 ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__llocal` ) ( nurl_sym_get2 syms src `__llocal` ) )
+                // (…and what it lends on those paths, by how deep that was
+                // bound (`__ldepth`, a `:` binding of a join). Deeper than this
+                // binding, it dies first: the lent paths are copied in here and
+                // this binding owns what it holds on every path, as `= t ? c x
+                // ( f )` makes it — AGORA-953. Handed to one no shallower, the
+                // depth goes along.)
+                : s __sld ( nurl_sym_get2 syms src `__ldepth` )
+                ? != 0 ( nurl_str_len __sld ) {
+                    ? > ( nurl_str_to_int __sld ) ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) ) {
+                        ( mem_dyn_lend_copy_in syms cg ptr ty f ( nurl_sym_get2 syms src `__ldroot` ) )
+                    } {
+                        ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__ldepth` ) __sld )
+                        ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__ldroot` ) ( nurl_sym_get2 syms src `__ldroot` ) )
+                    }
+                } {}
             } {}
             // …and whatever the source was a cursor over. An owner in a
             // deeper scope than this binding dies first: its value is
@@ -52013,6 +52084,21 @@ unsafe @ __src_has_raw_ptr s text → b {
             // Owned on some paths, lent on others (`{ ( string_from d ) } { h0 }`):
             // whether it owns is its flag, which a store or return consults.
             ( __sb syms ptr `dyn` )
+            // (…and how deep what it lends on the other paths lives: handed by
+            // name to a binding of an outer block, those paths are copied in
+            // there, as the join's own are when it is assigned there directly
+            // — g_join_ldepth, AGORA-953.)
+            ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__ldepth` ) ? > g_join_ldepth 0 ( nurl_str_int g_join_ldepth ) `` )
+            ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__ldroot` ) ? > g_join_ldepth 0 ( nurl_str_cat g_join_ldroot `` ) `` )
+            // (…and, a value that cannot be copied, the calls the join's
+            // value may be lent by: handed back by name, it is refused where
+            // they lend this frame's own values, as the join handed back
+            // directly is — __nc_bound_join_local_lend, AGORA-953.)
+            ? ( __nc_held_ty ty ) {
+                ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jlkey` ) ( nurl_sym_get syms `__last_join_lend_key__` ) )
+                ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jlargs` ) ( nurl_sym_get syms `__last_join_lend_args__` ) )
+                ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jalends` ) ( nurl_sym_get syms `__last_join_arm_lends__` ) )
+            } {}
             // (…and, one of whose arms yielded a payload of an enum this
             // frame keeps, a `sink` it is handed to: __lent_by_join.)
             ? != 0 g_join_pkept { ( nurl_sym_def syms ( nurl_str_cat ptr `__jpkept` ) `1` ) = g_join_pkept 0 } {}
@@ -53456,6 +53542,35 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
     ( nurl_print `  ` ) ( nurl_print cur ) ( nurl_print ` = load ` ) ( nurl_print lt ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
     : s cp ( mem_emit_cloneif cg ty cur cond )
     ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print cp ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+}
+
+// …the same for a value given by name (`= t e`) whose source `e` is a `:`
+// binding of such a join, bound in an inner block (`__ldepth`): `f` is the
+// source's flag, false on the paths it lent. Copied in place there; `ptr`
+// owns what it holds on every path. A value that cannot be copied is
+// refused, as the join assigned directly is (AGORA-953).
+@ mem_dyn_lend_copy_in i syms i cg s ptr s ty s f s root → v {
+    ? ( __nc_drop_ty ty ) {
+        ( nurl_sym_def syms `__last_member_root__` root )
+        ( __nc_outlive_die syms ptr ty )
+        ^ v
+    } {}
+    : ~ s cond `1`
+    ? ( seq f `1` ) { ^ v } {}
+    ? ! ( seq f `0` ) {
+        = cond ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print cond ) ( nurl_print ` = xor i1 ` ) ( nurl_print f ) ( nurl_print `, 1\n` )
+    } {}
+    : s lt ( nurl_llty ty )
+    : s cur ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print cur ) ( nurl_print ` = load ` ) ( nurl_print lt ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    : s cp ( mem_emit_cloneif cg ty cur cond )
+    ( nurl_print `  store ` ) ( nurl_print lt ) ( nurl_print ` ` ) ( nurl_print cp ) ( nurl_print `, ` ) ( nurl_print lt ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    ( mem_udrop_flag_set syms cg ptr `1` )
+    ( __sb syms ptr `` )
+    // (The core IR's `=` says so: the target owns the value it was given on
+    // the runs this copied it in, CORE_VF_CPCOPY.)
+    ? != 0 g_core_live { ( core_cpcopy_mark ) } {}
 }
 
 // The arguments of the call just made (a value block's tail call) that
@@ -77500,8 +77615,14 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
         : b rhs_is_owned_local & ( is_ident_tok bck_rhs_tt )
         ( nurl_sym_has_word syms `__owned_strings__`
         ( enum_owner_ptr syms bck_rhs_val ) )
+        // (…and a raw view a value block's tail call lends out of one of the
+        // block's own locals, `: s e { : String x … ( string_data x ) }`:
+        // that local ends with the block, so the binding gets a copy of its
+        // own, as `^ { … }` and `= a { … }` give one — AGORA-953.)
+        : b __blk_slend & & == bck_rhs_tt TT_LBRACE == g_blk_tail_eff TT_LPAREN
+        & ( seq ( nurl_llty vt ) `i8*` ) != 0 ( nurl_str_len ( mem_blk_tail_deeper_args syms 1073741824 __rhs_r0 ) )
         ? & & & != 0 g_auto_drop_strings
-        | & is_mutable | == bck_rhs_tt TT_STR rhs_is_owned_local rhs_is_owned_global
+        | | & is_mutable | == bck_rhs_tt TT_STR rhs_is_owned_local rhs_is_owned_global __blk_slend
         ( seq ( nurl_llty vt ) `i8*` )
         == 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
         { : s __ld ( nurl_cg_reg cg )
@@ -77510,6 +77631,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             ( nurl_print `)` ) ( emit_dbg_eol )
             = val __ld
             = lit_track T
+            ? & __blk_slend != 0 g_core_live { = g_core_let_dup 1 } {}
         } {}
         ( mem_cursor_owner_slot syms cg is_mutable vt lit_track rhs_is_owned_local rhs_is_owned_global bck_rhs_tt )
         ( bck_check_owned_fields_alias lex syms bck_rhs_tt bck_rhs_val name )
@@ -78356,6 +78478,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // (Only a registered binding has a `__depth`: ptr.)
         = g_join_rdepth -1
         = g_join_deep 0
+        = g_join_ldepth -1
         ? | == bck_rhs_tt TT_QUEST == bck_rhs_tt TT_QUESTQUEST {
             ? != 0 ( nurl_sym_len2 syms ptr `__depth` ) { = g_join_rdepth ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) ) } {
                 // (An `inout` parameter or a binding captured by reference
@@ -107092,8 +107215,25 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // cannot be copied.
 @ __nc_join_local_lend i syms i lex s ty → s {
     ? ! ( __nc_held_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
-    ( __nc_lend_args_park syms lex ( nurl_sym_get syms `__last_join_lend_key__` ) ( nurl_sym_get syms `__last_join_lend_args__` ) ty )
-    : ~ s rest ( nurl_str_cat ( nurl_sym_get syms `__last_join_arm_lends__` ) `` )
+    ( __nc_join_local_lend_of syms lex ( nurl_sym_get syms `__last_join_lend_key__` ) ( nurl_sym_get syms `__last_join_lend_args__` ) ( nurl_sym_get syms `__last_join_arm_lends__` ) ty )
+    ^ ( nurl_str_cat `` `` )
+}
+
+// …the same for a `:` binding of such a join handed back by name (`: D e
+// ?? ( vec_get [D] v 0 ) { … }  ^ e`): the join's lends, kept on the
+// binding where it was bound (`__jlkey`, `__jlargs`, `__jalends`,
+// mem_udrop_bind_flag), parked as the join's own are (AGORA-953).
+@ __nc_bound_join_local_lend i syms i lex s up s ty → v {
+    ? ! ( __nc_held_ty ty ) { ^ v } {}
+    ( __nc_join_local_lend_of syms lex ( nurl_sym_get2 syms up `__jlkey` ) ( nurl_sym_get2 syms up `__jlargs` ) ( nurl_sym_get2 syms up `__jalends` ) ty )
+}
+
+// A join's lends — the scrutinee's or a lending arm's call `key` over
+// `args`, and the arms' own calls (`alends`, a `key<TAB>args` line each) —
+// parked where they are of this frame's own values.
+@ __nc_join_local_lend_of i syms i lex s key s args s alends s ty → v {
+    ( __nc_lend_args_park syms lex key args ty )
+    : ~ s rest ( nurl_str_cat alends `` )
     ~ != 0 ( nurl_str_len rest ) {
         : i nl ( nurl_str_find rest `\n` )
         : s ent ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
@@ -107101,7 +107241,6 @@ unsafe @ __sx_names_capture i syms s sx → b {
         : i tb ( nurl_str_find ent `\t` )
         ? > tb 0 { ( __nc_lend_args_park syms lex ( nurl_str_slice ent 0 tb ) ( nurl_str_slice ent + tb 1 - - ( nurl_str_len ent ) tb 1 ) ty ) } {}
     }
-    ^ ( nurl_str_cat `` `` )
 }
 
 // The arguments of the call `key` (`callee generic`) that are this frame's
