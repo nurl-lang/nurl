@@ -610,7 +610,7 @@ Two routes:
     `hF` weakened to "unchanged, or changed strictly inside, sparing every
     loan".
 
-**F is taken**, because its obligations stay local. In the rename, `w ∈ Fc`
+**F was taken first**, because its obligations stay local; it is set aside below (`CatchOK`). In the rename, `w ∈ Fc`
 (`zN`), and `ThruReady`'s `e.root ∉ Fc` becomes "the caller's `F` does not
 hold `w`, and no lent binding of the placed context is hit by a `dropIn` on
 `w`". The lifted lent parameters reach `w` only at `.view`/`.self`/names
@@ -649,6 +649,46 @@ of two things has to happen:
   unchanged, and a set the call places for roots changed only inside, which
   `zN` leaves out of `F`. That is route U's unfreezing, with its kill-site
   obligation confined to the new set.
+
+**Finding: route F cannot be a generic rule.** `CatchOK` (`catchR`) asks
+that every slot outside the inner statement's spine equals the remembered
+store `m0`'s, and a `recover` freezes `range m0.nv`. A `ThruOK` that lets a
+frozen root change inside (`FrozenOK`) cannot tell a root a `recover`
+froze from one a call lent. So `catchR` preservation would fail for an
+inner statement that changes such a root. That such a statement is never
+reached does not help, since preservation is proved for every typed
+statement. The memory lemmas above stay useful for route U.
+
+**Route U, taken.** `zN` leaves out the real roots the regioned arguments
+view, so `w ∉ Fc`. This is consistent with `Frz` and `CatchOK`, because a
+`recover` inside the callee still freezes `w`. Two things change:
+
+1. **Anchors.** A `Vec`-typed lent parameter's `held` may anchor at an
+   unfrozen root, at `.view`/`.self`. Its path anchors stay frozen, and its
+   node lands through its path in a frozen owner other than `w`
+   (`bor_lands_vec`, `rootKeep_frame_ne`).
+2. **Kill sites.** A kill at a root that some lent parameter holds views of
+   (`LentHeld Γ r`, a root unfrozen and held at `.view`/`.self`) must end
+   no loan. Three rules get premises, each a strengthening that today's
+   derivations meet vacuously (no lent parameter holds views of an
+   unfrozen root, since `RootbAnch` holds):
+   - `ThruOK`: `LentHeld Γ1 d.root → effAt = .dropIn`. The edit spares
+     `.view`/`.self` (hv `false`). Where the call places a callee, the
+     `LentHeld` roots are σ's, reached only through regions at `.inner`
+     with a `dropIn` effect (`hreg_in`).
+   - Kills of a named binding (`assign`, a move, scope exit, a call's
+     `sink`/`inout` argument): `¬ LentHeld Γ x`. Where the call places a
+     callee, those are renamed callee bindings, never `w`.
+   - `killNames`: a closure changing `r` by name is refused where
+     `LentHeld Γ r`. `NamesFree` already refuses such arguments when the
+     call is placed (`w ∉ roots mutNames`).
+   Each kill site then shows "no lent parameter hit" (`MInv.kill_norootb`)
+   in place of `killE_rootb`.
+
+The premise of the call (`CallThruOK`) narrows too (finding above): other
+arguments reach `w` only by name. A `.self` path (a borrow `&w` passed
+beside `vv`) would let the callee view inside `w`'s elements through a
+parameter whose dependencies are not on the region.
 
 Then `CallThruOK` (the `CallT` premise) holds the following, each stated
 on the caller:
