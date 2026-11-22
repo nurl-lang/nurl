@@ -764,6 +764,13 @@ def Stmt.spine : Stmt → List Var
   | .block s => s.spine
   | _ => []
 
+/-- A running scope's binding is a variable of the statement. -/
+theorem Stmt.spine_sub_vars (s : Stmt) : ∀ v ∈ s.spine, v ∈ s.vars := by
+  induction s <;> intro v h <;> simp only [Stmt.spine, Stmt.vars, List.mem_cons, List.mem_append] at h ⊢
+  all_goals first
+    | (rcases h with h | h <;> simp_all)
+    | simp_all
+
 /-- An address is covered: a tree some binding owns holds it, or (A3.1) a
     live block's payload owns it. -/
 def Covered (m : Mem) (i : Nat) : Prop := (∃ x t, OwnedAt m x t ∧ i ∈ t.ids) ∨ PayAddr m i
@@ -1017,12 +1024,47 @@ theorem AnchoredS.anti {Γ : Ctx} {E : Entry} {F V V' : List Var} (h : AnchoredS
     (hV : ∀ v ∈ V', v ∈ V) : AnchoredS Γ E F V' :=
   fun d hd hb => (h d hd hb).imp id fun ⟨ha, hn, hr⟩ => ⟨ha, fun h' => hn (hV _ h'), hr⟩
 
+/-- Two of them for one entry, the first through `Γ`: anchored for both sets
+    of variables at once. -/
+theorem AnchoredS.union {Γ Γ0 : Ctx} {E : Entry} {F V1 V2 : List Var} (h1 : AnchoredS Γ E F V1)
+    (h2 : AnchoredS Γ0 E F V2) : AnchoredS Γ E F (V1 ++ V2) := fun d hd hb => by
+  rcases h1 d hd hb with h | ⟨ha, hn1, hr⟩
+  · exact Or.inl h
+  rcases h2 d hd hb with h | ⟨_, hn2, _⟩
+  · exact Or.inl h
+  exact Or.inr ⟨ha, fun h => (List.mem_append.mp h).elim hn1 hn2, hr⟩
+
+/-- ... in a context that keeps the type of each binding outside `V` (a
+    held anchor's root is none of `V`). -/
+theorem AnchoredS.of_tyV {Γ Γ' : Ctx} {E : Entry} {F V : List Var} (h : AnchoredS Γ E F V)
+    (hty : ∀ r Er, Γ r = some Er → r ∉ V → ∃ Er', Γ' r = some Er' ∧ Er'.ty = Er.ty) : AnchoredS Γ' E F V :=
+  fun d hd hb => (h d hd hb).imp id fun ⟨ha, hn, Er, hEr, hv⟩ => by
+    obtain ⟨Er', h', ht⟩ := hty _ _ hEr hn
+    exact ⟨ha, hn, Er', h', ht ▸ hv⟩
+
+/-- ... for more variables, each an old one or bound nowhere in `Γ` (a fresh
+    one): a held anchor's root is bound. -/
+theorem AnchoredS.extend {Γ : Ctx} {E : Entry} {F V V' : List Var} (h : AnchoredS Γ E F V)
+    (hV : ∀ v ∈ V', v ∈ V ∨ Γ v = none) : AnchoredS Γ E F V' :=
+  fun d hd hb => (h d hd hb).imp id fun ⟨ha, hn, Er, hEr, hr⟩ =>
+    ⟨ha, (fun h' => by
+      rcases hV _ h' with h' | h'
+      · exact hn h'
+      · rw [hEr] at h'; cases h'), Er, hEr, hr⟩
+
 /-- ... in a context that keeps each binding's type. -/
 theorem AnchoredS.of_ty {Γ Γ' : Ctx} {E : Entry} {F V : List Var} (h : AnchoredS Γ E F V)
     (hty : ∀ r Er, Γ r = some Er → ∃ Er', Γ' r = some Er' ∧ Er'.ty = Er.ty) : AnchoredS Γ' E F V :=
   fun d hd hb => (h d hd hb).imp id fun ⟨ha, hn, Er, hEr, hv⟩ => by
     obtain ⟨Er', h', ht⟩ := hty _ _ hEr
     exact ⟨ha, hn, Er', h', ht ▸ hv⟩
+
+/-- ... where a fresh binding is added: a held anchor's root is bound. -/
+theorem AnchoredS.setE_none {Γ : Ctx} {E : Entry} {F V : List Var} (h : AnchoredS Γ E F V) {z : Var}
+    (hz : Γ z = none) (Ez : Entry) : AnchoredS (setE Γ z Ez) E F V :=
+  h.of_ty fun r Er hr => by
+    have hrz : r ≠ z := fun e => by subst e; rw [hz] at hr; cases hr
+    exact ⟨Er, by simp [setE, upd, hrz, hr], rfl⟩
 
 /-- The borrowed parameters' anchors where a statement of variables `V`
     runs (`Inv.leafAnchS`). -/
@@ -1121,6 +1163,20 @@ theorem AnchoredIn.of_regions {Γ Γ' : Ctx} {E : Entry} {F : List Var} (h : Anc
     (hreg : ∀ v Er, Γ v = some Er → Er.mode = .region → ∃ Er', Γ' v = some Er' ∧ Er'.mode = .region) :
     AnchoredIn Γ' E F := fun d hd hb =>
   (h d hd hb).imp id fun ⟨hk, _, hEr, hr⟩ => ⟨hk, hreg _ _ hEr hr⟩
+
+/-- AGORA-937 (3d, route U, PR B2): the borrowed parameters' anchors where a
+    kill's context is typed at a leaf: in `F`, a view of a region, or a lent
+    `Vec`'s held anchor (`HeldAnch`), which a kill spares where it is told so
+    (`HeldSpared`, `killE_rootbRH`). -/
+def RootbAnchRH (Γ : Ctx) (F : List Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound = .none →
+    d.root ∈ F ∨ RegionView Γ d ∨ HeldAnch E d
+
+theorem RootbAnchR.toRH {Γ : Ctx} {F : List Var} (h : RootbAnchR Γ F) : RootbAnchRH Γ F :=
+  fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp id Or.inl
+
+theorem RootbAnchS.toRH {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) : RootbAnchRH Γ F :=
+  fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp id fun h' => Or.inr h'.1
 
 
 /-- A2-drop.3d, Agora #610: what the invariant asks of a block's destructor
