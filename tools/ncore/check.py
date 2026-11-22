@@ -74,6 +74,43 @@ def _calls_in(x, out):
             _calls_in(y, out)
 
 
+def _dtor_fns(prog, ty, out, seen):
+    """The destructors of the program's (`drop__T`) releasing a value of
+    type `ty` runs: its own, and its fields', payloads' and type
+    arguments' (a closure's environment is no part of its type)."""
+    if not isinstance(ty, tuple) or not ty or ty in seen or ty[0] == "closure":
+        return
+    seen.add(ty)
+    if ty[0] == "named" and len(ty) > 1 and isinstance(ty[1], str):
+        from lower import norm
+        if f"drop__{ty[1]}" in prog.fns:
+            out.add(f"drop__{ty[1]}")
+        for fty, _f in prog.structs.get(ty[1], ()):
+            _dtor_fns(prog, norm(fty), out, seen)
+        for _v, tys in getattr(prog, "enums", {}).get(ty[1], ()):
+            for t in tys:
+                _dtor_fns(prog, norm(t), out, seen)
+    for y in ty:
+        if isinstance(y, tuple):
+            _dtor_fns(prog, y, out, seen)
+
+
+def _release_calls(prog, fn, out):
+    """A function releases its own bindings (a `drop`, a scope's end) and
+    its `sink` parameters: each runs the destructors of the program's their
+    types reach, calls the module's panic graph counts as nurlc's IR has
+    them (CodeRabbit on github#2183). A borrowed parameter is released by
+    no one here."""
+    if not getattr(prog, "udrop_fns", None):
+        return
+    pmode = dict(zip(fn.params, fn.modes))
+    seen = set()
+    for vid, v in fn.vars.items():
+        if vid in pmode and pmode[vid] != "sink":
+            continue
+        _dtor_fns(prog, getattr(v, "ty", None), out, seen)
+
+
 def may_panic_fns(prog):
     """The functions of the program a call of which may start a panic, as
     nurlc's module pass finds them over its IR (__mp_compute): one that
@@ -92,6 +129,13 @@ def may_panic_fns(prog):
             cs = set()
             _calls_in(fn.body, cs)
             calls[name] = cs
+    # (…and the destructors its releases run: no statement names them)
+    prog.udrop_fns = any(n.startswith("drop__") for n in prog.fns)
+    calls = {name: set(cs) for name, cs in calls.items()}
+    for name, cs in calls.items():
+        fn = prog.fns.get(name)
+        if fn is not None:
+            _release_calls(prog, fn, cs)
     # (a callee with no body anywhere is the runtime's or a foreign one:
     # extern_may_panic, as nurlc's __mp_runtime_panics answers it - unless
     # `calls_of` is the program's own bodies only, where it may be the library's)
