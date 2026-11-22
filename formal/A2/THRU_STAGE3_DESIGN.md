@@ -685,6 +685,34 @@ view, so `w ∉ Fc`. This is consistent with `Frz` and `CatchOK`, because a
    Each kill site then shows "no lent parameter hit" (`MInv.kill_norootb`)
    in place of `killE_rootb`.
 
+**How the kill-site premises are met, refined.** A rule premise is needed
+only where the statement decides it. Elsewhere an `Inv` clause on the
+statement's variables does it:
+
+- *Named kills* (`assign`, a move, scope exit, a call's `sink`/`inout`
+  argument) kill a variable of the statement. Clause: a `LentHeld` root is
+  no variable of the statement. When the call is placed, the statement is
+  the renamed body, whose variables are the callee's (`≥ base`, or
+  `inout` arguments). `w` is neither.
+- *Edits through a borrow* go through a variable of the statement.
+  Clause: such a variable, a live `Vec`-typed borrow, depends on a
+  `LentHeld` root only at `.inner`. Then `Edit.effAt` there is `dropIn`
+  (`inEff .inner true`; a push is `realloc` only at `.self`). The derived
+  borrows keep `.inner` (`borrow`, `vec_at`, `slice_at`, `fst`/`snd`: what
+  derives from `.inner` stays `.inner`). A slice read from a regioned
+  parameter's element (`vec_at q i` is `.bor` with `q`'s held as its path,
+  `⟨w, .view⟩`) is no `Vec`, so nothing edits through it.
+- *`editBV`* kills with `hv` = the root's type holds views (`killThruV`),
+  and a `dropIn` with `hv` ends `.view`/`.self`. So the call asks that `w`'s
+  elements hold no views (`¬ (argE Γ w).ty.holdsView`), and `editBV` never
+  reaches a `LentHeld` root.
+- *`killNames`*: closures that change a `LentHeld` root by name. The call
+  asks `w ∉ roots (mutNames Γ args)`, which `zN` already reads, and
+  closures made inside the callee name its own bindings.
+
+So `ThruOK` needs no new premise. The `Inv` clauses carry it, and the
+call establishes them (`CallInv`).
+
 The premise of the call (`CallThruOK`) narrows too (finding above): other
 arguments reach `w` only by name. A `.self` path (a borrow `&w` passed
 beside `vv`) would let the callee view inside `w`'s elements through a
