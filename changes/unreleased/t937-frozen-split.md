@@ -1,0 +1,3 @@
+### Changed
+
+- **When the formal proof models a call inside its caller, it now separates memory it freezes from memory a parameter's region tracks** (AGORA-937). Before, everything the arguments held was treated as frozen. Only what is passed to parameters that hold no views now stays frozen. What a view-holding parameter's argument holds comes back through that parameter's region. This removes the last over-approximation that would have stopped a callee from changing memory inside its argument's view. Nothing changes in nurlc, no rule changes, and the proof is complete with no theorem weakened.

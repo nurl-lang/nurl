@@ -681,6 +681,10 @@ import A3
 #print axioms A2.mem_compAll
 #print axioms A2.compAll_argMem_notName
 #print axioms A2.RSetup.compAll_Rd
+-- (AGORA-937 3d): frozen roots split from region-reached ones; the bounds after the substitution
+#print axioms A2.RSetup.mem_subD_comp
+#print axioms A2.RSetup.heldOfArgs_lift
+#print axioms A2.CallH.own_param_free
 #print axioms A2.RSetup.liftE_rootb_dep
 -- (AGORA-937 3d groundwork): the call's lift is precise (σ: the argument's own memory deps and
 -- each root by its handle) and composes kinds; deriving commutes with it
