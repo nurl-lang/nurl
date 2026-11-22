@@ -85,6 +85,10 @@ def _dtor_fns(prog, ty, out, seen):
         from lower import norm
         if f"drop__{ty[1]}" in prog.fns:
             out.add(f"drop__{ty[1]}")
+        # (a handle's payload, `( Rc D )` as fromnurlc names it: released
+        # by its last share, as dtor_parts walks it; CodeRabbit on github#2183)
+        if ty[1] in getattr(prog, "handle_elem", {}):
+            _dtor_fns(prog, prog.handle_elem[ty[1]], out, seen)
         for fty, _f in prog.structs.get(ty[1], ()):
             _dtor_fns(prog, norm(fty), out, seen)
         for _v, tys in getattr(prog, "enums", {}).get(ty[1], ()):
@@ -104,11 +108,41 @@ def _release_calls(prog, fn, out):
     if not getattr(prog, "udrop_fns", None):
         return
     pmode = dict(zip(fn.params, fn.modes))
+    # (A binding every exit hands back whole is released by no path of
+    # this function: `@ id sink D d → D { ^ d }`. Only where each `ret`
+    # returns it and the body ends in one, so none falls off; CodeRabbit
+    # on github#2183.)
+    rets = []
+    _rets_in(fn.body, rets)
+    whole = None
+    last = fn.body[-1] if fn.body else None
+    while isinstance(last, tuple) and last and last[0] == "scope" and last[1]:
+        last = last[1][-1]
+    if rets and isinstance(last, tuple) and last and last[0] == "ret":
+        ops = {r[1] for r in rets}
+        if len(ops) == 1:
+            op = next(iter(ops))
+            if isinstance(op, tuple) and len(op) == 3 and op[0] == "v" and not op[2]:
+                whole = op[1]
     seen = set()
     for vid, v in fn.vars.items():
-        if vid in pmode and pmode[vid] != "sink":
+        if (vid in pmode and pmode[vid] != "sink") or vid == whole:
             continue
         _dtor_fns(prog, getattr(v, "ty", None), out, seen)
+
+
+def _rets_in(x, out):
+    """The `ret` statements of a statement list, however deep."""
+    if isinstance(x, tuple):
+        if x and x[0] == "ret":
+            out.append(x)
+            return
+        for y in x:
+            if isinstance(y, (tuple, list)):
+                _rets_in(y, out)
+    elif isinstance(x, list):
+        for y in x:
+            _rets_in(y, out)
 
 
 def may_panic_fns(prog):
