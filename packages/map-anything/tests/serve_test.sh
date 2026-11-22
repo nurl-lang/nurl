@@ -225,6 +225,22 @@ check "...the stale shell never ran" 0 "$(ls "$J4" | grep -c '^ranA$')"
 until_state "$J4" failed done
 check "...and the job ran again, once" failed "$(cat "$J4/state")"
 
+# 2b. A recorded pid whose process is gone (the run died with the server):
+# recovery finds the pid dead, queues the job again, and it runs to its end.
+ID7=$(newjob)
+J7="$WORK/data/jobs/$ID7"
+( exit 0 ) &
+DEAD=$!
+wait "$DEAD"
+kill -KILL "$PID"; wait "$PID" 2>/dev/null
+echo running > "$J7/state"; echo tokD > "$J7/run"; rm -f "$J7"/pid.*; echo "$DEAD" > "$J7/pid.tokD"
+"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >>"$WORK/lifecycle.log" 2>&1 &
+PID=$!
+up_or_fail
+until_state "$J7" failed done
+check "a dead recorded pid: the job is queued again and runs to its end" failed "$(cat "$J7/state")"
+check "...and its pid files are cleared" 0 "$(ls "$J7" | grep -c '^pid\.tokD$')"
+
 # 3. An unsettled job holds the queue. A job is left `running` whose token
 # recovery cannot void (its directory is read-only); a second job waits in
 # the queue. The first stays `running` and the second must not start.
