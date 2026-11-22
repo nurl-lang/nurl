@@ -696,6 +696,11 @@ import A3
 -- (AGORA-937 3d, route F): a kill that ends no lent parameter keeps the invariant, frozen root or not
 #print axioms A2.MInv.kill_norootb
 #print axioms A2.MInv.killNames_norootb
+-- (AGORA-937 3d, route F, memory side): a frozen owner's tree changed inside, no loan in it or ended
+#print axioms A2.rootKeep_frame_ne
+#print axioms A2.MInv.change_ne
+#print axioms A2.MInv.edit_dropE_ne
+#print axioms A2.MInv.killNames_mixed
 #print axioms A2.RSetup.liftE_rootb_dep
 -- (AGORA-937 3d groundwork): the call's lift is precise (σ: the argument's own memory deps and
 -- each root by its handle) and composes kinds; deriving commutes with it

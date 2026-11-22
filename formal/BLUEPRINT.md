@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,055 lines of Lean 4**, **929 theorems**, **1107 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **82 modules**, **77,633 lines of Lean 4**, **3500 theorems**, **4516 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **82 modules**, **78,659 lines of Lean 4**, **3514 theorems**, **4530 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -155,13 +155,13 @@ flowchart BT
   DropInWitness["DropInWitness<br/>(69L, 5 thms)"]
   DtorWitness["DtorWitness<br/>(3715L, 172 thms)"]
   DynCell["DynCell<br/>(483L, 33 thms)"]
-  EditB["EditB<br/>(2684L, 77 thms)"]
+  EditB["EditB<br/>(2980L, 82 thms)"]
   EditBV["EditBV<br/>(1373L, 46 thms)"]
   EditBVFnWitness["EditBVFnWitness<br/>(263L, 12 thms)"]
   Elem["Elem<br/>(67L, 1 thms)"]
   EnvHand["EnvHand<br/>(2797L, 70 thms)"]
   ExitWitness["ExitWitness<br/>(380L, 47 thms)"]
-  Frame["Frame<br/>(1288L, 73 thms)"]
+  Frame["Frame<br/>(1712L, 75 thms)"]
   Fresh["Fresh<br/>(153L, 3 thms)"]
   FreshBase["FreshBase<br/>(447L, 34 thms)"]
   FreshClosureWitness["FreshClosureWitness<br/>(256L, 18 thms)"]
@@ -197,9 +197,9 @@ flowchart BT
   SliceCopyViewWitness["SliceCopyViewWitness<br/>(192L, 11 thms)"]
   Soundness["Soundness<br/>(279L, 17 thms)"]
   SrcKeep["SrcKeep<br/>(457L, 19 thms)"]
-  Stability["Stability<br/>(1087L, 78 thms)"]
+  Stability["Stability<br/>(1231L, 82 thms)"]
   StepFrame["StepFrame<br/>(417L, 17 thms)"]
-  Steps["Steps<br/>(3932L, 122 thms)"]
+  Steps["Steps<br/>(3947L, 123 thms)"]
   StoreViewWitness["StoreViewWitness<br/>(345L, 17 thms)"]
   SubDcKill["SubDcKill<br/>(183L, 9 thms)"]
   Sweep["Sweep<br/>(604L, 65 thms)"]
@@ -219,7 +219,7 @@ flowchart BT
   TypingFacts["TypingFacts<br/>(1139L, 65 thms)"]
   Unfresh["Unfresh<br/>(169L, 15 thms)"]
   UnheldFresh["UnheldFresh<br/>(198L, 16 thms)"]
-  Values["Values<br/>(1182L, 67 thms)"]
+  Values["Values<br/>(1329L, 69 thms)"]
   Wf["Wf<br/>(1627L, 42 thms)"]
   DtorWitness --> ArcDtorWitness
   Settle --> ArcDtorWitness
@@ -347,8 +347,8 @@ flowchart BT
 | 2. Memory Invariant | [`A2/Invariant.lean`](A2/Invariant.lean) | 2632 | 157 | 86 | Configuration invariant (Inv, HeapOK, Covers, ValOK, ViewsOK): single ownership and valid borrows/views. |
 | 2. Memory Invariant | [`A2/NameWf.lean`](A2/NameWf.lean) | 1046 | 50 | 3 | Well-formedness and invariants for by-name closure captures (Kind.name). |
 | 2. Memory Invariant | [`A2/SrcKeep.lean`](A2/SrcKeep.lean) | 457 | 19 | 0 | Source typing keeps a borrowed parameter's entry (StmtT.ctxRel), so a destructor's frame gets KeepOut, CtxWF and NameWF of its body without premises on letd (srcCase). |
-| 2. Memory Invariant | [`A2/Stability.lean`](A2/Stability.lean) | 1087 | 78 | 5 | Stability of borrows and views under store and context updates. |
-| 2. Memory Invariant | [`A2/Values.lean`](A2/Values.lean) | 1182 | 67 | 2 | Well-formedness lemmas for values, structs (pair), enums (inl/inr), and views. |
+| 2. Memory Invariant | [`A2/Stability.lean`](A2/Stability.lean) | 1231 | 82 | 5 | Stability of borrows and views under store and context updates. |
+| 2. Memory Invariant | [`A2/Values.lean`](A2/Values.lean) | 1329 | 69 | 2 | Well-formedness lemmas for values, structs (pair), enums (inl/inr), and views. |
 | 2. Memory Invariant | [`A2/Wf.lean`](A2/Wf.lean) | 1627 | 42 | 1 | Preservation of context well-formedness (WfCtx) across typing transitions. |
 | 3. Proof Infrastructure | [`A2/ArcDtorWitness.lean`](A2/ArcDtorWitness.lean) | 304 | 13 | 4 |  |
 | 3. Proof Infrastructure | [`A2/ArcPanicWitness.lean`](A2/ArcPanicWitness.lean) | 796 | 52 | 15 |  |
@@ -357,7 +357,7 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/DropCode.lean`](A2/DropCode.lean) | 694 | 15 | 9 |  |
 | 3. Proof Infrastructure | [`A2/DropInWitness.lean`](A2/DropInWitness.lean) | 69 | 5 | 3 |  |
 | 3. Proof Infrastructure | [`A2/DtorWitness.lean`](A2/DtorWitness.lean) | 3715 | 172 | 68 |  |
-| 3. Proof Infrastructure | [`A2/EditB.lean`](A2/EditB.lean) | 2684 | 77 | 0 | Element edits through borrows (StmtT.editB): push, truncate, and element set through borrowed paths. |
+| 3. Proof Infrastructure | [`A2/EditB.lean`](A2/EditB.lean) | 2980 | 82 | 0 | Element edits through borrows (StmtT.editB): push, truncate, and element set through borrowed paths. |
 | 3. Proof Infrastructure | [`A2/EditBV.lean`](A2/EditBV.lean) | 1373 | 46 | 1 | A view stored through a borrow (StmtT.editBV): every view-holding root of the borrow's path holds what the stored value depends on. |
 | 3. Proof Infrastructure | [`A2/EditBVFnWitness.lean`](A2/EditBVFnWitness.lean) | 263 | 12 | 17 |  |
 | 3. Proof Infrastructure | [`A2/Elem.lean`](A2/Elem.lean) | 67 | 1 | 0 | An element handed over (withElem, insert): the invariant does not see the order of an owned Vec's elements (MInv.perm). |
@@ -393,12 +393,12 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/ThruPre.lean`](A2/ThruPre.lean) | 247 | 25 | 3 |  |
 | 3. Proof Infrastructure | [`A2/Unfresh.lean`](A2/Unfresh.lean) | 169 | 15 | 2 |  |
 | 3. Proof Infrastructure | [`A2/UnheldFresh.lean`](A2/UnheldFresh.lean) | 198 | 16 | 2 |  |
-| 3. Step & Unwinding Lemmas | [`A2/Frame.lean`](A2/Frame.lean) | 1288 | 73 | 4 | How runtime frames (scope, rbind, frozen) interact with the memory invariant. |
+| 3. Step & Unwinding Lemmas | [`A2/Frame.lean`](A2/Frame.lean) | 1712 | 75 | 4 | How runtime frames (scope, rbind, frozen) interact with the memory invariant. |
 | 3. Step & Unwinding Lemmas | [`A2/Leak.lean`](A2/Leak.lean) | 665 | 26 | 1 | Leak-freedom invariant (Covers): every allocated address is owned by a live binding. |
 | 3. Step & Unwinding Lemmas | [`A2/Panic.lean`](A2/Panic.lean) | 387 | 23 | 1 | Panic unwinding (panic_unwind): every exited scope drops its owned trees via the drop journal. |
 | 3. Step & Unwinding Lemmas | [`A2/Rhs.lean`](A2/Rhs.lean) | 3371 | 161 | 3 | Stepping and invariant preservation for right-hand side evaluations (Rhs). |
 | 3. Step & Unwinding Lemmas | [`A2/StepFrame.lean`](A2/StepFrame.lean) | 417 | 17 | 1 | Invariant preservation across frame steps and panic unwinding frames. |
-| 3. Step & Unwinding Lemmas | [`A2/Steps.lean`](A2/Steps.lean) | 3932 | 122 | 6 | Preservation lemmas for individual statement steps (letv, assign, push, free, unpair). |
+| 3. Step & Unwinding Lemmas | [`A2/Steps.lean`](A2/Steps.lean) | 3947 | 123 | 6 | Preservation lemmas for individual statement steps (letv, assign, push, free, unpair). |
 | 4. Calls & Closures | [`A2/Bind.lean`](A2/Bind.lean) | 188 | 4 | 1 | Binding call arguments (in, inout, sink) from caller context into callee frame. |
 | 4. Calls & Closures | [`A2/Call.lean`](A2/Call.lean) | 4419 | 199 | 21 | Typing of expanded function calls (callStmt) from function summaries (FnOK + CallT). |
 | 4. Calls & Closures | [`A2/CallInv.lean`](A2/CallInv.lean) | 652 | 21 | 0 | Full invariant preservation (callCase, recCase) across function call and recover expansion. |

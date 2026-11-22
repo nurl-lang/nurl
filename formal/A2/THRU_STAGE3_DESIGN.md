@@ -617,6 +617,39 @@ hold `w`, and no lent binding of the placed context is hit by a `dropIn` on
 (the premise, and σ's `comp .view .self = .view`). The frame's own lent
 parameters are anchored in the caller's `F`, which `w` is not in.
 
+**Route F, memory side (done).** These need no rule change:
+- `rootb_anchor_ne` / `rootKeep_frame_ne`: where no lent parameter reaches
+  `x` by its path, nor (but for a `Vec`, `bor_lands_vec`) by what it holds,
+  every lent parameter's node lies in a frozen owner other than `x`, or in a
+  live block's payload (kept by `BlkLe`), so a frozen `x` may change. The
+  premise is on every lent parameter, so a chain of them through one
+  another never reaches `x` either;
+- `MInv.change_ne` (with `keep_notx_ne`, `root_namer_ne`, `namer_ne`,
+  `PkgKeep.of_edit_ne`/`of_repl_ne`, `NewSlot.edit_ne`): `MInv.change` with
+  a frozen `x` that the change ends no loan of (`hnr`);
+- `MInv.edit_dropE_ne`: an owner's tree changed by a drop or strictly inside
+  its elements, owner frozen;
+- `MInv.killNames_mixed`: kills each at an unfrozen root by an effect below
+  `replace`, or ending no loan (an unfrozen `replace` still has to show the
+  latter).
+
+**What blocks the rule change: `Frz`.** `preserve` concludes `Frz F m m'`:
+every frozen slot is unchanged across a step. Its users are the
+`recover` frame (`catchOK`: the frame's slots against the store `m0` it
+remembers), the call frames (`CallH.frz`, `Closure`), and `frozen`. Route F's
+`ThruOK` (`FrozenOK`: "`∉ F`, or a `dropIn` with `LentAway`", for a borrow
+whose elements hold no views, so `editBV` stays unfrozen) builds through
+`EditB`, `EditBV` and `TakeB` (branch `t937-frozenok-wip`). It stops at
+`Preservation`, where `Frz` is proved from `x ∉ F`. Before it can land, one
+of two things has to happen:
+- `Frz` weakens to "unchanged, or (for a root changed inside) the same top
+  node address and length". Then `catchOK`, `CallH.frz` and `frozen` must be
+  re-proved against the weaker form.
+- Or the frozen set `F` of the judgement is split: `F` for slots that stay
+  unchanged, and a set the call places for roots changed only inside, which
+  `zN` leaves out of `F`. That is route U's unfreezing, with its kill-site
+  obligation confined to the new set.
+
 Then `CallThruOK` (the `CallT` premise) holds the following, each stated
 on the caller:
 - nothing frozen (`argMemF = []`);
