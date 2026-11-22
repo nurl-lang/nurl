@@ -685,6 +685,10 @@ import A3
 #print axioms A2.RSetup.mem_subD_comp
 #print axioms A2.RSetup.heldOfArgs_lift
 #print axioms A2.CallH.own_param_free
+-- (AGORA-937 3d): a change inside a region's elements, where the call places it, is the caller's on the root
+#print axioms A2.RSetup.hits_subE_region
+#print axioms A2.RSetup.canon_kill_region
+#print axioms A2.RSetup.dtorSafe_region
 #print axioms A2.RSetup.liftE_rootb_dep
 -- (AGORA-937 3d groundwork): the call's lift is precise (σ: the argument's own memory deps and
 -- each root by its handle) and composes kinds; deriving commutes with it
