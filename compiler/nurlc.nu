@@ -66106,6 +66106,15 @@ unsafe @ bck_ret_drop_check s st i line → v {
 // would be read through after its storage is gone, by a `recover` caller.
 // Refused where the call is, as the caller cannot see it (agora #382; as
 // tools/ncore's rule for a call of the program's, MEMORY.md §3.3d).
+// …its key in `warnset`: by the parameter and the value it views, and, for
+// a report parked for the module's answer, the callee it waits on - one
+// parked behind a destructor that cannot panic, which does not stand, must
+// not hide one behind another that may (CodeRabbit on github#2183).
+@ __bck_uw_tag s ps i r → s {
+    : s park ? g_bck_unw_only ( nurl_str_cat3 `uwp:` ( nurl_sym_get g_bck `unwpark` ) `:` ) ``
+    ^ ( nurl_str_cat4 park `uw:` ps ( nurl_str_cat `:` ( nurl_str_int r ) ) )
+}
+
 // The words of __bck_unwind_check's report (kept apart from the walk's
 // own functions, agora #942).
 @ __bck_unwind_msg s pn s sn → s {
@@ -66129,7 +66138,7 @@ unsafe @ bck_ret_drop_check s st i line → v {
                 : s c ( str_first_word ds ) = ds ( str_skip_word ds )
                 : i r ( bck_local_source st ( nurl_str_to_int c ) )
                 ? & & >= r 0 != r pid != BCK_MOVED ( bck_st_get st r ) {
-                    : s tag ( nurl_str_cat4 `uw:` ps `:` ( nurl_str_int r ) )
+                    : s tag ( __bck_uw_tag ps r )
                     : s ws ( nurl_sym_get g_bck `warnset` )
                     ? ! ( str_contains_word ws tag ) {
                         ( bck_put `warnset` ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
@@ -120803,6 +120812,9 @@ unsafe @ __dce_emit_module s mod i mlen → v {
     : i w0 g_walk_owns
     = g_bck_quiet 0
     = g_walk_owns 1
+    // (Two reports parked behind two callees that both may panic, two
+    // destructors one release runs, say the same: each is made once.)
+    : ~ s made `\n`
     ~ != 0 ( nurl_str_len rest ) {
         : i nl ( nurl_str_find rest `\n` )
         : s e ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
@@ -120815,7 +120827,11 @@ unsafe @ __dce_emit_module s mod i mlen → v {
             : i t2 ( nurl_str_find r1 `\t` )
             : s r2 ( nurl_str_slice r1 + t2 1 - - ( nurl_str_len r1 ) t2 1 )
             : i t3 ( nurl_str_find r2 `\t` )
-            ( bck_emit_error ( nurl_str_slice r1 0 t2 ) ( nurl_str_to_int ( nurl_str_slice r2 0 t3 ) ) ( nurl_str_slice r2 + t3 1 - - ( nurl_str_len r2 ) t3 1 ) )
+            : s key ( nurl_str_cat3 `\n` r1 `\n` )
+            ? < ( nurl_str_find made key ) 0 {
+                = made ( nurl_str_cat3 made r1 `\n` )
+                ( bck_emit_error ( nurl_str_slice r1 0 t2 ) ( nurl_str_to_int ( nurl_str_slice r2 0 t3 ) ) ( nurl_str_slice r2 + t3 1 - - ( nurl_str_len r2 ) t3 1 ) )
+            } {}
         } {}
     }
     = g_bck_quiet q0

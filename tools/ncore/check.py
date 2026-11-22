@@ -4388,22 +4388,62 @@ class FnCheck:
             return [(("#T0",), ty[1]), (("#F0",), ty[2])]
         return []
 
-    def dtor_unw(self, st, ty, line, seen=frozenset()):
-        """A destructor of the program's (`drop__T`) that the release of a
-        value of type `ty` runs, its own or a part's, and that may panic, is
-        a point the frame may unwind from, as a call that may is: what the
+    def lit_named_fields(self, st, vid):
+        """The fields a literal names a binding at (its `lit` handle loan):
+        still that binding's, so releasing the literal releases them
+        nowhere (run_dtor)."""
+        av = st.vals.get(vid)
+        return {tuple(hp) for hp, ln in av.held
+                if isinstance(ln, tuple) and len(ln) == 3 and isinstance(ln[0], tuple)
+                and ln[0] and ln[0][-1] == "lit" and ln[2] == "handle"} if av is not None else set()
+
+    def dtor_unw(self, st, place, ty, line):
+        """A destructor of the program's (`drop__T`) that releasing the
+        value of type `ty` at `place` runs - its own, a part's, or one of a
+        capture a closure held there took over - and that may panic, is a
+        point the frame may unwind from, as a call that may is: what the
         caller holds must be whole there and view nothing of this frame,
-        where the module's panic graph says it may (agora #942)."""
+        where the module's panic graph says it may (agora #942). The parts
+        run_dtor releases, no field a literal only names."""
+        av = st.vals.get(place[0])
+        if av is not None:
+            n = len(place[1])
+            for base, fname in self.closures_in(av):
+                if tuple(base[:n]) != tuple(place[1]):
+                    continue
+                body = self.prog.fns.get(fname)
+                if body is None:
+                    continue
+                for c in body.params[:getattr(body, "ncap", 0)]:
+                    cv = body.vars.get(c)
+                    if cv is not None and getattr(cv, "taken", False):
+                        if self.dtor_unw_ty(st, cv.ty, line, None, frozenset()):
+                            return
+        self.dtor_unw_ty(st, ty, line, (place, self.lit_named_fields(st, place[0])), frozenset())
+
+    def dtor_unw_ty(self, st, ty, line, at, seen):
+        """dtor_unw's walk of a type: True once a destructor that may panic
+        was asked of (one unwind point per release). `at` is the released
+        place and the literal's fields, or None for a value nothing else
+        names (a closure's environment)."""
         if ty is None or ty in seen or ty[0] == "closure":
-            return
+            return False
         seen = seen | {ty}
         if ty[0] == "named":
             dn = f"drop__{ty[1]}"
             if dn in self.prog.fns and call_may_panic(self.prog, dn):
                 self.unwind_check(st, [], line, dn, None)
-                return
-        for _sub, pty in self.dtor_parts(ty):
-            self.dtor_unw(st, pty, line, seen)
+                return True
+        for sub, pty in self.dtor_parts(ty):
+            sat = None
+            if at is not None:
+                p2 = tuple((at[0][1] + sub)[:PATH_MAX])
+                if p2 in at[1]:
+                    continue
+                sat = ((at[0][0], p2), at[1])
+            if self.dtor_unw_ty(st, pty, line, sat, seen):
+                return True
+        return False
 
     def dtor_runs(self, ty):
         """Does releasing a value of type `ty` run a `% Drop` of the
@@ -4426,7 +4466,7 @@ class FnCheck:
         another handle's view of it live (agora #766, #918, #919; nurlc's
         `+d=` / `+dk=` notes, __bck_udrop_*)."""
         if not seen:
-            self.dtor_unw(st, ty, line)
+            self.dtor_unw(st, place, ty, line)
         if not getattr(self.prog, "udrop", ()) or (ty is not None and ty in seen):
             return
         k = ty[0] if ty is not None else None
@@ -4467,11 +4507,8 @@ class FnCheck:
         # (…but a field a literal names a binding at, its `lit` handle loan,
         # is still that binding's: a literal handed to a callee that only
         # borrows it leaves the binding the owner, and releasing the
-        # literal releases the field nowhere - lit_places)
-        av = st.vals.get(place[0])
-        lit = {tuple(hp) for hp, ln in av.held
-               if isinstance(ln, tuple) and len(ln) == 3 and isinstance(ln[0], tuple)
-               and ln[0] and ln[0][-1] == "lit" and ln[2] == "handle"} if av is not None else set()
+        # literal releases the field nowhere - lit_named_fields)
+        lit = self.lit_named_fields(st, place[0])
         # (A part handed on - `st.gone` - still runs its destructor here:
         # gone is a union at joins, so a part taken on one path only is
         # still the owner's on the other, and skipping it there would miss
