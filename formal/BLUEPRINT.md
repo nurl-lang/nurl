@@ -4,7 +4,7 @@
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
 * **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,055 lines of Lean 4**, **929 theorems**, **1107 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **82 modules**, **76,322 lines of Lean 4**, **3450 theorems**, **4459 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **82 modules**, **76,552 lines of Lean 4**, **3456 theorems**, **4465 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -143,9 +143,9 @@ flowchart BT
   ArcPanicWitness["ArcPanicWitness<br/>(796L, 52 thms)"]
   Basic["Basic<br/>(520L, 45 thms)"]
   Bind["Bind<br/>(188L, 4 thms)"]
-  Call["Call<br/>(4265L, 195 thms)"]
+  Call["Call<br/>(4362L, 198 thms)"]
   CallInv["CallInv<br/>(652L, 21 thms)"]
-  CallMem["CallMem<br/>(1522L, 58 thms)"]
+  CallMem["CallMem<br/>(1544L, 59 thms)"]
   Closure["Closure<br/>(3234L, 114 thms)"]
   ClosureDropWitness["ClosureDropWitness<br/>(869L, 51 thms)"]
   ClosureParamViewWitness["ClosureParamViewWitness<br/>(356L, 18 thms)"]
@@ -188,7 +188,7 @@ flowchart BT
   RegionResWitness["RegionResWitness<br/>(439L, 30 thms)"]
   RegionThruWitness["RegionThruWitness<br/>(107L, 8 thms)"]
   RemoveLoopWitness["RemoveLoopWitness<br/>(252L, 10 thms)"]
-  Rename["Rename<br/>(7706L, 320 thms)"]
+  Rename["Rename<br/>(7817L, 322 thms)"]
   Repl["Repl<br/>(387L, 21 thms)"]
   Rhs["Rhs<br/>(3371L, 161 thms)"]
   SelfViewCall["SelfViewCall<br/>(60L, 2 thms)"]
@@ -400,12 +400,12 @@ flowchart BT
 | 3. Step & Unwinding Lemmas | [`A2/StepFrame.lean`](A2/StepFrame.lean) | 417 | 17 | 1 | Invariant preservation across frame steps and panic unwinding frames. |
 | 3. Step & Unwinding Lemmas | [`A2/Steps.lean`](A2/Steps.lean) | 3932 | 122 | 6 | Preservation lemmas for individual statement steps (letv, assign, push, free, unpair). |
 | 4. Calls & Closures | [`A2/Bind.lean`](A2/Bind.lean) | 188 | 4 | 1 | Binding call arguments (in, inout, sink) from caller context into callee frame. |
-| 4. Calls & Closures | [`A2/Call.lean`](A2/Call.lean) | 4265 | 195 | 20 | Typing of expanded function calls (callStmt) from function summaries (FnOK + CallT). |
+| 4. Calls & Closures | [`A2/Call.lean`](A2/Call.lean) | 4362 | 198 | 20 | Typing of expanded function calls (callStmt) from function summaries (FnOK + CallT). |
 | 4. Calls & Closures | [`A2/CallInv.lean`](A2/CallInv.lean) | 652 | 21 | 0 | Full invariant preservation (callCase, recCase) across function call and recover expansion. |
-| 4. Calls & Closures | [`A2/CallMem.lean`](A2/CallMem.lean) | 1522 | 58 | 2 | Store state and owned trees immediately after binding parameters in a call. |
+| 4. Calls & Closures | [`A2/CallMem.lean`](A2/CallMem.lean) | 1544 | 59 | 2 | Store state and owned trees immediately after binding parameters in a call. |
 | 4. Calls & Closures | [`A2/Closure.lean`](A2/Closure.lean) | 3234 | 114 | 7 | Closure and trait-object package calls (callc, cloCase, cloProgress) and by-name capture soundness. |
 | 4. Calls & Closures | [`A2/Codes.lean`](A2/Codes.lean) | 870 | 43 | 6 | Package code-pointer integrity (ProgCodes, MemCodes, codes_step) across execution steps. |
-| 4. Calls & Closures | [`A2/Rename.lean`](A2/Rename.lean) | 7706 | 320 | 23 | Alpha-renaming of function body variables to fresh variables at a call site. |
+| 4. Calls & Closures | [`A2/Rename.lean`](A2/Rename.lean) | 7817 | 322 | 23 | Alpha-renaming of function body variables to fresh variables at a call site. |
 | 4. Memory Invariant | [`A2/Layout.lean`](A2/Layout.lean) | 182 | 12 | 5 | Agora #879: a tree's addresses split into its nodes' control blocks and buffers (ctls_datas_perm); no control block of any owned tree, a slot's or a block payload, is a buffer of any owned tree (ctl_ne_data, from HeapOK and BlkOwn), the fact the lowering's Vec TBAA tags assert. |
 | 5. Soundness Theorems | [`A2/Preservation.lean`](A2/Preservation.lean) | 4493 | 101 | 15 | Preservation theorem (preserve): every execution step preserves typing StmtT and memory invariant Inv. |
 | 5. Soundness Theorems | [`A2/Progress.lean`](A2/Progress.lean) | 938 | 14 | 0 | Progress theorem (progress): a well-typed statement is either .skip or can step (never Stuck). |

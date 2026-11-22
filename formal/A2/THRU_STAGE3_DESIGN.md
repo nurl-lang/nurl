@@ -520,6 +520,31 @@ and its lift is exact by `comp_assoc` (`allKinds_recvRoots_subE`). So
 argument's memory dependencies. nurlc is unchanged, and it is at most as
 permissive as the model.
 
+### 3d groundwork: a lent parameter's lift holds the callee's memory
+
+A lent parameter used to be lifted to its argument's entry (`S.pe`), and
+with that came the argument's own memory dependencies. A lift lemma bounds
+those only through `S.A`'s `allKinds R`, which is the over-approximation
+3d removes. Now the `.rootb` lift keeps the argument's path, but its held
+is the callee's own memory dependencies, renamed (its region, by its
+handle). If it has none, the argument's held is kept; otherwise the
+argument's names are kept (`liftE`). Substituted, the region gives back
+exactly the argument's memory (`comp a .self = a`, σ precise since the
+precise `recvRes`). So where the call places the callee, a lent parameter
+is its argument's entry, dependency for dependency (`canon_inp_eq`). This
+needs `typedDeps` to list memory first, then names, and the lent
+parameter's exit (`WrapCond`, `exitsP`, `callPost`) is then unchanged.
+
+- `liftE_rootb_dep` / `liftE_rootb_ρ` give what a lifted lent parameter
+  depends on: the argument's, or its own region by its handle.
+- `subE_liftE_fix` asks a lent parameter's held to be on no region
+  (`hEb`).
+- `canon_param` holds in every mode, and `canon_lend` (unused) is gone.
+- `canon_rbq` takes the context's `AbsOK`.
+
+No rule changes: `typedDeps` only reorders, and the lift is proof
+machinery.
+
 ### 3d groundwork: what the kinds-composed lift kills (`A2/SubDcKill.lean`)
 
 For 3d, a call passes an argument that views real memory `w`, so σ ≠ [], and

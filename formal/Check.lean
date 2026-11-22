@@ -675,6 +675,9 @@ import A3
 -- the lift of it is exact
 #print axioms A2.recvDeps_root
 #print axioms A2.RSetup.allKinds_recvRoots_subE
+-- (AGORA-937 3d): a lent parameter's lift holds the callee's memory; placed, it is its argument's entry
+#print axioms A2.CallH.canon_inp_eq
+#print axioms A2.RSetup.liftE_rootb_dep
 -- (AGORA-937 3d groundwork): the call's lift is precise (σ: the argument's own memory deps and
 -- each root by its handle) and composes kinds; deriving commutes with it
 #print axioms A2.RSetup.derive_subE

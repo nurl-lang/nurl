@@ -291,6 +291,26 @@ theorem with_live_fresh (E : Entry) (h : E.live = true) (hf : E.fresh = false) (
 @[simp] theorem callS_R : (callS Γ F fn args base x).R = callR Γ args := rfl
 @[simp] theorem callS_pe : (callS Γ F fn args base x).pe = callPe Γ fn.params args := rfl
 
+/-- AGORA-937 (3d): a lent parameter where the call places it is its
+    argument's entry, exactly (`canon_inp`: its region, substituted, gives
+    back the argument's memory, and the lift keeps its names). -/
+theorem canon_inp_eq (h : CallH P Γ F x fn args base) {k : Nat} {t : Ty}
+    (hk : fn.params[k]? = some (.inp, t)) :
+    (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ k) =
+      some (callPe Γ fn.params args k) := by
+  obtain ⟨E, hE, _, _, hvd⟩ := h.canon_inp hk
+  have hE' := h.canon_param hk
+  rw [hE'] at hE; cases hE
+  rw [hE']; congr 1
+  have hlp : ((callS Γ F fn args base x).liftE k (paramE fn.params (.inp, t))).path =
+      (callPe Γ fn.params args k).path := by simp [RSetup.liftE, paramE]
+  dsimp only at hvd
+  rw [hlp] at hvd
+  have hheld := List.append_cancel_left hvd
+  rw [hheld]
+  simp only [RSetup.liftE, paramE, ↓reduceIte, callS_pe]
+  exact with_live_fresh _ (callPe_live _ _ _ _) (callPe_fresh _ _ _ _) (callPe_heldFresh _ _ _ _)
+
 /-- The bindings of the context the call sets up. -/
 theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
     (y = x ∧ (callS Γ F fn args m.nv x).canon (sigCtx fn) y = some (callX fn)) ∨
@@ -334,11 +354,11 @@ theorem ctx_cases (h : CallH P Γ F x fn args m.nv) (y : Var) :
         cases pm with
         | inp =>
           refine Or.inr (Or.inr (Or.inl ⟨v, t, hget, by simp, ?_⟩))
-          simp only [RSetup.liftE, paramE, ↓reduceIte, PMode.isInp, Bool.not_true, Bool.and_false,
-            Bool.false_eq_true, List.nil_append]
-          congr 1
-          show { callPe Γ fn.params args v with live := true, fresh := false, heldFresh := false } = _
-          rw [with_live_fresh _ (callPe_live _ _ _ _) (callPe_fresh _ _ _ _) (callPe_heldFresh _ _ _ _)]
+          have := h.canon_inp_eq hget
+          change (callS Γ F fn args m.nv x).canon (sigCtx fn) (callRen fn.params args m.nv v) = _ at this
+          rw [hr, hcp] at this
+          -- (the goal reads the parameter as generalized)
+          simpa only [hp] using this
         | sink =>
           refine Or.inr (Or.inr (Or.inr (Or.inl ⟨v, t, hget, by simp, ?_⟩)))
           simp [RSetup.liftE, paramE, liftMode, Mode.ownSlot, callS, rds, PMode.isInp]
@@ -546,7 +566,8 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       hb.blk
     · cases hf : Ea.ty.hasFn
       · rw [typedDeps_noFn hf, typedDeps_noFn hf]; exact hok1.memDeps hf
-      · rw [typedDeps_hasFn hf, typedDeps_hasFn hf]; exact hok1
+      · rw [typedDeps_hasFn hf, typedDeps_hasFn hf]
+        exact hok1.mono (fun _ hd => mem_memDeps_nameDeps.mpr hd) (fun _ hd => mem_memDeps_nameDeps.mpr hd)
     · rcases derive_roots_cases (List.mem_map_of_mem (f := Dep.root) hd) with h' | ⟨hnr, _⟩
       · exact Or.inl h'
       · -- a borrow: the handle passes on what it borrows from, kind for kind
@@ -867,7 +888,8 @@ theorem _root_.A2.CleanDeps.typed {Γ : Ctx} {t : Ty} {D : List Dep} :
     CleanDeps Γ (typedDeps t D) ↔ CleanDeps Γ D := by
   have hm : ∀ d, d ∈ memDeps (typedDeps t D) ↔ d ∈ memDeps D := fun d => by
     unfold typedDeps; split
-    · exact Iff.rfl
+    · simp only [memDeps, List.mem_filter, List.mem_append, nameDeps]
+      cases d.kind.isName <;> simp
     · simp [memDeps, List.mem_filter]
   exact ⟨fun h d hd => h d ((hm d).mpr hd), fun h d hd => h d ((hm d).mp hd)⟩
 
@@ -1139,7 +1161,7 @@ theorem minv (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
               · simp only [Option.bind, lendSlot, Option.some.injEq] at hT; subst hT
                 exact List.eq_nil_iff_forall_not_mem.mpr fun c hc => by
                   have := names_lendOf V c hc; rw [hVn] at this; cases this
-            · rw [typedDeps_hasFn hf]; exact hTV
+            · rw [typedDeps_hasFn hf]; exact hTV.mono fun _ hd => mem_memDeps_nameDeps.mpr hd
     · -- a `sink` parameter: the argument's value, moved
       rw [h.st_sink hb hk] at hst; cases hst
       have hkl := lt_of_get hk
