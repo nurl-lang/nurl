@@ -124,11 +124,30 @@ def _release_calls(prog, fn, out):
             op = next(iter(ops))
             if isinstance(op, tuple) and len(op) == 3 and op[0] == "v" and not op[2]:
                 whole = op[1]
+    # (…and only where nothing gives it, or a part of it, a new value or
+    # drops it: `= d e` releases the old `d` before `^ d`; CodeRabbit on
+    # github#2183)
+    if whole is not None and _released_in(fn.body, whole):
+        whole = None
     seen = set()
     for vid, v in fn.vars.items():
         if (vid in pmode and pmode[vid] != "sink") or vid == whole:
             continue
         _dtor_fns(prog, getattr(v, "ty", None), out, seen)
+
+
+def _released_in(x, vid):
+    """Does a statement list give binding `vid`, or a part of it, a new
+    value (`assign`), or drop it?"""
+    if isinstance(x, tuple):
+        if x and x[0] == "assign" and len(x) > 1 and isinstance(x[1], tuple) and x[1] and x[1][0] == vid:
+            return True
+        if x and x[0] == "drop" and len(x) > 1 and x[1] == vid:
+            return True
+        return any(_released_in(y, vid) for y in x if isinstance(y, (tuple, list)))
+    if isinstance(x, list):
+        return any(_released_in(y, vid) for y in x)
+    return False
 
 
 def _rets_in(x, out):
