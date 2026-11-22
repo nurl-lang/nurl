@@ -1,6 +1,5 @@
-// t952_taken_field_past_a_closure_release_whose_env_drop_panics: AGORA-952 (open; filed from AGORA-942) — a sink took `. h buf` of an `inout` parameter; before the refill, `= f g` releases a closure whose environment took over a `D` whose `% Drop` may panic
-// AGORA-952 (open): accepted by nurlc, refused by ncore; a `recover`ing caller gets `h` back with `buf` empty and its next push reads a null handle (tools/fuzz/holes/open/t952.md)
-// map: §3.3d | A2 | rejected | - | AGORA-952: a taken inout field, then a closure released whose environment's destructor may panic
+// map: §2.1 | A2 | rejected | - | AGORA-952: a closure binding handed to a wrapper that takes it over, released by '=' while an inout field is taken
+// AGORA-952 (closed): refused - `f0`'s environment, taken over by `wrap`, holds mkf's `D`, whose drop may panic (main 3f08626b: accepted, a SEGV after recover)
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/panic.nu`
 
@@ -16,8 +15,11 @@ $ `stdlib/std/panic.nu`
 
 @ mkf sink D d → ( @ i ) { ^ \ → i { ^ . d n } }
 
+@ wrap sink ( @ i ) c → ( @ i ) { ^ \ → i { ^ + 1 ( c ) } }
+
 @ cycle inout Holder h i k → v {
-    : ~ ( @ i ) f ( mkf @ D { k } )
+    : ( @ i ) f0 ( mkf @ D { k } )
+    : ~ ( @ i ) f ( wrap f0 )
     : ( @ i ) g ( mkf @ D { 1 } )
     : i n ( take . h buf )
     = f g
