@@ -262,27 +262,55 @@ function putPiece(url, body, onprog) {
 
 /* The whole file. Up to CHUNK it goes as the File itself, in one PUT — the
    way a phone's browser reads a picked file most reliably. A larger file
-   is READ FROM START TO END as a stream and sent in CHUNK-sized pieces from
-   memory, never through file.slice(): on Android, a file picked from the
-   gallery is a content:// document, and reading a slice of one can fail,
-   which XHR reports as nothing more than a network error. A read that
-   fails says so. */
+   is READ FROM START TO END as a stream and sent in pieces of exactly CHUNK
+   bytes from memory (the last shorter), never through file.slice(): on
+   Android, a file picked from the gallery is a content:// document, and
+   reading a slice of one can fail, which XHR reports as nothing more than
+   a network error. A read that fails says so. Only a browser without
+   file.stream falls back to slices. Every body stays within the server's
+   40 MiB cap. */
 function put(url, file, onprog) {
-  if (file.size <= CHUNK || !file.stream) {
-    return putPiece(url + "?offset=0", file, onprog);
+  if (file.size <= CHUNK) return putPiece(url + "?offset=0", file, onprog);
+  var off = 0;
+  /* one piece of exactly n bytes (the last may be shorter), from memory */
+  function sendPiece(body, n) {
+    var here = off;
+    off += n;
+    return putPiece(url + "?offset=" + here, body, function (k) { onprog(here + k); });
+  }
+  if (!file.stream) {
+    /* no stream API: bounded slices, the only way left to stay under the
+       server's body cap */
+    var next = function () {
+      if (off >= file.size) return Promise.resolve();
+      var end = Math.min(file.size, off + CHUNK);
+      return sendPiece(file.slice(off, end), end - off).then(next);
+    };
+    return next();
   }
   var reader = file.stream().getReader();
-  var off = 0, parts = [], have = 0;
-  function send() {
-    var blob = new Blob(parts), n = have, here = off;
-    parts = []; have = 0; off += n;
-    return putPiece(url + "?offset=" + here, blob, function (k) { onprog(here + k); });
+  var parts = [], have = 0;
+  /* take exactly n buffered bytes, splitting a stream chunk if it straddles
+     the boundary and keeping its remainder for the next piece */
+  function take(n) {
+    var out = [], need = n;
+    while (need > 0) {
+      var p = parts[0];
+      if (p.byteLength <= need) { out.push(p); parts.shift(); need -= p.byteLength; }
+      else { out.push(p.subarray(0, need)); parts[0] = p.subarray(need); need = 0; }
+    }
+    have -= n;
+    return new Blob(out);
+  }
+  function drain() {
+    if (have < CHUNK) return Promise.resolve();
+    return sendPiece(take(CHUNK), CHUNK).then(drain);
   }
   function pump() {
     return reader.read().then(function (r) {
-      if (r.done) return have > 0 ? send() : null;
+      if (r.done) { var n = have; return n > 0 ? sendPiece(take(n), n) : null; }
       parts.push(r.value); have += r.value.byteLength;
-      return have >= CHUNK ? send().then(pump) : pump();
+      return drain().then(pump);
     }, function (e) {
       throw new Error("this device could not read " + file.name + " (" + (e && e.name || e) + ")");
     });
