@@ -74,6 +74,96 @@ def _calls_in(x, out):
             _calls_in(y, out)
 
 
+def _dtor_fns(prog, ty, out, seen):
+    """The destructors of the program's (`drop__T`) releasing a value of
+    type `ty` runs: its own, and its fields', payloads' and type
+    arguments' (a closure's environment is no part of its type)."""
+    if not isinstance(ty, tuple) or not ty or ty in seen or ty[0] == "closure":
+        return
+    seen.add(ty)
+    if ty[0] == "named" and len(ty) > 1 and isinstance(ty[1], str):
+        from lower import norm
+        if f"drop__{ty[1]}" in prog.fns:
+            out.add(f"drop__{ty[1]}")
+        # (a handle's payload, `( Rc D )` as fromnurlc names it: released
+        # by its last share, as dtor_parts walks it; CodeRabbit on github#2183)
+        if ty[1] in getattr(prog, "handle_elem", {}):
+            _dtor_fns(prog, prog.handle_elem[ty[1]], out, seen)
+        for fty, _f in prog.structs.get(ty[1], ()):
+            _dtor_fns(prog, norm(fty), out, seen)
+        for _v, tys in getattr(prog, "enums", {}).get(ty[1], ()):
+            for t in tys:
+                _dtor_fns(prog, norm(t), out, seen)
+    for y in ty:
+        if isinstance(y, tuple):
+            _dtor_fns(prog, y, out, seen)
+
+
+def _release_calls(prog, fn, out):
+    """A function releases its own bindings (a `drop`, a scope's end) and
+    its `sink` parameters: each runs the destructors of the program's their
+    types reach, calls the module's panic graph counts as nurlc's IR has
+    them (CodeRabbit on github#2183). A borrowed parameter is released by
+    no one here."""
+    if not getattr(prog, "udrop_fns", None):
+        return
+    pmode = dict(zip(fn.params, fn.modes))
+    # (A binding every exit hands back whole is released by no path of
+    # this function: `@ id sink D d → D { ^ d }`. Only where each `ret`
+    # returns it and the body ends in one, so none falls off; CodeRabbit
+    # on github#2183.)
+    rets = []
+    _rets_in(fn.body, rets)
+    whole = None
+    last = fn.body[-1] if fn.body else None
+    while isinstance(last, tuple) and last and last[0] == "scope" and last[1]:
+        last = last[1][-1]
+    if rets and isinstance(last, tuple) and last and last[0] == "ret":
+        ops = {r[1] for r in rets}
+        if len(ops) == 1:
+            op = next(iter(ops))
+            if isinstance(op, tuple) and len(op) == 3 and op[0] == "v" and not op[2]:
+                whole = op[1]
+    # (…and only where nothing gives it, or a part of it, a new value or
+    # drops it: `= d e` releases the old `d` before `^ d`; CodeRabbit on
+    # github#2183)
+    if whole is not None and _released_in(fn.body, whole):
+        whole = None
+    seen = set()
+    for vid, v in fn.vars.items():
+        if (vid in pmode and pmode[vid] != "sink") or vid == whole:
+            continue
+        _dtor_fns(prog, getattr(v, "ty", None), out, seen)
+
+
+def _released_in(x, vid):
+    """Does a statement list give binding `vid`, or a part of it, a new
+    value (`assign`), or drop it?"""
+    if isinstance(x, tuple):
+        if x and x[0] == "assign" and len(x) > 1 and isinstance(x[1], tuple) and x[1] and x[1][0] == vid:
+            return True
+        if x and x[0] == "drop" and len(x) > 1 and x[1] == vid:
+            return True
+        return any(_released_in(y, vid) for y in x if isinstance(y, (tuple, list)))
+    if isinstance(x, list):
+        return any(_released_in(y, vid) for y in x)
+    return False
+
+
+def _rets_in(x, out):
+    """The `ret` statements of a statement list, however deep."""
+    if isinstance(x, tuple):
+        if x and x[0] == "ret":
+            out.append(x)
+            return
+        for y in x:
+            if isinstance(y, (tuple, list)):
+                _rets_in(y, out)
+    elif isinstance(x, list):
+        for y in x:
+            _rets_in(y, out)
+
+
 def may_panic_fns(prog):
     """The functions of the program a call of which may start a panic, as
     nurlc's module pass finds them over its IR (__mp_compute): one that
@@ -92,6 +182,13 @@ def may_panic_fns(prog):
             cs = set()
             _calls_in(fn.body, cs)
             calls[name] = cs
+    # (…and the destructors its releases run: no statement names them)
+    prog.udrop_fns = any(n.startswith("drop__") for n in prog.fns)
+    calls = {name: set(cs) for name, cs in calls.items()}
+    for name, cs in calls.items():
+        fn = prog.fns.get(name)
+        if fn is not None:
+            _release_calls(prog, fn, cs)
     # (a callee with no body anywhere is the runtime's or a foreign one:
     # extern_may_panic, as nurlc's __mp_runtime_panics answers it - unless
     # `calls_of` is the program's own bodies only, where it may be the library's)
@@ -4388,6 +4485,63 @@ class FnCheck:
             return [(("#T0",), ty[1]), (("#F0",), ty[2])]
         return []
 
+    def lit_named_fields(self, st, vid):
+        """The fields a literal names a binding at (its `lit` handle loan):
+        still that binding's, so releasing the literal releases them
+        nowhere (run_dtor)."""
+        av = st.vals.get(vid)
+        return {tuple(hp) for hp, ln in av.held
+                if isinstance(ln, tuple) and len(ln) == 3 and isinstance(ln[0], tuple)
+                and ln[0] and ln[0][-1] == "lit" and ln[2] == "handle"} if av is not None else set()
+
+    def dtor_unw(self, st, place, ty, line):
+        """A destructor of the program's (`drop__T`) that releasing the
+        value of type `ty` at `place` runs - its own, a part's, or one of a
+        capture a closure held there took over - and that may panic, is a
+        point the frame may unwind from, as a call that may is: what the
+        caller holds must be whole there and view nothing of this frame,
+        where the module's panic graph says it may (agora #942). The parts
+        run_dtor releases, no field a literal only names."""
+        av = st.vals.get(place[0])
+        if av is not None:
+            n = len(place[1])
+            for base, fname in self.closures_in(av):
+                if tuple(base[:n]) != tuple(place[1]):
+                    continue
+                body = self.prog.fns.get(fname)
+                if body is None:
+                    continue
+                for c in body.params[:getattr(body, "ncap", 0)]:
+                    cv = body.vars.get(c)
+                    if cv is not None and getattr(cv, "taken", False):
+                        if self.dtor_unw_ty(st, cv.ty, line, None, frozenset()):
+                            return
+        self.dtor_unw_ty(st, ty, line, (place, self.lit_named_fields(st, place[0])), frozenset())
+
+    def dtor_unw_ty(self, st, ty, line, at, seen):
+        """dtor_unw's walk of a type: True once a destructor that may panic
+        was asked of (one unwind point per release). `at` is the released
+        place and the literal's fields, or None for a value nothing else
+        names (a closure's environment)."""
+        if ty is None or ty in seen or ty[0] == "closure":
+            return False
+        seen = seen | {ty}
+        if ty[0] == "named":
+            dn = f"drop__{ty[1]}"
+            if dn in self.prog.fns and call_may_panic(self.prog, dn):
+                self.unwind_check(st, [], line, dn, None)
+                return True
+        for sub, pty in self.dtor_parts(ty):
+            sat = None
+            if at is not None:
+                p2 = tuple((at[0][1] + sub)[:PATH_MAX])
+                if p2 in at[1]:
+                    continue
+                sat = ((at[0][0], p2), at[1])
+            if self.dtor_unw_ty(st, pty, line, sat, seen):
+                return True
+        return False
+
     def dtor_runs(self, ty):
         """Does releasing a value of type `ty` run a `% Drop` of the
         program's own - its own, or one a part of it holds (a slice's
@@ -4408,6 +4562,8 @@ class FnCheck:
         effect of its own, a `% Drop` that cleared a shared Rc payload left
         another handle's view of it live (agora #766, #918, #919; nurlc's
         `+d=` / `+dk=` notes, __bck_udrop_*)."""
+        if not seen:
+            self.dtor_unw(st, place, ty, line)
         if not getattr(self.prog, "udrop", ()) or (ty is not None and ty in seen):
             return
         k = ty[0] if ty is not None else None
@@ -4448,11 +4604,8 @@ class FnCheck:
         # (…but a field a literal names a binding at, its `lit` handle loan,
         # is still that binding's: a literal handed to a callee that only
         # borrows it leaves the binding the owner, and releasing the
-        # literal releases the field nowhere - lit_places)
-        av = st.vals.get(place[0])
-        lit = {tuple(hp) for hp, ln in av.held
-               if isinstance(ln, tuple) and len(ln) == 3 and isinstance(ln[0], tuple)
-               and ln[0] and ln[0][-1] == "lit" and ln[2] == "handle"} if av is not None else set()
+        # literal releases the field nowhere - lit_named_fields)
+        lit = self.lit_named_fields(st, place[0])
         # (A part handed on - `st.gone` - still runs its destructor here:
         # gone is a union at joins, so a part taken on one path only is
         # still the owner's on the other, and skipping it there would miss
