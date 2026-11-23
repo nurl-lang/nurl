@@ -199,6 +199,7 @@ $ `stdlib/core/vec.nu`
 : ~ s g_bck_own_params ``  // the parameters the function being walked owns (a safe `sink s`)
 : ~ i g_call_cp 0  // `res` / `own`: the call just emitted copied its result `res`, owned by bit `own` (mem_own_lendback); `bind`: a let binds that copy (__mem_udrop_bind_flag) — agora #477
 : ~ i g_bck_end_views 0  // 1 while bck_root_end ends a field path's borrows: only its views (agora #309)
+: ~ s g_bck_rows_ix ``  // a parked function whose rows its walk reads in place, in g_deferred_bck (__bck_rows); `` = g_bck's own `stmts` (AGORA-974)
 : ~ s g_bck_fn ``  // the function being walked, whose g_fn_vkeeps it decides (a closure body's: its literal's, `__closure_N`)
 : ~ i g_bck_quiet 0  // 1 while a walk only makes its answers: no diagnostic (__bck_walk_scc)
 : ~ i g_bck_ans_union 0  // 1 while a walk's answers add to the ones published (a component's fixed point)
@@ -62336,7 +62337,9 @@ unsafe @ bck_row_put i n s row → v {
 // `*u` for the same reason as bck_field: with `nurl_str_get` this
 // single loop was O(total²) over the whole function's statement text.
 unsafe @ bck_explode → i {
-    : s txt ( nurl_sym_get g_bck `stmts` )
+    // (Read in place, not interned: each row is copied out below, and
+    // nothing writes the list while it is split. AGORA-974)
+    : s txt ( __bck_rows )
     : i len ( nurl_str_len txt )
     : *u tp # *u txt
     : ~ i start 0
@@ -76990,8 +76993,8 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
 @ bck_analyze s params → v {
     // (A run of a closure whose builder's answer was not there yet: its rows
     // now, every answer final — __bck_rce_expand, agora #813.)
-    ? != 0 g_rce_n { ? >= ( nurl_str_find ( nurl_sym_get g_bck `stmts` ) `pendrce` ) 0 { ( bck_put `stmts` ( __bck_rce_expand ( nurl_sym_get g_bck `stmts` ) ) ) } {} } {}
-    ? != 0 # i ( getenv `NURL_BCK_DUMP` ) { ( nurl_eprintln ( nurl_str_cat `── rows: ` ( nurl_sym_get g_bck `stmts` ) ) ) } {}
+    ? != 0 g_rce_n { ? >= ( nurl_str_find ( __bck_rows ) `pendrce` ) 0 { ( bck_put `stmts` ( __bck_rce_expand ( __bck_rows ) ) ) = g_bck_rows_ix `` } {} } {}
+    ? != 0 # i ( getenv `NURL_BCK_DUMP` ) { ( nurl_eprintln ( nurl_str_cat `── rows: ` ( __bck_rows ) ) ) } {}
     // (Its parameters in order, and what bck_note_vkeeps finds.)
     ( bck_put `vkparams` params )
     ( bck_put `vkacc` `` )
@@ -77188,8 +77191,12 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     : s ix ( nurl_str_int n )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `o` ix ) g_bck_own_params )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `r` ix ) g_bck_rcty )
-    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `s` ix )
-    ( nurl_sym_get g_bck `stmts` ) )
+    // (The rows are parked as a buffer of their own, not interned: the
+    // intern arena lives for the whole compile, the rows only until their
+    // last walk, which releases them — __bck_rows_release. AGORA-974)
+    : s sk ( nurl_str_cat `s` ix )
+    ( nurl_sym_def g_deferred_bck sk `` )
+    ( nurl_sym_append g_deferred_bck sk ( __sym_peek g_bck `stmts` ) )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `p` ix ) params )
     // (Whose callers wait for its g_fn_vkeeps answer: bck_run_deferred.)
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `n` ix ) g_bck_fn )
@@ -77261,7 +77268,7 @@ unsafe @ __bck_walk_deferred i i → v {
     // what it makes. A call of itself its `bK` rows ask is answered by its
     // own walk, bck_vkeeps_self.)
     : ~ b selfq ( str_contains_word ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) ) )
-    : ~ s cs ( __word_union ( __vbuf_callees ( nurl_sym_get g_deferred_bck ( nurl_str_cat `s` ix ) ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) )
+    : ~ s cs ( __word_union ( __vbuf_callees ( __sym_peek g_deferred_bck ( nurl_str_cat `s` ix ) ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) )
     : ~ s seen ``
     ~ != 0 ( nurl_str_len cs ) {
         : s c ( str_first_word cs ) = cs ( str_skip_word cs )
@@ -77305,15 +77312,39 @@ unsafe @ __bck_walk_deferred i i → v {
         = more & ! ( seq m ix ) != 0 ( nurl_str_len stk )
     }
     ( nurl_sym_def g_deferred_bck `dstk` stk )
-    ? & ! selfq ( seq mem ix ) { ( __bck_walk_one ix ) ^ v } {}
+    ? & ! selfq ( seq mem ix ) { ( __bck_walk_one ix ) ( __bck_rows_release ix ) ^ v } {}
     ( __bck_walk_scc mem )
+    : ~ s rm ( nurl_str_cat mem `` )
+    ~ != 0 ( nurl_str_len rm ) {
+        : s m ( str_first_word rm ) = rm ( str_skip_word rm )
+        ( __bck_rows_release m )
+    }
+}
+
+// A parked function's rows, after its last walk: nothing reads them again
+// (its own walk, or its component's rounds, are done), so their buffer is
+// released here rather than kept for the rest of the compile. AGORA-974.
+@ __bck_rows_release s ix → v {
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `s` ix ) `` )
+}
+
+// The rows a walk reads: the parked function's own, in place, while
+// __bck_walk_one walks it (g_bck_rows_ix), else g_bck's `stmts`. Neither
+// is interned, and nothing writes them while they are split (bck_explode).
+// AGORA-974.
+@ __bck_rows → s {
+    ? == 0 ( nurl_str_len g_bck_rows_ix ) { ^ ( __sym_peek g_bck `stmts` ) } {}
+    ^ ( __sym_peek g_deferred_bck ( nurl_str_cat `s` g_bck_rows_ix ) )
 }
 
 // Walk parked function `ix` (its rows, parameters, file and the facts
 // codegen parked with them: bck_defer_fn).
 unsafe @ __bck_walk_one s ix → v {
     ( bck_put `file` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `f` ix ) ) )
-    ( bck_put `stmts` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `s` ix ) ) )
+    // (…read where they are parked, neither copied nor interned: a
+    // component's members are walked once per round; __bck_rows. AGORA-974)
+    ( bck_put `stmts` `` )
+    = g_bck_rows_ix ( nurl_str_cat ix `` )
     ( bck_put `reads` `` )
     = g_bck_cap_via ( nurl_sym_get g_deferred_bck ( nurl_str_cat `c` ix ) )
     = g_bck_own_params ( nurl_sym_get g_deferred_bck ( nurl_str_cat `o` ix ) )
@@ -77321,6 +77352,7 @@ unsafe @ __bck_walk_one s ix → v {
     = g_bck_rcix_ok 0
     = g_bck_fn ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) )
     ( bck_analyze ( nurl_sym_get g_deferred_bck ( nurl_str_cat `p` ix ) ) )
+    = g_bck_rows_ix ``
 }
 
 // The parked walks `mem` (deepest first) ask each other's answers: a
@@ -90242,7 +90274,9 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     : i __cl_win g_win_done
     : i __cl_rp_rd g_rp_rd
     ? != g_borrowck 0 {
-        = __cl_bck_stmts ( nurl_sym_get g_bck `stmts` )
+        // (A copy of its own, not an interned snapshot of the enclosing
+        // function's rows so far: one per closure literal. AGORA-974)
+        = __cl_bck_stmts ( nurl_str_cat ( __sym_peek g_bck `stmts` ) `` )
         = __cl_bck_reads ( nurl_sym_get g_bck `reads` )
         = __cl_bck_kind ( nurl_sym_get g_bck `pending_kind` )
         = __cl_bck_pmoves ( nurl_sym_get g_bck `pmoves` )
@@ -90385,7 +90419,8 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     = g_win_done __cl_win
     = g_rp_rd __cl_rp_rd
     ? != g_borrowck 0 {
-        ( bck_put `stmts` __cl_bck_stmts )
+        ( bck_put `stmts` `` )
+        ( bck_add `stmts` __cl_bck_stmts )
         ( bck_put `reads` __cl_bck_reads )
         ( bck_put `pending_kind` __cl_bck_kind )
         ( bck_put `pmoves` __cl_bck_pmoves )
