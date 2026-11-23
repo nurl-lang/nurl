@@ -24,6 +24,8 @@ def lean_ty(t):
         return ".int"
     if t.startswith("%Vec__"):
         return f"(.vec {lean_ty(t[len('%Vec__'):])})"
+    if t.startswith("%Slice__"):
+        return f"(.slice {lean_ty(t[len('%Slice__'):])})"
     raise Unsupported(f"type {t}")
 
 
@@ -145,6 +147,12 @@ class Fn:
         if f.startswith("vec_len__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.expr (.len {self.var(int(ops[0][1:]))})) {rest})"
+        if f.startswith("slice_from_vec__") and n == 1 and ops[0] != "c":
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.view {self.var(int(ops[0][1:]))}) {rest})"
+        if f.startswith("slice_len__") and n == 1 and ops[0] != "c":
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.expr (.slen {self.var(int(ops[0][1:]))})) {rest})"
         return None
 
     def call(self, words, names, rest):
