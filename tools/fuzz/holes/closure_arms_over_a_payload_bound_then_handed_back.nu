@@ -1,5 +1,4 @@
-// map: §7.5 | A2 | rejected | - | agora #242: elaborated twin: a `??` whose arms are closures capturing a payload of a local `??String`, bound by `:` then handed back
-// AGORA-869: heap-use-after-free under ASan with the walk alone; the ownership engine refuses it (codegen makes no copy here, unlike the unbound spelling).
+// map: §7.5 | A2 | rejected | - | AGORA-953 (agora #242 twin): a `??` whose arms are closures capturing a payload of a local `??String`, bound by `:` then handed back: the payload binding is a cursor over the local option, whose release on the way out the closure would outlive
 // twin of tools/fuzz/holes/closure_returned_from_an_arm_over_a_payload.nu (tools/fuzz/holes/elab.py)
 $ `stdlib/core/string.nu`
 

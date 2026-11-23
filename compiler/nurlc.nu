@@ -65975,6 +65975,24 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
     ^ r
 }
 
+// …for a value handed back by name (`hand`, bck_ret_view_check): also a
+// cursor over an owner of this frame whose own frame closed — a `??` arm's
+// payload over a local option, `T inner → \ … inner …`, captured by a
+// closure bound by `:` and handed back past the arm. What it reads into is
+// that owner's, released on the way out, so the owner is the source. (A
+// closure written in the return takes the payload over instead: there the
+// capture is the env's own.) Taken for nothing, the closure was handed back
+// over a freed payload: AGORA-953, one of AGORA-242's twins.
+@ bck_local_source_h s st i id b hand → i {
+    : i r0 ( bck_local_source st id )
+    ? | >= r0 0 ! hand { ^ r0 } {}
+    : i r ( bck_path_root id )
+    : s co ( nurl_sym_get g_bck ( bck_bkey `cuo_` ( nurl_str_int r ) ) )
+    ? | == 0 ( nurl_str_len co ) == ( nurl_str_to_int co ) r { ^ -1 } {}
+    ? != BCK_UNINIT ( bck_st_get st r ) { ^ -1 } {}
+    ^ ( bck_local_source st ( nurl_str_to_int co ) )
+}
+
 // Storage the caller holds — a parameter (a `( Vec s )` it passed, an
 // `inout` struct), or a binding that borrows one (an alias of it, a cursor
 // into it) — outlives this function.
@@ -67098,7 +67116,7 @@ unsafe @ __vk_assumptions_check → v {
                 continue
             } {}
         } {}
-        : i r ( bck_local_source st ( nurl_str_to_int w ) )
+        : i r ( bck_local_source_h st ( nurl_str_to_int w ) hand )
         ? >= r 0 {
             : s nm ( bck_name_show ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int r ) ) )
             ? & ( str_contains_word hnd w ) ( bck_nch w ) {
