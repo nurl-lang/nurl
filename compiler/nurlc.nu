@@ -52894,6 +52894,25 @@ unsafe @ __jt_reg i cg → s {
     ( mem_own_closure_remove syms name )
 }
 
+// …for `= name <a closure binding that owns nothing>` (slot `slot`): the
+// env `name` owns is released unless the new value `val` (type `ty`) holds
+// that very env — a second name of it handed back — where the slot keeps
+// it (AGORA-953).
+@ mem_emit_closure_env_drop_unless i syms i cg s name s slot s ty s val → v {
+    : s ev ( mem_clo_slot_env syms cg name slot )
+    : s ne ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ne ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
+    : s same ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print same ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print ev ) ( nurl_print `, ` ) ( nurl_print ne ) ( nurl_print `\n` )
+    : s keep ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print keep ) ( nurl_print ` = select i1 ` ) ( nurl_print same ) ( nurl_print `, i8* ` ) ( nurl_print ev ) ( nurl_print `, i8* null\n` )
+    : s gone ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print gone ) ( nurl_print ` = select i1 ` ) ( nurl_print same ) ( nurl_print `, i8* null, i8* ` ) ( nurl_print ev ) ( nurl_print `\n` )
+    ( nurl_print `  store i8* ` ) ( nurl_print keep ) ( nurl_print `, i8** ` ) ( nurl_print slot ) ( nurl_print `\n` )
+    ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print gone ) ( nurl_print `)` )
+    ( emit_dbg_eol )
+}
+
 @ mem_emit_closure_env_drop i syms i cg s name → v {
     : s slot ( nurl_sym_get2 syms name `__envown` )
     ? != 0 ( nurl_str_len slot )
@@ -78899,9 +78918,15 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 // still owned: agora #614.)
                 // (`= a a` gives the binding the value it holds: nothing to
                 // release.)
+                // (…and a value that is a second name of the env this binding
+                // owns — `: g { … a }  = a g`, g bound from a value block whose
+                // tail is a — gives it back its own env: by the env's address
+                // at run time, nothing is released and the slot keeps it.
+                // Released as "the old one", a held the env it had just freed:
+                // AGORA-953, one of AGORA-242's twins.)
                 ? & & != 0 ( nurl_str_len __asn_slot ) ( __is_closure_ty vt ) ! & ( is_ident_tok bck_rhs_tt ) ( seq bck_rhs_val name )
                 { ? ( mem_clo_in_list syms name )
-                    { ( mem_emit_closure_env_drop syms cg name ) }
+                    { ? ( is_ident_tok bck_rhs_tt ) { ( mem_emit_closure_env_drop_unless syms cg name __asn_slot vt val ) } { ( mem_emit_closure_env_drop syms cg name ) } }
                     {}
                     ( mem_clo_mark_lent syms name T ) }
                 {} }
