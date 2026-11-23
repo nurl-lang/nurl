@@ -172,6 +172,9 @@ def can_panic(callee):
     return callee in mp or callee not in known
 
 
+PROTECT = {}   # D0b: llvm function → {slot: binding} the core IR never moves
+
+
 def check_function(name, blocks, owning, journal=False):
     """None if validated, else a mismatch string. Raises Unsupported.
     `owning`: the types the module has a `__dropif_T` for (what owns).
@@ -295,6 +298,7 @@ def check_function(name, blocks, owning, journal=False):
         path = path + [lab]
         flag_v, val, released = dict(st[0]), dict(st[1]), set(st[2])
         regv, regid, jr = dict(st[3]), dict(st[4]), set(st[5])
+        fresh_put = set()
 
         def owned(f):
             return flag_v.get(f) and val.get(f) is not None and val[f] not in released
@@ -339,6 +343,7 @@ def check_function(name, blocks, owning, journal=False):
             m = LOAD_VAL.match(l)
             if m and m.group(3) in slot_flag:
                 regid[m.group(1)] = val.get(slot_flag[m.group(3)])
+                fresh_put.discard(m.group(3))
             m = CLONEIF.match(l)
             if m and m.group(2) in regid:
                 # the value itself where the slot owns it, else a clone: the
@@ -346,6 +351,16 @@ def check_function(name, blocks, owning, journal=False):
                 regid[m.group(1)] = regid[m.group(2)]
             m = STORE_FLAG.match(l) or STORE_FLAG_PTR.match(l)
             if m:
+                if m.group(1) in ("false", "0") and m.group(2) in flags:
+                    # D0b: a binding the core IR keeps to its scope end is
+                    # not handed on: its flag is not cleared while it owns
+                    sl = next(iter(pairs[m.group(2)]))
+                    if sl in PROTECT.get(name, {}) and owned(m.group(2)) and sl not in fresh_put:
+                        return (f"mismatch: {name} {sl} ({PROTECT[name][sl]}) is never moved in the core IR, "
+                                f"but its flag is cleared while it owns a value: {'>'.join(path)}")
+                if m.group(1) in ("true", "1") and m.group(2) in flags:
+                    # (an owned store: what the slot holds is its own now)
+                    fresh_put.discard(next(iter(pairs[m.group(2)])))
                 flag_v[m.group(2)] = m.group(1) in ("true", "1")
                 continue
             m = STORE_I1_VAR.match(l)
@@ -371,6 +386,9 @@ def check_function(name, blocks, owning, journal=False):
                 if owns(f):
                     return f"mismatch: {name} {m.group(1)} overwritten while it owns a value: {'>'.join(path)}"
                 val[f] = next(fresh)
+                # (a store whose flag is cleared before anything reads the
+                # slot is a value the slot does not own: `= out <a lend>`)
+                fresh_put.add(m.group(1))
                 if f.startswith("!"):
                     flag_v[f] = True
                 continue
@@ -433,6 +451,11 @@ def check_function(name, blocks, owning, journal=False):
 def main():
     text = open(sys.argv[1]).read()
     fns = functions(text)
+    if "--protect" in sys.argv:
+        for line in open(sys.argv[sys.argv.index("--protect") + 1]):
+            w = line.split()
+            if len(w) == 3:
+                PROTECT.setdefault(w[0], {})[w[1]] = w[2]
     owning = set(re.findall(r"@__dropifv?_([\w.]+)\(", text))
     # D1 (--journal): the journal is what a recover frame's catch drains;
     # without a recover in the program a panic ends the process, and no
