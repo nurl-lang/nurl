@@ -457,6 +457,33 @@ class Fn:
         if f.startswith("slice_from_vec__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.view {rd(ops[0])}) {rest})"
+        if (f.startswith("vec_clear__") and n == 1 or f.startswith("vec_truncate__") and n == 2) and ops[0] != "c":
+            # the callee changes the Vec through the borrow it is handed:
+            # its elements past the new length dropped (A2's `edit`, `trunc`)
+            pre = []
+            i = "(.lit 0)" if n == 1 else self.operand(ops[1], pre)
+            b = self.fresh()
+            s = f"(.letv {b} (.borrow {rd(ops[0])}) (.edit true {b} (.trunc {i})))"
+            if x is not None:   # vec_truncate's answer, a Bool
+                rest = f"(.letv {x} (.expr (.lit 0)) {rest})"
+            return self.wrap(pre, self.seq(s, rest))
+        if f == "string_push_str" and n == 2 and x is None and ops[0] != "c":
+            # the bytes of a text it reads appended through the borrow of the
+            # String it is handed (one byte stands for them: A2's `push`)
+            pre, s = [], ""
+            if ops[1] != "c":
+                y = rd(ops[1])
+                ty = self.vlean(int(ops[1][1:])) if "/" not in ops[1] else lean_ty(self.vty(ops[1]))
+                e = f"(.slen {y})" if ty.startswith("(.slice") else f"(.len {y})" if ty.startswith("(.vec") else None
+                if e is None:
+                    raise Unsupported(f"{self.fn['name']}: string_push_str of a {ty}")
+                pre.append((self.fresh(), f".expr {e}"))
+            b, c = self.fresh(), self.lit_temp()
+            st = f"(.letv {b} (.borrow {rd(ops[0])}) (.edit true {b} (.push {c})))"
+            return self.wrap(pre, self.seq(st, rest))
+        if (f.startswith("vec_free__") or f == "string_free") and n == 1 and x is None and ops[0] != "c":
+            # a sink that releases what it is handed (A2's `free`)
+            return self.seq(f"(.free {self.pvar(ops[0])})", rest)
         if f.startswith("vec_at__") and n == 2 and ops[0] != "c":
             # a bounds-checked element read; only a scalar element, whose
             # value is copied out, is translated (a lent aggregate element
