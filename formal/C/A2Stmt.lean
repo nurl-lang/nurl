@@ -11,7 +11,8 @@ can hold, whatever the exits `ξ` are:
 * `push`, `insert`, `free`; `withLock`, `withElem`;
 * `letd` and `scopeD`, of a destructor type or a `Vec` nest of one;
 * `takeB`, `editB` (view-free elements) and `editBV` (elements that hold
-  views but no closure, through an `edit true`);
+  views, closures among them; an `edit false` through a fresh borrow that
+  is not held-fresh);
 * `callc` and `callcE` (`¬ ThruFn` by a checked-closed set, `noThruB`).
 
 The rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
@@ -30,8 +31,7 @@ glue is `LetdFn`'s second case (`letdFnB_sound`).
 Out of the checker's domain: `catchR`, a run-time form only (`src = false`,
 made by stepping, `recStmt`), whose premise is the heap invariant over a
 concrete memory; no function body holds one. `sub` is subsumption, used by
-the joins. Not decided yet: `editBV` over closure elements or through an
-`edit false`.
+the joins.
 -/
 
 namespace C
@@ -757,21 +757,40 @@ theorem thruVB_sound {D : List Var} {Γ1 : Ctx} {op : Edit} {tx : Ty} {Ps Ds : L
   simp only [Bool.and_eq_true, Bool.not_eq_true', decide_eq_true_eq] at h
   exact ⟨dtorSafeB_sound hs h.1.1, h.1.2, h.2⟩
 
-/-- `editBV`, decided for an element type that holds views but no closure,
-    through an `edit true`. -/
+/-- What a closure element stores by name is held by `x` and by every
+    memory root of its path whose type holds views. -/
+def closureHeldB (Γ1 : Ctx) (Ex1 : Entry) (Ds : List Dep) : Bool :=
+  Ds.all fun d => !d.kind.isName || (decide (d ∈ Ex1.held) &&
+    (roots (memDeps Ex1.path)).all fun r => !(argE Γ1 r).ty.holdsView || decide (d ∈ (argE Γ1 r).held))
+
+theorem closureHeldB_sound {Γ1 : Ctx} {Ex1 : Entry} {Ds : List Dep} (h : closureHeldB Γ1 Ex1 Ds = true) :
+    ∀ d ∈ Ds, d.kind.isName = true → d ∈ Ex1.held ∧ ∀ r ∈ roots (memDeps Ex1.path),
+      (argE Γ1 r).ty.holdsView = true → d ∈ (argE Γ1 r).held := by
+  intro d hd hn
+  have := List.all_eq_true.mp h d hd
+  simp only [hn, Bool.not_true, Bool.false_or, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at this
+  refine ⟨this.1, fun r hr hv => ?_⟩
+  have := this.2 r hr
+  simp only [hv, Bool.not_true, Bool.false_or, decide_eq_true_eq] at this
+  exact this
+
+/-- `editBV`, decided for an element type that holds views: an element
+    with a closure stores only what `x` and its memory roots hold already
+    (`closureHeldB`); an `edit false` goes through a fresh borrow that is
+    not held-fresh. -/
 def editBVB (D : List Var) (Γ : Ctx) (F : List Var) (b : Bool) (x : Var) (op : Edit) : Option Ctx :=
   match Γ x with
   | some Ex =>
     match vecElem2 Ex.ty with
     | some t =>
-      if decide (Ex.mode = .bor) && Ex.live && t.holdsView && !t.hasFn && decide (x ∉ F) && storedNeB op x &&
-          (!op.drops || t.dtorFree) && b then
+      if decide (Ex.mode = .bor) && Ex.live && t.holdsView && decide (x ∉ F) && storedNeB op x &&
+          (!op.drops || t.dtorFree) && (b || (Ex.fresh && !Ex.heldFresh)) then
         match editArgB D Γ F t op with
         | some (Ds, Γ1) =>
           match liveE2 Γ1 x with
           | some Ex1 =>
             if !(memDeps Ex1.path).isEmpty && thruOKB D Γ1 F op Ex.ty Ex1.path &&
-                thruVB D Γ1 op Ex.ty Ex1.path (memDeps Ds) then
+                thruVB D Γ1 op Ex.ty Ex1.path (memDeps Ds) && (!t.hasFn || closureHeldB Γ1 Ex1 Ds) then
               some (setE (holdThru (memDeps Ds) Ex1.path (killThruV op Ex.ty Ex1.path Γ1)) x
                 { Ex1 with held := Ex1.held ++ memDeps Ds })
             else none
@@ -792,26 +811,37 @@ theorem editBVB_sound {P : Prog} {D : List Var} {ξ : Exits} {Γ : Ctx} {F : Lis
       split at h
       · rename_i hc
         simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true', Bool.or_eq_true] at hc
-        obtain ⟨⟨⟨⟨⟨⟨⟨hm, hl⟩, hv⟩, hfn⟩, hxF⟩, hst⟩, hdr⟩, hb⟩ := hc
-        subst hb
+        obtain ⟨⟨⟨⟨⟨⟨hm, hl⟩, hv⟩, hxF⟩, hst⟩, hdr⟩, hb⟩ := hc
         split at h
         · rename_i Ds Γ1 hea
           split at h
           · rename_i Ex1 hEx1
             split at h
             · rename_i hto
-              simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff] at hto
-              obtain ⟨⟨hne, hok⟩, hvv⟩ := hto
+              simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff, Bool.or_eq_true] at hto
+              obtain ⟨⟨⟨hne, hok⟩, hvv⟩, hcl⟩ := hto
               simp only [Option.some.injEq] at h; subst h
               obtain ⟨hargs, hs1⟩ := editArgB_sound hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hea
               obtain ⟨hx1, hx1l⟩ := liveE2_some hEx1
-              refine ⟨.editBV hEx hm hl (vecElem2_some ht) hv (Or.inl hfn) hxF hargs (storedNeB_sound hst) hx1 hx1l
-                hne (thruOKB_sound hs1 hok) (thruVB_sound hs1 hvv) (fun hd => ?_) (fun hb => by cases hb)
-                (fun hb => by cases hb),
+              have hfnc : t.hasFn = false ∨ ∀ d ∈ Ds, d.kind.isName = true →
+                  d ∈ Ex1.held ∧ ∀ r ∈ roots (memDeps Ex1.path), (argE Γ1 r).ty.holdsView = true →
+                    d ∈ (argE Γ1 r).held := by
+                rcases hcl with h0 | h0
+                · exact Or.inl h0
+                · exact Or.inr (closureHeldB_sound h0)
+              refine ⟨.editBV hEx hm hl (vecElem2_some ht) hv hfnc hxF hargs (storedNeB_sound hst) hx1 hx1l
+                hne (thruOKB_sound hs1 hok) (thruVB_sound hs1 hvv) (fun hd => ?_) (fun hb' => ?_)
+                (fun hb' => ?_),
                 supported2_setE (supported2_holdOn (supported2_killHv hs1 _) _ _) (hD x (by simp [Stmt.vars])) _⟩
-              rcases hdr with h0 | h0
-              · rw [hd] at h0; cases h0
-              · exact h0
+              · rcases hdr with h0 | h0
+                · rw [hd] at h0; cases h0
+                · exact h0
+              · rcases hb with h0 | ⟨h0, _⟩
+                · rw [hb'] at h0; cases h0
+                · exact h0
+              · rcases hb with h0 | ⟨_, h0⟩
+                · rw [hb'] at h0; cases h0
+                · exact Or.inl h0
             · cases h
           · cases h
         · cases h
