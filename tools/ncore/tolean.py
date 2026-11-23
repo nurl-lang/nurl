@@ -405,6 +405,20 @@ class Fn:
         if f.startswith("slice_from_vec__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.view {self.pvar(ops[0])}) {rest})"
+        if f.startswith("vec_at__") and n == 2 and ops[0] != "c":
+            # a bounds-checked element read; only a scalar element, whose
+            # value is copied out, is translated (a lent aggregate element
+            # needs the borrow the IR's next line takes, not yet followed)
+            if vec_elem(f, "vec_at__") != ".int":
+                raise Unsupported(f"{self.fn['name']}: vec_at of a non-scalar element")
+            pre = []
+            i = self.operand(ops[1], pre)
+            if x is None:
+                t = self.fresh()
+                s = self.seq(f"(.letv {t} (.at {self.pvar(ops[0])} {i}) .skip)", rest)
+            else:
+                s = f"(.letv {x} (.at {self.pvar(ops[0])} {i}) {rest})"
+            return self.wrap(pre, s)
         if f.startswith("slice_len__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.expr (.slen {self.pvar(ops[0])})) {rest})"
