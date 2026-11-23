@@ -1,0 +1,9 @@
+[package]
+name = "glb"
+version = "0.1.0"
+nurl-version = "0.73.0"
+description = "Write triangle meshes as binary glTF 2.0 (.glb) in pure NURL — the one-file 3-D format Blender, three.js, the Windows 3D viewer and Android's Scene Viewer open directly. Build a GlbMesh vertex by vertex (position, optional normal, optional RGBA colour) and triangle by triangle, then glb_write it or take the bytes with glb_bytes. Normals are written unit length, colours as normalised unsigned bytes (COLOR_0), indices as u32, POSITION with the min/max the spec requires, every bufferView 4-byte aligned, under a double-sided white PBR material so vertex colours show as they are. A mesh with a dangling index, or with normals or colours on only some vertices, is refused with a message rather than written broken. Checked by its own dependency-free structural test (container, chunks, accessor bounds, winding against normals) and by Khronos's glTF validator: no errors, no warnings. No dependencies."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nurl-lang/nurl-lang"
+
+[dependencies]

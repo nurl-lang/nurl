@@ -2571,11 +2571,13 @@ class FnCheck:
             whole = {k for (k, path, kind) in sm["lends"] if not path and k < len(ops)
                      and ops[k][0] == "v" and not ops[k][2] and self.fn.vars[ops[k][1]].kind == "temp"
                      and avs[k].own == "O"
-                     # (a handle, or a raw string handed back as the raw
-                     # string it is: an owned one is its own buffer)
+                     # (a handle, or a raw string or an owned slice handed
+                     # back as the value it is: an owned one is its own
+                     # buffer - nurlc's per-call own bit, __slice_call_own_bit,
+                     # AGORA-915)
                      and (kind == "handle" or (kind == "view" and dest_vid is not None
                                                and self.fn.vars[ops[k][1]].ty is not None
-                                               and self.fn.vars[ops[k][1]].ty[0] == "s"
+                                               and self.fn.vars[ops[k][1]].ty[0] in ("s", "slice")
                                                and self.fn.vars[dest_vid].ty == self.fn.vars[ops[k][1]].ty))}
         # the closure bodies the callee leaves in an argument, and in its result
         for (j, dpath, fname) in sm.get("sclos", ()):

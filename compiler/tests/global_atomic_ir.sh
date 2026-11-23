@@ -11,7 +11,8 @@
 #  the same numbers. This greps the IR for the atomic forms, counting
 #  POSITIVE markers (a gate that only looks for the absence of plain ones
 #  passes when nothing was emitted at all), and checks that an immutable
-#  constant is still an ordinary load.
+#  constant is no load at all: its value is an immediate wherever it is
+#  read (AGORA-855), so the pre-link optimiser sees the number.
 #
 #  Exit 0 iff every assertion holds.
 # ============================================================
@@ -56,6 +57,22 @@ want "bool: atomic byte load"     'load atomic i8, i8\* %[a-z0-9_]+ monotonic, a
 want "bool: atomic byte store"    'store atomic i8 %[a-z0-9_]+, i8\* %[a-z0-9_]+ monotonic, align 1'
 none "no plain load of a mutable scalar"  '= load (i64|double|i8|i1|i8\*), [^ ]+ @g_(count|level|byte|done|name)$'
 none "no plain store to a mutable scalar" '^  store (i64|double|i8|i1|i8\*) [^,]+, [^ ]+ @g_(count|level|byte|done|name)$'
+
+# An immutable constant of each scalar kind is read as its value: no load
+# of it at all, and the value used where it was named.
+cat > "$WORK/c.nu" <<'NU'
+: i G_LIMIT 100
+: f G_SCALE 2.5
+: b G_ON T
+: i G_SQ * 60 60
+@ main → i { ? G_ON { ( nurl_println_int + G_LIMIT G_SQ ) } {} ( nurl_println_int # i * G_SCALE 2.0 ) ^ 0 }
+NU
+(cd "$ROOT" && NURL_STDLIB="$ROOT" "$NURLC" "$WORK/c.nu") > "$WORK/c.ll" 2> "$WORK/c.err" \
+    || { echo "global_atomic_ir: compiling the constants failed:"; cat "$WORK/c.err"; exit 1; }
+ncl=$(grep -cE 'load[^@]*@G_(LIMIT|SCALE|ON|SQ)' "$WORK/c.ll")
+if [ "$ncl" -eq 0 ]; then note "immutable constants: no load" "ok"; else bad "immutable constants: no load" "$ncl load(s)"; fi
+if grep -qE ', 100$|i64 100,|i64 100\)' "$WORK/c.ll" && grep -qE '3600' "$WORK/c.ll"; then note "immutable constants: their values as immediates" "ok"
+else bad "immutable constants: their values as immediates" "100 / 3600 not found in an instruction"; fi
 
 [ "$fails" -eq 0 ] && echo "global_atomic_ir: all assertions hold" || echo "global_atomic_ir: $fails FAILED"
 exit "$fails"
