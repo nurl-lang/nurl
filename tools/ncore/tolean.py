@@ -22,6 +22,9 @@ def lean_ty(t):
     """An IR type as an A2 type: an integer, or a `Vec` of them (`%Vec__T`)."""
     if t in INT_TYS or t in ("i", "u", "b"):
         return ".int"
+    if t.startswith("{ i1, ") and t.endswith(" }"):
+        # an option: `sum int t`, None the first variant (formal/A2/Syntax.lean)
+        return f"(.sum .int {lean_ty(t[len('{ i1, '):-2])})"
     if not t.startswith("%"):
         t = "%" + t   # a type argument's name, inside another (`%Vec__String`)
     if t.startswith("%Vec__"):
@@ -68,7 +71,7 @@ def block_of(lines, i):
     out, depth = [], 0
     while i < len(lines):
         w = lines[i].split()[0]
-        if depth == 0 and w in ("end", "else"):
+        if depth == 0 and w in ("end", "else", "arm"):
             return out, i
         if w in ("scope", "if", "loop", "match", "foreach", "defer"):
             depth += 1
@@ -87,8 +90,9 @@ class Fn:
         self.next = top + 2  # past every core variable and the result slot
         for v, ty in fn["vars"].items():
             lean_ty(ty)
-        if fn["ret"] not in INT_TYS:
-            raise Unsupported(f"{fn['name']}: result of type {fn['ret']}")
+        self.lits = []
+        self.res_ty = lean_ty(fn["ret"])
+        self.res_own = self.res_ty != ".int"
 
     def var(self, k):
         return k if k < self.np else k + 1
@@ -97,6 +101,14 @@ class Fn:
         self.next += 1
         return self.next - 1
 
+    def lit_temp(self):
+        """An integer temporary holding a number the IR does not track,
+        bound once at the top of the body (`lean`), so a branch needs no
+        scope of its own for it."""
+        t = self.fresh()
+        self.lits.append(t)
+        return t
+
     def operand(self, op):
         if op == "c":
             return "(.lit 0)"
@@ -104,8 +116,24 @@ class Fn:
             return f"(.var {self.var(int(op[1:]))})"
         raise Unsupported(f"{self.fn['name']}: operand {op}")
 
-    def rhs(self, words, dest=None):
+    def is_int(self, op):
+        return op == "c" or self.fn["vars"].get(int(op[1:]), "i64") in INT_TYS
+
+    def rhs(self, words, dest=None, pre=None):
         k = words[0]
+        if k == "agg" and words[1] in ("T", "F") and dest is not None:
+            ty = lean_ty(self.fn["vars"][dest])
+            if not ty.startswith("(.sum .int "):
+                raise Unsupported(f"{self.fn['name']}: aggregate of type {ty}")
+            pay = ty[len("(.sum .int "):-1]
+            if words[1] == "F":
+                return f".inl {self.lit_temp()} {pay}"
+            op = words[3]
+            if op == "c":
+                return f".inr .int {self.lit_temp()}"
+            return f".inr .int {self.var(int(op[1:]))}"
+        if k == "payload" and words[2] == "T" and words[3] == "0":
+            return f".getr {self.var(int(words[1][1:]))}"
         if k == "none":
             return ".expr (.lit 0)"
         if k == "use":
@@ -129,9 +157,7 @@ class Fn:
 
     def argvar(self, op, pre):
         if op == "c":
-            t = self.fresh()
-            pre.append(t)
-            return t
+            return self.lit_temp()
         return self.var(int(op[1:]))
 
     def intrinsic(self, words, rest, x=None):
@@ -169,8 +195,8 @@ class Fn:
             return f"(.letv {x} (.expr (.slen {self.var(int(ops[0][1:]))})) {rest})"
         return None
 
-    def call(self, words, names, rest):
-        """`call f n op…` into a fresh temporary, then `rest`."""
+    def call(self, words, names, rest, x=None):
+        """`call f n op…` into `x` (a fresh temporary if none), then `rest`."""
         f, n = words[1], int(words[2])
         got = self.intrinsic(words, rest)
         if got is not None:
@@ -180,12 +206,10 @@ class Fn:
         pre, args = [], []
         for op in words[3:3 + n]:
             if op == "c":
-                t = self.fresh()
-                pre.append(t)
-                args.append(str(t))
+                args.append(str(self.lit_temp()))
             else:
                 args.append(str(self.var(int(op[1:]))))
-        x = self.fresh()
+        x = self.fresh() if x is None else x
         s = f"(.letcall {x} {names[f]} [{', '.join(args)}] {rest})"
         for t in reversed(pre):
             s = f"(.letv {t} (.expr (.lit 0)) {s})"
@@ -203,6 +227,18 @@ class Fn:
         if w == "scope":
             body, j = block_of(lines, 1)
             return self.seq(self.stmts(body, names), self.stmts(lines[j + 1:], names))
+        if w == "match":
+            # an option's match: `isl` is 1 for its first variant, None (`F`)
+            arms, j = {}, 1
+            while j < len(lines) and lines[j].split()[0] == "arm":
+                body, k = block_of(lines, j + 1)
+                arms[lines[j].split()[1]] = body
+                j = k   # the next `arm`, or the match's `end`
+            if set(arms) != {"T", "F"}:
+                raise Unsupported(f"{self.fn['name']}: match arms {sorted(arms)}")
+            m = self.var(int(head[1][1:]))
+            ite = f"(.ite (.isl {m}) {self.stmts(arms['F'], names)} {self.stmts(arms['T'], names)})"
+            return self.seq(ite, self.stmts(lines[j + 1:], names))
         if w == "if":
             a, j = block_of(lines, 1)
             if lines[j].split()[0] == "else":
@@ -213,9 +249,20 @@ class Fn:
             ite = f"(.ite {c} {self.stmts(a, names)} {self.stmts(b, names)})"
             return self.seq(ite, self.stmts(lines[k + 1:], names))
         if w == "ret":
+            if head[1] != "-" and not self.is_int(head[1]):
+                ex = f"(.seq (.assign {self.np} (.var {self.var(int(head[1][1:]))})) (.exit 0))"
+                return self.seq(ex, self.stmts(lines[1:], names))
             v = "(.lit 0)" if head[1] == "-" else self.operand(head[1])
             ex = f"(.seq (.assign {self.np} (.expr {v})) (.exit 0))"
             return self.seq(ex, self.stmts(lines[1:], names))
+        if w == "let" and head[2] != "call":
+            # `let x r` whose value is returned at once: the result takes `r`
+            nxt = [l for l in lines[1:] if l.split()[0] not in ("line", "drop")]
+            if nxt and nxt[0].split() == ["ret", f"v{head[1]}"]:
+                k = lines.index(nxt[0])
+                r = self.rhs(head[2:], int(head[1]), [])
+                ex = f"(.seq (.assign {self.np} ({r})) (.exit 0))"
+                return self.seq(ex, self.stmts(lines[k + 1:], names))
         if w == "let":
             x = self.var(int(head[1]))
             rest = self.stmts(lines[1:], names)
@@ -223,10 +270,12 @@ class Fn:
                 got = self.intrinsic(head[2:], rest, x)
                 if got is not None:
                     return got
-                t = self.fresh()
-                return self.call(head[2:], names, f"(.letv {x} (.expr (.var {t})) {rest})".replace(
-                    f"(.var {t})", "(.lit 0)"))
-            return f"(.letv {x} ({self.rhs(head[2:], int(head[1]))}) {rest})"
+                return self.call(head[2:], names, rest, x)
+            pre = []
+            s = f"(.letv {x} ({self.rhs(head[2:], int(head[1]), pre)}) {rest})"
+            for t in reversed(pre):
+                s = f"(.letv {t} (.expr (.lit 0)) {s})"
+            return s
         if w == "eval":
             rest = self.stmts(lines[1:], names)
             if head[1] == "call":
@@ -245,9 +294,13 @@ class Fn:
         return a if b == ".skip" else f"(.seq {a} {b})"
 
     def lean(self, names):
-        body = f"(.block {self.stmts(self.fn['body'], names)})"
-        params = ", ".join(["(.inp, .int)"] * self.np)
-        return (f"{{ params := [{params}], resTy := .int, resOwn := false, lends := [], rholds := [],\n"
+        inner = self.stmts(self.fn['body'], names)
+        for t in reversed(self.lits):
+            inner = f"(.letv {t} (.expr (.lit 0)) {inner})"
+        body = f"(.block {inner})"
+        params = ", ".join(f"(.inp, {lean_ty(self.fn['vars'][i])})" for i in range(self.np))
+        own = "true" if self.res_own else "false"
+        return (f"{{ params := [{params}], resTy := {self.res_ty}, resOwn := {own}, lends := [], rholds := [],\n"
                 f"    outHolds := [], body := {body}, nvars := {self.next + 1} }}")
 
 
