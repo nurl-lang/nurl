@@ -87,6 +87,36 @@ theorem oblBlk_ok {ξ : Exits} {Δ : Ctx} {E : Obl} {D : List Var} (hΔ : Suppor
   | succ m =>
     exact h (m, Γe) (List.mem_filterMap.mpr ⟨(m + 1, Γe), he, rfl⟩)
 
+/-- AGORA-980 follow-up: a block's end joined with the contexts its own
+    exits (`0`) leave from, as an `ite`'s arms are joined. -/
+def blkJoin (Δ : Ctx) : Obl → Ctx
+  | [] => Δ
+  | (0, Γe) :: E => blkJoin (joinCand Δ Γe) E
+  | _ :: E => blkJoin Δ E
+
+theorem blkJoin_supported {D : List Var} {Δ : Ctx} (hΔ : Supported2 Δ D) :
+    ∀ {E : Obl}, Supported2 (blkJoin Δ E) D
+  | [] => hΔ
+  | (0, _) :: E => blkJoin_supported (E := E) (joinCand_supported hΔ)
+  | (_ + 1, _) :: E => blkJoin_supported (E := E) hΔ
+
+/-- ... each of its exits reaching an end weaker than its own context
+    (`Exits.blk`'s `Weaker`), decided. -/
+def oblBlkWkB (D : List Var) (Δ : Ctx) (E : Obl) : Bool :=
+  E.all fun e => e.1 != 0 || weaker2B D e.2 Δ
+
+theorem oblBlkWk_ok {ξ : Exits} {Δ : Ctx} {E : Obl} {D : List Var} (hΔ : Supported2 Δ D)
+    (hE : ∀ e ∈ E, Supported2 e.2 D) (hb : oblBlkWkB D Δ E = true) (h : OblOK ξ (oblBlk E)) :
+    OblOK (ξ.blk Δ) E := by
+  intro ⟨n, Γe⟩ he
+  cases n with
+  | zero =>
+    have := List.all_eq_true.mp hb _ he
+    simp only [bne_self_eq_false, Bool.false_or] at this
+    exact Or.inr (weaker2B_sound (hE _ he) hΔ this)
+  | succ m =>
+    exact h (m, Γe) (List.mem_filterMap.mpr ⟨(m + 1, Γe), he, rfl⟩)
+
 /-- An exit from `Γ` may end in `Δ` (`StmtT.exit`'s conditions on the two),
     decided over the domain. -/
 def exitToB (D : List Var) (Γ Δ : Ctx) : Bool :=
@@ -233,7 +263,16 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
     | some Δ => some ⟨Δ, [], none⟩
     | none =>
       match checkX P R C D Γ F s with
-      | some r => if oblBlkOKB D r.Δ r.E then some ⟨r.Δ, oblBlk r.E, none⟩ else none
+      | some r =>
+        if oblBlkOKB D r.Δ r.E then some ⟨r.Δ, oblBlk r.E, none⟩
+        -- (AGORA-980 follow-up: an exit of the block from a context the end
+        -- may be weakened to, `Exits.blk`: the end joined with the exits',
+        -- as an `ite`'s arms are; a `return` from inside a loop beside a
+        -- fall-off result)
+        else if ctxWF2B D Γ && nameWFB D Γ && weaker2B D r.Δ (blkJoin r.Δ r.E) &&
+            oblBlkWkB D (blkJoin r.Δ r.E) r.E then
+          some ⟨blkJoin r.Δ r.E, oblBlk r.E, none⟩
+        else none
       | none => none
   | Γ, F, .ite c a b =>
     match pre2 P R C D Γ F (.ite c a b) with
@@ -444,7 +483,24 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
           | succ m =>
             simp only [hn, Option.some.injEq] at hm; subst hm
             exact e0 e' he'
-        · cases h
+        · split at h
+          · rename_i hj
+            simp only [Bool.and_eq_true] at hj
+            obtain ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩ := hj
+            simp only [Option.some.injEq] at h; subst h
+            obtain ⟨s0, e0, t0, _⟩ := ih hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr0
+            have sj := blkJoin_supported (E := r0.E) s0
+            have wΓ := weaker_self2 hs h1 h2
+            refine ⟨sj, fun e he => ?_, fun ξ hξ =>
+              .block (.sub wΓ (t0 _ (oblBlkWk_ok sj e0 h4 hξ)) (Or.inr (weaker2B_sound s0 sj h3))),
+              fun n Γe ht => (by cases ht)⟩
+            obtain ⟨e', he', hm⟩ := List.mem_filterMap.mp he
+            cases hn : e'.1 with
+            | zero => simp [hn] at hm
+            | succ m =>
+              simp only [hn, Option.some.injEq] at hm; subst hm
+              exact e0 e' he'
+          · cases h
       · cases h
   | ite c a b iha ihb =>
     intro Γ F r hs hD h
