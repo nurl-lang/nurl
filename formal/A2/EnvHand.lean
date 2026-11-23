@@ -2531,7 +2531,36 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
       rcases hv with h | h | h | h | h | h | h <;> (try rw [h]) <;> (try assumption)
       exact Nat.lt_of_lt_of_le (hi.nvS v (by simp [Stmt.vars, h])) (Nat.le_add_right _ 2)
     · exact Nat.lt_of_lt_of_le (hi.nvF v hv) (by show m.nv ≤ m.nv + 2; omega)
-    · sorry  -- WIP scaffold (AGORA-937 B2, never merged): carry the anchors to the package call's new statement (fresh m.nv / m.nv+1, the code's renamed body)
+    · -- AGORA-937 (B2): the new statement's killable names are the old ones,
+      -- or the fresh m.nv / m.nv+1, none of them bound in Γ (asked of the new
+      -- names and the old ones together, so x and c are in the set; then the new)
+      have hΓr : Γ (m.nv + 1) = none := by
+        have hmz : m.st (m.nv + 1) = none := by
+          cases h : m.st (m.nv + 1) with
+          | none => rfl
+          | some sl => exact absurd (hi.nvSt (m.nv + 1) (by rw [h]; rfl)) (Nat.not_lt.mpr (Nat.le_succ _))
+        have := hi.dom (m.nv + 1); rw [hmz] at this; cases h : Γ (m.nv + 1) <;> simp_all
+      have h0 := hrbΓ p E' hp hm
+      refine ((((hi.anch p E' h0 hm (by simp [Stmt.spine])).extend
+        (V' := (handStmtD x f0 [] m.nv k).killVars ++ (Stmt.callcE x c j [] k).killVars) fun v hv => ?_).of_tyV
+        fun r Er hr hrV => ?_).anti fun v hv => List.mem_append_left _ hv)
+      · rcases List.mem_append.mp hv with hv | hv
+        · simp only [handStmtD, Stmt.killVars, Rhs.vars, List.mem_cons, List.mem_append,
+            List.not_mem_nil, or_false] at hv
+          by_cases h1 : v = m.nv
+          · exact Or.inr (h1 ▸ hΓy)
+          by_cases h2 : v = m.nv + 1
+          · exact Or.inr (h2 ▸ hΓr)
+          left
+          simp only [h1, h2, false_or, or_false] at hv
+          simp only [Stmt.killVars]
+          rcases hv with h | h <;> first | (rcases h with h' | h' <;> simp [h']) | simp [h]
+        · exact Or.inl hv
+      · have hrx : r ≠ x := fun e => hrV (List.mem_append_right _ (by simp [Stmt.killVars, e]))
+        have hrc : r ≠ c := fun e => hrV (List.mem_append_right _ (by simp [Stmt.killVars, e]))
+        have hry : r ≠ m.nv := fun e => by rw [e, hΓy] at hr; cases hr
+        refine ⟨killE .replace false c Er, ?_, killE_ty ..⟩
+        rw [handCtx_other hrx hry hrc]; simp [kill, hr]
     · rw [hspine] at hv
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hv
       rcases hv with rfl | rfl
@@ -2747,7 +2776,33 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
           | (rw [h]; assumption)
           | exact hS v (by simp [Stmt.vars, h])
       · exact Nat.lt_of_lt_of_le (hi.nvF v hv) (by show m.nv ≤ m.nv + 2; omega)
-      · sorry  -- WIP scaffold (AGORA-937 B2, never merged): carry the anchors to the package call's new statement (fresh m.nv / m.nv+1, the code's renamed body)
+      · -- AGORA-937 (B2): as handStmtD's: the new killable names are the old ones,
+        -- or the fresh m.nv / m.nv+1, none of them bound in Γ
+        have hΓr : Γ (m.nv + 1) = none := by
+          have hmz : m.st (m.nv + 1) = none := by
+            cases h : m.st (m.nv + 1) with
+            | none => rfl
+            | some sl => exact absurd (hi.nvSt (m.nv + 1) (by rw [h]; rfl)) (Nat.not_lt.mpr (Nat.le_succ _))
+          have := hi.dom (m.nv + 1); rw [hmz] at this; cases h : Γ (m.nv + 1) <;> simp_all
+        have h0 := hrbΓ p E' hp hm
+        refine ((((hi.anch p E' h0 hm (by simp [Stmt.spine])).extend
+          (V' := (handStmt x c f0 zs fs0 te0 ms m.nv k).killVars ++ (Stmt.callcE x c j zs k).killVars)
+          fun v hv => ?_).of_tyV fun r Er hr hrV => ?_).anti fun v hv => List.mem_append_left _ hv)
+        · rcases List.mem_append.mp hv with hv | hv
+          · by_cases h1 : v = m.nv
+            · exact Or.inr (h1 ▸ hΓy)
+            by_cases h2 : v = m.nv + 1
+            · exact Or.inr (h2 ▸ hΓr)
+            left
+            simp only [handStmt, Stmt.killVars, Rhs.vars, List.mem_cons, List.mem_append,
+              List.not_mem_nil] at hv ⊢
+            grind
+          · exact Or.inl hv
+        · have hrx : r ≠ x := fun e => hrV (List.mem_append_right _ (by simp [Stmt.killVars, e]))
+          have hrc : r ≠ c := fun e => hrV (List.mem_append_right _ (by simp [Stmt.killVars, e]))
+          have hry : r ≠ m.nv := fun e => by rw [e, hΓy] at hr; cases hr
+          refine ⟨killE .replace false c Er, ?_, killE_ty ..⟩
+          rw [handCtx_other hrx hry hrc]; simp [kill, hr]
       · rw [hspine] at hv
         simp only [List.mem_cons, List.not_mem_nil, or_false] at hv
         rcases hv with rfl | rfl

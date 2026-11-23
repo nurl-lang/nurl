@@ -805,7 +805,7 @@ This makes B2's last two cases depend on B3's invariant. The order is therefore:
 - **`SrcCase` relaxed, 2 places:** Preservation's `withLock` and `withElem` (SrcKeep's `StmtT.ctxRel`).
 - **`CallA.anch` relaxed (B3), 1 place:** CallInv.lean's call setup.
 - **`StmtT.catchR`'s anchor premise, 1 place:** the typing rule asks `RootbAnchF Δ F` (CallInv.lean's recover case).
-- **Independent of the rest, 2 places:** EnvHand.lean, carrying the anchors to the package call's new statement (fresh `m.nv` / `m.nv + 1`, and the code's renamed body).
+- *(Proved since: EnvHand.lean's two "carry the anchors to the package call's new statement". The new killable names are the old ones, or the fresh `m.nv` / `m.nv + 1`, which Γ does not bind.)*
 
 **The call side (B3): what `CallA.anch` is used for.** Four uses (2026-11-23), and all but one are met by the relaxed clause:
 1. **`CallA.post_rootb` (Call.lean).** The call's context change leaves every borrowed parameter's entry as it was. At a moved or changed argument, a held root is impossible: an argument is a killable name of the `letcall` / `callc`, and the clause keeps held roots out of those. At the roots of `mutNames Γ args` (what an argument closure may change by name), the clause says nothing. **This is the one use that needs AGORA-963's fact**, in its typing form: no held root is a root of `mutNames Γ args`.
