@@ -11,6 +11,14 @@ domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
 joins are finite comparisons. `checkStmt2_sound` gives `StmtT`. Calls,
 `letd`, closures, shares, locks, regions and the exits (`block`, `exit`,
 `catchR`) follow.
+
+A `letd`'s or a `scopeD`'s destructor is decided as `DropFnOK`
+(`dropFnOKB_sound`): a destructor that takes the value lent, or a struct's,
+an enum's, an impl's or a closure's glue (`GlueOK`, `EnumGlueOK`,
+`ImplGlueOK`, `ClosureGlueOK`), each one body shape over the glue
+signature, with `ThruFn`'s premise from the thru-free set where the value
+holds views. A value of another destructor type rebound under its parts'
+glue is `LetdFn`'s second case (`letdFnB_sound`).
 -/
 
 namespace C
@@ -419,36 +427,32 @@ theorem nestDtor_sound {f : Nat} {u : Ty} : ∀ {n : Nat} {t : Ty}, nestDtor f u
     rw [ih hm]; rfl
   | _ => intro n t h; simp [nestDtor] at h
 
-/-- `letd`'s types, for a value that is the struct itself or already of
-    `f`'s destructor type (its struct `t`, the binding's type `.dtor f t`),
-    or a `Vec` nest of `f`'s destructor values (bound at its own type). A
-    value of another destructor type glued to `f` is not decided yet. -/
+/-- `letd`'s types, for a value that is the struct itself or of a
+    destructor type over it (its struct `t`, the binding's type `.dtor f t`;
+    a destructor type other than `f`'s is `LetdFn`'s to allow, `letdFnB`),
+    or a `Vec` nest of `f`'s destructor values (bound at its own type). -/
 def letdTys (f : Nat) : Ty → Option (Ty × Ty)
-  | .dtor g t => if g = f then some (t, .dtor f t) else none
+  | .dtor _ t => some (t, .dtor f t)
   | .vec u => match nestDtor f u with
     | some (_, t) => some (t, .vec u)
     | none => none
   | a => some (a, .dtor f a)
 
-theorem letdTys_sound {f : Nat} {a t τ : Ty} (h : letdTys f a = some (t, τ)) :
-    LetdTy f t a τ ∧ ∀ g, a = .dtor g t → g = f := by
+theorem letdTys_sound {f : Nat} {a t τ : Ty} (h : letdTys f a = some (t, τ)) : LetdTy f t a τ := by
   cases a with
   | dtor g u =>
-    simp only [letdTys] at h
-    split at h
-    · rename_i hg; simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
-      subst hg; exact ⟨Or.inl ⟨rfl, Or.inr ⟨g, rfl⟩⟩, fun g' hg' => by cases hg'; rfl⟩
-    · cases h
+    simp only [letdTys, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+    exact Or.inl ⟨rfl, Or.inr ⟨g, rfl⟩⟩
   | vec u =>
     simp only [letdTys] at h
     split at h
     · rename_i n t' hn
       simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
-      exact ⟨Or.inr ⟨n, by rw [nestDtor_sound hn], rfl⟩, fun g hg => by cases hg⟩
+      exact Or.inr ⟨n, by rw [nestDtor_sound hn], rfl⟩
     · cases h
   | _ =>
     simp only [letdTys, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
-    exact ⟨Or.inl ⟨rfl, Or.inl rfl⟩, fun g hg => by cases hg⟩
+    exact Or.inl ⟨rfl, Or.inl rfl⟩
 
 /-- `DSelf`, decided on `x`'s entry `E`: a destructor binding with its own
     slot depends on itself by no view. -/
@@ -869,6 +873,271 @@ theorem noThruB_sound {P : Prog} {σ : Nat} (h : noThruB P σ = true) : ¬ ThruF
   simp only [noThruB, Bool.and_eq_true, decide_eq_true_eq] at h
   exact fun ht => thruClosedB_sound h.2 ht h.1
 
+/-! ### The glue destructors (`DropFnOK`), decided
+
+Each glue is one fixed body shape over a fixed signature, so each is decided
+by matching the function's body; the `ThruFn` premise by the thru-free set
+where the value holds views (`noThruB`). -/
+
+/-- `ThruFn P f → t.holdsView = false`, decided: `t` holds no views, or `f`
+    is in the closed thru-free set. -/
+def thruViewB (P : Prog) (f : Nat) (t : Ty) : Bool := !t.holdsView || noThruB P f
+
+theorem thruViewB_sound {P : Prog} {f : Nat} {t : Ty} (h : thruViewB P f t = true) :
+    ThruFn P f → t.holdsView = false := by
+  intro ht
+  simp only [thruViewB, Bool.or_eq_true, Bool.not_eq_true'] at h
+  rcases h with h | h
+  · exact h
+  · exact absurd ht (noThruB_sound h)
+
+/-- The signature every glue has: one value of `Ty.dtor f t`, taken owned,
+    and a plain integer result. -/
+def glueSigB (P : Prog) (f : Nat) (t : Ty) (fn : Fn) : Bool :=
+  decide (fn.params = [(.sink, .dtor f t)]) && decide (fn.resTy = .int) && !fn.resOwn &&
+    decide (fn.lends = []) && decide (fn.rholds = []) && decide (fn.outHolds = []) && thruViewB P f t
+
+theorem glueSigB_sound {P : Prog} {f : Nat} {t : Ty} {fn : Fn} (h : glueSigB P f t fn = true) :
+    fn.params = [(.sink, .dtor f t)] ∧ fn.resTy = .int ∧ fn.resOwn = false ∧ fn.lends = [] ∧
+      fn.rholds = [] ∧ fn.outHolds = [] ∧ (ThruFn P f → t.holdsView = false) := by
+  simp only [glueSigB, Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at h
+  obtain ⟨⟨⟨⟨⟨⟨hp, hr⟩, ho⟩, hl⟩, hh⟩, hoh⟩, hv⟩ := h
+  exact ⟨hp, hr, ho, hl, hh, hoh, thruViewB_sound hv⟩
+
+/-- A struct's glue: its body takes the value apart first thing, and does
+    nothing else (`GlueOK`). -/
+def glueOKB (P : Prog) (f : Nat) (t : Ty) : Bool :=
+  match P[f]?, prodOf2 t with
+  | some fn, some _ =>
+    glueSigB P f t fn && (match fn.body with
+      | .unpair y _ _ s => decide (y = 0) && s.pureGlue
+      | _ => false)
+  | _, _ => false
+
+theorem glueOKB_sound {P : Prog} {f : Nat} {t : Ty} (h : glueOKB P f t = true) : GlueOK P f t := by
+  unfold glueOKB at h
+  split at h
+  · rename_i fn ab hf ht
+    obtain ⟨a, b⟩ := ab
+    simp only [Bool.and_eq_true] at h
+    obtain ⟨hs, hb⟩ := h
+    obtain ⟨hp, hr, ho, hl, hh, hoh, hv⟩ := glueSigB_sound hs
+    split at hb
+    · rename_i y x z s hbody
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hb
+      obtain ⟨rfl, hg⟩ := hb
+      exact ⟨fn, a, b, hf, prodOf2_some ht, hp, hr, ho, hl, hh, hoh, hv, x, z, s, hbody, hg⟩
+    · cases hb
+  · cases h
+
+/-- The two payloads of an enum type. -/
+def sumOf2 : Ty → Option (Ty × Ty)
+  | .sum a b => some (a, b)
+  | _ => none
+
+theorem sumOf2_some {t a b : Ty} (h : sumOf2 t = some (a, b)) : t = .sum a b := by
+  cases t <;> simp [sumOf2] at h; obtain ⟨rfl, rfl⟩ := h; rfl
+
+/-- An enum's arm that moves its payload out to a `letd` first thing
+    (`takel 0` for the first variant, `taker 0` for the second). -/
+def takesPayB (left : Bool) : Stmt → Bool
+  | .letd _ _ (.takel y) _ => left && decide (y = 0)
+  | .letd _ _ (.taker y) _ => !left && decide (y = 0)
+  | _ => false
+
+theorem takesPayB_left {s : Stmt} (h : takesPayB true s = true) : ∃ y g k, s = .letd y g (.takel 0) k := by
+  unfold takesPayB at h
+  split at h
+  · rename_i y g w k
+    simp only [Bool.true_and, decide_eq_true_eq] at h; subst h; exact ⟨y, g, k, rfl⟩
+  · simp at h
+  · cases h
+
+theorem takesPayB_right {s : Stmt} (h : takesPayB false s = true) : ∃ y g k, s = .letd y g (.taker 0) k := by
+  unfold takesPayB at h
+  split at h
+  · simp at h
+  · rename_i y g w k
+    simp only [Bool.not_false, Bool.true_and, decide_eq_true_eq] at h; subst h; exact ⟨y, g, k, rfl⟩
+  · cases h
+
+/-- An enum's glue: its body matches on the tag, and each arm only moves a
+    payload that holds a destructor value out to its `letd` (`EnumGlueOK`). -/
+def enumGlueOKB (P : Prog) (f : Nat) (t : Ty) : Bool :=
+  match P[f]?, sumOf2 t with
+  | some fn, some (a, b) =>
+    glueSigB P f t fn && (match fn.body with
+      | .ite c sa sb => decide (c = .isl 0) && sa.pureGlue && sb.pureGlue &&
+          (!a.holdsDtor || takesPayB true sa) && (!b.holdsDtor || takesPayB false sb)
+      | _ => false)
+  | _, _ => false
+
+theorem enumGlueOKB_sound {P : Prog} {f : Nat} {t : Ty} (h : enumGlueOKB P f t = true) :
+    EnumGlueOK P f t := by
+  unfold enumGlueOKB at h
+  split at h
+  · rename_i fn a b hf ht
+    simp only [Bool.and_eq_true] at h
+    obtain ⟨hs, hb⟩ := h
+    obtain ⟨hp, hr, ho, hl, hh, hoh, hv⟩ := glueSigB_sound hs
+    split at hb
+    · rename_i c sa sb hbody
+      simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true, Bool.not_eq_true'] at hb
+      obtain ⟨⟨⟨⟨rfl, hga⟩, hgb⟩, hta⟩, htb⟩ := hb
+      refine ⟨fn, a, b, sa, sb, hf, sumOf2_some ht, hp, hr, ho, hl, hh, hoh, hv, hbody, hga, hgb, ?_, ?_⟩
+      · intro hd; rcases hta with h0 | h0
+        · rw [hd] at h0; cases h0
+        · exact takesPayB_left h0
+      · intro hd; rcases htb with h0 | h0
+        · rw [hd] at h0; cases h0
+        · exact takesPayB_right h0
+    · cases hb
+  · cases h
+
+/-- A struct's or an enum's glue with an impl, for the parts' glue `h` and
+    the impl `i` its body names (`ImplGlueOK`). -/
+def implGlueAtB (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Bool :=
+  match P[f]? with
+  | some fn =>
+    t.isStruct && glueSigB P f t fn && (glueOKB P h t || enumGlueOKB P h t) && dtorOKB P i (.dtor h t) &&
+      (match fn.body with
+        | .letd w h' (.var y) (.letcall _ i' args (.assign v (.expr _))) =>
+          decide (h' = h) && decide (y = 0) && decide (i' = i) && decide (args = [w]) && decide (v = 1)
+        | _ => false)
+  | none => false
+
+theorem implGlueAtB_sound {P : Prog} {f : Nat} {t : Ty} {h i : Nat} (hc : implGlueAtB P f t h i = true) :
+    ImplGlueOK P f t h i := by
+  unfold implGlueAtB at hc
+  split at hc
+  · rename_i fn hf
+    simp only [Bool.and_eq_true, Bool.or_eq_true] at hc
+    obtain ⟨⟨⟨⟨hst, hs⟩, hg⟩, hd⟩, hb⟩ := hc
+    obtain ⟨hp, hr, ho, hl, hh, hoh, hv⟩ := glueSigB_sound hs
+    split at hb
+    · rename_i w h' y r i' args v e hbody
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hb
+      obtain ⟨⟨⟨⟨rfl, rfl⟩, rfl⟩, rfl⟩, rfl⟩ := hb
+      refine ⟨fn, w, r, e, hf, hst, hp, hr, ho, hl, hh, hoh, hv, ?_, dtorOKB_sound hd, hbody⟩
+      rcases hg with hg | hg
+      · exact Or.inl (glueOKB_sound hg)
+      · exact Or.inr (enumGlueOKB_sound hg)
+    · cases hb
+  · cases hc
+
+/-- The glue with an impl, its parts' glue and impl read off its body. -/
+def implGlueOKB (P : Prog) (f : Nat) (t : Ty) : Bool :=
+  match P[f]? with
+  | some fn =>
+    match fn.body with
+    | .letd _ h (.var _) (.letcall _ i _ _) => implGlueAtB P f t h i
+    | _ => false
+  | none => false
+
+theorem implGlueOKB_sound {P : Prog} {f : Nat} {t : Ty} (hc : implGlueOKB P f t = true) :
+    ∃ h i, ImplGlueOK P f t h i := by
+  unfold implGlueOKB at hc
+  split at hc
+  · split at hc
+    · exact ⟨_, _, implGlueAtB_sound hc⟩
+    · cases hc
+  · cases hc
+
+/-- A closure's glue: its body calls the closure's drop method on it, owned,
+    first thing, and then only sets its result (`ClosureGlueOK`). -/
+def closureGlueOKB (P : Prog) (f : Nat) (t : Ty) : Bool :=
+  match P[f]?, t with
+  | some fn, .fn ms q =>
+    decide (q = .dropd) && glueSigB P f t fn &&
+      (match fn.body with
+        | .callcE _ c j zs (.assign v (.expr _)) =>
+          decide (c = 0) && decide (zs = []) && decide (v = 1) &&
+            (match ms[j]? with
+              | some σ => (match P[σ]? with
+                  | some sig => decide (sig.params = [(.sink, .dtor f t)])
+                  | none => false)
+              | none => false)
+        | _ => false)
+  | _, _ => false
+
+theorem closureGlueOKB_sound {P : Prog} {f : Nat} {t : Ty} (hc : closureGlueOKB P f t = true) :
+    ClosureGlueOK P f t := by
+  unfold closureGlueOKB at hc
+  split at hc
+  · rename_i fn ms q hf
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+    obtain ⟨⟨rfl, hs⟩, hb⟩ := hc
+    obtain ⟨hp, hr, ho, hl, hh, hoh, hv⟩ := glueSigB_sound hs
+    split at hb
+    · rename_i r c j zs v e hbody
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hb
+      obtain ⟨⟨⟨rfl, rfl⟩, rfl⟩, hm⟩ := hb
+      split at hm
+      · rename_i σ hσ
+        split at hm
+        · rename_i sig hsig
+          exact ⟨fn, ms, j, σ, sig, r, e, hf, rfl, hp, hr, ho, hl, hh, hoh, hv, hσ, hsig,
+            of_decide_eq_true hm, hbody⟩
+        · cases hm
+      · cases hm
+    · cases hb
+  · cases hc
+
+/-- `DropFnOK`, decided: a destructor that takes the value lent (`DtorOK`,
+    for a payload that holds no views), or one of the glues. -/
+def dropFnOKB (P : Prog) (f : Nat) (t : Ty) : Bool :=
+  (dtorOKB P f (.dtor f t) && !t.holdsDtor) || glueOKB P f t || implGlueOKB P f t ||
+    enumGlueOKB P f t || closureGlueOKB P f t
+
+theorem dropFnOKB_sound {P : Prog} {f : Nat} {t : Ty} (h : dropFnOKB P f t = true) : DropFnOK P f t := by
+  simp only [dropFnOKB, Bool.or_eq_true, Bool.and_eq_true, Bool.not_eq_true'] at h
+  rcases h with (((⟨hd, hh⟩ | h) | h) | h) | h
+  · exact Or.inl ⟨dtorOKB_sound hd, hh⟩
+  · exact Or.inr (Or.inl (glueOKB_sound h))
+  · exact Or.inr (Or.inr (Or.inl (implGlueOKB_sound h)))
+  · exact Or.inr (Or.inr (Or.inr (Or.inl (enumGlueOKB_sound h))))
+  · exact Or.inr (Or.inr (Or.inr (Or.inr (closureGlueOKB_sound h))))
+
+/-- A struct's glue (`unpair` first thing, then only its result) and an
+    enum's (a tag match whose arms only set the result), at function 0: the
+    deciders accept them, and refuse a struct glue whose body does more. -/
+def glueEx (body : Stmt) (t : Ty) : Prog :=
+  [{ params := [(.sink, .dtor 0 t)], resTy := .int, resOwn := false, lends := [], rholds := [],
+     outHolds := [], body := body, nvars := 4 }]
+
+example : dropFnOKB (glueEx (.unpair 0 1 2 (.assign 1 (.expr (.lit 0)))) (.prod .int .int)) 0 (.prod .int .int) = true := by
+  decide
+example : dropFnOKB (glueEx (.ite (.isl 0) (.assign 1 (.expr (.lit 0))) .skip) (.sum .int .int)) 0 (.sum .int .int) = true := by
+  decide
+example : glueOKB (glueEx (.unpair 0 1 2 (.free 1)) (.prod .int .int)) 0 (.prod .int .int) = false := by decide
+
+/-- `LetdFn`, decided: `f` is a destructor or a glue of `t` (`dropFnOKB`),
+    and a value of another destructor type `.dtor g t` is rebound under `f`
+    only where `g` is the glue with an impl whose parts' glue is `f`, and the
+    body calls that impl on the binding next (Agora #616). -/
+def letdFnB (P : Prog) (f : Nat) (t a : Ty) (x : Var) (s : Stmt) : Bool :=
+  dropFnOKB P f t && (match a with
+    | .dtor g _ => decide (g = f) || (match s with
+        | .letcall _ i args _ => decide (args = [x]) && implGlueAtB P g t f i
+        | _ => false)
+    | _ => true)
+
+theorem letdFnB_sound {P : Prog} {f : Nat} {t a : Ty} {x : Var} {s : Stmt} (h : letdFnB P f t a x s = true) :
+    LetdFn P f t a x s := by
+  simp only [letdFnB, Bool.and_eq_true] at h
+  obtain ⟨hd, hm⟩ := h
+  refine ⟨dropFnOKB_sound hd, fun g hg hne => ?_⟩
+  subst hg
+  simp only [Bool.or_eq_true, decide_eq_true_eq] at hm
+  rcases hm with hm | hm
+  · exact absurd hm hne
+  · split at hm
+    · rename_i r i args k
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hm
+      obtain ⟨rfl, hi⟩ := hm
+      exact ⟨i, r, k, implGlueAtB_sound hi, rfl⟩
+    · cases hm
+
 /-- `Cross.send.Le q`, decided. -/
 def sendLeB (q : Cross) : Bool :=
   decide (Cross.send.rank ≤ q.rank) && decide (Cross.send.drops = q.drops)
@@ -1058,8 +1327,8 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
       | some (E, Γ1) =>
         match letdTys f E.ty with
         | some (t, τ) =>
-          if decide (E.mode = .own) && t.isStruct && !t.hasFn && !t.holdsDtor &&
-              dtorOKB P f (.dtor f t) && takeOKB Γ r then
+          if decide (E.mode = .own) && t.isStruct && !t.hasFn &&
+              letdFnB P f t E.ty x s && takeOKB Γ r then
             match checkStmt2 P R C D (setE Γ1 x (Entry.arm { E with ty := τ, held := E.held })) F s with
             | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
             | none => none
@@ -1072,7 +1341,7 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
     | some E =>
       match scopeDTy f E.ty with
       | some t =>
-        if decide (E.mode = .own) && !E.ty.hasFn && !t.holdsDtor && dtorOKB P f (.dtor f t) &&
+        if decide (E.mode = .own) && !E.ty.hasFn && dropFnOKB P f t &&
             t.isStruct && decide (x ∉ F) && dSelfB E x then
           match checkStmt2 P R C D Γ F s with
           | some Δ =>
@@ -1520,19 +1789,19 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
           split at h
           · rename_i hc2
             simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hc2
-            obtain ⟨⟨⟨⟨⟨hm, hst⟩, hfn⟩, hhd⟩, hdt⟩, htk⟩ := hc2
+            obtain ⟨⟨⟨⟨hm, hst⟩, hfn⟩, hdt⟩, htk⟩ := hc2
             split at h
             · rename_i Δ0 h0
               split at h
               · rename_i he
                 simp only [Option.some.injEq] at h; subst h
                 obtain ⟨hrt, hs1⟩ := hR Γ F r E Γ1 hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
-                obtain ⟨hlt, hg⟩ := letdTys_sound hty
+                have hlt := letdTys_sound hty
                 obtain ⟨t0, s0⟩ := ih (ξ := ξ.underD x)
                   (supported2_setE hs1 (hD x (by simp [Stmt.vars])) _)
                   (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
                 exact ⟨.letd hsrc hx hF hrt hm hlt hst hfn
-                  ⟨LetdFn.of (Or.inl ⟨dtorOKB_sound hdt, hhd⟩) hg, takeOKB_sound htk⟩
+                  ⟨letdFnB_sound hdt, takeOKB_sound htk⟩
                   (HeldUp.refl Γ1 E) t0 (endOK2B_sound s0 he) hna, supported2_exitScope s0 x⟩
               · cases h
             · cases h
@@ -1550,7 +1819,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
         split at h
         · rename_i hc
           simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hc
-          obtain ⟨⟨⟨⟨⟨⟨hm, hfn⟩, hhd⟩, hdt⟩, hst⟩, hxF⟩, hds⟩ := hc
+          obtain ⟨⟨⟨⟨⟨hm, hfn⟩, hdt⟩, hst⟩, hxF⟩, hds⟩ := hc
           split at h
           · rename_i Δ0 h0
             split at h
@@ -1560,7 +1829,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
               obtain ⟨⟨⟨⟨⟨hend, hko⟩, hwf⟩, hnw⟩, hvd⟩, hfr⟩ := he
               obtain ⟨t0, s0⟩ := ih (ξ := ξ.underD x) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
               have hty := scopeDTy_sound ht
-              exact ⟨.scopeD ⟨E, t, hE, hm, hty, hfn, Or.inl ⟨dtorOKB_sound hdt, hhd⟩, hst⟩ hxF t0
+              exact ⟨.scopeD ⟨E, t, hE, hm, hty, hfn, dropFnOKB_sound hdt, hst⟩ hxF t0
                 (endOK2B_sound s0 hend) (keepOutB_sound hs s0 hko) (ctxWF2B_sound s0 hwf)
                 (nameWFB_sound s0 hnw) (viewDbindB_sound hvd) (dSelfB_sound hE hds) (freshOKB_sound s0 hfr),
                 supported2_exitScope s0 x⟩
