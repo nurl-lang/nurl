@@ -26453,8 +26453,9 @@ unsafe @ core_flush i syms â†’ v {
 // The value of global `name` (of type `lt`), loaded; `mark` is its
 // `__global` mark, which the caller has read to know it is one.
 // (An enum variant is its tag, an immediate â€” its mark is `=<tag>`,
-// gen_enum_decl: nothing is loaded, and no other global's read pays a
-// lookup to find that out.)
+// gen_enum_decl â€” and so is an immutable number, `: i LIMIT 100`, its mark
+// `=<value>` (gen_global, AGORA-855): nothing is loaded, and no other
+// global's read pays a lookup to find that out.)
 @ load_global i syms i cg s lt s name s mark â†’ s {
     ? == 61 ( nurl_str_get mark 0 ) { ^ ( nurl_str_slice mark 1 - ( nurl_str_len mark ) 1 ) } {}
     ? ! ( glob_is_atomic syms name lt ) { ^ ( load_var cg lt ( nurl_str_cat `@` name ) ) } {}
@@ -100415,7 +100416,12 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col â†
                 { ( nurl_print ( nurl_str_int n ) ) } }
             ( nurl_print `\n\n` )
             ( nurl_sym_def syms cname lt )
-            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            // (An immutable integer is its value wherever it is read, an
+            // immediate, as an enum variant's tag is: `=<n>`, load_global.
+            // Nothing can write it: `=` and `mem_addr` refuse one, and an
+            // `inout` argument must be a binding. AGORA-855.)
+            : b __gimm & & ! is_mutable != ( nurl_str_get lt - ( nurl_str_len lt ) 1 ) 42 ! | | == lt0 37 == lt0 123 == lt0 91
+            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) ? __gimm ( nurl_str_cat `=` ( nurl_str_int n ) ) `1` )
             // The const's signedness rides its stored type `lt` (raw
             // internal repr): `: u GU 200` records `u8`, and gen_ident's
             // load re-publishes it so `# i GU` widens with zext.
@@ -100476,7 +100482,7 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col â†
             ( nurl_print `@` ) ( nurl_print cname )
             ( nurl_print ` = global double ` ) ( nurl_print fv ) ( nurl_print `\n\n` )
             ( nurl_sym_def syms cname `double` )
-            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) ? is_mutable `1` ( nurl_str_cat `=` fv ) )
             ? is_mutable
             { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` ) }
             {}
@@ -100489,7 +100495,7 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col â†
             ( nurl_print ` = global i1 ` )
             ( nurl_print ? ( seq bv `T` ) `1` `0` ) ( nurl_print `\n\n` )
             ( nurl_sym_def syms cname `i1` )
-            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) ? is_mutable `1` ? ( seq bv `T` ) `=1` `=0` )
             ? is_mutable
             { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` ) }
             {}
@@ -100554,7 +100560,7 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col â†
             ( nurl_print ` = global ` ) ( nurl_print ( nurl_llty lt ) ) ( nurl_print ` ` )
             ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n\n` )
             ( nurl_sym_def syms cname lt )
-            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) ? is_mutable `1` ( nurl_str_cat `=` ( nurl_str_int n ) ) )
             ? is_mutable
             { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` ) }
             {}
