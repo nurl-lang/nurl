@@ -113,4 +113,26 @@ head -c 1000 "$WORK/sphere.scene" > "$WORK/cut.scene"
 if "$WORK/map-anything" mesh "$WORK/cut.scene" -o "$WORK/x.glb" > "$WORK/cut.out" 2>&1; then
     echo "FAIL a truncated scene was accepted"; fails=$((fails + 1))
 else echo "PASS a truncated scene is refused: $(head -1 "$WORK/cut.out")"; fi
+# the automatic box sees every column: a 42-pixel-wide view with valid
+# pixels only in columns 0 (near) and 1-2 (far) — a stride sharing a factor
+# with 42 would sample columns 0, 3, 6 ... and miss the far ones
+python3 - "$WORK/cols.scene" <<'PY'
+import struct, sys
+W, H = 42, 280
+out = bytearray(struct.pack("<III", 0x3153414D, H, W))
+out += struct.pack("<I", 0x57454956)
+out += struct.pack("<13d", 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0) + struct.pack("<4d", 50.0, 50.0, W / 2, H / 2)
+dz = [ (1.0 if u == 0 else 3.0) if u <= 2 else 0.0 for v in range(H) for u in range(W) ]
+mask = [ 1 if u <= 2 else 0 for v in range(H) for u in range(W) ]
+out += struct.pack("<%df" % (W * H), *dz) + bytes(mask) + bytes([128] * (3 * W * H))
+out += struct.pack("<II", 0x444E454D, 1)
+open(sys.argv[1], "wb").write(out)
+PY
+"$WORK/map-anything" mesh "$WORK/cols.scene" -o "$WORK/cols.glb" > "$WORK/cols.out" 2>&1
+zmax=$(sed -n 's/^box *\([^ ]*\) \([^ ]*\) \([^ ]*\) \([^ ]*\) \([^ ]*\) \([^ ]*\).*/\6/p' "$WORK/cols.out")
+if python3 -c "import sys; sys.exit(0 if float('${zmax:-0}') >= 2.9 else 1)"; then
+    echo "PASS the automatic box reaches the far columns (z up to $zmax)"
+else
+    echo "FAIL the automatic box missed the far columns (z up to ${zmax:-?})"; fails=$((fails + 1))
+fi
 [ "$fails" = 0 ] || exit 1

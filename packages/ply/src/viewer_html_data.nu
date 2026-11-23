@@ -463,12 +463,16 @@ function drawBox(b, mvp) {
 }
 var cropAttempt = "";
 function cropMsg(text) { $("cmsg").textContent = text; }
-/* only same-origin paths make links: whatever the server says, a link is
-   built from nodes and never from markup */
+/* only same-origin links: the href is parsed as the browser will parse it
+   ("/\\\\host" is another host to a URL parser) and kept only if its origin
+   is this page's; the link is built from nodes, never from markup */
 function cropLink(href, text, dl) {
+  if (typeof href !== "string") return null;
+  var u;
+  try { u = new URL(href, location.href); } catch (e) { return null; }
+  if (u.origin !== location.origin) return null;
   var a = document.createElement("a");
-  if (typeof href !== "string" || href.charAt(0) !== "/" || href.charAt(1) === "/") return null;
-  a.href = href; a.textContent = text;
+  a.href = u.href; a.textContent = text;
   if (dl) a.setAttribute("download", ""); else a.target = "_blank";
   return a;
 }
@@ -478,12 +482,15 @@ function cropPoll() {
     return r.json().catch(function () { return {}; }).then(function (j) { return { r: r, j: j }; });
   }).then(function (x) {
     var j = x.j;
-    if (x.r.status === 404 || x.r.status === 400) {      /* the job is gone: stop */
-      cropMsg("failed: " + (j.error || ("HTTP " + x.r.status)));
+    /* a 4xx will not change by asking again (gone, unauthorised, refused):
+       stop and say so; a 5xx or a timeout/limit (408, 429) is retried */
+    var st = x.r.status;
+    if (st >= 400 && st < 500 && st !== 408 && st !== 429) {
+      cropMsg("failed: " + (j.error || ("HTTP " + st)));
       $("cgo").disabled = false;
       return;
     }
-    if (!x.r.ok) { setTimeout(cropPoll, 3000); return; }  /* transient */
+    if (!x.r.ok) { setTimeout(cropPoll, 3000); return; }
     if (j.state === "done" && j.url) {
       var m = $("cmsg"); m.textContent = "ready: ";
       var a1 = cropLink(j.view, "open the object", false), a2 = cropLink(j.url, "download .glb", true);
@@ -699,7 +706,8 @@ function boot(data, label) {
   var ntri = isMesh ? data.idx.length / 3 : 0;
 
   gl.enable(gl.DEPTH_TEST);
-  gl.clearColor(0.043, 0.051, 0.063, 1);
+` } {}
+    ? == k 1 { ^ `  gl.clearColor(0.043, 0.051, 0.063, 1);
 
   $("status").hidden = true;
   $("hud").hidden = false; $("help").hidden = false;
@@ -707,8 +715,7 @@ function boot(data, label) {
   $("n").textContent = total.toLocaleString();
   if (isMesh) $("nd").textContent = ntri.toLocaleString();
 
-` } {}
-    ? == k 1 { ^ `  var last = performance.now(), frames = 0, acc = 0;
+  var last = performance.now(), frames = 0, acc = 0;
   function frame(now) {
     resize();
     var eye = [

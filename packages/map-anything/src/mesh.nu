@@ -82,11 +82,12 @@ $ `scene.nu`
     : ( Slice f ) p ( slice_from_vec [f] p__v )
     : ( Slice u ) m ( slice_from_vec [u] . sc mask )
     : ( Slice f32 ) dz ( slice_from_vec [f32] . sc dz )
-    // a sample of the valid pixels, at a stride that does not divide the
-    // width (it would see the same columns in every row); with nothing
-    // on that lattice, every pixel
+    // a sample of the valid pixels, at a PRIME stride that does not divide
+    // the width — so it is coprime to it and the rows' offsets sweep every
+    // column (9 against 42 would see only every third); with nothing on
+    // that lattice, every pixel
     : ~ i st 7
-    ~ == 0 % . sc w st { = st + st 2 }
+    ~ == 0 % . sc w st { = st ? == st 7 11 ? == st 11 13 ? == st 13 17 ? == st 17 19 + st 4 }
     : ~ i pass 0
     ~ & < pass 2 == ( vec_len [f] xs ) 0 {
         : i step ? == pass 0 st 1
