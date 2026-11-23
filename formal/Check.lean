@@ -1012,3 +1012,5 @@ import C
 #print axioms C.endOK2B_sound
 #print axioms C.pushArg2_sound
 #print axioms C.checkStmt2_sound
+-- Phase C8: A2's struct and enum right-hand sides decided
+#print axioms C.inferRhs2d_ok
