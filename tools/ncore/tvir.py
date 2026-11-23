@@ -12,7 +12,7 @@ A binding counts as one the IR may move (and is left out) where it is
 - an operand of `agg` or `closure` (a literal it moves into);
 - `ret vK`;
 - an argument of a call at a `sink=` or `keeps=` index of the callee's `sum`
-  line, or of
+  line, or the operand of `mem_forget` (the binding it gives up), or of
   a call through a closure (`callind`), or of a construct the walk did not
   lower (`opaque`).
 Only bindings (`v` kind 1) of a type with something to release (`ty`'s
@@ -24,8 +24,13 @@ import re
 import sys
 
 
+# intrinsics that consume an operand, as nurlc's IR names it (AGORA-989:
+# `call mem_forget 1 vK`, the binding given up)
+CONSUMES = {"mem_forget": {0}}
+
+
 def ir_protected(core):
-    drops, sinks, out = set(), {}, []
+    drops, sinks, out = set(), {k: set(v) for k, v in CONSUMES.items()}, []
     for raw in core.splitlines():
         f = raw.split("\t")
         if f[0] == "ty" and len(f) > 3 and f[3][:1] == "1":
