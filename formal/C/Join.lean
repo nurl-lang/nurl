@@ -248,9 +248,10 @@ theorem checkedS_memory_safe {P : Prog} (hP : ProgOK P) {s : Stmt} {Δ : Ctx}
     ¬ Stuck P m' s' :=
   memory_safe hP (checkS_sound (P := P) (fun _ _ => rfl) (fun _ h => h) hc).1 hs hv hr
 
-/-- A loop that pushes into a `Vec` it owns, then frees it: accepted. -/
+/-- A loop that pushes into a `Vec` it owns (once: its length reaches 1),
+    then frees it: accepted. -/
 def ex3 : Stmt :=
-  .letv 0 (.new .int) (.letv 1 (.expr (.lit 3)) (.seq (.while (.lt (.lit 0) (.len 0)) (.push 0 1)) (.free 0)))
+  .letv 0 (.new .int) (.letv 1 (.expr (.lit 3)) (.seq (.while (.lt (.len 0) (.lit 1)) (.push 0 1)) (.free 0)))
 
 example : (checkS ex3.vars (fun _ => none) [] ex3).isSome = true := by decide
 
