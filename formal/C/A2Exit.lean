@@ -38,6 +38,34 @@ theorem oblUnder_ok {ξ : Exits} {x : Var} {E : Obl} {D : List Var}
   refine ⟨endOK2B_sound (hE e he) (List.all_eq_true.mp hend e he), ?_⟩
   exact h (e.1, exitScope x e.2) (List.mem_map.mpr ⟨e, he, rfl⟩)
 
+/-- `Exits.underD`'s clause on the binding at an exit, decided: no borrowed
+    parameter, and a `letd`'s if its type holds views. -/
+def underDB (Γ : Ctx) (x : Var) : Bool :=
+  match Γ x with
+  | some E => decide (E.mode ≠ .rootb) && (!E.ty.holdsView || E.dbind)
+  | none => true
+
+theorem underDB_sound {Γ : Ctx} {x : Var} (h : underDB Γ x = true) :
+    ∀ E, Γ x = some E → E.mode ≠ .rootb ∧ (E.ty.holdsView = true → E.dbind = true) := by
+  intro E hE
+  simp only [underDB, hE, Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true, Bool.not_eq_true'] at h
+  obtain ⟨hm, hv⟩ := h
+  refine ⟨hm, fun hh => ?_⟩
+  rcases hv with hv | hv
+  · rw [hh] at hv; cases hv
+  · exact hv
+
+/-- Through a destructor frame of `x` (`letd`): as `oblUnder_ok`, with
+    `Exits.underD`'s clause on `x` at each exit. -/
+theorem oblUnderD_ok {ξ : Exits} {x : Var} {E : Obl} {D : List Var}
+    (hE : ∀ e ∈ E, Supported2 e.2 D) (hend : E.all (fun e => endOK2B D e.2 x && underDB e.2 x) = true)
+    (h : OblOK ξ (oblUnder x E)) : OblOK (ξ.underD x) E := by
+  intro e he
+  have := List.all_eq_true.mp hend e he
+  simp only [Bool.and_eq_true] at this
+  refine ⟨endOK2B_sound (hE e he) this.1, underDB_sound this.2, ?_⟩
+  exact h (e.1, exitScope x e.2) (List.mem_map.mpr ⟨e, he, rfl⟩)
+
 /-- Out of a block whose end is `Δ`: an exit of it (`0`) is from `Δ`
     itself; one further out goes one level up. -/
 def oblBlkOKB (D : List Var) (Δ : Ctx) (E : Obl) : Bool :=
@@ -215,6 +243,29 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
               else none
             | none => none
           else none
+        | none => none
+      else none
+  | Γ, F, .letd x f r s =>
+    -- (a destructor frame's body may exit: each exit ends `x`'s scope as its
+    -- end does, under `Exits.underD`; AGORA-975)
+    match checkStmt2 P R C D Γ F (.letd x f r s) with
+    | some Δ => some ⟨Δ, [], none⟩
+    | none =>
+      if s.src ∧ Γ x = none ∧ x ∉ F ∧ x ∉ s.assigns then
+        match R Γ F r with
+        | some (E, Γ1) =>
+          match letdTys f E.ty with
+          | some (t, τ) =>
+            if decide (E.mode = .own) && t.isStruct && !t.hasFn &&
+                letdFnB P f t E.ty x s && takeOKB Γ r then
+              match checkX P R C D (setE Γ1 x (Entry.arm { E with ty := τ, held := E.held })) F s with
+              | some rs =>
+                if endOK2B D rs.Δ x && rs.E.all (fun e => endOK2B D e.2 x && underDB e.2 x) then
+                  some ⟨exitScope x rs.Δ, oblUnder x rs.E, none⟩
+                else none
+              | none => none
+            else none
+          | none => none
         | none => none
       else none
   | Γ, F, .letcall x f args s =>
@@ -428,6 +479,46 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
                   exact supported2_exitScope (e0 e' he') x
                 · exact .letv hsrc hx hF hrt (t0 _ (oblUnder_ok e0 hendE hξ)) (endOK2B_sound s0 hend)
                     (of_decide_eq_true hnd)
+              · cases h
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+  | letd x f r s ih =>
+    intro Γ F rr hs hD h
+    simp only [checkX] at h
+    split at h
+    · rename_i Δ h0
+      simp only [Option.some.injEq] at h; subst h
+      exact xsound_of_check2 hR hC hs hD h0
+    · split at h
+      · rename_i hc
+        obtain ⟨hsrc, hx, hF, hna⟩ := hc
+        split at h
+        · rename_i E Γ1 hr
+          split at h
+          · rename_i t τ hty
+            split at h
+            · rename_i hc2
+              simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hc2
+              obtain ⟨⟨⟨⟨hm, hst⟩, hfn⟩, hdt⟩, htk⟩ := hc2
+              split at h
+              · rename_i rs hrs
+                split at h
+                · rename_i he
+                  simp only [Option.some.injEq] at h; subst h
+                  simp only [Bool.and_eq_true] at he
+                  obtain ⟨hend, hendE⟩ := he
+                  obtain ⟨hrt, hs1⟩ := hR Γ F r E Γ1 hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
+                  obtain ⟨s0, e0, t0, _⟩ := ih (supported2_setE hs1 (hD x (by simp [Stmt.vars])) _)
+                    (fun v hv => hD v (by simp [Stmt.vars, hv])) hrs
+                  refine ⟨supported2_exitScope s0 x, fun e he => ?_, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
+                  · obtain ⟨e', he', rfl⟩ := List.mem_map.mp he
+                    exact supported2_exitScope (e0 e' he') x
+                  · exact .letd hsrc hx hF hrt hm (letdTys_sound hty) hst hfn
+                      ⟨letdFnB_sound hdt, takeOKB_sound htk⟩ (HeldUp.refl Γ1 E)
+                      (t0 _ (oblUnderD_ok e0 hendE hξ)) (endOK2B_sound s0 hend) hna
+                · cases h
               · cases h
             · cases h
           · cases h
