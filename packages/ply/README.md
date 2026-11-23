@@ -73,3 +73,14 @@ $ `deps/ply/src/view.nu`
 Writer round-trip (binary vs ascii agree, count patched, oracle-parsed),
 the server (page + cloud verbatim), and — when chrome/chromium is on
 PATH — a real headless render with a lit-pixel assertion.
+
+### Meshes and regions
+
+The viewer page also takes:
+
+- `?glb=URL` — show a triangle mesh from a binary glTF (vertex colours, lit),
+  instead of a cloud;
+- `?crop=URL` — over a cloud, a region box with sliders; "make 3-D object"
+  POSTs `{"box": [x0, y0, z0, x1, y1, z1], "res": n}` to URL and polls GET URL
+  for `{state, progress, url, view}` (the protocol `map-anything serve`
+  implements).
