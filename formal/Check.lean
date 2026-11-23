@@ -974,3 +974,10 @@ import B
 #print axioms B.countAdd_ok
 #print axioms B.doubleTo_le
 #print axioms B.growCap_le
+-- Phase B9: std/rc.nu's Rc / Weak / rc_take: a checked-out value is never read or dropped through the block;
+-- the last strong release drops a value only when it is there; the block goes with the last Weak
+#print axioms B.rcGet_ok
+#print axioms B.rcTake_ok
+#print axioms B.rcRestore_ok
+#print axioms B.rcDrop_ok
+#print axioms B.rcUpgrade_ok
