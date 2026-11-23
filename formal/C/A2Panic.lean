@@ -195,13 +195,19 @@ def panicToB (D : List Var) (Γ Δ : Ctx) : Bool :=
         (match Δ v with | some E' => E'.dbind && E'.mode.ownSlot | none => false)
      | none => true)
 
-theorem panicToB_sound {P : Prog} {ξ : Exits} {D : List Var} {Γ Δ : Ctx} {F : List Var}
-    (hs : Supported2 Γ D) (hsΔ : Supported2 Δ D) (h : panicToB D Γ Δ = true) : StmtT P ξ Γ F .panic Δ := by
+/-- What `panic` and `loop` ask of the context after. -/
+def PanicPrem (Γ Δ : Ctx) : Prop :=
+  CtxWF Δ ∧ NameWF Δ ∧ (∀ v, (Γ v).isSome = (Δ v).isSome) ∧
+  (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧ (E0.fixed → E = E0)) ∧
+  DKeep Γ Δ [] ∧ DStay Γ Δ [] ∧ (FreshOK Γ → FreshOK Δ)
+
+theorem panicToB_prem {D : List Var} {Γ Δ : Ctx}
+    (hs : Supported2 Γ D) (hsΔ : Supported2 Δ D) (h : panicToB D Γ Δ = true) : PanicPrem Γ Δ := by
   simp only [panicToB, Bool.and_eq_true] at h
   obtain ⟨⟨⟨hwf, hnw⟩, hfr⟩, hall⟩ := h
   have get : ∀ v, v ∈ D → _ := fun v hv => List.all_eq_true.mp hall v hv
-  refine .panic (ctxWF2B_sound hsΔ hwf) (nameWFB_sound hsΔ hnw) (fun v => ?_) (fun v E hE => ?_)
-    (fun v E' hE' hd ho hk _ => ?_) (fun v E hE hd ho _ => ?_) (fun _ => freshOKB_sound hsΔ hfr)
+  refine ⟨ctxWF2B_sound hsΔ hwf, nameWFB_sound hsΔ hnw, fun v => ?_, fun v E hE => ?_,
+    fun v E' hE' hd ho hk _ => ?_, fun v E hE hd ho _ => ?_, fun _ => freshOKB_sound hsΔ hfr⟩
   · by_cases hv : v ∈ D
     · have := get v hv
       simp only [Bool.and_eq_true, beq_iff_eq] at this
@@ -257,5 +263,10 @@ theorem panicToB_sound {P : Prog} {ξ : Exits} {D : List Var} {Γ Δ : Ctx} {F :
       intro h3
       simp only [Bool.and_eq_true] at h3
       exact ⟨E', rfl, h3.1, h3.2⟩
+
+theorem panicToB_sound {P : Prog} {ξ : Exits} {D : List Var} {Γ Δ : Ctx} {F : List Var}
+    (hs : Supported2 Γ D) (hsΔ : Supported2 Δ D) (h : panicToB D Γ Δ = true) : StmtT P ξ Γ F .panic Δ := by
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7⟩ := panicToB_prem hs hsΔ h
+  exact .panic h1 h2 h3 h4 h5 h6 h7
 
 end C

@@ -309,6 +309,13 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
     | none => none
   | Γ, F, .frozen z s => checkStmt2 P R C D Γ (F ++ z) s
   | Γ, _, .panic => if ctxWF2B D Γ && nameWFB D Γ then some Γ else none
+  | Γ, F, .block s => checkStmt2 P R C D Γ F s
+  | Γ, F, .loop s =>
+    if s.src then
+      match checkStmt2 P R C D Γ F s with
+      | some Δ => if D.all (fun v => Δ v == Γ v) && panicToB D Γ Γ then some Γ else none
+      | none => none
+    else none
   | Γ, F, .unpair y x z s =>
     match Γ y with
     | some E =>
@@ -537,6 +544,30 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
       simp only [Bool.and_eq_true] at hc
       simp only [Option.some.injEq] at h; subst h
       exact ⟨panic_self hs hc.1 hc.2, hs⟩
+    · cases h
+  | block s ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    obtain ⟨t0, s0⟩ := ih (ξ := ξ.blk Δ) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h
+    exact ⟨.block t0, s0⟩
+  | loop s ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i hsrc
+      split at h
+      · rename_i Δ0 h0
+        split at h
+        · rename_i hc
+          simp only [Bool.and_eq_true] at hc
+          simp only [Option.some.injEq] at h; subst h
+          obtain ⟨t0, s0⟩ := ih (ξ := ξ) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+          have heq := eq_of_agree2 s0 hs hc.1
+          subst heq
+          obtain ⟨p1, p2, p3, p4, p5, p6, p7⟩ := panicToB_prem s0 s0 hc.2
+          exact ⟨.loop hsrc t0 p1 p2 p3 p4 p5 p6 p7, s0⟩
+        · cases h
+      · cases h
     · cases h
   | unpair y x z s ih =>
     intro ξ Γ F Δ hs hD h
