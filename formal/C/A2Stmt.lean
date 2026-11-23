@@ -117,6 +117,7 @@ theorem inferRhs2_supported {D : List Var} {Γ : Ctx} {F : List Var} {r : Rhs} {
         · cases h
       · cases h
     · cases h
+  | slit n => simp only [inferRhs2] at h; cases h; exact hs
   | _ => simp [inferRhs2] at h
 
 /-- `DbindSafe`, decided over the domain. -/

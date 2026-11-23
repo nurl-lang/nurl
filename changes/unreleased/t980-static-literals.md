@@ -11,5 +11,8 @@
   asks for a node of memory (`DataAtM`). A3's race-freedom proof allows a
   fresh address in a payload: `Step.payAt` gains the case of a new block
   that the step's own slots reach. No theorem statement is weakened and no
-  axiom is added. The C checker and `tools/ncore/tolean.py` emit the rule
-  in the next phase.
+  axiom is added. The verified checker infers the rule (C `inferRhs2`).
+  `tools/ncore/tolean.py` translates a literal handed back as a view, and a
+  borrowed-result function that hands back only literals, which it used to
+  report as unsupported: seven more hole probes now translate, and the six
+  that must be rejected are.
