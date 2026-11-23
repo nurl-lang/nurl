@@ -97,9 +97,29 @@ theorem inoutArgs_sub (ps : List (PMode × Ty)) (args : List Var) (hl : args.len
     `inout` parameter of its code (`callc`). -/
 def CapInout (P : Prog) (m : Mem) (v : Var) : Prop :=
   ∃ (c : Var) (o : Bool) (fs : List Nat) (te : Ty) (ms : List Nat) (env : Val)
-    (cs : List (Var × PMode × Ty)) (j f : Nat) (fn : Fn) (zs : List Var),
+    (cs : List (Var × PMode × Ty)) (j f : Nat) (fn : Fn) (zs : List Var) (i : Nat) (b : Eff) (t : Ty),
     m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩ ∧ fs[j]? = some f ∧ P[f]? = some fn ∧
-    v ∈ cs.map (·.1) ∧ v ∈ inoutArgs fn.params (m.nv :: zs ++ cs.map (·.1))
+    (m.nv :: zs ++ cs.map (·.1)).length = fn.params.length ∧
+    zs.length + 1 ≤ i ∧ (m.nv :: zs ++ cs.map (·.1))[i]? = some v ∧
+    fn.params[i]? = some (PMode.inout b, t)
+
+theorem inoutArgs_pos (ps : List (PMode × Ty)) (args : List Var) (hl : args.length = ps.length) :
+    ∀ v ∈ inoutArgs ps args, ∃ (i : Nat) (b : Eff) (t : Ty), ps[i]? = some (PMode.inout b, t) ∧ args[i]? = some v := by
+  intro v hv
+  unfold inoutArgs at hv
+  obtain ⟨i, hi, rfl⟩ := List.mem_map.mp hv
+  obtain ⟨hir, hin⟩ := List.mem_filter.mp hi
+  have hlt : i < ps.length := List.mem_range.mp hir
+  have hla : i < args.length := by rw [hl]; exact hlt
+  revert hin
+  cases hpi : ps[i]? with
+  | none => intro h; simp at h
+  | some pe =>
+    obtain ⟨pm, t⟩ := pe
+    cases pm with
+    | inout b => intro _; exact ⟨i, b, t, hpi, by simp [List.getD, List.getElem?_eq_getElem hla]⟩
+    | inp => intro h; simp at h
+    | sink => intro h; simp at h
 
 theorem Step.killVars_sub {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) :
     ∀ m' s', r = .ok m' s' → ∀ v ∈ s'.killVars, v ∈ s.killVars ∨ m.nv ≤ v ∨ CapInout P m v := by
@@ -200,12 +220,17 @@ theorem Step.killVars_sub {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P 
       · exact Or.inl (by simp [Stmt.killVars])
       · exact Or.inr (Or.inl (by omega))
       · have hl := hb.length_eq
-        have ha := inoutArgs_sub _ _ hl v h
-        simp only [List.mem_cons, List.mem_append] at ha
-        rcases ha with (rfl | ha) | ha
-        · exact Or.inr (Or.inl (Nat.le_refl _))
-        · exact Or.inl (by simp [Stmt.killVars, ha])
-        · exact Or.inr (Or.inr ⟨c, o, fs, te, ms, env, cs, j, f, fn, zs, hc, hj, hf, ha, h⟩)
+        obtain ⟨i, b, t, hpi, hai⟩ := inoutArgs_pos _ _ hl v h
+        rcases Nat.lt_or_ge i (zs.length + 1) with hi | hi
+        · cases i with
+          | zero =>
+            simp at hai; subst hai; exact Or.inr (Or.inl (Nat.le_refl _))
+          | succ k =>
+            have hk : k < zs.length := by omega
+            have hz : zs[k]? = some v := by
+              simpa [List.getElem?_cons_succ, List.getElem?_append_left hk] using hai
+            exact Or.inl (by simp [Stmt.killVars, List.mem_of_getElem? hz])
+        · exact Or.inr (Or.inr ⟨c, o, fs, te, ms, env, cs, j, f, fn, zs, i, b, t, hc, hj, hf, hl, hi, hai, hpi⟩)
     · exact Or.inl (by simp [Stmt.killVars, hv])
   | _ =>
     intro m' s' hr v hv
