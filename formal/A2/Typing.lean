@@ -905,6 +905,10 @@ inductive RhsT (Γ : Ctx) (F : List Var) : Rhs → Entry → Ctx → Prop
       -- ... and held-fresh if what `y` holds is
       (hh : h = true → HeldSrc Γ y := by fresh_src) →
       RhsT Γ F (.view y) ⟨.slice t, .bor, true, derive y E .view, E.held, false, false, f, h⟩ Γ
+  /-- AGORA-980: a literal's text handed back as a view: a fresh static
+      block's, valid with no dependency and holding nothing (`ValOK.sview`). -/
+  | slit {n : Nat} :
+      RhsT Γ F (.slit n) ⟨.slice .int, .bor, true, [], [], false, false, false, false⟩ Γ
   -- (AGORA-909: an element read through a slice may be fresh, as one read
   -- through a `Vec` (`RhsT.at`) may: the slice is the frame's own, or a fresh
   -- view of a binding of the frame's own. Not a slice element.)
@@ -1210,6 +1214,7 @@ theorem RhsT.out {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : RhsT 
   | borrow => exact ⟨Or.inr rfl, rfl⟩
   | @«at» _ _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩
   | view => exact ⟨Or.inr rfl, rfl⟩
+  | slit => exact ⟨Or.inr rfl, rfl⟩
   | @sat _ _ _ t => cases t <;> exact ⟨Or.inr rfl, rfl⟩
   | @pop _ _ t => cases t <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
   | @remove _ _ _ t => cases t <;> first | exact ⟨Or.inl rfl, rfl⟩ | exact ⟨Or.inr rfl, rfl⟩
