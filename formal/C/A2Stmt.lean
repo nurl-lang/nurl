@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` and `letd` (a struct or its own destructor type), whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct or its own destructor type) and `scopeD` (a binding of its own destructor type), whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -417,6 +417,51 @@ theorem letdTys_sound {f : Nat} {a t τ : Ty} (h : letdTys f a = some (t, τ)) :
     simp only [letdTys, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
     exact ⟨Or.inl ⟨rfl, Or.inl rfl⟩, fun g hg => by cases hg⟩
 
+/-- `DSelf`, decided on `x`'s entry `E`: a destructor binding with its own
+    slot depends on itself by no view. -/
+def dSelfB (E : Entry) (x : Var) : Bool :=
+  !(E.dbind && E.mode.ownSlot && (decide (E.ty ≠ .int) || decide (E.mode = .rootb))) ||
+    E.vdeps.all fun d => d.kind.isName || decide (d.root ≠ x)
+
+theorem dSelfB_sound {Γ : Ctx} {x : Var} {E : Entry} (hE : Γ x = some E) (h : dSelfB E x = true) :
+    DSelf Γ x := by
+  intro E' hE' hdb hos hty d hd hn
+  rw [hE] at hE'; cases hE'
+  simp only [dSelfB, hdb, hos, Bool.true_and, Bool.or_eq_true, Bool.not_eq_true', List.all_eq_true,
+    decide_eq_true_eq] at h
+  rcases h with h | h
+  · rcases hty with hty | hty
+    · simp [hty] at h
+    · simp [hty] at h
+  · have := h d hd
+    simp only [hn, decide_eq_true_eq] at this
+    exact this.resolve_left (by simp)
+
+/-- At the end, `x`, if it holds views, is still a destructor binding. -/
+def viewDbindB (Δ : Ctx) (x : Var) : Bool :=
+  match Δ x with | some E => !E.ty.holdsView || E.dbind | none => true
+
+theorem viewDbindB_sound {Δ : Ctx} {x : Var} (h : viewDbindB Δ x = true) :
+    ∀ E, Δ x = some E → E.ty.holdsView = true → E.dbind = true := by
+  intro E hE hv
+  simp only [viewDbindB, hE, hv, Bool.not_true, Bool.false_or] at h
+  exact h
+
+/-- `scopeD`'s struct, for a binding of `f`'s destructor type. (A `Vec` of
+    destructor values is not decided yet.) -/
+def scopeDTy (f : Nat) : Ty → Option Ty
+  | .dtor g t => if g = f then some t else none
+  | _ => none
+
+theorem scopeDTy_sound {f : Nat} {a t : Ty} (h : scopeDTy f a = some t) : a = .dtor f t := by
+  cases a with
+  | dtor g u =>
+    simp only [scopeDTy] at h
+    split at h
+    · rename_i hg; simp only [Option.some.injEq] at h; subst hg; subst h; rfl
+    · cases h
+  | _ => simp [scopeDTy] at h
+
 def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, _, .skip => some Γ
   | Γ, F, .seq a b =>
@@ -566,6 +611,21 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
         | none => none
       | none => none
     else none
+  | Γ, F, .scopeD x f s =>
+    match Γ x with
+    | some E =>
+      match scopeDTy f E.ty with
+      | some t =>
+        if decide (E.mode = .own) && !E.ty.hasFn && !t.holdsDtor && dtorOKB P f (.dtor f t) &&
+            t.isStruct && decide (x ∉ F) && dSelfB E x then
+          match checkStmt2 P R C D Γ F s with
+          | some Δ =>
+            if endOK2B D Δ x && keepOutB D Γ Δ s.spine && ctxWF2B D Δ && nameWFB D Δ &&
+                viewDbindB Δ x && freshOKB D Δ then some (exitScope x Δ) else none
+          | none => none
+        else none
+      | none => none
+    | none => none
   | Γ, F, .scope x s =>
     match Γ x with
     | some E =>
@@ -950,6 +1010,35 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
                   ⟨LetdFn.of (Or.inl ⟨dtorOKB_sound hdt, hhd⟩) hg, takeOKB_sound htk⟩
                   (HeldUp.refl Γ1 E) t0 (endOK2B_sound s0 he) hna, supported2_exitScope s0 x⟩
               · cases h
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  | scopeD x f s ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i E hE
+      split at h
+      · rename_i t ht
+        split at h
+        · rename_i hc
+          simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hc
+          obtain ⟨⟨⟨⟨⟨⟨hm, hfn⟩, hhd⟩, hdt⟩, hst⟩, hxF⟩, hds⟩ := hc
+          split at h
+          · rename_i Δ0 h0
+            split at h
+            · rename_i he
+              simp only [Option.some.injEq] at h; subst h
+              simp only [Bool.and_eq_true] at he
+              obtain ⟨⟨⟨⟨⟨hend, hko⟩, hwf⟩, hnw⟩, hvd⟩, hfr⟩ := he
+              obtain ⟨t0, s0⟩ := ih (ξ := ξ.underD x) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+              have hty := scopeDTy_sound ht
+              exact ⟨.scopeD ⟨E, t, hE, hm, Or.inl hty, hfn, Or.inl ⟨dtorOKB_sound hdt, hhd⟩, hst⟩ hxF t0
+                (endOK2B_sound s0 hend) (keepOutB_sound hs s0 hko) (ctxWF2B_sound s0 hwf)
+                (nameWFB_sound s0 hnw) (viewDbindB_sound hvd) (dSelfB_sound hE hds) (freshOKB_sound s0 hfr),
+                supported2_exitScope s0 x⟩
             · cases h
           · cases h
         · cases h
