@@ -50222,6 +50222,20 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ^ r
 }
 
+// Does an owner of type `ot` keyed by mem_ud_ident_key name, by that key,
+// the value of type `vt` it would have handed a binding: its own type, or
+// an option's or a result's side of it (keyed by its active side, which is
+// the one a binding can hold)?
+@ __ud_key_names s ot s vt → b {
+    : s o ( nurl_llty ( __udty_val ot ) )
+    : s v ( nurl_llty ( __udty_val vt ) )
+    ? ( seq o v ) { ^ T } {}
+    ? == 0 ( nurl_str_starts o `{ i1, ` ) { ^ F } {}
+    : s pt ( __wrap_part_key o 0 )
+    : s et ( __wrap_part_key o 1 )
+    ^ | & != 0 ( nurl_str_len pt ) ( __ud_key_names pt v ) & != 0 ( nurl_str_len et ) ( __ud_key_names et v )
+}
+
 @ __ud_keyable s vt → b {
     : s ll ( nurl_llty vt )
     // (An option or a result by its active side, as mem_ud_ident_key keys
@@ -52122,7 +52136,13 @@ unsafe @ __src_has_raw_ptr s text → b {
                     // handle the binding holds where that arm ran. An owner
                     // whose type has no key is taken over as before.)
                     : s __mwt ( nurl_sym_get syms ( nurl_sym_get2 syms __mw `__bname` ) )
-                    ? & & __mkey != 0 ( nurl_str_len __mnk ) & != 0 ( nurl_str_len __mwt ) ( __ud_keyable __mwt ) {
+                    // (Only where that key names the value the binding holds
+                    // when this owner is the one: the same type, or an option
+                    // or a result with a side of it. A struct owner that lent
+                    // a field is keyed by its first one, which is not the
+                    // field: keyed so, it kept its flag and released the field
+                    // under the binding — it is taken over as before.)
+                    ? & & __mkey != 0 ( nurl_str_len __mnk ) & & != 0 ( nurl_str_len __mwt ) ( __ud_keyable __mwt ) ( __ud_key_names __mwt ty ) {
                         : s __mok ( mem_ud_ident_key cg __mwt ( __ud_load cg __mwt __mw ) )
                         ? != 0 ( nurl_str_len __mok ) {
                             : s __meq ( nurl_cg_reg cg )
