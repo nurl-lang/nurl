@@ -4565,7 +4565,16 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         | none => rw [hE] at h; cases h
         | some E => rw [hE] at h; cases h; exact ⟨hvp, E, rfl, rfl⟩
       have hos : Ep.mode.ownSlot = false := by rw [hm]; rfl
-      refine ⟨exitRoot p (Ep.path ++ Ep.held) Γ, ?_, Inv.ofLeaf (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hi hinv (by simp) (by simp [Stmt.vars]) ?_
+      have hcaps : HeldCapsInp (m.remove p) (exitRoot p (Ep.path ++ Ep.held) Γ) F .skip :=
+        -- (AGORA-963 step 3: the slot dropped, the other borrowed parameters
+        -- depend on no `p`, so are kept)
+        hi.heldCaps.step_of (fun q E hq hmq _ => by
+          obtain ⟨hqp, E0, h0, rfl⟩ := hrel q E hq
+          have hmq' : E0.mode = .rootb := by simpa [rerootE] using hmq
+          rw [rerootE_rootb hanch hpF (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hpF) _ h0 hmq'
+            (hpn q E0 h0 hmq')]
+          exact ⟨h0, by simp [Stmt.spine, hqp]⟩) (fun w hw => hw.remove p)
+      refine ⟨exitRoot p (Ep.path ++ Ep.held) Γ, ?_, Inv.ofLeaf hcaps hi hinv (by simp) (by simp [Stmt.vars]) ?_
         rfl (covers_remove_bor hi.cover hsl) trivial, by simp,
         ⟨?_, ?_, (DKeep.refl Γ []).exitRoot _ fun v E hv hd hos hn hvp _ d hdd hnm h =>
           hi.dtorOut v E hv hd hos hn (by simp [Stmt.spine, hvp]) d hdd hnm (by simp [Stmt.spine, h])⟩,
