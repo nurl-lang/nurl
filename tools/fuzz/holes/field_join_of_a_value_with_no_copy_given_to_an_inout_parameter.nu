@@ -1,5 +1,5 @@
 // map: §7.6 | A2 | rejected | - | AGORA-959 guard: a field join of a `% Drop` struct handed to an `inout` parameter stays refused
-// AGORA-959: there is no copy to give it, so codegen marks nothing
+// AGORA-959: there is no copy to give it, so codegen marks nothing; ncore does not model the copy codegen needs (disagree.tsv)
 $ `stdlib/core/string.nu`
 
 : D { String s }

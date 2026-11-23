@@ -1,5 +1,5 @@
 // map: §7.6 | A2 | rejected | - | AGORA-959 guard: two field joins handed to one `inout` parameter on one line stay refused
-// AGORA-959: only a row codegen marks `ak` loses the field borrow; this one keeps the rule as before
+// AGORA-959: refused as on main c4c0f350 (the move check reads each branch store as a borrow handed over); ncore's rules accept it, a precision gap listed in disagree.tsv
 $ `stdlib/core/string.nu`
 
 : P { String s i n }

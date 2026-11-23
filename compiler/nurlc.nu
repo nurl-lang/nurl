@@ -64680,60 +64680,62 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // by the time the join hands its handle on: its borrow
                         // relation, not its state, says what it was.)
                         : s avsrc ( nurl_sym_get g_bck ( bck_bkey `bs_` avn ) )
-                        ? | | == BCK_BORROWED_SHARED ( bck_st_get st avid ) != 0 ( nurl_str_len avsrc ) ( seq ( bck_field rec 6 ) `c` ) {
-                            // A borrow's handle taken by another name, or an
-                            // argument's handle a call handed back: that name
-                            // borrows from it (from its sources, if a borrow).
-                            : s asrc ? != 0 ( nurl_str_len avsrc ) avsrc ( nurl_str_cat avn `` )
-                            // (Handed over by name — `= cur nxt`, a cursor pair
-                            // swapped — it is a copy of that borrow's own value,
-                            // so a copy of what that one is a copy of; not an
-                            // argument a call handed back: bck_byte_root.)
-                            = g_bck_br_next ? & & == 0 ( nurl_str_len prior ) ! ( seq ( bck_field rec 6 ) `c` ) == BCK_BORROWED_SHARED ( bck_st_get st avid ) ( bck_br_get avn ) -1
-                            = st ( bck_borrow_begin st apid ? == 0 ( nurl_str_len prior ) asrc ( nurl_str_cat3 prior ` ` asrc ) )
-                            = g_bck_br_next -1
-                            // (…a handle that a `:` join's field borrow holds, `bxf_`,
-                            // taken by another name: that one too - agora #242.)
-                            // (Not over an `ak` handover: the target is given a copy
-                            // where the source lends, so it is no borrow of the
-                            // struct - an `inout` parameter, __ioc_mark_copy;
-                            // AGORA-959.)
-                            ? & & != 0 g_bck_bxf_any ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` avn ) ) `1` ) ! ( seq amk `ak` ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) } {}
-                            // (An arm of a `:` join, `g`, that is a copy of an
-                            // owner's handle — `: c ? k cur other`: the
-                            // binding is one too, `hc_`, while every borrow
-                            // arm it takes is; an arm that is an element
-                            // borrow makes it no such copy, `hcn_`, whatever
-                            // the other arms are. Agora #599.)
-                            ? ( seq ( bck_field rec 6 ) `g` ) {
-                                : b ahc & != 0 g_bck_hc_any != 0 ( nurl_sym_len g_bck ( bck_bkey `hc_` avn ) )
-                                : s phk ( bck_bkey `hc_` ( nurl_str_int apid ) )
-                                : s pnk ( bck_bkey `hcn_` ( nurl_str_int apid ) )
-                                ? ahc {
-                                    ? == 0 ( nurl_sym_len g_bck pnk ) { ( bck_put phk `1` ) } {}
-                                } {
-                                    ( bck_put pnk `1` )
-                                    ? != 0 ( nurl_sym_len g_bck phk ) { ( bck_put phk `` ) } {}
-                                }
-                            } {}
-                        } {
-                            // An owner's handle: an assignment moved it
-                            // (definitely); one of several a `?` / `??` may
-                            // have selected moved on the paths that selected it.
-                            = a_moved a_asn
-                            = st ( bck_st_set st avid ? a_asn BCK_MOVED ( bck_join ( bck_st_get st avid ) BCK_MOVED ) )
-                            // (A `:` binding of the join gives it back where it
-                            // dies still holding it: bck_join_giveback. What is
-                            // stored into that binding meanwhile lands in this
-                            // owner's value — agora #414. A handle that moved
-                            // for good is its taker's alone.)
-                            ? ( seq ( bck_field rec 6 ) `g` ) {
-                                ( __bck_hr_set apid avn T )
-                                ( bck_add_word_once ( bck_bkey `jt_` ( nurl_str_int apid ) ) avn )
-                                = g_bck_jgb_any 1
-                            } {}
-                            ( bck_put ( nurl_str_cat `ml_` avn ) ( bck_field rec 3 ) )
-                            ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ) )
+                        // (An `ak` handover is neither: the target is given a copy where
+                        // the source lends and its value where it owns, so it borrows
+                        // nothing of the source, which keeps its own state - a_mv below
+                        // moves it where it owned. AGORA-959.)
+                        ? ( seq amk `ak` ) {} {
+                            ? | | == BCK_BORROWED_SHARED ( bck_st_get st avid ) != 0 ( nurl_str_len avsrc ) ( seq ( bck_field rec 6 ) `c` ) {
+                                // A borrow's handle taken by another name, or an
+                                // argument's handle a call handed back: that name
+                                // borrows from it (from its sources, if a borrow).
+                                : s asrc ? != 0 ( nurl_str_len avsrc ) avsrc ( nurl_str_cat avn `` )
+                                // (Handed over by name — `= cur nxt`, a cursor pair
+                                // swapped — it is a copy of that borrow's own value,
+                                // so a copy of what that one is a copy of; not an
+                                // argument a call handed back: bck_byte_root.)
+                                = g_bck_br_next ? & & == 0 ( nurl_str_len prior ) ! ( seq ( bck_field rec 6 ) `c` ) == BCK_BORROWED_SHARED ( bck_st_get st avid ) ( bck_br_get avn ) -1
+                                = st ( bck_borrow_begin st apid ? == 0 ( nurl_str_len prior ) asrc ( nurl_str_cat3 prior ` ` asrc ) )
+                                = g_bck_br_next -1
+                                // (…a handle that a `:` join's field borrow holds, `bxf_`,
+                                // taken by another name: that one too - agora #242.)
+                                ? & != 0 g_bck_bxf_any ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` avn ) ) `1` ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) } {}
+                                // (An arm of a `:` join, `g`, that is a copy of an
+                                // owner's handle — `: c ? k cur other`: the
+                                // binding is one too, `hc_`, while every borrow
+                                // arm it takes is; an arm that is an element
+                                // borrow makes it no such copy, `hcn_`, whatever
+                                // the other arms are. Agora #599.)
+                                ? ( seq ( bck_field rec 6 ) `g` ) {
+                                    : b ahc & != 0 g_bck_hc_any != 0 ( nurl_sym_len g_bck ( bck_bkey `hc_` avn ) )
+                                    : s phk ( bck_bkey `hc_` ( nurl_str_int apid ) )
+                                    : s pnk ( bck_bkey `hcn_` ( nurl_str_int apid ) )
+                                    ? ahc {
+                                        ? == 0 ( nurl_sym_len g_bck pnk ) { ( bck_put phk `1` ) } {}
+                                    } {
+                                        ( bck_put pnk `1` )
+                                        ? != 0 ( nurl_sym_len g_bck phk ) { ( bck_put phk `` ) } {}
+                                    }
+                                } {}
+                            } {
+                                // An owner's handle: an assignment moved it
+                                // (definitely); one of several a `?` / `??` may
+                                // have selected moved on the paths that selected it.
+                                = a_moved a_asn
+                                = st ( bck_st_set st avid ? a_asn BCK_MOVED ( bck_join ( bck_st_get st avid ) BCK_MOVED ) )
+                                // (A `:` binding of the join gives it back where it
+                                // dies still holding it: bck_join_giveback. What is
+                                // stored into that binding meanwhile lands in this
+                                // owner's value — agora #414. A handle that moved
+                                // for good is its taker's alone.)
+                                ? ( seq ( bck_field rec 6 ) `g` ) {
+                                    ( __bck_hr_set apid avn T )
+                                    ( bck_add_word_once ( bck_bkey `jt_` ( nurl_str_int apid ) ) avn )
+                                    = g_bck_jgb_any 1
+                                } {}
+                                ( bck_put ( nurl_str_cat `ml_` avn ) ( bck_field rec 3 ) )
+                                ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ) )
+                            }
                         }
                     }
                 } {
