@@ -63457,6 +63457,13 @@ unsafe @ bck_sx_ev s st s e b arg → s {
     ^ F
 }
 
+// The key of gen_assign's fact that function `fn` copies the value it hands
+// `inout` parameter `name` by name at `line` where the source does not own
+// it (agora #954).
+@ __bck_ioc_key s fn s name s line → s {
+    ^ ( nurl_str_cat4 `ioc_` fn ( nurl_str_cat3 `:` name `:` ) line )
+}
+
 // Does one of the bindings `srcs` names hold a `bxf_` borrow?
 @ __bck_any_bxf s srcs → b {
     ? == 0 g_bck_bxf_any { ^ F } {}
@@ -64542,7 +64549,20 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             = g_bck_br_next -1
                             // (…a handle that a `:` join's field borrow holds, `bxf_`,
                             // taken by another name: that one too - agora #242.)
-                            ? & != 0 g_bck_bxf_any ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` avn ) ) `1` ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) } {}
+                            // (Not to an `inout` parameter the generated code
+                            // copies the value into where the source does not
+                            // own it, `ioc_` - gen_assign; agora #954.)
+                            ? & != 0 g_bck_bxf_any ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` avn ) ) `1` ) {
+                                ? ! ( seq ( nurl_sym_get g_bck ( __bck_ioc_key g_bck_fn ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int apid ) ) ( bck_field rec 3 ) ) ) `1` ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) } {}
+                            } {}
+                            // (…and a `:` join's arm, `g`, that hands on a field
+                            // viewer, `: x . p s` then `? c x …`: the same field's
+                            // handle, which codegen takes neither at the arm nor
+                            // where the join's binding is handed outward, as it
+                            // does for `= t x`; agora #954.)
+                            ? & != 0 g_bck_fv_any ( seq ( bck_field rec 6 ) `g` ) {
+                                ? != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` avn ) ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) = g_bck_bxf_any 1 } {}
+                            } {}
                             // (An arm of a `:` join, `g`, that is a copy of an
                             // owner's handle — `: c ? k cur other`: the
                             // binding is one too, `hc_`, while every borrow
@@ -79586,6 +79606,14 @@ unsafe @ gen_assign i lex i syms i cg → s {
             ( nurl_print `  ` ) ( nurl_print __io_l ) ( nurl_print ` = xor i1 ` ) ( nurl_print __io_f ) ( nurl_print `, 1\n` )
             = store_val ( mem_emit_cloneif cg vt store_val __io_l )
             ( mem_udrop_flag_set syms cg __io_src `0` )
+            // (The walk is told: the parameter holds a copy of its own on
+            // every path the source did not own, so a `:` join's field
+            // borrow, `bxf_`, does not reach it through this handover;
+            // agora #954.)
+            // (Keyed by the function too - its walk may run parked, after
+            // the module's other functions, under g_bck_fn, the name its
+            // `__fn_self_name__` is here.)
+            ? & != g_borrowck 0 == g_bck_rec_off 0 { ( bck_put ( __bck_ioc_key ( nurl_sym_get syms `__fn_self_name__` ) name ( nurl_str_int bck_line ) ) `1` ) } {}
         } {}
         // …while a binding whose value another owner keeps is copied in: a
         // parameter the function only borrows (h201: `= o b` with `b` a
