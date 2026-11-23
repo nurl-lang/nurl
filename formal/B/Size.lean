@@ -1,3 +1,5 @@
+import B.Vec
+
 /-!
 # B8: allocation sizes never wrap (AGORA-970)
 
@@ -63,5 +65,31 @@ theorem countAdd_ok (a b : Int) : ∀ p, countAdd a b = some p → p = a + b ∧
   · rename_i h
     simp at hp; subst hp
     refine ⟨rfl, by omega, by omega⟩
+
+/-- The doubling of `alloc_grow_cap` stops below twice what is needed: from
+    a start `c > 0`, it ends at `c` itself (already enough) or below
+    `2 * need`. -/
+theorem doubleTo_le {need : Nat} : ∀ c, 0 < c → doubleTo c need ≤ max c (2 * need - 1) := by
+  intro c
+  induction c using doubleTo.induct (need := need) with
+  | case1 c h ih =>
+    intro _
+    rw [doubleTo]; simp only [h, and_self, ↓reduceIte]
+    have := ih (by omega)
+    omega
+  | case2 c h =>
+    intro _
+    rw [doubleTo]; simp only [h, ↓reduceIte]; omega
+
+/-- `__vec_grow_to` multiplies the new capacity by the element size with no
+    check (vec.nu: `need` counts elements that exist, so `need · Z < 2^58`).
+    This is the bound it rests on: below `2^62`, the capacity
+    `alloc_grow_cap` picks is the old one, 4, or below `2 * need`. -/
+theorem growCap_le (cap need : Nat) (hn : need ≤ 4611686018427387904) :
+    growCap cap need ≤ max (if 0 < cap then cap else 4) (2 * need - 1) := by
+  unfold growCap
+  dsimp only
+  rw [ite_eq_right (by omega)]
+  exact doubleTo_le _ (by split <;> omega)
 
 end B

@@ -972,3 +972,5 @@ import B
 -- Phase B8: alloc_size / alloc_count_add never hand back a wrapped size
 #print axioms B.allocSize_ok
 #print axioms B.countAdd_ok
+#print axioms B.doubleTo_le
+#print axioms B.growCap_le
