@@ -969,3 +969,6 @@ import B
 #print axioms B.trial_eq
 #print axioms B.white_closed
 #print axioms B.collect_safe
+-- Phase B8: alloc_size / alloc_count_add never hand back a wrapped size
+#print axioms B.allocSize_ok
+#print axioms B.countAdd_ok
