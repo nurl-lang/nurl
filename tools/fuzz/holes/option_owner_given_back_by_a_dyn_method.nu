@@ -1,6 +1,6 @@
-// option_owner_given_back_by_a_dyn_method_runs_clean: `= o ( pick d o other k )`, `d` a `dyn` trait object.
-// Guard for agora #427: runs clean on main by the module-end lend answers (#410, #742) and the per-call keys.
-// map: §7.6 | A2 | runs-clean | - | agora #427 guard: an option owner given back by a dyn method
+// option_owner_given_back_by_a_dyn_method: `= o ( pick d o other k )`, `d` a `dyn` trait object.
+// AGORA-966 (AGORA-946 D4a): refused - the form is A2's refused one in every spelling; main acec7a34 let it through on a per-call key
+// map: §7.6 | A2 | rejected | - | AGORA-966 (AGORA-946 D4a): an option owner given back by a dyn method
 $ `stdlib/core/string.nu`
 
 % Picker [T] {
