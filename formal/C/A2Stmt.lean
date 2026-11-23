@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock` and `withElem`, whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` and `letd` (a struct or its own destructor type), whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -377,6 +377,46 @@ theorem lockPay_sound {E : Entry} {t : Ty} (h : lockPay E.ty = some t) : E.lockO
   revert h
   cases E.ty <;> simp [lockPay]
 
+/-- `DtorOK`, decided for a payload that holds no views (so the `ThruFn`
+    premise holds whatever `f`'s code is): the destructor's signature. -/
+def dtorOKB (P : Prog) (f : Nat) (ty : Ty) : Bool :=
+  match P[f]? with
+  | some fn => decide (fn.params = [(.inp, ty)]) && decide (fn.resTy = .int) && !fn.resOwn &&
+      decide (fn.lends = []) && decide (fn.rholds = []) && decide (fn.outHolds = []) && !ty.holdsView
+  | none => false
+
+theorem dtorOKB_sound {P : Prog} {f : Nat} {ty : Ty} (h : dtorOKB P f ty = true) : DtorOK P f ty := by
+  unfold dtorOKB at h
+  revert h
+  cases hf : P[f]? with
+  | none => intro h; cases h
+  | some fn =>
+    intro h
+    simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at h
+    obtain ⟨⟨⟨⟨⟨⟨hp, hr⟩, ho⟩, hl⟩, hh⟩, hoh⟩, hv⟩ := h
+    exact ⟨fn, hf, hp, hr, ho, hl, hh, hoh, fun _ => hv⟩
+
+/-- `letd`'s types, for a value that is the struct itself or already of
+    `f`'s destructor type: its struct `t` and the binding's type `.dtor f t`.
+    (A `Vec` of destructor values, and a value of another destructor type
+    glued to `f`, are not decided yet.) -/
+def letdTys (f : Nat) : Ty → Option (Ty × Ty)
+  | .dtor g t => if g = f then some (t, .dtor f t) else none
+  | a => some (a, .dtor f a)
+
+theorem letdTys_sound {f : Nat} {a t τ : Ty} (h : letdTys f a = some (t, τ)) :
+    LetdTy f t a τ ∧ ∀ g, a = .dtor g t → g = f := by
+  cases a with
+  | dtor g u =>
+    simp only [letdTys] at h
+    split at h
+    · rename_i hg; simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+      subst hg; exact ⟨Or.inl ⟨rfl, Or.inr ⟨g, rfl⟩⟩, fun g' hg' => by cases hg'; rfl⟩
+    · cases h
+  | _ =>
+    simp only [letdTys, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+    exact ⟨Or.inl ⟨rfl, Or.inl rfl⟩, fun g hg => by cases hg⟩
+
 def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, _, .skip => some Γ
   | Γ, F, .seq a b =>
@@ -511,6 +551,21 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
         else none
       else none
     | none => none
+  | Γ, F, .letd x f r s =>
+    if s.src ∧ Γ x = none ∧ x ∉ F ∧ x ∉ s.assigns then
+      match R Γ F r with
+      | some (E, Γ1) =>
+        match letdTys f E.ty with
+        | some (t, τ) =>
+          if decide (E.mode = .own) && t.isStruct && !t.hasFn && !t.holdsDtor &&
+              dtorOKB P f (.dtor f t) && takeOKB Γ r then
+            match checkStmt2 P R C D (setE Γ1 x (Entry.arm { E with ty := τ, held := E.held })) F s with
+            | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
+            | none => none
+          else none
+        | none => none
+      | none => none
+    else none
   | Γ, F, .scope x s =>
     match Γ x with
     | some E =>
@@ -861,6 +916,39 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
                       supported2_exitScope s2 x⟩
                   · cases h
                 · cases h
+              · cases h
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  | letd x f r s ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i hc
+      obtain ⟨hsrc, hx, hF, hna⟩ := hc
+      split at h
+      · rename_i E Γ1 hr
+        split at h
+        · rename_i t τ hty
+          split at h
+          · rename_i hc2
+            simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hc2
+            obtain ⟨⟨⟨⟨⟨hm, hst⟩, hfn⟩, hhd⟩, hdt⟩, htk⟩ := hc2
+            split at h
+            · rename_i Δ0 h0
+              split at h
+              · rename_i he
+                simp only [Option.some.injEq] at h; subst h
+                obtain ⟨hrt, hs1⟩ := hR Γ F r E Γ1 hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
+                obtain ⟨hlt, hg⟩ := letdTys_sound hty
+                obtain ⟨t0, s0⟩ := ih (ξ := ξ.underD x)
+                  (supported2_setE hs1 (hD x (by simp [Stmt.vars])) _)
+                  (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+                exact ⟨.letd hsrc hx hF hrt hm hlt hst hfn
+                  ⟨LetdFn.of (Or.inl ⟨dtorOKB_sound hdt, hhd⟩) hg, takeOKB_sound htk⟩
+                  (HeldUp.refl Γ1 E) t0 (endOK2B_sound s0 he) hna, supported2_exitScope s0 x⟩
               · cases h
             · cases h
           · cases h
