@@ -11,12 +11,15 @@ count stayed above zero ("scan" / "mark black"). What is left white is
 freed.
 
 This file proves the criterion that makes the free safe, on an abstract
-heap. A block's strong count is its outside handles (`ext`: locals, fields
-of non-candidates, globals) plus one for each handle a block holds on it
-(the edges). Then every white block has no outside handle, and every handle
-held on it comes from another white block. Freeing the white blocks
-together leaves no handle anywhere that points into them: no use after
-free. The collector's own walks (iterative, one context, no lock) are the
+heap. A block's strong count is its outside handles (`ext`: the strong
+handles not represented in the edges, such as locals and globals) plus one
+for each handle a block holds on it (the edges, which include the fields of
+non-candidates): the two must not overlap, so each strong handle is counted
+once. Then every white block has no outside handle, and every handle
+held on it comes from another white block. Freeing the white blocks'
+payloads together leaves no strong handle anywhere that points into them.
+(A `Weak` may remain on a white block: its payload is dropped, and its
+block stays allocated until the weak count reaches zero.) The collector's own walks (iterative, one context, no lock) are the
 runtime's C, phase D's to check against this.
 -/
 
@@ -87,9 +90,10 @@ theorem white_closed {g : RcGraph} {S : List Nat} {n : Nat} (hw : White g S n) :
     omega
   exact ⟨hmS, fun hmb => hnb (Black.step hmb hm hn)⟩
 
-/-- Freeing the white blocks together leaves no handle into them. Every
-    handle the heap still holds after the free (an outside handle, or a
-    handle a surviving block holds) points at a block that is not freed. -/
+/-- Freeing the white blocks together leaves no strong handle into them.
+    Every strong handle the heap still holds after the free (an outside
+    handle, or a handle a surviving block holds) points at a block that is
+    not freed. (Weak handles are not covered.) -/
 theorem collect_safe {g : RcGraph} {S : List Nat} :
     (∀ n, White g S n → g.ext n = 0) ∧
     (∀ m n, (m, n) ∈ g.edges → ¬ White g S m → ¬ White g S n) := by

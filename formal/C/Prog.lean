@@ -127,8 +127,10 @@ theorem progOKB_sound {P : Prog} {certs : Nat → Cert} (h : progOKB P certs = t
   exact fnOKB_sound this
 
 /-- Phase C for A1, end to end: a program whose certificates the checker
-    accepts, with an entry statement it accepts, never gets stuck from the
-    empty store. -/
+    accepts, with an entry statement it accepts that is source syntax and
+    whose variables fit the initial store (the theorem's premises: the
+    checker's acceptance alone does not give them), never gets stuck from
+    the empty store. -/
 theorem checked_program_safe {P : Prog} {certs : Nat → Cert} (hP : progOKB P certs = true)
     {s : Stmt} {c : Cert} {Δ : Ctx} (hc : checkC P s.vars c (fun _ => none) [] s = some Δ)
     (hs : s.src = true) {nv : Nat} (hv : ∀ v ∈ s.vars, v < nv) {m' : Mem} {s' : Stmt}

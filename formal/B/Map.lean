@@ -10,6 +10,10 @@ bitwise (`mem_take`, `mem_put_back`), so memory safety rests on the slot
 code: which slot is read, which is written, and whether an entry is ever
 written over, lost or kept twice.
 
+Keys are compared by structural equality here: the theorems cover a map
+whose equality callback agrees with it on the keys stored (and whose hash
+is compatible with it); a coarser equality callback is outside the model.
+
 This file models the table as its `cap` slots and the code of
 `__map_probe_for`, `map_set`'s insert and `map_remove`. It proves:
 
@@ -494,8 +498,10 @@ theorem fresh_entries (n : Nat) : (Tab.fresh n : Tab K V).entries = [] := by
 
 omit [DecidableEq K] in
 /-- `__map_grow` into `new_cap` slots, more than the old table has
-    entries: it succeeds, and the new table holds exactly the old entries,
-    each once, with no tombstones. -/
+    entries: when every `hash_fn` call returns, the new table holds exactly
+    the old entries, each once, with no tombstones. A `hash_fn` panic that a
+    `recover` frame catches leaves the runtime's rehash incomplete, which
+    this theorem does not describe. -/
 theorem grow_ok (hash : K → Nat) (t : Tab K V) {n : Nat} (hroom : t.entries.length < n) :
     ∃ t', moveAll hash (Tab.fresh n) t.entries = some t' ∧ t'.cap = n ∧ t'.entries.Perm t.entries ∧
       ∀ i, i < t'.cap → t'.s i ≠ .tomb := by

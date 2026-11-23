@@ -789,7 +789,9 @@ theorem swap_ok {h : Heap α} {v : RVec} {es : List α} {i j : Nat} (hr : Rep h 
         simp only [h1, upd, ite_eq_right hbd]
 
 /-- `vec_reserve n` (`n > 0`): grow to `len + n` when the room left is
-    less; the list is kept. -/
+    less; the list is kept. (`len + n` is a `Nat` here: the runtime's
+    checked count, `alloc_count_add`, panics when it overflows `i64`, before
+    the Vec changes, B8; `reserve_ok` covers counts that fit.) -/
 def reserve (h : Heap α) (v : RVec) (n : Nat) : Option (Heap α × RVec) :=
   if n > 0 ∧ v.cap - v.len < n then growTo h v (v.len + n) else some (h, v)
 
@@ -980,8 +982,10 @@ A2's business.) The stack-or-heap choice for the buffer (Agora #748) is a
 fresh block here. -/
 
 /-- The drop loop over the release's buffer `t`: load cell `k`, run the
-    destructor (which may do anything to the heap), go on with `k + 1`. A
-    panic in one destructor goes on with the rest, so `dtor` is total. -/
+    destructor (which may do anything to the heap), go on with `k + 1`. The
+    claim is the order of the destructor calls in a completed drain: a
+    panicking destructor (the runtime drains the rest, then hands control to
+    a `recover` frame, or ends the process) is not modelled as a return. -/
 def dropLoop (dtor : α → Heap α → Heap α) (t : Nat) : Nat → Nat → Heap α → Option (Heap α × List α)
   | _, 0, h => some (h, [])
   | k, n + 1, h =>
@@ -1268,9 +1272,11 @@ A1 tracks each allocation by an id and one liveness bit (`Mem.alloc`,
 `Mem.nid`). A1's `Vec` value `.node t c d es` names its buffer `d`, and A1
 lets `vec_push` take either of two steps: `push` keeps `d`, `pushRealloc` ends
 `d` and takes `nid`. `Agree` says the heap's blocks are A1's allocations.
-`push_refines` says the raw push, on a buffer A1 names, makes exactly one of
-A1's two steps: the same buffer and the same allocation map, or the next
-fresh id with A1's own update of the map. -/
+`push_refines` says the raw push, on a buffer A1 names, agrees with one of
+A1's two steps on buffer identity and allocation state: the same buffer and
+the same allocation map, or the next fresh id with A1's own update of the
+map. (It does not by itself give an A1 transition, which also needs the
+slots A1's push reads.) -/
 
 /-- The heap's liveness and fresh-id counter are A1's. -/
 def Agree (m : A1.Mem) (h : Heap α) : Prop := m.alloc = h.live ∧ m.nid = h.nid

@@ -6,7 +6,10 @@ import B.Vec
 A `String` is a `Vec u` (`stdlib/core/string.nu`: `__sbuf` views the same
 control block) with one more invariant, the NUL-terminator discipline.
 There is always room past the length (`len < cap`), and the byte at `len`
-is 0, so `string_data` hands C a terminated buffer. The model here covers:
+is 0, so `string_data` hands C a terminated buffer. The theorems cover a
+String whose bytes are a separate, owned data block; a packed String (its
+bytes at an offset inside a shared allocation) is outside the model. The
+model here covers:
 
 * `_string_seal`, both paths: the fast store when there is room, and
   otherwise `_vec_reserve_more` by one and then the store;
@@ -240,8 +243,10 @@ theorem pushBytes_ok {h : Heap Nat} {v : RVec} {bs src : List Nat} {sb so : Nat}
         · intro i hi
           rw [hc3, hoth2 sb hsbd, hl1sb, hsc i hi]
 
-/-- `string_data`'s pointer, read as C reads it: every byte of the string,
-    then the NUL, each one a load inside the string's live block. -/
+/-- `string_data`'s pointer, read by index: every byte of the string, then
+    the NUL, each one a load inside the string's live block. (A C scan that
+    stops at the first 0 reaches the length only when the bytes hold no
+    0 of their own.) -/
 theorem data_ok {h : Heap Nat} {v : RVec} {bs : List Nat} (hr : SRep h v bs) :
     ∃ d, v.data = some d ∧ ∀ i (hi : i < (bs ++ [0]).length), h.load d i = some (bs ++ [0])[i] := by
   obtain ⟨hr0, hroom, d, hd, hnul⟩ := hr

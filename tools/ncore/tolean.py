@@ -432,6 +432,11 @@ class Fn:
                     t = self.fresh()
                     pre.append((t, f".expr (.len {self.var(y)})"))
                     return f".new {ty[len('(.vec '):-1]}"
+                if assign and vt.get(y) == "i8*":
+                    # `= dst src` of raw text copies it (MEMORY.md §2.13: a
+                    # copy of a binding that owns its text is a view of it),
+                    # which a move would not be
+                    raise Unsupported(f"{self.fn['name']}: raw text assigned from another binding")
                 return f".var {self.var(y)}"
             return f".expr {self.operand(op)}"
         if k == "agg" and words[1] == "-" and dest is not None and int(words[2]) == 1:
@@ -576,6 +581,8 @@ class Fn:
         if f.startswith("vec_len__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.expr (.len {rd(ops[0])})) {rest})"
+        if f.startswith("slice_from_vec__") and "(.slice" in vec_elem(f, "slice_from_vec__"):
+            raise Unsupported(f"{self.fn['name']}: a slice of a Vec of views")
         if f.startswith("slice_from_vec__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.view {rd(ops[0])}) {rest})"
@@ -723,7 +730,12 @@ class Fn:
             self.depth += 1
             inner_body = self.stmts(body, names)
             self.depth -= 1
-            inner = f"(.ite {self.operand(c)} (.block {inner_body}) (.exit 0))"
+            if c in ("T", "1"):
+                # `~ T { … }`: no condition, the body block alone (`break`
+                # and `continue` keep their targets)
+                inner = f"(.block {inner_body})"
+            else:
+                inner = f"(.ite {self.operand(c)} (.block {inner_body}) (.exit 0))"
             loop_body = self.stmts(cond, names, inner)
             self.depth -= 1
             return self.seq(f"(.block (.loop {loop_body}))", self.stmts(lines[k + 1:], names, tail))
@@ -737,6 +749,9 @@ class Fn:
             xs = head[2]
             if not self.fn["vars"].get(int(xs[1:]) if xs[1:].isdigit() else -1, "").startswith("%Vec__"):
                 raise Unsupported(f"{self.fn['name']}: foreach over {xs}")
+            if "(.slice" in lean_ty(self.fn["vars"][int(xs[1:])]):
+                # (a view of a Vec whose elements hold views is not A2's `view`)
+                raise Unsupported(f"{self.fn['name']}: foreach over a Vec of views")
             v, x, i, w = self.pvar(xs), self.var(int(head[1])), self.fresh(), self.fresh()
             self.depth += 2
             inner = self.stmts(body, names)
@@ -859,7 +874,7 @@ class Fn:
 def emit(text):
     # The standard library's functions are A2's constructs (`intrinsic`),
     # not bodies to check: their code is phase B's.
-    fns = [f for f in parse(text) if "stdlib/" not in f["file"]]
+    fns = [f for f in parse(text) if not f["file"].startswith("stdlib/")]
     names = {f["name"]: i for i, f in enumerate(fns)}
     if "main" not in names:
         raise Unsupported("no main")
