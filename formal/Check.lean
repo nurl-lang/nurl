@@ -934,3 +934,7 @@ import B
 #print axioms B.strSeal_ok
 #print axioms B.pushBytes_ok
 #print axioms B.data_ok
+-- Phase B3: `rcbox` (stdlib/core/rcbox.nu): the count is the handles; the last release drops once
+#print axioms B.rcNew_ok
+#print axioms B.rcShare_ok
+#print axioms B.rcRelease_ok
