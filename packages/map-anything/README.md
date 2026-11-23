@@ -58,6 +58,25 @@ who can reach it: keep it on a private network then. Basic sign-in sends the
 password with every request, so off loopback it needs TLS: a TLS-terminating
 proxy in front (an ingress), or `--tls-cert FILE --tls-key FILE`.
 
+### 3-D objects
+
+```
+map-anything walk.mp4 --scene walk.scene              # keep the views
+map-anything mesh walk.scene -o walk.glb              # the whole scene
+map-anything mesh walk.scene -o chair.glb --box -0.4 0.1 1.2 0.5 0.9 2.0 --res 320
+```
+
+`--scene` keeps what a mesh needs and a point cloud has lost: each view's
+camera, depths, mask and colours. `mesh` fuses them into a signed distance
+grid inside a box (in the point cloud's coordinates; default the whole scene
+without its 2 % outliers), extracts the zero surface, drops the loose pieces
+and writes a binary glTF (+Y up, centred on the box, metres) that Blender,
+three.js and phone AR viewers open. `--res` is the number of cells along the
+box's longest side (default 256): a tighter box gives finer detail.
+
+In `serve` this is the "make 3-D object" button in the cloud viewer: drag the
+region's sliders around the object, press it, and open or download the result.
+
 ### Beyond the reference: cleaner clouds
 
 ```
