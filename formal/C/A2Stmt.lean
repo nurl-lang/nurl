@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert` and `letrec`, whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec` and `withLock`, whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -366,6 +366,17 @@ theorem pushB_sound {P : Prog} {D : List Var} {ξ : Exits} {Γ : Ctx} {F : List 
     · cases h
   · cases h
 
+/-- The payload type of a lock or cell type. -/
+def lockPay : Ty → Option Ty
+  | .lk t => some t
+  | .cell t => some t
+  | _ => none
+
+theorem lockPay_sound {E : Entry} {t : Ty} (h : lockPay E.ty = some t) : E.lockOf t := by
+  unfold Entry.lockOf
+  revert h
+  cases E.ty <;> simp [lockPay]
+
 def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, _, .skip => some Γ
   | Γ, F, .seq a b =>
@@ -467,6 +478,19 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
           | none => none
         | none => none
       else none
+    | none => none
+  | Γ, F, .withLock a x s =>
+    match Γ a with
+    | some Ea =>
+      match lockPay Ea.ty with
+      | some t =>
+        if s.src ∧ Γ x = none ∧ x ∉ F ∧ Ea.live = true ∧ Ea.mode.isRoot = true ∧ a ∉ s.vars ∧
+            (t.holdsDtor = true → x ∉ s.assigns) then
+          match checkStmt2 P R C D (setE Γ x (lockE t)) F s with
+          | some Δ => if liveAtB Δ x && endOK2B D Δ x then some (exitScope x Δ) else none
+          | none => none
+        else none
+      | none => none
     | none => none
   | Γ, F, .scope x s =>
     match Γ x with
@@ -752,6 +776,31 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
                 (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
               exact ⟨.letrec hsrc hx hF hfn hp hr ho hct t0 (endOK2B_sound s0 he),
                 supported2_exitScope s0 x⟩
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  | withLock a x s ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i Ea hEa
+      split at h
+      · rename_i t ht
+        split at h
+        · rename_i hc
+          obtain ⟨hsrc, hx, hF, hl, hr, ha, hna⟩ := hc
+          split at h
+          · rename_i Δ0 h0
+            split at h
+            · rename_i he
+              simp only [Option.some.injEq] at h; subst h
+              simp only [Bool.and_eq_true] at he
+              obtain ⟨t0, s0⟩ := ih (ξ := .none) (supported2_setE hs (hD x (by simp [Stmt.vars])) (lockE t))
+                (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+              exact ⟨.withLock hsrc hx hF hEa hl (lockPay_sound ht) t0 (endOK2B_sound s0 he.2) hr ha
+                (liveAtB_sound he.1) hna, supported2_exitScope s0 x⟩
             · cases h
           · cases h
         · cases h
