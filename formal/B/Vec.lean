@@ -36,7 +36,9 @@ always gives a new id.
 
 Borrowed views (`vec_borrow_raw`, `cap < 0`) are covered for reads and for
 the push that detaches them (`vpush_ok`: the viewed block is never written
-or freed). The packed-string layout's growth is the same detach (`packedPush_ok`).
+or freed). A packed `Vec`'s push is in place below its stored capacity
+(`packedPush_room`) and the same detach at it, growing from that capacity
+(`packedPush_ok`).
 What B1 leaves out, for the next steps: the runtime's `nurl_vec_drop` (C code; it frees a view's handle only), element destructors (cells
 here are values that are moved by bit copy, as `mem_take` makes them),
 byte sizes and their overflow (`alloc_size`).
@@ -891,28 +893,33 @@ theorem vget_ok {h : Heap α} {w : VView} {es : List α} (hr : VRep h w es) (i :
     to at least the length), `__vec_place`'s detach (a fresh `nurl_alloc`,
     the live cells copied), then the store and the length bump. The result
     is an ordinary owned `Vec`. -/
-def vpush (h : Heap α) (w : VView) (x : α) : Option (Heap α × RVec) :=
-  let nc := growCap 4 (w.len + 1)
+def vpushC (c : Nat) (h : Heap α) (w : VView) (x : α) : Option (Heap α × RVec) :=
+  let nc := growCap c (w.len + 1)
   match memcpy (h.alloc nc).1 w.blk w.off (h.alloc nc).2 w.len with
   | none => none
   | some h1 =>
     (h1.store (h.alloc nc).2 w.len x).map fun h2 =>
       (h2, { data := some (h.alloc nc).2, len := w.len + 1, cap := nc })
 
+/-- The view's push grows from 4 (`alloc_grow_cap 4`); a packed `Vec`'s
+    from its stored capacity (`packedPush` below). -/
+def vpush (h : Heap α) (w : VView) (x : α) : Option (Heap α × RVec) := vpushC 4 h w x
+
 /-- A push on a view detaches. The result represents `es ++ [x]` in a fresh
     block, and every block that was there keeps its cells, size and
     liveness: the owner's storage is never written or freed. -/
-theorem vpush_ok {h : Heap α} {w : VView} {es : List α} (x : α) (hw : h.WF) (hr : VRep h w es) :
-    ∃ h' v', vpush h w x = some (h', v') ∧ Rep h' v' (es ++ [x]) ∧ h'.WF ∧
-      v'.data = some h.nid ∧ h'.nid = h.nid + 1 ∧ h'.live = upd h.live h.nid true ∧
+theorem vpushC_ok {h : Heap α} {w : VView} {es : List α} (c : Nat) (x : α) (hw : h.WF) (hr : VRep h w es) :
+    ∃ h' v', vpushC c h w x = some (h', v') ∧ Rep h' v' (es ++ [x]) ∧ h'.WF ∧
+      v'.data = some h.nid ∧ v'.cap = growCap c (w.len + 1) ∧ h'.nid = h.nid + 1 ∧
+      h'.live = upd h.live h.nid true ∧
       ∀ b, b < h.nid → h'.cell b = h.cell b ∧ h'.size b = h.size b := by
   obtain ⟨hl, hlv, hsz, hcell⟩ := hr
   have hbn : w.blk < h.nid := by
     rcases Nat.lt_or_ge w.blk h.nid with e | e
     · exact e
     · rw [hw _ e] at hlv; exact absurd hlv (by simp)
-  have hg := growCap_ge 4 (w.len + 1)
-  let nc := growCap 4 (w.len + 1)
+  have hg := growCap_ge c (w.len + 1)
+  let nc := growCap c (w.len + 1)
   let ha := (h.alloc nc).1
   have hbd : w.blk ≠ h.nid := by omega
   have halb : ha.live w.blk = true := by
@@ -929,8 +936,8 @@ theorem vpush_ok {h : Heap α} {w : VView} {es : List α} (x : α) (hw : h.WF) (
   have hin : h1.live h.nid = true ∧ w.len < h1.size h.nid :=
     ⟨by rw [hlv1]; exact hald, by rw [hsz1, hasd]; omega⟩
   refine ⟨{ h1 with cell := upd h1.cell h.nid (upd (h1.cell h.nid) w.len (some x)) },
-    { data := some h.nid, len := w.len + 1, cap := nc }, ?_, ⟨?_, ?_, ?_⟩, ?_, rfl, ?_, ?_, ?_⟩
-  · unfold vpush
+    { data := some h.nid, len := w.len + 1, cap := nc }, ?_, ⟨?_, ?_, ?_⟩, ?_, rfl, rfl, ?_, ?_, ?_⟩
+  · unfold vpushC
     simp only []
     show (match memcpy ha w.blk w.off h.nid w.len with
       | none => none
@@ -964,6 +971,13 @@ theorem vpush_ok {h : Heap α} {w : VView} {es : List α} (x : α) (hw : h.WF) (
       simp only [upd, ite_eq_right hbne]; rw [hoth1 b hbne]
       show (upd h.cell h.nid _) b = h.cell b; simp only [upd, ite_eq_right hbne]
     · show h1.size b = h.size b; rw [hsz1]; show (upd h.size h.nid nc) b = _; simp only [upd, ite_eq_right hbne]
+
+theorem vpush_ok {h : Heap α} {w : VView} {es : List α} (x : α) (hw : h.WF) (hr : VRep h w es) :
+    ∃ h' v', vpush h w x = some (h', v') ∧ Rep h' v' (es ++ [x]) ∧ h'.WF ∧
+      v'.data = some h.nid ∧ h'.nid = h.nid + 1 ∧ h'.live = upd h.live h.nid true ∧
+      ∀ b, b < h.nid → h'.cell b = h.cell b ∧ h'.size b = h.size b := by
+  obtain ⟨h', v', he, hr', hw', hd, -, hn, hlv, hfr⟩ := vpushC_ok 4 x hw hr
+  exact ⟨h', v', he, hr', hw', hd, hn, hlv, hfr⟩
 
 /-! ### `__vec_release_from`: drops that run program code (Agora #709)
 
@@ -1015,6 +1029,26 @@ theorem dropLoop_ok {dtor : α → Heap α → Heap α} {t : Nat}
         (fun i hi => by rw [hD3]; have := hc (i + 1) (by simp; omega); simpa [Nat.add_assoc, Nat.add_comm 1] using this)
       exact ⟨h', by simp only [dropLoop, hload, he, Option.map_some]⟩
 
+/-- The loop leaves its buffer's liveness as it found it when no destructor
+    touches that block. -/
+theorem dropLoop_live {dtor : α → Heap α → Heap α} {t : Nat}
+    (hD : ∀ y (h : Heap α), (dtor y h).live t = h.live t) :
+    ∀ n k (h h' : Heap α) (ys : List α), dropLoop dtor t k n h = some (h', ys) → h'.live t = h.live t := by
+  intro n
+  induction n with
+  | zero => intro k h h' ys he; simp only [dropLoop, Option.some.injEq, Prod.mk.injEq] at he; rw [he.1]
+  | succ n ih =>
+    intro k h h' ys he
+    simp only [dropLoop] at he
+    split at he
+    · exact absurd he (by simp)
+    · rename_i y _
+      cases hr : dropLoop dtor t (k + 1) n (dtor y h) with
+      | none => rw [hr] at he; exact absurd he (by simp)
+      | some r =>
+        rw [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at he
+        rw [← he.1, ih (k + 1) (dtor y h) r.1 r.2 hr, hD]
+
 /-- `__vec_release_from v from` with `nurl_vec_move_drop_dtor`: a fresh
     buffer, the elements `[from, len)` copied into it, the count set to
     `from`, then the drop loop over the buffer. It hands back the heap, the
@@ -1028,18 +1062,28 @@ def releaseFrom (dtor : α → Heap α → Heap α) (h : Heap α) (v : RVec) (fr
     let n := v.len - fr
     match memcpy (h.alloc n).1 d fr (h.alloc n).2 n with
     | none => none
-    | some h1 => (dropLoop dtor (h.alloc n).2 0 n h1).map fun r => (r.1, { v with len := fr }, r.2)
+    | some h1 =>
+      match dropLoop dtor (h.alloc n).2 0 n h1 with
+      | none => none
+      | some r => (r.1.free (h.alloc n).2).map fun h2 => (h2, { v with len := fr }, r.2)
 
 /-- The release drops exactly `es.drop from`, in index order, each once,
     whatever the destructors do elsewhere. Before the first of them runs,
     the `Vec` represents `es.take from` in its own block, which the
-    release's buffer (the heap's next fresh id) is not. -/
+    release's buffer (the heap's next fresh id) is not, and once the loop is
+    done that buffer is freed (`h'.live h.nid = false`).
+
+    What the model does not cover: here a destructor is a function of the
+    heap alone, so it cannot reach `v`'s control block. The runtime sets the
+    length to `from` before the first drop (`*w = v` in
+    `nurl_vec_move_drop_dtor`), so a destructor that reaches `v` sees it
+    short, but this theorem does not state that. -/
 theorem releaseFrom_ok {dtor : α → Heap α → Heap α} {h : Heap α} {v : RVec} {es : List α}
     {fr : Nat} (hw : h.WF) (hr : Rep h v es) (hf : fr < es.length)
     (hD : ∀ y (g : Heap α), (dtor y g).live h.nid = g.live h.nid ∧ (dtor y g).size h.nid = g.size h.nid ∧
       (dtor y g).cell h.nid = g.cell h.nid) :
     ∃ h' h1, releaseFrom dtor h v fr = some (h', { v with len := fr }, es.drop fr) ∧
-      Rep h1 { v with len := fr } (es.take fr) ∧ v.data ≠ some h.nid := by
+      Rep h1 { v with len := fr } (es.take fr) ∧ v.data ≠ some h.nid ∧ h'.live h.nid = false := by
   have hl : v.len = es.length := hr.1
   have hlc := hr.2.1
   cases hd : v.data with
@@ -1070,15 +1114,22 @@ theorem releaseFrom_ok {dtor : α → Heap α → Heap α} {h : Heap α} {v : RV
         simp at hi
         rw [hcell1, ite_eq_left (by omega), hacd, Nat.zero_add, hcell (fr + i) (by omega)]
         simp)
-    refine ⟨h', h1, ?_, ⟨by simp; omega, by show fr ≤ v.cap; omega, ?_⟩, by simp; omega⟩
+    have hl' : h'.live h.nid = true := by
+      rw [dropLoop_live (fun y g => (hD y g).1) n 0 h1 h' _ hdrop, hlv1]; exact halt
+    refine ⟨{ h' with live := upd h'.live h.nid false }, h1, ?_,
+      ⟨by simp; omega, by show fr ≤ v.cap; omega, ?_⟩, by simp; omega, by simp [upd]⟩
     · unfold releaseFrom
       rw [ite_eq_right (by omega)]
       simp only [hd]
       show (match memcpy ha d fr h.nid n with
         | none => none
-        | some h1 => (dropLoop dtor h.nid 0 n h1).map fun (r : Heap α × List α) => (r.1, ({ data := some d, len := fr, cap := v.cap } : RVec), r.2)) = _
+        | some h1 =>
+          match dropLoop dtor h.nid 0 n h1 with
+          | none => none
+          | some (r : Heap α × List α) => (r.1.free h.nid).map fun h2 =>
+              (h2, ({ data := some d, len := fr, cap := v.cap } : RVec), r.2)) = _
       rw [he]
-      simp only [hdrop, Option.map_some]
+      simp only [hdrop, Heap.free, hl', ite_true, Option.map_some]
     · show h1.live d = true ∧ h1.size d = v.cap ∧
             ∀ i (hi : i < (es.take fr).length), h1.cell d i = some (es.take fr)[i]
       refine ⟨by rw [hlv1]; exact hald, by rw [hsz1, hasd]; exact hsz, fun i hi => ?_⟩
@@ -1238,33 +1289,86 @@ theorem append_ok {h : Heap α} {dst src : RVec} {es1 es2 : List α} (hw : h.WF)
           show h2.live b = false
           rw [hlv2]; exact hw1 b (by rw [← hn2]; exact hb)
 
-/-! ### The packed layout (`string_from_bytes_packed`, `vec_split_off_packed`)
+/-! ### The packed layout (`vec_with_cap_packed`, `vec_split_off_packed`)
 
-A packed `Vec` keeps its elements in its control block's own allocation,
-24 bytes in (here cell `off` of the control block). `realloc` of a pointer
-into the middle of a block is undefined behaviour, so `__vec_place` gives
-the packed case the same detach as a borrowed view: a fresh `nurl_alloc`,
-the live cells copied over, the data pointer moved. The theorem is
-`vpush_ok` for that view. The push detaches, the control block keeps its
-cells and stays live, and the result represents `es ++ [x]` in a fresh
-block. The packed-aware release then frees the control block (with
-whatever cells it still holds) and the new buffer separately. -/
+A packed `Vec` keeps room for `cap` elements in its control block's own
+allocation, 24 bytes in (here cells `off ..< off + cap` of the control
+block `ctl`), and stores that `cap` (`__vec_pack_new`). `vec_push` grows only
+when `len` reaches the stored capacity. Below it, the push stores in place.
+At it, `__vec_grow_cap` doubles from the stored capacity (`alloc_grow_cap
+cap need`; the 4-based case is only for a borrowed view, whose stored
+capacity is -1). `__vec_place` then detaches, as for a view, because
+`realloc` of a pointer into the middle of a block is undefined behaviour: a
+fresh `nurl_alloc`, the live cells copied over, the data pointer moved. The
+control block keeps its cells and stays live. The packed-aware release then
+frees it (with whatever cells it still holds) and the new buffer
+separately. -/
 
-/-- A push on a packed `Vec` whose elements sit at cell `off` of its
-    control block `ctl` detaches: no `realloc` of an interior pointer, the
-    control block untouched and live, the elements in a fresh block. -/
-theorem packedPush_ok {h : Heap α} {ctl off : Nat} {es : List α} (x : α) (hw : h.WF)
-    (hr : VRep h ⟨ctl, off, es.length⟩ es) :
-    ∃ h' v', vpush h ⟨ctl, off, es.length⟩ x = some (h', v') ∧ Rep h' v' (es ++ [x]) ∧ h'.WF ∧
-      v'.data = some h.nid ∧ h'.live ctl = true ∧
+/-- A packed `Vec`: `len` elements of room for `cap`, at cell `off` of the
+    control block `ctl`. -/
+structure PVec where
+  ctl : Nat
+  off : Nat
+  len : Nat
+  cap : Nat
+
+/-- The packed `p` on `h` holds `es`. -/
+def PRep (h : Heap α) (p : PVec) (es : List α) : Prop :=
+  p.len = es.length ∧ p.len ≤ p.cap ∧ h.live p.ctl = true ∧ p.off + p.cap ≤ h.size p.ctl ∧
+  ∀ i (hi : i < es.length), h.cell p.ctl (p.off + i) = some es[i]
+
+/-- `vec_push` on a packed `Vec`: in place below the stored capacity
+    (`.inl`, still packed), else `__vec_grow_cap`'s doubling from that
+    capacity and `__vec_place`'s detach (`.inr`, an ordinary owned `Vec`). -/
+def packedPush (h : Heap α) (p : PVec) (x : α) : Option (Heap α × (PVec ⊕ RVec)) :=
+  if p.len < p.cap then
+    (h.store p.ctl (p.off + p.len) x).map fun h2 => (h2, .inl { p with len := p.len + 1 })
+  else
+    (vpushC p.cap h ⟨p.ctl, p.off, p.len⟩ x).map fun r => (r.1, .inr r.2)
+
+/-- Below the stored capacity, a packed push writes one cell of the control
+    block's room and allocates nothing: the `Vec` stays packed and holds
+    `es ++ [x]`, and every other block, every size and every liveness bit
+    is as it was. -/
+theorem packedPush_room {h : Heap α} {p : PVec} {es : List α} (x : α) (hw : h.WF)
+    (hr : PRep h p es) (hc : p.len < p.cap) :
+    ∃ h', packedPush h p x = some (h', .inl { p with len := p.len + 1 }) ∧
+      PRep h' { p with len := p.len + 1 } (es ++ [x]) ∧ h'.WF ∧ h'.nid = h.nid ∧
+      h'.live = h.live ∧ h'.size = h.size ∧ ∀ b, b ≠ p.ctl → h'.cell b = h.cell b := by
+  obtain ⟨hl, -, hlv, hsz, hcell⟩ := hr
+  have hin : h.live p.ctl = true ∧ p.off + p.len < h.size p.ctl := ⟨hlv, by omega⟩
+  refine ⟨{ h with cell := upd h.cell p.ctl (upd (h.cell p.ctl) (p.off + p.len) (some x)) }, ?_,
+    ⟨by simp; omega, by show p.len + 1 ≤ p.cap; omega, hlv, hsz, fun i hi => ?_⟩, hw, rfl, rfl, rfl,
+    fun b hb => by show (upd h.cell p.ctl _) b = _; simp only [upd, ite_eq_right hb]⟩
+  · unfold packedPush
+    simp only [hc, ↓reduceIte, Heap.store, hin, and_self, Option.map_some]
+  · show (upd h.cell p.ctl (upd (h.cell p.ctl) (p.off + p.len) (some x))) p.ctl (p.off + i) = _
+    simp only [upd, ↓reduceIte]
+    by_cases hil : i = p.len
+    · subst hil; rw [ite_eq_left rfl, List.getElem_append_right (by omega)]; simp [hl]
+    · have hi' : i < es.length := by simp at hi; omega
+      rw [ite_eq_right (by omega), hcell i hi', List.getElem_append_left hi']
+
+/-- At the stored capacity, a packed push detaches: no `realloc` of an
+    interior pointer, the control block's cells and size untouched and it
+    live, and the elements in a fresh block whose capacity is
+    `alloc_grow_cap` from the stored one. -/
+theorem packedPush_ok {h : Heap α} {p : PVec} {es : List α} (x : α) (hw : h.WF)
+    (hr : PRep h p es) (hc : p.len = p.cap) :
+    ∃ h' v', packedPush h p x = some (h', .inr v') ∧ Rep h' v' (es ++ [x]) ∧ h'.WF ∧
+      v'.data = some h.nid ∧ v'.cap = growCap p.cap (p.len + 1) ∧ h'.live p.ctl = true ∧
       ∀ b, b < h.nid → h'.cell b = h.cell b ∧ h'.size b = h.size b := by
-  obtain ⟨h', v', he, hr', hw', hd, hn, hlv, hfr⟩ := vpush_ok x hw hr
-  have hctl : ctl < h.nid := by
-    rcases Nat.lt_or_ge ctl h.nid with e | e
+  obtain ⟨hl, -, hlv, hsz, hcell⟩ := hr
+  have hv : VRep h ⟨p.ctl, p.off, p.len⟩ es := ⟨hl, hlv, by show p.off + p.len ≤ h.size p.ctl; rw [hc]; exact hsz, hcell⟩
+  obtain ⟨h', v', he, hr', hw', hd, hcap, hn, hlv', hfr⟩ := vpushC_ok p.cap x hw hv
+  have hctl : p.ctl < h.nid := by
+    rcases Nat.lt_or_ge p.ctl h.nid with e | e
     · exact e
-    · have := hr.2.1; rw [hw ctl e] at this; exact absurd this (by simp)
-  refine ⟨h', v', he, hr', hw', hd, ?_, hfr⟩
-  rw [hlv]; simp only [upd, ite_eq_right (show ¬ ctl = h.nid by omega)]; exact hr.2.1
+    · rw [hw p.ctl e] at hlv; exact absurd hlv (by simp)
+  refine ⟨h', v', ?_, hr', hw', hd, hcap, ?_, hfr⟩
+  · unfold packedPush
+    simp only [show ¬ p.len < p.cap by omega, ↓reduceIte, he, Option.map_some]
+  · rw [hlv']; simp only [upd, ite_eq_right (show ¬ p.ctl = h.nid by omega)]; exact hlv
 
 /-! ### The link to A1
 
