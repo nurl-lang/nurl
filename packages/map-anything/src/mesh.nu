@@ -82,31 +82,32 @@ $ `scene.nu`
     : ( Slice f ) p ( slice_from_vec [f] p__v )
     : ( Slice u ) m ( slice_from_vec [u] . sc mask )
     : ( Slice f32 ) dz ( slice_from_vec [f32] . sc dz )
-    // a sample of the valid pixels, at a PRIME stride that does not divide
-    // the width — so it is coprime to it and the rows' offsets sweep every
-    // column (9 against 42 would see only every third); with nothing on
-    // that lattice, every pixel
-    : ~ i st 7
-    ~ == 0 % . sc w st { = st ? == st 7 11 ? == st 11 13 ? == st 13 17 ? == st 17 19 + st 4 }
-    : ~ i pass 0
-    ~ & < pass 2 == ( vec_len [f] xs ) 0 {
-        : i step ? == pass 0 st 1
-        : ~ i v 0
-        ~ < v . sc n {
-            : ~ i j 0
-            ~ < j hw {
-                : i q + * v hw j
-                ? != # i ( slice_at [u] m q ) 0 {
+    // a sample of the VALID pixels themselves: count them, then keep every
+    // k-th of them in scan order — uniform over the valid set whatever its
+    // shape, so no column, row or small region can fall between the samples
+    : ~ i nvalid 0
+    : ~ i q0 0
+    ~ < q0 * . sc n hw { ? != # i ( slice_at [u] m q0 ) 0 { = nvalid + nvalid 1 } {} = q0 + q0 1 }
+    : i want 60000
+    : i every ? > nvalid want / nvalid want 1
+    : ~ i seen 0
+    : ~ i v 0
+    ~ < v . sc n {
+        : ~ i j 0
+        ~ < j hw {
+            : i q + * v hw j
+            ? != # i ( slice_at [u] m q ) 0 {
+                ? == 0 % seen every {
                     ( __ms_world sc v # f % j . sc w # f / j . sc w # f ( slice_at [f32] dz q ) p )
                     ( vec_push [f] xs ( slice_at [f] p 0 ) )
                     ( vec_push [f] ys ( slice_at [f] p 1 ) )
                     ( vec_push [f] zs ( slice_at [f] p 2 ) )
                 } {}
-                = j + j step
-            }
-            = v + v 1
+                = seen + seen 1
+            } {}
+            = j + j 1
         }
-        = pass + pass 1
+        = v + v 1
     }
     ? == ( vec_len [f] xs ) 0 { ^ F } {}
     ( sort_by [f] xs \ f a f b → i { ^ ? < a b -1 ? > a b 1 0 } )

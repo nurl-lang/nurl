@@ -22,7 +22,13 @@
   .panel { position: fixed; background: rgba(14,17,21,.86); border: 1px solid #232a33;
            border-radius: 8px; padding: 10px 12px; backdrop-filter: blur(6px); }
   /* the panel scrolls when it outgrows a short screen (the crop tool) */
-  #hud { top: 12px; left: 12px; min-width: 210px; max-height: calc(100vh - 24px); overflow-y: auto; }
+  /* 100dvh is the viewport the page actually has — a phone's 100vh counts
+     the space under its browser bars and system buttons, which pushed the
+     crop tool's buttons out of reach; the bottom padding keeps clear of a
+     gesture bar */
+  #hud { top: 12px; left: 12px; min-width: 210px; max-height: calc(100vh - 24px);
+         max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain;
+         padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
   #hud h1 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: #e8eef4;
             letter-spacing: .02em; }
   #hud .sub { color: #6b7885; margin-bottom: 9px; font-size: 11px; }
@@ -63,7 +69,11 @@
     #fold { padding: 2px 9px; }
   }
   @media (max-width: 600px) {
-    #hud { top: 8px; left: 8px; right: 8px; min-width: 0; }
+    /* at most 60 % of the height: the cloud — and the crop box being set —
+       stays in sight below the panel, which scrolls */
+    #hud { top: 8px; left: 8px; right: 8px; min-width: 0; max-height: 60vh; max-height: 60dvh; }
+    /* the open panel takes the screen: the help line would cover its end */
+    #hud:not(.folded) ~ #help { display: none; }
     #help { left: 8px; right: 8px; bottom: 8px; text-align: center; }
   }
 </style>
@@ -341,11 +351,25 @@ function parseGlb(buf) {
   if (binOff + binLen > buf.byteLength) throw new Error("the .glb's binary chunk runs past the file");
   var prim = doc.meshes[0].primitives[0];
   if (prim.mode !== undefined && prim.mode !== 4) throw new Error("only triangle meshes are shown");
-  /* positions are drawn as stored: a node that moves the mesh (matrix,
-     rotation, scale, translation) is refused rather than shown wrongly */
-  (doc.nodes || []).forEach(function (nd) {
-    if (nd.mesh === 0 && (nd.matrix || nd.rotation || nd.scale || nd.translation))
-      throw new Error("meshes placed by a node transform are not shown; bake the transform into the positions");
+  /* positions are drawn as stored: if the node holding the mesh, or any of
+     its ancestors, moves it (a non-identity matrix, rotation, scale or
+     translation), the file is refused rather than shown wrongly; identity
+     transforms written out explicitly are fine */
+  var nodes = doc.nodes || [], parent = {};
+  nodes.forEach(function (nd, i) { (nd.children || []).forEach(function (c) { parent[c] = i; }); });
+  function eq(a, b) { for (var k = 0; k < b.length; k++) if (Math.abs(a[k] - b[k]) > 1e-9) return false; return true; }
+  function moves(nd) {
+    if (nd.matrix && !eq(nd.matrix, [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1])) return true;
+    if (nd.rotation && !eq(nd.rotation, [0, 0, 0, 1])) return true;
+    if (nd.scale && !eq(nd.scale, [1, 1, 1])) return true;
+    if (nd.translation && !eq(nd.translation, [0, 0, 0])) return true;
+    return false;
+  }
+  nodes.forEach(function (nd, i) {
+    if (nd.mesh !== 0) return;
+    for (var at = i, hops = 0; at !== undefined && hops <= nodes.length; at = parent[at], hops++)
+      if (moves(nodes[at]))
+        throw new Error("meshes placed by a node transform are not shown; bake the transform into the positions");
   });
   function acc(i, want) {
     var a = doc.accessors[i], v = doc.bufferViews[a.bufferView];
@@ -411,7 +435,14 @@ function cropSetup(data) {
     return [lo - pad, hi + pad];
   });
   $("crop").hidden = false;
-  ["cx0", "cx1", "cy0", "cy1", "cz0", "cz1"].forEach(function (id) { $(id).oninput = cropLabels; });
+  /* the two sliders of an axis never cross, so "lower" stays the lower bound
+     (and their accessible names stay true): each stops one step short of
+     the other */
+  ["x", "y", "z"].forEach(function (ax) {
+    var lo = $("c" + ax + "0"), hi = $("c" + ax + "1");
+    lo.oninput = function () { if (+lo.value > +hi.value - 1) lo.value = +hi.value - 1; cropLabels(); };
+    hi.oninput = function () { if (+hi.value < +lo.value + 1) hi.value = +lo.value + 1; cropLabels(); };
+  });
   cropLabels();
   $("cgo").onclick = cropGo;
   lineProg = gl.createProgram();

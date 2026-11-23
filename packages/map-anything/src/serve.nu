@@ -1158,6 +1158,7 @@ $ `ui.nu`
             ?? ( file_delete ( string_data obp ) ) { T _ → {} F _e → {} }
             : b _m1 ( __mas_write_job sid `mesh_state` `` )
             : b _m2 ( __mas_write_job sid `object_attempt` `` )
+            : b _m3 ( __mas_write_job sid `mesh_attempt` `` )
             ? ( __mas_set_state sid `queued` ) {} { = res 3 }
         } { = res 3 }
     } { = res ? == ( string_len st ) 0 1 2 }
@@ -1243,8 +1244,11 @@ $ `ui.nu`
         ?? ( file_size ( string_data obp ) ) { T z → { = osize z } F _e → {} }
     } {}
     ? >= osize 0 {
+        // the object's url names the request it answers: once another
+        // request replaces it, that url answers 410 instead of the newer one
         : String url ( string_from `/jobs/` )
-        ( string_push_str url id ) ( string_push_str url `/object.glb` )
+        ( string_push_str url id ) ( string_push_str url `/object.glb?attempt=` )
+        ( string_push_str url ( string_data oat ) )
         : String view ( string_from `/view?glb=` )
         ( string_push_str view ( string_data url ) )
         : b _u ( json_obj_set o `url` ( json_str_lit ( string_data url ) ) )
@@ -1356,9 +1360,20 @@ $ `ui.nu`
     ^ r
 }
 
-@ __mas_object Params ps → HttpResponse {
+@ __mas_object HttpRequest req Params ps → HttpResponse {
     : String id ( __mas_param ps `id` )
     ? ( __mas_id_ok ( string_data id ) ) {} { ^ ( __mas_err 400 `bad job id` ) }
+    // ?attempt=: only that request's object, never a later one's
+    ?? ( query_value ( slice_of_str ( string_data . req query ) ) `attempt` ) {
+        T v → {
+            : String want ( string_new )
+            : ~ i k 0
+            ~ & < k ( slice_len [u] v ) < k 32 { ( string_push_char want ( slice_byte v k ) ) = k + k 1 }
+            : String oat ( __mas_read_job ( string_data id ) `object_attempt` )
+            ? ( __mas_eq ( string_data oat ) ( string_data want ) ) {} { ^ ( __mas_err 410 `this object was replaced by a later one` ) }
+        }
+        F → {}
+    }
     : String op ( __mas_jfile ( string_data id ) `object.glb` )
     ?? ( read_file_bytes ( string_data op ) ) {
         F _e → { ^ ( __mas_err 404 `no object for this job (yet)` ) }
@@ -1532,7 +1547,7 @@ $ `ui.nu`
     ( http_app_put a `/api/jobs/:id/files/:name` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_upload rq ps ) } )
     ( http_app_post a `/api/jobs/:id/start` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_start rq ps ) } )
     ( http_app_get a `/jobs/:id/cloud.ply` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_cloud ps ) } )
-    ( http_app_get a `/jobs/:id/object.glb` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_object ps ) } )
+    ( http_app_get a `/jobs/:id/object.glb` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_object rq ps ) } )
     ( http_app_get a `/api/jobs/:id/mesh` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_mesh_get rq ps ) } )
     ( http_app_post a `/api/jobs/:id/mesh` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_mesh_post rq ps ) } )
     ? noauth {} {
