@@ -964,3 +964,8 @@ import B
 #print axioms B.offered_split
 #print axioms B.fresh_conservation
 #print axioms B.recv_steps
+-- Phase B7: the Rc cycle collector's trial-deletion criterion: a white block has no outside handle and
+-- every handle on it is a white block's, so freeing them together leaves nothing dangling
+#print axioms B.trial_eq
+#print axioms B.white_closed
+#print axioms B.collect_safe
