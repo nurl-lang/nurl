@@ -1002,3 +1002,5 @@ import C
 #print axioms C.fnOKB_sound
 #print axioms C.progOKB_sound
 #print axioms C.checked_program_safe
+-- Phase C5: A2's expressions decided
+#print axioms C.checkExpr2_sound
