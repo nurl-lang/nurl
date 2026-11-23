@@ -349,9 +349,6 @@ class Fn:
         # then the result slot; its captures are read out of the environment
         # at the top of the body - A2/Invariant.lean, `Implements`)
         self.vmap, self.rslot, self.caps = None, self.np, []
-        if clo_sig(fn["ret"]) is not None:
-            # (a closure handed back: nurlc may copy it on the way out)
-            raise Unsupported(f"{fn['name']}: a closure as a result")
         self.closure = fn["name"].startswith("__closure_")
         if self.closure:
             kinds, flags = fn.get("kind", {}), fn["flags"]
