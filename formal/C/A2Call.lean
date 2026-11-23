@@ -187,7 +187,10 @@ def callB2 (P : Prog) (D : List Var) (Γ : Ctx) (F : List Var) (f : Nat) (args :
   match P[f]? with
   | some fn =>
     if args.length = fn.params.length ∧ (List.range fn.params.length).all (argOK2 D Γ F fn args) ∧
-        namesFreeB D Γ F fn.params args ∧ callDtorSafeB D Γ fn.params args ∧ regionsB Γ args then
+        namesFreeB D Γ F fn.params args ∧ callDtorSafeB D Γ fn.params args ∧
+        -- (CallT asks the region premise of a through-changing callee only:
+        -- one in the thru-free set, `noThruB`, needs none)
+        (noThruB P f || regionsB Γ args) then
       some (callRes Γ fn args, callPost Γ fn args)
     else none
   | none => none
@@ -204,7 +207,11 @@ theorem callB2_sound {P : Prog} {D : List Var} {Γ : Ctx} {F : List Var} {f : Na
       simp only [Option.some.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl⟩ := h
       refine ⟨⟨fn, hfn, hlen, fun i hi => ?_, namesFreeB_sound hs hnf, callDtorSafeB_sound hs hcd, rfl, rfl,
-        fun _ => regionsB_sound hrg⟩, fn, hfn, rfl⟩
+        fun ht => (by
+          simp only [Bool.or_eq_true] at hrg
+          rcases hrg with h0 | h0
+          · exact absurd ht (noThruB_sound h0)
+          · exact regionsB_sound h0)⟩, fn, hfn, rfl⟩
       have ha := List.all_eq_true.mp hall i (List.mem_range.mpr hi)
       unfold argOK2 at ha
       rw [List.getElem?_eq_getElem hi] at ha
