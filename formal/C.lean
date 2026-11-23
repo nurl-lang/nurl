@@ -8,6 +8,7 @@ import C.A2Rhs
 import C.A2Stmt
 import C.A2Data
 import C.A2Chan
+import C.A2Pack
 import C.A2Call
 import C.A2Panic
 import C.A2Prog
@@ -22,7 +23,7 @@ finite contexts (`C/Join.lean`), C2 subsumption by certificate
 (`C/Prog.lean`, `C.checked_program_safe`). For A2: C5, its expressions
 (`C/A2Expr.lean`); C6, its core right-hand sides with `NoPin` / `DtorSafe`
 decided (`C/A2Rhs.lean`); C7, its core statements with `EndOK` decided
-(`C/A2Stmt.lean`); C8, its struct and enum right-hand sides (`C/A2Data.lean`); C8c, A3.2's lock and A3.4's channel right-hand sides (`C/A2Chan.lean`); C9, its calls, and the
+(`C/A2Stmt.lean`); C8, its struct and enum right-hand sides (`C/A2Data.lean`); C8c, A3.2's lock and A3.4's channel right-hand sides (`C/A2Chan.lean`); C8p, closure literals that capture nothing by name (`C/A2Pack.lean`); C9, its calls, and the
 checker that puts them together, `checkA2` (`C/A2Call.lean`); C10, `CtxWF` / `NameWF` decided and `panic`
 (`C/A2Panic.lean`); C7w, `Weaker` decided and joins by weakening (`C/A2Weaker.lean`: an `ite` whose
 arms end apart, a loop whose round ends weaker than it began); C7x, `exit` by obligations (`C/A2Exit.lean`); C11, its whole programs (`C/A2Prog.lean`,
