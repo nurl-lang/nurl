@@ -37,3 +37,14 @@
   in the environment. `string_captured_by_a_returned_closure_runs_clean` is
   accepted; all 11 must-reject programs whose translation changes are still
   refused.
+- **`tools/ncore/tolean.py` gives a parameter changed through its handle
+  the mode of the change** (AGORA-994). A `Vec` or String parameter that
+  the function clears, truncates, grows or sets elements of, with no
+  `inout` written, was translated as read-only (`inp`), so the change
+  through it was refused. Its mode now comes from the walk's summary:
+  `inout` at the bound of what the function does (`drops`/`mutates` give
+  `.drop`, `reallocs` gives `.realloc`, `ireallocs` gives `.dropIn`). The
+  caller's views end as nurlc ends them, and the callee is checked against
+  that bound. `owner_read_after_an_earlier_operands_call_cleared_it_runs_clean`
+  is accepted; all 17 must-reject programs whose translation changes are
+  still refused.
