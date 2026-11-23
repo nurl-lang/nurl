@@ -29,6 +29,10 @@ def borrowed(f):
     """Does function `f` hand back a value that views what it was handed
     (its summary: `ret_unowned=1`, or `rviews` naming a parameter)?"""
     sm = SUMS.get(f, {})
+    if "ret_owned" in sm:
+        # (its `__ret_owned` marker: it hands over a fresh result; its
+        # `ret_unowned` only says no call needs a per-call ownership answer)
+        return False
     return sm.get("ret_unowned") == "1" or sm.get("rviews", ":") not in (":", "")
 
 
@@ -87,6 +91,10 @@ def lean_ty(t):
         # channel of those is a lock of the glued struct (`Ty.dtor g …`,
         # nurlc's `ChImpl A` with its drop), not translated.
         return f"(.lk (.prod (.vec {chan_elem(t[len('%Channel__'):])}) .int))"
+    if t in ("%str", "str"):
+        # a raw string held in a value (a container's element) is a view
+        # of a buffer someone else owns (MEMORY.md §2.13)
+        return "(.slice .int)"
     if t == "%String":
         return "(.vec .int)"   # a Vec of bytes (formal/A2/Syntax.lean)
     if t.startswith("%Slice__"):
@@ -241,7 +249,8 @@ class Fn:
             changed = False
             for l in self.fn["body"]:
                 w = l.split()
-                if len(w) >= 4 and w[0] == "let" and w[2] == "call" and (w[3] == "string_data" or borrowed(w[3])):
+                if len(w) >= 4 and w[0] == "let" and w[2] == "call" and (
+                        w[3] in ("string_data", "vec_at__str") or borrowed(w[3])):
                     v = int(w[1])
                 elif len(w) >= 4 and w[0] == "let" and w[2] == "use" and w[3].startswith("v") and w[3][1:].isdigit() \
                         and int(w[3][1:]) in views:
@@ -477,6 +486,16 @@ class Fn:
             pre = []
             v, y = self.argvar(ops[0], pre), self.argvar(ops[1], pre)
             s = self.seq(f"(.push {v} {y})", rest)
+            if vec_elem(f, "vec_push__") == "(.slice .int)":
+                # a raw string pushed where it is held in a value: the Vec
+                # keeps a view of it (MEMORY.md §2.13), of the text a binding
+                # owns, or the view a binding holds, copied
+                if ops[1] == "c":
+                    raise Unsupported(f"{self.fn['name']}: a literal string held in a Vec (no static strings in A2)")
+                k = int(ops[1][1:])
+                if self.vlean(k) == "(.vec .int)":
+                    t = self.fresh()
+                    s = f"(.letv {t} (.view {y}) {self.seq(f'(.push {v} {t})', rest)})"
             for t in reversed(pre):
                 s = f"(.letv {t} (.expr (.lit 0)) {s})"
             return s
@@ -562,7 +581,7 @@ class Fn:
             # a bounds-checked element read; only a scalar element, whose
             # value is copied out, is translated (a lent aggregate element
             # needs the borrow the IR's next line takes, not yet followed)
-            if vec_elem(f, "vec_at__") != ".int":
+            if vec_elem(f, "vec_at__") not in (".int", "(.slice .int)"):
                 raise Unsupported(f"{self.fn['name']}: vec_at of a non-scalar element")
             pre = []
             i = self.operand(ops[1], pre)
