@@ -87,6 +87,15 @@ theorem oblBlk_ok {ξ : Exits} {Δ : Ctx} {E : Obl} {D : List Var} (hΔ : Suppor
   | succ m =>
     exact h (m, Γe) (List.mem_filterMap.mpr ⟨(m + 1, Γe), he, rfl⟩)
 
+/-- With no exit of the block's own, the block's exits are its body's, one
+    level up, whatever its end. -/
+theorem oblBlk_noZero {ξ : Exits} {Δ : Ctx} {E : Obl} (hz : ∀ e ∈ E, e.1 ≠ 0) (h : OblOK ξ (oblBlk E)) :
+    OblOK (ξ.blk Δ) E := by
+  intro ⟨n, Γe⟩ he
+  cases n with
+  | zero => exact absurd rfl (hz _ he)
+  | succ m => exact h (m, Γe) (List.mem_filterMap.mpr ⟨(m + 1, Γe), he, rfl⟩)
+
 /-- AGORA-980 follow-up: a block's end joined with the contexts its own
     exits (`0`) leave from, as an `ite`'s arms are joined. -/
 def blkJoin (Δ : Ctx) : Obl → Ctx
@@ -244,6 +253,27 @@ structure XR where
   E : Obl
   tail : Option (Nat × Ctx)
 
+/-- AGORA-994: the exit a block ends in, one level up: its body's, when the
+    body ends in an exit further out and has no exit of the block's own. -/
+def blkTail (r : XR) : Option (Nat × Ctx) :=
+  match r.tail with
+  | some (m + 1, Γe) => if r.E.all (fun e => e.1 != 0) then some (m, Γe) else none
+  | _ => none
+
+theorem blkTail_some {r : XR} {n : Nat} {Γe : Ctx} (h : blkTail r = some (n, Γe)) :
+    r.tail = some (n + 1, Γe) ∧ ∀ e ∈ r.E, e.1 ≠ 0 := by
+  unfold blkTail at h
+  split at h
+  · rename_i m Γ0 ht
+    split at h
+    · rename_i hall
+      simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+      refine ⟨ht, fun e he => ?_⟩
+      have := List.all_eq_true.mp hall e he
+      simpa using this
+    · cases h
+  · cases h
+
 def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option XR
   | Γ, _, .exit n => if exitToB D Γ Γ then some ⟨Γ, [(n, Γ)], some (n, Γ)⟩ else none
   | Γ, F, .seq a b =>
@@ -264,7 +294,10 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
     | none =>
       match checkX P R C D Γ F s with
       | some r =>
-        if oblBlkOKB D r.Δ r.E then some ⟨r.Δ, oblBlk r.E, none⟩
+        if oblBlkOKB D r.Δ r.E then
+          -- (AGORA-994: a body with no exit of the block's own that ends in an
+          -- exit further out makes the block end in it, one level up)
+          some ⟨r.Δ, oblBlk r.E, blkTail r⟩
         -- (AGORA-980 follow-up: an exit of the block from a context the end
         -- may be weakened to, `Exits.blk`: the end joined with the exits',
         -- as an `ite`'s arms are; a `return` from inside a loop beside a
@@ -475,14 +508,19 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
         split at h
         · rename_i hb
           simp only [Option.some.injEq] at h; subst h
-          obtain ⟨s0, e0, t0, _⟩ := ih hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr0
-          refine ⟨s0, fun e he => ?_, fun ξ hξ => .block (t0 _ (oblBlk_ok s0 e0 hb hξ)), fun n Γe ht => (by cases ht)⟩
-          obtain ⟨e', he', hm⟩ := List.mem_filterMap.mp he
-          cases hn : e'.1 with
-          | zero => simp [hn] at hm
-          | succ m =>
-            simp only [hn, Option.some.injEq] at hm; subst hm
-            exact e0 e' he'
+          obtain ⟨s0, e0, t0, tl0⟩ := ih hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr0
+          refine ⟨s0, fun e he => ?_, fun ξ hξ => .block (t0 _ (oblBlk_ok s0 e0 hb hξ)), fun n Γe ht => ?_⟩
+          · obtain ⟨e', he', hm⟩ := List.mem_filterMap.mp he
+            cases hn : e'.1 with
+            | zero => simp [hn] at hm
+            | succ m =>
+              simp only [hn, Option.some.injEq] at hm; subst hm
+              exact e0 e' he'
+          · -- the block ends in its body's exit, one level up
+            obtain ⟨ht0, hz⟩ := blkTail_some ht
+            obtain ⟨sΓ, hmem, hre⟩ := tl0 (n + 1) Γe ht0
+            refine ⟨sΓ, List.mem_filterMap.mpr ⟨(n + 1, Γe), hmem, rfl⟩, fun Δ' hΔ' hto ξ hξ => ?_⟩
+            exact .block (hre Δ' hΔ' hto _ (oblBlk_noZero hz hξ))
         · split at h
           · rename_i hj
             simp only [Bool.and_eq_true] at hj
