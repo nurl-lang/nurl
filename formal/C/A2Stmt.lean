@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL` and `insert`, whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert` and `letrec`, whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -456,6 +456,18 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
         | none => none
       else none
     | none => none
+  | Γ, F, .letrec x f s =>
+    match P[f]? with
+    | some fn =>
+      if s.src ∧ Γ x = none ∧ x ∉ F ∧ fn.params = [] ∧ fn.resTy = .int ∧ fn.resOwn = false then
+        match C Γ F f [] with
+        | some (E, Γ1) =>
+          match checkStmt2 P R C D (setE Γ1 x E) F s with
+          | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
+          | none => none
+        | none => none
+      else none
+    | none => none
   | Γ, F, .scope x s =>
     match Γ x with
     | some E =>
@@ -716,6 +728,31 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
             exact ⟨.scopeL ⟨E, hE, hm, ht, hti, hlive⟩ hxF t0 (endOK2B_sound s0 hend)
               (keepOutB_sound hs s0 hko) (ctxWF2B_sound s0 hwf) (nameWFB_sound s0 hnw)
               (freshOKB_sound s0 hfr), supported2_exitScope s0 x⟩
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  | letrec x f s ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i fn hfn
+      split at h
+      · rename_i hc
+        obtain ⟨hsrc, hx, hF, hp, hr, ho⟩ := hc
+        split at h
+        · rename_i E Γ1 hcall
+          split at h
+          · rename_i Δ0 h0
+            split at h
+            · rename_i he
+              simp only [Option.some.injEq] at h; subst h
+              obtain ⟨hct, hs1⟩ := hC Γ F f [] E Γ1 hs (fun a ha => by simp at ha) hcall
+              obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x) (supported2_setE hs1 (hD x (by simp [Stmt.vars])) E)
+                (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+              exact ⟨.letrec hsrc hx hF hfn hp hr ho hct t0 (endOK2B_sound s0 he),
+                supported2_exitScope s0 x⟩
+            · cases h
           · cases h
         · cases h
       · cases h
