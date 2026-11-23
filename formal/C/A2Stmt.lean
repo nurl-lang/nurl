@@ -434,10 +434,12 @@ theorem thruClosedB_sound {P : Prog} {S : List Nat} (hc : thruClosedB P S = true
     simp only [thruOKFn, hP, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at this
     exact this.2 _ hg
 
-/-- The candidate thru-free set: every index, filtered once per function. -/
+/-- The candidate thru-free set: every index, filtered once per function,
+    until a round removes nothing (its fixpoint; `thruClosedB` checks the
+    result, so where it stops needs no proof). -/
 def thruFreeIter (P : Prog) : Nat → List Nat → List Nat
   | 0, S => S
-  | n + 1, S => thruFreeIter P n (S.filter (thruOKFn P S))
+  | n + 1, S => let S' := S.filter (thruOKFn P S); if S'.length = S.length then S else thruFreeIter P n S'
 
 def thruFreeSet (P : Prog) : List Nat := thruFreeIter P P.length (List.range P.length)
 
