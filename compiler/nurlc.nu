@@ -52117,7 +52117,11 @@ unsafe @ __src_has_raw_ptr s text → b {
                 ? > ( nurl_str_to_int ( nurl_sym_get2 syms __mw `__depth` ) ) __pd {
                     : ~ s __of ( mem_udrop_flag_get syms cg __mw )
                     : s __cf ( mem_udrop_flag_get syms cg ptr )
-                    ? & __mkey != 0 ( nurl_str_len __mnk ) {
+                    // (…keyed only where the owner holds a value of this
+                    // binding's type: an option owner behind a payload arm is
+                    // keyed by its payload, so it is taken over as before.)
+                    : s __mwt ( nurl_sym_get syms ( nurl_sym_get2 syms __mw `__bname` ) )
+                    ? & & __mkey != 0 ( nurl_str_len __mnk ) & != 0 ( nurl_str_len __mwt ) ( seq ( nurl_llty __mwt ) ( nurl_llty ty ) ) {
                         : s __mok ( mem_ud_ident_key cg ty ( __ud_load cg ty __mw ) )
                         ? != 0 ( nurl_str_len __mok ) {
                             : s __meq ( nurl_cg_reg cg )
