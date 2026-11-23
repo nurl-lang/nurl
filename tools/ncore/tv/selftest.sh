@@ -20,4 +20,12 @@ mut no_flag_clear_on_move 'if ($0 ~ /store i1 0, i1\*/ && !c++) next; print'
 mut old_value_not_released 'if ($0 ~ /call void @__dropif_/ && !c++) next; print'
 mut last_release_missing 'if ($0 ~ /call void @__dropif_/) { n++; if (n==2) next }; print'
 mut released_twice 'print; if ($0 ~ /call void @__dropif_/) { n++; if (n==3) { sub(/^/, ""); print "  store i1 1, i1* %r4"; print } }'
+# every release of f deleted: f must not validate (its owning slots are
+# found from their types, not from the drops being checked)
+awk "$fn{m=1} m && /^}/{m=0} {if (m && \$0 ~ /call void @__dropif_/) next; print}" "$TMP/a.ll" > "$TMP/none.ll"
+if python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/none.ll" -v | grep -q "__nurl_fn.f[: ]"; then
+  echo "ok: all_releases_deleted not validated"
+else
+  echo "FAIL: all_releases_deleted validated"; fail=1
+fi
 exit $fail
