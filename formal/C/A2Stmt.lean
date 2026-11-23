@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct or its own destructor type) `scopeD` (a binding of its own destructor type) `takeB`, `editB` (view-free elements) and `editBV` (elements that hold views but no closure, through an `edit true`) and `callc`, whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct or its own destructor type) `scopeD` (a binding of its own destructor type) `takeB`, `editB` (view-free elements) and `editBV` (elements that hold views but no closure, through an `edit true`) `callc` and `callcE`, whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -784,6 +784,101 @@ theorem recvApartB_sound {zs : List Var} {Ec : Entry} (h : recvApartB zs Ec = tr
   simp only [Bool.or_eq_true, decide_eq_true_eq] at this
   exact this.resolve_left hb
 
+/-- A function of the set `S` changes no elements through a borrow and
+    calls only functions of `S`. -/
+def thruOKFn (P : Prog) (S : List Nat) (f : Nat) : Bool :=
+  match P[f]? with
+  | some fn => !fn.body.hasThru && fn.body.calls.all fun g => decide (g ∈ S)
+  | none => false
+
+/-- `S` is closed: each of its functions is `thruOKFn`. -/
+def thruClosedB (P : Prog) (S : List Nat) : Bool := S.all (thruOKFn P S)
+
+/-- A closed set holds no function that changes elements through a borrow,
+    directly or through a call (`ThruFn`). -/
+theorem thruClosedB_sound {P : Prog} {S : List Nat} (hc : thruClosedB P S = true) :
+    ∀ {f : Nat}, ThruFn P f → f ∉ S := by
+  intro f ht
+  induction ht with
+  | here hP hb =>
+    intro hf
+    simp only [thruClosedB, List.all_eq_true] at hc
+    have := hc _ hf
+    simp only [thruOKFn, hP, hb, Bool.not_true, Bool.false_and] at this
+    cases this
+  | call hP hg _ ih =>
+    intro hf
+    apply ih
+    simp only [thruClosedB, List.all_eq_true] at hc
+    have := hc _ hf
+    simp only [thruOKFn, hP, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at this
+    exact this.2 _ hg
+
+/-- The candidate thru-free set: every index, filtered once per function. -/
+def thruFreeIter (P : Prog) : Nat → List Nat → List Nat
+  | 0, S => S
+  | n + 1, S => thruFreeIter P n (S.filter (thruOKFn P S))
+
+def thruFreeSet (P : Prog) : List Nat := thruFreeIter P P.length (List.range P.length)
+
+/-- `¬ ThruFn P σ`, decided: `σ` is in the thru-free set, and that set is
+    closed (checked, so its construction need not be trusted). -/
+def noThruB (P : Prog) (σ : Nat) : Bool :=
+  decide (σ ∈ thruFreeSet P) && thruClosedB P (thruFreeSet P)
+
+theorem noThruB_sound {P : Prog} {σ : Nat} (h : noThruB P σ = true) : ¬ ThruFn P σ := by
+  simp only [noThruB, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact fun ht => thruClosedB_sound h.2 ht h.1
+
+/-- `Cross.send.Le q`, decided. -/
+def sendLeB (q : Cross) : Bool :=
+  decide (Cross.send.rank ≤ q.rank) && decide (Cross.send.drops = q.drops)
+
+theorem sendLeB_sound {q : Cross} (h : sendLeB q = true) : Cross.send.Le q := by
+  simp only [sendLeB, Bool.and_eq_true, decide_eq_true_eq] at h; exact h
+
+/-- `callcE`'s receiver: the method takes the environment `inout` at some
+    bound (returned), the receiver is the closure itself, at least `send`,
+    and the other arguments depend only on bound names; or it takes the
+    receiver as its one `sink` argument, a dropping closure with nothing
+    held, owned and live, returning nothing owned. -/
+def callcEArgB (Γ : Ctx) (Ec : Entry) (ms : List Nat) (q : Cross) (sig : Fn) (zs : List Var) : Option Eff :=
+  match sig.params with
+  | (.inout b, .fn ms' q') :: _ =>
+    if decide (ms' = ms) && decide (q' = q) && decide (Ec.ty = .fn ms q) && sendLeB q &&
+        zs.all (fun z => (argE Γ z).vdeps.all fun d => (Γ d.root).isSome) then some b else none
+  | [(.sink, t)] =>
+    if decide (t = Ec.ty) && zs.isEmpty && Ec.vdeps.isEmpty && decide (Ec.mode = .own) && Ec.live &&
+        q.drops && !sig.resOwn then some .none else none
+  | _ => none
+
+theorem callcEArgB_sound {Γ : Ctx} {Ec : Entry} {ms : List Nat} {q : Cross} {sig : Fn} {zs : List Var}
+    {b : Eff} (h : callcEArgB Γ Ec ms q sig zs = some b) :
+    (∃ ps, sig.params = (.inout b, .fn ms q) :: ps ∧ Ec.ty = .fn ms q ∧ Cross.send.Le q ∧
+        ∀ z ∈ zs, ∀ d ∈ (argE Γ z).vdeps, (Γ d.root).isSome) ∨
+      (sig.params = [(.sink, Ec.ty)] ∧ zs = [] ∧ Ec.vdeps = [] ∧ Ec.mode = .own ∧ Ec.live = true ∧
+        q.drops = true ∧ sig.resOwn = false) := by
+  unfold callcEArgB at h
+  split at h
+  · rename_i b0 ms' q' ps hp
+    split at h
+    · rename_i hc
+      simp only [Option.some.injEq] at h; subst h
+      simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hc
+      obtain ⟨⟨⟨⟨hm, hq⟩, hty⟩, hle⟩, hz⟩ := hc
+      subst hm; subst hq
+      exact Or.inl ⟨ps, hp, hty, sendLeB_sound hle, fun z hz' d hd => hz z hz' d hd⟩
+    · cases h
+  · rename_i t hp
+    split at h
+    · rename_i hc
+      simp only [Bool.and_eq_true, decide_eq_true_eq, List.isEmpty_iff, Bool.not_eq_true'] at hc
+      obtain ⟨⟨⟨⟨⟨⟨ht, hzs⟩, hv⟩, hm⟩, hl⟩, hd⟩, ho⟩ := hc
+      subst ht
+      exact Or.inr ⟨hp, hzs, hv, hm, hl, hd, ho⟩
+    · cases h
+  · cases h
+
 def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, _, .skip => some Γ
   | Γ, F, .seq a b =>
@@ -986,6 +1081,34 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
               | none => none
             else none
           else none
+        | none => none
+      | none => none
+    | none => none
+  | Γ, F, .callcE x c j zs k =>
+    match Γ c with
+    | some Ec =>
+      match fnTysOf Ec.ty.undtor with
+      | some (ms, q) =>
+        match ms[j]? with
+        | some σ =>
+          match P[σ]? with
+          | some sig =>
+            if k.src ∧ Γ x = none ∧ x ∉ F ∧ sig.lends = [] ∧ sig.rholds = [] ∧ sig.outHolds = [] ∧
+                (sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) then
+              if (sendLeB q || q.drops) && canDoB2 Ec.mode .replace && noPinB D Γ c &&
+                  dtorSafeB D Γ .replace false c && noThruB P σ then
+                match callcEArgB Γ Ec ms q sig zs with
+                | some _ =>
+                  match C (kill .replace false c Γ) F σ (c :: zs) with
+                  | some (E, Γ1) =>
+                    match checkStmt2 P R C D (kill .replace false c (setE Γ1 x E)) F k with
+                    | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
+                    | none => none
+                  | none => none
+                | none => none
+              else none
+            else none
+          | none => none
         | none => none
       | none => none
     | none => none
@@ -1473,6 +1596,57 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
                       (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
                     exact ⟨.callc hsrc hx hF hEc (fnTysOf_some hms) hj hsig hhd hout hct (recvApartB_sound hap) t0
                       (endOK2B_sound s0 he) hdk, supported2_exitScope s0 x⟩
+                  · cases h
+                · cases h
+              · cases h
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  | callcE x c j zs k ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i Ec hEc
+      split at h
+      · rename_i ms q hms
+        split at h
+        · rename_i σ hj
+          split at h
+          · rename_i sig hsig
+            split at h
+            · rename_i hc
+              obtain ⟨hsrc, hx, hF, hle, hrh, hoh, hdk⟩ := hc
+              split at h
+              · rename_i hc2
+                simp only [Bool.and_eq_true, Bool.or_eq_true] at hc2
+                obtain ⟨⟨⟨⟨hq, hcd⟩, hnp⟩, hds⟩, hnt⟩ := hc2
+                split at h
+                · rename_i b0 harg
+                  split at h
+                  · rename_i E Γ1 hcall
+                    split at h
+                    · rename_i Δ0 h0
+                      split at h
+                      · rename_i he
+                        simp only [Option.some.injEq] at h; subst h
+                        have hcD : c ∈ D := hD c (by simp [Stmt.vars])
+                        have hxD : x ∈ D := hD x (by simp [Stmt.vars])
+                        obtain ⟨hct, hs1⟩ := hC _ F σ (c :: zs) E Γ1 (supported2_kill hs .replace false c)
+                          (fun a ha => hD a (by simp [Stmt.vars] at ha ⊢; rcases ha with ha | ha <;> simp [ha])) hcall
+                        obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x)
+                          (supported2_kill (supported2_setE hs1 hxD E) .replace false c)
+                          (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+                        have hq' : Cross.send.Le q ∨ q.drops = true := by
+                          rcases hq with hq | hq
+                          · exact Or.inl (sendLeB_sound hq)
+                          · exact Or.inr hq
+                        exact ⟨.callcE (b := b0) hsrc hx hF hEc (fnTysOf_some hms) (canDoB2_sound hcd) hq' hj hsig
+                          (callcEArgB_sound harg) hle hrh hoh (noPinB_sound hs hnp) (dtorSafeB_sound hs hds) hct t0
+                          (endOK2B_sound s0 he) (noThruB_sound hnt) hdk, supported2_exitScope s0 x⟩
+                      · cases h
+                    · cases h
                   · cases h
                 · cases h
               · cases h
