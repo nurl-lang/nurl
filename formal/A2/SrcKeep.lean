@@ -26,9 +26,13 @@ theorem CtxRel.domTy {Γ Γ' : Ctx} (h : CtxRel Γ Γ') : DomTy Γ Γ' := ⟨h.d
 A borrowed parameter may hold a `Vec` whose held views are anchored by an
 unfrozen root (`HeldAnch`). Source typing still keeps every borrowed
 parameter's entry where such a root is none of the statement's killable
-names (`Stmt.killVars`): every name a source statement kills is one, so it
-is no held root (`RootbAnchRS.noHeld`), which is what the kills ask
-(`HeldSpared`). -/
+names (`Stmt.killVars`): every name a source statement kills directly is
+one, so it is no held root (`RootbAnchRS.noHeld`), which is what the kills
+ask (`HeldSpared`). A call kills more: a root a closure argument changes by
+name, which need not be an argument. That one is no killable name; the
+call's own typing covers it, its anchors restricted to the explicit
+arguments (`CallT.ctxRelS`, `RootbAnchRS Γ F args`) and `NamesFree`'s last
+conjunct saying the change spares every held view (`CallA.post_rootb`). -/
 
 theorem RootbAnchRS.toRH {Γ : Ctx} {F V : List Var} (h : RootbAnchRS Γ F V) : RootbAnchRH Γ F :=
   fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp id (Or.imp id fun h' => h'.1)

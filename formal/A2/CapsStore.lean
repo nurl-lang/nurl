@@ -1,5 +1,6 @@
 import A2.CapClause
 import A2.Basic
+import A2.Steps
 
 /-! A2 — AGORA-969 (AGORA-963 step 3, the store half): **the store part of
 the closure-capture clause, kept by the store operations a step makes.**
@@ -133,10 +134,25 @@ theorem ValCapsInp.lend {V : Val} {w : Var} (h : ValCapsInp V w) : ValCapsInp (l
 
 /-! ### Binding a call's parameters, and a lock scope's end -/
 
-/-- The values `BindParams` writes are the arguments' values, an `in`
-    argument's lent: they capture `w` as the store did. -/
-theorem BindParams.capsInp {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
-    {w : Var} (hb : BindParams m ps as base i m') (h : CapsInpAt m w) : CapsInpAt m' w := by
+/-- The slot half of `CapsInpAt`. -/
+def SlotsCaps (m : Mem) (w : Var) : Prop := ∀ x o V, m.st x = some ⟨o, some V⟩ → ValCapsInp V w
+
+theorem SlotsCaps.slot {m : Mem} {w : Var} (h : SlotsCaps m w) {x : Var} {o : Bool} {V : Val}
+    (hx : m.st x = some ⟨o, some V⟩) : ValCapsInp V w := h x o V hx
+
+theorem SlotsCaps.set {m : Mem} {w : Var} (h : SlotsCaps m w) {x : Var} {o : Bool} {v : Option Val}
+    (hv : ∀ V, v = some V → ValCapsInp V w) : SlotsCaps (m.set x ⟨o, v⟩) w := by
+  intro y o' V hy
+  by_cases hyx : y = x
+  · subst hyx; simp at hy; obtain ⟨_, rfl⟩ := hy; exact hv V rfl
+  · simp [upd_ne _ _ hyx] at hy; exact h.slot hy
+
+theorem SlotsCaps.set_none {m : Mem} {w : Var} (h : SlotsCaps m w) (x : Var) (o : Bool) :
+    SlotsCaps (m.set x ⟨o, none⟩) w :=
+  h.set (fun _ e => by cases e)
+
+theorem BindParams.slotsCaps {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
+    {w : Var} (hb : BindParams m ps as base i m') (h : SlotsCaps m w) : SlotsCaps m' w := by
   induction hb with
   | nil => exact h
   | @inp m _ _ _ a _ _ _ sl v ha hl _ ih =>
@@ -148,6 +164,11 @@ theorem BindParams.capsInp {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var
     · subst hl; exact (h.slot ha).lend
   | sink ha _ ih => exact ih ((h.set_none _ _).set (fun V e => by cases e; exact h.slot ha))
   | inout _ ih => exact ih h
+
+/-- ... and the blocks stay as they were. -/
+theorem BindParams.capsInp {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
+    {w : Var} (hb : BindParams m ps as base i m') (h : CapsInpAt m w) : CapsInpAt m' w :=
+  ⟨hb.slotsCaps h.1, fun k bl V hk hp => h.2 k bl V (hb.blk ▸ hk) hp⟩
 
 /-- A lock scope's end gives `x`'s value back to the block, or drops it:
     the value goes from the slot into the block, or nowhere. -/

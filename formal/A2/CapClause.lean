@@ -8,12 +8,14 @@ so a call through a package never hands it to an `inout` parameter of the
 code (`CapInout`), and a step names it as no new killable name. By
 claude-expert. -/
 
-theorem capPos {zs : List Var} {cs : List (Var × PMode × Ty)} {n : Nat} {pre : List (PMode × Ty)}
-    {i : Nat} {v : Var} {pm : PMode × Ty}
+/-- AGORA-937 B2 (AGORA-963): an opened call's argument at a capture's
+    position is a capture, whose parameter is its own mode and type. -/
+theorem capPos_any {zs : List Var} {cs : List (Var × PMode × Ty)} {n : Nat} {pre : List (PMode × Ty)}
+    {i : Nat} {v : Var} {pm pt : PMode × Ty}
     (hlen : pre.length = zs.length) (hi : zs.length + 1 ≤ i)
     (hv : (n :: zs ++ cs.map (·.1))[i]? = some v)
-    (hp : (pm :: pre ++ cs.map (·.2))[i]? = some (PMode.inout b, t)) :
-    ∃ q ∈ cs, q.1 = v ∧ q.2.1 = PMode.inout b := by
+    (hp : (pm :: pre ++ cs.map (·.2))[i]? = some pt) :
+    ∃ q ∈ cs, q.1 = v ∧ q.2 = pt := by
   obtain ⟨k, rfl⟩ : ∃ k, i = k + 1 := ⟨i - 1, by omega⟩
   have hk : zs.length ≤ k := by omega
   have hk' : pre.length ≤ k := by omega
@@ -25,7 +27,17 @@ theorem capPos {zs : List Var} {cs : List (Var × PMode × Ty)} {n : Nat} {pre :
   | some q =>
     rw [hq] at hv hp
     simp only [Option.map_some, Option.some.injEq] at hv hp
-    exact ⟨q, List.mem_of_getElem? hq, hv, by rw [hp]⟩
+    exact ⟨q, List.mem_of_getElem? hq, hv, hp⟩
+
+/-- ... the mode alone. -/
+theorem capPos {zs : List Var} {cs : List (Var × PMode × Ty)} {n : Nat} {pre : List (PMode × Ty)}
+    {i : Nat} {v : Var} {pm : PMode × Ty}
+    (hlen : pre.length = zs.length) (hi : zs.length + 1 ≤ i)
+    (hv : (n :: zs ++ cs.map (·.1))[i]? = some v)
+    (hp : (pm :: pre ++ cs.map (·.2))[i]? = some (PMode.inout b, t)) :
+    ∃ q ∈ cs, q.1 = v ∧ q.2.1 = PMode.inout b := by
+  obtain ⟨q, hq, h1, h2⟩ := capPos_any hlen hi hv hp
+  exact ⟨q, hq, h1, by rw [h2]⟩
 
 theorem CapInout.not_held {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt}
     (hcl : HeldCapsInp m Γ F s) (hcodes : MemCodes P m)

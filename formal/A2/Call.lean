@@ -1327,7 +1327,11 @@ theorem callPostAux_rootb {Γ0 : Ctx} {fn : Fn} {args : List Var} {p : Var} {Ep 
 /-- A borrowed parameter of the caller is untouched by the call's context
     change: what it borrows and reads by name is lent out, what the call
     moves or changes is not, and what the call's closures change it reaches
-    only by name. -/
+    only by name, or (AGORA-937 B3) through a held view (`HeldAnch`) that
+    the change spares (`NamesFree`'s last conjunct). That is a separate
+    rule from the one that keeps an unfrozen held root out of the call's
+    arguments (`CallA.anch`, `RootbAnchRS Γ F args`), which covers what the
+    call moves or changes directly. -/
 theorem _root_.A2.CallA.post_rootb (h : CallA Γ F fn args) {p : Var} {Ep : Entry} (hp : Γ p = some Ep)
     (hrb : Ep.mode = .rootb) : callPost Γ fn args p = some Ep := by
   have hanch := h.anch p Ep hp hrb

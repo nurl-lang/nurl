@@ -17,24 +17,6 @@ theorem SlotsCaps.remove {m : Mem} {w : Var} (h : SlotsCaps m w) (x : Var) : Slo
   · subst hyx; simp at hy
   · simp [upd_ne _ _ hyx] at hy; exact h.slot hy
 
-theorem SlotsCaps.set_none {m : Mem} {w : Var} (h : SlotsCaps m w) (x : Var) (o : Bool) :
-    SlotsCaps (m.set x ⟨o, none⟩) w :=
-  h.set (fun _ e => by cases e)
-
-theorem BindParams.slotsCaps {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
-    {w : Var} (hb : BindParams m ps as base i m') (h : SlotsCaps m w) : SlotsCaps m' w := by
-  induction hb with
-  | nil => exact h
-  | @inp m _ _ _ a _ _ _ sl v ha hl _ ih =>
-    refine ih (h.set (fun V e => ?_))
-    cases e
-    obtain ⟨o, val⟩ := sl
-    cases o <;> cases val <;> simp [lendSlot] at hl
-    · subst hl; exact h.slot ha
-    · subst hl; exact (h.slot ha).lend
-  | sink ha _ ih => exact ih ((h.set_none _ _).set (fun V e => by cases e; exact h.slot ha))
-  | inout _ ih => exact ih h
-
 theorem res_ok {m1 : Mem} {s0 : Stmt} {w : Var} (h : SlotsCaps m1 w) :
     (∀ m' s', Res.ok m1 s0 = .ok m' s' → SlotsCaps m' w) ∧ (∀ m', Res.ok m1 s0 = .panic m' → SlotsCaps m' w) :=
   ⟨fun _ _ e => (by cases e; exact h), fun _ e => (by cases e)⟩

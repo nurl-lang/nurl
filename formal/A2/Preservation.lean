@@ -641,12 +641,8 @@ theorem anch_keepIn {Γ Γ' : Ctx} {F V : List Var} {k k' : Stmt} (hk : Keep Γ 
     (hnew : ∀ p E, Γ' p = some E → E.mode = .rootb → p ∉ k'.spine → AnchoredS Γ' E F k'.killVars) :
     ∀ p E, Γ' p = some E → E.mode = .rootb → p ∉ k'.spine → AnchoredS Γ' E F (k'.killVars ++ V) := by
   intro p E hp hm hps
-  obtain ⟨hps0, E0, h0⟩ := hk.2.1 p E hp hps
-  obtain ⟨_, E', h', hm', _, hrb⟩ := hk.1 p E0 h0 hps0
-  rw [hp] at h'; cases h'
-  have hm0 : E0.mode = .rootb := by rw [← hm']; exact hm
-  have hE := hrb hm0; subst hE
-  exact (hnew p _ hp hm hps).union (hold p _ h0 hm0 hps0)
+  obtain ⟨h0, hps0⟩ := hk.rootb_back hp hm hps
+  exact (hnew p _ hp hm hps).union (hold p _ h0 hm hps0)
 
 /-- AGORA-937 (B2): leaving `x`'s scope keeps every other binding's type. -/
 theorem AnchoredS.exitScope {Γ : Ctx} {E : Entry} {F V : List Var} {x : Var} (h : AnchoredS Γ E F V)
@@ -774,12 +770,8 @@ theorem DtorIn.of_off {Γ : Ctx} {x : Var} {s : Stmt} (h : ∀ E, Γ x = some E 
 /-- A borrowed parameter outside the new running scopes was outside the old
     ones, with the same entry. -/
 theorem Keep.rootb_old {Γ Γ' : Ctx} {k k' : Stmt} (hk : Keep Γ Γ' k k') {p : Var} {E : Entry}
-    (hp : Γ' p = some E) (hm : E.mode = .rootb) (hps : p ∉ k'.spine) : p ∉ k.spine ∧ Γ p = some E := by
-  obtain ⟨hps0, E0, h0⟩ := hk.2.1 p E hp hps
-  obtain ⟨_, E', h', hm', _, hrb⟩ := hk.1 p E0 h0 hps0
-  rw [hp] at h'; cases h'
-  rw [← hrb (by rw [← hm']; exact hm)] at h0
-  exact ⟨hps0, h0⟩
+    (hp : Γ' p = some E) (hm : E.mode = .rootb) (hps : p ∉ k'.spine) : p ∉ k.spine ∧ Γ p = some E :=
+  (hk.rootb_back hp hm hps).symm
 
 /-- A frame around a step: what the frame binds (`b`) was bound before the
     step too, so the old frame says a borrowed parameter outside it does not
@@ -2979,12 +2971,8 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             -- AGORA-937 (B2): a borrowed parameter off the spine was there
             -- before the step, with this entry (`Keep`), so held anchors at
             -- none of `b`'s variables either
-            obtain ⟨hps0, E0, h0⟩ := hk.2.1 p E hp hps
-            obtain ⟨_, E', h', hm', _, hrb⟩ := hk.1 p E0 h0 hps0
-            rw [hp] at h'; cases h'
-            have hm0 : E0.mode = .rootb := by rw [← hm']; exact hm
-            have hE := hrb hm0; subst hE
-            exact (hi'.anch p _ hp hm hps).union ((hi.anch p _ h0 hm0 hps0).anti fun v hv => by
+            obtain ⟨h0, hps0⟩ := hk.rootb_back hp hm hps
+            exact (hi'.anch p _ hp hm hps).union ((hi.anch p _ h0 hm hps0).anti fun v hv => by
               simp [Stmt.killVars, hv]) }, hnv, hk, hfz⟩
       simp only [Stmt.vars, List.mem_append] at hv
       rcases hv with hv | hv
@@ -4864,18 +4852,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             · exact hi'.nvS v hv
           nvF := fun v hv => Nat.lt_of_lt_of_le (hi.nvF v hv) hnv
           anch := fun p E hp hm hps => by
-            obtain ⟨hps0, E0, h0⟩ := hk.2.1 p E hp hps
-            obtain ⟨_, E', h', hm', _, hrb⟩ := hk.1 p E0 h0 hps0
-            rw [hp] at h'; cases h'
-            have hm0 : E0.mode = .rootb := by rw [← hm']; exact hm
-            have hE := hrb hm0; subst hE
+            obtain ⟨h0, hps0⟩ := hk.rootb_back hp hm hps
             -- AGORA-937 B2 (AGORA-963): a held root is no new killable name of
             -- the inner step (`Step.held_not_killVars`, the closure-capture
             -- clause), and keeps its type outside the running scopes (`Keep`)
             intro d hd hb
             by_cases hF : d.root ∈ F
             · exact Or.inl hF
-            rcases hi.anch p E h0 hm0 (by simpa [Stmt.spine] using hps0) d hd hb with hF' | ⟨hha, hnk, Er, hEr, hhv⟩
+            rcases hi.anch p E h0 hm (by simpa [Stmt.spine] using hps0) d hd hb with hF' | ⟨hha, hnk, Er, hEr, hhv⟩
             · exact absurd hF' hF
             have hlt : d.root < m.nv := hi.nvSt d.root (by rw [← hi.dom, hEr]; rfl)
             have hnk' : d.root ∉ k.killVars := fun h => hnk (by simp [Stmt.killVars, h])
@@ -4883,7 +4867,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             obtain ⟨_, Er', hEr', _, hty, _⟩ := hk.1 d.root Er hEr hns
             refine Or.inr ⟨hha, fun hin => ?_, Er', hEr', by rw [hty]; exact hhv⟩
             have := Step.held_not_killVars hst' (hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv)
-              hcd h0 hm0 (by simpa [Stmt.spine] using hps0) hd hb hha hF hnk' hlt
+              hcd h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hF hnk' hlt
             exact this (by simpa [Stmt.killVars] using hin)
           spineNd := hi'.spineNd
           spineDom := hi'.spineDom
@@ -5006,18 +4990,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             · exact hi'.nvS v hv
           nvF := fun v hv => Nat.lt_of_lt_of_le (hi.nvF v hv) hnv
           anch := fun p E hp hm hps => by
-            obtain ⟨hps0, E0, h0⟩ := hk.2.1 p E hp hps
-            obtain ⟨_, E', h', hm', _, hrb⟩ := hk.1 p E0 h0 hps0
-            rw [hp] at h'; cases h'
-            have hm0 : E0.mode = .rootb := by rw [← hm']; exact hm
-            rw [hrb hm0]
+            obtain ⟨h0, hps0⟩ := hk.rootb_back hp hm hps
             -- AGORA-937 B2 (AGORA-963): a held root is no new killable name of
             -- the inner step (`Step.held_not_killVars`, the closure-capture
             -- clause), and keeps its type outside the running scopes (`Keep`)
             intro d hd hb
             by_cases hF : d.root ∈ F
             · exact Or.inl hF
-            rcases hi.anch p E0 h0 hm0 (by simpa [Stmt.spine] using hps0) d hd hb with hF' | ⟨hha, hnk, Er, hEr, hhv⟩
+            rcases hi.anch p E h0 hm (by simpa [Stmt.spine] using hps0) d hd hb with hF' | ⟨hha, hnk, Er, hEr, hhv⟩
             · exact absurd hF' hF
             have hlt : d.root < m.nv := hi.nvSt d.root (by rw [← hi.dom, hEr]; rfl)
             have hnk' : d.root ∉ s.killVars := fun h => hnk (by simp [Stmt.killVars, h])
@@ -5025,7 +5005,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             obtain ⟨_, Er', hEr', _, hty, _⟩ := hk.1 d.root Er hEr hns
             refine Or.inr ⟨hha, fun hin => ?_, Er', hEr', by rw [hty]; exact hhv⟩
             have := Step.held_not_killVars hst' (hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv)
-              hcd h0 hm0 (by simpa [Stmt.spine] using hps0) hd hb hha hF hnk' hlt
+              hcd h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hF hnk' hlt
             rcases (by simpa [Stmt.killVars] using hin : d.root = x ∨ d.root ∈ _) with h | h
             · exact hnk (by simp [Stmt.killVars, h])
             · exact this h

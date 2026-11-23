@@ -24,9 +24,6 @@ theorem MInv.blkCapsInp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) (w : Var) :
   obtain ⟨_, hhv, hpay, _⟩ := hi.blocks k bl hk
   exact valCapsInp_of_names ((hpay V hp).1.names_nil hhv) w
 
-/-- The slot half of `CapsInpAt`. -/
-def SlotsCaps (m : Mem) (w : Var) : Prop := ∀ x o V, m.st x = some ⟨o, some V⟩ → ValCapsInp V w
-
 theorem CapsInpAt.of_slots {m : Mem} {Γ : Ctx} {w : Var} (h : SlotsCaps m w) (hM : MInv m Γ) : CapsInpAt m w :=
   ⟨h, hM.blkCapsInp w⟩
 
@@ -53,16 +50,6 @@ theorem ValCapsInp.of_children {v : Val} {w : Var}
 
 theorem ValCapsInp.child {e v : Val} {w : Var} (h : ValCapsInp v w) (hc : Child e v) : ValCapsInp e w :=
   h.sub (hc.sub (Sub.refl _))
-
-theorem SlotsCaps.slot {m : Mem} {w : Var} (h : SlotsCaps m w) {x : Var} {o : Bool} {V : Val}
-    (hx : m.st x = some ⟨o, some V⟩) : ValCapsInp V w := h x o V hx
-
-theorem SlotsCaps.set {m : Mem} {w : Var} (h : SlotsCaps m w) {x : Var} {o : Bool} {v : Option Val}
-    (hv : ∀ V, v = some V → ValCapsInp V w) : SlotsCaps (m.set x ⟨o, v⟩) w := by
-  intro y o' V hy
-  by_cases hyx : y = x
-  · subst hyx; simp at hy; obtain ⟨_, rfl⟩ := hy; exact hv V rfl
-  · simp [upd_ne _ _ hyx] at hy; exact h.slot hy
 
 theorem SlotsCaps.of_st {m m' : Mem} {w : Var} (h : SlotsCaps m w) (hst : m'.st = m.st) : SlotsCaps m' w :=
   fun x o V hx => h.slot (hst ▸ hx)

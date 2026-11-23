@@ -2833,27 +2833,6 @@ theorem cloProgress {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x 
   | waitPanic hw => simp [Waits] at hw
   | reap hrs hrk hnc => exact ⟨_, Step.reap (r := .callc x c j σ zs k) hrs hrk hnc⟩
 
-/-- AGORA-937 B2 (AGORA-963): an opened call's argument at a capture's
-    position is a capture, whose parameter is its own mode and type. -/
-theorem capPos_any {zs : List Var} {cs : List (Var × PMode × Ty)} {n : Nat} {pre : List (PMode × Ty)}
-    {i : Nat} {v : Var} {pm pt : PMode × Ty}
-    (hlen : pre.length = zs.length) (hi : zs.length + 1 ≤ i)
-    (hv : (n :: zs ++ cs.map (·.1))[i]? = some v)
-    (hp : (pm :: pre ++ cs.map (·.2))[i]? = some pt) :
-    ∃ q ∈ cs, q.1 = v ∧ q.2 = pt := by
-  obtain ⟨k, rfl⟩ : ∃ k, i = k + 1 := ⟨i - 1, by omega⟩
-  have hk : zs.length ≤ k := by omega
-  have hk' : pre.length ≤ k := by omega
-  simp only [List.cons_append, List.getElem?_cons_succ] at hv hp
-  rw [List.getElem?_append_right hk, List.getElem?_map] at hv
-  rw [List.getElem?_append_right hk', List.getElem?_map, hlen] at hp
-  cases hq : cs[k - zs.length]? with
-  | none => rw [hq] at hv; cases hv
-  | some q =>
-    rw [hq] at hv hp
-    simp only [Option.map_some, Option.some.injEq] at hv hp
-    exact ⟨q, List.mem_of_getElem? hq, hv, hp⟩
-
 set_option maxHeartbeats 400000 in
 theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
   intro ξ Γ Γ1 F x c j zs k Ec E ms q σ sig Δ m m' s' hk hx hxF hc htc hj hσ hhd hnz hcT hnzs hkT hpx hcd hi hst hnr
@@ -2927,6 +2906,19 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
     have hFe' : m.nv ∉ F ++ H := fun h => (List.mem_append.mp h).elim hFe hHe
     have hEe : Γe m.nv = some Ee := by simp [Γe, setE]
     have hxe' : Γe x = none := by simp [Γe, setE, upd_ne _ _ hxe, hxc]
+    -- what the opened call's closures may change, the call through the
+    -- package may
+    have hMc : ∀ d ∈ mutNames Γe (m.nv :: zs ++ cs.map (·.1)), d ∈ mutNames Γ (c :: zs) := by
+      intro d hd
+      refine mutNames_clean Γ (c :: zs) (mutNames_open (cleanC_none.mpr hΓe0) hcc hnint
+        (fun a ha e => by have := vlt (hzlt a ha); have := veq e; omega) (fun ci hci => ⟨?_, ?_⟩) d hd)
+      · obtain ⟨Ev, hEv, _⟩ := hcap ci hci
+        exact fun e => by rw [e, hΓe0] at hEv; cases hEv
+      · obtain ⟨Ev, hEv, _, _, _, _, hvd, _⟩ := hcap ci hci
+        rw [argE_clean]
+        have hae' : argE Γ ci.1 = Ev := by unfold argE; rw [hEv]; rfl
+        rw [hae']
+        exact List.eq_nil_of_subset_nil (hvd ▸ clean_vdeps_sub Ev)
     have hIe : Inv (envMem m env) Γe (F ++ H) (.letcall x f (m.nv :: zs ++ cs.map (·.1)) k) :=
       { toMInv := hie
         nvS := by
@@ -2994,16 +2986,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
                 exact ⟨hrlt, hrx, hnm⟩
               · intro hr
                 obtain ⟨dm, hdm, hdr⟩ := List.mem_map.mp hr
-                have hdm' : dm ∈ mutNames Γ (c :: zs) := by
-                  refine mutNames_clean Γ (c :: zs) (mutNames_open (cleanC_none.mpr hΓe0) hcc hnint
-                    (fun a ha e => by have := vlt (hzlt a ha); have := veq e; omega) (fun ci hci => ⟨?_, ?_⟩) dm hdm)
-                  · obtain ⟨Ev, hEv, _⟩ := hcap ci hci
-                    exact fun e => by rw [e, hΓe0] at hEv; cases hEv
-                  · obtain ⟨Ev, hEv, _, _, _, _, hvd, _⟩ := hcap ci hci
-                    rw [argE_clean]
-                    have hae' : argE Γ ci.1 = Ev := by unfold argE; rw [hEv]; rfl
-                    rw [hae']
-                    exact List.eq_nil_of_subset_nil (hvd ▸ clean_vdeps_sub Ev)
+                have hdm' : dm ∈ mutNames Γ (c :: zs) := hMc dm hdm
                 obtain ⟨_, _, _, _, huni, _⟩ := hnf dm hdm'
                 have hbd : dm.kind.bound ≠ .none := by simpa using (List.mem_filter.mp hdm').2
                 obtain ⟨q, hq, hq1⟩ := List.mem_map.mp hcp
@@ -3172,19 +3155,6 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
       (hV := fun hd => absurd hd (by simp [callRes]))
     have hnf' := NameWF.setE hn1 (fun Ex h' => by rw [hx1] at h'; cases h')
       (fun Ex h' => by rw [hx1] at h'; cases h') (recvRes_named (c := c) (Ec := Ec) hEn)
-    -- what the opened call's closures may change, the call through the
-    -- package may
-    have hMc : ∀ d ∈ mutNames Γe (m.nv :: zs ++ cs.map (·.1)), d ∈ mutNames Γ (c :: zs) := by
-      intro d hd
-      refine mutNames_clean Γ (c :: zs) (mutNames_open (cleanC_none.mpr hΓe0) hcc hnint
-        (fun a ha e => by have := vlt (hzlt a ha); have := veq e; omega) (fun ci hci => ⟨?_, ?_⟩) d hd)
-      · obtain ⟨Ev, hEv, _⟩ := hcap ci hci
-        exact fun e => by rw [e, hΓe0] at hEv; cases hEv
-      · obtain ⟨Ev, hEv, _, _, _, _, hvd, _⟩ := hcap ci hci
-        rw [argE_clean]
-        have hae' : argE Γ ci.1 = Ev := by unfold argE; rw [hEv]; rfl
-        rw [hae']
-        exact List.eq_nil_of_subset_nil (hvd ▸ clean_vdeps_sub Ev)
     have hW := weaker_open (x := x) (te := te) (cs := cs) hi.wf hi.rootbLive hi.noInout hΓe0 hzs hc hlc
       hnint hxe hps hsp hzr hty hown hl hr ho (fun jk h' => (hlends jk h').2) (fun jk h' => (hrholds jk h').2)
       hnz hbl hbr hbo hrb hio hcapW hMr hMc hse hwf hnf'
