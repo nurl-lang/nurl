@@ -191,6 +191,25 @@ theorem dtorHeadB_sound {P : Prog} {f : Nat} {x : Var} {s : Stmt} (h : dtorHeadB
   simp only [ho, hd, Bool.and_self, Bool.not_true, Bool.false_or, Bool.and_eq_true, decide_eq_true_eq] at h
   exact h
 
+/-- `TakeOK`, asked strictly: a payload taken out of an enum of a
+    destructor type is refused (its glue's check is the next step). -/
+def takeOKB (Γ : Ctx) (r : Rhs) : Bool :=
+  match r with
+  | .takel y | .taker y => match Γ y with
+    | some Ey => (match Ey.ty with | .dtor _ _ => false | _ => true)
+    | none => true
+  | _ => true
+
+theorem takeOKB_sound {P : Prog} {Γ : Ctx} {r : Rhs} (h : takeOKB Γ r = true) : TakeOK P Γ r := by
+  intro y Ey g u hr hEy hty
+  exfalso
+  rcases hr with rfl | rfl <;> simp [takeOKB, hEy, hty] at h
+
+/-- The modes an assignment may join. -/
+def assignModes2 (Ex E : Entry) : Bool :=
+  decide (Ex.mode = .own ∧ E.mode = .own ∨ Ex.mode = .inout .replace ∧ E.mode = .own ∨
+    Ex.mode = .bor ∧ E.mode = .bor)
+
 /-- A2's `StmtT` for the core statements and calls, computed. -/
 def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, _, .skip => some Γ
@@ -218,6 +237,18 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
         | none => none
       | none => none
     else none
+  | Γ, F, .assign x r =>
+    match Γ x with
+    | some Ex =>
+      if x ∈ F then none else
+      match R Γ F r with
+      | some (E, Γ1) =>
+        if assignModes2 Ex E && decide (E.ty = Ex.ty) && decide (x ∉ roots E.vdeps) && (Γ1 x).isSome &&
+            noPinB D Γ x && dtorSafeB D Γ1 .replace false x && !Ex.dbind && takeOKB Γ r then
+          some (setE (kill .replace false x Γ1) x { E with mode := Ex.mode })
+        else none
+      | none => none
+    | none => none
   | Γ, F, .ite c a b =>
     if a.src ∧ b.src ∧ checkExpr2 Γ c then
       match checkStmt2 P R C D Γ F a, checkStmt2 P R C D Γ F b with
@@ -327,6 +358,28 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
           · cases h
         · cases h
       · cases h
+    · cases h
+  | assign x r =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i Ex hx
+      split at h
+      · cases h
+      · rename_i hF
+        split at h
+        · rename_i E Γ1 hr
+          split at h
+          · rename_i hc
+            simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hc
+            obtain ⟨⟨⟨⟨⟨⟨⟨hm, hty⟩, hroot⟩, hsome⟩, hp⟩, hd⟩, hdb⟩, htk⟩ := hc
+            simp only [Option.some.injEq] at h; subst h
+            obtain ⟨hrt, hs1⟩ := hR Γ F r E Γ1 hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
+            exact ⟨.assign hx hF (of_decide_eq_true hm) hrt hty hroot hsome (noPinB_sound hs hp)
+              (dtorSafeB_sound hs1 hd) hdb (takeOKB_sound htk),
+              supported2_setE (supported2_kill hs1 _ _ _) (hD x (by simp [Stmt.vars])) _⟩
+          · cases h
+        · cases h
     · cases h
   | ite c a b iha ihb =>
     intro ξ Γ F Δ hs hD h
