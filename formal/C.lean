@@ -10,6 +10,7 @@ import C.A2Data
 import C.A2Call
 import C.A2Panic
 import C.A2Prog
+import C.A3Prog
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
 C0 the straight-line checker (`C/Check.lean`), C1 `ite` / `while` over
@@ -21,4 +22,6 @@ decided (`C/A2Rhs.lean`); C7, its core statements with `EndOK` decided
 (`C/A2Stmt.lean`); C8, its struct and enum right-hand sides (`C/A2Data.lean`); C9, its calls, and the
 checker that puts them together, `checkA2` (`C/A2Call.lean`); C10, `CtxWF` / `NameWF` decided and `panic`
 (`C/A2Panic.lean`); C11, its whole programs (`C/A2Prog.lean`,
-`C.checked_program_safe2`). -/
+`C.checked_program_safe2`). For A3: C12, its claim for a checked program,
+spawned functions and globals included (`C/A3Prog.lean`,
+`C.checked_claim_made_full`). -/
