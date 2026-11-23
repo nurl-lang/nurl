@@ -21,8 +21,9 @@ holds a value exactly when it is not checked out. Proven:
 
 * every operation through a held handle succeeds or panics, and never
   reaches a freed block or reads a slot with no value;
-* a read, store, replace or take panics exactly while the value is out;
-  otherwise it acts on the value that is there;
+* a read or take panics exactly while the value is out; otherwise it acts
+  on the value that is there (`rc_set` / `rc_replace` are not modelled
+  here);
 * the last strong release drops the value exactly when it is not checked
   out (none dropped twice), and frees the block exactly when no `Weak` is
   left;
@@ -53,7 +54,9 @@ inductive Res (α : Type) where
   | panic
 
 /-- The invariant. Each block a handle names is live, has its four cells,
-    counts its handles, and holds a value exactly when not checked out. -/
+    and counts its handles; while a strong handle names it, it holds a value
+    exactly when not checked out (the flag and the slot say nothing of a
+    block only `Weak`s name, which the last strong release left a hole). -/
 def SRcInv (h : Heap (SCell V)) (hs ws : List Nat) : Prop :=
   ∀ b, (b ∈ hs ∨ b ∈ ws) → h.live b = true ∧ h.size b = 4 ∧
     h.cell b 0 = some (.n (hs.count b)) ∧ h.cell b 1 = some (.n (ws.count b)) ∧

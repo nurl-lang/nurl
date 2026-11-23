@@ -1,0 +1,3 @@
+### Performance
+
+- **A statement's pending call rows are no longer interned for the whole compile** (Agora #977). `__bck_flush_ppends` runs on every statement. It read the statement's pending list (`ppends`) through an interning lookup and then emptied it, so every statement's list stayed in the intern arena until the compile ended. It now returns at once for an empty list, the common case, and reads a non-empty one from a copy of its own. The read-only sites read the list in place: the join arms' snapshots, `__vself_waiting` and `__bck_arm_take`. No new unsafe code. Self-compile of `nurlc.nu`: peak RSS 203.5 → 200.5 MB, heap at peak 225.1 → 222.0 MB (massif), instructions −0.11 % (callgrind), byte-identical output.

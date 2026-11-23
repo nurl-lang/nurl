@@ -3,9 +3,11 @@ import A1.Soundness
 /-!
 # C0: an executable checker for A1, proven sound (AGORA-970)
 
-Phase C has nurlc emit a certificate for each program it accepts, which a
-small verified checker then validates. This file is that checker's first
-piece, over A1's calculus. These are functions that run (`#eval`, compiled
+Phase C's goal is a small verified checker that validates the programs
+nurlc accepts. (Today nurlc's core IR is translated into A2 and decided by
+A2's checker, `tools/ncore/certify.sh`; a certificate nurlc emits itself is
+the plan, not yet the workflow.) This file is the A1 statement checker, the
+first piece, over A1's calculus. These are functions that run (`#eval`, compiled
 code), not relations:
 
 * `checkExpr Γ e` decides `ExprT`;
@@ -16,8 +18,11 @@ code), not relations:
 
 Each is proven sound. When it answers, the A1 typing judgement holds
 (`checkExpr_sound`, `inferRhs_sound`, `checkStmt_sound`), so A1's
-`memory_safe` applies to every program the checker accepts
-(`checked_memory_safe`).
+`memory_safe` applies to a program the checker accepts that also meets the
+theorem's other premises (`checked_memory_safe`): the statement is source
+syntax (`s.src`, which the checker's acceptance alone does not give: it
+also accepts run-time forms such as `frozen`), the program is valid, and its
+variables fit the initial store.
 
 The rest of A1's statements need what a certificate adds. An `ite` or a
 `while` asks for one context after both arms or around the loop, and

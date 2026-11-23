@@ -79,19 +79,28 @@ def functions(text):
     return out
 
 
-def check_function(name, blocks):
-    """None if validated, else a mismatch string. Raises Unsupported."""
+def check_function(name, blocks, owning):
+    """None if validated, else a mismatch string. Raises Unsupported.
+    `owning`: the types the module has a `__dropif_T` for (what owns)."""
     body = {lab: lines for lab, lines in blocks}
-    # the flags: what `__dropif` reads, through a load of an i1 slot, for a
-    # slot of this function's own frame (an `alloca`): a slot reached through
-    # a pointer (a closure's capture by pointer, an `inout` parameter) is
-    # another frame's, whose own check covers it
-    local = set()
     for _, lines in blocks:
         for l in lines:
-            mm = re.match(r"^\s*(%[\w.]+) = alloca\b", l)
+            if any(u in l for u in UNTRACKED):
+                raise Unsupported(f"{name}: a drop decided at run time ({l.strip()[:60]})")
+            if SWITCH.match(l):
+                raise Unsupported(f"{name}: a switch")
+    # The slots of this function's own frame (an `alloca`), and which of
+    # them own (their type has a `__dropif`): found from the types, not from
+    # the drops being checked. A slot reached through a pointer (a capture
+    # by pointer, an `inout` parameter) is another frame's, checked there.
+    local, own_slots = set(), set()
+    for _, lines in blocks:
+        for l in lines:
+            mm = re.match(r"^\s*(%[\w.]+) = alloca ([^,]+?)(?:, align \d+)?$", l)
             if mm:
                 local.add(mm.group(1))
+                if mm.group(2).strip().lstrip("%") in owning:
+                    own_slots.add(mm.group(1))
     loads, pairs = {}, {}
     for _, lines in blocks:
         for l in lines:
@@ -108,72 +117,105 @@ def check_function(name, blocks):
                 if slot not in local or loads[fv] not in local:
                     continue
                 pairs.setdefault(loads[fv], set()).add(slot)
-    if not pairs:
-        return None
-    for _, lines in blocks:
-        for l in lines:
-            if any(u in l for u in UNTRACKED):
-                raise Unsupported(f"{name}: a drop decided at run time ({l.strip()[:60]})")
-            if SWITCH.match(l):
-                raise Unsupported(f"{name}: a switch")
-            m = STORE_I1_VAR.match(l)
-            if m and m.group(2) in pairs and loads.get(m.group(1)) not in pairs:
-                raise Unsupported(f"{name}: a drop flag given a computed value")
     for flag, slots in pairs.items():
         if len(slots) != 1:
             raise Unsupported(f"{name}: flag {flag} guards several slots")
     flags = set(pairs)
     slot_flag = {next(iter(v)): f for f, v in pairs.items()}
+    # an owning slot that is given a value but has no drop flag: nothing here
+    # says who releases what it holds
+    stored = set()
+    for _, lines in blocks:
+        for l in lines:
+            m = STORE_ANY.match(l)
+            if m:
+                stored.add(m.group(1))
+    for sl in own_slots & stored:
+        if sl not in slot_flag:
+            raise Unsupported(f"{name}: an owning slot {sl} with no drop flag")
+    if not pairs:
+        return None
+    for _, lines in blocks:
+        for l in lines:
+            m = STORE_I1_VAR.match(l)
+            if m and m.group(2) in pairs and loads.get(m.group(1)) not in pairs:
+                raise Unsupported(f"{name}: a drop flag given a computed value")
 
-    # paths: depth-first over the blocks, each block entered at most 3 times
-    # on one path (a loop's body twice). The state: each slot's value (an
-    # id: a store into the slot makes a new one, a flag moved from another
-    # slot brings that slot's), each flag, and the values released.
+    # Paths, depth-first, each block entered at most 3 times on one path (a
+    # loop's body twice). The state, carried from block to block: each i1
+    # slot's known value, each owning slot's value (an id: a store into the
+    # slot makes a new one), the values released, and the registers' loads
+    # (a flag register's value and the value id it came with; a value
+    # register's id). A block reached again in an equal state (ids renamed
+    # in order) is not explored again.
     import itertools
     fresh = itertools.count(1)
+    seen = set()
+
+    def canon(st):
+        flag_v, val, released, regv, regid = st
+        ren = {}
+        def r(x):
+            if x is None:
+                return None
+            if x not in ren:
+                ren[x] = len(ren) + 1
+            return ren[x]
+        v = tuple(sorted((k, r(x)) for k, x in sorted(val.items())))
+        rv = tuple(sorted((k, x) for k, x in regv.items()))
+        ri = tuple(sorted((k, r(x)) for k, x in sorted(regid.items())))
+        rel = tuple(sorted(r(x) for x in released if x in ren))
+        return (tuple(sorted(flag_v.items())), v, rel, rv, ri)
 
     def run(lab, st, visits, path):
         visits = dict(visits)
         visits[lab] = visits.get(lab, 0) + 1
         if visits[lab] > 3:
             return None
+        key = (lab, visits[lab], canon(st))
+        if key in seen:
+            return None
+        seen.add(key)
         path = path + [lab]
         flag_v, val, released = dict(st[0]), dict(st[1]), set(st[2])
-
-        regv = {}   # an i1 register's value, as its load read it
-        regslot = {}   # a register holding a slot's value (its load, a cloneif of it)
+        regv, regid = dict(st[3]), dict(st[4])
 
         def owned(f):
             return flag_v.get(f) and val.get(f) is not None and val[f] not in released
+
+        def go(o):
+            return run(o, (flag_v, val, released, regv, regid), visits, path)
 
         for l in body.get(lab, []):
             m = LOAD_FLAG.match(l)
             if m:
                 regv[m.group(1)] = flag_v.get(m.group(2))
+                regid[m.group(1)] = val.get(m.group(2))
                 continue
             m = LOAD_VAL.match(l)
             if m and m.group(3) in slot_flag:
-                regslot[m.group(1)] = m.group(3)
+                regid[m.group(1)] = val.get(slot_flag[m.group(3)])
             m = CLONEIF.match(l)
-            if m and m.group(2) in regslot:
+            if m and m.group(2) in regid:
                 # the value itself where the slot owns it, else a clone: the
                 # result is the caller's either way (`ret` hands it over)
-                regslot[m.group(1)] = regslot[m.group(2)]
+                regid[m.group(1)] = regid[m.group(2)]
             m = STORE_FLAG.match(l) or STORE_FLAG_PTR.match(l)
             if m:
-                # (any i1 slot's known value: a drop flag, or a guard a
-                # branch reads, `dkeep`'s, so an infeasible path is not taken)
                 flag_v[m.group(2)] = m.group(1) in ("true", "1")
                 continue
             m = STORE_I1_VAR.match(l)
-            if m and m.group(2) not in flags:
-                flag_v.pop(m.group(2), None)
-            m = STORE_I1_VAR.match(l)
-            if m and m.group(2) in flags:
-                # a value moved from one slot to another (`= w v`): the
-                # target owns it as the source did (whose flag is cleared next)
-                f, src = m.group(2), loads[m.group(1)]
-                flag_v[f], val[f] = flag_v.get(src, False), val.get(src)
+            if m:
+                if m.group(2) in flags:
+                    # a value moved from one slot to another (`= w v`): the
+                    # target owns what the source held when its flag was
+                    # loaded, as the load read it
+                    f, reg = m.group(2), m.group(1)
+                    if regv.get(reg) is None:
+                        raise Unsupported(f"{name}: a drop flag moved from an unknown value")
+                    flag_v[f], val[f] = regv[reg], regid.get(reg)
+                else:
+                    flag_v.pop(m.group(2), None)
                 continue
             m = STORE_ANY.match(l)
             if m and m.group(1) in slot_flag:
@@ -187,18 +229,20 @@ def check_function(name, blocks):
                 f = loads[m.group(1)]
                 if f not in flags:
                     continue
-                if regv.get(m.group(1)):
-                    if val.get(f) is None or val[f] in released:
+                on = regv.get(m.group(1))
+                if on is None:
+                    raise Unsupported(f"{name}: a drop whose flag's value is not known")
+                if on:
+                    vid = regid.get(m.group(1))
+                    if vid is None or vid in released:
                         return f"mismatch: {name} {next(iter(pairs[f]))} released twice: {'>'.join(path)}"
-                    released.add(val[f])
+                    released.add(vid)
                 continue
             if RET.match(l):
                 m = RET_VAL.match(l)
-                if m and m.group(1) in regslot:
-                    # the slot's value handed to the caller: moved out
-                    f = slot_flag[regslot[m.group(1)]]
-                    if owned(f):
-                        released.add(val[f])
+                if m and regid.get(m.group(1)) is not None:
+                    # the value the register loaded, handed to the caller
+                    released.add(regid[m.group(1)])
                 for f in flags:
                     if owned(f):
                         return f"mismatch: {name} {next(iter(pairs[f]))} leaks at the return: {'>'.join(path)}"
@@ -210,27 +254,28 @@ def check_function(name, blocks):
                     c = "1" if regv[c] else "0"
                 outs = [m.group(2)] if c in ("1", "true") else [m.group(3)] if c in ("0", "false") else [m.group(2), m.group(3)]
                 for o in outs:
-                    r = run(o, (flag_v, val, released), visits, path)
+                    r = go(o)
                     if r:
                         return r
                 return None
             m = BR.match(l)
             if m:
-                return run(m.group(1), (flag_v, val, released), visits, path)
+                return go(m.group(1))
             if l.strip().startswith("unreachable"):
                 return None
         return None
 
-    return run("entry", ({}, {}, set()), {}, [])
+    return run("entry", ({}, {}, set(), {}, {}), {}, [])
 
 
 def main():
     text = open(sys.argv[1]).read()
     fns = functions(text)
+    owning = set(re.findall(r"@__dropifv?_([\w.]+)\(", text))
     ok, uns, bad = 0, [], []
     for name, blocks in fns.items():
         try:
-            r = check_function(name, blocks)
+            r = check_function(name, blocks, owning)
         except Unsupported as e:
             uns.append(str(e))
             continue

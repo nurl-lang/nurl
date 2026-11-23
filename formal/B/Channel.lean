@@ -10,8 +10,10 @@ queue runs under the lock, so to the model it is one step:
 * `chan_send` refuses a closed channel (`F`: the value is dropped there) and
   otherwise pushes the value to the back (`vec_push`);
 * `chan_recv` / `chan_try_recv` hand back the front (`vec_remove … 0`), or
-  `none` on a closed and empty channel. A receive on an open, empty channel
-  waits, which here is a step that does not happen yet;
+  `none` on a closed and empty channel. A blocking receive on an open,
+  empty channel waits, which here is a step that does not happen yet. (The
+  model covers blocking receives: `chan_try_recv`'s `none` on an open,
+  empty channel, a poll that changes nothing, is not a step of it);
 * `chan_close` sets the flag;
 * the last handle's release (`rcbox_release`) drops the queue with what is
   still in it.

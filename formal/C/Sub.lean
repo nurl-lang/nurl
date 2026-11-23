@@ -9,9 +9,10 @@ names them as finite lists (`CtxL`), and the checker verifies `Weaker`
 over the finite domain: entry by entry, then `CtxWF`, which says every
 dependency's root is a root binding. `checkC` walks the statement and its
 certificate together and is proven sound (`checkC_sound`,
-`checkedC_memory_safe`). This is the shape phase C's certificate takes:
-nurlc writes down the contexts its walk used, and a small, proven checker
-checks them.
+`checkedC_memory_safe`). This is the format such a certificate would take,
+the contexts a walk used, for a small proven checker to check; nurlc
+emitting it is a proposed integration (today nurlc's core IR goes to A2's
+checker through `tools/ncore/tolean.py`).
 -/
 
 namespace C

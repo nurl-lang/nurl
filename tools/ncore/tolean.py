@@ -13,6 +13,7 @@ emitted.
 
     python3 tools/ncore/tolean.py prog.core > Prog.lean
 """
+import re
 import sys
 
 INT_TYS = {"i64", "i1", "i32", "i16", "i8", "void",
@@ -57,6 +58,92 @@ def view_deps(f):
         else:
             raise Unsupported(f"{f}: rviews {tok}")
     return out
+
+
+# Closure types: one interface Fn per type (`{ R (i8*, A…)*, i8* }`), placed
+# after the program's own functions (`CLO_BASE`), in the order first seen.
+CLO_SIGS = {}
+CLO_LIST = []
+CLO_BASE = [0]
+
+
+def clo_sig(t):
+    """A closure type's interface: (result, arguments), each an IR type with
+    no nested aggregate, or None where `t` is not a closure type."""
+    if not (t.startswith("{ ") and t.endswith(", i8* }") and " (i8*" in t):
+        return None
+    head = t[2:-len(", i8* }")]
+    r, _, rest = head.partition(" (i8*")
+    if not rest.endswith(")*"):
+        raise Unsupported(f"closure type {t}")
+    args = [a.strip() for a in rest[:-2].split(",") if a.strip()]
+    if "i8*" in [r] + args:
+        # a raw string a closure takes or hands back is a view or owned
+        # text by its use, which a closure type does not say
+        raise Unsupported(f"closure type {t}: a raw string argument or result")
+    for x in [r] + args:
+        if "{" in x or "(" in x or "*" in x and x != "i8*":
+            raise Unsupported(f"closure type {t}: a nested or pointer type")
+    return r, args
+
+
+def clo_index(t):
+    """The interface Fn index of closure type `t`."""
+    if t not in CLO_SIGS:
+        CLO_SIGS[t] = CLO_BASE[0] + len(CLO_LIST)
+        CLO_LIST.append(t)
+    return CLO_SIGS[t]
+
+
+def no_clo(t):
+    """A type inside another (an element, a payload, a field, a channel's
+    element) is no closure: nurlc copies a closure stored in a value
+    (`nurl_closure_own_copy`), which the core IR does not show."""
+    tt = t if t.startswith("{") else t
+    if clo_sig(tt) is not None:
+        raise Unsupported(f"a closure inside a value ({t})")
+    return t
+
+
+# The program's functions, for a call's parameter modes.
+FNS = []
+
+
+def cap_ty(t):
+    """A capture by value's A2 type, where the translation follows it: a
+    number, copied into the environment, or a buffer of numbers (a String, a
+    `Vec` of numbers). A buffer captured by value is a copy of its handle
+    that depends on the binding (MEMORY.md §2.11: the binding given a new
+    value ends the closure): A2's capture by name, read only (`inp`)."""
+    lt = lean_ty(t)
+    if lt in (".int", "(.vec .int)"):
+        return lt
+    raise Unsupported(f"a capture of type {t}")
+
+
+def by_name(t):
+    """Is a capture of IR type `t` one by name (a buffer), not a number?"""
+    return cap_ty(t) != ".int"
+
+
+def env_ty(tys):
+    """A closure environment of captures of A2 types `tys` (A2 has no unit
+    or one-tuple: none is an integer, one is its value, more are pairs to
+    the right)."""
+    if not tys:
+        return ".int"
+    acc = tys[-1]
+    for t in reversed(tys[:-1]):
+        acc = f"(.prod {t} {acc})"
+    return acc
+
+
+def fn_sigma(ty):
+    """`.fn [σ] .any` → σ."""
+    m = re.fullmatch(r"\(\.fn \[(\d+)\] \.any\)", ty)
+    if not m:
+        raise Unsupported(f"a call through a value of type {ty}")
+    return int(m.group(1))
 
 
 def struct_fields(t):
@@ -108,13 +195,21 @@ def lean_ty(t):
         # A2's buffer of bytes (MEMORY.md §1; one held in a value is a view,
         # §2.13, and is not translated yet)
         return "(.vec .int)"
+    sig = clo_sig(t)
+    if sig is not None:
+        # a closure: code and an environment it owns, of the program's
+        # interface for its type; class `any` (it crosses nowhere: a closure
+        # sent or spawned needs a class of its own, not translated yet)
+        for x in [sig[0]] + sig[1]:
+            lean_ty(x)
+        return f"(.fn [{clo_index(t)}] .any)"
     if t.startswith("{ i1, ") and t.endswith(" }"):
         # an option: `sum int t`, None the first variant (formal/A2/Syntax.lean)
-        return f"(.sum .int {lean_ty(t[len('{ i1, '):-2])})"
+        return f"(.sum .int {lean_ty(no_clo(t[len('{ i1, '):-2]))})"
     if not t.startswith("%"):
         t = "%" + t   # a type argument's name, inside another (`%Vec__String`)
     if t.startswith("%Vec__"):
-        return f"(.vec {lean_ty(t[len('%Vec__'):])})"
+        return f"(.vec {lean_ty(no_clo(t[len('%Vec__'):]))})"
     if t.startswith("%Channel__"):
         # A3.4: a `Channel A` is a lock share whose payload is its queue and
         # its closed flag, `lk (prod (vec A) int)` (formal/A2/Syntax.lean,
@@ -147,7 +242,7 @@ def lean_ty(t):
         # a struct of one field: A2 has no one-element tuple, so it is its field
         _EXPANDING.add(t)
         try:
-            return lean_ty(fs[0][1])
+            return lean_ty(no_clo(fs[0][1]))
         finally:
             _EXPANDING.discard(t)
     if fs is not None and len(fs) >= 2:
@@ -171,17 +266,17 @@ def chan_elem(t):
 
 def _struct_ty(fs, fty=None):
     """A struct: its fields nested in pairs to the right (formal/A2's `prod`)."""
-    fty_given = fty is not None
+    if fty is None:
+        for _, ft in fs:
+            if ft == "i8*":
+                # a raw string in a value is a view (MEMORY.md §2.13), which a
+                # field's translation as owned text would not be (a destructor
+                # type's fields go through its own `fty`, which gives a view)
+                raise Unsupported("a raw string held in a struct field")
     fty = fty or lean_ty
-    for _, ft in fs:
-        if ft == "i8*" and not fty_given:
-            # a raw string in a value is a view (MEMORY.md §2.13), which a
-            # field's translation as owned text would not be (a destructor
-            # struct's translates it as a view: dtor_field_ty)
-            raise Unsupported("a raw string held in a struct field")
-    acc = fty(fs[-1][1])
+    acc = fty(no_clo(fs[-1][1]))
     for _, ft in reversed(fs[:-1]):
-        acc = f"(.prod {fty(ft)} {acc})"
+        acc = f"(.prod {fty(no_clo(ft))} {acc})"
     return acc
 
 
@@ -250,6 +345,45 @@ class Fn:
         self.np = fn["np"]
         top = max(list(fn["vars"]) + [self.np - 1, -1])
         self.next = top + 2  # past every core variable and the result slot
+        # (a closure's code: its environment first, then its parameters,
+        # then the result slot; its captures are read out of the environment
+        # at the top of the body - A2/Invariant.lean, `Implements`)
+        self.vmap, self.rslot, self.caps = None, self.np, []
+        if clo_sig(fn["ret"]) is not None:
+            # (a closure handed back: nurlc may copy it on the way out)
+            raise Unsupported(f"{fn['name']}: a closure as a result")
+        self.closure = fn["name"].startswith("__closure_")
+        if self.closure:
+            kinds, flags = fn.get("kind", {}), fn["flags"]
+            caps = sorted(k for k in fn["vars"] if kinds.get(k) == 3)
+            prms = sorted(k for k in fn["vars"] if kinds.get(k) == 0)
+            if len(prms) != self.np:
+                raise Unsupported(f"{fn['name']}: closure parameters")
+            for k in caps:
+                if flags.get(k, 0) & 8:
+                    raise Unsupported(f"{fn['name']}: a capture taken by pointer")
+                cap_ty(fn["vars"][k])
+            for k in prms:
+                if flags.get(k, 0) & 6:
+                    raise Unsupported(f"{fn['name']}: a closure parameter taken sink or inout")
+            if borrowed(fn["name"]):
+                raise Unsupported(f"{fn['name']}: a closure whose result is lent")
+            vm = {p: 1 + i for i, p in enumerate(prms)}
+            # (captures by name: the code's parameters after the interface's,
+            # `Implements`: `… ++ cs.map (·.2)`)
+            named = [k for k in caps if by_name(fn["vars"][k])]
+            for j, k in enumerate(named):
+                vm[k] = 1 + self.np + j
+            caps = [k for k in caps if k not in named]
+            self.named = named
+            self.rslot = self.np + 1 + len(named)
+            nxt = self.rslot + 1
+            for k in sorted(fn["vars"]):
+                if k not in vm:
+                    vm[k] = nxt
+                    nxt += 1
+            self.vmap, self.caps, self.prms = vm, caps, prms
+            self.next = nxt + 1
         for v, ty in fn["vars"].items():
             lean_ty(ty)
         self.lits = []
@@ -350,6 +484,8 @@ class Fn:
         return lean_ty(t)
 
     def var(self, k):
+        if self.vmap is not None:
+            return self.vmap[k]
         return k if k < self.np else k + 1
 
     def pvar(self, op):
@@ -491,6 +627,11 @@ class Fn:
                     t = self.fresh()
                     pre.append((t, f".expr (.len {self.var(y)})"))
                     return f".new {ty[len('(.vec '):-1]}"
+                if assign and vt.get(y) == "i8*":
+                    # `= dst src` of raw text copies it (MEMORY.md §2.13: a
+                    # copy of a binding that owns its text is a view of it),
+                    # which a move would not be
+                    raise Unsupported(f"{self.fn['name']}: raw text assigned from another binding")
                 return f".var {self.var(y)}"
             return f".expr {self.operand(op)}"
         if (k == "agg" and words[1] == "-" and dest is not None and int(words[2]) == 1
@@ -641,6 +782,8 @@ class Fn:
         if f.startswith("vec_len__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.expr (.len {rd(ops[0])})) {rest})"
+        if f.startswith("slice_from_vec__") and "(.slice" in vec_elem(f, "slice_from_vec__"):
+            raise Unsupported(f"{self.fn['name']}: a slice of a Vec of views")
         if f.startswith("slice_from_vec__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.view {rd(ops[0])}) {rest})"
@@ -715,7 +858,14 @@ class Fn:
         if f not in names:
             raise Unsupported(f"{self.fn['name']}: call of {f}, not in the program")
         pre, args = [], []
-        for op in words[3:3 + n]:
+        callee = FNS[names[f]] if names[f] < len(FNS) else None
+        for i, op in enumerate(words[3:3 + n]):
+            if (callee is not None and op.startswith("v") and op[1:].isdigit()
+                    and clo_sig(self.fn["vars"].get(int(op[1:]), "")) is not None
+                    and callee["flags"].get(i, 0) & 6):
+                # nurlc copies a closure it hands to a `sink` / `inout`
+                # parameter (`nurl_closure_clone`), which the IR does not show
+                raise Unsupported(f"{self.fn['name']}: a closure handed to a sink or inout parameter of {f}")
             if op == "c":
                 args.append(str(self.lit_temp()))
             elif "/" in op:
@@ -788,7 +938,12 @@ class Fn:
             self.depth += 1
             inner_body = self.stmts(body, names)
             self.depth -= 1
-            inner = f"(.ite {self.operand(c)} (.block {inner_body}) (.exit 0))"
+            if c in ("T", "1"):
+                # `~ T { … }`: no condition, the body block alone (`break`
+                # and `continue` keep their targets)
+                inner = f"(.block {inner_body})"
+            else:
+                inner = f"(.ite {self.operand(c)} (.block {inner_body}) (.exit 0))"
             loop_body = self.stmts(cond, names, inner)
             self.depth -= 1
             return self.seq(f"(.block (.loop {loop_body}))", self.stmts(lines[k + 1:], names, tail))
@@ -802,6 +957,9 @@ class Fn:
             xs = head[2]
             if not self.fn["vars"].get(int(xs[1:]) if xs[1:].isdigit() else -1, "").startswith("%Vec__"):
                 raise Unsupported(f"{self.fn['name']}: foreach over {xs}")
+            if "(.slice" in lean_ty(self.fn["vars"][int(xs[1:])]):
+                # (a view of a Vec whose elements hold views is not A2's `view`)
+                raise Unsupported(f"{self.fn['name']}: foreach over a Vec of views")
             v, x, i, w = self.pvar(xs), self.var(int(head[1])), self.fresh(), self.fresh()
             self.depth += 2
             inner = self.stmts(body, names)
@@ -843,21 +1001,37 @@ class Fn:
             # (`retnx`: the result set, its exit placed after the list, above)
             ex_ = "" if w == "retnx" else f" (.exit {self.depth})"
             if head[1] != "-" and not self.is_int(head[1]):
-                a = f"(.assign {self.np} (.var {self.pvar(head[1])}))"
+                a = f"(.assign {self.rslot} (.var {self.pvar(head[1])}))"
             else:
                 v = "(.lit 0)" if head[1] == "-" else self.operand(head[1])
-                a = f"(.assign {self.np} (.expr {v}))"
+                a = f"(.assign {self.rslot} (.expr {v}))"
             ex = f"(.seq {a}{ex_})" if ex_ else a
             return self.seq(ex, self.stmts(lines[1:], names, tail))
-        if w == "let" and head[2] != "call":
+        if w == "let" and head[2] not in ("call", "closure", "callind"):
             # `let x r` whose value is returned at once: the result takes `r`
             nxt = [l for l in lines[1:] if l.split()[0] not in ("line", "drop")]
             if nxt and nxt[0].split() == ["ret", f"v{head[1]}"] and not self.is_dtor(self.fn["vars"].get(int(head[1]), "")):
                 k = lines.index(nxt[0])
                 pre = []
                 r = self.rhs(head[2:], int(head[1]), pre)
-                ex = self.wrap(pre, f"(.seq (.assign {self.np} ({r})) (.exit {self.depth}))")
+                ex = self.wrap(pre, f"(.seq (.assign {self.rslot} ({r})) (.exit {self.depth}))")
                 return self.seq(ex, self.stmts(lines[k + 1:], names, tail))
+        if w == "let" and head[2] == "closure":
+            x = self.var(int(head[1]))
+            rest = self.stmts(lines[1:], names, tail)
+            pre, r = self.closure_lit(head[2:], int(head[1]), names, rest)
+            return self.wrap(pre, f"(.letv {x} ({r}) {rest})")
+        if (w in ("let", "assign") and len(head) > 3 and head[2] == "use" and head[3].startswith("v")
+                and head[3][1:].isdigit()
+                and clo_sig(self.fn["vars"].get(int(head[3][1:]), "")) is not None
+                and (w == "assign" or self.fn.get("kind", {}).get(int(head[3][1:])) != 2)):
+            # a closure moves only from the temporary its literal made into its
+            # binding; given another binding, nurlc copies it, unseen here
+            raise Unsupported(f"{self.fn['name']}: a closure bound from another binding")
+        if w == "let" and head[2] == "callind":
+            x = self.var(int(head[1]))
+            rest = self.stmts(lines[1:], names, tail)
+            return self.callind(head[2:], rest, x)
         if w == "let":
             x = self.var(int(head[1]))
             rest = self.stmts(lines[1:], names, tail)
@@ -886,6 +1060,8 @@ class Fn:
             rest = self.stmts(lines[1:], names, tail)
             if head[1] == "call":
                 return self.call(head[1:], names, rest)
+            if head[1] == "callind":
+                return self.callind(head[1:], rest)
             t = self.fresh()
             pre = []
             r = self.rhs(head[1:], None, pre)
@@ -905,6 +1081,84 @@ class Fn:
                             self.stmts(lines[1:], names, tail))
         raise Unsupported(f"{self.fn['name']}: statement {w}")
 
+    def read_caps(self, inner):
+        """A closure's captures read out of its environment (variable 0,
+        lent) at the top of its body: one is the environment, more are its
+        pairs' fields (`env_ty`). A number is copied; a buffer is lent from
+        the environment, which holds the closure's own copy of it."""
+        caps = self.caps
+        if not caps:
+            return inner
+        def take(c, src):
+            return f".expr (.var {src})" if cap_ty(self.fn["vars"][c]) == ".int" else f".var {src}"
+        if len(caps) == 1:
+            return f"(.letv {self.vmap[caps[0]]} ({take(caps[0], 0)}) {inner})"
+        binds, cur = [], 0
+        for i, c in enumerate(caps):
+            if i < len(caps) - 1:
+                binds.append((self.vmap[c], f".fst {cur}"))
+                t = self.fresh()
+                binds.append((t, f".snd {cur}"))
+                cur = t
+            else:
+                binds.append((self.vmap[c], take(c, cur)))
+        return self.wrap(binds, inner)
+
+    def closure_lit(self, words, x, names, rest):
+        """`closure __closure_N n caps…`: its environment, the captured
+        numbers copied into one value (`env_ty`), packed with the code and
+        its type's interface (A2's `pack`, captures by name none)."""
+        f, n = words[1], int(words[2])
+        caps = words[3:3 + n]
+        if f not in names:
+            raise Unsupported(f"{self.fn['name']}: closure {f}, not in the program")
+        for c in caps:
+            if c == "c" or "/" in c or not (c.startswith("v") and c[1:].isdigit()):
+                raise Unsupported(f"{self.fn['name']}: a capture that is not a variable")
+        # (the literal's captures in the code's order: numbers by value into
+        # the environment, buffers by name)
+        named = [c for c in caps if by_name(self.fn["vars"][int(c[1:])])]
+        caps = [c for c in caps if c not in named]
+        n = len(caps)
+        tys = [cap_ty(self.fn["vars"][int(c[1:])]) for c in caps]
+        cs = ", ".join(f"({self.pvar(c)}, .inp, {self.vlean(int(c[1:]))})" for c in named)
+        sigma = fn_sigma(self.vlean(int(x)) if isinstance(x, int) else x)
+        pre = []
+        vals = [self.pvar(c) for c in caps]
+        if n == 0:
+            y = self.fresh()
+            pre.append((y, ".expr (.lit 0)"))
+        elif n == 1:
+            y = vals[0]
+        else:
+            acc = vals[-1]
+            for v in reversed(vals[:-1]):
+                t = self.fresh()
+                pre.append((t, f".pair {v} {acc}"))
+                acc = t
+            y = acc
+        return pre, f".pack [{names[f]}] {env_ty(tys)} [{sigma}] {y} [{cs}]"
+
+    def callind(self, words, rest, x=None):
+        """`callind n c args…`: method 0 of the package `c`, of its type's
+        interface (A2's `callc`)."""
+        n = int(words[1])
+        ops = words[2:2 + n]
+        if ops[0] == "c" or "/" in ops[0]:
+            raise Unsupported(f"{self.fn['name']}: a call through {ops[0]}")
+        c = self.pvar(ops[0])
+        sigma = fn_sigma(self.vlean(int(ops[0][1:])))
+        pre, zs = [], []
+        for op in ops[1:]:
+            if op == "c":
+                zs.append(str(self.lit_temp()))
+            elif "/" in op:
+                raise Unsupported(f"{self.fn['name']}: a field as an argument ({op})")
+            else:
+                zs.append(str(self.pvar(op)))
+        x = self.fresh() if x is None else x
+        return f"(.callc {x} {c} 0 {sigma} [{', '.join(zs)}] {rest})"
+
     @staticmethod
     def wrap(pre, s):
         """The bindings `pre` (temporary, right-hand side) scoped over `s`."""
@@ -918,10 +1172,12 @@ class Fn:
 
     def lean(self, names):
         # (a `void` function may fall off its end: its result is the unit)
-        tail = f"(.assign {self.np} (.expr (.lit 0)))" if self.fn["ret"] == "void" else ".skip"
+        tail = f"(.assign {self.rslot} (.expr (.lit 0)))" if self.fn["ret"] == "void" else ".skip"
         inner = self.stmts(self.fn['body'], names, tail)
         for t in reversed(self.lits):
             inner = f"(.letv {t} (.expr (.lit 0)) {inner})"
+        if self.closure:
+            inner = self.read_caps(inner)
         body = f"(.block {inner})"
         def mode(i):
             fl = self.fn["flags"].get(i, 0)
@@ -930,7 +1186,13 @@ class Fn:
             if fl & 2:
                 return "(.inout .replace)"  # `inout`: the caller's, changed in place
             return ".inp"
-        params = ", ".join(f"({mode(i)}, {self.vlean(i)})" for i in range(self.np))
+        if self.closure:
+            # the environment (lent, `inp`), then the interface's parameters
+            params = ", ".join([f"(.inp, {env_ty([cap_ty(self.fn['vars'][c]) for c in self.caps])})"] +
+                               [f"(.inp, {self.vlean(p)})" for p in self.prms] +
+                               [f"(.inp, {self.vlean(k)})" for k in self.named])
+        else:
+            params = ", ".join(f"({mode(i)}, {self.vlean(i)})" for i in range(self.np))
         own = "true" if self.res_own else "false"
         lends = ", ".join(self.lends)
         return (f"{{ params := [{params}], resTy := {self.res_ty}, resOwn := {own}, lends := [{lends}], rholds := [{lends}],\n"
@@ -940,19 +1202,43 @@ class Fn:
 def emit(text):
     # The standard library's functions are A2's constructs (`intrinsic`),
     # not bodies to check: their code is phase B's.
-    fns = [f for f in parse(text) if "stdlib/" not in f["file"]]
+    fns = [f for f in parse(text) if not f["file"].startswith("stdlib/")]
     names = {f["name"]: i for i, f in enumerate(fns)}
     NAMES.clear()
     NAMES.update(names)
     if "main" not in names:
         raise Unsupported("no main")
     out = ["import C.A3Prog", "open A2 C", ""]
+    CLO_SIGS.clear()
+    CLO_LIST.clear()
+    CLO_BASE[0] = len(fns)
+    FNS[:] = fns
     defs = []
     for i, f in enumerate(fns):
         defs.append(f"def fn{i} : Fn :=\n  {Fn(f, i).lean(names)}")
+    # one interface per closure type: the receiver (the closure, lent),
+    # then its parameters; its body is never run (a call runs the
+    # package's code), so it is one that type-checks: a result of the type,
+    # made fresh (a number, or an empty buffer)
+    for k, t in enumerate(CLO_LIST):
+        r, args = clo_sig(t)
+        sigma = CLO_BASE[0] + k
+        ps = ", ".join([f"(.inp, (.fn [{sigma}] .any))"] + [f"(.inp, {lean_ty(a)})" for a in args])
+        rty = lean_ty(r)
+        own = "false" if rty == ".int" else "true"
+        rs = len(args) + 1
+        if rty == ".int":
+            made = "(.expr (.lit 0))"
+        elif rty.startswith("(.vec ") and rty.count("(") == 1:
+            made = f"(.new {rty[len('(.vec '):-1]})"
+        else:
+            raise Unsupported(f"closure type {t}: a result of type {rty}")
+        defs.append(f"def fn{sigma} : Fn :=\n  {{ params := [{ps}], resTy := {rty}, resOwn := {own}, lends := [], "
+                    f"rholds := [],\n    outHolds := [], body := (.block (.seq (.assign {rs} {made}) (.exit 0))), "
+                    f"nvars := {rs + 1} }}")
     out += defs
     out.append("")
-    out.append("def P : Prog := [" + ", ".join(f"fn{i}" for i in range(len(fns))) + "]")
+    out.append("def P : Prog := [" + ", ".join(f"fn{i}" for i in range(len(fns) + len(CLO_LIST))) + "]")
     out.append(f"def entry : Stmt := .letcall 0 {names['main']} [] .skip")
     out.append("")
     out.append("#eval progOK2B P && (checkA2 P entry.vars (fun _ => none) [] entry).isSome && stmtCodesB P entry")

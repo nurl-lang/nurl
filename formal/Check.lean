@@ -1007,6 +1007,9 @@ import C
 -- Phase C8c: A3.2's lock and A3.4's channel right-hand sides, decided (AGORA-975)
 #print axioms C.chanRhs_ok
 #print axioms C.inferRhs2c_ok
+-- Phase C8p: A2's closure literal with no captures by name, decided (AGORA-978)
+#print axioms C.packRhs_ok
+#print axioms C.inferRhs2p_ok
 -- Phase C7x: A2's exit, decided by obligations on the exits context
 #print axioms C.checkX_sound
 -- Phase C11: A2 end to end - a program the checker accepts never gets stuck from the empty store
