@@ -8,4 +8,10 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 NURLC="${NURLC:-$ROOT/build/nurlc}"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 "$NURLC" "$1" > "$TMP/p.ll" 2> "$TMP/err" || { echo "nurlc: $(head -1 "$TMP/err")"; exit 1; }
-python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/p.ll" "${@:2}"
+case " ${*:2} " in
+  *" --journal "*)
+    # D1 asks which callees may panic: nurlc's core IR answers it
+    "$NURLC" --emit-core "$1" > "$TMP/p.core" 2>/dev/null
+    python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/p.ll" "${@:2}" --core "$TMP/p.core" "$NURLC" ;;
+  *) python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/p.ll" "${@:2}" ;;
+esac
