@@ -149,6 +149,7 @@ theorem BlkLe.rdBlk (B : Nat → Option Blk) : BlkLe B (rdBlk B) := by
   | lock => exact absurd rfl h
   | dead => exact absurd rfl h'
   | arc => rfl
+  | static => rfl
   | view => rfl
 
 /-- A block a slot's value refers to is reached. -/

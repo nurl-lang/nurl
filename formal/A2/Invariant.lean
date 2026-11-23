@@ -62,6 +62,7 @@ theorem BlkKeep.rd {bl bl' : Blk} (h : BlkKeep bl bl') : bl'.rd = bl.rd := by
   cases hkd : bl.kind with
   | arc => rw [ha (by rw [hkd]; simp) (by rw [hkd]; simp)]
   | view => rw [ha (by rw [hkd]; simp) (by rw [hkd]; simp)]
+  | static => rw [ha (by rw [hkd]; simp) (by rw [hkd]; simp)]
   | lock =>
     rw [hkd] at hk
     obtain ⟨t, k, p⟩ := bl; obtain ⟨t', k', p'⟩ := bl'

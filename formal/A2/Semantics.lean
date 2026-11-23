@@ -69,6 +69,7 @@ def Blk.rd (bl : Blk) : Val :=
   | .lock => .int 0
   | .view => bl.pay.getD (.int 0)
   | .dead => .int 0   -- Agora #610: no one reads an orphan's payload
+  | .static => bl.tree   -- AGORA-980: a literal's text, read through its views
 
 /-- A3.3: a view of lock block `k` lives (a read guard of an `RwLocked`): its
     payload is read, so whatever would change it waits (a writer's
