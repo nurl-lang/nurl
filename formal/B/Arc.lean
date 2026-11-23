@@ -19,7 +19,8 @@ their atomicity across threads is A3's and phase D's. The handles held are
 two lists of block ids, strong and weak. The invariant `ArcInv` says a
 block a handle names is live, its counts are the handles (plus the one
 shared weak), and it holds its value exactly while a strong handle names
-it. Each operation keeps the invariant, and every operation through a held
+it; once none does, the value slot is empty, because the move out of it
+zeroed it. Each operation keeps the invariant, and every operation through a held
 handle succeeds, so no handle ever reaches a freed block. Moreover:
 
 * the value comes out to be dropped exactly at the release of the last
@@ -37,12 +38,14 @@ variable {V : Type}
 
 /-- The counts and the value of the block a handle names, as the
     invariant asks: strong `= hs.count b`, weak `= ws.count b + [hs ∋ b]`,
-    and a value exactly while a strong handle names the block. -/
+    a value while a strong handle names the block, and the slot moved out
+    of (`.gone`) once none does. -/
 def ArcInv (h : Heap (RcCell V)) (hs ws : List Nat) : Prop :=
   ∀ b, (b ∈ hs ∨ b ∈ ws) → h.live b = true ∧ h.size b = 3 ∧
     h.cell b 0 = some (.cnt (hs.count b)) ∧
     h.cell b 1 = some (.cnt (ws.count b + (if b ∈ hs then 1 else 0))) ∧
-    (b ∈ hs → ∃ v, h.cell b 2 = some (.val v))
+    (b ∈ hs → ∃ v, h.cell b 2 = some (.val v)) ∧
+    (b ∉ hs → h.cell b 2 = some .gone)
 
 /-- `arc_new`: count 1, weak 1 (the strong handles' one), the value. -/
 def arcNew (h : Heap (RcCell V)) (x : V) : Heap (RcCell V) × Nat :=
@@ -66,15 +69,17 @@ def weakRelease (h : Heap (RcCell V)) (p : Nat) : Option (Heap (RcCell V) × Boo
   | _ => none
 
 /-- `Arc_drop`: `nurl_arc_release`. Not the last strong handle: count down.
-    The last: count 0 and the value out, then either the block freed (no
-    `Weak`, answer 2) or the strong handles' weak given up (answer 1). -/
+    The last: count 0, the value moved out of its slot (the move zeroes the
+    slot: `store zeroinitializer` through the field's address in the
+    emitted code), then either the block freed (no `Weak`, answer 2) or the
+    strong handles' weak given up (answer 1). -/
 def arcDrop (h : Heap (RcCell V)) (p : Nat) : Option (Heap (RcCell V) × Option V) :=
   match h.load p 0 with
   | some (.cnt n) =>
     if n = 1 then
       match h.load p 2, h.load p 1 with
       | some (.val v), some (.cnt w) =>
-        match h.store p 0 (.cnt 0) with
+        match (h.store p 0 (.cnt 0)).bind fun h0 => h0.store p 2 .gone with
         | none => none
         | some h1 =>
           if w = 1 then (h1.free p).map fun h2 => (h2, some v)
@@ -111,13 +116,14 @@ theorem arcNew_ok {h : Heap (RcCell V)} {hs ws : List Nat} (x : V) (hw : h.WF) (
     by_cases hbn : b = h.nid
     · subst hbn
       simp only [upd, ↓reduceIte, true_and]
-      refine ⟨?_, ?_, fun _ => ⟨x, by simp⟩⟩
+      refine ⟨?_, ?_, fun _ => ⟨x, by simp⟩, fun hn => absurd List.mem_cons_self hn⟩
       · simp [List.count_eq_zero_of_not_mem hnh]
       · simp [List.count_eq_zero_of_not_mem hnw]
     · have hb' : b ∈ hs ∨ b ∈ ws := by simp [hbn] at hb; exact hb
-      obtain ⟨h1, h2, h3, h4, h5⟩ := hi b hb'
+      obtain ⟨h1, h2, h3, h4, h5, h6⟩ := hi b hb'
       simp only [upd, ite_eq_right hbn]
-      refine ⟨h1, h2, ?_, ?_, fun hm => h5 (by simp [hbn] at hm; exact hm)⟩
+      refine ⟨h1, h2, ?_, ?_, fun hm => h5 (by simp [hbn] at hm; exact hm),
+        fun hn => h6 (fun hm => hn (List.mem_cons_of_mem _ hm))⟩
       · rw [h3, List.count_cons]; simp [Ne.symm hbn]
       · rw [h4]; simp [hbn]
   · simp only [arcNew, upd] at hb ⊢
@@ -127,29 +133,32 @@ theorem arcNew_ok {h : Heap (RcCell V)} {hs ws : List Nat} (x : V) (hw : h.WF) (
 theorem arcClone_ok {h : Heap (RcCell V)} {hs ws : List Nat} {p : Nat} (hw : h.WF) (hi : ArcInv h hs ws)
     (hp : p ∈ hs) :
     ∃ h', cntInc h p 0 = some h' ∧ ArcInv h' (p :: hs) ws ∧ h'.WF ∧ h'.live = h.live := by
-  obtain ⟨hl, hsz, hc0, hc1, hv⟩ := hi p (Or.inl hp)
+  obtain ⟨hl, hsz, hc0, hc1, hv, -⟩ := hi p (Or.inl hp)
   refine ⟨{ h with cell := upd h.cell p (upd (h.cell p) 0 (some (.cnt (hs.count p + 1)))) },
     by simp only [cntInc, load_of hl hsz (by omega) hc0, store_of hl hsz (by omega : 0 < 3)], ?_,
     fun b hb => hw b hb, rfl⟩
   intro b hb
   by_cases hbp : b = p
   · subst hbp
-    refine ⟨hl, hsz, by show (upd h.cell b _) b 0 = _; simp [upd], ?_, fun _ => ?_⟩
+    refine ⟨hl, hsz, by show (upd h.cell b _) b 0 = _; simp [upd], ?_, fun _ => ?_,
+      fun hn => absurd List.mem_cons_self hn⟩
     · show (upd h.cell b _) b 1 = _; simp [upd, hc1, hp]
     · obtain ⟨v, hv⟩ := hv hp; exact ⟨v, by show (upd h.cell b _) b 2 = _; simp [upd, hv]⟩
   · have hb' : b ∈ hs ∨ b ∈ ws := by simp [hbp] at hb; exact hb
-    obtain ⟨g1, g2, g3, g4, g5⟩ := hi b hb'
-    refine ⟨g1, g2, ?_, ?_, fun hm => ?_⟩
+    obtain ⟨g1, g2, g3, g4, g5, g6⟩ := hi b hb'
+    refine ⟨g1, g2, ?_, ?_, fun hm => ?_, fun hn => ?_⟩
     · show (upd h.cell p _) b 0 = _; simp only [upd, ite_eq_right hbp]; rw [g3, List.count_cons]; simp [Ne.symm hbp]
     · show (upd h.cell p _) b 1 = _; simp only [upd, ite_eq_right hbp]; rw [g4]; simp [hbp]
     · obtain ⟨v, hv⟩ := g5 (by simp [hbp] at hm; exact hm)
       exact ⟨v, by show (upd h.cell p _) b 2 = _; simp only [upd, ite_eq_right hbp]; exact hv⟩
+    · show (upd h.cell p _) b 2 = _; simp only [upd, ite_eq_right hbp]
+      exact g6 (fun hm => hn (List.mem_cons_of_mem _ hm))
 
 /-- `arc_downgrade` through a held strong handle: a `Weak` more. -/
 theorem arcDowngrade_ok {h : Heap (RcCell V)} {hs ws : List Nat} {p : Nat} (hw : h.WF) (hi : ArcInv h hs ws)
     (hp : p ∈ hs) :
     ∃ h', cntInc h p 1 = some h' ∧ ArcInv h' hs (p :: ws) ∧ h'.WF ∧ h'.live = h.live := by
-  obtain ⟨hl, hsz, hc0, hc1, hv⟩ := hi p (Or.inl hp)
+  obtain ⟨hl, hsz, hc0, hc1, hv, -⟩ := hi p (Or.inl hp)
   refine ⟨{ h with cell := upd h.cell p (upd (h.cell p) 1
       (some (.cnt (ws.count p + (if p ∈ hs then 1 else 0) + 1)))) },
     by simp only [cntInc, load_of hl hsz (by omega) hc1, store_of hl hsz (by omega : 1 < 3)], ?_,
@@ -157,16 +166,18 @@ theorem arcDowngrade_ok {h : Heap (RcCell V)} {hs ws : List Nat} {p : Nat} (hw :
   intro b hb
   by_cases hbp : b = p
   · subst hbp
-    refine ⟨hl, hsz, by show (upd h.cell b _) b 0 = _; simp [upd, hc0], ?_, fun _ => ?_⟩
+    refine ⟨hl, hsz, by show (upd h.cell b _) b 0 = _; simp [upd, hc0], ?_, fun _ => ?_,
+      fun hn => absurd hp hn⟩
     · show (upd h.cell b _) b 1 = _; simp [upd, hp]
     · obtain ⟨v, hv⟩ := hv hp; exact ⟨v, by show (upd h.cell b _) b 2 = _; simp [upd, hv]⟩
   · have hb' : b ∈ hs ∨ b ∈ ws := by simp [hbp] at hb; exact hb
-    obtain ⟨g1, g2, g3, g4, g5⟩ := hi b hb'
-    refine ⟨g1, g2, ?_, ?_, fun hm => ?_⟩
+    obtain ⟨g1, g2, g3, g4, g5, g6⟩ := hi b hb'
+    refine ⟨g1, g2, ?_, ?_, fun hm => ?_, fun hn => ?_⟩
     · show (upd h.cell p _) b 0 = _; simp only [upd, ite_eq_right hbp]; exact g3
     · show (upd h.cell p _) b 1 = _; simp only [upd, ite_eq_right hbp]; rw [g4, List.count_cons]; simp [Ne.symm hbp]
     · obtain ⟨v, hv⟩ := g5 hm
       exact ⟨v, by show (upd h.cell p _) b 2 = _; simp only [upd, ite_eq_right hbp]; exact hv⟩
+    · show (upd h.cell p _) b 2 = _; simp only [upd, ite_eq_right hbp]; exact g6 hn
 
 /-- Any change to block `p` alone keeps the invariant's clauses for every
     other block whose handles did not change. -/
@@ -177,18 +188,19 @@ theorem arcInv_other {h h' : Heap (RcCell V)} {hs ws hs' ws' : List Nat} {p : Na
     ∀ b, b ≠ p → (b ∈ hs' ∨ b ∈ ws') → h'.live b = true ∧ h'.size b = 3 ∧
       h'.cell b 0 = some (.cnt (hs'.count b)) ∧
       h'.cell b 1 = some (.cnt (ws'.count b + (if b ∈ hs' then 1 else 0))) ∧
-      (b ∈ hs' → ∃ v, h'.cell b 2 = some (.val v)) := by
+      (b ∈ hs' → ∃ v, h'.cell b 2 = some (.val v)) ∧ (b ∉ hs' → h'.cell b 2 = some .gone) := by
   intro b hbp hb
   have hmem : ∀ (l l' : List Nat), l'.count b = l.count b → (b ∈ l' ↔ b ∈ l) := by
     intro l l' e
     rw [← List.count_pos_iff, ← List.count_pos_iff, e]
   have e1 := hmem hs hs' (hhs b hbp)
   have e2 := hmem ws ws' (hws b hbp)
-  obtain ⟨g1, g2, g3, g4, g5⟩ := hi b (by rcases hb with hb | hb; exact Or.inl (e1.mp hb); exact Or.inr (e2.mp hb))
-  refine ⟨by rw [hlv b hbp]; exact g1, by rw [hsz b hbp]; exact g2, ?_, ?_, fun hm => ?_⟩
+  obtain ⟨g1, g2, g3, g4, g5, g6⟩ := hi b (by rcases hb with hb | hb; exact Or.inl (e1.mp hb); exact Or.inr (e2.mp hb))
+  refine ⟨by rw [hlv b hbp]; exact g1, by rw [hsz b hbp]; exact g2, ?_, ?_, fun hm => ?_, fun hn => ?_⟩
   · rw [hc b hbp, g3, hhs b hbp]
   · rw [hc b hbp, g4, hws b hbp]; simp only [e1]
   · obtain ⟨v, hv⟩ := g5 (e1.mp hm); exact ⟨v, by rw [hc b hbp]; exact hv⟩
+  · rw [hc b hbp]; exact g6 (fun hm => hn (e1.mpr hm))
 
 /-- `Arc_drop` through a held strong handle succeeds. The value comes out
     exactly when it was the last strong handle. The block is freed exactly
@@ -198,7 +210,7 @@ theorem arcDrop_ok {h : Heap (RcCell V)} {hs ws : List Nat} {p : Nat} (hw : h.WF
     (hp : p ∈ hs) :
     ∃ h' r, arcDrop h p = some (h', r) ∧ ArcInv h' (hs.erase p) ws ∧ h'.WF ∧
       ((hs.count p = 1 ↔ ∃ v, r = some v) ∧ (h'.live p = false ↔ p ∉ hs.erase p ∧ p ∉ ws)) := by
-  obtain ⟨hl, hsz, hc0, hc1, hv⟩ := hi p (Or.inl hp)
+  obtain ⟨hl, hsz, hc0, hc1, hv, -⟩ := hi p (Or.inl hp)
   obtain ⟨v, hv⟩ := hv hp
   have hpos : 0 < hs.count p := List.count_pos_iff.mpr hp
   have hc1' : h.cell p 1 = some (.cnt (ws.count p + 1)) := by rw [hc1]; simp [hp]
@@ -206,21 +218,28 @@ theorem arcDrop_ok {h : Heap (RcCell V)} {hs ws : List Nat} {p : Nat} (hw : h.WF
   by_cases h1 : hs.count p = 1
   · have hpe : p ∉ hs.erase p := by
       intro hm; have := List.count_pos_iff.mpr hm; rw [List.count_erase_self] at this; omega
-    let h1' : Heap (RcCell V) := { h with cell := upd h.cell p (upd (h.cell p) 0 (some (.cnt 0))) }
-    have hst := store_of (c := .cnt 0) hl hsz (by omega : 0 < 3)
+    let h0 : Heap (RcCell V) := { h with cell := upd h.cell p (upd (h.cell p) 0 (some (.cnt 0))) }
+    let h1' : Heap (RcCell V) := { h0 with cell := upd h0.cell p (upd (h0.cell p) 2 (some .gone)) }
+    have hst : ((h.store p 0 (.cnt 0)).bind fun h0 => h0.store p 2 .gone) = some h1' := by
+      rw [store_of (c := .cnt 0) hl hsz (by omega : 0 < 3), Option.bind_some]
+      exact store_of (h := h0) hl hsz (by omega : 2 < 3)
+    -- block `p`'s cells in `h1'`, and every other block's
+    have hp0 : h1'.cell p 0 = some (.cnt 0) := by simp [h1', h0, upd]
+    have hp1 : h1'.cell p 1 = h.cell p 1 := by simp [h1', h0, upd]
+    have hp2 : h1'.cell p 2 = some .gone := by simp [h1', upd]
+    have hoth : ∀ b, b ≠ p → h1'.cell b = h.cell b := fun b hb => by simp [h1', h0, upd, hb]
     by_cases hw1 : ws.count p = 0
     · -- the only owner, no Weak: the block freed at once (answer 2)
       have hpw : p ∉ ws := fun hm => by have := List.count_pos_iff.mpr hm; omega
       refine ⟨{ h1' with live := upd h1'.live p false }, some v, ?_, ?_, ?_, ⟨⟨fun _ => ⟨v, rfl⟩, fun _ => h1⟩, ?_⟩⟩
       · simp only [arcDrop, load_of hl hsz (by omega) hc0, h1, ↓reduceIte, load_of hl hsz (by omega) hv,
           load_of hl hsz (by omega) hc1', hst, hw1, Nat.zero_add, Heap.free]
-        simp [h1', hl]
+        simp [h1', h0, hl]
       · intro b hb
         have hbp : b ≠ p := by rintro rfl; rcases hb with hb | hb; exact hpe hb; exact hpw hb
         exact arcInv_other (h' := { h1' with live := upd h1'.live p false }) hi
           (fun b hb => by show (upd h.live p false) b = _; simp [upd, hb])
-          (fun _ _ => rfl) (fun b hb => by show (upd h.cell p _) b = _; simp [upd, hb])
-          herase (fun _ _ => rfl) b hbp hb
+          (fun _ _ => rfl) hoth herase (fun _ _ => rfl) b hbp hb
       · intro b hb; show (upd h.live p false) b = false
         simp only [upd]; split
         · rfl
@@ -231,8 +250,7 @@ theorem arcDrop_ok {h : Heap (RcCell V)} {hs ws : List Nat} {p : Nat} (hw : h.WF
       let h2 : Heap (RcCell V) := { h1' with cell := upd h1'.cell p (upd (h1'.cell p) 1 (some (.cnt (ws.count p)))) }
       have hl1 : h1'.live p = true := hl
       have hsz1 : h1'.size p = 3 := hsz
-      have hc1'' : h1'.cell p 1 = some (.cnt (ws.count p + 1)) := by
-        show (upd h.cell p _) p 1 = _; simp [upd, hc1']
+      have hc1'' : h1'.cell p 1 = some (.cnt (ws.count p + 1)) := by rw [hp1, hc1']
       have hwr : weakRelease h1' p = some (h2, false) := by
         simp only [weakRelease, load_of hl1 hsz1 (by omega) hc1'', show ¬ ws.count p + 1 = 1 by omega,
           ↓reduceIte, store_of hl1 hsz1 (by omega : 1 < 3), Option.map_some, Nat.add_sub_cancel]
@@ -240,21 +258,22 @@ theorem arcDrop_ok {h : Heap (RcCell V)} {hs ws : List Nat} {p : Nat} (hw : h.WF
       refine ⟨h2, some v, ?_, ?_, fun b hb => hw b hb, ⟨⟨fun _ => ⟨v, rfl⟩, fun _ => h1⟩, ?_⟩⟩
       · simp only [arcDrop, load_of hl hsz (by omega) hc0, h1, ↓reduceIte, load_of hl hsz (by omega) hv,
           load_of hl hsz (by omega) hc1', hst, show ¬ ws.count p + 1 = 1 by omega]
-        rw [show h1' = { h with cell := upd h.cell p (upd (h.cell p) 0 (some (.cnt 0))) } from rfl] at hwr
         rw [hwr]; rfl
       · intro b hb
         by_cases hbp : b = p
         · subst hbp
-          refine ⟨hl, hsz, ?_, ?_, fun hm => absurd hm hpe⟩
+          refine ⟨hl, hsz, ?_, ?_, fun hm => absurd hm hpe, fun _ => ?_⟩
           · show (upd h1'.cell b _) b 0 = _
             simp only [upd, ↓reduceIte]
-            show (upd h.cell b _) b 0 = _
-            simp [upd, List.count_erase_self, h1]
+            rw [show (h1'.cell b) 0 = some (.cnt 0) from hp0]
+            simp [List.count_erase_self, h1]
           · show (upd h1'.cell b _) b 1 = _
             simp [upd, hpe]
+          · show (upd h1'.cell b _) b 2 = _
+            simp only [upd, ↓reduceIte]
+            rw [show (h1'.cell b) 2 = some .gone from hp2]; rfl
         · exact arcInv_other (h' := h2) hi (fun _ _ => rfl) (fun _ _ => rfl)
-            (fun b hb => by show (upd h1'.cell p _) b = _; simp only [upd, ite_eq_right hb]
-                            show (upd h.cell p _) b = _; simp [upd, hb])
+            (fun b hb => by show (upd h1'.cell p _) b = _; simp only [upd, ite_eq_right hb]; exact hoth b hb)
             herase (fun _ _ => rfl) b hbp hb
       · show h.live p = false ↔ _; simp [hl, hpw]
   · -- not the last strong handle: count down
@@ -267,7 +286,8 @@ theorem arcDrop_ok {h : Heap (RcCell V)} {hs ws : List Nat} {p : Nat} (hw : h.WF
     · intro b hb
       by_cases hbp : b = p
       · subst hbp
-        refine ⟨hl, hsz, ?_, ?_, fun _ => ⟨v, by show (upd h.cell b _) b 2 = _; simp [upd, hv]⟩⟩
+        refine ⟨hl, hsz, ?_, ?_, fun _ => ⟨v, by show (upd h.cell b _) b 2 = _; simp [upd, hv]⟩,
+          fun hn => absurd hpe hn⟩
         · show (upd h.cell b _) b 0 = _; simp [upd, List.count_erase_self]
         · show (upd h.cell b _) b 1 = _; simp [upd, hc1', hpe]
       · exact arcInv_other (h' := { h with cell := upd h.cell p (upd (h.cell p) 0 (some (.cnt (hs.count p - 1)))) })
@@ -281,7 +301,7 @@ theorem weakDrop_ok {h : Heap (RcCell V)} {hs ws : List Nat} {p : Nat} (hw : h.W
     (hp : p ∈ ws) :
     ∃ h' fr, weakRelease h p = some (h', fr) ∧ ArcInv h' hs (ws.erase p) ∧ h'.WF ∧
       (fr = true ↔ (p ∉ hs ∧ p ∉ ws.erase p)) := by
-  obtain ⟨hl, hsz, hc0, hc1, hv⟩ := hi p (Or.inr hp)
+  obtain ⟨hl, hsz, hc0, hc1, hv, hg⟩ := hi p (Or.inr hp)
   have hpos : 0 < ws.count p := List.count_pos_iff.mpr hp
   have herase : ∀ b, b ≠ p → (ws.erase p).count b = ws.count b := fun b hb => List.count_erase_of_ne hb
   have hcnt : (ws.erase p).count p = ws.count p - 1 := by rw [List.count_erase_self]
@@ -307,11 +327,12 @@ theorem weakDrop_ok {h : Heap (RcCell V)} {hs ws : List Nat} {p : Nat} (hw : h.W
     · intro b hb
       by_cases hbp : b = p
       · subst hbp
-        refine ⟨hl, hsz, by show (upd h.cell b _) b 0 = _; simp [upd, hc0], ?_, fun hm => ?_⟩
+        refine ⟨hl, hsz, by show (upd h.cell b _) b 0 = _; simp [upd, hc0], ?_, fun hm => ?_, fun hn => ?_⟩
         · show (upd h.cell b _) b 1 = _
           simp only [upd, ↓reduceIte, hcnt]
           by_cases hm : b ∈ hs <;> simp [hm] at hlast ⊢ <;> omega
         · obtain ⟨x, hx⟩ := hv hm; exact ⟨x, by show (upd h.cell b _) b 2 = _; simp [upd, hx]⟩
+        · show (upd h.cell b _) b 2 = _; simp [upd, hg hn]
       · exact arcInv_other (h' := { h with cell := upd h.cell p (upd (h.cell p) 1
             (some (.cnt (ws.count p + (if p ∈ hs then 1 else 0) - 1)))) }) hi (fun _ _ => rfl) (fun _ _ => rfl)
           (fun b hb => by show (upd h.cell p _) b = _; simp [upd, hb]) (fun _ _ => rfl) herase b hbp hb
@@ -322,23 +343,24 @@ theorem weakDrop_ok {h : Heap (RcCell V)} {hs ws : List Nat} {p : Nat} (hw : h.W
 
 /-- `arc_weak_upgrade` through a held `Weak`: a strong handle exactly while
     the value is alive (a strong handle names the block). Otherwise none,
-    and nothing changes. -/
+    nothing changes, and the slot the value was in is empty. -/
 theorem upgrade_ok {h : Heap (RcCell V)} {hs ws : List Nat} {p : Nat} (hw : h.WF) (hi : ArcInv h hs ws)
     (hp : p ∈ ws) :
     ∃ h' ok, arcUpgrade h p = some (h', ok) ∧ (ok = true ↔ p ∈ hs) ∧
-      ArcInv h' (if ok then p :: hs else hs) ws ∧ h'.WF ∧ (ok = true → ∃ v, h'.cell p 2 = some (.val v)) := by
-  obtain ⟨hl, hsz, hc0, hc1, hv⟩ := hi p (Or.inr hp)
+      ArcInv h' (if ok then p :: hs else hs) ws ∧ h'.WF ∧ (ok = true → ∃ v, h'.cell p 2 = some (.val v)) ∧
+      (ok = false → h'.cell p 2 = some .gone) := by
+  obtain ⟨hl, hsz, hc0, hc1, hv, hg⟩ := hi p (Or.inr hp)
   by_cases hph : p ∈ hs
   · have hpos : hs.count p ≠ 0 := by have := List.count_pos_iff.mpr hph; omega
     obtain ⟨h', he, hi', hw', hlv⟩ := arcClone_ok hw hi hph
-    refine ⟨h', true, ?_, by simp [hph], by simpa using hi', hw', fun _ => ?_⟩
+    refine ⟨h', true, ?_, by simp [hph], by simpa using hi', hw', fun _ => ?_, fun e => by cases e⟩
     · simp only [cntInc] at he
       simp only [arcUpgrade, load_of hl hsz (by omega) hc0, hpos, ↓reduceIte]
       simp only [load_of hl hsz (by omega) hc0] at he
       rw [he]; rfl
-    · exact (hi' p (Or.inl (List.mem_cons_self))).2.2.2.2 List.mem_cons_self
+    · exact (hi' p (Or.inl (List.mem_cons_self))).2.2.2.2.1 List.mem_cons_self
   · have hz : hs.count p = 0 := List.count_eq_zero_of_not_mem hph
-    refine ⟨h, false, ?_, by simp [hph], by simpa using hi, hw, fun e => by cases e⟩
+    refine ⟨h, false, ?_, by simp [hph], by simpa using hi, hw, fun e => (by cases e), fun _ => hg hph⟩
     simp only [arcUpgrade, load_of hl hsz (by omega) hc0, hz, ↓reduceIte]
 
 end B

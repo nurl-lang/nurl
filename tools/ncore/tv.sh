@@ -18,11 +18,13 @@ case " ${*:2} " in
     python3 "$ROOT/tools/ncore/tvir.py" "$TMP/p.core" "$TMP/p.g.ll" > "$TMP/protect"
     EXTRA=(--protect "$TMP/protect") ;;
 esac
+# D0c: each callee's `sink` / `keeps` parameters, from the core IR
+[ -s "$TMP/p.core" ] || "$NURLC" --emit-core "$1" > "$TMP/p.core" 2>/dev/null
+EXTRA+=(--sums "$TMP/p.core")
 set -- "$1" $(printf '%s\n' "${@:2}" | grep -vx -- --ir) "${EXTRA[@]}"
 case " ${*:2} " in
   *" --journal "*)
     # D1 asks which callees may panic: nurlc's core IR answers it
-    "$NURLC" --emit-core "$1" > "$TMP/p.core" 2>/dev/null
     python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/p.ll" "${@:2}" --core "$TMP/p.core" "$NURLC" ;;
   *) python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/p.ll" "${@:2}" ;;
 esac

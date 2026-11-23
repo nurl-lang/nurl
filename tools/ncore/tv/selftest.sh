@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # selftest.sh: D0's validator must catch what a wrong drop insertion does.
-# The LLVM of owner_assigned_on_one_branch.nu validates; four edits of it,
-# each a codegen mistake, must each be reported as a mismatch.
+# The LLVM of owner_assigned_on_one_branch.nu validates; edits of it (and of
+# the other programs here), each a codegen mistake, must each be reported
+# as a mismatch.
 set -u
 D="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$D/../../.." && pwd)"
 NURLC="${NURLC:-$ROOT/build/nurlc}"
@@ -46,6 +47,46 @@ case "$(tv "$TMP/handed.ll")" in *"mismatch 0") ;; *) echo "FAIL: D0 refuses a p
 case "$(python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/handed.ll" --protect "$TMP/protect" | tail -1)" in
   *"mismatch 1") echo "ok: never_moved_binding_handed_on caught (D0b)" ;;
   *) echo "FAIL: never_moved_binding_handed_on not caught"; fail=1 ;; esac
+# D0c: what conservation alone cannot see, checked with the core IR's
+# summaries (`--sums`): the edited LLVM still releases each value once
+"$NURLC" --emit-core "$D/owner_assigned_on_one_branch.nu" > "$TMP/o.core" || exit 1
+cv() { python3 "$ROOT/tools/ncore/tvdrops.py" "$1" --sums "$2" | tail -1; }
+cmut() {  # cmut <name> <edited .ll> <core>
+  case "$(cv "$2" "$3")" in *"mismatch 1") echo "ok: $1 caught (D0c)" ;; *) echo "FAIL: $1 not caught"; fail=1 ;; esac
+}
+case "$(cv "$TMP/a.ll" "$TMP/o.core")" in *"mismatch 0") ;; *) echo "FAIL: the unedited program does not validate with --sums"; fail=1 ;; esac
+# w's release moved from its scope's end to before w is read
+python3 - "$TMP/a.ll" "$TMP/early.ll" <<'PY'
+import sys
+L = open(sys.argv[1]).read().split("\n")
+s = L.index(next(l for l in L if l.startswith("define i64 @__nurl_fn.f(")))
+e = next(k for k in range(s, len(L)) if L[k] == "}")
+end = next(k for k in range(s, e) if L[k] == "end_3:")
+d = next(k for k in range(end, e) if "@__dropif_" in L[k])
+pair = [L[d - 1], L[d]]
+del L[d - 1:d + 1]
+L[end + 1:end + 1] = pair
+open(sys.argv[2], "w").write("\n".join(L))
+PY
+cmut release_moved_to_an_earlier_point "$TMP/early.ll" "$TMP/o.core"
+# keep borrows its parameter (no `sink`); the edit gives it a flag and releases it
+awk '/define i64 @__nurl_fn.keep\(/{m=1} m && /^}/{m=0}
+  { if (m && /= alloca i64/) { print; print "  %xf = alloca i1"; next }
+    if (m && /store %Vec__i64 %v,/) { print; print "  store i1 true, i1* %xf"; next }
+    if (m && /^  ret /) { print "  %xl = load i1, i1* %xf"; print "  call void @__dropif_Vec__i64(i1 %xl, ptr %r0)" }
+    print }' "$TMP/a.ll" > "$TMP/lent.ll"
+case "$(tv "$TMP/lent.ll")" in *"mismatch 0") ;; *) echo "FAIL: D0 alone was expected to miss a borrowed parameter's release"; fail=1 ;; esac
+cmut borrowed_parameter_released "$TMP/lent.ll" "$TMP/o.core"
+# f moves v into eat's `sink` on one branch; the edit keeps v's flag set
+# there, so the frame releases what eat took
+K="$D/binding_moved_into_a_sink_on_one_branch.nu"
+"$NURLC" "$K" > "$TMP/k.ll" || exit 1
+"$NURLC" --emit-core "$K" > "$TMP/k.core" || exit 1
+case "$(cv "$TMP/k.ll" "$TMP/k.core")" in *"mismatch 0") ;; *) echo "FAIL: the sink program does not validate"; fail=1 ;; esac
+awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { if (m && /^then_1:/) t = 1; if (t && m && /store i1 0, i1\*/ && !c++) next; print }' "$TMP/k.ll" > "$TMP/given.ll"
+case "$(tv "$TMP/given.ll")" in *"mismatch 0") ;; *) echo "FAIL: D0 alone was expected to miss the sink's double ownership"; fail=1 ;; esac
+cmut a_move_released_instead "$TMP/given.ll" "$TMP/k.core"
 # D1, the panic journal: flat's registrations, edited
 J="$D/bindings_journaled_across_a_call_that_may_panic.nu"
 "$NURLC" "$J" > "$TMP/j.ll" || exit 1
