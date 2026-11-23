@@ -1509,7 +1509,10 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
         else none
       | none => none
     | none => none
-  | _, _, _ => none
+  -- (the two forms with no case here, one arm each: the match does not
+  -- overlap, so its equations are cheap to make)
+  | _, _, .catchR _ _ _ => none
+  | _, _, .exit _ => none
 
 theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : R.OK D) (hC : C.OK P D) :
     ∀ {s : Stmt} {ξ : Exits} {Γ : Ctx} {F : List Var} {Δ : Ctx},
