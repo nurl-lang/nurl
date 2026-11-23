@@ -3,8 +3,8 @@ import C.A2Panic
 /-!
 # C7: A2's statements, decided (AGORA-970)
 
-`checkStmt2` computes A2's `StmtT` for every statement form a function body
-can hold, whatever the exits `ξ` are:
+`checkStmt2` computes A2's `StmtT`, whatever the exits `ξ` are, for every
+statement form a function body can hold except `exit` (below):
 
 * `skip`, `seq`, `letv`, `letcall`, `letrec`, `assign`, `unpair`, `ite`,
   `while`, `block`, `loop`, `panic`, `frozen`, `scope`, `rbind`, `scopeL`;
@@ -32,6 +32,13 @@ Out of the checker's domain: `catchR`, a run-time form only (`src = false`,
 made by stepping, `recStmt`), whose premise is the heap invariant over a
 concrete memory; no function body holds one. `sub` is subsumption, used by
 the joins.
+
+Not decided yet: `exit n`. Its premise `ξ.up n Γ` asks the exits `ξ` to take
+the context at the exit, and `checkStmt2` is sound for every `ξ` without
+looking at it. Deciding it needs the checker to carry the pending exits
+(the context at each one, through the scopes it leaves) and to check each
+against the end of the block it leaves. So a body that leaves a block early
+(`exit`, which a function's early `^` becomes) is refused today.
 -/
 
 namespace C
