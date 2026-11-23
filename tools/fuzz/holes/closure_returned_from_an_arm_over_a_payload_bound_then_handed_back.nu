@@ -1,5 +1,5 @@
-// map: §7.5 | A2 | rejected | - | AGORA-953 (agora #242 twin): a `??` whose arms are closures capturing a payload of a local `??String`, bound by `:` then handed back: the payload binding is a cursor over the local option, whose release on the way out the closure would outlive
-// twin of tools/fuzz/holes/closure_returned_from_an_arm_over_a_payload.nu (tools/fuzz/holes/elab.py)
+// map: §7.5 | A2 | rejected | - | AGORA-958 (AGORA-242's twin): a `??` whose arms are closures capturing a payload of a local, bound by `:` then handed back
+// AGORA-958 (closed): refused - a bound closure arm captures what the scrutinee holds (main 26f26b53: accepted, heap-use-after-free under ASan); twin of tools/fuzz/holes/closure_returned_from_an_arm_over_a_payload.nu
 $ `stdlib/core/string.nu`
 
 @ cap → ( @ i ) {

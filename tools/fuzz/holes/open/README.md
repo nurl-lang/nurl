@@ -14,7 +14,7 @@ as named probes (`// map:` line).
 probe's elaborated twin (`elab.py`), its producer form bound by `:` first
 and the consumer reading the binding (agora #242). A twin known to fault
 is listed in `twins.txt` with its reason and is not run. None is listed
-now: agora #242's twins were closed by AGORA-953, each by the rule its
+now: agora #242's twins were closed by AGORA-953 and AGORA-958, each by the rule its
 unbound form already had.
 
 The history below is the earlier `hNNN` era. Agora #150 was closed and graduated as
