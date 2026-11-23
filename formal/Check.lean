@@ -1017,3 +1017,7 @@ import C
 -- Phase C9: A2's calls decided; the A2 checker so far (checkA2)
 #print axioms C.callB2_sound
 #print axioms C.checkA2_sound
+-- Phase C10: CtxWF / NameWF decided; A2's panic
+#print axioms C.ctxWF2B_sound
+#print axioms C.nameWFB_sound
+#print axioms C.panic_self

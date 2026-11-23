@@ -1,5 +1,4 @@
-import C.A2Rhs
-import A2.Invariant
+import C.A2Panic
 
 /-!
 # C7: A2's core statements, decided (AGORA-970)
@@ -291,6 +290,7 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
       | none => none
     | none => none
   | Γ, F, .frozen z s => checkStmt2 P R C D Γ (F ++ z) s
+  | Γ, _, .panic => if ctxWF2B D Γ && nameWFB D Γ then some Γ else none
   | _, _, _ => none
 
 theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : R.OK D) (hC : C.OK P D) :
@@ -480,6 +480,15 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     simp only [checkStmt2] at h
     obtain ⟨t0, s0⟩ := ih (ξ := .none) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h
     exact ⟨.frozen t0 (fun v hv => hv), s0⟩
+  | panic =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i hc
+      simp only [Bool.and_eq_true] at hc
+      simp only [Option.some.injEq] at h; subst h
+      exact ⟨panic_self hs hc.1 hc.2, hs⟩
+    · cases h
   | _ => intro ξ Γ F Δ hs hD h; simp [checkStmt2] at h
 
 end C
