@@ -407,7 +407,7 @@ class Fn:
             vm = {p: 1 + i for i, p in enumerate(prms)}
             # (captures by name: the code's parameters after the interface's,
             # `Implements`: `… ++ cs.map (·.2)`)
-            named = [k for k in caps if by_name(fn["vars"][k])]
+            named = [k for i, k in enumerate(caps) if by_name(fn["vars"][k]) and not is_moved(fn["name"], i)]
             for j, k in enumerate(named):
                 vm[k] = 1 + self.np + j
             caps = [k for k in caps if k not in named]
@@ -1181,14 +1181,15 @@ class Fn:
             if c == "c" or "/" in c or not (c.startswith("v") and c[1:].isdigit()):
                 raise Unsupported(f"{self.fn['name']}: a capture that is not a variable")
         # (the literal's captures in the code's order: numbers by value into
-        # the environment, buffers by name)
-        named = [c for c in caps if by_name(self.fn["vars"][int(c[1:])])]
+        # the environment, buffers by name, but a buffer every literal moves
+        # in by value: the environment owns it, AGORA-994)
+        named = [c for j, c in enumerate(caps) if by_name(self.fn["vars"][int(c[1:])]) and not is_moved(f, j)]
         caps = [c for c in caps if c not in named]
         n = len(caps)
         tys = [cap_ty(self.fn["vars"][int(c[1:])]) for c in caps]
         code = FNS[names[f]]
         ck = sorted(k for k in code["vars"] if code.get("kind", {}).get(k) == 3)
-        ck = [k for k in ck if by_name(code["vars"][k])]
+        ck = [k for j, k in enumerate(ck) if by_name(code["vars"][k]) and not is_moved(f, j)]
         if len(ck) != len(named):
             raise Unsupported(f"{self.fn['name']}: closure {f}'s captures by name")
         cs = ", ".join(f"({self.pvar(c)}, {cap_mode(code, k)}, {self.vlean(int(c[1:]))})"
@@ -1270,6 +1271,44 @@ class Fn:
                 f"    outHolds := [], body := {body}, nvars := {self.next + 1} }}")
 
 
+# AGORA-994: per closure code, the captures (its kind-3 variables) that
+# every literal of it moves into the environment: the creating function
+# releases the binding nowhere and reads it no more after the literal, so
+# the environment owns the buffer (a capture by value), not a handle of a
+# binding that lives on (a capture by name, `cap_ty`)
+MOVED_CAPS = {}
+
+
+def moved_caps(fns):
+    MOVED_CAPS.clear()
+    seen = {}
+    for fn in fns:
+        body = fn["body"]
+        for li, line in enumerate(body):
+            w = line.split()
+            if len(w) >= 5 and w[0] == "let" and w[2] == "closure":
+                code, n = w[3], int(w[4])
+                ops = w[5:5 + n]
+                later = body[li + 1:]
+                moved = set()
+                for j, op in enumerate(ops):
+                    if not (op.startswith("v") and op[1:].isdigit()):
+                        continue
+                    pat = re.compile(r"(^|[\s/])" + re.escape(op) + r"($|[\s/])")
+                    dropped = any(l.split()[:2] == ["drop", op[1:]] for l in body)
+                    if not dropped and not any(pat.search(l) for l in later):
+                        moved.add(j)
+                seen.setdefault(code, []).append(moved)
+    for code, sets in seen.items():
+        MOVED_CAPS[code] = set.intersection(*sets) if sets else set()
+
+
+def is_moved(code_name, j):
+    """Is capture `j` (in the code's order) of closure code `code_name`
+    moved into the environment by every literal of it?"""
+    return j in MOVED_CAPS.get(code_name, set())
+
+
 def emit(text):
     # The standard library's functions are A2's constructs (`intrinsic`),
     # not bodies to check: their code is phase B's.
@@ -1284,6 +1323,7 @@ def emit(text):
     CLO_LIST.clear()
     CLO_BASE[0] = len(fns)
     FNS[:] = fns
+    moved_caps(fns)
     defs = []
     for i, f in enumerate(fns):
         defs.append(f"def fn{i} : Fn :=\n  {Fn(f, i).lean(names)}")
