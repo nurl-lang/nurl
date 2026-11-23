@@ -2139,6 +2139,129 @@ theorem rhs_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : R
       obtain ⟨E0, h0, rfl⟩ := hr
       simp [h0]
 
+theorem idsL_replicate_int (n k : Nat) : idsL (List.replicate n (Val.int k)) = [] := by
+  induction n with
+  | zero => rfl
+  | succ n ih => simp [List.replicate, Val.ids, ih]
+
+/-- The store `slit` leaves (`EvalR.slit`). -/
+def slitMem (m : Mem) (n : Nat) : Mem :=
+  { m with alloc := upd (upd m.alloc m.nid true) (m.nid + 1) true, nid := m.nid + 3,
+           blk := upd m.blk (m.nid + 2)
+             (some ⟨.vec .int, .static, some (.node .int m.nid (m.nid + 1) (List.replicate n (.int 0)))⟩) }
+
+/-- AGORA-980, `slit`: a literal's text, a node of integers at two fresh
+    addresses, put in a fresh static block, and a view of it handed back,
+    valid with no dependency (`ValOK.sview`).  The block owns the text: no
+    owned tree, no other payload holds its addresses (they are fresh). -/
+theorem rhs_slit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) {n : Nat}
+    (hfr : m.blk (m.nid + 2) = none) :
+    RhsPost m (slitMem m n) Γ Γ F ∧
+    RhsOut (slitMem m n) Γ ⟨.slice .int, .bor, true, [], [], false, false, false, false⟩ (.view (m.nid + 1) 0 n) false := by
+  let N : Val := .node .int m.nid (m.nid + 1) (List.replicate n (.int 0))
+  let bl : Blk := ⟨.vec .int, .static, some N⟩
+  let m1 : Mem := { m with alloc := upd (upd m.alloc m.nid true) (m.nid + 1) true, nid := m.nid + 3 }
+  let m2 : Mem := { m1 with blk := upd m.blk (m.nid + 2) (some bl) }
+  show RhsPost m m2 Γ Γ F ∧ RhsOut m2 Γ _ _ false
+  have hNids : N.ids = [m.nid, m.nid + 1] := by simp [N, ids_node, idsL_replicate_int]
+  -- the text's addresses are fresh: no owned tree, no payload holds one
+  have hold : ∀ i, i < m.nid → m1.alloc i = m.alloc i := fun i hi' => by
+    show upd (upd m.alloc m.nid true) (m.nid + 1) true i = m.alloc i
+    rw [upd_ne _ _ (by omega), upd_ne _ _ (by omega)]
+  have hheap1 : HeapOK m1 :=
+    { nodup := fun o U hU => hi.heap.nodup o U hU
+      disj := fun o1 o2 U1 U2 hne h1 h2 => hi.heap.disj o1 o2 U1 U2 hne h1 h2
+      alloc := fun o U hU i hi' => by
+        obtain ⟨ha, hlt⟩ := hi.heap.alloc o U hU i hi'
+        exact ⟨by rw [hold i hlt]; exact ha, by show i < m.nid + 3; omega⟩
+      self := fun o U hU => hi.heap.self o U hU
+      blk := hi.heap.blk.frame rfl (by show m.nid ≤ m.nid + 3; omega)
+        (fun i hi' => hold i (hi.heap.payAlloc hi').2)
+        (fun o U hU i hi' => hi.heap.notPay hU hi')
+      views := hi.heap.views }
+  have hi1 : MInv m1 Γ := hi.of_st rfl hheap1 (Nat.le_refl _)
+  have hnew : m2.blk (m.nid + 2) = some bl := by simp [m2]
+  have hcases : ∀ k b, m2.blk k = some b → (k = m.nid + 2 ∧ b = bl) ∨ (k ≠ m.nid + 2 ∧ m.blk k = some b) := by
+    intro k b hk
+    by_cases hkn : k = m.nid + 2
+    · subst hkn; rw [hnew] at hk; cases hk; exact .inl ⟨rfl, rfl⟩
+    · refine .inr ⟨hkn, ?_⟩
+      have : m2.blk k = m.blk k := by simp [m2, upd_ne _ _ hkn]
+      rw [← this]; exact hk
+  have hb : BlkLe m1.blk m2.blk := by
+    refine BlkLe.of_le fun k b hk => ?_
+    have hne : k ≠ m.nid + 2 := fun h => by rw [h] at hk; exact absurd (hk.symm.trans hfr) (by simp)
+    show upd m.blk (m.nid + 2) _ k = some b
+    rw [upd_ne _ _ hne]; exact hk
+  -- the new block owns its text
+  have hbo : BlkOwn m2 := by
+    intro k b hk
+    rcases hcases k b hk with ⟨rfl, rfl⟩ | ⟨hkn, h⟩
+    · refine ⟨by show m.nid + 2 < m.nid + 3; omega, by simp [bl, Blk.tree, hNids], fun i hi' => ?_⟩
+      have hi2 : i = m.nid ∨ i = m.nid + 1 := by simpa [bl, Blk.tree, hNids] using hi'
+      refine ⟨?_, by show i < m.nid + 3; omega, fun x T hT hiT => ?_, fun k' b' hk' hk'' hib => ?_⟩
+      · show upd (upd m.alloc m.nid true) (m.nid + 1) true i = true
+        rcases hi2 with rfl | rfl
+        · rw [upd_ne _ _ (by omega)]; simp
+        · simp
+      · have := (hi.heap.alloc x T hT i hiT).2; omega
+      · rcases hcases k' b' hk'' with ⟨rfl, _⟩ | ⟨_, h'⟩
+        · exact hk' rfl
+        · have := (hi.heap.payAlloc ⟨k', b', h', hib⟩).2; omega
+    · obtain ⟨hkey, hnd, hall⟩ := hheap1.blk k b h
+      refine ⟨hkey, hnd, fun i hi' => ?_⟩
+      obtain ⟨ha, hlt, hsl, hoth⟩ := hall i hi'
+      refine ⟨ha, hlt, hsl, fun k' b' hk' hk'' => ?_⟩
+      rcases hcases k' b' hk'' with ⟨rfl, rfl⟩ | ⟨_, h'⟩
+      · have := (hi.heap.payAlloc ⟨k, b, h, hi'⟩).2
+        intro hib
+        have : i = m.nid ∨ i = m.nid + 1 := by simpa [bl, Blk.tree, hNids] using hib
+        omega
+      · exact hoth k' b' hk' h'
+  have hheap : HeapOK m2 :=
+    HeapOK.mono hheap1 rfl (fun _ h => h) (Nat.le_refl _) hbo (hheap1.views.fresh hfr (by simp [bl]))
+  have hwN : WFv (.vec .int) N :=
+    WFv.node fun e he => by rw [List.eq_of_mem_replicate he]; exact .int
+  have hB : BlocksIn m2 := fun k b hk => by
+    rcases hcases k b hk with ⟨rfl, rfl⟩ | ⟨_, h⟩
+    · have hdt : bl.DtorOK := ⟨fun _ _ => Or.inl rfl, fun h => (by cases h), fun h => (by cases h)⟩
+      refine ⟨rfl, rfl, fun p hp => ?_, .inr rfl, hdt, rfl⟩
+      cases hp
+      exact ⟨hwN, SharesOK.of_noArc rfl⟩
+    · obtain ⟨h1, h2, h3, h4⟩ := hi1.blocks k b h
+      exact ⟨h1, h2, fun p hp => ⟨(h3 p hp).1, (h3 p hp).2.grow hb⟩, h4⟩
+  have hinv : MInv m2 Γ := hi1.grow rfl hheap (Nat.le_refl _) hb hB
+  refine ⟨⟨hinv, rfl, by show m.nid ≤ m.nid + 3; omega, fun _ => rfl, fun _ _ => rfl,
+    fun _ _ h _ => h, fun _ => rfl, fun x E1 h => ⟨E1, h, rfl, rfl⟩, DKeep.refl _ _, hb⟩, ?_⟩
+  have hpay : PayAddr m2 (m.nid + 1) := ⟨m.nid + 2, bl, hnew, by simp [bl, Blk.tree, hNids]⟩
+  refine
+    { own := rfl
+      mode := Or.inr rfl
+      live := rfl
+      tyok := rfl
+      wf := fun _ r hr => by simp [roots, Entry.vdeps, Mode.ownSlot] at hr
+      valOwn := fun h => by cases h
+      valBor := fun _ => .sview ⟨rfl, m.nid + 2, bl, m.nid, _, hnew, rfl, Sub.refl _, by simp, hwN⟩
+      names := fun _ d hd => by simp [Entry.vdeps, Mode.ownSlot] at hd
+      held := NamesIn.nil _ rfl
+      pkgs := PkgsOK.leaf (fun _ h => by cases h) (fun _ _ _ _ _ h => by cases h)
+      shares := fun h => by cases h
+      pkgFree := fun i hn => ?_ }
+  -- what the view names is its text's buffer, an address the block owns
+  have hieq : i = m.nid + 1 := by
+    rcases hn with ⟨_, _, ⟨c, hb', _⟩ | ⟨o, l, h⟩⟩ | ⟨_, _, o, l, hb'⟩ | ⟨_, _, c, _, _, _, _, _, hb', _⟩ |
+        ⟨h, _⟩
+    · have := hb'.of_leaf (fun _ _ h => by cases h) (fun _ h => by cases h) (fun _ h => by cases h)
+      cases this
+    · cases h; rfl
+    · have := hb'.of_leaf (fun _ _ h => by cases h) (fun _ h => by cases h) (fun _ h => by cases h)
+      cases this; rfl
+    · have := hb'.of_leaf (fun _ _ h => by cases h) (fun _ h => by cases h) (fun _ h => by cases h)
+      cases this
+    · cases h
+  subst hieq
+  exact hheap.pkgFree_of_pay hpay
+
 theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} {v : Val} {o : Bool}
     (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) (hno : ∀ y ∈ r.vars, y ∉ F → NoHeld Γ y) :
@@ -2215,6 +2338,9 @@ theorem rhs_pres {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry
   | «at» hy hl ht hx =>
     cases he with
     | «at» hn hvec _ => exact ⟨RhsPost.same hi, (out_at hi hy hl ht hn hvec).setFresh _⟩
+  | slit =>
+    cases he with
+    | slit hfr => exact rhs_slit hi hfr
   | view hy hl ht hhv =>
     cases he with
     | view hvec => exact ⟨RhsPost.same hi, ((out_view hi hy hl ht hhv hvec).setFresh _).setHeldFresh _⟩

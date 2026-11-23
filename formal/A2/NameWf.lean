@@ -253,6 +253,7 @@ theorem RhsT.names {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hr : Rhs
   cases hr with
   | expr _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | new _ => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
+  | slit => exact ⟨hn, fun _ _ => DepsNamed.nil _, ⟨[], Keeps.refl Γ []⟩⟩
   | moveOwn hy hl _ _ _ =>
     refine ⟨hn.moved hy, fun _ h => own_named (moved_named hn hy hl (h.resolve_right (by intro e; cases e))),
       ⟨_, Keeps.moved Γ hy⟩⟩

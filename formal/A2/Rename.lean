@@ -3065,6 +3065,10 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) (hfo : FreshOK Γa) {Fa : List V
     refine ⟨_, RhsT.new ht, fun x => S.subE_weaker (E := ⟨.vec _, .own, true, [], [], false, false, false, false⟩) ?_⟩
     exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
       (fun h' => by simp [Mode.ownSlot] at h') (by simp)
+  | slit =>
+    refine ⟨_, RhsT.slit, fun x => S.subE_weaker (E := ⟨.slice .int, .bor, true, [], [], false, false, false, false⟩) ?_⟩
+    exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
+      (fun _ => by simp) (by simp)
   | @moveOwn y Ey hy hl hm hyF _ hds =>
     have hpy : S.isPi y = false := hvs y (by simp [Rhs.vars])
     have hc : S.canon Γa (S.ρ y) = some (S.subE (S.liftE y Ey)) := canon_some h hy hpy
