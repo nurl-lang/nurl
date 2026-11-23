@@ -587,7 +587,8 @@ theorem Inv.sweepR {R : Val → Prop} {m : Mem} (hR : ∀ v, m.vals v → R v) {
     pinOut := hi.pinOut
     pinIn := hi.pinIn
     dtorOut := hi.dtorOut
-    dtorIn := hi.dtorIn }
+    dtorIn := hi.dtorIn
+    heldCaps := hi.heldCaps.of_st (Mem.sweepR_st R m) }
 
 theorem Inv.sweep {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) : Inv m.sweep Γ F s :=
   hi.sweepR fun _ h => h

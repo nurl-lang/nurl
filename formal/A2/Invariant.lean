@@ -1731,6 +1731,34 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   pkgFree   : ∀ x Ex o v, Γ x = some Ex → Alive Ex → m.st x = some ⟨o, some v⟩ →
                 ∀ i, PkgNames m Γ Ex v i → PkgFreeId m i
 
+/-- AGORA-937 B2 (AGORA-963): the closure-capture clause. A held anchor's
+    root, not lent out, is captured by no package in the store but
+    read-only (`.inp`), so no call through a package hands it to an
+    `inout` parameter of the code (`CapInout.not_held`, `CapClause.lean`). -/
+def HeldCapsInp (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine →
+  ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F →
+  ∀ x o V fs te ms e cs, m.st x = some ⟨o, some V⟩ → Sub (.pkg fs te ms e cs) V →
+  ∀ q ∈ cs, q.1 = d.root → q.2.1 = .inp
+
+/-- ... read off the slots, the borrowed parameters and the running scopes. -/
+theorem HeldCapsInp.of_st {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
+    (hst : m'.st = m.st) : HeldCapsInp m' Γ F s :=
+  fun p E hp hm hps d hd hb hh hF x o V fs te ms e cs hx =>
+    h p E hp hm hps d hd hb hh hF x o V fs te ms e cs (hst ▸ hx)
+
+theorem HeldCapsInp.respine {m : Mem} {Γ : Ctx} {F : List Var} {s s' : Stmt} (h : HeldCapsInp m Γ F s)
+    (hsp : ∀ v ∈ s.spine, v ∈ s'.spine) : HeldCapsInp m Γ F s' :=
+  fun p E hp hm hps => h p E hp hm fun h' => hps (hsp _ h')
+
+theorem HeldCapsInp.of_rootb {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
+    (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E) : HeldCapsInp m Γ' F s :=
+  fun p E hp hm => h p E (hrb p E hp hm) hm
+
+theorem HeldCapsInp.mono {m : Mem} {Γ : Ctx} {F F' : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
+    (hF : ∀ v ∈ F, v ∈ F') : HeldCapsInp m Γ F' s :=
+  fun p E hp hm hps d hd hb hh hF' => h p E hp hm hps d hd hb hh fun h' => hF' (hF _ h')
+
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
 structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv m Γ where
@@ -1754,6 +1782,22 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
                 (E.ty ≠ .int ∨ E.mode = .rootb) → v ∉ s.spine → ∀ d ∈ E.vdeps,
                 d.kind.isName = false → d.root ∉ s.spine
   dtorIn    : DtorPinOK Γ s
+  /-- AGORA-937 B2 (AGORA-963): the closure-capture clause. -/
+  heldCaps  : HeldCapsInp m Γ F s
+
+/-- The invariant from its fields, the closure-capture clause first. -/
+theorem Inv.mk₀ {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hcaps : HeldCapsInp m Γ F s)
+    (toMInv : MInv m Γ) (nvS : ∀ v ∈ s.vars, v < m.nv) (nvF : ∀ v ∈ F, v < m.nv)
+    (anch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → AnchoredS Γ E F s.killVars)
+    (spineNd : s.spine.Nodup) (spineDom : ∀ v ∈ s.spine, ∃ E, Γ v = some E) (catchOK : CatchOK m s)
+    (cover : Covers m)
+    (pinOut : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∉ s.spine)
+    (pinIn : PinOK Γ s)
+    (dtorOut : ∀ v E, Γ v = some E → E.dbind = true → E.mode.ownSlot = true →
+                (E.ty ≠ .int ∨ E.mode = .rootb) → v ∉ s.spine → ∀ d ∈ E.vdeps,
+                d.kind.isName = false → d.root ∉ s.spine)
+    (dtorIn : DtorPinOK Γ s) : Inv m Γ F s :=
+  ⟨toMInv, nvS, nvF, anch, spineNd, spineDom, catchOK, cover, pinOut, pinIn, dtorOut, dtorIn, hcaps⟩
 
 /-- Agora #755: `StmtT.withLock`'s `hna` where the payload owns no destructor
     value (its type is known) or the body assigns nothing to the binding. -/

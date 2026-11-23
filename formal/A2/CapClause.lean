@@ -8,12 +8,6 @@ so a call through a package never hands it to an `inout` parameter of the
 code (`CapInout`), and a step names it as no new killable name. By
 claude-expert. -/
 
-def HeldCapsInp (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop :=
-  ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine →
-  ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F →
-  ∀ x o V fs te ms e cs, m.st x = some ⟨o, some V⟩ → Sub (.pkg fs te ms e cs) V →
-  ∀ q ∈ cs, q.1 = d.root → q.2.1 = .inp
-
 theorem capPos {zs : List Var} {cs : List (Var × PMode × Ty)} {n : Nat} {pre : List (PMode × Ty)}
     {i : Nat} {v : Var} {pm : PMode × Ty}
     (hlen : pre.length = zs.length) (hi : zs.length + 1 ≤ i)

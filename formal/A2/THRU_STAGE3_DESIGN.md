@@ -808,7 +808,13 @@ This makes B2's last two cases depend on B3's invariant. The order is therefore:
   - *The `NoHeld` callbacks of `PushArg` / `EditArg` / `editBH` / `editBVH` take a no-region premise: a callee frame's region may carry held self-views, and only the `move` case asks.*
   - *The strict `StmtT.ctxRel` stays as a corollary for a callee's body. Its R-only helpers in SrcKeep had no other users and are gone.)*
 
-**All 7 places left are AGORA-963's (the closure-capture clause).**
+**The closure-capture clause in the invariant (2026-11-23).**
+- `Inv.heldCaps : HeldCapsInp m Γ F s` is the clause (claude-expert's, CapClause.lean; its definition sits in Invariant.lean ahead of `Inv`).
+- With it, Preservation's `frozenIn` and `catchR` are proved by `Step.held_not_killVars`.
+- What is left:
+  - **AGORA-963 step 3, preservation of the clause:** every `Inv` a step builds is marked `WIP scaffold (AGORA-963 step 3, …): HeldCapsInp across this step`. `grep -rn "AGORA-963 step 3" formal/` lists them: 33 sites in Preservation, EnvHand, Closure and CallInv. The positional constructions go through `Inv.mk₀ hcaps …`, and `Inv.ofLeaf` takes the clause first.
+  - **Proved already:** the sites where the store's slots, the borrowed parameters and the spine carry over (`HeldCapsInp.of_st / respine / of_rootb / mono`): the sweeps, `Inv.weaker`, `Inv.clean`, `Inv.respine`, the `…In` lemmas, A3's `Nid` and spawn, and the empty store.
+  - **The other 5:** Closure ×3 and EnvHand ×2 (the closure call and the package hand-over), which use the clause at the call.
 - *(Proved since, B3's call side: `CallA.anch` is `RootbAnchRS Γ F args`. An anchor is in `F`, through a region, or held of a root that is no argument and holds no views.*
   - *`NamesFree` asks that the closures' by-name change ends no held view. That is the call-site twin of 963's clause, in the spare form `HeldSpared` reads.*
   - *`namesFree_lift` carries it into the lifted frame from `S.OK` as it stands, with no new field (`liftE_rootb_held_mem`, `Φsat`, `N_mut`).*

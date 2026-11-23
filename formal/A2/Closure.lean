@@ -721,7 +721,10 @@ theorem Inv.clean {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ 
     dtorIn := hi.dtorIn.of_dbind fun v E hv hd hos hn => by
       obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
       rw [Entry.clean_dbind] at hd; rw [clean_mode] at hos; rw [clean_ty, clean_mode] at hn
-      exact ⟨E0, h0, hd, hos, hn, fun d hdd _ => Entry.clean_vdeps_sub hdd⟩ }
+      exact ⟨E0, h0, hd, hos, hn, fun d hdd _ => Entry.clean_vdeps_sub hdd⟩ 
+    heldCaps := hi.heldCaps.of_rootb fun p E hp hm => by
+        obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
+        rw [clean_mode] at hm; rw [clean_rootb hm]; exact h0 }
 
 theorem derive_clean_sub (y : Var) (E : Entry) (k : Kind) : derive y E.clean k ⊆ derive y E k := by
   unfold derive; rw [clean_mode, clean_ty]
@@ -2940,7 +2943,9 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
         pinOut := pinOut_nil rfl
         pinIn := trivial
         dtorOut := dtorOut_nil rfl
-        dtorIn := trivial }
+        dtorIn := trivial 
+        -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
+        heldCaps := sorry }
     have h := callH_of hP hf hxe' hxF' hcT' hIe
     have hI := h.inv hIe hb
     -- the environment's binding, where the call leaves it
@@ -3263,7 +3268,9 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
                     obtain ⟨E0, h0, hd0⟩ := h.post_dbind h1 hd
                     rw [hEe] at h0; cases h0
                     exact absurd hd0 (by simp [Ee, envE])
-                · exact h.spine_dbind v hv' E hE }
+                · exact h.spine_dbind v hv' E hE 
+              -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
+              heldCaps := sorry }
     · have hve : v ≠ m.nv := fun e => by rw [e, hΓe0] at hv; cases hv
       have hv' : Γe v = some E.clean := by simp only [Γe, setE, upd_ne _ _ hve]; exact cleanC_of hv
       obtain ⟨hns, E', h', hm', ht', hrb'⟩ := hkeep.1 v E.clean hv' (by simp [Stmt.spine])

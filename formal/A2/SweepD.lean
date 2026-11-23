@@ -297,7 +297,8 @@ theorem Inv.sweepDR (hR : ∀ v, m.vals v → R v) {Γ : Ctx} {F : List Var} {s 
     pinOut := hi.pinOut
     pinIn := hi.pinIn
     dtorOut := hi.dtorOut
-    dtorIn := hi.dtorIn }
+    dtorIn := hi.dtorIn
+    heldCaps := hi.heldCaps.of_st (Mem.sweepDR_st R m) }
 
 /-- The packages in memory are the slots' and the blocks', which the marking
     sweep keeps or marks (a marked block owns what it owned and its holders

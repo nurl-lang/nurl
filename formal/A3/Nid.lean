@@ -120,7 +120,7 @@ theorem inv_move {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F
       · exact Or.inl ⟨x, T, hT, hiT⟩
       · exact Or.inr h,
     pinOut := hi.pinOut, pinIn := hi.pinIn, dtorOut := hi.dtorOut,
-    dtorIn := hi.dtorIn }
+    dtorIn := hi.dtorIn, heldCaps := hi.heldCaps.of_st rfl }
 
 theorem ThreadOK.move {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {A : Nat → Bool} {n : Nat}
     {B : Nat → Option Blk} {TK : Nat → Bool} (hown : ∀ x T, OwnedAt m x T → ∀ i ∈ T.ids, A i = true)
