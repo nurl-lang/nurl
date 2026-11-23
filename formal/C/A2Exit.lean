@@ -180,6 +180,32 @@ theorem loopEnd_supported {Γ : Ctx} {D : List Var} (hs : Supported2 Γ D) :
   | (0, Γe) :: E, h => h (0, Γe) (List.mem_cons_self ..)
   | (_ + 1, _) :: E, h => loopEnd_supported (E := E) hs (fun e he => h e (List.mem_cons_of_mem _ he))
 
+/-- The statement contains an `exit`. `checkStmt2` decides no exit, so it
+    refuses every such statement: `checkX` does not ask it first (`pre2`),
+    and a binding's body is not scanned once per binding around an exit
+    (github#2242's review, A2Exit l.204). -/
+def hasExit : Stmt → Bool
+  | .exit _ => true
+  | .seq a b => hasExit a || hasExit b
+  | .ite _ a b => hasExit a || hasExit b
+  | .letv _ _ s | .letcall _ _ _ s | .while _ s | .scope _ s | .rbind _ s | .frozen _ s
+  | .letrec _ _ s | .catchR _ _ s | .unpair _ _ _ s | .callc _ _ _ _ _ s | .letd _ _ _ s
+  | .scopeD _ _ s | .withLock _ _ s | .scopeL _ _ _ s | .withElem _ _ _ s | .callcE _ _ _ _ s
+  | .block s | .loop s | .takeB _ _ _ s => hasExit s
+  | _ => false
+
+/-- `checkStmt2`, asked only of a statement with no `exit`. -/
+def pre2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) (Γ : Ctx) (F : List Var) (s : Stmt) :
+    Option Ctx :=
+  if hasExit s then none else checkStmt2 P R C D Γ F s
+
+theorem pre2_some {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} {Γ : Ctx} {F : List Var} {s : Stmt}
+    {Δ : Ctx} (h : pre2 P R C D Γ F s = some Δ) : checkStmt2 P R C D Γ F s = some Δ := by
+  unfold pre2 at h
+  split at h
+  · cases h
+  · exact h
+
 /-- What `checkX` finds: the end context, the obligations on the exits
     context, and, for a statement that ends in an exit, that exit's depth
     and the context it leaves from (so a branch may end it elsewhere). -/
@@ -191,7 +217,7 @@ structure XR where
 def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option XR
   | Γ, _, .exit n => if exitToB D Γ Γ then some ⟨Γ, [(n, Γ)], some (n, Γ)⟩ else none
   | Γ, F, .seq a b =>
-    match checkStmt2 P R C D Γ F (.seq a b) with
+    match pre2 P R C D Γ F (.seq a b) with
     | some Δ => some ⟨Δ, [], none⟩
     | none =>
       if b.src then
@@ -203,14 +229,14 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
         | none => none
       else none
   | Γ, F, .block s =>
-    match checkStmt2 P R C D Γ F (.block s) with
+    match pre2 P R C D Γ F (.block s) with
     | some Δ => some ⟨Δ, [], none⟩
     | none =>
       match checkX P R C D Γ F s with
       | some r => if oblBlkOKB D r.Δ r.E then some ⟨r.Δ, oblBlk r.E, none⟩ else none
       | none => none
   | Γ, F, .ite c a b =>
-    match checkStmt2 P R C D Γ F (.ite c a b) with
+    match pre2 P R C D Γ F (.ite c a b) with
     | some Δ => some ⟨Δ, [], none⟩
     | none =>
       if a.src ∧ b.src ∧ checkExpr2 Γ c then
@@ -234,7 +260,7 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
         | _, _ => none
       else none
   | Γ, F, .letv x r s =>
-    match checkStmt2 P R C D Γ F (.letv x r s) with
+    match pre2 P R C D Γ F (.letv x r s) with
     | some Δ => some ⟨Δ, [], none⟩
     | none =>
       if s.src ∧ Γ x = none ∧ x ∉ F then
@@ -253,7 +279,7 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
   | Γ, F, .scope x s =>
     -- (a run-time scope's body may exit: each exit ends `x`'s scope as its
     -- end does; github#2242's review)
-    match checkStmt2 P R C D Γ F (.scope x s) with
+    match pre2 P R C D Γ F (.scope x s) with
     | some Δ => some ⟨Δ, [], none⟩
     | none =>
       match Γ x with
@@ -270,7 +296,7 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
   | Γ, F, .letd x f r s =>
     -- (a destructor frame's body may exit: each exit ends `x`'s scope as its
     -- end does, under `Exits.underD`; AGORA-975)
-    match checkStmt2 P R C D Γ F (.letd x f r s) with
+    match pre2 P R C D Γ F (.letd x f r s) with
     | some Δ => some ⟨Δ, [], none⟩
     | none =>
       if s.src ∧ Γ x = none ∧ x ∉ F ∧ x ∉ s.assigns then
@@ -291,7 +317,7 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
         | none => none
       else none
   | Γ, F, .letcall x f args s =>
-    match checkStmt2 P R C D Γ F (.letcall x f args s) with
+    match pre2 P R C D Γ F (.letcall x f args s) with
     | some Δ => some ⟨Δ, [], none⟩
     | none =>
       if s.src ∧ Γ x = none ∧ x ∉ F ∧ dtorHeadB P f x s then
@@ -306,7 +332,7 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
         | none => none
       else none
   | Γ, F, .loop s =>
-    match checkStmt2 P R C D Γ F (.loop s) with
+    match pre2 P R C D Γ F (.loop s) with
     | some Δ => some ⟨Δ, [], none⟩
     | none =>
       if s.src then
@@ -368,7 +394,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD h0
+      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
     · split at h
       · rename_i hsrc
         split at h
@@ -397,7 +423,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD h0
+      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
     · split at h
       · rename_i r0 hr0
         split at h
@@ -419,7 +445,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD h0
+      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
     · split at h
       · rename_i hc
         obtain ⟨ha, hb, hce⟩ := hc
@@ -496,7 +522,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD h0
+      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
     · split at h
       · rename_i hc
         obtain ⟨hsrc, hx, hF⟩ := hc
@@ -530,7 +556,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD h0
+      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
     · split at h
       · rename_i E hE
         split at h
@@ -558,7 +584,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD h0
+      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
     · split at h
       · rename_i hc
         obtain ⟨hsrc, hx, hF, hna⟩ := hc
@@ -598,7 +624,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD h0
+      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
     · split at h
       · rename_i hc
         obtain ⟨hsrc, hx, hF, hdk⟩ := hc
@@ -629,7 +655,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
-      exact xsound_of_check2 hR hC hs hD h0
+      exact xsound_of_check2 hR hC hs hD (pre2_some h0)
     · split at h
       · rename_i hsrc
         split at h
