@@ -4435,7 +4435,7 @@ theorem namesFree_lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {ps : List
     have hout := (h.N_out d hN).1
     have hae : argE (S.canon Γa) d.root = Er := by unfold argE; rw [canon_frame _ hout, hEr]; rfl
     refine ⟨by rw [hae]; exact hcan, ⟨s, by rw [hae]; exact hts, hsv⟩, hFc, Or.inl fun hm => ?_,
-      fun a' ha' _ d' hd' hr' => ?_⟩
+      fun a' ha' _ d' hd' hr' => ?_, sorry⟩  -- WIP scaffold (AGORA-937 B3, never merged): the lifted frame's held anchors miss the closures' names (N)
     · obtain ⟨a, _, he⟩ := List.mem_map.mp hm; exact hout a he
     · obtain ⟨a, ha, rfl⟩ := List.mem_map.mp ha'
       obtain ⟨Ea, hEa⟩ := hargs a ha
@@ -4454,7 +4454,7 @@ theorem namesFree_lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {ps : List
         · exact absurd (hr' ▸ mem_allKinds ha2) hR
         · exact hN' d' ha2 hr'
   obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd
-  obtain ⟨hcan, ⟨s, hts, hsv⟩, hF, hna, hoth⟩ := hnf d0 hd0
+  obtain ⟨hcan, ⟨s, hts, hsv⟩, hF, hna, hoth, hnh0⟩ := hnf d0 hd0
   have hex : ∃ E0, Γa d0.root = some E0 := by
     cases hE : Γa d0.root with
     | some E0 => exact ⟨E0, rfl⟩
@@ -4468,7 +4468,7 @@ theorem namesFree_lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {ps : List
   -- (what a closure may change owns its slot: no region)
   have hnp0 : S.isPi d0.root = false := hab.notPi hE0 (by
     rcases hcan with hm | ⟨b, hm, _⟩ <;> rw [hm] <;> simp)
-  refine ⟨?_, ⟨s, ?_, hsv⟩, h.Fcout _, ?_, fun a' ha' hn' d' hd' hr' => ?_⟩
+  refine ⟨?_, ⟨s, ?_, hsv⟩, h.Fcout _, ?_, fun a' ha' hn' d' hd' hr' => ?_, sorry⟩  -- WIP scaffold (AGORA-937 B3, never merged): the lifted frame's held anchors miss the callee's names, lifted
   · show canDo (argE (S.canon Γa) (S.ρ d0.root)).mode d0.kind.bound
     rw [argE_canons h hE0 hnp0, subE_mode, liftE_mode _ hrb0]; exact canDo_lift hcan
   · show (argE (S.canon Γa) (S.ρ d0.root)).ty = _

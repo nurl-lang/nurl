@@ -1802,7 +1802,7 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
     obtain ⟨hout, Er, hEr, _⟩ := h.N_root hdN
     obtain ⟨hd, _⟩ := (h.mem_N).mp hdN
     have hdm : d ∈ mutNames Γ args := List.mem_filter.mpr ⟨hd, by simpa using hb⟩
-    obtain ⟨hcan, ⟨s, hts, hsv⟩, hF, hna, hoth⟩ := h.nfree d hdm
+    obtain ⟨hcan, ⟨s, hts, hsv⟩, hF, hna, hoth, _⟩ := h.nfree d hdm
     have hae : argE Γ d.root = Er := by unfold argE; rw [hEr]; rfl
     rw [hae] at hcan hts
     refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -3058,7 +3058,7 @@ theorem pe_Fc (h : CallH P Γ F x fn args base) (j : Nat) :
   have hnot : d.root ∉ roots (mutNames Γ args) := by
     intro hm
     obtain ⟨dm, hdm, hr⟩ := List.mem_map.mp hm
-    obtain ⟨_, _, _, hna, hoth⟩ := h.nfree dm hdm
+    obtain ⟨_, _, _, hna, hoth, _⟩ := h.nfree dm hdm
     obtain ⟨Ea, hvp, hEa, _, hni, hc, _⟩ := h.pe_vdeps j hd
     have hmem : args.getD j 0 ∈ args := by simp [List.getD, show j < args.length from h.len ▸ hvp]
     have hae' : argE Γ (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl

@@ -117,6 +117,17 @@ def envE (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Ent
   ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held ++ shareOf (derive c Ec .self ++ Ec.held)),
     envDeps cs (Ec.held ++ shareOf Ec.held), false, false, false, false⟩
 
+/-- AGORA-937 (B3): an environment's binding has no held anchor: what it
+    holds of the receiver's memory is in its path too, and the rest are
+    shares. -/
+theorem envE_not_heldAnch {c : Var} {Ec : Entry} {te : Ty} {cs : List (Var × PMode × Ty)} {d : Dep} :
+    ¬ HeldAnch (envE c Ec te cs) d := by
+  rintro ⟨hnp, hh, _, hk⟩
+  simp only [envE, mem_envDeps, List.mem_append] at hh hnp
+  obtain ⟨hh | hsh, hw⟩ := hh
+  · exact hnp ⟨Or.inl (Or.inr hh), hw⟩
+  · rw [(mem_shareOf.mp hsh).1] at hk; rcases hk with h | h <;> cases h
+
 /-- The environment's entry without the shares: what its value is valid
     through. -/
 def envE0 (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Entry :=
@@ -768,9 +779,13 @@ theorem CallT.clean {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : L
     fun ht => callR_clean_regions (hg ht)⟩
   rotate_left
   · simp only [argE_clean, clean_mode, clean_ty]
-    obtain ⟨hcan, hvec, hnF, hnA, huniq⟩ := hnf d (mutNames_clean Γ args hd)
-    refine ⟨hcan, hvec, hnF, hnA, fun a ha hc' d' hd' hdr => ?_⟩
-    exact huniq a ha hc' d' (clean_vdeps_sub _ hd') hdr
+    obtain ⟨hcan, hvec, hnF, hnA, huniq, hnh⟩ := hnf d (mutNames_clean Γ args hd)
+    refine ⟨hcan, hvec, hnF, hnA, fun a ha hc' d' hd' hdr => ?_, fun p Ep hp hm d' hd' hdr => ?_⟩
+    · exact huniq a ha hc' d' (clean_vdeps_sub _ hd') hdr
+    · obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
+      rw [clean_mode] at hm
+      rw [clean_rootb hm] at hd' ⊢
+      exact hnh p E0 h0 hm d' hd' hdr
   obtain ⟨Ea, hEa, hl, hok, hmv, hpin⟩ := hargs i hi
   refine ⟨Ea.clean, cleanC_of hEa, by rw [clean_live]; exact hl, ?_, fun hm => ?_, fun hs => ?_⟩
   · revert hok
@@ -1858,7 +1873,7 @@ theorem pkg_cap_mut {P : Prog} {m : Mem} {Γ Γ1 : Ctx} (hi : MInv m Γ) {F : Li
         ∀ d' ∈ (argE Γ a).vdeps, d'.root = ci.1 → d'.kind.bound = b := by
   obtain ⟨_, _, _, _, hnf, _, _⟩ := hcT
   have hdm := pkg_cap_mutName hi hc hl ht hslot hci hb hbn zs
-  obtain ⟨_, _, hF, _, hx⟩ := hnf _ hdm
+  obtain ⟨_, _, hF, _, hx, _⟩ := hnf _ hdm
   have hin := pkg_cap_root hi hc hl hslot hci
   rw [hb] at hin
   refine ⟨hF, fun hm => ?_, hx⟩
@@ -2411,7 +2426,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       -- names of the change's bound
       obtain ⟨dm, hdm, hdr⟩ := List.mem_map.mp hm
       have hdm' := hmo dm hdm
-      obtain ⟨_, _, _, _, hoth⟩ := hnf dm hdm'
+      obtain ⟨_, _, _, _, hoth, _⟩ := hnf dm hdm'
       have hbd : dm.kind.bound ≠ .none := by simpa using (List.mem_filter.mp hdm').2
       have hpk : dm.root ≠ c := fun hdc => by
         -- the package itself: a closure, not a `Vec` a closure changes
@@ -2438,7 +2453,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
   · -- what the opened call's closures may change is changed by it
     intro d hd
     have hd' := hmo d hd
-    obtain ⟨hcan, hvec, hF, hna, hoth⟩ := hnf d hd'
+    obtain ⟨hcan, hvec, hF, hna, hoth, hnh⟩ := hnf d hd'
     have hbd : d.kind.bound ≠ .none := by simpa using (List.mem_filter.mp hd').2
     have hdlt : d.root < m.nv := by
       cases hE : Γ d.root with
@@ -2448,7 +2463,16 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       | some Er => exact hlt _ Er hE
     have hdne : d.root ≠ m.nv := fun e => by rw [e] at hdlt; exact Nat.lt_irrefl _ hdlt
     rw [hargE _ hdne]
-    refine ⟨hcan, hvec, fun hm => ?_, ?_, fun a ha hty d' hd'' hdr => ?_⟩
+    refine ⟨hcan, hvec, fun hm => ?_, ?_, fun a ha hty d' hd'' hdr => ?_,
+      -- (AGORA-937 B3: the opened call's borrowed parameters are the outer
+      -- ones and the environment, which holds no held anchor)
+      fun p Ep hp hm d' hd' hdr hha => ?_⟩
+    rotate_right
+    · by_cases hpn : p = m.nv
+      · subst hpn; simp only [setE, upd_same, Option.some.injEq] at hp; subst hp
+        exact envE_not_heldAnch hha
+      · simp only [setE, upd_ne _ _ hpn] at hp
+        exact hnh p Ep hp hm d' hd' hdr hha
     · rcases List.mem_append.mp hm with hm | hm
       · exact hF hm
       · exact (mem_heldN.mp hm).2 (List.mem_map_of_mem hd)

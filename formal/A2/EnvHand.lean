@@ -1166,7 +1166,7 @@ theorem callT_hand {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
         rw [hzE j' hj'z, hpar]
         exact ⟨hne, hr, hs, hb⟩
   · -- what the code's closures may change, the interface's may
-    obtain ⟨hcan', hvec, hnF, hin, huniq⟩ := hnf d (hmutZ d hd)
+    obtain ⟨hcan', hvec, hnF, hin, huniq, hnh⟩ := hnf d (hmutZ d hd)
     have hbd : (Γ d.root).isSome := by
       cases h : Γ d.root with
       | some _ => rfl
@@ -1179,7 +1179,18 @@ theorem callT_hand {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
     have harg : argE (handCtx Γ c x Ec te m.nv E0) d.root = argE (kill .replace false c Γ) d.root := by
       simp only [argE]; rw [hother _ hdx hdy hdc]
     rw [harg]
-    refine ⟨hcan', hvec, hnF, ?_, fun a ha hcond d' hd' hdr => ?_⟩
+    refine ⟨hcan', hvec, hnF, ?_, fun a ha hcond d' hd' hdr => ?_,
+      -- (AGORA-937 B3: the hand-over's new bindings are no borrowed parameters)
+      fun p Ep hp hm d' hd' hdr hha => ?_⟩
+    rotate_right
+    · by_cases hpx : p = x
+      · rw [hpx, handCtx_x] at hp; cases hp; exact hE0m hm
+      by_cases hpy : p = m.nv
+      · rw [hpy, hy, hEy] at hp; cases hp; cases hm
+      by_cases hpc : p = c
+      · rw [hpc, handCtx_c hxc hyc] at hp; cases hp; simp only at hm; rw [hm] at hos; cases hos
+      rw [hother p hpx hpy hpc] at hp
+      exact hnh p Ep hp hm d' hd' hdr hha
     · rcases hin with hn | ⟨i, t, hi1, hi2⟩
       · left; simp only [List.mem_cons, not_or] at hn ⊢; exact ⟨hdy, hn.2⟩
       · rcases i with _ | i
@@ -1496,7 +1507,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
           rw [he, hck, htc] at hs'; cases hs'
     · intro dm hdm hr
       rcases hd' with ⟨hn, d0, hd0, hr0⟩ | ⟨hn, _⟩
-      · have hb0 := (hnf dm hdm).2.2.2.2 a ha (Or.inl hty) d0 (List.mem_filter.mp hd0).1 (by rw [← hr0, hr])
+      · have hb0 := (hnf dm hdm).2.2.2.2.1 a ha (Or.inl hty) d0 (List.mem_filter.mp hd0).1 (by rw [← hr0, hr])
         have hn0 := RSetup.isName_of_bound (by rw [hb0]; exact (hmutD dm hdm).1)
         have := (List.mem_filter.mp hd0).2
         rw [hn0] at this; cases this
