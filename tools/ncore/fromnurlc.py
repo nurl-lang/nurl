@@ -352,7 +352,7 @@ class Reader:
             v.carried = bool(flags & 16)   # a join arm's temporary the enclosing statement releases
             v.handon = bool(flags & 128)   # the literal a `\` try hands its failure on in (codegen hands it on whole)
             v.agglend = bool(flags & 1024)  # a returned literal codegen made without copying a lent field: a lend of what it borrows (agora #907)
-            v.cpcopy = bool(flags & 512)   # a value codegen copied into a by-pointer capture where its call lent (agora #872, #884)
+            v.cpcopy = bool(flags & 512)   # a value codegen copied into a by-pointer capture where its call lent (agora #872, #884); a raw string binding codegen gave a copy of its own (AGORA-953)
             v.slot = bool(flags & 256)     # a call's option temporary whose payload codegen takes out of the slot it read (vec_get)
             fn.vars[vid] = v
             if kind == 3:

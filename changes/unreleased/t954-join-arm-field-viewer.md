@@ -1,4 +1,0 @@
-### Fixed
-
-- **A `:` join whose arm hands on a view of an inner struct's field can no longer outlive that struct** (AGORA-954). `: x . p s`, then `: y ? c x ( mk )` (or a `??` arm `x`), followed by `= outer y` and a read of `outer` after the block, read a freed field. It is refused now, as the direct arm `. p s` is. Inside a closure that assigns such a join to a binding it captures by name, the same shape is still open (AGORA-955, docs/LIMITATIONS.md). Read the value inside the block, or hand it on with `= outer ? c x ( mk )`, which copies the field.
-- **Such a join handed to an `inout` parameter is accepted** (AGORA-954). `= t y` into an `inout` parameter copies the value wherever the join lends it, so `t` does not depend on the struct: `@ f inout String t … { : P p … : y ? c . p s ( mk ) = t y }` was refused, and now compiles and runs clean.
