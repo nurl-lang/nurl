@@ -24,6 +24,36 @@ STRUCTS = {}
 SUMS = {}
 
 
+def borrowed(f):
+    """Does function `f` hand back a value that views what it was handed
+    (its summary: `ret_unowned=1`, or `rviews` naming a parameter)?"""
+    sm = SUMS.get(f, {})
+    return sm.get("ret_unowned") == "1" or sm.get("rviews", ":") not in (":", "")
+
+
+def view_deps(f):
+    """What `f`'s result may view (`rviews`: `:` then, for each parameter,
+    `k` its own storage or `^k` only its elements'), as A2 dependencies
+    (formal/A2/Syntax.lean, `Kind`): `^k` is `inner` (strictly inside its
+    elements: a view of an element's String), `k` its own buffer or handle
+    (`view`, `self`). `%k`, a copy of the views argument k holds, is not
+    translated yet."""
+    out = []
+    for tok in SUMS.get(f, {}).get("rviews", ":").lstrip(":").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if tok.startswith("%"):
+            raise Unsupported(f"{f}: a result holding a copy of argument {tok[1:]}'s views")
+        if tok.startswith("^") and tok[1:].isdigit():
+            out.append((int(tok[1:]), ".inner"))
+        elif tok.isdigit():
+            out += [(int(tok), ".view"), (int(tok), ".self")]
+        else:
+            raise Unsupported(f"{f}: rviews {tok}")
+    return out
+
+
 def struct_fields(t):
     return STRUCTS.get(t if t.startswith("%") else "%" + t)
 
@@ -143,11 +173,49 @@ class Fn:
         self.depth = 0   # the loops' blocks around the statement
         self.res_ty = lean_ty(fn["ret"])
         self.res_own = self.res_ty != ".int"
-        sm = SUMS.get(fn["name"], {})
-        if self.res_own and (sm.get("ret_unowned") == "1" or sm.get("rviews", ":") != ":"):
-            # a result that views or borrows what it was handed: its lends
-            # (the summary's `rviews`) are not translated yet
-            raise Unsupported(f"{fn['name']}: a borrowed result ({sm.get('rviews')})")
+        self.views = self.view_vars()
+        self.lends = []
+        if borrowed(fn["name"]):
+            # a result that views what it was handed (the walk's summary,
+            # `rviews`): a `slice` of it, not owned, depending on the
+            # parameters it names; every kind of dependency on each is
+            # declared (a summary may name more than the body needs: a
+            # caller only depends on more)
+            if fn["ret"] != "i8*":
+                raise Unsupported(f"{fn['name']}: a borrowed result of type {fn['ret']}")
+            self.res_ty, self.res_own = "(.slice .int)", False
+            for k, kind in view_deps(fn["name"]):
+                if k < self.np:
+                    self.lends.append(f"({k}, {kind})")
+
+    def view_vars(self):
+        """The raw-string variables that hold a view, not their own text:
+        bound from `string_data` or from a call whose result is borrowed, or
+        handed one (`use`)."""
+        views = set()
+        changed = True
+        while changed:
+            changed = False
+            for l in self.fn["body"]:
+                w = l.split()
+                if len(w) >= 4 and w[0] == "let" and w[2] == "call" and (w[3] == "string_data" or borrowed(w[3])):
+                    v = int(w[1])
+                elif len(w) >= 4 and w[0] == "let" and w[2] == "use" and w[3].startswith("v") and w[3][1:].isdigit() \
+                        and int(w[3][1:]) in views:
+                    v = int(w[1])
+                else:
+                    continue
+                if v not in views:
+                    views.add(v)
+                    changed = True
+        return views
+
+    def vlean(self, k):
+        """Variable `k`'s A2 type: a raw string that holds a view is a slice."""
+        t = self.fn["vars"][k]
+        if t == "i8*" and k in self.views:
+            return "(.slice .int)"
+        return lean_ty(t)
 
     def var(self, k):
         return k if k < self.np else k + 1
@@ -295,7 +363,7 @@ class Fn:
             if ops[0] == "c":
                 return rest
             y = self.pvar(ops[0])
-            ty = lean_ty(self.vty(ops[0]))
+            ty = self.vlean(int(ops[0][1:])) if "/" not in ops[0] else lean_ty(self.vty(ops[0]))
             e = f"(.slen {y})" if ty.startswith("(.slice") else f"(.len {y})" if ty.startswith("(.vec") else f"(.var {y})"
             t = self.fresh()
             return f"(.letv {t} (.expr {e}) {rest})"
@@ -448,6 +516,9 @@ class Fn:
             ite = f"(.ite {c} {self.stmts(a, names)} {self.stmts(b, names)})"
             return self.seq(ite, self.stmts(lines[k + 1:], names, tail))
         if w == "ret":
+            if head[1] == "c" and self.res_ty == "(.slice .int)":
+                # a literal handed back as a view: A2 has no static strings
+                raise Unsupported(f"{self.fn['name']}: a literal string handed back as a view")
             if head[1] != "-" and not self.is_int(head[1]):
                 ex = f"(.seq (.assign {self.np} (.var {self.pvar(head[1])})) (.exit {self.depth}))"
                 return self.seq(ex, self.stmts(lines[1:], names, tail))
@@ -512,9 +583,10 @@ class Fn:
             if fl & 2:
                 return "(.inout .replace)"  # `inout`: the caller's, changed in place
             return ".inp"
-        params = ", ".join(f"({mode(i)}, {lean_ty(self.fn['vars'][i])})" for i in range(self.np))
+        params = ", ".join(f"({mode(i)}, {self.vlean(i)})" for i in range(self.np))
         own = "true" if self.res_own else "false"
-        return (f"{{ params := [{params}], resTy := {self.res_ty}, resOwn := {own}, lends := [], rholds := [],\n"
+        lends = ", ".join(self.lends)
+        return (f"{{ params := [{params}], resTy := {self.res_ty}, resOwn := {own}, lends := [{lends}], rholds := [{lends}],\n"
                 f"    outHolds := [], body := {body}, nvars := {self.next + 1} }}")
 
 
