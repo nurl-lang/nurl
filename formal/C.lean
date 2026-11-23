@@ -11,6 +11,7 @@ import C.A2Call
 import C.A2Panic
 import C.A2Prog
 import C.A3Prog
+import C.A2Weaker
 import C.A2Exit
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
@@ -22,7 +23,8 @@ finite contexts (`C/Join.lean`), C2 subsumption by certificate
 decided (`C/A2Rhs.lean`); C7, its core statements with `EndOK` decided
 (`C/A2Stmt.lean`); C8, its struct and enum right-hand sides (`C/A2Data.lean`); C9, its calls, and the
 checker that puts them together, `checkA2` (`C/A2Call.lean`); C10, `CtxWF` / `NameWF` decided and `panic`
-(`C/A2Panic.lean`); C7x, `exit` by obligations (`C/A2Exit.lean`); C11, its whole programs (`C/A2Prog.lean`,
+(`C/A2Panic.lean`); C7w, `Weaker` decided and joins by weakening (`C/A2Weaker.lean`: an `ite` whose
+arms end apart, a loop whose round ends weaker than it began); C7x, `exit` by obligations (`C/A2Exit.lean`); C11, its whole programs (`C/A2Prog.lean`,
 `C.checked_program_safe2`). For A3: C12, its claim for a checked program,
 spawned functions and globals included (`C/A3Prog.lean`,
 `C.checked_claim_made_full`). -/

@@ -630,7 +630,9 @@ class Fn:
         return a if b == ".skip" else f"(.seq {a} {b})"
 
     def lean(self, names):
-        inner = self.stmts(self.fn['body'], names)
+        # (a `void` function may fall off its end: its result is the unit)
+        tail = f"(.assign {self.np} (.expr (.lit 0)))" if self.fn["ret"] == "void" else ".skip"
+        inner = self.stmts(self.fn['body'], names, tail)
         for t in reversed(self.lits):
             inner = f"(.letv {t} (.expr (.lit 0)) {inner})"
         body = f"(.block {inner})"

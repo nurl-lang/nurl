@@ -236,6 +236,16 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
         | some rs =>
           if D.all (fun v => rs.Δ v == Γ v) && exitToB D Γ (loopEnd Γ rs.E) then
             some ⟨loopEnd Γ rs.E, rs.E, none⟩
+          -- (C7w: a round that ends weaker than it started, a binding moved
+          -- and given back, or not: the loop runs from the join of both)
+          else if weaker2B D Γ (joinCand Γ rs.Δ) then
+            match checkX P R C D (joinCand Γ rs.Δ) F s with
+            | some rj =>
+              if weaker2B D (joinCand Γ rs.Δ) (joinCand Γ rs.Δ) && weaker2B D rj.Δ (joinCand Γ rs.Δ) &&
+                  exitToB D (joinCand Γ rs.Δ) (loopEnd (joinCand Γ rs.Δ) rj.E) then
+                some ⟨loopEnd (joinCand Γ rs.Δ) rj.E, rj.E, none⟩
+              else none
+            | none => none
           else none
         | none => none
       else none
@@ -459,7 +469,27 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
             obtain ⟨h1, h2, h3, h4, h5, h6, h7⟩ := exitToB_parts hs hsl hto
             refine ⟨hsl, e0, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
             exact .loop hsrc (heq ▸ t0 ξ hξ) h1 h2 h3 h4 h5 h6 h7
-          · cases h
+          · split at h
+            · rename_i hwj
+              split at h
+              · rename_i rj hrj
+                split at h
+                · rename_i hc
+                  simp only [Bool.and_eq_true] at hc
+                  obtain ⟨⟨hjj, hwd⟩, hto⟩ := hc
+                  simp only [Option.some.injEq] at h; subst h
+                  have sJ := joinCand_supported (Δb := rs.Δ) hs
+                  obtain ⟨s0, e0, t0, _⟩ := ih sJ (fun v hv => hD v (by simp [Stmt.vars, hv])) hrj
+                  have hsl := loopEnd_supported sJ e0
+                  obtain ⟨h1, h2, h3, h4, h5, h6, h7⟩ := exitToB_parts sJ hsl hto
+                  refine ⟨hsl, e0, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
+                  exact .sub (weaker2B_sound hs sJ hwj)
+                    (.loop hsrc (.sub (weaker2B_sound sJ sJ hjj) (t0 ξ hξ)
+                      (Or.inr (weaker2B_sound s0 sJ hwd))) h1 h2 h3 h4 h5 h6 h7)
+                    (Or.inl rfl)
+                · cases h
+              · cases h
+            · cases h
         · cases h
       · cases h
   | _ =>
