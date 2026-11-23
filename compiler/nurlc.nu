@@ -2491,6 +2491,23 @@ unsafe @ agg_field_count i syms s ot → i {
 : ~ s g_msealed_ty ``
 : ~ i g_clo_lend_set 0  // 1 while `__last_call_clo_lend_idents__` holds the last call's answer (else it is empty)
 : ~ i g_retcloeff_n 0  // functions with a `retcloeff##` summary so far (gen_call skips the lookup while 0)
+// The fresh Rc handles of this compile (__rc_share_note): a handle bound by
+// `:` from `rc_new` / `rc_zero` is private while every mention of it is a
+// bare argument of a call that keeps, shares and lends nothing of it
+// (__rc_priv_callee); its number in g_rcfresh_tab maps to `1` until another
+// mention makes it `0` (__rcfresh_use). A closure's effects on a private
+// handle are the closure's alone (__rc_anon_eff). The engine's private
+// payload (tools/ncore/RULES.md, proposal D3); AGORA-945.
+: ~ i g_rcfresh_n 0
+: ~ i g_rcfresh_tab 0
+// 1 while the function compiling now (its closure bodies included) has made
+// a fresh handle: gen_ident asks only then. Saved around a function compiled
+// inside another (a generic instance), gen_fn_decl_concrete.
+: ~ i g_rcfresh_on 0
+// The place of the bare argument of such a call that the next gen_ident
+// reads, line and column; 0 where none.
+: ~ i g_rcfresh_okl 0
+: ~ i g_rcfresh_okc 0
 : ~ i g_rce_n 0  // `pendrce` rows made so far: a run of a closure whose builder had no answer yet (agora #813)
 : ~ i g_clo_eff_set 0  // 1 while `__last_call_clo_effects__` holds the last call's answer
 : ~ i g_clo_ret_n 0  // the call results given a node member of their own so far (agora #813)
@@ -7861,6 +7878,21 @@ unsafe @ __arg_lend_root i syms → s {
 // family here; agora #845).
 @ __rc_share_note i syms s name → v {
     : s cn ( nurl_sym_get syms `__last_call_name__` )
+    // (…and `: name ( rc_new x )`: a fresh handle, private until a mention
+    // shares it, g_rcfresh_tab; AGORA-945.)
+    ? != 0 ( nurl_sym_len2 syms name `__rcfresh` ) { ( nurl_sym_def syms ( nurl_str_cat name `__rcfresh` ) `` ) } {}
+    ? | != 0 ( nurl_str_starts cn `rc_new` ) != 0 ( nurl_str_starts cn `rc_zero` ) {
+        : s cb ( bck_generic_base cn )
+        ? | ( seq cb `rc_new` ) ( seq cb `rc_zero` ) {
+            ? == 0 g_rcfresh_tab { = g_rcfresh_tab ( nurl_sym_new ) } {}
+            = g_rcfresh_n + g_rcfresh_n 1
+            = g_rcfresh_on 1
+            : s id ( nurl_str_int g_rcfresh_n )
+            ( nurl_sym_def g_rcfresh_tab id `1` )
+            ( nurl_sym_def syms ( nurl_str_cat name `__rcfresh` ) id )
+        } {}
+        ^ v
+    } {}
     ? == 0 ( nurl_str_starts cn `rc_clone` ) { ^ v } {}
     ? ! ( seq ( bck_generic_base cn ) `rc_clone` ) { ^ v } {}
     : s a0 ( str_first_word ( nurl_sym_get syms `__last_call_args__` ) )
@@ -7888,7 +7920,8 @@ unsafe @ __arg_lend_root i syms → s {
     ? & != 0 g_rce_noclo != 0 ( nurl_sym_len g_rce_noclo cn ) { ^ F } {}
     : s rt ( nurl_sym_get g_root_syms cn )
     ? == 0 ( nurl_str_len rt ) { ^ F } {}
-    ? ! ( __is_closure_ty rt ) {
+    // (A closure, or a value that may hold one: AGORA-945.)
+    ? & ! ( __is_closure_ty rt ) ! ( __may_hold_clo ( nurl_llty rt ) g_root_syms ) {
         ? == 0 g_rce_noclo { = g_rce_noclo ( nurl_sym_new ) } {}
         ( nurl_sym_def g_rce_noclo cn `1` )
         ^ F
@@ -7925,6 +7958,9 @@ unsafe @ __arg_lend_root i syms → s {
         } {}
         = k + k 1
     }
+    // (…and one for what it does to handles that are no argument's, the
+    // `^R_D` words of `cn`'s answer: `^:rce#cn#^#0:0`; AGORA-945.)
+    = out ( __word_union out ( nurl_str_cat3 `^:rce#` cn `#^#0:0` ) )
     ^ out
 }
 
@@ -8076,11 +8112,15 @@ unsafe @ __arg_lend_root i syms → s {
         : i p ( nurl_str_find e1 `.` )
         : i c1 ( nurl_str_find e1 `:` )
         : i end ? & > p 0 < p c1 p c1
-        ? & > c1 1 ( seq ( nurl_str_slice e1 1 - end 1 ) ks ) {
-            : s path ( nurl_str_slice e1 end - c1 end )
+        // (The `^` placeholder takes the `^R_D` words, each on its anonymous
+        // handle `%rcsR_D`, bck_closure_effects_run's; AGORA-945.)
+        : b anon & ( seq ks `^` ) == ( nurl_str_get e1 0 ) 94
+        ? & > c1 1 | anon ( seq ( nurl_str_slice e1 1 - end 1 ) ks ) {
+            : s path ? anon `` ( nurl_str_slice e1 end - c1 end )
             : s ct ( nurl_str_slice e1 + c1 1 - - ( nurl_str_len e1 ) c1 1 )
             : i c2 ( nurl_str_find ct `:` )
-            : s r ( __bck_rce_one ( nurl_str_cat nm path ) mid ( nurl_str_slice ct 0 c2 ) ( nurl_str_slice ct + c2 1 - - ( nurl_str_len ct ) c2 1 ) tail | lent0 lw )
+            : s rn ? anon ( nurl_str_cat `%rcs` ( nurl_str_slice e1 1 - c1 1 ) ) ( nurl_str_cat nm path )
+            : s r ( __bck_rce_one rn mid ( nurl_str_slice ct 0 c2 ) ( nurl_str_slice ct + c2 1 - - ( nurl_str_len ct ) c2 1 ) tail | lent0 lw )
             = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat r `` ) ( nurl_str_cat3 out `\n` r )
         } {}
     }
@@ -8124,7 +8164,14 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
             ? >= k 0 {
                 : s w ( nurl_str_cat4 ? lent `~%` `%` ( nurl_str_int k ) ( nurl_str_slice e1 ( nurl_str_len r ) - ( nurl_str_len e1 ) ( nurl_str_len r ) ) `` )
                 = out ( __word_union out w )
-            } {}
+            } {
+                // (…and one on a handle that is no parameter, of a type that
+                // reaches an Rc: an effect inside a shared payload, which
+                // a clone left beside the closure may reach. The caller
+                // replays it on an anonymous handle of those Rc types.)
+                : s an ( __rc_anon_eff ( nurl_str_slice e1 0 c1 ) syms )
+                ? != 0 ( nurl_str_len an ) { = out ( __word_union out ( nurl_str_cat3 ? lent `~` `` an ( nurl_str_slice e1 c1 - ( nurl_str_len e1 ) c1 ) ) ) } {}
+            }
         } {}
     }
     ? == 0 ( nurl_str_len out ) { ^ v } {}
@@ -8132,6 +8179,64 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
     : s cur ( nurl_sym_get g_pending_impl key )
     ? == 0 ( nurl_str_len cur ) { = g_retcloeff_n + g_retcloeff_n 1 } {}
     ( nurl_sym_def g_pending_impl key ( __word_union cur out ) )
+}
+
+// A closure handed back that changes inside the payload of a handle that
+// is no parameter - the maker's own local, a global - of a type that
+// reaches an Rc. What it does to an owned local it took over is the
+// closure's alone. An Rc's payload is not: every clone of the handle
+// reaches it, and a clone may have left beside the closure (in a field of
+// the result, or in another closure's capture). So the effect is on a
+// handle no caller's binding names, `^R_D`: R is the set of Rc types the
+// handle reaches, D the set it is or holds in its own storage
+// (__rc_set_id's numbers, 0 for none). A run of the closure replays it on
+// `%rcsR_D` (bck_closure_effects_run), whose Rc types the same-Rc rule
+// reads (__bck_rc_noted). This is proposal D3, AGORA-945. `` where the
+// handle reaches no Rc. A word that is one already is kept as it is.
+@ __rc_anon_eff s pn i syms → s {
+    ? == ( nurl_str_get pn 0 ) 94 { ^ ( nurl_str_cat pn `` ) } {}
+    : i dot ( nurl_str_find pn `.` )
+    : s root ? > dot 0 ( nurl_str_slice pn 0 dot ) ( nurl_str_cat pn `` )
+    // (A private handle, the maker's own and no one else's: its effects are
+    // the closure's, as an owned local's are. The engine's private payload,
+    // tools/ncore/RULES.md.)
+    ? != 0 g_rcfresh_on {
+        : s fid ( nurl_sym_get2 syms root `__rcfresh` )
+        ? & & != 0 ( nurl_str_len fid ) == 0 ( nurl_sym_len2 syms root `__mutable` ) ( seq ( nurl_sym_get g_rcfresh_tab fid ) `1` ) { ^ ( nurl_str_cat `` `` ) } {}
+    } {}
+    : s rt ( nurl_sym_get syms root )
+    ? == 0 ( nurl_str_len rt ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s ty ? > dot 0 ( __clo_fpath_ty syms rt ( nurl_str_slice pn + dot 1 - - ( nurl_str_len pn ) dot 1 ) ) ( nurl_str_cat rt `` )
+    ? == 0 ( nurl_str_len ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s lt ( nurl_llty ty )
+    : s rs ( __rc_reach lt )
+    ? == 0 ( nurl_str_len rs ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s ds ( __rc_direct lt )
+    : s r ( __rc_set_id rs )
+    : s d ? == 0 ( nurl_str_len ds ) ( nurl_str_cat `#0` `` ) ( __rc_set_id ds )
+    ^ ( nurl_str_cat4 `^` ( nurl_str_slice r 1 - ( nurl_str_len r ) 1 ) `_` ( nurl_str_slice d 1 - ( nurl_str_len d ) 1 ) )
+}
+
+// A mention of `name` read at `line`:`col`: a fresh Rc handle mentioned
+// other than as the bare argument gen_call excused (g_rcfresh_okl/okc) is
+// shared from then on, cloned, stored, returned or lent, and no longer
+// private (g_rcfresh_tab).
+@ __rcfresh_use i syms s name i line i col → v {
+    : b ok & == line g_rcfresh_okl == col g_rcfresh_okc
+    = g_rcfresh_okl 0
+    = g_rcfresh_okc 0
+    ? ok { ^ v } {}
+    : s id ( nurl_sym_get2 syms name `__rcfresh` )
+    ? == 0 ( nurl_str_len id ) { ^ v } {}
+    ( nurl_sym_def g_rcfresh_tab id `0` )
+}
+
+// Does a call of `cn` keep, share and lend nothing of an Rc handle handed
+// to it: it replaces, takes or puts back the payload, or reads a count.
+// (Not rc_get: its lend may leave through a closure's result.)
+@ __rc_priv_callee s cn → b {
+    ? == 0 ( nurl_str_starts cn `rc_` ) { ^ F } {}
+    ^ ( str_contains_word `rc_set rc_replace rc_take rc_restore rc_strong rc_weak rc_is_unique` ( bck_generic_base cn ) )
 }
 
 // What running the closure value returned (`tt`/`tv`) does, on the names
@@ -8196,7 +8301,12 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
             // the parameter's, as mem_note_ret_clo_effs has it; agora #845.)
             : s rp ( nurl_sym_get2 syms r `__rcof` )
             : i k ( nurl_sym_word_index syms `__fn_param_names__` ? == 0 ( nurl_str_len rp ) r rp )
-            : s w ? >= k 0 ( nurl_str_cat4 ? lent `~%` `%` ( nurl_str_int k ) ( nurl_str_slice e1 ( nurl_str_len r ) - ( nurl_str_len e1 ) ( nurl_str_len r ) ) `` ) ( nurl_str_cat e `` )
+            // (…and one on a local of the literal's own body, which the call
+            // does not see, of a type that reaches an Rc: on an anonymous
+            // handle of those Rc types, as mem_note_ret_clo_effs has it;
+            // AGORA-945.)
+            : s an ? | >= k 0 ( str_contains_word g_clo_caps_now r ) ( nurl_str_cat `` `` ) ( __rc_anon_eff ( nurl_str_slice e1 0 c1 ) syms )
+            : s w ? >= k 0 ( nurl_str_cat4 ? lent `~%` `%` ( nurl_str_int k ) ( nurl_str_slice e1 ( nurl_str_len r ) - ( nurl_str_len e1 ) ( nurl_str_len r ) ) `` ) ? != 0 ( nurl_str_len an ) ( nurl_str_cat3 ? lent `~` `` an ( nurl_str_slice e1 c1 - ( nurl_str_len e1 ) c1 ) ) ( nurl_str_cat e `` )
             = out ( __word_union out w )
         } {}
     }
@@ -8359,6 +8469,9 @@ unsafe @ __sx_top_roots s sx → s {
         : s e ( str_first_word rest ) = rest ( str_skip_word rest )
         : b lent == ( nurl_str_get e 0 ) 126
         : s e1 ? lent ( nurl_str_slice e 1 - ( nurl_str_len e ) 1 ) ( nurl_str_cat e `` )
+        // (An effect on an anonymous Rc handle, `^R_D`, is on no argument:
+        // kept as it is, AGORA-945.)
+        ? == ( nurl_str_get e1 0 ) 94 { = out ( __word_union out e ) continue } {}
         : i p ( nurl_str_find e1 `.` )
         : i c1 ( nurl_str_find e1 `:` )
         : i end ? & > p 0 < p c1 p c1
@@ -26454,6 +26567,7 @@ unsafe @ gen_ident i lex i syms i cg → s {
         ? != 0 g_vb_marks { ( __vb_gone_check lex syms name __id_line __id_col ) } {}
         // Borrow checker: every value-position identifier is a read.
         ( bck_note_read name )
+        ? != 0 g_rcfresh_on { ( __rcfresh_use syms name __id_line __id_col ) } {}
         ? != 0 g_clolk_n { ( __clolend_use syms name ) } {}
         // (A capture an earlier run may have given away: agora #463.)
         ? != 0 g_clo_tk_body { ( __clo_taken_check syms cg name ) } {}
@@ -36705,7 +36819,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // with no lookup — the two __rce_pending would make, asked of every
     // call. A generic instance's own return type is its substituted one,
     // which __rce_pending reads; agora #813.)
-    : b __rce_pend & ! __callee_shadowed & | != 0 ( nurl_str_len call_targs ) ( __is_closure_ll __cal_ll ) ( __rce_pending syms call_name )
+    // (…or a value that holds closures, a builder's struct of them: what
+    // running them does is its answer too, mem_note_ret_clo_effs; AGORA-945.
+    // The callee compiled already, nearly every one, is asked first.)
+    : b __rce_pend & ! __callee_shadowed & ( __rce_pending syms call_name ) | | != 0 ( nurl_str_len call_targs ) ( __is_closure_ll __cal_ll ) ( __may_hold_clo __cal_ll syms )
     : b __want_effr | & != 0 g_retcloeff_n != 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` call_name ) __rce_pend
     : ~ s arg_effr ``
     : ~ s __clo_args ``
@@ -36826,6 +36943,13 @@ unsafe @ gen_call_body i lex i syms i cg → s {
         // the binding the loaded ident names.
         : i bck_arg_tt ( nurl_lex_type lex )
         : s bck_arg_val ( nurl_lex_val lex )
+        // (A bare name handed to a call that keeps, shares and lends nothing
+        // of an Rc handle leaves a fresh one private: __rcfresh_use.)
+        ? != 0 g_rcfresh_on {
+            : b __rcok & & ! __callee_shadowed ( is_ident_tok bck_arg_tt ) ( __rc_priv_callee call_name )
+            = g_rcfresh_okl ? __rcok ( nurl_lex_line lex ) 0
+            = g_rcfresh_okc ? __rcok ( nurl_lex_col lex ) 0
+        } {}
         // (An argument that is a name a value block bound — an `inout`
         // one is handed over without a read of it: agora #575.)
         ? != 0 g_vb_marks { ? ( is_ident_tok bck_arg_tt ) { ( __vb_gone_check lex syms bck_arg_val ( nurl_lex_line lex ) ( nurl_lex_col lex ) ) } {} } {}
@@ -38294,7 +38418,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
             // tool more included. That wants what a callee may run of what a
             // parameter holds, open in tools/fuzz/holes/open/t736.md.)
             : i __hc0 ( nurl_str_get at 0 )
-            ? & & != 0 g_srcx_on | == __hc0 37 == __hc0 123 | | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_AT & == bck_arg_tt TT_LPAREN | != 0 g_clo_eff_set != 0 g_call_hold_set {
+            // (…of a type that can hold one: a value lent out of a holder,
+            // `( rc_get . p h )` of a struct with a closure field beside an
+            // Rc of a Vec, holds none of the holder's closures; AGORA-945.)
+            ? & & & != 0 g_srcx_on | == __hc0 37 == __hc0 123 | | ( is_ident_tok bck_arg_tt ) == bck_arg_tt TT_AT & == bck_arg_tt TT_LPAREN | != 0 g_clo_eff_set != 0 g_call_hold_set ( __may_hold_clo at syms ) {
                 : s __hms ? ( is_ident_tok bck_arg_tt ) ? == 0 g_clo_hold_n `` ( nurl_sym_get2 syms bck_arg_val `__clonode` ) ( __clo_val_members syms bck_arg_tt bck_arg_val )
                 ? != 0 ( nurl_str_len __hms ) {
                     : s __he ( __clo_members_attr __hms `le` )
@@ -55238,16 +55365,20 @@ unsafe @ __blk_froot_set s root → v { = g_blk_froot ( nurl_str_cat root `` ) }
 // `callee` as argument `aix` — an effect of running the closure when it is
 // one of its captures.
 unsafe @ __clo_effect_note s name s callee i aix → v {
-    ? == 0 ( nurl_str_len g_clo_caps_now ) { ^ } {}
-    : i dot ( nurl_str_find name `.` )
+    // (An anonymous Rc handle's effect, `^R_D` (`~^R_D` through a value
+    // lent out of it), is the closure's whatever it captures: a run of
+    // a closure that holds the handle, written in this body; AGORA-945.)
+    : b anon | == ( nurl_str_get name 0 ) 94 & == ( nurl_str_get name 0 ) 126 == ( nurl_str_get name 1 ) 94
+    ? & ! anon == 0 ( nurl_str_len g_clo_caps_now ) { ^ } {}
+    : i dot ? anon 0 ( nurl_str_find name `.` )
     : s root ? > dot 0 ( nurl_str_slice name 0 dot ) ( nurl_str_cat name `` )
     // (A body local read out of a capture: the capture it reaches — not by
     // being given a new value itself, `@assign`, which releases nothing of
     // the capture.)
-    : b der | != 0 ( nurl_str_len g_clo_deriv ) != 0 ( nurl_str_len g_clo_deriv_c )
+    : b der & ! anon | != 0 ( nurl_str_len g_clo_deriv ) != 0 ( nurl_str_len g_clo_deriv_c )
     // (…which a closure run in the body may give it as well, or a callee
     // through its `inout` parameter: __clo_cond_off_note.)
-    ? != 0 ( nurl_str_len g_clo_deriv_c ) {
+    ? & ! anon != 0 ( nurl_str_len g_clo_deriv_c ) {
         ? | ( seq callee `@assign` ) ( __fn_param_inout callee aix ) { ( __clo_cond_off_note root ) } {}
     } {}
     ? & & & ! ( str_contains_word g_clo_caps_now root ) der ( seq callee `@assign` ) < dot 0 { ^ } {}
@@ -55261,7 +55392,7 @@ unsafe @ __clo_effect_note s name s callee i aix → v {
         ( __clo_effect_note_cond root callee aix )
         ^
     } {}
-    ? ! ( str_contains_word g_clo_caps_now root ) { ^ } {}
+    ? & ! anon ! ( str_contains_word g_clo_caps_now root ) { ^ } {}
     : s e ( nurl_str_cat4 name `:` callee ( nurl_str_cat `:` ( nurl_str_int aix ) ) )
     ? ( str_contains_word g_closure_effects e ) { ^ } {}
     = g_closure_effects ? == 0 ( nurl_str_len g_closure_effects ) ( nurl_str_cat e `` ) ( nurl_str_cat3 g_closure_effects ` ` e )
@@ -55750,6 +55881,17 @@ unsafe @ __clo_cap_marks i syms s caps i line → v {
         // (`~`: through a value lent out of the capture, agora #353.)
         : b lent & > ( nurl_str_len nm ) 1 == ( nurl_str_get nm 0 ) 126
         : s pn ? lent ( nurl_str_slice nm 1 - ( nurl_str_len nm ) 1 ) ( nurl_str_cat nm `` )
+        // (`^R_D`: on a handle no binding here names, of the Rc types R
+        // (D in its own storage), a maker's local the closure holds
+        // beside a clone that may have left with it (__rc_anon_eff). The
+        // row names it `%rcsR_D`, whose Rc types the same-Rc rule reads,
+        // and a closure whose body runs this one carries the word on.
+        // AGORA-945.)
+        ? == ( nurl_str_get pn 0 ) 94 {
+            ( bck_stash_pending_kind ( nurl_str_cat `%rcs` ( nurl_str_slice pn 1 - ( nurl_str_len pn ) 1 ) ) line cal aix `` ? lent `pendlend` `pendeff` )
+            ? != 0 g_bck_closure_depth { ( __clo_effect_note nm cal aix ) } {}
+            continue
+        } {}
         // (…with the Rc types the capture, or the field path of it, reaches,
         // as a call written here notes of its argument: a closure that
         // changes `. h a` of a captured struct changes what another handle
@@ -71409,7 +71551,8 @@ unsafe @ bck_note_rc_arg s name s ty → v {
 @ __bck_rc_arg_show s st s wn i wroot s sty → s {
     : s nm ( nurl_sym_get2 g_bck `rv_` wn )
     // (A value no binding names, bck_stash_rc_value.)
-    ? != 0 ( nurl_str_starts nm `%rcv` ) { ^ ( nurl_str_cat `a value no binding names (a call's result, a literal), which may be another handle on the same Rc value,` `` ) } {}
+    : s an ( __bck_rc_anon_show nm )
+    ? != 0 ( nurl_str_len an ) { ^ ( nurl_str_cat an `, which may be another handle on the same Rc value,` ) } {}
     : s me ( nurl_str_cat3 `'` ( bck_name_show nm ) `'` )
     : s be `, which may be another handle on the same Rc value,`
     : s hold `, which may hold another handle on the same Rc value,`
@@ -71671,7 +71814,8 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
 // through an element end: the call `callee` handed `wn` `what`s.
 @ __bck_rc_ind_why s wn s srcs s rec s what → s {
     : s wnm ( nurl_sym_get2 g_bck `rv_` wn )
-    : s me ? != 0 ( nurl_str_starts wnm `%rcv` ) `a value no binding names (a call's result, a literal)` ( nurl_str_cat3 `'` ( bck_name_show wnm ) `'` )
+    : s an ( __bck_rc_anon_show wnm )
+    : s me ? != 0 ( nurl_str_len an ) an ( nurl_str_cat3 `'` ( bck_name_show wnm ) `'` )
     : s sn ( nurl_str_cat3 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` srcs ) ) `'` )
     ^ ( nurl_str_cat4 ( nurl_str_cat me ( __bck_rc_passed rec what ) ) ( nurl_str_cat4 `; it may be another handle on an Rc value ` sn ` holds, and the view reads that value's payload through an element of ` sn ) `` `` )
 }
@@ -71684,6 +71828,10 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
 @ bck_rc_direct_of s name → s { ^ ( __bck_rc_noted name `~=` ) }
 
 @ __bck_rc_noted s name s tag → s {
+    // (`%rcsR_D`: an anonymous handle a closure that runs here holds, whose
+    // Rc types its name carries, __rc_anon_eff: R for `=`, D for `~=`;
+    // AGORA-945.)
+    ? & == ( nurl_str_get name 0 ) 37 != 0 ( nurl_str_starts name `%rcs` ) { ^ ( __rcs_name_set name tag ) } {}
     ( __bck_rcix_sync )
     : s ids ( nurl_sym_get g_bck_rcix ( nurl_str_cat name tag ) )
     ? == 0 ( nurl_str_len ids ) { ^ `` } {}
@@ -71694,6 +71842,25 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         = out ( __bar_union out ? == ( nurl_str_get x 0 ) 35 ( nurl_sym_get g_rc_idset x ) x )
     }
     ^ out
+}
+
+// The Rc types an anonymous handle `%rcsR_D` carries for note `tag`: set R
+// for `=`, set D for `~=` (none where D is 0), none for any other note.
+@ __rcs_name_set s name s tag → s {
+    : i us ( nurl_str_find name `_` )
+    ? < us 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : s id ? ( seq tag `=` ) ( nurl_str_slice name 4 - us 4 ) ? ( seq tag `~=` ) ( nurl_str_slice name + us 1 - - ( nurl_str_len name ) us 1 ) ( nurl_str_cat `0` `` )
+    ? ( seq id `0` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_sym_get g_rc_idset ( nurl_str_cat `#` id ) )
+}
+
+// How a diagnostic names a value a row is about that no binding names:
+// `%rcvN` (a call's result, a literal) or `%rcsR_D` (a handle a closure
+// that runs here holds), or `` for a binding's name.
+@ __bck_rc_anon_show s nm → s {
+    ? != 0 ( nurl_str_starts nm `%rcv` ) { ^ ( nurl_str_cat `a value no binding names (a call's result, a literal)` `` ) } {}
+    ? != 0 ( nurl_str_starts nm `%rcs` ) { ^ ( nurl_str_cat `an Rc handle that a closure called here holds` `` ) } {}
+    ^ ( nurl_str_cat `` `` )
 }
 
 // Does row `rec` name what it is about by a source expression (field 1
@@ -77600,6 +77767,7 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     ? != 0 ( nurl_sym_len2 syms name `__sinkp` ) { ( nurl_sym_def syms ( nurl_str_cat name `__sinkp` ) `` ) } {}
     ? != 0 ( nurl_sym_len2 syms name `__captured_byref` ) { ( nurl_sym_def syms ( nurl_str_cat name `__captured_byref` ) `` ) } {}
     ? != 0 ( nurl_sym_len2 syms name `__global` ) { ( nurl_sym_def syms ( nurl_str_cat name `__global` ) `` ) } {}
+    ? != 0 ( nurl_sym_len2 syms name `__rcfresh` ) { ( nurl_sym_def syms ( nurl_str_cat name `__rcfresh` ) `` ) } {}
     ? own {
         ? != 0 ( nurl_sym_len2 syms name `__mutable` ) { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `` ) } {}
         ? != 0 ( nurl_sym_len2 syms name `__borrow` ) { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `` ) } {}
@@ -97701,6 +97869,8 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     = g_ptr_own_n 0
     // (A generic instance compiled inside another function keeps its own.)
     : i __etk_saved g_etake_n
+    : i __rcf_saved g_rcfresh_on
+    = g_rcfresh_on 0
     : i __epl_saved g_epl_n
     = g_epl_n 0
     = g_join_pkept 0
@@ -98693,6 +98863,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ? ( seq fname `main` ) ( emit_main_wrapper ret_ty ) {}
     = g_etake_n __etk_saved
     = g_epl_n __epl_saved
+    = g_rcfresh_on __rcf_saved
 }
 
 // Is `fname` a library handle's drop hook — `X_drop` (or an instance of a
@@ -103415,6 +103586,10 @@ unsafe @ __cc_walk_r s ty i syms → s {
 // every type once per path to it: a generic of eight fields eight deep is
 // 8^8 paths, agora #722.)
 : ~ s g_ts_seen ``
+// 1 while __may_hold_clo asks: every library handle's payload is followed,
+// an Rc's and a Weak's too, as what a value may hold, not what crosses a
+// thread.
+: ~ i g_ts_all 0
 
 unsafe @ __ts_walk s ty i syms → s {
     = g_ts_seen ( __seen_begin )
@@ -103432,15 +103607,20 @@ unsafe @ __ts_walk_r s ty i syms → s {
         : s b ( __ts_walk_r ( __wrap_part ty 1 ) syms )
         ^ ( __bar_union a b )
     } {}
+    // (Asked what it may hold: an owned slice's elements, and a view's.)
+    ? & & != 0 g_ts_all == ( nurl_str_get ty 0 ) 123 ( __is_slice_ll ty ) { ^ ( __ts_walk_r ( __owned_slice_elem ty ) syms ) } {}
     ? != ( nurl_str_get ty 0 ) 37 { ^ ( nurl_str_cat `` `` ) } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __ts_walk_r ( __vec_elem_llvm ty ) syms ) } {}
+    ? & != 0 g_ts_all != 0 ( nurl_str_starts ty `%Slice__` ) { ^ ( __ts_walk_r ( demangle_type ( nurl_str_slice ty 8 - ( nurl_str_len ty ) 8 ) ) syms ) } {}
     ? ( __is_libh ty ) {
         : s b ( __libh_base ty )
-        ? | | ( seq b `Arc` ) ( seq b `Channel` ) ( seq b `DChannel` ) { ^ ( nurl_str_cat ty `` ) } {}
+        ? & != 0 g_ts_all ( seq b `DChannel` ) { ^ ( nurl_str_cat `*` `` ) } {}
+        ? & == 0 g_ts_all | | ( seq b `Arc` ) ( seq b `Channel` ) ( seq b `DChannel` ) { ^ ( nurl_str_cat ty `` ) } {}
         // A Weak owns nothing; an Rc never crosses threads.
-        ? | | ( seq b `ArcWeak` ) ( seq b `Weak` ) ( seq b `Rc` ) { ^ ( nurl_str_cat `` `` ) } {}
-        ? != 0 ( nurl_sym_len2 g_impl_name_syms `rcstate##` ty ) { ^ ( nurl_str_cat ty `` ) } {}
-        : ~ s out ``
+        ? & == 0 g_ts_all | | ( seq b `ArcWeak` ) ( seq b `Weak` ) ( seq b `Rc` ) { ^ ( nurl_str_cat `` `` ) } {}
+        ? & == 0 g_ts_all != 0 ( nurl_sym_len2 g_impl_name_syms `rcstate##` ty ) { ^ ( nurl_str_cat ty `` ) } {}
+        // (…and, asked what it may hold, its handle's state.)
+        : ~ s out ? & != 0 g_ts_all != 0 ( nurl_sym_len2 g_impl_name_syms `rcstate##` ty ) ( __ts_walk_r ( nurl_sym_get2 g_impl_name_syms `rcstate##` ty ) syms ) ``
         : i na ( count_words ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) )
         : ~ i k 0
         ~ < k na {
@@ -103637,6 +103817,22 @@ unsafe @ __ts_walk_r s ty i syms → s {
             } {}
         }
     }
+    ( nurl_sym_def g_impl_name_syms key ? r `1` `0` )
+    ^ r
+}
+
+// May a value of lowered type `ty` hold a closure anywhere: in a field, an
+// enum payload, an element, any library handle's payload (an Rc's, a
+// Box's, an Arc's, a channel's), a trait object? Memoised per type
+// (`mhc##`). AGORA-945.
+@ __may_hold_clo s ty i syms → b {
+    : i c0 ( nurl_str_get ty 0 )
+    ? & != c0 37 != c0 123 { ^ F } {}
+    : s key ( nurl_str_cat `mhc##` ty )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ ( seq ( nurl_sym_get g_impl_name_syms key ) `1` ) } {}
+    = g_ts_all 1
+    : b r ( __bar_has ( __ts_walk ty syms ) `*` )
+    = g_ts_all 0
     ( nurl_sym_def g_impl_name_syms key ? r `1` `0` )
     ^ r
 }

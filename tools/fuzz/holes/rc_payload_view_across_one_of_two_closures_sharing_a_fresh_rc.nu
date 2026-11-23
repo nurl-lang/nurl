@@ -1,5 +1,6 @@
-// adversarial: two closures over one fresh Rc - one hands back a clone of it, the other replaces its payload; a view through the clone ends under the second
-// map: §2.14 | A2 | rejected | - | AGORA-869 adversarial: a fresh Rc captured by two closures; heap-use-after-free under ASan with the walk alone, refused by the ownership engine
+// rc_payload_view_across_one_of_two_closures_sharing_a_fresh_rc: two closures over one fresh Rc - one hands back a clone of it, the other replaces its payload; a view through the clone is held across the second
+// main 4525fc8: accepted, heap-use-after-free under ASan.
+// map: §7.6 | A2 | rejected | - | AGORA-945: two closures over one fresh Rc, one handing back a clone, the other replacing the payload; the view through the clone ends at the second
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/rc.nu`
