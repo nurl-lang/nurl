@@ -2512,6 +2512,7 @@ def Expr.vars : Expr → List Var
 def Rhs.vars : Rhs → List Var
   | .expr e => e.vars
   | .new _ => []
+  | .slit _ => []
   | .var y => [y]
   | .borrow y => [y]
   | .at y i => y :: i.vars

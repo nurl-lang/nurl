@@ -3537,6 +3537,7 @@ theorem EvalR.blk {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.o
   | rwTryRead _ _ hfr => exact BlkLe.fresh hfr _
   | lockTake _ hk _ => exact BlkLe.setLock hk _
   | lockRestore _ h1 hk => exact (BlkLe.of_eq (TakeVal.blk h1)).trans (BlkLe.setLock hk _)
+  | slit hfr => exact BlkLe.fresh hfr _
   | _ => exact BlkLe.refl _
 
 theorem BindParams.blk {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var} {base i : Nat}
@@ -3655,6 +3656,9 @@ theorem EvalR.leafKeep {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m 
   | cellNew h1 hfr => exact .inl (fresh _ (TakeVal.blk h1) hfr)
   | rwRead _ _ hfr => exact .inl (fresh (m1 := m) _ rfl hfr)
   | rwTryRead _ _ hfr => exact .inl (fresh (m1 := m) _ rfl hfr)
+  | slit hfr =>
+    have hne : k ≠ m.nid + 2 := fun e => by rw [e, hfr] at hk; cases hk
+    exact .inl ⟨bl, by show upd m.blk (m.nid + 2) _ k = some bl; rw [upd_ne _ _ hne]; exact hk, hs⟩
   | @atomic op a e1 e2 o k0 n n1 n2 _ hk0 _ _ _ =>
     by_cases he : k = k0
     · subst he; rw [hk0] at hk; cases hk; exact absurd hs (Sub.leaf_int hw)
