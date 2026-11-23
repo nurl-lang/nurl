@@ -1,5 +1,5 @@
 import A2.TakeB
-import A2.CapClause
+import A2.CapsStore
 
 /-! A2 — preservation: a step of a well-typed configuration leads to a
 well-typed configuration. -/

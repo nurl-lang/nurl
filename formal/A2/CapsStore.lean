@@ -1,5 +1,5 @@
 import A2.CapClause
-import A2.Codes
+import A2.Basic
 
 /-! A2 — AGORA-969 (AGORA-963 step 3, the store half): **the store part of
 the closure-capture clause, kept by the store operations a step makes.**
