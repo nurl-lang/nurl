@@ -1,9 +1,12 @@
 # formal — a mechanized proof of NURL's memory model
 
 > **Status: A1, A2 and A3 are proven** (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`, `A3.claim_full`, `A3.claim_made_full` — Lean 4, no `sorry`, only Lean's
-> standard axioms — `./check.sh`). Phase B has begun: B1, `Vec`'s raw
-> core, B2, `String`'s, B3, `rcbox`, and B4, `HashMap`'s slot code, B5, `Arc`, and B6, `Channel`'s queue, are
-> proven (`B.push_refines`, `B.pushBytes_ok`, `B.rcRelease_ok`, `B.set_probe_answers`, `B.arcDrop_ok`). The rest of B, and C–D, are not. Until a phase
+> standard axioms — `./check.sh`). Phase B: each library piece it
+> names has a model of its raw code with the memory-safety theorems proven
+> (B1–B9 in `B/`: `Vec`, `String`, `rcbox`, `HashMap`, `Arc`, channels,
+> the cycle collector's criterion, allocation sizes, `std/rc.nu`'s `Rc`).
+> The models follow the library code by inspection, and the runtime's C is
+> phase D's. C–D are not started. Until a phase
 > below is marked done, the part of the guarantee in
 > [`docs/MEMORY.md` §6.2](../docs/MEMORY.md) it covers rests on the
 > compiler's tests (§6.6), not on a proof; and until phase C, the proof is
