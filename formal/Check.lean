@@ -930,3 +930,7 @@ import B
 #print axioms B.releaseFrom_ok
 #print axioms B.copyAt_ok
 #print axioms B.append_ok
+-- Phase B2: `String` (stdlib/core/string.nu's raw core): the bytes and the NUL terminator
+#print axioms B.strSeal_ok
+#print axioms B.pushBytes_ok
+#print axioms B.data_ok

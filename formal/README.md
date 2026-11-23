@@ -1,8 +1,8 @@
 # formal — a mechanized proof of NURL's memory model
 
 > **Status: A1, A2 and A3 are proven** (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`, `A3.claim_full`, `A3.claim_made_full` — Lean 4, no `sorry`, only Lean's
-> standard axioms — `./check.sh`). Phase B has begun: B1, `Vec`'s owned
-> buffer, is proven (`B.push_refines`). The rest of B, and C–D, are not. Until a phase
+> standard axioms — `./check.sh`). Phase B has begun: B1, `Vec`'s raw
+> core, and B2, `String`'s, are proven (`B.push_refines`, `B.pushBytes_ok`). The rest of B, and C–D, are not. Until a phase
 > below is marked done, the part of the guarantee in
 > [`docs/MEMORY.md` §6.2](../docs/MEMORY.md) it covers rests on the
 > compiler's tests (§6.6), not on a proof; and until phase C, the proof is
@@ -58,7 +58,7 @@ formal/
   rules/t<N>.md    RULES.md's change rows, one file per change (an ownership PR adds
                    its file, never a row of the table); tools/formal_rules.py writes
                    the table from them at release (rules/README.md)
-  B.lean, B/       phase B: the unsafe base against the rules' types (B1: `Vec`)
+  B.lean, B/       phase B: the unsafe base against the rules' types (B1: `Vec`, B2: `String`)
   check.sh         builds the proof and checks it has no sorry and no new axiom
   lean-toolchain, lakefile.toml, A1.lean, A2.lean, A3.lean, Check.lean
   A1/              the A1 proof (Lean 4, core library only)
