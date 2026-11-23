@@ -29,6 +29,10 @@ def borrowed(f):
     """Does function `f` hand back a value that views what it was handed
     (its summary: `ret_unowned=1`, or `rviews` naming a parameter)?"""
     sm = SUMS.get(f, {})
+    if "ret_owned" in sm:
+        # (its `__ret_owned` marker: it hands over a fresh result; its
+        # `ret_unowned` only says no call needs a per-call ownership answer)
+        return False
     return sm.get("ret_unowned") == "1" or sm.get("rviews", ":") not in (":", "")
 
 
@@ -68,19 +72,15 @@ NAMES = {}
 
 def dtor_of(t):
     """A type with a `% Drop` of the program's own, `%T` with `drop__T`: its
-    destructor's index and its struct as A2's `Ty.dtor f u`, or None. A
-    struct of one field is padded with an integer (`prod u int`): A2's
-    destructor types are of a struct (`Ty.isStruct`), and the padding is read
-    by no one."""
-    if t not in DTOR_TYS:
-        return None
+    destructor's index and its struct as A2's `Ty.dtor f u`. A struct of one
+    field is padded with an integer (`prod u int`): A2's destructor types
+    are of a struct (`Ty.isStruct`), and the padding is read by no one."""
     f = NAMES.get("drop__" + t.lstrip("%"))
     fs = struct_fields(t)
     if f is None or fs is None or not fs:
         raise Unsupported(f"type {t}, with a destructor A2's translation does not see")
     for _, ft in fs:
-        ftn = ft if ft.startswith("%") else "%" + ft
-        if ftn in DTOR_TYS:
+        if (ft if ft.startswith("%") else "%" + ft) in DTOR_TYS:
             raise Unsupported(f"type {t}, holding a value of a destructor type ({ft})")
     _EXPANDING.add(t)
     try:
@@ -115,6 +115,17 @@ def lean_ty(t):
         t = "%" + t   # a type argument's name, inside another (`%Vec__String`)
     if t.startswith("%Vec__"):
         return f"(.vec {lean_ty(t[len('%Vec__'):])})"
+    if t.startswith("%Channel__"):
+        # A3.4: a `Channel A` is a lock share whose payload is its queue and
+        # its closed flag, `lk (prod (vec A) int)` (formal/A2/Syntax.lean,
+        # `Ty.ChanOf`). Only an element that holds no destructor value: a
+        # channel of those is a lock of the glued struct (`Ty.dtor g …`,
+        # nurlc's `ChImpl A` with its drop), not translated.
+        return f"(.lk (.prod (.vec {chan_elem(t[len('%Channel__'):])}) .int))"
+    if t in ("%str", "str"):
+        # a raw string held in a value (a container's element) is a view
+        # of a buffer someone else owns (MEMORY.md §2.13)
+        return "(.slice .int)"
     if t == "%String":
         return "(.vec .int)"   # a Vec of bytes (formal/A2/Syntax.lean)
     if t.startswith("%Slice__"):
@@ -144,6 +155,16 @@ def lean_ty(t):
         finally:
             _EXPANDING.discard(t)
     raise Unsupported(f"type {t}")
+
+
+def chan_elem(t):
+    """A channel's element type, where it holds no destructor value: an
+    integer, a String, or a Vec of integers. Anything else is Unsupported."""
+    if t in INT_TYS or t in ("i", "u", "b") or t in ("String", "%String"):
+        return lean_ty(t)
+    if t.lstrip("%").startswith("Vec__") and t.lstrip("%")[len("Vec__"):] in INT_TYS:
+        return lean_ty(t)
+    raise Unsupported(f"a channel of {t}")
 
 
 def _struct_ty(fs, fty=None):
@@ -274,7 +295,8 @@ class Fn:
             changed = False
             for l in self.fn["body"]:
                 w = l.split()
-                if len(w) >= 4 and w[0] == "let" and w[2] == "call" and (w[3] == "string_data" or borrowed(w[3])):
+                if len(w) >= 4 and w[0] == "let" and w[2] == "call" and (
+                        w[3] in ("string_data", "vec_at__str") or borrowed(w[3])):
                     v = int(w[1])
                 elif len(w) >= 4 and w[0] == "let" and w[2] == "use" and w[3].startswith("v") and w[3][1:].isdigit() \
                         and int(w[3][1:]) in views:
@@ -527,9 +549,48 @@ class Fn:
             pre = []
             v, y = self.argvar(ops[0], pre), self.argvar(ops[1], pre)
             s = self.seq(f"(.push {v} {y})", rest)
+            if vec_elem(f, "vec_push__") == "(.slice .int)":
+                # a raw string pushed where it is held in a value: the Vec
+                # keeps a view of it (MEMORY.md §2.13), of the text a binding
+                # owns, or the view a binding holds, copied
+                if ops[1] == "c":
+                    raise Unsupported(f"{self.fn['name']}: a literal string held in a Vec (no static strings in A2)")
+                k = int(ops[1][1:])
+                if self.vlean(k) == "(.vec .int)":
+                    t = self.fresh()
+                    s = f"(.letv {t} (.view {y}) {self.seq(f'(.push {v} {t})', rest)})"
             for t in reversed(pre):
                 s = f"(.letv {t} (.expr (.lit 0)) {s})"
             return s
+        if f.startswith("chan_new__") and n == 0:
+            # `lockNew` of a fresh queue and a 0 flag (A3.4)
+            x = self.fresh() if x is None else x
+            q, k, p = self.fresh(), self.fresh(), self.fresh()
+            el = chan_elem(f[len("chan_new__"):])
+            return (f"(.letv {q} (.new {el}) (.letv {k} (.expr (.lit 0)) (.letv {p} (.pair {q} {k}) "
+                    f"(.letv {x} (.lockNew (.prod (.vec {el}) .int) {p}) {rest}))))")
+        if f.startswith("Channel_share__") and n == 1 and ops[0] != "c":
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.lockClone {rd(ops[0])}) {rest})"
+        if f.startswith("chan_send__") and n == 2 and ops[0] != "c":
+            # the value moves to the back of the queue, as `vec_push` takes it;
+            # the answer (sent or dropped on a closed channel) is an integer
+            chan_elem(f[len("chan_send__"):])
+            pre = []
+            y = self.argvar(ops[1], pre)
+            x = self.fresh() if x is None else x
+            s = f"(.letv {x} (.chanSend {rd(ops[0])} {y}) {rest})"
+            for t in reversed(pre):
+                s = f"(.letv {t} (.expr (.lit 0)) {s})"
+            return s
+        if (f.startswith("chan_recv__") or f.startswith("chan_try_recv__")) and n == 1 and ops[0] != "c":
+            # the head moves out as `some`, or `none`: an owned `sum int A`
+            w = "true" if f.startswith("chan_recv__") else "false"
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.chanRecv {w} {rd(ops[0])}) {rest})"
+        if f.startswith("chan_close__") and n == 1 and ops[0] != "c":
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.chanClose {rd(ops[0])}) {rest})"
         if f.startswith("vec_len__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.expr (.len {rd(ops[0])})) {rest})"
@@ -583,7 +644,7 @@ class Fn:
             # a bounds-checked element read; only a scalar element, whose
             # value is copied out, is translated (a lent aggregate element
             # needs the borrow the IR's next line takes, not yet followed)
-            if vec_elem(f, "vec_at__") != ".int":
+            if vec_elem(f, "vec_at__") not in (".int", "(.slice .int)"):
                 raise Unsupported(f"{self.fn['name']}: vec_at of a non-scalar element")
             pre = []
             i = self.operand(ops[1], pre)
@@ -620,26 +681,30 @@ class Fn:
             s = f"(.letv {t} (.expr (.lit 0)) {s})"
         return s
 
-    @staticmethod
-    def no_more(lines):
-        """Nothing but position marks and the IR's drops left in `lines`."""
-        return all(l.split()[0] in ("line", "drop") for l in lines)
-
-    def stmts(self, lines, names, tail=".skip", top=False):
+    def stmts(self, lines, names, tail=".skip"):
         """A statement list as one A2 statement, ending in `tail`: each
-        binding scoped over what follows it. `top`: the list ends the
-        function's body (no statement of it runs after this one's)."""
+        binding scoped over what follows it."""
         if not lines:
             return tail
+        eff = [k for k, l in enumerate(lines) if l.split()[0] not in ("line", "drop")]
+        if eff and lines[eff[-1]].split()[0] == "ret":
+            # A list ending in `ret` (the last line of a list is at its own
+            # depth: a nested block's ends in `end`) leaves the function from
+            # inside every binding made before it. The exit is put after
+            # them: ending their scopes and then leaving is what leaving
+            # from inside them does (the unwinding ends them in that order),
+            # and an exit at the end of a sequence is one a branch around it
+            # may end elsewhere (`checkX`'s tail).
+            k = eff[-1]
+            body = lines[:k] + ["retnx " + " ".join(lines[k].split()[1:])]
+            return self.seq(self.stmts(body, names), f"(.exit {self.depth})")
         head, i = lines[0].split(), 1
         w = head[0]
         if w in ("line", "drop"):
-            return self.stmts(lines[1:], names, tail, top)
+            return self.stmts(lines[1:], names, tail)
         if w == "scope":
             body, j = block_of(lines, 1)
-            rest = lines[j + 1:]
-            return self.seq(self.stmts(body, names, top=top and self.no_more(rest)),
-                            self.stmts(rest, names, tail, top))
+            return self.seq(self.stmts(body, names), self.stmts(lines[j + 1:], names, tail))
         if w == "loop":
             # `loop <condition> loopcond op <body> end`: a block around A2's
             # `loop`, whose body runs the condition and leaves the block
@@ -666,7 +731,7 @@ class Fn:
             inner = f"(.ite {self.operand(c)} (.block {inner_body}) (.exit 0))"
             loop_body = self.stmts(cond, names, inner)
             self.depth -= 1
-            return self.seq(f"(.block (.loop {loop_body}))", self.stmts(lines[k + 1:], names, tail, top))
+            return self.seq(f"(.block (.loop {loop_body}))", self.stmts(lines[k + 1:], names, tail))
         if w == "foreach":
             # `foreach x v … end` over a Vec: the loop holds a borrow of the
             # container for its whole run (a view of it, `view`), and lends
@@ -685,11 +750,11 @@ class Fn:
             each = f"(.letv {x} (.sat {w} (.var {i})) (.seq {step} {inner}))"
             loop = f"(.loop (.ite (.lt (.var {i}) (.slen {w})) (.block {each}) (.exit 0)))"
             return self.seq(f"(.block (.letv {i} (.expr (.lit 0)) (.letv {w} (.view {v}) {loop})))",
-                            self.stmts(lines[k + 1:], names, tail, top))
+                            self.stmts(lines[k + 1:], names, tail))
         if w == "break":
-            return self.seq("(.exit 1)", self.stmts(lines[1:], names, tail, top))
+            return self.seq("(.exit 1)", self.stmts(lines[1:], names, tail))
         if w == "continue":
-            return self.seq("(.exit 0)", self.stmts(lines[1:], names, tail, top))
+            return self.seq("(.exit 0)", self.stmts(lines[1:], names, tail))
         if w == "match":
             # an option's match: `isl` is 1 for its first variant, None (`F`)
             arms, j = {}, 1
@@ -701,7 +766,7 @@ class Fn:
                 raise Unsupported(f"{self.fn['name']}: match arms {sorted(arms)}")
             m = self.pvar(head[1])
             ite = f"(.ite (.isl {m}) {self.stmts(arms['F'], names)} {self.stmts(arms['T'], names)})"
-            return self.seq(ite, self.stmts(lines[j + 1:], names, tail, top))
+            return self.seq(ite, self.stmts(lines[j + 1:], names, tail))
         if w == "if":
             a, j = block_of(lines, 1)
             if lines[j].split()[0] == "else":
@@ -710,22 +775,19 @@ class Fn:
                 b, k = [], j
             c = self.operand(head[1])
             ite = f"(.ite {c} {self.stmts(a, names)} {self.stmts(b, names)})"
-            return self.seq(ite, self.stmts(lines[k + 1:], names, tail, top))
-        if w == "ret":
+            return self.seq(ite, self.stmts(lines[k + 1:], names, tail))
+        if w in ("ret", "retnx"):
             if head[1] == "c" and self.res_ty == "(.slice .int)":
                 # a literal handed back as a view: A2 has no static strings
                 raise Unsupported(f"{self.fn['name']}: a literal string handed back as a view")
-            # (a `ret` that ends the function's body, outside any loop, falls
-            # off its block's end: the same as leaving it, `exit 0`, so no exit
-            # is needed — and none is asked of the scopes it would leave)
-            last = top and self.depth == 0 and self.no_more(lines[1:])
+            # (`retnx`: the result set, its exit placed after the list, above)
+            ex_ = "" if w == "retnx" else f" (.exit {self.depth})"
             if head[1] != "-" and not self.is_int(head[1]):
                 a = f"(.assign {self.np} (.var {self.pvar(head[1])}))"
-                ex = a if last else f"(.seq {a} (.exit {self.depth}))"
-                return self.seq(ex, self.stmts(lines[1:], names, tail))
-            v = "(.lit 0)" if head[1] == "-" else self.operand(head[1])
-            a = f"(.assign {self.np} (.expr {v}))"
-            ex = a if last else f"(.seq {a} (.exit {self.depth}))"
+            else:
+                v = "(.lit 0)" if head[1] == "-" else self.operand(head[1])
+                a = f"(.assign {self.np} (.expr {v}))"
+            ex = f"(.seq {a}{ex_})" if ex_ else a
             return self.seq(ex, self.stmts(lines[1:], names, tail))
         if w == "let" and head[2] != "call":
             # `let x r` whose value is returned at once: the result takes `r`
@@ -734,13 +796,11 @@ class Fn:
                 k = lines.index(nxt[0])
                 pre = []
                 r = self.rhs(head[2:], int(head[1]), pre)
-                last = top and self.depth == 0 and self.no_more(lines[k + 1:])
-                a = f"(.assign {self.np} ({r}))"
-                ex = self.wrap(pre, a if last else f"(.seq {a} (.exit {self.depth}))")
-                return self.seq(ex, self.stmts(lines[k + 1:], names, tail, top))
+                ex = self.wrap(pre, f"(.seq (.assign {self.np} ({r})) (.exit {self.depth}))")
+                return self.seq(ex, self.stmts(lines[k + 1:], names, tail))
         if w == "let":
             x = self.var(int(head[1]))
-            rest = self.stmts(lines[1:], names, tail, top)
+            rest = self.stmts(lines[1:], names, tail)
             d = self.is_dtor(self.fn["vars"].get(int(head[1]), ""))
             if head[2] == "call":
                 if d:
@@ -763,7 +823,7 @@ class Fn:
                 s = f"(.letv {x} ({r}) {rest})"
             return self.wrap(pre, s)
         if w == "eval":
-            rest = self.stmts(lines[1:], names, tail, top)
+            rest = self.stmts(lines[1:], names, tail)
             if head[1] == "call":
                 return self.call(head[1:], names, rest)
             t = self.fresh()
@@ -775,14 +835,14 @@ class Fn:
                 raise Unsupported(f"{self.fn['name']}: store to {head[1]}")
             if self.fn["vars"].get(int(head[1][1:])) == "void":
                 # a join's value that no one takes (a `void` holder): nothing moves
-                return self.stmts(lines[1:], names, tail, top)
+                return self.stmts(lines[1:], names, tail)
             if self.is_dtor(self.fn["vars"].get(int(head[1][1:]), "")):
                 # a destructor binding is given no other value (A2's `letd`)
                 raise Unsupported(f"{self.fn['name']}: a destructor binding assigned")
             pre = []
             r = self.rhs(head[2:], int(head[1][1:]), pre, assign=True)
             return self.seq(self.wrap(pre, f"(.assign {self.pvar(head[1])} ({r}))"),
-                            self.stmts(lines[1:], names, tail, top))
+                            self.stmts(lines[1:], names, tail))
         raise Unsupported(f"{self.fn['name']}: statement {w}")
 
     @staticmethod
@@ -799,7 +859,7 @@ class Fn:
     def lean(self, names):
         # (a `void` function may fall off its end: its result is the unit)
         tail = f"(.assign {self.np} (.expr (.lit 0)))" if self.fn["ret"] == "void" else ".skip"
-        inner = self.stmts(self.fn['body'], names, tail, top=True)
+        inner = self.stmts(self.fn['body'], names, tail)
         for t in reversed(self.lits):
             inner = f"(.letv {t} (.expr (.lit 0)) {inner})"
         body = f"(.block {inner})"

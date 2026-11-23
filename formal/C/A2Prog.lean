@@ -382,7 +382,7 @@ def fnOK2B (P : Prog) (f : Nat) (fn : Fn) : Bool :=
   (fn.lends ++ fn.rholds).all (fun jk => kindFitsB fn jk.1 jk.2) &&
   fn.outHolds.all (fun o => kindFitsB fn o.2.1 o.2.2) &&
   dtorParamsB P f fn &&
-  (match checkX P (inferRhs2d (fnDom fn)) (callB2 P (fnDom fn)) (fnDom fn) (sigCtx fn) [] fn.body with
+  (match checkX P (inferRhs2c (fnDom fn)) (callB2 P (fnDom fn)) (fnDom fn) (sigCtx fn) [] fn.body with
    | some r => r.E.isEmpty && noDtorEndB (fnDom fn) r.Δ && resEndB fn r.Δ && inoutEndB fn r.Δ
    | none => false)
 
@@ -416,7 +416,7 @@ theorem fnOK2B_sound {P : Prog} {f : Nat} {fn : Fn} (hf : P[f]? = some fn) (h : 
     · rename_i r hr
       have hD : ∀ v ∈ fn.body.vars, v ∈ fnDom fn := fun v hv =>
         List.mem_range.mpr (Nat.lt_of_lt_of_le (hvars v hv) (Nat.le_add_right _ _))
-      obtain ⟨hsΔ, _, ht, _⟩ := checkX_sound (inferRhs2d_OK _) (callB2_OK P _) (sigCtx_supported2 hlen) hD hr
+      obtain ⟨hsΔ, _, ht, _⟩ := checkX_sound (inferRhs2c_OK _) (callB2_OK P _) (sigCtx_supported2 hlen) hD hr
       simp only [Bool.and_eq_true, List.isEmpty_iff] at hchk
       obtain ⟨⟨⟨hE, hnd⟩, hre⟩, hie⟩ := hchk
       exact ⟨r.Δ, ht .none (by rw [hE]; intro e he; cases he), noDtorEndB_sound hsΔ hnd, resEndB_sound hre,
