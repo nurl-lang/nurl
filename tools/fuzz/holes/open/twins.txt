@@ -9,4 +9,3 @@
 # elaboration closes at the source; each stage takes its lines out of here.
 #
 # probe                                                   what the twin does
-capture_lent_a_closure_local_through_a_join_runs_clean.nu a join of two closure locals' lends bound by `:` in the closure, then assigned to a capture by name (leaks on main too, AGORA-242)

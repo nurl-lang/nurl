@@ -13,9 +13,9 @@ as named probes (`// map:` line).
 **Elaborated twins** ([`twins.txt`](twins.txt)): `check.sh` also runs each
 probe's elaborated twin (`elab.py`), its producer form bound by `:` first
 and the consumer reading the binding (agora #242). A twin known to fault
-is listed in `twins.txt` with its reason and is not run. What the listed
-ones share is agora #242's open shape (`t242.md`), which #222's
-elaboration closes at the source.
+is listed in `twins.txt` with its reason and is not run, and filed as an
+open hole here. Agora #242's twins are all closed (AGORA-941, AGORA-953,
+AGORA-958, AGORA-961); `twins.txt` lists none, and every twin runs.
 
 The history below is the earlier `hNNN` era. Agora #150 was closed and graduated as
 `h424`–`h425`: a field of a call's lent result handed to a `sink`
