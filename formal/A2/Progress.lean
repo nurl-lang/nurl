@@ -879,7 +879,7 @@ theorem progress {P : Prog}
     intro m hcd hi
     -- AGORA-937 (item 3): a frame binds no region
     have hthru := hthru.toOK fun v E h hr => by
-      obtain ⟨E0, h0, hm, _⟩ := (harg.ctxRelH (hi.leafAnchS rfl).toRH (fun y hy hyF => NoHeld.of_anchS (hi.leafAnchS rfl) (Edit.stored_vars hy) hyF)).mode v E h
+      obtain ⟨E0, h0, hm, _⟩ := (harg.ctxRelH (hi.leafAnchS rfl).toRH (fun y hy hyF _ => NoHeld.of_anchS (hi.leafAnchS rfl) (Edit.stored_vars hy) hyF)).mode v E h
       exact hi.toMInv.noRegion v E0 h0 (hm ▸ hr)
     exact Or.inr <| Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnchS rfl) (fun y hy => Edit.stored_vars hy) hx hmx hl hty harg hyx hx1 hl1 hthru)
   | editBV hx hmx hl hty _ _ _ harg hyx hx1 hl1 _ hthru _ =>

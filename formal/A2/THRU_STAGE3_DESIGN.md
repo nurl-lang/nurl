@@ -802,7 +802,13 @@ This makes B2's last two cases depend on B3's invariant. The order is therefore:
   - Preservation's `frozenIn` and `catchR`;
   - Closure.lean: the closure call's frame, the kill at the captures, and the new statement;
   - EnvHand.lean: the anchors the package-call lemmas take, two places.
-- **`SrcCase` relaxed, 2 places:** Preservation's `withLock` and `withElem` (SrcKeep's `StmtT.ctxRel`).
+- *(Proved since: `SrcCase` takes `RootbAnchRS Γ F s.killVars`, and SrcKeep's `StmtT.ctxRelS` keeps the borrowed parameters on the relaxed anchors.*
+  - *Every name a source statement kills is a killable name that is no region, so no held root (`RootbAnchRS.noHeld`). That is what the `…H` kills ask (`HeldSpared`).*
+  - *A changed `Vec`'s path roots hold views, so they are no held root either (`NoHeldV.of_anchRS`).*
+  - *The `NoHeld` callbacks of `PushArg` / `EditArg` / `editBH` / `editBVH` take a no-region premise: a callee frame's region may carry held self-views, and only the `move` case asks.*
+  - *The strict `StmtT.ctxRel` stays as a corollary for a callee's body. Its R-only helpers in SrcKeep had no other users and are gone.)*
+
+**All 7 places left are AGORA-963's (the closure-capture clause).**
 - *(Proved since, B3's call side: `CallA.anch` is `RootbAnchRS Γ F args`. An anchor is in `F`, through a region, or held of a root that is no argument and holds no views.*
   - *`NamesFree` asks that the closures' by-name change ends no held view. That is the call-site twin of 963's clause, in the spare form `HeldSpared` reads.*
   - *`namesFree_lift` carries it into the lifted frame from `S.OK` as it stands, with no new field (`liftE_rootb_held_mem`, `Φsat`, `N_mut`).*

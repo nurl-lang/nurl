@@ -1267,6 +1267,25 @@ theorem RootbAnchRS.mono {Γ : Ctx} {F F' V : List Var} (h : RootbAnchRS Γ F V)
     RootbAnchRS Γ F' V :=
   fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp (hF _) id
 
+theorem RootbAnchRS.anti {Γ : Ctx} {F V V' : List Var} (h : RootbAnchRS Γ F V) (hV : ∀ v ∈ V', v ∈ V) :
+    RootbAnchRS Γ F V' :=
+  fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp id
+    (Or.imp id fun ⟨ha, hn, hr⟩ => ⟨ha, fun h' => hn (hV _ h'), hr⟩)
+
+/-- A fresh binding with an entry other than a borrowed parameter's keeps
+    the anchors. -/
+theorem RootbAnchRS.setE {Γ : Ctx} {F V : List Var} (h : RootbAnchRS Γ F V) {x : Var} {E : Entry}
+    (hE : E.mode ≠ .rootb) (hx : Γ x = none) : RootbAnchRS (A2.setE Γ x E) F V := fun p Ep hp hm d hd hb => by
+  by_cases hpx : p = x
+  · subst hpx; simp [A2.setE, upd] at hp; subst hp; exact absurd hm hE
+  · have hp' : Γ p = some Ep := by simpa [A2.setE, upd, hpx] using hp
+    rcases h p Ep hp' hm d hd hb with h1 | ⟨hk, Er, hEr, hr⟩ | ⟨ha, hn, Er, hEr, hv⟩
+    · exact Or.inl h1
+    · have hdx : d.root ≠ x := fun e => by rw [e, hx] at hEr; cases hEr
+      exact Or.inr (Or.inl ⟨hk, Er, by simp [A2.setE, upd, hdx, hEr], hr⟩)
+    · have hdx : d.root ≠ x := fun e => by rw [e, hx] at hEr; cases hEr
+      exact Or.inr (Or.inr ⟨ha, hn, Er, by simp [A2.setE, upd, hdx, hEr], hv⟩)
+
 /-- ... where no binding is a region (a run-time context), the region
     disjunct is void. -/
 theorem RootbAnchRS.toS {Γ : Ctx} {F V : List Var} (h : RootbAnchRS Γ F V)
