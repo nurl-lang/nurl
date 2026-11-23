@@ -5,7 +5,7 @@
 > the same way `bench.yml` commits the benchmark numbers. Do not edit by hand;
 > curate the findings log in [`tools/fuzz/FINDINGS.json`](tools/fuzz/FINDINGS.json).
 
-_Last run: **2026-11-16** · toolchain `525613d` · commit `525613d`_
+_Last run: **2026-11-23** · toolchain `06ce241` · commit `06ce241`_
 
 **Latest run:** ✅ **clean** — no findings
 
@@ -14,7 +14,7 @@ _Last run: **2026-11-16** · toolchain `525613d` · commit `525613d`_
 | `differential-int` | seeds 1–1500, size=12, depth=4 | 1500 | 1500 | 0 | 0 | 150 |
 | `parser-mutational` | iters=4000 rng-seed=1 | 4000 | 4000 | 0 | 4000 | 0 |
 | `parser-mutational` | iters=4000 rng-seed=2 | 4000 | 4000 | 0 | 4000 | 0 |
-| `parser-mutational` | 4 min × 14 targets, rng-seed=22 | 5225320 | 5225320 | 0 | 5225320 | 0 |
+| `parser-mutational` | 4 min × 14 targets, rng-seed=23 | 2315176 | 2315176 | 0 | 2315176 | 0 |
 | `reject-inverse` | seeds 1–400, depth=3 | 400 | 400 | 0 | 0 | 0 |
 | `differential-struct` | seeds 1–600, size=14, depth=3 | 600 | 600 | 0 | 120 | 120 |
 
@@ -24,24 +24,24 @@ Parser targets (all `parser-mutational` legs of this run):
 |---|---:|---:|---:|
 | `cbor` | 704 | 0.0 | 0 |
 | `csr` | 1216 | 0.0 | 0 |
-| `h2` | 121040 | 4.0 | 0 |
-| `h2frame` | 682688 | 4.0 | 0 |
-| `h3frame` | 684544 | 4.0 | 0 |
-| `hpack` | 510272 | 4.0 | 0 |
-| `http1` | 122496 | 4.0 | 0 |
-| `http1resp` | 105184 | 4.0 | 0 |
+| `h2` | 57728 | 4.0 | 0 |
+| `h2frame` | 298880 | 4.0 | 0 |
+| `h3frame` | 298176 | 4.0 | 0 |
+| `hpack` | 234816 | 4.0 | 0 |
+| `http1` | 59584 | 4.0 | 0 |
+| `http1resp` | 56688 | 4.0 | 0 |
 | `json` | 1024 | 0.0 | 0 |
-| `mqtt` | 103616 | 4.0 | 0 |
+| `mqtt` | 55792 | 4.0 | 0 |
 | `msgpack` | 1056 | 0.0 | 0 |
-| `multipart` | 1136512 | 4.0 | 0 |
+| `multipart` | 468096 | 4.0 | 0 |
 | `pem` | 832 | 0.0 | 0 |
-| `qpack` | 739264 | 4.0 | 0 |
-| `tls` | 68632 | 4.0 | 0 |
-| `tlscert` | 22144 | 4.0 | 0 |
-| `tlscli` | 100000 | 4.0 | 0 |
+| `qpack` | 307584 | 4.0 | 0 |
+| `tls` | 32968 | 4.0 | 0 |
+| `tlscert` | 12352 | 4.0 | 0 |
+| `tlscli` | 50592 | 4.0 | 0 |
 | `toml` | 800 | 0.0 | 0 |
-| `urlish` | 747072 | 4.0 | 0 |
-| `ws` | 81856 | 4.0 | 0 |
+| `urlish` | 335936 | 4.0 | 0 |
+| `ws` | 45984 | 4.0 | 0 |
 | `x509` | 832 | 0.0 | 0 |
 | `xml` | 704 | 0.0 | 0 |
 | `yaml` | 832 | 0.0 | 0 |
