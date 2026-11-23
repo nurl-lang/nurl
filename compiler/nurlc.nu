@@ -50420,29 +50420,69 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ^ F
 }
 
-// …asked of the value held at `ptr` itself, as an i1 (or `1` / `0` where its type
-// answers alone): an option by its active side — `None` owns nothing,
-// whatever the payload's type — and a result by the side it holds. A side
-// whose null key may leave something owned (a struct by its first field)
-// answers no (AGORA-965).
+// …asked of the value held at `ptr` itself, as an i1 (or `1` / `0` where its
+// type answers alone): an option by its active side — `None` owns nothing,
+// whatever the payload's type — and a result by the side it holds, through
+// nested options and results (`Some(None)` of a `??P` owns nothing either).
+// A side whose null key may leave something owned (a struct by its first
+// field) answers no. The value is read only where a tag decides (AGORA-965).
 @ __ud_null_triv_rt i cg s vt s ptr → s {
     : s ll ( nurl_llty ( __udty_val vt ) )
-    ? == 0 ( nurl_str_starts ll `{ i1, ` ) { ^ ? ( __ud_null_trivial vt ) `1` `0` } {}
+    : i st ( __ntv_static ll )
+    ? == st 1 { ^ ( nurl_str_cat `1` `` ) } {}
+    ? == st 0 { ^ ( nurl_str_cat `0` `` ) } {}
+    ^ ( __ntv_val cg ll ( __ud_load cg vt ptr ) )
+}
+
+// The type alone: 1 a null key always means nothing owned, 0 never, 2 the
+// active side decides (an option is never 0: its `None` owns nothing).
+@ __ntv_static s ll → i {
+    ? == 0 ( nurl_str_starts ll `{ i1, ` ) { ^ ? | ( __ud_null_trivial ll ) ( __is_plain_num_llty ll ) 1 0 } {}
+    : s fs ( __seplist_rest ( __agg_fields ll ) )
+    ? == 0 ( nurl_str_len fs ) { ^ 0 } {}
+    : s rest ( __seplist_rest fs )
+    : i sp ( __ntv_static ( seplist_first fs ) )
+    : i se ? == 0 ( nurl_str_len rest ) 1 ( __ntv_static ( seplist_first rest ) )
+    ? & == sp 1 == se 1 { ^ 1 } {}
+    ? & == sp 0 == se 0 { ^ 0 } {}
+    ^ 2
+}
+
+// …of the value `val` of LLVM type `ll`, as an i1 or `1` / `0`.
+@ __ntv_val i cg s ll s val → s {
+    : i st ( __ntv_static ll )
+    ? == st 1 { ^ ( nurl_str_cat `1` `` ) } {}
+    ? == st 0 { ^ ( nurl_str_cat `0` `` ) } {}
     : s fs ( __seplist_rest ( __agg_fields ll ) )
     : s f1 ( seplist_first fs )
     : s rest ( __seplist_rest fs )
-    : b pT | ( __ud_null_trivial f1 ) ( __is_plain_num_llty f1 )
-    : b opt == 0 ( nurl_str_len rest )
-    : b eT ? opt T | ( __ud_null_trivial ( seplist_first rest ) ) ( __is_plain_num_llty ( seplist_first rest ) )
-    ? & pT eT { ^ `1` } {}
-    ? & ! pT ! eT { ^ `0` } {}
-    // (Only now is the value read: the tag says the payload side, trivial
-    // there if pT, else on the other.)
-    : s val ( __ud_load cg vt ptr )
     : s tg ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print tg ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
-    // (the tag says the payload side: trivial there if pT, else on the other)
-    ^ ? pT ( nurl_str_cat tg `` ) ( __not_i1 cg tg )
+    : s pt ( __ntv_side cg ll val f1 1 )
+    : s et ? == 0 ( nurl_str_len rest ) ( nurl_str_cat `1` `` ) ( __ntv_side cg ll val ( seplist_first rest ) 2 )
+    ^ ( __sel_i1c cg tg pt et )
+}
+
+// One side (field `k` of type `ft`) of a wrapper value: read only where
+// its own type does not answer alone.
+@ __ntv_side i cg s ll s val s ft i k → s {
+    : i st ( __ntv_static ft )
+    ? == st 1 { ^ ( nurl_str_cat `1` `` ) } {}
+    ? == st 0 { ^ ( nurl_str_cat `0` `` ) } {}
+    : s v ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print v ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print ( nurl_str_int k ) ) ( nurl_print `\n` )
+    ^ ( __ntv_val cg ft v )
+}
+
+// `c ? a : b` of i1s, `1` / `0` for constants, folded where it can be.
+@ __sel_i1c i cg s c s a s b → s {
+    ? ( seq a b ) { ^ ( nurl_str_cat a `` ) } {}
+    ? & ( seq a `1` ) ( seq b `0` ) { ^ ( nurl_str_cat c `` ) } {}
+    ? & ( seq a `0` ) ( seq b `1` ) { ^ ( __not_i1 cg c ) } {}
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = select i1 ` ) ( nurl_print c ) ( nurl_print `, i1 ` ) ( nurl_print ? ( seq a `1` ) `true` ? ( seq a `0` ) `false` a )
+    ( nurl_print `, i1 ` ) ( nurl_print ? ( seq b `1` ) `true` ? ( seq b `0` ) `false` b ) ( nurl_print `\n` )
+    ^ r
 }
 
 // An LLVM integer or float type: a number, which owns nothing.
