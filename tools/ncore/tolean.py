@@ -109,14 +109,32 @@ def no_clo(t):
 FNS = []
 
 
-def env_ty(n):
-    """A closure environment of `n` integer captures (A2 has no unit or
-    one-tuple: none or one is an integer, more are pairs to the right)."""
-    if n <= 1:
+def cap_ty(t):
+    """A capture by value's A2 type, where the translation follows it: a
+    number, copied into the environment, or a buffer of numbers (a String, a
+    `Vec` of numbers). A buffer captured by value is a copy of its handle
+    that depends on the binding (MEMORY.md §2.11: the binding given a new
+    value ends the closure): A2's capture by name, read only (`inp`)."""
+    lt = lean_ty(t)
+    if lt in (".int", "(.vec .int)"):
+        return lt
+    raise Unsupported(f"a capture of type {t}")
+
+
+def by_name(t):
+    """Is a capture of IR type `t` one by name (a buffer), not a number?"""
+    return cap_ty(t) != ".int"
+
+
+def env_ty(tys):
+    """A closure environment of captures of A2 types `tys` (A2 has no unit
+    or one-tuple: none is an integer, one is its value, more are pairs to
+    the right)."""
+    if not tys:
         return ".int"
-    acc = ".int"
-    for _ in range(n - 1):
-        acc = f"(.prod .int {acc})"
+    acc = tys[-1]
+    for t in reversed(tys[:-1]):
+        acc = f"(.prod {t} {acc})"
     return acc
 
 
@@ -344,16 +362,22 @@ class Fn:
             for k in caps:
                 if flags.get(k, 0) & 8:
                     raise Unsupported(f"{fn['name']}: a capture taken by pointer")
-                if lean_ty(fn["vars"][k]) != ".int":
-                    raise Unsupported(f"{fn['name']}: a capture that is not a number")
+                cap_ty(fn["vars"][k])
             for k in prms:
                 if flags.get(k, 0) & 6:
                     raise Unsupported(f"{fn['name']}: a closure parameter taken sink or inout")
             if borrowed(fn["name"]):
                 raise Unsupported(f"{fn['name']}: a closure whose result is lent")
             vm = {p: 1 + i for i, p in enumerate(prms)}
-            self.rslot = self.np + 1
-            nxt = self.np + 2
+            # (captures by name: the code's parameters after the interface's,
+            # `Implements`: `… ++ cs.map (·.2)`)
+            named = [k for k in caps if by_name(fn["vars"][k])]
+            for j, k in enumerate(named):
+                vm[k] = 1 + self.np + j
+            caps = [k for k in caps if k not in named]
+            self.named = named
+            self.rslot = self.np + 1 + len(named)
+            nxt = self.rslot + 1
             for k in sorted(fn["vars"]):
                 if k not in vm:
                     vm[k] = nxt
@@ -1058,14 +1082,17 @@ class Fn:
         raise Unsupported(f"{self.fn['name']}: statement {w}")
 
     def read_caps(self, inner):
-        """A closure's captures, numbers, read out of its environment
-        (variable 0) at the top of its body: one is the environment, more
-        are its pairs' fields (`env_ty`)."""
+        """A closure's captures read out of its environment (variable 0,
+        lent) at the top of its body: one is the environment, more are its
+        pairs' fields (`env_ty`). A number is copied; a buffer is lent from
+        the environment, which holds the closure's own copy of it."""
         caps = self.caps
         if not caps:
             return inner
+        def take(c, src):
+            return f".expr (.var {src})" if cap_ty(self.fn["vars"][c]) == ".int" else f".var {src}"
         if len(caps) == 1:
-            return f"(.letv {self.vmap[caps[0]]} (.expr (.var 0)) {inner})"
+            return f"(.letv {self.vmap[caps[0]]} ({take(caps[0], 0)}) {inner})"
         binds, cur = [], 0
         for i, c in enumerate(caps):
             if i < len(caps) - 1:
@@ -1074,7 +1101,7 @@ class Fn:
                 binds.append((t, f".snd {cur}"))
                 cur = t
             else:
-                binds.append((self.vmap[c], f".expr (.var {cur})"))
+                binds.append((self.vmap[c], take(c, cur)))
         return self.wrap(binds, inner)
 
     def closure_lit(self, words, x, names, rest):
@@ -1086,23 +1113,31 @@ class Fn:
         if f not in names:
             raise Unsupported(f"{self.fn['name']}: closure {f}, not in the program")
         for c in caps:
-            if c == "c" or "/" in c or not self.is_int(c):
-                raise Unsupported(f"{self.fn['name']}: a capture that is not a number variable")
+            if c == "c" or "/" in c or not (c.startswith("v") and c[1:].isdigit()):
+                raise Unsupported(f"{self.fn['name']}: a capture that is not a variable")
+        # (the literal's captures in the code's order: numbers by value into
+        # the environment, buffers by name)
+        named = [c for c in caps if by_name(self.fn["vars"][int(c[1:])])]
+        caps = [c for c in caps if c not in named]
+        n = len(caps)
+        tys = [cap_ty(self.fn["vars"][int(c[1:])]) for c in caps]
+        cs = ", ".join(f"({self.pvar(c)}, .inp, {self.vlean(int(c[1:]))})" for c in named)
         sigma = fn_sigma(self.vlean(int(x)) if isinstance(x, int) else x)
         pre = []
+        vals = [self.pvar(c) for c in caps]
         if n == 0:
             y = self.fresh()
             pre.append((y, ".expr (.lit 0)"))
         elif n == 1:
-            y = self.pvar(caps[0])
+            y = vals[0]
         else:
-            acc = self.pvar(caps[-1])
-            for c in reversed(caps[:-1]):
+            acc = vals[-1]
+            for v in reversed(vals[:-1]):
                 t = self.fresh()
-                pre.append((t, f".pair {self.pvar(c)} {acc}"))
+                pre.append((t, f".pair {v} {acc}"))
                 acc = t
             y = acc
-        return pre, f".pack [{names[f]}] {env_ty(n)} [{sigma}] {y} []"
+        return pre, f".pack [{names[f]}] {env_ty(tys)} [{sigma}] {y} [{cs}]"
 
     def callind(self, words, rest, x=None):
         """`callind n c args…`: method 0 of the package `c`, of its type's
@@ -1153,8 +1188,9 @@ class Fn:
             return ".inp"
         if self.closure:
             # the environment (lent, `inp`), then the interface's parameters
-            params = ", ".join([f"(.inp, {env_ty(len(self.caps))})"] +
-                               [f"(.inp, {self.vlean(p)})" for p in self.prms])
+            params = ", ".join([f"(.inp, {env_ty([cap_ty(self.fn['vars'][c]) for c in self.caps])})"] +
+                               [f"(.inp, {self.vlean(p)})" for p in self.prms] +
+                               [f"(.inp, {self.vlean(k)})" for k in self.named])
         else:
             params = ", ".join(f"({mode(i)}, {self.vlean(i)})" for i in range(self.np))
         own = "true" if self.res_own else "false"
