@@ -72,7 +72,7 @@ theorem ctxWFB_sound {D : List Var} {Γ : Ctx} (hs : Supported Γ D) (h : ctxWFB
     apply Classical.byContradiction; intro hn; rw [hs v hn] at hv; cases hv
   have := List.all_eq_true.mp h v hvD
   rw [hv] at this
-  simp only [Bool.or_eq_true, Bool.not_eq_true', decide_eq_false_iff_not, Classical.not_not] at this
+  simp only [Bool.or_eq_true, Bool.not_eq_true', decide_eq_false_iff_not] at this
   rcases this with (h0 | h0) | h0
   · rw [hl] at h0; cases h0
   · exact absurd hk h0
