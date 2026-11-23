@@ -42227,7 +42227,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     : b __aj_t & != 0 g_borrowck | | == t_tt0 TT_AT == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST
     : i __cj ? != 0 g_core_live ( core_if_begin ) 0
     : ~ i __cjt g_core_tmp_n
-    : s __aj0 ? __aj_t ( nurl_str_cat ( nurl_sym_get g_bck `ppends` ) `` ) ``
+    : s __aj0 ? __aj_t ( nurl_str_cat ( __sym_peek g_bck `ppends` ) `` ) ``
     : s __ajj0 ? __aj_t ( nurl_str_cat ( nurl_sym_get g_bck `pajoins` ) `` ) ``
     = g_vb_arm_pub ? & != 0 g_vb_on | == t_tt0 TT_QUEST == t_tt0 TT_QUESTQUEST 1 0
     : ~ s tv ( gen_expr lex syms cg )
@@ -42550,7 +42550,7 @@ unsafe @ gen_cond i lex i syms i cg → s {
     ? & c_rval == e_tt0 TT_LBRACE { = g_rpg_want 1 } {}
     : b __aj_e & != 0 g_borrowck | | == e_tt0 TT_AT == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST
     ? != 0 g_core_live { ( core_if_else ) } {}
-    : s __aj1 ? __aj_e ( nurl_str_cat ( nurl_sym_get g_bck `ppends` ) `` ) ``
+    : s __aj1 ? __aj_e ( nurl_str_cat ( __sym_peek g_bck `ppends` ) `` ) ``
     : s __ajj1 ? __aj_e ( nurl_str_cat ( nurl_sym_get g_bck `pajoins` ) `` ) ``
     = g_vb_arm_pub ? & != 0 g_vb_on | == e_tt0 TT_QUEST == e_tt0 TT_QUESTQUEST 1 0
     : ~ s ev ( gen_expr lex syms cg )
@@ -59783,7 +59783,9 @@ unsafe @ bck_swap_char s str i from i to → s {
 // ran last, gets them again (gen_loop).
 @ __vself_waiting → s {
     : ~ s out ``
-    : ~ s pp ( nurl_sym_get g_bck `ppends` )
+    // (Both lists are read in place: nothing writes them here, and each
+    // word is copied out. AGORA-974)
+    : ~ s pp ( __sym_peek g_bck `ppends` )
     ~ != 0 ( nurl_str_len pp ) {
         : s c ( str_first_word pp ) = pp ( str_skip_word pp )
         : s l ( str_first_word pp ) = pp ( str_skip_word pp )
@@ -59796,7 +59798,7 @@ unsafe @ bck_swap_char s str i from i to → s {
             = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat e `` ) ( nurl_str_cat3 out ` ` e )
         } {}
     }
-    : ~ s vp ( nurl_sym_get g_bck `pvpass` )
+    : ~ s vp ( __sym_peek g_bck `pvpass` )
     ~ != 0 ( nurl_str_len vp ) {
         ? == ( nurl_str_get vp 0 ) 32 { = vp ( nurl_str_slice vp 1 - ( nurl_str_len vp ) 1 ) continue } {}
         : s c ( str_first_word vp ) = vp ( str_skip_word vp )
@@ -59820,15 +59822,20 @@ unsafe @ bck_swap_char s str i from i to → s {
 // all of them, or (`calls`) all but the stores into an owner (`store`,
 // `pendstore`), which stay in the list.
 @ __bck_flush_ppends b calls → v {
-    : ~ s prest ( nurl_sym_get g_bck `ppends` )
-    : ~ s keep ``
-    ( bck_put `ppends` `` )
     // (…and the fields handed to calls, as `unw` rows read them: in rows now -
     // except those handed to a call still running around this statement (a
     // value block in its arguments), whose own `unw` row comes after it:
     // __unw_pf_keep_open; CodeRabbit on github#2129.)
     ? != 0 ( nurl_sym_len g_bck `unwpf` ) { ( bck_put `unwpf` ( __unw_pf_keep_open ) ) } {}
     ? ! calls { = g_bck_ownerless 0 } {}
+    // (Most statements stash nothing. A list that is there is read from a
+    // copy of its own, not an interned one: it is emptied below, and every
+    // statement's list interned stayed in the arena for the whole compile.
+    // AGORA-974)
+    ? == 0 ( nurl_sym_len g_bck `ppends` ) { ^ v } {}
+    : ~ s prest ( nurl_str_cat ( __sym_peek g_bck `ppends` ) `` )
+    : ~ s keep ``
+    ( bck_put `ppends` `` )
     ~ != 0 ( nurl_str_len prest ) {
         : s pnm ( str_first_word prest )
         = prest ( str_skip_word prest )
@@ -60742,7 +60749,9 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
 // when they are taken.
 @ __bck_arm_take s p0 → s {
     ? | == g_borrowck 0 != 0 g_bck_rec_off { ^ ( nurl_str_cat `` `` ) } {}
-    : s now ( nurl_sym_get g_bck `ppends` )
+    // (Read in place: it is only sliced, into copies, before it is put
+    // back. AGORA-974)
+    : s now ( __sym_peek g_bck `ppends` )
     : i n0 ( nurl_str_len p0 )
     ? <= ( nurl_str_len now ) n0 { ^ ( nurl_str_cat `` `` ) } {}
     ? ! ( seq ( nurl_str_slice now 0 n0 ) p0 ) { ^ ( nurl_str_cat `` `` ) } {}
