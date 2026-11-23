@@ -1520,7 +1520,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
   | skip => intro ξ Γ F Δ hs hD h; simp [checkStmt2] at h; subst h; exact ⟨.skip, hs⟩
   | seq a b iha ihb =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i hb
       split at h
@@ -1532,7 +1532,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | letv x r s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i hc
       obtain ⟨hsrc, hx, hF⟩ := hc
@@ -1557,7 +1557,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | letcall x f args s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i hc
       obtain ⟨hsrc, hx, hF, hdk⟩ := hc
@@ -1579,7 +1579,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | assign x r =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i Ex hx
       split at h
@@ -1601,7 +1601,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | ite c a b iha ihb =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i hc
       obtain ⟨ha, hb, hce⟩ := hc
@@ -1644,7 +1644,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | «while» c s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i hc
       obtain ⟨hsrc, hce⟩ := hc
@@ -1663,7 +1663,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
   | push x y => intro ξ Γ F Δ hs hD h; exact pushB_sound hs hD h
   | insert x i y =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i hc
       simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
@@ -1673,7 +1673,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | free x =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i E hE
       obtain ⟨hx, hl⟩ := liveE2_some hE
@@ -1691,12 +1691,12 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | frozen z s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     obtain ⟨t0, s0⟩ := ih (ξ := .none) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h
     exact ⟨.frozen t0 (fun v hv => hv), s0⟩
   | panic =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i hc
       simp only [Bool.and_eq_true] at hc
@@ -1705,7 +1705,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | rbind p s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i E hE
       split at h
@@ -1726,7 +1726,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | scopeL k t x s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i E hE
       split at h
@@ -1751,7 +1751,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | letrec x f s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i fn hfn
       split at h
@@ -1776,7 +1776,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | withLock a x s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i Ea hEa
       split at h
@@ -1801,7 +1801,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | withElem v i x s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i Ev hEv
       split at h
@@ -1843,7 +1843,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | letd x f r s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i hc
       obtain ⟨hsrc, hx, hF, hna⟩ := hc
@@ -1876,7 +1876,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | scopeD x f s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i E hE
       split at h
@@ -1905,7 +1905,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | takeB x i y s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i Ex hEx
       split at h
@@ -1936,7 +1936,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | edit b x op =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i Δ0 h0
       simp only [Option.some.injEq] at h; subst h
@@ -1944,7 +1944,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · exact editBVB_sound hs hD h
   | callc x c j σ zs k ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i Ec hEc
       split at h
@@ -1979,7 +1979,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | callcE x c j zs k ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i Ec hEc
       split at h
@@ -2030,7 +2030,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | scope x s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i E hE
       split at h
@@ -2049,12 +2049,12 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | block s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     obtain ⟨t0, s0⟩ := ih (ξ := ξ.blk Δ) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h
     exact ⟨.block t0, s0⟩
   | loop s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i hsrc
       split at h
@@ -2073,7 +2073,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     · cases h
   | unpair y x z s ih =>
     intro ξ Γ F Δ hs hD h
-    simp only [checkStmt2] at h
+    unfold checkStmt2 at h
     split at h
     · rename_i E hE
       split at h

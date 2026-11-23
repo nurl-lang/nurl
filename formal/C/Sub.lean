@@ -165,7 +165,7 @@ theorem checkC_sound {P : Prog} {D : List Var} : ∀ (c : Cert) {s : Stmt} {Γ :
   | plain => intro s Γ F Δ hs hD h; exact checkS_sound hs hD h
   | sub L0 c L ih =>
     intro s Γ F Δ hs hD h
-    simp only [checkC] at h
+    unfold checkC at h
     split at h
     · rename_i hc
       simp only [Bool.and_eq_true] at hc
@@ -190,7 +190,7 @@ theorem checkC_sound {P : Prog} {D : List Var} : ∀ (c : Cert) {s : Stmt} {Γ :
     intro s Γ F Δ hs hD h
     cases s with
     | seq a b =>
-      simp only [checkC] at h
+      unfold checkC at h
       split at h
       · rename_i hb
         split at h
@@ -205,7 +205,7 @@ theorem checkC_sound {P : Prog} {D : List Var} : ∀ (c : Cert) {s : Stmt} {Γ :
     intro s Γ F Δ hs hD h
     cases s with
     | letv x r s =>
-      simp only [checkC] at h
+      unfold checkC at h
       split at h
       · rename_i hc
         obtain ⟨hsrc, hx, hF⟩ := hc
@@ -223,7 +223,7 @@ theorem checkC_sound {P : Prog} {D : List Var} : ∀ (c : Cert) {s : Stmt} {Γ :
     intro s Γ F Δ hs hD h
     cases s with
     | letcall x f args s =>
-      simp only [checkC] at h
+      unfold checkC at h
       split at h
       · rename_i hc
         obtain ⟨hsrc, hx, hF⟩ := hc
@@ -244,7 +244,7 @@ theorem checkC_sound {P : Prog} {D : List Var} : ∀ (c : Cert) {s : Stmt} {Γ :
     intro s Γ F Δ hs hD h
     cases s with
     | ite c a b =>
-      simp only [checkC] at h
+      unfold checkC at h
       split at h
       · rename_i hc
         obtain ⟨ha, hb, hce⟩ := hc
@@ -266,7 +266,7 @@ theorem checkC_sound {P : Prog} {D : List Var} : ∀ (c : Cert) {s : Stmt} {Γ :
     intro s Γ F Δ hs hD h
     cases s with
     | «while» c s =>
-      simp only [checkC] at h
+      unfold checkC at h
       split at h
       · rename_i hc
         obtain ⟨hsrc, hce⟩ := hc
@@ -287,7 +287,7 @@ theorem checkC_sound {P : Prog} {D : List Var} : ∀ (c : Cert) {s : Stmt} {Γ :
     intro s Γ F Δ hs hD h
     cases s with
     | frozen z s =>
-      simp only [checkC] at h
+      unfold checkC at h
       obtain ⟨t0, s0⟩ := ih hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h
       exact ⟨.frozen t0, s0⟩
     | _ => simp [checkC] at h
