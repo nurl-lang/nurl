@@ -103,7 +103,7 @@ theorem checkStmt_leaf_supported {Γ : Ctx} {F D : List Var} {s : Stmt} {Δ : Ct
     Supported Δ D := by
   rcases hleaf with rfl | ⟨x, r, rfl⟩ | ⟨x, y, rfl⟩ | ⟨x, rfl⟩
   · simp [checkStmt] at h; subst h; exact hs
-  · simp only [checkStmt] at h
+  · unfold checkStmt at h
     split at h
     · split at h
       · cases h
@@ -116,7 +116,7 @@ theorem checkStmt_leaf_supported {Γ : Ctx} {F D : List Var} {s : Stmt} {Δ : Ct
           · cases h
         · cases h
     · cases h
-  · simp only [checkStmt] at h
+  · unfold checkStmt at h
     split at h
     · split at h
       · split at h
@@ -141,7 +141,7 @@ theorem checkStmt_leaf_supported {Γ : Ctx} {F D : List Var} {s : Stmt} {Δ : Ct
         · cases h
       · cases h
     · cases h
-  · simp only [checkStmt] at h
+  · unfold checkStmt at h
     split at h
     · split at h
       · split at h
@@ -157,7 +157,7 @@ theorem checkS_sound {P : Prog} {D : List Var} : ∀ {s : Stmt} {Γ : Ctx} {F : 
   | skip => intro Γ F Δ hs hD h; simp [checkS, checkStmt] at h; subst h; exact ⟨.skip, hs⟩
   | seq a b iha ihb =>
     intro Γ F Δ hs hD h
-    simp only [checkS] at h
+    unfold checkS at h
     split at h
     · rename_i hb
       split at h
@@ -169,7 +169,7 @@ theorem checkS_sound {P : Prog} {D : List Var} : ∀ {s : Stmt} {Γ : Ctx} {F : 
     · cases h
   | letv x r s ih =>
     intro Γ F Δ hs hD h
-    simp only [checkS] at h
+    unfold checkS at h
     split at h
     · rename_i hc
       obtain ⟨hsrc, hx, hF⟩ := hc
@@ -185,11 +185,11 @@ theorem checkS_sound {P : Prog} {D : List Var} : ∀ {s : Stmt} {Γ : Ctx} {F : 
   | letcall x f args s ih => intro Γ F Δ hs hD h; simp [checkS, checkStmt] at h
   | assign x r =>
     intro Γ F Δ hs hD h
-    simp only [checkS] at h
+    unfold checkS at h
     exact ⟨checkStmt_sound h, checkStmt_leaf_supported hs hD h (Or.inr (Or.inl ⟨x, r, rfl⟩))⟩
   | ite c a b iha ihb =>
     intro Γ F Δ hs hD h
-    simp only [checkS] at h
+    unfold checkS at h
     split at h
     · rename_i hc
       obtain ⟨ha, hb, hce⟩ := hc
@@ -208,7 +208,7 @@ theorem checkS_sound {P : Prog} {D : List Var} : ∀ {s : Stmt} {Γ : Ctx} {F : 
     · cases h
   | «while» c s ih =>
     intro Γ F Δ hs hD h
-    simp only [checkS] at h
+    unfold checkS at h
     split at h
     · rename_i hc
       obtain ⟨hsrc, hce⟩ := hc
@@ -226,17 +226,17 @@ theorem checkS_sound {P : Prog} {D : List Var} : ∀ {s : Stmt} {Γ : Ctx} {F : 
     · cases h
   | push x y =>
     intro Γ F Δ hs hD h
-    simp only [checkS] at h
+    unfold checkS at h
     exact ⟨checkStmt_sound h, checkStmt_leaf_supported hs hD h (Or.inr (Or.inr (Or.inl ⟨x, y, rfl⟩)))⟩
   | free x =>
     intro Γ F Δ hs hD h
-    simp only [checkS] at h
+    unfold checkS at h
     exact ⟨checkStmt_sound h, checkStmt_leaf_supported hs hD h (Or.inr (Or.inr (Or.inr ⟨x, rfl⟩)))⟩
   | scope x s _ => intro Γ F Δ hs hD h; simp [checkS, checkStmt] at h
   | rbind p s _ => intro Γ F Δ hs hD h; simp [checkS, checkStmt] at h
   | frozen z s ih =>
     intro Γ F Δ hs hD h
-    simp only [checkS] at h
+    unfold checkS at h
     obtain ⟨t0, s0⟩ := ih hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h
     exact ⟨.frozen t0, s0⟩
 
