@@ -85,24 +85,26 @@ theorem vkeep_share {m m' : Mem} (hb : BlkLe m.blk m'.blk) {r : Var} (hro : Root
   exact ⟨c, es, hks, hla.pay hb rfl hro, hl, hw⟩
 
 theorem ViewsOK.keep {m m' : Mem} {τ : Ty} {T : Val} {H : List Dep} (hk : ∀ h ∈ H, VKeep m m' h)
-    (hv : ViewsOK m τ T H) : ViewsOK m' τ T H := by
+    (hv : ViewsOK m τ T H) (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) :
+    ViewsOK m' τ T H := by
   intro s v hin
-  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := hv s v hin
-  exact ⟨d, o, l, rfl, dep, hd, hk dep hd d o l s ha⟩
+  obtain ⟨d, o, l, rfl, ⟨dep, hd, ha⟩ | hsv⟩ := hv s v hin
+  · exact ⟨d, o, l, rfl, .inl ⟨dep, hd, hk dep hd d o l s ha⟩⟩
+  · exact ⟨d, o, l, rfl, .inr (hsv.blkLe hb)⟩
 
 /-- An armed binding's value stays valid where what it views in memory
     stays. -/
 theorem ArmOK.keep {m m' : Mem} {E : Entry} {sl : Slot}
     (hk : E.dtor = true → E.dbind = true → E.mode.ownSlot = true → ∀ dep ∈ memDeps E.held, VKeep m m' dep)
-    (h : ArmOK m E sl) : ArmOK m' E sl := by
+    (h : ArmOK m E sl) (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) : ArmOK m' E sl := by
   intro hd hos T hT
   obtain ⟨h1, h2⟩ := h hd hos T hT
-  exact ⟨h1, (h2.memDeps.keep (hk h1 hd hos)).mono (fun d hd => (List.mem_filter.mp hd).1)⟩
+  exact ⟨h1, (h2.memDeps.keep (hk h1 hd hos) hb).mono (fun d hd => (List.mem_filter.mp hd).1)⟩
 
 theorem RootKeep.hkeep {m m' : Mem} {dep : Dep} (h : RootKeep m m' dep.root) : HKeep m m' dep := by
   refine ⟨fun c t H hH hb ⟨d, es, hla, hw, hv, hn, hsh⟩ => ?_, fun k p _ hla => hla.keep h,
     fun k hla => hla.keep h⟩
-  exact ⟨d, es, hla.keep h (BlkLe.of_eq hb), hw, hv.keep hH, hn, hsh.of_blk hb⟩
+  exact ⟨d, es, hla.keep h (BlkLe.of_eq hb), hw, hv.keep hH (BlkLe.of_eq hb), hn, hsh.of_blk hb⟩
 
 theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
     (hp : ∀ dep ∈ P, VKeep m m' dep ∧ HKeep m m' dep) (hh : ∀ dep ∈ H, VKeep m m' dep ∧ HKeep m m' dep)
@@ -125,6 +127,7 @@ theorem ValOK.keep {m m' : Mem} {τ : Ty} {v : Val} {P H : List Dep}
   | view h =>
     obtain ⟨dep, hd, ha⟩ := h
     exact .view ⟨dep, hd, (hp dep hd).1 _ _ _ _ ha⟩
+  | sview h => exact .sview (h.of_blk hb)
   | pair _ _ ihx ihy =>
     have hph : ∀ dep ∈ _ ++ _, VKeep m m' dep ∧ HKeep m m' dep := fun dep hd => by
       rcases List.mem_append.mp hd with hd | hd
@@ -236,6 +239,104 @@ theorem DataAt.mono {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → OwnedAt m' o
     (hb : BlkLe m.blk m'.blk) {d : Nat} {n : Val} (h : DataAt m d n) : DataAt m' d n := by
   obtain ⟨t, c, es, rfl⟩ := h.eq
   exact (h.inMem.mono hown hb).dataAt rfl
+
+theorem DataAtM.inMem {m : Mem} {d : Nat} {n : Val} (h : DataAtM m d n) : InMem m n := h.dataAt.inMem
+
+theorem DataAtM.eq {m : Mem} {d : Nat} {n : Val} (h : DataAtM m d n) : ∃ ty c es, n = .node ty c d es :=
+  h.dataAt.eq
+
+theorem DataAtM.mono {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → OwnedAt m' o T)
+    (hb : BlkLe m.blk m'.blk) {d : Nat} {n : Val} (h : DataAtM m d n) : DataAtM m' d n := by
+  rcases h with ⟨o, T, hT, hs, he⟩ | ⟨k, bl, hk, hs, ty, c, es, he, hkd⟩
+  · exact .inl ⟨o, T, hown o T hT, hs, he⟩
+  · obtain ⟨bl', hk', hkp⟩ := hb k bl hk
+    exact .inr ⟨k, bl', hk', by rw [hkp.rd]; exact hs, ty, c, es, he, by rw [hkp.2.1]; exact hkd⟩
+
+/-- A node of memory stays one while every owned tree is still owned and the
+    blocks are kept. -/
+theorem DataAtM.move {m m' : Mem} (hown : ∀ o T, OwnedAt m o T → ∃ o', OwnedAt m' o' T)
+    (hb : BlkLe m.blk m'.blk) {d : Nat} {n : Val} (h : DataAtM m d n) : DataAtM m' d n := by
+  rcases h with ⟨o, T, hT, hs, he⟩ | ⟨k, bl, hk, hs, ty, c, es, he, hkd⟩
+  · obtain ⟨o', h'⟩ := hown o T hT
+    exact .inl ⟨o', T, h', hs, he⟩
+  · obtain ⟨bl', hk', hkp⟩ := hb k bl hk
+    exact .inr ⟨k, bl', hk', by rw [hkp.rd]; exact hs, ty, c, es, he, by rw [hkp.2.1]; exact hkd⟩
+
+/-- A node in memory is one of memory (`DataAtM`), or a node of integers in
+    a static literal's block. -/
+theorem InMem.dataAtM_or {m : Mem} {n : Val} (h : InMem m n) {t : Ty} {c d : Nat} {es : List Val}
+    (hn : n = .node t c d es) :
+    DataAtM m d n ∨ t = .int ∧ ∃ k bl, m.blk k = some bl ∧ bl.kind = .static ∧ Sub n bl.rd := by
+  rcases h with ⟨o, T, hT, h⟩ | ⟨k, bl, hk, h⟩
+  · exact .inl (.inl ⟨o, T, hT, h, t, c, es, hn⟩)
+  · by_cases hks : bl.kind = .static ∧ t = .int
+    · exact .inr ⟨hks.2, k, bl, hk, hks.1, h⟩
+    · exact .inl (.inr ⟨k, bl, hk, h, t, c, es, hn, by
+        by_cases h1 : bl.kind = .static
+        · exact .inr fun h2 => hks ⟨h1, h2⟩
+        · exact .inl h1⟩)
+
+/-- AGORA-980: **a static literal's text is no other memory**: its buffer
+    lies in no owned tree and in no payload but its own block's. -/
+theorem HeapOK.static_node {m : Mem} (hh : HeapOK m) {k : Nat} {bl : Blk} (hk : m.blk k = some bl)
+    (hks : bl.kind = .static) {c d : Nat} {es : List Val} (hs : Sub (.node .int c d es) bl.rd)
+    {n : Val} (hn : DataAtM m d n) : False := by
+  -- the node at `d` is the literal's
+  have hda : DataAt m d (.node .int c d es) := .inr ⟨k, bl, hk, hs, .int, c, es, rfl⟩
+  have := dataAt_unique hh hn.dataAt hda
+  subst this
+  have hdr : d ∈ bl.rd.ids := hs.ids d (by simp [Val.ids])
+  have hd' : d ∈ bl.tree.ids := by
+    obtain ⟨t, kd, p⟩ := bl
+    cases hks; exact hdr
+  obtain ⟨_, _, hown⟩ := hh.blk k _ hk
+  obtain ⟨_, _, hno, hnb⟩ := hown d hd'
+  rcases hn with ⟨x, T, hx, hsT, _⟩ | ⟨k', bl', hk', hs', ty, c', es', he, hkd⟩
+  · exact hno x T hx (hsT.ids d (by simp [Val.ids]))
+  · cases he
+    have hkd : bl'.kind ≠ .static := hkd.resolve_right (fun h => h rfl)
+    have hdr' : d ∈ bl'.rd.ids := hs'.ids d (by simp [Val.ids])
+    by_cases hkk : k' = k
+    · subst hkk; rw [hk] at hk'; cases hk'; exact hkd hks
+    obtain ⟨t', kd, p⟩ := bl'
+    cases kd with
+    | arc => exact hnb k' _ hkk hk' hdr'
+    | static => exact hkd rfl
+    | lock => simp [Blk.rd] at hdr'
+    | dead => simp [Blk.rd] at hdr'
+    | view =>
+      obtain ⟨k0, t0, q, rfl, rfl, hk0⟩ := hh.views.view hk'
+      have hk0k : k0 ≠ k := fun e => by subst e; rw [hk] at hk0; cases hk0; cases hks
+      refine hnb k0 _ hk0k hk0 ?_
+      simp only [Blk.rd_view, Option.getD_some, Val.ids, List.mem_append] at hdr'
+      rcases hdr' with h | h
+      · simp at h
+      · simpa using h
+
+theorem SViewAt.not_dataAtM {m : Mem} (hh : HeapOK m) {d o l : Nat} {t : Ty} (h : SViewAt m d o l t)
+    {n : Val} (hn : DataAtM m d n) : False := by
+  obtain ⟨_, k, bl, c, es, hk, hks, hs, _, _⟩ := h
+  exact hh.static_node hk hks hs hn
+
+/-- A static literal's buffer is an address its block's payload owns. -/
+theorem SViewAt.payAddr {m : Mem} {d o l : Nat} {t : Ty} (h : SViewAt m d o l t) : PayAddr m d := by
+  obtain ⟨_, k, bl, c, es, hk, hks, hs, _, _⟩ := h
+  refine ⟨k, bl, hk, ?_⟩
+  have hdr : d ∈ bl.rd.ids := hs.ids d (by simp [Val.ids])
+  obtain ⟨t, kd, p⟩ := bl
+  cases hks; exact hdr
+
+/-- A node of memory found in a block is no static literal's text. -/
+theorem DataAtM.kind_of {m : Mem} (hh : HeapOK m) {d : Nat} {n : Val} (h : DataAtM m d n) {k : Nat}
+    {bl : Blk} (hk : m.blk k = some bl) (hs : Sub n bl.rd) {ty : Ty} {c : Nat} {es : List Val}
+    (hn : n = .node ty c d es) : bl.kind ≠ .static ∨ ty ≠ .int := by
+  by_cases hks : bl.kind = .static ∧ ty = .int
+  · obtain ⟨hks, rfl⟩ := hks
+    subst hn
+    exact (hh.static_node hk hks hs h).elim
+  · by_cases h1 : bl.kind = .static
+    · exact .inr fun h2 => hks ⟨h1, h2⟩
+    · exact .inl h1
 
 theorem Lands.sub {k : Kind} {n n0 : Val} (h : Lands k n n0) : Sub n n0 := by
   rcases h with ⟨_, rfl⟩ | ⟨_, rfl⟩ | ⟨_, hb⟩
@@ -375,6 +476,7 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m 
   | lk => cases ht
   | cell => cases ht
   | view _ => cases ht
+  | sview _ => cases ht
   | @href t c' P H h =>
     obtain ⟨dep, hd, d, es, hla, _⟩ := h
     cases ht
@@ -398,7 +500,7 @@ theorem valOK_href {m : Mem} (hh : HeapOK m) {c : Nat} {n : Val} (hn : NodeAt m 
 
 /-- A view inside a borrowed value reaches its buffer through one of the
     value's dependencies, of a kind that ends views. -/
-theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataAt m d n)
+theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataAtM m d n)
     {τ : Ty} {w : Val} {P H : List Dep} (hok : ValOK m τ w P H) (ht : Top (.view d o l) w) :
     ∃ dep ∈ P ++ H, dep.kind ≠ .self ∧ Landed m dep n := by
   induction hok with
@@ -411,9 +513,13 @@ theorem valOK_view {m : Mem} (hh : HeapOK m) {d o l : Nat} {n : Val} (hn : DataA
   | @view t d' o' l' P H h =>
     obtain ⟨dep, hd, c, es, hks, hla, _, _⟩ := h
     cases ht
-    have := dataAt_unique hh hn (hla.inMem.dataAt rfl)
+    have := dataAt_unique hh hn.dataAt (hla.inMem.dataAt rfl)
     subst this
     exact ⟨dep, List.mem_append_left _ hd, hks, hla⟩
+  | sview h =>
+    -- AGORA-980: a static literal's text is no node of memory
+    cases ht
+    exact (h.not_dataAtM hh hn).elim
   | pair _ _ ihx ihy =>
     cases ht with
     | fst ht => obtain ⟨dep, hd, rest⟩ := ihx ht; exact ⟨dep, append_assoc_sub hd, rest⟩
@@ -454,9 +560,13 @@ theorem valOK_via {m : Mem} {y : Var} {T : Val} (hy : m.st y = some ⟨false, so
   | @view t d o l P H h =>
     intro Q ht hq
     obtain ⟨dep, hd, c, es, _, hla, hlen, hw⟩ := h
-    exact .view ⟨_, hq, c, es, (by intro h; cases h),
-      Or.inl ⟨_, Or.inr (Or.inr (Or.inl ⟨T, d, o, l, hy, ht, hla.inMem.dataAt rfl⟩)), Or.inr (Or.inl ⟨rfl, rfl⟩)⟩,
-      hlen, hw⟩
+    -- AGORA-980: a view of a static literal's text needs no dependency
+    rcases hla.inMem.dataAtM_or rfl with hdm | ⟨rfl, k, bl, hk, hks, hs⟩
+    · exact .view ⟨_, hq, c, es, (by intro h; cases h),
+        Or.inl ⟨_, Or.inr (Or.inr (Or.inl ⟨T, d, o, l, hy, ht, hdm⟩)), Or.inr (Or.inl ⟨rfl, rfl⟩)⟩,
+        hlen, hw⟩
+    · exact .sview ⟨rfl, k, bl, c, es, hk, hks, hs, hlen, hw⟩
+  | sview h => intro _ _ _; exact .sview h
   | pair _ _ ihx ihy =>
     intro Q ht hq
     exact .pair (ihx (Top.trans (Top.fst (Top.refl _)) ht) (List.mem_append_left _ hq))
@@ -480,6 +590,7 @@ theorem valOK_arc {m : Mem} {k : Nat} {q : Val} {τ : Ty} {w : Val} {P H : List 
   | int => cases ht
   | href _ => cases ht
   | view _ => cases ht
+  | sview _ => cases ht
   | arc _ _ _ hl =>
     cases ht
     obtain ⟨dep, hd, hla⟩ := hl
@@ -513,6 +624,7 @@ theorem valOK_cell {m : Mem} {k : Nat} {τ : Ty} {w : Val} {P H : List Dep}
   | int => cases ht
   | href _ => cases ht
   | view _ => cases ht
+  | sview _ => cases ht
   | arc _ _ _ _ => cases ht
   | rguard _ _ _ _ => cases ht
   | lk _ => cases ht
@@ -716,8 +828,12 @@ theorem rootKeep_frame {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     rcases rootb_anchor hi hanch r Er n hr hrb (Or.inr (Or.inr (Or.inl ⟨w, d, o, l, hc, ht, hdata⟩)))
         (by rw [hneq]; intro _ _ h; cases h) with
       ⟨o', T, hoF, hoT, hsT⟩ | ⟨k, bl, hk, hs⟩
-    · exact dataAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
-    · exact (InMem.grow_pay hb hk hs).dataAt hneq
+    · exact .inl ⟨o', T, by rw [hF o' hoF]; exact hoT, hsT, _, _, _, hneq⟩
+    · -- AGORA-980: not a static literal's block, which holds no node of memory
+      obtain ⟨bl', hk', hkp⟩ := hb k bl hk
+      refine .inr ⟨k, bl', hk', by rw [hkp.rd]; exact hs, _, _, _, hneq, ?_⟩
+      rw [hkp.2.1]
+      exact DataAtM.kind_of hi.heap hdata hk hs hneq
 
 /-- AGORA-937 (3d, route F): `rootb_anchor`, the owner not `x`, where no
     borrowed parameter reaches `x`'s memory by its path, nor, but for a
@@ -838,8 +954,12 @@ theorem rootKeep_frame_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ
     rcases rootb_anchor_ne hi hanch hxr r Er n hr hrb (Or.inr (Or.inr (Or.inl ⟨w, d, o, l, hc, ht, hdata⟩)))
         (by rw [hneq]; intro _ _ h; cases h) with
       ⟨o', T, hoF, hox, hoT, hsT⟩ | ⟨k, bl, hk, hs⟩
-    · exact dataAt_of_owned (by unfold OwnedAt; rw [hF o' hoF hox]; exact hoT) hsT hneq
-    · exact (InMem.grow_pay hb hk hs).dataAt hneq
+    · exact .inl ⟨o', T, by rw [hF o' hoF hox]; exact hoT, hsT, _, _, _, hneq⟩
+    · -- AGORA-980: not a static literal's block, which holds no node of memory
+      obtain ⟨bl', hk', hkp⟩ := hb k bl hk
+      refine .inr ⟨k, bl', hk', by rw [hkp.rd]; exact hs, _, _, _, hneq, ?_⟩
+      rw [hkp.2.1]
+      exact DataAtM.kind_of hi.heap hdata hk hs hneq
 
 /-- `rootb_anchor` for the borrowed parameters outside the bindings `sp`. -/
 theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
@@ -944,8 +1064,12 @@ theorem rootKeep_frame_sp {m m' : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m
     rcases rootb_anchor_sp hi hanch hpin r Er n hr hrb hrs (Or.inr (Or.inr (Or.inl ⟨w, d, o, l, hc, ht, hdata⟩)))
         (by rw [hneq]; intro _ _ h; cases h) with
       ⟨o', T, hoF, hoT, hsT⟩ | ⟨k, bl, hk, hs⟩
-    · exact dataAt_of_owned (by unfold OwnedAt; rw [hF o' hoF]; exact hoT) hsT hneq
-    · exact (InMem.grow_pay hb hk hs).dataAt hneq
+    · exact .inl ⟨o', T, by rw [hF o' hoF]; exact hoT, hsT, _, _, _, hneq⟩
+    · -- AGORA-980: not a static literal's block, which holds no node of memory
+      obtain ⟨bl', hk', hkp⟩ := hb k bl hk
+      refine .inr ⟨k, bl', hk', by rw [hkp.rd]; exact hs, _, _, _, hneq, ?_⟩
+      rw [hkp.2.1]
+      exact DataAtM.kind_of hi.heap hdata hk hs hneq
 
 /-! ### A root that grows or shrinks in place -/
 
@@ -1010,6 +1134,7 @@ theorem ValOK.memDeps {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK 
   | rguard h hw hv hl =>
     obtain ⟨dep, hd, hla⟩ := hl
     exact .rguard h hw hv ⟨dep, List.mem_filter.mpr ⟨hd, by simp [hla.notName]⟩, hla⟩
+  | sview h => exact .sview h
   | lk h => exact .lk h
   | cell h hl =>
     obtain ⟨dep, hd, hla⟩ := hl
@@ -1054,6 +1179,7 @@ theorem ValOK.names_nil_fn {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : V
   | cell => rfl
   | href => rfl
   | view => rfl
+  | sview => rfl
   | pair _ _ iha ihb =>
     simp only [Ty.hasFn, Bool.or_eq_false_iff] at hf
     simp [Val.names, iha hf.1, ihb hf.2]
@@ -1188,8 +1314,8 @@ theorem Evolve.grow_hkeep {m m' : Mem} {x : Var} {t : Ty} {c d d' : Nat} {es es'
       cases hc with
       | elem he =>
         exact ⟨d2, es2, Or.inl ⟨_, Or.inl ⟨_, hev.after, Top.refl _⟩,
-          Or.inr (Or.inr ⟨hin, e, Child.elem (hpre e he), hs⟩)⟩, hw, hv.keep hH, hn, hsh.of_blk hb⟩
-  · exact ⟨d2, es2, Or.inr ⟨hsk, RootMem.own hev.after, k0, bl, by rw [hb]; exact hk0, hs⟩, hw, hv.keep hH, hn,
+          Or.inr (Or.inr ⟨hin, e, Child.elem (hpre e he), hs⟩)⟩, hw, hv.keep hH (BlkLe.of_eq hb), hn, hsh.of_blk hb⟩
+  · exact ⟨d2, es2, Or.inr ⟨hsk, RootMem.own hev.after, k0, bl, by rw [hb]; exact hk0, hs⟩, hw, hv.keep hH (BlkLe.of_eq hb), hn,
       hsh.of_blk hb⟩
 
 /-- Shrinking (`vec_pop`): only a borrow of the whole handle survives, and
