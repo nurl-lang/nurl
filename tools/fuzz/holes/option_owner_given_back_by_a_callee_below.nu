@@ -1,6 +1,6 @@
-// option_owner_given_back_by_a_callee_below_runs_clean: `= o ( pickb o other k )` with `pickb` defined below the call.
-// Guard for agora #427: runs clean on main by the module-end lend answers (#410, #742) and the per-call keys.
-// map: §7.6 | A2 | runs-clean | - | agora #427 guard: an option owner given back by a callee below
+// option_owner_given_back_by_a_callee_below: `= o ( pickb o other k )` with `pickb` defined below the call.
+// AGORA-966 (AGORA-946 D4a): refused - the form is A2's refused one in every spelling; main acec7a34 let it through on a per-call key
+// map: §7.6 | A2 | rejected | - | AGORA-966 (AGORA-946 D4a): an option owner given back by a callee below
 $ `stdlib/core/string.nu`
 
 @ show ? String o → v { ?? o { T s → { ( nurl_println ( string_data s ) ) } F → { ( nurl_println `none` ) } } }

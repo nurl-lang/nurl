@@ -80176,7 +80176,9 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // module end, resolve_opt_pick_lends. A per-call key let it through
         // before; A2 refuses the form in every spelling: AGORA-946 D4a.)
         ? & & & & __ud_optv ! __ud_may_self ! ( __is_handle_ty vt ) & __ud_owns == __ud_tt TT_LPAREN == 0 ( nurl_str_len __ud_lids ) {
-            ( __park_opt_pick lex name ( nurl_sym_get syms `__last_call_lend_key__` ) ( nurl_sym_get syms `__last_call_args__` ) )
+            // (By the arguments' roots where a call's are known: a nested
+            // call's stand-in, `__alr#N`, keeps its own call and roots.)
+            ( __park_opt_pick lex name ( nurl_sym_get syms `__last_call_lend_key__` ) ? != 0 ( nurl_str_len g_call_lroots ) ( nurl_str_cat g_call_lroots `` ) ( nurl_sym_get syms `__last_call_args__` ) )
         } {}
         ? & & & & __ud_optv __ud_may_self ! __ud_only_self ! ( __is_handle_ty vt ) & __ud_owns == __ud_tt TT_LPAREN {
             : s __q1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of '` )
@@ -107775,6 +107777,34 @@ unsafe @ __sx_names_capture i syms s sx → b {
     ( nurl_str_cat4 ( nurl_str_cat3 key `\t` name ) ( nurl_str_cat3 `\t` args `\t` ) ( nurl_str_int g_stmt_line ) ( nurl_str_cat `\t` ( nurl_lex_filename lex ) ) ) )
 }
 
+// What argument root `w` is to the owner `name` in a parked `= name ( f …
+// )`: 1 its own value (`name`, or a nested call's stand-in that may lend
+// only out of it - `( tail o )`), 2 another value (a binding, a temporary,
+// a nested call that may lend something else), 0 nothing (`-` is 2: a
+// temporary the callee may hand back).
+@ __opt_pick_arg_class i syms s w s name i depth → i {
+    ? ( seq w name ) { ^ 1 } {}
+    ? | == 0 ( nurl_str_starts w `__alr#` ) > depth 8 { ^ 2 } {}
+    : s k ( nurl_sym_get2 g_pending_impl w `__vljk` )
+    : s cn ( str_first_word k )
+    : s gn ( str_first_word ( str_skip_word k ) )
+    : s who ? != 0 ( nurl_sym_len2 syms cn `__body_done` ) cn gn
+    : ~ s rest ( bck_swap_char ( nurl_sym_get2 g_pending_impl w `__vljr` ) 10 32 )
+    : ~ i ix 0
+    : ~ b own F
+    : ~ b oth F
+    ~ != 0 ( nurl_str_len rest ) {
+        : s r ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? != 0 ( mem_fn_lend_kind syms who ix ) {
+            : i c ( __opt_pick_arg_class syms r name + depth 1 )
+            ? == c 1 { = own T } { = oth T }
+        } {}
+        = ix + ix 1
+    }
+    ? & own ! oth { ^ 1 } {}
+    ^ 2
+}
+
 // The parked `= o ( f … )` forms (__park_opt_pick): refused where `f`'s
 // final summary may lend `o`'s own argument and another one too, as
 // gen_assign refuses the form when it knows that at the call (agora #412).
@@ -107799,7 +107829,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
         : ~ i k 0
         ~ != 0 ( nurl_str_len rest ) {
             : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-            ? != 0 ( mem_fn_lend_kind syms who k ) { ? ( seq w name ) { = self T } { = other T } } {}
+            ? != 0 ( mem_fn_lend_kind syms who k ) { ? == 1 ( __opt_pick_arg_class syms w name 0 ) { = self T } { = other T } } {}
             = k + k 1
         }
         ? & self other {
