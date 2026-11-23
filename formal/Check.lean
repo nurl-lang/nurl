@@ -950,3 +950,4 @@ import B
 #print axioms B.entries_put_empty
 #print axioms B.moveAll_ok
 #print axioms B.grow_ok
+#print axioms B.release_ok

@@ -31,8 +31,8 @@ This file models the table as its `cap` slots and the code of
 The state byte's `frag` (seven bits of the hash) only spares a key
 comparison. A slot holding the key always has the key's frag, so the model
 compares keys directly. `__map_grow`'s rehash is covered too (`grow_ok`):
-the new table holds exactly the old entries, each once. The key and value
-destructors (`HashMap_drop`'s release loop) are left for later.
+the new table holds exactly the old entries, each once. `HashMap_drop`'s release loop
+is covered too (`release_ok`).
 -/
 
 namespace B
@@ -440,6 +440,7 @@ theorem len_eq_entries_length (t : Tab K V) : t.len = t.entries.length := by
     simp only [entriesUpTo, List.length_append]
     cases hs : t.s n <;> simp [Slot.isFull, hs]
 
+omit [DecidableEq K] in
 /-- The rehash into a table with no tombstones, with room for every entry
     (`entries + es < cap`): it succeeds, and its entries are the old ones
     and `es`, each once. -/
@@ -491,6 +492,7 @@ theorem fresh_entries (n : Nat) : (Tab.fresh n : Tab K V).entries = [] := by
   | zero => rfl
   | succ m ih => simp only [entriesUpTo, ih]; rfl
 
+omit [DecidableEq K] in
 /-- `__map_grow` into `new_cap` slots, more than the old table has
     entries: it succeeds, and the new table holds exactly the old entries,
     each once, with no tombstones. -/
@@ -504,5 +506,170 @@ theorem grow_ok (hash : K → Nat) (t : Tab K V) {n : Nat} (hroom : t.entries.le
   refine ⟨t', he, hcap, ?_, hnt⟩
   rw [fresh_entries, List.append_nil] at hperm
   exact hperm.trans (List.reverse_perm _)
+
+/-! ### `__map_release`: every entry dropped once, the map honest throughout
+
+Where dropping a key or a value runs program code, `HashMap_drop` goes
+through `__map_release`. Each entry leaves the map before its key and value
+are dropped: its slot becomes a tombstone, the count goes down, and `next`
+moves past it. When a destructor runs, the map holds exactly the entries
+still to go. A panic in one is resumed from `next`
+(`MapRelease_drop`), so the entries after it are dropped and the one that
+panicked is not dropped again. -/
+
+omit [DecidableEq K] in
+/-- The entry a slot holds, as a list of at most one. -/
+def Slot.ent : Slot K V → List (K × V)
+  | .full k v => [(k, v)]
+  | _ => []
+
+omit [DecidableEq K] in
+/-- The entries of slots `[i, i + n)`, in order. -/
+def entriesRange (s : Nat → Slot K V) : Nat → Nat → List (K × V)
+  | _, 0 => []
+  | i, n + 1 => (s i).ent ++ entriesRange s (i + 1) n
+
+omit [DecidableEq K] in
+theorem entriesUpTo_add (s : Nat → Slot K V) (i : Nat) :
+    ∀ n, entriesUpTo s (i + n) = entriesUpTo s i ++ entriesRange s i n := by
+  intro n
+  induction n generalizing i with
+  | zero => simp [entriesRange]
+  | succ n ih =>
+    rw [show i + (n + 1) = (i + 1) + n by omega, ih (i + 1)]
+    simp only [entriesUpTo, entriesRange, List.append_assoc]
+    cases s i <;> rfl
+
+omit [DecidableEq K] in
+theorem entriesRange_split (s : Nat → Slot K V) :
+    ∀ a b i, entriesRange s i (a + b) = entriesRange s i a ++ entriesRange s (i + a) b := by
+  intro a
+  induction a with
+  | zero => intro b i; simp [entriesRange]
+  | succ a ih =>
+    intro b i
+    rw [show a + 1 + b = (a + b) + 1 by omega]
+    simp only [entriesRange, List.append_assoc]
+    rw [ih b (i + 1), show i + 1 + a = i + (a + 1) by omega]
+
+omit [DecidableEq K] in
+/-- One slot of the release: an entry leaves (its slot a tombstone) and is
+    handed out to be dropped. -/
+def relStep (t : Tab K V) (j : Nat) : Tab K V × List (K × V) :=
+  match t.s j with
+  | .full k v => (t.put j .tomb, [(k, v)])
+  | _ => (t, [])
+
+omit [DecidableEq K] in
+/-- `__map_release`'s loop over slots `[i, i + n)`. -/
+def relLoop : Tab K V → Nat → Nat → Tab K V × List (K × V)
+  | t, _, 0 => (t, [])
+  | t, i, n + 1 =>
+    let r1 := relStep t i
+    let r2 := relLoop r1.1 (i + 1) n
+    (r2.1, r1.2 ++ r2.2)
+
+omit [DecidableEq K] in
+theorem relLoop_spec :
+    ∀ n (t : Tab K V) i, (relLoop t i n).2 = entriesRange t.s i n ∧ (relLoop t i n).1.cap = t.cap ∧
+      (∀ j, (j < i ∨ i + n ≤ j) → (relLoop t i n).1.s j = t.s j) ∧
+      (∀ j, i ≤ j → j < i + n → ((relLoop t i n).1.s j).ent = []) := by
+  intro n
+  induction n with
+  | zero => intro t i; refine ⟨rfl, rfl, fun _ _ => rfl, fun j h1 h2 => by omega⟩
+  | succ n ih =>
+    intro t i
+    obtain ⟨hd, hc, hout, hin⟩ := ih (relStep t i).1 (i + 1)
+    have hstep_s : ∀ j, j ≠ i → (relStep t i).1.s j = t.s j := by
+      intro j hj; unfold relStep; split <;> simp [Tab.put, hj]
+    have hstep_i : ((relStep t i).1.s i).ent = [] := by
+      unfold relStep; split <;> simp_all [Tab.put, Slot.ent]
+    have hstep_d : (relStep t i).2 = (t.s i).ent := by
+      unfold relStep; split <;> simp_all [Slot.ent]
+    have hstep_c : (relStep t i).1.cap = t.cap := by unfold relStep; split <;> rfl
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · simp only [relLoop]
+      rw [hd, hstep_d, entriesRange]
+      congr 1
+      -- the rest of the range sees the table as it was: only slot i changed
+      have : ∀ m j, i < j → entriesRange (relStep t i).1.s j m = entriesRange t.s j m := by
+        intro m
+        induction m with
+        | zero => intro _ _; rfl
+        | succ m ihm =>
+          intro j hj
+          simp only [entriesRange]
+          rw [hstep_s j (by omega), ihm (j + 1) (by omega)]
+      exact this n (i + 1) (by omega)
+    · simp only [relLoop]; rw [hc, hstep_c]
+    · intro j hj
+      simp only [relLoop]
+      rw [hout j (by omega), hstep_s j (by omega)]
+    · intro j h1 h2
+      simp only [relLoop]
+      by_cases hji : j = i
+      · subst hji; rw [hout j (by omega)]; exact hstep_i
+      · exact hin j (by omega) (by omega)
+
+omit [DecidableEq K] in
+/-- `__map_release` from slot 0 drops exactly the map's entries, in slot
+    order, each once, and leaves no entry behind. And at any point after
+    slot `j`, the table holds exactly the entries of slots past `j`, which
+    a resume from `next = j + 1` (a panic's `MapRelease_drop`) then drops. -/
+theorem release_ok (t : Tab K V) :
+    (relLoop t 0 t.cap).2 = t.entries ∧ (relLoop t 0 t.cap).1.len = 0 ∧
+      ∀ j, j < t.cap → (relLoop t 0 (j + 1)).1.entries = entriesRange t.s (j + 1) (t.cap - (j + 1)) ∧
+        (relLoop t 0 (j + 1)).2 ++ (relLoop (relLoop t 0 (j + 1)).1 (j + 1) (t.cap - (j + 1))).2 = t.entries := by
+  have hent : ∀ (u : Tab K V), u.entries = entriesRange u.s 0 u.cap := by
+    intro u; unfold Tab.entries; have := entriesUpTo_add u.s 0 u.cap; simpa [entriesUpTo] using this
+  obtain ⟨hd, hc, _, hin⟩ := relLoop_spec t.cap t 0
+  refine ⟨by rw [hd, hent], ?_, fun j hj => ?_⟩
+  · rw [len_eq_entries_length, hent, hc]
+    have : ∀ m i, (∀ x, i ≤ x → x < i + m → ((relLoop t 0 t.cap).1.s x).ent = []) →
+        entriesRange (relLoop t 0 t.cap).1.s i m = [] := by
+      intro m
+      induction m with
+      | zero => intro _ _; rfl
+      | succ m ihm =>
+        intro i h
+        simp only [entriesRange]
+        rw [h i (by omega) (by omega), ihm (i + 1) (fun x h1 h2 => h x (by omega) (by omega))]
+        rfl
+    rw [this t.cap 0 (fun x _ h2 => hin x (by omega) (by omega))]
+    rfl
+  · obtain ⟨hd1, hc1, hout1, hin1⟩ := relLoop_spec (j + 1) t 0
+    have hsplit : ∀ (u : Tab K V), u.cap = t.cap →
+        entriesRange u.s 0 u.cap = entriesRange u.s 0 (j + 1) ++ entriesRange u.s (j + 1) (t.cap - (j + 1)) := by
+      intro u hu
+      rw [hu, show t.cap = (j + 1) + (t.cap - (j + 1)) by omega, entriesRange_split, Nat.zero_add]
+      congr 2; omega
+    let u := (relLoop t 0 (j + 1)).1
+    have hzero : entriesRange u.s 0 (j + 1) = [] := by
+      have : ∀ m i, i + m ≤ j + 1 → entriesRange u.s i m = [] := by
+        intro m
+        induction m with
+        | zero => intro _ _; rfl
+        | succ m ihm =>
+          intro i h
+          simp only [entriesRange]
+          rw [hin1 i (by omega) (by omega), ihm (i + 1) (by omega)]
+          rfl
+      exact this (j + 1) 0 (by omega)
+    have hrest : entriesRange u.s (j + 1) (t.cap - (j + 1)) = entriesRange t.s (j + 1) (t.cap - (j + 1)) := by
+      have : ∀ m i, j + 1 ≤ i → entriesRange u.s i m = entriesRange t.s i m := by
+        intro m
+        induction m with
+        | zero => intro _ _; rfl
+        | succ m ihm =>
+          intro i h
+          simp only [entriesRange]
+          rw [hout1 i (Or.inr (by omega)), ihm (i + 1) (by omega)]
+      exact this _ _ (Nat.le_refl _)
+    refine ⟨?_, ?_⟩
+    · rw [hent, hsplit u hc1, hzero, List.nil_append, hrest]
+    · obtain ⟨hd2, _, _, _⟩ := relLoop_spec (t.cap - (j + 1)) u (j + 1)
+      rw [hd1, hd2, hrest, hent]
+      have := hsplit t rfl
+      rw [this]
 
 end B
