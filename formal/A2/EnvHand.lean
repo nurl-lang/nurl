@@ -1184,7 +1184,7 @@ theorem callT_hand {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
       fun p Ep hp hm d' hd' hdr hha => ?_⟩
     rotate_right
     · by_cases hpx : p = x
-      · rw [hpx, handCtx_x] at hp; cases hp; exact hE0m hm
+      · rw [hpx, handCtx_x] at hp; cases hp; exact absurd hm hE0m
       by_cases hpy : p = m.nv
       · rw [hpy, hy, hEy] at hp; cases hp; cases hm
       by_cases hpc : p = c

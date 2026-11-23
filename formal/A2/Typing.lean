@@ -1532,12 +1532,13 @@ def NamesFree (Γ : Ctx) (F : List Var) (ps : List (PMode × Ty)) (args : List V
       ps[i]? = some (PMode.inout d.kind.bound, t)) ∧
     (∀ a ∈ args, ((argE Γ a).ty ≠ .int ∨ (argE Γ a).mode = .rootb) →
       ∀ d' ∈ (argE Γ a).vdeps, d'.root = d.root → d'.kind.bound = d.kind.bound) ∧
-    -- AGORA-937 (B3): ... and it anchors no borrowed parameter's held view
-    -- (`HeldAnch`): the change by name would end it. Where every anchor is in
-    -- `F` this follows from `d.root ∉ F` (`NamesFree.noHeld_of_anchF`); a held
-    -- anchor outside `F` (route U) is the case it is asked for, as
-    -- `CallThruOK`'s `w ∉ roots (mutNames Γ args)`.
-    ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d' ∈ Ep.vdeps, d'.root = d.root → ¬ HeldAnch Ep d'
+    -- AGORA-937 (B3): ... and the change by name ends no borrowed
+    -- parameter's held view (`HeldAnch`, as `HeldSpared` reads it). Where
+    -- every anchor is in `F` this follows from `d.root ∉ F`; a held anchor
+    -- outside `F` (route U) is the case it is asked for, as `CallThruOK`'s
+    -- `w ∉ roots (mutNames Γ args)`.
+    ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d' ∈ Ep.vdeps, d'.root = d.root → HeldAnch Ep d' →
+      d.kind.bound.kills false d'.kind = false
 
 def PMode.moves : PMode → Bool
   | .inp => false

@@ -2470,7 +2470,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
     rotate_right
     · by_cases hpn : p = m.nv
       · subst hpn; simp only [setE, upd_same, Option.some.injEq] at hp; subst hp
-        exact envE_not_heldAnch hha
+        exact absurd hha envE_not_heldAnch
       · simp only [setE, upd_ne _ _ hpn] at hp
         exact hnh p Ep hp hm d' hd' hdr hha
     · rcases List.mem_append.mp hm with hm | hm
