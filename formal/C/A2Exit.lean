@@ -217,6 +217,11 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
         match checkX P R C D Γ F a, checkX P R C D Γ F b with
         | some ra, some rb =>
           if D.all (fun v => ra.Δ v == rb.Δ v) then some ⟨ra.Δ, ra.E ++ rb.E, none⟩
+          -- (a direct panic arm first, into the other arm's end, as
+          -- checkStmt2's: an exit arm's own obligation stays as it is;
+          -- github#2242's review)
+          else if isPanic a && panicToB D Γ rb.Δ then some ⟨rb.Δ, ra.E ++ rb.E, none⟩
+          else if isPanic b && panicToB D Γ ra.Δ then some ⟨ra.Δ, ra.E ++ rb.E, none⟩
           else match ra.tail, rb.tail with
             | some (_, Γe), _ => if exitToB D Γe rb.Δ then some ⟨rb.Δ, ra.E ++ rb.E, none⟩ else none
             | none, some (_, Γe) => if exitToB D Γe ra.Δ then some ⟨ra.Δ, ra.E ++ rb.E, none⟩ else none
@@ -245,6 +250,23 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
           else none
         | none => none
       else none
+  | Γ, F, .scope x s =>
+    -- (a run-time scope's body may exit: each exit ends `x`'s scope as its
+    -- end does; github#2242's review)
+    match checkStmt2 P R C D Γ F (.scope x s) with
+    | some Δ => some ⟨Δ, [], none⟩
+    | none =>
+      match Γ x with
+      | some E =>
+        if decide (E.mode ≠ .rootb) && decide (x ∉ F) then
+          match checkX P R C D Γ F s with
+          | some rs =>
+            if endOK2B D rs.Δ x && rs.E.all (fun e => endOK2B D e.2 x) then
+              some ⟨exitScope x rs.Δ, oblUnder x rs.E, none⟩
+            else none
+          | none => none
+        else none
+      | none => none
   | Γ, F, .letd x f r s =>
     -- (a destructor frame's body may exit: each exit ends `x`'s scope as its
     -- end does, under `Exits.underD`; AGORA-975)
@@ -417,37 +439,55 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
             obtain ⟨h1, h2⟩ := OblOK.append hξ
             exact .ite ha hb (checkExpr2_sound hce) (ta ξ h1) (heq ▸ tb ξ h2)
           · split at h
-            · rename_i n Γe hta
-              split at h
-              · rename_i hto
-                simp only [Option.some.injEq] at h; subst h
-                obtain ⟨hse, _, hre⟩ := tla n Γe hta
-                refine ⟨sb, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
-                obtain ⟨h1, h2⟩ := OblOK.append hξ
-                exact .ite ha hb (checkExpr2_sound hce) (hre rb.Δ sb hto ξ h1) (tb ξ h2)
-              · cases h
-            · rename_i n Γe hta htb
-              split at h
-              · rename_i hto
-                simp only [Option.some.injEq] at h; subst h
-                obtain ⟨hse, _, hre⟩ := tlb n Γe htb
-                refine ⟨sa, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
-                obtain ⟨h1, h2⟩ := OblOK.append hξ
-                exact .ite ha hb (checkExpr2_sound hce) (ta ξ h1) (hre ra.Δ sa hto ξ h2)
-              · cases h
+            · rename_i hp
+              simp only [Bool.and_eq_true] at hp
+              simp only [Option.some.injEq] at h; subst h
+              have hap := isPanic_eq hp.1
+              subst hap
+              refine ⟨sb, hE, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
+              obtain ⟨_, h2⟩ := OblOK.append hξ
+              exact .ite ha hb (checkExpr2_sound hce) (panicToB_sound hs sb hp.2) (tb ξ h2)
             · split at h
-              · rename_i hj
-                simp only [Bool.and_eq_true] at hj
-                obtain ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩ := hj
+              · rename_i _ hp
+                simp only [Bool.and_eq_true] at hp
                 simp only [Option.some.injEq] at h; subst h
-                have sj := joinCand_supported (Δb := rb.Δ) sa
-                have wΓ := weaker_self2 hs h1 h2
-                refine ⟨sj, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
-                obtain ⟨k1, k2⟩ := OblOK.append hξ
-                exact .ite ha hb (checkExpr2_sound hce)
-                  (.sub wΓ (ta ξ k1) (Or.inr (weaker2B_sound sa sj h3)))
-                  (.sub wΓ (tb ξ k2) (Or.inr (weaker2B_sound sb sj h4)))
-              · cases h
+                have hbp := isPanic_eq hp.1
+                subst hbp
+                refine ⟨sa, hE, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
+                obtain ⟨h1, _⟩ := OblOK.append hξ
+                exact .ite ha hb (checkExpr2_sound hce) (ta ξ h1) (panicToB_sound hs sa hp.2)
+              · split at h
+                · rename_i n Γe hta
+                  split at h
+                  · rename_i hto
+                    simp only [Option.some.injEq] at h; subst h
+                    obtain ⟨hse, _, hre⟩ := tla n Γe hta
+                    refine ⟨sb, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
+                    obtain ⟨h1, h2⟩ := OblOK.append hξ
+                    exact .ite ha hb (checkExpr2_sound hce) (hre rb.Δ sb hto ξ h1) (tb ξ h2)
+                  · cases h
+                · rename_i n Γe hta htb
+                  split at h
+                  · rename_i hto
+                    simp only [Option.some.injEq] at h; subst h
+                    obtain ⟨hse, _, hre⟩ := tlb n Γe htb
+                    refine ⟨sa, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
+                    obtain ⟨h1, h2⟩ := OblOK.append hξ
+                    exact .ite ha hb (checkExpr2_sound hce) (ta ξ h1) (hre ra.Δ sa hto ξ h2)
+                  · cases h
+                · split at h
+                  · rename_i hj
+                    simp only [Bool.and_eq_true] at hj
+                    obtain ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩ := hj
+                    simp only [Option.some.injEq] at h; subst h
+                    have sj := joinCand_supported (Δb := rb.Δ) sa
+                    have wΓ := weaker_self2 hs h1 h2
+                    refine ⟨sj, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
+                    obtain ⟨k1, k2⟩ := OblOK.append hξ
+                    exact .ite ha hb (checkExpr2_sound hce)
+                      (.sub wΓ (ta ξ k1) (Or.inr (weaker2B_sound sa sj h3)))
+                      (.sub wΓ (tb ξ k2) (Or.inr (weaker2B_sound sb sj h4)))
+                  · cases h
         · cases h
       · cases h
   | letv x r s ih =>
@@ -480,6 +520,34 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
                 · exact .letv hsrc hx hF hrt (t0 _ (oblUnder_ok e0 hendE hξ)) (endOK2B_sound s0 hend)
                     (of_decide_eq_true hnd)
               · cases h
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+  | scope x s ih =>
+    intro Γ F rr hs hD h
+    simp only [checkX] at h
+    split at h
+    · rename_i Δ h0
+      simp only [Option.some.injEq] at h; subst h
+      exact xsound_of_check2 hR hC hs hD h0
+    · split at h
+      · rename_i E hE
+        split at h
+        · rename_i hc
+          simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+          split at h
+          · rename_i rs hrs
+            split at h
+            · rename_i he
+              simp only [Option.some.injEq] at h; subst h
+              simp only [Bool.and_eq_true] at he
+              obtain ⟨hend, hendE⟩ := he
+              obtain ⟨s0, e0, t0, _⟩ := ih hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hrs
+              refine ⟨supported2_exitScope s0 x, fun e he => ?_, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
+              · obtain ⟨e', he', rfl⟩ := List.mem_map.mp he
+                exact supported2_exitScope (e0 e' he') x
+              · exact .scope ⟨E, hE, hc.1⟩ hc.2 (t0 _ (oblUnder_ok e0 hendE hξ)) (endOK2B_sound s0 hend)
             · cases h
           · cases h
         · cases h
