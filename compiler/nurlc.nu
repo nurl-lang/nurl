@@ -108054,9 +108054,17 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // call that may lend the owner or another value - `( pick o other k )`
 // as an argument: CodeRabbit on github#2226). `-` is 2: a temporary the
 // callee may hand back.
-@ __opt_pick_arg_class i syms s w s name i depth → i {
+// (Followed to any depth: a stand-in's roots are its call's arguments,
+// compiled before it, so any stand-in among them has a smaller number -
+// the walk ends. `below` is the stand-in being read, -1 at the top; one
+// that is not below it cannot occur, and is answered 3, refused, not
+// guessed - CodeRabbit on github#2226: a depth cut-off answered 2 and let
+// a ninth-level pick through.)
+@ __opt_pick_arg_class i syms s w s name i below → i {
     ? ( seq w name ) { ^ 1 } {}
-    ? | == 0 ( nurl_str_starts w `__alr#` ) > depth 8 { ^ 2 } {}
+    ? == 0 ( nurl_str_starts w `__alr#` ) { ^ 2 } {}
+    : i n ( nurl_str_to_int ( nurl_str_slice w 6 - ( nurl_str_len w ) 6 ) )
+    ? & >= below 0 >= n below { ^ 3 } {}
     : s k ( nurl_sym_get2 g_pending_impl w `__vljk` )
     : s cn ( str_first_word k )
     : s gn ( str_first_word ( str_skip_word k ) )
@@ -108068,7 +108076,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
     ~ != 0 ( nurl_str_len rest ) {
         : s r ( str_first_word rest ) = rest ( str_skip_word rest )
         ? != 0 ( mem_fn_lend_kind syms who ix ) {
-            : i c ( __opt_pick_arg_class syms r name + depth 1 )
+            : i c ( __opt_pick_arg_class syms r name n )
             ? != c 2 { = own T } {}
             ? != c 1 { = oth T } {}
         } {}
@@ -108104,7 +108112,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
         ~ != 0 ( nurl_str_len rest ) {
             : s w ( str_first_word rest ) = rest ( str_skip_word rest )
             ? != 0 ( mem_fn_lend_kind syms who k ) {
-                : i c ( __opt_pick_arg_class syms w name 0 )
+                : i c ( __opt_pick_arg_class syms w name -1 )
                 ? != c 2 { = self T } {}
                 ? != c 1 { = other T } {}
             } {}
