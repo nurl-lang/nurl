@@ -11,7 +11,8 @@ a heap of blocks, a control triple `(data, len, cap)`, and the code of
 `vec_set` (by `.data idx`), `vec_pop`, `vec_insert` and `vec_remove` (their
 shift loops), `vec_truncate` (for elements whose drop runs no code of the
 program's: the elements it drops are exactly the ones it no longer holds),
-`vec_swap`, `vec_reserve` and `vec_free`. It proves that each
+`vec_swap`, `vec_reserve`, `vec_append` (`__vec_extend_move`) and
+`vec_free`. It proves that each
 operation:
 
 * touches only cells inside a live block (`load` and `store` are
@@ -1080,6 +1081,158 @@ theorem releaseFrom_ok {dtor : α → Heap α → Heap α} {h : Heap α} {v : RV
       simp at hi
       rw [hoth1 d hdne, hacd, hcell i (by omega)]
       simp
+
+/-! ### `vec_append`: moving one `Vec`'s elements onto another
+
+`vec_append dst src` (`src` a `sink`) runs `__vec_extend_move`. That grows
+`dst` to `dlen + n`, copies `src`'s cells bitwise to `dst` from `dlen`, bumps
+`dst`'s length and sets `src`'s to 0. The elements change owner, and none is
+copied or dropped. Because `src` is a `sink`, the two never share a buffer,
+and the theorem asks for that. A growth of `dst` that reallocates ends only
+`dst`'s block, so `src`'s cells are still there to be read. -/
+
+/-- The element-copy loop `= . ddata + dlen i . sdata i`, for `n` cells. -/
+def copyAt (h : Heap α) (b o d p : Nat) : Nat → Option (Heap α)
+  | 0 => some h
+  | n + 1 =>
+    match copyAt h b o d p n with
+    | none => none
+    | some h1 =>
+      match h1.load b (o + n) with
+      | none => none
+      | some y => h1.store d (p + n) y
+
+theorem copyAt_ok {h : Heap α} {b o d p : Nat} (hbd : b ≠ d) (hlb : h.live b = true)
+    (hld : h.live d = true) : ∀ n, o + n ≤ h.size b → p + n ≤ h.size d →
+    (∀ k, k < n → (h.cell b (o + k)).isSome) →
+    ∃ h', copyAt h b o d p n = some h' ∧ h'.live = h.live ∧ h'.size = h.size ∧ h'.nid = h.nid ∧
+      (∀ c, c ≠ d → h'.cell c = h.cell c) ∧
+      ∀ j, h'.cell d j = if p ≤ j ∧ j < p + n then h.cell b (o + (j - p)) else h.cell d j := by
+  intro n
+  induction n with
+  | zero =>
+    intro _ _ _
+    exact ⟨h, rfl, rfl, rfl, rfl, fun _ _ => rfl, fun j => by rw [ite_eq_right (by omega)]⟩
+  | succ n ih =>
+    intro hb hd hc
+    obtain ⟨h1, he, hlv, hsz, hn, hoth, hcell⟩ := ih (by omega) (by omega) (fun k hk => hc k (by omega))
+    obtain ⟨y, hy⟩ := Option.isSome_iff_exists.mp (hc n (by omega))
+    have hy1 : h1.cell b (o + n) = some y := by rw [hoth b hbd]; exact hy
+    have hload : h1.load b (o + n) = some y := by
+      simp only [Heap.load, hlv, hsz, hlb, true_and]; rw [ite_eq_left (by omega)]; exact hy1
+    have hin : h1.live d = true ∧ p + n < h1.size d := ⟨by rw [hlv]; exact hld, by rw [hsz]; omega⟩
+    refine ⟨{ h1 with cell := upd h1.cell d (upd (h1.cell d) (p + n) (some y)) }, ?_, hlv, hsz, hn, ?_, ?_⟩
+    · simp only [copyAt, he, hload, Heap.store, hin, and_self, ↓reduceIte]
+    · intro c hc'
+      show (upd h1.cell d _) c = h.cell c
+      simp only [upd, ite_eq_right hc']; exact hoth c hc'
+    · intro j
+      show (upd h1.cell d (upd (h1.cell d) (p + n) (some y))) d j = _
+      simp only [upd, ↓reduceIte]
+      by_cases hjn : j = p + n
+      · subst hjn; rw [ite_eq_left rfl, ite_eq_left (by omega)]
+        have : o + (p + n - p) = o + n := by omega
+        rw [this]; exact hy.symm
+      · rw [ite_eq_right hjn, hcell j]
+        by_cases hj : p ≤ j ∧ j < p + n
+        · rw [ite_eq_left hj, ite_eq_left (by omega)]
+        · rw [ite_eq_right hj, ite_eq_right (by omega)]
+
+/-- `vec_append dst src`: `__vec_extend_move`, then `src`'s length set to
+    0. -/
+def append (h : Heap α) (dst src : RVec) : Option (Heap α × RVec × RVec) :=
+  if src.len = 0 then some (h, dst, { src with len := 0 }) else
+  match (if dst.cap < dst.len + src.len then growTo h dst (dst.len + src.len) else some (h, dst)) with
+  | none => none
+  | some (h1, d1) =>
+    match d1.data, src.data with
+    | some dd, some sd =>
+      (copyAt h1 sd 0 dd d1.len src.len).map fun h2 =>
+        (h2, { d1 with len := d1.len + src.len }, { src with len := 0 })
+    | _, _ => none
+
+/-- `vec_append` of two `Vec`s that share no buffer (`src` is a `sink`, so a
+    `Vec` is never appended to itself): `dst` represents `es1 ++ es2` and
+    `src` is empty, holding its block (released at its drop). Every element
+    moves; none is copied twice or lost. -/
+theorem append_ok {h : Heap α} {dst src : RVec} {es1 es2 : List α} (hw : h.WF)
+    (hr1 : Rep h dst es1) (hr2 : Rep h src es2) (hne : ∀ b, dst.data = some b → src.data ≠ some b) :
+    ∃ h' d', append h dst src = some (h', d', { src with len := 0 }) ∧ Rep h' d' (es1 ++ es2) ∧
+      Rep h' { src with len := 0 } [] ∧ h'.WF := by
+  have hl1 : dst.len = es1.length := hr1.1
+  have hl2 : src.len = es2.length := hr2.1
+  have hlc2 := hr2.2.1
+  by_cases h0 : src.len = 0
+  · have : es2 = [] := List.eq_nil_of_length_eq_zero (by omega)
+    subst this
+    refine ⟨h, dst, by unfold append; rw [ite_eq_left h0], by simpa using hr1, ⟨rfl, by simp, ?_⟩, hw⟩
+    have h2 := hr2.2.2
+    revert h2
+    show (match src.data with
+      | none => src.cap = 0
+      | some d => h.live d = true ∧ h.size d = src.cap ∧ ∀ i (hi : i < ([] : List α).length), h.cell d i = some ([] : List α)[i]) → _
+    intro h2; exact h2
+  · cases hsd : src.data with
+    | none => have := rep_none hr2 hsd; omega
+    | some sd =>
+      obtain ⟨hlsd, hszsd, hcsd⟩ := rep_some hr2 hsd
+      have hsdn : sd < h.nid := by
+        rcases Nat.lt_or_ge sd h.nid with e | e
+        · exact e
+        · rw [hw sd e] at hlsd; exact absurd hlsd (by simp)
+      -- the growth of `dst`: kept, or moved to a fresh id; `src`'s block stays
+      have hg : ∃ h1 d1, (if dst.cap < dst.len + src.len then growTo h dst (dst.len + src.len)
+            else some (h, dst)) = some (h1, d1) ∧ Rep h1 d1 es1 ∧ h1.WF ∧ dst.len + src.len ≤ d1.cap ∧
+          d1.len = dst.len ∧ h1.live sd = true ∧ h1.size sd = h.size sd ∧ h1.cell sd = h.cell sd ∧
+          d1.data ≠ some sd := by
+        by_cases hf : dst.cap < dst.len + src.len
+        · rw [ite_eq_left hf]
+          obtain ⟨h1, d1, he, hr1', hw1, hroom, hlen, hbuf⟩ := growTo_ok (need := dst.len + src.len) hw hr1
+          refine ⟨h1, d1, he, hr1', hw1, hroom, hlen, ?_⟩
+          rcases hbuf with ⟨rfl, rfl⟩ | ⟨hd1, _, hlv, hfr⟩
+          · exact ⟨hlsd, rfl, rfl, fun e => hne sd e hsd⟩
+          · have hsne : dst.data ≠ some sd := fun e => hne sd e hsd
+            obtain ⟨hc, hs⟩ := hfr sd hsdn hsne
+            refine ⟨?_, hs, hc, by rw [hd1]; intro e; injection e; omega⟩
+            rw [hlv]
+            cases hdd : dst.data with
+            | none => simp only [upd]; rw [ite_eq_right (by omega)]; exact hlsd
+            | some dd =>
+              have : sd ≠ dd := fun e => hsne (by rw [hdd, e])
+              simp only [upd]; rw [ite_eq_right (by omega), ite_eq_right this]; exact hlsd
+        · rw [ite_eq_right hf]
+          exact ⟨h, dst, rfl, hr1, hw, by omega, rfl, hlsd, rfl, rfl, fun e => hne sd e hsd⟩
+      obtain ⟨h1, d1, he, hr1', hw1, hroom, hlen, hl1sd, hs1sd, hc1sd, hd1ne⟩ := hg
+      have hl1' : d1.len = es1.length := hr1'.1
+      cases hdd : d1.data with
+      | none => have := rep_none hr1' hdd; omega
+      | some dd =>
+        obtain ⟨hldd, hszdd, hcdd⟩ := rep_some hr1' hdd
+        have hsdd : sd ≠ dd := fun e => hd1ne (by rw [hdd, e])
+        obtain ⟨h2, hc2, hlv2, hsz2, hn2, hoth2, hcell2⟩ := copyAt_ok (o := 0) (p := d1.len) hsdd hl1sd hldd
+          src.len (by rw [hs1sd]; omega) (by rw [hszdd]; omega)
+          (fun k hk => by rw [hc1sd, Nat.zero_add, hcsd k (by omega)]; rfl)
+        refine ⟨h2, { d1 with len := d1.len + src.len }, ?_, ⟨by simp; omega, by show d1.len + src.len ≤ d1.cap; omega, ?_⟩,
+          ⟨rfl, by simp, ?_⟩, ?_⟩
+        · unfold append
+          rw [ite_eq_right h0, he]
+          simp only [hdd, hsd, hc2, Option.map_some]
+        · simp only [hdd]
+          show h2.live dd = true ∧ h2.size dd = d1.cap ∧ ∀ i (hi : i < (es1 ++ es2).length),
+            h2.cell dd i = some (es1 ++ es2)[i]
+          refine ⟨by rw [hlv2]; exact hldd, by rw [hsz2]; exact hszdd, fun i hi => ?_⟩
+          rw [hcell2 i]
+          simp at hi
+          by_cases hi1 : i < es1.length
+          · rw [ite_eq_right (by omega), hcdd i hi1, List.getElem_append_left hi1]
+          · rw [ite_eq_left (by omega), hc1sd, Nat.zero_add, hcsd (i - d1.len) (by omega),
+              List.getElem_append_right (by omega)]
+            simp only [hl1']
+        · show h2.live sd = true ∧ h2.size sd = src.cap ∧ ∀ i (hi : i < ([] : List α).length), h2.cell sd i = some ([] : List α)[i]
+          refine ⟨by rw [hlv2]; exact hl1sd, by rw [hsz2, hs1sd]; exact hszsd, fun i hi => by simp at hi⟩
+        · intro b hb
+          show h2.live b = false
+          rw [hlv2]; exact hw1 b (by rw [← hn2]; exact hb)
 
 /-! ### The link to A1
 

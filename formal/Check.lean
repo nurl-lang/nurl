@@ -928,3 +928,5 @@ import B
 #print axioms B.vpush_ok
 #print axioms B.dropLoop_ok
 #print axioms B.releaseFrom_ok
+#print axioms B.copyAt_ok
+#print axioms B.append_ok
