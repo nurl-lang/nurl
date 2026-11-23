@@ -106,6 +106,21 @@ $ `../src/glb.nu`
     ( vec_push [u] . stray col # u 9 )
     ( glb_tri stray t0 t1 t2 )
     ?? ( glb_bytes stray `` ) { T _ → { ( nurl_print `FAIL a stray colour byte was accepted\n` ) = rc 1 } F e → { ( nurl_print `refused: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) } }
+    // fewer bytes than one vertex's worth: 1 colour byte, 2 normal numbers
+    : ~ GlbMesh short ( glb_mesh_new )
+    : i w0 ( glb_vertex short 0.0 0.0 0.0 )
+    : i w1 ( glb_vertex short 1.0 0.0 0.0 )
+    : i w2 ( glb_vertex short 0.0 1.0 0.0 )
+    ( glb_tri short w0 w1 w2 )
+    ( vec_push [u] . short col # u 7 )
+    ?? ( glb_bytes short `` ) { T _ → { ( nurl_print `FAIL a one-byte colour vector was accepted\n` ) = rc 1 } F e → { ( nurl_print `refused: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) } }
+    : ~ GlbMesh shortn ( glb_mesh_new )
+    : i z0 ( glb_vertex shortn 0.0 0.0 0.0 )
+    : i z1 ( glb_vertex shortn 1.0 0.0 0.0 )
+    : i z2 ( glb_vertex shortn 0.0 1.0 0.0 )
+    ( glb_tri shortn z0 z1 z2 )
+    ( vec_push [f] . shortn nrm 0.0 ) ( vec_push [f] . shortn nrm 1.0 )
+    ?? ( glb_bytes shortn `` ) { T _ → { ( nurl_print `FAIL a two-number normal vector was accepted\n` ) = rc 1 } F e → { ( nurl_print `refused: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) } }
     : ~ GlbMesh huge ( glb_mesh_new )
     : i u0 ( glb_vertex huge 1.0e300 0.0 0.0 )
     : i u1 ( glb_vertex huge 1.0 0.0 0.0 )

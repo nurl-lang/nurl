@@ -128,9 +128,9 @@ $ `stdlib/ext/json.nu`
     ? & != nc 0 != nc nv { ^ @ !( Vec u ) String { F ( string_from `glb: some vertices have a colour and some do not` ) } } {}
     // exactly four bytes a vertex: a stray byte written straight into `col`
     // would shift the indices off their 4-byte alignment
-    ? & != nc 0 != ( vec_len [u] . m col ) * nv 4 { ^ @ !( Vec u ) String { F ( string_from `glb: each vertex colour must be four bytes` ) } } {}
+    ? & != ( vec_len [u] . m col ) 0 != ( vec_len [u] . m col ) * nv 4 { ^ @ !( Vec u ) String { F ( string_from `glb: each vertex colour must be four bytes` ) } } {}
     ? != ( vec_len [f] . m pos ) * nv 3 { ^ @ !( Vec u ) String { F ( string_from `glb: each vertex position must be three numbers` ) } } {}
-    ? & != nn 0 != ( vec_len [f] . m nrm ) * nv 3 { ^ @ !( Vec u ) String { F ( string_from `glb: each vertex normal must be three numbers` ) } } {}
+    ? & != ( vec_len [f] . m nrm ) 0 != ( vec_len [f] . m nrm ) * nv 3 { ^ @ !( Vec u ) String { F ( string_from `glb: each vertex normal must be three numbers` ) } } {}
     : ( Slice f ) p ( slice_from_vec [f] . m pos )
     : ( Slice i ) ix ( slice_from_vec [i] . m idx )
     : ~ i k 0

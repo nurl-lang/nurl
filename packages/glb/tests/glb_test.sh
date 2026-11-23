@@ -49,13 +49,15 @@ for f in sys.argv[1:]:
         if v["byteOffset"] % 4: fail(name, "unaligned view")
         if a["count"] * n * sz > v["byteLength"] or v["byteOffset"] + v["byteLength"] > bl: fail(name, "accessor overruns its view")
         flat = struct.unpack_from("<%d%s" % (a["count"] * n, fmt), binb, v["byteOffset"])
+        if fmt == "f" and not all(math.isfinite(x) for x in flat): fail(name, "a non-finite float in accessor %d" % i)
         return a, [flat[k:k + n] for k in range(0, len(flat), n)]
     prim = doc["meshes"][0]["primitives"][0]
     # the cube is written with both: a writer that dropped them must not pass
     if name == "cube.glb" and not {"NORMAL", "COLOR_0"} <= set(prim["attributes"]): fail(name, "NORMAL or COLOR_0 missing")
     if name == "scaled.glb":
         _, N = read(prim["attributes"]["NORMAL"])
-        if any(abs(n[0] - 1) > 1e-6 or abs(n[1]) > 1e-6 or abs(n[2]) > 1e-6 for n in N): fail(name, "tiny/huge normals lost their direction: %r" % (N,))
+        # a NaN fails every comparison, so finiteness is checked first
+        if any(not all(math.isfinite(c) for c in n) or abs(n[0] - 1) > 1e-6 or abs(n[1]) > 1e-6 or abs(n[2]) > 1e-6 for n in N): fail(name, "tiny/huge normals lost their direction: %r" % (N,))
         print("PASS", name, "normals of any size keep their direction"); continue
     pa, P = read(prim["attributes"]["POSITION"])
     for ax in range(3):
