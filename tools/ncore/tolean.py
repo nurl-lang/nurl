@@ -206,6 +206,15 @@ class Fn:
             return ".expr (.lit 0)"
         if k == "use" and words[1] == "c" and dest is not None and self.fn["vars"].get(dest) == "i8*":
             return ".new .int"   # a literal: its own copy of the text
+        if k == "use" and "/" in words[1]:
+            # a field's value: an integer is read through the pairs; an owning
+            # one would move out of its struct, which A2 does only by `unpair`
+            base, field = words[1].split("/", 1)
+            fs = struct_fields(self.fn["vars"].get(int(base[1:]), "")) or []
+            fty = dict(fs).get(field)
+            if fty not in INT_TYS or pre is None:
+                raise Unsupported(f"{self.fn['name']}: the field {words[1]} moved or copied")
+            return f".expr (.var {self.field_temp(words[1], pre)})"
         if k == "use":
             op = words[1]
             if op != "c" and self.fn["vars"].get(int(op[1:]), "i64") not in INT_TYS:
@@ -348,6 +357,25 @@ class Fn:
             loop_body = self.stmts(cond, names, inner)
             self.depth -= 1
             return self.seq(f"(.block (.loop {loop_body}))", self.stmts(lines[k + 1:], names, tail))
+        if w == "foreach":
+            # `foreach x v … end` over a Vec: the loop holds a borrow of the
+            # container for its whole run (a view of it, `view`), and lends
+            # each element through it (`sat`), as nurlc's `~` loop does; an
+            # index counts up, stepped before the body so `continue` keeps
+            # it; the blocks as `loop`'s
+            body, k = block_of(lines, 1)
+            xs = head[2]
+            if not self.fn["vars"].get(int(xs[1:]) if xs[1:].isdigit() else -1, "").startswith("%Vec__"):
+                raise Unsupported(f"{self.fn['name']}: foreach over {xs}")
+            v, x, i, w = self.pvar(xs), self.var(int(head[1])), self.fresh(), self.fresh()
+            self.depth += 2
+            inner = self.stmts(body, names)
+            self.depth -= 2
+            step = f"(.assign {i} (.expr (.add (.var {i}) (.lit 1))))"
+            each = f"(.letv {x} (.sat {w} (.var {i})) (.seq {step} {inner}))"
+            loop = f"(.loop (.ite (.lt (.var {i}) (.slen {w})) (.block {each}) (.exit 0)))"
+            return self.seq(f"(.block (.letv {i} (.expr (.lit 0)) (.letv {w} (.view {v}) {loop})))",
+                            self.stmts(lines[k + 1:], names, tail))
         if w == "break":
             return self.seq("(.exit 1)", self.stmts(lines[1:], names, tail))
         if w == "continue":
