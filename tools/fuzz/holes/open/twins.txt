@@ -10,7 +10,6 @@
 #
 # probe                                                   what the twin does
 drop_vec_get_local_match.nu                               a `vec_get` element of a local Vec through a `??`, bound then handed back
-inner_payload_field_through_a_match_assigned_outward.nu   a field of an inner block's enum payload through a `??`, bound then assigned outward
 raw_view_block_tail.nu                                    a raw view of a block's own local as its tail, bound then handed back
 closure_returned_from_an_arm_over_a_payload.nu            a `??` whose arms are closures capturing a payload of a local `??String`, bound then handed back (the arm binding's source is `*`)
 closure_assigned_a_value_block_ending_in_itself_runs_clean.nu agora #835: a closure bound from a value block whose tail is an outer closure takes over no env (`: g { … a }  = a g`)
