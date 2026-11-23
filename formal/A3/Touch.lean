@@ -225,7 +225,13 @@ theorem sat_seen {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} {t 
   obtain ⟨v, hv', hval⟩ := hbor hown.symm hl
   cases hv'
   rw [ht] at hval
-  obtain ⟨d', o', l', he, dep, _, hva⟩ := valOK_slice.mp hval
+  obtain ⟨d', o', l', he, ⟨dep, _, hva⟩ | hsv⟩ := valOK_slice.mp hval
+  rotate_left
+  · -- AGORA-980: a static literal's text, a payload the view reaches
+    cases he
+    obtain ⟨_, k, bl, c, es, hk, _, hs, _, _⟩ := hsv
+    have hd : d ∈ bl.rd.ids := hs.ids d (by simp [Val.ids])
+    exact .inr ⟨k, bl, hk, hd, .root ⟨y, false, hv⟩ (Or.inr ⟨bl, hk, Or.inr ⟨d, o, l, Sub.refl _, hd⟩⟩)⟩
   cases he
   rcases hva.owned_rd with ⟨x, T, hT, hd⟩ | ⟨k, bl, hk, hd⟩
   · exact .inl ⟨x, T, hT, hd⟩
