@@ -959,3 +959,8 @@ import B
 #print axioms B.arcDrop_ok
 #print axioms B.weakDrop_ok
 #print axioms B.upgrade_ok
+-- Phase B6: `Channel`'s queue (stdlib/std/channel.nu): FIFO conservation, none lost, none twice
+#print axioms B.conservation
+#print axioms B.offered_split
+#print axioms B.fresh_conservation
+#print axioms B.recv_steps
