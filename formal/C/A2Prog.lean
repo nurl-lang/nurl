@@ -215,51 +215,96 @@ theorem dtorParamsB_sound {P : Prog} {fn : Fn} (h : dtorParamsB P fn = true) : D
         exact ⟨ha, g, t, resDTyOf_sound ht, hv, hf, Or.inl ⟨dtorOKB_sound hdt, hhd⟩⟩
       · cases hm
 
-/-- `Rhs.codeOK`, decided for a right-hand side that makes no closure
-    package: an `arc`, a lock or a cell over a destructor-free payload reaps
-    nothing (`Ty.Reaps.dtorFree`). (A closure package's `CodeOK` is not
-    decided yet.) -/
-def rhsCodeB : Rhs → Bool
-  | .pack _ _ _ _ _ => false
+/-- `Implements`, decided for code that changes no elements through a borrow
+    (`noThruB`, so its last clause holds): its signature is the interface's
+    with the environment as the receiver and the captures after, and what
+    it lends and holds is within the interface's. -/
+def implementsB (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (σ : Nat) : Bool :=
+  match P[f]?, P[σ]? with
+  | some fn, some sig =>
+    decide (fn.params = (sig.recvMode, te) :: sig.params.tail ++ cs.map (·.2)) &&
+    (decide (sig.recvMode = .inp) || cs.isEmpty) &&
+    decide (fn.resTy = sig.resTy) && decide (fn.resOwn = sig.resOwn) &&
+    fn.lends.all (fun x => decide (x ∈ sig.lends)) && fn.rholds.all (fun x => decide (x ∈ sig.rholds)) &&
+    fn.outHolds.all (fun x => decide (x ∈ sig.outHolds)) && noThruB P f
+  | _, _ => false
+
+theorem implementsB_sound {P : Prog} {f : Nat} {te : Ty} {cs : List (Var × PMode × Ty)} {σ : Nat}
+    (h : implementsB P f te cs σ = true) : Implements P f te cs σ := by
+  unfold implementsB at h
+  split at h
+  · rename_i fn sig hf hσ
+    simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true, List.all_eq_true,
+      List.isEmpty_iff] at h
+    obtain ⟨⟨⟨⟨⟨⟨⟨hp, hcs⟩, hr⟩, ho⟩, hl⟩, hh⟩, hoh⟩, hnt⟩ := h
+    refine ⟨fn, sig, hf, hσ, hp, fun hne => ?_, hr, ho, fun x hx => hl x hx, fun x hx => hh x hx,
+      fun x hx => hoh x hx, fun ht => absurd ht (noThruB_sound hnt)⟩
+    rcases hcs with h0 | h0
+    · exact absurd h0 hne
+    · exact h0
+  · cases h
+
+/-- `CodeOK`, decided method by method. -/
+def codeOKB (P : Prog) (fs : List Nat) (te : Ty) (ms : List Nat) (cs : List (Var × PMode × Ty)) : Bool :=
+  decide (fs.length = ms.length) && (List.range fs.length).all fun j =>
+    match fs[j]?, ms[j]? with
+    | some f, some σ => implementsB P f te cs σ
+    | _, _ => true
+
+theorem codeOKB_sound {P : Prog} {fs : List Nat} {te : Ty} {ms : List Nat} {cs : List (Var × PMode × Ty)}
+    (h : codeOKB P fs te ms cs = true) : CodeOK P fs te ms cs := by
+  simp only [codeOKB, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at h
+  refine ⟨h.1, fun j f σ hf hσ => ?_⟩
+  have hj : j < fs.length := (List.getElem?_eq_some_iff.mp hf).1
+  have := h.2 j (List.mem_range.mpr hj)
+  rw [hf, hσ] at this
+  exact implementsB_sound this
+
+/-- `Rhs.codeOK`, decided: a closure package's code implements its
+    interfaces (`codeOKB`); an `arc`, a lock or a cell over a
+    destructor-free payload reaps nothing (`Ty.Reaps.dtorFree`). -/
+def rhsCodeB (P : Prog) : Rhs → Bool
+  | .pack fs te ms _ cs => codeOKB P fs te ms cs
   | .arcNew t _ => t.dtorFree
   | .lockNew t _ => t.dtorFree
   | .cellNew t _ => t.dtorFree
   | _ => true
 
-theorem rhsCodeB_sound {P : Prog} {r : Rhs} (h : rhsCodeB r = true) : r.codeOK P := by
+theorem rhsCodeB_sound {P : Prog} {r : Rhs} (h : rhsCodeB P r = true) : r.codeOK P := by
   cases r <;> simp only [rhsCodeB] at h <;> simp only [Rhs.codeOK] <;>
     first
     | trivial
+    | exact codeOKB_sound h
     | exact fun f u hr => absurd (Ty.Reaps.dtorFree hr) (by rw [h]; decide)
     | cases h
 
 /-- `Stmt.codesOK`, decided with `rhsCodeB`. -/
-def stmtCodesB : Stmt → Bool
-  | .seq a b => stmtCodesB a && stmtCodesB b
-  | .letv _ r s => rhsCodeB r && stmtCodesB s
-  | .letcall _ _ _ s => stmtCodesB s
-  | .assign _ r => rhsCodeB r
-  | .ite _ a b => stmtCodesB a && stmtCodesB b
-  | .while _ s => stmtCodesB s
-  | .scope _ s => stmtCodesB s
-  | .rbind _ s => stmtCodesB s
-  | .frozen _ s => stmtCodesB s
-  | .letrec _ _ s => stmtCodesB s
-  | .catchR _ _ s => stmtCodesB s
-  | .unpair _ _ _ s => stmtCodesB s
-  | .callc _ _ _ _ _ s => stmtCodesB s
-  | .letd _ _ r s => rhsCodeB r && stmtCodesB s
-  | .scopeD _ _ s => stmtCodesB s
-  | .withLock _ _ s => stmtCodesB s
-  | .scopeL _ _ _ s => stmtCodesB s
-  | .withElem _ _ _ s => stmtCodesB s
-  | .callcE _ _ _ _ s => stmtCodesB s
-  | .block s => stmtCodesB s
-  | .loop s => stmtCodesB s
-  | .takeB _ _ _ s => stmtCodesB s
+def stmtCodesB (P : Prog) : Stmt → Bool
+  | .seq a b => stmtCodesB P a && stmtCodesB P b
+  | .letv _ r s => rhsCodeB P r && stmtCodesB P s
+  | .letcall _ _ _ s => stmtCodesB P s
+  | .assign _ r => rhsCodeB P r
+  | .ite _ a b => stmtCodesB P a && stmtCodesB P b
+  | .while _ s => stmtCodesB P s
+  | .scope _ s => stmtCodesB P s
+  | .rbind _ s => stmtCodesB P s
+  | .frozen _ s => stmtCodesB P s
+  | .letrec _ _ s => stmtCodesB P s
+  | .catchR _ _ s => stmtCodesB P s
+  | .unpair _ _ _ s => stmtCodesB P s
+  | .callc _ _ _ _ _ s => stmtCodesB P s
+  | .letd _ _ r s => rhsCodeB P r && stmtCodesB P s
+  | .scopeD _ _ s => stmtCodesB P s
+  | .withLock _ _ s => stmtCodesB P s
+  | .scopeL _ _ _ s => stmtCodesB P s
+  | .withElem _ _ _ s => stmtCodesB P s
+  | .callcE _ _ _ _ s => stmtCodesB P s
+  | .block s => stmtCodesB P s
+  | .loop s => stmtCodesB P s
+  | .takeB _ _ _ s => stmtCodesB P s
   | _ => true
 
-theorem stmtCodesB_sound {P : Prog} : ∀ {s : Stmt}, stmtCodesB s = true → s.codesOK P := by
+theorem stmtCodesB_sound {P : Prog} : ∀ {s : Stmt}, stmtCodesB P s = true → s.codesOK P := by
   intro s
   induction s <;> intro h <;> simp only [stmtCodesB, Bool.and_eq_true] at h <;> simp only [Stmt.codesOK] <;>
     first
@@ -325,7 +370,7 @@ theorem fnOK2B_sound {P : Prog} {fn : Fn} (h : fnOK2B P fn = true) : FnOK P fn :
 
 /-- `ProgOK` and `ProgCodes` (A2), decided. -/
 def progOK2B (P : Prog) : Bool :=
-  P.all fun fn => fnOK2B P fn && stmtCodesB fn.body
+  P.all fun fn => fnOK2B P fn && stmtCodesB P fn.body
 
 theorem progOK2B_sound {P : Prog} (h : progOK2B P = true) : ProgOK P ∧ ProgCodes P := by
   simp only [progOK2B, List.all_eq_true, Bool.and_eq_true] at h
@@ -334,7 +379,7 @@ theorem progOK2B_sound {P : Prog} (h : progOK2B P = true) : ProgOK P ∧ ProgCod
 /-- Phase C for A2, end to end: a program the checker accepts, with an
     entry statement it accepts, never gets stuck from the empty store. -/
 theorem checked_program_safe2 {P : Prog} (hP : progOK2B P = true) {s : Stmt} {Δ : Ctx}
-    (hc : checkA2 P s.vars (fun _ => none) [] s = some Δ) (hsc : stmtCodesB s = true)
+    (hc : checkA2 P s.vars (fun _ => none) [] s = some Δ) (hsc : stmtCodesB P s = true)
     (hs : s.src = true) {nv : Nat} (hv : ∀ v ∈ s.vars, v < nv) {m' : Mem} {s' : Stmt}
     (hr : Steps P (emptyMem nv) s (.ok m' s')) : ¬ Stuck P m' s' := by
   obtain ⟨hok, hcodes⟩ := progOK2B_sound hP
