@@ -6565,6 +6565,20 @@ unsafe @ __arg_param_lend_root i syms → s {
 }
 
 // `a | b` of two i1 operands, either `` for none.
+// `! a` for an i1.
+@ __not_i1 i cg s a → s {
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = xor i1 ` ) ( nurl_print a ) ( nurl_print `, 1\n` )
+    ^ r
+}
+
+// Is the `i8*` `p` not null, as an i1.
+@ __i8_nonnull i cg s p → s {
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print p ) ( nurl_print `, null\n` )
+    ^ r
+}
+
 @ __or_i1 i cg s a s b → s {
     ? == 0 ( nurl_str_len a ) { ^ ( nurl_str_cat b `` ) } {}
     ? == 0 ( nurl_str_len b ) { ^ ( nurl_str_cat a `` ) } {}
@@ -50185,6 +50199,10 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         { = set ? == 0 ( nurl_str_len set ) ( nurl_str_cat w `` ) ( nurl_str_cat3 set ` ` w ) } {}
     }
     ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__alias` ) set )
+    // (A cursor over a binding whose owners are a join's arms, one per run
+    // (`__jalias`), is over one of them too: whoever takes its value over
+    // takes over that one only, AGORA-953.)
+    ? ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jalias` ) `1` ) } {}
     // (A cursor over part of a value is a cursor over that part.)
     ? != 0 g_part_n { ? ( seq ( nurl_sym_get2 syms src `__alias_part` ) `1` ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__alias_part` ) `1` ) } {} } {}
     : s bw ( nurl_sym_get2 syms src `__borrowers` )
@@ -52085,6 +52103,15 @@ unsafe @ __src_has_raw_ptr s text → b {
             // AGORA-953, the last of AGORA-242's twins.)
             : b __mkey & & & ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) != 0 ( nurl_str_len ( str_skip_word __ma ) ) ( __ud_keyable ty ) != 0 ( nurl_str_len ptr )
             : s __mnk ? __mkey ( mem_ud_ident_key cg ty ( __ud_load cg ty ptr ) ) ``
+            // (At most one owner is taken over by its key: two that share it —
+            // two shares of one Rc — keep a release each. A key that names
+            // nothing (null: an empty handle, a field left out) tells no owner
+            // apart, so every one is taken over as before: a leak at worst,
+            // never a release under a holder.)
+            : ~ s __mtaken `0`
+            : s __mnn ? & __mkey != 0 ( nurl_str_len __mnk ) ( __i8_nonnull cg __mnk ) ``
+            // (…and a binding given this one's value is one of those arms' too.)
+            ? ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jalias` ) `1` ) } {}
             ~ != 0 ( nurl_str_len __ma ) {
                 : s __mw ( str_first_word __ma ) = __ma ( str_skip_word __ma )
                 ? > ( nurl_str_to_int ( nurl_sym_get2 syms __mw `__depth` ) ) __pd {
@@ -52095,8 +52122,13 @@ unsafe @ __src_has_raw_ptr s text → b {
                         ? != 0 ( nurl_str_len __mok ) {
                             : s __meq ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print __meq ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print __mnk ) ( nurl_print `, ` ) ( nurl_print __mok ) ( nurl_print `\n` )
-                            : s __mtk ( __and_i1 cg __of __meq )
-                            : s __mrest ( __and_not cg __of __meq )
+                            // (the first owner that matches and owns, unless the
+                            // key is null: then every one)
+                            : s __mm ( __and_not cg ( __and_i1 cg ( __and_i1 cg __meq __of ) __mnn ) __mtaken )
+                            = __mtaken ( __or_i1 cg __mtaken __mm )
+                            : s __msel ( __or_i1 cg __mm ( __not_i1 cg __mnn ) )
+                            : s __mtk ( __and_i1 cg __of __msel )
+                            : s __mrest ( __and_not cg __of __msel )
                             : s __nf2 ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print __nf2 ) ( nurl_print ` = or i1 ` ) ( nurl_print __cf ) ( nurl_print `, ` ) ( nurl_print __mtk ) ( nurl_print `\n` )
                             ( mem_udrop_flag_set syms cg ptr __nf2 )
