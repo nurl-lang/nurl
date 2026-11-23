@@ -38,8 +38,9 @@ the push that detaches them (`vpush_ok`: the viewed block is never written
 or freed). What B1 leaves out, for the next steps: the packed-string layout,
 the runtime's `nurl_vec_drop` (C code; it frees a view's handle only), element destructors (cells
 here are values that are moved by bit copy, as `mem_take` makes them),
-byte sizes and their overflow (`alloc_size`), and `__vec_release_from`, the
-truncation path for elements whose drop runs program code.
+byte sizes and their overflow (`alloc_size`).
+`__vec_release_from` (the truncation path for elements whose drop runs
+program code, Agora #709) is covered: `releaseFrom_ok`.
 -/
 
 namespace B
@@ -960,6 +961,125 @@ theorem vpush_ok {h : Heap α} {w : VView} {es : List α} (x : α) (hw : h.WF) (
       simp only [upd, ite_eq_right hbne]; rw [hoth1 b hbne]
       show (upd h.cell h.nid _) b = h.cell b; simp only [upd, ite_eq_right hbne]
     · show h1.size b = h.size b; rw [hsz1]; show (upd h.size h.nid nc) b = _; simp only [upd, ite_eq_right hbne]
+
+/-! ### `__vec_release_from`: drops that run program code (Agora #709)
+
+For an element type whose drop runs code of the program's, `vec_truncate`
+and `vec_clear` go through `__vec_release_from` and the runtime's
+`nurl_vec_move_drop_dtor`. The elements past `from` are moved into a
+buffer of the release's own first. Then the count is written, and only
+then is each one dropped from that buffer, in index order. A destructor is
+program code and may reach the `Vec` again: push into it, grow it, clear
+it. The theorem below says it cannot change which elements are dropped.
+For any destructor that leaves the release's own buffer alone, every
+element past `from` is dropped exactly once, in order, and the `Vec`
+represents the first `from` before the first destructor runs. (Safe code
+cannot name that buffer: no value of the program points into it. That is
+A2's business.) The stack-or-heap choice for the buffer (Agora #748) is a
+fresh block here. -/
+
+/-- The drop loop over the release's buffer `t`: load cell `k`, run the
+    destructor (which may do anything to the heap), go on with `k + 1`. A
+    panic in one destructor goes on with the rest, so `dtor` is total. -/
+def dropLoop (dtor : α → Heap α → Heap α) (t : Nat) : Nat → Nat → Heap α → Option (Heap α × List α)
+  | _, 0, h => some (h, [])
+  | k, n + 1, h =>
+    match h.load t k with
+    | none => none
+    | some y => (dropLoop dtor t (k + 1) n (dtor y h)).map fun r => (r.1, y :: r.2)
+
+theorem dropLoop_ok {dtor : α → Heap α → Heap α} {t : Nat}
+    (hD : ∀ y (h : Heap α), (dtor y h).live t = h.live t ∧ (dtor y h).size t = h.size t ∧
+      (dtor y h).cell t = h.cell t) :
+    ∀ n k (h : Heap α) (ys : List α), h.live t = true → k + n ≤ h.size t → ys.length = n →
+      (∀ i (hi : i < ys.length), h.cell t (k + i) = some ys[i]) →
+      ∃ h', dropLoop dtor t k n h = some (h', ys) := by
+  intro n
+  induction n with
+  | zero => intro k h ys _ _ hl _; rw [List.eq_nil_of_length_eq_zero hl]; exact ⟨h, rfl⟩
+  | succ n ih =>
+    intro k h ys hlv hsz hl hc
+    match ys, hl with
+    | y :: ys', hl =>
+      have hl' : ys'.length = n := by simpa using hl
+      have hy : h.cell t k = some y := by have := hc 0 (by simp); simpa using this
+      have hload : h.load t k = some y := by
+        simp only [Heap.load, hlv, true_and]; rw [ite_eq_left (by omega)]; exact hy
+      obtain ⟨hD1, hD2, hD3⟩ := hD y h
+      obtain ⟨h', he⟩ := ih (k + 1) (dtor y h) ys' (by rw [hD1]; exact hlv) (by rw [hD2]; omega) hl'
+        (fun i hi => by rw [hD3]; have := hc (i + 1) (by simp; omega); simpa [Nat.add_assoc, Nat.add_comm 1] using this)
+      exact ⟨h', by simp only [dropLoop, hload, he, Option.map_some]⟩
+
+/-- `__vec_release_from v from` with `nurl_vec_move_drop_dtor`: a fresh
+    buffer, the elements `[from, len)` copied into it, the count set to
+    `from`, then the drop loop over the buffer. It hands back the heap, the
+    `Vec` as the destructors first see it, and the elements dropped. -/
+def releaseFrom (dtor : α → Heap α → Heap α) (h : Heap α) (v : RVec) (fr : Nat) :
+    Option (Heap α × RVec × List α) :=
+  if fr ≥ v.len then some (h, v, []) else
+  match v.data with
+  | none => none
+  | some d =>
+    let n := v.len - fr
+    match memcpy (h.alloc n).1 d fr (h.alloc n).2 n with
+    | none => none
+    | some h1 => (dropLoop dtor (h.alloc n).2 0 n h1).map fun r => (r.1, { v with len := fr }, r.2)
+
+/-- The release drops exactly `es.drop from`, in index order, each once,
+    whatever the destructors do elsewhere. Before the first of them runs,
+    the `Vec` represents `es.take from` in its own block, which the
+    release's buffer (the heap's next fresh id) is not. -/
+theorem releaseFrom_ok {dtor : α → Heap α → Heap α} {h : Heap α} {v : RVec} {es : List α}
+    {fr : Nat} (hw : h.WF) (hr : Rep h v es) (hf : fr < es.length)
+    (hD : ∀ y (g : Heap α), (dtor y g).live h.nid = g.live h.nid ∧ (dtor y g).size h.nid = g.size h.nid ∧
+      (dtor y g).cell h.nid = g.cell h.nid) :
+    ∃ h' h1, releaseFrom dtor h v fr = some (h', { v with len := fr }, es.drop fr) ∧
+      Rep h1 { v with len := fr } (es.take fr) ∧ v.data ≠ some h.nid := by
+  have hl : v.len = es.length := hr.1
+  have hlc := hr.2.1
+  cases hd : v.data with
+  | none => have := rep_none hr hd; omega
+  | some d =>
+    obtain ⟨hld, hsz, hcell⟩ := rep_some hr hd
+    have hdn : d < h.nid := by
+      rcases Nat.lt_or_ge d h.nid with e | e
+      · exact e
+      · rw [hw d e] at hld; exact absurd hld (by simp)
+    have hdne : d ≠ h.nid := by omega
+    let n := v.len - fr
+    let ha := (h.alloc n).1
+    have hald : ha.live d = true := by
+      show (upd h.live h.nid true) d = true; simp only [upd, ite_eq_right hdne]; exact hld
+    have halt : ha.live h.nid = true := by show (upd h.live h.nid true) h.nid = true; simp [upd]
+    have hasd : ha.size d = h.size d := by
+      show (upd h.size h.nid n) d = _; simp only [upd, ite_eq_right hdne]
+    have hast : ha.size h.nid = n := by show (upd h.size h.nid n) h.nid = n; simp [upd]
+    have hacd : ∀ j, ha.cell d j = h.cell d j := by
+      intro j; show (upd h.cell h.nid _) d j = _; simp only [upd, ite_eq_right hdne]
+    obtain ⟨h1, he, hlv1, hsz1, hn1, hoth1, hcell1⟩ := memcpy_ok (o := fr) hdne hald halt n
+      (by rw [hasd]; omega) (by rw [hast]; omega)
+      (fun k hk => by rw [hacd, hcell (fr + k) (by omega)]; rfl)
+    obtain ⟨h', hdrop⟩ := dropLoop_ok (dtor := dtor) (t := h.nid) hD n 0 h1 (es.drop fr)
+      (by rw [hlv1]; exact halt) (by rw [hsz1, hast]; omega) (by simp; omega)
+      (fun i hi => by
+        simp at hi
+        rw [hcell1, ite_eq_left (by omega), hacd, Nat.zero_add, hcell (fr + i) (by omega)]
+        simp)
+    refine ⟨h', h1, ?_, ⟨by simp; omega, by show fr ≤ v.cap; omega, ?_⟩, by simp; omega⟩
+    · unfold releaseFrom
+      rw [ite_eq_right (by omega)]
+      simp only [hd]
+      show (match memcpy ha d fr h.nid n with
+        | none => none
+        | some h1 => (dropLoop dtor h.nid 0 n h1).map fun (r : Heap α × List α) => (r.1, ({ data := some d, len := fr, cap := v.cap } : RVec), r.2)) = _
+      rw [he]
+      simp only [hdrop, Option.map_some]
+    · show h1.live d = true ∧ h1.size d = v.cap ∧
+            ∀ i (hi : i < (es.take fr).length), h1.cell d i = some (es.take fr)[i]
+      refine ⟨by rw [hlv1]; exact hald, by rw [hsz1, hasd]; exact hsz, fun i hi => ?_⟩
+      simp at hi
+      rw [hoth1 d hdne, hacd, hcell i (by omega)]
+      simp
 
 /-! ### The link to A1
 
