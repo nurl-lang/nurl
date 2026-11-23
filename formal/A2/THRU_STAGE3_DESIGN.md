@@ -797,6 +797,14 @@ This makes B2's last two cases depend on B3's invariant. The order is therefore:
 
 (1) is the closest to what `callc` reads (`m.st c = some ⟨o, some (.pkg … cs)⟩`), and the call establishes it from `CallThruOK`'s `w ∉ roots (mutNames Γ args)` together with the package invariant that a package's captures are its entry's name dependencies.
 
+**The call side (B3): what `CallA.anch` is used for.** Four uses (2026-11-23), and all but one are met by the relaxed clause:
+1. **`CallA.post_rootb` (Call.lean).** The call's context change leaves every borrowed parameter's entry as it was. At a moved or changed argument, a held root is impossible: an argument is a killable name of the `letcall` / `callc`, and the clause keeps held roots out of those. At the roots of `mutNames Γ args` (what an argument closure may change by name), the clause says nothing. **This is the one use that needs AGORA-963's fact**, in its typing form: no held root is a root of `mutNames Γ args`.
+2. **CallInv.lean:257.** The new `Inv`'s anchors for an outer borrowed parameter after the call is placed. The renamed body's killable names are `≥ base` or `inout` arguments (`Step.killVars_sub`'s call case), and an outer held root is none of them. So the relaxed clause carries over (transport: `of_ty` / `extend`).
+3. **CallInv.lean:540 (`recCase`).** It only enlarges `F` (`.mono`).
+4. **CallMem.lean:568/573.** An argument's copy at entry (`rhs_pres`) asks `NoHeld` at the argument, a killable name, so the relaxed clause suffices.
+
+So `CallA.anch` can become the relaxed R-form with the held clause over `s.killVars`, plus a premise for (1). That premise is the call-site twin of 963's store-level clause: `w ∉ roots (mutNames Γ args)` for each held root `w`, the same condition `CallThruOK` asks at a route-U call. **The two must be proved to agree.** A package's captures are its entry's name dependencies (`MInv.held`, `NamesIn`), so the store-level clause gives the typing-level one on the strict context. Weakening (`StmtT.sub`) can only add name dependencies, so the premise is asked of the context at the call, before weakening, as `CallT`'s other premises are.
+
 The premise of the call (`CallThruOK`) narrows too (finding above): other
 arguments reach `w` only by name. A `.self` path (a borrow `&w` passed
 beside `vv`) would let the callee view inside `w`'s elements through a
