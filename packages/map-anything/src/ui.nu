@@ -145,6 +145,7 @@ footer a { color: var(--dim); }
 "use strict";
 var $ = function (id) { return document.getElementById(id); };
 var picked = [];
+var pickGen = 0;  // bumped by every pick: a slower, older read gives way
 var videoSecs = 0;  // the picked video's length, once the browser has read it
 var uploading = false;  // one upload at a time; picking waits for it
 var CHUNK = 32 * 1048576;
@@ -184,10 +185,59 @@ function pick(files) {
     if (skipped) msg += (msg ? " — " : "") + skipped + " unsupported file" + (skipped > 1 ? "s" : "") + " skipped";
   }
   $("picked").textContent = msg;
+  $("go").disabled = true;
+  if (!picked.length) { $("thumbs").textContent = ""; viewsHint(); return; }
+  /* A phone's gallery hands the page a file it may let it read only once:
+     reading it for the video's length (or a thumbnail) and again for the
+     upload fails the second time — a "network error", or a TypeError from
+     its stream. So every picked file is read into memory here, once, and
+     everything after — thumbnails, the length, the upload's pieces — uses
+     that copy. Past 1.5 GB the originals are kept (and not probed). */
+  var gen = ++pickGen, list = picked.slice(), done = 0, copies = [];
+  if (total > 1536 * 1048576) { pickedReady(gen, list, msg, false); return; }
+  $("picked").textContent = msg + " — reading…";
+  (function next() {
+    if (gen !== pickGen) return;            /* a newer pick took over */
+    if (done === list.length) { pickedReady(gen, copies, msg, true); return; }
+    var f = list[done];
+    readAll(f).then(function (buf) {
+      var c = new File([buf], f.name, { type: f.type, lastModified: f.lastModified });
+      c.inMemory = true;
+      copies.push(c);
+      done++;
+      if (list.length > 1) $("picked").textContent = msg + " — reading " + done + "/" + list.length + "…";
+      next();
+    }, function (e) {
+      if (gen !== pickGen) return;
+      picked = [];
+      $("picked").textContent = "this device could not read " + f.name + " (" + (e && e.name || e) + ")";
+    });
+  })();
+}
+
+/* the whole file into memory: Blob.arrayBuffer, or a FileReader where it
+   is missing */
+function readAll(f) {
+  if (f.arrayBuffer) return f.arrayBuffer();
+  return new Promise(function (ok, bad) {
+    var r = new FileReader();
+    r.onload = function () { ok(r.result); };
+    r.onerror = function () { bad(r.error); };
+    r.readAsArrayBuffer(f);
+  });
+}
+
+/* the picked files (copies in memory when probe is set) are ready to show */
+function pickedReady(gen, files, msg, probe) {
+  if (gen !== pickGen) return;
+  picked = files;
+  $("picked").textContent = msg;
   $("go").disabled = picked.length === 0;
+  var vids = picked.filter(isVideo);
   var th = $("thumbs");
   th.textContent = "";
-  picked.slice(0, 24).forEach(function (f) {
+  /* thumbnails read the file too: only from the copies */
+  (probe ? picked.slice(0, 24) : []).forEach(function (f) {
     if (!isImage(f)) return;
     var im = document.createElement("img");
     im.src = URL.createObjectURL(f);
@@ -196,7 +246,7 @@ function pick(files) {
   });
   if (!$("o-name").value && picked.length) $("o-name").placeholder = picked[0].name.replace(/[.][^.]*$/, "");
   videoSecs = 0;
-  if (vids.length === 1) {
+  if (probe && vids.length === 1) {
     /* the length, read by the browser itself, so the hint can say how
        densely the frames will sample it */
     /* a later pick may finish reading first: only this pick's answer counts */
@@ -320,6 +370,19 @@ function putPiece(url, body, onprog) {
    40 MiB cap. */
 function put(url, file, onprog) {
   if (file.size <= CHUNK) return putPiece(url + "?offset=0", file, onprog);
+  /* a picked file is normally a copy in memory (see pick): its slices are
+     plain memory, safe to cut; only an original kept for its size goes
+     through the stream below */
+  if (file.inMemory) {
+    var at = 0;
+    var nextSlice = function () {
+      if (at >= file.size) return Promise.resolve();
+      var here = at, end = Math.min(file.size, at + CHUNK);
+      at = end;
+      return putPiece(url + "?offset=" + here, file.slice(here, end), function (k) { onprog(here + k); }).then(nextSlice);
+    };
+    return nextSlice();
+  }
   var off = 0;
   /* one piece of exactly n bytes (the last may be shorter), from memory */
   function sendPiece(body, n) {
