@@ -16,3 +16,10 @@
   borrowed-result function that hands back only literals, which it used to
   report as unsupported: seven more hole probes now translate, and the six
   that must be rejected are.
+- **The verified checker accepts a return from inside a loop beside a
+  fall-off result.** Its block rule asked every exit of a block to leave
+  from exactly the block's end. It now joins the end with the exits'
+  contexts when they differ, as it already joins an `if`'s arms, which A2's
+  `Exits.blk` and `sub` allow. `bare_view_of_a_loop_element_over_a_param_handed_back_runs_clean`
+  is accepted. Over the 154 translated sweep programs no other verdict
+  changes, and all 99 that must be rejected still are.
