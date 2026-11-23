@@ -14,7 +14,13 @@ lines (a finding: function, line, message) and one `eng verdict` line
         `run.py --nurlc` (default: results_nurlc.tsv, every hole probe)
         against the reference checker's verdict recorded there
 
-(NURLC=<binary>.)  Exit status 1 if anything differs.
+(NURLC=<binary>; NCORE_ENGCMP_TIMEOUT=<seconds> per program, default 300.)
+Exit status 1 if anything differs.  With --verdicts, a program the engine
+did not finish (a timeout, nurlc killed or crashing, no `eng verdict`
+line) is no verdict: it is listed apart as "did not run", never counted as
+agreeing or differing, and the exit status is 2 if any did (1 still wins
+when a verdict differs).  Every difference is listed, sorted, so two runs
+on one compiler print the same lines (AGORA-912).
 """
 
 import os
@@ -31,11 +37,18 @@ KIND = {"s": 1, "ptr": 2, "opt": 3, "res": 4, "slice": 5, "closure": 6, "String"
 ROOT = os.environ.get("NCORE_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+TIMEOUT = int(os.environ.get("NCORE_ENGCMP_TIMEOUT") or "300")
+
+
 def emit(path):
     nurlc = os.environ.get("NURLC") or os.path.join(ROOT, "build", "nurlc")
     r = subprocess.run([nurlc, "--emit-core", "--engine", path], cwd=ROOT, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=300)
+                       encoding="utf-8", errors="replace", timeout=TIMEOUT)
     return r.returncode, r.stdout, r.stderr
+
+
+# A verdict that is none: the engine did not finish the program.
+NORUN = "norun: "
 
 
 def py_types(text):
@@ -128,9 +141,20 @@ def engine_verdict(path):
     try:
         rc, text, err = emit(path)
     except subprocess.TimeoutExpired:
-        return "timeout", []
+        return NORUN + f"timed out after {TIMEOUT} s", []
+    except OSError as e:                       # the process could not be started
+        return NORUN + f"could not run nurlc: {e}", []
+    # (Killed by a signal, out of memory under load, or an internal error:
+    # no verdict, whatever it printed before.)
+    if rc < 0:
+        return NORUN + f"nurlc killed by signal {-rc}", []
+    if any("internal error" in x for x in err.splitlines()):
+        bad = next(x for x in err.splitlines() if "internal error" in x)
+        return NORUN + "crash: " + bad[:80], []
     if rc != 0:
-        first = next((l for l in err.splitlines() if "error" in l), "nurlc failed")
+        first = next((l for l in err.splitlines() if "error" in l), None)
+        if first is None:
+            return NORUN + f"nurlc failed (rc={rc}) with no diagnostic", []
         msg = first.split("error:", 1)[-1].strip()
         if any(w in msg for w in WALK_RULES):
             return "rejected", [("nurlc", "0", "the walk: " + msg[:60])]
@@ -142,8 +166,7 @@ def engine_verdict(path):
         elif line.startswith("eng\terr\t"):
             errs.append(tuple(line.split("\t")[2:5]))
     if verdict == "none":
-        bad = [x for x in err.split("\n") if "internal error" in x]
-        verdict = "crash: " + (bad[0][:80] if bad else f"rc={rc}")
+        verdict = NORUN + f"no verdict line (rc={rc})"
     return verdict, errs
 
 
@@ -169,17 +192,22 @@ def verdicts(results, jobs):
             if not os.path.exists(path):
                 path = os.path.join(ROOT, *sub, name)
         work.append((name, path))
-    same, differ = 0, []
+    same, differ, norun = 0, [], []
     with ProcessPoolExecutor(max_workers=jobs) as ex:
         for name, verdict, errs in ex.map(_verdict_job, work):
-            if verdict == ref[name]:
+            if verdict.startswith(NORUN):
+                norun.append((name, verdict[len(NORUN):]))
+            elif verdict == ref[name]:
                 same += 1
             else:
                 differ.append((name, ref[name], verdict, errs[:1]))
-    for name, want, got, errs in differ[:40]:
+    for name, want, got, errs in sorted(differ):
         print(f"{name}: reference {want}, engine {got} {errs[0] if errs else ''}")
-    print(f"engcmp: {same} of {same + len(differ)} programs get the reference's verdict")
-    return 1 if differ else 0
+    for name, why in sorted(norun):
+        print(f"{name}: did not run: {why}")
+    print(f"engcmp: {same} of {same + len(differ)} programs get the reference's verdict"
+          + (f"; {len(norun)} did not run (no verdict, not compared)" if norun else ""))
+    return 1 if differ else (2 if norun else 0)
 
 
 def main(argv):
