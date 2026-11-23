@@ -80,6 +80,13 @@ def lean_ty(t):
         t = "%" + t   # a type argument's name, inside another (`%Vec__String`)
     if t.startswith("%Vec__"):
         return f"(.vec {lean_ty(t[len('%Vec__'):])})"
+    if t.startswith("%Channel__"):
+        # A3.4: a `Channel A` is a lock share whose payload is its queue and
+        # its closed flag, `lk (prod (vec A) int)` (formal/A2/Syntax.lean,
+        # `Ty.ChanOf`). Only an element that holds no destructor value: a
+        # channel of those is a lock of the glued struct (`Ty.dtor g …`,
+        # nurlc's `ChImpl A` with its drop), not translated.
+        return f"(.lk (.prod (.vec {chan_elem(t[len('%Channel__'):])}) .int))"
     if t == "%String":
         return "(.vec .int)"   # a Vec of bytes (formal/A2/Syntax.lean)
     if t.startswith("%Slice__"):
@@ -106,6 +113,16 @@ def lean_ty(t):
         finally:
             _EXPANDING.discard(t)
     raise Unsupported(f"type {t}")
+
+
+def chan_elem(t):
+    """A channel's element type, where it holds no destructor value: an
+    integer, a String, or a Vec of integers. Anything else is Unsupported."""
+    if t in INT_TYS or t in ("i", "u", "b") or t in ("String", "%String"):
+        return lean_ty(t)
+    if t.lstrip("%").startswith("Vec__") and t.lstrip("%")[len("Vec__"):] in INT_TYS:
+        return lean_ty(t)
+    raise Unsupported(f"a channel of {t}")
 
 
 def _struct_ty(fs):
@@ -463,6 +480,35 @@ class Fn:
             for t in reversed(pre):
                 s = f"(.letv {t} (.expr (.lit 0)) {s})"
             return s
+        if f.startswith("chan_new__") and n == 0:
+            # `lockNew` of a fresh queue and a 0 flag (A3.4)
+            x = self.fresh() if x is None else x
+            q, k, p = self.fresh(), self.fresh(), self.fresh()
+            el = chan_elem(f[len("chan_new__"):])
+            return (f"(.letv {q} (.new {el}) (.letv {k} (.expr (.lit 0)) (.letv {p} (.pair {q} {k}) "
+                    f"(.letv {x} (.lockNew (.prod (.vec {el}) .int) {p}) {rest}))))")
+        if f.startswith("Channel_share__") and n == 1 and ops[0] != "c":
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.lockClone {rd(ops[0])}) {rest})"
+        if f.startswith("chan_send__") and n == 2 and ops[0] != "c":
+            # the value moves to the back of the queue, as `vec_push` takes it;
+            # the answer (sent or dropped on a closed channel) is an integer
+            chan_elem(f[len("chan_send__"):])
+            pre = []
+            y = self.argvar(ops[1], pre)
+            x = self.fresh() if x is None else x
+            s = f"(.letv {x} (.chanSend {rd(ops[0])} {y}) {rest})"
+            for t in reversed(pre):
+                s = f"(.letv {t} (.expr (.lit 0)) {s})"
+            return s
+        if (f.startswith("chan_recv__") or f.startswith("chan_try_recv__")) and n == 1 and ops[0] != "c":
+            # the head moves out as `some`, or `none`: an owned `sum int A`
+            w = "true" if f.startswith("chan_recv__") else "false"
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.chanRecv {w} {rd(ops[0])}) {rest})"
+        if f.startswith("chan_close__") and n == 1 and ops[0] != "c":
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.chanClose {rd(ops[0])}) {rest})"
         if f.startswith("vec_len__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.expr (.len {rd(ops[0])})) {rest})"
