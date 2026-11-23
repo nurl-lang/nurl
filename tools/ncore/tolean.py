@@ -33,6 +33,11 @@ def lean_ty(t):
     """An IR type as an A2 type: an integer, or a `Vec` of them (`%Vec__T`)."""
     if t in INT_TYS or t in ("i", "u", "b"):
         return ".int"
+    if t == "i8*":
+        # a raw string bound from a literal or a fresh string: owned text,
+        # A2's buffer of bytes (MEMORY.md §1; one held in a value is a view,
+        # §2.13, and is not translated yet)
+        return "(.vec .int)"
     if t.startswith("{ i1, ") and t.endswith(" }"):
         # an option: `sum int t`, None the first variant (formal/A2/Syntax.lean)
         return f"(.sum .int {lean_ty(t[len('{ i1, '):-2])})"
@@ -198,6 +203,8 @@ class Fn:
             return f".getr {self.var(int(words[1][1:]))}"
         if k == "none":
             return ".expr (.lit 0)"
+        if k == "use" and words[1] == "c" and dest is not None and self.fn["vars"].get(dest) == "i8*":
+            return ".new .int"   # a literal: its own copy of the text
         if k == "use":
             op = words[1]
             if op != "c" and self.fn["vars"].get(int(op[1:]), "i64") not in INT_TYS:
@@ -236,6 +243,18 @@ class Fn:
         """A standard-library call A2 has a construct for, or None."""
         f, n = words[1], int(words[2])
         ops = words[3:3 + n]
+        if f == "nurl_str_cat" and n == 2:
+            # a fresh string from two it reads: each read checked live
+            x = self.fresh() if x is None else x
+            s = f"(.letv {x} (.new .int) {rest})"
+            for op in ops:
+                if op != "c":
+                    t = self.fresh()
+                    s = f"(.letv {t} (.expr (.len {self.pvar(op)})) {s})"
+            return s
+        if f == "nurl_str_len" and n == 1 and ops[0] != "c":
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.expr (.len {self.pvar(ops[0])})) {rest})"
         if f == "string_from" and n == 1:
             # a fresh owned String of a text the IR does not track
             x = self.fresh() if x is None else x
@@ -380,7 +399,14 @@ class Fn:
         for t in reversed(self.lits):
             inner = f"(.letv {t} (.expr (.lit 0)) {inner})"
         body = f"(.block {inner})"
-        params = ", ".join(f"(.inp, {lean_ty(self.fn['vars'][i])})" for i in range(self.np))
+        def mode(i):
+            fl = self.fn["flags"].get(i, 0)
+            if fl & 4:
+                return ".sink"            # `sink`: the callee takes it over
+            if fl & 2:
+                return "(.inout .replace)"  # `inout`: the caller's, changed in place
+            return ".inp"
+        params = ", ".join(f"({mode(i)}, {lean_ty(self.fn['vars'][i])})" for i in range(self.np))
         own = "true" if self.res_own else "false"
         return (f"{{ params := [{params}], resTy := {self.res_ty}, resOwn := {own}, lends := [], rholds := [],\n"
                 f"    outHolds := [], body := {body}, nvars := {self.next + 1} }}")
