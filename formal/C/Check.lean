@@ -335,7 +335,13 @@ def checkStmt : Ctx → List Var → Stmt → Option Ctx
       | none => none
     | none => none
   | Γ, F, .frozen z s => checkStmt Γ (F ++ z) s
-  | _, _, _ => none
+  -- (the forms decided elsewhere, C1, or not at all: one arm each, so the
+  -- match does not overlap)
+  | _, _, .letcall _ _ _ _ => none
+  | _, _, .ite _ _ _ => none
+  | _, _, .while _ _ => none
+  | _, _, .scope _ _ => none
+  | _, _, .rbind _ _ => none
 
 theorem checkStmt_sound {P : Prog} : ∀ {s : Stmt} {Γ : Ctx} {F : List Var} {Δ : Ctx},
     checkStmt Γ F s = some Δ → StmtT P Γ F s Δ := by
