@@ -59,6 +59,8 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          # git, not the REST API (ci.yml's `filter` step says why).
+          token: ''
           # Every exclusion must hold (see ci.yml's `code` step, which
           # also says why CHANGELOG.md is one).
           predicate-quantifier: 'every'
