@@ -60167,6 +60167,25 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
     } {}
 }
 
+// The handover of `src` to `name` stashed for this statement at `line` is
+// one the generated code copies where `src` lends and moves where it owns
+// (gen_assign's `inout` move, `__io_move`): its mark `:m` becomes `:k`, the
+// row's field 6 `ak`. The mark rides on the row itself, so no other
+// handover - another line, another function, a second `=` on this line -
+// can read it. An entry not found keeps `:m`, the rule as before
+// (AGORA-959).
+@ __ioc_mark_copy s name s src i line → v {
+    : s al ( nurl_sym_get g_bck `paliases` )
+    : s old ( nurl_str_cat4 src ` ` ( nurl_str_int line ) ( nurl_str_cat3 ` ` name `:m` ) )
+    : i at ( nurl_str_find al old )
+    ? < at 0 { ^ v } {}
+    : i e + at ( nurl_str_len old )
+    : i n ( nurl_str_len al )
+    ? & < e n != ( nurl_str_get al e ) 32 { ^ v } {}
+    ? & > at 0 != ( nurl_str_get al - at 1 ) 32 { ^ v } {}
+    ( bck_put `paliases` ( nurl_str_cat3 ( nurl_str_slice al 0 - e 1 ) `k` ( nurl_str_slice al e - n e ) ) )
+}
+
 // The stdlib container calls that drop elements, or hand them out to a
 // caller that may drop them (vec_pop's result), without releasing the
 // container: a value stored into the container may go with them.
@@ -60351,10 +60370,13 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
             // (`:m`: a handover by name the generated code makes a move,
             // amv_open — the row's field 6 is `am`.)
             : b amov & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:m` )
+            // (`:k`: such a move that copies where the source lends - an
+            // `inout` parameter's, __ioc_mark_copy; field 6 `ak`.)
+            : b akop & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:k` )
             : b agiv & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:g` )
-            : s apn ? | | | acall aasg amov agiv ( nurl_str_slice apt 0 - ( nurl_str_len apt ) 2 ) apt
+            : s apn ? | | | | acall aasg amov akop agiv ( nurl_str_slice apt 0 - ( nurl_str_len apt ) 2 ) apt
             : s apf ? ( seq apn `-` ) `-` ( nurl_str_cat `=` apn )
-            ( bck_record2 `maybealias` anm ( nurl_str_to_int aln ) apf ? acall `c` ? aasg `a` ? amov `am` ? agiv `g` `0` )
+            ( bck_record2 `maybealias` anm ( nurl_str_to_int aln ) apf ? acall `c` ? aasg `a` ? amov `am` ? akop `ak` ? agiv `g` `0` )
         }
         ~ != 0 ( nurl_str_len frest ) {
             : s fnm ( str_first_word frest )
@@ -64645,7 +64667,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // this visit finds it to be.)
                 : s amk ( bck_field rec 6 )
                 : b a_asn == ( nurl_str_get amk 0 ) 97
-                : b a_mv ( seq amk `am` )
+                : b a_mv | ( seq amk `am` ) ( seq amk `ak` )
                 : ~ b a_moved F
                 ? & ( bck_sound ) apart {
                     // Another name took this one's handle: it is a borrow of
@@ -64672,7 +64694,11 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                             = g_bck_br_next -1
                             // (…a handle that a `:` join's field borrow holds, `bxf_`,
                             // taken by another name: that one too - agora #242.)
-                            ? & != 0 g_bck_bxf_any ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` avn ) ) `1` ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) } {}
+                            // (Not over an `ak` handover: the target is given a copy
+                            // where the source lends, so it is no borrow of the
+                            // struct - an `inout` parameter, __ioc_mark_copy;
+                            // AGORA-959.)
+                            ? & & != 0 g_bck_bxf_any ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` avn ) ) `1` ) ! ( seq amk `ak` ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) } {}
                             // (An arm of a `:` join, `g`, that is a copy of an
                             // owner's handle — `: c ? k cur other`: the
                             // binding is one too, `hc_`, while every borrow
@@ -72409,7 +72435,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // the generated code makes — amv_open: the target takes the source's
     // run-time flag, so what it may own goes with it and a borrow loses
     // nothing. Agora #667.)
-    : i amv_k ? & == kc 6 ( seq ( bck_field rec 6 ) `am` ) ( bck_field_int rec 1 ) -1
+    : i amv_k ? & == kc 6 | ( seq ( bck_field rec 6 ) `am` ) ( seq ( bck_field rec 6 ) `ak` ) ( bck_field_int rec 1 ) -1
     : ~ s brest ( nurl_str_cat ist `` )
     : i n ( nurl_str_len ist )
     : ~ i k 0
@@ -79736,6 +79762,8 @@ unsafe @ gen_assign i lex i syms i cg → s {
             ( nurl_print `  ` ) ( nurl_print __io_l ) ( nurl_print ` = xor i1 ` ) ( nurl_print __io_f ) ( nurl_print `, 1\n` )
             = store_val ( mem_emit_cloneif cg vt store_val __io_l )
             ( mem_udrop_flag_set syms cg __io_src `0` )
+            // (…and the walk is told, on this handover's own row: AGORA-959.)
+            ? & != g_borrowck 0 == g_bck_rec_off 0 { ( __ioc_mark_copy name bck_rhs_val bck_line ) } {}
         } {}
         // …while a binding whose value another owner keeps is copied in: a
         // parameter the function only borrows (h201: `= o b` with `b` a
