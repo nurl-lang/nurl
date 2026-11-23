@@ -4953,11 +4953,17 @@ class FnCheck:
                     # moves it (the option is moved on that path, read after
                     # it is a possibly-moved value; agora #175)
                     st.vals[psrc] = AV("O", (), (), self.held_of_own(st.vals[psrc], psrc))
+                src_var = self.fn.vars.get(rv[1][1]) if (rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]) else None
+                # (a binding codegen gave a value of its own - the copy-in or
+                # the keyed takeover it marks cpcopy, read just below - is
+                # handed the lend as it is, and owns it there: it is no view
+                # of what the lend borrowed, whether or not a copy of its type
+                # could be made - a `??P` has none; AGORA-971)
+                cp_given = cur is not None and cur.own in ("O", "P", "L") and getattr(src_var, "cpcopy", False)
                 new = self.rvalue(st, rv, ln, ddepth, v.ty, v.name, copy_ok=not repoint, dest_vid=vid,
                                   named=v.kind != "temp",
                                   lend_owner=outer if v.kind == "temp" else (cursor_lends if v.mut and repoint else (lambda x: False)),
-                                  keep_lend=not repoint and v.kind != "temp" and self.kept_lend(st, psrc))
-                src_var = self.fn.vars.get(rv[1][1]) if (rv[0] == "use" and rv[1][0] == "v" and not rv[1][2]) else None
+                                  keep_lend=cp_given or (not repoint and v.kind != "temp" and self.kept_lend(st, psrc)))
                 if (cur is not None and cur.own == "P" and vid in self.pidx and self.pidx[vid] < self.ncap
                         and new.own == "L" and getattr(src_var, "cpcopy", False)):
                     # a capture given what a call lends of what dies with the
