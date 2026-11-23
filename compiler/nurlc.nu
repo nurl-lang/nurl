@@ -50420,6 +50420,31 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ^ F
 }
 
+// …asked of the value held at `ptr` itself, as an i1 (or `1` / `0` where its type
+// answers alone): an option by its active side — `None` owns nothing,
+// whatever the payload's type — and a result by the side it holds. A side
+// whose null key may leave something owned (a struct by its first field)
+// answers no (AGORA-965).
+@ __ud_null_triv_rt i cg s vt s ptr → s {
+    : s ll ( nurl_llty ( __udty_val vt ) )
+    ? == 0 ( nurl_str_starts ll `{ i1, ` ) { ^ ? ( __ud_null_trivial vt ) `1` `0` } {}
+    : s fs ( __seplist_rest ( __agg_fields ll ) )
+    : s f1 ( seplist_first fs )
+    : s rest ( __seplist_rest fs )
+    : b pT | ( __ud_null_trivial f1 ) ( __is_plain_num_llty f1 )
+    : b opt == 0 ( nurl_str_len rest )
+    : b eT ? opt T | ( __ud_null_trivial ( seplist_first rest ) ) ( __is_plain_num_llty ( seplist_first rest ) )
+    ? & pT eT { ^ `1` } {}
+    ? & ! pT ! eT { ^ `0` } {}
+    // (Only now is the value read: the tag says the payload side, trivial
+    // there if pT, else on the other.)
+    : s val ( __ud_load cg vt ptr )
+    : s tg ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print tg ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+    // (the tag says the payload side: trivial there if pT, else on the other)
+    ^ ? pT ( nurl_str_cat tg `` ) ( __not_i1 cg tg )
+}
+
 // An LLVM integer or float type: a number, which owns nothing.
 @ __is_plain_num_llty s t → b {
     ^ | | | | | | ( seq t `i1` ) ( seq t `i8` ) ( seq t `i16` ) ( seq t `i32` ) ( seq t `i64` ) ( seq t `double` ) ( seq t `float` )
@@ -52313,7 +52338,9 @@ unsafe @ __src_has_raw_ptr s text → b {
             // never a release under a holder.)
             : ~ s __mtaken `0`
             : s __mnn ? & __mkey != 0 ( nurl_str_len __mnk ) ( __i8_nonnull cg __mnk ) ``
-            : b __mtriv ( __ud_null_trivial ty )
+            // (…by the side the value holds: a `None` owns nothing whatever its
+            // payload type is, so its null key takes over no owner either.)
+            : s __mtriv ? __mkey ( __ud_null_triv_rt cg ty ptr ) `0`
             // (…and an owner whose key does not name what the binding holds —
             // a struct a call lent a field of, `( ex a )` — is no owner of
             // it: taken over whole, the binding released the field only and
@@ -52369,7 +52396,7 @@ unsafe @ __src_has_raw_ptr s text → b {
                             // (…unless a null key says the value owns nothing —
                             // `None`, an empty String: then no owner is taken
                             // over, and each releases its own, AGORA-965.)
-                            : s __msel ? __mtriv ( nurl_str_cat __mm `` ) ( __or_i1 cg __mm ( __not_i1 cg __mnn ) )
+                            : s __msel ? ( seq __mtriv `1` ) ( nurl_str_cat __mm `` ) ? ( seq __mtriv `0` ) ( __or_i1 cg __mm ( __not_i1 cg __mnn ) ) ( __or_i1 cg __mm ( __and_not cg ( __not_i1 cg __mnn ) __mtriv ) )
                             : s __mtk ( __and_i1 cg __of __msel )
                             : s __mrest ( __and_not cg __of __msel )
                             : s __nf2 ( nurl_cg_reg cg )
