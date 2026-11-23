@@ -993,3 +993,7 @@ import C
 #print axioms C.eq_of_agree
 #print axioms C.checkS_sound
 #print axioms C.checkedS_memory_safe
+-- Phase C2: subsumption by certificate: Weaker decided over the finite domain
+#print axioms C.weakerB_sound
+#print axioms C.checkC_sound
+#print axioms C.checkedC_memory_safe
