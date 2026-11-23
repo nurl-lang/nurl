@@ -1,5 +1,5 @@
-// map: §7.4 | A2 | runs-clean | - | AGORA-961: a String join of two closure locals bound by `:`, assigned to a capture
-// AGORA-961 (closed): main 07e02a7 leaked (LSan)
+// map: §7.4 | A2 | runs-clean | - | AGORA-953 (found in AGORA-961): a String join of two closure locals bound by `:`, assigned to a capture
+// AGORA-953 (closed by its `__jalias` move): main 07e02a7 leaked (LSan)
 $ `stdlib/core/string.nu`
 
 @ id ? String a → ?String { ^ a }

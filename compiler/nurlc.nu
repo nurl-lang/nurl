@@ -80108,27 +80108,23 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 ( nurl_sym_def syms `__last_join_own__` `true` )
             } {}
         } {}
-        // (…and a binding of such a join given by name, `: e ? c ( id a ) (
-        // id b )  = o e`: a cursor over more than one owner that owns its
-        // value on no path, or on some only (`dyn`), is copied in where it
-        // does not, as the join itself would be.
-        // The capture owns what it holds on every path, the binding gives up
-        // its own where it had one, and the join's sources keep their drops.
-        // Its flag handed over instead, the capture took over every source
-        // the join read, and the one it did not select leaked; AGORA-961.)
+        // (…and a binding of such a join given by name that may lend the
+        // capture itself, `: e ? c ( id o ) ( id a )  = o e`: one that owns
+        // its value on no path, or on some only (`dyn`), is copied in where it
+        // does not, as the join itself would be. The capture owns what it
+        // holds on every path and the binding gives up its own where it had
+        // one. Its flag handed over instead, the capture stayed a lend of its
+        // own old value, which the store releases: AGORA-961. A cursor over
+        // the closure's own locals is taken over owner by owner, no copy:
+        // __mem_udrop_bind_flag's `__jalias` move, AGORA-953.)
         : ~ b __cp_bjoin F
         ? & != 0 g_bck_closure_depth ( is_ident_tok bck_rhs_tt ) { ? & != 0 ( nurl_str_len __ud_ptr ) != 0 ( nurl_sym_len2 syms __ud_ptr `__outer_owned` ) {
                 : s __bj_sp ( mem_udrop_ptr_of syms bck_rhs_val )
                 : s __bj_sb ( nurl_sym_get2 syms __bj_sp `__sborrow` )
-                // (Only a cursor over more than one owner: over one, the capture
-                // takes that owner's value over, as before - no copy.)
-                // (…or one that may hand back the capture's own value - `: e ? c (
-                // id o ) ( id a )  = o e`: the old value goes below, so the value
-                // is copied first wherever it lent, as `= o ( id o )` is not but
-                // `= o ? c ( id o ) …` is.)
+                // (The old value goes below, so the value is copied first
+                // wherever it lent, as `= o ? c ( id o ) …` is.)
                 : b __bj_self & != 0 ( nurl_str_len __bj_sp ) ( str_contains_word ( bck_swap_char ( nurl_sym_get2 syms bck_rhs_val `__pljr` ) 10 32 ) name )
-                : b __bj_multi | __bj_self & != 0 ( nurl_str_len __bj_sp ) != 0 ( nurl_str_len ( str_skip_word ( nurl_sym_get2 syms __bj_sp `__alias` ) ) )
-                ? & & & __bj_multi ! ( seq __bj_sp __ud_ptr ) | ( seq __bj_sb `dyn` ) ( seq __bj_sb `1` ) ( __clone_supported vt syms ) {
+                ? & & & __bj_self ! ( seq __bj_sp __ud_ptr ) | ( seq __bj_sb `dyn` ) ( seq __bj_sb `1` ) ( __clone_supported vt syms ) {
                     : s __bj_f ( mem_udrop_flag_get syms cg __bj_sp )
                     : s __bj_c ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __bj_c ) ( nurl_print ` = xor i1 ` ) ( nurl_print __bj_f ) ( nurl_print `, 1\n` )
