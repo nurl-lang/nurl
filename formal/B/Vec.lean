@@ -33,8 +33,10 @@ and an id is never reused. C's `realloc` ends its old block even when it
 hands back the same address, which matches the C standard; `Heap.realloc`
 always gives a new id.
 
-What B1 leaves out, for the next steps: a borrowed view (`cap < 0`,
-`vec_borrow_raw`), the packed-string layout, element destructors (cells
+Borrowed views (`vec_borrow_raw`, `cap < 0`) are covered for reads and for
+the push that detaches them (`vpush_ok`: the viewed block is never written
+or freed). What B1 leaves out, for the next steps: the packed-string layout,
+the runtime's `nurl_vec_drop` (C code; it frees a view's handle only), element destructors (cells
 here are values that are moved by bit copy, as `mem_take` makes them),
 byte sizes and their overflow (`alloc_size`), and `__vec_release_from`, the
 truncation path for elements whose drop runs program code.
@@ -800,6 +802,164 @@ theorem reserve_ok {h : Heap α} {v : RVec} {es : List α} (n : Nat) (hw : h.WF)
     exact ⟨h1, v1, he, hr1, hw1, hroom, hlen⟩
   · rw [ite_eq_right hc]
     exact ⟨h, v, rfl, hr, hw, by omega, rfl⟩
+
+/-! ### Borrowed views (`vec_borrow_raw`, `cap < 0`)
+
+A view points into storage another owner holds: block `blk`, from cell
+`off`. vec.nu keeps such a `Vec` at `cap = -1`, and "the buffer is not ours
+to grow, shrink or free". The theorems below say that this holds. A read
+sees the owner's cells. A push detaches: it copies the live cells into a
+fresh block and writes only there, so the owner's block keeps its cells and
+stays live. `vec_free` of a view releases nothing of the owner's. -/
+
+/-- A borrowed view: `len` cells of block `blk` from cell `off`. -/
+structure VView where
+  blk : Nat
+  off : Nat
+  len : Nat
+
+/-- The view `w` on `h` sees the list `es`. -/
+def VRep (h : Heap α) (w : VView) (es : List α) : Prop :=
+  w.len = es.length ∧ h.live w.blk = true ∧ w.off + w.len ≤ h.size w.blk ∧
+  ∀ i (hi : i < es.length), h.cell w.blk (w.off + i) = some es[i]
+
+/-- `nurl_memcpy` of `n` cells, from block `b` at `o` to block `d` at 0. -/
+def memcpy (h : Heap α) (b o d : Nat) : Nat → Option (Heap α)
+  | 0 => some h
+  | n + 1 =>
+    match memcpy h b o d n with
+    | none => none
+    | some h1 =>
+      match h1.load b (o + n) with
+      | none => none
+      | some y => h1.store d n y
+
+theorem memcpy_ok {h : Heap α} {b o d : Nat} (hbd : b ≠ d) (hlb : h.live b = true)
+    (hld : h.live d = true) : ∀ n, o + n ≤ h.size b → n ≤ h.size d →
+    (∀ k, k < n → (h.cell b (o + k)).isSome) →
+    ∃ h', memcpy h b o d n = some h' ∧ h'.live = h.live ∧ h'.size = h.size ∧ h'.nid = h.nid ∧
+      (∀ c, c ≠ d → h'.cell c = h.cell c) ∧
+      ∀ j, h'.cell d j = if j < n then h.cell b (o + j) else h.cell d j := by
+  intro n
+  induction n with
+  | zero =>
+    intro _ _ _
+    exact ⟨h, rfl, rfl, rfl, rfl, fun _ _ => rfl, fun j => by rw [ite_eq_right (by omega)]⟩
+  | succ n ih =>
+    intro hb hd hc
+    obtain ⟨h1, he, hlv, hsz, hn, hoth, hcell⟩ := ih (by omega) (by omega) (fun k hk => hc k (by omega))
+    obtain ⟨y, hy⟩ := Option.isSome_iff_exists.mp (hc n (by omega))
+    have hy1 : h1.cell b (o + n) = some y := by rw [hoth b hbd]; exact hy
+    have hload : h1.load b (o + n) = some y := by
+      simp only [Heap.load, hlv, hsz, hlb, true_and]; rw [ite_eq_left (by omega)]; exact hy1
+    have hin : h1.live d = true ∧ n < h1.size d := ⟨by rw [hlv]; exact hld, by rw [hsz]; omega⟩
+    refine ⟨{ h1 with cell := upd h1.cell d (upd (h1.cell d) n (some y)) }, ?_, hlv, hsz, hn, ?_, ?_⟩
+    · simp only [memcpy, he, hload, Heap.store, hin, and_self, ↓reduceIte]
+    · intro c hc'
+      show (upd h1.cell d _) c = h.cell c
+      simp only [upd, ite_eq_right hc']; exact hoth c hc'
+    · intro j
+      show (upd h1.cell d (upd (h1.cell d) n (some y))) d j = _
+      simp only [upd, ↓reduceIte]
+      by_cases hjn : j = n
+      · subst hjn; rw [ite_eq_left rfl, ite_eq_left (by omega)]; exact hy.symm
+      · rw [ite_eq_right hjn, hcell j]
+        by_cases hj : j < n
+        · rw [ite_eq_left hj, ite_eq_left (by omega)]
+        · rw [ite_eq_right hj, ite_eq_right (by omega)]
+
+/-- `vec_get` on a view. -/
+def vget (h : Heap α) (w : VView) (i : Nat) : Option (Option α) :=
+  if i < w.len then (h.load w.blk (w.off + i)).map some else some none
+
+theorem vget_ok {h : Heap α} {w : VView} {es : List α} (hr : VRep h w es) (i : Nat) :
+    vget h w i = some es[i]? := by
+  obtain ⟨hl, hlv, hsz, hcell⟩ := hr
+  unfold vget
+  by_cases hi : i < w.len
+  · rw [ite_eq_left hi]
+    simp only [Heap.load, hlv, true_and]
+    rw [ite_eq_left (by omega), hcell i (by omega), List.getElem?_eq_getElem (by omega)]
+    rfl
+  · rw [ite_eq_right hi, List.getElem?_eq_none (by omega)]
+
+/-- `vec_push` on a view: `__vec_grow_cap`'s view case (`alloc_grow_cap 4`
+    to at least the length), `__vec_place`'s detach (a fresh `nurl_alloc`,
+    the live cells copied), then the store and the length bump. The result
+    is an ordinary owned `Vec`. -/
+def vpush (h : Heap α) (w : VView) (x : α) : Option (Heap α × RVec) :=
+  let nc := growCap 4 (w.len + 1)
+  match memcpy (h.alloc nc).1 w.blk w.off (h.alloc nc).2 w.len with
+  | none => none
+  | some h1 =>
+    (h1.store (h.alloc nc).2 w.len x).map fun h2 =>
+      (h2, { data := some (h.alloc nc).2, len := w.len + 1, cap := nc })
+
+/-- A push on a view detaches. The result represents `es ++ [x]` in a fresh
+    block, and every block that was there keeps its cells, size and
+    liveness: the owner's storage is never written or freed. -/
+theorem vpush_ok {h : Heap α} {w : VView} {es : List α} (x : α) (hw : h.WF) (hr : VRep h w es) :
+    ∃ h' v', vpush h w x = some (h', v') ∧ Rep h' v' (es ++ [x]) ∧ h'.WF ∧
+      v'.data = some h.nid ∧ h'.nid = h.nid + 1 ∧ h'.live = upd h.live h.nid true ∧
+      ∀ b, b < h.nid → h'.cell b = h.cell b ∧ h'.size b = h.size b := by
+  obtain ⟨hl, hlv, hsz, hcell⟩ := hr
+  have hbn : w.blk < h.nid := by
+    rcases Nat.lt_or_ge w.blk h.nid with e | e
+    · exact e
+    · rw [hw _ e] at hlv; exact absurd hlv (by simp)
+  have hg := growCap_ge 4 (w.len + 1)
+  let nc := growCap 4 (w.len + 1)
+  let ha := (h.alloc nc).1
+  have hbd : w.blk ≠ h.nid := by omega
+  have halb : ha.live w.blk = true := by
+    show (upd h.live h.nid true) w.blk = true; simp only [upd, ite_eq_right hbd]; exact hlv
+  have hald : ha.live h.nid = true := by show (upd h.live h.nid true) h.nid = true; simp [upd]
+  have hasb : ha.size w.blk = h.size w.blk := by
+    show (upd h.size h.nid nc) w.blk = _; simp only [upd, ite_eq_right hbd]
+  have hasd : ha.size h.nid = nc := by show (upd h.size h.nid nc) h.nid = nc; simp [upd]
+  have hacb : ∀ j, ha.cell w.blk j = h.cell w.blk j := by
+    intro j; show (upd h.cell h.nid _) w.blk j = _; simp only [upd, ite_eq_right hbd]
+  obtain ⟨h1, he, hlv1, hsz1, hn1, hoth1, hcell1⟩ := memcpy_ok (o := w.off) hbd halb hald w.len
+    (by rw [hasb]; exact hsz) (by rw [hasd]; omega)
+    (fun k hk => by rw [hacb, hcell k (by omega)]; rfl)
+  have hin : h1.live h.nid = true ∧ w.len < h1.size h.nid :=
+    ⟨by rw [hlv1]; exact hald, by rw [hsz1, hasd]; omega⟩
+  refine ⟨{ h1 with cell := upd h1.cell h.nid (upd (h1.cell h.nid) w.len (some x)) },
+    { data := some h.nid, len := w.len + 1, cap := nc }, ?_, ⟨?_, ?_, ?_⟩, ?_, rfl, ?_, ?_, ?_⟩
+  · unfold vpush
+    simp only []
+    show (match memcpy ha w.blk w.off h.nid w.len with
+      | none => none
+      | some h1 => (h1.store h.nid w.len x).map fun h2 => (h2, ({ data := some h.nid, len := w.len + 1, cap := nc } : RVec))) = _
+    rw [he]
+    simp only [Heap.store, hin, and_self, ↓reduceIte, Option.map_some]
+  · simp; omega
+  · show w.len + 1 ≤ nc; omega
+  · show h1.live h.nid = true ∧ h1.size h.nid = nc ∧ ∀ i (hi : i < (es ++ [x]).length),
+      (upd h1.cell h.nid (upd (h1.cell h.nid) w.len (some x))) h.nid i = some (es ++ [x])[i]
+    refine ⟨hin.1, by rw [hsz1, hasd], fun i hi => ?_⟩
+    simp only [upd, ↓reduceIte]
+    by_cases hil : i = w.len
+    · subst hil; rw [ite_eq_left rfl, List.getElem_append_right (by omega)]; simp [hl]
+    · rw [ite_eq_right hil, hcell1 i]
+      have hi' : i < es.length := by simp at hi; omega
+      rw [ite_eq_left (by omega), hacb, hcell i hi', List.getElem_append_left hi']
+  · intro b hb
+    show h1.live b = false
+    have hb1 : h1.nid ≤ b := hb
+    rw [hn1] at hb1
+    have hb' : h.nid + 1 ≤ b := hb1
+    rw [hlv1]; show (upd h.live h.nid true) b = false
+    simp only [upd, ite_eq_right (show ¬ b = h.nid by omega)]; exact hw b (by omega)
+  · show h1.nid = h.nid + 1; rw [hn1]; rfl
+  · show h1.live = upd h.live h.nid true; rw [hlv1]; rfl
+  · intro b hb
+    have hbne : b ≠ h.nid := by omega
+    refine ⟨?_, ?_⟩
+    · show (upd h1.cell h.nid _) b = h.cell b
+      simp only [upd, ite_eq_right hbne]; rw [hoth1 b hbne]
+      show (upd h.cell h.nid _) b = h.cell b; simp only [upd, ite_eq_right hbne]
+    · show h1.size b = h.size b; rw [hsz1]; show (upd h.size h.nid nc) b = _; simp only [upd, ite_eq_right hbne]
 
 /-! ### The link to A1
 

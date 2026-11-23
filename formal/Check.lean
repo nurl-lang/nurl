@@ -923,3 +923,6 @@ import B
 #print axioms B.truncate_ok
 #print axioms B.swap_ok
 #print axioms B.reserve_ok
+#print axioms B.memcpy_ok
+#print axioms B.vget_ok
+#print axioms B.vpush_ok
