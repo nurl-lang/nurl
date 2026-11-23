@@ -3,6 +3,7 @@ import A2
 import A3
 import B
 import C
+import D
 /-! Run by `check.sh`: the axioms the main theorems rest on. -/
 #print axioms A1.memory_safe
 #print axioms A1.soundness
@@ -1049,3 +1050,5 @@ import C
 #print axioms A2.Release.capsInp
 #print axioms A2.EvalR.capsInp
 #print axioms A2.Step.slotsCaps
+-- Phase D2: an accepted drop-validation path is safe on a concrete heap
+#print axioms D.validated_safe
