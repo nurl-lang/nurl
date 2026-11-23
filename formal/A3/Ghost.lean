@@ -36,6 +36,18 @@ theorem GhostRel.vars {s s' : Stmt} (h : GhostRel s s') : s'.vars = s.vars := by
   | catchR _ _ _ _ _ _ _ ih => simp only [Stmt.vars, ih]
   | scopeL _ _ _ _ ih => simp only [Stmt.vars, ih]
 
+theorem GhostRel.killVars {s s' : Stmt} (h : GhostRel s s') : s'.killVars = s.killVars := by
+  induction h with
+  | refl => rfl
+  | seq _ _ ih => simp only [Stmt.killVars, ih]
+  | scope _ _ ih => simp only [Stmt.killVars, ih]
+  | scopeD _ _ _ ih => simp only [Stmt.killVars, ih]
+  | rbind _ _ ih => simp only [Stmt.killVars, ih]
+  | frozen _ _ ih => simp only [Stmt.killVars, ih]
+  | block _ ih => simp only [Stmt.killVars, ih]
+  | catchR _ _ _ _ _ _ _ ih => simp only [Stmt.killVars, ih]
+  | scopeL _ _ _ _ ih => simp only [Stmt.killVars, ih]
+
 theorem GhostRel.codesOK {P : Prog} {s s' : Stmt} (h : GhostRel s s') (hc : s.codesOK P) :
     s'.codesOK P := by
   induction h with
@@ -102,7 +114,7 @@ theorem GhostRel.closed {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hc : Close
 theorem inv_ghost {m : Mem} {Γ : Ctx} {F : List Var} {s s' : Stmt} (hi : Inv m Γ F s)
     (hg : GhostRel s s') : Inv m Γ F s' :=
   hi.respine hg.spine (fun v hv => by rw [hg.vars] at hv; exact hv) (hg.catchOK hi.catchOK)
-    (hg.pinOK hi.pinIn) (hg.dtorPinOK hi.dtorIn)
+    (hg.pinOK hi.pinIn) (hg.dtorPinOK hi.dtorIn) (fun v hv => by rw [hg.killVars] at hv; exact hv)
 
 /-! ### Typing, frame by frame
 

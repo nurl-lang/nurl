@@ -451,8 +451,9 @@ structure CallA (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) : Prop whe
               (fn.params[i].1 = .sink ∨ fn.params[i].1 = .inout .replace → NoPin Γ (args.getD i 0))
   nfree   : NamesFree Γ F fn.params args
   names   : NameWF Γ
-  /-- AGORA-937: regions allowed, as in a callee's body (`RootbAnchR`). -/
-  anch    : RootbAnchR Γ F
+  /-- AGORA-937: regions allowed, as in a callee's body (`RootbAnchR`); and
+      (B3) held anchors of roots that are no argument and hold no views. -/
+  anch    : RootbAnchRS Γ F args
 
 /-- What a well-typed call, in a well-formed configuration, gives. -/
 structure CallH (P : Prog) (Γ : Ctx) (F : List Var) (x : Var) (fn : Fn) (args : List Var) (base : Nat) :
@@ -1348,8 +1349,11 @@ theorem _root_.A2.CallA.post_rootb (h : CallA Γ F fn args) {p : Var} {Ep : Entr
         rcases hcan with hm' | ⟨b', hm', _⟩ <;> rw [hrb] at hm' <;> cases hm'
     refine ⟨hne, fun d hd hr => ?_⟩
     by_cases hb : d.kind.bound = .none
-    · rcases hanch d hd hb with h' | ⟨_, Er, hEr, hreg⟩
+    · rcases hanch d hd hb with h' | ⟨_, Er, hEr, hreg⟩ | ⟨_, harg, _⟩
       · exact absurd (hr ▸ h') haF
+      rotate_right
+      · -- AGORA-937 (B3): a held anchor's root is no argument
+        exact absurd (hr ▸ RSetup.getD_mem' (h.len ▸ hk)) harg
       · -- AGORA-937: what the call moves or changes owns its slot, so is no region
         exfalso
         rw [hr, hEa] at hEr; cases hEr
@@ -1379,13 +1383,16 @@ theorem _root_.A2.CallA.post_rootb (h : CallA Γ F fn args) {p : Var} {Ep : Entr
   intro hany
   obtain ⟨d, hdm, hh⟩ := List.any_eq_true.mp hany
   obtain ⟨hdn, hb⟩ := List.mem_filter.mp hdm
-  obtain ⟨hcanN, _, hF, _, _⟩ := h.nfree d hdm
+  obtain ⟨hcanN, _, hF, _, _, hnh⟩ := h.nfree d hdm
   have hb' : d.kind.bound ≠ .none := by simpa using hb
   have hbr := h.argNames_bound hdn hb'
   have hno : hits d.kind.bound false d.root Ep = false := RSetup.hits_false_of (fun d' hd' hr => by
     by_cases hb0 : d'.kind.bound = .none
-    · rcases hanch d' hd' hb0 with h' | ⟨_, Er, hEr, hreg⟩
+    · rcases hanch d' hd' hb0 with h' | ⟨_, Er, hEr, hreg⟩ | ⟨hha, _⟩
       · exact absurd (hr ▸ h') hF
+      rotate_right
+      · -- AGORA-937 (B3): the change by name spares a held view (`NamesFree`)
+        exact hnh p Ep hp hrb d' hd' hr hha
       · -- AGORA-937: a root a call changes by name owns its slot, so is no region
         exfalso
         rw [hr] at hEr
@@ -1802,7 +1809,7 @@ theorem sOK (h : CallH P Γ F x fn args base) : (callS Γ F fn args base x).OK w
     obtain ⟨hout, Er, hEr, _⟩ := h.N_root hdN
     obtain ⟨hd, _⟩ := (h.mem_N).mp hdN
     have hdm : d ∈ mutNames Γ args := List.mem_filter.mpr ⟨hd, by simpa using hb⟩
-    obtain ⟨hcan, ⟨s, hts, hsv⟩, hF, hna, hoth⟩ := h.nfree d hdm
+    obtain ⟨hcan, ⟨s, hts, hsv⟩, hF, hna, hoth, _⟩ := h.nfree d hdm
     have hae : argE Γ d.root = Er := by unfold argE; rw [hEr]; rfl
     rw [hae] at hcan hts
     refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -3058,7 +3065,7 @@ theorem pe_Fc (h : CallH P Γ F x fn args base) (j : Nat) :
   have hnot : d.root ∉ roots (mutNames Γ args) := by
     intro hm
     obtain ⟨dm, hdm, hr⟩ := List.mem_map.mp hm
-    obtain ⟨_, _, _, hna, hoth⟩ := h.nfree dm hdm
+    obtain ⟨_, _, _, hna, hoth, _⟩ := h.nfree dm hdm
     obtain ⟨Ea, hvp, hEa, _, hni, hc, _⟩ := h.pe_vdeps j hd
     have hmem : args.getD j 0 ∈ args := by simp [List.getD, show j < args.length from h.len ▸ hvp]
     have hae' : argE Γ (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl

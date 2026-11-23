@@ -843,7 +843,7 @@ theorem rootKeep_frame_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ
 
 /-- `rootb_anchor` for the borrowed parameters outside the bindings `sp`. -/
 theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
-    (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → Anchored E F)
+    (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → AnchoredH E F)
     (hpin : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → ∀ r ∈ roots E.vdeps, r ∉ sp) :
     ∀ p E n, Γ p = some E → E.mode = .rootb → p ∉ sp → RootNode m p n → (∀ k q, n ≠ .arc k q) →
       (∃ o T, o ∈ F ∧ OwnedAt m o T ∧ Sub n T) ∨ ∃ k bl, m.blk k = some bl ∧ Sub n bl.rd := by
@@ -866,7 +866,7 @@ theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
     simp only [roots, Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte, List.mem_map]
     exact ⟨dep, hd, rfl⟩
   have hF : dep.root ∈ F := by
-    refine hanch p E hp hm hps dep ?_ (lands_bound hl)
+    refine (hanch p E hp hm hps dep ?_ (lands_bound hl)).resolve_right hna
     simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte]
     exact hd
   have hnint : E.ty ≠ .int := by
@@ -910,7 +910,7 @@ theorem rootb_anchor_sp {m : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
     `sp` are anchored in `F`, and none of them depends on those bindings: what
     a panic leaves while it unwinds the scopes `sp`. -/
 theorem rootKeep_frame_sp {m m' : Mem} {Γ : Ctx} {F sp : List Var} (hi : MInv m Γ)
-    (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → Anchored E F)
+    (hanch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → AnchoredH E F)
     (hpin : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ sp → ∀ r ∈ roots E.vdeps, r ∉ sp)
     (hF : ∀ o ∈ F, m'.st o = m.st o) {r : Var} {Er : Entry} (hr : Γ r = some Er) (hrs : r ∉ sp)
     (hroot : Er.mode.isRoot = true) (hsame : m'.st r = m.st r)
