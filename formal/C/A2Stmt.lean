@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct or its own destructor type) `scopeD` (a binding of its own destructor type) and `takeB`, whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct or its own destructor type) `scopeD` (a binding of its own destructor type) `takeB` and `editB` (an element type that holds no views), whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -529,6 +529,67 @@ theorem thruOKRB_sound {D : List Var} {Γ1 : Ctx} {F : List Var} {op : Edit} {tx
     · exact Or.inl (canDoB2_sound hc)
     · exact Or.inr hc
 
+/-- `EditArg`, decided: a push or an element set stores a live `y` of the
+    element type, taken as `PushArg` takes it; a truncation takes an
+    expression. -/
+def editArgB (D : List Var) (Γ : Ctx) (F : List Var) (t : Ty) : Edit → Option (List Dep × Ctx)
+  | .push y =>
+    match liveE2 Γ y with
+    | some Ey => if Ey.ty = t then pushArg2 D Γ F y Ey t else none
+    | none => none
+  | .trunc i => if checkExpr2 Γ i then some ([], Γ) else none
+  | .set i y =>
+    if checkExpr2 Γ i then
+      match liveE2 Γ y with
+      | some Ey => if Ey.ty = t then pushArg2 D Γ F y Ey t else none
+      | none => none
+    else none
+
+theorem editArgB_sound {D : List Var} {Γ : Ctx} {F : List Var} {t : Ty} {op : Edit} {Ds : List Dep}
+    {Γ1 : Ctx} (hs : Supported2 Γ D) (hD : ∀ v ∈ op.vars, v ∈ D) (h : editArgB D Γ F t op = some (Ds, Γ1)) :
+    EditArg Γ F op t Ds Γ1 ∧ Supported2 Γ1 D := by
+  cases op with
+  | push y =>
+    simp only [editArgB] at h
+    split at h
+    · rename_i Ey hEy
+      split at h
+      · rename_i hty
+        obtain ⟨hy, hyl⟩ := liveE2_some hEy
+        obtain ⟨hpa, hsp⟩ := pushArg2_sound hs h
+        exact ⟨.push hy hyl hty hpa, hsp (hD y (by simp [Edit.vars]))⟩
+      · cases h
+    · cases h
+  | trunc i =>
+    simp only [editArgB] at h
+    split at h
+    · rename_i hi
+      simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+      exact ⟨.trunc (checkExpr2_sound hi), hs⟩
+    · cases h
+  | set i y =>
+    simp only [editArgB] at h
+    split at h
+    · rename_i hi
+      split at h
+      · rename_i Ey hEy
+        split at h
+        · rename_i hty
+          obtain ⟨hy, hyl⟩ := liveE2_some hEy
+          obtain ⟨hpa, hsp⟩ := pushArg2_sound hs h
+          exact ⟨.set (checkExpr2_sound hi) hy hyl hty hpa, hsp (hD y (by simp [Edit.vars]))⟩
+        · cases h
+      · cases h
+    · cases h
+
+/-- What the edit stores is not `x`. -/
+def storedNeB (op : Edit) (x : Var) : Bool :=
+  match op.stored with | some y => decide (y ≠ x) | none => true
+
+theorem storedNeB_sound {op : Edit} {x : Var} (h : storedNeB op x = true) :
+    ∀ y, op.stored = some y → y ≠ x := by
+  intro y hy; simp only [storedNeB, hy, decide_eq_true_eq] at h; exact h
+
 def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, _, .skip => some Γ
   | Γ, F, .seq a b =>
@@ -705,6 +766,24 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
             | some Δ => if endOK2B D Δ y then some (exitScope y Δ) else none
             | none => none
           else none
+        else none
+      | none => none
+    | none => none
+  | Γ, F, .edit b x op =>
+    match Γ x with
+    | some Ex =>
+      match vecElem2 Ex.ty with
+      | some t =>
+        if decide (Ex.mode = .bor) && Ex.live && !t.holdsView && decide (x ∉ F) && storedNeB op x &&
+            (!op.drops || t.dtorFree) && (b || Ex.fresh) then
+          match editArgB D Γ F t op with
+          | some (_, Γ1) =>
+            match liveE2 Γ1 x with
+            | some Ex1 =>
+              if thruOKRB D Γ1 F op Ex.ty Ex1.path then some (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
+              else none
+            | none => none
+          | none => none
         else none
       | none => none
     | none => none
@@ -1151,6 +1230,41 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
                   (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
                 exact ⟨.takeB hsrc hy hyF hEx hm hl (vecElem2_some ht) hv hxF (checkExpr2_sound hc2.1)
                   (thruOKRB_sound hs hc2.2) hdt t0 (endOK2B_sound s0 he), supported2_exitScope s0 y⟩
+              · cases h
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  | edit b x op =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i Ex hEx
+      split at h
+      · rename_i t ht
+        split at h
+        · rename_i hc
+          simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true', Bool.or_eq_true] at hc
+          obtain ⟨⟨⟨⟨⟨⟨hm, hl⟩, hv⟩, hxF⟩, hst⟩, hdr⟩, hbf⟩ := hc
+          split at h
+          · rename_i Ds Γ1 hea
+            split at h
+            · rename_i Ex1 hEx1
+              split at h
+              · rename_i hto
+                simp only [Option.some.injEq] at h; subst h
+                obtain ⟨hargs, hs1⟩ := editArgB_sound hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hea
+                obtain ⟨hx1, hx1l⟩ := liveE2_some hEx1
+                refine ⟨.editB hEx hm hl (vecElem2_some ht) hv hxF hargs (storedNeB_sound hst) hx1 hx1l
+                  (thruOKRB_sound hs1 hto) (fun hd => ?_) (fun hb => ?_),
+                  supported2_setE (supported2_killThru hs1 _ _ _) (hD x (by simp [Stmt.vars])) _⟩
+                · rcases hdr with h0 | h0
+                  · rw [hd] at h0; cases h0
+                  · exact h0
+                · rcases hbf with h0 | h0
+                  · rw [hb] at h0; cases h0
+                  · exact h0
               · cases h
             · cases h
           · cases h
