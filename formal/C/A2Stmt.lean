@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct or its own destructor type) `scopeD` (a binding of its own destructor type) `takeB`, `editB` (view-free elements) and `editBV` (elements that hold views but no closure, through an `edit true`) `callc` and `callcE`, whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct, its own destructor type, or a `Vec` nest of those) `scopeD` (a binding of its own destructor type or a `Vec` nest of them) `takeB`, `editB` (view-free elements) and `editBV` (elements that hold views but no closure, through an `edit true`) `callc` and `callcE`, whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -396,12 +396,38 @@ theorem dtorOKB_sound {P : Prog} {f : Nat} {ty : Ty} (h : dtorOKB P f ty = true)
     obtain ⟨⟨⟨⟨⟨⟨hp, hr⟩, ho⟩, hl⟩, hh⟩, hoh⟩, hv⟩ := h
     exact ⟨fn, hf, hp, hr, ho, hl, hh, hoh, fun _ => hv⟩
 
+/-- A nest of `Vec`s around `f`'s destructor type: its depth and struct. -/
+def nestDtor (f : Nat) : Ty → Option (Nat × Ty)
+  | .dtor g t => if g = f then some (0, t) else none
+  | .vec u => (nestDtor f u).map fun p => (p.1 + 1, p.2)
+  | _ => none
+
+theorem nestDtor_sound {f : Nat} {u : Ty} : ∀ {n : Nat} {t : Ty}, nestDtor f u = some (n, t) →
+    u = Ty.nest n (.dtor f t) := by
+  induction u with
+  | dtor g t' _ =>
+    intro n t h
+    simp only [nestDtor] at h
+    split at h
+    · rename_i hg; simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; subst hg; rfl
+    · cases h
+  | vec u ih =>
+    intro n t h
+    simp only [nestDtor, Option.map_eq_some_iff] at h
+    obtain ⟨⟨m, t'⟩, hm, he⟩ := h
+    simp only [Prod.mk.injEq] at he; obtain ⟨rfl, rfl⟩ := he
+    rw [ih hm]; rfl
+  | _ => intro n t h; simp [nestDtor] at h
+
 /-- `letd`'s types, for a value that is the struct itself or already of
-    `f`'s destructor type: its struct `t` and the binding's type `.dtor f t`.
-    (A `Vec` of destructor values, and a value of another destructor type
-    glued to `f`, are not decided yet.) -/
+    `f`'s destructor type (its struct `t`, the binding's type `.dtor f t`),
+    or a `Vec` nest of `f`'s destructor values (bound at its own type). A
+    value of another destructor type glued to `f` is not decided yet. -/
 def letdTys (f : Nat) : Ty → Option (Ty × Ty)
   | .dtor g t => if g = f then some (t, .dtor f t) else none
+  | .vec u => match nestDtor f u with
+    | some (_, t) => some (t, .vec u)
+    | none => none
   | a => some (a, .dtor f a)
 
 theorem letdTys_sound {f : Nat} {a t τ : Ty} (h : letdTys f a = some (t, τ)) :
@@ -412,6 +438,13 @@ theorem letdTys_sound {f : Nat} {a t τ : Ty} (h : letdTys f a = some (t, τ)) :
     split at h
     · rename_i hg; simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
       subst hg; exact ⟨Or.inl ⟨rfl, Or.inr ⟨g, rfl⟩⟩, fun g' hg' => by cases hg'; rfl⟩
+    · cases h
+  | vec u =>
+    simp only [letdTys] at h
+    split at h
+    · rename_i n t' hn
+      simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+      exact ⟨Or.inr ⟨n, by rw [nestDtor_sound hn], rfl⟩, fun g hg => by cases hg⟩
     · cases h
   | _ =>
     simp only [letdTys, Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
@@ -447,19 +480,25 @@ theorem viewDbindB_sound {Δ : Ctx} {x : Var} (h : viewDbindB Δ x = true) :
   simp only [viewDbindB, hE, hv, Bool.not_true, Bool.false_or] at h
   exact h
 
-/-- `scopeD`'s struct, for a binding of `f`'s destructor type. (A `Vec` of
-    destructor values is not decided yet.) -/
+/-- `scopeD`'s struct, for a binding of `f`'s destructor type or a `Vec`
+    nest of its values. -/
 def scopeDTy (f : Nat) : Ty → Option Ty
   | .dtor g t => if g = f then some t else none
+  | .vec u => (nestDtor f u).map (·.2)
   | _ => none
 
-theorem scopeDTy_sound {f : Nat} {a t : Ty} (h : scopeDTy f a = some t) : a = .dtor f t := by
+theorem scopeDTy_sound {f : Nat} {a t : Ty} (h : scopeDTy f a = some t) : ScopeDTy f t a := by
   cases a with
   | dtor g u =>
     simp only [scopeDTy] at h
     split at h
-    · rename_i hg; simp only [Option.some.injEq] at h; subst hg; subst h; rfl
+    · rename_i hg; simp only [Option.some.injEq] at h; subst hg; subst h; exact Or.inl rfl
     · cases h
+  | vec u =>
+    simp only [scopeDTy, Option.map_eq_some_iff] at h
+    obtain ⟨⟨n, t'⟩, hn, he⟩ := h
+    simp only at he; subst he
+    exact Or.inr ⟨n, by rw [nestDtor_sound hn]⟩
   | _ => simp [scopeDTy] at h
 
 theorem supported2_killNames {Γ : Ctx} {D : List Var} (h : Supported2 Γ D) (ds : List Dep) :
@@ -1521,7 +1560,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
               obtain ⟨⟨⟨⟨⟨hend, hko⟩, hwf⟩, hnw⟩, hvd⟩, hfr⟩ := he
               obtain ⟨t0, s0⟩ := ih (ξ := ξ.underD x) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
               have hty := scopeDTy_sound ht
-              exact ⟨.scopeD ⟨E, t, hE, hm, Or.inl hty, hfn, Or.inl ⟨dtorOKB_sound hdt, hhd⟩, hst⟩ hxF t0
+              exact ⟨.scopeD ⟨E, t, hE, hm, hty, hfn, Or.inl ⟨dtorOKB_sound hdt, hhd⟩, hst⟩ hxF t0
                 (endOK2B_sound s0 hend) (keepOutB_sound hs s0 hko) (ctxWF2B_sound s0 hwf)
                 (nameWFB_sound s0 hnw) (viewDbindB_sound hvd) (dSelfB_sound hE hds) (freshOKB_sound s0 hfr),
                 supported2_exitScope s0 x⟩
