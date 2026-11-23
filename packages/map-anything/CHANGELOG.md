@@ -2,7 +2,15 @@
 
 ## [0.11.0] — 2026-11-23
 
+### Added
+
+- Sharing (recon-kit's): "Share" on a finished job gives a link that opens without
+  the sign-in — view and download the cloud and the 3-D object, nothing else.
+
 ### Changed
+
+- Sensible limits on the page and in the service: "drop least confident %" 0–50
+  (was 0–95), pixel stride 1–4 (was 1–16).
 
 - The service, 3-D objects, voxel fusion and frame choice live in the new
   `recon-kit` package, so other model packages (lingbot-map) offer the same service.

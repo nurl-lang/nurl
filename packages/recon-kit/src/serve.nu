@@ -21,6 +21,12 @@
 //   POST   /api/jobs/:id/mesh         {box, res} → a 3-D object queued
 //   GET    /api/jobs/:id/mesh         its state, and once done its url
 //   GET    /jobs/:id/object.glb       the object (binary glTF)
+//   POST   /api/jobs/:id/share        a read-only link → {share, url}
+//   DELETE /api/jobs/:id/share        the link stops working
+//   GET    /s/:token                  WITHOUT the sign-in: what is shared,
+//   GET    /s/:token/view               the viewer (no crop tool),
+//   GET    /s/:token/cloud.ply          the cloud and
+//   GET    /s/:token/object.glb         the object — reading only
 //
 // What the model's executable must answer — the whole contract between a
 // model and this service:
@@ -514,6 +520,8 @@ $ `ui.nu`
     : ~ i obytes 0
     ?? ( file_size ( string_data obp ) ) { T z → { = obytes z } F _e → {} }
     : b _ob ( json_obj_set o `object_bytes` ( json_int obytes ) )
+    : String shr ( __rk_read_job id `share` )
+    : b _sh ( json_obj_set o `share` ( json_str_lit ? ( __rk_token_ok ( string_data shr ) ) ( string_data shr ) `` ) )
     ? with_log {
         : b _m ( json_obj_set o `log` ( json_str_lit ( string_data log ) ) )
     } {}
@@ -1217,7 +1225,7 @@ $ `ui.nu`
     : String st ( __rk_state ( string_data id ) )
     ? == ( string_len st ) 0 { = res 1 } {
         ? | ( __rk_eq ( string_data st ) `running` ) ( __rk_state_is_f ( string_data id ) `mesh_state` `running` ) { = res 2 } {
-            ? ( __rk_set_state ( string_data id ) `deleted` ) {} { = res 3 }
+            ? ( __rk_set_state ( string_data id ) `deleted` ) { ( __rk_unshare ( string_data id ) ) } { = res 3 }
         }
     }
     ( __rk_unlock t )
@@ -1402,22 +1410,27 @@ $ `ui.nu`
         }
         F → {}
     }
-    : String op ( __rk_jfile ( string_data id ) `object.glb` )
-    ?? ( read_file_bytes ( string_data op ) ) {
-        F _e → { ^ ( __rk_err 404 `no object for this job (yet)` ) }
+    ^ ( __rk_send_file ( string_data id ) `object.glb` `.glb` `model/gltf-binary` `no object for this job (yet)` )
+}
+
+// A job's file as a download named after the job ("<name><ext>").
+@ __rk_send_file s id s file s ext s ctype s missing → HttpResponse {
+    : String cp ( __rk_jfile id file )
+    ?? ( read_file_bytes ( string_data cp ) ) {
+        F _e → { ^ ( __rk_err 404 missing ) }
         T blob → {
-            : String nm ( __rk_read_job ( string_data id ) `name` )
+            : String nm ( __rk_read_job id `name` )
             : ~ String base ( __rk_safe_name ( string_data nm ) )
-            ? == ( string_len base ) 0 { = base ( string_from ( string_data id ) ) } {}
-            : String file ( string_from ( string_data base ) )
-            ( string_push_str file `.glb` )
+            ? == ( string_len base ) 0 { = base ( string_from id ) } {}
+            : String fname ( string_from ( string_data base ) )
+            ( string_push_str fname ext )
             : String disp ( string_from `attachment; filename="` )
-            ( string_push_str disp ( string_data file ) )
+            ( string_push_str disp ( string_data fname ) )
             ( string_push_char disp 34 )
             : HttpResponse r ( response_new 200 )
-            ( response_set_header r `Content-Type` `model/gltf-binary` )
+            ( response_set_header r `Content-Type` ctype )
             ( response_set_header r `Content-Disposition` ( string_data disp ) )
-            ( response_set_header r `X-Cloud-Name` ( string_data file ) )
+            ( response_set_header r `X-Cloud-Name` ( string_data fname ) )
             ( response_set_header r `Cache-Control` `no-store` )
             ( response_set_body_bytes r blob )
             ^ r
@@ -1428,27 +1441,261 @@ $ `ui.nu`
 @ __rk_cloud Params ps → HttpResponse {
     : String id ( __rk_param ps `id` )
     ? ( __rk_id_ok ( string_data id ) ) {} { ^ ( __rk_err 400 `bad job id` ) }
-    : String cp ( __rk_jfile ( string_data id ) `cloud.ply` )
-    ?? ( read_file_bytes ( string_data cp ) ) {
-        F _e → { ^ ( __rk_err 404 `no cloud for this job (yet)` ) }
-        T blob → {
-            : String nm ( __rk_read_job ( string_data id ) `name` )
-            : ~ String base ( __rk_safe_name ( string_data nm ) )
-            ? == ( string_len base ) 0 { = base ( string_from ( string_data id ) ) } {}
-            : String file ( string_from ( string_data base ) )
-            ( string_push_str file `.ply` )
-            : String disp ( string_from `attachment; filename="` )
-            ( string_push_str disp ( string_data file ) )
-            ( string_push_char disp 34 )
-            : HttpResponse r ( response_new 200 )
-            ( response_set_header r `Content-Type` `application/octet-stream` )
-            ( response_set_header r `Content-Disposition` ( string_data disp ) )
-            ( response_set_header r `X-Cloud-Name` ( string_data file ) )
-            ( response_set_header r `Cache-Control` `no-store` )
-            ( response_set_body_bytes r blob )
-            ^ r
-        }
+    ^ ( __rk_send_file ( string_data id ) `cloud.ply` `.ply` `application/octet-stream` `no cloud for this job (yet)` )
+}
+
+// ── sharing ─────────────────────────────────────────────────────────
+
+// A job shared read-only. A random token (128 bits, 32 hex digits) names
+// it in <data>/shares/<token>, which holds the job id, and in the job's
+// own `share` file; both must agree. Under /s/<token> it answers WITHOUT
+// the sign-in — a page, the viewer, the cloud, the object — and only
+// ever reads: no route under /s/ changes anything, and the viewer is
+// served without its crop tool. DELETE .../share, or deleting the job,
+// ends the link.
+
+@ __rk_shares_dir → String {
+    : RkCfg c ( __rk_cfg )
+    ^ ( path_join ( string_data . c data ) `shares` )
+}
+
+@ __rk_token_ok s t → b {
+    : ( Slice u ) bs ( slice_of_str t )
+    ? != ( slice_len [u] bs ) 32 { ^ F } {}
+    : ~ i k 0
+    ~ < k 32 {
+        : i c ( slice_byte bs k )
+        ? | & >= c 48 <= c 57 & >= c 97 <= c 102 {} { ^ F }
+        = k + k 1
     }
+    ^ T
+}
+
+@ __rk_share_file s token → String {
+    : String d ( __rk_shares_dir )
+    ^ ( path_join ( string_data d ) token )
+}
+
+// The job a token shares, or "" — the token, the index and the job's own
+// record must all agree, and the job must not be on its way out.
+@ __rk_shared_job s token → String {
+    ? ( __rk_token_ok token ) {} { ^ ( string_new ) }
+    : String sf ( __rk_share_file token )
+    : String raw ( __rk_read ( string_data sf ) )
+    : String id ( string_trim raw )
+    ? ( __rk_id_ok ( string_data id ) ) {} { ^ ( string_new ) }
+    : String mine ( __rk_read_job ( string_data id ) `share` )
+    ? ( __rk_eq ( string_data mine ) token ) {} { ^ ( string_new ) }
+    : String st ( __rk_state ( string_data id ) )
+    ? | == ( string_len st ) 0 ( __rk_eq ( string_data st ) `deleted` ) { ^ ( string_new ) } {}
+    ^ id
+}
+
+// Ends a job's link (both records); the caller holds the job lock.
+@ __rk_unshare s id → v {
+    : String tok ( __rk_read_job id `share` )
+    ? ( __rk_token_ok ( string_data tok ) ) {
+        : String sf ( __rk_share_file ( string_data tok ) )
+        ?? ( file_delete ( string_data sf ) ) { T _ → {} F _e → {} }
+    } {}
+    : String jf ( __rk_jfile id `share` )
+    ?? ( file_delete ( string_data jf ) ) { T _ → {} F _e → {} }
+}
+
+@ __rk_share_json s id s token → HttpResponse {
+    : Json o ( json_obj_new )
+    : String url ( string_from `/s/` )
+    ( string_push_str url token )
+    : b _a ( json_obj_set o `id` ( json_str_lit id ) )
+    : b _b ( json_obj_set o `share` ( json_str_lit token ) )
+    : b _c ( json_obj_set o `url` ( json_str_lit ( string_data url ) ) )
+    ^ ( response_json 200 o )
+}
+
+// POST /api/jobs/:id/share — the job's link, made on the first call; a
+// finished job only (there is nothing to look at before).
+@ __rk_share_post Params ps → HttpResponse {
+    : String id ( __rk_param ps `id` )
+    : s sid ( string_data id )
+    ? ( __rk_id_ok sid ) {} { ^ ( __rk_err 400 `bad job id` ) }
+    : ~ i res 0  // 0 shared, 1 no such job, 2 not done, 3 a write failed
+    : ~ String tok ( string_new )
+    : i t ( __rk_lock )
+    : String st ( __rk_state sid )
+    ? == ( string_len st ) 0 { = res 1 } {
+        ? ( __rk_eq ( string_data st ) `done` ) {
+            : String have ( __rk_read_job sid `share` )
+            ? ( __rk_token_ok ( string_data have ) ) { = tok ( string_from ( string_data have ) ) } {
+                = tok ( rand_hex_str 16 )
+                : String sf ( __rk_share_file ( string_data tok ) )
+                ?? ( write_file ( string_data sf ) sid ) {
+                    T _ → { ? ( __rk_write_job sid `share` ( string_data tok ) ) {} { = res 3 } }
+                    F _e → { = res 3 }
+                }
+            }
+        } { = res 2 }
+    }
+    ( __rk_unlock t )
+    ? == res 1 { ^ ( __rk_err 404 `no such job` ) } {}
+    ? == res 2 { ^ ( __rk_err 409 `only a finished job can be shared` ) } {}
+    ? == res 3 { ^ ( __rk_err 500 `cannot store the link` ) } {}
+    ^ ( __rk_share_json sid ( string_data tok ) )
+}
+
+// DELETE /api/jobs/:id/share — the link stops working.
+@ __rk_share_delete Params ps → HttpResponse {
+    : String id ( __rk_param ps `id` )
+    : s sid ( string_data id )
+    ? ( __rk_id_ok sid ) {} { ^ ( __rk_err 400 `bad job id` ) }
+    : i t ( __rk_lock )
+    : String st ( __rk_state sid )
+    : b known > ( string_len st ) 0
+    ? known { ( __rk_unshare sid ) } {}
+    ( __rk_unlock t )
+    ? known {} { ^ ( __rk_err 404 `no such job` ) }
+    ^ ( response_status_only 204 )
+}
+
+// Text into HTML: the five characters that could end an element or an
+// attribute, as entities.
+@ __rk_html String out s text → v {
+    : ( Slice u ) bs ( slice_of_str text )
+    : ~ i k 0
+    ~ < k ( slice_len [u] bs ) {
+        : i c ( slice_byte bs k )
+        ? == c 38 { ( string_push_str out `&amp;` ) } {
+            ? == c 60 { ( string_push_str out `&lt;` ) } {
+                ? == c 62 { ( string_push_str out `&gt;` ) } {
+                    ? == c 34 { ( string_push_str out `&quot;` ) } {
+                        ? == c 39 { ( string_push_str out `&#39;` ) } { ( string_push_char out c ) }
+                    }
+                }
+            }
+        }
+        = k + k 1
+    }
+}
+
+@ __rk_mb i n → String {
+    : String o ( string_new )
+    ? >= n 1048576 {
+        ( string_push_int o / n 1048576 ) ( string_push_char o 46 ) ( string_push_int o / % n 1048576 104858 )
+        ( string_push_str o ` MB` )
+    } {
+        ( string_push_int o ? > / n 1024 0 / n 1024 1 ) ( string_push_str o ` kB` )
+    }
+    ^ o
+}
+
+@ __rk_shared_head HttpResponse r → v {
+    ( response_set_header r `Cache-Control` `no-store` )
+    // the token is the key: it must not leave in a Referer
+    ( response_set_header r `Referrer-Policy` `no-referrer` )
+    ( response_set_header r `X-Robots-Tag` `noindex` )
+}
+
+// GET /s/:token — what is shared: the cloud (and the object, if one was
+// made) to open in the viewer or download. Nothing to change.
+@ __rk_shared_page Params ps → HttpResponse {
+    : String tok ( __rk_param ps `token` )
+    : String id ( __rk_shared_job ( string_data tok ) )
+    ? == ( string_len id ) 0 { ^ ( __rk_err 404 `this link is not shared (any more)` ) } {}
+    : s sid ( string_data id )
+    : RkCfg c ( __rk_cfg )
+    : String nm ( __rk_read_job sid `name` )
+    : ~ i cb 0
+    : String cp ( __rk_jfile sid `cloud.ply` )
+    ?? ( file_size ( string_data cp ) ) { T z → { = cb z } F _e → {} }
+    : ~ i ob 0
+    : String op ( __rk_jfile sid `object.glb` )
+    ?? ( file_size ( string_data op ) ) { T z → { = ob z } F _e → {} }
+    : String base ( string_from `/s/` )
+    ( string_push_str base ( string_data tok ) )
+    : s b ( string_data base )
+    : String h ( string_from `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>` )
+    ( __rk_html h ( string_data nm ) )
+    ( string_push_str h `</title>
+<style>
+:root { color-scheme: dark; --bg: #0b0d12; --card: #141821; --fg: #e8eaf0; --dim: #8a93a6; --acc: #4c9aff; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+main { max-width: 640px; margin: 0 auto; padding: 32px 16px; }
+h1 { font-size: 22px; margin: 0 0 4px; word-break: break-word; }
+.sub { color: var(--dim); font-size: 13px; }
+.card { background: var(--card); border-radius: 12px; padding: 18px; margin-top: 20px; }
+.card h2 { font-size: 14px; margin: 0 0 10px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+a.btn { display: inline-block; padding: 10px 16px; border-radius: 8px; background: #222a38; color: var(--fg); text-decoration: none; }
+a.btn.primary { background: var(--acc); color: #fff; }
+footer { color: var(--dim); font-size: 12px; margin-top: 28px; }
+</style></head><body><main>
+<h1>` )
+    ( __rk_html h ( string_data nm ) )
+    ( string_push_str h `</h1>
+<div class="sub">a shared 3-D reconstruction &middot; view or download, nothing to sign in to</div>
+<div class="card"><h2>Point cloud</h2><div class="row">` )
+    ? > cb 0 {
+        ( string_push_str h `<a class="btn primary" href="` ) ( string_push_str h b )
+        ( string_push_str h `/view?cloud=` ) ( string_push_str h b ) ( string_push_str h `/cloud.ply">View in 3-D</a>` )
+        ( string_push_str h `<a class="btn" download href="` ) ( string_push_str h b )
+        ( string_push_str h `/cloud.ply">Download .ply (` )
+        : String m1 ( __rk_mb cb )
+        ( string_push_str h ( string_data m1 ) ) ( string_push_str h `)</a>` )
+    } { ( string_push_str h `<span class="sub">the cloud is not there any more</span>` ) }
+    ( string_push_str h `</div></div>` )
+    ? > ob 0 {
+        ( string_push_str h `<div class="card"><h2>3-D object</h2><div class="row"><a class="btn primary" href="` )
+        ( string_push_str h b ) ( string_push_str h `/view?glb=` ) ( string_push_str h b )
+        ( string_push_str h `/object.glb">View the object</a><a class="btn" download href="` )
+        ( string_push_str h b ) ( string_push_str h `/object.glb">Download .glb (` )
+        : String m2 ( __rk_mb ob )
+        ( string_push_str h ( string_data m2 ) ) ( string_push_str h `)</a></div></div>` )
+    } {}
+    ( string_push_str h `<footer>Made with ` )
+    ( __rk_html h ( string_data . c name ) )
+    ( string_push_str h `. The .ply opens in MeshLab, CloudCompare or Blender; the .glb in Blender, the Windows 3D viewer or a browser.</footer>
+</main></body></html>
+` )
+    : HttpResponse r ( response_new 200 )
+    ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+    ( __rk_shared_head r )
+    ( response_set_body_str r ( string_data h ) )
+    ^ r
+}
+
+// GET /s/:token/view — the viewer, for a shared link only. Served without
+// ?crop, so there is no region tool, and its only data is under /s/.
+@ __rk_shared_view Params ps → HttpResponse {
+    : String tok ( __rk_param ps `token` )
+    : String id ( __rk_shared_job ( string_data tok ) )
+    ? == ( string_len id ) 0 { ^ ( __rk_err 404 `this link is not shared (any more)` ) } {}
+    : HttpResponse r ( response_new 200 )
+    ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+    ( __rk_shared_head r )
+    : String page ( vw_page `` )
+    ( response_set_body_str r ( string_data page ) )
+    ^ r
+}
+
+@ __rk_shared_cloud Params ps → HttpResponse {
+    : String tok ( __rk_param ps `token` )
+    : String id ( __rk_shared_job ( string_data tok ) )
+    ? == ( string_len id ) 0 { ^ ( __rk_err 404 `this link is not shared (any more)` ) } {}
+    : HttpResponse r ( __rk_send_file ( string_data id ) `cloud.ply` `.ply` `application/octet-stream` `no cloud for this job` )
+    ( response_set_header r `Referrer-Policy` `no-referrer` )
+    ^ r
+}
+
+@ __rk_shared_object Params ps → HttpResponse {
+    : String tok ( __rk_param ps `token` )
+    : String id ( __rk_shared_job ( string_data tok ) )
+    ? == ( string_len id ) 0 { ^ ( __rk_err 404 `this link is not shared (any more)` ) } {}
+    : HttpResponse r ( __rk_send_file ( string_data id ) `object.glb` `.glb` `model/gltf-binary` `no object for this job` )
+    ( response_set_header r `Referrer-Policy` `no-referrer` )
+    ^ r
 }
 
 // ── the server ──────────────────────────────────────────────────────
@@ -1522,6 +1769,8 @@ $ `ui.nu`
         F _e → { = bin ( string_from ( nurl_argv 0 ) ) }
     }
     : String jobs ( path_join ( string_data data ) `jobs` )
+    : String shd ( path_join ( string_data data ) `shares` )
+    ?? ( dir_create_all ( string_data shd ) ) { T _ → {} F _e → {} }
     ?? ( dir_create_all ( string_data jobs ) ) {
         T _ → {}
         F _e → {
@@ -1580,6 +1829,13 @@ $ `ui.nu`
     ( http_app_put a `/api/jobs/:id/files/:name` \ HttpRequest rq Params ps → HttpResponse { ^ ( __rk_upload rq ps ) } )
     ( http_app_post a `/api/jobs/:id/start` \ HttpRequest rq Params ps → HttpResponse { ^ ( __rk_start rq ps ) } )
     ( http_app_get a `/jobs/:id/cloud.ply` \ HttpRequest rq Params ps → HttpResponse { ^ ( __rk_cloud ps ) } )
+    ( http_app_post a `/api/jobs/:id/share` \ HttpRequest rq Params ps → HttpResponse { ^ ( __rk_share_post ps ) } )
+    ( http_app_delete a `/api/jobs/:id/share` \ HttpRequest rq Params ps → HttpResponse { ^ ( __rk_share_delete ps ) } )
+    // read-only and without the sign-in (see the gate below)
+    ( http_app_get a `/s/:token` \ HttpRequest rq Params ps → HttpResponse { ^ ( __rk_shared_page ps ) } )
+    ( http_app_get a `/s/:token/view` \ HttpRequest rq Params ps → HttpResponse { ^ ( __rk_shared_view ps ) } )
+    ( http_app_get a `/s/:token/cloud.ply` \ HttpRequest rq Params ps → HttpResponse { ^ ( __rk_shared_cloud ps ) } )
+    ( http_app_get a `/s/:token/object.glb` \ HttpRequest rq Params ps → HttpResponse { ^ ( __rk_shared_object ps ) } )
     ( http_app_get a `/jobs/:id/object.glb` \ HttpRequest rq Params ps → HttpResponse { ^ ( __rk_object rq ps ) } )
     ( http_app_get a `/api/jobs/:id/mesh` \ HttpRequest rq Params ps → HttpResponse { ^ ( __rk_mesh_get rq ps ) } )
     ( http_app_post a `/api/jobs/:id/mesh` \ HttpRequest rq Params ps → HttpResponse { ^ ( __rk_mesh_post rq ps ) } )
@@ -1587,7 +1843,10 @@ $ `ui.nu`
         : ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) gate
         \ ( @ HttpResponse HttpRequest ) inner → ( @ HttpResponse HttpRequest ) {
             ^ \ HttpRequest req → HttpResponse {
-                ? | ( __rk_eq ( string_data . req path ) `/healthz` ) ( __rk_authed req ) { ^ ( inner req ) } {}
+                // a shared link's GETs are the token's to answer, not the
+                // password's: every /s/ route reads, and checks its token
+                : b shared & ( __rk_eq ( string_data . req method ) `GET` ) ( string_starts_with . req path `/s/` )
+                ? | | ( __rk_eq ( string_data . req path ) `/healthz` ) shared ( __rk_authed req ) { ^ ( inner req ) } {}
                 : RkCfg cc ( __rk_cfg )
                 : String msg ( string_from `sign in to use ` )
                 ( string_push_str msg ( string_data . cc name ) ) ( string_push_str msg `\n` )

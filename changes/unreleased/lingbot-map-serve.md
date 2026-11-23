@@ -5,4 +5,5 @@
 ### Added
 
 - **recon-kit: the reconstruction service as a package** (recon-kit 0.1.0, map-anything 0.11.0). map-anything's web service, 3-D objects, voxel fusion and frame choice, generalised over an `RkApp` a model package supplies.
+- **Shared links for map-anything and lingbot-map** (recon-kit 0.1.0): a finished job's read-only link that opens without the sign-in — view and download the cloud and the 3-D object; nothing under it changes anything. The confidence and pixel-stride options get limits that still leave a cloud.
 - **lingbot-map serve and mesh** (lingbot-map 0.13.0): the same upload page, job queue, viewer and 3-D objects as map-anything, plus `--max-views`, `--scene`, `--voxel` and `--image-size auto` in the CLI.

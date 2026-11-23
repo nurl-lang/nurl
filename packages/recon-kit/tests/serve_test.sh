@@ -122,6 +122,38 @@ for r in $racers; do wait "$r"; done
 check "concurrent uploads of one name: one stored" 1 "$(grep -c 201 "$WORK/race")"
 check "...the rest refused" 5 "$(grep -c 409 "$WORK/race")"
 
+# sharing: a read-only link that answers without the sign-in
+ID3=$(curl -s $A -X POST "$B/api/jobs" -d '{"name":"<b>shared</b>"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+check "a job not done cannot be shared" 409 "$(code $A -X POST "$B/api/jobs/$ID3/share")"
+check "sharing needs the sign-in" 401 "$(code -X POST "$B/api/jobs/$ID3/share")"
+printf 'ply-bytes' > "$WORK/data/jobs/$ID3/cloud.ply"
+echo done > "$WORK/data/jobs/$ID3/state"
+TOK=$(curl -s $A -X POST "$B/api/jobs/$ID3/share" | sed -n 's/.*"share":"\([0-9a-f]*\)".*/\1/p')
+check "a finished job is shared: a 32-hex token" 32 "${#TOK}"
+check "...asking again gives the same link" "$TOK" "$(curl -s $A -X POST "$B/api/jobs/$ID3/share" | sed -n 's/.*"share":"\([0-9a-f]*\)".*/\1/p')"
+check "...the job lists it" 1 "$(curl -s $A "$B/api/jobs" | grep -c "\"share\":\"$TOK\"")"
+check "the shared page opens without the sign-in" 200 "$(code "$B/s/$TOK")"
+check "...naming the job, escaped" 2 "$(curl -s "$B/s/$TOK" | grep -c '&lt;b&gt;shared&lt;/b&gt;')"
+check "...never as markup" 0 "$(curl -s "$B/s/$TOK" | grep -c '<b>shared')"
+check "...and leaking no Referer" 1 "$(curl -s -D - -o /dev/null "$B/s/$TOK" | grep -ci '^referrer-policy: no-referrer')"
+check "the shared viewer opens" 200 "$(code "$B/s/$TOK/view")"
+check "the shared cloud downloads" "ply-bytes" "$(curl -s "$B/s/$TOK/cloud.ply")"
+check "no object yet" 404 "$(code "$B/s/$TOK/object.glb")"
+check "a link changes nothing: POST is refused" 401 "$(code -X POST "$B/s/$TOK")"
+check "...DELETE too" 401 "$(code -X DELETE "$B/s/$TOK")"
+check "a made-up token" 404 "$(code "$B/s/0123456789abcdef0123456789abcdef")"
+check "a malformed token" 404 "$(code "$B/s/..%2F..%2Fjobs")"
+check "a path that climbs out of /s/ is not let through" 1 "$(code --path-as-is "$B/s/$TOK/../../api/jobs" | grep -c '^40')"
+check "the jobs list still wants the sign-in" 401 "$(code "$B/api/jobs")"
+check "stop sharing" 204 "$(code $A -X DELETE "$B/api/jobs/$ID3/share")"
+check "...and the link is dead" 404 "$(code "$B/s/$TOK")"
+check "...its cloud too" 404 "$(code "$B/s/$TOK/cloud.ply")"
+TOK2=$(curl -s $A -X POST "$B/api/jobs/$ID3/share" | sed -n 's/.*"share":"\([0-9a-f]*\)".*/\1/p')
+check "sharing again makes a new link" 1 "$([ -n "$TOK2" ] && [ "$TOK2" != "$TOK" ] && echo 1 || echo 0)"
+check "deleting the job" 204 "$(code $A -X DELETE "$B/api/jobs/$ID3")"
+check "...ends its link" 404 "$(code "$B/s/$TOK2")"
+check "...and leaves no record of it" 0 "$(ls "$WORK/data/shares" | wc -l | tr -d ' ')"
+
 # the data directory has one owner
 "$WORK/recon-test" serve --port $((PORT + 1)) --data "$WORK/data" >"$WORK/second.log" 2>&1
 check "a second server on the same data is refused" 1 "$(grep -c 'another server already owns' "$WORK/second.log")"

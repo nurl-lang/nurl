@@ -597,6 +597,41 @@ function render(jobs) {
       od.setAttribute("download", safe(j.name || j.id) + ".glb");
       act.appendChild(od);
     }
+    if (j.state === "done" && j.cloud_bytes) {
+      /* a read-only link that opens without the sign-in */
+      if (j.share) {
+        var link = location.origin + "/s/" + j.share;
+        var cp = el("button", "", "Copy share link");
+        cp.setAttribute("data-key", j.id + ":copy");
+        cp.title = link;
+        cp.onclick = function () {
+          var done = function () { cp.textContent = "Link copied"; setTimeout(function () { cp.textContent = "Copy share link"; }, 2000); };
+          if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(link).then(done, function () { prompt("Share link:", link); });
+          else prompt("Share link:", link);
+        };
+        act.appendChild(cp);
+        var us = el("button", "", "Stop sharing");
+        us.setAttribute("data-key", j.id + ":unshare");
+        us.onclick = function () {
+          if (!confirm("Stop sharing " + (j.name || j.id) + "? The link stops working.")) return;
+          api("DELETE", "/api/jobs/" + j.id + "/share").then(refresh).catch(function (e) { alert(e.message); });
+        };
+        act.appendChild(us);
+      } else {
+        var sh = el("button", "", "Share");
+        sh.setAttribute("data-key", j.id + ":share");
+        sh.title = "a link anyone can open to view and download this, without signing in";
+        sh.onclick = function () {
+          sh.disabled = true;
+          api("POST", "/api/jobs/" + j.id + "/share").then(function (r) {
+            var link = location.origin + r.url;
+            if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(link).catch(function () {});
+            refresh();
+          }).catch(function (e) { alert(e.message); sh.disabled = false; });
+        };
+        act.appendChild(sh);
+      }
+    }
     var lb = el("button", "", "Log");
     lb.setAttribute("data-key", j.id + ":log");
     lb.onclick = function () { showLog(j.id, d); };

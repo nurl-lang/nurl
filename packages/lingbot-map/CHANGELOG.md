@@ -28,6 +28,10 @@
   portrait video at 518 wants ~19 GB of KV cache).
 - `--voxel M|auto`: fuse the cloud on a grid, one averaged point per cell.
 - `-o` as a short `--out`.
+- In the service: sharing (a read-only link without the sign-in), and limits that
+  keep a cloud — confidence threshold 1.0–10 (10 keeps an eighth of the courthouse,
+  20 almost nothing), pixel stride 1–4. `tests/app_test.sh` checks the options
+  line and the limits.
 
 ## [0.12.3] — 2026-10-21
 

@@ -37,6 +37,8 @@ printf 'x' > "$WORK/f"
 check "an upload" 201 "$(code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$ID/files/p.jpg")"
 check "start" 200 "$(code $A -X POST "$B/api/jobs/$ID/start" -d '{"max_views":5,"align":2,"mv_check":1,"voxel_mm":5,"window":99}')"
 check "the options line" "--max-views 5 --stride 1 --pixel-stride 1 --window 64 --align 2 --mv-check 1 --voxel 0.005" "$(cat "$WORK/data/jobs/$ID/opts")"
+for _ in $(seq 1 100); do st=$(cat "$WORK/data/jobs/$ID/state"); [ "$st" = failed ] || [ "$st" = done ] && break; sleep 0.1; done
+check "...the limits hold: confidence at most 50 %, pixel stride at most 4" 1 "$(curl -s -o /dev/null $A -X POST "$B/api/jobs/$ID/start" -d '{"conf_pct":95,"pixel_stride":16}'; grep -c -- '--pixel-stride 4 .*--conf-pct 50' "$WORK/data/jobs/$ID/opts")"
 for _ in $(seq 1 100); do
     st=$(cat "$WORK/data/jobs/$ID/state")
     [ "$st" = failed ] || [ "$st" = done ] && break

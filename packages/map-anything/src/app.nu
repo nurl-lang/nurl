@@ -10,9 +10,10 @@ $ `deps/recon-kit/src/serve.nu`
 
 @ __ma_opts_html → s {
     ^ `    <div><label for="o-stride">take every Nth input</label><input id="o-stride" type="number" min="1" max="100" value="1"></div>
-    <div><label for="o-px">pixel stride</label><input id="o-px" type="number" min="1" max="16" value="1">
-      <div class="hint">2 = &frac14; of the points, a lighter cloud</div></div>
-    <div><label for="o-conf">drop least confident %</label><input id="o-conf" type="number" min="0" max="95" value="0"></div>
+    <div><label for="o-px">pixel stride</label><input id="o-px" type="number" min="1" max="4" value="1">
+      <div class="hint">1&ndash;4; 2 = &frac14; of the points, a lighter cloud</div></div>
+    <div><label for="o-conf">drop least confident %</label><input id="o-conf" type="number" min="0" max="50" step="5" value="0">
+      <div class="hint">0&ndash;50 % of each view's pixels</div></div>
     <div><label for="o-win">attention window</label><input id="o-win" type="number" min="4" max="64" value="24">
       <div class="hint">views per window; lower if the GPU runs out</div></div>
     <div><label for="o-align">align views (sweeps)</label><input id="o-align" type="number" min="0" max="10" value="3">
@@ -34,8 +35,8 @@ $ `deps/recon-kit/src/serve.nu`
 }
 function modelOptions() {
   return {
-    stride: num("o-stride", 1, 100, 1), pixel_stride: num("o-px", 1, 16, 1),
-    conf_pct: num("o-conf", 0, 95, 0), window: num("o-win", 4, 64, 24),
+    stride: num("o-stride", 1, 100, 1), pixel_stride: num("o-px", 1, 4, 1),
+    conf_pct: num("o-conf", 0, 50, 0), window: num("o-win", 4, 64, 24),
     mask_sky: $("o-sky").checked, align: num("o-align", 0, 10, 3), mv_check: num("o-mv", 0, 4, 1),
     voxel_mm: voxelMm()
   };
@@ -50,8 +51,11 @@ document.addEventListener("DOMContentLoaded", function () { $("o-win").addEventL
 @ __ma_opts Json j → String {
     : i maxv ( rk_jint j `max_views` 0 2000 24 )
     : i stride ( rk_jint j `stride` 1 100 1 )
-    : i pstride ( rk_jint j `pixel_stride` 1 16 1 )
-    : i conf ( rk_jint j `conf_pct` 0 95 0 )
+    // the limits of what is still a cloud worth having: a stride past 4
+    // keeps a sixteenth of the points and less, and dropping more than
+    // half of every view leaves holes, not a cleaner scene
+    : i pstride ( rk_jint j `pixel_stride` 1 4 1 )
+    : i conf ( rk_jint j `conf_pct` 0 50 0 )
     : i win ( rk_jint j `window` 4 64 24 )
     : b sky ( rk_jbool j `mask_sky` )
     : i align ( rk_jint j `align` 0 10 3 )

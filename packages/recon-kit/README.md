@@ -21,6 +21,13 @@ glTF. A restart loses nothing, a shutdown re-queues the job it ends, and
 one server owns a data directory at a time. Sign-in is HTTP Basic: put
 a TLS proxy (an ingress) in front of anything but loopback.
 
+**Sharing.** "Share" on a finished job makes a link, `/s/<token>` (128
+random bits), that opens without the sign-in: a page with the cloud —
+and the 3-D object, when one was made — to view or download. Every route
+under `/s/` only reads; the viewer comes without its crop tool; the
+page sends `Referrer-Policy: no-referrer`. "Stop sharing", or deleting
+the job, ends the link.
+
 ```nurl
 $ `deps/recon-kit/src/serve.nu`
 

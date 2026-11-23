@@ -11,10 +11,10 @@ $ `deps/recon-kit/src/serve.nu`
 @ __lm_opts_html → s {
     ^ `    <div><label for="o-size">input size (px)</label><input id="o-size" type="text" value="auto">
       <div class="hint">auto = the largest the GPU's free memory takes (518 at most); or a multiple of 14</div></div>
-    <div><label for="o-conf">confidence threshold</label><input id="o-conf" type="number" min="0" max="20" step="0.1" value="1.5">
-      <div class="hint">keep pixels the model is surer of than this; the reference's 1.5</div></div>
-    <div><label for="o-px">pixel stride</label><input id="o-px" type="number" min="1" max="16" value="1">
-      <div class="hint">2 = &frac14; of the points, a lighter cloud</div></div>
+    <div><label for="o-conf">confidence threshold</label><input id="o-conf" type="number" min="1" max="10" step="0.5" value="1.5">
+      <div class="hint">1&ndash;10: keep pixels the model is surer of than this; 1.5 is the reference's, 3&ndash;5 cleaner</div></div>
+    <div><label for="o-px">pixel stride</label><input id="o-px" type="number" min="1" max="4" value="1">
+      <div class="hint">1&ndash;4; 2 = &frac14; of the points, a lighter cloud</div></div>
     <div class="chk"><input id="o-vox" type="checkbox" checked><label for="o-vox" style="margin:0;color:inherit;font-size:13px">fuse on a voxel grid (one averaged point per cell)</label></div>`
 }
 
@@ -23,9 +23,10 @@ $ `deps/recon-kit/src/serve.nu`
   var t = $("o-size").value.trim().toLowerCase(), size = 0;
   if (t !== "" && t !== "auto") { size = parseInt(t, 10); if (isNaN(size)) size = 0; }
   var c = parseFloat($("o-conf").value);
+  c = isNaN(c) ? 1.5 : Math.min(10, Math.max(1, c));
   return {
-    image_size: size, conf_tenths: isNaN(c) ? 15 : Math.round(c * 10),
-    pixel_stride: num("o-px", 1, 16, 1), voxel: $("o-vox").checked
+    image_size: size, conf_tenths: Math.round(c * 10),
+    pixel_stride: num("o-px", 1, 4, 1), voxel: $("o-vox").checked
   };
 }
 function modelHint(n, isVid, picked) {
@@ -39,8 +40,11 @@ function modelHint(n, isVid, picked) {
     : i maxv ( rk_jint j `max_views` 0 2000 120 )
     : ~ i size ( rk_jint j `image_size` 0 518 0 )
     = size * / size 14 14
-    : i conf ( rk_jint j `conf_tenths` 0 200 15 )
-    : i pstride ( rk_jint j `pixel_stride` 1 16 1 )
+    // 1.0 is "the model knows nothing" (confidence is 1 + e^x): below it
+    // nothing is dropped, and past 10 little of a scene is left — on the
+    // courthouse 10 keeps an eighth of the points, 20 almost none
+    : i conf ( rk_jint j `conf_tenths` 10 100 15 )
+    : i pstride ( rk_jint j `pixel_stride` 1 4 1 )
     : String opts ( string_from `--max-views ` )
     ( string_push_int opts maxv )
     // every frame: the reference's own rate
