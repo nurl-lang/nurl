@@ -31756,14 +31756,26 @@ unsafe @ nurl_intern_free → v {
     = g_in_end 0
 }
 
+// A table's per-entry words (depth, bucket head, chain link, value length,
+// hash, buffer size) are 4 bytes each: half the memory of the 8 they took,
+// for tables that hold over half a million entries at a self-compile's
+// peak. A depth, a link (an index + 1) and a hash (32 bits, read back
+// zero-extended) always fit. A value's length and a buffer's size are
+// checked here: a value of 2 GiB or more stops the compile rather than
+// storing a length that would misstate its size.
+@ __sym_n32 i v → i32 {
+    ? | < v 0 > v 2147483647 { ( nurl_panic `nurlc: a symbol-table value of 2 GiB or more` ) } {}
+    ^ # i32 v
+}
+
 // The value of entry `idx` as a view: the interned copy, or — for a value
 // the table grows in place — an interned copy of what it holds now.
 unsafe @ __sym_view s t i idx → s {
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i owns # *i # s ( nurl_peek t 13 )
-    ? == 0 . owns idx { ^ . types idx } {}
-    : *i lens # *i # s ( nurl_peek t 11 )
-    ^ ( nurl_intern_n . types idx . lens idx )
+    : *i32 owns # *i32 # s ( nurl_peek t 13 )
+    ? == 0 # i . owns idx { ^ . types idx } {}
+    : *i32 lens # *i32 # s ( nurl_peek t 11 )
+    ^ ( nurl_intern_n . types idx # i . lens idx )
 }
 
 // Entry `idx` takes `v` (length `vl`) as its value: interned, after the
@@ -31772,11 +31784,11 @@ unsafe @ __sym_view s t i idx → s {
 unsafe @ __sym_put s t i idx s v i vl → v {
     : s nv ( nurl_intern_n v vl )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i owns # *i # s ( nurl_peek t 13 )
-    : *i lens # *i # s ( nurl_peek t 11 )
-    ? != 0 . owns idx { ( nurl_free . types idx ) = . owns idx 0 } {}
+    : *i32 owns # *i32 # s ( nurl_peek t 13 )
+    : *i32 lens # *i32 # s ( nurl_peek t 11 )
+    ? != 0 # i . owns idx { ( nurl_free . types idx ) = . owns idx # i32 0 } {}
     = . types idx nv
-    = . lens idx vl
+    = . lens idx ( __sym_n32 vl )
 }
 
 // Entry `idx`'s value as a buffer it may grow (`extra` more bytes): its
@@ -31789,24 +31801,24 @@ unsafe @ __sym_put s t i idx s v i vl → v {
 // 21a0fb5).
 unsafe @ __sym_buf s t i idx i extra → s {
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i owns # *i # s ( nurl_peek t 13 )
-    : *i lens # *i # s ( nurl_peek t 11 )
-    : i ol . lens idx
+    : *i32 owns # *i32 # s ( nurl_peek t 13 )
+    : *i32 lens # *i32 # s ( nurl_peek t 11 )
+    : i ol # i . lens idx
     : i need + + ol extra 1
-    : i cap . owns idx
+    : i cap # i . owns idx
     ? != 0 cap {
         ? <= need cap { ^ . types idx } {}
         : i half + cap / cap 2
         : i nc ? > need half need half
         : s grown # s ( nurl_realloc # *u . types idx nc )
         = . types idx grown
-        = . owns idx nc
+        = . owns idx ( __sym_n32 nc )
         ^ grown
     } {}
     : s nb # s ( nurl_alloc need )
     ( memcpy nb . types idx + ol 1 )
     = . types idx nb
-    = . owns idx need
+    = . owns idx ( __sym_n32 need )
     ^ nb
 }
 
@@ -31823,17 +31835,17 @@ unsafe @ __sym_rehash i h → v {
     : i count ( nurl_peek t 0 )
     : i nb * ( nurl_peek t 6 ) 4
     ( nurl_free # s ( nurl_peek t 7 ) )
-    : s nbk # s ( nurl_zalloc * nb 8 )
+    : s nbk # s ( nurl_zalloc * nb 4 )
     ( nurl_poke t 7 # i nbk )
     ( nurl_poke t 6 nb )
-    : *i buckets # *i nbk
-    : *i prev # *i # s ( nurl_peek t 8 )
-    : *i hashes # *i # s ( nurl_peek t 12 )
+    : *i32 buckets # *i32 nbk
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
     : ~ i k 0
     ~ < k count {
-        : i bh & . hashes k - nb 1
-        = . prev k . buckets bh
-        = . buckets bh + k 1
+        : i bh & & # i . hashes k 4294967295 - nb 1
+        = . prev k # i32 # i . buckets bh
+        = . buckets bh # i32 + k 1
         = k + k 1
     }
 }
@@ -31850,21 +31862,23 @@ unsafe @ __sym_grow i h → v {
     : s lens_old # s ( nurl_peek t 11 )
     : s hashes_old # s ( nurl_peek t 12 )
     : s owns_old # s ( nurl_peek t 13 )
-    : s hashes_new # s ( nurl_alloc * newcap 8 )
-    : s owns_new # s ( nurl_alloc * newcap 8 )
+    : s hashes_new # s ( nurl_alloc * newcap 4 )
+    : s owns_new # s ( nurl_alloc * newcap 4 )
     : s names_new # s ( nurl_alloc * newcap 8 )
     : s types_new # s ( nurl_alloc * newcap 8 )
-    : s depths_new # s ( nurl_alloc * newcap 8 )
-    : s prev_new # s ( nurl_alloc * newcap 8 )
-    : s lens_new # s ( nurl_zalloc * newcap 8 )
+    : s depths_new # s ( nurl_alloc * newcap 4 )
+    : s prev_new # s ( nurl_alloc * newcap 4 )
+    : s lens_new # s ( nurl_zalloc * newcap 4 )
+    // (names and types are pointers, 8 bytes; the per-entry words are 4)
     : i nbytes * count 8
+    : i wbytes * count 4
     ( memcpy names_new names_old nbytes )
     ( memcpy types_new types_old nbytes )
-    ( memcpy depths_new depths_old nbytes )
-    ( memcpy prev_new prev_old nbytes )
-    ( memcpy lens_new lens_old nbytes )
-    ( memcpy hashes_new hashes_old nbytes )
-    ( memcpy owns_new owns_old nbytes )
+    ( memcpy depths_new depths_old wbytes )
+    ( memcpy prev_new prev_old wbytes )
+    ( memcpy lens_new lens_old wbytes )
+    ( memcpy hashes_new hashes_old wbytes )
+    ( memcpy owns_new owns_old wbytes )
     ( nurl_free names_old )
     ( nurl_free types_old )
     ( nurl_free depths_old )
@@ -31886,6 +31900,8 @@ unsafe @ __sym_grow i h → v {
 : ~ i g_live_lexers 0
 
 unsafe @ nurl_sym_new → i {
+    // (The per-entry arrays 5, 7, 8, 11, 12 and 13 hold 4-byte words; 3
+    // and 4 hold pointers. See __sym_n32.)
     // 12 slots: 0 count, 1 depth, 2 cap, 3 names, 4 types, 5 depths,
     // 6 nbuckets, 7 buckets (head index+1 per bucket; 0 = empty),
     // 8 prev (per-entry link to the previous entry in the same bucket),
@@ -31921,13 +31937,13 @@ unsafe @ __sym_alloc → i {
     ( nurl_poke t 2 64 )
     ( nurl_poke t 3 # i # s ( nurl_alloc * 64 8 ) )
     ( nurl_poke t 4 # i # s ( nurl_alloc * 64 8 ) )
-    ( nurl_poke t 5 # i # s ( nurl_alloc * 64 8 ) )
+    ( nurl_poke t 5 # i # s ( nurl_alloc * 64 4 ) )
     ( nurl_poke t 6 nb )
-    ( nurl_poke t 7 # i # s ( nurl_zalloc * nb 8 ) )
-    ( nurl_poke t 8 # i # s ( nurl_alloc * 64 8 ) )
-    ( nurl_poke t 11 # i # s ( nurl_zalloc * 64 8 ) )
-    ( nurl_poke t 12 # i # s ( nurl_alloc * 64 8 ) )
-    ( nurl_poke t 13 # i # s ( nurl_zalloc * 64 8 ) )
+    ( nurl_poke t 7 # i # s ( nurl_zalloc * nb 4 ) )
+    ( nurl_poke t 8 # i # s ( nurl_alloc * 64 4 ) )
+    ( nurl_poke t 11 # i # s ( nurl_zalloc * 64 4 ) )
+    ( nurl_poke t 12 # i # s ( nurl_alloc * 64 4 ) )
+    ( nurl_poke t 13 # i # s ( nurl_zalloc * 64 4 ) )
     ^ # i t
 }
 
@@ -31956,12 +31972,12 @@ unsafe @ nurl_sym_free sink i h → v {
     // (dce_free → nurl_sym_free → free), after the IR had already
     // been emitted correctly.
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i owns # *i # s ( nurl_peek t 13 )
+    : *i32 owns # *i32 # s ( nurl_peek t 13 )
     // (Names and plain values are interned: only a grown buffer is the
     // entry's own.)
     : ~ i k 0
     ~ < k count {
-        ? != 0 . owns k { ( nurl_free . types k ) } {}
+        ? != 0 # i . owns k { ( nurl_free . types k ) } {}
         = k + k 1
     }
     ( nurl_free # s ( nurl_peek t 3 ) )
@@ -31986,9 +32002,9 @@ unsafe @ nurl_sym_def i h s name s type → v {
     // is picked up.
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i depths # *i # s ( nurl_peek t 5 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 depths # *i32 # s ( nurl_peek t 5 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     // Each string is measured once: the hash, both copies and the cached
     // length below share the two lengths.
     : i nl ( nurl_str_len name )
@@ -32002,15 +32018,15 @@ unsafe @ nurl_sym_def i h s name s type → v {
     // so nothing can tell the difference — except the cost of a copied
     // name per definition and bucket chains that grew one duplicate per
     // call for every other lookup in the bucket to step over.
-    : *i hashes0 # *i # s ( nurl_peek t 12 )
-    : *i lens0 # *i # s ( nurl_peek t 11 )
+    : *i32 hashes0 # *i32 # s ( nurl_peek t 12 )
+    : *i32 lens0 # *i32 # s ( nurl_peek t 11 )
     : i dnow ( nurl_peek t 1 )
-    : ~ i cur . buckets bh
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { = cur 0 } {
-            ? && == hn . hashes0 idx == 0 # i ( strcmp name . names idx ) {
-                ? == . depths idx dnow {
+            ? && == # i32 hn . hashes0 idx == 0 # i ( strcmp name . names idx ) {
+                ? == # i . depths idx dnow {
                     // (Most redefinitions reset a channel that is already
                     // empty, or store what it holds: nothing to copy.)
                     : s old . types idx
@@ -32019,29 +32035,29 @@ unsafe @ nurl_sym_def i h s name s type → v {
                     ^
                 } {}
                 = cur 0
-            } { = cur . prev idx }
+            } { = cur # i . prev idx }
         }
     }
     = . names count ( nurl_intern_n name nl )
     = . types count ( nurl_intern_n type tl )
-    : *i owns # *i # s ( nurl_peek t 13 )
-    = . owns count 0
-    = . depths count ( nurl_peek t 1 )
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    = . hashes count hn
+    : *i32 owns # *i32 # s ( nurl_peek t 13 )
+    = . owns count # i32 0
+    = . depths count # i32 ( nurl_peek t 1 )
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    = . hashes count # i32 hn
     // Slot 11 caches the value's length — for the appends, which grow a
     // value in place, and for nurl_sym_len / _len2, which a caller asks
     // of the compiler's largest accumulators once per record (measured
     // with strlen, `bck_record`'s emptiness test made recording a
     // function's statements quadratic). 0 is "ask strlen", which is also
     // what an empty value measures.
-    : *i lens # *i # s ( nurl_peek t 11 )
-    = . lens count tl
+    : *i32 lens # *i32 # s ( nurl_peek t 11 )
+    = . lens count ( __sym_n32 tl )
     // Push onto the front of the bucket chain — newest-first, so a
     // later definition of the same name shadows the earlier one, exactly
     // like the old backward linear scan.
-    = . prev count . buckets bh
-    = . buckets bh + count 1
+    = . prev count # i32 # i . buckets bh
+    = . buckets bh # i32 + count 1
     ( nurl_poke t 0 + count 1 )
     ? > + count 1 * 2 ( nurl_peek t 6 ) { ( __sym_rehash h ) } {}
 }
@@ -32051,20 +32067,20 @@ unsafe @ nurl_sym_get i h s name → s {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
     // Walk this name's bucket chain newest-first. Entries are stored as
     // index+1 (0 = chain end); pop unlinks, so every chained index is < count.
-    : ~ i cur . buckets bh
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { = cur 0 } {
-            ? && == hn . hashes idx == 0 # i ( strcmp name . names idx )
+            ? && == # i32 hn . hashes idx == 0 # i ( strcmp name . names idx )
             { ^ ( __sym_view t idx ) }
-            { = cur . prev idx }
+            { = cur # i . prev idx }
         }
     }
     ^ ``
@@ -32087,23 +32103,23 @@ unsafe @ nurl_sym_get2 i h s base s suffix → s {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i bl ( nurl_str_len base )
     : i sl ( nurl_str_len suffix )
     : i hn ( __sym_hash2 base bl suffix sl )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { = cur 0 } {
             : s cand . names idx
-            ? && && == hn . hashes idx == ( nurl_str_len cand ) + bl sl
+            ? && && == # i32 hn . hashes idx == ( nurl_str_len cand ) + bl sl
             && == 0 # i ( memcmp cand base bl )
             == 0 # i ( memcmp # s + # i # *u cand bl suffix sl )
             { ^ ( __sym_view t idx ) }
-            { = cur . prev idx }
+            { = cur # i . prev idx }
         }
     }
     ^ ``
@@ -32151,21 +32167,21 @@ unsafe @ nurl_sym_set_deep i h s name s value → v {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
     // Same newest-first bucket walk as nurl_sym_get — the entry it would
     // read is the entry we overwrite, so reads and writes cannot disagree.
-    : ~ i cur . buckets bh
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { = cur 0 } {
-            ? && == hn . hashes idx == 0 # i ( strcmp name . names idx )
+            ? && == # i32 hn . hashes idx == 0 # i ( strcmp name . names idx )
             { ( __sym_put t idx value ( nurl_str_len value ) )
                 ^ v }
-            { = cur . prev idx }
+            { = cur # i . prev idx }
         }
     }
     ( nurl_sym_def h name value )
@@ -32182,15 +32198,15 @@ unsafe @ nurl_sym_set_deep i h s name s value → v {
 unsafe @ nurl_sym_append i h s name s suffix → v {
     : i idx ( __sym_find_here h name )
     ? < idx 0 { ( nurl_sym_def h name suffix ) ^ } {}
-    : *i lens # *i # s ( nurl_peek # s h 11 )
-    : i ol . lens idx
+    : *i32 lens # *i32 # s ( nurl_peek # s h 11 )
+    : i ol # i . lens idx
     : i sl ( nurl_str_len suffix )
     // A buffer of the entry's own, grown with nurl_realloc, not malloc +
     // copy + free: for a value that only ever grows, glibc extends the
     // block in place and the accumulated prefix never moves at all.
     : s grown ( __sym_buf # s h idx sl )
     ( memcpy # s + # i # *u grown ol suffix + sl 1 )
-    = . lens idx + ol sl
+    = . lens idx ( __sym_n32 + ol sl )
 }
 
 // Append `word` to the space-separated list under `name`, WHEREVER in
@@ -32214,33 +32230,33 @@ unsafe @ nurl_sym_append_word i h s name s word → v {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
     // Same newest-first bucket walk as nurl_sym_set_deep, so the entry
     // this grows is the entry nurl_sym_get would read back.
-    : ~ i cur . buckets bh
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { = cur 0 } {
-            ? && == hn . hashes idx == 0 # i ( strcmp name . names idx )
-            { : *i lens # *i # s ( nurl_peek t 11 )
+            ? && == # i32 hn . hashes idx == 0 # i ( strcmp name . names idx )
+            { : *i32 lens # *i32 # s ( nurl_peek t 11 )
                 // The cached length is what keeps this O(1) in the list's
                 // size. Without it the strlen alone is O(L) per append,
                 // which is the same quadratic one term smaller: 400 KB
                 // rescanned for every record added to it.
-                : i ol . lens idx
+                : i ol # i . lens idx
                 : i wl ( nurl_str_len word )
                 : i sep ? == ol 0 0 1
                 : s grown ( __sym_buf t idx + sep wl )
                 : *u gp # *u grown
                 ? == sep 1 { = . gp ol # u 32 } {}
                 ( memcpy # s + # i gp + ol sep word + wl 1 )
-                = . lens idx + + ol sep wl
+                = . lens idx ( __sym_n32 + + ol sep wl )
                 ^ v }
-            { = cur . prev idx }
+            { = cur # i . prev idx }
         }
     }
     ( nurl_sym_def h name word )
@@ -32252,21 +32268,21 @@ unsafe @ __sym_find_here i h s name → i {
     : s t # s h
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
-    : *i depths # *i # s ( nurl_peek t 5 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 depths # *i32 # s ( nurl_peek t 5 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ -1 } {}
-        ? && == hn . hashes idx == 0 # i ( strcmp name . names idx ) {
-            ? == . depths idx ( nurl_peek t 1 ) { ^ idx } {}
+        ? && == # i32 hn . hashes idx == 0 # i ( strcmp name . names idx ) {
+            ? == # i . depths idx ( nurl_peek t 1 ) { ^ idx } {}
             ^ -1
         } {}
-        = cur . prev idx
+        = cur # i . prev idx
     }
     -1
 }
@@ -32279,17 +32295,17 @@ unsafe @ nurl_sym_len i h s name → i {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ 0 } {}
-        ? && == hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ ( __sym_vlen t types idx ) } {}
-        = cur . prev idx
+        ? && == # i32 hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ ( __sym_vlen t types idx ) } {}
+        = cur # i . prev idx
     }
     0
 }
@@ -32299,18 +32315,18 @@ unsafe @ nurl_sym_depth_of i h s name → i {
     : s t # s h
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
-    : *i depths # *i # s ( nurl_peek t 5 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 depths # *i32 # s ( nurl_peek t 5 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ -1 } {}
-        ? && == hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ . depths idx } {}
-        = cur . prev idx
+        ? && == # i32 hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ # i . depths idx } {}
+        = cur # i . prev idx
     }
     ^ -1
 }
@@ -32321,17 +32337,17 @@ unsafe @ nurl_sym_index_of i h s name → i {
     : s t # s h
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ -1 } {}
-        ? && == hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ idx } {}
-        = cur . prev idx
+        ? && == # i32 hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ idx } {}
+        = cur # i . prev idx
     }
     ^ -1
 }
@@ -32339,8 +32355,8 @@ unsafe @ nurl_sym_index_of i h s name → i {
 // The length of value `idx` of table `t`: every writer maintains slot 11,
 // and zero is the valid cached length of an empty value.
 unsafe @ __sym_vlen s t * s types i idx → i {
-    : *i lens # *i # s ( nurl_peek t 11 )
-    ^ . lens idx
+    : *i32 lens # *i32 # s ( nurl_peek t 11 )
+    ^ # i . lens idx
 }
 
 // nurl_sym_len for a two-part key. See nurl_sym_get2.
@@ -32349,23 +32365,23 @@ unsafe @ nurl_sym_len2 i h s base s suffix → i {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i bl ( nurl_str_len base )
     : i sl ( nurl_str_len suffix )
     : i hn ( __sym_hash2 base bl suffix sl )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ 0 } {}
         : s cand . names idx
-        ? && && == hn . hashes idx == ( nurl_str_len cand ) + bl sl
+        ? && && == # i32 hn . hashes idx == ( nurl_str_len cand ) + bl sl
         && == 0 # i ( memcmp cand base bl )
         == 0 # i ( memcmp # s + # i # *u cand bl suffix sl )
         { ^ ( __sym_vlen t types idx ) }
-        { = cur . prev idx }
+        { = cur # i . prev idx }
     }
     0
 }
@@ -32379,17 +32395,17 @@ unsafe @ nurl_sym_int i h s name → i {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ -1 } {}
-        ? && == hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ ( __sym_vint . types idx ) } {}
-        = cur . prev idx
+        ? && == # i32 hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ ( __sym_vint . types idx ) } {}
+        = cur # i . prev idx
     }
     -1
 }
@@ -32400,23 +32416,23 @@ unsafe @ nurl_sym_int2 i h s base s suffix → i {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i bl ( nurl_str_len base )
     : i sl ( nurl_str_len suffix )
     : i hn ( __sym_hash2 base bl suffix sl )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ -1 } {}
         : s cand . names idx
-        ? && && == hn . hashes idx == ( nurl_str_len cand ) + bl sl
+        ? && && == # i32 hn . hashes idx == ( nurl_str_len cand ) + bl sl
         && == 0 # i ( memcmp cand base bl )
         == 0 # i ( memcmp # s + # i # *u cand bl suffix sl )
         { ^ ( __sym_vint . types idx ) }
-        { = cur . prev idx }
+        { = cur # i . prev idx }
     }
     -1
 }
@@ -32444,20 +32460,20 @@ unsafe @ nurl_sym_tail i h s name i off → s {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { = cur 0 } {
-            ? && == hn . hashes idx == 0 # i ( strcmp name . names idx ) {
+            ? && == # i32 hn . hashes idx == 0 # i ( strcmp name . names idx ) {
                 : i vl ( __sym_vlen t types idx )
                 : i o ? > off vl vl ? < off 0 0 off
                 ^ # s ( nurl_strdup_n # s + # i # *u . types idx o - vl o )
-            } { = cur . prev idx }
+            } { = cur # i . prev idx }
         }
     }
     ^ # s ( nurl_strdup `` )
@@ -32471,17 +32487,17 @@ unsafe @ nurl_sym_has_word i h s name s word → b {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ F } {}
-        ? && == hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ >= ( __str_word_at . types idx word ) 0 } {}
-        = cur . prev idx
+        ? && == # i32 hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ >= ( __str_word_at . types idx word ) 0 } {}
+        = cur # i . prev idx
     }
     F
 }
@@ -32497,17 +32513,17 @@ unsafe @ __sym_peek i h s name → s {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ `` } {}
-        ? && == hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ . types idx } {}
-        = cur . prev idx
+        ? && == # i32 hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ . types idx } {}
+        = cur # i . prev idx
     }
     ^ ``
 }
@@ -32518,23 +32534,23 @@ unsafe @ nurl_sym_has_word2 i h s base s suffix s word → b {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i bl ( nurl_str_len base )
     : i sl ( nurl_str_len suffix )
     : i hn ( __sym_hash2 base bl suffix sl )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ F } {}
         : s cand . names idx
-        ? && && == hn . hashes idx == ( nurl_str_len cand ) + bl sl
+        ? && && == # i32 hn . hashes idx == ( nurl_str_len cand ) + bl sl
         && == 0 # i ( memcmp cand base bl )
         == 0 # i ( memcmp # s + # i # *u cand bl suffix sl )
         { ^ >= ( __str_word_at . types idx word ) 0 }
-        { = cur . prev idx }
+        { = cur # i . prev idx }
     }
     F
 }
@@ -32545,17 +32561,17 @@ unsafe @ nurl_sym_word_index i h s name s word → i {
     : i count ( nurl_peek t 0 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i hn ( __sym_hash name )
     : i bh & hn - ( nurl_peek t 6 ) 1
-    : *i hashes # *i # s ( nurl_peek t 12 )
-    : ~ i cur . buckets bh
+    : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+    : ~ i cur # i . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ -1 } {}
-        ? && == hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ ( str_word_index . types idx word ) } {}
-        = cur . prev idx
+        ? && == # i32 hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ ( str_word_index . types idx word ) } {}
+        = cur # i . prev idx
     }
     -1
 }
@@ -32584,19 +32600,19 @@ unsafe @ nurl_sym_pop i h → v {
     : i depth ( nurl_peek t 1 )
     : *s names # *s # s ( nurl_peek t 3 )
     : *s types # *s # s ( nurl_peek t 4 )
-    : *i depths # *i # s ( nurl_peek t 5 )
-    : *i buckets # *i # s ( nurl_peek t 7 )
-    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i32 depths # *i32 # s ( nurl_peek t 5 )
+    : *i32 buckets # *i32 # s ( nurl_peek t 7 )
+    : *i32 prev # *i32 # s ( nurl_peek t 8 )
     : i nb ( nurl_peek t 6 )
-    ~ & > count 0 == . depths - count 1 depth {
+    ~ & > count 0 == # i . depths - count 1 depth {
         : i idx - count 1
         // The top entry is the newest def for its name, hence the head of
         // its bucket chain — unlink it so the chain stays consistent.
-        : *i hashes # *i # s ( nurl_peek t 12 )
-        : i bh % . hashes idx nb
-        = . buckets bh . prev idx
-        : *i owns # *i # s ( nurl_peek t 13 )
-        ? != 0 . owns idx { ( nurl_free . types idx ) } {}
+        : *i32 hashes # *i32 # s ( nurl_peek t 12 )
+        : i bh % & # i . hashes idx 4294967295 nb
+        = . buckets bh # i32 # i . prev idx
+        : *i32 owns # *i32 # s ( nurl_peek t 13 )
+        ? != 0 # i . owns idx { ( nurl_free . types idx ) } {}
         = count - count 1
     }
     ( nurl_poke t 0 count )
@@ -35887,8 +35903,8 @@ unsafe @ bck_list_len i which → i {
         ? < slot 0 { ^ 0 } {}
         ? == which 0 { = g_bck_rd_slot slot } { = g_bck_pm_slot slot }
     } {}
-    : *i lens # *i # s ( nurl_peek # s g_bck 11 )
-    ^ . lens slot
+    : *i32 lens # *i32 # s ( nurl_peek # s g_bck 11 )
+    ^ # i . lens slot
 }
 
 // A plain scalar value (an integer, a float, a bool): computed in full
