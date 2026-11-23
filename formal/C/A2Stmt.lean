@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct or its own destructor type) `scopeD` (a binding of its own destructor type) `takeB` and `editB` (an element type that holds no views), whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct or its own destructor type) `scopeD` (a binding of its own destructor type) `takeB`, `editB` (view-free elements) and `editBV` (elements that hold views but no closure, through an `edit true`), whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -590,6 +590,179 @@ theorem storedNeB_sound {op : Edit} {x : Var} (h : storedNeB op x = true) :
     ∀ y, op.stored = some y → y ≠ x := by
   intro y hy; simp only [storedNeB, hy, decide_eq_true_eq] at h; exact h
 
+def editBB (D : List Var) (Γ : Ctx) (F : List Var) (b : Bool) (x : Var) (op : Edit) : Option Ctx :=
+  match Γ x with
+  | some Ex =>
+    match vecElem2 Ex.ty with
+    | some t =>
+      if decide (Ex.mode = .bor) && Ex.live && !t.holdsView && decide (x ∉ F) && storedNeB op x &&
+          (!op.drops || t.dtorFree) && (b || Ex.fresh) then
+        match editArgB D Γ F t op with
+        | some (_, Γ1) =>
+          match liveE2 Γ1 x with
+          | some Ex1 =>
+            if thruOKRB D Γ1 F op Ex.ty Ex1.path then some (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
+            else none
+          | none => none
+        | none => none
+      else none
+    | none => none
+  | none => none
+
+theorem editBB_sound {P : Prog} {D : List Var} {ξ : Exits} {Γ : Ctx} {F : List Var} {b : Bool} {x : Var}
+    {op : Edit} {Δ : Ctx} (hs : Supported2 Γ D) (hD : ∀ v ∈ (Stmt.edit b x op).vars, v ∈ D)
+    (h : editBB D Γ F b x op = some Δ) : StmtT P ξ Γ F (.edit b x op) Δ ∧ Supported2 Δ D := by
+  simp only [editBB] at h
+  split at h
+  · rename_i Ex hEx
+    split at h
+    · rename_i t ht
+      split at h
+      · rename_i hc
+        simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true', Bool.or_eq_true] at hc
+        obtain ⟨⟨⟨⟨⟨⟨hm, hl⟩, hv⟩, hxF⟩, hst⟩, hdr⟩, hbf⟩ := hc
+        split at h
+        · rename_i Ds Γ1 hea
+          split at h
+          · rename_i Ex1 hEx1
+            split at h
+            · rename_i hto
+              simp only [Option.some.injEq] at h; subst h
+              obtain ⟨hargs, hs1⟩ := editArgB_sound hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hea
+              obtain ⟨hx1, hx1l⟩ := liveE2_some hEx1
+              refine ⟨.editB hEx hm hl (vecElem2_some ht) hv hxF hargs (storedNeB_sound hst) hx1 hx1l
+                (thruOKRB_sound hs1 hto) (fun hd => ?_) (fun hb => ?_),
+                supported2_setE (supported2_killThru hs1 _ _ _) (hD x (by simp [Stmt.vars])) _⟩
+              · rcases hdr with h0 | h0
+                · rw [hd] at h0; cases h0
+                · exact h0
+              · rcases hbf with h0 | h0
+                · rw [hb] at h0; cases h0
+                · exact h0
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  · cases h
+
+theorem supported2_killHv {Γ : Ctx} {D : List Var} (h : Supported2 Γ D) :
+    ∀ ks : List (Eff × Bool × Var), Supported2 (killHv ks Γ) D
+  | [] => h
+  | (_, _, _) :: ks => supported2_kill (supported2_killHv h ks) _ _ _
+
+theorem supported2_holdOn {Γ : Ctx} {D : List Var} (h : Supported2 Γ D) (rs : List Var) (Ds : List Dep) :
+    Supported2 (holdOn rs Ds Γ) D := fun v hv => by simp [holdOn, h v hv]
+
+/-- `ThruOK`, decided: `ThruOKR` with every root live and an owner that
+    allows the effect. -/
+def thruOKB (D : List Var) (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (Ps : List Dep) : Bool :=
+  (memDeps Ps).all fun d => decide (d.root ∉ F) &&
+    (match op.stored with | some y => decide (d.root ≠ y) | none => true) &&
+    match Γ1 d.root with
+    | some Er =>
+      Er.live && canDoB2 Er.mode (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) &&
+      dtorSafeB D Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) false d.root &&
+      decide (d.kind ≠ .share) &&
+      heldOKB D Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) d.root
+    | none => false
+
+theorem thruOKB_sound {D : List Var} {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {Ps : List Dep}
+    (hs : Supported2 Γ1 D) (h : thruOKB D Γ1 F op tx Ps = true) : ThruOK Γ1 F op tx Ps := by
+  intro d hd
+  simp only [thruOKB, List.all_eq_true] at h
+  have h := h d hd
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+  obtain ⟨⟨hF, hst⟩, hr⟩ := h
+  refine ⟨hF, fun y hy => by rw [hy] at hst; simpa using hst, ?_⟩
+  revert hr
+  cases hE : Γ1 d.root with
+  | none => intro hr; cases hr
+  | some Er =>
+    intro hr
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hr
+    obtain ⟨⟨⟨⟨hl, hc⟩, hds⟩, hsh⟩, hho⟩ := hr
+    exact ⟨Er, rfl, hl, canDoB2_sound hc, dtorSafeB_sound hs hds, hsh, heldOKB_sound hs hho⟩
+
+/-- `ThruV`, decided: each memory root of the path is viewed by no
+    destructor its effect ends, is no destructor binding, and is not a root
+    of what is stored. -/
+def thruVB (D : List Var) (Γ1 : Ctx) (op : Edit) (tx : Ty) (Ps Ds : List Dep) : Bool :=
+  (memDeps Ps).all fun d =>
+    dtorSafeB D Γ1 (op.effAt d.kind (decide ((argE Γ1 d.root).ty = tx)) (argE Γ1 d.root).rvec)
+      (argE Γ1 d.root).ty.holdsView d.root &&
+    !(argE Γ1 d.root).dbind && decide (d.root ∉ roots Ds)
+
+theorem thruVB_sound {D : List Var} {Γ1 : Ctx} {op : Edit} {tx : Ty} {Ps Ds : List Dep}
+    (hs : Supported2 Γ1 D) (h : thruVB D Γ1 op tx Ps Ds = true) : ThruV Γ1 op tx Ps Ds := by
+  intro d hd
+  simp only [thruVB, List.all_eq_true] at h
+  have h := h d hd
+  simp only [Bool.and_eq_true, Bool.not_eq_true', decide_eq_true_eq] at h
+  exact ⟨dtorSafeB_sound hs h.1.1, h.1.2, h.2⟩
+
+/-- `editBV`, decided for an element type that holds views but no closure,
+    through an `edit true`. -/
+def editBVB (D : List Var) (Γ : Ctx) (F : List Var) (b : Bool) (x : Var) (op : Edit) : Option Ctx :=
+  match Γ x with
+  | some Ex =>
+    match vecElem2 Ex.ty with
+    | some t =>
+      if decide (Ex.mode = .bor) && Ex.live && t.holdsView && !t.hasFn && decide (x ∉ F) && storedNeB op x &&
+          (!op.drops || t.dtorFree) && b then
+        match editArgB D Γ F t op with
+        | some (Ds, Γ1) =>
+          match liveE2 Γ1 x with
+          | some Ex1 =>
+            if !(memDeps Ex1.path).isEmpty && thruOKB D Γ1 F op Ex.ty Ex1.path &&
+                thruVB D Γ1 op Ex.ty Ex1.path (memDeps Ds) then
+              some (setE (holdThru (memDeps Ds) Ex1.path (killThruV op Ex.ty Ex1.path Γ1)) x
+                { Ex1 with held := Ex1.held ++ memDeps Ds })
+            else none
+          | none => none
+        | none => none
+      else none
+    | none => none
+  | none => none
+
+theorem editBVB_sound {P : Prog} {D : List Var} {ξ : Exits} {Γ : Ctx} {F : List Var} {b : Bool} {x : Var}
+    {op : Edit} {Δ : Ctx} (hs : Supported2 Γ D) (hD : ∀ v ∈ (Stmt.edit b x op).vars, v ∈ D)
+    (h : editBVB D Γ F b x op = some Δ) : StmtT P ξ Γ F (.edit b x op) Δ ∧ Supported2 Δ D := by
+  simp only [editBVB] at h
+  split at h
+  · rename_i Ex hEx
+    split at h
+    · rename_i t ht
+      split at h
+      · rename_i hc
+        simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true', Bool.or_eq_true] at hc
+        obtain ⟨⟨⟨⟨⟨⟨⟨hm, hl⟩, hv⟩, hfn⟩, hxF⟩, hst⟩, hdr⟩, hb⟩ := hc
+        subst hb
+        split at h
+        · rename_i Ds Γ1 hea
+          split at h
+          · rename_i Ex1 hEx1
+            split at h
+            · rename_i hto
+              simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff] at hto
+              obtain ⟨⟨hne, hok⟩, hvv⟩ := hto
+              simp only [Option.some.injEq] at h; subst h
+              obtain ⟨hargs, hs1⟩ := editArgB_sound hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hea
+              obtain ⟨hx1, hx1l⟩ := liveE2_some hEx1
+              refine ⟨.editBV hEx hm hl (vecElem2_some ht) hv (Or.inl hfn) hxF hargs (storedNeB_sound hst) hx1 hx1l
+                hne (thruOKB_sound hs1 hok) (thruVB_sound hs1 hvv) (fun hd => ?_) (fun hb => by cases hb)
+                (fun hb => by cases hb),
+                supported2_setE (supported2_holdOn (supported2_killHv hs1 _) _ _) (hD x (by simp [Stmt.vars])) _⟩
+              rcases hdr with h0 | h0
+              · rw [hd] at h0; cases h0
+              · exact h0
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  · cases h
+
 def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, _, .skip => some Γ
   | Γ, F, .seq a b =>
@@ -770,23 +943,9 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
       | none => none
     | none => none
   | Γ, F, .edit b x op =>
-    match Γ x with
-    | some Ex =>
-      match vecElem2 Ex.ty with
-      | some t =>
-        if decide (Ex.mode = .bor) && Ex.live && !t.holdsView && decide (x ∉ F) && storedNeB op x &&
-            (!op.drops || t.dtorFree) && (b || Ex.fresh) then
-          match editArgB D Γ F t op with
-          | some (_, Γ1) =>
-            match liveE2 Γ1 x with
-            | some Ex1 =>
-              if thruOKRB D Γ1 F op Ex.ty Ex1.path then some (setE (killThru op Ex.ty Ex1.path Γ1) x Ex1)
-              else none
-            | none => none
-          | none => none
-        else none
-      | none => none
-    | none => none
+    match editBB D Γ F b x op with
+    | some Δ => some Δ
+    | none => editBVB D Γ F b x op
   | Γ, F, .scope x s =>
     match Γ x with
     | some E =>
@@ -1240,37 +1399,10 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
     intro ξ Γ F Δ hs hD h
     simp only [checkStmt2] at h
     split at h
-    · rename_i Ex hEx
-      split at h
-      · rename_i t ht
-        split at h
-        · rename_i hc
-          simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true', Bool.or_eq_true] at hc
-          obtain ⟨⟨⟨⟨⟨⟨hm, hl⟩, hv⟩, hxF⟩, hst⟩, hdr⟩, hbf⟩ := hc
-          split at h
-          · rename_i Ds Γ1 hea
-            split at h
-            · rename_i Ex1 hEx1
-              split at h
-              · rename_i hto
-                simp only [Option.some.injEq] at h; subst h
-                obtain ⟨hargs, hs1⟩ := editArgB_sound hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hea
-                obtain ⟨hx1, hx1l⟩ := liveE2_some hEx1
-                refine ⟨.editB hEx hm hl (vecElem2_some ht) hv hxF hargs (storedNeB_sound hst) hx1 hx1l
-                  (thruOKRB_sound hs1 hto) (fun hd => ?_) (fun hb => ?_),
-                  supported2_setE (supported2_killThru hs1 _ _ _) (hD x (by simp [Stmt.vars])) _⟩
-                · rcases hdr with h0 | h0
-                  · rw [hd] at h0; cases h0
-                  · exact h0
-                · rcases hbf with h0 | h0
-                  · rw [hb] at h0; cases h0
-                  · exact h0
-              · cases h
-            · cases h
-          · cases h
-        · cases h
-      · cases h
-    · cases h
+    · rename_i Δ0 h0
+      simp only [Option.some.injEq] at h; subst h
+      exact editBB_sound hs hD h0
+    · exact editBVB_sound hs hD h
   | scope x s ih =>
     intro ξ Γ F Δ hs hD h
     simp only [checkStmt2] at h
