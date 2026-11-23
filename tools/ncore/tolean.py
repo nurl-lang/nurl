@@ -903,7 +903,7 @@ class Fn:
             return got
         if f not in names:
             raise Unsupported(f"{self.fn['name']}: call of {f}, not in the program")
-        pre, args = [], []
+        pre, args, texts = [], [], []
         callee = FNS[names[f]] if names[f] < len(FNS) else None
         for i, op in enumerate(words[3:3 + n]):
             if (callee is not None and op.startswith("v") and op[1:].isdigit()
@@ -912,7 +912,14 @@ class Fn:
                 # nurlc copies a closure it hands to a `sink` / `inout`
                 # parameter (`nurl_closure_clone`), which the IR does not show
                 raise Unsupported(f"{self.fn['name']}: a closure handed to a sink or inout parameter of {f}")
-            if op == "c":
+            if op == "c" and callee is not None and callee["vars"].get(i) == "i8*":
+                # AGORA-994: a literal handed to a raw-string parameter is text,
+                # as a raw string bound from a literal is (`lean_ty`): a buffer
+                # of its own, here the call's (it lives no shorter than the call)
+                t = self.fresh()
+                texts.append(t)
+                args.append(str(t))
+            elif op == "c":
                 args.append(str(self.lit_temp()))
             elif "/" in op:
                 raise Unsupported(f"{self.fn['name']}: a field as an argument ({op})")
@@ -920,6 +927,8 @@ class Fn:
                 args.append(str(self.pvar(op)))
         x = self.fresh() if x is None else x
         s = f"(.letcall {x} {names[f]} [{', '.join(args)}] {rest})"
+        for t in reversed(texts):
+            s = f"(.letv {t} (.new .int) {s})"
         for t in reversed(pre):
             s = f"(.letv {t} (.expr (.lit 0)) {s})"
         return s
