@@ -243,31 +243,54 @@ theorem dtorParamsB_sound {P : Prog} {f : Nat} {fn : Fn} (hf : P[f]? = some fn) 
         exact ⟨ha, g, t, resDTyOf_sound ht, hv, hf, dropFnOKB_sound hdf⟩
       · cases hm
 
-/-- `ThruFn P f`, found: `f`'s body changes elements through a borrow, or
-    it calls a function that does, searched `n` calls deep. -/
-def thruReach (P : Prog) : Nat → Nat → Bool
-  | 0, _ => false
-  | n + 1, f => match P[f]? with
-    | some fn => fn.body.hasThru || fn.body.calls.any (thruReach P n)
+/-- One round of the through-changing set: every function whose body
+    changes elements through a borrow, or calls one of `S`. -/
+def thruStep (P : Prog) (S : List Nat) : List Nat :=
+  (List.range P.length).filter fun f => match P[f]? with
+    | some fn => fn.body.hasThru || fn.body.calls.any (· ∈ S)
     | none => false
 
-theorem thruReach_sound {P : Prog} : ∀ {n f : Nat}, thruReach P n f = true → ThruFn P f
-  | 0, _, h => by simp [thruReach] at h
-  | n + 1, f, h => by
-    simp only [thruReach] at h
-    split at h
-    · rename_i fn hf
-      simp only [Bool.or_eq_true, List.any_eq_true] at h
-      rcases h with h | ⟨g, hg, hr⟩
-      · exact .here hf h
-      · exact .call hf hg (thruReach_sound hr)
-    · cases h
+/-- The through-changing set, grown round by round from nothing until a
+    round adds nothing (at most one round per function). A search of every
+    call chain (`n` calls deep from each function) was exponential in the
+    depth. -/
+def thruIter (P : Prog) : Nat → List Nat → List Nat
+  | 0, S => S
+  | n + 1, S => let S' := thruStep P S; if S' = S then S else thruIter P n S'
+
+def thruSet (P : Prog) : List Nat := thruIter P P.length []
+
+theorem thruStep_sound {P : Prog} {S : List Nat} (hS : ∀ g ∈ S, ThruFn P g) :
+    ∀ f ∈ thruStep P S, ThruFn P f := by
+  intro f hf
+  simp only [thruStep, List.mem_filter] at hf
+  obtain ⟨_, h⟩ := hf
+  split at h
+  · rename_i fn hfn
+    simp only [Bool.or_eq_true, List.any_eq_true, decide_eq_true_eq] at h
+    rcases h with h | ⟨g, hg, hgS⟩
+    · exact .here hfn h
+    · exact .call hfn hg (hS g hgS)
+  · cases h
+
+theorem thruIter_sound {P : Prog} : ∀ {n : Nat} {S : List Nat}, (∀ g ∈ S, ThruFn P g) →
+    ∀ f ∈ thruIter P n S, ThruFn P f
+  | 0, _, hS => hS
+  | n + 1, S, hS => by
+    simp only [thruIter]
+    split
+    · exact hS
+    · exact thruIter_sound (thruStep_sound hS)
+
+/-- `ThruFn P f`, found: `f` is in the through-changing set. -/
+theorem thruSet_sound {P : Prog} {f : Nat} (h : f ∈ thruSet P) : ThruFn P f :=
+  thruIter_sound (fun _ h => by cases h) f h
 
 /-- `Implements`, decided: its signature is the interface's with the
     environment as the receiver and the captures after, and what it lends
     and holds is within the interface's; and it changes no elements through
     a borrow (`noThruB`), or the interface is code that does too
-    (`thruReach`), with an environment that holds no views, taken lent. -/
+    (`thruSet`), with an environment that holds no views, taken lent. -/
 def implementsB (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (σ : Nat) : Bool :=
   match P[f]?, P[σ]? with
   | some fn, some sig =>
@@ -276,7 +299,7 @@ def implementsB (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) 
     decide (fn.resTy = sig.resTy) && decide (fn.resOwn = sig.resOwn) &&
     fn.lends.all (fun x => decide (x ∈ sig.lends)) && fn.rholds.all (fun x => decide (x ∈ sig.rholds)) &&
     fn.outHolds.all (fun x => decide (x ∈ sig.outHolds)) &&
-    (noThruB P f || (thruReach P P.length σ && !te.holdsView && decide (sig.recvMode = .inp)))
+    (noThruB P f || (decide (σ ∈ thruSet P) && !te.holdsView && decide (sig.recvMode = .inp)))
   | _, _ => false
 
 theorem implementsB_sound {P : Prog} {f : Nat} {te : Ty} {cs : List (Var × PMode × Ty)} {σ : Nat}
@@ -294,7 +317,7 @@ theorem implementsB_sound {P : Prog} {f : Nat} {te : Ty} {cs : List (Var × PMod
       · exact h0
     · rcases hnt with hnt | ⟨⟨hre, hv⟩, hm⟩
       · exact absurd ht (noThruB_sound hnt)
-      · exact ⟨thruReach_sound hre, hv, hm⟩
+      · exact ⟨thruSet_sound hre, hv, hm⟩
   · cases h
 
 /-- `CodeOK`, decided method by method. -/
