@@ -41980,9 +41980,8 @@ unsafe @ __ty_no_address s ty0 i depth → b {
 
 // The result slot of the body being compiled (`__ret_val__`): the slot a
 // return under a `;` defer leaves its value in while the defers run, and
-// the one an aggregate's returns merge through. A function opens with
-// one (gen_fn_decl_concrete); a closure body, which has no defers of its
-// own, gets its slot from the first return that needs it.
+// the one an aggregate's returns merge through. A function or a closure
+// body gets its slot from the first return that needs it (AGORA-856).
 @ __ret_slot i syms i cg → s {
     ? == 0 ( nurl_sym_len syms `__ret_val__` ) {
         ( nurl_sym_set_deep syms `__ret_val__` ( __agg_slot_new cg ( nurl_llty ( nurl_sym_get syms `__fn_ret_ty__` ) ) ) )
@@ -98715,15 +98714,12 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     : s fn_cleanup ( nurl_cg_lbl cg `fn_cleanup` )
     ( nurl_sym_def syms `__fn_cleanup__` fn_cleanup )
     ( nurl_sym_set g_fn_escapes `__defer_top_fn__` `` )
-    // Pre-allocate return-value slot for defer routing (non-void functions).
-    // Unused if no defers are registered; optimiser removes it.
-    ? ! ( seq ret_ty `void` )
-    { : s p ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print p )
-        ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty ret_ty ) ) ( nurl_print `\n` )
-        ( nurl_sym_def syms `__ret_val__` p )
-    }
-    { ( nurl_sym_def syms `__ret_val__` `` ) }
+    // The result slot (a return under a `;` defer leaves its value there
+    // while the defers run; an aggregate's returns merge through it) is made
+    // by the first return that needs it, __ret_slot, as a closure body's is:
+    // most functions never need one, and an alloca up front in each was a
+    // dead line of IR in most of them (AGORA-856).
+    ( nurl_sym_def syms `__ret_val__` `` )
     // An aggregate result leaves through that slot and one exit block
     // (emit_ret_value), whether or not a defer is ever registered.
     : s agg_exit ? ( __ll_is_agg ( nurl_llty ret_ty ) ) ( nurl_cg_lbl cg `fn_ret` ) ( nurl_str_cat `` `` )
@@ -99316,7 +99312,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
         // (The result slot's journal registration, where a return made one,
         // ends: the value is the caller's from the `ret`.)
         ? & ! ( seq ret_ty `void` ) != 0 ( nurl_sym_len g_fn_escapes `__ret_dguard__` ) {
-            ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ( nurl_sym_get syms `__ret_val__` ) ) ( nurl_print `)\n` )
+            ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ( __ret_slot syms cg ) ) ( nurl_print `)\n` )
         } {}
         ? ! ( seq ret_ty `void` )
         { ? > g_agg_ret_n 0
@@ -99336,7 +99332,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     {}
     // The one exit of an aggregate result, where a return stored into
     // the slot (emit_ret_value).
-    ? > g_agg_ret_n 0 { ( emit_agg_exit cg agg_exit ( nurl_sym_get syms `__ret_val__` ) ( nurl_llty ret_ty ) ) } {}
+    ? > g_agg_ret_n 0 { ( emit_agg_exit cg agg_exit ( __ret_slot syms cg ) ( nurl_llty ret_ty ) ) } {}
     = g_agg_ret_n __saved_agg_n
     = g_tail_reg __saved_tail_reg
     ( emit `}` ) ( emit `` )
@@ -114570,7 +114566,11 @@ unsafe @ __ir_calls_level s ir i set → i {
     // tests a pointer that is almost never null, and the branch is
     // cheaper there than a select. nurl_vctl_get below is the branchless
     // form, where hoisting the load out of a loop is the point.)
-    ( emit `@.nurl.peek.zero = linkonce_odr constant i64 0` )
+    // (A Vec's control block reads, at null, as this: three zero words, its
+    // data pointer, length and capacity. A null handle is a Vec's empty
+    // state — a field a sink took over, an `inout` slot handed on, a
+    // zero-initialised global — read as an empty Vec.)
+    ( emit `@.nurl.peek.zero = linkonce_odr constant [3 x i64] zeroinitializer` )
     // What a null `s` reads as at a C string primitive (`"nurl.cstr"`).
     // Private, so a partitioned build (--split) copies it into every part
     // that names it.
@@ -114606,13 +114606,29 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( emit `!92 = !{!91, !91, i64 0}` )
     ( emit `!93 = !{!"nurl vec elem", !90, i64 0}` )
     ( emit `!94 = !{!93, !93, i64 0}` )
+    //
+    // The read states, ahead of its load, that the word it reads is
+    // there: `llvm.assume` with a `dereferenceable` bundle on the very
+    // pointer the next instruction loads 8 bytes from. That claims
+    // nothing the load does not already require: a load from memory that
+    // is not there is undefined in itself. What it buys is where the
+    // claim sits. vec_at_loc reads the data pointer ahead of its bounds
+    // check, but the optimiser sinks that load past the check into the
+    // one block that uses it, and from there it may not lift it out of a
+    // loop: the load no longer runs on every iteration's path, and only
+    // a pointer known to be dereferenceable may be read speculatively.
+    // The assume stays where the read was written, so it can (AGORA-857:
+    // safe_record_array kept one reload of the data pointer an iteration).
+    ( emit `declare void @llvm.assume(i1)` )
     ( emit `define linkonce_odr i64 @nurl_vctl_get(i8* %p, i64 %i) alwaysinline {` )
     ( emit `entry:` )
     ( emit `  %vg.n = icmp eq i8* %p, null` )
     ( emit `  %vg.b = bitcast i8* %p to i64*` )
-    ( emit `  %vg.q = select i1 %vg.n, i64* @.nurl.peek.zero, i64* %vg.b` )
-    ( emit `  %vg.j = select i1 %vg.n, i64 0, i64 %i` )
-    ( emit `  %vg.e = getelementptr inbounds i64, i64* %vg.q, i64 %vg.j` )
+    // (`i` is a word of the block, 0..2, so at null it reads the same word of
+    // the zero block: one select, and the word's offset stays an immediate.)
+    ( emit `  %vg.q = select i1 %vg.n, i64* getelementptr ([3 x i64], [3 x i64]* @.nurl.peek.zero, i64 0, i64 0), i64* %vg.b` )
+    ( emit `  %vg.e = getelementptr inbounds i64, i64* %vg.q, i64 %i` )
+    ( emit `  call void @llvm.assume(i1 true) [ "dereferenceable"(i64* %vg.e, i64 8) ]` )
     ( emit `  %vg.v = load i64, i64* %vg.e, !tbaa !92` )
     ( emit `  ret i64 %vg.v` )
     ( emit `}` )
