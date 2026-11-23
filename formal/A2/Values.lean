@@ -230,6 +230,7 @@ theorem ViewsAt.rd_pay {m : Mem} (hv : ViewsAt m.blk) {k : Nat} {bl : Blk} (hk :
   obtain ⟨t, kd, p⟩ := bl
   cases kd with
   | arc => exact ⟨k, _, hk, h⟩
+  | static => exact ⟨k, _, hk, h⟩
   | lock => simp [Blk.rd] at h
   | dead => simp [Blk.rd] at h
   | view =>

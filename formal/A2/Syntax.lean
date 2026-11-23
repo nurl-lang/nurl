@@ -1164,6 +1164,10 @@ inductive BKind where
       destructor value, is in it), and the thread whose
       step it ended reaps it next (`Settle`). -/
   | dead
+  /-- AGORA-980: an immortal block of the program's static text, a string
+      literal's bytes (`Rhs.slit`): no share of it exists, so no step
+      writes or frees it, and a view of its node needs no dependency. -/
+  | static
 deriving DecidableEq, Repr
 
 /-- A shared block: its kind, and its payload, a tree of type `ty`.  How

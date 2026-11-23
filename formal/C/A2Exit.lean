@@ -384,7 +384,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
   induction s with
   | exit n =>
     intro Γ F r hs hD h
-    unfold checkX at h
+    simp only [checkX] at h
     split at h
     · rename_i hx
       simp only [Option.some.injEq] at h; subst h
@@ -397,7 +397,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
     · cases h
   | seq a b iha ihb =>
     intro Γ F r hs hD h
-    unfold checkX at h
+    simp only [checkX] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
@@ -426,7 +426,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | block s ih =>
     intro Γ F r hs hD h
-    unfold checkX at h
+    simp only [checkX] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
@@ -448,7 +448,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | ite c a b iha ihb =>
     intro Γ F r hs hD h
-    unfold checkX at h
+    simp only [checkX] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
@@ -541,7 +541,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | letv x r s ih =>
     intro Γ F rr hs hD h
-    unfold checkX at h
+    simp only [checkX] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
@@ -575,7 +575,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | scope x s ih =>
     intro Γ F rr hs hD h
-    unfold checkX at h
+    simp only [checkX] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
@@ -603,7 +603,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | letd x f r s ih =>
     intro Γ F rr hs hD h
-    unfold checkX at h
+    simp only [checkX] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
@@ -643,7 +643,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | letcall x f args s ih =>
     intro Γ F rr hs hD h
-    unfold checkX at h
+    simp only [checkX] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
@@ -674,7 +674,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | loop s ih =>
     intro Γ F r hs hD h
-    unfold checkX at h
+    simp only [checkX] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h
@@ -719,7 +719,7 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
       · cases h
   | _ =>
     intro Γ F r hs hD h
-    unfold checkX at h
+    simp only [checkX] at h
     split at h
     · rename_i Δ h0
       simp only [Option.some.injEq] at h; subst h

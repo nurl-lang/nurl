@@ -335,13 +335,7 @@ def checkStmt : Ctx → List Var → Stmt → Option Ctx
       | none => none
     | none => none
   | Γ, F, .frozen z s => checkStmt Γ (F ++ z) s
-  -- (the forms decided elsewhere, C1, or not at all: one arm each, so the
-  -- match does not overlap)
-  | _, _, .letcall _ _ _ _ => none
-  | _, _, .ite _ _ _ => none
-  | _, _, .while _ _ => none
-  | _, _, .scope _ _ => none
-  | _, _, .rbind _ _ => none
+  | _, _, _ => none
 
 theorem checkStmt_sound {P : Prog} : ∀ {s : Stmt} {Γ : Ctx} {F : List Var} {Δ : Ctx},
     checkStmt Γ F s = some Δ → StmtT P Γ F s Δ := by
@@ -350,7 +344,7 @@ theorem checkStmt_sound {P : Prog} : ∀ {s : Stmt} {Γ : Ctx} {F : List Var} {�
   | skip => intro Γ F Δ h; simp [checkStmt] at h; subst h; exact .skip
   | seq a b iha ihb =>
     intro Γ F Δ h
-    unfold checkStmt at h
+    simp only [checkStmt] at h
     split at h
     · rename_i hb
       split at h
@@ -359,7 +353,7 @@ theorem checkStmt_sound {P : Prog} : ∀ {s : Stmt} {Γ : Ctx} {F : List Var} {�
     · cases h
   | letv x r s ih =>
     intro Γ F Δ h
-    unfold checkStmt at h
+    simp only [checkStmt] at h
     split at h
     · rename_i hc
       obtain ⟨hs, hx, hF⟩ := hc
@@ -372,7 +366,7 @@ theorem checkStmt_sound {P : Prog} : ∀ {s : Stmt} {Γ : Ctx} {F : List Var} {�
   | letcall x f args s ih => intro Γ F Δ h; simp [checkStmt] at h
   | assign x r =>
     intro Γ F Δ h
-    unfold checkStmt at h
+    simp only [checkStmt] at h
     split at h
     · rename_i Ex hx
       split at h
@@ -392,7 +386,7 @@ theorem checkStmt_sound {P : Prog} : ∀ {s : Stmt} {Γ : Ctx} {F : List Var} {�
   | «while» c s _ => intro Γ F Δ h; simp [checkStmt] at h
   | push x y =>
     intro Γ F Δ h
-    unfold checkStmt at h
+    simp only [checkStmt] at h
     split at h
     · rename_i Ex Ey hEx hEy
       obtain ⟨hx, hxl⟩ := liveE_some hEx
@@ -420,7 +414,7 @@ theorem checkStmt_sound {P : Prog} : ∀ {s : Stmt} {Γ : Ctx} {F : List Var} {�
     · cases h
   | free x =>
     intro Γ F Δ h
-    unfold checkStmt at h
+    simp only [checkStmt] at h
     split at h
     · rename_i E hE
       obtain ⟨hx, hl⟩ := liveE_some hE
