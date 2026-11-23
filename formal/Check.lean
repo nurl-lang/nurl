@@ -920,3 +920,6 @@ import B
 #print axioms B.free_ok
 #print axioms B.insert_ok
 #print axioms B.remove_ok
+#print axioms B.truncate_ok
+#print axioms B.swap_ok
+#print axioms B.reserve_ok

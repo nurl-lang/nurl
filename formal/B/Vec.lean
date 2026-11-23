@@ -9,7 +9,9 @@ of `stdlib/core/vec.nu`. It models the buffer at the level that code runs on:
 a heap of blocks, a control triple `(data, len, cap)`, and the code of
 `vec_push`, `__vec_grow_to`, `__vec_place`, `alloc_grow_cap`, `vec_get`,
 `vec_set` (by `.data idx`), `vec_pop`, `vec_insert` and `vec_remove` (their
-shift loops) and `vec_free`. It proves that each
+shift loops), `vec_truncate` (for elements whose drop runs no code of the
+program's: the elements it drops are exactly the ones it no longer holds),
+`vec_swap`, `vec_reserve` and `vec_free`. It proves that each
 operation:
 
 * touches only cells inside a live block (`load` and `store` are
@@ -34,7 +36,8 @@ always gives a new id.
 What B1 leaves out, for the next steps: a borrowed view (`cap < 0`,
 `vec_borrow_raw`), the packed-string layout, element destructors (cells
 here are values that are moved by bit copy, as `mem_take` makes them),
-and byte sizes and their overflow (`alloc_size`).
+byte sizes and their overflow (`alloc_size`), and `__vec_release_from`, the
+truncation path for elements whose drop runs program code.
 -/
 
 namespace B
@@ -652,6 +655,151 @@ theorem remove_ok {h : Heap α} {v : RVec} {es : List α} {idx : Nat} (hw : h.WF
     · intro b hb
       show h2.live b = false
       rw [hlv2]; exact hw b (by rw [← hn2]; exact hb)
+
+/-! ### `vec_truncate`, `vec_swap`, `vec_reserve` -/
+
+/-- `mem_drop_range data n len`'s reads: the cells `[n, n + k)`, in index
+    order, each one loaded once to be dropped. -/
+def loadRange (h : Heap α) (d : Nat) : Nat → Nat → Option (List α)
+  | _, 0 => some []
+  | n, k + 1 =>
+    match h.load d n with
+    | none => none
+    | some y => (loadRange h d (n + 1) k).map (y :: ·)
+
+theorem loadRange_ok {h : Heap α} {d : Nat} {es : List α} (hl : h.live d = true)
+    (hcell : ∀ i (hi : i < es.length), h.cell d i = some es[i]) (hsz : es.length ≤ h.size d) :
+    ∀ k n, n + k = es.length → loadRange h d n k = some (es.drop n) := by
+  intro k
+  induction k with
+  | zero => intro n hn; simp [loadRange]; omega
+  | succ k ih =>
+    intro n hn
+    have hns : n < h.size d := by omega
+    have hld : h.load d n = some es[n] := by
+      simp only [Heap.load, hl, true_and]; rw [ite_eq_left hns]; exact hcell n (by omega)
+    have heq : es.drop n = es[n] :: es.drop (n + 1) := List.drop_eq_getElem_cons (by omega)
+    rw [heq]
+    simp only [loadRange, hld, ih (n + 1) (by omega), Option.map_some]
+
+/-- `vec_truncate` to `n ≤ len` (for an element type whose drop runs no
+    code of the program's): the length first, then the elements past `n`
+    read out to be dropped. Out of range: `false`, nothing done. -/
+def truncate (h : Heap α) (v : RVec) (n : Nat) : Option (Bool × List α × RVec) :=
+  if n > v.len then some (false, [], v) else
+  match v.data with
+  | none => if v.len = 0 then some (true, [], { v with len := n }) else none
+  | some d => (loadRange h d n (v.len - n)).map fun ds => (true, ds, { v with len := n })
+
+/-- `vec_truncate` keeps the first `n` elements and hands every other one
+    to drop exactly once: the two lists make up `es` (nothing leaks, and
+    nothing is dropped twice). The heap is not written. -/
+theorem truncate_ok {h : Heap α} {v : RVec} {es : List α} {n : Nat} (hr : Rep h v es)
+    (hn : n ≤ es.length) :
+    ∃ v', truncate h v n = some (true, es.drop n, v') ∧ Rep h v' (es.take n) ∧ v'.data = v.data ∧
+      es.take n ++ es.drop n = es := by
+  have hl : v.len = es.length := hr.1
+  have hlc := hr.2.1
+  refine ⟨{ v with len := n }, ?_, ⟨by simp; omega, by show n ≤ v.cap; omega, ?_⟩, rfl, List.take_append_drop n es⟩
+  · unfold truncate
+    rw [ite_eq_right (by omega)]
+    cases hd : v.data with
+    | none =>
+      have h0 := rep_none hr hd
+      have : es = [] := List.eq_nil_of_length_eq_zero (by omega)
+      subst this
+      simp at hn; subst hn
+      simp [hl]
+    | some d =>
+      obtain ⟨hld, hsz, hcell⟩ := rep_some hr hd
+      simp only [loadRange_ok hld hcell (by omega) (v.len - n) n (by omega), Option.map_some]
+  · dsimp only
+    cases hd : v.data with
+    | none => exact rep_none hr hd
+    | some d =>
+      obtain ⟨hld, hsz, hcell⟩ := rep_some hr hd
+      refine ⟨hld, hsz, fun i hi => ?_⟩
+      simp at hi
+      rw [hcell i (by omega)]; simp
+
+/-- `vec_swap` of two indices in bounds: each element goes back into the
+    other's cell as it is (no copy, nothing taken over). -/
+def swap (h : Heap α) (v : RVec) (i j : Nat) : Option (Bool × Heap α) :=
+  if i ≥ v.len ∨ j ≥ v.len then some (false, h) else
+  if i = j then some (true, h) else
+  match v.data with
+  | none => none
+  | some d =>
+    match h.load d i, h.load d j with
+    | some a, some b =>
+      match h.store d i b with
+      | none => none
+      | some h1 => (h1.store d j a).map fun h2 => (true, h2)
+    | _, _ => none
+
+theorem swap_ok {h : Heap α} {v : RVec} {es : List α} {i j : Nat} (hr : Rep h v es)
+    (hi : i < es.length) (hj : j < es.length) :
+    ∃ h', swap h v i j = some (true, h') ∧ Rep h' v ((es.set i es[j]).set j es[i]) ∧
+      h'.live = h.live ∧ h'.size = h.size ∧ h'.nid = h.nid ∧
+      ∀ b, v.data ≠ some b → h'.cell b = h.cell b := by
+  have hl : v.len = es.length := hr.1
+  have hlc := hr.2.1
+  by_cases hij : i = j
+  · subst hij
+    refine ⟨h, ?_, ?_, rfl, rfl, rfl, fun _ _ => rfl⟩
+    · unfold swap; rw [ite_eq_right (by omega), ite_eq_left rfl]
+    · simp only [List.set_getElem_self]; exact hr
+  · cases hd : v.data with
+    | none => have := rep_none hr hd; omega
+    | some d =>
+      obtain ⟨hld, hsz, hcell⟩ := rep_some hr hd
+      have hli : h.load d i = some es[i] := by
+        simp only [Heap.load, hld, true_and]; rw [ite_eq_left (by omega)]; exact hcell i hi
+      have hlj : h.load d j = some es[j] := by
+        simp only [Heap.load, hld, true_and]; rw [ite_eq_left (by omega)]; exact hcell j hj
+      have hin : h.live d = true ∧ i < h.size d := ⟨hld, by omega⟩
+      let h1 : Heap α := { h with cell := upd h.cell d (upd (h.cell d) i (some es[j])) }
+      have hs1 : h.store d i es[j] = some h1 := by simp only [Heap.store, hin, and_self, ↓reduceIte]; rfl
+      have hin1 : h1.live d = true ∧ j < h1.size d := ⟨hld, by show j < h.size d; omega⟩
+      refine ⟨{ h1 with cell := upd h1.cell d (upd (h1.cell d) j (some es[i])) }, ?_, ⟨by simp; omega, hlc, ?_⟩, rfl, rfl, rfl, ?_⟩
+      · unfold swap
+        rw [ite_eq_right (by omega), ite_eq_right hij]
+        simp only [hd, hli, hlj]
+        rw [hs1]
+        simp only [Heap.store, hin1, and_self, ↓reduceIte, Option.map_some]
+      · simp only [hd]
+        refine ⟨hld, hsz, fun k hk => ?_⟩
+        simp only [h1, upd, ↓reduceIte]
+        simp at hk
+        rw [List.getElem_set, List.getElem_set]
+        by_cases hkj : k = j
+        · subst hkj; simp
+        · have hjk : j ≠ k := fun e => hkj e.symm
+          simp only [hkj, hjk, ↓reduceIte]
+          by_cases hki : k = i
+          · subst hki; simp
+          · have hik : i ≠ k := fun e => hki e.symm
+            simp only [hki, hik, ↓reduceIte]; exact hcell k hk
+      · intro b hb
+        have hbd : b ≠ d := fun e => hb (by rw [e])
+        simp only [h1, upd, ite_eq_right hbd]
+
+/-- `vec_reserve n` (`n > 0`): grow to `len + n` when the room left is
+    less; the list is kept. -/
+def reserve (h : Heap α) (v : RVec) (n : Nat) : Option (Heap α × RVec) :=
+  if n > 0 ∧ v.cap - v.len < n then growTo h v (v.len + n) else some (h, v)
+
+theorem reserve_ok {h : Heap α} {v : RVec} {es : List α} (n : Nat) (hw : h.WF) (hr : Rep h v es) :
+    ∃ h' v', reserve h v n = some (h', v') ∧ Rep h' v' es ∧ h'.WF ∧ v.len + n ≤ v'.cap ∧
+      v'.len = v.len := by
+  have hlc := hr.2.1
+  unfold reserve
+  by_cases hc : n > 0 ∧ v.cap - v.len < n
+  · rw [ite_eq_left hc]
+    obtain ⟨h1, v1, he, hr1, hw1, hroom, hlen, _⟩ := growTo_ok (need := v.len + n) hw hr
+    exact ⟨h1, v1, he, hr1, hw1, hroom, hlen⟩
+  · rw [ite_eq_right hc]
+    exact ⟨h, v, rfl, hr, hw, by omega, rfl⟩
 
 /-! ### The link to A1
 
