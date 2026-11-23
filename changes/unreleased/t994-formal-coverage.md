@@ -26,3 +26,14 @@
   as lent. The caller was then charged with a drop nurlc never makes, and
   the move refused. `kwargs_forward_consuming_callee` is accepted; the two
   other programs whose translation changes must be rejected and still are.
+- **`tools/ncore/tolean.py` captures a buffer that a closure literal moves
+  in by value** (AGORA-994). A captured String or `Vec` was always
+  translated as captured by name, a read of the creating binding. That is
+  right for a closure that shares a handle with a binding that lives on,
+  but not for one whose literal takes the binding over: the creating
+  function never releases or reads it again, so the environment owns it.
+  Such a closure handed back over its local was refused as escaping. A
+  capture that every literal of the code moves in is now a capture by value
+  in the environment. `string_captured_by_a_returned_closure_runs_clean` is
+  accepted; all 11 must-reject programs whose translation changes are still
+  refused.
