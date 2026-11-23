@@ -984,6 +984,7 @@ import D
 #print axioms B.rcDrop_ok
 #print axioms B.rcUpgrade_ok
 #print axioms B.rcWeakDrop_ok
+#print axioms B.packedPush_room
 #print axioms B.packedPush_ok
 -- Phase C0: an executable checker for A1's straight-line fragment, sound against A1's typing
 #print axioms C.checkExpr_sound
