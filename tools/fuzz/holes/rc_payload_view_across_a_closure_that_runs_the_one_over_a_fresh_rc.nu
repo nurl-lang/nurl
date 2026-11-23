@@ -6,6 +6,7 @@ $ `stdlib/core/slice.nu`
 $ `stdlib/std/rc.nu`
 
 : Pair { ( @ v ) set ( Rc ( Vec u ) ) h }
+
 @ mk → Pair {
     : ~ ( Vec u ) w ( vec_new [u] )
     ( vec_push [u] w # u 1 )
@@ -13,6 +14,7 @@ $ `stdlib/std/rc.nu`
     : ( Rc ( Vec u ) ) d ( rc_clone [( Vec u )] c )
     ^ @ Pair { \ → v { ( rc_set [( Vec u )] c ( vec_new [u] ) ) } d }
 }
+
 @ main → i {
     : Pair p ( mk )
     : ( @ v ) s . p set
