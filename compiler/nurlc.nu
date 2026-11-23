@@ -8099,10 +8099,12 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
     // 1 }`: what running what it holds does to the parameters, for a
     // caller's holder to carry; agora #838.)
     // (Asked only where the value can carry them: an aggregate literal that
-    // published closure members, a call with a hand-back answer, a holder
+    // published closure members, a call with a hand-back answer or one
+    // handed a holder it may hand back (`( box_new [H] @ H { … } )`, an
+    // `rc_new` of one, `__last_call_hold_ms__`; agora #960), a holder
     // binding — not of every return's type.)
     ? ! ( __is_closure_ty lt ) {
-        : b __hcar ? == tt TT_AT != 0 ( nurl_str_len ( nurl_sym_get syms `__last_agg_clo__` ) ) ? == tt TT_LPAREN != 0 g_clo_eff_set & & != 0 g_clo_hold_n ( is_ident_tok tt ) != 0 ( nurl_sym_len2 syms tv `__clonode` )
+        : b __hcar ? == tt TT_AT != 0 ( nurl_str_len ( nurl_sym_get syms `__last_agg_clo__` ) ) ? == tt TT_LPAREN | != 0 g_clo_eff_set != 0 g_call_hold_set & & != 0 g_clo_hold_n ( is_ident_tok tt ) != 0 ( nurl_sym_len2 syms tv `__clonode` )
         ? ! __hcar { ^ v } {}
     } {}
     : s effs ( __ret_clo_val_effs syms tt tv )
@@ -8140,7 +8142,7 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
 @ __ret_clo_val_effs i syms i tt s tv → s {
     // (A binding: under any name the closure may have, a literal assigned
     // in an arm too — __clo_run_attr; agora #802.)
-    : s effs0 ? == tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_effects__` ) ? ( is_ident_tok tt ) ( __clo_run_attr syms tv `__closure_effects` `le` ) ? & == tt TT_LPAREN != 0 g_clo_eff_set ( nurl_sym_get syms `__last_call_clo_effects__` ) ? == tt TT_AT ( __clo_members_attr ( nurl_sym_get syms `__last_agg_clo__` ) `le` ) ``
+    : s effs0 ? == tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_effects__` ) ? ( is_ident_tok tt ) ( __clo_run_attr syms tv `__closure_effects` `le` ) ? & == tt TT_LPAREN != 0 g_clo_eff_set ( nurl_sym_get syms `__last_call_clo_effects__` ) ? & == tt TT_LPAREN != 0 g_call_hold_set ( __clo_members_attr ( nurl_sym_get syms `__last_call_hold_ms__` ) `le` ) ? == tt TT_AT ( __clo_members_attr ( nurl_sym_get syms `__last_agg_clo__` ) `le` ) ``
     : ~ s effs ( nurl_str_cat effs0 `` )
     // (…and a join's or a block's arms, `^ ? k c1 c2`: the literals they
     // may be, #686's nodes.)
@@ -103440,6 +103442,10 @@ unsafe @ __cc_walk_r s ty i syms → s {
 // every type once per path to it: a generic of eight fields eight deep is
 // 8^8 paths, agora #722.)
 : ~ s g_ts_seen ``
+// …and, while set, an Rc's or a Weak's payload is walked as a Box's is:
+// what a value may hold of closures (__may_hold_clo_rc), not what crosses
+// threads (agora #960).
+: ~ i g_ts_rc_open 0
 
 unsafe @ __ts_walk s ty i syms → s {
     = g_ts_seen ( __seen_begin )
@@ -103462,8 +103468,12 @@ unsafe @ __ts_walk_r s ty i syms → s {
     ? ( __is_libh ty ) {
         : s b ( __libh_base ty )
         ? | | ( seq b `Arc` ) ( seq b `Channel` ) ( seq b `DChannel` ) { ^ ( nurl_str_cat ty `` ) } {}
-        // A Weak owns nothing; an Rc never crosses threads.
-        ? | | ( seq b `ArcWeak` ) ( seq b `Weak` ) ( seq b `Rc` ) { ^ ( nurl_str_cat `` `` ) } {}
+        // A Weak owns nothing; an Rc never crosses threads. (What one may
+        // hold of closures is its payload's, g_ts_rc_open.)
+        ? | | ( seq b `ArcWeak` ) ( seq b `Weak` ) ( seq b `Rc` ) {
+            ? != 0 g_ts_rc_open { ^ ( __ts_walk_r ( __libh_targ ty 0 ) syms ) } {}
+            ^ ( nurl_str_cat `` `` )
+        } {}
         ? != 0 ( nurl_sym_len2 g_impl_name_syms `rcstate##` ty ) { ^ ( nurl_str_cat ty `` ) } {}
         : ~ s out ``
         : i na ( count_words ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) )
@@ -103644,10 +103654,10 @@ unsafe @ __ts_walk_r s ty i syms → s {
 // Can a value of type `ty` hold a closure — directly, or in the state of a
 // thread-shared handle it reaches? Its closures' captures then have to be
 // followed with the value (memoised).
-@ __ts_may_hold_closures s ty i syms → b {
+@ __ts_mhc s ty i syms s pre → b {
     : i c0 ( nurl_str_get ty 0 )
     ? & != c0 37 != c0 123 { ^ F } {}
-    : s key ( nurl_str_cat `tsmhc##` ty )
+    : s key ( nurl_str_cat pre ty )
     ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ ( seq ( nurl_sym_get g_impl_name_syms key ) `1` ) } {}
     : ~ s todo ( __ts_walk ty syms )
     : ~ s seen ``
@@ -103663,6 +103673,19 @@ unsafe @ __ts_walk_r s ty i syms → s {
         }
     }
     ( nurl_sym_def g_impl_name_syms key ? r `1` `0` )
+    ^ r
+}
+
+@ __ts_may_hold_closures s ty i syms → b { ^ ( __ts_mhc ty syms `tsmhc##` ) }
+
+// Can a value of type `ty` hold closures, an Rc's or a Weak's payload
+// included: a binding's holder node (__clo_hold_bind / _param / _payload).
+// An `( Rc H )` whose `H` has a closure field holds one; a helper handed it
+// that runs it through rc_get runs what was stored there (agora #960).
+@ __may_hold_clo_rc s ty i syms → b {
+    = g_ts_rc_open 1
+    : b r ( __ts_mhc ty syms `tsmhr##` )
+    = g_ts_rc_open 0
     ^ r
 }
 
@@ -104291,7 +104314,7 @@ unsafe @ __clo_node_bind i syms s name s ty i tt s val b grow → v {
 unsafe @ __clo_hold_bind i syms s name s ty i tt s val b grow → v {
     : i c0 ( nurl_str_get ty 0 )
     ? & != c0 37 != c0 123 { ^ v } {}
-    ? ! ( __ts_may_hold_closures ty syms ) { ^ v } {}
+    ? ! ( __may_hold_clo_rc ty syms ) { ^ v } {}
     // (A `:` is a new binding: its entry lives in its scope from here,
     // empty, so a store into it inside a block lands there.)
     ? ! grow { ( nurl_sym_def syms ( nurl_str_cat name `__clonode` ) `` ) } {}
@@ -104334,7 +104357,7 @@ unsafe @ __clo_hold_payload i syms s pv s root s cms → v {
         ( __clo_node_add_all nd ( nurl_str_cat hn ` *` ) )
         ^ v
     } {}
-    ? ( __ts_may_hold_closures ty syms ) {
+    ? ( __may_hold_clo_rc ty syms ) {
         ( nurl_sym_def syms ( nurl_str_cat pv `__clonode` ) `` )
         ( __clo_hold_add syms pv hn )
     } {}
@@ -104363,7 +104386,7 @@ unsafe @ __clo_hold_param i syms s name s fname i k s ty → v {
     : i c0 ( nurl_str_get ty 0 )
     ? & != c0 37 != c0 123 { ^ v } {}
     ? ( __is_closure_ty ty ) { ^ v } {}
-    ? ! ( __ts_may_hold_closures ty syms ) { ^ v } {}
+    ? ! ( __may_hold_clo_rc ty syms ) { ^ v } {}
     : s nd ( __clo_node_mint name )
     = g_clo_hold_n + g_clo_hold_n 1
     ( nurl_sym_def g_clo_nodes ( nurl_str_cat `h#` nd ) `1` )
