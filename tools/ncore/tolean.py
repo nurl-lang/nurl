@@ -18,6 +18,20 @@ import sys
 INT_TYS = {"i64", "i1", "i32", "i8", "void"}
 
 
+def lean_ty(t):
+    """An IR type as an A2 type: an integer, or a `Vec` of them (`%Vec__T`)."""
+    if t in INT_TYS:
+        return ".int"
+    if t.startswith("%Vec__"):
+        return f"(.vec {lean_ty(t[len('%Vec__'):])})"
+    raise Unsupported(f"type {t}")
+
+
+def vec_elem(fname, prefix):
+    """`vec_push__i64` → the element type of the instance."""
+    return lean_ty(fname[len(prefix):])
+
+
 class Unsupported(Exception):
     pass
 
@@ -29,9 +43,11 @@ def parse(text):
             continue
         f = raw.split("\t")
         if f[0] == "fn":
-            cur = {"name": f[1], "ret": f[2], "np": int(f[3]), "vars": {}, "body": []}
+            cur = {"name": f[1], "ret": f[2], "np": int(f[3]), "file": f[5], "vars": {}, "flags": {}, "body": []}
         elif f[0] == "v" and cur is not None:
             cur["vars"][int(f[1])] = f[-1]
+            cur["flags"][int(f[1])] = int(f[4])
+            cur.setdefault("kind", {})[int(f[1])] = int(f[2])
         elif f[0] == "endfn":
             fns.append(cur)
             cur = None
@@ -64,8 +80,7 @@ class Fn:
         top = max(list(fn["vars"]) + [self.np - 1, -1])
         self.next = top + 2  # past every core variable and the result slot
         for v, ty in fn["vars"].items():
-            if ty not in INT_TYS:
-                raise Unsupported(f"{fn['name']}: variable {v} of type {ty}")
+            lean_ty(ty)
         if fn["ret"] not in INT_TYS:
             raise Unsupported(f"{fn['name']}: result of type {fn['ret']}")
 
@@ -83,12 +98,21 @@ class Fn:
             return f"(.var {self.var(int(op[1:]))})"
         raise Unsupported(f"{self.fn['name']}: operand {op}")
 
-    def rhs(self, words):
+    def rhs(self, words, dest=None):
         k = words[0]
         if k == "none":
             return ".expr (.lit 0)"
         if k == "use":
-            return f".expr {self.operand(words[1])}"
+            op = words[1]
+            if op != "c" and self.fn["vars"].get(int(op[1:]), "i64") not in INT_TYS:
+                y = int(op[1:])
+                kinds, flags = self.fn.get("kind", {}), self.fn["flags"]
+                # (A `: ~` binding of another binding is a cursor, a borrow of
+                # it, MEMORY.md §2.3; a temporary's value moves into its holder.)
+                if dest is not None and kinds.get(dest) == 1 and flags.get(dest, 0) & 1 and kinds.get(y) == 1:
+                    return f".borrow {self.var(y)}"
+                return f".var {self.var(y)}"
+            return f".expr {self.operand(op)}"
         if k == "scalar":
             ops = [self.operand(o) for o in words[2:2 + int(words[1])]]
             e = "(.lit 0)"
@@ -97,9 +121,38 @@ class Fn:
             return f".expr {e}"
         raise Unsupported(f"{self.fn['name']}: rvalue {k}")
 
+    def argvar(self, op, pre):
+        if op == "c":
+            t = self.fresh()
+            pre.append(t)
+            return t
+        return self.var(int(op[1:]))
+
+    def intrinsic(self, words, rest, x=None):
+        """A standard-library call A2 has a construct for, or None."""
+        f, n = words[1], int(words[2])
+        ops = words[3:3 + n]
+        if f.startswith("vec_new__") and n == 0:
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.new {vec_elem(f, 'vec_new__')}) {rest})"
+        if f.startswith("vec_push__") and n == 2 and x is None:
+            pre = []
+            v, y = self.argvar(ops[0], pre), self.argvar(ops[1], pre)
+            s = self.seq(f"(.push {v} {y})", rest)
+            for t in reversed(pre):
+                s = f"(.letv {t} (.expr (.lit 0)) {s})"
+            return s
+        if f.startswith("vec_len__") and n == 1 and ops[0] != "c":
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.expr (.len {self.var(int(ops[0][1:]))})) {rest})"
+        return None
+
     def call(self, words, names, rest):
         """`call f n op…` into a fresh temporary, then `rest`."""
         f, n = words[1], int(words[2])
+        got = self.intrinsic(words, rest)
+        if got is not None:
+            return got
         if f not in names:
             raise Unsupported(f"{self.fn['name']}: call of {f}, not in the program")
         pre, args = [], []
@@ -145,10 +198,13 @@ class Fn:
             x = self.var(int(head[1]))
             rest = self.stmts(lines[1:], names)
             if head[2] == "call":
+                got = self.intrinsic(head[2:], rest, x)
+                if got is not None:
+                    return got
                 t = self.fresh()
                 return self.call(head[2:], names, f"(.letv {x} (.expr (.var {t})) {rest})".replace(
                     f"(.var {t})", "(.lit 0)"))
-            return f"(.letv {x} ({self.rhs(head[2:])}) {rest})"
+            return f"(.letv {x} ({self.rhs(head[2:], int(head[1]))}) {rest})"
         if w == "eval":
             rest = self.stmts(lines[1:], names)
             if head[1] == "call":
@@ -174,7 +230,9 @@ class Fn:
 
 
 def emit(text):
-    fns = parse(text)
+    # The standard library's functions are A2's constructs (`intrinsic`),
+    # not bodies to check: their code is phase B's.
+    fns = [f for f in parse(text) if "stdlib/" not in f["file"]]
     names = {f["name"]: i for i, f in enumerate(fns)}
     if "main" not in names:
         raise Unsupported("no main")
