@@ -7880,7 +7880,9 @@ unsafe @ __arg_lend_root i syms → s {
     : s cn ( nurl_sym_get syms `__last_call_name__` )
     // (…and `: name ( rc_new x )`: a fresh handle, private until a mention
     // shares it, g_rcfresh_tab; AGORA-945.)
-    ? != 0 ( nurl_sym_len2 syms name `__rcfresh` ) { ( nurl_sym_def syms ( nurl_str_cat name `__rcfresh` ) `` ) } {}
+    ? & != 0 g_rcfresh_n != 0 ( nurl_sym_len2 syms name `__rcfresh` ) { ( nurl_sym_def syms ( nurl_str_cat name `__rcfresh` ) `` ) } {}
+    // (Every `:` of a call asks: told apart by its first letters, `rc_`.)
+    ? | | != 114 ( nurl_str_get cn 0 ) != 99 ( nurl_str_get cn 1 ) != 95 ( nurl_str_get cn 2 ) { ^ v } {}
     ? | != 0 ( nurl_str_starts cn `rc_new` ) != 0 ( nurl_str_starts cn `rc_zero` ) {
         : s cb ( bck_generic_base cn )
         ? | ( seq cb `rc_new` ) ( seq cb `rc_zero` ) {
@@ -31111,7 +31113,24 @@ unsafe @ nurl_str_eq s a s b → i {
 }
 
 unsafe @ nurl_str_to_int s str → i {
-    ^ ( atoll str )
+    // (The walk reads ids back from its rows two million times a compile:
+    // `[-]digits` of at most 18 digits, the common case, is read here, so
+    // it cannot overflow; anything else — a leading space or `+`, a longer
+    // number — is atoll's, whose answer it is in every case.)
+    : *u p # *u str
+    : i c0 & # i . p 0 255
+    : i neg ? == c0 45 1 0
+    : ~ i k neg
+    : ~ i c & # i . p k 255
+    ? | < c 48 > c 57 { ^ ( atoll str ) } {}
+    : ~ i v 0
+    ~ & >= c 48 <= c 57 {
+        ? >= - k neg 18 { ^ ( atoll str ) } {}
+        = v + * v 10 - c 48
+        = k + k 1
+        = c & # i . p k 255
+    }
+    ^ ? == neg 1 - 0 v v
 }
 
 // nurl_lex_parse_int_wrap: parse a decimal integer literal's text into its
@@ -36821,8 +36840,10 @@ unsafe @ gen_call_body i lex i syms i cg → s {
     // which __rce_pending reads; agora #813.)
     // (…or a value that holds closures, a builder's struct of them: what
     // running them does is its answer too, mem_note_ret_clo_effs; AGORA-945.
-    // The callee compiled already, nearly every one, is asked first.)
-    : b __rce_pend & ! __callee_shadowed & ( __rce_pending syms call_name ) | | != 0 ( nurl_str_len call_targs ) ( __is_closure_ll __cal_ll ) ( __may_hold_clo __cal_ll syms )
+    // Asked of an aggregate result only, the callee compiled already, nearly
+    // every one, first.)
+    : i __cal0 ( nurl_str_get __cal_ll 0 )
+    : b __rce_pend & ! __callee_shadowed ? | != 0 ( nurl_str_len call_targs ) ( __is_closure_ll __cal_ll ) ( __rce_pending syms call_name ) & & | == __cal0 37 == __cal0 123 ( __rce_pending syms call_name ) ( __may_hold_clo __cal_ll syms )
     : b __want_effr | & != 0 g_retcloeff_n != 0 ( nurl_sym_len2 g_pending_impl `retcloeff##` call_name ) __rce_pend
     : ~ s arg_effr ``
     : ~ s __clo_args ``
@@ -77786,7 +77807,7 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
     ? != 0 ( nurl_sym_len2 syms name `__sinkp` ) { ( nurl_sym_def syms ( nurl_str_cat name `__sinkp` ) `` ) } {}
     ? != 0 ( nurl_sym_len2 syms name `__captured_byref` ) { ( nurl_sym_def syms ( nurl_str_cat name `__captured_byref` ) `` ) } {}
     ? != 0 ( nurl_sym_len2 syms name `__global` ) { ( nurl_sym_def syms ( nurl_str_cat name `__global` ) `` ) } {}
-    ? != 0 ( nurl_sym_len2 syms name `__rcfresh` ) { ( nurl_sym_def syms ( nurl_str_cat name `__rcfresh` ) `` ) } {}
+    ? & != 0 g_rcfresh_n != 0 ( nurl_sym_len2 syms name `__rcfresh` ) { ( nurl_sym_def syms ( nurl_str_cat name `__rcfresh` ) `` ) } {}
     ? own {
         ? != 0 ( nurl_sym_len2 syms name `__mutable` ) { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `` ) } {}
         ? != 0 ( nurl_sym_len2 syms name `__borrow` ) { ( nurl_sym_def syms ( nurl_str_cat name `__borrow` ) `` ) } {}
