@@ -8139,10 +8139,21 @@ unsafe @ mem_note_ret_clo_effs i syms s lt i tt s tv → v {
 // What running the closure value returned (`tt`/`tv`) does, on the names
 // it is written with: a literal's, a binding's under any name the closure
 // may have, a call's answer, a join's or a block's arms.
+// What a call's result may run, as __ret_clo_val_effs answers it: the
+// closures it hands back (`__last_call_clo_effects__`) and those of the
+// holders it was handed that it may hand back (`__last_call_hold_ms__`),
+// both where both are known, as the members are (__clo_val_members; agora
+// #960, CodeRabbit on github#2203).
+@ __call_ret_effs i syms → s {
+    : s ce ? != 0 g_clo_eff_set ( nurl_sym_get syms `__last_call_clo_effects__` ) ``
+    ? == 0 g_call_hold_set { ^ ( nurl_str_cat ce `` ) } {}
+    ^ ( __word_union ce ( __clo_members_attr ( nurl_sym_get syms `__last_call_hold_ms__` ) `le` ) )
+}
+
 @ __ret_clo_val_effs i syms i tt s tv → s {
     // (A binding: under any name the closure may have, a literal assigned
     // in an arm too — __clo_run_attr; agora #802.)
-    : s effs0 ? == tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_effects__` ) ? ( is_ident_tok tt ) ( __clo_run_attr syms tv `__closure_effects` `le` ) ? & == tt TT_LPAREN != 0 g_clo_eff_set ( nurl_sym_get syms `__last_call_clo_effects__` ) ? & == tt TT_LPAREN != 0 g_call_hold_set ( __clo_members_attr ( nurl_sym_get syms `__last_call_hold_ms__` ) `le` ) ? == tt TT_AT ( __clo_members_attr ( nurl_sym_get syms `__last_agg_clo__` ) `le` ) ``
+    : s effs0 ? == tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_effects__` ) ? ( is_ident_tok tt ) ( __clo_run_attr syms tv `__closure_effects` `le` ) ? == tt TT_LPAREN ( __call_ret_effs syms ) ? == tt TT_AT ( __clo_members_attr ( nurl_sym_get syms `__last_agg_clo__` ) `le` ) ``
     : ~ s effs ( nurl_str_cat effs0 `` )
     // (…and a join's or a block's arms, `^ ? k c1 c2`: the literals they
     // may be, #686's nodes.)
