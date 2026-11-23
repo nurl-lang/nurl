@@ -9,6 +9,7 @@ import C.A2Stmt
 import C.A2Data
 import C.A2Call
 import C.A2Panic
+import C.A2Prog
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
 C0 the straight-line checker (`C/Check.lean`), C1 `ite` / `while` over
