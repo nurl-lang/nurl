@@ -143,18 +143,10 @@ jobs:
       # branch-protection required checks (freebsd is required), while a
       # path-filtered workflow that never starts would leave a docs-only PR
       # blocked forever. A PR touching both classes runs everything.
-      #
-      # Every paths-filter step below reads the changed files with git
-      # (`token: ''`), not the REST API: the API refuses a PR whose diff it
-      # cannot render in time ("this diff is taking too long to generate"),
-      # and a bootstrap refresh (compiler/nurlc_lastgood.ll, ~10^6 lines)
-      # is exactly such a diff. The step then failed, and every job after
-      # it was skipped. git has no such limit and lists the same files.
       - uses: dorny/paths-filter@v3
         id: filter
         if: github.event_name != 'merge_group'
         with:
-          token: ''
           filters: |
             webdocs:
               - 'webdocs/**'
@@ -196,7 +188,6 @@ jobs:
         id: code
         if: github.event_name != 'merge_group'
         with:
-          token: ''
           predicate-quantifier: 'every'
           filters: |
             code:
@@ -215,7 +206,6 @@ jobs:
         id: md
         if: github.event_name != 'merge_group'
         with:
-          token: ''
           predicate-quantifier: 'every'
           filters: |
             md:

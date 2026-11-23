@@ -21,14 +21,7 @@
   canvas.dragging { cursor: grabbing; }
   .panel { position: fixed; background: rgba(14,17,21,.86); border: 1px solid #232a33;
            border-radius: 8px; padding: 10px 12px; backdrop-filter: blur(6px); }
-  /* the panel scrolls when it outgrows a short screen (the crop tool) */
-  /* 100dvh is the viewport the page actually has — a phone's 100vh counts
-     the space under its browser bars and system buttons, which pushed the
-     crop tool's buttons out of reach; the bottom padding keeps clear of a
-     gesture bar */
-  #hud { top: 12px; left: 12px; min-width: 210px; max-height: calc(100vh - 24px);
-         max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain;
-         padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+  #hud { top: 12px; left: 12px; min-width: 210px; }
   #hud h1 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: #e8eef4;
             letter-spacing: .02em; }
   #hud .sub { color: #6b7885; margin-bottom: 9px; font-size: 11px; }
@@ -51,10 +44,6 @@
            cursor: pointer; }
   button:hover { background: #222a35; }
   .btns { display: flex; gap: 5px; margin-top: 9px; }
-  select { background: #1a2029; color: #c8d0d8; border: 1px solid #2c3540; border-radius: 5px;
-           font: inherit; font-size: 11px; padding: 2px 4px; }
-  #cmsg a { color: #4f9cf9; }
-  #crop input[type=range] { margin: 1px 0; }
   #fold { position: absolute; top: 6px; right: 8px; padding: 0 6px; font-size: 13px;
           line-height: 20px; }
   #hud.folded .fold-body { display: none; }
@@ -69,11 +58,7 @@
     #fold { padding: 2px 9px; }
   }
   @media (max-width: 600px) {
-    /* at most 60 % of the height: the cloud — and the crop box being set —
-       stays in sight below the panel, which scrolls */
-    #hud { top: 8px; left: 8px; right: 8px; min-width: 0; max-height: 60vh; max-height: 60dvh; }
-    /* the open panel takes the screen: the help line would cover its end */
-    #hud:not(.folded) ~ #help { display: none; }
+    #hud { top: 8px; left: 8px; right: 8px; min-width: 0; }
     #help { left: 8px; right: 8px; bottom: 8px; text-align: center; }
   }
 </style>
@@ -86,8 +71,8 @@
   <button id="fold" title="fold the panel">&#9776;</button>
   <div class="fold-body">
   <div class="sub" id="src">&nbsp;</div>
-  <div class="row"><span id="nl">points</span><span id="n">-</span></div>
-  <div class="row"><span id="ndl">drawn</span><span id="nd">-</span></div>
+  <div class="row"><span>points</span><span id="n">-</span></div>
+  <div class="row"><span>drawn</span><span id="nd">-</span></div>
   <div class="row"><span>fps</span><span id="fps">-</span></div>
   <div class="ctl">
     <label>point size <b id="psv">2</b></label>
@@ -104,17 +89,6 @@
   <div class="btns">
     <button id="mode">colour: rgb</button>
     <button id="reset">reset view</button>
-  </div>
-  <div id="crop" hidden>
-    <div class="sub" style="margin:10px 0 4px">region for a 3-D object</div>
-    <div class="ctl"><label for="cx0">x <b id="cxv"></b></label><input id="cx0" type="range" min="0" max="1000" value="0" aria-label="x lower bound"><input id="cx1" type="range" min="0" max="1000" value="1000" aria-label="x upper bound"></div>
-    <div class="ctl"><label for="cy0">y <b id="cyv"></b></label><input id="cy0" type="range" min="0" max="1000" value="0" aria-label="y lower bound"><input id="cy1" type="range" min="0" max="1000" value="1000" aria-label="y upper bound"></div>
-    <div class="ctl"><label for="cz0">z <b id="czv"></b></label><input id="cz0" type="range" min="0" max="1000" value="0" aria-label="z lower bound"><input id="cz1" type="range" min="0" max="1000" value="1000" aria-label="z upper bound"></div>
-    <div class="btns">
-      <select id="cres" title="detail" aria-label="detail"><option value="128">coarse</option><option value="256" selected>normal</option><option value="384">fine</option></select>
-      <button id="cgo">make 3-D object</button>
-    </div>
-    <div class="sub" id="cmsg" style="margin-top:6px">&nbsp;</div>
   </div>
   </div>
 </div>
@@ -243,9 +217,6 @@ var VS = [
 "uniform vec3 uSpan;",
 "uniform vec3 uCentre;",
 "uniform float uMaxR;",
-"uniform int uBoxOn;",
-"uniform vec3 uBoxLo;",
-"uniform vec3 uBoxHi;",
 "out vec3 vCol;",
 /* a compact blue-through-red ramp for the height and depth modes */
 "vec3 ramp(float t){",
@@ -267,16 +238,7 @@ var VS = [
 "  if (uMode == 0) vCol = aCol.rgb;",
 "  else if (uMode == 1) vCol = ramp(1.0 - (aPos.y - uLo.y) / max(uSpan.y, 1e-6));",
 "  else vCol = ramp(clamp(gl_Position.w / max(uSpan.x, 1e-6), 0.0, 1.0));",
-/* the crop region: what falls outside it is dimmed, not hidden, so the
-   box can be placed against its surroundings */
-"  if (uBoxOn == 1 && (any(lessThan(aPos, uBoxLo)) || any(greaterThan(aPos, uBoxHi)))) vCol *= 0.22;",
 "}"].join("\n");
-
-/* the crop box itself, as lines */
-var LVS = ["#version 300 es", "layout(location=0) in vec3 aPos;", "uniform mat4 uMVP;",
-  "void main(){ gl_Position = uMVP * vec4(aPos, 1.0); }"].join("\n");
-var LFS = ["#version 300 es", "precision mediump float;", "out vec4 oCol;",
-  "void main(){ oCol = vec4(0.31, 0.61, 0.98, 1.0); }"].join("\n");
 
 var FS = [
 "#version 300 es",
@@ -290,132 +252,6 @@ var FS = [
 "  oCol = vec4(vCol, 1.0);",
 "}"].join("\n");
 
-/* A triangle mesh (?glb=): vertex colours under a headlight that sits at
-   the eye, plus an ambient floor, lit from both sides — a scanned surface
-   is open, and its back faces are as real as its front. Without a NORMAL
-   attribute the face normal comes from the screen-space derivatives. */
-var MVS = [
-"#version 300 es",
-"layout(location=0) in vec3 aPos;",
-"layout(location=1) in vec4 aCol;",
-"layout(location=2) in vec3 aNrm;",
-"uniform mat4 uMVP;",
-"uniform int uMode;",
-"uniform vec3 uLo;",
-"uniform vec3 uSpan;",
-"uniform float uUp;",
-"out vec3 vCol;",
-"out vec3 vN;",
-"out vec3 vP;",
-"vec3 ramp(float t){",
-"  t = clamp(t, 0.0, 1.0);",
-"  return clamp(vec3(1.5 - abs(4.0*t - 3.0), 1.5 - abs(4.0*t - 2.0), 1.5 - abs(4.0*t - 1.0)), 0.0, 1.0);",
-"}",
-"void main(){",
-"  gl_Position = uMVP * vec4(aPos, 1.0);",
-"  vN = aNrm; vP = aPos;",
-"  float hy = (aPos.y - uLo.y) / max(uSpan.y, 1e-6);",
-"  if (uMode == 0) vCol = aCol.rgb;",
-"  else if (uMode == 1) vCol = ramp(uUp > 0.0 ? hy : 1.0 - hy);",
-"  else vCol = ramp(clamp(gl_Position.w / max(uSpan.x, 1e-6), 0.0, 1.0));",
-"}"].join("\n");
-var MFS = [
-"#version 300 es",
-"precision highp float;",
-"in vec3 vCol;",
-"in vec3 vN;",
-"in vec3 vP;",
-"uniform vec3 uEye;",
-"uniform int uHasN;",
-"out vec4 oCol;",
-"void main(){",
-"  vec3 n = uHasN == 1 ? normalize(vN) : normalize(cross(dFdx(vP), dFdy(vP)));",
-"  vec3 l = normalize(uEye - vP);",
-"  float k = 0.35 + 0.65 * abs(dot(n, l));",
-"  oCol = vec4(vCol * k, 1.0);",
-"}"].join("\n");
-
-/* ---------- GLB ----------------------------------------------------------
-   One mesh's first primitive: POSITION (float VEC3), optional NORMAL
-   (float VEC3) and COLOR_0 (normalised u8/u16 or float, VEC3/VEC4),
-   indices u8/u16/u32 or none. What the glb package writes, and what most
-   exporters write for a single scanned object. */
-function parseGlb(buf) {
-  var dv = new DataView(buf);
-  if (dv.getUint32(0, true) !== 0x46546C67) throw new Error("not a .glb file");
-  if (buf.byteLength < 28) throw new Error("the .glb is cut short");
-  var jlen = dv.getUint32(12, true);
-  if (20 + jlen + 8 > buf.byteLength) throw new Error("the .glb's JSON chunk runs past the file");
-  var doc = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jlen)));
-  var binOff = 20 + jlen + 8, binLen = dv.getUint32(20 + jlen, true);
-  if (binOff + binLen > buf.byteLength) throw new Error("the .glb's binary chunk runs past the file");
-  var prim = doc.meshes[0].primitives[0];
-  if (prim.mode !== undefined && prim.mode !== 4) throw new Error("only triangle meshes are shown");
-  /* positions are drawn as stored: if the node holding the mesh, or any of
-     its ancestors, moves it (a non-identity matrix, rotation, scale or
-     translation), the file is refused rather than shown wrongly; identity
-     transforms written out explicitly are fine */
-  var nodes = doc.nodes || [], parent = {};
-  nodes.forEach(function (nd, i) { (nd.children || []).forEach(function (c) { parent[c] = i; }); });
-  function eq(a, b) { for (var k = 0; k < b.length; k++) if (Math.abs(a[k] - b[k]) > 1e-9) return false; return true; }
-  function moves(nd) {
-    if (nd.matrix && !eq(nd.matrix, [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1])) return true;
-    if (nd.rotation && !eq(nd.rotation, [0, 0, 0, 1])) return true;
-    if (nd.scale && !eq(nd.scale, [1, 1, 1])) return true;
-    if (nd.translation && !eq(nd.translation, [0, 0, 0])) return true;
-    return false;
-  }
-  /* each node's verdict (does it, or an ancestor, move?) is computed once
-     and remembered, so a long chain costs one pass, not one per node */
-  var placed = {};
-  function chainMoves(i) {
-    var path = [], at = i, hops = 0, r = false;
-    for (; at !== undefined && hops <= nodes.length; at = parent[at], hops++) {
-      if (placed[at] !== undefined) { r = placed[at]; break; }
-      path.push(at);
-      if (moves(nodes[at])) { r = true; break; }
-    }
-    path.forEach(function (p) { placed[p] = r; });
-    return r;
-  }
-  nodes.forEach(function (nd, i) {
-    if (nd.mesh === 0 && chainMoves(i))
-      throw new Error("meshes placed by a node transform are not shown; bake the transform into the positions");
-  });
-  function acc(i, want) {
-    var a = doc.accessors[i], v = doc.bufferViews[a.bufferView];
-    var n = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 }[a.type];
-    var off = binOff + (v.byteOffset || 0) + (a.byteOffset || 0);
-    var T = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }[a.componentType];
-    if (!T) throw new Error("unsupported accessor type " + a.componentType);
-    var stride = v.byteStride || n * T.BYTES_PER_ELEMENT;
-    /* the accessor's last byte inside its view, and the view inside the
-       binary chunk: a cut file is an error, not a smaller mesh */
-    var vStart = binOff + (v.byteOffset || 0), vEnd = vStart + v.byteLength;
-    var need = a.count ? (a.count - 1) * stride + n * T.BYTES_PER_ELEMENT : 0;
-    if (vEnd > binOff + binLen || off < vStart || off + need > vEnd) throw new Error("accessor " + i + " runs past its data");
-    if (stride === n * T.BYTES_PER_ELEMENT) return { arr: new T(buf.slice(off, off + a.count * stride)), n: n, a: a };
-    var out = new T(a.count * n), src = new T(buf, 0);
-    for (var c = 0; c < a.count; c++)
-      for (var k = 0; k < n; k++) out[c * n + k] = new T(buf, off + c * stride + k * T.BYTES_PER_ELEMENT, 1)[0];
-    return { arr: out, n: n, a: a };
-  }
-  var P = acc(prim.attributes.POSITION).arr, nv = P.length / 3;
-  var N = prim.attributes.NORMAL !== undefined ? acc(prim.attributes.NORMAL).arr : null;
-  var C = new Uint8Array(nv * 4).fill(255);
-  if (prim.attributes.COLOR_0 !== undefined) {
-    var c = acc(prim.attributes.COLOR_0), sc = c.a.componentType === 5126 ? 255 : c.a.componentType === 5123 ? 255 / 65535 : 1;
-    for (var q = 0; q < nv; q++) for (var k = 0; k < 3; k++) C[q * 4 + k] = Math.min(255, Math.round(c.arr[q * c.n + k] * sc));
-  }
-  var I;
-  if (prim.indices !== undefined) {
-    var ia = acc(prim.indices).arr; I = ia instanceof Uint32Array ? ia : Uint32Array.from(ia);
-    for (var ii = 0; ii < I.length; ii++) if (I[ii] >= nv) throw new Error("an index names a vertex that does not exist");
-  }
-  else { I = new Uint32Array(nv); for (var z = 0; z < nv; z++) I[z] = z; }
-  return { n: nv, xyz: P, rgb: C, nrm: N, idx: I };
-}
-
 function compile(gl, type, src) {
   var s = gl.createShader(type);
   gl.shaderSource(s, src); gl.compileShader(s);
@@ -428,137 +264,6 @@ function compile(gl, type, src) {
 var Q = new URLSearchParams(location.search);
 /* a finger rather than a mouse: a phone or a tablet */
 var COARSE = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
-
-/* ---------- crop to a 3-D object -----------------------------------------
-   ?crop=URL turns on a region box over the cloud. Each axis has two
-   sliders spanning its 1st–99th percentile (padded), so far outliers do
-   not squeeze the useful range into a few pixels of slider. "make 3-D
-   object" POSTs {"box": [x0, y0, z0, x1, y1, z1], "res": n} to URL and
-   polls GET URL for {state, progress, url, view} until done or failed. */
-var CROP_URL = Q.get("crop");
-var cropRange = null, lineProg = null, lineVao = null, lineBuf = null;
-function cropSetup(data) {
-  var n = data.n, S = Math.min(n, 60000), axes = [[], [], []];
-  for (var q = 0; q < S; q++) { var t = Math.floor(q * n / S); for (var a = 0; a < 3; a++) axes[a].push(data.xyz[t * 3 + a]); }
-  cropRange = axes.map(function (v) {
-    v.sort(function (x, y) { return x - y; });
-    var lo = v[Math.floor(0.01 * (v.length - 1))], hi = v[Math.floor(0.99 * (v.length - 1))], pad = 0.05 * (hi - lo || 1);
-    return [lo - pad, hi + pad];
-  });
-  $("crop").hidden = false;
-  /* the two sliders of an axis never cross, so "lower" stays the lower bound
-     (and their accessible names stay true): each stops one step short of
-     the other */
-  ["x", "y", "z"].forEach(function (ax) {
-    var lo = $("c" + ax + "0"), hi = $("c" + ax + "1");
-    lo.oninput = function () { if (+lo.value > +hi.value - 1) lo.value = +hi.value - 1; cropLabels(); };
-    hi.oninput = function () { if (+hi.value < +lo.value + 1) hi.value = +lo.value + 1; cropLabels(); };
-  });
-  cropLabels();
-  $("cgo").onclick = cropGo;
-  lineProg = gl.createProgram();
-  gl.attachShader(lineProg, compile(gl, gl.VERTEX_SHADER, LVS));
-  gl.attachShader(lineProg, compile(gl, gl.FRAGMENT_SHADER, LFS));
-  gl.linkProgram(lineProg);
-  lineVao = gl.createVertexArray(); gl.bindVertexArray(lineVao);
-  lineBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf);
-  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-  /* the panel holds the tool: unfold it */
-  $("hud").classList.remove("folded");
-}
-function cropBox() {
-  if (!cropRange) return null;
-  var lo = [], hi = [];
-  ["x", "y", "z"].forEach(function (ax, a) {
-    var r = cropRange[a], u0 = +$("c" + ax + "0").value / 1000, u1 = +$("c" + ax + "1").value / 1000;
-    var p0 = r[0] + Math.min(u0, u1) * (r[1] - r[0]), p1 = r[0] + Math.max(u0, u1) * (r[1] - r[0]);
-    lo.push(p0); hi.push(p1);
-  });
-  return { lo: lo, hi: hi };
-}
-function cropLabels() {
-  var b = cropBox();
-  ["x", "y", "z"].forEach(function (ax, a) { $("c" + ax + "v").textContent = (b.hi[a] - b.lo[a]).toFixed(2) + " m"; });
-}
-function drawBox(b, mvp) {
-  var l = b.lo, h = b.hi, c = [];
-  var P = [[l[0], l[1], l[2]], [h[0], l[1], l[2]], [h[0], h[1], l[2]], [l[0], h[1], l[2]],
-           [l[0], l[1], h[2]], [h[0], l[1], h[2]], [h[0], h[1], h[2]], [l[0], h[1], h[2]]];
-  [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]].forEach(function (e) {
-    c.push.apply(c, P[e[0]]); c.push.apply(c, P[e[1]]);
-  });
-  gl.useProgram(lineProg); gl.bindVertexArray(lineVao);
-  gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(c), gl.DYNAMIC_DRAW);
-  gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, "uMVP"), false, mvp);
-  gl.drawArrays(gl.LINES, 0, 24);
-}
-var cropAttempt = "";
-function cropMsg(text) { $("cmsg").textContent = text; }
-/* only same-origin links: the href is parsed as the browser will parse it
-   ("/\\host" is another host to a URL parser) and kept only if its origin
-   is this page's; the link is built from nodes, never from markup */
-function cropLink(href, text, dl) {
-  if (typeof href !== "string") return null;
-  var u;
-  try { u = new URL(href, location.href); } catch (e) { return null; }
-  if (u.origin !== location.origin) return null;
-  var a = document.createElement("a");
-  a.href = u.href; a.textContent = text;
-  if (dl) a.setAttribute("download", ""); else a.target = "_blank";
-  return a;
-}
-function cropPoll() {
-  var url = CROP_URL + (CROP_URL.indexOf("?") < 0 ? "?" : "&") + "attempt=" + encodeURIComponent(cropAttempt);
-  fetch(url, { credentials: "same-origin" }).then(function (r) {
-    return r.json().catch(function () { return {}; }).then(function (j) { return { r: r, j: j }; });
-  }).then(function (x) {
-    var j = x.j;
-    /* a 4xx will not change by asking again (gone, unauthorised, refused):
-       stop and say so; a 5xx or a timeout/limit (408, 429) is retried */
-    var st = x.r.status;
-    if (st >= 400 && st < 500 && st !== 408 && st !== 429) {
-      cropMsg("failed: " + (j.error || ("HTTP " + st)));
-      $("cgo").disabled = false;
-      return;
-    }
-    if (!x.r.ok) { setTimeout(cropPoll, 3000); return; }
-    if (j.state === "done" && j.url) {
-      var m = $("cmsg"); m.textContent = "ready: ";
-      var a1 = cropLink(j.view, "open the object", false), a2 = cropLink(j.url, "download .glb", true);
-      if (a1) m.appendChild(a1);
-      if (a1 && a2) m.appendChild(document.createTextNode(" · "));
-      if (a2) m.appendChild(a2);
-      $("cgo").disabled = false;
-    } else if (j.state === "replaced") {
-      cropMsg("replaced by a later request (another tab, or a new reconstruction)");
-      $("cgo").disabled = false;
-    } else if (j.state === "failed") {
-      cropMsg("failed: " + (j.progress || "see the job's log"));
-      $("cgo").disabled = false;
-    } else {
-      cropMsg(j.state === "queued" ? "waiting for the GPU queue…" : (j.progress || "fusing…"));
-      setTimeout(cropPoll, 1500);
-    }
-  }).catch(function () { setTimeout(cropPoll, 3000); });
-}
-function cropGo() {
-  var b = cropBox();
-  /* a box with no depth on an axis has nothing in it */
-  for (var a = 0; a < 3; a++) if (!(b.hi[a] > b.lo[a])) { cropMsg("widen the " + "xyz".charAt(a) + " range first"); return; }
-  $("cgo").disabled = true;
-  cropMsg("asking…");
-  fetch(CROP_URL, {
-    method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ box: b.lo.concat(b.hi), res: +$("cres").value })
-  }).then(function (r) {
-    return r.json().catch(function () { return {}; }).then(function (j) {
-      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-      cropAttempt = j.attempt || "";
-      cropPoll();
-    });
-  }).catch(function (e) { cropMsg("failed: " + e.message); $("cgo").disabled = false; });
-}
 /* keep the farthest 2% out by default: on every example scene that is
    sky and nothing else, and it is what makes the first frame legible */
 var DEFAULT_TRIM = 0.98;
@@ -659,7 +364,6 @@ function boot(data, label) {
   if (Q.has("pitch")) cam.pitch = parseFloat(Q.get("pitch"));
   if (Q.has("dist")) cam.dist *= parseFloat(Q.get("dist"));
   home = JSON.parse(JSON.stringify(cam));
-  if (CROP_URL && !data.idx) cropSetup(data);
 
   /* A phone's GPU draws a few million points at a crawl and the orbit
      stutters with it; start it at a budget the slider can lift. ?density=
@@ -670,32 +374,11 @@ function boot(data, label) {
   $("dn").value = Math.max(1, Math.round(density * 100));
   $("dnv").textContent = $("dn").value + "%";
 
-  var isMesh = !!data.idx;
-  var vao = gl.createVertexArray(); gl.bindVertexArray(vao);
-  if (isMesh) {
-    /* a mesh: its own arrays as they are, and the indices */
-    var pb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, pb);
-    gl.bufferData(gl.ARRAY_BUFFER, data.xyz, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-    var cb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, cb);
-    gl.bufferData(gl.ARRAY_BUFFER, data.rgb, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, true, 0, 0);
-    if (data.nrm) {
-      var nb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, nb);
-      gl.bufferData(gl.ARRAY_BUFFER, data.nrm, gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
-    } else gl.vertexAttrib3f(2, 0, 0, 1);
-    var ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data.idx, gl.STATIC_DRAW);
-    ["ps", "dn", "tm"].forEach(function (id) { $(id).parentNode.hidden = true; });
-    $("nl").textContent = "vertices"; $("ndl").textContent = "triangles";
-  }
-
   /* one interleaved, 16-byte-aligned, shuffled buffer */
-  var order = isMesh ? null : shuffled(total);
-  var inter = new ArrayBuffer(isMesh ? 0 : total * 16);
+  var order = shuffled(total);
+  var inter = new ArrayBuffer(total * 16);
   var fv = new Float32Array(inter), bv = new Uint8Array(inter);
-  for (var k = 0; !isMesh && k < total; k++) {
+  for (var k = 0; k < total; k++) {
     var s = order[k];
     fv[k * 4]     = data.xyz[s * 3];
     fv[k * 4 + 1] = data.xyz[s * 3 + 1];
@@ -705,19 +388,18 @@ function boot(data, label) {
     bv[k * 16 + 14] = data.rgb[s * 4 + 2];
   }
 
-  if (!isMesh) {
-    var vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, inter, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, true, 16, 12);
-  }
+  var vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+  var vbo = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, inter, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 4, gl.UNSIGNED_BYTE, true, 16, 12);
 
   var prog = gl.createProgram();
-  gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, isMesh ? MVS : VS));
-  gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, isMesh ? MFS : FS));
+  gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FS));
   gl.linkProgram(prog);
   if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
     throw new Error("link: " + gl.getProgramInfoLog(prog));
@@ -728,14 +410,7 @@ function boot(data, label) {
       uLo = gl.getUniformLocation(prog, "uLo"),
       uSpan = gl.getUniformLocation(prog, "uSpan"),
       uCentre = gl.getUniformLocation(prog, "uCentre"),
-      uMaxR = gl.getUniformLocation(prog, "uMaxR"),
-      uBoxOn = gl.getUniformLocation(prog, "uBoxOn"),
-      uBoxLo = gl.getUniformLocation(prog, "uBoxLo"),
-      uBoxHi = gl.getUniformLocation(prog, "uBoxHi"),
-      uEye = gl.getUniformLocation(prog, "uEye"),
-      uUp = gl.getUniformLocation(prog, "uUp"),
-      uHasN = gl.getUniformLocation(prog, "uHasN");
-  var ntri = isMesh ? data.idx.length / 3 : 0;
+      uMaxR = gl.getUniformLocation(prog, "uMaxR");
 
   gl.enable(gl.DEPTH_TEST);
   gl.clearColor(0.043, 0.051, 0.063, 1);
@@ -744,14 +419,13 @@ function boot(data, label) {
   $("hud").hidden = false; $("help").hidden = false;
   $("src").textContent = label;
   $("n").textContent = total.toLocaleString();
-  if (isMesh) $("nd").textContent = ntri.toLocaleString();
 
   var last = performance.now(), frames = 0, acc = 0;
   function frame(now) {
     resize();
     var eye = [
       cam.tgt[0] + cam.dist * Math.cos(cam.pitch) * Math.sin(cam.yaw),
-      cam.tgt[1] + UP[1] * cam.dist * Math.sin(cam.pitch),
+      cam.tgt[1] - cam.dist * Math.sin(cam.pitch),
       cam.tgt[2] + cam.dist * Math.cos(cam.pitch) * Math.cos(cam.yaw)
     ];
     var P = perspective(50 * Math.PI / 180, cv.width / cv.height,
@@ -762,22 +436,10 @@ function boot(data, label) {
     gl.uniform3fv(uLo, lo);
     gl.uniform3fv(uSpan, [cam.dist * 2, span[1], 1]);
     gl.uniform3fv(uCentre, mid);
+    gl.uniform1f(uMaxR, trim >= 1 ? 0 : radiusAt(trim));
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    if (isMesh) {
-      gl.uniform3fv(uEye, eye);
-      gl.uniform1f(uUp, UP[1]);
-      gl.uniform1i(uHasN, data.nrm ? 1 : 0);
-      gl.drawElements(gl.TRIANGLES, data.idx.length, gl.UNSIGNED_INT, 0);
-    } else {
-      gl.uniform1f(uMaxR, trim >= 1 ? 0 : radiusAt(trim));
-      drawn = Math.max(1, Math.round(total * density));
-      var cb = cropBox();
-      gl.uniform1i(uBoxOn, cb ? 1 : 0);
-      if (cb) { gl.uniform3fv(uBoxLo, cb.lo); gl.uniform3fv(uBoxHi, cb.hi); }
-      gl.drawArrays(gl.POINTS, 0, drawn);
-      if (cb) drawBox(cb, mul(P, lookAt(eye, cam.tgt, rolledUp(eye, cam.tgt))));
-      gl.useProgram(prog); gl.bindVertexArray(vao);
-    }
+    drawn = Math.max(1, Math.round(total * density));
+    gl.drawArrays(gl.POINTS, 0, drawn);
 
     frames++; acc += now - last; last = now;
     if (acc > 500) {
@@ -786,7 +448,7 @@ function boot(data, label) {
          capture, a backgrounded tab — it is an invented number that looks
          like a real one. Better to say nothing. */
       $("fps").textContent = frames >= 10 ? (frames * 1000 / acc).toFixed(0) : "-";
-      if (!isMesh) $("nd").textContent = drawn.toLocaleString();
+      $("nd").textContent = drawn.toLocaleString();
       frames = 0; acc = 0;
     }
 
@@ -842,11 +504,7 @@ function probeOut() {
      two pointers     pinch zooms about the centre, the midpoint's travel pans
      double tap       reset the view
    The camera moves are the same functions whichever device made them. */
-/* With -Y up (OpenCV clouds) the screen's horizontal runs mirrored against
-   a +Y-up orbit; a +Y-up model (glTF) needs the plain sign. */
-function hsign() { return UP[1] < 0 ? 1 : -1; }
 function orbitBy(dx, dy) {
-  dx *= hsign();
   cam.yaw += dx * 0.006;
   cam.pitch = Math.max(-1.55, Math.min(1.55, cam.pitch + dy * 0.006));
 }
@@ -858,10 +516,8 @@ function panBy(dx, dy) {
      and in the orbit, or left-drag walks the scene right. */
   var s = cam.dist * 0.0016;
   var rx = Math.cos(cam.yaw), rz = -Math.sin(cam.yaw);
-  dx *= hsign();
   cam.tgt[0] += dx * s * rx; cam.tgt[2] += dx * s * rz;
-  /* drag down, the scene goes down: with -Y up that is +y, with +Y up -y */
-  cam.tgt[1] += UP[1] * dy * s;
+  cam.tgt[1] -= dy * s;
 }
 function zoomBy(f) { cam.dist = Math.max(diag * 1e-4, Math.min(diag * 50, cam.dist * f)); }
 
@@ -965,10 +621,7 @@ window.addEventListener("keydown", function (e) {
 (function () {
   if (!gl) return fail("this browser has no WebGL2",
                        "the viewer draws the cloud on the GPU and needs it");
-  var glbUrl = Q.get("glb");
-  /* glTF is +Y up */
-  if (glbUrl) { UP = [0, 1, 0]; $("hud").querySelector("h1").textContent = "3-D object"; }
-  var url = glbUrl || Q.get("cloud") || "cloud";
+  var url = Q.get("cloud") || "cloud";
   var xhr = new XMLHttpRequest();
   xhr.open("GET", url);
   xhr.responseType = "arraybuffer";
@@ -990,8 +643,7 @@ window.addEventListener("keydown", function (e) {
        virtual time may never get round to running. */
     try {
       var name = xhr.getResponseHeader("X-Cloud-Name") || url;
-      var data = glbUrl ? parseGlb(xhr.response)
-                        : parsePly(xhr.response, function (n) { $("statsub").textContent = n; });
+      var data = parsePly(xhr.response, function (n) { $("statsub").textContent = n; });
       boot(data, name + "  " + (xhr.response.byteLength / 1048576).toFixed(1) + " MB");
     } catch (err) {
       fail("could not read the cloud", String(err && err.message || err));

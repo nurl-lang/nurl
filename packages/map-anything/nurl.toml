@@ -1,8 +1,8 @@
 [package]
 name = "map-anything"
-version = "0.10.0"
+version = "0.9.0"
 nurl-version = "0.73.0"
-description = "Metric 3-D reconstruction from plain images in pure NURL — a port of Meta's MapAnything (https://github.com/facebookresearch/map-anything). Point it at a set of photos or a video and it produces a metric-scale world-space point cloud with per-view camera poses, depth maps and confidences, viewable as a rotatable object in the browser via the ply package's WebGL viewer. Runs the reference facebook/map-anything-apache checkpoint (DINOv2-giant encoder, 16-layer alternating-attention multi-view transformer, DPT ray-directions+depth head, pose and metric-scale heads), fetched from Hugging Face on first use and cached under ~/.nurl/models. --mask-sky additionally drops sky pixels with the skyseg.onnx U2-Net run through the onnx package on the GPU, for outdoor scenes where the depth head hallucinates a far wall. `map-anything serve` is the same pipeline as a web service: upload photos or a video in the browser, follow the job, then orbit the cloud or download it as a PLY. `--scene` keeps the views, and `map-anything mesh` turns them — or a box cut from them in the browser — into a 3-D object (.glb, via the glb package): TSDF fusion of the depths, marching tetrahedra, the loose bits dropped."
+description = "Metric 3-D reconstruction from plain images in pure NURL — a port of Meta's MapAnything (https://github.com/facebookresearch/map-anything). Point it at a set of photos or a video and it produces a metric-scale world-space point cloud with per-view camera poses, depth maps and confidences, viewable as a rotatable object in the browser via the ply package's WebGL viewer. Runs the reference facebook/map-anything-apache checkpoint (DINOv2-giant encoder, 16-layer alternating-attention multi-view transformer, DPT ray-directions+depth head, pose and metric-scale heads), fetched from Hugging Face on first use and cached under ~/.nurl/models. --mask-sky additionally drops sky pixels with the skyseg.onnx U2-Net run through the onnx package on the GPU, for outdoor scenes where the depth head hallucinates a far wall. `map-anything serve` is the same pipeline as a web service: upload photos or a video in the browser, follow the job, then orbit the cloud or download it as a PLY."
 license = "Apache-2.0"
 
 [dependencies]
@@ -10,8 +10,7 @@ hub = { path = "../hub", version = "^0" }
 http = { path = "../http", version = "^0" }
 gpukit = { path = "../gpukit", version = "^0.11.13" }
 image = { path = "../image", version = "^0" }
-ply = { path = "../ply", version = "^0.4" }
+ply = { path = "../ply", version = "^0.3.7" }
 video = { path = "../video", version = "^0.3" }
 safetensor = { path = "../safetensor", version = "^0.6" }
 onnx = { path = "../onnx", version = "^0.13.0" }
-glb = { path = "../glb", version = "^0.1" }

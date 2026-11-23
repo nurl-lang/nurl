@@ -1,35 +1,5 @@
 # Changelog
 
-## [0.10.0] — 2026-11-23
-
-### Added
-
-- 3-D objects. `--scene FILE` keeps the views a run emits — each camera as a
-  similarity in the point cloud's frame (alignment and window stitch folded
-  in), its fitted pinhole, its z-depths, its filtered mask, its colours — and
-  `map-anything mesh <scene> -o object.glb [--box x0 y0 z0 x1 y1 z1] [--res N]`
-  turns them into a mesh: TSDF fusion inside the box (N cells along its longest
-  side, default 256, truncation 4 cells, colour only from views that see the
-  surface there), marching tetrahedra (Freudenthal's six per cell: no cracks,
-  no case tables), shared edge vertices with interpolated colours, triangles
-  turned to face the free space, pieces under 2 % of the largest dropped,
-  area-weighted normals, written as binary glTF in glTF's frame (+Y up,
-  centred on the box, metres). The whole lego scene meshes in ~2 s on a CPU.
-- `serve` keeps every run's views (`scene.bin`) and makes objects as queued
-  jobs on the same worker, lock, pid/token and recovery as reconstructions:
-  `POST /api/jobs/:id/mesh {box, res}`, `GET /api/jobs/:id/mesh` (state,
-  progress, url), `GET /jobs/:id/object.glb`. The cloud viewer opens with a
-  region box ("make 3-D object"), and the job list links the object and its
-  download. Jobs made before this version say to run them again.
-- `tests/mesh_test.sh`: a synthetic scene — a sphere seen by eight cameras with
-  exact depths — through the real fusion and extraction: vertices within a cell
-  of the sphere, 99.98 % of the normals and 99.86 % of the windings outward,
-  the colour through; a bad box and a truncated scene refused.
-
-### Changed
-
-- Requires ply 0.4 (mesh view, region box) and glb 0.1.
-
 ## [0.9.0] — 2026-11-22
 
 ### Changed

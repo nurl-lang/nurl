@@ -28,9 +28,6 @@
 //   diff build/nurlc.ll build/nurlc2.ll
 
 // ── Token type constants (must match runtime.c §5) ────────────────
-// The core IR builder's tables are Vecs (AGORA-905).
-$ `stdlib/core/vec.nu`
-
 : i TT_EOF 0
 : i TT_IDENT 1
 : i TT_INT 2
@@ -199,7 +196,6 @@ $ `stdlib/core/vec.nu`
 : ~ s g_bck_own_params ``  // the parameters the function being walked owns (a safe `sink s`)
 : ~ i g_call_cp 0  // `res` / `own`: the call just emitted copied its result `res`, owned by bit `own` (mem_own_lendback); `bind`: a let binds that copy (__mem_udrop_bind_flag) — agora #477
 : ~ i g_bck_end_views 0  // 1 while bck_root_end ends a field path's borrows: only its views (agora #309)
-: ~ s g_bck_rows_ix ``  // a parked function whose rows its walk reads in place, in g_deferred_bck (__bck_rows); `` = g_bck's own `stmts` (AGORA-974)
 : ~ s g_bck_fn ``  // the function being walked, whose g_fn_vkeeps it decides (a closure body's: its literal's, `__closure_N`)
 : ~ i g_bck_quiet 0  // 1 while a walk only makes its answers: no diagnostic (__bck_walk_scc)
 : ~ i g_bck_ans_union 0  // 1 while a walk's answers add to the ones published (a component's fixed point)
@@ -215,41 +211,24 @@ $ `stdlib/core/vec.nu`
 // g_core_on.
 : ~ i g_core_on 0  // 1: the walk builds the core IR (--emit-core)
 : ~ i g_core_live 0  // 1 while a function's IR is being built
-// The builder's tables, words each: one `( Vec i )` per CT_* number
-// (__ct_get / __ct_set / __ct_need reach them, AGORA-905).
-: ~ ( Vec i ) g_ct_code 0
-: ~ ( Vec i ) g_ct_vars 0
-: ~ ( Vec i ) g_ct_pl 0
-: ~ ( Vec i ) g_ct_os 0
-: ~ ( Vec i ) g_ct_tmps 0
-: ~ ( Vec i ) g_ct_virts 0
-: ~ ( Vec i ) g_ct_callees 0
-: ~ ( Vec i ) g_ct_pend 0
-: ~ ( Vec i ) g_ct_tys 0
-: ~ ( Vec i ) g_ct_fns 0
-: ~ b g_ct_made F  // the tables (and the stacks below) exist
-: i CT_CODE 0  // the function's statements, as words (CO_* / RV_*)
-: i CT_VARS 1  // its variables, CORE_VW words each: name, type, kind, depth, flags, line, value block
-: i CT_PL 2  // its places, 3 words each: variable (-1: a global), parent place (-1: a root), path element
-: i CT_OS 3  // the operand stack: every expression leaves one operand (core_expr_exit)
-: i CT_TMPS 4  // temporaries made and not yet released (core_discard)
-: i CT_VIRTS 5  // the `dyn` methods' virtual callees the IR called, interned (core_note_virt)
-: i CT_CALLEES 6  // the functions the IR called, interned, each once (core_note_callee)
-: i CT_PEND 7  // the arguments of the calls being compiled read as values and not taken yet, 3 words each: stack slot, operand, type interned (0: read in place) (core_arg_read)
-: i CT_TYS 8  // the types the IR mentioned, interned, in the order met (core_note_ty)
-: i CT_FNS 9  // the functions built, 3 words each: name, template (interned), parameter count (core_note_fn)
+: ~ i g_core_code 0  // the function's statements, as words (CO_* / RV_*)
 : ~ i g_core_code_n 0
+: ~ i g_core_code_cap 0
+: ~ i g_core_vars 0  // its variables, CORE_VW words each: name, type, kind, depth, flags, line, value block
 : ~ i g_core_var_n 0
+: ~ i g_core_var_cap 0
+: ~ i g_core_pl 0  // its places, 3 words each: variable (-1: a global), parent place (-1: a root), path element
 : ~ i g_core_pl_n 0
+: ~ i g_core_pl_cap 0
+: ~ i g_core_os 0  // the operand stack: every expression leaves one operand (core_expr_exit)
 : ~ i g_core_os_n 0
+: ~ i g_core_os_cap 0
+: ~ i g_core_tmps 0  // temporaries made and not yet released (core_discard)
 : ~ i g_core_tmp_n 0
-// The tables of the functions a closure body or an instance is being built
-// inside, five per level, innermost last; and their scalar state.
-: ~ ( Vec ( Vec i ) ) g_ct_saved 0
-: ~ ( Vec i ) g_ct_saved_w 0
+: ~ i g_core_tmp_cap 0
 : ~ i g_core_depth 0  // scopes open (SCOPE, an arm, a loop body)
 : ~ i g_core_line 0  // the line of the last LINE word
-: ~ i g_core_saved 0  // the levels of enclosing builders set aside (a closure body or an instance is being built inside a function)
+: ~ i g_core_saved 0  // the enclosing function's builder, while a closure body or an instance is built inside it
 : ~ i g_core_fname 0  // the function's name, interned
 : ~ i g_core_fret 0  // its return type, interned
 : ~ i g_core_fline 0
@@ -268,7 +247,9 @@ $ `stdlib/core/vec.nu`
 : ~ i g_core_agg_var 0  // …and its variant (an enum's, `T` / `F` of an option or a result), 0 none
 : ~ i g_core_match_op 0  // the scrutinee of the match arm being compiled, and its pattern (core_match_arm)
 : ~ i g_core_match_var 0
+: ~ i g_core_tys 0  // the types the IR mentioned, interned, in the order met (core_note_ty)
 : ~ i g_core_ty_n 0
+: ~ i g_core_ty_cap 0
 : ~ i g_core_ty_seen 0  // …and the table that says which are listed already
 : ~ i g_core_fflags 0  // the function being built: bit 0 its body may use raw memory (bck_unsafe_ctx); bit 3 it may start a panic itself (core_note_panic_point)
 : ~ i g_core_ftmpl 0  // …and the generic it is an instance of, interned (`` none)
@@ -282,14 +263,22 @@ $ `stdlib/core/vec.nu`
 : ~ i g_core_vb_tail_fs -1
 : ~ i g_core_kw_h 0  // the call with named arguments just read: where its operands begin, and its arguments' parameter positions in the order written (core_kwargs_reorder)
 : ~ s g_core_kw_slots ``
+: ~ i g_core_pend 0  // the arguments of the calls being compiled read as values and not taken yet, 3 words each: stack slot, operand, type interned (0: read in place) (core_arg_read)
 : ~ i g_core_pend_n 0
+: ~ i g_core_pend_cap 0
 : ~ i g_core_pend_base 0  // …the first of them that is the innermost call's own (__gen_call_nested)
+: ~ i g_core_virts 0  // the `dyn` methods' virtual callees the IR called, interned (core_note_virt)
 : ~ i g_core_virt_n 0
+: ~ i g_core_virt_cap 0
 : ~ i g_core_virt_seen 0
 : ~ i g_raw_probe 0  // 1 while the core IR asks whether a call crosses the raw boundary, 2 once a rule said yes (bck_check_raw_call)
+: ~ i g_core_callees 0  // the functions the IR called, interned, each once (core_note_callee)
 : ~ i g_core_callee_n 0
+: ~ i g_core_callee_cap 0
 : ~ i g_core_callee_seen 0
+: ~ i g_core_fns 0  // the functions built, 3 words each: name, template (interned), parameter count (core_note_fn)
 : ~ i g_core_fn_n 0
+: ~ i g_core_fn_cap 0
 : ~ i g_walk_owns 1  // 1: the fused walk makes its ownership refusals (own_die, bck_emit_error); 0 under --emit-core, where the IR's reader decides them
 // ── Ownership engine (docs/dev/CORE_IR.md §7, AGORA-863) ─────────────
 // The rule table of tools/ncore/RULES.md over the core IR: one analysis
@@ -10829,293 +10818,125 @@ unsafe @ __gen_ret i lex i syms i cg → s {
 // A statement's temporaries are released where its value is discarded
 // (core_discard); a tail's ride on to the statement around its block.
 
-// ── The builder's tables ─────────────────────────────────────────────
-// Every table the builder keeps is a `( Vec i )` of words, g_ct_<name>,
-// numbered CT_*, and reached only through the accessors below: the core_*
-// functions go through them and need no raw pointer of their own. A
-// table's Vec is at least its `_n` long; the words past `_n` are spare
-// room, zeroed when grown. (The accessors are inline, and every caller
-// names its table by a constant: each folds to the one table it reads.)
-//
-// Why these accessors are `unsafe`, and why that is sound: an owning
-// global is refused in safe code because another thread could replace
-// and drop it under a reader. These tables are the walk's own state:
-// nurlc runs the walk on one thread and never hands a table to another,
-// and no accessor keeps a view of a table past its own body. Every index
-// is checked: `vec_at` panics past the end, and so does a `vec_set` that
-// does not land. (AGORA-905)
-unsafe inline @ __ct_init → v {
-    ? ! g_ct_made { ( __ct_make ) } {}
+// A word array `ncap` words long holding the first `n` of `arr`, which is
+// released.
+unsafe @ __core_grown i arr i n i ncap → i {
+    : s nw # s ( nurl_alloc * ncap 8 )
+    ? != n 0 { ( memcpy nw # s arr * n 8 ) } {}
+    ? != arr 0 { ( nurl_free # s arr ) } {}
+    ^ # i nw
 }
 
-unsafe @ __ct_make → v {
-    = g_ct_code ( vec_new [i] )
-    = g_ct_vars ( vec_new [i] )
-    = g_ct_pl ( vec_new [i] )
-    = g_ct_os ( vec_new [i] )
-    = g_ct_tmps ( vec_new [i] )
-    = g_ct_virts ( vec_new [i] )
-    = g_ct_callees ( vec_new [i] )
-    = g_ct_pend ( vec_new [i] )
-    = g_ct_tys ( vec_new [i] )
-    = g_ct_fns ( vec_new [i] )
-    = g_ct_saved ( vec_new [( Vec i )] )
-    = g_ct_saved_w ( vec_new [i] )
-    = g_ct_made T
-}
-
-// Word `k` of table `t`.
-unsafe inline @ __ct_get i t i k → i {
-    ( __ct_init )
-    ? == t CT_CODE { ^ ( vec_at [i] g_ct_code k ) } {}
-    ? == t CT_VARS { ^ ( vec_at [i] g_ct_vars k ) } {}
-    ? == t CT_PL { ^ ( vec_at [i] g_ct_pl k ) } {}
-    ? == t CT_OS { ^ ( vec_at [i] g_ct_os k ) } {}
-    ? == t CT_TMPS { ^ ( vec_at [i] g_ct_tmps k ) } {}
-    ? == t CT_VIRTS { ^ ( vec_at [i] g_ct_virts k ) } {}
-    ? == t CT_CALLEES { ^ ( vec_at [i] g_ct_callees k ) } {}
-    ? == t CT_PEND { ^ ( vec_at [i] g_ct_pend k ) } {}
-    ? == t CT_TYS { ^ ( vec_at [i] g_ct_tys k ) } {}
-    ^ ( vec_at [i] g_ct_fns k )
-}
-
-// Word `k` of table `t` is `x`. `k` is below the table's length
-// (__ct_need made room).
-unsafe inline @ __ct_set i t i k i x → v {
-    ( __ct_init )
-    : ~ b ok F
-    ? == t CT_CODE { = ok ( vec_set [i] g_ct_code k x ) } {
-        ? == t CT_VARS { = ok ( vec_set [i] g_ct_vars k x ) } {
-            ? == t CT_PL { = ok ( vec_set [i] g_ct_pl k x ) } {
-                ? == t CT_OS { = ok ( vec_set [i] g_ct_os k x ) } {
-                    ? == t CT_TMPS { = ok ( vec_set [i] g_ct_tmps k x ) } {
-                        ? == t CT_VIRTS { = ok ( vec_set [i] g_ct_virts k x ) } {
-                            ? == t CT_CALLEES { = ok ( vec_set [i] g_ct_callees k x ) } {
-                                ? == t CT_PEND { = ok ( vec_set [i] g_ct_pend k x ) } {
-                                    ? == t CT_TYS { = ok ( vec_set [i] g_ct_tys k x ) } {
-                                        = ok ( vec_set [i] g_ct_fns k x )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    ? ! ok { ( nurl_panic `nurlc: a core IR table written past its end` ) } {}
-}
-
-unsafe inline @ __ct_len i t → i {
-    ( __ct_init )
-    ? == t CT_CODE { ^ ( vec_len [i] g_ct_code ) } {}
-    ? == t CT_VARS { ^ ( vec_len [i] g_ct_vars ) } {}
-    ? == t CT_PL { ^ ( vec_len [i] g_ct_pl ) } {}
-    ? == t CT_OS { ^ ( vec_len [i] g_ct_os ) } {}
-    ? == t CT_TMPS { ^ ( vec_len [i] g_ct_tmps ) } {}
-    ? == t CT_VIRTS { ^ ( vec_len [i] g_ct_virts ) } {}
-    ? == t CT_CALLEES { ^ ( vec_len [i] g_ct_callees ) } {}
-    ? == t CT_PEND { ^ ( vec_len [i] g_ct_pend ) } {}
-    ? == t CT_TYS { ^ ( vec_len [i] g_ct_tys ) } {}
-    ^ ( vec_len [i] g_ct_fns )
-}
-
-// Table `t` is at least `n` words long: it doubles, zeroed, from 64.
-unsafe inline @ __ct_need i t i n → v {
-    : i len ( __ct_len t )
-    ? < len n { ( __ct_grow t len n ) } {}
-}
-
-unsafe @ __ct_grow i t i len i n → v {
-    : ~ i nc ? == len 0 64 * len 2
-    ~ < nc n { = nc * nc 2 }
-    : ~ b ok F
-    ? == t CT_CODE { = ok ( vec_resize_zeroed [i] g_ct_code nc ) } {
-        ? == t CT_VARS { = ok ( vec_resize_zeroed [i] g_ct_vars nc ) } {
-            ? == t CT_PL { = ok ( vec_resize_zeroed [i] g_ct_pl nc ) } {
-                ? == t CT_OS { = ok ( vec_resize_zeroed [i] g_ct_os nc ) } {
-                    ? == t CT_TMPS { = ok ( vec_resize_zeroed [i] g_ct_tmps nc ) } {
-                        ? == t CT_VIRTS { = ok ( vec_resize_zeroed [i] g_ct_virts nc ) } {
-                            ? == t CT_CALLEES { = ok ( vec_resize_zeroed [i] g_ct_callees nc ) } {
-                                ? == t CT_PEND { = ok ( vec_resize_zeroed [i] g_ct_pend nc ) } {
-                                    ? == t CT_TYS { = ok ( vec_resize_zeroed [i] g_ct_tys nc ) } {
-                                        = ok ( vec_resize_zeroed [i] g_ct_fns nc )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    ? ! ok { ( nurl_panic `nurlc: a core IR table could not grow` ) } {}
-}
-
-// The address of table `t`'s words, for the engine's copy of a finished
-// function (eng_keep_fn and eng_print_types read it at once, before any
-// table can grow).
-unsafe @ __ct_addr i t → i {
-    ( __ct_init )
-    ? == t CT_CODE { ^ # i ( vec_data [i] g_ct_code ) } {}
-    ? == t CT_VARS { ^ # i ( vec_data [i] g_ct_vars ) } {}
-    ? == t CT_PL { ^ # i ( vec_data [i] g_ct_pl ) } {}
-    ? == t CT_OS { ^ # i ( vec_data [i] g_ct_os ) } {}
-    ? == t CT_TMPS { ^ # i ( vec_data [i] g_ct_tmps ) } {}
-    ? == t CT_VIRTS { ^ # i ( vec_data [i] g_ct_virts ) } {}
-    ? == t CT_CALLEES { ^ # i ( vec_data [i] g_ct_callees ) } {}
-    ? == t CT_PEND { ^ # i ( vec_data [i] g_ct_pend ) } {}
-    ? == t CT_TYS { ^ # i ( vec_data [i] g_ct_tys ) } {}
-    ^ # i ( vec_data [i] g_ct_fns )
-}
-
-// Table `t` is empty again (its words go).
-unsafe @ __ct_clear i t → v {
-    ( __ct_init )
-    ? == t CT_CODE { = g_ct_code ( vec_new [i] ) ^ } {}
-    ? == t CT_VARS { = g_ct_vars ( vec_new [i] ) ^ } {}
-    ? == t CT_PL { = g_ct_pl ( vec_new [i] ) ^ } {}
-    ? == t CT_OS { = g_ct_os ( vec_new [i] ) ^ } {}
-    ? == t CT_TMPS { = g_ct_tmps ( vec_new [i] ) ^ } {}
-    ? == t CT_VIRTS { = g_ct_virts ( vec_new [i] ) ^ } {}
-    ? == t CT_CALLEES { = g_ct_callees ( vec_new [i] ) ^ } {}
-    ? == t CT_PEND { = g_ct_pend ( vec_new [i] ) ^ } {}
-    ? == t CT_TYS { = g_ct_tys ( vec_new [i] ) ^ } {}
-    ? == t CT_FNS { = g_ct_fns ( vec_new [i] ) ^ } {}
-}
-
-// A closure body's or an instance's builder begins inside a function's:
-// the function's own tables (CT_CODE … CT_TMPS) go on the stack, fresh
-// ones take their place.
-unsafe @ __ct_push_tables → v {
-    ( __ct_init )
-    ( vec_push [( Vec i )] g_ct_saved g_ct_code )
-    = g_ct_code ( vec_new [i] )
-    ( vec_push [( Vec i )] g_ct_saved g_ct_vars )
-    = g_ct_vars ( vec_new [i] )
-    ( vec_push [( Vec i )] g_ct_saved g_ct_pl )
-    = g_ct_pl ( vec_new [i] )
-    ( vec_push [( Vec i )] g_ct_saved g_ct_os )
-    = g_ct_os ( vec_new [i] )
-    ( vec_push [( Vec i )] g_ct_saved g_ct_tmps )
-    = g_ct_tmps ( vec_new [i] )
-}
-
-unsafe @ __ct_pop_table → ( Vec i ) {
-    ^ ?? ( vec_pop [( Vec i )] g_ct_saved ) { T v → v F _ → ( vec_new [i] ) }
-}
-
-// …and it ends: the inner tables go, the function's come back.
-unsafe @ __ct_pop_tables → v {
-    ( __ct_init )
-    = g_ct_tmps ( __ct_pop_table )
-    = g_ct_os ( __ct_pop_table )
-    = g_ct_pl ( __ct_pop_table )
-    = g_ct_vars ( __ct_pop_table )
-    = g_ct_code ( __ct_pop_table )
-}
-
-// The builder's scalar state, set aside and taken back, word by word.
-unsafe @ __ct_save_w i x → v {
-    ( __ct_init )
-    ( vec_push [i] g_ct_saved_w x )
-}
-
-unsafe @ __ct_restore_w → i {
-    ( __ct_init )
-    ^ ?? ( vec_pop [i] g_ct_saved_w ) { T x → x F _ → 0 }
-}
-
-// The string an interned id names (__core_in made it; 0 names none, the
-// empty string). Why this is `unsafe`, and sound: an id is the address of
-// an interned copy, and interned strings live for the whole compile
-// (nurl_intern_n: "a view valid for the compile"), so the view handed back
-// never dangles. (AGORA-905)
-unsafe @ __core_str i id → s {
-    ? == id 0 { ^ `` } {}
-    ^ # s id
-}
-
-@ __core_in s x → i {
+unsafe @ __core_in s x → i {
     ^ # i ( nurl_intern_n x ( nurl_str_len x ) )
 }
 
 // One statement word.
-inline @ core_w i w → v {
-    ( __ct_need CT_CODE + g_core_code_n 1 )
-    ( __ct_set CT_CODE g_core_code_n w )
+unsafe @ core_w i w → v {
+    ? >= g_core_code_n g_core_code_cap {
+        : i nc ? == g_core_code_cap 0 512 * g_core_code_cap 2
+        = g_core_code ( __core_grown g_core_code g_core_code_n nc )
+        = g_core_code_cap nc
+    } {}
+    : *i c # *i # s g_core_code
+    = . c g_core_code_n w
     = g_core_code_n + g_core_code_n 1
 }
 
-inline @ core_push i op → v {
-    ( __ct_need CT_OS + g_core_os_n 1 )
-    ( __ct_set CT_OS g_core_os_n op )
+unsafe @ core_push i op → v {
+    ? >= g_core_os_n g_core_os_cap {
+        : i nc ? == g_core_os_cap 0 64 * g_core_os_cap 2
+        = g_core_os ( __core_grown g_core_os g_core_os_n nc )
+        = g_core_os_cap nc
+    } {}
+    : *i os # *i # s g_core_os
+    = . os g_core_os_n op
     = g_core_os_n + g_core_os_n 1
 }
 
 // The operand on top, taken: 1 (a value nothing named) from an empty stack.
-inline @ core_pop → i {
+unsafe @ core_pop → i {
     ? <= g_core_os_n 0 { ^ 1 } {}
     = g_core_os_n - g_core_os_n 1
-    ^ ( __ct_get CT_OS g_core_os_n )
+    : *i os # *i # s g_core_os
+    ^ . os g_core_os_n
 }
 
 // A new variable: kind 0 a parameter, 1 a binding, 2 a temporary, 3 a
 // capture; flags bit 0 mutable, 2 `inout`, 4 `sink`.
-@ core_var_new s name s ty i kind i flags i line → i {
-    ( __ct_need CT_VARS * + g_core_var_n 1 CORE_VW )
+unsafe @ core_var_new s name s ty i kind i flags i line → i {
+    : i need * + g_core_var_n 1 CORE_VW
+    ? > need g_core_var_cap {
+        : i nc ? == g_core_var_cap 0 * 64 CORE_VW * g_core_var_cap 2
+        = g_core_vars ( __core_grown g_core_vars * g_core_var_n CORE_VW nc )
+        = g_core_var_cap nc
+    } {}
+    : *i vs # *i # s g_core_vars
     : i b * g_core_var_n CORE_VW
-    ( __ct_set CT_VARS b ( __core_in name ) )
-    ( __ct_set CT_VARS + b 1 ( __core_in ty ) )
+    = . vs b ( __core_in name )
+    = . vs + b 1 ( __core_in ty )
     ( core_note_ty ty )
-    ( __ct_set CT_VARS + b 2 kind )
-    ( __ct_set CT_VARS + b 3 g_core_depth )
-    ( __ct_set CT_VARS + b 4 flags )
-    ( __ct_set CT_VARS + b 5 line )
-    ( __ct_set CT_VARS + b 6 g_core_vb )
+    = . vs + b 2 kind
+    = . vs + b 3 g_core_depth
+    = . vs + b 4 flags
+    = . vs + b 5 line
+    = . vs + b 6 g_core_vb
     = g_core_var_n + g_core_var_n 1
     ^ - g_core_var_n 1
 }
 
 // A variable's type, set once it is known (a join's temporary: after its arms).
-@ core_var_set_ty i vid s ty → v {
+unsafe @ core_var_set_ty i vid s ty → v {
     ? | < vid 0 >= vid g_core_var_n { ^ } {}
-    ( __ct_set CT_VARS + * vid CORE_VW 1 ( __core_in ty ) )
+    : *i vs # *i # s g_core_vars
+    = . vs + * vid CORE_VW 1 ( __core_in ty )
     ( core_note_ty ty )
 }
 
 // A place, as an operand: `var` -1 with `parent` -1 is a global named by
 // `elem`; `parent` -1 otherwise the variable itself; else `elem` (a field
 // name, `*`, `#Variant.i`) under the place `parent`.
-@ core_place i var i parent i elem → i {
-    ( __ct_need CT_PL * + g_core_pl_n 1 3 )
+unsafe @ core_place i var i parent i elem → i {
+    : i need * + g_core_pl_n 1 3
+    ? > need g_core_pl_cap {
+        : i nc ? == g_core_pl_cap 0 192 * g_core_pl_cap 2
+        = g_core_pl ( __core_grown g_core_pl * g_core_pl_n 3 nc )
+        = g_core_pl_cap nc
+    } {}
+    : *i ps # *i # s g_core_pl
     : i b * g_core_pl_n 3
-    ( __ct_set CT_PL b var )
-    ( __ct_set CT_PL + b 1 parent )
-    ( __ct_set CT_PL + b 2 elem )
+    = . ps b var
+    = . ps + b 1 parent
+    = . ps + b 2 elem
     = g_core_pl_n + g_core_pl_n 1
     ^ + g_core_pl_n 1
 }
 
-@ core_op_var i vid → i {
+unsafe @ core_op_var i vid → i {
     ^ ( core_place vid -1 0 )
 }
 
 // The place `elem` under the operand `op`; a value with nothing to track,
 // or one nothing named, has no parts that are anything else.
-@ core_op_ext i op s elem → i {
+unsafe @ core_op_ext i op s elem → i {
     ? < op 2 { ^ op } {}
+    : *i ps # *i # s g_core_pl
     : i p - op 2
-    : i var ( __ct_get CT_PL * p 3 )
+    : i var . ps * p 3
     ^ ( core_place var p ( __core_in elem ) )
 }
 
 // A temporary of type `ty`: released where its statement's value is
 // discarded (core_discard).
-@ core_temp s ty → i {
+unsafe @ core_temp s ty → i {
     : i vid ( core_var_new `` ty 2 0 g_core_line )
-    ( __ct_need CT_TMPS + g_core_tmp_n 1 )
-    ( __ct_set CT_TMPS g_core_tmp_n vid )
+    ? >= g_core_tmp_n g_core_tmp_cap {
+        : i nc ? == g_core_tmp_cap 0 64 * g_core_tmp_cap 2
+        = g_core_tmps ( __core_grown g_core_tmps g_core_tmp_n nc )
+        = g_core_tmp_cap nc
+    } {}
+    : *i tm # *i # s g_core_tmps
+    = . tm g_core_tmp_n vid
     = g_core_tmp_n + g_core_tmp_n 1
     ^ vid
 }
@@ -11123,22 +10944,24 @@ inline @ core_pop → i {
 // A type whose values hold no address and own nothing, told by its
 // spelling: void, an integer, a float, a vector — anything but a pointer,
 // a named type and a literal aggregate.
-@ core_ty_scalar s ty → b {
+unsafe @ core_ty_scalar s ty → b {
     : i n ( nurl_str_len ty )
     ? == n 0 { ^ T } {}
-    : i c0 ( nurl_str_get ty 0 )
+    : *u p # *u ty
+    : i c0 ( nurl_str_at p n 0 )
     ? | == c0 37 == c0 123 { ^ F } {}
-    ^ != ( nurl_str_get ty - n 1 ) 42
+    ^ != ( nurl_str_at p n - n 1 ) 42
 }
 
 // The operands above height `h0`, as a count and a list; the stack is
 // back at `h0`.
-@ __core_w_ops i h0 → v {
+unsafe @ __core_w_ops i h0 → v {
     : i n ? > g_core_os_n h0 - g_core_os_n h0 0
     ( core_w n )
+    : *i os # *i # s g_core_os
     : ~ i k 0
     ~ < k n {
-        ( core_w ( __ct_get CT_OS + h0 k ) )
+        ( core_w . os + h0 k )
         = k + k 1
     }
     ? > g_core_os_n h0 { = g_core_os_n h0 } {}
@@ -11146,10 +10969,10 @@ inline @ core_pop → i {
 
 // A construct the walk compiled without a hook, or a name no hook bound:
 // counted, and named on stderr with the function it is in.
-@ __core_gap s what → v {
+unsafe @ __core_gap s what → v {
     = g_core_unlowered + g_core_unlowered 1
     ? != 0 g_eng_decide { ^ } {}
-    ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat4 `core-gap\t` what `\t` ( __core_str g_core_fname ) ) ( nurl_str_cat4 `\t` ( __core_str g_core_ffile ) `:` ( nurl_str_int g_core_line ) ) ) )
+    ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat4 `core-gap\t` what `\t` # s g_core_fname ) ( nurl_str_cat4 `\t` # s g_core_ffile `:` ( nurl_str_int g_core_line ) ) ) )
 }
 
 // Where gen_expr returns: the expression that began with token `tt` at
@@ -11157,7 +10980,7 @@ inline @ core_pop → i {
 // with nothing to track when its type says so (a literal, a number); one
 // that left several consumed them without saying how — a computation of
 // numbers reads them (`scalar`), anything else is `opaque`.
-@ core_expr_exit i h0 i tt i acks0 → v {
+unsafe @ core_expr_exit i h0 i tt i acks0 → v {
     : i n - g_core_os_n h0
     // (A closure literal, a try and a slice literal are lowered by their
     // own hooks or not at all: one operand left is not their value.)
@@ -11182,14 +11005,17 @@ inline @ core_pop → i {
         // (`…*`, a raw string's `i8*` too), named whole?)
         : ~ b __addr F
         ? & != 0 g_eng_rawwalk | == tt TT_PLUS == tt TT_MINUS {
+            : *i aos # *i # s g_core_os
+            : *i aps # *i # s g_core_pl
+            : *i avs # *i # s g_core_vars
             : ~ i ak h0
             ~ & ! __addr < ak g_core_os_n {
-                : i aop ( __ct_get CT_OS ak )
+                : i aop . aos ak
                 ? >= aop 2 {
                     : i ab * - aop 2 3
-                    : i avid ( __ct_get CT_PL ab )
-                    ? & & == ( __ct_get CT_PL + ab 1 ) -1 >= avid 0 < avid g_core_var_n {
-                        : s aty ( __core_str ( __ct_get CT_VARS + * avid CORE_VW 1 ) )
+                    : i avid . aps ab
+                    ? & & == . aps + ab 1 -1 >= avid 0 < avid g_core_var_n {
+                        : s aty # s . avs + * avid CORE_VW 1
                         : i an ( nurl_str_len aty )
                         ? & > an 0 == ( nurl_str_get aty - an 1 ) 42 { = __addr T } {}
                     } {}
@@ -11214,7 +11040,7 @@ inline @ core_pop → i {
 }
 
 // A statement begins on `line`.
-@ core_line i line → v {
+unsafe @ core_line i line → v {
     ? == line g_core_line { ^ } {}
     = g_core_line line
     ( core_w CO_LINE ) ( core_w line )
@@ -11223,10 +11049,11 @@ inline @ core_pop → i {
 // Where gen_stmt returns: the statement that began at height `h0` leaves
 // one operand, its value (nothing to track for a declaration, a loop, an
 // assignment).
-@ core_stmt_exit i h0 → v {
+unsafe @ core_stmt_exit i h0 → v {
     ? == g_core_os_n + h0 1 { ^ } {}
     ? > g_core_os_n + h0 1 {
-        ( __ct_set CT_OS h0 ( __ct_get CT_OS - g_core_os_n 1 ) )
+        : *i os # *i # s g_core_os
+        = . os h0 . os - g_core_os_n 1
         = g_core_os_n + h0 1
         ^
     } {}
@@ -11236,11 +11063,12 @@ inline @ core_pop → i {
 
 // A statement's value is not taken: the stack is back at `h0` and the
 // temporaries made since `t0` are released, newest first.
-@ core_discard i h0 i t0 → v {
+unsafe @ core_discard i h0 i t0 → v {
     ? > g_core_os_n h0 { = g_core_os_n h0 } {}
+    : *i tm # *i # s g_core_tmps
     ~ > g_core_tmp_n t0 {
         = g_core_tmp_n - g_core_tmp_n 1
-        ( core_w CO_DROP ) ( core_w ( __ct_get CT_TMPS g_core_tmp_n ) )
+        ( core_w CO_DROP ) ( core_w . tm g_core_tmp_n )
     }
 }
 
@@ -11250,14 +11078,14 @@ inline @ core_pop → i {
 }
 
 // A parameter: `mode` 0 by value, 2 `inout`, 4 `sink`.
-@ core_param i syms s name s ty i mode i line → v {
+unsafe @ core_param i syms s name s ty i mode i line → v {
     : i vid ( core_var_new name ty 0 mode line )
     ( __core_bind syms name vid )
     = g_core_nparam + g_core_nparam 1
 }
 
 // `: [~] T name value`: the value on top of the stack is bound.
-@ core_let i syms s name s ty b mut i line → v {
+unsafe @ core_let i syms s name s ty b mut i line → v {
     : ~ i op ( core_pop )
     // (A `: ~` binding of a value block whose tail is a binding the block
     // made itself takes the value over: the block's local is no cursor's
@@ -11279,7 +11107,7 @@ inline @ core_pop → i {
 // The operand a name is: its variable, a capture of the enclosing
 // function's, a global, or — a constant, an enum's unit variant — nothing
 // to track.
-@ core_name_op i syms s name s lt → i {
+unsafe @ core_name_op i syms s name s lt → i {
     : i cv ( nurl_sym_int2 syms name `__cv` )
     ? >= cv 0 {
         ? == / cv CORE_VS g_core_serial { ^ ( core_op_var % cv CORE_VS ) } {}
@@ -11299,17 +11127,18 @@ inline @ core_pop → i {
     ^ ( core_place -1 -1 ( __core_in name ) )
 }
 
-@ core_push_name i syms s name s lt → v {
+unsafe @ core_push_name i syms s name s lt → v {
     ( core_push ( core_name_op syms name lt ) )
 }
 
 // The capture variable of `name` in the closure body being built: one per
 // name (a body sees one binding of its maker's under a name).
-@ __core_capture s name s ty → i {
+unsafe @ __core_capture s name s ty → i {
     : i nm ( __core_in name )
+    : *i vs # *i # s g_core_vars
     : ~ i k 0
     ~ < k g_core_var_n {
-        ? & == ( __ct_get CT_VARS + * k CORE_VW 2 ) 3 == ( __ct_get CT_VARS * k CORE_VW ) nm { ^ k } {}
+        ? & == . vs + * k CORE_VW 2 3 == . vs * k CORE_VW nm { ^ k } {}
         = k + k 1
     }
     ^ ( core_var_new name ty 3 0 g_core_line )
@@ -11319,23 +11148,29 @@ inline @ core_pop → i {
 // `ret_ty`, is a temporary unless it is a number.
 // A `dyn` method's virtual callee (`m__dyn__Trait`) a call named: listed
 // with the impls it may run by core_print_virts.
-@ core_note_virt i callee → v {
+unsafe @ core_note_virt i callee → v {
     ? != 0 g_eng_decide { ^ } {}
-    : s cn ( __core_str callee )
+    : s cn # s callee
     ? == 0 g_core_virt_seen { = g_core_virt_seen ( nurl_sym_new ) } {}
     ? != 0 ( nurl_sym_len g_core_virt_seen cn ) { ^ } {}
     ( nurl_sym_def g_core_virt_seen cn `1` )
-    ( __ct_need CT_VIRTS + g_core_virt_n 1 )
-    ( __ct_set CT_VIRTS g_core_virt_n callee )
+    ? >= g_core_virt_n g_core_virt_cap {
+        : i nc ? == g_core_virt_cap 0 64 * g_core_virt_cap 2
+        = g_core_virts ( __core_grown g_core_virts g_core_virt_n nc )
+        = g_core_virt_cap nc
+    } {}
+    : *i va # *i # s g_core_virts
+    = . va g_core_virt_n callee
     = g_core_virt_n + g_core_virt_n 1
 }
 
 // `virt`, the virtual callee, then the impl functions it stands for: the
 // method's impl for each type that implements its trait.
-@ core_print_virts → v {
+unsafe @ core_print_virts → v {
     : ~ i k 0
     ~ < k g_core_virt_n {
-        : s vn ( nurl_str_cat ( __core_str ( __ct_get CT_VIRTS k ) ) `` )
+        : *i va # *i # s g_core_virts
+        : s vn ( nurl_str_cat # s . va k `` )
         : i at ( nurl_str_find vn `__dyn__` )
         : s m ( nurl_str_slice vn 0 at )
         : s dt ( nurl_str_slice vn + at 7 - ( nurl_str_len vn ) + at 7 )
@@ -11355,32 +11190,37 @@ inline @ core_pop → i {
 // A function a call named: listed once, so that core_print_sums can say
 // what the walk holds of one that has no body here (a function of the
 // runtime, an extern).
-@ core_note_callee i callee → v {
+unsafe @ core_note_callee i callee → v {
     ? != 0 g_eng_decide { ^ } {}
-    : s cn ( __core_str callee )
+    : s cn # s callee
     ? == 0 g_core_callee_seen { = g_core_callee_seen ( nurl_sym_new ) } {}
     ? != 0 ( nurl_sym_len g_core_callee_seen cn ) { ^ } {}
     ( nurl_sym_def g_core_callee_seen cn `1` )
-    ( __ct_need CT_CALLEES + g_core_callee_n 1 )
-    ( __ct_set CT_CALLEES g_core_callee_n callee )
+    ? >= g_core_callee_n g_core_callee_cap {
+        : i nc ? == g_core_callee_cap 0 256 * g_core_callee_cap 2
+        = g_core_callees ( __core_grown g_core_callees g_core_callee_n nc )
+        = g_core_callee_cap nc
+    } {}
+    : *i ca # *i # s g_core_callees
+    = . ca g_core_callee_n callee
     = g_core_callee_n + g_core_callee_n 1
 }
 
 // A call through a closure value (`ind`): the value is the first operand.
-@ core_call i h0 s ret_ty b ind → v {
+unsafe @ core_call i h0 s ret_ty b ind → v {
     : b slot != 0 g_core_slotget
     = g_core_slotget 0
     ? & ! ind != 0 g_core_callee {
-        ? >= ( nurl_str_find ( __core_str g_core_callee ) `__dyn__` ) 0 { ( core_note_virt g_core_callee ) } {}
+        ? >= ( nurl_str_find # s g_core_callee `__dyn__` ) 0 { ( core_note_virt g_core_callee ) } {}
         ( core_note_callee g_core_callee )
         // (a foreign function: what it does to the memory it is handed is
         // nothing this IR shows — bit 2 of the function's flags)
-        ? & != 0 g_root_syms != 0 ( nurl_sym_len2 g_root_syms ( __core_str g_core_callee ) `__ffi` ) { = g_core_fflags | g_core_fflags 4 } {}
+        ? & != 0 g_root_syms != 0 ( nurl_sym_len2 g_root_syms # s g_core_callee `__ffi` ) { = g_core_fflags | g_core_fflags 4 } {}
     } {}
     // (…where the engine reads raw bodies, the word `nurl_peek` reads out of
     // raw memory may be an address into what it was read from: a temporary
     // of a pointer type - AGORA-877)
-    : b peek & & & != 0 g_eng_rawwalk ! ind != 0 g_core_callee ( seq ( __core_str g_core_callee ) `nurl_peek` )
+    : b peek & & & != 0 g_eng_rawwalk ! ind != 0 g_core_callee ( seq # s g_core_callee `nurl_peek` )
     ? & ! peek ( core_ty_scalar ret_ty ) {
         ( core_w CO_EVAL )
         ? ind { ( core_w RV_CALLIND ) } { ( core_w RV_CALL ) ( core_w g_core_callee ) }
@@ -11390,8 +11230,9 @@ inline @ core_pop → i {
     } {}
     : i t ( core_temp ? peek `u8*` ret_ty )
     ? slot {
+        : *i vs # *i # s g_core_vars
         : i fb + * t CORE_VW 4
-        ( __ct_set CT_VARS fb | ( __ct_get CT_VARS fb ) CORE_VF_SLOT )
+        = . vs fb | . vs fb CORE_VF_SLOT
     } {}
     ( core_w CO_LET ) ( core_w t )
     ? ind { ( core_w RV_CALLIND ) } { ( core_w RV_CALL ) ( core_w g_core_callee ) }
@@ -11402,22 +11243,25 @@ inline @ core_pop → i {
 // A type whose value an argument is loaded as one word that owns nothing:
 // a number (core_ty_scalar) or a raw string's address. `use` of a place
 // of it is a copy of what the place held there.
-@ core_ty_word s ty → b {
+unsafe @ core_ty_word s ty → b {
     ^ | ( core_ty_scalar ty ) ( seq ty `i8*` )
 }
 
 // The words from `cp` on, with the last `n - at` of them (written at `at`)
 // moved to `cp`: statements written late, put where they ran.
-@ __core_code_hoist i cp i at → v {
+unsafe @ __core_code_hoist i cp i at → v {
     : i tail - g_core_code_n at
     ? | <= tail 0 >= cp at { ^ } {}
-    : ( Vec i ) tp ( vec_with_cap [i] tail )
+    : s tmp # s ( nurl_alloc * tail 8 )
+    : *i tp # *i tmp
+    : *i c # *i # s g_core_code
     : ~ i k 0
-    ~ < k tail { ( vec_push [i] tp ( __ct_get CT_CODE + at k ) ) = k + k 1 }
+    ~ < k tail { = . tp k . c + at k = k + k 1 }
     = k - at 1
-    ~ >= k cp { ( __ct_set CT_CODE + k tail ( __ct_get CT_CODE k ) ) = k - k 1 }
+    ~ >= k cp { = . c + k tail . c k = k - k 1 }
     = k 0
-    ~ < k tail { ( __ct_set CT_CODE + cp k ( vec_at [i] tp k ) ) = k + k 1 }
+    ~ < k tail { = . c + cp k . tp k = k + k 1 }
+    ( nurl_free tmp )
 }
 
 // An argument of the call being compiled has been read; its code began
@@ -11437,21 +11281,24 @@ inline @ core_pop → i {
 //      moves it, and the IR has no copy of an aggregate read in place;
 //   0  neither: passed by address (`inout`), or an owner the call is lent
 //      when it runs.
-@ core_arg_read i cp i how s ty → v {
+unsafe @ core_arg_read i cp i how s ty → v {
     ? & > g_core_code_n cp > g_core_pend_n g_core_pend_base {
         : i w0 g_core_code_n
         : ~ i k g_core_pend_base
         ~ < k g_core_pend_n {
-            : i slot ( __ct_get CT_PEND * k 3 )
-            : i op ( __ct_get CT_PEND + * k 3 1 )
-            : i pty ( __ct_get CT_PEND + * k 3 2 )
-            ? & < slot g_core_os_n == ( __ct_get CT_OS slot ) op {
+            : *i pd # *i # s g_core_pend
+            : i slot . pd * k 3
+            : i op . pd + * k 3 1
+            : i pty . pd + * k 3 2
+            : *i os # *i # s g_core_os
+            ? & < slot g_core_os_n == . os slot op {
                 ? == pty 0 {
                     ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( core_w 1 ) ( core_w op )
                 } {
-                    : i t ( core_temp ( __core_str pty ) )
+                    : i t ( core_temp # s pty )
                     ( core_w CO_LET ) ( core_w t ) ( core_w RV_USE ) ( core_w op )
-                    ( __ct_set CT_OS slot ( core_op_var t ) )
+                    : *i os2 # *i # s g_core_os
+                    = . os2 slot ( core_op_var t )
                 }
             } {}
             = k + k 1
@@ -11460,18 +11307,24 @@ inline @ core_pop → i {
         ( __core_code_hoist cp w0 )
     } {}
     ? | == how 0 <= g_core_os_n 0 { ^ } {}
-    : i top ( __ct_get CT_OS - g_core_os_n 1 )
+    : *i os # *i # s g_core_os
+    : i top . os - g_core_os_n 1
     ? < top 2 { ^ } {}
-    ( __ct_need CT_PEND * + g_core_pend_n 1 3 )
+    ? > * + g_core_pend_n 1 3 g_core_pend_cap {
+        : i nc ? == g_core_pend_cap 0 48 * g_core_pend_cap 2
+        = g_core_pend ( __core_grown g_core_pend * g_core_pend_n 3 nc )
+        = g_core_pend_cap nc
+    } {}
+    : *i pd # *i # s g_core_pend
     : i b * g_core_pend_n 3
-    ( __ct_set CT_PEND b - g_core_os_n 1 )
-    ( __ct_set CT_PEND + b 1 top )
-    ( __ct_set CT_PEND + b 2 ? == how 1 ( __core_in ty ) 0 )
+    = . pd b - g_core_os_n 1
+    = . pd + b 1 top
+    = . pd + b 2 ? == how 1 ( __core_in ty ) 0
     = g_core_pend_n + g_core_pend_n 1
 }
 
 // How core_arg_read reads an argument of type `ty` passed by value.
-@ core_arg_how i syms s ty → i {
+unsafe @ core_arg_how i syms s ty → i {
     ? ( core_ty_word ty ) { ^ 1 } {}
     ? ( __type_needs_drop ty syms ) { ^ 0 } {}
     ^ 2
@@ -11485,37 +11338,40 @@ unsafe @ core_kw_note i h0 s slots → v {
 // A call with named arguments read them in the order written, `slots`
 // their parameters' positions, and then its omitted parameters' defaults
 // in parameter order: the operands above `h0` are put in parameter order.
-@ core_kwargs_reorder i h0 s slots i n → v {
+unsafe @ core_kwargs_reorder i h0 s slots i n → v {
     ? <= n 0 { ^ } {}
-    : ( Vec i ) tp ( vec_with_cap [i] n )
+    : s tmp # s ( nurl_alloc * n 8 )
+    : *i tp # *i tmp
     : ~ i k 0
-    ~ < k n { ( vec_push [i] tp -1 ) = k + k 1 }
+    ~ < k n { = . tp k -1 = k + k 1 }
+    : *i os # *i # s g_core_os
     : ~ s rest ( nurl_str_cat slots `` )
     : ~ i at h0
     ~ & != 0 ( nurl_str_len rest ) < at g_core_os_n {
         : i slot ( nurl_str_to_int ( str_first_word rest ) )
         = rest ( str_skip_word rest )
-        ? & >= slot 0 < slot n { : b _s ( vec_set [i] tp slot ( __ct_get CT_OS at ) ) } {}
+        ? & >= slot 0 < slot n { = . tp slot . os at } {}
         = at + at 1
     }
     = k 0
     ~ < k n {
-        ? == ( vec_at [i] tp k ) -1 {
-            ? < at g_core_os_n { : b _s ( vec_set [i] tp k ( __ct_get CT_OS at ) ) = at + at 1 } { : b _z ( vec_set [i] tp k 0 ) }
+        ? == . tp k -1 {
+            ? < at g_core_os_n { = . tp k . os at = at + at 1 } { = . tp k 0 }
         } {}
         = k + k 1
     }
     = g_core_os_n h0
     = k 0
     ~ < k n {
-        ( core_push ( vec_at [i] tp k ) )
+        ( core_push . tp k )
         = k + k 1
     }
+    ( nurl_free tmp )
 }
 
 // A call begins: when its callee names a binding (a closure value), that
 // binding is the call's first operand and the call is indirect.
-@ core_call_begin i syms s callee → b {
+unsafe @ core_call_begin i syms s callee → b {
     ? < ( nurl_sym_int2 syms callee `__cv` ) 0 {
         = g_core_callee ( __core_in callee )
         ^ F
@@ -11526,19 +11382,19 @@ unsafe @ core_kw_note i h0 s slots → v {
 
 // `^ value` (the operand on top) or a bare `^` (`has` F). The `^` itself
 // is a value with nothing to track.
-@ core_ret b has → v {
+unsafe @ core_ret b has → v {
     : i op ? has ( core_pop ) -1
     ( core_w CO_RET ) ( core_w op )
     ( core_push 0 )
 }
 
 // A scope opens: what is bound in it is released at its end.
-@ core_scope_begin → v {
+unsafe @ core_scope_begin → v {
     ( core_w CO_SCOPE )
     = g_core_depth + g_core_depth 1
 }
 
-@ core_scope_end → v {
+unsafe @ core_scope_end → v {
     ( core_w CO_END )
     = g_core_depth - g_core_depth 1
 }
@@ -12147,7 +12003,7 @@ unsafe @ eng_keep_fn → v {
     : i code_n ? body g_core_code_n 0
     : i pl_n ? body g_core_pl_n 0
     // (its parameters and captures, counted once)
-    : *i vs # *i ( eng_str ( __ct_addr CT_VARS ) )
+    : *i vs # *i ( eng_str g_core_vars )
     : ~ i np 0
     : ~ i ncap 0
     : ~ i v 0
@@ -12176,26 +12032,26 @@ unsafe @ eng_keep_fn → v {
     ( wv_push g_ef np )
     ( wv_push g_ef ncap )
     = g_ef_count + g_ef_count 1
-    ( wv_append_raw g_ef_code ( __ct_addr CT_CODE ) code_n )
+    ( wv_append_raw g_ef_code g_core_code code_n )
     // (…but the functions it calls are: a call of it may reach a panic
     // through them, eng_may_unwind)
     ? body { ( wv_push g_ef_cl -1 ) ( wv_push g_ef_cn 0 ) } {
         : i base ( wv_len g_ef_code )
         : i c0 ( wv_len g_ef_calls )
-        ( wv_append_raw g_ef_code ( __ct_addr CT_CODE ) g_core_code_n )
+        ( wv_append_raw g_ef_code g_core_code g_core_code_n )
         ( __eng_calls_in base g_core_code_n g_ef_calls )
         ( wv_trunc g_ef_code base )
         ( wv_push g_ef_cl c0 ) ( wv_push g_ef_cn - ( wv_len g_ef_calls ) c0 )
     }
-    ? body { ( wv_append_raw g_ef_vars ( __ct_addr CT_VARS ) * g_core_var_n CORE_VW ) } {
+    ? body { ( wv_append_raw g_ef_vars g_core_vars * g_core_var_n CORE_VW ) } {
         = v 0
         ~ < v g_core_var_n {
             : i kind . vs + * v CORE_VW 2
-            ? | == kind 0 == kind 3 { ( wv_append_raw g_ef_vars + ( __ct_addr CT_VARS ) * * v CORE_VW 8 CORE_VW ) } {}
+            ? | == kind 0 == kind 3 { ( wv_append_raw g_ef_vars + g_core_vars * * v CORE_VW 8 CORE_VW ) } {}
             = v + v 1
         }
     }
-    ( wv_append_raw g_ef_pl ( __ct_addr CT_PL ) * pl_n 3 )
+    ( wv_append_raw g_ef_pl g_core_pl * pl_n 3 )
     ( im_put g_ef_ix g_core_fname + f 1 )
 }
 
@@ -25116,7 +24972,7 @@ unsafe @ eng_byte s w i k → i {
 unsafe @ eng_print_types → v {
     : ~ i k 0
     ~ < k g_core_ty_n {
-        : *i ta # *i ( eng_str ( __ct_addr CT_TYS ) )
+        : *i ta # *i ( eng_str g_core_tys )
         : i name . ta k
         : i t ( et_of name )
         ( __core_o `ety\t` ) ( __core_o ( eng_str name ) )
@@ -25349,16 +25205,25 @@ unsafe @ eng_print_types → v {
 }
 // A function's (or a closure body's) IR begins. The builder of the
 // function it is compiled inside, if any, is set aside.
-@ core_fn_begin s fname s file i line i flags s tmpl → v {
+unsafe @ core_fn_begin s fname s file i line i flags s tmpl → v {
     ? != 0 g_core_live {
-        ( __ct_push_tables )
-        ( __ct_save_w g_core_code_n ) ( __ct_save_w g_core_var_n ) ( __ct_save_w g_core_pl_n )
-        ( __ct_save_w g_core_os_n ) ( __ct_save_w g_core_tmp_n )
-        ( __ct_save_w g_core_depth ) ( __ct_save_w g_core_line )
-        ( __ct_save_w g_core_fname ) ( __ct_save_w g_core_fret ) ( __ct_save_w g_core_fline )
-        ( __ct_save_w g_core_serial ) ( __ct_save_w g_core_nparam ) ( __ct_save_w g_core_ffile )
-        ( __ct_save_w g_core_fflags ) ( __ct_save_w g_core_ftmpl ) ( __ct_save_w g_core_vb )
-        = g_core_saved + g_core_saved 1
+        : s sv # s ( nurl_alloc * 27 8 )
+        ( nurl_poke sv 0 g_core_saved )
+        ( nurl_poke sv 1 g_core_code ) ( nurl_poke sv 2 g_core_code_n ) ( nurl_poke sv 3 g_core_code_cap )
+        ( nurl_poke sv 4 g_core_vars ) ( nurl_poke sv 5 g_core_var_n ) ( nurl_poke sv 6 g_core_var_cap )
+        ( nurl_poke sv 7 g_core_pl ) ( nurl_poke sv 8 g_core_pl_n ) ( nurl_poke sv 9 g_core_pl_cap )
+        ( nurl_poke sv 10 g_core_os ) ( nurl_poke sv 11 g_core_os_n ) ( nurl_poke sv 12 g_core_os_cap )
+        ( nurl_poke sv 13 g_core_tmps ) ( nurl_poke sv 14 g_core_tmp_n ) ( nurl_poke sv 15 g_core_tmp_cap )
+        ( nurl_poke sv 16 g_core_depth ) ( nurl_poke sv 17 g_core_line )
+        ( nurl_poke sv 18 g_core_fname ) ( nurl_poke sv 19 g_core_fret ) ( nurl_poke sv 20 g_core_fline )
+        ( nurl_poke sv 21 g_core_serial ) ( nurl_poke sv 22 g_core_nparam ) ( nurl_poke sv 23 g_core_ffile )
+        ( nurl_poke sv 24 g_core_fflags ) ( nurl_poke sv 25 g_core_ftmpl ) ( nurl_poke sv 26 g_core_vb )
+        = g_core_saved # i sv
+        = g_core_code 0 = g_core_code_cap 0
+        = g_core_vars 0 = g_core_var_cap 0
+        = g_core_pl 0 = g_core_pl_cap 0
+        = g_core_os 0 = g_core_os_cap 0
+        = g_core_tmps 0 = g_core_tmp_cap 0
     } {}
     = g_core_live 1
     = g_core_code_n 0
@@ -25389,26 +25254,35 @@ unsafe @ eng_print_types → v {
     ? != 0 g_core_live { = g_core_fflags | g_core_fflags 8 } {}
 }
 
-@ core_fn_ret s ret_ty → v {
+unsafe @ core_fn_ret s ret_ty → v {
     = g_core_fret ( __core_in ret_ty )
 }
 
 // The function's IR is complete: printed, and the enclosing function's
 // builder is back.
-@ core_fn_end → v {
+unsafe @ core_fn_end → v {
     ? == 0 g_core_live { ^ } {}
     ( core_note_fn )
     ? == 0 g_eng_decide { ( core_print_fn ) } {}
     ? != 0 g_eng_on { ( eng_keep_fn ) } {}
     ? == 0 g_core_saved { = g_core_live 0 ^ } {}
-    = g_core_saved - g_core_saved 1
-    = g_core_vb ( __ct_restore_w ) = g_core_ftmpl ( __ct_restore_w ) = g_core_fflags ( __ct_restore_w )
-    = g_core_ffile ( __ct_restore_w ) = g_core_nparam ( __ct_restore_w ) = g_core_serial ( __ct_restore_w )
-    = g_core_fline ( __ct_restore_w ) = g_core_fret ( __ct_restore_w ) = g_core_fname ( __ct_restore_w )
-    = g_core_line ( __ct_restore_w ) = g_core_depth ( __ct_restore_w )
-    = g_core_tmp_n ( __ct_restore_w ) = g_core_os_n ( __ct_restore_w )
-    = g_core_pl_n ( __ct_restore_w ) = g_core_var_n ( __ct_restore_w ) = g_core_code_n ( __ct_restore_w )
-    ( __ct_pop_tables )
+    ? != 0 g_core_code { ( nurl_free # s g_core_code ) } {}
+    ? != 0 g_core_vars { ( nurl_free # s g_core_vars ) } {}
+    ? != 0 g_core_pl { ( nurl_free # s g_core_pl ) } {}
+    ? != 0 g_core_os { ( nurl_free # s g_core_os ) } {}
+    ? != 0 g_core_tmps { ( nurl_free # s g_core_tmps ) } {}
+    : s sv # s g_core_saved
+    = g_core_saved ( nurl_peek sv 0 )
+    = g_core_code ( nurl_peek sv 1 ) = g_core_code_n ( nurl_peek sv 2 ) = g_core_code_cap ( nurl_peek sv 3 )
+    = g_core_vars ( nurl_peek sv 4 ) = g_core_var_n ( nurl_peek sv 5 ) = g_core_var_cap ( nurl_peek sv 6 )
+    = g_core_pl ( nurl_peek sv 7 ) = g_core_pl_n ( nurl_peek sv 8 ) = g_core_pl_cap ( nurl_peek sv 9 )
+    = g_core_os ( nurl_peek sv 10 ) = g_core_os_n ( nurl_peek sv 11 ) = g_core_os_cap ( nurl_peek sv 12 )
+    = g_core_tmps ( nurl_peek sv 13 ) = g_core_tmp_n ( nurl_peek sv 14 ) = g_core_tmp_cap ( nurl_peek sv 15 )
+    = g_core_depth ( nurl_peek sv 16 ) = g_core_line ( nurl_peek sv 17 )
+    = g_core_fname ( nurl_peek sv 18 ) = g_core_fret ( nurl_peek sv 19 ) = g_core_fline ( nurl_peek sv 20 )
+    = g_core_serial ( nurl_peek sv 21 ) = g_core_nparam ( nurl_peek sv 22 ) = g_core_ffile ( nurl_peek sv 23 )
+    = g_core_fflags ( nurl_peek sv 24 ) = g_core_ftmpl ( nurl_peek sv 25 ) = g_core_vb ( nurl_peek sv 26 )
+    ( nurl_free sv )
 }
 
 // ── Core IR: places, literals, stores ────────────────────────────────
@@ -25418,13 +25292,14 @@ unsafe @ eng_print_types → v {
 // name, `*` an element, `#n` the n-th member of an inline aggregate (an
 // option's or a result's payload), `=` the value itself (`. e 0` of a
 // named type), `>name` a field reached through a pointer.
-@ core_member_elem i syms s ot i lex → i {
+unsafe @ core_member_elem i syms s ot i lex → i {
     : i n ( nurl_str_len ot )
     ? == n 0 { ^ ( __core_in `*` ) } {}
-    : b ptr == ( nurl_str_get ot - n 1 ) 42
+    : *u p # *u ot
+    : b ptr == ( nurl_str_at p n - n 1 ) 42
     // (A read or a store through a pointer is raw memory.)
     ? ptr { = g_core_fflags | g_core_fflags 2 } {}
-    : i c0 ( nurl_str_get ot 0 )
+    : i c0 ( nurl_str_at p n 0 )
     : i tt ( nurl_lex_type lex )
     ? == tt TT_INT {
         ? ptr { ^ ( __core_in `*` ) } {}
@@ -25453,8 +25328,8 @@ unsafe @ eng_print_types → v {
 }
 
 // `base` extended by the element `elem` (core_member_elem).
-@ __core_ext_elem i base i elem → i {
-    : s e ( __core_str elem )
+unsafe @ __core_ext_elem i base i elem → i {
+    : s e # s elem
     : i c ( nurl_str_get e 0 )
     ? == c 61 { ^ base } {}
     ? == c 62 { ^ ( core_op_ext ( core_op_ext base `*` ) ( nurl_str_slice e 1 - ( nurl_str_len e ) 1 ) ) } {}
@@ -25463,23 +25338,24 @@ unsafe @ eng_print_types → v {
 
 // The element a field store's target names; an object walked by address
 // (gen_nested_lvalue_addr) is the struct's own storage, not a pointer's.
-@ core_store_elem i syms s pt i lex → v {
+unsafe @ core_store_elem i syms s pt i lex → v {
     = g_core_mb_elem ( core_member_elem syms pt lex )
     // (A slice's `= . xs 0 v` stores an element; read, `. xs 0` is its
     // first member.)
-    ? & & == ( nurl_str_get pt 0 ) 123 != 0 ( nurl_str_ends pt `*, i64 }` ) == ( nurl_str_get ( __core_str g_core_mb_elem ) 0 ) 35 { = g_core_mb_elem ( __core_in `*` ) } {}
+    ? & & == ( nurl_str_get pt 0 ) 123 != 0 ( nurl_str_ends pt `*, i64 }` ) == ( nurl_str_get # s g_core_mb_elem 0 ) 35 { = g_core_mb_elem ( __core_in `*` ) } {}
     ? != 0 g_core_nl_addr {
         = g_core_nl_addr 0
-        : s e ( __core_str g_core_mb_elem )
+        : s e # s g_core_mb_elem
         ? == ( nurl_str_get e 0 ) 62 { = g_core_mb_elem ( __core_in ( nurl_str_slice e 1 - ( nurl_str_len e ) 1 ) ) } {}
     } {}
 }
 
 // `. obj x`: the object is the operand at `h0`; operands above it are an
 // index expression's, read.
-@ core_member i h0 i elem → v {
+unsafe @ core_member i h0 i elem → v {
     ? | == elem 0 <= g_core_os_n h0 { ^ } {}
-    : i base ( __ct_get CT_OS h0 )
+    : *i os # *i # s g_core_os
+    : i base . os h0
     ? > g_core_os_n + h0 1 {
         ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops + h0 1 )
     } {}
@@ -25489,10 +25365,11 @@ unsafe @ eng_print_types → v {
 
 // `= . obj x value`: the object at `h0`, the value on top, an index
 // expression's operands between them.
-@ core_field_store i h0 i elem → v {
+unsafe @ core_field_store i h0 i elem → v {
     ? | == elem 0 < g_core_os_n + h0 2 { ( __core_gap `fieldstore` ) ^ } {}
-    : i base ( __ct_get CT_OS h0 )
-    : i rhs ( __ct_get CT_OS - g_core_os_n 1 )
+    : *i os # *i # s g_core_os
+    : i base . os h0
+    : i rhs . os - g_core_os_n 1
     = g_core_os_n - g_core_os_n 1
     ? > g_core_os_n + h0 1 {
         ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops + h0 1 )
@@ -25506,12 +25383,13 @@ unsafe @ eng_print_types → v {
 // `@ T { … }` / `[T | … ]`: the items are the operands above `h0`. An
 // enum's, an option's or a result's first item names the variant
 // (g_core_agg_var) and is no operand.
-@ core_agg i h0 → v {
-    : s ty ? != 0 g_core_agg_ty ( nurl_str_cat ( __core_str g_core_agg_ty ) `` ) ( nurl_get_last_type )
+unsafe @ core_agg i h0 → v {
+    : s ty ? != 0 g_core_agg_ty ( nurl_str_cat # s g_core_agg_ty `` ) ( nurl_get_last_type )
     ? & != 0 g_core_agg_var > g_core_os_n h0 {
+        : *i os # *i # s g_core_os
         : ~ i k h0
         ~ < + k 1 g_core_os_n {
-            ( __ct_set CT_OS k ( __ct_get CT_OS + k 1 ) )
+            = . os k . os + k 1
             = k + k 1
         }
         = g_core_os_n - g_core_os_n 1
@@ -25527,7 +25405,7 @@ unsafe @ eng_print_types → v {
 // `= name value`: the value on top is stored in `target` (what the name
 // meant before the value was made: a value block in it may bind the same
 // name); the statement's own value is what the binding now holds.
-@ core_assign i target → v {
+unsafe @ core_assign i target → v {
     : i op ( core_pop )
     = g_core_asn_op op
     ( core_w CO_ASSIGN ) ( core_w target ) ( core_w RV_USE ) ( core_w op )
@@ -25546,27 +25424,30 @@ unsafe @ eng_print_types → v {
 // The variable an operand names itself (not a part of it: its place has no
 // parent), or -1 (AGORA-905: the core IR's tables are read here, so the
 // flaggers above need no pointer work of their own).
-@ core_op_root_var i op → i {
+unsafe @ core_op_root_var i op → i {
     ? < op 2 { ^ -1 } {}
+    : *i ps # *i # s g_core_pl
     : i b * - op 2 3
-    : i vid ( __ct_get CT_PL b )
-    ? | | < vid 0 >= vid g_core_var_n != ( __ct_get CT_PL + b 1 ) -1 { ^ -1 } {}
+    : i vid . ps b
+    ? | | < vid 0 >= vid g_core_var_n != . ps + b 1 -1 { ^ -1 } {}
     ^ vid
 }
 
 // Variable `vid`'s flags gain `flag` (a variable out of range: nothing).
-@ core_var_or_flag i vid i flag → v {
+unsafe @ core_var_or_flag i vid i flag → v {
     ? | < vid 0 >= vid g_core_var_n { ^ } {}
-    ( __ct_set CT_VARS + * vid CORE_VW 4 | ( __ct_get CT_VARS + * vid CORE_VW 4 ) flag )
+    : *i vs # *i # s g_core_vars
+    = . vs + * vid CORE_VW 4 | . vs + * vid CORE_VW 4 flag
 }
 
 // The capture named `nm` (interned) of the closure body being built gains
 // `flag`: the first one, or every one (`all`).
-@ core_capture_flag i nm i flag b all → v {
+unsafe @ core_capture_flag i nm i flag b all → v {
+    : *i vs # *i # s g_core_vars
     : ~ i k 0
     ~ < k g_core_var_n {
-        ? & == ( __ct_get CT_VARS + * k CORE_VW 2 ) 3 == ( __ct_get CT_VARS * k CORE_VW ) nm {
-            ( __ct_set CT_VARS + * k CORE_VW 4 | ( __ct_get CT_VARS + * k CORE_VW 4 ) flag )
+        ? & == . vs + * k CORE_VW 2 3 == . vs * k CORE_VW nm {
+            = . vs + * k CORE_VW 4 | . vs + * k CORE_VW 4 flag
             ? ! all { ^ } {}
         } {}
         = k + k 1
@@ -25577,7 +25458,7 @@ unsafe @ eng_print_types → v {
 
 // `? c a b` after its condition (the operand on top): the join's
 // temporary, which each arm assigns its value.
-@ core_if_begin → i {
+unsafe @ core_if_begin → i {
     : i op ( core_pop )
     : i j ( core_temp `` )
     ( core_w CO_LET ) ( core_w j ) ( core_w RV_NONE )
@@ -25594,28 +25475,30 @@ unsafe @ eng_print_types → v {
 // enclosing statement's: of the join's depth, marked (CORE_VF_CARRIED) so
 // that the arm's scope does not end them, and released where that
 // statement releases its own.
-@ core_arm_end i j i t0 b carry → v {
+unsafe @ core_arm_end i j i t0 b carry → v {
     : i op ( core_pop )
     ? != op 0 { ( core_w CO_ASSIGN ) ( core_w ( core_op_var j ) ) ( core_w RV_USE ) ( core_w op ) } {}
     ? carry {
+        : *i tm # *i # s g_core_tmps
+        : *i vs # *i # s g_core_vars
         : ~ i k t0
         ~ < k g_core_tmp_n {
-            : i b * ( __ct_get CT_TMPS k ) CORE_VW
-            ( __ct_set CT_VARS + b 3 ( __ct_get CT_VARS + * j CORE_VW 3 ) )
-            ( __ct_set CT_VARS + b 4 | ( __ct_get CT_VARS + b 4 ) CORE_VF_CARRIED )
+            : i b * . tm k CORE_VW
+            = . vs + b 3 . vs + * j CORE_VW 3
+            = . vs + b 4 | . vs + b 4 CORE_VF_CARRIED
             = k + k 1
         }
     } { ( core_discard g_core_os_n t0 ) }
     ( core_scope_end )
 }
 
-@ core_if_else → v {
+unsafe @ core_if_else → v {
     ( core_w CO_ELSE )
     ( core_scope_begin )
 }
 
 // The join is closed: its value is its temporary.
-@ core_join_end i j → v {
+unsafe @ core_join_end i j → v {
     ( core_w CO_END )
     ( core_push ( core_op_var j ) )
 }
@@ -25623,26 +25506,29 @@ unsafe @ eng_print_types → v {
 // A `?` / `??` returns to gen_expr with its temporary on top: the
 // temporary takes the join's type, and a join of numbers (or of nothing)
 // is a value with nothing to track.
-@ __core_join_fix → v {
+unsafe @ __core_join_fix → v {
     ? <= g_core_os_n 0 { ^ } {}
-    : i op ( __ct_get CT_OS - g_core_os_n 1 )
+    : *i os # *i # s g_core_os
+    : i op . os - g_core_os_n 1
     ? < op 2 { ^ } {}
+    : *i ps # *i # s g_core_pl
     : i p - op 2
-    ? >= ( __ct_get CT_PL + * p 3 1 ) 0 { ^ } {}
-    : i vid ( __ct_get CT_PL * p 3 )
+    ? >= . ps + * p 3 1 0 { ^ } {}
+    : i vid . ps * p 3
     ? < vid 0 { ^ } {}
-    ? != ( __ct_get CT_VARS + * vid CORE_VW 2 ) 2 { ^ } {}
-    ? != 0 ( nurl_str_len ( __core_str ( __ct_get CT_VARS + * vid CORE_VW 1 ) ) ) { ^ } {}
+    : *i vs # *i # s g_core_vars
+    ? != . vs + * vid CORE_VW 2 2 { ^ } {}
+    ? != 0 ( nurl_str_len # s . vs + * vid CORE_VW 1 ) { ^ } {}
     : s ty ( nurl_get_last_type )
-    ( __ct_set CT_VARS + * vid CORE_VW 1 ( __core_in ? == 0 ( nurl_str_len ty ) `void` ty ) )
+    = . vs + * vid CORE_VW 1 ( __core_in ? == 0 ( nurl_str_len ty ) `void` ty )
     ( core_note_ty ty )
-    ? ( core_ty_scalar ty ) { ( __ct_set CT_OS - g_core_os_n 1 0 ) } {}
+    ? ( core_ty_scalar ty ) { = . os - g_core_os_n 1 0 } {}
 }
 
 // A value block `{ … tail }` begins: its value is a temporary of the
 // enclosing statement, which its tail is assigned; what the block binds
 // is marked as the block's (g_core_vb).
-@ core_vblock_begin → i {
+unsafe @ core_vblock_begin → i {
     : i t ( core_temp `` )
     ( core_w CO_LET ) ( core_w t ) ( core_w RV_NONE )
     = g_core_vb t
@@ -25658,7 +25544,7 @@ unsafe @ eng_print_types → v {
 // }` is `= b s`, a call handed `{ … s }` is lent s. (Through the temporary,
 // the block's value owned s, and a call that lent it back handed its
 // result an owner: agora #839.)
-@ core_vblock_end i t i prev i h0 → v {
+unsafe @ core_vblock_end i t i prev i h0 → v {
     : ~ i val ( core_op_var t )
     ? > g_core_os_n h0 {
         : i op ( core_pop )
@@ -25676,17 +25562,19 @@ unsafe @ eng_print_types → v {
 
 // Is the operand `op` a whole binding made in the value block whose
 // temporary is `t`?
-@ __core_own_binding i op i t → b {
+unsafe @ __core_own_binding i op i t → b {
     ? < op 2 { ^ F } {}
+    : *i ps # *i # s g_core_pl
     : i p - op 2
-    ? >= ( __ct_get CT_PL + * p 3 1 ) 0 { ^ F } {}
-    : i vid ( __ct_get CT_PL * p 3 )
+    ? >= . ps + * p 3 1 0 { ^ F } {}
+    : i vid . ps * p 3
     ? | < vid 0 >= vid g_core_var_n { ^ F } {}
-    ^ & == ( __ct_get CT_VARS + * vid CORE_VW 2 ) 1 == ( __ct_get CT_VARS + * vid CORE_VW 6 ) t
+    : *i vs # *i # s g_core_vars
+    ^ & == . vs + * vid CORE_VW 2 1 == . vs + * vid CORE_VW 6 t
 }
 
 // `?? s { … }` after its scrutinee `op`.
-@ core_match_begin i op → i {
+unsafe @ core_match_begin i op → i {
     : i j ( core_temp `` )
     ( core_w CO_LET ) ( core_w j ) ( core_w RV_NONE )
     ( core_w CO_MATCH ) ( core_w op )
@@ -25695,7 +25583,7 @@ unsafe @ eng_print_types → v {
 
 // An arm of the match on `op` begins: `variant` is its pattern (a
 // variant, `T` / `F`, a number, `_`; an or-pattern's names).
-@ core_match_arm s variant i op → v {
+unsafe @ core_match_arm s variant i op → v {
     = g_core_match_op op
     = g_core_match_var ( __core_in variant )
     ( core_w CO_ARM ) ( core_w g_core_match_var )
@@ -25703,14 +25591,14 @@ unsafe @ eng_print_types → v {
 }
 
 // The arm binds payload `idx` of the matched value as `name`.
-@ core_payload i syms s name s ty i idx → v {
+unsafe @ core_payload i syms s name s ty i idx → v {
     : i vid ( core_var_new name ty 1 0 g_core_line )
     ( __core_bind syms name vid )
     ( core_w CO_LET ) ( core_w vid ) ( core_w RV_PAYLOAD ) ( core_w g_core_match_op ) ( core_w g_core_match_var ) ( core_w idx )
 }
 
 // An arm's guard (the operand on top) is read.
-@ core_guard → v {
+unsafe @ core_guard → v {
     : i h0 - g_core_os_n 1
     ? < h0 0 { ^ } {}
     ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops h0 )
@@ -25719,7 +25607,7 @@ unsafe @ eng_print_types → v {
 // `a | b` / `a & b` on flags, after `a` (on top): `b` runs only when `a`
 // does not decide — in the else of `a` for `|`, in its then for `&`.
 // Returns where the temporaries `b` makes begin.
-@ core_sc_begin b is_or → i {
+unsafe @ core_sc_begin b is_or → i {
     : i op ( core_pop )
     ( core_w CO_IF ) ( core_w op )
     ? is_or { ( core_w CO_ELSE ) } {}
@@ -25728,7 +25616,7 @@ unsafe @ eng_print_types → v {
 }
 
 // …and after `b` (on top): it is read, and what it made is released.
-@ core_sc_end i t0 → v {
+unsafe @ core_sc_end i t0 → v {
     : i h0 - g_core_os_n 1
     ? >= h0 0 { ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops h0 ) } {}
     ( core_discard g_core_os_n t0 )
@@ -25739,7 +25627,7 @@ unsafe @ eng_print_types → v {
 
 // `~ cond { body }` before its condition; returns where the LOOP word is,
 // for core_loop_cancel.
-@ core_loop_begin → i {
+unsafe @ core_loop_begin → i {
     ( core_w CO_LOOP )
     ^ - g_core_code_n 1
 }
@@ -25749,7 +25637,7 @@ unsafe @ eng_print_types → v {
 // `always`: the condition is a literal that is true (`~ T {`, `~ 1 {`): the
 // loop is left only by a `break` or a `^`, which the engine has to know to
 // say what holds after it (printed `loopcond T`).
-@ core_loop_cond i t0 b always → v {
+unsafe @ core_loop_cond i t0 b always → v {
     : ~ i op ( core_pop )
     // (a condition read out of one of those temporaries - `~ . ( locked_get
     // g ) serving` - is read before they go, as the code does: into a
@@ -25764,20 +25652,21 @@ unsafe @ eng_print_types → v {
     ( core_scope_begin )
 }
 
-@ core_loop_end → v {
+unsafe @ core_loop_end → v {
     ( core_scope_end )
     ( core_w CO_END )
 }
 
 // What looked like a loop was `~ value`, a complement.
-@ core_loop_cancel i at → v {
+unsafe @ core_loop_cancel i at → v {
     ? | < at 0 >= at g_core_code_n { ^ } {}
-    ( __ct_set CT_CODE at CO_NOP )
+    : *i c # *i # s g_core_code
+    = . c at CO_NOP
 }
 
 // `~ name container { body }` after its container (the operand on top):
 // `name` is an element of it, round by round.
-@ core_foreach i syms s name s ty → v {
+unsafe @ core_foreach i syms s name s ty → v {
     : i op ( core_pop )
     = g_core_depth + g_core_depth 1
     : i vid ( core_var_new name ty 1 0 g_core_line )
@@ -25786,28 +25675,33 @@ unsafe @ eng_print_types → v {
     ( core_w CO_SCOPE )
 }
 
-@ core_foreach_end → v {
+unsafe @ core_foreach_end → v {
     ( core_w CO_END )
     ( core_w CO_END )
     = g_core_depth - g_core_depth 1
 }
 
-@ core_jump b is_break → v {
+unsafe @ core_jump b is_break → v {
     ( core_w ? is_break CO_BREAK CO_CONTINUE )
 }
 
 // ── Core IR: the types it mentions ───────────────────────────────────
 
 // A type a variable or a literal has: listed once by core_print_types.
-@ core_note_ty s ty → v {
+unsafe @ core_note_ty s ty → v {
     // (the lists of what the IR mentioned are for its printer: none is
     // made when no IR is printed)
     ? | != 0 g_eng_decide == 0 ( nurl_str_len ty ) { ^ } {}
     ? == 0 g_core_ty_seen { = g_core_ty_seen ( nurl_sym_new ) } {}
     ? != 0 ( nurl_sym_len g_core_ty_seen ty ) { ^ } {}
     ( nurl_sym_def g_core_ty_seen ty `1` )
-    ( __ct_need CT_TYS + g_core_ty_n 1 )
-    ( __ct_set CT_TYS g_core_ty_n ( __core_in ty ) )
+    ? >= g_core_ty_n g_core_ty_cap {
+        : i nc ? == g_core_ty_cap 0 256 * g_core_ty_cap 2
+        = g_core_tys ( __core_grown g_core_tys g_core_ty_n nc )
+        = g_core_ty_cap nc
+    } {}
+    : *i ta # *i # s g_core_tys
+    = . ta g_core_ty_n ( __core_in ty )
     = g_core_ty_n + g_core_ty_n 1
 }
 
@@ -25819,10 +25713,11 @@ unsafe @ eng_print_types → v {
 // its base name, then `A` and its type arguments,
 // `F` and its fields (name, type), `V` and its variants (name, payload
 // types). The lists a type has none of are empty.
-@ core_print_types i syms → v {
+unsafe @ core_print_types i syms → v {
     : ~ i k 0
     ~ < k g_core_ty_n {
-        : s ty ( nurl_str_cat ( __core_str ( __ct_get CT_TYS k ) ) `` )
+        : *i ta # *i # s g_core_tys
+        : s ty ( nurl_str_cat # s . ta k `` )
         : i n ( nurl_str_len ty )
         ( __core_o `ty\t` ) ( __core_o ty )
         ( __core_o `\t` ) ( __core_oi ( bck_bind_class ty ) )
@@ -25893,7 +25788,7 @@ unsafe @ eng_print_types → v {
 
 // An `inout` argument's index (`( f . p k )`): the element of the object
 // `op`, the index (on top) read.
-@ core_inout_index i op → v {
+unsafe @ core_inout_index i op → v {
     : i h0 - g_core_os_n 1
     ? >= h0 0 { ( core_w CO_EVAL ) ( core_w RV_SCALAR ) ( __core_w_ops h0 ) } {}
     ( core_push ( core_op_ext op `*` ) )
@@ -25904,7 +25799,7 @@ unsafe @ eng_print_types → v {
 // `\ ( f … )`: the call's result `r` (on top) is matched — its `F` arm
 // returns (the error it carries moved into what the function hands
 // back), its `T` arm's payload is the try's value.
-@ core_try → v {
+unsafe @ core_try → v {
     : i r ( core_pop )
     : s ty ( nurl_get_last_type )
     ? < r 2 { ( __core_gap `try` ) ( core_push r ) ^ } {}
@@ -25913,7 +25808,7 @@ unsafe @ eng_print_types → v {
     ( core_w CO_MATCH ) ( core_w r )
     ( core_w CO_ARM ) ( core_w ( __core_in `F` ) )
     ( core_scope_begin )
-    : s rt ? != 0 g_core_fret ( nurl_str_cat ( __core_str g_core_fret ) `` ) ``
+    : s rt ? != 0 g_core_fret ( nurl_str_cat # s g_core_fret `` ) ``
     : i e ( core_var_new `` `` 1 0 g_core_line )
     ( core_w CO_LET ) ( core_w e ) ( core_w RV_PAYLOAD ) ( core_w r ) ( core_w ( __core_in `F` ) ) ( core_w 0 )
     // (The literal is the try's own, marked: a failure that cannot be
@@ -25967,10 +25862,11 @@ unsafe @ eng_print_types → v {
 // The operand on top, a closure binding a `=` gives another without moving
 // its env (gen_assign's __asn_move_env): bound first to a temporary that is
 // a second name of it (CORE_VF_SECOND), which the assignment is given.
-@ core_second_op s ty → v {
+unsafe @ core_second_op s ty → v {
     : i op ( core_pop )
     : i t ( core_temp ty )
-    ( __ct_set CT_VARS + * t CORE_VW 4 | ( __ct_get CT_VARS + * t CORE_VW 4 ) CORE_VF_SECOND )
+    : *i vs # *i # s g_core_vars
+    = . vs + * t CORE_VW 4 | . vs + * t CORE_VW 4 CORE_VF_SECOND
     ( core_w CO_LET ) ( core_w t ) ( core_w RV_USE ) ( core_w op )
     ( core_push ( core_op_var t ) )
 }
@@ -25980,18 +25876,21 @@ unsafe @ eng_print_types → v {
 // still call the binding): a second name of it (CORE_VF_SECOND). (The
 // block's value is the tail binding itself, core_vblock_end: the second
 // name is a temporary given it, as core_second_op makes one.)
-@ core_second_top → v {
+unsafe @ core_second_top → v {
     ? <= g_core_os_n 0 { ^ } {}
-    : i op ( __ct_get CT_OS - g_core_os_n 1 )
+    : *i os # *i # s g_core_os
+    : i op . os - g_core_os_n 1
     ? < op 2 { ^ } {}
+    : *i ps # *i # s g_core_pl
     : i b * - op 2 3
-    : i vid ( __ct_get CT_PL b )
-    ? | | < vid 0 >= vid g_core_var_n != ( __ct_get CT_PL + b 1 ) -1 { ^ } {}
-    ? != ( __ct_get CT_VARS + * vid CORE_VW 2 ) 2 {
-        ( core_second_op ( nurl_str_cat ( __core_str ( __ct_get CT_VARS + * vid CORE_VW 1 ) ) `` ) )
+    : i vid . ps b
+    ? | | < vid 0 >= vid g_core_var_n != . ps + b 1 -1 { ^ } {}
+    : *i vs # *i # s g_core_vars
+    ? != . vs + * vid CORE_VW 2 2 {
+        ( core_second_op ( nurl_str_cat # s . vs + * vid CORE_VW 1 `` ) )
         ^
     } {}
-    ( __ct_set CT_VARS + * vid CORE_VW 4 | ( __ct_get CT_VARS + * vid CORE_VW 4 ) CORE_VF_SECOND )
+    = . vs + * vid CORE_VW 4 | . vs + * vid CORE_VW 4 CORE_VF_SECOND
 }
 
 // The capture `name` of the closure body being built is the env's own,
@@ -26004,7 +25903,7 @@ unsafe @ eng_print_types → v {
 // A closure literal before its body: what it captures (`caps`, names of
 // the enclosing function's bindings) is read here, in the enclosing
 // function, and its body's IR begins — the captures its first variables.
-@ core_closure_begin i syms s caps s fname s file i line s ret_ty → v {
+unsafe @ core_closure_begin i syms s caps s fname s file i line s ret_ty → v {
     : ~ s rest ( nurl_str_cat caps `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s nm ( str_first_word rest )
@@ -26026,7 +25925,7 @@ unsafe @ eng_print_types → v {
 // …and after it: a body that falls off with a value (`falls`) returns it;
 // the body's IR is complete; back in the enclosing function the closure
 // is a temporary made of the captures above `h0`.
-@ core_closure_end i h0 b falls → v {
+unsafe @ core_closure_end i h0 b falls → v {
     ? falls { ( core_ret T ) } {}
     ( core_scope_end )
     : i fname g_core_fname
@@ -26038,12 +25937,12 @@ unsafe @ eng_print_types → v {
 }
 
 // `; { … }`: the block runs at every exit of the function from here on.
-@ core_defer_begin → v {
+unsafe @ core_defer_begin → v {
     ( core_w CO_DEFER )
     ( core_scope_begin )
 }
 
-@ core_defer_end → v {
+unsafe @ core_defer_end → v {
     ( core_scope_end )
     ( core_w CO_END )
 }
@@ -26064,123 +25963,128 @@ unsafe @ __core_o s x → v {
     = g_core_out_n + g_core_out_n n
 }
 
-@ __core_oi i x → v {
+unsafe @ __core_oi i x → v {
     ( __core_o ( nurl_str_int x ) )
 }
 
 // An operand: `c` nothing to track, `?` not named, else a place — `v3`,
 // `g:name`, with `/field`, `/*`, `/#Variant.i` steps.
-@ __core_o_op i op → v {
+unsafe @ __core_o_op i op → v {
     ? == op CORE_OP_TRUE { ( __core_o `T` ) ^ } {}
     ? == op 0 { ( __core_o `c` ) ^ } {}
     ? == op 1 { ( __core_o `?` ) ^ } {}
     ? < op 0 { ( __core_o `-` ) ^ } {}
+    : *i ps # *i # s g_core_pl
     : i p - op 2
-    : i var ( __ct_get CT_PL * p 3 )
-    : i parent ( __ct_get CT_PL + * p 3 1 )
-    : i elem ( __ct_get CT_PL + * p 3 2 )
+    : i var . ps * p 3
+    : i parent . ps + * p 3 1
+    : i elem . ps + * p 3 2
     ? < parent 0 {
-        ? < var 0 { ( __core_o `g:` ) ( __core_o ( __core_str elem ) ) ^ } {}
+        ? < var 0 { ( __core_o `g:` ) ( __core_o # s elem ) ^ } {}
         ( __core_o `v` ) ( __core_oi var )
         ^
     } {}
     ( __core_o_op + parent 2 )
-    ( __core_o `/` ) ( __core_o ( __core_str elem ) )
+    ( __core_o `/` ) ( __core_o # s elem )
 }
 
 // The operand list at word `at`: its count, then the operands. Returns
 // the word after it.
-@ __core_o_ops i at → i {
-    : i n ( __ct_get CT_CODE at )
+unsafe @ __core_o_ops i at → i {
+    : *i c # *i # s g_core_code
+    : i n . c at
     ( __core_oi n )
     : ~ i k 0
     ~ < k n {
-        ( __core_o ` ` ) ( __core_o_op ( __ct_get CT_CODE + + at 1 k ) )
+        ( __core_o ` ` ) ( __core_o_op . c + + at 1 k )
         = k + k 1
     }
     ^ + + at 1 n
 }
 
 // The rvalue at word `at`; returns the word after it.
-@ __core_o_rv i at → i {
-    : i k ( __ct_get CT_CODE at )
+unsafe @ __core_o_rv i at → i {
+    : *i c # *i # s g_core_code
+    : i k . c at
     ? == k RV_NONE { ( __core_o `none` ) ^ + at 1 } {}
-    ? == k RV_USE { ( __core_o `use ` ) ( __core_o_op ( __ct_get CT_CODE + at 1 ) ) ^ + at 2 } {}
+    ? == k RV_USE { ( __core_o `use ` ) ( __core_o_op . c + at 1 ) ^ + at 2 } {}
     ? == k RV_CALL {
         ( __core_o `call ` )
-        ? == 0 ( __ct_get CT_CODE + at 1 ) { ( __core_o `?` ) } { ( __core_o ( __core_str ( __ct_get CT_CODE + at 1 ) ) ) }
+        ? == 0 . c + at 1 { ( __core_o `?` ) } { ( __core_o # s . c + at 1 ) }
         ( __core_o ` ` )
         ^ ( __core_o_ops + at 2 )
     } {}
     ? == k RV_AGG {
         ( __core_o `agg ` )
-        ? == 0 ( __ct_get CT_CODE + at 2 ) { ( __core_o `-` ) } { ( __core_o ( __core_str ( __ct_get CT_CODE + at 2 ) ) ) }
+        ? == 0 . c + at 2 { ( __core_o `-` ) } { ( __core_o # s . c + at 2 ) }
         ( __core_o ` ` )
         : i e ( __core_o_ops + at 3 )
-        ( __core_o `\t` ) ( __core_o ( __core_str ( __ct_get CT_CODE + at 1 ) ) )
+        ( __core_o `\t` ) ( __core_o # s . c + at 1 )
         ^ e
     } {}
     ? == k RV_SCALAR { ( __core_o `scalar ` ) ^ ( __core_o_ops + at 1 ) } {}
     ? == k RV_PAYLOAD {
-        ( __core_o `payload ` ) ( __core_o_op ( __ct_get CT_CODE + at 1 ) ) ( __core_o ` ` )
-        ( __core_o ( __core_str ( __ct_get CT_CODE + at 2 ) ) ) ( __core_o ` ` ) ( __core_oi ( __ct_get CT_CODE + at 3 ) )
+        ( __core_o `payload ` ) ( __core_o_op . c + at 1 ) ( __core_o ` ` )
+        ( __core_o # s . c + at 2 ) ( __core_o ` ` ) ( __core_oi . c + at 3 )
         ^ + at 4
     } {}
     ? == k RV_CLOSURE {
-        ( __core_o `closure ` ) ( __core_o ( __core_str ( __ct_get CT_CODE + at 1 ) ) ) ( __core_o ` ` )
+        ( __core_o `closure ` ) ( __core_o # s . c + at 1 ) ( __core_o ` ` )
         ^ ( __core_o_ops + at 2 )
     } {}
     ? == k RV_CALLIND { ( __core_o `callind ` ) ^ ( __core_o_ops + at 1 ) } {}
-    ( __core_o `opaque ` ) ( __core_oi ( __ct_get CT_CODE + at 1 ) ) ( __core_o ` ` )
+    ( __core_o `opaque ` ) ( __core_oi . c + at 1 ) ( __core_o ` ` )
     ^ ( __core_o_ops + at 2 )
 }
 
 // The statement at word `at`; returns the word after it.
-@ __core_o_stmt i at → i {
-    : i op ( __ct_get CT_CODE at )
-    ? == op CO_LET { ( __core_o `let ` ) ( __core_oi ( __ct_get CT_CODE + at 1 ) ) ( __core_o ` ` ) ^ ( __core_o_rv + at 2 ) } {}
-    ? == op CO_ASSIGN { ( __core_o `assign ` ) ( __core_o_op ( __ct_get CT_CODE + at 1 ) ) ( __core_o ` ` ) ^ ( __core_o_rv + at 2 ) } {}
+unsafe @ __core_o_stmt i at → i {
+    : *i c # *i # s g_core_code
+    : i op . c at
+    ? == op CO_LET { ( __core_o `let ` ) ( __core_oi . c + at 1 ) ( __core_o ` ` ) ^ ( __core_o_rv + at 2 ) } {}
+    ? == op CO_ASSIGN { ( __core_o `assign ` ) ( __core_o_op . c + at 1 ) ( __core_o ` ` ) ^ ( __core_o_rv + at 2 ) } {}
     ? == op CO_EVAL { ( __core_o `eval ` ) ^ ( __core_o_rv + at 1 ) } {}
-    ? == op CO_IF { ( __core_o `if ` ) ( __core_o_op ( __ct_get CT_CODE + at 1 ) ) ^ + at 2 } {}
+    ? == op CO_IF { ( __core_o `if ` ) ( __core_o_op . c + at 1 ) ^ + at 2 } {}
     ? == op CO_ELSE { ( __core_o `else` ) ^ + at 1 } {}
     ? == op CO_END { ( __core_o `end` ) ^ + at 1 } {}
-    ? == op CO_MATCH { ( __core_o `match ` ) ( __core_o_op ( __ct_get CT_CODE + at 1 ) ) ^ + at 2 } {}
-    ? == op CO_ARM { ( __core_o `arm ` ) ( __core_o ( __core_str ( __ct_get CT_CODE + at 1 ) ) ) ^ + at 2 } {}
+    ? == op CO_MATCH { ( __core_o `match ` ) ( __core_o_op . c + at 1 ) ^ + at 2 } {}
+    ? == op CO_ARM { ( __core_o `arm ` ) ( __core_o # s . c + at 1 ) ^ + at 2 } {}
     ? == op CO_LOOP { ( __core_o `loop` ) ^ + at 1 } {}
-    ? == op CO_LOOPCOND { ( __core_o `loopcond ` ) ( __core_o_op ( __ct_get CT_CODE + at 1 ) ) ^ + at 2 } {}
-    ? == op CO_FOREACH { ( __core_o `foreach ` ) ( __core_oi ( __ct_get CT_CODE + at 1 ) ) ( __core_o ` ` ) ( __core_o_op ( __ct_get CT_CODE + at 2 ) ) ^ + at 3 } {}
+    ? == op CO_LOOPCOND { ( __core_o `loopcond ` ) ( __core_o_op . c + at 1 ) ^ + at 2 } {}
+    ? == op CO_FOREACH { ( __core_o `foreach ` ) ( __core_oi . c + at 1 ) ( __core_o ` ` ) ( __core_o_op . c + at 2 ) ^ + at 3 } {}
     ? == op CO_SCOPE { ( __core_o `scope` ) ^ + at 1 } {}
-    ? == op CO_DROP { ( __core_o `drop ` ) ( __core_oi ( __ct_get CT_CODE + at 1 ) ) ^ + at 2 } {}
-    ? == op CO_RET { ( __core_o `ret ` ) ( __core_o_op ( __ct_get CT_CODE + at 1 ) ) ^ + at 2 } {}
+    ? == op CO_DROP { ( __core_o `drop ` ) ( __core_oi . c + at 1 ) ^ + at 2 } {}
+    ? == op CO_RET { ( __core_o `ret ` ) ( __core_o_op . c + at 1 ) ^ + at 2 } {}
     ? == op CO_BREAK { ( __core_o `break` ) ^ + at 1 } {}
     ? == op CO_CONTINUE { ( __core_o `continue` ) ^ + at 1 } {}
     ? == op CO_NOP { ( __core_o `nop` ) ^ + at 1 } {}
     ? == op CO_DEFER { ( __core_o `defer` ) ^ + at 1 } {}
-    ( __core_o `line ` ) ( __core_oi ( __ct_get CT_CODE + at 1 ) )
+    ( __core_o `line ` ) ( __core_oi . c + at 1 )
     ^ + at 2
 }
 
 // The function just built, as text: `fn`, its variables, its statements
 // one a line, `endfn`.
-@ core_print_fn → v {
-    ( __core_o `fn\t` ) ( __core_o ( __core_str g_core_fname ) ) ( __core_o `\t` )
-    ? != 0 g_core_fret { ( __core_o ( __core_str g_core_fret ) ) } {}
+unsafe @ core_print_fn → v {
+    ( __core_o `fn\t` ) ( __core_o # s g_core_fname ) ( __core_o `\t` )
+    ? != 0 g_core_fret { ( __core_o # s g_core_fret ) } {}
     ( __core_o `\t` ) ( __core_oi g_core_nparam )
     ( __core_o `\t` ) ( __core_oi g_core_fline )
-    ( __core_o `\t` ) ( __core_o ( __core_str g_core_ffile ) )
+    ( __core_o `\t` ) ( __core_o # s g_core_ffile )
     ( __core_o `\t` ) ( __core_oi g_core_fflags )
-    ( __core_o `\t` ) ( __core_o ( __core_str g_core_ftmpl ) ) ( __core_o `\n` )
+    ( __core_o `\t` ) ( __core_o # s g_core_ftmpl ) ( __core_o `\n` )
+    : *i vs # *i # s g_core_vars
     : ~ i k 0
     ~ < k g_core_var_n {
         : i b * k CORE_VW
         ( __core_o `v\t` ) ( __core_oi k )
-        ( __core_o `\t` ) ( __core_oi ( __ct_get CT_VARS + b 2 ) )
-        ( __core_o `\t` ) ( __core_oi ( __ct_get CT_VARS + b 3 ) )
-        ( __core_o `\t` ) ( __core_oi ( __ct_get CT_VARS + b 4 ) )
-        ( __core_o `\t` ) ( __core_oi ( __ct_get CT_VARS + b 5 ) )
-        ( __core_o `\t` ) ( __core_oi ( __ct_get CT_VARS + b 6 ) )
-        ( __core_o `\t` ) ( __core_o ( __core_str ( __ct_get CT_VARS b ) ) )
-        ( __core_o `\t` ) ( __core_o ( __core_str ( __ct_get CT_VARS + b 1 ) ) )
+        ( __core_o `\t` ) ( __core_oi . vs + b 2 )
+        ( __core_o `\t` ) ( __core_oi . vs + b 3 )
+        ( __core_o `\t` ) ( __core_oi . vs + b 4 )
+        ( __core_o `\t` ) ( __core_oi . vs + b 5 )
+        ( __core_o `\t` ) ( __core_oi . vs + b 6 )
+        ( __core_o `\t` ) ( __core_o # s . vs b )
+        ( __core_o `\t` ) ( __core_o # s . vs + b 1 )
         ( __core_o `\n` )
         = k + k 1
     }
@@ -26193,12 +26097,17 @@ unsafe @ __core_o s x → v {
 }
 
 // The function just built: listed for core_print_sums.
-@ core_note_fn → v {
+unsafe @ core_note_fn → v {
     ? != 0 g_eng_decide { ^ } {}
-    ( __ct_need CT_FNS + g_core_fn_n 3 )
-    ( __ct_set CT_FNS g_core_fn_n g_core_fname )
-    ( __ct_set CT_FNS + g_core_fn_n 1 g_core_ftmpl )
-    ( __ct_set CT_FNS + g_core_fn_n 2 g_core_nparam )
+    ? >= + g_core_fn_n 3 g_core_fn_cap {
+        : i nc ? == g_core_fn_cap 0 192 * g_core_fn_cap 2
+        = g_core_fns ( __core_grown g_core_fns g_core_fn_n nc )
+        = g_core_fn_cap nc
+    } {}
+    : *i fa # *i # s g_core_fns
+    = . fa g_core_fn_n g_core_fname
+    = . fa + g_core_fn_n 1 g_core_ftmpl
+    = . fa + g_core_fn_n 2 g_core_nparam
     = g_core_fn_n + g_core_fn_n 3
 }
 
@@ -26207,7 +26116,7 @@ unsafe @ __core_o s x → v {
     ^ ( nurl_str_cat ( nurl_sym_get tab f ) `` )
 }
 
-@ __core_sum_kv s key s val → v {
+unsafe @ __core_sum_kv s key s val → v {
     ? == 0 ( nurl_str_len val ) { ^ } {}
     ( __core_o `\t` ) ( __core_o key ) ( __core_o `=` ) ( __core_o val )
 }
@@ -26237,7 +26146,7 @@ unsafe @ __ws_syncd s f i np → s {
 // template's, as the walk keys some answers by either. This is what
 // answers for a function whose body uses raw memory (PROPOSAL_CORE_IR D2)
 // until its summary is declared in source.
-@ core_print_sum i syms s f i np → v {
+unsafe @ core_print_sum i syms s f i np → v {
     ( __core_o `sum\t` ) ( __core_o f ) ( __core_o `\t` ) ( __core_oi np )
     ( __core_sum_kv `sink` ( __core_tab g_fn_sink f ) )
     ( __core_sum_kv `keeps` ( __core_tab g_fn_keeps f ) )
@@ -26302,14 +26211,15 @@ unsafe @ __ws_syncd s f i np → s {
 }
 
 // Every function built, and each template once.
-@ core_print_sums i syms → v {
+unsafe @ core_print_sums i syms → v {
     ? == 0 g_summaries_final { ^ } {}
     : i seen ( nurl_sym_new )
+    : *i fa # *i # s g_core_fns
     : ~ i k 0
     ~ < k g_core_fn_n {
-        : s f ( nurl_str_cat ( __core_str ( __ct_get CT_FNS k ) ) `` )
-        : s t ( nurl_str_cat ( __core_str ( __ct_get CT_FNS + k 1 ) ) `` )
-        : i np ( __ct_get CT_FNS + k 2 )
+        : s f ( nurl_str_cat # s . fa k `` )
+        : s t ( nurl_str_cat # s . fa + k 1 `` )
+        : i np . fa + k 2
         ? == 0 ( nurl_sym_len seen f ) {
             ( nurl_sym_def seen f `1` )
             ( core_print_sum syms f np )
@@ -26321,9 +26231,10 @@ unsafe @ __ws_syncd s f i np → s {
         = k + k 3
     }
     // …and each function called that was not built here.
+    : *i ca # *i # s g_core_callees
     = k 0
     ~ < k g_core_callee_n {
-        : s f ( nurl_str_cat ( __core_str ( __ct_get CT_CALLEES k ) ) `` )
+        : s f ( nurl_str_cat # s . ca k `` )
         ? == 0 ( nurl_sym_len seen f ) {
             ( nurl_sym_def seen f `1` )
             ( core_print_sum syms f 0 )
@@ -26361,12 +26272,15 @@ unsafe @ core_flush i syms → v {
         ( nurl_eprintln ( nurl_str_cat3 `core: ` ( nurl_str_int g_core_unlowered ) ` construct(s) not lowered` ) )
     } {}
     // The builder's arrays (the last function's, reused by each) and the lists.
-    : ~ i __t CT_CODE
-    ~ <= __t CT_TMPS { ( __ct_clear __t ) = __t + __t 1 }
-    ( __ct_clear CT_TYS ) = g_core_ty_n 0
-    ( __ct_clear CT_VIRTS ) = g_core_virt_n 0
-    ( __ct_clear CT_FNS ) = g_core_fn_n 0
-    ( __ct_clear CT_CALLEES ) = g_core_callee_n 0
+    ? != 0 g_core_code { ( nurl_free # s g_core_code ) = g_core_code 0 = g_core_code_cap 0 } {}
+    ? != 0 g_core_vars { ( nurl_free # s g_core_vars ) = g_core_vars 0 = g_core_var_cap 0 } {}
+    ? != 0 g_core_pl { ( nurl_free # s g_core_pl ) = g_core_pl 0 = g_core_pl_cap 0 } {}
+    ? != 0 g_core_os { ( nurl_free # s g_core_os ) = g_core_os 0 = g_core_os_cap 0 } {}
+    ? != 0 g_core_tmps { ( nurl_free # s g_core_tmps ) = g_core_tmps 0 = g_core_tmp_cap 0 } {}
+    ? != 0 g_core_tys { ( nurl_free # s g_core_tys ) = g_core_tys 0 = g_core_ty_n 0 = g_core_ty_cap 0 } {}
+    ? != 0 g_core_virts { ( nurl_free # s g_core_virts ) = g_core_virts 0 = g_core_virt_n 0 = g_core_virt_cap 0 } {}
+    ? != 0 g_core_fns { ( nurl_free # s g_core_fns ) = g_core_fns 0 = g_core_fn_n 0 = g_core_fn_cap 0 } {}
+    ? != 0 g_core_callees { ( nurl_free # s g_core_callees ) = g_core_callees 0 = g_core_callee_n 0 = g_core_callee_cap 0 } {}
 }
 
 @ __nest_enter i lex → v {
@@ -50485,97 +50399,6 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ^ | & != 0 ( nurl_str_len pt ) ( __ud_key_names pt v ) & != 0 ( nurl_str_len et ) ( __ud_key_names et v )
 }
 
-// Does a null key (mem_ud_ident_key) say the value owns nothing at all —
-// an empty String, a byte buffer with none, an option or a result whose
-// active side is one of those or a number? Then releasing it is a no-op,
-// and a takeover by key that meets one takes over no owner: each keeps
-// what it holds (AGORA-965).
-@ __ud_null_trivial s vt → b {
-    : s ll ( nurl_llty ( __udty_val vt ) )
-    ? != 0 ( nurl_str_starts ll `{ i1, ` ) {
-        : ~ s fs ( __seplist_rest ( __agg_fields ll ) )
-        ? == 0 ( nurl_str_len fs ) { ^ F } {}
-        ~ != 0 ( nurl_str_len fs ) {
-            : s f ( seplist_first fs ) = fs ( __seplist_rest fs )
-            ? ! | ( __ud_null_trivial f ) ( __is_plain_num_llty f ) { ^ F } {}
-        }
-        ^ T
-    } {}
-    ? ( seq ll `%String` ) { ^ T } {}
-    ? != 0 ( nurl_str_starts ll `%Vec__` ) { ^ ( __is_plain_num_llty ( nurl_str_slice ll 6 - ( nurl_str_len ll ) 6 ) ) } {}
-    ^ F
-}
-
-// …asked of the value held at `ptr` itself, as an i1 (or `1` / `0` where its
-// type answers alone): an option by its active side — `None` owns nothing,
-// whatever the payload's type — and a result by the side it holds, through
-// nested options and results (`Some(None)` of a `??P` owns nothing either).
-// A side whose null key may leave something owned (a struct by its first
-// field) answers no. The value is read only where a tag decides (AGORA-965).
-@ __ud_null_triv_rt i cg s vt s ptr → s {
-    : s ll ( nurl_llty ( __udty_val vt ) )
-    : i st ( __ntv_static ll )
-    ? == st 1 { ^ ( nurl_str_cat `1` `` ) } {}
-    ? == st 0 { ^ ( nurl_str_cat `0` `` ) } {}
-    ^ ( __ntv_val cg ll ( __ud_load cg vt ptr ) )
-}
-
-// The type alone: 1 a null key always means nothing owned, 0 never, 2 the
-// active side decides (an option is never 0: its `None` owns nothing).
-@ __ntv_static s ll → i {
-    ? == 0 ( nurl_str_starts ll `{ i1, ` ) { ^ ? | ( __ud_null_trivial ll ) ( __is_plain_num_llty ll ) 1 0 } {}
-    : s fs ( __seplist_rest ( __agg_fields ll ) )
-    ? == 0 ( nurl_str_len fs ) { ^ 0 } {}
-    : s rest ( __seplist_rest fs )
-    : i sp ( __ntv_static ( seplist_first fs ) )
-    : i se ? == 0 ( nurl_str_len rest ) 1 ( __ntv_static ( seplist_first rest ) )
-    ? & == sp 1 == se 1 { ^ 1 } {}
-    ? & == sp 0 == se 0 { ^ 0 } {}
-    ^ 2
-}
-
-// …of the value `val` of LLVM type `ll`, as an i1 or `1` / `0`.
-@ __ntv_val i cg s ll s val → s {
-    : i st ( __ntv_static ll )
-    ? == st 1 { ^ ( nurl_str_cat `1` `` ) } {}
-    ? == st 0 { ^ ( nurl_str_cat `0` `` ) } {}
-    : s fs ( __seplist_rest ( __agg_fields ll ) )
-    : s f1 ( seplist_first fs )
-    : s rest ( __seplist_rest fs )
-    : s tg ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print tg ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
-    : s pt ( __ntv_side cg ll val f1 1 )
-    : s et ? == 0 ( nurl_str_len rest ) ( nurl_str_cat `1` `` ) ( __ntv_side cg ll val ( seplist_first rest ) 2 )
-    ^ ( __sel_i1c cg tg pt et )
-}
-
-// One side (field `k` of type `ft`) of a wrapper value: read only where
-// its own type does not answer alone.
-@ __ntv_side i cg s ll s val s ft i k → s {
-    : i st ( __ntv_static ft )
-    ? == st 1 { ^ ( nurl_str_cat `1` `` ) } {}
-    ? == st 0 { ^ ( nurl_str_cat `0` `` ) } {}
-    : s v ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print v ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print ( nurl_str_int k ) ) ( nurl_print `\n` )
-    ^ ( __ntv_val cg ft v )
-}
-
-// `c ? a : b` of i1s, `1` / `0` for constants, folded where it can be.
-@ __sel_i1c i cg s c s a s b → s {
-    ? ( seq a b ) { ^ ( nurl_str_cat a `` ) } {}
-    ? & ( seq a `1` ) ( seq b `0` ) { ^ ( nurl_str_cat c `` ) } {}
-    ? & ( seq a `0` ) ( seq b `1` ) { ^ ( __not_i1 cg c ) } {}
-    : s r ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = select i1 ` ) ( nurl_print c ) ( nurl_print `, i1 ` ) ( nurl_print ? ( seq a `1` ) `true` ? ( seq a `0` ) `false` a )
-    ( nurl_print `, i1 ` ) ( nurl_print ? ( seq b `1` ) `true` ? ( seq b `0` ) `false` b ) ( nurl_print `\n` )
-    ^ r
-}
-
-// An LLVM integer or float type: a number, which owns nothing.
-@ __is_plain_num_llty s t → b {
-    ^ | | | | | | ( seq t `i1` ) ( seq t `i8` ) ( seq t `i16` ) ( seq t `i32` ) ( seq t `i64` ) ( seq t `double` ) ( seq t `float` )
-}
-
 @ __ud_keyable s vt → b {
     : s ll ( nurl_llty vt )
     // (An option or a result by its active side, as mem_ud_ident_key keys
@@ -52464,34 +52287,6 @@ unsafe @ __src_has_raw_ptr s text → b {
             // never a release under a holder.)
             : ~ s __mtaken `0`
             : s __mnn ? & __mkey != 0 ( nurl_str_len __mnk ) ( __i8_nonnull cg __mnk ) ``
-            // (…by the side the value holds: a `None` owns nothing whatever its
-            // payload type is, so its null key takes over no owner either.)
-            : s __mtriv ? __mkey ( __ud_null_triv_rt cg ty ptr ) `0`
-            // (…and an owner whose key does not name what the binding holds —
-            // a struct a call lent a field of, `( ex a )` — is no owner of
-            // it: taken over whole, the binding released the field only and
-            // the rest of each such owner leaked. The binding is given a copy
-            // of what it holds on the runs it owns nothing, and every deeper
-            // owner keeps and releases its own; a value with no copy is
-            // refused, as a field of a dying struct is — AGORA-967.)
-            : ~ s __mpo ``
-            : s __mjp ( nurl_sym_get2 syms src `__jparts` )
-            // (…a binding given this one's value is over those parts too.)
-            ? != 0 ( nurl_str_len __mjp ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jparts` ) __mjp ) } {}
-            ? | ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) != 0 ( nurl_str_len __mjp ) {
-                : ~ s __mq ( nurl_str_cat3 __ma ` ` __mjp )
-                ~ != 0 ( nurl_str_len __mq ) {
-                    : s __mqw ( str_first_word __mq ) = __mq ( str_skip_word __mq )
-                    : s __mqt ( nurl_sym_get syms ( nurl_sym_get2 syms __mqw `__bname` ) )
-                    ? & & == 0 ( nurl_str_len __mpo ) > ( nurl_str_to_int ( nurl_sym_get2 syms __mqw `__depth` ) ) __pd | == 0 ( nurl_str_len __mqt ) ! ( __ud_key_names __mqt ty ) {
-                        = __mpo ( nurl_str_cat ( nurl_sym_get2 syms __mqw `__bname` ) `` )
-                    } {}
-                }
-            } {}
-            ? & != 0 ( nurl_str_len __mpo ) | ( __clone_supported ty syms ) ( __nc_drop_ty ty ) {
-                ( mem_dyn_lend_copy_in syms cg ptr ty ( mem_udrop_flag_get syms cg ptr ) __mpo )
-                ^ v
-            } {}
             // (…and a binding given this one's value is one of those arms' too.)
             ? ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jalias` ) `1` ) } {}
             ~ != 0 ( nurl_str_len __ma ) {
@@ -52519,10 +52314,7 @@ unsafe @ __src_has_raw_ptr s text → b {
                             // key is null: then every one)
                             : s __mm ( __and_not cg ( __and_i1 cg ( __and_i1 cg __meq __of ) __mnn ) __mtaken )
                             = __mtaken ( __or_i1 cg __mtaken __mm )
-                            // (…unless a null key says the value owns nothing —
-                            // `None`, an empty String: then no owner is taken
-                            // over, and each releases its own, AGORA-965.)
-                            : s __msel ? ( seq __mtriv `1` ) ( nurl_str_cat __mm `` ) ? ( seq __mtriv `0` ) ( __or_i1 cg __mm ( __not_i1 cg __mnn ) ) ( __or_i1 cg __mm ( __and_not cg ( __not_i1 cg __mnn ) __mtriv ) )
+                            : s __msel ( __or_i1 cg __mm ( __not_i1 cg __mnn ) )
                             : s __mtk ( __and_i1 cg __of __msel )
                             : s __mrest ( __and_not cg __of __msel )
                             : s __nf2 ( nurl_cg_reg cg )
@@ -52635,44 +52427,11 @@ unsafe @ __src_has_raw_ptr s text → b {
             : ~ s __jids ``
             = __jids ( __phi_ids_union ( nurl_sym_get syms `__last_phi_idents__` ) ( nurl_sym_get syms `__last_join_tails__` ) )
             : s __jpn ( nurl_sym_get syms `__fn_param_names__` )
-            // (The roots of the arms' lending calls' arguments.)
-            : s __jarg ( __arm_lend_roots ( nurl_sym_get syms `__last_join_arm_lends__` ) )
             ~ != 0 ( nurl_str_len __jids ) {
                 : s __jw ( str_first_word __jids ) = __jids ( str_skip_word __jids )
                 ? ! ( str_contains_word __jpn __jw ) {
                     : s __jup ( mem_udrop_ptr_of syms __jw )
-                    // (…or a local an arm's call lends, as a call's result
-                    // over what it hands back is (above): the join is a
-                    // cursor over it on the runs that arm is taken — a
-                    // literal-built option bound in a closure and lent by
-                    // `( idq a )`, assigned by name to a capture, was left
-                    // a borrow of a local the closure then released,
-                    // AGORA-965.)
-                    // (Only a whole value: the local is an argument of an
-                    // arm's lending call and has the join's own type — a
-                    // field lent out of it, `( getr lb )`, is no cursor
-                    // over lb; and an arm that is a bare name moves.)
-                    : s __jot ( nurl_sym_get syms ( nurl_sym_get2 syms __jup `__bname` ) )
-                    : b __jco != 0 ( nurl_str_len ( __call_owned_by syms __jup ) )
-                    // (An argument of an arm's lending call.)
-                    : b __jarm & ( nurl_sym_has_word syms `__last_phi_idents__` __jw ) ( str_contains_word __jarg __jw )
-                    : b __jwh & != 0 ( nurl_str_len __jot ) ( seq ( nurl_llty ( __udty_val __jot ) ) ( nurl_llty ( __udty_val ty ) ) )
-                    // (Whole, and told apart by its key — a handle, an
-                    // option of one, a struct by its first owned field.)
-                    : b __jcl | __jco & & __jarm __jwh | ( __is_handle_ty ty ) ( __ud_keyable ty )
-                    // (…and a local such a call lends part of, `( ex a )` a
-                    // field of a, or the whole of with no key to tell it by:
-                    // no cursor over it, but handed on by name to a binding
-                    // that outlives it, the value is copied there, or refused
-                    // where it has no copy (__mem_udrop_bind_flag's `__mpo`) —
-                    // `__jparts`. Left out, a capture kept what a literal-built
-                    // local its closure released held, AGORA-967.)
-                    : b __jparm & & ! __jcl __jarm | | ( __is_handle_ty ty ) ( __nc_drop_ty ty ) ( __ud_keyable ty )
-                    ? & & & ! ( seq __jup ptr ) __jparm != 0 ( nurl_str_len __jup ) ( nurl_sym_has_word syms `__user_drops__` __jup ) {
-                        : s __jps ( nurl_sym_get2 syms ptr `__jparts` )
-                        ? ! ( str_contains_word __jps __jup ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jparts` ) ( nurl_str_cat3 __jps ` ` __jup ) ) } {}
-                    } {}
-                    ? & & & != 0 ( nurl_str_len __jup ) ! ( seq __jup ptr ) ( nurl_sym_has_word syms `__user_drops__` __jup ) __jcl {
+                    ? & & & != 0 ( nurl_str_len __jup ) ! ( seq __jup ptr ) ( nurl_sym_has_word syms `__user_drops__` __jup ) != 0 ( nurl_str_len ( __call_owned_by syms __jup ) ) {
                         ( mem_udrop_link_alias syms ptr __jup )
                         // (…one of them on a run, the arm's: whoever takes
                         // the binding's value over takes over that one only,
@@ -52785,10 +52544,7 @@ unsafe @ __src_has_raw_ptr s text → b {
 @ __nc_outlive_die i syms s ptr s ty → v {
     : s rec ( __stmt_pos_rec ( nurl_sym_get syms `__fn_self_name__` ) )
     : s r1 ( str_skip_word rec )
-    // (A capture's slot has no binding name of its own: the assignment's
-    // target names it, AGORA-967.)
-    : s bn0 ( nurl_sym_get2 syms ptr `__bname` )
-    : s bn ? == 0 ( nurl_str_len bn0 ) ( nurl_sym_get syms `__assign_name__` ) bn0
+    : s bn ( nurl_sym_get2 syms ptr `__bname` )
     : s root ( nurl_sym_get syms `__last_member_root__` )
     : s tshow ( llvm_to_nurl ty )
     : s m1 ( nurl_str_cat4 `'` bn `' would still borrow a field of '` root )
@@ -60682,28 +60438,6 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
     } {}
 }
 
-// The handover of `src` to `name` stashed for this statement at `line` is
-// one the generated code copies where `src` lends and moves where it owns
-// (gen_assign's `inout` move, `__io_move`): its mark `:m` becomes `:k`, the
-// row's field 6 `ak`. The mark rides on the row itself, so no other
-// handover - another line, another function, a second `=` on this line -
-// can read it. An entry not found keeps `:m`, the rule as before
-// (AGORA-959).
-@ __ioc_mark_copy s name s src i line → v {
-    : s al ( nurl_sym_get g_bck `paliases` )
-    : s old ( nurl_str_cat4 src ` ` ( nurl_str_int line ) ( nurl_str_cat3 ` ` name `:m` ) )
-    // (Found as a whole word: the list and the entry padded with a blank on
-    // each side, so an entry that ends another - `ax 7 p:m` beside
-    // `x 7 p:m` - is never the one taken; CodeRabbit on github#2224. The
-    // padded match starts at the blank before the entry, which is the
-    // entry's own offset in the unpadded list.)
-    : i at ( nurl_str_find ( nurl_str_cat3 ` ` al ` ` ) ( nurl_str_cat3 ` ` old ` ` ) )
-    ? < at 0 { ^ v } {}
-    : i e + at ( nurl_str_len old )
-    : i n ( nurl_str_len al )
-    ( bck_put `paliases` ( nurl_str_cat3 ( nurl_str_slice al 0 - e 1 ) `k` ( nurl_str_slice al e - n e ) ) )
-}
-
 // The stdlib container calls that drop elements, or hand them out to a
 // caller that may drop them (vec_pop's result), without releasing the
 // container: a value stored into the container may go with them.
@@ -60888,13 +60622,10 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
             // (`:m`: a handover by name the generated code makes a move,
             // amv_open — the row's field 6 is `am`.)
             : b amov & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:m` )
-            // (`:k`: such a move that copies where the source lends - an
-            // `inout` parameter's, __ioc_mark_copy; field 6 `ak`.)
-            : b akop & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:k` )
             : b agiv & > ( nurl_str_len apt ) 2 != 0 ( nurl_str_ends apt `:g` )
-            : s apn ? | | | | acall aasg amov akop agiv ( nurl_str_slice apt 0 - ( nurl_str_len apt ) 2 ) apt
+            : s apn ? | | | acall aasg amov agiv ( nurl_str_slice apt 0 - ( nurl_str_len apt ) 2 ) apt
             : s apf ? ( seq apn `-` ) `-` ( nurl_str_cat `=` apn )
-            ( bck_record2 `maybealias` anm ( nurl_str_to_int aln ) apf ? acall `c` ? aasg `a` ? amov `am` ? akop `ak` ? agiv `g` `0` )
+            ( bck_record2 `maybealias` anm ( nurl_str_to_int aln ) apf ? acall `c` ? aasg `a` ? amov `am` ? agiv `g` `0` )
         }
         ~ != 0 ( nurl_str_len frest ) {
             : s fnm ( str_first_word frest )
@@ -61710,36 +61441,13 @@ unsafe @ __bck_field_off s rec i idx → i {
 // except that it stops at the field's tab where atoll would skip it and
 // read the NEXT field.
 // Field `idx` of a row as a walk id, or -1 when it holds none.
-// (Safe code: one byte at a known offset is a bounds-checked
-// `nurl_str_get`, no raw read needed.)
-@ bck_field_id s rec i idx → i {
+unsafe @ bck_field_id s rec i idx → i {
     : i off ( __bck_field_off rec idx )
     ? < off 0 { ^ -1 } {}
-    : i c ( nurl_str_get rec off )
+    : *u rp # *u rec
+    : i c # i . rp off
     ? | < c 48 > c 57 { ^ -1 } {}
     ^ ( bck_field_int rec idx )
-}
-
-// Is field `idx` of `rec` exactly `lit`? `( seq ( bck_field rec idx ) lit )`
-// without the copy: the walk asks this of a row's kind and marks many times
-// per row, and each ask cost a malloc, a copy and a free. A missing field
-// reads as `` there, so it equals only an empty `lit`. Safe code: every byte
-// is a bounds-checked `nurl_str_get`, which reads 0 past either string's end.
-@ bck_field_is s rec i idx s lit → b {
-    : i off ( __bck_field_off rec idx )
-    ? < off 0 { ^ == 0 ( nurl_str_len lit ) } {}
-    ^ ( __bck_field_is_from rec off lit 0 )
-}
-
-// Byte `j` on of `lit` against the field at `off`: equal through `lit`'s end,
-// and the field ends there too (a tab or the record's end). One step per byte
-// of `lit` (a few bytes: a row kind or a mark), not a walk of `rec`.
-@ __bck_field_is_from s rec i off s lit i j → b {
-    : i c ( nurl_str_get lit j )
-    : i r ( nurl_str_get rec + off j )
-    ? == c 0 { ^ | == r 0 == r 9 } {}
-    ? != c r { ^ F } {}
-    ^ ( __bck_field_is_from rec off lit + j 1 )
 }
 
 unsafe @ bck_field_int s rec i idx → i {
@@ -62178,18 +61886,18 @@ unsafe @ bck_sx_ids s sx → s {
         ? != 0 ( nurl_str_len lf7 ) { ^ ( nurl_str_cat4 five `\t` f5 ( nurl_str_cat4 `\t` lf6 `\t` lf7 ) ) } {}
         ? != 0 ( nurl_str_len lf6 ) { ^ ( nurl_str_cat4 five `\t` f5 ( nurl_str_cat `\t` lf6 ) ) } {}
         ? udr { ^ ( nurl_str_cat3 five `\t` f5 ) } {}
-        ? ( bck_field_is rec 5 `s` ) { ^ ( nurl_str_cat five `\ts` ) } {}
-        ? ( bck_field_is rec 5 `v` ) { ^ ( nurl_str_cat five `\tv` ) } {}
-        ? ( bck_field_is rec 5 `w` ) { ^ ( nurl_str_cat five `\tw` ) } {}
-        ? ( bck_field_is rec 5 `o` ) { ^ ( nurl_str_cat five `\to` ) } {}
-        ? ( bck_field_is rec 5 `d` ) { ^ ( nurl_str_cat five `\td` ) } {}
-        ? ( bck_field_is rec 5 `c` ) { ^ ( nurl_str_cat five `\tc` ) } {}
-        ? ( bck_field_is rec 5 `k` ) { ^ ( nurl_str_cat five `\tk` ) } {}
+        ? ( seq ( bck_field rec 5 ) `s` ) { ^ ( nurl_str_cat five `\ts` ) } {}
+        ? ( seq ( bck_field rec 5 ) `v` ) { ^ ( nurl_str_cat five `\tv` ) } {}
+        ? ( seq ( bck_field rec 5 ) `w` ) { ^ ( nurl_str_cat five `\tw` ) } {}
+        ? ( seq ( bck_field rec 5 ) `o` ) { ^ ( nurl_str_cat five `\to` ) } {}
+        ? ( seq ( bck_field rec 5 ) `d` ) { ^ ( nurl_str_cat five `\td` ) } {}
+        ? ( seq ( bck_field rec 5 ) `c` ) { ^ ( nurl_str_cat five `\tc` ) } {}
+        ? ( seq ( bck_field rec 5 ) `k` ) { ^ ( nurl_str_cat five `\tk` ) } {}
     } {}
     // A library call's drop of elements (`fieldset` by a dropper): its
     // callee and mark `e` (bck_stash_fieldset_by).
     ? ? == __k0 102 ( seq kind `fieldset` ) F {
-        ? ( bck_field_is rec 6 `e` ) { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) `\te` ) } {}
+        ? ( seq ( bck_field rec 6 ) `e` ) { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) `\te` ) } {}
     } {}
     // A call that may panic: the function called (gen_call, agora #939).
     ? ? == __k0 117 ( seq kind `unw` ) F {
@@ -62337,9 +62045,7 @@ unsafe @ bck_row_put i n s row → v {
 // `*u` for the same reason as bck_field: with `nurl_str_get` this
 // single loop was O(total²) over the whole function's statement text.
 unsafe @ bck_explode → i {
-    // (Read in place, not interned: each row is copied out below, and
-    // nothing writes the list while it is split. AGORA-974)
-    : s txt ( __bck_rows )
+    : s txt ( nurl_sym_get g_bck `stmts` )
     : i len ( nurl_str_len txt )
     : *u tp # *u txt
     : ~ i start 0
@@ -64607,7 +64313,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
             // (…and a closure that runs here with an effect on a taken path -
             // `( g )`, g pushing to `. h buf` after `( take . h buf )`: a
             // `pendeff` row; agora #929.)
-            ? & == kc 32 ( bck_field_is rec 0 `pendeff` ) {
+            ? & == kc 32 ( seq ( bck_field rec 0 ) `pendeff` ) {
                 : s pes ( bck_field rec 1 )
                 ? & != 0 ( nurl_str_len pes ) & >= ( nurl_str_get pes 0 ) 48 <= ( nurl_str_get pes 0 ) 57 {
                     ( __bck_fmv_check ( nurl_str_to_int pes ) ( bck_field_int rec 3 ) st )
@@ -64635,7 +64341,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
             ? == kc 48 { ( __bck_partly_moved_check ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) st ) } {}
             // (…and a value block handed to a call, `( grow { h } )`, a
             // `pendlend` row of `@h`: h whole; agora #929.)
-            ? & == kc 32 ( bck_field_is rec 0 `pendlend` ) {
+            ? & == kc 32 ( seq ( bck_field rec 0 ) `pendlend` ) {
                 : s pls ( bck_field rec 1 )
                 : s pln ? != 0 ( nurl_str_starts pls `@` ) ( nurl_str_slice pls 1 - ( nurl_str_len pls ) 1 ) ``
                 ? & != 0 ( nurl_str_len pln ) & >= ( nurl_str_get pln 0 ) 48 <= ( nurl_str_get pln 0 ) 57 { ( __bck_partly_moved_check ( nurl_str_to_int pln ) ( bck_field_int rec 3 ) st ) } {}
@@ -64651,7 +64357,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 : ~ b rmore T
                 ~ rmore {
                     : s rr ( bck_rec rq )
-                    ? | == 0 ( nurl_str_len rr ) ! ( bck_field_is rr 0 `store` ) { = rmore F } {
+                    ? | == 0 ( nurl_str_len rr ) ! ( seq ( bck_field rr 0 ) `store` ) { = rmore F } {
                         ( __bck_partly_moved_check ( bck_field_int rr 1 ) ( bck_field_int rr 3 ) st )
                         = rq + rq 1
                     }
@@ -64659,12 +64365,12 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
             } {}
             // (…and a value block's tail bound, `: ~ Holder g { h }`, a
             // `cborrow` row of `|h`: h whole; agora #929.)
-            ? & == kc 7 ( bck_field_is rec 0 `cborrow` ) {
+            ? & == kc 7 ( seq ( bck_field rec 0 ) `cborrow` ) {
                 : s cbs ( bck_field rec 2 )
                 : s cbn ? != 0 ( nurl_str_starts cbs `|` ) ( nurl_str_slice cbs 1 - ( nurl_str_len cbs ) 1 ) ( nurl_str_cat cbs `` )
                 ? & != 0 ( nurl_str_len cbn ) & >= ( nurl_str_get cbn 0 ) 48 <= ( nurl_str_get cbn 0 ) 57 { ( __bck_partly_moved_check ( nurl_str_to_int cbn ) ( bck_field_int rec 3 ) st ) } {}
             } {}
-            ? & == kc 7 ( bck_field_is rec 0 `fborrow` ) { ( __bck_fmv_check ( bck_field_int rec 2 ) ( bck_field_int rec 3 ) st ) ( __bck_fmv_rel_check ( bck_field_int rec 2 ) ( bck_field_int rec 3 ) st ) } {}
+            ? & == kc 7 ( seq ( bck_field rec 0 ) `fborrow` ) { ( __bck_fmv_check ( bck_field_int rec 2 ) ( bck_field_int rec 3 ) st ) ( __bck_fmv_rel_check ( bck_field_int rec 2 ) ( bck_field_int rec 3 ) st ) } {}
             // (…and a field path whose value the statement reads whole: a
             // literal's field, `@ Holder { . h buf }` — a `pendread` row.)
             ? == kc 40 { ( __bck_fmv_check ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) st ) } {}
@@ -64749,7 +64455,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // callers' bindings of it: g_fn_rcp, agora #726.)
                 ? & != 0 g_rcp_on != 0 ( nurl_str_len g_bck_fn ) { ( __bck_rcp_ret st ? >= ( __bck_field_off rec 8 ) 0 ( bck_field rec 8 ) `` ( bck_field rec 1 ) ) } {}
                 // A view handed back points into what the caller has.
-                ? & >= ( __bck_field_off rec 8 ) 0 ! ( bck_field_is rec 5 `l` ) { ( bck_ret_view_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) ( bck_field_is rec 5 `d` ) ! | | ( bck_field_is rec 5 `e` ) ( bck_field_is rec 5 `n` ) ( bck_field_is rec 5 `x` ) | ( bck_field_is rec 5 `b` ) ( bck_field_is rec 5 `n` ) ) } {}
+                ? & >= ( __bck_field_off rec 8 ) 0 ! ( seq ( bck_field rec 5 ) `l` ) { ( bck_ret_view_check st ( bck_field rec 8 ) ( bck_field_int rec 3 ) ( seq ( bck_field rec 5 ) `d` ) ! | | ( seq ( bck_field rec 5 ) `e` ) ( seq ( bck_field rec 5 ) `n` ) ( seq ( bck_field rec 5 ) `x` ) | ( seq ( bck_field rec 5 ) `b` ) ( seq ( bck_field rec 5 ) `n` ) ) } {}
                 // A payload of what a call lends, handed in the returned
                 // expression to a callee that takes it (`^ ( eat s )` in `?? (
                 // rc_get r ) { T s → … }`): a borrow released as if owned,
@@ -65022,8 +64728,8 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // one that owns nothing itself (`w`), or an `s` that may own
                 // the buffer it points at (`o`: the view mark is `o`, read by
                 // bck_sx_name — one key per row, not a key per question).
-                ( bck_put ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( bck_field_is rec 5 `o` ) `o` ? | ( bck_field_is rec 5 `v` ) ( bck_field_is rec 5 `w` ) `1` `` )
-                ( bck_put ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( bck_field_is rec 5 `w` ) `1` `` )
+                ( bck_put ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `o` ? | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) `1` `` )
+                ( bck_put ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 ? != 0 g_bck_has_borrow {
                     ( bck_put_bf `bs_` ( bck_field rec 1 ) `` )
                     ( bck_put_bf `fb_` ( bck_field rec 1 ) `` )
@@ -65102,8 +64808,8 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // one that owns nothing itself (`w`), or an `s` that may own
                 // the buffer it points at (`o`: the view mark is `o`, read by
                 // bck_sx_name — one key per row, not a key per question).
-                ( bck_put ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( bck_field_is rec 5 `o` ) `o` ? | ( bck_field_is rec 5 `v` ) ( bck_field_is rec 5 `w` ) `1` `` )
-                ( bck_put ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( bck_field_is rec 5 `w` ) `1` `` )
+                ( bck_put ( bck_bkey `vw_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `o` ) `o` ? | ( seq ( bck_field rec 5 ) `v` ) ( seq ( bck_field rec 5 ) `w` ) `1` `` )
+                ( bck_put ( bck_bkey `wv_` ( bck_field rec 1 ) ) ? ( seq ( bck_field rec 5 ) `w` ) `1` `` )
                 // (…and it views no field any more, as at a `let`: its new
                 // value's own borrow row says if it does. Kept, a reader of
                 // `. o name` re-pointed at a `vec_at` element was still
@@ -65210,7 +64916,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // this visit finds it to be.)
                 : s amk ( bck_field rec 6 )
                 : b a_asn == ( nurl_str_get amk 0 ) 97
-                : b a_mv | ( seq amk `am` ) ( seq amk `ak` )
+                : b a_mv ( seq amk `am` )
                 : ~ b a_moved F
                 ? & ( bck_sound ) apart {
                     // Another name took this one's handle: it is a borrow of
@@ -65223,62 +64929,56 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // by the time the join hands its handle on: its borrow
                         // relation, not its state, says what it was.)
                         : s avsrc ( nurl_sym_get g_bck ( bck_bkey `bs_` avn ) )
-                        // (An `ak` handover is neither: the target is given a copy where
-                        // the source lends and its value where it owns, so it borrows
-                        // nothing of the source, which keeps its own state - a_mv below
-                        // moves it where it owned. AGORA-959.)
-                        ? ( seq amk `ak` ) {} {
-                            ? | | == BCK_BORROWED_SHARED ( bck_st_get st avid ) != 0 ( nurl_str_len avsrc ) ( bck_field_is rec 6 `c` ) {
-                                // A borrow's handle taken by another name, or an
-                                // argument's handle a call handed back: that name
-                                // borrows from it (from its sources, if a borrow).
-                                : s asrc ? != 0 ( nurl_str_len avsrc ) avsrc ( nurl_str_cat avn `` )
-                                // (Handed over by name — `= cur nxt`, a cursor pair
-                                // swapped — it is a copy of that borrow's own value,
-                                // so a copy of what that one is a copy of; not an
-                                // argument a call handed back: bck_byte_root.)
-                                = g_bck_br_next ? & & == 0 ( nurl_str_len prior ) ! ( bck_field_is rec 6 `c` ) == BCK_BORROWED_SHARED ( bck_st_get st avid ) ( bck_br_get avn ) -1
-                                = st ( bck_borrow_begin st apid ? == 0 ( nurl_str_len prior ) asrc ( nurl_str_cat3 prior ` ` asrc ) )
-                                = g_bck_br_next -1
-                                // (…a handle that a `:` join's field borrow holds, `bxf_`,
-                                // taken by another name: that one too - agora #242.)
-                                ? & != 0 g_bck_bxf_any ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` avn ) ) `1` ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) } {}
-                                // (An arm of a `:` join, `g`, that is a copy of an
-                                // owner's handle — `: c ? k cur other`: the
-                                // binding is one too, `hc_`, while every borrow
-                                // arm it takes is; an arm that is an element
-                                // borrow makes it no such copy, `hcn_`, whatever
-                                // the other arms are. Agora #599.)
-                                ? ( bck_field_is rec 6 `g` ) {
-                                    : b ahc & != 0 g_bck_hc_any != 0 ( nurl_sym_len g_bck ( bck_bkey `hc_` avn ) )
-                                    : s phk ( bck_bkey `hc_` ( nurl_str_int apid ) )
-                                    : s pnk ( bck_bkey `hcn_` ( nurl_str_int apid ) )
-                                    ? ahc {
-                                        ? == 0 ( nurl_sym_len g_bck pnk ) { ( bck_put phk `1` ) } {}
-                                    } {
-                                        ( bck_put pnk `1` )
-                                        ? != 0 ( nurl_sym_len g_bck phk ) { ( bck_put phk `` ) } {}
-                                    }
-                                } {}
-                            } {
-                                // An owner's handle: an assignment moved it
-                                // (definitely); one of several a `?` / `??` may
-                                // have selected moved on the paths that selected it.
-                                = a_moved a_asn
-                                = st ( bck_st_set st avid ? a_asn BCK_MOVED ( bck_join ( bck_st_get st avid ) BCK_MOVED ) )
-                                // (A `:` binding of the join gives it back where it
-                                // dies still holding it: bck_join_giveback. What is
-                                // stored into that binding meanwhile lands in this
-                                // owner's value — agora #414. A handle that moved
-                                // for good is its taker's alone.)
-                                ? ( bck_field_is rec 6 `g` ) {
-                                    ( __bck_hr_set apid avn T )
-                                    ( bck_add_word_once ( bck_bkey `jt_` ( nurl_str_int apid ) ) avn )
-                                    = g_bck_jgb_any 1
-                                } {}
-                                ( bck_put ( nurl_str_cat `ml_` avn ) ( bck_field rec 3 ) )
-                                ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ) )
-                            }
+                        ? | | == BCK_BORROWED_SHARED ( bck_st_get st avid ) != 0 ( nurl_str_len avsrc ) ( seq ( bck_field rec 6 ) `c` ) {
+                            // A borrow's handle taken by another name, or an
+                            // argument's handle a call handed back: that name
+                            // borrows from it (from its sources, if a borrow).
+                            : s asrc ? != 0 ( nurl_str_len avsrc ) avsrc ( nurl_str_cat avn `` )
+                            // (Handed over by name — `= cur nxt`, a cursor pair
+                            // swapped — it is a copy of that borrow's own value,
+                            // so a copy of what that one is a copy of; not an
+                            // argument a call handed back: bck_byte_root.)
+                            = g_bck_br_next ? & & == 0 ( nurl_str_len prior ) ! ( seq ( bck_field rec 6 ) `c` ) == BCK_BORROWED_SHARED ( bck_st_get st avid ) ( bck_br_get avn ) -1
+                            = st ( bck_borrow_begin st apid ? == 0 ( nurl_str_len prior ) asrc ( nurl_str_cat3 prior ` ` asrc ) )
+                            = g_bck_br_next -1
+                            // (…a handle that a `:` join's field borrow holds, `bxf_`,
+                            // taken by another name: that one too - agora #242.)
+                            ? & != 0 g_bck_bxf_any ( seq ( nurl_sym_get g_bck ( bck_bkey `bxf_` avn ) ) `1` ) { ( bck_put ( bck_bkey `bxf_` ( nurl_str_int apid ) ) `1` ) } {}
+                            // (An arm of a `:` join, `g`, that is a copy of an
+                            // owner's handle — `: c ? k cur other`: the
+                            // binding is one too, `hc_`, while every borrow
+                            // arm it takes is; an arm that is an element
+                            // borrow makes it no such copy, `hcn_`, whatever
+                            // the other arms are. Agora #599.)
+                            ? ( seq ( bck_field rec 6 ) `g` ) {
+                                : b ahc & != 0 g_bck_hc_any != 0 ( nurl_sym_len g_bck ( bck_bkey `hc_` avn ) )
+                                : s phk ( bck_bkey `hc_` ( nurl_str_int apid ) )
+                                : s pnk ( bck_bkey `hcn_` ( nurl_str_int apid ) )
+                                ? ahc {
+                                    ? == 0 ( nurl_sym_len g_bck pnk ) { ( bck_put phk `1` ) } {}
+                                } {
+                                    ( bck_put pnk `1` )
+                                    ? != 0 ( nurl_sym_len g_bck phk ) { ( bck_put phk `` ) } {}
+                                }
+                            } {}
+                        } {
+                            // An owner's handle: an assignment moved it
+                            // (definitely); one of several a `?` / `??` may
+                            // have selected moved on the paths that selected it.
+                            = a_moved a_asn
+                            = st ( bck_st_set st avid ? a_asn BCK_MOVED ( bck_join ( bck_st_get st avid ) BCK_MOVED ) )
+                            // (A `:` binding of the join gives it back where it
+                            // dies still holding it: bck_join_giveback. What is
+                            // stored into that binding meanwhile lands in this
+                            // owner's value — agora #414. A handle that moved
+                            // for good is its taker's alone.)
+                            ? ( seq ( bck_field rec 6 ) `g` ) {
+                                ( __bck_hr_set apid avn T )
+                                ( bck_add_word_once ( bck_bkey `jt_` ( nurl_str_int apid ) ) avn )
+                                = g_bck_jgb_any 1
+                            } {}
+                            ( bck_put ( nurl_str_cat `ml_` avn ) ( bck_field rec 3 ) )
+                            ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` ( nurl_sym_get2 g_bck `rv_` avn ) ( bck_field rec 3 ) ) ) )
                         }
                     }
                 } {
@@ -65673,7 +65373,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // (A closure that runs here and gives a borrowing binding a
                 // new value, `@assign`: from here on it may hold the closure's
                 // value, its own on that path — BCK_MAYBE_OWNED.)
-                ? ( bck_field_is rec 5 `@assign` ) {
+                ? ( seq ( bck_field rec 5 ) `@assign` ) {
                     : i aid ( bck_field_int rec 1 )
                     ? == ( bck_path_root aid ) aid {
                         ( bck_note_may_own aid )
@@ -65722,7 +65422,7 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // for a view of a capture, which its caller cannot
                         // follow; a view of another parameter is the call's
                         // holder/source pair, agora #332, #403.)
-                        ? ( bck_field_is rec 6 `3` ) { ( bck_put ( bck_bkey `cc_` ( bck_field rec 1 ) ) `v` ) } {}
+                        ? ( seq ( bck_field rec 6 ) `3` ) { ( bck_put ( bck_bkey `cc_` ( bck_field rec 1 ) ) `v` ) } {}
                     }
                     // (A source it cannot see into, whatever its class — a
                     // view, an owner of views, a closure: stored whole into a
@@ -66022,10 +65722,10 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // viewer (the field of one, or the viewer itself).
                 // (`pendfc`: a field of a capture the closure holds by value.)
                 : s xcal ( bck_field rec 5 )
-                ? & ( bck_field_is rec 0 `pendfc` ) ( nurl_sym_has_word g_fn_sink xcal ( bck_field rec 6 ) ) {
+                ? & ( seq ( bck_field rec 0 ) `pendfc` ) ( nurl_sym_has_word g_fn_sink xcal ( bck_field rec 6 ) ) {
                     ( bck_diag_capture_field_taken ( bck_field_int rec 1 ) ( bck_field_int rec 3 ) xcal )
                 } {}
-                ? & ( bck_field_is rec 0 `pendfx` ) ( nurl_sym_has_word g_fn_sink xcal ( bck_field rec 6 ) ) {
+                ? & ( seq ( bck_field rec 0 ) `pendfx` ) ( nurl_sym_has_word g_fn_sink xcal ( bck_field rec 6 ) ) {
                     : i xid ( bck_field_int rec 1 )
                     : i xroot ( bck_path_root xid )
                     ? & == xid xroot != 0 ( nurl_sym_len g_bck ( bck_bkey `fb_` ( nurl_str_int xid ) ) ) {
@@ -69258,7 +68958,7 @@ unsafe @ __bck_rv_self_tie i wid s cals → v {
     : s plain ( __src_plain srcs )
     ? == 0 ( nurl_str_len plain ) { ^ st } {}
     : s ws ( nurl_str_int wid )
-    ( bck_put ( bck_bkey `vw_` ws ) ? ( bck_field_is rec 6 `2` ) `1` `` )
+    ( bck_put ( bck_bkey `vw_` ws ) ? ( seq ( bck_field rec 6 ) `2` ) `1` `` )
     ? != 0 g_bck_has_borrow { ( bck_put_bf `vi_` ws ( __src_indirect srcs ) ) } {}
     ^ ( bck_borrow_begin ( bck_st_set st wid BCK_OWNED ) wid plain )
 }
@@ -69363,7 +69063,7 @@ unsafe @ __bck_rv_self_tie i wid s cals → v {
     // argument is read before the binding takes its new value, so what it
     // lends is what the binding borrowed before its `=`, `obs_` - as for a
     // value block's tail, bck_brw_leaves; agora #873.)
-    : s obs ? & != 0 g_bck_has_borrow ( bck_field_is rec 0 `assign` ) ( nurl_sym_get g_bck ( bck_bkey `obs_` ( nurl_str_int wid ) ) ) ``
+    : s obs ? & != 0 g_bck_has_borrow ( seq ( bck_field rec 0 ) `assign` ) ( nurl_sym_get g_bck ( bck_bkey `obs_` ( nurl_str_int wid ) ) ) ``
     : ~ s out ? == 0 ( nurl_sym_len g_bck `plend` ) ( nurl_str_cat st `` ) ( bck_take_plend st wid ( bck_field rec 3 ) ( bck_field rec 6 ) obs )
     ? isv { = out ( bck_view_from_reads out wid ( bck_field rec 7 ) ) } {}
     ^ out
@@ -72523,7 +72223,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // A field replaced (`= . s v x`, directly or through a borrow of `s`):
     // the bindings viewing exactly that field take the value it held over
     // (__fs_viewers_take) — owners now, not borrows that end below.
-    ? & & == kc 8 >= wid 0 ! ( bck_field_is rec 6 `e` ) {
+    ? & & == kc 8 >= wid 0 ! ( seq ( bck_field rec 6 ) `e` ) {
         : s __pb0 ( nurl_str_cat out `` )
         = out ( bck_fview_take out ( nurl_str_int wid ) )
         // (…of a copy that only borrows its value - `: Slot s ( vec_at t k
@@ -72580,7 +72280,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             ? == kc 8 {
                 // (A library call dropping or replacing elements of it: a
                 // copy of its handle still reaches what it holds now.)
-                ? ( bck_field_is rec 6 `e` ) {
+                ? ( seq ( bck_field rec 6 ) `e` ) {
                     = why ( nurl_str_cat3 `it was passed to '` ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` )
                     = eonly T
                 } { = why ? whole `it was replaced` `a field of it was replaced` }
@@ -72592,19 +72292,19 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 // chose between — agora #314; or one arm of it a value lent
                 // out of an element of it, g_bck_sx_part, as `pendlend` —
                 // agora #349.)
-                : b plend & == kc 32 | g_bck_sx_part ( bck_field_is rec 0 `pendlend` )
-                : b pjoin & == kc 32 ( bck_field_is rec 0 `pendjoin` )
+                : b plend & == kc 32 | g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
+                : b pjoin & == kc 32 ( seq ( bck_field rec 0 ) `pendjoin` )
                 // (`pendlit`: it was moved into a literal handed to the
                 // callee, agora #799.)
-                : b plit & == kc 32 ( bck_field_is rec 0 `pendlit` )
+                : b plit & == kc 32 ( seq ( bck_field rec 0 ) `pendlit` )
                 : s pw0 ? plend `a value lent from it was passed to '` ? pjoin `it was one of the values a '?' / '??' argument chose between, passed to '` ? plit `it was moved into a literal passed to '` ? == kc 32 ? whole `a closure that runs here passes it to '` `a closure that runs here passes a field of it to '` ? whole `it was passed to '` `a field of it was passed to '`
                 // (`@assign`: a closure that runs here gives it, or a field of
                 // it, a new value — __clo_assign_note — as a `= x …` here
                 // would, agora #151.)
-                ? & & == kc 32 ( bck_field_is rec 5 `@assign` ) repoint_frees {
+                ? & & == kc 32 ( seq ( bck_field rec 5 ) `@assign` ) repoint_frees {
                     = why ? whole `a closure that runs here gives it a new value` `a closure that runs here gives a field of it a new value`
                 } {}
-                ? ( bck_field_is rec 5 `@opaqueclo` ) {
+                ? ( seq ( bck_field rec 5 ) `@opaqueclo` ) {
                     // An opaque closure called inside a closure body — a
                     // parameter (h285), or a closure a parameter holds
                     // (h286, h287): its captures are the caller's, so running
@@ -72683,7 +72383,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             // no release there, agora #766. Asked only where the Rc types
             // meet, so no other row pays for it.)
             ? & & & & != 0 ( nurl_str_len wty ) | != rid wroot wfield ! wsame ( __bar_meets wty sty ) ? == kc 42 ! ( __bck_rel_kept wn ) T {
-                : b rlent & == kc 32 | g_bck_sx_part ( bck_field_is rec 0 `pendlend` )
+                : b rlent & == kc 32 | g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
                 // (A library dropper or element replacer handed the value whole
                 // — `( vec_clear hs )`, `( vec_put hs 0 x )` of a Vec of shares,
                 // `( map_set m k x )` of a map of them —
@@ -72839,7 +72539,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     ? != 0 ( nurl_str_len wsrc ) {
         : ~ s bwhy ``
         ? == kc 8 {
-            ? ( bck_field_is rec 6 `e` ) {
+            ? ( seq ( bck_field rec 6 ) `e` ) {
                 = bwhy ( nurl_str_cat4 `'` ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wroot ) ) `', which borrows from it, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) `', which may drop or replace what it holds` ) )
                 = g_bck_end_eonly 1
             } { = bwhy ( nurl_str_cat3 `a field of it was replaced through '` ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int wroot ) ) `'` ) }
@@ -72884,7 +72584,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             // g_bck_sx_wid: a part only where that root is one, `^` — a
             // callee that hands the borrow back WHOLE, `( grow ( pickv cur
             // other ) )`, moves the borrow's own buffer.)
-            : b deep | irthru & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( bck_field_is rec 0 `pendlend` )
+            : b deep | irthru & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
             // (…and through a `~` loop's own element — `( string_push_str x
             // … )` in `~ x . ( vec_at bs 0 ) items`: the element's buffer, a
             // level below the container that loop walks. Its cursor, `fcx_`,
@@ -72987,7 +72687,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             // own: codegen stores it into the binding's copy and releases it
             // where the binding is given a new value or goes out of scope.
             // The binding may own its value from here on.)
-            ? && && == kc 8 == keep BCK_BORROWED_SHARED ! ( bck_field_is rec 6 `e` ) {
+            ? && && == kc 8 == keep BCK_BORROWED_SHARED ! ( seq ( bck_field rec 6 ) `e` ) {
                 = out ( bck_st_set out wroot BCK_MAYBE_OWNED )
                 ( bck_note_may_own wroot )
             } {}
@@ -73005,7 +72705,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     // the generated code makes — amv_open: the target takes the source's
     // run-time flag, so what it may own goes with it and a borrow loses
     // nothing. Agora #667.)
-    : i amv_k ? & == kc 6 | ( bck_field_is rec 6 `am` ) ( bck_field_is rec 6 `ak` ) ( bck_field_int rec 1 ) -1
+    : i amv_k ? & == kc 6 ( seq ( bck_field rec 6 ) `am` ) ( bck_field_int rec 1 ) -1
     : ~ s brest ( nurl_str_cat ist `` )
     : i n ( nurl_str_len ist )
     : ~ i k 0
@@ -73080,7 +72780,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
             // (A value lent OUT of the payload binding handed on — `(
             // string_push_str ( vec_at b 0 ) … )`: what moves is one of its
             // elements' buffers, as bck_borrow_sweep's `deep` reads it.)
-            : b sdeep & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( bck_field_is rec 0 `pendlend` )
+            : b sdeep & == kc 32 ? >= g_bck_sx_wid 0 g_bck_sx_part ( seq ( bck_field rec 0 ) `pendlend` )
             : b swhole & srea ! sdeep
             : s scw ( nurl_str_cat4 `'` ( bck_name_show ( nurl_sym_get2 g_bck `rv_` wrs ) ) `', a payload of the same value, was passed to '` ( nurl_str_cat ( bck_fn_show ( bck_field rec 5 ) ) ? sdrop `', which may drop or replace what it holds` ? swhole `', which may move its buffer` `', which may move the buffer of one of its elements` ) )
             // The owners to visit, each with the field path the change is at
@@ -74685,7 +74385,7 @@ unsafe @ __bck_body_defers s st i p i line → s {
                     ? | | | == k 3 == k 4 == k 5 == k 14 { ^ T } {}
                     // (A library call dropping elements of it, `e`, leaves
                     // the caller a consistent handle: not a release.)
-                    ? & == k 8 ! ( bck_field_is r 6 `e` ) { ^ T } {}
+                    ? & == k 8 ! ( seq ( bck_field r 6 ) `e` ) { ^ T } {}
                     : s cal ( bck_field r 5 )
                     : s ax ( bck_field r 6 )
                     ? | | ( nurl_sym_has_word g_fn_sink cal ax ) ( nurl_sym_has_word g_fn_keeps cal ax ) ( nurl_sym_has_word g_fn_stores cal ax ) { ^ T } {}
@@ -75551,7 +75251,7 @@ unsafe @ bck_scope_leave s st i line → s {
 // name) — and that this `what`.
 @ __bck_rc_passed s rec s what → s {
     : s callee ( bck_field rec 5 )
-    ? ( bck_field_is rec 0 `pendsink` ) {
+    ? ( seq ( bck_field rec 0 ) `pendsink` ) {
         : s how ( bck_field rec 7 )
         ? != 0 ( nurl_str_len how ) { ^ ( nurl_str_cat4 ` was released ` how `, which runs its type's 'drop', which ` what ) } {}
         ? != 0 ( nurl_str_starts callee `drop__` ) { ^ ( nurl_str_cat3 ` was released here, which runs its type's 'drop', which ` what `` ) } {}
@@ -76993,8 +76693,8 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
 @ bck_analyze s params → v {
     // (A run of a closure whose builder's answer was not there yet: its rows
     // now, every answer final — __bck_rce_expand, agora #813.)
-    ? != 0 g_rce_n { ? >= ( nurl_str_find ( __bck_rows ) `pendrce` ) 0 { ( bck_put `stmts` ( __bck_rce_expand ( __bck_rows ) ) ) = g_bck_rows_ix `` } {} } {}
-    ? != 0 # i ( getenv `NURL_BCK_DUMP` ) { ( nurl_eprintln ( nurl_str_cat `── rows: ` ( __bck_rows ) ) ) } {}
+    ? != 0 g_rce_n { ? >= ( nurl_str_find ( nurl_sym_get g_bck `stmts` ) `pendrce` ) 0 { ( bck_put `stmts` ( __bck_rce_expand ( nurl_sym_get g_bck `stmts` ) ) ) } {} } {}
+    ? != 0 # i ( getenv `NURL_BCK_DUMP` ) { ( nurl_eprintln ( nurl_str_cat `── rows: ` ( nurl_sym_get g_bck `stmts` ) ) ) } {}
     // (Its parameters in order, and what bck_note_vkeeps finds.)
     ( bck_put `vkparams` params )
     ( bck_put `vkacc` `` )
@@ -77062,7 +76762,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     : ~ i row 0
     ~ < row n {
         : s rec ( bck_rec row )
-        ? & ( bck_field_is rec 0 `block` ) ( bck_field_is rec 1 `defer` ) {
+        ? & ( seq ( bck_field rec 0 ) `block` ) ( seq ( bck_field rec 1 ) `defer` ) {
             = g_bck_has_defers 1
             : s index ( nurl_str_int row )
             : i flag ( bck_intern ( nurl_str_cat `$defer:` index ) )
@@ -77191,12 +76891,8 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     : s ix ( nurl_str_int n )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `o` ix ) g_bck_own_params )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `r` ix ) g_bck_rcty )
-    // (The rows are parked as a buffer of their own, not interned: the
-    // intern arena lives for the whole compile, the rows only until their
-    // last walk, which releases them — __bck_rows_release. AGORA-974)
-    : s sk ( nurl_str_cat `s` ix )
-    ( nurl_sym_def g_deferred_bck sk `` )
-    ( nurl_sym_append g_deferred_bck sk ( __sym_peek g_bck `stmts` ) )
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `s` ix )
+    ( nurl_sym_get g_bck `stmts` ) )
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `p` ix ) params )
     // (Whose callers wait for its g_fn_vkeeps answer: bck_run_deferred.)
     ( nurl_sym_def g_deferred_bck ( nurl_str_cat `n` ix ) g_bck_fn )
@@ -77268,7 +76964,7 @@ unsafe @ __bck_walk_deferred i i → v {
     // what it makes. A call of itself its `bK` rows ask is answered by its
     // own walk, bck_vkeeps_self.)
     : ~ b selfq ( str_contains_word ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) ) )
-    : ~ s cs ( __word_union ( __vbuf_callees ( __sym_peek g_deferred_bck ( nurl_str_cat `s` ix ) ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) )
+    : ~ s cs ( __word_union ( __vbuf_callees ( nurl_sym_get g_deferred_bck ( nurl_str_cat `s` ix ) ) ) ( nurl_sym_get g_deferred_bck ( nurl_str_cat `q` ix ) ) )
     : ~ s seen ``
     ~ != 0 ( nurl_str_len cs ) {
         : s c ( str_first_word cs ) = cs ( str_skip_word cs )
@@ -77312,39 +77008,15 @@ unsafe @ __bck_walk_deferred i i → v {
         = more & ! ( seq m ix ) != 0 ( nurl_str_len stk )
     }
     ( nurl_sym_def g_deferred_bck `dstk` stk )
-    ? & ! selfq ( seq mem ix ) { ( __bck_walk_one ix ) ( __bck_rows_release ix ) ^ v } {}
+    ? & ! selfq ( seq mem ix ) { ( __bck_walk_one ix ) ^ v } {}
     ( __bck_walk_scc mem )
-    : ~ s rm ( nurl_str_cat mem `` )
-    ~ != 0 ( nurl_str_len rm ) {
-        : s m ( str_first_word rm ) = rm ( str_skip_word rm )
-        ( __bck_rows_release m )
-    }
-}
-
-// A parked function's rows, after its last walk: nothing reads them again
-// (its own walk, or its component's rounds, are done), so their buffer is
-// released here rather than kept for the rest of the compile. AGORA-974.
-@ __bck_rows_release s ix → v {
-    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `s` ix ) `` )
-}
-
-// The rows a walk reads: the parked function's own, in place, while
-// __bck_walk_one walks it (g_bck_rows_ix), else g_bck's `stmts`. Neither
-// is interned, and nothing writes them while they are split (bck_explode).
-// AGORA-974.
-@ __bck_rows → s {
-    ? == 0 ( nurl_str_len g_bck_rows_ix ) { ^ ( __sym_peek g_bck `stmts` ) } {}
-    ^ ( __sym_peek g_deferred_bck ( nurl_str_cat `s` g_bck_rows_ix ) )
 }
 
 // Walk parked function `ix` (its rows, parameters, file and the facts
 // codegen parked with them: bck_defer_fn).
 unsafe @ __bck_walk_one s ix → v {
     ( bck_put `file` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `f` ix ) ) )
-    // (…read where they are parked, neither copied nor interned: a
-    // component's members are walked once per round; __bck_rows. AGORA-974)
-    ( bck_put `stmts` `` )
-    = g_bck_rows_ix ( nurl_str_cat ix `` )
+    ( bck_put `stmts` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `s` ix ) ) )
     ( bck_put `reads` `` )
     = g_bck_cap_via ( nurl_sym_get g_deferred_bck ( nurl_str_cat `c` ix ) )
     = g_bck_own_params ( nurl_sym_get g_deferred_bck ( nurl_str_cat `o` ix ) )
@@ -77352,7 +77024,6 @@ unsafe @ __bck_walk_one s ix → v {
     = g_bck_rcix_ok 0
     = g_bck_fn ( nurl_sym_get g_deferred_bck ( nurl_str_cat `n` ix ) )
     ( bck_analyze ( nurl_sym_get g_deferred_bck ( nurl_str_cat `p` ix ) ) )
-    = g_bck_rows_ix ``
 }
 
 // The parked walks `mem` (deepest first) ask each other's answers: a
@@ -80362,8 +80033,6 @@ unsafe @ gen_assign i lex i syms i cg → s {
             ( nurl_print `  ` ) ( nurl_print __io_l ) ( nurl_print ` = xor i1 ` ) ( nurl_print __io_f ) ( nurl_print `, 1\n` )
             = store_val ( mem_emit_cloneif cg vt store_val __io_l )
             ( mem_udrop_flag_set syms cg __io_src `0` )
-            // (…and the walk is told, on this handover's own row: AGORA-959.)
-            ? & != g_borrowck 0 == g_bck_rec_off 0 { ( __ioc_mark_copy name bck_rhs_val bck_line ) } {}
         } {}
         // …while a binding whose value another owner keeps is copied in: a
         // parameter the function only borrows (h201: `= o b` with `b` a
@@ -80596,16 +80265,6 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // other k ) }`: the same call's value, only spelled inside a block —
         // let through, the run that handed o's own value back freed it under
         // o, agora #427.)
-        // (…and where what the call may lend is not known here - a callee
-        // defined below, a generic instance, a `dyn` method: the form is
-        // the same one, so it is judged on the callee's final summary at
-        // module end, resolve_opt_pick_lends. A per-call key let it through
-        // before; A2 refuses the form in every spelling: AGORA-946 D4a.)
-        ? & & & & __ud_optv ! __ud_may_self ! ( __is_handle_ty vt ) & __ud_owns == __ud_tt TT_LPAREN == 0 ( nurl_str_len __ud_lids ) {
-            // (By the arguments' roots where a call's are known: a nested
-            // call's stand-in, `__alr#N`, keeps its own call and roots.)
-            ( __park_opt_pick lex name ( nurl_sym_get syms `__last_call_lend_key__` ) ? != 0 ( nurl_str_len g_call_lroots ) ( nurl_str_cat g_call_lroots `` ) ( nurl_sym_get syms `__last_call_args__` ) )
-        } {}
         ? & & & & __ud_optv __ud_may_self ! __ud_only_self ! ( __is_handle_ty vt ) & __ud_owns == __ud_tt TT_LPAREN {
             : s __q1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of '` )
             : s __q2 ( nurl_str_cat3 name `' itself or out of another argument: nurlc cannot tell which one a run hands back, so it cannot know whether '` name )
@@ -80710,48 +80369,6 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 ( nurl_sym_def syms `__last_join_own__` `true` )
             } {}
         } {}
-        // (…and a binding of such a join given by name that may lend the
-        // capture itself, `: e ? c ( id o ) ( id a )  = o e`: one that owns
-        // its value on no path, or on some only (`dyn`), is copied in where it
-        // does not, as the join itself would be. The capture owns what it
-        // holds on every path and the binding gives up its own where it had
-        // one. Its flag handed over instead, the capture stayed a lend of its
-        // own old value, which the store releases: AGORA-961. A cursor over
-        // the closure's own locals is taken over owner by owner, no copy:
-        // __mem_udrop_bind_flag's `__jalias` move, AGORA-953.)
-        : ~ b __cp_bjoin F
-        ? & != 0 g_bck_closure_depth ( is_ident_tok bck_rhs_tt ) { ? & != 0 ( nurl_str_len __ud_ptr ) != 0 ( nurl_sym_len2 syms __ud_ptr `__outer_owned` ) {
-                : s __bj_sp ( mem_udrop_ptr_of syms bck_rhs_val )
-                : s __bj_sb ( nurl_sym_get2 syms __bj_sp `__sborrow` )
-                // (The old value goes below, so the value is copied first
-                // wherever it lent, as `= o ? c ( id o ) …` is.)
-                : b __bj_self & != 0 ( nurl_str_len __bj_sp ) ( str_contains_word ( bck_swap_char ( nurl_sym_get2 syms bck_rhs_val `__pljr` ) 10 32 ) name )
-                // (…or one that lends what dies with the closure - a local or a
-                // parameter of it, another capture - from a join the `__jalias`
-                // move does not take over owner by owner: a nested join over a
-                // payload, `: e ? k ?? x { T s → s … } ( id a )`. Copied in where
-                // it lent, as the join assigned directly is; AGORA-964.)
-                // (A `__jalias` cursor too: its alias set names the owners its
-                // arms select, but a nested join's payload arm - an element of
-                // a closure-local Vec, `?? ( vec_get [T] w 0 ) { T s → s … }` -
-                // lends what is none of them, so a takeover left the capture
-                // claiming an element its Vec freed. The copy is what AGORA-872
-                // gives the join assigned directly.)
-                // (Only a binding of a join - owned per path, `dyn`, or a
-                // `__jalias` cursor: a single call's lend, `: e ( id a )`, is
-                // taken over as before, with no copy.)
-                : b __bj_join | ( seq __bj_sb `dyn` ) ( seq ( nurl_sym_get2 syms __bj_sp `__jalias` ) `1` )
-                : b __bj_die & __bj_join ( __cc_dying_lend syms ( bck_swap_char ( nurl_sym_get2 syms bck_rhs_val `__pljr` ) 10 32 ) name )
-                ? & & & | __bj_self __bj_die ! ( seq __bj_sp __ud_ptr ) | ( seq __bj_sb `dyn` ) ( seq __bj_sb `1` ) ( __clone_supported vt syms ) {
-                    : s __bj_f ( mem_udrop_flag_get syms cg __bj_sp )
-                    : s __bj_c ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print __bj_c ) ( nurl_print ` = xor i1 ` ) ( nurl_print __bj_f ) ( nurl_print `, 1\n` )
-                    = store_val ( mem_emit_cloneif cg vt store_val __bj_c )
-                    ( mem_udrop_flag_set syms cg __bj_sp `0` )
-                    = __cp_bjoin T
-                    ? != 0 g_core_live { ( core_cpcopy_mark ) } {}
-                } {}
-            } {} } {}
         : b __ud_same F
         // A call that may lend, given back to the owner whose value it may
         // lend — through another binding that holds that value (`= o ( fwd
@@ -80951,17 +80568,15 @@ unsafe @ gen_assign i lex i syms i cg → s {
                     ( nurl_print `  ` ) ( nurl_print __ud_ls ) ( nurl_print ` = alloca i1\n  store i1 ` ) ( nurl_print __ud_nb ) ( nurl_print `, ptr ` ) ( nurl_print __ud_ls ) ( nurl_print `\n` )
                     ( __sb syms __ud_ptr ( nurl_str_cat `@` __ud_ls ) )
                 } }
-            { ? & & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) ! __ud_same ! __cp_bjoin
-                { ( nurl_sym_def syms `__assign_name__` name )
-                    ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow val )
-                    ( nurl_sym_def syms `__assign_name__` `` )
+            { ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) ! __ud_same
+                { ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow val )
                     ? __as_blk { ( mem_blk_tail_call_own syms cg __ud_ptr ) } {} } {} }
         }
         // (…and owns it again past whatever the call's answer said.)
         ? != 0 ( nurl_str_len __ud_kept ) { ( mem_udrop_keep_settle syms cg __ud_ptr __ud_kept ) } {}
         // (…a closure parameter copied in over a by-pointer capture is the
         // binding's own: agora #864, above.)
-        ? | | __cp_call __cp_bjoin & __cp_clo ( __clone_supported vt syms ) { ( mem_udrop_flag_set syms cg __ud_ptr `1` ) ( __sb syms __ud_ptr `` ) } {}
+        ? | __cp_call & __cp_clo ( __clone_supported vt syms ) { ( mem_udrop_flag_set syms cg __ud_ptr `1` ) ( __sb syms __ud_ptr `` ) } {}
         // (…a copy of a part of the old value is the binding's own.)
         ? != 0 ( nurl_str_len __ud_pcpy ) {
             : s __ud_pf0 ( mem_udrop_flag_get syms cg __ud_ptr )
@@ -90274,9 +89889,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     : i __cl_win g_win_done
     : i __cl_rp_rd g_rp_rd
     ? != g_borrowck 0 {
-        // (A copy of its own, not an interned snapshot of the enclosing
-        // function's rows so far: one per closure literal. AGORA-974)
-        = __cl_bck_stmts ( nurl_str_cat ( __sym_peek g_bck `stmts` ) `` )
+        = __cl_bck_stmts ( nurl_sym_get g_bck `stmts` )
         = __cl_bck_reads ( nurl_sym_get g_bck `reads` )
         = __cl_bck_kind ( nurl_sym_get g_bck `pending_kind` )
         = __cl_bck_pmoves ( nurl_sym_get g_bck `pmoves` )
@@ -90419,8 +90032,7 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     = g_win_done __cl_win
     = g_rp_rd __cl_rp_rd
     ? != g_borrowck 0 {
-        ( bck_put `stmts` `` )
-        ( bck_add `stmts` __cl_bck_stmts )
+        ( bck_put `stmts` __cl_bck_stmts )
         ( bck_put `reads` __cl_bck_reads )
         ( bck_put `pending_kind` __cl_bck_kind )
         ( bck_put `pmoves` __cl_bck_pmoves )
@@ -102651,7 +102263,7 @@ unsafe @ __holds_user_drop s ty i depth → b {
         : s rd ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `dropreads##` sty ) )
         // (A callee compiled after the call: only where its final summary
         // takes the argument.)
-        : b taken | ! ( bck_field_is e 6 `1` ) ( str_has_index ( nurl_sym_get g_fn_sink ( bck_field e 4 ) ) ( bck_field_int e 7 ) )
+        : b taken | ! ( seq ( bck_field e 6 ) `1` ) ( str_has_index ( nurl_sym_get g_fn_sink ( bck_field e 4 ) ) ( bck_field_int e 7 ) )
         ? & & taken != 0 ( nurl_str_len fld ) | ( str_contains_word rd fld ) ( str_contains_word rd `*` ) {
             : s ts ( llvm_to_nurl sty )
             ( bck_emit_error ( bck_field e 3 ) ( bck_field_int e 2 ) ( nurl_str_cat4 ( nurl_str_cat3 `'` ( __bck_path_src ( bck_field e 5 ) ) `' is handed to a 'sink' parameter of '` ) ( bck_field e 4 ) ( nurl_str_cat4 `', but it is a field of a '` ts `', whose '% Drop' reads '` fld ) ( nurl_str_cat3 `': that destructor runs when the value ends and would read the field the sink emptied. Hand the sink a copy that owns its data (string_clone, mem_dup).` `` `` ) ) )
@@ -108234,99 +107846,6 @@ unsafe @ __sx_names_capture i syms s sx → b {
     ? != 0 ( nurl_str_len acc ) { ( __park_nc_local_lend syms lex acc args ty ) } {}
 }
 
-// `= name ( f … )` with `name` an option or result owner among the call's
-// arguments `args` (one root per position, `-` for none) beside another,
-// and what `f` (`key`, `callee generic`) may lend not known at the call:
-// parked for resolve_opt_pick_lends (AGORA-946 D4a).
-@ __park_opt_pick i lex s name s key s args → v {
-    ? | == 0 ( nurl_str_len key ) ! ( str_contains_word args name ) { ^ v } {}
-    // (Another argument beside it, by name or not: `-` is a value with no
-    // root, a temporary the callee may hand back too.)
-    : ~ s rest ( nurl_str_cat args `` )
-    : ~ b other F
-    ~ != 0 ( nurl_str_len rest ) {
-        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? ! ( seq w name ) { = other T } {}
-    }
-    ? ! other { ^ v } {}
-    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `optpick_n` ) )
-    ( nurl_sym_def g_pending_impl `optpick_n` ( nurl_str_int + n 1 ) )
-    ( nurl_sym_def g_pending_impl ( nurl_str_cat `optpick#` ( nurl_str_int n ) )
-    ( nurl_str_cat4 ( nurl_str_cat3 key `\t` name ) ( nurl_str_cat3 `\t` args `\t` ) ( nurl_str_int g_stmt_line ) ( nurl_str_cat `\t` ( nurl_lex_filename lex ) ) ) )
-}
-
-// What argument root `w` is to the owner `name` in a parked `= name ( f …
-// )`: 1 its own value (`name`, or a nested call's stand-in that may lend
-// only out of it - `( tail o )`), 2 another value (a binding, a temporary,
-// a nested call that may lend something else), 0 nothing (`-` is 2: a
-// temporary the callee may hand back).
-// (Followed to any depth: a stand-in's roots are its call's arguments,
-// compiled before it, so a stand-in among them has a smaller number and
-// the walk ends. `below` is the stand-in being read, -1 at the top. A
-// depth cut-off answered 2 past eight levels and refused AGORA-907's
-// owner-only lend nested ten calls deep - CodeRabbit on github#2226.)
-@ __opt_pick_arg_class i syms s w s name i below → i {
-    ? ( seq w name ) { ^ 1 } {}
-    ? == 0 ( nurl_str_starts w `__alr#` ) { ^ 2 } {}
-    : i n ( nurl_str_to_int ( nurl_str_slice w 6 - ( nurl_str_len w ) 6 ) )
-    ? & >= below 0 >= n below { ^ 2 } {}
-    : s k ( nurl_sym_get2 g_pending_impl w `__vljk` )
-    : s cn ( str_first_word k )
-    : s gn ( str_first_word ( str_skip_word k ) )
-    : s who ? != 0 ( nurl_sym_len2 syms cn `__body_done` ) cn gn
-    : ~ s rest ( bck_swap_char ( nurl_sym_get2 g_pending_impl w `__vljr` ) 10 32 )
-    : ~ i ix 0
-    : ~ b own F
-    : ~ b oth F
-    ~ != 0 ( nurl_str_len rest ) {
-        : s r ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? != 0 ( mem_fn_lend_kind syms who ix ) {
-            : i c ( __opt_pick_arg_class syms r name n )
-            ? == c 1 { = own T } { = oth T }
-        } {}
-        = ix + ix 1
-    }
-    ? & own ! oth { ^ 1 } {}
-    ^ 2
-}
-
-// The parked `= o ( f … )` forms (__park_opt_pick): refused where `f`'s
-// final summary may lend `o`'s own argument and another one too, as
-// gen_assign refuses the form when it knows that at the call (agora #412).
-// Every spelling of the callee answers alike - defined below, a generic
-// instance, a `dyn` method (AGORA-946 D4a).
-@ resolve_opt_pick_lends i syms → v {
-    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `optpick_n` ) )
-    : ~ i j 0
-    ~ < j n {
-        : s r ( nurl_sym_get g_pending_impl ( nurl_str_cat `optpick#` ( nurl_str_int j ) ) )
-        : s f0 ( bck_field r 0 )
-        : s name ( bck_field r 1 )
-        : s args ( bck_field r 2 )
-        : s line ( bck_field r 3 )
-        : s file ( bck_field r 4 )
-        : s cn ( str_first_word f0 )
-        : s gn ( str_first_word ( str_skip_word f0 ) )
-        : s who ? != 0 ( nurl_sym_len2 syms cn `__body_done` ) cn gn
-        : ~ b self F
-        : ~ b other F
-        : ~ s rest ( nurl_str_cat args `` )
-        : ~ i k 0
-        ~ != 0 ( nurl_str_len rest ) {
-            : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-            ? != 0 ( mem_fn_lend_kind syms who k ) { ? == 1 ( __opt_pick_arg_class syms w name -1 ) { = self T } { = other T } } {}
-            = k + k 1
-        }
-        ? & self other {
-            : s q1 ( nurl_str_cat3 `'` name `' is given back what this call may lend out of '` )
-            : s q2 ( nurl_str_cat3 name `' itself or out of another argument: nurlc cannot tell which one a run hands back, so it cannot know whether '` name )
-            : s q3 ( nurl_str_cat3 `''s old value is still in use or must be released (agora #412). Give '` name `' a value of its own — a copy of the call's result, ( mem_dup … ) — or bind the result to a new name and keep the two owners apart.` )
-            ( bck_emit_error file ( nurl_str_to_int line ) ( nurl_str_cat3 q1 q2 q3 ) )
-        } {}
-        = j + j 1
-    }
-}
-
 @ resolve_nc_local_lends i syms → v {
     : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `nclocal_n` ) )
     : ~ i j 0
@@ -109807,21 +109326,6 @@ unsafe @ __rpg_tmp_next → v { = g_rpg_tmp + g_rpg_tmp 1 }
     : s r ( nurl_sym_get g_bck `reads` )
     ? == tt TT_LPAREN { ^ ( __rprov_ret_bind syms r TT_LPAREN vt `` ) } {}
     ^ ( __rpg_demark ( __rpg_val_from syms tt v0 vt r `` ) )
-}
-
-// The argument roots of a join's lending arms' calls (`key\troots` a
-// line, __last_join_arm_lends__), one word list.
-@ __arm_lend_roots s ls → s {
-    : ~ s rest ( nurl_str_cat ls `` )
-    : ~ s out ``
-    ~ != 0 ( nurl_str_len rest ) {
-        : i nl ( nurl_str_find rest `\n` )
-        : s ent ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
-        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
-        : i tb ( nurl_str_find ent `\t` )
-        ? > tb 0 { = out ( nurl_str_cat3 out ` ` ( nurl_str_slice ent + tb 1 - - ( nurl_str_len ent ) tb 1 ) ) } {}
-    }
-    ^ out
 }
 
 // Two `mem_arm_call_lend` lists, one per line.
@@ -119203,39 +118707,29 @@ unsafe @ __dce_index i mlen → i {
 // Emission policy, set by main's --sanitize-address flag.
 : ~ i g_sanitize_address 0
 
-// Every source read (including deferred diagnostic excerpts and import
-// replay) sees one snapshot of each file per invocation: an editor save
-// between scan and emission must not combine two versions into spurious
-// duplicate declarations or wrong source spans. A --stdin overlay is that
-// snapshot for the input's path (__source_overlay). A read hands back the
-// snapshot itself, a view valid for the compile: the input file was held
-// twice before, the snapshot and the caller's own copy (6.8 MB of nurlc's
-// peak compiling itself).
+// Borrowed aliases to main's live source/key bindings when --stdin supplies
+// an overlay. Every source read (including deferred diagnostic excerpts and
+// import replay) sees that same snapshot. Normal files are also snapshotted
+// per invocation: an editor save between scan and emission must not combine
+// two versions into spurious duplicate declarations or wrong source spans.
+: ~ i g_input_source 0
+: ~ i g_input_key 0
 : ~ i g_source_snapshots 0
 
-@ __source_snapshots → i {
-    ? == g_source_snapshots 0 { = g_source_snapshots ( nurl_sym_new ) } {}
-    ^ g_source_snapshots
-}
-
-// `text` is what every read of `path` sees from now on (--stdin).
-@ __source_overlay s path s text → v {
-    : i t ( __source_snapshots )
+unsafe @ compiler_read_source s path → s {
     : s key ( __canon_import_key path )
-    ( nurl_sym_def t key text )
-    ( nurl_sym_def t ( nurl_str_cat `seen:` key ) `1` )
-}
-
-@ compiler_read_source s path → s {
-    : i t ( __source_snapshots )
-    : s key ( __canon_import_key path )
-    : s seen_key ( nurl_str_cat `seen:` key )
-    ? == 0 ( nurl_sym_len t seen_key ) {
-        : s source ( nurl_read_file path )
-        ( nurl_sym_def t key source )
-        ( nurl_sym_def t seen_key `1` )
+    ? != 0 g_input_source {
+        ? ( seq key # s g_input_key ) { ^ ( nurl_str_cat # s g_input_source `` ) } {}
     } {}
-    ^ ( nurl_sym_get t key )
+    ? == g_source_snapshots 0 { = g_source_snapshots ( nurl_sym_new ) } {}
+    : s seen_key ( nurl_str_cat `seen:` key )
+    ? != 0 ( nurl_sym_len g_source_snapshots seen_key ) {
+        ^ ( nurl_sym_get g_source_snapshots key )
+    } {}
+    : s source ( nurl_read_file path )
+    ( nurl_sym_def g_source_snapshots key source )
+    ( nurl_sym_def g_source_snapshots seen_key `1` )
+    ^ source
 }
 
 // __import_src: the source a `$` import is read as — the file itself,
@@ -122964,7 +122458,6 @@ unsafe @ __compile_pipeline s src s path i syms i cg → v {
         ( resolve_cap_nc_lends syms )
         ( resolve_nc_lent_stores syms )
         ( resolve_nc_local_lends syms )
-        ( resolve_opt_pick_lends syms )
         ( resolve_pfo_lends syms )
         ( resolve_udrop_param_lends syms )
         ( resolve_owned_strings_kept syms )
@@ -123232,8 +122725,9 @@ unsafe @ main → i {
         ( nurl_eprintln ( nurl_str_cat3 `nurlc: error: cannot open '` path `' — no such file` ) ) ^ 1
     } {}
     ? != g_lint 0 { ( lint_init path ) } {}
-    ? stdin_source { ( __source_overlay path ( nurl_read_stdin ) ) } {}
-    : s src ( compiler_read_source path )
+    : s src ? stdin_source ( nurl_read_stdin ) ( compiler_read_source path )
+    : s input_key ? stdin_source ( __canon_import_key path ) ``
+    ? stdin_source { = g_input_source # i src = g_input_key # i input_key } {}
     : s marker ( nurl_str_cat `@@nurl-disable` `-autodrop-strings@@` )
     ? >= ( nurl_str_find src marker ) 0
     { = g_auto_drop_strings 0 }

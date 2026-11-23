@@ -145,7 +145,6 @@ footer a { color: var(--dim); }
 "use strict";
 var $ = function (id) { return document.getElementById(id); };
 var picked = [];
-var pickGen = 0;  // bumped by every pick: a slower, older read gives way
 var videoSecs = 0;  // the picked video's length, once the browser has read it
 var uploading = false;  // one upload at a time; picking waits for it
 var CHUNK = 32 * 1048576;
@@ -185,59 +184,10 @@ function pick(files) {
     if (skipped) msg += (msg ? " — " : "") + skipped + " unsupported file" + (skipped > 1 ? "s" : "") + " skipped";
   }
   $("picked").textContent = msg;
-  $("go").disabled = true;
-  if (!picked.length) { $("thumbs").textContent = ""; viewsHint(); return; }
-  /* A phone's gallery hands the page a file it may let it read only once:
-     reading it for the video's length (or a thumbnail) and again for the
-     upload fails the second time — a "network error", or a TypeError from
-     its stream. So every picked file is read into memory here, once, and
-     everything after — thumbnails, the length, the upload's pieces — uses
-     that copy. Past 1.5 GB the originals are kept (and not probed). */
-  var gen = ++pickGen, list = picked.slice(), done = 0, copies = [];
-  if (total > 1536 * 1048576) { pickedReady(gen, list, msg, false); return; }
-  $("picked").textContent = msg + " — reading…";
-  (function next() {
-    if (gen !== pickGen) return;            /* a newer pick took over */
-    if (done === list.length) { pickedReady(gen, copies, msg, true); return; }
-    var f = list[done];
-    readAll(f).then(function (buf) {
-      var c = new File([buf], f.name, { type: f.type, lastModified: f.lastModified });
-      c.inMemory = true;
-      copies.push(c);
-      done++;
-      if (list.length > 1) $("picked").textContent = msg + " — reading " + done + "/" + list.length + "…";
-      next();
-    }, function (e) {
-      if (gen !== pickGen) return;
-      picked = [];
-      $("picked").textContent = "this device could not read " + f.name + " (" + (e && e.name || e) + ")";
-    });
-  })();
-}
-
-/* the whole file into memory: Blob.arrayBuffer, or a FileReader where it
-   is missing */
-function readAll(f) {
-  if (f.arrayBuffer) return f.arrayBuffer();
-  return new Promise(function (ok, bad) {
-    var r = new FileReader();
-    r.onload = function () { ok(r.result); };
-    r.onerror = function () { bad(r.error); };
-    r.readAsArrayBuffer(f);
-  });
-}
-
-/* the picked files (copies in memory when probe is set) are ready to show */
-function pickedReady(gen, files, msg, probe) {
-  if (gen !== pickGen) return;
-  picked = files;
-  $("picked").textContent = msg;
   $("go").disabled = picked.length === 0;
-  var vids = picked.filter(isVideo);
   var th = $("thumbs");
   th.textContent = "";
-  /* thumbnails read the file too: only from the copies */
-  (probe ? picked.slice(0, 24) : []).forEach(function (f) {
+  picked.slice(0, 24).forEach(function (f) {
     if (!isImage(f)) return;
     var im = document.createElement("img");
     im.src = URL.createObjectURL(f);
@@ -246,7 +196,7 @@ function pickedReady(gen, files, msg, probe) {
   });
   if (!$("o-name").value && picked.length) $("o-name").placeholder = picked[0].name.replace(/[.][^.]*$/, "");
   videoSecs = 0;
-  if (probe && vids.length === 1) {
+  if (vids.length === 1) {
     /* the length, read by the browser itself, so the hint can say how
        densely the frames will sample it */
     /* a later pick may finish reading first: only this pick's answer counts */
@@ -370,19 +320,6 @@ function putPiece(url, body, onprog) {
    40 MiB cap. */
 function put(url, file, onprog) {
   if (file.size <= CHUNK) return putPiece(url + "?offset=0", file, onprog);
-  /* a picked file is normally a copy in memory (see pick): its slices are
-     plain memory, safe to cut; only an original kept for its size goes
-     through the stream below */
-  if (file.inMemory) {
-    var at = 0;
-    var nextSlice = function () {
-      if (at >= file.size) return Promise.resolve();
-      var here = at, end = Math.min(file.size, at + CHUNK);
-      at = end;
-      return putPiece(url + "?offset=" + here, file.slice(here, end), function (k) { onprog(here + k); }).then(nextSlice);
-    };
-    return nextSlice();
-  }
   var off = 0;
   /* one piece of exactly n bytes (the last may be shorter), from memory */
   function sendPiece(body, n) {
@@ -570,9 +507,7 @@ function render(jobs) {
     if (j.cloud_bytes) {
       var v = el("a", "btn", "View in 3-D");
       v.setAttribute("data-key", j.id + ":view");
-      /* with the views kept, the viewer can also cut a region into a 3-D object */
-      v.href = "/view?cloud=" + encodeURIComponent("/jobs/" + j.id + "/cloud.ply") +
-        (j.scene && j.state === "done" ? "&crop=" + encodeURIComponent("/api/jobs/" + j.id + "/mesh") : "");
+      v.href = "/view?cloud=" + encodeURIComponent("/jobs/" + j.id + "/cloud.ply");
       v.target = "_blank";
       act.appendChild(v);
       var dl = el("a", "btn", "Download .ply");
@@ -580,18 +515,6 @@ function render(jobs) {
       dl.href = "/jobs/" + j.id + "/cloud.ply";
       dl.setAttribute("download", safe(j.name || j.id) + ".ply");
       act.appendChild(dl);
-    }
-    if (j.object_bytes) {
-      var ov = el("a", "btn", "View 3-D object");
-      ov.setAttribute("data-key", j.id + ":obj");
-      ov.href = "/view?glb=" + encodeURIComponent("/jobs/" + j.id + "/object.glb");
-      ov.target = "_blank";
-      act.appendChild(ov);
-      var od = el("a", "btn", "Download .glb");
-      od.setAttribute("data-key", j.id + ":objdl");
-      od.href = "/jobs/" + j.id + "/object.glb";
-      od.setAttribute("download", safe(j.name || j.id) + ".glb");
-      act.appendChild(od);
     }
     var lb = el("button", "", "Log");
     lb.setAttribute("data-key", j.id + ":log");
@@ -616,13 +539,6 @@ function render(jobs) {
       act.appendChild(del);
     }
     d.appendChild(act);
-    if (j.mesh_state === "queued" || j.mesh_state === "running")
-      d.appendChild(el("div", "jprog", "making a 3-D object" + (j.mesh_state === "queued" ? " (queued)" : "…")));
-    else if (j.mesh_state === "failed") d.appendChild(el("div", "jprog", "the 3-D object failed — try a box around the object"));
-    if (j.state === "done" && !j.scene)
-      d.appendChild(el("div", "jmeta", "made before 3-D objects: run it again to cut objects from it"));
-    else if (j.state === "done" && j.scene && !j.object_bytes && !j.mesh_state)
-      d.appendChild(el("div", "jmeta", "3-D object: open View in 3-D, box the region, make 3-D object"));
     if (j.opts) d.appendChild(el("div", "jmeta", "options: " + j.opts));
     if (openLogs[j.id]) {
       var pre = el("pre", "log", "…");
@@ -642,9 +558,7 @@ function refresh() {
   clearTimeout(timer);
   api("GET", "/api/jobs").then(function (r) {
     render(r.jobs || []);
-    var busy = (r.jobs || []).some(function (j) {
-      return j.state === "queued" || j.state === "running" || j.mesh_state === "queued" || j.mesh_state === "running";
-    });
+    var busy = (r.jobs || []).some(function (j) { return j.state === "queued" || j.state === "running"; });
     timer = setTimeout(refresh, busy ? 2000 : 15000);
   }).catch(function (e) {
     $("jobs").textContent = "cannot list the jobs: " + e.message;

@@ -856,24 +856,3 @@ $ `stdlib/std/sort.nu`
     }
     ^ applied
 }
-
-// out = a ∘ b for similarities in the 13-float layout [s | R 9 | t 3]:
-// s = sa·sb, R = Ra·Rb, t = sa·Ra·tb + ta. `out` may not alias a or b.
-@ gm_sim_compose ( Slice f ) a ( Slice f ) b ( Slice f ) out → v {
-    : f sa ( slice_at [f] a 0 )
-    ( slice_put [f] out 0 * sa ( slice_at [f] b 0 ) )
-    : ~ i r 0
-    ~ < r 3 {
-        : ~ i c 0
-        ~ < c 3 {
-            ( slice_put [f] out + + 1 * r 3 c + + * ( slice_at [f] a + + 1 * r 3 0 ) ( slice_at [f] b + 1 c )
-            * ( slice_at [f] a + + 1 * r 3 1 ) ( slice_at [f] b + 4 c )
-            * ( slice_at [f] a + + 1 * r 3 2 ) ( slice_at [f] b + 7 c ) )
-            = c + c 1
-        }
-        ( slice_put [f] out + 10 r + * sa + + * ( slice_at [f] a + + 1 * r 3 0 ) ( slice_at [f] b 10 )
-        * ( slice_at [f] a + + 1 * r 3 1 ) ( slice_at [f] b 11 )
-        * ( slice_at [f] a + + 1 * r 3 2 ) ( slice_at [f] b 12 ) ( slice_at [f] a + 10 r ) )
-        = r + r 1
-    }
-}

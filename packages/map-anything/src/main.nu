@@ -53,8 +53,6 @@ $ `preproc.nu`
 $ `sky.nu`
 $ `voxel.nu`
 $ `sharp.nu`
-$ `scene.nu`
-$ `mesh.nu`
 $ `serve.nu`
 $ `stdlib/core/slice.nu`
 
@@ -68,8 +66,6 @@ $ `stdlib/core/slice.nu`
     ( nurl_print `a port of Meta's MapAnything (github.com/facebookresearch/map-anything)\n\n` )
     ( nurl_print `usage: map-anything <images-dir | video | frames...> [options]\n` )
     ( nurl_print `       map-anything view <cloud.ply> [--port N] [--host A] [--tls]\n` )
-    ( nurl_print `       map-anything mesh <scene> -o object.glb [--box x0 y0 z0 x1 y1 z1] [--res N]\n` )
-    ( nurl_print `                          a 3-D object from the views a run kept with --scene\n` )
     ( nurl_print `       map-anything serve [--host A] [--port N] [--data DIR] [--password P]\n` )
     ( nurl_print `                          web service: upload photos/video, get the cloud\n\n` )
     ( nurl_print `options:\n` )
@@ -94,8 +90,6 @@ $ `stdlib/core/slice.nu`
     ( nurl_print `  --align N           N sweeps of per-view Sim(3) alignment against the other\n` )
     ( nurl_print `                      views of the window: merges the parallel copies of a\n` )
     ( nurl_print `                      surface the views disagree on (default 0 = off)\n` )
-    ( nurl_print `  --scene FILE        keep the views (cameras, depths, masks, colours) for\n` )
-    ( nurl_print `                      "map-anything mesh" to make a 3-D object from\n` )
     ( nurl_print `  --voxel M|auto      fuse the cloud on an M-metre grid: one averaged point\n` )
     ( nurl_print `                      per cell; auto = two pixels' footprint at the median\n` )
     ( nurl_print `                      depth (default 0 = a point per pixel)\n` )
@@ -290,7 +284,6 @@ $ `stdlib/core/slice.nu`
     f mvtol  // ...within this relative z-depth difference
     f voxel  // fuse on a grid of this many metres (0 = every pixel)
     i align  // view-alignment sweeps per window (0 = the heads' poses as they are)
-    String scene  // --scene FILE: keep the views (cameras, depths, masks, colours) for `mesh`
     ( Vec String ) frames
     i bad  // 0 run, 1 error, 2 help, 3 view-subcommand
     String viewfile
@@ -321,7 +314,6 @@ $ `stdlib/core/slice.nu`
     : ~ f mvtol 0.03
     : ~ f voxel 0.0
     : ~ i align 0
-    : ~ s scene ``
     : ~ i bad 0
     : ~ s viewfile ``
     : ~ s vhost `127.0.0.1`
@@ -382,7 +374,6 @@ $ `stdlib/core/slice.nu`
             }
             = take 1
         } {}
-        ? & ( __ma_streq a `--scene` ) < + i0 1 argc { = scene ( nurl_argv + i0 1 ) = take 1 } {}
         ? & ( __ma_streq a `--align` ) < + i0 1 argc { = align ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--port` ) < + i0 1 argc { = port ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & | ( __ma_streq a `--host` ) ( __ma_streq a `--addr` ) < + i0 1 argc { = vhost ( nurl_argv + i0 1 ) = take 1 } {}
@@ -470,14 +461,13 @@ $ `stdlib/core/slice.nu`
     } {}
     ? & == bad 0 == ( vec_len [String] fr ) 0 { = bad 2 } {}
     ^ @ Opts { ( string_from model ) ( string_from out ) ( string_from video ) view port ascii verbose maxviews stride fps
-        pstride confpct maskedges masksky window overlap domask mvneed mvtol voxel align ( string_from scene ) fr bad ( string_from viewfile ) ( string_from vhost ) vtls }
+        pstride confpct maskedges masksky window overlap domask mvneed mvtol voxel align fr bad ( string_from viewfile ) ( string_from vhost ) vtls }
 }
 
 // ── main ────────────────────────────────────────────────────────────
 
 @ main → i {
     ? & > ( nurl_argc ) 1 ( __ma_streq ( nurl_argv 1 ) `serve` ) { ^ ( mas_main ) } {}
-    ? & > ( nurl_argc ) 1 ( __ma_streq ( nurl_argv 1 ) `mesh` ) { ^ ( ms_main ) } {}
     : Opts o ( __ma_parse )
     ? == . o bad 2 {
         ( __ma_usage )
@@ -685,8 +675,7 @@ $ `stdlib/core/slice.nu`
     // Only what an enabled step reads is filled: the depths and the
     // cameras for --align, --mv-check and --voxel auto, the camera-frame
     // points for --align alone (the largest buffer).
-    : b keepscene > ( string_len . o scene ) 0
-    : b geo | | | > . o align 0 > . o mvneed 0 < . o voxel 0.0 keepscene
+    : b geo | | > . o align 0 > . o mvneed 0 < . o voxel 0.0
     : ( Vec f ) wdz__v ( vec_zeroed [f] ? geo * win hw 0 )
     : ( Slice f ) wdz ( slice_from_vec [f] wdz__v )
     : ( Vec u ) wmask__v ( vec_zeroed [u] * win hw )
@@ -698,20 +687,6 @@ $ `stdlib/core/slice.nu`
     : ( Vec f ) wsims__v ( vec_zeroed [f] * 13 win )
     : ( Slice f ) wsims ( slice_from_vec [f] wsims__v )
     : ~ i aligned 0
-    // --scene: the emitted views, written as they are emitted
-    : ~ ScW sw ?? ( sc_create ? keepscene ( string_data . o scene ) `/dev/null` h w ) {
-        T x → x
-        F e → {
-            ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-            ^ 1
-        }
-    }
-    : ( Vec f ) fsim__v ( vec_zeroed [f] 13 )
-    : ( Slice f ) fsim ( slice_from_vec [f] fsim__v )
-    : ( Vec f ) vsim__v ( vec_zeroed [f] 13 )
-    : ( Slice f ) vsim ( slice_from_vec [f] vsim__v )
-    : ( Vec f ) vk__v ( vec_zeroed [f] 4 )
-    : ( Slice f ) vk ( slice_from_vec [f] vk__v )
     : ( Vec f ) wks__v ( vec_zeroed [f] * 4 win )
     : ( Slice f ) wks ( slice_from_vec [f] wks__v )
     : ( Vec f ) k4__v ( vec_zeroed [f] 4 )
@@ -948,22 +923,6 @@ $ `stdlib/core/slice.nu`
 
             ? >= v emit_from {
                 ? > windex 0 { ( gm_sim3_apply pts hw xf ) } {}
-                ? keepscene {
-                    // the view's camera in the PLY's frame: the stitch ∘ its own
-                    : ~ i e 0
-                    ~ < e 13 { ( slice_put [f] vsim e ( slice_at [f] wsims + * v 13 e ) ) = e + e 1 }
-                    = e 0
-                    ~ < e 4 { ( slice_put [f] vk e ( slice_at [f] wks + * v 4 e ) ) = e + e 1 }
-                    ? > windex 0 { ( gm_sim_compose xf vsim fsim ) } {
-                        = e 0
-                        ~ < e 13 { ( slice_put [f] fsim e ( slice_at [f] vsim e ) ) = e + e 1 }
-                    }
-                    : ( Slice f ) vrgb ( slice_from_vec [f] ( pp_data ( vec_at [Frame] framev + wbase v ) ) )
-                    ? ( sc_view sw fsim vk wdz wb mask 0 vrgb ) {} {
-                        ( nurl_print `map-anything: cannot write the scene file\n` )
-                        ^ 1
-                    }
-                } {}
                 : ( Slice f ) rgb ( slice_from_vec [f] ( pp_data ( vec_at [Frame] framev + wbase v ) ) )
                 : ~ i y 0
                 ~ < y h {
@@ -1033,16 +992,6 @@ $ `stdlib/core/slice.nu`
             ( nurl_print `\n` )
         } {}
         = total fused
-    } {}
-    ? keepscene {
-        ? ( sc_finish sw ) {} {
-            ( nurl_print `map-anything: cannot finish the scene file\n` )
-            ^ 1
-        }
-        ? != . o verbose 0 {
-            ( nurl_print `scene   ` ) ( nurl_print ( string_data . o scene ) )
-            ( nurl_print ` (` ) ( nurl_print ( nurl_str_int . sw n ) ) ( nurl_print ` views)\n` )
-        } {}
     } {}
     ? ( ply_finish ply ) {} {
         ( nurl_print `map-anything: cannot finish the PLY\n` )
