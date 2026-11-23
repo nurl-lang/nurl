@@ -8,5 +8,6 @@
     it consumes.
   - The ownership engine's verdicts are unchanged. The emitted LLVM is
     byte-identical across the tree.
-  - The drop validator (`tools/ncore/tv.sh --ir`) no longer reports
+  - With the drop validator's matching update in nurl-lang/nurl#2242
+    (`tools/ncore/tvir.py`), `tools/ncore/tv.sh --ir` no longer reports
     `__dq_drop_elems` in `stdlib/std/deque.nu`.
