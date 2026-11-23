@@ -150,7 +150,7 @@ theorem holdThru_nil (P : List Dep) (Γ : Ctx) : holdThru [] P Γ = Γ := by
 theorem MInv.editBV_take {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     (hanch : RootbAnch Γ F) {x : Var} {i : Expr} {Ex : Entry} {t : Ty} (hx : Γ x = some Ex)
     (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t) (hhv : t.holdsView = true)
-    (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path) (hnoV : ∀ d ∈ memDeps Ex.path, NoHeld Γ d.root)
+    (hthru : ThruOK Γ F (.trunc i) Ex.ty Ex.path) (hnoV : NoHeldV Γ Ex.path)
     (hV : ThruV Γ (.trunc i) Ex.ty Ex.path [])
     {o : Var} {T T' : Val} {t' : Ty} {c d n : Nat} {es : List Val} (hn : n < es.length)
     (hno : NodeOf m x o T t' c d es)

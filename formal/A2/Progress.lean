@@ -136,10 +136,10 @@ theorem pair_slot {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {E : Entry} (h
     rw [← valOK_undtor, ht] at hok; obtain ⟨x, z, rfl, _⟩ := valOK_prod.mp hok
     exact ⟨_, _, _, hv⟩
 
-theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry} (hi : MInv m Γ)
-    (hanchF : RootbAnchF Γ F)
+theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F V : List Var} {r : Rhs} {E : Entry} (hi : MInv m Γ)
+    (hanchS : RootbAnchS Γ F V) (hV : ∀ y ∈ r.vars, y ∈ V)
     (hr : RhsT Γ F r E Γ1) (hnb : ¬ RBlocked m r) : ∃ res, EvalR m r res := by
-  have hanch : RootbAnch Γ F := hanchF.toH
+  have hanch : RootbAnch Γ F := hanchS.toH
   cases hr with
   | expr he =>
     obtain ⟨n, hn⟩ := eval_exists hi he; exact ⟨_, EvalR.expr hn⟩
@@ -211,7 +211,7 @@ theorem evalR_exists {m : Mem} {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entr
       rw [hT] at h; cases h
   | @pair y z Ey Ez Γ1 Γ2 Dy Dz hy hly hpa1 hz hlz hpa2 _ =>
     obtain ⟨v, m1, htk1⟩ := takeVal_exists hi hy hly hpa1 rfl
-    obtain ⟨post1, _⟩ := push_take hi hanch hy hly rfl (fun h => NoHeld.of_anchF hanchF h) hpa1 htk1
+    obtain ⟨post1, _⟩ := push_take hi hanch hy hly rfl (fun h => NoHeld.of_anchS hanchS (hV _ (by simp [Rhs.vars])) h) hpa1 htk1
     obtain ⟨w, m2, htk2⟩ := takeVal_exists post1.inv hz hlz hpa2 rfl
     exact ⟨_, EvalR.pair htk1 htk2⟩
   | fst hy hl ht =>
@@ -475,12 +475,13 @@ theorem freesL_exists {τ : Ty} : ∀ {l : List Val}, (∀ e ∈ l, WFv τ e) �
 /-- Agora #295: a change through a borrow finds the node in its owner's tree
     (`MInv.thru_owner`), and steps. -/
 theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : MInv m Γ)
-    (hanchF : RootbAnchF Γ F) {x : Var} {op : Edit} {Ex Ex1 : Entry} {t : Ty} {D : List Dep}
+    {V : List Var} (hanchS : RootbAnchS Γ F V) {x : Var} {op : Edit}
+    (hV : ∀ y, op.stored = some y → y ∈ V) {Ex Ex1 : Entry} {t : Ty} {D : List Dep}
     (hx : Γ x = some Ex) (hmx : Ex.mode = .bor) (hl : Ex.live = true) (hty : Ex.ty = .vec t)
     (harg : EditArg Γ F op t D Γ1) (hyx : ∀ y, op.stored = some y → y ≠ x) (hx1 : Γ1 x = some Ex1)
     (hl1 : Ex1.live = true) (hthru : ThruOK Γ1 F op Ex.ty Ex1.path) {b : Bool} :
     ∃ r, Step P m (.edit b x op) r := by
-  have hanch : RootbAnch Γ F := hanchF.toH
+  have hanch : RootbAnch Γ F := hanchS.toH
   have hE1 : Ex1 = Ex := harg.at_ne hyx hx hx1 hl1
   rw [hE1] at hx1 hthru
   have hro : ∀ d ∈ memDeps Ex.path, ∃ Er, Γ1 d.root = some Er ∧ Er.mode.ownSlot = true :=
@@ -490,7 +491,7 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
   cases harg with
   | push hy hly htyy hpa =>
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa htyy
-    obtain ⟨post, _⟩ := push_take hi hanch hy hly htyy (fun h => NoHeld.of_anchF hanchF h) hpa htk
+    obtain ⟨post, _⟩ := push_take hi hanch hy hly htyy (fun h => NoHeld.of_anchS hanchS (hV _ rfl) h) hpa htk
     obtain ⟨_, _, _, _, c, d, es, _, _, _, _, _, _, hno, _⟩ := post.inv.thru_owner hx1 hmx hl hty hro hthru.noShare
     obtain ⟨T', hr⟩ := Repl.exists hno.sub (.node t c d (es ++ [v]))
     exact ⟨_, Step.editPush htk hno hr⟩
@@ -515,7 +516,7 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
   | set hie hy hly htyy hpa =>
     obtain ⟨n, hev⟩ := eval_exists hi hie
     obtain ⟨v, m1, htk⟩ := takeVal_exists hi hy hly hpa htyy
-    obtain ⟨post, hp⟩ := push_take hi hanch hy hly htyy (fun h => NoHeld.of_anchF hanchF h) hpa htk
+    obtain ⟨post, hp⟩ := push_take hi hanch hy hly htyy (fun h => NoHeld.of_anchS hanchS (hV _ rfl) h) hpa htk
     obtain ⟨_, _, T, _, c, d, es, _, hT, _, _, _, hw, hno, _⟩ := post.inv.thru_owner hx1 hmx hl hty hro hthru.noShare
     by_cases hn : n < es.length
     · -- the old element is freed
@@ -534,7 +535,7 @@ theorem progress_editB {P : Prog} {m : Mem} {Γ Γ1 : Ctx} {F : List Var} (hi : 
 /-- Agora #871: no exit is about to leave a statement typed under no exit. -/
 theorem exitAt_none {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} {m : Mem}
     (ht : StmtT P .none Γ F s Δ) {n : Nat} {e : Stmt} (he : ExitAt s n e) (hi : Inv m Γ F s) : False := by
-  obtain ⟨_, _, h2, -⟩ := ExitAt.typed ht he hi.wf hi.names hi.toMInv.fresh hi.anch .none
+  obtain ⟨_, _, h2, -⟩ := ExitAt.typed ht he hi.wf hi.names hi.toMInv.fresh hi.anch (fun v hv => hv) .none
   exact Exits.none_up h2
 
 /-- AGORA-889: `takeB` steps: the node `x` names is found as for `editB`; in
@@ -614,7 +615,7 @@ theorem progress {P : Prog}
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
     by_cases hrb : RBlocked m r
     · exact Or.inr (Or.inl hrb)
-    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnchF rfl) hr hrb
+    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnchS rfl) (fun y hy => by simp [Stmt.killVars, hy]) hr hrb
     cases res with
     | ok v o m1 => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letv hmx hres⟩
     | panic => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letvP hres⟩
@@ -710,7 +711,7 @@ theorem progress {P : Prog}
       have := hi.dom x; rw [hx] at this; cases h : m.st x <;> simp_all
     by_cases hrb : RBlocked m r
     · exact Or.inr (Or.inl hrb)
-    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnchF rfl) hr hrb
+    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnchS rfl) (fun y hy => by simp [Stmt.killVars, hy]) hr hrb
     cases res with
     | ok v o m1 => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letd hmx hres⟩
     | panic => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.letdP hres⟩
@@ -782,11 +783,11 @@ theorem progress {P : Prog}
     intro m hcd hi
     by_cases hrb : RBlocked m r
     · exact Or.inr (Or.inl hrb)
-    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnchF rfl) hr hrb
+    obtain ⟨res, hres⟩ := evalR_exists hi.toMInv (hi.leafAnchS rfl) (fun y hy => by simp [Stmt.killVars, hy]) hr hrb
     cases res with
     | panic => exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.assignP hres⟩
     | ok v o m1 =>
-      obtain ⟨post, _⟩ := rhs_pres hi.toMInv (hi.leafAnch rfl) hr hres (fun _ _ hyF => NoHeld.of_anchF (hi.leafAnchF rfl) hyF)
+      obtain ⟨post, _⟩ := rhs_pres hi.toMInv (hi.leafAnch rfl) hr hres (fun _ hy hyF => NoHeld.of_anchS (hi.leafAnchS rfl) (by simp [Stmt.killVars, hy]) hyF)
       have hx1 : (Γ1 x).isSome := by rw [post.cdom, hx]; rfl
       obtain ⟨Ex1, hEx1⟩ := Option.isSome_iff_exists.mp hx1
       obtain ⟨sl, a', hsl, hd⟩ := dropSlot_exists post.inv hEx1
@@ -878,12 +879,12 @@ theorem progress {P : Prog}
     intro m hcd hi
     -- AGORA-937 (item 3): a frame binds no region
     have hthru := hthru.toOK fun v E h hr => by
-      obtain ⟨E0, h0, hm, _⟩ := (harg.ctxRel (RootbAnch.toR (hi.leafAnchF rfl))).mode v E h
+      obtain ⟨E0, h0, hm, _⟩ := (harg.ctxRelH (hi.leafAnchS rfl).toRH (fun y hy hyF _ => NoHeld.of_anchS (hi.leafAnchS rfl) (Edit.stored_vars hy) hyF)).mode v E h
       exact hi.toMInv.noRegion v E0 h0 (hm ▸ hr)
-    exact Or.inr <| Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnchF rfl) hx hmx hl hty harg hyx hx1 hl1 hthru)
+    exact Or.inr <| Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnchS rfl) (fun y hy => Edit.stored_vars hy) hx hmx hl hty harg hyx hx1 hl1 hthru)
   | editBV hx hmx hl hty _ _ _ harg hyx hx1 hl1 _ hthru _ =>
     intro m hcd hi
-    exact Or.inr <| Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnchF rfl) hx hmx hl hty harg hyx hx1 hl1 hthru)
+    exact Or.inr <| Or.inr <| Or.inr (progress_editB hi.toMInv (hi.leafAnchS rfl) (fun y hy => Edit.stored_vars hy) hx hmx hl hty harg hyx hx1 hl1 hthru)
 
   | @takeB _ Γ Δ F x y i k Ex t _ hy _ hx hmx hl hty _ _ hie hthru _ _ _ _ =>
     exact fun _ hi => Or.inr <| Or.inr <| Or.inr

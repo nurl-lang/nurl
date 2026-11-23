@@ -26,6 +26,20 @@ theorem dropSeq_spine (x : Var) (L : Stmt) (hL : L.spine = []) : ∀ as, (dropSe
   | [] => hL
   | _ :: _ => rfl
 
+theorem dropSeq_killVars {x : Var} {L : Stmt} :
+    ∀ as, ∀ v ∈ (dropSeq x as L).killVars, v = x ∨ v ∈ as ∨ v ∈ L.killVars
+  | [], v, hv => .inr (.inr hv)
+  | a :: as, v, hv => by
+    simp only [dropSeq, Stmt.killVars, Rhs.vars, List.mem_append, List.mem_cons, List.not_mem_nil,
+      or_false] at hv
+    rcases hv with (rfl | rfl) | hv
+    · exact .inl rfl
+    · exact .inr (.inl (List.mem_cons_self))
+    · rcases dropSeq_killVars as v hv with h | h | h
+      · exact .inl h
+      · exact .inr (.inl (List.mem_cons_of_mem _ h))
+      · exact .inr (.inr h)
+
 theorem dropSeq_vars {x : Var} {L : Stmt} :
     ∀ as, ∀ v ∈ (dropSeq x as L).vars, v = x ∨ v ∈ as ∨ v ∈ L.vars
   | [], v, hv => .inr (.inr hv)
@@ -105,6 +119,39 @@ theorem Redex.vars_sub {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y y' 
   | scopeL _ ih =>
     intro v hv
     simp only [Stmt.vars, List.mem_cons] at hv ⊢
+    exact hv.imp_right (ih v)
+
+/-- AGORA-937 (B2): … and its killable names (a `frozen` frame's list is
+    none). -/
+theorem Redex.killVars_sub {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y y' : Stmt}
+    (hy : ∀ v ∈ y.killVars, v ∈ y'.killVars) : ∀ v ∈ (K y).killVars, v ∈ (K y').killVars := by
+  induction h with
+  | here => exact hy
+  | seq _ ih =>
+    intro v hv
+    simp only [Stmt.killVars, List.mem_append] at hv ⊢
+    exact hv.imp_left (ih v)
+  | scope _ ih =>
+    intro v hv
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+    exact hv.imp_right (ih v)
+  | rbind _ ih =>
+    intro v hv
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+    exact hv.imp_right (ih v)
+  | frozen _ ih => exact ih
+  | block _ ih => exact ih
+  | catchR _ ih =>
+    intro v hv
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+    exact hv.imp_right (ih v)
+  | scopeD _ ih =>
+    intro v hv
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+    exact hv.imp_right (ih v)
+  | scopeL _ ih =>
+    intro v hv
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
     exact hv.imp_right (ih v)
 
 theorem Redex.catchOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {m : Mem} {y y' : Stmt}
@@ -769,7 +816,7 @@ theorem spawner_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
   have ht' := hR.plug hDsp (spawn_hole hP hS hsp hf hmv.nodup) _ Γ F Δ ht hi
   have hi' : Inv m Γ F (K (dropSeq x args (.letv x (.expr (.lit 0)) k))) := by
     refine hi.respine hsp' (hR.vars_sub fun v hv => ?_) (hR.catchOK hDsp ?_ hi.catchOK)
-      (hR.pinOK hDsp ?_ hi.pinIn) (hR.dtorPinOK hDsp ?_ hi.dtorIn)
+      (hR.pinOK hDsp ?_ hi.pinIn) (hR.dtorPinOK hDsp ?_ hi.dtorIn) (hR.killVars_sub fun v hv => ?_)
     · have hv' : v = x ∨ v ∈ args ∨ v ∈ k.vars := by
         rcases dropSeq_vars args v hv with h | h | h
         · exact .inl h
@@ -781,6 +828,14 @@ theorem spawner_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
     · cases args <;> exact trivial
     · cases args <;> exact trivial
     · cases args <;> exact trivial
+    · have hv' : v = x ∨ v ∈ args ∨ v ∈ k.killVars := by
+        rcases dropSeq_killVars args v hv with h | h | h
+        · exact .inl h
+        · exact .inr (.inl h)
+        · simp [Stmt.killVars, Rhs.vars, Expr.vars] at h
+          exact h.imp_right .inr
+      simp only [Stmt.killVars, List.mem_cons, List.mem_append]
+      exact or_assoc.mpr hv'
   have hsc' : (K (dropSeq x args (.letv x (.expr (.lit 0)) k))).codesOK P :=
     hR.codesOK (dropSeq_codes (L := .letv x (.expr (.lit 0)) k)
       (show (Stmt.letv x (.expr (.lit 0)) k).codesOK P from ⟨trivial, hR.codes_hole hsc⟩) args) hsc
@@ -826,6 +881,7 @@ theorem spawnFail_ok {P : Prog} {m : Mem} {s : Stmt} (hok : ThreadOK P m s) {K :
   have hi' : Inv m Γ F (K (.seq .panic (.letcall x f args k))) :=
     hi.respine hsp' (hR.vars_sub fun v hv => by simpa [Stmt.vars] using hv)
       (hR.catchOK hsp trivial hi.catchOK) (hR.pinOK hsp trivial hi.pinIn) (hR.dtorPinOK hsp trivial hi.dtorIn)
+      (hR.killVars_sub fun v hv => by simpa [Stmt.killVars] using hv)
   have hsc' : (K (.seq .panic (.letcall x f args k))).codesOK P :=
     hR.codesOK (show (Stmt.seq .panic (.letcall x f args k)).codesOK P from ⟨trivial, hR.codes_hole hsc⟩) hsc
   exact ⟨Γ, F, Δ, ht', hi', hcd, hsc', fun v hv => by rw [hsp']; exact hc v hv⟩
