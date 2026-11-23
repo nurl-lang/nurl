@@ -249,6 +249,13 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
           else if isPanic a && panicToB D Γ rb.Δ then some ⟨rb.Δ, ra.E ++ rb.E, none⟩
           else if isPanic b && panicToB D Γ ra.Δ then some ⟨ra.Δ, ra.E ++ rb.E, none⟩
           else match ra.tail, rb.tail with
+            -- (both arms end in an exit and the first leaves the innermost
+            -- block: that block's end is its context, so the second arm is
+            -- retargeted there first, not the first to the second's;
+            -- github#2242's review, A2Exit l.193)
+            | some (0, Γea), some (_, Γeb) =>
+              if exitToB D Γeb ra.Δ then some ⟨ra.Δ, ra.E ++ rb.E, none⟩
+              else if exitToB D Γea rb.Δ then some ⟨rb.Δ, ra.E ++ rb.E, none⟩ else none
             | some (_, Γe), _ => if exitToB D Γe rb.Δ then some ⟨rb.Δ, ra.E ++ rb.E, none⟩ else none
             | none, some (_, Γe) => if exitToB D Γe ra.Δ then some ⟨ra.Δ, ra.E ++ rb.E, none⟩ else none
             -- (C7w: the arms' ends joined by weakening, as `checkStmt2`'s)
@@ -483,7 +490,23 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
                 obtain ⟨h1, _⟩ := OblOK.append hξ
                 exact .ite ha hb (checkExpr2_sound hce) (ta ξ h1) (panicToB_sound hs sa hp.2)
               · split at h
-                · rename_i n Γe hta
+                · rename_i Γea m Γeb hta htb
+                  split at h
+                  · rename_i hto
+                    simp only [Option.some.injEq] at h; subst h
+                    obtain ⟨_, _, hre⟩ := tlb m Γeb htb
+                    refine ⟨sa, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
+                    obtain ⟨h1, h2⟩ := OblOK.append hξ
+                    exact .ite ha hb (checkExpr2_sound hce) (ta ξ h1) (hre ra.Δ sa hto ξ h2)
+                  · split at h
+                    · rename_i _ hto
+                      simp only [Option.some.injEq] at h; subst h
+                      obtain ⟨_, _, hre⟩ := tla 0 Γea hta
+                      refine ⟨sb, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
+                      obtain ⟨h1, h2⟩ := OblOK.append hξ
+                      exact .ite ha hb (checkExpr2_sound hce) (hre rb.Δ sb hto ξ h1) (tb ξ h2)
+                    · cases h
+                · rename_i n Γe hta _
                   split at h
                   · rename_i hto
                     simp only [Option.some.injEq] at h; subst h
