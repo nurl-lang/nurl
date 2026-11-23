@@ -33007,8 +33007,14 @@ unsafe @ __lx_skip_ws i lex → v {
         ? & & < + pos 1 len
         == & # i . src pos 255 47
         == & # i . src + pos 1 255 47 {
-            // line comment — skip to end of line (exclusive of '\n').
-            ~ & < pos len != & # i . src pos 255 10 { = pos + pos 1 }
+            // line comment — skip to end of line (exclusive of '\n'): memchr
+            // to the line break, as __lex_build_linetab does. A third of
+            // the compiler's own source is comments, and every scan pass
+            // lexes the whole file, so a byte loop here was most of what
+            // skipping cost.
+            : i sb # i src
+            : i hit # i ( memchr # *u + sb pos 10 - len pos )
+            = pos ? == hit 0 len - hit sb
         } { = done T }
     }
     ( nurl_poke p LX_POS pos )
@@ -98218,7 +98224,12 @@ unsafe @ __lazy_scan → v {
     : *u q # *u pre
     : ~ i k g_lazy_scan
     ~ < k n {
-        ? & == # i . p k 64 < + k 11 n {
+        // (memchr to the next `@`: the text is tens of megabytes, scanned
+        // again after every round of instances; a byte loop over it was
+        // the scan's whole cost)
+        : i hit # i ( memchr # *u + base k 64 - n k )
+        = k ? == hit 0 n - hit base
+        ? & & < k n == # i . p k 64 < + k 11 n {
             : ~ b m T
             : ~ i j 0
             ~ & m < j 10 { ? != # i . p + + k 1 j # i . q j { = m F } {} = j + j 1 }
