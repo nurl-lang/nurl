@@ -2214,7 +2214,10 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P .none Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
-      (RootbAnchF Δ F) →
+      -- (AGORA-937 B2: at the frame's end the statement is `catchR x m0 skip`,
+      -- whose one killable name is `x`: an anchor in `F`, or held of a root
+      -- other than `x` that holds no views)
+      (RootbAnchS Δ F [x]) →
       KeepOut Γ Δ s.spine → DStay Γ Δ s.spine →
       StmtT P ξ Γ F (.catchR x m0 s) Δ
   /-- A2-drop: a binding that runs a destructor at its end: of a destructor

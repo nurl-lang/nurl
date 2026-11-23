@@ -592,12 +592,18 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
           have : (m0.set x ⟨false, some (.int 1)⟩) = ((m.set x ⟨false, none⟩).set x ⟨false, some (.int 1)⟩) := by
             simp [m0, ho]
           rw [this]; exact hh) (Nat.le_refl _)
-    have hanchΔ : RootbAnchF (setE Γ x (callRes Γ fn [])) F := by
+    have hanchΔ : RootbAnchS (setE Γ x (callRes Γ fn [])) F [x] := by
       intro p Ep hp' hm
       by_cases hpx : p = x
       · subst hpx; simp [setE] at hp'; subst hp'; rw [hEc] at hm; cases hm
       · simp only [setE, upd_ne _ _ hpx] at hp'
-        sorry  -- WIP scaffold (AGORA-937 B2, never merged): StmtT.catchR's anchor premise takes the relaxed form
+        -- AGORA-937 (B2): `x` is a killable name of `letrec x f k`, so a held
+        -- anchor's root is not `x`, which is all the call result's binding changes
+        refine ((hi.anch p Ep hp' hm (by simp [Stmt.spine])).anti fun v hv => ?_).of_tyV
+          fun r Er hr hrV => ⟨Er, ?_, rfl⟩
+        · simp only [List.mem_singleton] at hv; simp [Stmt.killVars, hv]
+        · have hrx : r ≠ x := fun e => hrV (by simp [e])
+          simp [setE, upd_ne _ _ hrx, hr]
     have hsp : (callIn fn [] m.nv x).spine = [m.nv + fn.params.length] := by
       rw [callIn_spine, h.body_spine]; simp [hp, wrapSpine]
     have hKO : KeepOut ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) (setE Γ x (callRes Γ fn []))

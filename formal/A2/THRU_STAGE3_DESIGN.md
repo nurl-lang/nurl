@@ -804,7 +804,7 @@ This makes B2's last two cases depend on B3's invariant. The order is therefore:
   - EnvHand.lean: the anchors the package-call lemmas take, two places.
 - **`SrcCase` relaxed, 2 places:** Preservation's `withLock` and `withElem` (SrcKeep's `StmtT.ctxRel`).
 - **`CallA.anch` relaxed (B3), 1 place:** CallInv.lean's call setup.
-- **`StmtT.catchR`'s anchor premise, 1 place:** the typing rule asks `RootbAnchF Δ F` (CallInv.lean's recover case).
+- *(Proved since: `StmtT.catchR`'s anchor premise is now `RootbAnchS Δ F [x]`. It is used only at the frame's end, where `catchR x m0 skip`'s one killable name is `x`. At the recursive call's setup it follows from the outer anchors, because `x` is a killable name of `letrec x f k`.)*
 - *(Proved since: EnvHand.lean's two "carry the anchors to the package call's new statement". The new killable names are the old ones, or the fresh `m.nv` / `m.nv + 1`, which Γ does not bind.)*
 
 **The call side (B3): what `CallA.anch` is used for.** Four uses (2026-11-23), and all but one are met by the relaxed clause:
