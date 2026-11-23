@@ -326,8 +326,28 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
       rw [← hρ]
       show ∃ E, (callS Γ F fn args m.nv x).canon (sigCtx fn) ((callS Γ F fn args m.nv x).ρ k') = some E
       exact ⟨_, h.canon_sigR (sigCtx_of hk') (Nat.le_of_lt (lt_of_get hk'))⟩
-  -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step (the call's setup)
-  heldCaps := sorry
+  -- (AGORA-963 step 3: a borrowed parameter outside the call's scopes is the
+  -- caller's, as the call left it; the store binds the parameters to the
+  -- arguments' values, `BindParams.capsInp`, and the result slots to nothing)
+  heldCaps p E hp hrb hns d hd hb' hh hF := by
+    rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
+        ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
+    · exact absurd hrb (resMode_ne' fn)
+    · exact absurd hrb (resMode_ne' fn)
+    · exfalso; apply hns
+      rw [callStmt_spine]
+      exact List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_append_left _
+        (mem_wrapSpine_of hk' (fun b h => by cases h))))
+    · cases hrb
+    · cases hrb
+    · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp
+      rw [clean_mode] at hrb
+      obtain ⟨E0, h0, hm⟩ := h.postdm.2 p E1' h1'
+      have := h.post_rootb h0 (hm ▸ hrb)
+      rw [h1'] at this; cases this
+      rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)] at hd hh
+      have hcw := hi.heldCaps p E1' h0 hrb (by simp [Stmt.spine]) d hd hb' hh hF
+      exact (((hb.capsInp hcw).set_none _ _).set_none _ _).of_st rfl
 
 theorem keep (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} :
     Keep Γ ((callS Γ F fn args m.nv x).canon (sigCtx fn)) (.letcall x f args k) (callStmt fn args m.nv x k) := by

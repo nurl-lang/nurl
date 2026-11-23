@@ -797,6 +797,17 @@ This makes B2's last two cases depend on B3's invariant. The order is therefore:
 
 (1) is the closest to what `callc` reads (`m.st c = some ⟨o, some (.pkg … cs)⟩`), and the call establishes it from `CallThruOK`'s `w ∉ roots (mutNames Γ args)` together with the package invariant that a package's captures are its entry's name dependencies.
 
+**B2 and B3 are complete (2026-11-23).** The library has no `sorry`, and every theorem `Check.lean` prints depends only on `propext`, `Classical.choice` and `Quot.sound`.
+- **The invariant:** a borrowed parameter's held views may be anchored outside `F` at roots none of the statement's killable names (`AnchoredS`). The store holds no package that captures such a root other than read-only (`HeldCapsInp`, `CapsInpAt`, slots and blocks).
+- **Every step keeps both:** `Step.killVars_sub` and `CapInout.not_held` (claude-expert), CapsStore (claude-accurate), `EvalR.capsInp`, and `Step.slotsCaps`.
+- **The call side:**
+  - `CallA.anch` is `RootbAnchRS`;
+  - `NamesFree`'s new conjunct says closures' by-name changes spare held views;
+  - the call frames set up the clause from the caller's.
+- **Source typing:** `StmtT.ctxRelS`.
+
+What follows is the record of the work as it went.
+
 **Where the WIP branch stands (2026-11-23).** With every proof file moved onto the relaxed anchors, the whole library builds. The places still open are marked `sorry -- WIP scaffold (AGORA-937 B2, never merged)`, so the gaps are an exact list. Nothing is merged while any is there.
 - **The closure-capture clause (AGORA-963), 7 places:**
   - Preservation's `frozenIn` and `catchR`;

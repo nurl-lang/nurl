@@ -2833,7 +2833,6 @@ theorem cloProgress {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x 
   | waitPanic hw => simp [Waits] at hw
   | reap hrs hrk hnc => exact ⟨_, Step.reap (r := .callc x c j σ zs k) hrs hrk hnc⟩
 
-set_option maxHeartbeats 400000 in
 /-- AGORA-937 B2 (AGORA-963): an opened call's argument at a capture's
     position is a capture, whose parameter is its own mode and type. -/
 theorem capPos_any {zs : List Var} {cs : List (Var × PMode × Ty)} {n : Nat} {pre : List (PMode × Ty)}
@@ -2855,6 +2854,7 @@ theorem capPos_any {zs : List Var} {cs : List (Var × PMode × Ty)} {n : Nat} {p
     simp only [Option.map_some, Option.some.injEq] at hv hp
     exact ⟨q, List.mem_of_getElem? hq, hv, hp⟩
 
+set_option maxHeartbeats 400000 in
 theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
   intro ξ Γ Γ1 F x c j zs k Ec E ms q σ sig Δ m m' s' hk hx hxF hc htc hj hσ hhd hnz hcT hnzs hkT hpx hcd hi hst hnr
   cases hst with
@@ -3033,9 +3033,22 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
         pinOut := pinOut_nil rfl
         pinIn := trivial
         dtorOut := dtorOut_nil rfl
-        dtorIn := trivial 
-        -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
-        heldCaps := sorry }
+        dtorIn := trivial
+        -- (AGORA-963 step 3: the environment's binding holds no held anchor; any
+        -- other borrowed parameter is the caller's; the store lends the
+        -- package's environment, a part of it, to the fresh binding)
+        heldCaps := fun p E hp hm _ d hd hb' hh hF => by
+          by_cases hpe : p = m.nv
+          · subst hpe; simp only [Γe, setE, upd_same, Option.some.injEq] at hp; subst hp
+            exact absurd hh envE_not_heldAnch
+          · simp only [Γe, setE, upd_ne _ _ hpe] at hp
+            obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
+            rw [clean_mode] at hm
+            rw [clean_rootb hm] at hd hh
+            have hcw := hi.heldCaps p E0 h0 hm (by simp [Stmt.spine]) d hd hb' hh
+              (fun h => hF (List.mem_append_left _ h))
+            exact (hcw.set (x := m.nv) (o := false) (fun V e => by
+              cases e; exact ((hcw.slot hslot).child Child.pkg).lend)).of_st rfl }
     have h := callH_of hP hf hxe' hxF' hcT' hIe
     have hI := h.inv hIe hb
     -- the environment's binding, where the call leaves it
@@ -3431,9 +3444,38 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
                     obtain ⟨E0, h0, hd0⟩ := h.post_dbind h1 hd
                     rw [hEe] at h0; cases h0
                     exact absurd hd0 (by simp [Ee, envE])
-                · exact h.spine_dbind v hv' E hE 
-              -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
-              heldCaps := sorry }
+                · exact h.spine_dbind v hv' E hE
+              -- (AGORA-963 step 3: a borrowed parameter outside the call is the
+              -- caller's, as the call left it; the store lends the environment,
+              -- then binds the parameters, `BindParams.capsInp`)
+              heldCaps := fun p Ep hp hm hs d hd hb' hh hF => by
+                have hs' : p ≠ m.nv ∧ p ∉ (callStmt fn (m.nv :: zs ++ cs.map (·.1)) (m.nv + 1) x k).spine := by
+                  refine ⟨fun e => hs ((hssp p).mpr (Or.inl e)), fun h' => hs ((hssp p).mpr (Or.inr h'))⟩
+                rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
+                    ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
+                · exact absurd hm (resMode_ne' fn)
+                · exact absurd hm (resMode_ne' fn)
+                · exfalso; apply hs'.2
+                  rw [callStmt_spine]
+                  exact List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_append_left _
+                    (mem_wrapSpine_of hk' (fun b h => by cases h))))
+                · cases hm
+                · cases hm
+                · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp
+                  rw [clean_mode] at hm
+                  obtain ⟨E0, h0, hm0⟩ := h.postdm.2 p E1' h1'
+                  have := h.post_rootb h0 (hm0 ▸ hm)
+                  rw [h1'] at this; cases this
+                  rw [clean_id (Or.inr hm) (h.post_live_rootb h1' hm)] at hd hh
+                  simp only [Γe, setE, upd_ne _ _ hs'.1] at h0
+                  obtain ⟨E2, h2, rfl⟩ := cleanC_some h0
+                  rw [clean_mode] at hm
+                  rw [clean_rootb hm] at hd hh
+                  have hcw := hi.heldCaps p E2 h2 hm (by simp [Stmt.spine]) d hd hb' hh hF
+                  have he : CapsInpAt (envMem m env) d.root :=
+                    (hcw.set (x := m.nv) (o := false) (fun V e => by
+                      cases e; exact ((hcw.slot hslot).child Child.pkg).lend)).of_st rfl
+                  exact (((hb.capsInp he).set_none _ _).set_none _ _).of_st rfl }
     · have hve : v ≠ m.nv := fun e => by rw [e, hΓe0] at hv; cases hv
       have hv' : Γe v = some E.clean := by simp only [Γe, setE, upd_ne _ _ hve]; exact cleanC_of hv
       obtain ⟨hns, E', h', hm', ht', hrb'⟩ := hkeep.1 v E.clean hv' (by simp [Stmt.spine])
