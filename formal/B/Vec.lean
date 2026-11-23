@@ -8,7 +8,8 @@ types the rules give it. This file covers the first piece, the owned buffer
 of `stdlib/core/vec.nu`. It models the buffer at the level that code runs on:
 a heap of blocks, a control triple `(data, len, cap)`, and the code of
 `vec_push`, `__vec_grow_to`, `__vec_place`, `alloc_grow_cap`, `vec_get`,
-`vec_set` (by `.data idx`), `vec_pop` and `vec_free`. It proves that each
+`vec_set` (by `.data idx`), `vec_pop`, `vec_insert` and `vec_remove` (their
+shift loops) and `vec_free`. It proves that each
 operation:
 
 * touches only cells inside a live block (`load` and `store` are
@@ -33,8 +34,7 @@ always gives a new id.
 What B1 leaves out, for the next steps: a borrowed view (`cap < 0`,
 `vec_borrow_raw`), the packed-string layout, element destructors (cells
 here are values that are moved by bit copy, as `mem_take` makes them),
-byte sizes and their overflow (`alloc_size`), and `vec_insert` /
-`vec_remove`'s shifts.
+and byte sizes and their overflow (`alloc_size`).
 -/
 
 namespace B
@@ -426,6 +426,232 @@ theorem free_ok {h : Heap α} {v : RVec} {es : List α} (hr : Rep h v es) :
       simp only [upd, ite_eq_right hbd]
     · intro d' hd'
       simp [free, hd, Heap.free, upd]
+
+/-! ### `vec_insert` and `vec_remove`: the shifts -/
+
+/-- `vec_insert`'s loop `~ > i idx { = . data i . data - i 1  = i - i 1 }`,
+    from `i`: each cell above `idx` takes the one below it. -/
+def shiftR (h : Heap α) (d idx : Nat) : Nat → Option (Heap α)
+  | 0 => some h
+  | k + 1 =>
+    if idx < k + 1 then
+      match h.load d k with
+      | none => none
+      | some y =>
+        match h.store d (k + 1) y with
+        | none => none
+        | some h1 => shiftR h1 d idx k
+    else some h
+
+theorem shiftR_ok {d idx : Nat} : ∀ (i : Nat) (h : Heap α), idx ≤ i → h.live d = true → i < h.size d →
+    (∀ k, idx ≤ k → k < i → (h.cell d k).isSome) →
+    ∃ h', shiftR h d idx i = some h' ∧ h'.live = h.live ∧ h'.size = h.size ∧ h'.nid = h.nid ∧
+      (∀ b, b ≠ d → h'.cell b = h.cell b) ∧
+      ∀ j, h'.cell d j = if idx < j ∧ j ≤ i then h.cell d (j - 1) else h.cell d j := by
+  intro i
+  induction i with
+  | zero =>
+    intro h hi _ _ _
+    refine ⟨h, rfl, rfl, rfl, rfl, fun _ _ => rfl, fun j => ?_⟩
+    rw [ite_eq_right (by omega)]
+  | succ k ih =>
+    intro h hi hl hs hc
+    by_cases hlt : idx < k + 1
+    · obtain ⟨y, hy⟩ := Option.isSome_iff_exists.mp (hc k (by omega) (by omega))
+      have hld : h.load d k = some y := by
+        simp only [Heap.load, hl, true_and]; rw [ite_eq_left (by omega)]; exact hy
+      have hin : h.live d = true ∧ k + 1 < h.size d := ⟨hl, hs⟩
+      have hst : h.store d (k + 1) y =
+          some { h with cell := upd h.cell d (upd (h.cell d) (k + 1) (some y)) } := by
+        simp only [Heap.store, hin, and_self, ↓reduceIte]
+      obtain ⟨h', he, hlv, hsz, hn, hoth, hcell⟩ :=
+        ih { h with cell := upd h.cell d (upd (h.cell d) (k + 1) (some y)) } (by omega) hl (by
+          show k < h.size d; omega) (by
+          intro k' h1 h2
+          show ((upd h.cell d (upd (h.cell d) (k + 1) (some y))) d k').isSome
+          simp only [upd, ↓reduceIte]; rw [ite_eq_right (by omega)]; exact hc k' h1 (by omega))
+      refine ⟨h', ?_, hlv, hsz, hn, ?_, ?_⟩
+      · simp only [shiftR, ite_eq_left hlt, hld, hst]; exact he
+      · intro b hb; rw [hoth b hb]; show (upd h.cell d _) b = h.cell b; simp only [upd, ite_eq_right hb]
+      · intro j
+        rw [hcell j]
+        simp only [upd, ↓reduceIte]
+        by_cases hj : idx < j ∧ j ≤ k
+        · rw [ite_eq_left hj, ite_eq_right (by omega), ite_eq_left (by omega)]
+        · rw [ite_eq_right hj]
+          by_cases hjk : j = k + 1
+          · subst hjk; rw [ite_eq_left rfl, ite_eq_left (by omega)]; simp [hy]
+          · rw [ite_eq_right hjk, ite_eq_right (by omega)]
+    · refine ⟨h, by simp only [shiftR, ite_eq_right hlt], rfl, rfl, rfl, fun _ _ => rfl, fun j => ?_⟩
+      rw [ite_eq_right (by omega)]
+
+/-- `vec_insert` at `idx ≤ len`: grow when full, shift `[idx, len)` up by
+    one from the tail, store at `idx`. Out of range: `false`, nothing done. -/
+def insert (h : Heap α) (v : RVec) (idx : Nat) (x : α) : Option (Bool × Heap α × RVec) :=
+  if idx > v.len then some (false, h, v) else
+  match (if v.cap < v.len + 1 then growTo h v (v.len + 1) else some (h, v)) with
+  | none => none
+  | some (h1, v1) =>
+    match v1.data with
+    | none => none
+    | some d =>
+      match shiftR h1 d idx v1.len with
+      | none => none
+      | some h2 => (h2.store d idx x).map fun h3 => (true, h3, { v1 with len := v1.len + 1 })
+
+theorem insert_ok {h : Heap α} {v : RVec} {es : List α} {idx : Nat} (x : α) (hw : h.WF)
+    (hr : Rep h v es) (hi : idx ≤ es.length) :
+    ∃ h' v', insert h v idx x = some (true, h', v') ∧
+      Rep h' v' (es.take idx ++ x :: es.drop idx) ∧ h'.WF := by
+  have hl : v.len = es.length := hr.1
+  have hg : ∃ h1 v1, (if v.cap < v.len + 1 then growTo h v (v.len + 1) else some (h, v)) = some (h1, v1) ∧
+      Rep h1 v1 es ∧ h1.WF ∧ v.len + 1 ≤ v1.cap ∧ v1.len = v.len := by
+    by_cases hf : v.cap < v.len + 1
+    · rw [ite_eq_left hf]
+      obtain ⟨h1, v1, he, hr1, hw1, hroom, hlen, _⟩ := growTo_ok (need := v.len + 1) hw hr
+      exact ⟨h1, v1, he, hr1, hw1, hroom, hlen⟩
+    · rw [ite_eq_right hf]; exact ⟨h, v, rfl, hr, hw, by omega, rfl⟩
+  obtain ⟨h1, v1, he, hr1, hw1, hroom, hlen⟩ := hg
+  have hl1 : v1.len = es.length := hr1.1
+  cases hd1 : v1.data with
+  | none => have := rep_none hr1 hd1; omega
+  | some d =>
+    obtain ⟨hld, hsz, hcell⟩ := rep_some hr1 hd1
+    obtain ⟨h2, hs2, hlv2, hsz2, hn2, hoth2, hcell2⟩ := shiftR_ok (idx := idx) (d := d) v1.len h1
+      (by omega) hld (by omega) (fun k _ hk => by rw [hcell k (by omega)]; rfl)
+    have hin : h2.live d = true ∧ idx < h2.size d := ⟨by rw [hlv2]; exact hld, by rw [hsz2]; omega⟩
+    refine ⟨{ h2 with cell := upd h2.cell d (upd (h2.cell d) idx (some x)) },
+      { v1 with len := v1.len + 1 }, ?_, ⟨?_, ?_, ?_⟩, ?_⟩
+    · unfold insert
+      rw [ite_eq_right (by omega), he]
+      simp only [hd1, hs2, Heap.store, hin, and_self, ↓reduceIte, Option.map_some]
+    · show v1.len + 1 = (es.take idx ++ x :: es.drop idx).length
+      simp; omega
+    · show v1.len + 1 ≤ v1.cap; omega
+    · simp only [hd1]
+      show h2.live d = true ∧ h2.size d = v1.cap ∧ ∀ j (hj : j < (es.take idx ++ x :: es.drop idx).length),
+        (upd h2.cell d (upd (h2.cell d) idx (some x))) d j = some (es.take idx ++ x :: es.drop idx)[j]
+      refine ⟨hin.1, by rw [hsz2]; exact hsz, fun j hj => ?_⟩
+      have hlen' : (es.take idx).length = idx := by simp; omega
+      simp only [upd, ↓reduceIte]
+      rw [hcell2 j]
+      by_cases hji : j = idx
+      · subst hji; rw [ite_eq_left rfl, List.getElem_append_right (by omega)]; simp [hlen']
+      · rw [ite_eq_right hji]
+        simp at hj
+        by_cases hlt : j < idx
+        · rw [ite_eq_right (by omega), hcell j (by omega), List.getElem_append_left (by omega)]
+          simp
+        · rw [ite_eq_left (by omega), hcell (j - 1) (by omega), List.getElem_append_right (by omega)]
+          have hjp : j - (es.take idx).length = (j - 1 - idx) + 1 := by rw [hlen']; omega
+          simp only [hjp, List.getElem_cons_succ, List.getElem_drop]
+          have hix : idx + (j - 1 - idx) = j - 1 := by omega
+          simp only [hix]
+    · intro b hb
+      show h2.live b = false
+      rw [hlv2]; exact hw1 b (by rw [← hn2]; exact hb)
+
+/-- `vec_remove`'s loop `~ < i - len 1 { = . data i . data + i 1  = i + i 1 }`,
+    `n` rounds from `i`: each cell takes the one above it. -/
+def shiftL (h : Heap α) (d : Nat) : Nat → Nat → Option (Heap α)
+  | _, 0 => some h
+  | i, n + 1 =>
+    match h.load d (i + 1) with
+    | none => none
+    | some y =>
+      match h.store d i y with
+      | none => none
+      | some h1 => shiftL h1 d (i + 1) n
+
+theorem shiftL_ok {d : Nat} : ∀ (n i : Nat) (h : Heap α), h.live d = true → i + n < h.size d →
+    (∀ k, i < k → k ≤ i + n → (h.cell d k).isSome) →
+    ∃ h', shiftL h d i n = some h' ∧ h'.live = h.live ∧ h'.size = h.size ∧ h'.nid = h.nid ∧
+      (∀ b, b ≠ d → h'.cell b = h.cell b) ∧
+      ∀ j, h'.cell d j = if i ≤ j ∧ j < i + n then h.cell d (j + 1) else h.cell d j := by
+  intro n
+  induction n with
+  | zero =>
+    intro i h _ _ _
+    refine ⟨h, rfl, rfl, rfl, rfl, fun _ _ => rfl, fun j => ?_⟩
+    rw [ite_eq_right (by omega)]
+  | succ n ih =>
+    intro i h hl hs hc
+    obtain ⟨y, hy⟩ := Option.isSome_iff_exists.mp (hc (i + 1) (by omega) (by omega))
+    have hld : h.load d (i + 1) = some y := by
+      simp only [Heap.load, hl, true_and]; rw [ite_eq_left (by omega)]; exact hy
+    have hin : h.live d = true ∧ i < h.size d := ⟨hl, by omega⟩
+    have hst : h.store d i y = some { h with cell := upd h.cell d (upd (h.cell d) i (some y)) } := by
+      simp only [Heap.store, hin, and_self, ↓reduceIte]
+    obtain ⟨h', he, hlv, hsz, hn, hoth, hcell⟩ :=
+      ih (i + 1) { h with cell := upd h.cell d (upd (h.cell d) i (some y)) } hl (by
+        show i + 1 + n < h.size d; omega) (by
+        intro k h1 h2
+        show ((upd h.cell d (upd (h.cell d) i (some y))) d k).isSome
+        simp only [upd, ↓reduceIte]; rw [ite_eq_right (by omega)]; exact hc k (by omega) (by omega))
+    refine ⟨h', ?_, hlv, hsz, hn, ?_, ?_⟩
+    · simp only [shiftL, hld, hst]; exact he
+    · intro b hb; rw [hoth b hb]; show (upd h.cell d _) b = h.cell b; simp only [upd, ite_eq_right hb]
+    · intro j
+      rw [hcell j]
+      simp only [upd, ↓reduceIte]
+      by_cases hj : i + 1 ≤ j ∧ j < i + 1 + n
+      · rw [ite_eq_left hj, ite_eq_right (by omega), ite_eq_left (by omega)]
+      · rw [ite_eq_right hj]
+        by_cases hji : j = i
+        · subst hji; rw [ite_eq_left rfl, ite_eq_left (by omega)]; simp [hy]
+        · rw [ite_eq_right hji, ite_eq_right (by omega)]
+
+/-- `vec_remove` at `idx < len`: load the element (it leaves the
+    container), shift `(idx, len)` down by one, length down by one. Out of
+    range: `none` handed back, nothing done. -/
+def remove (h : Heap α) (v : RVec) (idx : Nat) : Option (Option α × Heap α × RVec) :=
+  if idx ≥ v.len then some (none, h, v) else
+  match v.data with
+  | none => none
+  | some d =>
+    match h.load d idx with
+    | none => none
+    | some x =>
+      (shiftL h d idx (v.len - 1 - idx)).map fun h2 => (some x, h2, { v with len := v.len - 1 })
+
+theorem remove_ok {h : Heap α} {v : RVec} {es : List α} {idx : Nat} (hw : h.WF)
+    (hr : Rep h v es) (hi : idx < es.length) :
+    ∃ h' v', remove h v idx = some (some es[idx], h', v') ∧
+      Rep h' v' (es.take idx ++ es.drop (idx + 1)) ∧ h'.WF ∧ v'.data = v.data := by
+  have hl : v.len = es.length := hr.1
+  have hlc := hr.2.1
+  cases hd : v.data with
+  | none => have := rep_none hr hd; omega
+  | some d =>
+    obtain ⟨hld, hsz, hcell⟩ := rep_some hr hd
+    have hload : h.load d idx = some es[idx] := by
+      simp only [Heap.load, hld, true_and]; rw [ite_eq_left (by omega)]; exact hcell idx hi
+    obtain ⟨h2, hs2, hlv2, hsz2, hn2, _, hcell2⟩ := shiftL_ok (d := d) (v.len - 1 - idx) idx h
+      hld (by omega) (fun k _ hk => by rw [hcell k (by omega)]; rfl)
+    refine ⟨h2, { v with len := v.len - 1 }, ?_, ⟨?_, ?_, ?_⟩, ?_, hd⟩
+    · unfold remove
+      rw [ite_eq_right (by omega)]
+      simp only [hd, hload, hs2, Option.map_some]
+    · show v.len - 1 = (es.take idx ++ es.drop (idx + 1)).length
+      simp; omega
+    · show v.len - 1 ≤ v.cap; omega
+    · simp only [hd]
+      show h2.live d = true ∧ h2.size d = v.cap ∧ ∀ j (hj : j < (es.take idx ++ es.drop (idx + 1)).length),
+        h2.cell d j = some (es.take idx ++ es.drop (idx + 1))[j]
+      have hlen' : (es.take idx).length = idx := by simp; omega
+      refine ⟨by rw [hlv2]; exact hld, by rw [hsz2]; exact hsz, fun j hj => ?_⟩
+      rw [hcell2 j]
+      simp at hj
+      by_cases hlt : j < idx
+      · rw [ite_eq_right (by omega), hcell j (by omega), List.getElem_append_left (by omega)]
+        simp
+      · rw [ite_eq_left (by omega), hcell (j + 1) (by omega), List.getElem_append_right (by omega)]
+        simp only [List.getElem_drop, hlen']
+        have hix : idx + 1 + (j - idx) = j + 1 := by omega
+        simp only [hix]
+    · intro b hb
+      show h2.live b = false
+      rw [hlv2]; exact hw b (by rw [← hn2]; exact hb)
 
 /-! ### The link to A1
 

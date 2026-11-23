@@ -918,3 +918,5 @@ import B
 #print axioms B.set_ok
 #print axioms B.pop_ok
 #print axioms B.free_ok
+#print axioms B.insert_ok
+#print axioms B.remove_ok
