@@ -118,4 +118,144 @@ theorem panic_self {P : Prog} {ξ : Exits} {D : List Var} {Γ : Ctx} {F : List V
   .panic (ctxWF2B_sound hs h1) (nameWFB_sound hs h2) (fun _ => rfl)
     (fun _ E hE => ⟨E, hE, rfl, rfl, fun _ => rfl⟩) (DKeep.refl Γ []) (DStay.refl Γ []) id
 
+/-! ### A panic into a given context -/
+
+def fixedB (E : Entry) : Bool :=
+  match E.mode with
+  | .rootb => true
+  | .inout b => decide (b ≠ .replace) && !E.ty.holdsView
+  | _ => false
+
+theorem fixedB_sound {E : Entry} (h : fixedB E = false) : ¬ E.fixed := by
+  intro hf
+  rcases hf with hm | ⟨b, hm, hb, hv⟩
+  · simp [fixedB, hm] at h
+  · simp [fixedB, hm, hb, hv] at h
+
+def isFrame (m : Mode) : Bool :=
+  match m with
+  | .own => true
+  | .inout _ => true
+  | _ => false
+
+theorem isFrame_sound {m : Mode} (h : isFrame m = true) : m.frame := by
+  unfold isFrame at h; split at h
+  · exact Or.inl rfl
+  · rename_i b; exact Or.inr ⟨b, rfl⟩
+  · cases h
+
+/-- `FreshE`, decided. -/
+def freshEB (Γ : Ctx) (E : Entry) : Bool :=
+  !E.live || !(decide (E.ty ≠ .int)) || !(decide (E.mode = .bor)) || !E.fresh ||
+    (!E.path.isEmpty && E.path.all fun d =>
+      decide (d.kind = .self ∨ d.kind = .inner ∨ d.kind = .view) &&
+        (match Γ d.root with | some Er => isFrame Er.mode | none => false))
+
+theorem freshEB_sound {Γ : Ctx} {E : Entry} (h : freshEB Γ E = true) : FreshE Γ E := by
+  intro hl hty hm hf
+  simp only [freshEB, hl, hm, hf, Bool.not_true, Bool.false_or, Bool.or_eq_true, Bool.not_eq_true',
+    decide_eq_false_iff_not, Classical.not_not, decide_true, Bool.and_eq_true, List.isEmpty_eq_false_iff] at h
+  rcases h with h0 | ⟨hne, hall⟩
+  · simp at h0; exact absurd h0 hty
+  · refine ⟨hne, fun d hd => ?_⟩
+    have := List.all_eq_true.mp hall d hd
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at this
+    refine ⟨this.1, ?_⟩
+    have h2 := this.2
+    revert h2
+    cases hE : Γ d.root with
+    | none => intro h; cases h
+    | some Er => intro h; exact ⟨Er, rfl, isFrame_sound h⟩
+
+def freshOKB (D : List Var) (Γ : Ctx) : Bool :=
+  D.all fun v => match Γ v with
+    | some E => freshEB Γ E
+    | none => true
+
+theorem freshOKB_sound {D : List Var} {Γ : Ctx} (hs : Supported2 Γ D) (h : freshOKB D Γ = true) : FreshOK Γ := by
+  intro v E hE
+  have := List.all_eq_true.mp h v (mem_of_some2 hs hE)
+  rw [hE] at this
+  exact freshEB_sound this
+
+/-- The premises of `panic` (and of `loop`'s end) into `Δ`, decided. -/
+def panicToB (D : List Var) (Γ Δ : Ctx) : Bool :=
+  ctxWF2B D Δ && nameWFB D Δ && freshOKB D Δ &&
+  D.all fun v =>
+    (Γ v).isSome == (Δ v).isSome &&
+    (match Δ v, Γ v with
+     | some E, some E0 => decide (E.mode = E0.mode) && decide (E.ty = E0.ty) && (!fixedB E0 || decide (E = E0)) &&
+        (!E.dbind || !E.mode.ownSlot || !(decide (E.ty ≠ .int ∨ E.mode = .rootb)) ||
+          (E0.dbind && E0.mode.ownSlot && decide (E0.ty ≠ .int ∨ E0.mode = .rootb) &&
+            E.vdeps.all fun d => d.kind.isName || decide (d ∈ E0.vdeps)))
+     | none, _ => true
+     | some _, none => false) &&
+    (match Γ v with
+     | some E0 => !E0.dbind || !E0.mode.ownSlot ||
+        (match Δ v with | some E' => E'.dbind && E'.mode.ownSlot | none => false)
+     | none => true)
+
+theorem panicToB_sound {P : Prog} {ξ : Exits} {D : List Var} {Γ Δ : Ctx} {F : List Var}
+    (hs : Supported2 Γ D) (hsΔ : Supported2 Δ D) (h : panicToB D Γ Δ = true) : StmtT P ξ Γ F .panic Δ := by
+  simp only [panicToB, Bool.and_eq_true] at h
+  obtain ⟨⟨⟨hwf, hnw⟩, hfr⟩, hall⟩ := h
+  have get : ∀ v, v ∈ D → _ := fun v hv => List.all_eq_true.mp hall v hv
+  refine .panic (ctxWF2B_sound hsΔ hwf) (nameWFB_sound hsΔ hnw) (fun v => ?_) (fun v E hE => ?_)
+    (fun v E' hE' hd ho hk _ => ?_) (fun v E hE hd ho _ => ?_) (fun _ => freshOKB_sound hsΔ hfr)
+  · by_cases hv : v ∈ D
+    · have := get v hv
+      simp only [Bool.and_eq_true, beq_iff_eq] at this
+      exact this.1.1
+    · rw [hs v hv, hsΔ v hv]
+  · have hv := mem_of_some2 hsΔ hE
+    have := (get v hv)
+    simp only [Bool.and_eq_true] at this
+    have h2 := this.1.2
+    rw [hE] at h2
+    revert h2
+    cases hE0 : Γ v with
+    | none => intro h; cases h
+    | some E0 =>
+      intro h2
+      simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true, Bool.not_eq_true'] at h2
+      obtain ⟨⟨⟨hm, ht⟩, hfx⟩, _⟩ := h2
+      refine ⟨E0, rfl, hm, ht, fun hf => ?_⟩
+      rcases hfx with h0 | h0
+      · exact absurd hf (fixedB_sound h0)
+      · exact h0
+  · have hv := mem_of_some2 hsΔ hE'
+    have := (get v hv)
+    simp only [Bool.and_eq_true] at this
+    have h2 := this.1.2
+    rw [hE'] at h2
+    revert h2
+    cases hE0 : Γ v with
+    | none => intro h; cases h
+    | some E0 =>
+      intro h2
+      simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true, Bool.not_eq_true',
+        decide_eq_false_iff_not] at h2
+      obtain ⟨_, hk2⟩ := h2
+      rcases hk2 with ((h0 | h0) | h0) | ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩
+      · rw [hd] at h0; cases h0
+      · rw [ho] at h0; cases h0
+      · exact absurd hk h0
+      · refine ⟨E0, rfl, h1, h2, h3, fun d hdd hn => ?_⟩
+        have := List.all_eq_true.mp h4 d hdd
+        simp only [hn, Bool.false_or, decide_eq_true_eq] at this
+        exact this
+  · have hv := mem_of_some2 hs hE
+    have := (get v hv)
+    simp only [Bool.and_eq_true] at this
+    have h3 := this.2
+    rw [hE] at h3
+    simp only [hd, ho, Bool.not_true, Bool.false_or] at h3
+    revert h3
+    cases hE' : Δ v with
+    | none => intro h; cases h
+    | some E' =>
+      intro h3
+      simp only [Bool.and_eq_true] at h3
+      exact ⟨E', rfl, h3.1, h3.2⟩
+
 end C

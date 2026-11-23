@@ -190,6 +190,13 @@ theorem dtorHeadB_sound {P : Prog} {f : Nat} {x : Var} {s : Stmt} (h : dtorHeadB
   simp only [ho, hd, Bool.and_self, Bool.not_true, Bool.false_or, Bool.and_eq_true, decide_eq_true_eq] at h
   exact h
 
+def isPanic : Stmt → Bool
+  | .panic => true
+  | _ => false
+
+theorem isPanic_eq {s : Stmt} (h : isPanic s = true) : s = .panic := by
+  cases s <;> simp_all [isPanic]
+
 /-- `TakeOK`, asked strictly: a payload taken out of an enum of a
     destructor type is refused (its glue's check is the next step). -/
 def takeOKB (Γ : Ctx) (r : Rhs) : Bool :=
@@ -251,7 +258,11 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
   | Γ, F, .ite c a b =>
     if a.src ∧ b.src ∧ checkExpr2 Γ c then
       match checkStmt2 P R C D Γ F a, checkStmt2 P R C D Γ F b with
-      | some Δa, some Δb => if D.all (fun v => Δa v == Δb v) then some Δa else none
+      | some Δa, some Δb =>
+        if D.all (fun v => Δa v == Δb v) then some Δa
+        else if isPanic a && panicToB D Γ Δb then some Δb
+        else if isPanic b && panicToB D Γ Δa then some Δa
+        else none
       | _, _ => none
     else none
   | Γ, F, .while c s =>
@@ -389,15 +400,29 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
       obtain ⟨ha, hb, hce⟩ := hc
       split at h
       · rename_i Δa Δb hca hcb
+        obtain ⟨ta, sa⟩ := iha (ξ := ξ) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hca
+        obtain ⟨tb, sb⟩ := ihb (ξ := ξ) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hcb
         split at h
         · rename_i hag
           simp only [Option.some.injEq] at h; subst h
-          obtain ⟨ta, sa⟩ := iha (ξ := ξ) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hca
-          obtain ⟨tb, sb⟩ := ihb (ξ := ξ) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hcb
           have heq := eq_of_agree2 sa sb hag
           subst heq
           exact ⟨.ite ha hb (checkExpr2_sound hce) ta tb, sa⟩
-        · cases h
+        · split at h
+          · rename_i hp
+            simp only [Bool.and_eq_true] at hp
+            simp only [Option.some.injEq] at h; subst h
+            have hap := isPanic_eq hp.1
+            subst hap
+            exact ⟨.ite ha hb (checkExpr2_sound hce) (panicToB_sound hs sb hp.2) tb, sb⟩
+          · split at h
+            · rename_i _ hp
+              simp only [Bool.and_eq_true] at hp
+              simp only [Option.some.injEq] at h; subst h
+              have hbp := isPanic_eq hp.1
+              subst hbp
+              exact ⟨.ite ha hb (checkExpr2_sound hce) ta (panicToB_sound hs sa hp.2), sa⟩
+            · cases h
       · cases h
     · cases h
   | «while» c s ih =>

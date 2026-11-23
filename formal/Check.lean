@@ -1021,3 +1021,5 @@ import C
 #print axioms C.ctxWF2B_sound
 #print axioms C.nameWFB_sound
 #print axioms C.panic_self
+#print axioms C.freshOKB_sound
+#print axioms C.panicToB_sound
