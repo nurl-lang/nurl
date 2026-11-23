@@ -65,6 +65,37 @@ def struct_fields(t):
 
 _EXPANDING = set()
 DTOR_TYS = set()
+# The program's functions by name → index (A2's `Prog`), for a destructor
+# type's `f` (set by `emit` before any function is translated).
+NAMES = {}
+
+
+def dtor_of(t):
+    """A type with a `% Drop` of the program's own, `%T` with `drop__T`: its
+    destructor's index and its struct as A2's `Ty.dtor f u`. A struct of one
+    field is padded with an integer (`prod u int`): A2's destructor types
+    are of a struct (`Ty.isStruct`), and the padding is read by no one."""
+    f = NAMES.get("drop__" + t.lstrip("%"))
+    fs = struct_fields(t)
+    if f is None or fs is None or not fs:
+        raise Unsupported(f"type {t}, with a destructor A2's translation does not see")
+    for _, ft in fs:
+        if (ft if ft.startswith("%") else "%" + ft) in DTOR_TYS:
+            raise Unsupported(f"type {t}, holding a value of a destructor type ({ft})")
+    _EXPANDING.add(t)
+    try:
+        u = (f"(.prod {dtor_field_ty(fs[0][1])} .int)" if len(fs) == 1
+             else _struct_ty(fs, dtor_field_ty))
+    finally:
+        _EXPANDING.discard(t)
+    return f, u
+
+
+def dtor_field_ty(ft):
+    """A destructor struct's field type: a raw string held in a value is a
+    view of the text it was made from (MEMORY.md §2.13), a slice: the
+    destructor's reads of it are reads of that text."""
+    return "(.slice .int)" if ft == "i8*" else lean_ty(ft)
 
 
 def lean_ty(t):
@@ -100,10 +131,13 @@ def lean_ty(t):
     if t.startswith("%Slice__"):
         return f"(.slice {lean_ty(t[len('%Slice__'):])})"
     if t in DTOR_TYS:
-        # A2's destructor types (`Ty.dtor f u`, letd / scopeD) are not
-        # translated yet: leaving the destructor out would leave out the reads
-        # it makes where each value ends
-        raise Unsupported(f"type {t}, with a destructor of the program's own")
+        # A2's destructor type (`Ty.dtor f u`): its values are bound by `letd`,
+        # whose scope's end runs `f` on them (formal/A2, A2-drop); leaving the
+        # destructor out would leave out the reads it makes where a value ends
+        if t in _EXPANDING:
+            raise Unsupported(f"type {t}, recursive")
+        f, u = dtor_of(t)
+        return f"(.dtor {f} {u})"
     fs = struct_fields(t)
     if fs is not None and t in _EXPANDING:
         raise Unsupported(f"type {t}, recursive")
@@ -135,16 +169,19 @@ def chan_elem(t):
     raise Unsupported(f"a channel of {t}")
 
 
-def _struct_ty(fs):
+def _struct_ty(fs, fty=None):
     """A struct: its fields nested in pairs to the right (formal/A2's `prod`)."""
+    fty_given = fty is not None
+    fty = fty or lean_ty
     for _, ft in fs:
-        if ft == "i8*":
+        if ft == "i8*" and not fty_given:
             # a raw string in a value is a view (MEMORY.md §2.13), which a
-            # field's translation as owned text would not be
+            # field's translation as owned text would not be (a destructor
+            # struct's translates it as a view: dtor_field_ty)
             raise Unsupported("a raw string held in a struct field")
-    acc = lean_ty(fs[-1][1])
+    acc = fty(fs[-1][1])
     for _, ft in reversed(fs[:-1]):
-        acc = f"(.prod {lean_ty(ft)} {acc})"
+        acc = f"(.prod {fty(ft)} {acc})"
     return acc
 
 
@@ -217,6 +254,13 @@ class Fn:
             lean_ty(ty)
         self.lits = []
         self.depth = 0   # the loops' blocks around the statement
+        for i in range(self.np):
+            if self.is_dtor(fn["vars"].get(i, "")) and fn["flags"].get(i, 0) & 6:
+                # a `sink` / `inout` destructor parameter: moved to a `letd`
+                # first thing, or never assigned (dtorParamsB), not yet
+                raise Unsupported(f"{fn['name']}: a destructor value as a sink or inout parameter")
+        if self.is_dtor(fn["ret"]):
+            raise Unsupported(f"{fn['name']}: a destructor value handed back")
         self.res_ty = lean_ty(fn["ret"])
         self.res_own = self.res_ty != ".int"
         self.views = self.view_vars()
@@ -245,6 +289,10 @@ class Fn:
             for k, kind in view_deps(fn["name"]):
                 if k < self.np:
                     self.lends.append(f"({k}, {kind})")
+
+    @staticmethod
+    def is_dtor(t):
+        return t in DTOR_TYS or ("%" + t) in DTOR_TYS
 
     def view_vars(self):
         """The raw-string variables that hold a view, not their own text:
@@ -331,12 +379,15 @@ class Fn:
         if "/" in field:
             raise Unsupported(f"{self.fn['name']}: nested field {op}")
         b = int(base[1:])
-        fs = struct_fields(self.fn["vars"][b])
-        if fs is not None and len(fs) == 1:
+        bt = self.fn["vars"][b]
+        fs = struct_fields(bt)
+        # (a destructor struct of one field is padded, `prod u int`: dtor_of)
+        padded = fs is not None and len(fs) == 1 and self.is_dtor(bt)
+        if fs is not None and len(fs) == 1 and not padded:
             return self.var(b)   # a struct of one field is its field
-        if fs is None or len(fs) < 2:
+        if fs is None or (len(fs) < 2 and not padded):
             raise Unsupported(f"{self.fn['name']}: field of {self.fn['vars'][b]}")
-        names = [f for f, _ in fs]
+        names = [f for f, _ in fs] + (["(padding)"] if padded else [])
         i, n = names.index(field), len(names)
         cur = self.var(b)
         for _ in range(i):
@@ -366,6 +417,14 @@ class Fn:
                 raise Unsupported(f"{self.fn['name']}: the field path {op}")
             t = dict(fs)[f]
         return t
+
+    def flean(self, op):
+        """A field's A2 type: a destructor struct's raw string field is a view
+        (dtor_field_ty)."""
+        base = self.fn["vars"].get(int(op.split("/")[0][1:]), "")
+        if self.is_dtor(base):
+            return dtor_field_ty(self.vty(op))
+        return lean_ty(self.vty(op))
 
     def is_int(self, op):
         return op == "c" or self.vty(op) in INT_TYS
@@ -434,6 +493,12 @@ class Fn:
                     return f".new {ty[len('(.vec '):-1]}"
                 return f".var {self.var(y)}"
             return f".expr {self.operand(op)}"
+        if (k == "agg" and words[1] == "-" and dest is not None and int(words[2]) == 1
+                and self.is_dtor(self.fn["vars"][dest])):
+            # a destructor struct of one field: its field and the padding
+            op = words[3]
+            v = str(self.lit_temp()) if op == "c" else str(self.pvar(op))
+            return f".pair {v} {self.lit_temp()}"
         if k == "agg" and words[1] == "-" and dest is not None and int(words[2]) == 1:
             # a struct of one field is its field's value
             op = words[3]
@@ -485,7 +550,7 @@ class Fn:
             if ops[0] == "c":
                 return rest
             y = rd(ops[0])
-            ty = self.vlean(int(ops[0][1:])) if "/" not in ops[0] else lean_ty(self.vty(ops[0]))
+            ty = self.vlean(int(ops[0][1:])) if "/" not in ops[0] else self.flean(ops[0])
             e = f"(.slen {y})" if ty.startswith("(.slice") else f"(.len {y})" if ty.startswith("(.vec") else f"(.var {y})"
             t = self.fresh()
             return f"(.letv {t} (.expr {e}) {rest})"
@@ -613,7 +678,7 @@ class Fn:
             st = f"(.letv {b} (.borrow {rd(ops[0])}) (.edit true {b} (.push {c})))"
             if ops[1] != "c":
                 y = rd(ops[1])
-                ty = self.vlean(int(ops[1][1:])) if "/" not in ops[1] else lean_ty(self.vty(ops[1]))
+                ty = self.vlean(int(ops[1][1:])) if "/" not in ops[1] else self.flean(ops[1])
                 e = f"(.slen {y})" if ty.startswith("(.slice") else f"(.len {y})" if ty.startswith("(.vec") else None
                 if e is None:
                     raise Unsupported(f"{self.fn['name']}: string_push_str of a {ty}")
@@ -787,7 +852,7 @@ class Fn:
         if w == "let" and head[2] != "call":
             # `let x r` whose value is returned at once: the result takes `r`
             nxt = [l for l in lines[1:] if l.split()[0] not in ("line", "drop")]
-            if nxt and nxt[0].split() == ["ret", f"v{head[1]}"]:
+            if nxt and nxt[0].split() == ["ret", f"v{head[1]}"] and not self.is_dtor(self.fn["vars"].get(int(head[1]), "")):
                 k = lines.index(nxt[0])
                 pre = []
                 r = self.rhs(head[2:], int(head[1]), pre)
@@ -796,13 +861,26 @@ class Fn:
         if w == "let":
             x = self.var(int(head[1]))
             rest = self.stmts(lines[1:], names, tail)
+            d = self.is_dtor(self.fn["vars"].get(int(head[1]), ""))
             if head[2] == "call":
+                if d:
+                    # a call's owned destructor value goes to its `letd` first
+                    # thing in A2 (A2-drop.3a), not translated yet
+                    raise Unsupported(f"{self.fn['name']}: a destructor value a call hands back")
                 got = self.intrinsic(head[2:], rest, x)
                 if got is not None:
                     return got
                 return self.call(head[2:], names, rest, x)
             pre = []
-            s = f"(.letv {x} ({self.rhs(head[2:], int(head[1]), pre)}) {rest})"
+            r = self.rhs(head[2:], int(head[1]), pre)
+            if d:
+                # a value of a destructor type: a `letd` binding, whose scope's
+                # end runs the destructor on it (the IR's `drop` lines are that
+                # end); a literal, or a value of the type moved in
+                f, _ = dtor_of(self.fn["vars"][int(head[1])])
+                s = f"(.letd {x} {f} ({r}) {rest})"
+            else:
+                s = f"(.letv {x} ({r}) {rest})"
             return self.wrap(pre, s)
         if w == "eval":
             rest = self.stmts(lines[1:], names, tail)
@@ -818,6 +896,9 @@ class Fn:
             if self.fn["vars"].get(int(head[1][1:])) == "void":
                 # a join's value that no one takes (a `void` holder): nothing moves
                 return self.stmts(lines[1:], names, tail)
+            if self.is_dtor(self.fn["vars"].get(int(head[1][1:]), "")):
+                # a destructor binding is given no other value (A2's `letd`)
+                raise Unsupported(f"{self.fn['name']}: a destructor binding assigned")
             pre = []
             r = self.rhs(head[2:], int(head[1][1:]), pre, assign=True)
             return self.seq(self.wrap(pre, f"(.assign {self.pvar(head[1])} ({r}))"),
@@ -861,6 +942,8 @@ def emit(text):
     # not bodies to check: their code is phase B's.
     fns = [f for f in parse(text) if "stdlib/" not in f["file"]]
     names = {f["name"]: i for i, f in enumerate(fns)}
+    NAMES.clear()
+    NAMES.update(names)
     if "main" not in names:
         raise Unsupported("no main")
     out = ["import C.A3Prog", "open A2 C", ""]
