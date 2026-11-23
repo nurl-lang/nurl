@@ -1,24 +1,11 @@
 import A2.TakeB
-import A2.CapsStore
+import A2.CapsEval
 
 /-! A2 — preservation: a step of a well-typed configuration leads to a
 well-typed configuration. -/
 
 namespace A2
 
-/-- AGORA-937 B2 (AGORA-963): a value that holds no names holds no package
-    that captures anything. -/
-theorem valCapsInp_of_names {V : Val} (h : V.names = []) (w : Var) : ValCapsInp V w :=
-  fun fs te ms e cs hs q hq _ => by
-    have := names_sub hs q (by simp [Val.names, hq])
-    rw [h] at this; cases this
-
-/-- ... so every block's payload is clean: it is of a type holding no views
-    (`MInv.blocks`), so holds no names. -/
-theorem MInv.blkCapsInp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) (w : Var) :
-    ∀ k bl V, m.blk k = some bl → bl.pay = some V → ValCapsInp V w := fun k bl V hk hp => by
-  obtain ⟨_, hhv, hpay, _⟩ := hi.blocks k bl hk
-  exact valCapsInp_of_names ((hpay V hp).1.names_nil hhv) w
 
 /-- How the context after a step relates to the one before: bindings outside
     the run-time scopes stay, with their mode and type, and a borrowed
