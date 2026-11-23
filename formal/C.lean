@@ -1,8 +1,11 @@
 import C.Check
 import C.Join
+import C.Call
 import C.Sub
+import C.Prog
 
-/-! Phase C: nurlc's implementation of the rules, checked. C0: an executable
-checker for A1's straight-line fragment, proven sound (`C/Check.lean`). C1:
-`ite` and `while` over finite contexts (`C/Join.lean`). C2: subsumption by
-certificate (`C/Sub.lean`). -/
+/-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
+C0 the straight-line checker (`C/Check.lean`), C1 `ite` / `while` over
+finite contexts (`C/Join.lean`), C2 subsumption by certificate
+(`C/Sub.lean`), C3 calls (`C/Call.lean`), C4 whole programs
+(`C/Prog.lean`, `C.checked_program_safe`). -/

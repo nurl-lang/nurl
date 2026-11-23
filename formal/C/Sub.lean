@@ -1,4 +1,4 @@
-import C.Join
+import C.Call
 
 /-!
 # C2: subsumption by certificate (AGORA-970)
@@ -110,6 +110,7 @@ inductive Cert where
   | sub (Γ0 : CtxL) (c : Cert) (Δ : CtxL)
   | seq (a b : Cert)
   | letv (c : Cert)
+  | letcall (c : Cert)
   | ite (a b : Cert)
   | while (c : Cert)
   | frozen (c : Cert)
@@ -117,41 +118,47 @@ inductive Cert where
 def keysIn (D : List Var) (L : CtxL) : Bool := L.all (fun p => decide (p.1 ∈ D))
 
 /-- The checker with certificates. -/
-def checkC (D : List Var) : Cert → Ctx → List Var → Stmt → Option Ctx
+def checkC (P : Prog) (D : List Var) : Cert → Ctx → List Var → Stmt → Option Ctx
   | .plain, Γ, F, s => checkS D Γ F s
   | .sub L0 c L, Γ, F, s =>
     if keysIn D L0 && keysIn D L && weakerB D Γ L0.toCtx then
-      match checkC D c L0.toCtx F s with
+      match checkC P D c L0.toCtx F s with
       | some Δ0 => if D.all (fun v => Δ0 v == L.toCtx v) || weakerB D Δ0 L.toCtx then some L.toCtx else none
       | none => none
     else none
   | .seq ca cb, Γ, F, .seq a b =>
-    if b.src then (match checkC D ca Γ F a with
-      | some Γ1 => checkC D cb Γ1 F b
+    if b.src then (match checkC P D ca Γ F a with
+      | some Γ1 => checkC P D cb Γ1 F b
       | none => none) else none
   | .letv c, Γ, F, .letv x r s =>
     if s.src ∧ Γ x = none ∧ x ∉ F then
       match inferRhs Γ F r with
-      | some (E, Γ1) => (checkC D c (setE Γ1 x E) F s).map (exitScope x)
+      | some (E, Γ1) => (checkC P D c (setE Γ1 x E) F s).map (exitScope x)
+      | none => none
+    else none
+  | .letcall c, Γ, F, .letcall x f args s =>
+    if s.src ∧ Γ x = none ∧ x ∉ F then
+      match callB P Γ F f args with
+      | some (E, Γ1) => (checkC P D c (setE Γ1 x E) F s).map (exitScope x)
       | none => none
     else none
   | .ite ca cb, Γ, F, .ite c a b =>
     if a.src ∧ b.src ∧ checkExpr Γ c then
-      match checkC D ca Γ F a, checkC D cb Γ F b with
+      match checkC P D ca Γ F a, checkC P D cb Γ F b with
       | some Δa, some Δb => if D.all (fun v => Δa v == Δb v) then some Δa else none
       | _, _ => none
     else none
   | .while cs, Γ, F, .while c s =>
     if s.src ∧ checkExpr Γ c then
-      match checkC D cs Γ F s with
+      match checkC P D cs Γ F s with
       | some Δ => if D.all (fun v => Δ v == Γ v) then some Γ else none
       | none => none
     else none
-  | .frozen c, Γ, F, .frozen z s => checkC D c Γ (F ++ z) s
+  | .frozen c, Γ, F, .frozen z s => checkC P D c Γ (F ++ z) s
   | _, _, _, _ => none
 
 theorem checkC_sound {P : Prog} {D : List Var} : ∀ (c : Cert) {s : Stmt} {Γ : Ctx} {F : List Var} {Δ : Ctx},
-    Supported Γ D → (∀ v ∈ s.vars, v ∈ D) → checkC D c Γ F s = some Δ → StmtT P Γ F s Δ ∧ Supported Δ D := by
+    Supported Γ D → (∀ v ∈ s.vars, v ∈ D) → checkC P D c Γ F s = some Δ → StmtT P Γ F s Δ ∧ Supported Δ D := by
   intro c
   induction c with
   | plain => intro s Γ F Δ hs hD h; exact checkS_sound hs hD h
@@ -211,6 +218,27 @@ theorem checkC_sound {P : Prog} {D : List Var} : ∀ (c : Cert) {s : Stmt} {Γ :
         · cases h
       · cases h
     | _ => simp [checkC] at h
+  | letcall c ih =>
+    intro s Γ F Δ hs hD h
+    cases s with
+    | letcall x f args s =>
+      simp only [checkC] at h
+      split at h
+      · rename_i hc
+        obtain ⟨hsrc, hx, hF⟩ := hc
+        split at h
+        · rename_i E Γ1 hcall
+          obtain ⟨Δ0, h0, rfl⟩ := Option.map_eq_some_iff.mp h
+          have hct := callB_sound hcall
+          have ⟨fn, _, _, _, _, hpost⟩ := hct
+          have hs1 : Supported Γ1 D := by
+            rw [hpost]; exact callPost_supported hs (fun a ha => hD a (by simp [Stmt.vars, ha]))
+          obtain ⟨t0, s0⟩ := ih (supported_setE hs1 (hD x (by simp [Stmt.vars])) E)
+            (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+          exact ⟨.letcall hsrc hx hF hct t0, supported_exitScope s0 x⟩
+        · cases h
+      · cases h
+    | _ => simp [checkC] at h
   | ite ca cb iha ihb =>
     intro s Γ F Δ hs hD h
     cases s with
@@ -266,7 +294,7 @@ theorem checkC_sound {P : Prog} {D : List Var} : ∀ (c : Cert) {s : Stmt} {Γ :
 /-- A program the certificate checker accepts, run from the empty store,
     never gets stuck. -/
 theorem checkedC_memory_safe {P : Prog} (hP : ProgOK P) {s : Stmt} {c : Cert} {Δ : Ctx}
-    (hc : checkC s.vars c (fun _ => none) [] s = some Δ) (hs : s.src = true) {nv : Nat}
+    (hc : checkC P s.vars c (fun _ => none) [] s = some Δ) (hs : s.src = true) {nv : Nat}
     (hv : ∀ v ∈ s.vars, v < nv) {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem nv) s (.ok m' s')) :
     ¬ Stuck P m' s' :=
   memory_safe hP (checkC_sound (P := P) c (fun _ _ => rfl) (fun _ h => h) hc).1 hs hv hr

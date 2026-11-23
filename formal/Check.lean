@@ -997,3 +997,8 @@ import C
 #print axioms C.weakerB_sound
 #print axioms C.checkC_sound
 #print axioms C.checkedC_memory_safe
+-- Phase C3–C4: calls decided; whole A1 programs checked end to end
+#print axioms C.callB_sound
+#print axioms C.fnOKB_sound
+#print axioms C.progOKB_sound
+#print axioms C.checked_program_safe
