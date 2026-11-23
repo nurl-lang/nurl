@@ -173,7 +173,7 @@ theorem resDTyOf_sound {τ : Ty} {g : Nat} {t : Ty} (h : resDTyOf τ = some (g, 
     is moved first and never assigned; an `inout` one holding one is never
     assigned; an owned result holding one is assigned at most once and is
     of a destructor type (or a `Vec` nest of one) whose struct holds no
-    views and no closure, with its destructor checked by its signature.
+    views and no closure, with its destructor or glue checked (`dropFnOKB`).
     (An enum's or a closure's glue taking its `sink` parameter is not
     decided yet.) -/
 def dtorParamsB (P : Prog) (fn : Fn) : Bool :=
@@ -184,7 +184,7 @@ def dtorParamsB (P : Prog) (fn : Fn) : Bool :=
   (!fn.resOwn || !fn.resTy.holdsDtor ||
     (decide (fn.body.asgMax fn.params.length ≤ 1) &&
       match resDTyOf fn.resTy with
-      | some (g, t) => !t.holdsView && !t.hasFn && !t.holdsDtor && dtorOKB P g (.dtor g t)
+      | some (g, t) => !t.holdsView && !t.hasFn && dropFnOKB P g t
       | none => false))
 
 theorem dtorParamsB_sound {P : Prog} {fn : Fn} (h : dtorParamsB P fn = true) : DtorParamsOK P fn := by
@@ -211,8 +211,8 @@ theorem dtorParamsB_sound {P : Prog} {fn : Fn} (h : dtorParamsB P fn = true) : D
       split at hm
       · rename_i g t ht
         simp only [Bool.and_eq_true, Bool.not_eq_true'] at hm
-        obtain ⟨⟨⟨hv, hf⟩, hhd⟩, hdt⟩ := hm
-        exact ⟨ha, g, t, resDTyOf_sound ht, hv, hf, Or.inl ⟨dtorOKB_sound hdt, hhd⟩⟩
+        obtain ⟨⟨hv, hf⟩, hdf⟩ := hm
+        exact ⟨ha, g, t, resDTyOf_sound ht, hv, hf, dropFnOKB_sound hdf⟩
       · cases hm
 
 /-- `Implements`, decided for code that changes no elements through a borrow
