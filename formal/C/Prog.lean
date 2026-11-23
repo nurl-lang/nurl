@@ -5,8 +5,9 @@ import C.Sub
 
 `ProgOK` asks each function to be `FnOK`: its body types from the callee's
 own view of its parameters (`sigCtx`) and ends as its summary says. `fnOKB`
-decides that, given the body's certificate. The domain is the function's
-variables, `List.range fn.nvars`. `progOKB` checks every function. A
+decides that, given the body's certificate. The domain is the variables
+the function uses, its parameters, result slot and body's (`fnDomA`).
+`progOKB` checks every function. A
 program it accepts, with an entry statement `checkC` accepts, never gets
 stuck (`checked_program_safe`). That is the end-to-end statement of
 phase C for A1: run the checker on the certificate, and A1's soundness
@@ -49,6 +50,12 @@ def endOKB (fn : Fn) (Δ : Ctx) : Bool :=
         | none => false)
     | _ => true
 
+/-- The variables a function's check ranges over: its parameters, its
+    result slot and the variables its body names (github#2242's review: not
+    every slot up to `nvars`). -/
+def fnDomA (fn : Fn) : List Var :=
+  (List.range fn.nvars).filter fun v => decide (v ≤ fn.params.length) || decide (v ∈ fn.body.vars)
+
 /-- `FnOK`, decided, with the body's certificate. -/
 def fnOKB (P : Prog) (fn : Fn) (c : Cert) : Bool :=
   fn.body.src && decide (fn.params.length < fn.nvars) && fn.body.vars.all (fun v => decide (v < fn.nvars)) &&
@@ -56,16 +63,18 @@ def fnOKB (P : Prog) (fn : Fn) (c : Cert) : Bool :=
   fn.params.all (fun pt => pt.2.ok && (decide (pt.1 = .inp) || isVecB pt.2)) &&
   fn.lends.all (fun jk => lendableB fn jk.1) && fn.rholds.all (fun jk => lendableB fn jk.1) &&
   fn.outHolds.all (fun o => lendableB fn o.2.1) &&
-  (match checkC P (List.range fn.nvars) c (sigCtx fn) [] fn.body with
+  (match checkC P (fnDomA fn) c (sigCtx fn) [] fn.body with
    | some Δ => endOKB fn Δ
    | none => false)
 
 theorem sigCtx_supported {fn : Fn} (h : fn.params.length < fn.nvars) :
-    Supported (sigCtx fn) (List.range fn.nvars) := by
+    Supported (sigCtx fn) (fnDomA fn) := by
   intro v hv
-  have hv' : fn.nvars ≤ v := by simpa using hv
-  have h1 : ¬ v < fn.params.length := fun hlt => Nat.lt_irrefl _ (Nat.lt_of_lt_of_le (Nat.lt_trans hlt h) hv')
-  have h2 : ¬ v = fn.params.length := fun e => Nat.lt_irrefl _ (Nat.lt_of_lt_of_le (e ▸ h) hv')
+  have hv' : ¬ (v < fn.nvars ∧ (v ≤ fn.params.length ∨ v ∈ fn.body.vars)) := by
+    simpa [fnDomA, List.mem_filter, decide_eq_true_eq] using hv
+  have h1 : ¬ v < fn.params.length := fun hlt =>
+    hv' ⟨Nat.lt_trans hlt h, Or.inl (Nat.le_of_lt hlt)⟩
+  have h2 : ¬ v = fn.params.length := fun e => hv' ⟨e ▸ h, Or.inl (Nat.le_of_eq e)⟩
   simp [sigCtx, h1, h2]
 
 theorem fnOKB_sound {P : Prog} {fn : Fn} {c : Cert} (h : fnOKB P fn c = true) : FnOK P fn := by
@@ -86,8 +95,9 @@ theorem fnOKB_sound {P : Prog} {fn : Fn} {c : Cert} (h : fnOKB P fn c = true) : 
     · exact isVecB_sound h0
   · split at hchk
     · rename_i Δ hΔ
-      have hD : ∀ v ∈ fn.body.vars, v ∈ List.range fn.nvars := fun v hv =>
-        List.mem_range.mpr (of_decide_eq_true (List.all_eq_true.mp hvars v hv))
+      have hD : ∀ v ∈ fn.body.vars, v ∈ fnDomA fn := fun v hv => by
+        simp only [fnDomA, List.mem_filter, List.mem_range, Bool.or_eq_true, decide_eq_true_eq]
+        exact ⟨of_decide_eq_true (List.all_eq_true.mp hvars v hv), Or.inr hv⟩
       obtain ⟨ht, _⟩ := checkC_sound (P := P) c (sigCtx_supported hlen) hD hΔ
       refine ⟨Δ, ht, ?_, ?_⟩
       · simp only [endOKB, Bool.and_eq_true] at hchk
