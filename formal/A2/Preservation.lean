@@ -1189,7 +1189,13 @@ theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT
     (DSelf.of_dbind fun E' hE' => by simp [setE] at hE'; subst hE'; exact hEdb) hm.fresh
   rw [exitScope_setE_fresh hwf hΓz] at hfr
   refine ⟨setE Γ m.nv E, StmtT.seq hsrc hfr ht, ?_, Nat.le_succ _, ?_, fun v hv => ?_⟩
-  · refine Inv.mk₀ (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine])
+  · -- (AGORA-963 step 3: the payload reaped from the block holds no names)
+    refine Inv.mk₀ (hi.heldCaps_step (fun q Eq hq hmq _ => by
+        have hqz : q ≠ m.nv := fun h => by
+          rw [h] at hq; simp [setE] at hq; rw [← hq] at hmq; exact hnrb hmq
+        simp only [setE, upd_ne _ _ hqz] at hq
+        exact ⟨hq, by simp [hsp]⟩) (fun w _ hcw =>
+        CapsInpAt.of_slots (SlotsCaps.set_of hcw.1 (hi.toMInv.blkCapsInp w k _ p hk rfl) rfl) hm)) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine])
       (by simp [Stmt.spine, setE]) (by simp [CatchOK])
       (covers_take (covers_reap (m := { m with nv := m.nv + 1 }) hi.cover hk) (fun T h => by
         unfold OwnedAt at h; simp [hmz] at h))
@@ -1310,7 +1316,19 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
       (StmtT.scope ⟨compE E b, by simp [setE], compE_mode_ne E b⟩ hzF hs hpz) hpx, ?_, by simp, ?_, ?_⟩
     · have hyx : y ≠ x := fun h => by rw [h, hx] at hy; cases hy
       have hyz : y ≠ z := fun h => by rw [h, hz] at hy; cases hy
-      refine Inv.mk₀ (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hi3 (fun u hu => ?_) (fun u hu => ?_) (fun p Ep hp hmp _ => ?_) ?_ ?_
+      -- (AGORA-963 step 3: the pair's halves were the pair's)
+      have hP := fun w' (hcw : CapsInpAt m w') => SlotsCaps.slot hcw.1 hvy
+      refine Inv.mk₀ (hi.heldCaps_step (fun p Ep hp hmp _ => by
+          have hpz : p ≠ z := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact compE_mode_ne E b hmp
+          have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE, upd_ne _ _ hxz] at hp; rw [← hp] at hmp; exact compE_mode_ne E a hmp
+          simp only [setE, upd_ne _ _ hpz, upd_ne _ _ hpx] at hp
+          exact ⟨hrel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w' _ hcw =>
+          CapsInpAt.of_slots ((((SlotsCaps.set hcw.1 (x := y) (o := true) (v := none) (fun _ e => by cases e)).set
+            (x := x) (fun V e => by cases e; exact (hP w' hcw).child Child.fst)).set
+            (x := z) (fun V e => by cases e; exact (hP w' hcw).child Child.snd))) hi3))
+        hi3 (fun u hu => ?_) (fun u hu => ?_) (fun p Ep hp hmp _ => ?_) ?_ ?_
         (show CatchOK _ s from catchOK_src hsrc) ?_
         (pinOut_fresh hi.toMInv (fun p Ep hp hmp => by
           have hpz : p ≠ z := fun h => by
