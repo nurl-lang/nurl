@@ -77,8 +77,14 @@ def _calls_in(x, out):
 def _dtor_fns(prog, ty, out, seen):
     """The destructors of the program's (`drop__T`) releasing a value of
     type `ty` runs: its own, and its fields', payloads' and type
-    arguments' (a closure's environment is no part of its type)."""
-    if not isinstance(ty, tuple) or not ty or ty in seen or ty[0] == "closure":
+    arguments. A closure's environment is no part of its type: releasing
+    one runs what it took over, which no type here names - a call through
+    a closure value, `None`, as nurlc's graph counts `nurl_closure_drop`
+    (CodeRabbit on github#2189)."""
+    if not isinstance(ty, tuple) or not ty or ty in seen:
+        return
+    if ty[0] == "closure":
+        out.add(None)
         return
     seen.add(ty)
     if ty[0] == "named" and len(ty) > 1 and isinstance(ty[1], str):
@@ -4501,8 +4507,12 @@ class FnCheck:
         point the frame may unwind from, as a call that may is: what the
         caller holds must be whole there and view nothing of this frame,
         where the module's panic graph says it may (agora #942). The parts
-        run_dtor releases, no field a literal only names."""
+        run_dtor releases, a field a literal names included (see below)."""
         av = st.vals.get(place[0])
+        # (Every closure held there, a field a literal names included: the
+        # `lit` marks are a union over the paths that joined, so a field
+        # one path names may be owned on another - asked of all, a refusal
+        # at worst; CodeRabbit on github#2194.)
         if av is not None:
             n = len(place[1])
             for base, fname in self.closures_in(av):
@@ -4516,7 +4526,7 @@ class FnCheck:
                     if cv is not None and getattr(cv, "taken", False):
                         if self.dtor_unw_ty(st, cv.ty, line, None, frozenset()):
                             return
-        self.dtor_unw_ty(st, ty, line, (place, self.lit_named_fields(st, place[0])), frozenset())
+        self.dtor_unw_ty(st, ty, line, (place, frozenset()), frozenset())
 
     def dtor_unw_ty(self, st, ty, line, at, seen):
         """dtor_unw's walk of a type: True once a destructor that may panic
