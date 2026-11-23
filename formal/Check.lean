@@ -1002,6 +1002,8 @@ import C
 #print axioms C.fnOKB_sound
 #print axioms C.progOKB_sound
 #print axioms C.checked_program_safe
+-- Phase C11: A2 end to end - a program the checker accepts never gets stuck from the empty store
+#print axioms C.checked_program_safe2
 -- Phase C5: A2's expressions decided
 #print axioms C.checkExpr2_sound
 -- Phase C6: A2's core right-hand sides decided
