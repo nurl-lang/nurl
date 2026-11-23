@@ -108042,9 +108042,16 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // only out of it - `( tail o )`), 2 another value (a binding, a temporary,
 // a nested call that may lend something else), 0 nothing (`-` is 2: a
 // temporary the callee may hand back).
-@ __opt_pick_arg_class i syms s w s name i depth → i {
+// (Followed to any depth: a stand-in's roots are its call's arguments,
+// compiled before it, so a stand-in among them has a smaller number and
+// the walk ends. `below` is the stand-in being read, -1 at the top. A
+// depth cut-off answered 2 past eight levels and refused AGORA-907's
+// owner-only lend nested ten calls deep - CodeRabbit on github#2226.)
+@ __opt_pick_arg_class i syms s w s name i below → i {
     ? ( seq w name ) { ^ 1 } {}
-    ? | == 0 ( nurl_str_starts w `__alr#` ) > depth 8 { ^ 2 } {}
+    ? == 0 ( nurl_str_starts w `__alr#` ) { ^ 2 } {}
+    : i n ( nurl_str_to_int ( nurl_str_slice w 6 - ( nurl_str_len w ) 6 ) )
+    ? & >= below 0 >= n below { ^ 2 } {}
     : s k ( nurl_sym_get2 g_pending_impl w `__vljk` )
     : s cn ( str_first_word k )
     : s gn ( str_first_word ( str_skip_word k ) )
@@ -108056,7 +108063,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
     ~ != 0 ( nurl_str_len rest ) {
         : s r ( str_first_word rest ) = rest ( str_skip_word rest )
         ? != 0 ( mem_fn_lend_kind syms who ix ) {
-            : i c ( __opt_pick_arg_class syms r name + depth 1 )
+            : i c ( __opt_pick_arg_class syms r name n )
             ? == c 1 { = own T } { = oth T }
         } {}
         = ix + ix 1
@@ -108089,7 +108096,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
         : ~ i k 0
         ~ != 0 ( nurl_str_len rest ) {
             : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-            ? != 0 ( mem_fn_lend_kind syms who k ) { ? == 1 ( __opt_pick_arg_class syms w name 0 ) { = self T } { = other T } } {}
+            ? != 0 ( mem_fn_lend_kind syms who k ) { ? == 1 ( __opt_pick_arg_class syms w name -1 ) { = self T } { = other T } } {}
             = k + k 1
         }
         ? & self other {
