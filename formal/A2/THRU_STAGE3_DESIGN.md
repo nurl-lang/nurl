@@ -803,7 +803,11 @@ This makes B2's last two cases depend on B3's invariant. The order is therefore:
   - Closure.lean: the closure call's frame, the kill at the captures, and the new statement;
   - EnvHand.lean: the anchors the package-call lemmas take, two places.
 - **`SrcCase` relaxed, 2 places:** Preservation's `withLock` and `withElem` (SrcKeep's `StmtT.ctxRel`).
-- **`CallA.anch` relaxed (B3), 1 place:** CallInv.lean's call setup.
+- *(Proved since, B3's call side: `CallA.anch` is `RootbAnchRS Γ F args`. An anchor is in `F`, through a region, or held of a root that is no argument and holds no views.*
+  - *`NamesFree` asks that the closures' by-name change ends no held view. That is the call-site twin of 963's clause, in the spare form `HeldSpared` reads.*
+  - *`namesFree_lift` carries it into the lifted frame from `S.OK` as it stands, with no new field (`liftE_rootb_held_mem`, `Φsat`, `N_mut`).*
+  - *`post_rootb` uses it at `mutNames`' roots, and at a moved or changed argument the held root is no argument.*
+  - *The outer anchors after the call is placed come from the `letcall`'s own `Inv` (`killVars_callIn`, `postdt`).)*
 - *(Proved since: `StmtT.catchR`'s anchor premise is now `RootbAnchS Δ F [x]`. It is used only at the frame's end, where `catchR x m0 skip`'s one killable name is `x`. At the recursive call's setup it follows from the outer anchors, because `x` is a killable name of `letrec x f k`.)*
 - *(Proved since: EnvHand.lean's two "carry the anchors to the package call's new statement". The new killable names are the old ones, or the fresh `m.nv` / `m.nv + 1`, which Γ does not bind.)*
 

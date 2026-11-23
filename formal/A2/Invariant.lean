@@ -1249,6 +1249,33 @@ theorem RootbAnchR.toRH {Γ : Ctx} {F : List Var} (h : RootbAnchR Γ F) : RootbA
 theorem RootbAnchS.toRH {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) : RootbAnchRH Γ F :=
   fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp id fun h' => Or.inr h'.1
 
+/-- AGORA-937 (B3): the borrowed parameters' anchors at a call (`CallA`):
+    in `F`, through a region (a callee's body), or held of a root that is
+    none of `V` (the call's arguments) and holds no views. -/
+def RootbAnchRS (Γ : Ctx) (F V : List Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound = .none →
+    d.root ∈ F ∨ RegionView Γ d ∨
+    (HeldAnch E d ∧ d.root ∉ V ∧ ∃ Er, Γ d.root = some Er ∧ Er.ty.holdsView = false)
+
+theorem RootbAnchR.toRS {Γ : Ctx} {F : List Var} (h : RootbAnchR Γ F) (V : List Var) : RootbAnchRS Γ F V :=
+  fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp id Or.inl
+
+theorem RootbAnchS.toRS {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) : RootbAnchRS Γ F V :=
+  fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp id Or.inr
+
+theorem RootbAnchRS.mono {Γ : Ctx} {F F' V : List Var} (h : RootbAnchRS Γ F V) (hF : ∀ v ∈ F, v ∈ F') :
+    RootbAnchRS Γ F' V :=
+  fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp (hF _) id
+
+/-- ... where no binding is a region (a run-time context), the region
+    disjunct is void. -/
+theorem RootbAnchRS.toS {Γ : Ctx} {F V : List Var} (h : RootbAnchRS Γ F V)
+    (hnr : ∀ v E, Γ v = some E → E.mode ≠ .region) : RootbAnchS Γ F V := fun p E hp hm d hd hb => by
+  rcases h p E hp hm d hd hb with h | ⟨_, Er, hEr, hr⟩ | h
+  · exact Or.inl h
+  · exact absurd hr (hnr _ _ hEr)
+  · exact Or.inr h
+
 
 /-- A2-drop.3d, Agora #610: what the invariant asks of a block's destructor
     values.  A view owns nothing (its tree is empty, `Blk.tree_view`; Agora

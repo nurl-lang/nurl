@@ -1,4 +1,5 @@
 import A2.CallMem
+import A2.KillVarsStep
 import A2.SrcKeep
 
 /-! A2 — the call step preserves the invariant and is typed: the call case
@@ -253,8 +254,44 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
       obtain ⟨E0, h0, hm⟩ := h.postdm.2 p E1' h1'
       have := h.post_rootb h0 (hm ▸ hrb)
       rw [h1'] at this; cases this
-      rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)] at hr
-      exact fun hb => Or.inl ((h.anch.toAnchF hi.toMInv.noRegion) p E1' h0 (hm ▸ hrb) r hr hb)
+      rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)] at hr ⊢
+      -- AGORA-937 (B2/B3): the outer anchors carry over: a held root is bound
+      -- before the call (so below the frame), not `x`, and no argument, so
+      -- none of the placed call's killable names (`killVars_callIn`), and
+      -- a frame binding of the same type in the new context
+      intro hb
+      rcases hi.anch p E1' h0 (hm ▸ hrb) (by simp [Stmt.spine]) r hr hb with hF | ⟨hha, hnk, Er, hEr, hhv⟩
+      · exact Or.inl hF
+      have hlt : r.root < m.nv := hi.nvSt r.root (by rw [← hi.dom, hEr]; rfl)
+      have hrx : r.root ≠ x := fun e => hnk (by simp [Stmt.killVars, e])
+      have hra : r.root ∉ args := fun e => hnk (by simp [Stmt.killVars, e])
+      refine Or.inr ⟨hha, fun hk => ?_, ?_⟩
+      · simp only [callStmt, Stmt.killVars, List.mem_cons, List.mem_append] at hk
+        rcases hk with hk | hk | hk
+        · exact hrx hk
+        · rcases killVars_callIn fn args m.nv x _ hk with hk | hk | hk
+          · exact hrx hk
+          · exact absurd hk (Nat.not_le.mpr hlt)
+          · exact hra (inoutArgs_sub _ _ h.len _ hk)
+        · exact hnk (by simp [Stmt.killVars, hk])
+      · rcases h.ctx_cases r.root with ⟨e, _⟩ | ⟨e, _⟩ | ⟨_, _, _, e, _⟩ | ⟨_, _, _, e, _⟩ |
+            ⟨k2, _, _, hk2, e, _⟩ | ⟨_, _, hc2⟩ | ⟨_, v, _, e⟩
+        · exact absurd e hrx
+        · exact absurd hlt (Nat.not_lt.mpr (by rw [e]; exact Nat.le_add_right _ _))
+        · exact absurd hlt (Nat.not_lt.mpr (by rw [e, Nat.add_zero]; exact Nat.le_add_right _ _))
+        · exact absurd hlt (Nat.not_lt.mpr (by rw [e, Nat.add_zero]; exact Nat.le_add_right _ _))
+        · exact absurd (e ▸ RSetup.getD_mem' (h.len ▸ (List.getElem?_eq_some_iff.mp hk2).1)) hra
+        · obtain ⟨E2, hE2⟩ : ∃ E2, callPost Γ fn args r.root = some E2 := by
+            have := h.postdm.1 r.root; rw [hEr] at this
+            cases h2 : callPost Γ fn args r.root with
+            | none => rw [h2] at this; cases this
+            | some E2 => exact ⟨E2, rfl⟩
+          have hd3 := h.postdt.2 r.root E2 hE2
+          obtain ⟨E3, h3, hd3⟩ := hd3
+          have hE3 : E3 = Er := Option.some.inj (h3.symm.trans hEr)
+          refine ⟨E2.clean, by rw [hc2, hE2]; rfl, ?_⟩
+          rw [clean_ty, hd3.2, hE3]; exact hhv
+        · exact absurd hlt (Nat.not_lt.mpr (by rw [e]; exact Nat.le_add_right _ _))
   spineNd := by
     rw [callStmt_spine, h.body_spine, List.append_nil]
     have hx : x ∉ (m.nv + fn.params.length) :: wrapSpine fn.params m.nv 0 := by
@@ -497,7 +534,9 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
     wf := hi.wf
     noInout := hi.noInout
     rbLive := hi.rootbLive
-    anch := sorry  -- WIP scaffold (AGORA-937 B2, never merged): CallA.anch takes the relaxed anchors (B3: the design doc's "The call side")
+    -- AGORA-937 (B3): the arguments are killable names of the `letcall`
+    anch := RootbAnchS.toRS fun p E hp hm =>
+      (hi.anch p E hp hm (by simp [Stmt.spine])).anti fun v hv => by simp [Stmt.killVars, hv]
     postwf := hw1
     postdm := hdm
     reswf := hE
@@ -537,7 +576,7 @@ theorem CallH.widen {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {ba
       rcases List.mem_append.mp hv with hv | hv
       · exact h.Flt v hv
       · exact hG v hv
-    anch := fun p E hp' hm => (h.anch p E hp' hm).mono fun _ hv => List.mem_append_left _ hv
+    anch := h.anch.mono fun _ hv => List.mem_append_left _ hv
     nfree := fun d hd => by simp [mutNames, argNames] at hd }
 
 /-- The `recover` case of preservation. -/

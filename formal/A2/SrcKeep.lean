@@ -86,7 +86,7 @@ theorem RhsT.ctxRel {Γ Γ1 : Ctx} {F : List Var} {r : Rhs} {E : Entry}
 
 /-- A call's typing gives what `CallH` needs of the arguments. -/
 theorem CallT.toA {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
-    {Γ' : Ctx} (hc : CallT P Γ F f args E Γ') (hn : NameWF Γ) (hanch : RootbAnchR Γ F) :
+    {Γ' : Ctx} (hc : CallT P Γ F f args E Γ') (hn : NameWF Γ) (hanch : RootbAnchRS Γ F args) :
     ∃ fn, P[f]? = some fn ∧ CallA Γ F fn args ∧ E = callRes Γ fn args ∧ Γ' = callPost Γ fn args := by
   obtain ⟨fn, hf, hlen, harg, hnf, _, hE, hΓ, _⟩ := hc
   exact ⟨fn, hf, ⟨hlen, harg, hnf, hn, hanch⟩, hE, hΓ⟩
@@ -96,7 +96,7 @@ theorem CallT.ctxRel {P : Prog} {Γ : Ctx} {F : List Var} {f : Nat} {args : List
     CtxRel Γ Γ' := by
   have hdt := CallT.domTy hc
   have hdk := hc.dkeep
-  obtain ⟨fn, _, ha, _, rfl⟩ := hc.toA hn hanch
+  obtain ⟨fn, _, ha, _, rfl⟩ := hc.toA hn (hanch.toRS _)
   exact CtxRel.ofDomTy hdt (fun p Ep hp hrb => ha.post_rootb hp hrb) hdk
 
 /-- A weaker context keeps a fixed entry, so a borrowed parameter's. -/
