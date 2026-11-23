@@ -16,23 +16,13 @@ AGORA-963's (claude-expert). By claude-accurate. -/
 
 namespace A2
 
-/-- The packages in `V` capture `w` only `.inp`. -/
-def ValCapsInp (V : Val) (w : Var) : Prop :=
-  ∀ fs te ms e cs, Sub (.pkg fs te ms e cs) V → ∀ q ∈ cs, q.1 = w → q.2.1 = .inp
-
-/-- The store part of `HeldCapsInp`: every package in a slot's value that
-    captures `w` does so `.inp`. -/
-def CapsInpAt (m : Mem) (w : Var) : Prop :=
-  ∀ x o V fs te ms e cs, m.st x = some ⟨o, some V⟩ → Sub (.pkg fs te ms e cs) V →
-    ∀ q ∈ cs, q.1 = w → q.2.1 = .inp
-
 theorem CapsInpAt.slot {m : Mem} {w : Var} (h : CapsInpAt m w) {x : Var} {o : Bool} {V : Val}
     (hx : m.st x = some ⟨o, some V⟩) : ValCapsInp V w :=
-  fun fs te ms e cs hs => h x o V fs te ms e cs hx hs
+  h.1 x o V hx
 
-theorem capsInpAt_of_slots {m : Mem} {w : Var}
-    (h : ∀ x o V, m.st x = some ⟨o, some V⟩ → ValCapsInp V w) : CapsInpAt m w :=
-  fun x o V fs te ms e cs hx hs => h x o V hx fs te ms e cs hs
+theorem CapsInpAt.pay {m : Mem} {w : Var} (h : CapsInpAt m w) {k : Nat} {bl : Blk} {V : Val}
+    (hk : m.blk k = some bl) (hp : bl.pay = some V) : ValCapsInp V w :=
+  h.2 k bl V hk hp
 
 /-- `HeldCapsInp` is its premises on the held anchor and `CapsInpAt` of its
     root. -/
@@ -45,7 +35,7 @@ theorem heldCapsInp_iff {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} :
 /-- `HeldCapsInp` from `CapsInpAt` of every root it asks about. -/
 theorem HeldCapsInp.of_caps {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt}
     (h : HeldCapsInp m Γ F s) (hc : ∀ w, CapsInpAt m w → CapsInpAt m' w) : HeldCapsInp m' Γ F s :=
-  heldCapsInp_iff.mpr fun p E hp hm hps d hd hb hh hF => hc _ (heldCapsInp_iff.mp h p E hp hm hps d hd hb hh hF)
+  fun p E hp hm hps d hd hb hh hF => hc _ (h p E hp hm hps d hd hb hh hF)
 
 /-- ... carried to a step's result where the borrowed parameters outside the
     new running scopes are old ones, outside the old scopes, and the store
@@ -54,15 +44,15 @@ theorem HeldCapsInp.step_of {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : S
     (h : HeldCapsInp m Γ F s)
     (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → p ∉ s'.spine → Γ p = some E ∧ p ∉ s.spine)
     (hc : ∀ w, CapsInpAt m w → CapsInpAt m' w) : HeldCapsInp m' Γ' F s' :=
-  heldCapsInp_iff.mpr fun p E hp hm hps d hd hb hh hF => by
+  fun p E hp hm hps d hd hb hh hF => by
     obtain ⟨h0, hps0⟩ := hrb p E hp hm hps
-    exact hc _ (heldCapsInp_iff.mp h p E h0 hm hps0 d hd hb hh hF)
+    exact hc _ (h p E h0 hm hps0 d hd hb hh hF)
 
 /-! ### The store operations -/
 
 theorem CapsInpAt.set {m : Mem} {w : Var} (h : CapsInpAt m w) {x : Var} {o : Bool} {v : Option Val}
     (hv : ∀ V, v = some V → ValCapsInp V w) : CapsInpAt (m.set x ⟨o, v⟩) w := by
-  refine capsInpAt_of_slots fun y o' V hy => ?_
+  refine ⟨fun y o' V hy => ?_, fun k bl V hk hp => h.pay hk hp⟩
   by_cases hyx : y = x
   · subst hyx; simp at hy; obtain ⟨_, rfl⟩ := hy; exact hv V rfl
   · simp [upd_ne _ _ hyx] at hy; exact h.slot hy
@@ -73,19 +63,25 @@ theorem CapsInpAt.set_none {m : Mem} {w : Var} (h : CapsInpAt m w) (x : Var) (o 
   h.set (fun _ e => by cases e)
 
 theorem CapsInpAt.remove {m : Mem} {w : Var} (h : CapsInpAt m w) (x : Var) : CapsInpAt (m.remove x) w := by
-  refine capsInpAt_of_slots fun y o' V hy => ?_
+  refine ⟨fun y o' V hy => ?_, fun k bl V hk hp => h.pay hk hp⟩
   by_cases hyx : y = x
   · subst hyx; simp at hy
   · simp [upd_ne _ _ hyx] at hy; exact h.slot hy
 
-theorem CapsInpAt.of_st {m m' : Mem} {w : Var} (h : CapsInpAt m w) (hst : m'.st = m.st) :
-    CapsInpAt m' w :=
-  capsInpAt_of_slots fun y o V hy => h.slot (by rw [← hst]; exact hy)
+/-- The slots of one store, blocks that are some of the other's. -/
+theorem CapsInpAt.withBlk {m m' : Mem} {w : Var} (h : CapsInpAt m w) (hst : m'.st = m.st)
+    (hb : ∀ k bl V, m'.blk k = some bl → bl.pay = some V → ValCapsInp V w) : CapsInpAt m' w :=
+  ⟨fun x o V hx => h.slot (hst ▸ hx), hb⟩
 
-/-- The slots of one store, the blocks of another: the clause reads no block. -/
-theorem CapsInpAt.withBlk {m m' : Mem} {w : Var} (h : CapsInpAt m w) (hst : m'.st = m.st) :
-    CapsInpAt m' w :=
-  h.of_st hst
+/-- A block updated to a payload whose packages are clean. -/
+theorem CapsInpAt.updBlk {m : Mem} {w : Var} (h : CapsInpAt m w) {k : Nat} {bl : Blk}
+    (hbl : ∀ V, bl.pay = some V → ValCapsInp V w) {m' : Mem} (hst : m'.st = m.st)
+    (hb : m'.blk = upd m.blk k (some bl)) : CapsInpAt m' w := by
+  refine h.withBlk hst fun k' bl' V hk hp => ?_
+  rw [hb] at hk
+  by_cases hkk : k' = k
+  · subst hkk; simp at hk; subst hk; exact hbl V hp
+  · simp [upd_ne _ _ hkk] at hk; exact h.pay hk hp
 
 /-! ### Lent values -/
 
@@ -154,11 +150,13 @@ theorem BindParams.capsInp {m m' : Mem} {ps : List (PMode × Ty)} {as : List Var
   | inout _ ih => exact ih h
 
 /-- A lock scope's end gives `x`'s value back to the block, or drops it:
-    either way the slot goes, and no slot gains a value. -/
+    the value goes from the slot into the block, or nowhere. -/
 theorem Release.capsInp {m m' : Mem} {k : Nat} {t : Ty} {x : Var} {w : Var}
     (hrl : Release m k t x m') (h : CapsInpAt m w) : CapsInpAt m' w := by
   cases hrl with
-  | put _ _ _ => exact (h.withBlk rfl).remove _
+  | @put o v hx _ _ _ =>
+    exact (h.updBlk (bl := ⟨t, .lock, some v⟩) (m' := { m with blk := upd m.blk k (some ⟨t, .lock, some v⟩) })
+      (fun V e => by cases e; exact h.slot hx) rfl rfl).remove _
   | drop _ _ _ _ => exact (h.of_st rfl).remove _
 
 end A2

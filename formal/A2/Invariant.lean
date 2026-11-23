@@ -1731,21 +1731,34 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   pkgFree   : ∀ x Ex o v, Γ x = some Ex → Alive Ex → m.st x = some ⟨o, some v⟩ →
                 ∀ i, PkgNames m Γ Ex v i → PkgFreeId m i
 
+/-- The packages in `V` capture `w` only `.inp`. -/
+def ValCapsInp (V : Val) (w : Var) : Prop :=
+  ∀ fs te ms e cs, Sub (.pkg fs te ms e cs) V → ∀ q ∈ cs, q.1 = w → q.2.1 = .inp
+
+/-- ... in the store: every slot's value and every block's payload (a
+    package in an `Arc`, lock or cell comes back to a slot by `arcGet` /
+    `lockTake`, as `MemCodes` reads the blocks too). -/
+def CapsInpAt (m : Mem) (w : Var) : Prop :=
+  (∀ x o V, m.st x = some ⟨o, some V⟩ → ValCapsInp V w) ∧
+  (∀ k bl V, m.blk k = some bl → bl.pay = some V → ValCapsInp V w)
+
 /-- AGORA-937 B2 (AGORA-963): the closure-capture clause. A held anchor's
     root, not lent out, is captured by no package in the store but
     read-only (`.inp`), so no call through a package hands it to an
     `inout` parameter of the code (`CapInout.not_held`, `CapClause.lean`). -/
 def HeldCapsInp (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop :=
   ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine →
-  ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F →
-  ∀ x o V fs te ms e cs, m.st x = some ⟨o, some V⟩ → Sub (.pkg fs te ms e cs) V →
-  ∀ q ∈ cs, q.1 = d.root → q.2.1 = .inp
+  ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F → CapsInpAt m d.root
 
-/-- ... read off the slots, the borrowed parameters and the running scopes. -/
+/-- ... read off the slots, the blocks, the borrowed parameters and the
+    running scopes. -/
+theorem CapsInpAt.of_st {m m' : Mem} {w : Var} (h : CapsInpAt m w) (hst : m'.st = m.st)
+    (hb : m'.blk = m.blk := by rfl) : CapsInpAt m' w :=
+  ⟨fun x o V hx => h.1 x o V (hst ▸ hx), fun k bl V hk hp => h.2 k bl V (hb ▸ hk) hp⟩
+
 theorem HeldCapsInp.of_st {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
-    (hst : m'.st = m.st) : HeldCapsInp m' Γ F s :=
-  fun p E hp hm hps d hd hb hh hF x o V fs te ms e cs hx =>
-    h p E hp hm hps d hd hb hh hF x o V fs te ms e cs (hst ▸ hx)
+    (hst : m'.st = m.st) (hb : m'.blk = m.blk := by rfl) : HeldCapsInp m' Γ F s :=
+  fun p E hp hm hps d hd hb' hh hF => (h p E hp hm hps d hd hb' hh hF).of_st hst hb
 
 theorem HeldCapsInp.respine {m : Mem} {Γ : Ctx} {F : List Var} {s s' : Stmt} (h : HeldCapsInp m Γ F s)
     (hsp : ∀ v ∈ s.spine, v ∈ s'.spine) : HeldCapsInp m Γ F s' :=

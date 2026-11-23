@@ -46,7 +46,7 @@ theorem CapInout.not_held {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} {s : St
   have hlen' : sig.params.tail.length = zs.length := by
     simp only [List.length_cons, List.length_append, List.length_map] at hl; omega
   obtain ⟨q, hq, hq1, hq2⟩ := capPos hlen' hi hai hpi
-  have := hcl p E hp hm hps d hd hb hh hF c o _ fs te ms env cs hc (Sub.refl _) q hq hq1
+  have := (hcl p E hp hm hps d hd hb hh hF).1 c o _ hc fs te ms env cs (Sub.refl _) q hq hq1
   rw [hq2] at this; cases this
 
 theorem Step.held_not_killVars {P : Prog} {m m' : Mem} {Γ : Ctx} {F : List Var} {s s' : Stmt}

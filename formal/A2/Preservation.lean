@@ -6,6 +6,20 @@ well-typed configuration. -/
 
 namespace A2
 
+/-- AGORA-937 B2 (AGORA-963): a value that holds no names holds no package
+    that captures anything. -/
+theorem valCapsInp_of_names {V : Val} (h : V.names = []) (w : Var) : ValCapsInp V w :=
+  fun fs te ms e cs hs q hq _ => by
+    have := names_sub hs q (by simp [Val.names, hq])
+    rw [h] at this; cases this
+
+/-- ... so every block's payload is clean: it is of a type holding no views
+    (`MInv.blocks`), so holds no names. -/
+theorem MInv.blkCapsInp {m : Mem} {Γ : Ctx} (hi : MInv m Γ) (w : Var) :
+    ∀ k bl V, m.blk k = some bl → bl.pay = some V → ValCapsInp V w := fun k bl V hk hp => by
+  obtain ⟨_, hhv, hpay, _⟩ := hi.blocks k bl hk
+  exact valCapsInp_of_names ((hpay V hp).1.names_nil hhv) w
+
 /-- How the context after a step relates to the one before: bindings outside
     the run-time scopes stay, with their mode and type, and a borrowed
     parameter's entry is untouched; new bindings are inside new scopes. -/
@@ -3718,7 +3732,11 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (CtxRel.setE (x := x) (Ex := killE .replace false x E) (by simp [A2.kill, hx])
           (by rw [killE_mode]) (by rw [killE_ty]) (by rw [killE_mode, hm]; simp)
           (fun hdb => ⟨by rw [killE_dbind]; exact hdb, fun d hdd _ => by rw [killE_vdeps]; exact hdd⟩))
-      exact ⟨_, StmtT.skip, Inv.ofLeaf (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hi hinv (by simp) (by simp [Stmt.vars]) (hrel.anchS hanchS |>.anti fun _ h => by simp [Stmt.killVars] at h)
+      -- (AGORA-963 step 3: the slot emptied, the borrowed parameters kept)
+      have hcaps : HeldCapsInp ({ m with alloc := _ }.set x ⟨true, none⟩) _ F .skip :=
+        hi.heldCaps.step_of (fun p E hp hm _ => ⟨hrel.rootb_back hp hm, by simp [Stmt.spine]⟩)
+          (fun w hw => (hw.of_st rfl).set_none x true)
+      exact ⟨_, StmtT.skip, Inv.ofLeaf hcaps hi hinv (by simp) (by simp [Stmt.vars]) (hrel.anchS hanchS |>.anti fun _ h => by simp [Stmt.killVars] at h)
         rfl (covers_free hi.cover ht hf) trivial,
         by simp, hrel.keep rfl rfl, fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
   | @scope ξ Γ Δ1 F x k hxE hxF hs hpx ihs =>

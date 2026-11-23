@@ -2964,8 +2964,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
             have hrlt : d.root < m.nv := hlt _ _ hEr
             have hrne : d.root ≠ m.nv := fun e => by rw [e] at hrlt; exact Nat.lt_irrefl _ hrlt
             have hinp : ∀ q ∈ cs, q.1 = d.root → q.2.1 = .inp :=
-              hi.heldCaps p E0 h0 hm (by simp [Stmt.spine]) d hd hb hha hdF c o _ fs te _ env cs hslot
-                (Sub.refl _)
+              (hi.heldCaps p E0 h0 hm (by simp [Stmt.spine]) d hd hb hha hdF).1 c o _ hslot fs te _ env cs (Sub.refl _)
             obtain ⟨sig', hσ', hlen', _, hnf, _⟩ := hcT
             rw [hσ] at hσ'; cases hσ'
             have hzr : zs.length = rest.length := by rw [hsp] at hlen'; simpa using hlen'
@@ -3292,8 +3291,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
                   have hrz : d.root ∉ zs := fun e => hnk (by simp [Stmt.killVars, e])
                   have hrk : d.root ∉ k.killVars := fun e => hnk (by simp [Stmt.killVars, e])
                   have hinp : ∀ q ∈ cs, q.1 = d.root → q.2.1 = .inp :=
-                    hi.heldCaps p E0' h0' hm (by simp [Stmt.spine]) d hd hb hha hdF c o _ fs te _ env cs hslot
-                      (Sub.refl _)
+                    (hi.heldCaps p E0' h0' hm (by simp [Stmt.spine]) d hd hb hha hdF).1 c o _ hslot fs te _ env cs (Sub.refl _)
                   -- it is at no `inout` parameter of the opened call
                   have hnio : ∀ (i : Nat) (b : Eff) (t : Ty), fn.params[i]? = some (PMode.inout b, t) →
                       (m.nv :: zs ++ cs.map (·.1))[i]? ≠ some d.root := by
