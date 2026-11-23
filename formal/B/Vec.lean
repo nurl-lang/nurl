@@ -36,8 +36,8 @@ always gives a new id.
 
 Borrowed views (`vec_borrow_raw`, `cap < 0`) are covered for reads and for
 the push that detaches them (`vpush_ok`: the viewed block is never written
-or freed). What B1 leaves out, for the next steps: the packed-string layout,
-the runtime's `nurl_vec_drop` (C code; it frees a view's handle only), element destructors (cells
+or freed). The packed-string layout's growth is the same detach (`packedPush_ok`).
+What B1 leaves out, for the next steps: the runtime's `nurl_vec_drop` (C code; it frees a view's handle only), element destructors (cells
 here are values that are moved by bit copy, as `mem_take` makes them),
 byte sizes and their overflow (`alloc_size`).
 `__vec_release_from` (the truncation path for elements whose drop runs
@@ -1233,6 +1233,34 @@ theorem append_ok {h : Heap α} {dst src : RVec} {es1 es2 : List α} (hw : h.WF)
         · intro b hb
           show h2.live b = false
           rw [hlv2]; exact hw1 b (by rw [← hn2]; exact hb)
+
+/-! ### The packed layout (`string_from_bytes_packed`, `vec_split_off_packed`)
+
+A packed `Vec` keeps its elements in its control block's own allocation,
+24 bytes in (here cell `off` of the control block). `realloc` of a pointer
+into the middle of a block is undefined behaviour, so `__vec_place` gives
+the packed case the same detach as a borrowed view: a fresh `nurl_alloc`,
+the live cells copied over, the data pointer moved. The theorem is
+`vpush_ok` for that view. The push detaches, the control block keeps its
+cells and stays live, and the result represents `es ++ [x]` in a fresh
+block. The packed-aware release then frees the control block (with
+whatever cells it still holds) and the new buffer separately. -/
+
+/-- A push on a packed `Vec` whose elements sit at cell `off` of its
+    control block `ctl` detaches: no `realloc` of an interior pointer, the
+    control block untouched and live, the elements in a fresh block. -/
+theorem packedPush_ok {h : Heap α} {ctl off : Nat} {es : List α} (x : α) (hw : h.WF)
+    (hr : VRep h ⟨ctl, off, es.length⟩ es) :
+    ∃ h' v', vpush h ⟨ctl, off, es.length⟩ x = some (h', v') ∧ Rep h' v' (es ++ [x]) ∧ h'.WF ∧
+      v'.data = some h.nid ∧ h'.live ctl = true ∧
+      ∀ b, b < h.nid → h'.cell b = h.cell b ∧ h'.size b = h.size b := by
+  obtain ⟨h', v', he, hr', hw', hd, hn, hlv, hfr⟩ := vpush_ok x hw hr
+  have hctl : ctl < h.nid := by
+    rcases Nat.lt_or_ge ctl h.nid with e | e
+    · exact e
+    · have := hr.2.1; rw [hw ctl e] at this; exact absurd this (by simp)
+  refine ⟨h', v', he, hr', hw', hd, ?_, hfr⟩
+  rw [hlv]; simp only [upd, ite_eq_right (show ¬ ctl = h.nid by omega)]; exact hr.2.1
 
 /-! ### The link to A1
 
