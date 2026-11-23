@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free` and `frozen`, whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope` and `rbind`, whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -224,6 +224,40 @@ def assignModes2 (Ex E : Entry) : Bool :=
     Ex.mode = .bor ∧ E.mode = .bor)
 
 /-- A2's `StmtT` for the core statements and calls, computed. -/
+theorem supported2_exitRoot {Γ : Ctx} {D : List Var} (h : Supported2 Γ D) (p : Var) (Ds : List Dep) :
+    Supported2 (exitRoot p Ds Γ) D := fun v hv => by
+  unfold exitRoot; simp only [upd]; split <;> simp [h v hv]
+
+/-- `Anchored`, decided: every unbound dependency's root is frozen. -/
+def anchoredB (E : Entry) (F : List Var) : Bool :=
+  E.vdeps.all fun d => !(decide (d.kind.bound = .none)) || decide (d.root ∈ F)
+
+theorem anchoredB_sound {E : Entry} {F : List Var} (h : anchoredB E F = true) : Anchored E F := by
+  intro d hd hb
+  simp only [anchoredB, List.all_eq_true] at h
+  have := h d hd
+  simp only [hb, decide_true, Bool.not_true, Bool.false_or, decide_eq_true_eq] at this
+  exact this
+
+/-- `rbind`'s end condition, decided: what the borrowed binding may change
+    by name is another root, still bound as a root at the scope's end. -/
+def rbindKeptB (Δ : Ctx) (p : Var) (Ds : List Dep) : Bool :=
+  Ds.all fun d => decide (d.kind.bound = .none) ||
+    (decide (d.root ≠ p) && match Δ d.root with | some Er => Er.mode.isRoot | none => false)
+
+theorem rbindKeptB_sound {Δ : Ctx} {p : Var} {Ds : List Dep} (h : rbindKeptB Δ p Ds = true) :
+    ∀ d ∈ Ds, d.kind.bound ≠ .none → d.root ≠ p ∧ ∃ Er, Δ d.root = some Er ∧ Er.mode.isRoot = true := by
+  intro d hd hb
+  simp only [rbindKeptB, List.all_eq_true] at h
+  have := h d hd
+  simp only [hb, decide_false, Bool.false_or, Bool.and_eq_true, decide_eq_true_eq] at this
+  obtain ⟨h1, h2⟩ := this
+  refine ⟨h1, ?_⟩
+  revert h2
+  cases hΔ : Δ d.root with
+  | none => intro h2; cases h2
+  | some Er => intro h2; exact ⟨Er, rfl, h2⟩
+
 def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, _, .skip => some Γ
   | Γ, F, .seq a b =>
@@ -308,6 +342,24 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
       | none => none
     | none => none
   | Γ, F, .frozen z s => checkStmt2 P R C D Γ (F ++ z) s
+  | Γ, F, .rbind p s =>
+    match Γ p with
+    | some E =>
+      if decide (E.mode = .rootb) && E.live && anchoredB E F && decide (p ∉ F) then
+        match checkStmt2 P R C D Γ F s with
+        | some Δ => if rbindKeptB Δ p E.vdeps then some (exitRoot p (E.path ++ E.held) Δ) else none
+        | none => none
+      else none
+    | none => none
+  | Γ, F, .scope x s =>
+    match Γ x with
+    | some E =>
+      if decide (E.mode ≠ .rootb) && decide (x ∉ F) then
+        match checkStmt2 P R C D Γ F s with
+        | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
+        | none => none
+      else none
+    | none => none
   | Γ, _, .panic => if ctxWF2B D Γ && nameWFB D Γ then some Γ else none
   | Γ, F, .block s => checkStmt2 P R C D Γ F s
   | Γ, F, .loop s =>
@@ -544,6 +596,46 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
       simp only [Bool.and_eq_true] at hc
       simp only [Option.some.injEq] at h; subst h
       exact ⟨panic_self hs hc.1 hc.2, hs⟩
+    · cases h
+  | rbind p s ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i E hE
+      split at h
+      · rename_i hc
+        simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+        obtain ⟨⟨⟨hm, hl⟩, ha⟩, hpF⟩ := hc
+        split at h
+        · rename_i Δ0 h0
+          split at h
+          · rename_i hk
+            simp only [Option.some.injEq] at h; subst h
+            obtain ⟨t0, s0⟩ := ih (ξ := .none) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+            exact ⟨.rbind hE hm hl (anchoredB_sound ha) hpF t0 (rbindKeptB_sound hk),
+              supported2_exitRoot s0 p _⟩
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  | scope x s ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i E hE
+      split at h
+      · rename_i hc
+        simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+        split at h
+        · rename_i Δ0 h0
+          split at h
+          · rename_i he
+            simp only [Option.some.injEq] at h; subst h
+            obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x) hs (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+            exact ⟨.scope ⟨E, hE, hc.1⟩ hc.2 t0 (endOK2B_sound s0 he), supported2_exitScope s0 x⟩
+          · cases h
+        · cases h
+      · cases h
     · cases h
   | block s ih =>
     intro ξ Γ F Δ hs hD h
