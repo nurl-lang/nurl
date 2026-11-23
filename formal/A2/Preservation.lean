@@ -667,6 +667,19 @@ theorem Inv.leafNoHeld {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
     (hs : s.spine = []) {x : Var} (hxV : x ∈ s.killVars) (hx : x ∉ F) : NoHeld Γ x :=
   NoHeld.of_anchS (hi.leafAnchS hs) hxV hx
 
+/-- AGORA-963 step 3: the clause after a step, where the borrowed
+    parameters outside the new running scopes are old ones, outside the old
+    scopes, and the store keeps it at every root that is none of the old
+    statement's killable names (a held root is none, `Inv.anch`). -/
+theorem Inv.heldCaps_step {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt} (hi : Inv m Γ F s)
+    (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → p ∉ s'.spine → Γ p = some E ∧ p ∉ s.spine)
+    (hc : ∀ w, w ∉ s.killVars → CapsInpAt m w → CapsInpAt m' w) : HeldCapsInp m' Γ' F s' :=
+  fun p E hp hm hps d hd hb hh hF => by
+    obtain ⟨h0, hps0⟩ := hrb p E hp hm hps
+    rcases hi.anch p E h0 hm hps0 d hd hb with h' | ⟨_, hnk, _⟩
+    · exact absurd h' hF
+    · exact hc _ hnk (hi.heldCaps p E h0 hm hps0 d hd hb hh hF)
+
 theorem Inv.ofLeaf {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt} (hcaps : HeldCapsInp m' Γ' F s')
     (hi : Inv m Γ F s)
     (hm : MInv m' Γ') (hnv : m.nv ≤ m'.nv) (hvars : ∀ v ∈ s'.vars, v < m'.nv)
@@ -2961,9 +2974,19 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hnrb : E.mode ≠ .rootb := by rcases out.mode with h | h <;> rw [h] <;> simp
       have hanch1 := post.rel.anchS hanchS
       have hsp : k.spine = [] := src_spine hsrc
+      -- (AGORA-963 step 3: what the right-hand side yields, and the store it
+      -- leaves, keep the clause at a held root, none of its variables)
+      have hcaps : HeldCapsInp (m1.set x ⟨o, some v⟩) (setE Γ1 x E) F (.scope x k) :=
+        hi.heldCaps_step (fun p Ep hp hmp _ => by
+          have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+          simp only [setE, upd_ne _ _ hpx] at hp
+          exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w hw hcw => by
+          obtain ⟨hv, hs1⟩ := he.capsInp hi.toMInv hcw.1 (fun h => hw (by simp [Stmt.killVars, h]))
+          exact CapsInpAt.of_slots (hs1.set (fun V e => by cases e; exact hv)) hm)
       refine ⟨setE Γ1 x E, StmtT.scope ⟨E, by simp [setE], hnrb⟩ hxF hs hpx, ?_, by simp [post.nv], ?_,
         fun v hv => ?_⟩
-      · refine Inv.mk₀ (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+      · refine Inv.mk₀ hcaps hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (covers_evalR hi.cover he) (fun T h => by
             unfold OwnedAt at h; rw [evalR_none he hmx] at h; cases h))
@@ -3142,9 +3165,18 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           · exact absurd h hnrb
         obtain ⟨Er, hEr, _⟩ := out2.wf hnt x (by rw [← hdx]; exact List.mem_map_of_mem hd)
         rw [hx1] at hEr; cases hEr
+      -- (AGORA-963 step 3: what the right-hand side yields keeps the clause)
+      have hcaps : HeldCapsInp (m1.set x ⟨o, some v⟩) (setE Γ1 x E2.arm) F (.scopeD x f k) :=
+        hi.heldCaps_step (fun p Ep hp hmp _ => by
+          have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; simp [Entry.arm] at hmp; exact hnrb hmp
+          simp only [setE, upd_ne _ _ hpx] at hp
+          exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w hw hcw => by
+          obtain ⟨hv, hs1⟩ := he.capsInp hi.toMInv hcw.1 (fun h => hw (by simp [Stmt.killVars, h]))
+          exact CapsInpAt.of_slots (hs1.set (fun V e => by cases e; exact hv)) hm)
       refine ⟨setE Γ1 x E2.arm, StmtT.scopeD ⟨E2.arm, t, by simp [setE], hmo2, hsd2, hfn2, hdtor.1.1, hstr⟩ hxF hs hpx
         (by rw [hsp]; exact hKOd) hWd hNd hΔd hself hFd, ?_, by simp [post.nv], ?_, fun v hv => ?_⟩
-      · refine Inv.mk₀ (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+      · refine Inv.mk₀ hcaps hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (covers_evalR hi.cover he) (fun T h => by
             unfold OwnedAt at h; rw [evalR_none he hmx] at h; cases h))
