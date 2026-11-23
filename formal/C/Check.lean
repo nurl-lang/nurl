@@ -442,10 +442,20 @@ def ex1 : Stmt := .letv 0 (.new .int) (.letv 1 (.expr (.lit 7)) (.seq (.push 0 1
 
 example : (checkStmt (fun _ => none) [] ex1).isSome = true := by decide
 
-/-- A view of `v` kept across a push into `v` (a use after the realloc
-    ends it): refused. -/
+/-- A view of `v`, taken once `v` holds an element, read at index 0:
+    accepted (the positive control for `ex2`). -/
+def ex2ok : Stmt :=
+  .letv 0 (.new .int) (.letv 2 (.expr (.lit 1)) (.seq (.push 0 2)
+    (.letv 1 (.view 0) (.letv 3 (.sat 1 (.lit 0)) .skip))))
+
+example : (checkStmt (fun _ => none) [] ex2ok).isSome = true := by decide
+
+/-- The same view kept across a second push into `v` (a use after the
+    realloc ends it): refused. The read itself is in bounds, so the
+    refusal is the push's. -/
 def ex2 : Stmt :=
-  .letv 0 (.new .int) (.letv 1 (.view 0) (.letv 2 (.expr (.lit 1)) (.seq (.push 0 2) (.letv 3 (.sat 1 (.lit 0)) .skip))))
+  .letv 0 (.new .int) (.letv 2 (.expr (.lit 1)) (.seq (.push 0 2)
+    (.letv 1 (.view 0) (.seq (.push 0 2) (.letv 3 (.sat 1 (.lit 0)) .skip)))))
 
 example : (checkStmt (fun _ => none) [] ex2).isSome = false := by decide
 
