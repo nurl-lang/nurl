@@ -80388,11 +80388,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // the same one, so it is judged on the callee's final summary at
         // module end, resolve_opt_pick_lends. A per-call key let it through
         // before; A2 refuses the form in every spelling: AGORA-946 D4a.)
-        // (…and so is one whose arguments hold a nested call that may lend,
-        // whatever is known of the callee here: `( second o ( pick o other k
-        // ) )` lends `o` or `other` through its second argument, which no
-        // bare name at this call shows - CodeRabbit on github#2226.)
-        ? & & & & __ud_optv ! __ud_may_self ! ( __is_handle_ty vt ) & __ud_owns == __ud_tt TT_LPAREN | == 0 ( nurl_str_len __ud_lids ) >= ( nurl_str_find g_call_lroots `__alr#` ) 0 {
+        ? & & & & __ud_optv ! __ud_may_self ! ( __is_handle_ty vt ) & __ud_owns == __ud_tt TT_LPAREN == 0 ( nurl_str_len __ud_lids ) {
             // (By the arguments' roots where a call's are known: a nested
             // call's stand-in, `__alr#N`, keeps its own call and roots.)
             ( __park_opt_pick lex name ( nurl_sym_get syms `__last_call_lend_key__` ) ? != 0 ( nurl_str_len g_call_lroots ) ( nurl_str_cat g_call_lroots `` ) ( nurl_sym_get syms `__last_call_args__` ) )
@@ -108025,22 +108021,16 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // and what `f` (`key`, `callee generic`) may lend not known at the call:
 // parked for resolve_opt_pick_lends (AGORA-946 D4a).
 @ __park_opt_pick i lex s name s key s args → v {
-    ? == 0 ( nurl_str_len key ) { ^ v } {}
+    ? | == 0 ( nurl_str_len key ) ! ( str_contains_word args name ) { ^ v } {}
     // (Another argument beside it, by name or not: `-` is a value with no
-    // root, a temporary the callee may hand back too. A nested call's
-    // stand-in, `__alr#N`, is judged at module end whatever stands beside
-    // it: it may lend the owner, another value or both - `( pick ( id o )
-    // other k )`, `( second o ( pick o other k ) )`, `( id ( pick o other
-    // k ) )`: CodeRabbit on github#2226.)
+    // root, a temporary the callee may hand back too.)
     : ~ s rest ( nurl_str_cat args `` )
-    : ~ b self F
     : ~ b other F
-    : ~ b nested F
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-        ? ( seq w name ) { = self T } { = other T ? != 0 ( nurl_str_starts w `__alr#` ) { = nested T } {} }
+        ? ! ( seq w name ) { = other T } {}
     }
-    ? ! | nested & self other { ^ v } {}
+    ? ! other { ^ v } {}
     : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `optpick_n` ) )
     ( nurl_sym_def g_pending_impl `optpick_n` ( nurl_str_int + n 1 ) )
     ( nurl_sym_def g_pending_impl ( nurl_str_cat `optpick#` ( nurl_str_int n ) )
@@ -108050,21 +108040,11 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // What argument root `w` is to the owner `name` in a parked `= name ( f …
 // )`: 1 its own value (`name`, or a nested call's stand-in that may lend
 // only out of it - `( tail o )`), 2 another value (a binding, a temporary,
-// a nested call that may lend only something else), 3 either (a nested
-// call that may lend the owner or another value - `( pick o other k )`
-// as an argument: CodeRabbit on github#2226). `-` is 2: a temporary the
-// callee may hand back.
-// (Followed to any depth: a stand-in's roots are its call's arguments,
-// compiled before it, so any stand-in among them has a smaller number -
-// the walk ends. `below` is the stand-in being read, -1 at the top; one
-// that is not below it cannot occur, and is answered 3, refused, not
-// guessed - CodeRabbit on github#2226: a depth cut-off answered 2 and let
-// a ninth-level pick through.)
-@ __opt_pick_arg_class i syms s w s name i below → i {
+// a nested call that may lend something else), 0 nothing (`-` is 2: a
+// temporary the callee may hand back).
+@ __opt_pick_arg_class i syms s w s name i depth → i {
     ? ( seq w name ) { ^ 1 } {}
-    ? == 0 ( nurl_str_starts w `__alr#` ) { ^ 2 } {}
-    : i n ( nurl_str_to_int ( nurl_str_slice w 6 - ( nurl_str_len w ) 6 ) )
-    ? & >= below 0 >= n below { ^ 3 } {}
+    ? | == 0 ( nurl_str_starts w `__alr#` ) > depth 8 { ^ 2 } {}
     : s k ( nurl_sym_get2 g_pending_impl w `__vljk` )
     : s cn ( str_first_word k )
     : s gn ( str_first_word ( str_skip_word k ) )
@@ -108076,14 +108056,12 @@ unsafe @ __sx_names_capture i syms s sx → b {
     ~ != 0 ( nurl_str_len rest ) {
         : s r ( str_first_word rest ) = rest ( str_skip_word rest )
         ? != 0 ( mem_fn_lend_kind syms who ix ) {
-            : i c ( __opt_pick_arg_class syms r name n )
-            ? != c 2 { = own T } {}
-            ? != c 1 { = oth T } {}
+            : i c ( __opt_pick_arg_class syms r name + depth 1 )
+            ? == c 1 { = own T } { = oth T }
         } {}
         = ix + ix 1
     }
-    ? & own oth { ^ 3 } {}
-    ? own { ^ 1 } {}
+    ? & own ! oth { ^ 1 } {}
     ^ 2
 }
 
@@ -108111,11 +108089,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
         : ~ i k 0
         ~ != 0 ( nurl_str_len rest ) {
             : s w ( str_first_word rest ) = rest ( str_skip_word rest )
-            ? != 0 ( mem_fn_lend_kind syms who k ) {
-                : i c ( __opt_pick_arg_class syms w name -1 )
-                ? != c 2 { = self T } {}
-                ? != c 1 { = other T } {}
-            } {}
+            ? != 0 ( mem_fn_lend_kind syms who k ) { ? == 1 ( __opt_pick_arg_class syms w name 0 ) { = self T } { = other T } } {}
             = k + k 1
         }
         ? & self other {
