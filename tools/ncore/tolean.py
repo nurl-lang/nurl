@@ -20,10 +20,14 @@ INT_TYS = {"i64", "i1", "i32", "i8", "void"}
 
 def lean_ty(t):
     """An IR type as an A2 type: an integer, or a `Vec` of them (`%Vec__T`)."""
-    if t in INT_TYS:
+    if t in INT_TYS or t in ("i", "u", "b"):
         return ".int"
+    if not t.startswith("%"):
+        t = "%" + t   # a type argument's name, inside another (`%Vec__String`)
     if t.startswith("%Vec__"):
         return f"(.vec {lean_ty(t[len('%Vec__'):])})"
+    if t == "%String":
+        return "(.vec .int)"   # a Vec of bytes (formal/A2/Syntax.lean)
     if t.startswith("%Slice__"):
         return f"(.slice {lean_ty(t[len('%Slice__'):])})"
     raise Unsupported(f"type {t}")
@@ -134,6 +138,16 @@ class Fn:
         """A standard-library call A2 has a construct for, or None."""
         f, n = words[1], int(words[2])
         ops = words[3:3 + n]
+        if f == "string_from" and n == 1:
+            # a fresh owned String of a text the IR does not track
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.new .int) {rest})"
+        if f == "string_data" and n == 1 and ops[0] != "c":
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.view {self.var(int(ops[0][1:]))}) {rest})"
+        if f == "string_len" and n == 1 and ops[0] != "c":
+            x = self.fresh() if x is None else x
+            return f"(.letv {x} (.expr (.len {self.var(int(ops[0][1:]))})) {rest})"
         if f.startswith("vec_new__") and n == 0:
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.new {vec_elem(f, 'vec_new__')}) {rest})"
