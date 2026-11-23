@@ -80124,7 +80124,23 @@ unsafe @ gen_assign i lex i syms i cg → s {
                 // (The old value goes below, so the value is copied first
                 // wherever it lent, as `= o ? c ( id o ) …` is.)
                 : b __bj_self & != 0 ( nurl_str_len __bj_sp ) ( str_contains_word ( bck_swap_char ( nurl_sym_get2 syms bck_rhs_val `__pljr` ) 10 32 ) name )
-                ? & & & __bj_self ! ( seq __bj_sp __ud_ptr ) | ( seq __bj_sb `dyn` ) ( seq __bj_sb `1` ) ( __clone_supported vt syms ) {
+                // (…or one that lends what dies with the closure - a local or a
+                // parameter of it, another capture - from a join the `__jalias`
+                // move does not take over owner by owner: a nested join over a
+                // payload, `: e ? k ?? x { T s → s … } ( id a )`. Copied in where
+                // it lent, as the join assigned directly is; AGORA-964.)
+                // (A `__jalias` cursor too: its alias set names the owners its
+                // arms select, but a nested join's payload arm - an element of
+                // a closure-local Vec, `?? ( vec_get [T] w 0 ) { T s → s … }` -
+                // lends what is none of them, so a takeover left the capture
+                // claiming an element its Vec freed. The copy is what AGORA-872
+                // gives the join assigned directly.)
+                // (Only a binding of a join - owned per path, `dyn`, or a
+                // `__jalias` cursor: a single call's lend, `: e ( id a )`, is
+                // taken over as before, with no copy.)
+                : b __bj_join | ( seq __bj_sb `dyn` ) ( seq ( nurl_sym_get2 syms __bj_sp `__jalias` ) `1` )
+                : b __bj_die & __bj_join ( __cc_dying_lend syms ( bck_swap_char ( nurl_sym_get2 syms bck_rhs_val `__pljr` ) 10 32 ) name )
+                ? & & & | __bj_self __bj_die ! ( seq __bj_sp __ud_ptr ) | ( seq __bj_sb `dyn` ) ( seq __bj_sb `1` ) ( __clone_supported vt syms ) {
                     : s __bj_f ( mem_udrop_flag_get syms cg __bj_sp )
                     : s __bj_c ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __bj_c ) ( nurl_print ` = xor i1 ` ) ( nurl_print __bj_f ) ( nurl_print `, 1\n` )
