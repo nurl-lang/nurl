@@ -689,7 +689,8 @@ theorem Inv.clean {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ 
     nvF := hi.nvF
     anch := fun p E hp hm hs => by
       obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
-      rw [clean_mode] at hm; rw [clean_rootb hm]; exact hi.anch p E0 h0 hm hs
+      rw [clean_mode] at hm; rw [clean_rootb hm]
+      exact (hi.anch p E0 h0 hm hs).of_ty fun r Er hr => ⟨Er.clean, cleanC_of hr, clean_ty Er⟩
     spineNd := hi.spineNd
     spineDom := fun v hv => by
       obtain ⟨E, hE⟩ := hi.spineDom v hv
@@ -2899,9 +2900,9 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
         anch := fun p E hp hm _ => by
           by_cases hpe : p = m.nv
           · subst hpe; simp only [Γe, setE, upd_same, Option.some.injEq] at hp; subst hp
-            exact fun d hd hb => List.mem_append_right _ (hZ d hd hb)
+            exact fun d hd hb => Or.inl (List.mem_append_right _ (hZ d hd hb))
           · simp only [Γe, setE, upd_ne _ _ hpe] at hp
-            exact fun d hd hb' => List.mem_append_left _ (hic.anch p E hp hm (by simp [Stmt.spine]) d hd hb')
+            sorry  -- WIP scaffold (AGORA-937 B2, never merged): the closure call's frame: a held root must be none of the captured names (AGORA-963)
         spineNd := by simp [Stmt.spine]
         spineDom := by simp [Stmt.spine]
         catchOK := catchOK_src (by simp [Stmt.src, hk])
@@ -3013,7 +3014,9 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
             | _ => exact absurd rfl hb'
       exact RSetup.hits_false_of (fun d' hd' hr' => by
         by_cases hb0 : d'.kind.bound = .none
-        · exact absurd (hr' ▸ hanch d' hd' hb0) hF
+        · rcases hanch d' hd' hb0 with h' | _
+          · exact absurd (hr' ▸ h') hF
+          · sorry  -- WIP scaffold (AGORA-937 B2, never merged): a held root is no mutating capture of the closure called (AGORA-963)
         · exact RSetup.kills_isName hbr _ (RSetup.isName_of_bound hb0))
     have hcapW : ∀ ci ∈ cs, ∃ Ev, Γ ci.1 = some Ev ∧ Ev.vdeps = [] ∧ Ev.mode = .own ∧
         ci.2.2.holdsView = false ∧ (ci.2.1 = .inp ∨ ∃ b, ci.2.1 = .inout b ∧ ci.1 ∉ zs ∧
@@ -3150,7 +3153,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
                   rw [h1'] at this; cases this
                   rw [clean_rootb hm]
                   simp only [Γe, setE, upd_ne _ _ hs'.1] at h0
-                  exact hic.anch p E1' h0 hm (by simp [Stmt.spine])
+                  sorry  -- WIP scaffold (AGORA-937 B2, never merged): the new statement names the closure's inout captures (AGORA-963)
               spineNd := by
                 simp only [Stmt.spine, List.nodup_cons, List.mem_cons, not_or] at hnd ⊢
                 exact ⟨⟨hxe, hnd.1⟩, fun h' => Nat.lt_irrefl _ (hcin _ h'), hnd.2⟩

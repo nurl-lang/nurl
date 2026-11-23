@@ -254,7 +254,7 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
       have := h.post_rootb h0 (hm ▸ hrb)
       rw [h1'] at this; cases this
       rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)] at hr
-      exact (h.anch.toAnchF hi.toMInv.noRegion) p E1' h0 (hm ▸ hrb) r hr
+      exact fun hb => Or.inl ((h.anch.toAnchF hi.toMInv.noRegion) p E1' h0 (hm ▸ hrb) r hr hb)
   spineNd := by
     rw [callStmt_spine, h.body_spine, List.append_nil]
     have hx : x ∉ (m.nv + fn.params.length) :: wrapSpine fn.params m.nv 0 := by
@@ -497,7 +497,7 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
     wf := hi.wf
     noInout := hi.noInout
     rbLive := hi.rootbLive
-    anch := RootbAnch.toR fun p E hp hm => hi.anch p E hp hm (by simp [Stmt.spine])
+    anch := sorry  -- WIP scaffold (AGORA-937 B2, never merged): CallA.anch takes the relaxed anchors (B3: the design doc's "The call side")
     postwf := hw1
     postdm := hdm
     reswf := hE
@@ -597,7 +597,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       by_cases hpx : p = x
       · subst hpx; simp [setE] at hp'; subst hp'; rw [hEc] at hm; cases hm
       · simp only [setE, upd_ne _ _ hpx] at hp'
-        exact hi.anch p Ep hp' hm (by simp [Stmt.spine])
+        sorry  -- WIP scaffold (AGORA-937 B2, never merged): StmtT.catchR's anchor premise takes the relaxed form
     have hsp : (callIn fn [] m.nv x).spine = [m.nv + fn.params.length] := by
       rw [callIn_spine, h.body_spine]; simp [hp, wrapSpine]
     have hKO : KeepOut ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) (setE Γ x (callRes Γ fn []))
@@ -637,7 +637,9 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
     refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, fun _ bl hk _ => ⟨bl, hk, BlkKeep.refl bl⟩,
       h.catchOK _ k⟩
-      hI.pinIn hI.dtorIn
+      hI.pinIn hI.dtorIn (fun v hv => by
+        simp only [recStmt, callStmt, Stmt.killVars, List.mem_cons, List.mem_append] at hv ⊢
+        rcases hv with rfl | (rfl | hv) | hv <;> simp_all)
     · simp only [recStmt, Stmt.vars, List.mem_cons, List.mem_append] at hv
       rcases hv with rfl | (rfl | hv) | hv
       · simp [callStmt, Stmt.vars]

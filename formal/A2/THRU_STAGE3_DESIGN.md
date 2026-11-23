@@ -797,6 +797,16 @@ This makes B2's last two cases depend on B3's invariant. The order is therefore:
 
 (1) is the closest to what `callc` reads (`m.st c = some ⟨o, some (.pkg … cs)⟩`), and the call establishes it from `CallThruOK`'s `w ∉ roots (mutNames Γ args)` together with the package invariant that a package's captures are its entry's name dependencies.
 
+**Where the WIP branch stands (2026-11-23).** With every proof file moved onto the relaxed anchors, the whole library builds. The places still open are marked `sorry -- WIP scaffold (AGORA-937 B2, never merged)`, so the gaps are an exact list. Nothing is merged while any is there.
+- **The closure-capture clause (AGORA-963), 7 places:**
+  - Preservation's `frozenIn` and `catchR`;
+  - Closure.lean: the closure call's frame, the kill at the captures, and the new statement;
+  - EnvHand.lean: the anchors the package-call lemmas take, two places.
+- **`SrcCase` relaxed, 2 places:** Preservation's `withLock` and `withElem` (SrcKeep's `StmtT.ctxRel`).
+- **`CallA.anch` relaxed (B3), 1 place:** CallInv.lean's call setup.
+- **`StmtT.catchR`'s anchor premise, 1 place:** the typing rule asks `RootbAnchF Δ F` (CallInv.lean's recover case).
+- **Independent of the rest, 2 places:** EnvHand.lean, carrying the anchors to the package call's new statement (fresh `m.nv` / `m.nv + 1`, and the code's renamed body).
+
 **The call side (B3): what `CallA.anch` is used for.** Four uses (2026-11-23), and all but one are met by the relaxed clause:
 1. **`CallA.post_rootb` (Call.lean).** The call's context change leaves every borrowed parameter's entry as it was. At a moved or changed argument, a held root is impossible: an argument is a killable name of the `letcall` / `callc`, and the clause keeps held roots out of those. At the roots of `mutNames Γ args` (what an argument closure may change by name), the clause says nothing. **This is the one use that needs AGORA-963's fact**, in its typing form: no held root is a root of `mutNames Γ args`.
 2. **CallInv.lean:257.** The new `Inv`'s anchors for an outer borrowed parameter after the call is placed. The renamed body's killable names are `≥ base` or `inout` arguments (`Step.killVars_sub`'s call case), and an outer held root is none of them. So the relaxed clause carries over (transport: `of_ty` / `extend`).

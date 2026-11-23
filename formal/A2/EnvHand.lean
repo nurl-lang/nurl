@@ -2435,7 +2435,7 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
   have e6 := Option.some.inj (hf0.symm.trans hf)
   subst e6
   have hanch := hi.leafAnch rfl
-  have hanchF := hi.leafAnchF rfl
+  have hanchF : RootbAnchF Γ F := sorry  -- WIP scaffold (AGORA-937 B2, never merged): the package-call lemmas take the relaxed anchors (AGORA-963)
   have hos : Ec.mode.ownSlot = true := by rw [hmo]; rfl
   have hcF : c ∉ F := hcT.sink0_notF hσ hsp
   have hxn : x < m.nv := hi.nvS x (by simp [Stmt.vars])
@@ -2531,7 +2531,7 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
       rcases hv with h | h | h | h | h | h | h <;> (try rw [h]) <;> (try assumption)
       exact Nat.lt_of_lt_of_le (hi.nvS v (by simp [Stmt.vars, h])) (Nat.le_add_right _ 2)
     · exact Nat.lt_of_lt_of_le (hi.nvF v hv) (by show m.nv ≤ m.nv + 2; omega)
-    · exact hi.anch p E' (hrbΓ p E' hp hm) hm (by simp [Stmt.spine])
+    · sorry  -- WIP scaffold (AGORA-937 B2, never merged): carry the anchors to the package call's new statement (fresh m.nv / m.nv+1, the code's renamed body)
     · rw [hspine] at hv
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hv
       rcases hv with rfl | rfl
@@ -2641,7 +2641,7 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
     have e6 := Option.some.inj (hf0.symm.trans hf)
     subst e6
     have hanch := hi.leafAnch rfl
-    have hanchF := hi.leafAnchF rfl
+    have hanchF : RootbAnchF Γ F := sorry  -- WIP scaffold (AGORA-937 B2, never merged): the package-call lemmas take the relaxed anchors (AGORA-963)
     have hos : Ec.mode.ownSlot = true := by rw [hmo]; rfl
     have hcF : c ∉ F := hcT.inout0_notF hσ hsp
     have hxn : x < m.nv := hi.nvS x (by simp [Stmt.vars])
@@ -2747,7 +2747,7 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
           | (rw [h]; assumption)
           | exact hS v (by simp [Stmt.vars, h])
       · exact Nat.lt_of_lt_of_le (hi.nvF v hv) (by show m.nv ≤ m.nv + 2; omega)
-      · exact hi.anch p E' (hrbΓ p E' hp hm) hm (by simp [Stmt.spine])
+      · sorry  -- WIP scaffold (AGORA-937 B2, never merged): carry the anchors to the package call's new statement (fresh m.nv / m.nv+1, the code's renamed body)
       · rw [hspine] at hv
         simp only [List.mem_cons, List.not_mem_nil, or_false] at hv
         rcases hv with rfl | rfl
