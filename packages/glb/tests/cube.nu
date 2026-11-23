@@ -84,6 +84,34 @@ $ `../src/glb.nu`
     : i h2 ( glb_vertex half 0.0 1.0 0.0 )
     ( glb_tri half h0 h1 h2 )
     ?? ( glb_bytes half `` ) { T _ → { ( nurl_print `FAIL a half-coloured mesh was accepted\n` ) = rc 1 } F e → { ( nurl_print `refused: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) } }
+    // a normal of any non-zero size keeps its direction: 1e-13 and 1e200 → +X
+    : ~ GlbMesh sc ( glb_mesh_new )
+    : i s0 ( glb_vertex sc 0.0 0.0 0.0 )
+    ( glb_normal sc 0.0000000000001 0.0 0.0 )
+    : i s1 ( glb_vertex sc 0.0 1.0 0.0 )
+    ( glb_normal sc 1.0e200 0.0 0.0 )
+    : i s2 ( glb_vertex sc 0.0 0.0 1.0 )
+    ( glb_normal sc 1.0 0.0 0.0 )
+    ( glb_tri sc s0 s1 s2 )
+    : String scp ( path_join dir `scaled.glb` )
+    ?? ( glb_write sc ( string_data scp ) `` ) { T _ → {} F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) = rc 1 } }
+    // a stray colour byte, and a position too large for f32
+    : ~ GlbMesh stray ( glb_mesh_new )
+    : i t0 ( glb_vertex stray 0.0 0.0 0.0 )
+    ( glb_color stray 1 2 3 255 )
+    : i t1 ( glb_vertex stray 1.0 0.0 0.0 )
+    ( glb_color stray 1 2 3 255 )
+    : i t2 ( glb_vertex stray 0.0 1.0 0.0 )
+    ( glb_color stray 1 2 3 255 )
+    ( vec_push [u] . stray col # u 9 )
+    ( glb_tri stray t0 t1 t2 )
+    ?? ( glb_bytes stray `` ) { T _ → { ( nurl_print `FAIL a stray colour byte was accepted\n` ) = rc 1 } F e → { ( nurl_print `refused: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) } }
+    : ~ GlbMesh huge ( glb_mesh_new )
+    : i u0 ( glb_vertex huge 1.0e300 0.0 0.0 )
+    : i u1 ( glb_vertex huge 1.0 0.0 0.0 )
+    : i u2 ( glb_vertex huge 0.0 1.0 0.0 )
+    ( glb_tri huge u0 u1 u2 )
+    ?? ( glb_bytes huge `` ) { T _ → { ( nurl_print `FAIL a non-finite position was accepted\n` ) = rc 1 } F e → { ( nurl_print `refused: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) } }
     : GlbMesh empty ( glb_mesh_new )
     ?? ( glb_bytes empty `` ) { T _ → { ( nurl_print `FAIL an empty mesh was accepted\n` ) = rc 1 } F e → { ( nurl_print `refused: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) } }
     ^ rc

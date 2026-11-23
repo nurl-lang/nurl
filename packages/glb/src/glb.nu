@@ -17,8 +17,9 @@
 //
 // Normals and colours are all-or-nothing: either every vertex has one or
 // the attribute is left out (a mesh with some is refused, not guessed).
-// Normals are written unit length (glTF requires it; a zero normal becomes
-// +Z). Colours go out as normalised unsigned bytes (COLOR_0, VEC4), the
+// Normals are written unit length (glTF requires it; scaled first, so any
+// non-zero size keeps its direction; a zero normal becomes +Z). Positions
+// must be finite as f32. Colours go out as normalised unsigned bytes (COLOR_0, VEC4), the
 // form every importer reads as vertex colour.
 //
 // glTF's frame is right-handed, +Y up, the front facing +Z. Converting a
@@ -125,6 +126,11 @@ $ `stdlib/ext/json.nu`
     : i nc / ( vec_len [u] . m col ) 4
     ? & != nn 0 != nn nv { ^ @ !( Vec u ) String { F ( string_from `glb: some vertices have a normal and some do not` ) } } {}
     ? & != nc 0 != nc nv { ^ @ !( Vec u ) String { F ( string_from `glb: some vertices have a colour and some do not` ) } } {}
+    // exactly four bytes a vertex: a stray byte written straight into `col`
+    // would shift the indices off their 4-byte alignment
+    ? & != nc 0 != ( vec_len [u] . m col ) * nv 4 { ^ @ !( Vec u ) String { F ( string_from `glb: each vertex colour must be four bytes` ) } } {}
+    ? != ( vec_len [f] . m pos ) * nv 3 { ^ @ !( Vec u ) String { F ( string_from `glb: each vertex position must be three numbers` ) } } {}
+    ? & != nn 0 != ( vec_len [f] . m nrm ) * nv 3 { ^ @ !( Vec u ) String { F ( string_from `glb: each vertex normal must be three numbers` ) } } {}
     : ( Slice f ) p ( slice_from_vec [f] . m pos )
     : ( Slice i ) ix ( slice_from_vec [i] . m idx )
     : ~ i k 0
@@ -148,6 +154,11 @@ $ `stdlib/ext/json.nu`
         : f x # f # f32 ( slice_at [f] p * k 3 )
         : f y # f # f32 ( slice_at [f] p + * k 3 1 )
         : f z # f # f32 ( slice_at [f] p + * k 3 2 )
+        // glTF forbids non-finite components; a finite f64 too large for
+        // f32 becomes infinite here too
+        ? | | | | | != 0 ( nurl_is_nan x ) != 0 ( nurl_is_inf x ) != 0 ( nurl_is_nan y ) != 0 ( nurl_is_inf y ) != 0 ( nurl_is_nan z ) != 0 ( nurl_is_inf z ) {
+            ^ @ !( Vec u ) String { F ( string_from `glb: a vertex position is not a finite number` ) }
+        } {}
         ( __glb_f32 bin x ) ( __glb_f32 bin y ) ( __glb_f32 bin z )
         ? < x mnx { = mnx x } {}
         ? < y mny { = mny y } {}
@@ -166,9 +177,20 @@ $ `stdlib/ext/json.nu`
             : f a ( slice_at [f] q * k 3 )
             : f b ( slice_at [f] q + * k 3 1 )
             : f c ( slice_at [f] q + * k 3 2 )
-            : f l ( float_sqrt + + * a a * b b * c c )
-            ? > l 0.000000000001 {
-                ( __glb_f32 bin / a l ) ( __glb_f32 bin / b l ) ( __glb_f32 bin / c l )
+            // scaled by the largest component first, so a tiny normal keeps
+            // its direction and a huge one does not overflow when squared;
+            // only an exactly zero (or non-finite) one becomes +Z
+            : f aa ? < a 0.0 - 0.0 a a
+            : f ab ? < b 0.0 - 0.0 b b
+            : f ac ? < c 0.0 - 0.0 c c
+            : f mx ? > aa ? > ab ac ab ac aa ? > ab ac ab ac
+            : b usable & > mx 0.0 == 0 ( nurl_is_inf mx )
+            ? & usable == 0 ( nurl_is_nan + + a b c ) {
+                : f sa / a mx
+                : f sb / b mx
+                : f sc / c mx
+                : f l ( float_sqrt + + * sa sa * sb sb * sc sc )
+                ( __glb_f32 bin / sa l ) ( __glb_f32 bin / sb l ) ( __glb_f32 bin / sc l )
             } {
                 ( __glb_f32 bin 0.0 ) ( __glb_f32 bin 0.0 ) ( __glb_f32 bin 1.0 )
             }

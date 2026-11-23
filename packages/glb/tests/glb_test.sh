@@ -24,7 +24,7 @@ fi
 cat "$WORK/run.out"
 fails=$(grep -c '^FAIL' "$WORK/run.out")
 
-python3 - "$WORK/cube.glb" "$WORK/tri.glb" <<'PY' || fails=$((fails + 1))
+python3 - "$WORK/cube.glb" "$WORK/tri.glb" "$WORK/scaled.glb" <<'PY' || fails=$((fails + 1))
 import json, math, struct, sys
 CT = {5121: ("B", 1), 5125: ("I", 4), 5126: ("f", 4)}
 NC = {"SCALAR": 1, "VEC3": 3, "VEC4": 4}
@@ -51,6 +51,12 @@ for f in sys.argv[1:]:
         flat = struct.unpack_from("<%d%s" % (a["count"] * n, fmt), binb, v["byteOffset"])
         return a, [flat[k:k + n] for k in range(0, len(flat), n)]
     prim = doc["meshes"][0]["primitives"][0]
+    # the cube is written with both: a writer that dropped them must not pass
+    if name == "cube.glb" and not {"NORMAL", "COLOR_0"} <= set(prim["attributes"]): fail(name, "NORMAL or COLOR_0 missing")
+    if name == "scaled.glb":
+        _, N = read(prim["attributes"]["NORMAL"])
+        if any(abs(n[0] - 1) > 1e-6 or abs(n[1]) > 1e-6 or abs(n[2]) > 1e-6 for n in N): fail(name, "tiny/huge normals lost their direction: %r" % (N,))
+        print("PASS", name, "normals of any size keep their direction"); continue
     pa, P = read(prim["attributes"]["POSITION"])
     for ax in range(3):
         if abs(min(p[ax] for p in P) - pa["min"][ax]) > 1e-6 or abs(max(p[ax] for p in P) - pa["max"][ax]) > 1e-6: fail(name, "min/max")
@@ -85,7 +91,7 @@ for (const f of process.argv.slice(2)) {
 }
 process.exit(bad ? 1 : 0);
 JS
-    (cd "$GLTF_VALIDATOR" && node .glb-check.mjs "$WORK/cube.glb" "$WORK/tri.glb") || fails=$((fails + 1))
+    (cd "$GLTF_VALIDATOR" && node .glb-check.mjs "$WORK/cube.glb" "$WORK/tri.glb" "$WORK/scaled.glb") || fails=$((fails + 1))
     rm -f "$GLTF_VALIDATOR/.glb-check.mjs"
 else
     echo "SKIP Khronos validator (set GLTF_VALIDATOR to a dir with node_modules/gltf-validator)"

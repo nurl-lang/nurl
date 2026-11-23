@@ -10,8 +10,10 @@
   written as binary glTF 2.0. Normals are normalised on the way out (a zero
   normal becomes +Z), colours are normalised unsigned bytes (`COLOR_0`, VEC4),
   indices u32; POSITION carries min/max; the material is double-sided white
-  PBR. A dangling index, or normals or colours on only some of the vertices,
-  is refused.
+  PBR. A dangling index, normals or colours on only some of the vertices, a
+  colour vector that is not exactly four bytes a vertex, or a position that is
+  not finite as f32 is refused. Normals are scaled by their largest component
+  before normalising, so any non-zero size keeps its direction.
 - `tests/glb_test.sh`: writes a coloured cube and a bare triangle and checks
   the container, the chunks, every accessor against its bufferView, indices,
   min/max, unit normals and the winding against the normals, without
