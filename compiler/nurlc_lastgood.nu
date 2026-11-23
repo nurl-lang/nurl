@@ -114566,7 +114566,11 @@ unsafe @ __ir_calls_level s ir i set → i {
     // tests a pointer that is almost never null, and the branch is
     // cheaper there than a select. nurl_vctl_get below is the branchless
     // form, where hoisting the load out of a loop is the point.)
-    ( emit `@.nurl.peek.zero = linkonce_odr constant i64 0` )
+    // (A Vec's control block reads, at null, as this: three zero words, its
+    // data pointer, length and capacity. A null handle is a Vec's empty
+    // state — a field a sink took over, an `inout` slot handed on, a
+    // zero-initialised global — read as an empty Vec.)
+    ( emit `@.nurl.peek.zero = linkonce_odr constant [3 x i64] zeroinitializer` )
     // What a null `s` reads as at a C string primitive (`"nurl.cstr"`).
     // Private, so a partitioned build (--split) copies it into every part
     // that names it.
@@ -114620,9 +114624,10 @@ unsafe @ __ir_calls_level s ir i set → i {
     ( emit `entry:` )
     ( emit `  %vg.n = icmp eq i8* %p, null` )
     ( emit `  %vg.b = bitcast i8* %p to i64*` )
-    ( emit `  %vg.q = select i1 %vg.n, i64* @.nurl.peek.zero, i64* %vg.b` )
-    ( emit `  %vg.j = select i1 %vg.n, i64 0, i64 %i` )
-    ( emit `  %vg.e = getelementptr inbounds i64, i64* %vg.q, i64 %vg.j` )
+    // (`i` is a word of the block, 0..2, so at null it reads the same word of
+    // the zero block: one select, and the word's offset stays an immediate.)
+    ( emit `  %vg.q = select i1 %vg.n, i64* getelementptr ([3 x i64], [3 x i64]* @.nurl.peek.zero, i64 0, i64 0), i64* %vg.b` )
+    ( emit `  %vg.e = getelementptr inbounds i64, i64* %vg.q, i64 %i` )
     ( emit `  call void @llvm.assume(i1 true) [ "dereferenceable"(i64* %vg.e, i64 8) ]` )
     ( emit `  %vg.v = load i64, i64* %vg.e, !tbaa !92` )
     ( emit `  ret i64 %vg.v` )
