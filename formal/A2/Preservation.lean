@@ -1,5 +1,5 @@
 import A2.TakeB
-import A2.CapsEval
+import A2.StepCaps
 
 /-! A2 — preservation: a step of a well-typed configuration leads to a
 well-typed configuration. -/
@@ -16,6 +16,16 @@ def Keep (Γ Γ' : Ctx) (s s' : Stmt) : Prop :=
   (∀ v E', Γ' v = some E' → v ∉ s'.spine → v ∉ s.spine ∧ ∃ E, Γ v = some E) ∧
   -- A2-drop.2: a destructor binding outside the running scopes gains no view
   DKeep Γ Γ' s'.spine
+
+/-- A borrowed parameter outside the running scopes after a step was one
+    before, with the same entry, outside the old scopes. -/
+theorem Keep.rootb_back {Γ Γ' : Ctx} {s s' : Stmt} (hk : Keep Γ Γ' s s') {p : Var} {E : Entry}
+    (hp : Γ' p = some E) (hm : E.mode = .rootb) (hps : p ∉ s'.spine) : Γ p = some E ∧ p ∉ s.spine := by
+  obtain ⟨hps0, E0, h0⟩ := hk.2.1 p E hp hps
+  obtain ⟨_, E', h', hm', _, hrb⟩ := hk.1 p E0 h0 hps0
+  rw [hp] at h'; cases h'
+  have hm0 : E0.mode = .rootb := by rw [← hm']; exact hm
+  rw [hrb hm0]; exact ⟨h0, hps0⟩
 
 structure CtxRel (Γ Γ' : Ctx) : Prop where
   dom   : ∀ x, (Γ' x).isSome = (Γ x).isSome
@@ -2742,7 +2752,13 @@ theorem pres_unwindD {P : Prog} {Γ Δ1 : Ctx} {F : List Var} {x : Var} {f : Nat
       dtorOut := fun w E hw hd hos hn _ d hdd hnm hrs =>
         hpinU'.2.2 w E hw hd hos hn d hdd hnm (by simpa [Stmt.spine] using hrs)
       dtorIn := ⟨fun _ _ _ _ _ _ _ _ => by simp [Stmt.spine], trivial⟩ 
-      heldCaps := sorry }  -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
+      -- (AGORA-963 step 3: the panicking step keeps the clause at a held root,
+      -- none of its killable names: `Step.slotsCaps`)
+      heldCaps := hiS.heldCaps_step (fun q E hq hmq _ => by
+          obtain ⟨hqx, hqk, h0⟩ := hrbU' q E hq hmq
+          exact ⟨h0, by simp [Stmt.spine, hqx, hqk]⟩) (fun w hw hcw =>
+          CapsInpAt.of_slots ((hp.slotsCaps hiS.toMInv (fun h => hw (by simp [Stmt.killVars, h])) hcw.1).2 _ rfl)
+            hMu') }
   · intro w E hw hws
     have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
     have hwk : w ∉ k.spine := fun h => hws (by simp [Stmt.spine, h])
@@ -4877,7 +4893,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           pinIn := hi'.pinIn
           dtorOut := dtorOut_cong (b := []) rfl rfl hk hi'.dtorOut hi.dtorOut
           dtorIn := hi'.dtorIn 
-          heldCaps := sorry }  -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
+          -- (AGORA-963 step 3: the inner step keeps the clause at a held root, none
+          -- of its killable names: `Step.slotsCaps`)
+          heldCaps := hi.heldCaps_step (fun p E hp hm hps => by
+              obtain ⟨h0, hps0⟩ := hk.rootb_back hp hm (by simpa [Stmt.spine] using hps)
+              exact ⟨h0, by simpa [Stmt.spine] using hps0⟩) (fun w hw hcw =>
+              CapsInpAt.of_slots ((hst'.slotsCaps hi.toMInv (fun h => hw (by simp [Stmt.killVars, h])) hcw.1).1 _ _ rfl)
+                hi'.toMInv) }
 
   | panic =>
     intro m m' s' hcd hi hst
@@ -5029,7 +5051,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           pinIn := hi'.pinIn
           dtorOut := dtorOut_cong (b := []) rfl rfl hk hi'.dtorOut hi.dtorOut
           dtorIn := hi'.dtorIn 
-          heldCaps := sorry }  -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
+          -- (AGORA-963 step 3: the inner step keeps the clause at a held root, none
+          -- of its killable names: `Step.slotsCaps`)
+          heldCaps := hi.heldCaps_step (fun p E hp hm hps => by
+              obtain ⟨h0, hps0⟩ := hk.rootb_back hp hm (by simpa [Stmt.spine] using hps)
+              exact ⟨h0, by simpa [Stmt.spine] using hps0⟩) (fun w hw hcw =>
+              CapsInpAt.of_slots ((hst'.slotsCaps hi.toMInv (fun h => hw (by simp [Stmt.killVars, h])) hcw.1).1 _ _ rfl)
+                hi'.toMInv) }
     | catchSkip =>
       refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial trivial trivial, Nat.le_refl _,
         (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl⟩
@@ -5098,7 +5126,16 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hKOd : KeepOut Δ Δ (Stmt.skip).spine :=
         ⟨fun v E hv _ => ⟨E, hv, rfl, rfl, fun _ => rfl⟩, fun v E' hv => ⟨by simp [Stmt.spine], E', hv⟩⟩
       refine ⟨Δ, StmtT.catchR hxF StmtT.skip hM hanchΔ hKOd (DStay.refl _ _),
-        Inv.ofLeaf (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hi hM' (by simp [hnv1]) (by simp [Stmt.vars, hnv1]; exact hi.nvS x (by simp [Stmt.vars]))
+        -- (AGORA-963 step 3: the panicking body keeps the clause at a held root,
+        -- none of its killable names, `Step.slotsCaps`; `x` says so, an integer)
+        Inv.ofLeaf (hi.heldCaps_step (fun q E hq hmq _ => by
+            obtain ⟨hqs, E0, h0⟩ := hKO.2 q E hq
+            obtain ⟨E', h', hm', _, hrb⟩ := hKO.1 q E0 h0 hqs
+            rw [hq] at h'; cases h'
+            have hm0 : E0.mode = .rootb := by rw [← hm']; exact hmq
+            rw [hrb hm0]; exact ⟨h0, by simpa [Stmt.spine] using hqs⟩) (fun w hw hcw =>
+            CapsInpAt.of_slots (((hp.slotsCaps hi.toMInv (fun h => hw (by simp [Stmt.killVars, h])) hcw.1).2 _ rfl).set
+              (fun V e => by cases e; exact ValCapsInp.int _ w)) hM')) hi hM' (by simp [hnv1]) (by simp [Stmt.vars, hnv1]; exact hi.nvS x (by simp [Stmt.vars]))
         (hanchΔ.anti fun v hv => by simpa [Stmt.killVars] using hv) (by simp [Stmt.spine]) (covers_set_none hc1 hxown (fun _ h => by cases h)) hcatch,
         by simp [hnv1], ⟨fun v E hv hvs => ⟨by simp [Stmt.spine], hKO.1 v E hv hvs⟩,
           fun v E' hv _ => hKO.2 v E' hv,

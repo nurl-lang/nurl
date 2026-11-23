@@ -920,3 +920,4 @@ import A3
 #print axioms A2.BindParams.capsInp
 #print axioms A2.Release.capsInp
 #print axioms A2.EvalR.capsInp
+#print axioms A2.Step.slotsCaps
