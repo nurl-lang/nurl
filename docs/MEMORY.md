@@ -230,6 +230,12 @@ unsafe @ name_add s n → v {
 }
 ```
 
+A global that never changes (no `~`) is its first value for the whole
+run, so it may not start as zero bytes that are not a value of its type:
+`: ( Vec i ) g 0` would stay a null control block, and a push through it
+would write through null (AGORA-987). Make it mutable and fill it as
+above, or set it at start.
+
 A value that is there or not is an option global (`: ~ ?Model g_model 0`,
 zero is `F`): `= g_model @ ?Model { F }` lets the old one go.
 `( mem_addr g )` (`unsafe`) is a `*T` to any mutable global: a struct

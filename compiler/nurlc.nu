@@ -100937,6 +100937,22 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col �
                     ( nurl_sym_def syms ( nurl_str_cat cname `__aggglobal` ) `1` )
                 } {}
             }
+            // An immutable global is its initial value for the whole run. An
+            // integer gives an aggregate its zero bytes, and of a type whose
+            // zero is not a value of it — a String, a Vec, a library handle,
+            // a closure, or what holds one (__zero_invalid, as the zero-fill
+            // constructors ask) — that is a null handle for good: read, it
+            // is empty, and a change through it (a push) writes through null
+            // (AGORA-987). A mutable one starts as zero and is filled behind
+            // an `unsafe` accessor (docs/MEMORY.md, module globals).
+            // (Last, so the global is declared and its uses report nothing more.)
+            ? & ! is_mutable ( __zero_invalid ( nurl_llty lt ) syms ) {
+                : s __zg_ty ( __zty_show ( nurl_llty lt ) )
+                : s __zg1 ( nurl_str_cat4 `the global '` cname `' never changes, and it starts as zero bytes, which are not a '` __zg_ty )
+                : s __zg2 `': a String or a Vec needs its control block, a library handle its shared block, a closure its code, so it would stay a null handle for the whole run, and a change through it (a push) would write through null. `
+                : s __zg3 ( nurl_str_cat3 `Make it a mutable global (': ~ ` ( nurl_str_cat __zg_ty ( nurl_str_cat3 ` ` cname ` 0'), filled before use and reached from an 'unsafe' accessor, or set it at start from a function of no arguments with a type that synchronises itself (( Locked T ), ( Arc T ), …).` ) ) `` )
+                ( die_pos lex __cv_line __cv_col ( nurl_str_cat3 __zg1 __zg2 __zg3 ) )
+            } {}
             // TEMPORARILY DISABLED: ( nurl_sym_def syms ( nurl_str_cat cname `__newsyntax` ) `1` )
         }
         // `: ( Locked T ) g ( make )` — a global set once at program start
