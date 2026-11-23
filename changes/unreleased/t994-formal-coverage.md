@@ -10,3 +10,12 @@
   does. `loop_element_grown_through_itself_then_read_runs_clean` is
   accepted. No other verdict among the sweep's translated programs changes,
   and every one that must be rejected still is.
+- **`tools/ncore/tolean.py` hands a string literal to a raw-string parameter
+  as text** (AGORA-994). A literal argument was translated as an integer, so
+  a call passing a literal to an `s` parameter failed to type and the
+  program was refused. It is now a buffer of its own for the call, as a raw
+  string bound from a literal already is. That is stricter than the
+  program, where the literal never dies. `local_option_moved_into_inout`,
+  `inout_option_replaced_leaks` and
+  `struct_owners_rotated_by_assignment_in_a_loop_runs_clean` are accepted.
+  No other translation changes.
