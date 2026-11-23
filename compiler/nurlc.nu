@@ -50197,6 +50197,13 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // is unique to an owned value: a String, a Vec, a struct by its first such
 // field (mem_identity_key), or an option of one by its payload's? (Not an
 // enum: its first payload slot may be a number another value holds too.)
+// The value of type `vt` held at `p`, loaded.
+@ __ud_load i cg s vt s p → s {
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ptr ` ) ( nurl_print p ) ( nurl_print `\n` )
+    ^ r
+}
+
 @ __ud_keyable s vt → b {
     : s ll ( nurl_llty vt )
     // (An option or a result by its active side, as mem_ud_ident_key keys
@@ -52070,11 +52077,36 @@ unsafe @ __src_has_raw_ptr s text → b {
             // bound inside an arm).
             : i __pd ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) )
             : ~ s __ma ( nurl_sym_get2 syms src `__alias` )
+            // (A source that may be a cursor over any of several owners — a
+            // `:` binding of a join over two locals' lends, `? c ( id a ) ( id
+            // b )` — holds one of them on a run: only that one is taken over,
+            // by its key, and the others keep their own values to release.
+            // Taken over all, the one not selected was never released: a leak,
+            // AGORA-953, the last of AGORA-242's twins.)
+            : b __mkey & & & ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) != 0 ( nurl_str_len ( str_skip_word __ma ) ) ( __ud_keyable ty ) != 0 ( nurl_str_len ptr )
+            : s __mnk ? __mkey ( mem_ud_ident_key cg ty ( __ud_load cg ty ptr ) ) ``
             ~ != 0 ( nurl_str_len __ma ) {
                 : s __mw ( str_first_word __ma ) = __ma ( str_skip_word __ma )
                 ? > ( nurl_str_to_int ( nurl_sym_get2 syms __mw `__depth` ) ) __pd {
-                    : s __of ( mem_udrop_flag_get syms cg __mw )
+                    : ~ s __of ( mem_udrop_flag_get syms cg __mw )
                     : s __cf ( mem_udrop_flag_get syms cg ptr )
+                    ? & __mkey != 0 ( nurl_str_len __mnk ) {
+                        : s __mok ( mem_ud_ident_key cg ty ( __ud_load cg ty __mw ) )
+                        ? != 0 ( nurl_str_len __mok ) {
+                            : s __meq ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __meq ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print __mnk ) ( nurl_print `, ` ) ( nurl_print __mok ) ( nurl_print `\n` )
+                            : s __mtk ( __and_i1 cg __of __meq )
+                            : s __mrest ( __and_not cg __of __meq )
+                            : s __nf2 ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __nf2 ) ( nurl_print ` = or i1 ` ) ( nurl_print __cf ) ( nurl_print `, ` ) ( nurl_print __mtk ) ( nurl_print `\n` )
+                            ( mem_udrop_flag_set syms cg ptr __nf2 )
+                            ( mem_udrop_flag_set syms cg __mw __mrest )
+                            // (The core IR's `=` says the target owns what it
+                            // was given there, CORE_VF_CPCOPY, as a copy-in.)
+                            ? != 0 g_core_live { ( core_cpcopy_mark ) } {}
+                            continue
+                        } {}
+                    } {}
                     : s __nf ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __nf ) ( nurl_print ` = or i1 ` ) ( nurl_print __cf ) ( nurl_print `, ` ) ( nurl_print __of ) ( nurl_print `\n` )
                     ( mem_udrop_flag_set syms cg ptr __nf )
@@ -52181,6 +52213,10 @@ unsafe @ __src_has_raw_ptr s text → b {
                     : s __jup ( mem_udrop_ptr_of syms __jw )
                     ? & & & != 0 ( nurl_str_len __jup ) ! ( seq __jup ptr ) ( nurl_sym_has_word syms `__user_drops__` __jup ) != 0 ( nurl_str_len ( __call_owned_by syms __jup ) ) {
                         ( mem_udrop_link_alias syms ptr __jup )
+                        // (…one of them on a run, the arm's: whoever takes
+                        // the binding's value over takes over that one only,
+                        // by its key — __mem_udrop_bind_flag, AGORA-953.)
+                        ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jalias` ) `1` )
                     } {}
                 } {}
             }
