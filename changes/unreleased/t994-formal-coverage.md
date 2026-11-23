@@ -19,3 +19,10 @@
   `inout_option_replaced_leaks` and
   `struct_owners_rotated_by_assignment_in_a_loop_runs_clean` are accepted.
   No other translation changes.
+- **`tools/ncore/tolean.py` takes a parameter nurlc infers consumed as
+  `sink`** (AGORA-994). It read a parameter's mode only from the flag the
+  IR's variable line carries, so a parameter that the walk infers consumed
+  (handed on to a `sink`, recorded in the summary's `sink=`) was translated
+  as lent. The caller was then charged with a drop nurlc never makes, and
+  the move refused. `kwargs_forward_consuming_callee` is accepted; the two
+  other programs whose translation changes must be rejected and still are.
