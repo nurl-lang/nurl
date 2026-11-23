@@ -195,6 +195,7 @@ $ `stdlib/core/vec.nu`
 : ~ i g_fn_strp 0  // fn → its raw string params no summary may make a `sink` (__own_sink_str_params)
 : ~ b g_origin_arg_str F  // the argument origin_call_arg records is one whose slot is emptied where it is handed over: a raw string the compiler manages, an `inout` handle parameter (agora #776)
 : ~ i g_use_ownstr 0  // a return went through __nurl_ownstr (gen_ret)
+: ~ i g_use_ownstr_if 0  // …or through __nurl_ownstr_if, its copy decided at module end (gen_ret, AGORA-867)
 : ~ i g_use_sltmask8 0  // a call of nurl_v128_sltmask8 (defined at module end, only then)
 : ~ s g_bck_own_params ``  // the parameters the function being walked owns (a safe `sink s`)
 : ~ i g_call_cp 0  // `res` / `own`: the call just emitted copied its result `res`, owned by bit `own` (mem_own_lendback); `bind`: a let binds that copy (__mem_udrop_bind_flag) — agora #477
@@ -7299,6 +7300,83 @@ unsafe @ __arg_lend_root i syms → s {
     ^ F
 }
 
+// Is `id` a raw string this frame owns — dropped on the way out — as
+// __call_lends_local_str asks of what the callee may lend?
+@ __raw_local_str i syms s id → b {
+    : s sp ( nurl_sym_get2 syms id `__ptr` )
+    ? & != 0 ( nurl_str_len sp ) ( nurl_sym_has_word syms `__owned_strings__` sp ) { ^ T } {}
+    ^ != 0 ( nurl_sym_len2 syms id `__guardslot` )
+}
+
+// …and is one of the call just compiled's arguments such a string (whether
+// or not its callee is known yet)?
+@ __call_args_raw_local i syms → b {
+    ? == 0 g_auto_drop_strings { ^ F } {}
+    : ~ s ids ( nurl_sym_get syms `__last_call_args__` )
+    ~ != 0 ( nurl_str_len ids ) {
+        : s id ( str_first_word ids ) = ids ( str_skip_word ids )
+        ? ( __raw_local_str syms id ) { ^ T } {}
+    }
+    ^ F
+}
+
+// May the call just compiled hand back — lent — what it was given in an
+// argument that is a raw string this frame owns? An i1 operand: the
+// callee's answer at module end for each such position (`@.__nurl_lend*`,
+// mem_lend_const, as mem_local_lend_of asks of owners with a drop of their
+// own), `` when no argument is such a string or the callee is not one
+// that answers.
+@ __raw_local_lend i syms i cg → s {
+    : s key ( nurl_sym_get syms `__last_call_lend_key__` )
+    ? | == 0 ( nurl_str_len key ) ( seq key `__field__` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s cn ( str_first_word key )
+    // (A callee compiled already has its answer where the call is: the
+    // return's static rule decided, __call_lends_local_str.)
+    ? != 0 ( nurl_sym_len g_fn_compiled cn ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s gn ( str_first_word ( str_skip_word key ) )
+    : ~ s args ( nurl_str_cat ( nurl_sym_get syms `__last_call_args__` ) `` )
+    : ~ s acc ``
+    : ~ i idx 0
+    ~ != 0 ( nurl_str_len args ) {
+        : s nm ( str_first_word args ) = args ( str_skip_word args )
+        ? & ! ( seq nm `-` ) ( __raw_local_str syms nm ) {
+            : s lo ( nurl_cg_reg cg )
+            ( emit_sink_flag_load ( mem_lend_const syms `one` cn gn idx ) lo )
+            : s lp ( nurl_cg_reg cg )
+            ( emit_sink_flag_load ( mem_lend_const syms `part` cn gn idx ) lp )
+            = acc ( __or_i1 cg ( __or_i1 cg acc lo ) lp )
+        } {}
+        = idx + idx 1
+    }
+    ^ acc
+}
+
+// The source expression `sx` of a call, `g(a|b…)`, with every argument
+// that is a raw string this frame owns replaced by `-`: gen_ret copied
+// what the call lent of it, so the result views none of it (AGORA-867).
+@ __sx_drop_raw_locals i syms s sx → s {
+    : i n ( nurl_str_len sx )
+    : i op ( nurl_str_find sx `(` )
+    ? | < op 1 == 0 ( nurl_str_ends sx `)` ) { ^ ( nurl_str_cat sx `` ) } {}
+    : s inner ( nurl_str_slice sx + op 1 - - n op 2 )
+    // (An argument that is itself an expression — a call, a block — is left
+    // as it is, the whole source with it: the walk reads it as before.)
+    ? | >= ( nurl_str_find inner `(` ) 0 >= ( nurl_str_find inner `{` ) 0 { ^ ( nurl_str_cat sx `` ) } {}
+    : ~ s out ( nurl_str_slice sx 0 + op 1 )
+    : ~ s rest ( nurl_str_cat inner `` )
+    : ~ b more T
+    ~ more {
+        : i bar ( nurl_str_find rest `|` )
+        : s arg ? < bar 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 bar )
+        = out ( nurl_str_cat out ? ( __raw_local_str syms arg ) `-` arg )
+        ? < bar 0 { = more F } {
+            = out ( nurl_str_cat out `|` )
+            = rest ( nurl_str_slice rest + bar 1 - - ( nurl_str_len rest ) bar 1 )
+        }
+    }
+    ^ ( nurl_str_cat out `)` )
+}
+
 @ __call_lends_local i syms → b {
     : ~ s ids ( nurl_sym_get syms `__last_call_lend_idents__` )
     ~ != 0 ( nurl_str_len ids ) {
@@ -9065,6 +9143,44 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             // (A copy of a value that holds views still views what they
             // did.)
             ? ! ( __ty_holds_view __crt 0 ) { = __ret_l0 ( nurl_sym_get syms `__last_local_lend0__` ) } {}
+        } {}
+        // `^ ( g a )` where `a` is a raw string this frame owns and g is
+        // compiled after this function (below it, a generic instance): the
+        // rule is the one gen_ret applies below when g is known
+        // (__call_lends_local_str), decided at module end instead. Where g
+        // may lend such an argument (__raw_local_lend), the caller gets the result as
+        // its own: the string g handed over when it did, a copy of what it
+        // lent otherwise; where it may not, the result is g's as it stands.
+        // Either way `a` goes as usual, and nothing returned views it: the
+        // walk is not told of `a` (__sx_drop_raw_locals). One answer
+        // whatever order the two functions are written in (AGORA-867,
+        // AGORA-946 D4b).
+        // (A result the callee always hands over as its own, `str`, views
+        // nothing of `a`: it goes as it is, its proof static.)
+        : s __rrl ? & & & & & ! ret_call_copied __rv_raw == g_bck_closure_depth 0 ! ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) ! ( __call_lends_local_str syms ) ( __call_args_raw_local syms ) ( __raw_local_lend syms cg ) ``
+        ? != 0 ( nurl_str_len __rrl ) {
+            : s __og2 ( nurl_sym_get syms `__last_call_guard__` )
+            : ~ s __oo2 ( nurl_str_cat `null` `` )
+            ? != 0 ( nurl_str_len __og2 ) {
+                = __oo2 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __oo2 ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print __og2 ) ( nurl_print `\n` )
+            } {}
+            = g_use_ownstr_if 1
+            : s __oc2 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __oc2 ) ( nurl_print ` = call i8* @__nurl_ownstr_if(i1 ` ) ( nurl_print __rrl )
+            ( nurl_print `, i8* ` ) ( nurl_print __oo2 ) ( nurl_print `, i8* ` ) ( nurl_print val ) ( nurl_print `)\n` )
+            // (What owns the result now: the copy, or what g handed over —
+            // the guard the return's proof reads, mem_save_return_proof.)
+            : s __ow2 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __ow2 ) ( nurl_print ` = select i1 ` ) ( nurl_print __rrl ) ( nurl_print `, i8* ` ) ( nurl_print __oc2 ) ( nurl_print `, i8* ` ) ( nurl_print __oo2 ) ( nurl_print `\n` )
+            : s __gs2 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __gs2 ) ( nurl_print ` = alloca i8*\n` )
+            ( nurl_print `  store i8* ` ) ( nurl_print __ow2 ) ( nurl_print `, i8** ` ) ( nurl_print __gs2 ) ( nurl_print `\n` )
+            = val __oc2
+            ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+            ( nurl_sym_def syms `__last_call_guard__` __gs2 )
+            = __ret_sx ( __sx_drop_raw_locals syms __ret_sx )
+            = ret_call_copied T
         } {}
         // One that cannot be copied has nothing to stand in for the lend:
         // refused at module end when the callee may lend such an argument
@@ -103780,6 +103896,10 @@ unsafe @ __type_needs_drop s ty i syms → b {
     // the call's own string, or a copy.
     ? != 0 g_use_ownstr
     { ( nurl_print `define linkonce_odr i8* @__nurl_ownstr(i8* %o, i8* %v) alwaysinline {\nentry:\n  %e = icmp eq i8* %v, %o\n  br i1 %e, label %x, label %d\nd:\n  %n = call i8* @nurl_strdup(i8* %v)\n  br label %x\nx:\n  %r = phi i8* [ %v, %entry ], [ %n, %d ]\n  ret i8* %r\n}\n` ) } {}
+    // (…and where the copy is made only when `%c`, the callee's lend of an
+    // argument this frame owns, known at module end: AGORA-867.)
+    ? != 0 g_use_ownstr_if
+    { ( nurl_print `define linkonce_odr i8* @__nurl_ownstr_if(i1 %c, i8* %o, i8* %v) alwaysinline {\nentry:\n  %e = icmp eq i8* %v, %o\n  %s = xor i1 %c, true\n  %t = or i1 %e, %s\n  br i1 %t, label %x, label %d\nd:\n  %n = call i8* @nurl_strdup(i8* %v)\n  br label %x\nx:\n  %r = phi i8* [ %v, %entry ], [ %n, %d ]\n  ret i8* %r\n}\n` ) } {}
     // A raw string a callee may take over (mem_sink_str_arg): the caller's
     // own string moves, anything else goes over as a copy.
     ? != 0 g_use_sinkstr
