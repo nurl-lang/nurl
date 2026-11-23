@@ -435,10 +435,13 @@ class Fn:
             raise Unsupported(f"{fn['name']}: a result owned or lent per call")
         if "ret_alias" in sm and not borrowed(fn["name"]) and self.res_own:
             raise Unsupported(f"{fn['name']}: a result aliasing parameter {sm['ret_alias']}")
-        if borrowed(fn["name"]) and sm.get("rviews", ":") in (":", ""):
+        rets = [l.split() for l in fn["body"] if l.split()[:1] in (["ret"], ["retnx"])]
+        lit_only = bool(rets) and all(len(w) > 1 and w[1] == "c" for w in rets)
+        if borrowed(fn["name"]) and sm.get("rviews", ":") in (":", "") and not lit_only:
             # lent, but from no parameter's storage: a copy of a view an
             # argument holds (a raw string's), which A2 tracks only as a
-            # held dependency, not translated yet
+            # held dependency, not translated yet.  (AGORA-980: one that
+            # hands back only literals lends nothing, `Rhs.slit`.)
             raise Unsupported(f"{fn['name']}: a result copying a view an argument holds")
         if borrowed(fn["name"]):
             # a result that views what it was handed (the walk's summary,
@@ -1024,12 +1027,14 @@ class Fn:
             ite = f"(.ite {c} {self.stmts(a, names)} {self.stmts(b, names)})"
             return self.seq(ite, self.stmts(lines[k + 1:], names, tail))
         if w in ("ret", "retnx"):
-            if head[1] == "c" and self.res_ty == "(.slice .int)":
-                # a literal handed back as a view: A2 has no static strings
-                raise Unsupported(f"{self.fn['name']}: a literal string handed back as a view")
             # (`retnx`: the result set, its exit placed after the list, above)
             ex_ = "" if w == "retnx" else f" (.exit {self.depth})"
-            if head[1] != "-" and not self.is_int(head[1]):
+            if head[1] == "c" and self.res_ty == "(.slice .int)":
+                # AGORA-980: a literal handed back as a view is a static
+                # block's text (`Rhs.slit`); its length is no part of the
+                # typing, so the model's text is empty
+                a = f"(.assign {self.rslot} (.slit 0))"
+            elif head[1] != "-" and not self.is_int(head[1]):
                 a = f"(.assign {self.rslot} (.var {self.pvar(head[1])}))"
             else:
                 v = "(.lit 0)" if head[1] == "-" else self.operand(head[1])
