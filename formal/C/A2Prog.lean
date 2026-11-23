@@ -215,10 +215,31 @@ theorem dtorParamsB_sound {P : Prog} {fn : Fn} (h : dtorParamsB P fn = true) : D
         exact ⟨ha, g, t, resDTyOf_sound ht, hv, hf, dropFnOKB_sound hdf⟩
       · cases hm
 
-/-- `Implements`, decided for code that changes no elements through a borrow
-    (`noThruB`, so its last clause holds): its signature is the interface's
-    with the environment as the receiver and the captures after, and what
-    it lends and holds is within the interface's. -/
+/-- `ThruFn P f`, found: `f`'s body changes elements through a borrow, or
+    it calls a function that does, searched `n` calls deep. -/
+def thruReach (P : Prog) : Nat → Nat → Bool
+  | 0, _ => false
+  | n + 1, f => match P[f]? with
+    | some fn => fn.body.hasThru || fn.body.calls.any (thruReach P n)
+    | none => false
+
+theorem thruReach_sound {P : Prog} : ∀ {n f : Nat}, thruReach P n f = true → ThruFn P f
+  | 0, _, h => by simp [thruReach] at h
+  | n + 1, f, h => by
+    simp only [thruReach] at h
+    split at h
+    · rename_i fn hf
+      simp only [Bool.or_eq_true, List.any_eq_true] at h
+      rcases h with h | ⟨g, hg, hr⟩
+      · exact .here hf h
+      · exact .call hf hg (thruReach_sound hr)
+    · cases h
+
+/-- `Implements`, decided: its signature is the interface's with the
+    environment as the receiver and the captures after, and what it lends
+    and holds is within the interface's; and it changes no elements through
+    a borrow (`noThruB`), or the interface is code that does too
+    (`thruReach`), with an environment that holds no views, taken lent. -/
 def implementsB (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (σ : Nat) : Bool :=
   match P[f]?, P[σ]? with
   | some fn, some sig =>
@@ -226,7 +247,8 @@ def implementsB (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) 
     (decide (sig.recvMode = .inp) || cs.isEmpty) &&
     decide (fn.resTy = sig.resTy) && decide (fn.resOwn = sig.resOwn) &&
     fn.lends.all (fun x => decide (x ∈ sig.lends)) && fn.rholds.all (fun x => decide (x ∈ sig.rholds)) &&
-    fn.outHolds.all (fun x => decide (x ∈ sig.outHolds)) && noThruB P f
+    fn.outHolds.all (fun x => decide (x ∈ sig.outHolds)) &&
+    (noThruB P f || (thruReach P P.length σ && !te.holdsView && decide (sig.recvMode = .inp)))
   | _, _ => false
 
 theorem implementsB_sound {P : Prog} {f : Nat} {te : Ty} {cs : List (Var × PMode × Ty)} {σ : Nat}
@@ -235,13 +257,16 @@ theorem implementsB_sound {P : Prog} {f : Nat} {te : Ty} {cs : List (Var × PMod
   split at h
   · rename_i fn sig hf hσ
     simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true, List.all_eq_true,
-      List.isEmpty_iff] at h
+      List.isEmpty_iff, Bool.not_eq_true'] at h
     obtain ⟨⟨⟨⟨⟨⟨⟨hp, hcs⟩, hr⟩, ho⟩, hl⟩, hh⟩, hoh⟩, hnt⟩ := h
     refine ⟨fn, sig, hf, hσ, hp, fun hne => ?_, hr, ho, fun x hx => hl x hx, fun x hx => hh x hx,
-      fun x hx => hoh x hx, fun ht => absurd ht (noThruB_sound hnt)⟩
-    rcases hcs with h0 | h0
-    · exact absurd h0 hne
-    · exact h0
+      fun x hx => hoh x hx, fun ht => ?_⟩
+    · rcases hcs with h0 | h0
+      · exact absurd h0 hne
+      · exact h0
+    · rcases hnt with hnt | ⟨⟨hre, hv⟩, hm⟩
+      · exact absurd ht (noThruB_sound hnt)
+      · exact ⟨thruReach_sound hre, hv, hm⟩
   · cases h
 
 /-- `CodeOK`, decided method by method. -/
