@@ -1,6 +1,7 @@
 import A1
 import A2
 import A3
+import B
 /-! Run by `check.sh`: the axioms the main theorems rest on. -/
 #print axioms A1.memory_safe
 #print axioms A1.soundness
@@ -909,3 +910,11 @@ import A3
 #print axioms A2.FreshSatWitness.sat_stale_not_fresh
 #print axioms A2.FreshSatWitness.sat_slice_elem_not_fresh
 #print axioms A2.FreshSatWitness.sat_of_view_of_rootb_not_fresh
+-- Phase B1: `Vec`'s owned buffer (stdlib/core/vec.nu's raw core) meets A1's `Vec`
+#print axioms B.growTo_ok
+#print axioms B.push_ok
+#print axioms B.push_refines
+#print axioms B.get_ok
+#print axioms B.set_ok
+#print axioms B.pop_ok
+#print axioms B.free_ok

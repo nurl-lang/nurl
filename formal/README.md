@@ -1,7 +1,8 @@
 # formal — a mechanized proof of NURL's memory model
 
 > **Status: A1, A2 and A3 are proven** (`A1.memory_safe`, `A2.memory_safe`, `A2.no_leak_end`, `A2.no_leak_panic`, `A3.claim_full`, `A3.claim_made_full` — Lean 4, no `sorry`, only Lean's
-> standard axioms — `./check.sh`). Phases B–D are not. Until a phase
+> standard axioms — `./check.sh`). Phase B has begun: B1, `Vec`'s owned
+> buffer, is proven (`B.push_refines`). The rest of B, and C–D, are not. Until a phase
 > below is marked done, the part of the guarantee in
 > [`docs/MEMORY.md` §6.2](../docs/MEMORY.md) it covers rests on the
 > compiler's tests (§6.6), not on a proof; and until phase C, the proof is
@@ -36,7 +37,7 @@ the implementation (B–D) follow once the rules have stopped moving.
 | **A1** | Core calculus: owned values, moves and drop flags, borrows and views, a `Vec` that reallocates (§2.10), `inout`, `sink`. Single-threaded, no panics. Soundness: progress and preservation. | **done** |
 | **A2** | A1 plus structs and their fields, enum and option payloads, closures and trait objects (packages: code on an environment, called through an interface) with captures by handle and by name, panics with unwinding and `recover`, the drop journal — and **leak freedom**. Generics add nothing to the memory model (a template is instantiated before it is checked). | **done** — see below for what A2 does not model yet |
 | **A3** | A2 plus threads: `Send` / `Sync`, `Arc`, `Mutex`, `Locked`, `RwLocked` and its frozen read guards (`% Frozen`, `% NotSend`), `Atomic`, channels, library handles (`SendCheck`), closures and trait objects across threads, module globals (`make`), M:N fibers, foreign functions marked `sync`. Data-race freedom against the LLVM / C11 memory model. | **done** (`A3.claim_full`, `A3.claim_made_full`). A fiber is a thread of the model (the scheduler only picks which thread steps); a foreign function's `sync` is its author's claim, outside the proof (`CLAIM.md`). What each milestone leaves out (deadlock freedom, phase-D obligations on the runtime): [`A3/DESIGN.md`](A3/DESIGN.md), [`CLAIM.md`](CLAIM.md) |
-| **B** | The standard library's `unsafe` base proven to meet the semantic types it is given: `Vec`, `String`, `HashMap`, `Rc` and the cycle collector, `Arc`, channels. | later |
+| **B** | The standard library's `unsafe` base proven to meet the semantic types it is given: `Vec`, `String`, `HashMap`, `Rc` and the cycle collector, `Arc`, channels. | **B1 done** (`B/Vec.lean`): a model of the raw core of `vec.nu` (`vec_push` with `__vec_grow_to` / `__vec_place` / `alloc_grow_cap`, `vec_get`, the in-bounds store, `vec_pop`, `vec_free`) on a heap with provenance. Every operation on a represented `Vec` succeeds, touches only its live block, keeps the representation, and changes the buffer as A1's `push` / `pushRealloc` does (`B.push_refines`). Later: borrowed views (`cap < 0`), the packed-string layout, element destructors, byte sizes, `vec_insert` / `vec_remove`, then `String`, `HashMap`, `Rc`, `Arc`, channels |
 | **C** | nurlc implements the rules: the compiler emits a certificate for each accepted program and a small verified checker validates it. | later |
 | **D** | Code generation preserves the semantics: drop insertion, drop flags and the panic journal, by translation validation. | later |
 
@@ -57,6 +58,7 @@ formal/
   rules/t<N>.md    RULES.md's change rows, one file per change (an ownership PR adds
                    its file, never a row of the table); tools/formal_rules.py writes
                    the table from them at release (rules/README.md)
+  B.lean, B/       phase B: the unsafe base against the rules' types (B1: `Vec`)
   check.sh         builds the proof and checks it has no sorry and no new axiom
   lean-toolchain, lakefile.toml, A1.lean, A2.lean, A3.lean, Check.lean
   A1/              the A1 proof (Lean 4, core library only)
