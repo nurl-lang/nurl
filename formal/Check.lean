@@ -2,6 +2,7 @@ import A1
 import A2
 import A3
 import B
+import C
 /-! Run by `check.sh`: the axioms the main theorems rest on. -/
 #print axioms A1.memory_safe
 #print axioms A1.soundness
@@ -983,3 +984,8 @@ import B
 #print axioms B.rcUpgrade_ok
 #print axioms B.rcWeakDrop_ok
 #print axioms B.packedPush_ok
+-- Phase C0: an executable checker for A1's straight-line fragment, sound against A1's typing
+#print axioms C.checkExpr_sound
+#print axioms C.inferRhs_sound
+#print axioms C.checkStmt_sound
+#print axioms C.checked_memory_safe
