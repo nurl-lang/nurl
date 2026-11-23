@@ -52021,6 +52021,12 @@ unsafe @ __src_has_raw_ptr s text → b {
             ? ( seq __ssb `dyn` ) {
                 ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jpkept` ) ( nurl_sym_get2 syms src `__jpkept` ) )
                 ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__llocal` ) ( nurl_sym_get2 syms src `__llocal` ) )
+                // (…and the calls its join's value may be lent by, for a value
+                // that cannot be copied: handed back through this binding, it
+                // is refused as through the first, __nc_bound_join_local_lend.)
+                ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jlkey` ) ( nurl_sym_get2 syms src `__jlkey` ) )
+                ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jlargs` ) ( nurl_sym_get2 syms src `__jlargs` ) )
+                ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jalends` ) ( nurl_sym_get2 syms src `__jalends` ) )
                 // (…and what it lends on those paths, by how deep that was
                 // bound (`__ldepth`, a `:` binding of a join). Deeper than this
                 // binding, it dies first: the lent paths are copied in here and
