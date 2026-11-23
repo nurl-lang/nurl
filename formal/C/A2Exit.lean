@@ -76,17 +76,21 @@ def exitToB (D : List Var) (Γ Δ : Ctx) : Bool :=
      | none, none => true
      | _, _ => false)
 
-theorem exitToB_sound {P : Prog} {ξ : Exits} {D : List Var} {Γ Δ : Ctx} {F : List Var} {n : Nat}
-    (hs : Supported2 Γ D) (hsΔ : Supported2 Δ D) (h : exitToB D Γ Δ = true) (hx : ξ n Γ) :
-    StmtT P ξ Γ F (.exit n) Δ := by
+/-- What `exitToB` decides: `StmtT.exit`'s (and `StmtT.loop`'s) conditions
+    on the context left from and the one ended in. -/
+theorem exitToB_parts {D : List Var} {Γ Δ : Ctx}
+    (hs : Supported2 Γ D) (hsΔ : Supported2 Δ D) (h : exitToB D Γ Δ = true) :
+    CtxWF Δ ∧ NameWF Δ ∧ (∀ v, (Γ v).isSome = (Δ v).isSome) ∧
+      (∀ v E, Δ v = some E → ∃ E0, Γ v = some E0 ∧ E.mode = E0.mode ∧ E.ty = E0.ty ∧ (E0.fixed → E = E0)) ∧
+      DKeep Γ Δ [] ∧ DStay Γ Δ [] ∧ (FreshOK Γ → FreshOK Δ) := by
   simp only [exitToB, Bool.and_eq_true, List.all_eq_true] at h
   obtain ⟨⟨⟨hwf, hnw⟩, hfr⟩, hall⟩ := h
   have hv : ∀ v, ((Γ v).isSome == (Δ v).isSome) = true ∧ _ := fun v => by
     by_cases hd : v ∈ D
     · exact hall v hd
     · simp [hs v hd, hsΔ v hd]
-  refine .exit (Or.inl hx) (ctxWF2B_sound hsΔ hwf) (nameWFB_sound hsΔ hnw) (fun v => ?_) (fun v E hE => ?_)
-    (fun v E hE hdb hos hty _ => ?_) (fun v E0 hE0 hdb hos _ => ?_) (fun _ => freshOKB_sound hsΔ hfr)
+  refine ⟨ctxWF2B_sound hsΔ hwf, nameWFB_sound hsΔ hnw, fun v => ?_, fun v E hE => ?_,
+    fun v E hE hdb hos hty _ => ?_, fun v E0 hE0 hdb hos _ => ?_, fun _ => freshOKB_sound hsΔ hfr⟩
   · have := (hv v).1; simpa using this
   · have := (hv v).2; rw [hE] at this
     revert this
@@ -128,6 +132,25 @@ theorem exitToB_sound {P : Prog} {ξ : Exits} {D : List Var} {Γ Δ : Ctx} {F : 
       rcases hst with h0 | h0
       · exfalso; simp [hdb, hos] at h0
       · exact ⟨E, rfl, h0.1, h0.2⟩
+
+theorem exitToB_sound {P : Prog} {ξ : Exits} {D : List Var} {Γ Δ : Ctx} {F : List Var} {n : Nat}
+    (hs : Supported2 Γ D) (hsΔ : Supported2 Δ D) (h : exitToB D Γ Δ = true) (hx : ξ n Γ) :
+    StmtT P ξ Γ F (.exit n) Δ := by
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7⟩ := exitToB_parts hs hsΔ h
+  exact .exit (Or.inl hx) h1 h2 h3 h4 h5 h6 h7
+
+/-- The context a loop ends in, for the block around it: where its first
+    exit of that block leaves from, or its own start when it has none. -/
+def loopEnd (Γ : Ctx) : Obl → Ctx
+  | [] => Γ
+  | (0, Γe) :: _ => Γe
+  | _ :: E => loopEnd Γ E
+
+theorem loopEnd_supported {Γ : Ctx} {D : List Var} (hs : Supported2 Γ D) :
+    ∀ {E : Obl}, (∀ e ∈ E, Supported2 e.2 D) → Supported2 (loopEnd Γ E) D
+  | [], _ => hs
+  | (0, Γe) :: E, h => h (0, Γe) (List.mem_cons_self ..)
+  | (_ + 1, _) :: E, h => loopEnd_supported (E := E) hs (fun e he => h e (List.mem_cons_of_mem _ he))
 
 /-- What `checkX` finds: the end context, the obligations on the exits
     context, and, for a statement that ends in an exit, that exit's depth
@@ -202,6 +225,18 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
               some ⟨exitScope x rs.Δ, oblUnder x rs.E, none⟩
             else none
           | none => none
+        | none => none
+      else none
+  | Γ, F, .loop s =>
+    match checkStmt2 P R C D Γ F (.loop s) with
+    | some Δ => some ⟨Δ, [], none⟩
+    | none =>
+      if s.src then
+        match checkX P R C D Γ F s with
+        | some rs =>
+          if D.all (fun v => rs.Δ v == Γ v) && exitToB D Γ (loopEnd Γ rs.E) then
+            some ⟨loopEnd Γ rs.E, rs.E, none⟩
+          else none
         | none => none
       else none
   | Γ, F, s =>
@@ -399,6 +434,31 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
               · exact .letcall hsrc hx hF hct (t0 _ (oblUnder_ok e0 hendE hξ)) (endOK2B_sound s0 hend)
                   (dtorHeadB_sound hdk)
             · cases h
+          · cases h
+        · cases h
+      · cases h
+  | loop s ih =>
+    intro Γ F r hs hD h
+    simp only [checkX] at h
+    split at h
+    · rename_i Δ h0
+      simp only [Option.some.injEq] at h; subst h
+      exact xsound_of_check2 hR hC hs hD h0
+    · split at h
+      · rename_i hsrc
+        split at h
+        · rename_i rs hrs
+          split at h
+          · rename_i hc
+            simp only [Bool.and_eq_true] at hc
+            obtain ⟨hag, hto⟩ := hc
+            simp only [Option.some.injEq] at h; subst h
+            obtain ⟨s0, e0, t0, _⟩ := ih hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hrs
+            have heq := eq_of_agree2 s0 hs hag
+            have hsl := loopEnd_supported hs e0
+            obtain ⟨h1, h2, h3, h4, h5, h6, h7⟩ := exitToB_parts hs hsl hto
+            refine ⟨hsl, e0, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
+            exact .loop hsrc (heq ▸ t0 ξ hξ) h1 h2 h3 h4 h5 h6 h7
           · cases h
         · cases h
       · cases h

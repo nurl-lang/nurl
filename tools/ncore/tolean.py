@@ -129,6 +129,7 @@ class Fn:
         for v, ty in fn["vars"].items():
             lean_ty(ty)
         self.lits = []
+        self.depth = 0   # the loops' blocks around the statement
         self.res_ty = lean_ty(fn["ret"])
         self.res_own = self.res_ty != ".int"
 
@@ -308,18 +309,42 @@ class Fn:
             s = f"(.letv {t} (.expr (.lit 0)) {s})"
         return s
 
-    def stmts(self, lines, names):
-        """A statement list as one A2 statement: each binding scoped over
-        what follows it."""
+    def stmts(self, lines, names, tail=".skip"):
+        """A statement list as one A2 statement, ending in `tail`: each
+        binding scoped over what follows it."""
         if not lines:
-            return ".skip"
+            return tail
         head, i = lines[0].split(), 1
         w = head[0]
         if w in ("line", "drop"):
-            return self.stmts(lines[1:], names)
+            return self.stmts(lines[1:], names, tail)
         if w == "scope":
             body, j = block_of(lines, 1)
-            return self.seq(self.stmts(body, names), self.stmts(lines[j + 1:], names))
+            return self.seq(self.stmts(body, names), self.stmts(lines[j + 1:], names, tail))
+        if w == "loop":
+            # `loop <condition> loopcond op <body> end`: a block around A2's
+            # `loop`, whose body runs the condition and leaves the block
+            # (`exit 0`) when it is false; `break` leaves it too, and a `ret`
+            # leaves it and every block around it.
+            depth, j = 0, 1
+            while j < len(lines):
+                ww = lines[j].split()[0]
+                if depth == 0 and ww == "loopcond":
+                    break
+                if ww in ("scope", "if", "loop", "match", "foreach", "defer"):
+                    depth += 1
+                elif ww == "end":
+                    depth -= 1
+                j += 1
+            cond, c = lines[1:j], lines[j].split()[1]
+            body, k = block_of(lines, j + 1)
+            self.depth += 1
+            inner = f"(.ite {self.operand(c)} {self.stmts(body, names)} (.exit 0))"
+            loop_body = self.stmts(cond, names, inner)
+            self.depth -= 1
+            return self.seq(f"(.block (.loop {loop_body}))", self.stmts(lines[k + 1:], names, tail))
+        if w == "break":
+            return self.seq("(.exit 0)", self.stmts(lines[1:], names, tail))
         if w == "match":
             # an option's match: `isl` is 1 for its first variant, None (`F`)
             arms, j = {}, 1
@@ -331,7 +356,7 @@ class Fn:
                 raise Unsupported(f"{self.fn['name']}: match arms {sorted(arms)}")
             m = self.var(int(head[1][1:]))
             ite = f"(.ite (.isl {m}) {self.stmts(arms['F'], names)} {self.stmts(arms['T'], names)})"
-            return self.seq(ite, self.stmts(lines[j + 1:], names))
+            return self.seq(ite, self.stmts(lines[j + 1:], names, tail))
         if w == "if":
             a, j = block_of(lines, 1)
             if lines[j].split()[0] == "else":
@@ -340,14 +365,14 @@ class Fn:
                 b, k = [], j
             c = self.operand(head[1])
             ite = f"(.ite {c} {self.stmts(a, names)} {self.stmts(b, names)})"
-            return self.seq(ite, self.stmts(lines[k + 1:], names))
+            return self.seq(ite, self.stmts(lines[k + 1:], names, tail))
         if w == "ret":
             if head[1] != "-" and not self.is_int(head[1]):
-                ex = f"(.seq (.assign {self.np} (.var {self.var(int(head[1][1:]))})) (.exit 0))"
-                return self.seq(ex, self.stmts(lines[1:], names))
+                ex = f"(.seq (.assign {self.np} (.var {self.var(int(head[1][1:]))})) (.exit {self.depth}))"
+                return self.seq(ex, self.stmts(lines[1:], names, tail))
             v = "(.lit 0)" if head[1] == "-" else self.operand(head[1])
-            ex = f"(.seq (.assign {self.np} (.expr {v})) (.exit 0))"
-            return self.seq(ex, self.stmts(lines[1:], names))
+            ex = f"(.seq (.assign {self.np} (.expr {v})) (.exit {self.depth}))"
+            return self.seq(ex, self.stmts(lines[1:], names, tail))
         if w == "let" and head[2] != "call":
             # `let x r` whose value is returned at once: the result takes `r`
             nxt = [l for l in lines[1:] if l.split()[0] not in ("line", "drop")]
@@ -355,11 +380,11 @@ class Fn:
                 k = lines.index(nxt[0])
                 pre = []
                 r = self.rhs(head[2:], int(head[1]), pre)
-                ex = self.wrap(pre, f"(.seq (.assign {self.np} ({r})) (.exit 0))")
-                return self.seq(ex, self.stmts(lines[k + 1:], names))
+                ex = self.wrap(pre, f"(.seq (.assign {self.np} ({r})) (.exit {self.depth}))")
+                return self.seq(ex, self.stmts(lines[k + 1:], names, tail))
         if w == "let":
             x = self.var(int(head[1]))
-            rest = self.stmts(lines[1:], names)
+            rest = self.stmts(lines[1:], names, tail)
             if head[2] == "call":
                 got = self.intrinsic(head[2:], rest, x)
                 if got is not None:
@@ -369,7 +394,7 @@ class Fn:
             s = f"(.letv {x} ({self.rhs(head[2:], int(head[1]), pre)}) {rest})"
             return self.wrap(pre, s)
         if w == "eval":
-            rest = self.stmts(lines[1:], names)
+            rest = self.stmts(lines[1:], names, tail)
             if head[1] == "call":
                 return self.call(head[1:], names, rest)
             t = self.fresh()
@@ -380,7 +405,7 @@ class Fn:
             if not (head[1].startswith("v") and head[1][1:].isdigit()):
                 raise Unsupported(f"{self.fn['name']}: store to {head[1]}")
             return self.seq(f"(.assign {self.var(int(head[1][1:]))} ({self.rhs(head[2:])}))",
-                            self.stmts(lines[1:], names))
+                            self.stmts(lines[1:], names, tail))
         raise Unsupported(f"{self.fn['name']}: statement {w}")
 
     @staticmethod
