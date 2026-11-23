@@ -31,7 +31,8 @@
   canvas.dragging { cursor: grabbing; }
   .panel { position: fixed; background: rgba(14,17,21,.86); border: 1px solid #232a33;
            border-radius: 8px; padding: 10px 12px; backdrop-filter: blur(6px); }
-  #hud { top: 12px; left: 12px; min-width: 210px; }
+  /* the panel scrolls when it outgrows a short screen (the crop tool) */
+  #hud { top: 12px; left: 12px; min-width: 210px; max-height: calc(100vh - 24px); overflow-y: auto; }
   #hud h1 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: #e8eef4;
             letter-spacing: .02em; }
   #hud .sub { color: #6b7885; margin-bottom: 9px; font-size: 11px; }
@@ -106,11 +107,11 @@
   </div>
   <div id="crop" hidden>
     <div class="sub" style="margin:10px 0 4px">region for a 3-D object</div>
-    <div class="ctl"><label>x <b id="cxv"></b></label><input id="cx0" type="range" min="0" max="1000" value="0"><input id="cx1" type="range" min="0" max="1000" value="1000"></div>
-    <div class="ctl"><label>y <b id="cyv"></b></label><input id="cy0" type="range" min="0" max="1000" value="0"><input id="cy1" type="range" min="0" max="1000" value="1000"></div>
-    <div class="ctl"><label>z <b id="czv"></b></label><input id="cz0" type="range" min="0" max="1000" value="0"><input id="cz1" type="range" min="0" max="1000" value="1000"></div>
+    <div class="ctl"><label for="cx0">x <b id="cxv"></b></label><input id="cx0" type="range" min="0" max="1000" value="0" aria-label="x lower bound"><input id="cx1" type="range" min="0" max="1000" value="1000" aria-label="x upper bound"></div>
+    <div class="ctl"><label for="cy0">y <b id="cyv"></b></label><input id="cy0" type="range" min="0" max="1000" value="0" aria-label="y lower bound"><input id="cy1" type="range" min="0" max="1000" value="1000" aria-label="y upper bound"></div>
+    <div class="ctl"><label for="cz0">z <b id="czv"></b></label><input id="cz0" type="range" min="0" max="1000" value="0" aria-label="z lower bound"><input id="cz1" type="range" min="0" max="1000" value="1000" aria-label="z upper bound"></div>
     <div class="btns">
-      <select id="cres" title="detail"><option value="128">coarse</option><option value="256" selected>normal</option><option value="384">fine</option></select>
+      <select id="cres" title="detail" aria-label="detail"><option value="128">coarse</option><option value="256" selected>normal</option><option value="384">fine</option></select>
       <button id="cgo">make 3-D object</button>
     </div>
     <div class="sub" id="cmsg" style="margin-top:6px">&nbsp;</div>
@@ -342,10 +343,20 @@ var MFS = [
 function parseGlb(buf) {
   var dv = new DataView(buf);
   if (dv.getUint32(0, true) !== 0x46546C67) throw new Error("not a .glb file");
+  if (buf.byteLength < 28) throw new Error("the .glb is cut short");
   var jlen = dv.getUint32(12, true);
+  if (20 + jlen + 8 > buf.byteLength) throw new Error("the .glb's JSON chunk runs past the file");
   var doc = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jlen)));
-  var binOff = 20 + jlen + 8, prim = doc.meshes[0].primitives[0];
+  var binOff = 20 + jlen + 8, binLen = dv.getUint32(20 + jlen, true);
+  if (binOff + binLen > buf.byteLength) throw new Error("the .glb's binary chunk runs past the file");
+  var prim = doc.meshes[0].primitives[0];
   if (prim.mode !== undefined && prim.mode !== 4) throw new Error("only triangle meshes are shown");
+  /* positions are drawn as stored: a node that moves the mesh (matrix,
+     rotation, scale, translation) is refused rather than shown wrongly */
+  (doc.nodes || []).forEach(function (nd) {
+    if (nd.mesh === 0 && (nd.matrix || nd.rotation || nd.scale || nd.translation))
+      throw new Error("meshes placed by a node transform are not shown; bake the transform into the positions");
+  });
   function acc(i, want) {
     var a = doc.accessors[i], v = doc.bufferViews[a.bufferView];
     var n = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 }[a.type];
@@ -353,6 +364,11 @@ function parseGlb(buf) {
     var T = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array }[a.componentType];
     if (!T) throw new Error("unsupported accessor type " + a.componentType);
     var stride = v.byteStride || n * T.BYTES_PER_ELEMENT;
+    /* the accessor's last byte inside its view, and the view inside the
+       binary chunk: a cut file is an error, not a smaller mesh */
+    var vStart = binOff + (v.byteOffset || 0), vEnd = vStart + v.byteLength;
+    var need = a.count ? (a.count - 1) * stride + n * T.BYTES_PER_ELEMENT : 0;
+    if (vEnd > binOff + binLen || off < vStart || off + need > vEnd) throw new Error("accessor " + i + " runs past its data");
     if (stride === n * T.BYTES_PER_ELEMENT) return { arr: new T(buf.slice(off, off + a.count * stride)), n: n, a: a };
     var out = new T(a.count * n), src = new T(buf, 0);
     for (var c = 0; c < a.count; c++)
@@ -367,7 +383,10 @@ function parseGlb(buf) {
     for (var q = 0; q < nv; q++) for (var k = 0; k < 3; k++) C[q * 4 + k] = Math.min(255, Math.round(c.arr[q * c.n + k] * sc));
   }
   var I;
-  if (prim.indices !== undefined) { var ia = acc(prim.indices).arr; I = ia instanceof Uint32Array ? ia : Uint32Array.from(ia); }
+  if (prim.indices !== undefined) {
+    var ia = acc(prim.indices).arr; I = ia instanceof Uint32Array ? ia : Uint32Array.from(ia);
+    for (var ii = 0; ii < I.length; ii++) if (I[ii] >= nv) throw new Error("an index names a vertex that does not exist");
+  }
   else { I = new Uint32Array(nv); for (var z = 0; z < nv; z++) I[z] = z; }
   return { n: nv, xyz: P, rgb: C, nrm: N, idx: I };
 }
@@ -442,37 +461,64 @@ function drawBox(b, mvp) {
   gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, "uMVP"), false, mvp);
   gl.drawArrays(gl.LINES, 0, 24);
 }
-function cropMsg(html, isText) {
-  var m = $("cmsg");
-  if (isText) m.textContent = html; else m.innerHTML = html;
+var cropAttempt = "";
+function cropMsg(text) { $("cmsg").textContent = text; }
+/* only same-origin paths make links: whatever the server says, a link is
+   built from nodes and never from markup */
+function cropLink(href, text, dl) {
+  var a = document.createElement("a");
+  if (typeof href !== "string" || href.charAt(0) !== "/" || href.charAt(1) === "/") return null;
+  a.href = href; a.textContent = text;
+  if (dl) a.setAttribute("download", ""); else a.target = "_blank";
+  return a;
 }
 function cropPoll() {
-  fetch(CROP_URL, { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (j) {
+  var url = CROP_URL + (CROP_URL.indexOf("?") < 0 ? "?" : "&") + "attempt=" + encodeURIComponent(cropAttempt);
+  fetch(url, { credentials: "same-origin" }).then(function (r) {
+    return r.json().catch(function () { return {}; }).then(function (j) { return { r: r, j: j }; });
+  }).then(function (x) {
+    var j = x.j;
+    if (x.r.status === 404 || x.r.status === 400) {      /* the job is gone: stop */
+      cropMsg("failed: " + (j.error || ("HTTP " + x.r.status)));
+      $("cgo").disabled = false;
+      return;
+    }
+    if (!x.r.ok) { setTimeout(cropPoll, 3000); return; }  /* transient */
     if (j.state === "done" && j.url) {
-      cropMsg('ready: <a href="' + j.view + '" target="_blank">open the object</a> · <a href="' + j.url + '" download>download .glb</a>');
+      var m = $("cmsg"); m.textContent = "ready: ";
+      var a1 = cropLink(j.view, "open the object", false), a2 = cropLink(j.url, "download .glb", true);
+      if (a1) m.appendChild(a1);
+      if (a1 && a2) m.appendChild(document.createTextNode(" · "));
+      if (a2) m.appendChild(a2);
+      $("cgo").disabled = false;
+    } else if (j.state === "replaced") {
+      cropMsg("replaced by a later request (another tab, or a new reconstruction)");
       $("cgo").disabled = false;
     } else if (j.state === "failed") {
-      cropMsg("failed: " + (j.progress || "see the job's log"), true);
+      cropMsg("failed: " + (j.progress || "see the job's log"));
       $("cgo").disabled = false;
     } else {
-      cropMsg((j.state === "queued" ? "waiting for the GPU queue…" : (j.progress || "fusing…")), true);
+      cropMsg(j.state === "queued" ? "waiting for the GPU queue…" : (j.progress || "fusing…"));
       setTimeout(cropPoll, 1500);
     }
   }).catch(function () { setTimeout(cropPoll, 3000); });
 }
 function cropGo() {
   var b = cropBox();
+  /* a box with no depth on an axis has nothing in it */
+  for (var a = 0; a < 3; a++) if (!(b.hi[a] > b.lo[a])) { cropMsg("widen the " + "xyz".charAt(a) + " range first"); return; }
   $("cgo").disabled = true;
-  cropMsg("asking…", true);
+  cropMsg("asking…");
   fetch(CROP_URL, {
     method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ box: b.lo.concat(b.hi), res: +$("cres").value })
   }).then(function (r) {
     return r.json().catch(function () { return {}; }).then(function (j) {
       if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+      cropAttempt = j.attempt || "";
       cropPoll();
     });
-  }).catch(function (e) { cropMsg("failed: " + e.message, true); $("cgo").disabled = false; });
+  }).catch(function (e) { cropMsg("failed: " + e.message); $("cgo").disabled = false; });
 }
 /* keep the farthest 2% out by default: on every example scene that is
    sky and nothing else, and it is what makes the first frame legible */
@@ -661,7 +707,8 @@ function boot(data, label) {
   $("n").textContent = total.toLocaleString();
   if (isMesh) $("nd").textContent = ntri.toLocaleString();
 
-  var last = performance.now(), frames = 0, acc = 0;
+` } {}
+    ? == k 1 { ^ `  var last = performance.now(), frames = 0, acc = 0;
   function frame(now) {
     resize();
     var eye = [
@@ -729,8 +776,7 @@ function probeOut() {
   gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
   var lit = 0, r = 0, g = 0, b = 0;
   for (var i = 0; i < px.length; i += 4) {
-` } {}
-    ? == k 1 { ^ `    /* anything above the background counts as drawn */
+    /* anything above the background counts as drawn */
     if (px[i] > 20 || px[i + 1] > 22 || px[i + 2] > 26) {
       lit++; r += px[i]; g += px[i + 1]; b += px[i + 2];
     }
@@ -776,7 +822,8 @@ function panBy(dx, dy) {
   var rx = Math.cos(cam.yaw), rz = -Math.sin(cam.yaw);
   dx *= hsign();
   cam.tgt[0] += dx * s * rx; cam.tgt[2] += dx * s * rz;
-  cam.tgt[1] -= dy * s;
+  /* drag down, the scene goes down: with -Y up that is +y, with +Y up -y */
+  cam.tgt[1] += UP[1] * dy * s;
 }
 function zoomBy(f) { cam.dist = Math.max(diag * 1e-4, Math.min(diag * 50, cam.dist * f)); }
 

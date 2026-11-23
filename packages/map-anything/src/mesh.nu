@@ -82,20 +82,30 @@ $ `scene.nu`
     : ( Slice f ) p ( slice_from_vec [f] p__v )
     : ( Slice u ) m ( slice_from_vec [u] . sc mask )
     : ( Slice f32 ) dz ( slice_from_vec [f32] . sc dz )
-    : ~ i v 0
-    ~ < v . sc n {
-        : ~ i j 0
-        ~ < j hw {
-            : i q + * v hw j
-            ? != # i ( slice_at [u] m q ) 0 {
-                ( __ms_world sc v # f % j . sc w # f / j . sc w # f ( slice_at [f32] dz q ) p )
-                ( vec_push [f] xs ( slice_at [f] p 0 ) )
-                ( vec_push [f] ys ( slice_at [f] p 1 ) )
-                ( vec_push [f] zs ( slice_at [f] p 2 ) )
-            } {}
-            = j + j 7
+    // a sample of the valid pixels, at a stride that does not divide the
+    // width (it would see the same columns in every row); with nothing
+    // on that lattice, every pixel
+    : ~ i st 7
+    ~ == 0 % . sc w st { = st + st 2 }
+    : ~ i pass 0
+    ~ & < pass 2 == ( vec_len [f] xs ) 0 {
+        : i step ? == pass 0 st 1
+        : ~ i v 0
+        ~ < v . sc n {
+            : ~ i j 0
+            ~ < j hw {
+                : i q + * v hw j
+                ? != # i ( slice_at [u] m q ) 0 {
+                    ( __ms_world sc v # f % j . sc w # f / j . sc w # f ( slice_at [f32] dz q ) p )
+                    ( vec_push [f] xs ( slice_at [f] p 0 ) )
+                    ( vec_push [f] ys ( slice_at [f] p 1 ) )
+                    ( vec_push [f] zs ( slice_at [f] p 2 ) )
+                } {}
+                = j + j step
+            }
+            = v + v 1
         }
-        = v + v 1
+        = pass + pass 1
     }
     ? == ( vec_len [f] xs ) 0 { ^ F } {}
     ( sort_by [f] xs \ f a f b → i { ^ ? < a b -1 ? > a b 1 0 } )
@@ -368,7 +378,9 @@ $ `scene.nu`
                         ? & & & >= u 0 < u w >= vv 0 < vv h {
                             : i q + vb + * vv w u
                             ? != # i ( slice_at [u] mk q ) 0 {
-                                : f d - # f ( slice_at [f32] dz q ) cz
+                                // the residual in world metres: the camera
+                                // frame is the world's divided by s
+                                : f d * s - # f ( slice_at [f32] dz q ) cz
                                 ? >= d - 0.0 trunc {
                                     : i gi + row ix
                                     : f tv ? > d trunc 1.0 / d trunc

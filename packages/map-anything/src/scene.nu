@@ -140,6 +140,10 @@ $ `stdlib/std/floatbits.nu`
     : i n ( __sc_rd32 b - len 4 )
     : i h ( __sc_rd32 b 4 )
     : i w ( __sc_rd32 b 8 )
+    // the dimensions against the payload before any product of them, so a
+    // forged header cannot wrap h·w and pass the size check
+    ? | | | < n 1 < h 1 < w 1 < len 160 { ^ ( __sc_bad `the header is empty` ) } {}
+    ? > h / / - len 160 8 w { ^ ( __sc_bad `the header claims more pixels than the file holds` ) } {}
     : i hw * h w
     : i per + + 4 136 * hw 8
     ? | | <= n 0 <= hw 0 != len + + 12 * n per 8 { ^ ( __sc_bad `the size does not match its header` ) } {}

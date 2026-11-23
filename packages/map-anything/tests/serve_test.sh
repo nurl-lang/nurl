@@ -84,6 +84,7 @@ check "a mesh request with a non-number in the box is refused" 400 "$(code $A -X
 check "a mesh of a job not done is refused" 409 "$(code $A -X POST "$B/api/jobs/$ID/mesh" -d '{"box":[0,0,0,1,1,1]}')"
 echo done > "$WORK/data/jobs/$ID/state"
 check "a mesh of a job that kept no views is refused" 409 "$(code $A -X POST "$B/api/jobs/$ID/mesh" -d '{"box":[0,0,0,1,1,1]}')"
+check "...for that reason" 1 "$(curl -s $A -X POST "$B/api/jobs/$ID/mesh" -d '{"box":[0,0,0,1,1,1]}' | grep -c 'kept no views')"
 echo uploading > "$WORK/data/jobs/$ID/state"
 check "no object to download" 404 "$(code $A "$B/jobs/$ID/object.glb")"
 check "the job lists its files" 5 "$(curl -s $A "$B/api/jobs/$ID" | sed -n 's/.*"files":\([0-9]*\).*/\1/p')"

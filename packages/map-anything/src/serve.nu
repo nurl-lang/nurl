@@ -489,7 +489,9 @@ $ `ui.nu`
     : ( Vec String ) ids ( __mas_job_ids )
     : ~ String got ( string_new )
     : i t ( __mas_lock )
-    : ~ b unsettled F
+    // a shutdown sets its flag under this lock: claimed before it, the work
+    // is swept by the shutdown; after it, nothing is claimed
+    : ~ b unsettled ( __mas_stopping )
     : ~ i u 0
     ~ < u ( vec_len [String] ids ) {
         ?? ( vec_get [String] ids u ) {
@@ -500,36 +502,61 @@ $ `ui.nu`
         }
         = u + u 1
     }
+    // the oldest queued work of either kind, by when it was queued, so a
+    // stream of new reconstructions cannot starve an object asked for
+    // earlier (or the other way round)
+    : ~ i best_kind 0  // 0 none, 1 reconstruction, 2 object
+    : ~ String best_id ( string_new )
+    : ~ i best_t 0
     : ~ i k ? unsettled ( vec_len [String] ids ) 0
-    ~ & < k ( vec_len [String] ids ) == ( string_len got ) 0 {
+    ~ < k ( vec_len [String] ids ) {
         ?? ( vec_get [String] ids k ) {
             T id → {
-                ? ( __mas_state_is ( string_data id ) `queued` ) {
-                    ? ( __mas_set_state ( string_data id ) `running` ) { = got ( string_from ( string_data id ) ) } {}
+                : s sid ( string_data id )
+                ? ( __mas_state_is sid `queued` ) {
+                    : i qt ( __mas_read_int sid `queued_at` )
+                    ? | == best_kind 0 < qt best_t { = best_kind 1 = best_id ( string_from sid ) = best_t qt } {}
+                } {}
+                // an object only of a job still done (not deleted, not re-run)
+                ? & ( __mas_state_is sid `done` ) ( __mas_state_is_f sid `mesh_state` `queued` ) {
+                    : i qt ( __mas_read_int sid `mesh_queued_at` )
+                    ? | == best_kind 0 < qt best_t { = best_kind 2 = best_id ( string_from sid ) = best_t qt } {}
                 } {}
             }
             F → {}
         }
         = k + k 1
     }
-    // then a 3-D object someone asked for (returned as "m:<id>")
-    = k ? unsettled ( vec_len [String] ids ) 0
-    ~ & < k ( vec_len [String] ids ) == ( string_len got ) 0 {
-        ?? ( vec_get [String] ids k ) {
-            T id → {
-                ? ( __mas_state_is_f ( string_data id ) `mesh_state` `queued` ) {
-                    ? ( __mas_write_job ( string_data id ) `mesh_state` `running` ) {
-                        = got ( string_from `m:` )
-                        ( string_push_str got ( string_data id ) )
-                    } {}
-                } {}
-            }
-            F → {}
-        }
-        = k + k 1
-    }
+    ? == best_kind 1 {
+        ? ( __mas_set_state ( string_data best_id ) `running` ) { = got ( string_from ( string_data best_id ) ) } {}
+    } {}
+    ? == best_kind 2 {
+        ? ( __mas_write_job ( string_data best_id ) `mesh_state` `running` ) {
+            = got ( string_from `m:` )
+            ( string_push_str got ( string_data best_id ) )
+        } {}
+    } {}
     ( __mas_unlock t )
     ^ got
+}
+
+// A finished run's terminal state, written under the job lock and retried
+// with a growing pause until it is on disk: the child is gone, so if the
+// write were lost the job would stay `running` and hold the queue. A
+// shutdown that queued the work again in the meantime is overwritten only
+// by a real outcome, never by nothing (a stopped run writes nothing).
+@ __mas_settle s id s file s value → v {
+    : ~ i pause 500
+    ~ T {
+        : i t ( __mas_lock )
+        : b ok ( __mas_write_job id file value )
+        ( __mas_unlock t )
+        ? ok { ^ v } {}
+        ( nurl_eprint `map-anything serve: cannot record job ` ) ( nurl_eprint id )
+        ( nurl_eprint ` ` ) ( nurl_eprint file ) ( nurl_eprintln `; retrying` )
+        ( sleep_ms pause )
+        = pause ? < pause 30000 * pause 2 30000
+    }
 }
 
 @ __mas_stopping → b { ^ != 0 ( locked_get [i] g_mas_stop ) }
@@ -775,7 +802,7 @@ $ `ui.nu`
     }
     : String t1 ( __mas_now )
     : b _e ( __mas_write_job id `finished` ( string_data t1 ) )
-    : b _s ( __mas_set_state id ? ok `done` `failed` )
+    ( __mas_settle id `state` ? ok `done` `failed` )
     ( nurl_eprint `map-anything serve: job ` )
     ( nurl_eprint id )
     ( nurl_eprintln ? ok ` done` ` failed` )
@@ -788,6 +815,7 @@ $ `ui.nu`
     : MaCfg c ( __mas_cfg )
     : String jd ( __mas_jdir id )
     : String args ( __mas_read_job id `mesh_req` )
+    : String attempt ( __mas_read_job id `mesh_attempt` )
     : ~ b ok F
     ? ( __mas_opts_ok ( string_data args ) ) {
         : String token ( rand_hex_str 8 )
@@ -803,9 +831,11 @@ $ `ui.nu`
             : String tmp ( path_join ( string_data jd ) `object.tmp.glb` )
             : String out ( path_join ( string_data jd ) `object.glb` )
             ?? ( fs_rename ( string_data tmp ) ( string_data out ) ) { T _ → { = ok T } F _e → {} }
+            // which request the object answers (the status names it)
+            ? ok { ( __mas_settle id `object_attempt` ( string_data attempt ) ) } {}
         } {}
     } {}
-    : b _s ( __mas_write_job id `mesh_state` ? ok `done` `failed` )
+    ( __mas_settle id `mesh_state` ? ok `done` `failed` )
     ( nurl_eprint `map-anything serve: job ` ) ( nurl_eprint id )
     ( nurl_eprintln ? ok ` object done` ` object failed` )
 }
@@ -838,8 +868,10 @@ $ `ui.nu`
         = ended ( __mas_end_child pid \ → b { ^ ! ( __mas_is_our_child pid ) } )
     } {}
     ? & >= pid 0 ended {
+        // only if it is still that same run: a worker that finished first
+        // has recorded `done` or `failed`, and that stays
         : i t ( __mas_lock )
-        : b _q ( __mas_write_job id file `queued` )
+        ? ( __mas_state_is_f id file `running` ) { : b _q ( __mas_write_job id file `queued` ) } {}
         ( __mas_unlock t )
     } {}
 }
@@ -1117,8 +1149,15 @@ $ `ui.nu`
     : s sd ( string_data st )
     : b meshbusy | ( __mas_state_is_f sid `mesh_state` `queued` ) ( __mas_state_is_f sid `mesh_state` `running` )
     ? & ! meshbusy | | ( __mas_eq sd `uploading` ) ( __mas_eq sd `done` ) ( __mas_eq sd `failed` ) {
-        ? & & ( __mas_write_job sid `opts` ( string_data opts ) ) ( __mas_write_job sid `finished` `0` ) ( __mas_write_job sid `started` `0` ) {
+        : String qnow ( __mas_now )
+        ? & & & ( __mas_write_job sid `opts` ( string_data opts ) ) ( __mas_write_job sid `finished` `0` ) ( __mas_write_job sid `started` `0` ) ( __mas_write_job sid `queued_at` ( string_data qnow ) ) {
             ( __mas_log_put sid `` )
+            // a new reconstruction replaces the cloud and the views: an
+            // object made from the old ones would no longer match
+            : String obp ( __mas_jfile sid `object.glb` )
+            ?? ( file_delete ( string_data obp ) ) { T _ → {} F _e → {} }
+            : b _m1 ( __mas_write_job sid `mesh_state` `` )
+            : b _m2 ( __mas_write_job sid `object_attempt` `` )
             ? ( __mas_set_state sid `queued` ) {} { = res 3 }
         } { = res 3 }
     } { = res ? == ( string_len st ) 0 1 2 }
@@ -1184,23 +1223,34 @@ $ `ui.nu`
 // The object's status, the shape the viewer reads: state (none, queued,
 // running, done, failed), and once there is an object its url, view and
 // bytes; `progress` is the last line of the mesh log.
-@ __mas_mesh_status s id → Json {
+// With `attempt` (a request's id) the status is that request's: `replaced`
+// once a later request (or a new reconstruction) took its place, and the
+// object only when it is the one this request made.
+@ __mas_mesh_status s id s attempt → Json {
     : Json o ( json_obj_new )
     : String ms ( __mas_read_job id `mesh_state` )
-    : b _s ( json_obj_set o `state` ( json_str_lit ? == ( string_len ms ) 0 `none` ( string_data ms ) ) )
+    : String cur ( __mas_read_job id `mesh_attempt` )
+    : String oat ( __mas_read_job id `object_attempt` )
+    : b asked > ( nurl_str_len attempt ) 0
+    : b replaced & asked ! ( __mas_eq ( string_data cur ) attempt )
+    : b ours | ! asked ( __mas_eq ( string_data oat ) attempt )
+    : s stv ? replaced `replaced` ? == ( string_len ms ) 0 `none` ( string_data ms )
+    : b _s ( json_obj_set o `state` ( json_str_lit stv ) )
+    : b _a ( json_obj_set o `attempt` ( json_str_lit ? asked attempt ( string_data cur ) ) )
     : String obp ( __mas_jfile id `object.glb` )
-    ?? ( file_size ( string_data obp ) ) {
-        T z → {
-            : String url ( string_from `/jobs/` )
-            ( string_push_str url id ) ( string_push_str url `/object.glb` )
-            : String view ( string_from `/view?glb=` )
-            ( string_push_str view ( string_data url ) )
-            : b _u ( json_obj_set o `url` ( json_str_lit ( string_data url ) ) )
-            : b _v ( json_obj_set o `view` ( json_str_lit ( string_data view ) ) )
-            : b _b ( json_obj_set o `bytes` ( json_int z ) )
-        }
-        F _e → {}
-    }
+    : ~ i osize -1
+    ? & ours ! replaced {
+        ?? ( file_size ( string_data obp ) ) { T z → { = osize z } F _e → {} }
+    } {}
+    ? >= osize 0 {
+        : String url ( string_from `/jobs/` )
+        ( string_push_str url id ) ( string_push_str url `/object.glb` )
+        : String view ( string_from `/view?glb=` )
+        ( string_push_str view ( string_data url ) )
+        : b _u ( json_obj_set o `url` ( json_str_lit ( string_data url ) ) )
+        : b _v ( json_obj_set o `view` ( json_str_lit ( string_data view ) ) )
+        : b _b ( json_obj_set o `bytes` ( json_int osize ) )
+    } {}
     : String lp ( __mas_jfile id `mesh.log` )
     : ~ String log ( string_new )
     ?? ( read_file ( string_data lp ) ) { T t → { = log t } F _e → {} }
@@ -1209,12 +1259,25 @@ $ `ui.nu`
     ^ o
 }
 
-@ __mas_mesh_get Params ps → HttpResponse {
+@ __mas_mesh_get HttpRequest req Params ps → HttpResponse {
     : String id ( __mas_param ps `id` )
     ? ( __mas_id_ok ( string_data id ) ) {} { ^ ( __mas_err 400 `bad job id` ) }
     : String st ( __mas_state ( string_data id ) )
     ? == ( string_len st ) 0 { ^ ( __mas_err 404 `no such job` ) } {}
-    : HttpResponse r ( response_json 200 ( __mas_mesh_status ( string_data id ) ) )
+    // ?attempt=<hex>: kept only while it is hex, so it is safe to echo
+    : String att ( string_new )
+    ?? ( query_value ( slice_of_str ( string_data . req query ) ) `attempt` ) {
+        T v → {
+            : ~ i k 0
+            ~ & < k ( slice_len [u] v ) < k 32 {
+                : i c ( slice_byte v k )
+                ? | & >= c 48 <= c 57 & >= c 97 <= c 102 { ( string_push_char att c ) } {}
+                = k + k 1
+            }
+        }
+        F → {}
+    }
+    : HttpResponse r ( response_json 200 ( __mas_mesh_status ( string_data id ) ( string_data att ) ) )
     ^ r
 }
 
@@ -1265,6 +1328,9 @@ $ `ui.nu`
     }
     ( string_push_str args ` --res ` ) ( string_push_int args res )
     : String scp ( __mas_jfile sid `scene.bin` )
+    // this request's own id: its status and its object are asked for by it,
+    // so a second tab's request is never mistaken for this one's
+    : String attempt ( rand_hex_str 6 )
     : ~ i rc 0  // 0 queued, 1 no job, 2 not done, 3 no scene, 4 busy, 5 write failed
     : i t ( __mas_lock )
     : String st ( __mas_state sid )
@@ -1272,7 +1338,8 @@ $ `ui.nu`
         ? ( __mas_eq ( string_data st ) `done` ) {
             ? == 1 ( nurl_path_type ( string_data scp ) ) {
                 ? | ( __mas_state_is_f sid `mesh_state` `queued` ) ( __mas_state_is_f sid `mesh_state` `running` ) { = rc 4 } {
-                    ? & ( __mas_write_job sid `mesh_req` ( string_data args ) ) ( __mas_write_job sid `mesh.log` `` ) {
+                    : String qnow ( __mas_now )
+                    ? & & & ( __mas_write_job sid `mesh_req` ( string_data args ) ) ( __mas_write_job sid `mesh.log` `` ) ( __mas_write_job sid `mesh_attempt` ( string_data attempt ) ) ( __mas_write_job sid `mesh_queued_at` ( string_data qnow ) ) {
                         ? ( __mas_write_job sid `mesh_state` `queued` ) {} { = rc 5 }
                     } { = rc 5 }
                 }
@@ -1285,7 +1352,7 @@ $ `ui.nu`
     ? == rc 3 { ^ ( __mas_err 409 `this job kept no views: run it again to make 3-D objects` ) } {}
     ? == rc 4 { ^ ( __mas_err 409 `an object is already being made` ) } {}
     ? == rc 5 { ^ ( __mas_err 500 `cannot store the request` ) } {}
-    : HttpResponse r ( response_json 202 ( __mas_mesh_status sid ) )
+    : HttpResponse r ( response_json 202 ( __mas_mesh_status sid ( string_data attempt ) ) )
     ^ r
 }
 
@@ -1466,7 +1533,7 @@ $ `ui.nu`
     ( http_app_post a `/api/jobs/:id/start` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_start rq ps ) } )
     ( http_app_get a `/jobs/:id/cloud.ply` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_cloud ps ) } )
     ( http_app_get a `/jobs/:id/object.glb` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_object ps ) } )
-    ( http_app_get a `/api/jobs/:id/mesh` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_mesh_get ps ) } )
+    ( http_app_get a `/api/jobs/:id/mesh` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_mesh_get rq ps ) } )
     ( http_app_post a `/api/jobs/:id/mesh` \ HttpRequest rq Params ps → HttpResponse { ^ ( __mas_mesh_post rq ps ) } )
     ? noauth {} {
         : ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) gate

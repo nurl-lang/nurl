@@ -509,7 +509,7 @@ function render(jobs) {
       v.setAttribute("data-key", j.id + ":view");
       /* with the views kept, the viewer can also cut a region into a 3-D object */
       v.href = "/view?cloud=" + encodeURIComponent("/jobs/" + j.id + "/cloud.ply") +
-        (j.scene ? "&crop=" + encodeURIComponent("/api/jobs/" + j.id + "/mesh") : "");
+        (j.scene && j.state === "done" ? "&crop=" + encodeURIComponent("/api/jobs/" + j.id + "/mesh") : "");
       v.target = "_blank";
       act.appendChild(v);
       var dl = el("a", "btn", "Download .ply");
