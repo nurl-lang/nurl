@@ -989,3 +989,7 @@ import C
 #print axioms C.inferRhs_sound
 #print axioms C.checkStmt_sound
 #print axioms C.checked_memory_safe
+-- Phase C1: the checker with ite / while joins over finite contexts, sound
+#print axioms C.eq_of_agree
+#print axioms C.checkS_sound
+#print axioms C.checkedS_memory_safe
