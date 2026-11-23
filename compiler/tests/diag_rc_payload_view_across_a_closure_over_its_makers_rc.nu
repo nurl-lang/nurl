@@ -1,5 +1,9 @@
-// adversarial: a maker returns a closure over a fresh Rc that replaces its payload, and a clone of that Rc beside it
-// map: §2.14 | A2 | rejected | - | AGORA-869 adversarial: a fresh Rc captured by two closures; heap-use-after-free under ASan with the walk alone, refused by the ownership engine
+// diag_rc_payload_view_across_a_closure_over_its_makers_rc.nu — a maker
+// captures its own fresh Rc in a closure that replaces the payload, and
+// returns a clone of that Rc beside the closure. The caller's view of the
+// payload through the clone ends where the closure runs: the closure holds
+// a handle no binding of the caller names, which may be the same Rc value
+// (AGORA-945, proposal D3). The message names the closure's handle.
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/slice.nu`
 $ `stdlib/std/rc.nu`
