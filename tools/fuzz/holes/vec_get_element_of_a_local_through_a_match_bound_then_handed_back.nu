@@ -1,4 +1,4 @@
-// map: §7.6 | A2 | rejected | - | agora #242: elaborated twin: a `vec_get` element of a local Vec through a `??`, bound by `:` then handed back
+// map: §7.6 | A2 | rejected | - | AGORA-953 (agora #242 twin): a `vec_get` element of a local Vec through a `??`, bound by `:` then handed back: refused as the unbound form is
 // twin of tools/fuzz/holes/drop_vec_get_local_match.nu (tools/fuzz/holes/elab.py)
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
