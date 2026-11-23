@@ -18,6 +18,14 @@ import sys
 INT_TYS = {"i64", "i1", "i32", "i8", "void"}
 
 
+# Struct types from the IR's `ty` lines: name → [(field, type), …].
+STRUCTS = {}
+
+
+def struct_fields(t):
+    return STRUCTS.get(t if t.startswith("%") else "%" + t)
+
+
 def lean_ty(t):
     """An IR type as an A2 type: an integer, or a `Vec` of them (`%Vec__T`)."""
     if t in INT_TYS or t in ("i", "u", "b"):
@@ -33,6 +41,13 @@ def lean_ty(t):
         return "(.vec .int)"   # a Vec of bytes (formal/A2/Syntax.lean)
     if t.startswith("%Slice__"):
         return f"(.slice {lean_ty(t[len('%Slice__'):])})"
+    fs = struct_fields(t)
+    if fs is not None and len(fs) >= 2:
+        # a struct: its fields nested in pairs to the right (formal/A2's `prod`)
+        acc = lean_ty(fs[-1][1])
+        for _, ft in reversed(fs[:-1]):
+            acc = f"(.prod {lean_ty(ft)} {acc})"
+        return acc
     raise Unsupported(f"type {t}")
 
 
@@ -57,6 +72,11 @@ def parse(text):
             cur["vars"][int(f[1])] = f[-1]
             cur["flags"][int(f[1])] = int(f[4])
             cur.setdefault("kind", {})[int(f[1])] = int(f[2])
+        elif f[0] == "ty" and cur is None:
+            # ty <type> <class> <drops> <base> A <n> … F <n> (<field> <type>)… V …
+            i = f.index("F")
+            n = int(f[i + 1])
+            STRUCTS[f[1]] = [(f[i + 2 + 2 * k], f[i + 3 + 2 * k]) for k in range(n)]
         elif f[0] == "endfn":
             fns.append(cur)
             cur = None
@@ -109,9 +129,32 @@ class Fn:
         self.lits.append(t)
         return t
 
-    def operand(self, op):
+    def field_temp(self, op, pre):
+        """`v/f`: the field read into a temporary. A struct of n fields is
+        `prod t0 (prod t1 (… (prod t(n-2) t(n-1))))`: field i is i `snd`s,
+        then a `fst` (the last field, `n-1`, is the last `snd` itself).
+        The bindings it needs are appended to `pre`."""
+        base, field = op.split("/", 1)
+        if "/" in field:
+            raise Unsupported(f"{self.fn['name']}: nested field {op}")
+        b = int(base[1:])
+        fs = struct_fields(self.fn["vars"][b])
+        if fs is None or len(fs) < 2:
+            raise Unsupported(f"{self.fn['name']}: field of {self.fn['vars'][b]}")
+        names = [f for f, _ in fs]
+        i, n = names.index(field), len(names)
+        cur = self.var(b)
+        for _ in range(i):
+            t = self.fresh(); pre.append((t, f".snd {cur}")); cur = t
+        if i < n - 1:
+            t = self.fresh(); pre.append((t, f".fst {cur}")); cur = t
+        return cur
+
+    def operand(self, op, pre=None):
         if op == "c":
             return "(.lit 0)"
+        if "/" in op and pre is not None:
+            return f"(.var {self.field_temp(op, pre)})"
         if op.startswith("v") and op[1:].isdigit():
             return f"(.var {self.var(int(op[1:]))})"
         raise Unsupported(f"{self.fn['name']}: operand {op}")
@@ -147,8 +190,18 @@ class Fn:
                     return f".borrow {self.var(y)}"
                 return f".var {self.var(y)}"
             return f".expr {self.operand(op)}"
+        if k == "agg" and words[1] == "-" and dest is not None:
+            # a struct literal: its fields nested in pairs to the right
+            n = int(words[2])
+            vs = [str(self.lit_temp()) if o == "c" else str(self.var(int(o[1:]))) for o in words[3:3 + n]]
+            if n < 2:
+                raise Unsupported(f"{self.fn['name']}: struct of {n} field(s)")
+            acc = vs[-1]
+            for v in reversed(vs[1:-1]):
+                t = self.fresh(); pre.append((t, f".pair {v} {acc}")); acc = str(t)
+            return f".pair {vs[0]} {acc}"
         if k == "scalar":
-            ops = [self.operand(o) for o in words[2:2 + int(words[1])]]
+            ops = [self.operand(o, pre) for o in words[2:2 + int(words[1])]]
             e = "(.lit 0)"
             for o in ops:
                 e = f"(.add {e} {o})"
@@ -207,6 +260,8 @@ class Fn:
         for op in words[3:3 + n]:
             if op == "c":
                 args.append(str(self.lit_temp()))
+            elif "/" in op:
+                raise Unsupported(f"{self.fn['name']}: a field as an argument ({op})")
             else:
                 args.append(str(self.var(int(op[1:]))))
         x = self.fresh() if x is None else x
@@ -260,8 +315,9 @@ class Fn:
             nxt = [l for l in lines[1:] if l.split()[0] not in ("line", "drop")]
             if nxt and nxt[0].split() == ["ret", f"v{head[1]}"]:
                 k = lines.index(nxt[0])
-                r = self.rhs(head[2:], int(head[1]), [])
-                ex = f"(.seq (.assign {self.np} ({r})) (.exit 0))"
+                pre = []
+                r = self.rhs(head[2:], int(head[1]), pre)
+                ex = self.wrap(pre, f"(.seq (.assign {self.np} ({r})) (.exit 0))")
                 return self.seq(ex, self.stmts(lines[k + 1:], names))
         if w == "let":
             x = self.var(int(head[1]))
@@ -273,21 +329,28 @@ class Fn:
                 return self.call(head[2:], names, rest, x)
             pre = []
             s = f"(.letv {x} ({self.rhs(head[2:], int(head[1]), pre)}) {rest})"
-            for t in reversed(pre):
-                s = f"(.letv {t} (.expr (.lit 0)) {s})"
-            return s
+            return self.wrap(pre, s)
         if w == "eval":
             rest = self.stmts(lines[1:], names)
             if head[1] == "call":
                 return self.call(head[1:], names, rest)
             t = self.fresh()
-            return f"(.letv {t} ({self.rhs(head[1:])}) {rest})"
+            pre = []
+            r = self.rhs(head[1:], None, pre)
+            return self.wrap(pre, f"(.letv {t} ({r}) {rest})")
         if w == "assign":
             if not (head[1].startswith("v") and head[1][1:].isdigit()):
                 raise Unsupported(f"{self.fn['name']}: store to {head[1]}")
             return self.seq(f"(.assign {self.var(int(head[1][1:]))} ({self.rhs(head[2:])}))",
                             self.stmts(lines[1:], names))
         raise Unsupported(f"{self.fn['name']}: statement {w}")
+
+    @staticmethod
+    def wrap(pre, s):
+        """The bindings `pre` (temporary, right-hand side) scoped over `s`."""
+        for t, r in reversed(pre):
+            s = f"(.letv {t} ({r}) {s})"
+        return s
 
     @staticmethod
     def seq(a, b):
