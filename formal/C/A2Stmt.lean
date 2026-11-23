@@ -404,12 +404,70 @@ theorem lockPay_sound {E : Entry} {t : Ty} (h : lockPay E.ty = some t) : E.lockO
   revert h
   cases E.ty <;> simp [lockPay]
 
-/-- `DtorOK`, decided for a payload that holds no views (so the `ThruFn`
-    premise holds whatever `f`'s code is): the destructor's signature. -/
+/-- A function of the set `S` changes no elements through a borrow and
+    calls only functions of `S`. -/
+def thruOKFn (P : Prog) (S : List Nat) (f : Nat) : Bool :=
+  match P[f]? with
+  | some fn => !fn.body.hasThru && fn.body.calls.all fun g => decide (g ∈ S)
+  | none => false
+
+/-- `S` is closed: each of its functions is `thruOKFn`. -/
+def thruClosedB (P : Prog) (S : List Nat) : Bool := S.all (thruOKFn P S)
+
+/-- A closed set holds no function that changes elements through a borrow,
+    directly or through a call (`ThruFn`). -/
+theorem thruClosedB_sound {P : Prog} {S : List Nat} (hc : thruClosedB P S = true) :
+    ∀ {f : Nat}, ThruFn P f → f ∉ S := by
+  intro f ht
+  induction ht with
+  | here hP hb =>
+    intro hf
+    simp only [thruClosedB, List.all_eq_true] at hc
+    have := hc _ hf
+    simp only [thruOKFn, hP, hb, Bool.not_true, Bool.false_and] at this
+    cases this
+  | call hP hg _ ih =>
+    intro hf
+    apply ih
+    simp only [thruClosedB, List.all_eq_true] at hc
+    have := hc _ hf
+    simp only [thruOKFn, hP, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at this
+    exact this.2 _ hg
+
+/-- The candidate thru-free set: every index, filtered once per function. -/
+def thruFreeIter (P : Prog) : Nat → List Nat → List Nat
+  | 0, S => S
+  | n + 1, S => thruFreeIter P n (S.filter (thruOKFn P S))
+
+def thruFreeSet (P : Prog) : List Nat := thruFreeIter P P.length (List.range P.length)
+
+/-- `¬ ThruFn P σ`, decided: `σ` is in the thru-free set, and that set is
+    closed (checked, so its construction need not be trusted). -/
+def noThruB (P : Prog) (σ : Nat) : Bool :=
+  decide (σ ∈ thruFreeSet P) && thruClosedB P (thruFreeSet P)
+
+theorem noThruB_sound {P : Prog} {σ : Nat} (h : noThruB P σ = true) : ¬ ThruFn P σ := by
+  simp only [noThruB, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact fun ht => thruClosedB_sound h.2 ht h.1
+
+/-- `ThruFn P f → t.holdsView = false`, decided: `t` holds no views, or `f`
+    is in the closed thru-free set. -/
+def thruViewB (P : Prog) (f : Nat) (t : Ty) : Bool := !t.holdsView || noThruB P f
+
+theorem thruViewB_sound {P : Prog} {f : Nat} {t : Ty} (h : thruViewB P f t = true) :
+    ThruFn P f → t.holdsView = false := by
+  intro ht
+  simp only [thruViewB, Bool.or_eq_true, Bool.not_eq_true'] at h
+  rcases h with h | h
+  · exact h
+  · exact absurd ht (noThruB_sound h)
+
+/-- `DtorOK`, decided: the destructor's signature, and `ThruFn`'s premise
+    (`thruViewB`: the payload holds no views, or `f` is thru-free). -/
 def dtorOKB (P : Prog) (f : Nat) (ty : Ty) : Bool :=
   match P[f]? with
   | some fn => decide (fn.params = [(.inp, ty)]) && decide (fn.resTy = .int) && !fn.resOwn &&
-      decide (fn.lends = []) && decide (fn.rholds = []) && decide (fn.outHolds = []) && !ty.holdsView
+      decide (fn.lends = []) && decide (fn.rholds = []) && decide (fn.outHolds = []) && thruViewB P f ty
   | none => false
 
 theorem dtorOKB_sound {P : Prog} {f : Nat} {ty : Ty} (h : dtorOKB P f ty = true) : DtorOK P f ty := by
@@ -421,7 +479,7 @@ theorem dtorOKB_sound {P : Prog} {f : Nat} {ty : Ty} (h : dtorOKB P f ty = true)
     intro h
     simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at h
     obtain ⟨⟨⟨⟨⟨⟨hp, hr⟩, ho⟩, hl⟩, hh⟩, hoh⟩, hv⟩ := h
-    exact ⟨fn, hf, hp, hr, ho, hl, hh, hoh, fun _ => hv⟩
+    exact ⟨fn, hf, hp, hr, ho, hl, hh, hoh, thruViewB_sound hv⟩
 
 /-- A nest of `Vec`s around `f`'s destructor type: its depth and struct. -/
 def nestDtor (f : Nat) : Ty → Option (Nat × Ty)
@@ -876,51 +934,6 @@ theorem recvApartB_sound {zs : List Var} {Ec : Entry} (h : recvApartB zs Ec = tr
   simp only [Bool.or_eq_true, decide_eq_true_eq] at this
   exact this.resolve_left hb
 
-/-- A function of the set `S` changes no elements through a borrow and
-    calls only functions of `S`. -/
-def thruOKFn (P : Prog) (S : List Nat) (f : Nat) : Bool :=
-  match P[f]? with
-  | some fn => !fn.body.hasThru && fn.body.calls.all fun g => decide (g ∈ S)
-  | none => false
-
-/-- `S` is closed: each of its functions is `thruOKFn`. -/
-def thruClosedB (P : Prog) (S : List Nat) : Bool := S.all (thruOKFn P S)
-
-/-- A closed set holds no function that changes elements through a borrow,
-    directly or through a call (`ThruFn`). -/
-theorem thruClosedB_sound {P : Prog} {S : List Nat} (hc : thruClosedB P S = true) :
-    ∀ {f : Nat}, ThruFn P f → f ∉ S := by
-  intro f ht
-  induction ht with
-  | here hP hb =>
-    intro hf
-    simp only [thruClosedB, List.all_eq_true] at hc
-    have := hc _ hf
-    simp only [thruOKFn, hP, hb, Bool.not_true, Bool.false_and] at this
-    cases this
-  | call hP hg _ ih =>
-    intro hf
-    apply ih
-    simp only [thruClosedB, List.all_eq_true] at hc
-    have := hc _ hf
-    simp only [thruOKFn, hP, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at this
-    exact this.2 _ hg
-
-/-- The candidate thru-free set: every index, filtered once per function. -/
-def thruFreeIter (P : Prog) : Nat → List Nat → List Nat
-  | 0, S => S
-  | n + 1, S => thruFreeIter P n (S.filter (thruOKFn P S))
-
-def thruFreeSet (P : Prog) : List Nat := thruFreeIter P P.length (List.range P.length)
-
-/-- `¬ ThruFn P σ`, decided: `σ` is in the thru-free set, and that set is
-    closed (checked, so its construction need not be trusted). -/
-def noThruB (P : Prog) (σ : Nat) : Bool :=
-  decide (σ ∈ thruFreeSet P) && thruClosedB P (thruFreeSet P)
-
-theorem noThruB_sound {P : Prog} {σ : Nat} (h : noThruB P σ = true) : ¬ ThruFn P σ := by
-  simp only [noThruB, Bool.and_eq_true, decide_eq_true_eq] at h
-  exact fun ht => thruClosedB_sound h.2 ht h.1
 
 /-! ### The glue destructors (`DropFnOK`), decided
 
@@ -928,17 +941,6 @@ Each glue is one fixed body shape over a fixed signature, so each is decided
 by matching the function's body; the `ThruFn` premise by the thru-free set
 where the value holds views (`noThruB`). -/
 
-/-- `ThruFn P f → t.holdsView = false`, decided: `t` holds no views, or `f`
-    is in the closed thru-free set. -/
-def thruViewB (P : Prog) (f : Nat) (t : Ty) : Bool := !t.holdsView || noThruB P f
-
-theorem thruViewB_sound {P : Prog} {f : Nat} {t : Ty} (h : thruViewB P f t = true) :
-    ThruFn P f → t.holdsView = false := by
-  intro ht
-  simp only [thruViewB, Bool.or_eq_true, Bool.not_eq_true'] at h
-  rcases h with h | h
-  · exact h
-  · exact absurd ht (noThruB_sound h)
 
 /-- The signature every glue has: one value of `Ty.dtor f t`, taken owned,
     and a plain integer result. -/
