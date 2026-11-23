@@ -60,6 +60,7 @@ def struct_fields(t):
 
 
 _EXPANDING = set()
+DTOR_TYS = set()
 
 
 def lean_ty(t):
@@ -83,6 +84,11 @@ def lean_ty(t):
         return "(.vec .int)"   # a Vec of bytes (formal/A2/Syntax.lean)
     if t.startswith("%Slice__"):
         return f"(.slice {lean_ty(t[len('%Slice__'):])})"
+    if t in DTOR_TYS:
+        # A2's destructor types (`Ty.dtor f u`, letd / scopeD) are not
+        # translated yet: leaving the destructor out would leave out the reads
+        # it makes where each value ends
+        raise Unsupported(f"type {t}, with a destructor of the program's own")
     fs = struct_fields(t)
     if fs is not None and t in _EXPANDING:
         raise Unsupported(f"type {t}, recursive")
@@ -138,7 +144,13 @@ def parse(text):
             i = f.index("F")
             n = int(f[i + 1])
             STRUCTS[f[1]] = [(f[i + 2 + 2 * k], f[i + 3 + 2 * k]) for k in range(n)]
+            if len(f) > 3 and "d" in f[3]:
+                DTOR_TYS.add(f[1])
         elif f[0] == "endfn":
+            if cur["name"].startswith("drop__") and not cur["file"].startswith("stdlib/"):
+                # a `% Drop` of the program's own: it runs at the end of every
+                # value of the type (MEMORY.md §2.14)
+                DTOR_TYS.add("%" + cur["name"][len("drop__"):])
             fns.append(cur)
             cur = None
         elif cur is not None:
@@ -468,19 +480,20 @@ class Fn:
                 rest = f"(.letv {x} (.expr (.lit 0)) {rest})"
             return self.wrap(pre, self.seq(s, rest))
         if f == "string_push_str" and n == 2 and x is None and ops[0] != "c":
-            # the bytes of a text it reads appended through the borrow of the
-            # String it is handed (one byte stands for them: A2's `push`)
-            pre, s = [], ""
+            # the String it is handed grows through the borrow (one byte stands
+            # for the bytes: A2's `push`, which may move its buffer), and only
+            # then are the bytes of the text copied in: the text is read after
+            # the change, so a view of the String itself is dead by then
+            b, c = self.fresh(), self.lit_temp()
+            st = f"(.letv {b} (.borrow {rd(ops[0])}) (.edit true {b} (.push {c})))"
             if ops[1] != "c":
                 y = rd(ops[1])
                 ty = self.vlean(int(ops[1][1:])) if "/" not in ops[1] else lean_ty(self.vty(ops[1]))
                 e = f"(.slen {y})" if ty.startswith("(.slice") else f"(.len {y})" if ty.startswith("(.vec") else None
                 if e is None:
                     raise Unsupported(f"{self.fn['name']}: string_push_str of a {ty}")
-                pre.append((self.fresh(), f".expr {e}"))
-            b, c = self.fresh(), self.lit_temp()
-            st = f"(.letv {b} (.borrow {rd(ops[0])}) (.edit true {b} (.push {c})))"
-            return self.wrap(pre, self.seq(st, rest))
+                st = f"(.seq {st} (.letv {self.fresh()} (.expr {e}) .skip))"
+            return self.seq(st, rest)
         if (f.startswith("vec_free__") or f == "string_free") and n == 1 and x is None and ops[0] != "c":
             # a sink that releases what it is handed (A2's `free`)
             return self.seq(f"(.free {self.pvar(ops[0])})", rest)
