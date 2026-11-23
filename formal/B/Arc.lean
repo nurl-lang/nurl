@@ -19,8 +19,10 @@ their atomicity across threads is A3's and phase D's. The handles held are
 two lists of block ids, strong and weak. The invariant `ArcInv` says a
 block a handle names is live, its counts are the handles (plus the one
 shared weak), and it holds its value exactly while a strong handle names
-it; once none does, the value slot is empty, because the move out of it
-zeroed it. Each operation keeps the invariant, and every operation through a held
+it; once none does, the value slot holds no live value (`.gone`). For a
+payload type with a drop the move out zeroes the slot in the emitted code;
+for a trivial one the bits stay, but nothing reads them: no handle can
+reach them, as the upgrade theorem shows. Each operation keeps the invariant, and every operation through a held
 handle succeeds, so no handle ever reaches a freed block. Moreover:
 
 * the value comes out to be dropped exactly at the release of the last
@@ -69,10 +71,11 @@ def weakRelease (h : Heap (RcCell V)) (p : Nat) : Option (Heap (RcCell V) × Boo
   | _ => none
 
 /-- `Arc_drop`: `nurl_arc_release`. Not the last strong handle: count down.
-    The last: count 0, the value moved out of its slot (the move zeroes the
-    slot: `store zeroinitializer` through the field's address in the
-    emitted code), then either the block freed (no `Weak`, answer 2) or the
-    strong handles' weak given up (answer 1). -/
+    The last: count 0, the value moved out of its slot (`.gone`: for a
+    payload with a drop the emitted code zeroes the slot, `store
+    zeroinitializer` through the field's address; a trivial payload's bits
+    stay, no longer a value of anyone's), then either the block freed (no
+    `Weak`, answer 2) or the strong handles' weak given up (answer 1). -/
 def arcDrop (h : Heap (RcCell V)) (p : Nat) : Option (Heap (RcCell V) × Option V) :=
   match h.load p 0 with
   | some (.cnt n) =>

@@ -19,6 +19,12 @@
   `@.__nurl_sink.N`) is now followed instead of being reported as
   unsupported. A slot that only holds a borrowed parameter is recognised as
   owning nothing.
-  - On the 1986-program corpus, 98285 functions now validate (83518
-    before) and 7961 are unsupported (22728 before).
+  - On the 1986-program corpus, 98236 functions now validate (83518
+    before) and 8010 are unsupported (22728 before).
   - There are 0 mismatches.
+- **The drop validator claims less where it followed less.**
+  - A loop whose drop state still changes after two rounds is reported
+    unsupported. It used to count as validated.
+  - A `__dropif` releases what its slot holds at the call.
+  - A return of a value that was released, handed on, or only borrowed is
+    a mismatch.

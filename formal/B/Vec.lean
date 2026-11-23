@@ -989,10 +989,12 @@ then is each one dropped from that buffer, in index order. A destructor is
 program code and may reach the `Vec` again: push into it, grow it, clear
 it. The theorem below says it cannot change which elements are dropped.
 For any destructor that leaves the release's own buffer alone, every
-element past `from` is dropped exactly once, in order, and the `Vec`
-represents the first `from` before the first destructor runs. (Safe code
-cannot name that buffer: no value of the program points into it. That is
-A2's business.) The stack-or-heap choice for the buffer (Agora #748) is a
+element past `from` is dropped exactly once, in order, from the buffer's
+copy, and the buffer is freed once the loop is done. The model's
+destructor is a function of the heap alone, so what a destructor that
+reaches the `Vec` observes of its length is not part of the claim. (Safe
+code cannot name that buffer: no value of the program points into it.
+That is A2's business.) The stack-or-heap choice for the buffer (Agora #748) is a
 fresh block here. -/
 
 /-- The drop loop over the release's buffer `t`: load cell `k`, run the
@@ -1051,8 +1053,9 @@ theorem dropLoop_live {dtor : α → Heap α → Heap α} {t : Nat}
 
 /-- `__vec_release_from v from` with `nurl_vec_move_drop_dtor`: a fresh
     buffer, the elements `[from, len)` copied into it, the count set to
-    `from`, then the drop loop over the buffer. It hands back the heap, the
-    `Vec` as the destructors first see it, and the elements dropped. -/
+    `from`, then the drop loop over the buffer, then the buffer freed. It
+    hands back the heap, the shortened `Vec` (its count `from`) and the
+    elements dropped, in drop order. -/
 def releaseFrom (dtor : α → Heap α → Heap α) (h : Heap α) (v : RVec) (fr : Nat) :
     Option (Heap α × RVec × List α) :=
   if fr ≥ v.len then some (h, v, []) else
@@ -1068,16 +1071,17 @@ def releaseFrom (dtor : α → Heap α → Heap α) (h : Heap α) (v : RVec) (fr
       | some r => (r.1.free (h.alloc n).2).map fun h2 => (h2, { v with len := fr }, r.2)
 
 /-- The release drops exactly `es.drop from`, in index order, each once,
-    whatever the destructors do elsewhere. Before the first of them runs,
-    the `Vec` represents `es.take from` in its own block, which the
-    release's buffer (the heap's next fresh id) is not, and once the loop is
-    done that buffer is freed (`h'.live h.nid = false`).
+    whatever the destructors do elsewhere. The shortened `Vec` is a valid
+    representation of `es.take from` on some heap (`h1`) in its own block,
+    which the release's buffer (the heap's next fresh id) is not. Once the
+    loop is done, that buffer is freed (`h'.live h.nid = false`).
 
     What the model does not cover: here a destructor is a function of the
-    heap alone, so it cannot reach `v`'s control block. The runtime sets the
-    length to `from` before the first drop (`*w = v` in
-    `nurl_vec_move_drop_dtor`), so a destructor that reaches `v` sees it
-    short, but this theorem does not state that. -/
+    heap alone, so it cannot reach `v`'s control block, and `h1` is not
+    tied to the heap a destructor runs on. The runtime sets the length to
+    `from` before the first drop (`*w = v` in `nurl_vec_move_drop_dtor`),
+    so a destructor that reaches `v` sees it short, but this theorem does
+    not state that. -/
 theorem releaseFrom_ok {dtor : α → Heap α → Heap α} {h : Heap α} {v : RVec} {es : List α}
     {fr : Nat} (hw : h.WF) (hr : Rep h v es) (hf : fr < es.length)
     (hD : ∀ y (g : Heap α), (dtor y g).live h.nid = g.live h.nid ∧ (dtor y g).size h.nid = g.size h.nid ∧

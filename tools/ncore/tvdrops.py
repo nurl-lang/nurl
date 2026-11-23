@@ -337,11 +337,15 @@ def check_function(name, blocks, owning, journal=False):
     def run(lab, st, visits, path):
         visits = dict(visits)
         visits[lab] = visits.get(lab, 0) + 1
-        if visits[lab] > 3:
-            return None
-        key = (lab, visits[lab], canon(st))
+        key = (lab, min(visits[lab], 3), canon(st))
         if key in seen:
+            # a block reached again in a state already explored from it:
+            # every path on from here was checked then
             return None
+        if visits[lab] > 3:
+            # a loop still changing the state after its body ran twice: not
+            # every path was followed, so nothing is claimed
+            raise Unsupported(f"{name}: a loop whose drop state still changes after two rounds ({lab})")
         seen.add(key)
         path = path + [lab]
         flag_v, val, released = dict(st[0]), dict(st[1]), set(st[2])
@@ -504,7 +508,9 @@ def check_function(name, blocks, owning, journal=False):
                 if on is None:
                     raise Unsupported(f"{name}: a drop whose flag's value is not known")
                 if on:
-                    vid = regid.get(m.group(1))
+                    # the flag as loaded decides; what is released is what
+                    # the slot holds at the call
+                    vid = val.get(f)
                     if vid is None or vid in released:
                         return f"mismatch: {name} {next(iter(pairs[f]))} released twice: {'>'.join(path)}"
                     if vid in lent_ids:
@@ -520,8 +526,14 @@ def check_function(name, blocks, owning, journal=False):
                     return f"mismatch: {name} {sorted(jr)[0]} still journaled at the return: {'>'.join(path)}"
                 m = RET_VAL.match(l)
                 if m and regid.get(m.group(1)) is not None:
-                    # the value the register loaded, handed to the caller
-                    released.add(regid[m.group(1)])
+                    # the value the register loaded, handed to the caller:
+                    # once, and not one the frame released or handed on
+                    rv = regid[m.group(1)]
+                    if rv in released or rv in given:
+                        return f"mismatch: {name} returns a value it released or handed on: {'>'.join(path)}"
+                    if rv in lent_ids:
+                        return f"mismatch: {name} returns a parameter it only borrows as its own: {'>'.join(path)}"
+                    released.add(rv)
                 for f in flags:
                     if owns(f):
                         return f"mismatch: {name} {next(iter(pairs[f]))} leaks at the return: {'>'.join(path)}"

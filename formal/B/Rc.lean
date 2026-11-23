@@ -33,8 +33,9 @@ namespace B
 open A1 (upd)
 
 /-- A cell of an rcbox: the owner count, the value, or a value slot the
-    value was moved out of (a move from a place zeroes it, as
-    `Arc_drop`'s `. impl value` does). -/
+    value was moved out of: no live value, whatever bits remain (a move
+    from a place zeroes a value with a drop, as `Arc_drop`'s `. impl
+    value` does; a trivial value's bits stay). -/
 inductive RcCell (V : Type) where
   | cnt (n : Nat)
   | val (v : V)
