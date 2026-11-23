@@ -77,6 +77,16 @@ check "...at start" 400 "$(code $A -X POST "$B/api/jobs/$ID/start" -d '{}')"
 check "a bad job id" 400 "$(code $A "$B/api/jobs/..%2Fx")"
 check "an unknown job" 404 "$(code $A "$B/api/jobs/123-abc")"
 check "no cloud yet" 404 "$(code $A "$B/jobs/$ID/cloud.ply")"
+# 3-D objects: the status before any, the refusals
+check "no object yet" '"state":"none"' "$(curl -s $A "$B/api/jobs/$ID/mesh" | grep -o '"state":"none"')"
+check "a mesh request without a six-number box is refused" 400 "$(code $A -X POST "$B/api/jobs/$ID/mesh" -d '{"box":[0,0,0,1,1]}')"
+check "a mesh request with a non-number in the box is refused" 400 "$(code $A -X POST "$B/api/jobs/$ID/mesh" -d '{"box":[0,0,0,1,1,"x"]}')"
+check "a mesh of a job not done is refused" 409 "$(code $A -X POST "$B/api/jobs/$ID/mesh" -d '{"box":[0,0,0,1,1,1]}')"
+echo done > "$WORK/data/jobs/$ID/state"
+check "a mesh of a job that kept no views is refused" 409 "$(code $A -X POST "$B/api/jobs/$ID/mesh" -d '{"box":[0,0,0,1,1,1]}')"
+check "...for that reason" 1 "$(curl -s $A -X POST "$B/api/jobs/$ID/mesh" -d '{"box":[0,0,0,1,1,1]}' | grep -c 'kept no views')"
+echo uploading > "$WORK/data/jobs/$ID/state"
+check "no object to download" 404 "$(code $A "$B/jobs/$ID/object.glb")"
 check "the job lists its files" 5 "$(curl -s $A "$B/api/jobs/$ID" | sed -n 's/.*"files":\([0-9]*\).*/\1/p')"
 # a job that starts: options become the CLI's flags, and a "photo" that
 # does not decode fails in the CLI before any model is loaded
@@ -125,6 +135,65 @@ PID=$!
 up=0
 for _ in $(seq 1 50); do curl -s -m 1 -o /dev/null "$B/healthz" && { up=1; break; }; sleep 0.1; done
 check "a killed server's lock does not keep the next one out" 1 "$up"
+
+# 3-D object requests are tracked by their id: a job with a synthetic scene
+# (a sphere seen by four cameras: the real mesh subcommand, no GPU) gets
+# request A, then request B; A then reports "replaced" and A's object url
+# answers 410, B's 200; a reconstruction started again replaces B too.
+sphere_scene() {
+    python3 - "$1" <<'PY'
+import math, struct, sys
+W, H, F = 64, 48, 55.0
+C, R = (0.0, 0.0, 2.0), 0.4
+def norm(v):
+    l = math.sqrt(sum(x * x for x in v)); return [x / l for x in v]
+out = bytearray(struct.pack("<III", 0x3153414D, H, W))
+for k in range(4):
+    a = 2 * math.pi * k / 4
+    eye = [1.6 * math.sin(a), 0.2, 2.0 - 1.6 * math.cos(a)]
+    z = norm([C[i] - eye[i] for i in range(3)]); x = norm([z[2], 0.0, -z[0]])
+    y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]]
+    Rm = [[x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]]]
+    dz, mask = [], []
+    for v in range(H):
+        for u in range(W):
+            d = [sum(Rm[r][c] * ((u - W / 2) / F, (v - H / 2) / F, 1.0)[c] for c in range(3)) for r in range(3)]
+            o = [eye[i] - C[i] for i in range(3)]
+            A = sum(q * q for q in d); B = 2 * sum(d[i] * o[i] for i in range(3)); Cc = sum(q * q for q in o) - R * R
+            disc = B * B - 4 * A * Cc
+            if disc > 0: dz.append((-B - math.sqrt(disc)) / (2 * A)); mask.append(1)
+            else: dz.append(0.0); mask.append(0)
+    out += struct.pack("<I", 0x57454956) + struct.pack("<13d", 1.0, *[Rm[r][c] for r in range(3) for c in range(3)], *eye)
+    out += struct.pack("<4d", F, F, W / 2, H / 2) + struct.pack("<%df" % (W * H), *dz) + bytes(mask) + bytes([150] * (3 * W * H))
+out += struct.pack("<II", 0x444E454D, 4)
+open(sys.argv[1], "wb").write(out)
+PY
+}
+until_mesh() {  # job attempt → its final state (≤ 60 s)
+    for _ in $(seq 1 600); do
+        st=$(curl -s $A "$B/api/jobs/$1/mesh?attempt=$2" | sed -n 's/.*"state":"\([a-z]*\)".*/\1/p')
+        case "$st" in done|failed|replaced) echo "$st"; return;; esac
+        sleep 0.1
+    done
+    echo timeout
+}
+IDM=$(curl -s $A -X POST "$B/api/jobs" -d '{"name":"objects"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$IDM/files/p.jpg" >/dev/null
+sphere_scene "$WORK/data/jobs/$IDM/scene.bin"
+echo done > "$WORK/data/jobs/$IDM/state"
+BOX='{"box":[-0.6,-0.6,1.4,0.6,0.6,2.6],"res":48}'
+AT1=$(curl -s $A -X POST "$B/api/jobs/$IDM/mesh" -d "$BOX" | sed -n 's/.*"attempt":"\([0-9a-f]*\)".*/\1/p')
+check "request A is made" done "$(until_mesh "$IDM" "$AT1")"
+URL1=$(curl -s $A "$B/api/jobs/$IDM/mesh?attempt=$AT1" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
+check "...its object url names it" 1 "$(echo "$URL1" | grep -c "attempt=$AT1")"
+check "...and serves it" 200 "$(code $A "$B$URL1")"
+AT2=$(curl -s $A -X POST "$B/api/jobs/$IDM/mesh" -d "$BOX" | sed -n 's/.*"attempt":"\([0-9a-f]*\)".*/\1/p')
+check "request A, once B is asked for, is replaced" replaced "$(curl -s $A "$B/api/jobs/$IDM/mesh?attempt=$AT1" | sed -n 's/.*"state":"\([a-z]*\)".*/\1/p')"
+check "request B is made" done "$(until_mesh "$IDM" "$AT2")"
+check "A's object url no longer serves B's object" 410 "$(code $A "$B$URL1")"
+check "a reconstruction started again" 200 "$(code $A -X POST "$B/api/jobs/$IDM/start" -d '{}')"
+check "...replaces B's request" replaced "$(curl -s $A "$B/api/jobs/$IDM/mesh?attempt=$AT2" | sed -n 's/.*"state":"\([a-z]*\)".*/\1/p')"
+for _ in $(seq 1 300); do st=$(cat "$WORK/data/jobs/$IDM/state"); [ "$st" = failed ] || [ "$st" = done ] && break; sleep 0.1; done
 
 # helpers for the child-lifecycle cases: bounded waits, never bare sleeps
 up_or_fail() {

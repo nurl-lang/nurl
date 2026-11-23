@@ -1,0 +1,13 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_immutable_const_assigned.nu:9:13: error: cannot assign to immutable global 'LIMIT' (declared at compiler/tests/diag_immutable_const_assigned.nu:4; add ': ~' there to make it mutable). Bindings are immutable unless declared ': ~', and parameters are always immutable: add the tilde at the declaration, copy the parameter into a ': ~' local, or take it as 'inout' if the caller should see the write.
+    = LIMIT 5
+            ^
+compiler/tests/diag_immutable_const_assigned.nu:14:13: error: cannot assign to immutable global 'SCALE' (declared at compiler/tests/diag_immutable_const_assigned.nu:5; add ': ~' there to make it mutable). Bindings are immutable unless declared ': ~', and parameters are always immutable: add the tilde at the declaration, copy the parameter into a ': ~' local, or take it as 'inout' if the caller should see the write.
+    = SCALE 1.0
+            ^
+compiler/tests/diag_immutable_const_assigned.nu:19:10: error: cannot assign to immutable global 'ON' (declared at compiler/tests/diag_immutable_const_assigned.nu:6; add ': ~' there to make it mutable). Bindings are immutable unless declared ': ~', and parameters are always immutable: add the tilde at the declaration, copy the parameter into a ': ~' local, or take it as 'inout' if the caller should see the write.
+    = ON F
+         ^
+error: aborting due to 3 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
