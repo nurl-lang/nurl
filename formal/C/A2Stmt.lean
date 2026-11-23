@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec` and `withLock`, whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock` and `withElem`, whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -492,6 +492,25 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
         else none
       | none => none
     | none => none
+  | Γ, F, .withElem v i x s =>
+    match Γ v with
+    | some Ev =>
+      if s.src ∧ Γ x = none ∧ x ∉ F ∧ Ev.mode = .own ∧ v ∉ s.vars then
+        if checkExpr2 Γ i && noPinB D Γ v && dtorSafeB D Γ .replace false v then
+          match R (kill .replace false v Γ) F (.pop v) with
+          | some (E, Γ1) =>
+            if E.ty.dtorFree then
+              match checkStmt2 P R C D (setE Γ1 x E) F s with
+              | some Δ1 =>
+                match pushB D Δ1 F v x with
+                | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
+                | none => none
+              | none => none
+            else none
+          | none => none
+        else none
+      else none
+    | none => none
   | Γ, F, .scope x s =>
     match Γ x with
     | some E =>
@@ -801,6 +820,48 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
                 (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
               exact ⟨.withLock hsrc hx hF hEa hl (lockPay_sound ht) t0 (endOK2B_sound s0 he.2) hr ha
                 (liveAtB_sound he.1) hna, supported2_exitScope s0 x⟩
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  | withElem v i x s ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i Ev hEv
+      split at h
+      · rename_i hc
+        obtain ⟨hsrc, hx, hF, hm, hvs⟩ := hc
+        split at h
+        · rename_i hc2
+          simp only [Bool.and_eq_true] at hc2
+          obtain ⟨⟨hi, hnp⟩, hds⟩ := hc2
+          split at h
+          · rename_i E Γ1 hpop
+            split at h
+            · rename_i hdf
+              split at h
+              · rename_i Δ1 h1
+                split at h
+                · rename_i Δ0 h0
+                  split at h
+                  · rename_i he
+                    simp only [Option.some.injEq] at h; subst h
+                    have hvD : v ∈ D := hD v (by simp [Stmt.vars])
+                    have hxD : x ∈ D := hD x (by simp [Stmt.vars])
+                    obtain ⟨hrt, hs1⟩ := hR _ F (.pop v) E Γ1 (supported2_kill hs .replace false v)
+                      (fun w hw => by simp [Rhs.vars] at hw; subst hw; exact hvD) hpop
+                    obtain ⟨t1, s1⟩ := ih (ξ := .none) (supported2_setE hs1 hxD E)
+                      (fun w hw => hD w (by simp [Stmt.vars, hw])) h1
+                    obtain ⟨t2, s2⟩ := pushB_sound (P := P) (ξ := .none) s1
+                      (fun w hw => by simp [Stmt.vars] at hw; rcases hw with hw | hw <;> subst hw <;> assumption) h0
+                    exact ⟨.withElem hsrc hx hF hEv hm (checkExpr2_sound hi) (noPinB_sound hs hnp)
+                      (dtorSafeB_sound hs hds) hrt t1 t2 (endOK2B_sound s2 he) hvs hdf,
+                      supported2_exitScope s2 x⟩
+                  · cases h
+                · cases h
+              · cases h
             · cases h
           · cases h
         · cases h
