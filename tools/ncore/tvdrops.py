@@ -25,6 +25,16 @@ A function whose drops depend on an answer the analysis does not follow
 loaded from memory it does not own, a flag computed) is reported
 `unsupported`, never guessed.
 
+D0c (`--sums core`, the core IR nurlc prints with `--emit-core`): each
+function's `sink` / `keeps` parameters, from its `sum` line. Then, also:
+- a value handed to such a parameter is not released by the frame as well
+  (its flag must be cleared), nor handed on twice;
+- a parameter the function only borrows is never released, nor handed to
+  a `sink`; a slot that only ever holds one owns nothing (no flag needed);
+- a slot is not read after the value it holds was released.
+A per-call answer whose key is a constant of the module (`__nurl_clear_if`,
+`__nurl_cloneifk` on `@.__nurl_sink.N` and the like) is followed.
+
 Prints one line per program: `validated: N functions`, or the first
 `mismatch: <fn> <slot> <what> <path>`, or `unsupported: …` with the
 count of functions validated before it.
@@ -56,6 +66,14 @@ CALL = re.compile(r"call [^@]*@([\w.$]+)\(")
 # LLVM intrinsics, the Vec control block's accessors (D1 asks nothing at them)
 NOPANIC = ("nurl_journal_", "__dropif", "llvm.", "nurl_vctl_", "__nurl_cloneif", "nurl_free")
 UNTRACKED = ("__nurl_clear_if", "__nurl_hown", "__nurl_set_if", "invoke ", "indirectbr", "resume ")
+# a per-call ownership answer whose key is a constant of the module (a
+# callee that answers statically): followed, not reported
+CLEARIF = re.compile(r"call void @__nurl_clear_if\(ptr (@[\w.]+), ptr (%[\w.]+)\)")
+CLONEIFK = re.compile(r"^\s*(%[\w.]+) = call [^@]*@__nurl_cloneifk_[\w.]+\(ptr (@[\w.]+), i1 ([^,]+), [^,]* (%[\w.]+)\)")
+CONST_I1 = re.compile(r"^(@[\w.]+) = private constant i1 (true|false)", re.M)
+CONSTS = {}   # @key → its constant answer
+SINKS = {}    # D0c (--sums): llvm function → (arity, indices of sink=/keeps= parameters)
+PARAMS = {}   # llvm function → its parameters' names, in order
 
 
 class Unsupported(Exception):
@@ -142,6 +160,8 @@ def functions(text):
         m = DEF.match(raw)
         if m:
             cur, blocks = m.group(1), [("entry", [])]
+            inner = raw[raw.index("(", m.end() - 1) + 1:raw.rindex(")")]
+            PARAMS[cur] = re.findall(r"(%[\w.]+)(?=\s*(?:,|$))", inner)
             continue
         if cur is None:
             continue
@@ -187,6 +207,9 @@ def check_function(name, blocks, owning, journal=False):
                     raise Unsupported(f"{name}: a raw-pointer journal registration")
     for _, lines in blocks:
         for l in lines:
+            mk = CLEARIF.search(l)
+            if mk and mk.group(1) in CONSTS:
+                continue
             if any(u in l for u in UNTRACKED):
                 raise Unsupported(f"{name}: a drop decided at run time ({l.strip()[:60]})")
             if SWITCH.match(l):
@@ -249,7 +272,21 @@ def check_function(name, blocks, owning, journal=False):
             m = STORE_ANY.match(l)
             if m:
                 stored.add(m.group(1))
-    for sl in own_slots & stored:
+    # (a slot that only ever holds a parameter the function borrows, one the
+    # core IR's summary does not make a `sink` or `keeps`, owns nothing: its
+    # value is the caller's, and the function releases none of it)
+    params = PARAMS.get(name, [])
+    borrowed, lent = set(), set()
+    if name in SINKS and SINKS[name][0] == len(params):
+        lent = {p for i, p in enumerate(params) if i not in SINKS[name][1]}
+        for sl in own_slots - set(slot_flag):
+            vals = [mv.group(1) for _, lines in blocks for l in lines
+                    if (mm := STORE_ANY.match(l)) and mm.group(1) == sl
+                    for mv in [re.match(r"^\s*store \S+ (%[\w.]+), ", l)] if mv] 
+            nst = sum(1 for _, lines in blocks for l in lines if (mm := STORE_ANY.match(l)) and mm.group(1) == sl)
+            if vals and len(vals) == nst and all(v in lent for v in vals):
+                borrowed.add(sl)
+    for sl in (own_slots & stored) - borrowed:
         if sl not in slot_flag:
             raise Unsupported(f"{name}: an owning slot {sl} with no drop flag")
     if not pairs:
@@ -271,8 +308,17 @@ def check_function(name, blocks, owning, journal=False):
     fresh = itertools.count(1)
     seen = set()
 
+    # registers that may hold a clone (a `__nurl_cloneif`): what they carry
+    # is not the slot's own value when it is handed on
+    maybe_clone, lent_ids = set(), set()
+    for _, lines in blocks:
+        for l in lines:
+            mc = CLONEIF.match(l) or CLONEIFK.match(l)
+            if mc:
+                maybe_clone.add(mc.group(1))
+
     def canon(st):
-        flag_v, val, released, regv, regid, jr = st
+        flag_v, val, released, regv, regid, jr, given = st
         ren = {}
         def r(x):
             if x is None:
@@ -284,7 +330,9 @@ def check_function(name, blocks, owning, journal=False):
         rv = tuple(sorted((k, x) for k, x in regv.items()))
         ri = tuple(sorted((k, r(x)) for k, x in sorted(regid.items())))
         rel = tuple(sorted(r(x) for x in released if x in ren))
-        return (tuple(sorted(flag_v.items())), v, rel, rv, ri, tuple(sorted(jr)))
+        gv = tuple(sorted(r(x) for x in given if x in ren))
+        lv = tuple(sorted(r(x) for x in lent_ids if x in ren))
+        return (tuple(sorted(flag_v.items())), v, rel, rv, ri, tuple(sorted(jr)), gv, lv)
 
     def run(lab, st, visits, path):
         visits = dict(visits)
@@ -297,7 +345,7 @@ def check_function(name, blocks, owning, journal=False):
         seen.add(key)
         path = path + [lab]
         flag_v, val, released = dict(st[0]), dict(st[1]), set(st[2])
-        regv, regid, jr = dict(st[3]), dict(st[4]), set(st[5])
+        regv, regid, jr, given = dict(st[3]), dict(st[4]), set(st[5]), set(st[6])
         fresh_put = set()
 
         def owned(f):
@@ -312,7 +360,7 @@ def check_function(name, blocks, owning, journal=False):
             return owned(f) and next(iter(pairs[f])) not in jonly and not f.startswith("!")
 
         def go(o):
-            return run(o, (flag_v, val, released, regv, regid, jr), visits, path)
+            return run(o, (flag_v, val, released, regv, regid, jr, given), visits, path)
 
         for l in body.get(lab, []):
             if journal:
@@ -342,8 +390,33 @@ def check_function(name, blocks, owning, journal=False):
                 continue
             m = LOAD_VAL.match(l)
             if m and m.group(3) in slot_flag:
-                regid[m.group(1)] = val.get(slot_flag[m.group(3)])
+                f = slot_flag[m.group(3)]
+                if (val.get(f) is not None and val[f] in released and m.group(3) not in jonly
+                        and not f.startswith("!")):
+                    # D0c: a slot read after the value it holds was
+                    # released (a release before its scope's end)
+                    return f"mismatch: {name} {m.group(3)} read after its value was released: {'>'.join(path)}"
+                regid[m.group(1)] = val.get(f)
                 fresh_put.discard(m.group(3))
+            m = CLEARIF.search(l)
+            if m and m.group(1) in CONSTS:
+                if CONSTS[m.group(1)] and m.group(2) in flags:
+                    # the callee consumes: the binding's value moves out
+                    sl = next(iter(pairs[m.group(2)]))
+                    if sl in PROTECT.get(name, {}) and owned(m.group(2)) and sl not in fresh_put:
+                        return (f"mismatch: {name} {sl} ({PROTECT[name][sl]}) is never moved in the core IR, "
+                                f"but its flag is cleared while it owns a value: {'>'.join(path)}")
+                    flag_v[m.group(2)] = False
+                continue
+            m = CLONEIFK.match(l)
+            if m and m.group(4) in regid:
+                # a clone exactly when the key and the flag are both set; the
+                # value itself otherwise
+                k, fl = CONSTS.get(m.group(2)), m.group(3).strip()
+                fl = regv.get(fl) if fl.startswith("%") else fl in ("true", "1")
+                if k is False or fl is False:
+                    regid[m.group(1)] = regid[m.group(4)]
+                continue
             m = CLONEIF.match(l)
             if m and m.group(2) in regid:
                 # the value itself where the slot owns it, else a clone: the
@@ -386,12 +459,32 @@ def check_function(name, blocks, owning, journal=False):
                 if owns(f):
                     return f"mismatch: {name} {m.group(1)} overwritten while it owns a value: {'>'.join(path)}"
                 val[f] = next(fresh)
+                if mv and mv.group(1) in lent:
+                    # D0c: a parameter the function borrows (not a `sink`)
+                    lent_ids.add(val[f])
                 # (a store whose flag is cleared before anything reads the
                 # slot is a value the slot does not own: `= out <a lend>`)
                 fresh_put.add(m.group(1))
                 if f.startswith("!"):
                     flag_v[f] = True
                 continue
+            m = CALL.search(l)
+            if m and m.group(1) in SINKS and not DROPIF.search(l):
+                ar, idx = SINKS[m.group(1)]
+                args = re.findall(r"(%[\w.]+)(?=\s*(?:,|\)\s*$))", l[l.index("(", m.end() - 1):])
+                if len(args) == ar:
+                    for i in idx:
+                        a = args[i]
+                        vid = regid.get(a)
+                        if a in maybe_clone or vid is None:
+                            continue
+                        if vid in lent_ids:
+                            return f"mismatch: {name} a borrowed parameter handed to a `sink` of {m.group(1)}: {'>'.join(path)}"
+                        if vid in given:
+                            return f"mismatch: {name} a value handed to a `sink` of {m.group(1)} twice: {'>'.join(path)}"
+                        if vid in released:
+                            return f"mismatch: {name} a released value handed to a `sink` of {m.group(1)}: {'>'.join(path)}"
+                        given.add(vid)
             m = DROPIF.search(l)
             if m:
                 if m.group(1) in ("false", "0"):
@@ -414,6 +507,12 @@ def check_function(name, blocks, owning, journal=False):
                     vid = regid.get(m.group(1))
                     if vid is None or vid in released:
                         return f"mismatch: {name} {next(iter(pairs[f]))} released twice: {'>'.join(path)}"
+                    if vid in lent_ids:
+                        return f"mismatch: {name} {next(iter(pairs[f]))} releases a parameter it only borrows: {'>'.join(path)}"
+                    if vid in given:
+                        # D0c: the callee took it (`sink`), and the frame
+                        # releases it too
+                        return f"mismatch: {name} {next(iter(pairs[f]))} released after a `sink` parameter took it: {'>'.join(path)}"
                     released.add(vid)
                 continue
             if RET.match(l):
@@ -445,7 +544,7 @@ def check_function(name, blocks, owning, journal=False):
                 return None
         return None
 
-    return run("entry", ({}, {}, set(), {}, {}, set()), {}, [])
+    return run("entry", ({}, {}, set(), {}, {}, set(), set()), {}, [])
 
 
 def main():
@@ -457,6 +556,19 @@ def main():
             if len(w) == 3:
                 PROTECT.setdefault(w[0], {})[w[1]] = w[2]
     owning = set(re.findall(r"@__dropifv?_([\w.]+)\(", text))
+    CONSTS.update((k, v == "true") for k, v in CONST_I1.findall(text))
+    if "--sums" in sys.argv:
+        # D0c: each function's `sink` / `keeps` parameters, from the core IR
+        for raw in open(sys.argv[sys.argv.index("--sums") + 1]):
+            f = raw.rstrip("\n").split("\t")
+            if f[0] == "sum" and len(f) > 2 and f[2].isdigit():
+                idx = set()
+                for kv in f[3:]:
+                    for key in ("sink=", "keeps="):
+                        if kv.startswith(key):
+                            idx |= {int(x) for x in kv[len(key):].split() if x.isdigit()}
+                ll = "_nurl_main" if f[1] == "main" else "__nurl_fn." + f[1]
+                SINKS[ll] = (int(f[2]), idx)
     # D1 (--journal): the journal is what a recover frame's catch drains;
     # without a recover in the program a panic ends the process, and no
     # registration is owed
