@@ -77,6 +77,15 @@ check "...at start" 400 "$(code $A -X POST "$B/api/jobs/$ID/start" -d '{}')"
 check "a bad job id" 400 "$(code $A "$B/api/jobs/..%2Fx")"
 check "an unknown job" 404 "$(code $A "$B/api/jobs/123-abc")"
 check "no cloud yet" 404 "$(code $A "$B/jobs/$ID/cloud.ply")"
+# 3-D objects: the status before any, the refusals
+check "no object yet" '"state":"none"' "$(curl -s $A "$B/api/jobs/$ID/mesh" | grep -o '"state":"none"')"
+check "a mesh request without a six-number box is refused" 400 "$(code $A -X POST "$B/api/jobs/$ID/mesh" -d '{"box":[0,0,0,1,1]}')"
+check "a mesh request with a non-number in the box is refused" 400 "$(code $A -X POST "$B/api/jobs/$ID/mesh" -d '{"box":[0,0,0,1,1,"x"]}')"
+check "a mesh of a job not done is refused" 409 "$(code $A -X POST "$B/api/jobs/$ID/mesh" -d '{"box":[0,0,0,1,1,1]}')"
+echo done > "$WORK/data/jobs/$ID/state"
+check "a mesh of a job that kept no views is refused" 409 "$(code $A -X POST "$B/api/jobs/$ID/mesh" -d '{"box":[0,0,0,1,1,1]}')"
+echo uploading > "$WORK/data/jobs/$ID/state"
+check "no object to download" 404 "$(code $A "$B/jobs/$ID/object.glb")"
 check "the job lists its files" 5 "$(curl -s $A "$B/api/jobs/$ID" | sed -n 's/.*"files":\([0-9]*\).*/\1/p')"
 # a job that starts: options become the CLI's flags, and a "photo" that
 # does not decode fails in the CLI before any model is loaded

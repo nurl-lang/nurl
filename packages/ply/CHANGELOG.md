@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0] — 2026-11-23
+
+### Added
+
+- The viewer shows a triangle mesh: `?glb=URL` loads a binary glTF (the first
+  mesh's first primitive: POSITION, optional NORMAL and COLOR_0, indices) and
+  draws it with its vertex colours under a light at the eye plus an ambient
+  floor, lit from both sides (a scanned surface is open); without normals the
+  face normal comes from screen-space derivatives. The frame is glTF's, +Y up,
+  so the orbit follows it. Height and depth colouring work as for clouds.
+- `?crop=URL` over a cloud: a region box — three pairs of sliders, each axis
+  spanning the cloud's 1st–99th percentile — drawn as lines, with the points
+  outside it dimmed. "make 3-D object" POSTs `{"box": [x0, y0, z0, x1, y1,
+  z1], "res": n}` to URL and polls GET URL for `{state, progress, url, view}`,
+  then links the object and its download.
+
 ## [0.3.7] — 2026-11-21
 
 ### Added

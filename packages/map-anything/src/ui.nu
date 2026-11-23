@@ -507,7 +507,9 @@ function render(jobs) {
     if (j.cloud_bytes) {
       var v = el("a", "btn", "View in 3-D");
       v.setAttribute("data-key", j.id + ":view");
-      v.href = "/view?cloud=" + encodeURIComponent("/jobs/" + j.id + "/cloud.ply");
+      /* with the views kept, the viewer can also cut a region into a 3-D object */
+      v.href = "/view?cloud=" + encodeURIComponent("/jobs/" + j.id + "/cloud.ply") +
+        (j.scene ? "&crop=" + encodeURIComponent("/api/jobs/" + j.id + "/mesh") : "");
       v.target = "_blank";
       act.appendChild(v);
       var dl = el("a", "btn", "Download .ply");
@@ -515,6 +517,18 @@ function render(jobs) {
       dl.href = "/jobs/" + j.id + "/cloud.ply";
       dl.setAttribute("download", safe(j.name || j.id) + ".ply");
       act.appendChild(dl);
+    }
+    if (j.object_bytes) {
+      var ov = el("a", "btn", "View 3-D object");
+      ov.setAttribute("data-key", j.id + ":obj");
+      ov.href = "/view?glb=" + encodeURIComponent("/jobs/" + j.id + "/object.glb");
+      ov.target = "_blank";
+      act.appendChild(ov);
+      var od = el("a", "btn", "Download .glb");
+      od.setAttribute("data-key", j.id + ":objdl");
+      od.href = "/jobs/" + j.id + "/object.glb";
+      od.setAttribute("download", safe(j.name || j.id) + ".glb");
+      act.appendChild(od);
     }
     var lb = el("button", "", "Log");
     lb.setAttribute("data-key", j.id + ":log");
@@ -539,6 +553,13 @@ function render(jobs) {
       act.appendChild(del);
     }
     d.appendChild(act);
+    if (j.mesh_state === "queued" || j.mesh_state === "running")
+      d.appendChild(el("div", "jprog", "making a 3-D object" + (j.mesh_state === "queued" ? " (queued)" : "…")));
+    else if (j.mesh_state === "failed") d.appendChild(el("div", "jprog", "the 3-D object failed — try a box around the object"));
+    if (j.state === "done" && !j.scene)
+      d.appendChild(el("div", "jmeta", "made before 3-D objects: run it again to cut objects from it"));
+    else if (j.state === "done" && j.scene && !j.object_bytes && !j.mesh_state)
+      d.appendChild(el("div", "jmeta", "3-D object: open View in 3-D, box the region, make 3-D object"));
     if (j.opts) d.appendChild(el("div", "jmeta", "options: " + j.opts));
     if (openLogs[j.id]) {
       var pre = el("pre", "log", "…");
@@ -558,7 +579,9 @@ function refresh() {
   clearTimeout(timer);
   api("GET", "/api/jobs").then(function (r) {
     render(r.jobs || []);
-    var busy = (r.jobs || []).some(function (j) { return j.state === "queued" || j.state === "running"; });
+    var busy = (r.jobs || []).some(function (j) {
+      return j.state === "queued" || j.state === "running" || j.mesh_state === "queued" || j.mesh_state === "running";
+    });
     timer = setTimeout(refresh, busy ? 2000 : 15000);
   }).catch(function (e) {
     $("jobs").textContent = "cannot list the jobs: " + e.message;
