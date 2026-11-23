@@ -11,6 +11,7 @@ import C.A2Call
 import C.A2Panic
 import C.A2Prog
 import C.A3Prog
+import C.A2Exit
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
 C0 the straight-line checker (`C/Check.lean`), C1 `ite` / `while` over
