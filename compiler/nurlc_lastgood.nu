@@ -1871,6 +1871,7 @@ unsafe @ __strip_spaces s t → s {
                     ( nurl_str_cat `__` ( mangle_type ta_lty ) ) ) }
                 { : s ta ( nurl_lex_val lex )
                     ( lint_note_used ta )
+                    ? ( is_ident_tok ta_tt ) { ( __vis_check_targ lex ta ) } {}
                     ( nurl_lex_advance lex )
                     ? ( is_tparam_like ta ) { = has_tparam_arg T } {}
                     = ta_count + ta_count 1
@@ -2072,6 +2073,9 @@ unsafe @ agg_field_count i syms s ot → i {
         : s lt ( parse_type lex )
         ^ ( __targ_word lt )
     } {}
+    // (The name a call's type argument comes down to - under any `?` /
+    // `??` / `*` - is judged here, where it is written: AGORA-861.)
+    ? ( is_ident_tok tt ) { ( __vis_check_targ lex ( nurl_lex_val lex ) ) } {}
     ^ ( capture_type_arg_src lex )
 }
 
@@ -4992,6 +4996,82 @@ unsafe @ note_unsafe_item s pos s what → v {
             {}
         }
     }
+}
+
+// A type named bare as a type ARGUMENT where the program writes it —
+// `( Vec Impl )`, `( vec_new [Impl] )` — is a reference like any other,
+// judged as parse_type_base judges a bare type (AGORA-861: both paths took
+// the name as one token and never asked, so a strict module's private type
+// could be named from another file inside any generic). Called with the
+// lexer still on the name, so the diagnostic points at it.
+// A generic struct template's own field types, judged once against the file
+// that wrote it (AGORA-861). The template is stored unparsed and is first
+// read in an instance's rescan, where substituted text cannot tell a name
+// the template wrote from an instance's type argument; so its unsubstituted
+// body is read here. A struct body is `type name` pairs: an identifier in
+// parentheses, or one where a type is expected, is a type name; the one
+// after a whole type is the field's name. The template's own type
+// parameters are skipped. A type private to another strict file is refused.
+unsafe @ __vis_check_template s sname s tfile s tparams s body → v {
+    ? != 0 ( nurl_str_len ( nurl_sym_get2 g_generic_struct_syms sname `__svis` ) ) { ^ } {}
+    ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__svis` ) `1` )
+    : i lx ( nurl_lex_new body ( nurl_str_cat3 `<template ` sname ( nurl_str_cat3 ` of ` tfile `>` ) ) )
+    ? == ( nurl_lex_type lx ) TT_LBRACE { ( nurl_lex_advance lx ) } {}
+    : ~ i depth 0
+    // (need: how many types the current field still needs before its name -
+    // one, and one more for each `!` result type, `! T E`)
+    : ~ i need 1
+    ~ & != ( nurl_lex_type lx ) TT_EOF ! & == depth 0 == ( nurl_lex_type lx ) TT_RBRACE {
+        : i tt ( nurl_lex_type lx )
+        ? == tt TT_LPAREN { = depth + depth 1 } {
+            ? == tt TT_RPAREN {
+                = depth - depth 1
+                ? & == depth 0 > need 0 { = need - need 1 } {}
+            } {
+                ? & == depth 0 ( seq ( nurl_lex_val lx ) `!` ) { = need + need 1 } {}
+                ? ( is_ident_tok tt ) {
+                    : s v ( nurl_lex_val lx )
+                    : b is_type | > depth 0 > need 0
+                    ? & is_type ! ( str_contains_word tparams v ) {
+                        : s sf ( nurl_sym_get2 g_vis_syms v `__src_file` )
+                        ? & != 0 ( nurl_str_len sf ) ! ( seq sf tfile ) {
+                            ? & ( seq ( nurl_sym_get2 g_vis_syms sf `__strict` ) `1` ) ! ( seq ( nurl_sym_get2 g_vis_syms v `__pub` ) `1` ) {
+                                ( die lx ( nurl_str_cat4 `private type '` v
+                                ( nurl_str_cat4 `' is not visible across files: the generic struct '` sname `' written in '` tfile )
+                                ( nurl_str_cat3 `' names it in a field. A declaration is private to its file unless marked 'pub' — add the prefix at its definition ('pub : name ...'). Defined in '` sf `'` ) ) )
+                            } {}
+                        } {}
+                    } {}
+                    // (at depth 0 a type uses up one of the field's types; the
+                    // name after them starts the next field)
+                    ? == depth 0 { = need ? > need 0 - need 1 1 } {}
+                } {}
+            }
+        }
+        ( nurl_lex_advance lx )
+    }
+    ( nurl_lex_free lx )
+}
+
+@ __vis_check_targ i lex s ta → v {
+    // (a name with no recorded file - a builtin, a type parameter - is never
+    // private: one hash lookup settles most type arguments)
+    : s sf ( nurl_sym_get2 g_vis_syms ta `__src_file` )
+    ? == 0 ( nurl_str_len sf ) { ^ } {}
+    // (Text the type's own file wrote - a `pub` struct's field `( Shared
+    // Impl )`, read again while an importer is the current file - names it
+    // where it is visible: judged where it is written, AGORA-860.)
+    : s lf ( nurl_lex_filename lex )
+    ? ( seq sf lf ) { ^ } {}
+    // (A synthetic lexer reads text the compiler substituted: a generic
+    // struct's body, an instance's return type. Its names were judged
+    // where they are written - a type argument in the program's own file,
+    // a name in a struct template once against the template's file
+    // (__vis_check_template) - so none is judged again by name here.)
+    ? & != 0 ( nurl_str_len lf ) == ( nurl_str_get lf 0 ) 60 { ^ } {}
+    ? ( __vis_targ_exempt ta ) { ^ } {}
+    : s lt ( llvm_type ta )
+    ? & != 0 ( nurl_str_len lt ) == ( nurl_str_get lt 0 ) 37 { ( vis_check_xref lex ta `type` ) } {}
 }
 
 // ── Unused-symbol lint helpers (all inert unless `--lint`) ─────────
@@ -47454,7 +47534,7 @@ unsafe @ __blk_leave b val → v {
         = __tail_line ( nurl_lex_line lex )
         = __tail_col ( nurl_lex_col lex )
         = __nstmt + __nstmt 1
-        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex __tail_tt ) } {}
+        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex syms __tail_tt ) } {}
         ? & | __blk_ret_sx blk_fsx & ! g_ret_implicit | | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST == __tail_tt TT_LBRACE { = g_bck_fall_sx T } {}
         // (A field read is named by its path — `{ . h a }` is `h.a`, not all
         // of `h` — as a join's arm is: agora #360.)
@@ -47718,8 +47798,18 @@ unsafe @ __blk_leave b val → v {
 // that is the value is one: it does not drop at its `}` what it hands back
 // — agora #188; a closure literal is one: its env copies what it captures,
 // as `^ \ …` does — agora #473.)
-unsafe @ __is_fall_value_stmt i lex i tt → b {
+unsafe @ __is_fall_value_stmt i lex i syms i tt → b {
     ? ( is_ident_tok tt ) { ^ == ( nurl_lex_peek_type lex ) TT_RBRACE } {}
+    // A `?` / `??` is one where its value has no copy (__nc_drop_ty): taken
+    // as a statement, its arms lend, and a lend of such a value is refused,
+    // where `^` of it moves the owner an arm selects (AGORA-866). A value
+    // with a copy is copied on the arms that lend, the answer such joins
+    // have always had, which their callers rely on: a join handed back by
+    // `^` would lend them its argument instead.
+    ? | == tt TT_QUEST == tt TT_QUESTQUEST {
+        ? ! ( __nc_drop_ty ( nurl_llty ( nurl_sym_get syms `__fn_ret_ty__` ) ) ) { ^ F } {}
+        ^ ( __fall_join_is_tail lex )
+    } {}
     ? & & & & != tt TT_LPAREN != tt TT_DOT != tt TT_AT != tt TT_LBRACE != tt TT_BACKSLASH { ^ F } {}
     : s p # s lex
     : *u src # *u # s ( nurl_peek p LX_SRC )
@@ -47728,6 +47818,63 @@ unsafe @ __is_fall_value_stmt i lex i tt → b {
     ? < e 0 { ^ F } {}
     : i w ( __src_skip_ws src len e )
     ^ & < w len == & # i . src w 255 125
+}
+
+// Is the `?` / `??` statement starting here the value its block falls off
+// with? Its extent is read on tokens - one value, as the parser reads it -
+// and the lexer is put back where it was. A join's operands are prefix
+// expressions of any arity, which no scan of the source text can measure.
+// A fall-off join of a value with no copy then returns as `^` of it does
+// (gen_ret's `__jmove`): an owner an arm selects moves out on that path.
+// Taken as a statement, it lent from each arm instead, and such a value was
+// refused where the same join after `^` - the same IR - was accepted
+// (AGORA-866).
+@ __fall_join_is_tail i lex → b {
+    : i at ( nurl_lex_cur_start lex )
+    : b whole ( __skip_one_value lex )
+    : b tail & whole == ( nurl_lex_type lex ) TT_RBRACE
+    ( nurl_lex_set_pos lex at )
+    ^ tail
+}
+
+// Step over one value, as __gen_expr_level reads one: a group, a `??` and
+// its arms, a cast or a literal with its type, or a token and the operands
+// its arity says it takes (__cs_arity). F for anything else, which leaves
+// the statement to be taken as before.
+@ __skip_one_value i lex → b {
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_LPAREN { ( skip_balanced_parens lex ) ^ T } {}
+    ? == tt TT_LBRACK { ( skip_balanced_bracks lex ) ^ T } {}
+    ? == tt TT_LBRACE { ( skip_balanced lex ) ^ T } {}
+    ? == tt TT_QUESTQUEST {
+        ( nurl_lex_advance lex )
+        ? ! ( __skip_one_value lex ) { ^ F } {}
+        ? != ( nurl_lex_type lex ) TT_LBRACE { ^ F } {}
+        ( skip_balanced lex )
+        ^ T
+    } {}
+    ? == tt TT_HASH {
+        ( nurl_lex_advance lex )
+        ( skip_one_type lex )
+        ^ ( __skip_one_value lex )
+    } {}
+    ? == tt TT_AT {
+        ( nurl_lex_advance lex )
+        ( skip_one_type lex )
+        ? != ( nurl_lex_type lex ) TT_LBRACE { ^ F } {}
+        ( skip_balanced lex )
+        ^ T
+    } {}
+    ? | == tt TT_BACKSLASH == tt TT_SIZEOF { ^ F } {}
+    : i n ( __cs_arity lex tt )
+    ? < n 0 { ^ F } {}
+    ( nurl_lex_advance lex )
+    : ~ i k 0
+    ~ < k n {
+        ? ! ( __skip_one_value lex ) { ^ F } {}
+        = k + k 1
+    }
+    ^ T
 }
 
 // Past whitespace and `//` comments from `pos`.
@@ -47940,7 +48087,7 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
         // The value the body falls off with, written without `^`, returns
         // as `^` returns it: the same ownership rules decide whether the
         // caller owns it or it is a lend (h218).
-        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex __tail_tt ) } {}
+        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex syms __tail_tt ) } {}
         ? & __blk_ret_sx & ! g_ret_implicit | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST { = g_bck_fall_sx T } {}
         // (Raw provenance: a `?`/`??` the body may fall off with hands
         // back its arms' values — whether it is the tail is known only
@@ -77715,13 +77862,22 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
         ( nurl_sym_def syms ( nurl_str_cat name `__refdepth` )
         ? > refdepth 0 ( nurl_str_int refdepth ) `` )
         ? > refdepth 0 {
-            : s bd ( nurl_sym_get2 syms name `__bdepth` )
-            : i bdv ? == 0 ( nurl_str_len bd ) 1 ( nurl_str_to_int bd )
-            ? < bdv refdepth
-            { ( bck_esc_warn lex line ( nurl_str_cat3
+            // (An `inout` parameter is the caller's storage: it outlives
+            // every binding of this frame, so any stack reference stored
+            // into it dangles once the function returns. AGORA-1001.)
+            ? & != 0 ( nurl_str_len g_fn_io_names ) ( str_contains_word g_fn_io_names name ) {
+                ( bck_esc_warn lex line ( nurl_str_cat3
                 `assigning to '` name
-                `' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits` ) ) }
-            {}
+                `', storage the caller holds (an 'inout' parameter), a value that references a stack binding of this function by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)` ) )
+            } {
+                : s bd ( nurl_sym_get2 syms name `__bdepth` )
+                : i bdv ? == 0 ( nurl_str_len bd ) 1 ( nurl_str_to_int bd )
+                ? < bdv refdepth
+                { ( bck_esc_warn lex line ( nurl_str_cat3
+                    `assigning to '` name
+                    `' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits` ) ) }
+                {}
+            }
         } {}
     }
 }
@@ -81193,13 +81349,21 @@ unsafe @ gen_assign i lex i syms i cg → s {
             { ( nurl_sym_def syms ( nurl_str_cat obj `__refdepth` )
                 ( nurl_str_int refdepth ) ) }
             {}
-            : s bd ( nurl_sym_get2 syms obj `__bdepth` )
-            : i bdv ? == 0 ( nurl_str_len bd ) 1 ( nurl_str_to_int bd )
-            ? < bdv refdepth
-            { ( bck_esc_warn lex line ( nurl_str_cat3
+            // (…of an `inout` parameter: the caller's storage, as for
+            // bck_esc_assign. AGORA-1001.)
+            ? & != 0 ( nurl_str_len g_fn_io_names ) ( str_contains_word g_fn_io_names obj ) {
+                ( bck_esc_warn lex line ( nurl_str_cat3
                 `storing into a field of '` obj
-                `' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits` ) ) }
-            {}
+                `', storage the caller holds (an 'inout' parameter), a value that references a stack binding of this function by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)` ) )
+            } {
+                : s bd ( nurl_sym_get2 syms obj `__bdepth` )
+                : i bdv ? == 0 ( nurl_str_len bd ) 1 ( nurl_str_to_int bd )
+                ? < bdv refdepth
+                { ( bck_esc_warn lex line ( nurl_str_cat3
+                    `storing into a field of '` obj
+                    `' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits` ) ) }
+                {}
+            }
         }
     }
 }
@@ -96724,13 +96888,17 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
                 // downstream `getelementptr` of the outer struct.) The
                 // `__done` dedup marker for `mangled` was set above, so
                 // a self-referential struct won't recurse infinitely.
+                // (The instance's type arguments were judged where they were
+                // written; the rescan and the field parse below see them
+                // as the template's own - AGORA-861.)
+                : s __saved_vta ( nurl_str_cat g_vis_inst_targs `` )
+                = g_vis_inst_targs ( nurl_str_cat ta_list `` )
+                ( __vis_check_template sname ( nurl_sym_get2 g_generic_struct_syms sname `__sfile` ) tparams body )
                 : i lex_inner ( nurl_lex_new subst ( nurl_str_cat `<inst-rescan:` ( nurl_str_cat mangled `>` ) ) )
                 ( scan_generic_structs lex_inner syms )
                 ( nurl_lex_free lex_inner )
                 // Re-lex, skip outer '{', parse each field via parse_type + IDENT.
                 : i lex2 ( nurl_lex_new subst ( nurl_str_cat `<inst:` ( nurl_str_cat mangled `>` ) ) )
-                : s __saved_vta ( nurl_str_cat g_vis_inst_targs `` )
-                = g_vis_inst_targs ( nurl_str_cat ta_list `` )
                 ? == ( nurl_lex_type lex2 ) TT_LBRACE { ( nurl_lex_advance lex2 ) } {}
                 ( nurl_print `%` ) ( nurl_print mangled ) ( nurl_print ` = type { ` )
                 : ~ i first 1
@@ -118841,6 +119009,12 @@ unsafe @ priv_resolve i lex i syms s fname → s {
     ? == tt TT_AT { ( gen_fn_decl lex syms cg ) }
     ? == tt TT_COLON {
         ( gen_const_or_struct lex syms )
+        // (A `pub` belongs to this declaration and no other: a generic
+        // struct's template does not read the flag, and it was left set for
+        // whatever the parser reached next - the last declaration of an
+        // imported file put it on the importer's next `$`, "'pub' has no
+        // meaning on a '$' import".)
+        = g_pending_pub 0
         // Still pending: the ':' declared a const, an enum or a generic struct.
         ? != 0 g_pending_rawrep {
             = g_pending_rawrep 0

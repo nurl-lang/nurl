@@ -47534,7 +47534,7 @@ unsafe @ __blk_leave b val → v {
         = __tail_line ( nurl_lex_line lex )
         = __tail_col ( nurl_lex_col lex )
         = __nstmt + __nstmt 1
-        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex __tail_tt ) } {}
+        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex syms __tail_tt ) } {}
         ? & | __blk_ret_sx blk_fsx & ! g_ret_implicit | | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST == __tail_tt TT_LBRACE { = g_bck_fall_sx T } {}
         // (A field read is named by its path — `{ . h a }` is `h.a`, not all
         // of `h` — as a join's arm is: agora #360.)
@@ -47798,8 +47798,18 @@ unsafe @ __blk_leave b val → v {
 // that is the value is one: it does not drop at its `}` what it hands back
 // — agora #188; a closure literal is one: its env copies what it captures,
 // as `^ \ …` does — agora #473.)
-unsafe @ __is_fall_value_stmt i lex i tt → b {
+unsafe @ __is_fall_value_stmt i lex i syms i tt → b {
     ? ( is_ident_tok tt ) { ^ == ( nurl_lex_peek_type lex ) TT_RBRACE } {}
+    // A `?` / `??` is one where its value has no copy (__nc_drop_ty): taken
+    // as a statement, its arms lend, and a lend of such a value is refused,
+    // where `^` of it moves the owner an arm selects (AGORA-866). A value
+    // with a copy is copied on the arms that lend, the answer such joins
+    // have always had, which their callers rely on: a join handed back by
+    // `^` would lend them its argument instead.
+    ? | == tt TT_QUEST == tt TT_QUESTQUEST {
+        ? ! ( __nc_drop_ty ( nurl_llty ( nurl_sym_get syms `__fn_ret_ty__` ) ) ) { ^ F } {}
+        ^ ( __fall_join_is_tail lex )
+    } {}
     ? & & & & != tt TT_LPAREN != tt TT_DOT != tt TT_AT != tt TT_LBRACE != tt TT_BACKSLASH { ^ F } {}
     : s p # s lex
     : *u src # *u # s ( nurl_peek p LX_SRC )
@@ -47808,6 +47818,63 @@ unsafe @ __is_fall_value_stmt i lex i tt → b {
     ? < e 0 { ^ F } {}
     : i w ( __src_skip_ws src len e )
     ^ & < w len == & # i . src w 255 125
+}
+
+// Is the `?` / `??` statement starting here the value its block falls off
+// with? Its extent is read on tokens - one value, as the parser reads it -
+// and the lexer is put back where it was. A join's operands are prefix
+// expressions of any arity, which no scan of the source text can measure.
+// A fall-off join of a value with no copy then returns as `^` of it does
+// (gen_ret's `__jmove`): an owner an arm selects moves out on that path.
+// Taken as a statement, it lent from each arm instead, and such a value was
+// refused where the same join after `^` - the same IR - was accepted
+// (AGORA-866).
+@ __fall_join_is_tail i lex → b {
+    : i at ( nurl_lex_cur_start lex )
+    : b whole ( __skip_one_value lex )
+    : b tail & whole == ( nurl_lex_type lex ) TT_RBRACE
+    ( nurl_lex_set_pos lex at )
+    ^ tail
+}
+
+// Step over one value, as __gen_expr_level reads one: a group, a `??` and
+// its arms, a cast or a literal with its type, or a token and the operands
+// its arity says it takes (__cs_arity). F for anything else, which leaves
+// the statement to be taken as before.
+@ __skip_one_value i lex → b {
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_LPAREN { ( skip_balanced_parens lex ) ^ T } {}
+    ? == tt TT_LBRACK { ( skip_balanced_bracks lex ) ^ T } {}
+    ? == tt TT_LBRACE { ( skip_balanced lex ) ^ T } {}
+    ? == tt TT_QUESTQUEST {
+        ( nurl_lex_advance lex )
+        ? ! ( __skip_one_value lex ) { ^ F } {}
+        ? != ( nurl_lex_type lex ) TT_LBRACE { ^ F } {}
+        ( skip_balanced lex )
+        ^ T
+    } {}
+    ? == tt TT_HASH {
+        ( nurl_lex_advance lex )
+        ( skip_one_type lex )
+        ^ ( __skip_one_value lex )
+    } {}
+    ? == tt TT_AT {
+        ( nurl_lex_advance lex )
+        ( skip_one_type lex )
+        ? != ( nurl_lex_type lex ) TT_LBRACE { ^ F } {}
+        ( skip_balanced lex )
+        ^ T
+    } {}
+    ? | == tt TT_BACKSLASH == tt TT_SIZEOF { ^ F } {}
+    : i n ( __cs_arity lex tt )
+    ? < n 0 { ^ F } {}
+    ( nurl_lex_advance lex )
+    : ~ i k 0
+    ~ < k n {
+        ? ! ( __skip_one_value lex ) { ^ F } {}
+        = k + k 1
+    }
+    ^ T
 }
 
 // Past whitespace and `//` comments from `pos`.
@@ -48020,7 +48087,7 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
         // The value the body falls off with, written without `^`, returns
         // as `^` returns it: the same ownership rules decide whether the
         // caller owns it or it is a lend (h218).
-        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex __tail_tt ) } {}
+        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex syms __tail_tt ) } {}
         ? & __blk_ret_sx & ! g_ret_implicit | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST { = g_bck_fall_sx T } {}
         // (Raw provenance: a `?`/`??` the body may fall off with hands
         // back its arms' values — whether it is the tail is known only
