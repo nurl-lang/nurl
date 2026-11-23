@@ -62222,12 +62222,14 @@ unsafe @ bck_emit_error s file i line s msg → v {
 }
 
 // Does a scope's end release, in a function with `inout` parameters, a
-// closure whose environment runs a `% Drop` that reaches no Rc (`+du=`,
-// __udrop_clo_note)? Its end is then asked even with no borrow to end
+// closure whose environment runs a `% Drop` of the program's (`+du=`, or
+// `+dk=` for one that reaches an Rc; __udrop_clo_note)? Its end is then asked even with no borrow to end
 // (bck_scope_drop, __bck_clo_unw; agora #952).
 @ __bck_du_any → b {
     ? == 0 g_bck_inp_any { ^ F } {}
-    ^ >= ( nurl_str_find g_bck_rcty `+du=` ) 0
+    // (…or one that reaches an Rc, `+dk=`: its release runs it too;
+    // CodeRabbit on github#2189.)
+    ^ | >= ( nurl_str_find g_bck_rcty `+du=` ) 0 >= ( nurl_str_find g_bck_rcty `+dk=` ) 0
 }
 
 // A closure binding `id` released at `line` with no call (its block's end,

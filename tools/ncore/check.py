@@ -77,8 +77,14 @@ def _calls_in(x, out):
 def _dtor_fns(prog, ty, out, seen):
     """The destructors of the program's (`drop__T`) releasing a value of
     type `ty` runs: its own, and its fields', payloads' and type
-    arguments' (a closure's environment is no part of its type)."""
-    if not isinstance(ty, tuple) or not ty or ty in seen or ty[0] == "closure":
+    arguments. A closure's environment is no part of its type: releasing
+    one runs what it took over, which no type here names - a call through
+    a closure value, `None`, as nurlc's graph counts `nurl_closure_drop`
+    (CodeRabbit on github#2189)."""
+    if not isinstance(ty, tuple) or not ty or ty in seen:
+        return
+    if ty[0] == "closure":
+        out.add(None)
         return
     seen.add(ty)
     if ty[0] == "named" and len(ty) > 1 and isinstance(ty[1], str):
@@ -4503,10 +4509,15 @@ class FnCheck:
         where the module's panic graph says it may (agora #942). The parts
         run_dtor releases, no field a literal only names."""
         av = st.vals.get(place[0])
+        lit = self.lit_named_fields(st, place[0])
         if av is not None:
             n = len(place[1])
             for base, fname in self.closures_in(av):
                 if tuple(base[:n]) != tuple(place[1]):
+                    continue
+                # (…not one in a field a literal only names: the binding's,
+                # released nowhere here; CodeRabbit on github#2189)
+                if any(tuple(base[:len(l)]) == l for l in lit):
                     continue
                 body = self.prog.fns.get(fname)
                 if body is None:
@@ -4516,7 +4527,7 @@ class FnCheck:
                     if cv is not None and getattr(cv, "taken", False):
                         if self.dtor_unw_ty(st, cv.ty, line, None, frozenset()):
                             return
-        self.dtor_unw_ty(st, ty, line, (place, self.lit_named_fields(st, place[0])), frozenset())
+        self.dtor_unw_ty(st, ty, line, (place, lit), frozenset())
 
     def dtor_unw_ty(self, st, ty, line, at, seen):
         """dtor_unw's walk of a type: True once a destructor that may panic
