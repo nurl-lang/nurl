@@ -20,6 +20,8 @@ INT_TYS = {"i64", "i1", "i32", "i8", "void"}
 
 # Struct types from the IR's `ty` lines: name → [(field, type), …].
 STRUCTS = {}
+# The fused walk's summaries from the IR's `sum` lines: name → {key: value}.
+SUMS = {}
 
 
 def struct_fields(t):
@@ -52,6 +54,13 @@ def lean_ty(t):
     fs = struct_fields(t)
     if fs is not None and t in _EXPANDING:
         raise Unsupported(f"type {t}, recursive")
+    if fs is not None and len(fs) == 1:
+        # a struct of one field: A2 has no one-element tuple, so it is its field
+        _EXPANDING.add(t)
+        try:
+            return lean_ty(fs[0][1])
+        finally:
+            _EXPANDING.discard(t)
     if fs is not None and len(fs) >= 2:
         _EXPANDING.add(t)
         try:
@@ -90,6 +99,8 @@ def parse(text):
             cur["vars"][int(f[1])] = f[-1]
             cur["flags"][int(f[1])] = int(f[4])
             cur.setdefault("kind", {})[int(f[1])] = int(f[2])
+        elif f[0] == "sum" and cur is None:
+            SUMS[f[1]] = dict(kv.split("=", 1) for kv in f[3:] if "=" in kv)
         elif f[0] == "ty" and cur is None:
             # ty <type> <class> <drops> <base> A <n> … F <n> (<field> <type>)… V …
             i = f.index("F")
@@ -132,6 +143,11 @@ class Fn:
         self.depth = 0   # the loops' blocks around the statement
         self.res_ty = lean_ty(fn["ret"])
         self.res_own = self.res_ty != ".int"
+        sm = SUMS.get(fn["name"], {})
+        if self.res_own and (sm.get("ret_unowned") == "1" or sm.get("rviews", ":") != ":"):
+            # a result that views or borrows what it was handed: its lends
+            # (the summary's `rviews`) are not translated yet
+            raise Unsupported(f"{fn['name']}: a borrowed result ({sm.get('rviews')})")
 
     def var(self, k):
         return k if k < self.np else k + 1
@@ -164,6 +180,8 @@ class Fn:
             raise Unsupported(f"{self.fn['name']}: nested field {op}")
         b = int(base[1:])
         fs = struct_fields(self.fn["vars"][b])
+        if fs is not None and len(fs) == 1:
+            return self.var(b)   # a struct of one field is its field
         if fs is None or len(fs) < 2:
             raise Unsupported(f"{self.fn['name']}: field of {self.fn['vars'][b]}")
         names = [f for f, _ in fs]
@@ -181,11 +199,24 @@ class Fn:
         if "/" in op and pre is not None:
             return f"(.var {self.field_temp(op, pre)})"
         if op.startswith("v") and op[1:].isdigit():
-            return f"(.var {self.var(int(op[1:]))})"
+            return f"(.var {self.pvar(op)})"
         raise Unsupported(f"{self.fn['name']}: operand {op}")
 
+    def vty(self, op):
+        """The IR type of a place: a variable's, or a field's through its struct."""
+        base, _, path = op.partition("/")
+        if not (base.startswith("v") and base[1:].isdigit()):
+            raise Unsupported(f"{self.fn['name']}: the place {op}")
+        t = self.fn["vars"].get(int(base[1:]), "i64")
+        for f in [p for p in path.split("/") if p]:
+            fs = struct_fields(t)
+            if fs is None or f not in dict(fs):
+                raise Unsupported(f"{self.fn['name']}: the field path {op}")
+            t = dict(fs)[f]
+        return t
+
     def is_int(self, op):
-        return op == "c" or self.fn["vars"].get(int(op[1:]), "i64") in INT_TYS
+        return op == "c" or self.vty(op) in INT_TYS
 
     def rhs(self, words, dest=None, pre=None):
         k = words[0]
@@ -199,9 +230,9 @@ class Fn:
             op = words[3]
             if op == "c":
                 return f".inr .int {self.lit_temp()}"
-            return f".inr .int {self.var(int(op[1:]))}"
+            return f".inr .int {self.pvar(op)}"
         if k == "payload" and words[2] == "T" and words[3] == "0":
-            return f".getr {self.var(int(words[1][1:]))}"
+            return f".getr {self.pvar(words[1])}"
         if k == "none":
             return ".expr (.lit 0)"
         if k == "use" and words[1] == "c" and dest is not None and self.fn["vars"].get(dest) == "i8*":
@@ -217,7 +248,7 @@ class Fn:
             return f".expr (.var {self.field_temp(words[1], pre)})"
         if k == "use":
             op = words[1]
-            if op != "c" and self.fn["vars"].get(int(op[1:]), "i64") not in INT_TYS:
+            if op != "c" and self.vty(op) not in INT_TYS:
                 y = int(op[1:])
                 kinds, flags = self.fn.get("kind", {}), self.fn["flags"]
                 # (A `: ~` binding of another binding is a cursor, a borrow of
@@ -226,10 +257,16 @@ class Fn:
                     return f".borrow {self.var(y)}"
                 return f".var {self.var(y)}"
             return f".expr {self.operand(op)}"
+        if k == "agg" and words[1] == "-" and dest is not None and int(words[2]) == 1:
+            # a struct of one field is its field's value
+            op = words[3]
+            if op == "c" or self.is_int(op):
+                return f".expr {self.operand(op)}"
+            return f".var {self.pvar(op)}"
         if k == "agg" and words[1] == "-" and dest is not None:
             # a struct literal: its fields nested in pairs to the right
             n = int(words[2])
-            vs = [str(self.lit_temp()) if o == "c" else str(self.var(int(o[1:]))) for o in words[3:3 + n]]
+            vs = [str(self.lit_temp()) if o == "c" else str(self.pvar(o)) for o in words[3:3 + n]]
             if n < 2:
                 raise Unsupported(f"{self.fn['name']}: struct of {n} field(s)")
             acc = vs[-1]
@@ -253,6 +290,15 @@ class Fn:
         """A standard-library call A2 has a construct for, or None."""
         f, n = words[1], int(words[2])
         ops = words[3:3 + n]
+        if f == "nurl_println" and n == 1 and x is None:
+            # it reads its argument: the read checked live
+            if ops[0] == "c":
+                return rest
+            y = self.pvar(ops[0])
+            ty = lean_ty(self.vty(ops[0]))
+            e = f"(.slen {y})" if ty.startswith("(.slice") else f"(.len {y})" if ty.startswith("(.vec") else f"(.var {y})"
+            t = self.fresh()
+            return f"(.letv {t} (.expr {e}) {rest})"
         if f == "nurl_str_cat" and n == 2:
             # a fresh string from two it reads: each read checked live
             x = self.fresh() if x is None else x
@@ -311,7 +357,7 @@ class Fn:
             elif "/" in op:
                 raise Unsupported(f"{self.fn['name']}: a field as an argument ({op})")
             else:
-                args.append(str(self.var(int(op[1:]))))
+                args.append(str(self.pvar(op)))
         x = self.fresh() if x is None else x
         s = f"(.letcall {x} {names[f]} [{', '.join(args)}] {rest})"
         for t in reversed(pre):
@@ -389,7 +435,7 @@ class Fn:
                 j = k   # the next `arm`, or the match's `end`
             if set(arms) != {"T", "F"}:
                 raise Unsupported(f"{self.fn['name']}: match arms {sorted(arms)}")
-            m = self.var(int(head[1][1:]))
+            m = self.pvar(head[1])
             ite = f"(.ite (.isl {m}) {self.stmts(arms['F'], names)} {self.stmts(arms['T'], names)})"
             return self.seq(ite, self.stmts(lines[j + 1:], names, tail))
         if w == "if":
@@ -403,7 +449,7 @@ class Fn:
             return self.seq(ite, self.stmts(lines[k + 1:], names, tail))
         if w == "ret":
             if head[1] != "-" and not self.is_int(head[1]):
-                ex = f"(.seq (.assign {self.np} (.var {self.var(int(head[1][1:]))})) (.exit {self.depth}))"
+                ex = f"(.seq (.assign {self.np} (.var {self.pvar(head[1])})) (.exit {self.depth}))"
                 return self.seq(ex, self.stmts(lines[1:], names, tail))
             v = "(.lit 0)" if head[1] == "-" else self.operand(head[1])
             ex = f"(.seq (.assign {self.np} (.expr {v})) (.exit {self.depth}))"
@@ -439,7 +485,7 @@ class Fn:
         if w == "assign":
             if not (head[1].startswith("v") and head[1][1:].isdigit()):
                 raise Unsupported(f"{self.fn['name']}: store to {head[1]}")
-            return self.seq(f"(.assign {self.var(int(head[1][1:]))} ({self.rhs(head[2:])}))",
+            return self.seq(f"(.assign {self.pvar(head[1])} ({self.rhs(head[2:])}))",
                             self.stmts(lines[1:], names, tail))
         raise Unsupported(f"{self.fn['name']}: statement {w}")
 
