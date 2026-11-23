@@ -951,3 +951,11 @@ import B
 #print axioms B.moveAll_ok
 #print axioms B.grow_ok
 #print axioms B.release_ok
+-- Phase B5: `Arc` / `ArcWeak` (stdlib/std/arc.nu): counts are the handles; the value dropped at the last strong
+-- release, the block freed at the last handle of either kind, an upgrade only while the value lives
+#print axioms B.arcNew_ok
+#print axioms B.arcClone_ok
+#print axioms B.arcDowngrade_ok
+#print axioms B.arcDrop_ok
+#print axioms B.weakDrop_ok
+#print axioms B.upgrade_ok
