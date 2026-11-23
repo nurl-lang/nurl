@@ -141,6 +141,8 @@ def lean_ty(t):
     fs = struct_fields(t)
     if fs is not None and t in _EXPANDING:
         raise Unsupported(f"type {t}, recursive")
+    if fs is not None and len(fs) == 1 and fs[0][1] == "i8*":
+        raise Unsupported(f"type {t}: a raw string held in a struct field")
     if fs is not None and len(fs) == 1:
         # a struct of one field: A2 has no one-element tuple, so it is its field
         _EXPANDING.add(t)
@@ -169,7 +171,14 @@ def chan_elem(t):
 
 def _struct_ty(fs, fty=None):
     """A struct: its fields nested in pairs to the right (formal/A2's `prod`)."""
+    fty_given = fty is not None
     fty = fty or lean_ty
+    for _, ft in fs:
+        if ft == "i8*" and not fty_given:
+            # a raw string in a value is a view (MEMORY.md §2.13), which a
+            # field's translation as owned text would not be (a destructor
+            # struct's translates it as a view: dtor_field_ty)
+            raise Unsupported("a raw string held in a struct field")
     acc = fty(fs[-1][1])
     for _, ft in reversed(fs[:-1]):
         acc = f"(.prod {fty(ft)} {acc})"
@@ -307,6 +316,31 @@ class Fn:
                     views.add(v)
                     changed = True
         return views
+
+    def views_of(self, k):
+        """`k` and the variables that may view it: bound from a call that
+        hands back a view of an argument `k` is (string_data, slice_from_vec,
+        vec_at, a borrowed result), or a copy of one of those."""
+        out, changed = {k}, True
+        mk = ("string_data", "slice_from_vec__", "vec_at__", "slice_at__")
+        while changed:
+            changed = False
+            for l in self.fn["body"]:
+                w = l.split()
+                if len(w) < 3 or w[0] != "let":
+                    continue
+                j = int(w[1])
+                if j in out:
+                    continue
+                args = {a.split("/")[0] for a in w[3:]}
+                hit = any(f"v{i}" in args for i in out)
+                if not hit:
+                    continue
+                if w[2] == "call" and (w[3].startswith(mk) or borrowed(w[3])):
+                    out.add(j); changed = True
+                elif w[2] == "use" and self.fn["kind"].get(j) == 2 and j in self.views:
+                    out.add(j); changed = True
+        return out
 
     def vlean(self, k):
         """Variable `k`'s A2 type: a raw string that holds a view is a slice."""
@@ -520,6 +554,15 @@ class Fn:
             e = f"(.slen {y})" if ty.startswith("(.slice") else f"(.len {y})" if ty.startswith("(.vec") else f"(.var {y})"
             t = self.fresh()
             return f"(.letv {t} (.expr {e}) {rest})"
+        def read(op):
+            # a read of raw text, checked live: a view's length or an owner's
+            y = rd(op)
+            ty = self.vlean(int(op[1:])) if "/" not in op else lean_ty(self.vty(op))
+            if ty.startswith("(.slice"):
+                return f"(.slen {y})"
+            if ty.startswith("(.vec"):
+                return f"(.len {y})"
+            raise Unsupported(f"{self.fn['name']}: {f} of a {ty}")
         if f == "nurl_str_cat" and n == 2:
             # a fresh string from two it reads: each read checked live
             x = self.fresh() if x is None else x
@@ -527,15 +570,19 @@ class Fn:
             for op in ops:
                 if op != "c":
                     t = self.fresh()
-                    s = f"(.letv {t} (.expr (.len {rd(op)})) {s})"
+                    s = f"(.letv {t} (.expr {read(op)}) {s})"
             return s
         if f == "nurl_str_len" and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.expr (.len {rd(ops[0])})) {rest})"
+            return f"(.letv {x} (.expr {read(ops[0])}) {rest})"
         if f == "string_from" and n == 1:
-            # a fresh owned String of a text the IR does not track
+            # a fresh owned String copied from the text it reads (checked live;
+            # a literal needs no check)
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.new .int) {rest})"
+            s = f"(.letv {x} (.new .int) {rest})"
+            if ops[0] != "c":
+                s = f"(.letv {self.fresh()} (.expr {read(ops[0])}) {s})"
+            return s
         if f == "string_data" and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.view {rd(ops[0])}) {rest})"
@@ -700,7 +747,20 @@ class Fn:
             return self.seq(self.stmts(body, names), f"(.exit {self.depth})")
         head, i = lines[0].split(), 1
         w = head[0]
-        if w in ("line", "drop"):
+        if w == "drop":
+            # a temporary's statement ended: it is released here, which the
+            # translation leaves to the end of its scope. That is the same
+            # only if nothing reads it, or a view of it, afterwards: else
+            # unsupported (CORE_IR.md §2)
+            k = int(head[1])
+            if lean_ty(self.fn["vars"].get(k, "i64")) != ".int" or self.fn["vars"].get(k) == "i8*":
+                dead = self.views_of(k)
+                for later in lines[1:]:
+                    toks = set(later.replace("/", " ").split())
+                    if any(f"v{j}" in toks for j in dead):
+                        raise Unsupported(f"{self.fn['name']}: a temporary, or a view of it, read after its drop")
+            return self.stmts(lines[1:], names, tail)
+        if w == "line":
             return self.stmts(lines[1:], names, tail)
         if w == "scope":
             body, j = block_of(lines, 1)
