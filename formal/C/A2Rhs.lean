@@ -36,7 +36,7 @@ theorem noPinB_sound {D : List Var} {Γ : Ctx} {x : Var} (hs : Supported2 Γ D) 
   intro p E hE hm d hd hb
   have := List.all_eq_true.mp h p (mem_of_some2 hs hE)
   rw [hE] at this
-  simp only [Bool.or_eq_true, Bool.not_eq_true', decide_eq_false_iff_not, decide_eq_true_eq] at this
+  simp only [Bool.or_eq_true, Bool.not_eq_true', decide_eq_false_iff_not] at this
   rcases this with h0 | h0
   · exact absurd hm h0
   · have := List.all_eq_true.mp h0 d hd
