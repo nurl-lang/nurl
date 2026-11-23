@@ -558,6 +558,18 @@ class Fn:
         binding scoped over what follows it."""
         if not lines:
             return tail
+        eff = [k for k, l in enumerate(lines) if l.split()[0] not in ("line", "drop")]
+        if eff and lines[eff[-1]].split()[0] == "ret":
+            # A list ending in `ret` (the last line of a list is at its own
+            # depth: a nested block's ends in `end`) leaves the function from
+            # inside every binding made before it. The exit is put after
+            # them: ending their scopes and then leaving is what leaving
+            # from inside them does (the unwinding ends them in that order),
+            # and an exit at the end of a sequence is one a branch around it
+            # may end elsewhere (`checkX`'s tail).
+            k = eff[-1]
+            body = lines[:k] + ["retnx " + " ".join(lines[k].split()[1:])]
+            return self.seq(self.stmts(body, names), f"(.exit {self.depth})")
         head, i = lines[0].split(), 1
         w = head[0]
         if w in ("line", "drop"):
@@ -636,15 +648,18 @@ class Fn:
             c = self.operand(head[1])
             ite = f"(.ite {c} {self.stmts(a, names)} {self.stmts(b, names)})"
             return self.seq(ite, self.stmts(lines[k + 1:], names, tail))
-        if w == "ret":
+        if w in ("ret", "retnx"):
             if head[1] == "c" and self.res_ty == "(.slice .int)":
                 # a literal handed back as a view: A2 has no static strings
                 raise Unsupported(f"{self.fn['name']}: a literal string handed back as a view")
+            # (`retnx`: the result set, its exit placed after the list, above)
+            ex_ = "" if w == "retnx" else f" (.exit {self.depth})"
             if head[1] != "-" and not self.is_int(head[1]):
-                ex = f"(.seq (.assign {self.np} (.var {self.pvar(head[1])})) (.exit {self.depth}))"
-                return self.seq(ex, self.stmts(lines[1:], names, tail))
-            v = "(.lit 0)" if head[1] == "-" else self.operand(head[1])
-            ex = f"(.seq (.assign {self.np} (.expr {v})) (.exit {self.depth}))"
+                a = f"(.assign {self.np} (.var {self.pvar(head[1])}))"
+            else:
+                v = "(.lit 0)" if head[1] == "-" else self.operand(head[1])
+                a = f"(.assign {self.np} (.expr {v}))"
+            ex = f"(.seq {a}{ex_})" if ex_ else a
             return self.seq(ex, self.stmts(lines[1:], names, tail))
         if w == "let" and head[2] != "call":
             # `let x r` whose value is returned at once: the result takes `r`
