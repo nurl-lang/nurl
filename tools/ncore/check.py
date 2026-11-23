@@ -4507,17 +4507,16 @@ class FnCheck:
         point the frame may unwind from, as a call that may is: what the
         caller holds must be whole there and view nothing of this frame,
         where the module's panic graph says it may (agora #942). The parts
-        run_dtor releases, no field a literal only names."""
+        run_dtor releases, a field a literal names included (see below)."""
         av = st.vals.get(place[0])
-        lit = self.lit_named_fields(st, place[0])
+        # (Every closure held there, a field a literal names included: the
+        # `lit` marks are a union over the paths that joined, so a field
+        # one path names may be owned on another - asked of all, a refusal
+        # at worst; CodeRabbit on github#2194.)
         if av is not None:
             n = len(place[1])
             for base, fname in self.closures_in(av):
                 if tuple(base[:n]) != tuple(place[1]):
-                    continue
-                # (…not one in a field a literal only names: the binding's,
-                # released nowhere here; CodeRabbit on github#2189)
-                if any(tuple(base[:len(l)]) == l for l in lit):
                     continue
                 body = self.prog.fns.get(fname)
                 if body is None:
@@ -4527,7 +4526,7 @@ class FnCheck:
                     if cv is not None and getattr(cv, "taken", False):
                         if self.dtor_unw_ty(st, cv.ty, line, None, frozenset()):
                             return
-        self.dtor_unw_ty(st, ty, line, (place, lit), frozenset())
+        self.dtor_unw_ty(st, ty, line, (place, frozenset()), frozenset())
 
     def dtor_unw_ty(self, st, ty, line, at, seen):
         """dtor_unw's walk of a type: True once a destructor that may panic
