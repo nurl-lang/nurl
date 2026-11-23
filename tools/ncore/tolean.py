@@ -416,6 +416,12 @@ class Fn:
         for v, ty in fn["vars"].items():
             lean_ty(ty)
         self.lits = []
+        # the A2 bindings that are a loop's borrowed element (`foreach`'s `sat`):
+        # a change of elements goes through such a binding itself, not a
+        # borrow of it (AGORA-994: a borrow of it would be the edit's own
+        # binding, and the element, reached `.inner`, would end with the
+        # change made through it)
+        self.elems = set()
         self.depth = 0   # the loops' blocks around the statement
         for i in range(self.np):
             if self.is_dtor(fn["vars"].get(i, "")) and fn["flags"].get(i, 0) & 6:
@@ -529,6 +535,15 @@ class Fn:
     def fresh(self):
         self.next += 1
         return self.next - 1
+
+    def edit_through(self, y, op):
+        """A change of `y`'s elements: through `y` itself when it is a loop's
+        borrowed element, else through a borrow of `y` (the binding A2's
+        `edit` goes through), and that binding's name."""
+        if y in self.elems:
+            return f"(.edit true {y} {op})", y
+        b = self.fresh()
+        return f"(.letv {b} (.borrow {y}) (.edit true {b} {op}))", b
 
     def lit_temp(self):
         """An integer temporary holding a number the IR does not track,
@@ -824,8 +839,7 @@ class Fn:
             # its elements past the new length dropped (A2's `edit`, `trunc`)
             pre = []
             i = "(.lit 0)" if n == 1 else self.operand(ops[1], pre)
-            b = self.fresh()
-            s = f"(.letv {b} (.borrow {rd(ops[0])}) (.edit true {b} (.trunc {i})))"
+            s, _ = self.edit_through(rd(ops[0]), f"(.trunc {i})")
             if x is not None:   # vec_truncate's answer, a Bool
                 rest = f"(.letv {x} (.expr (.lit 0)) {rest})"
             return self.wrap(pre, self.seq(s, rest))
@@ -849,8 +863,8 @@ class Fn:
             # for the bytes: A2's `push`, which may move its buffer), and only
             # then are the bytes of the text copied in: the text is read after
             # the change, so a view of the String itself is dead by then
-            b, c = self.fresh(), self.lit_temp()
-            st = f"(.letv {b} (.borrow {rd(ops[0])}) (.edit true {b} (.push {c})))"
+            c = self.lit_temp()
+            st, _ = self.edit_through(rd(ops[0]), f"(.push {c})")
             if ops[1] != "c":
                 y = rd(ops[1])
                 ty = self.vlean(int(ops[1][1:])) if "/" not in ops[1] else self.flean(ops[1])
@@ -993,6 +1007,7 @@ class Fn:
                 # (a view of a Vec whose elements hold views is not A2's `view`)
                 raise Unsupported(f"{self.fn['name']}: foreach over a Vec of views")
             v, x, i, w = self.pvar(xs), self.var(int(head[1])), self.fresh(), self.fresh()
+            self.elems.add(x)
             self.depth += 2
             inner = self.stmts(body, names)
             self.depth -= 2
