@@ -1,0 +1,4 @@
+### Fixed
+
+- **A closure's capture given a join over literal-built locals' lends no longer reads freed memory** (AGORA-965). With `: ?String e ? == k 0 ( idq a ) ( idq b )  = cap e` in a closure, where `a` and `b` are options built by literals, `cap` was left borrowing a local that the closure released when it returned. The join binding is now a cursor over the local an arm's call lends, so `cap` takes over the one the join selected. When that one is `None`, no owner is taken over, and the other option is no longer leaked. No source changes.
+- **A join over fields lent out of local structs, handed on by name, no longer leaks** (AGORA-967). `: String e ? == k 0 ( ex a ) ( ex b )  = o e`, with `ex` handing back a field, used to take both structs over whole and release only the field. The target now gets a copy of the field, and each struct releases its own. A field with no copy is refused at the assignment.

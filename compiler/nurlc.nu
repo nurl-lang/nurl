@@ -50397,6 +50397,32 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ^ | & != 0 ( nurl_str_len pt ) ( __ud_key_names pt v ) & != 0 ( nurl_str_len et ) ( __ud_key_names et v )
 }
 
+// Does a null key (mem_ud_ident_key) say the value owns nothing at all —
+// an empty String, a byte buffer with none, an option or a result whose
+// active side is one of those or a number? Then releasing it is a no-op,
+// and a takeover by key that meets one takes over no owner: each keeps
+// what it holds (AGORA-965).
+@ __ud_null_trivial s vt → b {
+    : s ll ( nurl_llty ( __udty_val vt ) )
+    ? != 0 ( nurl_str_starts ll `{ i1, ` ) {
+        : ~ s fs ( __seplist_rest ( __agg_fields ll ) )
+        ? == 0 ( nurl_str_len fs ) { ^ F } {}
+        ~ != 0 ( nurl_str_len fs ) {
+            : s f ( seplist_first fs ) = fs ( __seplist_rest fs )
+            ? ! | ( __ud_null_trivial f ) ( __is_plain_num_llty f ) { ^ F } {}
+        }
+        ^ T
+    } {}
+    ? ( seq ll `%String` ) { ^ T } {}
+    ? != 0 ( nurl_str_starts ll `%Vec__` ) { ^ ( __is_plain_num_llty ( nurl_str_slice ll 6 - ( nurl_str_len ll ) 6 ) ) } {}
+    ^ F
+}
+
+// An LLVM integer or float type: a number, which owns nothing.
+@ __is_plain_num_llty s t → b {
+    ^ | | | | | | ( seq t `i1` ) ( seq t `i8` ) ( seq t `i16` ) ( seq t `i32` ) ( seq t `i64` ) ( seq t `double` ) ( seq t `float` )
+}
+
 @ __ud_keyable s vt → b {
     : s ll ( nurl_llty vt )
     // (An option or a result by its active side, as mem_ud_ident_key keys
@@ -52285,6 +52311,29 @@ unsafe @ __src_has_raw_ptr s text → b {
             // never a release under a holder.)
             : ~ s __mtaken `0`
             : s __mnn ? & __mkey != 0 ( nurl_str_len __mnk ) ( __i8_nonnull cg __mnk ) ``
+            : b __mtriv ( __ud_null_trivial ty )
+            // (…and an owner whose key does not name what the binding holds —
+            // a struct a call lent a field of, `( ex a )` — is no owner of
+            // it: taken over whole, the binding released the field only and
+            // the rest of each such owner leaked. The binding is given a copy
+            // of what it holds on the runs it owns nothing, and every deeper
+            // owner keeps and releases its own; a value with no copy is
+            // refused, as a field of a dying struct is — AGORA-967.)
+            : ~ s __mpo ``
+            ? ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) {
+                : ~ s __mq ( nurl_str_cat __ma `` )
+                ~ != 0 ( nurl_str_len __mq ) {
+                    : s __mqw ( str_first_word __mq ) = __mq ( str_skip_word __mq )
+                    : s __mqt ( nurl_sym_get syms ( nurl_sym_get2 syms __mqw `__bname` ) )
+                    ? & & == 0 ( nurl_str_len __mpo ) > ( nurl_str_to_int ( nurl_sym_get2 syms __mqw `__depth` ) ) __pd | == 0 ( nurl_str_len __mqt ) ! ( __ud_key_names __mqt ty ) {
+                        = __mpo ( nurl_str_cat ( nurl_sym_get2 syms __mqw `__bname` ) `` )
+                    } {}
+                }
+            } {}
+            ? & != 0 ( nurl_str_len __mpo ) | ( __clone_supported ty syms ) ( __nc_drop_ty ty ) {
+                ( mem_dyn_lend_copy_in syms cg ptr ty ( mem_udrop_flag_get syms cg ptr ) __mpo )
+                ^ v
+            } {}
             // (…and a binding given this one's value is one of those arms' too.)
             ? ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jalias` ) `1` ) } {}
             ~ != 0 ( nurl_str_len __ma ) {
@@ -52312,7 +52361,10 @@ unsafe @ __src_has_raw_ptr s text → b {
                             // key is null: then every one)
                             : s __mm ( __and_not cg ( __and_i1 cg ( __and_i1 cg __meq __of ) __mnn ) __mtaken )
                             = __mtaken ( __or_i1 cg __mtaken __mm )
-                            : s __msel ( __or_i1 cg __mm ( __not_i1 cg __mnn ) )
+                            // (…unless a null key says the value owns nothing —
+                            // `None`, an empty String: then no owner is taken
+                            // over, and each releases its own, AGORA-965.)
+                            : s __msel ? __mtriv ( nurl_str_cat __mm `` ) ( __or_i1 cg __mm ( __not_i1 cg __mnn ) )
                             : s __mtk ( __and_i1 cg __of __msel )
                             : s __mrest ( __and_not cg __of __msel )
                             : s __nf2 ( nurl_cg_reg cg )
@@ -52425,11 +52477,26 @@ unsafe @ __src_has_raw_ptr s text → b {
             : ~ s __jids ``
             = __jids ( __phi_ids_union ( nurl_sym_get syms `__last_phi_idents__` ) ( nurl_sym_get syms `__last_join_tails__` ) )
             : s __jpn ( nurl_sym_get syms `__fn_param_names__` )
+            // (The roots of the arms' lending calls' arguments.)
+            : s __jarg ( __arm_lend_roots ( nurl_sym_get syms `__last_join_arm_lends__` ) )
             ~ != 0 ( nurl_str_len __jids ) {
                 : s __jw ( str_first_word __jids ) = __jids ( str_skip_word __jids )
                 ? ! ( str_contains_word __jpn __jw ) {
                     : s __jup ( mem_udrop_ptr_of syms __jw )
-                    ? & & & != 0 ( nurl_str_len __jup ) ! ( seq __jup ptr ) ( nurl_sym_has_word syms `__user_drops__` __jup ) != 0 ( nurl_str_len ( __call_owned_by syms __jup ) ) {
+                    // (…or a local an arm's call lends, as a call's result
+                    // over what it hands back is (above): the join is a
+                    // cursor over it on the runs that arm is taken — a
+                    // literal-built option bound in a closure and lent by
+                    // `( idq a )`, assigned by name to a capture, was left
+                    // a borrow of a local the closure then released,
+                    // AGORA-965.)
+                    // (Only a whole value: the local is an argument of an
+                    // arm's lending call and has the join's own type — a
+                    // field lent out of it, `( getr lb )`, is no cursor
+                    // over lb; and an arm that is a bare name moves.)
+                    : s __jot ( nurl_sym_get syms ( nurl_sym_get2 syms __jup `__bname` ) )
+                    : b __jcl | != 0 ( nurl_str_len ( __call_owned_by syms __jup ) ) & & & ( __is_handle_ty ty ) ( nurl_sym_has_word syms `__last_phi_idents__` __jw ) ( str_contains_word __jarg __jw ) & != 0 ( nurl_str_len __jot ) ( seq ( nurl_llty ( __udty_val __jot ) ) ( nurl_llty ( __udty_val ty ) ) )
+                    ? & & & != 0 ( nurl_str_len __jup ) ! ( seq __jup ptr ) ( nurl_sym_has_word syms `__user_drops__` __jup ) __jcl {
                         ( mem_udrop_link_alias syms ptr __jup )
                         // (…one of them on a run, the arm's: whoever takes
                         // the binding's value over takes over that one only,
@@ -52542,7 +52609,10 @@ unsafe @ __src_has_raw_ptr s text → b {
 @ __nc_outlive_die i syms s ptr s ty → v {
     : s rec ( __stmt_pos_rec ( nurl_sym_get syms `__fn_self_name__` ) )
     : s r1 ( str_skip_word rec )
-    : s bn ( nurl_sym_get2 syms ptr `__bname` )
+    // (A capture's slot has no binding name of its own: the assignment's
+    // target names it, AGORA-967.)
+    : s bn0 ( nurl_sym_get2 syms ptr `__bname` )
+    : s bn ? == 0 ( nurl_str_len bn0 ) ( nurl_sym_get syms `__assign_name__` ) bn0
     : s root ( nurl_sym_get syms `__last_member_root__` )
     : s tshow ( llvm_to_nurl ty )
     : s m1 ( nurl_str_cat4 `'` bn `' would still borrow a field of '` root )
@@ -80567,7 +80637,9 @@ unsafe @ gen_assign i lex i syms i cg → s {
                     ( __sb syms __ud_ptr ( nurl_str_cat `@` __ud_ls ) )
                 } }
             { ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) ! __ud_same
-                { ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow val )
+                { ( nurl_sym_def syms `__assign_name__` name )
+                    ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow val )
+                    ( nurl_sym_def syms `__assign_name__` `` )
                     ? __as_blk { ( mem_blk_tail_call_own syms cg __ud_ptr ) } {} } {} }
         }
         // (…and owns it again past whatever the call's answer said.)
@@ -109319,6 +109391,21 @@ unsafe @ __rpg_tmp_next → v { = g_rpg_tmp + g_rpg_tmp 1 }
     : s r ( nurl_sym_get g_bck `reads` )
     ? == tt TT_LPAREN { ^ ( __rprov_ret_bind syms r TT_LPAREN vt `` ) } {}
     ^ ( __rpg_demark ( __rpg_val_from syms tt v0 vt r `` ) )
+}
+
+// The argument roots of a join's lending arms' calls (`key\troots` a
+// line, __last_join_arm_lends__), one word list.
+@ __arm_lend_roots s ls → s {
+    : ~ s rest ( nurl_str_cat ls `` )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : i nl ( nurl_str_find rest `\n` )
+        : s ent ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )
+        = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - - ( nurl_str_len rest ) nl 1 )
+        : i tb ( nurl_str_find ent `\t` )
+        ? > tb 0 { = out ( nurl_str_cat3 out ` ` ( nurl_str_slice ent + tb 1 - - ( nurl_str_len ent ) tb 1 ) ) } {}
+    }
+    ^ out
 }
 
 // Two `mem_arm_call_lend` lists, one per line.
