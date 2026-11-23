@@ -126,6 +126,39 @@ def by_name(t):
     return cap_ty(t) != ".int"
 
 
+# The calls that change a buffer in place, through the handle they are given
+# (a closure's copy of a captured handle reaches the binding's buffer).
+CHANGERS = ("vec_push__", "vec_clear__", "vec_truncate__", "vec_reserve__",
+            "vec_shrink_to_fit__", "string_push_str")
+
+
+def changes(fn, k):
+    """Does closure code `fn` change capture `k` in place? (Only precision
+    rides on it: the code and the literal are both checked against the mode
+    it picks.)"""
+    for l in fn["body"]:
+        w = l.split()
+        if "call" in w:
+            i = w.index("call")
+            if (len(w) > i + 3 and w[i + 1].startswith(CHANGERS) and w[i + 3] == f"v{k}"):
+                return True
+    return False
+
+
+def cap_mode(fn, k):
+    """A capture by name's A2 mode in closure code `fn`: read only (`inp`),
+    or, taken by pointer (the body changes it in place), `inout` at the
+    widest bound short of a new value (`drop`; CapsOK's second case, a Vec
+    only, so a number taken by pointer is not translated). The code is
+    checked against that bound, so a body that gives the capture a new value
+    is refused, never let through."""
+    if not fn["flags"].get(k, 0) & 8 and not changes(fn, k):
+        return ".inp"
+    if cap_ty(fn["vars"][k]) != "(.vec .int)":
+        raise Unsupported(f"{fn['name']}: a number capture taken by pointer")
+    return "(.inout .drop)"
+
+
 def env_ty(tys):
     """A closure environment of captures of A2 types `tys` (A2 has no unit
     or one-tuple: none is an integer, one is its value, more are pairs to
@@ -357,9 +390,8 @@ class Fn:
             if len(prms) != self.np:
                 raise Unsupported(f"{fn['name']}: closure parameters")
             for k in caps:
-                if flags.get(k, 0) & 8:
-                    raise Unsupported(f"{fn['name']}: a capture taken by pointer")
                 cap_ty(fn["vars"][k])
+                cap_mode(fn, k)
             for k in prms:
                 if flags.get(k, 0) & 6:
                     raise Unsupported(f"{fn['name']}: a closure parameter taken sink or inout")
@@ -1118,7 +1150,13 @@ class Fn:
         caps = [c for c in caps if c not in named]
         n = len(caps)
         tys = [cap_ty(self.fn["vars"][int(c[1:])]) for c in caps]
-        cs = ", ".join(f"({self.pvar(c)}, .inp, {self.vlean(int(c[1:]))})" for c in named)
+        code = FNS[names[f]]
+        ck = sorted(k for k in code["vars"] if code.get("kind", {}).get(k) == 3)
+        ck = [k for k in ck if by_name(code["vars"][k])]
+        if len(ck) != len(named):
+            raise Unsupported(f"{self.fn['name']}: closure {f}'s captures by name")
+        cs = ", ".join(f"({self.pvar(c)}, {cap_mode(code, k)}, {self.vlean(int(c[1:]))})"
+                       for c, k in zip(named, ck))
         sigma = fn_sigma(self.vlean(int(x)) if isinstance(x, int) else x)
         pre = []
         vals = [self.pvar(c) for c in caps]
@@ -1187,7 +1225,7 @@ class Fn:
             # the environment (lent, `inp`), then the interface's parameters
             params = ", ".join([f"(.inp, {env_ty([cap_ty(self.fn['vars'][c]) for c in self.caps])})"] +
                                [f"(.inp, {self.vlean(p)})" for p in self.prms] +
-                               [f"(.inp, {self.vlean(k)})" for k in self.named])
+                               [f"({cap_mode(self.fn, k)}, {self.vlean(k)})" for k in self.named])
         else:
             params = ", ".join(f"({mode(i)}, {self.vlean(i)})" for i in range(self.np))
         own = "true" if self.res_own else "false"
