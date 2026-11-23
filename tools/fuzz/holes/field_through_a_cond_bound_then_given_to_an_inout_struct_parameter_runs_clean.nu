@@ -18,5 +18,7 @@ $ `stdlib/core/string.nu`
     : ~ W t ( mkw )
     ( f t T )
     ( nurl_println_int ( string_len . t s ) )
+    ( f t F )
+    ( nurl_println_int ( string_len . t s ) )
     ^ 0
 }

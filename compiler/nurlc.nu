@@ -60448,12 +60448,15 @@ unsafe @ bck_stash_rc_value i line s callee i argidx s at → v {
 @ __ioc_mark_copy s name s src i line → v {
     : s al ( nurl_sym_get g_bck `paliases` )
     : s old ( nurl_str_cat4 src ` ` ( nurl_str_int line ) ( nurl_str_cat3 ` ` name `:m` ) )
-    : i at ( nurl_str_find al old )
+    // (Found as a whole word: the list and the entry padded with a blank on
+    // each side, so an entry that ends another - `ax 7 p:m` beside
+    // `x 7 p:m` - is never the one taken; CodeRabbit on github#2224. The
+    // padded match starts at the blank before the entry, which is the
+    // entry's own offset in the unpadded list.)
+    : i at ( nurl_str_find ( nurl_str_cat3 ` ` al ` ` ) ( nurl_str_cat3 ` ` old ` ` ) )
     ? < at 0 { ^ v } {}
     : i e + at ( nurl_str_len old )
     : i n ( nurl_str_len al )
-    ? & < e n != ( nurl_str_get al e ) 32 { ^ v } {}
-    ? & > at 0 != ( nurl_str_get al - at 1 ) 32 { ^ v } {}
     ( bck_put `paliases` ( nurl_str_cat3 ( nurl_str_slice al 0 - e 1 ) `k` ( nurl_str_slice al e - n e ) ) )
 }
 
