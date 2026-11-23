@@ -305,6 +305,7 @@ theorem MInv.regrow {m m' : Mem} {Γ : Ctx} (hi : MInv m Γ) (h : m'.st = m.st) 
     | lock => exact absurd rfl hl
     | dead => exact absurd rfl hd
     | arc => rfl
+    | static => rfl
     | view => rfl
   have hR : ∀ v, mb.vals v → mb.vals v := fun _ h => h
   have hslot : ∀ x sl, m.st x = some sl → mb.st x = some sl := fun _ _ h => h
