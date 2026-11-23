@@ -119145,29 +119145,39 @@ unsafe @ __dce_index i mlen → i {
 // Emission policy, set by main's --sanitize-address flag.
 : ~ i g_sanitize_address 0
 
-// Borrowed aliases to main's live source/key bindings when --stdin supplies
-// an overlay. Every source read (including deferred diagnostic excerpts and
-// import replay) sees that same snapshot. Normal files are also snapshotted
-// per invocation: an editor save between scan and emission must not combine
-// two versions into spurious duplicate declarations or wrong source spans.
-: ~ i g_input_source 0
-: ~ i g_input_key 0
+// Every source read (including deferred diagnostic excerpts and import
+// replay) sees one snapshot of each file per invocation: an editor save
+// between scan and emission must not combine two versions into spurious
+// duplicate declarations or wrong source spans. A --stdin overlay is that
+// snapshot for the input's path (__source_overlay). A read hands back the
+// snapshot itself, a view valid for the compile: the input file was held
+// twice before, the snapshot and the caller's own copy (6.8 MB of nurlc's
+// peak compiling itself).
 : ~ i g_source_snapshots 0
 
-unsafe @ compiler_read_source s path → s {
-    : s key ( __canon_import_key path )
-    ? != 0 g_input_source {
-        ? ( seq key # s g_input_key ) { ^ ( nurl_str_cat # s g_input_source `` ) } {}
-    } {}
+@ __source_snapshots → i {
     ? == g_source_snapshots 0 { = g_source_snapshots ( nurl_sym_new ) } {}
+    ^ g_source_snapshots
+}
+
+// `text` is what every read of `path` sees from now on (--stdin).
+@ __source_overlay s path s text → v {
+    : i t ( __source_snapshots )
+    : s key ( __canon_import_key path )
+    ( nurl_sym_def t key text )
+    ( nurl_sym_def t ( nurl_str_cat `seen:` key ) `1` )
+}
+
+@ compiler_read_source s path → s {
+    : i t ( __source_snapshots )
+    : s key ( __canon_import_key path )
     : s seen_key ( nurl_str_cat `seen:` key )
-    ? != 0 ( nurl_sym_len g_source_snapshots seen_key ) {
-        ^ ( nurl_sym_get g_source_snapshots key )
+    ? == 0 ( nurl_sym_len t seen_key ) {
+        : s source ( nurl_read_file path )
+        ( nurl_sym_def t key source )
+        ( nurl_sym_def t seen_key `1` )
     } {}
-    : s source ( nurl_read_file path )
-    ( nurl_sym_def g_source_snapshots key source )
-    ( nurl_sym_def g_source_snapshots seen_key `1` )
-    ^ source
+    ^ ( nurl_sym_get t key )
 }
 
 // __import_src: the source a `$` import is read as — the file itself,
@@ -123164,9 +123174,8 @@ unsafe @ main → i {
         ( nurl_eprintln ( nurl_str_cat3 `nurlc: error: cannot open '` path `' — no such file` ) ) ^ 1
     } {}
     ? != g_lint 0 { ( lint_init path ) } {}
-    : s src ? stdin_source ( nurl_read_stdin ) ( compiler_read_source path )
-    : s input_key ? stdin_source ( __canon_import_key path ) ``
-    ? stdin_source { = g_input_source # i src = g_input_key # i input_key } {}
+    ? stdin_source { ( __source_overlay path ( nurl_read_stdin ) ) } {}
+    : s src ( compiler_read_source path )
     : s marker ( nurl_str_cat `@@nurl-disable` `-autodrop-strings@@` )
     ? >= ( nurl_str_find src marker ) 0
     { = g_auto_drop_strings 0 }
