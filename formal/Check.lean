@@ -947,3 +947,6 @@ import B
 #print axioms B.mapInsert_ok
 #print axioms B.mapReplace_ok
 #print axioms B.mapRemove_ok
+#print axioms B.entries_put_empty
+#print axioms B.moveAll_ok
+#print axioms B.grow_ok

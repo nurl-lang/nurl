@@ -23,13 +23,16 @@ This file models the table as its `cap` slots and the code of
   `map_set`'s 75 % load-factor check, whose count `len + tomb` is the
   number of slots in use, leaves one empty slot, so the `-1` answer
   ("table full"), which would make `map_set` write slot 0, never comes;
+* `__map_grow` moves every entry once (`grow_ok`), and its search for an
+  empty slot always finds one;
 * `map_remove` takes the entry out once: its slot becomes a tombstone and
   the count of entries goes down by one.
 
 The state byte's `frag` (seven bits of the hash) only spares a key
 comparison. A slot holding the key always has the key's frag, so the model
-compares keys directly. The rehash of `__map_grow` and the key and value
-destructors are left for B4b.
+compares keys directly. `__map_grow`'s rehash is covered too (`grow_ok`):
+the new table holds exactly the old entries, each once. The key and value
+destructors (`HashMap_drop`'s release loop) are left for later.
 -/
 
 namespace B
@@ -300,5 +303,206 @@ theorem mapRemove_ok {t : Tab K V} {key : K} {v : V} {i : Nat} (hi : i < t.cap)
   rw [hs] at h1 h2
   simp [Slot.isFull, Slot.used] at h1 h2
   exact ⟨h1, h2, fun j hj => by simp [Tab.put, hj]⟩
+
+/-! ### `__map_grow`: the rehash moves every entry once
+
+`__map_grow` takes the old buffers out (`mem_replace`) and installs fresh
+zeroed ones (every slot empty). It then walks the old slots in order, and
+moves each entry into the first empty slot from its hash in the new table
+(`~ != state 0 { idx + 1 & mask }`). The entries of the new table are then
+exactly the old ones, each once. None is lost (a leak), none is kept twice
+(a double drop), and tombstones are gone. The search for an empty slot
+always finds one, because fewer entries than slots have gone in. -/
+
+omit [DecidableEq K] in
+/-- The entries among the first `n` slots, in slot order. -/
+def entriesUpTo (s : Nat → Slot K V) : Nat → List (K × V)
+  | 0 => []
+  | n + 1 => entriesUpTo s n ++ (match s n with | .full k v => [(k, v)] | _ => [])
+
+/-- The table's entries. -/
+def Tab.entries (t : Tab K V) : List (K × V) := entriesUpTo t.s t.cap
+
+omit [DecidableEq K] in
+theorem entriesUpTo_put_empty {s : Nat → Slot K V} {i : Nat} {e : K × V} (hs : s i = .empty) :
+    ∀ n, i < n → (entriesUpTo (fun j => if j = i then .full e.1 e.2 else s j) n).Perm (e :: entriesUpTo s n) := by
+  intro n
+  induction n with
+  | zero => intro h; omega
+  | succ n ih =>
+    intro h
+    simp only [entriesUpTo]
+    by_cases hin : n = i
+    · subst hin
+      have hz : ∀ m, m ≤ n → entriesUpTo (fun j => if j = n then .full e.1 e.2 else s j) m = entriesUpTo s m := by
+        intro m
+        induction m with
+        | zero => intro _; rfl
+        | succ m ihm =>
+          intro hm
+          simp only [entriesUpTo]
+          rw [ihm (by omega), ite_eq_right (by omega)]
+      rw [hz n (Nat.le_refl _), hs]
+      simp only [↓reduceIte, List.append_nil]
+      exact List.perm_append_singleton e _
+    · rw [ite_eq_right hin]
+      exact (ih (by omega)).append_right _ |>.trans (by simp)
+
+omit [DecidableEq K] in
+theorem entriesUpTo_ext {s s' : Nat → Slot K V} :
+    ∀ n, (∀ j, j < n → s j = s' j) → entriesUpTo s n = entriesUpTo s' n := by
+  intro n
+  induction n with
+  | zero => intro _; rfl
+  | succ n ih =>
+    intro h
+    simp only [entriesUpTo]
+    rw [ih (fun j hj => h j (by omega)), h n (by omega)]
+
+omit [DecidableEq K] in
+/-- An entry stored into an empty slot below `cap` adds exactly that entry. -/
+theorem entries_put_empty {t : Tab K V} {i : Nat} {e : K × V} (hi : i < t.cap) (hs : t.s i = .empty) :
+    (t.put i (.full e.1 e.2)).entries.Perm (e :: t.entries) :=
+  entriesUpTo_put_empty hs t.cap hi
+
+/-- The rehash's search: the first empty slot from `start`, `n` probes. -/
+def findEmpty (t : Tab K V) (start : Nat) : Nat → Nat → Option Nat
+  | _, 0 => none
+  | p, n + 1 =>
+    match t.s ((start + p) % t.cap) with
+    | .empty => some ((start + p) % t.cap)
+    | _ => findEmpty t start (p + 1) n
+
+omit [DecidableEq K] in
+theorem findEmpty_sound {t : Tab K V} {start : Nat} (hc : 0 < t.cap) :
+    ∀ n p i, findEmpty t start p n = some i → i < t.cap ∧ t.s i = .empty := by
+  intro n
+  induction n with
+  | zero => intro _ _ h; cases h
+  | succ n ih =>
+    intro p i h
+    cases hs : t.s ((start + p) % t.cap) with
+    | empty => simp [findEmpty, hs] at h; subst h; exact ⟨Nat.mod_lt _ hc, hs⟩
+    | tomb => exact ih (p + 1) i (by simpa [findEmpty, hs] using h)
+    | full _ _ => exact ih (p + 1) i (by simpa [findEmpty, hs] using h)
+
+omit [DecidableEq K] in
+theorem findEmpty_total {t : Tab K V} {start : Nat} :
+    ∀ n p d, d < n → t.s ((start + (p + d)) % t.cap) = .empty → findEmpty t start p n ≠ none := by
+  intro n
+  induction n with
+  | zero => intro _ _ hd; omega
+  | succ n ih =>
+    intro p d hd he
+    cases hs : t.s ((start + p) % t.cap) with
+    | empty => simp [findEmpty, hs]
+    | tomb =>
+      have hd0 : d ≠ 0 := by intro e; subst e; rw [Nat.add_zero, hs] at he; cases he
+      have := ih (p + 1) (d - 1) (by omega) (by rw [show p + 1 + (d - 1) = p + d by omega]; exact he)
+      simpa [findEmpty, hs] using this
+    | full _ _ =>
+      have hd0 : d ≠ 0 := by intro e; subst e; rw [Nat.add_zero, hs] at he; cases he
+      have := ih (p + 1) (d - 1) (by omega) (by rw [show p + 1 + (d - 1) = p + d by omega]; exact he)
+      simpa [findEmpty, hs] using this
+
+/-- Move one entry into the new table: its first empty slot from its hash. -/
+def moveIn (hash : K → Nat) (t : Tab K V) (e : K × V) : Option (Tab K V) :=
+  (findEmpty t (hash e.1) 0 t.cap).map fun i => t.put i (.full e.1 e.2)
+
+/-- The rehash loop over the old entries in slot order. -/
+def moveAll (hash : K → Nat) : Tab K V → List (K × V) → Option (Tab K V)
+  | t, [] => some t
+  | t, e :: es => match moveIn hash t e with
+    | none => none
+    | some t1 => moveAll hash t1 es
+
+omit [DecidableEq K] in
+/-- A table with no tombstones (the fresh one and every one the rehash
+    makes) has as many slots in use as entries. -/
+theorem used_eq_len_of_no_tomb {t : Tab K V} (h : ∀ i, i < t.cap → t.s i ≠ .tomb) : t.used = t.len := by
+  unfold Tab.used Tab.len
+  apply List.countP_congr
+  intro i hi
+  have := h i (List.mem_range.mp hi)
+  cases hs : t.s i with
+  | empty => simp [Slot.used, Slot.isFull]
+  | tomb => exact absurd hs this
+  | full _ _ => simp [Slot.used, Slot.isFull]
+
+omit [DecidableEq K] in
+theorem len_eq_entries_length (t : Tab K V) : t.len = t.entries.length := by
+  unfold Tab.len Tab.entries
+  generalize t.cap = n
+  induction n with
+  | zero => rfl
+  | succ n ih =>
+    rw [List.range_succ, List.countP_append, ih]
+    simp only [entriesUpTo, List.length_append]
+    cases hs : t.s n <;> simp [Slot.isFull, hs]
+
+/-- The rehash into a table with no tombstones, with room for every entry
+    (`entries + es < cap`): it succeeds, and its entries are the old ones
+    and `es`, each once. -/
+theorem moveAll_ok (hash : K → Nat) :
+    ∀ (es : List (K × V)) (t : Tab K V), 0 < t.cap → (∀ i, i < t.cap → t.s i ≠ .tomb) →
+      t.entries.length + es.length < t.cap + 1 → t.entries.length + es.length ≤ t.cap →
+      ∃ t', moveAll hash t es = some t' ∧ t'.cap = t.cap ∧ t'.entries.Perm (es.reverse ++ t.entries) ∧
+        (∀ i, i < t'.cap → t'.s i ≠ .tomb) := by
+  intro es
+  induction es with
+  | nil => intro t _ hnt _ _; exact ⟨t, rfl, rfl, by simp, hnt⟩
+  | cons e es ih =>
+    intro t hc hnt _ hroom
+    -- an empty slot exists: fewer entries than slots
+    have hu : t.used < t.cap := by
+      rw [used_eq_len_of_no_tomb hnt, len_eq_entries_length]; simp at hroom; omega
+    obtain ⟨x, hx, hxe⟩ := exists_empty hu
+    obtain ⟨d, hd, hde⟩ := probe_covers (start := hash e.1) hc hx
+    have hf := findEmpty_total (t := t) (start := hash e.1) t.cap 0 d hd (by rw [Nat.zero_add, hde]; exact hxe)
+    obtain ⟨i, hi⟩ := Option.ne_none_iff_exists'.mp hf
+    obtain ⟨hil, hie⟩ := findEmpty_sound hc t.cap 0 i hi
+    let t1 := t.put i (.full e.1 e.2)
+    have hp := entries_put_empty (e := e) hil hie
+    have hnt1 : ∀ j, j < t1.cap → t1.s j ≠ .tomb := by
+      intro j hj
+      show (if j = i then Slot.full e.1 e.2 else t.s j) ≠ .tomb
+      split
+      · exact fun h => by cases h
+      · exact hnt j hj
+    have hlen1 : t1.entries.length = t.entries.length + 1 := by rw [hp.length_eq]; simp
+    obtain ⟨t', he', hcap', hperm', hnt'⟩ := ih t1 hc hnt1 (by
+      simp at hroom; show t1.entries.length + es.length < t.cap + 1; rw [hlen1]; omega) (by
+      simp at hroom; show t1.entries.length + es.length ≤ t.cap; rw [hlen1]; omega)
+    refine ⟨t', ?_, hcap', ?_, hnt'⟩
+    · simp only [moveAll, moveIn, hi, Option.map_some]; exact he'
+    · refine hperm'.trans ?_
+      rw [List.reverse_cons, List.append_assoc, List.singleton_append]
+      exact List.Perm.append_left _ hp
+
+/-- A fresh table of `n` empty slots (`raw_block_zero`). -/
+def Tab.fresh (n : Nat) : Tab K V := { cap := n, s := fun _ => .empty }
+
+omit [DecidableEq K] in
+theorem fresh_entries (n : Nat) : (Tab.fresh n : Tab K V).entries = [] := by
+  unfold Tab.entries Tab.fresh
+  simp only
+  generalize n = m
+  induction m with
+  | zero => rfl
+  | succ m ih => simp only [entriesUpTo, ih]; rfl
+
+/-- `__map_grow` into `new_cap` slots, more than the old table has
+    entries: it succeeds, and the new table holds exactly the old entries,
+    each once, with no tombstones. -/
+theorem grow_ok (hash : K → Nat) (t : Tab K V) {n : Nat} (hroom : t.entries.length < n) :
+    ∃ t', moveAll hash (Tab.fresh n) t.entries = some t' ∧ t'.cap = n ∧ t'.entries.Perm t.entries ∧
+      ∀ i, i < t'.cap → t'.s i ≠ .tomb := by
+  have hc : 0 < n := by omega
+  obtain ⟨t', he, hcap, hperm, hnt⟩ := moveAll_ok hash t.entries (Tab.fresh n) hc
+    (fun _ _ h => by cases h) (by rw [fresh_entries]; simp; show _ < n + 1; omega)
+    (by rw [fresh_entries]; simp; show _ ≤ n; omega)
+  refine ⟨t', he, hcap, ?_, hnt⟩
+  rw [fresh_entries, List.append_nil] at hperm
+  exact hperm.trans (List.reverse_perm _)
 
 end B
