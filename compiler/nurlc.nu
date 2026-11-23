@@ -43139,7 +43139,11 @@ unsafe @ gen_select i lex i syms i cg i sel_line i sel_col → s {
 // scrutinee's source expression `repl`: the arm's scope closes at
 // `endmatch-arm-edge`, so a payload name left in `m_sx` would resolve in the
 // enclosing scope instead of the arm's (agora #473).
-unsafe @ __sx_subst_pvs s sx s pvs s repl → s {
+// `inclo`: also a leaf among a closure literal's captures (`\~!(p)`), where
+// the closure is not returned right where it is written: its env then
+// views the payload rather than owning a copy of it, so it holds what the
+// scrutinee holds (agora #958).
+unsafe @ __sx_subst_pvs s sx s pvs s repl b inclo → s {
     : i n ( nurl_str_len sx )
     ? | == n 0 | ( seq sx `-` ) ( seq sx `*` ) { ^ sx } {}
     : *u sp # *u sx
@@ -43148,16 +43152,33 @@ unsafe @ __sx_subst_pvs s sx s pvs s repl → s {
     : ~ b hit F
     : ~ i done 0
     : ~ i depth 0
+    // (Which open lists are a closure's captures, one bit per nesting level
+    // `lvl`: they do not count in `depth` under `inclo`; a call's arguments
+    // do. Past 62 levels a list is taken for a call's, as before.)
+    : ~ i cbits 0
+    : ~ i lvl 0
+    : ~ i wstart 0
     : ~ i i 0
     ~ < i n {
         : i ch # i . sp i
         ? | | | | | == ch 40 == ch 41 == ch 124 == ch 123 == ch 125 == ch 59 {
             // (Only a leaf outside any call's or closure's argument list: an
             // argument is read as that call's answers say, and a closure's
-            // capture of a payload is copied in by codegen.)
-            ? == ch 40 { = depth + depth 1 } {}
-            ? & == ch 41 > depth 0 { = depth - depth 1 } {}
+            // capture of a payload is copied in by codegen - where it is
+            // returned right here; elsewhere, `inclo`, it is a leaf.)
+            ? == ch 40 {
+                : b isclo & & & inclo < lvl 62 < wstart i == # i . sp wstart 92
+                ? < lvl 62 { = cbits ? isclo | cbits << 1 lvl & cbits ^^ -1 << 1 lvl } {}
+                = lvl + lvl 1
+                ? ! isclo { = depth + depth 1 } {}
+            } {}
+            ? & == ch 41 > lvl 0 {
+                = lvl - lvl 1
+                : b wasclo & < lvl 62 != 0 & cbits << 1 lvl
+                ? & ! wasclo > depth 0 { = depth - depth 1 } {}
+            } {}
             = i + i 1
+            = wstart i
         } {
             : ~ i e i
             ~ & < e n ! | | | | | == # i . sp e 40 == # i . sp e 41 == # i . sp e 124 == # i . sp e 123 == # i . sp e 125 == # i . sp e 59 { = e + e 1 }
@@ -44820,7 +44841,7 @@ unsafe @ gen_match i lex i syms i cg → s {
                 : ~ s arm_sx ? != 0 g_did_ret ( nurl_str_cat `-` `` ) ( __sx_operand syms arm_tt0 arm_v0 ( nurl_get_last_type ) ( __sx_froot syms arm_tt0 ( nurl_get_last_type ) ) arm_sxn0 )
                 : b __has_pv | | | & != 0 ( nurl_str_len pv0 ) ! ( seq pv0 `_` ) != 0 ( nurl_str_len pv1 ) != 0 ( nurl_str_len pv2 ) != 0 ( nurl_str_len pv_over )
                 ? & == g_did_ret 0 __has_pv {
-                    = arm_sx ( __sx_subst_pvs arm_sx ( nurl_str_cat4 pv0 ` ` pv1 ( nurl_str_cat3 ` ` pv2 ( nurl_str_cat ` ` pv_over ) ) ) __m_scrut_sx )
+                    = arm_sx ( __sx_subst_pvs arm_sx ( nurl_str_cat4 pv0 ` ` pv1 ( nurl_str_cat3 ` ` pv2 ( nurl_str_cat ` ` pv_over ) ) ) __m_scrut_sx ! & m_retv == arm_tt0 TT_BACKSLASH )
                 } {}
                 = m_sx ? m_sx_any ( __sx_join m_sx arm_sx ) ( nurl_str_cat arm_sx `` )
                 = m_sx_any T
