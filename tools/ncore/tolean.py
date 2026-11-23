@@ -479,6 +479,21 @@ class Fn:
             if x is not None:   # vec_truncate's answer, a Bool
                 rest = f"(.letv {x} (.expr (.lit 0)) {rest})"
             return self.wrap(pre, self.seq(s, rest))
+        if ((f.startswith("vec_reserve__") and n == 2 or f.startswith("vec_shrink_to_fit__") and n == 1)
+                and x is None and ops[0] != "c"):
+            # the buffer may move, its length unchanged: through the borrow it
+            # is handed, a push (which may move it) and a cut back to the
+            # length it had; only a scalar element, which a cut drops freely
+            pfx = "vec_reserve__" if f.startswith("vec_reserve__") else "vec_shrink_to_fit__"
+            if vec_elem(f, pfx) != ".int":
+                raise Unsupported(f"{self.fn['name']}: {pfx[:-2]} of a non-scalar element")
+            pre = []
+            if n == 2:
+                self.operand(ops[1], pre)
+            b, c, k = self.fresh(), self.lit_temp(), self.fresh()
+            st = (f"(.letv {b} (.borrow {rd(ops[0])}) (.letv {k} (.expr (.len {b})) "
+                  f"(.seq (.edit true {b} (.push {c})) (.edit true {b} (.trunc (.var {k}))))))")
+            return self.wrap(pre, self.seq(st, rest))
         if f == "string_push_str" and n == 2 and x is None and ops[0] != "c":
             # the String it is handed grows through the borrow (one byte stands
             # for the bytes: A2's `push`, which may move its buffer), and only
