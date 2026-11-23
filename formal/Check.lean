@@ -1004,3 +1004,7 @@ import C
 #print axioms C.checked_program_safe
 -- Phase C5: A2's expressions decided
 #print axioms C.checkExpr2_sound
+-- Phase C6: A2's core right-hand sides decided
+#print axioms C.noPinB_sound
+#print axioms C.dtorSafeB_sound
+#print axioms C.inferRhs2_sound
