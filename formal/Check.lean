@@ -1002,6 +1002,8 @@ import C
 #print axioms C.fnOKB_sound
 #print axioms C.progOKB_sound
 #print axioms C.checked_program_safe
+-- Phase C7x: A2's exit, decided by obligations on the exits context
+#print axioms C.checkX_sound
 -- Phase C11: A2 end to end - a program the checker accepts never gets stuck from the empty store
 #print axioms C.checked_program_safe2
 -- Phase C12: A3 end to end - a checked program's makes and run are memory-safe, race-free and leak-free

@@ -33,12 +33,10 @@ made by stepping, `recStmt`), whose premise is the heap invariant over a
 concrete memory; no function body holds one. `sub` is subsumption, used by
 the joins.
 
-Not decided yet: `exit n`. Its premise `ξ.up n Γ` asks the exits `ξ` to take
-the context at the exit, and `checkStmt2` is sound for every `ξ` without
-looking at it. Deciding it needs the checker to carry the pending exits
-(the context at each one, through the scopes it leaves) and to check each
-against the end of the block it leaves. So a body that leaves a block early
-(`exit`, which a function's early `^` becomes) is refused today.
+`exit n` is not decided here: its premise `ξ.up n Γ` asks the exits `ξ` to
+take the context at the exit, and `checkStmt2` is sound for every `ξ`
+without looking at it. `C/A2Exit.lean` (`checkX`) decides it, carrying the
+exits as obligations on `ξ`, over `checkStmt2`.
 -/
 
 namespace C

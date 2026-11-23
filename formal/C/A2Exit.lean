@@ -129,4 +129,240 @@ theorem exitToB_sound {P : Prog} {ξ : Exits} {D : List Var} {Γ Δ : Ctx} {F : 
       · exfalso; simp [hdb, hos] at h0
       · exact ⟨E, rfl, h0.1, h0.2⟩
 
+/-- What `checkX` finds: the end context, the obligations on the exits
+    context, and, for a statement that ends in an exit, that exit's depth
+    and the context it leaves from (so a branch may end it elsewhere). -/
+structure XR where
+  Δ : Ctx
+  E : Obl
+  tail : Option (Nat × Ctx)
+
+def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option XR
+  | Γ, _, .exit n => if exitToB D Γ Γ then some ⟨Γ, [(n, Γ)], some (n, Γ)⟩ else none
+  | Γ, F, .seq a b =>
+    match checkStmt2 P R C D Γ F (.seq a b) with
+    | some Δ => some ⟨Δ, [], none⟩
+    | none =>
+      if b.src then
+        match checkX P R C D Γ F a with
+        | some ra =>
+          match checkX P R C D ra.Δ F b with
+          | some rb => some ⟨rb.Δ, ra.E ++ rb.E, rb.tail⟩
+          | none => none
+        | none => none
+      else none
+  | Γ, F, .block s =>
+    match checkStmt2 P R C D Γ F (.block s) with
+    | some Δ => some ⟨Δ, [], none⟩
+    | none =>
+      match checkX P R C D Γ F s with
+      | some r => if oblBlkOKB D r.Δ r.E then some ⟨r.Δ, oblBlk r.E, none⟩ else none
+      | none => none
+  | Γ, F, .ite c a b =>
+    match checkStmt2 P R C D Γ F (.ite c a b) with
+    | some Δ => some ⟨Δ, [], none⟩
+    | none =>
+      if a.src ∧ b.src ∧ checkExpr2 Γ c then
+        match checkX P R C D Γ F a, checkX P R C D Γ F b with
+        | some ra, some rb =>
+          if D.all (fun v => ra.Δ v == rb.Δ v) then some ⟨ra.Δ, ra.E ++ rb.E, none⟩
+          else match ra.tail, rb.tail with
+            | some (_, Γe), _ => if exitToB D Γe rb.Δ then some ⟨rb.Δ, ra.E ++ rb.E, none⟩ else none
+            | none, some (_, Γe) => if exitToB D Γe ra.Δ then some ⟨ra.Δ, ra.E ++ rb.E, none⟩ else none
+            | none, none => none
+        | _, _ => none
+      else none
+  | Γ, F, .letv x r s =>
+    match checkStmt2 P R C D Γ F (.letv x r s) with
+    | some Δ => some ⟨Δ, [], none⟩
+    | none =>
+      if s.src ∧ Γ x = none ∧ x ∉ F then
+        match R Γ F r with
+        | some (E, Γ1) =>
+          if decide (E.mode = .own → E.ty.holdsDtor = false) then
+            match checkX P R C D (setE Γ1 x E) F s with
+            | some rs =>
+              if endOK2B D rs.Δ x && rs.E.all (fun e => endOK2B D e.2 x) then
+                some ⟨exitScope x rs.Δ, oblUnder x rs.E, none⟩
+              else none
+            | none => none
+          else none
+        | none => none
+      else none
+  | Γ, F, s =>
+    match checkStmt2 P R C D Γ F s with
+    | some Δ => some ⟨Δ, [], none⟩
+    | none => none
+
+/-- What `checkX` proves of a statement. -/
+def XSound (P : Prog) (D : List Var) (Γ : Ctx) (F : List Var) (s : Stmt) (r : XR) : Prop :=
+  Supported2 r.Δ D ∧ (∀ e ∈ r.E, Supported2 e.2 D) ∧ (∀ ξ, OblOK ξ r.E → StmtT P ξ Γ F s r.Δ) ∧
+    ∀ n Γe, r.tail = some (n, Γe) → Supported2 Γe D ∧ (n, Γe) ∈ r.E ∧
+      ∀ Δ', Supported2 Δ' D → exitToB D Γe Δ' = true → ∀ ξ, OblOK ξ r.E → StmtT P ξ Γ F s Δ'
+
+theorem xsound_of_check2 {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : R.OK D) (hC : C.OK P D)
+    {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (hs : Supported2 Γ D) (hD : ∀ v ∈ s.vars, v ∈ D)
+    (h : checkStmt2 P R C D Γ F s = some Δ) : XSound P D Γ F s ⟨Δ, [], none⟩ := by
+  refine ⟨(checkStmt2_sound hR hC (ξ := .none) hs hD h).2, fun e he => (by cases he),
+    fun ξ _ => (checkStmt2_sound hR hC hs hD h).1, fun n Γe ht => (by cases ht)⟩
+
+theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : R.OK D) (hC : C.OK P D) :
+    ∀ {s : Stmt} {Γ : Ctx} {F : List Var} {r : XR}, Supported2 Γ D → (∀ v ∈ s.vars, v ∈ D) →
+      checkX P R C D Γ F s = some r → XSound P D Γ F s r := by
+  intro s
+  induction s with
+  | exit n =>
+    intro Γ F r hs hD h
+    simp only [checkX] at h
+    split at h
+    · rename_i hx
+      simp only [Option.some.injEq] at h; subst h
+      refine ⟨hs, fun e he => ?_, fun ξ hξ => exitToB_sound hs hs hx (hξ _ (List.mem_singleton_self _)),
+        fun n' Γe ht => ?_⟩
+      · simp only [List.mem_singleton] at he; subst he; exact hs
+      · simp only [Option.some.injEq, Prod.mk.injEq] at ht; obtain ⟨rfl, rfl⟩ := ht
+        exact ⟨hs, List.mem_singleton_self _, fun Δ' hΔ' hto ξ hξ =>
+          exitToB_sound hs hΔ' hto (hξ _ (List.mem_singleton_self _))⟩
+    · cases h
+  | seq a b iha ihb =>
+    intro Γ F r hs hD h
+    simp only [checkX] at h
+    split at h
+    · rename_i Δ h0
+      simp only [Option.some.injEq] at h; subst h
+      exact xsound_of_check2 hR hC hs hD h0
+    · split at h
+      · rename_i hsrc
+        split at h
+        · rename_i ra hra
+          split at h
+          · rename_i rb hrb
+            simp only [Option.some.injEq] at h; subst h
+            obtain ⟨sa, ea, ta, _⟩ := iha hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hra
+            obtain ⟨sb, eb, tb, tlb⟩ := ihb sa (fun v hv => hD v (by simp [Stmt.vars, hv])) hrb
+            refine ⟨sb, fun e he => ?_, fun ξ hξ => ?_, fun n Γe ht => ?_⟩
+            · rcases List.mem_append.mp he with he | he
+              · exact ea e he
+              · exact eb e he
+            · obtain ⟨h1, h2⟩ := OblOK.append hξ
+              exact .seq hsrc (ta ξ h1) (tb ξ h2)
+            · obtain ⟨hse, hm, hre⟩ := tlb n Γe ht
+              refine ⟨hse, List.mem_append_right _ hm, fun Δ' hs' hto ξ hξ => ?_⟩
+              obtain ⟨h1, h2⟩ := OblOK.append hξ
+              exact .seq hsrc (ta ξ h1) (hre Δ' hs' hto ξ h2)
+          · cases h
+        · cases h
+      · cases h
+  | block s ih =>
+    intro Γ F r hs hD h
+    simp only [checkX] at h
+    split at h
+    · rename_i Δ h0
+      simp only [Option.some.injEq] at h; subst h
+      exact xsound_of_check2 hR hC hs hD h0
+    · split at h
+      · rename_i r0 hr0
+        split at h
+        · rename_i hb
+          simp only [Option.some.injEq] at h; subst h
+          obtain ⟨s0, e0, t0, _⟩ := ih hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr0
+          refine ⟨s0, fun e he => ?_, fun ξ hξ => .block (t0 _ (oblBlk_ok s0 e0 hb hξ)), fun n Γe ht => (by cases ht)⟩
+          obtain ⟨e', he', hm⟩ := List.mem_filterMap.mp he
+          cases hn : e'.1 with
+          | zero => simp [hn] at hm
+          | succ m =>
+            simp only [hn, Option.some.injEq] at hm; subst hm
+            exact e0 e' he'
+        · cases h
+      · cases h
+  | ite c a b iha ihb =>
+    intro Γ F r hs hD h
+    simp only [checkX] at h
+    split at h
+    · rename_i Δ h0
+      simp only [Option.some.injEq] at h; subst h
+      exact xsound_of_check2 hR hC hs hD h0
+    · split at h
+      · rename_i hc
+        obtain ⟨ha, hb, hce⟩ := hc
+        split at h
+        · rename_i ra rb hra hrb
+          obtain ⟨sa, ea, ta, tla⟩ := iha hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hra
+          obtain ⟨sb, eb, tb, tlb⟩ := ihb hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hrb
+          have hE : ∀ e ∈ ra.E ++ rb.E, Supported2 e.2 D := fun e he => by
+            rcases List.mem_append.mp he with he | he
+            · exact ea e he
+            · exact eb e he
+          split at h
+          · rename_i hag
+            simp only [Option.some.injEq] at h; subst h
+            have heq := eq_of_agree2 sa sb hag
+            refine ⟨sa, hE, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
+            obtain ⟨h1, h2⟩ := OblOK.append hξ
+            exact .ite ha hb (checkExpr2_sound hce) (ta ξ h1) (heq ▸ tb ξ h2)
+          · split at h
+            · rename_i n Γe hta
+              split at h
+              · rename_i hto
+                simp only [Option.some.injEq] at h; subst h
+                obtain ⟨hse, _, hre⟩ := tla n Γe hta
+                refine ⟨sb, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
+                obtain ⟨h1, h2⟩ := OblOK.append hξ
+                exact .ite ha hb (checkExpr2_sound hce) (hre rb.Δ sb hto ξ h1) (tb ξ h2)
+              · cases h
+            · rename_i n Γe hta htb
+              split at h
+              · rename_i hto
+                simp only [Option.some.injEq] at h; subst h
+                obtain ⟨hse, _, hre⟩ := tlb n Γe htb
+                refine ⟨sa, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
+                obtain ⟨h1, h2⟩ := OblOK.append hξ
+                exact .ite ha hb (checkExpr2_sound hce) (ta ξ h1) (hre ra.Δ sa hto ξ h2)
+              · cases h
+            · cases h
+        · cases h
+      · cases h
+  | letv x r s ih =>
+    intro Γ F rr hs hD h
+    simp only [checkX] at h
+    split at h
+    · rename_i Δ h0
+      simp only [Option.some.injEq] at h; subst h
+      exact xsound_of_check2 hR hC hs hD h0
+    · split at h
+      · rename_i hc
+        obtain ⟨hsrc, hx, hF⟩ := hc
+        split at h
+        · rename_i E Γ1 hr
+          split at h
+          · rename_i hnd
+            split at h
+            · rename_i rs hrs
+              split at h
+              · rename_i he
+                simp only [Option.some.injEq] at h; subst h
+                simp only [Bool.and_eq_true] at he
+                obtain ⟨hend, hendE⟩ := he
+                obtain ⟨hrt, hs1⟩ := hR Γ F r E Γ1 hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
+                obtain ⟨s0, e0, t0, _⟩ := ih (supported2_setE hs1 (hD x (by simp [Stmt.vars])) E)
+                  (fun v hv => hD v (by simp [Stmt.vars, hv])) hrs
+                refine ⟨supported2_exitScope s0 x, fun e he => ?_, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
+                · obtain ⟨e', he', rfl⟩ := List.mem_map.mp he
+                  exact supported2_exitScope (e0 e' he') x
+                · exact .letv hsrc hx hF hrt (t0 _ (oblUnder_ok e0 hendE hξ)) (endOK2B_sound s0 hend)
+                    (of_decide_eq_true hnd)
+              · cases h
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+  | _ =>
+    intro Γ F r hs hD h
+    simp only [checkX] at h
+    split at h
+    · rename_i Δ h0
+      simp only [Option.some.injEq] at h; subst h
+      exact xsound_of_check2 hR hC hs hD h0
+    · cases h
+
 end C

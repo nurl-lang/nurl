@@ -1,12 +1,13 @@
-import C.A2Call
+import C.A2Exit
 import A2.Soundness
 
 /-!
 # C11: A2's whole programs, decided (AGORA-970)
 
 `fnOK2B` decides A2's `FnOK` for a function: its signature's clauses, the
-body checked by `checkA2` from `sigCtx` over the domain of its variables
-and its parameters' regions, and the end the summary promises.
+body checked by `checkX` (`checkA2`'s rules, and `exit`s carried as
+obligations, none left at the body's top) from `sigCtx` over the domain of
+its variables and its parameters' regions, and the end the summary promises.
 `progOK2B` decides `ProgOK`, and `checked_program_safe2` closes phase C for
 A2: a program the checker accepts never gets stuck from the empty store.
 -/
@@ -354,8 +355,8 @@ def fnOK2B (P : Prog) (fn : Fn) : Bool :=
   (fn.lends ++ fn.rholds).all (fun jk => kindFitsB fn jk.1 jk.2) &&
   fn.outHolds.all (fun o => kindFitsB fn o.2.1 o.2.2) &&
   dtorParamsB P fn &&
-  (match checkA2 P (fnDom fn) (sigCtx fn) [] fn.body with
-   | some Δ => noDtorEndB (fnDom fn) Δ && resEndB fn Δ && inoutEndB fn Δ
+  (match checkX P (inferRhs2d (fnDom fn)) (callB2 P (fnDom fn)) (fnDom fn) (sigCtx fn) [] fn.body with
+   | some r => r.E.isEmpty && noDtorEndB (fnDom fn) r.Δ && resEndB fn r.Δ && inoutEndB fn r.Δ
    | none => false)
 
 theorem fnOK2B_sound {P : Prog} {fn : Fn} (h : fnOK2B P fn = true) : FnOK P fn := by
@@ -384,13 +385,14 @@ theorem fnOK2B_sound {P : Prog} {fn : Fn} (h : fnOK2B P fn = true) : FnOK P fn :
   · have := ho o hoo
     exact ⟨lendable2B_sound this.1, this.2⟩
   · split at hchk
-    · rename_i Δ hΔ
+    · rename_i r hr
       have hD : ∀ v ∈ fn.body.vars, v ∈ fnDom fn := fun v hv =>
         List.mem_range.mpr (Nat.lt_of_lt_of_le (hvars v hv) (Nat.le_add_right _ _))
-      obtain ⟨ht, hsΔ⟩ := checkA2_sound (ξ := .none) (sigCtx_supported2 hlen) hD hΔ
-      simp only [Bool.and_eq_true] at hchk
-      obtain ⟨⟨hnd, hre⟩, hie⟩ := hchk
-      exact ⟨Δ, ht, noDtorEndB_sound hsΔ hnd, resEndB_sound hre, inoutEndB_sound hie⟩
+      obtain ⟨hsΔ, _, ht, _⟩ := checkX_sound (inferRhs2d_OK _) (callB2_OK P _) (sigCtx_supported2 hlen) hD hr
+      simp only [Bool.and_eq_true, List.isEmpty_iff] at hchk
+      obtain ⟨⟨⟨hE, hnd⟩, hre⟩, hie⟩ := hchk
+      exact ⟨r.Δ, ht .none (by rw [hE]; intro e he; cases he), noDtorEndB_sound hsΔ hnd, resEndB_sound hre,
+        inoutEndB_sound hie⟩
     · cases hchk
 
 /-- `ProgOK` and `ProgCodes` (A2), decided. -/
