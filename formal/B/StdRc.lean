@@ -283,7 +283,7 @@ theorem rcDrop_ok {h : Heap (SCell V)} {hs ws : List Nat} {p : Nat} (hw : h.WF) 
         · show (upd h.cell p _) p 1 = _; simp [upd, hc1]
         · unfold taken; rw [h2]; simp
         · simp only [rcDrop, sload hl hsz (by omega) hc0, sload hl hsz (by omega) hc1, sload hl hsz (by omega) h2,
-            sload hl hsz (by omega) h3, hs0, ↓reduceIte]
+            sload hl hsz (by omega) h3, hs0]
           rw [ite_eq_left hz]
           rfl
     have hlv2 : g2.live p = true := by rw [g2l]; exact hl
@@ -356,7 +356,7 @@ theorem rcUpgrade_ok {h : Heap (SCell V)} {hs ws : List Nat} {p : Nat} (hw : h.W
       · subst hbp
         have e : ∀ i, i ≠ 0 → (upd h.cell b (upd (h.cell b) 0 (some (SCell.n (hs.count b + 1))))) b i = h.cell b i :=
           fun i hi => by simp [upd, hi]
-        refine ⟨hl, hsz, by show (upd h.cell b _) b 0 = _; simp [upd, List.count_cons], ?_, fun _ => ?_⟩
+        refine ⟨hl, hsz, by show (upd h.cell b _) b 0 = _; simp [upd], ?_, fun _ => ?_⟩
         · show (upd h.cell b _) b 1 = _; rw [e 1 (by omega)]; exact hc1
         · show _ ∨ _
           show ((upd h.cell b _) b 2 = _ ∧ _) ∨ ((upd h.cell b _) b 2 = _ ∧ (upd h.cell b _) b 3 = _)
@@ -369,5 +369,65 @@ theorem rcUpgrade_ok {h : Heap (SCell V)} {hs ws : List Nat} {p : Nat} (hw : h.W
           (fun b hb => by rw [List.count_cons]; simp [Ne.symm hb]) (fun _ _ => rfl) b hbp hb
   · have hz : hs.count p = 0 := List.count_eq_zero_of_not_mem hph
     refine ⟨h, false, by simp [rcUpgrade, sload hl hsz (by omega) hc0, hz], by simp [hph], by simpa using hi, hw⟩
+
+/-- `Weak_drop` (a block not in the collector's buffer): weak down by one;
+    the block freed when it was the last `Weak` and no strong handle is
+    left. -/
+def rcWeakDrop (h : Heap (SCell V)) (p : Nat) : Option (Heap (SCell V) × Bool) :=
+  match h.load p 0, h.load p 1 with
+  | some (.n c), some (.n w) =>
+    match h.store p 1 (.n (w - 1)) with
+    | none => none
+    | some h1 => if w - 1 = 0 ∧ c = 0 then (h1.free p).map fun h2 => (h2, true) else some (h1, false)
+  | _, _ => none
+
+theorem rcWeakDrop_ok {h : Heap (SCell V)} {hs ws : List Nat} {p : Nat} (hw : h.WF) (hi : SRcInv h hs ws)
+    (hp : p ∈ ws) :
+    ∃ h' fr, rcWeakDrop h p = some (h', fr) ∧ SRcInv h' hs (ws.erase p) ∧ h'.WF ∧
+      (fr = true ↔ p ∉ hs ∧ p ∉ ws.erase p) := by
+  obtain ⟨hl, hsz, hc0, hc1, hv⟩ := hi p (Or.inr hp)
+  have hpos : 0 < ws.count p := List.count_pos_iff.mpr hp
+  have herase : ∀ b, b ≠ p → (ws.erase p).count b = ws.count b := fun b hb => List.count_erase_of_ne hb
+  have hce : (ws.erase p).count p = ws.count p - 1 := List.count_erase_self
+  let h1 : Heap (SCell V) := { h with cell := upd h.cell p (upd (h.cell p) 1 (some (.n (ws.count p - 1)))) }
+  have h1c : ∀ b, b ≠ p → h1.cell b = h.cell b := fun b hb => by show (upd h.cell p _) b = _; simp [upd, hb]
+  have hs1 := sstore (c := SCell.n (ws.count p - 1)) hl hsz (by omega : 1 < 4)
+  have hmem : ∀ l : List Nat, p ∉ l ↔ l.count p = 0 := fun l => by
+    constructor
+    · exact List.count_eq_zero_of_not_mem
+    · intro e hm; have := List.count_pos_iff.mpr hm; omega
+  by_cases hf : ws.count p - 1 = 0 ∧ hs.count p = 0
+  · have hph : p ∉ hs := (hmem hs).mpr hf.2
+    have hpe : p ∉ ws.erase p := (hmem _).mpr (by rw [hce]; exact hf.1)
+    refine ⟨{ h1 with live := upd h1.live p false }, true, ?_, ?_, ?_, by simp [hph, hpe]⟩
+    · simp only [rcWeakDrop, sload hl hsz (by omega) hc0, sload hl hsz (by omega) hc1, hs1]
+      rw [ite_eq_left hf]
+      simp [Heap.free, h1, hl]
+    · intro b hb
+      have hbp : b ≠ p := by rintro rfl; rcases hb with hb | hb; exact hph hb; exact hpe hb
+      exact srcInv_other (h' := { h1 with live := upd h1.live p false }) hi
+        (fun b hb => by show (upd h.live p false) b = _; simp [upd, hb]) (fun _ _ => rfl) h1c (fun _ _ => rfl)
+        herase b hbp hb
+    · intro b hb; show (upd h.live p false) b = false
+      simp only [upd]; split
+      · rfl
+      · exact hw b hb
+  · refine ⟨h1, false, ?_, ?_, fun b hb => hw b hb, ?_⟩
+    · simp only [rcWeakDrop, sload hl hsz (by omega) hc0, sload hl hsz (by omega) hc1, hs1]
+      rw [ite_eq_right hf]
+    · intro b hb
+      by_cases hbp : b = p
+      · subst hbp
+        have e : ∀ i, i ≠ 1 → h1.cell b i = h.cell b i := fun i hi => by
+          show (upd h.cell b _) b i = _; simp [upd, hi]
+        refine ⟨hl, hsz, by rw [e 0 (by omega)]; exact hc0, by show (upd h.cell b _) b 1 = _; simp [upd, hce],
+          fun hm => ?_⟩
+        rw [e 2 (by omega), e 3 (by omega)]; exact hv hm
+      · exact srcInv_other (h' := h1) hi (fun _ _ => rfl) (fun _ _ => rfl) h1c (fun _ _ => rfl) herase b hbp hb
+    · simp only [Bool.false_eq_true, false_iff, not_and, Decidable.not_not]
+      intro hph
+      apply Classical.byContradiction
+      intro hpe
+      exact hf ⟨by rw [← hce]; exact (hmem _).mp hpe, (hmem hs).mp hph⟩
 
 end B

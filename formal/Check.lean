@@ -981,3 +981,4 @@ import B
 #print axioms B.rcRestore_ok
 #print axioms B.rcDrop_ok
 #print axioms B.rcUpgrade_ok
+#print axioms B.rcWeakDrop_ok
