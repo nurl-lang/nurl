@@ -26,6 +26,9 @@ def struct_fields(t):
     return STRUCTS.get(t if t.startswith("%") else "%" + t)
 
 
+_EXPANDING = set()
+
+
 def lean_ty(t):
     """An IR type as an A2 type: an integer, or a `Vec` of them (`%Vec__T`)."""
     if t in INT_TYS or t in ("i", "u", "b"):
@@ -42,13 +45,23 @@ def lean_ty(t):
     if t.startswith("%Slice__"):
         return f"(.slice {lean_ty(t[len('%Slice__'):])})"
     fs = struct_fields(t)
+    if fs is not None and t in _EXPANDING:
+        raise Unsupported(f"type {t}, recursive")
     if fs is not None and len(fs) >= 2:
-        # a struct: its fields nested in pairs to the right (formal/A2's `prod`)
-        acc = lean_ty(fs[-1][1])
-        for _, ft in reversed(fs[:-1]):
-            acc = f"(.prod {lean_ty(ft)} {acc})"
-        return acc
+        _EXPANDING.add(t)
+        try:
+            return _struct_ty(fs)
+        finally:
+            _EXPANDING.discard(t)
     raise Unsupported(f"type {t}")
+
+
+def _struct_ty(fs):
+    """A struct: its fields nested in pairs to the right (formal/A2's `prod`)."""
+    acc = lean_ty(fs[-1][1])
+    for _, ft in reversed(fs[:-1]):
+        acc = f"(.prod {lean_ty(ft)} {acc})"
+    return acc
 
 
 def vec_elem(fname, prefix):
@@ -116,6 +129,12 @@ class Fn:
 
     def var(self, k):
         return k if k < self.np else k + 1
+
+    def pvar(self, op):
+        """A place that is a whole variable (`v3`), as an A2 variable."""
+        if not (op.startswith("v") and op[1:].isdigit()):
+            raise Unsupported(f"{self.fn['name']}: the place {op} where a variable is needed")
+        return self.var(int(op[1:]))
 
     def fresh(self):
         self.next += 1
@@ -211,7 +230,7 @@ class Fn:
     def argvar(self, op, pre):
         if op == "c":
             return self.lit_temp()
-        return self.var(int(op[1:]))
+        return self.pvar(op)
 
     def intrinsic(self, words, rest, x=None):
         """A standard-library call A2 has a construct for, or None."""
@@ -223,10 +242,10 @@ class Fn:
             return f"(.letv {x} (.new .int) {rest})"
         if f == "string_data" and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.view {self.var(int(ops[0][1:]))}) {rest})"
+            return f"(.letv {x} (.view {self.pvar(ops[0])}) {rest})"
         if f == "string_len" and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.expr (.len {self.var(int(ops[0][1:]))})) {rest})"
+            return f"(.letv {x} (.expr (.len {self.pvar(ops[0])})) {rest})"
         if f.startswith("vec_new__") and n == 0:
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.new {vec_elem(f, 'vec_new__')}) {rest})"
@@ -239,13 +258,13 @@ class Fn:
             return s
         if f.startswith("vec_len__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.expr (.len {self.var(int(ops[0][1:]))})) {rest})"
+            return f"(.letv {x} (.expr (.len {self.pvar(ops[0])})) {rest})"
         if f.startswith("slice_from_vec__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.view {self.var(int(ops[0][1:]))}) {rest})"
+            return f"(.letv {x} (.view {self.pvar(ops[0])}) {rest})"
         if f.startswith("slice_len__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.expr (.slen {self.var(int(ops[0][1:]))})) {rest})"
+            return f"(.letv {x} (.expr (.slen {self.pvar(ops[0])})) {rest})"
         return None
 
     def call(self, words, names, rest, x=None):
@@ -388,6 +407,8 @@ def emit(text):
 
 
 def main():
+    # (each statement is nested over the rest of its list: deep for a long body)
+    sys.setrecursionlimit(100000)
     text = open(sys.argv[1]).read()
     try:
         sys.stdout.write(emit(text))
