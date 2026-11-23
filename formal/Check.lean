@@ -1014,3 +1014,6 @@ import C
 #print axioms C.checkStmt2_sound
 -- Phase C8: A2's struct and enum right-hand sides decided
 #print axioms C.inferRhs2d_ok
+-- Phase C9: A2's calls decided; the A2 checker so far (checkA2)
+#print axioms C.callB2_sound
+#print axioms C.checkA2_sound

@@ -159,33 +159,74 @@ def subB2 (a b : List Dep) : Bool := a.all (fun d => decide (d ∈ b))
 theorem subB2_sound {a b : List Dep} (h : subB2 a b = true) : a ⊆ b := fun d hd =>
   of_decide_eq_true (List.all_eq_true.mp h d hd)
 
-/-- A2's `StmtT` for the core statements, computed. -/
-def checkStmt2 (D : List Var) : Ctx → List Var → Stmt → Option Ctx
+/-- A decider for right-hand sides, and one for calls: the statement
+    checker takes them as parameters, so C6's, C8's and C9's plug in. -/
+abbrev RhsDec := Ctx → List Var → Rhs → Option (Entry × Ctx)
+abbrev CallDec := Ctx → List Var → Nat → List Var → Option (Entry × Ctx)
+
+/-- The decider's contract: sound and keeping the domain. -/
+def RhsDec.OK (D : List Var) (R : RhsDec) : Prop :=
+  ∀ Γ F r E Γ1, Supported2 Γ D → (∀ v ∈ r.vars, v ∈ D) → R Γ F r = some (E, Γ1) →
+    RhsT Γ F r E Γ1 ∧ Supported2 Γ1 D
+
+def CallDec.OK (P : Prog) (D : List Var) (C : CallDec) : Prop :=
+  ∀ Γ F f args E Γ1, Supported2 Γ D → (∀ a ∈ args, a ∈ D) → C Γ F f args = some (E, Γ1) →
+    CallT P Γ F f args E Γ1 ∧ Supported2 Γ1 D
+
+theorem inferRhs2_OK (D : List Var) : RhsDec.OK D (inferRhs2 D) :=
+  fun _ _ _ _ _ hs hD h => ⟨inferRhs2_sound hs h, inferRhs2_supported hs hD h⟩
+
+/-- `letcall`'s destructor premise: a call handing back an owned value of a
+    destructor type binds it to a `letd` first thing, and assigns it nothing. -/
+def dtorHeadB (P : Prog) (f : Nat) (x : Var) (s : Stmt) : Bool :=
+  match P[f]? with
+  | some fn => !(fn.resOwn && fn.resTy.holdsDtor) || (decide (x ∈ s.movedFirst) && decide (x ∉ s.assigns))
+  | none => true
+
+theorem dtorHeadB_sound {P : Prog} {f : Nat} {x : Var} {s : Stmt} (h : dtorHeadB P f x s = true) :
+    ∀ fn, P[f]? = some fn → fn.resOwn = true → fn.resTy.holdsDtor = true → x ∈ s.movedFirst ∧ x ∉ s.assigns := by
+  intro fn hf ho hd
+  unfold dtorHeadB at h
+  rw [hf] at h
+  simp only [ho, hd, Bool.and_self, Bool.not_true, Bool.false_or, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact h
+
+/-- A2's `StmtT` for the core statements and calls, computed. -/
+def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, _, .skip => some Γ
   | Γ, F, .seq a b =>
-    if b.src then (match checkStmt2 D Γ F a with
-      | some Γ1 => checkStmt2 D Γ1 F b
+    if b.src then (match checkStmt2 P R C D Γ F a with
+      | some Γ1 => checkStmt2 P R C D Γ1 F b
       | none => none) else none
   | Γ, F, .letv x r s =>
     if s.src ∧ Γ x = none ∧ x ∉ F then
-      match inferRhs2 D Γ F r with
+      match R Γ F r with
       | some (E, Γ1) =>
         if decide (E.mode = .own → E.ty.holdsDtor = false) then
-          match checkStmt2 D (setE Γ1 x E) F s with
+          match checkStmt2 P R C D (setE Γ1 x E) F s with
           | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
           | none => none
         else none
       | none => none
     else none
+  | Γ, F, .letcall x f args s =>
+    if s.src ∧ Γ x = none ∧ x ∉ F ∧ dtorHeadB P f x s then
+      match C Γ F f args with
+      | some (E, Γ1) =>
+        match checkStmt2 P R C D (setE Γ1 x E) F s with
+        | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
+        | none => none
+      | none => none
+    else none
   | Γ, F, .ite c a b =>
     if a.src ∧ b.src ∧ checkExpr2 Γ c then
-      match checkStmt2 D Γ F a, checkStmt2 D Γ F b with
+      match checkStmt2 P R C D Γ F a, checkStmt2 P R C D Γ F b with
       | some Δa, some Δb => if D.all (fun v => Δa v == Δb v) then some Δa else none
       | _, _ => none
     else none
   | Γ, F, .while c s =>
     if s.src ∧ checkExpr2 Γ c then
-      match checkStmt2 D Γ F s with
+      match checkStmt2 P R C D Γ F s with
       | some Δ => if D.all (fun v => Δ v == Γ v) then some Γ else none
       | none => none
     else none
@@ -218,11 +259,12 @@ def checkStmt2 (D : List Var) : Ctx → List Var → Stmt → Option Ctx
         else none
       | none => none
     | none => none
-  | Γ, F, .frozen z s => checkStmt2 D Γ (F ++ z) s
+  | Γ, F, .frozen z s => checkStmt2 P R C D Γ (F ++ z) s
   | _, _, _ => none
 
-theorem checkStmt2_sound {P : Prog} {D : List Var} : ∀ {s : Stmt} {ξ : Exits} {Γ : Ctx} {F : List Var} {Δ : Ctx},
-    Supported2 Γ D → (∀ v ∈ s.vars, v ∈ D) → checkStmt2 D Γ F s = some Δ →
+theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : R.OK D) (hC : C.OK P D) :
+    ∀ {s : Stmt} {ξ : Exits} {Γ : Ctx} {F : List Var} {Δ : Ctx},
+    Supported2 Γ D → (∀ v ∈ s.vars, v ∈ D) → checkStmt2 P R C D Γ F s = some Δ →
       StmtT P ξ Γ F s Δ ∧ Supported2 Δ D := by
   intro s
   induction s with
@@ -254,12 +296,34 @@ theorem checkStmt2_sound {P : Prog} {D : List Var} : ∀ {s : Stmt} {ξ : Exits}
             split at h
             · rename_i he
               simp only [Option.some.injEq] at h; subst h
-              have hs1 := inferRhs2_supported hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
+              obtain ⟨hrt, hs1⟩ := hR Γ F r E Γ1 hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
               obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x) (supported2_setE hs1 (hD x (by simp [Stmt.vars])) E)
                 (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
-              exact ⟨.letv hsrc hx hF (inferRhs2_sound hs hr) t0 (endOK2B_sound s0 he) (of_decide_eq_true hnd),
+              exact ⟨.letv hsrc hx hF hrt t0 (endOK2B_sound s0 he) (of_decide_eq_true hnd),
                 supported2_exitScope s0 x⟩
             · cases h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  | letcall x f args s ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i hc
+      obtain ⟨hsrc, hx, hF, hdk⟩ := hc
+      split at h
+      · rename_i E Γ1 hcall
+        split at h
+        · rename_i Δ0 h0
+          split at h
+          · rename_i he
+            simp only [Option.some.injEq] at h; subst h
+            obtain ⟨hct, hs1⟩ := hC Γ F f args E Γ1 hs (fun a ha => hD a (by simp [Stmt.vars, ha])) hcall
+            obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x) (supported2_setE hs1 (hD x (by simp [Stmt.vars])) E)
+              (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+            exact ⟨.letcall hsrc hx hF hct t0 (endOK2B_sound s0 he) (dtorHeadB_sound hdk),
+              supported2_exitScope s0 x⟩
           · cases h
         · cases h
       · cases h
