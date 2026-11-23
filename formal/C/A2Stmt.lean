@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct or its own destructor type) `scopeD` (a binding of its own destructor type) `takeB`, `editB` (view-free elements) and `editBV` (elements that hold views but no closure, through an `edit true`), whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct or its own destructor type) `scopeD` (a binding of its own destructor type) `takeB`, `editB` (view-free elements) and `editBV` (elements that hold views but no closure, through an `edit true`) and `callc`, whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -763,6 +763,27 @@ theorem editBVB_sound {P : Prog} {D : List Var} {ξ : Exits} {Γ : Ctx} {F : Lis
     · cases h
   · cases h
 
+/-- A closure type's method table. -/
+def fnTysOf : Ty → Option (List Nat × Cross)
+  | .fn ms q => some (ms, q)
+  | _ => none
+
+theorem fnTysOf_some {ty : Ty} {ms : List Nat} {q : Cross} (h : fnTysOf ty = some (ms, q)) :
+    ty = .fn ms q := by
+  cases ty <;> simp [fnTysOf] at h; obtain ⟨rfl, rfl⟩ := h; rfl
+
+/-- What the receiver may change by name is none of the other arguments. -/
+def recvApartB (zs : List Var) (Ec : Entry) : Bool :=
+  zs.all fun z => Ec.vdeps.all fun d => decide (d.kind.bound = .none) || decide (d.root ≠ z)
+
+theorem recvApartB_sound {zs : List Var} {Ec : Entry} (h : recvApartB zs Ec = true) :
+    ∀ z ∈ zs, ∀ d ∈ Ec.vdeps, d.kind.bound ≠ .none → d.root ≠ z := by
+  intro z hz d hd hb
+  simp only [recvApartB, List.all_eq_true] at h
+  have := h z hz d hd
+  simp only [Bool.or_eq_true, decide_eq_true_eq] at this
+  exact this.resolve_left hb
+
 def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, _, .skip => some Γ
   | Γ, F, .seq a b =>
@@ -946,6 +967,28 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
     match editBB D Γ F b x op with
     | some Δ => some Δ
     | none => editBVB D Γ F b x op
+  | Γ, F, .callc x c j σ zs k =>
+    match Γ c with
+    | some Ec =>
+      match fnTysOf Ec.ty.undtor with
+      | some (ms, _) =>
+        match P[σ]? with
+        | some sig =>
+          if k.src ∧ Γ x = none ∧ x ∉ F ∧ ms[j]? = some σ ∧ sig.params.head? = some (.inp, Ec.ty) ∧
+              (∀ o ∈ sig.outHolds, o.2.1 ≠ 0) ∧
+              (sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns) then
+            if recvApartB zs Ec then
+              match C Γ F σ (c :: zs) with
+              | some (E, Γ1) =>
+                match checkStmt2 P R C D (setE Γ1 x (recvRes c Ec E)) F k with
+                | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
+                | none => none
+              | none => none
+            else none
+          else none
+        | none => none
+      | none => none
+    | none => none
   | Γ, F, .scope x s =>
     match Γ x with
     | some E =>
@@ -1403,6 +1446,41 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
       simp only [Option.some.injEq] at h; subst h
       exact editBB_sound hs hD h0
     · exact editBVB_sound hs hD h
+  | callc x c j σ zs k ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i Ec hEc
+      split at h
+      · rename_i ms q hms
+        split at h
+        · rename_i sig hsig
+          split at h
+          · rename_i hc
+            obtain ⟨hsrc, hx, hF, hj, hhd, hout, hdk⟩ := hc
+            split at h
+            · rename_i hap
+              split at h
+              · rename_i E Γ1 hcall
+                split at h
+                · rename_i Δ0 h0
+                  split at h
+                  · rename_i he
+                    simp only [Option.some.injEq] at h; subst h
+                    obtain ⟨hct, hs1⟩ := hC Γ F σ (c :: zs) E Γ1 hs
+                      (fun a ha => hD a (by simp [Stmt.vars] at ha ⊢; rcases ha with ha | ha <;> simp [ha])) hcall
+                    obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x) (supported2_setE hs1 (hD x (by simp [Stmt.vars])) _)
+                      (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+                    exact ⟨.callc hsrc hx hF hEc (fnTysOf_some hms) hj hsig hhd hout hct (recvApartB_sound hap) t0
+                      (endOK2B_sound s0 he) hdk, supported2_exitScope s0 x⟩
+                  · cases h
+                · cases h
+              · cases h
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
   | scope x s ih =>
     intro ξ Γ F Δ hs hD h
     simp only [checkStmt2] at h
