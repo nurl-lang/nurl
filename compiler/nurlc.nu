@@ -80050,7 +80050,7 @@ unsafe @ gen_assign i lex i syms i cg → s {
         // The capture owns what it holds on every path, the binding gives up
         // its own where it had one, and the join's sources keep their drops.
         // Its flag handed over instead, the capture took over every source
-        // the join read, and the one it did not select leaked; AGORA-960.)
+        // the join read, and the one it did not select leaked; AGORA-961.)
         : ~ b __cp_bjoin F
         ? & & & != 0 g_bck_closure_depth ( is_ident_tok bck_rhs_tt ) != 0 ( nurl_str_len __ud_ptr ) != 0 ( nurl_sym_len2 syms __ud_ptr `__outer_owned` ) {
             : s __bj_sp ( mem_udrop_ptr_of syms bck_rhs_val )
