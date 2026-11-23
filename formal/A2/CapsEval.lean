@@ -67,6 +67,21 @@ theorem SlotsCaps.set {m : Mem} {w : Var} (h : SlotsCaps m w) {x : Var} {o : Boo
 theorem SlotsCaps.of_st {m m' : Mem} {w : Var} (h : SlotsCaps m w) (hst : m'.st = m.st) : SlotsCaps m' w :=
   fun x o V hx => h.slot (hst ▸ hx)
 
+/-- ... a store whose slots are those, one set to a clean value. -/
+theorem SlotsCaps.set_of {m m' : Mem} {w x : Var} {o : Bool} {v : Val} (h : SlotsCaps m w)
+    (hv : ValCapsInp v w) (hst : m'.st = (m.set x ⟨o, some v⟩).st) : SlotsCaps m' w :=
+  (h.set (fun V e => by cases e; exact hv)).of_st hst
+
+/-- A `Vec` with a clean value pushed. -/
+theorem ValCapsInp.push {t : Ty} {c d c' d' : Nat} {es : List Val} {v : Val} {w : Var}
+    (hn : ValCapsInp (.node t c d es) w) (hv : ValCapsInp v w) : ValCapsInp (.node t c' d' (es ++ [v])) w := by
+  refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+  cases hc with
+  | elem he =>
+    rcases List.mem_append.mp he with he | he
+    · exact hn.child (Child.elem he)
+    · simp at he; subst he; exact hv
+
 /-- A block's payload, what its holders read and what it owns hold no
     package that captures anything. -/
 theorem MInv.rdCapsInp {m : Mem} {Γ : Ctx} (hM : MInv m Γ) (w : Var) {k : Nat} {bl : Blk}

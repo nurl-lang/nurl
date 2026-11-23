@@ -3238,9 +3238,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hanch := hi.leafAnch rfl
       have hanchS := hi.leafAnchS rfl
       have post := step_assign hi.toMInv hanch hx hxF (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) (fun _ hy hyF => NoHeld.of_anchS hanchS (by simp [Stmt.killVars, hy]) hyF) hmodes hr hty hxd he hsl hd hpin hds
-      exact ⟨_, StmtT.skip, Inv.ofLeaf (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hi post.inv (by rw [post.nv]; simp) (by simp [Stmt.vars])
+      refine ⟨_, StmtT.skip, Inv.ofLeaf ?_ hi post.inv (by rw [post.nv]; simp) (by simp [Stmt.vars])
         (post.rel.anchS hanchS |>.anti fun _ h => by simp [Stmt.killVars] at h) rfl (covers_assign (covers_evalR hi.cover he) hsl hd) trivial,
         by rw [post.nv]; simp, post.rel.keep rfl rfl, post.frz⟩
+      -- (AGORA-963 step 3: the value stored keeps the clause, the old one is dropped)
+      exact hi.heldCaps_step (fun p Ep hp hmp _ =>
+          ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w hw hcw => by
+          obtain ⟨hv, hs1⟩ := he.capsInp hi.toMInv hcw.1 (fun h => hw (by simp [Stmt.killVars, h]))
+          exact CapsInpAt.of_slots (hs1.set_of hv rfl) post.inv)
   | ite hsa hsb _ ha hb _ _ =>
     intro m m' s' hcd hi hst
     cases hst with
@@ -3274,10 +3279,11 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     have fin : ∀ {m1 m' : Mem} {v : Val}, TakeVal m y v m1 →
         MInv m' (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) →
         m'.nv = m1.nv → Covers m' → (∀ v, v ≠ x → m'.st v = m1.st v) →
+        (∀ w, ValCapsInp v w → SlotsCaps m1 w → SlotsCaps m' w) →
         ∃ Γ', StmtT P ξ Γ' F .skip (setE (kill .realloc t.holdsView x Γ1) x
             { Ex1 with held := Ex1.held ++ ownHeld true t D }) ∧ Inv m' Γ' F .skip ∧ m.nv ≤ m'.nv ∧
           Keep Γ Γ' (.push x y) .skip ∧ Frz F m m' := by
-      intro m1 m' v htk hinv hnv hcov hst1
+      intro m1 m' v htk hinv hnv hcov hst1 hsc
       obtain ⟨post, _⟩ := hgo htk
       have hanch1 := post.rel.anchS hanchS
       obtain ⟨E0, h0, hm0, ht0⟩ := post.rel.mode x Ex1 hx1
@@ -3301,7 +3307,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               rcases hdd with hdd | hdd
               · exact hdd
               · exact hsub hdd)))
-      exact ⟨_, StmtT.skip, Inv.ofLeaf (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hi hinv (by rw [hnv, post.nv]; exact Nat.le_refl _)
+      -- (AGORA-963 step 3: the taken value goes into the `Vec`; both were clean)
+      have hcaps := hi.heldCaps_step (s' := .skip) (fun p Ep hp hmp _ =>
+          ⟨hrel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w _ hcw => by
+          obtain ⟨hv, hs1⟩ := htk.capsInp hcw.1
+          exact CapsInpAt.of_slots (hsc w hv hs1) hinv)
+      exact ⟨_, StmtT.skip, Inv.ofLeaf hcaps hi hinv (by rw [hnv, post.nv]; exact Nat.le_refl _)
         (by simp [Stmt.vars]) (hrel.anchS hanchS |>.anti fun _ h => by simp [Stmt.killVars] at h) rfl hcov trivial,
         by rw [hnv, post.nv]; exact Nat.le_refl _,
         hrel.keep rfl rfl, fun w hw => by rw [hst1 w (fun e => hxF (e ▸ hw))]; exact post.frz w hw⟩
@@ -3321,12 +3332,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (fun h => by simp [ownHeld, h])
         (Or.inl ⟨rfl, rfl, rfl⟩) hds (HeldSpared.of_none (NoHeld.of_anchS hanch1 (by simp [Stmt.killVars]) hxF) _ _)) rfl (covers_push (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
+        (fun w hv hs => hs.set (fun V e => by cases e; exact (hs.slot hT).push hv))
     | pushRealloc htk hT _ _ =>
       obtain ⟨hp, hinv1, hcan1, hty1, hanch1⟩ := prep htk
       exact fin htk (push_grow hinv1 hanch1.toH hx1 hl1 hcan1 hxF hty1 hT hp.ownHeld (fun h => hxD (ownHeld_roots h))
         (fun h => by simp [ownHeld, h])
         (Or.inr ⟨rfl, rfl, rfl⟩) hds (HeldSpared.of_none (NoHeld.of_anchS hanch1 (by simp [Stmt.killVars]) hxF) _ _)) rfl (covers_pushRealloc (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
+        (fun w hv hs => (hs.set_of ((hs.slot hT).push hv) rfl))
   | @editB ξ Γ Γ1 F x op Ex Ex1 t D _ hx hmx hl hty hhv hxF harg hyx hx1 hl1 hthru =>
     intro m m' s' hcd hi hst
     have hanch := hi.leafAnch rfl
