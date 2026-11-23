@@ -47,6 +47,17 @@ theorem HeldCapsInp.of_caps {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt}
     (h : HeldCapsInp m Γ F s) (hc : ∀ w, CapsInpAt m w → CapsInpAt m' w) : HeldCapsInp m' Γ F s :=
   heldCapsInp_iff.mpr fun p E hp hm hps d hd hb hh hF => hc _ (heldCapsInp_iff.mp h p E hp hm hps d hd hb hh hF)
 
+/-- ... carried to a step's result where the borrowed parameters outside the
+    new running scopes are old ones, outside the old scopes, and the store
+    keeps every root's clause. -/
+theorem HeldCapsInp.step_of {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt}
+    (h : HeldCapsInp m Γ F s)
+    (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → p ∉ s'.spine → Γ p = some E ∧ p ∉ s.spine)
+    (hc : ∀ w, CapsInpAt m w → CapsInpAt m' w) : HeldCapsInp m' Γ' F s' :=
+  heldCapsInp_iff.mpr fun p E hp hm hps d hd hb hh hF => by
+    obtain ⟨h0, hps0⟩ := hrb p E hp hm hps
+    exact hc _ (heldCapsInp_iff.mp h p E h0 hm hps0 d hd hb hh hF)
+
 /-! ### The store operations -/
 
 theorem CapsInpAt.set {m : Mem} {w : Var} (h : CapsInpAt m w) {x : Var} {o : Bool} {v : Option Val}

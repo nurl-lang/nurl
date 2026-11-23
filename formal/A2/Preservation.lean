@@ -3747,7 +3747,15 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         cases hE : Γ v with
         | none => rw [hE] at h; cases h
         | some E => rw [hE] at h; cases h; exact ⟨hvx, E, rfl, rfl⟩
-      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hi hinv (by simp) (by simp [Stmt.vars]) ?_
+      have hcaps : HeldCapsInp ({ m with alloc := _ }.remove x) (exitScope x Γ) F .skip :=
+        -- (AGORA-963 step 3: the slot dropped, the borrowed parameters kept)
+        hi.heldCaps.step_of (fun p E hp hm _ => by
+          obtain ⟨hpx, E0, h0, rfl⟩ := hrel p E hp
+          rw [killE_mode] at hm
+          rw [killE_rootb hanch hxF .replace false hmn
+            (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) h0 hm]
+          exact ⟨h0, by simp [Stmt.spine, hpx]⟩) (fun w hw => (hw.of_st rfl).remove x)
+      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hcaps hi hinv (by simp) (by simp [Stmt.vars]) ?_
         rfl (covers_remove hi.cover hsl hd) trivial, by simp, ⟨?_, ?_, (DKeep.refl Γ _).exitScope x⟩,
         fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
       · rcases skip_inv hs with rfl | hw
@@ -3845,7 +3853,16 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         cases hE : Γ v with
         | none => rw [hE] at h; cases h
         | some E => rw [hE] at h; cases h; exact ⟨hvx, E, rfl, rfl⟩
-      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hi hinv (by rw [hrl.nv]; exact Nat.le_refl _) (by simp [Stmt.vars]) ?_
+      have hcaps : HeldCapsInp m' (exitScope x Γ) F .skip :=
+        -- (AGORA-963 step 3: the payload back in its block or dropped, the
+        -- borrowed parameters kept)
+        hi.heldCaps.step_of (fun p E hp hm _ => by
+          obtain ⟨hpx, E0, h0, rfl⟩ := hrel p E hp
+          rw [killE_mode] at hm
+          rw [killE_rootb hanch hxF .replace false hmn
+            (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) h0 hm]
+          exact ⟨h0, by simp [Stmt.spine, hpx]⟩) (fun w hw => hrl.capsInp hw)
+      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hcaps hi hinv (by rw [hrl.nv]; exact Nat.le_refl _) (by simp [Stmt.vars]) ?_
         rfl hcov trivial, by rw [hrl.nv]; exact Nat.le_refl _, ⟨?_, ?_, (DKeep.refl Γ _).exitScope x⟩,
         fun w hw => by rw [hrl.st]; simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
       · rcases skip_inv hs with rfl | hw
@@ -4026,7 +4043,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           dtorOut := dtorOut_cong (b := [x]) rfl rfl hk hi'.dtorOut hiS.dtorOut
           dtorIn := ⟨fun E hE hd hos hn d hdd hnm => hi'.dtorOut x E hE hd hos hn hxsp' d hdd hnm,
             hi'.dtorIn⟩ 
-          heldCaps := sorry }  -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
+          heldCaps := hi'.heldCaps.respine fun v hv => by simp [Stmt.spine, hv] }
       · intro v E hv hvs
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.1 v E hv hvs.2
@@ -4055,7 +4072,15 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         cases hE : Γ v with
         | none => rw [hE] at h; cases h
         | some E => rw [hE] at h; cases h; exact ⟨hvx, E, rfl, rfl⟩
-      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hiS hinv (by simp) (by simp [Stmt.vars]) ?_
+      have hcaps : HeldCapsInp _ (exitScope x Γ) F .skip :=
+        -- (AGORA-963 step 3: the slot dropped, the borrowed parameters kept)
+        hiS.heldCaps.step_of (fun p E hp hm _ => by
+          obtain ⟨hpx, E0, h0, rfl⟩ := hrel p E hp
+          rw [killE_mode] at hm
+          rw [killE_rootb hanch hxF .replace false hmn
+            (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) h0 hm]
+          exact ⟨h0, by simp [Stmt.spine, hpx]⟩) (fun w hw => (hw.of_st rfl).remove x)
+      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hcaps hiS hinv (by simp) (by simp [Stmt.vars]) ?_
         rfl (covers_remove hiS.cover hsl hd) trivial, by simp, ⟨?_, ?_, (DKeep.refl Γ _).exitScope x⟩,
         fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
       · rcases skip_inv hs with rfl | hw
@@ -4277,7 +4302,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             exact hiS.dtorOut v E hv hd hos hn (by simpa [Stmt.spine] using hvs) d hdd hnm
               (by simpa [Stmt.spine] using hrs)
           dtorIn := ⟨fun _ _ _ _ _ _ _ _ => by simp [Stmt.spine], trivial⟩ 
-          heldCaps := sorry }  -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
+          -- (AGORA-963 step 3: the slots kept, `x` revived as no borrowed parameter)
+          heldCaps := hiS.heldCaps.step_of (fun p E hp hm hps => by
+              have hpx : p ≠ x := fun h => by
+                rw [h] at hp; simp [setE] at hp; rw [← hp] at hm; simp [Entry.revive, hmo] at hm
+              simp only [setE, upd_ne _ _ hpx] at hp
+              exact ⟨hp, by simpa [Stmt.spine] using hps⟩) (fun w hw => hw.of_st rfl) }
       · intro w E hw hws
         have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
         exact ⟨by simp [Stmt.spine, hwx], E, by simp [setE, upd_ne _ _ hwx, hw], rfl, rfl, fun _ => rfl⟩
@@ -4471,7 +4501,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             exact hiS.dtorOut v E hv hd hos hn (by simpa [Stmt.spine] using hvs) d hdd hnm
               (by simpa [Stmt.spine] using hrs)
           dtorIn := ⟨fun _ _ _ _ _ _ _ _ => by simp [Stmt.spine], trivial⟩ 
-          heldCaps := sorry }  -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
+          -- (AGORA-963 step 3: the slots kept, `x` revived as no borrowed parameter)
+          heldCaps := hiS.heldCaps.step_of (fun p E hp hm hps => by
+              have hpx : p ≠ x := fun h => by
+                rw [h] at hp; simp [setE] at hp; rw [← hp] at hm; simp [Entry.reviveD, Entry.revive, hmo] at hm
+              simp only [setE, upd_ne _ _ hpx] at hp
+              exact ⟨hp, by simpa [Stmt.spine] using hps⟩) (fun w hw => hw.of_st rfl) }
       · intro w E hw hws
         have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
         exact ⟨by simp [Stmt.spine, hwx], E, by simp [setE, upd_ne _ _ hwx, hw], rfl, rfl, fun _ => rfl⟩
