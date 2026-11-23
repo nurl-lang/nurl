@@ -1009,6 +1009,6 @@ import C
 #print axioms C.dtorSafeB_sound
 #print axioms C.inferRhs2_sound
 -- Phase C7: A2's core statements decided, for any exits
-#print axioms C.endOKB_sound
+#print axioms C.endOK2B_sound
 #print axioms C.pushArg2_sound
 #print axioms C.checkStmt2_sound

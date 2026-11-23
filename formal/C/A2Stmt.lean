@@ -8,7 +8,7 @@ import A2.Invariant
 `while`, `push`, `free` and `frozen`, whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
-domain (`endOKB_sound`). Contexts stay inside the domain as in C1, so
+domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
 joins are finite comparisons. `checkStmt2_sound` gives `StmtT`. Calls,
 `letd`, closures, shares, locks, regions and the exits (`block`, `exit`,
 `catchR`) follow.
@@ -114,12 +114,12 @@ theorem dbindSafeB_sound {D : List Var} {Γ : Ctx} {x : Var} (hs : Supported2 Γ
     exact this
 
 /-- `EndOK`, decided over the domain. -/
-def endOKB (D : List Var) (Γ : Ctx) (x : Var) : Bool :=
+def endOK2B (D : List Var) (Γ : Ctx) (x : Var) : Bool :=
   noPinB D Γ x && dtorSafeB D Γ .replace false x && dbindSafeB D Γ x
 
-theorem endOKB_sound {D : List Var} {Γ : Ctx} {x : Var} (hs : Supported2 Γ D) (h : endOKB D Γ x = true) :
+theorem endOK2B_sound {D : List Var} {Γ : Ctx} {x : Var} (hs : Supported2 Γ D) (h : endOK2B D Γ x = true) :
     EndOK Γ x := by
-  simp only [endOKB, Bool.and_eq_true] at h
+  simp only [endOK2B, Bool.and_eq_true] at h
   exact ⟨noPinB_sound hs h.1.1, dtorSafeB_sound hs h.1.2, dbindSafeB_sound hs h.2⟩
 
 /-- A2's `PushArg`, computed. -/
@@ -172,7 +172,7 @@ def checkStmt2 (D : List Var) : Ctx → List Var → Stmt → Option Ctx
       | some (E, Γ1) =>
         if decide (E.mode = .own → E.ty.holdsDtor = false) then
           match checkStmt2 D (setE Γ1 x E) F s with
-          | some Δ => if endOKB D Δ x then some (exitScope x Δ) else none
+          | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
           | none => none
         else none
       | none => none
@@ -213,7 +213,7 @@ def checkStmt2 (D : List Var) : Ctx → List Var → Stmt → Option Ctx
     | some E =>
       match vecElem2 E.ty with
       | some t =>
-        if decide (E.mode = .own) && decide (x ∉ F) && endOKB D Γ x && t.dtorFree then
+        if decide (E.mode = .own) && decide (x ∉ F) && endOK2B D Γ x && t.dtorFree then
           some (setE (kill .replace false x Γ) x { E with live := false, dtor := false })
         else none
       | none => none
@@ -257,7 +257,7 @@ theorem checkStmt2_sound {P : Prog} {D : List Var} : ∀ {s : Stmt} {ξ : Exits}
               have hs1 := inferRhs2_supported hs (fun v hv => hD v (by simp [Stmt.vars, hv])) hr
               obtain ⟨t0, s0⟩ := ih (ξ := ξ.under x) (supported2_setE hs1 (hD x (by simp [Stmt.vars])) E)
                 (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
-              exact ⟨.letv hsrc hx hF (inferRhs2_sound hs hr) t0 (endOKB_sound s0 he) (of_decide_eq_true hnd),
+              exact ⟨.letv hsrc hx hF (inferRhs2_sound hs hr) t0 (endOK2B_sound s0 he) (of_decide_eq_true hnd),
                 supported2_exitScope s0 x⟩
             · cases h
           · cases h
@@ -353,7 +353,7 @@ theorem checkStmt2_sound {P : Prog} {D : List Var} : ∀ {s : Stmt} {ξ : Exits}
           simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
           obtain ⟨⟨⟨hm, hF⟩, he⟩, hdf⟩ := hc
           simp only [Option.some.injEq] at h; subst h
-          exact ⟨.free hx hl hm (vecElem2_some ht) hF (endOKB_sound hs he) hdf,
+          exact ⟨.free hx hl hm (vecElem2_some ht) hF (endOK2B_sound hs he) hdf,
             supported2_setE (supported2_kill hs _ _ _) (hD x (by simp [Stmt.vars])) _⟩
         · cases h
       · cases h
