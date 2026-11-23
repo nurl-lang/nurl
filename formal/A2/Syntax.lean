@@ -1095,6 +1095,8 @@ inductive Rhs where
   -- slot to the type's empty value)
   | take (y : Var)             -- `y`'s `Vec` moves out, owned; `y` keeps a fresh empty `Vec` of
                                -- its element type, and stays live
+  | slit (n : Nat)            -- AGORA-980: a string literal of n bytes, handed out as a view of
+                               -- the program's static text (a block of kind `static`, never freed)
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/

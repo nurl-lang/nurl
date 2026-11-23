@@ -396,6 +396,12 @@ theorem _root_.A2.EvalR.cellKeep {m m1 : Mem} {r : Rhs} {v : Val} {o : Bool} (h 
   | borrowBor _ => exact CellKeep.setVal x _ hn hst (fun h => nomatch h) (fun _ _ h => h)
   | «at» _ _ _ => exact CellKeep.setVal x _ hn hst (fun h => nomatch h) (fun _ _ h => h)
   | view _ => exact CellKeep.setVal x _ hn hst (fun _ _ hs => by cases hs) (fun _ _ h => h)
+  | slit _ =>
+    -- AGORA-980: a static literal's new block is no lock block
+    refine CellKeep.setVal x _ hn hst (fun _ _ hs => by cases hs) (fun k' k hk' => ?_)
+    rcases LockHolds.upd hk' with ⟨_, hk'⟩ | ⟨_, _, _, hb, _⟩
+    · exact hk'
+    · cases hb
   | sat _ _ _ _ _ _ => exact CellKeep.setVal x _ hn hst (fun h => nomatch h) (fun _ _ h => h)
   | pop hy _ _ =>
     exact CellKeep.setVal x _ hn hst (fun _ _ hs => .of_slot hy (Sub.child (by simp) hs)) (fun _ _ h => h)

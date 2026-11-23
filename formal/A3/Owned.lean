@@ -456,10 +456,11 @@ def PayAt (B : Nat → Option Blk) (k i : Nat) : Prop := ∃ bl, B k = some bl �
 
 /-- **Evaluating a right-hand side**: a payload's address afterwards was the
     same block's, or (a new block) an owned tree's. -/
-theorem EvalR.payAt {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m'))
-    (hb : BorFree m) : ∀ k i, PayAt m'.blk k i → PayAt m.blk k i ∨ OwnedId m i := by
+theorem EvalR.payAt0 {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m'))
+    (hb : BorFree m) (hns : ∀ n, r ≠ .slit n) : ∀ k i, PayAt m'.blk k i → PayAt m.blk k i ∨ OwnedId m i := by
   intro k i ⟨bl, hk, hi⟩
   cases h with
+  | slit _ => exact (hns _ rfl).elim
   | pair h1 h2 => rw [TakeVal.blk h2, TakeVal.blk h1] at hk; exact .inl ⟨bl, hk, hi⟩
   | inl h1 => rw [TakeVal.blk h1] at hk; exact .inl ⟨bl, hk, hi⟩
   | inr h1 => rw [TakeVal.blk h1] at hk; exact .inl ⟨bl, hk, hi⟩
@@ -577,6 +578,28 @@ theorem EvalR.payAt {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (
       exact .inl ⟨bl, hk', hi⟩
   | _ => exact .inl ⟨bl, hk, hi⟩
 
+/-- **Evaluating a right-hand side**: a payload's address afterwards was the
+    same block's, or (a new block) an owned tree's, or (AGORA-980: a static
+    literal's new block, of fresh addresses) a block the value handed back
+    refers to. -/
+theorem EvalR.payAt {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.ok v o m'))
+    (hb : BorFree m) : ∀ k i, PayAt m'.blk k i → PayAt m.blk k i ∨ OwnedId m i ∨ Refers m'.blk v k := by
+  intro k i hp
+  by_cases hs : ∃ n, r = .slit n
+  · obtain ⟨n, rfl⟩ := hs
+    obtain ⟨bl, hk, hi⟩ := hp
+    cases h with
+    | slit hfr =>
+      by_cases he : k = m.nid + 2
+      · subst he
+        refine .inr (.inr (.inr ⟨bl, hk, .inr ⟨m.nid + 1, 0, n, Sub.refl _, ?_⟩⟩))
+        have hk' : upd m.blk (m.nid + 2) _ (m.nid + 2) = some bl := hk
+        simp [upd] at hk'; subst hk'; simp [Blk.rd, Blk.tree, ids_node]
+      · have hk' : upd m.blk (m.nid + 2) _ k = some bl := hk
+        rw [upd_ne _ _ he] at hk'
+        exact .inl ⟨bl, hk', hi⟩
+  · exact (EvalR.payAt0 h hb (fun n e => hs ⟨n, e⟩) k i hp).imp_right .inl
+
 /-- A lock scope's end: a payload's address afterwards was the same block's,
     or (given back) the tree of the slot the scope ends. -/
 theorem Release.payAt {m m' : Mem} {k0 : Nat} {t : Ty} {x : Var} (hrl : Release m k0 t x m') :
@@ -601,16 +624,20 @@ theorem Release.payAt {m m' : Mem} {k0 : Nat} {t : Ty} {x : Var} (hrl : Release 
   | drop _ _ _ => exact .inl ⟨bl, hk, hi⟩
 
 /-- **A step**: a payload's address afterwards was the same block's, or an
-    owned tree's (a new block's, or a lock's given back).  Not a fresh one:
-    a step's fresh addresses go to its slots. -/
+    owned tree's (a new block's, or a lock's given back), or (AGORA-980) a
+    static literal's new block's, which the step's slots reach.  Otherwise
+    not a fresh one: a step's fresh addresses go to its slots. -/
 theorem Step.payAt {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) (hb : BorFree m) :
-    ∀ k i, PayAt r.mem.blk k i → PayAt m.blk k i ∨ OwnedId m i := by
+    ∀ k i, PayAt r.mem.blk k i → PayAt m.blk k i ∨ OwnedId m i ∨ (r.IsOk ∧ Reached r.mem.vals r.mem.blk k) := by
   induction h with
   | seqL _ ih | seqP _ ih | scopeIn _ ih | rbindIn _ ih | frozenIn _ ih | blockIn _ ih | frozenP _ ih | blockP _ ih | catchIn _ ih
     | scopeDIn _ ih | scopeLIn _ ih => exact ih
   | scopeP _ _ _ ih | rbindP _ _ ih | catchP _ _ ih | scopeDP _ _ _ ih | scopeDPDrain _ _ ih | scopeLPD _ _ _ _ _ ih
-    | scopeDPMoved _ _ ih => exact ih
-  | letv _ he | letd _ he | assign _ he _ _ => exact fun k i hp => EvalR.payAt he hb k i hp
+    | scopeDPMoved _ _ ih => exact fun k i hp => (ih k i hp).imp_right (Or.imp_right fun h => h.1.elim)
+  | letv _ he | letd _ he | assign _ he _ _ =>
+    -- AGORA-980: a static literal's new block is the bound slot's
+    exact fun k i hp => (EvalR.payAt he hb k i hp).imp_right (Or.imp_right fun h =>
+      ⟨trivial, .root ⟨_, _, upd_same _ _ _⟩ (by simpa [Res.mem] using h)⟩)
   | letcall _ _ hbp =>
     intro k i ⟨bl, hk, hi⟩
     have hk' : _ = some bl := hk
@@ -648,11 +675,12 @@ theorem Step.payAt {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) 
       simp [Blk.tree] at hi
     · rw [upd_ne _ _ he] at hk'
       exact .inl ⟨bl, hk', hi⟩
-  | scopeLSkip hrl => exact Release.payAt hrl
+  | scopeLSkip hrl => exact fun k i hp => (Release.payAt hrl k i hp).imp_right .inl
   | scopeLP hs hrl ih =>
     -- A3.3: what a panic's unwinding gives back was the thread's own
-    exact fun k i hp => (Release.payAt hrl k i hp).elim (ih k i)
-      (fun h => .inr (Step.ownedId_panic hs i h))
+    exact fun k i hp => (Release.payAt hrl k i hp).elim
+      (fun h => (ih k i h).imp_right (Or.imp_right fun h => h.1.elim))
+      (fun h => .inr (.inl (Step.ownedId_panic hs i h)))
   | _ => exact fun k i h => .inl h
 
 /-! ### Avoiding another part -/
