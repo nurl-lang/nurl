@@ -370,7 +370,8 @@ function parseGlb(buf) {
   function eq(a, b) { for (var k = 0; k < b.length; k++) if (Math.abs(a[k] - b[k]) > 1e-9) return false; return true; }
   function moves(nd) {
     if (nd.matrix && !eq(nd.matrix, [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1])) return true;
-    if (nd.rotation && !eq(nd.rotation, [0, 0, 0, 1])) return true;
+    /* q and -q are the same rotation: [0,0,0,-1] is the identity too */
+    if (nd.rotation && !eq(nd.rotation, [0, 0, 0, 1]) && !eq(nd.rotation, [0, 0, 0, -1])) return true;
     if (nd.scale && !eq(nd.scale, [1, 1, 1])) return true;
     if (nd.translation && !eq(nd.translation, [0, 0, 0])) return true;
     return false;
@@ -693,10 +694,10 @@ function boot(data, label) {
     if (data.nrm) {
       var nb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, nb);
       gl.bufferData(gl.ARRAY_BUFFER, data.nrm, gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
-    } else gl.vertexAttrib3f(2, 0, 0, 1);
 ` } {}
-    ? == k 1 { ^ `    var ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    ? == k 1 { ^ `      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
+    } else gl.vertexAttrib3f(2, 0, 0, 1);
+    var ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data.idx, gl.STATIC_DRAW);
     ["ps", "dn", "tm"].forEach(function (id) { $(id).parentNode.hidden = true; });
     $("nl").textContent = "vertices"; $("ndl").textContent = "triangles";

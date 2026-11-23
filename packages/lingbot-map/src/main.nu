@@ -36,6 +36,12 @@ $ `deps/gpukit/src/devops.nu`
 $ `deps/ply/src/ply.nu`
 $ `deps/ply/src/view.nu`
 $ `deps/video/src/video.nu`
+$ `deps/recon-kit/src/voxel.nu`
+$ `deps/recon-kit/src/sharp.nu`
+$ `deps/recon-kit/src/scene.nu`
+$ `deps/recon-kit/src/mesh.nu`
+$ `deps/recon-kit/src/serve.nu`
+$ `app.nu`
 $ `weights.nu`
 $ `devblock.nu`
 $ `load.nu`
@@ -70,7 +76,10 @@ $ `stdlib/core/slice.nu`
     String page
     String host
     i tls
-    i imgsize
+    i imgsize  // 0: auto — the largest that fits the device
+    i maxviews  // > 0: that many frames spread over the whole capture
+    String scene  // keep the views for 3-D objects (recon-kit's scene file)
+    f voxel  // 0 off, < 0 auto, else the cell in the cloud's units
 }
 
 // `video` and `fps` live outside Opts: they are consumed inside the
@@ -90,6 +99,8 @@ $ `stdlib/core/slice.nu`
     ( nurl_print `usage: lingbot-map [options] <frames-dir | video.mp4>\n` )
     ( nurl_print `       lingbot-map [options] <frame.png> <frame.png> ...\n` )
     ( nurl_print `       lingbot-map view <cloud.ply> [--port n] [--host a] [--tls]\n` )
+    ( nurl_print `       lingbot-map serve [--host a] [--port n] [--data dir] [--password p]\n` )
+    ( nurl_print `       lingbot-map mesh <scene> -o <object.glb> [--box x0 y0 z0 x1 y1 z1] [--res n]\n` )
     ( nurl_print `\n` )
     ( nurl_print `examples:\n` )
     ( nurl_print `  # a folder of frames -> cloud.ply. The checkpoint is downloaded once,\n` )
@@ -122,16 +133,24 @@ $ `stdlib/core/slice.nu`
     ( nurl_print `                      such as robbyant/lingbot-map/lingbot-map.pt. Default:\n` )
     ( nurl_print `                      $LINGBOT_MAP_MODEL, else ~/.nurl/models/lingbot-map/\n` )
     ( nurl_print `                      lingbot-map.pt, else that ref is fetched (4.6 GB).\n` )
-    ( nurl_print `  --out <file.ply>    where to write the cloud (default cloud.ply)\n` )
+    ( nurl_print `  --out <file.ply>    where to write the cloud (default cloud.ply); -o too\n` )
     ( nurl_print `  --conf <f>          keep pixels whose confidence exceeds this\n` )
     ( nurl_print `                      (default 1.5, the reference's own --conf_threshold)\n` )
     ( nurl_print `  --pixel-stride <n>  take every nth pixel on both axes (default 2)\n` )
     ( nurl_print `  --max-frames <n>    stop after n frames\n` )
+    ( nurl_print `  --max-views <n>     n frames spread over the whole capture, the sharpest\n` )
+    ( nurl_print `                      of each run, in order (a video: across its length,\n` )
+    ( nurl_print `                      unless --fps is given)\n` )
     ( nurl_print `  --stride <n>        use every nth frame (applied after --max-frames)\n` )
     ( nurl_print `  --fps <n>           frames per second to take from a video (default 10)\n` )
     ( nurl_print `  --image-size <n>    input width in pixels, a multiple of 14 (default 518).\n` )
     ( nurl_print `                      Smaller fits longer or portrait sequences in memory:\n` )
     ( nurl_print `                      392 roughly halves the KV cache of a portrait video.\n` )
+    ( nurl_print `                      auto: the largest that fits the device's free memory.\n` )
+    ( nurl_print `  --voxel <m|auto>    fuse the cloud on a grid of that cell, one averaged\n` )
+    ( nurl_print `                      point per cell; auto = two pixels at the median depth\n` )
+    ( nurl_print `  --scene <file>      keep the frames' cameras, depths and colours, for\n` )
+    ( nurl_print `                      lingbot-map mesh (3-D objects)\n` )
     ( nurl_print `  --frames <dir>      a directory of frames; same as naming it positionally\n` )
     ( nurl_print `  --ascii             write an ASCII PLY instead of binary_little_endian\n` )
     ( nurl_print `  --quiet, -q         no per-frame progress\n` )
@@ -173,7 +192,8 @@ $ `stdlib/core/slice.nu`
 // know before it can tell "--out" from a frame called "--out".
 @ __lm_wants s a → b {
     ? | ( __lm_streq a `--model` ) ( __lm_streq a `--model_path` ) { ^ T } {}
-    ? | ( __lm_streq a `--out` ) ( __lm_streq a `--conf` ) { ^ T } {}
+    ? | | ( __lm_streq a `--out` ) ( __lm_streq a `-o` ) ( __lm_streq a `--conf` ) { ^ T } {}
+    ? | | ( __lm_streq a `--max-views` ) ( __lm_streq a `--scene` ) ( __lm_streq a `--voxel` ) { ^ T } {}
     ? | ( __lm_streq a `--conf_threshold` ) ( __lm_streq a `--pixel-stride` ) { ^ T } {}
     ? | ( __lm_streq a `--max-frames` ) ( __lm_streq a `--first_k` ) { ^ T } {}
     ? | ( __lm_streq a `--frames` ) ( __lm_streq a `--image_folder` ) { ^ T } {}
@@ -296,7 +316,11 @@ $ `stdlib/core/slice.nu`
     : ~ i tls 0
     : ~ s video ``
     : ~ i fps 10
+    : ~ b fpsgiven F
     : ~ i imgsize LM_SIZE
+    : ~ i maxviews 0
+    : ~ s scene ``
+    : ~ f voxel 0.0
     : i argc ( nurl_argc )
     : ~ i i0 1
     ~ & == bad 0 < i0 argc {
@@ -312,7 +336,19 @@ $ `stdlib/core/slice.nu`
         ? == take 1 {
             : s v ( nurl_argv + i0 1 )
             ? | ( __lm_streq a `--model` ) ( __lm_streq a `--model_path` ) { = model v } {}
-            ? ( __lm_streq a `--out` ) { = out v } {}
+            ? | ( __lm_streq a `--out` ) ( __lm_streq a `-o` ) { = out v } {}
+            ? ( __lm_streq a `--max-views` ) { = maxviews ( nurl_str_to_int v ) } {}
+            ? ( __lm_streq a `--scene` ) { = scene v } {}
+            ? ( __lm_streq a `--voxel` ) {
+                ? ( __lm_streq v `auto` ) { = voxel -1.0 } {
+                    = voxel ( nurl_str_to_float v )
+                    ? > voxel 0.0 {} {
+                        ( nurl_print `lingbot-map: --voxel wants a cell size or auto, got ` )
+                        ( nurl_print v ) ( nurl_print `\n` )
+                        = bad 1
+                    }
+                }
+            } {}
             ? | ( __lm_streq a `--conf` ) ( __lm_streq a `--conf_threshold` ) {
                 = conf ( nurl_str_to_float v )
             } {}
@@ -325,9 +361,11 @@ $ `stdlib/core/slice.nu`
             ? ( __lm_streq a `--page` ) { = page v } {}
             ? | ( __lm_streq a `--host` ) ( __lm_streq a `--addr` ) { = host v } {}
             ? | ( __lm_streq a `--video` ) ( __lm_streq a `--video_path` ) { = video v } {}
-            ? ( __lm_streq a `--fps` ) { = fps ( nurl_str_to_int v ) } {}
+            ? ( __lm_streq a `--fps` ) { = fps ( nurl_str_to_int v ) = fpsgiven T } {}
             ? | ( __lm_streq a `--image-size` ) ( __lm_streq a `--image_size` ) {
-                = imgsize ( nurl_str_to_int v )
+                // 0 is auto, and only the word says so: a literal 0 is refused below
+                : i n0 ( nurl_str_to_int v )
+                = imgsize ? ( __lm_streq v `auto` ) 0 ? == n0 0 -1 n0
             } {}
             ? | ( __lm_streq a `--frames` ) ( __lm_streq a `--image_folder` ) {
                 ? ( __lm_dir fr v ) {} { = bad 1 }
@@ -368,8 +406,8 @@ $ `stdlib/core/slice.nu`
     // The ViT is patchwise: the input width must be whole patches, and
     // demo.py's own default is 518 = 37 x 14. Anything else is a typo or
     // a misunderstanding worth naming, not rounding silently.
-    ? | | < imgsize * 4 LM_PATCH > imgsize * 74 LM_PATCH != % imgsize LM_PATCH 0 {
-        ( nurl_print `lingbot-map: --image-size must be a multiple of 14 between 56 and 1036 (default 518, smaller = less memory)\n` )
+    ? & != imgsize 0 | | < imgsize * 4 LM_PATCH > imgsize * 74 LM_PATCH != % imgsize LM_PATCH 0 {
+        ( nurl_print `lingbot-map: --image-size must be auto or a multiple of 14 between 56 and 1036 (default 518, smaller = less memory)\n` )
         = bad 1
     } {}
 
@@ -391,7 +429,13 @@ $ `stdlib/core/slice.nu`
         } {}
         ? == bad 0 {
             : String fdir ( vid_frames_dir video )
-            ?? ( vid_extract video fps ( string_data fdir ) verbose ) {
+            // With a frame budget and no --fps, frames are taken across the
+            // WHOLE video: three candidates per frame kept, spread evenly
+            // over its length (sh_pick below keeps the sharpest of each
+            // three, in order), scaled to 1024 px. --fps is a fixed rate.
+            : b spread & > maxviews 0 ! fpsgiven
+            : !i String got ? spread ( vid_extract_count video * 3 maxviews 1024 ( string_data fdir ) fps verbose ) ( vid_extract video fps ( string_data fdir ) verbose )
+            ?? got {
                 T n → {
                     ? > n 0 {
                         ? != verbose 0 {
@@ -437,7 +481,13 @@ $ `stdlib/core/slice.nu`
         ( vec_clear [String] fr )
         ( vec_append [String] fr kept )
     } {}
-    ^ @ Opts { ( string_from model ) ( string_from out ) conf pstride maxf verbose profile ascii fr bad view port ( string_from page ) ( string_from host ) tls imgsize }
+    // the budget: maxviews frames spread over ALL of them, the sharpest of
+    // each run, still in their order — the model is streaming, and the
+    // order is the trajectory
+    ? & == bad 0 & > maxviews 0 > ( vec_len [String] fr ) maxviews {
+        ( sh_pick fr maxviews verbose )
+    } {}
+    ^ @ Opts { ( string_from model ) ( string_from out ) conf pstride maxf verbose profile ascii fr bad view port ( string_from page ) ( string_from host ) tls imgsize maxviews ( string_from scene ) voxel }
 }
 
 // ── the checkpoint ──────────────────────────────────────────────────
@@ -627,12 +677,66 @@ i h i w f cmin i stride → v {
     ( nurl_print ` GB` )
 }
 
+// --image-size auto: the largest input size (a multiple of 14, from 518
+// down) whose caches fit what the device has free once the checkpoint is
+// resident — a portrait phone video at 518 wants ~19 GB of KV cache, and a
+// card shared with another service may not have it. 0 when none fits.
+@ __lm_auto_size GpuKit kit s first i nframes i verbose → i {
+    : i mfree ( gk_mem_free kit )
+    : ~ i size LM_SIZE
+    ~ >= size 224 {
+        ?? ( pp_load first size LM_PATCH ) {
+            F _e → { ^ LM_SIZE }  // undecodable: the run says so itself
+            T f → {
+                : i p ( ag_ntokens / ( pp_height f ) LM_PATCH / ( pp_width f ) LM_PATCH )
+                : i need ( __lm_device_bytes nframes p )
+                ? | <= mfree 0 <= + need 268435456 mfree {
+                    ? & != verbose 0 != size LM_SIZE {
+                        ( nurl_print `size   auto: ` ) ( nurl_print ( nurl_str_int size ) )
+                        ( nurl_print ` px — ` ) ( nurl_print ( nurl_str_int LM_SIZE ) )
+                        ( nurl_print ` does not fit the device's free memory\n` )
+                    } {}
+                    ^ size
+                } {}
+            }
+        }
+        = size - size LM_PATCH
+    }
+    ^ 0
+}
+
+// One frame's points into the voxel grid (the --voxel path of __lm_emit).
+@ __lm_emit_vx inout VxGrid g ( Slice f ) rgb ( Slice f ) dep ( Slice f ) cf ( Slice f ) kinv ( Slice f ) c2w
+i h i w f cmin i stride → v {
+    : ( Vec f ) wp__v ( vec_zeroed [f] 3 )
+    : ( Slice f ) wp ( slice_from_vec [f] wp__v )
+    : i plane * h w
+    : ~ i y 0
+    ~ < y h {
+        : ~ i x 0
+        ~ < x w {
+            : i idx + * y w x
+            ? > ( slice_at [f] cf idx ) cmin {
+                ( unproject # f x # f y ( slice_at [f] dep idx ) kinv c2w wp )
+                ( vx_add g ( slice_at [f] wp 0 ) ( slice_at [f] wp 1 ) ( slice_at [f] wp 2 )
+                ( __lm_u8 ( slice_at [f] rgb idx ) )
+                ( __lm_u8 ( slice_at [f] rgb + plane idx ) )
+                ( __lm_u8 ( slice_at [f] rgb + * 2 plane idx ) ) )
+            } {}
+            = x + x stride
+        }
+        = y + y stride
+    }
+}
+
 @ main → i {
     // `lingbot-map view <cloud.ply>` — look at a cloud that already exists,
     // without a checkpoint, a GPU or a reconstruction. Taken before the
     // options are parsed because a bare filename is a frame everywhere else.
     ? > ( nurl_argc ) 1 {
         ? ( __lm_streq ( nurl_argv 1 ) `view` ) { ^ ( __lm_view_cmd ) } {}
+        ? ( __lm_streq ( nurl_argv 1 ) `serve` ) { ^ ( rk_serve ( lm_app ) ) } {}
+        ? ( __lm_streq ( nurl_argv 1 ) `mesh` ) { ^ ( ms_main `lingbot-map` ) } {}
     } {}
 
     : Opts o ( __lm_parse )
@@ -750,6 +854,37 @@ i h i w f cmin i stride → v {
             ? ( lw_ok lw ) {} {
                 ( nurl_print ( string_data ( lw_error lw ) ) ) ( nurl_print `\n` ) ^ 1
             }
+            // the input size, and from it the frame's size (every frame of
+            // a capture comes out the same size): the scene file wants it
+            : ~ s first ``
+            ?? ( vec_get [String] . o frames 0 ) { T s0 → { = first ( string_data s0 ) } F → {} }
+            : ~ i isz . o imgsize
+            ? == isz 0 {
+                = isz ( __lm_auto_size kit first nframes . o verbose )
+                ? == isz 0 {
+                    ( nurl_print `lingbot-map: no input size down to 224 px fits the device's free memory\n` )
+                    ( gk_close kit ) ^ 1
+                } {}
+            } {}
+            : ~ i fh 1
+            : ~ i fw 1
+            ?? ( pp_load first isz LM_PATCH ) { T f0 → { = fh ( pp_height f0 ) = fw ( pp_width f0 ) } F _e → {} }
+            : b keepscene > ( string_len . o scene ) 0
+            : ~ ScW sw ?? ( sc_create ? keepscene ( string_data . o scene ) `/dev/null` fh fw ) {
+                T x → x
+                F e → {
+                    ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
+                    ( gk_close kit ) ^ 1
+                }
+            }
+            : ( Vec f ) sim__v ( vec_zeroed [f] 13 )
+            : ( Slice f ) sim ( slice_from_vec [f] sim__v )
+            : ( Vec f ) k4__v ( vec_zeroed [f] 4 )
+            : ( Slice f ) k4 ( slice_from_vec [f] k4__v )
+            // --voxel: each point accumulates into its cell; auto is sized
+            // on the first frame (two pixels' footprint at its median depth)
+            : ~ f vox . o voxel
+            : ~ VxGrid vg ( vx_new ? > vox 0.0 vox 1.0 )
             : !PlyW String po ( ply_create ( string_data . o out ) . o ascii `lingbot-map, pure NURL` )
             ?? po {
                 F e → {
@@ -775,7 +910,7 @@ i h i w f cmin i stride → v {
                         : i t_frame0 ( monotonic_ns )
                         : i dev0 ( gk_prof_total kit )
                         ? == failed 0 {
-                            : !Frame String fro ( pp_load path . o imgsize LM_PATCH )
+                            : !Frame String fro ( pp_load path isz LM_PATCH )
                             ?? fro {
                                 F e → {
                                     ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
@@ -904,8 +1039,64 @@ i h i w f cmin i stride → v {
                                             ( pose_enc_to_intri pe h w kk )
                                             ( intri_inverse kk ki )
                                             ( pose_enc_to_c2w pe c2w )
-                                            ( __lm_emit ply rgb ( slice_from_vec [f] dv )
-                                            ( slice_from_vec [f] cv ) ki c2w h w . o conf . o pixstride )
+                                            : ( Slice f ) dsl ( slice_from_vec [f] dv )
+                                            : ( Slice f ) csl ( slice_from_vec [f] cv )
+                                            ? < vox 0.0 {
+                                                // auto, on this first frame
+                                                : ( Vec f ) zs ( vec_new [f] )
+                                                : ~ i zk 0
+                                                ~ < zk * h w {
+                                                    ? > ( slice_at [f] csl zk ) . o conf { ( vec_push [f] zs ( slice_at [f] dsl zk ) ) } {}
+                                                    = zk + zk 1
+                                                }
+                                                ? == ( vec_len [f] zs ) 0 { = vox 0.0 } {
+                                                    ( sort_by [f] zs \ f a f b → i { ^ ? < a b -1 ? > a b 1 0 } )
+                                                    : f zmed ?? ( vec_get [f] zs / ( vec_len [f] zs ) 2 ) { T z → z F → 1.0 }
+                                                    : f fx0 ( slice_at [f] kk 0 )
+                                                    = vox / * 2.0 zmed ? > fx0 1.0 fx0 1.0
+                                                    = vg ( vx_new vox )
+                                                }
+                                                ? != . o verbose 0 {
+                                                    ( nurl_print `voxel  auto: ` )
+                                                    ( nurl_print ? > vox 0.0 ( nurl_str_float vox ) `off (no confident depth in the first frame)` )
+                                                    ( nurl_print `\n` )
+                                                } {}
+                                            } {}
+                                            ? > vox 0.0 {
+                                                ( __lm_emit_vx vg rgb dsl csl ki c2w h w . o conf . o pixstride )
+                                            } {
+                                                ( __lm_emit ply rgb dsl csl ki c2w h w . o conf . o pixstride )
+                                            }
+                                            ? keepscene {
+                                                // the camera as recon-kit's similarity: s = 1,
+                                                // R and t of camera→world; the pinhole; the
+                                                // confident pixels as the mask
+                                                ( slice_put [f] sim 0 1.0 )
+                                                : ~ i q 0
+                                                ~ < q 3 {
+                                                    ( slice_put [f] sim + 1 * q 3 ( slice_at [f] c2w * q 4 ) )
+                                                    ( slice_put [f] sim + + 1 * q 3 1 ( slice_at [f] c2w + * q 4 1 ) )
+                                                    ( slice_put [f] sim + + 1 * q 3 2 ( slice_at [f] c2w + * q 4 2 ) )
+                                                    ( slice_put [f] sim + 10 q ( slice_at [f] c2w + * q 4 3 ) )
+                                                    = q + q 1
+                                                }
+                                                ( slice_put [f] k4 0 ( slice_at [f] kk 0 ) )
+                                                ( slice_put [f] k4 1 ( slice_at [f] kk 4 ) )
+                                                ( slice_put [f] k4 2 ( slice_at [f] kk 2 ) )
+                                                ( slice_put [f] k4 3 ( slice_at [f] kk 5 ) )
+                                                : ( Vec u ) mk ( vec_zeroed [u] * h w )
+                                                : ~ i mq 0
+                                                ~ < mq * h w {
+                                                    ? > ( slice_at [f] csl mq ) . o conf { : b _ms ( vec_set [u] mk mq 1 ) } {}
+                                                    = mq + mq 1
+                                                }
+                                                ? & == h fh == w fw {
+                                                    ? ( sc_view sw sim k4 dsl 0 ( slice_from_vec [u] mk ) 0 rgb ) {} {
+                                                        ( nurl_print `lingbot-map: cannot write the scene file\n` )
+                                                        = failed 1
+                                                    }
+                                                } {}
+                                            } {}
                                             ? != . o profile 0 {
                                                 ( nurl_print `   prep ` )
                                                 ( nurl_print ( nurl_str_int / - t_prep t_frame0 1000000 ) )
@@ -945,6 +1136,19 @@ i h i w f cmin i stride → v {
                         } {}
                         = fi + fi 1
                     }
+                    ? > vox 0.0 {
+                        : i cells ( vx_write vg ply )
+                        ? != . o verbose 0 {
+                            ( nurl_print `voxel  ` ) ( nurl_print ( nurl_str_int cells ) )
+                            ( nurl_print ` cells\n` )
+                        } {}
+                    } {}
+                    ? keepscene {
+                        ? ( sc_finish sw ) {} {
+                            ( nurl_print `lingbot-map: cannot finish the scene file\n` )
+                            = failed 1
+                        }
+                    } {}
                     : i total ( ply_count ply )
                     ? ( ply_finish ply ) {} {
                         ( nurl_print `lingbot-map: cannot finish the PLY\n` )
