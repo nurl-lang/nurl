@@ -189,6 +189,21 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
           else none
         | none => none
       else none
+  | Γ, F, .letcall x f args s =>
+    match checkStmt2 P R C D Γ F (.letcall x f args s) with
+    | some Δ => some ⟨Δ, [], none⟩
+    | none =>
+      if s.src ∧ Γ x = none ∧ x ∉ F ∧ dtorHeadB P f x s then
+        match C Γ F f args with
+        | some (E, Γ1) =>
+          match checkX P R C D (setE Γ1 x E) F s with
+          | some rs =>
+            if endOK2B D rs.Δ x && rs.E.all (fun e => endOK2B D e.2 x) then
+              some ⟨exitScope x rs.Δ, oblUnder x rs.E, none⟩
+            else none
+          | none => none
+        | none => none
+      else none
   | Γ, F, s =>
     match checkStmt2 P R C D Γ F s with
     | some Δ => some ⟨Δ, [], none⟩
@@ -352,6 +367,37 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
                 · exact .letv hsrc hx hF hrt (t0 _ (oblUnder_ok e0 hendE hξ)) (endOK2B_sound s0 hend)
                     (of_decide_eq_true hnd)
               · cases h
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+  | letcall x f args s ih =>
+    intro Γ F rr hs hD h
+    simp only [checkX] at h
+    split at h
+    · rename_i Δ h0
+      simp only [Option.some.injEq] at h; subst h
+      exact xsound_of_check2 hR hC hs hD h0
+    · split at h
+      · rename_i hc
+        obtain ⟨hsrc, hx, hF, hdk⟩ := hc
+        split at h
+        · rename_i E Γ1 hcall
+          split at h
+          · rename_i rs hrs
+            split at h
+            · rename_i he
+              simp only [Option.some.injEq] at h; subst h
+              simp only [Bool.and_eq_true] at he
+              obtain ⟨hend, hendE⟩ := he
+              obtain ⟨hct, hs1⟩ := hC Γ F f args E Γ1 hs (fun a ha => hD a (by simp [Stmt.vars, ha])) hcall
+              obtain ⟨s0, e0, t0, _⟩ := ih (supported2_setE hs1 (hD x (by simp [Stmt.vars])) E)
+                (fun v hv => hD v (by simp [Stmt.vars, hv])) hrs
+              refine ⟨supported2_exitScope s0 x, fun e he => ?_, fun ξ hξ => ?_, fun n Γe ht => (by cases ht)⟩
+              · obtain ⟨e', he', rfl⟩ := List.mem_map.mp he
+                exact supported2_exitScope (e0 e' he') x
+              · exact .letcall hsrc hx hF hct (t0 _ (oblUnder_ok e0 hendE hξ)) (endOK2B_sound s0 hend)
+                  (dtorHeadB_sound hdk)
             · cases h
           · cases h
         · cases h
