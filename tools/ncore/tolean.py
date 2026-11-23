@@ -15,7 +15,8 @@ emitted.
 """
 import sys
 
-INT_TYS = {"i64", "i1", "i32", "i8", "void"}
+INT_TYS = {"i64", "i1", "i32", "i16", "i8", "void",
+           "u64", "u32", "u16", "u8", "f64", "f32", "double", "float"}
 
 
 # Struct types from the IR's `ty` lines: name → [(field, type), …].
@@ -63,7 +64,8 @@ _EXPANDING = set()
 
 def lean_ty(t):
     """An IR type as an A2 type: an integer, or a `Vec` of them (`%Vec__T`)."""
-    if t in INT_TYS or t in ("i", "u", "b"):
+    if t.lstrip("%") in INT_TYS or t in ("i", "u", "b"):
+        # (a scalar: A2's int, its value no part of the memory model)
         return ".int"
     if t == "i8*":
         # a raw string bound from a literal or a fresh string: owned text,
@@ -175,6 +177,18 @@ class Fn:
         self.res_own = self.res_ty != ".int"
         self.views = self.view_vars()
         self.lends = []
+        sm = SUMS.get(fn["name"], {})
+        if sm.get("retdyn") == "1":
+            # owned on some paths and lent on others, answered per call:
+            # A2's results are one or the other
+            raise Unsupported(f"{fn['name']}: a result owned or lent per call")
+        if "ret_alias" in sm and not borrowed(fn["name"]) and self.res_own:
+            raise Unsupported(f"{fn['name']}: a result aliasing parameter {sm['ret_alias']}")
+        if borrowed(fn["name"]) and sm.get("rviews", ":") in (":", ""):
+            # lent, but from no parameter's storage: a copy of a view an
+            # argument holds (a raw string's), which A2 tracks only as a
+            # held dependency, not translated yet
+            raise Unsupported(f"{fn['name']}: a result copying a view an argument holds")
         if borrowed(fn["name"]):
             # a result that views what it was handed (the walk's summary,
             # `rviews`): a `slice` of it, not owned, depending on the
@@ -286,7 +300,7 @@ class Fn:
     def is_int(self, op):
         return op == "c" or self.vty(op) in INT_TYS
 
-    def rhs(self, words, dest=None, pre=None):
+    def rhs(self, words, dest=None, pre=None, assign=False):
         k = words[0]
         if k == "agg" and words[1] in ("T", "F") and dest is not None:
             ty = lean_ty(self.fn["vars"][dest])
@@ -302,6 +316,10 @@ class Fn:
         if k == "payload" and words[2] == "T" and words[3] == "0":
             return f".getr {self.pvar(words[1])}"
         if k == "none":
+            # a slot not yet given a value: A2 binds only with one, so only a
+            # scalar's (whose placeholder no read can tell apart) is translated
+            if dest is not None and lean_ty(self.fn["vars"].get(dest, "i64")) != ".int":
+                raise Unsupported(f"{self.fn['name']}: an owner bound before its value")
             return ".expr (.lit 0)"
         if k == "use" and words[1] == "c" and dest is not None and self.fn["vars"].get(dest) == "i8*":
             return ".new .int"   # a literal: its own copy of the text
@@ -319,10 +337,31 @@ class Fn:
             if op != "c" and self.vty(op) not in INT_TYS:
                 y = int(op[1:])
                 kinds, flags = self.fn.get("kind", {}), self.fn["flags"]
-                # (A `: ~` binding of another binding is a cursor, a borrow of
-                # it, MEMORY.md §2.3; a temporary's value moves into its holder.)
-                if dest is not None and kinds.get(dest) == 1 and flags.get(dest, 0) & 1 and kinds.get(y) == 1:
+                vt = self.fn["vars"]
+                # (A `: ~` binding of another binding or of a parameter is a
+                # cursor, a borrow of it, MEMORY.md §2.3; a temporary's value
+                # moves into its holder.)
+                if not assign and dest is not None and kinds.get(dest) == 1 and flags.get(dest, 0) & 1 and kinds.get(y) in (0, 1):
                     return f".borrow {self.var(y)}"
+                if (assign and kinds.get(y) == 0 and not flags.get(y, 0) & 6
+                        and vt.get(y) != "i8*" and kinds.get(dest) != 0):
+                    # a borrowed parameter assigned to a local: codegen re-points
+                    # the local at it and clears its drop flag, an owner turned
+                    # into a lend, which A2's bindings are not
+                    raise Unsupported(f"{self.fn['name']}: an owner given a borrowed parameter's value")
+                if (assign and pre is not None and kinds.get(y) == 0
+                        and not flags.get(y, 0) & 6 and kinds.get(dest) == 0
+                        and flags.get(dest, 0) & 2 and vt.get(y) == vt.get(dest)
+                        and vt.get(y) != "i8*"):
+                    # a borrowed parameter assigned to an `inout` one: codegen
+                    # copies it (`__nurl_clone_T`; the IR's `use` leaves the
+                    # copy implicit), a read of the parameter and a fresh owner
+                    ty = lean_ty(vt[y])
+                    if not ty.startswith("(.vec "):
+                        raise Unsupported(f"{self.fn['name']}: a copy of a {vt[y]} parameter")
+                    t = self.fresh()
+                    pre.append((t, f".expr (.len {self.var(y)})"))
+                    return f".new {ty[len('(.vec '):-1]}"
                 return f".var {self.var(y)}"
             return f".expr {self.operand(op)}"
         if k == "agg" and words[1] == "-" and dest is not None and int(words[2]) == 1:
@@ -358,6 +397,9 @@ class Fn:
         """A standard-library call A2 has a construct for, or None."""
         f, n = words[1], int(words[2])
         ops = words[3:3 + n]
+        if f == "nurl_println_int" and n == 1 and x is None:
+            # it reads a scalar: nothing of memory to check past the read
+            return rest if ops[0] == "c" else f"(.letv {self.fresh()} (.expr {self.operand(ops[0])}) {rest})"
         if f == "nurl_println" and n == 1 and x is None:
             # it reads its argument: the read checked live
             if ops[0] == "c":
@@ -570,7 +612,9 @@ class Fn:
         if w == "assign":
             if not (head[1].startswith("v") and head[1][1:].isdigit()):
                 raise Unsupported(f"{self.fn['name']}: store to {head[1]}")
-            return self.seq(f"(.assign {self.pvar(head[1])} ({self.rhs(head[2:])}))",
+            pre = []
+            r = self.rhs(head[2:], int(head[1][1:]), pre, assign=True)
+            return self.seq(self.wrap(pre, f"(.assign {self.pvar(head[1])} ({r}))"),
                             self.stmts(lines[1:], names, tail))
         raise Unsupported(f"{self.fn['name']}: statement {w}")
 
