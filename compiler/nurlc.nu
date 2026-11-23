@@ -78272,8 +78272,13 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
             : b rhs_is_owned_local & ( is_ident_tok bck_rhs_tt )
             ( nurl_sym_has_word syms `__owned_strings__`
             ( enum_owner_ptr syms bck_rhs_val ) )
+            // (…and a raw view a value block's tail call lends out of one of
+            // the block's own locals gets a copy, as on the inferred-type path
+            // — AGORA-953.)
+            : b __blk_slend & & == bck_rhs_tt TT_LBRACE == g_blk_tail_eff TT_LPAREN
+            & ( seq ( nurl_llty ptype ) `i8*` ) != 0 ( nurl_str_len ( mem_blk_tail_deeper_args syms 1073741824 __rhs_r0 ) )
             ? & & & != 0 g_auto_drop_strings
-            | & is_mutable | == bck_rhs_tt TT_STR rhs_is_owned_local rhs_is_owned_global
+            | | & is_mutable | == bck_rhs_tt TT_STR rhs_is_owned_local rhs_is_owned_global __blk_slend
             ( seq ( nurl_llty ptype ) `i8*` )
             == 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
             { : s __ld ( nurl_cg_reg cg )
@@ -78282,6 +78287,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                 ( nurl_print `)` ) ( emit_dbg_eol )
                 = val __ld
                 = lit_track T
+                ? & __blk_slend != 0 g_core_live { = g_core_let_dup 1 } {}
             } {}
             ( mem_cursor_owner_slot syms cg is_mutable ptype lit_track rhs_is_owned_local rhs_is_owned_global bck_rhs_tt )
             ( bck_check_owned_fields_alias lex syms bck_rhs_tt bck_rhs_val name )
