@@ -6510,6 +6510,18 @@ unsafe @ __arg_param_lend_root i syms → s {
     : ~ s rest ( nurl_str_cat ( nurl_sym_get syms `__last_join_arm_lends__` ) `` )
     : ~ s out ``
     : ~ b first T
+    // (…and a `??`'s scrutinee call, whose lend an arm hands on as it is -
+    // `T d → d` of `?? ( vec_get [D] v 0 )`: that arm's pairs are the
+    // scrutinee's, which __last_join_arm_lends__ leaves to
+    // __last_join_lend_key__. `^ ??` asks it there; a `:` binding of the
+    // join, handed back, asks its pairs: agora #956.)
+    ? == et TT_QUESTQUEST {
+        : s jk ( nurl_sym_get syms `__last_join_lend_key__` )
+        ? != 0 ( nurl_str_len jk ) {
+            = out ? roots ( nurl_sym_get syms `__last_join_lend_roots__` ) ( nurl_str_cat jk `` )
+            = first F
+        } {}
+    } {}
     ~ != 0 ( nurl_str_len rest ) {
         : i nl ( nurl_str_find rest `\n` )
         : s ent ? < nl 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 nl )

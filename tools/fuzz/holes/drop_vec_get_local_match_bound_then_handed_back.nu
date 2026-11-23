@@ -1,5 +1,5 @@
-// map: §7.6 | A2 | rejected | - | agora #242: elaborated twin: a `vec_get` element of a local Vec through a `??`, bound by `:` then handed back
-// twin of tools/fuzz/holes/drop_vec_get_local_match.nu (tools/fuzz/holes/elab.py)
+// map: §7.6 | A2 | rejected | - | AGORA-956 (AGORA-242's twin): the same element handed out of a `??` over the call, bound by `:` then handed back
+// AGORA-956 (closed): refused - a `:` binding of a `??` takes its scrutinee call's lend (main 3f08626b: accepted, heap-use-after-free under ASan); twin of tools/fuzz/holes/drop_vec_get_local_match.nu
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 
