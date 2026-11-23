@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_immutable_global_zero_handle.nu:7:13: error: the global 'g_v' never changes, and it starts as zero bytes, which are not a '( Vec i )': a String or a Vec needs its control block, a library handle its shared block, a closure its code, so it would stay a null handle for the whole run, and a change through it (a push) would write through null. Make it a mutable global (': ~ ( Vec i ) g_v 0'), filled before use and reached from an 'unsafe' accessor, or set it at start from a function of no arguments with a type that synchronises itself (( Locked T ), ( Arc T ), …).
+: ( Vec i ) g_v 0
+            ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
