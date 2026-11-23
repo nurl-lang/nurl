@@ -565,13 +565,17 @@ theorem slot_inp (h : CallH P Γ F x fn args m.nv) (hi : MInv m Γ) {m1 : Mem}
       rw [hs] at hown'; cases hown'
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
       have hr := RhsT.copyRoot (F := F) hEa hl hm
-      obtain ⟨_, hout⟩ := rhs_pres hi (h.anch.toAnch hi.noRegion) hr (EvalR.copy hv)
-        (fun _ _ hyF => NoHeld.of_anchF (h.anch.toAnchF hi.noRegion) hyF)
+      obtain ⟨_, hout⟩ := rhs_pres hi (h.anch.toS hi.noRegion).toH hr (EvalR.copy hv)
+        (fun y hy hyF => NoHeld.of_anchS (h.anch.toS hi.noRegion) (by
+          simp only [Rhs.vars, Expr.vars, List.mem_singleton] at hy
+          rw [hy]; exact RSetup.getD_mem' (h.len ▸ (List.getElem?_eq_some_iff.mp hk).1)) hyF)
       exact ⟨v, by rw [hv]; rfl, hout.valBor rfl⟩
     · obtain ⟨v, hv, _⟩ := hi.bor_val hEa hl (by rw [hm]; rfl)
       have hr := RhsT.copyBor (F := F) hEa hl hm
-      obtain ⟨_, hout⟩ := rhs_pres hi (h.anch.toAnch hi.noRegion) hr (EvalR.copy hv)
-        (fun _ _ hyF => NoHeld.of_anchF (h.anch.toAnchF hi.noRegion) hyF)
+      obtain ⟨_, hout⟩ := rhs_pres hi (h.anch.toS hi.noRegion).toH hr (EvalR.copy hv)
+        (fun y hy hyF => NoHeld.of_anchS (h.anch.toS hi.noRegion) (by
+          simp only [Rhs.vars, Expr.vars, List.mem_singleton] at hy
+          rw [hy]; exact RSetup.getD_mem' (h.len ▸ (List.getElem?_eq_some_iff.mp hk).1)) hyF)
       have hd : derive (args.getD k 0) Ea .self = Ea.path := by
         simp [derive, hm, Mode.isRoot, comp_self_r]
       exact ⟨v, by rw [hv]; rfl, by rw [hd]; exact hout.valBor hm⟩
