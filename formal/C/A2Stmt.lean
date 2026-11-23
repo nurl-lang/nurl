@@ -1,16 +1,31 @@
 import C.A2Panic
 
 /-!
-# C7: A2's core statements, decided (AGORA-970)
+# C7: A2's statements, decided (AGORA-970)
 
-`checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct, its own destructor type, or a `Vec` nest of those) `scopeD` (a binding of its own destructor type or a `Vec` nest of them) `takeB`, `editB` (view-free elements) and `editBV` (elements that hold views but no closure, through an `edit true`) `callc` and `callcE`, whatever the exits `ξ` are. These
-rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
-(`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
-domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
-joins are finite comparisons. `checkStmt2_sound` gives `StmtT`. Calls,
-`letd`, closures, shares, locks, regions and the exits (`block`, `exit`,
-`catchR`) follow.
+`checkStmt2` computes A2's `StmtT` for every statement form a function body
+can hold, whatever the exits `ξ` are:
+
+* `skip`, `seq`, `letv`, `letcall`, `letrec`, `assign`, `unpair`, `ite`,
+  `while`, `block`, `loop`, `panic`, `frozen`, `scope`, `rbind`, `scopeL`;
+* `push`, `insert`, `free`; `withLock`, `withElem`;
+* `letd` and `scopeD`: a struct, its own destructor type, or a `Vec` nest
+  of those, with `f`'s destructor checked by its signature (`dtorOKB`);
+* `takeB`, `editB` (view-free elements) and `editBV` (elements that hold
+  views but no closure, through an `edit true`);
+* `callc` and `callcE` (`¬ ThruFn` by a checked-closed set, `noThruB`).
+
+The rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
+(`NoPin`, `DtorSafe` and `DbindSafe`), decided over the finite domain
+(`endOK2B_sound`). Contexts stay inside the domain as in C1, so joins are
+finite comparisons. `checkStmt2_sound` gives `StmtT`.
+
+Out of the checker's domain: `catchR`, a run-time form only (`src = false`,
+made by stepping, `recStmt`), whose premise is the heap invariant over a
+concrete memory; no function body holds one. `sub` is subsumption, used by
+the joins. Not decided yet: glue destructors (`GlueOK`, `ImplGlueOK`,
+`EnumGlueOK`, `ClosureGlueOK`) and a value glued to `f` from another
+destructor type; `editBV` over closure elements or through an `edit false`.
 -/
 
 namespace C
