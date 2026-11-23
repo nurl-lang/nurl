@@ -3803,7 +3803,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           dtorOut := dtorOut_cong (b := [x]) rfl rfl hk hi'.dtorOut hi.dtorOut
           dtorIn := ⟨fun E hE hd hos hn d hdd hnm => hi'.dtorOut x E hE hd hos hn hxsp' d hdd hnm,
             hi'.dtorIn⟩ 
-          heldCaps := sorry }  -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
+          heldCaps := hi'.heldCaps.respine fun v hv => by simp [Stmt.spine, hv] }
       · intro v E hv hvs
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.1 v E hv hvs.2
@@ -3954,7 +3954,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           dtorOut := dtorOut_cong (b := [x]) rfl rfl hk hi'.dtorOut hi.dtorOut
           dtorIn := ⟨fun E hE hd hos hn d hdd hnm => hi'.dtorOut x E hE hd hos hn hxsp' d hdd hnm,
             hi'.dtorIn⟩ 
-          heldCaps := sorry }  -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
+          heldCaps := hi'.heldCaps.respine fun v hv => by simp [Stmt.spine, hv] }
       · intro v E hv hvs
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.1 v E hv hvs.2
@@ -4606,7 +4606,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           dtorOut := dtorOut_cong (b := [p]) rfl rfl hk hi'.dtorOut hi.dtorOut
           dtorIn := ⟨fun E hE hd hos hn d hdd hnm => hi'.dtorOut p E hE hd hos hn hpsp' d hdd hnm,
             hi'.dtorIn⟩ 
-          heldCaps := sorry }  -- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step
+          heldCaps := hi'.heldCaps.respine fun v hv => by simp [Stmt.spine, hv] }
       · intro v E hv hvs
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.1 v E hv hvs.2
