@@ -814,7 +814,11 @@ This makes B2's last two cases depend on B3's invariant. The order is therefore:
 - What is left:
   - **AGORA-963 step 3, preservation of the clause:** every `Inv` a step builds is marked `WIP scaffold (AGORA-963 step 3, …): HeldCapsInp across this step`. `grep -rn "AGORA-963 step 3" formal/` lists them: 33 sites in Preservation, EnvHand, Closure and CallInv. The positional constructions go through `Inv.mk₀ hcaps …`, and `Inv.ofLeaf` takes the clause first.
   - **Proved already:** the sites where the store's slots, the borrowed parameters and the spine carry over (`HeldCapsInp.of_st / respine / of_rootb / mono`): the sweeps, `Inv.weaker`, `Inv.clean`, `Inv.respine`, the `…In` lemmas, A3's `Nid` and spawn, and the empty store.
-  - **The other 5:** Closure ×3 and EnvHand ×2 (the closure call and the package hand-over), which use the clause at the call.
+  - *(Proved since: the 5 call-side places.*
+    - *At the closure call, an outer held root is at most a read capture (the clause). Then the opened call lends it (`H`): it is no moved argument (`capPos_any`), and no root of `mutNames`, since `NamesFree` makes every argument reach a changed root by its bound. Otherwise it is none of the call's names.*
+    - *After the call it is none of the new statement's killable names, and a frame binding of the same type (`postdt`).*
+    - *The hand-over lemmas take `RootbAnch` plus `NoHeld` at the receiver and the arguments, and `rootb_namesH` spares held views by `NamesFree`.)*
+- **What is left is exactly AGORA-963 step 3's 30 sites.**
 - *(Proved since, B3's call side: `CallA.anch` is `RootbAnchRS Γ F args`. An anchor is in `F`, through a region, or held of a root that is no argument and holds no views.*
   - *`NamesFree` asks that the closures' by-name change ends no held view. That is the call-site twin of 963's clause, in the spare form `HeldSpared` reads.*
   - *`namesFree_lift` carries it into the lifted frame from `S.OK` as it stands, with no new field (`liftE_rootb_held_mem`, `Φsat`, `N_mut`).*
