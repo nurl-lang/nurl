@@ -175,11 +175,34 @@ theorem resDTyOf_sound {τ : Ty} {g : Nat} {t : Ty} (h : resDTyOf τ = some (g, 
     assigned; an owned result holding one is assigned at most once and is
     of a destructor type (or a `Vec` nest of one) whose struct holds no
     views and no closure, with its destructor or glue checked (`dropFnOKB`).
-    (An enum's or a closure's glue taking its `sink` parameter is not
-    decided yet.) -/
-def dtorParamsB (P : Prog) (fn : Fn) : Bool :=
+    A `sink` parameter that is not moved first may instead be the value an
+    enum's or a closure's glue takes apart, `fn` being that glue: function
+    `f` of the program (`glueSelfB`). -/
+def glueSelfB (P : Prog) (f : Nat) (fn : Fn) : Bool :=
+  match fn.params with
+  | [(.sink, .dtor _ u)] => enumGlueOKB P f u || closureGlueOKB P f u
+  | _ => false
+
+theorem glueSelfB_sound {P : Prog} {f : Nat} {fn : Fn} (hf : P[f]? = some fn) (h : glueSelfB P f fn = true) :
+    ∃ f u, P[f]? = some fn ∧ (EnumGlueOK P f u ∨ ClosureGlueOK P f u) := by
+  unfold glueSelfB at h
+  split at h
+  · simp only [Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact ⟨f, _, hf, Or.inl (enumGlueOKB_sound h)⟩
+    · exact ⟨f, _, hf, Or.inr (closureGlueOKB_sound h)⟩
+  · cases h
+
+/-- An enum's glue (`glueEx`, C7) takes its `sink` parameter apart by its
+    tag and never moves it: its clause holds only as the glue it is. -/
+example : (glueEx (.ite (.isl 0) (.assign 1 (.expr (.lit 0))) .skip) (.sum .int .int)).all
+    (fun fn => glueSelfB (glueEx (.ite (.isl 0) (.assign 1 (.expr (.lit 0))) .skip) (.sum .int .int)) 0 fn)
+    = true := by decide
+
+def dtorParamsB (P : Prog) (f : Nat) (fn : Fn) : Bool :=
   (List.range fn.params.length).all (fun i => match fn.params[i]? with
-    | some (.sink, t) => !t.holdsDtor || (decide (i ∈ fn.body.movedFirst) && decide (i ∉ fn.body.assigns))
+    | some (.sink, t) => !t.holdsDtor ||
+        ((decide (i ∈ fn.body.movedFirst) || glueSelfB P f fn) && decide (i ∉ fn.body.assigns))
     | some (.inout _, t) => !t.holdsDtor || decide (i ∉ fn.body.assigns)
     | _ => true) &&
   (!fn.resOwn || !fn.resTy.holdsDtor ||
@@ -188,7 +211,8 @@ def dtorParamsB (P : Prog) (fn : Fn) : Bool :=
       | some (g, t) => !t.holdsView && !t.hasFn && dropFnOKB P g t
       | none => false))
 
-theorem dtorParamsB_sound {P : Prog} {fn : Fn} (h : dtorParamsB P fn = true) : DtorParamsOK P fn := by
+theorem dtorParamsB_sound {P : Prog} {f : Nat} {fn : Fn} (hf : P[f]? = some fn) (h : dtorParamsB P f fn = true) :
+    DtorParamsOK P fn := by
   simp only [dtorParamsB, Bool.and_eq_true, Bool.or_eq_true, Bool.not_eq_true'] at h
   obtain ⟨hp, hr⟩ := h
   refine ⟨fun i hi hs hd => ?_, fun i hi b hb hd => ?_, fun ho hd => ?_⟩
@@ -196,8 +220,11 @@ theorem dtorParamsB_sound {P : Prog} {fn : Fn} (h : dtorParamsB P fn = true) : D
     rw [List.getElem?_eq_getElem hi] at this
     have hpi : fn.params[i] = (.sink, fn.params[i].2) := by rw [← hs]
     rw [hpi] at this
-    simp only [hd, Bool.not_true, Bool.false_or, Bool.and_eq_true, decide_eq_true_eq] at this
-    exact ⟨Or.inl this.1, this.2⟩
+    simp only [hd, Bool.not_true, Bool.false_or, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at this
+    obtain ⟨hm, ha⟩ := this
+    rcases hm with hm | hm
+    · exact ⟨Or.inl hm, ha⟩
+    · exact ⟨Or.inr (glueSelfB_sound hf hm), ha⟩
   · have := List.all_eq_true.mp hp i (List.mem_range.mpr hi)
     rw [List.getElem?_eq_getElem hi] at this
     have hpi : fn.params[i] = (.inout b, fn.params[i].2) := by rw [← hb]
@@ -344,7 +371,7 @@ theorem stmtCodesB_sound {P : Prog} : ∀ {s : Stmt}, stmtCodesB P s = true → 
 /-- `FnOK` (A2), decided: the signature's clauses, the destructor clauses,
     and the body checked by `checkA2` from `sigCtx` over `fnDom`, ending as
     the summary says. -/
-def fnOK2B (P : Prog) (fn : Fn) : Bool :=
+def fnOK2B (P : Prog) (f : Nat) (fn : Fn) : Bool :=
   fn.body.src && decide (fn.params.length < fn.nvars) && fn.body.vars.all (fun v => decide (v < fn.nvars)) &&
   fn.resTy.ok && (!fn.resOwn || fn.resTy.owning) &&
   fn.params.all (fun pt => pt.2.ok && (!(decide (pt.1 = .sink)) || pt.2.owning) &&
@@ -354,19 +381,20 @@ def fnOK2B (P : Prog) (fn : Fn) : Bool :=
   fn.outHolds.all (fun o => lendable2B fn o.2.1 && !o.2.2.isName) &&
   (fn.lends ++ fn.rholds).all (fun jk => kindFitsB fn jk.1 jk.2) &&
   fn.outHolds.all (fun o => kindFitsB fn o.2.1 o.2.2) &&
-  dtorParamsB P fn &&
+  dtorParamsB P f fn &&
   (match checkX P (inferRhs2d (fnDom fn)) (callB2 P (fnDom fn)) (fnDom fn) (sigCtx fn) [] fn.body with
    | some r => r.E.isEmpty && noDtorEndB (fnDom fn) r.Δ && resEndB fn r.Δ && inoutEndB fn r.Δ
    | none => false)
 
-theorem fnOK2B_sound {P : Prog} {fn : Fn} (h : fnOK2B P fn = true) : FnOK P fn := by
+theorem fnOK2B_sound {P : Prog} {f : Nat} {fn : Fn} (hf : P[f]? = some fn) (h : fnOK2B P f fn = true) :
+    FnOK P fn := by
   simp only [fnOK2B, Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true, Bool.not_eq_true',
     List.all_eq_true] at h
   obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsrc, hlen⟩, hvars⟩, hres⟩, hown⟩, hps⟩, hl⟩, hr⟩, ho⟩, hkf⟩, hkfo⟩, hdp⟩, hchk⟩ := h
   refine ⟨hsrc, hlen, fun v hv => hvars v hv, hres, fun e => ?_, fun pt hpt => ?_,
     fun jk hjk => ?_, fun jk hjk => ?_, fun o hoo => ?_,
     fun jk hjk => kindFitsB_sound (hkf jk hjk), fun o hoo => kindFitsB_sound (hkfo o hoo),
-    dtorParamsB_sound hdp, ?_⟩
+    dtorParamsB_sound hf hdp, ?_⟩
   · rcases hown with h0 | h0
     · rw [e] at h0; cases h0
     · exact h0
@@ -395,13 +423,27 @@ theorem fnOK2B_sound {P : Prog} {fn : Fn} (h : fnOK2B P fn = true) : FnOK P fn :
         inoutEndB_sound hie⟩
     · cases hchk
 
-/-- `ProgOK` and `ProgCodes` (A2), decided. -/
+/-- `ProgOK` and `ProgCodes` (A2), decided function by function, each at
+    its index: a glue's clause names the function it is (`glueSelfB`). -/
 def progOK2B (P : Prog) : Bool :=
-  P.all fun fn => fnOK2B P fn && stmtCodesB P fn.body
+  (List.range P.length).all fun f => match P[f]? with
+    | some fn => fnOK2B P f fn && stmtCodesB P fn.body
+    | none => true
 
 theorem progOK2B_sound {P : Prog} (h : progOK2B P = true) : ProgOK P ∧ ProgCodes P := by
-  simp only [progOK2B, List.all_eq_true, Bool.and_eq_true] at h
-  exact ⟨fun fn hfn => fnOK2B_sound (h fn hfn).1, fun fn hfn => stmtCodesB_sound (h fn hfn).2⟩
+  have hat : ∀ fn ∈ P, ∃ f, P[f]? = some fn ∧ fnOK2B P f fn = true ∧ stmtCodesB P fn.body = true := by
+    intro fn hfn
+    obtain ⟨f, hlt, hget⟩ := List.mem_iff_getElem.mp hfn
+    have hf : P[f]? = some fn := by rw [List.getElem?_eq_getElem hlt, hget]
+    have := List.all_eq_true.mp h f (List.mem_range.mpr hlt)
+    rw [hf] at this
+    simp only [Bool.and_eq_true] at this
+    exact ⟨f, hf, this.1, this.2⟩
+  refine ⟨fun fn hfn => ?_, fun fn hfn => ?_⟩
+  · obtain ⟨f, hf, h1, _⟩ := hat fn hfn
+    exact fnOK2B_sound hf h1
+  · obtain ⟨_, _, _, h2⟩ := hat fn hfn
+    exact stmtCodesB_sound h2
 
 /-- Phase C for A2, end to end: a program the checker accepts, with an
     entry statement it accepts, never gets stuck from the empty store. -/
