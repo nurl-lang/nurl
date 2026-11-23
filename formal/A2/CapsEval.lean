@@ -89,6 +89,53 @@ theorem ValCapsInp.node_sub {t : Ty} {c d c' d' : Nat} {es es' : List Val} {w : 
   cases hc with
   | elem he => exact hn.child (Child.elem (hs _ he))
 
+/-- Rewriting a clean tree at one node, to a clean node, leaves it clean. -/
+theorem Repl.capsInp {n n' T T' : Val} {w : Var} (hr : Repl n n' T T') (hT : ValCapsInp T w)
+    (hn' : ValCapsInp n' w) : ValCapsInp T' w := by
+  induction hr with
+  | here => exact hn'
+  | @elem t c d pre post e e' _ ih =>
+    refine ValCapsInp.of_children (fun _ _ _ _ _ h => by cases h) (fun x hc => ?_)
+    cases hc with
+    | elem hx =>
+      rcases List.mem_append.mp hx with hx | hx
+      · exact hT.child (Child.elem (List.mem_append_left _ hx))
+      · rcases List.mem_cons.mp hx with rfl | hx
+        · exact ih (hT.child (Child.elem (List.mem_append_right _ (List.mem_cons_self ..))))
+        · exact hT.child (Child.elem (List.mem_append_right _ (List.mem_cons_of_mem _ hx)))
+  | fst _ ih =>
+    refine ValCapsInp.of_children (fun _ _ _ _ _ h => by cases h) (fun x hc => ?_)
+    cases hc with
+    | fst => exact ih (hT.child Child.fst)
+    | snd => exact hT.child Child.snd
+  | snd _ ih =>
+    refine ValCapsInp.of_children (fun _ _ _ _ _ h => by cases h) (fun x hc => ?_)
+    cases hc with
+    | fst => exact hT.child Child.fst
+    | snd => exact ih (hT.child Child.snd)
+  | inl _ ih =>
+    refine ValCapsInp.of_children (fun _ _ _ _ _ h => by cases h) (fun x hc => ?_)
+    cases hc with
+    | inl => exact ih (hT.child Child.inl)
+  | inr _ ih =>
+    refine ValCapsInp.of_children (fun _ _ _ _ _ h => by cases h) (fun x hc => ?_)
+    cases hc with
+    | inr => exact ih (hT.child Child.inr)
+  | pkg _ ih =>
+    refine ValCapsInp.of_children (fun fs te ms e cs h => ?_) (fun x hc => ?_)
+    · cases h; exact hT _ _ _ _ _ (Sub.refl _)
+    · cases hc with
+      | pkg => exact ih (hT.child Child.pkg)
+
+/-- The `Vec` a borrow or an owner names, in an owned slot's tree. -/
+theorem SlotsCaps.nodeOf {m : Mem} {w x o : Var} {T : Val} {t : Ty} {c d : Nat} {es : List Val}
+    (h : SlotsCaps m w) (hn : NodeOf m x o T t c d es) : ValCapsInp T w ∧ ValCapsInp (.node t c d es) w := by
+  obtain ⟨_, _, ho, hor⟩ := hn
+  have hT := h.slot ho
+  rcases hor with ⟨_, rfl⟩ | ⟨_, hs⟩
+  · exact ⟨hT, hT⟩
+  · exact ⟨hT, hT.sub hs⟩
+
 /-- A block's payload, what its holders read and what it owns hold no
     package that captures anything. -/
 theorem MInv.rdCapsInp {m : Mem} {Γ : Ctx} (hM : MInv m Γ) (w : Var) {k : Nat} {bl : Blk}

@@ -3529,7 +3529,20 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hsp : k.spine = [] := src_spine hsrc
       refine ⟨setE Γ1 x E, StmtT.scope ⟨E, by simp [setE], hnrb⟩ hxF
         (StmtT.seq rfl hs.ofNone (StmtT.insert ExprT.lit hyF hpush)) hpx, ?_, by simp, ?_, fun v hv => ?_⟩
-      · refine Inv.mk₀ (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+      · -- (AGORA-963 step 3: the element and the rest of the `Vec` were the `Vec`'s)
+        refine Inv.mk₀ (hi.heldCaps_step (fun p Ep hp hmp _ => by
+            have hpx : p ≠ x := fun h => by
+              rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+            simp only [setE, upd_ne _ _ hpx] at hp
+            exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w _ hcw => by
+            have hN := SlotsCaps.slot hcw.1 hT
+            refine CapsInpAt.of_slots ((SlotsCaps.set (SlotsCaps.set hcw.1 (x := y)
+              (fun V e => by
+                cases e; exact hN.node_sub fun e he => by
+                  rcases List.mem_append.mp he with he | he
+                  · exact List.mem_of_mem_take he
+                  · exact List.mem_of_mem_drop he)) (x := x)
+              (fun V e => by cases e; exact hN.child (Child.elem (List.getElem_mem hn))))) hm)) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (hcov hi.cover) (fun T h => by
             unfold OwnedAt at h; simp [upd_ne _ _ hxy, hmx] at h))
@@ -3607,7 +3620,17 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hyo : y ≠ o := fun e => by subst e; rw [hno.2.2.1] at hmx'; cases hmx'
       refine ⟨setE Γ1 y (compE Ex t), StmtT.scope ⟨compE Ex t, by simp [setE], hnrb⟩ hyF hs hend, ?_,
         by simp, ?_, fun v hv => ?_⟩
-      · refine Inv.mk₀ (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+      · -- (AGORA-963 step 3: the element and the rewritten tree were the tree's)
+        refine Inv.mk₀ (hi.heldCaps_step (fun p Ep hp hmp _ => by
+            have hpx : p ≠ y := fun h => by
+              rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+            simp only [setE, upd_ne _ _ hpx] at hp
+            exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w _ hcw => by
+            obtain ⟨hT, hN⟩ := SlotsCaps.nodeOf hcw.1 hno
+            refine CapsInpAt.of_slots ((SlotsCaps.set (SlotsCaps.set hcw.1 (x := o)
+              (fun V e => by
+                cases e; exact hr.capsInp hT (hN.node_sub fun e he => List.mem_of_mem_eraseIdx he)))
+              (x := y) (fun V e => by cases e; exact hN.child (Child.elem (List.getElem_mem hn))))) hm)) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (hcov hi.cover) (fun T h => by
             unfold OwnedAt at h; simp [upd_ne _ _ hyo, hmx'] at h))
@@ -3683,7 +3706,17 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hyo : y ≠ o := fun e => by subst e; rw [hno.2.2.1] at hmx'; cases hmx'
       refine ⟨setE Γ1 y (compE Ex t), StmtT.scope ⟨compE Ex t, by simp [setE], hnrb⟩ hyF hs hend, ?_,
         by simp, ?_, fun v hv => ?_⟩
-      · refine Inv.mk₀ (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+      · -- (AGORA-963 step 3: the element and the rewritten tree were the tree's)
+        refine Inv.mk₀ (hi.heldCaps_step (fun p Ep hp hmp _ => by
+            have hpx : p ≠ y := fun h => by
+              rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+            simp only [setE, upd_ne _ _ hpx] at hp
+            exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w _ hcw => by
+            obtain ⟨hT, hN⟩ := SlotsCaps.nodeOf hcw.1 hno
+            refine CapsInpAt.of_slots ((SlotsCaps.set (SlotsCaps.set hcw.1 (x := o)
+              (fun V e => by
+                cases e; exact hr.capsInp hT (hN.node_sub fun e he => List.mem_of_mem_eraseIdx he)))
+              (x := y) (fun V e => by cases e; exact hN.child (Child.elem (List.getElem_mem hn))))) hm)) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (hcov hi.cover) (fun T h => by
             unfold OwnedAt at h; simp [upd_ne _ _ hyo, hmx'] at h))
