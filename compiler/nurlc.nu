@@ -52320,8 +52320,11 @@ unsafe @ __src_has_raw_ptr s text → b {
             // owner keeps and releases its own; a value with no copy is
             // refused, as a field of a dying struct is — AGORA-967.)
             : ~ s __mpo ``
-            ? ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) {
-                : ~ s __mq ( nurl_str_cat __ma `` )
+            : s __mjp ( nurl_sym_get2 syms src `__jparts` )
+            // (…a binding given this one's value is over those parts too.)
+            ? != 0 ( nurl_str_len __mjp ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jparts` ) __mjp ) } {}
+            ? | ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) != 0 ( nurl_str_len __mjp ) {
+                : ~ s __mq ( nurl_str_cat3 __ma ` ` __mjp )
                 ~ != 0 ( nurl_str_len __mq ) {
                     : s __mqw ( str_first_word __mq ) = __mq ( str_skip_word __mq )
                     : s __mqt ( nurl_sym_get syms ( nurl_sym_get2 syms __mqw `__bname` ) )
@@ -52495,7 +52498,25 @@ unsafe @ __src_has_raw_ptr s text → b {
                     // field lent out of it, `( getr lb )`, is no cursor
                     // over lb; and an arm that is a bare name moves.)
                     : s __jot ( nurl_sym_get syms ( nurl_sym_get2 syms __jup `__bname` ) )
-                    : b __jcl | != 0 ( nurl_str_len ( __call_owned_by syms __jup ) ) & & & ( __is_handle_ty ty ) ( nurl_sym_has_word syms `__last_phi_idents__` __jw ) ( str_contains_word __jarg __jw ) & != 0 ( nurl_str_len __jot ) ( seq ( nurl_llty ( __udty_val __jot ) ) ( nurl_llty ( __udty_val ty ) ) )
+                    : b __jco != 0 ( nurl_str_len ( __call_owned_by syms __jup ) )
+                    // (An argument of an arm's lending call.)
+                    : b __jarm & ( nurl_sym_has_word syms `__last_phi_idents__` __jw ) ( str_contains_word __jarg __jw )
+                    : b __jwh & != 0 ( nurl_str_len __jot ) ( seq ( nurl_llty ( __udty_val __jot ) ) ( nurl_llty ( __udty_val ty ) ) )
+                    // (Whole, and told apart by its key — a handle, an
+                    // option of one, a struct by its first owned field.)
+                    : b __jcl | __jco & & __jarm __jwh | ( __is_handle_ty ty ) ( __ud_keyable ty )
+                    // (…and a local such a call lends part of, `( ex a )` a
+                    // field of a, or the whole of with no key to tell it by:
+                    // no cursor over it, but handed on by name to a binding
+                    // that outlives it, the value is copied there, or refused
+                    // where it has no copy (__mem_udrop_bind_flag's `__mpo`) —
+                    // `__jparts`. Left out, a capture kept what a literal-built
+                    // local its closure released held, AGORA-967.)
+                    : b __jparm & & ! __jcl __jarm | | ( __is_handle_ty ty ) ( __nc_drop_ty ty ) ( __ud_keyable ty )
+                    ? & & & ! ( seq __jup ptr ) __jparm != 0 ( nurl_str_len __jup ) ( nurl_sym_has_word syms `__user_drops__` __jup ) {
+                        : s __jps ( nurl_sym_get2 syms ptr `__jparts` )
+                        ? ! ( str_contains_word __jps __jup ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jparts` ) ( nurl_str_cat3 __jps ` ` __jup ) ) } {}
+                    } {}
                     ? & & & != 0 ( nurl_str_len __jup ) ! ( seq __jup ptr ) ( nurl_sym_has_word syms `__user_drops__` __jup ) __jcl {
                         ( mem_udrop_link_alias syms ptr __jup )
                         // (…one of them on a run, the arm's: whoever takes
