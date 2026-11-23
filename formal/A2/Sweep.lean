@@ -330,6 +330,20 @@ theorem DataAt.sweep {d : Nat} {n : Val} (h : DataAt m d n) (hd : KeptAddr R m d
   · exact Or.inl ⟨x, T, hT, hs, hn⟩
   · exact Or.inr ⟨k, bl, Mem.sweepR_blk.mpr ⟨hk, hd k bl hk (hs.ids d (by simp))⟩, hs, ty, c, es, rfl⟩
 
+omit hR in
+theorem DataAtM.sweep {d : Nat} {n : Val} (h : DataAtM m d n) (hd : KeptAddr R m d) :
+    DataAtM (m.sweepR R) d n := by
+  rcases h with ⟨x, T, hT, hs, hn⟩ | ⟨k, bl, hk, hs, ty, c, es, rfl, hks⟩
+  · exact Or.inl ⟨x, T, hT, hs, hn⟩
+  · exact Or.inr ⟨k, bl, Mem.sweepR_blk.mpr ⟨hk, hd k bl hk (hs.ids d (by simp))⟩, hs, ty, c, es, rfl, hks⟩
+
+omit hR in
+/-- AGORA-980: a static literal's view keeps its block, which the sweep keeps. -/
+theorem SViewAt.sweep {d o l : Nat} {s : Ty} (h : SViewAt m d o l s) (hd : KeptAddr R m d) :
+    SViewAt (m.sweepR R) d o l s := by
+  obtain ⟨ht, k, bl, c, es, hk, hks, hs, hl, hw⟩ := h
+  exact ⟨ht, k, bl, c, es, Mem.sweepR_blk.mpr ⟨hk, hd k bl hk (hs.ids d (by simp))⟩, hks, hs, hl, hw⟩
+
 /-- What a root reaches, it reaches in the swept store: a handle it holds
     refers to the block it reaches into. -/
 theorem RootNode.sweep {r : Var} {n : Val} (h : RootNode m r n) : RootNode (m.sweepR R) r n := by
@@ -372,8 +386,9 @@ theorem ViewAt.sweep {dep : Dep} {d o l : Nat} {s : Ty} (h : ViewAt m dep d o l 
 theorem ViewsOK.sweep {τ : Ty} {T : Val} {H : List Dep} (h : ViewsOK m τ T H) (hT : Kept R m T) :
     ViewsOK (m.sweepR R) τ T H := by
   intro s v hin
-  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hin
-  exact ⟨d, o, l, rfl, dep, hd, ha.sweep hR (hT.view hin.sub)⟩
+  obtain ⟨d, o, l, rfl, ⟨dep, hd, ha⟩ | hsv⟩ := h s v hin
+  · exact ⟨d, o, l, rfl, .inl ⟨dep, hd, ha.sweep hR (hT.view hin.sub)⟩⟩
+  · exact ⟨d, o, l, rfl, .inr (hsv.sweep (hT.view hin.sub))⟩
 
 omit hR in
 theorem SharesOK.sweep {τ : Ty} {T : Val} (h : SharesOK m τ T) (hT : Kept R m T) :
@@ -400,6 +415,7 @@ theorem ValOK.sweep {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m τ v P H) 
   | view h =>
     obtain ⟨dep, hd, ha⟩ := h
     exact .view ⟨dep, hd, ha.sweep hR (hv.view (Sub.refl _))⟩
+  | sview h => exact .sview (h.sweep (hv.view (Sub.refl _)))
   | pair _ _ ihx ihy => exact .pair (ihx (hv.sub (Sub.fst (Sub.refl _)))) (ihy (hv.sub (Sub.snd (Sub.refl _))))
   | inl _ ih => exact .inl (ih (hv.sub (Sub.inl (Sub.refl _))))
   | inr _ ih => exact .inr (ih (hv.sub (Sub.inr (Sub.refl _))))
