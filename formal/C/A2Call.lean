@@ -1,4 +1,4 @@
-import C.A2Data
+import C.A2Chan
 
 /-!
 # C9: A2's calls, decided (AGORA-970)
@@ -269,19 +269,23 @@ theorem callPost2_supported {Γ : Ctx} {fn : Fn} {args D : List Var} (hs : Suppo
 theorem inferRhs2d_OK (D : List Var) : RhsDec.OK D (inferRhs2d D) :=
   fun _ _ _ _ _ hs hD h => inferRhs2d_ok hs hD h
 
+/-- …and with A3.2's lock and A3.4's channel forms (C8c, `chanRhs`). -/
+theorem inferRhs2c_OK (D : List Var) : RhsDec.OK D (inferRhs2c D) :=
+  fun _ _ _ _ _ hs hD h => inferRhs2c_ok hs hD h
+
 theorem callB2_OK (P : Prog) (D : List Var) : CallDec.OK P D (callB2 P D) := by
   intro Γ F f args E Γ1 hs hD h
   obtain ⟨hct, fn, _, hpost⟩ := callB2_sound hs h
   exact ⟨hct, by rw [hpost]; exact callPost2_supported hs hD⟩
 
-/-- A2's checker so far: core and data right-hand sides, calls, and the core
-    statements, sound for any exits. -/
+/-- A2's checker so far: core, data, lock and channel right-hand sides,
+    calls, and the core statements, sound for any exits. -/
 def checkA2 (P : Prog) (D : List Var) : Ctx → List Var → Stmt → Option Ctx :=
-  checkStmt2 P (inferRhs2d D) (callB2 P D) D
+  checkStmt2 P (inferRhs2c D) (callB2 P D) D
 
 theorem checkA2_sound {P : Prog} {D : List Var} {s : Stmt} {ξ : Exits} {Γ : Ctx} {F : List Var} {Δ : Ctx}
     (hs : Supported2 Γ D) (hD : ∀ v ∈ s.vars, v ∈ D) (h : checkA2 P D Γ F s = some Δ) :
     StmtT P ξ Γ F s Δ ∧ Supported2 Δ D :=
-  checkStmt2_sound (inferRhs2d_OK D) (callB2_OK P D) hs hD h
+  checkStmt2_sound (inferRhs2c_OK D) (callB2_OK P D) hs hD h
 
 end C

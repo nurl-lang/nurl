@@ -1004,6 +1004,9 @@ import C
 #print axioms C.checked_program_safe
 -- Phase C7w: A2's Weaker decided; joins of ite arms and loop rounds by weakening
 #print axioms C.weaker2B_sound
+-- Phase C8c: A3.2's lock and A3.4's channel right-hand sides, decided (AGORA-975)
+#print axioms C.chanRhs_ok
+#print axioms C.inferRhs2c_ok
 -- Phase C7x: A2's exit, decided by obligations on the exits context
 #print axioms C.checkX_sound
 -- Phase C11: A2 end to end - a program the checker accepts never gets stuck from the empty store
