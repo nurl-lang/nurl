@@ -1051,11 +1051,13 @@ theorem dropLoop_live {dtor : α → Heap α → Heap α} {t : Nat}
         rw [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at he
         rw [← he.1, ih (k + 1) (dtor y h) r.1 r.2 hr, hD]
 
-/-- `__vec_release_from v from` with `nurl_vec_move_drop_dtor`: a fresh
-    buffer, the elements `[from, len)` copied into it, the count set to
-    `from`, then the drop loop over the buffer, then the buffer freed. It
-    hands back the heap, the shortened `Vec` (its count `from`) and the
-    elements dropped, in drop order. -/
+/-- `__vec_release_from v from` with `nurl_vec_move_drop_dtor`, as modelled:
+    a fresh buffer, the elements `[from, len)` copied into it, the drop loop
+    over the buffer, then the buffer freed. It hands back the heap, the
+    shortened `Vec` (its count `from`, built after the loop) and the
+    elements dropped, in drop order. (The runtime writes the count before
+    the loop. The model has no place for a destructor to see it, so the
+    order of that write is not modelled.) -/
 def releaseFrom (dtor : α → Heap α → Heap α) (h : Heap α) (v : RVec) (fr : Nat) :
     Option (Heap α × RVec × List α) :=
   if fr ≥ v.len then some (h, v, []) else
