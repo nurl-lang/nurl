@@ -338,12 +338,19 @@ class Fn:
                 j += 1
             cond, c = lines[1:j], lines[j].split()[1]
             body, k = block_of(lines, j + 1)
+            # (the body is a block of its own: `continue` leaves it, `exit 0`,
+            # and `break` leaves it and the loop's, `exit 1`)
             self.depth += 1
-            inner = f"(.ite {self.operand(c)} {self.stmts(body, names)} (.exit 0))"
+            self.depth += 1
+            inner_body = self.stmts(body, names)
+            self.depth -= 1
+            inner = f"(.ite {self.operand(c)} (.block {inner_body}) (.exit 0))"
             loop_body = self.stmts(cond, names, inner)
             self.depth -= 1
             return self.seq(f"(.block (.loop {loop_body}))", self.stmts(lines[k + 1:], names, tail))
         if w == "break":
+            return self.seq("(.exit 1)", self.stmts(lines[1:], names, tail))
+        if w == "continue":
             return self.seq("(.exit 0)", self.stmts(lines[1:], names, tail))
         if w == "match":
             # an option's match: `isl` is 1 for its first variant, None (`F`)
