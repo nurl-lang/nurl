@@ -1,4 +1,5 @@
 import A2.CallMem
+import A2.KillVarsStep
 import A2.SrcKeep
 
 /-! A2 — the call step preserves the invariant and is typed: the call case
@@ -253,8 +254,44 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
       obtain ⟨E0, h0, hm⟩ := h.postdm.2 p E1' h1'
       have := h.post_rootb h0 (hm ▸ hrb)
       rw [h1'] at this; cases this
-      rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)] at hr
-      exact (h.anch.toAnchF hi.toMInv.noRegion) p E1' h0 (hm ▸ hrb) r hr
+      rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)] at hr ⊢
+      -- AGORA-937 (B2/B3): the outer anchors carry over: a held root is bound
+      -- before the call (so below the frame), not `x`, and no argument, so
+      -- none of the placed call's killable names (`killVars_callIn`), and
+      -- a frame binding of the same type in the new context
+      intro hb
+      rcases hi.anch p E1' h0 (hm ▸ hrb) (by simp [Stmt.spine]) r hr hb with hF | ⟨hha, hnk, Er, hEr, hhv⟩
+      · exact Or.inl hF
+      have hlt : r.root < m.nv := hi.nvSt r.root (by rw [← hi.dom, hEr]; rfl)
+      have hrx : r.root ≠ x := fun e => hnk (by simp [Stmt.killVars, e])
+      have hra : r.root ∉ args := fun e => hnk (by simp [Stmt.killVars, e])
+      refine Or.inr ⟨hha, fun hk => ?_, ?_⟩
+      · simp only [callStmt, Stmt.killVars, List.mem_cons, List.mem_append] at hk
+        rcases hk with hk | hk | hk
+        · exact hrx hk
+        · rcases killVars_callIn fn args m.nv x _ hk with hk | hk | hk
+          · exact hrx hk
+          · exact absurd hk (Nat.not_le.mpr hlt)
+          · exact hra (inoutArgs_sub _ _ h.len _ hk)
+        · exact hnk (by simp [Stmt.killVars, hk])
+      · rcases h.ctx_cases r.root with ⟨e, _⟩ | ⟨e, _⟩ | ⟨_, _, _, e, _⟩ | ⟨_, _, _, e, _⟩ |
+            ⟨k2, _, _, hk2, e, _⟩ | ⟨_, _, hc2⟩ | ⟨_, v, _, e⟩
+        · exact absurd e hrx
+        · exact absurd hlt (Nat.not_lt.mpr (by rw [e]; exact Nat.le_add_right _ _))
+        · exact absurd hlt (Nat.not_lt.mpr (by rw [e, Nat.add_zero]; exact Nat.le_add_right _ _))
+        · exact absurd hlt (Nat.not_lt.mpr (by rw [e, Nat.add_zero]; exact Nat.le_add_right _ _))
+        · exact absurd (e ▸ RSetup.getD_mem' (h.len ▸ (List.getElem?_eq_some_iff.mp hk2).1)) hra
+        · obtain ⟨E2, hE2⟩ : ∃ E2, callPost Γ fn args r.root = some E2 := by
+            have := h.postdm.1 r.root; rw [hEr] at this
+            cases h2 : callPost Γ fn args r.root with
+            | none => rw [h2] at this; cases this
+            | some E2 => exact ⟨E2, rfl⟩
+          have hd3 := h.postdt.2 r.root E2 hE2
+          obtain ⟨E3, h3, hd3⟩ := hd3
+          have hE3 : E3 = Er := Option.some.inj (h3.symm.trans hEr)
+          refine ⟨E2.clean, by rw [hc2, hE2]; rfl, ?_⟩
+          rw [clean_ty, hd3.2, hE3]; exact hhv
+        · exact absurd hlt (Nat.not_lt.mpr (by rw [e]; exact Nat.le_add_right _ _))
   spineNd := by
     rw [callStmt_spine, h.body_spine, List.append_nil]
     have hx : x ∉ (m.nv + fn.params.length) :: wrapSpine fn.params m.nv 0 := by
@@ -289,6 +326,28 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
       rw [← hρ]
       show ∃ E, (callS Γ F fn args m.nv x).canon (sigCtx fn) ((callS Γ F fn args m.nv x).ρ k') = some E
       exact ⟨_, h.canon_sigR (sigCtx_of hk') (Nat.le_of_lt (lt_of_get hk'))⟩
+  -- (AGORA-963 step 3: a borrowed parameter outside the call's scopes is the
+  -- caller's, as the call left it; the store binds the parameters to the
+  -- arguments' values, `BindParams.capsInp`, and the result slots to nothing)
+  heldCaps p E hp hrb hns d hd hb' hh hF := by
+    rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
+        ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
+    · exact absurd hrb (resMode_ne' fn)
+    · exact absurd hrb (resMode_ne' fn)
+    · exfalso; apply hns
+      rw [callStmt_spine]
+      exact List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_append_left _
+        (mem_wrapSpine_of hk' (fun b h => by cases h))))
+    · cases hrb
+    · cases hrb
+    · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp
+      rw [clean_mode] at hrb
+      obtain ⟨E0, h0, hm⟩ := h.postdm.2 p E1' h1'
+      have := h.post_rootb h0 (hm ▸ hrb)
+      rw [h1'] at this; cases this
+      rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)] at hd hh
+      have hcw := hi.heldCaps p E1' h0 hrb (by simp [Stmt.spine]) d hd hb' hh hF
+      exact (((hb.capsInp hcw).set_none _ _).set_none _ _).of_st rfl
 
 theorem keep (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} :
     Keep Γ ((callS Γ F fn args m.nv x).canon (sigCtx fn)) (.letcall x f args k) (callStmt fn args m.nv x k) := by
@@ -497,7 +556,9 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
     wf := hi.wf
     noInout := hi.noInout
     rbLive := hi.rootbLive
-    anch := RootbAnch.toR fun p E hp hm => hi.anch p E hp hm (by simp [Stmt.spine])
+    -- AGORA-937 (B3): the arguments are killable names of the `letcall`
+    anch := RootbAnchS.toRS fun p E hp hm =>
+      (hi.anch p E hp hm (by simp [Stmt.spine])).anti fun v hv => by simp [Stmt.killVars, hv]
     postwf := hw1
     postdm := hdm
     reswf := hE
@@ -537,7 +598,7 @@ theorem CallH.widen {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {ba
       rcases List.mem_append.mp hv with hv | hv
       · exact h.Flt v hv
       · exact hG v hv
-    anch := fun p E hp' hm => (h.anch p E hp' hm).mono fun _ hv => List.mem_append_left _ hv
+    anch := h.anch.mono fun _ hv => List.mem_append_left _ hv
     nfree := fun d hd => by simp [mutNames, argNames] at hd }
 
 /-- The `recover` case of preservation. -/
@@ -592,12 +653,18 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
           have : (m0.set x ⟨false, some (.int 1)⟩) = ((m.set x ⟨false, none⟩).set x ⟨false, some (.int 1)⟩) := by
             simp [m0, ho]
           rw [this]; exact hh) (Nat.le_refl _)
-    have hanchΔ : RootbAnchF (setE Γ x (callRes Γ fn [])) F := by
+    have hanchΔ : RootbAnchS (setE Γ x (callRes Γ fn [])) F [x] := by
       intro p Ep hp' hm
       by_cases hpx : p = x
       · subst hpx; simp [setE] at hp'; subst hp'; rw [hEc] at hm; cases hm
       · simp only [setE, upd_ne _ _ hpx] at hp'
-        exact hi.anch p Ep hp' hm (by simp [Stmt.spine])
+        -- AGORA-937 (B2): `x` is a killable name of `letrec x f k`, so a held
+        -- anchor's root is not `x`, which is all the call result's binding changes
+        refine ((hi.anch p Ep hp' hm (by simp [Stmt.spine])).anti fun v hv => ?_).of_tyV
+          fun r Er hr hrV => ⟨Er, ?_, rfl⟩
+        · simp only [List.mem_singleton] at hv; simp [Stmt.killVars, hv]
+        · have hrx : r ≠ x := fun e => hrV (by simp [e])
+          simp [setE, upd_ne _ _ hrx, hr]
     have hsp : (callIn fn [] m.nv x).spine = [m.nv + fn.params.length] := by
       rw [callIn_spine, h.body_spine]; simp [hp, wrapSpine]
     have hKO : KeepOut ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) (setE Γ x (callRes Γ fn []))
@@ -637,7 +704,9 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
     refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, fun _ bl hk _ => ⟨bl, hk, BlkKeep.refl bl⟩,
       h.catchOK _ k⟩
-      hI.pinIn hI.dtorIn
+      hI.pinIn hI.dtorIn (fun v hv => by
+        simp only [recStmt, callStmt, Stmt.killVars, List.mem_cons, List.mem_append] at hv ⊢
+        rcases hv with rfl | (rfl | hv) | hv <;> simp_all)
     · simp only [recStmt, Stmt.vars, List.mem_cons, List.mem_append] at hv
       rcases hv with rfl | (rfl | hv) | hv
       · simp [callStmt, Stmt.vars]

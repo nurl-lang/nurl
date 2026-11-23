@@ -302,7 +302,9 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
   anch p E' hp hm := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hp
     have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
-    rw [hwe.fixed (Or.inl hm')]; exact hi.anch p E hE hm'
+    rw [hwe.fixed (Or.inl hm')]
+    exact fun hps => (hi.anch p E hE hm' hps).of_ty fun r Er hr => by
+      obtain ⟨Er', h', hw'⟩ := hw.get hr; exact ⟨Er', h', hw'.ty⟩
   spineNd := hi.spineNd
   spineDom v hv := by
     obtain ⟨E, hE⟩ := hi.spineDom v hv
@@ -334,6 +336,10 @@ theorem Inv.weaker {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
     refine ⟨E, hE, hd0, hos0, hn0, fun d hdd hnm => ?_⟩
     simp only [Entry.vdeps, hos, hos0, ↓reduceIte, List.nil_append] at hdd ⊢
     exact (hwe.dheld hd0 hos0 hn0 d hnm).mp hdd
+  heldCaps p E' hp hm := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hp
+    have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+    rw [hwe.fixed (Or.inl hm')]; exact hi.heldCaps p E hE hm'
 
 theorem Inv.weaker_iff_wf {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) :
     Weaker Γ Γ := Weaker.refl hi.wf hi.names

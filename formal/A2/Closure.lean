@@ -117,6 +117,17 @@ def envE (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Ent
   ⟨te, .rootb, true, envDeps cs (derive c Ec .self ++ Ec.held ++ shareOf (derive c Ec .self ++ Ec.held)),
     envDeps cs (Ec.held ++ shareOf Ec.held), false, false, false, false⟩
 
+/-- AGORA-937 (B3): an environment's binding has no held anchor: what it
+    holds of the receiver's memory is in its path too, and the rest are
+    shares. -/
+theorem envE_not_heldAnch {c : Var} {Ec : Entry} {te : Ty} {cs : List (Var × PMode × Ty)} {d : Dep} :
+    ¬ HeldAnch (envE c Ec te cs) d := by
+  rintro ⟨hnp, hh, _, hk⟩
+  simp only [envE, mem_envDeps, List.mem_append] at hh hnp
+  obtain ⟨hh | hsh, hw⟩ := hh
+  · exact hnp ⟨Or.inl (Or.inr hh), hw⟩
+  · rw [(mem_shareOf.mp hsh).1] at hk; rcases hk with h | h <;> cases h
+
 /-- The environment's entry without the shares: what its value is valid
     through. -/
 def envE0 (c : Var) (Ec : Entry) (te : Ty) (cs : List (Var × PMode × Ty)) : Entry :=
@@ -689,7 +700,8 @@ theorem Inv.clean {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ 
     nvF := hi.nvF
     anch := fun p E hp hm hs => by
       obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
-      rw [clean_mode] at hm; rw [clean_rootb hm]; exact hi.anch p E0 h0 hm hs
+      rw [clean_mode] at hm; rw [clean_rootb hm]
+      exact (hi.anch p E0 h0 hm hs).of_ty fun r Er hr => ⟨Er.clean, cleanC_of hr, clean_ty Er⟩
     spineNd := hi.spineNd
     spineDom := fun v hv => by
       obtain ⟨E, hE⟩ := hi.spineDom v hv
@@ -709,7 +721,10 @@ theorem Inv.clean {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ 
     dtorIn := hi.dtorIn.of_dbind fun v E hv hd hos hn => by
       obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
       rw [Entry.clean_dbind] at hd; rw [clean_mode] at hos; rw [clean_ty, clean_mode] at hn
-      exact ⟨E0, h0, hd, hos, hn, fun d hdd _ => Entry.clean_vdeps_sub hdd⟩ }
+      exact ⟨E0, h0, hd, hos, hn, fun d hdd _ => Entry.clean_vdeps_sub hdd⟩ 
+    heldCaps := hi.heldCaps.of_rootb fun p E hp hm => by
+        obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
+        rw [clean_mode] at hm; rw [clean_rootb hm]; exact h0 }
 
 theorem derive_clean_sub (y : Var) (E : Entry) (k : Kind) : derive y E.clean k ⊆ derive y E k := by
   unfold derive; rw [clean_mode, clean_ty]
@@ -767,9 +782,13 @@ theorem CallT.clean {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : L
     fun ht => callR_clean_regions (hg ht)⟩
   rotate_left
   · simp only [argE_clean, clean_mode, clean_ty]
-    obtain ⟨hcan, hvec, hnF, hnA, huniq⟩ := hnf d (mutNames_clean Γ args hd)
-    refine ⟨hcan, hvec, hnF, hnA, fun a ha hc' d' hd' hdr => ?_⟩
-    exact huniq a ha hc' d' (clean_vdeps_sub _ hd') hdr
+    obtain ⟨hcan, hvec, hnF, hnA, huniq, hnh⟩ := hnf d (mutNames_clean Γ args hd)
+    refine ⟨hcan, hvec, hnF, hnA, fun a ha hc' d' hd' hdr => ?_, fun p Ep hp hm d' hd' hdr => ?_⟩
+    · exact huniq a ha hc' d' (clean_vdeps_sub _ hd') hdr
+    · obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
+      rw [clean_mode] at hm
+      rw [clean_rootb hm] at hd' ⊢
+      exact hnh p E0 h0 hm d' hd' hdr
   obtain ⟨Ea, hEa, hl, hok, hmv, hpin⟩ := hargs i hi
   refine ⟨Ea.clean, cleanC_of hEa, by rw [clean_live]; exact hl, ?_, fun hm => ?_, fun hs => ?_⟩
   · revert hok
@@ -1857,7 +1876,7 @@ theorem pkg_cap_mut {P : Prog} {m : Mem} {Γ Γ1 : Ctx} (hi : MInv m Γ) {F : Li
         ∀ d' ∈ (argE Γ a).vdeps, d'.root = ci.1 → d'.kind.bound = b := by
   obtain ⟨_, _, _, _, hnf, _, _⟩ := hcT
   have hdm := pkg_cap_mutName hi hc hl ht hslot hci hb hbn zs
-  obtain ⟨_, _, hF, _, hx⟩ := hnf _ hdm
+  obtain ⟨_, _, hF, _, hx, _⟩ := hnf _ hdm
   have hin := pkg_cap_root hi hc hl hslot hci
   rw [hb] at hin
   refine ⟨hF, fun hm => ?_, hx⟩
@@ -2410,7 +2429,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       -- names of the change's bound
       obtain ⟨dm, hdm, hdr⟩ := List.mem_map.mp hm
       have hdm' := hmo dm hdm
-      obtain ⟨_, _, _, _, hoth⟩ := hnf dm hdm'
+      obtain ⟨_, _, _, _, hoth, _⟩ := hnf dm hdm'
       have hbd : dm.kind.bound ≠ .none := by simpa using (List.mem_filter.mp hdm').2
       have hpk : dm.root ≠ c := fun hdc => by
         -- the package itself: a closure, not a `Vec` a closure changes
@@ -2437,7 +2456,7 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
   · -- what the opened call's closures may change is changed by it
     intro d hd
     have hd' := hmo d hd
-    obtain ⟨hcan, hvec, hF, hna, hoth⟩ := hnf d hd'
+    obtain ⟨hcan, hvec, hF, hna, hoth, hnh⟩ := hnf d hd'
     have hbd : d.kind.bound ≠ .none := by simpa using (List.mem_filter.mp hd').2
     have hdlt : d.root < m.nv := by
       cases hE : Γ d.root with
@@ -2447,7 +2466,16 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       | some Er => exact hlt _ Er hE
     have hdne : d.root ≠ m.nv := fun e => by rw [e] at hdlt; exact Nat.lt_irrefl _ hdlt
     rw [hargE _ hdne]
-    refine ⟨hcan, hvec, fun hm => ?_, ?_, fun a ha hty d' hd'' hdr => ?_⟩
+    refine ⟨hcan, hvec, fun hm => ?_, ?_, fun a ha hty d' hd'' hdr => ?_,
+      -- (AGORA-937 B3: the opened call's borrowed parameters are the outer
+      -- ones and the environment, which holds no held anchor)
+      fun p Ep hp hm d' hd' hdr hha => ?_⟩
+    rotate_right
+    · by_cases hpn : p = m.nv
+      · subst hpn; simp only [setE, upd_same, Option.some.injEq] at hp; subst hp
+        exact absurd hha envE_not_heldAnch
+      · simp only [setE, upd_ne _ _ hpn] at hp
+        exact hnh p Ep hp hm d' hd' hdr hha
     · rcases List.mem_append.mp hm with hm | hm
       · exact hF hm
       · exact (mem_heldN.mp hm).2 (List.mem_map_of_mem hd)
@@ -2878,6 +2906,19 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
     have hFe' : m.nv ∉ F ++ H := fun h => (List.mem_append.mp h).elim hFe hHe
     have hEe : Γe m.nv = some Ee := by simp [Γe, setE]
     have hxe' : Γe x = none := by simp [Γe, setE, upd_ne _ _ hxe, hxc]
+    -- what the opened call's closures may change, the call through the
+    -- package may
+    have hMc : ∀ d ∈ mutNames Γe (m.nv :: zs ++ cs.map (·.1)), d ∈ mutNames Γ (c :: zs) := by
+      intro d hd
+      refine mutNames_clean Γ (c :: zs) (mutNames_open (cleanC_none.mpr hΓe0) hcc hnint
+        (fun a ha e => by have := vlt (hzlt a ha); have := veq e; omega) (fun ci hci => ⟨?_, ?_⟩) d hd)
+      · obtain ⟨Ev, hEv, _⟩ := hcap ci hci
+        exact fun e => by rw [e, hΓe0] at hEv; cases hEv
+      · obtain ⟨Ev, hEv, _, _, _, _, hvd, _⟩ := hcap ci hci
+        rw [argE_clean]
+        have hae' : argE Γ ci.1 = Ev := by unfold argE; rw [hEv]; rfl
+        rw [hae']
+        exact List.eq_nil_of_subset_nil (hvd ▸ clean_vdeps_sub Ev)
     have hIe : Inv (envMem m env) Γe (F ++ H) (.letcall x f (m.nv :: zs ++ cs.map (·.1)) k) :=
       { toMInv := hie
         nvS := by
@@ -2899,9 +2940,69 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
         anch := fun p E hp hm _ => by
           by_cases hpe : p = m.nv
           · subst hpe; simp only [Γe, setE, upd_same, Option.some.injEq] at hp; subst hp
-            exact fun d hd hb => List.mem_append_right _ (hZ d hd hb)
+            exact fun d hd hb => Or.inl (List.mem_append_right _ (hZ d hd hb))
           · simp only [Γe, setE, upd_ne _ _ hpe] at hp
-            exact fun d hd hb' => List.mem_append_left _ (hic.anch p E hp hm (by simp [Stmt.spine]) d hd hb')
+            -- AGORA-937 B2 (AGORA-963): an outer held root is a read capture of
+            -- the package at most (the closure-capture clause); if it is one,
+            -- the call lends it (`H`); else it is none of the call's names
+            obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
+            rw [clean_mode] at hm
+            rw [clean_rootb hm]
+            intro d hd hb
+            by_cases hdF : d.root ∈ F
+            · exact Or.inl (List.mem_append_left _ hdF)
+            rcases hi.anch p E0 h0 hm (by simp [Stmt.spine]) d hd hb with hF' | ⟨hha, hnk, Er, hEr, hhv⟩
+            · exact absurd hF' hdF
+            have hrlt : d.root < m.nv := hlt _ _ hEr
+            have hrne : d.root ≠ m.nv := fun e => by rw [e] at hrlt; exact Nat.lt_irrefl _ hrlt
+            have hinp : ∀ q ∈ cs, q.1 = d.root → q.2.1 = .inp :=
+              (hi.heldCaps p E0 h0 hm (by simp [Stmt.spine]) d hd hb hha hdF).1 c o _ hslot fs te _ env cs (Sub.refl _)
+            obtain ⟨sig', hσ', hlen', _, hnf, _⟩ := hcT
+            rw [hσ] at hσ'; cases hσ'
+            have hzr : zs.length = rest.length := by rw [hsp] at hlen'; simpa using hlen'
+            by_cases hcp : d.root ∈ cs.map (·.1)
+            · refine Or.inl (List.mem_append_right _ (mem_heldN.mpr ⟨?_, ?_⟩))
+              · have hrx : d.root ≠ x := fun e => hnk (by simp [Stmt.killVars, e])
+                have hnm : d.root ∉ movedArgs fn.params (m.nv :: zs ++ cs.map (·.1)) := fun hmv => by
+                  obtain ⟨i, pt, hpi, hpm, hia⟩ := mem_movedArgs hmv
+                  have hil : i < fn.params.length := (List.getElem?_eq_some_iff.mp hpi).1
+                  have hal : (m.nv :: zs ++ cs.map (·.1)).length = fn.params.length := by
+                    rw [hps]; simp [hzr]
+                  have hai : (m.nv :: zs ++ cs.map (·.1))[i]? = some d.root := by
+                    rw [hia, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (hal ▸ hil)]; rfl
+                  rcases Nat.lt_or_ge i (zs.length + 1) with hi1 | hi1
+                  · cases i with
+                    | zero => simp at hai; exact hrne hai.symm
+                    | succ k =>
+                      have hk : k < zs.length := by omega
+                      have hz : zs[k]? = some d.root := by
+                        simpa [List.getElem?_cons_succ, List.getElem?_append_left hk] using hai
+                      exact hnk (by simp [Stmt.killVars, List.mem_of_getElem? hz])
+                  · rw [hps] at hpi
+                    obtain ⟨q, hq, hq1, hq2⟩ := capPos_any hzr.symm hi1 hai hpi
+                    exact hpm (by rw [← hq2]; exact hinp q hq hq1)
+                simp only [heldFor, List.mem_filter, List.mem_range, Bool.and_eq_true, bne_iff_ne, ne_eq,
+                  Bool.not_eq_true', List.contains_eq_mem, decide_eq_false_iff_not]
+                exact ⟨hrlt, hrx, hnm⟩
+              · intro hr
+                obtain ⟨dm, hdm, hdr⟩ := List.mem_map.mp hr
+                have hdm' : dm ∈ mutNames Γ (c :: zs) := hMc dm hdm
+                obtain ⟨_, _, _, _, huni, _⟩ := hnf dm hdm'
+                have hbd : dm.kind.bound ≠ .none := by simpa using (List.mem_filter.mp hdm').2
+                obtain ⟨q, hq, hq1⟩ := List.mem_map.mp hcp
+                have hae : argE Γ c = Ec := by unfold argE; rw [hc]; rfl
+                have hin := pkg_cap_root hi.toMInv hc hlc hslot hq
+                have := huni c List.mem_cons_self (by rw [hae]; exact Or.inl hnint)
+                  ⟨q.1, .name q.2.1.bound q.2.2⟩ (by rw [hae]; unfold Entry.vdeps; exact List.mem_append_right _ hin)
+                  (by rw [hdr]; exact hq1)
+                rw [hinp q hq hq1] at this
+                exact hbd this.symm
+            · refine Or.inr ⟨hha, fun hin => ?_, Er.clean, ?_, by rw [clean_ty]; exact hhv⟩
+              · simp only [Stmt.killVars, List.mem_cons, List.mem_append, List.cons_append] at hin
+                have hk' : d.root ∉ x :: c :: zs ++ k.killVars := by simpa [Stmt.killVars] using hnk
+                simp only [List.mem_cons, List.mem_append, not_or] at hk'
+                grind
+              · simp [Γe, setE, upd_ne _ _ hrne, cleanC_of hEr]
         spineNd := by simp [Stmt.spine]
         spineDom := by simp [Stmt.spine]
         catchOK := catchOK_src (by simp [Stmt.src, hk])
@@ -2915,7 +3016,22 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
         pinOut := pinOut_nil rfl
         pinIn := trivial
         dtorOut := dtorOut_nil rfl
-        dtorIn := trivial }
+        dtorIn := trivial
+        -- (AGORA-963 step 3: the environment's binding holds no held anchor; any
+        -- other borrowed parameter is the caller's; the store lends the
+        -- package's environment, a part of it, to the fresh binding)
+        heldCaps := fun p E hp hm _ d hd hb' hh hF => by
+          by_cases hpe : p = m.nv
+          · subst hpe; simp only [Γe, setE, upd_same, Option.some.injEq] at hp; subst hp
+            exact absurd hh envE_not_heldAnch
+          · simp only [Γe, setE, upd_ne _ _ hpe] at hp
+            obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
+            rw [clean_mode] at hm
+            rw [clean_rootb hm] at hd hh
+            have hcw := hi.heldCaps p E0 h0 hm (by simp [Stmt.spine]) d hd hb' hh
+              (fun h => hF (List.mem_append_left _ h))
+            exact (hcw.set (x := m.nv) (o := false) (fun V e => by
+              cases e; exact ((hcw.slot hslot).child Child.pkg).lend)).of_st rfl }
     have h := callH_of hP hf hxe' hxF' hcT' hIe
     have hI := h.inv hIe hb
     -- the environment's binding, where the call leaves it
@@ -2976,7 +3092,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
     have hMr : ∀ v E0, Γ v = some E0 → E0.mode = .rootb →
         ∀ d ∈ mutNames Γ (c :: zs), hits d.kind.bound false d.root E0 = false := by
       intro v E0 hv hrbv d hd
-      obtain ⟨_, _, hF, _, _⟩ := hnf d hd
+      obtain ⟨_, _, hF, _, _, hnh⟩ := hnf d hd
       have hanch := hi.anch v E0 hv hrbv (by simp [Stmt.spine])
       obtain ⟨hdn, hbd⟩ := List.mem_filter.mp hd
       have hb' : d.kind.bound ≠ .none := by simpa using hbd
@@ -3013,7 +3129,10 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
             | _ => exact absurd rfl hb'
       exact RSetup.hits_false_of (fun d' hd' hr' => by
         by_cases hb0 : d'.kind.bound = .none
-        · exact absurd (hr' ▸ hanch d' hd' hb0) hF
+        · rcases hanch d' hd' hb0 with h' | ⟨hha, _⟩
+          · exact absurd (hr' ▸ h') hF
+          · -- AGORA-937 (B3): the call's by-name change spares a held view (`NamesFree`)
+            exact hnh v E0 hv hrbv d' hd' hr' hha
         · exact RSetup.kills_isName hbr _ (RSetup.isName_of_bound hb0))
     have hcapW : ∀ ci ∈ cs, ∃ Ev, Γ ci.1 = some Ev ∧ Ev.vdeps = [] ∧ Ev.mode = .own ∧
         ci.2.2.holdsView = false ∧ (ci.2.1 = .inp ∨ ∃ b, ci.2.1 = .inout b ∧ ci.1 ∉ zs ∧
@@ -3036,19 +3155,6 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
       (hV := fun hd => absurd hd (by simp [callRes]))
     have hnf' := NameWF.setE hn1 (fun Ex h' => by rw [hx1] at h'; cases h')
       (fun Ex h' => by rw [hx1] at h'; cases h') (recvRes_named (c := c) (Ec := Ec) hEn)
-    -- what the opened call's closures may change, the call through the
-    -- package may
-    have hMc : ∀ d ∈ mutNames Γe (m.nv :: zs ++ cs.map (·.1)), d ∈ mutNames Γ (c :: zs) := by
-      intro d hd
-      refine mutNames_clean Γ (c :: zs) (mutNames_open (cleanC_none.mpr hΓe0) hcc hnint
-        (fun a ha e => by have := vlt (hzlt a ha); have := veq e; omega) (fun ci hci => ⟨?_, ?_⟩) d hd)
-      · obtain ⟨Ev, hEv, _⟩ := hcap ci hci
-        exact fun e => by rw [e, hΓe0] at hEv; cases hEv
-      · obtain ⟨Ev, hEv, _, _, _, _, hvd, _⟩ := hcap ci hci
-        rw [argE_clean]
-        have hae' : argE Γ ci.1 = Ev := by unfold argE; rw [hEv]; rfl
-        rw [hae']
-        exact List.eq_nil_of_subset_nil (hvd ▸ clean_vdeps_sub Ev)
     have hW := weaker_open (x := x) (te := te) (cs := cs) hi.wf hi.rootbLive hi.noInout hΓe0 hzs hc hlc
       hnint hxe hps hsp hzr hty hown hl hr ho (fun jk h' => (hlends jk h').2) (fun jk h' => (hrholds jk h').2)
       hnz hbl hbr hbo hrb hio hcapW hMr hMc hse hwf hnf'
@@ -3150,7 +3256,79 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
                   rw [h1'] at this; cases this
                   rw [clean_rootb hm]
                   simp only [Γe, setE, upd_ne _ _ hs'.1] at h0
-                  exact hic.anch p E1' h0 hm (by simp [Stmt.spine])
+                  -- AGORA-937 B2 (AGORA-963): an outer held root is below the frame,
+                  -- not `x`, no argument but a read capture (the closure-capture
+                  -- clause), so none of the new statement's killable names; and a
+                  -- frame binding of the same type after the call
+                  obtain ⟨E0', h0', rfl⟩ := cleanC_some h0
+                  rw [clean_mode] at hm
+                  rw [clean_rootb hm]
+                  intro d hd hb
+                  by_cases hdF : d.root ∈ F
+                  · exact Or.inl hdF
+                  rcases hi.anch p E0' h0' hm (by simp [Stmt.spine]) d hd hb with hF' | ⟨hha, hnk, Er, hEr, hhv⟩
+                  · exact absurd hF' hdF
+                  have hrlt : d.root < m.nv := hlt _ _ hEr
+                  have hrne : d.root ≠ m.nv := fun e => by rw [e] at hrlt; exact Nat.lt_irrefl _ hrlt
+                  have hrx : d.root ≠ x := fun e => hnk (by simp [Stmt.killVars, e])
+                  have hrz : d.root ∉ zs := fun e => hnk (by simp [Stmt.killVars, e])
+                  have hrk : d.root ∉ k.killVars := fun e => hnk (by simp [Stmt.killVars, e])
+                  have hinp : ∀ q ∈ cs, q.1 = d.root → q.2.1 = .inp :=
+                    (hi.heldCaps p E0' h0' hm (by simp [Stmt.spine]) d hd hb hha hdF).1 c o _ hslot fs te _ env cs (Sub.refl _)
+                  -- it is at no `inout` parameter of the opened call
+                  have hnio : ∀ (i : Nat) (b : Eff) (t : Ty), fn.params[i]? = some (PMode.inout b, t) →
+                      (m.nv :: zs ++ cs.map (·.1))[i]? ≠ some d.root := by
+                    intro i b t hpi hai
+                    rcases Nat.lt_or_ge i (zs.length + 1) with hi1 | hi1
+                    · cases i with
+                      | zero => simp at hai; exact hrne hai.symm
+                      | succ k' =>
+                        have hk : k' < zs.length := by omega
+                        have hz : zs[k']? = some d.root := by
+                          simpa [List.getElem?_cons_succ, List.getElem?_append_left hk] using hai
+                        exact hrz (List.mem_of_getElem? hz)
+                    · rw [hps] at hpi
+                      obtain ⟨q, hq, hq1, hq2⟩ := capPos_any hzr.symm hi1 hai hpi
+                      have := hinp q hq hq1
+                      rw [hq2] at this; cases this
+                  have hal : (m.nv :: zs ++ cs.map (·.1)).length = fn.params.length := by
+                    rw [hps]; simp [hzr]
+                  refine Or.inr ⟨hha, fun hin => ?_, ?_⟩
+                  · simp only [Stmt.killVars, List.mem_cons, List.mem_append] at hin
+                    rcases hin with h1 | (h1 | h1) | h1
+                    · exact hrx h1
+                    · exact hrne h1
+                    · rcases killVars_callIn fn _ (m.nv + 1) x _ h1 with h2 | h2 | h2
+                      · exact hrx h2
+                      · exact absurd hrlt (Nat.not_lt.mpr (Nat.le_trans (Nat.le_succ _) h2))
+                      · obtain ⟨i, b, t, hpi, hai⟩ := inoutArgs_pos _ _ hal _ h2
+                        exact hnio i b t hpi hai
+                    · exact hrk h1
+                  · rcases h.ctx_cases d.root with ⟨e, _⟩ | ⟨e, _⟩ | ⟨_, _, _, e, _⟩ | ⟨_, _, _, e, _⟩ |
+                        ⟨k2, b2, t2, hk2, e, _⟩ | ⟨_, _, hc2⟩ | ⟨_, v, _, e⟩
+                    · exact absurd e hrx
+                    · exact absurd hrlt (Nat.not_lt.mpr (by rw [e]; show m.nv ≤ m.nv + 1 + _; omega))
+                    · exact absurd hrlt (Nat.not_lt.mpr (by rw [e]; show m.nv ≤ m.nv + 1 + 0 + _; omega))
+                    · exact absurd hrlt (Nat.not_lt.mpr (by rw [e]; show m.nv ≤ m.nv + 1 + 0 + _; omega))
+                    · have hil : k2 < fn.params.length := (List.getElem?_eq_some_iff.mp hk2).1
+                      refine absurd ?_ (hnio k2 b2 t2 hk2)
+                      rw [e, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (hal ▸ hil)]; rfl
+                    · obtain ⟨E2, hE2⟩ : ∃ E2, callPost Γe fn (m.nv :: zs ++ cs.map (·.1)) d.root = some E2 := by
+                        have h3 := h.postdm.1 d.root
+                        have hΓer : Γe d.root = some Er.clean := by
+                          simp [Γe, setE, upd_ne _ _ hrne, cleanC_of hEr]
+                        rw [hΓer] at h3
+                        cases h2 : callPost Γe fn (m.nv :: zs ++ cs.map (·.1)) d.root with
+                        | none => rw [h2] at h3; cases h3
+                        | some E2 => exact ⟨E2, rfl⟩
+                      have hd3 := h.postdt.2 d.root E2 hE2
+                      obtain ⟨E3, h3, hd3⟩ := hd3
+                      have hE3 : E3 = Er.clean := by
+                        have : Γe d.root = some Er.clean := by simp [Γe, setE, upd_ne _ _ hrne, cleanC_of hEr]
+                        exact Option.some.inj (h3.symm.trans this)
+                      refine ⟨E2.clean, by rw [hc2, hE2]; rfl, ?_⟩
+                      rw [clean_ty, hd3.2, hE3, clean_ty]; exact hhv
+                    · exact absurd hrlt (Nat.not_lt.mpr (by rw [e]; show m.nv ≤ m.nv + 1 + _; omega))
               spineNd := by
                 simp only [Stmt.spine, List.nodup_cons, List.mem_cons, not_or] at hnd ⊢
                 exact ⟨⟨hxe, hnd.1⟩, fun h' => Nat.lt_irrefl _ (hcin _ h'), hnd.2⟩
@@ -3236,7 +3414,38 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
                     obtain ⟨E0, h0, hd0⟩ := h.post_dbind h1 hd
                     rw [hEe] at h0; cases h0
                     exact absurd hd0 (by simp [Ee, envE])
-                · exact h.spine_dbind v hv' E hE }
+                · exact h.spine_dbind v hv' E hE
+              -- (AGORA-963 step 3: a borrowed parameter outside the call is the
+              -- caller's, as the call left it; the store lends the environment,
+              -- then binds the parameters, `BindParams.capsInp`)
+              heldCaps := fun p Ep hp hm hs d hd hb' hh hF => by
+                have hs' : p ≠ m.nv ∧ p ∉ (callStmt fn (m.nv :: zs ++ cs.map (·.1)) (m.nv + 1) x k).spine := by
+                  refine ⟨fun e => hs ((hssp p).mpr (Or.inl e)), fun h' => hs ((hssp p).mpr (Or.inr h'))⟩
+                rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
+                    ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
+                · exact absurd hm (resMode_ne' fn)
+                · exact absurd hm (resMode_ne' fn)
+                · exfalso; apply hs'.2
+                  rw [callStmt_spine]
+                  exact List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_append_left _
+                    (mem_wrapSpine_of hk' (fun b h => by cases h))))
+                · cases hm
+                · cases hm
+                · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp
+                  rw [clean_mode] at hm
+                  obtain ⟨E0, h0, hm0⟩ := h.postdm.2 p E1' h1'
+                  have := h.post_rootb h0 (hm0 ▸ hm)
+                  rw [h1'] at this; cases this
+                  rw [clean_id (Or.inr hm) (h.post_live_rootb h1' hm)] at hd hh
+                  simp only [Γe, setE, upd_ne _ _ hs'.1] at h0
+                  obtain ⟨E2, h2, rfl⟩ := cleanC_some h0
+                  rw [clean_mode] at hm
+                  rw [clean_rootb hm] at hd hh
+                  have hcw := hi.heldCaps p E2 h2 hm (by simp [Stmt.spine]) d hd hb' hh hF
+                  have he : CapsInpAt (envMem m env) d.root :=
+                    (hcw.set (x := m.nv) (o := false) (fun V e => by
+                      cases e; exact ((hcw.slot hslot).child Child.pkg).lend)).of_st rfl
+                  exact (((hb.capsInp he).set_none _ _).set_none _ _).of_st rfl }
     · have hve : v ≠ m.nv := fun e => by rw [e, hΓe0] at hv; cases hv
       have hv' : Γe v = some E.clean := by simp only [Γe, setE, upd_ne _ _ hve]; exact cleanC_of hv
       obtain ⟨hns, E', h', hm', ht', hrb'⟩ := hkeep.1 v E.clean hv' (by simp [Stmt.spine])

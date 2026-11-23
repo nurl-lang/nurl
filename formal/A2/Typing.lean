@@ -1511,6 +1511,13 @@ def killNames (ds : List Dep) (Γ : Ctx) : Ctx :=
 def callPost (Γ : Ctx) (fn : Fn) (args : List Var) : Ctx :=
   killNames (mutNames Γ args) (callPostAux Γ fn args fn.params args 0 Γ)
 
+/-- AGORA-937 (3d, route U): a lent `Vec`'s view of memory it holds (not
+    of what it borrows from): its node lands through its path
+    (`bor_lands_vec`), so this one may be anchored by an unfrozen root that
+    is changed only strictly inside its elements. -/
+def HeldAnch (E : Entry) (d : Dep) : Prop :=
+  d ∉ E.path ∧ d ∈ E.held ∧ (∃ t, E.ty = .vec t) ∧ (d.kind = .view ∨ d.kind = .self)
+
 /-- A binding a closure handed to a call may change is changed by the call:
     it allows the change, is a `Vec` whose elements hold no views, is not
     lent out, not passed beside the closure but as an `inout` argument of
@@ -1523,8 +1530,15 @@ def NamesFree (Γ : Ctx) (F : List Var) (ps : List (PMode × Ty)) (args : List V
     (∃ s, (argE Γ d.root).ty = .vec s ∧ s.holdsView = false) ∧ d.root ∉ F ∧
     (d.root ∉ args ∨ ∃ (i : Nat) (t : Ty), args[i]? = some d.root ∧
       ps[i]? = some (PMode.inout d.kind.bound, t)) ∧
-    ∀ a ∈ args, ((argE Γ a).ty ≠ .int ∨ (argE Γ a).mode = .rootb) →
-      ∀ d' ∈ (argE Γ a).vdeps, d'.root = d.root → d'.kind.bound = d.kind.bound
+    (∀ a ∈ args, ((argE Γ a).ty ≠ .int ∨ (argE Γ a).mode = .rootb) →
+      ∀ d' ∈ (argE Γ a).vdeps, d'.root = d.root → d'.kind.bound = d.kind.bound) ∧
+    -- AGORA-937 (B3): ... and the change by name ends no borrowed
+    -- parameter's held view (`HeldAnch`, as `HeldSpared` reads it). Where
+    -- every anchor is in `F` this follows from `d.root ∉ F`; a held anchor
+    -- outside `F` (route U) is the case it is asked for, as `CallThruOK`'s
+    -- `w ∉ roots (mutNames Γ args)`.
+    ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → ∀ d' ∈ Ep.vdeps, d'.root = d.root → HeldAnch Ep d' →
+      d.kind.bound.kills false d'.kind = false
 
 def PMode.moves : PMode → Bool
   | .inp => false
@@ -1726,13 +1740,6 @@ theorem ThruCanDo.toCanDo {Er : Entry} {e : Eff} (h : ThruCanDo Er e) (hnr : Er.
   h.resolve_right fun ⟨hr, _⟩ => hnr hr
 
 theorem ThruCanDo.of_canDo {Er : Entry} {e : Eff} (h : canDo Er.mode e) : ThruCanDo Er e := Or.inl h
-
-/-- AGORA-937 (3d, route U): a lent `Vec`'s view of memory it holds (not
-    of what it borrows from): its node lands through its path
-    (`bor_lands_vec`), so this one may be anchored by an unfrozen root that
-    is changed only strictly inside its elements. -/
-def HeldAnch (E : Entry) (d : Dep) : Prop :=
-  d ∉ E.path ∧ d ∈ E.held ∧ (∃ t, E.ty = .vec t) ∧ (d.kind = .view ∨ d.kind = .self)
 
 /-- ... read off the entry's path, held and type alone. -/
 theorem HeldAnch.of_eq {E E' : Entry} {d : Dep} (hp : E'.path = E.path) (hh : E'.held = E.held)
