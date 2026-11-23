@@ -938,3 +938,12 @@ import B
 #print axioms B.rcNew_ok
 #print axioms B.rcShare_ok
 #print axioms B.rcRelease_ok
+-- Phase B4: `HashMap` (stdlib/std/hashmap.nu): probes in bounds, sound and total; no write over an entry
+#print axioms B.mask_eq_mod
+#print axioms B.probe_found
+#print axioms B.probe_insert
+#print axioms B.probe_total
+#print axioms B.set_probe_answers
+#print axioms B.mapInsert_ok
+#print axioms B.mapReplace_ok
+#print axioms B.mapRemove_ok
