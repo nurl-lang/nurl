@@ -394,6 +394,16 @@ class Fn:
         return self.pvar(op)
 
     def intrinsic(self, words, rest, x=None):
+        """A standard-library call A2 has a construct for, or None. An
+        argument it only reads may be a struct's field (`v3/name`), read
+        through the pairs into a temporary (`field_temp`) that lends it."""
+        fpre = []
+        def rd(op):
+            return self.field_temp(op, fpre) if "/" in op else self.pvar(op)
+        got = self._intrinsic(words, rest, x, rd)
+        return None if got is None else self.wrap(fpre, got)
+
+    def _intrinsic(self, words, rest, x, rd):
         """A standard-library call A2 has a construct for, or None."""
         f, n = words[1], int(words[2])
         ops = words[3:3 + n]
@@ -404,7 +414,7 @@ class Fn:
             # it reads its argument: the read checked live
             if ops[0] == "c":
                 return rest
-            y = self.pvar(ops[0])
+            y = rd(ops[0])
             ty = self.vlean(int(ops[0][1:])) if "/" not in ops[0] else lean_ty(self.vty(ops[0]))
             e = f"(.slen {y})" if ty.startswith("(.slice") else f"(.len {y})" if ty.startswith("(.vec") else f"(.var {y})"
             t = self.fresh()
@@ -416,21 +426,21 @@ class Fn:
             for op in ops:
                 if op != "c":
                     t = self.fresh()
-                    s = f"(.letv {t} (.expr (.len {self.pvar(op)})) {s})"
+                    s = f"(.letv {t} (.expr (.len {rd(op)})) {s})"
             return s
         if f == "nurl_str_len" and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.expr (.len {self.pvar(ops[0])})) {rest})"
+            return f"(.letv {x} (.expr (.len {rd(ops[0])})) {rest})"
         if f == "string_from" and n == 1:
             # a fresh owned String of a text the IR does not track
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.new .int) {rest})"
         if f == "string_data" and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.view {self.pvar(ops[0])}) {rest})"
+            return f"(.letv {x} (.view {rd(ops[0])}) {rest})"
         if f == "string_len" and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.expr (.len {self.pvar(ops[0])})) {rest})"
+            return f"(.letv {x} (.expr (.len {rd(ops[0])})) {rest})"
         if f.startswith("vec_new__") and n == 0:
             x = self.fresh() if x is None else x
             return f"(.letv {x} (.new {vec_elem(f, 'vec_new__')}) {rest})"
@@ -443,10 +453,10 @@ class Fn:
             return s
         if f.startswith("vec_len__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.expr (.len {self.pvar(ops[0])})) {rest})"
+            return f"(.letv {x} (.expr (.len {rd(ops[0])})) {rest})"
         if f.startswith("slice_from_vec__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.view {self.pvar(ops[0])}) {rest})"
+            return f"(.letv {x} (.view {rd(ops[0])}) {rest})"
         if f.startswith("vec_at__") and n == 2 and ops[0] != "c":
             # a bounds-checked element read; only a scalar element, whose
             # value is copied out, is translated (a lent aggregate element
@@ -457,13 +467,13 @@ class Fn:
             i = self.operand(ops[1], pre)
             if x is None:
                 t = self.fresh()
-                s = self.seq(f"(.letv {t} (.at {self.pvar(ops[0])} {i}) .skip)", rest)
+                s = self.seq(f"(.letv {t} (.at {rd(ops[0])} {i}) .skip)", rest)
             else:
-                s = f"(.letv {x} (.at {self.pvar(ops[0])} {i}) {rest})"
+                s = f"(.letv {x} (.at {rd(ops[0])} {i}) {rest})"
             return self.wrap(pre, s)
         if f.startswith("slice_len__") and n == 1 and ops[0] != "c":
             x = self.fresh() if x is None else x
-            return f"(.letv {x} (.expr (.slen {self.pvar(ops[0])})) {rest})"
+            return f"(.letv {x} (.expr (.slen {rd(ops[0])})) {rest})"
         return None
 
     def call(self, words, names, rest, x=None):
@@ -612,6 +622,9 @@ class Fn:
         if w == "assign":
             if not (head[1].startswith("v") and head[1][1:].isdigit()):
                 raise Unsupported(f"{self.fn['name']}: store to {head[1]}")
+            if self.fn["vars"].get(int(head[1][1:])) == "void":
+                # a join's value that no one takes (a `void` holder): nothing moves
+                return self.stmts(lines[1:], names, tail)
             pre = []
             r = self.rhs(head[2:], int(head[1][1:]), pre, assign=True)
             return self.seq(self.wrap(pre, f"(.assign {self.pvar(head[1])} ({r}))"),

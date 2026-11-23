@@ -192,7 +192,12 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
           else match ra.tail, rb.tail with
             | some (_, Γe), _ => if exitToB D Γe rb.Δ then some ⟨rb.Δ, ra.E ++ rb.E, none⟩ else none
             | none, some (_, Γe) => if exitToB D Γe ra.Δ then some ⟨ra.Δ, ra.E ++ rb.E, none⟩ else none
-            | none, none => none
+            -- (C7w: the arms' ends joined by weakening, as `checkStmt2`'s)
+            | none, none =>
+              if ctxWF2B D Γ && nameWFB D Γ && weaker2B D ra.Δ (joinCand ra.Δ rb.Δ) &&
+                  weaker2B D rb.Δ (joinCand ra.Δ rb.Δ) then
+                some ⟨joinCand ra.Δ rb.Δ, ra.E ++ rb.E, none⟩
+              else none
         | _, _ => none
       else none
   | Γ, F, .letv x r s =>
@@ -379,7 +384,19 @@ theorem checkX_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : 
                 obtain ⟨h1, h2⟩ := OblOK.append hξ
                 exact .ite ha hb (checkExpr2_sound hce) (ta ξ h1) (hre ra.Δ sa hto ξ h2)
               · cases h
-            · cases h
+            · split at h
+              · rename_i hj
+                simp only [Bool.and_eq_true] at hj
+                obtain ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩ := hj
+                simp only [Option.some.injEq] at h; subst h
+                have sj := joinCand_supported (Δb := rb.Δ) sa
+                have wΓ := weaker_self2 hs h1 h2
+                refine ⟨sj, hE, fun ξ hξ => ?_, fun n' Γe' ht => (by cases ht)⟩
+                obtain ⟨k1, k2⟩ := OblOK.append hξ
+                exact .ite ha hb (checkExpr2_sound hce)
+                  (.sub wΓ (ta ξ k1) (Or.inr (weaker2B_sound sa sj h3)))
+                  (.sub wΓ (tb ξ k2) (Or.inr (weaker2B_sound sb sj h4)))
+              · cases h
         · cases h
       · cases h
   | letv x r s ih =>
