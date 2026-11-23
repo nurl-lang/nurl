@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind` and `scopeL`, whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL` and `insert`, whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -305,6 +305,67 @@ theorem liveAtB_sound {Γ : Ctx} {x : Var} (h : liveAtB Γ x = true) : ∃ E, Γ
   | none => intro h; cases h
   | some E => intro h; exact ⟨E, rfl, h⟩
 
+def pushB (D : List Var) (Γ : Ctx) (F : List Var) (x y : Var) : Option Ctx :=
+  match liveE2 Γ x, liveE2 Γ y with
+  | some Ex, some Ey =>
+    match vecElem2 Ex.ty with
+    | some t =>
+      if canDoB2 Ex.mode .realloc ∧ x ∉ F ∧ Ey.ty = t ∧ y ≠ x then
+        match pushArg2 D Γ F y Ey t with
+        | some (Ds, Γ1) =>
+          if x ∈ roots Ds then none else
+          match liveE2 Γ1 x with
+          | some Ex1 =>
+            if dtorSafeB D Γ1 .realloc t.holdsView x && (!Ex1.dbind || subB2 (ownHeld true t Ds) Ex1.held) then
+              some (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t Ds })
+            else none
+          | none => none
+        | none => none
+      else none
+    | none => none
+  | _, _ => none
+
+theorem pushB_sound {P : Prog} {D : List Var} {ξ : Exits} {Γ : Ctx} {F : List Var} {x y : Var} {Δ : Ctx}
+    (hs : Supported2 Γ D) (hD : ∀ v ∈ (Stmt.push x y).vars, v ∈ D) (h : pushB D Γ F x y = some Δ) :
+    StmtT P ξ Γ F (.push x y) Δ ∧ Supported2 Δ D := by
+  simp only [pushB] at h
+  split at h
+  · rename_i Ex Ey hEx hEy
+    obtain ⟨hx, hxl⟩ := liveE2_some hEx
+    obtain ⟨hy, hyl⟩ := liveE2_some hEy
+    split at h
+    · rename_i t ht
+      split at h
+      · rename_i hc
+        obtain ⟨hcd, hF, hty, hne⟩ := hc
+        split at h
+        · rename_i Ds Γ1 hpa
+          obtain ⟨hpa', hs1⟩ := pushArg2_sound hs hpa
+          have hs1' := hs1 (hD y (by simp [Stmt.vars]))
+          split at h
+          · cases h
+          · rename_i hroot
+            split at h
+            · rename_i Ex1 hEx1
+              obtain ⟨hx1, hx1l⟩ := liveE2_some hEx1
+              split at h
+              · rename_i hc2
+                simp only [Bool.and_eq_true, Bool.or_eq_true, Bool.not_eq_true'] at hc2
+                obtain ⟨hds, hdb⟩ := hc2
+                simp only [Option.some.injEq] at h; subst h
+                refine ⟨.push hx hxl (vecElem2_some ht) (canDoB2_sound hcd) hF hy hyl hty hne hpa' hroot hx1 hx1l
+                  (dtorSafeB_sound hs1' hds) (fun hdb' => ?_), supported2_setE (supported2_kill hs1' _ _ _)
+                  (hD x (by simp [Stmt.vars])) _⟩
+                rcases hdb with h0 | h0
+                · rw [hdb'] at h0; cases h0
+                · exact subB2_sound h0
+              · cases h
+            · cases h
+        · cases h
+      · cases h
+    · cases h
+  · cases h
+
 def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, _, .skip => some Γ
   | Γ, F, .seq a b =>
@@ -359,25 +420,8 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
       | some Δ => if D.all (fun v => Δ v == Γ v) then some Γ else none
       | none => none
     else none
-  | Γ, F, .push x y =>
-    match liveE2 Γ x, liveE2 Γ y with
-    | some Ex, some Ey =>
-      match vecElem2 Ex.ty with
-      | some t =>
-        if canDoB2 Ex.mode .realloc ∧ x ∉ F ∧ Ey.ty = t ∧ y ≠ x then
-          match pushArg2 D Γ F y Ey t with
-          | some (Ds, Γ1) =>
-            if x ∈ roots Ds then none else
-            match liveE2 Γ1 x with
-            | some Ex1 =>
-              if dtorSafeB D Γ1 .realloc t.holdsView x && (!Ex1.dbind || subB2 (ownHeld true t Ds) Ex1.held) then
-                some (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t Ds })
-              else none
-            | none => none
-          | none => none
-        else none
-      | none => none
-    | _, _ => none
+  | Γ, F, .push x y => pushB D Γ F x y
+  | Γ, F, .insert x i y => if checkExpr2 Γ i && decide (x ∉ F) then pushB D Γ F x y else none
   | Γ, F, .free x =>
     match liveE2 Γ x with
     | some E =>
@@ -587,44 +631,16 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
         · cases h
       · cases h
     · cases h
-  | push x y =>
+  | push x y => intro ξ Γ F Δ hs hD h; exact pushB_sound hs hD h
+  | insert x i y =>
     intro ξ Γ F Δ hs hD h
     simp only [checkStmt2] at h
     split at h
-    · rename_i Ex Ey hEx hEy
-      obtain ⟨hx, hxl⟩ := liveE2_some hEx
-      obtain ⟨hy, hyl⟩ := liveE2_some hEy
-      split at h
-      · rename_i t ht
-        split at h
-        · rename_i hc
-          obtain ⟨hcd, hF, hty, hne⟩ := hc
-          split at h
-          · rename_i Ds Γ1 hpa
-            obtain ⟨hpa', hs1⟩ := pushArg2_sound hs hpa
-            have hs1' := hs1 (hD y (by simp [Stmt.vars]))
-            split at h
-            · cases h
-            · rename_i hroot
-              split at h
-              · rename_i Ex1 hEx1
-                obtain ⟨hx1, hx1l⟩ := liveE2_some hEx1
-                split at h
-                · rename_i hc2
-                  simp only [Bool.and_eq_true, Bool.or_eq_true, Bool.not_eq_true'] at hc2
-                  obtain ⟨hds, hdb⟩ := hc2
-                  simp only [Option.some.injEq] at h; subst h
-                  refine ⟨.push hx hxl (vecElem2_some ht) (canDoB2_sound hcd) hF hy hyl hty hne hpa' hroot hx1 hx1l
-                    (dtorSafeB_sound hs1' hds) (fun hdb' => ?_), supported2_setE (supported2_kill hs1' _ _ _)
-                    (hD x (by simp [Stmt.vars])) _⟩
-                  rcases hdb with h0 | h0
-                  · rw [hdb'] at h0; cases h0
-                  · exact subB2_sound h0
-                · cases h
-              · cases h
-          · cases h
-        · cases h
-      · cases h
+    · rename_i hc
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
+      obtain ⟨t0, s0⟩ := pushB_sound (P := P) (ξ := .none) hs
+        (fun v hv => hD v (by simp [Stmt.vars] at hv ⊢; rcases hv with h | h <;> simp [h])) h
+      exact ⟨.insert (checkExpr2_sound hc.1) hc.2 t0, s0⟩
     · cases h
   | free x =>
     intro ξ Γ F Δ hs hD h
