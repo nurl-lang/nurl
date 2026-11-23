@@ -82,9 +82,10 @@ $ `scene.nu`
     : ( Slice f ) p ( slice_from_vec [f] p__v )
     : ( Slice u ) m ( slice_from_vec [u] . sc mask )
     : ( Slice f32 ) dz ( slice_from_vec [f32] . sc dz )
-    // a sample of the VALID pixels themselves: count them, then keep every
-    // k-th of them in scan order — uniform over the valid set whatever its
-    // shape, so no column, row or small region can fall between the samples
+    // a sample of the VALID pixels themselves: count them, then keep about
+    // one in k of them, chosen by a hash of their running index — uniform
+    // over the valid set whatever its shape or the image's width, so no
+    // column, row or small region falls between the samples
     : ~ i nvalid 0
     : ~ i q0 0
     ~ < q0 * . sc n hw { ? != # i ( slice_at [u] m q0 ) 0 { = nvalid + nvalid 1 } {} = q0 + q0 1 }
@@ -97,7 +98,10 @@ $ `scene.nu`
         ~ < j hw {
             : i q + * v hw j
             ? != # i ( slice_at [u] m q ) 0 {
-                ? == 0 % seen every {
+                // a hash of the running index, not the index itself: every
+                // k-th in scan order would follow the image's own period
+                // (k = 2 on an even width keeps only even columns)
+                ? == 0 % >> * + seen 1 2654435761 11 every {
                     ( __ms_world sc v # f % j . sc w # f / j . sc w # f ( slice_at [f32] dz q ) p )
                     ( vec_push [f] xs ( slice_at [f] p 0 ) )
                     ( vec_push [f] ys ( slice_at [f] p 1 ) )

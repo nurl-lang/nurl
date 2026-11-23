@@ -375,11 +375,22 @@ function parseGlb(buf) {
     if (nd.translation && !eq(nd.translation, [0, 0, 0])) return true;
     return false;
   }
+  /* each node's verdict (does it, or an ancestor, move?) is computed once
+     and remembered, so a long chain costs one pass, not one per node */
+  var placed = {};
+  function chainMoves(i) {
+    var path = [], at = i, hops = 0, r = false;
+    for (; at !== undefined && hops <= nodes.length; at = parent[at], hops++) {
+      if (placed[at] !== undefined) { r = placed[at]; break; }
+      path.push(at);
+      if (moves(nodes[at])) { r = true; break; }
+    }
+    path.forEach(function (p) { placed[p] = r; });
+    return r;
+  }
   nodes.forEach(function (nd, i) {
-    if (nd.mesh !== 0) return;
-    for (var at = i, hops = 0; at !== undefined && hops <= nodes.length; at = parent[at], hops++)
-      if (moves(nodes[at]))
-        throw new Error("meshes placed by a node transform are not shown; bake the transform into the positions");
+    if (nd.mesh === 0 && chainMoves(i))
+      throw new Error("meshes placed by a node transform are not shown; bake the transform into the positions");
   });
   function acc(i, want) {
     var a = doc.accessors[i], v = doc.bufferViews[a.bufferView];
@@ -684,7 +695,8 @@ function boot(data, label) {
       gl.bufferData(gl.ARRAY_BUFFER, data.nrm, gl.STATIC_DRAW);
       gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
     } else gl.vertexAttrib3f(2, 0, 0, 1);
-    var ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+` } {}
+    ? == k 1 { ^ `    var ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data.idx, gl.STATIC_DRAW);
     ["ps", "dn", "tm"].forEach(function (id) { $(id).parentNode.hidden = true; });
     $("nl").textContent = "vertices"; $("ndl").textContent = "triangles";
@@ -692,8 +704,7 @@ function boot(data, label) {
 
   /* one interleaved, 16-byte-aligned, shuffled buffer */
   var order = isMesh ? null : shuffled(total);
-` } {}
-    ? == k 1 { ^ `  var inter = new ArrayBuffer(isMesh ? 0 : total * 16);
+  var inter = new ArrayBuffer(isMesh ? 0 : total * 16);
   var fv = new Float32Array(inter), bv = new Uint8Array(inter);
   for (var k = 0; !isMesh && k < total; k++) {
     var s = order[k];

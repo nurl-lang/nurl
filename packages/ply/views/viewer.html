@@ -365,11 +365,22 @@ function parseGlb(buf) {
     if (nd.translation && !eq(nd.translation, [0, 0, 0])) return true;
     return false;
   }
+  /* each node's verdict (does it, or an ancestor, move?) is computed once
+     and remembered, so a long chain costs one pass, not one per node */
+  var placed = {};
+  function chainMoves(i) {
+    var path = [], at = i, hops = 0, r = false;
+    for (; at !== undefined && hops <= nodes.length; at = parent[at], hops++) {
+      if (placed[at] !== undefined) { r = placed[at]; break; }
+      path.push(at);
+      if (moves(nodes[at])) { r = true; break; }
+    }
+    path.forEach(function (p) { placed[p] = r; });
+    return r;
+  }
   nodes.forEach(function (nd, i) {
-    if (nd.mesh !== 0) return;
-    for (var at = i, hops = 0; at !== undefined && hops <= nodes.length; at = parent[at], hops++)
-      if (moves(nodes[at]))
-        throw new Error("meshes placed by a node transform are not shown; bake the transform into the positions");
+    if (nd.mesh === 0 && chainMoves(i))
+      throw new Error("meshes placed by a node transform are not shown; bake the transform into the positions");
   });
   function acc(i, want) {
     var a = doc.accessors[i], v = doc.bufferViews[a.bufferView];
