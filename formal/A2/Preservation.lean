@@ -3063,7 +3063,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (by rw [hsp]; exact hKOd) hWd hNd hFd, ?_,
         by simp, ?_,
         fun v hv => ?_⟩
-      · refine Inv.mk₀ (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+      · -- (AGORA-963 step 3: the payload taken from the lock block holds no names)
+        refine Inv.mk₀ (hi.heldCaps_step (fun p Ep hp hmp _ => by
+            have hpx : p ≠ x := fun h => by
+              rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+            simp only [setE, upd_ne _ _ hpx] at hp
+            exact ⟨hp, by simp [Stmt.spine]⟩) (fun w _ hcw =>
+            CapsInpAt.of_slots (SlotsCaps.set_of hcw.1 (hi.toMInv.blkCapsInp w kk _ v hk rfl) rfl) hm))
+          hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (covers_acquire hi.cover hk _) (fun T h => by
             unfold OwnedAt at h; simp [hmx] at h))
@@ -3744,7 +3751,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hm := hi'.toMInv.perm (hi'.leafAnch rfl) hxF hT' hp
       have hc' := hi'.cover.perm hT' hp
       rw [Mem.set_set] at hm hc'
-      refine ⟨Γ', ht'.ofNone, Inv.ofLeaf (sorry /- WIP scaffold (AGORA-963 step 3, never merged): HeldCapsInp across this step -/) hi' hm (by simp) (by simp [Stmt.vars]) (hi'.leafAnchS rfl) rfl hc' trivial,
+      -- (AGORA-963 step 3: the pushed `Vec`'s elements, reordered)
+      have hcaps : HeldCapsInp (m1.set x ⟨true, some (.node t c d (es.take n ++ w :: es.drop n))⟩) Γ' F .skip :=
+        hi'.heldCaps.of_caps fun w' hcw => by
+          have h2 := hcw.set (x := x) (o := true) (v := some (.node t c d (es.take n ++ w :: es.drop n)))
+            (fun V e => by cases e; exact (hcw.slot hT').node_sub fun e he => hp.mem_iff.mpr he)
+          rw [Mem.set_set] at h2; exact h2
+      refine ⟨Γ', ht'.ofNone, Inv.ofLeaf hcaps hi' hm (by simp) (by simp [Stmt.vars]) (hi'.leafAnchS rfl) rfl hc' trivial,
         by simpa using hnv, hk, fun v hv => ?_⟩
       have hvx : v ≠ x := fun e => hxF (e ▸ hv)
       have := hfz v hv

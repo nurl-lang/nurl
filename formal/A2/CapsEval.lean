@@ -82,6 +82,13 @@ theorem ValCapsInp.push {t : Ty} {c d c' d' : Nat} {es : List Val} {v : Val} {w 
     · exact hn.child (Child.elem he)
     · simp at he; subst he; exact hv
 
+/-- A `Vec` whose elements are among a clean one's. -/
+theorem ValCapsInp.node_sub {t : Ty} {c d c' d' : Nat} {es es' : List Val} {w : Var}
+    (hn : ValCapsInp (.node t c d es) w) (hs : ∀ e ∈ es', e ∈ es) : ValCapsInp (.node t c' d' es') w := by
+  refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+  cases hc with
+  | elem he => exact hn.child (Child.elem (hs _ he))
+
 /-- A block's payload, what its holders read and what it owns hold no
     package that captures anything. -/
 theorem MInv.rdCapsInp {m : Mem} {Γ : Ctx} (hM : MInv m Γ) (w : Var) {k : Nat} {bl : Blk}
