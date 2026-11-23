@@ -190,6 +190,13 @@ theorem dtorHeadB_sound {P : Prog} {f : Nat} {x : Var} {s : Stmt} (h : dtorHeadB
   simp only [ho, hd, Bool.and_self, Bool.not_true, Bool.false_or, Bool.and_eq_true, decide_eq_true_eq] at h
   exact h
 
+def prodOf2 : Ty → Option (Ty × Ty)
+  | .prod a b => some (a, b)
+  | _ => none
+
+theorem prodOf2_some {t a b : Ty} (h : prodOf2 t = some (a, b)) : t = .prod a b := by
+  cases t <;> simp [prodOf2] at h; obtain ⟨rfl, rfl⟩ := h; rfl
+
 def isPanic : Stmt → Bool
   | .panic => true
   | _ => false
@@ -302,6 +309,23 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
     | none => none
   | Γ, F, .frozen z s => checkStmt2 P R C D Γ (F ++ z) s
   | Γ, _, .panic => if ctxWF2B D Γ && nameWFB D Γ then some Γ else none
+  | Γ, F, .unpair y x z s =>
+    match Γ y with
+    | some E =>
+      match prodOf2 E.ty with
+      | some (a, b) =>
+        if s.src && E.live && canDoB2 E.mode .replace && decide (y ∉ F) && decide (Γ x = none) &&
+            decide (Γ z = none) && decide (x ≠ z) && decide (x ∉ F) && decide (z ∉ F) &&
+            noPinB D Γ y && dtorSafeB D Γ .replace false y &&
+            (!a.holdsDtor || (decide (x ∈ s.movedFirst) && decide (x ∉ s.assigns))) &&
+            (!b.holdsDtor || (decide (z ∈ s.movedFirst) && decide (z ∉ s.assigns))) then
+          match checkStmt2 P R C D (setE (setE (setE (kill .replace false y Γ) y { E with live := false, dtor := false })
+              x (compE E a)) z (compE E b)) F s with
+          | some Δ => if endOK2B D Δ z && endOK2B D (exitScope z Δ) x then some (exitScope x (exitScope z Δ)) else none
+          | none => none
+        else none
+      | none => none
+    | none => none
   | _, _, _ => none
 
 theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (hR : R.OK D) (hC : C.OK P D) :
@@ -513,6 +537,44 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
       simp only [Bool.and_eq_true] at hc
       simp only [Option.some.injEq] at h; subst h
       exact ⟨panic_self hs hc.1 hc.2, hs⟩
+    · cases h
+  | unpair y x z s ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i E hE
+      split at h
+      · rename_i a b hp
+        split at h
+        · rename_i hc
+          simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true, Bool.not_eq_true'] at hc
+          obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsrc, hl⟩, hcd⟩, hyF⟩, hx⟩, hz⟩, hxz⟩, hxF⟩, hzF⟩, hp1⟩, hd1⟩, hdx⟩, hdz⟩ := hc
+          split at h
+          · rename_i Δ0 h0
+            split at h
+            · rename_i he
+              simp only [Bool.and_eq_true] at he
+              simp only [Option.some.injEq] at h; subst h
+              have hyD : y ∈ D := hD y (by simp [Stmt.vars])
+              have hxD : x ∈ D := hD x (by simp [Stmt.vars])
+              have hzD : z ∈ D := hD z (by simp [Stmt.vars])
+              have hs1 := supported2_setE (supported2_setE (supported2_setE (supported2_kill hs .replace false y) hyD
+                { E with live := false, dtor := false }) hxD (compE E a)) hzD (compE E b)
+              obtain ⟨t0, s0⟩ := ih (ξ := (ξ.under x).under z) hs1 (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+              refine ⟨.unpair hsrc hE hl (canDoB2_sound hcd) (Or.inl (prodOf2_some hp)) hyF hx hz hxz hxF hzF t0
+                (noPinB_sound hs hp1) (dtorSafeB_sound hs hd1) (endOK2B_sound s0 he.1)
+                (endOK2B_sound (supported2_exitScope s0 z) he.2) (fun hh => ?_) (fun hh => ?_),
+                supported2_exitScope (supported2_exitScope s0 z) x⟩
+              · rcases hdx with h0 | h0
+                · rw [hh] at h0; cases h0
+                · exact h0
+              · rcases hdz with h0 | h0
+                · rw [hh] at h0; cases h0
+                · exact h0
+            · cases h
+          · cases h
+        · cases h
+      · cases h
     · cases h
   | _ => intro ξ Γ F Δ hs hD h; simp [checkStmt2] at h
 
