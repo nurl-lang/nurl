@@ -19426,9 +19426,10 @@ unsafe @ eng_byte s w i k → i {
                 : i ok ( wv_at ops lk )
                 : i ov ( pl_var ok )
                 ? & & == ( pl_path ok ) 0 == ( fv_kind ov ) VK_TEMP == ( av_own ( wv_at avs lk ) ) OW_O {
-                    // (a handle, or a raw string handed back as the raw string
-                    // it is: an owned one is its own buffer)
-                    ? | == lkind LK_HANDLE & & & & == lkind LK_VIEW have_dest != ( fv_ty ov ) ET_NONE == ( et_kind ( fv_ty ov ) ) EK_S == ( fv_ty dest ) ( fv_ty ov ) {
+                    // (a handle, or a raw string or an owned slice handed back
+                    // as the value it is: an owned one is its own buffer, the
+                    // walk's per-call own bit, __slice_call_own_bit; AGORA-915)
+                    ? | == lkind LK_HANDLE & & & & == lkind LK_VIEW have_dest != ( fv_ty ov ) ET_NONE | == ( et_kind ( fv_ty ov ) ) EK_S == ( et_kind ( fv_ty ov ) ) EK_SLICE == ( fv_ty dest ) ( fv_ty ov ) {
                         = whole_set ( sq_add whole_set lk )
                     } {}
                 } {}
