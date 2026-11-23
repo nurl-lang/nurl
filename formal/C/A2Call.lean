@@ -66,8 +66,17 @@ def argOK2 (D : List Var) (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) 
       (!(decide (m = .sink ∨ m = .inout .replace)) || noPinB D Γ (args.getD i 0))
   | _, _ => false
 
-/-- `NamesFree`, decided. -/
-def namesFreeB (Γ : Ctx) (F : List Var) (ps : List (PMode × Ty)) (args : List Var) : Bool :=
+/-- `HeldAnch`, decided. -/
+def heldAnchB (E : Entry) (d : Dep) : Bool :=
+  decide (d ∉ E.path) && decide (d ∈ E.held) && (match E.ty with | .vec _ => true | _ => false) &&
+    decide (d.kind = .view ∨ d.kind = .self)
+
+theorem heldAnchB_of {E : Entry} {d : Dep} (h : HeldAnch E d) : heldAnchB E d = true := by
+  obtain ⟨h1, h2, ⟨t, ht⟩, h4⟩ := h
+  simp [heldAnchB, h1, h2, ht, h4]
+
+/-- `NamesFree`, decided (its AGORA-937 B3 clause over the domain). -/
+def namesFreeB (D : List Var) (Γ : Ctx) (F : List Var) (ps : List (PMode × Ty)) (args : List Var) : Bool :=
   (mutNames Γ args).all fun d =>
     canDoB2 (argE Γ d.root).mode d.kind.bound &&
     (match (argE Γ d.root).ty with | .vec s => !s.holdsView | _ => false) &&
@@ -75,16 +84,20 @@ def namesFreeB (Γ : Ctx) (F : List Var) (ps : List (PMode × Ty)) (args : List 
     (decide (d.root ∉ args) || (List.range args.length).any fun i =>
       decide (args[i]? = some d.root) &&
         (match ps[i]? with | some (m, _) => decide (m = .inout d.kind.bound) | none => false)) &&
-    args.all fun a => !(decide ((argE Γ a).ty ≠ .int ∨ (argE Γ a).mode = .rootb)) ||
-      (argE Γ a).vdeps.all fun d' => d'.root != d.root || decide (d'.kind.bound = d.kind.bound)
+    (args.all fun a => !(decide ((argE Γ a).ty ≠ .int ∨ (argE Γ a).mode = .rootb)) ||
+      (argE Γ a).vdeps.all fun d' => d'.root != d.root || decide (d'.kind.bound = d.kind.bound)) &&
+    D.all fun p => match Γ p with
+      | some Ep => !(decide (Ep.mode = .rootb)) || Ep.vdeps.all fun d' =>
+          d'.root != d.root || !heldAnchB Ep d' || !(d.kind.bound.kills false d'.kind)
+      | none => true
 
-theorem namesFreeB_sound {Γ : Ctx} {F : List Var} {ps : List (PMode × Ty)} {args : List Var}
-    (h : namesFreeB Γ F ps args = true) : NamesFree Γ F ps args := by
+theorem namesFreeB_sound {D : List Var} {Γ : Ctx} {F : List Var} {ps : List (PMode × Ty)} {args : List Var}
+    (hs : Supported2 Γ D) (h : namesFreeB D Γ F ps args = true) : NamesFree Γ F ps args := by
   intro d hd
   have := List.all_eq_true.mp h d hd
   simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true, List.any_eq_true] at this
-  obtain ⟨⟨⟨⟨hc, hv⟩, hF⟩, hin⟩, hall⟩ := this
-  refine ⟨canDoB2_sound hc, ?_, hF, ?_, fun a ha hk d' hd' hr => ?_⟩
+  obtain ⟨⟨⟨⟨⟨hc, hv⟩, hF⟩, hin⟩, hall⟩, hanch⟩ := this
+  refine ⟨canDoB2_sound hc, ?_, hF, ?_, fun a ha hk d' hd' hr => ?_, fun p Ep hEp hm d' hd' hr hh => ?_⟩
   · revert hv
     cases hty : (argE Γ d.root).ty with
     | vec s => intro hv; exact ⟨s, rfl, by simpa using hv⟩
@@ -108,6 +121,17 @@ theorem namesFreeB_sound {Γ : Ctx} {F : List Var} {ps : List (PMode × Ty)} {ar
       simp only [Bool.or_eq_true, bne_iff_ne, ne_eq, decide_eq_true_eq] at this
       rcases this with h1 | h1
       · exact absurd hr h1
+      · exact h1
+  · have := List.all_eq_true.mp hanch p (mem_of_some2 hs hEp)
+    rw [hEp] at this
+    simp only [Bool.or_eq_true, Bool.not_eq_true', decide_eq_false_iff_not] at this
+    rcases this with h0 | h0
+    · exact absurd hm h0
+    · have := List.all_eq_true.mp h0 d' hd'
+      simp only [Bool.or_eq_true, bne_iff_ne, ne_eq, Bool.not_eq_true'] at this
+      rcases this with (h1 | h1) | h1
+      · exact absurd hr h1
+      · rw [heldAnchB_of hh] at h1; cases h1
       · exact h1
 
 /-- `CallDtorSafe`, decided over the domain. -/
@@ -163,7 +187,7 @@ def callB2 (P : Prog) (D : List Var) (Γ : Ctx) (F : List Var) (f : Nat) (args :
   match P[f]? with
   | some fn =>
     if args.length = fn.params.length ∧ (List.range fn.params.length).all (argOK2 D Γ F fn args) ∧
-        namesFreeB Γ F fn.params args ∧ callDtorSafeB D Γ fn.params args ∧ regionsB Γ args then
+        namesFreeB D Γ F fn.params args ∧ callDtorSafeB D Γ fn.params args ∧ regionsB Γ args then
       some (callRes Γ fn args, callPost Γ fn args)
     else none
   | none => none
@@ -179,7 +203,7 @@ theorem callB2_sound {P : Prog} {D : List Var} {Γ : Ctx} {F : List Var} {f : Na
       obtain ⟨hlen, hall, hnf, hcd, hrg⟩ := hc
       simp only [Option.some.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl⟩ := h
-      refine ⟨⟨fn, hfn, hlen, fun i hi => ?_, namesFreeB_sound hnf, callDtorSafeB_sound hs hcd, rfl, rfl,
+      refine ⟨⟨fn, hfn, hlen, fun i hi => ?_, namesFreeB_sound hs hnf, callDtorSafeB_sound hs hcd, rfl, rfl,
         fun _ => regionsB_sound hrg⟩, fn, hfn, rfl⟩
       have ha := List.all_eq_true.mp hall i (List.mem_range.mpr hi)
       unfold argOK2 at ha

@@ -6582,6 +6582,20 @@ unsafe @ __arg_param_lend_root i syms → s {
 }
 
 // `a | b` of two i1 operands, either `` for none.
+// `! a` for an i1.
+@ __not_i1 i cg s a → s {
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = xor i1 ` ) ( nurl_print a ) ( nurl_print `, 1\n` )
+    ^ r
+}
+
+// Is the `i8*` `p` not null, as an i1.
+@ __i8_nonnull i cg s p → s {
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print p ) ( nurl_print `, null\n` )
+    ^ r
+}
+
 @ __or_i1 i cg s a s b → s {
     ? == 0 ( nurl_str_len a ) { ^ ( nurl_str_cat b `` ) } {}
     ? == 0 ( nurl_str_len b ) { ^ ( nurl_str_cat a `` ) } {}
@@ -19426,9 +19440,10 @@ unsafe @ eng_byte s w i k → i {
                 : i ok ( wv_at ops lk )
                 : i ov ( pl_var ok )
                 ? & & == ( pl_path ok ) 0 == ( fv_kind ov ) VK_TEMP == ( av_own ( wv_at avs lk ) ) OW_O {
-                    // (a handle, or a raw string handed back as the raw string
-                    // it is: an owned one is its own buffer)
-                    ? | == lkind LK_HANDLE & & & & == lkind LK_VIEW have_dest != ( fv_ty ov ) ET_NONE == ( et_kind ( fv_ty ov ) ) EK_S == ( fv_ty dest ) ( fv_ty ov ) {
+                    // (a handle, or a raw string or an owned slice handed back
+                    // as the value it is: an owned one is its own buffer, the
+                    // walk's per-call own bit, __slice_call_own_bit; AGORA-915)
+                    ? | == lkind LK_HANDLE & & & & == lkind LK_VIEW have_dest != ( fv_ty ov ) ET_NONE | == ( et_kind ( fv_ty ov ) ) EK_S == ( et_kind ( fv_ty ov ) ) EK_SLICE == ( fv_ty dest ) ( fv_ty ov ) {
                         = whole_set ( sq_add whole_set lk )
                     } {}
                 } {}
@@ -26452,8 +26467,9 @@ unsafe @ core_flush i syms → v {
 // The value of global `name` (of type `lt`), loaded; `mark` is its
 // `__global` mark, which the caller has read to know it is one.
 // (An enum variant is its tag, an immediate — its mark is `=<tag>`,
-// gen_enum_decl: nothing is loaded, and no other global's read pays a
-// lookup to find that out.)
+// gen_enum_decl — and so is an immutable number, `: i LIMIT 100`, its mark
+// `=<value>` (gen_global, AGORA-855): nothing is loaded, and no other
+// global's read pays a lookup to find that out.)
 @ load_global i syms i cg s lt s name s mark → s {
     ? == 61 ( nurl_str_get mark 0 ) { ^ ( nurl_str_slice mark 1 - ( nurl_str_len mark ) 1 ) } {}
     ? ! ( glob_is_atomic syms name lt ) { ^ ( load_var cg lt ( nurl_str_cat `@` name ) ) } {}
@@ -50346,6 +50362,10 @@ unsafe @ __pfo_bind_lends i syms s name → v {
         { = set ? == 0 ( nurl_str_len set ) ( nurl_str_cat w `` ) ( nurl_str_cat3 set ` ` w ) } {}
     }
     ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__alias` ) set )
+    // (A cursor over a binding whose owners are a join's arms, one per run
+    // (`__jalias`), is over one of them too: whoever takes its value over
+    // takes over that one only, AGORA-953.)
+    ? ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jalias` ) `1` ) } {}
     // (A cursor over part of a value is a cursor over that part.)
     ? != 0 g_part_n { ? ( seq ( nurl_sym_get2 syms src `__alias_part` ) `1` ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__alias_part` ) `1` ) } {} } {}
     : s bw ( nurl_sym_get2 syms src `__borrowers` )
@@ -50358,6 +50378,27 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // is unique to an owned value: a String, a Vec, a struct by its first such
 // field (mem_identity_key), or an option of one by its payload's? (Not an
 // enum: its first payload slot may be a number another value holds too.)
+// The value of type `vt` held at `p`, loaded.
+@ __ud_load i cg s vt s p → s {
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ptr ` ) ( nurl_print p ) ( nurl_print `\n` )
+    ^ r
+}
+
+// Does an owner of type `ot` keyed by mem_ud_ident_key name, by that key,
+// the value of type `vt` it would have handed a binding: its own type, or
+// an option's or a result's side of it (keyed by its active side, which is
+// the one a binding can hold)?
+@ __ud_key_names s ot s vt → b {
+    : s o ( nurl_llty ( __udty_val ot ) )
+    : s v ( nurl_llty ( __udty_val vt ) )
+    ? ( seq o v ) { ^ T } {}
+    ? == 0 ( nurl_str_starts o `{ i1, ` ) { ^ F } {}
+    : s pt ( __wrap_part_key o 0 )
+    : s et ( __wrap_part_key o 1 )
+    ^ | & != 0 ( nurl_str_len pt ) ( __ud_key_names pt v ) & != 0 ( nurl_str_len et ) ( __ud_key_names et v )
+}
+
 @ __ud_keyable s vt → b {
     : s ll ( nurl_llty vt )
     // (An option or a result by its active side, as mem_ud_ident_key keys
@@ -52231,11 +52272,61 @@ unsafe @ __src_has_raw_ptr s text → b {
             // bound inside an arm).
             : i __pd ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) )
             : ~ s __ma ( nurl_sym_get2 syms src `__alias` )
+            // (A source that may be a cursor over any of several owners — a
+            // `:` binding of a join over two locals' lends, `? c ( id a ) ( id
+            // b )` — holds one of them on a run: only that one is taken over,
+            // by its key, and the others keep their own values to release.
+            // Taken over all, the one not selected was never released: a leak,
+            // AGORA-953, the last of AGORA-242's twins.)
+            : b __mkey & & & ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) != 0 ( nurl_str_len ( str_skip_word __ma ) ) ( __ud_keyable ty ) != 0 ( nurl_str_len ptr )
+            : s __mnk ? __mkey ( mem_ud_ident_key cg ty ( __ud_load cg ty ptr ) ) ``
+            // (At most one owner is taken over by its key: two that share it —
+            // two shares of one Rc — keep a release each. A key that names
+            // nothing (null: an empty handle, a field left out) tells no owner
+            // apart, so every one is taken over as before: a leak at worst,
+            // never a release under a holder.)
+            : ~ s __mtaken `0`
+            : s __mnn ? & __mkey != 0 ( nurl_str_len __mnk ) ( __i8_nonnull cg __mnk ) ``
+            // (…and a binding given this one's value is one of those arms' too.)
+            ? ( seq ( nurl_sym_get2 syms src `__jalias` ) `1` ) { ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jalias` ) `1` ) } {}
             ~ != 0 ( nurl_str_len __ma ) {
                 : s __mw ( str_first_word __ma ) = __ma ( str_skip_word __ma )
                 ? > ( nurl_str_to_int ( nurl_sym_get2 syms __mw `__depth` ) ) __pd {
-                    : s __of ( mem_udrop_flag_get syms cg __mw )
+                    : ~ s __of ( mem_udrop_flag_get syms cg __mw )
                     : s __cf ( mem_udrop_flag_get syms cg ptr )
+                    // (…each owner keyed by its own type: an option owner
+                    // behind a payload arm by its active payload, which is the
+                    // handle the binding holds where that arm ran. An owner
+                    // whose type has no key is taken over as before.)
+                    : s __mwt ( nurl_sym_get syms ( nurl_sym_get2 syms __mw `__bname` ) )
+                    // (Only where that key names the value the binding holds
+                    // when this owner is the one: the same type, or an option
+                    // or a result with a side of it. A struct owner that lent
+                    // a field is keyed by its first one, which is not the
+                    // field: keyed so, it kept its flag and released the field
+                    // under the binding — it is taken over as before.)
+                    ? & & __mkey != 0 ( nurl_str_len __mnk ) & & != 0 ( nurl_str_len __mwt ) ( __ud_keyable __mwt ) ( __ud_key_names __mwt ty ) {
+                        : s __mok ( mem_ud_ident_key cg __mwt ( __ud_load cg __mwt __mw ) )
+                        ? != 0 ( nurl_str_len __mok ) {
+                            : s __meq ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __meq ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print __mnk ) ( nurl_print `, ` ) ( nurl_print __mok ) ( nurl_print `\n` )
+                            // (the first owner that matches and owns, unless the
+                            // key is null: then every one)
+                            : s __mm ( __and_not cg ( __and_i1 cg ( __and_i1 cg __meq __of ) __mnn ) __mtaken )
+                            = __mtaken ( __or_i1 cg __mtaken __mm )
+                            : s __msel ( __or_i1 cg __mm ( __not_i1 cg __mnn ) )
+                            : s __mtk ( __and_i1 cg __of __msel )
+                            : s __mrest ( __and_not cg __of __msel )
+                            : s __nf2 ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __nf2 ) ( nurl_print ` = or i1 ` ) ( nurl_print __cf ) ( nurl_print `, ` ) ( nurl_print __mtk ) ( nurl_print `\n` )
+                            ( mem_udrop_flag_set syms cg ptr __nf2 )
+                            ( mem_udrop_flag_set syms cg __mw __mrest )
+                            // (The core IR's `=` says the target owns what it
+                            // was given there, CORE_VF_CPCOPY, as a copy-in.)
+                            ? != 0 g_core_live { ( core_cpcopy_mark ) } {}
+                            continue
+                        } {}
+                    } {}
                     : s __nf ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __nf ) ( nurl_print ` = or i1 ` ) ( nurl_print __cf ) ( nurl_print `, ` ) ( nurl_print __of ) ( nurl_print `\n` )
                     ( mem_udrop_flag_set syms cg ptr __nf )
@@ -52342,6 +52433,10 @@ unsafe @ __src_has_raw_ptr s text → b {
                     : s __jup ( mem_udrop_ptr_of syms __jw )
                     ? & & & != 0 ( nurl_str_len __jup ) ! ( seq __jup ptr ) ( nurl_sym_has_word syms `__user_drops__` __jup ) != 0 ( nurl_str_len ( __call_owned_by syms __jup ) ) {
                         ( mem_udrop_link_alias syms ptr __jup )
+                        // (…one of them on a run, the arm's: whoever takes
+                        // the binding's value over takes over that one only,
+                        // by its key — __mem_udrop_bind_flag, AGORA-953.)
+                        ( nurl_sym_set_deep syms ( nurl_str_cat ptr `__jalias` ) `1` )
                     } {}
                 } {}
             }
@@ -100414,7 +100509,12 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col �
                 { ( nurl_print ( nurl_str_int n ) ) } }
             ( nurl_print `\n\n` )
             ( nurl_sym_def syms cname lt )
-            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            // (An immutable integer is its value wherever it is read, an
+            // immediate, as an enum variant's tag is: `=<n>`, load_global.
+            // Nothing can write it: `=` and `mem_addr` refuse one, and an
+            // `inout` argument must be a binding. AGORA-855.)
+            : b __gimm & & ! is_mutable != ( nurl_str_get lt - ( nurl_str_len lt ) 1 ) 42 ! | | == lt0 37 == lt0 123 == lt0 91
+            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) ? __gimm ( nurl_str_cat `=` ( nurl_str_int n ) ) `1` )
             // The const's signedness rides its stored type `lt` (raw
             // internal repr): `: u GU 200` records `u8`, and gen_ident's
             // load re-publishes it so `# i GU` widens with zext.
@@ -100475,7 +100575,7 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col �
             ( nurl_print `@` ) ( nurl_print cname )
             ( nurl_print ` = global double ` ) ( nurl_print fv ) ( nurl_print `\n\n` )
             ( nurl_sym_def syms cname `double` )
-            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) ? is_mutable `1` ( nurl_str_cat `=` fv ) )
             ? is_mutable
             { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` ) }
             {}
@@ -100488,7 +100588,7 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col �
             ( nurl_print ` = global i1 ` )
             ( nurl_print ? ( seq bv `T` ) `1` `0` ) ( nurl_print `\n\n` )
             ( nurl_sym_def syms cname `i1` )
-            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) ? is_mutable `1` ? ( seq bv `T` ) `=1` `=0` )
             ? is_mutable
             { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` ) }
             {}
@@ -100553,7 +100653,7 @@ unsafe @ gen_const_decl s ty_tok b is_mutable i lex i syms i ty_line i ty_col �
             ( nurl_print ` = global ` ) ( nurl_print ( nurl_llty lt ) ) ( nurl_print ` ` )
             ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n\n` )
             ( nurl_sym_def syms cname lt )
-            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) `1` )
+            ( nurl_sym_def syms ( nurl_str_cat cname `__global` ) ? is_mutable `1` ( nurl_str_cat `=` ( nurl_str_int n ) ) )
             ? is_mutable
             { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` ) }
             {}

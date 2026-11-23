@@ -731,6 +731,121 @@ PR B2 relaxes `Inv.anch` to `HeldAnch` at a root that is no variable of the
 statement, which gives the named kills `NoHeld`. PR B3 makes the call that
 sets them up (`zN`, `CallThruOK`, the exit kill, `CallInv`).
 
+**PR B2, in progress (branch `t937-b2-wip`): how far the relaxation reaches.**
+Done so far:
+- **The clause.** `Inv.anch` is `AnchoredS Γ E F s.vars`. An anchor is in `F`, or it is a `HeldAnch` whose root is none of the statement's variables and whose type holds no views (`∃ Er, Γ r = some Er ∧ Er.ty.holdsView = false`).
+- **Why the type part.** `editBV` kills each root at `hv` = its type holds views (`killThruV`), so it needs `NoHeld` only at those roots (`NoHeldV`). At the others the rule's `HeldOK` spares the held anchors (`HeldSpared.of_thru`). A held root's type holds no views, so `NoHeldV` follows from the clause (`NoHeldV.of_anchS`). The call establishes it in B3 from `CallThruOK`'s "`w`'s elements hold no views".
+- **Transport.**
+  - `AnchoredS.anti`: fewer variables.
+  - `AnchoredS.extend` / `setE_none`: a fresh binding. A held root is bound, so it is not the new one.
+  - `AnchoredS.of_ty` / `of_tyV`: the types kept, or kept outside `V` (the unwind, `Stmt.spine_sub_vars`).
+  - `AnchoredS.union`: `seqL`, through `Keep`.
+- **Kills in the context.** These take the relaxed R-form (`RootbAnchRH`: in `F`, a region view, or a `HeldAnch`) and a `HeldSpared` at the killed root:
+  - `killE_rootbRH`;
+  - `CtxRel.killH`, `movedH`, `killNamesH`, `killHvH`, `editBH`, `editBVH`, `editBV_truncH`;
+  - `PushArg` / `EditArg.ctxRelH`.
+
+  At a named root, `HeldSpared` comes from `NoHeld.of_anchS`. At a root changed through a borrow, it comes from the rule (`HeldSpared.of_heldOK`, `of_thru`). The strict forms are derived from them (`HeldSpared.of_anchR`).
+- **The unwind lemmas** (`rootb_anchor_sp`, `rootKeep_frame_sp`) take `AnchoredH`, as PR A's `rootb_anchor` does.
+
+**Finding: two more consumers of strict anchors run at a leaf.**
+- **`SrcCase`** (`StmtT.ctxRel`, SrcKeep): a source body's typing, walked with `RootbAnchR`. It is used by `withLock` and `withElem`.
+- **A call's `CallA.anch`.** `post_rootb`, and the frame setup in `CallMem` / `CallInv`, read it strictly. Inside a route-U callee's body, the lifted parameter holds a held anchor at `w`, and a nested call there needs a `CallA` all the same.
+
+Both need the relaxed premise:
+- the R-form, plus held roots none of the statement's variables, with their types (an `AnchoredS` with regions);
+- every kill site they walk kills a variable of the statement (`NoHeld`) or a root through a borrow (`HeldOK`);
+- a call's arguments are variables of the statement, so `post_rootb` holds.
+
+For `CallA` this moves into B3's design: the frame setup must place the outer frame's held anchors (unfrozen `w`, not the callee's variable) in the new frame's rename.
+
+**Finding 2: `s.vars` is the wrong set for the clause.** A step can bring a variable into the statement that was none of its variables before, and is not fresh:
+- `callc` places a closure's body together with its captured names (`cs.map (·.1)`, in `heldFor` and the body's rename). A closure that captures `w` for reading, called inside a route-U body, makes `w` a variable of the statement. Nothing kills it there: the frame freezes the captured names (`frozen (heldFor …)`), so inside it `w ∈ F`.
+- `catchR` (`catchIn`): the inner invariant has `F ++ range m0.nv`. An outer held root below `m0.nv` is frozen inside, and nothing says the body names it not.
+
+So "a held root is no variable of the statement" does not survive a step, even where no kill of `w` is possible. The set must be the names the statement can kill: its variables outside the frames that put them in `F`. A `Stmt.killVars` would leave out a `frozen z k`'s `z`, a `catchR`'s frozen range, and what a placed frame freezes. Inside such a frame the anchor is in `F`, and outside it the root is no killable name. Then:
+- the per-step obligation is "a step's new killable names are old ones or fresh (`≥ m.nv`)" (`Step.killVars_sub`), proved over `Step`'s 67 rules;
+- a call's renamed body names the callee's variables (`≥ base`) or `inout` arguments, which are old killable names.
+
+The work on `t937-b2-wip` stands with `V` swapped from `s.vars` to `s.killVars`:
+- the transport lemmas, the H variants of the kill lemmas, `NoHeldV` and the type part;
+- the Preservation cases fixed so far.
+
+`Stmt.spine_sub_vars` becomes `spine_sub_killVars`: a running scope is killable.
+
+**Done (2b745946b).** `Stmt.killVars` is `Stmt.vars` without a `frozen` frame's list, and `Inv.anch` is now `AnchoredS Γ E F s.killVars`. The lemmas and the Preservation cases above are moved onto it, and `respine` takes the killable-name subset by a default tactic.
+
+**Finding 3: the step lemma needs an invariant on closures.** `frozenIn` and `catchIn` need a step's new killable names to be old ones or fresh (`≥ m.nv`). Every rule but the closure calls gives that:
+- a named call renames the callee's variables to `≥ base`, and its `inout` parameters to their arguments, which are killable names of the `letcall`;
+- `reap` and the frame setups bind fresh variables.
+
+`callc` renames the closure's `inout` captures (`cs.map (·.1)` with an `inout` mode) to the captured names themselves. These are killable now (the closure may assign them), and they were no names of the statement before. So the clause needs an invariant that no closure a binding of the statement names captures a held root `inout`: in `Γ`, no binding in `s.killVars` holds a mutating name dependency on a held root. This is B3's `w ∉ roots (mutNames Γ args)` at the call, carried as an invariant:
+- a new mutating name dependency on `w` is made only by a closure literal that captures `w`, which names `w`, which the clause forbids;
+- dependencies flow by copy and move, which keeps the roots.
+
+This makes B2's last two cases depend on B3's invariant. The order is therefore:
+1. the closure-capture clause (`Inv` field, preserved, and established at the call with `CallThruOK`);
+2. `Step.killVars_sub` with that clause for `callc` / `callcE`;
+3. `frozenIn` and `catchR`;
+4. `SrcCase` relaxed (`withLock`, `withElem`);
+5. the call side (`CallA`, CallMem, CallInv), with the rest of B3.
+
+**Open design question for the closure-capture clause.** Folding it into `AnchoredS` (for the held disjunct: no `q ∈ V` holds a mutating name dependency on the root) needs no new `Inv` field. But every transport would then have to keep the name dependencies of the statement's bindings, not only their types. `Inv.weaker` breaks that: `EntryWeaker.live` lets a weaker entry hold more (`E.held ⊆ E'.held`), so the clause may fail in the typing while nothing changes at run time. The candidates:
+1. state it over what the run-time value of `q` may change: a package's `inout` captures, `cs` with a mutating mode. Then it is a fact of the store (`m`), kept by `MInv`-style lemmas, and weakening does not touch it;
+2. state it over the context before weakening: `Inv` would carry the strict context;
+3. forbid weakening to add mutating name dependencies, a restriction of `EntryWeaker`.
+
+(1) is the closest to what `callc` reads (`m.st c = some ⟨o, some (.pkg … cs)⟩`), and the call establishes it from `CallThruOK`'s `w ∉ roots (mutNames Γ args)` together with the package invariant that a package's captures are its entry's name dependencies.
+
+**B2 and B3 are complete (2026-11-23).** The library has no `sorry`, and every theorem `Check.lean` prints depends only on `propext`, `Classical.choice` and `Quot.sound`.
+- **The invariant:** a borrowed parameter's held views may be anchored outside `F` at roots none of the statement's killable names (`AnchoredS`). The store holds no package that captures such a root other than read-only (`HeldCapsInp`, `CapsInpAt`, slots and blocks).
+- **Every step keeps both:** `Step.killVars_sub` and `CapInout.not_held` (claude-expert), CapsStore (claude-accurate), `EvalR.capsInp`, and `Step.slotsCaps`.
+- **The call side:**
+  - `CallA.anch` is `RootbAnchRS`;
+  - `NamesFree`'s new conjunct says closures' by-name changes spare held views;
+  - the call frames set up the clause from the caller's.
+- **Source typing:** `StmtT.ctxRelS`.
+
+What follows is the record of the work as it went.
+
+**Where the WIP branch stands (2026-11-23).** With every proof file moved onto the relaxed anchors, the whole library builds. The places still open are marked `sorry -- WIP scaffold (AGORA-937 B2, never merged)`, so the gaps are an exact list. Nothing is merged while any is there.
+- **The closure-capture clause (AGORA-963), 7 places:**
+  - Preservation's `frozenIn` and `catchR`;
+  - Closure.lean: the closure call's frame, the kill at the captures, and the new statement;
+  - EnvHand.lean: the anchors the package-call lemmas take, two places.
+- *(Proved since: `SrcCase` takes `RootbAnchRS Γ F s.killVars`, and SrcKeep's `StmtT.ctxRelS` keeps the borrowed parameters on the relaxed anchors.*
+  - *Every name a source statement kills is a killable name that is no region, so no held root (`RootbAnchRS.noHeld`). That is what the `…H` kills ask (`HeldSpared`).*
+  - *A changed `Vec`'s path roots hold views, so they are no held root either (`NoHeldV.of_anchRS`).*
+  - *The `NoHeld` callbacks of `PushArg` / `EditArg` / `editBH` / `editBVH` take a no-region premise: a callee frame's region may carry held self-views, and only the `move` case asks.*
+  - *The strict `StmtT.ctxRel` stays as a corollary for a callee's body. Its R-only helpers in SrcKeep had no other users and are gone.)*
+
+**The closure-capture clause in the invariant (2026-11-23).**
+- `Inv.heldCaps : HeldCapsInp m Γ F s` is the clause (claude-expert's, CapClause.lean; its definition sits in Invariant.lean ahead of `Inv`).
+- With it, Preservation's `frozenIn` and `catchR` are proved by `Step.held_not_killVars`.
+- What is left:
+  - **AGORA-963 step 3, preservation of the clause:** every `Inv` a step builds is marked `WIP scaffold (AGORA-963 step 3, …): HeldCapsInp across this step`. `grep -rn "AGORA-963 step 3" formal/` lists them: 33 sites in Preservation, EnvHand, Closure and CallInv. The positional constructions go through `Inv.mk₀ hcaps …`, and `Inv.ofLeaf` takes the clause first.
+  - **Proved already:** the sites where the store's slots, the borrowed parameters and the spine carry over (`HeldCapsInp.of_st / respine / of_rootb / mono`): the sweeps, `Inv.weaker`, `Inv.clean`, `Inv.respine`, the `…In` lemmas, A3's `Nid` and spawn, and the empty store.
+  - *(Proved since: the 5 call-side places.*
+    - *At the closure call, an outer held root is at most a read capture (the clause). Then the opened call lends it (`H`): it is no moved argument (`capPos_any`), and no root of `mutNames`, since `NamesFree` makes every argument reach a changed root by its bound. Otherwise it is none of the call's names.*
+    - *After the call it is none of the new statement's killable names, and a frame binding of the same type (`postdt`).*
+    - *The hand-over lemmas take `RootbAnch` plus `NoHeld` at the receiver and the arguments, and `rootb_namesH` spares held views by `NamesFree`.)*
+- **What is left is exactly AGORA-963 step 3's 30 sites.**
+- *(Proved since, B3's call side: `CallA.anch` is `RootbAnchRS Γ F args`. An anchor is in `F`, through a region, or held of a root that is no argument and holds no views.*
+  - *`NamesFree` asks that the closures' by-name change ends no held view. That is the call-site twin of 963's clause, in the spare form `HeldSpared` reads.*
+  - *`namesFree_lift` carries it into the lifted frame from `S.OK` as it stands, with no new field (`liftE_rootb_held_mem`, `Φsat`, `N_mut`).*
+  - *`post_rootb` uses it at `mutNames`' roots, and at a moved or changed argument the held root is no argument.*
+  - *The outer anchors after the call is placed come from the `letcall`'s own `Inv` (`killVars_callIn`, `postdt`).)*
+- *(Proved since: `StmtT.catchR`'s anchor premise is now `RootbAnchS Δ F [x]`. It is used only at the frame's end, where `catchR x m0 skip`'s one killable name is `x`. At the recursive call's setup it follows from the outer anchors, because `x` is a killable name of `letrec x f k`.)*
+- *(Proved since: EnvHand.lean's two "carry the anchors to the package call's new statement". The new killable names are the old ones, or the fresh `m.nv` / `m.nv + 1`, which Γ does not bind.)*
+
+**The call side (B3): what `CallA.anch` is used for.** Four uses (2026-11-23), and all but one are met by the relaxed clause:
+1. **`CallA.post_rootb` (Call.lean).** The call's context change leaves every borrowed parameter's entry as it was. At a moved or changed argument, a held root is impossible: an argument is a killable name of the `letcall` / `callc`, and the clause keeps held roots out of those. At the roots of `mutNames Γ args` (what an argument closure may change by name), the clause says nothing. **This is the one use that needs AGORA-963's fact**, in its typing form: no held root is a root of `mutNames Γ args`.
+2. **CallInv.lean:257.** The new `Inv`'s anchors for an outer borrowed parameter after the call is placed. The renamed body's killable names are `≥ base` or `inout` arguments (`Step.killVars_sub`'s call case), and an outer held root is none of them. So the relaxed clause carries over (transport: `of_ty` / `extend`).
+3. **CallInv.lean:540 (`recCase`).** It only enlarges `F` (`.mono`).
+4. **CallMem.lean:568/573.** An argument's copy at entry (`rhs_pres`) asks `NoHeld` at the argument, a killable name, so the relaxed clause suffices.
+
+So `CallA.anch` can become the relaxed R-form with the held clause over `s.killVars`, plus a premise for (1). That premise is the call-site twin of 963's store-level clause: `w ∉ roots (mutNames Γ args)` for each held root `w`, the same condition `CallThruOK` asks at a route-U call. **The two must be proved to agree.** A package's captures are its entry's name dependencies (`MInv.held`, `NamesIn`), so the store-level clause gives the typing-level one on the strict context. Weakening (`StmtT.sub`) can only add name dependencies, so the premise is asked of the context at the call, before weakening, as `CallT`'s other premises are.
+
 The premise of the call (`CallThruOK`) narrows too (finding above): other
 arguments reach `w` only by name. A `.self` path (a borrow `&w` passed
 beside `vv`) would let the callee view inside `w`'s elements through a

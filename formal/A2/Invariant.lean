@@ -764,6 +764,54 @@ def Stmt.spine : Stmt → List Var
   | .block s => s.spine
   | _ => []
 
+/-- AGORA-937 (3d, route U, PR B2): the names a statement may kill. A
+    `frozen` frame's list is no kill site: what it freezes is lent out inside,
+    and a call frame's list holds every older binding (`zOf`). -/
+def Stmt.killVars : Stmt → List Var
+  | .skip => []
+  | .seq a b => a.killVars ++ b.killVars
+  | .letv x r s => x :: r.vars ++ s.killVars
+  | .letcall x _ args s => x :: args ++ s.killVars
+  | .assign x r => x :: r.vars
+  | .ite c a b => c.vars ++ a.killVars ++ b.killVars
+  | .while c s => c.vars ++ s.killVars
+  | .push x y => [x, y]
+  | .free x => [x]
+  | .scope x s => x :: s.killVars
+  | .rbind p s => p :: s.killVars
+  | .frozen _ s => s.killVars
+  | .panic => []
+  | .letrec x _ s => x :: s.killVars
+  | .catchR x _ s => x :: s.killVars
+  | .unpair y x z s => y :: x :: z :: s.killVars
+  | .callc x c _ _ zs s => x :: c :: zs ++ s.killVars
+  | .letd x _ r s => x :: r.vars ++ s.killVars
+  | .scopeD x _ s => x :: s.killVars
+  | .edit _ x op => x :: op.vars
+  | .withLock a x s => x :: a :: s.killVars
+  | .scopeL _ _ x s => x :: s.killVars
+  | .insert x i y => x :: y :: i.vars
+  | .withElem v i x s => x :: v :: i.vars ++ s.killVars
+  | .callcE x c _ zs s => x :: c :: zs ++ s.killVars
+  | .block s => s.killVars
+  | .exit _ => []
+  | .loop s => s.killVars
+  | .takeB x i y s => y :: x :: i.vars ++ s.killVars
+
+/-- A running scope's binding is a variable of the statement. -/
+theorem Stmt.spine_sub_vars (s : Stmt) : ∀ v ∈ s.spine, v ∈ s.vars := by
+  induction s <;> intro v h <;> simp only [Stmt.spine, Stmt.vars, List.mem_cons, List.mem_append] at h ⊢
+  all_goals first
+    | (rcases h with h | h <;> simp_all)
+    | simp_all
+
+/-- ... and a name the statement may kill. -/
+theorem Stmt.spine_sub_killVars (s : Stmt) : ∀ v ∈ s.spine, v ∈ s.killVars := by
+  induction s <;> intro v h <;> simp only [Stmt.spine, Stmt.killVars, List.mem_cons, List.mem_append] at h ⊢
+  all_goals first
+    | (rcases h with h | h <;> simp_all)
+    | simp_all
+
 /-- An address is covered: a tree some binding owns holds it, or (A3.1) a
     live block's payload owns it. -/
 def Covered (m : Mem) (i : Nat) : Prop := (∃ x t, OwnedAt m x t ∧ i ∈ t.ids) ∨ PayAddr m i
@@ -932,6 +980,24 @@ theorem ExitAt.vars {s e : Stmt} {n : Nat} (h : ExitAt s n e) : ∀ v ∈ e.vars
     · exact Or.inr (ih v h)
   | block _ ih => exact ih
 
+theorem ExitAt.killVars {s e : Stmt} {n : Nat} (h : ExitAt s n e) : ∀ v ∈ e.killVars, v ∈ s.killVars := by
+  induction h with
+  | exit => intro v hv; simp [Stmt.killVars] at hv
+  | seq _ ih => intro v hv; exact List.mem_append_left _ (ih v hv)
+  | scope _ ih =>
+    intro v hv
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+    rcases hv with h | h
+    · exact Or.inl h
+    · exact Or.inr (ih v h)
+  | scopeD _ ih =>
+    intro v hv
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+    rcases hv with h | h
+    · exact Or.inl h
+    · exact Or.inr (ih v h)
+  | block _ ih => exact ih
+
 theorem ExitAt.catchOK {m : Mem} {s e : Stmt} {n : Nat} (h : ExitAt s n e) (hc : CatchOK m s) :
     CatchOK m e := by
   induction h with
@@ -990,6 +1056,127 @@ def RootbAnchF (Γ : Ctx) (F : List Var) : Prop :=
 theorem RootbAnchF.toH {Γ : Ctx} {F : List Var} (h : RootbAnchF Γ F) : RootbAnch Γ F :=
   fun p E hp hm => (h p E hp hm).toH
 
+/-- AGORA-937 (3d, route U, PR B2): anchored in `F`, or by a lent `Vec`'s
+    held anchor (`HeldAnch`) at a root that is none of `V` - the variables
+    of the statement that runs (`Inv.anch`) - and whose elements hold no
+    views. A binding the statement names is so no held anchor's root, and
+    a kill of it spares them (`NoHeld.of_anchS`); so is a root a change
+    through a borrow kills at `.view` (`editBV`, whose root's type holds
+    views: `NoHeldV.of_anchS`). -/
+def AnchoredS (Γ : Ctx) (E : Entry) (F V : List Var) : Prop :=
+  ∀ d ∈ E.vdeps, d.kind.bound = .none → d.root ∈ F ∨
+    (HeldAnch E d ∧ d.root ∉ V ∧ ∃ Er, Γ d.root = some Er ∧ Er.ty.holdsView = false)
+
+theorem Anchored.toS {E : Entry} {F : List Var} (h : Anchored E F) (Γ : Ctx) (V : List Var) :
+    AnchoredS Γ E F V :=
+  fun d hd hb => Or.inl (h d hd hb)
+
+theorem AnchoredS.toH {Γ : Ctx} {E : Entry} {F V : List Var} (h : AnchoredS Γ E F V) : AnchoredH E F :=
+  fun d hd hb => (h d hd hb).imp id And.left
+
+theorem AnchoredS.mono {Γ : Ctx} {E : Entry} {F F' V : List Var} (h : AnchoredS Γ E F V)
+    (hF : ∀ v ∈ F, v ∈ F') : AnchoredS Γ E F' V :=
+  fun d hd hb => (h d hd hb).imp (hF _) id
+
+/-- ... for fewer variables. -/
+theorem AnchoredS.anti {Γ : Ctx} {E : Entry} {F V V' : List Var} (h : AnchoredS Γ E F V)
+    (hV : ∀ v ∈ V', v ∈ V) : AnchoredS Γ E F V' :=
+  fun d hd hb => (h d hd hb).imp id fun ⟨ha, hn, hr⟩ => ⟨ha, fun h' => hn (hV _ h'), hr⟩
+
+/-- Two of them for one entry, the first through `Γ`: anchored for both sets
+    of variables at once. -/
+theorem AnchoredS.union {Γ Γ0 : Ctx} {E : Entry} {F V1 V2 : List Var} (h1 : AnchoredS Γ E F V1)
+    (h2 : AnchoredS Γ0 E F V2) : AnchoredS Γ E F (V1 ++ V2) := fun d hd hb => by
+  rcases h1 d hd hb with h | ⟨ha, hn1, hr⟩
+  · exact Or.inl h
+  rcases h2 d hd hb with h | ⟨_, hn2, _⟩
+  · exact Or.inl h
+  exact Or.inr ⟨ha, fun h => (List.mem_append.mp h).elim hn1 hn2, hr⟩
+
+/-- ... the first anchored where `Z` is lent out too (a `frozen` scope's
+    inner invariant), `Z` among the second's variables. -/
+theorem AnchoredS.union' {Γ Γ0 : Ctx} {E : Entry} {F Z V1 V2 : List Var} (h1 : AnchoredS Γ E (F ++ Z) V1)
+    (h2 : AnchoredS Γ0 E F V2) (hZ : ∀ v ∈ Z, v ∈ V2) : AnchoredS Γ E F (V1 ++ V2) := fun d hd hb => by
+  rcases h2 d hd hb with h | ⟨_, hn2, _⟩
+  · exact Or.inl h
+  rcases h1 d hd hb with h | ⟨ha, hn1, hr⟩
+  · rcases List.mem_append.mp h with h | h
+    · exact Or.inl h
+    · exact absurd (hZ _ h) hn2
+  exact Or.inr ⟨ha, fun h => (List.mem_append.mp h).elim hn1 hn2, hr⟩
+
+/-- ... in a context that keeps the type of each binding outside `V` (a
+    held anchor's root is none of `V`). -/
+theorem AnchoredS.of_tyV {Γ Γ' : Ctx} {E : Entry} {F V : List Var} (h : AnchoredS Γ E F V)
+    (hty : ∀ r Er, Γ r = some Er → r ∉ V → ∃ Er', Γ' r = some Er' ∧ Er'.ty = Er.ty) : AnchoredS Γ' E F V :=
+  fun d hd hb => (h d hd hb).imp id fun ⟨ha, hn, Er, hEr, hv⟩ => by
+    obtain ⟨Er', h', ht⟩ := hty _ _ hEr hn
+    exact ⟨ha, hn, Er', h', ht ▸ hv⟩
+
+/-- ... for more variables, each an old one or bound nowhere in `Γ` (a fresh
+    one): a held anchor's root is bound. -/
+theorem AnchoredS.extend {Γ : Ctx} {E : Entry} {F V V' : List Var} (h : AnchoredS Γ E F V)
+    (hV : ∀ v ∈ V', v ∈ V ∨ Γ v = none) : AnchoredS Γ E F V' :=
+  fun d hd hb => (h d hd hb).imp id fun ⟨ha, hn, Er, hEr, hr⟩ =>
+    ⟨ha, (fun h' => by
+      rcases hV _ h' with h' | h'
+      · exact hn h'
+      · rw [hEr] at h'; cases h'), Er, hEr, hr⟩
+
+/-- ... in a context that keeps each binding's type. -/
+theorem AnchoredS.of_ty {Γ Γ' : Ctx} {E : Entry} {F V : List Var} (h : AnchoredS Γ E F V)
+    (hty : ∀ r Er, Γ r = some Er → ∃ Er', Γ' r = some Er' ∧ Er'.ty = Er.ty) : AnchoredS Γ' E F V :=
+  fun d hd hb => (h d hd hb).imp id fun ⟨ha, hn, Er, hEr, hv⟩ => by
+    obtain ⟨Er', h', ht⟩ := hty _ _ hEr
+    exact ⟨ha, hn, Er', h', ht ▸ hv⟩
+
+/-- ... where a fresh binding is added: a held anchor's root is bound. -/
+theorem AnchoredS.setE_none {Γ : Ctx} {E : Entry} {F V : List Var} (h : AnchoredS Γ E F V) {z : Var}
+    (hz : Γ z = none) (Ez : Entry) : AnchoredS (setE Γ z Ez) E F V :=
+  h.of_ty fun r Er hr => by
+    have hrz : r ≠ z := fun e => by subst e; rw [hz] at hr; cases hr
+    exact ⟨Er, by simp [setE, upd, hrz, hr], rfl⟩
+
+/-- The borrowed parameters' anchors where a statement of variables `V`
+    runs (`Inv.leafAnchS`). -/
+def RootbAnchS (Γ : Ctx) (F V : List Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → AnchoredS Γ E F V
+
+theorem RootbAnchS.toH {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) : RootbAnch Γ F :=
+  fun p E hp hm => (h p E hp hm).toH
+
+theorem RootbAnchF.toS {Γ : Ctx} {F : List Var} (h : RootbAnchF Γ F) (V : List Var) : RootbAnchS Γ F V :=
+  fun p E hp hm => (h p E hp hm).toS Γ V
+
+theorem RootbAnchS.anti {Γ : Ctx} {F V V' : List Var} (h : RootbAnchS Γ F V) (hV : ∀ v ∈ V', v ∈ V) :
+    RootbAnchS Γ F V' :=
+  fun p E hp hm => (h p E hp hm).anti hV
+
+theorem RootbAnchS.mono {Γ : Ctx} {F F' V : List Var} (h : RootbAnchS Γ F V) (hF : ∀ v ∈ F, v ∈ F') :
+    RootbAnchS Γ F' V :=
+  fun p E hp hm => (h p E hp hm).mono hF
+
+/-- ... kept where the borrowed parameters keep their entries, every binding
+    its mode and type, and the domain is the same. -/
+theorem RootbAnchS.of_rel {Γ Γ1 : Ctx} {F V : List Var} (h : RootbAnchS Γ F V)
+    (hdom : ∀ x, (Γ1 x).isSome = (Γ x).isSome)
+    (hcm : ∀ x E1, Γ1 x = some E1 → ∃ E0, Γ x = some E0 ∧ E1.mode = E0.mode ∧ E1.ty = E0.ty)
+    (hrb : ∀ p Ep, Γ p = some Ep → Ep.mode = .rootb → Γ1 p = some Ep) : RootbAnchS Γ1 F V := by
+  have hty : ∀ r Er, Γ r = some Er → ∃ Er', Γ1 r = some Er' ∧ Er'.ty = Er.ty := by
+    intro r Er hr
+    cases h1 : Γ1 r with
+    | none => have := hdom r; rw [h1, hr] at this; cases this
+    | some Er' =>
+      obtain ⟨E0, h0, _, ht⟩ := hcm r Er' h1
+      rw [hr] at h0; cases h0; exact ⟨Er', rfl, ht⟩
+  intro p E hp hm
+  obtain ⟨E0, h0, hm0, _⟩ := hcm p E hp
+  rw [hm] at hm0
+  have := hrb p E0 h0 hm0.symm
+  rw [hp] at this; cases this
+  exact (h p _ h0 hm0.symm).of_ty hty
+
+
 theorem Anchored.mono {E : Entry} {F F' : List Var} (h : Anchored E F) (hF : ∀ v ∈ F, v ∈ F') :
     Anchored E F' :=
   fun d hd hb => hF _ (h d hd hb)
@@ -1047,6 +1234,66 @@ theorem AnchoredIn.of_regions {Γ Γ' : Ctx} {E : Entry} {F : List Var} (h : Anc
     (hreg : ∀ v Er, Γ v = some Er → Er.mode = .region → ∃ Er', Γ' v = some Er' ∧ Er'.mode = .region) :
     AnchoredIn Γ' E F := fun d hd hb =>
   (h d hd hb).imp id fun ⟨hk, _, hEr, hr⟩ => ⟨hk, hreg _ _ hEr hr⟩
+
+/-- AGORA-937 (3d, route U, PR B2): the borrowed parameters' anchors where a
+    kill's context is typed at a leaf: in `F`, a view of a region, or a lent
+    `Vec`'s held anchor (`HeldAnch`), which a kill spares where it is told so
+    (`HeldSpared`, `killE_rootbRH`). -/
+def RootbAnchRH (Γ : Ctx) (F : List Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound = .none →
+    d.root ∈ F ∨ RegionView Γ d ∨ HeldAnch E d
+
+theorem RootbAnchR.toRH {Γ : Ctx} {F : List Var} (h : RootbAnchR Γ F) : RootbAnchRH Γ F :=
+  fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp id Or.inl
+
+theorem RootbAnchS.toRH {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) : RootbAnchRH Γ F :=
+  fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp id fun h' => Or.inr h'.1
+
+/-- AGORA-937 (B3): the borrowed parameters' anchors at a call (`CallA`):
+    in `F`, through a region (a callee's body), or held of a root that is
+    none of `V` (the call's arguments) and holds no views. -/
+def RootbAnchRS (Γ : Ctx) (F V : List Var) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound = .none →
+    d.root ∈ F ∨ RegionView Γ d ∨
+    (HeldAnch E d ∧ d.root ∉ V ∧ ∃ Er, Γ d.root = some Er ∧ Er.ty.holdsView = false)
+
+theorem RootbAnchR.toRS {Γ : Ctx} {F : List Var} (h : RootbAnchR Γ F) (V : List Var) : RootbAnchRS Γ F V :=
+  fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp id Or.inl
+
+theorem RootbAnchS.toRS {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) : RootbAnchRS Γ F V :=
+  fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp id Or.inr
+
+theorem RootbAnchRS.mono {Γ : Ctx} {F F' V : List Var} (h : RootbAnchRS Γ F V) (hF : ∀ v ∈ F, v ∈ F') :
+    RootbAnchRS Γ F' V :=
+  fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp (hF _) id
+
+theorem RootbAnchRS.anti {Γ : Ctx} {F V V' : List Var} (h : RootbAnchRS Γ F V) (hV : ∀ v ∈ V', v ∈ V) :
+    RootbAnchRS Γ F V' :=
+  fun p E hp hm d hd hb => (h p E hp hm d hd hb).imp id
+    (Or.imp id fun ⟨ha, hn, hr⟩ => ⟨ha, fun h' => hn (hV _ h'), hr⟩)
+
+/-- A fresh binding with an entry other than a borrowed parameter's keeps
+    the anchors. -/
+theorem RootbAnchRS.setE {Γ : Ctx} {F V : List Var} (h : RootbAnchRS Γ F V) {x : Var} {E : Entry}
+    (hE : E.mode ≠ .rootb) (hx : Γ x = none) : RootbAnchRS (A2.setE Γ x E) F V := fun p Ep hp hm d hd hb => by
+  by_cases hpx : p = x
+  · subst hpx; simp [A2.setE, upd] at hp; subst hp; exact absurd hm hE
+  · have hp' : Γ p = some Ep := by simpa [A2.setE, upd, hpx] using hp
+    rcases h p Ep hp' hm d hd hb with h1 | ⟨hk, Er, hEr, hr⟩ | ⟨ha, hn, Er, hEr, hv⟩
+    · exact Or.inl h1
+    · have hdx : d.root ≠ x := fun e => by rw [e, hx] at hEr; cases hEr
+      exact Or.inr (Or.inl ⟨hk, Er, by simp [A2.setE, upd, hdx, hEr], hr⟩)
+    · have hdx : d.root ≠ x := fun e => by rw [e, hx] at hEr; cases hEr
+      exact Or.inr (Or.inr ⟨ha, hn, Er, by simp [A2.setE, upd, hdx, hEr], hv⟩)
+
+/-- ... where no binding is a region (a run-time context), the region
+    disjunct is void. -/
+theorem RootbAnchRS.toS {Γ : Ctx} {F V : List Var} (h : RootbAnchRS Γ F V)
+    (hnr : ∀ v E, Γ v = some E → E.mode ≠ .region) : RootbAnchS Γ F V := fun p E hp hm d hd hb => by
+  rcases h p E hp hm d hd hb with h | ⟨_, Er, hEr, hr⟩ | h
+  · exact Or.inl h
+  · exact absurd hr (hnr _ _ hEr)
+  · exact Or.inr h
 
 
 /-- A2-drop.3d, Agora #610: what the invariant asks of a block's destructor
@@ -1484,12 +1731,55 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   pkgFree   : ∀ x Ex o v, Γ x = some Ex → Alive Ex → m.st x = some ⟨o, some v⟩ →
                 ∀ i, PkgNames m Γ Ex v i → PkgFreeId m i
 
+/-- The packages in `V` capture `w` only `.inp`. -/
+def ValCapsInp (V : Val) (w : Var) : Prop :=
+  ∀ fs te ms e cs, Sub (.pkg fs te ms e cs) V → ∀ q ∈ cs, q.1 = w → q.2.1 = .inp
+
+/-- ... in the store: every slot's value and every block's payload (a
+    package in an `Arc`, lock or cell comes back to a slot by `arcGet` /
+    `lockTake`, as `MemCodes` reads the blocks too). -/
+def CapsInpAt (m : Mem) (w : Var) : Prop :=
+  (∀ x o V, m.st x = some ⟨o, some V⟩ → ValCapsInp V w) ∧
+  (∀ k bl V, m.blk k = some bl → bl.pay = some V → ValCapsInp V w)
+
+/-- AGORA-937 B2 (AGORA-963): the closure-capture clause. A held anchor's
+    root, not lent out, is captured by no package in the store but
+    read-only (`.inp`), so no call through a package hands it to an
+    `inout` parameter of the code (`CapInout.not_held`, `CapClause.lean`). -/
+def HeldCapsInp (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop :=
+  ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine →
+  ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F → CapsInpAt m d.root
+
+/-- ... read off the slots, the blocks, the borrowed parameters and the
+    running scopes. -/
+theorem CapsInpAt.of_st {m m' : Mem} {w : Var} (h : CapsInpAt m w) (hst : m'.st = m.st)
+    (hb : m'.blk = m.blk := by rfl) : CapsInpAt m' w :=
+  ⟨fun x o V hx => h.1 x o V (hst ▸ hx), fun k bl V hk hp => h.2 k bl V (hb ▸ hk) hp⟩
+
+theorem HeldCapsInp.of_st {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
+    (hst : m'.st = m.st) (hb : m'.blk = m.blk := by rfl) : HeldCapsInp m' Γ F s :=
+  fun p E hp hm hps d hd hb' hh hF => (h p E hp hm hps d hd hb' hh hF).of_st hst hb
+
+theorem HeldCapsInp.respine {m : Mem} {Γ : Ctx} {F : List Var} {s s' : Stmt} (h : HeldCapsInp m Γ F s)
+    (hsp : ∀ v ∈ s.spine, v ∈ s'.spine) : HeldCapsInp m Γ F s' :=
+  fun p E hp hm hps => h p E hp hm fun h' => hps (hsp _ h')
+
+theorem HeldCapsInp.of_rootb {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
+    (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E) : HeldCapsInp m Γ' F s :=
+  fun p E hp hm => h p E (hrb p E hp hm) hm
+
+theorem HeldCapsInp.mono {m : Mem} {Γ : Ctx} {F F' : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
+    (hF : ∀ v ∈ F, v ∈ F') : HeldCapsInp m Γ F' s :=
+  fun p E hp hm hps d hd hb hh hF' => h p E hp hm hps d hd hb hh fun h' => hF' (hF _ h')
+
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
 structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv m Γ where
   nvS       : ∀ v ∈ s.vars, v < m.nv
   nvF       : ∀ v ∈ F, v < m.nv
-  anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → Anchored E F
+  /-- AGORA-937 (3d, route U, PR B2): a held anchor's root is none of the
+      statement's variables (`AnchoredS`). -/
+  anch      : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → AnchoredS Γ E F s.killVars
   spineNd   : s.spine.Nodup
   spineDom  : ∀ v ∈ s.spine, ∃ E, Γ v = some E
   catchOK   : CatchOK m s
@@ -1505,6 +1795,22 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
                 (E.ty ≠ .int ∨ E.mode = .rootb) → v ∉ s.spine → ∀ d ∈ E.vdeps,
                 d.kind.isName = false → d.root ∉ s.spine
   dtorIn    : DtorPinOK Γ s
+  /-- AGORA-937 B2 (AGORA-963): the closure-capture clause. -/
+  heldCaps  : HeldCapsInp m Γ F s
+
+/-- The invariant from its fields, the closure-capture clause first. -/
+theorem Inv.mk₀ {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hcaps : HeldCapsInp m Γ F s)
+    (toMInv : MInv m Γ) (nvS : ∀ v ∈ s.vars, v < m.nv) (nvF : ∀ v ∈ F, v < m.nv)
+    (anch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → AnchoredS Γ E F s.killVars)
+    (spineNd : s.spine.Nodup) (spineDom : ∀ v ∈ s.spine, ∃ E, Γ v = some E) (catchOK : CatchOK m s)
+    (cover : Covers m)
+    (pinOut : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ r ∈ roots E.vdeps, r ∉ s.spine)
+    (pinIn : PinOK Γ s)
+    (dtorOut : ∀ v E, Γ v = some E → E.dbind = true → E.mode.ownSlot = true →
+                (E.ty ≠ .int ∨ E.mode = .rootb) → v ∉ s.spine → ∀ d ∈ E.vdeps,
+                d.kind.isName = false → d.root ∉ s.spine)
+    (dtorIn : DtorPinOK Γ s) : Inv m Γ F s :=
+  ⟨toMInv, nvS, nvF, anch, spineNd, spineDom, catchOK, cover, pinOut, pinIn, dtorOut, dtorIn, hcaps⟩
 
 /-- Agora #755: `StmtT.withLock`'s `hna` where the payload owns no destructor
     value (its type is known) or the body assigns nothing to the binding. -/
@@ -2011,7 +2317,10 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
   | catchR {Γ Δ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {s : Stmt} :
       x ∉ F → StmtT P .none Γ (F ++ (List.range m0.nv).filter (· ≠ x)) s Δ →
       MInv (m0.set x ⟨false, some (.int 1)⟩) Δ →
-      (RootbAnchF Δ F) →
+      -- (AGORA-937 B2: at the frame's end the statement is `catchR x m0 skip`,
+      -- whose one killable name is `x`: an anchor in `F`, or held of a root
+      -- other than `x` that holds no views)
+      (RootbAnchS Δ F [x]) →
       KeepOut Γ Δ s.spine → DStay Γ Δ s.spine →
       StmtT P ξ Γ F (.catchR x m0 s) Δ
   /-- A2-drop: a binding that runs a destructor at its end: of a destructor

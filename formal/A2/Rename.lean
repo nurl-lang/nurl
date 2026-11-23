@@ -4421,6 +4421,43 @@ theorem CallDtorSafe.canon (h : S.OK) (hab : S.AbsOK Γa) {ps : List (PMode × T
     · rfl
     · exact hds.2.2 i hi b hb Ea0 hEa0
 
+/-- AGORA-937 (B3): an effect ends no more with `hv` false. -/
+theorem Eff.kills_hv_mono {e : Eff} {k : Kind} (h : e.kills false k = true) (hv : Bool) :
+    e.kills hv k = true := by
+  cases e <;> cases k <;> cases hv <;> simp_all [Eff.kills]
+
+/-- AGORA-937 (B3): what a lifted borrowed parameter holds in memory: a
+    callee region's index, renamed, or a frame root (one a region stands
+    for, so in `R`, or one the argument's entry depends on). -/
+theorem liftE_rootb_held_mem (h : S.OK) (hab : S.AbsOK Γa) {v : Var} {E : Entry}
+    (hE : Γa v = some E) (hrb : E.mode = .rootb) {d : Dep}
+    (hd : d ∈ (S.subE (S.liftE v E)).held) (hk : d.kind.isName = false) :
+    (∃ u, d.root = S.ρ u ∧ S.isReg u = true) ∨
+    ((∀ w, S.ρ w ≠ d.root) ∧ (d.root ∈ S.R ∨ d ∈ (S.pe v).vdeps)) := by
+  rw [subE_held] at hd
+  obtain ⟨e, he, hde⟩ := List.mem_flatMap.mp hd
+  rcases S.mem_subD hde with rfl | ⟨u, _, _, e0, he0, rfl, hk0⟩
+  · simp only [liftE, hrb, ↓reduceIte, List.mem_append] at he
+    rcases he with he | he
+    · obtain ⟨e1, he1, rfl⟩ := mem_rds.mp he
+      obtain ⟨he1', hn1⟩ := List.mem_filter.mp he1
+      obtain ⟨_, _, R, hR, hh⟩ := hab.1 v E hE hrb
+      rw [hh] at he1'
+      rcases List.mem_append.mp he1' with hr | hs
+      · exact Or.inl ⟨e1.root, rfl, (hR e1 hr).2⟩
+      · exfalso
+        split at hs
+        · obtain ⟨w, b, t, rfl, _⟩ := h.sym_ok e1 hs
+          simp [Kind.isName] at hn1
+        · cases hs
+    · split at he
+      · exfalso; have := (List.mem_filter.mp he).2; simp [hk] at this
+      · have hv : d ∈ (S.pe v).vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ he
+        exact Or.inr ⟨(h.pe_out v d hv hk).1, Or.inr hv⟩
+  · refine Or.inr ⟨(S.σ_frameC h ⟨e0, he0, rfl, hk0⟩).1, Or.inl ?_⟩
+    show e0.root ∈ S.R
+    exact mem_allKinds (h.σ_sub u he0)
+
 /-- What a closure handed to a call may change is changed by the call, where
     the call places it. -/
 theorem namesFree_lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {ps : List (PMode × Ty)}
@@ -4431,11 +4468,33 @@ theorem namesFree_lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {ps : List
   rcases mem_mutNames_canon h hab hargs hvs hd with hd | ⟨hN, hb⟩
   case inr =>
     -- what the arguments' closures may change
-    obtain ⟨hFc, hR, ⟨Er, hEr, hcan, s, hts, hsv⟩, hpe, hN', _⟩ := h.N_mut d hN hb
+    obtain ⟨hFc, hR, ⟨Er, hEr, hcan, s, hts, hsv⟩, hpe, hN', hhit⟩ := h.N_mut d hN hb
     have hout := (h.N_out d hN).1
     have hae : argE (S.canon Γa) d.root = Er := by unfold argE; rw [canon_frame _ hout, hEr]; rfl
     refine ⟨by rw [hae]; exact hcan, ⟨s, by rw [hae]; exact hts, hsv⟩, hFc, Or.inl fun hm => ?_,
-      fun a' ha' _ d' hd' hr' => ?_⟩
+      fun a' ha' _ d' hd' hr' => ?_, fun p Ep hp hm d' hd' hr' hha => ?_⟩
+    rotate_right
+    · -- AGORA-937 (B3): a frame binding is reached by the closures' change as
+      -- by none (`N_mut`); a lifted borrowed parameter holds nothing on it in
+      -- memory (it is a frame root, in no region, and the arguments reach it
+      -- only by names of the change's bound)
+      rcases canon_cases_sub h Γa p with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨_, hc⟩ <;> rw [hc] at hp
+      · obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp hp
+        simp only [Function.comp, subE_mode] at hm
+        have hrb : E.mode = .rootb := (liftE_rootb h).mp hm
+        exfalso
+        have hk : d'.kind.isName = false := by rcases hha.2.2.2 with h' | h' <;> rw [h'] <;> rfl
+        rcases liftE_rootb_held_mem h hab hE hrb hha.2.1 hk with ⟨u, hu, _⟩ | ⟨_, hR' | hpv⟩
+        · exact hout u (hu.symm.trans hr')
+        · exact hR (hr' ▸ hR')
+        · have := hpe v d' hpv hr'
+          rcases hha.2.2.2 with h' | h' <;> rw [h'] at this <;> exact hb this.symm
+      · cases hp
+      · have hl := h.Φrb p Ep hp hm
+        have h0 := hhit p Ep hp hl
+        simp only [hits, hm, beq_self_eq_true, Bool.or_true, Bool.true_and, List.any_eq_false,
+          Bool.and_eq_true, beq_iff_eq, not_and, Bool.not_eq_true] at h0
+        exact h0 d' hd' hr'
     · obtain ⟨a, _, he⟩ := List.mem_map.mp hm; exact hout a he
     · obtain ⟨a, ha, rfl⟩ := List.mem_map.mp ha'
       obtain ⟨Ea, hEa⟩ := hargs a ha
@@ -4454,7 +4513,7 @@ theorem namesFree_lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {ps : List
         · exact absurd (hr' ▸ mem_allKinds ha2) hR
         · exact hN' d' ha2 hr'
   obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hd
-  obtain ⟨hcan, ⟨s, hts, hsv⟩, hF, hna, hoth⟩ := hnf d0 hd0
+  obtain ⟨hcan, ⟨s, hts, hsv⟩, hF, hna, hoth, hnh0⟩ := hnf d0 hd0
   have hex : ∃ E0, Γa d0.root = some E0 := by
     cases hE : Γa d0.root with
     | some E0 => exact ⟨E0, rfl⟩
@@ -4468,7 +4527,36 @@ theorem namesFree_lift (h : S.OK) (hab : S.AbsOK Γa) {Fa : List Var} {ps : List
   -- (what a closure may change owns its slot: no region)
   have hnp0 : S.isPi d0.root = false := hab.notPi hE0 (by
     rcases hcan with hm | ⟨b, hm, _⟩ <;> rw [hm] <;> simp)
-  refine ⟨?_, ⟨s, ?_, hsv⟩, h.Fcout _, ?_, fun a' ha' hn' d' hd' hr' => ?_⟩
+  refine ⟨?_, ⟨s, ?_, hsv⟩, h.Fcout _, ?_, fun a' ha' hn' d' hd' hr' => ?_,
+    fun p Ep hp hm d' hd' hr' hha => ?_⟩
+  rotate_right
+  · -- AGORA-937 (B3): a lifted borrowed parameter holds nothing in memory on a
+    -- callee binding that is no region; a frame binding's dependency on a
+    -- renamed one is on an `inout` parameter, spared by its bound
+    -- (`Φsat`), which bounds every change the callee's closures make there
+    have hr0 : d'.root = S.ρ d0.root := hr'
+    show d0.kind.bound.kills false d'.kind = false
+    rcases canon_cases_sub h Γa p with ⟨v, rfl, _, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨_, hc⟩ <;> rw [hc] at hp
+    · obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp hp
+      simp only [Function.comp, subE_mode] at hm
+      have hrb : E.mode = .rootb := (liftE_rootb h).mp hm
+      exfalso
+      have hk : d'.kind.isName = false := by rcases hha.2.2.2 with h' | h' <;> rw [h'] <;> rfl
+      rcases liftE_rootb_held_mem h hab hE hrb hha.2.1 hk with ⟨u, hu, hreg⟩ | ⟨hout', _⟩
+      · have := h.inj _ _ (hu.symm.trans hr0); subst this
+        have := ((hab.2.2.2.1 _ E0 hE0).1).mpr hreg
+        rcases hcan with hm' | ⟨b, hm', _⟩ <;> rw [hm'] at this <;> cases this
+      · exact hout' d0.root hr0.symm
+    · cases hp
+    · have hl := h.Φrb p Ep hp hm
+      obtain ⟨b, hv, hbv, hkb⟩ := h.Φsat p Ep hp hl (Or.inr hm) d' hd' d0.root hr0.symm
+      obtain ⟨E1, hE1, hm1, _⟩ := hab.2.2.1 d0.root (b, hv) hbv
+      rw [hE0] at hE1; cases hE1
+      rcases hcan with hm' | ⟨b', hm', hle⟩ <;> rw [hm'] at hm1 <;> cases hm1
+      cases hk : d0.kind.bound.kills false d'.kind
+      · rfl
+      · have := Eff.kills_hv_mono (Eff.kills_mono hle false d'.kind hk) hv
+        rw [this] at hkb; cases hkb
   · show canDo (argE (S.canon Γa) (S.ρ d0.root)).mode d0.kind.bound
     rw [argE_canons h hE0 hnp0, subE_mode, liftE_mode _ hrb0]; exact canDo_lift hcan
   · show (argE (S.canon Γa) (S.ρ d0.root)).ty = _

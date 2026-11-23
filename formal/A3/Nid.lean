@@ -88,6 +88,7 @@ def BlocksAt (B : Nat → Option Blk) (n : Nat) : Prop := ∀ k bl, B k = some b
 theorem BlocksAt.views {B : Nat → Option Blk} {n : Nat} (h : BlocksAt B n) : ViewsAt B :=
   fun k bl hk hv => (h k bl hk).view hv
 
+
 /-- **Another thread stepped**: a later `nid`, the blocks kept as their
     holders see them (`BlkLe`: more blocks, and (A3.2) a lock block's payload
     checked out or back in), and the address space the thread sees being its
@@ -110,7 +111,8 @@ theorem inv_move {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F
           ⟨hpA i ⟨k, bl, hk, hi'⟩, (hB k bl hk).lt i hi',
            fun x T hT => hP i ⟨k, bl, hk, hi'⟩ x T hT, (hB k bl hk).apart i hi'⟩⟩
       views := hB.views }
-  { toMInv := hi.toMInv.grow rfl hh (Nat.le_refl _) hb (fun k bl hk => (hB k bl hk).ok)
+  have hM : MInv { m with alloc := A, nid := n, blk := B, taken := TK } Γ := hi.toMInv.grow rfl hh (Nat.le_refl _) hb (fun k bl hk => (hB k bl hk).ok)
+  { toMInv := hM
     nvS := hi.nvS, nvF := hi.nvF
     anch := hi.anch, spineNd := hi.spineNd, spineDom := hi.spineDom
     catchOK := CatchOK.of_st (m := m) (m' := { m with alloc := A, nid := n, blk := B, taken := TK }) rfl (Nat.le_refl _) hb
@@ -120,7 +122,10 @@ theorem inv_move {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F
       · exact Or.inl ⟨x, T, hT, hiT⟩
       · exact Or.inr h,
     pinOut := hi.pinOut, pinIn := hi.pinIn, dtorOut := hi.dtorOut,
-    dtorIn := hi.dtorIn }
+    dtorIn := hi.dtorIn
+    -- (the slots kept; the blocks' payloads hold no names)
+    heldCaps := fun p E hp hm hps d hd hb' hh hF =>
+      ⟨(hi.heldCaps p E hp hm hps d hd hb' hh hF).1, hM.blkCapsInp _⟩ }
 
 theorem ThreadOK.move {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {A : Nat → Bool} {n : Nat}
     {B : Nat → Option Blk} {TK : Nat → Bool} (hown : ∀ x T, OwnedAt m x T → ∀ i ∈ T.ids, A i = true)

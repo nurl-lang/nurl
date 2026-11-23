@@ -1023,3 +1023,15 @@ import C
 #print axioms C.panic_self
 #print axioms C.freshOKB_sound
 #print axioms C.panicToB_sound
+-- (A2/CapsStore.lean, AGORA-969, AGORA-963 step 3's store half): the closure-capture clause's
+-- store part, kept by the store operations a step makes
+#print axioms A2.heldCapsInp_iff
+#print axioms A2.HeldCapsInp.of_caps
+#print axioms A2.CapsInpAt.set
+#print axioms A2.CapsInpAt.remove
+#print axioms A2.CapsInpAt.of_st
+#print axioms A2.sub_pkg_lendOf
+#print axioms A2.BindParams.capsInp
+#print axioms A2.Release.capsInp
+#print axioms A2.EvalR.capsInp
+#print axioms A2.Step.slotsCaps

@@ -196,6 +196,7 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
   nvS := hv
   nvF _ h := by cases h
   anch _ _ h := by cases h
+  heldCaps _ _ h := by cases h
   spineNd := by rw [src_spine hs]; exact List.nodup_nil
   spineDom v h := by rw [src_spine hs] at h; cases h
   catchOK := catchOK_src hs

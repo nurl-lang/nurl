@@ -188,9 +188,9 @@ def handCtx (Γ : Ctx) (c x : Var) (Ec : Entry) (te : Ty) (y : Var) (E0 : Entry)
     tree moved from `c` to the environment's binding `y` (the first fresh
     variable), as a field of a struct taken apart (`rhs_move'`, `out_part`),
     and `x` bound unset. -/
-theorem hand_minv {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanchF : RootbAnchF Γ F)
+theorem hand_minv {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanch : RootbAnch Γ F)
     {c x : Var} {Ec : Entry} (hc : Γ c = some Ec) (hl : Ec.live = true) (hos : Ec.mode.ownSlot = true)
-    (hcF : c ∉ F) (hny : NoPin Γ c) (hdc : DtorSafe Γ .replace false c)
+    (hcF : c ∉ F) (hcnh : NoHeld Γ c) (hny : NoPin Γ c) (hdc : DtorSafe Γ .replace false c)
     {fs : List Nat} {te : Ty} {ms : List Nat} {q : Cross} {env : Val} (htc : Ec.ty.undtor = .fn ms q)
     (hslot : m.st c = some ⟨true, some (.pkg fs te ms env [])⟩) (hown : te.owning = true)
     (htok : te.ok = true) (hx : Γ x = none) (hxn : x < m.nv) {E0 : Entry} (hl0 : E0.live = false)
@@ -199,12 +199,11 @@ theorem hand_minv {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanchF :
     MInv (handMem m c x env E0.mode.ownSlot) (handCtx Γ c x Ec te m.nv E0) ∧
     RhsPost { m with nv := m.nv + 2 } ({ m with nv := m.nv + 2 }.set c ⟨true, none⟩) Γ
       (setE (kill .replace false c Γ) c { Ec with live := false, dtor := false }) F := by
-  have hanch : RootbAnch Γ F := hanchF.toH
   let m' : Mem := { m with nv := m.nv + 2 }
   have hi' : MInv m' Γ :=
     hi.of_st rfl ⟨hi.heap.nodup, hi.heap.disj, hi.heap.alloc, hi.heap.self, hi.heap.blk, hi.heap.views⟩
       (by show m.nv ≤ m.nv + 2; omega)
-  obtain ⟨post, out⟩ := rhs_move' hi' hanch hc hl hos hcF hny (HeldSpared.of_none (NoHeld.of_anchF hanchF hcF) _ _) hslot hdc
+  obtain ⟨post, out⟩ := rhs_move' hi' hanch hc hl hos hcF hny (HeldSpared.of_none hcnh _ _) hslot hdc
   have hτ : Ec.ty ≠ .int := fun h => by rw [h] at htc; cases htc
   have hwP : WFv Ec.ty.undtor (.pkg fs te ms env []) := ((out.valOwn rfl).2.1).undtor
   rw [htc] at hwP
@@ -616,6 +615,22 @@ theorem rootb_names {Γ : Ctx} {F : List Var} (hanch : RootbAnchF Γ F) {ds : Li
   refine RSetup.hits_false_of fun d' hd' hr' => ?_
   by_cases hb0 : d'.kind.bound = .none
   · exact absurd (hr' ▸ hanch p E hp hm d' hd' hb0) hF
+  · exact RSetup.kills_isName hbr _ (RSetup.isName_of_bound hb0)
+
+/-- AGORA-937 (B2/B3): ... where a held anchor may be outside `F`: the kill
+    at a by-name change spares it as `NamesFree` says. -/
+theorem rootb_namesH {Γ : Ctx} {F : List Var} (hanch : RootbAnch Γ F) {ds : List Dep}
+    (hds : ∀ d ∈ ds, d.root ∉ F ∧ d.kind.bound ≠ .replace)
+    (hsp : ∀ d ∈ ds, ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d' ∈ E.vdeps, d'.root = d.root →
+      HeldAnch E d' → d.kind.bound.kills false d'.kind = false) :
+    ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ ds, hits d.kind.bound false d.root E = false := by
+  intro p E hp hm d hd
+  obtain ⟨hF, hbr⟩ := hds d hd
+  refine RSetup.hits_false_of fun d' hd' hr' => ?_
+  by_cases hb0 : d'.kind.bound = .none
+  · rcases hanch p E hp hm d' hd' hb0 with h' | h'
+    · exact absurd (hr' ▸ h') hF
+    · exact hsp d hd p E hp hm d' hd' hr' h'
   · exact RSetup.kills_isName hbr _ (RSetup.isName_of_bound hb0)
 
 /-- Every entry of `Γ'` is rooted in `Γ`: a binding `Γ` has none of ends nothing. -/
@@ -1166,7 +1181,7 @@ theorem callT_hand {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
         rw [hzE j' hj'z, hpar]
         exact ⟨hne, hr, hs, hb⟩
   · -- what the code's closures may change, the interface's may
-    obtain ⟨hcan', hvec, hnF, hin, huniq⟩ := hnf d (hmutZ d hd)
+    obtain ⟨hcan', hvec, hnF, hin, huniq, hnh⟩ := hnf d (hmutZ d hd)
     have hbd : (Γ d.root).isSome := by
       cases h : Γ d.root with
       | some _ => rfl
@@ -1179,7 +1194,18 @@ theorem callT_hand {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
     have harg : argE (handCtx Γ c x Ec te m.nv E0) d.root = argE (kill .replace false c Γ) d.root := by
       simp only [argE]; rw [hother _ hdx hdy hdc]
     rw [harg]
-    refine ⟨hcan', hvec, hnF, ?_, fun a ha hcond d' hd' hdr => ?_⟩
+    refine ⟨hcan', hvec, hnF, ?_, fun a ha hcond d' hd' hdr => ?_,
+      -- (AGORA-937 B3: the hand-over's new bindings are no borrowed parameters)
+      fun p Ep hp hm d' hd' hdr hha => ?_⟩
+    rotate_right
+    · by_cases hpx : p = x
+      · rw [hpx, handCtx_x] at hp; cases hp; exact absurd hm hE0m
+      by_cases hpy : p = m.nv
+      · rw [hpy, hy, hEy] at hp; cases hp; cases hm
+      by_cases hpc : p = c
+      · rw [hpc, handCtx_c hxc hyc] at hp; cases hp; simp only at hm; rw [hm] at hos; cases hos
+      rw [hother p hpx hpy hpc] at hp
+      exact hnh p Ep hp hm d' hd' hdr hha
     · rcases hin with hn | ⟨i, t, hi1, hi2⟩
       · left; simp only [List.mem_cons, not_or] at hn ⊢; exact ⟨hdy, hn.2⟩
       · rcases i with _ | i
@@ -1233,11 +1259,11 @@ theorem callT_hand {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m �
     interface's call leaves the source (with `c` ended again: the
     environment moved back in). -/
 theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
-    (hanchF : RootbAnchF Γ F) (hFlt : ∀ v ∈ F, v < m.nv)
+    (hanch : RootbAnch Γ F) (hFlt : ∀ v ∈ F, v < m.nv)
     {c x : Var} {Ec E : Entry} {Γ1 : Ctx} {σ f : Nat} {sig fn : Fn} {b : Eff} {ms : List Nat} {q : Cross}
     {te : Ty} {fs : List Nat} {zs : List Var} {ps : List (PMode × Ty)} (hc : Γ c = some Ec)
     (htc : Ec.ty = .fn ms q) (hmo : Ec.mode = .own)
-    (hx : Γ x = none) (hxn : x < m.nv) (hxF : x ∉ F) (hcF : c ∉ F) (hny : NoPin Γ c)
+    (hx : Γ x = none) (hxn : x < m.nv) (hxF : x ∉ F) (hcF : c ∉ F) (hcnh : NoHeld Γ c) (hzn : ∀ z ∈ zs, z ∉ F → NoHeld Γ z) (hny : NoPin Γ c)
     (hdc : DtorSafe Γ .replace false c)
     (hcT : CallT P (kill .replace false c Γ) F σ (c :: zs) E Γ1) (hσ : P[σ]? = some sig)
     (hsp : sig.params = (.inout b, .fn ms q) :: ps) (hsl : sig.lends = []) (hsr : sig.rholds = [])
@@ -1250,7 +1276,6 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
       (.scope m.nv (.seq (.letcall (m.nv + 1) f (m.nv :: zs) (.assign x (.var (m.nv + 1))))
         (.assign c (.pack fs te ms m.nv [])))) Γe ∧
       Weaker Γe (kill .replace false c (setE Γ1 x E)) := by
-  have hanch : RootbAnch Γ F := hanchF.toH
   have hcT0 := hcT
   obtain ⟨sig', hσ', hlen, hargs, hnf, hds, hE, hΓ1, _⟩ := hcT
   rw [hσ] at hσ'; cases hσ'
@@ -1304,7 +1329,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
   have hrootb_c : ∀ v E0, Γ v = some E0 → E0.fixed → ∀ e hb, killE e hb c E0 = E0 := by
     intro v E0 hv hf e hb
     rcases hf with hm | ⟨b', hm, _⟩
-    · exact killE_rootb hanch hcF e hb (hny.kills e hb) (HeldSpared.of_none (NoHeld.of_anchF hanchF hcF) _ _) hv hm
+    · exact killE_rootb hanch hcF e hb (hny.kills e hb) (HeldSpared.of_none hcnh _ _) hv hm
     · exact absurd hm (hi.noInout v E0 b' hv)
   -- the environment's binding
   let Γh := handCtx Γ c x Ec te m.nv (callX fn)
@@ -1445,6 +1470,18 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
   have hmutA : ∀ d ∈ mutNames Γh (m.nv :: zs), d ∈ mutNames (kill .replace false c Γ) (c :: zs) :=
     mutNames_hand (by rw [hyE]; exact hEyt) (by rw [hck]; exact hτ) (by rw [hyE, hck]; exact hEyv) hzE
   have hAF : ∀ d ∈ mutNames Γh (m.nv :: zs), d.root ∉ F ∧ d.kind.bound ≠ .replace := fun d hd => hB d (hmutA d hd)
+  -- (AGORA-937 B3: ... and spares a held view, `NamesFree`; a borrowed
+  -- parameter's entry is the same before the receiver's kill)
+  have hspB : ∀ d ∈ mutNames (kill .replace false c Γ) (c :: zs), ∀ p E, Γ p = some E → E.mode = .rootb →
+      ∀ d' ∈ E.vdeps, d'.root = d.root → HeldAnch E d' → d.kind.bound.kills false d'.kind = false := by
+    intro d hd p E hp hm
+    have hk : kill .replace false c Γ p = some E := by
+      simp only [A2.kill, hp, Option.map_some]
+      rw [killE_rootb hanch hcF .replace false (hny.kills .replace false) (HeldSpared.of_none hcnh _ _) hp hm]
+    exact (hnf d hd).2.2.2.2.2 p E hk hm
+  have hspA : ∀ d ∈ mutNames Γh (m.nv :: zs), ∀ p E, Γ p = some E → E.mode = .rootb →
+      ∀ d' ∈ E.vdeps, d'.root = d.root → HeldAnch E d' → d.kind.bound.kills false d'.kind = false :=
+    fun d hd => hspB d (hmutA d hd)
   -- what the arguments hand: in terms of the interface's call's entries
   have hyh : (compE Ec te).held ⊆ Ec.vdeps := fun d hd => hEyv (by rw [hEyh]; exact hd)
   have hHk : ∀ d ∈ heldOfArgs Γh (m.nv :: zs), ∃ a ∈ c :: zs, (argE (kill .replace false c Γ) a).ty ≠ .int ∧
@@ -1496,7 +1533,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
           rw [he, hck, htc] at hs'; cases hs'
     · intro dm hdm hr
       rcases hd' with ⟨hn, d0, hd0, hr0⟩ | ⟨hn, _⟩
-      · have hb0 := (hnf dm hdm).2.2.2.2 a ha (Or.inl hty) d0 (List.mem_filter.mp hd0).1 (by rw [← hr0, hr])
+      · have hb0 := (hnf dm hdm).2.2.2.2.1 a ha (Or.inl hty) d0 (List.mem_filter.mp hd0).1 (by rw [← hr0, hr])
         have hn0 := RSetup.isName_of_bound (by rw [hb0]; exact (hmutD dm hdm).1)
         have := (List.mem_filter.mp hd0).2
         rw [hn0] at this; cases this
@@ -1605,7 +1642,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
     obtain ⟨hzF, hpin, _⟩ := hzmv k hk hm
     rcases hf with hrb | ⟨b'', hm', _⟩
     · refine killE_rootb hanch hzF b' hb (fun p Ep hp hpm d hd hbn hk' => ?_)
-          (HeldSpared.of_none (NoHeld.of_anchF hanchF hzF) _ _) hv hrb
+          (HeldSpared.of_none (hzn _ (RSetup.getD_mem' (hlenz ▸ hk)) hzF) _ _) hv hrb
       by_cases hbr : b' = .replace
       · have hor : ps[k].1 = .sink ∨ ps[k].1 = .inout .replace := by
           rcases hb' with ⟨hs, _⟩ | hio
@@ -1714,7 +1751,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
       hits d.kind.bound false d.root E0 = false := by
     intro v E0 hv hf d hd
     rcases hf with hm | ⟨b', hm, _⟩
-    · exact rootb_names hanchF hB v E0 hv hm d hd
+    · exact rootb_namesH hanch hB hspB v E0 hv hm d hd
     · exact absurd hm (hi.noInout v E0 b' hv)
   have hfixc : ∀ v E0, Γ v = some E0 → E0.fixed → killE .replace false c E0 = E0 :=
     fun v E0 hv hf => hrootb_c v E0 hv hf _ _
@@ -1761,7 +1798,7 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
       (hfrh.setE (E := Ey1) (w := m.nv) (by simp [Ey1, hEy]) (by simp [Ey1, hEy]) (by simp [Ey1, hEy]))
     refine hft.killNames _ ?_
     intro p E0 hp hm
-    exact rootb_names hanchF hAF p E0 (hft.1 p E0 hp hm) hm
+    exact rootb_namesH hanch hAF hspA p E0 (hft.1 p E0 hp hm) hm
   -- the inner call's result
   have hE'r : ∀ d ∈ (callRes Γh fn (m.nv :: zs)).path ++ (callRes Γh fn (m.nv :: zs)).held, (Γ d.root).isSome := by
     intro d hd
@@ -2027,11 +2064,11 @@ theorem hand_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var
     the interface's call leaves.  The package holds nothing (`Ec.vdeps = []`:
     it is its glue's own parameter), so every entry made here holds nothing. -/
 theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
-    (hanchF : RootbAnchF Γ F) (hFlt : ∀ v ∈ F, v < m.nv)
+    (hanch : RootbAnch Γ F) (hFlt : ∀ v ∈ F, v < m.nv)
     {c x : Var} {Ec E : Entry} {Γ1 : Ctx} {σ f : Nat} {sig fn : Fn} {ms : List Nat} {q : Cross}
     {te : Ty} (hc : Γ c = some Ec) (htu : Ec.ty.undtor = .fn ms q) (hmo : Ec.mode = .own)
     (hvd : Ec.vdeps = [])
-    (hx : Γ x = none) (hxn : x < m.nv) (hxF : x ∉ F) (hcF : c ∉ F) (hny : NoPin Γ c)
+    (hx : Γ x = none) (hxn : x < m.nv) (hxF : x ∉ F) (hcF : c ∉ F) (hcnh : NoHeld Γ c) (hny : NoPin Γ c)
     (hcT : CallT P (kill .replace false c Γ) F σ [c] E Γ1) (hσ : P[σ]? = some sig)
     (hsp : sig.params = [(.sink, Ec.ty)]) (hsl : sig.lends = []) (hsr : sig.rholds = [])
     (hf : P[f]? = some fn) (hps : fn.params = [(.sink, te)]) (hto : te.owning = true) (hnt : ¬ ThruFn P f)
@@ -2040,7 +2077,6 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
     ∃ Γe, StmtT P ξ (handCtx Γ c x Ec te m.nv (callX fn)) F
       (.scope m.nv (.letcall (m.nv + 1) f [m.nv] (.assign x (.var (m.nv + 1))))) Γe ∧
       Weaker Γe (kill .replace false c (setE Γ1 x E)) := by
-  have hanch : RootbAnch Γ F := hanchF.toH
   have hcT0 := hcT
   obtain ⟨sig', hσ', _, _, _, _, hE, hΓ1, _⟩ := hcT
   rw [hσ] at hσ'; cases hσ'
@@ -2076,7 +2112,7 @@ theorem handD_typed {P : Prog} (hP : ProgOK P) {m : Mem} {Γ : Ctx} {F : List Va
   have hrootb_c : ∀ v E0, Γ v = some E0 → E0.fixed → ∀ e hb, killE e hb c E0 = E0 := by
     intro v E0 hv hf e hb
     rcases hf with hm | ⟨b', hm, _⟩
-    · exact killE_rootb hanch hcF e hb (hny.kills e hb) (HeldSpared.of_none (NoHeld.of_anchF hanchF hcF) _ _) hv hm
+    · exact killE_rootb hanch hcF e hb (hny.kills e hb) (HeldSpared.of_none hcnh _ _) hv hm
     · exact absurd hm (hi.noInout v E0 b' hv)
   -- the environment's binding
   let Γh := handCtx Γ c x Ec te m.nv (callX fn)
@@ -2435,9 +2471,11 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
   have e6 := Option.some.inj (hf0.symm.trans hf)
   subst e6
   have hanch := hi.leafAnch rfl
-  have hanchF := hi.leafAnchF rfl
   have hos : Ec.mode.ownSlot = true := by rw [hmo]; rfl
   have hcF : c ∉ F := hcT.sink0_notF hσ hsp
+  -- (AGORA-937 B2: the receiver and the arguments are killable names of
+  -- the statement: no held root)
+  have hcnh : NoHeld Γ c := hi.leafNoHeld rfl (by simp [Stmt.killVars]) hcF
   have hxn : x < m.nv := hi.nvS x (by simp [Stmt.vars])
   have hcn : c < m.nv := hi.nvSt c (by rw [← hi.dom, hc]; rfl)
   have hxy : x ≠ m.nv := fun e => by rw [e] at hxn; exact Nat.lt_irrefl _ hxn
@@ -2453,13 +2491,13 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
   have hte := hpar (.sink, te0) (by rw [hps]; simp)
   have hto : te0.owning = true := hte.2.1 rfl
   -- the store
-  obtain ⟨hm1, _⟩ := hand_minv hi.toMInv hanchF hc hlc hos hcF hny hdc htu hslot0 hto hte.1 hx hxn
+  obtain ⟨hm1, _⟩ := hand_minv hi.toMInv (hi.leafAnch rfl) hc hlc hos hcF hcnh hny hdc htu hslot0 hto hte.1 hx hxn
     (E0 := callX fn0) rfl rfl rfl hrok (by simp only [callX, resMode]; split <;> simp)
     (fun h => hrown (by simpa [callX, resMode] using h)) rfl rfl
   have hmo' : (callX fn0).mode.ownSlot = fn0.resOwn := resMode_ownSlot fn0
   rw [hmo'] at hm1
   -- the run-time form, typed
-  obtain ⟨Γe, hTh, hW⟩ := handD_typed hP hi.toMInv hanchF hi.nvF hc htu hmo hvd hx hxn hxF hcF hny hcT hσ hsp
+  obtain ⟨Γe, hTh, hW⟩ := handD_typed hP hi.toMInv (hi.leafAnch rfl) hi.nvF hc htu hmo hvd hx hxn hxF hcF hcnh hny hcT hσ hsp
     hsl hsr hf0 hps hto hnt hrt hro hl hr
   have hT : StmtT P ξ (handCtx Γ c x Ec te0 m.nv (callX fn0)) F (handStmtD x f0 [] m.nv k)
       (exitScope x Δ) :=
@@ -2483,7 +2521,7 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
   have hEyE : compE Ec te0 = ⟨te0, .own, true, [], ownHeld true te0 Ec.held, false, false, false, false⟩ := compE_owning Ec hto
   have hkrb : ∀ v E1, Γ v = some E1 → E1.mode = .rootb → killE .replace false c E1 = E1 :=
     fun v E1 hv hm => killE_rootb hanch hcF .replace false (hny.kills .replace false)
-      (HeldSpared.of_none (NoHeld.of_anchF hanchF hcF) _ _) hv hm
+      (HeldSpared.of_none hcnh _ _) hv hm
   -- its borrowed parameters and `letd` bindings are the store's
   have hrbΓ : ∀ p E', handCtx Γ c x Ec te0 m.nv (callX fn0) p = some E' → E'.mode = .rootb → Γ p = some E' := by
     intro p E' hp hm
@@ -2495,7 +2533,12 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
   have hspine : (handStmtD x f0 [] m.nv k).spine = [x, m.nv] := by
     simp [handStmtD, Stmt.spine]
   refine ⟨handCtx Γ c x Ec te0 m.nv (callX fn0), hT, ?_, by simp [handMem], ?_, ?_⟩
-  · refine Inv.mk hm1 (fun v hv => ?_) (fun v hv => ?_) (fun p E' hp hm _ => ?_) (by rw [hspine]; simp [hxy])
+  · -- (AGORA-963 step 3: the package moved out, its environment bound fresh, a
+    -- part of it; the result slot empty)
+    refine Inv.mk₀ (hi.heldCaps_step (fun p E' hp hm _ => ⟨hrbΓ p E' hp hm, by simp [Stmt.spine]⟩)
+        (fun w _ hcw => CapsInpAt.of_slots (hM := hm1) ((((SlotsCaps.set_none hcw.1 c true).set (x := m.nv)
+          (fun V e => by cases e; exact (SlotsCaps.slot hcw.1 hslot0).child Child.pkg)).set_none x _).of_st rfl)))
+      hm1 (fun v hv => ?_) (fun v hv => ?_) (fun p E' hp hm _ => ?_) (by rw [hspine]; simp [hxy])
       (fun v hv => ?_) (by simp [handStmtD, CatchOK]) ?_
       (pinOut_fresh hi.toMInv (fun p E' hp hm => ⟨E', hrbΓ p E' hp hm, hm, rfl⟩)
         (fun v hv => by rw [hspine] at hv; simp only [List.mem_cons, List.not_mem_nil, or_false] at hv
@@ -2531,7 +2574,36 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
       rcases hv with h | h | h | h | h | h | h <;> (try rw [h]) <;> (try assumption)
       exact Nat.lt_of_lt_of_le (hi.nvS v (by simp [Stmt.vars, h])) (Nat.le_add_right _ 2)
     · exact Nat.lt_of_lt_of_le (hi.nvF v hv) (by show m.nv ≤ m.nv + 2; omega)
-    · exact hi.anch p E' (hrbΓ p E' hp hm) hm (by simp [Stmt.spine])
+    · -- AGORA-937 (B2): the new statement's killable names are the old ones,
+      -- or the fresh m.nv / m.nv+1, none of them bound in Γ (asked of the new
+      -- names and the old ones together, so x and c are in the set; then the new)
+      have hΓr : Γ (m.nv + 1) = none := by
+        have hmz : m.st (m.nv + 1) = none := by
+          cases h : m.st (m.nv + 1) with
+          | none => rfl
+          | some sl => exact absurd (hi.nvSt (m.nv + 1) (by rw [h]; rfl)) (Nat.not_lt.mpr (Nat.le_succ _))
+        have := hi.dom (m.nv + 1); rw [hmz] at this; cases h : Γ (m.nv + 1) <;> simp_all
+      have h0 := hrbΓ p E' hp hm
+      refine ((((hi.anch p E' h0 hm (by simp [Stmt.spine])).extend
+        (V' := (handStmtD x f0 [] m.nv k).killVars ++ (Stmt.callcE x c j [] k).killVars) fun v hv => ?_).of_tyV
+        fun r Er hr hrV => ?_).anti fun v hv => List.mem_append_left _ hv)
+      · rcases List.mem_append.mp hv with hv | hv
+        · simp only [handStmtD, Stmt.killVars, Rhs.vars, List.mem_cons, List.mem_append,
+            List.not_mem_nil, or_false] at hv
+          by_cases h1 : v = m.nv
+          · exact Or.inr (h1 ▸ hΓy)
+          by_cases h2 : v = m.nv + 1
+          · exact Or.inr (h2 ▸ hΓr)
+          left
+          simp only [h1, h2, false_or, or_false] at hv
+          simp only [Stmt.killVars]
+          rcases hv with h | h <;> first | (rcases h with h' | h' <;> simp [h']) | simp [h]
+        · exact Or.inl hv
+      · have hrx : r ≠ x := fun e => hrV (List.mem_append_right _ (by simp [Stmt.killVars, e]))
+        have hrc : r ≠ c := fun e => hrV (List.mem_append_right _ (by simp [Stmt.killVars, e]))
+        have hry : r ≠ m.nv := fun e => by rw [e, hΓy] at hr; cases hr
+        refine ⟨killE .replace false c Er, ?_, killE_ty ..⟩
+        rw [handCtx_other hrx hry hrc]; simp [kill, hr]
     · rw [hspine] at hv
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hv
       rcases hv with rfl | rfl
@@ -2641,9 +2713,13 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
     have e6 := Option.some.inj (hf0.symm.trans hf)
     subst e6
     have hanch := hi.leafAnch rfl
-    have hanchF := hi.leafAnchF rfl
     have hos : Ec.mode.ownSlot = true := by rw [hmo]; rfl
     have hcF : c ∉ F := hcT.inout0_notF hσ hsp
+    -- (AGORA-937 B2: the receiver and the arguments are killable names of
+    -- the statement: no held root)
+    have hcnh : NoHeld Γ c := hi.leafNoHeld rfl (by simp [Stmt.killVars]) hcF
+    have hzn : ∀ z ∈ zs, z ∉ F → NoHeld Γ z := fun z hz hzF =>
+      hi.leafNoHeld rfl (by simp [Stmt.killVars, hz]) hzF
     have hxn : x < m.nv := hi.nvS x (by simp [Stmt.vars])
     have hcn : c < m.nv := hi.nvSt c (by rw [← hi.dom, hc]; rfl)
     have hxy : x ≠ m.nv := fun e => by rw [e] at hxn; exact Nat.lt_irrefl _ hxn
@@ -2660,13 +2736,13 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
     have hto : te0.owning = true := hte.2.2 b rfl
     have hq : q.Fits te0 [] := pkg_fits hi.toMInv hc hlc (by rw [htc]; rfl) hslot0
     -- the store
-    obtain ⟨hm1, _⟩ := hand_minv hi.toMInv hanchF hc hlc hos hcF hny hdc (by rw [htc]; rfl) hslot0 hto hte.1 hx hxn
+    obtain ⟨hm1, _⟩ := hand_minv hi.toMInv (hi.leafAnch rfl) hc hlc hos hcF hcnh hny hdc (by rw [htc]; rfl) hslot0 hto hte.1 hx hxn
       (E0 := callX fn0) rfl rfl rfl hrok (by simp only [callX, resMode]; split <;> simp)
       (fun h => hrown (by simpa [callX, resMode] using h)) rfl rfl
     have hmo' : (callX fn0).mode.ownSlot = fn0.resOwn := resMode_ownSlot fn0
     rw [hmo'] at hm1
     -- the run-time form, typed
-    obtain ⟨Γe, hTh, hW⟩ := hand_typed hP hi.toMInv hanchF hi.nvF hc htc hmo hx hxn hxF hcF hny hdc hcT hσ hsp
+    obtain ⟨Γe, hTh, hW⟩ := hand_typed hP hi.toMInv (hi.leafAnch rfl) hi.nvF hc htc hmo hx hxn hxF hcF hcnh hzn hny hdc hcT hσ hsp
       hsl hsr hso hf0 hps hto hnt hrt hro hl hr ho hq hzb (fs := fs0)
     have hT : StmtT P ξ (handCtx Γ c x Ec te0 m.nv (callX fn0)) F (handStmt x c f0 zs fs0 te0 ms m.nv k)
         (exitScope x Δ) :=
@@ -2695,7 +2771,7 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
     have hEyE : compE Ec te0 = ⟨te0, .own, true, [], ownHeld true te0 Ec.held, false, false, false, false⟩ := compE_owning Ec hto
     have hkrb : ∀ v E1, Γ v = some E1 → E1.mode = .rootb → killE .replace false c E1 = E1 :=
       fun v E1 hv hm => killE_rootb hanch hcF .replace false (hny.kills .replace false)
-      (HeldSpared.of_none (NoHeld.of_anchF hanchF hcF) _ _) hv hm
+      (HeldSpared.of_none hcnh _ _) hv hm
     -- its borrowed parameters and `letd` bindings are the store's
     have hrbΓ : ∀ p E', handCtx Γ c x Ec te0 m.nv (callX fn0) p = some E' → E'.mode = .rootb → Γ p = some E' := by
       intro p E' hp hm
@@ -2707,7 +2783,12 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
     have hspine : (handStmt x c f0 zs fs0 te0 ms m.nv k).spine = [x, m.nv] := by
       simp [handStmt, Stmt.spine]
     refine ⟨handCtx Γ c x Ec te0 m.nv (callX fn0), hT, ?_, by simp [handMem], ?_, ?_⟩
-    · refine Inv.mk hm1 (fun v hv => ?_) (fun v hv => ?_) (fun p E' hp hm _ => ?_) (by rw [hspine]; simp [hxy])
+    · -- (AGORA-963 step 3: the package moved out, its environment bound fresh, a
+      -- part of it; the result slot empty)
+      refine Inv.mk₀ (hi.heldCaps_step (fun p E' hp hm _ => ⟨hrbΓ p E' hp hm, by simp [Stmt.spine]⟩)
+          (fun w _ hcw => CapsInpAt.of_slots (hM := hm1) ((((SlotsCaps.set_none hcw.1 c true).set (x := m.nv)
+            (fun V e => by cases e; exact (SlotsCaps.slot hcw.1 hslot0).child Child.pkg)).set_none x _).of_st rfl)))
+        hm1 (fun v hv => ?_) (fun v hv => ?_) (fun p E' hp hm _ => ?_) (by rw [hspine]; simp [hxy])
         (fun v hv => ?_) (by simp [handStmt, CatchOK]) ?_
         (pinOut_fresh hi.toMInv (fun p E' hp hm => ⟨E', hrbΓ p E' hp hm, hm, rfl⟩)
           (fun v hv => by rw [hspine] at hv; simp only [List.mem_cons, List.not_mem_nil, or_false] at hv
@@ -2747,7 +2828,33 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
           | (rw [h]; assumption)
           | exact hS v (by simp [Stmt.vars, h])
       · exact Nat.lt_of_lt_of_le (hi.nvF v hv) (by show m.nv ≤ m.nv + 2; omega)
-      · exact hi.anch p E' (hrbΓ p E' hp hm) hm (by simp [Stmt.spine])
+      · -- AGORA-937 (B2): as handStmtD's: the new killable names are the old ones,
+        -- or the fresh m.nv / m.nv+1, none of them bound in Γ
+        have hΓr : Γ (m.nv + 1) = none := by
+          have hmz : m.st (m.nv + 1) = none := by
+            cases h : m.st (m.nv + 1) with
+            | none => rfl
+            | some sl => exact absurd (hi.nvSt (m.nv + 1) (by rw [h]; rfl)) (Nat.not_lt.mpr (Nat.le_succ _))
+          have := hi.dom (m.nv + 1); rw [hmz] at this; cases h : Γ (m.nv + 1) <;> simp_all
+        have h0 := hrbΓ p E' hp hm
+        refine ((((hi.anch p E' h0 hm (by simp [Stmt.spine])).extend
+          (V' := (handStmt x c f0 zs fs0 te0 ms m.nv k).killVars ++ (Stmt.callcE x c j zs k).killVars)
+          fun v hv => ?_).of_tyV fun r Er hr hrV => ?_).anti fun v hv => List.mem_append_left _ hv)
+        · rcases List.mem_append.mp hv with hv | hv
+          · by_cases h1 : v = m.nv
+            · exact Or.inr (h1 ▸ hΓy)
+            by_cases h2 : v = m.nv + 1
+            · exact Or.inr (h2 ▸ hΓr)
+            left
+            simp only [handStmt, Stmt.killVars, Rhs.vars, List.mem_cons, List.mem_append,
+              List.not_mem_nil] at hv ⊢
+            grind
+          · exact Or.inl hv
+        · have hrx : r ≠ x := fun e => hrV (List.mem_append_right _ (by simp [Stmt.killVars, e]))
+          have hrc : r ≠ c := fun e => hrV (List.mem_append_right _ (by simp [Stmt.killVars, e]))
+          have hry : r ≠ m.nv := fun e => by rw [e, hΓy] at hr; cases hr
+          refine ⟨killE .replace false c Er, ?_, killE_ty ..⟩
+          rw [handCtx_other hrx hry hrc]; simp [kill, hr]
       · rw [hspine] at hv
         simp only [List.mem_cons, List.not_mem_nil, or_false] at hv
         rcases hv with rfl | rfl

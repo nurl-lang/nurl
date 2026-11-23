@@ -413,6 +413,45 @@ theorem RootbAnchF.of_rootb {Γ Γ1 : Ctx} {F : List Var} (h : RootbAnchF Γ F)
 theorem NoHeld.of_anchF {Γ : Ctx} {F : List Var} (h : RootbAnchF Γ F) {x : Var} (hx : x ∉ F) : NoHeld Γ x :=
   fun p E hp hm d hd hr ha => hx (hr ▸ h p E hp hm d hd (by rcases ha.2.2.2 with h' | h' <;> rw [h'] <;> rfl))
 
+/-- AGORA-937 (3d, route U, PR B2): a binding the running statement names
+    (`V`, its variables) and not lent out has no held anchor: one's root is
+    none of them (`AnchoredS`). -/
+theorem NoHeld.of_anchS {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) {x : Var} (hxV : x ∈ V)
+    (hx : x ∉ F) : NoHeld Γ x :=
+  fun p E hp hm d hd hr ha => by
+    rcases h p E hp hm d hd (by rcases ha.2.2.2 with h' | h' <;> rw [h'] <;> rfl) with h1 | ⟨_, h2, _⟩
+    · exact hx (hr ▸ h1)
+    · exact h2 (hr ▸ hxV)
+
+/-- ... read off any context's anchors (`Γ0`) of the borrowed parameters
+    `Γ` binds: only where they are anchored counts. -/
+theorem NoHeld.of_anchS0 {Γ Γ0 : Ctx} {F V : List Var}
+    (h : ∀ p E, Γ p = some E → E.mode = .rootb → AnchoredS Γ0 E F V) {x : Var} (hxV : x ∈ V)
+    (hx : x ∉ F) : NoHeld Γ x :=
+  fun p E hp hm d hd hr ha => by
+    rcases h p E hp hm d hd (by rcases ha.2.2.2 with h' | h' <;> rw [h'] <;> rfl) with h1 | ⟨_, h2, _⟩
+    · exact hx (hr ▸ h1)
+    · exact h2 (hr ▸ hxV)
+
+/-- ... nor a binding not lent out whose type holds views: a held anchor's
+    root's elements hold none (`AnchoredS`). -/
+theorem NoHeld.of_anchS_hv {Γ : Ctx} {F V : List Var} (h : RootbAnchS Γ F V) {x : Var} {Ex : Entry}
+    (hxe : Γ x = some Ex) (hv : Ex.ty.holdsView = true) (hx : x ∉ F) : NoHeld Γ x :=
+  fun p E hp hm d hd hr ha => by
+    rcases h p E hp hm d hd (by rcases ha.2.2.2 with h' | h' <;> rw [h'] <;> rfl) with h1 | ⟨_, _, Er, hEr, hnv⟩
+    · exact hx (hr ▸ h1)
+    · rw [hr, hxe] at hEr; cases hEr; rw [hv] at hnv; cases hnv
+
+/-- What the rule's `HeldOK` says, as a kill's `HeldSpared` (`hv = false`). -/
+theorem HeldSpared.of_heldOK {Γ : Ctx} {e : Eff} {r : Var} (h : HeldOK Γ e r) : HeldSpared Γ e false r :=
+  fun p E hp hm d _ hr ha => h p E hp hm d ha.2.1 hr ha.2.2.2
+
+/-- AGORA-937 (3d, route U, PR B2): a change through a borrow that stores
+    a view (`editBV`) kills each root at `hv` = its type holds views
+    (`killThruV`): it needs no held anchor only at those roots. -/
+def NoHeldV (Γ1 : Ctx) (P : List Dep) : Prop :=
+  ∀ d ∈ memDeps P, (argE Γ1 d.root).ty.holdsView = true → NoHeld Γ1 d.root
+
 /-- ... so a change through a borrow, at roots not lent out (`ThruOK`),
     spares every held anchor. -/
 theorem ThruSpared.of_anchF {Γ1 : Ctx} {F : List Var} (h : RootbAnchF Γ1 F) {op : Edit} {tx : Ty}
@@ -429,9 +468,25 @@ theorem ThruOK.spared {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List
   rw [hae]
   exact hho p E hp hm d' ha.2.1 hr ha.2.2.2
 
-theorem NoHeld.thru_anchF {Γ1 : Ctx} {F : List Var} (h : RootbAnchF Γ1 F) {op : Edit} {tx : Ty}
-    {P : List Dep} (hthru : ThruOK Γ1 F op tx P) : ∀ d ∈ memDeps P, NoHeld Γ1 d.root :=
-  fun d hd => NoHeld.of_anchF h (hthru d hd).1
+/-- ... so the kill of each root spares every held anchor: at a root whose
+    type holds no views `hv` is `false` and the rule's `HeldOK` spares them
+    (`ThruOK.spared`); at one whose type holds views there is none. -/
+theorem HeldSpared.of_thru {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {P : List Dep}
+    (hthru : ThruOK Γ1 F op tx P) (hnoV : NoHeldV Γ1 P) {d : Dep} (hd : d ∈ memDeps P) :
+    HeldSpared Γ1 (op.effAt d.kind (decide ((argE Γ1 d.root).ty = tx)) (argE Γ1 d.root).rvec)
+      (argE Γ1 d.root).ty.holdsView d.root := by
+  cases h : (argE Γ1 d.root).ty.holdsView
+  · exact hthru.spared d hd
+  · exact HeldSpared.of_none (hnoV d hd h) _ _
+
+/-- The invariant's anchors give it: a root of a change through a borrow is
+    not lent out (`ThruOK`). -/
+theorem NoHeldV.of_anchS {Γ1 : Ctx} {F V : List Var} (h : RootbAnchS Γ1 F V) {op : Edit} {tx : Ty}
+    {P : List Dep} (hthru : ThruOK Γ1 F op tx P) : NoHeldV Γ1 P := fun d hd hv => by
+  obtain ⟨hF, _, Er, hEr, _⟩ := hthru d hd
+  have hae : argE Γ1 d.root = Er := by unfold argE; rw [hEr]; rfl
+  rw [hae] at hv
+  exact NoHeld.of_anchS_hv h hEr hv hF
 
 theorem killE_rootb {Γ : Ctx} {F : List Var}
     (hanch : RootbAnch Γ F)
@@ -485,13 +540,15 @@ theorem RegionSpared.of_killNames {Γ : Ctx} {e : Eff} {hv : Bool} {x : Var} (h 
       (RegionSpared.of_killNames h ds).of_kill _ _ _
 
 /-- `killE_rootb` where a borrowed parameter may view a region
-    (`RootbAnchR`): a kill of a region ends no view (`RegionSpared`). -/
-theorem killE_rootbR {Γ : Ctx} {F : List Var}
-    (hanch : RootbAnchR Γ F)
+    (`RootbAnchR`): a kill of a region ends no view (`RegionSpared`).
+    AGORA-937 (3d, route U, PR B2): ... and a lent `Vec`'s held anchor at
+    `x`, which the kill spares (`HeldSpared`). -/
+theorem killE_rootbRH {Γ : Ctx} {F : List Var}
+    (hanch : RootbAnchRH Γ F)
     {x : Var} (hxF : x ∉ F) (e : Eff) (hv : Bool)
     (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
       e.kills hv d.kind = true → d.root ≠ x)
-    (hxr : RegionSpared Γ e hv x)
+    (hxr : RegionSpared Γ e hv x) (hxh : HeldSpared Γ e hv x)
     {v : Var} {E : Entry} (hE : Γ v = some E)
     (hrb : E.mode = .rootb) : killE e hv x E = E := by
   unfold killE
@@ -501,13 +558,35 @@ theorem killE_rootbR {Γ : Ctx} {F : List Var}
       beq_iff_eq, not_and, Bool.not_eq_true]
     refine Or.inr fun dep hd hr => ?_
     by_cases hb : dep.kind.bound = .none
-    · rcases hanch v E hE hrb dep hd hb with h | ⟨hk, Er, hEr, hreg⟩
+    · rcases hanch v E hE hrb dep hd hb with h | ⟨hk, Er, hEr, hreg⟩ | ha
       · exact absurd (hr ▸ h) hxF
       · rw [hk]; exact Eff.kills_self_of_view (hxr ⟨Er, hr ▸ hEr, hreg⟩)
+      · exact hxh v E hE hrb dep hd hr ha
     · cases hk : e.kills hv dep.kind
       · rfl
       · exact absurd hr (hmn v E hE hrb dep hd hb hk)
   rw [this]; rfl
+
+/-- With the anchors in `F` or on regions, a binding not lent out has a held
+    anchor only as a view of a region, which a kill that spares the region
+    spares. -/
+theorem HeldSpared.of_anchR {Γ : Ctx} {F : List Var} (hanch : RootbAnchR Γ F) {x : Var} (hxF : x ∉ F)
+    {e : Eff} {hv : Bool} (hxr : RegionSpared Γ e hv x) : HeldSpared Γ e hv x := by
+  intro p E hp hm d hd hr ha
+  have hb : d.kind.bound = .none := by rcases ha.2.2.2 with h' | h' <;> rw [h'] <;> rfl
+  rcases hanch p E hp hm d hd hb with h | ⟨hk, Er, hEr, hreg⟩
+  · exact absurd (hr ▸ h) hxF
+  · rw [hk]; exact Eff.kills_self_of_view (hxr ⟨Er, hr ▸ hEr, hreg⟩)
+
+theorem killE_rootbR {Γ : Ctx} {F : List Var}
+    (hanch : RootbAnchR Γ F)
+    {x : Var} (hxF : x ∉ F) (e : Eff) (hv : Bool)
+    (hmn : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
+      e.kills hv d.kind = true → d.root ≠ x)
+    (hxr : RegionSpared Γ e hv x)
+    {v : Var} {E : Entry} (hE : Γ v = some E)
+    (hrb : E.mode = .rootb) : killE e hv x E = E :=
+  killE_rootbRH hanch.toRH hxF e hv hmn hxr (HeldSpared.of_anchR hanch hxF hxr) hE hrb
 
 theorem NoPin.kills {Γ : Ctx} {x : Var} (h : NoPin Γ x) (e : Eff) (hv : Bool) :
     ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound ≠ .none →
