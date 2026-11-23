@@ -1,5 +1,13 @@
-// packages/map-anything/src/ui.nu — the page `map-anything serve` answers
-// GET / with.
+// packages/recon-kit/src/ui.nu — the page `<model> serve` answers GET /
+// with. The page is the service's; the app (RkApp, serve.nu) fills in its
+// name, its own option fields and the script that reads them:
+//
+//   %%NAME%% %%TAGLINE%% %%ABOUT%%   text and HTML
+//   %%OPTS%%                         the model's option fields
+//   %%VIEWS%% %%VIEWS_MAX%%          the views slider's default and top
+//   %%MODEL_JS%%                     modelOptions() → {…} merged into the
+//                                    start request; modelHint(n, isVideo,
+//                                    picked) → text added to the views hint
 //
 // One self-contained document, no build step and no CDN: the markup, the
 // style and the script are a string in the binary, so an installed tool
@@ -20,13 +28,27 @@
 // NURL strings are backtick-delimited and read `\n` `\t` `\r` `\\` as
 // escapes, so the script below uses no template literals and no backslash.
 
-@ mas_ui_html → s {
+@ rk_ui_page RkApp app → String {
+    : String t ( string_from ( __rk_ui_template ) )
+    : String vd ( string_from ( nurl_str_int . app views ) )
+    : String vm ( string_from ( nurl_str_int . app views_max ) )
+    : String a1 ( string_replace t `%%NAME%%` ( string_data . app name ) )
+    : String a2 ( string_replace a1 `%%TAGLINE%%` ( string_data . app tagline ) )
+    : String a3 ( string_replace a2 `%%ABOUT%%` ( string_data . app about ) )
+    : String a4 ( string_replace a3 `%%OPTS%%` ( string_data . app opts_html ) )
+    : String a5 ( string_replace a4 `%%VIEWS_MAX%%` ( string_data vm ) )
+    : String a6 ( string_replace a5 `%%VIEWS%%` ( string_data vd ) )
+    : String a7 ( string_replace a6 `%%MODEL_JS%%` ( string_data . app opts_js ) )
+    ^ a7
+}
+
+@ __rk_ui_template → s {
     ^ `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>map-anything</title>
+<title>%%NAME%%</title>
 <style>
 :root { color-scheme: dark; --bg:#0b0d10; --panel:#12161b; --line:#232a33; --ink:#e8eef4;
         --dim:#8b98a6; --faint:#5d6875; --accent:#4f9cf9; --ok:#4fc38a; --bad:#ff7a7a; --warn:#f2c14e; }
@@ -88,8 +110,8 @@ footer a { color: var(--dim); }
 <body>
 <main>
 <header>
-  <h1>map-anything</h1>
-  <span class="sub">photos or a video in &rarr; a metric 3-D point cloud out</span>
+  <h1>%%NAME%%</h1>
+  <span class="sub">%%TAGLINE%%</span>
 </header>
 
 <section class="card">
@@ -105,22 +127,10 @@ footer a { color: var(--dim); }
   <div class="opts">
     <div><label for="o-name">name</label><input id="o-name" type="text" placeholder="from the first file"></div>
     <div class="wide"><label for="o-max" id="o-max-label">views to use</label>
-      <div class="pair"><input id="o-max-r" type="range" min="4" max="120" step="1" value="24" aria-label="views to use">
-      <input id="o-max" type="number" min="0" max="2000" value="24"></div>
+      <div class="pair"><input id="o-max-r" type="range" min="4" max="%%VIEWS_MAX%%" step="1" value="%%VIEWS%%" aria-label="views to use">
+      <input id="o-max" type="number" min="0" max="2000" value="%%VIEWS%%"></div>
       <div class="hint" id="o-max-hint">spread over the whole capture, the sharpest of each run; 0 = every frame</div></div>
-    <div><label for="o-stride">take every Nth input</label><input id="o-stride" type="number" min="1" max="100" value="1"></div>
-    <div><label for="o-px">pixel stride</label><input id="o-px" type="number" min="1" max="16" value="1">
-      <div class="hint">2 = &frac14; of the points, a lighter cloud</div></div>
-    <div><label for="o-conf">drop least confident %</label><input id="o-conf" type="number" min="0" max="95" value="0"></div>
-    <div><label for="o-win">attention window</label><input id="o-win" type="number" min="4" max="64" value="24">
-      <div class="hint">views per window; lower if the GPU runs out</div></div>
-    <div><label for="o-align">align views (sweeps)</label><input id="o-align" type="number" min="0" max="10" value="3">
-      <div class="hint">merges the double copies of walls; 0 = off</div></div>
-    <div><label for="o-mv">views that must agree</label><input id="o-mv" type="number" min="0" max="4" value="1">
-      <div class="hint">drops floaters only one view sees; 0 = off</div></div>
-    <div><label for="o-vox">voxel size (mm)</label><input id="o-vox" type="text" value="auto">
-      <div class="hint">auto, off, or millimetres: one averaged point per cell</div></div>
-    <div class="chk"><input id="o-sky" type="checkbox"><label for="o-sky" style="margin:0;color:inherit;font-size:13px">mask sky (outdoor)</label></div>
+%%OPTS%%
   </div>
 
   <div class="row">
@@ -136,14 +146,15 @@ footer a { color: var(--dim); }
 </section>
 
 <footer>
-  A NURL port of Meta's <a href="https://github.com/facebookresearch/map-anything">MapAnything</a>
-  (facebook/map-anything-apache). One job runs on the GPU at a time; the rest wait in the queue.
+  %%ABOUT%% One job runs on the GPU at a time; the rest wait in the queue.
 </footer>
 </main>
 
 <script>
 "use strict";
 var $ = function (id) { return document.getElementById(id); };
+var VIEWS = %%VIEWS%%, VIEWS_MAX = %%VIEWS_MAX%%;
+%%MODEL_JS%%
 var picked = [];
 var pickGen = 0;  // bumped by every pick: a slower, older read gives way
 var videoSecs = 0;  // the picked video's length, once the browser has read it
@@ -168,6 +179,9 @@ function when(ms) {
 
 function pick(files) {
   if (uploading) { $("picked").textContent = "wait for the current upload to finish"; return; }
+  /* first, before any return: every pick — an empty or refused one too —
+     makes an older pick's read still in flight give way */
+  var gen = ++pickGen;
   var vids = [], imgs = [], skipped = 0;
   for (var i = 0; i < files.length; i++) {
     var f = files[i];
@@ -193,7 +207,7 @@ function pick(files) {
      its stream. So every picked file is read into memory here, once, and
      everything after — thumbnails, the length, the upload's pieces — uses
      that copy. Past 1.5 GB the originals are kept (and not probed). */
-  var gen = ++pickGen, list = picked.slice(), done = 0, copies = [];
+  var list = picked.slice(), done = 0, copies = [];
   if (total > 1536 * 1048576) { pickedReady(gen, list, msg, false); return; }
   $("picked").textContent = msg + " — reading…";
   (function next() {
@@ -271,7 +285,7 @@ function secs(t) {
 }
 /* What the views control will do with what is picked, in words. */
 function viewsHint() {
-  var n = num("o-max", 0, 2000, 24), isVid = picked.length === 1 && isVideo(picked[0]);
+  var n = num("o-max", 0, 2000, VIEWS), isVid = picked.length === 1 && isVideo(picked[0]);
   $("o-max-label").textContent = isVid ? "frames across the video" : "views to use";
   var h;
   if (n === 0) h = isVid ? "every frame at 2 frames/s — long videos are stitched from windows" : "every photo";
@@ -281,7 +295,8 @@ function viewsHint() {
   } else if (picked.length > n) h = n + " of " + picked.length + " photos, spread evenly, the sharpest of each run";
   else if (picked.length) h = "all " + picked.length + " photos";
   else h = "spread over the whole capture, the sharpest of each run; 0 = every frame";
-  if (n > num("o-win", 4, 64, 24)) h += " · more than one window: stitched";
+  var mh = modelHint(n, isVid, picked);
+  if (mh) h += " · " + mh;
   $("o-max-hint").textContent = h;
 }
 
@@ -299,10 +314,9 @@ drop.addEventListener("drop", function (e) { pick(e.dataTransfer.files); });
 $("o-max-r").oninput = function () { $("o-max").value = this.value; viewsHint(); };
 $("o-max").oninput = function () {
   var v = parseInt(this.value, 10);
-  if (!isNaN(v) && v >= 4 && v <= 120) $("o-max-r").value = v;
+  if (!isNaN(v) && v >= 4 && v <= VIEWS_MAX) $("o-max-r").value = v;
   viewsHint();
 };
-$("o-win").addEventListener("input", viewsHint);
 
 function api(method, url, body) {
   return fetch(url, {
@@ -430,20 +444,10 @@ function put(url, file, onprog) {
   return pump();
 }
 
-function voxelMm() {
-  var t = $("o-vox").value.trim().toLowerCase();
-  if (t === "" || t === "auto") return -1;
-  if (t === "off" || t === "0") return 0;
-  var v = parseInt(t, 10);
-  return isNaN(v) ? -1 : Math.min(999, Math.max(1, v));
-}
 function options() {
-  return {
-    max_views: num("o-max", 0, 2000, 24), stride: num("o-stride", 1, 100, 1),
-    pixel_stride: num("o-px", 1, 16, 1), conf_pct: num("o-conf", 0, 95, 0), window: num("o-win", 4, 64, 24),
-    mask_sky: $("o-sky").checked, align: num("o-align", 0, 10, 3), mv_check: num("o-mv", 0, 4, 1),
-    voxel_mm: voxelMm()
-  };
+  var o = modelOptions();
+  o.max_views = num("o-max", 0, 2000, VIEWS);
+  return o;
 }
 function num(id, lo, hi, dflt) {
   var v = parseInt($(id).value, 10);

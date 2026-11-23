@@ -1,5 +1,7 @@
 #!/bin/sh
-# `map-anything serve` over HTTP, without a GPU or the checkpoint: every
+# recon-kit's service (`<model> serve`) over HTTP, through tests/app.nu —
+# a test app that answers the model contract without a model, so no GPU and
+# no checkpoint: every
 # route a browser uses, the sign-in, the file-name and job-id checks, and
 # the refusals — but no job is ever started, so nothing reaches the model.
 set -u
@@ -10,7 +12,7 @@ if [ -n "${NURL:-}" ]; then :;
 elif [ -x "$REPO_ROOT/nurl.sh" ]; then NURL="$REPO_ROOT/nurl.sh"; export NURL_STDLIB="${NURL_STDLIB:-$REPO_ROOT}";
 else NURL="nurl"; fi
 
-WORK="$(mktemp -d -t map-anything-serve.XXXXXX)"
+WORK="$(mktemp -d -t recon-kit-serve.XXXXXX)"
 PID=""
 FIXTURES=""
 # only the processes this test started: the server and its fixtures
@@ -23,14 +25,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ! $NURL src/main.nu "$WORK/map-anything" >/dev/null 2>"$WORK/build.err"; then
+if ! $NURL tests/app.nu "$WORK/recon-test" >/dev/null 2>"$WORK/build.err"; then
     echo "FAIL the CLI does not build:"; tail -6 "$WORK/build.err"
     exit 1
 fi
 
 PORT=$(( 20000 + $$ % 20000 ))
 B="http://127.0.0.1:$PORT"
-MAP_ANYTHING_PASSWORD=sekret "$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/serve.log" 2>&1 &
+RECON_TEST_PASSWORD=sekret "$WORK/recon-test" serve --port "$PORT" --data "$WORK/data" >"$WORK/serve.log" 2>&1 &
 PID=$!
 up=0
 for _ in $(seq 1 50); do
@@ -92,8 +94,8 @@ check "the job lists its files" 5 "$(curl -s $A "$B/api/jobs/$ID" | sed -n 's/.*
 # does not decode fails in the CLI before any model is loaded
 ID2=$(curl -s $A -X POST "$B/api/jobs" -d '{"name":"opts"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 check "an upload for the run" 201 "$(code $A -X PUT --data-binary @"$WORK/f" "$B/api/jobs/$ID2/files/p.jpg")"
-check "start" 200 "$(code $A -X POST "$B/api/jobs/$ID2/start" -d '{"max_views":5,"align":2,"mv_check":1,"voxel_mm":5,"window":99}')"
-check "the options line" "--max-views 5 --stride 1 --pixel-stride 1 --window 64 --align 2 --mv-check 1 --voxel 0.005" "$(cat "$WORK/data/jobs/$ID2/opts")"
+check "start" 200 "$(code $A -X POST "$B/api/jobs/$ID2/start" -d '{"max_views":5,"voxel_mm":5,"window":99}')"
+check "the app builds the options line, clamped" "--max-views 5 --window 64 --voxel 0.005" "$(cat "$WORK/data/jobs/$ID2/opts")"
 for _ in $(seq 1 100); do
     st=$(cat "$WORK/data/jobs/$ID2/state")
     [ "$st" = failed ] || [ "$st" = done ] && break
@@ -121,7 +123,7 @@ check "concurrent uploads of one name: one stored" 1 "$(grep -c 201 "$WORK/race"
 check "...the rest refused" 5 "$(grep -c 409 "$WORK/race")"
 
 # the data directory has one owner
-"$WORK/map-anything" serve --port $((PORT + 1)) --data "$WORK/data" >"$WORK/second.log" 2>&1
+"$WORK/recon-test" serve --port $((PORT + 1)) --data "$WORK/data" >"$WORK/second.log" 2>&1
 check "a second server on the same data is refused" 1 "$(grep -c 'another server already owns' "$WORK/second.log")"
 
 check "delete" 204 "$(code $A -X DELETE "$B/api/jobs/$ID")"
@@ -130,7 +132,7 @@ check "...and it is gone" 0 "$(ls "$WORK/data/jobs" | wc -l | tr -d ' ')"
 # the lock goes with its process, however it ends: a server killed with
 # SIGKILL leaves nothing that keeps the next one out
 kill -KILL "$PID"; wait "$PID" 2>/dev/null; PID=""
-"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >"$WORK/third.log" 2>&1 &
+"$WORK/recon-test" serve --port "$PORT" --data "$WORK/data" >"$WORK/third.log" 2>&1 &
 PID=$!
 up=0
 for _ in $(seq 1 50); do curl -s -m 1 -o /dev/null "$B/healthz" && { up=1; break; }; sleep 0.1; done
@@ -247,7 +249,7 @@ echo running > "$J3/state"; echo tok123 > "$J3/run"; rm -f "$J3"/pid.*
 ( cd "$J3" && exec sh -c 'while [ ! -e go ]; do sleep 0.1; done; echo $$ > pid.tok123 && [ "$(cat run)" = tok123 ] && touch ran' ) &
 LATE=$!
 FIXTURES="$FIXTURES $LATE"
-"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >>"$WORK/lifecycle.log" 2>&1 &
+"$WORK/recon-test" serve --port "$PORT" --data "$WORK/data" >>"$WORK/lifecycle.log" 2>&1 &
 PID=$!
 up_or_fail
 for _ in $(seq 1 100); do [ "$(cat "$J3/run")" != tok123 ] && break; sleep 0.1; done
@@ -280,7 +282,7 @@ check "the stale shell left the current run's pid alone" "$BPID" "$(cat "$J4/pid
 # recovery runs before the listener opens, so watch B's trap now and look
 # for the server's readiness only afterwards
 kill -KILL "$PID"; wait "$PID" 2>/dev/null
-"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >>"$WORK/lifecycle.log" 2>&1 &
+"$WORK/recon-test" serve --port "$PORT" --data "$WORK/data" >>"$WORK/lifecycle.log" 2>&1 &
 PID=$!
 for _ in $(seq 1 150); do [ -e "$J4/b.term" ] && break; sleep 0.1; done
 check "recovery signalled the active run" 1 "$([ -e "$J4/b.term" ] && echo 1 || echo 0)"
@@ -303,7 +305,7 @@ DEAD=$!
 wait "$DEAD"
 kill -KILL "$PID"; wait "$PID" 2>/dev/null
 echo running > "$J7/state"; echo tokD > "$J7/run"; rm -f "$J7"/pid.*; echo "$DEAD" > "$J7/pid.tokD"
-"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >>"$WORK/lifecycle.log" 2>&1 &
+"$WORK/recon-test" serve --port "$PORT" --data "$WORK/data" >>"$WORK/lifecycle.log" 2>&1 &
 PID=$!
 up_or_fail
 until_state "$J7" failed done
@@ -321,7 +323,7 @@ kill "$PID"; wait "$PID" 2>/dev/null
 echo running > "$J5/state"; echo tokX > "$J5/run"; rm -f "$J5"/pid.*
 echo "--max-views 1" > "$J6/opts"; echo queued > "$J6/state"
 chmod 555 "$J5"
-"$WORK/map-anything" serve --port "$PORT" --data "$WORK/data" >>"$WORK/lifecycle.log" 2>&1 &
+"$WORK/recon-test" serve --port "$PORT" --data "$WORK/data" >>"$WORK/lifecycle.log" 2>&1 &
 PID=$!
 up_or_fail
 for _ in $(seq 1 100); do grep -q "cannot void the run token of job $ID5" "$WORK/lifecycle.log" && break; sleep 0.1; done
