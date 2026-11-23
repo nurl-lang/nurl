@@ -4,7 +4,7 @@ import C.A2Panic
 # C7: A2's core statements, decided (AGORA-970)
 
 `checkStmt2` computes A2's `StmtT` for `skip`, `seq`, `letv`, `ite`,
-`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct or its own destructor type) and `scopeD` (a binding of its own destructor type), whatever the exits `ξ` are. These
+`while`, `push`, `free`, `frozen`, `scope`, `rbind`, `scopeL`, `insert`, `letrec`, `withLock`, `withElem` `letd` (a struct or its own destructor type) `scopeD` (a binding of its own destructor type) and `takeB`, whatever the exits `ξ` are. These
 rules pass `ξ` on and never look at it. A scope's end asks `EndOK`
 (`NoPin`, `DtorSafe` and `DbindSafe`), which is decided over the finite
 domain (`endOK2B_sound`). Contexts stay inside the domain as in C1, so
@@ -462,6 +462,73 @@ theorem scopeDTy_sound {f : Nat} {a t : Ty} (h : scopeDTy f a = some t) : a = .d
     · cases h
   | _ => simp [scopeDTy] at h
 
+theorem supported2_killNames {Γ : Ctx} {D : List Var} (h : Supported2 Γ D) (ds : List Dep) :
+    Supported2 (killNames ds Γ) D := by
+  unfold killNames
+  induction ds with
+  | nil => exact h
+  | cons d ds ih => exact supported2_kill ih _ false _
+
+theorem supported2_killThru {Γ : Ctx} {D : List Var} (h : Supported2 Γ D) (op : Edit) (tx : Ty)
+    (P : List Dep) : Supported2 (killThru op tx P Γ) D :=
+  supported2_killNames h _
+
+/-- `HeldOK`, decided over the domain: no borrowed root holds a view or a
+    handle of `r` that the effect `e` ends. -/
+def heldOKB (D : List Var) (Γ : Ctx) (e : Eff) (r : Var) : Bool :=
+  D.all fun p => match Γ p with
+    | some E => !(decide (E.mode = .rootb)) || E.held.all fun d =>
+        !(decide (d.root = r) && (decide (d.kind = .view) || decide (d.kind = .self))) || !(e.kills false d.kind)
+    | none => true
+
+theorem heldOKB_sound {D : List Var} {Γ : Ctx} {e : Eff} {r : Var} (hs : Supported2 Γ D)
+    (h : heldOKB D Γ e r = true) : HeldOK Γ e r := by
+  intro p E hE hm d hd hr hk
+  simp only [heldOKB, List.all_eq_true] at h
+  have := h p (mem_of_some2 hs hE)
+  rw [hE] at this
+  simp only [hm, decide_true, Bool.not_true, Bool.false_or, List.all_eq_true] at this
+  have := this d hd
+  simp only [hr, decide_true, Bool.true_and, Bool.or_eq_true, Bool.not_eq_true'] at this
+  rcases hk with hk | hk <;> simp [hk] at this ⊢ <;> exact this
+
+/-- `ThruOKR`, decided: every root the path reaches in memory is not
+    frozen, not what is stored, bound, live or a region, allows the change's
+    effect there, is viewed by no destructor it ends, is no share, and is
+    held by no borrowed root it ends. -/
+def thruOKRB (D : List Var) (Γ1 : Ctx) (F : List Var) (op : Edit) (tx : Ty) (Ps : List Dep) : Bool :=
+  (memDeps Ps).all fun d => decide (d.root ∉ F) &&
+    (match op.stored with | some y => decide (d.root ≠ y) | none => true) &&
+    match Γ1 d.root with
+    | some Er =>
+      (Er.live || decide (Er.mode = .region)) &&
+      (canDoB2 Er.mode (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) ||
+        (decide (Er.mode = .region) && !((op.effAt d.kind (decide (Er.ty = tx)) Er.rvec).kills false .view))) &&
+      dtorSafeB D Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) false d.root &&
+      decide (d.kind ≠ .share) &&
+      heldOKB D Γ1 (op.effAt d.kind (decide (Er.ty = tx)) Er.rvec) d.root
+    | none => false
+
+theorem thruOKRB_sound {D : List Var} {Γ1 : Ctx} {F : List Var} {op : Edit} {tx : Ty} {Ps : List Dep}
+    (hs : Supported2 Γ1 D) (h : thruOKRB D Γ1 F op tx Ps = true) : ThruOKR Γ1 F op tx Ps := by
+  intro d hd
+  simp only [thruOKRB, List.all_eq_true] at h
+  have h := h d hd
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+  obtain ⟨⟨hF, hst⟩, hr⟩ := h
+  refine ⟨hF, fun y hy => by rw [hy] at hst; simpa using hst, ?_⟩
+  revert hr
+  cases hE : Γ1 d.root with
+  | none => intro hr; cases hr
+  | some Er =>
+    intro hr
+    simp only [Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hr
+    obtain ⟨⟨⟨⟨hl, hc⟩, hds⟩, hsh⟩, hho⟩ := hr
+    refine ⟨Er, rfl, hl, ?_, dtorSafeB_sound hs hds, hsh, heldOKB_sound hs hho⟩
+    rcases hc with hc | hc
+    · exact Or.inl (canDoB2_sound hc)
+    · exact Or.inr hc
+
 def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, _, .skip => some Γ
   | Γ, F, .seq a b =>
@@ -623,6 +690,21 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
             if endOK2B D Δ x && keepOutB D Γ Δ s.spine && ctxWF2B D Δ && nameWFB D Δ &&
                 viewDbindB Δ x && freshOKB D Δ then some (exitScope x Δ) else none
           | none => none
+        else none
+      | none => none
+    | none => none
+  | Γ, F, .takeB x i y s =>
+    match Γ x with
+    | some Ex =>
+      match vecElem2 Ex.ty with
+      | some t =>
+        if s.src ∧ Γ y = none ∧ y ∉ F ∧ Ex.mode = .bor ∧ Ex.live = true ∧ t.holdsView = false ∧ x ∉ F ∧
+            (t.holdsDtor = true → y ∈ s.movedFirst ∧ y ∉ s.assigns) then
+          if checkExpr2 Γ i && thruOKRB D Γ F (.trunc i) Ex.ty Ex.path then
+            match checkStmt2 P R C D (setE (setE (killThru (.trunc i) Ex.ty Ex.path Γ) x Ex) y (compE Ex t)) F s with
+            | some Δ => if endOK2B D Δ y then some (exitScope y Δ) else none
+            | none => none
+          else none
         else none
       | none => none
     | none => none
@@ -1039,6 +1121,37 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
                 (endOK2B_sound s0 hend) (keepOutB_sound hs s0 hko) (ctxWF2B_sound s0 hwf)
                 (nameWFB_sound s0 hnw) (viewDbindB_sound hvd) (dSelfB_sound hE hds) (freshOKB_sound s0 hfr),
                 supported2_exitScope s0 x⟩
+            · cases h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  | takeB x i y s ih =>
+    intro ξ Γ F Δ hs hD h
+    simp only [checkStmt2] at h
+    split at h
+    · rename_i Ex hEx
+      split at h
+      · rename_i t ht
+        split at h
+        · rename_i hc
+          obtain ⟨hsrc, hy, hyF, hm, hl, hv, hxF, hdt⟩ := hc
+          split at h
+          · rename_i hc2
+            simp only [Bool.and_eq_true] at hc2
+            split at h
+            · rename_i Δ0 h0
+              split at h
+              · rename_i he
+                simp only [Option.some.injEq] at h; subst h
+                have hxD : x ∈ D := hD x (by simp [Stmt.vars])
+                have hyD : y ∈ D := hD y (by simp [Stmt.vars])
+                obtain ⟨t0, s0⟩ := ih (ξ := ξ.under y)
+                  (supported2_setE (supported2_setE (supported2_killThru hs _ _ _) hxD Ex) hyD _)
+                  (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
+                exact ⟨.takeB hsrc hy hyF hEx hm hl (vecElem2_some ht) hv hxF (checkExpr2_sound hc2.1)
+                  (thruOKRB_sound hs hc2.2) hdt t0 (endOK2B_sound s0 he), supported2_exitScope s0 y⟩
+              · cases h
             · cases h
           · cases h
         · cases h
