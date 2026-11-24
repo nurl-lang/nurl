@@ -65,6 +65,14 @@
            font: inherit; font-size: 11px; padding: 2px 4px; }
   #cmsg a { color: #4f9cf9; }
   #crop input[type=range] { margin: 1px 0; }
+  /* game mode: the cursor is captured, a crosshair marks the middle */
+  #cross { position: fixed; left: 50%; top: 50%; width: 14px; height: 14px;
+           margin: -7px 0 0 -7px; pointer-events: none; opacity: .7; }
+  #cross::before, #cross::after { content: ""; position: absolute; background: #e8eef4; }
+  #cross::before { left: 6px; top: 0; width: 2px; height: 14px; }
+  #cross::after { top: 6px; left: 0; height: 2px; width: 14px; }
+  body.fly canvas { cursor: crosshair; }
+  body.fly .orbit-help, body:not(.fly) .fly-help { display: none; }
   #fold { position: absolute; top: 6px; right: 8px; padding: 0 6px; font-size: 13px;
           line-height: 20px; }
   #hud.folded .fold-body { display: none; }
@@ -114,6 +122,7 @@
   <div class="btns">
     <button id="mode">colour: rgb</button>
     <button id="reset">reset view</button>
+    <button id="fly" class="mouse" title="fly through the scene like a game (g)">game mode</button>
   </div>
   <div id="crop" hidden>
     <div class="sub" style="margin:10px 0 4px">region for a 3-D object</div>
@@ -130,10 +139,14 @@
 </div>
 
 <div id="help" class="panel" hidden>
-  <span class="mouse"><b>drag</b> orbit &nbsp; <b>wheel</b> zoom &nbsp; <b>shift-drag</b> pan<br>
-  <b>r</b> reset &nbsp; <b>c</b> colour &nbsp; <b>[ ]</b> point size</span>
+  <span class="mouse orbit-help"><b>drag</b> orbit &nbsp; <b>wheel</b> zoom &nbsp; <b>shift-drag</b> pan<br>
+  <b>r</b> reset &nbsp; <b>c</b> colour &nbsp; <b>[ ]</b> point size &nbsp; <b>g</b> game mode</span>
+  <span class="mouse fly-help"><b>mouse</b> look &nbsp; <b>w a s d</b> / <b>arrows</b> fly &nbsp; <b>e q</b> up, down<br>
+  <b>shift</b> faster &nbsp; <b>wheel</b> speed <b id="flyv"></b> &nbsp; <b>esc</b> back to orbit</span>
   <span class="touch"><b>drag</b> orbit &nbsp; <b>pinch</b> zoom &nbsp; <b>two fingers</b> pan &nbsp; <b>double-tap</b> reset</span>
 </div>
+
+<div id="cross" hidden></div>
 
 <div id="status">
   <div class="big" id="stat">loading the cloud...</div>
@@ -605,6 +618,11 @@ function rolledUp(eye, tgt) {
   ];
 }
 var cam = { yaw: 0.6, pitch: 0.35, dist: 3, tgt: [0, 0, 0] }, home = null;
+/* Game mode: a free-flying eye instead of the orbit, null while orbiting.
+   pos is the eye, yaw/pitch its heading in the orbit's own angles (pitch
+   > 0 looks towards UP); sceneR, the radius the default trim keeps, sets
+   the scale of the speed so a room and a street feel alike. */
+var fly = null, keys = {}, sceneR = 1, flySpeed = 0;
 var total = 0, drawn = 0, mode = 0, psize = 2, density = 1, trim = 0.98;
 var lo = [0,0,0], span = [1,1,1], mid = [0,0,0], radii = null, diag = 1;
 function radiusAt(f) {
@@ -654,7 +672,9 @@ function boot(data, label) {
   rs.sort();
   radii = rs;
 
-  cam.tgt = mid;
+  cam.tgt = mid.slice();
+  sceneR = Math.max(radiusAt(DEFAULT_TRIM), diag * 0.02);
+  flySpeed = sceneR * 0.4;
   /* frame what the default trim keeps, or one far sky point decides
      the zoom and the scene is a speck in the middle */
   cam.dist = Math.max(radiusAt(DEFAULT_TRIM) * 2.6, diag * 0.05);
@@ -668,8 +688,12 @@ function boot(data, label) {
   if (Q.has("roll")) ROLL = parseFloat(Q.get("roll"));
   if (Q.has("yaw")) cam.yaw = parseFloat(Q.get("yaw"));
   if (Q.has("pitch")) cam.pitch = parseFloat(Q.get("pitch"));
-  if (Q.has("dist")) cam.dist *= parseFloat(Q.get("dist"));
+` } {}
+    ? == k 1 { ^ `  if (Q.has("dist")) cam.dist *= parseFloat(Q.get("dist"));
   home = JSON.parse(JSON.stringify(cam));
+  /* ?fly=1 starts in game mode (without the captured cursor, which only a
+     click or a key can ask for): a link, or a test, can open it that way */
+  if (Q.get("fly") === "1") flyEnter();
   if (CROP_URL && !data.idx) cropSetup(data);
 
   /* A phone's GPU draws a few million points at a crawl and the orbit
@@ -694,8 +718,7 @@ function boot(data, label) {
     if (data.nrm) {
       var nb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, nb);
       gl.bufferData(gl.ARRAY_BUFFER, data.nrm, gl.STATIC_DRAW);
-` } {}
-    ? == k 1 { ^ `      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
     } else gl.vertexAttrib3f(2, 0, 0, 1);
     var ib = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data.idx, gl.STATIC_DRAW);
@@ -761,18 +784,26 @@ function boot(data, label) {
   var last = performance.now(), frames = 0, acc = 0;
   function frame(now) {
     resize();
-    var eye = [
-      cam.tgt[0] + cam.dist * Math.cos(cam.pitch) * Math.sin(cam.yaw),
-      cam.tgt[1] + UP[1] * cam.dist * Math.sin(cam.pitch),
-      cam.tgt[2] + cam.dist * Math.cos(cam.pitch) * Math.cos(cam.yaw)
-    ];
+    if (fly) flyStep(Math.min(0.25, Math.max(0, (now - last) / 1000)));
+    /* the eye, the point it looks at, and the scale the clip planes and
+       the depth ramp follow: the orbit's distance, or the scene's radius */
+    var eye, look, reach;
+    if (fly) {
+      eye = fly.pos.slice();
+      var fd = flyDir(fly.yaw, fly.pitch);
+      look = [eye[0] + fd[0], eye[1] + fd[1], eye[2] + fd[2]];
+      reach = sceneR;
+    } else {
+      eye = orbitEye(); look = cam.tgt; reach = cam.dist;
+    }
     var P = perspective(50 * Math.PI / 180, cv.width / cv.height,
-                        Math.max(cam.dist / 5000, 1e-4), cam.dist * 20 + diag * 4);
-    gl.uniformMatrix4fv(uMVP, false, mul(P, lookAt(eye, cam.tgt, rolledUp(eye, cam.tgt))));
+                        Math.max(reach / 5000, 1e-4), reach * 20 + diag * 4);
+    var MV = mul(P, lookAt(eye, look, rolledUp(eye, look)));
+    gl.uniformMatrix4fv(uMVP, false, MV);
     gl.uniform1f(uSize, psize * Math.min(window.devicePixelRatio || 1, 2));
     gl.uniform1i(uMode, mode);
     gl.uniform3fv(uLo, lo);
-    gl.uniform3fv(uSpan, [cam.dist * 2, span[1], 1]);
+    gl.uniform3fv(uSpan, [reach * 2, span[1], 1]);
     gl.uniform3fv(uCentre, mid);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (isMesh) {
@@ -787,7 +818,7 @@ function boot(data, label) {
       gl.uniform1i(uBoxOn, cb ? 1 : 0);
       if (cb) { gl.uniform3fv(uBoxLo, cb.lo); gl.uniform3fv(uBoxHi, cb.hi); }
       gl.drawArrays(gl.POINTS, 0, drawn);
-      if (cb) drawBox(cb, mul(P, lookAt(eye, cam.tgt, rolledUp(eye, cam.tgt))));
+      if (cb) drawBox(cb, MV);
       gl.useProgram(prog); gl.bindVertexArray(vao);
     }
 
@@ -876,6 +907,93 @@ function panBy(dx, dy) {
   cam.tgt[1] += UP[1] * dy * s;
 }
 function zoomBy(f) { cam.dist = Math.max(diag * 1e-4, Math.min(diag * 50, cam.dist * f)); }
+function orbitEye() {
+  return [
+    cam.tgt[0] + cam.dist * Math.cos(cam.pitch) * Math.sin(cam.yaw),
+    cam.tgt[1] + UP[1] * cam.dist * Math.sin(cam.pitch),
+    cam.tgt[2] + cam.dist * Math.cos(cam.pitch) * Math.cos(cam.yaw)
+  ];
+}
+
+/* ---------- game mode ---------------------------------------------------
+   Fly like a game's spectator camera: the mouse turns the head, w a s d or
+   the arrows move along the view and across it, e and q (or space) rise
+   and sink along UP, shift is four times faster, the wheel sets the speed.
+   No gravity and no collisions: the eye goes through anything. The cursor
+   is captured (Pointer Lock); esc gives it back and the orbit carries on
+   from the view the flight ended on. A mouse-and-keyboard mode: the button
+   is hidden on touch screens. */
+/* the heading as a unit vector, in the orbit's angles: the orbit's eye sits
+   at tgt + dist * flyDir(yaw, pitch), so the flight starts at that eye with
+   the heading turned round (yaw + pi, -pitch) and nothing on screen moves */
+function flyDir(y, p) {
+  return [Math.cos(p) * Math.sin(y), UP[1] * Math.sin(p), Math.cos(p) * Math.cos(y)];
+}
+function flyLabel() { $("flyv").textContent = "x" + (flySpeed / (sceneR * 0.4)).toFixed(1); }
+function flyEnter() {
+  if (fly || !home) return;
+  fly = { pos: orbitEye(), yaw: cam.yaw + Math.PI, pitch: -cam.pitch, locked: false };
+  keys = {};
+  document.body.classList.add("fly");
+  $("cross").hidden = false;
+  $("fly").textContent = "leave game mode";
+  flyLabel();
+  /* a click or a key press may capture the cursor; anything else (?fly=1)
+     is refused, and then a drag turns the head instead */
+  try {
+    var pr = cv.requestPointerLock && cv.requestPointerLock();
+    if (pr && pr.catch) pr.catch(function () {});
+  } catch (err) {}
+}
+function flyLeave() {
+  if (!fly) return;
+  /* the orbit goes on from this view: its centre straight ahead, at the
+     distance the orbit had */
+  var d = flyDir(fly.yaw, fly.pitch);
+  cam.tgt = [fly.pos[0] + d[0] * cam.dist, fly.pos[1] + d[1] * cam.dist, fly.pos[2] + d[2] * cam.dist];
+  cam.yaw = fly.yaw - Math.PI;
+  cam.pitch = -fly.pitch;
+  fly = null; keys = {};
+  document.body.classList.remove("fly");
+  $("cross").hidden = true;
+  $("fly").textContent = "game mode";
+  if (document.pointerLockElement === cv) document.exitPointerLock();
+}
+/* the mouse to the right turns right, up looks up — whichever way UP is */
+function lookBy(dx, dy) {
+  fly.yaw += dx * 0.0025 * hsign();
+  fly.pitch = Math.max(-1.55, Math.min(1.55, fly.pitch - dy * 0.0025));
+}
+function flyStep(dt) {
+  var f = 0, r = 0, u = 0;
+  if (keys.KeyW || keys.ArrowUp) f += 1;
+  if (keys.KeyS || keys.ArrowDown) f -= 1;
+  if (keys.KeyD || keys.ArrowRight) r += 1;
+  if (keys.KeyA || keys.ArrowLeft) r -= 1;
+  if (keys.KeyE || keys.Space) u += 1;
+  if (keys.KeyQ) u -= 1;
+  if (!(f || r || u) || !dt) return;
+  var d = flyDir(fly.yaw, fly.pitch);
+  /* across the view: the heading x UP, level whatever the pitch */
+  var rt = [Math.cos(fly.yaw), 0, -Math.sin(fly.yaw)];
+  if (UP[1] > 0) rt = [-rt[0], 0, -rt[2]];
+  var m = [0, 1, 2].map(function (a) { return d[a] * f + rt[a] * r + UP[a] * u; });
+  var ml = Math.hypot(m[0], m[1], m[2]);
+  if (!ml) return;
+  var v = flySpeed * (keys.ShiftLeft || keys.ShiftRight ? 4 : 1) * dt / ml;
+  for (var a = 0; a < 3; a++) fly.pos[a] += m[a] * v;
+}
+document.addEventListener("pointerlockchange", function () {
+  if (!fly) return;
+  if (document.pointerLockElement === cv) fly.locked = true;
+  else if (fly.locked) flyLeave();  /* esc, or the window lost focus */
+});
+document.addEventListener("mousemove", function (e) {
+  if (fly && document.pointerLockElement === cv) lookBy(e.movementX, e.movementY);
+});
+window.addEventListener("keyup", function (e) { delete keys[e.code]; });
+/* a key let go while the page had no focus never arrives: stop, not drift */
+window.addEventListener("blur", function () { keys = {}; });
 
 var pts = {}, npts = 0, pinch = null, mousePan = false;
 /* A tap is a touch that lifts quickly, nearly where it went down, with no
@@ -906,6 +1024,11 @@ cv.addEventListener("pointermove", function (e) {
   if (!p) return;
   var dx = e.clientX - p.x, dy = e.clientY - p.y;
   p.x = e.clientX; p.y = e.clientY;
+  if (fly) {
+    if (document.pointerLockElement !== cv) lookBy(dx, dy);
+    e.preventDefault();
+    return;
+  }
   /* a finger that travels is dragging, even if it comes back */
   if (tapCand && tapCand.id === e.pointerId &&
       Math.hypot(e.clientX - tapCand.x, e.clientY - tapCand.y) >= 10) tapCand = null;
@@ -941,6 +1064,13 @@ function lift(e) {
 cv.addEventListener("pointerup", lift);
 cv.addEventListener("pointercancel", lift);
 cv.addEventListener("wheel", function (e) {
+  if (fly) {
+    var w = Math.max(-60, Math.min(60, e.deltaY * (e.deltaMode === 1 ? 20 : 1)));
+    flySpeed = Math.max(sceneR * 0.005, Math.min(sceneR * 20, flySpeed * Math.exp(-w * 0.004)));
+    flyLabel();
+    e.preventDefault();
+    return;
+  }
   /* a trackpad pinch arrives as ctrl+wheel with small deltas: follow the
      delta rather than a fixed step, so both feel proportionate */
   var d = Math.max(-60, Math.min(60, e.deltaY * (e.deltaMode === 1 ? 20 : 1)));
@@ -952,7 +1082,9 @@ cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 var MODES = ["rgb", "height", "depth"];
 function setMode(m) { mode = m; $("mode").textContent = "colour: " + MODES[m]; }
 $("mode").onclick = function () { setMode((mode + 1) % 3); };
-$("reset").onclick = function () { if (home) cam = JSON.parse(JSON.stringify(home)); };
+$("reset").onclick = function () { flyLeave(); if (home) cam = JSON.parse(JSON.stringify(home)); };
+/* blurred at once, or space (rise) would press the focused button again */
+$("fly").onclick = function () { this.blur(); if (fly) flyLeave(); else flyEnter(); };
 $("fold").onclick = function () { $("hud").classList.toggle("folded"); };
 /* the panel starts folded where it would cover most of the scene */
 if (window.innerWidth < 600) $("hud").classList.add("folded");
@@ -964,7 +1096,17 @@ $("tm").oninput = function () {
   trim = +this.value / 100;
   $("tmv").textContent = (100 - +this.value) + "%";
 };
+var FLY_KEYS = ["KeyW", "KeyA", "KeyS", "KeyD", "KeyE", "KeyQ", "Space",
+                "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight"];
 window.addEventListener("keydown", function (e) {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  /* game keys by position (e.code), so w a s d sit where they do on any
+     layout */
+  if (e.code === "KeyG" && !e.repeat) { if (fly) flyLeave(); else flyEnter(); return; }
+  if (fly) {
+    if (e.code === "Escape") { flyLeave(); return; }
+    if (FLY_KEYS.indexOf(e.code) >= 0) { keys[e.code] = true; e.preventDefault(); return; }
+  }
   if (e.key === "r") $("reset").onclick();
   else if (e.key === "c") setMode((mode + 1) % 3);
   else if (e.key === "[" || e.key === "]") {
