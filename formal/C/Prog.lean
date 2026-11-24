@@ -52,9 +52,9 @@ def endOKB (fn : Fn) (Δ : Ctx) : Bool :=
 
 /-- The variables a function's check ranges over: its parameters, its
     result slot and the variables its body names (github#2242's review: not
-    every slot up to `nvars`). -/
+    every slot up to `nvars`, and built without scanning `List.range fn.nvars`). -/
 def fnDomA (fn : Fn) : List Var :=
-  (List.range fn.nvars).filter fun v => decide (v ≤ fn.params.length) || decide (v ∈ fn.body.vars)
+  List.range (fn.params.length + 1) ++ (fn.body.vars.filter fun v => decide (fn.params.length < v)).eraseDups
 
 /-- `FnOK`, decided, with the body's certificate. -/
 def fnOKB (P : Prog) (fn : Fn) (c : Cert) : Bool :=
@@ -67,14 +67,13 @@ def fnOKB (P : Prog) (fn : Fn) (c : Cert) : Bool :=
    | some Δ => endOKB fn Δ
    | none => false)
 
-theorem sigCtx_supported {fn : Fn} (h : fn.params.length < fn.nvars) :
+theorem sigCtx_supported {fn : Fn} (_h : fn.params.length < fn.nvars) :
     Supported (sigCtx fn) (fnDomA fn) := by
   intro v hv
-  have hv' : ¬ (v < fn.nvars ∧ (v ≤ fn.params.length ∨ v ∈ fn.body.vars)) := by
-    simpa [fnDomA, List.mem_filter, decide_eq_true_eq] using hv
-  have h1 : ¬ v < fn.params.length := fun hlt =>
-    hv' ⟨Nat.lt_trans hlt h, Or.inl (Nat.le_of_lt hlt)⟩
-  have h2 : ¬ v = fn.params.length := fun e => hv' ⟨e ▸ h, Or.inl (Nat.le_of_eq e)⟩
+  have hv' : ¬ v < fn.params.length + 1 := fun hlt =>
+    hv (List.mem_append_left _ (List.mem_range.mpr hlt))
+  have h1 : ¬ v < fn.params.length := fun hlt => hv' (Nat.lt_succ_of_lt hlt)
+  have h2 : ¬ v = fn.params.length := fun e => hv' (e ▸ Nat.lt_succ_self _)
   simp [sigCtx, h1, h2]
 
 theorem fnOKB_sound {P : Prog} {fn : Fn} {c : Cert} (h : fnOKB P fn c = true) : FnOK P fn := by
@@ -96,8 +95,11 @@ theorem fnOKB_sound {P : Prog} {fn : Fn} {c : Cert} (h : fnOKB P fn c = true) : 
   · split at hchk
     · rename_i Δ hΔ
       have hD : ∀ v ∈ fn.body.vars, v ∈ fnDomA fn := fun v hv => by
-        simp only [fnDomA, List.mem_filter, List.mem_range, Bool.or_eq_true, decide_eq_true_eq]
-        exact ⟨of_decide_eq_true (List.all_eq_true.mp hvars v hv), Or.inr hv⟩
+        simp only [fnDomA, List.mem_append, List.mem_range, List.mem_eraseDups, List.mem_filter,
+          decide_eq_true_eq]
+        rcases Nat.lt_or_ge fn.params.length v with h' | h'
+        · exact Or.inr ⟨hv, h'⟩
+        · exact Or.inl (Nat.lt_succ_of_le h')
       obtain ⟨ht, _⟩ := checkC_sound (P := P) c (sigCtx_supported hlen) hD hΔ
       refine ⟨Δ, ht, ?_, ?_⟩
       · simp only [endOKB, Bool.and_eq_true] at hchk

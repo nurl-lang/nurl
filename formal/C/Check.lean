@@ -429,8 +429,10 @@ theorem checkStmt_sound {P : Prog} : ∀ {s : Stmt} {Γ : Ctx} {F : List Var} {�
   | rbind p s _ => intro Γ F Δ h; simp [checkStmt] at h
   | frozen z s ih => intro Γ F Δ h; simp only [checkStmt] at h; exact .frozen (ih h)
 
-/-- A program the checker accepts, run from the empty store, never gets
-    stuck: `A1.memory_safe` through `checkStmt_sound`. The checker's answer
+/-- A statement the checker accepts, in a valid program (`ProgOK P`),
+    written in source syntax (`s.src`) and naming only variables below
+    `nv`, run from the empty store of `nv` slots, never gets stuck:
+    `A1.memory_safe` through `checkStmt_sound`. The checker's answer
     is a computation, so a nurlc certificate for such a program is checked
     by running it. -/
 theorem checked_memory_safe {P : Prog} (hP : ProgOK P) {s : Stmt} {Δ : Ctx}
