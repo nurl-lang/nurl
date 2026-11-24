@@ -780,6 +780,20 @@ def check_function(name, blocks, owning, journal=False):
                             # storage of the frame's)
                             rs.add("other" if sp[0] is None else ptr_root(sp[0], seen_))
                 r = "other" if rs == {"other"} else None
+            elif a.startswith("@"):
+                # (a pointer read out of a global: what was stored there, not
+                # the global's address - outside only when every store into
+                # it here is; a frame's own slot stored into it comes back)
+                rs = set()
+                for _, lines in blocks:
+                    for l in lines:
+                        ms = parse_store(l)
+                        if ms == () and a in l:
+                            rs.add(None)
+                        elif ms and ms.group(2) == a:
+                            v = ms.group(1)
+                            rs.add(ptr_root(v, seen_) if v.startswith("%") else "other")
+                r = "other" if rs <= {"other"} else None
             else:
                 r = "other" if ptr_root(a, seen_) == "other" else None
         elif (mg := re.match(r"extractvalue .*? (%[\w.]+), \d+(?:, \d+)*$", d)):

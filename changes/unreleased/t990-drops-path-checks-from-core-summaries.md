@@ -223,3 +223,6 @@
   plain store does; and types compare without their whitespace. New
   selftest program `literal_of_clones_handed_to_a_sink.nu`. The corpus
   totals are unchanged.
+- A pointer read out of a global is what was stored there, not the global:
+  it counts as outside the frame only when every store into that global in
+  the function is.

@@ -386,6 +386,13 @@ awk "$lf"'{m=1} m && /^}/{m=0}
       print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lcall.ll"
 grep -q "call ptr @__nurl_fn.id_ptr(ptr %kp0)" "$TMP/lcall.ll" || { echo "FAIL: the call-returned pointer edit did not apply"; fail=1; }
 nv a_literal_stored_through_a_pointer_a_call_returned_from_an_untraced_argument __nurl_fn.mk "$TMP/lcall.ll" --sums "$TMP/l.core"
+# the same store through a pointer read back out of a global the frame
+# stored its own slot into: a load gives what was stored, not the global
+awk "$lf"'{m=1} m && /^}/{m=0}
+  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  store ptr %r7, ptr @.tv_g"; print "  %kp = load ptr, ptr @.tv_g"
+      print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lglob.ll"
+grep -q "load ptr, ptr @.tv_g" "$TMP/lglob.ll" || { echo "FAIL: the global round-trip edit did not apply"; fail=1; }
+nv a_literal_stored_through_a_frame_slot_read_back_out_of_a_global __nurl_fn.mk "$TMP/lglob.ll" --sums "$TMP/l.core"
 # field 0, which holds the first clone, replaced in the literal returned:
 # the result does not carry that clone
 awk "$lf"'{m=1} m && /^}/{m=0}
