@@ -4184,7 +4184,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           rw [killE_mode] at hm
           rw [killE_rootb hanch hxF .replace false hmn
             (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) h0 hm]
-          exact ⟨h0, by simp [Stmt.spine, hpx]⟩) (fun w hw => hrl.capsInp hw)
+          exact ⟨h0, by simp [Stmt.spine, hpx]⟩) (fun w hw => (hw.remove (LiveBack.exitScope x Γ) x).of_st hrl.st)
       refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hcaps hi hinv (by rw [hrl.nv]; exact Nat.le_refl _) (by simp [Stmt.vars]) ?_
         rfl hcov trivial, by rw [hrl.nv]; exact Nat.le_refl _, ⟨?_, ?_, (DKeep.refl Γ _).exitScope x⟩,
         fun w hw => by rw [hrl.st]; simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
@@ -4402,7 +4402,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           rw [killE_mode] at hm
           rw [killE_rootb hanch hxF .replace false hmn
             (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) h0 hm]
-          exact ⟨h0, by simp [Stmt.spine, hpx]⟩) (fun w hw => (hw.of_st rfl).remove x)
+          exact ⟨h0, by simp [Stmt.spine, hpx]⟩) (fun w hw => (hw.of_st rfl).remove (LiveBack.exitScope x Γ) x)
       refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hcaps hiS hinv (by simp) (by simp [Stmt.vars]) ?_
         rfl (covers_remove hiS.cover hsl hd) trivial, by simp, ⟨?_, ?_, (DKeep.refl Γ _).exitScope x⟩,
         fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
@@ -4630,7 +4630,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               have hpx : p ≠ x := fun h => by
                 rw [h] at hp; simp [setE] at hp; rw [← hp] at hm; simp [Entry.revive, hmo] at hm
               simp only [setE, upd_ne _ _ hpx] at hp
-              exact ⟨hp, by simpa [Stmt.spine] using hps⟩) (fun w hw => hw.of_st rfl) }
+              exact ⟨hp, by simpa [Stmt.spine] using hps⟩) (fun w hw =>
+            -- `x`, revived, holds no function: a value with no package
+            (hw.of_shrink (m' := m) (x := x) (fun _ _ h => h)
+              (fun u E1 hux h1 hl1 => by simp only [setE, upd_ne _ _ hux] at h1; exact ⟨E1, h1, hl1⟩)
+              (fun E1 o V h1 _ hs => by
+                obtain ⟨hn, hh⟩ := hm1.own_noFn h1 (by simp [setE] at h1; subst h1; exact hos)
+                  (by simp [setE] at h1; subst h1; exact hhf) hs
+                exact ⟨valCapsInp_of_names hn w, hh⟩)).of_st rfl) }
       · intro w E hw hws
         have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
         exact ⟨by simp [Stmt.spine, hwx], E, by simp [setE, upd_ne _ _ hwx, hw], rfl, rfl, fun _ => rfl⟩
@@ -4829,7 +4836,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               have hpx : p ≠ x := fun h => by
                 rw [h] at hp; simp [setE] at hp; rw [← hp] at hm; simp [Entry.reviveD, Entry.revive, hmo] at hm
               simp only [setE, upd_ne _ _ hpx] at hp
-              exact ⟨hp, by simpa [Stmt.spine] using hps⟩) (fun w hw => hw.of_st rfl) }
+              exact ⟨hp, by simpa [Stmt.spine] using hps⟩) (fun w hw =>
+            -- `x`, revived, holds no function: a value with no package
+            (hw.of_shrink (m' := m) (x := x) (fun _ _ h => h)
+              (fun u E1 hux h1 hl1 => by simp only [setE, upd_ne _ _ hux] at h1; exact ⟨E1, h1, hl1⟩)
+              (fun E1 o V h1 _ hs => by
+                obtain ⟨hn, hh⟩ := hm1.own_noFn h1 (by simp [setE] at h1; subst h1; exact hos)
+                  (by simp [setE] at h1; subst h1; exact hhf) hs
+                exact ⟨valCapsInp_of_names hn w, hh⟩)).of_st rfl) }
       · intro w E hw hws
         have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
         exact ⟨by simp [Stmt.spine, hwx], E, by simp [setE, upd_ne _ _ hwx, hw], rfl, rfl, fun _ => rfl⟩
