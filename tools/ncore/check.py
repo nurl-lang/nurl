@@ -2763,6 +2763,12 @@ class FnCheck:
             ty = self.fn.vars[vid].ty
             if ty is None or ty[0] in VIEW_TYPES or ty[0] == "closure":
                 continue
+            # (…nor a binding of another type than the place it reads - an
+            # option a call wrapped the place's value in, `wrap s → ? String`:
+            # codegen hands the old value to no one and frees it under the
+            # payload, agora #1000)
+            if any(self.ty_of_place(a) != ty for a in av.alias):
+                continue
             keep = {l for l in av.loans if self.loans.get(l, (None,))[0] not in av.alias}
             if first is None or av.own == "O":
                 # (the first binding that read it: one value has one owner)
@@ -4698,8 +4704,12 @@ class FnCheck:
             # (by name, a call's lend, a payload) or an `=` gives it a
             # binding by name - not where an `=` gives it a call's result
             vid = s[1] if s[0] == "let" else s[1][0]
-            byname = s[0] == "let" or (not s[1][1] and s[2] is not None and s[2][0] == "use"
-                                       and s[2][1][0] == "v" and self.fn.vars[s[2][1][1]].kind != "temp")
+            # (…a `let` of a binding codegen linked to no owner links nothing:
+            # a call's result whose callee is compiled after this function,
+            # CORE_VF_UNLINKED - a later `=` by name still links it; AGORA-1005)
+            byname = (not self.fn.vars[vid].unlinked) if s[0] == "let" else (
+                not s[1][1] and s[2] is not None and s[2][0] == "use"
+                and s[2][1][0] == "v" and self.fn.vars[s[2][1][1]].kind != "temp")
             av = st.vals.get(vid)
             if byname and av is not None and self.fn.vars[vid].kind != "temp":
                 for a in av.alias:

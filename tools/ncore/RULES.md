@@ -135,6 +135,7 @@ summarised by the same analysis, to a fixpoint over the program.
 | A closure's capture that has a copy, handed to a function that keeps its `in` parameter, is handed over as a copy: the closure keeps its own. A `sink` takes the capture itself | §7.5 (#796) | `apply_call`: consumed arguments |
 | A lend stored into a field whose holder outlives what the lend borrows is copied in, where the field's type has a copy; with none it is refused | §7.6 ("borrowed values are copied into owners") | `stmt` (`assign` to a part), `transfer` |
 | A `:` binding of a join that owns its value on some paths only, handed by name to a binding of an outer block while what it lends on the other paths lives deeper, is copied in there (CORE_VF_CPCOPY on the stored value); a `:` raw-string binding of a value block whose tail lends out of the block's own local is given a copy of its own (CORE_VF_CPCOPY on the binding). nurlc makes both copies, AGORA-953 | §7.6 | `stmt` (`assign`, `let`) |
+| A replaced owner's old value goes only to a reader codegen linked to it: not a `:` binding of a call's result that codegen linked to no owner, a callee compiled after the function (the IR's `v` flag 4096, CORE_VF_UNLINKED); a later `=` by name still links it, AGORA-1005 | §7.6 | `stmt` (`let`: the link), `handover` |
 | A temporary made in an arm of a `?` join that the arm's value may view is the enclosing statement's: no scope ends it, its `drop` does (the IR's `v` flag 16) | §1 (temporaries, #138) | `scope_end`, `stmt` (`drop`) |
 | An `inout` argument of a closure given a capture or another argument whole is given a copy of it, where its type has one: no store the closure's type would have to tell. A capture taken by pointer is given the handle itself, which is refused (agora #864) | §2.11, §2.12 | the closure-exit check (`real`) |
 | A borrow handed to a consumer: a part read in place is taken out of its owner; a call's lend in a temporary is copied; a binding of a call's lend is refused | §2.5, §7.6 | `apply_call`, `take_payload` |
@@ -318,9 +319,6 @@ gives and lists the other side here.
 | shape | refused when | accepted when | the checker |
 |---|---|---|---|
 | `= o ( pick o other k )`, `o` an option owner, `pick` may hand back either argument | in every spelling: `pick` defined above the call (`option_owner_given_a_call_that_may_lend_itself_or_another_argument`, agora #412), defined below it, a generic instance or a `dyn` method (`option_owner_given_back_by_a_callee_below`, `…_by_a_generic`, `…_by_a_dyn_method`), judged on the callee's final summary at module end (AGORA-966, D4a) | never; a nested call that lends only out of `o`, `( tail o )`, is `o`'s own (`part_of_owner_behind_a_box_handed_back_by_a_pick_defined_below_runs_clean`, AGORA-907) | refuses all (A2 refuses the form) |
-
-| `^ ( id x )`, `x` an owned raw string of this frame, `id` handing its argument back | `id` is defined below the function (`identity_of_a_fresh_s_binding_returned_callee_below`) | `id` is defined above it (`…_callee_above_runs_clean`): the text is copied at the return | accepts both (the copy) |
-| `? c x l` as a function's value, `l` a local with no copy, `x` a parameter or a fresh value | it is the body's fall-off value (`drop_param_local_fall_off`, agora #186: "would have to be copied") | it is written `^ ? c x l`: the selected local moves out | accepts both (the move) |
 
 ### One operation, three answers by spelling
 

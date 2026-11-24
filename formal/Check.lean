@@ -1,6 +1,9 @@
 import A1
 import A2
 import A3
+import B
+import C
+import D
 /-! Run by `check.sh`: the axioms the main theorems rest on. -/
 #print axioms A1.memory_safe
 #print axioms A1.soundness
@@ -916,6 +919,159 @@ import A3
 #print axioms A2.FreshSatWitness.sat_stale_not_fresh
 #print axioms A2.FreshSatWitness.sat_slice_elem_not_fresh
 #print axioms A2.FreshSatWitness.sat_of_view_of_rootb_not_fresh
+-- Phase B1: `Vec`'s owned buffer (stdlib/core/vec.nu's raw core) meets A1's `Vec`
+#print axioms B.growTo_ok
+#print axioms B.push_ok
+#print axioms B.push_refines
+#print axioms B.get_ok
+#print axioms B.set_ok
+#print axioms B.setC_ok
+#print axioms B.pop_ok
+#print axioms B.free_ok
+#print axioms B.insert_ok
+#print axioms B.remove_ok
+#print axioms B.truncate_ok
+#print axioms B.swap_ok
+#print axioms B.reserve_ok
+#print axioms B.memcpy_ok
+#print axioms B.vget_ok
+#print axioms B.vpush_ok
+#print axioms B.dropLoop_ok
+#print axioms B.releaseFrom_ok
+#print axioms B.memcpy_frame
+#print axioms B.dropLoop_nid
+#print axioms B.dropLoop_wf
+#print axioms B.releaseFrom_fresh
+#print axioms B.copyAt_ok
+#print axioms B.append_ok
+#print axioms B.rep_free_other
+#print axioms B.appendFree_ok
+-- Phase B2: `String` (stdlib/core/string.nu's raw core): the bytes and the NUL terminator
+#print axioms B.strSeal_ok
+#print axioms B.pushBytes_ok
+#print axioms B.data_ok
+-- Phase B3: `rcbox` (stdlib/core/rcbox.nu): the count is the handles; the last release drops once
+#print axioms B.rcNew_ok
+#print axioms B.rcShare_ok
+#print axioms B.rcRelease_ok
+-- Phase B4: `HashMap` (stdlib/std/hashmap.nu): probes in bounds, sound and total; no write over an entry
+#print axioms B.mask_eq_mod
+#print axioms B.probe_found
+#print axioms B.probe_insert
+#print axioms B.probe_total
+#print axioms B.set_probe_answers
+#print axioms B.mapInsert_ok
+#print axioms B.mapReplace_ok
+#print axioms B.mapRemove_ok
+#print axioms B.entries_put_empty
+#print axioms B.moveAll_ok
+#print axioms B.grow_ok
+#print axioms B.release_ok
+-- Phase B5: `Arc` / `ArcWeak` (stdlib/std/arc.nu): counts are the handles; the value dropped at the last strong
+-- release, the block freed at the last handle of either kind, an upgrade only while the value lives
+#print axioms B.arcNew_ok
+#print axioms B.arcClone_ok
+#print axioms B.arcDowngrade_ok
+#print axioms B.weakClone_ok
+#print axioms B.arcDrop_ok
+#print axioms B.weakDrop_ok
+#print axioms B.upgrade_ok
+-- Phase B6: `Channel`'s queue (stdlib/std/channel.nu): FIFO conservation, none lost, none twice
+#print axioms B.conservation
+#print axioms B.offered_split
+#print axioms B.fresh_conservation
+#print axioms B.recv_steps
+-- Phase B7: the Rc cycle collector's trial-deletion criterion: a white block has no outside handle and
+-- every handle on it is a white block's, so freeing them together leaves nothing dangling
+#print axioms B.trial_eq
+#print axioms B.white_closed
+#print axioms B.collect_safe
+-- Phase B8: alloc_size / alloc_count_add never hand back a wrapped size
+#print axioms B.allocSize_ok
+#print axioms B.countAdd_ok
+#print axioms B.reserveC_overflow
+#print axioms B.reserveC_room
+#print axioms B.reserveC_ok
+#print axioms B.growTo_cap
+#print axioms B.reserveZ_room
+#print axioms B.reserveZ_count_overflow
+#print axioms B.reserveZ_size_overflow
+#print axioms B.reserveZ_ok
+#print axioms B.reserveC_size_gap
+#print axioms B.doubleTo_le
+#print axioms B.growCap_le
+-- Phase B9: std/rc.nu's Rc / Weak / rc_take: a checked-out value is never read or dropped through the block;
+-- the last strong release drops a value only when it is there; the block goes with the last Weak
+#print axioms B.rcGet_ok
+#print axioms B.rcTake_ok
+#print axioms B.rcRestore_ok
+#print axioms B.rcDrop_ok
+#print axioms B.rcUpgrade_ok
+#print axioms B.rcWeakDrop_ok
+#print axioms B.packedPush_room
+#print axioms B.packedPush_ok
+#print axioms B.packedPush_release
+-- Phase C0: an executable checker for A1's straight-line fragment, sound against A1's typing
+#print axioms C.checkExpr_sound
+#print axioms C.inferRhs_sound
+#print axioms C.checkStmt_sound
+#print axioms C.checked_memory_safe
+-- Phase C1: the checker with ite / while joins over finite contexts, sound
+#print axioms C.eq_of_agree
+#print axioms C.checkS_sound
+#print axioms C.checkedS_memory_safe
+-- Phase C2: subsumption by certificate: Weaker decided over the finite domain
+#print axioms C.weakerB_sound
+#print axioms C.checkC_sound
+#print axioms C.checkedC_memory_safe
+-- Phase C3–C4: calls decided; whole A1 programs checked end to end
+#print axioms C.callB_sound
+#print axioms C.fnOKB_sound
+#print axioms C.progOKB_sound
+#print axioms C.progOKAux_mem
+#print axioms C.checkedS_memory_safe_dedup
+#print axioms C.checkedC_memory_safe_dedup
+#print axioms C.checked_program_safe_dedup
+#print axioms C.joinTbl_supported
+#print axioms C.capOKB_held
+#print axioms C.unpairTyB_some
+#print axioms C.takeOKB_sound
+#print axioms C.checked_program_safe
+-- Phase C7w: A2's Weaker decided; joins of ite arms and loop rounds by weakening
+#print axioms C.weaker2B_sound
+-- Phase C8c: A3.2's lock and A3.4's channel right-hand sides, decided (AGORA-975)
+#print axioms C.chanRhs_ok
+#print axioms C.inferRhs2c_ok
+-- Phase C8p: A2's closure literal with no captures by name, decided (AGORA-978)
+#print axioms C.packRhs_ok
+#print axioms C.inferRhs2p_ok
+-- Phase C7x: A2's exit, decided by obligations on the exits context
+#print axioms C.checkX_sound
+-- Phase C11: A2 end to end - a program the checker accepts never gets stuck from the empty store
+#print axioms C.checked_program_safe2
+-- Phase C12: A3 end to end - a checked program's makes and run are memory-safe, race-free and leak-free
+#print axioms C.checked_claim_made_full
+-- Phase C5: A2's expressions decided
+#print axioms C.checkExpr2_sound
+-- Phase C6: A2's core right-hand sides decided
+#print axioms C.noPinB_sound
+#print axioms C.dtorSafeB_sound
+#print axioms C.inferRhs2_sound
+-- Phase C7: A2's core statements decided, for any exits
+#print axioms C.endOK2B_sound
+#print axioms C.pushArg2_sound
+#print axioms C.checkStmt2_sound
+-- Phase C8: A2's struct and enum right-hand sides decided
+#print axioms C.inferRhs2d_ok
+-- Phase C9: A2's calls decided; the A2 checker so far (checkA2)
+#print axioms C.callB2_sound
+#print axioms C.checkA2_sound
+-- Phase C10: CtxWF / NameWF decided; A2's panic
+#print axioms C.ctxWF2B_sound
+#print axioms C.nameWFB_sound
+#print axioms C.panic_self
+#print axioms C.freshOKB_sound
+#print axioms C.panicToB_sound
 -- (A2/CapsStore.lean, AGORA-969, AGORA-963 step 3's store half): the closure-capture clause's
 -- store part, kept by the store operations a step makes
 #print axioms A2.heldCapsInp_iff
@@ -928,3 +1084,5 @@ import A3
 #print axioms A2.Release.capsInp
 #print axioms A2.EvalR.capsInp
 #print axioms A2.Step.slotsCaps
+-- Phase D2: an accepted drop-validation path is safe on a concrete heap
+#print axioms D.validated_safe

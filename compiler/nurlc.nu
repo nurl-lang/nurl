@@ -195,6 +195,7 @@ $ `stdlib/core/vec.nu`
 : ~ i g_fn_strp 0  // fn → its raw string params no summary may make a `sink` (__own_sink_str_params)
 : ~ b g_origin_arg_str F  // the argument origin_call_arg records is one whose slot is emptied where it is handed over: a raw string the compiler manages, an `inout` handle parameter (agora #776)
 : ~ i g_use_ownstr 0  // a return went through __nurl_ownstr (gen_ret)
+: ~ i g_use_ownstr_if 0  // …or through __nurl_ownstr_if, its copy decided at module end (gen_ret, AGORA-867)
 : ~ i g_use_sltmask8 0  // a call of nurl_v128_sltmask8 (defined at module end, only then)
 : ~ s g_bck_own_params ``  // the parameters the function being walked owns (a safe `sink s`)
 : ~ i g_call_cp 0  // `res` / `own`: the call just emitted copied its result `res`, owned by bit `own` (mem_own_lendback); `bind`: a let binds that copy (__mem_udrop_bind_flag) — agora #477
@@ -786,6 +787,7 @@ $ `stdlib/core/vec.nu`
 : i CORE_VF_HANDON 128  // a variable's flag: the literal a `\` try hands its failure on in, which codegen hands on whole (core_try)
 : i CORE_VF_ENVOWN 2048  // a capture's flag: a closure returned where it is made (`^ \ …`), whose env owns this handle capture — moved in from its owner, a copy where the binding borrows — not a copy of its handle that depends on the binding (gen_env_allocation; AGORA-978). The engine does not ask it
 : i CORE_VF_AGGLEND 1024  // a variable's flag: a returned literal codegen made without copying a field it was given lent: the literal is a lend of what that field borrows, on the runs the function answers lent (__gen_agg_lit_body, agora #907)
+: i CORE_VF_UNLINKED 4096  // a variable's flag: a `:` binding of a call's result that codegen linked to no owner - the callee not compiled yet (defined below, a generic instance), so no argument it hands back is known at the call: no store replacing an owner hands it the old value (mem_udrop_hand_over has no such borrower; AGORA-1005)
 : i CORE_VF_CPCOPY 512  // a variable's flag: the value a `=` gave a by-pointer capture, which codegen copied in on the runs the call lent (gen_assign's capture copy-in, agora #872): the capture owns it (agora #884); on a `:` raw string binding, codegen gave it a copy of its own (AGORA-953)
 : ~ i g_core_asn_op 0  // the operand the last core_assign stored (core_cpcopy_mark)
 : ~ i g_core_let_dup 0  // 1: the `:` binding core_let makes next was given a copy of its value by codegen (a raw view a value block lent out of its own local, AGORA-953): it gets CORE_VF_CPCOPY
@@ -4306,6 +4308,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // …and whether it has marked a borrow a copy of an owner's own handle
 // (`hc_`, bck_view_end_via): a `let` clears the mark only then.
 : ~ i g_bck_hc_any 0
+// …and whether codegen handed an owner's old value to a borrower for
+// certain (`pendho` rows, bck_note_handover; set as the rows are read in,
+// AGORA-1003).
+: ~ i g_bck_ho_any 0
 // 1 while mem_note_kept hands on a `: ~` cursor over a parameter that its
 // store copied wherever it was the parameter's (__cursor_lent_local): it
 // lends that parameter on no run (agora #824).
@@ -5012,7 +5018,7 @@ unsafe @ note_unsafe_item s pos s what → v {
 // parentheses, or one where a type is expected, is a type name; the one
 // after a whole type is the field's name. The template's own type
 // parameters are skipped. A type private to another strict file is refused.
-unsafe @ __vis_check_template s sname s tfile s tparams s body → v {
+@ __vis_check_template s sname s tfile s tparams s body → v {
     ? != 0 ( nurl_str_len ( nurl_sym_get2 g_generic_struct_syms sname `__svis` ) ) { ^ } {}
     ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__svis` ) `1` )
     : i lx ( nurl_lex_new body ( nurl_str_cat3 `<template ` sname ( nurl_str_cat3 ` of ` tfile `>` ) ) )
@@ -7394,6 +7400,83 @@ unsafe @ __arg_lend_root i syms → s {
     ^ F
 }
 
+// Is `id` a raw string this frame owns — dropped on the way out — as
+// __call_lends_local_str asks of what the callee may lend?
+@ __raw_local_str i syms s id → b {
+    : s sp ( nurl_sym_get2 syms id `__ptr` )
+    ? & != 0 ( nurl_str_len sp ) ( nurl_sym_has_word syms `__owned_strings__` sp ) { ^ T } {}
+    ^ != 0 ( nurl_sym_len2 syms id `__guardslot` )
+}
+
+// …and is one of the call just compiled's arguments such a string (whether
+// or not its callee is known yet)?
+@ __call_args_raw_local i syms → b {
+    ? == 0 g_auto_drop_strings { ^ F } {}
+    : ~ s ids ( nurl_sym_get syms `__last_call_args__` )
+    ~ != 0 ( nurl_str_len ids ) {
+        : s id ( str_first_word ids ) = ids ( str_skip_word ids )
+        ? ( __raw_local_str syms id ) { ^ T } {}
+    }
+    ^ F
+}
+
+// May the call just compiled hand back — lent — what it was given in an
+// argument that is a raw string this frame owns? An i1 operand: the
+// callee's answer at module end for each such position (`@.__nurl_lend*`,
+// mem_lend_const, as mem_local_lend_of asks of owners with a drop of their
+// own), `` when no argument is such a string or the callee is not one
+// that answers.
+@ __raw_local_lend i syms i cg → s {
+    : s key ( nurl_sym_get syms `__last_call_lend_key__` )
+    ? | == 0 ( nurl_str_len key ) ( seq key `__field__` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s cn ( str_first_word key )
+    // (A callee compiled already has its answer where the call is: the
+    // return's static rule decided, __call_lends_local_str.)
+    ? != 0 ( nurl_sym_len g_fn_compiled cn ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s gn ( str_first_word ( str_skip_word key ) )
+    : ~ s args ( nurl_str_cat ( nurl_sym_get syms `__last_call_args__` ) `` )
+    : ~ s acc ``
+    : ~ i idx 0
+    ~ != 0 ( nurl_str_len args ) {
+        : s nm ( str_first_word args ) = args ( str_skip_word args )
+        ? & ! ( seq nm `-` ) ( __raw_local_str syms nm ) {
+            : s lo ( nurl_cg_reg cg )
+            ( emit_sink_flag_load ( mem_lend_const syms `one` cn gn idx ) lo )
+            : s lp ( nurl_cg_reg cg )
+            ( emit_sink_flag_load ( mem_lend_const syms `part` cn gn idx ) lp )
+            = acc ( __or_i1 cg ( __or_i1 cg acc lo ) lp )
+        } {}
+        = idx + idx 1
+    }
+    ^ acc
+}
+
+// The source expression `sx` of a call, `g(a|b…)`, with every argument
+// that is a raw string this frame owns replaced by `-`: gen_ret copied
+// what the call lent of it, so the result views none of it (AGORA-867).
+@ __sx_drop_raw_locals i syms s sx → s {
+    : i n ( nurl_str_len sx )
+    : i op ( nurl_str_find sx `(` )
+    ? | < op 1 == 0 ( nurl_str_ends sx `)` ) { ^ ( nurl_str_cat sx `` ) } {}
+    : s inner ( nurl_str_slice sx + op 1 - - n op 2 )
+    // (An argument that is itself an expression — a call, a block — is left
+    // as it is, the whole source with it: the walk reads it as before.)
+    ? | >= ( nurl_str_find inner `(` ) 0 >= ( nurl_str_find inner `{` ) 0 { ^ ( nurl_str_cat sx `` ) } {}
+    : ~ s out ( nurl_str_slice sx 0 + op 1 )
+    : ~ s rest ( nurl_str_cat inner `` )
+    : ~ b more T
+    ~ more {
+        : i bar ( nurl_str_find rest `|` )
+        : s arg ? < bar 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 bar )
+        = out ( nurl_str_cat out ? ( __raw_local_str syms arg ) `-` arg )
+        ? < bar 0 { = more F } {
+            = out ( nurl_str_cat out `|` )
+            = rest ( nurl_str_slice rest + bar 1 - - ( nurl_str_len rest ) bar 1 )
+        }
+    }
+    ^ ( nurl_str_cat out `)` )
+}
+
 @ __call_lends_local i syms → b {
     : ~ s ids ( nurl_sym_get syms `__last_call_lend_idents__` )
     ~ != 0 ( nurl_str_len ids ) {
@@ -9019,6 +9102,9 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // copied whatever the function answers (no lend either way).
     : ~ i __ret_bcopy 0
     : ~ b ret_call_copied F
+    // (…and copied on every run that lent: the result is this function's
+    // own on every run, so it hands back no argument either - agora #1004)
+    : ~ b ret_call_owned_all F
     // (A closure-returning call's result that its callee may have lent is
     // copied on the way out where it was, mem_retclo_own_result's
     // __clo_tmp_settle: this function hands back its own, and lends
@@ -9141,6 +9227,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             = val ( mem_emit_cloneif cg __crt val rb )
             = hbit ( nurl_str_cat `true` `` )
             = ret_call_copied T
+            = ret_call_owned_all T
         } {}
         ? & & ! ret_call_copied ! ( seq hbit `true` ) & != 0 ( nurl_str_len __rll ) ( __clone_supported __crt syms ) {
             : s rb2 ( nurl_cg_reg cg )
@@ -9160,6 +9247,44 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             // (A copy of a value that holds views still views what they
             // did.)
             ? ! ( __ty_holds_view __crt 0 ) { = __ret_l0 ( nurl_sym_get syms `__last_local_lend0__` ) } {}
+        } {}
+        // `^ ( g a )` where `a` is a raw string this frame owns and g is
+        // compiled after this function (below it, a generic instance): the
+        // rule is the one gen_ret applies below when g is known
+        // (__call_lends_local_str), decided at module end instead. Where g
+        // may lend such an argument (__raw_local_lend), the caller gets the result as
+        // its own: the string g handed over when it did, a copy of what it
+        // lent otherwise; where it may not, the result is g's as it stands.
+        // Either way `a` goes as usual, and nothing returned views it: the
+        // walk is not told of `a` (__sx_drop_raw_locals). One answer
+        // whatever order the two functions are written in (AGORA-867,
+        // AGORA-946 D4b).
+        // (A result the callee always hands over as its own, `str`, views
+        // nothing of `a`: it goes as it is, its proof static.)
+        : s __rrl ? & & & & & ! ret_call_copied __rv_raw == g_bck_closure_depth 0 ! ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) ! ( __call_lends_local_str syms ) ( __call_args_raw_local syms ) ( __raw_local_lend syms cg ) ``
+        ? != 0 ( nurl_str_len __rrl ) {
+            : s __og2 ( nurl_sym_get syms `__last_call_guard__` )
+            : ~ s __oo2 ( nurl_str_cat `null` `` )
+            ? != 0 ( nurl_str_len __og2 ) {
+                = __oo2 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __oo2 ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print __og2 ) ( nurl_print `\n` )
+            } {}
+            = g_use_ownstr_if 1
+            : s __oc2 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __oc2 ) ( nurl_print ` = call i8* @__nurl_ownstr_if(i1 ` ) ( nurl_print __rrl )
+            ( nurl_print `, i8* ` ) ( nurl_print __oo2 ) ( nurl_print `, i8* ` ) ( nurl_print val ) ( nurl_print `)\n` )
+            // (What owns the result now: the copy, or what g handed over —
+            // the guard the return's proof reads, mem_save_return_proof.)
+            : s __ow2 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __ow2 ) ( nurl_print ` = select i1 ` ) ( nurl_print __rrl ) ( nurl_print `, i8* ` ) ( nurl_print __oc2 ) ( nurl_print `, i8* ` ) ( nurl_print __oo2 ) ( nurl_print `\n` )
+            : s __gs2 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __gs2 ) ( nurl_print ` = alloca i8*\n` )
+            ( nurl_print `  store i8* ` ) ( nurl_print __ow2 ) ( nurl_print `, i8** ` ) ( nurl_print __gs2 ) ( nurl_print `\n` )
+            = val __oc2
+            ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+            ( nurl_sym_def syms `__last_call_guard__` __gs2 )
+            = __ret_sx ( __sx_drop_raw_locals syms __ret_sx )
+            = ret_call_copied T
         } {}
         // One that cannot be copied has nothing to stand in for the lend:
         // refused at module end when the callee may lend such an argument
@@ -10132,7 +10257,11 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // though the return is not a bare identifier. Ownership only — the
     // §2.8 refdepth summary above deliberately stays on the strict
     // `^ p` form, so no escape diagnostic moves because of this.
-    : ~ s __ra_rest ( nurl_sym_get syms `__last_phi_idents__` )
+    // (…not where the call's result was copied on every run that lent:
+    // what goes back is this function's own, and naming the arguments the
+    // call could hand back made the caller take the copy for a lend of
+    // them, which it never released - agora #1004.)
+    : ~ s __ra_rest ? ret_call_owned_all `` ( nurl_sym_get syms `__last_phi_idents__` )
     ~ != 0 ( nurl_str_len __ra_rest ) {
         : s __ra_w ( str_first_word __ra_rest )
         = __ra_rest ( str_skip_word __ra_rest )
@@ -17270,6 +17399,22 @@ unsafe @ eng_byte s w i k → i {
     ^ & >= was 0 < was at
 }
 
+// Is every place of the variable `pv` that `alias` names at the replaced
+// place `pp` (or its option's or result's payload `t0`, `f0`) of the type
+// `ty` of the binding that reads it (eng_handover)?
+@ __eng_ho_typed i ty i alias i pv i pp i t0 i f0 → b {
+    : ~ i k 0
+    ~ < k ( sq_len alias ) {
+        : i a ( sq_at alias k )
+        : i ap ( pl_path a )
+        ? & == ( pl_var a ) pv | | == ap pp == ap t0 == ap f0 {
+            ? != ( eng_ty_of a ) ty { ^ F } {}
+        } {}
+        = k + k 1
+    }
+    ^ T
+}
+
 @ eng_handover i st i place i sat → v {
     : i pv ( pl_var place )
     : i pp ( pl_path place )
@@ -17326,7 +17471,11 @@ unsafe @ eng_byte s w i k → i {
                 // agora #881, #886)
                 ? & & & ok ! ( eng_ho_on av place ) ! & == own OW_O == ( av_loans av ) 0 ( __eng_linked vid pv sat ) {
                     : i ty ( fv_ty vid )
-                    ? & & != ty ET_NONE ! ( et_is_view ty ) != ( et_kind ty ) EK_CLOSURE {
+                    // (…nor a binding of another type than the place it
+                    // reads - an option a call wrapped the place's value in,
+                    // `wrap s → ? String`: nurlc hands the old value to no
+                    // one and frees it under the payload, agora #1000)
+                    ? & & & != ty ET_NONE ! ( et_is_view ty ) != ( et_kind ty ) EK_CLOSURE ( __eng_ho_typed ty alias pv pp t0 f0 ) {
                         : i loans ( av_loans av )
                         : ~ i keep 0
                         = k 0
@@ -23058,7 +23207,10 @@ unsafe @ eng_byte s w i k → i {
     ? == op CO_LET {
         ( stmt_let st at ln )
         : i lv ( ec + at 1 )
-        ? != ( fv_kind lv ) VK_TEMP { : i lav ( st_av st lv ) ? != lav 0 { ( __eng_link lv ( av_alias lav ) at ) } {} } {}
+        // (…not a binding codegen linked to no owner, CORE_VF_UNLINKED: a
+        // call's result whose callee is compiled after this function - a
+        // later `=` by name still links it; AGORA-1005)
+        ? & != ( fv_kind lv ) VK_TEMP == 0 & ( ev lv 4 ) CORE_VF_UNLINKED { : i lav ( st_av st lv ) ? != lav 0 { ( __eng_link lv ( av_alias lav ) at ) } {} } {}
         ^ ( eng_next at )
     } {}
     ? == op CO_ASSIGN {
@@ -26083,6 +26235,17 @@ unsafe @ eng_print_types → v {
     : i cv ( nurl_sym_int2 syms name `__cv` )
     ? | < cv 0 != / cv CORE_VS g_core_serial { ^ } {}
     ( core_var_or_flag % cv CORE_VS CORE_VF_SECOND )
+}
+
+// The `:` binding `name` of a call's result, at slot `ptr`: where codegen
+// linked it to no owner (no `__alias` - the callee not compiled yet, so
+// nothing it hands back is known here), a store replacing an owner hands
+// it nothing, and the core IR says so: CORE_VF_UNLINKED (AGORA-1005).
+@ core_mark_unlinked i syms s name s ptr → v {
+    ? != 0 ( nurl_sym_len2 syms ptr `__alias` ) { ^ v } {}
+    : i cv ( nurl_sym_int2 syms name `__cv` )
+    ? | < cv 0 != / cv CORE_VS g_core_serial { ^ v } {}
+    ( core_var_or_flag % cv CORE_VS CORE_VF_UNLINKED )
 }
 
 // The operand on top, a closure binding a `=` gives another without moving
@@ -34471,7 +34634,7 @@ unsafe @ nurl_lex_peek4_type i h → i {
     ^ ( nurl_str_cat `*` `` )
 }
 
-unsafe @ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
+@ __rp_rhs_set b v → v { = g_rp_rhs_lit v }
 
 // Is `txt` (an `=`'s right-hand side as written) a struct literal of
 // literals only — `@ Name { `text` 12 T … }`: no binding, call, field
@@ -47534,7 +47697,7 @@ unsafe @ __blk_leave b val → v {
         = __tail_line ( nurl_lex_line lex )
         = __tail_col ( nurl_lex_col lex )
         = __nstmt + __nstmt 1
-        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex __tail_tt ) } {}
+        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex syms __tail_tt ) } {}
         ? & | __blk_ret_sx blk_fsx & ! g_ret_implicit | | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST == __tail_tt TT_LBRACE { = g_bck_fall_sx T } {}
         // (A field read is named by its path — `{ . h a }` is `h.a`, not all
         // of `h` — as a join's arm is: agora #360.)
@@ -47798,8 +47961,18 @@ unsafe @ __blk_leave b val → v {
 // that is the value is one: it does not drop at its `}` what it hands back
 // — agora #188; a closure literal is one: its env copies what it captures,
 // as `^ \ …` does — agora #473.)
-unsafe @ __is_fall_value_stmt i lex i tt → b {
+unsafe @ __is_fall_value_stmt i lex i syms i tt → b {
     ? ( is_ident_tok tt ) { ^ == ( nurl_lex_peek_type lex ) TT_RBRACE } {}
+    // A `?` / `??` is one where its value has no copy (__nc_drop_ty): taken
+    // as a statement, its arms lend, and a lend of such a value is refused,
+    // where `^` of it moves the owner an arm selects (AGORA-866). A value
+    // with a copy is copied on the arms that lend, the answer such joins
+    // have always had, which their callers rely on: a join handed back by
+    // `^` would lend them its argument instead.
+    ? | == tt TT_QUEST == tt TT_QUESTQUEST {
+        ? ! ( __nc_drop_ty ( nurl_llty ( nurl_sym_get syms `__fn_ret_ty__` ) ) ) { ^ F } {}
+        ^ ( __fall_join_is_tail lex )
+    } {}
     ? & & & & != tt TT_LPAREN != tt TT_DOT != tt TT_AT != tt TT_LBRACE != tt TT_BACKSLASH { ^ F } {}
     : s p # s lex
     : *u src # *u # s ( nurl_peek p LX_SRC )
@@ -47808,6 +47981,66 @@ unsafe @ __is_fall_value_stmt i lex i tt → b {
     ? < e 0 { ^ F } {}
     : i w ( __src_skip_ws src len e )
     ^ & < w len == & # i . src w 255 125
+}
+
+// Is the `?` / `??` statement starting here the value its block falls off
+// with? Its extent is read on tokens - one value, as the parser reads it -
+// and the lexer is put back where it was. A join's operands are prefix
+// expressions of any arity, which no scan of the source text can measure.
+// A fall-off join of a value with no copy then returns as `^` of it does
+// (gen_ret's `__jmove`): an owner an arm selects moves out on that path.
+// Taken as a statement, it lent from each arm instead, and such a value was
+// refused where the same join after `^` - the same IR - was accepted
+// (AGORA-866).
+@ __fall_join_is_tail i lex → b {
+    : i at ( nurl_lex_cur_start lex )
+    : b whole ( __skip_one_value lex )
+    : b tail & whole == ( nurl_lex_type lex ) TT_RBRACE
+    ( nurl_lex_set_pos lex at )
+    ^ tail
+}
+
+// Step over one value, as __gen_expr_level reads one: a group, a `??` and
+// its arms, a cast or a literal with its type, or a token and the operands
+// its arity says it takes (__cs_arity). F for anything else, which leaves
+// the statement to be taken as before.
+@ __skip_one_value i lex → b {
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_LPAREN { ( skip_balanced_parens lex ) ^ T } {}
+    ? == tt TT_LBRACK { ( skip_balanced_bracks lex ) ^ T } {}
+    ? == tt TT_LBRACE { ( skip_balanced lex ) ^ T } {}
+    ? == tt TT_QUESTQUEST {
+        ( nurl_lex_advance lex )
+        ? ! ( __skip_one_value lex ) { ^ F } {}
+        ? != ( nurl_lex_type lex ) TT_LBRACE { ^ F } {}
+        ( skip_balanced lex )
+        ^ T
+    } {}
+    ? == tt TT_HASH {
+        ( nurl_lex_advance lex )
+        ( skip_one_type lex )
+        ^ ( __skip_one_value lex )
+    } {}
+    ? == tt TT_AT {
+        ( nurl_lex_advance lex )
+        ( skip_one_type lex )
+        ? != ( nurl_lex_type lex ) TT_LBRACE { ^ F } {}
+        ( skip_balanced lex )
+        ^ T
+    } {}
+    // (`sizeof T` is one value: the keyword and the type it measures, as
+    // __ar_operand reads it.)
+    ? == tt TT_SIZEOF { ( nurl_lex_advance lex ) ( skip_one_type lex ) ^ T } {}
+    ? == tt TT_BACKSLASH { ^ F } {}
+    : i n ( __cs_arity lex tt )
+    ? < n 0 { ^ F } {}
+    ( nurl_lex_advance lex )
+    : ~ i k 0
+    ~ < k n {
+        ? ! ( __skip_one_value lex ) { ^ F } {}
+        = k + k 1
+    }
+    ^ T
 }
 
 // Past whitespace and `//` comments from `pos`.
@@ -48020,7 +48253,7 @@ unsafe @ __bck_fall_ret_record i lex i syms i first_tt s first_val i sxn0 i line
         // The value the body falls off with, written without `^`, returns
         // as `^` returns it: the same ownership rules decide whether the
         // caller owns it or it is a lend (h218).
-        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex __tail_tt ) } {}
+        ? __blk_ret_val { = g_ret_implicit ( __is_fall_value_stmt lex syms __tail_tt ) } {}
         ? & __blk_ret_sx & ! g_ret_implicit | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST { = g_bck_fall_sx T } {}
         // (Raw provenance: a `?`/`??` the body may fall off with hands
         // back its arms' values — whether it is the tail is known only
@@ -51029,9 +51262,12 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // (`= old_r r = r nr`, the rotation of a Euclid loop): the value goes to
 // that cursor instead of being dropped. Whether a borrower still holds it
 // is asked at run time, by the identity of the value's first buffer.
-@ mem_udrop_hand_over i syms i cg s ptr s vt → v {
+// Answers the one borrower asked, where it was the only one and holds the
+// value whole for certain (__ho_certain): the walk makes it the owner of
+// the old value there (`pendho`, AGORA-1003). `` otherwise.
+@ mem_udrop_hand_over i syms i cg s ptr s vt → s {
     : ~ s rest ( nurl_sym_get2 syms ptr `__borrowers` )
-    ? == 0 ( nurl_str_len rest ) { ^ v } {}
+    ? == 0 ( nurl_str_len rest ) { ^ ( nurl_str_cat `` `` ) } {}
     : s ll ( nurl_llty vt )
     : s xv ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print xv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
@@ -51046,12 +51282,16 @@ unsafe @ __pfo_bind_lends i syms s name → v {
             = xk ( mem_handle_key cg pt xp )
         } {}
     } {}
-    ? == 0 ( nurl_str_len xk ) { ^ v } {}
+    ? == 0 ( nurl_str_len xk ) { ^ ( nurl_str_cat `` `` ) } {}
     : s xnn ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print xnn ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print xk ) ( nurl_print `, null\n` )
+    : ~ i nasked 0
+    : ~ s asked ``
     ~ != 0 ( nurl_str_len rest ) {
         : s b ( str_first_word rest ) = rest ( str_skip_word rest )
         ? & ! ( seq b ptr ) != 0 ( nurl_sym_len2 syms b `__live` ) {
+            = nasked + nasked 1
+            = asked ( nurl_str_cat b `` )
             // (The borrower's own type: a payload cursor is not an option.)
             : s bt0 ( nurl_sym_get2 syms b `__udty` )
             : s bt ? | == 0 ( nurl_str_len bt0 ) != 0 ( nurl_str_starts bt0 `%__opt.` ) ( nurl_str_cat vt `` ) ( nurl_str_cat bt0 `` )
@@ -51094,6 +51334,26 @@ unsafe @ __pfo_bind_lends i syms s name → v {
             ( mem_udrop_flag_set syms cg ptr nxf )
         } {}
     }
+    ? & == nasked 1 ( __ho_certain syms ptr asked vt ) { ^ asked } {}
+    ^ ( nurl_str_cat `` `` )
+}
+
+// Does borrower `b` of owner `ptr` hold the owner's value whole for
+// certain, so that mem_udrop_hand_over's identity test hands it the old
+// value on every run where the owner holds one? A `String` or a `Vec` of
+// the owner's own type (no part of either is another of that type), a
+// cursor over the owner alone and over no part of it, that cannot be
+// given another value (not `~`), and the binding its name names here. The
+// walk reads this as the borrower owning the old value (AGORA-1003).
+@ __ho_certain i syms s ptr s b s vt → b {
+    ? ! | ( seq vt `%String` ) != 0 ( nurl_str_starts vt `%Vec__` ) { ^ F } {}
+    ? ! ( seq ( nurl_sym_get2 syms b `__udty` ) vt ) { ^ F } {}
+    ? ! ( seq ( nurl_sym_get2 syms b `__alias` ) ptr ) { ^ F } {}
+    ? ( seq ( nurl_sym_get2 syms b `__alias_part` ) `1` ) { ^ F } {}
+    : s bn ( nurl_sym_get2 syms b `__bname` )
+    ? == 0 ( nurl_str_len bn ) { ^ F } {}
+    ? != 0 ( nurl_sym_len2 syms bn `__mutable` ) { ^ F } {}
+    ^ ( seq ( mem_udrop_ptr_of syms bn ) b )
 }
 
 // Can mem_udrop_hand_over tell an owner's old value apart from what `ptr`'s
@@ -51492,10 +51752,12 @@ unsafe @ __pfo_bind_lends i syms s name → v {
     ? ! ( __clone_supported rlt g_root_syms ) {
         ? ( __nc_drop_ty rlt ) { ^ T } {}
         ? != 0 ( nurl_str_len ( __nc_wrap_payload rlt ) ) { ^ T } {}
-        // (…an option of an option, which has no copy: by what its payload
-        // owns, below — agora #475. Only that: any other wrap with no copy
-        // answers as it did.)
-        ? | == 0 ( nurl_str_starts rlt `{ i1, ` ) == 0 ( nurl_str_starts ( __wrap_part_key rlt 0 ) `{ i1, ` ) { ^ F } {}
+        // (…an option or result with no copy — of an option, agora #475; of
+        // a Vec of values with no copy, AGORA-999 — by what its sides own,
+        // below: a function handing back a parameter on one path and a
+        // fresh value on another answers which, per call. Taken for one
+        // that always lends, the fresh value leaked.)
+        ? == 0 ( nurl_str_starts rlt `{ i1, ` ) { ^ F } {}
     } {}
     ? != 0 ( nurl_str_starts rlt `{ i1, ` ) {
         // (A side that is an option itself — `? ?String` — by what it owns:
@@ -56857,6 +57119,19 @@ unsafe @ bck_add_cap_name s name → v {
     ^ out
 }
 
+// Codegen's hand-over at `= owner …` on `line`: `bn`, the one borrower
+// that takes the old value for certain (mem_udrop_hand_over,
+// __ho_certain). Its row, `pendho owner … =bn`, is read by the `assign`
+// row of that statement, which makes `bn` the old value's owner rather
+// than a borrow it ends (AGORA-1003). The row reads nothing.
+@ bck_note_handover s owner s bn i line → v {
+    ? | == g_borrowck 0 == 0 ( nurl_str_len bn ) { ^ v } {}
+    : s rd0 ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` )
+    ( bck_put `reads` `` )
+    ( bck_record2 `pendho` owner line ( nurl_str_cat `=` bn ) `0` )
+    ( bck_put `reads` rd0 )
+}
+
 @ bck_record2 s kind s wname i line s x5 s x6 → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : s reads ( nurl_sym_get g_bck `reads` )
@@ -59156,7 +59431,7 @@ unsafe @ amv_open i syms s src s vt → s {
     ^ ( nurl_str_cat `m` `` )
 }
 
-unsafe @ amv_close → v { = g_amv_cur 0 }
+@ amv_close → v { = g_amv_cur 0 }
 
 // Does the statement being compiled move `src` (amv_open)?
 @ amv_moves s src → b { ^ & != 0 g_amv_cur ( seq g_amv_src src ) }
@@ -61639,6 +61914,27 @@ unsafe @ bck_st_get s state i id → i {
     BCK_UNINIT
 }
 
+// The first binding at or after `k` that `state`, `n` bytes long, holds
+// as a borrow - what bck_st_get answers BCK_BORROWED_SHARED for: that
+// digit, or BCK_MAYBE_OWNED's - or `n` when none does. A row's sweep asks
+// about every binding of its state in turn, and bck_st_get measures the
+// state up to the id it is asked: quadratic in the bindings, per row (1.6 %
+// of a self-compile was that strnlen alone).
+// (unsafe: the bytes are read through a raw pointer. `n` is the state's
+// length as the caller measured it, so every byte read is inside it.)
+unsafe @ bck_st_next_borrow s state i n i k → i {
+    : *u sp # *u state
+    : i cb + 48 BCK_BORROWED_SHARED
+    : i cm + 48 BCK_MAYBE_OWNED
+    : ~ i j ? < k 0 0 k
+    ~ < j n {
+        : i c # i . sp j
+        ? | == c cb == c cm { ^ j } {}
+        = j + j 1
+    }
+    n
+}
+
 // The digit as it is — BCK_MAYBE_OWNED too: a state put back as it was.
 unsafe @ bck_st_raw s state i id → i {
     ? | < id 0 > ( strnlen state + id 1 ) id {
@@ -61791,7 +62087,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
     ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 ? ( seq k `fborrow` ) 7 ? ( seq k `fborrowh` ) 7 0 } {}
     ? == c 116 { ^ ? ( seq k `take` ) 37 ? ( seq k `tborrow` ) 7 ? ( seq k `tryret` ) 39 0 } {}
-    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 ? ( seq k `pendsva` ) 46 ? ( seq k `pendslit` ) 47 ? ( seq k `pendwhole` ) 48 ? ( seq k `pendhv` ) 49 0 } {}
+    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 ? ( seq k `pendsva` ) 46 ? ( seq k `pendslit` ) 47 ? ( seq k `pendwhole` ) 48 ? ( seq k `pendhv` ) 49 ? ( seq k `pendho` ) 50 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
     ? == c 99 { ^ ? ( seq k `cdep` ) 17 ? ( seq k `cmove` ) 18 ? ( seq k `cnt` ) 22 ? ( seq k `cond` ) 25 ? ( seq k `callx` ) 31 ? ( seq k `clox` ) 34 ? ( seq k `cborrow` ) 7 0 } {}
@@ -62372,6 +62668,9 @@ unsafe @ bck_sx_ids s sx → s {
     ? ? == __k0 114 & ( seq kind `ret` ) != 0 ( nurl_str_len lf8 ) F { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) ( nurl_str_cat `\t\t\t` lf8 ) ) } {}
     ? __pend
     { : s f5 ( bck_field rec 5 )
+        // (A hand-over codegen makes for certain, read by its `assign`
+        // row: AGORA-1003.)
+        ? ? == __k0 112 ( seq kind `pendho` ) F { = g_bck_ho_any 1 } {}
         // A store's owner binding (`=t`, bck_emit_owner_stores) is an id too.
         ? & != 0 ( nurl_str_len f5 ) == ( nurl_str_get f5 0 ) 61 {
             // (…and the field of it a `store` went into, `p<id>` of that
@@ -65214,6 +65513,10 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // `= x ...` gives x a fresh value — Owned, reviving x. Its old
                 // value, if x owned it, is dropped with whatever was stored in it.
                 : i asid ( bck_field_int rec 1 )
+                // (…or handed to the one borrower codegen gives it to for
+                // certain, `pendho`: that borrower owns it from here on, so
+                // the new value ends no borrow of it - AGORA-1003.)
+                ? != 0 g_bck_ho_any { = st ( __bck_ho_take st asid p ) } {}
                 // (Its old value, where codegen still holds it, is released
                 // here: one whose type runs a `% Drop` of the program's own
                 // is handed to it — agora #766.)
@@ -73179,9 +73482,12 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     : i amv_k ? & == kc 6 | ( bck_field_is rec 6 `am` ) ( bck_field_is rec 6 `ak` ) ( bck_field_int rec 1 ) -1
     : ~ s brest ( nurl_str_cat ist `` )
     : i n ( nurl_str_len ist )
-    : ~ i k 0
+    // (Only a binding `ist` holds as a borrow can be consumed here: the walk
+    // steps from one to the next, bck_st_next_borrow.)
+    : ~ i k ( bck_st_next_borrow ist n 0 )
     ~ < k n {
-        ? && && == BCK_BORROWED_SHARED ( bck_st_get ist k ) | | == BCK_MOVED ( bck_st_get out k ) == BCK_STORED ( bck_st_get out k ) == BCK_MAYBE_MOVED ( bck_st_get out k ) ! & == k amv_k ( bck_st_may_own ist k ) {
+        : i ok ( bck_st_get out k )
+        ? && | | == BCK_MOVED ok == BCK_STORED ok == BCK_MAYBE_MOVED ok ! & == k amv_k ( bck_st_may_own ist k ) {
             : s ks ( nurl_str_int k )
             : s fbk ( nurl_sym_get g_bck ( bck_bkey `fb_` ks ) )
             ? == 0 ( nurl_str_len fbk ) {
@@ -73234,7 +73540,7 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                 }
             }
         } {}
-        = k + k 1
+        = k ( bck_st_next_borrow ist n + k 1 )
     }
     // (Last, so a cause found above — a copy of the handle, an element
     // through a borrow — is the one a view ends with.)
@@ -73941,6 +74247,39 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) ( nurl_str_to_int ( str_first_word pk ) ) ( nurl_str_cat4 `giving a field of '` nm `' a new value hands its old value to the binding that read it, but '` ( nurl_str_cat nm `' is a copy of a value its container still holds - the old value is still there, and both would release it. Take the value out of the container itself (( vec_replace v i new ) hands the old element over, its option's payload), or read a copy of the field (( mem_dup . … )) instead of the field itself` ) ) )
         ( bck_put ( bck_bkey `pbo_` ids ) `` )
     } {}
+}
+
+// `= o …` at row `p`, where codegen hands o's old value to a borrower
+// for certain (mem_udrop_hand_over, __ho_certain): the statement's
+// `pendho` row names it. A borrow still of o alone, whole, owns that value
+// from here on - a borrow no longer, so o's new value ends nothing of it.
+// One that borrows anything else, or o no more, is left as it is: the
+// new value ends it, as before (AGORA-1003).
+@ __bck_ho_take s st i oid i p → s {
+    : ~ s out st
+    : s os ( nurl_str_int oid )
+    : ~ i q + p 1
+    ~ < q g_bck_nrows {
+        : i qk ( bck_kc q )
+        // (The statement's own rows: up to the next statement's.)
+        ? | | | | == qk 1 == qk 2 == qk 3 == qk 23 == qk 24 { ^ out } {}
+        ? == qk 50 {
+            : s r ( bck_rec q )
+            : s f5 ( bck_field r 5 )
+            ? & & ( seq ( bck_field r 1 ) os ) > ( nurl_str_len f5 ) 1 == ( nurl_str_get f5 0 ) 61 {
+                : s ds ( nurl_str_slice f5 1 - ( nurl_str_len f5 ) 1 )
+                : i d ( nurl_str_to_int ds )
+                ? & == BCK_BORROWED_SHARED ( bck_st_raw out d ) ( seq ( nurl_sym_get g_bck ( bck_bkey `bs_` ds ) ) os ) {
+                    = out ( bck_st_set out d BCK_OWNED )
+                    ( bck_put_bf `bs_` ds `` )
+                    ( bck_put_bf `fb_` ds `` )
+                    ( bck_put_bf `fp_` ds `` )
+                } {}
+            } {}
+        } {}
+        = q + q 1
+    }
+    ^ out
 }
 
 @ bck_fview_take s st s wids → s {
@@ -77246,6 +77585,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_has_deps 0
     = g_bck_has_cursor 0
     = g_bck_hc_any 0
+    = g_bck_ho_any 0
     = g_bck_sfo_any 0
     = g_bck_svr_any 0
     = g_bck_bxf_any 0
@@ -78958,6 +79298,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     ( mem_note_bound_lend syms name __own_tt __own_val )
                     ( mem_own_add_user_drop syms cg ptr rvt )
                     ( mem_udrop_bind_flag syms cg ptr rvt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow val )
+                    ? & != 0 g_core_live == bck_rhs_tt TT_LPAREN { ( core_mark_unlinked syms name ptr ) } {}
                     ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 val ) } {}
                     ( __most_init syms name ptr val __blk_lend )
                     ( mem_journal_push_userdrop syms cg ptr rvt )
@@ -79397,6 +79738,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                         ( mem_note_bound_lend syms name __own_tt __own_val )
                         ( mem_own_add_user_drop syms cg ptr rpt )
                         ( mem_udrop_bind_flag syms cg ptr rpt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow val )
+                        ? & != 0 g_core_live == bck_rhs_tt TT_LPAREN { ( core_mark_unlinked syms name ptr ) } {}
                         ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 val ) } {}
                         ( __most_init syms name ptr val __blk_lend )
                         ( mem_journal_push_userdrop syms cg ptr rpt )
@@ -81093,7 +81435,10 @@ unsafe @ gen_assign i lex i syms i cg → s {
             // `{ i1, T }` names no drop, and the old value was lost.)
             : s __ud_rt0 ( nurl_sym_get2 syms __ud_ptr `__udty` )
             : s __ud_rt ? == 0 ( nurl_str_len __ud_rt0 ) ( nurl_str_cat vt `` ) ( nurl_str_cat __ud_rt0 `` )
-            ( mem_udrop_hand_over syms cg __ud_ptr vt )
+            : s __ud_ho ( mem_udrop_hand_over syms cg __ud_ptr vt )
+            // (…the one borrower that takes the old value for certain: the
+            // walk makes it the old value's owner, AGORA-1003.)
+            ? != 0 ( nurl_str_len __ud_ho ) { ( bck_note_handover name ( nurl_sym_get2 syms __ud_ho `__bname` ) bck_line ) } {}
             = __ud_late ( mem_udrop_take_old syms cg __ud_ptr __ud_rt )
             ? == 0 ( nurl_str_len __ud_late ) { ( mem_emit_user_drop_one syms cg __ud_ptr __ud_rt ) } {} }
         {}
@@ -97200,8 +97545,10 @@ unsafe @ __emit_hoisted_body s funcdef → v {
         : s tail # s + # i fp + sq 1
         ? & mark != 0 ( nurl_str_starts tail `jfs ` ) {
             : i js + sq 5
+            // (js, je inside [0, flen]: __span_dup, not nurl_str_slice's
+            // strlen of the whole function per marker.)
             : i je ( __ha_line_end funcdef js flen )
-            : s jw ( nurl_str_slice funcdef js - je js )
+            : s jw ( __span_dup funcdef js je )
             ? ! ( str_contains_word jf_slots jw ) {
                 = jf_slots ? == 0 jf_n ( nurl_str_cat jw `` ) ( nurl_str_cat3 jf_slots ` ` jw )
                 = jf_n + jf_n 1
@@ -97212,7 +97559,7 @@ unsafe @ __emit_hoisted_body s funcdef → v {
             ? & mark != 0 ( nurl_str_starts tail `jcs ` ) {
                 : i cs + sq 5
                 : i ce ( __ha_line_end funcdef cs flen )
-                : s cw ( nurl_str_slice funcdef cs - ce cs )
+                : s cw ( __span_dup funcdef cs ce )
                 = jc_pairs ? == 0 jc_n ( nurl_str_cat cw `` ) ( nurl_str_cat3 jc_pairs ` ` cw )
                 = jc_n + jc_n 1
             } {}
@@ -104115,6 +104462,10 @@ unsafe @ __type_needs_drop s ty i syms → b {
     // the call's own string, or a copy.
     ? != 0 g_use_ownstr
     { ( nurl_print `define linkonce_odr i8* @__nurl_ownstr(i8* %o, i8* %v) alwaysinline {\nentry:\n  %e = icmp eq i8* %v, %o\n  br i1 %e, label %x, label %d\nd:\n  %n = call i8* @nurl_strdup(i8* %v)\n  br label %x\nx:\n  %r = phi i8* [ %v, %entry ], [ %n, %d ]\n  ret i8* %r\n}\n` ) } {}
+    // (…and where the copy is made only when `%c`, the callee's lend of an
+    // argument this frame owns, known at module end: AGORA-867.)
+    ? != 0 g_use_ownstr_if
+    { ( nurl_print `define linkonce_odr i8* @__nurl_ownstr_if(i1 %c, i8* %o, i8* %v) alwaysinline {\nentry:\n  %e = icmp eq i8* %v, %o\n  %s = xor i1 %c, true\n  %t = or i1 %e, %s\n  br i1 %t, label %x, label %d\nd:\n  %n = call i8* @nurl_strdup(i8* %v)\n  br label %x\nx:\n  %r = phi i8* [ %v, %entry ], [ %n, %d ]\n  ret i8* %r\n}\n` ) } {}
     // A raw string a callee may take over (mem_sink_str_arg): the caller's
     // own string moves, anything else goes over as a copy.
     ? != 0 g_use_sinkstr
@@ -110073,7 +110424,7 @@ unsafe @ __rpg_ovreads_set s v → v { = g_rpg_ovreads ( nurl_str_cat v `` ) }
     ^ nm
 }
 
-unsafe @ __rpg_tmp_next → v { = g_rpg_tmp + g_rpg_tmp 1 }
+@ __rpg_tmp_next → v { = g_rpg_tmp + g_rpg_tmp 1 }
 
 // What a `??`'s matched value (first token `tt`, type `vt`) reaches, for
 // the payloads its arms bind (__rprov_alias): a call's result under a
