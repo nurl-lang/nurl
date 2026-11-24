@@ -222,7 +222,7 @@ theorem FrameCaps.of_shrink {m m' : Mem} {D : List Var} {w : Var} (h : FrameCaps
   exact ⟨h1, fun c hc x' t n hx' hsn hnd => h2 c hc x' t n (hp x' _ hx') hsn hnd⟩
 
 /-- **Splitting a pair into two fresh slots keeps the frame clause**, where
-    the pair's slot is in the domain. -/
+    the pair's slot is outside `D`. -/
 theorem FrameCaps.unpair {m : Mem} {D : List Var} {w y x z : Var} {o oa ob : Bool} {a b : Val}
     (h : FrameCaps m D w) (hyD : y ∉ D)
     (hvy : m.st y = some ⟨o, some (.pair a b)⟩) (hxy : x ≠ y) (hzy : z ≠ y) (hxz : x ≠ z) :
