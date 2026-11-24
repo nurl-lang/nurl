@@ -796,8 +796,12 @@ function boot(data, label) {
     } else {
       eye = orbitEye(); look = cam.tgt; reach = cam.dist;
     }
+    /* the far plane reaches past the whole scene from wherever the eye is:
+       a flight can start from an orbit zoomed far out, where the scene's
+       radius alone would clip all of it */
+    var away = Math.hypot(eye[0] - mid[0], eye[1] - mid[1], eye[2] - mid[2]);
     var P = perspective(50 * Math.PI / 180, cv.width / cv.height,
-                        Math.max(reach / 5000, 1e-4), reach * 20 + diag * 4);
+                        Math.max(reach / 5000, 1e-4), reach * 20 + diag * 4 + away);
     var MV = mul(P, lookAt(eye, look, rolledUp(eye, look)));
     gl.uniformMatrix4fv(uMVP, false, MV);
     gl.uniform1f(uSize, psize * Math.min(window.devicePixelRatio || 1, 2));
