@@ -215,4 +215,21 @@ theorem FrameCaps.unpair {m : Mem} {D : List Var} {w y x z : Var} {o oa ob : Boo
   · exact h2 c hc x' t n hx'' hsn hnd
   · exact hP.sub (Sub.trans hsn hst)
 
+
+/-- **A leaf step keeps `HeldZ`**: its borrowed parameters are old ones, its
+    killable names are among the old statement's, it opens no catch frame,
+    and the store keeps the frame clause wherever the statement names nothing
+    of the domain. -/
+theorem HeldZ.leaf {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s s' : Stmt}
+    (hz : HeldZ m Γ Z s) (hsp : s.spine = []) (hcf : s'.catchFrames = [])
+    (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E)
+    (hkv : ∀ v ∈ s'.killVars, v ∈ s.killVars)
+    (hc : ∀ D w, (∀ v ∈ s.killVars, v ∉ D) → FrameCaps m D w → FrameCaps m' D w) :
+    HeldZ m' Γ' Z s' where
+  caps p E hp hm d hd hb hh := by
+    have h0 := hrb p E hp hm
+    exact hc _ _ (hz.reach p E h0 hm (by simp [hsp])) (hz.caps p E h0 hm d hd hb hh)
+  reach p E hp hm _ v hv := hz.reach p E (hrb p E hp hm) hm (by simp [hsp]) v (hkv v hv)
+  frames x m0 h := by rw [hcf] at h; cases h
+
 end A2
