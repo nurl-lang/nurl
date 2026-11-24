@@ -48,3 +48,14 @@
   that bound. `owner_read_after_an_earlier_operands_call_cleared_it_runs_clean`
   is accepted; all 17 must-reject programs whose translation changes are
   still refused.
+- **`tools/ncore/tolean.py` takes a parameter a function keeps on some
+  path as `sink`** (AGORA-994). nurlc counts a parameter the callee stores
+  on some path (the summary's `keeps=`) as one the callee owns, together
+  with the `sink=` ones: the caller hands its argument over, and the callee
+  releases it through its drop flag on the paths that do not store it. The
+  translation read only `sink=`, so such a parameter was lent and its store
+  refused. `string_parameter_bound_from_a_callee_that_lends_nothing_kept_on_one_path_runs_clean`
+  and `in_params_one_taken_over_before_a_returned_literal_of_both_runs_clean`
+  are accepted. Over the whole hole sweep, no program that must be rejected
+  is accepted. One of them now reports `unsupported` (a kept destructor
+  value), not `refused`.
