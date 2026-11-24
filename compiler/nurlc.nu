@@ -4999,7 +4999,13 @@ unsafe @ note_unsafe_item s pos s what → v {
     // (Text the type's own file wrote - a `pub` struct's field `( Shared
     // Impl )`, read again while an importer is the current file - names it
     // where it is visible: judged where it is written, AGORA-860.)
-    ? ( seq sf ( nurl_lex_filename lex ) ) { ^ } {}
+    : s lf ( nurl_lex_filename lex )
+    ? ( seq sf lf ) { ^ } {}
+    // (A synthetic lexer - `<generic_ret>`, an instance's rescan - reads text
+    // the compiler substituted: each type argument in it was judged where a
+    // program wrote it, in a real file. Judging it again here would judge it
+    // against no file at all, and refuse a module's own `[Impl]`.)
+    ? & != 0 ( nurl_str_len lf ) == ( nurl_str_get lf 0 ) 60 { ^ } {}
     ? ( __vis_targ_exempt ta ) { ^ } {}
     : s lt ( llvm_type ta )
     ? & != 0 ( nurl_str_len lt ) == ( nurl_str_get lt 0 ) 37 { ( vis_check_xref lex ta `type` ) } {}
