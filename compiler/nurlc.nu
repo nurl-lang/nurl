@@ -784,6 +784,7 @@ $ `stdlib/core/vec.nu`
 : i CORE_VF_TAKEN 64  // a capture's flag: the body marks it taken in its env when it gives it away; a later run panics (core_capture_taken)
 : i CORE_VF_SECOND 32  // a variable's flag: a closure binding given an owner's closure that the walk does not move: a second name of it (core_second_name)
 : i CORE_VF_HANDON 128  // a variable's flag: the literal a `\` try hands its failure on in, which codegen hands on whole (core_try)
+: i CORE_VF_ENVOWN 2048  // a capture's flag: a closure returned where it is made (`^ \ …`), whose env owns this handle capture — moved in from its owner, a copy where the binding borrows — not a copy of its handle that depends on the binding (gen_env_allocation; AGORA-978). The engine does not ask it
 : i CORE_VF_AGGLEND 1024  // a variable's flag: a returned literal codegen made without copying a field it was given lent: the literal is a lend of what that field borrows, on the runs the function answers lent (__gen_agg_lit_body, agora #907)
 : i CORE_VF_CPCOPY 512  // a variable's flag: the value a `=` gave a by-pointer capture, which codegen copied in on the runs the call lent (gen_assign's capture copy-in, agora #872): the capture owns it (agora #884); on a `:` raw string binding, codegen gave it a copy of its own (AGORA-953)
 : ~ i g_core_asn_op 0  // the operand the last core_assign stored (core_cpcopy_mark)
@@ -3249,6 +3250,14 @@ unsafe @ __fn_io_add s name → v { = g_fn_io_names ( nurl_str_cat3 g_fn_io_name
 // #135: bck_inout_borrow_check).
 : ~ i g_fn_replaces 0
 : ~ s g_fn_replaces_witness ``
+// `g_fn_empties[fname]`: the `inout` handle parameters the function may
+// hand on to a `sink` (`( eat p )`), directly or through a callee's own
+// `inout` parameter: where it does, the caller's slot is emptied (agora
+// #778), a null handle, so to the caller the argument is moved on some
+// paths (bck_inout_borrow_check, AGORA-991). Indices, space-separated;
+// noted where a known `sink` takes it (__empties_note), and closed at
+// module end over the same call edges as g_fn_replaces (resolve_replaces).
+: ~ i g_fn_empties 0
 : ~ s g_repl_edges ``
 // The calls that hand a parameter on (f's parameter k is the callee's
 // argument j) are mutation edges of the provenance store (g_rpg_edge),
@@ -25950,6 +25959,25 @@ unsafe @ eng_print_types → v {
     ( core_capture_flag ( __core_in name ) 8 F )
 }
 
+// The handle captures of a closure returned where it is made (`^ \ …`):
+// its env owns them — the binding's value moved in, or a copy where the
+// binding borrows (gen_env_allocation) — so the closure does not depend on
+// the binding: flag CORE_VF_ENVOWN, for readers of the IR (tools/ncore's
+// translation to A2); the engine does not ask it, so its verdicts stay as
+// they are. Not a capture taken by pointer, nor one flag 4 already says the
+// env takes over (AGORA-978).
+@ core_capture_envown i syms s caps → v {
+    : ~ s rest ( nurl_str_cat caps `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s t ( nurl_sym_get syms nm )
+        ? & & ( __is_handle_ty t ) ! ( __is_capture_byref nm syms ) ! ( str_contains_word g_nc_own_caps nm ) {
+            ( core_capture_flag ( __core_in nm ) CORE_VF_ENVOWN F )
+        } {}
+    }
+}
+
 // The captures of the closure body being built whose binding moves into
 // the env when the literal is made (`owned`: g_nc_own_caps, values that
 // cannot be copied in a closure that may leave its frame, h239-h243): flag
@@ -38921,7 +38949,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                 // a `sink` position now, else by its final answer at module
                 // end — an `s` edge, __repl_s_edge; one that only borrows the
                 // position empties nothing.)
-                ? ( str_has_index callee_sink arg_idx ) { ( __replaces_note syms bck_arg_val `` ) } { ( __repl_s_edge syms bck_arg_val call_name arg_idx ) }
+                ? ( str_has_index callee_sink arg_idx ) { ( __replaces_note syms bck_arg_val `` ) ( __empties_note syms bck_arg_val ) } { ( __repl_s_edge syms bck_arg_val call_name arg_idx ) }
             } {}
         } {}
         // A capture of a closure returned right here — its env keeps it for
@@ -39369,7 +39397,7 @@ unsafe @ gen_call_body i lex i syms i cg → s {
                     } {}
                     ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request ( nurl_llty at ) ) )
                     ( nurl_print `(i1 ` ) ( nurl_print __jz_c ) ( nurl_print `, ptr ` ) ( nurl_print __jz_p ) ( nurl_print `)\n` )
-                    ? ( str_has_index callee_sink arg_idx ) { ( __replaces_note syms arg_join_ioh `` ) } { ( __repl_s_edge syms arg_join_ioh call_name arg_idx ) }
+                    ? ( str_has_index callee_sink arg_idx ) { ( __replaces_note syms arg_join_ioh `` ) ( __empties_note syms arg_join_ioh ) } { ( __repl_s_edge syms arg_join_ioh call_name arg_idx ) }
                 } {}
             } {}
             // An enum's payload, which the arm only borrows: a copy goes
@@ -63070,6 +63098,7 @@ unsafe @ bck_emit_error s file i line s msg → v {
             ( nurl_str_cat4 ? isf `use of possibly-moved field '` `use of possibly-moved value '` shown
             ( nurl_str_cat `'` by ) ( nurl_str_cat ml
             ? isf ( nurl_str_cat4 fby `; on that path the field is empty. Take it on every path, or give it a value again (= ` shown ` …) on the path that took it` )
+            ? ( seq ( nurl_sym_get g_bck ( nurl_str_cat `qe_` ids ) ) `1` ) ( nurl_str_cat3 `; on that path it is a null handle. Give it a new value (= ` name ` …) after that call, before using it again` )
             ( nurl_str_cat3 `; on that path this reads a freed buffer. Consume it on every path, or rebind it (= ` name ` …) on the path that consumed it` ) ) ) )
         }
         : s pl ( nurl_sym_get g_bck `pml` )
@@ -65692,6 +65721,9 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                         // a view the statement binds borrows it (`:p`).
                         ? & & ( bck_sound ) ! ptake ( mem_fn_retptr_arg pcal paix ) { ( bck_plend_add pvn pcal `:p` ( __bck_pl_line rec ) ) ( __plpart_note pvn pcal paix ) } {}
                     } }
+                // (After the row's own checks: the call that may leave it
+                // empty is no use of an emptied value. AGORA-991.)
+                ? == kc 9 { = st ( __bck_empties_mark st rec pcal ) } {}
                 ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
@@ -66053,6 +66085,10 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                     // generic, `take_any`, not `take_any__Vec__String`.)
                     ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` fpid ) ( bck_field rec 3 ) ) ( bck_generic_base fcal ) )
                 } {}
+                // (…and a field handed to an `inout` handle parameter its
+                // callee may hand on: moved on some paths, after this row's
+                // own checks. AGORA-991.)
+                = st ( __bck_empties_mark st rec fcal )
                 ? | != 0 g_bck_has_cursor != 0 g_bck_epy_any { = st ( bck_cursor_follow st rec kc ) } {}
                 = p + p 1
                 = done T
@@ -73079,27 +73115,32 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
                         }
                     }
                 }
-                // …and the struct whose library handle field the viewer took
-                // over goes with it: the field, emptied, holds no handle
-                // (h348) — and handed to another thread, the handle is that
-                // thread's state (#121).
-                ? ( seq fbk `h` ) {
-                    : s kn ( nurl_sym_get2 g_bck `rv_` ks )
-                    : ~ s fr ( nurl_sym_get g_bck ( bck_bkey `fp_` ks ) )
-                    ~ != 0 ( nurl_str_len fr ) {
-                        : s fs ( str_first_word fr ) = fr ( str_skip_word fr )
-                        : i fid ( bck_path_root ( nurl_str_to_int fs ) )
-                        : s fids ( nurl_str_int fid )
-                        ? & != fid k ! ( bck_dead_state ( bck_st_get out fid ) ) {
-                            = out ( bck_st_set out fid BCK_MOVED )
-                            ( bck_put ( nurl_str_cat `ml_` fids ) ( bck_field rec 3 ) )
-                            ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` fids ) ( bck_field rec 3 ) )
-                            ( nurl_str_cat4 ( nurl_str_cat3 `taking over '` kn `', a binding read out of its field '` ) ( nurl_sym_get2 g_bck `rv_` fs )
-                            `': the library handle there went with it, and the field left empty holds none (read what is needed from the struct before that line, or give the struct a fresh value)`
-                            `` ) )
-                        } {}
-                    }
-                } {}
+                // …and what it took goes with it. A library handle field
+                // takes the struct: the field, emptied, holds no handle (h348)
+                // — and handed to another thread, the handle is that thread's
+                // state (#121). Any other field is moved where it lives, as a
+                // field handed to the consumer directly is (`( eat . col res
+                // )`): left empty, a null handle, read or pushed through it
+                // went through null (AGORA-991); given a new value, it is live
+                // again.
+                : b fbh ( seq fbk `h` )
+                : s kn ( nurl_sym_get2 g_bck `rv_` ks )
+                : ~ s fr ( nurl_sym_get g_bck ( bck_bkey `fp_` ks ) )
+                ~ != 0 ( nurl_str_len fr ) {
+                    : s fs ( str_first_word fr ) = fr ( str_skip_word fr )
+                    : i fsn ( nurl_str_to_int fs )
+                    : i fid ? fbh ( bck_path_root fsn ) fsn
+                    : s fids ( nurl_str_int fid )
+                    ? & & & >= fid 0 | fbh != fid ( bck_path_root fid ) != fid k ! ( bck_dead_state ( bck_st_get out fid ) ) {
+                        = out ( bck_st_set out fid BCK_MOVED )
+                        ? fbh {} { ( bck_add_word_once `fmv` fids ) = g_bck_fmv_any 1 }
+                        ( bck_put ( nurl_str_cat `ml_` fids ) ( bck_field rec 3 ) )
+                        ( bck_put ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` fids ) ( bck_field rec 3 ) )
+                        ? fbh ( nurl_str_cat4 ( nurl_str_cat3 `taking over '` kn `', a binding read out of its field '` ) ( nurl_sym_get2 g_bck `rv_` fs )
+                        `': the library handle there went with it, and the field left empty holds none (read what is needed from the struct before that line, or give the struct a fresh value)`
+                        `` ) ( nurl_str_cat3 `consuming '` kn `', a binding read out of it` ) )
+                    } {}
+                }
             }
         } {}
         = k + k 1
@@ -74803,6 +74844,38 @@ unsafe @ __bck_body_defers s st i p i line → s {
 // start`, start a local or a `sink` parameter) holds that local's drop: the
 // call hands it the value, and the local, whose fields the callee may have
 // released, is moved — read later, it is a use of a moved value.
+// An argument handed to an `inout` handle parameter its callee may hand on
+// to a `sink` (g_fn_empties): on those paths the callee empties the
+// caller's slot (agora #778), a null handle, so the argument is moved on
+// some paths. Read, pushed through or handed on, it went through null; an
+// Rc read so faulted (AGORA-991). Given a new value it is live again, and
+// its zero drops as nothing, so its release is unchanged.
+@ __bck_empties_mark s st s rec s cal → s {
+    ? == 0 g_maybe_moved { ^ st } {}
+    // (Most callees empty nothing: asked by length first, which interns
+    // nothing.)
+    ? == 0 ( nurl_sym_len g_fn_empties cal ) { ^ st } {}
+    ? ! ( str_contains_word ( nurl_sym_get g_fn_empties cal ) ( bck_field rec 6 ) ) { ^ st } {}
+    : i eid ( bck_field_int rec 1 )
+    ? < eid 0 { ^ st } {}
+    ? ( bck_dead_state ( bck_st_get st eid ) ) { ^ st } {}
+    : s eids ( nurl_str_int eid )
+    : s ln ( bck_field rec 3 )
+    : s nm ( nurl_sym_get2 g_bck `rv_` eids )
+    : s fs ( bck_fn_show cal )
+    ( bck_put ( nurl_str_cat `ml_` eids ) ln )
+    ( bck_put ( nurl_str_cat `qe_` eids ) `1` )
+    ? != eid ( bck_path_root eid ) {
+        // (A field: as a field a callee took on some paths, agora #280.)
+        ( bck_add_word_once `fmv` eids )
+        = g_bck_fmv_any 1
+        ( bck_put ( nurl_str_cat3 `mc_` nm ln ) fs )
+    } {
+        ( bck_put ( nurl_str_cat3 `qc_` nm ln ) ( nurl_str_cat3 `'` fs `' may hand it on to a 'sink' (its 'inout' parameter), which leaves it empty,` ) )
+    }
+    ^ ( bck_st_set st eid BCK_MAYBE_MOVED )
+}
+
 @ bck_inout_borrow_check s st s rec → s {
     : s cal ( bck_field rec 5 )
     : s aix ( bck_field rec 6 )
@@ -81829,6 +81902,19 @@ unsafe @ gen_assign i lex i syms i cg → s {
         ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print ce ) ( nurl_print `)\n` )
     } {}
     ( nurl_print `  br label %out\nout:\n  ret void\n}\n` )
+}
+
+// This function hands its `inout` handle parameter `name` to a `sink` that
+// takes it: its caller's slot is left empty there (g_fn_empties, AGORA-991;
+// a callee whose answer comes later is an `s` edge, resolve_replaces).
+@ __empties_note i syms s name → v {
+    : i k ( nurl_sym_word_index syms `__fn_param_names__` name )
+    ? < k 0 { ^ v } {}
+    : s fn ( nurl_sym_get syms `__fn_self_name__` )
+    : s ks ( nurl_str_int k )
+    : s ec ( nurl_sym_get g_fn_empties fn )
+    ? ( str_contains_word ec ks ) { ^ v } {}
+    ( nurl_sym_def g_fn_empties fn ? == 0 ( nurl_str_len ec ) ( nurl_str_cat ks `` ) ( nurl_str_cat3 ec ` ` ks ) )
 }
 
 // This function replaces something `name` owns, and `name` is one of its
@@ -89793,7 +89879,10 @@ unsafe @ __gen_closure_expr i lex i syms i cg → s {
     ( nurl_sym_def body_syms `__fn_ret_proof_live__` `` )
 
     : i __cc_h g_core_os_n
-    ? != 0 g_core_live { ( core_closure_begin syms captured_vars closure_fn_name ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ret_type ) } {}
+    ? != 0 g_core_live {
+        ( core_closure_begin syms captured_vars closure_fn_name ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ret_type )
+        ? clo_returned { ( core_capture_envown syms captured_vars ) } {}
+    } {}
     // Register closure parameters
     : ~ s bp_types ( nurl_str_cat param_types `` )
     : ~ s bp_names ( nurl_str_cat param_names `` )
@@ -95059,6 +95148,17 @@ unsafe @ resolve_replaces → v {
             : b sedge & > ( nurl_str_len j0 ) 0 == ( nurl_str_get j0 0 ) 115
             : s j ? sedge ( nurl_str_slice j0 1 - ( nurl_str_len j0 ) 1 ) ( nurl_str_cat j0 `` )
             : s rj ? sedge ? ( nurl_sym_has_word g_fn_sink callee j ) `*` `` ( __repl_of callee j )
+            // …and what it may leave empty: the whole parameter handed to a
+            // `sink` that takes it, or to a callee's `inout` parameter that
+            // callee may leave empty (AGORA-991).
+            ? == 0 ( nurl_str_len f ) {
+                : b emp ? sedge ( nurl_sym_has_word g_fn_sink callee j ) & != 0 ( nurl_sym_len g_fn_empties callee ) ( str_contains_word ( nurl_sym_get g_fn_empties callee ) j )
+                : s ec ( nurl_sym_get g_fn_empties fn )
+                ? & emp ! ( str_contains_word ec k ) {
+                    ( nurl_sym_def g_fn_empties fn ? == 0 ( nurl_str_len ec ) ( nurl_str_cat k `` ) ( nurl_str_cat3 ec ` ` k ) )
+                    = changed T
+                } {}
+            } {}
             ? != 0 ( nurl_str_len rj ) {
                 : s cur ( nurl_sym_get g_fn_replaces fn )
                 : ~ s nw ( nurl_str_cat cur `` )
@@ -99162,6 +99262,7 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     {}
     ? != 0 ( nurl_str_len g_fn_replaces_witness )
     { ( nurl_sym_def g_fn_replaces fname g_fn_replaces_witness ) }
+
     {}
     // Implicit return — route through defer chain if defers are active
     : s dtop ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
@@ -123415,6 +123516,7 @@ unsafe @ main → i {
     = g_fn_ret_alias ( nurl_sym_new )
     = g_fn_mutates ( nurl_sym_new )
     = g_fn_replaces ( nurl_sym_new )
+    = g_fn_empties ( nurl_sym_new )
     = g_fn_reallocs ( nurl_sym_new )
     = g_fn_noreturn ( nurl_sym_new )
     ( nurl_sym_def g_fn_noreturn `nurl_exit` `1` )

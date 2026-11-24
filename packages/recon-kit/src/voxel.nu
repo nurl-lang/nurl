@@ -1,4 +1,4 @@
-// packages/map-anything/src/voxel.nu — voxel fusion of the finished cloud.
+// packages/recon-kit/src/voxel.nu — voxel fusion of the finished cloud.
 //
 // Every view contributes a point per pixel, so a surface seen by twenty
 // views is twenty slightly different copies of itself: a thick, noisy

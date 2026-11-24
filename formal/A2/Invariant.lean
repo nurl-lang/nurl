@@ -1695,6 +1695,13 @@ structure MInv (m : Mem) (Γ : Ctx) : Prop where
   held      : ∀ v E sl T, Γ v = some E → E.live = true → m.st v = some sl → sl.val = some T →
                 NamesIn T E.held
   pkgs      : ∀ v sl T, m.st v = some sl → sl.val = some T → PkgsOK T
+  /-- AGORA-937 B4: a binding whose type holds no closure that captures by
+      name holds, in its slot, live or dead, only packages that capture
+      nothing by name (a dead slot keeps what was written while it was live,
+      and its entry keeps its type). So no package there captures a binding
+      `inout` (`ValCapsInp`). -/
+  noPkg     : ∀ v E sl T, Γ v = some E → m.st v = some sl → sl.val = some T →
+                E.ty.hasFn = false → ∀ fs te ms e cs, Sub (.pkg fs te ms e cs) T → cs = []
   armed     : ∀ v E sl, Γ v = some E → m.st v = some sl → ArmOK m E sl
   /-- A3.1: every share an owned tree holds names a live block of its type. -/
   shares    : ∀ v E sl T, Γ v = some E → m.st v = some sl → sl.own = true → sl.val = some T →

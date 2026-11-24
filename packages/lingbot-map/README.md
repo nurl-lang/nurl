@@ -46,11 +46,12 @@ wrote 8602925 points to cloud.ply  (286 frames, 108624 ms)
 
 ![286 frames of the courthouse walk, rendered by the built-in viewer](docs/viewer.png)
 
-> All 286 frames of the courthouse walk as one reconstruction — facades,
-> shopfront posters, the parked cars, the street. Rendered by the viewer
-> below from `lingbot-map --conf 3 ...`; the exact view is
-> `?yaw=1.15&pitch=0.18&dist=0.60&trim=0.94&roll=0.30`, so you can
-> reproduce it.
+> All 286 frames of the reference's courthouse example as one
+> reconstruction — the walk around the whole block, facades and shopfront
+> posters closing into a ring. Rendered by the viewer below from
+> `lingbot-map --conf 3 ~/dev/lingbot-map/example/courthouse`; the exact
+> view is `?yaw=0.6&pitch=0.3&dist=0.64&trim=0.94`, so you can reproduce
+> it.
 
 Point it at a cloud:
 
@@ -171,13 +172,16 @@ lingbot-map --ascii --max-frames 2 --out two.ply ~/dev/lingbot-map/example/court
 | | |
 |---|---|
 | `--model <path\|ref>` | checkpoint to run: a local `.pt`, or a Hugging Face ref such as `robbyant/lingbot-map/lingbot-map.pt`. Default: `$LINGBOT_MAP_MODEL`, else `~/.nurl/models/lingbot-map/lingbot-map.pt`, else that ref is fetched |
-| `--out <file.ply>` | where to write the cloud (default `cloud.ply`) |
+| `--out <file.ply>`, `-o` | where to write the cloud (default `cloud.ply`) |
 | `--conf <f>` | keep pixels whose confidence exceeds this (default 1.5, the reference's own `--conf_threshold`) |
 | `--pixel-stride <n>` | take every nth pixel on both axes (default 2) |
 | `--max-frames <n>` | stop after n frames |
+| `--max-views <n>` | n frames spread over the WHOLE capture, the sharpest of each run, in order; a video is sampled across its length (three candidates per frame kept) unless `--fps` is given |
 | `--stride <n>` | use every nth frame, applied after `--max-frames` |
 | `--fps <n>` | frames per second to take from a video (default 10) |
-| `--image-size <n>` | input width in pixels, a multiple of 14 (default 518); smaller = fewer tokens = less memory |
+| `--image-size <n\|auto>` | input width in pixels, a multiple of 14 (default 518); smaller = fewer tokens = less memory. `auto` takes the largest that fits the device's free memory |
+| `--voxel <m\|auto>` | fuse the cloud on a grid of that cell: one averaged point per cell; `auto` = two pixels' footprint at the first frame's median depth |
+| `--scene <file>` | keep every frame's camera, depth, confident pixels and colours — what `lingbot-map mesh` and the service's 3-D objects are made from |
 | `--frames <dir>` | a directory of frames; the same as naming it positionally |
 | `--ascii` | write an ASCII PLY instead of `binary_little_endian` |
 | `--quiet`, `-q` | no per-frame progress |
@@ -193,6 +197,32 @@ The reference's own spellings work too — `--model_path`,
 **Order is the trajectory.** Frames are read in name order, and the model
 keeps a cache across frames, so each one is placed relative to the ones
 before it. A shuffled directory reconstructs a different scene.
+
+## Serve it
+
+```
+lingbot-map serve --host 0.0.0.0 --port 8808 --password secret \
+    --tls-cert cert.pem --tls-key key.pem
+```
+
+Basic sign-in sends the password with every request, so off loopback it
+needs TLS: these two flags, or a TLS-terminating proxy (an ingress) in
+front of a service bound to `127.0.0.1`. Without `--password` (or
+`$LINGBOT_MAP_PASSWORD`) anyone who can reach the port can use it.
+
+A web page where a browser — a phone too — uploads a video or photos,
+the jobs queue on disk under `~/.lingbot-map/jobs/` and run one at a
+time on the GPU, and the finished cloud opens in the viewer or downloads
+as a PLY. In the viewer a box cuts a region, and "make 3-D object" turns
+it into a mesh (binary glTF) to view or download. The service is
+[recon-kit](../recon-kit)'s — the same one `map-anything serve` is — and
+this package only says which options it shows: the number of frames
+spread over the capture, the input size (auto by default), the
+confidence threshold, the pixel stride and voxel fusion.
+
+`lingbot-map mesh scene.bin -o object.glb [--box x0 y0 z0 x1 y1 z1]
+[--res N]` makes the same object from the command line, out of a run
+with `--scene scene.bin`.
 
 ## How it differs from `demo.py`
 

@@ -1609,6 +1609,11 @@ theorem MInv.revive {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex : Entry}
       names := ?_
       held := fun w E sl T hw hl hsw hT => ?_
       pkgs := hi.pkgs
+      noPkg := fun w E sl T hw hsw hT hfn => by
+        by_cases hwx : w = x
+        · subst hwx; simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+          exact hi.noPkg w Ex sl T hx hsw hT hfn
+        · simp only [setE, upd_ne _ _ hwx] at hw; exact hi.noPkg w E sl T hw hsw hT hfn
       pkgFree := hpf
       armed := fun w E sl hw hsw => ?_ }
   · by_cases hwx : w = x
@@ -1742,6 +1747,10 @@ theorem MInv.rearm {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {E : Entry} (
       names := fun w Ew hw hlw hnw => ?_
       held := fun w Ew sl T hw hlw hsw hT => ?_
       pkgs := hi.pkgs
+      noPkg := fun w Ew sl T hw hsw hT hfn => by
+        rcases hcase w Ew hw with ⟨rfl, rfl⟩ | ⟨_, hw'⟩
+        · exact hi.noPkg w E sl T hx hsw hT hfn
+        · exact hi.noPkg w Ew sl T hw' hsw hT hfn
       armed := fun w Ew sl hw hsw => ?_ }
   · by_cases hwx : w = x
     · subst hwx; have := hi.dom w; rw [hx] at this; simpa [setE] using this
@@ -2168,6 +2177,7 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
       names := ?_
       held := fun w E sl T hw hl hsw hT => ?_
       pkgs := fun w sl T hsw hT => ?_
+      noPkg := fun w E sl T hw hsw hT hfn => ?_
       armed := fun w E sl hw hsw => ?_
       shares := fun w E sl T hw hsw hown hT => ?_
       blocks := fun k' bl hk' => ?_ }
@@ -2291,6 +2301,14 @@ theorem MInv.unwind0 {m m1 : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt}
   · by_cases hwk : w ∈ k.spine
     · rw [hin w hwk] at hsw; cases hsw
     · exact hi.pkgs w sl T (by rw [← hout w hwk]; exact hsw) hT
+  · -- AGORA-937: the revived binding's value is of its type; the others' as they were
+    by_cases hwx : w = x
+    · rw [hwx, hux] at hw; cases hw
+      rw [hwx, hsl] at hsw; cases hsw; cases hT
+      exact fun _ _ _ _ _ hs => hwfv.no_pkg hfn hs
+    · obtain ⟨hwk, E0, h0, hc⟩ := unwindCtx_cases hw hwx
+      refine hi.noPkg w E0 sl T h0 (by rw [← hout w hwk]; exact hsw) hT ?_
+      rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩ <;> exact hfn
   · -- A2-drop.2: an armed binding outside the frame views nothing the unwind ended
     by_cases hwk : w ∈ k.spine
     · rw [unwindCtx_sp hwk] at hw; cases hw

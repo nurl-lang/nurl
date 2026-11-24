@@ -1,4 +1,4 @@
-// packages/map-anything/src/sharp.nu — choose views across a capture,
+// packages/recon-kit/src/sharp.nu — choose views across a capture,
 // the sharp ones.
 //
 // A cap on the number of views used to keep the FIRST n frames, so a long

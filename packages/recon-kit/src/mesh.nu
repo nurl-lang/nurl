@@ -1,4 +1,4 @@
-// packages/map-anything/src/mesh.nu — a 3-D object from the kept views.
+// packages/recon-kit/src/mesh.nu — a 3-D object from the kept views.
 //
 //   ( ms_auto_box sc box )                         → b   2–98 % bounds
 //   ( ms_mesh sc box res keep verbose )            → !GlbMesh String
@@ -305,14 +305,14 @@ $ `scene.nu`
     : f ex - ( slice_at [f] box 3 ) ( slice_at [f] box 0 )
     : f ey - ( slice_at [f] box 4 ) ( slice_at [f] box 1 )
     : f ez - ( slice_at [f] box 5 ) ( slice_at [f] box 2 )
-    ? | | <= ex 0.0 <= ey 0.0 <= ez 0.0 { ^ @ !GlbMesh String { F ( string_from `map-anything mesh: the box is empty` ) } } {}
+    ? | | <= ex 0.0 <= ey 0.0 <= ez 0.0 { ^ @ !GlbMesh String { F ( string_from `mesh: the box is empty` ) } } {}
     : f longest ? > ex ? > ey ez ey ez ex ? > ey ez ey ez
     : f vs / longest # f ? < res 8 8 res
     : i nx + # i ( float_ceil / ex vs ) 1
     : i ny + # i ( float_ceil / ey vs ) 1
     : i nz + # i ( float_ceil / ez vs ) 1
     : i nvox * * nx ny nz
-    ? > nvox 60000000 { ^ @ !GlbMesh String { F ( string_from `map-anything mesh: the grid is too large; lower --res` ) } } {}
+    ? > nvox 60000000 { ^ @ !GlbMesh String { F ( string_from `mesh: the grid is too large; lower --res` ) } } {}
     : f trunc * 4.0 vs
     ? != verbose 0 {
         ( nurl_print `grid    ` ) ( nurl_print ( nurl_str_int nx ) ) ( nurl_print `x` )
@@ -529,7 +529,7 @@ $ `scene.nu`
     }
     : i nv0 / ( vec_len [f] . su vp ) 3
     : i nt0 / ( vec_len [i] . su tri ) 3
-    ? == nt0 0 { ^ @ !GlbMesh String { F ( string_from `map-anything mesh: no surface in the box (is it around the object?)` ) } } {}
+    ? == nt0 0 { ^ @ !GlbMesh String { F ( string_from `mesh: no surface in the box (is it around the object?)` ) } } {}
 
     // ── drop the loose bits ──
     : ( Vec i ) par__v ( vec_zeroed [i] nv0 )
@@ -635,8 +635,8 @@ $ `scene.nu`
 
 // ── the subcommand ──────────────────────────────────────────────────
 
-@ __ms_usage → v {
-    ( nurl_print `usage: map-anything mesh <scene> -o <object.glb> [options]\n\n` )
+@ __ms_usage s name → v {
+    ( nurl_print `usage: ` ) ( nurl_print name ) ( nurl_print ` mesh <scene> -o <object.glb> [options]\n\n` )
     ( nurl_print `  A 3-D object (.glb) from the views a run kept with --scene: TSDF\n` )
     ( nurl_print `  fusion of their depths inside a box, then the zero surface.\n\n` )
     ( nurl_print `  -o, --out FILE           the object (default object.glb)\n` )
@@ -667,8 +667,9 @@ $ `scene.nu`
     ^ & <= dots 1 > digits 0
 }
 
-// `map-anything mesh ...` — argv[1] is "mesh". Returns the exit code.
-@ ms_main → i {
+// `<model> mesh ...` — argv[1] is "mesh"; `name` is the model's, for the
+// usage line. Returns the exit code.
+@ ms_main s name → i {
     : i argc ( nurl_argc )
     : ~ s scene ``
     : ~ s out `object.glb`
@@ -686,17 +687,17 @@ $ `scene.nu`
             ? & ( __ms_eq a `--res` ) has { = res ( nurl_str_to_int ( nurl_argv + k 1 ) ) = k + k 1 } {
                 ? & ( __ms_eq a `--keep` ) has {
                     ? ( __ms_num ( nurl_argv + k 1 ) ) { = keep ( nurl_str_to_float ( nurl_argv + k 1 ) ) } {
-                        ( nurl_print `map-anything mesh: --keep wants a number\n` ) ^ 1
+                        ( nurl_print `mesh: --keep wants a number\n` ) ^ 1
                     }
                     = k + k 1
                 } {
                     ? ( __ms_eq a `--box` ) {
-                        ? < + k 6 argc {} { ( nurl_print `map-anything mesh: --box wants six numbers\n` ) ^ 1 }
+                        ? < + k 6 argc {} { ( nurl_print `mesh: --box wants six numbers\n` ) ^ 1 }
                         : ~ i j 0
                         ~ < j 6 {
                             : s t ( nurl_argv + + k 1 j )
                             ? ( __ms_num t ) { ( slice_put [f] box j ( nurl_str_to_float t ) ) } {
-                                ( nurl_print `map-anything mesh: --box wants six numbers, got ` ) ( nurl_print t ) ( nurl_print `\n` )
+                                ( nurl_print `mesh: --box wants six numbers, got ` ) ( nurl_print t ) ( nurl_print `\n` )
                                 ^ 1
                             }
                             = j + j 1
@@ -705,12 +706,12 @@ $ `scene.nu`
                         = k + k 6
                     } {
                         ? | ( __ms_eq a `-q` ) ( __ms_eq a `--quiet` ) { = verbose 0 } {
-                            ? | ( __ms_eq a `-h` ) ( __ms_eq a `--help` ) { ( __ms_usage ) ^ 0 } {
+                            ? | ( __ms_eq a `-h` ) ( __ms_eq a `--help` ) { ( __ms_usage name ) ^ 0 } {
                                 ? & > ( nurl_str_len a ) 0 != ( nurl_str_get a 0 ) 45 {
                                     = scene a
                                 } {
-                                    ( nurl_print `map-anything mesh: unknown option ` ) ( nurl_print a ) ( nurl_print `\n\n` )
-                                    ( __ms_usage )
+                                    ( nurl_print `mesh: unknown option ` ) ( nurl_print a ) ( nurl_print `\n\n` )
+                                    ( __ms_usage name )
                                     ^ 1
                                 }
                             }
@@ -721,8 +722,8 @@ $ `scene.nu`
         }
         = k + k 1
     }
-    ? == ( nurl_str_len scene ) 0 { ( __ms_usage ) ^ 1 } {}
-    ? | < res 8 > res 1024 { ( nurl_print `map-anything mesh: --res wants 8..1024\n` ) ^ 1 } {}
+    ? == ( nurl_str_len scene ) 0 { ( __ms_usage name ) ^ 1 } {}
+    ? | < res 8 > res 1024 { ( nurl_print `mesh: --res wants 8..1024\n` ) ^ 1 } {}
     : Scene sc ?? ( sc_load scene ) {
         T x → x
         F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
@@ -743,7 +744,7 @@ $ `scene.nu`
             = ax + ax 1
         }
     } {
-        ? ( ms_auto_box sc box ) {} { ( nurl_print `map-anything mesh: the scene has no valid pixel\n` ) ^ 1 }
+        ? ( ms_auto_box sc box ) {} { ( nurl_print `mesh: the scene has no valid pixel\n` ) ^ 1 }
     }
     ? != verbose 0 {
         ( nurl_print `box     ` )
@@ -754,7 +755,7 @@ $ `scene.nu`
     ?? ( ms_mesh sc box res keep verbose ) {
         F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
         T m → {
-            ?? ( glb_write m out `map-anything mesh, pure NURL` ) {
+            ?? ( glb_write m out `recon-kit mesh, pure NURL` ) {
                 F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
                 T _ → {
                     ? != verbose 0 {

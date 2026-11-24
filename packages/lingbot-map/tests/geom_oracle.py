@@ -104,9 +104,12 @@ def main():
 
         e4 = torch.eye(4, dtype=torch.float64)
         e4[:3, :] = extri
+        # the decoded pose IS camera->world (p_world = R p_cam + T, T the
+        # camera centre): pose_encoding_to_extri_intri does not invert,
+        # and demo.py inverts it only to hand its viewer a world->camera
         c2w = torch.eye(4, dtype=torch.float64)
-        c2w[:3, :3] = R.t()
-        c2w[:3, 3] = -(R.t() @ pe_t[:3])
+        c2w[:3, :3] = R
+        c2w[:3, 3] = pe_t[:3]
         row("c2w", c2w.reshape(16).tolist())
 
         for p in range(4):

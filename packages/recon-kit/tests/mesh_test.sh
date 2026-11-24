@@ -1,5 +1,5 @@
 #!/bin/sh
-# map-anything mesh without a GPU or the model: a synthetic scene file — a
+# `<model> mesh` (recon-kit's ms_main, through tests/app.nu) without a GPU or a model: a synthetic scene file — a
 # sphere seen by eight cameras around it, with exact depths — goes through
 # the real TSDF fusion and marching tetrahedra, and the object must be the
 # sphere: a valid .glb, its vertices on the sphere's surface, its normals
@@ -11,9 +11,9 @@ REPO_ROOT="$(cd ../.. && pwd)"
 if [ -n "${NURL:-}" ]; then :;
 elif [ -x "$REPO_ROOT/nurl.sh" ]; then NURL="$REPO_ROOT/nurl.sh"; export NURL_STDLIB="${NURL_STDLIB:-$REPO_ROOT}";
 else NURL="nurl"; fi
-WORK="$(mktemp -d -t map-anything-mesh.XXXXXX)"
+WORK="$(mktemp -d -t recon-kit-mesh.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
-if ! $NURL src/main.nu "$WORK/map-anything" >/dev/null 2>"$WORK/build.err"; then
+if ! $NURL tests/app.nu "$WORK/recon-test" >/dev/null 2>"$WORK/build.err"; then
     echo "FAIL the CLI does not build:"; tail -6 "$WORK/build.err"; exit 1
 fi
 fails=0
@@ -60,7 +60,7 @@ out += struct.pack("<II", 0x444E454D, n)
 open(sys.argv[1], "wb").write(out)
 PY
 
-if "$WORK/map-anything" mesh "$WORK/sphere.scene" -o "$WORK/sphere.glb" --box -0.6 -0.6 1.4 0.6 0.6 2.6 --res 96 > "$WORK/mesh.out" 2>&1; then
+if "$WORK/recon-test" mesh "$WORK/sphere.scene" -o "$WORK/sphere.glb" --box -0.6 -0.6 1.4 0.6 0.6 2.6 --res 96 > "$WORK/mesh.out" 2>&1; then
     echo "PASS the mesh subcommand ran"
 else
     echo "FAIL the mesh subcommand:"; tail -5 "$WORK/mesh.out"; fails=$((fails + 1))
@@ -106,11 +106,11 @@ else: print("PASS the colour came through")
 sys.exit(1 if bad else 0)
 PY
 
-if "$WORK/map-anything" mesh "$WORK/sphere.scene" -o "$WORK/x.glb" --box 0 0 0 1 1 >/dev/null 2>&1; then
+if "$WORK/recon-test" mesh "$WORK/sphere.scene" -o "$WORK/x.glb" --box 0 0 0 1 1 >/dev/null 2>&1; then
     echo "FAIL a five-number box was accepted"; fails=$((fails + 1))
 else echo "PASS a five-number box is refused"; fi
 head -c 1000 "$WORK/sphere.scene" > "$WORK/cut.scene"
-if "$WORK/map-anything" mesh "$WORK/cut.scene" -o "$WORK/x.glb" > "$WORK/cut.out" 2>&1; then
+if "$WORK/recon-test" mesh "$WORK/cut.scene" -o "$WORK/x.glb" > "$WORK/cut.out" 2>&1; then
     echo "FAIL a truncated scene was accepted"; fails=$((fails + 1))
 else echo "PASS a truncated scene is refused: $(head -1 "$WORK/cut.out")"; fi
 # the automatic box sees every column: a 42-pixel-wide view with valid
@@ -128,7 +128,7 @@ out += struct.pack("<%df" % (W * H), *dz) + bytes(mask) + bytes([128] * (3 * W *
 out += struct.pack("<II", 0x444E454D, 1)
 open(sys.argv[1], "wb").write(out)
 PY
-"$WORK/map-anything" mesh "$WORK/cols.scene" -o "$WORK/cols.glb" > "$WORK/cols.out" 2>&1
+"$WORK/recon-test" mesh "$WORK/cols.scene" -o "$WORK/cols.glb" > "$WORK/cols.out" 2>&1
 zmax=$(sed -n 's/^box *\([^ ]*\) \([^ ]*\) \([^ ]*\) \([^ ]*\) \([^ ]*\) \([^ ]*\).*/\6/p' "$WORK/cols.out")
 if python3 -c "import sys; sys.exit(0 if float('${zmax:-0}') >= 2.9 else 1)"; then
     echo "PASS the automatic box reaches the far columns (z up to $zmax)"
@@ -148,7 +148,7 @@ out += struct.pack("<%df" % (W * H), *dz) + bytes([1] * (W * H)) + bytes([128] *
 out += struct.pack("<II", 0x444E454D, 1)
 open(sys.argv[1], "wb").write(out)
 PY
-"$WORK/map-anything" mesh "$WORK/stripes.scene" -o "$WORK/stripes.glb" > "$WORK/stripes.out" 2>&1
+"$WORK/recon-test" mesh "$WORK/stripes.scene" -o "$WORK/stripes.glb" > "$WORK/stripes.out" 2>&1
 zmax=$(sed -n 's/^box *\([^ ]*\) \([^ ]*\) \([^ ]*\) \([^ ]*\) \([^ ]*\) \([^ ]*\).*/\6/p' "$WORK/stripes.out")
 if python3 -c "import sys; sys.exit(0 if float('${zmax:-0}') >= 2.9 else 1)"; then
     echo "PASS the automatic box samples odd columns too (z up to $zmax)"

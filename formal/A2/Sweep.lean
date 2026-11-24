@@ -458,6 +458,7 @@ theorem MInv.sweepR {Γ : Ctx} (hi : MInv m Γ) : MInv (m.sweepR R) Γ where
   fresh := hi.fresh
   held := hi.held
   pkgs := hi.pkgs
+  noPkg := hi.noPkg
   armed v E sl hE hsl := (hi.armed v E sl hE hsl).sweep hR (Kept.of_slot hR hsl)
   shares v E sl T hE hsl hown hT := (hi.shares v E sl T hE hsl hown hT).sweep (Kept.of_slot hR hsl T hT)
   blocks k bl hk := by
