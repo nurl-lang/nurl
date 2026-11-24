@@ -44,7 +44,7 @@ theorem heapOK_grow {m m' : Mem} (hh : HeapOK m) (hst : m'.st = m.st)
     space: its statement is typed, the invariant holds, its packages' codes
     are typed, and every binding is in a run-time scope it is inside of. -/
 def ThreadOK (P : Prog) (m : Mem) (s : Stmt) : Prop :=
-  ∃ Γ F Δ, StmtT P .none Γ F s Δ ∧ Inv m Γ F s ∧ MemCodes P m ∧ s.codesOK P ∧ Closed Γ s
+  ∃ Γ F Δ, StmtT P .none Γ F s Δ ∧ Inv m Γ F s ∧ MemCodes P m ∧ s.codesOK P ∧ Closed Γ s ∧ HZ m Γ s
 
 /-- A3.1: an address the payload of a block of `B` owns. -/
 def PayIn (B : Nat → Option Blk) (i : Nat) : Prop := ∃ k bl, B k = some bl ∧ i ∈ bl.tree.ids
@@ -131,8 +131,9 @@ theorem ThreadOK.move {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {A : 
     (hn : m.nid ≤ n) (hb : BlkLe m.blk B) (hB : BlocksAt B n) (hBc : BlkCodes P B)
     (hP : ∀ i, PayIn B i → ∀ x T, OwnedAt m x T → i ∉ T.ids) :
     ThreadOK P { m with alloc := A, nid := n, blk := B, taken := TK } s := by
-  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := h
-  exact ⟨Γ, F, Δ, ht, inv_move hi hown hA hpA hn hb hB hP, hcd.withBlk rfl hBc, hsc, hc⟩
+  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc, hz⟩ := h
+  exact ⟨Γ, F, Δ, ht, inv_move hi hown hA hpA hn hb hB hP, hcd.withBlk rfl hBc, hsc, hc,
+    hz.of_st rfl (Nat.le_refl _)⟩
 
 /-- A3.5b: the packages the blocks hold, which a thread's facts give. -/
 theorem ThreadOK.blkCodes {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) : BlkCodes P m.blk := by

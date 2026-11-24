@@ -121,8 +121,8 @@ theorem Cfg.sweepD_marks_cut {C : Cfg} {U : Nat → Prop} (hc : CutOff C.roots C
     slots (the configuration's, from every thread's and the globals). -/
 theorem ThreadOK.sweepDR {P : Prog} {m : Mem} {s : Stmt} (h : ThreadOK P m s) {R : Val → Prop}
     (hR : ∀ v, m.vals v → R v) : ThreadOK P (m.sweepDR R) s := by
-  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := h
-  exact ⟨Γ, F, Δ, ht, hi.sweepDR hR, hcd.sweepDR, hsc, hc⟩
+  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc, hz⟩ := h
+  exact ⟨Γ, F, Δ, ht, hi.sweepDR hR, hcd.sweepDR, hsc, hc, hz.of_st rfl (Nat.le_refl _)⟩
 
 /-- The marking sweep's addresses: a live one stays unless the payload of a
     block it removes owns it. -/

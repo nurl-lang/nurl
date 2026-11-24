@@ -10,7 +10,7 @@ open A2
 theorem ThreadOK.init {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
     (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P)
     (hv : ∀ v ∈ s.vars, v < nv) : ThreadOK P (emptyMem nv) s :=
-  ⟨fun _ => none, [], Δ, ht, inv_empty hs hv, codes_empty P nv, hsc, closed_empty s⟩
+  ⟨fun _ => none, [], Δ, ht, inv_empty hs hv, codes_empty P nv, hsc, closed_empty s, HZ.empty hs⟩
 
 /-- A3.6: the empty store with the module globals `g` set, and none of their
     blocks yet: A2's `inv_empty`, which reads no global. -/
@@ -145,7 +145,7 @@ theorem ThreadOK.start {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
   have h0 : ThreadOK P { emptyMem nv with gl := G.gl, taken := G.taken } s :=
     ⟨fun _ => none, [], Δ, ht, inv_emptyGl G.gl G.taken hs hv,
       ⟨fun _ _ _ _ _ _ _ _ h => (by cases h), fun _ _ _ _ _ _ _ h => (by cases h),
-        fun _ _ h => (by cases h)⟩, hsc, closed_empty s⟩
+        fun _ _ h => (by cases h)⟩, hsc, closed_empty s, HZ.empty hs⟩
   exact h0.move (fun _ _ h => by cases h) (fun i hi => .inr (by simpa [union, payPart_iff] using hi))
     (fun i hi => by simp [union, payPart_iff, hi]) (Nat.zero_le _) (fun _ _ h => by cases h) hG.blocksAt
     hG.blkCodes (fun _ _ _ _ h => by cases h)
@@ -153,9 +153,10 @@ theorem ThreadOK.start {P : Prog} {s : Stmt} {Δ : Ctx} {nv : Nat}
 /-- A2's preservation, one step. -/
 theorem ThreadOK.step {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {m : Mem} {s : Stmt}
     (h : ThreadOK P m s) {m' : Mem} {s' : Stmt} (hst : Step P m s (.ok m' s')) : ThreadOK P m' s' := by
-  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := h
-  obtain ⟨Γ', ht', hi', hc', hcd', hsc'⟩ := reach_ok0 hP hPc ht hcd hsc hi hc (Steps0.step hst Steps0.refl)
-  exact ⟨Γ', F, Δ, ht', hi', hcd', hsc', hc'⟩
+  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc, hz⟩ := h
+  obtain ⟨Γ', ht', hi', hc', hcd', hsc', hz'⟩ :=
+    reach_ok0 hP hPc ht hcd hsc hi hc hz (Steps0.step hst Steps0.refl)
+  exact ⟨Γ', F, Δ, ht', hi', hcd', hsc', hc', hz'⟩
 
 /-- A2's progress: a thread is finished, or (A3.2) waits for a lock, or it can step. -/
 theorem ThreadOK.progress {P : Prog} (hP : ProgOK P) {m : Mem} {s : Stmt} (h : ThreadOK P m s) :
@@ -185,7 +186,7 @@ theorem Blocked.of_eq {m m' : Mem} (hst : m'.st = m.st) (hb : m'.blk = m.blk) {s
 
 /-- A finished thread has no bindings. -/
 theorem ThreadOK.skip_st {P : Prog} {m : Mem} (h : ThreadOK P m .skip) : ∀ x, m.st x = none := by
-  obtain ⟨Γ, F, Δ, _, hi, _, _, hc⟩ := h
+  obtain ⟨Γ, F, Δ, _, hi, _, _, hc, _⟩ := h
   intro o
   cases ho : m.st o with
   | none => rfl

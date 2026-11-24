@@ -21,7 +21,7 @@ theorem GhostRel.spine {s s' : Stmt} (h : GhostRel s s') : s'.spine = s.spine :=
   | rbind _ _ ih => simp only [Stmt.spine, ih]
   | frozen _ _ ih => simpa only [Stmt.spine] using ih
   | block _ ih => simpa only [Stmt.spine] using ih
-  | catchR _ _ _ _ _ _ ih => simpa only [Stmt.spine] using ih
+  | catchR _ _ _ _ _ _ _ ih => simpa only [Stmt.spine] using ih
   | scopeL _ _ _ _ ih => simp only [Stmt.spine, ih]
 
 theorem GhostRel.vars {s s' : Stmt} (h : GhostRel s s') : s'.vars = s.vars := by
@@ -33,7 +33,7 @@ theorem GhostRel.vars {s s' : Stmt} (h : GhostRel s s') : s'.vars = s.vars := by
   | rbind _ _ ih => simp only [Stmt.vars, ih]
   | frozen _ _ ih => simp only [Stmt.vars, ih]
   | block _ ih => simp only [Stmt.vars, ih]
-  | catchR _ _ _ _ _ _ ih => simp only [Stmt.vars, ih]
+  | catchR _ _ _ _ _ _ _ ih => simp only [Stmt.vars, ih]
   | scopeL _ _ _ _ ih => simp only [Stmt.vars, ih]
 
 theorem GhostRel.killVars {s s' : Stmt} (h : GhostRel s s') : s'.killVars = s.killVars := by
@@ -45,7 +45,7 @@ theorem GhostRel.killVars {s s' : Stmt} (h : GhostRel s s') : s'.killVars = s.ki
   | rbind _ _ ih => simp only [Stmt.killVars, ih]
   | frozen _ _ ih => simp only [Stmt.killVars, ih]
   | block _ ih => simp only [Stmt.killVars, ih]
-  | catchR _ _ _ _ _ _ ih => simp only [Stmt.killVars, ih]
+  | catchR _ _ _ _ _ _ _ ih => simp only [Stmt.killVars, ih]
   | scopeL _ _ _ _ ih => simp only [Stmt.killVars, ih]
 
 theorem GhostRel.codesOK {P : Prog} {s s' : Stmt} (h : GhostRel s s') (hc : s.codesOK P) :
@@ -58,7 +58,7 @@ theorem GhostRel.codesOK {P : Prog} {s s' : Stmt} (h : GhostRel s s') (hc : s.co
   | rbind _ _ ih => exact ih hc
   | frozen _ _ ih => exact ih hc
   | block _ ih => exact ih hc
-  | catchR _ _ _ _ _ _ ih => exact ih hc
+  | catchR _ _ _ _ _ _ _ ih => exact ih hc
   | scopeL _ _ _ _ ih => exact ih hc
 
 theorem GhostRel.catchOK {m : Mem} {s s' : Stmt} (h : GhostRel s s') (hc : CatchOK m s) :
@@ -90,7 +90,7 @@ theorem GhostRel.pinOK {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hp : PinOK 
   | rbind _ hg ih => exact ⟨fun E hE hm r hr => by rw [hg.spine]; exact hp.1 E hE hm r hr, ih hp.2⟩
   | frozen _ _ ih => exact ih hp
   | block _ ih => exact ih hp
-  | catchR _ _ _ _ _ _ ih => exact ih hp
+  | catchR _ _ _ _ _ _ _ ih => exact ih hp
   | scopeL _ _ _ _ ih => exact ih hp
 
 theorem GhostRel.dtorPinOK {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hp : DtorPinOK Γ s) :
@@ -105,7 +105,7 @@ theorem GhostRel.dtorPinOK {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hp : Dt
   | rbind _ hg ih => exact ⟨hin hg hp.1, ih hp.2⟩
   | frozen _ _ ih => exact ih hp
   | block _ ih => exact ih hp
-  | catchR _ _ _ _ _ _ ih => exact ih hp
+  | catchR _ _ _ _ _ _ _ ih => exact ih hp
   | scopeL _ _ _ hg ih => exact ⟨hin hg hp.1, ih hp.2⟩
 
 theorem GhostRel.closed {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hc : Closed Γ s) : Closed Γ s' :=
@@ -224,10 +224,91 @@ theorem StmtT.ghost {P : Prog} {s s' : Stmt} (hg : GhostRel s s') :
     exact fun ht => StmtT.catchR_repl ht hst hnv hnid hblk hal hg.spine ih
   | block _ ih => exact fun ht => StmtT.block_repl ht ih
 
+theorem GhostRel.under_kv {s s' : Stmt} (h : GhostRel s s') (p : Var) :
+    (s'.under p).killVars = (s.under p).killVars := by
+  induction h with
+  | refl => rfl
+  | seq _ hg ih =>
+    simp only [Stmt.under, hg.spine]
+    split
+    · exact ih
+    · simp only [Stmt.killVars, hg.killVars]
+  | scope _ hg ih =>
+    simp only [Stmt.under, hg.spine]
+    split
+    · exact ih
+    · simp only [Stmt.killVars, hg.killVars]
+  | scopeD _ _ hg ih =>
+    simp only [Stmt.under, hg.spine]
+    split
+    · exact ih
+    · simp only [Stmt.killVars, hg.killVars]
+  | rbind _ hg ih =>
+    simp only [Stmt.under, hg.spine]
+    split
+    · exact hg.killVars
+    · split
+      · exact ih
+      · simp only [Stmt.killVars, hg.killVars]
+  | frozen _ hg ih =>
+    simp only [Stmt.under, hg.spine]
+    split
+    · exact ih
+    · simp only [Stmt.killVars, hg.killVars]
+  | block hg ih =>
+    simp only [Stmt.under, hg.spine]
+    split
+    · exact ih
+    · simp only [Stmt.killVars, hg.killVars]
+  | catchR _ _ _ _ _ _ hg ih =>
+    simp only [Stmt.under, hg.spine]
+    split
+    · exact ih
+    · simp only [Stmt.killVars, hg.killVars]
+  | scopeL _ _ _ hg ih =>
+    simp only [Stmt.under, hg.spine]
+    split
+    · exact ih
+    · simp only [Stmt.killVars, hg.killVars]
+
+/-- A catch frame of the grown statement is one of the original's, with a
+    remembered store of the same slots. -/
+theorem GhostRel.catchFrames_back {s s' : Stmt} (h : GhostRel s s') :
+    ∀ x m0' b', (x, m0', b') ∈ s'.catchFrames →
+      ∃ m0 b, (x, m0, b) ∈ s.catchFrames ∧ m0'.st = m0.st ∧ m0'.nv = m0.nv ∧ b'.spine = b.spine := by
+  induction h with
+  | refl => exact fun x m0' b' h => ⟨m0', b', h, rfl, rfl, rfl⟩
+  | seq _ _ ih => exact fun x m0' b' h => by simpa [Stmt.catchFrames] using ih x m0' b' (by simpa [Stmt.catchFrames] using h)
+  | scope _ _ ih => exact fun x m0' b' h => by simpa [Stmt.catchFrames] using ih x m0' b' (by simpa [Stmt.catchFrames] using h)
+  | scopeD _ _ _ ih => exact fun x m0' b' h => by simpa [Stmt.catchFrames] using ih x m0' b' (by simpa [Stmt.catchFrames] using h)
+  | rbind _ _ ih => exact fun x m0' b' h => by simpa [Stmt.catchFrames] using ih x m0' b' (by simpa [Stmt.catchFrames] using h)
+  | frozen _ _ ih => exact fun x m0' b' h => by simpa [Stmt.catchFrames] using ih x m0' b' (by simpa [Stmt.catchFrames] using h)
+  | block _ ih => exact fun x m0' b' h => by simpa [Stmt.catchFrames] using ih x m0' b' (by simpa [Stmt.catchFrames] using h)
+  | scopeL _ _ _ _ ih => exact fun x m0' b' h => by simpa [Stmt.catchFrames] using ih x m0' b' (by simpa [Stmt.catchFrames] using h)
+  | @catchR x0 m0 m0' s s' hst hnv _ _ _ hg ih =>
+    intro x m1 b1 h
+    simp only [Stmt.catchFrames, List.mem_cons, Prod.mk.injEq] at h
+    rcases h with ⟨rfl, rfl, rfl⟩ | h
+    · exact ⟨m0, s, by simp [Stmt.catchFrames], hst, hnv, hg.spine⟩
+    · obtain ⟨m2, b2, h2, h3⟩ := ih x m1 b1 h
+      exact ⟨m2, b2, by simp [Stmt.catchFrames, h2], h3⟩
+
+/-- AGORA-937 B4: **the frame clause survives remembered stores that grew**:
+    the spines, the killable names and the remembered slots are the same. -/
+theorem _root_.A2.HeldZ.ghost {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s s' : Stmt} (hz : HeldZ m Γ Z s)
+    (hg : GhostRel s s') : HeldZ m Γ Z s' where
+  caps := hz.caps
+  reach p E hp hm v hv := hz.reach p E hp hm v (by rw [← hg.under_kv p]; exact hv)
+  bound := hz.bound
+  frames x m0' b' hx p E hp hm hpb hlt w hW := by
+    obtain ⟨m0, b, h0, hst, hnv, hsp⟩ := hg.catchFrames_back x m0' b' hx
+    rw [hsp] at hpb; rw [hnv] at hlt
+    exact (hz.frames x m0 b h0 p E hp hm hpb hlt w hW).of_st (by simp [Mem.set, hst])
+
 /-- **Every per-thread fact survives remembered stores that grew.** -/
 theorem ThreadOK.ghost {P : Prog} {m : Mem} {s s' : Stmt} (h : ThreadOK P m s) (hg : GhostRel s s') :
     ThreadOK P m s' := by
-  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := h
-  exact ⟨Γ, F, Δ, StmtT.ghost hg ht, inv_ghost hi hg, hcd, hg.codesOK hsc, hg.closed hc⟩
+  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc, Z, hz⟩ := h
+  exact ⟨Γ, F, Δ, StmtT.ghost hg ht, inv_ghost hi hg, hcd, hg.codesOK hsc, hg.closed hc, Z, hz.ghost hg⟩
 
 end A3
