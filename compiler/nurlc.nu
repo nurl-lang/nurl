@@ -16309,6 +16309,8 @@ unsafe @ eng_byte s w i k → i {
     ? < src 0 { ^ } {}
     ? != 0 ( wv_at g_fx_lent src ) { ( wv_put g_fx_lent vid ( wv_at g_fx_lent src ) ) } {}
     ? ( fx_has src FX_CALL_MIXED ) { ( fx_set vid FX_CALL_MIXED ) } {}
+    // (…and its callee's twice-named parameters: a join's arms add up)
+    ? ( fx_has src FX_CALL_TWICE ) { ( fx_set vid FX_CALL_TWICE ) } {}
 }
 
 // Is one of `loans` a handle loan?

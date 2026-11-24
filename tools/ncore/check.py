@@ -2580,10 +2580,17 @@ class FnCheck:
             # (…and handed back, this function names them twice as well:
             # a forwarder of such a callee, nurlc's SM_TWICE)
             if dest_vid is not None:
-                tw = {ops[k][1] for k in twice if k < len(ops) and ops[k][0] == "v" and not ops[k][2]
-                      and ops[k][1] in self.pidx}
+                # (an argument that is a parameter, or a binding of one
+                # whole: its alias names it)
+                tw = set()
+                for k in twice:
+                    if k < len(ops) and ops[k][0] == "v" and not ops[k][2]:
+                        if ops[k][1] in self.pidx:
+                            tw.add(ops[k][1])
+                        if k < len(avs):
+                            tw |= {a[0] for a in avs[k].alias if not a[1] and a[0] in self.pidx}
                 if tw:
-                    self.call_twice[dest_vid] = tw
+                    self.call_twice.setdefault(dest_vid, set()).update(tw)
             whole = {k for (k, path, kind) in sm["lends"] if not path and k < len(ops) and k not in twice
                      and ops[k][0] == "v" and not ops[k][2] and self.fn.vars[ops[k][1]].kind == "temp"
                      and avs[k].own == "O"
@@ -4066,7 +4073,8 @@ class FnCheck:
         # (…and, any binding of it, the parameters its callee names twice:
         # handed back, this function names them twice as well)
         if src in self.call_twice:
-            self.call_twice[vid] = set(self.call_twice[src])
+            # (a join's arms add up)
+            self.call_twice.setdefault(vid, set()).update(self.call_twice[src])
         if self.fn.vars[vid].kind != "temp":
             return
         if src in self.call_lent:
