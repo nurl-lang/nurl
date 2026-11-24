@@ -1021,4 +1021,77 @@ theorem Repl.nodesBack {n n' T T' : Val} {w : Var} (hr : Repl n n' T T')
     | refl => intro _ _ _ _ h; cases h
     | pkg hs => exact (ih x hs).mono fun y hy => Sub.pkg hy
 
+
+theorem LiveBack.killNames (ds : List Dep) (Γ : Ctx) : LiveBack Γ (A2.killNames ds Γ) := by
+  induction ds with
+  | nil => exact LiveBack.refl _
+  | cons d ds ih => exact ih.trans (LiveBack.kill _ _ _ _)
+
+theorem LiveBack.killHv (ks : List (Eff × Bool × Var)) (Γ : Ctx) : LiveBack Γ (A2.killHv ks Γ) := by
+  induction ks with
+  | nil => exact LiveBack.refl _
+  | cons k ks ih => obtain ⟨e, hv, r⟩ := k; exact ih.trans (LiveBack.kill _ _ _ _)
+
+theorem LiveBack.killThru (op : Edit) (tx : Ty) (P : List Dep) (Γ : Ctx) : LiveBack Γ (A2.killThru op tx P Γ) :=
+  LiveBack.killNames _ _
+
+theorem LiveBack.killThruV (op : Edit) (tx : Ty) (P : List Dep) (Γ : Ctx) : LiveBack Γ (A2.killThruV op tx P Γ) :=
+  LiveBack.killHv _ _
+
+/-- **A change through a borrow keeps the clause**: the owner's tree `T`
+    becomes `T'`, one node `n` in it replaced by `n'`. If the owner is live
+    its tree was clean, and stays so; a live handle reaching a node of the
+    new tree reaches it at an old node's address, clean if that one was. -/
+theorem LiveCaps.repl {m m' : Mem} {Γ Γ' : Ctx} {w r : Var} {T T' n n' : Val}
+    (h : LiveCaps m Γ w) (hb : LiveBack Γ Γ') (hT : m.st r = some ⟨true, some T⟩)
+    (hrp : Repl n n' T T') (hr' : m'.st r = some ⟨true, some T'⟩) (hne : ∀ x, x ≠ r → m'.st x = m.st x)
+    (hcl : ValCapsInp n w → ValCapsInp n' w) (hn' : ∀ x, Sub x n' → NodeBack w n x)
+    (hnoh : ∀ c, Sub (.href c) T' → False) :
+    LiveCaps m' Γ' w := by
+  have hnb := hrp.nodesBack hcl hn'
+  refine h.of_changeR (fun x E1 hx hl _ => hb x E1 hx hl) (fun x E o V' hx hl hs hch => ?_)
+    (fun x t' n2 hx hch hs ty c d es hn2 => ?_)
+  · have hxr : x = r := by
+      by_cases e : x = r
+      · exact e
+      · exact absurd (hne x e) hch
+    subst hxr
+    rw [hr'] at hs; cases hs
+    obtain ⟨E0, h0, hl0⟩ := hb x E hx hl
+    have hTc := (h x E0 true T h0 hl0 hT).1
+    exact ⟨hrp.capsInp hTc (hcl (hTc.sub hrp.old_sub)), hnoh⟩
+  · have hxr : x = r := by
+      by_cases e : x = r
+      · exact e
+      · exact absurd (hne x e) hch
+    subst hxr
+    rw [hr'] at hx; cases hx
+    rcases hnb n2 hs ty c d es hn2 with hc | ⟨y, hy, hnd, himp⟩
+    · exact Or.inl hc
+    · exact Or.inr ⟨x, T, y, hT, hy, hnd, himp⟩
+
+
+/-- **An edit of a `Vec` node through its owner** (`NodeOf`): the node
+    `⟨t, c, d, es⟩` becomes `⟨t, c, d', es'⟩` at the same handle, each new
+    element an old one or clean throughout, so the clause carries over. -/
+theorem LiveCaps.editNode {m1 m' : Mem} {Γ1 Γ' Γ'' : Ctx} {w x o : Var} {T T' : Val} {t : Ty}
+    {c d d' : Nat} {es es' : List Val}
+    (h : LiveCaps m1 Γ1 w) (hb : LiveBack Γ1 Γ') (hno : NodeOf m1 x o T t c d es)
+    (hrp : Repl (.node t c d es) (.node t c d' es') T T')
+    (hr' : m'.st o = some ⟨true, some T'⟩) (hne : ∀ z, z ≠ o → m'.st z = m1.st z)
+    (hcl : ValCapsInp (.node t c d es) w → ValCapsInp (.node t c d' es') w)
+    (hel : ∀ e ∈ es', e ∈ es ∨ ∀ z, Sub z e → ValCapsInp z w) (hM : MInv m' Γ'') :
+    LiveCaps m' Γ' w := by
+  obtain ⟨_, _, ho, _⟩ := hno
+  refine h.repl hb ho hrp hr' hne hcl (fun z hz => ?_) (fun c' hc => hM.slot_no_href hr' hc)
+  cases hz with
+  | refl =>
+    intro ty c2 d2 es2 heq
+    cases heq
+    exact Or.inr ⟨_, Sub.refl _, ⟨t, d, es, rfl⟩, hcl⟩
+  | child hm hs =>
+    rcases hel _ hm with he | hc
+    · exact NodeBack.of_sub (Sub.child he hs)
+    · exact fun _ _ _ _ _ => Or.inl (hc _ hs)
+
 end A2
