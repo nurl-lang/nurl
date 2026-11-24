@@ -1049,3 +1049,18 @@ Stated this way, the clause holds for frozen roots as well: a frozen root is no 
 - A borrow of a closure part holds its names, so an inout capture of `w` would make `w` a root of `mutNames`, which `CallThruOK` excludes.
 
 The proof work is `EvalR.capsInp` restated for that clause. A read below `b`, outside the `inout` arguments, needs the typing facts above, carried as `MInv`-level facts. Then comes the preservation of the new `Inv` field over every step, as for `heldCaps` in B2.
+
+**Two scaffolds discharged (8eac5d2e1):**
+- `CallThruOK` takes no closure argument. A call through a package, whose receiver is a closure, therefore stays on the regions-only branch. `CallT.clean` and the package call's `.resolve_right` then follow by contradiction.
+- Route U for closure arguments is later work. Until then A2 types fewer such calls than nurlc accepts, which is no hole.
+
+**The two left share one cause.**
+- `Inv.rbindIn` needs the spine clause (above).
+- Rename's lifted `CallThruOK` needs, in the placed context, "every closure-typed binding is live". The outer frames' bindings are there too, and nothing is known of them.
+
+The liveness clause exists only to let the call establish the store-wide `CapsInpAt`. With the frame-relative clause:
+- the clause is not needed: a dead caller closure lies below the frame's base and is never read by it;
+- so it can go from `CallThruOK`;
+- the lift then needs only what the renaming keeps.
+
+So the next piece of work is the frame-relative clause, and the clause's removal from `CallThruOK`.
