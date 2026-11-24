@@ -216,3 +216,10 @@
   the frame only when every argument is a scalar, a constant or traced
   outside the frame: one traced nowhere may hand the frame's own storage
   back. The corpus totals are unchanged.
+- Fifth round: an aggregate handed to a `sink` takes what it carries, so a
+  release of one of those afterwards is a mismatch; an `alloca` with a count
+  other than one, or an address space, is unsupported (it was read as a slot
+  that owns nothing); `volatile` and `atomic` flag stores set the flag as a
+  plain store does; and types compare without their whitespace. New
+  selftest program `literal_of_clones_handed_to_a_sink.nu`. The corpus
+  totals are unchanged.

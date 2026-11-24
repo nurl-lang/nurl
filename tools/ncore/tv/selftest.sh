@@ -444,4 +444,30 @@ cmut an_option_slot_released_twice "$TMP/ptwice.ll" "$TMP/p.core"
 awk "$pf"'{m=1} m && /^}/{m=0} { if (m && /^then_1:/) t = 1; if (t && m && /store i1 0, i1\*/ && !c++) next; print }' "$TMP/p.ll" > "$TMP/pgiven.ll"
 cmp -s "$TMP/p.ll" "$TMP/pgiven.ll" && { echo "FAIL: the option sink edit did not apply"; fail=1; }
 cmut an_option_moved_into_a_sink_released_instead "$TMP/pgiven.ll" "$TMP/p.core"
+# the option leak again with the slot's type written without spaces
+# (`{i1,%String}`): one LLVM type either way, and an owning one
+awk "$pf"'{m=1} m && /^}/{m=0} { if (m) gsub(/\{ i1, %String \}/, "{i1,%String}"); print }' "$TMP/pleak.ll" > "$TMP/pcompact.ll"
+grep -q "= alloca {i1,%String}" "$TMP/pcompact.ll" || { echo "FAIL: the compact-type edit did not apply"; fail=1; }
+cmut an_option_slot_of_a_type_written_without_spaces_left_owning "$TMP/pcompact.ll" "$TMP/p.core"
+# every flag store of f made `volatile`: each sets its flag as a plain
+# store does, so f still validates
+awk "$fn"'{m=1} m && /^}/{m=0} { if (m) sub(/^  store i1 /, "  store volatile i1 "); print }' "$TMP/a.ll" > "$TMP/avol.ll"
+grep -q "store volatile i1 " "$TMP/avol.ll" || { echo "FAIL: the volatile-store edit did not apply"; fail=1; }
+vok __nurl_fn.f "$TMP/avol.ll" || { echo "FAIL: f with volatile flag stores does not validate"; fail=1; }
+# an owning slot of f allocated with a count of two (an array): not read
+awk "$fn"'{m=1} m && /^}/{m=0} { if (m && /= alloca %Vec__i64$/ && !c++) sub(/alloca %Vec__i64$/, "alloca %Vec__i64, i32 2"); print }' "$TMP/a.ll" > "$TMP/acount.ll"
+grep -q "alloca %Vec__i64, i32 2" "$TMP/acount.ll" || { echo "FAIL: the alloca-count edit did not apply"; fail=1; }
+nv an_owning_slot_allocated_with_a_count_of_two __nurl_fn.f "$TMP/acount.ll"
+# give moves two clones into a literal and hands it to keep, which takes it:
+# a clone it carries released after that releases what keep owns now
+G="$D/literal_of_clones_handed_to_a_sink.nu"
+"$NURLC" "$G" > "$TMP/g.ll" || exit 1
+"$NURLC" --emit-core "$G" > "$TMP/g.core" || exit 1
+vok __nurl_fn.give "$TMP/g.ll" --sums "$TMP/g.core" || { echo "FAIL: the literal handed to a sink does not validate"; fail=1; }
+awk '/define void @__nurl_fn.give\(/{m=1} m && /^}/{m=0}
+  { if (m && /= call %Vec__i64 @__nurl_cloneif_Vec__i64\(i1 true, / && c == "") c = $1
+    print
+    if (m && /call void @__nurl_fn.keep\(/) print "  call void @__dropifv_Vec__i64(i1 true, %Vec__i64 " c ")" }' "$TMP/g.ll" > "$TMP/grel.ll"
+grep -q "call void @__dropifv_Vec__i64(i1 true, %Vec__i64 %r" "$TMP/grel.ll" || { echo "FAIL: the member-release edit did not apply"; fail=1; }
+cmut a_clone_released_after_the_literal_carrying_it_was_handed_to_a_sink "$TMP/grel.ll" "$TMP/g.core"
 exit $fail

@@ -102,9 +102,11 @@ import sys
 
 DEF = re.compile(r"^define [^@]*@([^\s(]+)\(")
 LABEL = re.compile(r"^([A-Za-z0-9_.$-]+):")
-STORE_FLAG = re.compile(r"^\s*store i1 (true|false|1|0), i1\* (%[\w.]+)")
-STORE_FLAG_PTR = re.compile(r"^\s*store i1 (true|false|1|0), ptr (%[\w.]+)")
-STORE_I1_VAR = re.compile(r"^\s*store i1 (%[\w.]+), (?:i1\*|ptr) (%[\w.]+)")
+# (with the modifiers parse_store reads: a `volatile` or `atomic` store of a
+# flag sets it as a plain one does)
+STORE_FLAG = re.compile(r"^\s*store (?:atomic )?(?:volatile )?i1 (true|false|1|0), i1\* (%[\w.]+)")
+STORE_FLAG_PTR = re.compile(r"^\s*store (?:atomic )?(?:volatile )?i1 (true|false|1|0), ptr (%[\w.]+)")
+STORE_I1_VAR = re.compile(r"^\s*store (?:atomic )?(?:volatile )?i1 (%[\w.]+), (?:i1\*|ptr) (%[\w.]+)")
 LOAD_FLAG = re.compile(r"^\s*(%[\w.]+) = load i1, (?:i1\*|ptr) (%[\w.]+)")
 BR_COND = re.compile(r"^\s*br i1 ([^,]+), label %([\w.]+), label %([\w.]+)")
 BR = re.compile(r"^\s*br label %([\w.]+)")
@@ -196,7 +198,9 @@ def take_type(s, i=0):
 
 
 def norm_type(t):
-    return re.sub(r"\s+", " ", t.strip())
+    # (whitespace is not part of an LLVM type: `{i1,%String}` and
+    # `{ i1, %String }` are one type, and compare as one)
+    return re.sub(r"\s+", "", t)
 
 
 class M:
@@ -234,9 +238,13 @@ def parse_alloca(l):
     if not tt:
         return ()
     rest = m.group(2)[tt[1]:].strip()
+    if re.fullmatch(r", i(?:8|16|32|64) 1(?:, align \d+)?", rest):
+        # (a count of one: the default)
+        return M(m.group(1), tt[0])
     if rest and not re.fullmatch(r"(?:, align \d+)?", rest):
-        # (a count, an address space: a slot of no one type)
-        return M(m.group(1), None)
+        # (another count - an array - or an address space: not read, so
+        # not followed)
+        return ()
     return M(m.group(1), tt[0])
 
 
@@ -1376,7 +1384,15 @@ def check_function(name, blocks, owning, journal=False):
                         return f"mismatch: {name} a value handed to a `sink` of {callee} twice: {'>'.join(path)}"
                     if vid in released:
                         return f"mismatch: {name} a released value handed to a `sink` of {callee}: {'>'.join(path)}"
-                    given.add(vid)
+                    # (an aggregate handed on takes what it carries with it:
+                    # a later release of one of those is a release of what
+                    # the callee owns now)
+                    todo = [vid]
+                    while todo:
+                        x = todo.pop()
+                        if x not in given:
+                            given.add(x)
+                            todo.extend(via.get(x, ()))
             m = dropifv(l)
             if m:
                 # a release of the value a register holds, as its flag says
