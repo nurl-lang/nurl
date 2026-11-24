@@ -1221,3 +1221,25 @@ The typing allows both live together: creating `cl` kills no viewer of `r`; the 
   - its slots are the frame start's (`Frz`, `hsteq`).
 
   Then `catchP` keeps the clause for every root, and `frozenIn` takes it from a `CapsKeep` conjunct of `preserve`, as on wip/t937-b4-capskeep. This is the smaller step: one new `StmtT.catchR` fact ("no older binding dies"), kept by `catchIn` through a lemma that a step kills only bindings depending on an unfrozen root.
+
+**Decision (owner, 2026-11-25): the frame-relative clause.** Plan:
+
+*The clause.* For a borrowed parameter `p` with held anchor `w`: every live binding `v ≥ p` (the frame's later parameters, its body, the frames it opens) holds a value that meets `LiveGood m w`, and so does every live `inout` argument of `p`'s frame. A caller binding below the frame is not asked about, so the counterexample above (the caller's live `cl`) is out of scope. The clause needs neither the frame exclusion (`∉ F`) nor the spine exclusion: a running `rbind`'s parameter is asked about too, so `Inv.rbindIn` is the identity on it.
+
+*Why `≥ p` suffices.*
+- **The frame's earlier parameters** (`base ≤ v < p`): at a route-U call they hold no package (`CallThruOK` takes no closure argument). At an ordinary call, an argument that a package could make dirty for `w` holds a mutating name on `w` (`MInv.held`, `NamesIn`). Then `w` is a root of `mutNames`, and `NamesFree` forbids an argument viewing `w` with another bound. So no parameter is both.
+- **The receiver of a call through a package** (`Stmt.headCallc`, what `CapInoutH` reads) is a body binding, so `≥ p`; or it is an `inout` argument, which is in the clause.
+
+*Obligations.*
+1. Define it (`FrameCaps m Γ p A w`, where `A` is the frame's `inout` arguments). The frame of `p` must be readable from the `Inv`: give `CallStmt`'s `frozen` frame the `inout` arguments, or carry `A` in the running `rbind`.
+2. **The call** establishes it for each new parameter:
+   - its slots are the arguments' values or what they lend (`BindParams.src`);
+   - at a changed root `w`, `CallThruOK`'s `NoMutLive` with `MInv.liveCapsAll` gives it for the `inout` arguments;
+   - at a frozen root, the `NamesFree` argument above.
+3. **Each step** keeps it:
+   - a fresh binding (`≥ m.nv ≥ p`) is given a value read from bindings the frame reaches, or a lent part of one: `liveCapsSet` restricted to the reach;
+   - a read below `p` that is not an `inout` argument reaches a frozen view or a captured name, and by `noPkg` neither holds a package that captures by name.
+4. **`catchP`**: the frame's end restores the start's slots and `Δ`, inside the catch frame. A binding of `Δ` at or above `p` was created inside `p`'s frame, under the clause, so it met it then. The catch frame carries its end's clause, as it does now (proved in `recCase`).
+5. **The wrappers** (`frozen`, `catchR`) keep it from their inner step. It does not depend on `F`.
+
+`CallH.liveCaps`, `LiveCaps.hand`, `editNode`, `unpair` and the rest of `CapsLive.lean` carry over once restricted to `v ≥ p ∨ v ∈ A`; their proofs read one binding at a time.
