@@ -1,10 +1,12 @@
-// A parameter read after the call that kept it (tools/fuzz/holes h207).
+// A parameter read after the call that kept it (tools/fuzz/holes h207). An
+// `in` parameter handed back in a literal is lent (D4c, AGORA-995): `mk`
+// takes its argument over, so it says `sink`.
 $ `stdlib/core/string.nu`
 
 : H { String s }
 : K { H h }
 
-@ mk H h → K { ^ @ K { h } }
+@ mk sink H h → K { ^ @ K { h } }
 
 @ mid H h → v {
     : K k ( mk h )

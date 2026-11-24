@@ -1,6 +1,7 @@
 // A binding moved into one field of a literal and handed, in another, to
 // a callee that keeps it — decided at module end, since `wrap` is defined
-// below (tools/fuzz/holes h205).
+// below (tools/fuzz/holes h205). `wrap` takes its argument over, so it says
+// `sink`: an `in` parameter handed back in a literal is lent (D4c, AGORA-995).
 $ `stdlib/core/string.nu`
 
 : Holder { String h }
@@ -11,6 +12,6 @@ $ `stdlib/core/string.nu`
     ^ @ Two { t ( wrap t ) }
 }
 
-@ wrap String x → Holder { ^ @ Holder { x } }
+@ wrap sink String x → Holder { ^ @ Holder { x } }
 
 @ main → i { : Two w ( mk ) ^ ( string_len . w a ) }

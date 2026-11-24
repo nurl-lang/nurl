@@ -454,8 +454,10 @@ class FnCheck:
         self.tails_memo = {}
         self.agg_lends = {}      # a literal temporary -> the bindings it shows and has not taken
         self.lit_params = {}     # a literal temporary -> the parameters it names whole
+        self.lit_mixed = {}      # a literal temporary -> it holds a value of its own beside them
         self.temp_fresh = {}
         self.call_lent = {}      # a call's temporary -> the arguments it may hand back whole
+        self.call_lent_only = {} # …and that it lends nothing else (one argument, whole)
         self.cap_loans = set()   # the loans that are a closure's own handle of a binding it captured
         self.dep_loans = set()   # what a taken-over capture borrows: the closure depends on it, a part taken ends it (agora #887)
         self.lit_nocopy = {}     # a literal temporary -> its field that borrows a value with no copy
@@ -2587,8 +2589,15 @@ class FnCheck:
             held.add((tuple(dpath), ("clo", fname)))
         vcopy = None
         vcopy_own = False
+        # (where in the result each temporary handed back whole sits: the
+        # result itself, `^ p`, or a field of a literal that holds it whole,
+        # `^ @ K { p }` - D4c, AGORA-995)
+        whole_at = {}
         for (dpath, k, path, kind) in sm["rholds"]:
-            if k >= len(avs) or (k in whole and kind == "held" and not path and not dpath):
+            if k in whole and not path and kind in ("held", "handle"):
+                whole_at.setdefault(k, set()).add(tuple(dpath))
+        for (dpath, k, path, kind) in sm["rholds"]:
+            if k >= len(avs) or (k in whole and kind in ("held", "handle") and not path):
                 # (what a temporary handed back whole holds comes with it)
                 continue
             dpath = tuple(dpath)
@@ -2650,11 +2659,21 @@ class FnCheck:
                 # (the arguments this call may hand back whole, as written)
                 self.call_lent[dest_vid] = [ops[k] for (k, path, kind) in sm["lends"]
                                             if not path and kind == "handle" and k < len(ops)]
+                # (…and whether that is all it lends: one argument, whole -
+                # nurlc's lend kind 1, the return's handover)
+                self.call_lent_only[dest_vid] = (len(sm["lends"]) == 1 and len(self.call_lent[dest_vid]) == 1)
             part = False
             for k in whole:
                 moved = self.move_out(st, ops[k][1], line)
                 loans |= moved.loans
-                held |= moved.held
+                ats = {d for d in whole_at.get(k, ()) if d} if () not in whole_at.get(k, {()}) else set()
+                if ats:
+                    # (…under the field it sits in, where it is part of the
+                    # result)
+                    for d in ats:
+                        held |= hroot(moved.held, d)
+                else:
+                    held |= moved.held
             for (k, path, kind) in sm["lends"]:
                 if k >= len(avs) or avs[k].own == "N" or (k in whole and not path):
                     continue
@@ -4150,7 +4169,10 @@ class FnCheck:
                 fp = (names[i],)
                 cur = st.vals.get(op[1]) if op[0] == "v" and not op[2] else None
                 if (cur is not None and cur.own == "O" and self.fn.vars[op[1]].kind == "temp"
-                        and fty is not None and fty[0] not in VIEW_TYPES and self.T.owning(fty)):
+                        and fty is not None and fty[0] not in VIEW_TYPES and self.T.owning(fty)
+                        # (a literal nested in this one that lends the
+                        # parameters it names whole is no value of its own)
+                        and not (op[1] in self.lit_params and not self.lit_mixed.get(op[1]))):
                     owned_fresh = True
                 if (ty is not None and ty[0] == "slice" and cur is not None and cur.own in ("O", "P")
                         and self.fn.vars[op[1]].kind != "temp" and fty is not None and fty[0] not in VIEW_TYPES
@@ -4189,9 +4211,12 @@ class FnCheck:
                         # a variant's payload: handed back as it is, the
                         # literal keeps the caller's argument (below, `ret`)
                         self.lit_params.setdefault(dest_vid, set()).add(op[1])
-                    elif wrapper and op[1] in self.lit_params:
-                        # (…or as the payload of an option or a result)
+                    elif op[1] in self.lit_params and (wrapper or not self.lit_mixed.get(op[1])):
+                        # (…or as the payload of an option or a result, or in
+                        # a literal nested in this one that lends them)
                         self.lit_params.setdefault(dest_vid, set()).update(self.lit_params[op[1]])
+                        if self.lit_mixed.get(op[1]):
+                            self.lit_mixed[dest_vid] = True
                 if (cur is not None and cur.own == "L" and not cur.call and self.fn.vars[op[1]].mut
                         and self.fn.vars[op[1]].kind == "local" and cur.alias and dest_vid is not None
                         and fty is not None and fty[0] not in VIEW_TYPES and fty[0] != "closure" and self.T.owning(fty)
@@ -4326,6 +4351,11 @@ class FnCheck:
                 held |= hroot(self.closure_owned(av.held), fp)
             if lent:
                 self.agg_lends[dest_vid] = lent
+            if dest_vid is not None and (owned_fresh or lent):
+                # a value of its own beside the parameters it names whole: a
+                # struct is dropped whole, so handed back it takes them over
+                # (`ret`)
+                self.lit_mixed[dest_vid] = True
             if uncopy_lent and owned_fresh:
                 # a field of its own beside a part of a parameter it only
                 # borrows, which cannot be copied: lent whole, the literal's
@@ -5259,18 +5289,56 @@ class FnCheck:
             return st
         if k == "ret":
             _, op, ln = s
+            if (op is not None and op[0] == "v" and not op[2] and not st.defers
+                    and not getattr(self.fn, "is_closure", False) and self.call_lent_only.get(op[1])):
+                # `^ ( g x )` where g hands x back whole and lends nothing
+                # else, x a local this frame owns: on the runs g lent, its
+                # value IS the result, so x is handed over with it - nothing
+                # copied, nothing left for x's release (nurlc's
+                # __ret_local_hand, D4c AGORA-995). Not under a `;` block,
+                # which still reads x after the result is made.
+                (a,) = self.call_lent[op[1]]
+                cur = st.vals.get(op[1])
+                xv = st.vals.get(a[1]) if a[0] == "v" and not a[2] else None
+                if (cur is not None and cur.own == "L" and xv is not None and xv.own == "O"
+                        and self.fn.vars[a[1]].kind == "local" and (a[1], ()) in cur.alias):
+                    moved = self.move_out(st, a[1], ln)
+                    mine = {l for l in cur.loans if self.loans.get(l, (None,))[0] == (a[1], ())}
+                    # (…and where the result holds x as a field - a literal
+                    # over it - what x held sits there)
+                    hmine = {(hp, l) for hp, l in cur.held if self.loans.get(l, (None,))[0] == (a[1], ())}
+                    held = (set(cur.held) - hmine) | (set(moved.held) if mine or not hmine else set())
+                    for hp in {hp for hp, _ in hmine}:
+                        held |= hroot(moved.held, hp)
+                    st.vals[op[1]] = AV("O" if not (cur.loans - mine) else "L", cur.loans - mine,
+                                        cur.alias - {(a[1], ())}, frozenset(held))
             if op is not None:
                 before = st.vals.get(op[1]) if op[0] == "v" and not op[2] else None
                 av = self.transfer(st, op, ln, ("ret", id(s)), 0, self.fn.ret, "the returned value",
                                    copy_ok=True, is_ret=True)
                 self.moved_from = None
                 if op[0] == "v" and not op[2]:
-                    # a literal handed back as it is keeps the parameters it
-                    # names whole: the caller's arguments move into the
-                    # result, as into a `sink` (MEMORY.md §1 temporaries,
-                    # §7.6 h207). Bound, pushed or assigned first, it holds
-                    # copies of them.
-                    for b in sorted(self.lit_params.get(op[1], ())):
+                    # a literal handed back as it is lends the parameters it
+                    # names whole: the result borrows the caller's arguments,
+                    # as `^ p` does (D4c, AGORA-995). Beside a value of its
+                    # own it takes them over instead - a struct is dropped
+                    # whole: the caller's arguments move into the result, as
+                    # into a `sink` (MEMORY.md §1 temporaries, §7.6 h207).
+                    # Bound, pushed or assigned first, it holds copies of
+                    # them.
+                    lp = sorted(self.lit_params.get(op[1], ()))
+                    if lp and not self.lit_mixed.get(op[1]):
+                        for b in lp:
+                            if st.vals[b].own == "P":
+                                mine = {l for l in av.loans | hloans(av.held)
+                                        if self.loans.get(l, (None,))[0] == (b, ()) and self.loans[l][1] == "handle"}
+                                if not mine:
+                                    # (a literal over one that lends it - copied
+                                    # in by its own rule - lends it all the same)
+                                    mine = {self.loan(st, ("ret", id(s), b), (b, ()), "handle")}
+                                av = AV("L", av.loans | mine, av.alias | {(b, ())}, av.held, av.call)
+                        lp = []
+                    for b in lp:
                         if st.vals[b].own == "P":
                             self.s_consumes.add(self.pidx[b])
                             self.effect(st, (b, ()), "replace", ln)
