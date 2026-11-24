@@ -20,6 +20,10 @@ released or moved exactly once.
   it would be released twice), which is released.
 - `ret`: no slot owns a value (it would leak).
 
+A value a register loaded from one slot and stored into another is the same
+value in both (not a new one), so the two slots release it once between
+them.
+
 A function whose drops depend on an answer the analysis does not follow
 (the per-call ownership answers: `__nurl_clear_if`, `__nurl_hown*`, a flag
 loaded from memory it does not own, a flag computed) is reported
@@ -33,7 +37,16 @@ function's `sink` / `keeps` parameters, from its `sum` line. Then, also:
   a `sink`; a slot that only ever holds one owns nothing (no flag needed);
 - a slot is not read after the value it holds was released.
 A per-call answer whose key is a constant of the module (`__nurl_clear_if`,
-`__nurl_cloneifk` on `@.__nurl_sink.N` and the like) is followed.
+`__nurl_cloneifk` on `@.__nurl_sink.N` and the like) is followed: a result
+the path knows is the value itself, not a clone, is checked as that value.
+A call of a function with such parameters has every argument position read
+(constants too), or the function is reported `unsupported`.
+
+D1 (`--journal`): at each call that may panic (an indirect call is taken to
+panic), every value the frame owns is registered
+(`nurl_journal_push_drop2`) under its own slot's drop flag, the flag the
+drain asks, none twice, none after its release; at a return nothing is left
+registered.
 
 Prints one line per program: `validated: N functions`, or the first
 `mismatch: <fn> <slot> <what> <path>`, or `unsupported: …` with the
@@ -53,7 +66,7 @@ BR_COND = re.compile(r"^\s*br i1 ([^,]+), label %([\w.]+), label %([\w.]+)")
 BR = re.compile(r"^\s*br label %([\w.]+)")
 RET = re.compile(r"^\s*ret\b")
 LOAD_VAL = re.compile(r"^\s*(%[\w.]+) = load ([^,]+), (?:ptr|[^,]+\*) (%[\w.]+)")
-CLONEIF = re.compile(r"^\s*(%[\w.]+) = call [^@]*@__nurl_cloneif_[\w.]+\(i1 [^,]+, [^,]* (%[\w.]+)\)")
+CLONEIF = re.compile(r"^\s*(%[\w.]+) = call [^@]*@__nurl_cloneif_[\w.]+\(i1 ([^,]+), [^,]* (%[\w.]+)\)")
 RET_VAL = re.compile(r"^\s*ret \S.* (%[\w.]+)\s*$")
 SWITCH = re.compile(r"^\s*switch\b")
 STORE_ANY = re.compile(r"^\s*store .*, (?:ptr|[^,]+\*) (%[\w.]+)(?:, align \d+)?$")
@@ -61,7 +74,8 @@ JPUSH2 = re.compile(r"call void @nurl_journal_push_drop2\(ptr (%[\w.]+), ptr (%[
 JFORGET_SLOT = re.compile(r"call void @nurl_journal_forget_slot\(ptr (%[\w.]+)\)")
 JRAW = ("@nurl_journal_push(", "@nurl_journal_push_drop(", "@nurl_journal_push_slice(",
         "@nurl_journal_forget(", "@nurl_journal_disown(")
-CALL = re.compile(r"call [^@]*@([\w.$]+)\(")
+CALL_KW = re.compile(r"^\s*(?:%[\w.]+ = )?(?:(?:tail|musttail|notail) )?call\b")
+CALLEE = re.compile(r'[@%](?:[\w.$-]+|"[^"]*")')
 # calls that cannot panic: the journal's and the drops' own entry points,
 # LLVM intrinsics, the Vec control block's accessors (D1 asks nothing at them)
 NOPANIC = ("nurl_journal_", "__dropif", "llvm.", "nurl_vctl_", "__nurl_cloneif", "nurl_free")
@@ -78,6 +92,67 @@ PARAMS = {}   # llvm function → its parameters' names, in order
 
 class Unsupported(Exception):
     pass
+
+
+def parse_call(l):
+    """A `call` line read whole: (callee, args), or None where the line has
+    no call. The callee is `@name` (direct), `%reg` (indirect), or None where
+    it is not found (inline asm, a form not read): the return type is
+    skipped by its brackets (`{ void (i8*)*, i8* } @f(`, `void (ptr, ...)
+    @printf(`). Each argument is its value: a register (`%r3`), else its
+    constant text; None for one that is not read (a constant expression).
+    The args are None where the list does not close."""
+    m = CALL_KW.search(l)
+    if not m:
+        return None
+    s, i, depth = l, m.end(), 0
+    while i < len(s):
+        ch = s[i]
+        if ch in "({[<":
+            depth += 1
+        elif ch in ")}]>":
+            depth -= 1
+        elif depth == 0 and ch in "@%":
+            mm = CALLEE.match(s, i)
+            if mm and s.startswith("(", mm.end()):
+                return mm.group(0), call_args(s, mm.end())
+            if mm:
+                i = mm.end()
+                continue
+        i += 1
+    return None, None
+
+
+def call_args(s, i):
+    """The arguments of the list opening at s[i] == "(": each its value."""
+    args, cur, depth = [], "", 0
+    for k in range(i, len(s)):
+        ch = s[k]
+        if ch in "({[<":
+            depth += 1
+            if depth == 1:
+                continue
+        elif ch in ")}]>":
+            depth -= 1
+            if depth == 0:
+                if cur.strip() or args:
+                    args.append(cur)
+                return [arg_value(a) for a in args]
+        elif ch == "," and depth == 1:
+            args.append(cur)
+            cur = ""
+            continue
+        cur += ch
+    return None
+
+
+def arg_value(a):
+    # (a register is always the argument's last word; a constant, a constant
+    # expression included, names none)
+    w = a.split()
+    if w and re.fullmatch(r"%[\w.]+", w[-1]):
+        return w[-1]
+    return None
 
 
 def may_panic_set(core_text, nurlc, llvm_text=""):
@@ -184,6 +259,11 @@ MAYPANIC = None   # (may-panic names, known names), from --core
 
 
 def can_panic(callee):
+    # (an indirect call, or a callee not read, may reach any function: it is
+    # taken to panic, as nurlc's own answer takes `callind`)
+    if callee is None or not callee.startswith("@"):
+        return True
+    callee = callee[1:]
     if callee.startswith(NOPANIC):
         return False
     if MAYPANIC is None:
@@ -308,17 +388,14 @@ def check_function(name, blocks, owning, journal=False):
     fresh = itertools.count(1)
     seen = set()
 
-    # registers that may hold a clone (a `__nurl_cloneif`): what they carry
-    # is not the slot's own value when it is handed on
-    maybe_clone, lent_ids = set(), set()
-    for _, lines in blocks:
-        for l in lines:
-            mc = CLONEIF.match(l) or CLONEIFK.match(l)
-            if mc:
-                maybe_clone.add(mc.group(1))
+    # (the registers that may hold a clone, a `__nurl_cloneif` whose answer
+    # this path does not know, are the state's `maybe`: what they carry may
+    # not be the slot's own value when it is handed on; a result known to be
+    # the value itself is not among them)
+    lent_ids = set()
 
     def canon(st):
-        flag_v, val, released, regv, regid, jr, given = st
+        flag_v, val, released, regv, regid, jr, given, maybe = st
         ren = {}
         def r(x):
             if x is None:
@@ -332,7 +409,8 @@ def check_function(name, blocks, owning, journal=False):
         rel = tuple(sorted(r(x) for x in released if x in ren))
         gv = tuple(sorted(r(x) for x in given if x in ren))
         lv = tuple(sorted(r(x) for x in lent_ids if x in ren))
-        return (tuple(sorted(flag_v.items())), v, rel, rv, ri, tuple(sorted(jr)), gv, lv)
+        return (tuple(sorted(flag_v.items())), v, rel, rv, ri, tuple(sorted(jr.items())), gv, lv,
+                tuple(sorted(maybe)))
 
     def run(lab, st, visits, path):
         visits = dict(visits)
@@ -349,7 +427,8 @@ def check_function(name, blocks, owning, journal=False):
         seen.add(key)
         path = path + [lab]
         flag_v, val, released = dict(st[0]), dict(st[1]), set(st[2])
-        regv, regid, jr, given = dict(st[3]), dict(st[4]), set(st[5]), set(st[6])
+        regv, regid, jr, given = dict(st[3]), dict(st[4]), dict(st[5]), set(st[6])
+        maybe = set(st[7])
         fresh_put = set()
 
         def owned(f):
@@ -364,7 +443,7 @@ def check_function(name, blocks, owning, journal=False):
             return owned(f) and next(iter(pairs[f])) not in jonly and not f.startswith("!")
 
         def go(o):
-            return run(o, (flag_v, val, released, regv, regid, jr, given), visits, path)
+            return run(o, (flag_v, val, released, regv, regid, jr, given, maybe), visits, path)
 
         for l in body.get(lab, []):
             if journal:
@@ -372,21 +451,28 @@ def check_function(name, blocks, owning, journal=False):
                 if m and m.group(1) in slot_flag:
                     if m.group(1) in jr:
                         return f"mismatch: {name} {m.group(1)} journaled twice: {'>'.join(path)}"
-                    jr.add(m.group(1))
+                    # (with the flag it registers: the drain releases the
+                    # slot's value where that flag says so)
+                    jr[m.group(1)] = m.group(2)
                     continue
                 m = JFORGET_SLOT.search(l)
                 if m:
-                    jr.discard(m.group(1))
+                    jr.pop(m.group(1), None)
                     continue
-                m = CALL.search(l)
-                if m and can_panic(m.group(1)) and not DROPIF.search(l):
-                    # a call that may panic: what a drain would release must
-                    # be what the frame owns, each once
+                pc = parse_call(l)
+                if pc and can_panic(pc[0]) and not DROPIF.search(l):
+                    # a call that may panic (an indirect one too): what a
+                    # drain would release must be what the frame owns, each
+                    # once, under the slot's own drop flag
+                    callee = pc[0] or "an unread callee"
                     for sl, f in slot_flag.items():
                         if owned(f) and sl not in jr:
-                            return f"mismatch: {name} {sl} owned but not journaled at a call to {m.group(1)}: {'>'.join(path)}"
+                            return f"mismatch: {name} {sl} owned but not journaled at a call to {callee}: {'>'.join(path)}"
+                        if sl in jr and jr[sl] != (f if not f.startswith("!") else "null"):
+                            return (f"mismatch: {name} {sl} journaled with flag {jr[sl]}, not its drop flag "
+                                    f"{f}, at a call to {callee}: {'>'.join(path)}")
                         if sl in jr and flag_v.get(f) and (val.get(f) is None or val[f] in released):
-                            return f"mismatch: {name} {sl} journaled after its release, at a call to {m.group(1)}: {'>'.join(path)}"
+                            return f"mismatch: {name} {sl} journaled after its release, at a call to {callee}: {'>'.join(path)}"
             m = LOAD_FLAG.match(l)
             if m:
                 regv[m.group(1)] = flag_v.get(m.group(2))
@@ -413,19 +499,34 @@ def check_function(name, blocks, owning, journal=False):
                     flag_v[m.group(2)] = False
                 continue
             m = CLONEIFK.match(l)
-            if m and m.group(4) in regid:
+            if m:
                 # a clone exactly when the key and the flag are both set; the
                 # value itself otherwise
                 k, fl = CONSTS.get(m.group(2)), m.group(3).strip()
                 fl = regv.get(fl) if fl.startswith("%") else fl in ("true", "1")
+                regid.pop(m.group(1), None)
+                maybe.discard(m.group(1))
                 if k is False or fl is False:
-                    regid[m.group(1)] = regid[m.group(4)]
+                    if m.group(4) in regid:
+                        regid[m.group(1)] = regid[m.group(4)]
+                    if m.group(4) in maybe:
+                        maybe.add(m.group(1))
+                elif not (k is True and fl is True):
+                    maybe.add(m.group(1))
                 continue
             m = CLONEIF.match(l)
-            if m and m.group(2) in regid:
-                # the value itself where the slot owns it, else a clone: the
-                # result is the caller's either way (`ret` hands it over)
-                regid[m.group(1)] = regid[m.group(2)]
+            if m:
+                # a clone where the flag is set, the value itself otherwise;
+                # where this path does not know which, the result is the
+                # caller's either way (`ret` hands it over)
+                c = m.group(2).strip()
+                c = regv.get(c) if c.startswith("%") else c in ("true", "1")
+                regid.pop(m.group(1), None)
+                maybe.discard(m.group(1))
+                if c is not True and m.group(3) in regid:
+                    regid[m.group(1)] = regid[m.group(3)]
+                if c is None or (c is False and m.group(3) in maybe):
+                    maybe.add(m.group(1))
             m = STORE_FLAG.match(l) or STORE_FLAG_PTR.match(l)
             if m:
                 if m.group(1) in ("false", "0") and m.group(2) in flags:
@@ -462,7 +563,14 @@ def check_function(name, blocks, owning, journal=False):
                     continue
                 if owns(f):
                     return f"mismatch: {name} {m.group(1)} overwritten while it owns a value: {'>'.join(path)}"
-                val[f] = next(fresh)
+                if mv and regid.get(mv.group(1)) is not None:
+                    # a value a register loaded from another slot: the same
+                    # value, now in two slots (released once between them)
+                    if mv.group(1) in maybe:
+                        raise Unsupported(f"{name}: a slot given a value that may be a clone ({m.group(1)})")
+                    val[f] = regid[mv.group(1)]
+                else:
+                    val[f] = next(fresh)
                 if mv and mv.group(1) in lent:
                     # D0c: a parameter the function borrows (not a `sink`)
                     lent_ids.add(val[f])
@@ -472,23 +580,26 @@ def check_function(name, blocks, owning, journal=False):
                 if f.startswith("!"):
                     flag_v[f] = True
                 continue
-            m = CALL.search(l)
-            if m and m.group(1) in SINKS and not DROPIF.search(l):
-                ar, idx = SINKS[m.group(1)]
-                args = re.findall(r"(%[\w.]+)(?=\s*(?:,|\)\s*$))", l[l.index("(", m.end() - 1):])
-                if len(args) == ar:
-                    for i in idx:
-                        a = args[i]
-                        vid = regid.get(a)
-                        if a in maybe_clone or vid is None:
-                            continue
-                        if vid in lent_ids:
-                            return f"mismatch: {name} a borrowed parameter handed to a `sink` of {m.group(1)}: {'>'.join(path)}"
-                        if vid in given:
-                            return f"mismatch: {name} a value handed to a `sink` of {m.group(1)} twice: {'>'.join(path)}"
-                        if vid in released:
-                            return f"mismatch: {name} a released value handed to a `sink` of {m.group(1)}: {'>'.join(path)}"
-                        given.add(vid)
+            pc = parse_call(l)
+            if pc and pc[0] and pc[0][1:] in SINKS and pc[0].startswith("@") and not DROPIF.search(l):
+                callee = pc[0][1:]
+                ar, idx = SINKS[callee]
+                args = pc[1]
+                if args is None or len(args) != ar or any(i >= ar for i in idx):
+                    # every argument position is read, or nothing is said
+                    raise Unsupported(f"{name}: a call of {callee} whose arguments are not read as its {ar}")
+                for i in sorted(idx):
+                    a = args[i]
+                    vid = regid.get(a) if a else None
+                    if a in maybe or vid is None:
+                        continue
+                    if vid in lent_ids:
+                        return f"mismatch: {name} a borrowed parameter handed to a `sink` of {callee}: {'>'.join(path)}"
+                    if vid in given:
+                        return f"mismatch: {name} a value handed to a `sink` of {callee} twice: {'>'.join(path)}"
+                    if vid in released:
+                        return f"mismatch: {name} a released value handed to a `sink` of {callee}: {'>'.join(path)}"
+                    given.add(vid)
             m = DROPIF.search(l)
             if m:
                 if m.group(1) in ("false", "0"):
@@ -499,6 +610,10 @@ def check_function(name, blocks, owning, journal=False):
                         continue
                     if val.get(f) is None or val[f] in released or not flag_v.get(f):
                         return f"mismatch: {name} {m.group(2)} released twice: {'>'.join(path)}"
+                    if val[f] in lent_ids:
+                        return f"mismatch: {name} {m.group(2)} releases a parameter it only borrows: {'>'.join(path)}"
+                    if val[f] in given:
+                        return f"mismatch: {name} {m.group(2)} released after a `sink` parameter took it: {'>'.join(path)}"
                     released.add(val[f])
                     continue
                 f = loads[m.group(1)]
@@ -556,7 +671,7 @@ def check_function(name, blocks, owning, journal=False):
                 return None
         return None
 
-    return run("entry", ({}, {}, set(), {}, {}, set(), set()), {}, [])
+    return run("entry", ({}, {}, set(), {}, {}, {}, set(), set()), {}, [])
 
 
 def main():
