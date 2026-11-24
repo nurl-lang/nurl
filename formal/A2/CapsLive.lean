@@ -308,4 +308,88 @@ theorem LiveCaps.set_none {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (
     LiveCaps (m.set y ⟨o, none⟩) Γ w :=
   h.set (fun _ e => by cases e)
 
+
+/-- A node whose elements are among a clean node's is clean, every part. -/
+theorem ValCapsInp.shrink {t : Ty} {c d : Nat} {es es' : List Val} {w : Var}
+    (hT : ValCapsInp (.node t c d es) w) (hsub : ∀ e ∈ es', e ∈ es) :
+    ∀ n, Sub n (.node t c d es') → ValCapsInp n w := by
+  intro n hn
+  cases hn with
+  | refl =>
+    refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    cases hc with | elem he => exact hT.child (Child.elem (hsub _ he))
+  | child he hs => exact hT.sub (Sub.child (hsub _ he) hs)
+
+theorem TakeVal.liveCaps {m m1 : Mem} {Γ : Ctx} {y : Var} {v : Val} {w : Var} (ht : TakeVal m y v m1)
+    (h : LiveCaps m Γ w) : LiveCaps m1 Γ w := by
+  cases ht with
+  | own _ => exact h.set_none _ _
+  | bor _ => exact h
+
+/-- **The store a typed right-hand side leaves keeps the clause**: it ends
+    bindings at most (`RhsT.liveBack`), and changes only the slot it reads, to
+    nothing or to part of what it held. -/
+theorem RhsT.liveCapsSt {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
+    {v : Val} {o : Bool} {w : Var}
+    (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) (h : LiveCaps m Γ w) : LiveCaps m1 Γ1 w := by
+  have h' := h.of_back hr.liveBack
+  cases he
+  case pair => rename_i h1 h2; exact h2.liveCaps (h1.liveCaps h')
+  case arcNew =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact (ht.liveCaps h').of_st rfl
+  case lockNew =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact (ht.liveCaps h').of_st rfl
+  case cellNew =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact (ht.liveCaps h').of_st rfl
+  case chanSend =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact (ht.liveCaps h').of_st rfl
+  case chanSendClosed =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact (ht.liveCaps h').of_st rfl
+  case lockRestore =>
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact (ht.liveCaps h').of_st rfl
+  case pop =>
+    obtain hv : m.st _ = some ⟨true, some (.node _ _ _ (_ ++ [_]))⟩ := by assumption
+    cases hr with
+    | pop hy hl _ _ _ =>
+      have hT := h.val hy hl hv
+      refine LiveCaps.set h' (fun V e => ?_)
+      cases e
+      refine ⟨hT.shrink (fun e he => List.mem_append_left _ he), fun c hc => ?_, fun d o l hd => ?_⟩
+      · cases hc
+      · cases hd
+  case remove =>
+    obtain hv : m.st _ = some ⟨true, some (.node _ _ _ _)⟩ := by assumption
+    cases hr with
+    | remove hy hl _ _ _ _ _ =>
+      have hT := h.val hy hl hv
+      refine LiveCaps.set h' (fun V e => ?_)
+      cases e
+      refine ⟨hT.shrink (fun e he => List.mem_of_mem_eraseIdx he), fun c hc => ?_, fun d o l hd => ?_⟩
+      · cases hc
+      · cases hd
+  case take =>
+    refine LiveCaps.set (h'.of_st rfl) (fun V e => ?_)
+    cases e
+    refine ⟨fun n hn => ?_, fun c hc => ?_, fun d o l hd => ?_⟩
+    rotate_left
+    · cases hc
+    · cases hd
+    cases hn with
+    | refl =>
+      refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+      cases hc with | elem he => simp at he
+    | child he _ => simp at he
+  all_goals first
+    | exact h'
+    | exact h'.set_none _ _
+    | exact h'.of_st rfl
+    | exact (‹TakeVal _ _ _ _›.liveCaps h')
+    | exact (‹TakeVal _ _ _ _›.liveCaps h').of_st rfl
+
 end A2
