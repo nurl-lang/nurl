@@ -103,6 +103,34 @@ def CapInout (P : Prog) (m : Mem) (v : Var) : Prop :=
     zs.length + 1 ≤ i ∧ (m.nv :: zs ++ cs.map (·.1))[i]? = some v ∧
     fn.params[i]? = some (PMode.inout b, t)
 
+/-- AGORA-937 B4: the package slot a statement calls first, if it calls one
+    (`callc`, `callcE`), through the running scopes. -/
+def Stmt.headCallc : Stmt → List Var
+  | .seq a _ => a.headCallc
+  | .scope _ s => s.headCallc
+  | .rbind _ s => s.headCallc
+  | .scopeD _ _ s => s.headCallc
+  | .scopeL _ _ _ s => s.headCallc
+  | .catchR _ _ s => s.headCallc
+  | .frozen _ s => s.headCallc
+  | .block s => s.headCallc
+  | .callc _ c _ _ _ _ => [c]
+  | .callcE _ c _ _ _ => [c]
+  | _ => []
+
+/-- `CapInout` at a given package slot `c`. -/
+def CapInoutAt (P : Prog) (m : Mem) (c : Var) (v : Var) : Prop :=
+  ∃ (o : Bool) (fs : List Nat) (te : Ty) (ms : List Nat) (env : Val)
+    (cs : List (Var × PMode × Ty)) (j f : Nat) (fn : Fn) (zs : List Var) (i : Nat) (b : Eff) (t : Ty),
+    m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩ ∧ fs[j]? = some f ∧ P[f]? = some fn ∧
+    (m.nv :: zs ++ cs.map (·.1)).length = fn.params.length ∧
+    zs.length + 1 ≤ i ∧ (m.nv :: zs ++ cs.map (·.1))[i]? = some v ∧
+    fn.params[i]? = some (PMode.inout b, t)
+
+/-- ... at the slot the statement calls first. -/
+def CapInoutH (P : Prog) (m : Mem) (s : Stmt) (v : Var) : Prop :=
+  ∃ c ∈ s.headCallc, CapInoutAt P m c v
+
 theorem inoutArgs_pos (ps : List (PMode × Ty)) (args : List Var) (hl : args.length = ps.length) :
     ∀ v ∈ inoutArgs ps args, ∃ (i : Nat) (b : Eff) (t : Ty), ps[i]? = some (PMode.inout b, t) ∧ args[i]? = some v := by
   intro v hv
@@ -231,6 +259,124 @@ theorem Step.killVars_sub {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P 
               simpa [List.getElem?_cons_succ, List.getElem?_append_left hk] using hai
             exact Or.inl (by simp [Stmt.killVars, List.mem_of_getElem? hz])
         · exact Or.inr (Or.inr ⟨c, o, fs, te, ms, env, cs, j, f, fn, zs, i, b, t, hc, hj, hf, hl, hi, hai, hpi⟩)
+    · exact Or.inl (by simp [Stmt.killVars, hv])
+  | _ =>
+    intro m' s' hr v hv
+    cases hr
+    all_goals (simp only [Stmt.killVars, Rhs.vars, Expr.vars, handStmt, handStmtD, List.mem_cons, List.mem_append, List.not_mem_nil] at hv ⊢ <;> grind)
+
+/-- AGORA-937 B4: `Step.killVars_sub`, the captured name at the slot the
+    statement calls first. -/
+theorem Step.killVars_subH {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) :
+    ∀ m' s', r = .ok m' s' → ∀ v ∈ s'.killVars, v ∈ s.killVars ∨ m.nv ≤ v ∨ CapInoutH P m s v := by
+  induction h with
+  | seqL _ ih =>
+    intro m' s' hr v hv; cases hr
+    simp only [Stmt.killVars, List.mem_append] at hv ⊢
+    rcases hv with hv | hv
+    · rcases ih _ _ rfl v hv with h | h | h
+      · exact Or.inl (Or.inl h)
+      · exact Or.inr (Or.inl h)
+      · exact Or.inr (Or.inr h)
+    · exact Or.inl (Or.inr hv)
+  | @letcall m1 x f args k fn hf hx hb =>
+    intro m' s' hr v hv; cases hr
+    simp only [callStmt, Stmt.killVars, List.mem_cons, List.mem_append] at hv
+    rcases hv with rfl | hv | hv
+    · exact Or.inl (by simp [Stmt.killVars])
+    · rcases killVars_callIn fn args m.nv x v hv with rfl | h | h
+      · exact Or.inl (by simp [Stmt.killVars])
+      · exact Or.inr (Or.inl h)
+      · exact Or.inl (by simp [Stmt.killVars, inoutArgs_sub _ _ hb.length_eq v h])
+    · exact Or.inl (by simp [Stmt.killVars, hv])
+  | scopeIn _ ih =>
+    intro m' s' hr v hv; cases hr
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+    rcases hv with h | hv
+    · exact Or.inl (Or.inl h)
+    · rcases ih _ _ rfl v hv with h | h | h
+      · exact Or.inl (Or.inr h)
+      · exact Or.inr (Or.inl h)
+      · exact Or.inr (Or.inr h)
+  | rbindIn _ ih =>
+    intro m' s' hr v hv; cases hr
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+    rcases hv with h | hv
+    · exact Or.inl (Or.inl h)
+    · rcases ih _ _ rfl v hv with h | h | h
+      · exact Or.inl (Or.inr h)
+      · exact Or.inr (Or.inl h)
+      · exact Or.inr (Or.inr h)
+  | scopeDIn _ ih =>
+    intro m' s' hr v hv; cases hr
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+    rcases hv with h | hv
+    · exact Or.inl (Or.inl h)
+    · rcases ih _ _ rfl v hv with h | h | h
+      · exact Or.inl (Or.inr h)
+      · exact Or.inr (Or.inl h)
+      · exact Or.inr (Or.inr h)
+  | scopeLIn _ ih =>
+    intro m' s' hr v hv; cases hr
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+    rcases hv with h | hv
+    · exact Or.inl (Or.inl h)
+    · rcases ih _ _ rfl v hv with h | h | h
+      · exact Or.inl (Or.inr h)
+      · exact Or.inr (Or.inl h)
+      · exact Or.inr (Or.inr h)
+  | catchIn _ ih =>
+    intro m' s' hr v hv; cases hr
+    simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+    rcases hv with h | hv
+    · exact Or.inl (Or.inl h)
+    · rcases ih _ _ rfl v hv with h | h | h
+      · exact Or.inl (Or.inr h)
+      · exact Or.inr (Or.inl h)
+      · exact Or.inr (Or.inr h)
+  | frozenIn _ ih =>
+    intro m' s' hr v hv; cases hr
+    simp only [Stmt.killVars] at hv ⊢
+    exact ih _ _ rfl v hv
+  | blockIn _ ih =>
+    intro m' s' hr v hv; cases hr
+    simp only [Stmt.killVars] at hv ⊢
+    exact ih _ _ rfl v hv
+  | blockExit he =>
+    intro m' s' hr v hv; cases hr
+    exact Or.inl (he.killVars_sub v hv)
+  | @letrec x f k fn hf hp hx =>
+    intro m' s' hr v hv; cases hr
+    simp only [recStmt, Stmt.killVars, List.mem_cons, List.mem_append] at hv
+    rcases hv with rfl | (rfl | hv) | hv
+    · exact Or.inl (by simp [Stmt.killVars])
+    · exact Or.inl (by simp [Stmt.killVars])
+    · rcases killVars_callIn fn [] m.nv x v hv with rfl | h | h
+      · exact Or.inl (by simp [Stmt.killVars])
+      · exact Or.inr (Or.inl h)
+      · rw [hp] at h; simp [inoutArgs] at h
+    · exact Or.inl (by simp [Stmt.killVars, hv])
+  | @callc m1 x c j σ zs k o fs te ms env cs f fn hc hj hf hx hb =>
+    intro m' s' hr v hv; cases hr
+    simp only [Stmt.killVars, List.mem_cons, List.mem_append] at hv
+    rcases hv with rfl | (rfl | hv) | hv
+    · exact Or.inl (by simp [Stmt.killVars])
+    · exact Or.inr (Or.inl (Nat.le_refl _))
+    · rcases killVars_callIn fn _ (m.nv + 1) x v hv with rfl | h | h
+      · exact Or.inl (by simp [Stmt.killVars])
+      · exact Or.inr (Or.inl (by omega))
+      · have hl := hb.length_eq
+        obtain ⟨i, b, t, hpi, hai⟩ := inoutArgs_pos _ _ hl v h
+        rcases Nat.lt_or_ge i (zs.length + 1) with hi | hi
+        · cases i with
+          | zero =>
+            simp at hai; subst hai; exact Or.inr (Or.inl (Nat.le_refl _))
+          | succ k =>
+            have hk : k < zs.length := by omega
+            have hz : zs[k]? = some v := by
+              simpa [List.getElem?_cons_succ, List.getElem?_append_left hk] using hai
+            exact Or.inl (by simp [Stmt.killVars, List.mem_of_getElem? hz])
+        · exact Or.inr (Or.inr ⟨c, by simp [Stmt.headCallc], o, fs, te, ms, env, cs, j, f, fn, zs, i, b, t, hc, hj, hf, hl, hi, hai, hpi⟩)
     · exact Or.inl (by simp [Stmt.killVars, hv])
   | _ =>
     intro m' s' hr v hv
