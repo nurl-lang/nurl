@@ -235,6 +235,11 @@ theorem EvalR.keys {m m' : Mem} {r : Rhs} {v : Val} {o : Bool} (h : EvalR m r (.
   | borrowBor hy => exact ⟨hk, hk.st _ _ _ hy⟩
   | «at» h hv _ => exact ⟨hk, ((hk.vecOf hv).node_elem (List.getElem_mem h)).lendOf⟩
   | view _ => exact ⟨hk, .view⟩
+  | slit _ =>
+    -- AGORA-980: a static literal's block holds integers only
+    refine ⟨(hk.updBlk _ (fun w hw => by
+      cases hw; exact .node fun e he => by rw [List.eq_of_mem_replicate he]; exact .int)).of_eq rfl rfl rfl
+      (by show m.nid ≤ m.nid + 3; omega), .view⟩
   | sat h _ _ _ _ hd => exact ⟨hk, ((hk.dataAt hd).node_elem (List.getElem_mem h)).lendOf⟩
   | pop hy _ _ =>
     have hT := hk.st _ _ _ hy

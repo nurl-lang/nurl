@@ -1095,6 +1095,8 @@ inductive Rhs where
   -- slot to the type's empty value)
   | take (y : Var)             -- `y`'s `Vec` moves out, owned; `y` keeps a fresh empty `Vec` of
                                -- its element type, and stays live
+  | slit (n : Nat)            -- AGORA-980: a string literal of n bytes, handed out as a view of
+                               -- the program's static text (a block of kind `static`, never freed)
 deriving DecidableEq, Repr
 
 /-! ### Memory (here because a run-time form records a snapshot of it) -/
@@ -1164,6 +1166,10 @@ inductive BKind where
       destructor value, is in it), and the thread whose
       step it ended reaps it next (`Settle`). -/
   | dead
+  /-- AGORA-980: an immortal block of the program's static text, a string
+      literal's bytes (`Rhs.slit`): no share of it exists, so no step
+      writes or frees it, and a view of its node needs no dependency. -/
+  | static
 deriving DecidableEq, Repr
 
 /-- A shared block: its kind, and its payload, a tree of type `ty`.  How

@@ -27,17 +27,18 @@ theorem ViewsOK.keep_except {m m' : Mem} {x : Var} {τ : Ty} {T U : Val}
     (hb : BlkLe m.blk m'.blk := by exact BlkLe.of_le fun _ _ h => h) :
     ViewsOK m' τ' U H := by
   intro s v hin
-  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := hv s v (hsub s v hin)
-  refine ⟨d, o, l, rfl, dep, hd, ?_⟩
-  obtain ⟨r, k⟩ := dep
-  by_cases hrx : r = x
-  · subst hrx
-    by_cases hks : k = .share
-    · subst hks
-      obtain ⟨o', ho'⟩ := hx'
-      exact vkeep_share hb (RootMem.own ho') d o l s ha
-    · exact (viewAt_not_self hT hsf (hsub s _ hin) hks ha).elim
-  · exact hk ⟨r, k⟩ hd hrx d o l s ha
+  obtain ⟨d, o, l, rfl, ⟨dep, hd, ha⟩ | hsv⟩ := hv s v (hsub s v hin)
+  · refine ⟨d, o, l, rfl, .inl ⟨dep, hd, ?_⟩⟩
+    obtain ⟨r, k⟩ := dep
+    by_cases hrx : r = x
+    · subst hrx
+      by_cases hks : k = .share
+      · subst hks
+        obtain ⟨o', ho'⟩ := hx'
+        exact vkeep_share hb (RootMem.own ho') d o l s ha
+      · exact (viewAt_not_self hT hsf (hsub s _ hin) hks ha).elim
+    · exact hk ⟨r, k⟩ hd hrx d o l s ha
+  · exact ⟨d, o, l, rfl, .inr (hsv.blkLe hb)⟩
 
 /-! ### The general frame lemma -/
 
@@ -284,7 +285,7 @@ theorem SlotOK.keepLive {m m' : Mem} {E : Entry} {sl : Slot} (h : SlotOK m E sl)
   · obtain ⟨h1, h2, h3⟩ := hown hos
     refine ⟨h1, h2, fun hl => ?_⟩
     obtain ⟨T, hT, hv⟩ := h3 hl
-    refine ⟨T, hT, hv.keep fun dep hd => (hk hl dep ?_).1⟩
+    refine ⟨T, hT, hv.keep (hb := BlkLe.of_eq hb) fun dep hd => (hk hl dep ?_).1⟩
     simp [Entry.vdeps, hos, hd]
   · obtain ⟨v, hv, hok⟩ := hbor hos hl
     refine ⟨v, hv, hok.keep (fun dep hd => hk hl dep ?_) (fun dep hd => hk hl dep ?_) hb⟩
@@ -1080,7 +1081,7 @@ theorem MInv.change {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [hst v hvx] at hsl
       refine ArmOK.entry (killE_dbind ..) (killE_ty ..) (killE_mode ..) (fun h => by rw [killE_dtor]; exact h)
         (by rw [killE_held]; exact fun d hd => (List.mem_filter.mp hd).1) ?_
-      refine (hi.armed v E sl hE hsl).keep fun hdt hd hos dep hdm => ?_
+      refine (hi.armed v E sl hE hsl).keep (hb := BlkLe.of_eq hblk) fun hdt hd hos dep hdm => ?_
       have hdm' := List.mem_filter.mp hdm
       have hnm : dep.kind.isName = false := by simpa using hdm'.2
       have hdv : dep ∈ E.vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hdm'.1
@@ -1418,7 +1419,7 @@ theorem MInv.change_ne {m m' : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       rw [hst v hvx] at hsl
       refine ArmOK.entry (killE_dbind ..) (killE_ty ..) (killE_mode ..) (fun h => by rw [killE_dtor]; exact h)
         (by rw [killE_held]; exact fun d hd => (List.mem_filter.mp hd).1) ?_
-      refine (hi.armed v E sl hE hsl).keep fun hdt hd hos dep hdm => ?_
+      refine (hi.armed v E sl hE hsl).keep (hb := BlkLe.of_eq hblk) fun hdt hd hos dep hdm => ?_
       have hdm' := List.mem_filter.mp hdm
       have hnm : dep.kind.isName = false := by simpa using hdm'.2
       have hdv : dep ∈ E.vdeps := by unfold Entry.vdeps; exact List.mem_append_right _ hdm'.1

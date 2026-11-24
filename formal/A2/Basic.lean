@@ -170,6 +170,7 @@ theorem ValOK.no_pkg {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (hv : ValOK 
   | int => cases hs
   | href => cases hs
   | view => cases hs
+  | sview => cases hs
   | arc => cases hs
   | rguard => cases hs
   | lk => cases hs
@@ -245,6 +246,7 @@ theorem Blk.rd_keeps (bl : Blk) : bl.rd = bl.keeps ∨ bl.rd = .int 0 := by
   obtain ⟨t, k, p⟩ := bl
   cases k with
   | arc => exact Or.inl rfl
+  | static => exact Or.inl rfl
   | lock => exact Or.inr rfl
   | view => exact Or.inl rfl
   | dead => exact Or.inr rfl
@@ -290,6 +292,7 @@ theorem Blk.sub_tree {bl : Blk} {n : Val} (h : Sub n bl.tree) :
     cases k with
     | view => exact Or.inr h.int_eq
     | arc => exact Or.inl ⟨p, rfl, h⟩
+    | static => exact Or.inl ⟨p, rfl, h⟩
     | lock => exact Or.inl ⟨p, rfl, h⟩
     | dead => exact Or.inl ⟨p, rfl, h⟩
 
@@ -302,6 +305,10 @@ theorem Blk.sub_rd {bl : Blk} {n : Val} (h : Sub n bl.rd) :
   | lock => exact Or.inr h.int_eq
   | dead => exact Or.inr h.int_eq
   | arc =>
+    cases p with
+    | none => exact Or.inr h.int_eq
+    | some q => exact Or.inl ⟨by simp, q, rfl, h⟩
+  | static =>
     cases p with
     | none => exact Or.inr h.int_eq
     | some q => exact Or.inl ⟨by simp, q, rfl, h⟩
@@ -365,6 +372,7 @@ theorem ViewsAt.rd_ids {B : Nat → Option Blk} (hv : ViewsAt B) {k : Nat} {bl :
   obtain ⟨t, kd, p⟩ := bl
   cases kd with
   | arc => exact ⟨k, _, hk, h⟩
+  | static => exact ⟨k, _, hk, h⟩
   | lock => simp [Blk.rd] at h
   | dead => simp [Blk.rd] at h
   | view =>
@@ -386,6 +394,7 @@ theorem ViewsAt.rd_reached {B : Nat → Option Blk} (hv : ViewsAt B) {R : Val �
   obtain ⟨t, kd, p⟩ := bl
   cases kd with
   | arc => exact ⟨k, _, hk, h, hr⟩
+  | static => exact ⟨k, _, hk, h, hr⟩
   | lock => simp [Blk.rd] at h
   | dead => simp [Blk.rd] at h
   | view =>
@@ -545,6 +554,7 @@ theorem HeapOK.rd_sub {m : Mem} (hh : HeapOK m) {k : Nat} {bl : Blk} (hk : m.blk
   obtain ⟨t, kd, p⟩ := bl
   cases kd with
   | arc => exact ⟨k, _, hk, h⟩
+  | static => exact ⟨k, _, hk, h⟩
   | lock => rw [Blk.rd_lock] at h; rw [h.int_eq] at hi; simp [Val.head] at hi
   | dead => rw [Blk.rd_dead] at h; rw [h.int_eq] at hi; simp [Val.head] at hi
   | view =>

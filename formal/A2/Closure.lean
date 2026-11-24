@@ -2358,7 +2358,6 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
   -- and the environment shares each of those
   have hpfE : ∀ i, PkgNames mn Γ (envE c Ec te cs) (lendOf env) i → PkgFreeId mn i := by
     intro i hn
-    exfalso
     have hshP : ∀ dep ∈ (envE0 c Ec te cs).path ++ (envE0 c Ec te cs).held, dep.kind.isName = false →
         RootMem m dep.root → ¬ CleanDeps Γ (envE c Ec te cs).path := by
       intro dep hd hnm hrm hc
@@ -2379,14 +2378,18 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
       exact (hc _ (List.mem_filter.mpr ⟨hm, rfl⟩)).1.elim (fun hk => hk rfl) fun hh => hh.noMem hi.toMInv hrm
     rcases hn with ⟨_, hc, ⟨c', hb, _⟩ | ⟨o, l, hv⟩⟩ | ⟨_, hc, o, l, hb⟩ |
         ⟨_, hc, c', r, T, t, d, es, hb, hT, hs, o, l, hv⟩ | ⟨h, _⟩
+    -- AGORA-980: but a static literal's text, which no owned tree holds
     · obtain ⟨dep, hd, _, _, _, hl, _⟩ := hval00.bare_href_held c' hb
-      exact hshP dep hd hl.notName hl.rootMem hc
-    · obtain ⟨dep, hd, _, _, _, _, hl, _⟩ := hval00.bare_view_in i o l (by rw [hv]; exact Bare.refl _)
-      exact hshP dep hd hl.notName hl.rootMem hc
-    · obtain ⟨dep, hd, _, _, _, _, hl, _⟩ := hval00.bare_view_in i o l hb
-      exact hshP dep hd hl.notName hl.rootMem hc.left
-    · obtain ⟨dep, hd, hnm, hrm⟩ := hval00.named_view_held hi.heap hb hT hs hv
-      exact hshH dep hd hnm hrm hc
+      exact (hshP dep hd hl.notName hl.rootMem hc).elim
+    · rcases hval00.bare_view_in i o l (by rw [hv]; exact Bare.refl _) with ⟨dep, hd, _, _, _, _, hl, _⟩ | ⟨_, hsv⟩
+      · exact (hshP dep hd hl.notName hl.rootMem hc).elim
+      · exact hi.heap.pkgFree_of_pay hsv.payAddr
+    · rcases hval00.bare_view_in i o l hb with ⟨dep, hd, _, _, _, _, hl, _⟩ | ⟨_, hsv⟩
+      · exact (hshP dep hd hl.notName hl.rootMem hc.left).elim
+      · exact hi.heap.pkgFree_of_pay hsv.payAddr
+    · rcases hval00.named_view_held hi.heap hb hT hs hv with ⟨dep, hd, hnm, hrm⟩ | ⟨_, hsv⟩
+      · exact (hshH dep hd hnm hrm hc).elim
+      · exact hi.heap.pkgFree_of_pay hsv.payAddr
     · cases h
   have hie : MInv (envMem m env) (setE Γ m.nv (envE c Ec te cs)) :=
     hin.addRootb hΓe0 (Nat.lt_succ_self _) rfl rfl hteok hval hEw

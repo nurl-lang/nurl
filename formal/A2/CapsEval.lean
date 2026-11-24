@@ -179,6 +179,7 @@ theorem EvalR.capsInp {m m1 : Mem} {Γ : Ctx} {r : Rhs} {v : Val} {o : Bool} {w 
   | borrowBor hv => exact ⟨h.slot hv, h⟩
   | «at» hn hv _ => exact ⟨((h.vecOf hM hv).child (Child.elem (List.getElem_mem hn))).lend, h⟩
   | view _ => exact ⟨lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h⟩
+  | slit _ => exact ⟨lf (fun _ _ _ _ _ h => by cases h) (fun _ h => by cases h), h.of_st rfl⟩
   | sat hn _ _ _ _ hda => exact ⟨((h.dataAt hM hda).child (Child.elem (List.getElem_mem hn))).lend, h⟩
   | pop hv _ _ =>
     have hT := h.slot hv

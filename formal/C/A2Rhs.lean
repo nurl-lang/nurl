@@ -136,6 +136,8 @@ def inferRhs2 (D : List Var) (Γ : Ctx) (F : List Var) : Rhs → Option (Entry �
       | some t => if checkExpr2 Γ i then some ({ elemE y E t with fresh := false }, Γ) else none
       | none => none
     | none => none
+  -- AGORA-980: a literal's text handed back as a view, valid with no dependency
+  | .slit _ => some (⟨.slice .int, .bor, true, [], [], false, false, false, false⟩, Γ)
   | .pop y => match liveE2 Γ y with
     | some E => match vecElem2 E.ty with
       | some t => if canDoB2 E.mode .drop && decide (y ∉ F) && dtorSafeB D Γ .drop t.holdsView y then
@@ -161,6 +163,8 @@ theorem inferRhs2_sound {D : List Var} {Γ : Ctx} {F : List Var} {r : Rhs} {E : 
     simp only [inferRhs2] at h; split at h
     · rename_i ht; cases h; exact .new ht
     · cases h
+  | slit n =>
+    simp only [inferRhs2] at h; cases h; exact .slit
   | var y =>
     simp only [inferRhs2] at h
     split at h

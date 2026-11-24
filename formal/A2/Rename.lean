@@ -828,6 +828,22 @@ theorem liftE_vdeps_cases {v : Var} {E : Entry} (hrb : E.mode ≠ .rootb) {d : D
 theorem liftE_ty (v : Var) {E : Entry} (hrb : E.mode ≠ .rootb) : (S.liftE v E).ty = E.ty := by
   simp [liftE, hrb]
 
+/-- A lift of no borrowed parameter, in closed form: `liftE`'s second branch. -/
+theorem liftE_of_ne (v : Var) {E : Entry} (hrb : E.mode ≠ .rootb) :
+    S.liftE v E = ⟨E.ty, liftMode E.mode, E.live,
+      rds S.ρ E.path ++ (if E.mode.ownSlot || (E.fresh && E.ty != .int) then [] else S.A),
+      rds S.ρ E.held ++ ownHeld E.mode.ownSlot E.ty (S.heldA E), E.dtor, E.dbind, E.fresh, E.heldFresh⟩ := by
+  unfold liftE; split
+  · exact absurd ‹_› hrb
+  · rfl
+
+/-- A borrow's lift, in closed form: its path and what it holds renamed, and
+    what the arguments hold added unless it is fresh (or held-fresh). -/
+theorem liftE_of_bor (v : Var) {E : Entry} (hm : E.mode = .bor) :
+    S.liftE v E = ⟨E.ty, .bor, E.live, rds S.ρ E.path ++ (if E.fresh && E.ty != .int then [] else S.A),
+      rds S.ρ E.held ++ ownHeld false E.ty (S.heldA E), E.dtor, E.dbind, E.fresh, E.heldFresh⟩ := by
+  simp [liftE, hm, liftMode, Mode.ownSlot]
+
 theorem liftE_mode (v : Var) {E : Entry} (hrb : E.mode ≠ .rootb) : (S.liftE v E).mode = liftMode E.mode := by
   simp [liftE, hrb]
 
@@ -2010,65 +2026,65 @@ theorem elemE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : �
     show EntryWeaker intE (S.liftE x intE)
     exact intE_lift x
   | slice s =>
-    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
-      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot]
+    rw [S.liftE_of_bor x (elemE_mode y Ey _)]
+    refine EntryWeaker.mk' (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (fun _ => ?_) ?_
+    · simp only [elemE, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
       exact hl
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+    · simp only [elemE, ownHeld_false]; exact hl
   | vec s =>
-    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
-      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot]
+    rw [S.liftE_of_bor x (elemE_mode y Ey _)]
+    refine EntryWeaker.mk' (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (fun _ => ?_) ?_
+    · simp only [elemE, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
       exact derive_lift h hab hy .inner rfl
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+    · simp only [elemE, ownHeld_false]; exact hl
   | prod a b =>
-    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
-      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot]
+    rw [S.liftE_of_bor x (elemE_mode y Ey _)]
+    refine EntryWeaker.mk' (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (fun _ => ?_) ?_
+    · simp only [elemE, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
       exact derive_lift h hab hy .inner rfl
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+    · simp only [elemE, ownHeld_false]; exact hl
   | sum a b =>
-    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
-      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot]
+    rw [S.liftE_of_bor x (elemE_mode y Ey _)]
+    refine EntryWeaker.mk' (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (fun _ => ?_) ?_
+    · simp only [elemE, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
       exact derive_lift h hab hy .inner rfl
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+    · simp only [elemE, ownHeld_false]; exact hl
   | fn ms =>
-    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
-      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot]
+    rw [S.liftE_of_bor x (elemE_mode y Ey _)]
+    refine EntryWeaker.mk' (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (fun _ => ?_) ?_
+    · simp only [elemE, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
       exact derive_lift h hab hy .inner rfl
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+    · simp only [elemE, ownHeld_false]; exact hl
   | arc ms =>
-    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
-      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot]
+    rw [S.liftE_of_bor x (elemE_mode y Ey _)]
+    refine EntryWeaker.mk' (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (fun _ => ?_) ?_
+    · simp only [elemE, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
       exact derive_lift h hab hy .inner rfl
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+    · simp only [elemE, ownHeld_false]; exact hl
   | rguard ms =>
-    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
-      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot]
+    rw [S.liftE_of_bor x (elemE_mode y Ey _)]
+    refine EntryWeaker.mk' (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (fun _ => ?_) ?_
+    · simp only [elemE, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
       exact derive_lift h hab hy .inner rfl
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+    · simp only [elemE, ownHeld_false]; exact hl
   | lk ms =>
-    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
-      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot]
+    rw [S.liftE_of_bor x (elemE_mode y Ey _)]
+    refine EntryWeaker.mk' (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (fun _ => ?_) ?_
+    · simp only [elemE, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
       exact derive_lift h hab hy .inner rfl
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+    · simp only [elemE, ownHeld_false]; exact hl
   | cell ms =>
-    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
-      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot]
+    rw [S.liftE_of_bor x (elemE_mode y Ey _)]
+    refine EntryWeaker.mk' (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (fun _ => ?_) ?_
+    · simp only [elemE, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
       exact derive_lift h hab hy .inner rfl
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+    · simp only [elemE, ownHeld_false]; exact hl
   | dtor f a =>
-    refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode])
-      (by simp [elemE]) (by simp [elemE, liftE]) (fun _ => ?_) ?_
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot]
+    rw [S.liftE_of_bor x (elemE_mode y Ey _)]
+    refine EntryWeaker.mk' (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (by simp [elemE]) (fun _ => ?_) ?_
+    · simp only [elemE, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
       exact derive_lift h hab hy .inner rfl
-    · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+    · simp only [elemE, ownHeld_false]; exact hl
 
 theorem popE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γa y = some Ey)
     {t : Ty} (ht : Ey.ty = .vec t) (hrb : Ey.mode ≠ .rootb) (hos : Ey.mode.ownSlot = true) (x : Var) :
@@ -2252,11 +2268,12 @@ theorem getE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : Γ
     show EntryWeaker intE (S.liftE x intE)
     exact intE_lift x
   | _ =>
-    refine EntryWeaker.mk' (by simp [getE, liftE]) (by simp [getE, liftE, liftMode])
-      (by simp [getE]) (by simp [getE, liftE]) (fun _ => ?_) ?_
-    · simp only [getE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot]
+    rw [S.liftE_of_ne x (by simp [getE])]
+    refine EntryWeaker.mk' (by simp [getE]) (by simp [getE, liftMode])
+      (by simp [getE]) (by simp [getE]) (fun _ => ?_) ?_
+    · simp only [getE, Mode.ownSlot, Bool.false_and, Bool.false_or, Bool.false_eq_true, ↓reduceIte]
       exact derive_lift h hab hy .share rfl
-    · simp only [getE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact hl
+    · simp only [getE, Mode.ownSlot, ownHeld_false]; exact hl
 
 /-- A field moved out of a struct taken apart, where the call places it. -/
 theorem ownHeld_lift {X L : List Dep} {t : Ty} (hl : X ⊆ rds S.ρ L ++ S.A) :
@@ -2271,47 +2288,57 @@ theorem compE_lift (h : S.OK) (hab : S.AbsOK Γa) {y : Var} {Ey : Entry} (hy : �
   cases t with
   | int => exact intE_lift x
   | slice s =>
-    refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
-      (by simp [compE]) (by simp [compE, liftE]) (fun _ => ?_) ?_
-    · simp only [compE, liftE, reduceCtorEq, ↓reduceIte, liftMode, Mode.ownSlot]
+    rw [S.liftE_of_ne x (by simp [compE])]
+    refine EntryWeaker.mk' (by simp [compE]) (by simp [compE, liftMode])
+      (by simp [compE]) (by simp [compE]) (fun _ => ?_) ?_
+    · simp only [compE, Mode.ownSlot, Bool.false_and, Bool.false_or, Bool.false_eq_true, ↓reduceIte]
       exact hl
-    · simp only [compE, liftE, reduceCtorEq, ↓reduceIte]; exact hl
+    · simp only [compE, Mode.ownSlot]; exact hl
   | vec s =>
-    refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
-      (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
-    simp only [compE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot]; exact ownHeld_lift hl
+    rw [S.liftE_of_ne x (by simp [compE])]
+    refine EntryWeaker.mk' (by simp [compE]) (by simp [compE, liftMode])
+      (by simp [compE]) (by simp [compE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
+    simp only [compE, Mode.ownSlot]; exact ownHeld_lift hl
   | prod a b =>
-    refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
-      (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
-    simp only [compE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot]; exact ownHeld_lift hl
+    rw [S.liftE_of_ne x (by simp [compE])]
+    refine EntryWeaker.mk' (by simp [compE]) (by simp [compE, liftMode])
+      (by simp [compE]) (by simp [compE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
+    simp only [compE, Mode.ownSlot]; exact ownHeld_lift hl
   | sum a b =>
-    refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
-      (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
-    simp only [compE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot]; exact ownHeld_lift hl
+    rw [S.liftE_of_ne x (by simp [compE])]
+    refine EntryWeaker.mk' (by simp [compE]) (by simp [compE, liftMode])
+      (by simp [compE]) (by simp [compE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
+    simp only [compE, Mode.ownSlot]; exact ownHeld_lift hl
   | fn ms =>
-    refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
-      (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
-    simp only [compE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot]; exact ownHeld_lift hl
+    rw [S.liftE_of_ne x (by simp [compE])]
+    refine EntryWeaker.mk' (by simp [compE]) (by simp [compE, liftMode])
+      (by simp [compE]) (by simp [compE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
+    simp only [compE, Mode.ownSlot]; exact ownHeld_lift hl
   | arc ms =>
-    refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
-      (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
-    simp only [compE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot]; exact ownHeld_lift hl
+    rw [S.liftE_of_ne x (by simp [compE])]
+    refine EntryWeaker.mk' (by simp [compE]) (by simp [compE, liftMode])
+      (by simp [compE]) (by simp [compE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
+    simp only [compE, Mode.ownSlot]; exact ownHeld_lift hl
   | rguard ms =>
-    refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
-      (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
-    simp only [compE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot]; exact ownHeld_lift hl
+    rw [S.liftE_of_ne x (by simp [compE])]
+    refine EntryWeaker.mk' (by simp [compE]) (by simp [compE, liftMode])
+      (by simp [compE]) (by simp [compE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
+    simp only [compE, Mode.ownSlot]; exact ownHeld_lift hl
   | lk ms =>
-    refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
-      (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
-    simp only [compE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot]; exact ownHeld_lift hl
+    rw [S.liftE_of_ne x (by simp [compE])]
+    refine EntryWeaker.mk' (by simp [compE]) (by simp [compE, liftMode])
+      (by simp [compE]) (by simp [compE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
+    simp only [compE, Mode.ownSlot]; exact ownHeld_lift hl
   | cell ms =>
-    refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
-      (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
-    simp only [compE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot]; exact ownHeld_lift hl
+    rw [S.liftE_of_ne x (by simp [compE])]
+    refine EntryWeaker.mk' (by simp [compE]) (by simp [compE, liftMode])
+      (by simp [compE]) (by simp [compE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
+    simp only [compE, Mode.ownSlot]; exact ownHeld_lift hl
   | dtor f a =>
-    refine EntryWeaker.mk' (by simp [compE, liftE]) (by simp [compE, liftE, liftMode])
-      (by simp [compE]) (by simp [compE, liftE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
-    simp only [compE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot]; exact ownHeld_lift hl
+    rw [S.liftE_of_ne x (by simp [compE])]
+    refine EntryWeaker.mk' (by simp [compE]) (by simp [compE, liftMode])
+      (by simp [compE]) (by simp [compE]) (fun h' => by simp [compE, Mode.ownSlot] at h') ?_
+    simp only [compE, Mode.ownSlot]; exact ownHeld_lift hl
 
 theorem AbsOK.setE' {Γ0 Γ1 : Ctx} (hab : S.AbsOK Γ1) (hab0 : S.AbsOK Γ0) {x : Var} {E0 E : Entry}
     (hx : Γ0 x = some E0) (hm : E.mode = E0.mode) (ht : E.ty = E0.ty) (hrb : E.mode ≠ .rootb)
@@ -3066,6 +3093,13 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) (hfo : FreshOK Γa) {Fa : List V
     refine ⟨_, RhsT.new ht, fun x => S.subE_weaker (E := ⟨.vec _, .own, true, [], [], false, false, false, false⟩) ?_⟩
     exact EntryWeaker.mk' (by simp [liftE]) (by simp [liftE, liftMode]) (by simp) (by simp [liftE])
       (fun h' => by simp [Mode.ownSlot] at h') (by simp)
+  | slit =>
+    -- AGORA-980: nothing to lift; the lifted entry is the literal's, reading
+    -- the arguments' (`S.A`), weaker on every field (by computation)
+    refine ⟨_, RhsT.slit, fun x => S.subE_weaker (E := ⟨.slice .int, .bor, true, [], [], false, false, false, false⟩) ?_⟩
+    exact EntryWeaker.mk' rfl rfl (by simp [Entry.fixed]) rfl (fun _ => List.nil_subset _) (List.nil_subset _)
+      (fun h => by cases h) rfl (fun h => by cases h) (fun h => by cases h) (fun _ _ _ h => by cases h)
+      (fun _ _ h => by cases h)
   | @moveOwn y Ey hy hl hm hyF _ hds =>
     have hpy : S.isPi y = false := hvs y (by simp [Rhs.vars])
     have hc : S.canon Γa (S.ρ y) = some (S.subE (S.liftE y Ey)) := canon_some h hy hpy
@@ -3241,18 +3275,20 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) (hfo : FreshOK Γa) {Fa : List V
         -- Agora #909: a fresh element borrow is renamed exactly (`derive_lift_eq`)
         obtain ⟨hs, hns⟩ := hf rfl
         have heq := derive_lift_eq h hab hy hs .inner
+        -- the lift in closed form once, not unfolded in every case below
+        rw [S.liftE_of_bor x (E := { elemE y Ey t with fresh := true }) (elemE_mode y Ey t)]
         cases t
         case int =>
-          exact EntryWeaker.mk' (by simp [elemE, liftE, intE]) (by simp [elemE, liftE, intE, liftMode])
-            (by simp [elemE, intE]) (by simp [elemE, liftE, intE]) (fun _ d hd => by simp [elemE, intE] at hd)
-            (fun d hd => by simp [elemE, intE] at hd) (hf := fun _ hn _ _ => absurd (by simp [liftE, elemE, intE]) hn)
+          exact EntryWeaker.mk' (by simp [elemE, intE]) (by simp [elemE, intE])
+            (by simp [elemE, intE]) (by simp [elemE, intE]) (fun _ d hd => by simp [elemE, intE] at hd)
+            (fun d hd => by simp [elemE, intE] at hd) (hf := fun _ hn _ _ => absurd (by simp [elemE, intE]) hn)
         case slice s => exact absurd rfl (hns s)
         all_goals
-          refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode]) (by simp [elemE])
-            (by simp [elemE, liftE]) (fun _ => ?_) ?_ (hf := fun _ _ _ _ => ⟨rfl, ?_⟩)
-          · simp only [elemE]; rw [heq]; simp [liftE, Mode.ownSlot]
-          · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact held_lift h hab hy
-          · simp only [elemE]; rw [heq]; simp [liftE, Mode.ownSlot]
+          refine EntryWeaker.mk' (by simp [elemE]) (by simp [elemE]) (by simp [elemE])
+            (by simp [elemE]) (fun _ => ?_) ?_ (hf := fun _ _ _ _ => ⟨rfl, ?_⟩)
+          · simp only [elemE]; rw [heq]; simp
+          · simp only [elemE, ownHeld_false]; exact held_lift h hab hy
+          · simp only [elemE]; rw [heq]; simp
     exact (S.elemE_subE h hpy _ t f (fun hft => fresh_keep h hab hfo hy (hf hft).1)).trans (S.subE_weaker old)
   | @view y Ey t fv hv hy hl ht hhv hfs0 hhs =>
     have hpy : S.isPi y = false := hvs y (by simp [Rhs.vars])
@@ -3329,18 +3365,20 @@ theorem RhsT.ren (h : S.OK) (hab : S.AbsOK Γa) (hfo : FreshOK Γa) {Fa : List V
         -- AGORA-909: a fresh element read through a slice is renamed exactly (`derive_lift_eq`)
         obtain ⟨hs, hns⟩ := hf rfl
         have heq := derive_lift_eq h hab hy hs .inner
+        -- the lift in closed form once, not unfolded in every case below
+        rw [S.liftE_of_bor x (E := { elemE y Ey t with fresh := true }) (elemE_mode y Ey t)]
         cases t
         case int =>
-          exact EntryWeaker.mk' (by simp [elemE, liftE, intE]) (by simp [elemE, liftE, intE, liftMode])
-            (by simp [elemE, intE]) (by simp [elemE, liftE, intE]) (fun _ d hd => by simp [elemE, intE] at hd)
-            (fun d hd => by simp [elemE, intE] at hd) (hf := fun _ hn _ _ => absurd (by simp [liftE, elemE, intE]) hn)
+          exact EntryWeaker.mk' (by simp [elemE, intE]) (by simp [elemE, intE])
+            (by simp [elemE, intE]) (by simp [elemE, intE]) (fun _ d hd => by simp [elemE, intE] at hd)
+            (fun d hd => by simp [elemE, intE] at hd) (hf := fun _ hn _ _ => absurd (by simp [elemE, intE]) hn)
         case slice s => exact absurd rfl (hns s)
         all_goals
-          refine EntryWeaker.mk' (by simp [elemE, liftE]) (by simp [elemE, liftE, liftMode]) (by simp [elemE])
-            (by simp [elemE, liftE]) (fun _ => ?_) ?_ (hf := fun _ _ _ _ => ⟨rfl, ?_⟩)
-          · simp only [elemE]; rw [heq]; simp [liftE, Mode.ownSlot]
-          · simp only [elemE, liftE, reduceCtorEq, ↓reduceIte, Mode.ownSlot, ownHeld_false]; exact held_lift h hab hy
-          · simp only [elemE]; rw [heq]; simp [liftE, Mode.ownSlot]
+          refine EntryWeaker.mk' (by simp [elemE]) (by simp [elemE]) (by simp [elemE])
+            (by simp [elemE]) (fun _ => ?_) ?_ (hf := fun _ _ _ _ => ⟨rfl, ?_⟩)
+          · simp only [elemE]; rw [heq]; simp
+          · simp only [elemE, ownHeld_false]; exact held_lift h hab hy
+          · simp only [elemE]; rw [heq]; simp
     exact (S.elemE_subE h hpy _ t f (fun hft => fresh_keep h hab hfo hy (hf hft).1)).trans (S.subE_weaker old)
   | @pop y Ey t hy hl ht hcan hyF hds =>
     have hpy : S.isPi y = false := hvs y (by simp [Rhs.vars])

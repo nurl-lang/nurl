@@ -143,6 +143,17 @@ theorem EvalR.restrict {m : Mem} {r : Rhs} {res : RRes} (h : EvalR m r res) {a2 
     rw [← minus_upd_true (hf m.nid (Nat.le_refl _)), ← minus_upd_true (hf (m.nid + 1) (by omega))]
       at h1
     exact ⟨_, h1, rfl, rfl, rfl⟩
+  | @slit n hfr =>
+    -- AGORA-980: a static literal's node is past the part, as `new`'s
+    have h1 : EvalR { m with alloc := minus m.alloc a2 } (.slit n)
+        (.ok (.view (m.nid + 1) 0 n) false
+          { m with alloc := upd (upd (minus m.alloc a2) m.nid true) (m.nid + 1) true, nid := m.nid + 3,
+                   blk := upd m.blk (m.nid + 2)
+                     (some ⟨.vec .int, .static, some (.node .int m.nid (m.nid + 1) (List.replicate n (.int 0)))⟩) }) :=
+      .slit hfr
+    rw [← minus_upd_true (hf m.nid (Nat.le_refl _)), ← minus_upd_true (hf (m.nid + 1) (by omega))]
+      at h1
+    exact ⟨_, h1, rfl, rfl, rfl⟩
   | moveOwn hy => exact ⟨_, .moveOwn hy, rfl, rfl, rfl⟩
   | @take y t c d es hy =>
     -- Agora #826: the fresh empty `Vec` is past the part, as `new`'s

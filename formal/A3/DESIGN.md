@@ -892,6 +892,9 @@ time. `StmtT.withLock` asks for both:
   After a step, an address in block `k`'s payload was in the same block's
   payload before, or in the stepping thread's own trees (a new block's
   payload, or a lock's given back).
+  - AGORA-980: or the step made the block (a static literal's text, at
+    fresh addresses) and its own slots reach it, so the sweep that ends
+    the step keeps it.
   - This replaces A3.1's `CParts.down_pay` in `race_free`'s sweep case
     (`CParts.ctouch`).
   - `CParts.ctouch` and `CInv.raceFree` no longer take the frame lemmas.

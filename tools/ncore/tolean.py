@@ -362,6 +362,13 @@ def parse(text):
             cur = None
         elif cur is not None:
             cur["body"].append(Line(raw.strip(), len(cur["body"])))
+    # AGORA-994: a parameter the walk inferred consumed (`sink=` of its
+    # summary: handed on to a `sink`, bck_record_inferred_sink) is one the
+    # callee takes over, as a declared `sink` is: nurlc's caller drops none
+    for fn in fns:
+        for w in SUMS.get(fn["name"], {}).get("sink", "").split():
+            if w.isdigit() and int(w) < fn["np"] and not fn["flags"].get(int(w), 0) & 2:
+                fn["flags"][int(w)] = fn["flags"].get(int(w), 0) | 4
     return fns
 
 
@@ -419,7 +426,7 @@ class Fn:
             vm = {p: 1 + i for i, p in enumerate(prms)}
             # (captures by name: the code's parameters after the interface's,
             # `Implements`: `… ++ cs.map (·.2)`)
-            named = [k for k in caps if named_cap(fn, k)]
+            named = [k for i, k in enumerate(caps) if named_cap(fn, k) and not is_moved(fn["name"], i)]
             for j, k in enumerate(named):
                 vm[k] = 1 + self.np + j
             caps = [k for k in caps if k not in named]
@@ -435,6 +442,12 @@ class Fn:
         for v, ty in fn["vars"].items():
             lean_ty(ty)
         self.lits = []
+        # the A2 bindings that are a loop's borrowed element (`foreach`'s `sat`):
+        # a change of elements goes through such a binding itself, not a
+        # borrow of it (AGORA-994: a borrow of it would be the edit's own
+        # binding, and the element, reached `.inner`, would end with the
+        # change made through it)
+        self.elems = set()
         self.depth = 0   # the loops' blocks around the statement
         for i in range(self.np):
             if self.is_dtor(fn["vars"].get(i, "")) and fn["flags"].get(i, 0) & 6:
@@ -454,10 +467,13 @@ class Fn:
             raise Unsupported(f"{fn['name']}: a result owned or lent per call")
         if "ret_alias" in sm and not borrowed(fn["name"]) and self.res_own:
             raise Unsupported(f"{fn['name']}: a result aliasing parameter {sm['ret_alias']}")
-        if borrowed(fn["name"]) and sm.get("rviews", ":") in (":", ""):
+        rets = [l.split() for l in fn["body"] if l.split()[:1] in (["ret"], ["retnx"])]
+        lit_only = bool(rets) and all(len(w) > 1 and w[1] == "c" for w in rets)
+        if borrowed(fn["name"]) and sm.get("rviews", ":") in (":", "") and not lit_only:
             # lent, but from no parameter's storage: a copy of a view an
             # argument holds (a raw string's), which A2 tracks only as a
-            # held dependency, not translated yet
+            # held dependency, not translated yet.  (AGORA-980: one that
+            # hands back only literals lends nothing, `Rhs.slit`.)
             raise Unsupported(f"{fn['name']}: a result copying a view an argument holds")
         if borrowed(fn["name"]):
             # a result that views what it was handed (the walk's summary,
@@ -545,6 +561,15 @@ class Fn:
     def fresh(self):
         self.next += 1
         return self.next - 1
+
+    def edit_through(self, y, op):
+        """A change of `y`'s elements: through `y` itself when it is a loop's
+        borrowed element, else through a borrow of `y` (the binding A2's
+        `edit` goes through), and that binding's name."""
+        if y in self.elems:
+            return f"(.edit true {y} {op})", y
+        b = self.fresh()
+        return f"(.letv {b} (.borrow {y}) (.edit true {b} {op}))", b
 
     def lit_temp(self):
         """An integer temporary holding a number the IR does not track,
@@ -842,8 +867,7 @@ class Fn:
             # its elements past the new length dropped (A2's `edit`, `trunc`)
             pre = []
             i = "(.lit 0)" if n == 1 else self.operand(ops[1], pre)
-            b = self.fresh()
-            s = f"(.letv {b} (.borrow {rd(ops[0])}) (.edit true {b} (.trunc {i})))"
+            s, _ = self.edit_through(rd(ops[0]), f"(.trunc {i})")
             if x is not None:   # vec_truncate's answer, a Bool
                 rest = f"(.letv {x} (.expr (.lit 0)) {rest})"
             return self.wrap(pre, self.seq(s, rest))
@@ -867,8 +891,8 @@ class Fn:
             # for the bytes: A2's `push`, which may move its buffer), and only
             # then are the bytes of the text copied in: the text is read after
             # the change, so a view of the String itself is dead by then
-            b, c = self.fresh(), self.lit_temp()
-            st = f"(.letv {b} (.borrow {rd(ops[0])}) (.edit true {b} (.push {c})))"
+            c = self.lit_temp()
+            st, _ = self.edit_through(rd(ops[0]), f"(.push {c})")
             if ops[1] != "c":
                 y = rd(ops[1])
                 ty = self.vlean(int(ops[1][1:])) if "/" not in ops[1] else self.flean(ops[1])
@@ -907,7 +931,7 @@ class Fn:
             return got
         if f not in names:
             raise Unsupported(f"{self.fn['name']}: call of {f}, not in the program")
-        pre, args = [], []
+        pre, args, texts = [], [], []
         callee = FNS[names[f]] if names[f] < len(FNS) else None
         for i, op in enumerate(words[3:3 + n]):
             if (callee is not None and op.startswith("v") and op[1:].isdigit()
@@ -916,7 +940,14 @@ class Fn:
                 # nurlc copies a closure it hands to a `sink` / `inout`
                 # parameter (`nurl_closure_clone`), which the IR does not show
                 raise Unsupported(f"{self.fn['name']}: a closure handed to a sink or inout parameter of {f}")
-            if op == "c":
+            if op == "c" and callee is not None and callee["vars"].get(i) == "i8*":
+                # AGORA-994: a literal handed to a raw-string parameter is text,
+                # as a raw string bound from a literal is (`lean_ty`): a buffer
+                # of its own, here the call's (it lives no shorter than the call)
+                t = self.fresh()
+                texts.append(t)
+                args.append(str(t))
+            elif op == "c":
                 args.append(str(self.lit_temp()))
             elif "/" in op:
                 raise Unsupported(f"{self.fn['name']}: a field as an argument ({op})")
@@ -924,6 +955,8 @@ class Fn:
                 args.append(str(self.pvar(op)))
         x = self.fresh() if x is None else x
         s = f"(.letcall {x} {names[f]} [{', '.join(args)}] {rest})"
+        for t in reversed(texts):
+            s = f"(.letv {t} (.new .int) {s})"
         for t in reversed(pre):
             s = f"(.letv {t} (.expr (.lit 0)) {s})"
         return s
@@ -1017,6 +1050,7 @@ class Fn:
                 # (a view of a Vec whose elements hold views is not A2's `view`)
                 raise Unsupported(f"{self.fn['name']}: foreach over a Vec of views")
             v, x, i, w = self.pvar(xs), self.var(int(head[1])), self.fresh(), self.fresh()
+            self.elems.add(x)
             self.depth += 2
             inner = self.stmts(body, names)
             self.depth -= 2
@@ -1051,12 +1085,14 @@ class Fn:
             ite = f"(.ite {c} {self.stmts(a, names)} {self.stmts(b, names)})"
             return self.seq(ite, self.stmts(lines[k + 1:], names, tail))
         if w in ("ret", "retnx"):
-            if head[1] == "c" and self.res_ty == "(.slice .int)":
-                # a literal handed back as a view: A2 has no static strings
-                raise Unsupported(f"{self.fn['name']}: a literal string handed back as a view")
             # (`retnx`: the result set, its exit placed after the list, above)
             ex_ = "" if w == "retnx" else f" (.exit {self.depth})"
-            if head[1] != "-" and not self.is_int(head[1]):
+            if head[1] == "c" and self.res_ty == "(.slice .int)":
+                # AGORA-980: a literal handed back as a view is a static
+                # block's text (`Rhs.slit`); its length is no part of the
+                # typing, so the model's text is empty
+                a = f"(.assign {self.rslot} (.slit 0))"
+            elif head[1] != "-" and not self.is_int(head[1]):
                 a = f"(.assign {self.rslot} (.var {self.pvar(head[1])}))"
             else:
                 v = "(.lit 0)" if head[1] == "-" else self.operand(head[1])
@@ -1172,15 +1208,17 @@ class Fn:
             if c == "c" or "/" in c or not (c.startswith("v") and c[1:].isdigit()):
                 raise Unsupported(f"{self.fn['name']}: a capture that is not a variable")
         # (the literal's captures in the code's order: numbers, and buffers
-        # the environment owns, by value into the environment, the other
-        # buffers by name)
+        # the environment owns (AGORA-978) or every literal moves in by value
+        # (AGORA-994), by value into the environment, the other buffers by
+        # name)
         code = FNS[names[f]]
         ck_all = sorted(k for k in code["vars"] if code.get("kind", {}).get(k) == 3)
         if len(ck_all) != len(caps):
             raise Unsupported(f"{self.fn['name']}: closure {f}'s captures")
-        named = [c for c, k in zip(caps, ck_all) if named_cap(code, k)]
-        ck = [k for k in ck_all if named_cap(code, k)]
-        caps = [c for c in caps if c not in named]
+        keep = [named_cap(code, k) and not is_moved(f, j) for j, k in enumerate(ck_all)]
+        named = [c for c, b in zip(caps, keep) if b]
+        ck = [k for k, b in zip(ck_all, keep) if b]
+        caps = [c for c, b in zip(caps, keep) if not b]
         n = len(caps)
         tys = [cap_ty(self.fn["vars"][int(c[1:])]) for c in caps]
         cs = ", ".join(f"({self.pvar(c)}, {cap_mode(code, k)}, {self.vlean(int(c[1:]))})"
@@ -1248,6 +1286,12 @@ class Fn:
                 return ".sink"            # `sink`: the callee takes it over
             if fl & 2:
                 return "(.inout .replace)"  # `inout`: the caller's, changed in place
+            ch = summary_change(self.fn["name"], i)
+            if ch is not None and self.vlean(i).startswith("(.vec"):
+                # AGORA-994: a handle the function changes through, as its
+                # summary says (no `inout` written): the caller's, changed in
+                # place at the bound of what it does
+                return f"(.inout {ch})"
             return ".inp"
         if self.closure:
             # the environment (lent, `inp`), then the interface's parameters
@@ -1260,6 +1304,68 @@ class Fn:
         lends = ", ".join(self.lends)
         return (f"{{ params := [{params}], resTy := {self.res_ty}, resOwn := {own}, lends := [{lends}], rholds := [{lends}],\n"
                 f"    outHolds := [], body := {body}, nvars := {self.next + 1} }}")
+
+
+# AGORA-994: per closure code, the captures (its kind-3 variables) that
+# every literal of it moves into the environment: the creating function
+# releases the binding nowhere and reads it no more after the literal, so
+# the environment owns the buffer (a capture by value), not a handle of a
+# binding that lives on (a capture by name, `cap_ty`)
+MOVED_CAPS = {}
+
+
+def moved_caps(fns):
+    MOVED_CAPS.clear()
+    seen = {}
+    for fn in fns:
+        body = fn["body"]
+        for li, line in enumerate(body):
+            w = line.split()
+            if len(w) >= 5 and w[0] == "let" and w[2] == "closure":
+                code, n = w[3], int(w[4])
+                ops = w[5:5 + n]
+                later = body[li + 1:]
+                moved = set()
+                for j, op in enumerate(ops):
+                    if not (op.startswith("v") and op[1:].isdigit()):
+                        continue
+                    # (only a binding of the function's own, a local or a
+                    # temporary, is moved; a parameter or a capture is not
+                    # the literal's to take)
+                    if fn.get("kind", {}).get(int(op[1:])) not in (1, 2):
+                        continue
+                    pat = re.compile(r"(^|[\s/])" + re.escape(op) + r"($|[\s/])")
+                    dropped = any(l.split()[:2] == ["drop", op[1:]] for l in body)
+                    if not dropped and not any(pat.search(l) for l in later):
+                        moved.add(j)
+                seen.setdefault(code, []).append(moved)
+    for code, sets in seen.items():
+        MOVED_CAPS[code] = set.intersection(*sets) if sets else set()
+
+
+def is_moved(code_name, j):
+    """Is capture `j` (in the code's order) of closure code `code_name`
+    moved into the environment by every literal of it?"""
+    return j in MOVED_CAPS.get(code_name, set())
+
+
+def summary_change(name, i):
+    """The A2 bound of what function `name` does to its parameter `i`
+    through the handle, from the walk's summary (`drops`, `reallocs`,
+    `ireallocs`, `mutates`), or None if nothing. `drop` covers the other
+    two (`Eff.leb`)."""
+    sm = SUMS.get(name, {})
+    has = lambda k: str(i) in sm.get(k, "").split()
+    d, r, ir, m = has("drops"), has("reallocs"), has("ireallocs"), has("mutates")
+    if d or (r and ir):
+        return ".drop"
+    if r:
+        return ".realloc"
+    if ir:
+        return ".dropIn"
+    if m:
+        return ".drop"
+    return None
 
 
 def emit(text):
@@ -1276,6 +1382,7 @@ def emit(text):
     CLO_LIST.clear()
     CLO_BASE[0] = len(fns)
     FNS[:] = fns
+    moved_caps(fns)
     defs = []
     for i, f in enumerate(fns):
         defs.append(f"def fn{i} : Fn :=\n  {Fn(f, i).lean(names)}")

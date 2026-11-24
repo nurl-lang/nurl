@@ -69,6 +69,7 @@ def Blk.rd (bl : Blk) : Val :=
   | .lock => .int 0
   | .view => bl.pay.getD (.int 0)
   | .dead => .int 0   -- Agora #610: no one reads an orphan's payload
+  | .static => bl.tree   -- AGORA-980: a literal's text, read through its views
 
 /-- A3.3: a view of lock block `k` lives (a read guard of an `RwLocked`): its
     payload is read, so whatever would change it waits (a writer's
@@ -735,6 +736,16 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
       EvalR m (.arcNew t y)
         (.ok (.arc m1.nid v) true
           { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .arc, some v⟩) })
+  /-- AGORA-980: a string literal of `n` bytes: its text is a node in a fresh
+      block of kind `static` (the program's static data, which no step
+      frees), and the result is a view of all of it, not owned. -/
+  | slit {n : Nat} :
+      m.blk (m.nid + 2) = none →
+      EvalR m (.slit n)
+        (.ok (.view (m.nid + 1) 0 n) false
+          { m with alloc := upd (upd m.alloc m.nid true) (m.nid + 1) true, nid := m.nid + 3,
+                   blk := upd m.blk (m.nid + 2)
+                     (some ⟨.vec .int, .static, some (.node .int m.nid (m.nid + 1) (List.replicate n (.int 0)))⟩) })
   /-- A3.1: a read of the share `a` (owned or lent) makes a new share of its
       block. -/
   | arcClone {a : Var} {o : Bool} {k : Nat} {p : Val} :
@@ -973,6 +984,7 @@ def Expr.rename (ρ : Var → Var) : Expr → Expr
 def Rhs.rename (ρ : Var → Var) : Rhs → Rhs
   | .expr e => .expr (e.rename ρ)
   | .new t => .new t
+  | .slit n => .slit n
   | .var y => .var (ρ y)
   | .borrow y => .borrow (ρ y)
   | .at y i => .at (ρ y) (i.rename ρ)
@@ -1181,6 +1193,11 @@ inductive Res where
 def Res.mem : Res → Mem
   | .ok m _ => m
   | .panic m => m
+
+/-- AGORA-980: a step that did not panic. -/
+def Res.IsOk : Res → Prop
+  | .ok _ _ => True
+  | .panic _ => False
 
 /-- A3.4: a right-hand side that waits: an atomic operation on an integer
     lock block whose payload a `withLock` has checked out; a channel

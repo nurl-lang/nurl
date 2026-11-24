@@ -100,27 +100,30 @@ theorem ArcLanded.bound {m : Mem} {dep : Dep} {n : Val} (h : ArcLanded m dep n) 
 theorem ViewsOK.mono {m : Mem} {τ : Ty} {T : Val} {H H' : List Dep} (hs : H ⊆ H')
     (h : ViewsOK m τ T H) : ViewsOK m τ T H' := by
   intro s v hv
-  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hv
-  exact ⟨d, o, l, rfl, dep, hs hd, ha⟩
+  obtain ⟨d, o, l, rfl, ⟨dep, hd, ha⟩ | hsv⟩ := h s v hv
+  · exact ⟨d, o, l, rfl, .inl ⟨dep, hs hd, ha⟩⟩
+  · exact ⟨d, o, l, rfl, .inr hsv⟩
 
 /-- A view is valid through a dependency on memory. -/
 theorem ViewsOK.memDeps {m : Mem} {τ : Ty} {T : Val} {H : List Dep} (h : ViewsOK m τ T H) :
     ViewsOK m τ T (A2.memDeps H) := by
   intro s v hv
-  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hv
-  refine ⟨d, o, l, rfl, dep, List.mem_filter.mpr ⟨hd, ?_⟩, ha⟩
-  obtain ⟨_, _, _, hla, _⟩ := ha
-  simp [hla.notName]
+  obtain ⟨d, o, l, rfl, ⟨dep, hd, ha⟩ | hsv⟩ := h s v hv
+  · refine ⟨d, o, l, rfl, .inl ⟨dep, List.mem_filter.mpr ⟨hd, ?_⟩, ha⟩⟩
+    obtain ⟨_, _, _, hla, _⟩ := ha
+    simp [hla.notName]
+  · exact ⟨d, o, l, rfl, .inr hsv⟩
 
 /-- A view is valid only through a dependency that ends views, never through
     a name: what a value's views need, it needs of `readers`. -/
 theorem ViewsOK.readers {m : Mem} {τ : Ty} {T : Val} {H : List Dep} (h : ViewsOK m τ T H) :
     ViewsOK m τ T (readers H) := by
   intro s v hv
-  obtain ⟨d, o, l, rfl, dep, hd, ha⟩ := h s v hv
-  refine ⟨d, o, l, rfl, dep, mem_readers.mpr ⟨hd, ?_⟩, ha⟩
-  obtain ⟨_, _, _, hla, _⟩ := ha
-  exact hla.bound
+  obtain ⟨d, o, l, rfl, ⟨dep, hd, ha⟩ | hsv⟩ := h s v hv
+  · refine ⟨d, o, l, rfl, .inl ⟨dep, mem_readers.mpr ⟨hd, ?_⟩, ha⟩⟩
+    obtain ⟨_, _, _, hla, _⟩ := ha
+    exact hla.bound
+  · exact ⟨d, o, l, rfl, .inr hsv⟩
 
 theorem NamesIn.mono {T : Val} {H H' : List Dep} (h : NamesIn T H) (hs : H ⊆ H') : NamesIn T H' :=
   fun c hc => hs (h c hc)
@@ -140,6 +143,7 @@ theorem ValOK.mono' {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : ValOK m 
     intro P' H' hp hs; obtain ⟨dep, hd, ha⟩ := h; exact .href ⟨dep, hp hd, ha.mono hs⟩
   | view h =>
     intro P' H' hp hs; obtain ⟨dep, hd, ha⟩ := h; exact .view ⟨dep, hp hd, ha⟩
+  | sview h => intro _ _ _ _; exact .sview h
   | pair _ _ ihx ihy => intro P' H' hp hs; exact .pair (ihx (app hp hs) hs) (ihy (app hp hs) hs)
   | inl _ ih => intro P' H' hp hs; exact .inl (ih (app hp hs) hs)
   | inr _ ih => intro P' H' hp hs; exact .inr (ih (app hp hs) hs)
@@ -176,6 +180,7 @@ theorem ValOK.onlyReaders {m : Mem} {τ : Ty} {v : Val} {P H : List Dep} (h : Va
     obtain ⟨dep, hd, ha⟩ := h
     obtain ⟨c, es, hks, hla, hrest⟩ := ha
     exact .view ⟨dep, hp dep hd hla.bound, c, es, hks, hla, hrest⟩
+  | sview h => intro _ _; exact .sview h
   | pair _ _ ihx ihy => intro P' hp; exact .pair (ihx (app hp)) (ihy (app hp))
   | inl _ ih => intro P' hp; exact .inl (ih (app hp))
   | inr _ ih => intro P' hp; exact .inr (ih (app hp))
