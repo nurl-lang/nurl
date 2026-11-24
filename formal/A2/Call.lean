@@ -4526,14 +4526,153 @@ theorem σ_nil_of_thru (h : CallH P Γ F x fn args base) (hR : callR Γ args = [
 
 /-- AGORA-937 (3d, route U): a call that passes views of memory its callee
     changes strictly inside the elements sets the body up ready for it. -/
-theorem thruReady (h : CallH P Γ F x fn args base) (hc : CallThruOK P Γ F fn args) :
+theorem thruReady (h : CallH P Γ F x fn args base) (ht : fn.body.Thru P) (hc : CallThruOK P Γ F fn args) :
     (callS Γ F fn args base x).ThruReady := by
-  sorry -- WIP scaffold (AGORA-937 B4, never merged): ThruReady from CallThruOK
+  obtain ⟨hcalls, hnr, hreg, hw⟩ := hc
+  have hht : fn.body.hasThru = true := by
+    rcases ht with hh | ⟨g, hg, htg⟩
+    · exact hh
+    · exact absurd htg (hcalls g hg)
+  -- an argument by its parameter's index
+  have hargE : ∀ i (hi : i < fn.params.length), ∃ Ea, Γ (args.getD i 0) = some Ea ∧
+      argE Γ (args.getD i 0) = Ea := fun i hi => by
+    obtain ⟨Ea, hEa, _⟩ := h.arg i hi
+    exact ⟨Ea, hEa, by unfold argE; rw [hEa]; rfl⟩
+  have hmemA : ∀ i, i < fn.params.length → args.getD i 0 ∈ args := fun i hi => by
+    simp [List.getD, show i < args.length from h.len ▸ hi]
+  -- a region's index, and what it stands for
+  have hσ : ∀ u, (callS Γ F fn args base x).isPi u = true → ∃ p, ∃ hp : p < fn.params.length,
+      u = fn.nvars + p ∧ fn.params[p].2.holdsView = true ∧
+      (callS Γ F fn args base x).σ u =
+        (if (argE Γ (args.getD p 0)).ty = .int then [] else memDeps (argE Γ (args.getD p 0)).held) := by
+    intro u hu
+    obtain ⟨hle, hlt, hrg⟩ := isRegionIdx_iff.mp hu
+    have hu' : u = fn.nvars + (u - fn.nvars) := (Nat.add_sub_cancel' hle).symm
+    refine ⟨u - fn.nvars, hlt, hu', hrg, ?_⟩
+    have hul : u < fn.nvars + fn.params.length := by
+      have := Nat.add_lt_add_left hlt fn.nvars; rwa [← hu'] at this
+    simp only [callS]
+    rw [ite_cond_eq_true _ _ (eq_true ⟨hle, hul⟩)]
+  -- a root a region stands for: in what the call passes views of
+  have hroot : ∀ u, (callS Γ F fn args base x).isPi u = true → ∀ e ∈ (callS Γ F fn args base x).σ u,
+      e.root ∈ callR Γ args := by
+    intro u hu e he
+    obtain ⟨p, hp, -, -, hσu⟩ := hσ u hu
+    rw [hσu] at he
+    split at he
+    · cases he
+    · rename_i hint
+      exact mem_callR.mpr ⟨_, hmemA p hp, hint, List.mem_map_of_mem he⟩
+  refine ⟨List.eq_nil_iff_forall_not_mem.mpr fun d hd => ?_, fun u hu => ?_⟩
+  · obtain ⟨i, hi, hrg, hint, hdm⟩ := mem_argMemF.mp hd
+    have hil : i < fn.params.length := h.len ▸ hi
+    have hrf : fn.params[i].2.holdsView = false := by
+      simpa [List.getElem?_eq_getElem hil, regioned] using hrg
+    rcases hnr i hil hrf with h' | h'
+    · exact hint h'
+    · rw [h'] at hdm; cases hdm
+  obtain ⟨p, hp, rfl, hph, hσu⟩ := hσ _ hu
+  refine ⟨fun e he => ?_, fun e he => ?_⟩
+  · rw [hσu] at he; split at he
+    · cases he
+    · exact (hreg p hp hph (by assumption) e he).1
+  obtain ⟨hna, hkind, hpath, -, hlive, hdt, hF, ⟨Er, tw, hEr, hl, hmo, hty, -⟩, -, -⟩ :=
+    hw e.root (hroot _ hu e he)
+  have hwΓ : (Γ e.root).isSome := by rw [← h.postdm.1 e.root, hEr]; rfl
+  obtain ⟨Ew, hEw⟩ := Option.isSome_iff_exists.mp hwΓ
+  have hwb : e.root < base := h.domlt _ _ hEw
+  have hnρ : ∀ v, callRen fn.params args base v ≠ e.root := by
+    intro v hv
+    rcases callRen_mem fn.params args base v with hge | hio
+    · rw [hv] at hge; exact absurd hge (Nat.not_le.mpr hwb)
+    · rw [hv] at hio; exact hna (inoutArgs_sub _ _ h.len _ hio)
+  have hxw : e.root ≠ x := fun e' => by rw [e', h.fresh] at hEw; cases hEw
+  -- the frame after the call, as the body sees it
+  have hΦ : ∀ y E, (callS Γ F fn args base x).Φ y = some E →
+      (y = x ∧ E = (callX fn).clean) ∨ ∃ E', callPost Γ fn args y = some E' ∧ E = E'.clean := by
+    intro y E hy
+    simp only [callS] at hy
+    split at hy
+    · cases hy
+    · by_cases hyx : y = x
+      · subst hyx; simp [setE] at hy; exact Or.inl ⟨rfl, hy.symm⟩
+      · right
+        simp only [setE, upd_ne _ _ hyx] at hy
+        cases hp' : callPost Γ fn args y with
+        | none => rw [hp'] at hy; cases hy
+        | some E' => rw [hp'] at hy; cases hy; exact ⟨E', rfl, rfl⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- no other region on the root
+    intro u' hu' hne e' he'
+    obtain ⟨p', hp', rfl, hph', hσu'⟩ := hσ _ hu'
+    rw [hσu'] at he'
+    rw [hσu] at he
+    split at he
+    · cases he
+    split at he'
+    · cases he'
+    exact ((hreg p hp hph (by assumption) e he).2 p' hp' (fun e => hne (by rw [e])) hph'
+      (by assumption) e' he')
+  · -- a lent argument reaches the root at a view or its handle
+    intro w' d hd hr
+    have hpe : (callS Γ F fn args base x).pe w' = callPe Γ fn.params args w' := rfl
+    rw [hpe] at hd
+    unfold callPe at hd
+    split at hd
+    · rename_i t' hw'
+      have hwl : w' < fn.params.length := lt_of_get hw'
+      split at hd
+      · simp [Entry.vdeps, Mode.ownSlot] at hd
+      · simp only [Entry.vdeps, Mode.ownSlot, Bool.false_eq_true, ↓reduceIte, List.mem_append] at hd
+        rcases hd with hd | hd
+        · exfalso
+          have hd' := typedDeps_sub _ _ hd
+          unfold derive at hd'
+          split at hd'
+          · simp only [List.mem_singleton] at hd'; subst hd'
+            exact hna (hr ▸ hmemA w' hwl)
+          · obtain ⟨e0, he0, rfl⟩ := List.mem_map.mp hd'
+            exact hpath _ (hmemA w' hwl) e0 he0 hr
+        · have hd' := typedDeps_sub _ _ hd
+          rcases hkind _ (hmemA w' hwl) d (by unfold Entry.vdeps; exact List.mem_append_right _ hd') hr with
+            h' | h'
+          · exact Or.inl h'
+          · exact Or.inr (Or.inl h')
+    · simp [Entry.vdeps, Mode.ownSlot] at hd
+  · -- nothing live after the call is ended by the change inside
+    intro y E hy hlE
+    rcases hΦ y E hy with ⟨rfl, rfl⟩ | ⟨E', hE', rfl⟩
+    · unfold hits; simp only [Bool.and_eq_false_iff, List.any_eq_false]
+      exact Or.inr fun d hd => absurd (Entry.clean_vdeps_sub hd) (by rw [callX_vdeps]; simp)
+    · rw [clean_live] at hlE
+      rw [hits_clean hlE]
+      exact hlive y E' hE' hlE
+  · -- nor a destructor's view
+    intro y E hy hd hos
+    rcases hΦ y E hy with ⟨rfl, rfl⟩ | ⟨E', hE', rfl⟩
+    · unfold hitsMem; simp only [Bool.and_eq_false_iff, List.any_eq_false]
+      exact Or.inr fun d hd => absurd (Entry.clean_vdeps_sub hd) (by rw [callX_vdeps]; simp)
+    · have hm := hdt y E' hE' (by rw [← Entry.clean_dtor]; exact hd) (by rw [← clean_mode]; exact hos)
+      unfold hitsMem at hm ⊢
+      rw [clean_ty, clean_mode]
+      simp only [Bool.and_eq_false_iff, List.any_eq_false] at hm ⊢
+      exact hm.imp id fun h' d hd => h' d (Entry.clean_vdeps_sub hd)
+  · -- the root is not lent out, nor frozen for the call
+    intro hm
+    rcases List.mem_append.mp hm with hm | hm
+    · exact hF hm
+    · exact (mem_zN.mp hm).2.2 (by simp [thruW, hht, hroot _ hu e he])
+  · -- the root: a live owned `Vec` of the frame
+    refine ⟨Er.clean, ?_, by rw [clean_live]; exact hl, by rw [clean_mode]; exact hmo, ?_⟩
+    · simp only [callS]
+      rw [if_neg (fun ⟨v, hv⟩ => hnρ v hv)]
+      simp [setE, upd_ne _ _ hxw, hEr]
+    · simp [Entry.rvec, clean_ty, hty, Ty.isVec]
 
 /-- ... so the rename's `ThruOrReady` holds for the body. -/
 theorem thruOrReady (h : CallH P Γ F x fn args base) (ht : fn.body.Thru P) :
     (callS Γ F fn args base x).ThruOrReady P fn.body :=
-  (h.thru ht).imp id fun hc => ⟨h.thruReady hc, hc.1⟩
+  (h.thru ht).imp id fun hc => ⟨h.thruReady ht hc, hc.1⟩
 
 /-- The inside of the call is well-typed where the call was. -/
 theorem typedIn (h : CallH P Γ F x fn args base) (hsr : SrcRel P) :
