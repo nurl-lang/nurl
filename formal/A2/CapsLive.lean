@@ -869,4 +869,22 @@ theorem RhsT.st_back {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry
     | exact Or.inl (hnone _ _ _ x t n hx hsn)
     | exact Or.inl (htv ‹TakeVal _ _ _ _› x t n hx hsn)
 
+
+/-- **A binding given the value of a typed right-hand side keeps the
+    clause**: the value is clean (`liveCapsVal`), its handles reach clean
+    nodes (`liveCapsTgt`, through `st_back`), and the store it left keeps
+    the clause (`liveCapsSt`). -/
+theorem RhsT.liveCapsSet {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
+    {v : Val} {o : Bool} {w : Var}
+    (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) (hM : MInv m Γ) (h : LiveCaps m Γ w)
+    (hw : w ∉ r.vars) {x : Var} {o' : Bool} {Γ' : Ctx}
+    (hb : ∀ u E1, u ≠ x → Γ' u = some E1 → E1.live = true → ∃ E0, Γ1 u = some E0 ∧ E0.live = true) :
+    LiveCaps (m1.set x ⟨o', some v⟩) Γ' w := by
+  refine (hr.liveCapsSt he h).setG hb (fun V e => ?_)
+  cases e
+  refine ⟨fun n hn => (hr.liveCapsVal he hM h hw).sub hn, fun c hc x' t n hx' hsn hnd => ?_⟩
+  rcases hr.st_back he h x' t n hx' hsn with ⟨t', hx'', hs''⟩ | hn
+  · exact hr.liveCapsTgt he hM h c hc x' t' n hx'' hs'' hnd
+  · exact hn
+
 end A2
