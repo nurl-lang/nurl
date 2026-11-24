@@ -126,6 +126,16 @@ def by_name(t):
     return cap_ty(t) != ".int"
 
 
+def named_cap(fn, k):
+    """Is capture `k` of closure code `fn` one by name? A buffer is, unless
+    its env owns it: the closure is returned where it is made, and the core
+    IR flags the capture CORE_VF_ENVOWN (2048), the binding's value moved
+    in (or a copy of it where the binding borrows). Then it is a value of
+    the environment, as a number is, lent from it where the body reads it
+    (AGORA-978)."""
+    return by_name(fn["vars"][k]) and not fn["flags"].get(k, 0) & 2048
+
+
 # The calls that change a buffer in place, through the handle they are given
 # (a closure's copy of a captured handle reaches the binding's buffer).
 CHANGERS = ("vec_push__", "vec_clear__", "vec_truncate__", "vec_reserve__",
@@ -409,7 +419,7 @@ class Fn:
             vm = {p: 1 + i for i, p in enumerate(prms)}
             # (captures by name: the code's parameters after the interface's,
             # `Implements`: `… ++ cs.map (·.2)`)
-            named = [k for k in caps if by_name(fn["vars"][k])]
+            named = [k for k in caps if named_cap(fn, k)]
             for j, k in enumerate(named):
                 vm[k] = 1 + self.np + j
             caps = [k for k in caps if k not in named]
@@ -1161,17 +1171,18 @@ class Fn:
         for c in caps:
             if c == "c" or "/" in c or not (c.startswith("v") and c[1:].isdigit()):
                 raise Unsupported(f"{self.fn['name']}: a capture that is not a variable")
-        # (the literal's captures in the code's order: numbers by value into
-        # the environment, buffers by name)
-        named = [c for c in caps if by_name(self.fn["vars"][int(c[1:])])]
+        # (the literal's captures in the code's order: numbers, and buffers
+        # the environment owns, by value into the environment, the other
+        # buffers by name)
+        code = FNS[names[f]]
+        ck_all = sorted(k for k in code["vars"] if code.get("kind", {}).get(k) == 3)
+        if len(ck_all) != len(caps):
+            raise Unsupported(f"{self.fn['name']}: closure {f}'s captures")
+        named = [c for c, k in zip(caps, ck_all) if named_cap(code, k)]
+        ck = [k for k in ck_all if named_cap(code, k)]
         caps = [c for c in caps if c not in named]
         n = len(caps)
         tys = [cap_ty(self.fn["vars"][int(c[1:])]) for c in caps]
-        code = FNS[names[f]]
-        ck = sorted(k for k in code["vars"] if code.get("kind", {}).get(k) == 3)
-        ck = [k for k in ck if by_name(code["vars"][k])]
-        if len(ck) != len(named):
-            raise Unsupported(f"{self.fn['name']}: closure {f}'s captures by name")
         cs = ", ".join(f"({self.pvar(c)}, {cap_mode(code, k)}, {self.vlean(int(c[1:]))})"
                        for c, k in zip(named, ck))
         sigma = fn_sigma(self.vlean(int(x)) if isinstance(x, int) else x)
