@@ -2891,7 +2891,10 @@ are dropped, moved and copied by the same rules:
   parameter over instead, because a struct is dropped whole: the caller
   hands its argument in. So with several parameters named whole of which
   the function takes one over (a `sink`, or one it consumes on another
-  path): the literal takes them all over. A function that is meant to
+  path, through a callee compiled later too, by that callee's verdict):
+  the literal takes them all over. A function lending on one path and
+  handing over a value of its own on another answers per call, as `^ p`
+  beside `^ ( mk )` does. A function that is meant to
   take its argument over says so with `sink` (D4c, AGORA-995).
 - **A local handed back whole through a call** (`^ ( id s )`, `^ ( wrap
   s )`, or `: K k ( wrap s )` and then `^ k`, where the callee hands its

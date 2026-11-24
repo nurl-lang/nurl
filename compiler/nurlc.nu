@@ -10848,7 +10848,11 @@ unsafe @ __gen_ret i lex i syms i cg → s {
                 ? != 0 ( nurl_str_len __awp ) { ( mem_udrop_flag_set syms cg __awp `0` ) } {}
             } {}
         }
-        ? != 0 ( nurl_str_len __awo ) { = hbit __awo = __aw_sinkbit T } {}
+        // (A path that lends, as `^ p` is: beside one handing over a value
+        // of its own, `^ @ K { ( mk ) }`, the function answers per call -
+        // mem_store_hown. Taken for a lender throughout, the fresh result
+        // leaked; AGORA-995, review of github#2280.)
+        ? != 0 ( nurl_str_len __awo ) { = hbit __awo = __aw_sinkbit T ( nurl_sym_set_deep syms `__ret_path_lends__` `1` ) } {}
         // (…and where it takes some of them over and only lends the others,
         // the result would own the ones and borrow the rest, which no
         // answer can say: refused at module end then, resolve_nc_local_lends.)
@@ -10864,6 +10868,8 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             : i __mln ( nurl_str_to_int ( nurl_sym_get g_pending_impl `mixlit_n` ) )
             ( nurl_sym_def g_pending_impl `mixlit_n` ( nurl_str_int + __mln 1 ) )
             ( nurl_sym_def g_pending_impl ( nurl_str_cat `mixlit#` ( nurl_str_int __mln ) ) ( nurl_str_cat4 __awself ` ` __awix ( nurl_str_cat4 ` ` ( nurl_str_int bck_line ) ` ` ( nurl_lex_filename lex ) ) ) )
+            // (…listed by function too: __mixlit_take_all reads its own only.)
+            ( nurl_sym_append_word g_pending_impl ( nurl_str_cat `mixlit##` __awself ) ( nurl_str_int __mln ) )
         } {}
     } {}
     ? __rb_read { ( nurl_sym_set_deep syms `__fn_ret_borrow_read__` `1` ) } {}
@@ -109582,14 +109588,19 @@ unsafe @ __sx_names_capture i syms s sx → b {
 // taken over, an inferred `sink` and kept, as a declared `sink` beside
 // them makes them (AGORA-995).
 @ __mixlit_take_all i syms s fname → v {
-    : i mn ( nurl_str_to_int ( nurl_sym_get g_pending_impl `mixlit_n` ) )
-    ? == mn 0 { ^ v } {}
+    // (This function's records only, `mixlit##fname`: scanning every
+    // function's made the module quadratic in them.)
+    : s mids ( nurl_sym_get g_pending_impl ( nurl_str_cat `mixlit##` fname ) )
+    ? == 0 ( nurl_str_len mids ) { ^ v } {}
     : s pnames ( nurl_sym_get syms `__fn_param_names__` )
     // (…or may take over through a call to a function not compiled yet:
     // its parked implication, `pidx callee fname aidx`, names the
-    // parameter. Taken over at module end, the literal's lent ones could
-    // no longer be, and the program was refused; taking them all over now
-    // is what a declared `sink` beside them does.)
+    // parameter. That callee's verdict is not known here, so such a
+    // parameter is not taken over yet: each member of a literal with no
+    // sink is parked behind the others instead, below, and the module-end
+    // fixed point takes the literal's parameters over together exactly
+    // when one of them is a sink after all - a callee that only reads
+    // takes none over.)
     : ~ s pend ``
     : ~ s prest ( nurl_str_cat ( nurl_sym_get syms `__fn_pending_sink_impl__` ) `` )
     ~ != 0 ( nurl_str_len prest ) {
@@ -109602,9 +109613,10 @@ unsafe @ __sx_names_capture i syms s sx → b {
     : ~ b mchg T
     ~ mchg {
         = mchg F
-        : ~ i mj 0
-        ~ < mj mn {
-            : ~ s mr ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `mixlit#` ( nurl_str_int mj ) ) ) `` )
+        : ~ s mjs ( nurl_str_cat mids `` )
+        ~ != 0 ( nurl_str_len mjs ) {
+            : s mjw ( str_first_word mjs ) = mjs ( str_skip_word mjs )
+            : ~ s mr ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `mixlit#` mjw ) ) `` )
             : s mfn ( str_first_word mr ) = mr ( str_skip_word mr )
             ? ( seq mfn fname ) {
                 : s mixs ( str_first_word mr )
@@ -109615,7 +109627,7 @@ unsafe @ __sx_names_capture i syms s sx → b {
                     : s mix ? < cm 0 ( nurl_str_cat mrest `` ) ( nurl_str_slice mrest 0 cm )
                     = mrest ? < cm 0 `` ( nurl_str_slice mrest + cm 1 - - ( nurl_str_len mrest ) cm 1 )
                     ? != 0 ( nurl_str_len mix ) {
-                        ? | | ( str_contains_word ( nurl_sym_get g_fn_sink fname ) mix ) ( str_contains_word ( nurl_sym_get syms `__fn_inferred_sink__` ) mix ) ( str_contains_word pend mix ) { = msk + msk 1 } {}
+                        ? | ( str_contains_word ( nurl_sym_get g_fn_sink fname ) mix ) ( str_contains_word ( nurl_sym_get syms `__fn_inferred_sink__` ) mix ) { = msk + msk 1 } {}
                     } {}
                 }
                 ? > msk 0 {
@@ -109631,8 +109643,46 @@ unsafe @ __sx_names_capture i syms s sx → b {
                     }
                 } {}
             } {}
-            = mj + mj 1
         }
+    }
+    // (A literal none of whose parameters is taken over yet, in a body
+    // with a parked implication: each member is a `sink` if another is,
+    // `m fname fname x`, which the module-end fixed point settles with the
+    // callee's verdict - overlapping literals included.)
+    ? == 0 ( nurl_str_len pend ) { ^ v } {}
+    : ~ s pjs ( nurl_str_cat mids `` )
+    ~ != 0 ( nurl_str_len pjs ) {
+        : s pjw ( str_first_word pjs ) = pjs ( str_skip_word pjs )
+        : ~ s pr ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `mixlit#` pjw ) ) `` )
+        : s pfn ( str_first_word pr ) = pr ( str_skip_word pr )
+        ? ( seq pfn fname ) {
+            : s pmixs ( str_first_word pr )
+            : ~ s pwords ``
+            : ~ s pcs ( nurl_str_cat pmixs `` )
+            ~ != 0 ( nurl_str_len pcs ) {
+                : i cm ( nurl_str_find pcs `,` )
+                : s mix ? < cm 0 ( nurl_str_cat pcs `` ) ( nurl_str_slice pcs 0 cm )
+                = pcs ? < cm 0 `` ( nurl_str_slice pcs + cm 1 - - ( nurl_str_len pcs ) cm 1 )
+                ? != 0 ( nurl_str_len mix ) { = pwords ( nurl_str_cat3 pwords ` ` mix ) } {}
+            }
+            : ~ b psunk F
+            : ~ s pa ( nurl_str_cat pwords `` )
+            ~ != 0 ( nurl_str_len pa ) {
+                : s m ( str_first_word pa ) = pa ( str_skip_word pa )
+                ? | ( str_contains_word ( nurl_sym_get g_fn_sink fname ) m ) ( str_contains_word ( nurl_sym_get syms `__fn_inferred_sink__` ) m ) { = psunk T } {}
+            }
+            ? ! psunk {
+                : ~ s pm ( nurl_str_cat pwords `` )
+                ~ != 0 ( nurl_str_len pm ) {
+                    : s m ( str_first_word pm ) = pm ( str_skip_word pm )
+                    : ~ s px ( nurl_str_cat pwords `` )
+                    ~ != 0 ( nurl_str_len px ) {
+                        : s x ( str_first_word px ) = px ( str_skip_word px )
+                        ? ! ( seq m x ) { ( __park_append syms `__fn_pending_sink_impl__` ( nurl_str_cat4 m ` ` fname ( nurl_str_cat4 ` ` fname ` ` x ) ) ) } {}
+                    }
+                }
+            } {}
+        } {}
     }
 }
 
