@@ -1150,3 +1150,11 @@ What preservation needs is one typed read lemma: `RhsT` reads only live bindings
 3. Its `Preservation` sites; `Step.held_not_killVars` from the typing (the called `c` is live); then the two scaffolds.
 
 *Probe (2026-11-24): `RhsT.vars_live`, "every variable a typed rhs reads is live".* A generic tactic closes every `RhsT` case but nine: `at`, `sat`, `remove`, `expr`, `atomic`, `chanSend`, `lockRestore`, `pack` (captures, live by `CapsOK`) and `pair` (an intermediate context). The index expressions read integers, which need no clause. So the value lemma should go case by case, as `EvalR.capsInp` does, and take liveness from each `RhsT` premise only where a value that may hold packages is read.
+
+*Progress (2026-11-24 late):* `LiveCaps` is defined. `RhsT.liveCapsVal` proves the value is `ValCapsInp` for every case that reads a live slot or a block. Eighteen cases are left:
+- `at`, `sat`, `view`, `borrow`: the targets;
+- `pop`, `remove`: children;
+- `glob`, `rwRead`, `rwTry*`, `chanRecv`: leaves and payloads;
+- `pair`, `inl`, `inr`, `pack`, and `arcNew` / `lockNew` / `cellNew`: recursive.
+
+The recursive ones need the statement strengthened to "the value is `ValCapsInp`, and `LiveCaps m1 Γ1 w` holds after". A component's evaluation changes the store (a move empties its slot), and the next component reads in `Γ1`, as `EvalR.capsInp` does with `SlotsCaps`.

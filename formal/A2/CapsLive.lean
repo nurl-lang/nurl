@@ -38,4 +38,46 @@ theorem MInv.liveCaps {m : Mem} {Γ : Ctx} {w : Var} (hM : MInv m Γ) (hnm : NoM
 
 namespace A2
 
+
+/-- The clause over the live bindings: a live slot's value, and the nodes
+    its handle or view reaches, hold no package that captures `w` but
+    read-only. -/
+def LiveCaps (m : Mem) (Γ : Ctx) (w : Var) : Prop :=
+  ∀ v E o V, Γ v = some E → E.live = true → m.st v = some ⟨o, some V⟩ →
+    ValCapsInp V w ∧ (∀ c n, V = .href c → NodeAt m c n → ValCapsInp n w) ∧
+      (∀ d o' l n, V = .view d o' l → DataAt m d n → ValCapsInp n w)
+
+theorem LiveCaps.val {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) {v : Var} {E : Entry}
+    {o : Bool} {V : Val} (hv : Γ v = some E) (hl : E.live = true) (hs : m.st v = some ⟨o, some V⟩) :
+    ValCapsInp V w := (h v E o V hv hl hs).1
+
+/-- What a typed right-hand side yields holds no package capturing `w` but
+    read-only, where the live bindings it reads hold none. -/
+theorem RhsT.liveCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
+    {v : Val} {o : Bool} {w : Var}
+    (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) (hM : MInv m Γ) (h : LiveCaps m Γ w)
+    (hw : w ∉ r.vars) : ValCapsInp v w := by
+  have lf : ∀ {u : Val}, (∀ fs te ms e cs, u ≠ .pkg fs te ms e cs) → (∀ e, ¬ Child e u) → ValCapsInp u w :=
+    fun a b => ValCapsInp.leaf a b
+  induction hr generalizing v o m1
+  case expr => cases he; exact ValCapsInp.int _ w
+  case new =>
+    cases he
+    refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+    cases hc with | elem he => simp at he
+  case moveOwn y E0 hy hl _ _ _ _ => cases he <;> exact h.val hy hl (by assumption)
+  all_goals first
+    | (cases he <;> first
+        | exact h.val (by assumption) (by assumption) (by assumption)
+        | exact ValCapsInp.int _ w
+        | exact ((h.val (by assumption) (by assumption) (by assumption)).child Child.fst).lend
+        | exact ((h.val (by assumption) (by assumption) (by assumption)).child Child.snd).lend
+        | exact ((h.val (by assumption) (by assumption) (by assumption)).child Child.inl).lend
+        | exact ((h.val (by assumption) (by assumption) (by assumption)).child Child.inr).lend
+        | exact (h.val (by assumption) (by assumption) (by assumption)).child Child.inl
+        | exact (h.val (by assumption) (by assumption) (by assumption)).child Child.inr
+        | exact (hM.rdCapsInp w (by assumption)).2
+        | exact (hM.rdCapsInp w (by assumption)).1.lend)
+    | sorry -- WIP scaffold (AGORA-937 B4, never merged): RhsT.liveCapsVal, the remaining cases
+
 end A2
