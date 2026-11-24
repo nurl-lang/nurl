@@ -985,3 +985,38 @@ parameter's type a `Vec` of views.
    (`CallH.minv`), or as a `CallPre` context the call steps through?
 3. ~~Is a depth-aware `.drop` worth adding before 3d?~~ Yes; it is needed,
    not just more precise (`MInv.rootbLive`), and it is done (`Eff.dropIn`, above).
+
+## B4, the turn-on (in progress, branch `wip/t937-b4`)
+
+**Done on the branch:**
+- **The call rule.** `CallThruOK` (Typing.lean) is the second branch of `CallT`'s `ThruFn` premise: the call passes views of real memory `w` that the callee changes only inside its elements.
+- **No exit kill.** Weakening ends a caller binding such as `s2`, a view inside `w`'s elements, before the call (`EntryWeaker.live`). A dead binding is never read again, so A2 accepts what nurlc does, and `callPost` is unchanged.
+- **The frame.** `zN` leaves out `thruW`, the roots the callee changes inside.
+- **The anchors.**
+  - `StmtT.rbind` takes `AnchoredS Γ E F (p :: s.killVars)`.
+  - `WrapCond .inp` takes `AnchoredS … V`.
+  - `StmtT.keepKV` keeps such a root bound.
+  - `CallH.held_anch` shows that the lifted lent parameter's view of `w` is a `HeldAnch`.
+- **The rename.** `CallH.thruReady`: the call sets the body up ready for a change through its regions (`ThruReady`).
+
+**What is left: the closure-capture clause must be frame-relative.**
+
+`HeldCapsInp` asks for `CapsInpAt m w` over the whole store, for the held anchors of borrowed parameters outside the running scopes, at roots outside `F`. A running `rbind`'s own parameter is in the spine, so it is skipped. `Inv.rbindIn` then needs the clause for it.
+
+The clause cannot be stated at the outer level as it stands:
+- There, `F` lacks the frozen part `z'` the typing chose. The runtime `frozen z` (`zOf`) contains the changed root `w` too.
+- So no condition on `F` tells `w` from a frozen root `w'`.
+- A live caller closure that captures `w'` inout is legal and unreachable from the callee. It makes the store-wide `CapsInpAt m w'` false.
+
+The clause must therefore speak of what the frame can reach:
+- bindings at or above the frame's base;
+- the call's `inout` arguments;
+- closed under names held: what an argument's closures capture by name, transitively. A lent closure that reads a closure `x` which changes `w` would otherwise let the callee change `w` through `x`.
+
+Stated this way, the clause holds for frozen roots as well: a frozen root is no root of `mutNames`, and the callee names none of the caller's bindings. So the clause needs neither the spine exclusion nor the `∉ F` condition.
+
+**Preservation:**
+- A step inside the frame binds only fresh variables, at or above `m.nv`, which is at or above the base.
+- It writes only reached slots, from values it read there (`EvalR.capsInp`, restricted to the reach).
+- A nested frame's base is at or above the outer one's.
+- `rbindSkip` removes the parameter.
