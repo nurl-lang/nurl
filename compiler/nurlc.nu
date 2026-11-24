@@ -702,6 +702,7 @@ $ `stdlib/core/vec.nu`
 : ~ i g_eng_dtor_unw -1  // 1: a destructor of the program may start a panic; -1 not asked yet (__eng_dtor_unw_init)
 : ~ i g_sm_dyn 0  // the name `dyn` (interned): boxing a value as a trait object
 : ~ i g_sm_memtake 0  // the name `mem_take` (interned): a binding takes over what it read (g_eng_rawwalk, AGORA-877)
+: ~ i g_sm_memforget 0  // the name `mem_forget` (interned): the core IR names the binding it gives up (AGORA-989)
 : i TG_SC 32
 : i TG_RB 33  // a payload taken out of a temporary: what it holds of itself, of its new holder
 : i TG_CV 34  // a view a closure's body hands back: what it lends of an argument, a capture
@@ -21276,6 +21277,13 @@ unsafe @ eng_byte s w i k → i {
         : i ops ( wv_new )
         : ~ i j 0
         ~ < j n { ( wv_push ops ( eng_op ( ec + + at 3 j ) ) ) = j + j 1 }
+        ? & == n 1 == name g_sm_memforget {
+            // `( mem_forget x )`: the engine's verdicts stay as they were
+            // before the IR named x (AGORA-989); it asks nothing of the
+            // operand.
+            ( wv_drop ops )
+            ^ g_av_none
+        } {}
         ? & & != 0 g_eng_rawwalk == n 1 == name g_sm_memtake {
             // `( mem_take x )`, where the engine reads raw bodies: x, read
             // out of a container by hand, is its own from here - what it
@@ -25209,6 +25217,7 @@ unsafe @ eng_print_types → v {
     = g_ws_syms syms
     = g_sm_dyn ( __core_in `dyn` )
     = g_sm_memtake ( __core_in `mem_take` )
+    = g_sm_memforget ( __core_in `mem_forget` )
     ( eng_sq_reset )
     ( __ep_init )
     ( __et_names )
@@ -33015,8 +33024,14 @@ unsafe @ __lx_skip_ws i lex → v {
         ? & & < + pos 1 len
         == & # i . src pos 255 47
         == & # i . src + pos 1 255 47 {
-            // line comment — skip to end of line (exclusive of '\n').
-            ~ & < pos len != & # i . src pos 255 10 { = pos + pos 1 }
+            // line comment — skip to end of line (exclusive of '\n'): memchr
+            // to the line break, as __lex_build_linetab does. A third of
+            // the compiler's own source is comments, and every scan pass
+            // lexes the whole file, so a byte loop here was most of what
+            // skipping cost.
+            : i sb # i src
+            : i hit # i ( memchr # *u + sb pos 10 - len pos )
+            = pos ? == hit 0 len - hit sb
         } { = done T }
     }
     ( nurl_poke p LX_POS pos )
@@ -34205,6 +34220,11 @@ unsafe @ nurl_lex_peek4_type i h → i {
     : s name ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
     ( expect lex TT_RPAREN )
+    // (The core IR names the binding given up, as every call names the
+    // operands it consumes: `call mem_forget 1 vK`. Without it the IR said
+    // the binding lived to its scope end while the code cleared its flag
+    // here - AGORA-989.)
+    ? != 0 g_core_live { ( core_push_name syms name ( nurl_sym_get syms name ) ) } {}
     : s up ( mem_udrop_ptr_of syms name )
     ? != 0 ( nurl_str_len up ) { ( mem_udrop_flag_set syms cg up `0` ) } {}
     // A destructor's receiver given up whole: its fields go with it, so no
@@ -98294,7 +98314,12 @@ unsafe @ __lazy_scan → v {
     : *u q # *u pre
     : ~ i k g_lazy_scan
     ~ < k n {
-        ? & == # i . p k 64 < + k 11 n {
+        // (memchr to the next `@`: the text is tens of megabytes, scanned
+        // again after every round of instances; a byte loop over it was
+        // the scan's whole cost)
+        : i hit # i ( memchr # *u + base k 64 - n k )
+        = k ? == hit 0 n - hit base
+        ? & & < k n == # i . p k 64 < + k 11 n {
             : ~ b m T
             : ~ i j 0
             ~ & m < j 10 { ? != # i . p + + k 1 j # i . q j { = m F } {} = j + j 1 }
