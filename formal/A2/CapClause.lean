@@ -3,9 +3,10 @@ import A2.KillVarsStep
 namespace A2
 
 /-! AGORA-937 B2 (AGORA-963): the closure-capture clause. A held anchor's
-root (not lent out) is captured by no package in the store but read-only,
-so a call through a package never hands it to an `inout` parameter of the
-code (`CapInout`), and a step names it as no new killable name. By
+root is captured by no package in a live slot but read-only (a dead slot may
+keep a package with an `inout` capture). So a call through a package whose
+receiver is live (`hlive`) never hands the root to an `inout` parameter of
+the code (`CapInout`), and a step names it as no new killable name. By
 claude-expert. -/
 
 /-- AGORA-937 B2 (AGORA-963): an opened call's argument at a capture's
@@ -39,12 +40,14 @@ theorem capPos {zs : List Var} {cs : List (Var × PMode × Ty)} {n : Nat} {pre :
   obtain ⟨q, hq, h1, h2⟩ := capPos_any hlen hi hv hp
   exact ⟨q, hq, h1, by rw [h2]⟩
 
-theorem CapInout.not_held {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt}
-    (hcl : HeldCapsInp m Γ F s) (hcodes : MemCodes P m)
+theorem CapInoutH.not_held {P : Prog} {m : Mem} {Γ : Ctx} {s : Stmt}
+    (hcl : HeldCapsInp m Γ s) (hcodes : MemCodes P m)
+    (hlive : ∀ c ∈ s.headCallc, ∃ Ec, Γ c = some Ec ∧ Ec.live = true)
     {p : Var} {E : Entry} {d : Dep} (hp : Γ p = some E) (hm : E.mode = .rootb) (hps : p ∉ s.spine)
-    (hd : d ∈ E.vdeps) (hb : d.kind.bound = .none) (hh : HeldAnch E d) (hF : d.root ∉ F) :
-    ¬ CapInout P m d.root := by
-  rintro ⟨c, o, fs, te, ms, env, cs, j, f, fn, zs, i, b, t, hc, hj, hf, hl, hi, hai, hpi⟩
+    (hd : d ∈ E.vdeps) (hb : d.kind.bound = .none) (hh : HeldAnch E d) :
+    ¬ CapInoutH P m s d.root := by
+  rintro ⟨c, hcs, o, fs, te, ms, env, cs, j, f, fn, zs, i, b, t, hc, hj, hf, hl, hi, hai, hpi⟩
+  obtain ⟨Ec, hEc, hlc⟩ := hlive c hcs
   have hcode := hcodes.1 c o _ fs te ms env cs hc (Sub.refl _)
   obtain ⟨hlen, himpl⟩ := hcode
   have hjl : j < ms.length := by
@@ -58,18 +61,19 @@ theorem CapInout.not_held {P : Prog} {m : Mem} {Γ : Ctx} {F : List Var} {s : St
   have hlen' : sig.params.tail.length = zs.length := by
     simp only [List.length_cons, List.length_append, List.length_map] at hl; omega
   obtain ⟨q, hq, hq1, hq2⟩ := capPos hlen' hi hai hpi
-  have := (hcl p E hp hm hps d hd hb hh hF).1 c o _ hc fs te ms env cs (Sub.refl _) q hq hq1
+  have := ((hcl p E hp hm hps d hd hb hh) c Ec o _ hEc hlc hc).1 fs te ms env cs (Sub.refl _) q hq hq1
   rw [hq2] at this; cases this
 
-theorem Step.held_not_killVars {P : Prog} {m m' : Mem} {Γ : Ctx} {F : List Var} {s s' : Stmt}
-    (hstep : Step P m s (.ok m' s')) (hcl : HeldCapsInp m Γ F s) (hcodes : MemCodes P m)
+theorem Step.held_not_killVars {P : Prog} {m m' : Mem} {Γ : Ctx} {s s' : Stmt}
+    (hstep : Step P m s (.ok m' s')) (hcl : HeldCapsInp m Γ s) (hcodes : MemCodes P m)
+    (hlive : ∀ c ∈ s.headCallc, ∃ Ec, Γ c = some Ec ∧ Ec.live = true)
     {p : Var} {E : Entry} {d : Dep} (hp : Γ p = some E) (hm : E.mode = .rootb) (hps : p ∉ s.spine)
-    (hd : d ∈ E.vdeps) (hb : d.kind.bound = .none) (hh : HeldAnch E d) (hF : d.root ∉ F)
+    (hd : d ∈ E.vdeps) (hb : d.kind.bound = .none) (hh : HeldAnch E d)
     (hkv : d.root ∉ s.killVars) (hlt : d.root < m.nv) : d.root ∉ s'.killVars := by
   intro hin
-  rcases hstep.killVars_sub m' s' rfl d.root hin with h | h | h
+  rcases hstep.killVars_subH m' s' rfl d.root hin with h | h | h
   · exact hkv h
   · exact absurd h (Nat.not_le.mpr hlt)
-  · exact CapInout.not_held hcl hcodes hp hm hps hd hb hh hF h
+  · exact CapInoutH.not_held hcl hcodes hlive hp hm hps hd hb hh h
 
 end A2

@@ -103,6 +103,34 @@ def CapInout (P : Prog) (m : Mem) (v : Var) : Prop :=
     zs.length + 1 ≤ i ∧ (m.nv :: zs ++ cs.map (·.1))[i]? = some v ∧
     fn.params[i]? = some (PMode.inout b, t)
 
+/-- AGORA-937 B4: the package slot a statement calls first, if it calls one
+    (`callc`, `callcE`), through the running scopes. -/
+def Stmt.headCallc : Stmt → List Var
+  | .seq a _ => a.headCallc
+  | .scope _ s => s.headCallc
+  | .rbind _ s => s.headCallc
+  | .scopeD _ _ s => s.headCallc
+  | .scopeL _ _ _ s => s.headCallc
+  | .catchR _ _ s => s.headCallc
+  | .frozen _ s => s.headCallc
+  | .block s => s.headCallc
+  | .callc _ c _ _ _ _ => [c]
+  | .callcE _ c _ _ _ => [c]
+  | _ => []
+
+/-- `CapInout` at a given package slot `c`. -/
+def CapInoutAt (P : Prog) (m : Mem) (c : Var) (v : Var) : Prop :=
+  ∃ (o : Bool) (fs : List Nat) (te : Ty) (ms : List Nat) (env : Val)
+    (cs : List (Var × PMode × Ty)) (j f : Nat) (fn : Fn) (zs : List Var) (i : Nat) (b : Eff) (t : Ty),
+    m.st c = some ⟨o, some (.pkg fs te ms env cs)⟩ ∧ fs[j]? = some f ∧ P[f]? = some fn ∧
+    (m.nv :: zs ++ cs.map (·.1)).length = fn.params.length ∧
+    zs.length + 1 ≤ i ∧ (m.nv :: zs ++ cs.map (·.1))[i]? = some v ∧
+    fn.params[i]? = some (PMode.inout b, t)
+
+/-- ... at the slot the statement calls first. -/
+def CapInoutH (P : Prog) (m : Mem) (s : Stmt) (v : Var) : Prop :=
+  ∃ c ∈ s.headCallc, CapInoutAt P m c v
+
 theorem inoutArgs_pos (ps : List (PMode × Ty)) (args : List Var) (hl : args.length = ps.length) :
     ∀ v ∈ inoutArgs ps args, ∃ (i : Nat) (b : Eff) (t : Ty), ps[i]? = some (PMode.inout b, t) ∧ args[i]? = some v := by
   intro v hv
@@ -121,8 +149,10 @@ theorem inoutArgs_pos (ps : List (PMode × Ty)) (args : List Var) (hl : args.len
     | inp => intro h; simp at h
     | sink => intro h; simp at h
 
-theorem Step.killVars_sub {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) :
-    ∀ m' s', r = .ok m' s' → ∀ v ∈ s'.killVars, v ∈ s.killVars ∨ m.nv ≤ v ∨ CapInout P m v := by
+/-- AGORA-937 B4: `Step.killVars_sub`, the captured name at the slot the
+    statement calls first. -/
+theorem Step.killVars_subH {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) :
+    ∀ m' s', r = .ok m' s' → ∀ v ∈ s'.killVars, v ∈ s.killVars ∨ m.nv ≤ v ∨ CapInoutH P m s v := by
   induction h with
   | seqL _ ih =>
     intro m' s' hr v hv; cases hr
@@ -230,11 +260,21 @@ theorem Step.killVars_sub {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P 
             have hz : zs[k]? = some v := by
               simpa [List.getElem?_cons_succ, List.getElem?_append_left hk] using hai
             exact Or.inl (by simp [Stmt.killVars, List.mem_of_getElem? hz])
-        · exact Or.inr (Or.inr ⟨c, o, fs, te, ms, env, cs, j, f, fn, zs, i, b, t, hc, hj, hf, hl, hi, hai, hpi⟩)
+        · exact Or.inr (Or.inr ⟨c, by simp [Stmt.headCallc], o, fs, te, ms, env, cs, j, f, fn, zs, i, b, t, hc, hj, hf, hl, hi, hai, hpi⟩)
     · exact Or.inl (by simp [Stmt.killVars, hv])
   | _ =>
     intro m' s' hr v hv
     cases hr
     all_goals (simp only [Stmt.killVars, Rhs.vars, Expr.vars, handStmt, handStmtD, List.mem_cons, List.mem_append, List.not_mem_nil] at hv ⊢ <;> grind)
+
+
+/-- ... dropping which package slot the statement calls. -/
+theorem Step.killVars_sub {P : Prog} {m : Mem} {s : Stmt} {r : Res} (h : Step P m s r) :
+    ∀ m' s', r = .ok m' s' → ∀ v ∈ s'.killVars, v ∈ s.killVars ∨ m.nv ≤ v ∨ CapInout P m v := by
+  intro m' s' hr v hv
+  rcases h.killVars_subH m' s' hr v hv with h1 | h1 | ⟨c, -, o, fs, te, ms, env, cs, j, f, fn, zs, i, b, t, hc⟩
+  · exact Or.inl h1
+  · exact Or.inr (Or.inl h1)
+  · exact Or.inr (Or.inr ⟨c, o, fs, te, ms, env, cs, j, f, fn, zs, i, b, t, hc⟩)
 
 end A2

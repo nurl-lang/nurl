@@ -5,10 +5,13 @@ import A2.Steps
 /-! A2 — AGORA-969 (AGORA-963 step 3, the store half): **the store part of
 the closure-capture clause, kept by the store operations a step makes.**
 
-`HeldCapsInp` (CapClause.lean) asks, of every held anchor's root `w` that is
-not lent out, that no package in the store captures `w` other than `.inp`.
-Its store part is `CapsInpAt m w`, and `HeldCapsInp` is restated through it
-(`heldCapsInp_iff`). The lemmas here keep `CapsInpAt` across `Mem.set` of a
+`HeldCapsInp` (CapClause.lean) asks, of every held anchor's root `w`, that no
+package in a live slot captures `w` other than `.inp`, and that no live handle
+reaches such a package. That is `LiveCaps m Γ w`, with no `F` exclusion, as
+`heldCapsInp_iff` restates it. The store-wide `CapsInpAt m w` below is a
+separate, stronger contract: it also asks of dead slots that no live handle
+reaches, so a store can fail `CapsInpAt` while meeting `LiveCaps`. The lemmas
+here keep `CapsInpAt` across `Mem.set` of a
 value whose packages capture `w` only `.inp`, `Mem.remove`, a store with the
 same slots (`of_st`, `withBlk`), `BindParams` and `Release`, as
 `MemCodes.set` / `remove` / `of_st` / `withBlk` / `BindParams.codes` /
@@ -25,29 +28,29 @@ theorem CapsInpAt.pay {m : Mem} {w : Var} (h : CapsInpAt m w) {k : Nat} {bl : Bl
     (hk : m.blk k = some bl) (hp : bl.pay = some V) : ValCapsInp V w :=
   h.2 k bl V hk hp
 
-/-- `HeldCapsInp` is its premises on the held anchor and `CapsInpAt` of its
+/-- `HeldCapsInp` is its premises on the held anchor and `LiveCaps` of its
     root. -/
-theorem heldCapsInp_iff {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} :
-    HeldCapsInp m Γ F s ↔
+theorem heldCapsInp_iff {m : Mem} {Γ : Ctx} {s : Stmt} :
+    HeldCapsInp m Γ s ↔
       ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine →
-      ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F → CapsInpAt m d.root :=
+      ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → LiveCaps m Γ d.root :=
   Iff.rfl
 
-/-- `HeldCapsInp` from `CapsInpAt` of every root it asks about. -/
-theorem HeldCapsInp.of_caps {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt}
-    (h : HeldCapsInp m Γ F s) (hc : ∀ w, CapsInpAt m w → CapsInpAt m' w) : HeldCapsInp m' Γ F s :=
-  fun p E hp hm hps d hd hb hh hF => hc _ (h p E hp hm hps d hd hb hh hF)
+/-- `HeldCapsInp` from `LiveCaps` of every root it asks about. -/
+theorem HeldCapsInp.of_caps {m m' : Mem} {Γ : Ctx} {s : Stmt}
+    (h : HeldCapsInp m Γ s) (hc : ∀ w, LiveCaps m Γ w → LiveCaps m' Γ w) : HeldCapsInp m' Γ s :=
+  fun p E hp hm hps d hd hb hh => hc _ (h p E hp hm hps d hd hb hh)
 
 /-- ... carried to a step's result where the borrowed parameters outside the
     new running scopes are old ones, outside the old scopes, and the store
     keeps every root's clause. -/
-theorem HeldCapsInp.step_of {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt}
-    (h : HeldCapsInp m Γ F s)
+theorem HeldCapsInp.step_of {m m' : Mem} {Γ Γ' : Ctx} {s s' : Stmt}
+    (h : HeldCapsInp m Γ s)
     (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → p ∉ s'.spine → Γ p = some E ∧ p ∉ s.spine)
-    (hc : ∀ w, CapsInpAt m w → CapsInpAt m' w) : HeldCapsInp m' Γ' F s' :=
-  fun p E hp hm hps d hd hb hh hF => by
+    (hc : ∀ w, LiveCaps m Γ w → LiveCaps m' Γ' w) : HeldCapsInp m' Γ' s' :=
+  fun p E hp hm hps d hd hb hh => by
     obtain ⟨h0, hps0⟩ := hrb p E hp hm hps
-    exact hc _ (h p E h0 hm hps0 d hd hb hh hF)
+    exact hc _ (h p E h0 hm hps0 d hd hb hh)
 
 /-! ### The store operations -/
 

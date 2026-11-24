@@ -11,7 +11,12 @@ import A2.Typing
     lies inside the buffer it names.  The views stored inside a value are
     valid through what it holds (`held`).
   * A borrowed parameter's dependencies are frozen at the point of
-    execution, so nothing that runs can change what it reaches.
+    execution, so nothing that runs can change what it reaches. There is
+    one exception, AGORA-937 route U: a held anchor outside `F`, as
+    `StmtT.rbind`'s `AnchoredS` allows. It is a lent `Vec`'s view of memory
+    the parameter holds, at a root that the running statement does not kill.
+    The proof keeps the anchor while what runs changes the root strictly
+    inside its elements.
 -/
 
 namespace A2
@@ -1749,13 +1754,87 @@ def CapsInpAt (m : Mem) (w : Var) : Prop :=
   (∀ x o V, m.st x = some ⟨o, some V⟩ → ValCapsInp V w) ∧
   (∀ k bl V, m.blk k = some bl → bl.pay = some V → ValCapsInp V w)
 
+/-- The clause over the live bindings: a live slot's value, and the nodes
+    the handles in it reach in the slots, hold no package that captures `w`
+    but read-only. (A node in a block holds none anyway, `MInv.rdCapsInp`;
+    what a view reaches is of a type that holds no closure with names, read
+    off the viewing binding's type where it is read.) -/
+def LiveCaps (m : Mem) (Γ : Ctx) (w : Var) : Prop :=
+  ∀ v E o V, Γ v = some E → E.live = true → m.st v = some ⟨o, some V⟩ →
+    ValCapsInp V w ∧
+    (∀ c, Sub (.href c) V → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ ty d es, n = .node ty c d es) → ValCapsInp n w)
+
+/-- `Γ1` ends bindings of `Γ` at most: a live binding of `Γ1` is a live one
+    of `Γ`. -/
+def LiveBack (Γ Γ1 : Ctx) : Prop :=
+  ∀ v E1, Γ1 v = some E1 → E1.live = true → ∃ E, Γ v = some E ∧ E.live = true
+
+theorem LiveBack.refl (Γ : Ctx) : LiveBack Γ Γ := fun _ E h hl => ⟨E, h, hl⟩
+
+theorem LiveBack.trans {Γ1 Γ2 Γ3 : Ctx} (h1 : LiveBack Γ1 Γ2) (h2 : LiveBack Γ2 Γ3) : LiveBack Γ1 Γ3 :=
+  fun v E3 h3 hl3 => by
+    obtain ⟨E2, h2', hl2⟩ := h2 v E3 h3 hl3
+    exact h1 v E2 h2' hl2
+
+theorem LiveBack.kill (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) : LiveBack Γ (A2.kill e hv x Γ) :=
+  fun v E1 h hl => by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    refine ⟨E, hE, ?_⟩
+    unfold killE at hl; split at hl
+    · simp at hl
+    · exact hl
+
+theorem LiveBack.setDead {Γ Γ1 : Ctx} (h : LiveBack Γ Γ1) (y : Var) (E : Entry) (hd : E.live = false) :
+    LiveBack Γ (setE Γ1 y E) := fun v E1 hv hl => by
+  by_cases hvy : v = y
+  · subst hvy; simp [setE, upd] at hv; subst hv; rw [hd] at hl; cases hl
+  · simp [setE, upd, hvy] at hv; exact h v E1 hv hl
+
+theorem LiveBack.setLive {Γ Γ1 : Ctx} (h : LiveBack Γ Γ1) {y : Var} {Ey : Entry} (hy : Γ y = some Ey)
+    (hl : Ey.live = true) (E : Entry) : LiveBack Γ (setE Γ1 y E) := fun v E1 hv hl1 => by
+  by_cases hvy : v = y
+  · subst hvy; exact ⟨Ey, hy, hl⟩
+  · simp [setE, upd, hvy] at hv; exact h v E1 hv hl1
+
+/-- Ending bindings keeps the clause: it speaks of the live ones only. -/
+theorem LiveCaps.of_back {m : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w) (hb : LiveBack Γ Γ') :
+    LiveCaps m Γ' w := fun v E o V hv hl hs => by
+  obtain ⟨E0, h0, hl0⟩ := hb v E hv hl
+  exact h v E0 o V h0 hl0 hs
+
+/-- ... and so does a store with the same slots. -/
+theorem LiveCaps.of_st {m m' : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (hst : m'.st = m.st) :
+    LiveCaps m' Γ w := fun v E o V hv hl hs => by
+  rw [hst] at hs
+  obtain ⟨h1, h2⟩ := h v E o V hv hl hs
+  exact ⟨h1, fun c hc x t n hx => h2 c hc x t n (hst ▸ hx)⟩
+
+
+/-- Removing a slot, where the context ends bindings at most, keeps the
+    clause: the slot is gone, and its tree with it. -/
+theorem LiveCaps.remove {m : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w) (hb : LiveBack Γ Γ')
+    (x : Var) : LiveCaps (m.remove x) Γ' w := by
+  have h' := h.of_back hb
+  intro v E o V hv hl hs
+  have hrm : ∀ y sl, (m.remove x).st y = some sl → m.st y = some sl := by
+    intro y sl hy
+    by_cases hyx : y = x
+    · subst hyx; simp [Mem.remove, upd] at hy
+    · simpa [Mem.remove, upd, hyx] using hy
+  obtain ⟨h1, h2⟩ := h' v E o V hv hl (hrm _ _ hs)
+  exact ⟨h1, fun c hc x' t n hx' => h2 c hc x' t n (hrm _ _ hx')⟩
+
 /-- AGORA-937 B2 (AGORA-963): the closure-capture clause. A held anchor's
-    root, not lent out, is captured by no package in the store but
-    read-only (`.inp`), so no call through a package hands it to an
-    `inout` parameter of the code (`CapInout.not_held`, `CapClause.lean`). -/
-def HeldCapsInp (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop :=
+    root is captured by no live binding's package but read-only (`.inp`),
+    so no call through a package hands it to an `inout` parameter of the
+    code (`CapInout.not_held`, `CapClause.lean`). AGORA-937 B4: a root in
+    the frame too (`F`), which no package captures `inout` (`CapsOK`): a
+    wrapper that grows the frame (`frozen`, `catchR`) keeps the clause. -/
+def HeldCapsInp (m : Mem) (Γ : Ctx) (s : Stmt) : Prop :=
   ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine →
-  ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F → CapsInpAt m d.root
+  ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → LiveCaps m Γ d.root
 
 /-- ... read off the slots, the blocks, the borrowed parameters and the
     running scopes. -/
@@ -1763,21 +1842,18 @@ theorem CapsInpAt.of_st {m m' : Mem} {w : Var} (h : CapsInpAt m w) (hst : m'.st 
     (hb : m'.blk = m.blk := by rfl) : CapsInpAt m' w :=
   ⟨fun x o V hx => h.1 x o V (hst ▸ hx), fun k bl V hk hp => h.2 k bl V (hb ▸ hk) hp⟩
 
-theorem HeldCapsInp.of_st {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
-    (hst : m'.st = m.st) (hb : m'.blk = m.blk := by rfl) : HeldCapsInp m' Γ F s :=
-  fun p E hp hm hps d hd hb' hh hF => (h p E hp hm hps d hd hb' hh hF).of_st hst hb
+theorem HeldCapsInp.of_st {m m' : Mem} {Γ : Ctx} {s : Stmt} (h : HeldCapsInp m Γ s)
+    (hst : m'.st = m.st) : HeldCapsInp m' Γ s :=
+  fun p E hp hm hps d hd hb' hh => (h p E hp hm hps d hd hb' hh).of_st hst
 
-theorem HeldCapsInp.respine {m : Mem} {Γ : Ctx} {F : List Var} {s s' : Stmt} (h : HeldCapsInp m Γ F s)
-    (hsp : ∀ v ∈ s.spine, v ∈ s'.spine) : HeldCapsInp m Γ F s' :=
+theorem HeldCapsInp.respine {m : Mem} {Γ : Ctx} {s s' : Stmt} (h : HeldCapsInp m Γ s)
+    (hsp : ∀ v ∈ s.spine, v ∈ s'.spine) : HeldCapsInp m Γ s' :=
   fun p E hp hm hps => h p E hp hm fun h' => hps (hsp _ h')
 
-theorem HeldCapsInp.of_rootb {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
-    (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E) : HeldCapsInp m Γ' F s :=
-  fun p E hp hm => h p E (hrb p E hp hm) hm
-
-theorem HeldCapsInp.mono {m : Mem} {Γ : Ctx} {F F' : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
-    (hF : ∀ v ∈ F, v ∈ F') : HeldCapsInp m Γ F' s :=
-  fun p E hp hm hps d hd hb hh hF' => h p E hp hm hps d hd hb hh fun h' => hF' (hF _ h')
+theorem HeldCapsInp.of_rootb {m : Mem} {Γ Γ' : Ctx} {s : Stmt} (h : HeldCapsInp m Γ s)
+    (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E) (hlb : LiveBack Γ Γ') :
+    HeldCapsInp m Γ' s :=
+  fun p E hp hm hps d hd hb hh => (h p E (hrb p E hp hm) hm hps d hd hb hh).of_back hlb
 
 /-- The invariant of a configuration running `s` in context `Γ`, with `F`
     lent out. -/
@@ -1802,11 +1878,10 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
                 (E.ty ≠ .int ∨ E.mode = .rootb) → v ∉ s.spine → ∀ d ∈ E.vdeps,
                 d.kind.isName = false → d.root ∉ s.spine
   dtorIn    : DtorPinOK Γ s
-  /-- AGORA-937 B2 (AGORA-963): the closure-capture clause. -/
-  heldCaps  : HeldCapsInp m Γ F s
 
-/-- The invariant from its fields, the closure-capture clause first. -/
-theorem Inv.mk₀ {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hcaps : HeldCapsInp m Γ F s)
+/-- The invariant from its fields. (AGORA-937 B4: the closure-capture clause
+    is `HeldZ`, threaded beside it, `FrameClause.lean`.) -/
+theorem Inv.mk₀ {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt}
     (toMInv : MInv m Γ) (nvS : ∀ v ∈ s.vars, v < m.nv) (nvF : ∀ v ∈ F, v < m.nv)
     (anch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → AnchoredS Γ E F s.killVars)
     (spineNd : s.spine.Nodup) (spineDom : ∀ v ∈ s.spine, ∃ E, Γ v = some E) (catchOK : CatchOK m s)
@@ -1817,7 +1892,7 @@ theorem Inv.mk₀ {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hcaps : HeldCa
                 (E.ty ≠ .int ∨ E.mode = .rootb) → v ∉ s.spine → ∀ d ∈ E.vdeps,
                 d.kind.isName = false → d.root ∉ s.spine)
     (dtorIn : DtorPinOK Γ s) : Inv m Γ F s :=
-  ⟨toMInv, nvS, nvF, anch, spineNd, spineDom, catchOK, cover, pinOut, pinIn, dtorOut, dtorIn, hcaps⟩
+  ⟨toMInv, nvS, nvF, anch, spineNd, spineDom, catchOK, cover, pinOut, pinIn, dtorOut, dtorIn⟩
 
 /-- Agora #755: `StmtT.withLock`'s `hna` where the payload owns no destructor
     value (its type is known) or the body assigns nothing to the binding. -/
@@ -2218,7 +2293,10 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P (ξ.under x) Γ F s Δ → EndOK Δ x →
       StmtT P ξ Γ F (.scope x s) (exitScope x Δ)
   | rbind {Γ Δ : Ctx} {F : List Var} {p : Var} {s : Stmt} {E : Entry} :
-      Γ p = some E → E.mode = .rootb → E.live = true → Anchored E F → p ∉ F →
+      -- (AGORA-937, route U: a lent `Vec`'s held view may be anchored by a
+      -- root changed only inside its elements, none of the body's killable
+      -- names, `AnchoredS`)
+      Γ p = some E → E.mode = .rootb → E.live = true → AnchoredS Γ E F (p :: s.killVars) → p ∉ F →
       StmtT P .none Γ F s Δ →
       -- what the borrowed binding may change by name is not lent, but stays
       -- bound for its scope: it is the caller's
@@ -2315,8 +2393,10 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (h12 : StmtT P (ξ.under x) (setE Γ1 x (recvRes c Ec E)) F k Δ)
       (h13 : EndOK Δ x)
       -- (an interface that is code changing elements through a borrow is
-      -- called with no argument that holds views, `CallT`; the code that
-      -- runs is so only where its interface is, `Implements`; AGORA-395)
+      -- called by `CallT`'s `ThruFn` premise on `c :: zs`: views of regions
+      -- only, or route U's `CallThruOK`; the code that runs is so only where
+      -- its interface is, and its environment holds no views, `te.holdsView =
+      -- false`, `Implements`; AGORA-395)
       -- (A2-drop.3a: as `letcall`'s)
       (hdk : sig.resOwn = true → sig.resTy.holdsDtor = true → x ∈ k.movedFirst ∧ x ∉ k.assigns :=
         by dtor_head) :
@@ -2796,7 +2876,7 @@ def Implements (P : Prog) (f : Nat) (te : Ty) (cs : List (Var × PMode × Ty)) (
     fn.outHolds ⊆ sig.outHolds ∧
     -- a closure's code changes elements through a borrow (Agora #295) only
     -- where the interface is code that does so too — a call through it then
-    -- passes no argument that holds views, `CallT` — its environment holds no
+    -- meets `CallT`'s `ThruFn` premise on its explicit arguments — its environment holds no
     -- views, and it takes it lent (AGORA-395; an environment handed over,
     -- `StmtT.callcE`, goes to no such code); what it captures by name holds nothing
     -- (`CapsOK`), so every borrow its body changes through is rooted in its

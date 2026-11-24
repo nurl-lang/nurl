@@ -154,6 +154,98 @@ theorem Redex.killVars_sub {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y
     simp only [Stmt.killVars, List.mem_cons] at hv ⊢
     exact hv.imp_right (ih v)
 
+/-- AGORA-937 B4: **what runs under a parameter's `rbind`** names no more
+    after the hole's statement is replaced by one with no scope that names
+    no more. -/
+theorem Redex.under_kv_sub {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y y' : Stmt}
+    (hs : y.spine = []) (hs' : y'.spine = []) (hy : ∀ v ∈ y.killVars, v ∈ y'.killVars) (p : Var) :
+    ∀ v ∈ ((K y).under p).killVars, v ∈ ((K y').under p).killVars := by
+  have hsp : y.spine = y'.spine := by rw [hs, hs']
+  induction h with
+  | here =>
+    intro v hv
+    rw [Stmt.under_off (by simp [hs])] at hv
+    rw [Stmt.under_off (by simp [hs'])]
+    exact hy v hv
+  | seq h' ih =>
+    simp only [Stmt.under, h'.spine_eq hsp]
+    split
+    · exact ih
+    · exact (Redex.seq h').killVars_sub hy
+  | scope h' ih =>
+    simp only [Stmt.under, h'.spine_eq hsp]
+    split
+    · exact ih
+    · exact (Redex.scope h').killVars_sub hy
+  | rbind h' ih =>
+    simp only [Stmt.under, h'.spine_eq hsp]
+    split
+    · exact h'.killVars_sub hy
+    · split
+      · exact ih
+      · exact (Redex.rbind h').killVars_sub hy
+  | frozen h' ih =>
+    simp only [Stmt.under, h'.spine_eq hsp]
+    split
+    · exact ih
+    · exact (Redex.frozen h').killVars_sub hy
+  | block h' ih =>
+    simp only [Stmt.under, h'.spine_eq hsp]
+    split
+    · exact ih
+    · exact (Redex.block h').killVars_sub hy
+  | catchR h' ih =>
+    simp only [Stmt.under, h'.spine_eq hsp]
+    split
+    · exact ih
+    · exact (Redex.catchR h').killVars_sub hy
+  | scopeD h' ih =>
+    simp only [Stmt.under, h'.spine_eq hsp]
+    split
+    · exact ih
+    · exact (Redex.scopeD h').killVars_sub hy
+  | scopeL h' ih =>
+    simp only [Stmt.under, h'.spine_eq hsp]
+    split
+    · exact ih
+    · exact (Redex.scopeL h').killVars_sub hy
+
+/-- ... and its catch frames are the old ones, with bodies of the same
+    spines, where the hole's statement runs none. -/
+theorem Redex.catchFrames_back {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {y y' : Stmt}
+    (hsp : y.spine = y'.spine) (hcf : y.catchFrames = []) (hcf' : y'.catchFrames = []) :
+    ∀ x m0 b, (x, m0, b) ∈ (K y).catchFrames →
+      ∃ b', (x, m0, b') ∈ (K y').catchFrames ∧ b'.spine = b.spine := by
+  induction h with
+  | here => intro x m0 b hx; change (x, m0, b) ∈ y.catchFrames at hx; rw [hcf] at hx; cases hx
+  | seq _ ih => simpa [Stmt.catchFrames] using ih
+  | scope _ ih => simpa [Stmt.catchFrames] using ih
+  | rbind _ ih => simpa [Stmt.catchFrames] using ih
+  | frozen _ ih => simpa [Stmt.catchFrames] using ih
+  | block _ ih => simpa [Stmt.catchFrames] using ih
+  | scopeD _ ih => simpa [Stmt.catchFrames] using ih
+  | scopeL _ ih => simpa [Stmt.catchFrames] using ih
+  | @catchR x0 m00 _ _ _ h' ih =>
+    intro x m0 b hx
+    simp only [Stmt.catchFrames, List.mem_cons, Prod.mk.injEq] at hx
+    rcases hx with ⟨rfl, rfl, rfl⟩ | hx
+    · exact ⟨_, by simp [Stmt.catchFrames], (h'.spine_eq hsp).symm⟩
+    · obtain ⟨b', hb', hsp'⟩ := ih x m0 b hx
+      exact ⟨b', by simp [Stmt.catchFrames, hb'], hsp'⟩
+
+/-- AGORA-937 B4: `HeldZ` across a hole's statement replaced by one with no
+    scope and no catch frame, naming no more. -/
+theorem _root_.A2.HeldZ.redex {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s r : Stmt} {K : Stmt → Stmt}
+    (hR : Redex s K r) {y y' : Stmt} (hz : HeldZ m Γ Z (K y')) (hs : y.spine = []) (hs' : y'.spine = [])
+    (hy : ∀ v ∈ y.killVars, v ∈ y'.killVars) (hcf : y.catchFrames = []) (hcf' : y'.catchFrames = []) :
+    HeldZ m Γ Z (K y) where
+  caps := hz.caps
+  reach p E hp hm v hv := hz.reach p E hp hm v (hR.under_kv_sub hs hs' hy p v hv)
+  bound := hz.bound
+  frames x m0 b hx p E hp hm hpb := by
+    obtain ⟨b', hb', hsp⟩ := hR.catchFrames_back (by rw [hs, hs']) hcf hcf' x m0 b hx
+    exact hz.frames x m0 b' hb' p E hp hm (by rw [hsp]; exact hpb)
+
 theorem Redex.catchOK {s r : Stmt} {K : Stmt → Stmt} (h : Redex s K r) {m : Mem} {y y' : Stmt}
     (hy : y.spine = y'.spine) (hc : CatchOK m y) (hc' : CatchOK m (K y')) : CatchOK m (K y) := by
   induction h with
@@ -325,7 +417,7 @@ theorem Redex.typed {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Pro
     hole, with the invariant there, types `r'` the same way, and `r'` has
     `r`'s spine, then the whole stays typed. -/
 theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog} {m : Mem} {r' : Stmt}
-    (hsp : r'.spine = r.spine)
+    (hsp : r'.spine = r.spine) (hkv : ∀ v ∈ r'.killVars, v ∈ r.killVars)
     (hhole : ∀ ξ Γ F Δ, StmtT P ξ Γ F r Δ → Inv m Γ F r → StmtT P ξ Γ F r' Δ) :
     ∀ ξ Γ F Δ, StmtT P ξ Γ F s Δ → Inv m Γ F s → StmtT P ξ Γ F (K r') Δ := by
   induction hR with
@@ -334,7 +426,7 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     intro ξ Γ F Δ ht hi
     generalize hS : Stmt.seq a b = S at ht hi
     induction ht with
-    | seq hb ha hb' _ _ => cases hS; exact StmtT.seq hb (ih hsp hhole _ _ _ _ ha hi.seqIn) hb'
+    | seq hb ha hb' _ _ => cases hS; exact StmtT.seq hb (ih hsp hkv hhole _ _ _ _ ha hi.seqIn) hb'
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
   | @scope x s r K _ ih =>
@@ -344,23 +436,29 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     | scope hxE hxF hs hpx _ =>
       cases hS
       obtain ⟨Ex, hx, hnrb⟩ := hxE
-      exact StmtT.scope ⟨Ex, hx, hnrb⟩ hxF (ih hsp hhole _ _ _ _ hs (hi.scopeIn hx hnrb)) hpx
+      exact StmtT.scope ⟨Ex, hx, hnrb⟩ hxF (ih hsp hkv hhole _ _ _ _ hs (hi.scopeIn hx hnrb)) hpx
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
-  | @rbind p s r K _ ih =>
+  | @rbind p s r K hR' ih =>
     intro ξ Γ F Δ ht hi
     generalize hS : Stmt.rbind p s = S at ht hi
     induction ht with
     | rbind hp hm hl hanch hpF hs hd _ =>
       cases hS
-      exact StmtT.rbind hp hm hl hanch hpF (ih hsp hhole _ _ _ _ hs (hi.rbindIn hp hanch)) hd
+      exact StmtT.rbind hp hm hl (by
+          rw [hR'.eq] at hanch
+          exact hanch.anti fun v hv => by
+            rcases List.mem_cons.mp hv with rfl | hv
+            · exact List.mem_cons_self
+            · exact List.mem_cons_of_mem _ (hR'.killVars_sub hkv v hv)) hpF
+        (ih hsp hkv hhole _ _ _ _ hs (hi.rbindIn hp hanch)) hd
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
   | @frozen z s r K _ ih =>
     intro ξ Γ F Δ ht hi
     generalize hS : Stmt.frozen z s = S at ht hi
     induction ht with
-    | frozen hs hz _ => cases hS; exact StmtT.frozen (ih hsp hhole _ _ _ _ hs (hi.frozenIn hz)) hz
+    | frozen hs hz _ => cases hS; exact StmtT.frozen (ih hsp hkv hhole _ _ _ _ hs (hi.frozenIn hz)) hz
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
   | @catchR x m0 s r K h ih =>
@@ -370,7 +468,7 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     | catchR hxF hs hM hanch hKO hDS _ =>
       cases hS
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
-      exact StmtT.catchR hxF (ih hsp hhole _ _ _ _ hs hi.catchIn) hM hanch (by rw [hsp']; exact hKO)
+      exact StmtT.catchR hxF (ih hsp hkv hhole _ _ _ _ hs hi.catchIn) hM hanch (by rw [hsp']; exact hKO)
         (by rw [hsp']; exact hDS)
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
@@ -383,7 +481,7 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
       obtain ⟨Ex, tx, hx, hmo, hrest⟩ := hxE
       exact StmtT.scopeD ⟨Ex, tx, hx, hmo, hrest⟩ hxF
-        (ih hsp hhole _ _ _ _ hs ((Inv.scopeD_iff.mp hi).scopeIn hx (by rw [hmo]; simp))) hpx
+        (ih hsp hkv hhole _ _ _ _ hs ((Inv.scopeD_iff.mp hi).scopeIn hx (by rw [hmo]; simp))) hpx
         (by rw [hsp']; exact hKO) hWd hNd hΔd hself hfd
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
@@ -395,7 +493,7 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
       cases hS
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
       obtain ⟨Ex, hx, hnrb, hty, hdl⟩ := hxE
-      exact StmtT.scopeL ⟨Ex, hx, hnrb, hty, hdl⟩ hxF (ih hsp hhole _ _ _ _ hs (hi.scopeLIn hx hnrb)) hpx
+      exact StmtT.scopeL ⟨Ex, hx, hnrb, hty, hdl⟩ hxF (ih hsp hkv hhole _ _ _ _ hs (hi.scopeLIn hx hnrb)) hpx
         (by rw [hsp']; exact hKO) hWd hNd hfd
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
@@ -405,7 +503,7 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     induction ht with
     | block hs _ =>
       cases hS
-      exact StmtT.block (ih hsp hhole _ _ _ _ hs (hi.respine rfl (fun v hv => hv) hi.catchOK hi.pinIn hi.dtorIn))
+      exact StmtT.block (ih hsp hkv hhole _ _ _ _ hs (hi.respine rfl (fun v hv => hv) hi.catchOK hi.pinIn hi.dtorIn))
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
 
@@ -788,6 +886,15 @@ theorem owned_wf {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {y : Var} {t : Val}
   rw [hy] at hsl; cases hsl
   exact ⟨E, hE, (hown ho.symm).2.1 t rfl, hi.shares y E _ t hE hy rfl rfl⟩
 
+/-- A source call's body is a source statement. -/
+theorem letcall_src {P : Prog} {Γ : Ctx} {F : List Var} {x f : Nat} {args : List Var} {k : Stmt}
+    {Δ : Ctx} (ht : StmtT P ξ Γ F (.letcall x f args k) Δ) : (Stmt.letcall x f args k).src = true := by
+  generalize hS : Stmt.letcall x f args k = S at ht
+  induction ht with
+  | letcall hsrc _ _ _ _ _ => cases hS; exact hsrc
+  | sub _ _ _ ih0 => exact ih0 hS
+  | _ => cases hS
+
 /-- **The spawner after a spawn**: the moved trees are freed from its own
     part of the address space, in argument order, and A2 knows of what is
     left what it knew before — the spawner goes on with its result bound to
@@ -799,7 +906,7 @@ theorem spawner_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
     (hx : m.st x = none) (hmv : MoveArgs m.st args vs st') :
     ∃ a', FreesL m.alloc vs a' ∧
       ThreadOK P { m with alloc := a', st := upd st' x (some ⟨false, some (.int 0)⟩) } (K (.scope x k)) := by
-  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := hok
+  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc, hz⟩ := hok
   have hown : ∀ y t, m.st y = some ⟨true, some t⟩ →
       (∃ τ, WFv τ t) ∧ t.ids.Nodup ∧ ∀ i ∈ t.ids, m.alloc i = true := by
     intro y t hy
@@ -813,7 +920,11 @@ theorem spawner_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
     dropSeq_spine x _ rfl args
   have hsp' := hR.spine_eq hDsp
   -- the spawner's part, as A2 runs it: the moves, then `x := 0`
-  have ht' := hR.plug hDsp (spawn_hole hP hS hsp hf hmv.nodup) _ Γ F Δ ht hi
+  have ht' := hR.plug hDsp (fun v hv => by
+    rcases dropSeq_killVars args v hv with rfl | h | h
+    · simp [Stmt.killVars]
+    · simp [Stmt.killVars, h]
+    · simp [Stmt.killVars, Rhs.vars, Expr.vars] at h ⊢; rcases h with h | h <;> simp [h]) (spawn_hole hP hS hsp hf hmv.nodup) _ Γ F Δ ht hi
   have hi' : Inv m Γ F (K (dropSeq x args (.letv x (.expr (.lit 0)) k))) := by
     refine hi.respine hsp' (hR.vars_sub fun v hv => ?_) (hR.catchOK hDsp ?_ hi.catchOK)
       (hR.pinOK hDsp ?_ hi.pinIn) (hR.dtorPinOK hDsp ?_ hi.dtorIn) (hR.killVars_sub fun v hv => ?_)
@@ -849,17 +960,24 @@ theorem spawner_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
     dropSeq_run hR hmv m rfl hx hfl
       (Steps0.step (hR.step (Step.letv (by show st' x = none; rw [hmv.other x hxa]; exact hx)
         (EvalR.expr Eval.lit))) Steps0.refl)
-  obtain ⟨Γ', ht'', hi'', hc'', hcd'', hsc''⟩ := reach_ok0 hP hPc ht' hcd hsc' hi' hc' hrun
-  exact ⟨Γ', F, Δ, ht'', hi'', hcd'', hsc'', hc''⟩
-
-/-- A source call's body is a source statement. -/
-theorem letcall_src {P : Prog} {Γ : Ctx} {F : List Var} {x f : Nat} {args : List Var} {k : Stmt}
-    {Δ : Ctx} (ht : StmtT P ξ Γ F (.letcall x f args k) Δ) : (Stmt.letcall x f args k).src = true := by
-  generalize hS : Stmt.letcall x f args k = S at ht
-  induction ht with
-  | letcall hsrc _ _ _ _ _ => cases hS; exact hsrc
-  | sub _ _ _ ih0 => exact ih0 hS
-  | _ => cases hS
+  -- (AGORA-937 B4: the moves and `x := 0` name what the call did)
+  have hz' : HZ m Γ (K (dropSeq x args (.letv x (.expr (.lit 0)) k))) := by
+    obtain ⟨Z, hz⟩ := hz
+    have hLs : (Stmt.letv x (.expr (.lit 0)) k).src = true := by
+      obtain ⟨_, _, _, _, ht0, _⟩ := hR.typed _ Γ F Δ ht hi
+      have := letcall_src ht0; simp only [Stmt.src] at this ⊢; simpa using this
+    refine ⟨Z, hz.redex hR (dropSeq_spine x _ rfl args) rfl (fun v hv => ?_)
+      (Stmt.catchFrames_src (dropSeq_src hLs args)) rfl⟩
+    have hv' : v = x ∨ v ∈ args ∨ v ∈ k.killVars := by
+      rcases dropSeq_killVars args v hv with h | h | h
+      · exact .inl h
+      · exact .inr (.inl h)
+      · simp [Stmt.killVars, Rhs.vars, Expr.vars] at h
+        exact h.imp_right .inr
+    simp only [Stmt.killVars, List.mem_cons, List.mem_append]
+    exact or_assoc.mpr hv'
+  obtain ⟨Γ', ht'', hi'', hc'', hcd'', hsc'', hz''⟩ := reach_ok0 hP hPc ht' hcd hsc' hi' hc' hz' hrun
+  exact ⟨Γ', F, Δ, ht'', hi'', hcd'', hsc'', hc'', hz''⟩
 
 /-- **A3.5: a spawn whose crossing check fails** panics in the spawner, with
     nothing moved: its statement, the call with a panic put before it, is
@@ -869,12 +987,12 @@ theorem letcall_src {P : Prog} {Γ : Ctx} {F : List Var} {x f : Nat} {args : Lis
 theorem spawnFail_ok {P : Prog} {m : Mem} {s : Stmt} (hok : ThreadOK P m s) {K : Stmt → Stmt}
     {x f : Nat} {args : List Var} {k : Stmt} (hR : Redex s K (.letcall x f args k)) :
     ThreadOK P m (K (.seq .panic (.letcall x f args k))) := by
-  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc⟩ := hok
+  obtain ⟨Γ, F, Δ, ht, hi, hcd, hsc, hc, Z, hz⟩ := hok
   have hs : s = K (.letcall x f args k) := hR.eq
   subst hs
   have hsp : (Stmt.seq .panic (.letcall x f args k)).spine = (Stmt.letcall x f args k).spine := rfl
   have hsp' := hR.spine_eq hsp
-  have ht' := hR.plug hsp (fun _ Γ0 F0 Δ0 h0 hi0 =>
+  have ht' := hR.plug hsp (fun v h => by simpa [Stmt.killVars] using h) (fun _ Γ0 F0 Δ0 h0 hi0 =>
     StmtT.seq (letcall_src h0)
       (StmtT.panic hi0.wf hi0.names (fun _ => rfl) (fun _ E h => ⟨E, h, rfl, rfl, fun _ => rfl⟩)
         (DKeep.refl _ _) (DStay.refl _ _) id) h0) _ Γ F Δ ht hi
@@ -884,7 +1002,8 @@ theorem spawnFail_ok {P : Prog} {m : Mem} {s : Stmt} (hok : ThreadOK P m s) {K :
       (hR.killVars_sub fun v hv => by simpa [Stmt.killVars] using hv)
   have hsc' : (K (.seq .panic (.letcall x f args k))).codesOK P :=
     hR.codesOK (show (Stmt.seq .panic (.letcall x f args k)).codesOK P from ⟨trivial, hR.codes_hole hsc⟩) hsc
-  exact ⟨Γ, F, Δ, ht', hi', hcd, hsc', fun v hv => by rw [hsp']; exact hc v hv⟩
+  exact ⟨Γ, F, Δ, ht', hi', hcd, hsc', fun v hv => by rw [hsp']; exact hc v hv,
+    Z, hz.redex hR rfl rfl (fun v h => by simpa [Stmt.killVars] using h) rfl rfl⟩
 
 /-- **What moves to the new thread**: one value per parameter, each of its
     parameter's type, each the tree its argument owned, no two sharing an

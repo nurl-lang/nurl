@@ -1,5 +1,7 @@
 import A2.TakeB
 import A2.StepCaps
+import A2.CapsLive
+import A2.FrameClause
 
 /-! A2 — preservation: a step of a well-typed configuration leads to a
 well-typed configuration. -/
@@ -673,20 +675,7 @@ theorem Inv.leafNoHeld {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
     (hs : s.spine = []) {x : Var} (hxV : x ∈ s.killVars) (hx : x ∉ F) : NoHeld Γ x :=
   NoHeld.of_anchS (hi.leafAnchS hs) hxV hx
 
-/-- AGORA-963 step 3: the clause after a step, where the borrowed
-    parameters outside the new running scopes are old ones, outside the old
-    scopes, and the store keeps it at every root that is none of the old
-    statement's killable names (a held root is none, `Inv.anch`). -/
-theorem Inv.heldCaps_step {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt} (hi : Inv m Γ F s)
-    (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → p ∉ s'.spine → Γ p = some E ∧ p ∉ s.spine)
-    (hc : ∀ w, w ∉ s.killVars → CapsInpAt m w → CapsInpAt m' w) : HeldCapsInp m' Γ' F s' :=
-  fun p E hp hm hps d hd hb hh hF => by
-    obtain ⟨h0, hps0⟩ := hrb p E hp hm hps
-    rcases hi.anch p E h0 hm hps0 d hd hb with h' | ⟨_, hnk, _⟩
-    · exact absurd h' hF
-    · exact hc _ hnk (hi.heldCaps p E h0 hm hps0 d hd hb hh hF)
-
-theorem Inv.ofLeaf {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt} (hcaps : HeldCapsInp m' Γ' F s')
+theorem Inv.ofLeaf {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt}
     (hi : Inv m Γ F s)
     (hm : MInv m' Γ') (hnv : m.nv ≤ m'.nv) (hvars : ∀ v ∈ s'.vars, v < m'.nv)
     (hanch : RootbAnchS Γ' F s'.killVars)
@@ -702,8 +691,7 @@ theorem Inv.ofLeaf {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt} (hca
     pinOut := pinOut_nil hs'
     pinIn := PinOK.of_spine_nil hs'
     dtorOut := dtorOut_nil hs'
-    dtorIn := DtorPinOK.of_spine_nil hs'
-    heldCaps := hcaps }
+    dtorIn := DtorPinOK.of_spine_nil hs' }
 
 theorem vars_sub {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ F s) {s' : Stmt}
     (h : ∀ v ∈ s'.vars, v ∈ s.vars) : ∀ v ∈ s'.vars, v < m.nv := fun v hv => hi.nvS v (h v hv)
@@ -733,8 +721,7 @@ theorem Inv.respine {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m �
     pinIn := hpin
     dtorOut := fun v E hv hd hos hn hvs d hdd hnm hds =>
       hi.dtorOut v E hv hd hos hn (by rw [← hsp]; exact hvs) d hdd hnm (by rw [← hsp]; exact hds)
-    dtorIn := hdpin
-    heldCaps := hi.heldCaps.respine fun v hv => by rw [hsp]; exact hv }
+    dtorIn := hdpin }
 
 /-- A run-time scope binds what was unbound, and a borrowed parameter
     depends only on what is bound: it depends on no scope a step opens. -/
@@ -863,8 +850,9 @@ def CallCase (P : Prog) : Prop :=
     k.src = true → Γ x = none → x ∉ F → CallT P Γ F f args E Γ1 → StmtT P (ξ.under x) (setE Γ1 x E) F k Δ →
     EndOK Δ x → Inv m Γ F (.letcall x f args k) → Step P m (.letcall x f args k) (.ok m' s') →
     ¬ IsReap m (.letcall x f args k) m' s' →
+    ∀ (Z : Var → List Var), HeldZ m Γ Z (.letcall x f args k) →
     ∃ Γ', StmtT P ξ Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.letcall x f args k) s' ∧ Frz F m m'
+      Keep Γ Γ' (.letcall x f args k) s' ∧ Frz F m m' ∧ ∃ Z', HeldZ m' Γ' Z' s' ∧ ZKeep Γ Z Z'
 
 /-- The `recover` case, proven with the call case. -/
 def RecCase (P : Prog) : Prop :=
@@ -874,8 +862,9 @@ def RecCase (P : Prog) : Prop :=
     fn.resOwn = false → CallT P Γ F f [] E Γ1 → StmtT P (ξ.under x) (setE Γ1 x E) F k Δ →
     EndOK Δ x → Inv m Γ F (.letrec x f k) → Step P m (.letrec x f k) (.ok m' s') →
     ¬ IsReap m (.letrec x f k) m' s' →
+    ∀ (Z : Var → List Var), HeldZ m Γ Z (.letrec x f k) →
     ∃ Γ', StmtT P ξ Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.letrec x f k) s' ∧ Frz F m m'
+      Keep Γ Γ' (.letrec x f k) s' ∧ Frz F m m' ∧ ∃ Z', HeldZ m' Γ' Z' s' ∧ ZKeep Γ Z Z'
 
 /-- The case of a call through a package, proven with the call case
     (`Closure.lean`).  It reads which code the package holds from memory. -/
@@ -888,8 +877,9 @@ def CloCase (P : Prog) : Prop :=
     StmtT P (ξ.under x) (setE Γ1 x (recvRes c Ec E)) F k Δ →
     EndOK Δ x → MemCodes P m → Inv m Γ F (.callc x c j σ zs k) →
     Step P m (.callc x c j σ zs k) (.ok m' s') → ¬ IsReap m (.callc x c j σ zs k) m' s' →
+    ∀ (Z : Var → List Var), HeldZ m Γ Z (.callc x c j σ zs k) →
     ∃ Γ', StmtT P ξ Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.callc x c j σ zs k) s' ∧ Frz F m m'
+      Keep Γ Γ' (.callc x c j σ zs k) s' ∧ Frz F m m' ∧ ∃ Z', HeldZ m' Γ' Z' s' ∧ ZKeep Γ Z Z'
 
 /-- A2-envhand: the case of a call that hands the environment over, proven with
     the store it leaves and the typing of its run-time form (`EnvHand.lean`). -/
@@ -908,8 +898,9 @@ def HandCase (P : Prog) : Prop :=
     StmtT P (ξ.under x) (kill .replace false c (setE Γ1 x E)) F k Δ →
     EndOK Δ x → MemCodes P m → Inv m Γ F (.callcE x c j zs k) →
     Step P m (.callcE x c j zs k) (.ok m' s') → ¬ IsReap m (.callcE x c j zs k) m' s' →
+    ∀ (Z : Var → List Var), HeldZ m Γ Z (.callcE x c j zs k) →
     ∃ Γ', StmtT P ξ Γ' F s' (exitScope x Δ) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.callcE x c j zs k) s' ∧ Frz F m m'
+      Keep Γ Γ' (.callcE x c j zs k) s' ∧ Frz F m m' ∧ ∃ Z', HeldZ m' Γ' Z' s' ∧ ZKeep Γ Z Z'
 
 /-- What source typing keeps of a context (`StmtT.ctxRel`, `A2/SrcKeep.lean`),
     as a hypothesis of the call's typing, which is stated before it. -/
@@ -1126,14 +1117,18 @@ theorem exitScope_setE_fresh {Γ : Ctx} (hw : CtxWF Γ) {r : Var} (hr : Γ r = n
     after the marking sweep marks an orphan, `Settle`.) -/
 theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT P ξ Γ F r Δ)
     (hsrc : r.src = true) {m : Mem} {k n f : Nat} {u : Ty} {p : Val} (hcd : MemCodes P m)
-    (hi : Inv m Γ F r) (hk : m.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩) :
+    (hi : Inv m Γ F r) (hk : m.blk k = some ⟨Ty.nest n (.dtor f u), .dead, some p⟩)
+    (Z : Var → List Var) (hz : HeldZ m Γ Z r) :
     ∃ Γ', StmtT P ξ Γ' F (.seq (.scopeD m.nv f .skip) r) Δ ∧
       Inv { (m.set m.nv ⟨true, some p⟩) with
               nv := m.nv + 1, blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } Γ' F
         (.seq (.scopeD m.nv f .skip) r) ∧
       m.nv ≤ m.nv + 1 ∧ Keep Γ Γ' r (.seq (.scopeD m.nv f .skip) r) ∧
       Frz F m { (m.set m.nv ⟨true, some p⟩) with
-              nv := m.nv + 1, blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } := by
+              nv := m.nv + 1, blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } ∧
+      ∃ Z', HeldZ { (m.set m.nv ⟨true, some p⟩) with
+              nv := m.nv + 1, blk := upd m.blk k (some ⟨Ty.nest n (.dtor f u), .dead, none⟩) } Γ' Z'
+        (.seq (.scopeD m.nv f .skip) r) ∧ ZKeep Γ Z Z' := by
   have hsp : r.spine = [] := src_spine hsrc
   have hanch := hi.leafAnch hsp
   have hanchS := hi.leafAnchS hsp
@@ -1190,14 +1185,26 @@ theorem pres_reap {P : Prog} {Γ Δ : Ctx} {F : List Var} {r : Stmt} (ht : StmtT
       simp [setE] at hE'; subst hE'; rw [hEty] at hv'; rw [hvf] at hv'; cases hv')
     (DSelf.of_dbind fun E' hE' => by simp [setE] at hE'; subst hE'; exact hEdb) hm.fresh
   rw [exitScope_setE_fresh hwf hΓz] at hfr
-  refine ⟨setE Γ m.nv E, StmtT.seq hsrc hfr ht, ?_, Nat.le_succ _, ?_, fun v hv => ?_⟩
+  refine ⟨setE Γ m.nv E, StmtT.seq hsrc hfr ht, ?_, Nat.le_succ _, ?_, fun v hv => ?_,
+    Z, ?_, ZKeep.refl _ _⟩
+  rotate_right
+  · -- (AGORA-937 B4: the payload reaped from the block holds no names, and no handle)
+    refine hz.leaf hsp (by simp [Stmt.catchFrames]) (Nat.le_succ _) (fun q Eq hq hmq => ?_)
+      (fun v hv => by simp [Stmt.spine] at hv; subst hv; exact hΓz)
+      (fun v hv => ?_) (fun _ _ _ _ _ _ _ hcw => ?_)
+    · have hqz : q ≠ m.nv := fun h => by
+        rw [h] at hq; simp [setE] at hq; rw [← hq] at hmq; exact hnrb hmq
+      simpa only [setE, upd_ne _ _ hqz] using hq
+    · simp only [Stmt.killVars, List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hv
+      rcases hv with rfl | hv
+      · exact Or.inr (Nat.le_refl _)
+      · exact Or.inl hv
+    · exact (hcw.set (y := m.nv) (o := true) (v := some p) (fun V e => by
+        cases e
+        exact ⟨fun n hn => (hi.toMInv.blkCapsInp _ k _ p hk rfl).sub hn,
+          fun c hc => (hi.toMInv.pay_no_href hk rfl hc).elim⟩)).of_st rfl
   · -- (AGORA-963 step 3: the payload reaped from the block holds no names)
-    refine Inv.mk₀ (hi.heldCaps_step (fun q Eq hq hmq _ => by
-        have hqz : q ≠ m.nv := fun h => by
-          rw [h] at hq; simp [setE] at hq; rw [← hq] at hmq; exact hnrb hmq
-        simp only [setE, upd_ne _ _ hqz] at hq
-        exact ⟨hq, by simp [hsp]⟩) (fun w _ hcw =>
-        CapsInpAt.of_slots (SlotsCaps.set_of hcw.1 (hi.toMInv.blkCapsInp w k _ p hk rfl) rfl) hm)) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine])
+    refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine])
       (by simp [Stmt.spine, setE]) (by simp [CatchOK])
       (covers_take (covers_reap (m := { m with nv := m.nv + 1 }) hi.cover hk) (fun T h => by
         unfold OwnedAt at h; simp [hmz] at h))
@@ -1256,9 +1263,9 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
       (compE E b)) F s Δ) (hny : NoPin Γ y) (hdy : DtorSafe Γ .replace false y) (hpz : EndOK Δ z)
     (hpx : EndOK (exitScope z Δ) x)
     {m m' : Mem} {s' : Stmt} (hi : Inv m Γ F (.unpair y x z s)) (hst : Step P m (.unpair y x z s) (.ok m' s'))
-    (hnr : ¬ IsReap m (.unpair y x z s) m' s') :
+    (hnr : ¬ IsReap m (.unpair y x z s) m' s') (Z : Var → List Var) (hzz : HeldZ m Γ Z (.unpair y x z s)) :
     ∃ Γ', StmtT P ξ Γ' F s' (exitScope x (exitScope z Δ)) ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.unpair y x z s) s' ∧ Frz F m m' := by
+      Keep Γ Γ' (.unpair y x z s) s' ∧ Frz F m m' ∧ ∃ Z', HeldZ m' Γ' Z' s' ∧ ZKeep Γ Z Z' := by
   cases hst with
   | reap hrs hrk _ => exact absurd ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | unpair hvy hmx hmz hxz' =>
@@ -1315,22 +1322,29 @@ theorem pres_unpair {P : Prog} {Γ Δ : Ctx} {F : List Var} {y x z : Var} {s : S
     have hrel := post.rel
     have hanch1 := hrel.anchS hanchS
     refine ⟨_, StmtT.scope ⟨compE E a, by simp [setE, upd_ne _ _ hxz], compE_mode_ne E a⟩ hxF
-      (StmtT.scope ⟨compE E b, by simp [setE], compE_mode_ne E b⟩ hzF hs hpz) hpx, ?_, by simp, ?_, ?_⟩
+      (StmtT.scope ⟨compE E b, by simp [setE], compE_mode_ne E b⟩ hzF hs hpz) hpx, ?_, by simp, ?_, ?_,
+      Z, ?_, ZKeep.refl _ _⟩
+    rotate_right
+    · -- (AGORA-937 B4: the pair's halves were the pair's, a binding of the frame)
+      have hsp : s.spine = [] := src_spine hsrc
+      refine hzz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp)
+        (fun p Ep hp hmp => ?_) (fun v hv => ?_) (fun v hv => ?_) (fun _ _ _ _ _ _ hD hcw => ?_)
+      · have hpz : p ≠ z := fun h => by
+          rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact compE_mode_ne E b hmp
+        have hpx : p ≠ x := fun h => by
+          rw [h] at hp; simp [setE, upd_ne _ _ hxz] at hp; rw [← hp] at hmp; exact compE_mode_ne E a hmp
+        simp only [setE, upd_ne _ _ hpz, upd_ne _ _ hpx] at hp
+        exact hrel.rootb_back hp hmp
+      · simp [Stmt.spine, hsp] at hv; rcases hv with rfl | rfl
+        · exact hx
+        · exact hz
+      · simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+        rcases hv with h | h | h <;> simp [h]
+      · exact hcw.unpair (hD y (by simp [Stmt.killVars])) hvy hxy hzy hxz
     · have hyx : y ≠ x := fun h => by rw [h, hx] at hy; cases hy
       have hyz : y ≠ z := fun h => by rw [h, hz] at hy; cases hy
       -- (AGORA-963 step 3: the pair's halves were the pair's)
-      have hP := fun w' (hcw : CapsInpAt m w') => SlotsCaps.slot hcw.1 hvy
-      refine Inv.mk₀ (hi.heldCaps_step (fun p Ep hp hmp _ => by
-          have hpz : p ≠ z := fun h => by
-            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact compE_mode_ne E b hmp
-          have hpx : p ≠ x := fun h => by
-            rw [h] at hp; simp [setE, upd_ne _ _ hxz] at hp; rw [← hp] at hmp; exact compE_mode_ne E a hmp
-          simp only [setE, upd_ne _ _ hpz, upd_ne _ _ hpx] at hp
-          exact ⟨hrel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w' _ hcw =>
-          CapsInpAt.of_slots ((((SlotsCaps.set hcw.1 (x := y) (o := true) (v := none) (fun _ e => by cases e)).set
-            (x := x) (fun V e => by cases e; exact (hP w' hcw).child Child.fst)).set
-            (x := z) (fun V e => by cases e; exact (hP w' hcw).child Child.snd))) hi3))
-        hi3 (fun u hu => ?_) (fun u hu => ?_) (fun p Ep hp hmp _ => ?_) ?_ ?_
+      refine Inv.mk₀ hi3 (fun u hu => ?_) (fun u hu => ?_) (fun p Ep hp hmp _ => ?_) ?_ ?_
         (show CatchOK _ s from catchOK_src hsrc) ?_
         (pinOut_fresh hi.toMInv (fun p Ep hp hmp => by
           have hpz : p ≠ z := fun h => by
@@ -2501,7 +2515,7 @@ theorem glueCall_typed {P : Prog} {m : Mem} {Γ0 : Ctx} {F : List Var} {x : Var}
   have hpost : callPost Γ0 fn [x] = Γp := by
     simp [callPost, hnm, killNames, hps, callPostAux, argE, hx, Γp]
   have hcall : CallT P Γ0 F f [x] (callRes Γ0 fn [x]) Γp := by
-    refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm, fun ht => callR_regions_of_nil (hthr ht)⟩
+    refine ⟨fn, hfn, by simp [hps], fun i hi => ?_, fun d hd => ?_, ?_, rfl, hpost.symm, fun ht => Or.inl (callR_regions_of_nil (hthr ht))⟩
     · have hi0 : i = 0 := by simp [hps] at hi; omega
       subst hi0
       refine ⟨E, by simp [hx], hlive, ?_, fun _ => ⟨by simpa using hxF, by simpa using hmem,
@@ -2586,10 +2600,11 @@ theorem pres_unwindD {P : Prog} {Γ Δ1 : Ctx} {F : List Var} {x : Var} {f : Nat
     (hxF : x ∉ F) {ξb : Exits} (hs : StmtT P ξb Γ F k Δ1) (hpx : EndOK Δ1 x) (hKO : KeepOut Γ Δ1 k.spine)
     (hWd : CtxWF Δ1) (hNd : NameWF Δ1) (hFd : FreshOK Δ1) (hdbv : Ex.ty.holdsView = true → Ex.dbind = true)
     (hself : DSelf Γ x) {m m' : Mem} (hiS : Inv m Γ F (.scope x k)) (hp : Step P m k (.panic m'))
-    {v : Val} (hsl : m'.st x = some ⟨true, some v⟩) :
+    {v : Val} (hsl : m'.st x = some ⟨true, some v⟩) (Z : Var → List Var) (hz : HeldZ m Γ Z (.scope x k)) :
     ∃ Γ', StmtT P ξ Γ' F (.seq (.scopeD x f .skip) .panic) (exitScope x Δ1) ∧
       Inv m' Γ' F (.seq (.scopeD x f .skip) .panic) ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.scope x k) (.seq (.scopeD x f .skip) .panic) ∧ Frz F m m' := by
+      Keep Γ Γ' (.scope x k) (.seq (.scopeD x f .skip) .panic) ∧ Frz F m m' ∧
+      ∃ Z', HeldZ m' Γ' Z' (.seq (.scopeD x f .skip) .panic) ∧ ZKeep Γ Z Z' := by
   have hxsp : x ∉ k.spine := by
     have := hiS.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
   have hos : Ex.mode.ownSlot = true := by rw [hmo]; rfl
@@ -2727,7 +2742,25 @@ theorem pres_unwindD {P : Prog} {Γ Δ1 : Ctx} {F : List Var} {x : Var} {f : Nat
   refine ⟨setE (unwindCtx k.spine x Γ) x (Ex.reviveD x), StmtT.seq rfl hsc hpan, ?_,
     by show m.nv ≤ m'.nv; rw [hnv1]; exact Nat.le_refl _,
     ⟨?_, ?_, (DKeep.unwind _ fun w hw h => hw (by simp [Stmt.spine, h])).setE
-      fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩, ?_⟩
+      fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩, ?_, Z, ?_, ZKeep.refl _ _⟩
+  rotate_right
+  · -- (AGORA-937 B4: the panicking step writes no slot, `Step.panic_st`; the
+    -- unwound context's borrowed parameters are old ones, off the body's spine)
+    refine
+      { caps := fun q E hq hmq w hW => ?_
+        reach := fun q E hq hmq w hw => ?_
+        bound := fun q E hq hmq w hw => ?_
+        frames := fun x0 m0 b0 h => by simp [Stmt.catchFrames] at h }
+    · obtain ⟨_, _, h0⟩ := hrbU' q E hq hmq
+      exact (hz.caps q E h0 hmq w hW).of_shrink hp.panic_st
+    · obtain ⟨hqx, hqk, h0⟩ := hrbU' q E hq hmq
+      have hqs : q ∉ (Stmt.seq (.scopeD x f .skip) .panic).spine := by simp [Stmt.spine, hqx]
+      rw [Stmt.under_off hqs] at hw
+      simp [Stmt.killVars] at hw
+      subst hw
+      exact hz.reach q E h0 hmq _ (by simp [Stmt.under, hqk, Stmt.killVars])
+    · obtain ⟨_, _, h0⟩ := hrbU' q E hq hmq
+      rw [hnv1]; exact hz.bound q E h0 hmq w hw
   · exact
     { toMInv := hMu'
       nvS := fun w hw => by
@@ -2761,14 +2794,7 @@ theorem pres_unwindD {P : Prog} {Γ Δ1 : Ctx} {F : List Var} {x : Var} {f : Nat
       pinIn := trivial
       dtorOut := fun w E hw hd hos hn _ d hdd hnm hrs =>
         hpinU'.2.2 w E hw hd hos hn d hdd hnm (by simpa [Stmt.spine] using hrs)
-      dtorIn := ⟨fun _ _ _ _ _ _ _ _ => by simp [Stmt.spine], trivial⟩ 
-      -- (AGORA-963 step 3: the panicking step keeps the clause at a held root,
-      -- none of its killable names: `Step.slotsCaps`)
-      heldCaps := hiS.heldCaps_step (fun q E hq hmq _ => by
-          obtain ⟨hqx, hqk, h0⟩ := hrbU' q E hq hmq
-          exact ⟨h0, by simp [Stmt.spine, hqx, hqk]⟩) (fun w hw hcw =>
-          CapsInpAt.of_slots ((hp.slotsCaps hiS.toMInv (fun h => hw (by simp [Stmt.killVars, h])) hcw.1).2 _ rfl)
-            hMu') }
+      dtorIn := ⟨fun _ _ _ _ _ _ _ _ => by simp [Stmt.spine], trivial⟩ }
   · intro w E hw hws
     have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
     have hwk : w ∉ k.spine := fun h => hws (by simp [Stmt.spine, h])
@@ -2949,6 +2975,19 @@ theorem ExitAt.typed {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt
         q1, q2, q3, FreshOK.exitScope h6 x⟩
   | _ => intro n e Γ0 V he; cases he
 
+/-- A weaker context's borrowed parameters are the context's, with the same
+    (fixed) entries. -/
+theorem Weaker.rootb_eq {Γ Γ' : Ctx} (hw : Weaker Γ Γ') :
+    ∀ p E', Γ' p = some E' → E'.mode = .rootb → Γ p = some E' := fun p E' hp hm => by
+  obtain ⟨E, hE, hwe⟩ := hw.get' hp
+  have hm' : E.mode = .rootb := by rw [← hwe.mode]; exact hm
+  rw [hwe.fixed (Or.inl hm')]; exact hE
+
+theorem Weaker.rootb_fwd {Γ Γ' : Ctx} (hw : Weaker Γ Γ') :
+    ∀ p E, Γ p = some E → E.mode = .rootb → ∃ E', Γ' p = some E' ∧ E'.mode = .rootb := fun p E hp hm => by
+  obtain ⟨E', h', hwe⟩ := hw.get hp
+  exact ⟨E', h', by rw [hwe.mode]; exact hm⟩
+
 /-- Preservation: every step of a well-typed configuration, given the call
     cases and what source typing keeps. -/
 theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloCase P) (hhand : HandCase P)
@@ -2956,32 +2995,37 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) :
     ∀ {m m' : Mem} {s' : Stmt}, MemCodes P m → Inv m Γ F s → Step P m s (.ok m' s') →
-      ∃ Γ', StmtT P ξ Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧ Keep Γ Γ' s s' ∧ Frz F m m' := by
+      ∀ (Z : Var → List Var), HeldZ m Γ Z s →
+      ∃ Γ', StmtT P ξ Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ m.nv ≤ m'.nv ∧ Keep Γ Γ' s s' ∧ Frz F m m' ∧
+        ∃ Z', HeldZ m' Γ' Z' s' ∧ ZKeep Γ Z Z' := by
   -- Agora #610: `Step.reap` fires from any source statement; its case is
   -- `pres_reap`, from the typing of the whole statement (`ht0`)
   have ht0 := ht
   induction ht with
   | skip =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => exact pres_reap ht0 hrs hcd hi hrk Z hz
   | sub hw hsub ho ih =>
-    intro m m' s' hcd hi hst
-    obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ih hsub hcd (hi.weaker hw) hst
-    exact ⟨Γ', ht'.weakenOut hi'.wf hi'.names ho, hi', hnv, hk.weaker hw, hfz⟩
+    intro m m' s' hcd hi hst Z hz
+    -- (a weaker context's borrowed parameters are the context's, fixed entries)
+    obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := ih hsub hcd (hi.weaker hw) hst Z (hz.of_rootb hw.rootb_eq)
+    exact ⟨Γ', ht'.weakenOut hi'.wf hi'.names ho, hi', hnv, hk.weaker hw, hfz, Z', hz', hzk.back hw.rootb_fwd⟩
   | seq hbsrc ha hb iha ihb =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | seqSkip =>
-      refine ⟨_, ?_, ?_, Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hbsrc), fun _ _ => rfl⟩
+      refine ⟨_, ?_, ?_, Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hbsrc), fun _ _ => rfl,
+        Z, hz.restmt rfl (src_spine hbsrc) (fun v hv => by simp [Stmt.killVars, hv])
+          (fun c hc => by rw [Stmt.catchFrames_src hbsrc] at hc; cases hc), ZKeep.refl _ _⟩
       · rcases skip_inv ha with rfl | hw
         · exact hb
         · exact hb.weakenIn hw
       · exact hi.respine (by rw [src_spine hbsrc]; rfl) (fun v hv => by simp [Stmt.vars, hv])
           (catchOK_src hbsrc) (PinOK.of_spine_nil (src_spine hbsrc)) (DtorPinOK.of_spine_nil (src_spine hbsrc))
     | seqL hst' =>
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := iha ha hcd hi.seqIn hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := iha ha hcd hi.seqIn hst' Z hz.seqIn
       refine ⟨Γ', StmtT.seq hbsrc ht' hb,
         { hi' with
           nvS := fun v hv => ?_
@@ -2991,15 +3035,18 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             -- none of `b`'s variables either
             obtain ⟨h0, hps0⟩ := hk.rootb_back hp hm hps
             exact (hi'.anch p _ hp hm hps).union ((hi.anch p _ h0 hm hps0).anti fun v hv => by
-              simp [Stmt.killVars, hv]) }, hnv, hk, hfz⟩
+              simp [Stmt.killVars, hv]) }, hnv, hk, hfz, Z', hz'.seqOut fun p E hp hm hps v hv => by
+          obtain ⟨h0, hps0⟩ := hk.rootb_back hp hm hps
+          rw [hzk p E h0 hm]
+          exact hz.reach p E h0 hm v (by rw [Stmt.under_off (s := Stmt.seq _ _) hps0]; simp [Stmt.killVars, hv]), hzk⟩
       simp only [Stmt.vars, List.mem_append] at hv
       rcases hv with hv | hv
       · exact hi'.nvS v hv
       · exact Nat.lt_of_lt_of_le (hi.nvS v (by simp [Stmt.vars, hv])) hnv
   | @letv ξ Γ Γ1 Δ F x r k E hsrc hx hxF hr hs hpx _ =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | letv hmx he =>
       rename_i m1 v o
       have hanch := hi.leafAnch rfl
@@ -3014,19 +3061,27 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hnrb : E.mode ≠ .rootb := by rcases out.mode with h | h <;> rw [h] <;> simp
       have hanch1 := post.rel.anchS hanchS
       have hsp : k.spine = [] := src_spine hsrc
-      -- (AGORA-963 step 3: what the right-hand side yields, and the store it
-      -- leaves, keep the clause at a held root, none of its variables)
-      have hcaps : HeldCapsInp (m1.set x ⟨o, some v⟩) (setE Γ1 x E) F (.scope x k) :=
-        hi.heldCaps_step (fun p Ep hp hmp _ => by
-          have hpx : p ≠ x := fun h => by
+      refine ⟨setE Γ1 x E, StmtT.scope ⟨E, by simp [setE], hnrb⟩ hxF hs hpx, ?_, by simp [post.nv], ?_,
+        fun v hv => ?_, Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: what the right-hand side yields, read from the frame, keeps
+        -- the frame clause)
+        refine hz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp [post.nv])
+          (fun p Ep hp hmp => ?_)
+          (fun v hv => by simp [Stmt.spine, hsp] at hv; subst hv; exact hx) (fun v hv => ?_) (fun p Ep w hp hmp hW hD hcw => ?_)
+        · have hpx : p ≠ x := fun h => by
             rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
           simp only [setE, upd_ne _ _ hpx] at hp
-          exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w hw hcw => by
-          obtain ⟨hv, hs1⟩ := he.capsInp hi.toMInv hcw.1 (fun h => hw (by simp [Stmt.killVars, h]))
-          exact CapsInpAt.of_slots (hs1.set (fun V e => by cases e; exact hv)) hm)
-      refine ⟨setE Γ1 x E, StmtT.scope ⟨E, by simp [setE], hnrb⟩ hxF hs hpx, ?_, by simp [post.nv], ?_,
-        fun v hv => ?_⟩
-      · refine Inv.mk₀ hcaps hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+          exact post.rel.rootb_back hp hmp
+        · simp only [Stmt.killVars, List.mem_cons, List.mem_append] at hv ⊢
+          rcases hv with h | h <;> simp [h]
+        · refine hr.frameCapsSet he hi.toMInv hcw (fun y hy => hD y (by simp [Stmt.killVars, hy])) ?_
+          rcases hW with hwz | ⟨d, hd, hb, -, rfl⟩
+          · exact Or.inl fun h => hD _ (by simp [Stmt.killVars, h]) hwz
+          rcases hi.anch p Ep hp hmp (by simp [Stmt.spine]) d hd hb with h' | ⟨_, hnk, _⟩
+          · exact Or.inr h'
+          · exact Or.inl fun h => hnk (by simp [Stmt.killVars, h])
+      · refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (covers_evalR hi.cover he) (fun T h => by
             unfold OwnedAt at h; rw [evalR_none he hmx] at h; cases h))
@@ -3076,9 +3131,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
   | @withLock ξ Γ Δ F a x k Ea t hsrc hx hxF ha hla hta hs hpx _ _ hlive _ =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | @withLock _ _ _ kk t' v ha' hk hmx hnv =>
       -- the share names a lock block of the payload's type (A3.5: a cell's too)
       obtain ⟨ob, hk0⟩ := hi.lockOf_val ha hla hta ha'
@@ -3102,15 +3157,24 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       refine ⟨setE Γ x (lockE t), StmtT.scopeL ⟨lockE t, by simp [setE], hnrb, lockE_ty t, hdl⟩ hxF hs hpx
         (by rw [hsp]; exact hKOd) hWd hNd hFd, ?_,
         by simp, ?_,
-        fun v hv => ?_⟩
+        fun v hv => ?_, Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: the payload taken from the lock block holds no names, no handle)
+        refine hz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp)
+          (fun p Ep hp hmp => ?_)
+          (fun v hv => by simp [Stmt.spine, hsp] at hv; subst hv; exact hx) (fun v hv => ?_) (fun _ _ _ _ _ _ _ hcw => ?_)
+        · have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+          simpa only [setE, upd_ne _ _ hpx] using hp
+        · simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+          rcases hv with h | h <;> simp [h]
+        · exact (hcw.of_st (m' := { m with blk := upd m.blk kk (some ⟨t, .lock, none⟩), taken := upd m.taken kk false })
+            rfl).set (fun V e => by
+              cases e
+              exact ⟨fun n hn => (hi.toMInv.blkCapsInp _ kk _ v hk rfl).sub hn,
+                fun c hc => (hi.toMInv.pay_no_href hk rfl hc).elim⟩)
       · -- (AGORA-963 step 3: the payload taken from the lock block holds no names)
-        refine Inv.mk₀ (hi.heldCaps_step (fun p Ep hp hmp _ => by
-            have hpx : p ≠ x := fun h => by
-              rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
-            simp only [setE, upd_ne _ _ hpx] at hp
-            exact ⟨hp, by simp [Stmt.spine]⟩) (fun w _ hcw =>
-            CapsInpAt.of_slots (SlotsCaps.set_of hcw.1 (hi.toMInv.blkCapsInp w kk _ v hk rfl) rfl) hm))
-          hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+        refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (covers_acquire hi.cover hk _) (fun T h => by
             unfold OwnedAt at h; simp [hmx] at h))
@@ -3160,9 +3224,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]
   | @letd ξ Γ Γ1 Δ F x f r k E t H τ hsrc hx hxF hr hmo hty hstr hfn hdtor hH hs hpx _ =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | letd hmx he =>
       rename_i m1 v o
       have hanch := hi.leafAnch rfl
@@ -3212,18 +3276,27 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           · exact absurd h hnrb
         obtain ⟨Er, hEr, _⟩ := out2.wf hnt x (by rw [← hdx]; exact List.mem_map_of_mem hd)
         rw [hx1] at hEr; cases hEr
-      -- (AGORA-963 step 3: what the right-hand side yields keeps the clause)
-      have hcaps : HeldCapsInp (m1.set x ⟨o, some v⟩) (setE Γ1 x E2.arm) F (.scopeD x f k) :=
-        hi.heldCaps_step (fun p Ep hp hmp _ => by
-          have hpx : p ≠ x := fun h => by
+      refine ⟨setE Γ1 x E2.arm, StmtT.scopeD ⟨E2.arm, t, by simp [setE], hmo2, hsd2, hfn2, hdtor.1.1, hstr⟩ hxF hs hpx
+        (by rw [hsp]; exact hKOd) hWd hNd hΔd hself hFd, ?_, by simp [post.nv], ?_, fun v hv => ?_, Z, ?_,
+        ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: what the right-hand side yields keeps the frame clause)
+        refine hz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp [post.nv])
+          (fun p Ep hp hmp => ?_)
+          (fun v hv => by simp [Stmt.spine, hsp] at hv; subst hv; exact hx) (fun v hv => ?_) (fun p Ep w hp hmp hW hD hcw => ?_)
+        · have hpx : p ≠ x := fun h => by
             rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; simp [Entry.arm] at hmp; exact hnrb hmp
           simp only [setE, upd_ne _ _ hpx] at hp
-          exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w hw hcw => by
-          obtain ⟨hv, hs1⟩ := he.capsInp hi.toMInv hcw.1 (fun h => hw (by simp [Stmt.killVars, h]))
-          exact CapsInpAt.of_slots (hs1.set (fun V e => by cases e; exact hv)) hm)
-      refine ⟨setE Γ1 x E2.arm, StmtT.scopeD ⟨E2.arm, t, by simp [setE], hmo2, hsd2, hfn2, hdtor.1.1, hstr⟩ hxF hs hpx
-        (by rw [hsp]; exact hKOd) hWd hNd hΔd hself hFd, ?_, by simp [post.nv], ?_, fun v hv => ?_⟩
-      · refine Inv.mk₀ hcaps hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+          exact post.rel.rootb_back hp hmp
+        · simp only [Stmt.killVars, List.mem_cons, List.mem_append] at hv ⊢
+          rcases hv with h | h <;> simp [h]
+        · refine hr.frameCapsSet he hi.toMInv hcw (fun y hy => hD y (by simp [Stmt.killVars, hy])) ?_
+          rcases hW with hwz | ⟨d, hd, hb, -, rfl⟩
+          · exact Or.inl fun h => hD _ (by simp [Stmt.killVars, h]) hwz
+          rcases hi.anch p Ep hp hmp (by simp [Stmt.spine]) d hd hb with h' | ⟨_, hnk, _⟩
+          · exact Or.inr h'
+          · exact Or.inl fun h => hnk (by simp [Stmt.killVars, h])
+      · refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (covers_evalR hi.cover he) (fun T h => by
             unfold OwnedAt at h; rw [evalR_none he hmx] at h; cases h))
@@ -3273,51 +3346,62 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · have hvx : v ≠ x := fun e => hxF (e ▸ hv)
         simp only [Mem.set_st, upd_ne _ _ hvx]; exact post.frz v hv
   | letcall hsrc hx hxF hc hs hpx _ _ =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
-    · exact pres_reap ht0 hrs hcd hi hrk
-    exact hcall hsrc hx hxF hc hs hpx hi hst hnr
+    · exact pres_reap ht0 hrs hcd hi hrk Z hz
+    exact hcall hsrc hx hxF hc hs hpx hi hst hnr Z hz
   | assign hx hxF hmodes hr hty hxd _ hpin hds =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | assign _ he hsl hd =>
       have hanch := hi.leafAnch rfl
       have hanchS := hi.leafAnchS rfl
       have post := step_assign hi.toMInv hanch hx hxF (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) (fun _ hy hyF => NoHeld.of_anchS hanchS (by simp [Stmt.killVars, hy]) hyF) hmodes hr hty hxd he hsl hd hpin hds
-      refine ⟨_, StmtT.skip, Inv.ofLeaf ?_ hi post.inv (by rw [post.nv]; simp) (by simp [Stmt.vars])
+      refine ⟨_, StmtT.skip, Inv.ofLeaf hi post.inv (by rw [post.nv]; simp) (by simp [Stmt.vars])
         (post.rel.anchS hanchS |>.anti fun _ h => by simp [Stmt.killVars] at h) rfl (covers_assign (covers_evalR hi.cover he) hsl hd) trivial,
-        by rw [post.nv]; simp, post.rel.keep rfl rfl, post.frz⟩
-      -- (AGORA-963 step 3: the value stored keeps the clause, the old one is dropped)
-      exact hi.heldCaps_step (fun p Ep hp hmp _ =>
-          ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w hw hcw => by
-          obtain ⟨hv, hs1⟩ := he.capsInp hi.toMInv hcw.1 (fun h => hw (by simp [Stmt.killVars, h]))
-          exact CapsInpAt.of_slots (hs1.set_of hv rfl) post.inv)
+        by rw [post.nv]; simp, post.rel.keep rfl rfl, post.frz, Z, ?_, ZKeep.refl _ _⟩
+      -- (AGORA-937 B4: the value stored, read from the frame, keeps the frame clause)
+      refine hz.leaf rfl rfl (by rw [post.nv]; simp) (fun p Ep hp hmp => post.rel.rootb_back hp hmp) (by simp [Stmt.spine])
+        (fun v hv => by simp [Stmt.killVars] at hv) (fun p Ep w hp hmp hW hD hcw => ?_)
+      refine (hr.frameCapsSet he hi.toMInv hcw (fun y hy => hD y (by simp [Stmt.killVars, hy])) ?_).of_st rfl
+      rcases hW with hwz | ⟨d, hd, hb, -, rfl⟩
+      · exact Or.inl fun h => hD _ (by simp [Stmt.killVars, h]) hwz
+      rcases hi.anch p Ep hp hmp (by simp [Stmt.spine]) d hd hb with h' | ⟨_, hnk, _⟩
+      · exact Or.inr h'
+      · exact Or.inl fun h => hnk (by simp [Stmt.killVars, h])
   | ite hsa hsb _ ha hb _ _ =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | iteT _ _ =>
       exact ⟨_, ha, hi.respine (by rw [src_spine hsa]; rfl) (fun v hv => by
-        simp [Stmt.vars, hv]) (catchOK_src hsa) (PinOK.of_spine_nil (src_spine hsa)) (DtorPinOK.of_spine_nil (src_spine hsa)), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsa), fun _ _ => rfl⟩
+        simp [Stmt.vars, hv]) (catchOK_src hsa) (PinOK.of_spine_nil (src_spine hsa)) (DtorPinOK.of_spine_nil (src_spine hsa)), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsa), fun _ _ => rfl,
+        Z, hz.restmt rfl (src_spine hsa) (fun v hv => by simp [Stmt.killVars, hv])
+          (fun c hc => by rw [Stmt.catchFrames_src hsa] at hc; cases hc), ZKeep.refl _ _⟩
     | iteF _ =>
       exact ⟨_, hb, hi.respine (by rw [src_spine hsb]; rfl) (fun v hv => by
-        simp [Stmt.vars, hv]) (catchOK_src hsb) (PinOK.of_spine_nil (src_spine hsb)) (DtorPinOK.of_spine_nil (src_spine hsb)), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsb), fun _ _ => rfl⟩
+        simp [Stmt.vars, hv]) (catchOK_src hsb) (PinOK.of_spine_nil (src_spine hsb)) (DtorPinOK.of_spine_nil (src_spine hsb)), Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsb), fun _ _ => rfl,
+        Z, hz.restmt rfl (src_spine hsb) (fun v hv => by simp [Stmt.killVars, hv])
+          (fun c hc => by rw [Stmt.catchFrames_src hsb] at hc; cases hc), ZKeep.refl _ _⟩
   | «while» hsrc hc hs _ =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | «while» =>
       refine ⟨_, StmtT.ite (by simp [Stmt.src, hsrc]) rfl hc
         (StmtT.seq (by simp [Stmt.src, hsrc]) hs (StmtT.while hsrc hc hs)) StmtT.skip,
         hi.respine rfl (fun v hv => ?_) (catchOK_src (by simp [Stmt.src, hsrc])) (PinOK.of_spine_nil rfl)
           (DtorPinOK.of_spine_nil rfl),
         Nat.le_refl _,
-        (CtxRel.refl _).keep rfl rfl, fun _ _ => rfl⟩
+        (CtxRel.refl _).keep rfl rfl, fun _ _ => rfl,
+        Z, hz.restmt rfl rfl (fun v hv => by
+          simp only [Stmt.killVars, List.mem_append, List.not_mem_nil, or_false] at hv ⊢; grind)
+          (fun c hc => by simp [Stmt.catchFrames] at hc), ZKeep.refl _ _⟩
       simp only [Stmt.vars, List.mem_append, List.not_mem_nil, or_false] at hv ⊢
       grind
   | @push ξ Γ Γ1 F x y Ex Ey Ex1 t D hx hl hty hcan hxF hy hly htyy hyx hpa hxD hx1 hl1 hds hdbp =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     have hanch := hi.leafAnch rfl
     have hanchS := hi.leafAnchS rfl
     have hgo : ∀ {m1 : Mem} {v : Val}, TakeVal m y v m1 →
@@ -3326,10 +3410,11 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     have fin : ∀ {m1 m' : Mem} {v : Val}, TakeVal m y v m1 →
         MInv m' (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) →
         m'.nv = m1.nv → Covers m' → (∀ v, v ≠ x → m'.st v = m1.st v) →
-        (∀ w, ValCapsInp v w → SlotsCaps m1 w → SlotsCaps m' w) →
+        (MInv m' (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) →
+          ∀ D' w, x ∉ D' → y ∉ D' → FrameCaps m D' w → FrameCaps m' D' w) →
         ∃ Γ', StmtT P ξ Γ' F .skip (setE (kill .realloc t.holdsView x Γ1) x
             { Ex1 with held := Ex1.held ++ ownHeld true t D }) ∧ Inv m' Γ' F .skip ∧ m.nv ≤ m'.nv ∧
-          Keep Γ Γ' (.push x y) .skip ∧ Frz F m m' := by
+          Keep Γ Γ' (.push x y) .skip ∧ Frz F m m' ∧ ∃ Z', HeldZ m' Γ' Z' .skip ∧ ZKeep Γ Z Z' := by
       intro m1 m' v htk hinv hnv hcov hst1 hsc
       obtain ⟨post, _⟩ := hgo htk
       have hanch1 := post.rel.anchS hanchS
@@ -3354,15 +3439,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               rcases hdd with hdd | hdd
               · exact hdd
               · exact hsub hdd)))
-      -- (AGORA-963 step 3: the taken value goes into the `Vec`; both were clean)
-      have hcaps := hi.heldCaps_step (s' := .skip) (fun p Ep hp hmp _ =>
-          ⟨hrel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w _ hcw => by
-          obtain ⟨hv, hs1⟩ := htk.capsInp hcw.1
-          exact CapsInpAt.of_slots (hsc w hv hs1) hinv)
-      exact ⟨_, StmtT.skip, Inv.ofLeaf hcaps hi hinv (by rw [hnv, post.nv]; exact Nat.le_refl _)
+      exact ⟨_, StmtT.skip, Inv.ofLeaf hi hinv (by rw [hnv, post.nv]; exact Nat.le_refl _)
         (by simp [Stmt.vars]) (hrel.anchS hanchS |>.anti fun _ h => by simp [Stmt.killVars] at h) rfl hcov trivial,
         by rw [hnv, post.nv]; exact Nat.le_refl _,
-        hrel.keep rfl rfl, fun w hw => by rw [hst1 w (fun e => hxF (e ▸ hw))]; exact post.frz w hw⟩
+        hrel.keep rfl rfl, fun w hw => by rw [hst1 w (fun e => hxF (e ▸ hw))]; exact post.frz w hw,
+        Z, hz.leaf rfl rfl (by rw [hnv, post.nv]; exact Nat.le_refl _) (fun p Ep hp hmp => hrel.rootb_back hp hmp) (by simp [Stmt.spine])
+          (fun v hv => by simp [Stmt.killVars] at hv)
+          (fun _ _ _ _ _ _ hD hcw => hsc hinv _ _ (hD x (by simp [Stmt.killVars])) (hD y (by simp [Stmt.killVars])) hcw),
+        ZKeep.refl _ _⟩
     have prep : ∀ {m1 : Mem} {v : Val}, TakeVal m y v m1 →
         Pushed m1 Γ1 t v D ∧ MInv m1 Γ1 ∧ canDo Ex1.mode .realloc ∧ Ex1.ty = .vec t ∧
         (RootbAnchS Γ1 F (Stmt.push x y).killVars) := by
@@ -3371,24 +3455,44 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       obtain ⟨E0, h0, hm0, ht0⟩ := post.rel.mode x Ex1 hx1
       rw [hx] at h0; cases h0
       exact ⟨hp, post.inv, by rw [hm0]; exact hcan, by rw [ht0, hty], post.rel.anchS hanchS⟩
+    -- (AGORA-937 B4: the clause after a push into `x`'s own `Vec`: the taken
+    -- value was a live slot's, clean; the grown node is clean, and as an
+    -- owned tree holds no handle)
+    -- (AGORA-937 B4: the clause after a push into `x`'s own `Vec`: the taken
+    -- value was the frame's, clean; the grown node is clean, and as an owned
+    -- tree holds no handle)
+    have pushOwnCaps : ∀ {m1 m0 : Mem} {v : Val} {t' : Ty} {c d c' d' : Nat} {es : List Val},
+        TakeVal m y v m1 → m1.st x = some ⟨true, some (.node t' c d es)⟩ →
+        MInv (m0.set x ⟨true, some (.node t' c' d' (es ++ [v]))⟩) (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) →
+        m0.st = m1.st → ∀ D' w, x ∉ D' → y ∉ D' → FrameCaps m D' w →
+          FrameCaps (m0.set x ⟨true, some (.node t' c' d' (es ++ [v]))⟩) D' w := by
+      intro m1 m0 v t' c d c' d' es htk hT hinv hst0 D' w hxD hyD hcw
+      obtain ⟨_, hsy⟩ := htk.slot
+      have hv : ValCapsInp v w := (hcw y _ _ hyD hsy).1
+      have h1 : FrameCaps m1 D' w := htk.frameCaps hcw
+      have hN : ValCapsInp (.node t' c' d' (es ++ [v])) w := (h1 x _ _ hxD hT).1.push hv
+      refine (h1.of_st hst0).set (fun V e => ?_)
+      cases e
+      exact ⟨fun n hn => hN.sub hn, fun c hc =>
+        (hinv.slot_no_href (x := x) (T := .node t' c' d' (es ++ [v])) (by simp [Mem.set, upd]) hc).elim⟩
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | push htk hT _ _ =>
       obtain ⟨hp, hinv1, hcan1, hty1, hanch1⟩ := prep htk
       exact fin htk (push_grow hinv1 hanch1.toH hx1 hl1 hcan1 hxF hty1 hT hp.ownHeld (fun h => hxD (ownHeld_roots h))
         (fun h => by simp [ownHeld, h])
         (Or.inl ⟨rfl, rfl, rfl⟩) hds (HeldSpared.of_none (NoHeld.of_anchS hanch1 (by simp [Stmt.killVars]) hxF) _ _)) rfl (covers_push (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
-        (fun w hv hs => hs.set (fun V e => by cases e; exact (hs.slot hT).push hv))
+        (fun hinv D' w hxD hyD hcw => pushOwnCaps htk hT hinv rfl D' w hxD hyD hcw)
     | pushRealloc htk hT _ _ =>
       obtain ⟨hp, hinv1, hcan1, hty1, hanch1⟩ := prep htk
       exact fin htk (push_grow hinv1 hanch1.toH hx1 hl1 hcan1 hxF hty1 hT hp.ownHeld (fun h => hxD (ownHeld_roots h))
         (fun h => by simp [ownHeld, h])
         (Or.inr ⟨rfl, rfl, rfl⟩) hds (HeldSpared.of_none (NoHeld.of_anchS hanch1 (by simp [Stmt.killVars]) hxF) _ _)) rfl (covers_pushRealloc (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
-        (fun w hv hs => (hs.set_of ((hs.slot hT).push hv) rfl))
+        (fun hinv D' w hxD hyD hcw => pushOwnCaps htk hT hinv rfl D' w hxD hyD hcw)
   | @editB ξ Γ Γ1 F x op Ex Ex1 t D _ hx hmx hl hty hhv hxF harg hyx hx1 hl1 hthru =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     have hanch := hi.leafAnch rfl
     have hanchS := hi.leafAnchS rfl
     have hyh : ∀ y, op.stored = some y → y ∉ F → (∀ Ey, Γ y = some Ey → Ey.mode ≠ .region) → NoHeld Γ y := fun y hy hyF _ =>
@@ -3406,21 +3510,27 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
         exact ⟨Er, hEr, hcan.ownSlot⟩
     have fin : ∀ {m'' : Mem}, MInv m'' (setE (killThru op Ex.ty Ex.path Γ1) x Ex) → m''.nv = m.nv →
-        Covers m'' → Frz F m m'' → (∀ w, CapsInpAt m w → SlotsCaps m'' w) →
+        Covers m'' → Frz F m m'' →
+        (MInv m'' (setE (killThru op Ex.ty Ex.path Γ1) x Ex) → ∀ D' w, (∀ v ∈ (Stmt.edit true x op).killVars, v ∉ D') → FrameCaps m D' w →
+          FrameCaps m'' D' w) →
         ∃ Γ', StmtT P ξ Γ' F .skip (setE (killThru op Ex.ty Ex.path Γ1) x Ex) ∧ Inv m'' Γ' F .skip ∧
-          m.nv ≤ m''.nv ∧ Keep Γ Γ' (.edit true x op) .skip ∧ Frz F m m'' :=
+          m.nv ≤ m''.nv ∧ Keep Γ Γ' (.edit true x op) .skip ∧ Frz F m m'' ∧
+          ∃ Z', HeldZ m'' Γ' Z' .skip ∧ ZKeep Γ Z Z' :=
       -- (AGORA-963 step 3: the tree changed through the borrow, and the value
       -- stored into it, were the store's)
-      fun hinv hnv hcov hfz hsc => ⟨_, StmtT.skip, Inv.ofLeaf (hi.heldCaps_step (fun p Ep hp hmp _ =>
-          ⟨hrel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w _ hcw => CapsInpAt.of_slots (hsc w hcw) hinv))
-        hi hinv (by rw [hnv]; exact Nat.le_refl _)
+      fun hinv hnv hcov hfz hsc => ⟨_, StmtT.skip, Inv.ofLeaf hi hinv (by rw [hnv]; exact Nat.le_refl _)
         (by simp [Stmt.vars]) (hrel.anchS hanchS |>.anti fun _ h => by simp [Stmt.killVars] at h) rfl hcov trivial, by rw [hnv]; exact Nat.le_refl _,
-        hrel.keep rfl rfl, hfz⟩
+        hrel.keep rfl rfl, hfz,
+        Z, hz.leaf rfl rfl (by rw [hnv]; exact Nat.le_refl _) (fun p Ep hp hmp => hrel.rootb_back hp hmp) (by simp [Stmt.spine])
+          (fun v hv => by simp [Stmt.killVars] at hv) (fun _ _ _ _ _ _ hD hcw => hsc hinv _ _ hD hcw),
+        ZKeep.refl _ _⟩
+    have hbE : LiveBack Γ1 (setE (killThru op Ex.ty Ex.path Γ1) x Ex) :=
+      (LiveBack.killThru _ _ _ _).setLive hx1 hl1 _
     cases harg with
     | @push y Ey _ _ _ hy hly htyy hpa =>
       have hyx' : y ≠ x := hyx y rfl
       cases hst with
-      | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+      | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
       | editPush htk hno hr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy (fun h => NoHeld.of_anchS hanchS (by simp [Stmt.killVars, Edit.vars]) h) hpa htk
         obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
@@ -3430,10 +3540,16 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact fin (MInv.editB_push post.inv (post.rel.anchS hanchS).toH hx1 hmx hl1 hty hhv hxF hyx' hthru hthru.spared hp
             hno hr) (by simp [post.nv]) (covers_editPush (covers_takeVal hi.cover htk) hno.2.2.1 hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
-          (fun w hcw => by
-            obtain ⟨hv, hs1⟩ := htk.capsInp hcw.1
-            obtain ⟨hT, hN⟩ := hs1.nodeOf hno
-            exact hs1.set_of (hr.capsInp hT (hN.push hv)) rfl)
+          (fun hinv D' w hD hcw => by
+            obtain ⟨_, hsy⟩ := htk.slot
+            have hv : ValCapsInp _ w := (hcw _ _ _ (hD y (by simp [Stmt.killVars, Edit.vars])) hsy).1
+            exact (htk.frameCaps hcw).editNode hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz]) (fun hN => hN.push hv)
+              (fun e he => by
+                rcases List.mem_append.mp he with he | he
+                · exact Or.inl he
+                · simp at he; subst he; exact Or.inr fun z hz => hv.sub hz)
+              (fun c hc => hinv.slot_no_href (x := dep.root) (by simp [Mem.set, upd]) hc))
       | editPushRealloc htk hno hr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy (fun h => NoHeld.of_anchS hanchS (by simp [Stmt.killVars, Edit.vars]) h) hpa htk
         obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
@@ -3444,13 +3560,19 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             hthru hthru.spared hp hno hr) (by simp [post.nv])
           (covers_editPushRealloc (covers_takeVal hi.cover htk) hno.2.2.1 hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
-          (fun w hcw => by
-            obtain ⟨hv, hs1⟩ := htk.capsInp hcw.1
-            obtain ⟨hT, hN⟩ := hs1.nodeOf hno
-            exact hs1.set_of (hr.capsInp hT (hN.push hv)) rfl)
+          (fun hinv D' w hD hcw => by
+            obtain ⟨_, hsy⟩ := htk.slot
+            have hv : ValCapsInp _ w := (hcw _ _ _ (hD y (by simp [Stmt.killVars, Edit.vars])) hsy).1
+            exact (htk.frameCaps hcw).editNode hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz]) (fun hN => hN.push hv)
+              (fun e he => by
+                rcases List.mem_append.mp he with he | he
+                · exact Or.inl he
+                · simp at he; subst he; exact Or.inr fun z hz => hv.sub hz)
+              (fun c hc => hinv.slot_no_href (x := dep.root) (by simp [Mem.set, upd]) hc))
     | trunc _ =>
       cases hst with
-      | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+      | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
       | editTrunc _ hno hfr hr =>
         obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
           hi.toMInv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
@@ -3459,12 +3581,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact fin (MInv.editB_trunc hi.toMInv hanch hx1 hmx hl1 hty hhv hxF hthru hthru.spared hno hfr hr) (by simp)
           (covers_editTrunc hi.cover hno.2.2.1 hfr hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))])
-          (fun w hcw => by
-            obtain ⟨hT, hN⟩ := SlotsCaps.nodeOf hcw.1 hno
-            exact SlotsCaps.set_of hcw.1 (hr.capsInp hT (hN.node_sub fun e he => List.mem_of_mem_take he)) rfl)
+          (fun hinv D' w _ hcw => hcw.editNode hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz]) (fun hN => hN.node_sub fun e he => List.mem_of_mem_take he)
+              (fun e he => Or.inl (List.mem_of_mem_take he)) (fun c hc => hinv.slot_no_href (x := dep.root) (by simp [Mem.set, upd]) hc))
     | @set i y Ey _ _ _ _ hy hly htyy hpa =>
       cases hst with
-      | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+      | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
       | editSet hn _ htk hno hfr hr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy (fun h => NoHeld.of_anchS hanchS (by simp [Stmt.killVars, Edit.vars]) h) hpa htk
         obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
@@ -3474,11 +3596,17 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact fin (MInv.editB_set post.inv (post.rel.anchS hanchS).toH hx1 hmx hl1 hty hhv hthru hthru.spared hp hn hno hfr
             hr) (by simp [post.nv]) (covers_editSet (covers_takeVal hi.cover htk) hno.2.2.1 hn hfr hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
-          (fun w hcw => by
-            obtain ⟨hv, hs1⟩ := htk.capsInp hcw.1
-            obtain ⟨hT, hN⟩ := hs1.nodeOf hno
-            refine hs1.set_of (hr.capsInp hT (ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he)
-              (fun e hc => ?_))) rfl
+          (fun hinv D' w hD hcw => by
+            obtain ⟨_, hsy⟩ := htk.slot
+            have hv : ValCapsInp _ w := (hcw _ _ _ (hD y (by simp [Stmt.killVars, Edit.vars])) hsy).1
+            refine (htk.frameCaps hcw).editNode hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz]) (fun hN => ?_)
+              (fun e he => by
+                rcases List.mem_or_eq_of_mem_set he with he | rfl
+                · exact Or.inl he
+                · exact Or.inr fun z hz => hv.sub hz)
+              (fun c hc => hinv.slot_no_href (x := dep.root) (by simp [Mem.set, upd]) hc)
+            refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
             cases hc with
             | elem he =>
               rcases List.mem_or_eq_of_mem_set he with he | rfl
@@ -3488,9 +3616,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy (fun h => NoHeld.of_anchS hanchS (by simp [Stmt.killVars, Edit.vars]) h) hpa htk
         exact fin (MInv.editB_setOOB post.inv (post.rel.anchS hanchS).toH hx1 hmx hl1 hty hhv hthru hthru.spared hp hno hfr)
           (by simp [post.nv]) (covers_editSetOOB (covers_takeVal hi.cover htk) hfr) post.frz
-          (fun w hcw => (htk.capsInp hcw.1).2.of_st rfl)
+          (fun _ D' w _ hcw => (htk.frameCaps hcw).of_st rfl)
   | @editBV ξ Γ Γ1 F x op Ex Ex1 t D bb hx hmx hl hty hhv hfn hxF harg hyx hx1 hl1 _ hthru hV =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     have hanch := hi.leafAnch rfl
     have hanchS := hi.leafAnchS rfl
     have hyh : ∀ y, op.stored = some y → y ∉ F → (∀ Ey, Γ y = some Ey → Ey.mode ≠ .region) → NoHeld Γ y := fun y hy hyF _ =>
@@ -3510,22 +3638,30 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         obtain ⟨_, _, Er, hEr, _, hcan, _⟩ := hthru d hd
         exact ⟨Er, hEr, hcan.ownSlot⟩
     have fin : ∀ {m'' : Mem}, MInv m'' (setE (holdThru (memDeps D) Ex.path (killThruV op Ex.ty Ex.path Γ1)) x
-        { Ex with held := Ex.held ++ memDeps D }) → m''.nv = m.nv → Covers m'' → Frz F m m'' → (∀ w, CapsInpAt m w → SlotsCaps m'' w) →
+        { Ex with held := Ex.held ++ memDeps D }) → m''.nv = m.nv → Covers m'' → Frz F m m'' →
+        (MInv m'' (setE (holdThru (memDeps D) Ex.path (killThruV op Ex.ty Ex.path Γ1)) x
+          { Ex with held := Ex.held ++ memDeps D }) → ∀ D' w, (∀ v ∈ (Stmt.edit true x op).killVars, v ∉ D') → FrameCaps m D' w →
+          FrameCaps m'' D' w) →
         ∃ Γ', StmtT P ξ Γ' F .skip (setE (holdThru (memDeps D) Ex.path (killThruV op Ex.ty Ex.path Γ1)) x
           { Ex with held := Ex.held ++ memDeps D }) ∧ Inv m'' Γ' F .skip ∧
-          m.nv ≤ m''.nv ∧ Keep Γ Γ' (.edit true x op) .skip ∧ Frz F m m'' :=
+          m.nv ≤ m''.nv ∧ Keep Γ Γ' (.edit true x op) .skip ∧ Frz F m m'' ∧
+          ∃ Z', HeldZ m'' Γ' Z' .skip ∧ ZKeep Γ Z Z' :=
       -- (AGORA-963 step 3: the tree changed through the borrow, and the value
       -- stored into it, were the store's)
-      fun hinv hnv hcov hfz hsc => ⟨_, StmtT.skip, Inv.ofLeaf (hi.heldCaps_step (fun p Ep hp hmp _ =>
-          ⟨hrel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w _ hcw => CapsInpAt.of_slots (hsc w hcw) hinv))
-        hi hinv (by rw [hnv]; exact Nat.le_refl _)
+      fun hinv hnv hcov hfz hsc => ⟨_, StmtT.skip, Inv.ofLeaf hi hinv (by rw [hnv]; exact Nat.le_refl _)
         (by simp [Stmt.vars]) (hrel.anchS hanchS |>.anti fun _ h => by simp [Stmt.killVars] at h) rfl hcov trivial, by rw [hnv]; exact Nat.le_refl _,
-        hrel.keep rfl rfl, hfz⟩
+        hrel.keep rfl rfl, hfz,
+        Z, hz.leaf rfl rfl (by rw [hnv]; exact Nat.le_refl _) (fun p Ep hp hmp => hrel.rootb_back hp hmp) (by simp [Stmt.spine])
+          (fun v hv => by simp [Stmt.killVars] at hv) (fun _ _ _ _ _ _ hD hcw => hsc hinv _ _ hD hcw),
+        ZKeep.refl _ _⟩
+    have hbE : LiveBack Γ1 (setE (holdThru (memDeps D) Ex.path (killThruV op Ex.ty Ex.path Γ1)) x
+          { Ex with held := Ex.held ++ memDeps D }) := by
+      refine LiveBack.setLive ((LiveBack.killThruV _ _ _ _).trans (LiveBack.holdThru _ _ _)) hx1 hl1 _
     cases harg with
     | @push y Ey _ _ _ hy hly htyy hpa =>
       have hyx' : y ≠ x := hyx y rfl
       cases hst with
-      | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+      | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
       | editPush htk hno hr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy (fun h => NoHeld.of_anchS hanchS (by simp [Stmt.killVars, Edit.vars]) h) hpa htk
         obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
@@ -3536,10 +3672,16 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             memDeps_noName hp.mem (hvnOf hp) hno (Or.inl ⟨rfl, rfl, rfl⟩) hr) (by simp [post.nv])
           (covers_editPush (covers_takeVal hi.cover htk) hno.2.2.1 hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
-          (fun w hcw => by
-            obtain ⟨hv, hs1⟩ := htk.capsInp hcw.1
-            obtain ⟨hT, hN⟩ := hs1.nodeOf hno
-            exact hs1.set_of (hr.capsInp hT (hN.push hv)) rfl)
+          (fun hinv D' w hD hcw => by
+            obtain ⟨_, hsy⟩ := htk.slot
+            have hv : ValCapsInp _ w := (hcw _ _ _ (hD y (by simp [Stmt.killVars, Edit.vars])) hsy).1
+            exact (htk.frameCaps hcw).editNode hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz]) (fun hN => hN.push hv)
+              (fun e he => by
+                rcases List.mem_append.mp he with he | he
+                · exact Or.inl he
+                · simp at he; subst he; exact Or.inr fun z hz => hv.sub hz)
+              (fun c hc => hinv.slot_no_href (x := dep.root) (by simp [Mem.set, upd]) hc))
       | editPushRealloc htk hno hr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy (fun h => NoHeld.of_anchS hanchS (by simp [Stmt.killVars, Edit.vars]) h) hpa htk
         obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
@@ -3550,13 +3692,19 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             memDeps_noName hp.mem (hvnOf hp) hno (Or.inr ⟨rfl, rfl, rfl⟩) hr) (by simp [post.nv])
           (covers_editPushRealloc (covers_takeVal hi.cover htk) hno.2.2.1 hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
-          (fun w hcw => by
-            obtain ⟨hv, hs1⟩ := htk.capsInp hcw.1
-            obtain ⟨hT, hN⟩ := hs1.nodeOf hno
-            exact hs1.set_of (hr.capsInp hT (hN.push hv)) rfl)
+          (fun hinv D' w hD hcw => by
+            obtain ⟨_, hsy⟩ := htk.slot
+            have hv : ValCapsInp _ w := (hcw _ _ _ (hD y (by simp [Stmt.killVars, Edit.vars])) hsy).1
+            exact (htk.frameCaps hcw).editNode hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz]) (fun hN => hN.push hv)
+              (fun e he => by
+                rcases List.mem_append.mp he with he | he
+                · exact Or.inl he
+                · simp at he; subst he; exact Or.inr fun z hz => hv.sub hz)
+              (fun c hc => hinv.slot_no_href (x := dep.root) (by simp [Mem.set, upd]) hc))
     | trunc _ =>
       cases hst with
-      | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+      | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
       | editTrunc _ hno hfr hr =>
         obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
           hi.toMInv.thru_owner hx1 hmx hl1 hty hro hthru.noShare
@@ -3565,12 +3713,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact fin (MInv.editBV_trunc hi.toMInv hanch hx1 hmx hl1 hty hhv hthru (NoHeldV.of_anchS hanchS hthru) hV hno hfr hr) (by simp)
           (covers_editTrunc hi.cover hno.2.2.1 hfr hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))])
-          (fun w hcw => by
-            obtain ⟨hT, hN⟩ := SlotsCaps.nodeOf hcw.1 hno
-            exact SlotsCaps.set_of hcw.1 (hr.capsInp hT (hN.node_sub fun e he => List.mem_of_mem_take he)) rfl)
+          (fun hinv D' w _ hcw => hcw.editNode hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz]) (fun hN => hN.node_sub fun e he => List.mem_of_mem_take he)
+              (fun e he => Or.inl (List.mem_of_mem_take he)) (fun c hc => hinv.slot_no_href (x := dep.root) (by simp [Mem.set, upd]) hc))
     | @set i y Ey _ _ _ _ hy hly htyy hpa =>
       cases hst with
-      | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+      | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
       | editSet hn _ htk hno hfr hr =>
         obtain ⟨post, hp⟩ := push_take hi.toMInv hanch hy hly htyy (fun h => NoHeld.of_anchS hanchS (by simp [Stmt.killVars, Edit.vars]) h) hpa htk
         obtain ⟨dep, hdm, _, _, _, _, _, _, _, _, _, _, _, _, huniq, _⟩ :=
@@ -3581,11 +3729,17 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             memDeps_noName hp.mem (hvnOf hp) hn hno hfr hr) (by simp [post.nv])
           (covers_editSet (covers_takeVal hi.cover htk) hno.2.2.1 hn hfr hr)
           (fun w hw => by rw [Mem.set_st, upd_ne _ _ (show w ≠ dep.root from fun e => hoF (e ▸ hw))]; exact post.frz w hw)
-          (fun w hcw => by
-            obtain ⟨hv, hs1⟩ := htk.capsInp hcw.1
-            obtain ⟨hT, hN⟩ := hs1.nodeOf hno
-            refine hs1.set_of (hr.capsInp hT (ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he)
-              (fun e hc => ?_))) rfl
+          (fun hinv D' w hD hcw => by
+            obtain ⟨_, hsy⟩ := htk.slot
+            have hv : ValCapsInp _ w := (hcw _ _ _ (hD y (by simp [Stmt.killVars, Edit.vars])) hsy).1
+            refine (htk.frameCaps hcw).editNode hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz]) (fun hN => ?_)
+              (fun e he => by
+                rcases List.mem_or_eq_of_mem_set he with he | rfl
+                · exact Or.inl he
+                · exact Or.inr fun z hz => hv.sub hz)
+              (fun c hc => hinv.slot_no_href (x := dep.root) (by simp [Mem.set, upd]) hc)
+            refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
             cases hc with
             | elem he =>
               rcases List.mem_or_eq_of_mem_set he with he | rfl
@@ -3596,12 +3750,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact fin (MInv.editBV_setOOB post.inv (post.rel.anchS hanchS).toH hx1 hmx hl1 hty hhv hthru (NoHeldV.of_anchS (post.rel.anchS hanchS) hthru) hV
             memDeps_noName hp.mem hno hfr)
           (by simp [post.nv]) (covers_editSetOOB (covers_takeVal hi.cover htk) hfr) post.frz
-          (fun w hcw => (htk.capsInp hcw.1).2.of_st rfl)
+          (fun _ D' w _ hcw => (htk.frameCaps hcw).of_st rfl)
   | @withElem ξ Γ Γ1 Δ1 Δ F y x i k Ey E hsrc hx hxF _ _ _ hpin _ hr hs hpush hpx _ _ _ _ =>
     -- element `n` moves out to `x`, as a pop of it moved to the end (`elem_pres`)
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | @withElem _ _ _ _ t c d n es hn hT hc hd _ hmx =>
       have hyF : y ∉ F := by cases hr; assumption
       have hxy : x ≠ y := fun e => by
@@ -3620,21 +3774,39 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hanch1 := post.rel.anchS hanchS
       have hsp : k.spine = [] := src_spine hsrc
       refine ⟨setE Γ1 x E, StmtT.scope ⟨E, by simp [setE], hnrb⟩ hxF
-        (StmtT.seq rfl hs.ofNone (StmtT.insert ExprT.lit hyF hpush)) hpx, ?_, by simp, ?_, fun v hv => ?_⟩
+        (StmtT.seq rfl hs.ofNone (StmtT.insert ExprT.lit hyF hpush)) hpx, ?_, by simp, ?_, fun v hv => ?_,
+        Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: the element and the rest of the frame's `Vec` were the `Vec`'s)
+        refine hz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp)
+          (fun p Ep hp hmp => ?_)
+          (fun v hv => by simp [Stmt.spine, hsp] at hv; subst hv; exact hx) (fun v hv => ?_) (fun _ _ _ _ _ _ hD hcw => ?_)
+        · have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+          simp only [setE, upd_ne _ _ hpx] at hp
+          exact post.rel.rootb_back hp hmp
+        · simp only [Stmt.killVars, Expr.vars, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hv ⊢
+          rcases hv with h | h | h | h <;> simp [h]
+        · have hyD := hD y (by simp [Stmt.killVars])
+          have hN := (hcw y _ _ hyD hT).1
+          have hel : ∀ e ∈ es.take n ++ es.drop (n + 1), e ∈ es := fun e he => by
+            rcases List.mem_append.mp he with he | he
+            · exact List.mem_of_mem_take he
+            · exact List.mem_of_mem_drop he
+          refine (hcw.set (y := y) (o := true) (v := some (.node t c d (es.take n ++ es.drop (n + 1))))
+            (fun V e => ?_)).set (fun V e => ?_)
+          · cases e
+            refine ⟨fun z hz => ?_, fun c' hc => ?_⟩
+            · cases hz with
+              | refl => exact hN.node_sub hel
+              | child hm hz => exact hN.sub (Sub.child (hel _ hm) hz)
+            · cases hc with
+              | child hm hz => exact (hi.toMInv.slot_no_href hT (Sub.child (hel _ hm) hz)).elim
+          · cases e
+            have hsT : ∀ z, Sub z es[n] → Sub z (.node t c d es) := fun z hz => Sub.child (List.getElem_mem hn) hz
+            exact ⟨fun z hz => hN.sub (hsT z hz), fun c' hc => (hi.toMInv.slot_no_href hT (hsT _ hc)).elim⟩
       · -- (AGORA-963 step 3: the element and the rest of the `Vec` were the `Vec`'s)
-        refine Inv.mk₀ (hi.heldCaps_step (fun p Ep hp hmp _ => by
-            have hpx : p ≠ x := fun h => by
-              rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
-            simp only [setE, upd_ne _ _ hpx] at hp
-            exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w _ hcw => by
-            have hN := SlotsCaps.slot hcw.1 hT
-            refine CapsInpAt.of_slots ((SlotsCaps.set (SlotsCaps.set hcw.1 (x := y)
-              (fun V e => by
-                cases e; exact hN.node_sub fun e he => by
-                  rcases List.mem_append.mp he with he | he
-                  · exact List.mem_of_mem_take he
-                  · exact List.mem_of_mem_drop he)) (x := x)
-              (fun V e => by cases e; exact hN.child (Child.elem (List.getElem_mem hn))))) hm)) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+        refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (hcov hi.cover) (fun T h => by
             unfold OwnedAt at h; simp [upd_ne _ _ hxy, hmx] at h))
@@ -3690,9 +3862,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
   | @takeB ξ Γ Δ F x y i k Ex t hsrc hy hyF hx hmx hl hty hhv _ hie hthru _ hs hend _ =>
     -- element `n` moves out to `y` through the borrow `x` (`takeB_pres`), and
     -- the body runs in `y`'s scope, as a `letv`'s does
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | @takeB _ _ o _ _ n T T' t' c d es hn _ hno hmx' hr =>
       have hanch := hi.leafAnch rfl
       have hanchS := hi.leafAnchS rfl
@@ -3711,18 +3883,33 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hsp : k.spine = [] := src_spine hsrc
       have hyo : y ≠ o := fun e => by subst e; rw [hno.2.2.1] at hmx'; cases hmx'
       refine ⟨setE Γ1 y (compE Ex t), StmtT.scope ⟨compE Ex t, by simp [setE], hnrb⟩ hyF hs hend, ?_,
-        by simp, ?_, fun v hv => ?_⟩
+        by simp, ?_, fun v hv => ?_, Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: the element and the rewritten tree were the tree's; the
+        -- node is reached through the frame's borrow `x`, so clean)
+        refine hz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp)
+          (fun p Ep hp hmp => ?_)
+          (fun v hv => by simp [Stmt.spine, hsp] at hv; subst hv; exact hy) (fun v hv => ?_) (fun _ _ _ _ _ _ hD hcw => ?_)
+        · have hpy : p ≠ y := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+          simp only [setE, upd_ne _ _ hpy] at hp
+          exact post.rel.rootb_back hp hmp
+        · simp only [Stmt.killVars, List.mem_cons, List.mem_append] at hv ⊢
+          rcases hv with h | h <;> simp [h]
+        · have hN := hcw.nodeOf (hD x (by simp [Stmt.killVars])) hno
+          have hsT : ∀ z, Sub z es[n] → Sub z T := fun z hz =>
+            Sub.trans (Sub.child (List.getElem_mem hn) hz) hno.sub
+          refine (hcw.editNode (m' := m.set o ⟨true, some T'⟩) hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz])
+              (fun hN => hN.node_sub fun e he => List.mem_of_mem_eraseIdx he)
+              (fun e he => Or.inl (List.mem_of_mem_eraseIdx he))
+              (fun c' hc => hm.slot_no_href (x := o) (T := T') (by simp [Mem.set, upd, Ne.symm hyo]) hc)).set
+            (fun V e => ?_)
+          cases e
+          exact ⟨fun z hz => hN.sub (Sub.child (List.getElem_mem hn) hz),
+            fun c' hc => (hi.toMInv.slot_no_href hno.2.2.1 (hsT _ hc)).elim⟩
       · -- (AGORA-963 step 3: the element and the rewritten tree were the tree's)
-        refine Inv.mk₀ (hi.heldCaps_step (fun p Ep hp hmp _ => by
-            have hpx : p ≠ y := fun h => by
-              rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
-            simp only [setE, upd_ne _ _ hpx] at hp
-            exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w _ hcw => by
-            obtain ⟨hT, hN⟩ := SlotsCaps.nodeOf hcw.1 hno
-            refine CapsInpAt.of_slots ((SlotsCaps.set (SlotsCaps.set hcw.1 (x := o)
-              (fun V e => by
-                cases e; exact hr.capsInp hT (hN.node_sub fun e he => List.mem_of_mem_eraseIdx he)))
-              (x := y) (fun V e => by cases e; exact hN.child (Child.elem (List.getElem_mem hn))))) hm)) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+        refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (hcov hi.cover) (fun T h => by
             unfold OwnedAt at h; simp [upd_ne _ _ hyo, hmx'] at h))
@@ -3776,9 +3963,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     -- AGORA-897: element `n`, which holds views, moves out to `y` through
     -- the borrow `x` (`takeBV_pres`), and
     -- the body runs in `y`'s scope, as a `letv`'s does
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | @takeB _ _ o _ _ n T T' t' c d es hn _ hno hmx' hr =>
       have hanch := hi.leafAnch rfl
       have hanchS := hi.leafAnchS rfl
@@ -3797,18 +3984,33 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hsp : k.spine = [] := src_spine hsrc
       have hyo : y ≠ o := fun e => by subst e; rw [hno.2.2.1] at hmx'; cases hmx'
       refine ⟨setE Γ1 y (compE Ex t), StmtT.scope ⟨compE Ex t, by simp [setE], hnrb⟩ hyF hs hend, ?_,
-        by simp, ?_, fun v hv => ?_⟩
+        by simp, ?_, fun v hv => ?_, Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: the element and the rewritten tree were the tree's; the
+        -- node is reached through the frame's borrow `x`, so clean)
+        refine hz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp)
+          (fun p Ep hp hmp => ?_)
+          (fun v hv => by simp [Stmt.spine, hsp] at hv; subst hv; exact hy) (fun v hv => ?_) (fun _ _ _ _ _ _ hD hcw => ?_)
+        · have hpy : p ≠ y := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+          simp only [setE, upd_ne _ _ hpy] at hp
+          exact post.rel.rootb_back hp hmp
+        · simp only [Stmt.killVars, List.mem_cons, List.mem_append] at hv ⊢
+          rcases hv with h | h <;> simp [h]
+        · have hN := hcw.nodeOf (hD x (by simp [Stmt.killVars])) hno
+          have hsT : ∀ z, Sub z es[n] → Sub z T := fun z hz =>
+            Sub.trans (Sub.child (List.getElem_mem hn) hz) hno.sub
+          refine (hcw.editNode (m' := m.set o ⟨true, some T'⟩) hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz])
+              (fun hN => hN.node_sub fun e he => List.mem_of_mem_eraseIdx he)
+              (fun e he => Or.inl (List.mem_of_mem_eraseIdx he))
+              (fun c' hc => hm.slot_no_href (x := o) (T := T') (by simp [Mem.set, upd, Ne.symm hyo]) hc)).set
+            (fun V e => ?_)
+          cases e
+          exact ⟨fun z hz => hN.sub (Sub.child (List.getElem_mem hn) hz),
+            fun c' hc => (hi.toMInv.slot_no_href hno.2.2.1 (hsT _ hc)).elim⟩
       · -- (AGORA-963 step 3: the element and the rewritten tree were the tree's)
-        refine Inv.mk₀ (hi.heldCaps_step (fun p Ep hp hmp _ => by
-            have hpx : p ≠ y := fun h => by
-              rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
-            simp only [setE, upd_ne _ _ hpx] at hp
-            exact ⟨post.rel.rootb_back hp hmp, by simp [Stmt.spine]⟩) (fun w _ hcw => by
-            obtain ⟨hT, hN⟩ := SlotsCaps.nodeOf hcw.1 hno
-            refine CapsInpAt.of_slots ((SlotsCaps.set (SlotsCaps.set hcw.1 (x := o)
-              (fun V e => by
-                cases e; exact hr.capsInp hT (hN.node_sub fun e he => List.mem_of_mem_eraseIdx he)))
-              (x := y) (fun V e => by cases e; exact hN.child (Child.elem (List.getElem_mem hn))))) hm)) hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
+        refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (hcov hi.cover) (fun T h => by
             unfold OwnedAt at h; simp [upd_ne _ _ hyo, hmx'] at h))
@@ -3860,37 +4062,46 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         simp only [Mem.set_st, upd_ne _ _ hvy]; exact post.frz v hv
   | @insert ξ Γ Δ F x y i _ hxF hpu ih =>
     -- a push, and its element moved to index `n` (`MInv.perm`)
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | @insert m1 _ _ _ n w t c d es _ htk hT hc hd =>
       have hi0 : Inv m Γ F (.push x y) :=
         hi.respine rfl (fun v hv => by
           rcases List.mem_cons.mp hv with h | h
           · simp [Stmt.vars, h]
           · simp only [List.mem_singleton] at h; simp [Stmt.vars, h]) trivial trivial trivial
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ih hpu hcd hi0 (Step.push htk hT hc hd)
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := ih hpu hcd hi0 (Step.push htk hT hc hd) Z
+        (hz.restmt rfl rfl (fun v hv => by
+          simp only [Stmt.killVars, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at hv ⊢
+          rcases hv with h | h <;> simp [h]) (fun c hc => by simp [Stmt.catchFrames] at hc))
       have hT' : (m1.set x ⟨true, some (.node t c d (es ++ [w]))⟩).st x =
           some ⟨true, some (.node t c d (es ++ [w]))⟩ := by simp
       have hp := perm_insert es n w
       have hm := hi'.toMInv.perm (hi'.leafAnch rfl) hxF hT' hp
       have hc' := hi'.cover.perm hT' hp
       rw [Mem.set_set] at hm hc'
-      -- (AGORA-963 step 3: the pushed `Vec`'s elements, reordered)
-      have hcaps : HeldCapsInp (m1.set x ⟨true, some (.node t c d (es.take n ++ w :: es.drop n))⟩) Γ' F .skip :=
-        hi'.heldCaps.of_caps fun w' hcw => by
-          have h2 := hcw.set (x := x) (o := true) (v := some (.node t c d (es.take n ++ w :: es.drop n)))
-            (fun V e => by cases e; exact (hcw.slot hT').node_sub fun e he => hp.mem_iff.mpr he)
-          rw [Mem.set_set] at h2; exact h2
-      refine ⟨Γ', ht'.ofNone, Inv.ofLeaf hcaps hi' hm (by simp) (by simp [Stmt.vars]) (hi'.leafAnchS rfl) rfl hc' trivial,
-        by simpa using hnv, hk, fun v hv => ?_⟩
+      refine ⟨Γ', ht'.ofNone, Inv.ofLeaf hi' hm (by simp) (by simp [Stmt.vars]) (hi'.leafAnchS rfl) rfl hc' trivial,
+        by simpa using hnv, hk, fun v hv => ?_, Z', ?_, hzk⟩
+      rotate_right
+      · -- (AGORA-937 B4: the node keeps its handle, its elements reordered)
+        have hno : NodeOf (m1.set x ⟨true, some (.node t c d (es ++ [w]))⟩) x x (.node t c d (es ++ [w]))
+            t c d (es ++ [w]) := ⟨hc, hd, hT', Or.inl ⟨rfl, rfl⟩⟩
+        refine (hz'.mapCaps (m' := (m1.set x ⟨true, some (.node t c d (es ++ [w]))⟩).set x
+            ⟨true, some (.node t c d (es.take n ++ w :: es.drop n))⟩) (fun D' w' hcw => ?_) (by simp)).restmt
+          rfl rfl (fun v hv => by simp [Stmt.killVars] at hv) (fun c hc => by
+            simp [Stmt.catchFrames] at hc) |> fun h => by rw [Mem.set_set] at h; exact h
+        exact hcw.editNode (d' := d) (es' := es.take n ++ w :: es.drop n) hno Repl.here
+          (by simp [Mem.set, upd]) (fun z hz => by simp [Mem.set, upd, hz])
+          (fun hN => hN.node_sub fun e he => hp.mem_iff.mpr he) (fun e he => Or.inl (hp.mem_iff.mpr he))
+          (fun c' hc' => hm.slot_no_href (x := x) (by simp [Mem.set, upd]) hc')
       have hvx : v ≠ x := fun e => hxF (e ▸ hv)
       have := hfz v hv
       simp only [Mem.set_st, upd_ne _ _ hvx] at this ⊢; exact this
   | @free ξ Γ F x E t hx hl hm hty hxF hpin =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | free ht hf =>
       have hanch := hi.leafAnch rfl
       have hanchS := hi.leafAnchS rfl
@@ -3902,20 +4113,19 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (CtxRel.setE (x := x) (Ex := killE .replace false x E) (by simp [A2.kill, hx])
           (by rw [killE_mode]) (by rw [killE_ty]) (by rw [killE_mode, hm]; simp)
           (fun hdb => ⟨by rw [killE_dbind]; exact hdb, fun d hdd _ => by rw [killE_vdeps]; exact hdd⟩))
-      -- (AGORA-963 step 3: the slot emptied, the borrowed parameters kept)
-      have hcaps : HeldCapsInp ({ m with alloc := _ }.set x ⟨true, none⟩) _ F .skip :=
-        hi.heldCaps.step_of (fun p E hp hm _ => ⟨hrel.rootb_back hp hm, by simp [Stmt.spine]⟩)
-          (fun w hw => (hw.of_st rfl).set_none x true)
-      exact ⟨_, StmtT.skip, Inv.ofLeaf hcaps hi hinv (by simp) (by simp [Stmt.vars]) (hrel.anchS hanchS |>.anti fun _ h => by simp [Stmt.killVars] at h)
+      exact ⟨_, StmtT.skip, Inv.ofLeaf hi hinv (by simp) (by simp [Stmt.vars]) (hrel.anchS hanchS |>.anti fun _ h => by simp [Stmt.killVars] at h)
         rfl (covers_free hi.cover ht hf) trivial,
-        by simp, hrel.keep rfl rfl, fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
+        by simp, hrel.keep rfl rfl, fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))],
+        Z, hz.leaf rfl rfl (by simp) (fun p Ep hp hmp => hrel.rootb_back hp hmp) (by simp [Stmt.spine])
+          (fun v hv => by simp [Stmt.killVars] at hv)
+          (fun _ _ _ _ _ _ _ hcw => (hcw.of_st rfl).set_none x true), ZKeep.refl _ _⟩
   | @scope ξ Γ Δ1 F x k hxE hxF hs hpx ihs =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     obtain ⟨Ex, hx, hnrb⟩ := hxE
     have hxsp : x ∉ k.spine := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | scopeSkip hsl hd =>
       have hanchS : RootbAnchS Γ F _ := fun p E hp hm => hi.anch p E hp hm (by
         simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false]
@@ -3935,17 +4145,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         cases hE : Γ v with
         | none => rw [hE] at h; cases h
         | some E => rw [hE] at h; cases h; exact ⟨hvx, E, rfl, rfl⟩
-      have hcaps : HeldCapsInp ({ m with alloc := _ }.remove x) (exitScope x Γ) F .skip :=
-        -- (AGORA-963 step 3: the slot dropped, the borrowed parameters kept)
-        hi.heldCaps.step_of (fun p E hp hm _ => by
-          obtain ⟨hpx, E0, h0, rfl⟩ := hrel p E hp
-          rw [killE_mode] at hm
-          rw [killE_rootb hanch hxF .replace false hmn
-            (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) h0 hm]
-          exact ⟨h0, by simp [Stmt.spine, hpx]⟩) (fun w hw => (hw.of_st rfl).remove x)
-      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hcaps hi hinv (by simp) (by simp [Stmt.vars]) ?_
+      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hi hinv (by simp) (by simp [Stmt.vars]) ?_
         rfl (covers_remove hi.cover hsl hd) trivial, by simp, ⟨?_, ?_, (DKeep.refl Γ _).exitScope x⟩,
-        fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
+        fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))],
+        Z, hz.toSkip (fun p E' hp hm => by
+          obtain ⟨_, E, hE, rfl⟩ := hrel p E' hp
+          rw [killE_mode] at hm
+          rw [killE_rootb hanch hxF _ _ hmn (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) hE hm]
+          exact hE) (fun _ _ hcw => (hcw.of_st rfl).remove x) (by simp), ZKeep.refl _ _⟩
       · rcases skip_inv hs with rfl | hw
         · exact StmtT.skip
         · exact StmtT.skip.weakenOut hinv.wf hinv.names (Or.inr (hw.exitScope x hpx.2.2))
@@ -3964,10 +4171,13 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact ⟨by simp [Stmt.spine, hvx], E, hE⟩
     | scopeIn hst' =>
       have hi0 : Inv m Γ F k := hi.scopeIn hx hnrb
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hs hcd hi0 hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := ihs hs hcd hi0 hst' Z hz.scopeIn
       obtain ⟨hxsp', Ex', hx', hm', ht'', _⟩ := hk.1 x Ex hx hxsp
       refine ⟨Γ', StmtT.scope ⟨Ex', hx', by rw [hm']; exact hnrb⟩ hxF ht' hpx, ?_, hnv,
-        ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz⟩
+        ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz, Z', hz'.scopeOut (fun q E hq hmq hqk => by
+          obtain ⟨h0, hqk0⟩ := hk.rootb_back hq hmq hqk
+          rw [hzk q E h0 hmq]
+          exact hz.reach q E h0 hmq _ (by simp [Stmt.under, hqk0, Stmt.killVars])), hzk⟩
       · exact
         { toMInv := hi'.toMInv
           nvS := fun v hv => by
@@ -3998,8 +4208,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           pinIn := hi'.pinIn
           dtorOut := dtorOut_cong (b := [x]) rfl rfl hk hi'.dtorOut hi.dtorOut
           dtorIn := ⟨fun E hE hd hos hn d hdd hnm => hi'.dtorOut x E hE hd hos hn hxsp' d hdd hnm,
-            hi'.dtorIn⟩ 
-          heldCaps := hi'.heldCaps.respine fun v hv => by simp [Stmt.spine, hv] }
+            hi'.dtorIn⟩ }
       · intro v E hv hvs
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.1 v E hv hvs.2
@@ -4009,12 +4218,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         obtain ⟨hvs', rest⟩ := hk.2.1 v E' hv hvs.2
         exact ⟨by simp only [Stmt.spine, List.mem_cons, not_or]; exact ⟨hvs.1, hvs'⟩, rest⟩
   | @scopeL ξ Γ Δ1 F kk t x k hxE hxF hs hpx hKO hWd hNd hFd ihs =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     obtain ⟨Ex, hx, hnrb, hty, hdl⟩ := hxE
     have hxsp : x ∉ k.spine := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | scopeLSkip hrl _ =>
       have hanchS : RootbAnchS Γ F _ := fun p E hp hm => hi.anch p E hp hm (by
         simp only [Stmt.spine, List.mem_cons, List.not_mem_nil, or_false]
@@ -4041,18 +4250,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         cases hE : Γ v with
         | none => rw [hE] at h; cases h
         | some E => rw [hE] at h; cases h; exact ⟨hvx, E, rfl, rfl⟩
-      have hcaps : HeldCapsInp m' (exitScope x Γ) F .skip :=
-        -- (AGORA-963 step 3: the payload back in its block or dropped, the
-        -- borrowed parameters kept)
-        hi.heldCaps.step_of (fun p E hp hm _ => by
-          obtain ⟨hpx, E0, h0, rfl⟩ := hrel p E hp
-          rw [killE_mode] at hm
-          rw [killE_rootb hanch hxF .replace false hmn
-            (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) h0 hm]
-          exact ⟨h0, by simp [Stmt.spine, hpx]⟩) (fun w hw => hrl.capsInp hw)
-      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hcaps hi hinv (by rw [hrl.nv]; exact Nat.le_refl _) (by simp [Stmt.vars]) ?_
+      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hi hinv (by rw [hrl.nv]; exact Nat.le_refl _) (by simp [Stmt.vars]) ?_
         rfl hcov trivial, by rw [hrl.nv]; exact Nat.le_refl _, ⟨?_, ?_, (DKeep.refl Γ _).exitScope x⟩,
-        fun w hw => by rw [hrl.st]; simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
+        fun w hw => by rw [hrl.st]; simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))],
+        Z, hz.toSkip (fun p E' hp hm => by
+          obtain ⟨_, E, hE, rfl⟩ := hrel p E' hp
+          rw [killE_mode] at hm
+          rw [killE_rootb hanch hxF _ _ hmn (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) hE hm]
+          exact hE) (fun _ _ hcw => (hcw.remove x).of_st hrl.st) (by rw [hrl.nv]; exact Nat.le_refl _), ZKeep.refl _ _⟩
       · rcases skip_inv hs with rfl | hw
         · exact StmtT.skip
         · exact StmtT.skip.weakenOut hinv.wf hinv.names (Or.inr (hw.exitScope x hpx.2.2))
@@ -4077,7 +4282,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           hi.wf hi.names (skip_inv hs)) hpx hKO hWd hNd hFd,
         hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) hi.catchOK trivial ⟨hi.dtorIn.1, trivial⟩,
         Nat.le_refl _, ⟨fun v E hv hvs => ⟨hvs, E, hv, rfl, rfl, fun _ => rfl⟩, fun v E' hv hvs => ⟨hvs, E', hv⟩,
-          DKeep.refl _ _⟩, fun _ _ => rfl⟩
+          DKeep.refl _ _⟩, fun _ _ => rfl,
+        Z, (hz.scopeLIn.restmt rfl rfl (fun v hv => by simp [Stmt.killVars] at hv)
+          (fun c hc => by simp [Stmt.catchFrames] at hc)).scopeLOut (fun q E hq hmq _ =>
+            hz.reach q E hq hmq _ (by simp [Stmt.under, Stmt.spine, Stmt.killVars])), ZKeep.refl _ _⟩
     | @scopeLPD _ _ _ _ _ sl n f u hp hck hteq hsl hng =>
       -- Agora #803: a destructor payload that fails the give-back's check:
       -- the check-out's frame becomes `x`'s destructor frame, at its end
@@ -4120,14 +4328,18 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hsl' : m'.st x = some ⟨true, some v⟩ := by
         rw [hout x hxsp, hsl0]; rw [hout x hxsp, hsl0] at hsl; cases hsl; simp at hv; rw [hv]
       exact pres_unwindD hx hmo htx (by rw [hty]; exact hfn) hdrop hstr hxF hs hpx hKO hWd hNd hFd
-        (fun h => by rw [hvx] at h; cases h) hself hiS hp hsl'
+        (fun h => by rw [hvx] at h; cases h) hself hiS hp hsl' Z (hz.scopeLIn.scopeOut fun q E hq hmq hqk =>
+          hz.reach q E hq hmq _ (by simp [Stmt.under, hqk, Stmt.killVars]))
     | scopeLIn hst' =>
       have hi0 : Inv m Γ F k := hi.scopeLIn hx hnrb
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hs hcd hi0 hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := ihs hs hcd hi0 hst' Z hz.scopeLIn
       obtain ⟨hxsp', Ex', hx', hm', ht'', _⟩ := hk.1 x Ex hx hxsp
       refine ⟨Γ', StmtT.scopeL ⟨Ex', hx', by rw [hm']; exact hnrb, by rw [ht'']; exact hty,
           ⟨fun hne => by rw [hm']; exact hdl.1 hne, hdl.2⟩⟩ hxF ht' hpx (hKO.step hk) hWd hNd hFd, ?_, hnv,
-        ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz⟩
+        ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz, Z', hz'.scopeLOut (fun q E hq hmq hqk => by
+          obtain ⟨h0, hqk0⟩ := hk.rootb_back hq hmq hqk
+          rw [hzk q E h0 hmq]
+          exact hz.reach q E h0 hmq _ (by simp [Stmt.under, hqk0, Stmt.killVars])), hzk⟩
       · exact
         { toMInv := hi'.toMInv
           nvS := fun v hv => by
@@ -4158,8 +4370,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           pinIn := hi'.pinIn
           dtorOut := dtorOut_cong (b := [x]) rfl rfl hk hi'.dtorOut hi.dtorOut
           dtorIn := ⟨fun E hE hd hos hn d hdd hnm => hi'.dtorOut x E hE hd hos hn hxsp' d hdd hnm,
-            hi'.dtorIn⟩ 
-          heldCaps := hi'.heldCaps.respine fun v hv => by simp [Stmt.spine, hv] }
+            hi'.dtorIn⟩ }
       · intro v E hv hvs
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.1 v E hv hvs.2
@@ -4169,7 +4380,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         obtain ⟨hvs', rest⟩ := hk.2.1 v E' hv hvs.2
         exact ⟨by simp only [Stmt.spine, List.mem_cons, not_or]; exact ⟨hvs.1, hvs'⟩, rest⟩
   | @scopeD ξ Γ Δ1 F x f k hxE hxF hs hpx hKO hWd hNd hΔd hself hFd ihs =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     obtain ⟨Ex, tx, hx, hmo, htx, hhf, hdtor, hstr⟩ := hxE
     have hnrb : Ex.mode ≠ .rootb := by rw [hmo]; simp
     have hiS : Inv m Γ F (.scope x k) := Inv.scopeD_iff.mp hi
@@ -4187,10 +4398,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         hd1 (by rw [hm1, hmo]; rfl) (Or.inl hnint) hxsp
       rw [hx] at h0; cases h0; exact hd0
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | scopeDIn hst' =>
       have hi0 : Inv m Γ F k := hiS.scopeIn hx hnrb
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hs hcd hi0 hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := ihs hs hcd hi0 hst' Z hz.scopeDIn
       obtain ⟨hxsp', Ex', hx', hm', ht'', _⟩ := hk.1 x Ex hx hxsp
       -- Agora #633: the binding gains no view (`DKeep`), of itself neither
       have hself' : DSelf Γ' x := by
@@ -4199,7 +4410,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact hself E0 h0 hd0 hos0 hn0 d (hsub d hdd hnm) hnm
       refine ⟨Γ', StmtT.scopeD ⟨Ex', tx, hx', by rw [hm', hmo], by rw [ht'']; exact htx, by rw [ht'', hhf],
           hdtor, hstr⟩ hxF ht' hpx (hKO.step hk) hWd hNd hΔd hself' hFd, Inv.scopeD_iff.mpr ?_, hnv,
-        ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz⟩
+        ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz, Z', hz'.scopeDOut (fun q E hq hmq hqk => by
+          obtain ⟨h0, hqk0⟩ := hk.rootb_back hq hmq hqk
+          rw [hzk q E h0 hmq]
+          exact hz.reach q E h0 hmq _ (by simp [Stmt.under, hqk0, Stmt.killVars])), hzk⟩
       · exact
         { toMInv := hi'.toMInv
           nvS := fun v hv => by
@@ -4230,8 +4444,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           pinIn := hi'.pinIn
           dtorOut := dtorOut_cong (b := [x]) rfl rfl hk hi'.dtorOut hiS.dtorOut
           dtorIn := ⟨fun E hE hd hos hn d hdd hnm => hi'.dtorOut x E hE hd hos hn hxsp' d hdd hnm,
-            hi'.dtorIn⟩ 
-          heldCaps := hi'.heldCaps.respine fun v hv => by simp [Stmt.spine, hv] }
+            hi'.dtorIn⟩ }
       · intro v E hv hvs
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.1 v E hv hvs.2
@@ -4260,17 +4473,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         cases hE : Γ v with
         | none => rw [hE] at h; cases h
         | some E => rw [hE] at h; cases h; exact ⟨hvx, E, rfl, rfl⟩
-      have hcaps : HeldCapsInp _ (exitScope x Γ) F .skip :=
-        -- (AGORA-963 step 3: the slot dropped, the borrowed parameters kept)
-        hiS.heldCaps.step_of (fun p E hp hm _ => by
-          obtain ⟨hpx, E0, h0, rfl⟩ := hrel p E hp
-          rw [killE_mode] at hm
-          rw [killE_rootb hanch hxF .replace false hmn
-            (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) h0 hm]
-          exact ⟨h0, by simp [Stmt.spine, hpx]⟩) (fun w hw => (hw.of_st rfl).remove x)
-      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hcaps hiS hinv (by simp) (by simp [Stmt.vars]) ?_
+      refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hiS hinv (by simp) (by simp [Stmt.vars]) ?_
         rfl (covers_remove hiS.cover hsl hd) trivial, by simp, ⟨?_, ?_, (DKeep.refl Γ _).exitScope x⟩,
-        fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
+        fun w hw => by simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))],
+        Z, hz.toSkip (fun p E' hp hm => by
+          obtain ⟨_, E, hE, rfl⟩ := hrel p E' hp
+          rw [killE_mode] at hm
+          rw [killE_rootb hanch hxF _ _ hmn (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) hE hm]
+          exact hE) (fun _ _ hcw => (hcw.of_st rfl).remove x) (by simp), ZKeep.refl _ _⟩
       · rcases skip_inv hs with rfl | hw
         · exact StmtT.skip
         · exact StmtT.skip.weakenOut hinv.wf hinv.names (Or.inr (hw.exitScope x hpx.2.2))
@@ -4331,7 +4541,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
               -- = false`: an armed entry's type holds views, `CtxWF.view`),
               -- so revived it holds nothing, whatever its `letd` recorded,
               -- and the call passes no views — `CallT`'s `ThruFn` premise)
-              exact callR_regions_of_nil (callR_revive_noView hiS.toMInv.wf hx (hthr h))
+              exact Or.inl (callR_regions_of_nil (callR_revive_noView hiS.toMInv.wf hx (hthr h)))
           have hNoPinΓ : EndOK Γ x := by
             rcases skip_inv hs with rfl | hw
             · exact hpx
@@ -4443,7 +4653,23 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self, hm1.heap.blk, hm1.heap.views⟩ (Nat.le_succ _)
       refine ⟨setE Γ x (Ex.revive x), hfin, ?_, Nat.le_succ _,
         ⟨?_, ?_, (DKeep.refl Γ _).setE fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩,
-        fun _ _ => rfl⟩
+        fun _ _ => rfl, Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: the slots kept; `x` is no borrowed parameter)
+        have hxnr : ∀ p E, Γ p = some E → E.mode = .rootb → p ≠ x := fun p E hp hm h => by
+          subst h; rw [hx] at hp; cases hp; rw [hmo] at hm; cases hm
+        refine hz.leafR (fun p E hp hm h => by simp [Stmt.spine] at h; exact hxnr p E hp hm h)
+          (by simp [Stmt.catchFrames]) (Nat.le_succ _) (fun p E hp hm => ?_)
+          (fun p E hp hm h => by simp [Stmt.spine] at h; exact hxnr p E hp hm h) (fun v hv => ?_)
+          (fun _ _ hcw => hcw.of_st rfl)
+        · have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hm; simp [Entry.revive, hmo] at hm
+          simpa only [setE, upd_ne _ _ hpx] using hp
+        · simp only [Stmt.killVars, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hv
+          rcases hv with rfl | rfl | rfl
+          · exact Or.inl (by simp [Stmt.killVars])
+          · exact Or.inr (Nat.le_refl _)
+          · exact Or.inl (by simp [Stmt.killVars])
       · exact
         { toMInv := hm'
           nvS := fun w hw => by
@@ -4489,13 +4715,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             simp only [setE, upd_ne _ _ hvx] at hv
             exact hiS.dtorOut v E hv hd hos hn (by simpa [Stmt.spine] using hvs) d hdd hnm
               (by simpa [Stmt.spine] using hrs)
-          dtorIn := ⟨fun _ _ _ _ _ _ _ _ => by simp [Stmt.spine], trivial⟩ 
-          -- (AGORA-963 step 3: the slots kept, `x` revived as no borrowed parameter)
-          heldCaps := hiS.heldCaps.step_of (fun p E hp hm hps => by
-              have hpx : p ≠ x := fun h => by
-                rw [h] at hp; simp [setE] at hp; rw [← hp] at hm; simp [Entry.revive, hmo] at hm
-              simp only [setE, upd_ne _ _ hpx] at hp
-              exact ⟨hp, by simpa [Stmt.spine] using hps⟩) (fun w hw => hw.of_st rfl) }
+          dtorIn := ⟨fun _ _ _ _ _ _ _ _ => by simp [Stmt.spine], trivial⟩ }
       · intro w E hw hws
         have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
         exact ⟨by simp [Stmt.spine, hwx], E, by simp [setE, upd_ne _ _ hwx, hw], rfl, rfl, fun _ => rfl⟩
@@ -4640,7 +4860,24 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self, hm1.heap.blk, hm1.heap.views⟩ (Nat.le_succ _)
       refine ⟨setE Γ x (Ex.reviveD x), hfin, Inv.scopeD_iff.mpr ?_, Nat.le_succ _,
         ⟨?_, ?_, (DKeep.refl Γ _).setE fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩,
-        fun _ _ => rfl⟩
+        fun _ _ => rfl, Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: the slots kept; `x` is no borrowed parameter)
+        have hxnr : ∀ p E, Γ p = some E → E.mode = .rootb → p ≠ x := fun p E hp hm h => by
+          subst h; rw [hx] at hp; cases hp; rw [hmo] at hm; cases hm
+        refine hz.leafR (fun p E hp hm h => by simp [Stmt.spine] at h; exact hxnr p E hp hm h)
+          (by simp [Stmt.catchFrames]) (Nat.le_succ _) (fun p E hp hm => ?_)
+          (fun p E hp hm h => by simp [Stmt.spine] at h; exact hxnr p E hp hm h) (fun v hv => ?_)
+          (fun _ _ hcw => hcw.of_st rfl)
+        · have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hm; simp [Entry.reviveD, Entry.revive, hmo] at hm
+          simpa only [setE, upd_ne _ _ hpx] using hp
+        · simp only [Stmt.killVars, Rhs.vars, Expr.vars, List.mem_cons, List.mem_append, List.not_mem_nil,
+            or_false] at hv
+          rcases hv with rfl | rfl | rfl
+          · exact Or.inl (by simp [Stmt.killVars])
+          · exact Or.inr (Nat.le_refl _)
+          · exact Or.inl (by simp [Stmt.killVars])
       · exact
         { toMInv := hm'
           nvS := fun w hw => by
@@ -4688,13 +4925,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             simp only [setE, upd_ne _ _ hvx] at hv
             exact hiS.dtorOut v E hv hd hos hn (by simpa [Stmt.spine] using hvs) d hdd hnm
               (by simpa [Stmt.spine] using hrs)
-          dtorIn := ⟨fun _ _ _ _ _ _ _ _ => by simp [Stmt.spine], trivial⟩ 
-          -- (AGORA-963 step 3: the slots kept, `x` revived as no borrowed parameter)
-          heldCaps := hiS.heldCaps.step_of (fun p E hp hm hps => by
-              have hpx : p ≠ x := fun h => by
-                rw [h] at hp; simp [setE] at hp; rw [← hp] at hm; simp [Entry.reviveD, Entry.revive, hmo] at hm
-              simp only [setE, upd_ne _ _ hpx] at hp
-              exact ⟨hp, by simpa [Stmt.spine] using hps⟩) (fun w hw => hw.of_st rfl) }
+          dtorIn := ⟨fun _ _ _ _ _ _ _ _ => by simp [Stmt.spine], trivial⟩ }
       · intro w E hw hws
         have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
         exact ⟨by simp [Stmt.spine, hwx], E, by simp [setE, upd_ne _ _ hwx, hw], rfl, rfl, fun _ => rfl⟩
@@ -4713,7 +4944,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         rcases skip_inv hs with rfl | hw
         · exact h0
         · exact h0.weakenOut hiS.wf hiS.names (Or.inr (hw.exitScope x hpx.2.2))
-      refine ⟨Γ, hsc, hiS, Nat.le_refl _, ⟨?_, ?_, DKeep.refl Γ _⟩, fun _ _ => rfl⟩
+      refine ⟨Γ, hsc, hiS, Nat.le_refl _, ⟨?_, ?_, DKeep.refl Γ _⟩, fun _ _ => rfl,
+        Z, hz.scopeDIn.scopeOut (fun q E hq hmq _ =>
+          hz.reach q E hq hmq _ (by simp [Stmt.under, Stmt.spine, Stmt.killVars])), ZKeep.refl _ _⟩
       · intro w E hw hws
         exact ⟨by simpa [Stmt.spine] using hws, E, hw, rfl, rfl, fun _ => rfl⟩
       · intro w E' hw hws
@@ -4721,23 +4954,24 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     | scopeDP hp hsl _ | scopeDPDrain hp hsl =>
       -- A2-drop.3b: a panic stops at the frame (Agora #790: of any destructor
       -- value, not only a `Vec`'s): it is left at its end, then the panic goes on
-      exact pres_unwindD hx hmo htx hhf hdtor hstr hxF hs hpx hKO hWd hNd hFd hdbv hself hiS hp hsl
+      exact pres_unwindD hx hmo htx hhf hdtor hstr hxF hs hpx hKO hWd hNd hFd hdbv hself hiS hp hsl Z
+        (hz.scopeDIn.scopeOut fun q E hq hmq hqk => hz.reach q E hq hmq _ (by simp [Stmt.under, hqk, Stmt.killVars]))
   | @rbind ξ Γ Δ1 F p k Ep hp hm hl hroots hpF hs hrr ihs =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     have hpsp : p ∉ k.spine := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
     have hanchk : ∀ q E, Γ q = some E → E.mode = .rootb → q ∉ k.spine →
         AnchoredS Γ E F (Stmt.rbind p k).killVars := by
       intro q E hq hmq hqs
       by_cases hqp : q = p
-      · subst hqp; rw [hp] at hq; cases hq; exact hroots.toS _ _
+      · subst hqp; rw [hp] at hq; cases hq; exact hroots
       · exact hi.anch q E hq hmq (by simp [Stmt.spine, hqp, hqs])
     have hpo : ∀ Ep', Γ p = some Ep' → Ep'.mode.ownSlot = false := fun Ep' h => by
       rw [hp] at h; cases h; rw [hm]; rfl
     have hpn : ∀ q E, Γ q = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.isName = true → d.root ≠ p :=
       fun q E hq hmq => (hi.names q E hq (hi.rootbLive q E hq hmq) (Or.inr hmq)).not_root hpo
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | rbindSkip hsl =>
       have hanchS : RootbAnchS Γ F _ :=
         fun q E hq hmq => hanchk q E hq hmq (by simp [Stmt.spine])
@@ -4753,20 +4987,17 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         | none => rw [hE] at h; cases h
         | some E => rw [hE] at h; cases h; exact ⟨hvp, E, rfl, rfl⟩
       have hos : Ep.mode.ownSlot = false := by rw [hm]; rfl
-      have hcaps : HeldCapsInp (m.remove p) (exitRoot p (Ep.path ++ Ep.held) Γ) F .skip :=
-        -- (AGORA-963 step 3: the slot dropped, the other borrowed parameters
-        -- depend on no `p`, so are kept)
-        hi.heldCaps.step_of (fun q E hq hmq _ => by
-          obtain ⟨hqp, E0, h0, rfl⟩ := hrel q E hq
-          have hmq' : E0.mode = .rootb := by simpa [rerootE] using hmq
-          rw [rerootE_rootb hanch hpF (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hpF) _ h0 hmq'
-            (hpn q E0 h0 hmq')]
-          exact ⟨h0, by simp [Stmt.spine, hqp]⟩) (fun w hw => hw.remove p)
-      refine ⟨exitRoot p (Ep.path ++ Ep.held) Γ, ?_, Inv.ofLeaf hcaps hi hinv (by simp) (by simp [Stmt.vars]) ?_
+      refine ⟨exitRoot p (Ep.path ++ Ep.held) Γ, ?_, Inv.ofLeaf hi hinv (by simp) (by simp [Stmt.vars]) ?_
         rfl (covers_remove_bor hi.cover hsl) trivial, by simp,
         ⟨?_, ?_, (DKeep.refl Γ []).exitRoot _ fun v E hv hd hos hn hvp _ d hdd hnm h =>
           hi.dtorOut v E hv hd hos hn (by simp [Stmt.spine, hvp]) d hdd hnm (by simp [Stmt.spine, h])⟩,
-        fun w hw => by simp [upd_ne _ _ (show w ≠ p from fun e => hpF (e ▸ hw))]⟩
+        fun w hw => by simp [upd_ne _ _ (show w ≠ p from fun e => hpF (e ▸ hw))],
+        Z, hz.toSkip (fun q E hq hmq => by
+          obtain ⟨_, E0, h0, rfl⟩ := hrel q E hq
+          have hmq' : E0.mode = .rootb := by simpa [rerootE] using hmq
+          rw [rerootE_rootb hanch hpF (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hpF) _ h0 hmq'
+            (hpn q E0 h0 hmq')]
+          exact h0) (fun _ _ hcw => hcw.remove p) (by simp), ZKeep.refl _ _⟩
       · rcases skip_inv hs with rfl | hw
         · exact StmtT.skip
         · refine StmtT.skip.weakenOut hinv.wf hinv.names (Or.inr (hw.exitRoot p (Ep.path ++ Ep.held)
@@ -4804,12 +5035,21 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         exact ⟨by simp [Stmt.spine, hvp], E, hE⟩
     | rbindIn hst' =>
       have hi0 : Inv m Γ F k := hi.rbindIn hp hroots
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hs hcd hi0 hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := ihs hs hcd hi0 hst' Z (hz.rbindIn hpsp)
       obtain ⟨hpsp', Ep', hp', _, _, hrb⟩ := hk.1 p Ep hp hpsp
       have hEp : Ep' = Ep := hrb hm
       subst hEp
-      refine ⟨Γ', StmtT.rbind hp' hm hl hroots hpF ht' hrr, ?_, hnv,
-        ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz⟩
+      -- (a lent binding's anchors are older than it, `rootbLt`: not it)
+      have hanch' : AnchoredS Γ' _ F (p :: _) := fun d hd hb =>
+        (hi'.anch _ _ hp' hm hpsp' d hd hb).imp id fun ⟨hh, hv, he⟩ => ⟨hh, by
+          simp only [List.mem_cons, not_or]
+          exact ⟨Nat.ne_of_lt (hi'.rootbLt _ _ hp' hm d.root (List.mem_map_of_mem hd)), hv⟩, he⟩
+      refine ⟨Γ', StmtT.rbind hp' hm hl hanch' hpF ht' hrr, ?_, hnv,
+        ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz, Z', hz'.rbindOut hpsp'
+          (fun q E hq hmq hqp hqk => by
+            obtain ⟨h0, hqk0⟩ := hk.rootb_back hq hmq hqk
+            rw [hzk q E h0 hmq]
+            exact hz.reach q E h0 hmq _ (by simp [Stmt.under, Ne.symm hqp, hqk0, Stmt.killVars])), hzk⟩
       · exact
         { toMInv := hi'.toMInv
           nvS := fun v hv => by
@@ -4837,8 +5077,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           pinIn := ⟨fun E hE hm => hi'.pinOut p E hE hm hpsp', hi'.pinIn⟩
           dtorOut := dtorOut_cong (b := [p]) rfl rfl hk hi'.dtorOut hi.dtorOut
           dtorIn := ⟨fun E hE hd hos hn d hdd hnm => hi'.dtorOut p E hE hd hos hn hpsp' d hdd hnm,
-            hi'.dtorIn⟩ 
-          heldCaps := hi'.heldCaps.respine fun v hv => by simp [Stmt.spine, hv] }
+            hi'.dtorIn⟩ }
       · intro v E hv hvs
         simp only [Stmt.spine, List.mem_cons, not_or] at hvs
         obtain ⟨hvs', rest⟩ := hk.1 v E hv hvs.2
@@ -4848,19 +5087,22 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         obtain ⟨hvs', rest⟩ := hk.2.1 v E' hv hvs.2
         exact ⟨by simp only [Stmt.spine, List.mem_cons, not_or]; exact ⟨hvs.1, hvs'⟩, rest⟩
   | @frozen ξ Γ Δ F z z' k hs hz ihs =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hzz
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hzz
     | frozenSkip =>
       refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial trivial trivial, Nat.le_refl _,
-        (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl⟩
+        (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl,
+        Z, hzz.restmt rfl rfl (fun v hv => by simp [Stmt.killVars] at hv) (fun c hc => by simp [Stmt.catchFrames] at hc),
+        ZKeep.refl _ _⟩
       rcases skip_inv hs with rfl | hw
       · exact StmtT.skip
       · exact StmtT.skip.weakenOut hi.wf hi.names (Or.inr hw)
     | frozenIn hst' =>
       have hi0 : Inv m Γ (F ++ z') k := hi.frozenIn hz
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ihs hs hcd hi0 hst'
-      refine ⟨Γ', StmtT.frozen ht' hz, ?_, hnv, hk, fun v hv => hfz v (List.mem_append_left _ hv)⟩
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := ihs hs hcd hi0 hst' Z hzz.frozenIn
+      refine ⟨Γ', StmtT.frozen ht' hz, ?_, hnv, hk, fun v hv => hfz v (List.mem_append_left _ hv),
+        Z', hz'.frozenOut, hzk⟩
       exact
         { toMInv := hi'.toMInv
           nvS := fun v hv => by
@@ -4884,8 +5126,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             have hns : d.root ∉ k.spine := fun h => hnk' (Stmt.spine_sub_killVars _ _ h)
             obtain ⟨_, Er', hEr', _, hty, _⟩ := hk.1 d.root Er hEr hns
             refine Or.inr ⟨hha, fun hin => ?_, Er', hEr', by rw [hty]; exact hhv⟩
-            have := Step.held_not_killVars hst' (hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv)
-              hcd h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hF hnk' hlt
+            have := Step.held_not_killVarsZ hst' hzz.frozenIn hcd h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hnk' hlt
             exact this (by simpa [Stmt.killVars] using hin)
           spineNd := hi'.spineNd
           spineDom := hi'.spineDom
@@ -4894,34 +5135,27 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           pinOut := pinOut_cong (b := []) rfl rfl hk hi'.pinOut hi.pinOut
           pinIn := hi'.pinIn
           dtorOut := dtorOut_cong (b := []) rfl rfl hk hi'.dtorOut hi.dtorOut
-          dtorIn := hi'.dtorIn 
-          -- (AGORA-963 step 3: the inner step keeps the clause at a held root, none
-          -- of its killable names: `Step.slotsCaps`)
-          heldCaps := hi.heldCaps_step (fun p E hp hm hps => by
-              obtain ⟨h0, hps0⟩ := hk.rootb_back hp hm (by simpa [Stmt.spine] using hps)
-              exact ⟨h0, by simpa [Stmt.spine] using hps0⟩) (fun w hw hcw =>
-              CapsInpAt.of_slots ((hst'.slotsCaps hi.toMInv (fun h => hw (by simp [Stmt.killVars, h])) hcw.1).1 _ _ rfl)
-                hi'.toMInv) }
+          dtorIn := hi'.dtorIn }
 
   | panic =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => exact pres_reap ht0 hrs hcd hi hrk Z hz
   | exit =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => exact pres_reap ht0 hrs hcd hi hrk Z hz
   | @block ξ Γ Δ F k hk ih =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     have hik : Inv m Γ F k := hi.respine rfl (fun v hv => hv) hi.catchOK hi.pinIn hi.dtorIn
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | blockIn hst' =>
-      obtain ⟨Γ', ht', hi', hnv, hk', hfz⟩ := ih hk hcd hik hst'
+      obtain ⟨Γ', ht', hi', hnv, hk', hfz, Z', hz', hzk⟩ := ih hk hcd hik hst' Z hz.blockIn
       exact ⟨Γ', StmtT.block ht', hi'.respine rfl (fun v hv => hv) hi'.catchOK hi'.pinIn hi'.dtorIn,
-        hnv, hk', hfz⟩
+        hnv, hk', hfz, Z', hz'.blockOut, hzk⟩
     | blockSkip =>
-      refine ⟨Γ, ?_, hik, Nat.le_refl _, (CtxRel.refl _).keep rfl rfl, fun _ _ => rfl⟩
+      refine ⟨Γ, ?_, hik, Nat.le_refl _, (CtxRel.refl _).keep rfl rfl, fun _ _ => rfl, Z, hz.blockIn, ZKeep.refl _ _⟩
       rcases skip_inv hk with rfl | hw
       · exact StmtT.skip
       · exact StmtT.skip.weakenOut hi.wf hi.names (Or.inr hw)
@@ -4932,35 +5166,38 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         hik.respine he.spine he.vars (he.catchOK hik.catchOK) (he.pinOK hik.pinIn) (he.dtorPinOK hik.dtorIn) he.killVars,
         Nat.le_refl _, ⟨fun v E hv hvs => ⟨by rw [he.spine]; exact hvs, E, hv, rfl, rfl, fun _ => rfl⟩,
         fun v E' hv hvs => ⟨by show v ∉ k.spine; rw [← he.spine]; exact hvs, E', hv⟩, DKeep.refl _ _⟩,
-        fun _ _ => rfl⟩
+        fun _ _ => rfl, Z, hz.blockIn.exitAt he, ZKeep.refl _ _⟩
   | @loop ξ Γ Δ F k hsrc hb hwf hnw hdom hmode hdk hds hfΔ _ =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     cases hst with
-    | reap hrs hrk _ => exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => exact pres_reap ht0 hrs hcd hi hrk Z hz
     | loop =>
       -- Agora #871: `while T` runs its body, then itself again
       have hsk : (Stmt.seq k (.loop k)).src = true := by simp [Stmt.src, hsrc]
       refine ⟨Γ, StmtT.seq hsrc hb (StmtT.loop hsrc hb hwf hnw hdom hmode hdk hds hfΔ),
         hi.respine (src_spine hsk) (fun v hv => by simpa [Stmt.vars] using hv) (catchOK_src hsk)
           (PinOK.of_spine_nil (src_spine hsk)) (DtorPinOK.of_spine_nil (src_spine hsk)),
-        Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsk), fun _ _ => rfl⟩
+        Nat.le_refl _, (CtxRel.refl _).keep rfl (src_spine hsk), fun _ _ => rfl,
+        Z, hz.restmt rfl (src_spine hsk) (fun v hv => by
+          simp only [Stmt.killVars, List.mem_append] at hv ⊢; rcases hv with h | h <;> exact h)
+          (fun c hc => by rw [Stmt.catchFrames_src hsk] at hc; cases hc), ZKeep.refl _ _⟩
   | letrec hsrc hx hxF hf hp hty ho hc hs hpx _ =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
-    · exact pres_reap ht0 hrs hcd hi hrk
-    exact hrec hsrc hx hxF hf hp hty ho hc hs hpx hi hst hnr
+    · exact pres_reap ht0 hrs hcd hi hrk Z hz
+    exact hrec hsrc hx hxF hf hp hty ho hc hs hpx hi hst hnr Z hz
   | callc hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx _ =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
-    · exact pres_reap ht0 hrs hcd hi hrk
-    exact hclo hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx hcd hi hst hnr
+    · exact pres_reap ht0 hrs hcd hi hrk Z hz
+    exact hclo hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx hcd hi hst hnr Z hz
   | callcE hk hx hxF hc htc hcan _ hj hσ hsp hsl hsr hso hny hdc hcT hkT hpx _ =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
-    · exact pres_reap ht0 hrs hcd hi hrk
-    exact hhand hk hx hxF hc htc hcan hj hσ hsp hsl hsr hso hny hdc hcT hkT hpx hcd hi hst hnr
+    · exact pres_reap ht0 hrs hcd hi hrk Z hz
+    exact hhand hk hx hxF hc htc hcan hj hσ hsp hsl hsr hso hny hdc hcT hkT hpx hcd hi hst hnr Z hz
   | @catchR ξ Γ Δ F x m0 s hxF hs hM hanchΔ hKO hds ih =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hz
     obtain ⟨hfr, hxs, hnv0, hb0, hck⟩ := hi.catchOK
     have hlo : ∀ v, v ≠ x → v ∉ F ++ (List.range m0.nv).filter (· ≠ x) → m0.st v = none := by
       intro v hvx hvF
@@ -4973,10 +5210,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     obtain ⟨Ex, hEx⟩ : ∃ Ex, Δ x = some Ex := by
       have := hM.dom x; simp at this; exact Option.isSome_iff_exists.mp this
     cases hst with
-    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk
+    | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | catchIn hst' =>
       rename_i s'
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := ih hs hcd hi.catchIn hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := ih hs hcd hi.catchIn hst' Z hz.catchRIn
       have hKO' : KeepOut Γ' Δ s'.spine := by
         refine ⟨fun v E' hv hvs => ?_, fun v E' hv => ?_⟩
         · obtain ⟨hvs0, E0, h0⟩ := hk.2.1 v E' hv hvs
@@ -4998,7 +5235,15 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         obtain ⟨E0, h0, hd0, hos0, _⟩ := hk.2.2 v E' hv hd hos (Or.inl hnint) hvs
         exact hds v E0 h0 hd0 hos0 hvs0
       refine ⟨Γ', StmtT.catchR hxF ht' hM hanchΔ hKO' hds', ?_, hnv, hk,
-        fun v hv => hfz v (List.mem_append_left _ hv)⟩
+        fun v hv => hfz v (List.mem_append_left _ hv), Z', hz'.catchROut
+          (fun q E hq hmq hqs => by
+            obtain ⟨h0, hqs0⟩ := hk.rootb_back hq hmq hqs
+            rw [hzk q E h0 hmq]
+            exact hz.reach q E h0 hmq _ (by simp [Stmt.under, hqs0, Stmt.killVars]))
+          (fun q E hq hmq hqs hlt w hW => by
+            obtain ⟨h0, hqs0⟩ := hk.rootb_back hq hmq hqs
+            rw [hzk q E h0 hmq] at hW ⊢
+            exact hz.frames x m0 s (by simp [Stmt.catchFrames]) q E h0 hmq hqs0 hlt w hW), hzk⟩
       exact
         { toMInv := hi'.toMInv
           nvS := fun v hv => by
@@ -5022,8 +5267,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             have hns : d.root ∉ s.spine := fun h => hnk' (Stmt.spine_sub_killVars _ _ h)
             obtain ⟨_, Er', hEr', _, hty, _⟩ := hk.1 d.root Er hEr hns
             refine Or.inr ⟨hha, fun hin => ?_, Er', hEr', by rw [hty]; exact hhv⟩
-            have := Step.held_not_killVars hst' (hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv)
-              hcd h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hF hnk' hlt
+            have := Step.held_not_killVarsZ hst' hz.catchRIn hcd h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hnk' hlt
             rcases (by simpa [Stmt.killVars] using hin : d.root = x ∨ d.root ∈ _) with h | h
             · exact hnk (by simp [Stmt.killVars, h])
             · exact this h
@@ -5048,17 +5292,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           pinOut := pinOut_cong (b := []) rfl rfl hk hi'.pinOut hi.pinOut
           pinIn := hi'.pinIn
           dtorOut := dtorOut_cong (b := []) rfl rfl hk hi'.dtorOut hi.dtorOut
-          dtorIn := hi'.dtorIn 
-          -- (AGORA-963 step 3: the inner step keeps the clause at a held root, none
-          -- of its killable names: `Step.slotsCaps`)
-          heldCaps := hi.heldCaps_step (fun p E hp hm hps => by
-              obtain ⟨h0, hps0⟩ := hk.rootb_back hp hm (by simpa [Stmt.spine] using hps)
-              exact ⟨h0, by simpa [Stmt.spine] using hps0⟩) (fun w hw hcw =>
-              CapsInpAt.of_slots ((hst'.slotsCaps hi.toMInv (fun h => hw (by simp [Stmt.killVars, h])) hcw.1).1 _ _ rfl)
-                hi'.toMInv) }
+          dtorIn := hi'.dtorIn }
     | catchSkip =>
       refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial trivial trivial, Nat.le_refl _,
-        (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl⟩
+        (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl,
+        Z, hz.catchRIn.restmt rfl rfl (fun v hv => by simp [Stmt.killVars] at hv)
+          (fun c hc => by simp [Stmt.catchFrames] at hc), ZKeep.refl _ _⟩
       rcases skip_inv hs with rfl | hw
       · exact StmtT.skip
       · exact StmtT.skip.weakenOut hi.wf hi.names (Or.inr hw)
@@ -5126,28 +5365,52 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       refine ⟨Δ, StmtT.catchR hxF StmtT.skip hM hanchΔ hKOd (DStay.refl _ _),
         -- (AGORA-963 step 3: the panicking body keeps the clause at a held root,
         -- none of its killable names, `Step.slotsCaps`; `x` says so, an integer)
-        Inv.ofLeaf (hi.heldCaps_step (fun q E hq hmq _ => by
-            obtain ⟨hqs, E0, h0⟩ := hKO.2 q E hq
-            obtain ⟨E', h', hm', _, hrb⟩ := hKO.1 q E0 h0 hqs
-            rw [hq] at h'; cases h'
-            have hm0 : E0.mode = .rootb := by rw [← hm']; exact hmq
-            rw [hrb hm0]; exact ⟨h0, by simpa [Stmt.spine] using hqs⟩) (fun w hw hcw =>
-            CapsInpAt.of_slots (((hp.slotsCaps hi.toMInv (fun h => hw (by simp [Stmt.killVars, h])) hcw.1).2 _ rfl).set
-              (fun V e => by cases e; exact ValCapsInp.int _ w)) hM')) hi hM' (by simp [hnv1]) (by simp [Stmt.vars, hnv1]; exact hi.nvS x (by simp [Stmt.vars]))
+        -- the frame's end restores its start's slots (`hsteq`), whose clause the
+        -- frame's typing carries
+        Inv.ofLeaf hi hM' (by simp [hnv1]) (by simp [Stmt.vars, hnv1]; exact hi.nvS x (by simp [Stmt.vars]))
         (hanchΔ.anti fun v hv => by simpa [Stmt.killVars] using hv) (by simp [Stmt.spine]) (covers_set_none hc1 hxown (fun _ h => by cases h)) hcatch,
         by simp [hnv1], ⟨fun v E hv hvs => ⟨by simp [Stmt.spine], hKO.1 v E hv hvs⟩,
           fun v E' hv _ => hKO.2 v E' hv,
           -- the body gave no `letd` binding outside it a new view
           fun v E hv hd hos hn _ => StmtT.dkeep hs hi.dtorOut hi.dtorIn v E hv hd hos hn (hKO.2 v E hv).1⟩,
-        fun v hv => ?_⟩
+        fun v hv => ?_, Z, ?_, fun q E hq hmq => rfl⟩
+      rotate_right
+      · -- (AGORA-937 B4: the frame's end restores its start's slots, `hsteq`, which
+        -- the frame's record covers)
+        have hrbΔ : ∀ q E, Δ q = some E → E.mode = .rootb → Γ q = some E ∧ q ∉ s.spine ∧ q < m0.nv := by
+          intro q E hq hmq
+          obtain ⟨hqs, E0, h0⟩ := hKO.2 q E hq
+          obtain ⟨E', h', hm', _, hrb⟩ := hKO.1 q E0 h0 hqs
+          rw [hq] at h'; cases h'
+          have hm0 : E0.mode = .rootb := by rw [← hm']; exact hmq
+          refine ⟨by rw [hrb hm0]; exact h0, hqs, ?_⟩
+          have := hM.nvSt q (by rw [← hM.dom, hq]; rfl)
+          simpa using this
+        refine
+          { caps := fun q E hq hmq w hW => ?_
+            reach := fun q E hq hmq v hv => ?_
+            bound := fun q E hq hmq v hv => ?_
+            frames := fun x0 m00 b0 h q E hq hmq _ hlt w hW => ?_ }
+        · obtain ⟨h0, hqs, hlt⟩ := hrbΔ q E hq hmq
+          exact (hz.frames x m0 s (by simp [Stmt.catchFrames]) q E h0 hmq hqs hlt w hW).of_st hsteq
+        · obtain ⟨h0, hqs, _⟩ := hrbΔ q E hq hmq
+          have hvx : v = x := by simpa [Stmt.under, Stmt.spine, Stmt.killVars] using hv
+          rw [hvx]
+          exact hz.reach q E h0 hmq _ (by simp [Stmt.under, hqs, Stmt.killVars])
+        · obtain ⟨h0, _, _⟩ := hrbΔ q E hq hmq
+          exact Nat.lt_of_lt_of_le (hz.bound q E h0 hmq v hv) (by simp [hnv1])
+        · simp [Stmt.catchFrames] at h
+          obtain ⟨rfl, rfl, rfl⟩ := h
+          obtain ⟨h0, hqs, _⟩ := hrbΔ q E hq hmq
+          exact hz.frames x0 m00 s (by simp [Stmt.catchFrames]) q E h0 hmq hqs hlt w hW
       have hvx : v ≠ x := fun e => hxF (e ▸ hv)
       have hvs : v ∉ s.spine := fun h => hs.spine_F v h (List.mem_append_left _ hv)
       simp only [Mem.set_st, upd_ne _ _ hvx]; exact hout v hvs
 
   | unpair hsrc hy hl hm hty hyF hx hz hxz hxF hzF hs hny hdy hpz hpx _ _ _ =>
-    intro m m' s' hcd hi hst
+    intro m m' s' hcd hi hst Z hzz
     rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
-    · exact pres_reap ht0 hrs hcd hi hrk
-    exact pres_unpair hsrc hy hl hm (hty.imp id fun ⟨f, h, _⟩ => ⟨f, h⟩) hyF hx hz hxz hxF hzF hs hny hdy hpz hpx hi hst hnr
+    · exact pres_reap ht0 hrs hcd hi hrk Z hzz
+    exact pres_unpair hsrc hy hl hm (hty.imp id fun ⟨f, h, _⟩ => ⟨f, h⟩) hyF hx hz hxz hxF hzF hs hny hdy hpz hpx hi hst hnr Z hzz
 
 end A2

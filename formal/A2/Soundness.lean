@@ -20,10 +20,12 @@ namespace A2
 /-- Preservation, with the call and `recover` cases discharged. -/
 theorem preservation {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     (ht : StmtT P ξ Γ F s Δ) {m m' : Mem} {s' : Stmt} (hcd : MemCodes P m) (hi : Inv m Γ F s)
-    (hst : Step P m s (.ok m' s')) : ∃ Γ', StmtT P ξ Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Keep Γ Γ' s s' := by
-  obtain ⟨Γ', ht', hi', _, hk, _⟩ :=
-    preserve (callCase hP) (recCase hP) (cloCase hP) (handCase hP) (srcCase hP) ht hcd hi hst
-  exact ⟨Γ', ht', hi', hk⟩
+    (hst : Step P m s (.ok m' s')) (hz : HZ m Γ s) :
+    ∃ Γ', StmtT P ξ Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Keep Γ Γ' s s' ∧ HZ m' Γ' s' := by
+  obtain ⟨Z, hz⟩ := hz
+  obtain ⟨Γ', ht', hi', _, hk, _, Z', hz', _⟩ :=
+    preserve (callCase hP) (recCase hP) (cloCase hP) (handCase hP) (srcCase hP) ht hcd hi hst Z hz
+  exact ⟨Γ', ht', hi', hk, Z', hz'⟩
 
 /-- Progress, with the call cases discharged. -/
 theorem progress' {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
@@ -56,46 +58,46 @@ theorem Closed.step {Γ Γ' : Ctx} {s s' : Stmt} (hc : Closed Γ s) (hk : Keep �
     `pres_reap`), ended by the marking sweep (`Inv.sweepD`). -/
 theorem settle_ok {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
-    (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt} (hs : Settle P m s m' s') :
-    ∃ Γ', StmtT P ξ Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Closed Γ' s' ∧ MemCodes P m' ∧ s'.codesOK P := by
+    (hi : Inv m Γ F s) (hc : Closed Γ s) (hz : HZ m Γ s) {m' : Mem} {s' : Stmt} (hs : Settle P m s m' s') :
+    ∃ Γ', StmtT P ξ Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Closed Γ' s' ∧ MemCodes P m' ∧ s'.codesOK P ∧ HZ m' Γ' s' := by
   induction hs generalizing Γ with
-  | done _ => exact ⟨Γ, ht, hi, hc, hcd, hsc⟩
+  | done _ => exact ⟨Γ, ht, hi, hc, hcd, hsc, hz⟩
   | reap hst _ _ ih =>
-    obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
+    obtain ⟨Γ', ht', hi', hk, hz'⟩ := preservation hP ht hcd hi hst hz
     obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk.1 hsc).1 _ _ rfl
-    exact ih ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk)
+    exact ih ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk) hz'.sweepD
 
 /-- Every configuration a well-typed one reaches is well-typed (A3.1: each
     step's sweep keeps the invariant, `Inv.sweep`; Agora #610: the marking
     sweep, `Inv.sweepD`, and the reaps after it, `settle_ok`). -/
 theorem reach_ok {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
-    (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt} (hs : Steps P m s (.ok m' s')) :
-    ∃ Γ', StmtT P ξ Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Closed Γ' s' ∧ MemCodes P m' ∧ s'.codesOK P := by
+    (hi : Inv m Γ F s) (hc : Closed Γ s) (hz : HZ m Γ s) {m' : Mem} {s' : Stmt} (hs : Steps P m s (.ok m' s')) :
+    ∃ Γ', StmtT P ξ Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Closed Γ' s' ∧ MemCodes P m' ∧ s'.codesOK P ∧ HZ m' Γ' s' := by
   generalize hr : (Res.ok m' s') = r at hs
   induction hs generalizing Γ with
-  | refl => cases hr; exact ⟨Γ, ht, hi, hc, hcd, hsc⟩
+  | refl => cases hr; exact ⟨Γ, ht, hi, hc, hcd, hsc, hz⟩
   | step hst hse _ ih =>
-    obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
+    obtain ⟨Γ', ht', hi', hk, hz'⟩ := preservation hP ht hcd hi hst hz
     obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk.1 hsc).1 _ _ rfl
-    obtain ⟨Γ'', ht'', hi'', hc'', hcd'', hsc''⟩ :=
-      settle_ok hP hPc ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk) hse
-    exact ih ht'' hcd'' hsc'' hi'' hc'' hr
+    obtain ⟨Γ'', ht'', hi'', hc'', hcd'', hsc'', hz''⟩ :=
+      settle_ok hP hPc ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk) hz'.sweepD hse
+    exact ih ht'' hcd'' hsc'' hi'' hc'' hz'' hr
   | panic _ => cases hr
 
 /-- ... and so is every one a thread's own steps reach, with no sweep (A3:
     the configuration sweeps). -/
 theorem reach_ok0 {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
-    (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt} (hs : Steps0 P m s (.ok m' s')) :
-    ∃ Γ', StmtT P ξ Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Closed Γ' s' ∧ MemCodes P m' ∧ s'.codesOK P := by
+    (hi : Inv m Γ F s) (hc : Closed Γ s) (hz : HZ m Γ s) {m' : Mem} {s' : Stmt} (hs : Steps0 P m s (.ok m' s')) :
+    ∃ Γ', StmtT P ξ Γ' F s' Δ ∧ Inv m' Γ' F s' ∧ Closed Γ' s' ∧ MemCodes P m' ∧ s'.codesOK P ∧ HZ m' Γ' s' := by
   generalize hr : (Res.ok m' s') = r at hs
   induction hs generalizing Γ with
-  | refl => cases hr; exact ⟨Γ, ht, hi, hc, hcd, hsc⟩
+  | refl => cases hr; exact ⟨Γ, ht, hi, hc, hcd, hsc, hz⟩
   | step hst _ ih =>
-    obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
+    obtain ⟨Γ', ht', hi', hk, hz'⟩ := preservation hP ht hcd hi hst hz
     obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk.1 hsc).1 _ _ rfl
-    exact ih ht' hcd' hsc' hi' (hc.step hk) hr
+    exact ih ht' hcd' hsc' hi' (hc.step hk) hz' hr
   | panic _ => cases hr
 
 /-- The reaps that end a step end at a store the marking sweep left. -/
@@ -130,17 +132,17 @@ theorem Steps.ok_swept {P : Prog} {m m' : Mem} {s s' : Stmt} (hs : Steps P m s (
     none. -/
 theorem reach_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
-    (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem}
+    (hi : Inv m Γ F s) (hc : Closed Γ s) (hz : HZ m Γ s) {m' : Mem}
     (hs : Steps P m s (.panic m')) : (∀ v, m'.st v = none) ∧ Covers m' ∧ ∀ k, m'.blk k = none := by
   generalize hr : Res.panic m' = r at hs
   induction hs generalizing Γ with
   | refl => cases hr
   | step hst hse _ ih =>
-    obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
+    obtain ⟨Γ', ht', hi', hk, hz'⟩ := preservation hP ht hcd hi hst hz
     obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk.1 hsc).1 _ _ rfl
-    obtain ⟨Γ'', ht'', hi'', hc'', hcd'', hsc''⟩ :=
-      settle_ok hP hPc ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk) hse
-    exact ih ht'' hcd'' hsc'' hi'' hc'' hr
+    obtain ⟨Γ'', ht'', hi'', hc'', hcd'', hsc'', hz''⟩ :=
+      settle_ok hP hPc ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk) hz'.sweepD hse
+    exact ih ht'' hcd'' hsc'' hi'' hc'' hz'' hr
   | @panic m0 m1 s0 hst =>
     cases hr
     obtain ⟨hout, hin, _, hcov, _⟩ := panic_unwind hst hi.heap hi.cover hi.spineNd
@@ -160,9 +162,9 @@ theorem reach_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F
     configuration is finished or can step. -/
 theorem soundness {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P .none Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
-    (hi : Inv m Γ F s) (hc : Closed Γ s) {m' : Mem} {s' : Stmt}
+    (hi : Inv m Γ F s) (hc : Closed Γ s) (hz : HZ m Γ s) {m' : Mem} {s' : Stmt}
     (hs : Steps P m s (.ok m' s')) : ¬ Stuck P m' s' := by
-  obtain ⟨Γ', ht', hi', _, hcd', _⟩ := reach_ok hP hPc ht hcd hsc hi hc hs
+  obtain ⟨Γ', ht', hi', _, hcd', _, _⟩ := reach_ok hP hPc ht hcd hsc hi hc hz hs
   rintro ⟨hne, hnb, hno⟩
   rcases progress' hP ht' hcd' hi' with h | h | ⟨r, hr'⟩
   · exact hne h
@@ -197,7 +199,6 @@ theorem inv_empty {s : Stmt} {nv : Nat} (hs : s.src = true) (hv : ∀ v ∈ s.va
   nvS := hv
   nvF _ h := by cases h
   anch _ _ h := by cases h
-  heldCaps _ _ h := by cases h
   spineNd := by rw [src_spine hs]; exact List.nodup_nil
   spineDom v h := by rw [src_spine hs] at h; cases h
   catchOK := catchOK_src hs
@@ -219,7 +220,7 @@ theorem memory_safe {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {�
     (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
     (hv : ∀ v ∈ s.vars, v < nv)
     {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem nv) s (.ok m' s')) : ¬ Stuck P m' s' :=
-  soundness hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) hr
+  soundness hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) (HZ.empty hs) hr
 
 /-- Agora #610: **no store a run from the empty store reaches has an orphan
     awaiting its destructor**: the marking sweep that ends a step marks the
@@ -237,8 +238,8 @@ theorem no_leak_end {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {�
     (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
     (hv : ∀ v ∈ s.vars, v < nv)
     {m' : Mem} (hr : Steps P (emptyMem nv) s (.ok m' .skip)) : ∀ i, m'.alloc i = false := by
-  obtain ⟨Γ', _, hi', hc', _⟩ :=
-    reach_ok hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) hr
+  obtain ⟨Γ', _, hi', hc', _, _, _⟩ :=
+    reach_ok hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) (HZ.empty hs) hr
   intro i
   cases ha : m'.alloc i with
   | false => rfl
@@ -267,7 +268,7 @@ theorem no_leak_panic {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} 
     (hv : ∀ v ∈ s.vars, v < nv)
     {m' : Mem} (hr : Steps P (emptyMem nv) s (.panic m')) : ∀ i, m'.alloc i = false := by
   obtain ⟨hnone, hcov, hblk⟩ :=
-    reach_panic hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) hr
+    reach_panic hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) (HZ.empty hs) hr
   intro i
   cases ha : m'.alloc i with
   | false => rfl

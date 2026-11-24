@@ -3,8 +3,8 @@
 > **Interactive Explorer:** You can also explore this proof interactively (with a step-by-step memory & borrow-checker simulator, clickable theorem dependency graph, and searchable soundness-hole corpus) on **[nurl-lang.org/docs/formal-verification](https://nurl-lang.org/docs/formal-verification)**.
 
 * **Toolchain:** `leanprover/lean4:v4.35.0` (zero external dependencies; standard axioms `propext`, `Classical.choice`, `Quot.sound` only; `0` `sorry`s)
-* **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,139 lines of Lean 4**, **932 theorems**, **1110 total declarations**
-* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **87 modules**, **82,494 lines of Lean 4**, **3674 theorems**, **4711 total declarations**
+* **Phase A3 (Threads & Data-Race Freedom):** **33 modules**, **19,357 lines of Lean 4**, **940 theorems**, **1118 total declarations**
+* **Phase A2 (Full Single-Threaded Calculus + Leak Freedom, destructors):** **91 modules**, **86,726 lines of Lean 4**, **3848 theorems**, **4904 total declarations**
 * **Phase A1 (Core Calculus):** **22 modules**, **9,571 lines of Lean 4**, **449 theorems**, **613 total declarations**
 * **Soundness Corpus (`corpus/map.tsv`):** every hole probe in [`tools/fuzz/holes/`](../tools/fuzz/holes/), with the rule and the proof phase (A1, A2, A3, B) that covers it. The table is generated from the probes' `// map:` lines by `tools/fuzz/holes/map.sh` (build.sh writes it; it is not committed); `tools/fuzz/holes/map.py --counts` gives the totals
 
@@ -135,7 +135,7 @@ flowchart BT
 ---
 
 <!-- BEGIN generated: A2 module DAG (webdocs/scripts/gen-formal-data.mjs) -->
-## 4. Phase A2 Module Dependency DAG (87 Modules)
+## 4. Phase A2 Module Dependency DAG (91 Modules)
 
 ```mermaid
 flowchart BT
@@ -143,17 +143,19 @@ flowchart BT
   ArcPanicWitness["ArcPanicWitness<br/>(796L, 52 thms)"]
   Basic["Basic<br/>(602L, 47 thms)"]
   Bind["Bind<br/>(188L, 4 thms)"]
-  Call["Call<br/>(4743L, 203 thms)"]
-  CallInv["CallInv<br/>(721L, 21 thms)"]
+  Call["Call<br/>(4716L, 192 thms)"]
+  CallInv["CallInv<br/>(998L, 28 thms)"]
   CallMem["CallMem<br/>(1639L, 60 thms)"]
-  CapClause["CapClause<br/>(76L, 4 thms)"]
+  CapClause["CapClause<br/>(80L, 4 thms)"]
   CapsEval["CapsEval<br/>(277L, 20 thms)"]
-  CapsStore["CapsStore<br/>(184L, 18 thms)"]
-  Closure["Closure<br/>(3491L, 116 thms)"]
+  CapsLive["CapsLive<br/>(1997L, 82 thms)"]
+  CapsStore["CapsStore<br/>(187L, 18 thms)"]
+  Closure["Closure<br/>(3593L, 116 thms)"]
   ClosureDropWitness["ClosureDropWitness<br/>(869L, 51 thms)"]
   ClosureParamViewWitness["ClosureParamViewWitness<br/>(357L, 18 thms)"]
   Codes["Codes<br/>(870L, 43 thms)"]
-  Ctx["Ctx<br/>(351L, 31 thms)"]
+  Ctx["Ctx<br/>(346L, 31 thms)"]
+  DomTy["DomTy<br/>(152L, 14 thms)"]
   DropCode["DropCode<br/>(694L, 15 thms)"]
   DropInWitness["DropInWitness<br/>(69L, 5 thms)"]
   DtorWitness["DtorWitness<br/>(3715L, 172 thms)"]
@@ -162,9 +164,11 @@ flowchart BT
   EditBV["EditBV<br/>(1372L, 47 thms)"]
   EditBVFnWitness["EditBVFnWitness<br/>(264L, 12 thms)"]
   Elem["Elem<br/>(69L, 1 thms)"]
-  EnvHand["EnvHand<br/>(2918L, 71 thms)"]
+  EnvHand["EnvHand<br/>(2974L, 74 thms)"]
   ExitWitness["ExitWitness<br/>(380L, 47 thms)"]
   Frame["Frame<br/>(1936L, 95 thms)"]
+  FrameCall["FrameCall<br/>(160L, 10 thms)"]
+  FrameClause["FrameClause<br/>(772L, 46 thms)"]
   Fresh["Fresh<br/>(153L, 3 thms)"]
   FreshBase["FreshBase<br/>(447L, 34 thms)"]
   FreshClosureWitness["FreshClosureWitness<br/>(256L, 18 thms)"]
@@ -174,32 +178,32 @@ flowchart BT
   FreshWitness["FreshWitness<br/>(310L, 19 thms)"]
   HandOver["HandOver<br/>(497L, 30 thms)"]
   Heap["Heap<br/>(211L, 14 thms)"]
-  HeldViewThruWitness["HeldViewThruWitness<br/>(110L, 10 thms)"]
+  HeldViewThruWitness["HeldViewThruWitness<br/>(200L, 17 thms)"]
   InoutViewArgWitness["InoutViewArgWitness<br/>(409L, 34 thms)"]
-  Invariant["Invariant<br/>(2978L, 193 thms)"]
-  KillVarsStep["KillVarsStep<br/>(241L, 10 thms)"]
+  Invariant["Invariant<br/>(3058L, 200 thms)"]
+  KillVarsStep["KillVarsStep<br/>(281L, 11 thms)"]
   Layout["Layout<br/>(182L, 12 thms)"]
   Leak["Leak<br/>(665L, 26 thms)"]
   NameWf["NameWf<br/>(1046L, 50 thms)"]
   Panic["Panic<br/>(387L, 23 thms)"]
   ParamViewWitness["ParamViewWitness<br/>(457L, 21 thms)"]
   PopWitness["PopWitness<br/>(262L, 13 thms)"]
-  Preservation["Preservation<br/>(5154L, 122 thms)"]
+  Preservation["Preservation<br/>(5417L, 123 thms)"]
   Progress["Progress<br/>(941L, 14 thms)"]
   Region["Region<br/>(35L, 1 thms)"]
   RegionChangeWitness["RegionChangeWitness<br/>(86L, 5 thms)"]
   RegionMem["RegionMem<br/>(410L, 22 thms)"]
   RegionResWitness["RegionResWitness<br/>(442L, 30 thms)"]
-  RegionThruWitness["RegionThruWitness<br/>(107L, 8 thms)"]
+  RegionThruWitness["RegionThruWitness<br/>(113L, 8 thms)"]
   RemoveLoopWitness["RemoveLoopWitness<br/>(252L, 10 thms)"]
-  Rename["Rename<br/>(8783L, 357 thms)"]
+  Rename["Rename<br/>(9057L, 364 thms)"]
   Repl["Repl<br/>(387L, 21 thms)"]
   Rhs["Rhs<br/>(3393L, 163 thms)"]
   SelfViewCall["SelfViewCall<br/>(60L, 2 thms)"]
   Semantics["Semantics<br/>(1757L, 13 thms)"]
   Settle["Settle<br/>(213L, 12 thms)"]
   SliceCopyViewWitness["SliceCopyViewWitness<br/>(192L, 11 thms)"]
-  Soundness["Soundness<br/>(281L, 17 thms)"]
+  Soundness["Soundness<br/>(282L, 17 thms)"]
   SrcKeep["SrcKeep<br/>(562L, 25 thms)"]
   Stability["Stability<br/>(1248L, 83 thms)"]
   StepCaps["StepCaps<br/>(230L, 4 thms)"]
@@ -207,25 +211,25 @@ flowchart BT
   Steps["Steps<br/>(3971L, 123 thms)"]
   StoreViewWitness["StoreViewWitness<br/>(346L, 17 thms)"]
   SubDcKill["SubDcKill<br/>(183L, 9 thms)"]
-  Sweep["Sweep<br/>(609L, 65 thms)"]
-  SweepD["SweepD<br/>(483L, 39 thms)"]
+  Sweep["Sweep<br/>(605L, 65 thms)"]
+  SweepD["SweepD<br/>(475L, 39 thms)"]
   Syntax["Syntax<br/>(1463L, 69 thms)"]
   TakeB["TakeB<br/>(348L, 17 thms)"]
   TakeBDWitness["TakeBDWitness<br/>(207L, 4 thms)"]
   TakeBVWitness["TakeBVWitness<br/>(437L, 15 thms)"]
   TakeBWitness["TakeBWitness<br/>(240L, 7 thms)"]
   TakeWitness["TakeWitness<br/>(263L, 21 thms)"]
-  ThruClosureWitness["ThruClosureWitness<br/>(440L, 34 thms)"]
+  ThruClosureWitness["ThruClosureWitness<br/>(443L, 34 thms)"]
   ThruDtorWitness["ThruDtorWitness<br/>(164L, 12 thms)"]
   ThruGlueWitness["ThruGlueWitness<br/>(446L, 26 thms)"]
   ThruLiftKinds["ThruLiftKinds<br/>(96L, 8 thms)"]
   ThruPre["ThruPre<br/>(247L, 25 thms)"]
-  Typing["Typing<br/>(2655L, 145 thms)"]
-  TypingFacts["TypingFacts<br/>(1163L, 65 thms)"]
+  Typing["Typing<br/>(2663L, 145 thms)"]
+  TypingFacts["TypingFacts<br/>(1143L, 65 thms)"]
   Unfresh["Unfresh<br/>(169L, 15 thms)"]
   UnheldFresh["UnheldFresh<br/>(198L, 16 thms)"]
   Values["Values<br/>(1329L, 69 thms)"]
-  Wf["Wf<br/>(1812L, 43 thms)"]
+  Wf["Wf<br/>(1820L, 43 thms)"]
   DtorWitness --> ArcDtorWitness
   Settle --> ArcDtorWitness
   ArcDtorWitness --> ArcPanicWitness
@@ -234,12 +238,15 @@ flowchart BT
   Rename --> Call
   Preservation --> Call
   CallMem --> CallInv
+  FrameCall --> CallInv
   KillVarsStep --> CallInv
   SrcKeep --> CallInv
+  CapsLive --> CallInv
   Bind --> CallMem
   KillVarsStep --> CapClause
   TakeB --> CapsEval
   CapsStore --> CapsEval
+  CapsEval --> CapsLive
   CapClause --> CapsStore
   Basic --> CapsStore
   Steps --> CapsStore
@@ -252,6 +259,7 @@ flowchart BT
   Repl --> Codes
   Basic --> Ctx
   FreshBase --> Ctx
+  Fresh --> DomTy
   DtorWitness --> DropCode
   PopWitness --> DropInWitness
   DynCell --> DtorWitness
@@ -264,6 +272,10 @@ flowchart BT
   SrcKeep --> EnvHand
   Soundness --> ExitWitness
   Values --> Frame
+  FrameClause --> FrameCall
+  CallMem --> FrameCall
+  CapsLive --> FrameClause
+  CapClause --> FrameClause
   NameWf --> Fresh
   Basic --> FreshBase
   FreshWitness --> FreshClosureWitness
@@ -288,6 +300,8 @@ flowchart BT
   DynCell --> PopWitness
   TakeB --> Preservation
   StepCaps --> Preservation
+  CapsLive --> Preservation
+  FrameClause --> Preservation
   Preservation --> Progress
   Typing --> Region
   HeldViewThruWitness --> RegionChangeWitness
@@ -297,6 +311,7 @@ flowchart BT
   PopWitness --> RemoveLoopWitness
   NameWf --> Rename
   Fresh --> Rename
+  DomTy --> Rename
   Stability --> Repl
   Frame --> Rhs
   Typing --> SelfViewCall
@@ -355,23 +370,25 @@ flowchart BT
 | 0. Syntax & Store | [`A2/Semantics.lean`](A2/Semantics.lean) | 1757 | 13 | 95 | Small-step operational semantics (Step, Steps), tree deallocation (Frees, DropSlot), call expansion, and Stuck. |
 | 0. Syntax & Store | [`A2/Syntax.lean`](A2/Syntax.lean) | 1463 | 69 | 78 | Types, effect & kill lattice (Eff.kills), expressions, statements, and store values (Mem, Slot, Val). |
 | 1. Flow-Sensitive Typing | [`A2/Basic.lean`](A2/Basic.lean) | 602 | 47 | 1 | Foundational lemmas for store updates (upd), value subtrees, and contexts. |
-| 1. Flow-Sensitive Typing | [`A2/Ctx.lean`](A2/Ctx.lean) | 351 | 31 | 0 | Algebraic properties and monotonicity of context operations (kill, exitScope, derive). |
-| 1. Flow-Sensitive Typing | [`A2/Typing.lean`](A2/Typing.lean) | 2655 | 145 | 132 | Flow-sensitive context Γ, kill operation, and typing rules for RHS, statements, calls, and functions (RhsT, StmtT, CallT, FnOK). |
-| 1. Flow-Sensitive Typing | [`A2/TypingFacts.lean`](A2/TypingFacts.lean) | 1163 | 65 | 1 | Inversion lemmas and structural properties of well-typed statements (StmtT). |
+| 1. Flow-Sensitive Typing | [`A2/Ctx.lean`](A2/Ctx.lean) | 346 | 31 | 0 | Algebraic properties and monotonicity of context operations (kill, exitScope, derive). |
+| 1. Flow-Sensitive Typing | [`A2/Typing.lean`](A2/Typing.lean) | 2663 | 145 | 132 | Flow-sensitive context Γ, kill operation, and typing rules for RHS, statements, calls, and functions (RhsT, StmtT, CallT, FnOK). |
+| 1. Flow-Sensitive Typing | [`A2/TypingFacts.lean`](A2/TypingFacts.lean) | 1143 | 65 | 1 | Inversion lemmas and structural properties of well-typed statements (StmtT). |
 | 2. Memory Invariant | [`A2/Heap.lean`](A2/Heap.lean) | 211 | 14 | 0 | Preservation of heap disjointness and allocation validity (HeapOK) across store operations. |
-| 2. Memory Invariant | [`A2/Invariant.lean`](A2/Invariant.lean) | 2978 | 193 | 96 | Configuration invariant (Inv, HeapOK, Covers, ValOK, ViewsOK): single ownership and valid borrows/views. |
+| 2. Memory Invariant | [`A2/Invariant.lean`](A2/Invariant.lean) | 3058 | 200 | 98 | Configuration invariant (Inv, HeapOK, Covers, ValOK, ViewsOK): single ownership and valid borrows/views. |
 | 2. Memory Invariant | [`A2/NameWf.lean`](A2/NameWf.lean) | 1046 | 50 | 3 | Well-formedness and invariants for by-name closure captures (Kind.name). |
 | 2. Memory Invariant | [`A2/SrcKeep.lean`](A2/SrcKeep.lean) | 562 | 25 | 0 | Source typing keeps a borrowed parameter's entry (StmtT.ctxRel), so a destructor's frame gets KeepOut, CtxWF and NameWF of its body without premises on letd (srcCase). |
 | 2. Memory Invariant | [`A2/Stability.lean`](A2/Stability.lean) | 1248 | 83 | 5 | Stability of borrows and views under store and context updates. |
 | 2. Memory Invariant | [`A2/Values.lean`](A2/Values.lean) | 1329 | 69 | 2 | Well-formedness lemmas for values, structs (pair), enums (inl/inr), and views. |
-| 2. Memory Invariant | [`A2/Wf.lean`](A2/Wf.lean) | 1812 | 43 | 1 | Preservation of context well-formedness (WfCtx) across typing transitions. |
+| 2. Memory Invariant | [`A2/Wf.lean`](A2/Wf.lean) | 1820 | 43 | 1 | Preservation of context well-formedness (WfCtx) across typing transitions. |
 | 3. Proof Infrastructure | [`A2/ArcDtorWitness.lean`](A2/ArcDtorWitness.lean) | 304 | 13 | 4 |  |
 | 3. Proof Infrastructure | [`A2/ArcPanicWitness.lean`](A2/ArcPanicWitness.lean) | 796 | 52 | 15 |  |
-| 3. Proof Infrastructure | [`A2/CapClause.lean`](A2/CapClause.lean) | 76 | 4 | 0 |  |
+| 3. Proof Infrastructure | [`A2/CapClause.lean`](A2/CapClause.lean) | 80 | 4 | 0 |  |
 | 3. Proof Infrastructure | [`A2/CapsEval.lean`](A2/CapsEval.lean) | 277 | 20 | 0 |  |
-| 3. Proof Infrastructure | [`A2/CapsStore.lean`](A2/CapsStore.lean) | 184 | 18 | 1 |  |
+| 3. Proof Infrastructure | [`A2/CapsLive.lean`](A2/CapsLive.lean) | 1997 | 82 | 4 |  |
+| 3. Proof Infrastructure | [`A2/CapsStore.lean`](A2/CapsStore.lean) | 187 | 18 | 1 |  |
 | 3. Proof Infrastructure | [`A2/ClosureDropWitness.lean`](A2/ClosureDropWitness.lean) | 869 | 51 | 21 |  |
 | 3. Proof Infrastructure | [`A2/ClosureParamViewWitness.lean`](A2/ClosureParamViewWitness.lean) | 357 | 18 | 6 |  |
+| 3. Proof Infrastructure | [`A2/DomTy.lean`](A2/DomTy.lean) | 152 | 14 | 1 |  |
 | 3. Proof Infrastructure | [`A2/DropCode.lean`](A2/DropCode.lean) | 694 | 15 | 9 |  |
 | 3. Proof Infrastructure | [`A2/DropInWitness.lean`](A2/DropInWitness.lean) | 69 | 5 | 3 |  |
 | 3. Proof Infrastructure | [`A2/DtorWitness.lean`](A2/DtorWitness.lean) | 3715 | 172 | 68 |  |
@@ -379,7 +396,9 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/EditBV.lean`](A2/EditBV.lean) | 1372 | 47 | 1 | A view stored through a borrow (StmtT.editBV): every view-holding root of the borrow's path holds what the stored value depends on. |
 | 3. Proof Infrastructure | [`A2/EditBVFnWitness.lean`](A2/EditBVFnWitness.lean) | 264 | 12 | 17 |  |
 | 3. Proof Infrastructure | [`A2/Elem.lean`](A2/Elem.lean) | 69 | 1 | 0 | An element handed over (withElem, insert): the invariant does not see the order of an owned Vec's elements (MInv.perm). |
-| 3. Proof Infrastructure | [`A2/EnvHand.lean`](A2/EnvHand.lean) | 2918 | 71 | 5 | Closure and trait-object environment hand-over (StmtT.callcE) for inout receivers. |
+| 3. Proof Infrastructure | [`A2/EnvHand.lean`](A2/EnvHand.lean) | 2974 | 74 | 5 | Closure and trait-object environment hand-over (StmtT.callcE) for inout receivers. |
+| 3. Proof Infrastructure | [`A2/FrameCall.lean`](A2/FrameCall.lean) | 160 | 10 | 1 |  |
+| 3. Proof Infrastructure | [`A2/FrameClause.lean`](A2/FrameClause.lean) | 772 | 46 | 6 |  |
 | 3. Proof Infrastructure | [`A2/Fresh.lean`](A2/Fresh.lean) | 153 | 3 | 0 |  |
 | 3. Proof Infrastructure | [`A2/FreshBase.lean`](A2/FreshBase.lean) | 447 | 34 | 2 |  |
 | 3. Proof Infrastructure | [`A2/FreshClosureWitness.lean`](A2/FreshClosureWitness.lean) | 256 | 18 | 7 |  |
@@ -387,15 +406,15 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/FreshProjWitness.lean`](A2/FreshProjWitness.lean) | 467 | 36 | 26 |  |
 | 3. Proof Infrastructure | [`A2/FreshSatWitness.lean`](A2/FreshSatWitness.lean) | 417 | 34 | 24 |  |
 | 3. Proof Infrastructure | [`A2/FreshWitness.lean`](A2/FreshWitness.lean) | 310 | 19 | 7 |  |
-| 3. Proof Infrastructure | [`A2/HeldViewThruWitness.lean`](A2/HeldViewThruWitness.lean) | 110 | 10 | 11 |  |
+| 3. Proof Infrastructure | [`A2/HeldViewThruWitness.lean`](A2/HeldViewThruWitness.lean) | 200 | 17 | 13 |  |
 | 3. Proof Infrastructure | [`A2/InoutViewArgWitness.lean`](A2/InoutViewArgWitness.lean) | 409 | 34 | 25 |  |
-| 3. Proof Infrastructure | [`A2/KillVarsStep.lean`](A2/KillVarsStep.lean) | 241 | 10 | 1 |  |
+| 3. Proof Infrastructure | [`A2/KillVarsStep.lean`](A2/KillVarsStep.lean) | 281 | 11 | 4 |  |
 | 3. Proof Infrastructure | [`A2/ParamViewWitness.lean`](A2/ParamViewWitness.lean) | 457 | 21 | 6 |  |
 | 3. Proof Infrastructure | [`A2/Region.lean`](A2/Region.lean) | 35 | 1 | 0 |  |
 | 3. Proof Infrastructure | [`A2/RegionChangeWitness.lean`](A2/RegionChangeWitness.lean) | 86 | 5 | 3 |  |
 | 3. Proof Infrastructure | [`A2/RegionMem.lean`](A2/RegionMem.lean) | 410 | 22 | 6 |  |
 | 3. Proof Infrastructure | [`A2/RegionResWitness.lean`](A2/RegionResWitness.lean) | 442 | 30 | 19 |  |
-| 3. Proof Infrastructure | [`A2/RegionThruWitness.lean`](A2/RegionThruWitness.lean) | 107 | 8 | 7 |  |
+| 3. Proof Infrastructure | [`A2/RegionThruWitness.lean`](A2/RegionThruWitness.lean) | 113 | 8 | 7 |  |
 | 3. Proof Infrastructure | [`A2/Repl.lean`](A2/Repl.lean) | 387 | 21 | 0 | One-hole replacement (Repl): a change through a borrowed handle rewrites one node of its owner's tree and leaves the rest. |
 | 3. Proof Infrastructure | [`A2/SelfViewCall.lean`](A2/SelfViewCall.lean) | 60 | 2 | 0 |  |
 | 3. Proof Infrastructure | [`A2/Settle.lean`](A2/Settle.lean) | 213 | 12 | 3 |  |
@@ -403,10 +422,10 @@ flowchart BT
 | 3. Proof Infrastructure | [`A2/StepCaps.lean`](A2/StepCaps.lean) | 230 | 4 | 0 |  |
 | 3. Proof Infrastructure | [`A2/StoreViewWitness.lean`](A2/StoreViewWitness.lean) | 346 | 17 | 13 |  |
 | 3. Proof Infrastructure | [`A2/SubDcKill.lean`](A2/SubDcKill.lean) | 183 | 9 | 0 |  |
-| 3. Proof Infrastructure | [`A2/Sweep.lean`](A2/Sweep.lean) | 609 | 65 | 3 | The sweep (Mem.sweep): shared blocks (Arc, lock blocks) that nothing reaches are removed and their payloads freed, from every thread's roots. |
-| 3. Proof Infrastructure | [`A2/SweepD.lean`](A2/SweepD.lean) | 483 | 39 | 3 |  |
+| 3. Proof Infrastructure | [`A2/Sweep.lean`](A2/Sweep.lean) | 605 | 65 | 3 | The sweep (Mem.sweep): shared blocks (Arc, lock blocks) that nothing reaches are removed and their payloads freed, from every thread's roots. |
+| 3. Proof Infrastructure | [`A2/SweepD.lean`](A2/SweepD.lean) | 475 | 39 | 3 |  |
 | 3. Proof Infrastructure | [`A2/TakeB.lean`](A2/TakeB.lean) | 348 | 17 | 0 | AGORA-889: an element that owns memory moved out through a borrow (Stmt.takeB, editSet's reverse): the owner's tree loses it in place (HeapOK.editTake, MInv.editB_take, typed as editB's truncation), and the new owner takes it (takeB_outOwn, covers_takeB; takeB_pres in Preservation). AGORA-897: the same for an element type that holds views (StmtT.takeBV: MInv.editBV_take; its views stay valid, takeB_viewsOK, takeBV_out; takeBV_pres). |
-| 3. Proof Infrastructure | [`A2/ThruClosureWitness.lean`](A2/ThruClosureWitness.lean) | 440 | 34 | 13 |  |
+| 3. Proof Infrastructure | [`A2/ThruClosureWitness.lean`](A2/ThruClosureWitness.lean) | 443 | 34 | 13 |  |
 | 3. Proof Infrastructure | [`A2/ThruDtorWitness.lean`](A2/ThruDtorWitness.lean) | 164 | 12 | 6 |  |
 | 3. Proof Infrastructure | [`A2/ThruGlueWitness.lean`](A2/ThruGlueWitness.lean) | 446 | 26 | 14 |  |
 | 3. Proof Infrastructure | [`A2/ThruLiftKinds.lean`](A2/ThruLiftKinds.lean) | 96 | 8 | 0 |  |
@@ -420,16 +439,16 @@ flowchart BT
 | 3. Step & Unwinding Lemmas | [`A2/StepFrame.lean`](A2/StepFrame.lean) | 417 | 17 | 1 | Invariant preservation across frame steps and panic unwinding frames. |
 | 3. Step & Unwinding Lemmas | [`A2/Steps.lean`](A2/Steps.lean) | 3971 | 123 | 6 | Preservation lemmas for individual statement steps (letv, assign, push, free, unpair). |
 | 4. Calls & Closures | [`A2/Bind.lean`](A2/Bind.lean) | 188 | 4 | 1 | Binding call arguments (in, inout, sink) from caller context into callee frame. |
-| 4. Calls & Closures | [`A2/Call.lean`](A2/Call.lean) | 4743 | 203 | 22 | Typing of expanded function calls (callStmt) from function summaries (FnOK + CallT). |
-| 4. Calls & Closures | [`A2/CallInv.lean`](A2/CallInv.lean) | 721 | 21 | 0 | Full invariant preservation (callCase, recCase) across function call and recover expansion. |
+| 4. Calls & Closures | [`A2/Call.lean`](A2/Call.lean) | 4716 | 192 | 22 | Typing of expanded function calls (callStmt) from function summaries (FnOK + CallT). |
+| 4. Calls & Closures | [`A2/CallInv.lean`](A2/CallInv.lean) | 998 | 28 | 0 | Full invariant preservation (callCase, recCase) across function call and recover expansion. |
 | 4. Calls & Closures | [`A2/CallMem.lean`](A2/CallMem.lean) | 1639 | 60 | 2 | Store state and owned trees immediately after binding parameters in a call. |
-| 4. Calls & Closures | [`A2/Closure.lean`](A2/Closure.lean) | 3491 | 116 | 7 | Closure and trait-object package calls (callc, cloCase, cloProgress) and by-name capture soundness. |
+| 4. Calls & Closures | [`A2/Closure.lean`](A2/Closure.lean) | 3593 | 116 | 7 | Closure and trait-object package calls (callc, cloCase, cloProgress) and by-name capture soundness. |
 | 4. Calls & Closures | [`A2/Codes.lean`](A2/Codes.lean) | 870 | 43 | 6 | Package code-pointer integrity (ProgCodes, MemCodes, codes_step) across execution steps. |
-| 4. Calls & Closures | [`A2/Rename.lean`](A2/Rename.lean) | 8783 | 357 | 27 | Alpha-renaming of function body variables to fresh variables at a call site. |
+| 4. Calls & Closures | [`A2/Rename.lean`](A2/Rename.lean) | 9057 | 364 | 27 | Alpha-renaming of function body variables to fresh variables at a call site. |
 | 4. Memory Invariant | [`A2/Layout.lean`](A2/Layout.lean) | 182 | 12 | 5 | Agora #879: a tree's addresses split into its nodes' control blocks and buffers (ctls_datas_perm); no control block of any owned tree, a slot's or a block payload, is a buffer of any owned tree (ctl_ne_data, from HeapOK and BlkOwn), the fact the lowering's Vec TBAA tags assert. |
-| 5. Soundness Theorems | [`A2/Preservation.lean`](A2/Preservation.lean) | 5154 | 122 | 15 | Preservation theorem (preserve): every execution step preserves typing StmtT and memory invariant Inv. |
+| 5. Soundness Theorems | [`A2/Preservation.lean`](A2/Preservation.lean) | 5417 | 123 | 15 | Preservation theorem (preserve): every execution step preserves typing StmtT and memory invariant Inv. |
 | 5. Soundness Theorems | [`A2/Progress.lean`](A2/Progress.lean) | 941 | 14 | 0 | Progress theorem (progress): a well-typed statement is either .skip or can step (never Stuck). |
-| 5. Soundness Theorems | [`A2/Soundness.lean`](A2/Soundness.lean) | 281 | 17 | 2 | Main theorems: soundness, memory_safe, no_leak_end, and no_leak_panic. |
+| 5. Soundness Theorems | [`A2/Soundness.lean`](A2/Soundness.lean) | 282 | 17 | 2 | Main theorems: soundness, memory_safe, no_leak_end, and no_leak_panic. |
 | 5. Worked Examples | [`A2/DynCell.lean`](A2/DynCell.lean) | 483 | 33 | 21 | Per-call ownership through an owner cell: the pick example typed with A2's rules, and memory_safe and no_leak_end applied to it (pick_ok, main_safe, main_no_leak). |
 | 5. Worked Examples | [`A2/ExitWitness.lean`](A2/ExitWitness.lean) | 380 | 47 | 18 | Agora #871: early exits. A break out of while T that drops a live owned Vec on the way (mainB_typed, breakB_steps), a continue-shaped exit of a loop body, and an early ^ across a scope in a callee checked against its summary (gR_ok) with its caller, each run safe and leak-free (mainB_safe, mainC_no_leak, mainR_safe, mainR_no_leak). |
 | 5. Worked Examples | [`A2/HandOver.lean`](A2/HandOver.lean) | 497 | 30 | 12 | AGORA-885: the by-name owner hand-over as an encoding: the owner is a cell and a borrow, the hand-over a take into the cell. Straight-line and decided at run time (an ite on the flag nurlc reads off the buffer), each run safe and leak-free (main_safe, main_no_leak, mainJ_safe, mainJ_no_leak). |
@@ -446,7 +465,7 @@ flowchart BT
 <!-- BEGIN generated: A2 crown theorems (webdocs/scripts/gen-formal-data.mjs) -->
 ## 6. Crown Theorem Statements in Lean 4
 
-### `A2.memory_safe` ([`A2/Soundness.lean#L216-L221`](A2/Soundness.lean#L216-L221))
+### `A2.memory_safe` ([`A2/Soundness.lean#L217-L222`](A2/Soundness.lean#L217-L222))
 ```lean
 /-- The memory model of stage A2 is sound: a well-typed program, run from
     the empty store, never gets stuck — it finishes, panics, or runs on. -/
@@ -456,7 +475,7 @@ theorem memory_safe {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {�
     {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem nv) s (.ok m' s')) : ¬ Stuck P m' s'
 ```
 
-### `A2.no_leak_end` ([`A2/Soundness.lean#L234-L239`](A2/Soundness.lean#L234-L239))
+### `A2.no_leak_end` ([`A2/Soundness.lean#L235-L240`](A2/Soundness.lean#L235-L240))
 ```lean
 /-- Nothing leaks: when a well-typed program finishes, every allocation it
     made has been freed. -/
@@ -466,7 +485,7 @@ theorem no_leak_end {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stmt} {�
     {m' : Mem} (hr : Steps P (emptyMem nv) s (.ok m' .skip)) : ∀ i, m'.alloc i = false
 ```
 
-### `A2.no_leak_panic` ([`A2/Soundness.lean#L263-L268`](A2/Soundness.lean#L263-L268))
+### `A2.no_leak_panic` ([`A2/Soundness.lean#L264-L269`](A2/Soundness.lean#L264-L269))
 ```lean
 /-- ... and when a panic no `recover` frame catches ends it, the unwinding
     has freed every allocation too. -/

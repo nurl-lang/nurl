@@ -1117,7 +1117,7 @@ theorem RootInv.put {P : Prog} (hP : ProgOK P) {C : Cfg} {ps : List (Nat → Boo
   obtain ⟨hto, _⟩ := hc.ok i t a hi ha
   have hta : TypedAt P (ownView C t a) t.s := TypedAt.of_threadOK hto
   have htyp : Typed P t.s := by obtain ⟨ξ, Γ, F, Δ, ht, _⟩ := hta; exact ⟨ξ, Γ, F, Δ, ht⟩
-  obtain ⟨Γ, F, Δ, ht0, hinv, hcd, _, hcl⟩ := hto
+  obtain ⟨Γ, F, Δ, ht0, hinv, hcd, _, hcl, _⟩ := hto
   have hck : CapShr P (C.view t).st (C.view t).nv t.s := TypedAt.capShr hcd hta
   have hrb : RbOK (C.view t).st [] t.s :=
     rbOK_of (m := ownView C t a) t.s [] ht0 hinv.toMInv fun p E hp _ => .inl (hcl p (by rw [hp]; rfl))

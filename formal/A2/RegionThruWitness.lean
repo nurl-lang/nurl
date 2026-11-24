@@ -14,9 +14,11 @@ premise it was handed no views, and `π vv` stands for nothing in that
 frame (`CallH.σ_nil_of_thru`); the lift of the inner call passes none
 (`RSetup.callR_canon`).
 
-A real memory root is still refused: in `g`'s body a binding `vv2` holding a
-view of a local `w` is not handed to `f` (`call_root_refused`), as before
-(`HeldViewThruWitness`). -/
+A real memory root is no region (`call_root_not_region`): `( f vv2 )`, with
+`vv2` holding a view of a local `w`, does not meet the regions-only branch.
+This witness shows only that. It does not show that `f` changes `w` (its body
+uses slots 2 and 3 unbound). The positive `CallT` witness for route U is
+`HeldViewThruWitness.call_ok`. -/
 
 namespace A2.RegionThruWitness
 
@@ -70,7 +72,7 @@ theorem mutNames_vv : mutNames (sigCtx g) [0] = [] := by
 theorem call_region_ok :
     CallT P (sigCtx g) [] 0 [0] (callRes (sigCtx g) f [0]) (callPost (sigCtx g) f [0]) := by
   refine ⟨f, rfl, rfl, fun i hi => ?_, fun d hd => ?_,
-    CallDtorSafe.of_inp (by simp [f]) mutNames_vv, rfl, rfl, fun _ r hr => ?_⟩
+    CallDtorSafe.of_inp (by simp [f]) mutNames_vv, rfl, rfl, fun _ => Or.inl fun r hr => ?_⟩
   · have hi' : i = 0 := by simpa [f] using hi
     subst hi'
     refine ⟨_, sig_vv, rfl, rfl, fun h => ?_, fun h => ?_⟩
@@ -82,7 +84,9 @@ theorem call_region_ok :
     subst hr
     exact ⟨_, sig_region, rfl⟩
 
-/-! ### A real memory root is still refused -/
+/-! ### A real memory root does not meet the regions-only branch
+
+(Route U's `CallThruOK` is the other branch, `HeldViewThruWitness.call_ok`.) -/
 
 def Ew : Entry := ⟨.vec .int, .own, true, [], [], false, false, false, false⟩
 def Evv2 : Entry := ⟨vsi, .own, true, [], [⟨2, .view⟩], false, false, false, false⟩
@@ -94,11 +98,13 @@ def K : Ctx := setE (setE (sigCtx g) 2 Ew) 3 Evv2
 theorem callR_root : 2 ∈ callR K [3] := by
   simp [callR, argE, K, setE, upd, Evv2, roots, memDeps, Kind.isName, vsi]
 
-/-- **A view of memory is not handed to through-changing code**: `( f vv2 )`
-    has no typing, `w` being no region. -/
-theorem call_root_refused (E : Entry) (Γ' : Ctx) : ¬ CallT P K [] 0 [3] E Γ' := fun h => by
-  obtain ⟨_, _, _, _, _, _, _, _, hthr⟩ := h
-  obtain ⟨E', hE', hm⟩ := hthr f_thru 2 callR_root
+/-- **A view of memory is no region**: `( f vv2 )` does not type by the
+    regions-only branch of `CallT`'s `ThruFn` premise, `w` being no region.
+    Before route U this was its refusal. Whether route U's `CallThruOK`
+    branch types it is not shown here (see `HeldViewThruWitness.call_ok` for
+    a call it types). -/
+theorem call_root_not_region : ¬ ∀ r ∈ callR K [3], ∃ E, K r = some E ∧ E.mode = .region := fun h => by
+  obtain ⟨E', hE', hm⟩ := h 2 callR_root
   simp [K, setE, upd] at hE'
   subst hE'
   simp [Ew] at hm

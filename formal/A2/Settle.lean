@@ -150,18 +150,18 @@ theorem dtorCount_reap {m m1 : Mem} (hh : HeapOK m) (hr : ReapMem m m1) :
     `nid`, which neither changes, falls each round. -/
 theorem settle_total {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
-    (hi : Inv m Γ F s) (hc : Closed Γ s) : ∃ m' s', Settle P m s m' s' := by
+    (hi : Inv m Γ F s) (hc : Closed Γ s) (hz : HZ m Γ s) : ∃ m' s', Settle P m s m' s' := by
   suffices h : ∀ n, ∀ (Γ : Ctx) (s : Stmt) (m : Mem), dtorCount m.blk m.nid < n → StmtT P ξ Γ F s Δ →
-      MemCodes P m → s.codesOK P → Inv m Γ F s → Closed Γ s → ∃ m' s', Settle P m s m' s' from
-    h _ Γ s m (Nat.lt_succ_self _) ht hcd hsc hi hc
+      MemCodes P m → s.codesOK P → Inv m Γ F s → Closed Γ s → HZ m Γ s → ∃ m' s', Settle P m s m' s' from
+    h _ Γ s m (Nat.lt_succ_self _) ht hcd hsc hi hc hz
   intro n
   induction n with
   | zero => intro _ _ _ h; cases h
   | succ n ih =>
-    intro Γ s m hn ht hcd hsc hi hc
+    intro Γ s m hn ht hcd hsc hi hc hz
     by_cases ho : Orphan m
     · obtain ⟨m1, s1, hst, hrm⟩ := orphan_reaps ht hi.toMInv ho
-      obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
+      obtain ⟨Γ', ht', hi', hk, hz'⟩ := preservation hP ht hcd hi hst hz
       obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk.1 hsc).1 _ _ rfl
       have hnid : m1.nid = m.nid := by obtain ⟨_, _, _, _, _, _, rfl⟩ := hrm; rfl
       have hlt : dtorCount m1.sweepD.blk m1.sweepD.nid < n := by
@@ -169,7 +169,7 @@ theorem settle_total {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {
         have h2 := dtorCount_reap hi.heap hrm
         rw [Mem.sweepD_nid, hnid] at *
         omega
-      obtain ⟨m', s', hse⟩ := ih Γ' s1 m1.sweepD hlt ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk)
+      obtain ⟨m', s', hse⟩ := ih Γ' s1 m1.sweepD hlt ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk) hz'.sweepD
       exact ⟨m', s', Settle.reap hst hrm hse⟩
     · exact ⟨m, s, Settle.done ho⟩
 
@@ -178,11 +178,11 @@ theorem settle_total {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {
     it. -/
 theorem steps_step {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {Γ : Ctx} {F : List Var} {s : Stmt}
     {Δ : Ctx} (ht : StmtT P ξ Γ F s Δ) {m : Mem} (hcd : MemCodes P m) (hsc : s.codesOK P)
-    (hi : Inv m Γ F s) (hc : Closed Γ s) {m1 : Mem} {s1 : Stmt} (hst : Step P m s (.ok m1 s1)) :
+    (hi : Inv m Γ F s) (hc : Closed Γ s) (hz : HZ m Γ s) {m1 : Mem} {s1 : Stmt} (hst : Step P m s (.ok m1 s1)) :
     ∃ m' s', Steps P m s (.ok m' s') ∧ Settle P m1.sweepD s1 m' s' := by
-  obtain ⟨Γ', ht', hi', hk⟩ := preservation hP ht hcd hi hst
+  obtain ⟨Γ', ht', hi', hk, hz'⟩ := preservation hP ht hcd hi hst hz
   obtain ⟨hcd', hsc'⟩ := (codes_step hPc hst hcd hcd.blk.1 hsc).1 _ _ rfl
-  obtain ⟨m', s', hse⟩ := settle_total hP hPc ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk)
+  obtain ⟨m', s', hse⟩ := settle_total hP hPc ht' hcd'.sweepD hsc' hi'.sweepD (hc.step hk) hz'.sweepD
   exact ⟨m', s', Steps.step hst hse Steps.refl, hse⟩
 
 /-- **A reached configuration that is not finished steps, and not by a
@@ -193,8 +193,8 @@ theorem progress_no_reap {P : Prog} (hP : ProgOK P) (hPc : ProgCodes P) {s : Stm
     (ht : StmtT P .none (fun _ => none) [] s Δ) (hs : s.src = true) (hsc : s.codesOK P) {nv : Nat}
     (hv : ∀ v ∈ s.vars, v < nv) {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem nv) s (.ok m' s')) :
     s' = .skip ∨ Blocked m' s' ∨ ∃ r, Step P m' s' r ∧ ∀ m1, ¬ ReapMem m' m1 := by
-  obtain ⟨Γ', ht', hi', _, hcd', _⟩ :=
-    reach_ok hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) hr
+  obtain ⟨Γ', ht', hi', _, hcd', _, _⟩ :=
+    reach_ok hP hPc ht (codes_empty P nv) hsc (inv_empty hs hv) (closed_empty s) (HZ.empty hs) hr
   have hno : ¬ Orphan m' := no_orphan hr
   rcases progress' hP ht' hcd' hi' with h | h | ⟨r, hr'⟩
   · exact Or.inl h

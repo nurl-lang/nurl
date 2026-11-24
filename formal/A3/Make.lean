@@ -360,7 +360,7 @@ theorem make_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : ProgCod
     match ps, hl, ha with
     | [a'], _, ha' => simp at ha'; rw [ha']
   obtain ⟨hto, _⟩ := hc.ok 0 _ a hth ha
-  obtain ⟨Γ, F, Δ, ht, hi, hcd, _, hcl⟩ := hto
+  obtain ⟨Γ, F, Δ, ht, hi, hcd, _, hcl, _⟩ := hto
   -- the view is the configuration's store
   have hall : ∀ j, union a (payPart C.blk) j = C.alloc j := by
     intro j

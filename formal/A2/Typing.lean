@@ -2054,7 +2054,8 @@ def Stmt.calls : Stmt → List Nat
   | _ => []
 
 /-- A function that changes elements through a borrow, or calls one that
-    does (Agora #295). A call into one passes no argument that holds views
+    does (Agora #295). A call into one passes views only of regions, or (route U,
+    `CallThruOK`) of real memory it changes only inside its elements
     (`CallT`): inside it, every borrow's memory roots are the callee's own
     or a parameter's, which is what keeps a change through a borrow sound
     when the body is lifted into its caller's frame (`Rename`). -/
@@ -2073,8 +2074,8 @@ theorem ThruFn.of_body {P : Prog} {f : Nat} {fn : Fn} (hf : P[f]? = some fn) :
 
 /-- AGORA-937 (turn-on 2): a statement that calls a through-changing
     function is through-changing (`ThruFn.call`, for a function's body), so
-    a call that runs it was handed no argument holding views
-    (`CallH.thru`), and the call's regions stand for nothing
+    a call that runs it by the regions-only branch was handed no argument
+    holding views (`CallH.thru`), and the call's regions stand for nothing
     (`CallH.σ_nil_of_thru`). -/
 theorem thru_call {P : Prog} {s : Stmt} {g : Nat} (hg : g ∈ s.calls) (ht : ThruFn P g) : s.Thru P :=
   .inr ⟨g, hg, ht⟩
@@ -2138,14 +2139,17 @@ end Stmt.Thru
       (a name would anchor it, which would freeze it), in what it holds (not
       on its path), and none is `w`; a lent
       parameter it reaches is a `Vec` (its view is then a held anchor,
-      `HeldAnch`); no live binding after the call is ended by
-      a change inside `w`'s elements (a binding that is, `s2`, is ended
-      before the call by weakening, as nurlc ends it); no destructor reads
-      inside them; `w` is not lent out (`F`), is a live owned `Vec` whose
-      elements hold no views, and no closure handed to the call changes it;
-      and every closure-typed binding of the frame is live and changes `w` by
-      no name (the store then holds no package capturing `w` but read-only,
-      `HeldCapsInp`).
+      `HeldAnch`).
+    - Before the call: no live binding of the context is ended by a change
+      inside `w`'s elements (a binding that is, `s2`, is ended before the
+      call by weakening, as nurlc ends it), and no armed owner reads inside
+      them. An `inout` parameter holds no views, so the call adds no
+      dependency: what is live after it was live before, and depended on
+      what it did then (`callPost_base`).
+    - After the call: `w` is not lent out (`F`), and it is a live owned
+      `Vec` whose elements hold no views.
+    - What a closure may change by name is not part of this premise: the
+      frame-relative capture clause keeps it (`HeldZ`, `callZ`).
     - No argument is a closure: so a call through a package (whose receiver
       is one) passes views of a region only, as before route U. Route U for
       closure arguments is later work; A2 then types fewer such calls than
@@ -2160,21 +2164,22 @@ def CallThruOK (P : Prog) (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) 
       ∀ j (hj : j < fn.params.length), j ≠ i → fn.params[j].2.holdsView = true →
         (argE Γ (args.getD j 0)).ty ≠ .int →
         ∀ e' ∈ memDeps (argE Γ (args.getD j 0)).held, e'.root ≠ e.root) ∧
+  -- (AGORA-937 B4: an `inout` parameter holds no view, so the call adds no
+  -- dependency to what it leaves: what is live after it was live before, with
+  -- what it depended on)
+  (∀ (i : Nat) (b : Eff) (t : Ty), fn.params[i]? = some (PMode.inout b, t) → t.holdsView = false) ∧
   ∀ w ∈ callR Γ args,
     w ∉ args ∧
     (∀ a ∈ args, ∀ d ∈ (argE Γ a).vdeps, d.root = w → d.kind = .view ∨ d.kind = .self) ∧
     (∀ a ∈ args, ∀ d ∈ (argE Γ a).path, d.root ≠ w) ∧
     (∀ i (h : i < fn.params.length), fn.params[i].1 = .inp →
       w ∈ roots (memDeps (argE Γ (args.getD i 0)).held) → ∃ t, fn.params[i].2 = .vec t) ∧
-    (∀ y E, callPost Γ fn args y = some E → E.live = true → hits .dropIn false w E = false) ∧
-    (∀ y E, callPost Γ fn args y = some E → E.dtor = true → E.mode.ownSlot = true →
+    (∀ y E, Γ y = some E → E.live = true → hits .dropIn false w E = false) ∧
+    (∀ y E, Γ y = some E → E.dtor = true → E.mode.ownSlot = true →
       hitsMem .dropIn false w E = false) ∧
     w ∉ F ∧
     (∃ Er t, callPost Γ fn args w = some Er ∧ Er.live = true ∧ Er.mode = .own ∧
-      Er.ty = .vec t ∧ t.holdsView = false) ∧
-    w ∉ roots (mutNames Γ args) ∧
-    (∀ v E, Γ v = some E → E.ty.hasFn = true →
-      E.live = true ∧ ∀ d ∈ E.held, d.root = w → d.kind.bound = .none)
+      Er.ty = .vec t ∧ t.holdsView = false)
 
 /-- A call, checked against the callee's summary.  Each argument is live
     and of its parameter's type; one that moves or may change is not frozen
@@ -2208,7 +2213,10 @@ def CallT (P : Prog) (Γ : Ctx) (F : List Var) (f : Nat) (args : List Var) (E : 
     -- the arguments hold views of is at most a region of the caller's own
     -- signature (AGORA-937), which stands for what the caller's caller
     -- passed, and that is nothing, as this very premise says of that call
-    (ThruFn P f → ∀ r ∈ callR Γ args, ∃ E, Γ r = some E ∧ E.mode = .region)
+    -- (AGORA-937, route U: or it passes views of real memory, changed only
+    -- inside its elements, `CallThruOK`)
+    (ThruFn P f → (∀ r ∈ callR Γ args, ∃ E, Γ r = some E ∧ E.mode = .region) ∨
+      CallThruOK P Γ F fn args)
 
 /-- AGORA-937: a call whose arguments hold no views meets `CallT`'s `ThruFn`
     premise, as before regions. -/

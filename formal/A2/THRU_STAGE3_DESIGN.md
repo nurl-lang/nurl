@@ -988,21 +988,6 @@ parameter's type a `Vec` of views.
 
 ## B4, the turn-on (in progress, branch `wip/t937-b4`)
 
-**On main since the groundwork PR (no rule change):**
-- `CallThruOK` is defined in Typing.lean, but it is not yet a premise of `CallT`.
-- `zN` leaves out `thruW`, which is empty for every call typed today: a body that changes through a borrow is passed no views (`CallH.thru`).
-- `StmtT.keepKV`.
-- `CallH.thruReady` (given `CallThruOK`).
-- `CallH.held_anch` (given `CallThruOK` and a root in `callR`).
-
-**Only on the WIP branch:**
-- `CallT`'s second branch;
-- `CallH.thru`'s disjunction;
-- `StmtT.rbind` / `WrapCond` on `AnchoredS`;
-- the closure restriction, and the witnesses.
-
-Those land together with the frame-relative clause below.
-
 **Done on the branch:**
 - **The call rule.** `CallThruOK` (Typing.lean) is the second branch of `CallT`'s `ThruFn` premise: the call passes views of real memory `w` that the callee changes only inside its elements.
 - **No exit kill.** Weakening ends a caller binding such as `s2`, a view inside `w`'s elements, before the call (`EntryWeaker.live`). A dead binding is never read again, so A2 accepts what nurlc does, and `callPost` is unchanged.
@@ -1140,3 +1125,286 @@ Neither candidate is cheap. Choose by which consumers each serves:
 - (ii) serves the lift only, and still needs the dead-closure clause at the top level.
 
 So **(i) `CapsExcept` is the choice**, and (ii) is dropped.
+
+**Refined: `CapsLive` (supersedes `CapsExcept`'s fixed `D`).** The set left out is simply the dead bindings:
+
+    CapsLive m Γ w := ∀ v E o V, Γ v = some E → E.live → m.st v = some ⟨o, some V⟩ →
+      ValCapsInp V w ∧ (every node a view or handle inside V points at is ValCapsInp · w)
+
+plus blocks, which are free. The reasoning:
+- **Weakening keeps it.** Weakening can only end bindings, and it does not touch the store.
+- **The call can establish it from typing.** `MInv.held` (`NamesIn`) bounds a live value's package captures by its names, and what a live view reaches is named by its holder. So `CapsLive m Γ w` follows from "no LIVE entry holds a mutating name on `w`".
+  - That clause replaces `CallThruOK`'s "closure-typed bindings live".
+  - Unlike the old clause, it lifts: the outer frames' live entries depend only on bindings below the base.
+- **The consumer** (`CapInout`) calls a package in slot `c` of a `callc`, and its typing makes `c` live (`callT_recv_live`). So `Step.held_not_killVars` takes the statement's typing.
+
+What preservation needs is one typed read lemma: `RhsT` reads only live bindings' slots and the nodes their views and handles point at. Then come the `Preservation` sites, as for B2's `heldCaps`. This is the remaining work.
+
+**Proved (A2/CapsLive.lean):** `MInv.liveCaps`. Where no live binding holds a mutating name on `w` (`NoMutLive`), no live slot holds a package capturing `w` but read-only. It follows from `NamesIn` (`MInv.held`) and `PkgsOK`, whose `inout` captures have a bound.
+- What a borrowed `Vec` reaches is named too (`HrefAt` carries `NamesIn` of the node).
+- A slice's elements hold no views (`Ty.ok`), so no closure with names either.
+
+**Next:**
+1. `Inv.liveCaps` (the field): `∀ w` held anchor root outside `F`, every live slot and every node its handles reach is `ValCapsInp · w`. It replaces `HeldCapsInp`. Weakening keeps it, since it only ends bindings.
+2. `RhsT.liveCaps`: a typed right-hand side evaluated under it yields a `ValCapsInp` value, and leaves the store under it. It reads only live bindings and what they reach.
+3. Its `Preservation` sites; `Step.held_not_killVars` from the typing (the called `c` is live); then the two scaffolds.
+
+*Probe (2026-11-24): `RhsT.vars_live`, "every variable a typed rhs reads is live".* A generic tactic closes every `RhsT` case but nine: `at`, `sat`, `remove`, `expr`, `atomic`, `chanSend`, `lockRestore`, `pack` (captures, live by `CapsOK`) and `pair` (an intermediate context). The index expressions read integers, which need no clause. So the value lemma should go case by case, as `EvalR.capsInp` does, and take liveness from each `RhsT` premise only where a value that may hold packages is read.
+
+*Progress (2026-11-24 late):* `LiveCaps` is defined. `RhsT.liveCapsVal` proves the value is `ValCapsInp` for every case that reads a live slot or a block. Eighteen cases are left:
+- `at`, `sat`, `view`, `borrow`: the targets;
+- `pop`, `remove`: children;
+- `glob`, `rwRead`, `rwTry*`, `chanRecv`: leaves and payloads;
+- `pair`, `inl`, `inr`, `pack`, and `arcNew` / `lockNew` / `cellNew`: recursive.
+
+The recursive ones need the statement strengthened to "the value is `ValCapsInp`, and `LiveCaps m1 Γ1 w` holds after". A component's evaluation changes the store (a move empties its slot), and the next component reads in `Γ1`, as `EvalR.capsInp` does with `SlotsCaps`.
+
+*Plan for the joint lemma `RhsT.liveCaps`:* the value is `ValCapsInp`, and `LiveCaps m1 Γ1 w` holds.
+- **The store side.** `EvalR` changes only the read variable's slot: emptied (`moveOwn`, `takel`/`taker`), its node shrunk (`pop`, `remove`), or a fresh empty node (`take`). Each new tree's subtrees are the old one's, so both the values and the slot-located targets stay `ValCapsInp`.
+- **The block side.** Block changes (`chanSend`/`Recv`, `lock*`) leave the slots alone, and nodes in blocks are clean by `MInv`. So `LiveCaps` speaks of slot-located targets only.
+- **The context side.** It needs `RhsT`'s output to only end bindings, a `LiveLe Γ Γ1` for `RhsT`. Here `kill` is `LiveLe.kill`, and `setE … { live := false }` ends one.
+
+*Correction (integration, 2026-11-24): `LiveCaps`'s target clauses must cover nested handles and views.*
+- `lendOf` of a struct yields `pair (href c1) (href c2)`, and a later `fst` lifts the inner handle into a binding of its own. So the clause speaks of every `Sub (.href c) V` and `Sub (.view d o l) V`, not only the top.
+- At the call this needs nested inversion lemmas:
+  - `ValOK` for borrows: its `pair` / `pkg` / `dtor` constructors carry the handle's `HrefAt`, whose names are among `H` or `envDeps cs H`.
+  - `ViewsOK` with `ViewIn` for owners, with "a slice inside a well-formed type holds no views".
+- `LiveCaps.set`'s premise becomes "every nested target of the new value is clean". For a shrunk node it follows from the old node's clause.
+
+Integration state (branch wip/t937-b4-int, 8158047b7):
+- `HeldCapsInp` concludes `LiveCaps`.
+- Ctx, Sweep, SweepD, CapsStore and CapClause are done. CapClause uses `Stmt.headCallc`, `CapInoutH` and `Step.killVars_subH`, and `held_not_killVars` takes the called slot live.
+- Preservation has 50 errors, at the `heldCaps_step` callers and the set/remove/frozenIn/catchIn sites.
+
+*Open sub-problem (nested targets at the call).*
+- **Handles:** fine. `ValOK.href_sub`: a nested `href` carries `HrefAt` with names among `H` (`envDeps cs H ⊆ H`), and owned values hold no handle (`WFv`).
+- **Views:** the target's elements must hold no closure with names, so the view's element type must hold no views. For a top-level view the binding's `Ty.ok` gives it. For a view nested in a package's environment, `ValOK.pkg` does not carry `te.ok`.
+- **Candidates:**
+  - an `MInv`-level fact "every view in memory has an element type that holds no views", made where views are made, from typed bindings;
+  - `te.ok` from `PkgsOK` or `MemCodes`.
+
+Next: check whether either already exists.
+
+*Integration progress (2026-11-25):*
+- **CapsLive.lean** also has `RhsT.liveCapsSet`, the combined `x := r`, and `LiveCaps.of_change` / `of_changeR`, the clause across slot changes. `of_changeR` asks two things:
+  - a live changed value is clean, with no handle;
+  - each node in a changed slot is clean, or is what an old node at the same handle became, clean if that one was.
+
+  An edit's owner may be dead, so its whole tree need not be clean.
+- **Preservation:** `letv`, `letd` and `assign` are done (42 errors left).
+- **Next:** `Repl.nodesBack`, the node correspondence across a `Repl`, from `Repl.capsInp`. Then the edit, push, insert and `takeB` sites through `of_changeR`; then `unpair`, `reap`, `free`, the scope exits, the frames, and `frozenIn` / `catchIn` (`hlive`).
+
+**Integration, 2026-11-25 (wip/t937-b4-int).** The whole tree builds on `LiveCaps`. Proved:
+- the store and value lemmas (`CapsLive.lean`: `liveCapsSet`, `repl` / `editNode(H)`, `unpair`, `hand`, `panic_st`, `of_shrink`);
+- every leaf step in Preservation;
+- the call frame (`CallH.liveCaps`), the closure frames and the hand-overs;
+- the catch frame, which now carries its end's clause (`StmtT.catchR`'s new premise).
+
+Two scaffolds are left: `Inv.rbindIn` (the spine) and Rename's lifted `CallThruOK`.
+
+**Finding: the frame exclusion (`d.root ∉ F`) cannot simply go.** The current branch drops it, so that `frozen` and `catchR` keep the clause from their inner step. With it gone, `Inv.rbindIn` must give the clause at a frozen anchor of the callee's borrowed parameter, and that is false. A counterexample:
+
+- the caller holds a live closure `cl` that captures `r` inout;
+- it calls `f(vv)` where `vv` views `r`, and `r` is frozen for the call.
+
+The typing allows both live together: creating `cl` kills no viewer of `r`; the conflict is settled when `cl` runs. In `f`, `cl` is still live in the frame's context, so `LiveCaps r` fails. The frame exclusion is what makes this case vacuous.
+
+**With the exclusion kept (wip/t937-b4-capskeep)**, `frozenIn` must carry the clause for the roots it freezes (`z' \ F`) through the inner step. Leaf steps do keep it: a frozen root is captured inout by no package (`CapsOK`), and `liveCapsVal` takes `w ∈ F`. Two places break it:
+
+- **`catchP`:** the frame's end restores the start's store and context `Δ`. If the body killed a binding that captured `w` before the catch started, `Δ` revives it.
+- **The catch frame's start:** it knows the clause only at its own frame, outside its `F`, which holds every older binding.
+
+**What would close it:**
+- either a frame-relative clause, over what the frame can reach (above), so a caller's unreachable `cl` does not count;
+- or two catch-frame facts:
+  - the body kills no binding older than the frame (every older binding is frozen there, and depends on frozen roots only), so `Δ`'s live bindings are live now;
+  - its slots are the frame start's (`Frz`, `hsteq`).
+
+  Then `catchP` keeps the clause for every root, and `frozenIn` takes it from a `CapsKeep` conjunct of `preserve`, as on wip/t937-b4-capskeep. This is the smaller step: one new `StmtT.catchR` fact ("no older binding dies"), kept by `catchIn` through a lemma that a step kills only bindings depending on an unfrozen root.
+
+**Decision (owner, 2026-11-25): the frame-relative clause.** Plan:
+
+*The clause.* For a borrowed parameter `p` with held anchor `w`: every live binding `v ≥ p` (the frame's later parameters, its body, the frames it opens) holds a value that meets `LiveGood m w`, and so does every live `inout` argument of `p`'s frame. A caller binding below the frame is not asked about, so the counterexample above (the caller's live `cl`) is out of scope. The clause needs neither the frame exclusion (`∉ F`) nor the spine exclusion: a running `rbind`'s parameter is asked about too, so `Inv.rbindIn` is the identity on it.
+
+*Why `≥ p` suffices.*
+- **The frame's earlier parameters** (`base ≤ v < p`): at a route-U call they hold no package (`CallThruOK` takes no closure argument). At an ordinary call, an argument that a package could make dirty for `w` holds a mutating name on `w` (`MInv.held`, `NamesIn`). Then `w` is a root of `mutNames`, and `NamesFree` forbids an argument viewing `w` with another bound. So no parameter is both.
+- **The receiver of a call through a package** (`Stmt.headCallc`, what `CapInoutH` reads) is a body binding, so `≥ p`; or it is an `inout` argument, which is in the clause.
+
+*Obligations.*
+1. Define it (`FrameCaps m Γ p A w`, where `A` is the frame's `inout` arguments). The frame of `p` must be readable from the `Inv`: give `CallStmt`'s `frozen` frame the `inout` arguments, or carry `A` in the running `rbind`.
+2. **The call** establishes it for each new parameter:
+   - its slots are the arguments' values or what they lend (`BindParams.src`);
+   - at a changed root `w`, `CallThruOK`'s `NoMutLive` with `MInv.liveCapsAll` gives it for the `inout` arguments;
+   - at a frozen root, the `NamesFree` argument above.
+3. **Each step** keeps it:
+   - a fresh binding (`≥ m.nv ≥ p`) is given a value read from bindings the frame reaches, or a lent part of one: `liveCapsSet` restricted to the reach;
+   - a read below `p` that is not an `inout` argument reaches a frozen view or a captured name, and by `noPkg` neither holds a package that captures by name.
+4. **`catchP`**: the frame's end restores the start's slots and `Δ`, inside the catch frame. A binding of `Δ` at or above `p` was created inside `p`'s frame, under the clause, so it met it then. The catch frame carries its end's clause, as it does now (proved in `recCase`).
+5. **The wrappers** (`frozen`, `catchR`) keep it from their inner step. It does not depend on `F`.
+
+`CallH.liveCaps`, `LiveCaps.hand`, `editNode`, `unpair` and the rest of `CapsLive.lean` carry over once restricted to `v ≥ p ∨ v ∈ A`; their proofs read one binding at a time.
+
+*Refinement: the frame is `F`.* `callIn`'s runtime `frozen z` is every caller variable but the `inout` arguments (`(List.range base).filter (∉ inoutArgs)`). So "the bindings the frame reaches" is "the bindings outside `F`". The clause becomes `LiveCaps` restricted to `v ∉ F`:
+
+`FCaps m Γ F w := ∀ v E o V, Γ v = some E → E.live → v ∉ F → m.st v = some ⟨o, some V⟩ → LiveGood m w V`
+
+- **No root exclusion.** The counterexample's `cl` is a caller binding, so it is in `F` inside the frame.
+- **The spine:** a running `rbind`'s parameter is asked about too, at the `F` its frame runs under: `F ++ frozenAbove s p`, the runtime lists of the `frozen` wrappers on the spine above it.
+- **`Inv.rbindIn`** moves to the typing's `F ++ z'`. The runtime list `z` contains `z'` and the changed roots, whose slots hold no package (data `Vec`s, `noPkg`). So the clause over `v ∉ F ++ z` gives it over `v ∉ F ++ z'`.
+- **`frozenIn` and `catchIn`** keep it as follows:
+  - a binding in the frame the wrapper adds is frozen through the inner step (`Frz`: its slot is unchanged), and is not revived;
+  - outside that frame, the inner clause gives it.
+- **The call** establishes it for its parameters' anchors over the parameters and the `inout` arguments: the arguments are clean by `NamesFree` at a frozen root, and by `CallThruOK`'s `NoMutLive` at a changed root.
+- **`catchP`:** the catch frame's `F` is every older binding, so the restored `Δ` is asked about only at the frame's own bindings.
+
+**Second look at the refinement (2026-11-25): the domain must be the anchor owner's frame, not the current `F`.**
+
+A clause over `v ∉ F` with the *current* `F` shrinks as the frames nest. Inside an inner call `g`, an outer parameter `q`'s clause loses `q`'s own frame's bindings, which are frozen in `g`. After `g` they are asked for again, and a `catchP` inside `g` may have revived one, restoring a snapshot that no clause covered. This is the same wall as before.
+
+The domain must be fixed per anchor owner `p`: `{v ∉ z_p}`, where `z_p` is the runtime frozen list of `p`'s own frame. That set is every binding from `p`'s frame's base up, and its `inout` arguments.
+- It is the same at every depth, so a catch frame's snapshot taken deep inside is covered, and the catch frame's carried clause, proved in `recCase` from the `Inv` at hand, covers it.
+- It excludes the counterexample's `cl`, which is in `z_p`.
+
+What `Inv` lacks is `z_p` for a parameter outside the current spine. Options, in order of preference:
+1. **Recover `z_p` from the context.** A borrowed parameter's entry is `callPe`: `path = derive a .self` on its argument `a`. Check whether `Inv` can keep, per running frame, a ghost map from each `rbind` parameter to its frame's list. The candidate is a new `Inv` field, `frames : ∀ p rootb, ∃ z, …`, set by the call and kept by every step: frozen lists never change.
+2. **Thread the stack.** `Inv` at an inner level takes the enclosing frames' lists, as the wrappers peel them (`Inv.frozenIn` pushes `z`): `Inv m Γ F Z s`, where `Z : Var → List Var` gives each parameter's frame list. Every `Inv` construction site changes (large, mechanical).
+3. Carry the frame list in the `rbind` statement: `rbind p z s`. This is a syntax change across A2/A3 (largest).
+
+Whichever is chosen, the obligations above stand, with `v ∉ F` read as `v ∉ z_p`. Next session: start with option 1's feasibility.
+
+**Option 1 checked (2026-11-25): an existential frame list is not enough.** An `Inv` field `∃ Z ⊆ F ++ s.frozenAt p, FCaps m Γ (∉ Z) d.root` is kept by the leaf steps, and `catchP` can restore the creation-time `Z`.
+
+But `catchIn` must show the outer `Z` covers the post-state. A binding older than the catch frame lies in the catch's `F` and may be revived there. It was clean at the frame's start only for the `Z` chosen then. Nothing ties that choice to the `Z` chosen now.
+
+So the list must be **canonical**: the runtime frozen lists of the frames above `p`, concatenated. That is option 2. `Inv` takes the map `Z : Var → List Var` of the outer frames' parameters, `Inv m Γ F Z s`:
+- `preserve` keeps `Z` for the old parameters;
+- `Inv.frozenIn` and `Inv.rbindIn` extend it;
+- a catch frame's carried clause is stated at the `Z` of its start, which is the `Z` then, because `Z` is threaded.
+
+This is a signature change at every `Inv` use: mechanical, large, multi-session. It is the next step.
+
+**Option 2, the crux (2026-11-25).** Threading `Z` is mechanical, and it need not touch every `Inv` use: the clause can move out of `Inv` into a predicate `HeldZ m Γ Z s` that `preserve` takes and returns beside it. The hard part is the catch frame.
+
+At `catchP` the post-state is the snapshot `m0` with the typing's end context `Δ`. The clause there is needed at the threaded `Z`: `FCaps (m0.set x) Δ (Z p) d.root`. That is the clause at the frame's start, at the same `Z`, which the start's step (`recCase`) knew.
+
+It must be recorded where both sides meet:
+- **`StmtT.catchR`** has `Δ` but no `Z`. `Z` belongs to no typing.
+- **`HeldZ`** has `Z` but not `Δ`. Recording `∃ Γc, clause m0 Γc Z` leaves `Γc` unrelated to `Δ`.
+
+Ways out, to weigh next session:
+- **(a)** `catchR` carries the start's context in its syntax, `catchR x m0 Γ0 s`. It is a runtime-only form, so only its uses change. The typing then asks `Δ = setE Γ0 x _`, and `HeldZ` records `clause m0 Γ0 Z`.
+- **(b)** `HeldZ`'s record is the liveness of `Δ` against the snapshot (`LiveBack Γc Δ`). That needs the "body kills no older binding" fact again.
+- **(c)** Restrict A2: no `recover` frame inside a route-U frame. This is the coverage cut the owner did not choose.
+
+(a) looks smallest and sound. The rest of the plan (`HeldZ`, the frame's domain `∉ z_p`, the call's `NamesFree` / `NoMutLive` argument) stands.
+
+**(a) fails, and a memory-only clause makes it unnecessary (2026-11-25).** The `letrec` step knows no context, so a ghost `Γ0` in `catchR`'s syntax would be arbitrary.
+
+But inside a frame the clause can range over **every slot of the frame's domain**, live or dead:
+
+`FrameCaps m D w := ∀ v o V, v ∉ D → m.st v = some ⟨o, some V⟩ → LiveGood m w V`
+
+Live-only was needed only for the caller's dead closures that a through call killed, and those lie outside the domain (`D = z_p`, below the frame).
+- **At the call**, the domain is the fresh parameters, built from live arguments, and the `inout` arguments, which are live. Both are clean (`CallThruOK`'s `NoMutLive` with `liveCapsAll` at a changed root; `NamesFree` at a frozen one).
+- **In the frame**, no code names `w` (it is a caller variable, and no `inout` argument aliases a viewed root, `CallA`). So no package capturing it inout is made. Values come from the domain, or from reads outside it, which are frozen views or captured names: package-free (`noPkg`), and blocks hold no names (`blkCapsInp`). Killing a binding makes nothing dirty.
+- **`catchP`:** the clause is about memory only, so the catch frame's record needs no context. Keep `HeldZ`'s catch part as: for each running `catchR x m0 _`, for every borrowed parameter `p < m0.nv` of the current context, `FrameCaps (m0.set x) (Z p) d.root`. It is set at the frame's start from the clause then, and kept because old parameters' entries do not change (`KeepOut`, rootb entries) and `Z` is threaded. At `catchP` the post-state's store is the snapshot.
+
+**Pieces:**
+- `HeldZ m Γ Z s`:
+  - the clause for each borrowed parameter outside the spine, at `Z p`;
+  - the spine's parameters at `F ++ frozenAbove`;
+  - the catch part;
+  - "the running statement's variables avoid `Z p`", which gives the receivers of calls through a package (`CapInoutH`) inside the domain.
+- It is threaded beside `Inv` through `preserve` and the `…Case` results.
+- `CapsLive`'s lemmas get memory-only twins (simpler: no liveness).
+
+**`HeldZ`, settled (2026-11-25).** `Z p` is set when `p` is made, by the call (`Z p := z`, the new frame's runtime list), and then never changes. So the clause covers every borrowed parameter, the spine's too, and `Inv.rbindIn` needs nothing.
+
+`HeldZ m Γ Z s` is the conjunction of:
+1. **The clause**, for every rootb `p` and held anchor `d` of `p`: `FrameCaps m (Z p) d.root`.
+2. **The reach**: for a rootb `p ∉ s.spine`, every `v ∈ s.killVars` satisfies `v ∉ Z p`. `killVars` leaves out the frozen lists, and inside `p`'s `rbind` the statement is the callee's body. This gives `CapInoutH`'s receiver, and `frameCapsSet`'s `hD` (`r.vars ⊆ killVars`), inside the domain.
+3. **The catch frames** on the spine, `catchR x m0 _`: for every rootb `p < m0.nv` and held anchor `d`, `FrameCaps (m0.set x) (Z p) d.root`.
+
+`preserve` gets: `∀ Z, HeldZ m Γ Z s → ∃ Z', HeldZ m' Γ' Z' s' ∧ ∀ p E, Γ p = some E → E.mode = .rootb → Z' p = Z p`.
+
+Proved (wip/t937-b4-z, 9961c3798): `FrameCaps` (`set`, `remove`, `mono`, `reads`), `frameCapsSt`, `readsCapsVal` / `readsCapsTgt` / `readsSt_back`, and `frameCapsSet`.
+
+**Frame-clause library, proved (wip/t937-b4-z, f97d17c5d; `FrameClause.lean`, `CapsLive.lean`):**
+- `HeldZ`, with `CapInoutH.not_heldZ` and `Step.held_not_killVarsZ`;
+- `HeldZ.leaf`;
+- the memory-only change lemmas (`FrameCaps.of_changeR` / `repl` / `editNode` / `of_shrink` / `unpair`);
+- `frameCapsSet`;
+- `MInv.goodOf`: the clause one binding at a time;
+- `NamesFree.noMut`;
+- `BindParams.frameCaps`.
+
+**Finding:** the call needs no `NoMutLive` from `CallThruOK`. `NamesFree` alone keeps every argument free of a mutating name on a root another argument depends on with no bound (`NamesFree.noMut`). With `MInv.goodOf` this makes every argument clean for the new parameters' anchors, frozen and changed roots alike. `BindParams.frameCaps` then gives the clause on the new frame at `z`, and on old frames at `Z q`, since the arguments are outside `Z q` (`reach`). So `CallThruOK`'s "closure-typed bindings live" may not be needed by the clause at all. Check this when dropping the Rename scaffold.
+
+**Integration, next:**
+1. Remove `Inv.heldCaps`, which is false as it stands (`HeldCapsInp`), with `Inv.mk₀` / `ofLeaf`'s clause argument.
+2. `preserve` takes `HeldZ m Γ Z s` and returns `∃ Z', HeldZ m' Γ' Z' s'`, with `Z'` agreeing on old borrowed parameters. So do the `…Case` statements.
+3. The leaves via `HeldZ.leaf`, with `hc` from the FrameCaps lemmas. Their `hD` comes from `reach` (`r.vars ⊆ killVars`).
+4. The wrappers: `frozenIn` / `catchIn` / `rbindIn` keep `Z`; the anchor proofs use `held_not_killVarsZ`.
+5. `CallInv`: `Z' := Z[params ↦ z]`; `caps` via `BindParams.frameCaps`; `reach` for the callee body, whose variables are `≥ base` or `inout` arguments, outside `z`.
+6. `recCase` opens a catch frame: the `frames` entry from `caps` at that moment.
+7. `catchP`: the post store's slots are the snapshot's, so `caps` comes from `frames`.
+8. Soundness's initial state: an empty store, so every part holds.
+
+**Integration progress (wip/t937-b4-z), and a fix to `HeldZ.reach` (2026-11-25).** `Inv.heldCaps` is gone.
+
+`preserve` and the `…Case` results now take `HeldZ m Γ Z s` and return `∃ Z', HeldZ m' Γ' Z' s' ∧ ZKeep Γ Z Z'`. Threaded so far:
+- `pres_reap`, `sub`, `seq`, `letv`, `letd`, `withLock`, `assign`, `ite`, `while`, `push`;
+- `editB` / `editBV`, `withElem`, `takeB` / `takeBV`, `insert`, `free`, the scope exits.
+
+**The fix.** `reach` must speak of a running `rbind`'s parameter too: entering its body (`rbind p k ⟶ k`), the body's names must avoid `Z p`. State it at `s.under p`, the part of `s` under `p`'s `rbind` on the spine, or `s` itself when `p` is off the spine:
+
+`reach : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ (s.under p).killVars, v ∉ Z p`
+
+- At the call, `below p` is the callee's body. Its variables are `≥ base`, or `inout` arguments, all outside `z`.
+- A leaf has an empty spine, so `below p = s`.
+- A wrapper keeps `below` for parameters under it, and it is itself for the rest.
+
+**Status (2026-11-25, wip/t937-b4-z):** Preservation and CallInv build with `HeldZ`. `Inv.rbindIn`'s scaffold is gone with `Inv.heldCaps`, so the only scaffold left is Rename's.
+
+**Finding at `cloCase`: inout captures.** A call through a package `c` passes `c`'s captures as arguments, the `inout` ones by name. So the callee frame's statement names them (`callIn`'s killable names contain the `inout` arguments). If `c` is a closure argument of an outer call, its `inout` capture `q` is a caller binding, and so in the outer parameter's `Z p` (the runtime list). Then `reach` fails.
+
+**Fix: two changes.**
+1. **The frame list is the typing's, not the runtime's.** `Z p := F ++ z'`, the frame the callee body is typed under (`zN`). `Z` is ghost, and the call case has the typing, so it can choose. `z'` leaves out the roots of `mutNames` and the changed roots (`thruW`), which are data `Vec`s (`CapsOK`: `vec s` with `s.holdsView = false`, so no closure). Their slots are clean by their type.
+2. **`FrameCaps` also says that every package in the domain captures `inout` only names outside `D`:**
+   - at the call: a closure argument's `inout` captures are roots of `mutNames`, outside `F ++ z'`;
+   - in the frame: a new package captures `inout` only bindings outside the current `F` (`CapsOK`), and `F ⊇ Z p` there;
+   - packages copied in come from the domain.
+
+   At `cloCase`, the receiver `c` is in the domain, so its `inout` captures are outside `Z p`: `reach` holds.
+
+Both are local to `FrameCaps` / `CallH.heldZ`. `BindParams.frameCaps` gets the capture half from the arguments, and the leaf lemmas from `CapsOK` (`frameCapsSet`'s `pack` case).
+
+**Revision (2026-11-25): the `cloCase` fix, measured.** Three routes were tried or worked through. The facts behind them:
+- Caller bindings stay live in the callee's context (`Entry.clean` keeps `live`).
+- `reach` is established from the syntax of the statement: `killVars_callIn` gives only fresh names or `inout` arguments.
+- `killVars` contains `r.vars`. So every capture a closure literal makes, `inout` ones included, is a kill site, and `reach` puts it outside `Z p` with no context at all.
+
+1. **`reach` exempts owned data bindings (`v ∉ Z p ∨ OwnData Γ v`).** Tried; stashed as `t937b4 OwnData-in-reach attempt`.
+   - The library side builds. `FrameCaps.goodAt` gives `LiveGood` from `MInv.own_noFn`.
+   - Every `HeldZ` construction then has to carry `OwnData` from `Γ` to `Γ'`. Leaf steps get it from `CtxRel.ownData`, and `sub` from `Weaker.ownData`.
+   - It breaks at `seqOut` and the unwind cases. There a continuation's kill site may be a binder on the running spine, and `Keep` says nothing about spine binders. Dropped.
+2. **The frame list is the typing's (`Z p := F ++ zN`).** Not needed for closure literals (see the facts above). It would also weaken the call-time clause to "every binding outside the frozen list", which needs `NamesFree` over all caller bindings.
+3. **Chosen: `FrameCaps` also carries `InoutOff D V`.** Every package in a value outside `D` captures `inout` only names outside `D`.
+   - It needs no context.
+   - At `cloCase`, `c ∉ Z p` comes from `reach` (`c` is a kill site of `callc`), so `c`'s value gives its `inout` captures `∉ Z p`.
+   - Preservation:
+     - closure literals: captures are kill sites, so `reach` covers them;
+     - values copied from a binding: read names are kill sites, so they are outside `D` and already `InoutOff`;
+     - values reached through a handle: the same second clause as `LiveGood`, for nodes of owned trees;
+     - at a call, `BindParams` copies the arguments' values. The arguments sit outside the old frames' lists, and for the new frame the `inout` captures of a closure argument are roots of `mutNames`, which `Z'` must also leave out (with `x`).
+   - Open question: can a node of an owned tree (a `vec s`, `s.holdsView = false`) hold a package that captures `inout`? If `Ty.fn`'s `views` flag excludes this, the handle clause is vacuous for packages.
+
+**Open question answered.** A package that captures `inout` has the type `.fn ms .any`, because `q.Fits` allows by-name captures only under `any`. That type has `holdsView = true`. An owned tree's element type has `holdsView = false` (`CapsOK`, `vec s`), so by `WFv` no node reached through a handle is such a package, and the handle clause is vacuous for `InoutOff`.
+
+**B4 done (2026-11-25).** The route taken is neither `OwnData` nor a separate `InoutOff` field. It is `Watch`: a parameter's clause covers every name of its frame list as well as its held anchors' roots. `InoutOff (Z p) V` is `∀ w ∈ Z p, ValCapsInp V w`, so the existing `FrameCaps` lemmas carry it unchanged.
+- The call's list is `callZ`: the caller's bindings, but the `inout` arguments and the roots of `mutNames`.
+  - `NamesFree` and `MInv.goodArg` make every argument clean at such a name.
+  - A root of `mutNames` holds clean data (`MInv.goodMut`).
+- At `cloCase`, `c ∉ Z p` comes from `reach`, so `c`'s `inout` captures are outside every list.
+- `CallThruOK`'s kill clauses read the context before the call, and an `inout` parameter of a through-call holds no views. So the call adds no dependency (`callPost_base`), and the premise lifts where a call places its callee (`callThruOK_canon`).
+- Positive witness: `HeldViewThruWitness.call_ok`.

@@ -79,6 +79,26 @@ theorem sigCtx_spawn_mode {fn : Fn} (hpar : ∀ pt ∈ fn.params, pt.1 = .sink �
   · exact ⟨fun h => (by cases h), fun b h => (by cases h)⟩
   · exact ⟨resMode_ne' fn, resMode_inout fn⟩
 
+theorem wrapParams_catchFrames : ∀ (ps : List (PMode × Ty)) (base i : Nat) (s : Stmt),
+    (wrapParams ps base i s).catchFrames = s.catchFrames
+  | [], _, _, _ => rfl
+  | (.inp, _) :: ps, base, i, s => by simp [wrapParams, Stmt.catchFrames, wrapParams_catchFrames ps]
+  | (.sink, _) :: ps, base, i, s => by simp [wrapParams, Stmt.catchFrames, wrapParams_catchFrames ps]
+  | (.inout _, _) :: ps, base, i, s => by simp [wrapParams, wrapParams_catchFrames ps]
+
+/-- AGORA-937 B4: the new thread meets the frame clause: its context has no
+    borrowed parameter, and it runs no catch frame. -/
+theorem newThread_hz {fn : Fn} (hpar : ∀ pt ∈ fn.params, pt.1 = .sink ∧ pt.2.holdsView = false)
+    (hsrc : fn.body.src = true) (m : Mem) :
+    HZ m (sigCtx fn) (wrapParams fn.params 0 0 (.scope fn.params.length fn.body)) :=
+  ⟨fun _ => [],
+    { caps := fun _ _ hp hm => absurd hm (sigCtx_spawn_mode hpar hp).1
+      reach := fun _ _ hp hm => absurd hm (sigCtx_spawn_mode hpar hp).1
+      bound := fun _ _ hp hm => absurd hm (sigCtx_spawn_mode hpar hp).1
+      frames := fun _ _ _ h => by
+        rw [wrapParams_catchFrames] at h
+        simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc] at h }⟩
+
 /-- A context with no borrowed parameter pins nothing inside any call. -/
 theorem pinOK_noRootb {Γ : Ctx} (h : ∀ p E, Γ p = some E → E.mode ≠ .rootb) (s : Stmt) :
     PinOK Γ s := by
@@ -154,7 +174,7 @@ theorem newThread_typed {P : Prog} {fn : Fn} (hok : FnOK P fn)
     · subst hpn; simp [exitScope] at hp
     · rw [exitScope, upd_ne _ _ hpn] at hp
       exact (hq0.kill .replace false _) p E hp
-  refine ⟨_, wrap_typed (base := 0) (pe := fun _ => intE) hsc (fun _ d hd => by simp [intE] at hd)
+  refine ⟨_, wrap_typed (base := 0) (pe := fun _ => intE) hsc (fun _ h => h) (fun _ d hd => by simp [intE] at hd)
     (fun _ d hd => by simp [intE] at hd) hq (fun p E hp hd => absurd hd (by rw [(hfl' p E hp).1]; simp))
     (fun p E hp hd => absurd hd (by rw [(hfl' p E hp).2]; simp)) fn.params 0 (fun k p hk => ?_)⟩
   obtain ⟨h1, ht⟩ := hpar p (List.mem_of_getElem? hk)
@@ -303,7 +323,6 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
       · exact hvars v hv
     nvF := fun v hv => by cases hv
     anch := fun p E hp hm => absurd hm (hrb p E hp)
-    heldCaps := fun p E hp hm => absurd hm (hrb p E hp)
     spineNd := by
       rw [newThread_spine hsrc]
       refine List.nodup_append.mpr ⟨wrapSpine_nodup _ _ _,
@@ -369,6 +388,6 @@ theorem newThread_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Pr
   exact ⟨sigCtx fn, [], Δ, ht, newThread_inv hok hpar hres hlen hwf hnd hdisj hself hpk hpart hlt hsh hB hBv,
     memCodes_iff.mpr ⟨fun x o V hx => hcd V (List.mem_of_getElem? (spawnSt_val hx rfl).1), hBc⟩,
     wrapParams_codes (s := .scope fn.params.length fn.body) (hPc fn (List.mem_of_getElem? hf)) _ _ _,
-    newThread_closed hpar hsrc⟩
+    newThread_closed hpar hsrc, newThread_hz hpar hsrc _⟩
 
 end A3

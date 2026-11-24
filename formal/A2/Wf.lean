@@ -1627,11 +1627,19 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       exact ⟨d, hd, rfl⟩
     have hdv' : d ∈ E.vdeps := by simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte]; exact hd
     by_cases hb : d.kind.bound = .none
-    · have hF := hroots d hdv' hb
-      refine ⟨fun e => hpF (e ▸ hF), ?_⟩
-      obtain ⟨Er, hEr, hro⟩ := h p E hp hl (Or.inr hm) d.root hdv
-      obtain ⟨E', h', hm'⟩ := hk.keepF d.root hF Er hEr
-      exact ⟨E', h', by rw [hm']; exact hro⟩
+    · rcases hroots d hdv' hb with hF | _
+      · refine ⟨fun e => hpF (e ▸ hF), ?_⟩
+        obtain ⟨Er, hEr, hro⟩ := h p E hp hl (Or.inr hm) d.root hdv
+        obtain ⟨E', h', hm'⟩ := hk.keepF d.root hF Er hEr
+        exact ⟨E', h', by rw [hm']; exact hro⟩
+      · -- a held anchor's root is none of the body's killable names, so it
+        -- stays bound (`keepKV`), and is not `p`
+        rename_i hH
+        obtain ⟨_, hv, _⟩ := hH
+        refine ⟨fun e => hv (by rw [e]; exact List.mem_cons_self), ?_⟩
+        obtain ⟨Er, hEr, hro⟩ := h p E hp hl (Or.inr hm) d.root hdv
+        obtain ⟨E', h', hm'⟩ := hk.keepKV d.root (fun h' => hv (List.mem_cons_of_mem _ h')) Er hEr
+        exact ⟨E', h', by rw [hm']; exact hro⟩
     · exact hrr d hdv' hb
   | frozen _ _ ih => exact ih
   | @assign _ Γ Γ1 F x r Ex E hx _ hmodes hr _ hxd _ _ =>
