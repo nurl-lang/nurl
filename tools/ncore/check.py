@@ -2774,6 +2774,12 @@ class FnCheck:
                 continue
             if av.own == "O" and not av.loans:
                 continue
+            # (…nor the payload a call lent out of the place, `: String s (
+            # pay o )`: codegen keys an option owner by its payload only for
+            # a `??` cursor over it, and frees the old payload under a call's
+            # lend - a use after free under --no-borrowck, AGORA-1006)
+            if av.call and any(a[1][len(place[1]):] in (("#T0",), ("#F0",)) for a in av.alias):
+                continue
             # (a later reader the hand-over made a borrow of the first one:
             # replacing the first releases the value it was handed, which
             # codegen hands to no one - the borrow ends there, agora #387)
