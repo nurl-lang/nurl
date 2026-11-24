@@ -278,4 +278,19 @@ theorem HeldZ.restmt {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s s' : Stmt} (
 theorem Stmt.catchFrames_src {s : Stmt} (hs : s.src = true) : s.catchFrames = [] := by
   induction s <;> simp_all [Stmt.src, Stmt.catchFrames]
 
+
+/-- `HeldZ` at `a ; b` from `a`'s, where `b`'s names avoid the frame lists
+    off the spine. -/
+theorem HeldZ.seqOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {a b : Stmt} (hz : HeldZ m Γ Z a)
+    (hb : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ a.spine → ∀ v ∈ b.killVars, v ∉ Z p) :
+    HeldZ m Γ Z (.seq a b) where
+  caps := hz.caps
+  reach p E hp hm hps v hv := by
+    simp only [Stmt.killVars, List.mem_append] at hv
+    rcases hv with hv | hv
+    · exact hz.reach p E hp hm (by simpa [Stmt.spine] using hps) v hv
+    · exact hb p E hp hm (by simpa [Stmt.spine] using hps) v hv
+  bound := hz.bound
+  frames x m0 hx := hz.frames x m0 (by simpa [Stmt.catchFrames] using hx)
+
 end A2

@@ -2987,7 +2987,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       · exact hi.respine (by rw [src_spine hbsrc]; rfl) (fun v hv => by simp [Stmt.vars, hv])
           (catchOK_src hbsrc) (PinOK.of_spine_nil (src_spine hbsrc)) (DtorPinOK.of_spine_nil (src_spine hbsrc))
     | seqL hst' =>
-      obtain ⟨Γ', ht', hi', hnv, hk, hfz⟩ := iha ha hcd hi.seqIn hst'
+      obtain ⟨Γ', ht', hi', hnv, hk, hfz, Z', hz', hzk⟩ := iha ha hcd hi.seqIn hst' Z
+        (hz.restmt (fun p hp h => hp (by simpa [Stmt.spine] using h)) (fun v hv => by simp [Stmt.killVars, hv])
+          (fun c hc => by simpa [Stmt.catchFrames] using hc))
       refine ⟨Γ', StmtT.seq hbsrc ht' hb,
         { hi' with
           nvS := fun v hv => ?_
@@ -2997,7 +2999,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             -- none of `b`'s variables either
             obtain ⟨h0, hps0⟩ := hk.rootb_back hp hm hps
             exact (hi'.anch p _ hp hm hps).union ((hi.anch p _ h0 hm hps0).anti fun v hv => by
-              simp [Stmt.killVars, hv]) }, hnv, hk, hfz⟩
+              simp [Stmt.killVars, hv]) }, hnv, hk, hfz, Z', hz'.seqOut fun p E hp hm hps v hv => by
+          obtain ⟨h0, hps0⟩ := hk.rootb_back hp hm hps
+          rw [hzk p E h0 hm]
+          exact hz.reach p E h0 hm (by simpa [Stmt.spine] using hps0) v (by simp [Stmt.killVars, hv]), hzk⟩
       simp only [Stmt.vars, List.mem_append] at hv
       rcases hv with hv | hv
       · exact hi'.nvS v hv
