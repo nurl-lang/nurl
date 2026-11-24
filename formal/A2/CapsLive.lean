@@ -82,6 +82,106 @@ theorem TakeVal.st_of {m m1 : Mem} {y : Var} {v : Val} (ht : TakeVal m y v m1) (
     · left; simp [Mem.set, upd, hxy]
   | bor hv => exact Or.inl rfl
 
+theorem ValOK.href_sub {m : Mem} {τ : Ty} {V : Val} {P H : List Dep} (h : ValOK m τ V P H) {c : Nat}
+    (hs : Sub (.href c) V) : ∃ dep t H', HrefAt m dep c t H' ∧ ∀ d ∈ H', d ∈ H := by
+  induction h with
+  | href hex => cases hs; obtain ⟨dep, _, hh⟩ := hex; exact ⟨dep, _, _, hh, fun _ h => h⟩
+  | pair _ _ ih1 ih2 =>
+    cases hs with
+    | fst hs => exact ih1 hs
+    | snd hs => exact ih2 hs
+  | inl _ ih => cases hs with | inl hs => exact ih hs
+  | inr _ ih => cases hs with | inr hs => exact ih hs
+  | pkg _ _ ih =>
+    cases hs with
+    | pkg hs =>
+      obtain ⟨dep, t, H', hh, hsub⟩ := ih hs
+      exact ⟨dep, t, H', hh, fun d hd => (mem_envDeps.mp (hsub d hd)).1⟩
+  | dtor _ ih => exact ih hs
+  | _ => cases hs
+
+theorem WFv.href_sub_false {τ : Ty} {V : Val} (h : WFv τ V) {c : Nat} (hs : Sub (.href c) V) : False := by
+  induction h with
+  | node _ ih => cases hs with | child he hs => exact ih _ he hs
+  | pair _ _ ih1 ih2 =>
+    cases hs with
+    | fst hs => exact ih1 hs
+    | snd hs => exact ih2 hs
+  | inl _ ih => cases hs with | inl hs => exact ih hs
+  | inr _ ih => cases hs with | inr hs => exact ih hs
+  | dtor _ _ ih => exact ih hs
+  | _ => cases hs <;> simp_all
+
+theorem ValOK.href_inv {m : Mem} {τ : Ty} {c : Nat} {P H : List Dep} (h : ValOK m τ (.href c) P H) :
+    ∃ dep ∈ P, ∃ t, HrefAt m dep c t H := by
+  generalize hv : Val.href c = v at h
+  induction h with
+  | href hex => cases hv; obtain ⟨dep, hd, hh⟩ := hex; exact ⟨dep, hd, _, hh⟩
+  | dtor _ ih => exact ih hv
+  | _ => cases hv
+
+theorem ValOK.view_inv {m : Mem} {τ : Ty} {d o l : Nat} {P H : List Dep} (h : ValOK m τ (.view d o l) P H) :
+    ∃ dep ∈ P, ∃ s, ViewAt m dep d o l s ∧ τ.undtor = .slice s := by
+  generalize hv : Val.view d o l = v at h
+  induction h with
+  | view hex => cases hv; obtain ⟨dep, hd, hh⟩ := hex; exact ⟨dep, hd, _, hh, rfl⟩
+  | dtor _ ih =>
+    obtain ⟨dep, hd, s, hh, hu⟩ := ih hv
+    exact ⟨dep, hd, s, hh, by simpa [Ty.undtor] using hu⟩
+  | _ => cases hv
+
+theorem WFv.view_slice {τ : Ty} {d o l : Nat} (h : WFv τ (.view d o l)) : ∃ s, τ = .slice s := by
+  generalize hv : Val.view d o l = v at h
+  induction h with
+  | view => exact ⟨_, rfl⟩
+  | dtor hs _ ih =>
+    obtain ⟨s, rfl⟩ := ih hv
+    simp [Ty.isStruct] at hs
+  | _ => cases hv
+
+/-- A well-formed type whose undecorated form is a slice: its elements hold
+    no views. -/
+theorem Ty.ok_slice_noView {τ s : Ty} (h : τ.ok = true) (hu : τ.undtor = .slice s) : s.holdsView = false := by
+  induction τ with
+  | slice s' => simp [Ty.undtor] at hu; subst hu; simp [Ty.ok] at h; exact h.2
+  | dtor f t ih =>
+    simp [Ty.ok] at h
+    exact ih h.2 (by simpa [Ty.undtor] using hu)
+  | _ => simp [Ty.undtor] at hu
+
+
+/-- What a live view reaches holds no package that captures by name: the
+    view's element type holds no views (`Ty.ok`), so no closure with names. -/
+theorem MInv.viewTargetCaps {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {y : Var} {E : Entry} {o : Bool}
+    {d o' l : Nat} {n : Val} (hy : Γ y = some E) (hl : E.live = true)
+    (hs : m.st y = some ⟨o, some (.view d o' l)⟩) (hda : DataAt m d n) (w : Var) : ValCapsInp n w := by
+  obtain ⟨sl, hsl, hok, hown, howning, hbor⟩ := hM.slot y E hy
+  rw [hs] at hsl; cases hsl
+  have hvat : ∃ dep s, ViewAt m dep d o' l s ∧ s.holdsView = false := by
+    cases hos : E.mode.ownSlot
+    · obtain ⟨V', hV', hvok⟩ := hbor hos hl
+      cases hV'
+      obtain ⟨dep, _, s, hva, hu⟩ := hvok.view_inv
+      exact ⟨dep, s, hva, Ty.ok_slice_noView hok hu⟩
+    · obtain ⟨_, hwf, hvs⟩ := howning hos
+      obtain ⟨s, hτ⟩ := (hwf _ rfl).view_slice
+      obtain ⟨T, hT, hvo⟩ := hvs hl
+      cases hT
+      obtain ⟨d1, o1, l1, he, dep, _, hva⟩ := hvo s _ (by rw [hτ]; exact ViewIn.here)
+      cases he
+      exact ⟨dep, s, hva, Ty.ok_slice_noView hok (by rw [hτ]; rfl)⟩
+  obtain ⟨dep, s, ⟨c', es', _, hland, _, hwf⟩, hsv⟩ := hvat
+  have hfn : (Ty.vec s).hasFn = false := by
+    cases hf : s.hasFn
+    · simpa [Ty.hasFn] using hf
+    · exact absurd (hasFn_holdsView hf) (by rw [hsv]; simp)
+  have hnil := valCapsInp_of_names (hwf.names_nil_fn hfn) w
+  have hL : DataAt m d (.node s c' d es') := by
+    rcases hland.home with ⟨x', T', hx', hsL⟩ | ⟨k, bl, hk, hsb⟩
+    · exact Or.inl ⟨x', T', hx', hsL, _, _, _, rfl⟩
+    · exact Or.inr ⟨k, bl, hk, hsb, _, _, _, rfl⟩
+  rw [dataAt_unique hM.heap hda hL]; exact hnil
+
 theorem LiveCaps.val {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) {v : Var} {E : Entry}
     {o : Bool} {V : Val} (hv : Γ v = some E) (hl : E.live = true) (hs : m.st v = some ⟨o, some V⟩) :
     ValCapsInp V w := (h v E o V hv hl hs).1
@@ -117,16 +217,14 @@ theorem RhsT.liveCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : E
       obtain ⟨_, _, hv | ⟨hhr, hn'⟩⟩ := hv
       · exact ((h.val (by assumption) (by assumption) hv).child (Child.elem (List.getElem_mem hn))).lend
       · rcases hn' with ⟨x, t', hx, hs, hnd⟩ | ⟨k, bl, hk, hs, _⟩
-        · exact (((h _ _ _ _ (by assumption) (by assumption) hhr).2.1 _ rfl x t' _ hx hs hnd).child
+        · exact (((h _ _ _ _ (by assumption) (by assumption) hhr).2 _ (Sub.refl _) x t' _ hx hs hnd).child
             (Child.elem (List.getElem_mem hn))).lend
         · exact (((hM.rdCapsInp w hk).1.sub hs).child (Child.elem (List.getElem_mem hn))).lend
   case sat =>
     cases he with
     | sat hn hv _ _ _ hda =>
-      rcases hda with ⟨x, t', hx, hs, hnd⟩ | ⟨k, bl, hk, hs, _⟩
-      · exact (((h _ _ _ _ (by assumption) (by assumption) hv).2.2 _ _ _ rfl x t' _ hx hs hnd).child
-          (Child.elem (List.getElem_mem hn))).lend
-      · exact (((hM.rdCapsInp w hk).1.sub hs).child (Child.elem (List.getElem_mem hn))).lend
+      exact ((hM.viewTargetCaps (by assumption) (by assumption) hv hda w).child
+        (Child.elem (List.getElem_mem hn))).lend
   case pair y z Ey Ez Γa Γb Dy Dz hy hl hpa1 hz hl2 hpa2 _ =>
     cases he with
     | @pair _ _ v1 v2 m1' m2' h1 h2 =>
@@ -215,12 +313,13 @@ theorem RhsT.liveCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : E
 
 
 /-- Setting a slot to a value no part of which captures `w` but read-only,
-    and which is no handle or view, keeps the clause: the live values and the
-    targets in the other slots are as they were, and every node in the new
-    value is clean. -/
+    and whose handles reach clean nodes, keeps the clause: the live values
+    and the targets in the other slots are as they were, and every node in
+    the new value is clean. -/
 theorem LiveCaps.set {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) {y : Var} {o : Bool}
     {v : Option Val} (hv : ∀ V, v = some V → (∀ n, Sub n V → ValCapsInp n w) ∧
-      (∀ c, V ≠ .href c) ∧ (∀ d o' l, V ≠ .view d o' l)) :
+      (∀ c, Sub (.href c) V → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+        (∃ ty d es, n = .node ty c d es) → ValCapsInp n w)) :
     LiveCaps (m.set y ⟨o, v⟩) Γ w := by
   intro x E o1 V hx hl hs
   -- a target in the slots after the set: in `y`'s new value, or where it was
@@ -230,20 +329,22 @@ theorem LiveCaps.set {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) {y : V
     by_cases hxy : x' = y
     · subst hxy; simp at hx'; obtain ⟨_, rfl⟩ := hx'; exact Or.inr ((hv t rfl).1 n hsn)
     · simp [upd_ne _ _ hxy] at hx'; exact Or.inl hx'
+  have hcl : ∀ V', (∀ c, Sub (.href c) V' → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ ty d es, n = .node ty c d es) → ValCapsInp n w) →
+      ∀ c, Sub (.href c) V' → ∀ x t n, (m.set y ⟨o, v⟩).st x = some ⟨true, some t⟩ → Sub n t →
+        (∃ ty d es, n = .node ty c d es) → ValCapsInp n w := by
+    intro V' h2 c hc x' t n hx' hsn hnd
+    rcases htgt x' t n hx' hsn with hx'' | hn
+    · exact h2 c hc x' t n hx'' hsn hnd
+    · exact hn
   by_cases hxy : x = y
   · subst hxy
     simp at hs; obtain ⟨_, rfl⟩ := hs
-    obtain ⟨hsub, hnh, hnv⟩ := hv V rfl
-    exact ⟨hsub V (Sub.refl _), fun c hc => absurd hc (hnh c), fun d o' l hd => absurd hd (hnv d o' l)⟩
+    obtain ⟨hsub, hnh⟩ := hv V rfl
+    exact ⟨hsub V (Sub.refl _), hcl V hnh⟩
   · simp [upd_ne _ _ hxy] at hs
-    obtain ⟨h1, h2, h3⟩ := h x E o1 V hx hl hs
-    refine ⟨h1, fun c hc x' t n hx' hsn hnd => ?_, fun d o' l hd x' t n hx' hsn hnd => ?_⟩
-    · rcases htgt x' t n hx' hsn with hx'' | hn
-      · exact h2 c hc x' t n hx'' hsn hnd
-      · exact hn
-    · rcases htgt x' t n hx' hsn with hx'' | hn
-      · exact h3 d o' l hd x' t n hx'' hsn hnd
-      · exact hn
+    obtain ⟨h1, h2⟩ := h x E o1 V hx hl hs
+    exact ⟨h1, hcl V h2⟩
 
 theorem LiveCaps.set_none {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (y : Var) (o : Bool) :
     LiveCaps (m.set y ⟨o, none⟩) Γ w :=
@@ -301,9 +402,11 @@ theorem RhsT.liveCapsSt {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : En
       have hT := h.val hy hl hv
       refine LiveCaps.set h' (fun V e => ?_)
       cases e
-      refine ⟨hT.shrink (fun e he => List.mem_append_left _ he), fun c hc => ?_, fun d o l hd => ?_⟩
-      · cases hc
-      · cases hd
+      refine ⟨hT.shrink (fun e he => List.mem_append_left _ he), fun c hc => ?_⟩
+      -- a handle in the shrunk node was in the old one
+      cases hc with
+      | child he hs =>
+        exact (h _ _ _ _ hy hl hv).2 c (Sub.child (List.mem_append_left _ he) hs)
   case remove =>
     obtain hv : m.st _ = some ⟨true, some (.node _ _ _ _)⟩ := by assumption
     cases hr with
@@ -311,16 +414,16 @@ theorem RhsT.liveCapsSt {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : En
       have hT := h.val hy hl hv
       refine LiveCaps.set h' (fun V e => ?_)
       cases e
-      refine ⟨hT.shrink (fun e he => List.mem_of_mem_eraseIdx he), fun c hc => ?_, fun d o l hd => ?_⟩
-      · cases hc
-      · cases hd
+      refine ⟨hT.shrink (fun e he => List.mem_of_mem_eraseIdx he), fun c hc => ?_⟩
+      cases hc with
+      | child he hs =>
+        exact (h _ _ _ _ hy hl hv).2 c (Sub.child (List.mem_of_mem_eraseIdx he) hs)
   case take =>
     refine LiveCaps.set (h'.of_st rfl) (fun V e => ?_)
     cases e
-    refine ⟨fun n hn => ?_, fun c hc => ?_, fun d o l hd => ?_⟩
+    refine ⟨fun n hn => ?_, fun c hc => ?_⟩
     rotate_left
-    · cases hc
-    · cases hd
+    · cases hc with | child he _ => simp at he
     cases hn with
     | refl =>
       refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
@@ -334,43 +437,6 @@ theorem RhsT.liveCapsSt {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : En
     | exact (‹TakeVal _ _ _ _›.liveCaps h').of_st rfl
 
 
-theorem ValOK.href_inv {m : Mem} {τ : Ty} {c : Nat} {P H : List Dep} (h : ValOK m τ (.href c) P H) :
-    ∃ dep ∈ P, ∃ t, HrefAt m dep c t H := by
-  generalize hv : Val.href c = v at h
-  induction h with
-  | href hex => cases hv; obtain ⟨dep, hd, hh⟩ := hex; exact ⟨dep, hd, _, hh⟩
-  | dtor _ ih => exact ih hv
-  | _ => cases hv
-
-theorem ValOK.view_inv {m : Mem} {τ : Ty} {d o l : Nat} {P H : List Dep} (h : ValOK m τ (.view d o l) P H) :
-    ∃ dep ∈ P, ∃ s, ViewAt m dep d o l s ∧ τ.undtor = .slice s := by
-  generalize hv : Val.view d o l = v at h
-  induction h with
-  | view hex => cases hv; obtain ⟨dep, hd, hh⟩ := hex; exact ⟨dep, hd, _, hh, rfl⟩
-  | dtor _ ih =>
-    obtain ⟨dep, hd, s, hh, hu⟩ := ih hv
-    exact ⟨dep, hd, s, hh, by simpa [Ty.undtor] using hu⟩
-  | _ => cases hv
-
-theorem WFv.view_slice {τ : Ty} {d o l : Nat} (h : WFv τ (.view d o l)) : ∃ s, τ = .slice s := by
-  generalize hv : Val.view d o l = v at h
-  induction h with
-  | view => exact ⟨_, rfl⟩
-  | dtor hs _ ih =>
-    obtain ⟨s, rfl⟩ := ih hv
-    simp [Ty.isStruct] at hs
-  | _ => cases hv
-
-/-- A well-formed type whose undecorated form is a slice: its elements hold
-    no views. -/
-theorem Ty.ok_slice_noView {τ s : Ty} (h : τ.ok = true) (hu : τ.undtor = .slice s) : s.holdsView = false := by
-  induction τ with
-  | slice s' => simp [Ty.undtor] at hu; subst hu; simp [Ty.ok] at h; exact h.2
-  | dtor f t ih =>
-    simp [Ty.ok] at h
-    exact ih h.2 (by simpa [Ty.undtor] using hu)
-  | _ => simp [Ty.undtor] at hu
-
 /-- **At the call: the clause holds** where no live binding may change `w`
     by name. A live value is clean (`MInv.liveCaps`). What its handle
     reaches is named by it (`HrefAt`), and what its view reaches is of a
@@ -382,46 +448,20 @@ theorem MInv.liveCapsAll {m : Mem} {Γ : Ctx} {w : Var} (hM : MInv m Γ) (hnm : 
   intro v E o V hv hl hs
   obtain ⟨sl, hsl, hok, hown, howning, hbor⟩ := hM.slot v E hv
   rw [hs] at hsl; cases hsl
-  refine ⟨hM.liveCaps hnm v E o V hv hl hs, ?_, ?_⟩
-  · rintro c rfl x t n hx hsn ⟨ty, d, es, rfl⟩
-    have hnA : NodeAt m c (.node ty c d es) := Or.inl ⟨x, t, hx, hsn, ty, d, es, rfl⟩
-    cases hos : E.mode.ownSlot
-    · obtain ⟨V', hV', hvok⟩ := hbor hos hl
-      cases hV'
-      obtain ⟨dep, _, _, d', es', hland, _, _, hnames, _⟩ := hvok.href_inv
-      rcases hland.home with ⟨x', T', hx', hsL⟩ | ⟨k, bl, hk, hsb⟩
-      · have heq := nodeAt_unique hM.heap hnA (Or.inl ⟨x', T', hx', hsL, _, _, _, rfl⟩)
-        rw [heq]
-        exact ValCapsInp.of_namesIn hnames ((hM.pkgs x' _ T' hx' rfl).sub hsL) (hnm v E hv hl)
-      · have heq := nodeAt_unique hM.heap hnA (Or.inr ⟨k, bl, hk, hsb, _, _, _, rfl⟩)
-        rw [heq]; exact (hM.rdCapsInp w hk).1.sub hsb
-    · exact ((howning hos).2.1 _ rfl).href_false.elim
-  · rintro d o' l rfl x t n hx hsn ⟨ty, c, es, rfl⟩
-    have hdA : DataAt m d (.node ty c d es) := Or.inl ⟨x, t, hx, hsn, ty, c, es, rfl⟩
-    -- the view's target, through some dependency, at the view's element type
-    have hvat : ∃ dep s, ViewAt m dep d o' l s ∧ s.holdsView = false := by
-      cases hos : E.mode.ownSlot
-      · obtain ⟨V', hV', hvok⟩ := hbor hos hl
-        cases hV'
-        obtain ⟨dep, _, s, hva, hu⟩ := hvok.view_inv
-        exact ⟨dep, s, hva, Ty.ok_slice_noView hok hu⟩
-      · obtain ⟨_, hwf, hvs⟩ := howning hos
-        obtain ⟨s, hτ⟩ := (hwf _ rfl).view_slice
-        obtain ⟨T, hT, hvo⟩ := hvs hl
-        cases hT
-        obtain ⟨d1, o1, l1, he, dep, _, hva⟩ := hvo s _ (by rw [hτ]; exact ViewIn.here)
-        cases he
-        exact ⟨dep, s, hva, Ty.ok_slice_noView hok (by rw [hτ]; rfl)⟩
-    obtain ⟨dep, s, ⟨c', es', _, hland, _, hwf⟩, hsv⟩ := hvat
-    have hfn : (Ty.vec s).hasFn = false := by
-      cases hf : s.hasFn
-      · simpa [Ty.hasFn] using hf
-      · exact absurd (hasFn_holdsView hf) (by rw [hsv]; simp)
-    have hnil := valCapsInp_of_names (hwf.names_nil_fn hfn) w
+  refine ⟨hM.liveCaps hnm v E o V hv hl hs, ?_⟩
+  rintro c hcs x t n hx hsn ⟨ty, d, es, rfl⟩
+  have hnA : NodeAt m c (.node ty c d es) := Or.inl ⟨x, t, hx, hsn, ty, d, es, rfl⟩
+  cases hos : E.mode.ownSlot
+  · obtain ⟨V', hV', hvok⟩ := hbor hos hl
+    cases hV'
+    obtain ⟨dep, _, H', ⟨d', es', hland, _, _, hnames, _⟩, hH⟩ := hvok.href_sub hcs
     rcases hland.home with ⟨x', T', hx', hsL⟩ | ⟨k, bl, hk, hsb⟩
-    · have heq := dataAt_unique hM.heap hdA (Or.inl ⟨x', T', hx', hsL, _, _, _, rfl⟩)
-      rw [heq]; exact hnil
-    · have heq := dataAt_unique hM.heap hdA (Or.inr ⟨k, bl, hk, hsb, _, _, _, rfl⟩)
-      rw [heq]; exact hnil
+    · have heq := nodeAt_unique hM.heap hnA (Or.inl ⟨x', T', hx', hsL, _, _, _, rfl⟩)
+      rw [heq]
+      exact ValCapsInp.of_namesIn hnames ((hM.pkgs x' _ T' hx' rfl).sub hsL)
+        (fun d hd => hnm v E hv hl d (hH d hd))
+    · have heq := nodeAt_unique hM.heap hnA (Or.inr ⟨k, bl, hk, hsb, _, _, _, rfl⟩)
+      rw [heq]; exact (hM.rdCapsInp w hk).1.sub hsb
+  · exact ((howning hos).2.1 _ rfl).href_sub_false hcs |>.elim
 
 end A2

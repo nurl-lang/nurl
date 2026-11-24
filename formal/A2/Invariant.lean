@@ -1750,16 +1750,15 @@ def CapsInpAt (m : Mem) (w : Var) : Prop :=
   (∀ k bl V, m.blk k = some bl → bl.pay = some V → ValCapsInp V w)
 
 /-- The clause over the live bindings: a live slot's value, and the nodes
-    its handle or view reaches in the slots, hold no package that captures
-    `w` but read-only. (A node in a block holds none anyway,
-    `MInv.rdCapsInp`.) -/
+    the handles in it reach in the slots, hold no package that captures `w`
+    but read-only. (A node in a block holds none anyway, `MInv.rdCapsInp`;
+    what a view reaches is of a type that holds no closure with names, read
+    off the viewing binding's type where it is read.) -/
 def LiveCaps (m : Mem) (Γ : Ctx) (w : Var) : Prop :=
   ∀ v E o V, Γ v = some E → E.live = true → m.st v = some ⟨o, some V⟩ →
     ValCapsInp V w ∧
     (∀ c, Sub (.href c) V → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
-      (∃ ty d es, n = .node ty c d es) → ValCapsInp n w) ∧
-    (∀ d o' l, Sub (.view d o' l) V → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
-      (∃ ty c es, n = .node ty c d es) → ValCapsInp n w)
+      (∃ ty d es, n = .node ty c d es) → ValCapsInp n w)
 
 /-- `Γ1` ends bindings of `Γ` at most: a live binding of `Γ1` is a live one
     of `Γ`. -/
@@ -1804,8 +1803,8 @@ theorem LiveCaps.of_back {m : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w
 theorem LiveCaps.of_st {m m' : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (hst : m'.st = m.st) :
     LiveCaps m' Γ w := fun v E o V hv hl hs => by
   rw [hst] at hs
-  obtain ⟨h1, h2, h3⟩ := h v E o V hv hl hs
-  exact ⟨h1, fun c hc x t n hx => h2 c hc x t n (hst ▸ hx), fun d o' l hd x t n hx => h3 d o' l hd x t n (hst ▸ hx)⟩
+  obtain ⟨h1, h2⟩ := h v E o V hv hl hs
+  exact ⟨h1, fun c hc x t n hx => h2 c hc x t n (hst ▸ hx)⟩
 
 
 /-- Removing a slot, where the context ends bindings at most, keeps the
@@ -1819,9 +1818,8 @@ theorem LiveCaps.remove {m : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w)
     by_cases hyx : y = x
     · subst hyx; simp [Mem.remove, upd] at hy
     · simpa [Mem.remove, upd, hyx] using hy
-  obtain ⟨h1, h2, h3⟩ := h' v E o V hv hl (hrm _ _ hs)
-  exact ⟨h1, fun c hc x' t n hx' => h2 c hc x' t n (hrm _ _ hx'),
-    fun d o' l hd x' t n hx' => h3 d o' l hd x' t n (hrm _ _ hx')⟩
+  obtain ⟨h1, h2⟩ := h' v E o V hv hl (hrm _ _ hs)
+  exact ⟨h1, fun c hc x' t n hx' => h2 c hc x' t n (hrm _ _ hx')⟩
 
 /-- AGORA-937 B2 (AGORA-963): the closure-capture clause. A held anchor's
     root, not lent out, is captured by no package in the store but
