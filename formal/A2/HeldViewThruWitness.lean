@@ -124,4 +124,66 @@ theorem pre_vv_kept : thruPre K [1] 1 = some Evv := thruPre_arg (by simp)
 
 theorem pre_w_kept : thruPre K [1] 0 = some Ew := thruPre_named rfl rfl rfl
 
+/-! ### AGORA-937 B4: the through-call types (route U)
+
+With `s2` ended, `( f1 vv )` types: it passes a view of `w`, a real memory
+root, which the callee changes only inside its elements (`CallThruOK`). -/
+
+def Es2d : Entry := { Es2 with live := false }
+
+def K2 : Ctx := fun v =>
+  if v = 0 then some Ew else if v = 1 then some Evv else if v = 2 then some Es2d else none
+
+theorem callR_K2 : callR K2 [1] = [0] := by
+  simp [callR, argE, K2, Evv, roots, memDeps, Kind.isName, vsv, svv, vvi]
+
+theorem post_K2 : callPost K2 f1 [1] = K2 := by
+  funext v
+  simp [callPost, callPostAux, f1, killNames, mutNames, argNames, nameDeps, argE, K2, Evv,
+    Entry.vdeps, Mode.ownSlot, Kind.isName]
+
+theorem thru_ok : CallThruOK P K2 [] f1 [1] := by
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+  · intro g hg; simp [f1, fBody, Stmt.calls] at hg
+  · intro a ha ms q; simp at ha; subst ha; simp [argE, K2, Evv, vsv, Ty.undtor]
+  · intro i hi hhv
+    simp [f1] at hi; subst hi; simp [f1, vsv, svv, vvi, Ty.holdsView] at hhv
+  · intro i hi _ _ e he
+    simp [f1] at hi; subst hi
+    simp [argE, K2, Evv, memDeps, Kind.isName] at he; subst he
+    refine ⟨Or.inl rfl, fun j hj hji => ?_⟩
+    simp [f1] at hj; omega
+  · intro i b t h; simp [f1] at h
+    rcases i with _ | i <;> simp at h
+  · intro w hw
+    rw [callR_K2] at hw; simp at hw; subst hw
+    refine ⟨by simp, ?_, ?_, ?_, ?_, ?_, by simp, ?_⟩
+    · intro a ha d hd hr; simp at ha; subst ha
+      simp [argE, K2, Evv, Entry.vdeps, Mode.ownSlot] at hd; subst hd; exact Or.inl rfl
+    · intro a ha d hd; simp at ha; subst ha; simp [argE, K2, Evv] at hd
+    · intro i hi _ _; simp [f1] at hi; subst hi; exact ⟨svv, rfl⟩
+    · intro y E hy hl
+      unfold K2 at hy; repeat' split at hy
+      all_goals first | (cases hy; simp [Es2d, Es2] at hl) | (cases hy; decide) | cases hy
+    · intro y E hy hd _
+      unfold K2 at hy; repeat' split at hy
+      all_goals first | (cases hy; simp [Ew, Evv, Es2d, Es2] at hd) | cases hy
+    · exact ⟨Ew, vvi, by rw [post_K2]; rfl, rfl, rfl, rfl, rfl⟩
+
+
+theorem mutNames_K2 : mutNames K2 [1] = [] := by
+  simp [mutNames, argNames, nameDeps, argE, K2, Evv, Entry.vdeps, Mode.ownSlot, Kind.isName]
+
+/-- **`( f1 vv )` types with `s2` ended** (AGORA-937 B4, route U): a call that
+    passes a view of a real memory root to a callee that changes it only
+    inside its elements. -/
+theorem call_ok : CallT P K2 [] 1 [1] (callRes K2 f1 [1]) (callPost K2 f1 [1]) := by
+  refine ⟨f1, rfl, rfl, fun i hi => ?_, ?_, ?_, rfl, rfl, fun _ => Or.inr thru_ok⟩
+  · simp [f1] at hi; subst hi
+    refine ⟨Evv, rfl, rfl, rfl, fun h => by simp [f1, PMode.moves] at h, fun h => by simp [f1] at h⟩
+  · intro d hd; rw [mutNames_K2] at hd; cases hd
+  · refine ⟨fun i hi => ?_, fun d hd => (by rw [mutNames_K2] at hd; cases hd), fun i hi b hb => ?_⟩
+    · simp [f1] at hi; subst hi; exact ⟨fun h => by simp [f1] at h, fun b h => by simp [f1] at h⟩
+    · simp [f1] at hi; subst hi; simp [f1] at hb
+
 end A2.HeldViewThruWitness

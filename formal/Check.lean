@@ -634,6 +634,10 @@ import A3
 #print axioms A2.HeldViewThruWitness.pre_s2_dead
 #print axioms A2.HeldViewThruWitness.pre_vv_kept
 #print axioms A2.HeldViewThruWitness.pre_w_kept
+-- ... (AGORA-937 B4, route U) and with `s2` ended, `( f1 vv )` types: it passes a view of `w`, a
+-- real memory root, which the callee changes only inside its elements (`CallThruOK`)
+#print axioms A2.HeldViewThruWitness.thru_ok
+#print axioms A2.HeldViewThruWitness.call_ok
 -- (A2/EditB.lean, A2/DropInWitness.lean, AGORA-937): a change strictly inside the elements of a
 -- Vec root (`Eff.dropIn`) keeps the root's views: its buffer keeps its address and length
 #print axioms A2.vkeep_view_below

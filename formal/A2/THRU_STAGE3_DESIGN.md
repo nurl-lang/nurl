@@ -1400,3 +1400,11 @@ Both are local to `FrameCaps` / `CallH.heldZ`. `BindParams.frameCaps` gets the c
    - Open question: can a node of an owned tree (a `vec s`, `s.holdsView = false`) hold a package that captures `inout`? If `Ty.fn`'s `views` flag excludes this, the handle clause is vacuous for packages.
 
 **Open question answered.** A package that captures `inout` has the type `.fn ms .any`, because `q.Fits` allows by-name captures only under `any`. That type has `holdsView = true`. An owned tree's element type has `holdsView = false` (`CapsOK`, `vec s`), so by `WFv` no node reached through a handle is such a package, and the handle clause is vacuous for `InoutOff`.
+
+**B4 done (2026-11-25).** The route taken is neither `OwnData` nor a separate `InoutOff` field. It is `Watch`: a parameter's clause covers every name of its frame list as well as its held anchors' roots. `InoutOff (Z p) V` is `∀ w ∈ Z p, ValCapsInp V w`, so the existing `FrameCaps` lemmas carry it unchanged.
+- The call's list is `callZ`: the caller's bindings, but the `inout` arguments and the roots of `mutNames`.
+  - `NamesFree` and `MInv.goodArg` make every argument clean at such a name.
+  - A root of `mutNames` holds clean data (`MInv.goodMut`).
+- At `cloCase`, `c ∉ Z p` comes from `reach`, so `c`'s `inout` captures are outside every list.
+- `CallThruOK`'s kill clauses read the context before the call, and an `inout` parameter of a through-call holds no views. So the call adds no dependency (`callPost_base`), and the premise lifts where a call places its callee (`callThruOK_canon`).
+- Positive witness: `HeldViewThruWitness.call_ok`.
