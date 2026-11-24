@@ -230,3 +230,7 @@
   into one (`ptrtoint`): where the frame does that to a pointer not traced
   outside, the pointer such a call returns is not taken for outside storage.
   11 corpus functions move from validated to unsupported (98054 / 7888 / 0).
+- The same holds for a floating-point argument (a pointer's bits bitcast to
+  a float), and the question of what a frame turns into integers no longer
+  asks itself into a recursion: asked again while it is answered, it is
+  unsupported.

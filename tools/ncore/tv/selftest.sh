@@ -400,6 +400,20 @@ awk "$lf"'{m=1} m && /^}/{m=0}
       print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lint.ll"
 grep -q "ptrtoint ptr %r7 to i64" "$TMP/lint.ll" || { echo "FAIL: the ptrtoint edit did not apply"; fail=1; }
 nv a_literal_stored_through_a_pointer_a_call_returned_from_the_frames_slot_as_an_integer __nurl_fn.mk "$TMP/lint.ll" --sums "$TMP/l.core"
+# ...and as those bits in a double (`ptrtoint`, then `bitcast` to a float)
+awk "$lf"'{m=1} m && /^}/{m=0}
+  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %ki = ptrtoint ptr %r7 to i64"; print "  %kd = bitcast i64 %ki to double"; print "  %kp = call ptr @__nurl_fn.ptr_of_bits(double %kd)"
+      print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/ldbl.ll"
+grep -q "bitcast i64 %ki to double" "$TMP/ldbl.ll" || { echo "FAIL: the float-bits edit did not apply"; fail=1; }
+nv a_literal_stored_through_a_pointer_a_call_returned_from_the_frames_slot_as_float_bits __nurl_fn.mk "$TMP/ldbl.ll" --sums "$TMP/l.core"
+# a `ptrtoint` of a pointer a call returned from an integer register: the
+# question of what the frame turns into integers asks itself (not followed,
+# not a crash)
+awk "$lf"'{m=1} m && /^}/{m=0}
+  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %kq = call ptr @__nurl_fn.ptr_of(i64 %ki)"; print "  %ki = ptrtoint ptr %kq to i64"
+      print "  store %Two " r ", ptr %kq"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lrec.ll"
+grep -q "ptrtoint ptr %kq to i64" "$TMP/lrec.ll" || { echo "FAIL: the recursive-ptrtoint edit did not apply"; fail=1; }
+nv a_literal_stored_through_a_pointer_whose_ptrtoint_asks_itself __nurl_fn.mk "$TMP/lrec.ll" --sums "$TMP/l.core"
 # field 0, which holds the first clone, replaced in the literal returned:
 # the result does not carry that clone
 awk "$lf"'{m=1} m && /^}/{m=0}

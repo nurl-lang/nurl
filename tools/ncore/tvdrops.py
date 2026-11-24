@@ -756,9 +756,13 @@ def check_function(name, blocks, owning, journal=False):
     frame_pti = []
 
     def frame_ptrtoint():
-        # (does the frame turn a pointer not traced outside into an integer?)
+        # (does the frame turn a pointer not traced outside into an integer?
+        # Asked again while it is being answered - a `ptrtoint` source that
+        # a call returned from a scalar argument - the answer is yes: not
+        # followed)
         if not frame_pti:
-            frame_pti.append(any(x is None or ptr_root(x) != "other" for x in ptrtoint_srcs))
+            frame_pti.append(True)
+            frame_pti[0] = any(x is None or ptr_root(x) != "other" for x in ptrtoint_srcs)
         return frame_pti[0]
 
     def ptr_root(p, seen_=()):
@@ -828,11 +832,13 @@ def check_function(name, blocks, owning, journal=False):
 
             def arg_outside(a):
                 t = a.split()[0] if a.split() else ""
-                if re.fullmatch(r"i\d+", t) and re.fullmatch(r"%[\w.]+", word(a)) and frame_ptrtoint():
-                    # (an integer may be a pointer the frame turned into one,
-                    # `ptrtoint`, for the callee to turn back: where the frame
-                    # does that to a pointer not traced outside, an integer
-                    # register is not taken for a scalar)
+                if re.fullmatch(r"i\d+|half|float|double|fp128|x86_fp80", t) and re.fullmatch(r"%[\w.]+", word(a)) \
+                        and frame_ptrtoint():
+                    # (a scalar register may carry a pointer's bits - an
+                    # integer from `ptrtoint`, or that bitcast to a float -
+                    # for the callee to turn back: where the frame does that
+                    # to a pointer not traced outside, no scalar register is
+                    # taken for a plain value)
                     return False
                 if re.fullmatch(r"i\d+|half|float|double|fp128|x86_fp80", t):
                     return True
