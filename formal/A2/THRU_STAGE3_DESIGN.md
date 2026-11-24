@@ -1363,3 +1363,18 @@ Proved (wip/t937-b4-z, 9961c3798): `FrameCaps` (`set`, `remove`, `mono`, `reads`
 - At the call, `below p` is the callee's body. Its variables are `≥ base`, or `inout` arguments, all outside `z`.
 - A leaf has an empty spine, so `below p = s`.
 - A wrapper keeps `below` for parameters under it, and it is itself for the rest.
+
+**Status (2026-11-25, wip/t937-b4-z):** Preservation and CallInv build with `HeldZ`. `Inv.rbindIn`'s scaffold is gone with `Inv.heldCaps`, so the only scaffold left is Rename's.
+
+**Finding at `cloCase`: inout captures.** A call through a package `c` passes `c`'s captures as arguments, the `inout` ones by name. So the callee frame's statement names them (`callIn`'s killable names contain the `inout` arguments). If `c` is a closure argument of an outer call, its `inout` capture `q` is a caller binding, and so in the outer parameter's `Z p` (the runtime list). Then `reach` fails.
+
+**Fix: two changes.**
+1. **The frame list is the typing's, not the runtime's.** `Z p := F ++ z'`, the frame the callee body is typed under (`zN`). `Z` is ghost, and the call case has the typing, so it can choose. `z'` leaves out the roots of `mutNames` and the changed roots (`thruW`), which are data `Vec`s (`CapsOK`: `vec s` with `s.holdsView = false`, so no closure). Their slots are clean by their type.
+2. **`FrameCaps` also says that every package in the domain captures `inout` only names outside `D`:**
+   - at the call: a closure argument's `inout` captures are roots of `mutNames`, outside `F ++ z'`;
+   - in the frame: a new package captures `inout` only bindings outside the current `F` (`CapsOK`), and `F ⊇ Z p` there;
+   - packages copied in come from the domain.
+
+   At `cloCase`, the receiver `c` is in the domain, so its `inout` captures are outside `Z p`: `reach` holds.
+
+Both are local to `FrameCaps` / `CallH.heldZ`. `BindParams.frameCaps` gets the capture half from the arguments, and the leaf lemmas from `CapsOK` (`frameCapsSet`'s `pack` case).
