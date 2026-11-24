@@ -2784,6 +2784,15 @@ are dropped, moved and copied by the same rules:
   it is given a new value. Nothing is handed over later, so the order of
   the lines in a loop body does not matter. A handover out of a borrow
   copies the borrow, and a `: ~` binding of a name is a cursor.
+- **A lend of a whole owner takes its old value.** An immutable `: String
+  k ( id s )` (a String or a Vec, the owner's own type, from a call that
+  hands that argument back whole) is a borrow of `s` until `s` is given a
+  new value. There `k` takes the old value over and owns it from then
+  on, as the generated code hands it the old value by its buffer's
+  identity. That holds when `k` is the only live binding the code links
+  to `s`. With two or more linked, a `: ~ k`, an `= k ( id s )` (which
+  links nothing, agora #881), or an `inout` parameter (§2.2, agora #886),
+  the new value ends `k`, as before (AGORA-1003).
 - **Stores move.** A value stored into a literal, a field or a container
   element leaves its binding. A parameter stored that way makes the
   function keep its argument, which the caller hands over like a `sink`.

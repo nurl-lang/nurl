@@ -4307,6 +4307,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // …and whether it has marked a borrow a copy of an owner's own handle
 // (`hc_`, bck_view_end_via): a `let` clears the mark only then.
 : ~ i g_bck_hc_any 0
+// …and whether codegen handed an owner's old value to a borrower for
+// certain (`pendho` rows, bck_note_handover; set as the rows are read in,
+// AGORA-1003).
+: ~ i g_bck_ho_any 0
 // 1 while mem_note_kept hands on a `: ~` cursor over a parameter that its
 // store copied wherever it was the parameter's (__cursor_lent_local): it
 // lends that parameter on no run (agora #824).
@@ -51235,9 +51239,12 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // (`= old_r r = r nr`, the rotation of a Euclid loop): the value goes to
 // that cursor instead of being dropped. Whether a borrower still holds it
 // is asked at run time, by the identity of the value's first buffer.
-@ mem_udrop_hand_over i syms i cg s ptr s vt → v {
+// Answers the one borrower asked, where it was the only one and holds the
+// value whole for certain (__ho_certain): the walk makes it the owner of
+// the old value there (`pendho`, AGORA-1003). `` otherwise.
+@ mem_udrop_hand_over i syms i cg s ptr s vt → s {
     : ~ s rest ( nurl_sym_get2 syms ptr `__borrowers` )
-    ? == 0 ( nurl_str_len rest ) { ^ v } {}
+    ? == 0 ( nurl_str_len rest ) { ^ ( nurl_str_cat `` `` ) } {}
     : s ll ( nurl_llty vt )
     : s xv ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print xv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
@@ -51252,12 +51259,16 @@ unsafe @ __pfo_bind_lends i syms s name → v {
             = xk ( mem_handle_key cg pt xp )
         } {}
     } {}
-    ? == 0 ( nurl_str_len xk ) { ^ v } {}
+    ? == 0 ( nurl_str_len xk ) { ^ ( nurl_str_cat `` `` ) } {}
     : s xnn ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print xnn ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print xk ) ( nurl_print `, null\n` )
+    : ~ i nasked 0
+    : ~ s asked ``
     ~ != 0 ( nurl_str_len rest ) {
         : s b ( str_first_word rest ) = rest ( str_skip_word rest )
         ? & ! ( seq b ptr ) != 0 ( nurl_sym_len2 syms b `__live` ) {
+            = nasked + nasked 1
+            = asked ( nurl_str_cat b `` )
             // (The borrower's own type: a payload cursor is not an option.)
             : s bt0 ( nurl_sym_get2 syms b `__udty` )
             : s bt ? | == 0 ( nurl_str_len bt0 ) != 0 ( nurl_str_starts bt0 `%__opt.` ) ( nurl_str_cat vt `` ) ( nurl_str_cat bt0 `` )
@@ -51300,6 +51311,26 @@ unsafe @ __pfo_bind_lends i syms s name → v {
             ( mem_udrop_flag_set syms cg ptr nxf )
         } {}
     }
+    ? & == nasked 1 ( __ho_certain syms ptr asked vt ) { ^ asked } {}
+    ^ ( nurl_str_cat `` `` )
+}
+
+// Does borrower `b` of owner `ptr` hold the owner's value whole for
+// certain, so that mem_udrop_hand_over's identity test hands it the old
+// value on every run where the owner holds one? A `String` or a `Vec` of
+// the owner's own type (no part of either is another of that type), a
+// cursor over the owner alone and over no part of it, that cannot be
+// given another value (not `~`), and the binding its name names here. The
+// walk reads this as the borrower owning the old value (AGORA-1003).
+@ __ho_certain i syms s ptr s b s vt → b {
+    ? ! | ( seq vt `%String` ) != 0 ( nurl_str_starts vt `%Vec__` ) { ^ F } {}
+    ? ! ( seq ( nurl_sym_get2 syms b `__udty` ) vt ) { ^ F } {}
+    ? ! ( seq ( nurl_sym_get2 syms b `__alias` ) ptr ) { ^ F } {}
+    ? ( seq ( nurl_sym_get2 syms b `__alias_part` ) `1` ) { ^ F } {}
+    : s bn ( nurl_sym_get2 syms b `__bname` )
+    ? == 0 ( nurl_str_len bn ) { ^ F } {}
+    ? != 0 ( nurl_sym_len2 syms bn `__mutable` ) { ^ F } {}
+    ^ ( seq ( mem_udrop_ptr_of syms bn ) b )
 }
 
 // Can mem_udrop_hand_over tell an owner's old value apart from what `ptr`'s
@@ -57065,6 +57096,19 @@ unsafe @ bck_add_cap_name s name → v {
     ^ out
 }
 
+// Codegen's hand-over at `= owner …` on `line`: `bn`, the one borrower
+// that takes the old value for certain (mem_udrop_hand_over,
+// __ho_certain). Its row, `pendho owner … =bn`, is read by the `assign`
+// row of that statement, which makes `bn` the old value's owner rather
+// than a borrow it ends (AGORA-1003). The row reads nothing.
+@ bck_note_handover s owner s bn i line → v {
+    ? | == g_borrowck 0 == 0 ( nurl_str_len bn ) { ^ v } {}
+    : s rd0 ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` )
+    ( bck_put `reads` `` )
+    ( bck_record2 `pendho` owner line ( nurl_str_cat `=` bn ) `0` )
+    ( bck_put `reads` rd0 )
+}
+
 @ bck_record2 s kind s wname i line s x5 s x6 → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : s reads ( nurl_sym_get g_bck `reads` )
@@ -62020,7 +62064,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
     ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 ? ( seq k `fborrow` ) 7 ? ( seq k `fborrowh` ) 7 0 } {}
     ? == c 116 { ^ ? ( seq k `take` ) 37 ? ( seq k `tborrow` ) 7 ? ( seq k `tryret` ) 39 0 } {}
-    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 ? ( seq k `pendsva` ) 46 ? ( seq k `pendslit` ) 47 ? ( seq k `pendwhole` ) 48 ? ( seq k `pendhv` ) 49 0 } {}
+    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 ? ( seq k `pendsva` ) 46 ? ( seq k `pendslit` ) 47 ? ( seq k `pendwhole` ) 48 ? ( seq k `pendhv` ) 49 ? ( seq k `pendho` ) 50 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
     ? == c 99 { ^ ? ( seq k `cdep` ) 17 ? ( seq k `cmove` ) 18 ? ( seq k `cnt` ) 22 ? ( seq k `cond` ) 25 ? ( seq k `callx` ) 31 ? ( seq k `clox` ) 34 ? ( seq k `cborrow` ) 7 0 } {}
@@ -62601,6 +62645,9 @@ unsafe @ bck_sx_ids s sx → s {
     ? ? == __k0 114 & ( seq kind `ret` ) != 0 ( nurl_str_len lf8 ) F { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) ( nurl_str_cat `\t\t\t` lf8 ) ) } {}
     ? __pend
     { : s f5 ( bck_field rec 5 )
+        // (A hand-over codegen makes for certain, read by its `assign`
+        // row: AGORA-1003.)
+        ? ? == __k0 112 ( seq kind `pendho` ) F { = g_bck_ho_any 1 } {}
         // A store's owner binding (`=t`, bck_emit_owner_stores) is an id too.
         ? & != 0 ( nurl_str_len f5 ) == ( nurl_str_get f5 0 ) 61 {
             // (…and the field of it a `store` went into, `p<id>` of that
@@ -65443,6 +65490,10 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // `= x ...` gives x a fresh value — Owned, reviving x. Its old
                 // value, if x owned it, is dropped with whatever was stored in it.
                 : i asid ( bck_field_int rec 1 )
+                // (…or handed to the one borrower codegen gives it to for
+                // certain, `pendho`: that borrower owns it from here on, so
+                // the new value ends no borrow of it - AGORA-1003.)
+                ? != 0 g_bck_ho_any { = st ( __bck_ho_take st asid p ) } {}
                 // (Its old value, where codegen still holds it, is released
                 // here: one whose type runs a `% Drop` of the program's own
                 // is handed to it — agora #766.)
@@ -74175,6 +74226,39 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     } {}
 }
 
+// `= o …` at row `p`, where codegen hands o's old value to a borrower
+// for certain (mem_udrop_hand_over, __ho_certain): the statement's
+// `pendho` row names it. A borrow still of o alone, whole, owns that value
+// from here on - a borrow no longer, so o's new value ends nothing of it.
+// One that borrows anything else, or o no more, is left as it is: the
+// new value ends it, as before (AGORA-1003).
+@ __bck_ho_take s st i oid i p → s {
+    : ~ s out st
+    : s os ( nurl_str_int oid )
+    : ~ i q + p 1
+    ~ < q g_bck_nrows {
+        : i qk ( bck_kc q )
+        // (The statement's own rows: up to the next statement's.)
+        ? | | | | == qk 1 == qk 2 == qk 3 == qk 23 == qk 24 { ^ out } {}
+        ? == qk 50 {
+            : s r ( bck_rec q )
+            : s f5 ( bck_field r 5 )
+            ? & & ( seq ( bck_field r 1 ) os ) > ( nurl_str_len f5 ) 1 == ( nurl_str_get f5 0 ) 61 {
+                : s ds ( nurl_str_slice f5 1 - ( nurl_str_len f5 ) 1 )
+                : i d ( nurl_str_to_int ds )
+                ? & == BCK_BORROWED_SHARED ( bck_st_raw out d ) ( seq ( nurl_sym_get g_bck ( bck_bkey `bs_` ds ) ) os ) {
+                    = out ( bck_st_set out d BCK_OWNED )
+                    ( bck_put_bf `bs_` ds `` )
+                    ( bck_put_bf `fb_` ds `` )
+                    ( bck_put_bf `fp_` ds `` )
+                } {}
+            } {}
+        } {}
+        = q + q 1
+    }
+    ^ out
+}
+
 @ bck_fview_take s st s wids → s {
     : ~ s out st
     : ~ s takers ``
@@ -77478,6 +77562,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_has_deps 0
     = g_bck_has_cursor 0
     = g_bck_hc_any 0
+    = g_bck_ho_any 0
     = g_bck_sfo_any 0
     = g_bck_svr_any 0
     = g_bck_bxf_any 0
@@ -81325,7 +81410,10 @@ unsafe @ gen_assign i lex i syms i cg → s {
             // `{ i1, T }` names no drop, and the old value was lost.)
             : s __ud_rt0 ( nurl_sym_get2 syms __ud_ptr `__udty` )
             : s __ud_rt ? == 0 ( nurl_str_len __ud_rt0 ) ( nurl_str_cat vt `` ) ( nurl_str_cat __ud_rt0 `` )
-            ( mem_udrop_hand_over syms cg __ud_ptr vt )
+            : s __ud_ho ( mem_udrop_hand_over syms cg __ud_ptr vt )
+            // (…the one borrower that takes the old value for certain: the
+            // walk makes it the old value's owner, AGORA-1003.)
+            ? != 0 ( nurl_str_len __ud_ho ) { ( bck_note_handover name ( nurl_sym_get2 syms __ud_ho `__bname` ) bck_line ) } {}
             = __ud_late ( mem_udrop_take_old syms cg __ud_ptr __ud_rt )
             ? == 0 ( nurl_str_len __ud_late ) { ( mem_emit_user_drop_one syms cg __ud_ptr __ud_rt ) } {} }
         {}
