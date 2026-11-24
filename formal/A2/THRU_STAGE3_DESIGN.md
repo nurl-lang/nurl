@@ -1398,3 +1398,5 @@ Both are local to `FrameCaps` / `CallH.heldZ`. `BindParams.frameCaps` gets the c
      - values reached through a handle: the same second clause as `LiveGood`, for nodes of owned trees;
      - at a call, `BindParams` copies the arguments' values. The arguments sit outside the old frames' lists, and for the new frame the `inout` captures of a closure argument are roots of `mutNames`, which `Z'` must also leave out (with `x`).
    - Open question: can a node of an owned tree (a `vec s`, `s.holdsView = false`) hold a package that captures `inout`? If `Ty.fn`'s `views` flag excludes this, the handle clause is vacuous for packages.
+
+**Open question answered.** A package that captures `inout` has the type `.fn ms .any`, because `q.Fits` allows by-name captures only under `any`. That type has `holdsView = true`. An owned tree's element type has `holdsView = false` (`CapsOK`, `vec s`), so by `WFv` no node reached through a handle is such a package, and the handle clause is vacuous for `InoutOff`.
