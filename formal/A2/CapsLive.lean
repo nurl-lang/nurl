@@ -782,4 +782,91 @@ theorem RhsT.liveCapsTgt {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : E
     | (cases hc with | child he _ => simp at he)
     | exact h.tgt hM (by assumption) (by assumption) (by assumption) hc
     | exact (hM.slot_no_href (by assumption) hc).elim
+
+/-- A node in the slots a typed right-hand side leaves was in the slots
+    before, or is clean (the read slot shrunk, or given an empty node). -/
+theorem RhsT.st_back {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : Entry} {Γ1 : Ctx}
+    {v : Val} {o : Bool} {w : Var}
+    (hr : RhsT Γ F r E Γ1) (he : EvalR m r (.ok v o m1)) (h : LiveCaps m Γ w) :
+    ∀ x t n, m1.st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ t', m.st x = some ⟨true, some t'⟩ ∧ Sub n t') ∨ ValCapsInp n w := by
+  -- a slot set to `none`, or a `TakeVal`'s, keeps every other slot
+  have hnone : ∀ (m' : Mem) y o', ∀ x t n, (m'.set y ⟨o', none⟩).st x = some ⟨true, some t⟩ →
+      Sub n t → (∃ t', m'.st x = some ⟨true, some t'⟩ ∧ Sub n t') := by
+    intro m' y o' x t n hx hsn
+    by_cases hxy : x = y
+    · subst hxy; simp at hx
+    · simp [upd_ne _ _ hxy] at hx; exact ⟨t, hx, hsn⟩
+  have htv : ∀ {m' m'' : Mem} {y : Var} {u : Val}, TakeVal m' y u m'' → ∀ x t n,
+      m''.st x = some ⟨true, some t⟩ → Sub n t → (∃ t', m'.st x = some ⟨true, some t'⟩ ∧ Sub n t') := by
+    intro m' m'' y u ht x t n hx hsn
+    cases ht with
+    | own _ => exact hnone _ _ _ x t n hx hsn
+    | bor _ => exact ⟨t, hx, hsn⟩
+  have hset : ∀ (y : Var) (o' : Bool) (N : Val), (∀ n, Sub n N → ValCapsInp n w) → ∀ x t n,
+      (m.set y ⟨o', some N⟩).st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ t', m.st x = some ⟨true, some t'⟩ ∧ Sub n t') ∨ ValCapsInp n w := by
+    intro y o' N hN x t n hx hsn
+    by_cases hxy : x = y
+    · subst hxy; simp at hx; obtain ⟨_, rfl⟩ := hx; exact Or.inr (hN n hsn)
+    · simp [upd_ne _ _ hxy] at hx; exact Or.inl ⟨t, hx, hsn⟩
+  have hset' : ∀ (m0 : Mem) (y : Var) (N : Val), (∀ n, Sub n N → ValCapsInp n w) → m0.st = m.st → ∀ x t n,
+      (m0.set y ⟨true, some N⟩).st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ t', m.st x = some ⟨true, some t'⟩ ∧ Sub n t') ∨ ValCapsInp n w := by
+    intro m0 y N hN hst x t n hx hsn
+    by_cases hxy : x = y
+    · subst hxy; simp at hx; obtain ⟨_, rfl⟩ := hx; exact Or.inr (hN n hsn)
+    · simp [upd_ne _ _ hxy] at hx; rw [hst] at hx; exact Or.inl ⟨t, hx, hsn⟩
+  intro x t n hx hsn
+  cases hr
+  case pop =>
+    cases he with
+    | pop hv _ _ =>
+      exact hset _ _ _ ((h.val (by assumption) (by assumption) hv).shrink (fun e he => List.mem_append_left _ he)) x t n hx hsn
+  case remove =>
+    cases he with
+    | remove hn hv _ _ _ =>
+      exact hset _ _ _ ((h.val (by assumption) (by assumption) hv).shrink (fun e he => List.mem_of_mem_eraseIdx he)) x t n hx hsn
+  case take =>
+    cases he with
+    | take hv =>
+      refine hset' _ _ _ (fun n hsn => ?_) rfl x t n hx hsn
+      cases hsn with
+      | refl =>
+        refine ValCapsInp.of_children (fun _ _ _ _ _ he => by cases he) (fun e hc => ?_)
+        cases hc with | elem he => simp at he
+      | child he _ => simp at he
+  case pair =>
+    cases he with
+    | pair h1 h2 =>
+      obtain ⟨t', hx', hs'⟩ := htv h2 x t n hx hsn
+      exact Or.inl (htv h1 x t' n hx' hs')
+  case arcNew =>
+    cases he
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact Or.inl (htv ht x t n hx hsn)
+  case lockNew =>
+    cases he
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact Or.inl (htv ht x t n hx hsn)
+  case cellNew =>
+    cases he
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact Or.inl (htv ht x t n hx hsn)
+  case lockRestore =>
+    cases he
+    obtain ht : TakeVal _ _ _ _ := by assumption
+    exact Or.inl (htv ht x t n hx hsn)
+  case chanSend =>
+    cases he
+    · obtain ht : TakeVal _ _ _ _ := by assumption
+      exact Or.inl (htv ht x t n hx hsn)
+    · obtain ht : TakeVal _ _ _ _ := by assumption
+      exact Or.inl (htv ht x t n hx hsn)
+  all_goals cases he
+  all_goals first
+    | exact Or.inl ⟨t, hx, hsn⟩
+    | exact Or.inl (hnone _ _ _ x t n hx hsn)
+    | exact Or.inl (htv ‹TakeVal _ _ _ _› x t n hx hsn)
+
 end A2
