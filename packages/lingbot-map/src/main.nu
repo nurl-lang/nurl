@@ -654,19 +654,25 @@ i h i w f cmin i stride → v {
     ^ ( vw_serve cloud host port page 0 tls )
 }
 
-// The run's big device allocations, in bytes, before any of them is
-// made: the aggregator's 24 x (k,v) caches, the workspace's kv repack
-// pair, and the camera head's 16 trajectory caches. Everything else on
-// the device is either the checkpoint (already resident when this runs)
-// or small in comparison. The point of estimating is that a cache that
-// cannot fit fails HERE with numbers and levers, instead of as three
+// The run's device memory past the checkpoint, in bytes, before any of
+// it is allocated: the aggregator's 24 x (k,v) caches, the workspace's kv
+// repack pair, the camera head's 16 trajectory caches, and a frame's peak
+// working set. That last one is the DPT head's full-resolution maps (128
+// channels at h x w, its cached positional embedding as large again, and
+// the narrower ones after) with the aggregator's per-frame buffers. On an
+// RTX 4090, 60 courthouse frames at 504 px (141120 pixels) failed in the
+// depth head with 8.69 GiB free and ran with 8.79 GiB: 2.8-3.5 KB a pixel
+// past the caches. Counted as 4 KiB, with the callers' 256 MiB on top, it
+// leaves ~330 MiB to spare there. The point of estimating is that a run
+// that cannot fit fails HERE with numbers and levers, instead of as three
 // bare "failed" lines from ops that never say why.
-@ __lm_device_bytes i nframes i p → i {
+@ __lm_device_bytes i nframes i p i hw → i {
     : i rows ( ag_kv_rows nframes p AG_KV_SCALE AG_KV_WINDOW )
     : i aggkv * 48 * rows 4096  // 24 blocks x k+v, [16 heads, rows, 64] f32
     : i wspk * 2 * rows 4096  // lm_ws kpack + vpack, same shape
     : i camkv * 32 * nframes 8192  // 4 passes x 4 blocks x k+v, [16, n, 128] f32
-    ^ + + aggkv wspk camkv
+    : i frame * 4096 hw  // one frame's peak working set
+    ^ + + + aggkv wspk camkv frame
 }
 
 @ __lm_print_gb i bytes → v {
@@ -678,7 +684,7 @@ i h i w f cmin i stride → v {
 }
 
 // --image-size auto: the largest input size (a multiple of 14, from 518
-// down) whose caches fit what the device has free once the checkpoint is
+// down) whose run fits what the device has free once the checkpoint is
 // resident — a portrait phone video at 518 wants ~19 GB of KV cache, and a
 // card shared with another service may not have it. 0 when none fits.
 // `mfree` is the run's one reading, taken before its first allocation.
@@ -689,7 +695,7 @@ i h i w f cmin i stride → v {
             F _e → { ^ LM_SIZE }  // undecodable: the run says so itself
             T f → {
                 : i p ( ag_ntokens / ( pp_height f ) LM_PATCH / ( pp_width f ) LM_PATCH )
-                : i need ( __lm_device_bytes nframes p )
+                : i need ( __lm_device_bytes nframes p * ( pp_height f ) ( pp_width f ) )
                 ? | <= mfree 0 <= + need 268435456 mfree {
                     ? & != verbose 0 != size LM_SIZE {
                         ( nurl_print `size   auto: ` ) ( nurl_print ( nurl_str_int size ) )
@@ -936,7 +942,7 @@ i h i w f cmin i stride → v {
                                         // ~1.75x the memory; on a card where
                                         // that cannot fit, every op downstream
                                         // fails without a word about memory.
-                                        : i need ( __lm_device_bytes nframes p )
+                                        : i need ( __lm_device_bytes nframes p * h w )
                                         : i mfree mfree0
                                         ? & > mfree 0 > + need 268435456 mfree {
                                             ( nurl_print `lingbot-map: this run does not fit on the device.\n` )
@@ -948,7 +954,7 @@ i h i w f cmin i stride → v {
                                             ( nurl_print ( nurl_str_int h ) )
                                             ( nurl_print ` = ` )
                                             ( nurl_print ( nurl_str_int p ) )
-                                            ( nurl_print ` tokens each\n  caches need   ` )
+                                            ( nurl_print ` tokens each\n  device needs  ` )
                                             ( __lm_print_gb need )
                                             ( nurl_print `\n  device free   ` )
                                             ( __lm_print_gb mfree )
