@@ -110,7 +110,7 @@ The viewer page also takes:
 - `?tiles=URL` — stream an OGC 3D Tiles tileset (what [pctiles](../pctiles) writes)
   instead of one cloud. The tree is walked every frame from the eye. A tile in
   view is drawn, and its children are fetched while its geometric error would
-  show larger than 2.5 px. Fetches run four at a time, most-needed first. Past
+  show larger than 16 px (CesiumJS's default too). Fetches run four at a time, most-needed first. Past
   a budget of points on the GPU (14 M, 3 M on touch screens), the tiles unused
   for longest are let go, then the least needed. `?sse=` and `?budget=`
   override the two numbers. Box volumes, ADD and REPLACE, and point content are

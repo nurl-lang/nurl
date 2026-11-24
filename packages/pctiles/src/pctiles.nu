@@ -13,9 +13,13 @@
 //     tileset is z-up; points are turned to it once, before the octree.
 //   - A tile's box is the tight bounds of its subtree's points, so a client
 //     culls on what is really there, not on the octree's cubes.
-//   - A tile's geometric error is its sampling spacing: the gap its points
-//     leave, which its children fill. A leaf's is 0. The tileset's is the
-//     root box's diagonal (with nothing drawn, the whole extent is missing).
+//   - A tile's geometric error is its sampling spacing — the gap its points
+//     leave, which its children fill — times PCT_ERROR_SCALE (8). Clients
+//     refine a tile while its error shows larger than a pixel threshold,
+//     16 by default in CesiumJS and Cesium for Unreal and Unity; scaled so,
+//     that default refines until the gaps are about 2 pixels, which is when
+//     a cloud looks solid. A leaf's error is 0. The tileset's is the root
+//     box's diagonal (with nothing drawn, the whole extent is missing).
 //   - Content: `n<k>.glb` beside tileset.json, positions in glTF axes
 //     (tileset (x, y, z) as (x, z, -y)), colours as COLOR_0 when the cloud
 //     has them.
@@ -39,6 +43,7 @@ $ `deps/glb/src/glb.nu`
 : i PCT_UP_NEG_Y 0
 : i PCT_UP_POS_Y 1
 : i PCT_UP_POS_Z 2
+: f PCT_ERROR_SCALE 8.0
 
 : PctStats {
     i points  // placed in tiles
@@ -120,7 +125,7 @@ $ `deps/glb/src/glb.nu`
         : f hx + * 0.5 - ( oc_max t k 0 ) ( oc_min t k 0 ) eps
         : f hy + * 0.5 - ( oc_max t k 1 ) ( oc_min t k 1 ) eps
         : f hz + * 0.5 - ( oc_max t k 2 ) ( oc_min t k 2 ) eps
-        : f err ? == 1 ( slice_at [i] kids k ) ( oc_spacing t k ) 0.0
+        : f err ? == 1 ( slice_at [i] kids k ) * PCT_ERROR_SCALE ( oc_spacing t k ) 0.0
         : i tk ( ts_tile ts ( oc_parent t k ) cx cy cz hx hy hz err )
         ? == k 0 { ( ts_refine ts tk TS_ADD ) } {}
         // the content: this node's own points

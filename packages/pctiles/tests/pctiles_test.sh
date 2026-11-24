@@ -130,4 +130,48 @@ JS
 else
     echo "SKIP the validators (set VALIDATORS to a dir with node_modules/3d-tiles-validator and gltf-validator)"
 fi
+# CesiumJS — the 3D Tiles runtime under Cesium for Unreal and Unity — opens
+# the tileset at its default settings, loads tiles and fails none, when
+# VALIDATORS also holds node_modules/cesium and a browser is on PATH
+if [ -n "$V" ] && [ -d "$V/node_modules/cesium/Build/Cesium" ] && command -v google-chrome >/dev/null 2>&1; then
+    ln -sfn "$V/node_modules/cesium/Build/Cesium" "$WORK/a/cesium"
+    cat > "$WORK/a/cesium.html" <<'HTML'
+<!doctype html><html><head><meta charset="utf-8"><script>window.CESIUM_BASE_URL = "cesium/";</script>
+<script src="cesium/Cesium.js"></script><style>html,body,#c{margin:0;width:100%;height:100%}</style></head>
+<body><div id="c"></div><script>
+(async function () {
+  try {
+    var viewer = new Cesium.Viewer("c", { baseLayer: false, baseLayerPicker: false, geocoder: false, timeline: false,
+      animation: false, homeButton: false, sceneModePicker: false, navigationHelpButton: false, infoBox: false,
+      selectionIndicator: false, fullscreenButton: false, globe: false, skyBox: false, skyAtmosphere: false });
+    var ts = await Cesium.Cesium3DTileset.fromUrl("tileset.json");
+    viewer.scene.primitives.add(ts);
+    var loaded = 0, failed = 0;
+    ts.tileLoad.addEventListener(function () { loaded++; });
+    ts.tileFailed.addEventListener(function () { failed++; });
+    ts.initialTilesLoaded.addEventListener(function () {
+      document.title = "cesium loaded=" + loaded + " failed=" + failed + " points=" + ts.statistics.numberOfPointsSelected;
+    });
+    await viewer.zoomTo(ts);
+  } catch (e) { document.title = "cesium error " + e; }
+})();
+</script></body></html>
+HTML
+    PORT=$(( 22000 + $$ % 20000 ))
+    (cd "$WORK/a" && exec python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1) &
+    HPID=$!
+    for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$PORT/tileset.json" && break; sleep 0.1; done
+    title=$(timeout 120 google-chrome --headless=new --enable-unsafe-swiftshader --use-angle=swiftshader --no-sandbox \
+        --user-data-dir="$WORK/chrome" --virtual-time-budget=60000 --dump-dom "http://127.0.0.1:$PORT/cesium.html" 2>/dev/null \
+        | sed -n 's:.*<title>\(cesium [^<]*\)</title>.*:\1:p' | head -1)
+    kill "$HPID" 2>/dev/null; wait "$HPID" 2>/dev/null
+    case "$title" in
+        "cesium loaded="*" failed=0 points="*) [ "$(echo "$title" | sed 's/.*loaded=\([0-9]*\).*/\1/')" -gt 0 ] \
+            && echo "PASS CesiumJS opens the tileset at its defaults — $title" \
+            || { echo "FAIL CesiumJS loaded nothing — $title"; fails=$((fails + 1)); } ;;
+        *) echo "FAIL CesiumJS: ${title:-no answer}"; fails=$((fails + 1)) ;;
+    esac
+else
+    echo "SKIP CesiumJS (VALIDATORS with node_modules/cesium, and chrome)"
+fi
 [ "$fails" = 0 ] || exit 1

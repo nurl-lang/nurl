@@ -22,8 +22,12 @@ pctiles build cloud.ply -o tiles/        # → tiles/tileset.json + tiles/n<k>.g
 2. Each node becomes a tile whose content is its own points: a POINTS glb ([glb](../glb)) with colours.
 3. The tree is written as `tileset.json` ([tiles3d](../tiles3d)) and refines by **ADD**: the root's sample is drawn first, and children add detail where the camera is close.
 
-A tile's box is the tight bounds of its subtree, and its geometric error is
-its sampling spacing (the gap its children fill). A leaf's error is 0.
+A tile's box is the tight bounds of its subtree. Its geometric error is its
+sampling spacing (the gap its children fill) times 8. Clients refine a tile
+while its error shows larger than a pixel threshold, 16 by default in CesiumJS
+and Cesium for Unreal and Unity. With the scale, that default refines until
+the gaps between points are about 2 px, which is when a cloud looks solid.
+A leaf's error is 0.
 
 The library entry is `pct_build xyz rgb up capacity grid seed dir verbose`,
 which takes positions and colours from anywhere, not only a PLY.
@@ -41,6 +45,13 @@ With the default grid of 64, a viewer has a recognisable scene after one
 10,000-point tile (about 170 KB) instead of the whole 129 MB. CesiumGS's
 `3d-tiles-validator` reports no errors or warnings on the tileset, and
 Khronos's validator none on any of its 568 tiles.
+
+Opened at their default settings in two clients:
+
+| client | tiles loaded for the first view | points | failed |
+|---|---:|---:|---:|
+| CesiumJS 1.147 (`Cesium3DTileset`, the runtime under Cesium for Unreal and Unity) | 111 | 2,185,264 | 0 |
+| the ply viewer (`?tiles=`) | 151 | 2,872,878 | 0 |
 
 ## Limits
 
@@ -65,4 +76,7 @@ checks:
 - Every tile's points lie inside its box.
 - Errors fall to 0 at the leaves.
 - The same seed gives byte-identical tiles, and `--up +z` leaves points as they are.
-- With `VALIDATORS` set, both validators pass.
+- The ply viewer draws the root tile in a real browser.
+- With `VALIDATORS` set, both validators pass. If that directory also holds
+  `node_modules/cesium`, CesiumJS opens the tileset at its defaults, loads
+  tiles and fails none.

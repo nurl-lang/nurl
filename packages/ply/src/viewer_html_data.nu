@@ -870,7 +870,9 @@ function boot(data, label) {
    view is the content's frame, so boxes are turned (x, y, z) → (x, z, -y).
    Read: box bounding volumes, ADD and REPLACE, point (and triangle-less)
    content. Not read yet: tile transforms, external tilesets, regions. */
-var TILE_SSE = 2.5, TILE_FETCHES = 4;
+/* 16 px, CesiumJS's default too: pctiles scales its errors so that this
+   refines until the gaps between points are about 2 px */
+var TILE_SSE = 16, TILE_FETCHES = 4;
 var TILE_BUDGET = COARSE ? 3000000 : 14000000;
 function bootTiles(ts, url, label) {
   var base = url.replace(/[^\\/?]*(\\?.*)?$/, "");
@@ -1382,10 +1384,10 @@ window.addEventListener("keydown", function (e) {
   xhr.open("GET", url);
   xhr.responseType = "arraybuffer";
   xhr.onprogress = function (e) {
-    var mb = (e.loaded / 1048576).toFixed(1);
-    $("statsub").textContent = e.lengthComputable
 ` } {}
-    ? == k 2 { ^ `      ? mb + " of " + (e.total / 1048576).toFixed(1) + " MB"
+    ? == k 2 { ^ `    var mb = (e.loaded / 1048576).toFixed(1);
+    $("statsub").textContent = e.lengthComputable
+      ? mb + " of " + (e.total / 1048576).toFixed(1) + " MB"
       : mb + " MB";
     if (e.lengthComputable) $("barf").style.width = (100 * e.loaded / e.total) + "%";
   };
