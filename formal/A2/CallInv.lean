@@ -598,6 +598,176 @@ theorem callH_of {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {x : Var} 
     postdt := hdt
     resnames := NameWF.setE hn1 (fun Ex h => by rw [hx1] at h; cases h) (fun Ex h => by rw [hx1] at h; cases h) hEn }
 
+/-- AGORA-937 B4: what runs under a new parameter's `rbind` is the callee's
+    body: its killable names are fresh, or `inout` arguments. -/
+theorem callStmt_under (fn : Fn) (args : List Var) (base : Nat) (x : Var) (k : Stmt) {p : Var}
+    (hp : p ∈ wrapSpine fn.params base 0) :
+    ∀ v ∈ ((callStmt fn args base x k).under p).killVars, base ≤ v ∨ v ∈ inoutArgs fn.params args := by
+  intro v hv
+  have hW : ∀ v ∈ ((wrapParams fn.params base 0 (fn.body.rename (callRen fn.params args base))).under p).killVars,
+      base ≤ v ∨ v ∈ inoutArgs fn.params args := by
+    intro v hv
+    rcases killVars_wrap _ _ _ _ v (Stmt.under_kv_sub p _ v hv) with h | hv
+    · exact Or.inl h
+    rw [Stmt.killVars_rename] at hv
+    obtain ⟨w, -, rfl⟩ := List.mem_map.mp hv
+    exact callRen_mem fn.params args base w
+  apply hW
+  have hpW : p ∈ (wrapParams fn.params base 0 (fn.body.rename (callRen fn.params args base))).spine := by
+    rw [spine_wrap]; exact List.mem_append_left _ hp
+  have hpF : p ∈ (Stmt.frozen ((List.range base).filter (fun v => !(inoutArgs fn.params args).contains v))
+      (wrapParams fn.params base 0 (fn.body.rename (callRen fn.params args base)))).spine := hpW
+  unfold callStmt callIn resFrame at hv
+  split at hv <;> simp only [Stmt.under, Stmt.spine, List.mem_cons, hpW, hpF, or_true, ↓reduceIte] at hv <;> exact hv
+
+theorem catchFrames_wrap (s : Stmt) : ∀ (ps : List (PMode × Ty)) (base i : Nat),
+    (wrapParams ps base i s).catchFrames = s.catchFrames
+  | [], _, _ => rfl
+  | (pm, _) :: ps, base, i => by
+    cases pm <;> simp [wrapParams, Stmt.catchFrames, catchFrames_wrap s ps base (i + 1)]
+
+theorem callStmt_catchFrames {base : Nat} (h : CallH P Γ F x fn args base) (k : Stmt) (hk : k.src = true) :
+    (callStmt fn args base x k).catchFrames = [] := by
+  obtain ⟨hsrc, _⟩ := h.fnok
+  have hb : (fn.body.rename (callRen fn.params args base)).catchFrames = [] :=
+    Stmt.catchFrames_src (by rw [RSetup.src_rename]; exact hsrc)
+  unfold callStmt callIn resFrame
+  split <;> simp [Stmt.catchFrames, catchFrames_wrap, hb]
+
+/-- AGORA-937 B4: **the call's frame meets `HeldZ`**, each new parameter's
+    frame list being the call's frozen one: the new frame's slots are the
+    arguments' values or what they lend, clean for every anchor
+    (`NamesFree.noMut`, `MInv.goodOf`), and the callee's body names nothing
+    frozen (`callStmt_under`). -/
+theorem CallH.heldZ (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk : k.src = true)
+    (hi : Inv m Γ F (.letcall x f args k)) {m1 : Mem} (hb : BindParams m fn.params args m.nv 0 m1)
+    {Z : Var → List Var} (hz : HeldZ m Γ Z (.letcall x f args k)) :
+    HeldZ (callMem m m1 fn x) ((callS Γ F fn args m.nv x).canon (sigCtx fn))
+      (fun p => if m.nv ≤ p then (List.range m.nv).filter (fun v => !(inoutArgs fn.params args).contains v)
+        else Z p) (callStmt fn args m.nv x k) := by
+  have hargs : ∀ a ∈ args, ∃ E, Γ a = some E ∧ E.live = true := fun a ha => by
+    obtain ⟨i, hi', rfl⟩ := List.getElem_of_mem ha
+    obtain ⟨Ea, hEa, hl, _⟩ := h.arg i (by rw [← h.len]; exact hi')
+    exact ⟨Ea, by simpa [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi'] using hEa, hl⟩
+  have hlt : ∀ a ∈ args, a < m.nv := fun a ha => by
+    obtain ⟨E, hE, _⟩ := hargs a ha
+    exact h.domlt a E hE
+  -- the borrowed parameters of the frame: old ones, or the new `in` parameters
+  have hcases : ∀ p E, (callS Γ F fn args m.nv x).canon (sigCtx fn) p = some E → E.mode = .rootb →
+      (p < m.nv ∧ Γ p = some E) ∨
+      (∃ k' t, fn.params[k']? = some (PMode.inp, t) ∧ p = m.nv + 0 + k' ∧ E = callPe Γ fn.params args k') := by
+    intro p E hp hrb
+    rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
+        ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
+    · exact absurd hrb (resMode_ne' fn)
+    · exact absurd hrb (resMode_ne' fn)
+    · exact Or.inr ⟨k', t, hk', rfl, rfl⟩
+    · cases hrb
+    · cases hrb
+    · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp
+      rw [clean_mode] at hrb
+      obtain ⟨E0, h0, hm⟩ := h.postdm.2 _ E1' h1'
+      have := h.post_rootb h0 (hm ▸ hrb)
+      rw [h1'] at this; cases this
+      rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)]
+      exact Or.inl ⟨h.domlt _ _ h0, h0⟩
+  have hzL : ∀ v, v ∉ (List.range m.nv).filter (fun v => !(inoutArgs fn.params args).contains v) →
+      m.nv ≤ v ∨ v ∈ inoutArgs fn.params args := by
+    intro v hv
+    by_cases hvl : v < m.nv
+    · right
+      rcases Decidable.em (v ∈ inoutArgs fn.params args) with hio | hn
+      · exact hio
+      · exact absurd (List.mem_filter.mpr ⟨List.mem_range.mpr hvl, by simpa using hn⟩) hv
+    · exact Or.inl (Nat.le_of_not_lt hvl)
+  refine
+    { caps := fun p E hp hm d hd hb' hh => ?_
+      reach := fun p E hp hm v hv => ?_
+      bound := fun p E hp hm v hv => ?_
+      frames := fun x0 m0 b0 h0 => by rw [callStmt_catchFrames h k hk] at h0; cases h0 }
+  · rcases hcases p E hp hm with ⟨hpl, h0⟩ | ⟨k', t, hk', rfl, rfl⟩
+    · -- an old parameter: its frame's clause, kept (the arguments are its frame's)
+      simp only [Nat.not_le.mpr hpl, ↓reduceIte]
+      have hcw := hz.caps p E h0 hm d hd hb' hh
+      have hreach : ∀ v ∈ (Stmt.letcall x f args k).killVars, v ∉ Z p := fun v hv =>
+        hz.reach p E h0 hm v (by rw [Stmt.under_off (by simp [Stmt.spine])]; exact hv)
+      exact hb.frameCaps hi.toMInv hlt hargs
+        (fun a ha o V hs => hcw a o V (hreach a (by simp [Stmt.killVars, ha])) hs)
+        (fun v o V hv hs => hcw v o V hv hs)
+    · -- a new `in` parameter: every argument is clean for its anchor
+      simp only [show m.nv ≤ m.nv + 0 + k' by omega, ↓reduceIte]
+      have hkl : k' < fn.params.length := (List.getElem?_eq_some_iff.mp hk').1
+      have hvvm : args.getD k' 0 ∈ args := by
+        rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by rw [h.len]; exact hkl)]
+        exact List.getElem_mem _
+      -- the anchor is one the argument holds, of no integer
+      have hheld := hh.2.1
+      unfold callPe at hheld
+      rw [hk'] at hheld
+      simp only at hheld
+      by_cases hvt : (argE Γ (args.getD k' 0)).ty = .int
+      · rw [if_pos hvt] at hheld; simp at hheld
+      rw [if_neg hvt] at hheld
+      have hdv : d ∈ (argE Γ (args.getD k' 0)).vdeps := by
+        have hsub : ∀ {t : Ty} {ds : List Dep}, d ∈ typedDeps t ds → d ∈ ds := by
+          intro t ds hd'
+          unfold typedDeps at hd'
+          split at hd'
+          · rcases List.mem_append.mp hd' with h1 | h1
+            · exact (List.mem_filter.mp h1).1
+            · exact (List.mem_filter.mp h1).1
+          · exact (List.mem_filter.mp hd').1
+        exact List.mem_append_right _ (hsub hheld)
+      have hA : ∀ a ∈ args, ∀ o V, m.st a = some ⟨o, some V⟩ → LiveGood m d.root V := by
+        intro a ha o V hs
+        obtain ⟨Ea, hEa, hla⟩ := hargs a ha
+        by_cases hat : Ea.ty = .int
+        · exact hi.toMInv.goodInt hEa hla hat hs
+        · have hat' : (argE Γ a).ty ≠ .int := by simp [argE, hEa, hat]
+          have hnm := NamesFree.noMut h.nfree ha hat' hvvm hvt hdv hb'
+          simp only [argE, hEa, Option.getD_some] at hnm
+          exact hi.toMInv.goodOf hEa hla hs hnm
+      exact hb.frameCaps hi.toMInv hlt hargs hA (fun v o V hv hs => by
+        rcases hzL v hv with hge | hio
+        · exact absurd (hi.toMInv.nvSt v (by rw [hs]; rfl)) (Nat.not_lt.mpr hge)
+        · exact hA v (inoutArgs_sub _ _ h.len _ hio) o V hs)
+  · rcases hcases p E hp hm with ⟨hpl, h0⟩ | ⟨k', t, hk', rfl, rfl⟩
+    · simp only [Nat.not_le.mpr hpl, ↓reduceIte]
+      -- an old parameter: off the frame's spine, so the whole statement; its
+      -- names are the call's, fresh ones, or `inout` arguments
+      have hps : p ∉ (callStmt fn args m.nv x k).spine := by
+        rw [callStmt_spine, h.body_spine, List.append_nil]
+        intro hm'
+        rcases List.mem_cons.mp hm' with e | hm'
+        · subst e; rw [h.fresh] at h0; cases h0
+        rcases List.mem_cons.mp hm' with e | hm'
+        · have := vlt hpl; have := veq e; omega
+        · obtain ⟨_, _, _, _, e⟩ := mem_wrapSpine hm'; have := vlt hpl; have := veq e; omega
+      rw [Stmt.under_off hps] at hv
+      have hreach : ∀ v ∈ (Stmt.letcall x f args k).killVars, v ∉ Z p := fun v hv =>
+        hz.reach p E h0 hm v (by rw [Stmt.under_off (by simp [Stmt.spine])]; exact hv)
+      simp only [callStmt, Stmt.killVars, List.mem_cons, List.mem_append] at hv
+      rcases hv with rfl | hv | hv
+      · exact hreach _ (by simp [Stmt.killVars])
+      · rcases killVars_callIn fn args m.nv x _ hv with rfl | hge | hio
+        · exact hreach _ (by simp [Stmt.killVars])
+        · exact fun hz' => Nat.lt_irrefl _ (Nat.lt_of_le_of_lt hge (hz.bound p E h0 hm _ hz'))
+        · exact hreach _ (by simp [Stmt.killVars, inoutArgs_sub _ _ h.len _ hio])
+      · exact hreach _ (by simp [Stmt.killVars, hv])
+    · simp only [show m.nv ≤ m.nv + 0 + k' by omega, ↓reduceIte]
+      have hpw : m.nv + 0 + k' ∈ wrapSpine fn.params m.nv 0 := mem_wrapSpine_of hk' (fun b h => by cases h)
+      intro hvz
+      rcases callStmt_under fn args m.nv x k hpw v hv with hge | hio
+      · exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt hge (List.mem_range.mp (List.mem_filter.mp hvz).1))
+      · have := (List.mem_filter.mp hvz).2
+        simp [hio] at this
+  · split at hv
+    · exact Nat.lt_of_lt_of_le (List.mem_range.mp (List.mem_filter.mp hv).1) (by simp [callMem])
+    · rename_i hpl
+      rcases hcases p E hp hm with ⟨_, h0⟩ | ⟨k', _, _, rfl, _⟩
+      · exact Nat.lt_of_lt_of_le (hz.bound p E h0 hm v hv) (by simp [callMem])
+      · omega
+
 /-- The call case of preservation. -/
 theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
   intro ξ Γ F x f args k E Γ1 Δ m m' s' hk hx hxF hc hkT hpx hi hst hnr

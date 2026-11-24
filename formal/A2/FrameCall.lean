@@ -71,4 +71,23 @@ theorem BindParams.frameCaps {Γ : Ctx} {m m1 : Mem} {fn : Fn} {args : List Var}
     · exact hg.lend hM hEa hla hsa
 
 
+
+/-- An integer binding's value meets the clause: it holds no package and no
+    handle. -/
+theorem MInv.goodInt {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {a : Var} {E : Entry} {o : Bool} {V : Val} {w : Var}
+    (hE : Γ a = some E) (hl : E.live = true) (ht : E.ty = .int) (hs : m.st a = some ⟨o, some V⟩) :
+    LiveGood m w V := by
+  obtain ⟨sl, hsl, _, hown, howning, hbor⟩ := hM.slot a E hE
+  rw [hs] at hsl; cases hsl
+  cases hos : E.mode.ownSlot
+  · obtain ⟨V', hV', hvok⟩ := hbor hos hl
+    cases hV'
+    rw [ht] at hvok
+    have hn := hvok.names_nil_fn (by rfl)
+    refine ⟨valCapsInp_of_names hn w, fun c hc => ?_⟩
+    cases hvok <;> cases hc
+  · have hw := (howning hos).2.1 V rfl
+    rw [ht] at hw
+    exact ⟨valCapsInp_of_names (hw.names_nil_fn rfl) w, fun c hc => (hw.href_sub_false hc).elim⟩
+
 end A2

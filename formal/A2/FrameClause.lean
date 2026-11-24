@@ -641,4 +641,46 @@ theorem HeldZ.exitAt {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s e : Stmt} {n
   bound := hz.bound
   frames x m0 b hx := hz.frames x m0 b (he.catchFrames_sub _ hx)
 
+
+/-- What runs under a parameter's `rbind` is part of the statement: its
+    killable names are the statement's. -/
+theorem Stmt.under_kv_sub (p : Var) : ∀ (s : Stmt), ∀ v ∈ (s.under p).killVars, v ∈ s.killVars := by
+  intro s
+  induction s with
+  | seq a b iha _ =>
+    intro v hv; simp only [Stmt.under] at hv; split at hv
+    · simp [Stmt.killVars, iha v hv]
+    · exact hv
+  | scope x k ih =>
+    intro v hv; simp only [Stmt.under] at hv; split at hv
+    · simp [Stmt.killVars, ih v hv]
+    · exact hv
+  | scopeD x f k ih =>
+    intro v hv; simp only [Stmt.under] at hv; split at hv
+    · simp [Stmt.killVars, ih v hv]
+    · exact hv
+  | rbind q k ih =>
+    intro v hv; simp only [Stmt.under] at hv; split at hv
+    · simp [Stmt.killVars, hv]
+    · split at hv
+      · simp [Stmt.killVars, ih v hv]
+      · exact hv
+  | frozen z k ih =>
+    intro v hv; simp only [Stmt.under] at hv; split at hv
+    · simp [Stmt.killVars, ih v hv]
+    · exact hv
+  | catchR x m0 k ih =>
+    intro v hv; simp only [Stmt.under] at hv; split at hv
+    · simp [Stmt.killVars, ih v hv]
+    · exact hv
+  | scopeL kk t x k ih =>
+    intro v hv; simp only [Stmt.under] at hv; split at hv
+    · simp [Stmt.killVars, ih v hv]
+    · exact hv
+  | block k ih =>
+    intro v hv; simp only [Stmt.under] at hv; split at hv
+    · simp [Stmt.killVars, ih v hv]
+    · exact hv
+  | _ => intro v hv; simpa [Stmt.under] using hv
+
 end A2
