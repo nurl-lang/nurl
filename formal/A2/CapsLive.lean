@@ -272,4 +272,40 @@ theorem LiveCaps.of_st {m m' : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (
   obtain ⟨h1, h2, h3⟩ := h v E o V hv hl hs
   exact ⟨h1, fun c hc x t n hx => h2 c hc x t n (hst ▸ hx), fun d o' l hd x t n hx => h3 d o' l hd x t n (hst ▸ hx)⟩
 
+
+/-- Setting a slot to a value no part of which captures `w` but read-only,
+    and which is no handle or view, keeps the clause: the live values and the
+    targets in the other slots are as they were, and every node in the new
+    value is clean. -/
+theorem LiveCaps.set {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) {y : Var} {o : Bool}
+    {v : Option Val} (hv : ∀ V, v = some V → (∀ n, Sub n V → ValCapsInp n w) ∧
+      (∀ c, V ≠ .href c) ∧ (∀ d o' l, V ≠ .view d o' l)) :
+    LiveCaps (m.set y ⟨o, v⟩) Γ w := by
+  intro x E o1 V hx hl hs
+  -- a target in the slots after the set: in `y`'s new value, or where it was
+  have htgt : ∀ x' t n, (m.set y ⟨o, v⟩).st x' = some ⟨true, some t⟩ → Sub n t →
+      (m.st x' = some ⟨true, some t⟩) ∨ ValCapsInp n w := by
+    intro x' t n hx' hsn
+    by_cases hxy : x' = y
+    · subst hxy; simp at hx'; obtain ⟨_, rfl⟩ := hx'; exact Or.inr ((hv t rfl).1 n hsn)
+    · simp [upd_ne _ _ hxy] at hx'; exact Or.inl hx'
+  by_cases hxy : x = y
+  · subst hxy
+    simp at hs; obtain ⟨_, rfl⟩ := hs
+    obtain ⟨hsub, hnh, hnv⟩ := hv V rfl
+    exact ⟨hsub V (Sub.refl _), fun c hc => absurd hc (hnh c), fun d o' l hd => absurd hd (hnv d o' l)⟩
+  · simp [upd_ne _ _ hxy] at hs
+    obtain ⟨h1, h2, h3⟩ := h x E o1 V hx hl hs
+    refine ⟨h1, fun c hc x' t n hx' hsn hnd => ?_, fun d o' l hd x' t n hx' hsn hnd => ?_⟩
+    · rcases htgt x' t n hx' hsn with hx'' | hn
+      · exact h2 c hc x' t n hx'' hsn hnd
+      · exact hn
+    · rcases htgt x' t n hx' hsn with hx'' | hn
+      · exact h3 d o' l hd x' t n hx'' hsn hnd
+      · exact hn
+
+theorem LiveCaps.set_none {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (y : Var) (o : Bool) :
+    LiveCaps (m.set y ⟨o, none⟩) Γ w :=
+  h.set (fun _ e => by cases e)
+
 end A2
