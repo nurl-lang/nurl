@@ -1317,3 +1317,14 @@ Live-only was needed only for the caller's dead closures that a through call kil
   - "the running statement's variables avoid `Z p`", which gives the receivers of calls through a package (`CapInoutH`) inside the domain.
 - It is threaded beside `Inv` through `preserve` and the `…Case` results.
 - `CapsLive`'s lemmas get memory-only twins (simpler: no liveness).
+
+**`HeldZ`, settled (2026-11-25).** `Z p` is set when `p` is made, by the call (`Z p := z`, the new frame's runtime list), and then never changes. So the clause covers every borrowed parameter, the spine's too, and `Inv.rbindIn` needs nothing.
+
+`HeldZ m Γ Z s` is the conjunction of:
+1. **The clause**, for every rootb `p` and held anchor `d` of `p`: `FrameCaps m (Z p) d.root`.
+2. **The reach**: for a rootb `p ∉ s.spine`, every `v ∈ s.killVars` satisfies `v ∉ Z p`. `killVars` leaves out the frozen lists, and inside `p`'s `rbind` the statement is the callee's body. This gives `CapInoutH`'s receiver, and `frameCapsSet`'s `hD` (`r.vars ⊆ killVars`), inside the domain.
+3. **The catch frames** on the spine, `catchR x m0 _`: for every rootb `p < m0.nv` and held anchor `d`, `FrameCaps (m0.set x) (Z p) d.root`.
+
+`preserve` gets: `∀ Z, HeldZ m Γ Z s → ∃ Z', HeldZ m' Γ' Z' s' ∧ ∀ p E, Γ p = some E → E.mode = .rootb → Z' p = Z p`.
+
+Proved (wip/t937-b4-z, 9961c3798): `FrameCaps` (`set`, `remove`, `mono`, `reads`), `frameCapsSt`, `readsCapsVal` / `readsCapsTgt` / `readsSt_back`, and `frameCapsSet`.
