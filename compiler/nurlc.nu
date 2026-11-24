@@ -1870,6 +1870,7 @@ unsafe @ __strip_spaces s t → s {
                     ( nurl_str_cat `__` ( mangle_type ta_lty ) ) ) }
                 { : s ta ( nurl_lex_val lex )
                     ( lint_note_used ta )
+                    ? ( is_ident_tok ta_tt ) { ( __vis_check_targ lex ta ) } {}
                     ( nurl_lex_advance lex )
                     ? ( is_tparam_like ta ) { = has_tparam_arg T } {}
                     = ta_count + ta_count 1
@@ -2071,6 +2072,9 @@ unsafe @ agg_field_count i syms s ot → i {
         : s lt ( parse_type lex )
         ^ ( __targ_word lt )
     } {}
+    // (The name a call's type argument comes down to - under any `?` /
+    // `??` / `*` - is judged here, where it is written: AGORA-861.)
+    ? ( is_ident_tok tt ) { ( __vis_check_targ lex ( nurl_lex_val lex ) ) } {}
     ^ ( capture_type_arg_src lex )
 }
 
@@ -4979,6 +4983,22 @@ unsafe @ note_unsafe_item s pos s what → v {
             {}
         }
     }
+}
+
+// A type named bare as a type ARGUMENT where the program writes it —
+// `( Vec Impl )`, `( vec_new [Impl] )` — is a reference like any other,
+// judged as parse_type_base judges a bare type (AGORA-861: both paths took
+// the name as one token and never asked, so a strict module's private type
+// could be named from another file inside any generic). Called with the
+// lexer still on the name, so the diagnostic points at it.
+@ __vis_check_targ i lex s ta → v {
+    ? ( __vis_targ_exempt ta ) { ^ } {}
+    // (Text the type's own file wrote - a `pub` struct's field `( Shared
+    // Impl )`, read again while an importer is the current file - names it
+    // where it is visible: judged where it is written, AGORA-860.)
+    ? ( seq ( nurl_sym_get2 g_vis_syms ta `__src_file` ) ( nurl_lex_filename lex ) ) { ^ } {}
+    : s lt ( llvm_type ta )
+    ? & != 0 ( nurl_str_len lt ) == ( nurl_str_get lt 0 ) 37 { ( vis_check_xref lex ta `type` ) } {}
 }
 
 // ── Unused-symbol lint helpers (all inert unless `--lint`) ─────────
@@ -96609,13 +96629,16 @@ unsafe @ ensure_struct_instantiated i syms s sname s ta_list → v {
                 // downstream `getelementptr` of the outer struct.) The
                 // `__done` dedup marker for `mangled` was set above, so
                 // a self-referential struct won't recurse infinitely.
+                // (The instance's type arguments were judged where they were
+                // written; the rescan and the field parse below see them
+                // as the template's own - AGORA-861.)
+                : s __saved_vta ( nurl_str_cat g_vis_inst_targs `` )
+                = g_vis_inst_targs ( nurl_str_cat ta_list `` )
                 : i lex_inner ( nurl_lex_new subst ( nurl_str_cat `<inst-rescan:` ( nurl_str_cat mangled `>` ) ) )
                 ( scan_generic_structs lex_inner syms )
                 ( nurl_lex_free lex_inner )
                 // Re-lex, skip outer '{', parse each field via parse_type + IDENT.
                 : i lex2 ( nurl_lex_new subst ( nurl_str_cat `<inst:` ( nurl_str_cat mangled `>` ) ) )
-                : s __saved_vta ( nurl_str_cat g_vis_inst_targs `` )
-                = g_vis_inst_targs ( nurl_str_cat ta_list `` )
                 ? == ( nurl_lex_type lex2 ) TT_LBRACE { ( nurl_lex_advance lex2 ) } {}
                 ( nurl_print `%` ) ( nurl_print mangled ) ( nurl_print ` = type { ` )
                 : ~ i first 1

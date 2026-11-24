@@ -1,0 +1,13 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_private_type_as_type_argument.nu:12:13: error: private type 'Impl' is not visible across files. A declaration is private to its file unless marked 'pub' — add the prefix at its definition ('pub @ name ...'). Defined in 'compiler/tests/private_handle_payload_mod.nu'
+    : ( Vec Impl ) q ( vec_new [i] )
+            ^
+compiler/tests/diag_private_type_as_type_argument.nu:18:18: error: private type 'Impl' is not visible across files. A declaration is private to its file unless marked 'pub' — add the prefix at its definition ('pub @ name ...'). Defined in 'compiler/tests/private_handle_payload_mod.nu'
+    ^ ( vec_len [Impl] ( vec_new [Impl] ) )
+                 ^
+compiler/tests/diag_private_type_as_type_argument.nu:23:24: error: private type 'Impl' is not visible across files. A declaration is private to its file unless marked 'pub' — add the prefix at its definition ('pub @ name ...'). Defined in 'compiler/tests/private_handle_payload_mod.nu'
+    : i n ( vec_len [? Impl] ( vec_new [? Impl] ) )
+                       ^
+error: aborting due to 3 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
