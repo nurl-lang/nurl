@@ -39,17 +39,35 @@ def Stmt.catchFrames : Stmt → List (Var × Mem)
   | .block s => s.catchFrames
   | _ => []
 
+/-- The part of a running statement under borrowed parameter `p`'s `rbind`,
+    on the spine; the statement itself where `p` is off the spine. -/
+def Stmt.under (p : Var) : Stmt → Stmt
+  | .seq a b => if p ∈ a.spine then a.under p else .seq a b
+  | .scope x k => if p ∈ k.spine then k.under p else .scope x k
+  | .scopeD x f k => if p ∈ k.spine then k.under p else .scopeD x f k
+  | .rbind q k => if q = p then k else if p ∈ k.spine then k.under p else .rbind q k
+  | .frozen z k => if p ∈ k.spine then k.under p else .frozen z k
+  | .catchR x m0 k => if p ∈ k.spine then k.under p else .catchR x m0 k
+  | .scopeL kk t x k => if p ∈ k.spine then k.under p else .scopeL kk t x k
+  | .block k => if p ∈ k.spine then k.under p else .block k
+  | s => s
+
+theorem Stmt.under_off {p : Var} : ∀ {s : Stmt}, p ∉ s.spine → s.under p = s := by
+  intro s hp
+  cases s <;> simp_all [Stmt.under, Stmt.spine] <;> (try intro h; exact absurd h.symm hp.1)
+
 /-- **The frame-relative closure-capture clause** (AGORA-937 B4):
     1. at each borrowed parameter's held anchor, the frame clause at the
        parameter's frame list `Z p`;
-    2. off the spine, the running statement names nothing in that list;
+    2. the running statement, under the parameter's `rbind`, names nothing in
+       that list;
     3. each frame list names only bindings made already;
     4. each running catch frame's remembered store meets the clause, for the
        parameters older than it. -/
 structure HeldZ (m : Mem) (Γ : Ctx) (Z : Var → List Var) (s : Stmt) : Prop where
   caps  : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d →
             FrameCaps m (Z p) d.root
-  reach : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ v ∈ s.killVars, v ∉ Z p
+  reach : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ (s.under p).killVars, v ∉ Z p
   bound : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ Z p, v < m.nv
   frames : ∀ x m0, (x, m0) ∈ s.catchFrames → ∀ p E, Γ p = some E → E.mode = .rootb → p < m0.nv →
             ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → FrameCaps (m0.set x ⟨false, some (.int 1)⟩) (Z p) d.root
@@ -63,7 +81,7 @@ theorem CapInoutH.not_heldZ {P : Prog} {m : Mem} {Γ : Ctx} {Z : Var → List Va
     (hd : d ∈ E.vdeps) (hb : d.kind.bound = .none) (hh : HeldAnch E d) :
     ¬ CapInoutH P m s d.root := by
   rintro ⟨c, hcs, o, fs, te, ms, env, cs, j, f, fn, zs, i, b, t, hc, hj, hf, hl, hi, hai, hpi⟩
-  have hcZ : c ∉ Z p := hz.reach p E hp hm hps c (Stmt.headCallc_killVars s c hcs)
+  have hcZ : c ∉ Z p := hz.reach p E hp hm c (by rw [Stmt.under_off hps]; exact Stmt.headCallc_killVars s c hcs)
   have hcode := hcodes.1 c o _ fs te ms env cs hc (Sub.refl _)
   obtain ⟨hlen, himpl⟩ := hcode
   have hjl : j < ms.length := by
@@ -218,25 +236,30 @@ theorem FrameCaps.unpair {m : Mem} {D : List Var} {w y x z : Var} {o oa ob : Boo
   · exact hP.sub (Sub.trans hsn hst)
 
 
-/-- **A leaf step keeps `HeldZ`**: its borrowed parameters are old ones, its
-    killable names are among the old statement's, it opens no catch frame,
-    and the store keeps the frame clause wherever the statement names nothing
-    of the domain. -/
+/-- **A leaf step keeps `HeldZ`**: its borrowed parameters are old ones, the
+    new statement's running scopes bind fresh names, its killable names are
+    the old statement's or fresh, it opens no catch frame, and the store keeps
+    the frame clause wherever the statement names nothing of the domain. -/
 theorem HeldZ.leaf {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s s' : Stmt}
     (hz : HeldZ m Γ Z s) (hsp : s.spine = []) (hcf : s'.catchFrames = [])
     (hnv : m.nv ≤ m'.nv)
     (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E)
+    (hsp' : ∀ v ∈ s'.spine, Γ v = none)
     (hkv : ∀ v ∈ s'.killVars, v ∈ s.killVars ∨ m.nv ≤ v)
     (hc : ∀ p E d, Γ p = some E → E.mode = .rootb → d ∈ E.vdeps → d.kind.bound = .none → HeldAnch E d →
       (∀ v ∈ s.killVars, v ∉ Z p) → FrameCaps m (Z p) d.root → FrameCaps m' (Z p) d.root) :
     HeldZ m' Γ' Z s' where
   caps p E hp hm d hd hb hh := by
     have h0 := hrb p E hp hm
-    exact hc p E d h0 hm hd hb hh (hz.reach p E h0 hm (by simp [hsp])) (hz.caps p E h0 hm d hd hb hh)
-  reach p E hp hm _ v hv hvZ := by
+    exact hc p E d h0 hm hd hb hh (fun v hv => hz.reach p E h0 hm v (by rw [Stmt.under_off (by simp [hsp])]; exact hv))
+      (hz.caps p E h0 hm d hd hb hh)
+  reach p E hp hm v hv hvZ := by
+    have h0 := hrb p E hp hm
+    have hps : p ∉ s'.spine := fun h => by rw [hsp' p h] at h0; cases h0
+    rw [Stmt.under_off hps] at hv
     rcases hkv v hv with h | h
-    · exact hz.reach p E (hrb p E hp hm) hm (by simp [hsp]) v h hvZ
-    · exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt h (hz.bound p E (hrb p E hp hm) hm v hvZ))
+    · exact hz.reach p E h0 hm v (by rw [Stmt.under_off (by simp [hsp])]; exact h) hvZ
+    · exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt h (hz.bound p E h0 hm v hvZ))
   bound p E hp hm v hv := Nat.lt_of_lt_of_le (hz.bound p E (hrb p E hp hm) hm v hv) hnv
   frames x m0 h := by rw [hcf] at h; cases h
 
@@ -264,14 +287,16 @@ theorem ZKeep.back {Γ Γ0 : Ctx} {Z Z' : Var → List Var} (h : ZKeep Γ0 Z Z')
   obtain ⟨E', h', hm'⟩ := hrb p E hp hm
   exact h p E' h' hm'
 
-/-- `HeldZ` at a statement with the same killable names, spine and catch
-    frames (or fewer). -/
+/-- `HeldZ` at another statement with no running scope, whose killable
+    names and catch frames are among the first one's. -/
 theorem HeldZ.restmt {m : Mem} {Γ : Ctx} {Z : Var → List Var} {s s' : Stmt} (hz : HeldZ m Γ Z s)
-    (hspo : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s'.spine → p ∉ s.spine)
+    (hsp : s.spine = []) (hsp' : s'.spine = [])
     (hkv : ∀ v ∈ s'.killVars, v ∈ s.killVars)
     (hcf : ∀ c ∈ s'.catchFrames, c ∈ s.catchFrames) : HeldZ m Γ Z s' where
   caps := hz.caps
-  reach p E hp hm hps v hv := hz.reach p E hp hm (hspo p E hp hm hps) v (hkv v hv)
+  reach p E hp hm v hv := by
+    rw [Stmt.under_off (by simp [hsp'])] at hv
+    exact hz.reach p E hp hm v (by rw [Stmt.under_off (by simp [hsp])]; exact hkv v hv)
   bound := hz.bound
   frames x m0 hx := hz.frames x m0 (hcf _ hx)
 
@@ -282,16 +307,19 @@ theorem Stmt.catchFrames_src {s : Stmt} (hs : s.src = true) : s.catchFrames = []
 
 
 /-- `HeldZ` at `a ; b` from `a`'s, where `b`'s names avoid the frame lists
-    off the spine. -/
+    of the parameters off `a`'s spine. -/
 theorem HeldZ.seqOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {a b : Stmt} (hz : HeldZ m Γ Z a)
     (hb : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ a.spine → ∀ v ∈ b.killVars, v ∉ Z p) :
     HeldZ m Γ Z (.seq a b) where
   caps := hz.caps
-  reach p E hp hm hps v hv := by
-    simp only [Stmt.killVars, List.mem_append] at hv
-    rcases hv with hv | hv
-    · exact hz.reach p E hp hm (by simpa [Stmt.spine] using hps) v hv
-    · exact hb p E hp hm (by simpa [Stmt.spine] using hps) v hv
+  reach p E hp hm v hv := by
+    by_cases hpa : p ∈ a.spine
+    · simp only [Stmt.under, hpa, ↓reduceIte] at hv
+      exact hz.reach p E hp hm v hv
+    · simp only [Stmt.under, hpa, ↓reduceIte, Stmt.killVars, List.mem_append] at hv
+      rcases hv with hv | hv
+      · exact hz.reach p E hp hm v (by rw [Stmt.under_off hpa]; exact hv)
+      · exact hb p E hp hm hpa v hv
   bound := hz.bound
   frames x m0 hx := hz.frames x m0 (by simpa [Stmt.catchFrames] using hx)
 
@@ -322,23 +350,22 @@ theorem HeldZ.toSkip {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s : Stm
     (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E)
     (hc : ∀ D w, FrameCaps m D w → FrameCaps m' D w) (hnv : m.nv ≤ m'.nv) : HeldZ m' Γ' Z .skip where
   caps p E hp hm d hd hb hh := hc _ _ (hz.caps p E (hrb p E hp hm) hm d hd hb hh)
-  reach _ _ _ _ _ v hv := by simp [Stmt.killVars] at hv
+  reach _ _ _ _ v hv := by simp [Stmt.under, Stmt.killVars] at hv
   bound p E hp hm v hv := Nat.lt_of_lt_of_le (hz.bound p E (hrb p E hp hm) hm v hv) hnv
   frames x m0 h := by simp [Stmt.catchFrames] at h
 
 
-/-- `HeldZ` out of a wrapper `S` around `t` that binds `x`: `x` was a name of
-    the statement before, so outside the frame lists. -/
-theorem HeldZ.wrapOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {t S : Stmt} {x : Var} (hz : HeldZ m Γ Z t)
-    (hsp : ∀ p, p ∉ S.spine → p ∉ t.spine) (hkv : ∀ v ∈ S.killVars, v = x ∨ v ∈ t.killVars)
-    (hcf : ∀ c ∈ S.catchFrames, c ∈ t.catchFrames)
-    (hx : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ S.spine → x ∉ Z p) : HeldZ m Γ Z S where
+
+/-- `HeldZ` at `a` from `a ; b`'s. -/
+theorem HeldZ.seqIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {a b : Stmt} (hz : HeldZ m Γ Z (.seq a b)) :
+    HeldZ m Γ Z a where
   caps := hz.caps
-  reach p E hp hm hps v hv := by
-    rcases hkv v hv with rfl | hv
-    · exact hx p E hp hm hps
-    · exact hz.reach p E hp hm (hsp p hps) v hv
+  reach p E hp hm v hv := by
+    by_cases hpa : p ∈ a.spine
+    · exact hz.reach p E hp hm v (by simp only [Stmt.under, hpa, ↓reduceIte]; exact hv)
+    · rw [Stmt.under_off hpa] at hv
+      exact hz.reach p E hp hm v (by simp [Stmt.under, hpa, Stmt.killVars, hv])
   bound := hz.bound
-  frames x m0 hx := hz.frames x m0 (hcf _ hx)
+  frames x m0 hx := hz.frames x m0 (by simpa [Stmt.catchFrames] using hx)
 
 end A2

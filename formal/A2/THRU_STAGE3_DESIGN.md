@@ -1356,9 +1356,9 @@ Proved (wip/t937-b4-z, 9961c3798): `FrameCaps` (`set`, `remove`, `mono`, `reads`
 - `pres_reap`, `sub`, `seq`, `letv`, `letd`, `withLock`, `assign`, `ite`, `while`, `push`;
 - `editB` / `editBV`, `withElem`, `takeB` / `takeBV`, `insert`, `free`, the scope exits.
 
-**The fix.** `reach` must speak of a running `rbind`'s parameter too: entering its body (`rbind p k ⟶ k`), the body's names must avoid `Z p`. State it at `s.below p`, the part of `s` under `p`'s `rbind` on the spine, or `s` itself when `p` is off the spine:
+**The fix.** `reach` must speak of a running `rbind`'s parameter too: entering its body (`rbind p k ⟶ k`), the body's names must avoid `Z p`. State it at `s.under p`, the part of `s` under `p`'s `rbind` on the spine, or `s` itself when `p` is off the spine:
 
-`reach : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ (s.below p).killVars, v ∉ Z p`
+`reach : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ (s.under p).killVars, v ∉ Z p`
 
 - At the call, `below p` is the callee's body. Its variables are `≥ base`, or `inout` arguments, all outside `z`.
 - A leaf has an empty spine, so `below p = s`.
