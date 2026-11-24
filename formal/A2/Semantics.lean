@@ -738,7 +738,8 @@ inductive EvalR (m : Mem) : Rhs → RRes → Prop
           { m1 with nid := m1.nid + 1, blk := upd m1.blk m1.nid (some ⟨t, .arc, some v⟩) })
   /-- AGORA-980: a string literal of `n` bytes: its text is a node in a fresh
       block of kind `static` (the program's static data, which no step
-      frees), and the result is a view of all of it, not owned. -/
+      writes, kept by the sweep while a slot reaches it), and the result is
+      a view of all of it, not owned. -/
   | slit {n : Nat} :
       m.blk (m.nid + 2) = none →
       EvalR m (.slit n)

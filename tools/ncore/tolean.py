@@ -1353,18 +1353,17 @@ def summary_change(name, i):
     """The A2 bound of what function `name` does to its parameter `i`
     through the handle, from the walk's summary (`drops`, `reallocs`,
     `ireallocs`, `mutates`), or None if nothing. `drop` covers the other
-    two (`Eff.leb`)."""
+    two (`Eff.leb`), and a change of the elements (`mutates`) is a `drop`
+    whatever else the function does."""
     sm = SUMS.get(name, {})
     has = lambda k: str(i) in sm.get(k, "").split()
     d, r, ir, m = has("drops"), has("reallocs"), has("ireallocs"), has("mutates")
-    if d or (r and ir):
+    if d or m or (r and ir):
         return ".drop"
     if r:
         return ".realloc"
     if ir:
         return ".dropIn"
-    if m:
-        return ".drop"
     return None
 
 
