@@ -56,7 +56,7 @@ $ `value.nu`
 
 @ __w s a s b → b { ^ != 0 ( nurl_str_eq a b ) }
 
-@ __tok i kind String text → SqlTok { ^ @ SqlTok { kind text 0 0.0 } }
+@ __tok i kind sink String text → SqlTok { ^ @ SqlTok { kind text 0 0.0 } }
 
 // The tokens of `src`; a stray character is an error.
 @ sql_lex String src → !( Vec SqlTok ) String {

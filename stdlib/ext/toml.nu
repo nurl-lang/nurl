@@ -157,7 +157,7 @@ $ `stdlib/std/float.nu`
     i pos
 }
 
-@ __keyresult_ok String key i pos → KeyResult {
+@ __keyresult_ok sink String key i pos → KeyResult {
     ^ @ KeyResult { T # TomlErr TomlOther key pos }
 }
 
@@ -165,7 +165,7 @@ $ `stdlib/std/float.nu`
     ^ @ KeyResult { F e ( string_new ) pos }
 }
 
-@ __valresult_ok TomlValue v i pos → ValueResult {
+@ __valresult_ok sink TomlValue v i pos → ValueResult {
     ^ @ ValueResult { T # TomlErr TomlOther v pos }
 }
 
