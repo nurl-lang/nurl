@@ -207,3 +207,12 @@
 - **`selftest.sh`'s positive controls require the function under test to
   validate.** A module with no mismatch used to pass even when that
   function was unsupported.
+- Two follow-ups from the same round. An `insertvalue` result's chain of
+  fields is resolved from the definitions, not read in the order the blocks
+  are listed, so replacing a field that holds an owned value is refused
+  wherever LLVM lists the blocks. A field set on an aggregate that carries
+  owned values without an `insertvalue` here building it (a phi of
+  literals) is unsupported. And a pointer a call returns counts as outside
+  the frame only when every argument is a scalar, a constant or traced
+  outside the frame: one traced nowhere may hand the frame's own storage
+  back. The corpus totals are unchanged.

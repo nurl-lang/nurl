@@ -379,12 +379,26 @@ awk "$lf"'{m=1} m && /^}/{m=0}
       print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lstore.ll"
 grep -q "store %Two %r[0-9]*, ptr %kp" "$TMP/lstore.ll" || { echo "FAIL: the frame-store edit did not apply"; fail=1; }
 nv a_literal_stored_into_a_field_of_the_frames_own_slot __nurl_fn.mk "$TMP/lstore.ll" --sums "$TMP/l.core"
+# the same store through a pointer a call returned, given the frame's own
+# slot through a value not traced (a select): the call may hand it back
+awk "$lf"'{m=1} m && /^}/{m=0}
+  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %kp0 = select i1 true, ptr %r7, ptr %r7"; print "  %kp = call ptr @__nurl_fn.id_ptr(ptr %kp0)"
+      print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lcall.ll"
+grep -q "call ptr @__nurl_fn.id_ptr(ptr %kp0)" "$TMP/lcall.ll" || { echo "FAIL: the call-returned pointer edit did not apply"; fail=1; }
+nv a_literal_stored_through_a_pointer_a_call_returned_from_an_untraced_argument __nurl_fn.mk "$TMP/lcall.ll" --sums "$TMP/l.core"
 # field 0, which holds the first clone, replaced in the literal returned:
 # the result does not carry that clone
 awk "$lf"'{m=1} m && /^}/{m=0}
   { if (m && /^  ret %Two %r[0-9]+$/) { print "  %kr = insertvalue %Two " $3 ", %Vec__i64 zeroinitializer, 0"; print "  ret %Two %kr"; next } print }' "$TMP/l.ll" > "$TMP/lrepl.ll"
 grep -q "ret %Two %kr" "$TMP/lrepl.ll" || { echo "FAIL: the field-replacement edit did not apply"; fail=1; }
 nv a_field_holding_a_clone_replaced_in_the_literal_returned __nurl_fn.mk "$TMP/lrepl.ll" --sums "$TMP/l.core"
+# the same replacement with the literal's first field set in a block listed
+# after the one that sets its second: a chain read in text order lost it
+awk "$lf"'{m=1} m && /^}/{m=0}
+  { if (m && /= insertvalue %Two zeroinitializer, %Vec__i64 %r[0-9]+, 0$/) { a = $0; print "  br label %kA"; print "kB:"; next }
+    if (m && a != "" && /^  ret %Two %r[0-9]+$/) { print "  %kr = insertvalue %Two " $3 ", %Vec__i64 zeroinitializer, 0"; print "  ret %Two %kr"; print "kA:"; print a; print "  br label %kB"; next } print }' "$TMP/l.ll" > "$TMP/lreord.ll"
+grep -q "^kA:" "$TMP/lreord.ll" || { echo "FAIL: the reordered-block edit did not apply"; fail=1; }
+nv a_field_replaced_through_a_chain_whose_first_field_is_set_in_a_later_listed_block __nurl_fn.mk "$TMP/lreord.ll" --sums "$TMP/l.core"
 # the first clone moved into both fields (the second clone not made): one
 # value with two owners
 awk "$lf"'{m=1} m && /^}/{m=0}

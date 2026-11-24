@@ -745,7 +745,11 @@ def check_function(name, blocks, owning, journal=False):
         seen_ = seen_ + (p,)
         d = deflines.get(p, "")
         r = None
-        if p in local or d.startswith("alloca "):
+        if not p.startswith("%"):
+            # (a global, a string constant, `null`: no constant names the
+            # frame's storage - an `alloca` is never one)
+            r = "other"
+        elif p in local or d.startswith("alloca "):
             r = "local"
         elif p in params:
             r = "other"
@@ -764,7 +768,9 @@ def check_function(name, blocks, owning, journal=False):
                     for l in lines:
                         sp = store_parts(l)
                         if sp is not None and sp[1] == a:
-                            rs.add(ptr_root(sp[0], seen_))
+                            # (a constant stored - `null` first - names no
+                            # storage of the frame's)
+                            rs.add("other" if sp[0] is None else ptr_root(sp[0], seen_))
                 r = "other" if rs == {"other"} else None
             else:
                 r = "other" if ptr_root(a, seen_) == "other" else None
@@ -775,8 +781,22 @@ def check_function(name, blocks, owning, journal=False):
             r = ptr_root(mg.group(1), seen_)
             r = r if r == "other" else None
         elif re.match(r"(?:(?:tail|musttail|notail) )?call\b", d):
-            pc = parse_call("  " + d)
-            if pc and pc[1] is not None and all(ptr_root(x, seen_) != "local" for x in pc[1] if x):
+            # (a pointer a call returned: outside the frame only when every
+            # argument is - a scalar, a constant, or a value traced to memory
+            # that is not the frame's. An argument not traced (a pointer
+            # through a slot of mixed stores, a phi, an aggregate that may
+            # carry one) may be the frame's own, handed back: not followed)
+            pc = parse_call_raw("  " + d)
+
+            def arg_outside(a):
+                t = a.split()[0] if a.split() else ""
+                if re.fullmatch(r"i\d+|half|float|double|fp128|x86_fp80", t):
+                    return True
+                v = word(a)
+                if re.fullmatch(r"%[\w.]+", v):
+                    return ptr_root(v, seen_) == "other"
+                return "%" not in a
+            if pc and all(arg_outside(x) for x in pc[1]):
                 r = "other"
         roots[p] = r
         return r
@@ -789,16 +809,37 @@ def check_function(name, blocks, owning, journal=False):
     # (for each `insertvalue` result, the `insertvalue` that set each of its
     # fields, along its chain; and the results a value the frame owned went
     # into, on some path: a field of one replaced is not followed)
+    # (SSA: each result has one definition, so its chain is its base's plus
+    # its own field, resolved from the definitions whatever order the blocks
+    # are listed in. A base that is a phi or another value no `insertvalue`
+    # built starts an empty chain: its fields were never set here.)
     chain, owning_ins = {}, set()
+    ins_def = {}
     for _, lines in blocks:
         for l in lines:
             mi = re.match(r"^\s*(%[\w.]+) = insertvalue (.*)$", l)
             if mi:
                 ops = split_top(mi.group(2))
                 base = arg_value(ops[0]) if ops else None
-                c = dict(chain.get(base, {}))
-                c[tuple(x.strip() for x in ops[2:])] = mi.group(1)
-                chain[mi.group(1)] = c
+                ins_def[mi.group(1)] = (base, tuple(x.strip() for x in ops[2:]))
+
+    def chain_of(r):
+        if r in chain:
+            return chain[r]
+        seen, stack = set(), []
+        while r in ins_def and r not in chain and r not in seen:
+            seen.add(r)
+            stack.append(r)
+            r = ins_def[r][0]
+        c = dict(chain.get(r, {}))
+        for x in reversed(stack):
+            c = dict(c)
+            c[ins_def[x][1]] = x
+            chain[x] = c
+        return chain.get(stack[0], {}) if stack else c
+
+    for r in ins_def:
+        chain_of(r)
 
     def canon(st):
         flag_v, val, released, regv, regid, jr, given, maybe, pend, via = st
@@ -1066,7 +1107,14 @@ def check_function(name, blocks, owning, journal=False):
                     a = next(fresh)
                     agg_ids.add(a)
                 idx = tuple(x.strip() for x in ops[2:])
-                if any(i[:len(idx)] == idx or idx[:len(i)] == i for i, r in chain.get(base, {}).items()
+                if base and base not in ins_def and regid.get(base) is not None and via.get(regid[base]):
+                    # (an aggregate carrying owned values that no `insertvalue`
+                    # here built - a phi of literals, say: which field holds
+                    # which value is not known, so a field set on it is not
+                    # followed)
+                    raise Unsupported(f"{name}: a field set on an aggregate that carries owned values "
+                                      f"through {base}, whose fields are not followed ({mi.group(1)})")
+                if any(i[:len(idx)] == idx or idx[:len(i)] == i for i, r in chain_of(base).items()
                        if r in owning_ins):
                     # (a field that holds a value the frame owned replaced:
                     # the result no longer carries it, the base still does.
