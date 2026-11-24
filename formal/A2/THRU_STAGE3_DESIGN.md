@@ -1163,3 +1163,15 @@ The recursive ones need the statement strengthened to "the value is `ValCapsInp`
 - **The store side.** `EvalR` changes only the read variable's slot: emptied (`moveOwn`, `takel`/`taker`), its node shrunk (`pop`, `remove`), or a fresh empty node (`take`). Each new tree's subtrees are the old one's, so both the values and the slot-located targets stay `ValCapsInp`.
 - **The block side.** Block changes (`chanSend`/`Recv`, `lock*`) leave the slots alone, and nodes in blocks are clean by `MInv`. So `LiveCaps` speaks of slot-located targets only.
 - **The context side.** It needs `RhsT`'s output to only end bindings, a `LiveLe Γ Γ1` for `RhsT`. Here `kill` is `LiveLe.kill`, and `setE … { live := false }` ends one.
+
+*Correction (integration, 2026-11-24): `LiveCaps`'s target clauses must cover nested handles and views.*
+- `lendOf` of a struct yields `pair (href c1) (href c2)`, and a later `fst` lifts the inner handle into a binding of its own. So the clause speaks of every `Sub (.href c) V` and `Sub (.view d o l) V`, not only the top.
+- At the call this needs nested inversion lemmas:
+  - `ValOK` for borrows: its `pair` / `pkg` / `dtor` constructors carry the handle's `HrefAt`, whose names are among `H` or `envDeps cs H`.
+  - `ViewsOK` with `ViewIn` for owners, with "a slice inside a well-formed type holds no views".
+- `LiveCaps.set`'s premise becomes "every nested target of the new value is clean". For a shrunk node it follows from the old node's clause.
+
+Integration state (branch wip/t937-b4-int, 8158047b7):
+- `HeldCapsInp` concludes `LiveCaps`.
+- Ctx, Sweep, SweepD, CapsStore and CapClause are done. CapClause uses `Stmt.headCallc`, `CapInoutH` and `Step.killVars_subH`, and `held_not_killVars` takes the called slot live.
+- Preservation has 50 errors, at the `heldCaps_step` callers and the set/remove/frozenIn/catchIn sites.
