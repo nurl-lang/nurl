@@ -498,4 +498,72 @@ theorem MInv.liveCapsAll {m : Mem} {Γ : Ctx} {w : Var} (hM : MInv m Γ) (hnm : 
       rw [heq]; exact (hM.rdCapsInp w hk).1.sub hsb
   · exact ((howning hos).2.1 _ rfl).href_sub_false hcs |>.elim
 
+
+/-- A handle in what lends a value is one the value holds, or one of a node
+    inside it. -/
+theorem sub_href_lendOf {c : Nat} : ∀ {u : Val}, Sub (.href c) (lendOf u) →
+    Sub (.href c) u ∨ ∃ ty d es, Sub (.node ty c d es) u
+  | .node t c' d es, h => by
+    simp only [lendOf] at h; cases h; exact Or.inr ⟨t, d, es, Sub.refl _⟩
+  | .pair a b, h => by
+    simp only [lendOf] at h
+    cases h with
+    | fst h =>
+      rcases sub_href_lendOf h with h | ⟨ty, d, es, h⟩
+      · exact Or.inl (Sub.fst h)
+      · exact Or.inr ⟨ty, d, es, Sub.fst h⟩
+    | snd h =>
+      rcases sub_href_lendOf h with h | ⟨ty, d, es, h⟩
+      · exact Or.inl (Sub.snd h)
+      · exact Or.inr ⟨ty, d, es, Sub.snd h⟩
+  | .inl a, h => by
+    simp only [lendOf] at h
+    cases h with
+    | inl h =>
+      rcases sub_href_lendOf h with h | ⟨ty, d, es, h⟩
+      · exact Or.inl (Sub.inl h)
+      · exact Or.inr ⟨ty, d, es, Sub.inl h⟩
+  | .inr a, h => by
+    simp only [lendOf] at h
+    cases h with
+    | inr h =>
+      rcases sub_href_lendOf h with h | ⟨ty, d, es, h⟩
+      · exact Or.inl (Sub.inr h)
+      · exact Or.inr ⟨ty, d, es, Sub.inr h⟩
+  | .pkg fs te ms a cs, h => by
+    simp only [lendOf] at h
+    cases h with
+    | pkg h =>
+      rcases sub_href_lendOf h with h | ⟨ty, d, es, h⟩
+      · exact Or.inl (Sub.pkg h)
+      · exact Or.inr ⟨ty, d, es, Sub.pkg h⟩
+  | .int _, h => Or.inl h
+  | .view _ _ _, h => Or.inl h
+  | .href _, h => Or.inl h
+  | .arc _ _, h => Or.inl h
+  | .lk _, h => Or.inl h
+  | .cell _, h => Or.inl h
+
+
+/-- An owned slot's tree holds no handle: it is well-formed (`WFv`). -/
+theorem MInv.slot_no_href {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {x : Var} {T : Val} {c : Nat}
+    (hx : m.st x = some ⟨true, some T⟩) (hs : Sub (.href c) T) : False := by
+  have hd := hM.dom x
+  rw [hx] at hd
+  obtain ⟨Ex, hEx⟩ := Option.isSome_iff_exists.mp (by simpa using hd)
+  obtain ⟨sl, hsl, _, hown, howning, _⟩ := hM.slot x Ex hEx
+  rw [hx] at hsl; cases hsl
+  have hos : Ex.mode.ownSlot = true := by rw [← hown]
+  exact ((howning hos).2.1 T rfl).href_sub_false hs
+
+/-- ... nor does what a block's holders read. -/
+theorem MInv.rd_no_href {m : Mem} {Γ : Ctx} (hM : MInv m Γ) {k : Nat} {bl : Blk} {c : Nat}
+    (hk : m.blk k = some bl) (hs : Sub (.href c) bl.rd) : False := by
+  obtain ⟨_, _, hpay, _⟩ := hM.blocks k bl hk
+  obtain ⟨ty, kind, pay⟩ := bl
+  cases kind <;> cases pay <;> simp only [Blk.rd, Blk.tree, Option.getD] at hs
+  all_goals first
+    | exact ((hpay _ rfl).1).href_sub_false hs
+    | (cases hs; done)
+
 end A2
