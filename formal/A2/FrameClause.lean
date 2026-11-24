@@ -43,12 +43,14 @@ def Stmt.catchFrames : Stmt → List (Var × Mem)
     1. at each borrowed parameter's held anchor, the frame clause at the
        parameter's frame list `Z p`;
     2. off the spine, the running statement names nothing in that list;
-    3. each running catch frame's remembered store meets the clause, for the
+    3. each frame list names only bindings made already;
+    4. each running catch frame's remembered store meets the clause, for the
        parameters older than it. -/
 structure HeldZ (m : Mem) (Γ : Ctx) (Z : Var → List Var) (s : Stmt) : Prop where
   caps  : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d →
             FrameCaps m (Z p) d.root
   reach : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → ∀ v ∈ s.killVars, v ∉ Z p
+  bound : ∀ p E, Γ p = some E → E.mode = .rootb → ∀ v ∈ Z p, v < m.nv
   frames : ∀ x m0, (x, m0) ∈ s.catchFrames → ∀ p E, Γ p = some E → E.mode = .rootb → p < m0.nv →
             ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → FrameCaps (m0.set x ⟨false, some (.int 1)⟩) (Z p) d.root
 
@@ -222,14 +224,19 @@ theorem FrameCaps.unpair {m : Mem} {D : List Var} {w y x z : Var} {o oa ob : Boo
     of the domain. -/
 theorem HeldZ.leaf {m m' : Mem} {Γ Γ' : Ctx} {Z : Var → List Var} {s s' : Stmt}
     (hz : HeldZ m Γ Z s) (hsp : s.spine = []) (hcf : s'.catchFrames = [])
+    (hnv : m.nv ≤ m'.nv)
     (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E)
-    (hkv : ∀ v ∈ s'.killVars, v ∈ s.killVars)
+    (hkv : ∀ v ∈ s'.killVars, v ∈ s.killVars ∨ m.nv ≤ v)
     (hc : ∀ D w, (∀ v ∈ s.killVars, v ∉ D) → FrameCaps m D w → FrameCaps m' D w) :
     HeldZ m' Γ' Z s' where
   caps p E hp hm d hd hb hh := by
     have h0 := hrb p E hp hm
     exact hc _ _ (hz.reach p E h0 hm (by simp [hsp])) (hz.caps p E h0 hm d hd hb hh)
-  reach p E hp hm _ v hv := hz.reach p E (hrb p E hp hm) hm (by simp [hsp]) v (hkv v hv)
+  reach p E hp hm _ v hv hvZ := by
+    rcases hkv v hv with h | h
+    · exact hz.reach p E (hrb p E hp hm) hm (by simp [hsp]) v h hvZ
+    · exact Nat.lt_irrefl _ (Nat.lt_of_le_of_lt h (hz.bound p E (hrb p E hp hm) hm v hvZ))
+  bound p E hp hm v hv := Nat.lt_of_lt_of_le (hz.bound p E (hrb p E hp hm) hm v hv) hnv
   frames x m0 h := by rw [hcf] at h; cases h
 
 
