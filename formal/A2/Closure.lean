@@ -264,6 +264,16 @@ theorem MInv.addRootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x
       simp only [Mem.set, upd_same, Option.some.injEq] at hsl; subst hsl
       simp only [Option.some.injEq] at hT; subst hT; exact hvpkgs
     · rw [Mem.set_st, upd_ne _ _ hwx] at hsl; exact hi.pkgs w sl T hsl hT
+  · intro w Ew sl T hw hsl hT hfn
+    by_cases hwx : w = x
+    · subst hwx
+      simp only [setE, upd_same, Option.some.injEq] at hw; subst hw
+      simp only [Mem.set, upd_same, Option.some.injEq] at hsl; subst hsl
+      simp only [Option.some.injEq] at hT; subst hT
+      exact fun _ _ _ _ _ hs => hok.no_pkg hfn hs
+    · simp only [setE, upd_ne _ _ hwx] at hw
+      rw [Mem.set_st, upd_ne _ _ hwx] at hsl
+      exact hi.noPkg w Ew sl T hw hsl hT hfn
   · intro w Ew sl hw hsl
     by_cases hwx : w = x
     · subst hwx
@@ -634,6 +644,9 @@ theorem MInv.clean {m : Mem} {Γ : Ctx} (hi : MInv m Γ) : MInv m (cleanC Γ) wh
       intro c hc; rw [hnm] at hc; cases hc
     · rw [clean_id (Or.inl hint) hl]; exact hi.held v E0 sl T h0 hl hsl hT
   pkgs v sl T hsl hT := hi.pkgs v sl T hsl hT
+  noPkg v E sl T hv hsl hT hfn := by
+    obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
+    rw [clean_ty] at hfn; exact hi.noPkg v E0 sl T h0 hsl hT hfn
   dom v := by rw [← hi.dom v]; simp [cleanC]
   slot v E hv := by
     obtain ⟨E0, h0, rfl⟩ := cleanC_some hv

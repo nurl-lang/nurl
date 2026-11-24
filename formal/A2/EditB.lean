@@ -289,6 +289,10 @@ theorem MInv.kill_pin {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ) (hanc
     rw [killE_live] at hl; rw [killE_held]
     exact hi.held v E sl T hE (by simp only [Bool.and_eq_true] at hl; exact hl.1) hsl hT
   pkgs := hi.pkgs
+  noPkg v E' sl T h hsl hT hfn := by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    exact hi.noPkg v E sl T hE hsl hT (by rw [killE_ty] at hfn; exact hfn)
   armed v E' sl h hsl := by
     simp only [A2.kill] at h
     obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
@@ -348,6 +352,10 @@ theorem MInv.kill_norootb {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {r : Var} {e : E
     rw [killE_live] at hl; rw [killE_held]
     exact hi.held v E sl T hE (by simp only [Bool.and_eq_true] at hl; exact hl.1) hsl hT
   pkgs := hi.pkgs
+  noPkg v E' sl T h hsl hT hfn := by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    exact hi.noPkg v E sl T hE hsl hT (by rw [killE_ty] at hfn; exact hfn)
   armed v E' sl h hsl := by
     simp only [A2.kill] at h
     obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
@@ -575,6 +583,11 @@ theorem MInv.reset {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} {Ex E0 : Entr
       rw [hw] at hsl; cases hsl; cases hT; exact hnm
     · simp only [A2.setE, upd_ne _ _ hvx] at h; exact hi.held v E' sl T h hl hsl hT
   pkgs := hi.pkgs
+  noPkg v E' sl T h hsl hT hfn := by
+    by_cases hvx : v = x
+    · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at h; subst h
+      exact hi.noPkg v E0 sl T hx hsl hT (by rw [ht0]; exact hfn)
+    · simp only [A2.setE, upd_ne _ _ hvx] at h; exact hi.noPkg v E' sl T h hsl hT hfn
   armed v E' sl h hsl := by
     by_cases hvx : v = x
     · subst hvx; simp only [A2.setE, upd_same, Option.some.injEq] at h; subst h
@@ -1755,7 +1768,8 @@ theorem NewSlot.edit {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} {e : Eff} (hi : MI
     fun U hU => ?_, fun hdb _ _ dd hdd hnm => ?_,
     fun h => by rw [killE_dtor] at h; rw [killE_dbind]; exact hi.wf.arm o Eo ho h,
     fun h => by rw [killE_dbind] at h; rw [killE_ty]; exact hi.wf.view o Eo ho h, ?_, ?_,
-    FreshE.of_ownSlot (by rw [killE_mode]; exact hos)⟩
+    FreshE.of_ownSlot (by rw [killE_mode]; exact hos),
+    NoPkgS.of_wfv fun U hU => by cases hU; rw [killE_ty]; exact hwT'⟩
   · -- the views of the live owner
     have hl := hlive hl'
     obtain ⟨T1, hT1, hv1⟩ := hlv0 hl
@@ -1889,7 +1903,8 @@ theorem NewSlot.edit_ne {m1 m' : Mem} {Γ1 : Ctx} {F : List Var} {e : Eff} (hi :
     fun U hU => ?_, fun hdb _ _ dd hdd hnm => ?_,
     fun h => by rw [killE_dtor] at h; rw [killE_dbind]; exact hi.wf.arm o Eo ho h,
     fun h => by rw [killE_dbind] at h; rw [killE_ty]; exact hi.wf.view o Eo ho h, ?_, ?_,
-    FreshE.of_ownSlot (by rw [killE_mode]; exact hos)⟩
+    FreshE.of_ownSlot (by rw [killE_mode]; exact hos),
+    NoPkgS.of_wfv fun U hU => by cases hU; rw [killE_ty]; exact hwT'⟩
   · -- the views of the live owner
     have hl := hlive hl'
     obtain ⟨T1, hT1, hv1⟩ := hlv0 hl
