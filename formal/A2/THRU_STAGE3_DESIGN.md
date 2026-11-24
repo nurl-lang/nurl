@@ -1111,3 +1111,17 @@ Rename's lifted `CallThruOK` fails only on "every closure-typed binding is live"
   - The exit checks have to be shown to refuse the `inout` case.
 
 (ii) is closer to what the lift needs, and it is local to frames. (i) also covers the top-level call's dead closures. Next session: settle which one, by trying (ii)'s step lemma on `assign` to an `inout` argument first.
+
+**(ii) checked on `assign` to an `inout` argument: it does not hold as stated.**
+- A2 does not refuse a callee that assigns its `inout` parameter a closure capturing a callee local `w`. The assign rule asks only `x ∉ roots E.vdeps` and the modes.
+- At the body's end, `exitScope w` kills the entry that names `w`. The caller's slot keeps the package, though: it is below the base and captures `w`.
+- So (ii) has to exempt the call's `inout` arguments while the frame runs.
+- It also needs the running frames' bases, which `Inv` does not carry. The spine gives the `rbind` parameters `base + j`, but not `base`.
+
+With both, (ii) is a new `Inv` field with a preservation proof over every step, as large as (i).
+
+Neither candidate is cheap. Choose by which consumers each serves:
+- (i) serves the top-level call's dead closures and the lift. It needs a typing-aware read lemma.
+- (ii) serves the lift only, and still needs the dead-closure clause at the top level.
+
+So **(i) `CapsExcept` is the choice**, and (ii) is dropped.
