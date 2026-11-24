@@ -887,4 +887,61 @@ theorem RhsT.liveCapsSet {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : E
   · exact hr.liveCapsTgt he hM h c hc x' t' n hx'' hs'' hnd
   · exact hn
 
+
+/-- **A step that changes slots only to clean values with no handle keeps
+    the clause**, where the context ends bindings at most: an unchanged live
+    value's handles reach a node in an unchanged slot (the clause) or in a
+    changed one (clean), and a changed slot's value is clean. -/
+theorem LiveCaps.of_change {m m' : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w) (hb : LiveBack Γ Γ')
+    (hch : ∀ x o V', m'.st x = some ⟨o, some V'⟩ → m'.st x ≠ m.st x →
+      (∀ n, Sub n V' → ValCapsInp n w) ∧ ∀ c, Sub (.href c) V' → False) :
+    LiveCaps m' Γ' w := by
+  intro v E o V hv hl hs
+  -- a slot-located node after the step: in an unchanged slot, or clean
+  have hloc : ∀ x t n, m'.st x = some ⟨true, some t⟩ → Sub n t →
+      (m.st x = some ⟨true, some t⟩) ∨ ValCapsInp n w := by
+    intro x t n hx hsn
+    by_cases heq : m'.st x = m.st x
+    · rw [heq] at hx; exact Or.inl hx
+    · exact Or.inr ((hch x true t hx heq).1 n hsn)
+  by_cases heq : m'.st v = m.st v
+  · rw [heq] at hs
+    obtain ⟨E0, h0, hl0⟩ := hb v E hv hl
+    obtain ⟨h1, h2⟩ := h v E0 o V h0 hl0 hs
+    refine ⟨h1, fun c hc x t n hx hsn hnd => ?_⟩
+    rcases hloc x t n hx hsn with hx' | hn
+    · exact h2 c hc x t n hx' hsn hnd
+    · exact hn
+  · obtain ⟨hsub, hnh⟩ := hch v o V hs heq
+    exact ⟨hsub V (Sub.refl _), fun c hc => (hnh c hc).elim⟩
+
+
+/-- ... in its precise form: a changed slot need not be clean throughout
+    (its owner may be dead). It suffices that a live changed value is clean
+    with no handle, and that each node in a changed slot is clean or is
+    what an old node at the same handle became, clean if that one was. -/
+theorem LiveCaps.of_changeR {m m' : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w)
+    (hb : ∀ x E1, Γ' x = some E1 → E1.live = true → m'.st x = m.st x → ∃ E0, Γ x = some E0 ∧ E0.live = true)
+    (hval : ∀ x E o V', Γ' x = some E → E.live = true → m'.st x = some ⟨o, some V'⟩ → m'.st x ≠ m.st x →
+      ValCapsInp V' w ∧ ∀ c, Sub (.href c) V' → False)
+    (hnode : ∀ x t' n', m'.st x = some ⟨true, some t'⟩ → m'.st x ≠ m.st x → Sub n' t' →
+      ∀ ty c d es, n' = .node ty c d es → ValCapsInp n' w ∨
+        ∃ x0 t n, m.st x0 = some ⟨true, some t⟩ ∧ Sub n t ∧ (∃ ty d es, n = .node ty c d es) ∧
+          (ValCapsInp n w → ValCapsInp n' w)) :
+    LiveCaps m' Γ' w := by
+  intro v E o V hv hl hs
+  by_cases heq : m'.st v = m.st v
+  · obtain ⟨E0, h0, hl0⟩ := hb v E hv hl heq
+    rw [heq] at hs
+    obtain ⟨h1, h2⟩ := h v E0 o V h0 hl0 hs
+    refine ⟨h1, fun c hc x t n hx hsn hnd => ?_⟩
+    by_cases hxe : m'.st x = m.st x
+    · rw [hxe] at hx; exact h2 c hc x t n hx hsn hnd
+    · obtain ⟨ty, d, es, rfl⟩ := hnd
+      rcases hnode x t _ hx hxe hsn ty c d es rfl with hn | ⟨x0, t0, n0, hx0, hs0, hnd0, himp⟩
+      · exact hn
+      · exact himp (h2 c hc x0 t0 n0 hx0 hs0 hnd0)
+  · obtain ⟨hcl, hnh⟩ := hval v E o V hv hl hs heq
+    exact ⟨hcl, fun c hc => (hnh c hc).elim⟩
+
 end A2
