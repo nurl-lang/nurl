@@ -1256,3 +1256,18 @@ The typing allows both live together: creating `cl` kills no viewer of `r`; the 
   - outside that frame, the inner clause gives it.
 - **The call** establishes it for its parameters' anchors over the parameters and the `inout` arguments: the arguments are clean by `NamesFree` at a frozen root, and by `CallThruOK`'s `NoMutLive` at a changed root.
 - **`catchP`:** the catch frame's `F` is every older binding, so the restored `Δ` is asked about only at the frame's own bindings.
+
+**Second look at the refinement (2026-11-25): the domain must be the anchor owner's frame, not the current `F`.**
+
+A clause over `v ∉ F` with the *current* `F` shrinks as the frames nest. Inside an inner call `g`, an outer parameter `q`'s clause loses `q`'s own frame's bindings, which are frozen in `g`. After `g` they are asked for again, and a `catchP` inside `g` may have revived one, restoring a snapshot that no clause covered. This is the same wall as before.
+
+The domain must be fixed per anchor owner `p`: `{v ∉ z_p}`, where `z_p` is the runtime frozen list of `p`'s own frame. That set is every binding from `p`'s frame's base up, and its `inout` arguments.
+- It is the same at every depth, so a catch frame's snapshot taken deep inside is covered, and the catch frame's carried clause, proved in `recCase` from the `Inv` at hand, covers it.
+- It excludes the counterexample's `cl`, which is in `z_p`.
+
+What `Inv` lacks is `z_p` for a parameter outside the current spine. Options, in order of preference:
+1. **Recover `z_p` from the context.** A borrowed parameter's entry is `callPe`: `path = derive a .self` on its argument `a`. Check whether `Inv` can keep, per running frame, a ghost map from each `rbind` parameter to its frame's list. The candidate is a new `Inv` field, `frames : ∀ p rootb, ∃ z, …`, set by the call and kept by every step: frozen lists never change.
+2. **Thread the stack.** `Inv` at an inner level takes the enclosing frames' lists, as the wrappers peel them (`Inv.frozenIn` pushes `z`): `Inv m Γ F Z s`, where `Z : Var → List Var` gives each parameter's frame list. Every `Inv` construction site changes (large, mechanical).
+3. Carry the frame list in the `rbind` statement: `rbind p z s`. This is a syntax change across A2/A3 (largest).
+
+Whichever is chosen, the obligations above stand, with `v ∉ F` read as `v ∉ z_p`. Next session: start with option 1's feasibility.
