@@ -5539,6 +5539,275 @@ theorem callR_canon (h : S.OK) (hab : S.AbsOK Γa) {args : List Var} (hR : S.R =
         · cases hdo
         · rw [hA d (S.heldA_sub _ hdo)] at hdn; cases hdn
 
+theorem A_names (h : S.OK) (hR : S.R = []) : ∀ d ∈ S.A, d.kind.isName = true := by
+  intro d hd
+  rcases List.mem_append.mp hd with hd | hd
+  · rw [S.Rf_nil h hR] at hd; simp [compAll] at hd
+  · exact h.N_name d hd
+
+/-- AGORA-937 B4: **what a lifted argument holds in memory** where the call
+    passed no views: what the argument held, renamed. -/
+theorem memDeps_lift (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {a : Var} {E : Entry}
+    (hE : Γa a = some E) (hnp : S.isPi a = false) {d : Dep}
+    (hd : d ∈ memDeps (argE (S.canon Γa) (S.ρ a)).held) :
+    ∃ d0 ∈ memDeps E.held, d = d0.ren S.ρ := by
+  rw [argE_canons h hE hnp] at hd
+  have hdn : d.kind.isName = false := by simpa using (List.mem_filter.mp hd).2
+  obtain ⟨hdh, _⟩ := S.mem_subE_held_notPi_of_R h hR (List.mem_filter.mp hd).1
+  have hA := A_names h hR
+  by_cases hrb : E.mode = .rootb
+  · simp only [RSetup.liftE, hrb, ↓reduceIte] at hdh
+    rcases List.mem_append.mp hdh with hdr | hdA
+    · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hdr; exact ⟨d0, hd0, rfl⟩
+    · split at hdA
+      · have := (List.mem_filter.mp hdA).2; rw [hdn] at this; cases this
+      · rename_i hpr
+        rcases h.pe_held a d hdA with hdA | ⟨hds, _⟩ | ⟨_, hr⟩
+        · rw [hA d hdA] at hdn; cases hdn
+        · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hds
+          obtain ⟨w, b, t, rfl, _⟩ := h.sym_ok d0 hd0
+          simp [Dep.ren, Kind.isName] at hdn
+        · rw [hr] at hpr; cases hpr rfl
+  · rw [liftE_held hrb] at hdh
+    rcases List.mem_append.mp hdh with hdr | hdo
+    · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hdr
+      exact ⟨d0, List.mem_filter.mpr ⟨hd0, by simpa [Dep.ren] using hdn⟩, rfl⟩
+    · unfold ownHeld at hdo
+      split at hdo
+      · cases hdo
+      · rw [hA d (S.heldA_sub _ hdo)] at hdn; cases hdn
+
+theorem argE_canon_ty (h : S.OK) (hab : S.AbsOK Γa) {a : Var} (hnp : S.isPi a = false) :
+    (argE (S.canon Γa) (S.ρ a)).ty = (argE Γa a).ty := by
+  cases hE : Γa a with
+  | none => unfold argE; rw [canon_ρs h _ hnp, hE]; rfl
+  | some E =>
+    rw [argE_canons h hE hnp, subE_ty, liftE_ty' h hab hE]
+    unfold argE; rw [hE]; rfl
+
+/-- ... so the roots it passes views of are the call's own, renamed. -/
+theorem callR_lift (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {args : List Var}
+    (hvs : ∀ a ∈ args, S.isPi a = false) {r : Var} (hr : r ∈ callR (S.canon Γa) (args.map S.ρ)) :
+    ∃ w ∈ callR Γa args, r = S.ρ w := by
+  obtain ⟨a', ha', hty, hr⟩ := mem_callR.mp hr
+  obtain ⟨a, ha, rfl⟩ := List.mem_map.mp ha'
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+  cases hE : Γa a with
+  | none => exact absurd (by unfold argE; rw [canon_ρs h _ (hvs a ha), hE]; rfl) hty
+  | some E =>
+    obtain ⟨d0, hd0, rfl⟩ := memDeps_lift h hab hR hE (hvs a ha) hd
+    refine ⟨d0.root, mem_callR.mpr ⟨a, ha, ?_, ?_⟩, rfl⟩
+    · rw [← argE_canon_ty h hab (hvs a ha)]; exact hty
+    · unfold argE; rw [hE]; exact List.mem_map_of_mem hd0
+
+
+/-- A dependency of a lifted argument on a renamed binding that is no
+    `inout` parameter: the argument's own, renamed. -/
+theorem vdeps_lift_root (h : S.OK) (hR : S.R = []) {a w : Var} {E : Entry} (hE : Γa a = some E)
+    (hnp : S.isPi a = false) (hbw : S.bnd w = none) {d : Dep}
+    (hd : d ∈ (argE (S.canon Γa) (S.ρ a)).vdeps) (hr : d.root = S.ρ w) :
+    ∃ d0 ∈ E.vdeps, d0.root = w ∧ d0.kind = d.kind := by
+  rw [argE_canons h hE hnp, subE_vdeps] at hd
+  obtain ⟨d1, hd1, hdd⟩ := List.mem_flatMap.mp hd
+  have hdd' : d = d1 := by
+    rcases S.subD_frame h hdd with e | ⟨hout, _⟩
+    · exact e
+    · exact absurd hr.symm (hout w)
+  subst hdd'
+  have hnρ : ∀ e : Dep, (∀ v, S.ρ v ≠ e.root) → e.root = S.ρ w → False := fun e he her => he w her.symm
+  have hsym : ∀ e ∈ rds S.ρ S.sym, e.root = S.ρ w → False := fun e he her => by
+    obtain ⟨w', b, t, rfl, hb, _⟩ := sym_ren h he
+    have := h.inj _ _ her; subst this; rw [hbw] at hb; cases hb
+  have hA : ∀ e ∈ S.A, e.root = S.ρ w → False := fun e he her => by
+    rcases List.mem_append.mp he with he | he
+    · rw [S.Rf_nil h hR] at he; simp [compAll] at he
+    · exact hnρ e (h.N_out e he).1 her
+  have hpe : ∀ e ∈ (S.pe a).vdeps, e.root = S.ρ w → False := fun e he her => by
+    cases hk : e.kind.isName
+    · exact hnρ e (h.pe_out a e he hk).1 her
+    · rcases h.pe_names a e he hk with hN | ⟨hs, _⟩
+      · exact hnρ e (h.N_out e hN).1 her
+      · exact hsym e hs her
+  by_cases hrb : E.mode = .rootb
+  · have hpm : (S.pe a).mode.ownSlot = false := by rw [h.pe_rb]; rfl
+    unfold Entry.vdeps at hd1
+    simp only [RSetup.liftE, hrb, ↓reduceIte, hpm, Bool.false_eq_true] at hd1
+    rcases List.mem_append.mp hd1 with hp | hh
+    · exact (hpe d (by unfold Entry.vdeps; rw [hpm]; exact List.mem_append_left _ hp) hr).elim
+    rcases List.mem_append.mp hh with hr' | hp'
+    · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hr'
+      refine ⟨d0, ?_, h.inj _ _ hr, rfl⟩
+      unfold Entry.vdeps; exact List.mem_append_right _ (List.mem_filter.mp hd0).1
+    · have hp'' : d ∈ (S.pe a).held := by
+        split at hp'
+        · exact (List.mem_filter.mp hp').1
+        · exact hp'
+      exact (hpe d (by unfold Entry.vdeps; rw [hpm]; exact List.mem_append_right _ hp'') hr).elim
+  · rcases liftE_vdeps_cases hrb hd1 with ⟨d0, hd0, rfl⟩ | hdA
+    · exact ⟨d0, hd0, h.inj _ _ hr, rfl⟩
+    · exact (hA d hdA hr).elim
+
+/-- ... and on its path. -/
+theorem path_lift_root (h : S.OK) (hR : S.R = []) {a w : Var} {E : Entry} (hE : Γa a = some E)
+    (hnp : S.isPi a = false) (hbw : S.bnd w = none) {d : Dep}
+    (hd : d ∈ (argE (S.canon Γa) (S.ρ a)).path) (hr : d.root = S.ρ w) :
+    ∃ d0 ∈ E.path, d0.root = w := by
+  rw [argE_canons h hE hnp, subE_path] at hd
+  obtain ⟨d1, hd1, hdd⟩ := List.mem_flatMap.mp hd
+  have hdd' : d = d1 := by
+    rcases S.subD_frame h hdd with e | ⟨hout, _⟩
+    · exact e
+    · exact absurd hr.symm (hout w)
+  subst hdd'
+  by_cases hrb : E.mode = .rootb
+  · simp only [RSetup.liftE, hrb, ↓reduceIte] at hd1
+    have hpm : (S.pe a).mode.ownSlot = false := by rw [h.pe_rb]; rfl
+    cases hk : d.kind.isName
+    · exact absurd hr.symm ((h.pe_out a d (by unfold Entry.vdeps; rw [hpm]; exact List.mem_append_left _ hd1) hk).1 w)
+    · rcases h.pe_names a d (by unfold Entry.vdeps; rw [hpm]; exact List.mem_append_left _ hd1) hk with hN | ⟨hs, _⟩
+      · exact absurd hr.symm ((h.N_out d hN).1 w)
+      · obtain ⟨w', b, t, rfl, hb, _⟩ := sym_ren h hs
+        have := h.inj _ _ hr; subst this; rw [hbw] at hb; cases hb
+  · simp only [RSetup.liftE, hrb, ↓reduceIte] at hd1
+    rcases List.mem_append.mp hd1 with hr' | hA
+    · obtain ⟨d0, hd0, rfl⟩ := mem_rds.mp hr'
+      exact ⟨d0, hd0, h.inj _ _ hr⟩
+    · split at hA
+      · cases hA
+      · rcases List.mem_append.mp hA with hA | hA
+        · rw [S.Rf_nil h hR] at hA; simp [compAll] at hA
+        · exact absurd hr.symm ((h.N_out d hA).1 w)
+
+
+/-- AGORA-937 B4: **a through-call's premise, where the call places the
+    callee** (the outer call passed no views): what the arguments pass views
+    of is the callee's own, renamed, and nothing of the frame depends on it. -/
+theorem callThruOK_canon (h : S.OK) (hab : S.AbsOK Γa) (hR : S.R = []) {P : Prog} {Fa : List Var}
+    {fn : Fn} {args : List Var} (hlen : args.length = fn.params.length)
+    (hexA : ∀ a ∈ args, ∃ Ea, Γa a = some Ea) (hvs : ∀ a ∈ args, S.isPi a = false)
+    (hpost : PW (callPost (S.canon Γa) fn (args.map S.ρ)) (S.canon (callPost Γa fn args)))
+    (hc : CallThruOK P Γa Fa fn args) : CallThruOK P (S.canon Γa) S.Fc fn (args.map S.ρ) := by
+  obtain ⟨hcalls, hnf, hnv, hvw, hio, hw⟩ := hc
+  have hgi : ∀ i, i < fn.params.length → ∃ E, Γa (args.getD i 0) = some E ∧ S.isPi (args.getD i 0) = false ∧
+      (args.map S.ρ).getD i 0 = S.ρ (args.getD i 0) := fun i hi => by
+    have hia : i < args.length := hlen ▸ hi
+    obtain ⟨E, hE⟩ := hexA _ (getD_mem' hia)
+    exact ⟨E, hE, hvs _ (getD_mem' hia), getD_map hia _⟩
+  have hae : ∀ {a : Var} {E : Entry}, Γa a = some E → argE Γa a = E := fun hE => by unfold argE; rw [hE]; rfl
+  refine ⟨hcalls, fun a' ha' ms q => ?_, fun i hi hhv => ?_, fun i hi hhv hty e he => ?_, hio, fun w' hw' => ?_⟩
+  · obtain ⟨a, ha, rfl⟩ := List.mem_map.mp ha'
+    rw [argE_canon_ty h hab (hvs a ha)]; exact hnf a ha ms q
+  · obtain ⟨E, hE, hnp, hg⟩ := hgi i hi
+    rw [hg, argE_canon_ty h hab hnp]
+    rcases hnv i hi hhv with hint | hnil
+    · exact Or.inl hint
+    · refine Or.inr (List.eq_nil_iff_forall_not_mem.mpr fun d hd => ?_)
+      obtain ⟨d0, hd0, _⟩ := memDeps_lift h hab hR hE hnp hd
+      rw [hae hE] at hnil; rw [hnil] at hd0; cases hd0
+  · obtain ⟨E, hE, hnp, hg⟩ := hgi i hi
+    rw [hg] at hty he
+    rw [argE_canon_ty h hab hnp] at hty
+    obtain ⟨e0, he0, rfl⟩ := memDeps_lift h hab hR hE hnp he
+    rw [← hae hE] at he0
+    obtain ⟨hk, hdis⟩ := hvw i hi hhv hty e0 he0
+    refine ⟨hk, fun j hj hji hhvj htyj e' he' => ?_⟩
+    obtain ⟨Ej, hEj, hnpj, hgj⟩ := hgi j hj
+    rw [hgj] at htyj he'
+    rw [argE_canon_ty h hab hnpj] at htyj
+    obtain ⟨e0', he0', rfl⟩ := memDeps_lift h hab hR hEj hnpj he'
+    rw [← hae hEj] at he0'
+    exact fun heq => hdis j hj hji hhvj htyj e0' he0' (h.inj _ _ heq)
+  · obtain ⟨w, hwR, rfl⟩ := callR_lift h hab hR hvs hw'
+    obtain ⟨hna, hkind, hpath, hvec, hlive, hdt, -, ⟨Er, t, hEr, hl, hmo, hty, hhv⟩⟩ := hw w hwR
+    have hdom : DomTy Γa (callPost Γa fn args) :=
+      DomTy.killNames (callPostAux_domTy _ _ _ _ hexA (DomTy.refl Γa)) _
+    obtain ⟨E0, hE0, hm0, -⟩ := hdom.2 w Er hEr
+    have hreg : S.isReg w = false := by
+      cases hr : S.isReg w
+      · rfl
+      · have := (hab.2.2.2.1 w E0 hE0).1.mpr hr
+        rw [← hm0, hmo] at this; cases this
+    have hpi : S.isPi w = false := by rw [hab.2.2.2.2.2 w, hreg]; rfl
+    have hbw : S.bnd w = none := by
+      cases hb : S.bnd w with
+      | none => rfl
+      | some bh =>
+        obtain ⟨E, hE, hmE, _⟩ := hab.2.2.1 w bh hb
+        rw [hE0] at hE; cases hE; rw [← hm0, hmo] at hmE; cases hmE
+    have hal : Allowed S .dropIn false w := Or.inl hbw
+    refine ⟨fun hm => ?_, fun a' ha' d hd hr => ?_, fun a' ha' d hd hr => ?_, fun i hi hinp hr => ?_,
+      fun y E hy hlE => ?_, fun y E hy hdE hos => ?_, h.Fcout w, ?_⟩
+    · obtain ⟨a, ha, he⟩ := List.mem_map.mp hm
+      exact hna (h.inj _ _ he ▸ ha)
+    · obtain ⟨a, ha, rfl⟩ := List.mem_map.mp ha'
+      obtain ⟨E, hE⟩ := hexA a ha
+      obtain ⟨d0, hd0, hr0, hk0⟩ := vdeps_lift_root h hR hE (hvs a ha) hbw hd hr
+      rw [← hk0]; exact hkind a ha d0 (by rw [hae hE]; exact hd0) hr0
+    · obtain ⟨a, ha, rfl⟩ := List.mem_map.mp ha'
+      obtain ⟨E, hE⟩ := hexA a ha
+      obtain ⟨d0, hd0, hr0⟩ := path_lift_root h hR hE (hvs a ha) hbw hd hr
+      exact hpath a ha d0 (by rw [hae hE]; exact hd0) hr0
+    · obtain ⟨E, hE, hnp, hg⟩ := hgi i hi
+      rw [hg] at hr
+      obtain ⟨e, he, her⟩ := List.mem_map.mp hr
+      obtain ⟨e0, he0, rfl⟩ := memDeps_lift h hab hR hE hnp he
+      refine hvec i hi hinp (List.mem_map.mpr ⟨e0, by rw [hae hE]; exact he0, h.inj _ _ her⟩)
+    · rcases canon_cases_sub h Γa y with ⟨v, rfl, hnp, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hy', hc⟩
+      · rw [hc] at hy
+        obtain ⟨E1, hE1, rfl⟩ := Option.map_eq_some_iff.mp hy
+        simp only [Function.comp, subE_live, liftE_live] at hlE
+        simp only [Function.comp]
+        rw [hits_subE h hpi, hits_lift h hab hE1 hal hreg]
+        exact hlive v E1 hE1 hlE
+      · rw [hc] at hy; cases hy
+      · rw [hc] at hy
+        by_cases hcd : E.ty ≠ .int ∨ E.mode = .rootb
+        · exact hits_false_of fun d hd hr => by
+            obtain ⟨b, hv, hb, _⟩ := h.Φsat y E hy hlE hcd d hd w hr.symm
+            rw [hbw] at hb; cases hb
+        · unfold hits
+          have : (E.ty != .int || E.mode == .rootb) = false := by
+            simp only [not_or, ne_eq, Decidable.not_not] at hcd
+            simp [hcd.1, hcd.2]
+          rw [this]; rfl
+    · rcases canon_cases_sub h Γa y with ⟨v, rfl, hnp, hc⟩ | ⟨v, rfl, _, hc⟩ | ⟨hy', hc⟩
+      · rw [hc] at hy
+        obtain ⟨E1, hE1, rfl⟩ := Option.map_eq_some_iff.mp hy
+        simp only [Function.comp, subE_dtor, subE_mode] at hdE hos ⊢
+        rw [liftE_dtor' h] at hdE
+        by_cases hrb : E1.mode = .rootb
+        · rw [if_pos hrb] at hdE; cases hdE
+        rw [if_neg hrb] at hdE
+        refine hitsMem_subE h ?_
+        rw [hitsMem_lift h hrb]
+        rw [liftE_mode _ hrb, liftMode_ownSlot] at hos
+        exact hdt v E1 hE1 hdE hos
+      · rw [hc] at hy; cases hy
+      · rw [hc] at hy
+        by_cases hcd : E.ty ≠ .int ∨ E.mode = .rootb
+        · unfold hitsMem
+          simp only [Bool.and_eq_false_iff, List.any_eq_false]
+          refine Or.inr fun d hd hdd => ?_
+          simp only [Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at hdd
+          obtain ⟨⟨hr, hn⟩, _⟩ := hdd
+          obtain ⟨b, hv, hb, _⟩ := h.Φdt y E hy hdE hos hcd d hd hn w hr.symm
+          rw [hbw] at hb; cases hb
+        · unfold hitsMem
+          have : (E.ty != .int || E.mode == .rootb) = false := by
+            simp only [not_or, ne_eq, Decidable.not_not] at hcd
+            simp [hcd.1, hcd.2]
+          rw [this]; rfl
+    · have hc' := canon_some h hEr hpi
+      obtain ⟨hn, hwk⟩ := hpost (S.ρ w)
+      cases h1 : callPost (S.canon Γa) fn (args.map S.ρ) (S.ρ w) with
+      | none => rw [hn.mp h1] at hc'; cases hc'
+      | some Er' =>
+        have hW := hwk Er' _ h1 hc'
+        have hrb : Er.mode ≠ .rootb := by rw [hmo]; simp
+        refine ⟨Er', t, rfl, (hW.live (by rw [subE_live, liftE_live]; exact hl)).1, ?_, ?_, hhv⟩
+        · rw [← hW.mode, subE_mode, liftE_mode _ hrb, hmo]; rfl
+        · rw [← hW.ty, subE_ty, liftE_ty _ hrb, hty]
+
 /-- A call in the callee's body, where the call places it. -/
 theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa : List Var} {f : Nat}
     {args : List Var} {E : Entry} {Γa1 : Ctx} (hc : CallT P Γa Fa f args E Γa1)
@@ -5578,12 +5847,47 @@ theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa 
       rwa [hsv] at this
   -- what a closure handed over may change owns its slot: no region
   have hnpN : ∀ d ∈ mutNames Γa args, S.isPi d.root = false := name_kill_not_region hab hnf
+  have hpost : PW (callPost (S.canon Γa) fn (args.map S.ρ)) (S.canon (callPost Γa fn args)) := by
+    unfold callPost
+    rw [canon_killNames h (AbsOK.callPostAux hab fn.params args 0 Γa hz hab) _ hal hnpN
+      (fun d hd => name_kill_notReg hab hnf d hd)]
+    have hdv : ∀ pa ∈ fn.params.zip args, ∀ b, pa.1.1 = .inout b → ∀ Ea, Γa pa.2 = some Ea →
+        Ea.dbind = true → pa.1.2.holdsView = false := by
+      intro pa hpa b hb Ea hEa hd
+      obtain ⟨k, hk, _, rfl⟩ := mem_zip_getD hpa
+      exact absurd hd (by rw [hds.2.2 k hk b hb Ea hEa]; simp)
+    refine PW.killNames' (callPostAux_lift h hab hou hex hvs fn.params args 0 Γa _ hz hdv hab (PW.refl _))
+      (fun d hd => ?_) (fun d hd => ?_)
+    · rcases mutNames_canon_sub h hab hnf hexA hvs d hd with hd | ⟨w, b, t, rfl, hbw, hbr⟩
+      · exact Or.inl hd
+      · refine Or.inr (sym_quiet h hab hbw hbr fun pa hpa hm => ?_)
+        obtain ⟨k, hk, hka, rfl⟩ := mem_zip_getD hpa
+        have hka' : k < args.length := by simpa using hka
+        obtain ⟨Ea, hEa, _, hok, _⟩ := hargs k hk
+        simp only at hm ⊢
+        rw [getD_map hka', canon_some h hEa (hvs _ (getD_mem' hka'))]
+        refine ⟨_, rfl, ?_⟩
+        rw [subE_mode]
+        revert hok hm; generalize fn.params[k] = q; obtain ⟨pm, t⟩ := q
+        cases pm with
+        | inp => intro hm; simp [PMode.moves] at hm
+        | sink =>
+          intro _ hok
+          have hrb : Ea.mode ≠ .rootb := by rw [hok.2.1]; simp
+          rw [liftE_mode _ hrb, hok.2.1]; simp [liftMode]
+        | inout b' =>
+          intro _ hok
+          have hrb : Ea.mode ≠ .rootb := by
+            rcases hok.2.1 with hm | ⟨_, hm, _⟩ <;> rw [hm] <;> simp
+          rw [liftE_mode _ hrb]; cases hm' : Ea.mode <;> simp_all [liftMode]
+    · rcases mem_mutNames_canon h hab hexA hvs hd with hd | ⟨hN, hb⟩
+      · exact Or.inl hd
+      · exact Or.inr (canon_quiet h (AbsOK.callPostAux hab fn.params args 0 Γa hz hab) hN hb)
   refine ⟨_, _, ⟨fn, hf, by simp [hlen], fun i hi => ?_, namesFree_lift h hab hexA hvs hnf,
     CallDtorSafe.canon h hab hexA hlen (fun i hi => by
       obtain ⟨Ea, hEa, _, hok, _⟩ := hargs i hi; exact ⟨Ea, hEa, hok⟩) hal hds hvs, rfl, rfl,
       fun ht => (hg ht).imp (fun hg' => callR_canon h hab (hR ht) hg' hvs)
-        (fun _ => sorry /- WIP scaffold (AGORA-937 B4, never merged): CallThruOK lifted
-          where a call places its callee (`S.R = []`) -/)⟩, ?_,
+        (fun hc' => callThruOK_canon h hab (hR ht) hlen hexA hvs hpost hc')⟩, ?_,
     fun x => callRes_lift h hab hlr hex hvs x⟩
   · obtain ⟨Ea, hEa, hl, hok, hmv, _⟩ := hargs i hi
     have hia : i < args.length := hlen ▸ hi
@@ -5636,41 +5940,8 @@ theorem callT_ren (h : S.OK) (hab : S.AbsOK Γa) {P : Prog} (hP : ProgOK P) {Fa 
         · rw [hmo] at hmE; cases hmE
         · rw [hmo] at hmE; cases hmE
           cases hb1 : bh.1 <;> rw [hb1] at hle <;> simp_all [Eff.le, Eff.leb]
-  · unfold callPost
-    rw [canon_killNames h (AbsOK.callPostAux hab fn.params args 0 Γa hz hab) _ hal hnpN
-      (fun d hd => name_kill_notReg hab hnf d hd)]
-    have hdv : ∀ pa ∈ fn.params.zip args, ∀ b, pa.1.1 = .inout b → ∀ Ea, Γa pa.2 = some Ea →
-        Ea.dbind = true → pa.1.2.holdsView = false := by
-      intro pa hpa b hb Ea hEa hd
-      obtain ⟨k, hk, _, rfl⟩ := mem_zip_getD hpa
-      exact absurd hd (by rw [hds.2.2 k hk b hb Ea hEa]; simp)
-    refine PW.killNames' (callPostAux_lift h hab hou hex hvs fn.params args 0 Γa _ hz hdv hab (PW.refl _))
-      (fun d hd => ?_) (fun d hd => ?_)
-    · rcases mutNames_canon_sub h hab hnf hexA hvs d hd with hd | ⟨w, b, t, rfl, hbw, hbr⟩
-      · exact Or.inl hd
-      · refine Or.inr (sym_quiet h hab hbw hbr fun pa hpa hm => ?_)
-        obtain ⟨k, hk, hka, rfl⟩ := mem_zip_getD hpa
-        have hka' : k < args.length := by simpa using hka
-        obtain ⟨Ea, hEa, _, hok, _⟩ := hargs k hk
-        simp only at hm ⊢
-        rw [getD_map hka', canon_some h hEa (hvs _ (getD_mem' hka'))]
-        refine ⟨_, rfl, ?_⟩
-        rw [subE_mode]
-        revert hok hm; generalize fn.params[k] = q; obtain ⟨pm, t⟩ := q
-        cases pm with
-        | inp => intro hm; simp [PMode.moves] at hm
-        | sink =>
-          intro _ hok
-          have hrb : Ea.mode ≠ .rootb := by rw [hok.2.1]; simp
-          rw [liftE_mode _ hrb, hok.2.1]; simp [liftMode]
-        | inout b' =>
-          intro _ hok
-          have hrb : Ea.mode ≠ .rootb := by
-            rcases hok.2.1 with hm | ⟨_, hm, _⟩ <;> rw [hm] <;> simp
-          rw [liftE_mode _ hrb]; cases hm' : Ea.mode <;> simp_all [liftMode]
-    · rcases mem_mutNames_canon h hab hexA hvs hd with hd | ⟨hN, hb⟩
-      · exact Or.inl hd
-      · exact Or.inr (canon_quiet h (AbsOK.callPostAux hab fn.params args 0 Γa hz hab) hN hb)
+  · exact hpost
+
 
 /-! ### The callee's contexts stay as the call set them up -/
 
