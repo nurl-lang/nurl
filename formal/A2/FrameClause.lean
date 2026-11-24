@@ -368,4 +368,198 @@ theorem HeldZ.seqIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {a b : Stmt} (hz
   bound := hz.bound
   frames x m0 hx := hz.frames x m0 (by simpa [Stmt.catchFrames] using hx)
 
+
+theorem HeldZ.scopeIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var}
+    (hz : HeldZ m Γ Z (.scope x k)) : HeldZ m Γ Z k where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpk : p ∈ k.spine
+    · exact hz.reach p E hp hm v (by simp only [Stmt.under, hpk, ↓reduceIte]; exact hv)
+    · rw [Stmt.under_off hpk] at hv
+      exact hz.reach p E hp hm v (by simp [Stmt.under, hpk, Stmt.killVars, hv])
+  bound := hz.bound
+  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+
+theorem HeldZ.scopeDIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var} {f : Nat}
+    (hz : HeldZ m Γ Z (.scopeD x f k)) : HeldZ m Γ Z k where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpk : p ∈ k.spine
+    · exact hz.reach p E hp hm v (by simp only [Stmt.under, hpk, ↓reduceIte]; exact hv)
+    · rw [Stmt.under_off hpk] at hv
+      exact hz.reach p E hp hm v (by simp [Stmt.under, hpk, Stmt.killVars, hv])
+  bound := hz.bound
+  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+
+theorem HeldZ.scopeLIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {kk : Nat} {t : Ty} {x : Var}
+    (hz : HeldZ m Γ Z (.scopeL kk t x k)) : HeldZ m Γ Z k where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpk : p ∈ k.spine
+    · exact hz.reach p E hp hm v (by simp only [Stmt.under, hpk, ↓reduceIte]; exact hv)
+    · rw [Stmt.under_off hpk] at hv
+      exact hz.reach p E hp hm v (by simp [Stmt.under, hpk, Stmt.killVars, hv])
+  bound := hz.bound
+  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+
+theorem HeldZ.frozenIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {z : List Var}
+    (hz : HeldZ m Γ Z (.frozen z k)) : HeldZ m Γ Z k where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpk : p ∈ k.spine
+    · exact hz.reach p E hp hm v (by simp only [Stmt.under, hpk, ↓reduceIte]; exact hv)
+    · rw [Stmt.under_off hpk] at hv
+      exact hz.reach p E hp hm v (by simp [Stmt.under, hpk, Stmt.killVars, hv])
+  bound := hz.bound
+  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+
+theorem HeldZ.blockIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} 
+    (hz : HeldZ m Γ Z (.block k)) : HeldZ m Γ Z k where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpk : p ∈ k.spine
+    · exact hz.reach p E hp hm v (by simp only [Stmt.under, hpk, ↓reduceIte]; exact hv)
+    · rw [Stmt.under_off hpk] at hv
+      exact hz.reach p E hp hm v (by simp [Stmt.under, hpk, Stmt.killVars, hv])
+  bound := hz.bound
+  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+
+theorem HeldZ.catchRIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var} {m0 : Mem}
+    (hz : HeldZ m Γ Z (.catchR x m0 k)) : HeldZ m Γ Z k where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpk : p ∈ k.spine
+    · exact hz.reach p E hp hm v (by simp only [Stmt.under, hpk, ↓reduceIte]; exact hv)
+    · rw [Stmt.under_off hpk] at hv
+      exact hz.reach p E hp hm v (by simp [Stmt.under, hpk, Stmt.killVars, hv])
+  bound := hz.bound
+  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+
+
+theorem HeldZ.scopeOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var}
+    (hz : HeldZ m Γ Z k)
+    (hx : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → x ∉ Z p) : HeldZ m Γ Z (.scope x k) where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpk : p ∈ k.spine
+    · simp only [Stmt.under, hpk, ↓reduceIte] at hv
+      exact hz.reach p E hp hm v hv
+    · simp only [Stmt.under, hpk, ↓reduceIte, Stmt.killVars, List.mem_cons] at hv
+      rcases hv with rfl | hv
+      · exact hx p E hp hm hpk
+      · exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
+  bound := hz.bound
+  frames x0 m1 hx0 := hz.frames x0 m1 (by simpa [Stmt.catchFrames] using hx0)
+
+theorem HeldZ.scopeDOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var} {f : Nat}
+    (hz : HeldZ m Γ Z k)
+    (hx : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → x ∉ Z p) : HeldZ m Γ Z (.scopeD x f k) where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpk : p ∈ k.spine
+    · simp only [Stmt.under, hpk, ↓reduceIte] at hv
+      exact hz.reach p E hp hm v hv
+    · simp only [Stmt.under, hpk, ↓reduceIte, Stmt.killVars, List.mem_cons] at hv
+      rcases hv with rfl | hv
+      · exact hx p E hp hm hpk
+      · exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
+  bound := hz.bound
+  frames x0 m1 hx0 := hz.frames x0 m1 (by simpa [Stmt.catchFrames] using hx0)
+
+theorem HeldZ.scopeLOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {kk : Nat} {t : Ty} {x : Var}
+    (hz : HeldZ m Γ Z k)
+    (hx : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → x ∉ Z p) : HeldZ m Γ Z (.scopeL kk t x k) where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpk : p ∈ k.spine
+    · simp only [Stmt.under, hpk, ↓reduceIte] at hv
+      exact hz.reach p E hp hm v hv
+    · simp only [Stmt.under, hpk, ↓reduceIte, Stmt.killVars, List.mem_cons] at hv
+      rcases hv with rfl | hv
+      · exact hx p E hp hm hpk
+      · exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
+  bound := hz.bound
+  frames x0 m1 hx0 := hz.frames x0 m1 (by simpa [Stmt.catchFrames] using hx0)
+
+theorem HeldZ.frozenOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {z : List Var}
+    (hz : HeldZ m Γ Z k) : HeldZ m Γ Z (.frozen z k) where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpk : p ∈ k.spine
+    · simp only [Stmt.under, hpk, ↓reduceIte] at hv
+      exact hz.reach p E hp hm v hv
+    · simp only [Stmt.under, hpk, ↓reduceIte, Stmt.killVars] at hv
+      exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
+  bound := hz.bound
+  frames x0 m1 hx0 := hz.frames x0 m1 (by simpa [Stmt.catchFrames] using hx0)
+
+theorem HeldZ.blockOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} 
+    (hz : HeldZ m Γ Z k) : HeldZ m Γ Z (.block k) where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpk : p ∈ k.spine
+    · simp only [Stmt.under, hpk, ↓reduceIte] at hv
+      exact hz.reach p E hp hm v hv
+    · simp only [Stmt.under, hpk, ↓reduceIte, Stmt.killVars] at hv
+      exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
+  bound := hz.bound
+  frames x0 m1 hx0 := hz.frames x0 m1 (by simpa [Stmt.catchFrames] using hx0)
+
+theorem HeldZ.catchROut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {x : Var} {m0 : Mem}
+    (hz : HeldZ m Γ Z k)
+    (hx : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ k.spine → x ∉ Z p)
+    (hfr : ∀ p E, Γ p = some E → E.mode = .rootb → p < m0.nv → ∀ d ∈ E.vdeps, d.kind.bound = .none →
+      HeldAnch E d → FrameCaps (m0.set x ⟨false, some (.int 1)⟩) (Z p) d.root) : HeldZ m Γ Z (.catchR x m0 k) where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpk : p ∈ k.spine
+    · simp only [Stmt.under, hpk, ↓reduceIte] at hv
+      exact hz.reach p E hp hm v hv
+    · simp only [Stmt.under, hpk, ↓reduceIte, Stmt.killVars, List.mem_cons] at hv
+      rcases hv with rfl | hv
+      · exact hx p E hp hm hpk
+      · exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
+  bound := hz.bound
+  frames x0 m1 hx0 := by
+    simp only [Stmt.catchFrames, List.mem_cons] at hx0
+    rcases hx0 with h | h
+    · cases h; exact hfr
+    · exact hz.frames x0 m1 h
+
+
+theorem HeldZ.rbindIn {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {q : Var}
+    (hz : HeldZ m Γ Z (.rbind q k)) (hq : q ∉ k.spine) : HeldZ m Γ Z k where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpq : q = p
+    · subst hpq
+      rw [Stmt.under_off hq] at hv
+      exact hz.reach q E hp hm v (by simp only [Stmt.under, ↓reduceIte]; exact hv)
+    · by_cases hpk : p ∈ k.spine
+      · exact hz.reach p E hp hm v (by simp only [Stmt.under, hpq, hpk, ↓reduceIte]; exact hv)
+      · rw [Stmt.under_off hpk] at hv
+        exact hz.reach p E hp hm v (by simp [Stmt.under, hpq, hpk, Stmt.killVars, hv])
+  bound := hz.bound
+  frames x m0 hx := hz.frames x m0 (by simp [Stmt.catchFrames, hx])
+
+theorem HeldZ.rbindOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {k : Stmt} {q : Var}
+    (hz : HeldZ m Γ Z k) (hq : q ∉ k.spine)
+    (hx : ∀ p E, Γ p = some E → E.mode = .rootb → p ≠ q → p ∉ k.spine → q ∉ Z p) :
+    HeldZ m Γ Z (.rbind q k) where
+  caps := hz.caps
+  reach p E hp hm v hv := by
+    by_cases hpq : q = p
+    · subst hpq
+      simp only [Stmt.under, ↓reduceIte] at hv
+      exact hz.reach q E hp hm v (by rw [Stmt.under_off hq]; exact hv)
+    · by_cases hpk : p ∈ k.spine
+      · simp only [Stmt.under, hpq, hpk, ↓reduceIte] at hv
+        exact hz.reach p E hp hm v hv
+      · simp only [Stmt.under, hpq, hpk, ↓reduceIte, Stmt.killVars, List.mem_cons] at hv
+        rcases hv with rfl | hv
+        · exact hx p E hp hm (Ne.symm hpq) hpk
+        · exact hz.reach p E hp hm v (by rw [Stmt.under_off hpk]; exact hv)
+  bound := hz.bound
+  frames x m0 hx := hz.frames x m0 (by simpa [Stmt.catchFrames] using hx)
+
 end A2
