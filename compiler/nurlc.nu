@@ -5015,7 +5015,7 @@ unsafe @ __vis_check_template s sname s tfile s tparams s body → v {
                 = depth - depth 1
                 ? & == depth 0 > need 0 { = need - need 1 } {}
             } {
-                ? & == depth 0 seq ( nurl_lex_val lx ) `!` { = need + need 1 } {}
+                ? & == depth 0 ( seq ( nurl_lex_val lx ) `!` ) { = need + need 1 } {}
                 ? ( is_ident_tok tt ) {
                     : s v ( nurl_lex_val lx )
                     : b is_type | > depth 0 > need 0
