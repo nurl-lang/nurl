@@ -317,7 +317,8 @@ $ `stdlib/core/vec.nu`
 **Inferred `sink`.** A parameter does not have to be spelled `sink` to be
 one. If the body consumes it (releases it, stores it in an owner, passes
 it — or one of its fields, or its payload — to another `sink` position)
-or returns it,
+or returns it as the owner of a value of its own (beside a fresh value
+in one literal, say, or taken over on another path),
 the parameter is a `sink` for every caller (a function that takes a
 field of its parameter owns the rest of it, and drops it on the way out):
 
@@ -515,9 +516,12 @@ the same way: an owner moves, a borrow is copied.
 - A `?` / `??` that selects one of several bindings
   (`: ( Vec i ) chosen ? flag a ( make )`) moves the selected owner on the
   paths that select it. The other paths keep their own owners.
-- A call whose callee may return one of its arguments takes that argument
-  as `sink` (§1), so the caller's binding is consumed rather than
-  aliased.
+- A call whose callee takes one of its arguments over to return it takes
+  that argument as `sink` (§1), so the caller's binding is consumed rather
+  than aliased. A callee that only hands an `in` argument back — `^ p`, or
+  a literal or option payload that names it whole (§7.6) — lends it: the
+  caller keeps its binding, and the result borrows from it, so the result
+  cannot outlive it.
 
 So two live names can never both own one buffer.
 
@@ -2885,8 +2889,10 @@ are dropped, moved and copied by the same rules:
   be copied as well, since nothing is copied. Beside a value of the
   literal's own (`^ @ P { p ( vec_new ) }`) the literal takes the
   parameter over instead, because a struct is dropped whole: the caller
-  hands its argument in. A function that is meant to take its argument
-  over says so with `sink` (D4c, AGORA-995).
+  hands its argument in. So with several parameters named whole of which
+  the function takes one over (a `sink`, or one it consumes on another
+  path): the literal takes them all over. A function that is meant to
+  take its argument over says so with `sink` (D4c, AGORA-995).
 - **A local handed back whole through a call** (`^ ( id s )`, `^ ( wrap
   s )`, or `: K k ( wrap s )` and then `^ k`, where the callee hands its
   argument back whole) leaves with the result on the runs the call lent:

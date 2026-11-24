@@ -561,6 +561,7 @@ $ `stdlib/core/vec.nu`
 : i FX_ENUM_LENT 2097152  // a `??` arm's payload of a program enum: lent to the arm, which works on a copy (agora #883, h231)
 : i FX_LIT_MIXED 4194304  // a literal temporary holding a value of its own beside the parameters it names whole (check.py's lit_mixed, AGORA-995)
 : i FX_CALL_LENT_ONLY 8388608  // a call's temporary whose callee lends one argument, whole, and nothing else (check.py's call_lent_only, AGORA-995)
+: i FX_LIT_TWICE 16777216  // a literal temporary naming one of its whole parameters more than once (check.py's lit_twice, AGORA-995)
 : ~ i g_fc_cap_loans 0  // the loans closures captured (a set)
 : ~ i g_fc_wb_pairs 0  // (the loan a place holds of a reader's value, the struct cursor whose field store handed it over: eng_cursor_handover), a set
 : ~ i g_fc_wbs 0  // while a call's effects are applied: the cursors it writes back into the slots they were read from (a set)
@@ -570,6 +571,7 @@ $ `stdlib/core/vec.nu`
 : ~ i g_fc_ret_sel -1  // the owners a `ret`'s join or value block moved out, each with its value before (a vector of pairs)
 : ~ i g_fc_ret_ws 0  // …the ones of them watched while the `;` blocks run (a set)
 : ~ i g_fc_ret_fresh 0  // some return hands back a value of the function's own that holds something
+: ~ i g_fc_twice 0  // some return hands back a literal naming a parameter twice (check.py's twice, AGORA-995)
 : ~ i g_fc_moved_vid -1  // the last value moved that holds views of its own parts: the binding, and those loans (a set)
 : ~ i g_fc_moved_own 0
 : ~ i g_fc_tails -1  // a place → the shared handles it reaches through + 1 (shared_tails), for this function
@@ -664,7 +666,7 @@ $ `stdlib/core/vec.nu`
 : ~ i g_sm -1  // the summaries, SM_W words a function (by its number); each set a place in g_sm_w, 0 the empty one
 : ~ i g_sm_w -1  // …their sets: a count, then the words in order
 : ~ i g_sm_tmp -1
-: i SM_W 26
+: i SM_W 27
 : i SM_STATE 0  // 0 none yet, 1 made by the engine, 2 declared, 3 derived from the walk's tables
 : i SM_RES 1  // RES_*
 : i SM_LENDS 2  // (parameter, path, kind): the result is a handle of / a view into it
@@ -691,6 +693,7 @@ $ `stdlib/core/vec.nu`
 : i SM_KEEPS 23  // the parameters that may go back still holding what they held on entry
 : i SM_CATCHES 24  // the closure parameters it runs where a panic in them is caught (`recover`): the body may stop anywhere
 : i SM_PUTBACK 25  // the parameters it writes back into the slot they were read from (mem_put_back): stored as they are, nothing there released
+: i SM_TWICE 26  // 1: it hands back a literal naming a parameter twice - a lend in part, no return handover (check.py's twice, AGORA-995)
 : i RES_NONE 0
 : i RES_OWN 1
 : i RES_LENT 2
@@ -795,6 +798,7 @@ $ `stdlib/core/vec.nu`
 : i CORE_VF_HANDON 128  // a variable's flag: the literal a `\` try hands its failure on in, which codegen hands on whole (core_try)
 : i CORE_VF_ENVOWN 2048  // a capture's flag: a closure returned where it is made (`^ \ …`), whose env owns this handle capture — moved in from its owner, a copy where the binding borrows — not a copy of its handle that depends on the binding (gen_env_allocation; AGORA-978). The engine does not ask it
 : i CORE_VF_AGGLEND 1024  // a variable's flag: a returned literal codegen made without copying a field it was given lent: the literal is a lend of what that field borrows, on the runs the function answers lent (__gen_agg_lit_body, agora #907)
+: i CORE_VF_UNLINKED 4096  // a variable's flag: a `:` binding of a call's result that codegen linked to no owner - the callee not compiled yet (defined below, a generic instance), so no argument it hands back is known at the call: no store replacing an owner hands it the old value (mem_udrop_hand_over has no such borrower; AGORA-1005)
 : i CORE_VF_CPCOPY 512  // a variable's flag: the value a `=` gave a by-pointer capture, which codegen copied in on the runs the call lent (gen_assign's capture copy-in, agora #872): the capture owns it (agora #884); on a `:` raw string binding, codegen gave it a copy of its own (AGORA-953)
 : ~ i g_core_asn_op 0  // the operand the last core_assign stored (core_cpcopy_mark)
 : ~ i g_core_let_dup 0  // 1: the `:` binding core_let makes next was given a copy of its value by codegen (a raw view a value block lent out of its own local, AGORA-953): it gets CORE_VF_CPCOPY
@@ -9257,6 +9261,9 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // copied whatever the function answers (no lend either way).
     : ~ i __ret_bcopy 0
     : ~ b ret_call_copied F
+    // (…and copied on every run that lent: the result is this function's
+    // own on every run, so it hands back no argument either - agora #1004)
+    : ~ b ret_call_owned_all F
     // (A closure-returning call's result that its callee may have lent is
     // copied on the way out where it was, mem_retclo_own_result's
     // __clo_tmp_settle: this function hands back its own, and lends
@@ -9387,6 +9394,7 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             = val ( mem_emit_cloneif cg __crt val rb )
             = hbit ( nurl_str_cat `true` `` )
             = ret_call_copied T
+            = ret_call_owned_all T
         } {}
         ? & & ! ret_call_copied ! ( seq hbit `true` ) & != 0 ( nurl_str_len __rll ) ( __clone_supported __crt syms ) {
             : s rb2 ( nurl_cg_reg cg )
@@ -10458,7 +10466,11 @@ unsafe @ __gen_ret i lex i syms i cg → s {
     // though the return is not a bare identifier. Ownership only — the
     // §2.8 refdepth summary above deliberately stays on the strict
     // `^ p` form, so no escape diagnostic moves because of this.
-    : ~ s __ra_rest ( nurl_sym_get syms `__last_phi_idents__` )
+    // (…not where the call's result was copied on every run that lent:
+    // what goes back is this function's own, and naming the arguments the
+    // call could hand back made the caller take the copy for a lend of
+    // them, which it never released - agora #1004.)
+    : ~ s __ra_rest ? ret_call_owned_all `` ( nurl_sym_get syms `__last_phi_idents__` )
     ~ != 0 ( nurl_str_len __ra_rest ) {
         : s __ra_w ( str_first_word __ra_rest )
         = __ra_rest ( str_skip_word __ra_rest )
@@ -12407,6 +12419,16 @@ unsafe @ sq_has i a i w → b {
         : i x . st + + a 1 mid
         ? == x w { ^ T } {}
         ? < x w { = lo + mid 1 } { = hi mid }
+    }
+    ^ F
+}
+
+// Do sets `a` and `b` have a word in common?
+@ __sq_meets i a i b → b {
+    : ~ i k 0
+    ~ < k ( sq_len b ) {
+        ? ( sq_has a ( sq_at b k ) ) { ^ T } {}
+        = k + k 1
     }
     ^ F
 }
@@ -20224,7 +20246,7 @@ unsafe @ eng_byte s w i k → i {
             ( wv_put g_fx_lent dest ( sq_of_wv tmp 0 ( wv_len tmp ) ) )
             // (…and whether that is all it lends: one argument, whole -
             // nurlc's lend kind 1, the return's handover)
-            ? & == nl 1 == ( wv_len tmp ) 1 { ( fx_set dest FX_CALL_LENT_ONLY ) } { ( fx_clear dest FX_CALL_LENT_ONLY ) }
+            ? & & == nl 1 == ( wv_len tmp ) 1 == 0 ( sm_word sm SM_TWICE ) { ( fx_set dest FX_CALL_LENT_ONLY ) } { ( fx_clear dest FX_CALL_LENT_ONLY ) }
             ( wv_drop tmp )
         } {}
         : ~ b part F
@@ -21893,6 +21915,10 @@ unsafe @ eng_byte s w i k → i {
             // (a literal nested in this one that lends the parameters it
             // names whole is no value of its own)
             ? & & & & == cown OW_O == ( fv_kind ov ) VK_TEMP & != fty ET_NONE ! ( et_is_view fty ) ( et_owning fty ) ! & != 0 ( wv_at g_fx_litp ov ) ! ( fx_has ov FX_LIT_MIXED ) { = owned_fresh T } {}
+            // (…and a `sink` parameter named whole: the function's own, it
+            // moves in, so the literal holds a value of its own beside the
+            // `in` ones - nurlc's gen_agg_lit, AGORA-995)
+            ? & & & whole >= ( fv_pidx ov ) 0 == ( fp_mode ( fv_pidx ov ) ) PM_SINK & != fty ET_NONE ( et_owning fty ) { = owned_fresh T } {}
             : ~ b next F
             ? & & & & & != ty ET_NONE == ( et_kind ty ) EK_SLICE | == cown OW_O == cown OW_P != ( fv_kind ov ) VK_TEMP fplain ( et_owning fty ) {
                 // a slice literal owns its elements: one that names a
@@ -21947,12 +21973,16 @@ unsafe @ eng_byte s w i k → i {
                         // a parameter named whole in a struct literal or as a
                         // variant's payload: handed back as it is, the literal
                         // keeps the caller's argument (at the `ret`)
+                        ? ( sq_has ( wv_at g_fx_litp dest ) ov ) { ( fx_set dest FX_LIT_TWICE ) } {}
                         ( wv_put g_fx_litp dest ( sq_add ( wv_at g_fx_litp dest ) ov ) )
                     } {
                         ? & | wrapper ! ( fx_has ov FX_LIT_MIXED ) != 0 ( wv_at g_fx_litp ov ) {
                             // (…or as the payload of an option or a result,
                             // or in a literal nested in this one that lends
                             // them)
+                            // (a name it shares with this literal, or one the nested
+                            // literal names twice, is named twice here too)
+                            ? | ( fx_has ov FX_LIT_TWICE ) ( __sq_meets ( wv_at g_fx_litp dest ) ( wv_at g_fx_litp ov ) ) { ( fx_set dest FX_LIT_TWICE ) } {}
                             ( wv_put g_fx_litp dest ( sq_union ( wv_at g_fx_litp dest ) ( wv_at g_fx_litp ov ) ) )
                             ? ( fx_has ov FX_LIT_MIXED ) { ( fx_set dest FX_LIT_MIXED ) } {}
                         } {}
@@ -23198,7 +23228,23 @@ unsafe @ eng_byte s w i k → i {
         // into the result, as into a `sink`. Bound, pushed or assigned
         // first, it holds copies of them.
         : ~ i lp ( wv_at g_fx_litp ov )
-        ? & != lp 0 ! ( fx_has ov FX_LIT_MIXED ) {
+        // (…and one of several parameters, some of which this function
+        // takes over on another path, takes them all over, as a declared
+        // `sink` beside them makes it - nurlc's __mixlit_take_all; the
+        // summary of the round before says which it consumes)
+        : ~ b lmix ( fx_has ov FX_LIT_MIXED )
+        ? & ! lmix > ( sq_len lp ) 1 {
+            : i took ( sq_union g_s_consumes ? ( sm_have g_ec_f ) ( sm_load g_ec_f SM_CONSUMES ) 0 )
+            : ~ i k 0
+            ~ < k ( sq_len lp ) {
+                ? ( sq_has took ( fv_pidx ( sq_at lp k ) ) ) { = lmix T } {}
+                = k + k 1
+            }
+        } {}
+        ? & != lp 0 ! lmix {
+            // (one named twice is lent in part: no return handover of
+            // what a caller hands it - SM_TWICE, nurlc's twicelit)
+            ? ( fx_has ov FX_LIT_TWICE ) { = g_fc_twice 1 } {}
             : ~ i k 0
             ~ < k ( sq_len lp ) {
                 : i b ( sq_at lp k )
@@ -23598,7 +23644,10 @@ unsafe @ eng_byte s w i k → i {
     ? == op CO_LET {
         ( stmt_let st at ln )
         : i lv ( ec + at 1 )
-        ? != ( fv_kind lv ) VK_TEMP { : i lav ( st_av st lv ) ? != lav 0 { ( __eng_link lv ( av_alias lav ) at ) } {} } {}
+        // (…not a binding codegen linked to no owner, CORE_VF_UNLINKED: a
+        // call's result whose callee is compiled after this function - a
+        // later `=` by name still links it; AGORA-1005)
+        ? & != ( fv_kind lv ) VK_TEMP == 0 & ( ev lv 4 ) CORE_VF_UNLINKED { : i lav ( st_av st lv ) ? != lav 0 { ( __eng_link lv ( av_alias lav ) at ) } {} } {}
         ^ ( eng_next at )
     } {}
     ? == op CO_ASSIGN {
@@ -24397,12 +24446,14 @@ unsafe @ eng_byte s w i k → i {
         = field + field 1
     }
     : ~ i mixed 0
+    : ~ i twice 0
     = k 0
     ~ < k ( wv_len impls ) {
         : i f ( ef_find ( wv_at impls k ) )
         ? & & >= f 0 ( ef_walked f ) ( sm_have f ) {
             ? > ( sm_word f SM_RES ) res { = res ( sm_word f SM_RES ) } {}
             ? != 0 ( sm_word f SM_MIXED ) { = mixed 1 } {}
+            ? != 0 ( sm_word f SM_TWICE ) { = twice 1 } {}
         } {}
         = k + k 1
     }
@@ -24424,6 +24475,7 @@ unsafe @ eng_byte s w i k → i {
     ( sm_put r SM_CATCHES ( sm_keep kset ) )
     ( sm_put r SM_RES res )
     ( sm_put r SM_MIXED mixed )
+    ( sm_put r SM_TWICE twice )
     ( sm_put r SM_MODES ( sm_word any SM_MODES ) )
     ( sm_put r SM_NPARAM ( sm_word any SM_NPARAM ) )
     ( im_put g_sx_virt name + r 1 )
@@ -24670,7 +24722,7 @@ unsafe @ eng_byte s w i k → i {
     = g_fc_loopmemo ( im_new )
     = g_fc_loophead ( im_new )
     = g_fc_cap_loans 0 = g_fc_walking 0 = g_fc_wb_pairs 0 = g_fc_wbs 0
-    = g_fc_ret_watch -1 = g_fc_ret_changed 0 = g_fc_ret_fresh 0
+    = g_fc_ret_watch -1 = g_fc_ret_changed 0 = g_fc_ret_fresh 0 = g_fc_twice 0
     = g_fc_moved_vid -1 = g_fc_moved_own 0
     = g_fc_line ( ef_at f EF_LINE )
     = g_s_effects 0 = g_s_consumes 0 = g_s_elems 0 = g_s_invokes 0 = g_s_detaches 0 = g_s_shares 0
@@ -25263,6 +25315,7 @@ unsafe @ eng_byte s w i k → i {
     ? == 0 ( sm_word f SM_STATE ) { ( eng_initial_summary f ) = changed T } {}
     ? > res ( sm_word f SM_RES ) { ( sm_put f SM_RES res ) = changed T } {}
     ? & != mixed 0 == 0 ( sm_word f SM_MIXED ) { ( sm_put f SM_MIXED 1 ) = changed T } {}
+    ? & != g_fc_twice 0 == 0 ( sm_word f SM_TWICE ) { ( sm_put f SM_TWICE 1 ) = changed T } {}
     ? ( sm_merge f SM_LENDS lends ) { = changed T } {}
     ? ( sm_merge f SM_RHOLDS rholds ) { = changed T } {}
     ? ( sm_merge f SM_EFFECTS effs ) { = changed T } {}
@@ -25327,6 +25380,7 @@ unsafe @ eng_byte s w i k → i {
     : ~ i field SM_LENDS
     ~ <= field SM_CREDITS { ? != field SM_MIXED { ( sm_put f field 0 ) } {} = field + field 1 }
     ( sm_put f SM_MIXED 0 )
+    ( sm_put f SM_TWICE 0 )
     ( sm_put f SM_KEEPS 0 )
     ( sm_put f SM_CATCHES 0 )
     ( sm_put f SM_PUTBACK 0 )
@@ -26623,6 +26677,17 @@ unsafe @ eng_print_types → v {
     : i cv ( nurl_sym_int2 syms name `__cv` )
     ? | < cv 0 != / cv CORE_VS g_core_serial { ^ } {}
     ( core_var_or_flag % cv CORE_VS CORE_VF_SECOND )
+}
+
+// The `:` binding `name` of a call's result, at slot `ptr`: where codegen
+// linked it to no owner (no `__alias` - the callee not compiled yet, so
+// nothing it hands back is known here), a store replacing an owner hands
+// it nothing, and the core IR says so: CORE_VF_UNLINKED (AGORA-1005).
+@ core_mark_unlinked i syms s name s ptr → v {
+    ? != 0 ( nurl_sym_len2 syms ptr `__alias` ) { ^ v } {}
+    : i cv ( nurl_sym_int2 syms name `__cv` )
+    ? | < cv 0 != / cv CORE_VS g_core_serial { ^ v } {}
+    ( core_var_or_flag % cv CORE_VS CORE_VF_UNLINKED )
 }
 
 // The operand on top, a closure binding a `=` gives another without moving
@@ -79756,6 +79821,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                     ( mem_note_bound_lend syms name __own_tt __own_val )
                     ( mem_own_add_user_drop syms cg ptr rvt )
                     ( mem_udrop_bind_flag syms cg ptr rvt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow val )
+                    ? & != 0 g_core_live == bck_rhs_tt TT_LPAREN { ( core_mark_unlinked syms name ptr ) } {}
                     ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rvt ptr __rhs_r0 val ) } {}
                     ( __most_init syms name ptr val __blk_lend )
                     ( mem_journal_push_userdrop syms cg ptr rvt )
@@ -80195,6 +80261,7 @@ unsafe @ gen_let_or_struct i lex i syms i cg → s {
                         ( mem_note_bound_lend syms name __own_tt __own_val )
                         ( mem_own_add_user_drop syms cg ptr rpt )
                         ( mem_udrop_bind_flag syms cg ptr rpt ( __blk_bind_tt __own_tt __blk_lend ) __own_val rhs_borrow val )
+                        ? & != 0 g_core_live == bck_rhs_tt TT_LPAREN { ( core_mark_unlinked syms name ptr ) } {}
                         ? __blk_lend { ( mem_blk_tail_call_own syms cg ptr ) ( mem_blk_tail_copy_slot syms cg ptr rpt ptr __rhs_r0 val ) } {}
                         ( __most_init syms name ptr val __blk_lend )
                         ( mem_journal_push_userdrop syms cg ptr rpt )
@@ -109530,36 +109597,42 @@ unsafe @ __sx_names_capture i syms s sx → b {
         = pend ( nurl_str_cat3 pend ` ` pw )
         = prest ( str_skip_words prest 4 )
     }
-    : ~ i mj 0
-    ~ < mj mn {
-        : ~ s mr ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `mixlit#` ( nurl_str_int mj ) ) ) `` )
-        : s mfn ( str_first_word mr ) = mr ( str_skip_word mr )
-        ? ( seq mfn fname ) {
-            : s mixs ( str_first_word mr )
-            : ~ i msk 0
-            : ~ s mrest ( nurl_str_cat mixs `` )
-            ~ != 0 ( nurl_str_len mrest ) {
-                : i cm ( nurl_str_find mrest `,` )
-                : s mix ? < cm 0 ( nurl_str_cat mrest `` ) ( nurl_str_slice mrest 0 cm )
-                = mrest ? < cm 0 `` ( nurl_str_slice mrest + cm 1 - - ( nurl_str_len mrest ) cm 1 )
-                ? != 0 ( nurl_str_len mix ) {
-                    ? | | ( str_contains_word ( nurl_sym_get g_fn_sink fname ) mix ) ( str_contains_word ( nurl_sym_get syms `__fn_inferred_sink__` ) mix ) ( str_contains_word pend mix ) { = msk + msk 1 } {}
-                } {}
-            }
-            ? > msk 0 {
-                = mrest ( nurl_str_cat mixs `` )
+    // (Until a pass adds none: two literals sharing a parameter take each
+    // other's over, whichever is recorded first.)
+    : ~ b mchg T
+    ~ mchg {
+        = mchg F
+        : ~ i mj 0
+        ~ < mj mn {
+            : ~ s mr ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `mixlit#` ( nurl_str_int mj ) ) ) `` )
+            : s mfn ( str_first_word mr ) = mr ( str_skip_word mr )
+            ? ( seq mfn fname ) {
+                : s mixs ( str_first_word mr )
+                : ~ i msk 0
+                : ~ s mrest ( nurl_str_cat mixs `` )
                 ~ != 0 ( nurl_str_len mrest ) {
                     : i cm ( nurl_str_find mrest `,` )
                     : s mix ? < cm 0 ( nurl_str_cat mrest `` ) ( nurl_str_slice mrest 0 cm )
                     = mrest ? < cm 0 `` ( nurl_str_slice mrest + cm 1 - - ( nurl_str_len mrest ) cm 1 )
                     ? != 0 ( nurl_str_len mix ) {
-                        : s pn ( str_first_word ( str_skip_words pnames ( nurl_str_to_int mix ) ) )
-                        ? != 0 ( nurl_str_len pn ) { ( mem_record_kept_param syms pn ) ( bck_record_inferred_sink syms pn ) } {}
+                        ? | | ( str_contains_word ( nurl_sym_get g_fn_sink fname ) mix ) ( str_contains_word ( nurl_sym_get syms `__fn_inferred_sink__` ) mix ) ( str_contains_word pend mix ) { = msk + msk 1 } {}
                     } {}
                 }
+                ? > msk 0 {
+                    = mrest ( nurl_str_cat mixs `` )
+                    ~ != 0 ( nurl_str_len mrest ) {
+                        : i cm ( nurl_str_find mrest `,` )
+                        : s mix ? < cm 0 ( nurl_str_cat mrest `` ) ( nurl_str_slice mrest 0 cm )
+                        = mrest ? < cm 0 `` ( nurl_str_slice mrest + cm 1 - - ( nurl_str_len mrest ) cm 1 )
+                        ? & != 0 ( nurl_str_len mix ) ! | ( str_contains_word ( nurl_sym_get g_fn_sink fname ) mix ) ( str_contains_word ( nurl_sym_get syms `__fn_inferred_sink__` ) mix ) {
+                            : s pn ( str_first_word ( str_skip_words pnames ( nurl_str_to_int mix ) ) )
+                            ? != 0 ( nurl_str_len pn ) { ( mem_record_kept_param syms pn ) ( bck_record_inferred_sink syms pn ) = mchg T } {}
+                        } {}
+                    }
+                } {}
             } {}
-        } {}
-        = mj + mj 1
+            = mj + mj 1
+        }
     }
 }
 

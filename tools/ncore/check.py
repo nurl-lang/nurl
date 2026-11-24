@@ -4392,7 +4392,14 @@ class FnCheck:
                 held |= hroot(self.closure_owned(av.held), fp)
             if lent:
                 self.agg_lends[dest_vid] = lent
-            if dest_vid is not None and (owned_fresh or lent):
+            # (…and a `sink` parameter named whole: the function's own, it
+            # moves in, a value of its own beside the `in` ones - nurlc's
+            # gen_agg_lit, AGORA-995)
+            sunk_in = any(op[0] == "v" and not op[2] and op[1] in self.pidx
+                          and self.fn.modes[self.pidx[op[1]]] == "sink"
+                          and (self.ty_of_field(ty, variant, i) or ("?",))[0] not in VIEW_TYPES
+                          for i, op in enumerate(ops))
+            if dest_vid is not None and (owned_fresh or lent or sunk_in):
                 # a value of its own beside the parameters it names whole: a
                 # struct is dropped whole, so handed back it takes them over
                 # (`ret`)
@@ -4769,8 +4776,12 @@ class FnCheck:
             # (by name, a call's lend, a payload) or an `=` gives it a
             # binding by name - not where an `=` gives it a call's result
             vid = s[1] if s[0] == "let" else s[1][0]
-            byname = s[0] == "let" or (not s[1][1] and s[2] is not None and s[2][0] == "use"
-                                       and s[2][1][0] == "v" and self.fn.vars[s[2][1][1]].kind != "temp")
+            # (…a `let` of a binding codegen linked to no owner links nothing:
+            # a call's result whose callee is compiled after this function,
+            # CORE_VF_UNLINKED - a later `=` by name still links it; AGORA-1005)
+            byname = (not self.fn.vars[vid].unlinked) if s[0] == "let" else (
+                not s[1][1] and s[2] is not None and s[2][0] == "use"
+                and s[2][1][0] == "v" and self.fn.vars[s[2][1][1]].kind != "temp")
             av = st.vals.get(vid)
             if byname and av is not None and self.fn.vars[vid].kind != "temp":
                 for a in av.alias:
