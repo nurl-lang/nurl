@@ -5068,7 +5068,9 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hzz
     | frozenSkip =>
       refine ⟨Γ, ?_, hi.respine rfl (by simp [Stmt.vars]) trivial trivial trivial, Nat.le_refl _,
-        (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl⟩
+        (CtxRel.refl Γ).keep rfl rfl, fun _ _ => rfl,
+        Z, hzz.restmt rfl rfl (fun v hv => by simp [Stmt.killVars] at hv) (fun c hc => by simp [Stmt.catchFrames] at hc),
+        ZKeep.refl _ _⟩
       rcases skip_inv hs with rfl | hw
       · exact StmtT.skip
       · exact StmtT.skip.weakenOut hi.wf hi.names (Or.inr hw)
@@ -5100,8 +5102,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
             have hns : d.root ∉ k.spine := fun h => hnk' (Stmt.spine_sub_killVars _ _ h)
             obtain ⟨_, Er', hEr', _, hty, _⟩ := hk.1 d.root Er hEr hns
             refine Or.inr ⟨hha, fun hin => ?_, Er', hEr', by rw [hty]; exact hhv⟩
-            have := Step.held_not_killVars hst' (hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv)
-              hcd hs.headCallc_live h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hnk' hlt
+            have := Step.held_not_killVarsZ hst' hzz.frozenIn hcd h0 hm (by simpa [Stmt.spine] using hps0) hd hb hha hnk' hlt
             exact this (by simpa [Stmt.killVars] using hin)
           spineNd := hi'.spineNd
           spineDom := hi'.spineDom
