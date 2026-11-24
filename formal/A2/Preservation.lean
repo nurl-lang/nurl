@@ -3366,11 +3366,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         MInv m' (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) →
         m'.nv = m1.nv → Covers m' → (∀ v, v ≠ x → m'.st v = m1.st v) →
         (MInv m' (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) →
-          ∀ w, LiveCaps m Γ w →
-          LiveCaps m' (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) w) →
+          ∀ D' w, x ∉ D' → y ∉ D' → FrameCaps m D' w → FrameCaps m' D' w) →
         ∃ Γ', StmtT P ξ Γ' F .skip (setE (kill .realloc t.holdsView x Γ1) x
             { Ex1 with held := Ex1.held ++ ownHeld true t D }) ∧ Inv m' Γ' F .skip ∧ m.nv ≤ m'.nv ∧
-          Keep Γ Γ' (.push x y) .skip ∧ Frz F m m' := by
+          Keep Γ Γ' (.push x y) .skip ∧ Frz F m m' ∧ ∃ Z', HeldZ m' Γ' Z' .skip ∧ ZKeep Γ Z Z' := by
       intro m1 m' v htk hinv hnv hcov hst1 hsc
       obtain ⟨post, _⟩ := hgo htk
       have hanch1 := post.rel.anchS hanchS
@@ -3398,7 +3397,11 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       exact ⟨_, StmtT.skip, Inv.ofLeaf hi hinv (by rw [hnv, post.nv]; exact Nat.le_refl _)
         (by simp [Stmt.vars]) (hrel.anchS hanchS |>.anti fun _ h => by simp [Stmt.killVars] at h) rfl hcov trivial,
         by rw [hnv, post.nv]; exact Nat.le_refl _,
-        hrel.keep rfl rfl, fun w hw => by rw [hst1 w (fun e => hxF (e ▸ hw))]; exact post.frz w hw⟩
+        hrel.keep rfl rfl, fun w hw => by rw [hst1 w (fun e => hxF (e ▸ hw))]; exact post.frz w hw,
+        Z, hz.leaf rfl rfl (by rw [hnv, post.nv]; exact Nat.le_refl _) (fun p Ep hp hmp => hrel.rootb_back hp hmp)
+          (fun v hv => by simp [Stmt.killVars] at hv)
+          (fun _ _ _ _ _ _ _ _ hD hcw => hsc hinv _ _ (hD x (by simp [Stmt.killVars])) (hD y (by simp [Stmt.killVars])) hcw),
+        ZKeep.refl _ _⟩
     have prep : ∀ {m1 : Mem} {v : Val}, TakeVal m y v m1 →
         Pushed m1 Γ1 t v D ∧ MInv m1 Γ1 ∧ canDo Ex1.mode .realloc ∧ Ex1.ty = .vec t ∧
         (RootbAnchS Γ1 F (Stmt.push x y).killVars) := by
@@ -3410,22 +3413,23 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     -- (AGORA-937 B4: the clause after a push into `x`'s own `Vec`: the taken
     -- value was a live slot's, clean; the grown node is clean, and as an
     -- owned tree holds no handle)
+    -- (AGORA-937 B4: the clause after a push into `x`'s own `Vec`: the taken
+    -- value was the frame's, clean; the grown node is clean, and as an owned
+    -- tree holds no handle)
     have pushOwnCaps : ∀ {m1 m0 : Mem} {v : Val} {t' : Ty} {c d c' d' : Nat} {es : List Val},
         TakeVal m y v m1 → m1.st x = some ⟨true, some (.node t' c d es)⟩ →
-        MInv (m0.set x ⟨true, some (.node t' c' d' (es ++ [v]))⟩)
-          (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) →
-        m0.st = m1.st → ∀ w, LiveCaps m Γ w → LiveCaps (m0.set x ⟨true, some (.node t' c' d' (es ++ [v]))⟩)
-          (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) w := by
-      intro m1 m0 v t' c d c' d' es htk hT hinv hst0 w hcw
+        MInv (m0.set x ⟨true, some (.node t' c' d' (es ++ [v]))⟩) (setE (kill .realloc t.holdsView x Γ1) x { Ex1 with held := Ex1.held ++ ownHeld true t D }) →
+        m0.st = m1.st → ∀ D' w, x ∉ D' → y ∉ D' → FrameCaps m D' w →
+          FrameCaps (m0.set x ⟨true, some (.node t' c' d' (es ++ [v]))⟩) D' w := by
+      intro m1 m0 v t' c d c' d' es htk hT hinv hst0 D' w hxD hyD hcw
       obtain ⟨_, hsy⟩ := htk.slot
-      have hv : ValCapsInp v w := hcw.val hy hly hsy
-      have h1 : LiveCaps m1 Γ1 w := (htk.liveCaps hcw).of_back hpa.liveBack
-      have hN : ValCapsInp (.node t' c' d' (es ++ [v])) w := (h1.val hx1 hl1 hT).push hv
-      refine (h1.of_st hst0).setG (fun u E1 hux hu hlu => ?_) (fun V e => ?_)
-      · simp only [setE, upd_ne _ _ hux] at hu; exact LiveBack.kill _ _ _ _ u E1 hu hlu
-      · cases e
-        exact ⟨fun n hn => hN.sub hn, fun c hc =>
-          (hinv.slot_no_href (x := x) (T := .node t' c' d' (es ++ [v])) (by simp [Mem.set, upd]) hc).elim⟩
+      have hv : ValCapsInp v w := (hcw y _ _ hyD hsy).1
+      have h1 : FrameCaps m1 D' w := htk.frameCaps hcw
+      have hN : ValCapsInp (.node t' c' d' (es ++ [v])) w := (h1 x _ _ hxD hT).1.push hv
+      refine (h1.of_st hst0).set (fun V e => ?_)
+      cases e
+      exact ⟨fun n hn => hN.sub hn, fun c hc =>
+        (hinv.slot_no_href (x := x) (T := .node t' c' d' (es ++ [v])) (by simp [Mem.set, upd]) hc).elim⟩
     cases hst with
     | reap hrs hrk _ => first | exact Bool.noConfusion hrs | exact pres_reap ht0 hrs hcd hi hrk Z hz
     | push htk hT _ _ =>
@@ -3434,14 +3438,14 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         (fun h => by simp [ownHeld, h])
         (Or.inl ⟨rfl, rfl, rfl⟩) hds (HeldSpared.of_none (NoHeld.of_anchS hanch1 (by simp [Stmt.killVars]) hxF) _ _)) rfl (covers_push (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
-        (fun hinv w hcw => pushOwnCaps htk hT hinv rfl w hcw)
+        (fun hinv D' w hxD hyD hcw => pushOwnCaps htk hT hinv rfl D' w hxD hyD hcw)
     | pushRealloc htk hT _ _ =>
       obtain ⟨hp, hinv1, hcan1, hty1, hanch1⟩ := prep htk
       exact fin htk (push_grow hinv1 hanch1.toH hx1 hl1 hcan1 hxF hty1 hT hp.ownHeld (fun h => hxD (ownHeld_roots h))
         (fun h => by simp [ownHeld, h])
         (Or.inr ⟨rfl, rfl, rfl⟩) hds (HeldSpared.of_none (NoHeld.of_anchS hanch1 (by simp [Stmt.killVars]) hxF) _ _)) rfl (covers_pushRealloc (covers_takeVal hi.cover htk) hT)
         (fun w hw => by simp [upd_ne _ _ hw])
-        (fun hinv w hcw => pushOwnCaps htk hT hinv rfl w hcw)
+        (fun hinv D' w hxD hyD hcw => pushOwnCaps htk hT hinv rfl D' w hxD hyD hcw)
   | @editB ξ Γ Γ1 F x op Ex Ex1 t D _ hx hmx hl hty hhv hxF harg hyx hx1 hl1 hthru =>
     intro m m' s' hcd hi hst Z hz
     have hanch := hi.leafAnch rfl
