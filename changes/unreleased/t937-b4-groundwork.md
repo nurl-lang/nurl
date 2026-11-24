@@ -1,4 +1,4 @@
-### Formal
+### Added
 
 - **A2 groundwork for typing a call that changes memory its arguments view, inside the elements** (AGORA-937 B4, AGORA-933's `( f1 vv )`).
   - New definition `CallThruOK`, the call-site premise route U will add.
