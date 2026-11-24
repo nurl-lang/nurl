@@ -209,6 +209,18 @@ theorem MInv.add {m : Mem} {Γ : Ctx} (hi : MInv m Γ) {x : Var} (hx : Γ x = no
       subst hsl; cases hT; exact hout.pkgs
     · simp only [Mem.set_st, upd_ne _ _ hwx] at hsl
       exact hi.pkgs w sl T hsl hT
+  · -- AGORA-937: the new binding's value is the right-hand side's
+    intro w Ew sl T hw hsl hT hfn
+    by_cases hwx : w = x
+    · subst hwx
+      simp only [setE, upd_same, Option.some.injEq] at hw
+      subst hw
+      simp only [Mem.set_st, upd_same, Option.some.injEq] at hsl
+      subst hsl; cases hT
+      exact fun _ _ _ _ _ hs => hout.noPkg hfn hs
+    · simp only [setE, upd_ne _ _ hwx] at hw
+      simp only [Mem.set_st, upd_ne _ _ hwx] at hsl
+      exact hi.noPkg w Ew sl T hw hsl hT hfn
   · -- A2-drop.2: an armed binding's value, the new one's from the right-hand side
     intro w Ew sl hw hsl
     by_cases hwx : w = x
@@ -1991,7 +2003,8 @@ theorem assign_post {m m1 : Mem} {Γ Γ1 : Ctx} {F : List Var}
           refine ⟨{ E with mode := Ex.mode }, by simp, ?_⟩
           show Ex.mode.frame; rw [← hm1]; exact hm
         · exact ⟨killE .replace false x Er, by simp [upd_ne _ _ hrx, A2.kill, hr],
-            by rw [killE_mode]; exact hm⟩⟩
+            by rw [killE_mode]; exact hm⟩,
+      out.noPkgS rfl⟩
     rotate_right
     · rw [vdeps_mode hos] at hdd
       have hr' := List.mem_map_of_mem (f := Dep.root) hdd
@@ -2483,7 +2496,8 @@ theorem step_free {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
       fun h => (by simp [hos] at h)⟩
   refine ⟨⟨true, none⟩, by simp, hok, hs, rfl, (fun h => by simp at h), rfl, (fun h => by simp at h),
     (fun h => by simp at h), (fun T h => by simp at h), fun hd _ hn dep hdd hnm => ?_, fun h => by simp at h,
-    fun hd => hi.wf.view x E hx hd, ArmOK.of_none rfl, fun _ T h => by simp at h, FreshE.of_ownSlot hos⟩
+    fun hd => hi.wf.view x E hx hd, ArmOK.of_none rfl, fun _ T h => by simp at h, FreshE.of_ownSlot hos,
+    fun _ T h => by simp at h⟩
   obtain ⟨Er, hEr, hroot⟩ := hi.wf.dtor x E hx hd hos (Or.inl hn) dep hdd hnm
   by_cases hrx : dep.root = x
   · exact Or.inl ⟨hrx, Mode.isRoot_of_ownSlot hos⟩
@@ -2875,7 +2889,8 @@ theorem push_growN {m1 : Mem} {Γ1 : Ctx} {F : List Var} (hi : MInv m1 Γ1)
         -- tree's views are valid)
         fun hd _ T hT0 => ⟨(hi.armed x Ex _ hx hT hd hos _ rfl).1, by
           simp only [Option.some.injEq] at hT0; subst hT0; exact hvsN⟩,
-        fun _ T hT => by cases hT; rw [hty]; exact hshN, FreshE.of_ownSlot hos⟩
+        fun _ T hT => by cases hT; rw [hty]; exact hshN, FreshE.of_ownSlot hos,
+        NoPkgS.of_wfv fun U hU => by cases hU; rw [hty]; exact hwT'⟩
     rotate_right
     · simp only [Entry.vdeps, hos, ↓reduceIte, List.nil_append, List.mem_append] at hdd
       by_cases hrx : dep.root = x
@@ -3454,6 +3469,11 @@ theorem step_rbindExit {m : Mem} {Γ : Ctx} {F : List Var} (hi : MInv m Γ)
     have hvp : v ≠ p := fun h => by subst h; simp at hsl
     simp only [Mem.remove_st, upd_ne _ _ hvp] at hsl
     exact hi.pkgs v sl T hsl hT
+  · intro v E' sl T hv' hsl hT hfn
+    have hvp : v ≠ p := fun h => by subst h; simp [exitRoot] at hv'
+    obtain ⟨E, hE, rfl⟩ := getE v E' hv' hvp
+    simp only [Mem.remove_st, upd_ne _ _ hvp] at hsl
+    exact hi.noPkg v E sl T hE hsl hT hfn
   · -- A2-drop.2: what an armed binding viewed through `p` it views through what `p` borrowed
     intro v E' sl hv' hsl
     have hvp : v ≠ p := fun h => by subst h; simp [exitRoot] at hv'

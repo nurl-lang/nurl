@@ -268,6 +268,9 @@ theorem MInv.weaker {m : Mem} {Γ Γ' : Ctx} (hi : MInv m Γ) (hw : Weaker Γ Γ
     obtain ⟨hl0, _, hh⟩ := hwe.live hl
     exact (hi.held v E sl T hE hl0 hsl hT).mono hh
   pkgs := hi.pkgs
+  noPkg v E' sl T hv hsl hT hfn := by
+    obtain ⟨E, hE, hwe⟩ := hw.get' hv
+    exact hi.noPkg v E sl T hE hsl hT (by rw [← hwe.1]; exact hfn)
   armed v E' sl hv hsl := by
     obtain ⟨E, hE, hwe⟩ := hw.get' hv
     exact (hi.armed v E sl hE hsl).weaker hwe

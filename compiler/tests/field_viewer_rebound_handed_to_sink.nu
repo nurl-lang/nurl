@@ -13,14 +13,16 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) xs ( vec_new [i] )
     ( vec_push [i] xs 41 )
     ( vec_push [i] xs 1 )
-    : C col @ C { @ R { xs } 0 }
+    : ~ C col @ C { @ R { xs } 0 }
     : R a . col res
     : R b a
     : R c b
     ( nurl_println_int ( vec_len [i] . a v ) )
     ( nurl_println_int ( vec_len [i] . b v ) )
     ( nurl_println_int ( eat c ) )
-    // The field, taken over, is left empty where it lives.
+    // The field, taken over, is left empty where it lives: moved, until it
+    // is given a new value (AGORA-991).
+    = . col res @ R { ( vec_new [i] ) }
     ( nurl_println_int ( vec_len [i] . . col res v ) )
     ^ 0
 }
