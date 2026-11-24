@@ -38,39 +38,6 @@ theorem MInv.liveCaps {m : Mem} {Γ : Ctx} {w : Var} (hM : MInv m Γ) (hnm : NoM
 
 
 
-/-- `Γ1` ends bindings of `Γ` at most: a live binding of `Γ1` is a live one
-    of `Γ`. -/
-def LiveBack (Γ Γ1 : Ctx) : Prop :=
-  ∀ v E1, Γ1 v = some E1 → E1.live = true → ∃ E, Γ v = some E ∧ E.live = true
-
-theorem LiveBack.refl (Γ : Ctx) : LiveBack Γ Γ := fun _ E h hl => ⟨E, h, hl⟩
-
-theorem LiveBack.trans {Γ1 Γ2 Γ3 : Ctx} (h1 : LiveBack Γ1 Γ2) (h2 : LiveBack Γ2 Γ3) : LiveBack Γ1 Γ3 :=
-  fun v E3 h3 hl3 => by
-    obtain ⟨E2, h2', hl2⟩ := h2 v E3 h3 hl3
-    exact h1 v E2 h2' hl2
-
-theorem LiveBack.kill (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) : LiveBack Γ (A2.kill e hv x Γ) :=
-  fun v E1 h hl => by
-    simp only [A2.kill] at h
-    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
-    refine ⟨E, hE, ?_⟩
-    unfold killE at hl; split at hl
-    · simp at hl
-    · exact hl
-
-theorem LiveBack.setDead {Γ Γ1 : Ctx} (h : LiveBack Γ Γ1) (y : Var) (E : Entry) (hd : E.live = false) :
-    LiveBack Γ (setE Γ1 y E) := fun v E1 hv hl => by
-  by_cases hvy : v = y
-  · subst hvy; simp [setE] at hv; subst hv; rw [hd] at hl; cases hl
-  · simp only [setE, upd_ne _ _ hvy] at hv; exact h v E1 hv hl
-
-theorem LiveBack.setLive {Γ Γ1 : Ctx} (h : LiveBack Γ Γ1) {y : Var} {Ey : Entry} (hy : Γ y = some Ey)
-    (hl : Ey.live = true) (E : Entry) : LiveBack Γ (setE Γ1 y E) := fun v E1 hv hl1 => by
-  by_cases hvy : v = y
-  · subst hvy; exact ⟨Ey, hy, hl⟩
-  · simp only [setE, upd_ne _ _ hvy] at hv; exact h v E1 hv hl1
-
 theorem PushArg.liveBack {Γ Γ1 : Ctx} {F : List Var} {y : Var} {Ey : Entry} {t : Ty} {D : List Dep}
     (hp : PushArg Γ F y Ey t D Γ1) : LiveBack Γ Γ1 := by
   cases hp with
@@ -114,18 +81,6 @@ theorem TakeVal.st_of {m m1 : Mem} {y : Var} {v : Val} (ht : TakeVal m y v m1) (
     · subst hxy; right; simp [Mem.set, upd]
     · left; simp [Mem.set, upd, hxy]
   | bor hv => exact Or.inl rfl
-
-/-- The clause over the live bindings: a live slot's value, and the nodes
-    its handle or view reaches in the slots, hold no package that captures
-    `w` but read-only. (A node in a block holds none anyway,
-    `MInv.rdCapsInp`.) -/
-def LiveCaps (m : Mem) (Γ : Ctx) (w : Var) : Prop :=
-  ∀ v E o V, Γ v = some E → E.live = true → m.st v = some ⟨o, some V⟩ →
-    ValCapsInp V w ∧
-    (∀ c, V = .href c → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
-      (∃ ty d es, n = .node ty c d es) → ValCapsInp n w) ∧
-    (∀ d o' l, V = .view d o' l → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
-      (∃ ty c es, n = .node ty c d es) → ValCapsInp n w)
 
 theorem LiveCaps.val {m : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) {v : Var} {E : Entry}
     {o : Bool} {V : Val} (hv : Γ v = some E) (hl : E.live = true) (hs : m.st v = some ⟨o, some V⟩) :
@@ -257,20 +212,6 @@ theorem RhsT.liveCapsVal {m m1 : Mem} {Γ : Ctx} {F : List Var} {r : Rhs} {E : E
         | exact (h.val (by assumption) (by assumption) (by assumption)).child Child.inr
         | exact (hM.rdCapsInp w (by assumption)).2
         | exact (hM.rdCapsInp w (by assumption)).1.lend)
-
-
-/-- Ending bindings keeps the clause: it speaks of the live ones only. -/
-theorem LiveCaps.of_back {m : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w) (hb : LiveBack Γ Γ') :
-    LiveCaps m Γ' w := fun v E o V hv hl hs => by
-  obtain ⟨E0, h0, hl0⟩ := hb v E hv hl
-  exact h v E0 o V h0 hl0 hs
-
-/-- ... and so does a store with the same slots. -/
-theorem LiveCaps.of_st {m m' : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (hst : m'.st = m.st) :
-    LiveCaps m' Γ w := fun v E o V hv hl hs => by
-  rw [hst] at hs
-  obtain ⟨h1, h2, h3⟩ := h v E o V hv hl hs
-  exact ⟨h1, fun c hc x t n hx => h2 c hc x t n (hst ▸ hx), fun d o' l hd x t n hx => h3 d o' l hd x t n (hst ▸ hx)⟩
 
 
 /-- Setting a slot to a value no part of which captures `w` but read-only,

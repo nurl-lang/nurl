@@ -1749,13 +1749,72 @@ def CapsInpAt (m : Mem) (w : Var) : Prop :=
   (∀ x o V, m.st x = some ⟨o, some V⟩ → ValCapsInp V w) ∧
   (∀ k bl V, m.blk k = some bl → bl.pay = some V → ValCapsInp V w)
 
+/-- The clause over the live bindings: a live slot's value, and the nodes
+    its handle or view reaches in the slots, hold no package that captures
+    `w` but read-only. (A node in a block holds none anyway,
+    `MInv.rdCapsInp`.) -/
+def LiveCaps (m : Mem) (Γ : Ctx) (w : Var) : Prop :=
+  ∀ v E o V, Γ v = some E → E.live = true → m.st v = some ⟨o, some V⟩ →
+    ValCapsInp V w ∧
+    (∀ c, V = .href c → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ ty d es, n = .node ty c d es) → ValCapsInp n w) ∧
+    (∀ d o' l, V = .view d o' l → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+      (∃ ty c es, n = .node ty c d es) → ValCapsInp n w)
+
+/-- `Γ1` ends bindings of `Γ` at most: a live binding of `Γ1` is a live one
+    of `Γ`. -/
+def LiveBack (Γ Γ1 : Ctx) : Prop :=
+  ∀ v E1, Γ1 v = some E1 → E1.live = true → ∃ E, Γ v = some E ∧ E.live = true
+
+theorem LiveBack.refl (Γ : Ctx) : LiveBack Γ Γ := fun _ E h hl => ⟨E, h, hl⟩
+
+theorem LiveBack.trans {Γ1 Γ2 Γ3 : Ctx} (h1 : LiveBack Γ1 Γ2) (h2 : LiveBack Γ2 Γ3) : LiveBack Γ1 Γ3 :=
+  fun v E3 h3 hl3 => by
+    obtain ⟨E2, h2', hl2⟩ := h2 v E3 h3 hl3
+    exact h1 v E2 h2' hl2
+
+theorem LiveBack.kill (Γ : Ctx) (e : Eff) (hv : Bool) (x : Var) : LiveBack Γ (A2.kill e hv x Γ) :=
+  fun v E1 h hl => by
+    simp only [A2.kill] at h
+    obtain ⟨E, hE, rfl⟩ := Option.map_eq_some_iff.mp h
+    refine ⟨E, hE, ?_⟩
+    unfold killE at hl; split at hl
+    · simp at hl
+    · exact hl
+
+theorem LiveBack.setDead {Γ Γ1 : Ctx} (h : LiveBack Γ Γ1) (y : Var) (E : Entry) (hd : E.live = false) :
+    LiveBack Γ (setE Γ1 y E) := fun v E1 hv hl => by
+  by_cases hvy : v = y
+  · subst hvy; simp [setE, upd] at hv; subst hv; rw [hd] at hl; cases hl
+  · simp [setE, upd, hvy] at hv; exact h v E1 hv hl
+
+theorem LiveBack.setLive {Γ Γ1 : Ctx} (h : LiveBack Γ Γ1) {y : Var} {Ey : Entry} (hy : Γ y = some Ey)
+    (hl : Ey.live = true) (E : Entry) : LiveBack Γ (setE Γ1 y E) := fun v E1 hv hl1 => by
+  by_cases hvy : v = y
+  · subst hvy; exact ⟨Ey, hy, hl⟩
+  · simp [setE, upd, hvy] at hv; exact h v E1 hv hl1
+
+/-- Ending bindings keeps the clause: it speaks of the live ones only. -/
+theorem LiveCaps.of_back {m : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w) (hb : LiveBack Γ Γ') :
+    LiveCaps m Γ' w := fun v E o V hv hl hs => by
+  obtain ⟨E0, h0, hl0⟩ := hb v E hv hl
+  exact h v E0 o V h0 hl0 hs
+
+/-- ... and so does a store with the same slots. -/
+theorem LiveCaps.of_st {m m' : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (hst : m'.st = m.st) :
+    LiveCaps m' Γ w := fun v E o V hv hl hs => by
+  rw [hst] at hs
+  obtain ⟨h1, h2, h3⟩ := h v E o V hv hl hs
+  exact ⟨h1, fun c hc x t n hx => h2 c hc x t n (hst ▸ hx), fun d o' l hd x t n hx => h3 d o' l hd x t n (hst ▸ hx)⟩
+
+
 /-- AGORA-937 B2 (AGORA-963): the closure-capture clause. A held anchor's
     root, not lent out, is captured by no package in the store but
     read-only (`.inp`), so no call through a package hands it to an
     `inout` parameter of the code (`CapInout.not_held`, `CapClause.lean`). -/
 def HeldCapsInp (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop :=
   ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine →
-  ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F → CapsInpAt m d.root
+  ∀ d ∈ E.vdeps, d.kind.bound = .none → HeldAnch E d → d.root ∉ F → LiveCaps m Γ d.root
 
 /-- ... read off the slots, the blocks, the borrowed parameters and the
     running scopes. -/
@@ -1764,16 +1823,17 @@ theorem CapsInpAt.of_st {m m' : Mem} {w : Var} (h : CapsInpAt m w) (hst : m'.st 
   ⟨fun x o V hx => h.1 x o V (hst ▸ hx), fun k bl V hk hp => h.2 k bl V (hb ▸ hk) hp⟩
 
 theorem HeldCapsInp.of_st {m m' : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
-    (hst : m'.st = m.st) (hb : m'.blk = m.blk := by rfl) : HeldCapsInp m' Γ F s :=
-  fun p E hp hm hps d hd hb' hh hF => (h p E hp hm hps d hd hb' hh hF).of_st hst hb
+    (hst : m'.st = m.st) (_hb : m'.blk = m.blk := by rfl) : HeldCapsInp m' Γ F s :=
+  fun p E hp hm hps d hd hb' hh hF => (h p E hp hm hps d hd hb' hh hF).of_st hst
 
 theorem HeldCapsInp.respine {m : Mem} {Γ : Ctx} {F : List Var} {s s' : Stmt} (h : HeldCapsInp m Γ F s)
     (hsp : ∀ v ∈ s.spine, v ∈ s'.spine) : HeldCapsInp m Γ F s' :=
   fun p E hp hm hps => h p E hp hm fun h' => hps (hsp _ h')
 
 theorem HeldCapsInp.of_rootb {m : Mem} {Γ Γ' : Ctx} {F : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
-    (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E) : HeldCapsInp m Γ' F s :=
-  fun p E hp hm => h p E (hrb p E hp hm) hm
+    (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → Γ p = some E) (hlb : LiveBack Γ Γ') :
+    HeldCapsInp m Γ' F s :=
+  fun p E hp hm hps d hd hb hh hF => (h p E (hrb p E hp hm) hm hps d hd hb hh hF).of_back hlb
 
 theorem HeldCapsInp.mono {m : Mem} {Γ : Ctx} {F F' : List Var} {s : Stmt} (h : HeldCapsInp m Γ F s)
     (hF : ∀ v ∈ F, v ∈ F') : HeldCapsInp m Γ F' s :=
