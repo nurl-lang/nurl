@@ -3729,7 +3729,36 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hanch1 := post.rel.anchS hanchS
       have hsp : k.spine = [] := src_spine hsrc
       refine ⟨setE Γ1 x E, StmtT.scope ⟨E, by simp [setE], hnrb⟩ hxF
-        (StmtT.seq rfl hs.ofNone (StmtT.insert ExprT.lit hyF hpush)) hpx, ?_, by simp, ?_, fun v hv => ?_⟩
+        (StmtT.seq rfl hs.ofNone (StmtT.insert ExprT.lit hyF hpush)) hpx, ?_, by simp, ?_, fun v hv => ?_,
+        Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: the element and the rest of the frame's `Vec` were the `Vec`'s)
+        refine hz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp)
+          (fun p Ep hp hmp => ?_) (fun v hv => ?_) (fun _ _ _ _ _ _ _ _ hD hcw => ?_)
+        · have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+          simp only [setE, upd_ne _ _ hpx] at hp
+          exact post.rel.rootb_back hp hmp
+        · simp only [Stmt.killVars, Expr.vars, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hv ⊢
+          rcases hv with h | h | h | h <;> simp [h]
+        · have hyD := hD y (by simp [Stmt.killVars])
+          have hN := (hcw y _ _ hyD hT).1
+          have hel : ∀ e ∈ es.take n ++ es.drop (n + 1), e ∈ es := fun e he => by
+            rcases List.mem_append.mp he with he | he
+            · exact List.mem_of_mem_take he
+            · exact List.mem_of_mem_drop he
+          refine (hcw.set (y := y) (o := true) (v := some (.node t c d (es.take n ++ es.drop (n + 1))))
+            (fun V e => ?_)).set (fun V e => ?_)
+          · cases e
+            refine ⟨fun z hz => ?_, fun c' hc => ?_⟩
+            · cases hz with
+              | refl => exact hN.node_sub hel
+              | child hm hz => exact hN.sub (Sub.child (hel _ hm) hz)
+            · cases hc with
+              | child hm hz => exact (hi.toMInv.slot_no_href hT (Sub.child (hel _ hm) hz)).elim
+          · cases e
+            have hsT : ∀ z, Sub z es[n] → Sub z (.node t c d es) := fun z hz => Sub.child (List.getElem_mem hn) hz
+            exact ⟨fun z hz => hN.sub (hsT z hz), fun c' hc => (hi.toMInv.slot_no_href hT (hsT _ hc)).elim⟩
       · -- (AGORA-963 step 3: the element and the rest of the `Vec` were the `Vec`'s)
         refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
