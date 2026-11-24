@@ -1,5 +1,6 @@
 import A2.NameWf
 import A2.Fresh
+import A2.DomTy
 
 /-! A2 — a callee's body, checked once against its own view of its
 parameters, is well-typed where a call places it.

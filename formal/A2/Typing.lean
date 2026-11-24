@@ -2160,14 +2160,18 @@ def CallThruOK (P : Prog) (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) 
       ∀ j (hj : j < fn.params.length), j ≠ i → fn.params[j].2.holdsView = true →
         (argE Γ (args.getD j 0)).ty ≠ .int →
         ∀ e' ∈ memDeps (argE Γ (args.getD j 0)).held, e'.root ≠ e.root) ∧
+  -- (AGORA-937 B4: an `inout` parameter holds no view, so the call adds no
+  -- dependency to what it leaves: what is live after it was live before, with
+  -- what it depended on)
+  (∀ (i : Nat) (b : Eff) (t : Ty), fn.params[i]? = some (PMode.inout b, t) → t.holdsView = false) ∧
   ∀ w ∈ callR Γ args,
     w ∉ args ∧
     (∀ a ∈ args, ∀ d ∈ (argE Γ a).vdeps, d.root = w → d.kind = .view ∨ d.kind = .self) ∧
     (∀ a ∈ args, ∀ d ∈ (argE Γ a).path, d.root ≠ w) ∧
     (∀ i (h : i < fn.params.length), fn.params[i].1 = .inp →
       w ∈ roots (memDeps (argE Γ (args.getD i 0)).held) → ∃ t, fn.params[i].2 = .vec t) ∧
-    (∀ y E, callPost Γ fn args y = some E → E.live = true → hits .dropIn false w E = false) ∧
-    (∀ y E, callPost Γ fn args y = some E → E.dtor = true → E.mode.ownSlot = true →
+    (∀ y E, Γ y = some E → E.live = true → hits .dropIn false w E = false) ∧
+    (∀ y E, Γ y = some E → E.dtor = true → E.mode.ownSlot = true →
       hitsMem .dropIn false w E = false) ∧
     w ∉ F ∧
     (∃ Er t, callPost Γ fn args w = some Er ∧ Er.live = true ∧ Er.mode = .own ∧
