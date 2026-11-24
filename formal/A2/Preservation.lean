@@ -2615,7 +2615,8 @@ theorem pres_unwindD {P : Prog} {Γ Δ1 : Ctx} {F : List Var} {x : Var} {f : Nat
     {v : Val} (hsl : m'.st x = some ⟨true, some v⟩) :
     ∃ Γ', StmtT P ξ Γ' F (.seq (.scopeD x f .skip) .panic) (exitScope x Δ1) ∧
       Inv m' Γ' F (.seq (.scopeD x f .skip) .panic) ∧ m.nv ≤ m'.nv ∧
-      Keep Γ Γ' (.scope x k) (.seq (.scopeD x f .skip) .panic) ∧ Frz F m m' := by
+      Keep Γ Γ' (.scope x k) (.seq (.scopeD x f .skip) .panic) ∧ Frz F m m' ∧
+      CapsKeep m m' Γ Γ' (.scope x k) := by
   have hxsp : x ∉ k.spine := by
     have := hiS.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.1
   have hos : Ex.mode.ownSlot = true := by rw [hmo]; rfl
@@ -2750,10 +2751,21 @@ theorem pres_unwindD {P : Prog} {Γ Δ1 : Ctx} {F : List Var} {x : Var} {f : Nat
         simp only [setE, upd_same, Option.some.injEq] at hE; subst hE; exact hEaway d hd hnm)
       hMu'.fresh
     rwa [exitScope_setE_over] at h0
-  refine ⟨setE (unwindCtx k.spine x Γ) x (Ex.reviveD x), StmtT.seq rfl hsc hpan, ?_,
+  refine (fun hck => ⟨setE (unwindCtx k.spine x Γ) x (Ex.reviveD x), StmtT.seq rfl hsc hpan, ?_,
     by show m.nv ≤ m'.nv; rw [hnv1]; exact Nat.le_refl _,
     ⟨?_, ?_, (DKeep.unwind _ fun w hw h => hw (by simp [Stmt.spine, h])).setE
-      fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩, ?_⟩
+      fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩, ?_, hck⟩) ?_
+  · exact (fun w _ hcw =>
+          hcw.of_shrink hp.panic_st (fun u E1 hux h1 hl1 => by
+              obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases (hUx u E1 h1 hux) hux
+              rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩
+              · simp at hl1
+              · exact ⟨_, h0, hl1⟩)
+            (fun E1 o V h1 _ hs => by
+              have he : E1 = Ex.reviveD x := by simp [setE] at h1; exact h1.symm
+              subst he
+              obtain ⟨hn, hh⟩ := hMu'.own_noFn h1 hos hhf hs
+              exact ⟨valCapsInp_of_names hn w, hh⟩))
   · exact
     { toMInv := hMu'
       nvS := fun w hw => by
@@ -2792,17 +2804,7 @@ theorem pres_unwindD {P : Prog} {Γ Δ1 : Ctx} {F : List Var} {x : Var} {f : Nat
       -- none of its killable names: `Step.slotsCaps`)
       heldCaps := hiS.heldCaps_step (fun q E hq hmq _ => by
           obtain ⟨hqx, hqk, h0⟩ := hrbU' q E hq hmq
-          exact ⟨h0, by simp [Stmt.spine, hqx, hqk]⟩) (fun w _ hcw =>
-          hcw.of_shrink hp.panic_st (fun u E1 hux h1 hl1 => by
-              obtain ⟨_, E0, h0, hc⟩ := unwindCtx_cases (hUx u E1 h1 hux) hux
-              rcases hc with ⟨_, rfl⟩ | ⟨_, rfl⟩
-              · simp at hl1
-              · exact ⟨_, h0, hl1⟩)
-            (fun E1 o V h1 _ hs => by
-              have he : E1 = Ex.reviveD x := by simp [setE] at h1; exact h1.symm
-              subst he
-              obtain ⟨hn, hh⟩ := hMu'.own_noFn h1 hos hhf hs
-              exact ⟨valCapsInp_of_names hn w, hh⟩)) }
+          exact ⟨h0, by simp [Stmt.spine, hqx, hqk]⟩) hck }
   · intro w E hw hws
     have hwx : w ≠ x := fun h => hws (by simp [Stmt.spine, h])
     have hwk : w ∉ k.spine := fun h => hws (by simp [Stmt.spine, h])
@@ -4260,7 +4262,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           hi.wf hi.names (skip_inv hs)) hpx hKO hWd hNd hFd,
         hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) hi.catchOK trivial ⟨hi.dtorIn.1, trivial⟩,
         Nat.le_refl _, ⟨fun v E hv hvs => ⟨hvs, E, hv, rfl, rfl, fun _ => rfl⟩, fun v E' hv hvs => ⟨hvs, E', hv⟩,
-          DKeep.refl _ _⟩, fun _ _ => rfl⟩
+          DKeep.refl _ _⟩, fun _ _ => rfl, CapsKeep.refl _ _ _⟩
     | @scopeLPD _ _ _ _ _ sl n f u hp hck hteq hsl hng =>
       -- Agora #803: a destructor payload that fails the give-back's check:
       -- the check-out's frame becomes `x`'s destructor frame, at its end
