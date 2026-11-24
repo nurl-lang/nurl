@@ -1,5 +1,5 @@
 // packages/recon-kit/src/ui.nu — the page `<model> serve` answers GET /
-// with. The page is the service's; the app (RkApp, serve.nu) fills in its
+// with. The page is the service's; the app (RkApp, app.nu) fills in its
 // name, its own option fields and the script that reads them:
 //
 //   %%NAME%% %%TAGLINE%% %%ABOUT%%   text and HTML
@@ -27,6 +27,9 @@
 //
 // NURL strings are backtick-delimited and read `\n` `\t` `\r` `\\` as
 // escapes, so the script below uses no template literals and no backslash.
+
+$ `stdlib/core/string.nu`
+$ `app.nu`
 
 @ rk_ui_page RkApp app → String {
     : String t ( string_from ( __rk_ui_template ) )
