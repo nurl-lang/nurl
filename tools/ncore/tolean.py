@@ -351,8 +351,17 @@ def parse(text):
             fns.append(cur)
             cur = None
         elif cur is not None:
-            cur["body"].append(raw.strip())
+            cur["body"].append(Line(raw.strip(), len(cur["body"])))
     return fns
+
+
+class Line(str):
+    """A core IR line that knows its index in its function's body, so a
+    check can look at everything after it, not only its own list."""
+    def __new__(cls, text, pos):
+        o = super().__new__(cls, text)
+        o.pos = pos
+        return o
 
 
 def block_of(lines, i):
@@ -931,10 +940,16 @@ class Fn:
             # translation leaves to the end of its scope. That is the same
             # only if nothing reads it, or a view of it, afterwards: else
             # unsupported (CORE_IR.md §2)
+            # (everything after the drop in the function, not only the rest
+            # of its own list: a drop inside an `if` arm or a block is
+            # followed by what comes after that block; github#2242's review)
             k = int(head[1])
             if lean_ty(self.fn["vars"].get(k, "i64")) != ".int" or self.fn["vars"].get(k) == "i8*":
                 dead = self.views_of(k)
-                for later in lines[1:]:
+                pos = getattr(lines[0], "pos", None)
+                if pos is None:
+                    raise Unsupported(f"{self.fn['name']}: a drop whose place in the body is unknown")
+                for later in self.fn["body"][pos + 1:]:
                     toks = set(later.replace("/", " ").split())
                     if any(f"v{j}" in toks for j in dead):
                         raise Unsupported(f"{self.fn['name']}: a temporary, or a view of it, read after its drop")
