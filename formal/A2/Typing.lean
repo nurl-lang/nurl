@@ -2145,9 +2145,14 @@ end Stmt.Thru
       elements hold no views, and no closure handed to the call changes it;
       and every closure-typed binding of the frame is live and changes `w` by
       no name (the store then holds no package capturing `w` but read-only,
-      `HeldCapsInp`). -/
+      `HeldCapsInp`).
+    - No argument is a closure: so a call through a package (whose receiver
+      is one) passes views of a region only, as before route U. Route U for
+      closure arguments is later work; A2 then types fewer such calls than
+      nurlc accepts, which is no hole. -/
 def CallThruOK (P : Prog) (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) : Prop :=
   (∀ g ∈ fn.body.calls, ¬ ThruFn P g) ∧
+  (∀ a ∈ args, ∀ ms q, (argE Γ a).ty.undtor ≠ .fn ms q) ∧
   (∀ i (h : i < fn.params.length), fn.params[i].2.holdsView = false →
     (argE Γ (args.getD i 0)).ty = .int ∨ memDeps (argE Γ (args.getD i 0)).held = []) ∧
   (∀ i (h : i < fn.params.length), fn.params[i].2.holdsView = true → (argE Γ (args.getD i 0)).ty ≠ .int →

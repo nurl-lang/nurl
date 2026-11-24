@@ -787,13 +787,18 @@ theorem CallDtorSafe.clean {Γ : Ctx} {ps : List (PMode × Ty)} {args : List Var
 
 /-- A call checked in a context is checked in its cleaned form. -/
 theorem CallT.clean {P : Prog} {Γ Γ1 : Ctx} {F : List Var} {f : Nat} {args : List Var} {E : Entry}
-    (hc : CallT P Γ F f args E Γ1) {fn : Fn} (hf : P[f]? = some fn) :
+    (hc : CallT P Γ F f args E Γ1) {fn : Fn} (hf : P[f]? = some fn)
+    -- (a call through a package: its receiver is a closure, so route U's
+    -- `CallThruOK` is not the call's premise)
+    (hrecv : ∃ a ∈ args, ∃ ms q, (argE Γ a).ty.undtor = .fn ms q) :
     CallT P (cleanC Γ) F f args (callRes (cleanC Γ) fn args) (callPost (cleanC Γ) fn args) := by
   obtain ⟨fn', hf', hlen, hargs, hnf, hds, _, _, hg⟩ := hc
   rw [hf] at hf'; cases hf'
   refine ⟨fn, hf, hlen, fun i hi => ?_, fun d hd => ?_, hds.clean, rfl, rfl,
     fun ht => (hg ht).imp callR_clean_regions
-      (fun _ => sorry /- WIP scaffold (AGORA-937 B4, never merged): CallThruOK cleaned -/)⟩
+      (fun hc => absurd hc fun hc => by
+        obtain ⟨a, ha, ms, q, h⟩ := hrecv
+        exact hc.2.1 a ha ms q h)⟩
   rotate_left
   · simp only [argE_clean, clean_mode, clean_ty]
     obtain ⟨hcan, hvec, hnF, hnA, huniq, hnh⟩ := hnf d (mutNames_clean Γ args hd)
@@ -2467,8 +2472,8 @@ theorem open_pkg {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c :
   have hthru : ThruFn P f → callR (setE Γ m.nv (envE c Ec te cs)) (m.nv :: zs ++ cs.map (·.1)) = [] :=
     fun ht => open_pkg_callR hc hnint hEe hargE hze hkne hcapv
       (((CallT.thru hcT0 hi.noRegion hσ (hthr ht).1)).resolve_right
-        (fun _ => sorry /- WIP scaffold (AGORA-937 B4, never merged): a package call into
-          through-changing code that passes views of real memory -/))
+        -- (route U's `CallThruOK` takes no closure argument, and the receiver is one)
+        (fun hc => hc.2.1 c List.mem_cons_self _ _ (by rw [hae]; exact htc)))
   refine ⟨hie, hZ, fn, hf, ?_, fun i hil => ?_, ?_, ?_, rfl, rfl, fun ht => Or.inl (callR_regions_of_nil (hthru ht))⟩
   · simp [hplen]; omega
   rotate_left
@@ -2838,7 +2843,7 @@ theorem cloProgress {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x 
   obtain ⟨f, fn, hfs, hf, hps, _, _, _, _, _, hnt⟩ := pkg_code hcd hslot hj hσ hhd
   have hnint : Ec.ty ≠ .int := fun h => by rw [h] at htc; cases htc
   have hcc : cleanC Γ c = some Ec := by rw [cleanC_of hc, clean_id (Or.inl hnint) hlc]
-  obtain ⟨hie, _, hcT'⟩ := open_pkg hP (cleanC_none.mpr hx) hcc htc hσ hhd (hcT.clean hσ) hnz
+  obtain ⟨hie, _, hcT'⟩ := open_pkg hP (cleanC_none.mpr hx) hcc htc hσ hhd (hcT.clean hσ ⟨c, List.mem_cons_self, ms, q, by unfold argE; rw [hc]; exact htc⟩) hnz
     hi.clean cleanC_clean hslot hf hps hnt
   have hxlt : x < m.nv := hi.nvS x (by simp [Stmt.vars])
   have hxe : x ≠ m.nv := fun e => by have := vlt hxlt; have := veq e; omega
@@ -2909,7 +2914,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
     have hic := hi.clean
     have hcc : cleanC Γ c = some Ec := by rw [cleanC_of hc, clean_id (Or.inl hnint) hlc]
     have hxc : cleanC Γ x = none := cleanC_none.mpr hx
-    obtain ⟨hie, hZ, hcT'⟩ := open_pkg hP hxc hcc htc hσ hhd (hcT.clean hσ) hnzs hic
+    obtain ⟨hie, hZ, hcT'⟩ := open_pkg hP hxc hcc htc hσ hhd (hcT.clean hσ ⟨c, List.mem_cons_self, ms, q, by unfold argE; rw [hc]; exact htc⟩) hnzs hic
       cleanC_clean hslot hf hps0 hnt
     let Ee := envE c Ec te cs
     let Γe := setE (cleanC Γ) m.nv Ee

@@ -89,7 +89,7 @@ theorem s2_inner : (⟨0, .inner⟩ : Dep) ∈ (argE K 2).vdeps := by
 theorem call_refused (E : Entry) (Γ' : Ctx) : ¬ CallT P K [] 0 [1, 2] E Γ' := fun h => by
   rcases CallT.thru h K_noRegion rfl f_thru with hm | hc
   · have := callR_vv_s2; rw [hm] at this; cases this
-  · have := (hc.2.2.2 0 callR_vv_s2).2.1 2 (by simp) _ s2_inner rfl
+  · have := (hc.2.2.2.2 0 callR_vv_s2).2.1 2 (by simp) _ s2_inner rfl
     simp [Kind.isName] at this
 
 /-- `s2` is live after `( f1 vv )` and ends where `w`'s elements change. -/
@@ -107,7 +107,7 @@ theorem call_alone_refused (E : Entry) (Γ' : Ctx) : ¬ CallT P K [] 1 [1] E Γ'
   rcases CallT.thru h K_noRegion rfl f1_thru with hm | hc
   · have := callR_vv; rw [hm] at this; cases this
   · obtain ⟨hp, hl, hh⟩ := s2_hit
-    have := (hc.2.2.2 0 callR_vv).2.2.2.2.1 2 Es2 hp hl
+    have := (hc.2.2.2.2 0 callR_vv).2.2.2.2.1 2 Es2 hp hl
     rw [hh] at this; cases this
 
 /-! ### AGORA-937 stage 3a: the call's entry kill

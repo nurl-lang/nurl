@@ -3136,7 +3136,7 @@ theorem held_anch (h : CallH P Γ F x fn args base) {k : Nat} {t : Ty}
   have hwR : d.root ∈ callR Γ args := by simpa [thruW, hht] using hwt
   rcases h.thru (Or.inl hht) with hR | hc
   · rw [hR] at hwR; cases hwR
-  obtain ⟨-, hnr, -, hw⟩ := hc
+  obtain ⟨-, -, hnr, -, hw⟩ := hc
   obtain ⟨hna, hkind, hpath, hvec, -, -, -, ⟨Er, tw, hEr, -, -, hty, hhv⟩, -, -⟩ := hw d.root hwR
   have hak : args.getD k 0 ∈ args := by simp [List.getD, show k < args.length from h.len ▸ hkl]
   -- what the parameter lifts to: its argument's path, and what it holds
@@ -4528,7 +4528,7 @@ theorem σ_nil_of_thru (h : CallH P Γ F x fn args base) (hR : callR Γ args = [
     changes strictly inside the elements sets the body up ready for it. -/
 theorem thruReady (h : CallH P Γ F x fn args base) (ht : fn.body.Thru P) (hc : CallThruOK P Γ F fn args) :
     (callS Γ F fn args base x).ThruReady := by
-  obtain ⟨hcalls, hnr, hreg, hw⟩ := hc
+  obtain ⟨hcalls, -, hnr, hreg, hw⟩ := hc
   have hht : fn.body.hasThru = true := by
     rcases ht with hh | ⟨g, hg, htg⟩
     · exact hh
