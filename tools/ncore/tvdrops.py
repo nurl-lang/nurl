@@ -630,7 +630,23 @@ def check_temps(name, blocks):
     if not want:
         return None
     lines = [l for _, ls in blocks for l in ls]
-    local = {m.group(1) for l in lines if (m := re.match(r"^\s*(%[\w.]+) = alloca\b", l))}
+    deflines = {m.group(1): m.group(2) for l in lines if (m := re.match(r"^\s*(%[\w.]+) = (.*)$", l))}
+
+    def frame_local(p, seen=()):
+        # (a pointer into the frame's own storage: an `alloca`, or a
+        # `getelementptr` / `bitcast` of one; a global, a parameter, a
+        # pointer loaded or a call returned is not)
+        if p is None or not p.startswith("%") or p in seen:
+            return False
+        d = deflines.get(p, "")
+        if d.startswith("alloca "):
+            return True
+        if (mg := re.match(r"getelementptr (?:inbounds )?(.*)$", d)):
+            ops = split_top(mg.group(1))
+            return len(ops) > 1 and frame_local(arg_value(ops[1]), seen + (p,))
+        if (mg := re.match(r"(?:bitcast|addrspacecast) .* (%[\w.]+) to ", d)):
+            return frame_local(mg.group(1), seen + (p,))
+        return False
     for callee, k, n, temp in want:
         reg = None
         for cand in ("@__nurl_fn." + callee, "@" + callee):
@@ -645,18 +661,23 @@ def check_temps(name, blocks):
         # (and what is the value itself under another register: a
         # `__nurl_cloneif` / `__nurl_cloneifk` the module's constants say
         # makes no clone - the condition `false`, or a key that is)
-        regs = {reg}
-        for l in lines:
-            for keyed in (False, True):
-                mc = cloneif(l, keyed)
-                if mc:
-                    src, cond = (mc.group(4), mc.group(2)) if keyed else (mc.group(3), mc.group(2))
-                    nocl = CONSTS.get(cond) is False if keyed else cond.strip() in ("false", "0")
-                    if keyed and not nocl:
-                        c = mc.group(3).strip()
-                        nocl = c in ("false", "0")
-                    if src in regs and nocl:
-                        regs.add(mc.group(1))
+        # (to a fixpoint: a block listed before the one defining what it
+        # reads is read again)
+        regs, grew = {reg}, True
+        while grew:
+            grew = False
+            for l in lines:
+                for keyed in (False, True):
+                    mc = cloneif(l, keyed)
+                    if mc:
+                        src, cond = (mc.group(4), mc.group(2)) if keyed else (mc.group(3), mc.group(2))
+                        nocl = CONSTS.get(cond) is False if keyed else cond.strip() in ("false", "0")
+                        if keyed and not nocl:
+                            c = mc.group(3).strip()
+                            nocl = c in ("false", "0")
+                        if src in regs and nocl and mc.group(1) not in regs:
+                            regs.add(mc.group(1))
+                            grew = True
         how = None
         for l in lines:
             hit = [r for r in regs if re.search(re.escape(r) + r"(?![\w.])", l)]
@@ -675,8 +696,10 @@ def check_temps(name, blocks):
                 ops = split_top(mi.group(1))
                 if len(ops) > 1 and arg_value(ops[1]) in regs:
                     how = "moved into an aggregate"
-            elif (ms := store_parts(l)) and ms[0] in regs and ms[1] and ms[1] not in local:
-                how = f"stored into memory not the frame's ({ms[1]})"
+            elif (ms := parse_store(l)) and ms.group(1) in regs and not frame_local(ms.group(2)):
+                # (into a global, a parameter's memory, or through a pointer
+                # that is not the frame's own storage)
+                how = f"stored into memory not the frame's ({ms.group(2)})"
             if how:
                 return (f"mismatch: {name} {reg} ({temp}, the result of call {k} of {n} to {callee}) is never "
                         f"moved in the core IR, but the LLVM hands it on {how}")
