@@ -11,6 +11,18 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 "$NURLC" "$D/owner_assigned_on_one_branch.nu" > "$TMP/a.ll" || exit 1
 tv() { python3 "$ROOT/tools/ncore/tvdrops.py" "$1" | tail -1; }
 fail=0
+# f's registers, read from its LLVM (an edit names them; their numbers move
+# with nurlc's code generation): v's and w's slots and flags, in the order
+# they are allocated, and the condition of the branch
+regs_a() {
+  awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+    m && /= alloca %Vec__i64$/ { s[++n] = $1; want = 1; next }
+    m && want && /= alloca i1$/ { f[n] = $1; want = 0 }
+    m && /^  br i1 %r[0-9]+, label %then_/ && !c { c = $3; sub(/,$/, "", c) }
+    END { print s[1], f[1], s[2], f[2], c }' "$1"
+}
+read -r VS VF WS WF AC <<< "$(regs_a "$TMP/a.ll")"
+[ -n "$AC" ] || { echo "FAIL: f's slots and branch are not found in the LLVM"; fail=1; }
 # vok <fn> <.ll> [args]: a positive control: no mismatch in the module, and
 # <fn> itself validated (not merely left unsupported)
 vok() {
@@ -23,16 +35,16 @@ vok __nurl_fn.f "$TMP/a.ll" || { echo "FAIL: the unedited program does not valid
 fn='/define i64 @__nurl_fn.f\(/'
 # the flags and drops of f, by their order in the function
 mut() {  # mut <name> <awk program over f's lines>
-  awk "$fn{m=1} m && /^}/{m=0} {if (m) { $2 } else print}" "$TMP/a.ll" > "$TMP/$1.ll"
+  awk -v VS="$VS" -v VF="$VF" -v WS="$WS" -v WF="$WF" "$fn{m=1} m && /^}/{m=0} {if (m) { $2 } else print}" "$TMP/a.ll" > "$TMP/$1.ll"
   case "$(tv "$TMP/$1.ll")" in *"mismatch 1") echo "ok: $1 caught" ;; *) echo "FAIL: $1 not caught"; fail=1 ;; esac
 }
 mut no_flag_clear_on_move 'if ($0 ~ /store i1 0, i1\*/ && !c++) next; print'
 mut old_value_not_released 'if ($0 ~ /call void @__dropif_/ && !c++) next; print'
 mut last_release_missing 'if ($0 ~ /call void @__dropif_/) { n++; if (n==2) next }; print'
-mut released_twice 'print; if ($0 ~ /call void @__dropif_/) { n++; if (n==3) { sub(/^/, ""); print "  store i1 1, i1* %r4"; print } }'
+mut released_twice 'print; if ($0 ~ /call void @__dropif_/) { n++; if (n==3) { sub(/^/, ""); print "  store i1 1, i1* " VF; print } }'
 # `= w v` with w's flag set outright, not handed v's, and v's kept: one
 # value in two slots, each released (w's value is v's, not a new one)
-mut moved_value_owned_by_both_slots 'if ($0 ~ /store i1 %r[0-9]+, i1\* %r13/) { print "  store i1 true, i1* %r13"; next } if ($0 ~ /store i1 0, i1\* %r4/) next; print'
+mut moved_value_owned_by_both_slots 'if ($0 ~ ("store i1 %r[0-9]+, i1\\* " WF "$")) { print "  store i1 true, i1* " WF; next } if ($0 == "  store i1 0, i1* " VF) next; print'
 # every release of f deleted: f must not validate (its owning slots are
 # found from their types, not from the drops being checked)
 awk "$fn{m=1} m && /^}/{m=0} {if (m && \$0 ~ /call void @__dropif_/) next; print}" "$TMP/a.ll" > "$TMP/none.ll"
@@ -46,7 +58,7 @@ fi
 "$NURLC" --emit-core "$D/owner_assigned_on_one_branch.nu" > "$TMP/a.core" || exit 1
 "$NURLC" --g "$D/owner_assigned_on_one_branch.nu" > "$TMP/a.g.ll" || exit 1
 python3 "$ROOT/tools/ncore/tvir.py" "$TMP/a.core" "$TMP/a.g.ll" > "$TMP/protect"
-wslot=$(awk '$1 == "__nurl_fn.f" {print $2; exit}' "$TMP/protect")
+wslot=$(awk '$1 == "__nurl_fn.f" && NF == 3 && $2 !~ /^call:/ {print $2; exit}' "$TMP/protect")
 [ -n "$wslot" ] || { echo "FAIL: D0b found no never-moved binding in f"; fail=1; }
 # its flag: the first one set after a store into the slot; the edit clears
 # it right there. Nothing is handed on after it: on the path where `= w v`
@@ -101,7 +113,7 @@ PY
 cmut release_moved_to_an_earlier_point "$TMP/early.ll" "$TMP/o.core"
 # keep borrows its parameter (no `sink`); the edit gives it a flag and releases it
 awk '/define i64 @__nurl_fn.keep\(/{m=1} m && /^}/{m=0}
-  { if (m && /= alloca i64/) { print; print "  %xf = alloca i1"; next }
+  { if (m && /= alloca %Vec__i64$/ && !xa++) { print; print "  %xf = alloca i1"; next }
     if (m && /store %Vec__i64 %v,/) { print; print "  store i1 true, i1* %xf"; next }
     if (m && /^  ret /) { print "  %xl = load i1, i1* %xf"; print "  call void @__dropif_Vec__i64(i1 %xl, ptr %r0)" }
     print }' "$TMP/a.ll" > "$TMP/lent.ll"
@@ -138,8 +150,9 @@ cmut flag_cleared_with_nothing_handed_on "$TMP/off.ll" "$TMP/k.core"
 awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
   { if (m && /^then_1:/) t = 1; if (t && m && /store i1 0, i1\*/ && !c++) next
     if (t && m && /call i64 @__nurl_fn.eat\(/) {
-      print "  %kc = call %Vec__i64 @__nurl_cloneifk_Vec__i64(ptr @.__nurl_sink.0, i1 true, %Vec__i64 %r16)"
-      sub(/%Vec__i64 %r16\)/, "%Vec__i64 %kc)") }
+      r = $0; sub(/.*eat\(%Vec__i64 /, "", r); sub(/\).*/, "", r)
+      print "  %kc = call %Vec__i64 @__nurl_cloneifk_Vec__i64(ptr @.__nurl_sink.0, i1 true, %Vec__i64 " r ")"
+      sub(/%Vec__i64 %r[0-9]+\)/, "%Vec__i64 %kc)") }
     print }' "$TMP/k.ll" > "$TMP/kclone.ll"
 grep -q "@.__nurl_sink.0 = private constant i1 false" "$TMP/kclone.ll" && grep -q "eat(%Vec__i64 %kc)" "$TMP/kclone.ll" \
   || { echo "FAIL: the cloneifk edit did not apply"; fail=1; }
@@ -228,10 +241,10 @@ nv() {
 # it A, clears A's flag with A handed nowhere, then gives it B. The two
 # sides meet in states that differ only in A, which is owed: the leaking
 # side must not be taken for the other
-awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
-  { if (m && /^  %r13 = alloca i1$/) { print; print "  %ms = alloca %Vec__i64"; print "  %mf = alloca i1"; next }
+awk -v WF="$WF" -v AC="$AC" '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { if (m && $0 == "  " WF " = alloca i1") { print; print "  %ms = alloca %Vec__i64"; print "  %mf = alloca i1"; next }
     if (m && /^end_3:$/) {
-      print; print "  br i1 %r16, label %mt, label %me"; print "mt:"
+      print; print "  br i1 " AC ", label %mt, label %me"; print "mt:"
       print "  %mb1 = call %Vec__i64 @__nurl_fn.vec_new__i64()"; print "  store %Vec__i64 %mb1, %Vec__i64* %ms"
       print "  store i1 true, i1* %mf"; print "  br label %mj"; print "me:"
       print "  %ma = call %Vec__i64 @__nurl_fn.vec_new__i64()"; print "  store %Vec__i64 %ma, %Vec__i64* %ms"
@@ -247,18 +260,18 @@ case "$(tv "$TMP/join.ll")" in
 # w's value moved in, and w's flag set to false, not to v's: v's flag is
 # cleared first, then v is stored into w, which never owns it (nothing
 # releases v). A store into a slot whose flag stays clear is no hand-on
-awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+awk -v VS="$VS" -v VF="$VF" -v WF="$WF" '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
   { if (m && /^then_1:/) t = 1
-    if (t && m && $0 == "  store i1 0, i1* %r4") next
-    if (t && m && /store i1 %r[0-9]+, i1\* %r13/) { print "  store i1 false, i1* %r13"; next }
-    print; if (t && m && /= load %Vec__i64, %Vec__i64\* %r3$/ && !c++) print "  store i1 0, i1* %r4" }' "$TMP/a.ll" > "$TMP/dis.ll"
-grep -q "store i1 false, i1\* %r13" "$TMP/dis.ll" || { echo "FAIL: the disabled-slot edit did not apply"; fail=1; }
+    if (t && m && $0 == "  store i1 0, i1* " VF) next
+    if (t && m && $0 ~ ("store i1 %r[0-9]+, i1\\* " WF "$")) { print "  store i1 false, i1* " WF; next }
+    print; if (t && m && $0 ~ ("= load %Vec__i64, %Vec__i64\\* " VS "$") && !c++) print "  store i1 0, i1* " VF }' "$TMP/a.ll" > "$TMP/dis.ll"
+grep -q "store i1 false, i1\* $WF" "$TMP/dis.ll" || { echo "FAIL: the disabled-slot edit did not apply"; fail=1; }
 cmut a_value_stored_into_a_slot_whose_flag_stays_clear "$TMP/dis.ll" "$TMP/o.core"
 # `= w v` with the store of v into w deleted: w's flag is given v's, but w
 # still holds its own (released) value. The flag copy says w owns v; it
 # does not hold it
-awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
-  { if (m && /^then_1:/) t = 1; if (t && m && /store %Vec__i64 %r[0-9]+, %Vec__i64\* %r12/ && !c++) next; print }' "$TMP/a.ll" > "$TMP/fcopy.ll"
+awk -v WS="$WS" '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { if (m && /^then_1:/) t = 1; if (t && m && $0 ~ ("store %Vec__i64 %r[0-9]+, %Vec__i64\\* " WS "$") && !c++) next; print }' "$TMP/a.ll" > "$TMP/fcopy.ll"
 cmp -s "$TMP/a.ll" "$TMP/fcopy.ll" && { echo "FAIL: the flag-copy edit did not apply"; fail=1; }
 nv a_flag_copied_into_a_slot_that_does_not_hold_the_value __nurl_fn.f "$TMP/fcopy.ll"
 # v's flag cleared, and v put into an aggregate that is thrown away (in
@@ -276,14 +289,16 @@ case "$(tv "$TMP/agg.ll")" in
 # v stored, before its flag is cleared, to memory elsewhere through a
 # `__nurl_cloneif` whose condition the path does not know, and not handed
 # to eat: if that was a clone, v leaks; if not, it moved. Not followed
-awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+read -r KVS KVF _ _ KC <<< "$(regs_a "$TMP/k.ll")"
+KV=$(awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0} m && /call i64 @__nurl_fn.eat\(%Vec__i64 %r[0-9]+\)/ { r = $0; sub(/.*eat\(%Vec__i64 /, "", r); sub(/\).*/, "", r); print r; exit }' "$TMP/k.ll")
+awk -v KVF="$KVF" -v KC="$KC" -v KV="$KV" '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
   { if (m && /^then_1:/) t = 1
-    if (t && m && $0 == "  store i1 0, i1* %r4" && !d++) {
-      print "  %kc = call %Vec__i64 @__nurl_cloneif_Vec__i64(i1 %r15, %Vec__i64 %r16)"
+    if (t && m && $0 == "  store i1 0, i1* " KVF && !d++) {
+      print "  %kc = call %Vec__i64 @__nurl_cloneif_Vec__i64(i1 " KC ", %Vec__i64 " KV ")"
       print "  %kp = getelementptr i8, ptr null, i64 0"; print "  store %Vec__i64 %kc, ptr %kp" }
-    if (t && m && /= call i64 @__nurl_fn.eat\(%Vec__i64 %r16\)/ && !c++) { print "  " $1 " = add i64 0, 0"; next }
+    if (t && m && index($0, "= call i64 @__nurl_fn.eat(%Vec__i64 " KV ")") && !c++) { print "  " $1 " = add i64 0, 0"; next }
     print }' "$TMP/k.ll" > "$TMP/earlyclone.ll"
-grep -q "store %Vec__i64 %kc, ptr %kp" "$TMP/earlyclone.ll" && ! grep -q "eat(%Vec__i64 %r16)" "$TMP/earlyclone.ll" \
+grep -q "store %Vec__i64 %kc, ptr %kp" "$TMP/earlyclone.ll" && ! grep -q "eat(%Vec__i64 $KV)" "$TMP/earlyclone.ll" \
   || { echo "FAIL: the early-clone edit did not apply"; fail=1; }
 nv a_value_handed_on_early_as_a_possible_clone __nurl_fn.f "$TMP/earlyclone.ll"
 # a second known clone of the element, made and thrown away
@@ -363,11 +378,11 @@ vok __nurl_fn.f "$TMP/givenv0.ll" --sums "$TMP/e.core" || { echo "FAIL: a releas
 # v's flag cleared on f's else side after a by-value release of what a
 # `__nurl_cloneif` whose condition is not known returned: if that was a
 # clone, v leaks. With the condition known false it is v, released
-awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+awk -v VS="$VS" -v VF="$VF" '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
   { print; if (m && /^else_2:$/) {
-      print "  %kx = load %Vec__i64, %Vec__i64* %r3"; print "  %kg = icmp sgt i64 %n, 5"
+      print "  %kx = load %Vec__i64, %Vec__i64* " VS; print "  %kg = icmp sgt i64 %n, 5"
       print "  %kc = call %Vec__i64 @__nurl_cloneif_Vec__i64(i1 %kg, %Vec__i64 %kx)"
-      print "  call void @__dropifv_Vec__i64(i1 true, %Vec__i64 %kc)"; print "  store i1 0, i1* %r4" } }' "$TMP/a.ll" > "$TMP/relclone.ll"
+      print "  call void @__dropifv_Vec__i64(i1 true, %Vec__i64 %kc)"; print "  store i1 0, i1* " VF } }' "$TMP/a.ll" > "$TMP/relclone.ll"
 grep -q "%kc = call %Vec__i64 @__nurl_cloneif_Vec__i64(i1 %kg," "$TMP/relclone.ll" || { echo "FAIL: the possible-clone release edit did not apply"; fail=1; }
 nv a_possible_clone_released_by_value_for_the_value_itself __nurl_fn.f "$TMP/relclone.ll" --sums "$TMP/o.core"
 sed 's/@__nurl_cloneif_Vec__i64(i1 %kg,/@__nurl_cloneif_Vec__i64(i1 false,/' "$TMP/relclone.ll" > "$TMP/relorig.ll"
@@ -379,37 +394,42 @@ L="$D/element_clones_moved_into_a_returned_literal.nu"
 grep -q "= insertvalue %Two %r[0-9]*, %Vec__i64 %r[0-9]*, 1" "$TMP/l.ll" || { echo "FAIL: mk's literal is not in the LLVM"; fail=1; }
 vok __nurl_fn.mk "$TMP/l.ll" --sums "$TMP/l.core" || { echo "FAIL: the literal of two clones does not validate"; fail=1; }
 lf='/define %Two @__nurl_fn.mk\(/'
-# the literal stored into a field of mk's own (unused) %Two slot, and
+# the literal stored into a field of a %Two slot of mk's own (unused), and
 # not returned: frame-local storage is no hand-on
 awk "$lf"'{m=1} m && /^}/{m=0}
-  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %kp = getelementptr %Two, ptr %r7, i32 0"
+  { if (m && /^entry:$/) { print; print "  %ks = alloca %Two"; next }
+    if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %kp = getelementptr %Two, ptr %ks, i32 0"
       print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lstore.ll"
 grep -q "store %Two %r[0-9]*, ptr %kp" "$TMP/lstore.ll" || { echo "FAIL: the frame-store edit did not apply"; fail=1; }
 nv a_literal_stored_into_a_field_of_the_frames_own_slot __nurl_fn.mk "$TMP/lstore.ll" --sums "$TMP/l.core"
 # the same store through a pointer a call returned, given the frame's own
 # slot through a value not traced (a select): the call may hand it back
 awk "$lf"'{m=1} m && /^}/{m=0}
-  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %kp0 = select i1 true, ptr %r7, ptr %r7"; print "  %kp = call ptr @__nurl_fn.id_ptr(ptr %kp0)"
+  { if (m && /^entry:$/) { print; print "  %ks = alloca %Two"; next }
+    if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %kp0 = select i1 true, ptr %ks, ptr %ks"; print "  %kp = call ptr @__nurl_fn.id_ptr(ptr %kp0)"
       print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lcall.ll"
 grep -q "call ptr @__nurl_fn.id_ptr(ptr %kp0)" "$TMP/lcall.ll" || { echo "FAIL: the call-returned pointer edit did not apply"; fail=1; }
 nv a_literal_stored_through_a_pointer_a_call_returned_from_an_untraced_argument __nurl_fn.mk "$TMP/lcall.ll" --sums "$TMP/l.core"
 # the same store through a pointer read back out of a global the frame
 # stored its own slot into: a load gives what was stored, not the global
 awk "$lf"'{m=1} m && /^}/{m=0}
-  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  store ptr %r7, ptr @.tv_g"; print "  %kp = load ptr, ptr @.tv_g"
+  { if (m && /^entry:$/) { print; print "  %ks = alloca %Two"; next }
+    if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  store ptr %ks, ptr @.tv_g"; print "  %kp = load ptr, ptr @.tv_g"
       print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lglob.ll"
 grep -q "load ptr, ptr @.tv_g" "$TMP/lglob.ll" || { echo "FAIL: the global round-trip edit did not apply"; fail=1; }
 nv a_literal_stored_through_a_frame_slot_read_back_out_of_a_global __nurl_fn.mk "$TMP/lglob.ll" --sums "$TMP/l.core"
 # the same store through a pointer a call returned from an integer: the
 # frame's own slot as `ptrtoint`, which the callee may turn back
 awk "$lf"'{m=1} m && /^}/{m=0}
-  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %ki = ptrtoint ptr %r7 to i64"; print "  %kp = call ptr @__nurl_fn.ptr_of(i64 %ki)"
+  { if (m && /^entry:$/) { print; print "  %ks = alloca %Two"; next }
+    if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %ki = ptrtoint ptr %ks to i64"; print "  %kp = call ptr @__nurl_fn.ptr_of(i64 %ki)"
       print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lint.ll"
-grep -q "ptrtoint ptr %r7 to i64" "$TMP/lint.ll" || { echo "FAIL: the ptrtoint edit did not apply"; fail=1; }
+grep -q "ptrtoint ptr %ks to i64" "$TMP/lint.ll" || { echo "FAIL: the ptrtoint edit did not apply"; fail=1; }
 nv a_literal_stored_through_a_pointer_a_call_returned_from_the_frames_slot_as_an_integer __nurl_fn.mk "$TMP/lint.ll" --sums "$TMP/l.core"
 # ...and as those bits in a double (`ptrtoint`, then `bitcast` to a float)
 awk "$lf"'{m=1} m && /^}/{m=0}
-  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %ki = ptrtoint ptr %r7 to i64"; print "  %kd = bitcast i64 %ki to double"; print "  %kp = call ptr @__nurl_fn.ptr_of_bits(double %kd)"
+  { if (m && /^entry:$/) { print; print "  %ks = alloca %Two"; next }
+    if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %ki = ptrtoint ptr %ks to i64"; print "  %kd = bitcast i64 %ki to double"; print "  %kp = call ptr @__nurl_fn.ptr_of_bits(double %kd)"
       print "  store %Two " r ", ptr %kp"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/ldbl.ll"
 grep -q "bitcast i64 %ki to double" "$TMP/ldbl.ll" || { echo "FAIL: the float-bits edit did not apply"; fail=1; }
 nv a_literal_stored_through_a_pointer_a_call_returned_from_the_frames_slot_as_float_bits __nurl_fn.mk "$TMP/ldbl.ll" --sums "$TMP/l.core"
@@ -417,14 +437,16 @@ nv a_literal_stored_through_a_pointer_a_call_returned_from_the_frames_slot_as_fl
 # question of what the frame turns into integers asks itself (not followed,
 # not a crash)
 awk "$lf"'{m=1} m && /^}/{m=0}
-  { if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %ki = add i64 0, 0"; print "  %kq = call ptr @__nurl_fn.ptr_of(i64 %ki)"; print "  %kj = ptrtoint ptr %kq to i64"
+  { if (m && /^entry:$/) { print; print "  %ks = alloca %Two"; next }
+    if (m && /^  ret %Two %r[0-9]+$/) { r = $3; print "  %ki = add i64 0, 0"; print "  %kq = call ptr @__nurl_fn.ptr_of(i64 %ki)"; print "  %kj = ptrtoint ptr %kq to i64"
       print "  store %Two " r ", ptr %kq"; print "  ret %Two zeroinitializer"; next } print }' "$TMP/l.ll" > "$TMP/lrec.ll"
 grep -q "%kj = ptrtoint ptr %kq to i64" "$TMP/lrec.ll" || { echo "FAIL: the recursive-ptrtoint edit did not apply"; fail=1; }
 nv a_literal_stored_through_a_pointer_whose_ptrtoint_asks_itself __nurl_fn.mk "$TMP/lrec.ll" --sums "$TMP/l.core"
 # field 0, which holds the first clone, replaced in the literal returned:
 # the result does not carry that clone
 awk "$lf"'{m=1} m && /^}/{m=0}
-  { if (m && /^  ret %Two %r[0-9]+$/) { print "  %kr = insertvalue %Two " $3 ", %Vec__i64 zeroinitializer, 0"; print "  ret %Two %kr"; next } print }' "$TMP/l.ll" > "$TMP/lrepl.ll"
+  { if (m && /^entry:$/) { print; print "  %ks = alloca %Two"; next }
+    if (m && /^  ret %Two %r[0-9]+$/) { print "  %kr = insertvalue %Two " $3 ", %Vec__i64 zeroinitializer, 0"; print "  ret %Two %kr"; next } print }' "$TMP/l.ll" > "$TMP/lrepl.ll"
 grep -q "ret %Two %kr" "$TMP/lrepl.ll" || { echo "FAIL: the field-replacement edit did not apply"; fail=1; }
 nv a_field_holding_a_clone_replaced_in_the_literal_returned __nurl_fn.mk "$TMP/lrepl.ll" --sums "$TMP/l.core"
 # the same replacement with the literal's first field set in a block listed
@@ -513,4 +535,47 @@ awk '/define void @__nurl_fn.give\(/{m=1} m && /^}/{m=0}
     print }' "$TMP/g.ll" > "$TMP/gpre.ll"
 grep -q "call void @__dropifv_Vec__i64(i1 true, %Vec__i64 %r" "$TMP/gpre.ll" || { echo "FAIL: the member-release-before edit did not apply"; fail=1; }
 cmut a_clone_released_before_the_literal_carrying_it_was_handed_to_a_sink "$TMP/gpre.ll" "$TMP/g.core"
+# D0d (AGORA-992): a temporary the core IR never moves - `mk`'s result, read
+# by `look` - handed by the LLVM to a `sink` instead of released: each path
+# is consistent (no release, one hand-on), so only the IR tells
+T="$D/temporary_read_by_a_borrowing_call.nu"
+"$NURLC" "$T" > "$TMP/t.ll" || exit 1
+"$NURLC" --emit-core "$T" > "$TMP/t.core" || exit 1
+"$NURLC" --g "$T" > "$TMP/t.g.ll" || exit 1
+python3 "$ROOT/tools/ncore/tvir.py" "$TMP/t.core" "$TMP/t.g.ll" > "$TMP/t.protect"
+grep -q "^__nurl_fn.f call:mk:1:" "$TMP/t.protect" || { echo "FAIL: D0d found no never-moved temporary in f"; fail=1; }
+vok __nurl_fn.f "$TMP/t.ll" --protect "$TMP/t.protect" --sums "$TMP/t.core" || { echo "FAIL: the temporary program does not validate"; fail=1; }
+treg=$(awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0} m && /call [^@]*@__nurl_fn.look\(/ { sub(/.*@__nurl_fn.look\(/, ""); sub(/\).*/, ""); n = split($0, a, " "); print a[n]; exit }' "$TMP/t.ll")
+awk -v R="$treg" '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { if (m && /@__nurl_fn.look\(/) sub(/@__nurl_fn.look\(/, "@__nurl_fn.eat(")
+    if (m && /call void @__dropifv_/ && index($0, R ")")) next
+    print }' "$TMP/t.ll" > "$TMP/thand.ll"
+grep -q "@__nurl_fn.eat(%Vec__i64 $treg)" "$TMP/thand.ll" || { echo "FAIL: the temporary hand-on edit did not apply"; fail=1; }
+case "$(python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/thand.ll" --protect "$TMP/t.protect" --sums "$TMP/t.core" | tail -1)" in
+  *"mismatch 1") echo "ok: never_moved_temporary_handed_to_a_sink caught (D0d)" ;;
+  *) echo "FAIL: never_moved_temporary_handed_to_a_sink not caught"; fail=1 ;;
+esac
+# D0d: `v` moved into `eat` on the then arm only, in the IR; the LLVM's arms
+# swapped, so it is handed on the else arm (and released on the then arm):
+# each path is consistent, only the IR's arm tells
+A="$D/binding_moved_into_a_sink_on_the_then_arm_only.nu"
+"$NURLC" "$A" > "$TMP/arm.ll" || exit 1
+"$NURLC" --emit-core "$A" > "$TMP/arm.core" || exit 1
+"$NURLC" --g "$A" > "$TMP/arm.g.ll" || exit 1
+python3 "$ROOT/tools/ncore/tvir.py" "$TMP/arm.core" "$TMP/arm.g.ll" > "$TMP/arm.protect"
+grep -q "^__nurl_fn.f .* v arm:1:1:t$" "$TMP/arm.protect" || { echo "FAIL: D0d found no one-arm move in f"; fail=1; }
+vok __nurl_fn.f "$TMP/arm.ll" --protect "$TMP/arm.protect" --sums "$TMP/arm.core" || { echo "FAIL: the one-arm program does not validate"; fail=1; }
+awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  !m { print; next }
+  /^then_[0-9]+:/ { t = $0; cur = "t"; next }
+  /^else_[0-9]+:/ { e = $0; cur = "e"; next }
+  /^end_[0-9]+:/ && cur != "" { print t; printf "%s", eb; print e; printf "%s", tb; print; cur = ""; next }
+  cur == "t" { tb = tb $0 "\n"; next }
+  cur == "e" { eb = eb $0 "\n"; next }
+  { print }' "$TMP/arm.ll" > "$TMP/armswap.ll"
+cmp -s "$TMP/arm.ll" "$TMP/armswap.ll" && { echo "FAIL: the arm-swap edit did not apply"; fail=1; }
+case "$(python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/armswap.ll" --protect "$TMP/arm.protect" --sums "$TMP/arm.core" | tail -1)" in
+  *"mismatch 1") echo "ok: one_arm_move_handed_on_the_other_arm caught (D0d)" ;;
+  *) echo "FAIL: one_arm_move_handed_on_the_other_arm not caught"; fail=1 ;;
+esac
 exit $fail

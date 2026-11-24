@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """tvir.py prog.core prog.g.ll: formal phase D0b (AGORA-985), the core IR's
 side of the drop validation. It prints, one per line, the LLVM slots of
-named bindings the core IR never moves: `<llvm function> <slot> <name>`.
+named bindings the core IR never moves: `<llvm function> <slot> <name>`;
+and (D0d, AGORA-992) each temporary it never moves that a call's result
+is, by that call: `<llvm function> call:<callee>:<k>:<n> v<id>`, the k-th
+of the function's n calls to the callee.
 
 `tvdrops.py --protect FILE` then asks of each such slot that its flag is
 never cleared while it owns a value: what the IR keeps to its scope end, the
@@ -58,8 +61,23 @@ def ir_protected(core):
     res = []
     for fn in out:
         moved = set()
+        # (D0d: where each move is - the arms of the `if`s around it, the
+        # outermost first, as (if number, "t" / "e"); a move outside every
+        # `if` has none)
+        where, stack, nif = {}, [], 0
         for l in fn["body"]:
             w = l.split()
+            if w[:1] == ["if"]:
+                nif += 1
+                stack.append(["if", nif, "t"])
+            elif w[:1] == ["else"] and stack and stack[-1][0] == "if":
+                stack[-1][2] = "e"
+            elif w[:1] in (["scope"], ["loop"]):
+                stack.append([w[0]])
+            elif w[:1] == ["end"] and stack:
+                stack.pop()
+            ctx = tuple((b[1], b[2]) for b in stack if b[0] == "if")
+            lm = set()   # (what this line moves)
             ops = [t.split("/")[0] for t in w]
             # (a `use` into a `void` holder, an `if`'s value no one takes,
             # moves nothing)
@@ -68,19 +86,50 @@ def ir_protected(core):
                                                        (0, "", 0, ""))[3] == "void"
             for k, t in enumerate(w):
                 if t in ("use", "ret") and k + 1 < len(w) and not (t == "use" and dvoid):
-                    moved.add(w[k + 1].split("/")[0])
+                    lm.add(w[k + 1].split("/")[0])
             if ("agg" in w or "closure" in w or "callind" in w or "opaque" in w):
-                moved.update(o for o in ops if o.startswith("v"))
+                lm.update(o for o in ops if o.startswith("v"))
             if "call" in w:
                 k = w.index("call")
                 callee = w[k + 1] if k + 1 < len(w) else ""
                 args = w[k + 3:] if k + 2 < len(w) else []
                 for i in sinks.get(callee, ()):
                     if i < len(args):
-                        moved.add(args[i].split("/")[0])
+                        lm.add(args[i].split("/")[0])
+            moved |= lm
+            for o in lm:
+                where.setdefault(o, set()).add(ctx)
         for vid, (kind, name, line, ty) in fn["vars"].items():
             if kind == 1 and name and ty in drops and f"v{vid}" not in moved:
                 res.append((fn["name"], name, line))
+            # D0d (AGORA-992): a binding the IR moves on one arm of an `if`
+            # only - every move inside that arm, the outermost `if` around
+            # all of them: the LLVM hands it on in that arm's blocks only
+            ws = where.get(f"v{vid}")
+            if kind == 1 and name and ty in drops and ws and all(ws):
+                tops = {c[0] for c in ws}
+                if len(tops) == 1:
+                    (i, arm), = tops
+                    res.append((fn["name"], name, line, f"arm:{i}:{nif}:{arm}"))
+        # D0d (AGORA-992): a temporary - an unnamed value, no binding - of a
+        # dropping type the IR never moves, bound straight from a call
+        # (`let N call F …`): its value is the result of that call, the
+        # k-th of the function's calls to F. The LLVM's k-th call to F is
+        # the same one where both have as many (tvdrops.py checks the
+        # count), and its result is not handed on.
+        calls, temps = {}, []
+        for l in fn["body"]:
+            w = l.split()
+            for k, t in enumerate(w):
+                if t == "call" and k + 1 < len(w):
+                    f = w[k + 1]
+                    calls[f] = calls.get(f, 0) + 1
+                    if k == 2 and w[0] == "let" and w[1].isdigit():
+                        temps.append((int(w[1]), f, calls[f]))
+        for vid, f, k in temps:
+            kind, name, line, ty = fn["vars"].get(vid, (0, "", 0, ""))
+            if kind != 1 and not name and ty in drops and f"v{vid}" not in moved:
+                res.append((fn["name"], f"call:{f}:{k}:{calls[f]}", f"v{vid}"))
     return res
 
 
@@ -105,8 +154,12 @@ def dbg_slots(ll):
 def main():
     core, ll = open(sys.argv[1]).read(), open(sys.argv[2]).read()
     slots = dbg_slots(ll)
-    for fname, name, line in ir_protected(core):
+    for fname, name, line, *arm in ir_protected(core):
         llname = "_nurl_main" if fname == "main" else "__nurl_fn." + fname
+        if name.startswith("call:"):
+            # (a temporary: found by its call in the plain build, tvdrops.py)
+            print(llname, name, line)
+            continue
         # by name in the function; the line only breaks a tie (the debug
         # line may be the IR's or one more)
         cands = {k: v for k, v in slots.items() if k[0] == llname and k[1] == name}
@@ -115,7 +168,7 @@ def main():
         if len(cands) == 1:
             s = next(iter(cands.values()))
             if len(s) == 1:
-                print(llname, next(iter(s)), name)
+                print(llname, next(iter(s)), name, *arm)
 
 
 if __name__ == "__main__":

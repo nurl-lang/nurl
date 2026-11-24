@@ -576,6 +576,134 @@ def can_panic(callee):
 
 
 PROTECT = {}   # D0b: llvm function → {slot: binding} the core IR never moves
+PROTECT_TEMP = {}  # D0d: llvm function → [(callee, k, n, temp)]: the k-th of n calls
+ARM_ONLY = {}  # D0d: llvm function → {slot: (if number, ifs, "t" / "e", binding)}
+
+
+def arm_regions(blocks):
+    """The arms of each `if` of the function, in order: (then blocks, else
+    blocks). nurlc emits an `if` as `br i1 c, label %then_N, label %else_M`,
+    in the order of the core IR's `if`s; an arm is what is reached from its
+    label going forward (a loop's way back is to an earlier label) and not
+    from the other's (where they meet and after)."""
+    order = {lab: i for i, (lab, _) in enumerate(blocks)}
+    succ = {}
+    for lab, ls in blocks:
+        out = []
+        for l in ls:
+            if (m := BR_COND.match(l)):
+                out += [m.group(2), m.group(3)]
+            elif (m := BR.match(l)):
+                out.append(m.group(1))
+        succ[lab] = out
+
+    def reach(start, floor):
+        seen, todo = set(), [start]
+        while todo:
+            b = todo.pop()
+            if b in seen or order.get(b, -1) <= floor:
+                continue
+            seen.add(b)
+            todo += succ.get(b, [])
+        return seen
+    arms = []
+    for lab, ls in blocks:
+        for l in ls:
+            m = BR_COND.match(l)
+            if m and m.group(2).startswith("then_") and m.group(3).startswith("else_"):
+                t, e = reach(m.group(2), order[lab]), reach(m.group(3), order[lab])
+                arms.append((t - e, e - t))
+    return arms
+
+
+def check_temps(name, blocks):
+    """D0d (AGORA-992): a temporary the core IR never moves, the result of
+    the k-th of the function's n calls to a callee, is not handed on by the
+    LLVM either. Its register is that of the LLVM's k-th call to the callee,
+    where the LLVM has n of them (else it is not followed). Handed on: an
+    argument at a `sink` / `keeps` index of a summarized callee, `ret`, an
+    element `insertvalue` moves into an aggregate, or a store into memory
+    that is not one of the frame's slots. A release (`__dropifv`), an
+    argument a callee borrows, a store into a slot of the frame (not
+    followed further) is not. None, or a mismatch string."""
+    want = PROTECT_TEMP.get(name)
+    if not want:
+        return None
+    lines = [l for _, ls in blocks for l in ls]
+    deflines = {m.group(1): m.group(2) for l in lines if (m := re.match(r"^\s*(%[\w.]+) = (.*)$", l))}
+
+    def frame_local(p, seen=()):
+        # (a pointer into the frame's own storage: an `alloca`, or a
+        # `getelementptr` / `bitcast` of one; a global, a parameter, a
+        # pointer loaded or a call returned is not)
+        if p is None or not p.startswith("%") or p in seen:
+            return False
+        d = deflines.get(p, "")
+        if d.startswith("alloca "):
+            return True
+        if (mg := re.match(r"getelementptr (?:inbounds )?(.*)$", d)):
+            ops = split_top(mg.group(1))
+            return len(ops) > 1 and frame_local(arg_value(ops[1]), seen + (p,))
+        if (mg := re.match(r"(?:bitcast|addrspacecast) .* (%[\w.]+) to ", d)):
+            return frame_local(mg.group(1), seen + (p,))
+        return False
+    for callee, k, n, temp in want:
+        reg = None
+        for cand in ("@__nurl_fn." + callee, "@" + callee):
+            hits = [l for l in lines if (pc := parse_call(l)) and pc[0] == cand]
+            if hits:
+                if len(hits) == n:
+                    mr = re.match(r"^\s*(%[\w.]+) = ", hits[k - 1])
+                    reg = mr.group(1) if mr else None
+                break
+        if reg is None:
+            continue
+        # (and what is the value itself under another register: a
+        # `__nurl_cloneif` / `__nurl_cloneifk` the module's constants say
+        # makes no clone - the condition `false`, or a key that is)
+        # (to a fixpoint: a block listed before the one defining what it
+        # reads is read again)
+        regs, grew = {reg}, True
+        while grew:
+            grew = False
+            for l in lines:
+                for keyed in (False, True):
+                    mc = cloneif(l, keyed)
+                    if mc:
+                        src, cond = (mc.group(4), mc.group(2)) if keyed else (mc.group(3), mc.group(2))
+                        nocl = CONSTS.get(cond) is False if keyed else cond.strip() in ("false", "0")
+                        if keyed and not nocl:
+                            c = mc.group(3).strip()
+                            nocl = c in ("false", "0")
+                        if src in regs and nocl and mc.group(1) not in regs:
+                            regs.add(mc.group(1))
+                            grew = True
+        how = None
+        for l in lines:
+            hit = [r for r in regs if re.search(re.escape(r) + r"(?![\w.])", l)]
+            if not hit:
+                continue
+            if cloneif(l, False) or cloneif(l, True):
+                continue
+            pc = parse_call(l)
+            if pc and pc[0] and pc[1] is not None and not pc[0].startswith(("@__dropifv_", "@__dropif_")):
+                if pc[0][1:] in SINKS and SINKS[pc[0][1:]][0] == len(pc[1]):
+                    if any(a in regs for i, a in enumerate(pc[1]) if i in SINKS[pc[0][1:]][1]):
+                        how = f"to a `sink` / `keeps` parameter of {pc[0]}"
+            elif (mr := RET_VAL.match(l)) and mr.group(1) in regs:
+                how = "by `ret`"
+            elif (mi := re.match(r"^\s*%[\w.]+ = insertvalue (.*)$", l)):
+                ops = split_top(mi.group(1))
+                if len(ops) > 1 and arg_value(ops[1]) in regs:
+                    how = "moved into an aggregate"
+            elif (ms := parse_store(l)) and ms.group(1) in regs and not frame_local(ms.group(2)):
+                # (into a global, a parameter's memory, or through a pointer
+                # that is not the frame's own storage)
+                how = f"stored into memory not the frame's ({ms.group(2)})"
+            if how:
+                return (f"mismatch: {name} {reg} ({temp}, the result of call {k} of {n} to {callee}) is never "
+                        f"moved in the core IR, but the LLVM hands it on {how}")
+    return None
 
 
 def check_function(name, blocks, owning, journal=False):
@@ -583,6 +711,15 @@ def check_function(name, blocks, owning, journal=False):
     `owning`: the types the module has a `__dropif_T` for (what owns).
     `journal` (D1): also the panic journal's registrations."""
     body = {lab: lines for lab, lines in blocks}
+    # D0d: a binding the core IR moves on one arm of an `if` only, its slot
+    # with that arm's blocks - where the IR's `if`s and the LLVM's are as
+    # many (else not followed)
+    armreg = {}
+    if ARM_ONLY.get(name):
+        arms = arm_regions(blocks)
+        for sl, (i, n, a, b) in ARM_ONLY[name].items():
+            if len(arms) == n and 0 < i <= n:
+                armreg[sl] = (arms[i - 1][0 if a == "t" else 1], i, a, b)
     if journal:
         for _, lines in blocks:
             for l in lines:
@@ -1287,6 +1424,12 @@ def check_function(name, blocks, owning, journal=False):
                     if sl in PROTECT.get(name, {}) and owned(m.group(2)) and sl not in fresh_put:
                         return (f"mismatch: {name} {sl} ({PROTECT[name][sl]}) is never moved in the core IR, "
                                 f"but its flag is cleared while it owns a value: {'>'.join(path)}")
+                    if sl in armreg and owned(m.group(2)) and sl not in fresh_put and lab not in armreg[sl][0]:
+                        # D0d: moved in the IR on one arm only, handed on elsewhere
+                        reg = armreg[sl]
+                        return (f"mismatch: {name} {sl} ({reg[3]}) is moved in the core IR on the "
+                                f"{'then' if reg[2] == 't' else 'else'} arm of if {reg[1]} only, but its flag is "
+                                f"cleared while it owns a value in {lab}, outside that arm: {'>'.join(path)}")
                     cleared(m.group(2))
                     flag_v[m.group(2)] = False
                 continue
@@ -1339,6 +1482,12 @@ def check_function(name, blocks, owning, journal=False):
                     if sl in PROTECT.get(name, {}) and owned(m.group(2)) and sl not in fresh_put:
                         return (f"mismatch: {name} {sl} ({PROTECT[name][sl]}) is never moved in the core IR, "
                                 f"but its flag is cleared while it owns a value: {'>'.join(path)}")
+                    if sl in armreg and owned(m.group(2)) and sl not in fresh_put and lab not in armreg[sl][0]:
+                        # D0d: moved in the IR on one arm only, handed on elsewhere
+                        reg = armreg[sl]
+                        return (f"mismatch: {name} {sl} ({reg[3]}) is moved in the core IR on the "
+                                f"{'then' if reg[2] == 't' else 'else'} arm of if {reg[1]} only, but its flag is "
+                                f"cleared while it owns a value in {lab}, outside that arm: {'>'.join(path)}")
                 if m.group(1) in ("false", "0") and m.group(2) in flags:
                     cleared(m.group(2))
                 if m.group(1) in ("true", "1") and m.group(2) in flags:
@@ -1576,8 +1725,18 @@ def main():
     if "--protect" in sys.argv:
         for line in open(sys.argv[sys.argv.index("--protect") + 1]):
             w = line.split()
-            if len(w) == 3:
+            if len(w) == 3 and w[1].startswith("call:"):
+                # (a temporary, by its call: `call:<callee>:<k>:<n>`)
+                c = w[1].split(":")
+                if len(c) == 4 and c[2].isdigit() and c[3].isdigit():
+                    PROTECT_TEMP.setdefault(w[0], []).append((c[1], int(c[2]), int(c[3]), w[2]))
+            elif len(w) == 3:
                 PROTECT.setdefault(w[0], {})[w[1]] = w[2]
+            elif len(w) == 4 and w[3].startswith("arm:"):
+                # (a binding moved on one arm of an `if` only: `arm:<i>:<n>:<t|e>`)
+                c = w[3].split(":")
+                if len(c) == 4 and c[1].isdigit() and c[2].isdigit() and c[3] in ("t", "e"):
+                    ARM_ONLY.setdefault(w[0], {})[w[1]] = (int(c[1]), int(c[2]), c[3], w[2])
     owning = set(re.findall(r"@__dropifv?_([\w.]+)\(", text))
     # (and the types they read: a slot or a parameter of a literal aggregate
     # type, `{ i1, %String }`, owns as the named type it is the body of does)
@@ -1630,7 +1789,7 @@ def main():
             # (D1 asks the journal of a function that may run under a
             # recover frame; elsewhere a panic ends the process)
             jn = journal and (MAYPANIC is None or name in MAYPANIC[2])
-            r = check_function(name, blocks, owning, jn)
+            r = check_temps(name, blocks) or check_function(name, blocks, owning, jn)
         except Unsupported as e:
             uns.append(str(e))
             continue
