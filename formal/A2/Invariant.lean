@@ -1808,6 +1808,21 @@ theorem LiveCaps.of_st {m m' : Mem} {Γ : Ctx} {w : Var} (h : LiveCaps m Γ w) (
   exact ⟨h1, fun c hc x t n hx => h2 c hc x t n (hst ▸ hx), fun d o' l hd x t n hx => h3 d o' l hd x t n (hst ▸ hx)⟩
 
 
+/-- Removing a slot, where the context ends bindings at most, keeps the
+    clause: the slot is gone, and its tree with it. -/
+theorem LiveCaps.remove {m : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps m Γ w) (hb : LiveBack Γ Γ')
+    (x : Var) : LiveCaps (m.remove x) Γ' w := by
+  have h' := h.of_back hb
+  intro v E o V hv hl hs
+  have hrm : ∀ y sl, (m.remove x).st y = some sl → m.st y = some sl := by
+    intro y sl hy
+    by_cases hyx : y = x
+    · subst hyx; simp [Mem.remove, upd] at hy
+    · simpa [Mem.remove, upd, hyx] using hy
+  obtain ⟨h1, h2, h3⟩ := h' v E o V hv hl (hrm _ _ hs)
+  exact ⟨h1, fun c hc x' t n hx' => h2 c hc x' t n (hrm _ _ hx'),
+    fun d o' l hd x' t n hx' => h3 d o' l hd x' t n (hrm _ _ hx')⟩
+
 /-- AGORA-937 B2 (AGORA-963): the closure-capture clause. A held anchor's
     root, not lent out, is captured by no package in the store but
     read-only (`.inp`), so no call through a package hands it to an

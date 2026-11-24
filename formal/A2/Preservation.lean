@@ -679,7 +679,7 @@ theorem Inv.leafNoHeld {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv 
     statement's killable names (a held root is none, `Inv.anch`). -/
 theorem Inv.heldCaps_step {m m' : Mem} {Γ Γ' : Ctx} {F : List Var} {s s' : Stmt} (hi : Inv m Γ F s)
     (hrb : ∀ p E, Γ' p = some E → E.mode = .rootb → p ∉ s'.spine → Γ p = some E ∧ p ∉ s.spine)
-    (hc : ∀ w, w ∉ s.killVars → CapsInpAt m w → CapsInpAt m' w) : HeldCapsInp m' Γ' F s' :=
+    (hc : ∀ w, w ∉ s.killVars → LiveCaps m Γ w → LiveCaps m' Γ' w) : HeldCapsInp m' Γ' F s' :=
   fun p E hp hm hps d hd hb hh hF => by
     obtain ⟨h0, hps0⟩ := hrb p E hp hm hps
     rcases hi.anch p E h0 hm hps0 d hd hb with h' | ⟨_, hnk, _⟩
