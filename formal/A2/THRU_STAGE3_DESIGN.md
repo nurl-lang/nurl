@@ -1243,3 +1243,16 @@ The typing allows both live together: creating `cl` kills no viewer of `r`; the 
 5. **The wrappers** (`frozen`, `catchR`) keep it from their inner step. It does not depend on `F`.
 
 `CallH.liveCaps`, `LiveCaps.hand`, `editNode`, `unpair` and the rest of `CapsLive.lean` carry over once restricted to `v ≥ p ∨ v ∈ A`; their proofs read one binding at a time.
+
+*Refinement: the frame is `F`.* `callIn`'s runtime `frozen z` is every caller variable but the `inout` arguments (`(List.range base).filter (∉ inoutArgs)`). So "the bindings the frame reaches" is "the bindings outside `F`". The clause becomes `LiveCaps` restricted to `v ∉ F`:
+
+`FCaps m Γ F w := ∀ v E o V, Γ v = some E → E.live → v ∉ F → m.st v = some ⟨o, some V⟩ → LiveGood m w V`
+
+- **No root exclusion.** The counterexample's `cl` is a caller binding, so it is in `F` inside the frame.
+- **The spine:** a running `rbind`'s parameter is asked about too, at the `F` its frame runs under: `F ++ frozenAbove s p`, the runtime lists of the `frozen` wrappers on the spine above it.
+- **`Inv.rbindIn`** moves to the typing's `F ++ z'`. The runtime list `z` contains `z'` and the changed roots, whose slots hold no package (data `Vec`s, `noPkg`). So the clause over `v ∉ F ++ z` gives it over `v ∉ F ++ z'`.
+- **`frozenIn` and `catchIn`** keep it as follows:
+  - a binding in the frame the wrapper adds is frozen through the inner step (`Frz`: its slot is unchanged), and is not revived;
+  - outside that frame, the inner clause gives it.
+- **The call** establishes it for its parameters' anchors over the parameters and the `inout` arguments: the arguments are clean by `NamesFree` at a frozen root, and by `CallThruOK`'s `NoMutLive` at a changed root.
+- **`catchP`:** the catch frame's `F` is every older binding, so the restored `Δ` is asked about only at the frame's own bindings.
