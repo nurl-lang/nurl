@@ -5005,17 +5005,20 @@ unsafe @ __vis_check_template s sname s tfile s tparams s body → v {
     : i lx ( nurl_lex_new body ( nurl_str_cat3 `<template ` sname ( nurl_str_cat3 ` of ` tfile `>` ) ) )
     ? == ( nurl_lex_type lx ) TT_LBRACE { ( nurl_lex_advance lx ) } {}
     : ~ i depth 0
-    : ~ b want_type T
+    // (need: how many types the current field still needs before its name -
+    // one, and one more for each `!` result type, `! T E`)
+    : ~ i need 1
     ~ & != ( nurl_lex_type lx ) TT_EOF ! & == depth 0 == ( nurl_lex_type lx ) TT_RBRACE {
         : i tt ( nurl_lex_type lx )
         ? == tt TT_LPAREN { = depth + depth 1 } {
             ? == tt TT_RPAREN {
                 = depth - depth 1
-                ? == depth 0 { = want_type F } {}
+                ? & == depth 0 > need 0 { = need - need 1 } {}
             } {
+                ? & == depth 0 seq ( nurl_lex_val lx ) `!` { = need + need 1 } {}
                 ? ( is_ident_tok tt ) {
                     : s v ( nurl_lex_val lx )
-                    : b is_type | > depth 0 want_type
+                    : b is_type | > depth 0 > need 0
                     ? & is_type ! ( str_contains_word tparams v ) {
                         : s sf ( nurl_sym_get2 g_vis_syms v `__src_file` )
                         ? & != 0 ( nurl_str_len sf ) ! ( seq sf tfile ) {
@@ -5026,7 +5029,9 @@ unsafe @ __vis_check_template s sname s tfile s tparams s body → v {
                             } {}
                         } {}
                     } {}
-                    ? == depth 0 { = want_type ! want_type } {}
+                    // (at depth 0 a type uses up one of the field's types; the
+                    // name after them starts the next field)
+                    ? == depth 0 { = need ? > need 0 - need 1 1 } {}
                 } {}
             }
         }
