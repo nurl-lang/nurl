@@ -1020,3 +1020,20 @@ Stated this way, the clause holds for frozen roots as well: a frozen root is no 
 - It writes only reached slots, from values it read there (`EvalR.capsInp`, restricted to the reach).
 - A nested frame's base is at or above the outer one's.
 - `rbindSkip` removes the parameter.
+
+**Refined, after `CapsOK` and `MInv.noPkg` (github#2268):**
+- **No transitive capture problem.** A binding captured by name holds nothing (`CapsOK`: `Ev.held = []`), and its type holds no views. By `noPkg`, every package in its slot captures nothing by name, so it cannot carry an inout capture of `w` into the frame.
+- **The call can establish the store clause.** At a route-U call, `CapsInpAt m w` over the whole store follows from three things:
+  - `noPkg` for bindings whose type has no closure, dead ones included;
+  - `MInv.held` with `NamesIn` for live closures;
+  - `CallThruOK`'s "closure-typed bindings are live and change `w` by no name".
+
+  Blocks need nothing.
+- **Left: the spine.** A running `rbind`'s parameter `p` is in the spine at every level above it. There, `F` does not show whether `p`'s held anchor is a changed root `w` or a frozen root `w'`. The typing's frozen part `z'` lives only in the derivation, and the runtime `frozen z` (`zOf`) contains both roots.
+
+**Direction for the spine: make the runtime frozen list informative.**
+- `Step.letcall` builds `frozen z` with `z` = `zOf` minus, when `fn.body.hasThru`, every slot whose tree holds a node that an argument's value views (`ViewAddr`, `DataAt`).
+- `frozen z` is ghost: no step reads `z`. So no behaviour changes, and for every call typed today nothing is removed (`callR = []`, so no argument holds views).
+- `z' ⊆ z` still holds for the typing. `zN` drops `thruW`, and the correspondence lemma shows that `thruW` is the set of removed slots.
+- The spine clause then reads, at an `rbind` under `frozen z`: "a held anchor at a root outside `F ++ z` has `CapsInpAt`". A frozen `w'` is in `z`, so the clause is vacuous for it. A changed `w` is not in `z`, so the clause applies, and the call establishes it as above.
+- `Inv.rbindIn` moves to the typing's `F ++ z'`. A root in `z` but not in `z'` is a root of `mutNames`, which by `NamesFree` no argument but a closure reaches, so it is no held anchor.
