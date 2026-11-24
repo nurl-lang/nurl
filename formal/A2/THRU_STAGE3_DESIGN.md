@@ -1297,3 +1297,23 @@ Ways out, to weigh next session:
 - **(c)** Restrict A2: no `recover` frame inside a route-U frame. This is the coverage cut the owner did not choose.
 
 (a) looks smallest and sound. The rest of the plan (`HeldZ`, the frame's domain `∉ z_p`, the call's `NamesFree` / `NoMutLive` argument) stands.
+
+**(a) fails, and a memory-only clause makes it unnecessary (2026-11-25).** The `letrec` step knows no context, so a ghost `Γ0` in `catchR`'s syntax would be arbitrary.
+
+But inside a frame the clause can range over **every slot of the frame's domain**, live or dead:
+
+`FrameCaps m D w := ∀ v o V, v ∉ D → m.st v = some ⟨o, some V⟩ → LiveGood m w V`
+
+Live-only was needed only for the caller's dead closures that a through call killed, and those lie outside the domain (`D = z_p`, below the frame).
+- **At the call**, the domain is the fresh parameters, built from live arguments, and the `inout` arguments, which are live. Both are clean (`CallThruOK`'s `NoMutLive` with `liveCapsAll` at a changed root; `NamesFree` at a frozen one).
+- **In the frame**, no code names `w` (it is a caller variable, and no `inout` argument aliases a viewed root, `CallA`). So no package capturing it inout is made. Values come from the domain, or from reads outside it, which are frozen views or captured names: package-free (`noPkg`), and blocks hold no names (`blkCapsInp`). Killing a binding makes nothing dirty.
+- **`catchP`:** the clause is about memory only, so the catch frame's record needs no context. Keep `HeldZ`'s catch part as: for each running `catchR x m0 _`, for every borrowed parameter `p < m0.nv` of the current context, `FrameCaps (m0.set x) (Z p) d.root`. It is set at the frame's start from the clause then, and kept because old parameters' entries do not change (`KeepOut`, rootb entries) and `Z` is threaded. At `catchP` the post-state's store is the snapshot.
+
+**Pieces:**
+- `HeldZ m Γ Z s`:
+  - the clause for each borrowed parameter outside the spine, at `Z p`;
+  - the spine's parameters at `F ++ frozenAbove`;
+  - the catch part;
+  - "the running statement's variables avoid `Z p`", which gives the receivers of calls through a package (`CapInoutH`) inside the domain.
+- It is threaded beside `Inv` through `preserve` and the `…Case` results.
+- `CapsLive`'s lemmas get memory-only twins (simpler: no liveness).
