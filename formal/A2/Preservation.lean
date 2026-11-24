@@ -3118,7 +3118,21 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       refine ⟨setE Γ x (lockE t), StmtT.scopeL ⟨lockE t, by simp [setE], hnrb, lockE_ty t, hdl⟩ hxF hs hpx
         (by rw [hsp]; exact hKOd) hWd hNd hFd, ?_,
         by simp, ?_,
-        fun v hv => ?_⟩
+        fun v hv => ?_, Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: the payload taken from the lock block holds no names, no handle)
+        refine hz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp)
+          (fun p Ep hp hmp => ?_) (fun v hv => ?_) (fun _ _ _ _ _ _ _ _ _ hcw => ?_)
+        · have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+          simpa only [setE, upd_ne _ _ hpx] using hp
+        · simp only [Stmt.killVars, List.mem_cons] at hv ⊢
+          rcases hv with h | h <;> simp [h]
+        · exact (hcw.of_st (m' := { m with blk := upd m.blk kk (some ⟨t, .lock, none⟩), taken := upd m.taken kk false })
+            rfl).set (fun V e => by
+              cases e
+              exact ⟨fun n hn => (hi.toMInv.blkCapsInp _ kk _ v hk rfl).sub hn,
+                fun c hc => (hi.toMInv.pay_no_href hk rfl hc).elim⟩)
       · -- (AGORA-963 step 3: the payload taken from the lock block holds no names)
         refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
@@ -3223,7 +3237,22 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         obtain ⟨Er, hEr, _⟩ := out2.wf hnt x (by rw [← hdx]; exact List.mem_map_of_mem hd)
         rw [hx1] at hEr; cases hEr
       refine ⟨setE Γ1 x E2.arm, StmtT.scopeD ⟨E2.arm, t, by simp [setE], hmo2, hsd2, hfn2, hdtor.1.1, hstr⟩ hxF hs hpx
-        (by rw [hsp]; exact hKOd) hWd hNd hΔd hself hFd, ?_, by simp [post.nv], ?_, fun v hv => ?_⟩
+        (by rw [hsp]; exact hKOd) hWd hNd hΔd hself hFd, ?_, by simp [post.nv], ?_, fun v hv => ?_, Z, ?_,
+        ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: what the right-hand side yields keeps the frame clause)
+        refine hz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp [post.nv])
+          (fun p Ep hp hmp => ?_) (fun v hv => ?_) (fun p Ep d hp hmp hd hb hh hD hcw => ?_)
+        · have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; simp [Entry.arm] at hmp; exact hnrb hmp
+          simp only [setE, upd_ne _ _ hpx] at hp
+          exact post.rel.rootb_back hp hmp
+        · simp only [Stmt.killVars, List.mem_cons, List.mem_append] at hv ⊢
+          rcases hv with h | h <;> simp [h]
+        · refine hr.frameCapsSet he hi.toMInv hcw (fun y hy => hD y (by simp [Stmt.killVars, hy])) ?_
+          rcases hi.anch p Ep hp hmp (by simp [Stmt.spine]) d hd hb with h' | ⟨_, hnk, _⟩
+          · exact Or.inr h'
+          · exact Or.inl fun h => hnk (by simp [Stmt.killVars, h])
       · refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
           (covers_take (covers_evalR hi.cover he) (fun T h => by
@@ -3277,7 +3306,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     intro m m' s' hcd hi hst Z hz
     rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
     · exact pres_reap ht0 hrs hcd hi hrk Z hz
-    exact hcall hsrc hx hxF hc hs hpx hi hst hnr
+    exact hcall hsrc hx hxF hc hs hpx hi hst hnr Z hz
   | assign hx hxF hmodes hr hty hxd _ hpin hds =>
     intro m m' s' hcd hi hst Z hz
     cases hst with
@@ -4904,17 +4933,17 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
     intro m m' s' hcd hi hst Z hz
     rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
     · exact pres_reap ht0 hrs hcd hi hrk Z hz
-    exact hrec hsrc hx hxF hf hp hty ho hc hs hpx hi hst hnr
+    exact hrec hsrc hx hxF hf hp hty ho hc hs hpx hi hst hnr Z hz
   | callc hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx _ =>
     intro m m' s' hcd hi hst Z hz
     rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
     · exact pres_reap ht0 hrs hcd hi hrk Z hz
-    exact hclo hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx hcd hi hst hnr
+    exact hclo hk hx hxF hc htc hj hσ hhd hout hcT hnz hkT hpx hcd hi hst hnr Z hz
   | callcE hk hx hxF hc htc hcan _ hj hσ hsp hsl hsr hso hny hdc hcT hkT hpx _ =>
     intro m m' s' hcd hi hst Z hz
     rcases reap_or hst with ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ | hnr
     · exact pres_reap ht0 hrs hcd hi hrk Z hz
-    exact hhand hk hx hxF hc htc hcan hj hσ hsp hsl hsr hso hny hdc hcT hkT hpx hcd hi hst hnr
+    exact hhand hk hx hxF hc htc hcan hj hσ hsp hsl hsr hso hny hdc hcT hkT hpx hcd hi hst hnr Z hz
   | @catchR ξ Γ Δ F x m0 s hxF hs hM hanchΔ hKO hds ih =>
     intro m m' s' hcd hi hst Z hz
     obtain ⟨hfr, hxs, hnv0, hb0, hck⟩ := hi.catchOK
