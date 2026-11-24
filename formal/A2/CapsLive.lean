@@ -944,4 +944,81 @@ theorem LiveCaps.of_changeR {m m' : Mem} {Γ Γ' : Ctx} {w : Var} (h : LiveCaps 
   · obtain ⟨hcl, hnh⟩ := hval v E o V hv hl hs heq
     exact ⟨hcl, fun c hc => (hnh c hc).elim⟩
 
+
+/-- A node in a changed tree is clean, or is what a node of the old tree at
+    the same handle became, clean if that one was. -/
+def NodeBack (w : Var) (T x : Val) : Prop :=
+  ∀ ty c d es, x = .node ty c d es → ValCapsInp x w ∨
+    ∃ y, Sub y T ∧ (∃ ty d es, y = .node ty c d es) ∧ (ValCapsInp y w → ValCapsInp x w)
+
+theorem NodeBack.of_sub {w : Var} {T x : Val} (hx : Sub x T) : NodeBack w T x :=
+  fun ty c d es hxe => Or.inr ⟨x, hx, ⟨ty, d, es, hxe⟩, id⟩
+
+theorem NodeBack.mono {w : Var} {T T' x : Val} (h : NodeBack w T x) (hT : ∀ y, Sub y T → Sub y T') :
+    NodeBack w T' x := fun ty c d es hxe => by
+  rcases h ty c d es hxe with h | ⟨y, hy, hnd, himp⟩
+  · exact Or.inl h
+  · exact Or.inr ⟨y, hT y hy, hnd, himp⟩
+
+theorem Repl.old_sub {n n' T T' : Val} (hr : Repl n n' T T') : Sub n T := by
+  induction hr with
+  | here => exact Sub.refl _
+  | elem _ ih => exact Sub.child (List.mem_append_right _ (List.mem_cons_self ..)) ih
+  | fst _ ih => exact Sub.fst ih
+  | snd _ ih => exact Sub.snd ih
+  | inl _ ih => exact Sub.inl ih
+  | inr _ ih => exact Sub.inr ih
+  | pkg _ ih => exact Sub.pkg ih
+
+/-- **The nodes of a tree after a replacement** are the new node's (as its
+    own hypothesis says), the old tree's, or rebuilt ones on the way to it,
+    each at its old handle and clean if the old one was (`Repl.capsInp`). -/
+theorem Repl.nodesBack {n n' T T' : Val} {w : Var} (hr : Repl n n' T T')
+    (hcl : ValCapsInp n w → ValCapsInp n' w) (hn' : ∀ x, Sub x n' → NodeBack w n x) :
+    ∀ x, Sub x T' → NodeBack w T x := by
+  induction hr with
+  | here => exact hn'
+  | @elem t c d pre post e e' he ih =>
+    intro x hx
+    cases hx with
+    | refl =>
+      intro ty c' d' es' hxe
+      cases hxe
+      refine Or.inr ⟨_, Sub.refl _, ⟨t, d, _, rfl⟩, fun hT => ?_⟩
+      exact (Repl.elem he).capsInp hT (hcl (hT.sub (Repl.elem (pre := pre) (post := post) (t := t) (c := c) (d := d) he).old_sub))
+    | child hm hs =>
+      rcases List.mem_append.mp hm with hm | hm
+      · exact NodeBack.of_sub (Sub.child (List.mem_append_left _ hm) hs)
+      · rcases List.mem_cons.mp hm with rfl | hm
+        · exact (ih x hs).mono fun y hy =>
+            Sub.child (List.mem_append_right _ (List.mem_cons_self ..)) hy
+        · exact NodeBack.of_sub (Sub.child (List.mem_append_right _ (List.mem_cons_of_mem _ hm)) hs)
+  | fst _ ih =>
+    intro x hx
+    cases hx with
+    | refl => intro _ _ _ _ h; cases h
+    | fst hs => exact (ih x hs).mono fun y hy => Sub.fst hy
+    | snd hs => exact NodeBack.of_sub (Sub.snd hs)
+  | snd _ ih =>
+    intro x hx
+    cases hx with
+    | refl => intro _ _ _ _ h; cases h
+    | fst hs => exact NodeBack.of_sub (Sub.fst hs)
+    | snd hs => exact (ih x hs).mono fun y hy => Sub.snd hy
+  | inl _ ih =>
+    intro x hx
+    cases hx with
+    | refl => intro _ _ _ _ h; cases h
+    | inl hs => exact (ih x hs).mono fun y hy => Sub.inl hy
+  | inr _ ih =>
+    intro x hx
+    cases hx with
+    | refl => intro _ _ _ _ h; cases h
+    | inr hs => exact (ih x hs).mono fun y hy => Sub.inr hy
+  | pkg _ ih =>
+    intro x hx
+    cases hx with
+    | refl => intro _ _ _ _ h; cases h
+    | pkg hs => exact (ih x hs).mono fun y hy => Sub.pkg hy
+
 end A2
