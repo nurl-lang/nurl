@@ -69,7 +69,12 @@ theorem inferRhs_supported {Γ : Ctx} {F : List Var} {D : List Var} {r : Rhs} {E
     simp only [inferRhs] at h; split at h <;> (try split at h) <;> (try split at h) <;> cases h
     exact supported_kill hs _ _ _
 
-/-- The checker with joins. Straight-line leaves go to C0's `checkStmt`. -/
+/-- The checker with joins. Straight-line leaves go to C0's `checkStmt`.
+    Its soundness (`checkS_sound`) needs two things of the domain `D`: every
+    slot `Γ` binds (`Supported Γ D`) and every slot `s` names. A join compares
+    the arms only over `D`, so a slot left out of it is not compared: from
+    the empty context, `s.vars` alone is enough (`checkedS_memory_safe`);
+    from any other context, `D` must also cover what `Γ` binds. -/
 def checkS (D : List Var) : Ctx → List Var → Stmt → Option Ctx
   | Γ, F, .seq a b =>
     if b.src then (match checkS D Γ F a with
@@ -247,6 +252,15 @@ theorem checkedS_memory_safe {P : Prog} (hP : ProgOK P) {s : Stmt} {Δ : Ctx}
     (hv : ∀ v ∈ s.vars, v < nv) {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem nv) s (.ok m' s')) :
     ¬ Stuck P m' s' :=
   memory_safe hP (checkS_sound (P := P) (fun _ _ => rfl) (fun _ h => h) hc).1 hs hv hr
+
+/-- As `checkedS_memory_safe`, over the program's variables with each slot
+    listed once: a join compares the arms once per slot, not once per
+    mention (github#2242's review). -/
+theorem checkedS_memory_safe_dedup {P : Prog} (hP : ProgOK P) {s : Stmt} {Δ : Ctx}
+    (hc : checkS s.vars.eraseDups (fun _ => none) [] s = some Δ) (hs : s.src = true) {nv : Nat}
+    (hv : ∀ v ∈ s.vars, v < nv) {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem nv) s (.ok m' s')) :
+    ¬ Stuck P m' s' :=
+  memory_safe hP (checkS_sound (P := P) (fun _ _ => rfl) (fun _ h => List.mem_eraseDups.mpr h) hc).1 hs hv hr
 
 /-- A loop that pushes into a `Vec` it owns (once: its length reaches 1),
     then frees it: accepted. -/

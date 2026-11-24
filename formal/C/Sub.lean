@@ -300,4 +300,12 @@ theorem checkedC_memory_safe {P : Prog} (hP : ProgOK P) {s : Stmt} {c : Cert} {�
     ¬ Stuck P m' s' :=
   memory_safe hP (checkC_sound (P := P) c (fun _ _ => rfl) (fun _ h => h) hc).1 hs hv hr
 
+/-- As `checkedC_memory_safe`, over the program's variables with each slot
+    listed once (github#2242's review). -/
+theorem checkedC_memory_safe_dedup {P : Prog} (hP : ProgOK P) {s : Stmt} {c : Cert} {Δ : Ctx}
+    (hc : checkC P s.vars.eraseDups c (fun _ => none) [] s = some Δ) (hs : s.src = true) {nv : Nat}
+    (hv : ∀ v ∈ s.vars, v < nv) {m' : Mem} {s' : Stmt} (hr : Steps P (emptyMem nv) s (.ok m' s')) :
+    ¬ Stuck P m' s' :=
+  memory_safe hP (checkC_sound (P := P) c (fun _ _ => rfl) (fun _ h => List.mem_eraseDups.mpr h) hc).1 hs hv hr
+
 end C

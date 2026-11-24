@@ -312,7 +312,7 @@ def checkX (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → List V
           match letdTys f E.ty with
           | some (t, τ) =>
             if decide (E.mode = .own) && t.isStruct && !t.hasFn &&
-                letdFnB P f t E.ty x s && takeOKB Γ r then
+                letdFnB P f t E.ty x s && takeOKB P Γ r then
               match checkX P R C D (setE Γ1 x (Entry.arm { E with ty := τ, held := E.held })) F s with
               | some rs =>
                 if endOK2B D rs.Δ x && rs.E.all (fun e => endOK2B D e.2 x && underDB e.2 x) then

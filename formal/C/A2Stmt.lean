@@ -231,20 +231,6 @@ def isPanic : Stmt → Bool
 theorem isPanic_eq {s : Stmt} (h : isPanic s = true) : s = .panic := by
   cases s <;> simp_all [isPanic]
 
-/-- `TakeOK`, asked strictly: a payload taken out of an enum of a
-    destructor type is refused (its glue's check is the next step). -/
-def takeOKB (Γ : Ctx) (r : Rhs) : Bool :=
-  match r with
-  | .takel y | .taker y => match Γ y with
-    | some Ey => (match Ey.ty with | .dtor _ _ => false | _ => true)
-    | none => true
-  | _ => true
-
-theorem takeOKB_sound {P : Prog} {Γ : Ctx} {r : Rhs} (h : takeOKB Γ r = true) : TakeOK P Γ r := by
-  intro y Ey g u hr hEy hty
-  exfalso
-  rcases hr with rfl | rfl <;> simp [takeOKB, hEy, hty] at h
-
 /-- The modes an assignment may join. -/
 def assignModes2 (Ex E : Entry) : Bool :=
   decide (Ex.mode = .own ∧ E.mode = .own ∨ Ex.mode = .inout .replace ∧ E.mode = .own ∨
@@ -1047,6 +1033,41 @@ theorem enumGlueOKB_sound {P : Prog} {f : Nat} {t : Ty} (h : enumGlueOKB P f t =
     · cases hb
   · cases h
 
+/-- What `unpair` may take apart, decided: a struct, or a destructor type
+    whose destructor is the struct's glue (`StmtT.unpair`'s `h5`; github#2242's
+    review: the second case was refused). -/
+def unpairTyB (P : Prog) : Ty → Option (Ty × Ty)
+  | .prod a b => some (a, b)
+  | .dtor f (.prod a b) => if glueOKB P f (.prod a b) then some (a, b) else none
+  | _ => none
+
+theorem unpairTyB_some {P : Prog} {t a b : Ty} (h : unpairTyB P t = some (a, b)) :
+    t = .prod a b ∨ ∃ f, t = .dtor f (.prod a b) ∧ GlueOK P f (.prod a b) := by
+  unfold unpairTyB at h
+  split at h
+  · simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact Or.inl rfl
+  · rename_i f a' b'
+    split at h
+    · rename_i hg
+      simp only [Option.some.injEq, Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h
+      exact Or.inr ⟨f, rfl, glueOKB_sound hg⟩
+    · cases h
+  · cases h
+
+/-- `TakeOK`, decided: a payload taken out of an enum of a destructor type
+    is allowed when that destructor is the enum's glue (`enumGlueOKB`;
+    github#2242's review: it was refused outright). -/
+def takeOKB (P : Prog) (Γ : Ctx) (r : Rhs) : Bool :=
+  match r with
+  | .takel y | .taker y => match Γ y with
+    | some Ey => (match Ey.ty with | .dtor g u => enumGlueOKB P g u | _ => true)
+    | none => true
+  | _ => true
+
+theorem takeOKB_sound {P : Prog} {Γ : Ctx} {r : Rhs} (h : takeOKB P Γ r = true) : TakeOK P Γ r := by
+  intro y Ey g u hr hEy hty
+  rcases hr with rfl | rfl <;> simp only [takeOKB, hEy, hty] at h <;> exact enumGlueOKB_sound h
+
 /-- A struct's or an enum's glue with an impl, for the parts' glue `h` and
     the impl `i` its body names (`ImplGlueOK`). -/
 def implGlueAtB (P : Prog) (f : Nat) (t : Ty) (h i : Nat) : Bool :=
@@ -1273,7 +1294,7 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
       match R Γ F r with
       | some (E, Γ1) =>
         if assignModes2 Ex E && decide (E.ty = Ex.ty) && decide (x ∉ roots E.vdeps) && (Γ1 x).isSome &&
-            noPinB D Γ x && dtorSafeB D Γ1 .replace false x && !Ex.dbind && takeOKB Γ r then
+            noPinB D Γ x && dtorSafeB D Γ1 .replace false x && !Ex.dbind && takeOKB P Γ r then
           some (setE (kill .replace false x Γ1) x { E with mode := Ex.mode })
         else none
       | none => none
@@ -1383,7 +1404,7 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
         match letdTys f E.ty with
         | some (t, τ) =>
           if decide (E.mode = .own) && t.isStruct && !t.hasFn &&
-              letdFnB P f t E.ty x s && takeOKB Γ r then
+              letdFnB P f t E.ty x s && takeOKB P Γ r then
             match checkStmt2 P R C D (setE Γ1 x (Entry.arm { E with ty := τ, held := E.held })) F s with
             | some Δ => if endOK2B D Δ x then some (exitScope x Δ) else none
             | none => none
@@ -1495,7 +1516,7 @@ def checkStmt2 (P : Prog) (R : RhsDec) (C : CallDec) (D : List Var) : Ctx → Li
   | Γ, F, .unpair y x z s =>
     match Γ y with
     | some E =>
-      match prodOf2 E.ty with
+      match unpairTyB P E.ty with
       | some (a, b) =>
         if s.src && E.live && canDoB2 E.mode .replace && decide (y ∉ F) && decide (Γ x = none) &&
             decide (Γ z = none) && decide (x ≠ z) && decide (x ∉ F) && decide (z ∉ F) &&
@@ -2094,7 +2115,7 @@ theorem checkStmt2_sound {P : Prog} {R : RhsDec} {C : CallDec} {D : List Var} (h
               have hs1 := supported2_setE (supported2_setE (supported2_setE (supported2_kill hs .replace false y) hyD
                 { E with live := false, dtor := false }) hxD (compE E a)) hzD (compE E b)
               obtain ⟨t0, s0⟩ := ih (ξ := (ξ.under x).under z) hs1 (fun v hv => hD v (by simp [Stmt.vars, hv])) h0
-              refine ⟨.unpair hsrc hE hl (canDoB2_sound hcd) (Or.inl (prodOf2_some hp)) hyF hx hz hxz hxF hzF t0
+              refine ⟨.unpair hsrc hE hl (canDoB2_sound hcd) (unpairTyB_some hp) hyF hx hz hxz hxF hzF t0
                 (noPinB_sound hs hp1) (dtorSafeB_sound hs hd1) (endOK2B_sound s0 he.1)
                 (endOK2B_sound (supported2_exitScope s0 z) he.2) (fun hh => ?_) (fun hh => ?_),
                 supported2_exitScope (supported2_exitScope s0 z) x⟩

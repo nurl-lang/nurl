@@ -29,8 +29,7 @@ theorem fits_any {te : Ty} {cs : List (Var × PMode × Ty)} (h : te.holdsDtor = 
     neither nothing nor a new value, and one the binding may undergo), with
     the binding not frozen, and nothing the environment or another capture
     holds rooted at it. -/
-def capOKB (Γ : Ctx) (F : List Var) (D : List Dep) (cs : List (Var × PMode × Ty))
-    (c : Var × PMode × Ty) : Bool :=
+def capOKB (Γ : Ctx) (F : List Var) (D : List Dep) (c : Var × PMode × Ty) : Bool :=
   match Γ c.1 with
   | some Ev => Ev.live && Ev.held.isEmpty && decide (Ev.ty = c.2.2) && Ev.mode.ownSlot &&
       !c.2.2.holdsView &&
@@ -39,14 +38,27 @@ def capOKB (Γ : Ctx) (F : List Var) (D : List Dep) (cs : List (Var × PMode × 
       | .inout b => decide (b ≠ .none) && decide (b ≠ .replace) && canDoB2 Ev.mode b &&
           decide (c.1 ∉ F) &&
           (match c.2.2 with | .vec s => !s.holdsView | _ => false) &&
-          D.all (fun d => decide (d.root ≠ c.1)) &&
-          cs.all (fun c' => (argE Γ c'.1).held.all (fun d => decide (d.root ≠ c.1)))
+          D.all (fun d => decide (d.root ≠ c.1))
+      -- (nothing another capture holds is rooted at `c`: every capture holds
+      -- nothing, by its own `held.isEmpty` (`capOKB_held`), so no scan of the
+      -- captures per capture; github#2242's review)
       | .sink => false
   | none => false
 
 /-- `CapsOK`, decided: the names apart, and each capture `capOKB`. -/
 def capsB (Γ : Ctx) (F : List Var) (D : List Dep) (cs : List (Var × PMode × Ty)) : Bool :=
-  decide (cs.map (·.1)).Nodup && cs.all (capOKB Γ F D cs)
+  decide (cs.map (·.1)).Nodup && cs.all (capOKB Γ F D)
+
+/-- A capture `capOKB` accepts holds nothing. -/
+theorem capOKB_held {Γ : Ctx} {F : List Var} {D : List Dep} {c : Var × PMode × Ty}
+    (h : capOKB Γ F D c = true) : (argE Γ c.1).held = [] := by
+  unfold capOKB at h
+  split at h
+  · rename_i Ev hEv
+    simp only [Bool.and_eq_true, List.isEmpty_iff] at h
+    simp only [argE, hEv, Option.getD_some]
+    exact h.1.1.1.1.2
+  · cases h
 
 theorem capsB_sound {Γ : Ctx} {F : List Var} {D : List Dep} {cs : List (Var × PMode × Ty)}
     (h : capsB Γ F D cs = true) : CapsOK Γ F D cs := by
@@ -71,12 +83,12 @@ theorem capsB_sound {Γ : Ctx} {F : List Var} {D : List Dep} {cs : List (Var × 
       · exact h0
     | inout b =>
       simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hm
-      obtain ⟨⟨⟨⟨⟨⟨hb0, hbr⟩, hcd⟩, hF⟩, hvec⟩, hD⟩, hcs⟩ := hm
+      obtain ⟨⟨⟨⟨⟨hb0, hbr⟩, hcd⟩, hF⟩, hvec⟩, hD⟩ := hm
       cases t with
       | vec s =>
         simp only [Bool.not_eq_true'] at hvec
         exact Or.inr ⟨b, s, rfl, hb0, hbr, canDoB2_sound hcd, hF, rfl, hvec, hD,
-          fun c' hc' d hd => hcs c' hc' d hd⟩
+          fun c' hc' d hd => by rw [capOKB_held (h.2 c' hc')] at hd; cases hd⟩
       | _ => simp at hvec
     | sink => cases hm
   · cases h2

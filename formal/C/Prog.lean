@@ -125,18 +125,29 @@ theorem fnOKB_sound {P : Prog} {fn : Fn} {c : Cert} (h : fnOKB P fn c = true) : 
         · cases this
     · cases hchk
 
+/-- `fnOKB` over a list of functions, the `i`-th taking certificate
+    `certs i`: one walk of the list, stopping at the first refusal
+    (github#2242's review: `P[i]?` walks the list from its head each time). -/
+def progOKAux (P : Prog) (certs : Nat → Cert) : Nat → List Fn → Bool
+  | _, [] => true
+  | i, fn :: fs => fnOKB P fn (certs i) && progOKAux P certs (i + 1) fs
+
 /-- `ProgOK`, decided, with one certificate per function. -/
-def progOKB (P : Prog) (certs : Nat → Cert) : Bool :=
-  (List.range P.length).all fun i => match P[i]? with
-    | some fn => fnOKB P fn (certs i)
-    | none => false
+def progOKB (P : Prog) (certs : Nat → Cert) : Bool := progOKAux P certs 0 P
+
+theorem progOKAux_mem {P : Prog} {certs : Nat → Cert} :
+    ∀ {i : Nat} {l : List Fn}, progOKAux P certs i l = true → ∀ fn ∈ l, ∃ j, fnOKB P fn (certs j) = true
+  | _, [], _, _, h => by cases h
+  | i, f :: fs, h, fn, hfn => by
+    simp only [progOKAux, Bool.and_eq_true] at h
+    rcases List.mem_cons.mp hfn with e | hm
+    · exact ⟨i, e ▸ h.1⟩
+    · exact progOKAux_mem h.2 fn hm
 
 theorem progOKB_sound {P : Prog} {certs : Nat → Cert} (h : progOKB P certs = true) : ProgOK P := by
   intro fn hfn
-  obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem hfn
-  have := List.all_eq_true.mp h i (List.mem_range.mpr hi)
-  rw [List.getElem?_eq_getElem hi] at this
-  exact fnOKB_sound this
+  obtain ⟨j, hj⟩ := progOKAux_mem h fn hfn
+  exact fnOKB_sound hj
 
 /-- Phase C for A1, end to end: a program whose certificates the checker
     accepts, with an entry statement it accepts that is source syntax and

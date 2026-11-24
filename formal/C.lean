@@ -15,6 +15,7 @@ import C.A2Prog
 import C.A3Prog
 import C.A2Weaker
 import C.A2Exit
+import C.A2Glue
 
 /-! Phase C: nurlc's implementation of the rules, checked. For A1, complete:
 C0 the straight-line checker (`C/Check.lean`), C1 `ite` / `while` over

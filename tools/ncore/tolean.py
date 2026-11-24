@@ -735,8 +735,10 @@ class Fn:
             return f"(.letv {t} (.expr {e}) {rest})"
         def read(op):
             # a read of raw text, checked live: a view's length or an owner's
+            # (a field by its projected type, as nurl_println's: a destructor
+            # struct's raw text field is a view)
             y = rd(op)
-            ty = self.vlean(int(op[1:])) if "/" not in op else lean_ty(self.vty(op))
+            ty = self.vlean(int(op[1:])) if "/" not in op else self.flean(op)
             if ty.startswith("(.slice"):
                 return f"(.slen {y})"
             if ty.startswith("(.vec"):

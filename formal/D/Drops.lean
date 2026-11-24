@@ -4,8 +4,11 @@
 `tools/ncore/tvdrops.py` (phase D0) checks the LLVM nurlc emits path by
 path, with drop flags as the ownership record codegen keeps: a slot owns
 the block it holds while its flag is set and the block was not released.
-This file states, on a model of one path, what an accepted path guarantees
-about the heap, and proves it.
+This file states, on a model of one path, what a path its model checker
+`checkA` accepts guarantees about the heap, and proves it. The theorem is
+about `checkA` over the modeled operations: `tvdrops.py` is written to the
+same rules, and that it decides as `checkA` does is tested (`tv/selftest.sh`,
+the corpus), not proved (github#2242's review).
 
 A path is a list of operations on a frame's slots (`Op`), each the shape of
 an LLVM sequence codegen emits:
