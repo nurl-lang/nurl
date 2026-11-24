@@ -79,6 +79,51 @@
     validated to unsupported, and none the other way. The default run
     gives 98164 validated, 7778 unsupported, 0 mismatches. `--journal`
     gives 97830 / 8112 / 0, with 480 journal-checked.
+- **The drop validator no longer accepts nine more codegen mistakes**
+  (#2242 review, third round). Each one is a mutation of real nurlc output
+  in `tools/ncore/tv/selftest.sh`, accepted before and refused now:
+  - Two paths that meet in one state except for a value one of them still
+    owes a hand-on are no longer merged. The owed value used to be left out
+    of the state when no slot or register held it, so the leaking path was
+    skipped.
+  - A slot the journal alone tracks, or one that is always released, is no
+    longer an owner of a value whose flag is cleared. The value stays owed
+    until it is released or handed on. A journal `forget` hands nothing
+    on.
+  - A store into one of the frame's own slots is not a hand-on. The value
+    is owned again only once that slot's flag is set.
+  - A value moved into an aggregate (`insertvalue`) passes what it owes on
+    to the aggregate. The aggregate must then be stored, passed, returned
+    or released. A thrown-away aggregate is a leak.
+  - A known clone is the frame's to hand on or release. A clone made and
+    thrown away is a leak. Functions with no drop flag that make clones are
+    checked now too.
+  - A parameter stored into a slot that only holds it, then loaded back,
+    keeps its identity. Handing that load to a `sink` is a mismatch. A
+    `keeps` parameter of a type that owns nothing (a view such as `i8*`) is
+    still given no identity.
+  - With `--journal`, at a call that may panic, every value still owed a
+    hand-on must be held by an enabled registration, either of the value or
+    of an aggregate it went into. Otherwise a panic there leaks it.
+  - Reported unsupported instead of validated: a value handed on through a
+    `__nurl_cloneif` whose condition is not known, before its flag is
+    cleared. If the result was a clone, the value itself leaks.
+  - Reported unsupported instead of validated: a drop flag copied
+    (`store i1 %f`) into a slot that does not hold the source's value. The
+    target used to be given the source's identity without holding it.
+  - Also: a release of a value a register holds (`__dropifv_T(i1 true, T
+    %r)`) now counts as a release. A `store` is read with bracketed types
+    (`{ i1, %T }`).
+  - Registers that no path reads again are left out of the state, so paths
+    that loaded different registers on the way still meet. This alone moves
+    38 functions from unsupported (a loop whose state still changed) to
+    validated. It is a sound reduction: no check depends on a dead register.
+  - On the 1983-program corpus, the default run goes from 98164 validated,
+    7778 unsupported, 0 mismatches to 98197 / 7745 / 0. `--journal` goes
+    from 97830 / 8112 / 0 to 97863 / 8079 / 0, with 480 journal-checked
+    both times. Five functions move from validated to unsupported. Three
+    read a field (`extractvalue`) of a value still owed, and two are
+    clone-only functions whose loop is not followed.
 - **`tools/ncore/tv.sh` stops when a step fails.** If `nurlc --emit-core`,
   `nurlc --g` or `tvir.py` fails, it exits nonzero instead of validating
   with an empty file. It also forwards its arguments without word

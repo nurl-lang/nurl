@@ -36,7 +36,7 @@ mut moved_value_owned_by_both_slots 'if ($0 ~ /store i1 %r[0-9]+, i1\* %r13/) { 
 # every release of f deleted: f must not validate (its owning slots are
 # found from their types, not from the drops being checked)
 awk "$fn{m=1} m && /^}/{m=0} {if (m && \$0 ~ /call void @__dropif_/) next; print}" "$TMP/a.ll" > "$TMP/none.ll"
-if python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/none.ll" -v | grep -q "__nurl_fn.f[: ]"; then
+if python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/none.ll" -v | grep "__nurl_fn.f[: ]" >/dev/null; then
   echo "ok: all_releases_deleted not validated"
 else
   echo "FAIL: all_releases_deleted validated"; fail=1
@@ -216,4 +216,111 @@ bflag=$(echo "$flags" | sed -n 1p) wflag=$(echo "$flags" | sed -n 2p)
 mmut one_value_journaled_twice_through_a_move "$bflag" "call %Bomb @__nurl_fn.late(i64 %n)"
 # w's flag still set at late(0), after eat took its value
 mmut journaled_after_a_sink_took_it "$wflag" "call %Bomb @__nurl_fn.late(i64 0)"
+# third round of github#2242's review: each edit below validated before
+# nv <name> <fn> <.ll> [args]: <fn> must not validate (unsupported, or a
+# mismatch): what the edit does is not followed, and nothing is claimed
+nv() {
+  local n="$1" fn="$2" out; shift 2
+  out="$(python3 "$ROOT/tools/ncore/tvdrops.py" "$@" -v)"
+  if echo "$out" | grep "$fn[: ]" >/dev/null; then echo "ok: $n not validated"; else echo "FAIL: $n validated"; fail=1; fi
+}
+# a diamond added at f's join: one side gives a new slot B, the other gives
+# it A, clears A's flag with A handed nowhere, then gives it B. The two
+# sides meet in states that differ only in A, which is owed: the leaking
+# side must not be taken for the other
+awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { if (m && /^  %r13 = alloca i1$/) { print; print "  %ms = alloca %Vec__i64"; print "  %mf = alloca i1"; next }
+    if (m && /^end_3:$/) {
+      print; print "  br i1 %r16, label %mt, label %me"; print "mt:"
+      print "  %mb1 = call %Vec__i64 @__nurl_fn.vec_new__i64()"; print "  store %Vec__i64 %mb1, %Vec__i64* %ms"
+      print "  store i1 true, i1* %mf"; print "  br label %mj"; print "me:"
+      print "  %ma = call %Vec__i64 @__nurl_fn.vec_new__i64()"; print "  store %Vec__i64 %ma, %Vec__i64* %ms"
+      print "  store i1 true, i1* %mf"; print "  store i1 0, i1* %mf"
+      print "  %mb2 = call %Vec__i64 @__nurl_fn.vec_new__i64()"; print "  store %Vec__i64 %mb2, %Vec__i64* %ms"
+      print "  store i1 true, i1* %mf"; print "  br label %mj"; print "mj:"; next }
+    if (m && /^  ret i64 /) { print "  %mfl = load i1, i1* %mf"; print "  call void @__dropif_Vec__i64(i1 %mfl, ptr %ms)" }
+    print }' "$TMP/a.ll" > "$TMP/join.ll"
+grep -q "^mj:" "$TMP/join.ll" || { echo "FAIL: the join edit did not apply"; fail=1; }
+case "$(tv "$TMP/join.ll")" in
+  *"mismatch 1") echo "ok: a_leak_on_one_side_of_a_join_taken_for_the_other caught" ;;
+  *) echo "FAIL: a_leak_on_one_side_of_a_join_taken_for_the_other not caught"; fail=1 ;; esac
+# w's value moved in, and w's flag set to false, not to v's: v's flag is
+# cleared first, then v is stored into w, which never owns it (nothing
+# releases v). A store into a slot whose flag stays clear is no hand-on
+awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { if (m && /^then_1:/) t = 1
+    if (t && m && $0 == "  store i1 0, i1* %r4") next
+    if (t && m && /store i1 %r[0-9]+, i1\* %r13/) { print "  store i1 false, i1* %r13"; next }
+    print; if (t && m && /= load %Vec__i64, %Vec__i64\* %r3$/ && !c++) print "  store i1 0, i1* %r4" }' "$TMP/a.ll" > "$TMP/dis.ll"
+grep -q "store i1 false, i1\* %r13" "$TMP/dis.ll" || { echo "FAIL: the disabled-slot edit did not apply"; fail=1; }
+cmut a_value_stored_into_a_slot_whose_flag_stays_clear "$TMP/dis.ll" "$TMP/o.core"
+# `= w v` with the store of v into w deleted: w's flag is given v's, but w
+# still holds its own (released) value. The flag copy says w owns v; it
+# does not hold it
+awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { if (m && /^then_1:/) t = 1; if (t && m && /store %Vec__i64 %r[0-9]+, %Vec__i64\* %r12/ && !c++) next; print }' "$TMP/a.ll" > "$TMP/fcopy.ll"
+cmp -s "$TMP/a.ll" "$TMP/fcopy.ll" && { echo "FAIL: the flag-copy edit did not apply"; fail=1; }
+nv a_flag_copied_into_a_slot_that_does_not_hold_the_value __nurl_fn.f "$TMP/fcopy.ll"
+# v's flag cleared, and v put into an aggregate that is thrown away (in
+# place of eat's call): an aggregate is a hand-on only where it goes on
+awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { if (m && /^then_1:/) t = 1
+    if (t && m && /= call i64 @__nurl_fn.eat\(%Vec__i64 %r[0-9]+\)/ && !c++) {
+      r = $0; sub(/.*eat\(%Vec__i64 /, "", r); sub(/\).*/, "", r); res = $1
+      print "  %ka = insertvalue { %Vec__i64 } undef, %Vec__i64 " r ", 0"; print "  " res " = add i64 0, 0"; next }
+    print }' "$TMP/k.ll" > "$TMP/agg.ll"
+grep -q "%ka = insertvalue" "$TMP/agg.ll" || { echo "FAIL: the aggregate edit did not apply"; fail=1; }
+case "$(tv "$TMP/agg.ll")" in
+  *"mismatch 1") echo "ok: a_cleared_value_moved_into_an_aggregate_thrown_away caught" ;;
+  *) echo "FAIL: a_cleared_value_moved_into_an_aggregate_thrown_away not caught"; fail=1 ;; esac
+# v stored, before its flag is cleared, to memory elsewhere through a
+# `__nurl_cloneif` whose condition the path does not know, and not handed
+# to eat: if that was a clone, v leaks; if not, it moved. Not followed
+awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { if (m && /^then_1:/) t = 1
+    if (t && m && $0 == "  store i1 0, i1* %r4" && !d++) {
+      print "  %kc = call %Vec__i64 @__nurl_cloneif_Vec__i64(i1 %r15, %Vec__i64 %r16)"
+      print "  %kp = getelementptr i8, ptr null, i64 0"; print "  store %Vec__i64 %kc, ptr %kp" }
+    if (t && m && /= call i64 @__nurl_fn.eat\(%Vec__i64 %r16\)/ && !c++) { print "  " $1 " = add i64 0, 0"; next }
+    print }' "$TMP/k.ll" > "$TMP/earlyclone.ll"
+grep -q "store %Vec__i64 %kc, ptr %kp" "$TMP/earlyclone.ll" && ! grep -q "eat(%Vec__i64 %r16)" "$TMP/earlyclone.ll" \
+  || { echo "FAIL: the early-clone edit did not apply"; fail=1; }
+nv a_value_handed_on_early_as_a_possible_clone __nurl_fn.f "$TMP/earlyclone.ll"
+# a second known clone of the element, made and thrown away
+awk '/define i64 @__nurl_fn.f\(/{m=1} m && /^}/{m=0}
+  { print; if (m && /= call %Vec__i64 @__nurl_cloneif_Vec__i64\(i1 true, /) { l = $0; sub(/%r[0-9]+ = /, "%c2 = ", l); print l } }' "$TMP/e.ll" > "$TMP/clone0.ll"
+grep -q "%c2 = call" "$TMP/clone0.ll" || { echo "FAIL: the thrown-away clone edit did not apply"; fail=1; }
+cmut a_known_clone_thrown_away "$TMP/clone0.ll" "$TMP/e.core"
+# keep's parameter stored into its slot (which only ever holds it, so has
+# no flag), loaded back and handed to eat's `sink`
+awk '/define i64 @__nurl_fn.keep\(/{m=1} m && /^}/{m=0}
+  { if (m && /^  ret /) { print "  %kb = load %Vec__i64, %Vec__i64* %r0"; print "  %kz = call i64 @__nurl_fn.eat(%Vec__i64 %kb)" }
+    print }' "$TMP/e.ll" > "$TMP/lents.ll"
+cmut a_borrowed_parameter_loaded_from_its_slot_handed_to_a_sink "$TMP/lents.ll" "$TMP/e.core"
+# (--journal) b stored into the journal-only temporary in place of the
+# `bomb 1` value, registered there, and taken out of the aggregate: b's
+# flag is cleared with b handed nowhere. The journal-only slot is no owner
+# the frame releases by, and its forget hands nothing on
+awk '/define void @__nurl_fn.flat\(/{m=1} m && /^}/{m=0}
+  { if (m && /= insertvalue %Two zeroinitializer, %Bomb %r6, 0$/) sub(/%Bomb %r6, 0$/, "%Bomb zeroinitializer, 0")
+    if (m && (/^  store %Bomb %r8, ptr %j11$/ || /^  store i1 true, ptr %k11$/ || /push_drop2\(ptr %j11, /)) next
+    if (m && $0 == "  store i1 0, i1* %r3") {
+      print "  store %Bomb %r6, ptr %j11"; print "  store i1 true, ptr %k11"
+      print "  call void @nurl_journal_push_drop2(ptr %j11, ptr %k11, ptr @__jdrop_Bomb)" }
+    print }' "$TMP/j.ll" > "$TMP/jalias.ll"
+grep -q "store %Bomb %r6, ptr %j11" "$TMP/jalias.ll" || { echo "FAIL: the journal-alias edit did not apply"; fail=1; }
+case "$(jv "$TMP/jalias.ll")" in *mismatch*) echo "ok: a_value_cleared_beside_a_journal_only_alias caught" ;;
+  *) echo "FAIL: a_value_cleared_beside_a_journal_only_alias not caught"; fail=1 ;; esac
+# (--journal) w's flag cleared ahead of late(n), which may panic, and w
+# handed to eat after it: on the panic edge no enabled registration holds
+# w's value, and eat is never reached
+awk -v F="$wflag" '/define void @__nurl_fn.flat\(/{m=1} m && /^}/{m=0}
+  { if (m && $0 == "  store i1 0, i1* " F) next
+    if (m && index($0, "call %Bomb @__nurl_fn.late(i64 %n)")) print "  store i1 0, i1* " F
+    print }' "$TMP/m.ll" > "$TMP/panicowed.ll"
+cmp -s "$TMP/m.ll" "$TMP/panicowed.ll" && { echo "FAIL: the panic-edge edit did not apply"; fail=1; }
+case "$(python3 "$ROOT/tools/ncore/tvdrops.py" "$TMP/panicowed.ll" --sums "$TMP/m.core" | tail -1)" in
+  *"mismatch 0") ;; *) echo "FAIL: D0c alone was expected to miss a_cleared_value_across_a_call_that_may_panic"; fail=1 ;; esac
+case "$(mv_ "$TMP/panicowed.ll" | tail -1)" in *"mismatch 1"*) echo "ok: a_cleared_value_across_a_call_that_may_panic caught" ;;
+  *) echo "FAIL: a_cleared_value_across_a_call_that_may_panic not caught"; fail=1 ;; esac
 exit $fail
