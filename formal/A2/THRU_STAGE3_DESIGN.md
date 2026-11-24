@@ -1175,3 +1175,12 @@ Integration state (branch wip/t937-b4-int, 8158047b7):
 - `HeldCapsInp` concludes `LiveCaps`.
 - Ctx, Sweep, SweepD, CapsStore and CapClause are done. CapClause uses `Stmt.headCallc`, `CapInoutH` and `Step.killVars_subH`, and `held_not_killVars` takes the called slot live.
 - Preservation has 50 errors, at the `heldCaps_step` callers and the set/remove/frozenIn/catchIn sites.
+
+*Open sub-problem (nested targets at the call).*
+- **Handles:** fine. `ValOK.href_sub`: a nested `href` carries `HrefAt` with names among `H` (`envDeps cs H ⊆ H`), and owned values hold no handle (`WFv`).
+- **Views:** the target's elements must hold no closure with names, so the view's element type must hold no views. For a top-level view the binding's `Ty.ok` gives it. For a view nested in a package's environment, `ValOK.pkg` does not carry `te.ok`.
+- **Candidates:**
+  - an `MInv`-level fact "every view in memory has an element type that holds no views", made where views are made, from typed bindings;
+  - `te.ok` from `PkgsOK` or `MemCodes`.
+
+Next: check whether either already exists.

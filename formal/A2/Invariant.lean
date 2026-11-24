@@ -1756,9 +1756,9 @@ def CapsInpAt (m : Mem) (w : Var) : Prop :=
 def LiveCaps (m : Mem) (Γ : Ctx) (w : Var) : Prop :=
   ∀ v E o V, Γ v = some E → E.live = true → m.st v = some ⟨o, some V⟩ →
     ValCapsInp V w ∧
-    (∀ c, V = .href c → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+    (∀ c, Sub (.href c) V → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
       (∃ ty d es, n = .node ty c d es) → ValCapsInp n w) ∧
-    (∀ d o' l, V = .view d o' l → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+    (∀ d o' l, Sub (.view d o' l) V → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
       (∃ ty c es, n = .node ty c d es) → ValCapsInp n w)
 
 /-- `Γ1` ends bindings of `Γ` at most: a live binding of `Γ1` is a live one
