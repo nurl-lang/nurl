@@ -458,6 +458,7 @@ class FnCheck:
         self.temp_fresh = {}
         self.call_lent = {}      # a call's temporary -> the arguments it may hand back whole
         self.call_lent_only = {} # …and that it lends nothing else (one argument, whole)
+        self.bind_lent = {}      # a `:` binding of such a call that lends on every run -> what it hands back whole
         self.cap_loans = set()   # the loans that are a closure's own handle of a binding it captured
         self.dep_loans = set()   # what a taken-over capture borrows: the closure depends on it, a part taken ends it (agora #887)
         self.lit_nocopy = {}     # a literal temporary -> its field that borrows a value with no copy
@@ -4042,6 +4043,18 @@ class FnCheck:
         if src in self.call_mixed:
             self.call_mixed.add(vid)
 
+    def carry_bind_lent(self, vid, rv):
+        """`: K k ( g x )`: a binding never given another value, of a call
+        that lends `x` back whole and nothing else on every run, is handed
+        back as the call is (`^ k` as `^ ( g x )`: nurlc's __bind_hand,
+        AGORA-995)."""
+        if (rv is None or rv[0] != "use" or rv[1][0] != "v" or rv[1][2]
+                or self.fn.vars[vid].kind != "local" or self.fn.vars[vid].mut):
+            return
+        src = rv[1][1]
+        if self.call_lent_only.get(src) and src not in self.call_mixed:
+            self.bind_lent[vid] = list(self.call_lent[src])
+
     def share_handle_at(self, place):
         """Is the value at `place` a library handle whose copy is a share
         of one object (nurlc's `h`: a PNCounter, a Shared)?"""
@@ -4962,6 +4975,7 @@ class FnCheck:
                                               and st.vals[x].own == "O" and not st.vals[x].loans)
                 psrc = rv[1][1] if rv[0] == "use" and rv[1][0] == "v" and not rv[1][2] else None
                 self.carry_call_lent(vid, rv)
+                self.carry_bind_lent(vid, rv)
                 if (v.kind != "temp" and psrc is not None and self.fn.vars[psrc].kind == "local"
                         and not self.fn.vars[psrc].mut
                         and v.ty is not None and v.ty[0] not in VIEW_TYPES and v.ty[0] != "closure"
@@ -5290,19 +5304,27 @@ class FnCheck:
         if k == "ret":
             _, op, ln = s
             if (op is not None and op[0] == "v" and not op[2] and not st.defers
-                    and not getattr(self.fn, "is_closure", False) and self.call_lent_only.get(op[1])):
+                    and not getattr(self.fn, "is_closure", False)
+                    and (self.call_lent_only.get(op[1]) or op[1] in self.bind_lent)):
                 # `^ ( g x )` where g hands x back whole and lends nothing
                 # else, x a local this frame owns: on the runs g lent, its
                 # value IS the result, so x is handed over with it - nothing
                 # copied, nothing left for x's release (nurlc's
                 # __ret_local_hand, D4c AGORA-995). Not under a `;` block,
                 # which still reads x after the result is made.
-                (a,) = self.call_lent[op[1]]
+                (a,) = self.call_lent[op[1]] if op[1] in self.call_lent else self.bind_lent[op[1]]
                 cur = st.vals.get(op[1])
                 xv = st.vals.get(a[1]) if a[0] == "v" and not a[2] else None
                 if (cur is not None and cur.own == "L" and xv is not None and xv.own == "O"
                         and self.fn.vars[a[1]].kind == "local" and (a[1], ()) in cur.alias):
                     moved = self.move_out(st, a[1], ln)
+                    if op[1] in self.call_mixed:
+                        # (a call that hands back a fresh value on some runs:
+                        # x is handed over on the runs it lent and released
+                        # on the others, its destructor run at the exit -
+                        # moved on some paths only, as nurlc's per-call bit
+                        # says)
+                        st.vals[a[1]] = AV("X")
                     mine = {l for l in cur.loans if self.loans.get(l, (None,))[0] == (a[1], ())}
                     # (…and where the result holds x as a field - a literal
                     # over it - what x held sits there)

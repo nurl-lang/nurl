@@ -22292,6 +22292,13 @@ unsafe @ eng_byte s w i k → i {
     // it the call's own answer of whether it lent, which a consumer that
     // takes it reads - a copy goes where it lent)
     ? & & == kind VK_LOCAL ! ( fv_mut vid ) & >= src 0 | & from_temp ( fx_has src FX_CALL_TEMP ) & & == ( fv_kind src ) VK_LOCAL ! ( fv_mut src ) ( fx_has src FX_CALL_BIND ) { ( fx_set vid FX_CALL_BIND ) } { ( fx_clear vid FX_CALL_BIND ) }
+    // (…and, a call that lends one argument back whole and nothing else
+    // on every run, it is handed back as the call is: `^ k` of `: K k ( g x
+    // )` as `^ ( g x )` - nurlc's __bind_hand, AGORA-995)
+    ? & & & & & == kind VK_LOCAL ! ( fv_mut vid ) from_temp >= src 0 ( fx_has src FX_CALL_LENT_ONLY ) ! ( fx_has src FX_CALL_MIXED ) {
+        ( fx_set vid FX_CALL_LENT_ONLY )
+        ( wv_put g_fx_lent vid ( wv_at g_fx_lent src ) )
+    } { ? & == kind VK_LOCAL >= vid 0 { ( fx_clear vid FX_CALL_LENT_ONLY ) } {} }
     : b plain_ty & & != vty ET_NONE ! ( et_is_view vty ) != ( et_kind vty ) EK_CLOSURE
     : i nown ( av_own new )
     ? & & & & & & & ! mut == kind VK_LOCAL from_temp ! ( av_call new ) != ( av_alias new ) 0 | == nown OW_L & == nown OW_O != ( av_loans new ) 0 & plain_ty ! ( et_scalar vty ) ! jparts {
@@ -22959,6 +22966,10 @@ unsafe @ eng_byte s w i k → i {
     ? | | | | == cur 0 == xv 0 != ( av_own cur ) OW_L != ( av_own xv ) OW_O != ( fv_kind x ) VK_LOCAL { ^ } {}
     ? ! ( sq_has ( av_alias cur ) xp ) { ^ } {}
     : i moved ( move_out st x ln )
+    // (a call that hands back a fresh value on some runs: x is handed over
+    // on the runs it lent and released on the others, its destructor run at
+    // the exit - moved on some paths only, as nurlc's per-call bit says)
+    ? ( fx_has ov FX_CALL_MIXED ) { ( st_put st x ( av_make OW_X 0 0 0 F ) ) } {}
     : ~ i mine 0
     : ~ i j 0
     : i ls ( av_loans cur )
@@ -87106,7 +87117,13 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         ( nurl_print ` ` ) ( nurl_print actual_fval )
         ( nurl_print `, ` ) ( nurl_print ( nurl_str_int ins_idx ) ) ( nurl_print `\n` )
         = result r
-        ? ( __type_needs_drop actual_fty syms ) { = __lit_drops T } {}
+        // (…or one that holds a view - a Slice, a raw string, a pointer:
+        // what a callee reads through it may be the caller's, and a lend of
+        // that is no lend out of the literal - `( get @ V { ( slice_from_vec
+        // p ) 0 } )` handing back an element of `p`. Taken as inert, the
+        // forwarder lost its retvia and its caller released `p`'s element
+        // twice.)
+        ? | ( __type_needs_drop actual_fty syms ) ( __ty_holds_view_p ( nurl_llty actual_fty ) ) { = __lit_drops T } {}
         ? & < - __lm_n 1 62 ( __mx_scalar_ty actual_fty ) { = __lm_sc | __lm_sc << 1 - __lm_n 1 } {}
         ? & agg_moves_fields == g_bck_closure_depth 0 {
             // (…and a literal field that lends whole — `@ P1 { . h name }`,
