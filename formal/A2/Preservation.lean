@@ -4836,7 +4836,24 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         hm1.of_st rfl ⟨hm1.heap.nodup, hm1.heap.disj, hm1.heap.alloc, hm1.heap.self, hm1.heap.blk, hm1.heap.views⟩ (Nat.le_succ _)
       refine ⟨setE Γ x (Ex.reviveD x), hfin, Inv.scopeD_iff.mpr ?_, Nat.le_succ _,
         ⟨?_, ?_, (DKeep.refl Γ _).setE fun _ _ _ h => absurd (by simp [Stmt.spine]) h⟩,
-        fun _ _ => rfl⟩
+        fun _ _ => rfl, Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: the slots kept; `x` is no borrowed parameter)
+        have hxnr : ∀ p E, Γ p = some E → E.mode = .rootb → p ≠ x := fun p E hp hm h => by
+          subst h; rw [hx] at hp; cases hp; rw [hmo] at hm; cases hm
+        refine hz.leafR (fun p E hp hm h => by simp [Stmt.spine] at h; exact hxnr p E hp hm h)
+          (by simp [Stmt.catchFrames]) (Nat.le_succ _) (fun p E hp hm => ?_)
+          (fun p E hp hm h => by simp [Stmt.spine] at h; exact hxnr p E hp hm h) (fun v hv => ?_)
+          (fun _ _ hcw => hcw.of_st rfl)
+        · have hpx : p ≠ x := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hm; simp [Entry.reviveD, Entry.revive, hmo] at hm
+          simpa only [setE, upd_ne _ _ hpx] using hp
+        · simp only [Stmt.killVars, Rhs.vars, Expr.vars, List.mem_cons, List.mem_append, List.not_mem_nil,
+            or_false] at hv
+          rcases hv with rfl | rfl | rfl
+          · exact Or.inl (by simp [Stmt.killVars])
+          · exact Or.inr (Nat.le_refl _)
+          · exact Or.inl (by simp [Stmt.killVars])
       · exact
         { toMInv := hm'
           nvS := fun w hw => by
