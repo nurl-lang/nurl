@@ -9,10 +9,15 @@ $ `stdlib/core/string.nu`
 : | E { V String W i }
 
 @ bare String p → K { ^ @ K { p 0 } }
+
 @ nested String p → KK { ^ @ KK { @ K { p 0 } 1 } }
+
 @ variant String p → E { ^ @ E { V p } }
-@ wrapped String p → ? String { ^ @ ?String { T p } }
-@ wrapped_lit String p → ? K { ^ @ ?K { T @ K { p 0 } } }
+
+@ wrapped String p → ?String { ^ @ ?String { T p } }
+
+@ wrapped_lit String p → ?K { ^ @ ?K { T @ K { p 0 } } }
+
 @ twice String p → K2 { ^ @ K2 { p p } }
 
 @ main → i {
@@ -23,9 +28,9 @@ $ `stdlib/core/string.nu`
     ( nurl_println ( string_data . . kk k a ) )
     : E e ( variant s )
     ?? e { V x → { ( nurl_println ( string_data x ) ) } W n → {} }
-    : ? String o ( wrapped s )
+    : ?String o ( wrapped s )
     ?? o { T x → { ( nurl_println ( string_data x ) ) } F → {} }
-    : ? K ok ( wrapped_lit s )
+    : ?K ok ( wrapped_lit s )
     ?? ok { T x → { ( nurl_println ( string_data . x a ) ) } F → {} }
     : K2 t ( twice s )
     ( nurl_println ( string_data . t b ) )

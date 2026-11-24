@@ -6,11 +6,15 @@ $ `stdlib/core/string.nu`
 : K2 { String a String b }
 : KK2 { K2 k i m }
 : Conn { String name i fd }
+
 % Drop Conn { @ drop Conn c → v { ( nurl_println ( nurl_str_cat `drop ` ( string_data . c name ) ) ) } }
+
 : H { Conn c String t }
 
 @ bare String p → K2 { ^ @ K2 { p ( string_from `a fresh string long enough for the heap here` ) } }
+
 @ nested String p → KK2 { ^ @ KK2 { @ K2 { p ( string_from `a fresh string long enough for the heap here` ) } 1 } }
+
 @ nocopy Conn p → H { ^ @ H { p ( string_from `a fresh string long enough for the heap buffer` ) } }
 
 @ main → i {

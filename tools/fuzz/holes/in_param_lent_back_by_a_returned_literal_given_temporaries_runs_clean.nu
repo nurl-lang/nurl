@@ -4,11 +4,14 @@
 $ `stdlib/core/string.nu`
 
 : Conn { String name i fd }
+
 % Drop Conn { @ drop Conn c → v { ( nurl_println ( nurl_str_cat `drop ` ( string_data . c name ) ) ) } }
+
 : H { Conn c i n }
 : K { String a i n }
 
 @ wrap Conn p → H { ^ @ H { p 0 } }
+
 @ keep String p i n → K { ^ @ K { p n } }
 
 @ main → i {

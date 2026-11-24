@@ -5,18 +5,27 @@ $ `stdlib/core/string.nu`
 
 : K { String a i n }
 : Conn { String name i fd }
+
 % Drop Conn { @ drop Conn c → v { ( nurl_println ( nurl_str_cat `drop ` ( string_data . c name ) ) ) } }
+
 : H { Conn c i n }
 
 @ id String p → String { ^ p }
+
 @ wrap String p → K { ^ @ K { p 0 } }
+
 @ hold Conn p → H { ^ @ H { p 0 } }
+
 @ idc Conn p → Conn { ^ p }
 
 @ mk1 → String { : String s ( string_from `a local string long enough for the heap buffer` ) ^ ( id s ) }
+
 @ mk2 → K { : String s ( string_from `a local string long enough for the heap buffer` ) ^ ( wrap s ) }
+
 @ mk3 → K { : String s ( string_from `a local string long enough for the heap buffer` ) : K k ( wrap s ) ^ k }
+
 @ mk4 → H { : Conn c @ Conn { ( string_from `a local conn name long enough for the heap` ) 3 } ^ ( hold c ) }
+
 @ mk5 → Conn { : Conn c @ Conn { ( string_from `another local conn name long enough for it` ) 5 } ^ ( idc c ) }
 
 @ main → i {

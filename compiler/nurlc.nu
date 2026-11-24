@@ -85851,9 +85851,9 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
             // known to be handed back lent — not copied after all beside a
             // field of its own, agora #635.)
             { ? & | fld_param_copy fld_param_lend ( is_ident_tok fld_first_tt ) {
-                : s __awh ( nurl_sym_get syms `__agg_whole__` )
-                ( nurl_sym_set_deep syms `__agg_whole__` ? == 0 ( nurl_str_len __awh ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __awh ` ` fld_first_val ) )
-              } { ? ! | fld_rlent fld_view_lend { ( nurl_sym_set_deep syms `__agg_lends_part__` `1` ) } {} } } }
+                    : s __awh ( nurl_sym_get syms `__agg_whole__` )
+                    ( nurl_sym_set_deep syms `__agg_whole__` ? == 0 ( nurl_str_len __awh ) ( nurl_str_cat fld_first_val `` ) ( nurl_str_cat3 __awh ` ` fld_first_val ) )
+                } { ? ! | fld_rlent fld_view_lend { ( nurl_sym_set_deep syms `__agg_lends_part__` `1` ) } {} } } }
         {  // (A payload that is a `?` / `??`: lent per call only when what it
             // lent is the caller's — a local's lend is copied, as `^ ?` does;
             // agora #184.)

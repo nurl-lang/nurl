@@ -7,20 +7,23 @@ $ `stdlib/core/string.nu`
 : R { b ok Val v i pos }
 
 @ okr Val v i pos → R { ^ @ R { T v pos } }
-@ wrapo String p i n → ? String { ^ @ ?String { T p } }
+
+@ wrapo String p i n → ?String { ^ @ ?String { T p } }
 
 @ f i k → R { ^ ( okr @ Val { VS ( string_from `a temporary string long enough for the heap` ) } k ) }
+
 @ g i k → R {
     ? == k 0 { ^ ( okr @ Val { VI 3 } k ) } {}
     ^ ( okr @ Val { VS ( string_from `a temporary string long enough for the heap` ) } k )
 }
-@ h i k → ? String { ^ ( wrapo ( string_from `a temporary string long enough for the heap` ) k ) }
+
+@ h i k → ?String { ^ ( wrapo ( string_from `a temporary string long enough for the heap` ) k ) }
 
 @ main → i {
     : R r ( f 1 )
     : R r2 ( g 1 )
     : R r3 ( g 0 )
-    : ? String o ( h 1 )
+    : ?String o ( h 1 )
     ?? o { T x → { ( nurl_println ( string_data x ) ) } F → {} }
     ^ - + . r pos . r2 pos 2
 }
