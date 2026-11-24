@@ -35,4 +35,7 @@ theorem MInv.liveCaps {m : Mem} {Γ : Ctx} {w : Var} (hM : MInv m Γ) (hnm : NoM
   fun v E o V hv hl hs =>
     ValCapsInp.of_namesIn (hM.held v E _ V hv hl hs rfl) (hM.pkgs v _ V hs rfl) (hnm v E hv hl)
 
+
+namespace A2
+
 end A2

@@ -1148,3 +1148,5 @@ What preservation needs is one typed read lemma: `RhsT` reads only live bindings
 1. `Inv.liveCaps` (the field): `∀ w` held anchor root outside `F`, every live slot and every node its handles reach is `ValCapsInp · w`. It replaces `HeldCapsInp`. Weakening keeps it, since it only ends bindings.
 2. `RhsT.liveCaps`: a typed right-hand side evaluated under it yields a `ValCapsInp` value, and leaves the store under it. It reads only live bindings and what they reach.
 3. Its `Preservation` sites; `Step.held_not_killVars` from the typing (the called `c` is live); then the two scaffolds.
+
+*Probe (2026-11-24): `RhsT.vars_live`, "every variable a typed rhs reads is live".* A generic tactic closes every `RhsT` case but nine: `at`, `sat`, `remove`, `expr`, `atomic`, `chanSend`, `lockRestore`, `pack` (captures, live by `CapsOK`) and `pair` (an intermediate context). The index expressions read integers, which need no clause. So the value lemma should go case by case, as `EvalR.capsInp` does, and take liveness from each `RhsT` premise only where a value that may hold packages is read.
