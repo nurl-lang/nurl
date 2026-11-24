@@ -36,6 +36,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/ext/env.nu`
 $ `deps/octree/src/octree.nu`
 $ `deps/tiles3d/src/tiles3d.nu`
 $ `deps/glb/src/glb.nu`
@@ -66,6 +67,17 @@ $ `deps/glb/src/glb.nu`
 }
 
 @ __pct_max f a f b → f { ^ ? > a b a b }
+
+// fs_rename, which a test can make fail at a named step (PCTILES_TEST_FAIL
+// holding "swap", "restore" or both) to reach the publication's failure
+// paths, which a real filesystem almost never takes
+@ __pct_rename s from s to s step → !v IoErr {
+    ?? ( env_get `PCTILES_TEST_FAIL` ) {
+        T v → { ? ( string_contains v step ) { ^ @ !v IoErr { F @ IoErr { PermissionDenied } } } {} }
+        F → {}
+    }
+    ^ ( fs_rename from to )
+}
 
 @ __pct_uri i k → String {
     : String u ( string_from `n` )
@@ -104,13 +116,23 @@ $ `deps/glb/src/glb.nu`
                     }
                 }
             } {}
-            ?? ( fs_rename ( string_data stage ) dir ) {
+            ?? ( __pct_rename ( string_data stage ) dir `swap` ) {
                 T _ → {}
                 F _e → {
-                    // put the old one back where it was
-                    ? had { ?? ( fs_rename ( string_data old ) dir ) { T _ → {} F _e3 → {} } } {}
+                    ?? ( dir_remove_all ( string_data stage ) ) { T _ → {} F _e5 → {} }
                     : String m ( string_from `pctiles: cannot move the new tileset into place: ` )
                     ( string_push_str m dir )
+                    // put the old one back where it was, and say where it is
+                    // when even that fails
+                    ? had {
+                        ?? ( __pct_rename ( string_data old ) dir `restore` ) {
+                            T _ → { ( string_push_str m ` (the old one is back in place)` ) }
+                            F _e3 → {
+                                ( string_push_str m `; the old tileset could not be put back either and is at ` )
+                                ( string_push_str m ( string_data old ) )
+                            }
+                        }
+                    } {}
                     ^ @ !PctStats String { F m }
                 }
             }
@@ -157,7 +179,8 @@ $ `deps/glb/src/glb.nu`
     // at least the root's own error, which a coarse grid can push above the
     // diagonal (grid 2 on a cube: 8 x the root's half-size cells)
     : f rooterr ? > nn 1 * PCT_ERROR_SCALE ( oc_spacing t 0 ) 0.0
-    : ~ Tileset ts ( ts_new ( __pct_max ( __pct_max diag rooterr ) 1.0e-9 ) )
+    : f top ( __pct_max diag rooterr )
+    : ~ Tileset ts ( ts_new ? > top 0.0 top 1.0 )
     // which nodes have children: a leaf's error is 0
     : ( Vec i ) kids__v ( vec_zeroed [i] nn )
     : ( Slice i ) kids ( slice_from_vec [i] kids__v )

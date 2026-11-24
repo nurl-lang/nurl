@@ -140,6 +140,8 @@ open(d + "/hand_double.ply", "wb").write(b)
 a = b"ply\r\nformat ascii 1.0\r\nelement vertex 3\r\nproperty short x\r\nproperty short y\r\nproperty short z\r\nproperty uchar red\r\nproperty uchar green\r\nproperty uchar blue\r\nend_header\r\n-3 4 5 10 20 30\r\n100 -200 300 1 2 3\r\n0 0 -32768 255 255 255\r\n"
 open(d + "/hand_ascii.ply", "wb").write(a)
 # positions only
+# the last value ends the file, no newline after it
+open(d + "/hand_eof.ply", "wb").write(head("ascii", [("float", "x"), ("float", "y"), ("float", "z")], 1) + b"end_header\n0 0 0")
 open(d + "/hand_plain.ply", "wb").write(head("binary_little_endian", [("float", "x"), ("float", "y"), ("float", "z")], 2) + b"end_header\n" + struct.pack("<ffffff", 1, 2, 3, 4, 5, 6))
 # refusals
 open(d + "/bad_be.ply", "wb").write(head("binary_big_endian", [("float", "x"), ("float", "y"), ("float", "z")], 1) + b"end_header\n" + struct.pack(">fff", 1, 2, 3))
@@ -186,6 +188,7 @@ c255 = lambda v: max(0, min(255, int(v * 255 + 0.5)))
 check("hand_double.ply", 2, 1, 1.5 - 2.25 + 3.125 - 7 + 0 + 1e6, c255(0) + c255(.5) + c255(1) + c255(1) + c255(.25) + c255(.1), (1.5, -2.25, 3.125))
 check("hand_ascii.ply", 3, 1, -3 + 4 + 5 + 100 - 200 + 300 - 32768, 60 + 6 + 765, (-3, 4, 5))
 check("hand_plain.ply", 2, 0, 21, 0, (1, 2, 3))
+check("hand_eof.ply", 1, 0, 0, 0, (0, 0, 0))
 for name, why in [("bad_be.ply", "binary_little_endian"), ("bad_list.ply", "list property"), ("bad_noz.ply", "no x, y and z"), ("bad_order.ply", "must come first"), ("bad_short.ply", "shorter than the header"), ("bad_ascii_few.ply", "fewer values"), ("bad_ascii_many.ply", "more values"), ("bad_huge.ply", "shorter than the header")]:
     if why not in got.get(name, ""): bad.append("%s should be refused for '%s': %s" % (name, why, got.get(name)))
 if bad: print("\n".join(bad)); sys.exit(1)
@@ -282,6 +285,12 @@ glb(d + "/flaky/n0.glb", 400); tileset(d + "/flaky/tileset.json", tile("n0.glb")
 glb(d + "/real/sub/n0.glb", 400); tileset(d + "/real/sub/tileset.json", tile("n0.glb"))
 # point content with indices: refused, with the reason on screen
 glb(d + "/indexed/n0.glb", 400, indexed=True); tileset(d + "/indexed/tileset.json", tile("n0.glb"))
+# REPLACE: root content over a child of no content over a grandchild with content
+glb(d + "/replace/r.glb", 400); glb(d + "/replace/g.glb", 400)
+rt = tile("r.glb", [tile(None, [tile("g.glb")], err=0.5)], err=100.0)
+os.makedirs(d + "/replace", exist_ok=True)
+rt["refine"] = "REPLACE"
+json.dump({"asset": {"version": "1.1"}, "geometricError": 200, "root": rt}, open(d + "/replace/tileset.json", "w"))
 PYEOF
     cat > "$WORK/srv.py" <<'PYEOF'
 import http.server, os, sys
@@ -310,8 +319,44 @@ PYEOF
     done
     out=$(sh tests/viewer_shot.sh "http://127.0.0.1:$TPORT/viewer.html?tiles=indexed/tileset.json&probe=3" 2>&1)
     echo "$out" | grep -q "indexed point content" || { bad "indexed point content was not refused with its reason: $(echo "$out" | tail -2)"; tf=1; }
+    # REPLACE after a zoom in and out: in close, the grandchild loads; out
+    # far, the walk stops at its content-less parent, so the root must be
+    # drawn again — not left out because a grandchild nobody draws is loaded
+    if command -v node >/dev/null 2>&1; then
+        cat > "$WORK/replace.mjs" <<'JS'
+import { spawn } from "node:child_process";
+const [url, prof] = process.argv.slice(2);
+const port = 9300 + Math.floor(Math.random() * 500);
+const chrome = spawn("google-chrome", ["--headless=new", "--enable-unsafe-swiftshader", "--use-angle=swiftshader", "--no-sandbox",
+  "--window-size=1000,800", `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank"], { stdio: "ignore" });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let out = "no answer";
+try {
+  let t; for (let i = 0; i < 50; i++) { try { t = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); break; } catch { await sleep(200); } }
+  const ws = new WebSocket(t.find((x) => x.type === "page").webSocketDebuggerUrl); await new Promise((r) => (ws.onopen = r));
+  let n = 0; const w = new Map(); ws.onmessage = (m) => { const j = JSON.parse(m.data); if (j.id && w.has(j.id)) { w.get(j.id)(j); w.delete(j.id); } };
+  const send = (method, params = {}) => new Promise((r) => { const k = ++n; w.set(k, r); ws.send(JSON.stringify({ id: k, method, params })); });
+  const ev = async (e) => (await send("Runtime.evaluate", { expression: e, returnByValue: true })).result?.result?.value;
+  await send("Page.navigate", { url });
+  for (let i = 0; i < 100 && !(await ev("window.__ready === true")); i++) await sleep(100);
+  await ev("cam.dist = 2; 0");
+  for (let i = 0; i < 100 && (await ev("window.__tiles && window.__tiles.ready")) < 2; i++) await sleep(100);
+  const near = JSON.parse(await ev("JSON.stringify(window.__tiles)"));
+  await ev("cam.dist = 100; 0"); await sleep(1000);
+  const far = JSON.parse(await ev("JSON.stringify(window.__tiles)"));
+  out = `near ready=${near.ready} drawn=${near.drawnTiles}; far drawn=${far.drawnTiles}`;
+  ws.close();
+} finally { chrome.kill(); }
+console.log(out);
+JS
+        r=$(timeout 90 node "$WORK/replace.mjs" "http://127.0.0.1:$TPORT/viewer.html?tiles=replace/tileset.json" "$WORK/chrome-replace" 2>&1)
+        case "$r" in
+            "near ready=2 drawn=1; far drawn=1") ;;
+            *) bad "REPLACE after zooming in and out drew the wrong tiles: $r (want: near ready=2 drawn=1; far drawn=1)"; tf=1 ;;
+        esac
+    else skip "the REPLACE zoom check needs node"; fi
     kill "$TPID" 2>/dev/null; wait "$TPID" 2>/dev/null
-    [ "$tf" -eq 0 ] && ok "a root with no content draws its first child; a 503 is retried; content resolves after a redirect; indexed points are refused, saying why"
+    [ "$tf" -eq 0 ] && ok "a root with no content draws its first child; a 503 is retried; content resolves after a redirect; indexed points are refused, saying why; REPLACE draws its parent again when zoomed back out"
 fi
 
 echo

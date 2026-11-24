@@ -67,18 +67,34 @@ print(c(t['root']) + 1)" "$WORK/re/tileset.json")
 left=$(ls -d "$WORK"/re.* 2>/dev/null | wc -l)
 if [ "$n2" = "$n3" ] && [ "$n1" -gt "$n2" ] && [ "$left" = 0 ]; then echo "PASS a rebuild replaces the tileset whole ($n1 files, then $n2; no staging left)"
 else echo "FAIL a rebuild left $n2 files for $n3 tiles+manifest (was $n1), $left staging dirs"; fails=$((fails + 1)); fi
-# a build that cannot finish leaves the old tileset as it was (an ordinary
-# user cannot write into a read-only parent; root can, so it skips)
+# every file of a tileset directory, by name and content
+digest() { (cd "$1" && find . -type f | sort | xargs md5sum) | md5sum; }
+# a build that cannot finish leaves the old tileset as it was, byte for byte
+# (an ordinary user cannot write into a read-only parent; root can, so it skips)
 if [ "$(id -u)" != 0 ]; then
     mkdir -p "$WORK/ro" && cp -r "$WORK/re" "$WORK/ro/t" && chmod a-w "$WORK/ro"
-    before=$(cd "$WORK/ro/t" && cat tileset.json | md5sum)
+    before=$(digest "$WORK/ro/t")
     if "$WORK/pctiles" build "$WORK/cloud.ply" -o "$WORK/ro/t" --grid 16 -q > /dev/null 2>&1; then
         echo "FAIL a build into a read-only parent claimed success"; fails=$((fails + 1))
-    elif [ "$(cd "$WORK/ro/t" && cat tileset.json | md5sum)" = "$before" ] && [ "$(ls "$WORK/ro/t" | wc -l)" = "$n2" ]; then
-        echo "PASS a build that cannot finish leaves the old tileset untouched"
+    elif [ "$(digest "$WORK/ro/t")" = "$before" ]; then
+        echo "PASS a build that cannot start leaves the old tileset byte-identical"
     else echo "FAIL a failed build changed the old tileset"; fails=$((fails + 1)); fi
     chmod u+w "$WORK/ro"
 fi
+# the publication's failure paths, forced: the new tileset cannot be moved
+# into place — the old one is put back whole and nothing is left over; and
+# when even that fails, the error says where the old one is
+before=$(digest "$WORK/re")
+out=$(PCTILES_TEST_FAIL=swap "$WORK/pctiles" build "$WORK/cloud.ply" -o "$WORK/re" --grid 16 -q 2>&1)
+if [ $? -ne 0 ] && [ "$(digest "$WORK/re")" = "$before" ] && [ "$(ls -d "$WORK"/re.* 2>/dev/null | wc -l)" = 0 ] && echo "$out" | grep -q "back in place"; then
+    echo "PASS a swap that fails puts the old tileset back byte-identical, and leaves nothing over"
+else echo "FAIL a failed swap: $out; $(ls -d "$WORK"/re* | tr '\n' ' ')"; fails=$((fails + 1)); fi
+out=$(PCTILES_TEST_FAIL=swap,restore "$WORK/pctiles" build "$WORK/cloud.ply" -o "$WORK/re" --grid 16 -q 2>&1)
+old=$(echo "$out" | sed -n 's/.* is at \(.*\)$/\1/p')
+if [ -n "$old" ] && [ -d "$old" ] && [ "$(digest "$old")" = "$before" ] && [ ! -e "$WORK/re" ] && [ "$(ls -d "$WORK"/re.building-* 2>/dev/null | wc -l)" = 0 ]; then
+    echo "PASS a swap and a restore that both fail: the error names where the old tileset is, intact; no staging left"
+    mv "$old" "$WORK/re"
+else echo "FAIL a failed restore: $out"; fails=$((fails + 1)); fi
 python3 - "$WORK" <<'PY' || fails=$((fails + 1))
 import json, os, struct, sys
 w = sys.argv[1]

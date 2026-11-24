@@ -161,7 +161,10 @@ $ `stdlib/std/rng.nu`
     // resolution
     : f mag ( __oc_max ( __oc_max ( float_abs lx ) ( float_abs hx ) ) ( __oc_max ( __oc_max ( float_abs ly ) ( float_abs hy ) ) ( __oc_max ( float_abs lz ) ( float_abs hz ) ) ) )
     : f hmin ( __oc_max 0.000001 * mag 0.000000000001 )
-    : f h0 ( __oc_max * ex 1.0000002 hmin )
+    // a hair larger so no point sits on a far face — unless that is past
+    // float64's largest value (an extent of the whole range): then as is
+    : f pad * ex 1.0000002
+    : f h0 ( __oc_max ? == 0 ( nurl_is_inf pad ) pad ex hmin )
     : i _root ( __oc_node t -1 0 + * 0.5 lx * 0.5 hx + * 0.5 ly * 0.5 hy + * 0.5 lz * 0.5 hz h0 )
     // per node: its candidates' range in `cand`; children get sub-ranges
     : ( Vec i ) cs__v ( vec_new [i] )

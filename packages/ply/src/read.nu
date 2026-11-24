@@ -202,8 +202,11 @@ $ `stdlib/std/floatbits.nu`
     : ~ i stride 0
     = q 0
     ~ < q np { = stride + stride ( __ply_size ( slice_at [i] pt q ) ) = q + q 1 }
+    // (ascii: the last value may end the file without a separator, hence
+    // the one byte more)
     : i per ? == fmt 2 stride * 2 np
-    ? > nv / - nb body per { ^ ( __ply_err `the body is shorter than the header says` path ) } {}
+    : i room ? == fmt 2 - nb body + - nb body 1
+    ? > nv / room per { ^ ( __ply_err `the body is shorter than the header says` path ) } {}
     : ( Vec f ) xyz ( vec_with_cap [f] * nv 3 )
     : ( Vec u ) rgb ( vec_with_cap [u] ? col * nv 3 0 )
     : ( Vec f ) vals__v ( vec_zeroed [f] np )

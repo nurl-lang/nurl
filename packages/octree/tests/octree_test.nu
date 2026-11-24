@@ -233,11 +233,12 @@ $ `../src/octree.nu`
         ( vec_push [f] x__v * sgn * 1.0e308 ( rng_u01 g ) ) ( vec_push [f] x__v * -1.0e308 ( rng_u01 g ) ) ( vec_push [f] x__v * 1.0e308 ( rng_u01 g ) )
         = k + k 1
     }
-    ( vec_push [f] x__v 1.7e308 ) ( vec_push [f] x__v -1.7e308 ) ( vec_push [f] x__v 1.0 )
-    ( vec_push [f] x__v -1.7e308 ) ( vec_push [f] x__v 1.7e308 ) ( vec_push [f] x__v -1.0 )
+    // the very largest finite values: the root's padding must not overflow
+    ( vec_push [f] x__v 1.7976931348623157e308 ) ( vec_push [f] x__v -1.7976931348623157e308 ) ( vec_push [f] x__v 1.0 )
+    ( vec_push [f] x__v -1.7976931348623157e308 ) ( vec_push [f] x__v 1.7976931348623157e308 ) ( vec_push [f] x__v -1.0 )
     : ( Slice f ) xs ( slice_from_vec [f] x__v )
     : Octree tx ( oc_build xs 50 8 1 )
-    = bad + bad ( __check tx xs 402 50 8 `402 points out to 1.7e308` )
+    = bad + bad ( __check tx xs 402 50 8 `402 points out to float64's largest value` )
     = bad + bad ( __say & ( __fin ( oc_center tx 0 0 ) ) ( __fin ( oc_half tx 0 ) ) `  ...the root's cube is finite` )
     : ( Vec f ) e__v ( vec_new [f] )
     : Octree te ( oc_build ( slice_from_vec [f] e__v ) 10 8 1 )

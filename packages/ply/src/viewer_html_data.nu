@@ -1083,12 +1083,18 @@ function bootTiles(ts, url, label) {
     }
     return true;
   }
-  /* a branch that can stand in for its REPLACE parent: out of view, or its
-     content drawn, or (no content of its own) every child branch so */
-  function covered(k, M) {
+  /* A branch that can stand in for its REPLACE parent, judged by what the
+     walk would draw there this frame — not by what happens to be loaded:
+     out of view; or, where the walk stops at it, its own content drawn;
+     or, where the walk goes deeper, its own content drawn or every child
+     branch covered in turn. A loaded grandchild under a child the walk no
+     longer refines does not count (zooming out after zooming in). */
+  function covered(k, M, eye) {
     if (!inView(k, M)) return true;
-    if (k.uri) return k.state === 2;
-    return k.kids.length > 0 && k.kids.every(function (c) { return covered(c, M); });
+    var own = !!k.uri && k.state === 2;
+    var deeper = k.kids.length > 0 && sse(k, eye) > TILE_SSE;
+    if (!deeper) return own;
+    return own || k.kids.every(function (c) { return covered(c, M, eye); });
   }
   /* in view: the box's corners against the clip volume, culled only when
      all eight are beyond one plane */
@@ -1157,7 +1163,7 @@ function bootTiles(ts, url, label) {
       if (t.uri && t.state === 0 && now >= t.retryAt) { t.want = t.s; want.push(t); }
       var deeper = t.kids.length > 0 && s > TILE_SSE;
       if (!deeper || t.refine === "ADD") { if (t.state === 2) draw.push(t); }
-      else if (t.state === 2 && !t.kids.every(function (k) { return covered(k, MV); })) draw.push(t);
+      else if (t.state === 2 && !t.kids.every(function (k) { return covered(k, MV, eye); })) draw.push(t);
       if (deeper) t.kids.forEach(walk);
     })(root);
     /* a tile out of view counts as needed not at all */
@@ -1354,7 +1360,8 @@ function flyStep(dt) {
   var ml = Math.hypot(m[0], m[1], m[2]);
   if (!ml) return;
   var v = flySpeed * (keys.ShiftLeft || keys.ShiftRight ? 4 : 1) * dt / ml;
-  for (var a = 0; a < 3; a++) fly.pos[a] += m[a] * v;
+` } {}
+    ? == k 2 { ^ `  for (var a = 0; a < 3; a++) fly.pos[a] += m[a] * v;
 }
 document.addEventListener("pointerlockchange", function () {
   if (!fly) return;
@@ -1364,8 +1371,7 @@ document.addEventListener("pointerlockchange", function () {
 document.addEventListener("mousemove", function (e) {
   if (fly && document.pointerLockElement === cv) lookBy(e.movementX, e.movementY);
 });
-` } {}
-    ? == k 2 { ^ `window.addEventListener("keyup", function (e) { delete keys[e.code]; });
+window.addEventListener("keyup", function (e) { delete keys[e.code]; });
 /* ctrl+w closes the tab and no page can take it back: in flight, with
    ctrl held to sink, a w pressed with it is one key away. The browser asks
    first instead. */
