@@ -502,14 +502,14 @@ theorem Inv.scopeL_iff {m : Mem} {Γ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x
       heldCaps := hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv }
 
 theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep : Entry}
-    (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : Anchored Ep F) :
+    (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : AnchoredS Γ Ep F k.killVars) :
     Inv m Γ F k :=
   { toMInv := hi.toMInv
     nvS := fun v hv => hi.nvS v (by simp [Stmt.vars, hv])
     nvF := hi.nvF
     anch := fun q E hq hmq hqs => by
       by_cases hqp : q = p
-      · subst hqp; rw [hp] at hq; cases hq; exact hroots.toS _ _
+      · subst hqp; rw [hp] at hq; cases hq; exact hroots
       · exact AnchoredS.anti (hi.anch q E hq hmq (by simp [Stmt.spine, hqp, hqs])) (fun v hv => by simp [Stmt.killVars, hv])
     spineNd := by
       have := hi.spineNd; simp only [Stmt.spine, List.nodup_cons] at this; exact this.2
@@ -530,7 +530,10 @@ theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep
     -- (the bound parameter's anchors are lent out: it has no held one outside `F`)
     heldCaps := fun q E hq hmq hqs d hd hb hh hF => by
       by_cases hqp : q = p
-      · subst hqp; rw [hp] at hq; cases hq; exact absurd (hroots d hd hb) hF
+      · subst hqp; rw [hp] at hq; cases hq
+        rcases hroots d hd hb with hF' | _
+        · exact absurd hF' hF
+        · sorry -- WIP scaffold (AGORA-937 B4, never merged): a running `rbind`'s held anchor (HeldCapsInp skips the spine)
       · exact hi.heldCaps q E hq hmq (by simp [Stmt.spine, hqp, hqs]) d hd hb hh hF }
 
 theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z z' : List Var} {k : Stmt} (hi : Inv m Γ F (.frozen z k))

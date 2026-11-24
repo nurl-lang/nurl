@@ -4712,7 +4712,11 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         AnchoredS Γ E F (Stmt.rbind p k).killVars := by
       intro q E hq hmq hqs
       by_cases hqp : q = p
-      · subst hqp; rw [hp] at hq; cases hq; exact hroots.toS _ _
+      · subst hqp; rw [hp] at hq; cases hq
+        -- a lent binding's anchors are older than it (`rootbLt`), so not it
+        exact fun d hd hb => (hroots d hd hb).imp id fun ⟨hh, hv, he⟩ => ⟨hh, by
+          simp only [Stmt.killVars, List.mem_cons, not_or]
+          exact ⟨Nat.ne_of_lt (hi.rootbLt _ _ hp hm d.root (List.mem_map_of_mem hd)), hv⟩, he⟩
       · exact hi.anch q E hq hmq (by simp [Stmt.spine, hqp, hqs])
     have hpo : ∀ Ep', Γ p = some Ep' → Ep'.mode.ownSlot = false := fun Ep' h => by
       rw [hp] at h; cases h; rw [hm]; rfl
@@ -4790,7 +4794,7 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       obtain ⟨hpsp', Ep', hp', _, _, hrb⟩ := hk.1 p Ep hp hpsp
       have hEp : Ep' = Ep := hrb hm
       subst hEp
-      refine ⟨Γ', StmtT.rbind hp' hm hl hroots hpF ht' hrr, ?_, hnv,
+      refine ⟨Γ', StmtT.rbind hp' hm hl (hi'.anch _ _ hp' hm hpsp') hpF ht' hrr, ?_, hnv,
         ⟨?_, ?_, hk.2.2.mono fun v hv h => hv (List.mem_cons_of_mem _ h)⟩, hfz⟩
       · exact
         { toMInv := hi'.toMInv

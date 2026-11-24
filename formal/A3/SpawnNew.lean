@@ -154,7 +154,7 @@ theorem newThread_typed {P : Prog} {fn : Fn} (hok : FnOK P fn)
     · subst hpn; simp [exitScope] at hp
     · rw [exitScope, upd_ne _ _ hpn] at hp
       exact (hq0.kill .replace false _) p E hp
-  refine ⟨_, wrap_typed (base := 0) (pe := fun _ => intE) hsc (fun _ d hd => by simp [intE] at hd)
+  refine ⟨_, wrap_typed (base := 0) (pe := fun _ => intE) hsc (fun _ h => h) (fun _ d hd => by simp [intE] at hd)
     (fun _ d hd => by simp [intE] at hd) hq (fun p E hp hd => absurd hd (by rw [(hfl' p E hp).1]; simp))
     (fun p E hp hd => absurd hd (by rw [(hfl' p E hp).2]; simp)) fn.params 0 (fun k p hk => ?_)⟩
   obtain ⟨h1, ht⟩ := hpar p (List.mem_of_getElem? hk)

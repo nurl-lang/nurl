@@ -3167,7 +3167,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
     -- the residual, typed
     have hIn := h.typedIn (ξ := .none) (StmtT.ctxRel hP)
     have hrbT := StmtT.rbind (P := P) (ξ := .none) hΓ'e rfl rfl
-      (fun d hd hb => List.mem_append_right _ (hZ d hd hb)) hFe' hIn
+      (fun d hd hb => Or.inl (List.mem_append_right _ (hZ d hd hb))) hFe' hIn
       (fun d hd hb => by
         -- what the environment may change by name is a binding of the
         -- caller's, a root still after the call

@@ -2134,8 +2134,11 @@ end Stmt.Thru
       freezes nothing, `ThruReady`'s `Rf = []`);
     - what a regioned argument holds in memory is views or handles of roots,
       no two regioned arguments on one root;
-    - at each such root `w`: every argument reaches it at a view, a handle or
-      by name, and none is `w`; no live binding after the call is ended by
+    - at each such root `w`: every argument reaches it at a view or a handle
+      (a name would anchor it, which would freeze it), in what it holds (not
+      on its path), and none is `w`; a lent
+      parameter it reaches is a `Vec` (its view is then a held anchor,
+      `HeldAnch`); no live binding after the call is ended by
       a change inside `w`'s elements (a binding that is, `s2`, is ended
       before the call by weakening, as nurlc ends it); no destructor reads
       inside them; `w` is not lent out (`F`), is a live owned `Vec` whose
@@ -2154,8 +2157,10 @@ def CallThruOK (P : Prog) (Γ : Ctx) (F : List Var) (fn : Fn) (args : List Var) 
         ∀ e' ∈ memDeps (argE Γ (args.getD j 0)).held, e'.root ≠ e.root) ∧
   ∀ w ∈ callR Γ args,
     w ∉ args ∧
-    (∀ a ∈ args, ∀ d ∈ (argE Γ a).vdeps, d.root = w →
-      d.kind = .view ∨ d.kind = .self ∨ d.kind.isName = true) ∧
+    (∀ a ∈ args, ∀ d ∈ (argE Γ a).vdeps, d.root = w → d.kind = .view ∨ d.kind = .self) ∧
+    (∀ a ∈ args, ∀ d ∈ (argE Γ a).path, d.root ≠ w) ∧
+    (∀ i (h : i < fn.params.length), fn.params[i].1 = .inp →
+      w ∈ roots (memDeps (argE Γ (args.getD i 0)).held) → ∃ t, fn.params[i].2 = .vec t) ∧
     (∀ y E, callPost Γ fn args y = some E → E.live = true → hits .dropIn false w E = false) ∧
     (∀ y E, callPost Γ fn args y = some E → E.dtor = true → E.mode.ownSlot = true →
       hitsMem .dropIn false w E = false) ∧

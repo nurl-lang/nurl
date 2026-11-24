@@ -350,13 +350,27 @@ theorem callX_vdeps (fn : Fn) : (callX fn).vdeps = [] := by
 def zOf (fn : Fn) (args : List Var) (base : Nat) : List Var :=
   (List.range base).filter (fun v => !(inoutArgs fn.params args).contains v)
 
+/-- AGORA-937 (3d, route U): the roots a body that changes elements through
+    a borrow changes inside, through what the arguments hold views of
+    (`CallThruOK`). Where the call passes no views, none. -/
+def thruW (Γ : Ctx) (fn : Fn) (args : List Var) : List Var :=
+  if fn.body.hasThru then callR Γ args else []
+
 /-- ... and the typing lends all of them but what the closures handed to the
-    call may change. -/
+    call may change, and (route U) the roots the callee changes inside. -/
 def zN (Γ : Ctx) (fn : Fn) (args : List Var) (base : Nat) : List Var :=
-  (zOf fn args base).filter (fun v => !(roots (mutNames Γ args)).contains v)
+  (zOf fn args base).filter (fun v => !(roots (mutNames Γ args)).contains v && !(thruW Γ fn args).contains v)
 
 theorem zN_sub {Γ : Ctx} {fn : Fn} {args : List Var} {base : Nat} :
     ∀ v ∈ zN Γ fn args base, v ∈ zOf fn args base := fun _ h => (List.mem_filter.mp h).1
+
+theorem mem_zN {Γ : Ctx} {fn : Fn} {args : List Var} {base : Nat} {v : Var} :
+    v ∈ zN Γ fn args base ↔
+      v ∈ zOf fn args base ∧ v ∉ roots (mutNames Γ args) ∧ v ∉ thruW Γ fn args := by
+  simp [zN, List.mem_filter, Bool.and_eq_true, Bool.not_eq_true', List.contains_eq_mem]
+
+theorem thruW_nil {Γ : Ctx} {fn : Fn} {args : List Var} (h : callR Γ args = []) : thruW Γ fn args = [] := by
+  unfold thruW; split <;> simp [h]
 
 def bndOf (ps : List (PMode × Ty)) (v : Var) : Option (Eff × Bool) :=
   match ps[v]? with
@@ -1946,10 +1960,13 @@ def rrL : List (PMode × Ty) → Nat → Nat → (Var → Entry) → List Dep �
 def rrE (ps : List (PMode × Ty)) (base i : Nat) (pe : Var → Entry) (E : Entry) : Entry :=
   { E with path := rrL ps base i pe E.path, held := rrL ps base i pe E.held }
 
-/-- The condition for binding the parameters' scopes. -/
-def WrapCond (Γ : Ctx) (Fc : List Var) (base : Nat) (pe : Var → Entry) (j : Nat) : PMode × Ty → Prop
+/-- The condition for binding the parameters' scopes. A lent parameter's
+    anchors are lent out (`Fc`), or (AGORA-937, route U) held views of a root
+    none of the body's killable names `V` (`AnchoredS`). -/
+def WrapCond (Γ : Ctx) (Fc : List Var) (base : Nat) (pe : Var → Entry) (V : List Var) (j : Nat) :
+    PMode × Ty → Prop
   | (.inp, _) => ∃ E, Γ (base + j) = some E ∧ E.mode = .rootb ∧ E.live = true ∧
-      Anchored E Fc ∧ base + j ∉ Fc ∧ E.path ++ E.held = (pe j).path ++ (pe j).held
+      AnchoredS Γ E Fc V ∧ base + j ∉ Fc ∧ E.path ++ E.held = (pe j).path ++ (pe j).held
   | (.sink, _) => (∃ E, Γ (base + j) = some E ∧ E.mode ≠ .rootb) ∧ base + j ∉ Fc
   | (.inout _, _) => True
 
@@ -2172,19 +2189,20 @@ theorem exitsP_dbq {base : Nat} {pe : Var → Entry} {Q : Var → Prop}
     | inout b => exact ih p E hp hd hos hg d hdd hnm
 
 theorem wrap_typed {P : Prog} {Γ : Ctx} {Fc : List Var} {base : Nat} {pe : Var → Entry} {s : Stmt}
-    {Δ : Ctx} (hs : StmtT P .none Γ Fc s Δ) (hpe : ∀ j, ∀ d ∈ (pe j).path ++ (pe j).held, d.root < base)
+    {Δ : Ctx} {V : List Var} (hs : StmtT P .none Γ Fc s Δ) (hsV : ∀ v ∈ s.killVars, v ∈ V)
+    (hpe : ∀ j, ∀ d ∈ (pe j).path ++ (pe j).held, d.root < base)
     -- what a borrowed parameter may change by name stays bound to the end
     (hpw : ∀ j, ∀ d ∈ (pe j).path ++ (pe j).held, d.kind.bound ≠ .none →
       ∃ Er, Δ d.root = some Er ∧ Er.mode.isRoot = true)
     (hΔrb : RbQ (· < base) Δ) (hΔdt : DtQ (· < base) Δ) (hΔdb : DbQ (· < base) Δ) :
-    ∀ (ps : List (PMode × Ty)) (i : Nat), (∀ k p, ps[k]? = some p → WrapCond Γ Fc base pe (i + k) p) →
+    ∀ (ps : List (PMode × Ty)) (i : Nat), (∀ k p, ps[k]? = some p → WrapCond Γ Fc base pe V (i + k) p) →
       StmtT P .none Γ Fc (wrapParams ps base i s) (exitsP ps base i pe Δ) := by
   intro ps
   induction ps with
   | nil => intro i _; exact hs
   | cons p ps ih =>
     intro i hc
-    have hc' : ∀ k p, ps[k]? = some p → WrapCond Γ Fc base pe (i + 1 + k) p := by
+    have hc' : ∀ k p, ps[k]? = some p → WrapCond Γ Fc base pe V (i + 1 + k) p := by
       intro k p hp; have := hc (k + 1) p (by simpa using hp); rwa [show i + (k + 1) = i + 1 + k by omega] at this
     have h0 := hc 0 p (by simp)
     simp only [Nat.add_zero] at h0
@@ -2194,7 +2212,15 @@ theorem wrap_typed {P : Prog} {Γ : Ctx} {Fc : List Var} {base : Nat} {pe : Var 
       obtain ⟨E, hE, hm, hl, hr, hF, hp⟩ := h0
       have hvd : E.vdeps = (pe i).path ++ (pe i).held := by
         rw [← hp]; simp [Entry.vdeps, hm, Mode.ownSlot]
-      have := StmtT.rbind (P := P) (ξ := .none) hE hm hl hr hF (ih (i + 1) hc') (fun d hd hb => by
+      -- a held anchor is older than the frame, so none of the parameters'
+      -- scopes (`killVars_wrap`)
+      have hr' : AnchoredS Γ E Fc (wrapParams ps base (i + 1) s).killVars := fun d hd hb =>
+        (hr d hd hb).imp id fun ⟨hh, hv, he⟩ => ⟨hh, fun hk => by
+          have hlt := hpe i d (by rw [← hvd]; exact hd)
+          rcases killVars_wrap ps base (i + 1) s d.root hk with h | h
+          · exact absurd h (Nat.not_le.mpr hlt)
+          · exact hv (hsV _ h), he⟩
+      have := StmtT.rbind (P := P) (ξ := .none) hE hm hl hr' hF (ih (i + 1) hc') (fun d hd hb => by
         rw [hvd] at hd
         obtain ⟨Er, hEr, hro⟩ := hpw i d hd hb
         have hlt := hpe i d hd
@@ -3057,8 +3083,9 @@ theorem notRen_z (_h : CallH P Γ F x fn args base) {r : Var} (hout : ∀ w, cal
 /-- What an `in` parameter's entry borrows or reads by name is lent out for
     the call: no closure handed to it may change it (§2.11). -/
 theorem pe_Fc (h : CallH P Γ F x fn args base) (j : Nat) :
-    Anchored (callPe Γ fn.params args j) (F ++ zN Γ fn args base) := by
-  intro d hd hb
+    ∀ d ∈ (callPe Γ fn.params args j).vdeps, d.kind.bound = .none → d.root ∉ thruW Γ fn args →
+      d.root ∈ F ++ zN Γ fn args base := by
+  intro d hd hb hwt
   -- a reader is of the frame: a symbolic name's image changes its binding
   have hfr : (∀ w, callRen fn.params args base w ≠ d.root) ∧
       ∃ Er, (callS Γ F fn args base x).Φ d.root = some Er ∧ Er.mode.isRoot = true := by
@@ -3067,29 +3094,40 @@ theorem pe_Fc (h : CallH P Γ F x fn args base) (j : Nat) :
     · obtain ⟨_, b, _, rfl, _, _, hbn, _⟩ := RSetup.sym_ren h.sOK hs
       exact absurd hb hbn
   obtain ⟨hout, Er, hEr, _⟩ := hfr
-  refine List.mem_append_right _ (List.mem_filter.mpr ⟨h.notRen_z hout (h.frame_lt hEr), ?_⟩)
-  have hnot : d.root ∉ roots (mutNames Γ args) := by
-    intro hm
-    obtain ⟨dm, hdm, hr⟩ := List.mem_map.mp hm
-    obtain ⟨_, _, _, hna, hoth, _⟩ := h.nfree dm hdm
-    obtain ⟨Ea, hvp, hEa, _, hni, hc, _⟩ := h.pe_vdeps j hd
-    have hmem : args.getD j 0 ∈ args := by simp [List.getD, show j < args.length from h.len ▸ hvp]
-    have hae' : argE Γ (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl
-    rcases hc with ⟨he, _, _⟩ | hdv
-    · rcases hna with hna | ⟨i, t, hai, hpi⟩
-      · exact hna (by rw [hr, he]; exact hmem)
-      · -- `dm` changes an `inout` argument, which the callee can name
-        have hai' : args.getD i 0 = dm.root := by simp [List.getD_eq_getElem?_getD, hai]
-        exact hout i (by simp only [callRen, hpi]; rw [hai', hr, he])
-    · have := hoth _ hmem (Or.inl (by rw [hae']; exact hni)) d (by rw [hae']; exact hdv) hr.symm
-      rw [hb] at this
-      exact (by simpa using (List.mem_filter.mp hdm).2 : dm.kind.bound ≠ .none) this.symm
-  simpa using hnot
+  refine List.mem_append_right _ (mem_zN.mpr ⟨h.notRen_z hout (h.frame_lt hEr), ?_, hwt⟩)
+  show d.root ∉ roots (mutNames Γ args)
+  intro hm
+  obtain ⟨dm, hdm, hr⟩ := List.mem_map.mp hm
+  obtain ⟨_, _, _, hna, hoth, _⟩ := h.nfree dm hdm
+  obtain ⟨Ea, hvp, hEa, _, hni, hc, _⟩ := h.pe_vdeps j hd
+  have hmem : args.getD j 0 ∈ args := by simp [List.getD, show j < args.length from h.len ▸ hvp]
+  have hae' : argE Γ (args.getD j 0) = Ea := by unfold argE; rw [hEa]; rfl
+  rcases hc with ⟨he, _, _⟩ | hdv
+  · rcases hna with hna | ⟨i, t, hai, hpi⟩
+    · exact hna (by rw [hr, he]; exact hmem)
+    · -- `dm` changes an `inout` argument, which the callee can name
+      have hai' : args.getD i 0 = dm.root := by simp [List.getD_eq_getElem?_getD, hai]
+      exact hout i (by simp only [callRen, hpi]; rw [hai', hr, he])
+  · have := hoth _ hmem (Or.inl (by rw [hae']; exact hni)) d (by rw [hae']; exact hdv) hr.symm
+    rw [hb] at this
+    exact (by simpa using (List.mem_filter.mp hdm).2 : dm.kind.bound ≠ .none) this.symm
+
+/-- AGORA-937 (3d, route U): what a lent parameter, lifted, holds of a root
+    the callee changes inside is a held anchor (`HeldAnch`): a view of a
+    `Vec` it holds, of a root that is none of the body's killable names and
+    whose elements hold no views (`CallThruOK`). -/
+theorem held_anch (h : CallH P Γ F x fn args base) {k : Nat} {t : Ty}
+    (hk : fn.params[k]? = some (.inp, t)) {E0 : Entry}
+    (hci : (callS Γ F fn args base x).canon (sigCtx fn) ((callS Γ F fn args base x).ρ k) = some E0)
+    {d : Dep} (hd : d ∈ E0.vdeps) (hwt : d.root ∈ thruW Γ fn args) :
+    HeldAnch E0 d ∧ d.root ∉ (fn.body.rename (callRen fn.params args base)).killVars ∧
+      ∃ Er, (callS Γ F fn args base x).canon (sigCtx fn) d.root = some Er ∧ Er.ty.holdsView = false := by
+  sorry -- WIP scaffold (AGORA-937 B4, never merged): the lifted lent parameter's held anchor
 
 theorem wrapCond (h : CallH P Γ F x fn args base) :
     ∀ k p, fn.params[k]? = some p →
       WrapCond ((callS Γ F fn args base x).canon (sigCtx fn)) (F ++ zN Γ fn args base) base
-        (callPe Γ fn.params args) (0 + k) p := by
+        (callPe Γ fn.params args) (fn.body.rename (callRen fn.params args base)).killVars (0 + k) p := by
   intro k p hk
   rw [Nat.zero_add]
   obtain ⟨pm, t⟩ := p
@@ -3135,7 +3173,9 @@ theorem wrapCond (h : CallH P Γ F x fn args base) :
           (callPe Γ fn.params args k).path ++ (callPe Γ fn.params args k).held := by
         unfold Entry.vdeps; rw [show (callPe Γ fn.params args k).mode = .rootb from h.sOK.pe_rb k]; rfl
       rw [hpv, ← hvd0]; simpa [Entry.vdeps, hm0, Mode.ownSlot] using hd
-    exact h.pe_Fc k d hd' hb
+    by_cases hwt : d.root ∈ thruW Γ fn args
+    · exact Or.inr (h.held_anch hk hci0 hd hwt)
+    · exact Or.inl (h.pe_Fc k d hd' hb hwt)
   | sink =>
     have hne : ∀ b' t', (PMode.sink, t) ≠ (.inout b', t') := fun _ _ h => by cases h
     exact ⟨⟨_, hcR hne, by simp [RSetup.liftE, paramE, liftMode]⟩, hF hne⟩
@@ -3315,7 +3355,7 @@ theorem typedIn_of (h : CallH P Γ F x fn args base)
       obtain ⟨Ew, hEw, hm, _⟩ := habΔ.2.2.1 w (b, false) hbw
       refine ⟨_, RSetup.canon_some h.sOK hEw (habΔ.notPi hEw (by rw [hm]; simp)), ?_⟩
       rw [RSetup.subE_mode, RSetup.liftE_mode _ (by rw [hm]; simp), hm]; rfl
-  have hwrap := wrap_typed (pe := callPe Γ fn.params args) (base := base) hbody h.pe_lt hpw
+  have hwrap := wrap_typed (pe := callPe Γ fn.params args) (base := base) hbody (fun _ h => h) h.pe_lt hpw
     (fun p E hp hm d hd => (h.canon_rbq habΔ p E hp hm d hd).1)
     ((h.canon_dtq hΔd).mono fun _ h => h.1) ((h.canon_dbq hΔb).mono fun _ h => h.1) fn.params 0 h.wrapCond
   have hfz := StmtT.frozen (ξ := .none) (z := zOf fn args base) hwrap zN_sub

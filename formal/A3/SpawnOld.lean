@@ -325,7 +325,7 @@ theorem Redex.typed {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Pro
     hole, with the invariant there, types `r'` the same way, and `r'` has
     `r`'s spine, then the whole stays typed. -/
 theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog} {m : Mem} {r' : Stmt}
-    (hsp : r'.spine = r.spine)
+    (hsp : r'.spine = r.spine) (hkv : ∀ v ∈ r'.killVars, v ∈ r.killVars)
     (hhole : ∀ ξ Γ F Δ, StmtT P ξ Γ F r Δ → Inv m Γ F r → StmtT P ξ Γ F r' Δ) :
     ∀ ξ Γ F Δ, StmtT P ξ Γ F s Δ → Inv m Γ F s → StmtT P ξ Γ F (K r') Δ := by
   induction hR with
@@ -334,7 +334,7 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     intro ξ Γ F Δ ht hi
     generalize hS : Stmt.seq a b = S at ht hi
     induction ht with
-    | seq hb ha hb' _ _ => cases hS; exact StmtT.seq hb (ih hsp hhole _ _ _ _ ha hi.seqIn) hb'
+    | seq hb ha hb' _ _ => cases hS; exact StmtT.seq hb (ih hsp hkv hhole _ _ _ _ ha hi.seqIn) hb'
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
   | @scope x s r K _ ih =>
@@ -344,23 +344,24 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     | scope hxE hxF hs hpx _ =>
       cases hS
       obtain ⟨Ex, hx, hnrb⟩ := hxE
-      exact StmtT.scope ⟨Ex, hx, hnrb⟩ hxF (ih hsp hhole _ _ _ _ hs (hi.scopeIn hx hnrb)) hpx
+      exact StmtT.scope ⟨Ex, hx, hnrb⟩ hxF (ih hsp hkv hhole _ _ _ _ hs (hi.scopeIn hx hnrb)) hpx
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
-  | @rbind p s r K _ ih =>
+  | @rbind p s r K hR' ih =>
     intro ξ Γ F Δ ht hi
     generalize hS : Stmt.rbind p s = S at ht hi
     induction ht with
     | rbind hp hm hl hanch hpF hs hd _ =>
       cases hS
-      exact StmtT.rbind hp hm hl hanch hpF (ih hsp hhole _ _ _ _ hs (hi.rbindIn hp hanch)) hd
+      exact StmtT.rbind hp hm hl (by rw [hR'.eq] at hanch; exact hanch.anti (hR'.killVars_sub hkv)) hpF
+        (ih hsp hkv hhole _ _ _ _ hs (hi.rbindIn hp hanch)) hd
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
   | @frozen z s r K _ ih =>
     intro ξ Γ F Δ ht hi
     generalize hS : Stmt.frozen z s = S at ht hi
     induction ht with
-    | frozen hs hz _ => cases hS; exact StmtT.frozen (ih hsp hhole _ _ _ _ hs (hi.frozenIn hz)) hz
+    | frozen hs hz _ => cases hS; exact StmtT.frozen (ih hsp hkv hhole _ _ _ _ hs (hi.frozenIn hz)) hz
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
   | @catchR x m0 s r K h ih =>
@@ -370,7 +371,7 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     | catchR hxF hs hM hanch hKO hDS _ =>
       cases hS
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
-      exact StmtT.catchR hxF (ih hsp hhole _ _ _ _ hs hi.catchIn) hM hanch (by rw [hsp']; exact hKO)
+      exact StmtT.catchR hxF (ih hsp hkv hhole _ _ _ _ hs hi.catchIn) hM hanch (by rw [hsp']; exact hKO)
         (by rw [hsp']; exact hDS)
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
@@ -383,7 +384,7 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
       obtain ⟨Ex, tx, hx, hmo, hrest⟩ := hxE
       exact StmtT.scopeD ⟨Ex, tx, hx, hmo, hrest⟩ hxF
-        (ih hsp hhole _ _ _ _ hs ((Inv.scopeD_iff.mp hi).scopeIn hx (by rw [hmo]; simp))) hpx
+        (ih hsp hkv hhole _ _ _ _ hs ((Inv.scopeD_iff.mp hi).scopeIn hx (by rw [hmo]; simp))) hpx
         (by rw [hsp']; exact hKO) hWd hNd hΔd hself hfd
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
@@ -395,7 +396,7 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
       cases hS
       have hsp' : (K r').spine = s.spine := by rw [Redex.spine_eq h hsp, ← Redex.eq h]
       obtain ⟨Ex, hx, hnrb, hty, hdl⟩ := hxE
-      exact StmtT.scopeL ⟨Ex, hx, hnrb, hty, hdl⟩ hxF (ih hsp hhole _ _ _ _ hs (hi.scopeLIn hx hnrb)) hpx
+      exact StmtT.scopeL ⟨Ex, hx, hnrb, hty, hdl⟩ hxF (ih hsp hkv hhole _ _ _ _ hs (hi.scopeLIn hx hnrb)) hpx
         (by rw [hsp']; exact hKO) hWd hNd hfd
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
@@ -405,7 +406,7 @@ theorem Redex.plug {s r : Stmt} {K : Stmt → Stmt} (hR : Redex s K r) {P : Prog
     induction ht with
     | block hs _ =>
       cases hS
-      exact StmtT.block (ih hsp hhole _ _ _ _ hs (hi.respine rfl (fun v hv => hv) hi.catchOK hi.pinIn hi.dtorIn))
+      exact StmtT.block (ih hsp hkv hhole _ _ _ _ hs (hi.respine rfl (fun v hv => hv) hi.catchOK hi.pinIn hi.dtorIn))
     | sub hw _ ho ih0 => exact StmtT.sub hw (ih0 hS (hi.weaker hw)) ho
     | _ => cases hS
 
@@ -813,7 +814,11 @@ theorem spawner_ok {P : Prog} {spawn : Nat → Bool} (hP : ProgOK P) (hPc : Prog
     dropSeq_spine x _ rfl args
   have hsp' := hR.spine_eq hDsp
   -- the spawner's part, as A2 runs it: the moves, then `x := 0`
-  have ht' := hR.plug hDsp (spawn_hole hP hS hsp hf hmv.nodup) _ Γ F Δ ht hi
+  have ht' := hR.plug hDsp (fun v hv => by
+    rcases dropSeq_killVars args v hv with rfl | h | h
+    · simp [Stmt.killVars]
+    · simp [Stmt.killVars, h]
+    · simp [Stmt.killVars, Rhs.vars, Expr.vars] at h ⊢; rcases h with h | h <;> simp [h]) (spawn_hole hP hS hsp hf hmv.nodup) _ Γ F Δ ht hi
   have hi' : Inv m Γ F (K (dropSeq x args (.letv x (.expr (.lit 0)) k))) := by
     refine hi.respine hsp' (hR.vars_sub fun v hv => ?_) (hR.catchOK hDsp ?_ hi.catchOK)
       (hR.pinOK hDsp ?_ hi.pinIn) (hR.dtorPinOK hDsp ?_ hi.dtorIn) (hR.killVars_sub fun v hv => ?_)
@@ -874,7 +879,7 @@ theorem spawnFail_ok {P : Prog} {m : Mem} {s : Stmt} (hok : ThreadOK P m s) {K :
   subst hs
   have hsp : (Stmt.seq .panic (.letcall x f args k)).spine = (Stmt.letcall x f args k).spine := rfl
   have hsp' := hR.spine_eq hsp
-  have ht' := hR.plug hsp (fun _ Γ0 F0 Δ0 h0 hi0 =>
+  have ht' := hR.plug hsp (fun v h => by simpa [Stmt.killVars] using h) (fun _ Γ0 F0 Δ0 h0 hi0 =>
     StmtT.seq (letcall_src h0)
       (StmtT.panic hi0.wf hi0.names (fun _ => rfl) (fun _ E h => ⟨E, h, rfl, rfl, fun _ => rfl⟩)
         (DKeep.refl _ _) (DStay.refl _ _) id) h0) _ Γ F Δ ht hi

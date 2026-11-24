@@ -141,10 +141,11 @@ theorem StmtT.scope_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {s : Stm
 
 theorem StmtT.rbind_repl {P : Prog} {Γ : Ctx} {F : List Var} {p : Var} {s : Stmt} {Δ : Ctx}
     (ht : StmtT P ξ Γ F (.rbind p s) Δ) {s' : Stmt}
+    (hkv : s'.killVars = s.killVars)
     (hrep : ∀ {ξ' Γ' F' Δ'}, StmtT P ξ' Γ' F' s Δ' → StmtT P ξ' Γ' F' s' Δ') : StmtT P ξ Γ F (.rbind p s') Δ := by
   generalize hs : Stmt.rbind p s = s0 at ht
   induction ht with
-  | rbind hE hm hl ha hp hb hd _ => cases hs; exact .rbind hE hm hl ha hp (hrep hb) hd
+  | rbind hE hm hl ha hp hb hd _ => cases hs; exact .rbind hE hm hl (by rw [hkv]; exact ha) hp (hrep hb) hd
   | sub hw _ hd ih => exact .sub hw (ih hs) hd
   | _ => cases hs
 
@@ -216,7 +217,7 @@ theorem StmtT.ghost {P : Prog} {s s' : Stmt} (hg : GhostRel s s') :
   | seq _ _ ih => exact fun ht => StmtT.seq_repl ht ih
   | scope _ _ ih => exact fun ht => StmtT.scope_repl ht ih
   | scopeD _ _ hg ih => exact fun ht => StmtT.scopeD_repl ht hg.spine ih
-  | rbind _ _ ih => exact fun ht => StmtT.rbind_repl ht ih
+  | rbind _ hg ih => exact fun ht => StmtT.rbind_repl ht hg.killVars ih
   | frozen _ _ ih => exact fun ht => StmtT.frozen_repl ht ih
   | scopeL _ _ _ hg ih => exact fun ht => StmtT.scopeL_repl ht hg.spine ih
   | catchR _ hst hnv hnid hblk hal hg ih =>

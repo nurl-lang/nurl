@@ -107,7 +107,7 @@ theorem call_alone_refused (E : Entry) (Γ' : Ctx) : ¬ CallT P K [] 1 [1] E Γ'
   rcases CallT.thru h K_noRegion rfl f1_thru with hm | hc
   · have := callR_vv; rw [hm] at this; cases this
   · obtain ⟨hp, hl, hh⟩ := s2_hit
-    have := (hc.2.2.2 0 callR_vv).2.2.1 2 Es2 hp hl
+    have := (hc.2.2.2 0 callR_vv).2.2.2.2.1 2 Es2 hp hl
     rw [hh] at this; cases this
 
 /-! ### AGORA-937 stage 3a: the call's entry kill

@@ -2211,7 +2211,10 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       (∃ E, Γ x = some E ∧ E.mode ≠ .rootb) → x ∉ F → StmtT P (ξ.under x) Γ F s Δ → EndOK Δ x →
       StmtT P ξ Γ F (.scope x s) (exitScope x Δ)
   | rbind {Γ Δ : Ctx} {F : List Var} {p : Var} {s : Stmt} {E : Entry} :
-      Γ p = some E → E.mode = .rootb → E.live = true → Anchored E F → p ∉ F →
+      -- (AGORA-937, route U: a lent `Vec`'s held view may be anchored by a
+      -- root changed only inside its elements, none of the body's killable
+      -- names, `AnchoredS`)
+      Γ p = some E → E.mode = .rootb → E.live = true → AnchoredS Γ E F s.killVars → p ∉ F →
       StmtT P .none Γ F s Δ →
       -- what the borrowed binding may change by name is not lent, but stays
       -- bound for its scope: it is the caller's

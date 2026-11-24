@@ -1442,11 +1442,12 @@ theorem StmtT.wf {P : Prog} (hP : ProgOK P) {Γ : Ctx} {F : List Var} {s : Stmt}
       exact ⟨d, hd, rfl⟩
     have hdv' : d ∈ E.vdeps := by simp only [Entry.vdeps, hos, Bool.false_eq_true, ↓reduceIte]; exact hd
     by_cases hb : d.kind.bound = .none
-    · have hF := hroots d hdv' hb
-      refine ⟨fun e => hpF (e ▸ hF), ?_⟩
-      obtain ⟨Er, hEr, hro⟩ := h p E hp hl (Or.inr hm) d.root hdv
-      obtain ⟨E', h', hm'⟩ := hk.keepF d.root hF Er hEr
-      exact ⟨E', h', by rw [hm']; exact hro⟩
+    · rcases hroots d hdv' hb with hF | _
+      · refine ⟨fun e => hpF (e ▸ hF), ?_⟩
+        obtain ⟨Er, hEr, hro⟩ := h p E hp hl (Or.inr hm) d.root hdv
+        obtain ⟨E', h', hm'⟩ := hk.keepF d.root hF Er hEr
+        exact ⟨E', h', by rw [hm']; exact hro⟩
+      · sorry -- WIP scaffold (AGORA-937 B4, never merged): a held anchor, none of the body's killable names, stays bound (StmtT.keepKV, the twin of keepF)
     · exact hrr d hdv' hb
   | frozen _ _ ih => exact ih
   | @assign _ Γ Γ1 F x r Ex E hx _ hmodes hr _ hxd _ _ =>
