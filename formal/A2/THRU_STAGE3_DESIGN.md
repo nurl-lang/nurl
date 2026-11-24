@@ -1125,3 +1125,17 @@ Neither candidate is cheap. Choose by which consumers each serves:
 - (ii) serves the lift only, and still needs the dead-closure clause at the top level.
 
 So **(i) `CapsExcept` is the choice**, and (ii) is dropped.
+
+**Refined: `CapsLive` (supersedes `CapsExcept`'s fixed `D`).** The set left out is simply the dead bindings:
+
+    CapsLive m Γ w := ∀ v E o V, Γ v = some E → E.live → m.st v = some ⟨o, some V⟩ →
+      ValCapsInp V w ∧ (every node a view or handle inside V points at is ValCapsInp · w)
+
+plus blocks, which are free. The reasoning:
+- **Weakening keeps it.** Weakening can only end bindings, and it does not touch the store.
+- **The call can establish it from typing.** `MInv.held` (`NamesIn`) bounds a live value's package captures by its names, and what a live view reaches is named by its holder. So `CapsLive m Γ w` follows from "no LIVE entry holds a mutating name on `w`".
+  - That clause replaces `CallThruOK`'s "closure-typed bindings live".
+  - Unlike the old clause, it lifts: the outer frames' live entries depend only on bindings below the base.
+- **The consumer** (`CapInout`) calls a package in slot `c` of a `callc`, and its typing makes `c` live (`callT_recv_live`). So `Step.held_not_killVars` takes the statement's typing.
+
+What preservation needs is one typed read lemma: `RhsT` reads only live bindings' slots and the nodes their views and handles point at. Then come the `Preservation` sites, as for B2's `heldCaps`. This is the remaining work.
