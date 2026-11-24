@@ -21,7 +21,7 @@ theorem GhostRel.spine {s s' : Stmt} (h : GhostRel s s') : s'.spine = s.spine :=
   | rbind _ _ ih => simp only [Stmt.spine, ih]
   | frozen _ _ ih => simpa only [Stmt.spine] using ih
   | block _ ih => simpa only [Stmt.spine] using ih
-  | catchR _ _ _ _ _ _ _ ih => simpa only [Stmt.spine] using ih
+  | catchR _ _ _ _ _ _ ih => simpa only [Stmt.spine] using ih
   | scopeL _ _ _ _ ih => simp only [Stmt.spine, ih]
 
 theorem GhostRel.vars {s s' : Stmt} (h : GhostRel s s') : s'.vars = s.vars := by
@@ -33,7 +33,7 @@ theorem GhostRel.vars {s s' : Stmt} (h : GhostRel s s') : s'.vars = s.vars := by
   | rbind _ _ ih => simp only [Stmt.vars, ih]
   | frozen _ _ ih => simp only [Stmt.vars, ih]
   | block _ ih => simp only [Stmt.vars, ih]
-  | catchR _ _ _ _ _ _ _ ih => simp only [Stmt.vars, ih]
+  | catchR _ _ _ _ _ _ ih => simp only [Stmt.vars, ih]
   | scopeL _ _ _ _ ih => simp only [Stmt.vars, ih]
 
 theorem GhostRel.killVars {s s' : Stmt} (h : GhostRel s s') : s'.killVars = s.killVars := by
@@ -45,7 +45,7 @@ theorem GhostRel.killVars {s s' : Stmt} (h : GhostRel s s') : s'.killVars = s.ki
   | rbind _ _ ih => simp only [Stmt.killVars, ih]
   | frozen _ _ ih => simp only [Stmt.killVars, ih]
   | block _ ih => simp only [Stmt.killVars, ih]
-  | catchR _ _ _ _ _ _ _ ih => simp only [Stmt.killVars, ih]
+  | catchR _ _ _ _ _ _ ih => simp only [Stmt.killVars, ih]
   | scopeL _ _ _ _ ih => simp only [Stmt.killVars, ih]
 
 theorem GhostRel.codesOK {P : Prog} {s s' : Stmt} (h : GhostRel s s') (hc : s.codesOK P) :
@@ -58,7 +58,7 @@ theorem GhostRel.codesOK {P : Prog} {s s' : Stmt} (h : GhostRel s s') (hc : s.co
   | rbind _ _ ih => exact ih hc
   | frozen _ _ ih => exact ih hc
   | block _ ih => exact ih hc
-  | catchR _ _ _ _ _ _ _ ih => exact ih hc
+  | catchR _ _ _ _ _ _ ih => exact ih hc
   | scopeL _ _ _ _ ih => exact ih hc
 
 theorem GhostRel.catchOK {m : Mem} {s s' : Stmt} (h : GhostRel s s') (hc : CatchOK m s) :
@@ -90,7 +90,7 @@ theorem GhostRel.pinOK {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hp : PinOK 
   | rbind _ hg ih => exact ⟨fun E hE hm r hr => by rw [hg.spine]; exact hp.1 E hE hm r hr, ih hp.2⟩
   | frozen _ _ ih => exact ih hp
   | block _ ih => exact ih hp
-  | catchR _ _ _ _ _ _ _ ih => exact ih hp
+  | catchR _ _ _ _ _ _ ih => exact ih hp
   | scopeL _ _ _ _ ih => exact ih hp
 
 theorem GhostRel.dtorPinOK {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hp : DtorPinOK Γ s) :
@@ -105,7 +105,7 @@ theorem GhostRel.dtorPinOK {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hp : Dt
   | rbind _ hg ih => exact ⟨hin hg hp.1, ih hp.2⟩
   | frozen _ _ ih => exact ih hp
   | block _ ih => exact ih hp
-  | catchR _ _ _ _ _ _ _ ih => exact ih hp
+  | catchR _ _ _ _ _ _ ih => exact ih hp
   | scopeL _ _ _ hg ih => exact ⟨hin hg hp.1, ih hp.2⟩
 
 theorem GhostRel.closed {Γ : Ctx} {s s' : Stmt} (h : GhostRel s s') (hc : Closed Γ s) : Closed Γ s' :=
@@ -197,14 +197,14 @@ theorem StmtT.catchR_repl {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {m0 : M
     StmtT P ξ Γ F (.catchR x m0' s') Δ := by
   generalize hs : Stmt.catchR x m0 s = s0 at ht
   induction ht with
-  | catchR hx hb hmi hra hk hds hC _ =>
+  | catchR hx hb hmi hra hk hds _ =>
     cases hs
     have hst' : (m0'.set x ⟨false, some (.int 1)⟩).st = (m0.set x ⟨false, some (.int 1)⟩).st := by
       simp only [Mem.set, hst]
     have hmi' : MInv (m0'.set x ⟨false, some (.int 1)⟩) _ :=
       hmi.of_st hst' (heapOK_grow hmi.heap hst' hal (by simp only [Mem.set, hnid]; exact Nat.le_refl _) hblk)
         (by simp only [Mem.set, hnv]; exact Nat.le_refl _) hblk
-    refine .catchR hx ?_ hmi' hra (by rw [hsp]; exact hk) (by rw [hsp]; exact hds) (hC.of_st hst')
+    refine .catchR hx ?_ hmi' hra (by rw [hsp]; exact hk) (by rw [hsp]; exact hds)
     rw [hnv]; exact hrep hb
   | sub hw _ hd ih => exact .sub hw (ih hs) hd
   | _ => cases hs

@@ -1873,11 +1873,10 @@ structure Inv (m : Mem) (Γ : Ctx) (F : List Var) (s : Stmt) : Prop extends MInv
                 (E.ty ≠ .int ∨ E.mode = .rootb) → v ∉ s.spine → ∀ d ∈ E.vdeps,
                 d.kind.isName = false → d.root ∉ s.spine
   dtorIn    : DtorPinOK Γ s
-  /-- AGORA-937 B2 (AGORA-963): the closure-capture clause. -/
-  heldCaps  : HeldCapsInp m Γ s
 
-/-- The invariant from its fields, the closure-capture clause first. -/
-theorem Inv.mk₀ {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hcaps : HeldCapsInp m Γ s)
+/-- The invariant from its fields. (AGORA-937 B4: the closure-capture clause
+    is `HeldZ`, threaded beside it, `FrameClause.lean`.) -/
+theorem Inv.mk₀ {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt}
     (toMInv : MInv m Γ) (nvS : ∀ v ∈ s.vars, v < m.nv) (nvF : ∀ v ∈ F, v < m.nv)
     (anch : ∀ p E, Γ p = some E → E.mode = .rootb → p ∉ s.spine → AnchoredS Γ E F s.killVars)
     (spineNd : s.spine.Nodup) (spineDom : ∀ v ∈ s.spine, ∃ E, Γ v = some E) (catchOK : CatchOK m s)
@@ -1888,7 +1887,7 @@ theorem Inv.mk₀ {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hcaps : HeldCa
                 (E.ty ≠ .int ∨ E.mode = .rootb) → v ∉ s.spine → ∀ d ∈ E.vdeps,
                 d.kind.isName = false → d.root ∉ s.spine)
     (dtorIn : DtorPinOK Γ s) : Inv m Γ F s :=
-  ⟨toMInv, nvS, nvF, anch, spineNd, spineDom, catchOK, cover, pinOut, pinIn, dtorOut, dtorIn, hcaps⟩
+  ⟨toMInv, nvS, nvF, anch, spineNd, spineDom, catchOK, cover, pinOut, pinIn, dtorOut, dtorIn⟩
 
 /-- Agora #755: `StmtT.withLock`'s `hna` where the payload owns no destructor
     value (its type is known) or the body assigns nothing to the binding. -/
@@ -2403,9 +2402,6 @@ inductive StmtT (P : Prog) : Exits → Ctx → List Var → Stmt → Ctx → Pro
       -- other than `x` that holds no views)
       (RootbAnchS Δ F [x]) →
       KeepOut Γ Δ s.spine → DStay Γ Δ s.spine →
-      -- (AGORA-937 B4: the frame's end, whose slots are the frame's start's,
-      -- keeps the closure-capture clause at a held root: the frame starts so)
-      HeldCapsInp (m0.set x ⟨false, some (.int 1)⟩) Δ .skip →
       StmtT P ξ Γ F (.catchR x m0 s) Δ
   /-- A2-drop: a binding that runs a destructor at its end: of a destructor
       type (armed when the type holds views, A2-drop.2), or of a `Vec` of

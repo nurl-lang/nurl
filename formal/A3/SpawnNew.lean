@@ -303,7 +303,6 @@ theorem newThread_inv {P : Prog} {fn : Fn} (hok : FnOK P fn)
       · exact hvars v hv
     nvF := fun v hv => by cases hv
     anch := fun p E hp hm => absurd hm (hrb p E hp)
-    heldCaps := fun p E hp hm => absurd hm (hrb p E hp)
     spineNd := by
       rw [newThread_spine hsrc]
       refine List.nodup_append.mpr ⟨wrapSpine_nodup _ _ _,

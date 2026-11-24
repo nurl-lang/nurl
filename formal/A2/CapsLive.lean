@@ -1307,7 +1307,7 @@ theorem StmtT.headCallc_live {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {
   | scope _ _ _ _ ih => exact ih
   | rbind _ _ _ _ _ _ _ ih => exact ih
   | frozen _ _ ih => exact ih
-  | catchR _ _ _ _ _ _ _ ih => exact ih
+  | catchR _ _ _ _ _ _ ih => exact ih
   | scopeD _ _ _ _ _ _ _ _ _ _ ih => exact ih
   | scopeL _ _ _ _ _ _ _ _ ih => exact ih
   | block _ ih => exact ih

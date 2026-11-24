@@ -904,7 +904,7 @@ theorem progress {P : Prog}
   | callcE _ hx _ hc htc hcan _ hj hσ hsp _ _ _ _ _ hcT _ _ _ _ _ =>
     intro m hcd hi
     exact Or.inr <| Or.inr <| Or.inr (hhand hx hc htc hcan hj hσ hsp hcT hcd hi)
-  | @catchR _ Γ Δ F x m0 s _ hsB hM _ hKO _ _ ih =>
+  | @catchR _ Γ Δ F x m0 s _ hsB hM _ hKO _ ih =>
     intro m hcd hi
     rcases ih hcd hi.catchIn with rfl | hbl | ⟨n, e, hex⟩ | ⟨r, hr⟩
     · exact Or.inr <| Or.inr <| Or.inr ⟨_, Step.catchSkip⟩

@@ -27,7 +27,7 @@ theorem StmtT.mono {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {s : Stmt} 
   | letrec a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 ih0 => intro ξ' hξ; exact StmtT.letrec a0 a1 a2 a3 a4 a5 a6 a7 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a9
   | unpair a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 a16 a17 ih0 => intro ξ' hξ; exact StmtT.unpair a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a12 a13 a14 a15 a16 a17
   | callc a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 ih0 => intro ξ' hξ; exact StmtT.callc a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 (ih0 (fun _ _ h => ⟨h.1, hξ _ _ h.2⟩)) a12 a13
-  | catchR a0 a1 a2 a3 a4 a5 a6 ih0 => intro ξ' hξ; exact StmtT.catchR a0 a1 a2 a3 a4 a5 a6
+  | catchR a0 a1 a2 a3 a4 a5 ih0 => intro ξ' hξ; exact StmtT.catchR a0 a1 a2 a3 a4 a5
   | letd a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 ih0 => intro ξ' hξ; exact StmtT.letd a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 (ih0 (fun _ _ h => ⟨h.1, h.2.1, hξ _ _ h.2.2⟩)) a11 a12
   | withLock a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 ih0 => intro ξ' hξ; exact StmtT.withLock a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11
   | scopeL a0 a1 a2 a3 a4 a5 a6 a7 ih0 => intro ξ' hξ; exact StmtT.scopeL a0 a1 a2 a3 a4 a5 a6 a7
@@ -392,8 +392,7 @@ theorem Inv.seqIn {m : Mem} {Γ : Ctx} {F : List Var} {a b : Stmt} (hi : Inv m �
     pinOut := hi.pinOut
     pinIn := hi.pinIn
     dtorOut := hi.dtorOut
-    dtorIn := hi.dtorIn
-    heldCaps := hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv }
+    dtorIn := hi.dtorIn }
 
 theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex : Entry}
     (hi : Inv m Γ F (.scope x k)) (hx : Γ x = some Ex) (hnrb : Ex.mode ≠ .rootb) : Inv m Γ F k :=
@@ -418,11 +417,7 @@ theorem Inv.scopeIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {k : Stmt} {Ex
       · subst hvx; exact hi.dtorIn.1 E hv hd hos hn d hdd hnm hdk
       · exact hi.dtorOut v E hv hd hos hn (by simp [Stmt.spine, hvx, hvs]) d hdd hnm
           (by simp [Stmt.spine, hdk])
-    dtorIn := hi.dtorIn.2
-    heldCaps := fun p E hp hm hps => hi.heldCaps p E hp hm (by
-      simp only [Stmt.spine, List.mem_cons, not_or]
-      refine ⟨fun h => ?_, hps⟩
-      subst h; rw [hx] at hp; cases hp; exact hnrb hm) }
+    dtorIn := hi.dtorIn.2 }
 
 theorem Inv.scopeLIn {m : Mem} {Γ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x : Var} {s : Stmt} {Ex : Entry}
     (hi : Inv m Γ F (.scopeL k t x s)) (hx : Γ x = some Ex) (hnrb : Ex.mode ≠ .rootb) : Inv m Γ F s :=
@@ -447,11 +442,7 @@ theorem Inv.scopeLIn {m : Mem} {Γ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x :
       · subst hvx; exact hi.dtorIn.1 E hv hd hos hn d hdd hnm hdk
       · exact hi.dtorOut v E hv hd hos hn (by simp [Stmt.spine, hvx, hvs]) d hdd hnm
           (by simp [Stmt.spine, hdk])
-    dtorIn := hi.dtorIn.2
-    heldCaps := fun p E hp hm hps => hi.heldCaps p E hp hm (by
-      simp only [Stmt.spine, List.mem_cons, not_or]
-      refine ⟨fun h => ?_, hps⟩
-      subst h; rw [hx] at hp; cases hp; exact hnrb hm) }
+    dtorIn := hi.dtorIn.2 }
 
 /-- A destructor scope binds, names and catches as a plain scope does, and
     the invariant reads a statement only through those. -/
@@ -474,8 +465,7 @@ theorem Inv.scopeD_iff {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {f : Nat} {
       dtorOut := fun v E hv hd hos hn hvs d hdd hnm => by
         have := hi.dtorOut v E hv hd hos hn (by simpa [Stmt.spine] using hvs) d hdd hnm
         simpa [Stmt.spine] using this
-      dtorIn := hi.dtorIn
-      heldCaps := hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv }
+      dtorIn := hi.dtorIn }
 
 /-- Agora #803: so does a lock scope (its check-out's frame may become a
     destructor frame, `Step.scopeLPD`). -/
@@ -498,8 +488,7 @@ theorem Inv.scopeL_iff {m : Mem} {Γ : Ctx} {F : List Var} {k : Nat} {t : Ty} {x
       dtorOut := fun v E hv hd hos hn hvs d hdd hnm => by
         have := hi.dtorOut v E hv hd hos hn (by simpa [Stmt.spine] using hvs) d hdd hnm
         simpa [Stmt.spine] using this
-      dtorIn := hi.dtorIn
-      heldCaps := hi.heldCaps.respine fun v hv => by simpa [Stmt.spine] using hv }
+      dtorIn := hi.dtorIn }
 
 theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep : Entry}
     (hi : Inv m Γ F (.rbind p k)) (hp : Γ p = some Ep) (hroots : AnchoredS Γ Ep F (p :: k.killVars)) :
@@ -526,13 +515,7 @@ theorem Inv.rbindIn {m : Mem} {Γ : Ctx} {F : List Var} {p : Var} {k : Stmt} {Ep
       · subst hvp; exact hi.dtorIn.1 E hv hd hos hn d hdd hnm hdk
       · exact hi.dtorOut v E hv hd hos hn (by simp [Stmt.spine, hvp, hvs]) d hdd hnm
           (by simp [Stmt.spine, hdk])
-    dtorIn := hi.dtorIn.2
-    -- (the bound parameter's anchors are lent out: it has no held one outside `F`)
-    heldCaps := fun q E hq hmq hqs d hd hb hh => by
-      by_cases hqp : q = p
-      · subst hqp; rw [hp] at hq; cases hq
-        sorry -- WIP scaffold (AGORA-937 B4, never merged): a running `rbind`'s held anchor
-      · exact hi.heldCaps q E hq hmq (by simp [Stmt.spine, hqp, hqs]) d hd hb hh }
+    dtorIn := hi.dtorIn.2 }
 
 theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z z' : List Var} {k : Stmt} (hi : Inv m Γ F (.frozen z k))
     (hz : ∀ v ∈ z', v ∈ z) : Inv m Γ (F ++ z') k :=
@@ -551,9 +534,7 @@ theorem Inv.frozenIn {m : Mem} {Γ : Ctx} {F z z' : List Var} {k : Stmt} (hi : I
     pinOut := hi.pinOut
     pinIn := hi.pinIn
     dtorOut := hi.dtorOut
-    dtorIn := hi.dtorIn
-    heldCaps := hi.heldCaps.respine fun v hv => by
-      simpa [Stmt.spine] using hv }
+    dtorIn := hi.dtorIn }
 
 
 /-- A run-time scope never binds what is lent out. -/
@@ -575,7 +556,7 @@ theorem StmtT.spine_F {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx}
     · exact hpF
     · exact ih v hv
   | frozen _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
-  | catchR _ _ _ _ _ _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
+  | catchR _ _ _ _ _ _ ih => exact fun v hv hF => ih v hv (List.mem_append_left _ hF)
   | scopeD _ hxF _ _ _ _ _ _ _ _ ih =>
     intro v hv
     simp only [Stmt.spine, List.mem_cons] at hv
@@ -610,9 +591,7 @@ theorem Inv.catchIn {m : Mem} {Γ : Ctx} {F : List Var} {x : Var} {m0 : Mem} {k 
     pinOut := hi.pinOut
     pinIn := hi.pinIn
     dtorOut := hi.dtorOut
-    dtorIn := hi.dtorIn
-    heldCaps := hi.heldCaps.respine fun v hv => by
-      simpa [Stmt.spine] using hv }
+    dtorIn := hi.dtorIn }
 
 /-! ### A2-drop.2: typing gives no `letd` binding a new view
 
@@ -941,7 +920,7 @@ theorem StmtT.dkeep {P : Prog} {Γ : Ctx} {F : List Var} {s : Stmt} {Δ : Ctx} (
   | callcE hk _ _ _ _ _ _ _ _ _ _ _ _ _ _ hc _ _ _ _ ih =>
     exact fun _ _ => DKeep.bind (((DKeep.refl _ []).kill _ _ _).trans hc.dkeep fun _ h => h)
       (((DKeep.refl _ []).kill _ _ _).trans (DKeep.of_src hk ih) fun _ h => h)
-  | catchR _ _ _ _ _ _ _ ih => exact ih
+  | catchR _ _ _ _ _ _ ih => exact ih
   | letd hs _ _ hr _ _ _ _ _ _ _ _ _ ih => exact fun _ _ => DKeep.bind hr.dkeep (DKeep.of_src hs ih)
   | @scopeD _ Γ Δ F x f k _ _ _ _ _ _ _ _ _ _ ih =>
     intro ho hp

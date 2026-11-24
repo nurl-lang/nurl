@@ -1,4 +1,5 @@
 import A2.CallMem
+import A2.FrameCall
 import A2.KillVarsStep
 import A2.SrcKeep
 import A2.CapsLive
@@ -378,28 +379,6 @@ theorem inv (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hi : Inv m �
       rw [← hρ]
       show ∃ E, (callS Γ F fn args m.nv x).canon (sigCtx fn) ((callS Γ F fn args m.nv x).ρ k') = some E
       exact ⟨_, h.canon_sigR (sigCtx_of hk') (Nat.le_of_lt (lt_of_get hk'))⟩
-  -- (AGORA-963 step 3: a borrowed parameter outside the call's scopes is the
-  -- caller's, as the call left it; the store binds the parameters to the
-  -- arguments' values, `BindParams.capsInp`, and the result slots to nothing)
-  heldCaps p E hp hrb hns d hd hb' hh := by
-    rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
-        ⟨k', b', t, hk', rfl, hc⟩ | ⟨hy', hyx, hc⟩ | ⟨hc, v, hv, rfl⟩ <;> rw [hc] at hp <;> (try cases hp)
-    · exact absurd hrb (resMode_ne' fn)
-    · exact absurd hrb (resMode_ne' fn)
-    · exfalso; apply hns
-      rw [callStmt_spine]
-      exact List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_append_left _
-        (mem_wrapSpine_of hk' (fun b h => by cases h))))
-    · cases hrb
-    · cases hrb
-    · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp
-      rw [clean_mode] at hrb
-      obtain ⟨E0, h0, hm⟩ := h.postdm.2 p E1' h1'
-      have := h.post_rootb h0 (hm ▸ hrb)
-      rw [h1'] at this; cases this
-      rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)] at hd hh
-      exact h.liveCaps hi.toMInv hb (hi.heldCaps p E1' h0 hrb (by simp [Stmt.spine]) d hd hb' hh)
-
 theorem keep (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} :
     Keep Γ ((callS Γ F fn args m.nv x).canon (sigCtx fn)) (.letcall x f args k) (callStmt fn args m.nv x k) := by
   have hdt : DomTy Γ (callPost Γ fn args) := h.postdt
@@ -762,7 +741,7 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
         (ValCapsInp.int _ _) (fun c hc => by cases hc)).of_st (by show ((m.set x ⟨fn.resOwn, none⟩).set x _).st = _; rw [Mem.set_set])
     have hcatch : StmtT P (ξ.under x) ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) F (.catchR x m0 (callIn fn [] m.nv x))
         (setE Γ x (callRes Γ fn [])) :=
-      StmtT.catchR hxF hIn hM hanchΔ hKO hDS hC
+      StmtT.catchR hxF hIn hM hanchΔ hKO hDS
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF
       (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
     refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, fun _ bl hk _ => ⟨bl, hk, BlkKeep.refl bl⟩,

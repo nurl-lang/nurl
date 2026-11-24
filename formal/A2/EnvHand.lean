@@ -2541,19 +2541,7 @@ theorem handCaseD {P : Prog} (hP : ProgOK P) {Γ Γ1 : Ctx} {F : List Var} {x c 
   refine ⟨handCtx Γ c x Ec te0 m.nv (callX fn0), hT, ?_, by simp [handMem], ?_, ?_⟩
   · -- (AGORA-963 step 3: the package moved out, its environment bound fresh, a
     -- part of it; the result slot empty)
-    refine Inv.mk₀ (hi.heldCaps_step (fun p E' hp hm _ => ⟨hrbΓ p E' hp hm, by simp [Stmt.spine]⟩)
-        (fun w _ hcw => by
-          -- (AGORA-937 B4: the live package moves out, its environment, which
-          -- holds no handle, into the fresh owned slot: `LiveCaps.hand`)
-          have hcn : c < m.nv := hi.nvSt c (by rw [← hi.dom, hc]; rfl)
-          have hcy : c ≠ m.nv := fun e => by rw [e] at hcn; exact Nat.lt_irrefl _ hcn
-          have hcx : c ≠ x := fun e => by rw [e, hx] at hc; cases hc
-          exact (hcw.hand (o := _) hc hlc hslot0 (Sub.pkg (Sub.refl _))
-            (fun c' hc' => hm1.slot_no_href (x := m.nv) (by simp [handMem, Mem.set, upd, Ne.symm hxy, hcy]) hc')
-            (fun u E1 huc huy hux h1 hl1 => by
-              simp only [handCtx, setE, upd_ne _ _ huc, upd_ne _ _ huy, upd_ne _ _ hux] at h1
-              exact LiveBack.kill Γ _ _ _ u E1 h1 hl1) hcy hcx hxy).of_st rfl))
-      hm1 (fun v hv => ?_) (fun v hv => ?_) (fun p E' hp hm _ => ?_) (by rw [hspine]; simp [hxy])
+    refine Inv.mk₀ hm1 (fun v hv => ?_) (fun v hv => ?_) (fun p E' hp hm _ => ?_) (by rw [hspine]; simp [hxy])
       (fun v hv => ?_) (by simp [handStmtD, CatchOK]) ?_
       (pinOut_fresh hi.toMInv (fun p E' hp hm => ⟨E', hrbΓ p E' hp hm, hm, rfl⟩)
         (fun v hv => by rw [hspine] at hv; simp only [List.mem_cons, List.not_mem_nil, or_false] at hv
@@ -2800,19 +2788,7 @@ theorem handCase {P : Prog} (hP : ProgOK P) : HandCase P := by
     refine ⟨handCtx Γ c x Ec te0 m.nv (callX fn0), hT, ?_, by simp [handMem], ?_, ?_⟩
     · -- (AGORA-963 step 3: the package moved out, its environment bound fresh, a
       -- part of it; the result slot empty)
-      refine Inv.mk₀ (hi.heldCaps_step (fun p E' hp hm _ => ⟨hrbΓ p E' hp hm, by simp [Stmt.spine]⟩)
-          (fun w _ hcw => by
-          -- (AGORA-937 B4: the live package moves out, its environment, which
-          -- holds no handle, into the fresh owned slot: `LiveCaps.hand`)
-          have hcn : c < m.nv := hi.nvSt c (by rw [← hi.dom, hc]; rfl)
-          have hcy : c ≠ m.nv := fun e => by rw [e] at hcn; exact Nat.lt_irrefl _ hcn
-          have hcx : c ≠ x := fun e => by rw [e, hx] at hc; cases hc
-          exact (hcw.hand (o := _) hc hlc hslot0 (Sub.pkg (Sub.refl _))
-            (fun c' hc' => hm1.slot_no_href (x := m.nv) (by simp [handMem, Mem.set, upd, Ne.symm hxy, hcy]) hc')
-            (fun u E1 huc huy hux h1 hl1 => by
-              simp only [handCtx, setE, upd_ne _ _ huc, upd_ne _ _ huy, upd_ne _ _ hux] at h1
-              exact LiveBack.kill Γ _ _ _ u E1 h1 hl1) hcy hcx hxy).of_st rfl))
-        hm1 (fun v hv => ?_) (fun v hv => ?_) (fun p E' hp hm _ => ?_) (by rw [hspine]; simp [hxy])
+      refine Inv.mk₀ hm1 (fun v hv => ?_) (fun v hv => ?_) (fun p E' hp hm _ => ?_) (by rw [hspine]; simp [hxy])
         (fun v hv => ?_) (by simp [handStmt, CatchOK]) ?_
         (pinOut_fresh hi.toMInv (fun p E' hp hm => ⟨E', hrbΓ p E' hp hm, hm, rfl⟩)
           (fun v hv => by rw [hspine] at hv; simp only [List.mem_cons, List.not_mem_nil, or_false] at hv
