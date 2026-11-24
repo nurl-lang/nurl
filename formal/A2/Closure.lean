@@ -735,9 +735,11 @@ theorem Inv.clean {m : Mem} {Γ : Ctx} {F : List Var} {s : Stmt} (hi : Inv m Γ 
       obtain ⟨E0, h0, rfl⟩ := cleanC_some hv
       rw [Entry.clean_dbind] at hd; rw [clean_mode] at hos; rw [clean_ty, clean_mode] at hn
       exact ⟨E0, h0, hd, hos, hn, fun d hdd _ => Entry.clean_vdeps_sub hdd⟩ 
-    heldCaps := hi.heldCaps.of_rootb fun p E hp hm => by
+    heldCaps := hi.heldCaps.of_rootb (fun p E hp hm => by
         obtain ⟨E0, h0, rfl⟩ := cleanC_some hp
-        rw [clean_mode] at hm; rw [clean_rootb hm]; exact h0 }
+        rw [clean_mode] at hm; rw [clean_rootb hm]; exact h0) fun v E1 h hl => by
+      obtain ⟨E0, h0, rfl⟩ := cleanC_some h
+      exact ⟨E0, h0, by rwa [clean_live] at hl⟩ }
 
 theorem derive_clean_sub (y : Var) (E : Entry) (k : Kind) : derive y E.clean k ⊆ derive y E k := by
   unfold derive; rw [clean_mode, clean_ty]
@@ -2875,6 +2877,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
       | cons p0 rest => rw [h] at hhd; simp at hhd; exact ⟨rest, by rw [hhd]⟩
     have hps : fn.params = (.inp, te) :: rest ++ cs.map (·.2) := by rw [hps0, hsp]; rfl
     have hlc := callT_recv_live hcT hc
+    have hcR : Γ c = some Ec := hc
     have hnint : Ec.ty ≠ .int := fun h => by rw [h] at htc; cases htc
     obtain ⟨_, _, _, _, _, _, hlends, hrholds, _, _⟩ := hP fn (List.mem_of_getElem? hf)
     obtain ⟨_, _, _, _, _, _, hslends, hsrholds, hsouts, _⟩ := hP sig (List.mem_of_getElem? hσ)
@@ -2980,7 +2983,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
             have hrlt : d.root < m.nv := hlt _ _ hEr
             have hrne : d.root ≠ m.nv := fun e => by rw [e] at hrlt; exact Nat.lt_irrefl _ hrlt
             have hinp : ∀ q ∈ cs, q.1 = d.root → q.2.1 = .inp :=
-              (hi.heldCaps p E0 h0 hm (by simp [Stmt.spine]) d hd hb hha hdF).1 c o _ hslot fs te _ env cs (Sub.refl _)
+              ((hi.heldCaps p E0 h0 hm (by simp [Stmt.spine]) d hd hb hha) c Ec o _ hcR hlc hslot).1 fs te _ env cs (Sub.refl _)
             obtain ⟨sig', hσ', hlen', _, hnf, _⟩ := hcT
             rw [hσ] at hσ'; cases hσ'
             have hzr : zs.length = rest.length := by rw [hsp] at hlen'; simpa using hlen'
@@ -3044,7 +3047,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
         -- (AGORA-963 step 3: the environment's binding holds no held anchor; any
         -- other borrowed parameter is the caller's; the store lends the
         -- package's environment, a part of it, to the fresh binding)
-        heldCaps := fun p E hp hm _ d hd hb' hh hF => by
+        heldCaps := fun p E hp hm _ d hd hb' hh => by
           by_cases hpe : p = m.nv
           · subst hpe; simp only [Γe, setE, upd_same, Option.some.injEq] at hp; subst hp
             exact absurd hh envE_not_heldAnch
@@ -3053,9 +3056,17 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
             rw [clean_mode] at hm
             rw [clean_rootb hm] at hd hh
             have hcw := hi.heldCaps p E0 h0 hm (by simp [Stmt.spine]) d hd hb' hh
-              (fun h => hF (List.mem_append_left _ h))
-            exact (hcw.set (x := m.nv) (o := false) (fun V e => by
-              cases e; exact ((hcw.slot hslot).child Child.pkg).lend)).of_st rfl }
+            -- (the fresh binding borrows the live receiver's environment: clean,
+            -- and its handles reach what the receiver's do)
+            have hEv : ValCapsInp (lendOf env) d.root := ((hcw.val hcR hlc hslot).child Child.pkg).lend
+            exact (hcw.setG (y := m.nv) (o := false) (fun u E1 hu h1 hl1 => by
+                simp only [Γe, setE, upd_ne _ _ hu] at h1
+                obtain ⟨E0, h0, rfl⟩ := cleanC_some h1
+                exact ⟨E0, h0, by rwa [clean_live] at hl1⟩)
+              (fun V e => by
+                cases e
+                exact ⟨fun n hn => hEv.sub hn, fun c' hc' =>
+                  hcw.partTgt hi.toMInv hcR hlc hslot (Sub.pkg (Sub.refl _)) hc'⟩)).of_st rfl }
     have h := callH_of hP hf hxe' hxF' hcT' hIe
     have hI := h.inv hIe hb
     -- the environment's binding, where the call leaves it
@@ -3298,7 +3309,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
                   have hrz : d.root ∉ zs := fun e => hnk (by simp [Stmt.killVars, e])
                   have hrk : d.root ∉ k.killVars := fun e => hnk (by simp [Stmt.killVars, e])
                   have hinp : ∀ q ∈ cs, q.1 = d.root → q.2.1 = .inp :=
-                    (hi.heldCaps p E0' h0' hm (by simp [Stmt.spine]) d hd hb hha hdF).1 c o _ hslot fs te _ env cs (Sub.refl _)
+                    ((hi.heldCaps p E0' h0' hm (by simp [Stmt.spine]) d hd hb hha) c Ec o _ hcR hlc hslot).1 fs te _ env cs (Sub.refl _)
                   -- it is at no `inout` parameter of the opened call
                   have hnio : ∀ (i : Nat) (b : Eff) (t : Ty), fn.params[i]? = some (PMode.inout b, t) →
                       (m.nv :: zs ++ cs.map (·.1))[i]? ≠ some d.root := by
@@ -3442,7 +3453,7 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
               -- (AGORA-963 step 3: a borrowed parameter outside the call is the
               -- caller's, as the call left it; the store lends the environment,
               -- then binds the parameters, `BindParams.capsInp`)
-              heldCaps := fun p Ep hp hm hs d hd hb' hh hF => by
+              heldCaps := fun p Ep hp hm hs d hd hb' hh => by
                 have hs' : p ≠ m.nv ∧ p ∉ (callStmt fn (m.nv :: zs ++ cs.map (·.1)) (m.nv + 1) x k).spine := by
                   refine ⟨fun e => hs ((hssp p).mpr (Or.inl e)), fun h' => hs ((hssp p).mpr (Or.inr h'))⟩
                 rcases h.ctx_cases p with ⟨rfl, hc⟩ | ⟨rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ | ⟨k', t, hk', rfl, hc⟩ |
@@ -3465,11 +3476,19 @@ theorem cloCase {P : Prog} (hP : ProgOK P) : CloCase P := by
                   obtain ⟨E2, h2, rfl⟩ := cleanC_some h0
                   rw [clean_mode] at hm
                   rw [clean_rootb hm] at hd hh
-                  have hcw := hi.heldCaps p E2 h2 hm (by simp [Stmt.spine]) d hd hb' hh hF
-                  have he : CapsInpAt (envMem m env) d.root :=
-                    (hcw.set (x := m.nv) (o := false) (fun V e => by
-                      cases e; exact ((hcw.slot hslot).child Child.pkg).lend)).of_st rfl
-                  exact (((hb.capsInp he).set_none _ _).set_none _ _).of_st rfl }
+                  have hcw := hi.heldCaps p E2 h2 hm (by simp [Stmt.spine]) d hd hb' hh
+                  -- (the environment lent to the fresh binding, then the call's frame)
+                  have hEv : ValCapsInp (lendOf env) d.root := ((hcw.val hcR hlc hslot).child Child.pkg).lend
+                  have he : LiveCaps (envMem m env) Γe d.root :=
+                    (hcw.setG (y := m.nv) (o := false) (fun u E1 hu h1 hl1 => by
+                        simp only [Γe, setE, upd_ne _ _ hu] at h1
+                        obtain ⟨E0, h0, rfl⟩ := cleanC_some h1
+                        exact ⟨E0, h0, by rwa [clean_live] at hl1⟩)
+                      (fun V e => by
+                        cases e
+                        exact ⟨fun n hn => hEv.sub hn, fun c' hc' =>
+                          hcw.partTgt hi.toMInv hcR hlc hslot (Sub.pkg (Sub.refl _)) hc'⟩)).of_st rfl
+                  exact h.liveCaps hIe.toMInv hb he }
     · have hve : v ≠ m.nv := fun e => by rw [e, hΓe0] at hv; cases hv
       have hv' : Γe v = some E.clean := by simp only [Γe, setE, upd_ne _ _ hve]; exact cleanC_of hv
       obtain ⟨hns, E', h', hm', ht', hrb'⟩ := hkeep.1 v E.clean hv' (by simp [Stmt.spine])
