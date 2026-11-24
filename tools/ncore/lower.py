@@ -28,7 +28,7 @@ SCALARS = {"i", "u", "f", "b", "i8", "i16", "i32", "u16", "u32", "u64", "f32",
 
 class Var:
     __slots__ = ("id", "name", "ty", "kind", "line", "depth", "mut", "blk", "byref", "carried",
-                 "handon", "slot", "cpcopy", "taken", "agglend", "envown")
+                 "handon", "slot", "cpcopy", "taken", "agglend", "envown", "unlinked")
 
     def __init__(self, vid, name, ty, kind, line, depth):
         self.id, self.name, self.ty, self.kind, self.line, self.depth = vid, name, ty, kind, line, depth
@@ -38,6 +38,7 @@ class Var:
         self.carried = False  # a temporary of a join's arm that lives to the end of the join's statement
         self.handon = False   # the literal a `\` try hands its failure on in (nurlc's IR only)
         self.slot = False     # a call's option temporary whose payload codegen takes out of its slot (nurlc's IR only)
+        self.unlinked = False  # a binding of a call's result codegen linked to no owner (nurlc's IR only, AGORA-1005)
         self.cpcopy = False   # a value codegen copied into a by-pointer capture where its call lent (nurlc's IR only, agora #884)
         self.taken = False    # a capture the closure's env takes over (nurlc's IR only: capture flag 4, agora #868, #887)
         self.agglend = False  # a returned literal codegen built without copying a field it was given lent (nurlc's IR only, agora #907)
