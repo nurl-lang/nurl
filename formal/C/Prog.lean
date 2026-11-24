@@ -160,4 +160,13 @@ theorem checked_program_safe {P : Prog} {certs : Nat → Cert} (hP : progOKB P c
     (hr : Steps P (emptyMem nv) s (.ok m' s')) : ¬ Stuck P m' s' :=
   checkedC_memory_safe (progOKB_sound hP) hc hs hv hr
 
+/-- As `checked_program_safe`, with the entry statement checked over its
+    variables listed once: a join compares the arms once per slot, not once
+    per mention (github#2242's review). -/
+theorem checked_program_safe_dedup {P : Prog} {certs : Nat → Cert} (hP : progOKB P certs = true)
+    {s : Stmt} {c : Cert} {Δ : Ctx} (hc : checkC P s.vars.eraseDups c (fun _ => none) [] s = some Δ)
+    (hs : s.src = true) {nv : Nat} (hv : ∀ v ∈ s.vars, v < nv) {m' : Mem} {s' : Stmt}
+    (hr : Steps P (emptyMem nv) s (.ok m' s')) : ¬ Stuck P m' s' :=
+  checkedC_memory_safe_dedup (progOKB_sound hP) hc hs hv hr
+
 end C

@@ -1024,6 +1024,7 @@ import D
 #print axioms C.progOKAux_mem
 #print axioms C.checkedS_memory_safe_dedup
 #print axioms C.checkedC_memory_safe_dedup
+#print axioms C.checked_program_safe_dedup
 #print axioms C.joinTbl_supported
 #print axioms C.capOKB_held
 #print axioms C.unpairTyB_some
