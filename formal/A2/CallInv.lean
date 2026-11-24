@@ -770,7 +770,7 @@ theorem CallH.heldZ (h : CallH P Γ F x fn args m.nv) {f : Nat} {k : Stmt} (hk :
 
 /-- The call case of preservation. -/
 theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
-  intro ξ Γ F x f args k E Γ1 Δ m m' s' hk hx hxF hc hkT hpx hi hst hnr
+  intro ξ Γ F x f args k E Γ1 Δ m m' s' hk hx hxF hc hkT hpx hi hst hnr Z hz
   cases hst with
   | reap hrs hrk _ => exact absurd ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | letcall hf hmx hb =>
@@ -780,7 +780,8 @@ theorem callCase {P : Prog} (hP : ProgOK P) : CallCase P := by
     have hc' : CallT P Γ F f args (callRes Γ fn args) (callPost Γ fn args) :=
       ⟨fn, hf, hlen, hargs, hnf, hds, rfl, rfl, hg⟩
     have h := callH_of hP hf hx hxF hc' hi
-    exact ⟨_, h.typed (StmtT.ctxRel hP) hk hkT hpx, h.inv hi hb, Nat.le_add_right _ _, h.keep, h.frz hi.toMInv hb⟩
+    exact ⟨_, h.typed (StmtT.ctxRel hP) hk hkT hpx, h.inv hi hb, Nat.le_add_right _ _, h.keep, h.frz hi.toMInv hb,
+      _, h.heldZ hk hi hb hz, fun p E hp _ => by simp [Nat.not_le.mpr (h.domlt p E hp)]⟩
 
 
 /-! ### `recover`: a call of a function without parameters, in a `recover` frame -/
@@ -804,7 +805,7 @@ theorem CallH.widen {P : Prog} {Γ : Ctx} {F : List Var} {x : Var} {fn : Fn} {ba
 
 /-- The `recover` case of preservation. -/
 theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
-  intro ξ Γ F x f k E fn Γ1 Δ m m' s' hk hx hxF hf hp hty ho hc hkT hpx hi hst hnr
+  intro ξ Γ F x f k E fn Γ1 Δ m m' s' hk hx hxF hf hp hty ho hc hkT hpx hi hst hnr Z hz
   cases hst with
   | reap hrs hrk _ => exact absurd ⟨_, _, _, _, _, hrs, hrk, rfl, rfl⟩ hnr
   | letrec hf' _ hmx =>
@@ -898,22 +899,81 @@ theorem recCase {P : Prog} (hP : ProgOK P) : RecCase P := by
       rw [hpost] at h1
       exact ⟨E1, by simp [setE, upd_ne _ _ hvx, h1], by rwa [Entry.clean_dbind] at hd,
         by rwa [clean_mode] at hos⟩
-    -- AGORA-937 B4: the frame's end, the caller's store with `x` an integer,
-    -- keeps the clause the call starts with
-    have hC : HeldCapsInp (m0.set x ⟨false, some (.int 1)⟩) (setE Γ x (callRes Γ fn [])) .skip := by
-      intro p Ep hp hmp _ d hd hb' hh
-      have hpx : p ≠ x := fun e => by
-        subst e; simp [setE] at hp; subst hp; rw [hEc] at hmp; cases hmp
-      simp only [setE, upd_ne _ _ hpx] at hp
-      have hcw := hi.heldCaps p Ep hp hmp (by simp [Stmt.spine]) d hd hb' hh
-      exact (hcw.setClean (o := false) (y := x)
-        (fun u E1 hu h1 hl1 => by simp only [setE, upd_ne _ _ hu] at h1; exact ⟨E1, h1, hl1⟩)
-        (ValCapsInp.int _ _) (fun c hc => by cases hc)).of_st (by show ((m.set x ⟨fn.resOwn, none⟩).set x _).st = _; rw [Mem.set_set])
+    -- AGORA-937 B4: the frame keeps the clause (no parameter is made), and the
+    -- catch frame records it for its start's store, `x` an integer there
+    have hrbF : ∀ p E, (callS Γ F fn [] m.nv x).canon (sigCtx fn) p = some E → E.mode = .rootb →
+        p < m.nv ∧ Γ p = some E := by
+      intro p E hp' hrb
+      rcases h.ctx_cases p with ⟨rfl, hc'⟩ | ⟨rfl, hc'⟩ | ⟨k', t, hk', rfl, hc'⟩ | ⟨k', t, hk', rfl, hc'⟩ |
+          ⟨k', b', t, hk', rfl, hc'⟩ | ⟨hy', hyx, hc'⟩ | ⟨hc', v, hv, rfl⟩ <;> rw [hc'] at hp' <;> (try cases hp')
+      · exact absurd hrb (resMode_ne' fn)
+      · exact absurd hrb (resMode_ne' fn)
+      · rw [hp] at hk'; simp at hk'
+      · cases hrb
+      · cases hrb
+      · obtain ⟨E1', h1', rfl⟩ := Option.map_eq_some_iff.mp hp'
+        rw [clean_mode] at hrb
+        obtain ⟨E0, h0, hm⟩ := h.postdm.2 _ E1' h1'
+        have := h.post_rootb h0 (hm ▸ hrb)
+        rw [h1'] at this; cases this
+        rw [clean_id (Or.inr hrb) (h.post_live_rootb h1' hrb)]
+        exact ⟨h.domlt _ _ h0, h0⟩
+    have hbody : (fn.body.rename (callRen fn.params [] m.nv)).spine = [] := h.body_spine
+    have hspR : ∀ p E, Γ p = some E → p ∉ (recStmt fn m.nv x m0 k).spine := by
+      intro p E hp' hm'
+      have hpl := h.domlt p E hp'
+      have hsp : (recStmt fn m.nv x m0 k).spine = [x, m.nv + fn.params.length] := by
+        unfold recStmt callIn resFrame
+        have hbody' : (fn.body.rename (callRen [] [] m.nv)).spine = [] := by rw [← hp]; exact hbody
+        split <;> simp [Stmt.spine, spine_wrap, hbody', hp, wrapSpine]
+      rw [hsp] at hm'
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hm'
+      rcases hm' with rfl | rfl
+      · rw [h.fresh] at hp'; cases hp'
+      · have := vlt hpl; omega
+    have hcfI : (callIn fn [] m.nv x).catchFrames = [] := by
+      obtain ⟨hsrc, _⟩ := h.fnok
+      have hb' : (fn.body.rename (callRen fn.params [] m.nv)).catchFrames = [] :=
+        Stmt.catchFrames_src (by rw [RSetup.src_rename]; exact hsrc)
+      unfold callIn resFrame
+      split <;> simp [Stmt.catchFrames, catchFrames_wrap, hb']
+    have hZ : HeldZ (callMem m m fn x) ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) Z (recStmt fn m.nv x m0 k) := {
+      caps := fun p E hp' hm' d hd hb' hh => by
+        obtain ⟨_, h0⟩ := hrbF p E hp' hm'
+        exact (((hz.caps p E h0 hm' d hd hb' hh).set_none x _).set_none _ _).of_st rfl
+      reach := fun p E hp' hm' v hv => by
+        obtain ⟨_, h0⟩ := hrbF p E hp' hm'
+        rw [Stmt.under_off (hspR p E h0)] at hv
+        have hreach : ∀ v ∈ (Stmt.letrec x f k).killVars, v ∉ Z p := fun v hv =>
+          hz.reach p E h0 hm' v (by rw [Stmt.under_off (by simp [Stmt.spine])]; exact hv)
+        simp only [recStmt, Stmt.killVars, List.mem_cons, List.mem_append] at hv
+        rcases hv with rfl | (rfl | hv) | hv
+        · exact hreach _ (by simp [Stmt.killVars])
+        · exact hreach _ (by simp [Stmt.killVars])
+        · rcases killVars_callIn fn [] m.nv x _ hv with rfl | hge | hio
+          · exact hreach _ (by simp [Stmt.killVars])
+          · exact fun hz' => Nat.lt_irrefl _ (Nat.lt_of_le_of_lt hge (hz.bound p E h0 hm' _ hz'))
+          · exact absurd (inoutArgs_sub _ _ (by simp [hp]) _ hio) (by simp)
+        · exact hreach _ (by simp [Stmt.killVars, hv])
+      bound := fun p E hp' hm' v hv => by
+        obtain ⟨_, h0⟩ := hrbF p E hp' hm'
+        exact Nat.lt_of_lt_of_le (hz.bound p E h0 hm' v hv) (by simp [callMem])
+      frames := fun x0 m00 b0 hx0 p E hp' hm' _ _ d hd hb' hh => by
+        simp only [recStmt, Stmt.catchFrames, hcfI, List.mem_singleton, Prod.mk.injEq] at hx0
+        obtain ⟨h1, h2, -⟩ := hx0
+        rw [h1, h2]
+        obtain ⟨_, h0⟩ := hrbF p E hp' hm'
+        have hcw := hz.caps p E h0 hm' d hd hb' hh
+        refine (hcw.set (y := x) (o := false) (v := some (.int 1)) (fun V e => ?_)).of_st
+          (by show ((m.set x ⟨fn.resOwn, none⟩).set x _).st = _; rw [Mem.set_set])
+        cases e
+        exact ⟨fun n hn => by cases hn; exact ValCapsInp.int _ _, fun c hc => by cases hc⟩ }
     have hcatch : StmtT P (ξ.under x) ((callS Γ F fn [] m.nv x).canon (sigCtx fn)) F (.catchR x m0 (callIn fn [] m.nv x))
         (setE Γ x (callRes Γ fn [])) :=
       StmtT.catchR hxF hIn hM hanchΔ hKO hDS
     refine ⟨_, StmtT.scope ⟨callX fn, h.canon_x _, by simp [callX, resMode_ne' fn]⟩ h.xF
-      (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb⟩
+      (StmtT.seq hk hcatch hkT) hpx, ?_, Nat.le_add_right _ _, hkeep, h.frz hi.toMInv hb, Z, hZ,
+      ZKeep.refl _ _⟩
     refine hI.respine rfl (fun v hv => ?_) ⟨fun v hv hvx => ?_, ?_, Nat.le_add_right _ _, fun _ bl hk _ => ⟨bl, hk, BlkKeep.refl bl⟩,
       h.catchOK _ k⟩
       hI.pinIn hI.dtorIn (fun v hv => by
