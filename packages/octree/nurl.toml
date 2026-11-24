@@ -1,0 +1,9 @@
+[package]
+name = "octree"
+version = "0.1.0"
+nurl-version = "0.73.0"
+description = "An octree over 3-D points in pure NURL, each node holding an even sample of what falls in it: the structure behind level of detail for big point clouds (Potree, 3D Tiles point tilesets). oc_build takes xyz, a leaf capacity, a sampling grid and a seed; a node keeps the first point (in a seeded shuffle) to land in each cell of its grid and passes the rest to its eight octants, so every point is in exactly one node and a node with its ancestors is a sample of its region at that node's spacing (ADD refinement). Nodes are numbered parents first; each has its cube, its own points, its spacing and the tight bounds of its subtree. Non-finite points are dropped and counted; a cube too small to halve at its coordinates (one point copied many times, or georeferenced data) ends as a leaf. No dependencies."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nurl-lang/nurl-lang"
+
+[dependencies]
