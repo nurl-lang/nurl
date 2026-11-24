@@ -1139,3 +1139,12 @@ plus blocks, which are free. The reasoning:
 - **The consumer** (`CapInout`) calls a package in slot `c` of a `callc`, and its typing makes `c` live (`callT_recv_live`). So `Step.held_not_killVars` takes the statement's typing.
 
 What preservation needs is one typed read lemma: `RhsT` reads only live bindings' slots and the nodes their views and handles point at. Then come the `Preservation` sites, as for B2's `heldCaps`. This is the remaining work.
+
+**Proved (A2/CapsLive.lean):** `MInv.liveCaps`. Where no live binding holds a mutating name on `w` (`NoMutLive`), no live slot holds a package capturing `w` but read-only. It follows from `NamesIn` (`MInv.held`) and `PkgsOK`, whose `inout` captures have a bound.
+- What a borrowed `Vec` reaches is named too (`HrefAt` carries `NamesIn` of the node).
+- A slice's elements hold no views (`Ty.ok`), so no closure with names either.
+
+**Next:**
+1. `Inv.liveCaps` (the field): `∀ w` held anchor root outside `F`, every live slot and every node its handles reach is `ValCapsInp · w`. It replaces `HeldCapsInp`. Weakening keeps it, since it only ends bindings.
+2. `RhsT.liveCaps`: a typed right-hand side evaluated under it yields a `ValCapsInp` value, and leaves the store under it. It reads only live bindings and what they reach.
+3. Its `Preservation` sites; `Step.held_not_killVars` from the typing (the called `c` is live); then the two scaffolds.
