@@ -4209,7 +4209,12 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
         | some E => rw [hE] at h; cases h; exact ⟨hvx, E, rfl, rfl⟩
       refine ⟨exitScope x Γ, ?_, Inv.ofLeaf hi hinv (by rw [hrl.nv]; exact Nat.le_refl _) (by simp [Stmt.vars]) ?_
         rfl hcov trivial, by rw [hrl.nv]; exact Nat.le_refl _, ⟨?_, ?_, (DKeep.refl Γ _).exitScope x⟩,
-        fun w hw => by rw [hrl.st]; simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))]⟩
+        fun w hw => by rw [hrl.st]; simp [upd_ne _ _ (show w ≠ x from fun e => hxF (e ▸ hw))],
+        Z, hz.toSkip (fun p E' hp hm => by
+          obtain ⟨_, E, hE, rfl⟩ := hrel p E' hp
+          rw [killE_mode] at hm
+          rw [killE_rootb hanch hxF _ _ hmn (HeldSpared.of_none (NoHeld.of_anchS hanchS (by simp [Stmt.killVars]) hxF) _ _) hE hm]
+          exact hE) (fun _ _ hcw => (hcw.remove x).of_st hrl.st) (by rw [hrl.nv]; exact Nat.le_refl _), ZKeep.refl _ _⟩
       · rcases skip_inv hs with rfl | hw
         · exact StmtT.skip
         · exact StmtT.skip.weakenOut hinv.wf hinv.names (Or.inr (hw.exitScope x hpx.2.2))
@@ -4234,7 +4239,10 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
           hi.wf hi.names (skip_inv hs)) hpx hKO hWd hNd hFd,
         hi.respine rfl (fun v hv => by simpa [Stmt.vars] using hv) hi.catchOK trivial ⟨hi.dtorIn.1, trivial⟩,
         Nat.le_refl _, ⟨fun v E hv hvs => ⟨hvs, E, hv, rfl, rfl, fun _ => rfl⟩, fun v E' hv hvs => ⟨hvs, E', hv⟩,
-          DKeep.refl _ _⟩, fun _ _ => rfl⟩
+          DKeep.refl _ _⟩, fun _ _ => rfl,
+        Z, (hz.scopeLIn.restmt rfl rfl (fun v hv => by simp [Stmt.killVars] at hv)
+          (fun c hc => by simp [Stmt.catchFrames] at hc)).scopeLOut (fun q E hq hmq _ =>
+            hz.reach q E hq hmq _ (by simp [Stmt.under, Stmt.spine, Stmt.killVars])), ZKeep.refl _ _⟩
     | @scopeLPD _ _ _ _ _ sl n f u hp hck hteq hsl hng =>
       -- Agora #803: a destructor payload that fails the give-back's check:
       -- the check-out's frame becomes `x`'s destructor frame, at its end
