@@ -4315,6 +4315,10 @@ unsafe @ note_unsafe_item s pos s what → v {
 // …and whether it has marked a borrow a copy of an owner's own handle
 // (`hc_`, bck_view_end_via): a `let` clears the mark only then.
 : ~ i g_bck_hc_any 0
+// …and whether codegen handed an owner's old value to a borrower for
+// certain (`pendho` rows, bck_note_handover; set as the rows are read in,
+// AGORA-1003).
+: ~ i g_bck_ho_any 0
 // 1 while mem_note_kept hands on a `: ~` cursor over a parameter that its
 // store copied wherever it was the parameter's (__cursor_lent_local): it
 // lends that parameter on no run (agora #824).
@@ -10833,6 +10837,22 @@ unsafe @ __gen_ret i lex i syms i cg → s {
             } {}
         }
         ? != 0 ( nurl_str_len __awo ) { = hbit __awo = __aw_sinkbit T } {}
+        // (…and where it takes some of them over and only lends the others,
+        // the result would own the ones and borrow the rest, which no
+        // answer can say: refused at module end then, resolve_nc_local_lends.)
+        : s __awall ( nurl_sym_get syms `__agg_whole__` )
+        ? != 0 ( nurl_str_len ( str_skip_word __awall ) ) {
+            : ~ s __awix ``
+            : ~ s __awr3 ( nurl_str_cat __awall `` )
+            ~ != 0 ( nurl_str_len __awr3 ) {
+                : s __aw3 ( str_first_word __awr3 ) = __awr3 ( str_skip_word __awr3 )
+                : i __awi3 ( nurl_sym_word_index syms `__fn_param_names__` __aw3 )
+                ? >= __awi3 0 { = __awix ( nurl_str_cat3 __awix ( nurl_str_int __awi3 ) `,` ) } {}
+            }
+            : i __mln ( nurl_str_to_int ( nurl_sym_get g_pending_impl `mixlit_n` ) )
+            ( nurl_sym_def g_pending_impl `mixlit_n` ( nurl_str_int + __mln 1 ) )
+            ( nurl_sym_def g_pending_impl ( nurl_str_cat `mixlit#` ( nurl_str_int __mln ) ) ( nurl_str_cat4 __awself ` ` __awix ( nurl_str_cat4 ` ` ( nurl_str_int bck_line ) ` ` ( nurl_lex_filename lex ) ) ) )
+        } {}
     } {}
     ? __rb_read { ( nurl_sym_set_deep syms `__fn_ret_borrow_read__` `1` ) } {}
     // A value read out of a parameter's storage through a raw pointer and
@@ -51678,9 +51698,12 @@ unsafe @ __pfo_bind_lends i syms s name → v {
 // (`= old_r r = r nr`, the rotation of a Euclid loop): the value goes to
 // that cursor instead of being dropped. Whether a borrower still holds it
 // is asked at run time, by the identity of the value's first buffer.
-@ mem_udrop_hand_over i syms i cg s ptr s vt → v {
+// Answers the one borrower asked, where it was the only one and holds the
+// value whole for certain (__ho_certain): the walk makes it the owner of
+// the old value there (`pendho`, AGORA-1003). `` otherwise.
+@ mem_udrop_hand_over i syms i cg s ptr s vt → s {
     : ~ s rest ( nurl_sym_get2 syms ptr `__borrowers` )
-    ? == 0 ( nurl_str_len rest ) { ^ v } {}
+    ? == 0 ( nurl_str_len rest ) { ^ ( nurl_str_cat `` `` ) } {}
     : s ll ( nurl_llty vt )
     : s xv ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print xv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
@@ -51695,12 +51718,16 @@ unsafe @ __pfo_bind_lends i syms s name → v {
             = xk ( mem_handle_key cg pt xp )
         } {}
     } {}
-    ? == 0 ( nurl_str_len xk ) { ^ v } {}
+    ? == 0 ( nurl_str_len xk ) { ^ ( nurl_str_cat `` `` ) } {}
     : s xnn ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print xnn ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print xk ) ( nurl_print `, null\n` )
+    : ~ i nasked 0
+    : ~ s asked ``
     ~ != 0 ( nurl_str_len rest ) {
         : s b ( str_first_word rest ) = rest ( str_skip_word rest )
         ? & ! ( seq b ptr ) != 0 ( nurl_sym_len2 syms b `__live` ) {
+            = nasked + nasked 1
+            = asked ( nurl_str_cat b `` )
             // (The borrower's own type: a payload cursor is not an option.)
             : s bt0 ( nurl_sym_get2 syms b `__udty` )
             : s bt ? | == 0 ( nurl_str_len bt0 ) != 0 ( nurl_str_starts bt0 `%__opt.` ) ( nurl_str_cat vt `` ) ( nurl_str_cat bt0 `` )
@@ -51743,6 +51770,26 @@ unsafe @ __pfo_bind_lends i syms s name → v {
             ( mem_udrop_flag_set syms cg ptr nxf )
         } {}
     }
+    ? & == nasked 1 ( __ho_certain syms ptr asked vt ) { ^ asked } {}
+    ^ ( nurl_str_cat `` `` )
+}
+
+// Does borrower `b` of owner `ptr` hold the owner's value whole for
+// certain, so that mem_udrop_hand_over's identity test hands it the old
+// value on every run where the owner holds one? A `String` or a `Vec` of
+// the owner's own type (no part of either is another of that type), a
+// cursor over the owner alone and over no part of it, that cannot be
+// given another value (not `~`), and the binding its name names here. The
+// walk reads this as the borrower owning the old value (AGORA-1003).
+@ __ho_certain i syms s ptr s b s vt → b {
+    ? ! | ( seq vt `%String` ) != 0 ( nurl_str_starts vt `%Vec__` ) { ^ F } {}
+    ? ! ( seq ( nurl_sym_get2 syms b `__udty` ) vt ) { ^ F } {}
+    ? ! ( seq ( nurl_sym_get2 syms b `__alias` ) ptr ) { ^ F } {}
+    ? ( seq ( nurl_sym_get2 syms b `__alias_part` ) `1` ) { ^ F } {}
+    : s bn ( nurl_sym_get2 syms b `__bname` )
+    ? == 0 ( nurl_str_len bn ) { ^ F } {}
+    ? != 0 ( nurl_sym_len2 syms bn `__mutable` ) { ^ F } {}
+    ^ ( seq ( mem_udrop_ptr_of syms bn ) b )
 }
 
 // Can mem_udrop_hand_over tell an owner's old value apart from what `ptr`'s
@@ -57530,6 +57577,19 @@ unsafe @ bck_add_cap_name s name → v {
     ^ out
 }
 
+// Codegen's hand-over at `= owner …` on `line`: `bn`, the one borrower
+// that takes the old value for certain (mem_udrop_hand_over,
+// __ho_certain). Its row, `pendho owner … =bn`, is read by the `assign`
+// row of that statement, which makes `bn` the old value's owner rather
+// than a borrow it ends (AGORA-1003). The row reads nothing.
+@ bck_note_handover s owner s bn i line → v {
+    ? | == g_borrowck 0 == 0 ( nurl_str_len bn ) { ^ v } {}
+    : s rd0 ( nurl_str_cat ( nurl_sym_get g_bck `reads` ) `` )
+    ( bck_put `reads` `` )
+    ( bck_record2 `pendho` owner line ( nurl_str_cat `=` bn ) `0` )
+    ( bck_put `reads` rd0 )
+}
+
 @ bck_record2 s kind s wname i line s x5 s x6 → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : s reads ( nurl_sym_get g_bck `reads` )
@@ -62485,7 +62545,7 @@ unsafe @ bck_kc i idx → i {
     ? == c 98 { ^ ? ( seq k `borrow` ) 7 ? ( seq k `brk` ) 21 ? ( seq k `block` ) 23 0 } {}
     ? == c 102 { ^ ? ( seq k `fieldset` ) 8 ? ( seq k `fevar` ) 35 ? ( seq k `fborrow` ) 7 ? ( seq k `fborrowh` ) 7 0 } {}
     ? == c 116 { ^ ? ( seq k `take` ) 37 ? ( seq k `tborrow` ) 7 ? ( seq k `tryret` ) 39 0 } {}
-    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 ? ( seq k `pendsva` ) 46 ? ( seq k `pendslit` ) 47 ? ( seq k `pendwhole` ) 48 ? ( seq k `pendhv` ) 49 0 } {}
+    ? == c 112 { ^ ? ( seq k `pendcall` ) 9 ? ( seq k `pendretain` ) 10 ? ( seq k `pendtake` ) 11 ? ( seq k `pendkeep` ) 12 ? ( seq k `pendfield` ) 13 ? ( seq k `pendstore` ) 15 ? ( seq k `pendeff` ) 32 ? ( seq k `pendlend` ) 32 ? ( seq k `pendjoin` ) 32 ? ( seq k `pendlit` ) 32 ? ( seq k `pendfx` ) 38 ? ( seq k `pendfc` ) 38 ? ( seq k `pendread` ) 40 ? ( seq k `pendvf` ) 41 ? ( seq k `pendsink` ) 42 ? ( seq k `pendsxr` ) 43 ? ( seq k `pendsxu` ) 44 ? ( seq k `pendsva` ) 46 ? ( seq k `pendslit` ) 47 ? ( seq k `pendwhole` ) 48 ? ( seq k `pendhv` ) 49 ? ( seq k `pendho` ) 50 0 } {}
     ? == c 115 { ^ ? ( seq k `store` ) 14 0 } {}
     ? == c 120 { ^ ? ( seq k `xfer` ) 16 0 } {}
     ? == c 99 { ^ ? ( seq k `cdep` ) 17 ? ( seq k `cmove` ) 18 ? ( seq k `cnt` ) 22 ? ( seq k `cond` ) 25 ? ( seq k `callx` ) 31 ? ( seq k `clox` ) 34 ? ( seq k `cborrow` ) 7 0 } {}
@@ -63066,6 +63126,9 @@ unsafe @ bck_sx_ids s sx → s {
     ? ? == __k0 114 & ( seq kind `ret` ) != 0 ( nurl_str_len lf8 ) F { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 ) ( nurl_str_cat `\t\t\t` lf8 ) ) } {}
     ? __pend
     { : s f5 ( bck_field rec 5 )
+        // (A hand-over codegen makes for certain, read by its `assign`
+        // row: AGORA-1003.)
+        ? ? == __k0 112 ( seq kind `pendho` ) F { = g_bck_ho_any 1 } {}
         // A store's owner binding (`=t`, bck_emit_owner_stores) is an id too.
         ? & != 0 ( nurl_str_len f5 ) == ( nurl_str_get f5 0 ) 61 {
             // (…and the field of it a `store` went into, `p<id>` of that
@@ -65908,6 +65971,10 @@ unsafe @ __bck_try_exit_check s st i p i line → v {
                 // `= x ...` gives x a fresh value — Owned, reviving x. Its old
                 // value, if x owned it, is dropped with whatever was stored in it.
                 : i asid ( bck_field_int rec 1 )
+                // (…or handed to the one borrower codegen gives it to for
+                // certain, `pendho`: that borrower owns it from here on, so
+                // the new value ends no borrow of it - AGORA-1003.)
+                ? != 0 g_bck_ho_any { = st ( __bck_ho_take st asid p ) } {}
                 // (Its old value, where codegen still holds it, is released
                 // here: one whose type runs a `% Drop` of the program's own
                 // is handed to it — agora #766.)
@@ -74640,6 +74707,39 @@ unsafe @ __bck_rcp_ret s st s sx s wn → v {
     } {}
 }
 
+// `= o …` at row `p`, where codegen hands o's old value to a borrower
+// for certain (mem_udrop_hand_over, __ho_certain): the statement's
+// `pendho` row names it. A borrow still of o alone, whole, owns that value
+// from here on - a borrow no longer, so o's new value ends nothing of it.
+// One that borrows anything else, or o no more, is left as it is: the
+// new value ends it, as before (AGORA-1003).
+@ __bck_ho_take s st i oid i p → s {
+    : ~ s out st
+    : s os ( nurl_str_int oid )
+    : ~ i q + p 1
+    ~ < q g_bck_nrows {
+        : i qk ( bck_kc q )
+        // (The statement's own rows: up to the next statement's.)
+        ? | | | | == qk 1 == qk 2 == qk 3 == qk 23 == qk 24 { ^ out } {}
+        ? == qk 50 {
+            : s r ( bck_rec q )
+            : s f5 ( bck_field r 5 )
+            ? & & ( seq ( bck_field r 1 ) os ) > ( nurl_str_len f5 ) 1 == ( nurl_str_get f5 0 ) 61 {
+                : s ds ( nurl_str_slice f5 1 - ( nurl_str_len f5 ) 1 )
+                : i d ( nurl_str_to_int ds )
+                ? & == BCK_BORROWED_SHARED ( bck_st_raw out d ) ( seq ( nurl_sym_get g_bck ( bck_bkey `bs_` ds ) ) os ) {
+                    = out ( bck_st_set out d BCK_OWNED )
+                    ( bck_put_bf `bs_` ds `` )
+                    ( bck_put_bf `fb_` ds `` )
+                    ( bck_put_bf `fp_` ds `` )
+                } {}
+            } {}
+        } {}
+        = q + q 1
+    }
+    ^ out
+}
+
 @ bck_fview_take s st s wids → s {
     : ~ s out st
     : ~ s takers ``
@@ -77943,6 +78043,7 @@ unsafe @ __cj_state_at i a → s { ^ ? == a 0 `` # s a }
     = g_bck_has_deps 0
     = g_bck_has_cursor 0
     = g_bck_hc_any 0
+    = g_bck_ho_any 0
     = g_bck_sfo_any 0
     = g_bck_svr_any 0
     = g_bck_bxf_any 0
@@ -81794,7 +81895,10 @@ unsafe @ gen_assign i lex i syms i cg → s {
             // `{ i1, T }` names no drop, and the old value was lost.)
             : s __ud_rt0 ( nurl_sym_get2 syms __ud_ptr `__udty` )
             : s __ud_rt ? == 0 ( nurl_str_len __ud_rt0 ) ( nurl_str_cat vt `` ) ( nurl_str_cat __ud_rt0 `` )
-            ( mem_udrop_hand_over syms cg __ud_ptr vt )
+            : s __ud_ho ( mem_udrop_hand_over syms cg __ud_ptr vt )
+            // (…the one borrower that takes the old value for certain: the
+            // walk makes it the old value's owner, AGORA-1003.)
+            ? != 0 ( nurl_str_len __ud_ho ) { ( bck_note_handover name ( nurl_sym_get2 syms __ud_ho `__bname` ) bck_line ) } {}
             = __ud_late ( mem_udrop_take_old syms cg __ud_ptr __ud_rt )
             ? == 0 ( nurl_str_len __ud_late ) { ( mem_emit_user_drop_one syms cg __ud_ptr __ud_rt ) } {} }
         {}
@@ -85636,7 +85740,15 @@ unsafe @ __gen_agg_lit_body i lex i syms i cg → s {
         // (Lent, it needs no copy: one with none is lent as well. Only one
         // that owns something is a lend: a number is the literal's value.)
         ? agg_moves_fields ( __type_needs_drop ( nurl_sym_get syms fld_first_val ) syms ) ( __clone_supported ( nurl_sym_get syms fld_first_val ) syms )
-        ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fpc_i ) )
+        ! | ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fpc_i ) )
+        // (…nor one this body has already taken over on a path before here,
+        // an inferred `sink`: the function's own on every path, it moves in
+        // as a declared one does, and beside it the literal holds a value of
+        // its own. Lent, with another parameter lent beside it, the result
+        // owned the one and borrowed the other; AGORA-995, review of
+        // github#2280. One inferred only after the literal is refused at
+        // module end, resolve_nc_local_lends.)
+        ( str_contains_word ( nurl_sym_get syms `__fn_inferred_sink__` ) ( nurl_str_int __fpc_i ) )
         ? fld_param_copy { = fld_lent ( nurl_str_cat `1` `` ) } {}
         // (…and a `: ~` cursor over one, in such a literal: lent unless a
         // local it may be a cursor over owns the value now —
@@ -99952,6 +100064,12 @@ unsafe @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ? & & == 0 g_did_ret ! ( seq ret_ty `void` ) != 0 ( nurl_sym_len syms `__last_value_borrow__` )
     { ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` ) ( nurl_sym_set_deep syms `__fn_ret_borrow_x__` `1` ) }
     {}
+    // (A literal handed back of several parameters named whole, some of
+    // which this body takes over on another path: the rest go into the
+    // result with them, so they are taken over too - an inferred `sink`, as
+    // a declared one beside them makes them. Lent, the result owned the
+    // ones and borrowed the others; AGORA-995, review of github#2280.)
+    ( __mixlit_take_all syms fname )
     // Auto-sink inference (critic v0.9.0 §2): merge any inferred sinks
     // into g_fn_sink[fname], deduping against the explicit `sink`
     // marker set already published above.
@@ -109392,6 +109510,59 @@ unsafe @ __sx_names_capture i syms s sx → b {
     }
 }
 
+// The parameters of `fname`'s literals handed back whole (`mixlit#N`,
+// gen_ret) where this body takes some of them over: every one of them is
+// taken over, an inferred `sink` and kept, as a declared `sink` beside
+// them makes them (AGORA-995).
+@ __mixlit_take_all i syms s fname → v {
+    : i mn ( nurl_str_to_int ( nurl_sym_get g_pending_impl `mixlit_n` ) )
+    ? == mn 0 { ^ v } {}
+    : s pnames ( nurl_sym_get syms `__fn_param_names__` )
+    // (…or may take over through a call to a function not compiled yet:
+    // its parked implication, `pidx callee fname aidx`, names the
+    // parameter. Taken over at module end, the literal's lent ones could
+    // no longer be, and the program was refused; taking them all over now
+    // is what a declared `sink` beside them does.)
+    : ~ s pend ``
+    : ~ s prest ( nurl_str_cat ( nurl_sym_get syms `__fn_pending_sink_impl__` ) `` )
+    ~ != 0 ( nurl_str_len prest ) {
+        : s pw ( str_first_word prest )
+        = pend ( nurl_str_cat3 pend ` ` pw )
+        = prest ( str_skip_words prest 4 )
+    }
+    : ~ i mj 0
+    ~ < mj mn {
+        : ~ s mr ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `mixlit#` ( nurl_str_int mj ) ) ) `` )
+        : s mfn ( str_first_word mr ) = mr ( str_skip_word mr )
+        ? ( seq mfn fname ) {
+            : s mixs ( str_first_word mr )
+            : ~ i msk 0
+            : ~ s mrest ( nurl_str_cat mixs `` )
+            ~ != 0 ( nurl_str_len mrest ) {
+                : i cm ( nurl_str_find mrest `,` )
+                : s mix ? < cm 0 ( nurl_str_cat mrest `` ) ( nurl_str_slice mrest 0 cm )
+                = mrest ? < cm 0 `` ( nurl_str_slice mrest + cm 1 - - ( nurl_str_len mrest ) cm 1 )
+                ? != 0 ( nurl_str_len mix ) {
+                    ? | | ( str_contains_word ( nurl_sym_get g_fn_sink fname ) mix ) ( str_contains_word ( nurl_sym_get syms `__fn_inferred_sink__` ) mix ) ( str_contains_word pend mix ) { = msk + msk 1 } {}
+                } {}
+            }
+            ? > msk 0 {
+                = mrest ( nurl_str_cat mixs `` )
+                ~ != 0 ( nurl_str_len mrest ) {
+                    : i cm ( nurl_str_find mrest `,` )
+                    : s mix ? < cm 0 ( nurl_str_cat mrest `` ) ( nurl_str_slice mrest 0 cm )
+                    = mrest ? < cm 0 `` ( nurl_str_slice mrest + cm 1 - - ( nurl_str_len mrest ) cm 1 )
+                    ? != 0 ( nurl_str_len mix ) {
+                        : s pn ( str_first_word ( str_skip_words pnames ( nurl_str_to_int mix ) ) )
+                        ? != 0 ( nurl_str_len pn ) { ( mem_record_kept_param syms pn ) ( bck_record_inferred_sink syms pn ) } {}
+                    } {}
+                }
+            } {}
+        } {}
+        = mj + mj 1
+    }
+}
+
 @ resolve_nc_local_lends i syms → v {
     // A literal handed back naming a parameter twice whole (`^ @ K2 { p p
     // }`) is a lend of it twice — fine while the caller keeps it; where the
@@ -109409,6 +109580,32 @@ unsafe @ __sx_names_capture i syms s sx → b {
             ( bck_emit_error tr ( nurl_str_to_int tln ) ( nurl_str_cat4 `this hands back '` tpn `' twice in one literal, and this function takes '` ( nurl_str_cat3 tpn `' over on another path: the result would own one value twice. Copy one of them (string_clone, vec_clone, mem_dup …), or name it once.` `` ) ) )
         } {}
         = tj + tj 1
+    }
+    // …and one naming several parameters whole, of which the function takes
+    // some over on another path and only lends the others: the result
+    // would own the ones it took and borrow the rest - the caller could not
+    // release it rightly either way (AGORA-995, review of github#2280).
+    : i mn ( nurl_str_to_int ( nurl_sym_get g_pending_impl `mixlit_n` ) )
+    : ~ i mj 0
+    ~ < mj mn {
+        : ~ s mr ( nurl_str_cat ( nurl_sym_get g_pending_impl ( nurl_str_cat `mixlit#` ( nurl_str_int mj ) ) ) `` )
+        : s mfn ( str_first_word mr ) = mr ( str_skip_word mr )
+        : s mixs ( str_first_word mr ) = mr ( str_skip_word mr )
+        : s mln ( str_first_word mr ) = mr ( str_skip_word mr )
+        : ~ i msk 0
+        : ~ i mlent 0
+        : ~ s mrest ( nurl_str_cat mixs `` )
+        ~ != 0 ( nurl_str_len mrest ) {
+            : i cm ( nurl_str_find mrest `,` )
+            : s mix ? < cm 0 ( nurl_str_cat mrest `` ) ( nurl_str_slice mrest 0 cm )
+            = mrest ? < cm 0 `` ( nurl_str_slice mrest + cm 1 - - ( nurl_str_len mrest ) cm 1 )
+            ? != 0 ( nurl_str_len mix ) {
+                ? | ( nurl_sym_has_word g_fn_sink mfn mix ) ( nurl_sym_has_word g_fn_keeps mfn mix ) { = msk + msk 1 } { = mlent + mlent 1 } } {}
+        }
+        ? & > msk 0 > mlent 0 {
+            ( bck_emit_error mr ( nurl_str_to_int mln ) ( nurl_str_cat3 `this hands back a literal of several parameters named whole, and this function takes some of them over on another path but only lends the others: the result would own the ones and borrow the rest. Declare the others 'sink' too, or copy the ones it takes over into the literal (string_clone, vec_clone, mem_dup …).` `` `` ) )
+        } {}
+        = mj + mj 1
     }
     : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `nclocal_n` ) )
     : ~ i j 0

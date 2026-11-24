@@ -4183,6 +4183,11 @@ class FnCheck:
             _, ty, variant, ops, site = rv
             if dest_vid is not None:
                 self.temp_none[dest_vid] = variant == "F" and ty is not None and ty[0] == "opt"
+                # (what this literal names is this evaluation's: a loop's
+                # second round does not find its first round's parameters,
+                # which would read as named twice - review of github#2280)
+                for tbl in (self.lit_params, self.lit_twice, self.lit_mixed, self.lit_nocopy):
+                    tbl.pop(dest_vid, None)
             names = self.agg_paths(ty, variant, len(ops))
             held = set()
             lent = {}
