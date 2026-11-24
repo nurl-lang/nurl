@@ -3837,7 +3837,30 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hsp : k.spine = [] := src_spine hsrc
       have hyo : y ≠ o := fun e => by subst e; rw [hno.2.2.1] at hmx'; cases hmx'
       refine ⟨setE Γ1 y (compE Ex t), StmtT.scope ⟨compE Ex t, by simp [setE], hnrb⟩ hyF hs hend, ?_,
-        by simp, ?_, fun v hv => ?_⟩
+        by simp, ?_, fun v hv => ?_, Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: the element and the rewritten tree were the tree's; the
+        -- node is reached through the frame's borrow `x`, so clean)
+        refine hz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp)
+          (fun p Ep hp hmp => ?_) (fun v hv => ?_) (fun _ _ _ _ _ _ _ _ hD hcw => ?_)
+        · have hpy : p ≠ y := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+          simp only [setE, upd_ne _ _ hpy] at hp
+          exact post.rel.rootb_back hp hmp
+        · simp only [Stmt.killVars, List.mem_cons, List.mem_append] at hv ⊢
+          rcases hv with h | h <;> simp [h]
+        · have hN := hcw.nodeOf (hD x (by simp [Stmt.killVars])) hno
+          have hsT : ∀ z, Sub z es[n] → Sub z T := fun z hz =>
+            Sub.trans (Sub.child (List.getElem_mem hn) hz) hno.sub
+          refine (hcw.editNode (m' := m.set o ⟨true, some T'⟩) hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz])
+              (fun hN => hN.node_sub fun e he => List.mem_of_mem_eraseIdx he)
+              (fun e he => Or.inl (List.mem_of_mem_eraseIdx he))
+              (fun c' hc => hm.slot_no_href (x := o) (T := T') (by simp [Mem.set, upd, Ne.symm hyo]) hc)).set
+            (fun V e => ?_)
+          cases e
+          exact ⟨fun z hz => hN.sub (Sub.child (List.getElem_mem hn) hz),
+            fun c' hc => (hi.toMInv.slot_no_href hno.2.2.1 (hsT _ hc)).elim⟩
       · -- (AGORA-963 step 3: the element and the rewritten tree were the tree's)
         refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)
@@ -3914,7 +3937,30 @@ theorem preserve {P : Prog} (hcall : CallCase P) (hrec : RecCase P) (hclo : CloC
       have hsp : k.spine = [] := src_spine hsrc
       have hyo : y ≠ o := fun e => by subst e; rw [hno.2.2.1] at hmx'; cases hmx'
       refine ⟨setE Γ1 y (compE Ex t), StmtT.scope ⟨compE Ex t, by simp [setE], hnrb⟩ hyF hs hend, ?_,
-        by simp, ?_, fun v hv => ?_⟩
+        by simp, ?_, fun v hv => ?_, Z, ?_, ZKeep.refl _ _⟩
+      rotate_right
+      · -- (AGORA-937 B4: the element and the rewritten tree were the tree's; the
+        -- node is reached through the frame's borrow `x`, so clean)
+        refine hz.leaf rfl (by simp [Stmt.catchFrames, Stmt.catchFrames_src hsrc]) (by simp)
+          (fun p Ep hp hmp => ?_) (fun v hv => ?_) (fun _ _ _ _ _ _ _ _ hD hcw => ?_)
+        · have hpy : p ≠ y := fun h => by
+            rw [h] at hp; simp [setE] at hp; rw [← hp] at hmp; exact hnrb hmp
+          simp only [setE, upd_ne _ _ hpy] at hp
+          exact post.rel.rootb_back hp hmp
+        · simp only [Stmt.killVars, List.mem_cons, List.mem_append] at hv ⊢
+          rcases hv with h | h <;> simp [h]
+        · have hN := hcw.nodeOf (hD x (by simp [Stmt.killVars])) hno
+          have hsT : ∀ z, Sub z es[n] → Sub z T := fun z hz =>
+            Sub.trans (Sub.child (List.getElem_mem hn) hz) hno.sub
+          refine (hcw.editNode (m' := m.set o ⟨true, some T'⟩) hno hr (by simp [Mem.set, upd])
+              (fun z hz => by simp [Mem.set, upd, hz])
+              (fun hN => hN.node_sub fun e he => List.mem_of_mem_eraseIdx he)
+              (fun e he => Or.inl (List.mem_of_mem_eraseIdx he))
+              (fun c' hc => hm.slot_no_href (x := o) (T := T') (by simp [Mem.set, upd, Ne.symm hyo]) hc)).set
+            (fun V e => ?_)
+          cases e
+          exact ⟨fun z hz => hN.sub (Sub.child (List.getElem_mem hn) hz),
+            fun c' hc => (hi.toMInv.slot_no_href hno.2.2.1 (hsT _ hc)).elim⟩
       · -- (AGORA-963 step 3: the element and the rewritten tree were the tree's)
         refine Inv.mk₀ hm (fun v hv => ?_) (fun v hv => ?_) ?_ (by simp [Stmt.spine, hsp])
           (by simp [Stmt.spine, hsp, setE]) (show CatchOK _ k from catchOK_src hsrc)

@@ -294,4 +294,15 @@ theorem HeldZ.seqOut {m : Mem} {Γ : Ctx} {Z : Var → List Var} {a b : Stmt} (h
   bound := hz.bound
   frames x m0 hx := hz.frames x m0 (by simpa [Stmt.catchFrames] using hx)
 
+
+/-- **The node a binding of the frame reaches** (itself, or through its
+    handle) is clean. -/
+theorem FrameCaps.nodeOf {m : Mem} {D : List Var} {w x o : Var} {T : Val} {t : Ty} {c d : Nat}
+    {es : List Val} (h : FrameCaps m D w) (hxD : x ∉ D) (hno : NodeOf m x o T t c d es) :
+    ValCapsInp (.node t c d es) w := by
+  obtain ⟨_, _, ho, hor⟩ := hno
+  rcases hor with ⟨rfl, rfl⟩ | ⟨hsx, hs⟩
+  · exact (h _ true _ hxD ho).1
+  · exact (h x false _ hxD hsx).2 c (Sub.refl _) o T _ ho hs ⟨t, d, es, rfl⟩
+
 end A2
