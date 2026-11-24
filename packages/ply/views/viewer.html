@@ -131,7 +131,7 @@
 <div id="help" class="panel" hidden>
   <span class="mouse orbit-help"><b>drag</b> orbit &nbsp; <b>wheel</b> zoom &nbsp; <b>shift-drag</b> pan<br>
   <b>r</b> reset &nbsp; <b>c</b> colour &nbsp; <b>[ ]</b> point size &nbsp; <b>g</b> game mode</span>
-  <span class="mouse fly-help"><b>mouse</b> look &nbsp; <b>w a s d</b> / <b>arrows</b> fly &nbsp; <b>e q</b> up, down<br>
+  <span class="mouse fly-help"><b>mouse</b> look &nbsp; <b>w a s d</b> / <b>arrows</b> fly &nbsp; <b>e</b> / <b>q ctrl</b> up, down<br>
   <b>shift</b> faster &nbsp; <b>wheel</b> speed <b id="flyv"></b> &nbsp; <b>esc</b> back to orbit</span>
   <span class="touch"><b>drag</b> orbit &nbsp; <b>pinch</b> zoom &nbsp; <b>two fingers</b> pan &nbsp; <b>double-tap</b> reset</span>
 </div>
@@ -906,8 +906,8 @@ function orbitEye() {
 
 /* ---------- game mode ---------------------------------------------------
    Fly like a game's spectator camera: the mouse turns the head, w a s d or
-   the arrows move along the view and across it, e and q (or space) rise
-   and sink along UP, shift is four times faster, the wheel sets the speed.
+   the arrows move along the view and across it, e and q (or space and
+   ctrl) rise and sink along UP, shift is four times faster, the wheel sets the speed.
    No gravity and no collisions: the eye goes through anything. The cursor
    is captured (Pointer Lock); esc gives it back and the orbit carries on
    from the view the flight ended on. A mouse-and-keyboard mode: the button
@@ -960,7 +960,7 @@ function flyStep(dt) {
   if (keys.KeyD || keys.ArrowRight) r += 1;
   if (keys.KeyA || keys.ArrowLeft) r -= 1;
   if (keys.KeyE || keys.Space) u += 1;
-  if (keys.KeyQ) u -= 1;
+  if (keys.KeyQ || keys.ControlLeft || keys.ControlRight) u -= 1;
   if (!(f || r || u) || !dt) return;
   var d = flyDir(fly.yaw, fly.pitch);
   /* across the view: the heading x UP, level whatever the pitch */
@@ -981,6 +981,12 @@ document.addEventListener("mousemove", function (e) {
   if (fly && document.pointerLockElement === cv) lookBy(e.movementX, e.movementY);
 });
 window.addEventListener("keyup", function (e) { delete keys[e.code]; });
+/* ctrl+w closes the tab and no page can take it back: in flight, with
+   ctrl held to sink, a w pressed with it is one key away. The browser asks
+   first instead. */
+window.addEventListener("beforeunload", function (e) {
+  if (fly) { e.preventDefault(); e.returnValue = ""; }
+});
 /* a key let go while the page had no focus never arrives: stop, not drift */
 window.addEventListener("blur", function () { keys = {}; });
 
@@ -1086,16 +1092,20 @@ $("tm").oninput = function () {
   $("tmv").textContent = (100 - +this.value) + "%";
 };
 var FLY_KEYS = ["KeyW", "KeyA", "KeyS", "KeyD", "KeyE", "KeyQ", "Space",
-                "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight"];
+                "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight",
+                "ControlLeft", "ControlRight"];
 window.addEventListener("keydown", function (e) {
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
   /* game keys by position (e.code), so w a s d sit where they do on any
-     layout */
-  if (e.code === "KeyG" && !e.repeat) { if (fly) flyLeave(); else flyEnter(); return; }
+     layout. Ctrl sinks, so in flight a game key counts with ctrl held too
+     (ctrl+s, ctrl+d and ctrl+a are the page's, not the browser's, then). */
   if (fly) {
     if (e.code === "Escape") { flyLeave(); return; }
-    if (FLY_KEYS.indexOf(e.code) >= 0) { keys[e.code] = true; e.preventDefault(); return; }
+    if (FLY_KEYS.indexOf(e.code) >= 0 && !e.metaKey && !e.altKey) {
+      keys[e.code] = true; e.preventDefault(); return;
+    }
   }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.code === "KeyG" && !e.repeat) { if (fly) flyLeave(); else flyEnter(); return; }
   if (e.key === "r") $("reset").onclick();
   else if (e.key === "c") setMode((mode + 1) % 3);
   else if (e.key === "[" || e.key === "]") {
