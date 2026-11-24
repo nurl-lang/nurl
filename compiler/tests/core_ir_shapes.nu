@@ -75,6 +75,15 @@ $ `stdlib/core/string.nu`
     ^ ( f x )
 }
 
+// A closure returned where it is made: its env owns the Vec it captures
+// (CORE_VF_ENVOWN, flag 2048), where a closure that stays in its frame
+// holds a copy of the handle that depends on the binding (AGORA-978).
+@ shape_ret_closure_owns_vec → ( @ i i ) {
+    : ( Vec i ) table ( vec_new [i] )
+    ( vec_push [i] table 7 )
+    ^ \ i k → i { ^ + k ( vec_len [i] table ) }
+}
+
 @ shape_closure → i {
     : String name ( string_from `n` )
     : ~ i acc 0
@@ -122,5 +131,6 @@ $ `stdlib/core/string.nu`
     : b one ( shape_short w )
     : String fell ( shape_fall T )
     : i falls + ( string_len fell ) ( shape_fall_closure F )
-    ^ ? & & & & one > total 0 == falls 6 == ( shape_loop_always 3 ) 3 == ( shape_arm_temp 0 ) 11 0 1
+    : ( @ i i ) owns ( shape_ret_closure_owns_vec )
+    ^ ? & & & & & one > total 0 == falls 6 == ( shape_loop_always 3 ) 3 == ( shape_arm_temp 0 ) 11 == ( owns 1 ) 2 0 1
 }
