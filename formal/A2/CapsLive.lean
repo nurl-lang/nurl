@@ -28,6 +28,12 @@ theorem ValCapsInp.of_namesIn {V : Val} {H : List Dep} {w : Var} (hn : NamesIn V
   · simp [Kind.bound, h, PMode.bound] at hb
     exact absurd hb hbn
 
+/-- What the clause asks of one live value: clean, and every node its
+    handles reach in an owned slot clean. -/
+def LiveGood (m : Mem) (w : Var) (V : Val) : Prop :=
+  ValCapsInp V w ∧ ∀ c, Sub (.href c) V → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
+    (∃ ty d es, n = .node ty c d es) → ValCapsInp n w
+
 /-- **The live slots hold no package capturing `w` but read-only**, where no
     live binding may change `w` by name. -/
 theorem MInv.liveCaps {m : Mem} {Γ : Ctx} {w : Var} (hM : MInv m Γ) (hnm : NoMutLive Γ w) :
@@ -501,6 +507,29 @@ theorem MInv.liveCapsAll {m : Mem} {Γ : Ctx} {w : Var} (hM : MInv m Γ) (hnm : 
       rw [heq]
       exact ValCapsInp.of_namesIn hnames ((hM.pkgs x' _ T' hx' rfl).sub hsL)
         (fun d hd => hnm v E hv hl d (hH d hd))
+    · have heq := nodeAt_unique hM.heap hnA (Or.inr ⟨k, bl, hk, hsb, _, _, _, rfl⟩)
+      rw [heq]; exact (hM.rdCapsInp w hk).1.sub hsb
+  · exact ((howning hos).2.1 _ rfl).href_sub_false hcs |>.elim
+
+/-- ... one live binding at a time: its value meets the clause where its
+    entry holds no mutating name on `w`. -/
+theorem MInv.goodOf {m : Mem} {Γ : Ctx} {w : Var} (hM : MInv m Γ) {v : Var} {E : Entry} {o : Bool} {V : Val}
+    (hv : Γ v = some E) (hl : E.live = true) (hs : m.st v = some ⟨o, some V⟩)
+    (hnm : ∀ d ∈ E.held, d.root = w → d.kind.bound = .none) : LiveGood m w V := by
+  obtain ⟨sl, hsl, hok, hown, howning, hbor⟩ := hM.slot v E hv
+  rw [hs] at hsl; cases hsl
+  refine ⟨ValCapsInp.of_namesIn (hM.held v E _ V hv hl hs rfl) (hM.pkgs v _ V hs rfl) hnm, ?_⟩
+  rintro c hcs x t n hx hsn ⟨ty, d, es, rfl⟩
+  have hnA : NodeAt m c (.node ty c d es) := Or.inl ⟨x, t, hx, hsn, ty, d, es, rfl⟩
+  cases hos : E.mode.ownSlot
+  · obtain ⟨V', hV', hvok⟩ := hbor hos hl
+    cases hV'
+    obtain ⟨dep, _, H', ⟨d', es', hland, _, _, hnames, _⟩, hH⟩ := hvok.href_sub hcs
+    rcases hland.home with ⟨x', T', hx', hsL⟩ | ⟨k, bl, hk, hsb⟩
+    · have heq := nodeAt_unique hM.heap hnA (Or.inl ⟨x', T', hx', hsL, _, _, _, rfl⟩)
+      rw [heq]
+      exact ValCapsInp.of_namesIn hnames ((hM.pkgs x' _ T' hx' rfl).sub hsL)
+        (fun d hd => hnm d (hH d hd))
     · have heq := nodeAt_unique hM.heap hnA (Or.inr ⟨k, bl, hk, hsb, _, _, _, rfl⟩)
       rw [heq]; exact (hM.rdCapsInp w hk).1.sub hsb
   · exact ((howning hos).2.1 _ rfl).href_sub_false hcs |>.elim
@@ -1296,11 +1325,6 @@ theorem StmtT.headCallc_live {P : Prog} {ξ : Exits} {Γ : Ctx} {F : List Var} {
 
 /-! ### A call's frame (AGORA-937 B4) -/
 
-/-- What the clause asks of one live value: clean, and every node its
-    handles reach in an owned slot clean. -/
-def LiveGood (m : Mem) (w : Var) (V : Val) : Prop :=
-  ValCapsInp V w ∧ ∀ c, Sub (.href c) V → ∀ x t n, m.st x = some ⟨true, some t⟩ → Sub n t →
-    (∃ ty d es, n = .node ty c d es) → ValCapsInp n w
 
 /-- ... kept where every owned slot after holds a tree an owned slot held
     before. -/
