@@ -779,7 +779,7 @@ function boot(data, label) {
   $("n").textContent = total.toLocaleString();
   if (isMesh) $("nd").textContent = ntri.toLocaleString();
 
-  var last = performance.now(), frames = 0, acc = 0;
+  var last = performance.now(), frames = 0, acc = 0, lastSig = "";
   function frame(now) {
     resize();
     if (fly) flyStep(Math.min(0.25, Math.max(0, (now - last) / 1000)));
@@ -801,6 +801,13 @@ function boot(data, label) {
     var P = perspective(50 * Math.PI / 180, cv.width / cv.height,
                         Math.max(reach / 5000, 1e-4), reach * 20 + diag * 4 + away);
     var MV = mul(P, lookAt(eye, look, rolledUp(eye, look)));
+    /* the same view as the last frame drawn — camera, settings, crop box —
+       is already on the canvas: skip the draw, so an idle view does not keep
+       the GPU and CPU busy. A probe always draws. */
+    var cbx = isMesh ? null : cropBox();
+    var sig = [cv.width, cv.height, psize, density, mode, trim, cbx ? cbx.lo.concat(cbx.hi).join(",") : ""].concat(MV).join(",");
+    if (sig === lastSig && PROBE === 0) { last = now; return; }
+    lastSig = sig;
     gl.uniformMatrix4fv(uMVP, false, MV);
     gl.uniform1f(uSize, psize * Math.min(window.devicePixelRatio || 1, 2));
     gl.uniform1i(uMode, mode);
@@ -932,7 +939,10 @@ function bootTiles(ts, url, label) {
   gl.enable(gl.DEPTH_TEST);
   gl.clearColor(0.043, 0.051, 0.063, 1);
 
+  /* bumped whenever the set of tiles on the GPU changes */
+  var gen = 0, lastSig = "";
   function upload(t, d) {
+    gen++;
     t.vao = null; t.vbo = null;
     var inter = new ArrayBuffer(d.n * 16), fv = new Float32Array(inter), bv = new Uint8Array(inter);
     for (var k = 0; k < d.n; k++) {
@@ -947,6 +957,7 @@ function bootTiles(ts, url, label) {
     t.n = d.n; t.state = 2; loaded += d.n; ready++;
   }
   function free(t) {
+    gen++;
     gl.deleteBuffer(t.vbo); gl.deleteVertexArray(t.vao);
     t.vbo = t.vao = null; loaded -= t.n; t.n = 0; t.state = 0; ready--;
   }
@@ -1033,6 +1044,17 @@ function bootTiles(ts, url, label) {
   /* room for MORE points of a tile needed NEED: tiles needed less go
      until it fits; false when only tiles needed as much or more are left */
   function makeRoom(need, more) {
+    var over = charged() + more - TILE_BUDGET;
+    if (over <= 0) return true;
+    /* first whether letting go of every tile needed less would be enough:
+       letting some go and then giving up would lose them for nothing, and
+       the next frame would fetch them again — over and over */
+    var spare = 0;
+    for (var j = 0; j < tiles.length; j++) {
+      var u = tiles[j];
+      if (u.state === 2 && u !== pinned && u.s < need) spare += u.n;
+    }
+    if (spare < over) return false;
     while (charged() + more > TILE_BUDGET) {
       var least = null;
       for (var i = 0; i < tiles.length; i++) {
@@ -1090,7 +1112,7 @@ function bootTiles(ts, url, label) {
     return t.err * cv.height / (2 * d * Math.tan(25 * Math.PI / 180));
   }
 
-  var last = performance.now(), frames = 0, acc = 0, drawnPts = 0, drawnTiles = 0;
+  var last = performance.now(), frames = 0, acc = 0, drawnPts = 0, drawnTiles = 0, draws = 0;
   function frame(now) {
     resize();
     frameNo++;
@@ -1132,6 +1154,14 @@ function bootTiles(ts, url, label) {
       if (shown && charged() > 0 && !makeRoom(want[w].want, want[w].size || 0)) continue;
       fetchTile(want[w]);
     }
+    /* nothing changed since the last frame drawn — the view, the settings,
+       the tiles on the GPU — then the canvas already shows it: skip the
+       draw, and an idle view costs next to nothing */
+    var sig = [gen, cv.width, cv.height, psize, density, mode].concat(MV).join(",");
+    window.__tiles = { total: tiles.length, ready: ready, loaded: loaded, drawn: drawnPts, drawnTiles: drawnTiles,
+                       inflight: inflight, wanted: want.length, draws: draws, fetches: window.__tileLog.length };
+    if (sig === lastSig && !probing) { last = now; return; }
+    lastSig = sig; draws++;
     gl.useProgram(prog);
     gl.uniformMatrix4fv(U.uMVP, false, MV);
     gl.uniform1f(U.uSize, psize * Math.min(window.devicePixelRatio || 1, 2));
@@ -1150,7 +1180,6 @@ function bootTiles(ts, url, label) {
       gl.drawArrays(gl.POINTS, 0, n);
       drawnPts += n;
     }
-    window.__tiles = { total: tiles.length, ready: ready, loaded: loaded, drawn: drawnPts, drawnTiles: drawnTiles, inflight: inflight, wanted: want.length };
     frames++; acc += now - last; last = now;
     if (acc > 500) {
       $("fps").textContent = frames >= 10 ? (frames * 1000 / acc).toFixed(0) : "-";
