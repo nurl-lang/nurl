@@ -6,8 +6,10 @@
 // it does not, the slot still holds the caller's value. Either way the
 // caller drops its binding — the empty value, or its own. Before, the
 // function's summary said "consumes", the caller dropped nothing, and on
-// the paths that took nothing its value leaked. The caller may read the
-// binding after the call: it is empty where it was taken.
+// the paths that took nothing its value leaked. After the call the binding
+// is moved on some paths (empty where it was taken, a null handle), so the
+// caller gives it a new value before reading it (AGORA-991); that drops
+// what was there — the empty value, or its own.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -47,18 +49,22 @@ $ `stdlib/core/vec.nu`
 @ run i c → v {
     : ~ ( Vec S ) w ( mkv 1 )
     ( nurl_println_int ( g w c ) )
+    = w ( mkv 2 )
     ( nurl_println_int # i ( vec_len [S] w ) )
     : ~ ( Vec S ) w2 ( mkv 1 )
     ( nurl_println_int ( g2 w2 c ) )
     ( nurl_println_int # i ( vec_len [S] w2 ) )
     : ~ ( Vec S ) w3 ( mkv 1 )
     ( nurl_println_int ( g3 w3 c ) )
+    = w3 ( mkv 2 )
     ( nurl_println_int # i ( vec_len [S] w3 ) )
     : ~ ( Vec S ) w4 ( mkv 1 )
     ( nurl_println_int ( g4 w4 c ) )
+    = w4 ( mkv 2 )
     ( nurl_println_int # i ( vec_len [S] w4 ) )
     : ~ ( Vec S ) w5 ( mkv 1 )
     ( nurl_println_int ( g5 w5 c ) )
+    = w5 ( mkv 2 )
     ( nurl_println_int # i ( vec_len [S] w5 ) )
 }
 
