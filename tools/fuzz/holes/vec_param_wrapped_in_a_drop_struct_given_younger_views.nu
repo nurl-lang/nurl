@@ -1,6 +1,7 @@
 // vec_param_wrapped_in_a_drop_struct_given_younger_views: a Vec of views moved into a struct with a destructor, older than the views.
 // Closed: a copy of a value that holds views holds them too — what a callee makes of an argument's views (`%k` in g_fn_rviews, `h>%k` in g_fn_vkeeps) is derived from its walk, where a parameter's views stand for themselves (the pseudo `%p`); `mem_dup` hands back what its operand holds; a callee with no walk answer (trusted, library) holds what its arguments hold, A2's heldOfArgs.
 // main 836c0e9: accepted; AddressSanitizer: heap-use-after-free.
+// D4c (AGORA-995): an `in` parameter handed back in a literal is lent; the constructor here takes it over, so it says `sink`.
 // map: §2.7 | A2 | rejected | - | agora #362: a Vec of views moved into a struct with a destructor, older than the views
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -11,7 +12,7 @@ $ `stdlib/core/string.nu`
 
 : T1 { ( Vec W ) a }
 
-@ wrap ( Vec W ) ws → T1 {
+@ wrap sink ( Vec W ) ws → T1 {
     ^ @ T1 { ws }
 }
 

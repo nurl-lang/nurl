@@ -38,7 +38,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Adopt an existing byte buffer (moved in; not copied).
-@ image_of i w i h i ch ( Vec u ) data → Image {
+@ image_of i w i h i ch sink ( Vec u ) data → Image {
     ^ @ Image { w h ch data }
 }
 

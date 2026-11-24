@@ -23,7 +23,7 @@
 
 : Pair [A B] { A first B second }
 
-@ pair_new [A B] A first B second → ( Pair A B ) {
+@ pair_new [A B] sink A first sink B second → ( Pair A B ) {
     ^ @ ( Pair A B ) { first second }
 }
 
