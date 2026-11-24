@@ -77793,13 +77793,22 @@ unsafe @ borrowck_fn_end i lex i syms s fname → v {
         ( nurl_sym_def syms ( nurl_str_cat name `__refdepth` )
         ? > refdepth 0 ( nurl_str_int refdepth ) `` )
         ? > refdepth 0 {
-            : s bd ( nurl_sym_get2 syms name `__bdepth` )
-            : i bdv ? == 0 ( nurl_str_len bd ) 1 ( nurl_str_to_int bd )
-            ? < bdv refdepth
-            { ( bck_esc_warn lex line ( nurl_str_cat3
+            // (An `inout` parameter is the caller's storage: it outlives
+            // every binding of this frame, so any stack reference stored
+            // into it dangles once the function returns. AGORA-1001.)
+            ? & != 0 ( nurl_str_len g_fn_io_names ) ( str_contains_word g_fn_io_names name ) {
+                ( bck_esc_warn lex line ( nurl_str_cat3
                 `assigning to '` name
-                `' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits` ) ) }
-            {}
+                `', storage the caller holds (an 'inout' parameter), a value that references a stack binding of this function by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)` ) )
+            } {
+                : s bd ( nurl_sym_get2 syms name `__bdepth` )
+                : i bdv ? == 0 ( nurl_str_len bd ) 1 ( nurl_str_to_int bd )
+                ? < bdv refdepth
+                { ( bck_esc_warn lex line ( nurl_str_cat3
+                    `assigning to '` name
+                    `' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits` ) ) }
+                {}
+            }
         } {}
     }
 }
@@ -81271,13 +81280,21 @@ unsafe @ gen_assign i lex i syms i cg → s {
             { ( nurl_sym_def syms ( nurl_str_cat obj `__refdepth` )
                 ( nurl_str_int refdepth ) ) }
             {}
-            : s bd ( nurl_sym_get2 syms obj `__bdepth` )
-            : i bdv ? == 0 ( nurl_str_len bd ) 1 ( nurl_str_to_int bd )
-            ? < bdv refdepth
-            { ( bck_esc_warn lex line ( nurl_str_cat3
+            // (…of an `inout` parameter: the caller's storage, as for
+            // bck_esc_assign. AGORA-1001.)
+            ? & != 0 ( nurl_str_len g_fn_io_names ) ( str_contains_word g_fn_io_names obj ) {
+                ( bck_esc_warn lex line ( nurl_str_cat3
                 `storing into a field of '` obj
-                `' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits` ) ) }
-            {}
+                `', storage the caller holds (an 'inout' parameter), a value that references a stack binding of this function by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)` ) )
+            } {
+                : s bd ( nurl_sym_get2 syms obj `__bdepth` )
+                : i bdv ? == 0 ( nurl_str_len bd ) 1 ( nurl_str_to_int bd )
+                ? < bdv refdepth
+                { ( bck_esc_warn lex line ( nurl_str_cat3
+                    `storing into a field of '` obj
+                    `' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits` ) ) }
+                {}
+            }
         }
     }
 }
